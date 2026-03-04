@@ -1,0 +1,99 @@
+# Agent Manager — build and development tasks
+
+set dotenv-load
+
+# Default recipe - show help
+default:
+    @just --list
+
+# =============================================================================
+# Development
+# =============================================================================
+
+# Start backend + frontend with hot-reload
+dev:
+    @just _dev-impl
+
+# Internal dev implementation
+_dev-impl:
+    #!/usr/bin/env bash
+    set -e
+
+    PROJECT_ROOT="${JUST_INVOCATION_DIRECTORY:-.}"
+    cd "$PROJECT_ROOT"
+
+    echo "Starting Agent Manager development environment..."
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  API:      http://localhost:8080"
+    echo "  Frontend: http://localhost:5173 (proxies /api → :8080)"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+
+    trap "kill 0" EXIT
+    air &
+    (cd frontend && npm run dev) &
+    wait
+
+# Start only the Go backend with hot-reload
+dev-api:
+    air
+
+# Start only the frontend dev server (with API proxy to :8080)
+dev-frontend:
+    cd frontend && npm run dev
+
+# =============================================================================
+# Build
+# =============================================================================
+
+# Build the Go backend
+build:
+    go build -o bin/agent-manager ./cmd/agent-manager
+
+# Build the frontend
+build-frontend:
+    cd frontend && npm run build
+
+# Build the agent Node.js code
+build-agent:
+    cd agent && npm run build
+
+# Build the agent Docker image
+build-agent-image: build-agent
+    cd agent && docker build -f Dockerfile.agent -t agent-manager/agent:latest .
+
+# Build everything
+all: build build-agent build-agent-image build-frontend
+    @echo "All builds complete"
+
+# =============================================================================
+# Testing
+# =============================================================================
+
+# Run Go tests
+test:
+    go test ./...
+
+# =============================================================================
+# Utilities
+# =============================================================================
+
+# Tidy Go modules
+tidy:
+    go mod tidy
+
+# Install all npm dependencies
+install-deps:
+    cd agent && npm install
+    cd frontend && npm install
+
+# Full development setup
+setup: install-deps tidy
+    @echo "Setup complete"
+
+# Clean build artifacts
+clean:
+    rm -rf bin/
+    cd agent && npm run clean
+    rm -rf cmd/agent-manager/public/
