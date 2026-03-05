@@ -12,5 +12,5 @@ WORKDIR /app
 COPY --from=builder /build/agent-manager .
 COPY --from=builder /build/cmd/agent-manager/public ./public
 
-EXPOSE 8080
+EXPOSE 8081
 ENTRYPOINT ["./agent-manager"]

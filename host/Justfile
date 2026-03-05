@@ -25,8 +25,8 @@ _dev-impl:
     echo "Starting Agent Manager development environment..."
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  API:      http://localhost:8080"
-    echo "  Frontend: http://localhost:5173 (proxies /api → :8080)"
+    echo "  API:      http://localhost:8081"
+    echo "  Frontend: http://localhost:5173 (proxies /api → :8081)"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
 
@@ -39,7 +39,7 @@ _dev-impl:
 dev-api:
     air
 
-# Start only the frontend dev server (with API proxy to :8080)
+# Start only the frontend dev server (with API proxy to :8081)
 dev-frontend:
     cd frontend && npm run dev
 
