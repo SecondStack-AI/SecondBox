@@ -1,4 +1,4 @@
-# Agent Manager — build and development tasks
+# Agentcy — build and development tasks
 
 set dotenv-load
 
@@ -22,7 +22,7 @@ _dev-impl:
     PROJECT_ROOT="${JUST_INVOCATION_DIRECTORY:-.}"
     cd "$PROJECT_ROOT"
 
-    echo "Starting Agent Manager development environment..."
+    echo "Starting Agentcy development environment..."
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "  API:      http://localhost:8081"
@@ -49,7 +49,7 @@ dev-frontend:
 
 # Build the Go backend
 build:
-    go build -o bin/agent-manager ./cmd/agent-manager
+    go build -o bin/agentcy ./cmd/agentcy
 
 # Build the frontend
 build-frontend:
@@ -61,7 +61,7 @@ build-agent:
 
 # Build the agent Docker image
 build-agent-image: build-agent
-    cd agent && docker build -f Dockerfile.agent -t agent-manager/agent:latest .
+    cd agent && docker build -f Dockerfile.agent -t agentcy/agent:latest .
 
 # Build everything
 all: build build-agent build-agent-image build-frontend
@@ -96,4 +96,4 @@ setup: install-deps tidy
 clean:
     rm -rf bin/
     cd agent && npm run clean
-    rm -rf cmd/agent-manager/public/
+    rm -rf cmd/agentcy/public/
