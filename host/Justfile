@@ -63,6 +63,21 @@ build-agent:
 build-agent-image: build-agent
     cd agent && docker build -f Dockerfile.agent -t agentcy/agent:latest .
 
+# Rebuild the agent image and restart all currently running agents so they pick up the new image.
+rollout-agent-image api_url="http://localhost:8081":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    just build-agent-image
+
+    TOKEN="${AGENTCY_API_TOKEN:-${AG_API_AUTH_TOKEN:-}}"
+    HEADERS=(-H "Content-Type: application/json")
+    if [ -n "$TOKEN" ]; then
+        HEADERS+=(-H "X-Agentcy-Token: $TOKEN")
+    fi
+
+    curl -fsS -X POST "${api_url}/api/admin/restart-running-agents" "${HEADERS[@]}"
+
 # Build everything
 all: build build-agent build-agent-image build-frontend
     @echo "All builds complete"
