@@ -112,3 +112,204 @@ clean:
     rm -rf bin/
     cd agent && npm run clean
     rm -rf cmd/agentcy/public/
+
+# =============================================================================
+# Deployment (agentcy.t1a.dev)
+# =============================================================================
+
+AG_HOST := "agentcy.t1a.dev"
+AG_USER := "root"
+AG_PATH := "/opt/agentcy"
+
+# Initial server setup (run once before first ship)
+setup-server:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo "Setting up Agentcy server at {{AG_HOST}}"
+    echo "=============================================="
+
+    ssh -o ConnectTimeout=10 {{AG_USER}}@{{AG_HOST}} '
+        set -euo pipefail
+
+        # Install Docker
+        if ! command -v docker &>/dev/null; then
+            echo "Installing Docker..."
+            apt-get update
+            apt-get install -y ca-certificates curl
+            install -m 0755 -d /etc/apt/keyrings
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+            chmod a+r /etc/apt/keyrings/docker.asc
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list
+            apt-get update
+            apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
+            systemctl enable docker
+            systemctl start docker
+            echo "Docker installed"
+        else
+            echo "Docker already installed"
+        fi
+
+        # Install Caddy
+        if ! command -v caddy &>/dev/null; then
+            echo "Installing Caddy..."
+            apt-get install -y debian-keyring debian-archive-keyring apt-transport-https
+            curl -1sLf "https://dl.cloudsmith.io/public/caddy/stable/gpg.key" | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+            curl -1sLf "https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt" | tee /etc/apt/sources.list.d/caddy-stable.list
+            apt-get update
+            apt-get install -y caddy
+            echo "Caddy installed"
+        else
+            echo "Caddy already installed"
+        fi
+
+        # Create directory structure
+        echo "Creating directories..."
+        mkdir -p {{AG_PATH}}/{bin,data,public}
+
+        echo ""
+        echo "Server setup complete!"
+    '
+
+    # Generate .env if it does not exist
+    if ssh -o ConnectTimeout=10 {{AG_USER}}@{{AG_HOST}} "test -f {{AG_PATH}}/.env"; then
+        echo ".env already exists on server"
+    else
+        echo "Creating .env from template..."
+        ENCRYPTION_KEY=$(openssl rand -base64 32)
+        sed "s|^AG_SECRET_ENCRYPTION_KEY=.*|AG_SECRET_ENCRYPTION_KEY=${ENCRYPTION_KEY}|" \
+            deploy/agentcy.env.example | \
+            ssh -o ConnectTimeout=10 {{AG_USER}}@{{AG_HOST}} "umask 077; cat > {{AG_PATH}}/.env"
+        echo ".env created (admin credentials NOT set — edit before first start)"
+        echo "  ssh {{AG_USER}}@{{AG_HOST}} vi {{AG_PATH}}/.env"
+    fi
+
+# Ship to production (build + deploy)
+ship:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    VERSION=$(git rev-parse --short HEAD)
+    TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+    IMAGE_TAG="${VERSION}-${TIMESTAMP}"
+
+    echo "Shipping Agentcy to {{AG_HOST}}"
+    echo "  Version: ${IMAGE_TAG}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # Pre-flight checks (local only — no SSH yet)
+    echo ""
+    echo "Pre-flight checks..."
+    [ -f "deploy/Caddyfile" ] || { echo "deploy/Caddyfile not found"; exit 1; }
+    [ -f "deploy/agentcy.service" ] || { echo "deploy/agentcy.service not found"; exit 1; }
+    command -v docker >/dev/null || { echo "Docker not installed locally"; exit 1; }
+    echo "Pre-flight checks passed"
+
+    # Step 1: Build frontend
+    echo ""
+    echo "Building frontend..."
+    cd frontend && npm run build && cd ..
+
+    # Step 2: Cross-compile Go binary for linux/amd64
+    echo ""
+    echo "Building Go binary (linux/amd64)..."
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/agentcy-linux-amd64 ./cmd/agentcy
+
+    # Step 3: Build agent Docker image
+    echo ""
+    echo "Building agent Docker image..."
+    just build-agent-image
+
+    # Step 4: Save agent image to tarball
+    echo ""
+    echo "Saving agent Docker image..."
+    mkdir -p releases
+    docker save agentcy/agent:latest | gzip > releases/agentcy-agent.tar.gz
+    echo "  Size: $(du -h releases/agentcy-agent.tar.gz | cut -f1)"
+
+    # Open SSH control socket (one TCP connection for all remote operations)
+    SSH_SOCK="/tmp/agentcy-deploy-$$"
+    SSH_OPTS="-o ControlMaster=auto -o ControlPath=${SSH_SOCK} -o ControlPersist=300 -o ConnectTimeout=15 -o ServerAliveInterval=30"
+    trap "ssh ${SSH_OPTS} -O exit {{AG_USER}}@{{AG_HOST}} 2>/dev/null || true; rm -f ${SSH_SOCK}" EXIT
+
+    echo ""
+    echo "Connecting to {{AG_HOST}}..."
+    ssh ${SSH_OPTS} {{AG_USER}}@{{AG_HOST}} "test -f {{AG_PATH}}/.env" || { echo "Server .env not found. Run: just setup-server"; exit 1; }
+
+    # Step 5: Stop service before uploading (can't overwrite a running binary)
+    echo "Stopping agentcy service..."
+    ssh ${SSH_OPTS} {{AG_USER}}@{{AG_HOST}} "systemctl stop agentcy 2>/dev/null || true"
+
+    # Step 6: Upload to server (all over the same TCP connection)
+    echo ""
+    echo "Uploading to {{AG_HOST}}..."
+    scp ${SSH_OPTS} bin/agentcy-linux-amd64 {{AG_USER}}@{{AG_HOST}}:{{AG_PATH}}/bin/agentcy
+    scp ${SSH_OPTS} -r cmd/agentcy/public {{AG_USER}}@{{AG_HOST}}:{{AG_PATH}}/
+    scp ${SSH_OPTS} releases/agentcy-agent.tar.gz {{AG_USER}}@{{AG_HOST}}:/tmp/
+    scp ${SSH_OPTS} deploy/Caddyfile {{AG_USER}}@{{AG_HOST}}:/etc/caddy/Caddyfile
+    scp ${SSH_OPTS} deploy/agentcy.service {{AG_USER}}@{{AG_HOST}}:/etc/systemd/system/agentcy.service
+
+    # Step 7: Load agent image and restart services
+    echo ""
+    echo "Loading agent image and restarting services..."
+    ssh ${SSH_OPTS} {{AG_USER}}@{{AG_HOST}} "
+        set -euo pipefail
+
+        chmod +x {{AG_PATH}}/bin/agentcy
+
+        echo 'Loading Docker image...'
+        docker load < /tmp/agentcy-agent.tar.gz
+        rm /tmp/agentcy-agent.tar.gz
+
+        systemctl daemon-reload
+        systemctl enable agentcy
+        systemctl restart agentcy
+
+        systemctl reload caddy || systemctl restart caddy
+
+        echo ''
+        echo 'Service status:'
+        systemctl status agentcy --no-pager -l || true
+    "
+
+    # Step 8: Health check
+    echo ""
+    echo "Verifying service health..."
+    sleep 3
+
+    HEALTH_OK=false
+    for i in {1..20}; do
+        if ssh ${SSH_OPTS} {{AG_USER}}@{{AG_HOST}} "curl -sf http://localhost:8081/api/health >/dev/null 2>&1"; then
+            HEALTH_OK=true
+            break
+        fi
+        echo "  Waiting for services... ($i/20)"
+        sleep 2
+    done
+
+    if [ "$HEALTH_OK" = "true" ]; then
+        echo "Health check passed"
+    else
+        echo "Health check timed out — check logs: just logs-prod"
+    fi
+
+    # Record deployed version
+    ssh ${SSH_OPTS} {{AG_USER}}@{{AG_HOST}} "echo '${IMAGE_TAG}' > {{AG_PATH}}/.deployed_version"
+
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Deployment complete!"
+    echo "  Version: ${IMAGE_TAG}"
+    echo "  URL: https://{{AG_HOST}}"
+
+# SSH into production server
+ssh-prod:
+    ssh {{AG_USER}}@{{AG_HOST}}
+
+# View production logs
+logs-prod:
+    ssh {{AG_USER}}@{{AG_HOST}} "journalctl -u agentcy -f --no-pager"
+
+# Check production status
+status-prod:
+    ssh {{AG_USER}}@{{AG_HOST}} "systemctl status agentcy --no-pager -l && echo '' && docker ps"
