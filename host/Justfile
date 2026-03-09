@@ -229,11 +229,24 @@ ship:
 
     # Open SSH control socket (one TCP connection for all remote operations)
     SSH_SOCK="/tmp/agentcy-deploy-$$"
-    SSH_OPTS="-o ControlMaster=auto -o ControlPath=${SSH_SOCK} -o ControlPersist=300 -o ConnectTimeout=15 -o ServerAliveInterval=30"
+    SSH_OPTS="-o ControlMaster=auto -o ControlPath=${SSH_SOCK} -o ControlPersist=300 -o ConnectTimeout=30 -o ServerAliveInterval=15"
     trap "ssh ${SSH_OPTS} -O exit {{AG_USER}}@{{AG_HOST}} 2>/dev/null || true; rm -f ${SSH_SOCK}" EXIT
 
     echo ""
     echo "Connecting to {{AG_HOST}}..."
+    CONNECTED=false
+    for attempt in 1 2 3; do
+        if ssh ${SSH_OPTS} {{AG_USER}}@{{AG_HOST}} "echo ok" >/dev/null 2>&1; then
+            CONNECTED=true
+            break
+        fi
+        echo "  Connection attempt $attempt/3 failed, retrying..."
+        sleep 2
+    done
+    if [ "$CONNECTED" != "true" ]; then
+        echo "Cannot reach {{AG_HOST}} via SSH. Check server status."
+        exit 1
+    fi
     ssh ${SSH_OPTS} {{AG_USER}}@{{AG_HOST}} "test -f {{AG_PATH}}/.env" || { echo "Server .env not found. Run: just setup-server"; exit 1; }
 
     # Step 5: Stop service before uploading (can't overwrite a running binary)
