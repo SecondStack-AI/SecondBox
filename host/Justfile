@@ -60,7 +60,7 @@ build-agent:
     cd agent && npm run build
 
 # Build the agent Docker image
-build-agent-image: build-agent
+build-agent-image:
     cd agent && docker build -f Dockerfile.agent -t agentcy/agent:latest .
 
 # Rebuild the agent image and restart all currently running agents so they pick up the new image.
@@ -118,8 +118,10 @@ clean:
 # =============================================================================
 
 AG_HOST := "agentcy.t1a.dev"
-AG_USER := "root"
+AG_BOOTSTRAP_USER := "root"
+AG_USER := "agentdeploy"
 AG_PATH := "/opt/agentcy"
+AG_RUNTIME_USER := "agentcy"
 
 # Initial server setup (run once before first ship)
 setup-server:
@@ -129,7 +131,7 @@ setup-server:
     echo "Setting up Agentcy server at {{AG_HOST}}"
     echo "=============================================="
 
-    ssh -o ConnectTimeout=10 {{AG_USER}}@{{AG_HOST}} '
+    ssh -o ConnectTimeout=10 {{AG_BOOTSTRAP_USER}}@{{AG_HOST}} '
         set -euo pipefail
 
         # Install Docker
@@ -167,21 +169,56 @@ setup-server:
         echo "Creating directories..."
         mkdir -p {{AG_PATH}}/{bin,data,public}
 
+        # Create dedicated deploy user
+        if ! id -u {{AG_USER}} >/dev/null 2>&1; then
+            echo "Creating deploy user {{AG_USER}}..."
+            useradd --create-home --shell /bin/bash {{AG_USER}}
+        else
+            echo "Deploy user {{AG_USER}} already exists"
+        fi
+
+        # Create dedicated runtime user
+        if ! id -u {{AG_RUNTIME_USER}} >/dev/null 2>&1; then
+            echo "Creating runtime user {{AG_RUNTIME_USER}}..."
+            useradd --system --home-dir {{AG_PATH}} --shell /usr/sbin/nologin {{AG_RUNTIME_USER}}
+        else
+            echo "Runtime user {{AG_RUNTIME_USER}} already exists"
+        fi
+
+        if getent group docker >/dev/null 2>&1; then
+            usermod -aG docker {{AG_RUNTIME_USER}}
+            usermod -aG docker {{AG_USER}}
+        fi
+
+        install -d -m 0700 -o {{AG_USER}} -g {{AG_USER}} /home/{{AG_USER}}/.ssh
+        if [ -f /root/.ssh/authorized_keys ]; then
+            install -m 0600 -o {{AG_USER}} -g {{AG_USER}} /root/.ssh/authorized_keys /home/{{AG_USER}}/.ssh/authorized_keys
+        fi
+
+        printf '%s\n' '{{AG_USER}} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/{{AG_USER}}
+        chmod 0440 /etc/sudoers.d/{{AG_USER}}
+
+        chown root:root {{AG_PATH}}
+        chmod 0755 {{AG_PATH}}
+        chown -R {{AG_RUNTIME_USER}}:{{AG_RUNTIME_USER}} {{AG_PATH}}/data
+        chmod 0750 {{AG_PATH}}/data
+        chmod 0755 {{AG_PATH}}/bin {{AG_PATH}}/public
+
         echo ""
         echo "Server setup complete!"
     '
 
     # Generate .env if it does not exist
-    if ssh -o ConnectTimeout=10 {{AG_USER}}@{{AG_HOST}} "test -f {{AG_PATH}}/.env"; then
+    if ssh -o ConnectTimeout=10 {{AG_BOOTSTRAP_USER}}@{{AG_HOST}} "test -f {{AG_PATH}}/.env"; then
         echo ".env already exists on server"
     else
         echo "Creating .env from template..."
         ENCRYPTION_KEY=$(openssl rand -base64 32)
         sed "s|^AG_SECRET_ENCRYPTION_KEY=.*|AG_SECRET_ENCRYPTION_KEY=${ENCRYPTION_KEY}|" \
             deploy/agentcy.env.example | \
-            ssh -o ConnectTimeout=10 {{AG_USER}}@{{AG_HOST}} "umask 077; cat > {{AG_PATH}}/.env"
+            ssh -o ConnectTimeout=10 {{AG_BOOTSTRAP_USER}}@{{AG_HOST}} "cat > {{AG_PATH}}/.env && chown root:{{AG_RUNTIME_USER}} {{AG_PATH}}/.env && chmod 0640 {{AG_PATH}}/.env"
         echo ".env created (admin credentials NOT set — edit before first start)"
-        echo "  ssh {{AG_USER}}@{{AG_HOST}} vi {{AG_PATH}}/.env"
+        echo "  ssh {{AG_USER}}@{{AG_HOST}} 'sudo -n vi {{AG_PATH}}/.env'"
     fi
 
 # Ship to production (build + deploy)
@@ -192,6 +229,7 @@ ship:
     VERSION=$(git rev-parse --short HEAD)
     TIMESTAMP=$(date +%Y%m%d-%H%M%S)
     IMAGE_TAG="${VERSION}-${TIMESTAMP}"
+    REMOTE_TMP="/home/{{AG_USER}}/.agentcy-deploy-${IMAGE_TAG}"
 
     echo "Shipping Agentcy to {{AG_HOST}}"
     echo "  Version: ${IMAGE_TAG}"
@@ -229,14 +267,14 @@ ship:
 
     # Open SSH control socket (one TCP connection for all remote operations)
     SSH_SOCK="/tmp/agentcy-deploy-$$"
-    SSH_OPTS="-o ControlMaster=auto -o ControlPath=${SSH_SOCK} -o ControlPersist=300 -o ConnectTimeout=30 -o ServerAliveInterval=15"
-    trap "ssh ${SSH_OPTS} -O exit {{AG_USER}}@{{AG_HOST}} 2>/dev/null || true; rm -f ${SSH_SOCK}" EXIT
+    SSH_OPTS=(-o ControlMaster=auto -o "ControlPath=${SSH_SOCK}" -o ControlPersist=300 -o ConnectTimeout=30 -o ServerAliveInterval=15)
+    trap 'ssh "${SSH_OPTS[@]}" -O exit {{AG_USER}}@{{AG_HOST}} 2>/dev/null || true; rm -f "${SSH_SOCK}"' EXIT
 
     echo ""
     echo "Connecting to {{AG_HOST}}..."
     CONNECTED=false
     for attempt in 1 2 3; do
-        if ssh ${SSH_OPTS} {{AG_USER}}@{{AG_HOST}} "echo ok" >/dev/null 2>&1; then
+        if ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} "echo ok" >/dev/null 2>&1; then
             CONNECTED=true
             break
         fi
@@ -247,42 +285,65 @@ ship:
         echo "Cannot reach {{AG_HOST}} via SSH. Check server status."
         exit 1
     fi
-    ssh ${SSH_OPTS} {{AG_USER}}@{{AG_HOST}} "test -f {{AG_PATH}}/.env" || { echo "Server .env not found. Run: just setup-server"; exit 1; }
+    ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} "sudo -n true" >/dev/null 2>&1 || { echo "Deploy user {{AG_USER}} is missing passwordless sudo"; exit 1; }
+    ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} "sudo -n test -f {{AG_PATH}}/.env" || { echo "Server .env not found. Run: just setup-server"; exit 1; }
 
     # Step 5: Stop service before uploading (can't overwrite a running binary)
     echo "Stopping agentcy service..."
-    ssh ${SSH_OPTS} {{AG_USER}}@{{AG_HOST}} "systemctl stop agentcy 2>/dev/null || true"
+    ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} "sudo -n systemctl stop agentcy 2>/dev/null || true"
 
     # Step 6: Upload to server (all over the same TCP connection)
     echo ""
     echo "Uploading to {{AG_HOST}}..."
-    scp ${SSH_OPTS} bin/agentcy-linux-amd64 {{AG_USER}}@{{AG_HOST}}:{{AG_PATH}}/bin/agentcy
-    scp ${SSH_OPTS} -r cmd/agentcy/public {{AG_USER}}@{{AG_HOST}}:{{AG_PATH}}/
-    scp ${SSH_OPTS} releases/agentcy-agent.tar.gz {{AG_USER}}@{{AG_HOST}}:/tmp/
-    scp ${SSH_OPTS} deploy/Caddyfile {{AG_USER}}@{{AG_HOST}}:/etc/caddy/Caddyfile
-    scp ${SSH_OPTS} deploy/agentcy.service {{AG_USER}}@{{AG_HOST}}:/etc/systemd/system/agentcy.service
+    ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} "rm -rf ${REMOTE_TMP} && mkdir -p ${REMOTE_TMP}"
+    scp "${SSH_OPTS[@]}" bin/agentcy-linux-amd64 {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/agentcy
+    scp "${SSH_OPTS[@]}" -r cmd/agentcy/public {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/public
+    scp "${SSH_OPTS[@]}" releases/agentcy-agent.tar.gz {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/agentcy-agent.tar.gz
+    scp "${SSH_OPTS[@]}" deploy/Caddyfile {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/Caddyfile
+    scp "${SSH_OPTS[@]}" deploy/agentcy.service {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/agentcy.service
 
     # Step 7: Load agent image and restart services
     echo ""
     echo "Loading agent image and restarting services..."
-    ssh ${SSH_OPTS} {{AG_USER}}@{{AG_HOST}} "
+    ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} "
         set -euo pipefail
 
-        chmod +x {{AG_PATH}}/bin/agentcy
+        if ! id -u {{AG_RUNTIME_USER}} >/dev/null 2>&1; then
+            sudo -n useradd --system --home-dir {{AG_PATH}} --shell /usr/sbin/nologin {{AG_RUNTIME_USER}}
+        fi
+        if getent group docker >/dev/null 2>&1; then
+            sudo -n usermod -aG docker {{AG_RUNTIME_USER}}
+        fi
+
+        sudo -n install -d -m 0755 {{AG_PATH}}/bin
+        sudo -n install -m 0755 ${REMOTE_TMP}/agentcy {{AG_PATH}}/bin/agentcy
+
+        sudo -n rm -rf {{AG_PATH}}/public
+        sudo -n mkdir -p {{AG_PATH}}/public
+        sudo -n cp -a ${REMOTE_TMP}/public/. {{AG_PATH}}/public/
+        sudo -n chmod 0755 {{AG_PATH}}/public
+
+        sudo -n install -m 0644 ${REMOTE_TMP}/Caddyfile /etc/caddy/Caddyfile
+        sudo -n install -m 0644 ${REMOTE_TMP}/agentcy.service /etc/systemd/system/agentcy.service
+
+        sudo -n chown -R {{AG_RUNTIME_USER}}:{{AG_RUNTIME_USER}} {{AG_PATH}}/data
+        sudo -n chmod 0750 {{AG_PATH}}/data
+        sudo -n chown root:{{AG_RUNTIME_USER}} {{AG_PATH}}/.env
+        sudo -n chmod 0640 {{AG_PATH}}/.env
 
         echo 'Loading Docker image...'
-        docker load < /tmp/agentcy-agent.tar.gz
-        rm /tmp/agentcy-agent.tar.gz
+        sudo -n docker load < ${REMOTE_TMP}/agentcy-agent.tar.gz
+        rm -rf ${REMOTE_TMP}
 
-        systemctl daemon-reload
-        systemctl enable agentcy
-        systemctl restart agentcy
+        sudo -n systemctl daemon-reload
+        sudo -n systemctl enable agentcy
+        sudo -n systemctl restart agentcy
 
-        systemctl reload caddy || systemctl restart caddy
+        sudo -n systemctl reload caddy || sudo -n systemctl restart caddy
 
         echo ''
         echo 'Service status:'
-        systemctl status agentcy --no-pager -l || true
+        sudo -n systemctl status agentcy --no-pager -l || true
     "
 
     # Step 8: Health check
@@ -292,7 +353,7 @@ ship:
 
     HEALTH_OK=false
     for i in {1..20}; do
-        if ssh ${SSH_OPTS} {{AG_USER}}@{{AG_HOST}} "curl -sf http://localhost:8081/api/health >/dev/null 2>&1"; then
+        if ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} "curl -sf http://localhost:8081/api/health >/dev/null 2>&1"; then
             HEALTH_OK=true
             break
         fi
@@ -307,7 +368,7 @@ ship:
     fi
 
     # Record deployed version
-    ssh ${SSH_OPTS} {{AG_USER}}@{{AG_HOST}} "echo '${IMAGE_TAG}' > {{AG_PATH}}/.deployed_version"
+    ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} "printf '%s\n' '${IMAGE_TAG}' | sudo -n tee {{AG_PATH}}/.deployed_version >/dev/null"
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -321,8 +382,8 @@ ssh-prod:
 
 # View production logs
 logs-prod:
-    ssh {{AG_USER}}@{{AG_HOST}} "journalctl -u agentcy -f --no-pager"
+    ssh {{AG_USER}}@{{AG_HOST}} "sudo -n journalctl -u agentcy -f --no-pager"
 
 # Check production status
 status-prod:
-    ssh {{AG_USER}}@{{AG_HOST}} "systemctl status agentcy --no-pager -l && echo '' && docker ps"
+    ssh {{AG_USER}}@{{AG_HOST}} "sudo -n systemctl status agentcy --no-pager -l && echo '' && sudo -n docker ps"
