@@ -14,6 +14,24 @@ default:
 dev:
     @just _dev-impl
 
+# Build the local speech worker image when speech is enabled and the image is missing.
+_ensure-speech-worker:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    if [[ "${AG_SPEECH_ENABLED:-false}" != "true" ]]; then
+        exit 0
+    fi
+
+    image="${AG_SPEECH_WORKER_IMAGE:-agentcy/speech-worker:latest}"
+    if docker image inspect "$image" >/dev/null 2>&1; then
+        exit 0
+    fi
+
+    echo "Speech is enabled and Docker image $image is missing."
+    echo "Building local speech worker image..."
+    docker build -t "$image" ./speech-worker
+
 # Internal dev implementation
 _dev-impl:
     #!/usr/bin/env bash
@@ -21,6 +39,8 @@ _dev-impl:
 
     PROJECT_ROOT="${JUST_INVOCATION_DIRECTORY:-.}"
     cd "$PROJECT_ROOT"
+
+    just _ensure-speech-worker
 
     echo "Starting Agentcy development environment..."
     echo ""
@@ -30,14 +50,63 @@ _dev-impl:
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
 
+    AIR_BIN="$(command -v air || true)"
+    if [[ -z "$AIR_BIN" ]]; then
+        GOBIN_DIR="$(go env GOBIN 2>/dev/null || true)"
+        if [[ -n "$GOBIN_DIR" && -x "$GOBIN_DIR/air" ]]; then
+            AIR_BIN="$GOBIN_DIR/air"
+        fi
+    fi
+    if [[ -z "$AIR_BIN" ]]; then
+        GOPATH_DIR="$(go env GOPATH 2>/dev/null || true)"
+        if [[ -n "$GOPATH_DIR" && -x "$GOPATH_DIR/bin/air" ]]; then
+            AIR_BIN="$GOPATH_DIR/bin/air"
+        fi
+    fi
+    if [[ -z "$AIR_BIN" ]]; then
+        echo "air is required for hot reload but was not found."
+        echo "Install it with: go install github.com/air-verse/air@latest"
+        exit 1
+    fi
+
     trap "kill 0" EXIT
-    air &
+    "$AIR_BIN" &
     (cd frontend && npm run dev) &
     wait
 
 # Start only the Go backend with hot-reload
 dev-api:
-    air
+    @just _dev-api-impl
+
+_dev-api-impl:
+    #!/usr/bin/env bash
+    set -e
+
+    PROJECT_ROOT="${JUST_INVOCATION_DIRECTORY:-.}"
+    cd "$PROJECT_ROOT"
+
+    just _ensure-speech-worker
+
+    AIR_BIN="$(command -v air || true)"
+    if [[ -z "$AIR_BIN" ]]; then
+        GOBIN_DIR="$(go env GOBIN 2>/dev/null || true)"
+        if [[ -n "$GOBIN_DIR" && -x "$GOBIN_DIR/air" ]]; then
+            AIR_BIN="$GOBIN_DIR/air"
+        fi
+    fi
+    if [[ -z "$AIR_BIN" ]]; then
+        GOPATH_DIR="$(go env GOPATH 2>/dev/null || true)"
+        if [[ -n "$GOPATH_DIR" && -x "$GOPATH_DIR/bin/air" ]]; then
+            AIR_BIN="$GOPATH_DIR/bin/air"
+        fi
+    fi
+    if [[ -z "$AIR_BIN" ]]; then
+        echo "air is required for hot reload but was not found."
+        echo "Install it with: go install github.com/air-verse/air@latest"
+        exit 1
+    fi
+
+    "$AIR_BIN"
 
 # Start only the frontend dev server (with API proxy to :8081)
 dev-frontend:
@@ -63,6 +132,14 @@ build-agent:
 build-agent-image:
     cd agent && docker build -f Dockerfile.agent -t agentcy/agent:latest .
 
+# Build the speech worker Docker image
+build-speech-worker:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    image="${AG_SPEECH_WORKER_IMAGE:-agentcy/speech-worker:latest}"
+    docker build -t "$image" ./speech-worker
+
 # Rebuild the agent image and restart all currently running agents so they pick up the new image.
 rollout-agent-image api_url="http://localhost:8081":
     #!/usr/bin/env bash
@@ -79,7 +156,7 @@ rollout-agent-image api_url="http://localhost:8081":
     curl -fsS -X POST "${api_url}/api/admin/restart-running-agents" "${HEADERS[@]}"
 
 # Build everything
-all: build build-agent build-agent-image build-frontend
+all: build build-agent build-agent-image build-speech-worker build-frontend
     @echo "All builds complete"
 
 # =============================================================================
@@ -103,8 +180,12 @@ install-deps:
     cd agent && npm install
     cd frontend && npm install
 
+# Install Go-based local development tools
+install-dev-tools:
+    go install github.com/air-verse/air@latest
+
 # Full development setup
-setup: install-deps tidy
+setup: install-deps tidy install-dev-tools
     @echo "Setup complete"
 
 # Clean build artifacts
@@ -375,6 +456,135 @@ ship:
     echo "Deployment complete!"
     echo "  Version: ${IMAGE_TAG}"
     echo "  URL: https://{{AG_HOST}}"
+
+# Ship only the speech worker image to production
+ship-speech:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    VERSION=$(git rev-parse --short HEAD)
+    TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+    IMAGE_TAG="${VERSION}-${TIMESTAMP}"
+    SPEECH_IMAGE="${AG_SPEECH_WORKER_IMAGE:-agentcy/speech-worker:latest}"
+    REMOTE_TMP="/home/{{AG_USER}}/.agentcy-speech-deploy-${IMAGE_TAG}"
+
+    echo "Shipping speech worker to {{AG_HOST}}"
+    echo "  Version: ${IMAGE_TAG}"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # Pre-flight checks (local only — no SSH yet)
+    echo ""
+    echo "Pre-flight checks..."
+    command -v docker >/dev/null || { echo "Docker not installed locally"; exit 1; }
+    [ -d "speech-worker" ] || { echo "speech-worker directory not found"; exit 1; }
+    echo "Pre-flight checks passed"
+
+    # Step 1: Build speech worker Docker image
+    echo ""
+    echo "Building speech worker Docker image..."
+    just build-speech-worker
+
+    # Step 2: Save speech worker image to tarball
+    echo ""
+    echo "Saving speech worker Docker image..."
+    mkdir -p releases
+    docker save "$SPEECH_IMAGE" | gzip > releases/agentcy-speech-worker.tar.gz
+    echo "  Size: $(du -h releases/agentcy-speech-worker.tar.gz | cut -f1)"
+
+    # Open SSH control socket (one TCP connection for all remote operations)
+    SSH_SOCK="/tmp/agentcy-speech-deploy-$$"
+    SSH_OPTS=(-o ControlMaster=auto -o "ControlPath=${SSH_SOCK}" -o ControlPersist=300 -o ConnectTimeout=30 -o ServerAliveInterval=15)
+    trap 'ssh "${SSH_OPTS[@]}" -O exit {{AG_USER}}@{{AG_HOST}} 2>/dev/null || true; rm -f "${SSH_SOCK}"' EXIT
+
+    echo ""
+    echo "Connecting to {{AG_HOST}}..."
+    CONNECTED=false
+    for attempt in 1 2 3; do
+        if ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} "echo ok" >/dev/null 2>&1; then
+            CONNECTED=true
+            break
+        fi
+        echo "  Connection attempt $attempt/3 failed, retrying..."
+        sleep 2
+    done
+    if [ "$CONNECTED" != "true" ]; then
+        echo "Cannot reach {{AG_HOST}} via SSH. Check server status."
+        exit 1
+    fi
+    ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} "sudo -n true" >/dev/null 2>&1 || { echo "Deploy user {{AG_USER}} is missing passwordless sudo"; exit 1; }
+    ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} "sudo -n test -f {{AG_PATH}}/.env" || { echo "Server .env not found. Run: just setup-server"; exit 1; }
+
+    # Step 3: Upload speech image tarball to server
+    echo ""
+    echo "Uploading to {{AG_HOST}}..."
+    ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} "rm -rf ${REMOTE_TMP} && mkdir -p ${REMOTE_TMP}"
+    scp "${SSH_OPTS[@]}" releases/agentcy-speech-worker.tar.gz {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/agentcy-speech-worker.tar.gz
+
+    # Step 4: Load speech image and restart agentcy so it reconciles the worker
+    echo ""
+    echo "Loading speech image and restarting agentcy..."
+    ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} "
+        set -euo pipefail
+
+        echo 'Loading Docker image...'
+        sudo -n docker load < ${REMOTE_TMP}/agentcy-speech-worker.tar.gz
+        rm -rf ${REMOTE_TMP}
+
+        sudo -n systemctl restart agentcy
+
+        echo ''
+        echo 'Service status:'
+        sudo -n systemctl status agentcy --no-pager -l || true
+    "
+
+    # Step 5: Health checks
+    echo ""
+    echo "Verifying service health..."
+    sleep 3
+
+    HEALTH_OK=false
+    for i in {1..20}; do
+        if ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} "curl -sf http://localhost:8081/api/health >/dev/null 2>&1"; then
+            HEALTH_OK=true
+            break
+        fi
+        echo "  Waiting for agentcy... ($i/20)"
+        sleep 2
+    done
+
+    if [ "$HEALTH_OK" != "true" ]; then
+        echo "Health check timed out — check logs: just logs-prod"
+        exit 1
+    fi
+
+    SPEECH_ENABLED=$(ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} "sudo -n grep -E '^AG_SPEECH_ENABLED=' {{AG_PATH}}/.env | tail -n1 | cut -d= -f2 | tr -d '\r'" || true)
+    if [ "${SPEECH_ENABLED}" = "true" ]; then
+        echo "Verifying speech health..."
+        SPEECH_OK=false
+        for i in {1..20}; do
+            if ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} "curl -sf http://localhost:8081/api/speech/health | grep -Eq '\"ready\"[[:space:]]*:[[:space:]]*true'" >/dev/null 2>&1; then
+                SPEECH_OK=true
+                break
+            fi
+            echo "  Waiting for speech worker... ($i/20)"
+            sleep 2
+        done
+
+        if [ "$SPEECH_OK" = "true" ]; then
+            echo "Speech health check passed"
+        else
+            echo "Speech health check timed out — check logs: just logs-prod"
+            exit 1
+        fi
+    else
+        echo "Speech is disabled on the server; skipped speech health check"
+    fi
+
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Speech deployment complete!"
+    echo "  Version: ${IMAGE_TAG}"
+    echo "  Host: {{AG_HOST}}"
 
 # SSH into production server
 ssh-prod:
