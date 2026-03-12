@@ -14,6 +14,24 @@ default:
 dev:
     @just _dev-impl
 
+# Build the local speech worker image when speech is enabled and the image is missing.
+_ensure-speech-worker:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    if [[ "${AG_SPEECH_ENABLED:-false}" != "true" ]]; then
+        exit 0
+    fi
+
+    image="${AG_SPEECH_WORKER_IMAGE:-agentcy/speech-worker:latest}"
+    if docker image inspect "$image" >/dev/null 2>&1; then
+        exit 0
+    fi
+
+    echo "Speech is enabled and Docker image $image is missing."
+    echo "Building local speech worker image..."
+    docker build -t "$image" ./speech-worker
+
 # Internal dev implementation
 _dev-impl:
     #!/usr/bin/env bash
@@ -21,6 +39,8 @@ _dev-impl:
 
     PROJECT_ROOT="${JUST_INVOCATION_DIRECTORY:-.}"
     cd "$PROJECT_ROOT"
+
+    just _ensure-speech-worker
 
     echo "Starting Agentcy development environment..."
     echo ""
@@ -37,6 +57,16 @@ _dev-impl:
 
 # Start only the Go backend with hot-reload
 dev-api:
+    @just _dev-api-impl
+
+_dev-api-impl:
+    #!/usr/bin/env bash
+    set -e
+
+    PROJECT_ROOT="${JUST_INVOCATION_DIRECTORY:-.}"
+    cd "$PROJECT_ROOT"
+
+    just _ensure-speech-worker
     air
 
 # Start only the frontend dev server (with API proxy to :8081)
@@ -63,6 +93,10 @@ build-agent:
 build-agent-image:
     cd agent && docker build -f Dockerfile.agent -t agentcy/agent:latest .
 
+# Build the speech worker Docker image
+build-speech-worker:
+    docker build -t agentcy/speech-worker:latest ./speech-worker
+
 # Rebuild the agent image and restart all currently running agents so they pick up the new image.
 rollout-agent-image api_url="http://localhost:8081":
     #!/usr/bin/env bash
@@ -79,7 +113,7 @@ rollout-agent-image api_url="http://localhost:8081":
     curl -fsS -X POST "${api_url}/api/admin/restart-running-agents" "${HEADERS[@]}"
 
 # Build everything
-all: build build-agent build-agent-image build-frontend
+all: build build-agent build-agent-image build-speech-worker build-frontend
     @echo "All builds complete"
 
 # =============================================================================
