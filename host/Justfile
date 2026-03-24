@@ -168,6 +168,228 @@ test:
     go test ./...
 
 # =============================================================================
+# Migrations
+# =============================================================================
+
+# Organize existing agent workspaces into the new artifacts/projects/scratch layout.
+# Dry-run by default; pass --apply to move files.
+organize-workspaces *flags:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    DATA_DIR="${AG_DATA_DIR:-./data}"
+    AGENTS_DIR="$DATA_DIR/agents"
+    APPLY=false
+
+    for arg in {{flags}}; do
+        case "$arg" in
+            --apply) APPLY=true ;;
+            *) echo "Unknown flag: $arg"; exit 1 ;;
+        esac
+    done
+
+    if [ "$APPLY" = "false" ]; then
+        echo "DRY RUN — pass --apply to execute moves"
+        echo ""
+    fi
+
+    # Protected directories that should never be touched
+    PROTECTED="config memory conversations events skills browser-data .agentcy .tracing-spool SYSTEM .system"
+
+    is_protected() {
+        local name="$1"
+        for p in $PROTECTED; do
+            [ "$name" = "$p" ] && return 0
+        done
+        return 1
+    }
+
+    move_file() {
+        local src="$1" dest="$2"
+        if [ "$APPLY" = "true" ]; then
+            mkdir -p "$(dirname "$dest")"
+            mv "$src" "$dest"
+            echo "  MOVED $src → $dest"
+        else
+            echo "  WOULD MOVE $src → $dest"
+        fi
+    }
+
+    date_prefix() {
+        local file="$1"
+        stat -c '%Y' "$file" 2>/dev/null | xargs -I{} date -d @{} +%F 2>/dev/null || date +%F
+    }
+
+    needs_date_prefix() {
+        local name="$1"
+        # Already has YYYY-MM-DD prefix
+        [[ "$name" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}_ ]] && return 1
+        return 0
+    }
+
+    dest_for_file() {
+        local file="$1" ws="$2"
+        local name
+        name="$(basename "$file")"
+        local ext="${name##*.}"
+        ext="$(echo "$ext" | tr '[:upper:]' '[:lower:]')"
+        local prefix=""
+        if needs_date_prefix "$name"; then
+            prefix="$(date_prefix "$file")_"
+        fi
+
+        case "$ext" in
+            png|jpg|jpeg|gif|webp|svg|bmp)
+                echo "$ws/artifacts/images/${prefix}${name}" ;;
+            ogg|mp3|wav|m4a|flac|opus)
+                echo "$ws/artifacts/audio/${prefix}${name}" ;;
+            md|txt|pdf|doc|docx|rtf)
+                echo "$ws/artifacts/documents/${prefix}${name}" ;;
+            csv|json|jsonl|xml|yaml|yml|tsv)
+                echo "$ws/artifacts/data/${prefix}${name}" ;;
+            sh|py|js|ts|rb|pl)
+                echo "$ws/artifacts/data/${prefix}${name}" ;;
+            *)
+                echo "" ;;
+        esac
+    }
+
+    rebuild_workspace_md() {
+        local ws="$1"
+        local index="$ws/WORKSPACE.md"
+
+        local content="# Workspace\n\nSingle-file outputs live under \`artifacts/\`. Multi-file work (scripts, automations, tools) lives under \`projects/\`. Use \`scratch/\` for temporary work.\n"
+
+        # Projects section
+        content+="\n## Projects\n"
+        if [ -d "$ws/projects" ]; then
+            local has_projects=false
+            for proj_dir in "$ws/projects"/*/; do
+                [ -d "$proj_dir" ] || continue
+                has_projects=true
+                local proj_name
+                proj_name="$(basename "$proj_dir")"
+                local desc="(no README)"
+                if [ -f "$proj_dir/README.md" ]; then
+                    desc="$(head -1 "$proj_dir/README.md" | sed 's/^#\+ *//')"
+                fi
+                content+="- **${proj_name}** — ${desc}\n"
+            done
+            if [ "$has_projects" = "false" ]; then
+                content+="<!-- No projects yet -->\n"
+            fi
+        fi
+
+        # Artifacts section
+        content+="\n## Artifacts\n"
+        local has_artifacts=false
+        for type_dir in images audio documents data; do
+            if [ -d "$ws/artifacts/$type_dir" ]; then
+                for f in "$ws/artifacts/$type_dir"/*; do
+                    [ -f "$f" ] || continue
+                    has_artifacts=true
+                    local fname
+                    fname="$(basename "$f")"
+                    content+="- \`artifacts/${type_dir}/${fname}\`\n"
+                done
+            fi
+        done
+        if [ "$has_artifacts" = "false" ]; then
+            content+="<!-- No artifacts yet -->\n"
+        fi
+
+        if [ "$APPLY" = "true" ]; then
+            printf '%b' "$content" > "$index"
+            echo "  REBUILT $index"
+        else
+            echo "  WOULD REBUILD $index"
+        fi
+    }
+
+    if [ ! -d "$AGENTS_DIR" ]; then
+        echo "No agents directory found at $AGENTS_DIR"
+        exit 0
+    fi
+
+    for agent_dir in "$AGENTS_DIR"/*/; do
+        ws="$agent_dir/workspace"
+        [ -d "$ws" ] || continue
+
+        agent_id="$(basename "$agent_dir")"
+        echo "Agent: $agent_id"
+
+        moved=0
+
+        # 1. Move artifact files from scratch/ to artifacts/
+        if [ -d "$ws/scratch" ]; then
+            for f in "$ws/scratch"/*; do
+                [ -f "$f" ] || continue
+                dest="$(dest_for_file "$f" "$ws")"
+                if [ -n "$dest" ]; then
+                    move_file "$f" "$dest"
+                    moved=$((moved + 1))
+                fi
+            done
+        fi
+
+        # 2. Move loose artifact files from workspace root
+        for f in "$ws"/*; do
+            [ -f "$f" ] || continue
+            name="$(basename "$f")"
+            # Skip known system files
+            case "$name" in
+                WORKSPACE.md|SYSTEM.md|BOOTSTRAP.md|.heartbeat|.permissions-reconciled|settings.json) continue ;;
+                .*) continue ;;
+            esac
+            dest="$(dest_for_file "$f" "$ws")"
+            if [ -n "$dest" ]; then
+                move_file "$f" "$dest"
+                moved=$((moved + 1))
+            fi
+        done
+
+        # 3. Move artifact files from legacy channel directories
+        for chan_dir in "$ws"/*/; do
+            [ -d "$chan_dir" ] || continue
+            dir_name="$(basename "$chan_dir")"
+            is_protected "$dir_name" && continue
+            # Skip known workspace dirs
+            case "$dir_name" in
+                artifacts|projects|scratch|generated) continue ;;
+            esac
+            # Check for loose artifact files in channel dirs.
+            # Skip runtime files (jsonl, state.json) and attachments/ (user uploads
+            # referenced by conversation context — moving them breaks paths).
+            for f in "$chan_dir"/*; do
+                [ -f "$f" ] || continue
+                name="$(basename "$f")"
+                case "$name" in
+                    log.jsonl|context.jsonl|state.json|state-events.jsonl|last_prompt.jsonl|*.jsonl) continue ;;
+                esac
+                dest="$(dest_for_file "$f" "$ws")"
+                if [ -n "$dest" ]; then
+                    move_file "$f" "$dest"
+                    moved=$((moved + 1))
+                fi
+            done
+        done
+
+        # 4. Rebuild WORKSPACE.md
+        if [ "$moved" -gt 0 ] || [ "$APPLY" = "true" ]; then
+            rebuild_workspace_md "$ws"
+        fi
+
+        if [ "$moved" -eq 0 ]; then
+            echo "  (no files to organize)"
+        fi
+        echo ""
+    done
+
+    if [ "$APPLY" = "false" ]; then
+        echo "Re-run with --apply to execute: just organize-workspaces --apply"
+    fi
+
+# =============================================================================
 # Utilities
 # =============================================================================
 
