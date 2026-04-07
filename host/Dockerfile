@@ -17,10 +17,16 @@ RUN CGO_ENABLED=0 go build -o agentcy ./cmd/agentcy
 
 FROM alpine:3.21
 
-RUN apk add --no-cache ca-certificates docker-cli
+RUN apk add --no-cache ca-certificates docker-cli su-exec && \
+    addgroup -g 1000 agentcy && \
+    adduser -D -u 1000 -G agentcy agentcy && \
+    mkdir -p /app/data && \
+    chown -R agentcy:agentcy /app/data
 WORKDIR /app
 COPY --from=builder /build/agentcy .
 COPY --from=builder /build/cmd/agentcy/public ./public
+COPY docker/backend-entrypoint.sh /usr/local/bin/backend-entrypoint
+RUN chmod 0755 /usr/local/bin/backend-entrypoint
 
 EXPOSE 8081
-ENTRYPOINT ["./agentcy"]
+ENTRYPOINT ["backend-entrypoint"]
