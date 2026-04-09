@@ -32,6 +32,52 @@ _ensure-speech-worker:
     echo "Building local speech worker image..."
     docker build -t "$image" ./speech-worker
 
+# Ensure local dev has an encryption key without silently invalidating an existing database.
+_ensure-dev-secret-encryption-key:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    enabled="${AG_SECRET_ENCRYPTION_ENABLED:-true}"
+    enabled="$(printf '%s' "$enabled" | tr '[:upper:]' '[:lower:]')"
+    case "$enabled" in
+        true|1|yes|on) ;;
+        *) exit 0 ;;
+    esac
+
+    if [[ -n "${AG_SECRET_ENCRYPTION_KEY:-}" ]]; then
+        exit 0
+    fi
+
+    PROJECT_ROOT="${JUST_INVOCATION_DIRECTORY:-.}"
+    ENV_FILE="$PROJECT_ROOT/.env"
+    DATA_DIR="${AG_DATA_DIR:-./data}"
+    case "$DATA_DIR" in
+        /*) DB_PATH="$DATA_DIR/agentcy.db" ;;
+        *) DB_PATH="$PROJECT_ROOT/${DATA_DIR#./}/agentcy.db" ;;
+    esac
+
+    if [[ -f "$DB_PATH" ]]; then
+        echo "AG_SECRET_ENCRYPTION_KEY is missing while secret encryption is enabled."
+        echo "Existing database found at $DB_PATH, so local dev will not auto-generate a new key."
+        echo "Restore the original AG_SECRET_ENCRYPTION_KEY in .env, or explicitly set AG_SECRET_ENCRYPTION_ENABLED=false if this database does not contain encrypted secrets."
+        exit 1
+    fi
+
+    if [[ ! -f "$ENV_FILE" ]]; then
+        cp "$PROJECT_ROOT/.env.sample" "$ENV_FILE"
+    fi
+
+    ENCRYPTION_KEY="$(openssl rand -base64 32 | tr -d '\n')"
+    if grep -q '^AG_SECRET_ENCRYPTION_KEY=' "$ENV_FILE"; then
+        TMP_FILE="$(mktemp)"
+        sed "s|^AG_SECRET_ENCRYPTION_KEY=.*|AG_SECRET_ENCRYPTION_KEY=${ENCRYPTION_KEY}|" "$ENV_FILE" > "$TMP_FILE"
+        mv "$TMP_FILE" "$ENV_FILE"
+    else
+        printf '\nAG_SECRET_ENCRYPTION_KEY=%s\n' "$ENCRYPTION_KEY" >> "$ENV_FILE"
+    fi
+
+    echo "Generated AG_SECRET_ENCRYPTION_KEY in $ENV_FILE for local development."
+
 # Internal dev implementation
 _dev-impl:
     #!/usr/bin/env bash
@@ -40,6 +86,7 @@ _dev-impl:
     PROJECT_ROOT="${JUST_INVOCATION_DIRECTORY:-.}"
     cd "$PROJECT_ROOT"
 
+    just _ensure-dev-secret-encryption-key
     just _ensure-speech-worker
 
     echo "Starting Agentcy development environment..."
@@ -85,6 +132,7 @@ _dev-api-impl:
     PROJECT_ROOT="${JUST_INVOCATION_DIRECTORY:-.}"
     cd "$PROJECT_ROOT"
 
+    just _ensure-dev-secret-encryption-key
     just _ensure-speech-worker
 
     AIR_BIN="$(command -v air || true)"
