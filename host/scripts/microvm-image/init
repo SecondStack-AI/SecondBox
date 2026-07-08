@@ -1,0 +1,27 @@
+#!/bin/sh
+set -eu
+
+mountpoint -q /proc || mount -t proc proc /proc
+mountpoint -q /sys || mount -t sysfs sysfs /sys
+mountpoint -q /dev || mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/shm
+mountpoint -q /dev/shm || mount -t tmpfs -o rw,nosuid,nodev,mode=1777,size=512m tmpfs /dev/shm
+
+mkdir -p /workspace /runtime-private
+# runtime-private holds vsock-delivered secrets; keep it RAM-only so credentials
+# never land on the persistent workspace image or any snapshot.
+mountpoint -q /runtime-private || mount -t tmpfs -o rw,nosuid,nodev,mode=0700 tmpfs /runtime-private
+if ! mountpoint -q /workspace; then
+    mount -t ext4 -o rw,noatime /dev/vdb /workspace
+fi
+
+if [ -b /dev/vdc ]; then
+    mkdir -p /shared
+    mount -o ro /dev/vdc /shared || true
+fi
+
+exec /usr/local/bin/agentcy-microvm-entrypoint \
+    --agents=/workspace/config/agents.md \
+    --soul=/workspace/config/soul.md \
+    --tools=/workspace/config/tools.md \
+    /workspace

@@ -1,0 +1,68 @@
+# Standard tool-VM apt additions (Debian 12 "bookworm") for common coding and
+# productivity/cowork workloads. Installed by build-rootfs-source.sh after the
+# base rootfs is created from the pinned Debian snapshot in debian-rootfs.lock.
+# One package per line; blank lines and #-comments are ignored. The build emits
+# rootfs-packages.dpkg.lock with exact resolved package versions.
+
+# --- fonts (matplotlib / LibreOffice / pandoc / wkhtmltopdf glyph coverage) ---
+fonts-dejavu
+fonts-liberation
+fonts-noto-core
+fonts-noto-cjk
+
+# --- OCR (screenshots, scanned documents) ---
+tesseract-ocr
+tesseract-ocr-eng
+
+# --- diagrams + PDF toolchain (pairs with the already-present poppler-utils) ---
+graphviz
+ghostscript
+qpdf
+
+# --- archives beyond zip ---
+p7zip-full
+
+# --- office suite (headless docx/xlsx/pptx <-> pdf/csv conversions) ---
+libreoffice-writer
+libreoffice-calc
+libreoffice-impress
+
+# --- python build toolchain + on-demand installs ---
+python3-pip
+python3-dev
+python3-venv
+
+# --- developer tooling ---
+build-essential
+cmake
+git
+make
+g++
+pkg-config
+fd-find
+gh
+nodejs
+npm
+
+# --- Python libraries (system interpreter; importable by `python3 script.py`) ---
+python3-pandas
+python3-matplotlib
+python3-scipy
+python3-sklearn
+python3-tabulate
+python3-sympy
+python3-openpyxl
+python3-xlsxwriter
+python3-docx
+python3-reportlab
+python3-pypdf2
+python3-bs4
+python3-lxml
+python3-html5lib
+python3-markdown
+python3-httpx
+python3-aiohttp
+python3-rich
+python3-tqdm
+python3-jinja2
+python3-slugify
