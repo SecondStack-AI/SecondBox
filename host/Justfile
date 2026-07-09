@@ -138,6 +138,44 @@ _dev-impl:
         fi
     fi
 
+    cleanup_stale_host_harness_netns() {
+        if ! sudo -n ip netns list >/dev/null 2>&1; then
+            return 0
+        fi
+        if pgrep -af 'agent-harness|harness-main|ip netns exec ag-' >/dev/null 2>&1; then
+            echo "Skipping stale host harness netns cleanup because a harness process is running."
+            return 0
+        fi
+        local removed=0
+        while read -r ns; do
+            [[ -n "$ns" ]] || continue
+            sudo -n ip netns delete "$ns" >/dev/null 2>&1 || true
+            removed=$((removed + 1))
+        done < <(sudo -n ip netns list | awk '{print $1}' | grep -E '^ag-[0-9a-f]{8}$' || true)
+        if [[ "$removed" -gt 0 ]]; then
+            echo "Removed ${removed} stale host harness network namespace(s)."
+        fi
+    }
+
+    cleanup_stale_egress_proxy_bindings() {
+        if pgrep -af 'agent-harness|harness-main|ip netns exec ag-|firecracker|agentcy-microvm-agent|jailer' >/dev/null 2>&1; then
+            return 0
+        fi
+        local control_url="${AG_EGRESS_PROXY_CONTROL_URL:-}"
+        local token="${AG_EGRESS_PROXY_CONTROL_TOKEN:-}"
+        [[ -n "$control_url" && -n "$token" ]] || return 0
+        command -v curl >/dev/null 2>&1 || return 0
+        if curl -fsS -m 2 -X POST \
+            -H "Authorization: Bearer ${token}" \
+            -H 'Content-Type: application/json' \
+            -d '{"containerIds":[]}' \
+            "${control_url%/}/source-bindings/retain" >/dev/null 2>&1; then
+            echo "Cleared stale egress proxy source bindings."
+        fi
+    }
+
+    cleanup_stale_host_harness_netns
+
     echo "Starting Agentcy development environment..."
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -195,16 +233,18 @@ _dev-impl:
         wait_for_flue_store ""
     fi
     if [[ "$START_LOCAL_EGRESS_PROXY" == "true" ]]; then
-        bin/agentcy-egress-proxy \
-            -listen "$EGRESS_PROXY_LISTEN" \
-            -control-listen "$EGRESS_PROXY_CONTROL_LISTEN" \
+            bin/agentcy-egress-proxy \
+                -listen "$EGRESS_PROXY_LISTEN" \
+                -control-listen "$EGRESS_PROXY_CONTROL_LISTEN" \
             -control-token "${AG_EGRESS_PROXY_CONTROL_TOKEN:-}" \
             -decision-endpoint "$EGRESS_PROXY_DECISION_ENDPOINT" \
             -service-token "${AG_EGRESS_PROXY_SERVICE_TOKEN:-}" \
             -inject-cache-ttl "${AG_EGRESS_PROXY_INJECT_CACHE_TTL:-30s}" \
-            -mitm -mitm-ca-cert-out "$EGRESS_PROXY_CA_OUT" \
-            -require-source-identity &
+                -mitm -mitm-ca-cert-out "$EGRESS_PROXY_CA_OUT" \
+                -require-source-identity &
+            sleep 0.2
     fi
+    cleanup_stale_egress_proxy_bindings
     if [[ "${AG_MICROVM_ALLOW_UNJAILED:-}" == "true" ]]; then
         if [[ -x "$PWD/scripts/devnet/ip" ]] && sudo -n /usr/bin/ip -V >/dev/null 2>&1; then
             export PATH="$PWD/scripts/devnet:$PATH"
