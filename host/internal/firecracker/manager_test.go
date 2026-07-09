@@ -17,6 +17,7 @@ import (
 
 	"agentcy/internal/config"
 	"agentcy/internal/egressproxy"
+	"agentcy/internal/runtimecontext"
 	"agentcy/internal/runtimemanager"
 )
 
@@ -616,6 +617,142 @@ func TestWarmToolVMFingerprintMismatchDrainsBeforeFreshBoot(t *testing.T) {
 	defer m.releaseWarmToolVM(lease.instanceID)
 	if lease.instanceID != "fc-fresh" || !bootedAfterOldDone.Load() {
 		t.Fatalf("lease=%+v bootedAfterOldDone=%v, want fresh after old done", lease, bootedAfterOldDone.Load())
+	}
+}
+
+func TestWarmToolVMRuntimeActorContextMismatchDrainsBeforeReuse(t *testing.T) {
+	m := newWarmToolTestManager(t)
+	key := runtimeInstanceKey{agentID: "agent", compartmentID: "cmp_a"}
+	baseActor := runtimecontext.VerifiedActorContext{
+		Principal:      "slack:user:U1",
+		PlatformUserID: "platform-user-1",
+		SessionID:      "session-1",
+		TurnContextID:  "turn-1",
+		RequestID:      "request-1",
+		Verified:       true,
+		Source:         "actor_context",
+		ExpiresAt:      time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC),
+	}
+	firstOpts := runtimemanager.StartOpts{
+		CompartmentID:       key.compartmentID,
+		RuntimeActorContext: baseActor,
+	}
+	firstFingerprint, err := m.startupFingerprint(key.agentID, key.compartmentID, firstOpts)
+	if err != nil {
+		t.Fatalf("first fingerprint: %v", err)
+	}
+	old := &instance{
+		id:                 "fc-old-actor",
+		agentID:            key.agentID,
+		compartmentID:      key.compartmentID,
+		startupFingerprint: firstFingerprint,
+		warmToolVM:         true,
+		lastUsedAt:         time.Now(),
+		done:               make(chan struct{}),
+	}
+	m.mu.Lock()
+	m.addInstanceLocked(old)
+	m.instancesByKey[key] = old.id
+	m.mu.Unlock()
+
+	var bootedAfterOldDone atomic.Bool
+	m.startCompartment = func(_ context.Context, agentID, compartmentID string, opts runtimemanager.StartOpts) (string, error) {
+		select {
+		case <-old.done:
+			bootedAfterOldDone.Store(true)
+		default:
+		}
+		id := "fc-fresh-actor"
+		fp, err := m.startupFingerprint(agentID, compartmentID, opts)
+		if err != nil {
+			return "", err
+		}
+		m.mu.Lock()
+		m.addInstanceLocked(&instance{id: id, agentID: agentID, compartmentID: compartmentID, startupFingerprint: fp, done: make(chan struct{})})
+		m.mu.Unlock()
+		return id, nil
+	}
+
+	nextActor := baseActor
+	nextActor.RequestID = "request-2"
+	lease, err := m.acquireWarmToolVM(context.Background(), key.agentID, key.compartmentID, runtimemanager.StartOpts{
+		CompartmentID:       key.compartmentID,
+		RuntimeActorContext: nextActor,
+	})
+	if err != nil {
+		t.Fatalf("acquire after actor mismatch: %v", err)
+	}
+	defer m.releaseWarmToolVM(lease.instanceID)
+	if lease.instanceID != "fc-fresh-actor" || lease.reused || !bootedAfterOldDone.Load() {
+		t.Fatalf("lease=%+v bootedAfterOldDone=%v, want fresh actor VM after old done", lease, bootedAfterOldDone.Load())
+	}
+}
+
+func TestWarmToolVMRuntimeContextProjectionMismatchDrainsBeforeReuse(t *testing.T) {
+	m := newWarmToolTestManager(t)
+	key := runtimeInstanceKey{agentID: "agent", compartmentID: "cmp_a"}
+	firstProjection := runtimecontext.Projection{
+		Files: []runtimecontext.File{{
+			Path:    runtimecontext.PathGitHubContext,
+			Content: `{"service":"github","accessibleRepos":["owner/repo"]}`,
+		}},
+		MigratedServicePaths: []string{runtimecontext.PathGitHubContext},
+	}
+	firstOpts := runtimemanager.StartOpts{
+		CompartmentID:            key.compartmentID,
+		RuntimeContextProjection: firstProjection,
+	}
+	firstFingerprint, err := m.startupFingerprint(key.agentID, key.compartmentID, firstOpts)
+	if err != nil {
+		t.Fatalf("first fingerprint: %v", err)
+	}
+	old := &instance{
+		id:                 "fc-old-context",
+		agentID:            key.agentID,
+		compartmentID:      key.compartmentID,
+		startupFingerprint: firstFingerprint,
+		warmToolVM:         true,
+		lastUsedAt:         time.Now(),
+		done:               make(chan struct{}),
+	}
+	m.mu.Lock()
+	m.addInstanceLocked(old)
+	m.instancesByKey[key] = old.id
+	m.mu.Unlock()
+
+	var bootedAfterOldDone atomic.Bool
+	m.startCompartment = func(_ context.Context, agentID, compartmentID string, opts runtimemanager.StartOpts) (string, error) {
+		select {
+		case <-old.done:
+			bootedAfterOldDone.Store(true)
+		default:
+		}
+		id := "fc-fresh-context"
+		fp, err := m.startupFingerprint(agentID, compartmentID, opts)
+		if err != nil {
+			return "", err
+		}
+		m.mu.Lock()
+		m.addInstanceLocked(&instance{id: id, agentID: agentID, compartmentID: compartmentID, startupFingerprint: fp, done: make(chan struct{})})
+		m.mu.Unlock()
+		return id, nil
+	}
+
+	nextProjection := firstProjection
+	nextProjection.Files = []runtimecontext.File{{
+		Path:    runtimecontext.PathGitHubContext,
+		Content: `{"service":"github","accessibleRepos":["owner/other"]}`,
+	}}
+	lease, err := m.acquireWarmToolVM(context.Background(), key.agentID, key.compartmentID, runtimemanager.StartOpts{
+		CompartmentID:            key.compartmentID,
+		RuntimeContextProjection: nextProjection,
+	})
+	if err != nil {
+		t.Fatalf("acquire after context mismatch: %v", err)
+	}
+	defer m.releaseWarmToolVM(lease.instanceID)
+	if lease.instanceID != "fc-fresh-context" || lease.reused || !bootedAfterOldDone.Load() {
+		t.Fatalf("lease=%+v bootedAfterOldDone=%v, want fresh context VM after old done", lease, bootedAfterOldDone.Load())
 	}
 }
 
@@ -1392,6 +1529,149 @@ func TestStartupFingerprintIncludesActorPrincipal(t *testing.T) {
 	}
 	if firstFingerprint == secondFingerprint {
 		t.Fatal("fingerprint did not change after actor principal changed")
+	}
+}
+
+func TestStartupFingerprintIncludesRuntimeActorContext(t *testing.T) {
+	dir := t.TempDir()
+	toolRootfs := filepath.Join(dir, "tool-rootfs.ext4")
+	if err := os.WriteFile(toolRootfs, []byte("tool-rootfs"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{cfg: &config.Config{
+		DataDir:               dir,
+		PlatformAPIURL:        "http://platform.test",
+		MicroVMRootfsPath:     toolRootfs,
+		MicroVMToolRootfsPath: toolRootfs,
+	}}
+	actor := runtimecontext.VerifiedActorContext{
+		Principal:      "slack:user:U1",
+		PlatformUserID: "platform-user-1",
+		SessionID:      "session-1",
+		TurnContextID:  "turn-1",
+		RequestID:      "request-1",
+		Verified:       true,
+		Source:         "actor_context",
+		ExpiresAt:      time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC),
+	}
+	opts := runtimemanager.StartOpts{
+		CompartmentID:       "cmp_a",
+		RuntimeClass:        runtimemanager.RuntimeClassToolExecutor,
+		ActorPrincipal:      "slack:user:U1",
+		RuntimeActorContext: actor,
+	}
+	firstFingerprint, err := m.startupFingerprint("agent-1", "cmp_a", opts)
+	if err != nil {
+		t.Fatalf("first fingerprint: %v", err)
+	}
+	opts.RuntimeActorContext.RequestID = "request-2"
+	secondFingerprint, err := m.startupFingerprint("agent-1", "cmp_a", opts)
+	if err != nil {
+		t.Fatalf("second fingerprint: %v", err)
+	}
+	if firstFingerprint == secondFingerprint {
+		t.Fatal("fingerprint did not change after runtime actor request binding changed")
+	}
+	opts.RuntimeActorContext = actor
+	opts.RuntimeActorContext.PlatformUserID = "platform-user-2"
+	thirdFingerprint, err := m.startupFingerprint("agent-1", "cmp_a", opts)
+	if err != nil {
+		t.Fatalf("third fingerprint: %v", err)
+	}
+	if firstFingerprint == thirdFingerprint {
+		t.Fatal("fingerprint did not change after runtime actor platform user changed")
+	}
+}
+
+func TestStartupFingerprintIncludesRuntimeContextProjection(t *testing.T) {
+	dir := t.TempDir()
+	toolRootfs := filepath.Join(dir, "tool-rootfs.ext4")
+	if err := os.WriteFile(toolRootfs, []byte("tool-rootfs"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{cfg: &config.Config{
+		DataDir:               dir,
+		PlatformAPIURL:        "http://platform.test",
+		MicroVMRootfsPath:     toolRootfs,
+		MicroVMToolRootfsPath: toolRootfs,
+	}}
+	opts := runtimemanager.StartOpts{
+		CompartmentID: "cmp_a",
+		RuntimeClass:  runtimemanager.RuntimeClassToolExecutor,
+		RuntimeContextProjection: runtimecontext.Projection{
+			Files: []runtimecontext.File{{
+				Path:    runtimecontext.PathGitHubContext,
+				Content: `{"service":"github","accessibleRepos":["owner/repo"]}`,
+			}},
+			MigratedServicePaths:  []string{runtimecontext.PathGitHubContext},
+			PartialRolloutVersion: runtimecontext.PartialRolloutVersionGitHub,
+		},
+	}
+	firstFingerprint, err := m.startupFingerprint("agent-1", "cmp_a", opts)
+	if err != nil {
+		t.Fatalf("first fingerprint: %v", err)
+	}
+	opts.RuntimeContextProjection.Files[0].Content = `{"service":"github","accessibleRepos":["owner/other"]}`
+	contentFingerprint, err := m.startupFingerprint("agent-1", "cmp_a", opts)
+	if err != nil {
+		t.Fatalf("content fingerprint: %v", err)
+	}
+	if contentFingerprint == firstFingerprint {
+		t.Fatal("fingerprint did not change after runtime context content changed")
+	}
+	opts.RuntimeContextProjection.Files = nil
+	opts.RuntimeContextProjection.OmittedPaths = []string{runtimecontext.PathGitHubContext}
+	omittedFingerprint, err := m.startupFingerprint("agent-1", "cmp_a", opts)
+	if err != nil {
+		t.Fatalf("omitted fingerprint: %v", err)
+	}
+	if omittedFingerprint == contentFingerprint || omittedFingerprint == firstFingerprint {
+		t.Fatal("fingerprint did not change after runtime context file became omitted")
+	}
+}
+
+func TestStartupFingerprintCanonicalizesRuntimeContextProjection(t *testing.T) {
+	dir := t.TempDir()
+	toolRootfs := filepath.Join(dir, "tool-rootfs.ext4")
+	if err := os.WriteFile(toolRootfs, []byte("tool-rootfs"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{cfg: &config.Config{
+		DataDir:               dir,
+		PlatformAPIURL:        "http://platform.test",
+		MicroVMRootfsPath:     toolRootfs,
+		MicroVMToolRootfsPath: toolRootfs,
+	}}
+	base := runtimemanager.StartOpts{
+		CompartmentID: "cmp_a",
+		RuntimeClass:  runtimemanager.RuntimeClassToolExecutor,
+		RuntimeContextProjection: runtimecontext.Projection{
+			Files: []runtimecontext.File{
+				{Path: runtimecontext.PathNotionContext, Content: `{"service":"notion"}`},
+				{Path: runtimecontext.PathGitHubContext, Content: `{"service":"github"}`},
+			},
+			OmittedPaths:          []string{runtimecontext.PathGitLabContext, runtimecontext.PathJiraContext},
+			MigratedServicePaths:  []string{runtimecontext.PathNotionContext, runtimecontext.PathGitHubContext},
+			PartialRolloutVersion: runtimecontext.PartialRolloutVersionGitHub,
+		},
+	}
+	first, err := m.startupFingerprint("agent-1", "cmp_a", base)
+	if err != nil {
+		t.Fatalf("first fingerprint: %v", err)
+	}
+	reordered := base
+	reordered.RuntimeContextProjection.Files = []runtimecontext.File{
+		{Path: runtimecontext.PathGitHubContext, Content: `{"service":"github"}`},
+		{Path: runtimecontext.PathNotionContext, Content: `{"service":"notion"}`},
+	}
+	reordered.RuntimeContextProjection.OmittedPaths = []string{runtimecontext.PathJiraContext, runtimecontext.PathGitLabContext}
+	reordered.RuntimeContextProjection.MigratedServicePaths = []string{runtimecontext.PathGitHubContext, runtimecontext.PathNotionContext}
+	second, err := m.startupFingerprint("agent-1", "cmp_a", reordered)
+	if err != nil {
+		t.Fatalf("second fingerprint: %v", err)
+	}
+	if first != second {
+		t.Fatal("equivalent runtime context projection order changed startup fingerprint")
 	}
 }
 
@@ -2354,18 +2634,29 @@ func TestBuildStartupSecretBundleCarriesPlatformEnvWithoutRuntimeToken(t *testin
 	}
 }
 
-func TestBuildStartupSecretBundleCarriesRuntimePrivateGitHubContext(t *testing.T) {
+func TestBuildStartupSecretBundleCarriesRuntimeContextProjection(t *testing.T) {
 	m := &Manager{cfg: &config.Config{PlatformAPIURL: "https://platform.example/", AgentRuntimeAuthSecret: "runtime-secret"}}
 	bundle, err := m.buildStartupSecretBundle("agent-9", "fc-agent-9-cmp-a-1", runtimemanager.StartOpts{
-		Timezone:          "UTC",
-		CompartmentID:     "cmp_a",
-		GitHubContextJSON: `{"service":"github","accessibleRepos":["owner/repo"]}`,
+		Timezone:      "UTC",
+		CompartmentID: "cmp_a",
+		RuntimeContextProjection: runtimecontext.Projection{
+			Files: []runtimecontext.File{{
+				Path:    runtimecontext.PathGitHubContext,
+				Content: `{"service":"github","accessibleRepos":["owner/repo"]}`,
+			}},
+			MigratedServicePaths:  []string{runtimecontext.PathGitHubContext},
+			PartialRolloutVersion: runtimecontext.PartialRolloutVersionGitHub,
+		},
 	})
 	if err != nil {
 		t.Fatalf("build bundle: %v", err)
 	}
-	if got := bundle.Files["oauth/github.context.json"]; got != `{"service":"github","accessibleRepos":["owner/repo"]}` {
+	got, ok := bundle.RuntimeContextProjection.FileContent(runtimecontext.PathGitHubContext)
+	if !ok || got != `{"service":"github","accessibleRepos":["owner/repo"]}` {
 		t.Fatalf("github context file = %q", got)
+	}
+	if len(bundle.Files) != 0 {
+		t.Fatalf("runtime context must not be delivered as secret files: %#v", bundle.Files)
 	}
 }
 
@@ -2436,6 +2727,12 @@ func TestSourceBindingContextTokenCarriesIntoStartupProxyEnv(t *testing.T) {
 	opts := runtimemanager.StartOpts{
 		CompartmentID:  "cmp_a",
 		ActorPrincipal: "slack:user:U1",
+		RuntimeActorContext: runtimecontext.VerifiedActorContext{
+			PlatformUserID: "user-1",
+			SessionID:      "session-1",
+			RequestID:      "request-1",
+			Verified:       true,
+		},
 		ProxyEgress: &runtimemanager.ProxyEgressConfig{
 			Enabled:  true,
 			ProxyURL: "http://agentcy-egress-proxy:3128",
@@ -2456,7 +2753,14 @@ func TestSourceBindingContextTokenCarriesIntoStartupProxyEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify context token: %v", err)
 	}
-	if claims.AgentID != "agent-9" || claims.CompartmentID != "cmp_a" || claims.PlaceID != "plc_123" || claims.CredentialSubject != "slack:user:U1" || claims.EgressID != instanceID {
+	if claims.AgentID != "agent-9" ||
+		claims.CompartmentID != "cmp_a" ||
+		claims.PlaceID != "plc_123" ||
+		claims.CredentialSubject != "slack:user:U1" ||
+		claims.PlatformUserID != "user-1" ||
+		claims.AgentSessionID != "session-1" ||
+		claims.RequestID != "request-1" ||
+		claims.EgressID != instanceID {
 		t.Fatalf("context token claims = %#v", claims)
 	}
 

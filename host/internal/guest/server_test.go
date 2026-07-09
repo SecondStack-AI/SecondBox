@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"agentcy/internal/registry"
+	"agentcy/internal/runtimecontext"
 	"agentcy/internal/sandboxlimits"
 )
 
@@ -486,6 +488,195 @@ func TestApplySecretsMakesGitHubAskpassExecutable(t *testing.T) {
 	assertMode("github-askpass", 0o700)
 	assertMode("gitconfig", 0o600)
 	assertMode("proxy-ca.crt", 0o644)
+}
+
+func TestApplySecretsMaterializesRuntimeContextInWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	server := Server{WorkspaceDir: workspace, RuntimePrivateDir: t.TempDir()}
+	oauthDir := filepath.Join(workspace, "config", "oauth")
+	if err := os.MkdirAll(oauthDir, 0o755); err != nil {
+		t.Fatalf("mkdir oauth: %v", err)
+	}
+	staleGitHub := filepath.Join(oauthDir, "github.context.json")
+	if err := os.WriteFile(staleGitHub, []byte("stale"), 0o600); err != nil {
+		t.Fatalf("write stale github: %v", err)
+	}
+	legacyRawNames := []string{
+		"github.json",
+		"jira.json",
+		"notion.json",
+		"tempo.json",
+		"gitlab.json",
+		"google-workspace.json",
+		"google-workspace.credentials.json",
+	}
+	for _, name := range legacyRawNames {
+		if err := os.WriteFile(filepath.Join(oauthDir, name), []byte("secret"), 0o600); err != nil {
+			t.Fatalf("write legacy raw %s: %v", name, err)
+		}
+	}
+	legacyTemp := filepath.Join(oauthDir, ".google-workspace.credentials.json.crash.tmp")
+	if err := os.WriteFile(legacyTemp, []byte("secret"), 0o600); err != nil {
+		t.Fatalf("write legacy temp: %v", err)
+	}
+	nonMigratedContext := filepath.Join(oauthDir, "notion.context.json")
+	if err := os.WriteFile(nonMigratedContext, []byte("broker"), 0o600); err != nil {
+		t.Fatalf("write non-migrated context: %v", err)
+	}
+
+	err := server.applySecrets(SecretBundle{RuntimeContextProjection: runtimecontext.Projection{
+		Files: []runtimecontext.File{{
+			Path:    runtimecontext.PathGitHubContext,
+			Content: `{"service":"github"}`,
+		}},
+		MigratedServicePaths:  []string{runtimecontext.PathGitHubContext},
+		PartialRolloutVersion: runtimecontext.PartialRolloutVersionGitHub,
+	}})
+	if err != nil {
+		t.Fatalf("apply secrets: %v", err)
+	}
+	got, err := os.ReadFile(staleGitHub)
+	if err != nil {
+		t.Fatalf("read github context: %v", err)
+	}
+	if string(got) != `{"service":"github"}` {
+		t.Fatalf("github context = %q", got)
+	}
+	for _, name := range legacyRawNames {
+		if _, err := os.Stat(filepath.Join(oauthDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("legacy raw file %s should be removed, err=%v", name, err)
+		}
+	}
+	if _, err := os.Stat(legacyTemp); !os.IsNotExist(err) {
+		t.Fatalf("legacy temp file should be removed, err=%v", err)
+	}
+	if _, err := os.Stat(nonMigratedContext); err != nil {
+		t.Fatalf("non-migrated context should be preserved: %v", err)
+	}
+}
+
+func TestApplySecretsRuntimeContextPolicyNoneScrubsContextFiles(t *testing.T) {
+	workspace := t.TempDir()
+	server := Server{WorkspaceDir: workspace, RuntimePrivateDir: t.TempDir()}
+	oauthDir := filepath.Join(workspace, "config", "oauth")
+	if err := os.MkdirAll(oauthDir, 0o755); err != nil {
+		t.Fatalf("mkdir oauth: %v", err)
+	}
+	for _, name := range []string{"github.context.json", "notion.context.json"} {
+		if err := os.WriteFile(filepath.Join(oauthDir, name), []byte("stale"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	err := server.applySecrets(SecretBundle{RuntimeContextProjection: runtimecontext.Projection{
+		EffectivePolicy:       registry.CredentialPolicyNone,
+		OmittedPaths:          runtimecontext.AllProjectionPaths(),
+		PartialRolloutVersion: runtimecontext.PartialRolloutVersionGitHub,
+	}})
+	if err != nil {
+		t.Fatalf("apply secrets: %v", err)
+	}
+	for _, name := range []string{"github.context.json", "notion.context.json"} {
+		if _, err := os.Stat(filepath.Join(oauthDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s should be scrubbed, err=%v", name, err)
+		}
+	}
+}
+
+func TestApplySecretsRuntimeContextScrubsOmittedMigratedContextFiles(t *testing.T) {
+	workspace := t.TempDir()
+	server := Server{WorkspaceDir: workspace, RuntimePrivateDir: t.TempDir()}
+	oauthDir := filepath.Join(workspace, "config", "oauth")
+	if err := os.MkdirAll(oauthDir, 0o755); err != nil {
+		t.Fatalf("mkdir oauth: %v", err)
+	}
+	staleNotion := filepath.Join(oauthDir, "notion.context.json")
+	if err := os.WriteFile(staleNotion, []byte("stale notion"), 0o600); err != nil {
+		t.Fatalf("write stale notion: %v", err)
+	}
+	brokerJira := filepath.Join(oauthDir, "jira.context.json")
+	if err := os.WriteFile(brokerJira, []byte("broker jira"), 0o600); err != nil {
+		t.Fatalf("write broker jira: %v", err)
+	}
+
+	err := server.applySecrets(SecretBundle{RuntimeContextProjection: runtimecontext.Projection{
+		OmittedPaths:          []string{runtimecontext.PathNotionContext},
+		MigratedServicePaths:  []string{runtimecontext.PathNotionContext},
+		PartialRolloutVersion: runtimecontext.PartialRolloutVersionGitHub,
+	}})
+	if err != nil {
+		t.Fatalf("apply secrets: %v", err)
+	}
+	if _, err := os.Stat(staleNotion); !os.IsNotExist(err) {
+		t.Fatalf("omitted migrated notion context should be scrubbed, err=%v", err)
+	}
+	if _, err := os.Stat(brokerJira); err != nil {
+		t.Fatalf("non-migrated jira context should be preserved: %v", err)
+	}
+}
+
+func TestApplySecretsRuntimeContextRecreatesSymlinkedConfigDirs(t *testing.T) {
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	server := Server{WorkspaceDir: workspace, RuntimePrivateDir: t.TempDir()}
+	if err := os.Symlink(outside, filepath.Join(workspace, "config")); err != nil {
+		t.Fatalf("symlink config: %v", err)
+	}
+	err := server.applySecrets(SecretBundle{RuntimeContextProjection: runtimecontext.Projection{
+		Files: []runtimecontext.File{{
+			Path:    runtimecontext.PathGitHubContext,
+			Content: `{"service":"github"}`,
+		}},
+		MigratedServicePaths:  []string{runtimecontext.PathGitHubContext},
+		PartialRolloutVersion: runtimecontext.PartialRolloutVersionGitHub,
+	}})
+	if err != nil {
+		t.Fatalf("apply secrets: %v", err)
+	}
+	if info, err := os.Lstat(filepath.Join(workspace, "config")); err != nil {
+		t.Fatalf("lstat config: %v", err)
+	} else if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		t.Fatalf("config was not recreated as a real directory: %v", info.Mode())
+	}
+	if _, err := os.Stat(filepath.Join(outside, "oauth", "github.context.json")); !os.IsNotExist(err) {
+		t.Fatalf("runtime context escaped through symlink, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "config", "oauth", "github.context.json")); err != nil {
+		t.Fatalf("github context missing under workspace: %v", err)
+	}
+}
+
+func TestApplySecretsRuntimeContextRecreatesSymlinkedOAuthDir(t *testing.T) {
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	server := Server{WorkspaceDir: workspace, RuntimePrivateDir: t.TempDir()}
+	if err := os.MkdirAll(filepath.Join(workspace, "config"), 0o700); err != nil {
+		t.Fatalf("mkdir config: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(workspace, "config", "oauth")); err != nil {
+		t.Fatalf("symlink oauth: %v", err)
+	}
+	err := server.applySecrets(SecretBundle{RuntimeContextProjection: runtimecontext.Projection{
+		Files: []runtimecontext.File{{
+			Path:    runtimecontext.PathGitHubContext,
+			Content: `{"service":"github"}`,
+		}},
+		MigratedServicePaths:  []string{runtimecontext.PathGitHubContext},
+		PartialRolloutVersion: runtimecontext.PartialRolloutVersionGitHub,
+	}})
+	if err != nil {
+		t.Fatalf("apply secrets: %v", err)
+	}
+	if info, err := os.Lstat(filepath.Join(workspace, "config", "oauth")); err != nil {
+		t.Fatalf("lstat oauth: %v", err)
+	} else if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		t.Fatalf("oauth was not recreated as a real directory: %v", info.Mode())
+	}
+	if _, err := os.Stat(filepath.Join(outside, "github.context.json")); !os.IsNotExist(err) {
+		t.Fatalf("runtime context escaped through oauth symlink, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "config", "oauth", "github.context.json")); err != nil {
+		t.Fatalf("github context missing under workspace: %v", err)
+	}
 }
 
 func TestToolExecRunsImageHelperCommandsThroughExec(t *testing.T) {

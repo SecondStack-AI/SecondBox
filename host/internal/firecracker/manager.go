@@ -30,6 +30,7 @@ import (
 	"agentcy/internal/egressproxy"
 	"agentcy/internal/flow"
 	"agentcy/internal/registry"
+	"agentcy/internal/runtimecontext"
 	"agentcy/internal/runtimemanager"
 )
 
@@ -2028,9 +2029,6 @@ func (m *Manager) buildStartupSecretBundle(agentID, instanceID string, opts runt
 		env["MOM_AGENT_NETWORK_HOST"] = "false"
 	}
 	files := map[string]string{}
-	if contextJSON := strings.TrimSpace(opts.GitHubContextJSON); contextJSON != "" {
-		files["oauth/github.context.json"] = contextJSON
-	}
 	if opts.ProxyEgress != nil && opts.ProxyEgress.Enabled {
 		proxyURL := m.proxyURLForGuest(opts.ProxyEgress)
 		const gitHubAskpassPath = "/runtime-private/github-askpass"
@@ -2074,6 +2072,13 @@ func (m *Manager) buildStartupSecretBundle(agentID, instanceID string, opts runt
 	bundle := SecretBundle{Env: env}
 	if len(files) > 0 {
 		bundle.Files = files
+	}
+	if !opts.RuntimeContextProjection.IsZero() {
+		projection, err := runtimecontext.Canonicalize(opts.RuntimeContextProjection)
+		if err != nil {
+			return SecretBundle{}, fmt.Errorf("canonicalize runtime context projection: %w", err)
+		}
+		bundle.RuntimeContextProjection = projection
 	}
 	return bundle, nil
 }
@@ -2162,16 +2167,17 @@ func (m *Manager) startupFingerprintWithEffectiveProfileHash(agentID, compartmen
 		return "", fmt.Errorf("stat startup shared image: %w", err)
 	}
 	fingerprintInput := struct {
-		SecretBundle            SecretBundle                `json:"secretBundle"`
-		RuntimeClass            runtimemanager.RuntimeClass `json:"runtimeClass"`
-		RootfsPath              string                      `json:"rootfsPath"`
-		RootfsIdentity          *ArtifactIdentity           `json:"rootfsIdentity,omitempty"`
-		SharedPath              string                      `json:"sharedPath,omitempty"`
-		SharedIdentity          *ArtifactIdentity           `json:"sharedIdentity,omitempty"`
-		EffectiveProfileHash    string                      `json:"effectiveProfileHash,omitempty"`
-		ActorPrincipal          string                      `json:"actorPrincipal,omitempty"`
-		ExecutorContractVersion int                         `json:"executorContractVersion,omitempty"`
-		ExecutorCapabilities    []string                    `json:"executorCapabilities,omitempty"`
+		SecretBundle            SecretBundle                        `json:"secretBundle"`
+		RuntimeClass            runtimemanager.RuntimeClass         `json:"runtimeClass"`
+		RootfsPath              string                              `json:"rootfsPath"`
+		RootfsIdentity          *ArtifactIdentity                   `json:"rootfsIdentity,omitempty"`
+		SharedPath              string                              `json:"sharedPath,omitempty"`
+		SharedIdentity          *ArtifactIdentity                   `json:"sharedIdentity,omitempty"`
+		EffectiveProfileHash    string                              `json:"effectiveProfileHash,omitempty"`
+		ActorPrincipal          string                              `json:"actorPrincipal,omitempty"`
+		RuntimeActorContext     runtimecontext.VerifiedActorContext `json:"runtimeActorContext,omitempty"`
+		ExecutorContractVersion int                                 `json:"executorContractVersion,omitempty"`
+		ExecutorCapabilities    []string                            `json:"executorCapabilities,omitempty"`
 	}{
 		SecretBundle:            bundle,
 		RuntimeClass:            image.RuntimeClass,
@@ -2181,6 +2187,7 @@ func (m *Manager) startupFingerprintWithEffectiveProfileHash(agentID, compartmen
 		SharedIdentity:          sharedIdentity,
 		EffectiveProfileHash:    effectiveProfileHash,
 		ActorPrincipal:          strings.TrimSpace(opts.ActorPrincipal),
+		RuntimeActorContext:     canonicalRuntimeActorContext(opts.RuntimeActorContext),
 		ExecutorContractVersion: executorContractVersionForFingerprint(image.RuntimeClass),
 		ExecutorCapabilities:    executorCapabilitiesForFingerprint(image.RuntimeClass),
 	}
@@ -2191,6 +2198,16 @@ func (m *Manager) startupFingerprintWithEffectiveProfileHash(agentID, compartmen
 	sum := sha256.New()
 	sum.Write(data)
 	return hex.EncodeToString(sum.Sum(nil)), nil
+}
+
+func canonicalRuntimeActorContext(actor runtimecontext.VerifiedActorContext) runtimecontext.VerifiedActorContext {
+	actor.Principal = strings.TrimSpace(actor.Principal)
+	actor.PlatformUserID = strings.TrimSpace(actor.PlatformUserID)
+	actor.SessionID = strings.TrimSpace(actor.SessionID)
+	actor.Source = strings.TrimSpace(actor.Source)
+	actor.TurnContextID = strings.TrimSpace(actor.TurnContextID)
+	actor.RequestID = strings.TrimSpace(actor.RequestID)
+	return actor
 }
 
 func executorContractVersionForFingerprint(runtimeClass runtimemanager.RuntimeClass) int {
@@ -2834,6 +2851,9 @@ func (m *Manager) registerSourceBinding(ctx context.Context, agentID, instanceID
 			CompartmentID:     normalizeRuntimeCompartmentID(opts.CompartmentID),
 			PlaceID:           strings.TrimSpace(opts.ProxyEgress.PlaceID),
 			CredentialSubject: strings.TrimSpace(opts.ActorPrincipal),
+			PlatformUserID:    strings.TrimSpace(opts.RuntimeActorContext.PlatformUserID),
+			AgentSessionID:    strings.TrimSpace(opts.RuntimeActorContext.SessionID),
+			RequestID:         strings.TrimSpace(opts.RuntimeActorContext.RequestID),
 			EgressID:          instanceID,
 		}, time.Now().UTC(), egressproxy.ContextTokenTTL)
 		if err != nil {

@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"agentcy/internal/runtimecontext"
 	"agentcy/internal/runtimemanager"
 )
 
@@ -59,18 +60,20 @@ type ArtifactIdentity struct {
 }
 
 type RestoreSnapshotOpts struct {
-	AgentID           string
-	CompartmentID     string
-	ShapeFingerprint  string
-	Timezone          string
-	ProxyEgress       *runtimemanager.ProxyEgressConfig
-	Resume            bool
-	TrackDirtyPages   bool
-	ClockRealtime     bool
-	HardenPostRestore bool
-	MemoryBackendType string
-	MemoryBackendPath string
-	Metadata          map[string]string
+	AgentID                  string
+	CompartmentID            string
+	ShapeFingerprint         string
+	Timezone                 string
+	RuntimeActorContext      runtimecontext.VerifiedActorContext
+	ProxyEgress              *runtimemanager.ProxyEgressConfig
+	RuntimeContextProjection runtimecontext.Projection
+	Resume                   bool
+	TrackDirtyPages          bool
+	ClockRealtime            bool
+	HardenPostRestore        bool
+	MemoryBackendType        string
+	MemoryBackendPath        string
+	Metadata                 map[string]string
 }
 
 // CreateGoldenSnapshot pauses a warmed VM, writes a full Firecracker snapshot,
@@ -171,10 +174,12 @@ func (m *Manager) RestoreGoldenSnapshot(ctx context.Context, manifest GoldenSnap
 		return "", err
 	}
 	startOpts := runtimemanager.StartOpts{
-		Timezone:         opts.Timezone,
-		CompartmentID:    compartmentID,
-		ShapeFingerprint: opts.ShapeFingerprint,
-		ProxyEgress:      opts.ProxyEgress,
+		Timezone:                 opts.Timezone,
+		CompartmentID:            compartmentID,
+		RuntimeActorContext:      opts.RuntimeActorContext,
+		ShapeFingerprint:         opts.ShapeFingerprint,
+		ProxyEgress:              opts.ProxyEgress,
+		RuntimeContextProjection: opts.RuntimeContextProjection,
 	}
 	guestIP, err := m.reserveGuestIP(id)
 	if err != nil {
@@ -263,21 +268,29 @@ func (m *Manager) RestoreGoldenSnapshot(ctx context.Context, manifest GoldenSnap
 		_ = os.RemoveAll(dir)
 		return "", fmt.Errorf("start firecracker for snapshot restore: %w", err)
 	}
+	startupFingerprint, err := m.startupFingerprint(agentID, compartmentID, startOpts)
+	if err != nil {
+		m.cleanupTap(ctx, tapName)
+		_ = os.RemoveAll(dir)
+		_ = cmd.Process.Kill()
+		return "", fmt.Errorf("build restore startup fingerprint: %w", err)
+	}
 	inst := &instance{
-		id:            id,
-		agentID:       agentID,
-		compartmentID: compartmentID,
-		dir:           dir,
-		logPath:       logPath,
-		socket:        socket,
-		vsockUDS:      filepath.Join(dir, vsockUDSName),
-		tapName:       tapName,
-		rootfsPath:    rootfsPath,
-		workspacePath: workspacePath,
-		guestIP:       guestIP,
-		cmd:           cmd,
-		startedAt:     time.Now().UTC(),
-		done:          make(chan struct{}),
+		id:                 id,
+		agentID:            agentID,
+		compartmentID:      compartmentID,
+		dir:                dir,
+		logPath:            logPath,
+		socket:             socket,
+		vsockUDS:           filepath.Join(dir, vsockUDSName),
+		tapName:            tapName,
+		rootfsPath:         rootfsPath,
+		workspacePath:      workspacePath,
+		guestIP:            guestIP,
+		startupFingerprint: startupFingerprint,
+		cmd:                cmd,
+		startedAt:          time.Now().UTC(),
+		done:               make(chan struct{}),
 	}
 	if inst.vsockUDS == "" {
 		inst.vsockUDS = filepath.Join(dir, vsockUDSName)

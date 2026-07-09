@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"agentcy/internal/runtimecontext"
 	"agentcy/internal/runtimemanager"
 	"agentcy/internal/sandboxlimits"
 )
@@ -112,8 +113,9 @@ type BackupResponse struct {
 }
 
 type SecretBundle struct {
-	Env   map[string]string `json:"env,omitempty"`
-	Files map[string]string `json:"files,omitempty"`
+	Env                      map[string]string         `json:"env,omitempty"`
+	Files                    map[string]string         `json:"files,omitempty"`
+	RuntimeContextProjection runtimecontext.Projection `json:"runtimeContextProjection,omitempty"`
 }
 
 type RestoreHardenRequest struct {

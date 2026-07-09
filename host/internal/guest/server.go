@@ -19,6 +19,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"agentcy/internal/registry"
+	"agentcy/internal/runtimecontext"
 	"agentcy/internal/sandboxlimits"
 )
 
@@ -46,8 +48,9 @@ type RestoreHardener interface {
 }
 
 type SecretBundle struct {
-	Env   map[string]string `json:"env,omitempty"`
-	Files map[string]string `json:"files,omitempty"`
+	Env                      map[string]string         `json:"env,omitempty"`
+	Files                    map[string]string         `json:"files,omitempty"`
+	RuntimeContextProjection runtimecontext.Projection `json:"runtimeContextProjection,omitempty"`
 }
 
 type RestoreHardenRequest struct {
@@ -834,6 +837,200 @@ func (s Server) applySecrets(bundle SecretBundle) error {
 		if err := atomicWriteFile(target, []byte(content), perm); err != nil {
 			return fmt.Errorf("write secret file: %w", err)
 		}
+	}
+	if !bundle.RuntimeContextProjection.IsZero() {
+		if err := s.applyRuntimeContextProjection(bundle.RuntimeContextProjection); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s Server) applyRuntimeContextProjection(projection runtimecontext.Projection) error {
+	projection, err := runtimecontext.Canonicalize(projection)
+	if err != nil {
+		return fmt.Errorf("validate runtime context projection: %w", err)
+	}
+	workspaceRoot, oauthDir, err := s.ensureRuntimeContextDirs()
+	if err != nil {
+		return err
+	}
+	configRoot := filepath.Join(workspaceRoot, "config")
+	if err := scrubLegacyOAuthFiles(oauthDir); err != nil {
+		return err
+	}
+	currentFiles := map[string]struct{}{}
+	for _, file := range projection.Files {
+		currentFiles[file.Path] = struct{}{}
+	}
+	deletePaths := map[string]struct{}{}
+	if strings.TrimSpace(projection.EffectivePolicy) == registry.CredentialPolicyNone {
+		for _, path := range runtimecontext.AllProjectionPaths() {
+			deletePaths[path] = struct{}{}
+		}
+	}
+	for _, path := range projection.OmittedPaths {
+		deletePaths[path] = struct{}{}
+	}
+	for _, path := range projection.MigratedServicePaths {
+		if _, ok := currentFiles[path]; !ok {
+			deletePaths[path] = struct{}{}
+		}
+	}
+	for path := range deletePaths {
+		if err := runtimecontext.ValidatePath(path); err != nil {
+			return err
+		}
+		if err := removeContextPath(configRoot, path); err != nil {
+			return err
+		}
+	}
+	for _, file := range projection.Files {
+		target, err := runtimeContextTarget(configRoot, file.Path)
+		if err != nil {
+			return err
+		}
+		if err := atomicWriteFile(target, []byte(file.Content), 0o600); err != nil {
+			return fmt.Errorf("write runtime context file %s: %w", file.Path, err)
+		}
+	}
+	return nil
+}
+
+func (s Server) ensureRuntimeContextDirs() (string, string, error) {
+	workspaceRoot := s.workspaceRoot()
+	if err := ensureRootDir(workspaceRoot, 0o755); err != nil {
+		return "", "", fmt.Errorf("validate workspace root: %w", err)
+	}
+	configDir, err := ensureRealChildDir(workspaceRoot, "config", 0o755)
+	if err != nil {
+		return "", "", fmt.Errorf("prepare workspace config dir: %w", err)
+	}
+	oauthDir, err := ensureRealChildDir(configDir, "oauth", 0o700)
+	if err != nil {
+		return "", "", fmt.Errorf("prepare workspace oauth dir: %w", err)
+	}
+	return workspaceRoot, oauthDir, nil
+}
+
+func ensureRootDir(path string, perm os.FileMode) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		if err := os.MkdirAll(path, perm); err != nil {
+			return err
+		}
+		info, err = os.Lstat(path)
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink", path)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", path)
+	}
+	return os.Chmod(path, perm)
+}
+
+func ensureRealChildDir(parent, name string, perm os.FileMode) (string, error) {
+	if name == "" || filepath.Base(name) != name {
+		return "", fmt.Errorf("invalid child dir %q", name)
+	}
+	if info, err := os.Lstat(parent); err != nil {
+		return "", err
+	} else if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return "", fmt.Errorf("%s is not a real directory", parent)
+	}
+	path := filepath.Join(parent, name)
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		if err := os.Mkdir(path, perm); err != nil {
+			return "", err
+		}
+		return path, os.Chmod(path, perm)
+	}
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		if err := os.RemoveAll(path); err != nil {
+			return "", err
+		}
+		if err := os.Mkdir(path, perm); err != nil {
+			return "", err
+		}
+		return path, os.Chmod(path, perm)
+	}
+	return path, os.Chmod(path, perm)
+}
+
+func scrubLegacyOAuthFiles(oauthDir string) error {
+	rawNames := []string{
+		"github.json",
+		"jira.json",
+		"notion.json",
+		"tempo.json",
+		"gitlab.json",
+		"google-workspace.json",
+		"google-workspace.credentials.json",
+	}
+	for _, name := range rawNames {
+		if err := removeFileIfExists(filepath.Join(oauthDir, name)); err != nil {
+			return fmt.Errorf("remove legacy OAuth file %s: %w", name, err)
+		}
+	}
+	entries, err := os.ReadDir(oauthDir)
+	if err != nil {
+		return fmt.Errorf("read OAuth config dir: %w", err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		for _, raw := range rawNames {
+			matched, err := filepath.Match("."+raw+".*.tmp", name)
+			if err != nil {
+				return err
+			}
+			if matched {
+				if err := removeFileIfExists(filepath.Join(oauthDir, name)); err != nil {
+					return fmt.Errorf("remove legacy OAuth temp file %s: %w", name, err)
+				}
+				break
+			}
+		}
+	}
+	return nil
+}
+
+func removeContextPath(configRoot, path string) error {
+	target, err := runtimeContextTarget(configRoot, path)
+	if err != nil {
+		return err
+	}
+	if err := removeFileIfExists(target); err != nil {
+		return fmt.Errorf("remove runtime context file %s: %w", path, err)
+	}
+	return nil
+}
+
+func runtimeContextTarget(configRoot, path string) (string, error) {
+	if err := runtimecontext.ValidatePath(path); err != nil {
+		return "", err
+	}
+	target := filepath.Join(configRoot, filepath.FromSlash(path))
+	rel, err := filepath.Rel(configRoot, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("runtime context path escapes config root")
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return "", fmt.Errorf("create runtime context dir: %w", err)
+	}
+	return target, nil
+}
+
+func removeFileIfExists(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 	return nil
 }
