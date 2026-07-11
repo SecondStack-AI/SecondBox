@@ -42,6 +42,7 @@ type VerifiedActorContext struct {
 	Principal      string    `json:"principal,omitempty"`
 	PlatformUserID string    `json:"platformUserId,omitempty"`
 	SessionID      string    `json:"sessionId,omitempty"`
+	WakeTurnID     string    `json:"wakeTurnId,omitempty"`
 	Verified       bool      `json:"verified,omitempty"`
 	Source         string    `json:"source,omitempty"`
 	TurnContextID  string    `json:"turnContextId,omitempty"`
