@@ -125,7 +125,9 @@ _dev-impl:
             if [[ -z "$EGRESS_PROXY_CA_OUT" ]]; then
                 EGRESS_PROXY_CA_OUT="$PWD/data/egress-ca/egress-proxy-ca.pem"
             fi
+            EGRESS_PROXY_CA_KEY="${AG_EGRESS_PROXY_MITM_CA_KEY_PATH:-$PWD/data/egress-ca/mitm-ca-key.enc}"
             mkdir -p "$(dirname "$EGRESS_PROXY_CA_OUT")"
+            mkdir -p "$(dirname "$EGRESS_PROXY_CA_KEY")"
             go build -o bin/agentcy-egress-proxy ./cmd/agentcy-egress-proxy
             if timeout 1 bash -c ":</dev/tcp/${EGRESS_PROXY_BRIDGE_IP}/3128" >/dev/null 2>&1; then
                 echo "Using existing Firecracker egress proxy at ${EGRESS_PROXY_LISTEN}"
@@ -240,7 +242,8 @@ _dev-impl:
             -decision-endpoint "$EGRESS_PROXY_DECISION_ENDPOINT" \
             -service-token "${AG_EGRESS_PROXY_SERVICE_TOKEN:-}" \
             -inject-cache-ttl "${AG_EGRESS_PROXY_INJECT_CACHE_TTL:-30s}" \
-                -mitm -mitm-ca-cert-out "$EGRESS_PROXY_CA_OUT" \
+                -mitm -mitm-ca-key-path "$EGRESS_PROXY_CA_KEY" \
+                -mitm-ca-cert-out "$EGRESS_PROXY_CA_OUT" \
                 -require-source-identity &
             sleep 0.2
     fi
@@ -324,7 +327,9 @@ _dev-api-impl:
             if [[ -z "$EGRESS_PROXY_CA_OUT" ]]; then
                 EGRESS_PROXY_CA_OUT="$PWD/data/egress-ca/egress-proxy-ca.pem"
             fi
+            EGRESS_PROXY_CA_KEY="${AG_EGRESS_PROXY_MITM_CA_KEY_PATH:-$PWD/data/egress-ca/mitm-ca-key.enc}"
             mkdir -p "$(dirname "$EGRESS_PROXY_CA_OUT")"
+            mkdir -p "$(dirname "$EGRESS_PROXY_CA_KEY")"
             go build -o bin/agentcy-egress-proxy ./cmd/agentcy-egress-proxy
             if timeout 1 bash -c ":</dev/tcp/${EGRESS_PROXY_BRIDGE_IP}/3128" >/dev/null 2>&1; then
                 echo "Using existing Firecracker egress proxy at ${EGRESS_PROXY_LISTEN}"
@@ -392,7 +397,8 @@ _dev-api-impl:
             -decision-endpoint "$EGRESS_PROXY_DECISION_ENDPOINT" \
             -service-token "${AG_EGRESS_PROXY_SERVICE_TOKEN:-}" \
             -inject-cache-ttl "${AG_EGRESS_PROXY_INJECT_CACHE_TTL:-30s}" \
-            -mitm -mitm-ca-cert-out "$EGRESS_PROXY_CA_OUT" \
+            -mitm -mitm-ca-key-path "$EGRESS_PROXY_CA_KEY" \
+            -mitm-ca-cert-out "$EGRESS_PROXY_CA_OUT" \
             -require-source-identity &
     fi
     if [[ "${AG_MICROVM_ALLOW_UNJAILED:-}" == "true" ]]; then
