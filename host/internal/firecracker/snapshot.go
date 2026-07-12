@@ -439,6 +439,22 @@ func fileArtifactIdentity(path string) (*ArtifactIdentity, error) {
 	return &ArtifactIdentity{Size: info.Size(), ModTimeUnixNano: info.ModTime().UnixNano()}, nil
 }
 
+func syncDirectory(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	info, err := dir.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("sync target is not a directory: %s", path)
+	}
+	return dir.Sync()
+}
+
 func verifyArtifactIdentity(label, path string, want *ArtifactIdentity) error {
 	if want == nil {
 		return nil

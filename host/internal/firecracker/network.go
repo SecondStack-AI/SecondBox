@@ -25,6 +25,7 @@ type TapConfig struct {
 	AgentID    string
 	InstanceID string
 	TapName    string
+	GuestIP    string
 	BridgeName string
 	BridgeCIDR string
 	OwnerUID   int

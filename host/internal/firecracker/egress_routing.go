@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type HostEgressRouter interface {
@@ -61,29 +62,54 @@ func (r *IPTablesEgressRouter) RegisterTransparentRoute(ctx context.Context, rou
 			return err
 		}
 	}
+	// Retain the exact cleanup intent before invoking iptables. If the command
+	// reports an error after mutating the host, callers can still remove the
+	// rule and launcher state can restore this intent after a restart.
+	r.routes[route.InstanceID] = route
 	if err := r.run(ctx, r.bin, transparentRouteArgs("-A", route)...); err != nil {
 		return err
 	}
-	r.routes[route.InstanceID] = route
 	return nil
 }
 
 func (r *IPTablesEgressRouter) UnregisterContainer(instanceID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.UnregisterContainerContext(ctx, instanceID); err != nil {
+		slog.Warn("failed to remove microVM transparent egress route", "instance", instanceID, "error", err)
+	}
+}
+
+func (r *IPTablesEgressRouter) UnregisterContainerContext(ctx context.Context, instanceID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	route, ok := r.routes[instanceID]
 	if !ok {
-		return
+		return nil
 	}
-	if err := r.deleteRouteLocked(context.Background(), route); err != nil {
-		slog.Warn("failed to remove microVM transparent egress route", "instance", instanceID, "error", err)
-		return
+	if err := r.deleteRouteLocked(ctx, route); err != nil {
+		return err
 	}
 	delete(r.routes, instanceID)
+	return nil
 }
 
 func (r *IPTablesEgressRouter) deleteRouteLocked(ctx context.Context, route TransparentRoute) error {
-	return r.run(ctx, r.bin, transparentRouteArgs("-D", route)...)
+	err := r.run(ctx, r.bin, transparentRouteArgs("-D", route)...)
+	if err != nil && !missingIPTablesRule(err) {
+		return err
+	}
+	return nil
+}
+
+func missingIPTablesRule(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "does a matching rule exist") ||
+		strings.Contains(message, "bad rule") ||
+		strings.Contains(message, "no chain/target/match by that name")
 }
 
 func validateTransparentRoute(route TransparentRoute) error {
