@@ -57,7 +57,7 @@ if [ -z "$rootfs_source_dir" ] || [ ! -d "$rootfs_source_dir" ]; then
     exit 2
 fi
 
-for cmd in go sha256sum openssl mkfs.ext4 tar; do
+for cmd in debugfs go sha256sum openssl mkfs.ext4 tar; do
     command -v "$cmd" >/dev/null 2>&1 || { echo "missing required command: $cmd" >&2; exit 2; }
 done
 
@@ -93,6 +93,8 @@ install -d -m 0755 "$root_dir/usr/local/bin"
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$root_dir/usr/local/bin/agentcy-microvm-agent" "$repo_root/cmd/agentcy-microvm-agent"
 # Tool-executor microVMs run the tool-exec server only (no in-VM agent runtime).
 install -m 0755 "$repo_root/agent/tool-entrypoint.sh" "$root_dir/usr/local/bin/agentcy-microvm-entrypoint"
+
+"$script_dir/rootfs/verify-standard-toolset.sh" --root-dir "$root_dir"
 
 if [ -d "$root_dir/builtin-skills" ]; then
     mkdir -p "$shared_dir"
@@ -134,6 +136,8 @@ else
     mkfs.ext4 -F -q -d "$shared_dir" "$shared"
 fi
 "$script_dir/verify-browser-surface.sh" --shared "$shared"
+
+"$script_dir/rootfs/verify-standard-toolset.sh" --rootfs "$rootfs"
 
 cp "$kernel_path" "$out_dir/kernel"
 created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -188,7 +192,18 @@ EOF
 fi
 provenance_sha="$(sha256sum "$out_dir/kernel-provenance.json" | awk '{print $1}')"
 rootfs_source_sha="$(sha256sum "$out_dir/rootfs-source-manifest.json" | awk '{print $1}')"
-(cd "$out_dir" && sha256sum kernel rootfs.ext4 shared.img kernel-provenance.json rootfs-source-manifest.json > SHA256SUMS)
+toolset_policy_sha="$(sha256sum "$script_dir/rootfs/verify-standard-toolset.sh" | awk '{print $1}')"
+cat > "$out_dir/standard-toolset.json" <<EOF
+{
+  "schemaVersion": 1,
+  "contract": "standard-tool-vm",
+  "state": "verified",
+  "rootfsSha256": "$rootfs_sha",
+  "policySha256": "$toolset_policy_sha"
+}
+EOF
+standard_toolset_sha="$(sha256sum "$out_dir/standard-toolset.json" | awk '{print $1}')"
+(cd "$out_dir" && sha256sum kernel rootfs.ext4 shared.img kernel-provenance.json rootfs-source-manifest.json standard-toolset.json > SHA256SUMS)
 cat > "$out_dir/manifest.json" <<EOF
 {
   "artifactVersion": "$artifact_version",
@@ -196,6 +211,7 @@ cat > "$out_dir/manifest.json" <<EOF
   "kernel": {"path": "kernel", "sha256": "$kernel_sha"},
   "kernelProvenance": {"path": "kernel-provenance.json", "sha256": "$provenance_sha"},
   "rootfsSource": {"path": "rootfs-source-manifest.json", "sha256": "$rootfs_source_sha"},
+  "standardToolset": {"path": "standard-toolset.json", "sha256": "$standard_toolset_sha", "state": "verified"},
   "rootfs": {"path": "rootfs.ext4", "sha256": "$rootfs_sha", "format": "ext4", "sizeMiB": $rootfs_size_mib},
   "shared": {"path": "shared.img", "sha256": "$shared_sha", "format": "$shared_format"},
   "entrypoint": "/init",

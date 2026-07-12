@@ -55,7 +55,7 @@ if [ -n "$pubkey" ]; then
     fi
 fi
 
-for file in kernel rootfs.ext4 shared.img kernel-provenance.json rootfs-source-manifest.json manifest.json SHA256SUMS; do
+for file in kernel rootfs.ext4 shared.img kernel-provenance.json rootfs-source-manifest.json standard-toolset.json manifest.json SHA256SUMS; do
     if [ ! -f "$dir/$file" ]; then
         echo "missing artifact: $file" >&2
         exit 1
@@ -66,7 +66,7 @@ done
 "$script_dir/verify-browser-surface.sh" --rootfs "$dir/rootfs.ext4"
 "$script_dir/verify-browser-surface.sh" --shared "$dir/shared.img"
 
-for field in artifactVersion rootfs kernel kernelProvenance rootfsSource shared createdAt; do
+for field in artifactVersion rootfs kernel kernelProvenance rootfsSource standardToolset shared createdAt; do
     if ! grep -q "\"$field\"" "$dir/manifest.json"; then
         echo "manifest missing field: $field" >&2
         exit 1
@@ -81,6 +81,15 @@ fi
 rootfs_source_sha="$(sha256sum "$dir/rootfs-source-manifest.json" | awk '{print $1}')"
 if ! grep -q "$rootfs_source_sha" "$dir/manifest.json"; then
     echo "manifest rootfsSource sha256 does not match rootfs-source-manifest.json" >&2
+    exit 1
+fi
+standard_toolset_sha="$(sha256sum "$dir/standard-toolset.json" | awk '{print $1}')"
+if ! grep -q "$standard_toolset_sha" "$dir/manifest.json"; then
+    echo "manifest standardToolset sha256 does not match standard-toolset.json" >&2
+    exit 1
+fi
+if ! grep -Eq '"state"[[:space:]]*:[[:space:]]*"verified"' "$dir/standard-toolset.json"; then
+    echo "standard toolset policy is not verified" >&2
     exit 1
 fi
 kernel_sha="$(sha256sum "$dir/kernel" | awk '{print $1}')"

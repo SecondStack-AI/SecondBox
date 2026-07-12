@@ -23,12 +23,19 @@ longer the default because it depends on an opaque, gitignored
 | File | Purpose |
 |------|---------|
 | `debian-rootfs.lock` | pinned Debian suite, architecture, snapshot mirror, and debootstrap include set |
-| `apt-std.txt` | apt packages to add (Debian bookworm): native tools + `python3-*` libs |
+| `apt-std.txt` | complete Debian bookworm CLI contract plus `python3-*` libraries on minbase |
 | `requirements-std.txt` | pip-only Python libs not packaged in Debian |
 | `Dockerfile` | applies the two lists + config bakes on top of `${BASE_IMAGE}` |
 | `config/imagemagick-relax-policy.sh` | re-enable ImageMagick PDF/PS/EPS coders |
 | `config/profile.d-agentcy-std.sh` | headless matplotlib env (`MPLBACKEND=Agg`) |
 | `build-rootfs-source.sh` | orchestrates import → docker build → export to a dir |
+| `verify-standard-toolset.sh` | verifies documented CLI paths and Python imports in live/source/image modes |
+
+Because the base is `debootstrap --variant=minbase`, `apt-std.txt` includes the
+entire advertised CLI set, not only additions to an older opaque image. The live
+Docker build, exported directory check, and signed-rootfs check enforce the same
+standard-toolset contract. The signed artifact records its rootfs and policy
+hashes in `standard-toolset.json`.
 
 ## Delivery model
 

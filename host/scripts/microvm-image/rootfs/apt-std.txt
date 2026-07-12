@@ -4,6 +4,34 @@
 # One package per line; blank lines and #-comments are ignored. The build emits
 # rootfs-packages.dpkg.lock with exact resolved package versions.
 
+# --- baseline CLI contract (the source starts from debootstrap minbase) ---
+curl
+wget
+jq
+openssh-client
+unzip
+zip
+file
+less
+tree
+diffutils
+patch
+ripgrep
+sqlite3
+xmlstarlet
+pandoc
+csvkit
+yq
+httpie
+dnsutils
+iputils-ping
+netcat-openbsd
+imagemagick
+ffmpeg
+poppler-utils
+wkhtmltopdf
+shellcheck
+
 # --- fonts (matplotlib / LibreOffice / pandoc / wkhtmltopdf glyph coverage) ---
 fonts-dejavu
 fonts-liberation

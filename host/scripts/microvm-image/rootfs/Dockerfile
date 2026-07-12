@@ -34,6 +34,7 @@ RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/b
 # Pip-only importables not packaged in Debian, installed into the system
 # interpreter (build-time --break-system-packages is deliberate; PEP 668).
 COPY requirements-std.txt /tmp/agentcy/requirements-std.txt
+COPY verify-standard-toolset.sh /tmp/agentcy/verify-standard-toolset.sh
 RUN python3 -m pip install --no-cache-dir --break-system-packages \
       -r /tmp/agentcy/requirements-std.txt
 
@@ -48,4 +49,5 @@ RUN sh /tmp/agentcy/config/imagemagick-relax-policy.sh \
  && node -e "console.log(process.version)" \
  && npm --version \
  && (corepack --version >/dev/null 2>&1 || true) \
+ && /tmp/agentcy/verify-standard-toolset.sh --live \
  && rm -rf /tmp/agentcy
