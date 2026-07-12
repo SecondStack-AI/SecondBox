@@ -2827,6 +2827,7 @@ func TestSourceBindingContextTokenCarriesIntoStartupProxyEnv(t *testing.T) {
 			PlatformUserID: "user-1",
 			SessionID:      "session-1",
 			RequestID:      "request-1",
+			WakeTurnID:     "turn-1",
 			Verified:       true,
 		},
 		ProxyEgress: &runtimemanager.ProxyEgressConfig{
@@ -2856,6 +2857,7 @@ func TestSourceBindingContextTokenCarriesIntoStartupProxyEnv(t *testing.T) {
 		claims.PlatformUserID != "user-1" ||
 		claims.AgentSessionID != "session-1" ||
 		claims.RequestID != "request-1" ||
+		claims.TurnID != "turn-1" ||
 		claims.EgressID != instanceID {
 		t.Fatalf("context token claims = %#v", claims)
 	}
