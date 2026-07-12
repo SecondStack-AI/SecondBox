@@ -767,7 +767,10 @@ setup-server:
     else
         echo "Creating .env from template..."
         ENCRYPTION_KEY=$(openssl rand -base64 32)
-        sed "s|^AG_SECRET_ENCRYPTION_KEY=.*|AG_SECRET_ENCRYPTION_KEY=${ENCRYPTION_KEY}|" \
+        METRICS_TOKEN=$(openssl rand -hex 32)
+        sed \
+            -e "s|^AG_SECRET_ENCRYPTION_KEY=.*|AG_SECRET_ENCRYPTION_KEY=${ENCRYPTION_KEY}|" \
+            -e "s|^AG_METRICS_BEARER_TOKEN=.*|AG_METRICS_BEARER_TOKEN=${METRICS_TOKEN}|" \
             deploy/agentcy.env.example | \
             ssh -o ConnectTimeout=10 {{AG_BOOTSTRAP_USER}}@{{AG_HOST}} "cat > {{AG_PATH}}/.env && chown root:{{AG_RUNTIME_USER}} {{AG_PATH}}/.env && chmod 0640 {{AG_PATH}}/.env"
         echo ".env created (admin credentials NOT set — edit before first start)"
@@ -929,6 +932,10 @@ ship:
         set_env AG_MICROVM_KERNEL_PATH {{AG_PATH}}/microvm/latest/kernel
         set_env AG_MICROVM_ROOTFS_PATH {{AG_PATH}}/microvm/latest/rootfs.ext4
         set_env AG_MICROVM_SHARED_IMAGE_PATH {{AG_PATH}}/microvm/latest/shared.img
+        if ! sudo -n grep -Eq '^AG_METRICS_BEARER_TOKEN=.+$' {{AG_PATH}}/.env; then
+            set_env AG_METRICS_BEARER_TOKEN "\$(openssl rand -hex 32)"
+            echo 'Generated AG_METRICS_BEARER_TOKEN in {{AG_PATH}}/.env'
+        fi
 
         rm -rf ${REMOTE_TMP}
 
