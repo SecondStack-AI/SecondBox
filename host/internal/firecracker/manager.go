@@ -93,13 +93,7 @@ func (m *Manager) SetFlowRecorder(recorder flow.Recorder) {
 	m.flowRecorder = recorder
 }
 
-type RuntimeMetricsSnapshot struct {
-	ConcurrentVMsByAgent map[string]int
-	GuestIPsInUse        int
-	GuestIPCapacity      int
-	ColdStartCount       int
-	ColdStartP95         time.Duration
-}
+type RuntimeMetricsSnapshot = runtimemanager.RuntimeMetricsSnapshot
 
 type runtimeInstanceKey struct {
 	agentID       string
@@ -3225,10 +3219,14 @@ func (m *Manager) RuntimeMetricsSnapshot() RuntimeMetricsSnapshot {
 			continue
 		}
 		out.ConcurrentVMsByAgent[inst.agentID]++
+		if inst.warmToolVM {
+			out.WarmToolVMs++
+		}
 	}
 	out.GuestIPsInUse = len(m.guestIPs)
 	if m.cfg != nil {
 		out.GuestIPCapacity = microVMGuestIPCapacity(m.cfg)
+		out.MaxConcurrentPerAgent = m.cfg.MicroVMMaxConcurrentPerAgent
 	}
 	out.ColdStartCount = len(m.startDurations)
 	if len(m.startDurations) > 0 {
