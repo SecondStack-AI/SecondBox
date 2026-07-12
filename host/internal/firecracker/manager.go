@@ -3118,6 +3118,7 @@ func (m *Manager) registerSourceBinding(ctx context.Context, agentID, instanceID
 			PlatformUserID:    strings.TrimSpace(opts.RuntimeActorContext.PlatformUserID),
 			AgentSessionID:    strings.TrimSpace(opts.RuntimeActorContext.SessionID),
 			RequestID:         strings.TrimSpace(opts.RuntimeActorContext.RequestID),
+			TurnID:            strings.TrimSpace(opts.RuntimeActorContext.WakeTurnID),
 			EgressID:          instanceID,
 		}, time.Now().UTC(), egressproxy.ContextTokenTTL)
 		if err != nil {
