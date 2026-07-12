@@ -102,6 +102,7 @@ printf '%s\n' "$artifact_version" > "$shared_dir/agentcy-microvm-artifact-versio
 rootfs="$out_dir/rootfs.ext4"
 truncate -s "${rootfs_size_mib}M" "$rootfs"
 mkfs.ext4 -F -q -U "$rootfs_uuid" -d "$root_dir" "$rootfs"
+"$script_dir/verify-browser-surface.sh" --rootfs "$rootfs"
 
 shared="$out_dir/shared.img"
 case "$shared_format" in
@@ -129,6 +130,7 @@ else
     truncate -s "${shared_size_mib}M" "$shared"
     mkfs.ext4 -F -q -d "$shared_dir" "$shared"
 fi
+"$script_dir/verify-browser-surface.sh" --shared "$shared"
 
 cp "$kernel_path" "$out_dir/kernel"
 created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
