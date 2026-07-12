@@ -11,6 +11,7 @@ kernel_path="${AG_MICROVM_KERNEL_PATH:-}"
 kernel_config="${AG_MICROVM_KERNEL_CONFIG:-}"
 signing_key="${AG_MICROVM_SIGNING_KEY:-$repo_root/releases/microvm/signing.key}"
 trusted_public_key="${AG_MICROVM_PUBLIC_KEY:-}"
+trusted_public_key_sha="${AG_MICROVM_PUBLIC_KEY_SHA256:-}"
 rootfs_size_mib="${AG_MICROVM_ROOTFS_SIZE_MIB:-8192}"
 shared_format="${AG_MICROVM_SHARED_FORMAT:-auto}"
 rootfs_uuid="${AG_MICROVM_ROOTFS_UUID:-11111111-2222-3333-4444-555555555555}"
@@ -27,6 +28,8 @@ Environment:
   AG_MICROVM_OUT_DIR           Output dir (default releases/microvm/<timestamp>).
   AG_MICROVM_ROOTFS_SOURCE_DIR Prepared guest rootfs directory to copy.
   AG_MICROVM_SIGNING_KEY       OpenSSL private key path for manifest signing.
+  AG_MICROVM_PUBLIC_KEY        Optional trusted public key for verification.
+  AG_MICROVM_PUBLIC_KEY_SHA256 Optional trusted public key DER SHA-256.
   AG_MICROVM_ROOTFS_SIZE_MIB   Rootfs image size, default 8192.
   AG_MICROVM_SHARED_FORMAT     auto|erofs|squashfs|ext4, default auto.
 USAGE
@@ -209,7 +212,7 @@ openssl pkey -in "$signing_key" -pubout -out "$out_dir/signing.pub" >/dev/null 2
 openssl dgst -sha256 -sign "$signing_key" -out "$out_dir/manifest.sig" "$out_dir/manifest.json"
 openssl dgst -sha256 -verify "$out_dir/signing.pub" -signature "$out_dir/manifest.sig" "$out_dir/manifest.json" >/dev/null
 
-"$script_dir/verify.sh" "$out_dir" "$trusted_public_key"
+"$script_dir/verify.sh" "$out_dir" "$trusted_public_key" "$trusted_public_key_sha"
 out_dir_abs="$(cd "$out_dir" && pwd)"
 ln -sfn "$out_dir_abs" "$repo_root/releases/microvm/latest"
 echo "$out_dir"
