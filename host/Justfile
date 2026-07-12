@@ -618,6 +618,12 @@ test:
     export AG_DATABASE_URL="${AG_DATABASE_URL:-$AG_TEST_DATABASE_URL}"
     go test ./cmd/... ./internal/... ./skills-catalog/...
 
+# Compile every Go test package, then run packages whose test dependency graph
+# does not include the shared Postgres fixture. The full `just test` gate remains
+# authoritative for database contracts.
+test-fast *ARGS:
+    scripts/test/go-fast.sh {{ARGS}}
+
 # Initialize a local unified Postgres database and role/schema layout.
 db-init:
     #!/usr/bin/env bash
