@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -73,6 +74,7 @@ type Manager struct {
 	sourceBindings   SourceBindingRegistrar
 	network          HostNetworkConfigurer
 	egressRouter     HostEgressRouter
+	trustedArtifacts *trustedMicroVMArtifacts
 	startCompartment func(context.Context, string, string, runtimemanager.StartOpts) (string, error)
 	executeTool      func(context.Context, string, ToolExecRequest) (ToolExecResponse, error)
 	freezeWorkspace  func(context.Context, string) (BackupResponse, error)
@@ -147,6 +149,7 @@ type firecrackerLaunch struct {
 
 type microVMImageSelection struct {
 	RuntimeClass    runtimemanager.RuntimeClass
+	KernelPath      string
 	RootfsPath      string
 	SharedImagePath string
 }
@@ -155,6 +158,24 @@ type warmToolLease struct {
 	instanceID string
 	reused     bool
 	startVMMs  int64
+}
+
+type trustedMicroVMArtifacts struct {
+	files []trustedMicroVMArtifactFile
+}
+
+type trustedMicroVMArtifactFile struct {
+	label    string
+	path     string
+	identity trustedMicroVMArtifactIdentity
+}
+
+type trustedMicroVMArtifactIdentity struct {
+	dev             uint64
+	ino             uint64
+	size            int64
+	modTimeUnixNano int64
+	ctimeUnixNano   int64
 }
 
 var (
@@ -240,6 +261,10 @@ func New(cfg *config.Config) (*Manager, error) {
 			return nil, fmt.Errorf("microVM tool shared image path %q: %w", cfg.MicroVMToolSharedImagePath, err)
 		}
 	}
+	trustedArtifacts, err := verifyAndCaptureTrustedMicroVMArtifacts(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("verify microVM trust anchor: %w", err)
+	}
 	if cfg.MicroVMAllowUnjailed {
 		if relocated, ok := relocateRunDirForUnixSockets(cfg.MicroVMRunDir); ok {
 			slog.Warn("microVM run dir is too long for unjailed unix sockets; relocating to keep API/vsock paths under the kernel limit",
@@ -253,12 +278,13 @@ func New(cfg *config.Config) (*Manager, error) {
 		}
 	}
 	return &Manager{
-		cfg:            cfg,
-		instances:      map[string]*instance{},
-		instancesByKey: map[runtimeInstanceKey]string{},
-		provisioning:   map[runtimeInstanceKey]chan struct{}{},
-		guestIPs:       map[string]string{},
-		network:        IPTapConfigurer{},
+		cfg:              cfg,
+		instances:        map[string]*instance{},
+		instancesByKey:   map[runtimeInstanceKey]string{},
+		provisioning:     map[runtimeInstanceKey]chan struct{}{},
+		guestIPs:         map[string]string{},
+		network:          IPTapConfigurer{},
+		trustedArtifacts: trustedArtifacts,
 	}, nil
 }
 
@@ -1215,11 +1241,12 @@ func (m *Manager) createAndStartCold(ctx context.Context, agentID, compartmentID
 		m.cleanupTap(setupCtx, tapName)
 		return "", err
 	}
-	rootfsPath := filepath.Join(dir, rootfsName)
-	if err := reflinkOnlyFile(rootfsPath, image.RootfsPath, 0o600); err != nil {
+	launchImage, err := m.prepareLaunchImage(dir, image)
+	if err != nil {
 		m.cleanupTap(setupCtx, tapName)
-		return "", fmt.Errorf("prepare rootfs: %w", err)
+		return "", err
 	}
+	timer.mark("trust_anchor_verified")
 	timer.mark("rootfs_reflinked")
 	workspacePath, err := m.prepareWorkspace(setupCtx, agentID, compartmentID)
 	if err != nil {
@@ -1231,7 +1258,7 @@ func (m *Manager) createAndStartCold(ctx context.Context, agentID, compartmentID
 	// from the agent workspace. It is deliberately never removed on the error
 	// paths below so a restart does not destroy saved compartment-local work.
 
-	launch, err := m.prepareLaunch(setupCtx, id, dir, rootfsPath, workspacePath, image.SharedImagePath, tapName, guestIP)
+	launch, err := m.prepareLaunch(setupCtx, id, dir, launchImage.KernelPath, launchImage.RootfsPath, workspacePath, launchImage.SharedImagePath, tapName, guestIP)
 	if err != nil {
 		m.cleanupTap(setupCtx, tapName)
 		return "", err
@@ -1290,10 +1317,10 @@ func (m *Manager) createAndStartCold(ctx context.Context, agentID, compartmentID
 		vsockUDS:           launch.vsockUDS,
 		tapName:            tapName,
 		jailRoot:           launch.jailRoot,
-		rootfsPath:         rootfsPath,
+		rootfsPath:         launchImage.RootfsPath,
 		rootfsImagePath:    image.RootfsPath,
 		workspacePath:      workspacePath,
-		sharedImagePath:    image.SharedImagePath,
+		sharedImagePath:    launchImage.SharedImagePath,
 		guestIP:            guestIP,
 		startupFingerprint: startupFingerprint,
 		cmd:                cmd,
@@ -1358,6 +1385,252 @@ func shortMicroVMRunDirCandidates() []string {
 	return candidates
 }
 
+func (m *Manager) validateTrustAnchorForLaunch() error {
+	if m == nil || m.cfg == nil || strings.TrimSpace(m.cfg.MicroVMPublicKeyPath) == "" {
+		return nil
+	}
+	m.mu.Lock()
+	unchanged, err := trustedMicroVMArtifactsUnchanged(m.trustedArtifacts)
+	m.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if unchanged {
+		return nil
+	}
+	trustedArtifacts, err := verifyAndCaptureTrustedMicroVMArtifacts(m.cfg)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.trustedArtifacts = trustedArtifacts
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *Manager) prepareLaunchImage(dir string, image microVMImageSelection) (microVMImageSelection, error) {
+	if m == nil || m.cfg == nil || strings.TrimSpace(m.cfg.MicroVMPublicKeyPath) == "" {
+		image.RootfsPath = filepath.Join(dir, rootfsName)
+		if err := reflinkOnlyFile(image.RootfsPath, m.microVMImageSourceRootfs(image), 0o600); err != nil {
+			return microVMImageSelection{}, fmt.Errorf("prepare rootfs: %w", err)
+		}
+		return image, nil
+	}
+	if err := m.validateTrustAnchorForLaunch(); err != nil {
+		return microVMImageSelection{}, fmt.Errorf("verify microVM trust anchor: %w", err)
+	}
+	return m.stageTrustedLaunchImage(dir, image)
+}
+
+func (m *Manager) microVMImageSourceRootfs(image microVMImageSelection) string {
+	if strings.TrimSpace(image.RootfsPath) != "" {
+		return image.RootfsPath
+	}
+	if m == nil || m.cfg == nil {
+		return ""
+	}
+	return m.cfg.MicroVMRootfsPath
+}
+
+func (m *Manager) stageTrustedLaunchImage(dir string, image microVMImageSelection) (microVMImageSelection, error) {
+	m.mu.Lock()
+	artifacts := cloneTrustedMicroVMArtifacts(m.trustedArtifacts)
+	m.mu.Unlock()
+	if artifacts == nil {
+		return microVMImageSelection{}, fmt.Errorf("trusted microVM artifact identities are not recorded")
+	}
+	staged, err := stageTrustedLaunchImageFiles(dir, image, artifacts)
+	if err != nil {
+		return microVMImageSelection{}, err
+	}
+	return staged, nil
+}
+
+func stageTrustedLaunchImageFiles(dir string, image microVMImageSelection, artifacts *trustedMicroVMArtifacts) (microVMImageSelection, error) {
+	staged := image
+	staged.KernelPath = filepath.Join(dir, kernelName)
+	staged.RootfsPath = filepath.Join(dir, rootfsName)
+	if strings.TrimSpace(image.SharedImagePath) != "" {
+		staged.SharedImagePath = filepath.Join(dir, sharedImageName)
+	}
+	if err := copyFile(staged.KernelPath, image.KernelPath, 0o600); err != nil {
+		return microVMImageSelection{}, fmt.Errorf("stage trusted kernel: %w", err)
+	}
+	if err := reflinkOnlyFile(staged.RootfsPath, image.RootfsPath, 0o600); err != nil {
+		return microVMImageSelection{}, fmt.Errorf("prepare rootfs: %w", err)
+	}
+	if strings.TrimSpace(image.SharedImagePath) != "" {
+		if err := copyFile(staged.SharedImagePath, image.SharedImagePath, 0o600); err != nil {
+			return microVMImageSelection{}, fmt.Errorf("stage trusted shared image: %w", err)
+		}
+	}
+	unchanged, err := trustedMicroVMArtifactsUnchanged(artifacts)
+	if err != nil {
+		return microVMImageSelection{}, err
+	}
+	if !unchanged {
+		return microVMImageSelection{}, fmt.Errorf("trusted microVM artifacts changed while staging launch image")
+	}
+	return staged, nil
+}
+
+func verifyAndCaptureTrustedMicroVMArtifacts(cfg *config.Config) (*trustedMicroVMArtifacts, error) {
+	if cfg == nil || strings.TrimSpace(cfg.MicroVMPublicKeyPath) == "" {
+		return nil, nil
+	}
+	before, err := captureTrustedMicroVMArtifacts(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("record microVM trust anchor identities: %w", err)
+	}
+	if err := cfg.ValidateMicroVMTrustAnchor(); err != nil {
+		return nil, err
+	}
+	unchanged, err := trustedMicroVMArtifactsUnchanged(before)
+	if err != nil {
+		return nil, err
+	}
+	if !unchanged {
+		return nil, fmt.Errorf("trusted microVM artifacts changed during verification")
+	}
+	return before, nil
+}
+
+func captureTrustedMicroVMArtifacts(cfg *config.Config) (*trustedMicroVMArtifacts, error) {
+	if cfg == nil || strings.TrimSpace(cfg.MicroVMPublicKeyPath) == "" {
+		return nil, nil
+	}
+	artifactDir := filepath.Dir(cfg.MicroVMKernelPath)
+	paths := []trustedMicroVMArtifactFile{
+		{label: "public key", path: cfg.MicroVMPublicKeyPath},
+		{label: "kernel", path: cfg.MicroVMKernelPath},
+		{label: "rootfs", path: cfg.MicroVMRootfsPath},
+		{label: "shared image", path: cfg.MicroVMSharedImagePath},
+		{label: "kernel provenance", path: filepath.Join(artifactDir, "kernel-provenance.json")},
+		{label: "rootfs source manifest", path: filepath.Join(artifactDir, "rootfs-source-manifest.json")},
+		{label: "manifest", path: filepath.Join(artifactDir, "manifest.json")},
+		{label: "manifest signature", path: filepath.Join(artifactDir, "manifest.sig")},
+		{label: "checksums", path: filepath.Join(artifactDir, "SHA256SUMS")},
+	}
+	for i := range paths {
+		identity, err := trustedMicroVMArtifactIdentityFor(paths[i].path)
+		if err != nil {
+			return nil, fmt.Errorf("stat trusted microVM %s %q: %w", paths[i].label, paths[i].path, err)
+		}
+		paths[i].identity = identity
+	}
+	return &trustedMicroVMArtifacts{files: paths}, nil
+}
+
+func cloneTrustedMicroVMArtifacts(artifacts *trustedMicroVMArtifacts) *trustedMicroVMArtifacts {
+	if artifacts == nil {
+		return nil
+	}
+	files := make([]trustedMicroVMArtifactFile, len(artifacts.files))
+	copy(files, artifacts.files)
+	return &trustedMicroVMArtifacts{files: files}
+}
+
+func trustedMicroVMArtifactsUnchanged(artifacts *trustedMicroVMArtifacts) (bool, error) {
+	if artifacts == nil {
+		return false, nil
+	}
+	for _, file := range artifacts.files {
+		identity, err := trustedMicroVMArtifactIdentityFor(file.path)
+		if err != nil {
+			return false, fmt.Errorf("stat trusted microVM %s %q: %w", file.label, file.path, err)
+		}
+		if file.identity != identity {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func trustedMicroVMArtifactIdentityFor(path string) (trustedMicroVMArtifactIdentity, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return trustedMicroVMArtifactIdentity{}, err
+	}
+	dev, ino, ctimeUnixNano, ok := fileStatIdentity(info)
+	if !ok {
+		return trustedMicroVMArtifactIdentity{}, fmt.Errorf("unsupported stat metadata")
+	}
+	return trustedMicroVMArtifactIdentity{
+		dev:             dev,
+		ino:             ino,
+		size:            info.Size(),
+		modTimeUnixNano: info.ModTime().UnixNano(),
+		ctimeUnixNano:   ctimeUnixNano,
+	}, nil
+}
+
+func fileStatIdentity(info os.FileInfo) (dev uint64, ino uint64, ctimeUnixNano int64, ok bool) {
+	if info == nil || info.Sys() == nil {
+		return 0, 0, 0, false
+	}
+	stat := reflect.Indirect(reflect.ValueOf(info.Sys()))
+	if !stat.IsValid() {
+		return 0, 0, 0, false
+	}
+	devField, inoField := stat.FieldByName("Dev"), stat.FieldByName("Ino")
+	dev, ok = uint64FromStatField(devField)
+	if !ok {
+		return 0, 0, 0, false
+	}
+	ino, ok = uint64FromStatField(inoField)
+	if !ok {
+		return 0, 0, 0, false
+	}
+	for _, fieldName := range []string{"Ctim", "Ctimespec"} {
+		field := stat.FieldByName(fieldName)
+		if !field.IsValid() {
+			continue
+		}
+		sec, secOK := int64FromStatField(field.FieldByName("Sec"))
+		nsec, nsecOK := int64FromStatField(field.FieldByName("Nsec"))
+		if secOK && nsecOK {
+			return dev, ino, sec*int64(time.Second) + nsec, true
+		}
+	}
+	return 0, 0, 0, false
+}
+
+func uint64FromStatField(field reflect.Value) (uint64, bool) {
+	if !field.IsValid() {
+		return 0, false
+	}
+	switch field.Kind() {
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return field.Uint(), true
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		value := field.Int()
+		if value < 0 {
+			return 0, false
+		}
+		return uint64(value), true
+	default:
+		return 0, false
+	}
+}
+
+func int64FromStatField(field reflect.Value) (int64, bool) {
+	if !field.IsValid() {
+		return 0, false
+	}
+	switch field.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return field.Int(), true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		value := field.Uint()
+		if value > uint64(^uint64(0)>>1) {
+			return 0, false
+		}
+		return int64(value), true
+	default:
+		return 0, false
+	}
+}
+
 func (m *Manager) microVMImageForStart(opts runtimemanager.StartOpts) (microVMImageSelection, error) {
 	runtimeClass := opts.RuntimeClass
 	if runtimeClass == "" {
@@ -1369,6 +1642,7 @@ func (m *Manager) microVMImageForStart(opts runtimemanager.StartOpts) (microVMIm
 		sharedImagePath := firstNonEmpty(m.cfg.MicroVMToolSharedImagePath, m.cfg.MicroVMSharedImagePath)
 		return microVMImageSelection{
 			RuntimeClass:    runtimeClass,
+			KernelPath:      m.cfg.MicroVMKernelPath,
 			RootfsPath:      rootfsPath,
 			SharedImagePath: sharedImagePath,
 		}, nil
@@ -1387,7 +1661,7 @@ func checkUnixSocketPath(label, path string) error {
 	return nil
 }
 
-func (m *Manager) prepareLaunch(ctx context.Context, instanceID, dir, rootfsPath, workspacePath, sharedImagePath, tapName, guestIP string) (firecrackerLaunch, error) {
+func (m *Manager) prepareLaunch(ctx context.Context, instanceID, dir, kernelPath, rootfsPath, workspacePath, sharedImagePath, tapName, guestIP string) (firecrackerLaunch, error) {
 	if m.cfg.MicroVMAllowUnjailed {
 		socket := filepath.Join(dir, firecrackerSockName)
 		vsockUDS := filepath.Join(dir, vsockUDSName)
@@ -1401,7 +1675,7 @@ func (m *Manager) prepareLaunch(ctx context.Context, instanceID, dir, rootfsPath
 		return firecrackerLaunch{
 			executable: m.cfg.FirecrackerPath,
 			args:       []string{"--id", instanceID, "--api-sock", socket, "--config-file", configPath},
-			config:     buildFirecrackerConfig(m.cfg, rootfsPath, workspacePath, sharedImagePath, vsockUDS, tapName, guestIP),
+			config:     buildFirecrackerConfig(m.cfg, kernelPath, rootfsPath, workspacePath, sharedImagePath, vsockUDS, tapName, guestIP),
 			configPath: configPath,
 			socketPath: socket,
 			vsockUDS:   vsockUDS,
@@ -1422,7 +1696,7 @@ func (m *Manager) prepareLaunch(ctx context.Context, instanceID, dir, rootfsPath
 		_ = os.RemoveAll(jailRoot)
 		return firecrackerLaunch{}, fmt.Errorf("stage workspace in jail: %w", err)
 	}
-	if err := stageCopiedJailFile(filepath.Join(jailRoot, kernelName), m.cfg.MicroVMKernelPath, 0o600, m.cfg.MicroVMJailerUID, m.cfg.MicroVMJailerGID); err != nil {
+	if err := stageCopiedJailFile(filepath.Join(jailRoot, kernelName), kernelPath, 0o600, m.cfg.MicroVMJailerUID, m.cfg.MicroVMJailerGID); err != nil {
 		_ = os.RemoveAll(jailRoot)
 		return firecrackerLaunch{}, fmt.Errorf("stage kernel in jail: %w", err)
 	}
@@ -1438,7 +1712,7 @@ func (m *Manager) prepareLaunch(ctx context.Context, instanceID, dir, rootfsPath
 	socket := filepath.Join(jailRoot, firecrackerSockName)
 	vsockUDS := filepath.Join(jailRoot, vsockUDSName)
 	configPath := filepath.Join(jailRoot, configName)
-	fcConfig := buildFirecrackerConfig(m.cfg, rootfsName, workspaceName, drivesSharedPath, vsockUDSName, tapName, guestIP)
+	fcConfig := buildFirecrackerConfig(m.cfg, kernelName, rootfsName, workspaceName, drivesSharedPath, vsockUDSName, tapName, guestIP)
 	fcConfig.BootSource.KernelImagePath = kernelName
 
 	args := m.jailerArgs(instanceID)
@@ -1906,7 +2180,7 @@ type networkIface struct {
 	HostDevName string `json:"host_dev_name,omitempty"`
 }
 
-func buildFirecrackerConfig(cfg *config.Config, rootfsPath, workspacePath, sharedImagePath, vsockUDS, tapName, guestIP string) firecrackerConfig {
+func buildFirecrackerConfig(cfg *config.Config, kernelPath, rootfsPath, workspacePath, sharedImagePath, vsockUDS, tapName, guestIP string) firecrackerConfig {
 	drives := []drive{
 		{DriveID: "rootfs", PathOnHost: rootfsPath, IsRootDevice: true, IsReadOnly: false},
 		{DriveID: "workspace", PathOnHost: workspacePath, IsRootDevice: false, IsReadOnly: false},
@@ -1915,7 +2189,7 @@ func buildFirecrackerConfig(cfg *config.Config, rootfsPath, workspacePath, share
 		drives = append(drives, drive{DriveID: "shared", PathOnHost: sharedImagePath, IsRootDevice: false, IsReadOnly: true})
 	}
 	fc := firecrackerConfig{
-		BootSource: bootSource{KernelImagePath: cfg.MicroVMKernelPath, BootArgs: effectiveKernelArgs(cfg, guestIP)},
+		BootSource: bootSource{KernelImagePath: kernelPath, BootArgs: effectiveKernelArgs(cfg, guestIP)},
 		Drives:     drives,
 		Machine:    machineConfig{VCPUCount: cfg.MicroVMVCPUs, MemSizeMiB: cfg.MicroVMMemoryMiB, SMT: false, CPUTemplate: cfg.MicroVMCPUTemplate},
 		Vsock:      vsockConfig{VsockID: "agentcy-vsock", GuestCID: 3, UDSPath: vsockUDS},

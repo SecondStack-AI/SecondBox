@@ -38,6 +38,102 @@ func TestNewInstanceIDIncludesCompartmentSegment(t *testing.T) {
 	}
 }
 
+func TestTrustedMicroVMArtifactsDetectsSameSizeRestoredMtimeMutation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rootfs.ext4")
+	if err := os.WriteFile(path, []byte("before"), 0o600); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+	fixedTime := time.Unix(1700000000, 123)
+	if err := os.Chtimes(path, fixedTime, fixedTime); err != nil {
+		t.Fatalf("set artifact time: %v", err)
+	}
+	identity, err := trustedMicroVMArtifactIdentityFor(path)
+	if err != nil {
+		t.Fatalf("capture identity: %v", err)
+	}
+	artifacts := &trustedMicroVMArtifacts{files: []trustedMicroVMArtifactFile{{
+		label:    "rootfs",
+		path:     path,
+		identity: identity,
+	}}}
+	if err := os.WriteFile(path, []byte("after!"), 0o600); err != nil {
+		t.Fatalf("mutate artifact: %v", err)
+	}
+	if err := os.Chtimes(path, fixedTime, fixedTime); err != nil {
+		t.Fatalf("restore artifact time: %v", err)
+	}
+
+	unchanged, err := trustedMicroVMArtifactsUnchanged(artifacts)
+	if err != nil {
+		t.Fatalf("check artifacts: %v", err)
+	}
+	if unchanged {
+		t.Fatal("same-size mutation with restored mtime was treated as unchanged")
+	}
+}
+
+func TestStageTrustedLaunchImageFilesUsesStagedPaths(t *testing.T) {
+	dir := t.TempDir()
+	kernel := filepath.Join(dir, "kernel")
+	rootfs := filepath.Join(dir, "rootfs.ext4")
+	shared := filepath.Join(dir, "shared.img")
+	for path, data := range map[string]string{
+		kernel: "kernel",
+		rootfs: "rootfs",
+		shared: "shared",
+	} {
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	artifacts := &trustedMicroVMArtifacts{files: []trustedMicroVMArtifactFile{
+		{label: "kernel", path: kernel},
+		{label: "rootfs", path: rootfs},
+		{label: "shared image", path: shared},
+	}}
+	for i := range artifacts.files {
+		identity, err := trustedMicroVMArtifactIdentityFor(artifacts.files[i].path)
+		if err != nil {
+			t.Fatalf("stat %s: %v", artifacts.files[i].path, err)
+		}
+		artifacts.files[i].identity = identity
+	}
+
+	runDir := filepath.Join(dir, "run")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	staged, err := stageTrustedLaunchImageFiles(runDir, microVMImageSelection{
+		RuntimeClass:    runtimemanager.RuntimeClassToolExecutor,
+		KernelPath:      kernel,
+		RootfsPath:      rootfs,
+		SharedImagePath: shared,
+	}, artifacts)
+	if err != nil {
+		if strings.Contains(err.Error(), "reflink rootfs") {
+			t.Skipf("filesystem does not support rootfs reflinks: %v", err)
+		}
+		t.Fatalf("stage trusted launch image: %v", err)
+	}
+	if staged.KernelPath == kernel || staged.RootfsPath == rootfs || staged.SharedImagePath == shared {
+		t.Fatalf("staged image still points at source paths: %#v", staged)
+	}
+	for path, want := range map[string]string{
+		staged.KernelPath:      "kernel",
+		staged.RootfsPath:      "rootfs",
+		staged.SharedImagePath: "shared",
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read staged %s: %v", path, err)
+		}
+		if string(data) != want {
+			t.Fatalf("staged %s = %q, want %q", path, data, want)
+		}
+	}
+}
+
 func TestManagerInstanceMapConcurrentAccess(t *testing.T) {
 	m := &Manager{}
 	const n = 64
@@ -1319,7 +1415,7 @@ func TestBuildFirecrackerConfigIncludesWorkspaceAndVsock(t *testing.T) {
 		MicroVMCPUTemplate:     "None",
 	}
 
-	got := buildFirecrackerConfig(cfg, "/run/rootfs.ext4", "/vol/workspace.ext4", cfg.MicroVMSharedImagePath, "/run/agentcy.vsock", "", "")
+	got := buildFirecrackerConfig(cfg, cfg.MicroVMKernelPath, "/run/rootfs.ext4", "/vol/workspace.ext4", cfg.MicroVMSharedImagePath, "/run/agentcy.vsock", "", "")
 
 	if got.BootSource.KernelImagePath != "/artifacts/vmlinux" {
 		t.Fatalf("kernel path = %q", got.BootSource.KernelImagePath)
@@ -1681,7 +1777,7 @@ func TestBuildFirecrackerConfigIncludesTapInterface(t *testing.T) {
 		MicroVMVCPUs:      1,
 		MicroVMMemoryMiB:  512,
 	}
-	got := buildFirecrackerConfig(cfg, "/run/rootfs.ext4", "/vol/workspace.ext4", cfg.MicroVMSharedImagePath, "/run/agentcy.vsock", "agfc123456", "")
+	got := buildFirecrackerConfig(cfg, cfg.MicroVMKernelPath, "/run/rootfs.ext4", "/vol/workspace.ext4", cfg.MicroVMSharedImagePath, "/run/agentcy.vsock", "agfc123456", "")
 	if len(got.NetworkIfaces) != 1 {
 		t.Fatalf("network interfaces = %#v", got.NetworkIfaces)
 	}
@@ -1702,7 +1798,7 @@ func TestPrepareLaunchUnjailedIncludesInstanceID(t *testing.T) {
 		MicroVMMemoryMiB:     512,
 		MicroVMKernelPath:    "/kernel",
 	}}
-	launch, err := m.prepareLaunch(context.Background(), "fc-agent-cmp-a-id", dir, "/rootfs.ext4", "/workspace.ext4", "", "", "")
+	launch, err := m.prepareLaunch(context.Background(), "fc-agent-cmp-a-id", dir, "/kernel", "/rootfs.ext4", "/workspace.ext4", "", "", "")
 	if err != nil {
 		t.Fatalf("prepare launch: %v", err)
 	}
@@ -1909,7 +2005,7 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 		MicroVMWorkspaceSizeMiB:    8,
 		MicroVMAllowUnjailed:       false,
 	}}
-	launch, err := m.prepareLaunch(context.Background(), "fc-agent-123", runDir, rootfs, workspace, shared, "agfc123", "")
+	launch, err := m.prepareLaunch(context.Background(), "fc-agent-123", runDir, kernel, rootfs, workspace, shared, "agfc123", "")
 	if err != nil {
 		t.Fatalf("prepare launch: %v", err)
 	}
@@ -2584,7 +2680,7 @@ func TestMicroVMGuestIPCapacitySingleFallback(t *testing.T) {
 
 func TestBuildFirecrackerConfigAddsGuestIPBootArg(t *testing.T) {
 	cfg := &config.Config{MicroVMKernelPath: "/vmlinux", MicroVMBridgeCIDR: "10.0.0.1/24", MicroVMVCPUs: 1, MicroVMMemoryMiB: 512}
-	got := buildFirecrackerConfig(cfg, "/rootfs", "/workspace", cfg.MicroVMSharedImagePath, "/vsock", "agfc1", "10.0.0.7")
+	got := buildFirecrackerConfig(cfg, cfg.MicroVMKernelPath, "/rootfs", "/workspace", cfg.MicroVMSharedImagePath, "/vsock", "agfc1", "10.0.0.7")
 	if !strings.Contains(got.BootSource.BootArgs, "ip=10.0.0.7::10.0.0.1:255.255.255.0::eth0:off") {
 		t.Fatalf("boot args missing per-VM ip=: %q", got.BootSource.BootArgs)
 	}
