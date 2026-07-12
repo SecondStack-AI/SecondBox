@@ -159,7 +159,7 @@ type warmToolLease struct {
 
 var (
 	toolExecutorFingerprintContractVersion = ToolExecutorContractVersion
-	toolExecutorFingerprintCapabilities    = []string{"browser", "workspace-session-env"}
+	toolExecutorFingerprintCapabilities    = []string{"workspace-session-env"}
 	hardLinkFile                           = os.Link
 )
 
@@ -1548,7 +1548,7 @@ func guestMACForInstance(instanceID string) string {
 // reserveGuestIP allocates a per-VM guest IP. When a bridge CIDR is configured it
 // picks the next free host address in that subnet (skipping the gateway), giving
 // each microVM a distinct source identity for the egress proxy and a distinct
-// target for the service/browser proxies. Without a bridge CIDR it falls back to
+// target for the service proxies. Without a bridge CIDR it falls back to
 // the single configured guest IP (only correct with one concurrent VM).
 func (m *Manager) reserveGuestIP(instanceID string) (string, error) {
 	m.mu.Lock()
@@ -2015,18 +2015,8 @@ func (m *Manager) buildStartupSecretBundle(agentID, instanceID string, opts runt
 		"AG_FLUE_STORE_URL":      m.flueStoreURL(agentID),
 		"AG_FLUE_STORE_TOKEN":    m.cfg.AgentRuntimeToken(agentID),
 	}
-	env["MOM_BROWSER_HEADLESS"] = runtimeEnvDefault("MOM_BROWSER_HEADLESS", "true")
-	env["MOM_BROWSER_PRESTART"] = runtimeEnvDefault("MOM_BROWSER_PRESTART", "false")
 	if strings.TrimSpace(instanceID) != "" {
 		env["AGENTCY_RUNTIME_CREDENTIAL_ID"] = agentID + ":" + normalizeRuntimeCompartmentID(opts.CompartmentID) + ":" + strings.TrimSpace(instanceID)
-	}
-	if opts.BrowserPorts != nil {
-		env["MOM_BROWSER_SERVICE_PORT"] = strconv.Itoa(opts.BrowserPorts.ServicePort)
-		env["MOM_BROWSER_REMOTE_DEBUGGING_PORT"] = strconv.Itoa(opts.BrowserPorts.RemoteDebuggingPort)
-		env["MOM_BROWSER_VNC_PORT"] = strconv.Itoa(opts.BrowserPorts.VNCPort)
-		env["MOM_BROWSER_NOVNC_PORT"] = strconv.Itoa(opts.BrowserPorts.NoVNCPort)
-		env["MOM_BROWSER_DISPLAY_ID"] = opts.BrowserPorts.DisplayID
-		env["MOM_AGENT_NETWORK_HOST"] = "false"
 	}
 	files := map[string]string{}
 	if opts.ProxyEgress != nil && opts.ProxyEgress.Enabled {

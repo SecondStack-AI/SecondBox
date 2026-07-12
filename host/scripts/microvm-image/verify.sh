@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 usage() {
     cat >&2 <<'USAGE'
 Usage: verify.sh <artifact-dir> [public-key.pem]
@@ -29,6 +31,8 @@ for file in kernel rootfs.ext4 shared.img kernel-provenance.json rootfs-source-m
 done
 
 (cd "$dir" && sha256sum -c SHA256SUMS)
+"$script_dir/verify-browser-surface.sh" --rootfs "$dir/rootfs.ext4"
+"$script_dir/verify-browser-surface.sh" --shared "$dir/shared.img"
 
 for field in artifactVersion rootfs kernel kernelProvenance rootfsSource shared createdAt; do
     if ! grep -q "\"$field\"" "$dir/manifest.json"; then

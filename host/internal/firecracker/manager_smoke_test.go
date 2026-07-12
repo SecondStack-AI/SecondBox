@@ -105,8 +105,6 @@ func TestSmokeGeneratedImageBootsControlAndRuntime(t *testing.T) {
 		"AGENT_PLATFORM_TOKEN":    "generated-smoke-token",
 		"AG_PLATFORM_API_URL":     "http://127.0.0.1:1",
 		"AGENT_MODEL":             "openai:gpt-5.4",
-		"MOM_BROWSER_HEADLESS":    "true",
-		"MOM_BROWSER_MODE":        "managed",
 		"AGENTCY_SMOKE_GENERATED": "1",
 	}}); err != nil {
 		t.Fatalf("apply secrets: %v\n%s", err, smokeLogPath(t, logPath))
@@ -457,8 +455,6 @@ func TestSmokeJailedTapAndTransparentRouteGeneratedImage(t *testing.T) {
 		"AGENT_PLATFORM_TOKEN":    "generated-jailed-smoke-token",
 		"PLATFORM_API_URL":        "http://127.0.0.1:1",
 		"AG_FLUE_STORE_URL":       "http://127.0.0.1:1/api/agents/0123456789abcdef/flue-store",
-		"MOM_BROWSER_HEADLESS":    "true",
-		"MOM_BROWSER_MODE":        "managed",
 		"AGENTCY_SMOKE_GENERATED": "1",
 	}}); err != nil {
 		t.Fatalf("apply jailed smoke secrets: %v\n%s", err, smokeLogPath(t, logPath))

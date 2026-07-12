@@ -1456,7 +1456,7 @@ func TestStartupFingerprintIncludesToolExecutorContractAndCapabilities(t *testin
 	}
 
 	toolExecutorFingerprintContractVersion = origContractVersion
-	toolExecutorFingerprintCapabilities = append(append([]string(nil), origCapabilities...), "new-browser-mount-capability")
+	toolExecutorFingerprintCapabilities = append(append([]string(nil), origCapabilities...), "new-tool-mount-capability")
 	capabilityFingerprint, err := m.startupFingerprint("agent-1", "cmp_a", toolOpts)
 	if err != nil {
 		t.Fatalf("capability fingerprint: %v", err)
@@ -2626,11 +2626,11 @@ func TestBuildStartupSecretBundleCarriesPlatformEnvWithoutRuntimeToken(t *testin
 	if want := m.cfg.AgentRuntimeToken("agent-9"); bundle.Env["AGENTCY_RUNTIME_TOKEN"] != want {
 		t.Fatalf("AGENTCY_RUNTIME_TOKEN = %q, want agent runtime token", bundle.Env["AGENTCY_RUNTIME_TOKEN"])
 	}
-	if bundle.Env["MOM_BROWSER_HEADLESS"] != "false" {
-		t.Fatalf("MOM_BROWSER_HEADLESS = %q", bundle.Env["MOM_BROWSER_HEADLESS"])
+	if _, ok := bundle.Env["MOM_BROWSER_HEADLESS"]; ok {
+		t.Fatal("MOM_BROWSER_HEADLESS must not be injected into tool runtime env")
 	}
-	if bundle.Env["MOM_BROWSER_PRESTART"] != "true" {
-		t.Fatalf("MOM_BROWSER_PRESTART = %q", bundle.Env["MOM_BROWSER_PRESTART"])
+	if _, ok := bundle.Env["MOM_BROWSER_PRESTART"]; ok {
+		t.Fatal("MOM_BROWSER_PRESTART must not be injected into tool runtime env")
 	}
 }
 
