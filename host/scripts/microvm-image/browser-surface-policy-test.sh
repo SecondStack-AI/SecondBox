@@ -74,8 +74,10 @@ make_artifact_dir() {
 	cp "$shared_image" "$artifact_dir/shared.img"
 	printf 'kernel\n' > "$artifact_dir/kernel"
 	printf '{"schemaVersion":1}\n' > "$artifact_dir/rootfs-source-manifest.json"
+	printf '{"state":"verified"}\n' > "$artifact_dir/standard-toolset.json"
 	kernel_sha="$(sha256sum "$artifact_dir/kernel" | awk '{print $1}')"
 	rootfs_source_sha="$(sha256sum "$artifact_dir/rootfs-source-manifest.json" | awk '{print $1}')"
+	standard_toolset_sha="$(sha256sum "$artifact_dir/standard-toolset.json" | awk '{print $1}')"
 	cat > "$artifact_dir/kernel-provenance.json" <<EOF
 {"kernel":{"sha256":"$kernel_sha"}}
 EOF
@@ -87,13 +89,14 @@ EOF
   "kernel": {"path": "kernel"},
   "kernelProvenance": {"sha256": "$kernel_provenance_sha"},
   "rootfsSource": {"sha256": "$rootfs_source_sha"},
+  "standardToolset": {"sha256": "$standard_toolset_sha", "state": "verified"},
   "shared": {"path": "shared.img"},
   "createdAt": "2026-07-12T00:00:00Z"
 }
 EOF
 	(
 		cd "$artifact_dir"
-		sha256sum kernel rootfs.ext4 shared.img kernel-provenance.json rootfs-source-manifest.json manifest.json > SHA256SUMS
+		sha256sum kernel rootfs.ext4 shared.img kernel-provenance.json rootfs-source-manifest.json standard-toolset.json manifest.json > SHA256SUMS
 	)
 }
 
