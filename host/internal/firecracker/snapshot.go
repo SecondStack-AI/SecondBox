@@ -408,21 +408,20 @@ func verifySnapshotArtifacts(manifest GoldenSnapshotManifest) error {
 		if strings.TrimSpace(check.path) == "" {
 			continue
 		}
+		if strings.TrimSpace(check.sum) != "" {
+			got, err := fileSHA256(check.path)
+			if err != nil {
+				return fmt.Errorf("hash %s artifact: %w", label, err)
+			}
+			if got != check.sum {
+				return fmt.Errorf("%s artifact hash mismatch: got %s want %s", label, got, check.sum)
+			}
+			continue
+		}
 		if check.identity != nil {
 			if err := verifyArtifactIdentity(label, check.path, check.identity); err != nil {
 				return err
 			}
-			continue
-		}
-		if strings.TrimSpace(check.sum) == "" {
-			continue
-		}
-		got, err := fileSHA256(check.path)
-		if err != nil {
-			return fmt.Errorf("hash %s artifact: %w", label, err)
-		}
-		if got != check.sum {
-			return fmt.Errorf("%s artifact hash mismatch: got %s want %s", label, got, check.sum)
 		}
 	}
 	return nil

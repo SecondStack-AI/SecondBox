@@ -119,6 +119,16 @@ func TestSmokeGeneratedToolExecutorImageReadiness(t *testing.T) {
 	if os.Getenv("AG_MICROVM_TOOL_EXECUTOR_SMOKE") != "1" {
 		t.Skip("set AG_MICROVM_TOOL_EXECUTOR_SMOKE=1 to boot generated tool-executor artifacts")
 	}
+	for name, value := range map[string]string{
+		"AGENT_PLATFORM_TOKEN":  "host-platform-secret-must-not-cross-vm-boundary",
+		"ANTHROPIC_API_KEY":     "host-anthropic-secret-must-not-cross-vm-boundary",
+		"OPENAI_API_KEY":        "host-openai-secret-must-not-cross-vm-boundary",
+		"AWS_ACCESS_KEY_ID":     "AKIAHOSTBOUNDARYTEST",
+		"AWS_SECRET_ACCESS_KEY": "host-aws-secret-must-not-cross-vm-boundary",
+		"PI_CODING_AGENT_DIR":   "/host/model-auth-must-not-cross-vm-boundary",
+	} {
+		t.Setenv(name, value)
+	}
 	workDir := shortSmokeDir(t)
 	rootfsPath := requiredEnv(t, "AG_MICROVM_ROOTFS_PATH")
 	sharedImagePath := os.Getenv("AG_MICROVM_SHARED_IMAGE_PATH")
@@ -169,6 +179,59 @@ func TestSmokeGeneratedToolExecutorImageReadiness(t *testing.T) {
 	}, func() string {
 		return "tool executor heartbeat error: " + errorString(heartbeatErr) + "\n" + smokeLogPath(t, logPath)
 	})
+
+	envResp, err := mgr.ExecuteTool(ctx, instanceID, ToolExecRequest{
+		Operation: ToolOpExec,
+		Command:   "env",
+	})
+	if err != nil || envResp.Error != "" || envResp.ExitCode != 0 {
+		t.Fatalf("inspect tool executor environment: resp=%+v err=%v\n%s", envResp, err, smokeLogPath(t, logPath))
+	}
+	for _, name := range []string{
+		"AGENT_PLATFORM_TOKEN",
+		"ANTHROPIC_API_KEY",
+		"OPENAI_API_KEY",
+		"AWS_ACCESS_KEY_ID",
+		"AWS_SECRET_ACCESS_KEY",
+	} {
+		for _, line := range strings.Split(envResp.Stdout, "\n") {
+			if strings.HasPrefix(line, name+"=") {
+				t.Fatalf("credential variable %s reached tool executor environment\n%s", name, smokeLogPath(t, logPath))
+			}
+		}
+	}
+	if strings.Contains(envResp.Stdout, "model-auth") {
+		t.Fatalf("model-auth credential path reached tool executor environment\n%s", smokeLogPath(t, logPath))
+	}
+
+	egressResp, err := mgr.ExecuteTool(ctx, instanceID, ToolExecRequest{
+		Operation: ToolOpExec,
+		Command:   "sh",
+		Args: []string{"-c", strings.Join([]string{
+			"if command -v curl >/dev/null 2>&1; then",
+			"  curl --fail --silent --show-error --connect-timeout 3 --max-time 5 http://1.1.1.1/ >/dev/null",
+			"elif command -v wget >/dev/null 2>&1; then",
+			"  wget -q -T 5 -O /dev/null http://1.1.1.1/",
+			"else",
+			"  exit 125",
+			"fi",
+		}, "\n")},
+		TimeoutMillis: 10000,
+	})
+	if egressResp.ExitCode == 125 {
+		t.Fatalf("tool executor image has neither curl nor wget; egress assertion did not run\n%s", smokeLogPath(t, logPath))
+	}
+	if err == nil && egressResp.Error == "" && egressResp.ExitCode == 0 {
+		t.Fatalf("tool executor reached an external IP despite network-none policy: resp=%+v\n%s", egressResp, smokeLogPath(t, logPath))
+	}
+
+	escapeResp, err := mgr.ExecuteTool(ctx, instanceID, ToolExecRequest{
+		Operation: ToolOpReadFile,
+		Path:      "../../../../etc/passwd",
+	})
+	if err == nil || escapeResp.Error == "" {
+		t.Fatalf("workspace traversal was not rejected: resp=%+v err=%v\n%s", escapeResp, err, smokeLogPath(t, logPath))
+	}
 
 	writeResp, err := mgr.ExecuteTool(ctx, instanceID, ToolExecRequest{
 		Operation: ToolOpWriteFile,

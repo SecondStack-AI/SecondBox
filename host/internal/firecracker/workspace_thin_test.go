@@ -3,6 +3,10 @@ package microvm
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -44,6 +48,7 @@ func TestEnsureThinWorkspaceCreatesAndFormatsDevice(t *testing.T) {
 			t.Fatalf("calls missing %q:\n%s", want, joined)
 		}
 	}
+	assertThinIDsInRange(t, joined)
 }
 
 func TestCreateThinSnapshotCommands(t *testing.T) {
@@ -72,6 +77,86 @@ func TestCreateThinSnapshotCommands(t *testing.T) {
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("calls missing %q:\n%s", want, joined)
+		}
+	}
+	assertThinIDsInRange(t, joined)
+	match := regexp.MustCompile(`create_snap (\d+) (\d+)`).FindStringSubmatch(joined)
+	if len(match) != 3 || match[1] != "2" || match[2] != "1" {
+		t.Fatalf("create_snap ids = %v, want snapshot=2 origin=1\n%s", match, joined)
+	}
+}
+
+func TestThinDeviceIDAllocatorIsStableMonotonicAndPersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "microvm", "thin-device-ids.json")
+	first := &thinDeviceIDAllocator{path: path}
+	for index, seed := range []string{"origin:a", "snapshot:a", "origin:b"} {
+		id, err := first.allocate(seed)
+		if err != nil {
+			t.Fatalf("allocate %s: %v", seed, err)
+		}
+		if want := uint32(index + 1); id != want {
+			t.Fatalf("allocate %s = %d, want %d", seed, id, want)
+		}
+	}
+	stable, err := first.allocate("origin:a")
+	if err != nil || stable != 1 {
+		t.Fatalf("stable allocation = %d, %v", stable, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("allocator store mode = %o, want 600", info.Mode().Perm())
+	}
+
+	reloaded := &thinDeviceIDAllocator{path: path}
+	stable, err = reloaded.allocate("origin:a")
+	if err != nil || stable != 1 {
+		t.Fatalf("reloaded stable allocation = %d, %v", stable, err)
+	}
+	next, err := reloaded.allocate("snapshot:b")
+	if err != nil || next != 4 {
+		t.Fatalf("reloaded next allocation = %d, %v", next, err)
+	}
+}
+
+func TestThinDeviceIDAllocatorExhaustionAndSaveRollback(t *testing.T) {
+	exhausted := &thinDeviceIDAllocator{
+		loaded: true,
+		store:  thinDeviceIDStore{Next: maxThinDeviceID, IDs: map[string]uint32{}},
+	}
+	if _, err := exhausted.allocate("no-space"); err == nil || !strings.Contains(err.Error(), "exhausted") {
+		t.Fatalf("exhaustion error = %v", err)
+	}
+
+	parentFile := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(parentFile, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rollback := &thinDeviceIDAllocator{
+		path:   filepath.Join(parentFile, "ids.json"),
+		loaded: true,
+		store:  thinDeviceIDStore{Next: 1, IDs: map[string]uint32{}},
+	}
+	if _, err := rollback.allocate("first"); err == nil {
+		t.Fatal("allocation with unwritable store path succeeded")
+	}
+	if rollback.store.Next != 1 || len(rollback.store.IDs) != 0 {
+		t.Fatalf("failed save did not roll back: %+v", rollback.store)
+	}
+}
+
+func assertThinIDsInRange(t *testing.T, commands string) {
+	t.Helper()
+	matches := regexp.MustCompile(`(?:create_thin|create_snap|thin /dev/mapper/agentcy-pool) (\d+)`).FindAllStringSubmatch(commands, -1)
+	if len(matches) == 0 {
+		t.Fatalf("no dm-thin ids found in commands:\n%s", commands)
+	}
+	for _, match := range matches {
+		id, err := strconv.ParseUint(match[1], 10, 32)
+		if err != nil || id == 0 || id >= uint64(maxThinDeviceID) {
+			t.Fatalf("dm-thin id %q is outside [1,%d]", match[1], maxThinDeviceID-1)
 		}
 	}
 }

@@ -2,9 +2,11 @@ package microvm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,6 +37,94 @@ func TestNewInstanceIDIncludesCompartmentSegment(t *testing.T) {
 	}
 	if !strings.HasPrefix(emptyID, "fc-agent-1-compartment-") {
 		t.Fatalf("empty-compartment instance id %q does not include fallback segment", emptyID)
+	}
+}
+
+func TestBuildPrivilegedLaunchRequestMatchesLauncherValidation(t *testing.T) {
+	dir := t.TempDir()
+	runRoot := filepath.Join(dir, "run")
+	workspaceRoot := filepath.Join(dir, "workspaces")
+	artifactRoot := filepath.Join(dir, "artifacts")
+	instanceID := "fc-agent-1-cmp-a-123"
+	agentID := "agent-1"
+	compartmentID := "cmp-a"
+	rootfsPath := filepath.Join(runRoot, instanceID, rootfsName)
+	workspacePath := filepath.Join(workspaceRoot, agentID, compartmentID+"."+workspaceName)
+	rootfsImage := filepath.Join(artifactRoot, "rootfs.ext4")
+	sharedImage := filepath.Join(artifactRoot, "shared.img")
+	for _, path := range []string{rootfsPath, workspacePath, rootfsImage, sharedImage} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("artifact"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tapName := tapNameForInstance("agfc", instanceID)
+	req := buildPrivilegedLaunchRequest(instanceID, agentID, compartmentID,
+		microVMImageSelection{RootfsPath: rootfsPath},
+		microVMImageSelection{RootfsPath: rootfsImage, SharedImagePath: sharedImage},
+		workspacePath, tapName, "172.30.0.2")
+	server := &PrivilegedLauncherServer{cfg: PrivilegedLauncherConfig{
+		RunRoot:       runRoot,
+		WorkspaceRoot: workspaceRoot,
+		ArtifactRoot:  artifactRoot,
+		TapPrefix:     "agfc",
+		BridgeCIDR:    "172.30.0.0/24",
+	}}
+	if err := server.validateLaunchRequest(req); err != nil {
+		t.Fatalf("validateLaunchRequest: %v", err)
+	}
+}
+
+func TestLauncherModeReapAllowsNilCommand(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	m := &Manager{}
+	m.reap(&instance{id: "fc-agent-1-abc", launcherOnly: true, done: done})
+}
+
+func TestLauncherModeStopUsesLauncher(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "launcher.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	requestSeen := make(chan privilegedLauncherRequest, 1)
+	serverErr := make(chan error, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			serverErr <- acceptErr
+			return
+		}
+		defer conn.Close()
+		var req privilegedLauncherRequest
+		if decodeErr := json.NewDecoder(conn).Decode(&req); decodeErr != nil {
+			serverErr <- decodeErr
+			return
+		}
+		requestSeen <- req
+		serverErr <- json.NewEncoder(conn).Encode(privilegedLauncherResponse{OK: true})
+	}()
+
+	m := &Manager{
+		launcher:       newPrivilegedLauncherClient(socketPath),
+		instances:      map[string]*instance{},
+		instancesByKey: map[runtimeInstanceKey]string{},
+		guestIPs:       map[string]string{},
+	}
+	inst := &instance{id: "fc-agent-1-abc", launcherOnly: true, done: make(chan struct{})}
+	if err := m.stopInstance(context.Background(), inst, false); err != nil {
+		t.Fatalf("stopInstance: %v", err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("launcher server: %v", err)
+	}
+	req := <-requestSeen
+	if req.Op != "stop" || req.ID != inst.id {
+		t.Fatalf("launcher request = %#v", req)
 	}
 }
 
@@ -223,6 +313,8 @@ func newWarmToolTestManager(t *testing.T) *Manager {
 		MicroVMLogDir:                filepath.Join(dir, "logs"),
 		MicroVMWorkspaceSizeMiB:      8,
 		MicroVMMaxConcurrentPerAgent: 0,
+		MicroVMMaxConcurrentGlobal:   0,
+		MicroVMMemoryBudgetMiB:       0,
 	}
 	return &Manager{
 		cfg:            cfg,
@@ -1473,6 +1565,19 @@ func TestMicroVMImageForStartSelectsToolExecutorImage(t *testing.T) {
 	}
 }
 
+func TestPrepareLaunchImageResolvesFallbackBeforeSettingDestination(t *testing.T) {
+	sourceRootfs := filepath.Join(t.TempDir(), "source-rootfs.ext4")
+	m := &Manager{cfg: &config.Config{MicroVMRootfsPath: sourceRootfs}}
+
+	_, err := m.prepareLaunchImage(t.TempDir(), microVMImageSelection{})
+	if err == nil {
+		t.Fatal("expected missing source rootfs to fail")
+	}
+	if !strings.Contains(err.Error(), sourceRootfs) {
+		t.Fatalf("prepare error = %q, want resolved source %q", err, sourceRootfs)
+	}
+}
+
 func TestStartupFingerprintIncludesRuntimeClassAndSelectedImage(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, text string) string {
@@ -2645,7 +2750,12 @@ func TestReserveGuestIPExhaustionReturnsCleanError(t *testing.T) {
 
 func TestRuntimeMetricsSnapshotReportsCountsCapacityAndP95(t *testing.T) {
 	m := &Manager{
-		cfg: &config.Config{MicroVMBridgeCIDR: "10.0.0.1/29"},
+		cfg: &config.Config{
+			MicroVMBridgeCIDR:          "10.0.0.1/29",
+			MicroVMMaxConcurrentGlobal: 32,
+			MicroVMMemoryMiB:           512,
+			MicroVMMemoryBudgetMiB:     65536,
+		},
 		instances: map[string]*instance{
 			"fc-a-1": {id: "fc-a-1", agentID: "agent-a", compartmentID: "cmp_a"},
 			"fc-a-2": {id: "fc-a-2", agentID: "agent-a", compartmentID: "cmp_b"},
@@ -2667,8 +2777,75 @@ func TestRuntimeMetricsSnapshotReportsCountsCapacityAndP95(t *testing.T) {
 	if got.GuestIPsInUse != 2 || got.GuestIPCapacity != 5 {
 		t.Fatalf("guest IP metrics = used %d capacity %d", got.GuestIPsInUse, got.GuestIPCapacity)
 	}
+	if got.ConcurrentVMsTotal != 3 || got.MaxConcurrentGlobal != 32 || got.MemoryReservedMiB != 1536 || got.MemoryBudgetMiB != 65536 {
+		t.Fatalf("global metrics = total %d cap %d reserved %d budget %d", got.ConcurrentVMsTotal, got.MaxConcurrentGlobal, got.MemoryReservedMiB, got.MemoryBudgetMiB)
+	}
 	if got.ColdStartCount != 3 || got.ColdStartP95 != 40*time.Millisecond {
 		t.Fatalf("cold start metrics = count %d p95 %s", got.ColdStartCount, got.ColdStartP95)
+	}
+}
+
+func TestAdmitCompartmentSpawnLocked(t *testing.T) {
+	live := func(id, agent string, reaping bool) *instance {
+		return &instance{id: id, agentID: agent, compartmentID: id, reaping: reaping}
+	}
+	tests := []struct {
+		name      string
+		cfg       config.Config
+		instances map[string]*instance
+		wantErr   string
+	}{
+		{
+			name:      "per-agent cap",
+			cfg:       config.Config{MicroVMBridgeCIDR: "10.0.0.1/24", MicroVMMaxConcurrentPerAgent: 1},
+			instances: map[string]*instance{"a": live("cmp-a", "agent-1", false)},
+			wantErr:   "AG_MICROVM_MAX_CONCURRENT_PER_AGENT",
+		},
+		{
+			name: "global cap across agents",
+			cfg:  config.Config{MicroVMBridgeCIDR: "10.0.0.1/24", MicroVMMaxConcurrentGlobal: 2},
+			instances: map[string]*instance{
+				"a": live("cmp-a", "agent-1", false),
+				"b": live("cmp-b", "agent-2", false),
+			},
+			wantErr: "AG_MICROVM_MAX_CONCURRENT_GLOBAL",
+		},
+		{
+			name: "memory budget",
+			cfg:  config.Config{MicroVMBridgeCIDR: "10.0.0.1/24", MicroVMMemoryMiB: 2048, MicroVMMemoryBudgetMiB: 4096},
+			instances: map[string]*instance{
+				"a": live("cmp-a", "agent-1", false),
+				"b": live("cmp-b", "agent-2", false),
+			},
+			wantErr: "AG_MICROVM_MEMORY_BUDGET_MIB",
+		},
+		{
+			name:      "all zero is unlimited",
+			cfg:       config.Config{MicroVMBridgeCIDR: "10.0.0.1/24"},
+			instances: map[string]*instance{"a": live("cmp-a", "agent-2", false)},
+		},
+		{
+			name:      "reaping instances excluded",
+			cfg:       config.Config{MicroVMBridgeCIDR: "10.0.0.1/24", MicroVMMaxConcurrentPerAgent: 1, MicroVMMaxConcurrentGlobal: 1, MicroVMMemoryMiB: 2048, MicroVMMemoryBudgetMiB: 2048},
+			instances: map[string]*instance{"a": live("cmp-a", "agent-1", true)},
+		},
+		{
+			name:      "non-positive vm memory skips memory check",
+			cfg:       config.Config{MicroVMBridgeCIDR: "10.0.0.1/24", MicroVMMemoryMiB: 0, MicroVMMemoryBudgetMiB: 1},
+			instances: map[string]*instance{"a": live("cmp-a", "agent-2", false)},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &Manager{cfg: &tt.cfg, instances: tt.instances}
+			err := m.admitCompartmentSpawnLocked(runtimeInstanceKey{agentID: "agent-1", compartmentID: "cmp-new"})
+			if tt.wantErr == "" && err != nil {
+				t.Fatalf("admit: %v", err)
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("admit error = %v, want %s", err, tt.wantErr)
+			}
+		})
 	}
 }
 
@@ -2689,7 +2866,7 @@ func TestBuildFirecrackerConfigAddsGuestIPBootArg(t *testing.T) {
 	}
 }
 
-func TestBuildStartupSecretBundleCarriesPlatformEnvWithoutRuntimeToken(t *testing.T) {
+func TestBuildStartupSecretBundleCarriesScopedToolEnv(t *testing.T) {
 	t.Setenv("MOM_BROWSER_HEADLESS", "false")
 	t.Setenv("MOM_BROWSER_PRESTART", "true")
 
@@ -2713,14 +2890,10 @@ func TestBuildStartupSecretBundleCarriesPlatformEnvWithoutRuntimeToken(t *testin
 	if got := bundle.Env["AGENT_PLATFORM_TOKEN"]; got != "" {
 		t.Fatalf("AGENT_PLATFORM_TOKEN must not be injected into persistent runtime env, got %q", got)
 	}
-	if want := "https://platform.example/api/agents/agent-9/flue-store"; bundle.Env["AG_FLUE_STORE_URL"] != want {
-		t.Fatalf("AG_FLUE_STORE_URL = %q, want %q", bundle.Env["AG_FLUE_STORE_URL"], want)
-	}
-	if want := m.cfg.AgentRuntimeToken("agent-9"); bundle.Env["AG_FLUE_STORE_TOKEN"] != want {
-		t.Fatalf("AG_FLUE_STORE_TOKEN = %q, want agent runtime token", bundle.Env["AG_FLUE_STORE_TOKEN"])
-	}
-	if want := m.cfg.AgentRuntimeToken("agent-9"); bundle.Env["AGENTCY_RUNTIME_TOKEN"] != want {
-		t.Fatalf("AGENTCY_RUNTIME_TOKEN = %q, want agent runtime token", bundle.Env["AGENTCY_RUNTIME_TOKEN"])
+	for _, key := range []string{"AG_FLUE_STORE_URL", "AG_FLUE_STORE_TOKEN", "AGENTCY_RUNTIME_TOKEN"} {
+		if got := bundle.Env[key]; got != "" {
+			t.Fatalf("%s must not be injected into the tool runtime, got %q", key, got)
+		}
 	}
 	if _, ok := bundle.Env["MOM_BROWSER_HEADLESS"]; ok {
 		t.Fatal("MOM_BROWSER_HEADLESS must not be injected into tool runtime env")

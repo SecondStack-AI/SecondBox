@@ -634,7 +634,16 @@ test:
     set -euo pipefail
     export AG_TEST_DATABASE_URL="${AG_TEST_DATABASE_URL:-${FLUE_STORE_CONTRACT_DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable}}"
     export AG_DATABASE_URL="${AG_DATABASE_URL:-$AG_TEST_DATABASE_URL}"
-    go test ./cmd/... ./db ./internal/... ./scripts/backup ./scripts/deploy ./skills-catalog/...
+    # Run the nested API DB-contract package in its own phase. Otherwise its
+    # child timeout includes time spent waiting behind other packages' serialized
+    # CREATE/DROP DATABASE operations and can expire before its own tests run.
+    mapfile -t packages < <(go list ./cmd/... ./db ./internal/... ./scripts/backup ./scripts/deploy ./skills-catalog/...)
+    regular_packages=()
+    for package in "${packages[@]}"; do
+        [[ "$package" == "agentcy/internal/api/dbcontract" ]] || regular_packages+=("$package")
+    done
+    go test -timeout=50m "${regular_packages[@]}"
+    go test -timeout=50m ./internal/api/dbcontract
 
 # Compile every Go test package, then run packages whose test dependency graph
 # does not include the shared Postgres fixture. The full `just test` gate remains
@@ -679,9 +688,9 @@ preship:
     scripts/test/verify-generated.sh
     just test-fast
     just test
-    (cd flue-store && npm audit --audit-level=high && npm test && npm run test:contract && npm run build)
-    (cd agent && npm audit --audit-level=high && npm run typecheck && npm run lint && npm test && npm run build)
-    (cd frontend && npm audit --audit-level=high && npm run typecheck && npm run lint && npm test && npm run build)
+    (cd flue-store && ../scripts/test/npm-audit.sh moderate && npm test && npm run test:contract && npm run build)
+    (cd agent && ../scripts/test/npm-audit.sh moderate && npm run typecheck && npm run lint && npm test && npm run build)
+    (cd frontend && ../scripts/test/npm-audit.sh moderate && npm run typecheck && npm run lint && npm test && npm run build)
 
 # Create a local Agentcy Postgres dump.
 backup:

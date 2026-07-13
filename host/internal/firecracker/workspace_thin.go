@@ -2,15 +2,30 @@ package microvm
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
+	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
+
+const maxThinDeviceID uint32 = 1 << 24
+
+type thinDeviceIDStore struct {
+	Next uint32            `json:"next"`
+	IDs  map[string]uint32 `json:"ids"`
+}
+
+type thinDeviceIDAllocator struct {
+	mu     sync.Mutex
+	path   string
+	store  thinDeviceIDStore
+	loaded bool
+}
 
 type ThinWorkspaceSnapshot struct {
 	Name         string `json:"name"`
@@ -26,6 +41,134 @@ var runHostCommand hostCommandRunner = func(ctx context.Context, name string, ar
 	return cmd.CombinedOutput()
 }
 
+func (m *Manager) thinDeviceIDAllocatorRef() *thinDeviceIDAllocator {
+	m.thinDeviceIDOnce.Do(func() {
+		path := ""
+		if m.cfg != nil && strings.TrimSpace(m.cfg.DataDir) != "" {
+			path = filepath.Join(m.cfg.DataDir, "microvm", "thin-device-ids.json")
+		}
+		m.thinDeviceIDs = &thinDeviceIDAllocator{path: path}
+	})
+	return m.thinDeviceIDs
+}
+
+func (a *thinDeviceIDAllocator) allocate(seed string) (uint32, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := a.loadLocked(); err != nil {
+		return 0, err
+	}
+	seed = strings.TrimSpace(seed)
+	if seed == "" {
+		return 0, fmt.Errorf("dm-thin device id seed is required")
+	}
+	if id, ok := a.store.IDs[seed]; ok {
+		return id, nil
+	}
+	if a.store.Next == 0 {
+		a.store.Next = 1
+	}
+	if a.store.Next >= maxThinDeviceID {
+		return 0, fmt.Errorf("dm-thin device id space exhausted at %d", maxThinDeviceID-1)
+	}
+	id := a.store.Next
+	previousNext := a.store.Next
+	a.store.IDs[seed] = id
+	a.store.Next++
+	if err := a.saveLocked(); err != nil {
+		delete(a.store.IDs, seed)
+		a.store.Next = previousNext
+		return 0, err
+	}
+	return id, nil
+}
+
+func (a *thinDeviceIDAllocator) loadLocked() error {
+	if a.loaded {
+		return nil
+	}
+	store := thinDeviceIDStore{Next: 1, IDs: map[string]uint32{}}
+	if strings.TrimSpace(a.path) != "" {
+		data, err := os.ReadFile(a.path)
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("read dm-thin device id store: %w", err)
+		}
+		if err == nil {
+			if err := json.Unmarshal(data, &store); err != nil {
+				return fmt.Errorf("decode dm-thin device id store: %w", err)
+			}
+		}
+	}
+	if store.IDs == nil {
+		store.IDs = map[string]uint32{}
+	}
+	if store.Next == 0 {
+		store.Next = 1
+	}
+	used := make(map[uint32]string, len(store.IDs))
+	var highest uint32
+	for seed, id := range store.IDs {
+		if strings.TrimSpace(seed) == "" || id == 0 || id >= maxThinDeviceID {
+			return fmt.Errorf("invalid persisted dm-thin device id %d for %q", id, seed)
+		}
+		if other, exists := used[id]; exists {
+			return fmt.Errorf("persisted dm-thin device id %d is shared by %q and %q", id, other, seed)
+		}
+		used[id] = seed
+		if id > highest {
+			highest = id
+		}
+	}
+	if store.Next <= highest {
+		return fmt.Errorf("persisted dm-thin next device id %d does not follow allocated id %d", store.Next, highest)
+	}
+	if store.Next > maxThinDeviceID {
+		return fmt.Errorf("persisted dm-thin next device id %d exceeds 24-bit range", store.Next)
+	}
+	a.store = store
+	a.loaded = true
+	return nil
+}
+
+func (a *thinDeviceIDAllocator) saveLocked() error {
+	if strings.TrimSpace(a.path) == "" {
+		return nil
+	}
+	data, err := json.MarshalIndent(a.store, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode dm-thin device id store: %w", err)
+	}
+	dir := filepath.Dir(a.path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create dm-thin device id store directory: %w", err)
+	}
+	tmp, err := os.CreateTemp(dir, ".thin-device-ids-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create dm-thin device id store temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("secure dm-thin device id store temp file: %w", err)
+	}
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write dm-thin device id store: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync dm-thin device id store: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close dm-thin device id store: %w", err)
+	}
+	if err := os.Rename(tmpPath, a.path); err != nil {
+		return fmt.Errorf("replace dm-thin device id store: %w", err)
+	}
+	return nil
+}
+
 func (m *Manager) ensureThinWorkspace(ctx context.Context, agentID, compartmentID string) (string, error) {
 	pool := strings.TrimSpace(m.cfg.MicroVMThinPoolDevice)
 	if pool == "" {
@@ -35,7 +178,10 @@ func (m *Manager) ensureThinWorkspace(ctx context.Context, agentID, compartmentI
 	if _, err := runHostCommand(ctx, "dmsetup", "info", name); err == nil {
 		return thinDevicePath(name), nil
 	}
-	devID := thinDeviceID("workspace-origin:" + name)
+	devID, err := m.thinDeviceIDAllocatorRef().allocate("workspace-origin:" + name)
+	if err != nil {
+		return "", fmt.Errorf("allocate dm-thin workspace device id: %w", err)
+	}
 	if out, err := runHostCommand(ctx, "dmsetup", "message", pool, "0", fmt.Sprintf("create_thin %d", devID)); err != nil && !strings.Contains(string(out), "File exists") {
 		return "", fmt.Errorf("create dm-thin workspace device: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -77,8 +223,14 @@ func (m *Manager) createThinSnapshot(ctx context.Context, originName, snapshotNa
 		return ThinWorkspaceSnapshot{}, fmt.Errorf("dm-thin pool device is required")
 	}
 	name := thinSnapshotName(originName, snapshotName)
-	originID := thinDeviceID("workspace-origin:" + originName)
-	snapID := thinDeviceID("workspace-snapshot:" + name)
+	originID, err := m.thinDeviceIDAllocatorRef().allocate("workspace-origin:" + originName)
+	if err != nil {
+		return ThinWorkspaceSnapshot{}, fmt.Errorf("allocate dm-thin origin device id: %w", err)
+	}
+	snapID, err := m.thinDeviceIDAllocatorRef().allocate("workspace-snapshot:" + name)
+	if err != nil {
+		return ThinWorkspaceSnapshot{}, fmt.Errorf("allocate dm-thin snapshot device id: %w", err)
+	}
 	if out, err := runHostCommand(ctx, "dmsetup", "message", pool, "0", fmt.Sprintf("create_snap %d %d", snapID, originID)); err != nil && !strings.Contains(string(out), "File exists") {
 		return ThinWorkspaceSnapshot{}, fmt.Errorf("create dm-thin snapshot: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -97,15 +249,6 @@ func (m *Manager) createThinSnapshot(ctx context.Context, originName, snapshotNa
 
 func sectorsForMiB(sizeMiB int) int64 {
 	return int64(sizeMiB) * 1024 * 1024 / 512
-}
-
-func thinDeviceID(seed string) uint64 {
-	sum := sha256.Sum256([]byte(seed))
-	id := binary.BigEndian.Uint64(sum[:8])
-	if id == 0 {
-		return 1
-	}
-	return id
 }
 
 var thinNameUnsafe = regexp.MustCompile(`[^a-zA-Z0-9_.-]+`)

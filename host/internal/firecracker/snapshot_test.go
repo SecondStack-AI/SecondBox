@@ -86,6 +86,58 @@ func TestCreateGoldenSnapshotPausesSnapshotsResumesAndWritesManifest(t *testing.
 	}
 }
 
+func TestVerifySnapshotArtifactsHashIsAuthoritative(t *testing.T) {
+	dir := t.TempDir()
+	kernel := writeSnapshotFixture(t, dir, "kernel-hash", "aaaa")
+	snapshotPath := writeSnapshotFixture(t, dir, "vmstate-hash.snap", "snapshot")
+	memPath := writeSnapshotFixture(t, dir, "memory-hash.snap", "memory")
+	sum, err := fileSHA256(kernel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := fileArtifactIdentity(kernel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := GoldenSnapshotManifest{
+		SnapshotPath:       snapshotPath,
+		MemFilePath:        memPath,
+		KernelPath:         kernel,
+		KernelSHA256:       sum,
+		KernelIdentity:     identity,
+		FirecrackerVersion: expectedFirecrackerVersionString(),
+	}
+
+	if err := os.WriteFile(kernel, []byte("bbbb"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	originalModTime := time.Unix(0, identity.ModTimeUnixNano)
+	if err := os.Chtimes(kernel, originalModTime, originalModTime); err != nil {
+		t.Fatal(err)
+	}
+	mutatedIdentity, err := fileArtifactIdentity(kernel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mutatedIdentity.Size != identity.Size || mutatedIdentity.ModTimeUnixNano != identity.ModTimeUnixNano {
+		t.Fatalf("fixture did not preserve identity: got %+v want %+v", mutatedIdentity, identity)
+	}
+	if err := verifySnapshotArtifacts(manifest); err == nil || !strings.Contains(err.Error(), "hash mismatch") {
+		t.Fatalf("same-identity content mutation error = %v", err)
+	}
+
+	if err := os.WriteFile(kernel, []byte("aaaa"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	changedModTime := originalModTime.Add(2 * time.Second)
+	if err := os.Chtimes(kernel, changedModTime, changedModTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifySnapshotArtifacts(manifest); err != nil {
+		t.Fatalf("matching hash with changed identity: %v", err)
+	}
+}
+
 func TestRestoreGoldenSnapshotStartsFirecrackerAndLoadsSnapshot(t *testing.T) {
 	dir, err := os.MkdirTemp("/tmp", "agfc-restore-test-")
 	if err != nil {
