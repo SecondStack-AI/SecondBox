@@ -16,7 +16,7 @@ func (m *Manager) admitCompartmentSpawnLocked(key runtimeInstanceKey) error {
 	liveForAgent := 0
 	liveTotal := 0
 	for _, inst := range m.instances {
-		if inst == nil || inst.reaping {
+		if inst == nil {
 			continue
 		}
 		liveTotal++
@@ -30,6 +30,23 @@ func (m *Manager) admitCompartmentSpawnLocked(key runtimeInstanceKey) error {
 		}
 		if normalizeRuntimeCompartmentID(inst.compartmentID) != key.compartmentID && bridgeCIDR == "" {
 			return fmt.Errorf("cannot start compartment %q for agent %q while another compartment is live without AG_MICROVM_BRIDGE_CIDR; single AG_MICROVM_GUEST_IP fallback cannot safely isolate concurrent compartment VMs", key.compartmentID, key.agentID)
+		}
+	}
+	for pendingKey, count := range m.pendingSpawns {
+		if count <= 0 {
+			continue
+		}
+		liveTotal += count
+		if pendingKey.agentID != key.agentID {
+			continue
+		}
+		liveForAgent += count
+		bridgeCIDR := ""
+		if m.cfg != nil {
+			bridgeCIDR = strings.TrimSpace(m.cfg.MicroVMBridgeCIDR)
+		}
+		if pendingKey.compartmentID != key.compartmentID && bridgeCIDR == "" {
+			return fmt.Errorf("cannot start compartment %q for agent %q while another compartment is pending without AG_MICROVM_BRIDGE_CIDR; single AG_MICROVM_GUEST_IP fallback cannot safely isolate concurrent compartment VMs", key.compartmentID, key.agentID)
 		}
 	}
 	cap := 0
@@ -56,15 +73,37 @@ func (m *Manager) admitCompartmentSpawnLocked(key runtimeInstanceKey) error {
 	return nil
 }
 
+func (m *Manager) reserveCompartmentSpawnLocked(key runtimeInstanceKey) error {
+	if err := m.admitCompartmentSpawnLocked(key); err != nil {
+		return err
+	}
+	if m.pendingSpawns == nil {
+		m.pendingSpawns = map[runtimeInstanceKey]int{}
+	}
+	m.pendingSpawns[key]++
+	return nil
+}
+
+func (m *Manager) releaseCompartmentSpawnLocked(key runtimeInstanceKey) {
+	if m.pendingSpawns[key] <= 1 {
+		delete(m.pendingSpawns, key)
+		return
+	}
+	m.pendingSpawns[key]--
+}
+
 func (m *Manager) RuntimeMetricsSnapshot() RuntimeMetricsSnapshot {
-	out := RuntimeMetricsSnapshot{ConcurrentVMsByAgent: map[string]int{}}
+	out := RuntimeMetricsSnapshot{
+		ConcurrentVMsByAgent: map[string]int{},
+		PendingVMsByAgent:    map[string]int{},
+	}
 	if m == nil {
 		return out
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, inst := range m.instances {
-		if inst == nil || inst.reaping || strings.TrimSpace(inst.agentID) == "" {
+		if inst == nil || strings.TrimSpace(inst.agentID) == "" {
 			continue
 		}
 		out.ConcurrentVMsByAgent[inst.agentID]++
@@ -73,6 +112,13 @@ func (m *Manager) RuntimeMetricsSnapshot() RuntimeMetricsSnapshot {
 			out.WarmToolVMs++
 		}
 	}
+	for key, count := range m.pendingSpawns {
+		if count <= 0 || strings.TrimSpace(key.agentID) == "" {
+			continue
+		}
+		out.PendingVMsByAgent[key.agentID] += count
+		out.PendingVMsTotal += count
+	}
 	out.GuestIPsInUse = len(m.guestIPs)
 	if m.cfg != nil {
 		out.GuestIPCapacity = microVMGuestIPCapacity(m.cfg)
@@ -80,7 +126,7 @@ func (m *Manager) RuntimeMetricsSnapshot() RuntimeMetricsSnapshot {
 		out.MaxConcurrentGlobal = m.cfg.MicroVMMaxConcurrentGlobal
 		out.MemoryBudgetMiB = m.cfg.MicroVMMemoryBudgetMiB
 		if m.cfg.MicroVMMemoryMiB > 0 {
-			out.MemoryReservedMiB = out.ConcurrentVMsTotal * m.cfg.MicroVMMemoryMiB
+			out.MemoryReservedMiB = (out.ConcurrentVMsTotal + out.PendingVMsTotal) * m.cfg.MicroVMMemoryMiB
 		}
 	}
 	out.ColdStartCount = len(m.startDurations)

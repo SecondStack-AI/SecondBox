@@ -13,6 +13,11 @@ import (
 	"agentcy/internal/config"
 )
 
+type fakeHostExitError struct{ code int }
+
+func (e fakeHostExitError) Error() string { return "host command failed" }
+func (e fakeHostExitError) ExitCode() int { return e.code }
+
 func TestEnsureThinWorkspaceCreatesAndFormatsDevice(t *testing.T) {
 	var calls []string
 	restore := stubHostCommands(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -20,6 +25,9 @@ func TestEnsureThinWorkspaceCreatesAndFormatsDevice(t *testing.T) {
 		calls = append(calls, call)
 		if strings.HasPrefix(call, "dmsetup info ") {
 			return nil, errors.New("not found")
+		}
+		if strings.HasPrefix(call, "blkid ") {
+			return nil, fakeHostExitError{code: 2}
 		}
 		return nil, nil
 	})
@@ -42,6 +50,7 @@ func TestEnsureThinWorkspaceCreatesAndFormatsDevice(t *testing.T) {
 		"dmsetup info agentcy-ws-agent-1-cmp_a",
 		"dmsetup message /dev/mapper/agentcy-pool 0 create_thin ",
 		"dmsetup create agentcy-ws-agent-1-cmp_a --table 0 2097152 thin /dev/mapper/agentcy-pool ",
+		"blkid -o value -s TYPE /dev/mapper/agentcy-ws-agent-1-cmp_a",
 		"mkfs.ext4 -F -q -E lazy_itable_init=1,lazy_journal_init=1,nodiscard /dev/mapper/agentcy-ws-agent-1-cmp_a",
 	} {
 		if !strings.Contains(joined, want) {
@@ -49,6 +58,111 @@ func TestEnsureThinWorkspaceCreatesAndFormatsDevice(t *testing.T) {
 		}
 	}
 	assertThinIDsInRange(t, joined)
+}
+
+func TestEnsureThinWorkspaceReactivationDoesNotReformatExistingDevice(t *testing.T) {
+	var createAttempts, formatAttempts int
+	restore := stubHostCommands(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		call := name + " " + strings.Join(args, " ")
+		switch {
+		case strings.HasPrefix(call, "dmsetup info "):
+			return nil, errors.New("inactive")
+		case strings.Contains(call, " create_thin "):
+			createAttempts++
+			if createAttempts > 1 {
+				return []byte("File exists"), errors.New("device exists")
+			}
+		case strings.HasPrefix(call, "blkid "):
+			if formatAttempts > 0 {
+				return []byte("ext4"), nil
+			}
+			return nil, fakeHostExitError{code: 2}
+		case strings.HasPrefix(call, "mkfs.ext4 "):
+			formatAttempts++
+		}
+		return nil, nil
+	})
+	defer restore()
+
+	m := &Manager{cfg: &config.Config{
+		MicroVMWorkspaceBackend: "dm-thin",
+		MicroVMThinPoolDevice:   "/dev/mapper/agentcy-pool",
+		MicroVMWorkspaceSizeMiB: 1024,
+	}}
+	for wake := 0; wake < 2; wake++ {
+		if _, err := m.ensureThinWorkspace(context.Background(), "agent-reboot", "cmp_a"); err != nil {
+			t.Fatalf("ensure thin workspace wake %d: %v", wake+1, err)
+		}
+	}
+	if formatAttempts != 1 {
+		t.Fatalf("mkfs attempts = %d, want exactly one before reactivation", formatAttempts)
+	}
+}
+
+func TestEnsureThinWorkspaceFormatsActiveDeviceLeftUnformattedByCrash(t *testing.T) {
+	var calls []string
+	restore := stubHostCommands(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		call := name + " " + strings.Join(args, " ")
+		calls = append(calls, call)
+		if strings.HasPrefix(call, "dmsetup info ") {
+			return []byte("active"), nil
+		}
+		if strings.HasPrefix(call, "blkid ") {
+			return nil, fakeHostExitError{code: 2}
+		}
+		return nil, nil
+	})
+	defer restore()
+
+	m := &Manager{cfg: &config.Config{MicroVMThinPoolDevice: "/dev/mapper/agentcy-pool", MicroVMWorkspaceSizeMiB: 1024}}
+	if _, err := m.ensureThinWorkspace(context.Background(), "agent-crash", "cmp_a"); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(calls, "\n")
+	if !strings.Contains(joined, "blkid -o value -s TYPE /dev/mapper/agentcy-ws-agent-crash-cmp_a") ||
+		!strings.Contains(joined, "mkfs.ext4 -F -q") {
+		t.Fatalf("active unformatted device was not recovered:\n%s", joined)
+	}
+	if strings.Contains(joined, "create_thin") {
+		t.Fatalf("active device was recreated:\n%s", joined)
+	}
+}
+
+func TestEnsureThinWorkspaceSeedsNewDeviceFromCompartmentWorkspace(t *testing.T) {
+	dataDir := t.TempDir()
+	defaultSeedDir := filepath.Join(dataDir, "agents", "agent-seeded", "workspace")
+	if err := os.MkdirAll(defaultSeedDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	seedDir := filepath.Join(dataDir, "agents", "agent-seeded", "compartments", "cmp_a", "workspace")
+	if err := os.MkdirAll(seedDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	restore := stubHostCommands(t, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		call := name + " " + strings.Join(args, " ")
+		calls = append(calls, call)
+		if strings.HasPrefix(call, "dmsetup info ") {
+			return nil, errors.New("not found")
+		}
+		if strings.HasPrefix(call, "blkid ") {
+			return nil, fakeHostExitError{code: 2}
+		}
+		return nil, nil
+	})
+	defer restore()
+	m := &Manager{cfg: &config.Config{
+		DataDir:                 dataDir,
+		MicroVMThinPoolDevice:   "/dev/mapper/agentcy-pool",
+		MicroVMWorkspaceSizeMiB: 1024,
+		MicroVMWorkspaceBackend: "dm-thin",
+	}}
+	if _, err := m.ensureThinWorkspace(context.Background(), "agent-seeded", "cmp_a"); err != nil {
+		t.Fatal(err)
+	}
+	if joined := strings.Join(calls, "\n"); !strings.Contains(joined, "mkfs.ext4 -F -q -E lazy_itable_init=1,lazy_journal_init=1,nodiscard -d "+seedDir) {
+		t.Fatalf("mkfs did not seed from %s:\n%s", seedDir, joined)
+	}
 }
 
 func TestCreateThinSnapshotCommands(t *testing.T) {

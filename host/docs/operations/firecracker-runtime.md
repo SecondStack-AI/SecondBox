@@ -18,7 +18,8 @@ just build-microvm-kernel
 ```
 
 Changing either pin is a runtime migration: rebuild image artifacts, discard
-golden snapshots, restart runtimes, and run staging verification before rollout.
+archived golden snapshots, restart runtimes, and run staging verification before
+rollout.
 
 ## Jailer mode
 
@@ -51,23 +52,20 @@ AG_MICROVM_JAILER_PARENT_CGROUP=agentcy
 
 ## CPU template
 
-Snapshot restore is sensitive to the guest CPU/xstate feature set. The default
-is `None` on x86, which keeps save/restore on the same physical CPU in host
-passthrough mode. Static x86 Firecracker templates such as `T2A` target specific
-older CPU models and can make CPUID and XSAVE state disagree on newer hosts.
-On arm64, the default is `V1N1`.
+The default is `None` on x86. Static x86 Firecracker templates such as `T2A`
+target specific older CPU models and can make CPUID and XSAVE state disagree on
+newer hosts. On arm64, the default is `V1N1`.
 
-Set `AG_MICROVM_CPU_TEMPLATE` only when deliberately restoring across a matching
-host fleet:
+Set `AG_MICROVM_CPU_TEMPLATE` only when deliberately targeting a matching host
+fleet:
 
 ```env
 AG_MICROVM_CPU_TEMPLATE=None
 ```
 
-The manager also appends `noxsave` to the guest kernel args by default. Existing
-per-agent snapshots created without the current CPU template or kernel args are
-invalidated; the next start cold boots once and saves a new compatible snapshot
-on stop.
+The manager also appends `noxsave` to the guest kernel args by default. Archived
+snapshots created without the current CPU template or kernel args must be
+discarded.
 
 ## Tap networking
 
@@ -105,6 +103,42 @@ the manager still owns per-VM tap creation and the per-instance transparent HTTP
 redirect. Run `scripts/microvm-host-network-setup.sh --help` for the full
 variable list.
 
+The privileged launcher probes this posture on health checks, tap admission,
+and immediately before every VM launch. It fails closed when the bridge is not
+up with the configured CIDR, IPv4 forwarding is disabled, the guest-to-host or
+guest-forward default-deny hooks are missing, or the IPv6 drop hooks have
+drifted. The error lists stable invariant names such as
+`guest_forward_default_deny`; it does not include firewall command output.
+
+To diagnose a rejected launch, inspect the unit and compare the live rules to
+the provisioning contract:
+
+```sh
+systemctl status agentcy-microvm-network.service
+ip -o link show dev "${AG_MICROVM_BRIDGE_NAME:-agfc0}"
+sysctl net.ipv4.ip_forward
+sudo iptables-save | grep AGENTCY_
+sudo ip6tables-save | grep AGENTCY_
+```
+
+Recover by reapplying the idempotent host policy with the same `AG_*` values as
+the service, then restart the launcher only after the script succeeds:
+
+```sh
+sudo -E scripts/microvm-host-network-setup.sh apply
+sudo systemctl restart agentcy-vmlauncher.service
+```
+
+Do not bypass the probe or start a VM while an invariant remains missing.
+
+Hosted CI runs `scripts/test/microvm-network-namespace-test.sh` as a blocking
+job. It applies the real host policy inside isolated Linux network namespaces
+and proves the platform/proxy allow paths, transparent HTTP redirect, and
+default-deny path without requiring KVM. That check does not replace the
+owner-operated, self-hosted Firecracker isolation job: the latter remains the
+required end-to-end proof for jailer, tap, generated-image, and vsock behavior
+on a real KVM host.
+
 ## Transparent HTTP egress
 
 When proxy egress is enabled for an agent and
@@ -134,26 +168,26 @@ The manifest is compatibility metadata, not a restore policy. A snapshot must be
 discarded and recreated when the Firecracker version pin, guest-kernel pin, CPU
 template, rootfs/shared image, or machine shape changes.
 
+Golden-snapshot restore is intentionally not exposed by the manager. The former
+restore method launched Firecracker directly and bypassed the root-owned,
+peer-credentialed privileged launcher. Snapshot creation and artifact
+verification remain available for diagnostics and future launcher-backed
+restore work; do not treat these artifacts as a production restore pool.
+
 Snapshot invalidation procedure:
 
-1. Stop agent runtimes so no snapshot restore races the artifact swap.
+1. Stop agent runtimes so snapshot creation cannot race the artifact swap.
 2. Remove saved golden snapshots under the configured data/run snapshot
    directory for the affected agents.
 3. Rebuild and verify microVM artifacts (`just build-microvm-images-std`,
    `just verify-microvm-staging`).
-4. Restart `agentcy`; the first warm start recreates snapshots from the new VMM,
-   kernel, CPU template, and image set.
+4. Restart `agentcy`; create a new diagnostic snapshot explicitly if one is
+   needed after verification.
 
 Guest-kernel patch cadence: review the `6.12.y` stable line monthly and after
 any Linux guest CVE relevant to KVM, virtio, ext4, networking, or namespaces.
 Patch by updating `scripts/microvm-image/kernel.lock`, rebuilding artifacts, and
 following the invalidation procedure above.
-
-Restores can use the default Firecracker `File` memory backend or an explicit
-`Uffd` backend path for a future userfaultfd page-fault handler. The restore
-pool keeps paused clones ready; acquisition resumes a clone and asks the guest
-control agent to mix host-supplied entropy into `/dev/urandom` and set the guest
-clock to host time.
 
 ## Workspace storage
 

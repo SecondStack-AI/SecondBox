@@ -57,6 +57,7 @@ type Manager struct {
 	instances        map[string]*instance
 	instancesByKey   map[runtimeInstanceKey]string
 	provisioning     map[runtimeInstanceKey]chan struct{}
+	pendingSpawns    map[runtimeInstanceKey]int
 	shuttingDown     bool
 	sweepCancel      context.CancelFunc
 	sweepDone        chan struct{}
@@ -268,6 +269,7 @@ func New(cfg *config.Config) (*Manager, error) {
 		instances:        map[string]*instance{},
 		instancesByKey:   map[runtimeInstanceKey]string{},
 		provisioning:     map[runtimeInstanceKey]chan struct{}{},
+		pendingSpawns:    map[runtimeInstanceKey]int{},
 		guestIPs:         map[string]string{},
 		network:          IPTapConfigurer{},
 		trustedArtifacts: trustedArtifacts,
@@ -287,6 +289,11 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 	if err := m.sweepStartupOrphans(ctx); err != nil {
 		slog.Warn("startup orphan microVM sweep completed with unreclaimed entries", "error", err)
+	}
+	if deleted, err := m.pruneLogs(time.Now().UTC(), 7*24*time.Hour); err != nil {
+		slog.Warn("failed to prune stale microVM logs", "error", err)
+	} else if deleted > 0 {
+		slog.Info("pruned stale microVM logs", "count", deleted)
 	}
 	if m.cfg == nil || !m.cfg.ToolVMReuseEffective() {
 		return nil
@@ -360,7 +367,6 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 		case <-waitCtx.Done():
 			slog.Warn("microVM manager shutdown timed out waiting for provisioning warm tool VMs", "error", waitCtx.Err())
 			provisioningTimedOut = true
-			break
 		case <-time.After(25 * time.Millisecond):
 		}
 		if provisioningTimedOut {
@@ -602,6 +608,21 @@ func (m *Manager) createAndStart(ctx context.Context, agentID string, opts runti
 	}
 	opts.CompartmentID = compartmentID
 	key := runtimeInstanceKey{agentID: agentID, compartmentID: compartmentID}
+	m.mu.Lock()
+	if err := m.reserveCompartmentSpawnLocked(key); err != nil {
+		m.mu.Unlock()
+		return "", err
+	}
+	m.mu.Unlock()
+	releasePendingLocked := sync.OnceFunc(func() {
+		m.releaseCompartmentSpawnLocked(key)
+	})
+	releasePending := func() {
+		m.mu.Lock()
+		releasePendingLocked()
+		m.mu.Unlock()
+	}
+	defer releasePending()
 	// Single-guest-IP mode admits only one compartment per agent, so a Firecracker
 	// process for this agent that the manager is not tracking is a leaked orphan
 	// that still holds the shared guest IP. Reclaim it before this cold boot
@@ -611,13 +632,7 @@ func (m *Manager) createAndStart(ctx context.Context, agentID string, opts runti
 	if m.cfg != nil && strings.TrimSpace(m.cfg.MicroVMBridgeCIDR) == "" {
 		m.cleanupUntrackedAgentOrphans(ctx, agentID)
 	}
-	m.mu.Lock()
-	if err := m.admitCompartmentSpawnLocked(key); err != nil {
-		m.mu.Unlock()
-		return "", err
-	}
-	m.mu.Unlock()
-	return m.startCompartmentInstance(ctx, agentID, compartmentID, opts)
+	return m.startCompartmentInstance(ctx, agentID, compartmentID, opts, releasePendingLocked)
 }
 
 // ExecuteEphemeralTool starts a fresh Firecracker tool VM for one dangerous
@@ -669,7 +684,7 @@ func (m *Manager) untrackedInstanceIDs(candidateIDs []string) []string {
 	return out
 }
 
-func (m *Manager) startCompartmentInstance(ctx context.Context, agentID, compartmentID string, opts runtimemanager.StartOpts) (id string, err error) {
+func (m *Manager) startCompartmentInstance(ctx context.Context, agentID, compartmentID string, opts runtimemanager.StartOpts, onRegisteredLocked func()) (id string, err error) {
 	started := time.Now()
 	defer func() {
 		if err == nil && strings.TrimSpace(id) != "" {
@@ -679,10 +694,10 @@ func (m *Manager) startCompartmentInstance(ctx context.Context, agentID, compart
 	if m.startCompartment != nil {
 		return m.startCompartment(ctx, agentID, compartmentID, opts)
 	}
-	return m.createAndStartCold(ctx, agentID, compartmentID, opts)
+	return m.createAndStartCold(ctx, agentID, compartmentID, opts, onRegisteredLocked)
 }
 
-func (m *Manager) createAndStartCold(ctx context.Context, agentID, compartmentID string, opts runtimemanager.StartOpts) (string, error) {
+func (m *Manager) createAndStartCold(ctx context.Context, agentID, compartmentID string, opts runtimemanager.StartOpts, onRegisteredLocked func()) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -721,6 +736,7 @@ func (m *Manager) createAndStartCold(ctx context.Context, agentID, compartmentID
 			AgentID:    agentID,
 			InstanceID: id,
 			TapName:    tapName,
+			GuestIP:    guestIP,
 			BridgeName: m.cfg.MicroVMBridgeName,
 			BridgeCIDR: m.cfg.MicroVMBridgeCIDR,
 			OwnerUID:   m.tapOwnerUID(),
@@ -863,9 +879,7 @@ func (m *Manager) createAndStartCold(ctx context.Context, agentID, compartmentID
 		done:               make(chan struct{}),
 		launcherOnly:       launcherOnly,
 	}
-	m.mu.Lock()
-	m.addInstanceLocked(inst)
-	m.mu.Unlock()
+	m.registerStartingInstance(inst, onRegisteredLocked)
 	// Start the reaper before any stopInstance call so the process is always
 	// waited on (no zombie) and cleanup runs exactly once.
 	go m.reap(inst)
@@ -961,6 +975,7 @@ func (m *Manager) finishInstance(inst *instance) {
 }
 
 var firecrackerProcessRunningFunc = firecrackerProcessRunning
+var signalFirecrackerByIDFunc = signalFirecrackerByID
 
 // firecrackerInstanceIDsForAgentFunc is overridable in tests; production uses the
 // real /proc-based enumeration.
@@ -1147,11 +1162,47 @@ func (m *Manager) stopInstance(ctx context.Context, inst *instance, removeFiles 
 	}
 	if removeFiles {
 		_ = os.RemoveAll(inst.dir)
+		if strings.TrimSpace(inst.logPath) != "" {
+			_ = os.Remove(inst.logPath)
+		}
 		if inst.jailRoot != "" && m.launcher == nil {
 			_ = os.RemoveAll(filepath.Dir(inst.jailRoot))
 		}
 	}
 	return nil
+}
+
+func (m *Manager) pruneLogs(now time.Time, maxAge time.Duration) (int, error) {
+	if m == nil || m.cfg == nil || maxAge <= 0 || strings.TrimSpace(m.cfg.MicroVMLogDir) == "" {
+		return 0, nil
+	}
+	entries, err := os.ReadDir(m.cfg.MicroVMLogDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	cutoff := now.Add(-maxAge)
+	deleted := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".log") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return deleted, err
+		}
+		if !info.ModTime().Before(cutoff) {
+			continue
+		}
+		path := filepath.Join(m.cfg.MicroVMLogDir, entry.Name())
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return deleted, err
+		}
+		deleted++
+	}
+	return deleted, nil
 }
 
 func (m *Manager) IsRunning(ctx context.Context, instanceID string) (bool, error) {
@@ -1375,6 +1426,15 @@ func (m *Manager) addInstanceLocked(inst *instance) {
 	inst.agentID = strings.TrimSpace(inst.agentID)
 	inst.compartmentID = normalizeRuntimeCompartmentID(inst.compartmentID)
 	m.instances[inst.id] = inst
+}
+
+func (m *Manager) registerStartingInstance(inst *instance, onRegisteredLocked func()) {
+	m.mu.Lock()
+	m.addInstanceLocked(inst)
+	if onRegisteredLocked != nil {
+		onRegisteredLocked()
+	}
+	m.mu.Unlock()
 }
 
 func (m *Manager) removeInstanceLocked(inst *instance) {

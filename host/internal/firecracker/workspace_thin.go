@@ -3,6 +3,7 @@ package microvm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -176,14 +177,20 @@ func (m *Manager) ensureThinWorkspace(ctx context.Context, agentID, compartmentI
 	}
 	name := thinWorkspaceName(agentID, compartmentID)
 	if _, err := runHostCommand(ctx, "dmsetup", "info", name); err == nil {
-		return thinDevicePath(name), nil
+		path := thinDevicePath(name)
+		if err := m.ensureThinWorkspaceFilesystem(ctx, path, agentID, compartmentID); err != nil {
+			return "", err
+		}
+		return path, nil
 	}
 	devID, err := m.thinDeviceIDAllocatorRef().allocate("workspace-origin:" + name)
 	if err != nil {
 		return "", fmt.Errorf("allocate dm-thin workspace device id: %w", err)
 	}
-	if out, err := runHostCommand(ctx, "dmsetup", "message", pool, "0", fmt.Sprintf("create_thin %d", devID)); err != nil && !strings.Contains(string(out), "File exists") {
-		return "", fmt.Errorf("create dm-thin workspace device: %w: %s", err, strings.TrimSpace(string(out)))
+	if out, err := runHostCommand(ctx, "dmsetup", "message", pool, "0", fmt.Sprintf("create_thin %d", devID)); err != nil {
+		if !strings.Contains(string(out), "File exists") {
+			return "", fmt.Errorf("create dm-thin workspace device: %w: %s", err, strings.TrimSpace(string(out)))
+		}
 	}
 	sectors := sectorsForMiB(m.cfg.MicroVMWorkspaceSizeMiB)
 	table := fmt.Sprintf("0 %d thin %s %d", sectors, pool, devID)
@@ -191,10 +198,44 @@ func (m *Manager) ensureThinWorkspace(ctx context.Context, agentID, compartmentI
 		return "", fmt.Errorf("activate dm-thin workspace device: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	path := thinDevicePath(name)
-	if out, err := runHostCommand(ctx, "mkfs.ext4", "-F", "-q", "-E", "lazy_itable_init=1,lazy_journal_init=1,nodiscard", path); err != nil {
-		return "", fmt.Errorf("format dm-thin workspace: %w: %s", err, strings.TrimSpace(string(out)))
+	if err := m.ensureThinWorkspaceFilesystem(ctx, path, agentID, compartmentID); err != nil {
+		return "", err
 	}
 	return path, nil
+}
+
+func (m *Manager) ensureThinWorkspaceFilesystem(ctx context.Context, path, agentID, compartmentID string) error {
+	hasFilesystem, err := thinDeviceHasFilesystem(ctx, path)
+	if err != nil {
+		return fmt.Errorf("probe dm-thin workspace filesystem: %w", err)
+	}
+	if hasFilesystem {
+		return nil
+	}
+	args := []string{"-F", "-q", "-E", "lazy_itable_init=1,lazy_journal_init=1,nodiscard"}
+	seedDir := m.workspaceSeedDir(agentID, compartmentID)
+	if info, statErr := os.Stat(seedDir); statErr == nil && info.IsDir() {
+		args = append(args, "-d", seedDir)
+	} else if statErr != nil && !os.IsNotExist(statErr) {
+		return fmt.Errorf("stat dm-thin workspace seed dir: %w", statErr)
+	}
+	args = append(args, path)
+	if out, err := runHostCommand(ctx, "mkfs.ext4", args...); err != nil {
+		return fmt.Errorf("format dm-thin workspace: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func thinDeviceHasFilesystem(ctx context.Context, path string) (bool, error) {
+	out, err := runHostCommand(ctx, "blkid", "-o", "value", "-s", "TYPE", path)
+	if err == nil {
+		return strings.TrimSpace(string(out)) != "", nil
+	}
+	var exitCoder interface{ ExitCode() int }
+	if errors.As(err, &exitCoder) && exitCoder.ExitCode() == 2 {
+		return false, nil
+	}
+	return false, fmt.Errorf("blkid %s: %w: %s", path, err, strings.TrimSpace(string(out)))
 }
 
 func (m *Manager) CreateWorkspaceThinSnapshot(ctx context.Context, instanceID, snapshotName string) (ThinWorkspaceSnapshot, error) {

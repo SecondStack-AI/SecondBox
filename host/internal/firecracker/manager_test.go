@@ -23,6 +23,19 @@ import (
 	"agentcy/internal/runtimemanager"
 )
 
+type recordingHostNetworkConfigurer struct {
+	tap TapConfig
+}
+
+func (r *recordingHostNetworkConfigurer) ConfigureTap(_ context.Context, cfg TapConfig) error {
+	r.tap = cfg
+	return nil
+}
+
+func (r *recordingHostNetworkConfigurer) RemoveTap(context.Context, string) error {
+	return nil
+}
+
 func TestNewInstanceIDIncludesCompartmentSegment(t *testing.T) {
 	id, err := newInstanceID("agent-1", "cmp_abcdef1234567890")
 	if err != nil {
@@ -1218,6 +1231,13 @@ func TestSweepIdleToolVMsSkipsDrainingAndRecentlyUsed(t *testing.T) {
 }
 
 func TestSweepIdleToolVMsToleratesRemoveErrorWithoutDoubleTeardown(t *testing.T) {
+	originalSignal := signalFirecrackerByIDFunc
+	t.Cleanup(func() { signalFirecrackerByIDFunc = originalSignal })
+	escalated := make(chan syscall.Signal, 1)
+	signalFirecrackerByIDFunc = func(_ string, signal syscall.Signal) error {
+		escalated <- signal
+		return nil
+	}
 	m := newWarmToolTestManager(t)
 	key := runtimeInstanceKey{agentID: "agent", compartmentID: "cmp_error"}
 	inst := &instance{
@@ -1240,7 +1260,14 @@ func TestSweepIdleToolVMsToleratesRemoveErrorWithoutDoubleTeardown(t *testing.T)
 	if got := m.sweepIdleToolVMs(time.Now()); got != 1 {
 		t.Fatalf("first sweep count = %d, want 1", got)
 	}
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case signal := <-escalated:
+		if signal != syscall.SIGKILL {
+			t.Fatalf("escalation signal = %v, want SIGKILL", signal)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for teardown escalation")
+	}
 	m.mu.Lock()
 	_, stillIndexed := m.instancesByKey[key]
 	_, stillPresent := m.instances[inst.id]
@@ -1254,6 +1281,51 @@ func TestSweepIdleToolVMsToleratesRemoveErrorWithoutDoubleTeardown(t *testing.T)
 	}
 	if removes.Load() != 1 {
 		t.Fatalf("remove calls = %d, want 1", removes.Load())
+	}
+}
+
+func TestWarmToolVMTeardownEscalatesThroughPrivilegedLauncher(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "launcher.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	requestSeen := make(chan privilegedLauncherRequest, 1)
+	serverErr := make(chan error, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			serverErr <- acceptErr
+			return
+		}
+		defer conn.Close()
+		var req privilegedLauncherRequest
+		if decodeErr := json.NewDecoder(conn).Decode(&req); decodeErr != nil {
+			serverErr <- decodeErr
+			return
+		}
+		requestSeen <- req
+		serverErr <- json.NewEncoder(conn).Encode(privilegedLauncherResponse{OK: true})
+	}()
+
+	originalSignal := signalFirecrackerByIDFunc
+	t.Cleanup(func() { signalFirecrackerByIDFunc = originalSignal })
+	signalFirecrackerByIDFunc = func(string, syscall.Signal) error {
+		t.Fatal("unprivileged signal fallback must not run in launcher mode")
+		return nil
+	}
+	m := newWarmToolTestManager(t)
+	m.launcher = newPrivilegedLauncherClient(socketPath)
+	m.freezeWorkspace = func(context.Context, string) (BackupResponse, error) { return BackupResponse{}, nil }
+	m.removeInstance = func(context.Context, string) error { return errors.New("initial remove failed") }
+	inst := &instance{id: "fc-agent-cmp-privileged", agentID: "agent", compartmentID: "cmp", warmToolVM: true, done: make(chan struct{})}
+	m.teardownWarmToolVMContext(context.Background(), inst)
+	if err := <-serverErr; err != nil {
+		t.Fatalf("launcher server: %v", err)
+	}
+	if req := <-requestSeen; req.Op != "stop" || req.ID != inst.id {
+		t.Fatalf("launcher escalation request = %+v", req)
 	}
 }
 
@@ -2536,6 +2608,35 @@ func TestLogsReturnsTailFromStoppedInstanceLog(t *testing.T) {
 	}
 }
 
+func TestPruneLogsRemovesOnlyExpiredLogFiles(t *testing.T) {
+	logDir := t.TempDir()
+	now := time.Now().UTC()
+	oldPath := filepath.Join(logDir, "fc-old.log")
+	newPath := filepath.Join(logDir, "fc-new.log")
+	otherPath := filepath.Join(logDir, "keep.txt")
+	for _, path := range []string{oldPath, newPath, otherPath} {
+		if err := os.WriteFile(path, []byte("log"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chtimes(oldPath, now.Add(-8*24*time.Hour), now.Add(-8*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{cfg: &config.Config{MicroVMLogDir: logDir}}
+	deleted, err := m.pruneLogs(now, 7*24*time.Hour)
+	if err != nil || deleted != 1 {
+		t.Fatalf("prune logs: deleted=%d err=%v", deleted, err)
+	}
+	if _, err := os.Stat(oldPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old log still exists: %v", err)
+	}
+	for _, path := range []string{newPath, otherPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("retained file %s: %v", path, err)
+		}
+	}
+}
+
 func TestManagerUsesGuestControlForLiveVerbs(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "control.sock")
 	handshakes := make(chan string, 16)
@@ -2825,9 +2926,10 @@ func TestAdmitCompartmentSpawnLocked(t *testing.T) {
 			instances: map[string]*instance{"a": live("cmp-a", "agent-2", false)},
 		},
 		{
-			name:      "reaping instances excluded",
+			name:      "reaping instances retain capacity",
 			cfg:       config.Config{MicroVMBridgeCIDR: "10.0.0.1/24", MicroVMMaxConcurrentPerAgent: 1, MicroVMMaxConcurrentGlobal: 1, MicroVMMemoryMiB: 2048, MicroVMMemoryBudgetMiB: 2048},
 			instances: map[string]*instance{"a": live("cmp-a", "agent-1", true)},
+			wantErr:   "AG_MICROVM_MAX_CONCURRENT_PER_AGENT",
 		},
 		{
 			name:      "non-positive vm memory skips memory check",
@@ -2846,6 +2948,173 @@ func TestAdmitCompartmentSpawnLocked(t *testing.T) {
 				t.Fatalf("admit error = %v, want %s", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestAdmitCompartmentSpawnLockedCountsPendingReservations(t *testing.T) {
+	m := &Manager{
+		cfg:           &config.Config{MicroVMBridgeCIDR: "10.0.0.1/24", MicroVMMaxConcurrentGlobal: 2, MicroVMMemoryMiB: 1024, MicroVMMemoryBudgetMiB: 2048},
+		instances:     map[string]*instance{},
+		pendingSpawns: map[runtimeInstanceKey]int{{agentID: "agent-1", compartmentID: "cmp-a"}: 2},
+	}
+	if err := m.admitCompartmentSpawnLocked(runtimeInstanceKey{agentID: "agent-2", compartmentID: "cmp-b"}); err == nil || !strings.Contains(err.Error(), "AG_MICROVM_MAX_CONCURRENT_GLOBAL") {
+		t.Fatalf("admit with pending reservations = %v, want global cap", err)
+	}
+	got := m.RuntimeMetricsSnapshot()
+	if got.PendingVMsTotal != 2 || got.PendingVMsByAgent["agent-1"] != 2 || got.MemoryReservedMiB != 2048 {
+		t.Fatalf("pending metrics = %+v", got)
+	}
+}
+
+func TestRegisterStartingInstanceTransfersPendingCapacityToLive(t *testing.T) {
+	key := runtimeInstanceKey{agentID: "agent-1", compartmentID: "cmp-a"}
+	m := &Manager{
+		cfg:           &config.Config{MicroVMMemoryMiB: 1024},
+		instances:     map[string]*instance{},
+		pendingSpawns: map[runtimeInstanceKey]int{key: 1},
+	}
+	m.registerStartingInstance(&instance{id: "fc-1", agentID: key.agentID, compartmentID: key.compartmentID}, func() {
+		m.releaseCompartmentSpawnLocked(key)
+	})
+	got := m.RuntimeMetricsSnapshot()
+	if got.ConcurrentVMsTotal != 1 || got.PendingVMsTotal != 0 || got.MemoryReservedMiB != 1024 {
+		t.Fatalf("capacity after registration = %+v", got)
+	}
+}
+
+func TestRegisterStartingInstanceTransfersCapacityAtomically(t *testing.T) {
+	key := runtimeInstanceKey{agentID: "agent-1", compartmentID: "cmp-a"}
+	m := &Manager{
+		cfg:           &config.Config{MicroVMBridgeCIDR: "10.0.0.1/24", MicroVMMaxConcurrentGlobal: 2},
+		instances:     map[string]*instance{},
+		pendingSpawns: map[runtimeInstanceKey]int{key: 1},
+	}
+	transferEntered := make(chan struct{})
+	allowTransfer := make(chan struct{})
+	registered := make(chan struct{})
+	go func() {
+		m.registerStartingInstance(&instance{id: "fc-1", agentID: key.agentID, compartmentID: key.compartmentID}, func() {
+			m.releaseCompartmentSpawnLocked(key)
+			close(transferEntered)
+			<-allowTransfer
+		})
+		close(registered)
+	}()
+	<-transferEntered
+
+	admitted := make(chan error, 1)
+	go func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		admitted <- m.admitCompartmentSpawnLocked(runtimeInstanceKey{agentID: "agent-2", compartmentID: "cmp-b"})
+	}()
+	select {
+	case err := <-admitted:
+		t.Fatalf("concurrent admission observed an in-progress transfer: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(allowTransfer)
+	<-registered
+	if err := <-admitted; err != nil {
+		t.Fatalf("admission after atomic transfer: %v", err)
+	}
+}
+
+func TestCreateAndStartAtomicAdmissionBurst(t *testing.T) {
+	const cap = 2
+	launchEntered := make(chan struct{}, 10)
+	releaseLaunches := make(chan struct{})
+	var launched atomic.Int64
+	m := &Manager{
+		cfg:           &config.Config{MicroVMBridgeCIDR: "10.0.0.1/24", MicroVMMaxConcurrentGlobal: cap},
+		instances:     map[string]*instance{},
+		pendingSpawns: map[runtimeInstanceKey]int{},
+	}
+	m.startCompartment = func(ctx context.Context, agentID, compartmentID string, opts runtimemanager.StartOpts) (string, error) {
+		launched.Add(1)
+		launchEntered <- struct{}{}
+		select {
+		case <-releaseLaunches:
+			return "fc-" + compartmentID, nil
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+
+	const attempts = 12
+	results := make(chan error, attempts)
+	for i := 0; i < attempts; i++ {
+		go func(i int) {
+			_, err := m.createAndStart(context.Background(), fmt.Sprintf("agent-%d", i), runtimemanager.StartOpts{CompartmentID: fmt.Sprintf("cmp-%d", i)})
+			results <- err
+		}(i)
+	}
+	for i := 0; i < cap; i++ {
+		select {
+		case <-launchEntered:
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for admitted cold start")
+		}
+	}
+	denied := 0
+	for denied < attempts-cap {
+		select {
+		case err := <-results:
+			if err == nil {
+				t.Fatal("cold start completed before launcher was released")
+			}
+			denied++
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for denied cold starts; got %d", denied)
+		}
+	}
+	if got := launched.Load(); got != cap {
+		t.Fatalf("launches reached launcher = %d, want exactly %d", got, cap)
+	}
+	metrics := m.RuntimeMetricsSnapshot()
+	if metrics.PendingVMsTotal != cap {
+		t.Fatalf("pending reservations = %d, want %d", metrics.PendingVMsTotal, cap)
+	}
+	close(releaseLaunches)
+	for i := 0; i < cap; i++ {
+		if err := <-results; err != nil {
+			t.Fatalf("admitted cold start failed: %v", err)
+		}
+	}
+	if denied != attempts-cap {
+		t.Fatalf("denied starts = %d, want %d", denied, attempts-cap)
+	}
+	if got := m.RuntimeMetricsSnapshot().PendingVMsTotal; got != 0 {
+		t.Fatalf("pending reservations after completion = %d, want 0", got)
+	}
+}
+
+func TestCreateAndStartReleasesAdmissionReservationOnFailureAndCancellation(t *testing.T) {
+	m := &Manager{
+		cfg:           &config.Config{MicroVMBridgeCIDR: "10.0.0.1/24", MicroVMMaxConcurrentGlobal: 1},
+		instances:     map[string]*instance{},
+		pendingSpawns: map[runtimeInstanceKey]int{},
+	}
+	m.startCompartment = func(context.Context, string, string, runtimemanager.StartOpts) (string, error) {
+		return "", errors.New("launch failed")
+	}
+	if _, err := m.createAndStart(context.Background(), "agent-failure", runtimemanager.StartOpts{CompartmentID: "cmp-failure"}); err == nil {
+		t.Fatal("expected launch failure")
+	}
+	if got := m.RuntimeMetricsSnapshot().PendingVMsTotal; got != 0 {
+		t.Fatalf("pending after failure = %d", got)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	m.startCompartment = func(ctx context.Context, _ string, _ string, _ runtimemanager.StartOpts) (string, error) {
+		return "", ctx.Err()
+	}
+	if _, err := m.createAndStart(ctx, "agent-cancel", runtimemanager.StartOpts{CompartmentID: "cmp-cancel"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled launch = %v", err)
+	}
+	if got := m.RuntimeMetricsSnapshot().PendingVMsTotal; got != 0 {
+		t.Fatalf("pending after cancellation = %d", got)
 	}
 }
 
@@ -3085,20 +3354,26 @@ func TestCreateAndStartColdCleansInstanceDirOnFailure(t *testing.T) {
 			MicroVMLogDir:       logDir,
 			MicroVMWorkspaceDir: wsDir,
 			MicroVMRootfsPath:   filepath.Join(root, "missing-rootfs.ext4"),
+			MicroVMBridgeName:   "agbr0",
 			MicroVMBridgeCIDR:   "10.0.0.1/24",
 		},
 		instances: map[string]*instance{},
 		guestIPs:  map[string]string{},
 	}
+	network := &recordingHostNetworkConfigurer{}
+	m.network = network
 
 	// The rootfs source does not exist, so the cold start fails at "prepare
 	// rootfs" — after the per-instance dir and the guest IP have been allocated.
-	_, err := m.createAndStartCold(context.Background(), "agent-1", "cmp_a", runtimemanager.StartOpts{})
+	_, err := m.createAndStartCold(context.Background(), "agent-1", "cmp_a", runtimemanager.StartOpts{}, nil)
 	if err == nil {
 		t.Fatal("expected createAndStartCold to fail on missing rootfs")
 	}
 	if !strings.Contains(err.Error(), "prepare rootfs") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if network.tap.GuestIP != "10.0.0.2" || !ipWithinCIDR(network.tap.GuestIP, network.tap.BridgeCIDR) {
+		t.Fatalf("manager tap config = %+v, want reserved guest IP inside bridge CIDR", network.tap)
 	}
 
 	entries, readErr := os.ReadDir(runDir)

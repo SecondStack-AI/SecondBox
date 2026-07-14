@@ -19,6 +19,7 @@ import (
 	"agentcy/internal/runtimecontext"
 	"agentcy/internal/runtimemanager"
 	"agentcy/internal/sandboxlimits"
+	"agentcy/internal/toolexecutor"
 )
 
 const defaultControlPort = 1024
@@ -38,68 +39,27 @@ type HeartbeatResponse struct {
 	Time       string `json:"time,omitempty"`
 }
 
-const ToolExecutorContractVersion = 1
+const ToolExecutorContractVersion = toolexecutor.ContractVersion
 
-type ToolExecutorOperation string
+type ToolExecutorOperation = toolexecutor.Operation
 
 const (
-	ToolOpExec           ToolExecutorOperation = "exec"
-	ToolOpReadFile       ToolExecutorOperation = "readFile"
-	ToolOpReadFileBuffer ToolExecutorOperation = "readFileBuffer"
-	ToolOpWriteFile      ToolExecutorOperation = "writeFile"
-	ToolOpStat           ToolExecutorOperation = "stat"
-	ToolOpReaddir        ToolExecutorOperation = "readdir"
-	ToolOpExists         ToolExecutorOperation = "exists"
-	ToolOpMkdir          ToolExecutorOperation = "mkdir"
-	ToolOpRm             ToolExecutorOperation = "rm"
+	ToolOpExec           = toolexecutor.OpExec
+	ToolOpReadFile       = toolexecutor.OpReadFile
+	ToolOpReadFileBuffer = toolexecutor.OpReadFileBuffer
+	ToolOpWriteFile      = toolexecutor.OpWriteFile
+	ToolOpStat           = toolexecutor.OpStat
+	ToolOpReaddir        = toolexecutor.OpReaddir
+	ToolOpExists         = toolexecutor.OpExists
+	ToolOpMkdir          = toolexecutor.OpMkdir
+	ToolOpRm             = toolexecutor.OpRm
 )
 
-var ToolExecutorOperations = []ToolExecutorOperation{
-	ToolOpExec,
-	ToolOpReadFile,
-	ToolOpReadFileBuffer,
-	ToolOpWriteFile,
-	ToolOpStat,
-	ToolOpReaddir,
-	ToolOpExists,
-	ToolOpMkdir,
-	ToolOpRm,
-}
+var ToolExecutorOperations = toolexecutor.Operations()
 
-type ToolExecRequest struct {
-	Operation     ToolExecutorOperation `json:"operation"`
-	Command       string                `json:"command,omitempty"`
-	Args          []string              `json:"args,omitempty"`
-	Cwd           string                `json:"cwd,omitempty"`
-	Env           map[string]string     `json:"env,omitempty"`
-	TimeoutMillis int64                 `json:"timeoutMs,omitempty"`
-	Path          string                `json:"path,omitempty"`
-	Content       string                `json:"content,omitempty"`
-	ContentBase64 string                `json:"contentBase64,omitempty"`
-	Encoding      string                `json:"encoding,omitempty"`
-	Recursive     bool                  `json:"recursive,omitempty"`
-	Force         bool                  `json:"force,omitempty"`
-}
-
-type ToolExecResponse struct {
-	Stdout        string                 `json:"stdout,omitempty"`
-	Stderr        string                 `json:"stderr,omitempty"`
-	ExitCode      int                    `json:"exitCode,omitempty"`
-	TimedOut      bool                   `json:"timedOut,omitempty"`
-	Content       string                 `json:"content,omitempty"`
-	ContentBase64 string                 `json:"contentBase64,omitempty"`
-	Stat          map[string]any         `json:"stat,omitempty"`
-	Entries       []ToolExecutorDirEntry `json:"entries,omitempty"`
-	Exists        *bool                  `json:"exists,omitempty"`
-	Error         string                 `json:"error,omitempty"`
-}
-
-type ToolExecutorDirEntry struct {
-	Name  string `json:"name"`
-	Type  string `json:"type"`
-	Size  int64  `json:"size,omitempty"`
-	Mtime string `json:"mtime,omitempty"`
-}
+type ToolExecRequest = toolexecutor.Request
+type ToolExecResponse = toolexecutor.Response
+type ToolExecutorDirEntry = toolexecutor.DirEntry
 
 type WorkspaceEntry = runtimemanager.WorkspaceEntry
 

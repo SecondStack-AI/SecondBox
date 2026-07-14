@@ -628,22 +628,14 @@ all: build build-egress-proxy build-agent build-flue-store build-frontend
 # Testing
 # =============================================================================
 
-# Run Go tests
+# Run the authoritative Go test gate, including Postgres-backed DB contracts.
 test:
     #!/usr/bin/env bash
     set -euo pipefail
     export AG_TEST_DATABASE_URL="${AG_TEST_DATABASE_URL:-${FLUE_STORE_CONTRACT_DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable}}"
     export AG_DATABASE_URL="${AG_DATABASE_URL:-$AG_TEST_DATABASE_URL}"
-    # Run the nested API DB-contract package in its own phase. Otherwise its
-    # child timeout includes time spent waiting behind other packages' serialized
-    # CREATE/DROP DATABASE operations and can expire before its own tests run.
-    mapfile -t packages < <(go list ./cmd/... ./db ./internal/... ./scripts/backup ./scripts/deploy ./skills-catalog/...)
-    regular_packages=()
-    for package in "${packages[@]}"; do
-        [[ "$package" == "agentcy/internal/api/dbcontract" ]] || regular_packages+=("$package")
-    done
-    go test -timeout=50m "${regular_packages[@]}"
-    go test -timeout=50m ./internal/api/dbcontract
+    scripts/test/go-fast.sh
+    scripts/test/go-db.sh
 
 # Compile every Go test package, then run packages whose test dependency graph
 # does not include the shared Postgres fixture. The full `just test` gate remains
@@ -674,23 +666,11 @@ test-flue-store-contract:
 preship:
     #!/usr/bin/env bash
     set -euo pipefail
-    scripts/microvm-image/browser-surface-policy-test.sh
-    scripts/microvm-image/trust-anchor-policy-test.sh
-    mapfile -t go_files < <(git ls-files --cached --others --exclude-standard '*.go' | while IFS= read -r file; do
-        [[ "$file" == vendor/* || ! -f "$file" ]] || printf '%s\n' "$file"
-    done)
-    unformatted="$(gofmt -l "${go_files[@]}")"
-    if [[ -n "$unformatted" ]]; then
-        printf 'Go files are not gofmt-clean:\n%s\n' "$unformatted" >&2
-        exit 1
-    fi
-    go vet ./cmd/... ./db ./internal/... ./scripts/backup ./scripts/deploy ./skills-catalog/...
-    scripts/test/verify-generated.sh
-    just test-fast
+    scripts/test/backend-checks.sh
     just test
-    (cd flue-store && ../scripts/test/npm-audit.sh moderate && npm test && npm run test:contract && npm run build)
-    (cd agent && ../scripts/test/npm-audit.sh moderate && npm run typecheck && npm run lint && npm test && npm run build)
-    (cd frontend && ../scripts/test/npm-audit.sh moderate && npm run typecheck && npm run lint && npm test && npm run build)
+    (cd flue-store && npm test && npm run test:contract && npm run build)
+    (cd agent && npm run typecheck && npm run lint && npm test && npm run build)
+    (cd frontend && npm run typecheck && npm run lint && npm test && npm run build)
 
 # Create a local Agentcy Postgres dump.
 backup:

@@ -22,9 +22,9 @@ import (
 	"agentcy/internal/registry"
 	"agentcy/internal/runtimecontext"
 	"agentcy/internal/sandboxlimits"
+	"agentcy/internal/toolexecutor"
 )
 
-const defaultMaxReadBytes int64 = sandboxlimits.ToolReadRawBytes
 const defaultFileTransferMaxBytes int64 = sandboxlimits.FileTransferMaxBytes
 
 type Server struct {
@@ -58,34 +58,19 @@ type RestoreHardenRequest struct {
 	EntropyBase64 string `json:"entropyBase64,omitempty"`
 }
 
-type toolExecutorOperation string
-
 const (
-	toolOpExec           toolExecutorOperation = "exec"
-	toolOpReadFile       toolExecutorOperation = "readFile"
-	toolOpReadFileBuffer toolExecutorOperation = "readFileBuffer"
-	toolOpWriteFile      toolExecutorOperation = "writeFile"
-	toolOpStat           toolExecutorOperation = "stat"
-	toolOpReaddir        toolExecutorOperation = "readdir"
-	toolOpExists         toolExecutorOperation = "exists"
-	toolOpMkdir          toolExecutorOperation = "mkdir"
-	toolOpRm             toolExecutorOperation = "rm"
+	toolOpExec           = toolexecutor.OpExec
+	toolOpReadFile       = toolexecutor.OpReadFile
+	toolOpReadFileBuffer = toolexecutor.OpReadFileBuffer
+	toolOpWriteFile      = toolexecutor.OpWriteFile
+	toolOpStat           = toolexecutor.OpStat
+	toolOpReaddir        = toolexecutor.OpReaddir
+	toolOpExists         = toolexecutor.OpExists
+	toolOpMkdir          = toolexecutor.OpMkdir
+	toolOpRm             = toolexecutor.OpRm
 )
 
-type toolExecRequest struct {
-	Operation     toolExecutorOperation `json:"operation"`
-	Command       string                `json:"command,omitempty"`
-	Args          []string              `json:"args,omitempty"`
-	Cwd           string                `json:"cwd,omitempty"`
-	Env           map[string]string     `json:"env,omitempty"`
-	TimeoutMillis int64                 `json:"timeoutMs,omitempty"`
-	Path          string                `json:"path,omitempty"`
-	Content       string                `json:"content,omitempty"`
-	ContentBase64 string                `json:"contentBase64,omitempty"`
-	Encoding      string                `json:"encoding,omitempty"`
-	Recursive     bool                  `json:"recursive,omitempty"`
-	Force         bool                  `json:"force,omitempty"`
-}
+type toolExecRequest = toolexecutor.Request
 
 var toolCommandRuntimeEnvAllowlist = map[string]bool{
 	"AGENT_ID":                      true,
@@ -113,25 +98,8 @@ var toolCommandRuntimeEnvAllowlist = map[string]bool{
 	"no_proxy":                      true,
 }
 
-type toolExecResponse struct {
-	Stdout        string                 `json:"stdout,omitempty"`
-	Stderr        string                 `json:"stderr,omitempty"`
-	ExitCode      int                    `json:"exitCode,omitempty"`
-	TimedOut      bool                   `json:"timedOut,omitempty"`
-	Content       string                 `json:"content,omitempty"`
-	ContentBase64 string                 `json:"contentBase64,omitempty"`
-	Stat          map[string]any         `json:"stat,omitempty"`
-	Entries       []toolExecutorDirEntry `json:"entries,omitempty"`
-	Exists        *bool                  `json:"exists,omitempty"`
-	Error         string                 `json:"error,omitempty"`
-}
-
-type toolExecutorDirEntry struct {
-	Name  string `json:"name"`
-	Type  string `json:"type"`
-	Size  int64  `json:"size,omitempty"`
-	Mtime string `json:"mtime,omitempty"`
-}
+type toolExecResponse = toolexecutor.Response
+type toolExecutorDirEntry = toolexecutor.DirEntry
 
 func (s Server) Handler() http.Handler {
 	mux := http.NewServeMux()
