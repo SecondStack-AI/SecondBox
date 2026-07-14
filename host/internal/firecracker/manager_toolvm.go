@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -182,10 +183,6 @@ func (m *Manager) acquireWarmToolVM(ctx context.Context, agentID, compartmentID 
 			}
 			continue
 		}
-		if err := m.admitCompartmentSpawnLocked(key); err != nil {
-			m.mu.Unlock()
-			return warmToolLease{}, err
-		}
 		ch := make(chan struct{})
 		m.provisioning[key] = ch
 		m.mu.Unlock()
@@ -316,6 +313,19 @@ func (m *Manager) teardownWarmToolVMContext(ctx context.Context, inst *instance)
 	}
 	if err := removeInstance(removeCtx, inst.id); err != nil {
 		slog.Warn("failed to tear down warm tool microVM", "agent", inst.agentID, "compartment", inst.compartmentID, "instance", inst.id, "error", err)
+		var killErr error
+		if m.launcher != nil {
+			escalateCtx, cancelEscalate := context.WithTimeout(context.Background(), 10*time.Second)
+			killErr = m.launcher.Stop(escalateCtx, inst.id)
+			cancelEscalate()
+		} else {
+			killErr = signalFirecrackerByIDFunc(inst.id, syscall.SIGKILL)
+		}
+		if killErr != nil {
+			slog.Error("failed to escalate warm tool microVM teardown", "agent", inst.agentID, "compartment", inst.compartmentID, "instance", inst.id, "error", killErr)
+		} else {
+			slog.Warn("escalated warm tool microVM teardown", "agent", inst.agentID, "compartment", inst.compartmentID, "instance", inst.id, "privilegedLauncher", m.launcher != nil)
+		}
 	}
 }
 

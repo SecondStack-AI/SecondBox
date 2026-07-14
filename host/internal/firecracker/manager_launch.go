@@ -984,14 +984,6 @@ func gitHubProxyGitConfig() string {
 `
 }
 
-func runtimeEnvDefault(key, fallback string) string {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	return value
-}
-
 func (m *Manager) proxyURLForGuest(proxy *runtimemanager.ProxyEgressConfig) string {
 	if proxy == nil {
 		return ""

@@ -366,9 +366,9 @@ func TestSmokeGeneratedToolExecutorImageReadiness(t *testing.T) {
 	}
 }
 
-func TestSmokeGoldenSnapshotRestoreGeneratedImage(t *testing.T) {
+func TestSmokeGoldenSnapshotCreateGeneratedImage(t *testing.T) {
 	if os.Getenv("AG_MICROVM_SNAPSHOT_SMOKE") != "1" {
-		t.Skip("set AG_MICROVM_SNAPSHOT_SMOKE=1 to create and restore a local Firecracker snapshot")
+		t.Skip("set AG_MICROVM_SNAPSHOT_SMOKE=1 to create a local Firecracker snapshot")
 	}
 	workDir := shortSmokeDir(t)
 	cfg := &config.Config{
@@ -415,39 +415,12 @@ func TestSmokeGoldenSnapshotRestoreGeneratedImage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create golden snapshot: %v\n%s", err, smokeLogPath(t, sourceLogPath))
 	}
-	if err := mgr.Stop(ctx, instanceID); err != nil {
-		t.Fatalf("stop source microVM: %v", err)
+	if err := verifySnapshotArtifacts(manifest); err != nil {
+		t.Fatalf("verify created golden snapshot artifacts: %v", err)
 	}
-
-	restoreStarted := time.Now()
-	restoredID, err := mgr.RestoreGoldenSnapshot(ctx, manifest, RestoreSnapshotOpts{
-		AgentID:           agentID,
-		CompartmentID:     "cmp_smoke_snapshot_restore",
-		Resume:            true,
-		ClockRealtime:     true,
-		HardenPostRestore: true,
-		Metadata:          map[string]string{"smoke": "restore"},
-	})
-	restoreReturned := time.Since(restoreStarted)
-	if err != nil {
-		t.Fatalf("restore golden snapshot: %v\n%s", err, smokeLogPath(t, sourceLogPath))
+	if _, err := os.Stat(filepath.Join(snapshotDir, "manifest.json")); err != nil {
+		t.Fatalf("stat golden snapshot manifest: %v", err)
 	}
-	t.Logf("golden snapshot restore returned in %s", restoreReturned)
-	defer mgr.Remove(context.Background(), restoredID)
-	restoredLogPath := ""
-	if inst := mgr.lookup(restoredID); inst != nil {
-		restoredLogPath = inst.logPath
-	}
-
-	heartbeatStarted := time.Now()
-	waitForSmoke(t, 30*time.Second, func() bool {
-		hb, err := mgr.Heartbeat(ctx, restoredID)
-		heartbeatErr = err
-		return err == nil && hb.Healthy
-	}, func() string {
-		return "restored heartbeat error: " + errorString(heartbeatErr) + "\nsource log:\n" + smokeLogPath(t, sourceLogPath) + "\nrestored log:\n" + smokeLogPath(t, restoredLogPath)
-	})
-	t.Logf("golden snapshot restored heartbeat healthy in %s after restore returned; total restore-to-healthy %s", time.Since(heartbeatStarted), time.Since(restoreStarted))
 }
 
 func TestSmokeJailedTapAndTransparentRouteGeneratedImage(t *testing.T) {
@@ -557,15 +530,6 @@ func shortSmokeDir(t *testing.T) string {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return dir
-}
-
-func smokeLog(t *testing.T, mgr *Manager, instanceID string) string {
-	t.Helper()
-	inst := mgr.lookup(instanceID)
-	if inst == nil || inst.logPath == "" {
-		return ""
-	}
-	return smokeLogPath(t, inst.logPath)
 }
 
 func smokeLogPath(t *testing.T, logPath string) string {

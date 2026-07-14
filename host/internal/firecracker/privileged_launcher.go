@@ -63,18 +63,19 @@ type privilegedLaunchRequest struct {
 }
 
 type privilegedLauncherResponse struct {
-	OK               bool   `json:"ok"`
-	Error            string `json:"error,omitempty"`
-	SocketPath       string `json:"socketPath,omitempty"`
-	VsockPath        string `json:"vsockPath,omitempty"`
-	JailRoot         string `json:"jailRoot,omitempty"`
-	LogPath          string `json:"logPath,omitempty"`
-	ResultPath       string `json:"resultPath,omitempty"`
-	Output           string `json:"output,omitempty"`
-	Running          bool   `json:"running,omitempty"`
-	ExecutionStarted bool   `json:"executionStarted,omitempty"`
-	ExitCode         int    `json:"exitCode,omitempty"`
-	Version          string `json:"version,omitempty"`
+	OK               bool                  `json:"ok"`
+	Error            string                `json:"error,omitempty"`
+	SocketPath       string                `json:"socketPath,omitempty"`
+	VsockPath        string                `json:"vsockPath,omitempty"`
+	JailRoot         string                `json:"jailRoot,omitempty"`
+	LogPath          string                `json:"logPath,omitempty"`
+	ResultPath       string                `json:"resultPath,omitempty"`
+	Output           string                `json:"output,omitempty"`
+	Running          bool                  `json:"running,omitempty"`
+	ExecutionStarted bool                  `json:"executionStarted,omitempty"`
+	ExitCode         int                   `json:"exitCode,omitempty"`
+	Version          string                `json:"version,omitempty"`
+	NetworkPosture   *NetworkPostureReport `json:"networkPosture,omitempty"`
 }
 
 type privilegedHarnessPrepareRequest struct {
@@ -141,6 +142,12 @@ func (c *privilegedLauncherClient) Ping(ctx context.Context) error {
 	}
 	if resp.Version != expectedFirecrackerVersionString() {
 		return fmt.Errorf("privileged launcher firecracker version %q does not match %q", resp.Version, expectedFirecrackerVersionString())
+	}
+	if resp.NetworkPosture == nil {
+		return fmt.Errorf("privileged launcher response is missing the required network posture report")
+	}
+	if err := resp.NetworkPosture.admissionError(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -523,11 +530,12 @@ type privilegedHarnessState struct {
 }
 
 type PrivilegedLauncherServer struct {
-	cfg     PrivilegedLauncherConfig
-	mu      sync.Mutex
-	network IPTapConfigurer
-	router  *IPTablesEgressRouter
-	runHost commandRunner
+	cfg             PrivilegedLauncherConfig
+	mu              sync.Mutex
+	network         IPTapConfigurer
+	router          *IPTablesEgressRouter
+	runHost         commandRunner
+	postureFailures map[string]uint64
 }
 
 func NewPrivilegedLauncherServer(cfg PrivilegedLauncherConfig) (*PrivilegedLauncherServer, error) {
@@ -538,9 +546,10 @@ func NewPrivilegedLauncherServer(cfg PrivilegedLauncherConfig) (*PrivilegedLaunc
 		return nil, err
 	}
 	server := &PrivilegedLauncherServer{
-		cfg:     cfg,
-		network: IPTapConfigurer{},
-		router:  NewIPTablesEgressRouter(),
+		cfg:             cfg,
+		network:         IPTapConfigurer{},
+		router:          NewIPTablesEgressRouter(),
+		postureFailures: map[string]uint64{},
 		runHost: func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			return exec.CommandContext(ctx, name, args...).CombinedOutput()
 		},
@@ -1006,6 +1015,8 @@ func (s *PrivilegedLauncherServer) handle(ctx context.Context, req privilegedLau
 	switch req.Op {
 	case "ping":
 		resp.Version = expectedFirecrackerVersionString()
+		posture := s.networkPosture(ctx)
+		resp.NetworkPosture = &posture
 	case "configure_tap":
 		err = s.configureTap(ctx, req.Tap)
 	case "remove_tap":
@@ -1037,6 +1048,9 @@ func (s *PrivilegedLauncherServer) handle(ctx context.Context, req privilegedLau
 }
 
 func (s *PrivilegedLauncherServer) configureTap(ctx context.Context, cfg *TapConfig) error {
+	if err := s.requireNetworkPosture(ctx); err != nil {
+		return err
+	}
 	if cfg == nil {
 		return fmt.Errorf("tap config is required")
 	}
@@ -1841,6 +1855,43 @@ func (s *PrivilegedLauncherServer) hostCommand(ctx context.Context, name string,
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
+func (s *PrivilegedLauncherServer) networkPosture(ctx context.Context) NetworkPostureReport {
+	// Direct protocol tests construct a minimal server without production
+	// network configuration; validated production configs always name a bridge.
+	if s.cfg.allowUnprivilegedTests || strings.TrimSpace(s.cfg.BridgeName) == "" {
+		return NetworkPostureReport{Healthy: true, FailureCounts: clonePostureFailures(s.postureFailures)}
+	}
+	report := probeNetworkPosture(ctx, s.cfg, s.hostCommand)
+	report.FailureCounts = clonePostureFailures(s.postureFailures)
+	return report
+}
+
+func (s *PrivilegedLauncherServer) requireNetworkPosture(ctx context.Context) error {
+	report := s.networkPosture(ctx)
+	if report.Healthy {
+		return nil
+	}
+	if s.postureFailures == nil {
+		s.postureFailures = map[string]uint64{}
+	}
+	for _, invariant := range report.Missing {
+		s.postureFailures[invariant]++
+		slog.Error("refusing microVM launch because host network posture drifted", "invariant", invariant, "failures", s.postureFailures[invariant])
+	}
+	return report.admissionError()
+}
+
+func clonePostureFailures(source map[string]uint64) map[string]uint64 {
+	if len(source) == 0 {
+		return nil
+	}
+	result := make(map[string]uint64, len(source))
+	for invariant, count := range source {
+		result[invariant] = count
+	}
+	return result
+}
+
 func harnessUnitName(namespace harness.NetworkNamespace) string {
 	return "agentcy-harness-" + strings.TrimPrefix(namespace.NamespaceName, "ag-") + ".service"
 }
@@ -2016,7 +2067,10 @@ func (b *launcherOutputBuffer) Activity() <-chan struct{} {
 	return b.activity
 }
 
-func (s *PrivilegedLauncherServer) launch(_ context.Context, req *privilegedLaunchRequest) (privilegedLauncherResponse, error) {
+func (s *PrivilegedLauncherServer) launch(ctx context.Context, req *privilegedLaunchRequest) (privilegedLauncherResponse, error) {
+	if err := s.requireNetworkPosture(ctx); err != nil {
+		return privilegedLauncherResponse{}, err
+	}
 	if req == nil {
 		return privilegedLauncherResponse{}, fmt.Errorf("launch request is required")
 	}
