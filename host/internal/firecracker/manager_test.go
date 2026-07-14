@@ -23,6 +23,19 @@ import (
 	"agentcy/internal/runtimemanager"
 )
 
+type recordingHostNetworkConfigurer struct {
+	tap TapConfig
+}
+
+func (r *recordingHostNetworkConfigurer) ConfigureTap(_ context.Context, cfg TapConfig) error {
+	r.tap = cfg
+	return nil
+}
+
+func (r *recordingHostNetworkConfigurer) RemoveTap(context.Context, string) error {
+	return nil
+}
+
 func TestNewInstanceIDIncludesCompartmentSegment(t *testing.T) {
 	id, err := newInstanceID("agent-1", "cmp_abcdef1234567890")
 	if err != nil {
@@ -3341,11 +3354,14 @@ func TestCreateAndStartColdCleansInstanceDirOnFailure(t *testing.T) {
 			MicroVMLogDir:       logDir,
 			MicroVMWorkspaceDir: wsDir,
 			MicroVMRootfsPath:   filepath.Join(root, "missing-rootfs.ext4"),
+			MicroVMBridgeName:   "agbr0",
 			MicroVMBridgeCIDR:   "10.0.0.1/24",
 		},
 		instances: map[string]*instance{},
 		guestIPs:  map[string]string{},
 	}
+	network := &recordingHostNetworkConfigurer{}
+	m.network = network
 
 	// The rootfs source does not exist, so the cold start fails at "prepare
 	// rootfs" — after the per-instance dir and the guest IP have been allocated.
@@ -3355,6 +3371,9 @@ func TestCreateAndStartColdCleansInstanceDirOnFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "prepare rootfs") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if network.tap.GuestIP != "10.0.0.2" || !ipWithinCIDR(network.tap.GuestIP, network.tap.BridgeCIDR) {
+		t.Fatalf("manager tap config = %+v, want reserved guest IP inside bridge CIDR", network.tap)
 	}
 
 	entries, readErr := os.ReadDir(runDir)

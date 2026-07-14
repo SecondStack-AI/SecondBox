@@ -736,6 +736,7 @@ func (m *Manager) createAndStartCold(ctx context.Context, agentID, compartmentID
 			AgentID:    agentID,
 			InstanceID: id,
 			TapName:    tapName,
+			GuestIP:    guestIP,
 			BridgeName: m.cfg.MicroVMBridgeName,
 			BridgeCIDR: m.cfg.MicroVMBridgeCIDR,
 			OwnerUID:   m.tapOwnerUID(),
