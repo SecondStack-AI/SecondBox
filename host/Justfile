@@ -794,11 +794,38 @@ setup-server:
         fi
         apt-get update
         apt-get install -y liblzma5 libstdc++6
-        apt-get install -y bubblewrap e2fsprogs iproute2 iptables jq nftables openssl util-linux
+        apt-get install -y bubblewrap e2fsprogs erofs-utils iproute2 iptables jq nftables openssl util-linux xfsprogs
 
         # Create directory structure
         echo "Creating directories..."
-        mkdir -p {{AG_PATH}}/{bin,data,public,agent/releases,flue-store/releases,scripts} /etc/agentcy /ag/{workspaces,run,logs,jailer} /ag/run/harness-staging
+        mkdir -p {{AG_PATH}}/{bin,data,public,agent/releases,flue-store/releases,scripts} /etc/agentcy
+        store_image="{{AG_PATH}}/microvm-store.xfs"
+        if [[ -L /ag ]]; then
+            echo "/ag must be a direct XFS mount, not a symlink" >&2
+            exit 1
+        fi
+        mkdir -p /ag
+        if ! mountpoint --quiet /ag; then
+            if [[ ! -e "$store_image" ]]; then
+                truncate -s 80G "$store_image"
+                mkfs.xfs -f -m reflink=1 -n ftype=1 "$store_image"
+            fi
+            fstab_tmp="$(mktemp)"
+            awk -v image="$store_image" '$1 != image { print }' /etc/fstab > "$fstab_tmp"
+            printf '%s %s %s %s %s %s\n' "$store_image" /ag xfs 'loop,defaults,noatime' 0 0 >> "$fstab_tmp"
+            install -m 0644 -o root -g root "$fstab_tmp" /etc/fstab
+            rm -f "$fstab_tmp"
+            mount /ag
+        fi
+        [[ "$(findmnt --noheadings --output FSTYPE --target /ag | xargs)" == xfs ]] || {
+            echo "/ag must be mounted as XFS" >&2
+            exit 1
+        }
+        xfs_info /ag | grep -Eq 'reflink=1([^0-9]|$)' || {
+            echo "/ag XFS filesystem must have reflink=1" >&2
+            exit 1
+        }
+        mkdir -p /ag/{releases,workspaces,run,logs,jailer} /ag/run/harness-staging
 
         # Create dedicated deploy user
         if ! getent group {{AG_USER}} >/dev/null 2>&1; then
@@ -893,7 +920,7 @@ setup-server:
         chmod 0755 {{AG_PATH}}/bin {{AG_PATH}}/public {{AG_PATH}}/agent {{AG_PATH}}/agent/releases {{AG_PATH}}/flue-store {{AG_PATH}}/flue-store/releases
         chown -R {{AG_RUNTIME_USER}}:{{AG_RUNTIME_USER}} /ag/workspaces /ag/run /ag/logs
         chown root:agentcy-vmctl /ag/jailer
-        chown root:root /etc/agentcy
+        chown root:{{AG_RUNTIME_USER}} /etc/agentcy
         chmod 0750 /ag/workspaces /ag/run /ag/logs /ag/jailer /etc/agentcy
         chmod 0700 /ag/run/harness-staging
         printf '%s\n' \
@@ -920,6 +947,7 @@ setup-server:
     else
         echo "Creating .env from template..."
         ENCRYPTION_KEY=$(openssl rand -base64 32)
+        METRICS_TOKEN=$(openssl rand -hex 32)
         FLUE_STORE_TOKEN=$(openssl rand -hex 32)
         EGRESS_CONTROL_TOKEN=$(openssl rand -hex 32)
         EGRESS_SERVICE_TOKEN=$(openssl rand -hex 32)
@@ -927,6 +955,7 @@ setup-server:
         VM_GID="$(ssh -o ConnectTimeout=10 {{AG_BOOTSTRAP_USER}}@{{AG_HOST}} 'id -g agentcy-vm')"
         sed \
             -e "s|^AG_SECRET_ENCRYPTION_KEY=.*|AG_SECRET_ENCRYPTION_KEY=${ENCRYPTION_KEY}|" \
+            -e "s|^AG_METRICS_BEARER_TOKEN=.*|AG_METRICS_BEARER_TOKEN=${METRICS_TOKEN}|" \
             -e "s|^AG_FLUE_STORE_TOKEN=.*|AG_FLUE_STORE_TOKEN=${FLUE_STORE_TOKEN}|" \
             -e "s|^AG_EGRESS_PROXY_CONTROL_TOKEN=.*|AG_EGRESS_PROXY_CONTROL_TOKEN=${EGRESS_CONTROL_TOKEN}|" \
             -e "s|^AG_EGRESS_PROXY_SERVICE_TOKEN=.*|AG_EGRESS_PROXY_SERVICE_TOKEN=${EGRESS_SERVICE_TOKEN}|" \
@@ -970,6 +999,7 @@ ship:
     echo ""
     echo "Pre-flight checks..."
     [ -f "deploy/Caddyfile" ] || { echo "deploy/Caddyfile not found"; exit 1; }
+    [ -f "deploy/apparmor-agentcy-bwrap" ] || { echo "deploy/apparmor-agentcy-bwrap not found"; exit 1; }
     [ -f "deploy/agentcy.service" ] || { echo "deploy/agentcy.service not found"; exit 1; }
     [ -f "deploy/agentcy-flue-store.service" ] || { echo "deploy/agentcy-flue-store.service not found"; exit 1; }
     [ -f "deploy/agentcy-vmlauncher.service" ] || { echo "deploy/agentcy-vmlauncher.service not found"; exit 1; }
@@ -993,7 +1023,7 @@ ship:
     [[ "$TRUSTED_MICROVM_PUBLIC_KEY_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "AG_MICROVM_PUBLIC_KEY_SHA256 must be the key's canonical DER SHA-256"; exit 1; }
     ACTUAL_MICROVM_PUBLIC_KEY_SHA256="$(openssl pkey -pubin -in "$TRUSTED_MICROVM_PUBLIC_KEY" -outform DER 2>/dev/null | sha256sum | awk '{print $1}')"
     [[ "$ACTUAL_MICROVM_PUBLIC_KEY_SHA256" == "$TRUSTED_MICROVM_PUBLIC_KEY_SHA256" ]] || { echo "trusted microVM public key fingerprint mismatch"; exit 1; }
-    just preship
+    env -u AG_MICROVM_PUBLIC_KEY -u AG_MICROVM_PUBLIC_KEY_SHA256 -u TMPDIR just preship
     echo "Pre-flight checks passed"
 
     # Step 1: Build frontend
@@ -1106,6 +1136,7 @@ ship:
     scp "${SSH_OPTS[@]}" -r db/migrations {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/migrations
     scp "${SSH_OPTS[@]}" releases/agentcy-microvm-artifacts.tar.gz {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/agentcy-microvm-artifacts.tar.gz
     scp "${SSH_OPTS[@]}" deploy/Caddyfile {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/Caddyfile
+    scp "${SSH_OPTS[@]}" deploy/apparmor-agentcy-bwrap {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/apparmor-agentcy-bwrap
     scp "${SSH_OPTS[@]}" deploy/agentcy.service {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/agentcy.service
     scp "${SSH_OPTS[@]}" deploy/agentcy-flue-store.service {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/agentcy-flue-store.service
     scp "${SSH_OPTS[@]}" deploy/agentcy-vmlauncher.service {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/agentcy-vmlauncher.service

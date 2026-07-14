@@ -1318,7 +1318,7 @@ func (s *PrivilegedLauncherServer) prepareHarnessNetwork(ctx context.Context, re
 		commands = append(commands, []string{"netns", "exec", namespace.NamespaceName, s.cfg.HarnessIPCommand, "route", "replace", namespace.PlatformIP + "/32", "via", namespace.HostIP})
 	}
 	for _, args := range commands {
-		if out, err := s.hostCommand(ctx, s.cfg.HarnessIPCommand, args...); err != nil {
+		if out, err := s.hostHarnessIPCommand(ctx, args...); err != nil {
 			return "", fmt.Errorf("prepare harness network: ip %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 		}
 	}
@@ -1327,6 +1327,24 @@ func (s *PrivilegedLauncherServer) prepareHarnessNetwork(ctx context.Context, re
 	}
 	cleanup = false
 	return resultPath, nil
+}
+
+// hostHarnessIPCommand asks PID 1 to invoke ip in the host mount namespace.
+// The launcher service has a private mount namespace due to systemd filesystem
+// hardening; named network namespace bind mounts created directly by it are
+// otherwise invisible to the system manager that starts the harness unit.
+func (s *PrivilegedLauncherServer) hostHarnessIPCommand(ctx context.Context, args ...string) ([]byte, error) {
+	systemdArgs := []string{
+		"--quiet", "--wait", "--pipe", "--collect", "--service-type=exec",
+		"--property", "NoNewPrivileges=yes",
+		"--property", "CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_ADMIN",
+		"--property", "AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_ADMIN",
+		"--property", "RestrictAddressFamilies=AF_UNIX AF_NETLINK",
+		"--property", "UMask=0077",
+		"--", s.cfg.HarnessIPCommand,
+	}
+	systemdArgs = append(systemdArgs, args...)
+	return s.hostCommand(ctx, s.cfg.HarnessSystemdRun, systemdArgs...)
 }
 
 func (s *PrivilegedLauncherServer) executeHarnessNetwork(ctx context.Context, req *privilegedHarnessExecRequest) (privilegedLauncherResponse, error) {
@@ -1448,12 +1466,12 @@ func (s *PrivilegedLauncherServer) cleanupHarnessNetwork(ctx context.Context, st
 		cleanupErr = err
 	}
 	if state.Namespace.NamespaceName != "" {
-		if out, err := s.hostCommand(ctx, s.cfg.HarnessIPCommand, "netns", "delete", state.Namespace.NamespaceName); err != nil && !missingNetworkResource(out) {
+		if out, err := s.hostHarnessIPCommand(ctx, "netns", "delete", state.Namespace.NamespaceName); err != nil && !missingNetworkResource(out) {
 			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete harness namespace: %w: %s", err, strings.TrimSpace(string(out))))
 		}
 	}
 	if state.Namespace.HostVethName != "" {
-		if out, err := s.hostCommand(ctx, s.cfg.HarnessIPCommand, "link", "delete", state.Namespace.HostVethName); err != nil && !missingNetworkResource(out) {
+		if out, err := s.hostHarnessIPCommand(ctx, "link", "delete", state.Namespace.HostVethName); err != nil && !missingNetworkResource(out) {
 			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete harness veth: %w: %s", err, strings.TrimSpace(string(out))))
 		}
 	}
@@ -1653,7 +1671,10 @@ func (s *PrivilegedLauncherServer) harnessSystemdRunArgs(state privilegedHarness
 		"Group=" + strconv.Itoa(s.cfg.ManagerGID),
 		"SupplementaryGroups=",
 		"NoNewPrivileges=yes",
-		"CapabilityBoundingSet=",
+		// The outer process is an unprivileged UID with no ambient capabilities.
+		// Keep only the capabilities bubblewrap receives inside its new user
+		// namespace; an empty bounding set prevents it from mounting /proc.
+		"CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SETUID CAP_SETGID CAP_SETFCAP",
 		"AmbientCapabilities=",
 		"NetworkNamespacePath=/run/netns/" + state.Namespace.NamespaceName,
 		"MemoryMax=" + strconv.FormatInt(req.MemoryBytes, 10),
@@ -1672,10 +1693,7 @@ func (s *PrivilegedLauncherServer) harnessSystemdRunArgs(state privilegedHarness
 		"ProtectClock=yes",
 		"ProtectControlGroups=yes",
 		"ProtectHome=yes",
-		"ProtectHostname=yes",
-		"ProtectKernelLogs=yes",
 		"ProtectKernelModules=yes",
-		"ProtectKernelTunables=yes",
 		"RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
 		"RestrictNamespaces=user pid ipc uts mnt",
 		"RestrictRealtime=yes",

@@ -599,9 +599,10 @@ func TestPrivilegedLauncherDerivesAndRecoversHarnessNetwork(t *testing.T) {
 	}
 	joined := strings.Join(commands, "\n")
 	for _, required := range []string{
-		cfg.HarnessIPCommand + " netns add " + namespace.NamespaceName,
-		cfg.HarnessIPCommand + " link add " + namespace.HostVethName + " type veth peer name " + namespace.GuestVethName,
-		cfg.HarnessIPCommand + " link set " + namespace.GuestVethName + " address " + launcherSourceMAC(cellID),
+		cfg.HarnessSystemdRun + " --quiet --wait --pipe --collect --service-type=exec --property NoNewPrivileges=yes",
+		"-- " + cfg.HarnessIPCommand + " netns add " + namespace.NamespaceName,
+		"-- " + cfg.HarnessIPCommand + " link add " + namespace.HostVethName + " type veth peer name " + namespace.GuestVethName,
+		"-- " + cfg.HarnessIPCommand + " link set " + namespace.GuestVethName + " address " + launcherSourceMAC(cellID),
 		"route replace " + cfg.HarnessProxyIP + "/32 via " + namespace.HostIP,
 		cfg.NftPath + " add table netdev " + launcherSourceGuardTable,
 		"hook ingress device " + namespace.HostVethName,
@@ -721,7 +722,7 @@ func TestPrivilegedLauncherHarnessExecIsFixedUnprivilegedTransientUnit(t *testin
 		"Group=" + strconv.Itoa(cfg.ManagerGID),
 		"SupplementaryGroups=",
 		"NoNewPrivileges=yes",
-		"CapabilityBoundingSet=",
+		"CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SETUID CAP_SETGID CAP_SETFCAP",
 		"NetworkNamespacePath=/run/netns/" + namespace.NamespaceName,
 		"MemoryMax=" + strconv.FormatInt(cfg.HarnessMemoryBytes, 10),
 		" -- " + cfg.HarnessEnvCommand + " -i -- ",
