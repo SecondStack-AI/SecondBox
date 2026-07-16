@@ -232,6 +232,22 @@ func verifyAndCaptureTrustedMicroVMArtifacts(cfg *config.Config) (*trustedMicroV
 	return before, nil
 }
 
+// VerifyArtifactHealth proves that the artifact set verified during manager
+// startup has not been replaced or modified in place.
+func (m *Manager) VerifyArtifactHealth() error {
+	if m == nil || m.trustedArtifacts == nil {
+		return fmt.Errorf("trusted microVM artifacts are not configured")
+	}
+	unchanged, err := trustedMicroVMArtifactsUnchanged(m.trustedArtifacts)
+	if err != nil {
+		return err
+	}
+	if !unchanged {
+		return fmt.Errorf("trusted microVM artifacts changed after startup verification")
+	}
+	return nil
+}
+
 func captureTrustedMicroVMArtifacts(cfg *config.Config) (*trustedMicroVMArtifacts, error) {
 	if cfg == nil || strings.TrimSpace(cfg.MicroVMPublicKeyPath) == "" {
 		return nil, nil

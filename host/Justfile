@@ -565,6 +565,15 @@ build-flue-store:
 package-flue-store-production output_dir="tmp/flue-store-production" archive="releases/agentcy-flue-store.tar.gz":
     flue-store/scripts/package-production.sh --output-dir "{{output_dir}}" --archive "{{archive}}"
 
+# Build the monorepo release payload: control-plane binaries, private Flue,
+# immutable harness, notices, checksums, and the minimal privileged launcher.
+package-secondstack-artifacts output_dir="releases/secondstack-agent-manager":
+    scripts/release/package-secondstack-artifacts.sh "{{output_dir}}"
+
+# Generate an SPDX JSON dependency/license SBOM with the repository-pinned Trivy image.
+generate-secondstack-sbom output_file="tmp/secondstack-agent-manager.spdx.json":
+    scripts/release/generate-sbom.sh "{{output_file}}"
+
 # Build signed Firecracker kernel/rootfs/shared-image artifacts for agent runtimes.
 build-microvm-images:
     scripts/microvm-image/build.sh
