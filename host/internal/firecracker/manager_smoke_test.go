@@ -140,7 +140,7 @@ func TestSmokeGeneratedToolExecutorImageReadiness(t *testing.T) {
 		MicroVMToolRootfsPath:      envOrDefault("AG_MICROVM_TOOL_ROOTFS_PATH", rootfsPath),
 		MicroVMToolSharedImagePath: envOrDefault("AG_MICROVM_TOOL_SHARED_IMAGE_PATH", sharedImagePath),
 		MicroVMWorkspaceDir:        filepath.Join(workDir, "workspaces"),
-		MicroVMRunDir:              filepath.Join(workDir, "run"),
+		MicroVMRunDir:              envOrDefault("AG_MICROVM_SMOKE_RUN_DIR", filepath.Join(workDir, "run")),
 		MicroVMLogDir:              filepath.Join(workDir, "logs"),
 		MicroVMKernelArgs:          envOrDefault("AG_MICROVM_KERNEL_ARGS", "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/init"),
 		MicroVMMemoryMiB:           envIntOrDefault("AG_MICROVM_MEMORY_MIB", 2048),
@@ -302,39 +302,79 @@ func TestSmokeGeneratedToolExecutorImageReadiness(t *testing.T) {
 	if err != nil || rmResp.Error != "" {
 		t.Fatalf("rm through tool executor: resp=%+v err=%v\n%s", rmResp, err, smokeLogPath(t, logPath))
 	}
-	npmResp, err := mgr.ExecuteTool(ctx, instanceID, ToolExecRequest{
-		Operation: ToolOpExec,
-		Command:   "sh",
-		Args: []string{"-lc", strings.Join([]string{
-			"mkdir -p npm-smoke",
-			"cd npm-smoke",
-			"cat > package.json <<'JSON'\n{\"scripts\":{\"build\":\"node -e \\\"require('fs').mkdirSync('dist',{recursive:true});require('fs').writeFileSync('dist/ok.txt','ok')\\\"\"},\"dependencies\":{}}\nJSON",
-			"node -v",
-			"npm -v",
-			"npm install --ignore-scripts",
-			"npm run build",
-			"test -f dist/ok.txt",
-		}, "\n")},
-		TimeoutMillis: 120000,
-	})
-	if err != nil || npmResp.Error != "" || npmResp.ExitCode != 0 {
-		t.Fatalf("npm smoke through tool executor: resp=%+v err=%v\n%s", npmResp, err, smokeLogPath(t, logPath))
+	if os.Getenv("AG_MICROVM_CONTINUITY_SMOKE") != "1" {
+		npmResp, err := mgr.ExecuteTool(ctx, instanceID, ToolExecRequest{
+			Operation: ToolOpExec,
+			Command:   "sh",
+			Args: []string{"-lc", strings.Join([]string{
+				"mkdir -p npm-smoke",
+				"cd npm-smoke",
+				"cat > package.json <<'JSON'\n{\"scripts\":{\"build\":\"node -e \\\"require('fs').mkdirSync('dist',{recursive:true});require('fs').writeFileSync('dist/ok.txt','ok')\\\"\"},\"dependencies\":{}}\nJSON",
+				"node -v",
+				"npm -v",
+				"npm install --ignore-scripts",
+				"npm run build",
+				"test -f dist/ok.txt",
+			}, "\n")},
+			TimeoutMillis: 120000,
+		})
+		if err != nil || npmResp.Error != "" || npmResp.ExitCode != 0 {
+			t.Fatalf("npm smoke through tool executor: resp=%+v err=%v\n%s", npmResp, err, smokeLogPath(t, logPath))
+		}
+		timeoutResp, err := mgr.ExecuteTool(ctx, instanceID, ToolExecRequest{
+			Operation:     ToolOpExec,
+			Command:       "sh",
+			Args:          []string{"-c", "sleep 1"},
+			TimeoutMillis: 50,
+		})
+		if err == nil || !timeoutResp.TimedOut || timeoutResp.Error == "" {
+			t.Fatalf("timeout through tool executor: resp=%+v err=%v\n%s", timeoutResp, err, smokeLogPath(t, logPath))
+		}
 	}
-	timeoutResp, err := mgr.ExecuteTool(ctx, instanceID, ToolExecRequest{
-		Operation:     ToolOpExec,
-		Command:       "sh",
-		Args:          []string{"-c", "sleep 1"},
-		TimeoutMillis: 50,
-	})
-	if err == nil || !timeoutResp.TimedOut || timeoutResp.Error == "" {
-		t.Fatalf("timeout through tool executor: resp=%+v err=%v\n%s", timeoutResp, err, smokeLogPath(t, logPath))
-	}
-	if err := mgr.Remove(ctx, instanceID); err != nil {
-		t.Fatalf("remove first tool executor microVM before isolation check: %v\n%s", err, smokeLogPath(t, logPath))
+	if err := mgr.Shutdown(ctx); err != nil {
+		t.Fatalf("shut down first tool executor manager before continuity check: %v\n%s", err, smokeLogPath(t, logPath))
 	}
 	instanceID = ""
 
-	otherID, err := mgr.createAndStart(ctx, "0123456789abcdef", runtimemanager.StartOpts{
+	restartedManager, err := New(cfg)
+	if err != nil {
+		t.Fatalf("restart tool executor manager: %v", err)
+	}
+	if err := restartedManager.Start(ctx); err != nil {
+		t.Fatalf("start restarted tool executor manager: %v", err)
+	}
+	defer restartedManager.Shutdown(context.Background())
+	continuityID, err := restartedManager.createAndStart(ctx, "0123456789abcdef", runtimemanager.StartOpts{
+		Timezone:      "UTC",
+		CompartmentID: "cmp_smoke_tool_executor",
+		RuntimeClass:  runtimemanager.RuntimeClassToolExecutor,
+	})
+	if err != nil {
+		t.Fatalf("remount tool executor workspace after manager restart: %v\n%s", err, latestSmokeLog(t, workDir))
+	}
+	continuityLogPath := ""
+	if inst := restartedManager.lookup(continuityID); inst != nil {
+		continuityLogPath = inst.logPath
+	}
+	waitForSmoke(t, 30*time.Second, func() bool {
+		hb, err := restartedManager.Heartbeat(ctx, continuityID)
+		heartbeatErr = err
+		return err == nil && hb.Healthy
+	}, func() string {
+		return "restarted tool executor heartbeat error: " + errorString(heartbeatErr) + "\n" + smokeLogPath(t, continuityLogPath)
+	})
+	continuityResp, err := restartedManager.ExecuteTool(ctx, continuityID, ToolExecRequest{
+		Operation: ToolOpReadFile,
+		Path:      "tool-ready.txt",
+	})
+	if err != nil || continuityResp.Error != "" || continuityResp.Content != "ready" {
+		t.Fatalf("read remounted workspace after manager restart: resp=%+v err=%v\n%s", continuityResp, err, smokeLogPath(t, continuityLogPath))
+	}
+	if err := restartedManager.Remove(ctx, continuityID); err != nil {
+		t.Fatalf("remove restarted tool executor microVM before isolation check: %v\n%s", err, smokeLogPath(t, continuityLogPath))
+	}
+
+	otherID, err := restartedManager.createAndStart(ctx, "0123456789abcdef", runtimemanager.StartOpts{
 		Timezone:      "UTC",
 		CompartmentID: "cmp_smoke_tool_executor_other",
 		RuntimeClass:  runtimemanager.RuntimeClassToolExecutor,
@@ -342,19 +382,19 @@ func TestSmokeGeneratedToolExecutorImageReadiness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start second tool executor microVM: %v\n%s", err, smokeLogPath(t, logPath))
 	}
-	defer mgr.Remove(context.Background(), otherID)
+	defer restartedManager.Remove(context.Background(), otherID)
 	otherLogPath := ""
-	if inst := mgr.lookup(otherID); inst != nil {
+	if inst := restartedManager.lookup(otherID); inst != nil {
 		otherLogPath = inst.logPath
 	}
 	waitForSmoke(t, 30*time.Second, func() bool {
-		hb, err := mgr.Heartbeat(ctx, otherID)
+		hb, err := restartedManager.Heartbeat(ctx, otherID)
 		heartbeatErr = err
 		return err == nil && hb.Healthy
 	}, func() string {
 		return "second tool executor heartbeat error: " + errorString(heartbeatErr) + "\n" + smokeLogPath(t, otherLogPath)
 	})
-	isolationResp, err := mgr.ExecuteTool(ctx, otherID, ToolExecRequest{
+	isolationResp, err := restartedManager.ExecuteTool(ctx, otherID, ToolExecRequest{
 		Operation: ToolOpReadFile,
 		Path:      "tool-ready.txt",
 	})

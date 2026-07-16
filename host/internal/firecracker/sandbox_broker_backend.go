@@ -38,6 +38,17 @@ func NewSandboxBrokerBackend(manager *Manager) (*SandboxBrokerBackend, error) {
 	return &SandboxBrokerBackend{manager: manager, runtimes: map[string]sandboxBrokerRuntime{}}, nil
 }
 
+func (b *SandboxBrokerBackend) Revision(ctx context.Context, identity sandboxbroker.WorkspaceIdentity, policy sandboxbroker.LeasePolicy) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	runtime, err := b.runtimeFor(identity, policy)
+	if err != nil {
+		return "", err
+	}
+	return b.manager.startupFingerprint(runtime.agentID, runtime.compartmentID, runtime.startOpts)
+}
+
 func (b *SandboxBrokerBackend) Acquire(ctx context.Context, identity sandboxbroker.WorkspaceIdentity, policy sandboxbroker.LeasePolicy) (sandboxbroker.RuntimeHandle, error) {
 	runtime, err := b.runtimeFor(identity, policy)
 	if err != nil {

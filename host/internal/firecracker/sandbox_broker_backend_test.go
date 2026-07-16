@@ -168,6 +168,41 @@ func (rejectingArtifactExporter) Export(context.Context, sandboxbroker.ArtifactE
 	return sandboxbroker.StoredArtifact{}, errors.New("artifact export is not used by this test")
 }
 
+func TestSandboxBrokerRevisionChangesWithSelectedToolImage(t *testing.T) {
+	manager := newWarmToolTestManager(t)
+	manager.cfg.MicroVMToolRootfsPath = manager.cfg.MicroVMRootfsPath
+	backend, err := NewSandboxBrokerBackend(manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := sandboxbroker.WorkspaceIdentity{
+		WorkspaceRef: sandboxbroker.WorkspaceRef{SubjectKind: sandboxbroker.SubjectAgent, SubjectID: "agent-1", CompartmentID: "cmp-1"},
+		Generation:   1,
+	}
+	policy := sandboxbroker.LeasePolicy{
+		Resource: managedagents.ResourcePolicy{CpuMillis: 1000, MemoryBytes: 128 << 20, DiskBytes: 1 << 20, ProcessLimit: 16},
+		Mount:    managedagents.MountPolicy{WorkspaceWritable: true, SharedReadOnly: true},
+	}
+	first, err := backend.Revision(context.Background(), identity, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextTime := time.Now().Add(time.Second)
+	if err := os.WriteFile(manager.cfg.MicroVMToolRootfsPath, []byte("changed-tool-image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(manager.cfg.MicroVMToolRootfsPath, nextTime, nextTime); err != nil {
+		t.Fatal(err)
+	}
+	second, err := backend.Revision(context.Background(), identity, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("selected tool image change did not change sandbox broker revision")
+	}
+}
+
 func TestSandboxBrokerDestroyRemovesOnlyDerivedWorkspaceImage(t *testing.T) {
 	manager := newWarmToolTestManager(t)
 	manager.cfg.MicroVMWorkspaceDir = filepath.Join(t.TempDir(), "workspaces")

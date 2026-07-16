@@ -768,6 +768,41 @@ func TestToolExecFileOperationsStayInsideWorkspace(t *testing.T) {
 	}
 }
 
+func TestToolExecWriteFileAtomicallyReplacesAndCleansTemporaryFile(t *testing.T) {
+	workspace := t.TempDir()
+	targetDir := filepath.Join(workspace, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(targetDir, "value.txt")
+	if err := os.WriteFile(target, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resp := postToolExec(t, Server{WorkspaceDir: workspace}.Handler(), toolExecRequest{
+		Operation: toolOpWriteFile,
+		Path:      "state/value.txt",
+		Content:   "durable",
+	})
+	if resp.Error != "" {
+		t.Fatalf("write response = %#v", resp)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "durable" {
+		t.Fatalf("content = %q", data)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("mode = %o, want 644", info.Mode().Perm())
+	}
+	assertNoTransferTempFiles(t, targetDir)
+}
+
 func TestToolExecSessionWarmPersistenceAcrossCalls(t *testing.T) {
 	workspace := t.TempDir()
 	handler := Server{WorkspaceDir: workspace}.Handler()

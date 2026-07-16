@@ -257,7 +257,7 @@ func (s Server) handleWorkspaceWrite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	_, target, err := s.workspacePath(r.URL.Query().Get("path"))
+	root, target, err := s.workspacePath(r.URL.Query().Get("path"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -315,7 +315,7 @@ func (s Server) handleWorkspaceWrite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := fsyncDir(dir); err != nil {
+	if err := fsyncDirTree(root, dir); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -647,7 +647,7 @@ func marshaledToolResponseExceedsLimit(resp toolExecResponse) bool {
 }
 
 func (s Server) executeWriteFile(req toolExecRequest) toolExecResponse {
-	_, target, err := s.toolWorkspacePath(req.Path)
+	root, target, err := s.toolWorkspacePath(req.Path)
 	if err != nil {
 		return toolExecResponse{Error: err.Error()}
 	}
@@ -661,10 +661,31 @@ func (s Server) executeWriteFile(req toolExecRequest) toolExecResponse {
 	} else {
 		data = []byte(req.Content)
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+	dir := filepath.Dir(target)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return toolExecResponse{Error: err.Error()}
 	}
-	if err := os.WriteFile(target, data, 0o644); err != nil {
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(target)+".*.tmp")
+	if err != nil {
+		return toolExecResponse{Error: err.Error()}
+	}
+	tmpName := tmp.Name()
+	if err := tmp.Chmod(0o644); err != nil {
+		return toolExecResponse{Error: errors.Join(err, tmp.Close(), os.Remove(tmpName)).Error()}
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return toolExecResponse{Error: errors.Join(err, tmp.Close(), os.Remove(tmpName)).Error()}
+	}
+	if err := tmp.Sync(); err != nil {
+		return toolExecResponse{Error: errors.Join(err, tmp.Close(), os.Remove(tmpName)).Error()}
+	}
+	if err := tmp.Close(); err != nil {
+		return toolExecResponse{Error: errors.Join(err, os.Remove(tmpName)).Error()}
+	}
+	if err := os.Rename(tmpName, target); err != nil {
+		return toolExecResponse{Error: errors.Join(err, os.Remove(tmpName)).Error()}
+	}
+	if err := fsyncDirTree(root, dir); err != nil {
 		return toolExecResponse{Error: err.Error()}
 	}
 	return toolExecResponse{}
@@ -1123,8 +1144,28 @@ func fsyncDir(path string) error {
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
-	return dir.Sync()
+	if err := dir.Sync(); err != nil {
+		return errors.Join(err, dir.Close())
+	}
+	return dir.Close()
+}
+
+func fsyncDirTree(root, path string) error {
+	root = filepath.Clean(root)
+	path = filepath.Clean(path)
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return errors.New("workspace sync path escapes root")
+	}
+	for {
+		if err := fsyncDir(path); err != nil {
+			return err
+		}
+		if path == root {
+			return nil
+		}
+		path = filepath.Dir(path)
+	}
 }
 
 func (s Server) workspacePath(raw string) (string, string, error) {
