@@ -654,6 +654,16 @@ db-init:
 sqlc:
     go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
 
+# Generate Go and TypeScript Managed Agents public contract artifacts.
+generate-managed-agents-contracts:
+    node scripts/contracts/generate-managed-agents.mjs
+
+# Verify contract generation, inventory, provenance hashes, and local signed artifacts.
+verify-managed-agents-baseline artifact_dir="releases/microvm/latest":
+    node scripts/contracts/generate-managed-agents.mjs --check
+    node scripts/contracts/verify-managed-agents-baseline.mjs --verify-artifact-dir {{artifact_dir}}
+    scripts/microvm-image/verify.sh {{artifact_dir}} {{artifact_dir}}/signing.pub
+
 # Run Flue durable-store service tests
 test-flue-store:
     cd flue-store && npm test
