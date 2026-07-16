@@ -2,8 +2,11 @@ package microvm
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -55,10 +58,21 @@ func TestSandboxBrokerMicroVMBackendIsLazyReusableAndResetFenced(t *testing.T) {
 	now := time.Date(2026, time.July, 16, 12, 0, 0, 0, time.UTC)
 	nextLease := 0
 	service, err := sandboxbroker.New(sandboxbroker.Config{
-		Backend:     backend,
-		Generations: sandboxbroker.NewMemoryGenerationStore(),
-		LeaseTTL:    time.Minute,
-		Now:         func() time.Time { return now },
+		Backend:          backend,
+		ArtifactExporter: rejectingArtifactExporter{},
+		Generations:      sandboxbroker.NewMemoryGenerationStore(),
+		Activity:         sandboxbroker.NewMemoryActivityStore(),
+		LeaseTTL:         time.Minute,
+		CleanupInterval:  time.Second,
+		IdleTTL: map[sandboxbroker.SubjectKind]time.Duration{
+			sandboxbroker.SubjectAgent: 10 * time.Minute,
+			sandboxbroker.SubjectChat:  2 * time.Minute,
+		},
+		RetentionTTL: map[sandboxbroker.SubjectKind]time.Duration{
+			sandboxbroker.SubjectAgent: 30 * 24 * time.Hour,
+			sandboxbroker.SubjectChat:  24 * time.Hour,
+		},
+		Now: func() time.Time { return now },
 		NewLeaseID: func() string {
 			nextLease++
 			return fmt.Sprintf("lease-%d", nextLease)
@@ -143,6 +157,50 @@ func TestSandboxBrokerMicroVMBackendIsLazyReusableAndResetFenced(t *testing.T) {
 	}
 	if len(secondGenerationCompartment) > 14 {
 		t.Fatalf("generation compartment %q exceeds Firecracker-safe length", secondGenerationCompartment)
+	}
+}
+
+type rejectingArtifactExporter struct{}
+
+func (rejectingArtifactExporter) Supports(sandboxbroker.SubjectKind) bool { return true }
+
+func (rejectingArtifactExporter) Export(context.Context, sandboxbroker.ArtifactExportInput) (sandboxbroker.StoredArtifact, error) {
+	return sandboxbroker.StoredArtifact{}, errors.New("artifact export is not used by this test")
+}
+
+func TestSandboxBrokerDestroyRemovesOnlyDerivedWorkspaceImage(t *testing.T) {
+	manager := newWarmToolTestManager(t)
+	manager.cfg.MicroVMWorkspaceDir = filepath.Join(t.TempDir(), "workspaces")
+	backend, err := NewSandboxBrokerBackend(manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := sandboxbroker.WorkspaceIdentity{
+		WorkspaceRef: sandboxbroker.WorkspaceRef{SubjectKind: sandboxbroker.SubjectChat, SubjectID: "thread-delete"},
+		Generation:   1,
+	}
+	runtime, err := sandboxBrokerRuntimeFor(identity, sandboxbroker.LeasePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(manager.cfg.MicroVMWorkspaceDir, runtime.agentID, runtime.compartmentID+"."+workspaceName)
+	sibling := filepath.Join(manager.cfg.MicroVMWorkspaceDir, runtime.agentID, "other."+workspaceName)
+	if err := os.MkdirAll(filepath.Dir(workspace), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{workspace, sibling} {
+		if err := os.WriteFile(path, []byte("workspace"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := backend.Destroy(context.Background(), identity); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(workspace); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("destroyed workspace stat err = %v", err)
+	}
+	if _, err := os.Stat(sibling); err != nil {
+		t.Fatalf("sibling workspace was removed: %v", err)
 	}
 }
 
@@ -257,6 +315,20 @@ func TestSandboxBrokerToolResponseBoundsModelVisibleOutput(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected oversized read response rejection")
+	}
+}
+
+func TestSandboxBrokerArtifactExportUsesBoundedGuestBufferRead(t *testing.T) {
+	request, err := sandboxBrokerToolRequest(sandboxbroker.Operation{Kind: sandboxbroker.OperationExport, Path: "reports/final.bin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Operation != ToolOpReadFileBuffer || request.Path != "reports/final.bin" {
+		t.Fatalf("artifact export tool request = %+v", request)
+	}
+	oversized := ToolExecResponse{ContentBase64: base64.StdEncoding.EncodeToString(make([]byte, sandboxbroker.MaxReadBytes+1))}
+	if _, err := sandboxBrokerToolResponse(sandboxbroker.OperationExport, oversized); err == nil {
+		t.Fatal("oversized artifact export response unexpectedly passed")
 	}
 }
 

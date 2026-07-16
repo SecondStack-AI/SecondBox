@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -72,6 +74,19 @@ func (b *SandboxBrokerBackend) Execute(ctx context.Context, handle sandboxbroker
 	if err != nil {
 		return sandboxbroker.OperationResult{}, err
 	}
+	if operation.Kind == sandboxbroker.OperationExport {
+		if strings.TrimSpace(response.Error) != "" {
+			return sandboxbroker.OperationResult{}, fmt.Errorf("sandbox artifact export failed: %s", response.Error)
+		}
+		content, err := base64.StdEncoding.DecodeString(response.ContentBase64)
+		if err != nil {
+			return sandboxbroker.OperationResult{}, fmt.Errorf("decode sandbox artifact export: %w", err)
+		}
+		if len(content) > sandboxbroker.MaxReadBytes {
+			return sandboxbroker.OperationResult{}, fmt.Errorf("sandbox artifact export exceeds %d bytes", sandboxbroker.MaxReadBytes)
+		}
+		return sandboxbroker.NewArtifactContentResult(content), nil
+	}
 	encoded, err := json.Marshal(response)
 	if err != nil {
 		return sandboxbroker.OperationResult{}, fmt.Errorf("encode sandbox tool response: %w", err)
@@ -87,7 +102,7 @@ func sandboxBrokerToolResponse(kind sandboxbroker.OperationKind, response ToolEx
 		response.Stdout = truncateSandboxOutput(response.Stdout, sandboxbroker.MaxExecStreamBytes)
 		response.Stderr = truncateSandboxOutput(response.Stderr, sandboxbroker.MaxExecStreamBytes)
 	}
-	if kind == sandboxbroker.OperationReadFile {
+	if kind == sandboxbroker.OperationReadFile || kind == sandboxbroker.OperationExport {
 		if len(response.Content) > sandboxbroker.MaxReadBytes {
 			return ToolExecResponse{}, fmt.Errorf("sandbox file read exceeds %d bytes", sandboxbroker.MaxReadBytes)
 		}
@@ -123,6 +138,53 @@ func (b *SandboxBrokerBackend) Drain(ctx context.Context, handle sandboxbroker.R
 		return nil
 	}
 	return b.manager.drainSandboxBrokerRuntime(ctx, runtime.agentID, runtime.compartmentID)
+}
+
+func (b *SandboxBrokerBackend) Destroy(ctx context.Context, identity sandboxbroker.WorkspaceIdentity) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if strings.EqualFold(b.manager.cfg.MicroVMWorkspaceBackend, "dm-thin") {
+		return fmt.Errorf("%w: dm-thin broker workspace destruction is not implemented", sandboxbroker.ErrInvalidPolicy)
+	}
+	runtime, err := sandboxBrokerRuntimeFor(identity, sandboxbroker.LeasePolicy{})
+	if err != nil {
+		return err
+	}
+	workspaceDir := filepath.Join(b.manager.cfg.MicroVMWorkspaceDir, runtime.agentID)
+	workspacePath := filepath.Join(workspaceDir, runtime.compartmentID+"."+workspaceName)
+	directoryInfo, err := os.Lstat(workspaceDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect sandbox broker workspace directory before destruction: %w", err)
+	}
+	if !directoryInfo.IsDir() || directoryInfo.Mode()&os.ModeSymlink != 0 {
+		return errors.New("sandbox broker workspace destruction requires a real workspace directory")
+	}
+	info, err := os.Lstat(workspacePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect sandbox broker workspace before destruction: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("sandbox broker workspace destruction requires a regular workspace image")
+	}
+	if err := os.Remove(workspacePath); err != nil {
+		return fmt.Errorf("destroy sandbox broker workspace: %w", err)
+	}
+	directory, err := os.Open(workspaceDir)
+	if err != nil {
+		return fmt.Errorf("open sandbox broker workspace directory after destruction: %w", err)
+	}
+	defer directory.Close()
+	if err := directory.Sync(); err != nil {
+		return fmt.Errorf("sync sandbox broker workspace directory after destruction: %w", err)
+	}
+	return nil
 }
 
 func sandboxBrokerRuntimeFor(identity sandboxbroker.WorkspaceIdentity, policy sandboxbroker.LeasePolicy) (sandboxBrokerRuntime, error) {
@@ -240,7 +302,7 @@ func sandboxBrokerToolRequest(operation sandboxbroker.Operation) (ToolExecReques
 	case sandboxbroker.OperationExists:
 		request.Operation = ToolOpExists
 	case sandboxbroker.OperationExport:
-		return ToolExecRequest{}, errors.New("sandbox artifact export backend is not implemented")
+		request.Operation = ToolOpReadFileBuffer
 	default:
 		return ToolExecRequest{}, fmt.Errorf("unsupported sandbox broker operation %q", operation.Kind)
 	}
