@@ -783,7 +783,15 @@ func (m *Manager) createAndStartCold(ctx context.Context, agentID, compartmentID
 	}
 	timer.mark("trust_anchor_verified")
 	timer.mark("rootfs_reflinked")
-	workspacePath, err := m.prepareWorkspace(setupCtx, agentID, compartmentID)
+	workspaceSizeMiB := m.cfg.MicroVMWorkspaceSizeMiB
+	sharedImagePath := launchImage.SharedImagePath
+	if opts.SandboxPolicy != nil {
+		workspaceSizeMiB = opts.SandboxPolicy.WorkspaceSizeMiB
+		if !opts.SandboxPolicy.SharedReadOnly {
+			sharedImagePath = ""
+		}
+	}
+	workspacePath, err := m.prepareWorkspaceSized(setupCtx, agentID, compartmentID, workspaceSizeMiB)
 	if err != nil {
 		m.cleanupTap(setupCtx, tapName)
 		return "", fmt.Errorf("prepare workspace: %w", err)
@@ -808,7 +816,10 @@ func (m *Manager) createAndStartCold(ctx context.Context, agentID, compartmentID
 	var socketPath, vsockPath, jailRoot string
 	launcherOnly := m.launcher != nil
 	if launcherOnly {
-		resp, launchErr := m.launcher.Launch(setupCtx, buildPrivilegedLaunchRequest(id, agentID, compartmentID, launchImage, image, workspacePath, tapName, guestIP))
+		request := buildPrivilegedLaunchRequest(id, agentID, compartmentID, launchImage, image, workspacePath, tapName, guestIP)
+		request.SharedImage = sharedImagePath
+		request.SandboxPolicy = opts.SandboxPolicy
+		resp, launchErr := m.launcher.Launch(setupCtx, request)
 		if launchErr != nil {
 			m.cleanupTap(setupCtx, tapName)
 			return "", fmt.Errorf("launch firecracker through privileged launcher: %w", launchErr)
@@ -819,7 +830,7 @@ func (m *Manager) createAndStartCold(ctx context.Context, agentID, compartmentID
 		}
 		timer.mark("firecracker_process_started", "launcher", m.cfg.MicroVMLauncherSocket)
 	} else {
-		launch, launchErr := m.prepareLaunch(setupCtx, id, dir, launchImage.KernelPath, launchImage.RootfsPath, workspacePath, launchImage.SharedImagePath, tapName, guestIP)
+		launch, launchErr := m.prepareLaunchWithPolicy(setupCtx, id, dir, launchImage.KernelPath, launchImage.RootfsPath, workspacePath, sharedImagePath, tapName, guestIP, opts.SandboxPolicy)
 		if launchErr != nil {
 			m.cleanupTap(setupCtx, tapName)
 			return "", launchErr
@@ -1018,7 +1029,7 @@ func firecrackerInstanceIDsForAgent(agentID string) ([]string, error) {
 	if agentID == "" {
 		return nil, nil
 	}
-	prefix := instancePrefix + "-" + agentID + "-"
+	prefix := instancePrefix + "-" + instanceAgentIDSegment(agentID) + "-"
 	seen := map[string]struct{}{}
 	if _, err := firecrackerPIDsMatching(func(id string) bool {
 		if strings.HasPrefix(id, prefix) {

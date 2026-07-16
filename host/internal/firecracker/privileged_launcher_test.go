@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"agentcy/internal/harness"
+	"agentcy/internal/runtimemanager"
 )
 
 func testPrivilegedLauncherConfig(t *testing.T) PrivilegedLauncherConfig {
@@ -72,6 +73,7 @@ func testPrivilegedLauncherConfig(t *testing.T) PrivilegedLauncherConfig {
 		JailerParentCgroup:     "agentcy",
 		MemoryMiB:              2048,
 		VCPUs:                  2,
+		WorkspaceSizeMiB:       8192,
 		CPUTemplate:            "None",
 		TransparentHTTPPort:    18080,
 		HarnessCIDR:            "169.254.77.0/24",
@@ -91,6 +93,74 @@ func testPrivilegedLauncherConfig(t *testing.T) PrivilegedLauncherConfig {
 		HarnessMaxRuntime:      10 * time.Minute,
 		HarnessIdleTimeout:     5 * time.Minute,
 		allowUnprivilegedTests: true,
+	}
+}
+
+func TestOpenLauncherLogGrantsManagerGroupReadAccess(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "instance.log")
+	if err := os.WriteFile(logPath, []byte("existing\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	managerGID := os.Getgid()
+	logFile, err := openLauncherLog(logPath, managerGID)
+	if err != nil {
+		t.Fatalf("open launcher log: %v", err)
+	}
+	if err := logFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatalf("unexpected stat payload %T", info.Sys())
+	}
+	if got := int(stat.Gid); got != managerGID {
+		t.Fatalf("launcher log gid = %d, want manager gid %d", got, managerGID)
+	}
+	if got := info.Mode().Perm(); got != 0o640 {
+		t.Fatalf("launcher log mode = %04o, want 0640", got)
+	}
+}
+
+func TestManagerSocketAliasKeepsJailedSocketAddressShort(t *testing.T) {
+	cfg := testPrivilegedLauncherConfig(t)
+	runtimeDir, err := os.MkdirTemp("/tmp", "ag-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
+	cfg.SocketPath = filepath.Join(runtimeDir, "launcher.sock")
+	server := &PrivilegedLauncherServer{cfg: cfg}
+	instanceID := "fc-agent-with-a-very-long-identity-cmp-with-a-very-long-compartment-12345678"
+	target := filepath.Join(t.TempDir(), "guest.vsock")
+	listener, err := net.Listen("unix", target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	alias, err := server.installManagerSocketAlias(instanceID, target, "vsock")
+	if err != nil {
+		t.Fatalf("install manager socket alias: %v", err)
+	}
+	defer server.removeManagerSocketAliases(instanceID)
+	if len(alias) >= 108 {
+		t.Fatalf("manager socket alias exceeds Linux sockaddr_un limit: %q (%d bytes)", alias, len(alias))
+	}
+	conn, err := net.Dial("unix", alias)
+	if err != nil {
+		t.Fatalf("connect through manager socket alias: %v", err)
+	}
+	_ = conn.Close()
+	info, err := os.Lstat(alias)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("manager socket alias mode = %s, want symlink", info.Mode())
 	}
 }
 
@@ -119,10 +189,16 @@ func TestPrivilegedLauncherValidatesDerivedPathsAndSymlinks(t *testing.T) {
 		InstanceID: instanceID, AgentID: agentID, CompartmentID: compartmentID,
 		RootfsPath: runRootfs, RootfsImage: rootfsImage, WorkspacePath: workspace,
 		SharedImage: shared, TapName: tapNameForInstance(cfg.TapPrefix, instanceID), GuestIP: "172.30.0.2",
+		SandboxPolicy: &runtimemanager.SandboxRuntimePolicy{VCPUs: 1, MemoryMiB: 512, WorkspaceSizeMiB: 1024, ProcessLimit: 32, WorkspaceWritable: true, SharedReadOnly: true},
 	}
 	if err := server.validateLaunchRequest(req); err != nil {
 		t.Fatalf("valid launch request: %v", err)
 	}
+	req.SandboxPolicy.MemoryMiB = cfg.MemoryMiB + 1
+	if err := server.validateLaunchRequest(req); err == nil || !strings.Contains(err.Error(), "launcher maxima") {
+		t.Fatalf("oversized sandbox policy error = %v", err)
+	}
+	req.SandboxPolicy.MemoryMiB = 512
 
 	escape := filepath.Join(t.TempDir(), "escape.ext4")
 	if err := os.WriteFile(escape, []byte("escape"), 0o600); err != nil {
@@ -600,6 +676,9 @@ func TestPrivilegedLauncherDerivesAndRecoversHarnessNetwork(t *testing.T) {
 	joined := strings.Join(commands, "\n")
 	for _, required := range []string{
 		cfg.HarnessSystemdRun + " --quiet --wait --pipe --collect --service-type=exec --property NoNewPrivileges=yes",
+		"--property CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_ADMIN",
+		"--property AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_ADMIN",
+		"--property RestrictAddressFamilies=AF_UNIX AF_NETLINK",
 		"-- " + cfg.HarnessIPCommand + " netns add " + namespace.NamespaceName,
 		"-- " + cfg.HarnessIPCommand + " link add " + namespace.HostVethName + " type veth peer name " + namespace.GuestVethName,
 		"-- " + cfg.HarnessIPCommand + " link set " + namespace.GuestVethName + " address " + launcherSourceMAC(cellID),

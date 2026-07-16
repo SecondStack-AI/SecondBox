@@ -141,6 +141,49 @@ func TestLauncherModeStopUsesLauncher(t *testing.T) {
 	}
 }
 
+func TestLauncherModeLivenessUsesPrivilegedLauncherNamespace(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "launcher.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	requestSeen := make(chan privilegedLauncherRequest, 1)
+	serverErr := make(chan error, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			serverErr <- acceptErr
+			return
+		}
+		defer conn.Close()
+		var req privilegedLauncherRequest
+		if decodeErr := json.NewDecoder(conn).Decode(&req); decodeErr != nil {
+			serverErr <- decodeErr
+			return
+		}
+		requestSeen <- req
+		serverErr <- json.NewEncoder(conn).Encode(privilegedLauncherResponse{OK: true, Running: true})
+	}()
+
+	m := &Manager{launcher: newPrivilegedLauncherClient(socketPath)}
+	inst := &instance{id: "fc-agent-1-abc", launcherOnly: true}
+	running, err := m.firecrackerRunning(context.Background(), inst)
+	if err != nil {
+		t.Fatalf("firecrackerRunning: %v", err)
+	}
+	if !running {
+		t.Fatal("launcher reported running process as stopped")
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("launcher server: %v", err)
+	}
+	req := <-requestSeen
+	if req.Op != "running" || req.ID != inst.id {
+		t.Fatalf("launcher request = %#v", req)
+	}
+}
+
 func TestTrustedMicroVMArtifactsDetectsSameSizeRestoredMtimeMutation(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "rootfs.ext4")
@@ -1610,6 +1653,24 @@ func TestBuildFirecrackerConfigIncludesWorkspaceAndVsock(t *testing.T) {
 	}
 	if got.Drives[2].DriveID != "shared" || !got.Drives[2].IsReadOnly {
 		t.Fatalf("shared drive = %#v", got.Drives[2])
+	}
+}
+
+func TestBuildFirecrackerConfigEnforcesSandboxRuntimePolicy(t *testing.T) {
+	cfg := &config.Config{MicroVMKernelPath: "/vmlinux", MicroVMVCPUs: 2, MicroVMMemoryMiB: 512}
+	policy := &runtimemanager.SandboxRuntimePolicy{
+		VCPUs: 1, MemoryMiB: 128, WorkspaceSizeMiB: 64, ProcessLimit: 16,
+		WorkspaceWritable: false, SharedReadOnly: true,
+	}
+	got := buildFirecrackerConfigWithPolicy(cfg, "/vmlinux", "/rootfs", "/workspace", "/shared", "/vsock", "", "", policy)
+	if got.Machine.VCPUCount != 1 || got.Machine.MemSizeMiB != 128 {
+		t.Fatalf("machine config = %+v", got.Machine)
+	}
+	if len(got.Drives) != 3 || !got.Drives[1].IsReadOnly || !got.Drives[2].IsReadOnly {
+		t.Fatalf("drive policy = %+v", got.Drives)
+	}
+	if !strings.Contains(got.BootSource.BootArgs, "agentcy.process_limit=16") {
+		t.Fatalf("boot args = %q", got.BootSource.BootArgs)
 	}
 }
 

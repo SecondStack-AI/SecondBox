@@ -44,6 +44,17 @@ func TestHeartbeat(t *testing.T) {
 	}
 }
 
+func TestBoundedCommandOutputBufferDiscardsExcess(t *testing.T) {
+	buffer := newCommandOutputBuffer(32)
+	payload := []byte(strings.Repeat("x", 100))
+	if n, err := buffer.Write(payload); err != nil || n != len(payload) {
+		t.Fatalf("write = %d, %v", n, err)
+	}
+	if len(buffer.String()) > 32 || !strings.Contains(buffer.String(), "truncated") {
+		t.Fatalf("bounded output = %q", buffer.String())
+	}
+}
+
 func TestWorkspaceListAndRead(t *testing.T) {
 	workspace := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(workspace, "artifacts"), 0o755); err != nil {

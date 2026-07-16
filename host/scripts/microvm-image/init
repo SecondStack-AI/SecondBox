@@ -7,17 +7,32 @@ mountpoint -q /dev || mount -t devtmpfs devtmpfs /dev
 mkdir -p /dev/shm
 mountpoint -q /dev/shm || mount -t tmpfs -o rw,nosuid,nodev,mode=1777,size=512m tmpfs /dev/shm
 
+process_limit="$(sed -n 's/.*agentcy\.process_limit=\([0-9][0-9]*\).*/\1/p' /proc/cmdline)"
+if [ -n "$process_limit" ]; then
+    mkdir -p /sys/fs/cgroup
+    mountpoint -q /sys/fs/cgroup || mount -t cgroup2 cgroup2 /sys/fs/cgroup
+    grep -qw pids /sys/fs/cgroup/cgroup.controllers
+    grep -qw pids /sys/fs/cgroup/cgroup.subtree_control || printf '%s\n' +pids > /sys/fs/cgroup/cgroup.subtree_control
+    mkdir -p /sys/fs/cgroup/agentcy-tools
+    printf '%s\n' "$process_limit" > /sys/fs/cgroup/agentcy-tools/pids.max
+    printf '%s\n' "$$" > /sys/fs/cgroup/agentcy-tools/cgroup.procs
+fi
+
 mkdir -p /workspace /runtime-private
 # runtime-private holds vsock-delivered secrets; keep it RAM-only so credentials
 # never land on the persistent workspace image or any snapshot.
 mountpoint -q /runtime-private || mount -t tmpfs -o rw,nosuid,nodev,mode=0700 tmpfs /runtime-private
 if ! mountpoint -q /workspace; then
-    mount -t ext4 -o rw,noatime /dev/vdb /workspace
+    workspace_mode=rw
+    if [ "$(cat /sys/block/vdb/ro)" = "1" ]; then
+        workspace_mode=ro
+    fi
+    mount -t ext4 -o "$workspace_mode",noatime /dev/vdb /workspace
 fi
 
 if [ -b /dev/vdc ]; then
     mkdir -p /shared
-    mount -o ro /dev/vdc /shared || true
+    mount -o ro /dev/vdc /shared
 fi
 
 exec /usr/local/bin/agentcy-microvm-entrypoint \

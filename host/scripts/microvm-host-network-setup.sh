@@ -81,6 +81,13 @@ require_cmd() {
   fi
 }
 
+set_ip_forward() {
+  local desired="$1"
+  if [[ "$(sysctl -n net.ipv4.ip_forward)" != "$desired" ]]; then
+    sysctl -w "net.ipv4.ip_forward=$desired" >/dev/null
+  fi
+}
+
 iptables_add() {
   local table="$1"
   shift
@@ -291,7 +298,7 @@ apply_config() {
     write_network_state applying
   fi
   apply_mutated=true
-  sysctl -w net.ipv4.ip_forward=1 >/dev/null
+  set_ip_forward 1
 
   if ! ip link show "$bridge" >/dev/null 2>&1; then
     ip link add name "$bridge" type bridge
@@ -495,7 +502,7 @@ remove_config() {
   fi
 
   if [[ "$network_state_present" == "true" && "$preserve_network_state" != "true" ]]; then
-    sysctl -w "net.ipv4.ip_forward=$previous_ip_forward" >/dev/null
+    set_ip_forward "$previous_ip_forward"
     rm -f "$ip_forward_state_path"
     sync -f "$network_state_dir"
     network_state_present=false
@@ -518,7 +525,7 @@ if [[ "$mode" == "apply" ]]; then
     if [[ "$apply_recovery" == "true" ]]; then
       preserve_network_state=true
       remove_config
-      sysctl -w "net.ipv4.ip_forward=$previous_ip_forward" >/dev/null
+      set_ip_forward "$previous_ip_forward"
       write_network_state applying
     else
       remove_config

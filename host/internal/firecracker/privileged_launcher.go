@@ -23,6 +23,7 @@ import (
 
 	"agentcy/internal/config"
 	"agentcy/internal/harness"
+	"agentcy/internal/runtimemanager"
 	"golang.org/x/sys/unix"
 )
 
@@ -51,15 +52,16 @@ type privilegedLauncherRequest struct {
 }
 
 type privilegedLaunchRequest struct {
-	InstanceID    string `json:"instanceId"`
-	AgentID       string `json:"agentId"`
-	CompartmentID string `json:"compartmentId"`
-	RootfsPath    string `json:"rootfsPath"`
-	RootfsImage   string `json:"rootfsImage"`
-	WorkspacePath string `json:"workspacePath"`
-	SharedImage   string `json:"sharedImage,omitempty"`
-	TapName       string `json:"tapName,omitempty"`
-	GuestIP       string `json:"guestIp,omitempty"`
+	InstanceID    string                               `json:"instanceId"`
+	AgentID       string                               `json:"agentId"`
+	CompartmentID string                               `json:"compartmentId"`
+	RootfsPath    string                               `json:"rootfsPath"`
+	RootfsImage   string                               `json:"rootfsImage"`
+	WorkspacePath string                               `json:"workspacePath"`
+	SharedImage   string                               `json:"sharedImage,omitempty"`
+	TapName       string                               `json:"tapName,omitempty"`
+	GuestIP       string                               `json:"guestIp,omitempty"`
+	SandboxPolicy *runtimemanager.SandboxRuntimePolicy `json:"sandboxPolicy,omitempty"`
 }
 
 type privilegedLauncherResponse struct {
@@ -284,6 +286,7 @@ type PrivilegedLauncherConfig struct {
 	JailerParentCgroup     string
 	MemoryMiB              int
 	VCPUs                  int
+	WorkspaceSizeMiB       int
 	CPUTemplate            string
 	KernelArgs             string
 	TransparentHTTPPort    int
@@ -350,6 +353,10 @@ func LoadPrivilegedLauncherConfigFromEnv() (PrivilegedLauncherConfig, error) {
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
+	workspaceSizeMiB, err := intEnv("AG_MICROVM_WORKSPACE_SIZE_MIB", 8192)
+	if err != nil {
+		return PrivilegedLauncherConfig{}, err
+	}
 	transparentPort, err := intEnv("AG_EGRESS_PROXY_TRANSPARENT_HTTP_PORT", 0)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
@@ -397,6 +404,7 @@ func LoadPrivilegedLauncherConfigFromEnv() (PrivilegedLauncherConfig, error) {
 		JailerParentCgroup:  strings.TrimSpace(os.Getenv("AG_MICROVM_JAILER_PARENT_CGROUP")),
 		MemoryMiB:           memoryMiB,
 		VCPUs:               vcpus,
+		WorkspaceSizeMiB:    workspaceSizeMiB,
 		CPUTemplate:         normalizeLauncherCPUTemplate(os.Getenv("AG_MICROVM_CPU_TEMPLATE")),
 		KernelArgs:          strings.TrimSpace(os.Getenv("AG_MICROVM_KERNEL_ARGS")),
 		TransparentHTTPPort: transparentPort,
@@ -673,6 +681,9 @@ func (s *PrivilegedLauncherServer) cleanupMissingTapState(ctx context.Context, s
 	if err := os.RemoveAll(filepath.Dir(s.jailerRoot(state.InstanceID))); err != nil {
 		return err
 	}
+	if err := s.removeManagerSocketAliases(state.InstanceID); err != nil {
+		return err
+	}
 	return removeLauncherStatePath(s.cfg.StateRoot, s.statePath(state.InstanceID))
 }
 
@@ -763,8 +774,8 @@ func validatePrivilegedLauncherConfig(cfg *PrivilegedLauncherConfig) error {
 	if cfg.JailerUID <= 0 || cfg.JailerGID <= 0 {
 		return fmt.Errorf("AG_MICROVM_JAILER_UID/GID must select a non-root identity")
 	}
-	if cfg.MemoryMiB <= 0 || cfg.VCPUs <= 0 {
-		return fmt.Errorf("microVM memory and vCPUs must be positive")
+	if cfg.MemoryMiB <= 0 || cfg.VCPUs <= 0 || cfg.WorkspaceSizeMiB <= 0 {
+		return fmt.Errorf("microVM memory, vCPUs, and workspace size must be positive")
 	}
 	if cfg.TransparentHTTPPort < 0 || cfg.TransparentHTTPPort > 65535 {
 		return fmt.Errorf("transparent HTTP port is invalid")
@@ -1161,6 +1172,9 @@ func (s *PrivilegedLauncherServer) removeTap(ctx context.Context, tapName string
 	}
 	if err := os.RemoveAll(filepath.Dir(s.jailerRoot(state.InstanceID))); err != nil {
 		return fmt.Errorf("remove launcher jail: %w", err)
+	}
+	if err := s.removeManagerSocketAliases(state.InstanceID); err != nil {
+		return fmt.Errorf("remove manager socket aliases: %w", err)
 	}
 	return nil
 }
@@ -2112,6 +2126,7 @@ func (s *PrivilegedLauncherServer) launch(ctx context.Context, req *privilegedLa
 	cleanup := true
 	defer func() {
 		if cleanup {
+			_ = s.removeManagerSocketAliases(req.InstanceID)
 			_ = os.RemoveAll(filepath.Dir(jailRoot))
 		}
 	}()
@@ -2139,7 +2154,7 @@ func (s *PrivilegedLauncherServer) launch(ctx context.Context, req *privilegedLa
 		MicroVMCPUTemplate: s.cfg.CPUTemplate,
 		MicroVMBridgeCIDR:  s.cfg.BridgeCIDR,
 	}
-	fcConfig := buildFirecrackerConfig(serverCfg, kernelName, rootfsName, workspaceName, sharedName, vsockUDSName, req.TapName, req.GuestIP)
+	fcConfig := buildFirecrackerConfigWithPolicy(serverCfg, kernelName, rootfsName, workspaceName, sharedName, vsockUDSName, req.TapName, req.GuestIP, req.SandboxPolicy)
 	fcConfig.BootSource.KernelImagePath = kernelName
 	configPath := filepath.Join(jailRoot, configName)
 	data, err := json.MarshalIndent(fcConfig, "", "  ")
@@ -2153,11 +2168,15 @@ func (s *PrivilegedLauncherServer) launch(ctx context.Context, req *privilegedLa
 		return privilegedLauncherResponse{}, fmt.Errorf("chown firecracker config: %w", err)
 	}
 	logPath := filepath.Join(s.cfg.LogRoot, req.InstanceID+".log")
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND|syscall.O_NOFOLLOW, 0o640)
+	logFile, err := openLauncherLog(logPath, s.cfg.ManagerGID)
 	if err != nil {
 		return privilegedLauncherResponse{}, fmt.Errorf("open launcher log: %w", err)
 	}
-	args := s.jailerArgs(req.InstanceID)
+	memoryMiB := s.cfg.MemoryMiB
+	if req.SandboxPolicy != nil {
+		memoryMiB = req.SandboxPolicy.MemoryMiB
+	}
+	args := s.jailerArgsWithMemory(req.InstanceID, memoryMiB)
 	args = append(args, "--", "--api-sock", firecrackerSockName, "--config-file", configName)
 	cmd := exec.Command(s.cfg.JailerPath, args...)
 	cmd.Dir = filepath.Join(s.cfg.RunRoot, req.InstanceID)
@@ -2180,18 +2199,29 @@ func (s *PrivilegedLauncherServer) launch(ctx context.Context, req *privilegedLa
 		}
 		return privilegedLauncherResponse{}, fmt.Errorf("start jailer: %w", err)
 	}
-	socketPath := filepath.Join(jailRoot, firecrackerSockName)
-	vsockPath := filepath.Join(jailRoot, vsockUDSName)
-	if err := s.waitForManagerSockets(socketPath, vsockPath); err != nil {
+	abortStartedLaunch := func(cause error) error {
 		_ = cmd.Process.Kill()
 		_ = signalFirecrackerByID(req.InstanceID, syscall.SIGKILL)
 		_ = cmd.Wait()
 		_ = logFile.Close()
 		state.Started = false
 		if stateErr := s.writeState(state); stateErr != nil {
-			return privilegedLauncherResponse{}, errors.Join(err, fmt.Errorf("persist failed launch cleanup: %w", stateErr))
+			return errors.Join(cause, fmt.Errorf("persist failed launch cleanup: %w", stateErr))
 		}
-		return privilegedLauncherResponse{}, err
+		return cause
+	}
+	socketPath := filepath.Join(jailRoot, firecrackerSockName)
+	vsockPath := filepath.Join(jailRoot, vsockUDSName)
+	if err := s.waitForManagerSockets(socketPath, vsockPath); err != nil {
+		return privilegedLauncherResponse{}, abortStartedLaunch(err)
+	}
+	managerSocketPath, err := s.installManagerSocketAlias(req.InstanceID, socketPath, "api")
+	if err != nil {
+		return privilegedLauncherResponse{}, abortStartedLaunch(fmt.Errorf("install manager Firecracker socket alias: %w", err))
+	}
+	managerVsockPath, err := s.installManagerSocketAlias(req.InstanceID, vsockPath, "vsock")
+	if err != nil {
+		return privilegedLauncherResponse{}, abortStartedLaunch(fmt.Errorf("install manager vsock alias: %w", err))
 	}
 	go func() {
 		_ = cmd.Wait()
@@ -2199,11 +2229,27 @@ func (s *PrivilegedLauncherServer) launch(ctx context.Context, req *privilegedLa
 	}()
 	cleanup = false
 	return privilegedLauncherResponse{
-		SocketPath: socketPath,
-		VsockPath:  vsockPath,
+		SocketPath: managerSocketPath,
+		VsockPath:  managerVsockPath,
 		JailRoot:   jailRoot,
 		LogPath:    logPath,
 	}, nil
+}
+
+func openLauncherLog(logPath string, managerGID int) (*os.File, error) {
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND|syscall.O_NOFOLLOW, 0o640)
+	if err != nil {
+		return nil, err
+	}
+	if err := logFile.Chown(-1, managerGID); err != nil {
+		_ = logFile.Close()
+		return nil, fmt.Errorf("group log for manager: %w", err)
+	}
+	if err := logFile.Chmod(0o640); err != nil {
+		_ = logFile.Close()
+		return nil, fmt.Errorf("chmod log for manager: %w", err)
+	}
+	return logFile, nil
 }
 
 func (s *PrivilegedLauncherServer) waitForManagerSockets(paths ...string) error {
@@ -2304,6 +2350,17 @@ func (s *PrivilegedLauncherServer) validateLaunchRequest(req privilegedLaunchReq
 			return fmt.Errorf("shared image: %w", err)
 		}
 	}
+	if policy := req.SandboxPolicy; policy != nil {
+		if policy.VCPUs < 1 || policy.MemoryMiB < 1 || policy.WorkspaceSizeMiB < 1 || policy.ProcessLimit < 1 {
+			return fmt.Errorf("sandbox runtime policy values must be positive")
+		}
+		if policy.VCPUs > s.cfg.VCPUs || policy.MemoryMiB > s.cfg.MemoryMiB || policy.WorkspaceSizeMiB > s.cfg.WorkspaceSizeMiB {
+			return fmt.Errorf("sandbox runtime policy exceeds launcher maxima")
+		}
+		if policy.SharedReadOnly != (req.SharedImage != "") {
+			return fmt.Errorf("sandbox shared mount policy does not match launch drives")
+		}
+	}
 	if req.TapName == "" || req.GuestIP == "" {
 		if req.TapName != "" || req.GuestIP != "" {
 			return fmt.Errorf("tap name and guest IP must be supplied together")
@@ -2376,7 +2433,66 @@ func (s *PrivilegedLauncherServer) jailerRoot(instanceID string) string {
 	return filepath.Join(s.cfg.JailRoot, filepath.Base(s.cfg.FirecrackerPath), instanceID, "root")
 }
 
+func (s *PrivilegedLauncherServer) managerSocketAliasPath(instanceID, kind string) string {
+	sum := sha256.Sum256([]byte(instanceID))
+	return filepath.Join(filepath.Dir(s.cfg.SocketPath), fmt.Sprintf("vm-%x.%s", sum[:16], kind))
+}
+
+func (s *PrivilegedLauncherServer) installManagerSocketAlias(instanceID, target, kind string) (string, error) {
+	if err := validateLauncherInstanceID(instanceID); err != nil {
+		return "", err
+	}
+	if kind != "api" && kind != "vsock" {
+		return "", fmt.Errorf("manager socket alias kind is invalid")
+	}
+	alias := s.managerSocketAliasPath(instanceID, kind)
+	if len(alias) >= 108 {
+		return "", fmt.Errorf("manager socket alias exceeds Linux sockaddr_un limit")
+	}
+	if info, err := os.Lstat(alias); err == nil {
+		if info.Mode()&os.ModeSymlink == 0 {
+			return "", fmt.Errorf("manager socket alias path is not a symlink")
+		}
+		if err := os.Remove(alias); err != nil {
+			return "", err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	if err := os.Symlink(target, alias); err != nil {
+		return "", err
+	}
+	return alias, nil
+}
+
+func (s *PrivilegedLauncherServer) removeManagerSocketAliases(instanceID string) error {
+	var joined error
+	for _, kind := range []string{"api", "vsock"} {
+		alias := s.managerSocketAliasPath(instanceID, kind)
+		info, err := os.Lstat(alias)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			joined = errors.Join(joined, err)
+			continue
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			joined = errors.Join(joined, fmt.Errorf("manager socket alias path %s is not a symlink", alias))
+			continue
+		}
+		if err := os.Remove(alias); err != nil && !errors.Is(err, os.ErrNotExist) {
+			joined = errors.Join(joined, err)
+		}
+	}
+	return joined
+}
+
 func (s *PrivilegedLauncherServer) jailerArgs(instanceID string) []string {
+	return s.jailerArgsWithMemory(instanceID, s.cfg.MemoryMiB)
+}
+
+func (s *PrivilegedLauncherServer) jailerArgsWithMemory(instanceID string, memoryMiB int) []string {
 	args := []string{
 		"--id", instanceID,
 		"--exec-file", s.cfg.FirecrackerPath,
@@ -2391,7 +2507,7 @@ func (s *PrivilegedLauncherServer) jailerArgs(instanceID string) []string {
 		if s.cfg.JailerParentCgroup != "" {
 			args = append(args, "--parent-cgroup", s.cfg.JailerParentCgroup)
 		}
-		args = append(args, "--cgroup", jailerMemoryCgroup(s.cfg.JailerCgroupVersion, s.cfg.MemoryMiB))
+		args = append(args, "--cgroup", jailerMemoryCgroup(s.cfg.JailerCgroupVersion, memoryMiB))
 	}
 	return args
 }

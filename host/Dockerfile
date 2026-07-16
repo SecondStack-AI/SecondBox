@@ -27,7 +27,7 @@ RUN npm run build \
 FROM node:22.23.1-bookworm-slim AS agent-service
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates wget \
+    && apt-get install -y --no-install-recommends bubblewrap ca-certificates util-linux wget \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 agent-manager \
     && useradd --system --uid 10001 --gid 10001 --home-dir /var/lib/agent-manager --create-home --shell /usr/sbin/nologin agent-manager \
@@ -42,17 +42,18 @@ COPY --from=harness-builder --chown=10001:10001 /src/agent/package-lock.json /op
 COPY --from=harness-builder --chown=10001:10001 /src/agent/node_modules /opt/agent-harness/node_modules
 COPY --from=harness-builder --chown=10001:10001 /src/agent/dist /opt/agent-harness/dist
 COPY LICENSE /usr/share/licenses/agent-manager/LICENSE
+COPY --chmod=0755 scripts/container/agent-service-entrypoint.sh /usr/local/bin/agent-service-entrypoint
 
-USER 10001:10001
+USER 0:0
 WORKDIR /var/lib/agent-manager
 EXPOSE 8081
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=4 CMD ["wget", "--quiet", "--output-document=-", "http://127.0.0.1:8081/api/health"]
-ENTRYPOINT ["/usr/local/bin/agentcy"]
+ENTRYPOINT ["/usr/local/bin/agent-service-entrypoint"]
 
 FROM debian:12.12-slim AS agent-egress-proxy
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates util-linux \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10002 agent-egress \
     && useradd --system --uid 10002 --gid 10002 --home-dir /var/lib/agent-egress --create-home --shell /usr/sbin/nologin agent-egress \
@@ -60,12 +61,13 @@ RUN apt-get update \
 
 COPY --from=go-builder /out/agentcy-egress-proxy /usr/local/bin/agentcy-egress-proxy
 COPY LICENSE /usr/share/licenses/agent-manager/LICENSE
+COPY --chmod=0755 scripts/container/egress-proxy-entrypoint.sh /usr/local/bin/egress-proxy-entrypoint
 
-USER 10002:10002
+USER 0:0
 WORKDIR /var/lib/agent-egress
 EXPOSE 18080 18099
 HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=4 CMD ["/usr/local/bin/agentcy-egress-proxy", "-healthcheck", "-healthcheck-url", "http://127.0.0.1:18099", "-healthcheck-timeout", "5s"]
-ENTRYPOINT ["/usr/local/bin/agentcy-egress-proxy"]
+ENTRYPOINT ["/usr/local/bin/egress-proxy-entrypoint"]
 
 FROM debian:12.12-slim AS firecracker-release
 
@@ -96,6 +98,7 @@ RUN apt-get update \
       dbus \
       e2fsprogs \
       iproute2 \
+      iptables \
       nftables \
       procps \
       systemd \
@@ -120,6 +123,7 @@ COPY --from=harness-builder --chown=10001:10001 /src/agent/node_modules /opt/age
 COPY --from=harness-builder --chown=10001:10001 /src/agent/dist /opt/agent-harness/dist
 COPY LICENSE /usr/share/licenses/agent-manager/LICENSE
 COPY --chmod=0755 scripts/container/sandbox-host-entrypoint.sh /usr/local/bin/sandbox-host-entrypoint
+COPY --chmod=0755 scripts/microvm-host-network-setup.sh /usr/local/bin/microvm-host-network-setup
 COPY deploy/secondstack-agent-sandbox-host.service /etc/systemd/system/secondstack-agent-sandbox-host.service
 
 RUN ln -s /etc/systemd/system/secondstack-agent-sandbox-host.service /etc/systemd/system/multi-user.target.wants/secondstack-agent-sandbox-host.service
@@ -127,7 +131,7 @@ RUN ln -s /etc/systemd/system/secondstack-agent-sandbox-host.service /etc/system
 USER 0:0
 WORKDIR /var/lib/agent-sandbox-host
 STOPSIGNAL SIGRTMIN+3
-HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=4 CMD ["/usr/local/bin/agentcy-vmlauncher", "-healthcheck", "-healthcheck-timeout", "5s"]
+HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=4 CMD ["/usr/bin/setpriv", "--reuid=10001", "--regid=10001", "--clear-groups", "/usr/local/bin/agentcy-vmlauncher", "-healthcheck", "-healthcheck-timeout", "5s"]
 ENTRYPOINT ["/usr/local/bin/sandbox-host-entrypoint"]
 CMD ["/lib/systemd/systemd"]
 

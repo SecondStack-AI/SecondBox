@@ -415,6 +415,10 @@ func checkUnixSocketPath(label, path string) error {
 }
 
 func (m *Manager) prepareLaunch(ctx context.Context, instanceID, dir, kernelPath, rootfsPath, workspacePath, sharedImagePath, tapName, guestIP string) (firecrackerLaunch, error) {
+	return m.prepareLaunchWithPolicy(ctx, instanceID, dir, kernelPath, rootfsPath, workspacePath, sharedImagePath, tapName, guestIP, nil)
+}
+
+func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, kernelPath, rootfsPath, workspacePath, sharedImagePath, tapName, guestIP string, policy *runtimemanager.SandboxRuntimePolicy) (firecrackerLaunch, error) {
 	if m.cfg.MicroVMAllowUnjailed {
 		socket := filepath.Join(dir, firecrackerSockName)
 		vsockUDS := filepath.Join(dir, vsockUDSName)
@@ -428,7 +432,7 @@ func (m *Manager) prepareLaunch(ctx context.Context, instanceID, dir, kernelPath
 		return firecrackerLaunch{
 			executable: m.cfg.FirecrackerPath,
 			args:       []string{"--id", instanceID, "--api-sock", socket, "--config-file", configPath},
-			config:     buildFirecrackerConfig(m.cfg, kernelPath, rootfsPath, workspacePath, sharedImagePath, vsockUDS, tapName, guestIP),
+			config:     buildFirecrackerConfigWithPolicy(m.cfg, kernelPath, rootfsPath, workspacePath, sharedImagePath, vsockUDS, tapName, guestIP, policy),
 			configPath: configPath,
 			socketPath: socket,
 			vsockUDS:   vsockUDS,
@@ -465,10 +469,14 @@ func (m *Manager) prepareLaunch(ctx context.Context, instanceID, dir, kernelPath
 	socket := filepath.Join(jailRoot, firecrackerSockName)
 	vsockUDS := filepath.Join(jailRoot, vsockUDSName)
 	configPath := filepath.Join(jailRoot, configName)
-	fcConfig := buildFirecrackerConfig(m.cfg, kernelName, rootfsName, workspaceName, drivesSharedPath, vsockUDSName, tapName, guestIP)
+	fcConfig := buildFirecrackerConfigWithPolicy(m.cfg, kernelName, rootfsName, workspaceName, drivesSharedPath, vsockUDSName, tapName, guestIP, policy)
 	fcConfig.BootSource.KernelImagePath = kernelName
 
-	args := m.jailerArgs(instanceID)
+	memoryMiB := m.cfg.MicroVMMemoryMiB
+	if policy != nil {
+		memoryMiB = policy.MemoryMiB
+	}
+	args := m.jailerArgsWithMemory(instanceID, memoryMiB)
 	args = append(args, "--", "--api-sock", firecrackerSockName, "--config-file", configName)
 	return firecrackerLaunch{
 		executable: m.cfg.JailerPath,
@@ -482,6 +490,10 @@ func (m *Manager) prepareLaunch(ctx context.Context, instanceID, dir, kernelPath
 }
 
 func (m *Manager) jailerArgs(instanceID string) []string {
+	return m.jailerArgsWithMemory(instanceID, m.cfg.MicroVMMemoryMiB)
+}
+
+func (m *Manager) jailerArgsWithMemory(instanceID string, memoryMiB int) []string {
 	args := []string{
 		"--id", instanceID,
 		"--exec-file", m.cfg.FirecrackerPath,
@@ -496,7 +508,7 @@ func (m *Manager) jailerArgs(instanceID string) []string {
 		if parent := strings.TrimSpace(m.cfg.MicroVMJailerParentCgroup); parent != "" {
 			args = append(args, "--parent-cgroup", parent)
 		}
-		args = append(args, "--cgroup", jailerMemoryCgroup(m.cfg.MicroVMJailerCgroupVersion, m.cfg.MicroVMMemoryMiB))
+		args = append(args, "--cgroup", jailerMemoryCgroup(m.cfg.MicroVMJailerCgroupVersion, memoryMiB))
 	}
 	return args
 }
@@ -532,7 +544,17 @@ func newInstanceID(agentID, compartmentID string) (string, error) {
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", fmt.Errorf("generate instance id: %w", err)
 	}
-	return instancePrefix + "-" + agentID + "-" + compartmentIDSegment(compartmentID) + "-" + hex.EncodeToString(b[:]), nil
+	return instancePrefix + "-" + instanceAgentIDSegment(agentID) + "-" + compartmentIDSegment(compartmentID) + "-" + hex.EncodeToString(b[:]), nil
+}
+
+func instanceAgentIDSegment(agentID string) string {
+	agentID = strings.TrimSpace(agentID)
+	const maxBytes = 35
+	if len(agentID) <= maxBytes {
+		return agentID
+	}
+	digest := sha256.Sum256([]byte(agentID))
+	return agentID[:22] + "-" + hex.EncodeToString(digest[:6])
 }
 
 func compartmentIDSegment(compartmentID string) string {
@@ -680,7 +702,11 @@ func chownIfDifferent(path string, uid, gid int) error {
 }
 
 func ensureWorkspaceImage(ctx context.Context, path string, sizeMiB int, seedDir string) error {
-	if _, err := os.Stat(path); err == nil {
+	if info, err := os.Stat(path); err == nil {
+		want := int64(sizeMiB) * 1024 * 1024
+		if info.Size() != want {
+			return fmt.Errorf("existing workspace image is %d bytes, requested policy requires %d bytes", info.Size(), want)
+		}
 		return nil
 	} else if !os.IsNotExist(err) {
 		return err
@@ -748,7 +774,14 @@ func debugfsReadFile(ctx context.Context, imagePath, guestPath string) ([]byte, 
 }
 
 func (m *Manager) prepareWorkspace(ctx context.Context, agentID, compartmentID string) (string, error) {
+	return m.prepareWorkspaceSized(ctx, agentID, compartmentID, m.cfg.MicroVMWorkspaceSizeMiB)
+}
+
+func (m *Manager) prepareWorkspaceSized(ctx context.Context, agentID, compartmentID string, sizeMiB int) (string, error) {
 	if strings.EqualFold(m.cfg.MicroVMWorkspaceBackend, "dm-thin") {
+		if sizeMiB != m.cfg.MicroVMWorkspaceSizeMiB {
+			return "", fmt.Errorf("dm-thin workspace size %d MiB cannot enforce requested %d MiB", m.cfg.MicroVMWorkspaceSizeMiB, sizeMiB)
+		}
 		return m.ensureThinWorkspace(ctx, agentID, compartmentID)
 	}
 	compartmentID = normalizeRuntimeCompartmentID(compartmentID)
@@ -760,7 +793,7 @@ func (m *Manager) prepareWorkspace(ctx context.Context, agentID, compartmentID s
 		return "", fmt.Errorf("create compartment workspace dir: %w", err)
 	}
 	seedDir := m.workspaceSeedDir(agentID, compartmentID)
-	if err := ensureWorkspaceImage(ctx, workspacePath, m.cfg.MicroVMWorkspaceSizeMiB, seedDir); err != nil {
+	if err := ensureWorkspaceImage(ctx, workspacePath, sizeMiB, seedDir); err != nil {
 		return "", err
 	}
 	return workspacePath, nil
@@ -812,17 +845,31 @@ type networkIface struct {
 }
 
 func buildFirecrackerConfig(cfg *config.Config, kernelPath, rootfsPath, workspacePath, sharedImagePath, vsockUDS, tapName, guestIP string) firecrackerConfig {
+	return buildFirecrackerConfigWithPolicy(cfg, kernelPath, rootfsPath, workspacePath, sharedImagePath, vsockUDS, tapName, guestIP, nil)
+}
+
+func buildFirecrackerConfigWithPolicy(cfg *config.Config, kernelPath, rootfsPath, workspacePath, sharedImagePath, vsockUDS, tapName, guestIP string, policy *runtimemanager.SandboxRuntimePolicy) firecrackerConfig {
+	workspaceWritable := true
+	vcpus := cfg.MicroVMVCPUs
+	memoryMiB := cfg.MicroVMMemoryMiB
+	processLimit := 0
+	if policy != nil {
+		workspaceWritable = policy.WorkspaceWritable
+		vcpus = policy.VCPUs
+		memoryMiB = policy.MemoryMiB
+		processLimit = policy.ProcessLimit
+	}
 	drives := []drive{
 		{DriveID: "rootfs", PathOnHost: rootfsPath, IsRootDevice: true, IsReadOnly: false},
-		{DriveID: "workspace", PathOnHost: workspacePath, IsRootDevice: false, IsReadOnly: false},
+		{DriveID: "workspace", PathOnHost: workspacePath, IsRootDevice: false, IsReadOnly: !workspaceWritable},
 	}
 	if strings.TrimSpace(sharedImagePath) != "" {
 		drives = append(drives, drive{DriveID: "shared", PathOnHost: sharedImagePath, IsRootDevice: false, IsReadOnly: true})
 	}
 	fc := firecrackerConfig{
-		BootSource: bootSource{KernelImagePath: kernelPath, BootArgs: effectiveKernelArgs(cfg, guestIP)},
+		BootSource: bootSource{KernelImagePath: kernelPath, BootArgs: effectiveKernelArgsWithProcessLimit(cfg, guestIP, processLimit)},
 		Drives:     drives,
-		Machine:    machineConfig{VCPUCount: cfg.MicroVMVCPUs, MemSizeMiB: cfg.MicroVMMemoryMiB, SMT: false, CPUTemplate: cfg.MicroVMCPUTemplate},
+		Machine:    machineConfig{VCPUCount: vcpus, MemSizeMiB: memoryMiB, SMT: false, CPUTemplate: cfg.MicroVMCPUTemplate},
 		Vsock:      vsockConfig{VsockID: "agentcy-vsock", GuestCID: 3, UDSPath: vsockUDS},
 	}
 	if strings.TrimSpace(tapName) != "" {
@@ -833,6 +880,14 @@ func buildFirecrackerConfig(cfg *config.Config, kernelPath, rootfsPath, workspac
 		}}
 	}
 	return fc
+}
+
+func effectiveKernelArgsWithProcessLimit(cfg *config.Config, guestIP string, processLimit int) string {
+	args := effectiveKernelArgs(cfg, guestIP)
+	if processLimit > 0 {
+		args += " agentcy.process_limit=" + strconv.Itoa(processLimit)
+	}
+	return args
 }
 
 func effectiveKernelArgs(cfg *config.Config, guestIP string) string {
@@ -1139,7 +1194,7 @@ func (m *Manager) waitForControlPlane(ctx context.Context, inst *instance, timeo
 		}
 		if inst.launcherOnly {
 			if time.Since(inst.startedAt) > 2*time.Second {
-				running, err := firecrackerProcessRunning(inst.id)
+				running, err := m.firecrackerRunning(ctx, inst)
 				if err == nil && !running {
 					return fmt.Errorf("jailed firecracker process exited before its control plane became ready%s%s", inst.jailDiagnostics(), inst.logTailDiagnostics(120))
 				}
@@ -1160,6 +1215,16 @@ func (m *Manager) waitForControlPlane(ctx context.Context, inst *instance, timeo
 		case <-ticker.C:
 		}
 	}
+}
+
+func (m *Manager) firecrackerRunning(ctx context.Context, inst *instance) (bool, error) {
+	if inst == nil {
+		return false, nil
+	}
+	if inst.launcherOnly && m.launcher != nil {
+		return m.launcher.Running(ctx, inst.id)
+	}
+	return firecrackerProcessRunning(inst.id)
 }
 
 // deliverStartupSecrets waits for the guest control plane, then applies the

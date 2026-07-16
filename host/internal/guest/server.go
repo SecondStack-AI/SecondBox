@@ -1,7 +1,6 @@
 package microvmguest
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -24,6 +23,48 @@ import (
 	"agentcy/internal/sandboxlimits"
 	"agentcy/internal/toolexecutor"
 )
+
+const maxCommandOutputStreamBytes = 256 << 10
+
+type commandOutputBuffer struct {
+	value     []byte
+	limit     int
+	truncated bool
+}
+
+func newCommandOutputBuffer(limit int) *commandOutputBuffer {
+	return &commandOutputBuffer{limit: limit}
+}
+
+func (b *commandOutputBuffer) Write(value []byte) (int, error) {
+	written := len(value)
+	remaining := b.limit - len(b.value)
+	if remaining > 0 {
+		if remaining > len(value) {
+			remaining = len(value)
+		}
+		b.value = append(b.value, value[:remaining]...)
+	}
+	if remaining < len(value) {
+		b.truncated = true
+	}
+	return written, nil
+}
+
+func (b *commandOutputBuffer) String() string {
+	if !b.truncated {
+		return string(b.value)
+	}
+	const marker = "\n[output truncated by tool executor]"
+	if b.limit <= len(marker) {
+		return marker[:b.limit]
+	}
+	prefix := b.value
+	if len(prefix)+len(marker) > b.limit {
+		prefix = prefix[:b.limit-len(marker)]
+	}
+	return string(prefix) + marker
+}
 
 const defaultFileTransferMaxBytes int64 = sandboxlimits.FileTransferMaxBytes
 
@@ -487,10 +528,10 @@ func (s Server) executeCommand(ctx context.Context, req toolExecRequest) toolExe
 	if len(env) > 0 {
 		cmd.Env = env
 	}
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := newCommandOutputBuffer(maxCommandOutputStreamBytes)
+	stderr := newCommandOutputBuffer(maxCommandOutputStreamBytes)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	err = cmd.Run()
 	resp := toolExecResponse{
 		Stdout: stdout.String(),
