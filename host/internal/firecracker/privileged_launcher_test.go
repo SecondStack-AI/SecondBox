@@ -383,7 +383,96 @@ func TestPrivilegedLauncherInstallsNetdevSourceGuardBeforeTapReady(t *testing.T)
 	}
 }
 
-func TestPrivilegedLauncherRejectsDuplicateGuestSourceIdentity(t *testing.T) {
+func TestPrivilegedLauncherReclaimsStoppedGuestIdentityOwner(t *testing.T) {
+	cfg := testPrivilegedLauncherConfig(t)
+	server, err := NewPrivilegedLauncherServer(cfg)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	ownedID := "fc-agent-compartment-old"
+	ownedTap := tapNameForInstance(cfg.TapPrefix, ownedID)
+	guestIP := "172.30.0.2"
+	route := TransparentRoute{
+		AgentID:     "agent-1",
+		InstanceID:  ownedID,
+		SourceIP:    guestIP,
+		HTTPPort:    cfg.TransparentHTTPPort,
+		InterfaceID: ownedTap,
+	}
+	if err := server.writeState(privilegedLauncherState{
+		InstanceID:  ownedID,
+		TapName:     ownedTap,
+		GuestIP:     guestIP,
+		GuestMAC:    guestMACForInstance(ownedTap),
+		SourceGuard: true,
+		Started:     true,
+		Route:       &route,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	server.router.routes[ownedID] = route
+	originalProcessRunning := firecrackerProcessRunningFunc
+	firecrackerProcessRunningFunc = func(instanceID string) (bool, error) {
+		if instanceID != ownedID {
+			t.Fatalf("checked unexpected firecracker process %q", instanceID)
+		}
+		return false, nil
+	}
+	t.Cleanup(func() { firecrackerProcessRunningFunc = originalProcessRunning })
+
+	var networkCommands []string
+	server.network.run = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		networkCommands = append(networkCommands, name+" "+strings.Join(args, " "))
+		return nil, nil
+	}
+	var hostCommands []string
+	server.runHost = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		hostCommands = append(hostCommands, name+" "+strings.Join(args, " "))
+		return nil, nil
+	}
+	routeRemoved := false
+	server.router.run = func(_ context.Context, _ string, args ...string) error {
+		if sliceContains(args, "-D") {
+			routeRemoved = true
+		}
+		return nil
+	}
+
+	instanceID := "fc-agent-compartment-new"
+	resp := server.handle(context.Background(), privilegedLauncherRequest{
+		Version: privilegedLauncherProtocolVersion,
+		Op:      "configure_tap",
+		Tap: &TapConfig{
+			AgentID:    "agent-1",
+			InstanceID: instanceID,
+			TapName:    tapNameForInstance(cfg.TapPrefix, instanceID),
+			GuestIP:    guestIP,
+			BridgeName: cfg.BridgeName,
+			BridgeCIDR: cfg.BridgeCIDR,
+			OwnerUID:   cfg.JailerUID,
+		},
+	})
+	if !resp.OK {
+		t.Fatalf("reclaim stopped source owner response=%+v", resp)
+	}
+	if _, err := server.readState(ownedID); !os.IsNotExist(err) {
+		t.Fatalf("stale predecessor state remains: %v", err)
+	}
+	if !routeRemoved {
+		t.Fatal("stale predecessor egress route was not removed")
+	}
+	if !strings.Contains(strings.Join(networkCommands, "\n"), "link delete "+ownedTap) {
+		t.Fatalf("stale predecessor tap was not removed: %v", networkCommands)
+	}
+	oldGuard := launcherSourceGuardChain(ownedID)
+	joinedHostCommands := strings.Join(hostCommands, "\n")
+	if !strings.Contains(joinedHostCommands, "flush chain netdev "+launcherSourceGuardTable+" "+oldGuard) ||
+		!strings.Contains(joinedHostCommands, "delete chain netdev "+launcherSourceGuardTable+" "+oldGuard) {
+		t.Fatalf("stale predecessor source guard was not removed:\n%s", joinedHostCommands)
+	}
+}
+
+func TestPrivilegedLauncherRejectsRunningDuplicateGuestSourceIdentity(t *testing.T) {
 	cfg := testPrivilegedLauncherConfig(t)
 	server, err := NewPrivilegedLauncherServer(cfg)
 	if err != nil {
@@ -397,9 +486,18 @@ func TestPrivilegedLauncherRejectsDuplicateGuestSourceIdentity(t *testing.T) {
 		GuestIP:     "172.30.0.2",
 		GuestMAC:    guestMACForInstance(ownedTap),
 		SourceGuard: true,
+		Started:     true,
 	}); err != nil {
 		t.Fatal(err)
 	}
+	originalProcessRunning := firecrackerProcessRunningFunc
+	firecrackerProcessRunningFunc = func(instanceID string) (bool, error) {
+		if instanceID != ownedID {
+			t.Fatalf("checked unexpected firecracker process %q", instanceID)
+		}
+		return true, nil
+	}
+	t.Cleanup(func() { firecrackerProcessRunningFunc = originalProcessRunning })
 	commands := 0
 	server.network.run = func(context.Context, string, ...string) ([]byte, error) {
 		commands++

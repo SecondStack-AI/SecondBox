@@ -36,6 +36,21 @@ func (r *recordingHostNetworkConfigurer) RemoveTap(context.Context, string) erro
 	return nil
 }
 
+type blockingHostNetworkConfigurer struct {
+	removeStarted chan struct{}
+	allowRemove   chan struct{}
+}
+
+func (b *blockingHostNetworkConfigurer) ConfigureTap(context.Context, TapConfig) error {
+	return nil
+}
+
+func (b *blockingHostNetworkConfigurer) RemoveTap(context.Context, string) error {
+	close(b.removeStarted)
+	<-b.allowRemove
+	return nil
+}
+
 func TestNewInstanceIDIncludesCompartmentSegment(t *testing.T) {
 	id, err := newInstanceID("agent-1", "cmp_abcdef1234567890")
 	if err != nil {
@@ -3565,6 +3580,66 @@ func TestWatchJailedExitReclaimsOnNaturalExit(t *testing.T) {
 	case <-inst.done:
 	default:
 		t.Fatal("done channel not closed after natural exit")
+	}
+}
+
+func TestFinishInstanceRetainsGuestIdentityUntilTapCleanupCompletes(t *testing.T) {
+	const (
+		oldID = "fc-agent-recycle-old"
+		newID = "fc-agent-recycle-new"
+		oldIP = "10.0.0.2"
+	)
+	network := &blockingHostNetworkConfigurer{
+		removeStarted: make(chan struct{}),
+		allowRemove:   make(chan struct{}),
+	}
+	defer func() {
+		select {
+		case <-network.allowRemove:
+		default:
+			close(network.allowRemove)
+		}
+	}()
+	inst := &instance{
+		id:      oldID,
+		tapName: "agfc-recycle",
+		done:    make(chan struct{}),
+	}
+	m := &Manager{
+		cfg:       &config.Config{MicroVMBridgeCIDR: "10.0.0.1/24"},
+		instances: map[string]*instance{oldID: inst},
+		guestIPs:  map[string]string{oldID: oldIP},
+		network:   network,
+	}
+
+	go m.finishInstance(inst)
+	select {
+	case <-network.removeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("tap cleanup did not start")
+	}
+
+	newIP, err := m.reserveGuestIP(newID)
+	if err != nil {
+		t.Fatalf("reserve successor guest IP: %v", err)
+	}
+	if newIP == oldIP {
+		t.Fatalf("recycled guest identity %s before predecessor tap cleanup completed", oldIP)
+	}
+	m.releaseGuestIP(newID)
+
+	close(network.allowRemove)
+	select {
+	case <-inst.done:
+	case <-time.After(time.Second):
+		t.Fatal("instance cleanup did not finish")
+	}
+	recycledIP, err := m.reserveGuestIP(newID)
+	if err != nil {
+		t.Fatalf("reserve reclaimed guest IP: %v", err)
+	}
+	if recycledIP != oldIP {
+		t.Fatalf("guest identity after completed cleanup = %s, want %s", recycledIP, oldIP)
 	}
 }
 

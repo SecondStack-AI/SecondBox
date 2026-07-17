@@ -977,8 +977,11 @@ func (m *Manager) finishInstance(inst *instance) {
 		m.removeInstanceLocked(inst)
 		m.mu.Unlock()
 		m.unregisterSourceBinding(inst.id)
-		m.releaseGuestIP(inst.id)
 		m.cleanupTap(context.Background(), inst.tapName)
+		// Keep the guest identity reserved until the predecessor's tap and source
+		// guard are gone, so a successor cannot recycle the IP into stale launcher
+		// ownership state.
+		m.releaseGuestIP(inst.id)
 		close(inst.done)
 	})
 }

@@ -1073,7 +1073,7 @@ func (s *PrivilegedLauncherServer) configureTap(ctx context.Context, cfg *TapCon
 	if cfg.TapName != wantTap || cfg.BridgeName != s.cfg.BridgeName || cfg.BridgeCIDR != s.cfg.BridgeCIDR || cfg.OwnerUID != s.cfg.JailerUID || !ipWithinCIDR(cfg.GuestIP, s.cfg.BridgeCIDR) {
 		return fmt.Errorf("tap request does not match launcher policy")
 	}
-	if err := s.ensureGuestIdentityAvailable(cfg.InstanceID, cfg.GuestIP, wantMAC); err != nil {
+	if err := s.ensureGuestIdentityAvailable(ctx, cfg.InstanceID, cfg.GuestIP, wantMAC); err != nil {
 		return err
 	}
 	state, err := s.readState(cfg.InstanceID)
@@ -1119,7 +1119,7 @@ func (s *PrivilegedLauncherServer) configureTap(ctx context.Context, cfg *TapCon
 	return nil
 }
 
-func (s *PrivilegedLauncherServer) ensureGuestIdentityAvailable(instanceID, guestIP, guestMAC string) error {
+func (s *PrivilegedLauncherServer) ensureGuestIdentityAvailable(ctx context.Context, instanceID, guestIP, guestMAC string) error {
 	entries, err := os.ReadDir(s.cfg.StateRoot)
 	if err != nil {
 		return err
@@ -1136,8 +1136,23 @@ func (s *PrivilegedLauncherServer) ensureGuestIdentityAvailable(instanceID, gues
 		if err != nil {
 			return err
 		}
-		if state.GuestIP == guestIP || state.GuestMAC == guestMAC {
+		if state.GuestIP != guestIP && state.GuestMAC != guestMAC {
+			continue
+		}
+		running, err := firecrackerProcessRunningFunc(otherID)
+		if err != nil {
+			return fmt.Errorf("inspect guest source identity owner %s: %w", otherID, err)
+		}
+		if running {
 			return fmt.Errorf("guest source identity is already owned by another launcher instance")
+		}
+		if state.Route != nil {
+			if err := s.unregisterRoute(ctx, otherID); err != nil {
+				return fmt.Errorf("reclaim stopped guest source identity owner %s route: %w", otherID, err)
+			}
+		}
+		if err := s.removeTap(ctx, state.TapName); err != nil {
+			return fmt.Errorf("reclaim stopped guest source identity owner %s: %w", otherID, err)
 		}
 	}
 	return nil
