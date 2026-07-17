@@ -398,7 +398,7 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	var victims []*instance
 	m.mu.Lock()
 	for _, inst := range m.instances {
-		if inst == nil || !inst.warmToolVM || inst.reaping {
+		if inst == nil || inst.reaping {
 			continue
 		}
 		inst.reaping = true
@@ -411,7 +411,7 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 		wg.Add(1)
 		go func(inst *instance) {
 			defer wg.Done()
-			m.teardownWarmToolVMContext(ctx, inst)
+			m.teardownManagedVMContext(ctx, inst)
 		}(inst)
 	}
 	go func() {

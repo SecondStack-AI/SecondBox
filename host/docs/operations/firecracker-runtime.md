@@ -244,3 +244,11 @@ For non-root configuration and artifact checks only:
 ```sh
 just verify-microvm-staging --static
 ```
+
+## Restored workspace guest-read qualification
+
+SecondStack full recovery bundles require `AG_BACKUP_REFERENCE_GUEST_FILE_PATH` and `AG_BACKUP_REFERENCE_GUEST_FILE_SHA256` for the reference session compartment. Create the canary inside that compartment before quiescing the source deployment and record the SHA-256 of its exact bytes. The path is relative to `/workspace`; absolute paths, parent traversal, and backslashes are rejected.
+
+After the database, application data, and workspace archive are restored, `restore-drill.sh` stops the recovery Agent Service and runs `agentcy-restore-workspace-verify`. That verifier constructs a new MicroVM manager from the recovered service environment, revalidates the pinned signed kernel/rootfs/shared artifact set, boots an ephemeral tool-executor guest with a new instance identity, reads the canary through the guest control contract, and compares the returned bytes with the manifest digest. A host-side ext4-image checksum does not satisfy this gate.
+
+The restore host therefore needs the same Firecracker or privileged-launcher access, KVM access, signed artifact paths, pinned public key, and jailer configuration as the source Sandbox Host. A checkout with `/dev/kvm` but no Firecracker binary or signed artifact bundle can run the contract tests, but it cannot produce recovery qualification evidence.

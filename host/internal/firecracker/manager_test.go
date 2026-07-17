@@ -1395,6 +1395,27 @@ func TestShutdownReapsWarmToolVMs(t *testing.T) {
 	}
 }
 
+func TestShutdownReapsNonWarmRuntimeVMs(t *testing.T) {
+	m := newWarmToolTestManager(t)
+	inst := &instance{
+		id:            "fc-agent-cmp-session-shutdown",
+		agentID:       "agent",
+		compartmentID: "cmp_session",
+		done:          make(chan struct{}),
+	}
+	m.mu.Lock()
+	m.addInstanceLocked(inst)
+	m.mu.Unlock()
+	if err := m.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+	select {
+	case <-inst.done:
+	default:
+		t.Fatal("shutdown did not reap non-warm runtime instance")
+	}
+}
+
 func TestShutdownWaitsForInflightWarmToolVMWork(t *testing.T) {
 	m := newWarmToolTestManager(t)
 	inst := &instance{

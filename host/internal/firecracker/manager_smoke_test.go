@@ -2,6 +2,7 @@ package microvm
 
 import (
 	"context"
+	"crypto/sha256"
 	"os"
 	"path/filepath"
 	"sort"
@@ -139,6 +140,8 @@ func TestSmokeGeneratedToolExecutorImageReadiness(t *testing.T) {
 		MicroVMSharedImagePath:     sharedImagePath,
 		MicroVMToolRootfsPath:      envOrDefault("AG_MICROVM_TOOL_ROOTFS_PATH", rootfsPath),
 		MicroVMToolSharedImagePath: envOrDefault("AG_MICROVM_TOOL_SHARED_IMAGE_PATH", sharedImagePath),
+		MicroVMPublicKeyPath:       requiredEnv(t, "AG_MICROVM_PUBLIC_KEY"),
+		MicroVMPublicKeySHA256:     requiredEnv(t, "AG_MICROVM_PUBLIC_KEY_SHA256"),
 		MicroVMWorkspaceDir:        filepath.Join(workDir, "workspaces"),
 		MicroVMRunDir:              envOrDefault("AG_MICROVM_SMOKE_RUN_DIR", filepath.Join(workDir, "run")),
 		MicroVMLogDir:              filepath.Join(workDir, "logs"),
@@ -147,6 +150,11 @@ func TestSmokeGeneratedToolExecutorImageReadiness(t *testing.T) {
 		MicroVMVCPUs:               1,
 		MicroVMWorkspaceSizeMiB:    envIntOrDefault("AG_MICROVM_WORKSPACE_SIZE_MIB", 256),
 		MicroVMAllowUnjailed:       true,
+	}
+	rejectedCfg := *cfg
+	rejectedCfg.MicroVMPublicKeySHA256 = strings.Repeat("0", sha256.Size*2)
+	if _, err := New(&rejectedCfg); err == nil || !strings.Contains(err.Error(), "PUBLIC_KEY_SHA256 mismatch") {
+		t.Fatalf("mismatched signed-artifact trust anchor was not rejected: %v", err)
 	}
 	mgr, err := New(cfg)
 	if err != nil {
@@ -371,9 +379,9 @@ func TestSmokeGeneratedToolExecutorImageReadiness(t *testing.T) {
 		t.Fatalf("read remounted workspace after manager restart: resp=%+v err=%v\n%s", continuityResp, err, smokeLogPath(t, continuityLogPath))
 	}
 	if err := restartedManager.Remove(ctx, continuityID); err != nil {
-		t.Fatalf("remove restarted tool executor microVM before isolation check: %v\n%s", err, smokeLogPath(t, continuityLogPath))
+		t.Fatalf("remove continuity tool executor before second-compartment check: %v\n%s", err, smokeLogPath(t, continuityLogPath))
 	}
-
+	continuityID = ""
 	otherID, err := restartedManager.createAndStart(ctx, "0123456789abcdef", runtimemanager.StartOpts{
 		Timezone:      "UTC",
 		CompartmentID: "cmp_smoke_tool_executor_other",
@@ -404,6 +412,41 @@ func TestSmokeGeneratedToolExecutorImageReadiness(t *testing.T) {
 	if isolationResp.Error == "" {
 		t.Fatalf("second compartment read first compartment workspace file: resp=%+v", isolationResp)
 	}
+	if err := restartedManager.Remove(ctx, otherID); err != nil {
+		t.Fatalf("remove isolated second-compartment executor before warm-reuse check: %v\n%s", err, smokeLogPath(t, otherLogPath))
+	}
+	restartedManager.cfg.MicroVMToolVMIdleTTL = 100 * time.Millisecond
+	warmOpts := runtimemanager.StartOpts{Timezone: "UTC"}
+	warmID, warmWrite, err := restartedManager.ExecuteToolLeased(ctx, "0123456789abcdef", "cmp_smoke_warm_reuse", warmOpts, ToolExecRequest{
+		Operation: ToolOpWriteFile,
+		Path:      "warm-ready.txt",
+		Content:   "warm-ready",
+	})
+	if err != nil || warmWrite.Error != "" {
+		t.Fatalf("write through warm tool executor: resp=%+v err=%v\n%s", warmWrite, err, latestSmokeLog(t, workDir))
+	}
+	reusedID, warmRead, err := restartedManager.ExecuteToolLeased(ctx, "0123456789abcdef", "cmp_smoke_warm_reuse", warmOpts, ToolExecRequest{
+		Operation: ToolOpReadFile,
+		Path:      "warm-ready.txt",
+	})
+	if err != nil || warmRead.Error != "" || warmRead.Content != "warm-ready" || reusedID != warmID {
+		t.Fatalf("warm executor was not reused: first=%s second=%s resp=%+v err=%v\n%s", warmID, reusedID, warmRead, err, latestSmokeLog(t, workDir))
+	}
+	if reaped := restartedManager.sweepIdleToolVMs(time.Now().Add(time.Second)); reaped != 1 {
+		t.Fatalf("idle warm executor reap count = %d, want 1", reaped)
+	}
+	waitForSmoke(t, 30*time.Second, func() bool {
+		return restartedManager.lookup(warmID) == nil
+	}, func() string {
+		return "idle warm executor remained active\n" + latestSmokeLog(t, workDir)
+	})
+	remountedID, remountedRead, err := restartedManager.ExecuteToolLeased(ctx, "0123456789abcdef", "cmp_smoke_warm_reuse", warmOpts, ToolExecRequest{
+		Operation: ToolOpReadFile,
+		Path:      "warm-ready.txt",
+	})
+	if err != nil || remountedRead.Error != "" || remountedRead.Content != "warm-ready" || remountedID == warmID {
+		t.Fatalf("idle-stop workspace remount failed: first=%s remounted=%s resp=%+v err=%v\n%s", warmID, remountedID, remountedRead, err, latestSmokeLog(t, workDir))
+	}
 }
 
 func TestSmokeGoldenSnapshotCreateGeneratedImage(t *testing.T) {
@@ -416,6 +459,8 @@ func TestSmokeGoldenSnapshotCreateGeneratedImage(t *testing.T) {
 		MicroVMKernelPath:       requiredEnv(t, "AG_MICROVM_KERNEL_PATH"),
 		MicroVMRootfsPath:       requiredEnv(t, "AG_MICROVM_ROOTFS_PATH"),
 		MicroVMSharedImagePath:  os.Getenv("AG_MICROVM_SHARED_IMAGE_PATH"),
+		MicroVMPublicKeyPath:    requiredEnv(t, "AG_MICROVM_PUBLIC_KEY"),
+		MicroVMPublicKeySHA256:  requiredEnv(t, "AG_MICROVM_PUBLIC_KEY_SHA256"),
 		MicroVMWorkspaceDir:     filepath.Join(workDir, "workspaces"),
 		MicroVMRunDir:           filepath.Join(workDir, "run"),
 		MicroVMLogDir:           filepath.Join(workDir, "logs"),
@@ -477,6 +522,8 @@ func TestSmokeJailedTapAndTransparentRouteGeneratedImage(t *testing.T) {
 		MicroVMKernelPath:              requiredEnv(t, "AG_MICROVM_KERNEL_PATH"),
 		MicroVMRootfsPath:              requiredEnv(t, "AG_MICROVM_ROOTFS_PATH"),
 		MicroVMSharedImagePath:         os.Getenv("AG_MICROVM_SHARED_IMAGE_PATH"),
+		MicroVMPublicKeyPath:           requiredEnv(t, "AG_MICROVM_PUBLIC_KEY"),
+		MicroVMPublicKeySHA256:         requiredEnv(t, "AG_MICROVM_PUBLIC_KEY_SHA256"),
 		MicroVMWorkspaceDir:            filepath.Join(workDir, "workspaces"),
 		MicroVMRunDir:                  filepath.Join(workDir, "run"),
 		MicroVMLogDir:                  filepath.Join(workDir, "logs"),
@@ -543,6 +590,31 @@ func TestSmokeJailedTapAndTransparentRouteGeneratedImage(t *testing.T) {
 		return err == nil && hb.Healthy
 	}, func() string {
 		return "heartbeat error: " + errorString(heartbeatErr) + "\n" + smokeLogPath(t, logPath)
+	})
+
+	secondID, err := mgr.createAndStart(ctx, "0123456789abcdef", runtimemanager.StartOpts{
+		Timezone:      "UTC",
+		CompartmentID: "cmp_smoke_jailed_concurrent",
+		ProxyEgress: &runtimemanager.ProxyEgressConfig{
+			Enabled:             true,
+			TransparentHTTPPort: cfg.EgressProxyTransparentHTTPPort,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start concurrent jailed compartment: %v\n%s\n%s", err, smokeJailerConfig(cfg), latestSmokeLog(t, workDir))
+	}
+	defer mgr.Remove(context.Background(), secondID)
+	first := mgr.lookup(instanceID)
+	second := mgr.lookup(secondID)
+	if first == nil || second == nil || first.id == second.id || first.tapName == second.tapName || first.guestIP == second.guestIP || first.workspacePath == second.workspacePath {
+		t.Fatalf("concurrent jailed compartments are not isolated: first=%+v second=%+v", first, second)
+	}
+	waitForSmoke(t, 45*time.Second, func() bool {
+		firstHeartbeat, firstErr := mgr.Heartbeat(ctx, instanceID)
+		secondHeartbeat, secondErr := mgr.Heartbeat(ctx, secondID)
+		return firstErr == nil && secondErr == nil && firstHeartbeat.Healthy && secondHeartbeat.Healthy
+	}, func() string {
+		return "concurrent jailed compartments did not remain healthy\n" + smokeLogPath(t, logPath) + "\n" + smokeLogPath(t, second.logPath)
 	})
 }
 

@@ -2488,10 +2488,6 @@ func (s *PrivilegedLauncherServer) removeManagerSocketAliases(instanceID string)
 	return joined
 }
 
-func (s *PrivilegedLauncherServer) jailerArgs(instanceID string) []string {
-	return s.jailerArgsWithMemory(instanceID, s.cfg.MemoryMiB)
-}
-
 func (s *PrivilegedLauncherServer) jailerArgsWithMemory(instanceID string, memoryMiB int) []string {
 	args := []string{
 		"--id", instanceID,

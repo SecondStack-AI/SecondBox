@@ -489,10 +489,6 @@ func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, 
 	}, nil
 }
 
-func (m *Manager) jailerArgs(instanceID string) []string {
-	return m.jailerArgsWithMemory(instanceID, m.cfg.MicroVMMemoryMiB)
-}
-
 func (m *Manager) jailerArgsWithMemory(instanceID string, memoryMiB int) []string {
 	args := []string{
 		"--id", instanceID,

@@ -8,6 +8,7 @@ RUN go mod download && go mod verify
 COPY . .
 
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o /out/agentcy ./cmd/agentcy \
+	&& CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o /out/agentcy-mcp-cutover ./cmd/agentcy-mcp-cutover \
     && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o /out/agentcy-egress-proxy ./cmd/agentcy-egress-proxy \
     && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o /out/agentcy-vmlauncher ./cmd/agentcy-vmlauncher
 
@@ -37,6 +38,7 @@ RUN apt-get update \
     && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
 
 COPY --from=go-builder /out/agentcy /usr/local/bin/agentcy
+COPY --from=go-builder /out/agentcy-mcp-cutover /usr/local/bin/agentcy-mcp-cutover
 COPY --from=harness-builder --chown=10001:10001 /src/agent/package.json /opt/agent-harness/package.json
 COPY --from=harness-builder --chown=10001:10001 /src/agent/package-lock.json /opt/agent-harness/package-lock.json
 COPY --from=harness-builder --chown=10001:10001 /src/agent/node_modules /opt/agent-harness/node_modules

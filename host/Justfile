@@ -531,6 +531,7 @@ data-fix-perms:
 build:
     mkdir -p bin
     go build -o bin/agentcy ./cmd/agentcy
+    go build -o bin/agentcy-mcp-cutover ./cmd/agentcy-mcp-cutover
     go build -o bin/agentcy-backup-verify ./cmd/agentcy-backup-verify
 
 # Reproduce the exact Linux artifacts used by backup provenance and clean-host restore.

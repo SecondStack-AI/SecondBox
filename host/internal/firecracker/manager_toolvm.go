@@ -293,6 +293,10 @@ func (m *Manager) teardownWarmToolVM(inst *instance) {
 }
 
 func (m *Manager) teardownWarmToolVMContext(ctx context.Context, inst *instance) {
+	m.teardownManagedVMContext(ctx, inst)
+}
+
+func (m *Manager) teardownManagedVMContext(ctx context.Context, inst *instance) {
 	if inst == nil {
 		return
 	}
@@ -302,7 +306,7 @@ func (m *Manager) teardownWarmToolVMContext(ctx context.Context, inst *instance)
 		freezeWorkspace = m.freezeWorkspace
 	}
 	if _, err := freezeWorkspace(freezeCtx, inst.id); err != nil {
-		slog.Warn("failed to freeze warm tool microVM before teardown", "agent", inst.agentID, "compartment", inst.compartmentID, "instance", inst.id, "error", err)
+		slog.Warn("failed to freeze microVM workspace before teardown", "agent", inst.agentID, "compartment", inst.compartmentID, "instance", inst.id, "warmToolVM", inst.warmToolVM, "error", err)
 	}
 	cancelFreeze()
 	removeCtx, cancelRemove := context.WithTimeout(ctx, 30*time.Second)
@@ -312,7 +316,7 @@ func (m *Manager) teardownWarmToolVMContext(ctx context.Context, inst *instance)
 		removeInstance = m.removeInstance
 	}
 	if err := removeInstance(removeCtx, inst.id); err != nil {
-		slog.Warn("failed to tear down warm tool microVM", "agent", inst.agentID, "compartment", inst.compartmentID, "instance", inst.id, "error", err)
+		slog.Warn("failed to tear down microVM", "agent", inst.agentID, "compartment", inst.compartmentID, "instance", inst.id, "warmToolVM", inst.warmToolVM, "error", err)
 		var killErr error
 		if m.launcher != nil {
 			escalateCtx, cancelEscalate := context.WithTimeout(context.Background(), 10*time.Second)
@@ -322,9 +326,9 @@ func (m *Manager) teardownWarmToolVMContext(ctx context.Context, inst *instance)
 			killErr = signalFirecrackerByIDFunc(inst.id, syscall.SIGKILL)
 		}
 		if killErr != nil {
-			slog.Error("failed to escalate warm tool microVM teardown", "agent", inst.agentID, "compartment", inst.compartmentID, "instance", inst.id, "error", killErr)
+			slog.Error("failed to escalate microVM teardown", "agent", inst.agentID, "compartment", inst.compartmentID, "instance", inst.id, "warmToolVM", inst.warmToolVM, "error", killErr)
 		} else {
-			slog.Warn("escalated warm tool microVM teardown", "agent", inst.agentID, "compartment", inst.compartmentID, "instance", inst.id, "privilegedLauncher", m.launcher != nil)
+			slog.Warn("escalated microVM teardown", "agent", inst.agentID, "compartment", inst.compartmentID, "instance", inst.id, "warmToolVM", inst.warmToolVM, "privilegedLauncher", m.launcher != nil)
 		}
 	}
 }
