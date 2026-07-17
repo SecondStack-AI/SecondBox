@@ -75,18 +75,36 @@ func TestBuildPrivilegedLaunchRequestMatchesLauncherValidation(t *testing.T) {
 	}
 	tapName := tapNameForInstance("agfc", instanceID)
 	req := buildPrivilegedLaunchRequest(instanceID, agentID, compartmentID,
-		microVMImageSelection{RootfsPath: rootfsPath},
+		microVMImageSelection{RootfsPath: rootfsPath, SharedImagePath: filepath.Join(runRoot, instanceID, sharedImageName)},
 		microVMImageSelection{RootfsPath: rootfsImage, SharedImagePath: sharedImage},
-		workspacePath, tapName, "172.30.0.2")
+		workspacePath, tapName, "172.30.0.2",
+		&runtimemanager.SandboxRuntimePolicy{VCPUs: 1, MemoryMiB: 512, WorkspaceSizeMiB: 1024, ProcessLimit: 32, WorkspaceWritable: true, SharedReadOnly: true})
 	server := &PrivilegedLauncherServer{cfg: PrivilegedLauncherConfig{
-		RunRoot:       runRoot,
-		WorkspaceRoot: workspaceRoot,
-		ArtifactRoot:  artifactRoot,
-		TapPrefix:     "agfc",
-		BridgeCIDR:    "172.30.0.0/24",
+		RunRoot:          runRoot,
+		WorkspaceRoot:    workspaceRoot,
+		ArtifactRoot:     artifactRoot,
+		TapPrefix:        "agfc",
+		BridgeCIDR:       "172.30.0.0/24",
+		VCPUs:            2,
+		MemoryMiB:        1024,
+		WorkspaceSizeMiB: 2048,
 	}}
 	if err := server.validateLaunchRequest(req); err != nil {
 		t.Fatalf("validateLaunchRequest: %v", err)
+	}
+	if req.SharedImage != sharedImage {
+		t.Fatalf("shared image = %q, want signed source artifact %q", req.SharedImage, sharedImage)
+	}
+}
+
+func TestBuildPrivilegedLaunchRequestOmitsPolicyDisabledSharedImage(t *testing.T) {
+	req := buildPrivilegedLaunchRequest("fc-agent-1-cmp-a-123", "agent-1", "cmp-a",
+		microVMImageSelection{RootfsPath: "/run/rootfs.ext4", SharedImagePath: "/run/shared.img"},
+		microVMImageSelection{RootfsPath: "/artifacts/rootfs.ext4", SharedImagePath: "/artifacts/shared.img"},
+		"/workspaces/agent-1/cmp-a.workspace.ext4", "", "",
+		&runtimemanager.SandboxRuntimePolicy{VCPUs: 1, MemoryMiB: 512, WorkspaceSizeMiB: 1024, ProcessLimit: 32, WorkspaceWritable: true})
+	if req.SharedImage != "" {
+		t.Fatalf("shared image = %q, want omitted by sandbox policy", req.SharedImage)
 	}
 }
 

@@ -816,9 +816,7 @@ func (m *Manager) createAndStartCold(ctx context.Context, agentID, compartmentID
 	var socketPath, vsockPath, jailRoot string
 	launcherOnly := m.launcher != nil
 	if launcherOnly {
-		request := buildPrivilegedLaunchRequest(id, agentID, compartmentID, launchImage, image, workspacePath, tapName, guestIP)
-		request.SharedImage = sharedImagePath
-		request.SandboxPolicy = opts.SandboxPolicy
+		request := buildPrivilegedLaunchRequest(id, agentID, compartmentID, launchImage, image, workspacePath, tapName, guestIP, opts.SandboxPolicy)
 		resp, launchErr := m.launcher.Launch(setupCtx, request)
 		if launchErr != nil {
 			m.cleanupTap(setupCtx, tapName)

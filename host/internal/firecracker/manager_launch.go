@@ -26,7 +26,11 @@ import (
 	"time"
 )
 
-func buildPrivilegedLaunchRequest(instanceID, agentID, compartmentID string, launchImage, sourceImage microVMImageSelection, workspacePath, tapName, guestIP string) privilegedLaunchRequest {
+func buildPrivilegedLaunchRequest(instanceID, agentID, compartmentID string, launchImage, sourceImage microVMImageSelection, workspacePath, tapName, guestIP string, policy *runtimemanager.SandboxRuntimePolicy) privilegedLaunchRequest {
+	sharedImage := sourceImage.SharedImagePath
+	if policy != nil && !policy.SharedReadOnly {
+		sharedImage = ""
+	}
 	return privilegedLaunchRequest{
 		InstanceID:    instanceID,
 		AgentID:       agentID,
@@ -34,9 +38,10 @@ func buildPrivilegedLaunchRequest(instanceID, agentID, compartmentID string, lau
 		RootfsPath:    launchImage.RootfsPath,
 		RootfsImage:   sourceImage.RootfsPath,
 		WorkspacePath: workspacePath,
-		SharedImage:   sourceImage.SharedImagePath,
+		SharedImage:   sharedImage,
 		TapName:       tapName,
 		GuestIP:       guestIP,
+		SandboxPolicy: policy,
 	}
 }
 
