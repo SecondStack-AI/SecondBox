@@ -83,7 +83,7 @@ func TestCheckUnixSocketPath(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := checkUnixSocketPath("test", tt.path)
+			err := checkUnixSocketPath("test", tt.path, "AG_MICROVM_RUN_DIR")
 			if tt.wantErr && err == nil {
 				t.Fatalf("expected error for path of len %d", len(tt.path))
 			}

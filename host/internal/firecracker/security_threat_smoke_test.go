@@ -15,6 +15,20 @@ import (
 	"agentcy/internal/runtimemanager"
 )
 
+func TestMicroVMInitRemovesForbiddenDeviceNodesBeforeEntrypoint(t *testing.T) {
+	initScript, err := os.ReadFile("../../scripts/microvm-image/init")
+	if err != nil {
+		t.Fatalf("read microVM init: %v", err)
+	}
+	content := string(initScript)
+	devtmpfs := strings.Index(content, "mount -t devtmpfs devtmpfs /dev")
+	restrictDevices := strings.Index(content, "rm -f /dev/mem /dev/kmem /dev/port /dev/kvm /dev/net/tun")
+	guestEntrypoint := strings.Index(content, "exec /usr/local/bin/agentcy-microvm-entrypoint")
+	if devtmpfs < 0 || restrictDevices <= devtmpfs || guestEntrypoint <= restrictDevices {
+		t.Fatalf("microVM init must remove raw memory, KVM, and TUN nodes after devtmpfs and before the guest entrypoint")
+	}
+}
+
 func TestThreatModelJailedGuestEscapeAndResourceExhaustion(t *testing.T) {
 	if os.Getenv("AG_MICROVM_THREAT_SMOKE") != "1" {
 		t.Skip("set AG_MICROVM_THREAT_SMOKE=1 to run hostile workloads in a jailed KVM guest")
@@ -83,10 +97,12 @@ func TestThreatModelJailedGuestEscapeAndResourceExhaustion(t *testing.T) {
 		Operation: ToolOpExec,
 		Command:   "sh",
 		Args: []string{"-ceu", `
-test ! -e /dev/kvm
-test ! -e /dev/mem
-test ! -e /dev/net/tun
-test ! -e "$1"
+for forbidden in /dev/kvm /dev/mem /dev/net/tun "$1"; do
+	if test -e "$forbidden"; then
+		printf 'unexpected-device-or-host-path:%s' "$forbidden"
+		exit 42
+	fi
+done
 ln -s /etc/passwd escape-link
 if mknod fake-device c 1 1 2>/dev/null; then printf created; else printf denied; fi
 `, "threat-probe", hostSentinel},

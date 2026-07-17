@@ -2232,7 +2232,11 @@ func TestRegisterSourceBindingCleansUpWhenTransparentRouteFails(t *testing.T) {
 }
 
 func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
-	dir := t.TempDir()
+	dir, err := os.MkdirTemp("", "ag-jail-unit-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	write := func(path, text string) string {
 		t.Helper()
 		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
@@ -2301,6 +2305,38 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 	}
 	if !os.SameFile(workspaceInfo, stagedWorkspaceInfo) {
 		t.Fatal("workspace must be linked into the jail, not copied")
+	}
+}
+
+func TestPrepareJailedLaunchRejectsUnixSocketPathOverflowBeforeStaging(t *testing.T) {
+	base := filepath.Join(os.TempDir(), strings.Repeat("j", maxUnixSocketPathLen))
+	m := &Manager{cfg: &config.Config{
+		FirecrackerPath:            "/usr/local/bin/firecracker",
+		MicroVMJailerChrootBaseDir: base,
+		MicroVMJailerUID:           os.Getuid(),
+		MicroVMJailerGID:           os.Getgid(),
+		MicroVMAllowUnjailed:       false,
+	}}
+
+	_, err := m.prepareLaunch(
+		context.Background(),
+		"fc-agent-123",
+		t.TempDir(),
+		"missing-kernel",
+		"missing-rootfs",
+		"missing-workspace",
+		"",
+		"",
+		"",
+	)
+	if err == nil || !strings.Contains(err.Error(), "exceeding the unix socket limit") {
+		t.Fatalf("overlong jailed socket path error = %v", err)
+	}
+	if !strings.Contains(err.Error(), "AG_MICROVM_JAILER_CHROOT_BASE_DIR") {
+		t.Fatalf("overlong jailed socket path did not identify its setting: %v", err)
+	}
+	if _, statErr := os.Stat(m.jailerRoot("fc-agent-123")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("overlong jailed socket path staged a partial jail: %v", statErr)
 	}
 }
 

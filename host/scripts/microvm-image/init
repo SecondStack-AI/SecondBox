@@ -4,6 +4,12 @@ set -eu
 mountpoint -q /proc || mount -t proc proc /proc
 mountpoint -q /sys || mount -t sysfs sysfs /sys
 mountpoint -q /dev || mount -t devtmpfs devtmpfs /dev
+# The tool guest never needs raw memory, KVM, or TUN device access. devtmpfs
+# creates some of these nodes from the guest kernel's built-in device set even
+# though Firecracker did not pass the corresponding host devices through.
+# Remove them before accepting any vsock tool request so the guest boundary is
+# explicit and remains testable from inside the VM.
+rm -f /dev/mem /dev/kmem /dev/port /dev/kvm /dev/net/tun
 mkdir -p /dev/shm
 mountpoint -q /dev/shm || mount -t tmpfs -o rw,nosuid,nodev,mode=1777,size=512m tmpfs /dev/shm
 

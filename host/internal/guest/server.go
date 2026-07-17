@@ -2,6 +2,7 @@ package microvmguest
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -176,11 +178,22 @@ func (s Server) handleWorkspaceList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	entries, err := os.ReadDir(target)
+	directory, err := openWorkspaceTarget(root, target, unix.O_RDONLY|unix.O_DIRECTORY)
 	if err != nil {
+		if errors.Is(err, errUnsafeWorkspacePath) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeError(w, http.StatusNotFound, "workspace path not found")
 		return
 	}
+	defer directory.Close()
+	entries, err := directory.ReadDir(-1)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	type entry struct {
 		Path  string `json:"path"`
 		Type  string `json:"type"`
@@ -218,14 +231,24 @@ func (s Server) handleWorkspaceRead(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	_, target, err := s.workspacePath(r.URL.Query().Get("path"))
+	root, target, err := s.workspacePath(r.URL.Query().Get("path"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	info, err := os.Lstat(target)
+	f, err := openWorkspaceTarget(root, target, unix.O_RDONLY|unix.O_NONBLOCK)
 	if err != nil {
+		if errors.Is(err, errUnsafeWorkspacePath) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeError(w, http.StatusNotFound, "workspace file not found")
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if !info.Mode().IsRegular() {
@@ -241,12 +264,6 @@ func (s Server) handleWorkspaceRead(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("workspace file size %d bytes exceeds file transfer limit of %d bytes", info.Size(), maxBytes))
 		return
 	}
-	f, err := os.Open(target)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "workspace file not found")
-		return
-	}
-	defer f.Close()
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 	_, _ = io.Copy(w, f)
@@ -267,24 +284,36 @@ func (s Server) handleWorkspaceWrite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	dir := filepath.Dir(target)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(target)+".*.tmp")
+	parent, err := openWorkspaceParent(root, target, true)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		status := http.StatusInternalServerError
+		if errors.Is(err, errUnsafeWorkspacePath) {
+			status = http.StatusBadRequest
+		}
+		writeError(w, status, err.Error())
 		return
 	}
-	tmpName := tmp.Name()
+	defer parent.close()
+	tmp, tmpName, err := createWorkspaceTemp(parent)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, errUnsafeWorkspacePath) {
+			status = http.StatusBadRequest
+		}
+		writeError(w, status, err.Error())
+		return
+	}
 	cleanup := true
 	defer func() {
 		_ = tmp.Close()
 		if cleanup {
-			_ = os.Remove(tmpName)
+			unlinkWorkspaceTemp(parent, tmpName)
 		}
 	}()
+	if err := tmp.Chmod(0o644); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
 	hash := sha256.New()
 	counter := &countingLimitReader{r: r.Body, max: maxBytes}
@@ -311,12 +340,12 @@ func (s Server) handleWorkspaceWrite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := os.Rename(tmpName, target); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if err := fsyncDirTree(root, dir); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if err := commitWorkspaceTemp(parent, tmpName); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, errUnsafeWorkspacePath) {
+			status = http.StatusBadRequest
+		}
+		writeError(w, status, err.Error())
 		return
 	}
 	cleanup = false
@@ -603,24 +632,29 @@ func (s Server) readToolRuntimeEnv() (map[string]string, error) {
 }
 
 func (s Server) executeReadFile(req toolExecRequest, buffer bool) toolExecResponse {
-	_, target, err := s.toolWorkspacePath(req.Path)
+	root, target, err := s.toolWorkspacePath(req.Path)
 	if err != nil {
 		return toolExecResponse{Error: err.Error()}
 	}
-	info, err := os.Stat(target)
+	file, err := openWorkspaceTarget(root, target, unix.O_RDONLY|unix.O_NONBLOCK)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return toolExecResponse{Error: err.Error()}
 		}
 		return toolExecResponse{Error: "workspace file not found"}
 	}
-	if info.IsDir() {
-		return toolExecResponse{Error: "workspace path is a directory"}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return toolExecResponse{Error: err.Error()}
+	}
+	if !info.Mode().IsRegular() {
+		return toolExecResponse{Error: "workspace path is not a regular file"}
 	}
 	if info.Size() > sandboxlimits.ToolReadRawBytes {
 		return toolExecResponse{Error: fmt.Sprintf("workspace file exceeds read limit of %d bytes", sandboxlimits.ToolReadRawBytes)}
 	}
-	data, err := os.ReadFile(target)
+	data, err := io.ReadAll(file)
 	if err != nil {
 		return toolExecResponse{Error: err.Error()}
 	}
@@ -661,33 +695,38 @@ func (s Server) executeWriteFile(req toolExecRequest) toolExecResponse {
 	} else {
 		data = []byte(req.Content)
 	}
-	dir := filepath.Dir(target)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return toolExecResponse{Error: err.Error()}
-	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(target)+".*.tmp")
+	parent, err := openWorkspaceParent(root, target, true)
 	if err != nil {
 		return toolExecResponse{Error: err.Error()}
 	}
-	tmpName := tmp.Name()
-	if err := tmp.Chmod(0o644); err != nil {
-		return toolExecResponse{Error: errors.Join(err, tmp.Close(), os.Remove(tmpName)).Error()}
-	}
-	if _, err := tmp.Write(data); err != nil {
-		return toolExecResponse{Error: errors.Join(err, tmp.Close(), os.Remove(tmpName)).Error()}
-	}
-	if err := tmp.Sync(); err != nil {
-		return toolExecResponse{Error: errors.Join(err, tmp.Close(), os.Remove(tmpName)).Error()}
-	}
-	if err := tmp.Close(); err != nil {
-		return toolExecResponse{Error: errors.Join(err, os.Remove(tmpName)).Error()}
-	}
-	if err := os.Rename(tmpName, target); err != nil {
-		return toolExecResponse{Error: errors.Join(err, os.Remove(tmpName)).Error()}
-	}
-	if err := fsyncDirTree(root, dir); err != nil {
+	defer parent.close()
+	tmp, tmpName, err := createWorkspaceTemp(parent)
+	if err != nil {
 		return toolExecResponse{Error: err.Error()}
 	}
+	cleanup := true
+	defer func() {
+		_ = tmp.Close()
+		if cleanup {
+			unlinkWorkspaceTemp(parent, tmpName)
+		}
+	}()
+	if err := tmp.Chmod(0o644); err != nil {
+		return toolExecResponse{Error: err.Error()}
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return toolExecResponse{Error: err.Error()}
+	}
+	if err := tmp.Sync(); err != nil {
+		return toolExecResponse{Error: err.Error()}
+	}
+	if err := tmp.Close(); err != nil {
+		return toolExecResponse{Error: err.Error()}
+	}
+	if err := commitWorkspaceTemp(parent, tmpName); err != nil {
+		return toolExecResponse{Error: err.Error()}
+	}
+	cleanup = false
 	return toolExecResponse{}
 }
 
@@ -696,27 +735,37 @@ func (s Server) executeStat(req toolExecRequest) toolExecResponse {
 	if err != nil {
 		return toolExecResponse{Error: err.Error()}
 	}
-	info, err := os.Stat(target)
+	file, err := openWorkspaceTarget(root, target, unix.O_PATH)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return toolExecResponse{Error: err.Error()}
 		}
 		return toolExecResponse{Error: "workspace path not found"}
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return toolExecResponse{Error: err.Error()}
 	}
 	return toolExecResponse{Stat: fileStatMap(root, target, info)}
 }
 
 func (s Server) executeReaddir(req toolExecRequest) toolExecResponse {
-	_, target, err := s.toolWorkspacePath(req.Path)
+	root, target, err := s.toolWorkspacePath(req.Path)
 	if err != nil {
 		return toolExecResponse{Error: err.Error()}
 	}
-	entries, err := os.ReadDir(target)
+	directory, err := openWorkspaceTarget(root, target, unix.O_RDONLY|unix.O_DIRECTORY)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return toolExecResponse{Error: err.Error()}
 		}
 		return toolExecResponse{Error: "workspace path not found"}
+	}
+	defer directory.Close()
+	entries, err := directory.ReadDir(-1)
+	if err != nil {
+		return toolExecResponse{Error: err.Error()}
 	}
 	resp := toolExecResponse{}
 	for _, entry := range entries {
@@ -739,51 +788,78 @@ func (s Server) executeReaddir(req toolExecRequest) toolExecResponse {
 }
 
 func (s Server) executeExists(req toolExecRequest) toolExecResponse {
-	_, target, err := s.toolWorkspacePath(req.Path)
+	root, target, err := s.toolWorkspacePath(req.Path)
 	if err != nil {
 		return toolExecResponse{Error: err.Error()}
 	}
-	_, err = os.Stat(target)
-	exists := err == nil
-	if err != nil && !os.IsNotExist(err) {
+	file, err := openWorkspaceTarget(root, target, unix.O_PATH)
+	if os.IsNotExist(err) {
+		exists := false
+		return toolExecResponse{Exists: &exists}
+	}
+	if err != nil {
 		return toolExecResponse{Error: err.Error()}
 	}
+	_ = file.Close()
+	exists := true
 	return toolExecResponse{Exists: &exists}
 }
 
 func (s Server) executeMkdir(req toolExecRequest) toolExecResponse {
-	_, target, err := s.toolWorkspacePath(req.Path)
+	root, target, err := s.toolWorkspacePath(req.Path)
 	if err != nil {
 		return toolExecResponse{Error: err.Error()}
 	}
 	if req.Recursive {
-		err = os.MkdirAll(target, 0o755)
-	} else {
-		err = os.Mkdir(target, 0o755)
+		directory, openErr := openOrCreateWorkspaceDirectory(root, target)
+		if openErr != nil {
+			return toolExecResponse{Error: openErr.Error()}
+		}
+		if closeErr := directory.Close(); closeErr != nil {
+			return toolExecResponse{Error: closeErr.Error()}
+		}
+		return toolExecResponse{}
 	}
+	parent, err := openWorkspaceParent(root, target, false)
 	if err != nil {
+		return toolExecResponse{Error: err.Error()}
+	}
+	defer parent.close()
+	if err := rejectWorkspaceSymlinkAt(parent.parentFD, parent.base); err != nil {
+		return toolExecResponse{Error: err.Error()}
+	}
+	if err := unix.Mkdirat(parent.parentFD, parent.base, 0o755); err != nil {
+		return toolExecResponse{Error: err.Error()}
+	}
+	if err := unix.Fsync(parent.parentFD); err != nil {
 		return toolExecResponse{Error: err.Error()}
 	}
 	return toolExecResponse{}
 }
 
 func (s Server) executeRm(req toolExecRequest) toolExecResponse {
-	_, target, err := s.toolWorkspacePath(req.Path)
+	root, target, err := s.toolWorkspacePath(req.Path)
 	if err != nil {
 		return toolExecResponse{Error: err.Error()}
 	}
-	if target == s.workspaceRoot() {
+	if target == root {
 		return toolExecResponse{Error: "refusing to remove workspace root"}
 	}
-	if req.Recursive {
-		err = os.RemoveAll(target)
-	} else {
-		err = os.Remove(target)
-	}
+	parent, err := openWorkspaceParent(root, target, false)
 	if err != nil {
 		if req.Force && os.IsNotExist(err) {
 			return toolExecResponse{}
 		}
+		return toolExecResponse{Error: err.Error()}
+	}
+	defer parent.close()
+	if err := removeWorkspaceEntryAt(parent.parentFD, parent.base, req.Recursive); err != nil {
+		if req.Force && os.IsNotExist(err) {
+			return toolExecResponse{}
+		}
+		return toolExecResponse{Error: err.Error()}
+	}
+	if err := unix.Fsync(parent.parentFD); err != nil {
 		return toolExecResponse{Error: err.Error()}
 	}
 	return toolExecResponse{}
@@ -1116,6 +1192,7 @@ func fileTransferLimitFromQuery(r *http.Request, defaultLimit int64) (int64, err
 }
 
 var errTransferTooLarge = errors.New("workspace transfer too large")
+var errUnsafeWorkspacePath = errors.New("workspace path contains a symlink or escapes root")
 
 type countingLimitReader struct {
 	r   io.Reader
@@ -1139,35 +1216,6 @@ func (r *countingLimitReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func fsyncDir(path string) error {
-	dir, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	if err := dir.Sync(); err != nil {
-		return errors.Join(err, dir.Close())
-	}
-	return dir.Close()
-}
-
-func fsyncDirTree(root, path string) error {
-	root = filepath.Clean(root)
-	path = filepath.Clean(path)
-	rel, err := filepath.Rel(root, path)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return errors.New("workspace sync path escapes root")
-	}
-	for {
-		if err := fsyncDir(path); err != nil {
-			return err
-		}
-		if path == root {
-			return nil
-		}
-		path = filepath.Dir(path)
-	}
-}
-
 func (s Server) workspacePath(raw string) (string, string, error) {
 	root := s.workspaceRoot()
 	if hasParentSegment(raw) {
@@ -1183,6 +1231,298 @@ func (s Server) workspacePath(raw string) (string, string, error) {
 		return "", "", fmt.Errorf("workspace path escapes root")
 	}
 	return root, target, nil
+}
+
+type workspaceParent struct {
+	rootFD   int
+	parentFD int
+	base     string
+}
+
+func (p *workspaceParent) close() {
+	if p == nil {
+		return
+	}
+	if p.parentFD >= 0 && p.parentFD != p.rootFD {
+		_ = unix.Close(p.parentFD)
+	}
+	if p.rootFD >= 0 {
+		_ = unix.Close(p.rootFD)
+	}
+}
+
+func openWorkspaceRoot(root string) (int, error) {
+	fd, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return -1, normalizeWorkspaceOpenError(err)
+	}
+	return fd, nil
+}
+
+func workspaceRelativePath(root, target string) (string, error) {
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", errUnsafeWorkspacePath
+	}
+	return rel, nil
+}
+
+func workspacePathParts(rel string) ([]string, error) {
+	if rel == "." {
+		return nil, nil
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return nil, errUnsafeWorkspacePath
+		}
+	}
+	return parts, nil
+}
+
+func normalizeWorkspaceOpenError(err error) error {
+	if errors.Is(err, unix.ELOOP) || errors.Is(err, unix.EXDEV) {
+		return errUnsafeWorkspacePath
+	}
+	return err
+}
+
+func openWorkspaceTarget(root, target string, flags int) (*os.File, error) {
+	rel, err := workspaceRelativePath(root, target)
+	if err != nil {
+		return nil, err
+	}
+	parts, err := workspacePathParts(rel)
+	if err != nil {
+		return nil, err
+	}
+	rootFD, err := openWorkspaceRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	if len(parts) == 0 {
+		return os.NewFile(uintptr(rootFD), root), nil
+	}
+	currentFD := rootFD
+	for index, part := range parts {
+		openFlags := unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC | unix.O_NOFOLLOW
+		if index == len(parts)-1 {
+			openFlags = flags | unix.O_CLOEXEC | unix.O_NOFOLLOW
+		}
+		fd, openErr := unix.Openat(currentFD, part, openFlags, 0)
+		if currentFD != rootFD {
+			_ = unix.Close(currentFD)
+		}
+		if openErr != nil {
+			_ = unix.Close(rootFD)
+			return nil, normalizeWorkspaceOpenError(openErr)
+		}
+		currentFD = fd
+	}
+	_ = unix.Close(rootFD)
+	file := os.NewFile(uintptr(currentFD), target)
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		_ = file.Close()
+		return nil, errUnsafeWorkspacePath
+	}
+	return file, nil
+}
+
+func openWorkspaceParent(root, target string, createParents bool) (*workspaceParent, error) {
+	rel, err := workspaceRelativePath(root, target)
+	if err != nil {
+		return nil, err
+	}
+	parts, err := workspacePathParts(rel)
+	if err != nil {
+		return nil, err
+	}
+	if len(parts) == 0 {
+		return nil, errors.New("workspace root has no parent entry")
+	}
+	rootFD, err := openWorkspaceRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	currentFD := rootFD
+	for _, part := range parts[:len(parts)-1] {
+		fd, openErr := unix.Openat(currentFD, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		if errors.Is(openErr, unix.ENOENT) && createParents {
+			if mkdirErr := unix.Mkdirat(currentFD, part, 0o755); mkdirErr != nil && !errors.Is(mkdirErr, unix.EEXIST) {
+				if currentFD != rootFD {
+					_ = unix.Close(currentFD)
+				}
+				_ = unix.Close(rootFD)
+				return nil, mkdirErr
+			}
+			if syncErr := unix.Fsync(currentFD); syncErr != nil {
+				if currentFD != rootFD {
+					_ = unix.Close(currentFD)
+				}
+				_ = unix.Close(rootFD)
+				return nil, syncErr
+			}
+			fd, openErr = unix.Openat(currentFD, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		}
+		if openErr != nil {
+			if currentFD != rootFD {
+				_ = unix.Close(currentFD)
+			}
+			_ = unix.Close(rootFD)
+			return nil, normalizeWorkspaceOpenError(openErr)
+		}
+		if currentFD != rootFD {
+			_ = unix.Close(currentFD)
+		}
+		currentFD = fd
+	}
+	return &workspaceParent{rootFD: rootFD, parentFD: currentFD, base: parts[len(parts)-1]}, nil
+}
+
+func rejectWorkspaceSymlinkAt(parentFD int, name string) error {
+	var stat unix.Stat_t
+	err := unix.Fstatat(parentFD, name, &stat, unix.AT_SYMLINK_NOFOLLOW)
+	if errors.Is(err, unix.ENOENT) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if stat.Mode&unix.S_IFMT == unix.S_IFLNK {
+		return errUnsafeWorkspacePath
+	}
+	return nil
+}
+
+func createWorkspaceTemp(parent *workspaceParent) (*os.File, string, error) {
+	if err := rejectWorkspaceSymlinkAt(parent.parentFD, parent.base); err != nil {
+		return nil, "", err
+	}
+	for attempt := 0; attempt < 32; attempt++ {
+		var suffix [8]byte
+		if _, err := rand.Read(suffix[:]); err != nil {
+			return nil, "", err
+		}
+		name := fmt.Sprintf(".%s.%x.tmp", parent.base, suffix)
+		fd, err := unix.Openat(parent.parentFD, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
+		if errors.Is(err, unix.EEXIST) {
+			continue
+		}
+		if err != nil {
+			return nil, "", normalizeWorkspaceOpenError(err)
+		}
+		return os.NewFile(uintptr(fd), name), name, nil
+	}
+	return nil, "", errors.New("create workspace temporary file: exhausted unique names")
+}
+
+func commitWorkspaceTemp(parent *workspaceParent, temporaryName string) error {
+	if err := rejectWorkspaceSymlinkAt(parent.parentFD, parent.base); err != nil {
+		return err
+	}
+	if err := unix.Renameat(parent.parentFD, temporaryName, parent.parentFD, parent.base); err != nil {
+		return err
+	}
+	return unix.Fsync(parent.parentFD)
+}
+
+func unlinkWorkspaceTemp(parent *workspaceParent, temporaryName string) {
+	if parent != nil && temporaryName != "" {
+		_ = unix.Unlinkat(parent.parentFD, temporaryName, 0)
+	}
+}
+
+func openOrCreateWorkspaceDirectory(root, target string) (*os.File, error) {
+	rel, err := workspaceRelativePath(root, target)
+	if err != nil {
+		return nil, err
+	}
+	parts, err := workspacePathParts(rel)
+	if err != nil {
+		return nil, err
+	}
+	rootFD, err := openWorkspaceRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	if len(parts) == 0 {
+		return os.NewFile(uintptr(rootFD), root), nil
+	}
+	currentFD := rootFD
+	for _, part := range parts {
+		fd, openErr := unix.Openat(currentFD, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		if errors.Is(openErr, unix.ENOENT) {
+			if mkdirErr := unix.Mkdirat(currentFD, part, 0o755); mkdirErr != nil && !errors.Is(mkdirErr, unix.EEXIST) {
+				if currentFD != rootFD {
+					_ = unix.Close(currentFD)
+				}
+				_ = unix.Close(rootFD)
+				return nil, mkdirErr
+			}
+			if syncErr := unix.Fsync(currentFD); syncErr != nil {
+				if currentFD != rootFD {
+					_ = unix.Close(currentFD)
+				}
+				_ = unix.Close(rootFD)
+				return nil, syncErr
+			}
+			fd, openErr = unix.Openat(currentFD, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+		}
+		if openErr != nil {
+			if currentFD != rootFD {
+				_ = unix.Close(currentFD)
+			}
+			_ = unix.Close(rootFD)
+			return nil, normalizeWorkspaceOpenError(openErr)
+		}
+		if currentFD != rootFD {
+			_ = unix.Close(currentFD)
+		}
+		currentFD = fd
+	}
+	_ = unix.Close(rootFD)
+	return os.NewFile(uintptr(currentFD), target), nil
+}
+
+func removeWorkspaceEntryAt(parentFD int, name string, recursive bool) error {
+	var stat unix.Stat_t
+	if err := unix.Fstatat(parentFD, name, &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return err
+	}
+	if stat.Mode&unix.S_IFMT == unix.S_IFLNK {
+		return errUnsafeWorkspacePath
+	}
+	if stat.Mode&unix.S_IFMT != unix.S_IFDIR {
+		return unix.Unlinkat(parentFD, name, 0)
+	}
+	if !recursive {
+		return unix.Unlinkat(parentFD, name, unix.AT_REMOVEDIR)
+	}
+	childFD, err := unix.Openat(parentFD, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return normalizeWorkspaceOpenError(err)
+	}
+	child := os.NewFile(uintptr(childFD), name)
+	entries, err := child.Readdirnames(-1)
+	if err != nil {
+		_ = child.Close()
+		return err
+	}
+	for _, entry := range entries {
+		if err := removeWorkspaceEntryAt(childFD, entry, true); err != nil {
+			_ = child.Close()
+			return err
+		}
+	}
+	if err := child.Close(); err != nil {
+		return err
+	}
+	return unix.Unlinkat(parentFD, name, unix.AT_REMOVEDIR)
 }
 
 func (s Server) toolWorkspacePath(raw string) (string, string, error) {

@@ -407,9 +407,9 @@ func (m *Manager) microVMImageForStart(opts runtimemanager.StartOpts) (microVMIm
 // checkUnixSocketPath fails fast with an actionable message when a socket path would
 // exceed the kernel limit, instead of letting Firecracker exit with a cryptic
 // "path must be shorter than SUN_LEN".
-func checkUnixSocketPath(label, path string) error {
+func checkUnixSocketPath(label, path, setting string) error {
 	if len(path) >= maxUnixSocketPathLen {
-		return fmt.Errorf("%s socket path %q is %d bytes, exceeding the unix socket limit of %d; set AG_MICROVM_RUN_DIR to a shorter path", label, path, len(path), maxUnixSocketPathLen)
+		return fmt.Errorf("%s socket path %q is %d bytes, exceeding the unix socket limit of %d; set %s to a shorter path", label, path, len(path), maxUnixSocketPathLen, setting)
 	}
 	return nil
 }
@@ -422,10 +422,10 @@ func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, 
 	if m.cfg.MicroVMAllowUnjailed {
 		socket := filepath.Join(dir, firecrackerSockName)
 		vsockUDS := filepath.Join(dir, vsockUDSName)
-		if err := checkUnixSocketPath("firecracker api", socket); err != nil {
+		if err := checkUnixSocketPath("firecracker api", socket, "AG_MICROVM_RUN_DIR"); err != nil {
 			return firecrackerLaunch{}, err
 		}
-		if err := checkUnixSocketPath("vsock", vsockUDS); err != nil {
+		if err := checkUnixSocketPath("vsock", vsockUDS, "AG_MICROVM_RUN_DIR"); err != nil {
 			return firecrackerLaunch{}, err
 		}
 		configPath := filepath.Join(dir, configName)
@@ -440,6 +440,14 @@ func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, 
 	}
 
 	jailRoot := m.jailerRoot(instanceID)
+	socket := filepath.Join(jailRoot, firecrackerSockName)
+	vsockUDS := filepath.Join(jailRoot, vsockUDSName)
+	if err := checkUnixSocketPath("jailed firecracker api", socket, "AG_MICROVM_JAILER_CHROOT_BASE_DIR"); err != nil {
+		return firecrackerLaunch{}, err
+	}
+	if err := checkUnixSocketPath("jailed vsock", vsockUDS, "AG_MICROVM_JAILER_CHROOT_BASE_DIR"); err != nil {
+		return firecrackerLaunch{}, err
+	}
 	if err := os.MkdirAll(jailRoot, 0o700); err != nil {
 		return firecrackerLaunch{}, fmt.Errorf("create jail root: %w", err)
 	}
@@ -466,8 +474,6 @@ func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, 
 		}
 	}
 
-	socket := filepath.Join(jailRoot, firecrackerSockName)
-	vsockUDS := filepath.Join(jailRoot, vsockUDSName)
 	configPath := filepath.Join(jailRoot, configName)
 	fcConfig := buildFirecrackerConfigWithPolicy(m.cfg, kernelName, rootfsName, workspaceName, drivesSharedPath, vsockUDSName, tapName, guestIP, policy)
 	fcConfig.BootSource.KernelImagePath = kernelName

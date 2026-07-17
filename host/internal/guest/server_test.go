@@ -912,6 +912,80 @@ func TestToolExecRejectsWorkspaceEscapes(t *testing.T) {
 	}
 }
 
+func TestGuestWorkspaceFileAPIsRejectSymlinks(t *testing.T) {
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	outsideSecret := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(outsideSecret, []byte("outside-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "real.txt"), []byte("inside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(workspace, "escape")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := os.Symlink("real.txt", filepath.Join(workspace, "final-link")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	handler := Server{WorkspaceDir: workspace}.Handler()
+
+	toolRequests := []toolExecRequest{
+		{Operation: toolOpReadFile, Path: "escape/secret.txt"},
+		{Operation: toolOpReadFileBuffer, Path: "escape/secret.txt"},
+		{Operation: toolOpStat, Path: "escape/secret.txt"},
+		{Operation: toolOpReaddir, Path: "escape"},
+		{Operation: toolOpExists, Path: "escape/secret.txt"},
+		{Operation: toolOpWriteFile, Path: "escape/created.txt", Content: "nope"},
+		{Operation: toolOpMkdir, Path: "escape/created-dir", Recursive: true},
+		{Operation: toolOpRm, Path: "escape/secret.txt"},
+		{Operation: toolOpReadFile, Path: "final-link"},
+		{Operation: toolOpStat, Path: "final-link"},
+		{Operation: toolOpExists, Path: "final-link"},
+		{Operation: toolOpWriteFile, Path: "final-link", Content: "replacement"},
+		{Operation: toolOpRm, Path: "final-link"},
+	}
+	for _, request := range toolRequests {
+		response := postToolExec(t, handler, request)
+		if response.Error == "" {
+			t.Fatalf("symlink request %#v unexpectedly succeeded: %#v", request, response)
+		}
+	}
+
+	httpRequests := []struct {
+		method string
+		path   string
+		body   io.Reader
+	}{
+		{method: http.MethodGet, path: "/workspace/read?path=escape/secret.txt"},
+		{method: http.MethodGet, path: "/workspace/list?path=escape"},
+		{method: http.MethodPut, path: "/workspace/write?path=escape/http-created.txt", body: strings.NewReader("nope")},
+	}
+	for _, request := range httpRequests {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(request.method, request.path, request.body))
+		if recorder.Code >= 200 && recorder.Code < 300 {
+			t.Fatalf("symlink HTTP request %s %s unexpectedly succeeded: %s", request.method, request.path, recorder.Body.String())
+		}
+		if strings.Contains(recorder.Body.String(), "outside-secret") {
+			t.Fatalf("symlink HTTP request leaked outside content: %s", recorder.Body.String())
+		}
+	}
+
+	retained, err := os.ReadFile(outsideSecret)
+	if err != nil || string(retained) != "outside-secret" {
+		t.Fatalf("outside file changed through workspace API: content=%q err=%v", retained, err)
+	}
+	for _, path := range []string{"created.txt", "created-dir", "http-created.txt"} {
+		if _, err := os.Lstat(filepath.Join(outside, path)); !os.IsNotExist(err) {
+			t.Fatalf("workspace API created outside path %s: %v", path, err)
+		}
+	}
+	if info, err := os.Lstat(filepath.Join(workspace, "final-link")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("workspace API replaced or removed final symlink: info=%v err=%v", info, err)
+	}
+}
+
 func TestToolExecCommandTimeout(t *testing.T) {
 	handler := Server{WorkspaceDir: t.TempDir()}.Handler()
 	resp := postToolExec(t, handler, toolExecRequest{
