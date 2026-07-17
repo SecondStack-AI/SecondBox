@@ -472,6 +472,104 @@ func TestPrivilegedLauncherReclaimsStoppedGuestIdentityOwner(t *testing.T) {
 	}
 }
 
+func TestPrivilegedLauncherRemoveTapSelfHealsStoppedInstanceRoute(t *testing.T) {
+	cfg := testPrivilegedLauncherConfig(t)
+	server, err := NewPrivilegedLauncherServer(cfg)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	instanceID := "fc-agent-compartment-dead"
+	tap := tapNameForInstance(cfg.TapPrefix, instanceID)
+	guestIP := "172.30.0.2"
+	route := TransparentRoute{
+		AgentID:     "agent-1",
+		InstanceID:  instanceID,
+		SourceIP:    guestIP,
+		HTTPPort:    cfg.TransparentHTTPPort,
+		InterfaceID: tap,
+	}
+	// A stopped instance whose earlier unregister_route call never completed, so
+	// the state still records an egress route. remove_tap must self-heal it.
+	if err := server.writeState(privilegedLauncherState{
+		InstanceID:  instanceID,
+		TapName:     tap,
+		GuestIP:     guestIP,
+		GuestMAC:    guestMACForInstance(tap),
+		SourceGuard: true,
+		Started:     true,
+		Route:       &route,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	server.router.routes[instanceID] = route
+	originalProcessRunning := firecrackerProcessRunningFunc
+	firecrackerProcessRunningFunc = func(string) (bool, error) { return false, nil }
+	t.Cleanup(func() { firecrackerProcessRunningFunc = originalProcessRunning })
+
+	var networkCommands []string
+	server.network.run = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		networkCommands = append(networkCommands, name+" "+strings.Join(args, " "))
+		return nil, nil
+	}
+	server.runHost = func(_ context.Context, _ string, _ ...string) ([]byte, error) { return nil, nil }
+	routeRemoved := false
+	server.router.run = func(_ context.Context, _ string, args ...string) error {
+		if sliceContains(args, "-D") {
+			routeRemoved = true
+		}
+		return nil
+	}
+
+	resp := server.handle(context.Background(), privilegedLauncherRequest{
+		Version: privilegedLauncherProtocolVersion,
+		Op:      "remove_tap",
+		TapName: tap,
+	})
+	if !resp.OK {
+		t.Fatalf("remove_tap for a stopped routed instance must self-heal: %+v", resp)
+	}
+	if !routeRemoved {
+		t.Fatal("lingering egress route was not self-healed before tap removal")
+	}
+	if _, err := server.readState(instanceID); !os.IsNotExist(err) {
+		t.Fatalf("state remains after remove_tap: %v", err)
+	}
+	if !strings.Contains(strings.Join(networkCommands, "\n"), "link delete "+tap) {
+		t.Fatalf("tap was not removed: %v", networkCommands)
+	}
+}
+
+func TestPrivilegedLauncherRemoveTapStillRefusesRunningInstance(t *testing.T) {
+	cfg := testPrivilegedLauncherConfig(t)
+	server, err := NewPrivilegedLauncherServer(cfg)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	instanceID := "fc-agent-compartment-live"
+	tap := tapNameForInstance(cfg.TapPrefix, instanceID)
+	if err := server.writeState(privilegedLauncherState{
+		InstanceID: instanceID, TapName: tap, GuestIP: "172.30.0.2",
+		GuestMAC: guestMACForInstance(tap), SourceGuard: true, Started: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	originalProcessRunning := firecrackerProcessRunningFunc
+	firecrackerProcessRunningFunc = func(string) (bool, error) { return true, nil }
+	t.Cleanup(func() { firecrackerProcessRunningFunc = originalProcessRunning })
+
+	resp := server.handle(context.Background(), privilegedLauncherRequest{
+		Version: privilegedLauncherProtocolVersion,
+		Op:      "remove_tap",
+		TapName: tap,
+	})
+	if resp.OK {
+		t.Fatal("remove_tap must refuse a running instance")
+	}
+	if _, err := server.readState(instanceID); err != nil {
+		t.Fatalf("running instance state must be retained: %v", err)
+	}
+}
+
 func TestPrivilegedLauncherRejectsRunningDuplicateGuestSourceIdentity(t *testing.T) {
 	cfg := testPrivilegedLauncherConfig(t)
 	server, err := NewPrivilegedLauncherServer(cfg)

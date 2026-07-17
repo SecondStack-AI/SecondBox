@@ -977,11 +977,15 @@ func (m *Manager) finishInstance(inst *instance) {
 		m.removeInstanceLocked(inst)
 		m.mu.Unlock()
 		m.unregisterSourceBinding(inst.id)
-		m.cleanupTap(context.Background(), inst.tapName)
-		// Keep the guest identity reserved until the predecessor's tap and source
-		// guard are gone, so a successor cannot recycle the IP into stale launcher
-		// ownership state.
-		m.releaseGuestIP(inst.id)
+		// Release the guest identity only after the launcher tap and state are gone.
+		// If cleanup fails the launcher may still claim this IP/MAC, so retain the
+		// reservation fail-closed rather than let a concurrent start recycle it into
+		// an ownership conflict.
+		if err := m.cleanupTapChecked(context.Background(), inst.tapName); err != nil {
+			slog.Warn("microVM tap cleanup failed; retaining guest identity reservation", "instance", inst.id, "tap", inst.tapName, "error", err)
+		} else {
+			m.releaseGuestIP(inst.id)
+		}
 		close(inst.done)
 	})
 }

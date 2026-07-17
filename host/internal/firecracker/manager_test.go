@@ -51,6 +51,19 @@ func (b *blockingHostNetworkConfigurer) RemoveTap(context.Context, string) error
 	return nil
 }
 
+type failingHostNetworkConfigurer struct {
+	removeCalls int
+}
+
+func (f *failingHostNetworkConfigurer) ConfigureTap(context.Context, TapConfig) error {
+	return nil
+}
+
+func (f *failingHostNetworkConfigurer) RemoveTap(context.Context, string) error {
+	f.removeCalls++
+	return fmt.Errorf("simulated launcher tap removal failure")
+}
+
 func TestNewInstanceIDIncludesCompartmentSegment(t *testing.T) {
 	id, err := newInstanceID("agent-1", "cmp_abcdef1234567890")
 	if err != nil {
@@ -3640,6 +3653,43 @@ func TestFinishInstanceRetainsGuestIdentityUntilTapCleanupCompletes(t *testing.T
 	}
 	if recycledIP != oldIP {
 		t.Fatalf("guest identity after completed cleanup = %s, want %s", recycledIP, oldIP)
+	}
+}
+
+func TestFinishInstanceRetainsGuestIdentityWhenTapCleanupFails(t *testing.T) {
+	const (
+		oldID = "fc-agent-fail-old"
+		newID = "fc-agent-fail-new"
+		oldIP = "10.0.0.2"
+	)
+	network := &failingHostNetworkConfigurer{}
+	inst := &instance{id: oldID, tapName: "agfc-fail", done: make(chan struct{})}
+	m := &Manager{
+		cfg:       &config.Config{MicroVMBridgeCIDR: "10.0.0.1/24"},
+		instances: map[string]*instance{oldID: inst},
+		guestIPs:  map[string]string{oldID: oldIP},
+		network:   network,
+	}
+
+	m.finishInstance(inst)
+	select {
+	case <-inst.done:
+	case <-time.After(time.Second):
+		t.Fatal("instance cleanup did not finish")
+	}
+
+	// The launcher tap removal failed, so its state may still claim the guest
+	// identity. finishInstance must retain the reservation fail-closed so a
+	// successor cannot recycle a still-claimed IP into an ownership conflict.
+	newIP, err := m.reserveGuestIP(newID)
+	if err != nil {
+		t.Fatalf("reserve successor guest IP: %v", err)
+	}
+	if newIP == oldIP {
+		t.Fatalf("recycled guest identity %s despite failed tap cleanup", oldIP)
+	}
+	if network.removeCalls < 2 {
+		t.Fatalf("expected bounded retry of tap removal, got %d call(s)", network.removeCalls)
 	}
 }
 

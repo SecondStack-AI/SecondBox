@@ -222,13 +222,33 @@ func (m *Manager) unregisterSourceBinding(instanceID string) {
 }
 
 func (m *Manager) cleanupTap(ctx context.Context, tapName string) {
-	if m.network == nil || strings.TrimSpace(tapName) == "" {
-		return
-	}
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := m.network.RemoveTap(cleanupCtx, tapName); err != nil {
+	if err := m.cleanupTapChecked(ctx, tapName); err != nil {
 		slog.Warn("failed to remove microVM tap", "tap", tapName, "error", err)
 	}
+}
+
+// cleanupTapChecked removes an instance's tap (and its launcher state) and
+// reports the outcome. It retries a bounded number of times to absorb transient
+// launcher contention under load; the caller uses the returned error to decide
+// whether the guest identity is safe to recycle.
+func (m *Manager) cleanupTapChecked(ctx context.Context, tapName string) error {
+	if m.network == nil || strings.TrimSpace(tapName) == "" {
+		return nil
+	}
 	_ = ctx
+	const attempts = 3
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(300 * time.Millisecond)
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		err := m.network.RemoveTap(cleanupCtx, tapName)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+	}
+	return lastErr
 }

@@ -1165,7 +1165,7 @@ func (s *PrivilegedLauncherServer) removeTap(ctx context.Context, tapName string
 		return err
 	}
 	if state.Started {
-		running, runErr := firecrackerProcessRunning(state.InstanceID)
+		running, runErr := firecrackerProcessRunningFunc(state.InstanceID)
 		if runErr != nil {
 			return runErr
 		}
@@ -1173,8 +1173,14 @@ func (s *PrivilegedLauncherServer) removeTap(ctx context.Context, tapName string
 			return fmt.Errorf("refusing to remove tap for a running instance")
 		}
 	}
+	// The instance is confirmed stopped here. If an earlier unregister_route call
+	// never completed (e.g. it timed out under launcher load) the state can still
+	// record an egress route. Self-heal it as part of teardown so the tap and
+	// state are actually removed instead of leaking a stale guest-identity claim.
 	if state.Route != nil {
-		return fmt.Errorf("refusing to remove tap with an active egress route")
+		if err := s.unregisterRoute(ctx, state.InstanceID); err != nil {
+			return fmt.Errorf("clear egress route before tap removal: %w", err)
+		}
 	}
 	if err := s.removeSourceGuard(ctx, launcherSourceGuardChain(state.InstanceID)); err != nil {
 		return err
