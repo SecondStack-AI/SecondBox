@@ -233,10 +233,8 @@ func TestBuildWithRegistryStoreDoesNotReadOAuthSecrets(t *testing.T) {
 		t.Fatalf("create agent: %v", err)
 	}
 	if err := store.CreateUser(&registry.User{
-		ID:           "user-alice",
-		Email:        "alice@example.com",
-		PasswordHash: "hash",
-		Role:         registry.RoleViewer,
+		ID:    "user-alice",
+		Email: "alice@example.com",
 	}); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
