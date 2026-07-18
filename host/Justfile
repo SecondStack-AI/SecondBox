@@ -10,7 +10,7 @@ default:
 # Development
 # =============================================================================
 
-# Start backend + frontend with hot-reload
+# Start the Agent Service with hot-reload
 dev:
     @just _dev-impl
 
@@ -182,7 +182,6 @@ _dev-impl:
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "  API:      http://localhost:8081"
-    echo "  Frontend: http://localhost:5173 (proxies /api → :8081)"
     echo "  Flue:     $AG_FLUE_STORE_URL"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
@@ -254,12 +253,10 @@ _dev-impl:
             echo "Unjailed microVM mode: ip/iptables routed via passwordless-sudo shims (non-root VM launch)."
         else
             echo "AG_MICROVM_ALLOW_UNJAILED=true but passwordless sudo for ip is not configured." >&2
-            echo "Run 'just net-sudoers' once; until then microVM launches need root (API/frontend still work)." >&2
+            echo "Run 'just net-sudoers' once; until then microVM launches need root (the API still works)." >&2
         fi
     fi
-    "$AIR_BIN" &
-    (cd frontend && npm run dev) &
-    wait -n
+    "$AIR_BIN"
 
 # Start only the Go backend with hot-reload
 dev-api:
@@ -407,15 +404,11 @@ _dev-api-impl:
             echo "Unjailed microVM mode: ip/iptables routed via passwordless-sudo shims (non-root VM launch)."
         else
             echo "AG_MICROVM_ALLOW_UNJAILED=true but passwordless sudo for ip is not configured." >&2
-            echo "Run 'just net-sudoers' once; until then microVM launches need root (API/frontend still work)." >&2
+            echo "Run 'just net-sudoers' once; until then microVM launches need root (the API still works)." >&2
         fi
     fi
     "$AIR_BIN" &
     wait -n
-
-# Start only the frontend dev server (with API proxy to :8081)
-dev-frontend:
-    cd frontend && npm run dev
 
 # =============================================================================
 # Dev networking (persistent microVM bridge)
@@ -546,10 +539,6 @@ build-recovery-artifacts:
 build-egress-proxy:
     go build -o bin/agentcy-egress-proxy ./cmd/agentcy-egress-proxy
 
-# Build the frontend
-build-frontend:
-    cd frontend && npm run build
-
 # Build the agent Node.js code
 build-agent:
     cd agent && npm run build
@@ -608,11 +597,6 @@ verify-microvm-images:
 verify-microvm-staging *ARGS:
     scripts/microvm-stage-check.sh {{ARGS}}
 
-# Benchmark Firecracker stop-to-snapshot and snapshot wake latency. Pass --cold
-# before an optional agent id/name to also measure a cold force-restart baseline.
-benchmark-microvm-snapshot-start *ARGS:
-    scripts/benchmark-microvm-snapshot-start.sh {{ARGS}}
-
 # Image paths may name releases/microvm/latest/*; manager startup pins the concrete target.
 # Rebuild Firecracker runtime artifacts and restart running agents.
 rollout-microvm-images api_url="http://localhost:8081":
@@ -631,7 +615,7 @@ rollout-microvm-images api_url="http://localhost:8081":
 
 # Use `just build-runtime` when a prepared AG_MICROVM_ROOTFS_SOURCE_DIR is available for signed Firecracker images.
 # Build all self-contained code artifacts
-all: build build-egress-proxy build-agent build-flue-store build-frontend
+all: build build-egress-proxy build-agent build-flue-store
     @echo "All builds complete"
 
 # =============================================================================
@@ -653,16 +637,9 @@ test:
 test-fast *ARGS:
     scripts/test/go-fast.sh {{ARGS}}
 
-# Initialize a local unified Postgres database and role/schema layout.
-db-init:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    ADMIN_DATABASE_URL="${AG_TEST_DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable}"
-    psql "$ADMIN_DATABASE_URL" -v ON_ERROR_STOP=1 -f db/bootstrap.sql
-
 # Generate sqlc registry query code.
 sqlc:
-    go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
+    scripts/sqlc-generate.sh
 
 # Generate Go and TypeScript Managed Agents public contract artifacts.
 generate-managed-agents-contracts:
@@ -690,7 +667,6 @@ preship:
     just test
     (cd flue-store && npm test && npm run test:contract && npm run build)
     (cd agent && npm run typecheck && npm run lint && npm test && npm run build)
-    (cd frontend && npm run typecheck && npm run lint && npm test && npm run build)
 
 # Create a local Agentcy Postgres dump.
 backup:
@@ -712,7 +688,6 @@ tidy:
 install-deps:
     cd agent && npm install
     cd flue-store && npm install
-    cd frontend && npm install
 
 # Install Go-based local development tools
 install-dev-tools:
@@ -727,478 +702,3 @@ clean:
     rm -rf bin/
     cd agent && npm run clean
     rm -rf flue-store/dist/
-    rm -rf cmd/agentcy/public/
-
-# =============================================================================
-# Deployment (agentcy.t1a.dev)
-# =============================================================================
-
-AG_HOST := "agentcy.t1a.dev"
-AG_BOOTSTRAP_USER := "root"
-AG_USER := "agentdeploy"
-AG_PATH := "/opt/agentcy"
-AG_RUNTIME_USER := "agentcy"
-AG_FLUE_RUNTIME_USER := "agentcy-flue"
-
-# Initial server setup (run once before first ship)
-setup-server:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    DEPLOY_AUTHORIZED_KEY_FILE="${AG_DEPLOY_AUTHORIZED_KEY_FILE:-}"
-    if [[ -z "$DEPLOY_AUTHORIZED_KEY_FILE" || ! -f "$DEPLOY_AUTHORIZED_KEY_FILE" || -L "$DEPLOY_AUTHORIZED_KEY_FILE" ]]; then
-        echo "AG_DEPLOY_AUTHORIZED_KEY_FILE must name a dedicated Ed25519 deploy public key" >&2
-        exit 1
-    fi
-    mapfile -t deploy_key_lines < <(grep -Ev '^[[:space:]]*(#|$)' "$DEPLOY_AUTHORIZED_KEY_FILE")
-    if ((${#deploy_key_lines[@]} != 1)) || [[ ! "${deploy_key_lines[0]}" =~ ^(ssh-ed25519|sk-ssh-ed25519@openssh.com)[[:space:]]+[A-Za-z0-9+/=]+([[:space:]].*)?$ ]]; then
-        echo "AG_DEPLOY_AUTHORIZED_KEY_FILE must contain exactly one unadorned Ed25519 public key" >&2
-        exit 1
-    fi
-    ssh-keygen -l -f "$DEPLOY_AUTHORIZED_KEY_FILE" >/dev/null
-
-    SETUP_NONCE="$(date -u +%Y%m%dT%H%M%SZ)-$$-$(openssl rand -hex 8)"
-    REMOTE_SETUP_DIR="/tmp/agentcy-setup-${SETUP_NONCE}"
-    cleanup_setup() {
-        ssh -o ConnectTimeout=10 {{AG_BOOTSTRAP_USER}}@{{AG_HOST}} "rm -rf -- '$REMOTE_SETUP_DIR'" >/dev/null 2>&1 || true
-    }
-    trap cleanup_setup EXIT
-
-    echo "Setting up Agentcy server at {{AG_HOST}}"
-    echo "=============================================="
-
-    ssh -o ConnectTimeout=10 {{AG_BOOTSTRAP_USER}}@{{AG_HOST}} "umask 077; install -d -m 0700 '$REMOTE_SETUP_DIR'"
-    scp -o ConnectTimeout=10 "$DEPLOY_AUTHORIZED_KEY_FILE" \
-        {{AG_BOOTSTRAP_USER}}@{{AG_HOST}}:"$REMOTE_SETUP_DIR/deploy-authorized-key.pub"
-    scp -o ConnectTimeout=10 \
-        scripts/deploy/agentcy-deploy \
-        deploy/agentcy-deploy-recovery.service \
-        deploy/agentcy-deploy@.service \
-        deploy/caddy-agentcy-deploy-recovery.conf \
-        {{AG_BOOTSTRAP_USER}}@{{AG_HOST}}:"$REMOTE_SETUP_DIR/"
-
-    ssh -o ConnectTimeout=10 {{AG_BOOTSTRAP_USER}}@{{AG_HOST}} bash -se -- "$REMOTE_SETUP_DIR" <<'AGENTCY_SETUP'
-        set -euo pipefail
-        setup_dir="$1"
-        [[ "$setup_dir" =~ ^/tmp/agentcy-setup-[0-9]{8}T[0-9]{6}Z-[0-9]+-[0-9a-f]{16}$ ]] || {
-            echo "invalid setup staging path" >&2
-            exit 1
-        }
-        [[ -d "$setup_dir" && ! -L "$setup_dir" && "$(stat -c '%u:%a' "$setup_dir")" == 0:700 ]] || {
-            echo "unsafe setup staging directory" >&2
-            exit 1
-        }
-        for asset in deploy-authorized-key.pub agentcy-deploy agentcy-deploy-recovery.service agentcy-deploy@.service caddy-agentcy-deploy-recovery.conf; do
-            [[ -f "$setup_dir/$asset" && ! -L "$setup_dir/$asset" && "$(stat -c '%u' "$setup_dir/$asset")" == 0 ]] || {
-                echo "unsafe setup asset: $asset" >&2
-                exit 1
-            }
-        done
-
-        # Install Caddy
-        if ! command -v caddy &>/dev/null; then
-            echo "Installing Caddy..."
-            apt-get install -y debian-keyring debian-archive-keyring apt-transport-https
-            curl -1sLf "https://dl.cloudsmith.io/public/caddy/stable/gpg.key" | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-            curl -1sLf "https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt" | tee /etc/apt/sources.list.d/caddy-stable.list
-            apt-get update
-            apt-get install -y caddy
-            echo "Caddy installed"
-        else
-            echo "Caddy already installed"
-        fi
-
-        if [[ ! -x /usr/bin/node ]] || ! /usr/bin/node -e "process.exit(process.versions.node === '22.23.1' && process.platform === 'linux' && process.arch === 'x64' ? 0 : 1);"; then
-            echo "Linux/x64 Node.js 22.23.1 must be installed at /usr/bin/node before setup" >&2
-            exit 1
-        fi
-        apt-get update
-        apt-get install -y liblzma5 libstdc++6
-        apt-get install -y bubblewrap e2fsprogs erofs-utils iproute2 iptables jq nftables openssl util-linux xfsprogs
-
-        # Create directory structure
-        echo "Creating directories..."
-        mkdir -p {{AG_PATH}}/{bin,data,public,agent/releases,flue-store/releases,scripts} /etc/agentcy
-        store_image="{{AG_PATH}}/microvm-store.xfs"
-        if [[ -L /ag ]]; then
-            echo "/ag must be a direct XFS mount, not a symlink" >&2
-            exit 1
-        fi
-        mkdir -p /ag
-        if ! mountpoint --quiet /ag; then
-            if [[ ! -e "$store_image" ]]; then
-                truncate -s 80G "$store_image"
-                mkfs.xfs -f -m reflink=1 -n ftype=1 "$store_image"
-            fi
-            fstab_tmp="$(mktemp)"
-            awk -v image="$store_image" '$1 != image { print }' /etc/fstab > "$fstab_tmp"
-            printf '%s %s %s %s %s %s\n' "$store_image" /ag xfs 'loop,defaults,noatime' 0 0 >> "$fstab_tmp"
-            install -m 0644 -o root -g root "$fstab_tmp" /etc/fstab
-            rm -f "$fstab_tmp"
-            mount /ag
-        fi
-        [[ "$(findmnt --noheadings --output FSTYPE --target /ag | xargs)" == xfs ]] || {
-            echo "/ag must be mounted as XFS" >&2
-            exit 1
-        }
-        xfs_info /ag | grep -Eq 'reflink=1([^0-9]|$)' || {
-            echo "/ag XFS filesystem must have reflink=1" >&2
-            exit 1
-        }
-        mkdir -p /ag/{releases,workspaces,run,logs,jailer} /ag/run/harness-staging
-
-        # Create dedicated deploy user
-        if ! getent group {{AG_USER}} >/dev/null 2>&1; then
-            groupadd --system {{AG_USER}}
-        fi
-        if ! id -u {{AG_USER}} >/dev/null 2>&1; then
-            echo "Creating deploy user {{AG_USER}}..."
-            useradd --create-home --gid {{AG_USER}} --shell /bin/bash {{AG_USER}}
-        else
-            echo "Deploy user {{AG_USER}} already exists"
-        fi
-        usermod -a -G {{AG_USER}} {{AG_USER}}
-
-        # Create dedicated runtime user
-        if ! id -u {{AG_RUNTIME_USER}} >/dev/null 2>&1; then
-            echo "Creating runtime user {{AG_RUNTIME_USER}}..."
-            useradd --system --home-dir {{AG_PATH}} --shell /usr/sbin/nologin {{AG_RUNTIME_USER}}
-        else
-            echo "Runtime user {{AG_RUNTIME_USER}} already exists"
-        fi
-
-        if ! getent group agentcy-vmctl >/dev/null 2>&1; then
-            groupadd --system agentcy-vmctl
-        fi
-        usermod -a -G agentcy-vmctl {{AG_RUNTIME_USER}}
-        if ! getent group agentcy-vm >/dev/null 2>&1; then
-            groupadd --system agentcy-vm
-        fi
-        if ! id -u agentcy-vm >/dev/null 2>&1; then
-            useradd --system --gid agentcy-vm --home-dir /nonexistent --shell /usr/sbin/nologin agentcy-vm
-        fi
-        if ! getent group agentcy-egress >/dev/null 2>&1; then
-            groupadd --system agentcy-egress
-        fi
-        if ! id -u agentcy-egress >/dev/null 2>&1; then
-            useradd --system --gid agentcy-egress --home-dir /var/lib/agentcy-egress-proxy --shell /usr/sbin/nologin agentcy-egress
-        fi
-
-        # Flue Store receives only its role-scoped database and bearer settings.
-        if ! getent group {{AG_FLUE_RUNTIME_USER}} >/dev/null 2>&1; then
-            groupadd --system {{AG_FLUE_RUNTIME_USER}}
-        fi
-        if ! id -u {{AG_FLUE_RUNTIME_USER}} >/dev/null 2>&1; then
-            echo "Creating Flue Store runtime user {{AG_FLUE_RUNTIME_USER}}..."
-            useradd --system --gid {{AG_FLUE_RUNTIME_USER}} --home-dir {{AG_PATH}}/flue-store --shell /usr/sbin/nologin {{AG_FLUE_RUNTIME_USER}}
-        else
-            echo "Flue Store runtime user {{AG_FLUE_RUNTIME_USER}} already exists"
-        fi
-
-        chown root:root /home/{{AG_USER}}
-        chmod 0755 /home/{{AG_USER}}
-        install -d -m 0755 -o root -g root /home/{{AG_USER}}/.ssh
-        mapfile -t deploy_key_lines < <(grep -Ev '^[[:space:]]*(#|$)' "$setup_dir/deploy-authorized-key.pub")
-        if ((${#deploy_key_lines[@]} != 1)) || [[ ! "${deploy_key_lines[0]}" =~ ^(ssh-ed25519|sk-ssh-ed25519@openssh.com)[[:space:]]+[A-Za-z0-9+/=]+([[:space:]].*)?$ ]]; then
-            echo "invalid dedicated deploy public key" >&2
-            exit 1
-        fi
-        deploy_key_file="$setup_dir/deploy-authorized-key.pub"
-        ssh-keygen -l -f "$deploy_key_file" >/dev/null
-        printf 'restrict %s\n' "${deploy_key_lines[0]}" > "$setup_dir/authorized_keys"
-        install -m 0644 -o root -g root "$setup_dir/authorized_keys" /home/{{AG_USER}}/.ssh/authorized_keys
-
-        install -d -m 0710 -o root -g {{AG_USER}} /var/lib/agentcy-deploy
-        install -d -m 1730 -o root -g {{AG_USER}} /var/lib/agentcy-deploy/incoming
-        install -d -m 0700 -o root -g root /var/lib/agentcy-deploy/payloads /var/lib/agentcy-deploy/transactions
-        if [[ -x /usr/local/sbin/agentcy-deploy ]]; then
-            /usr/local/sbin/agentcy-deploy recover
-        fi
-        install -m 0755 -o root -g root "$setup_dir/agentcy-deploy" /usr/local/sbin/agentcy-deploy
-        install -m 0644 -o root -g root "$setup_dir/agentcy-deploy-recovery.service" /etc/systemd/system/agentcy-deploy-recovery.service
-        install -m 0644 -o root -g root "$setup_dir/agentcy-deploy@.service" /etc/systemd/system/agentcy-deploy@.service
-        install -d -m 0755 -o root -g root /etc/systemd/system/caddy.service.d
-        install -m 0644 -o root -g root "$setup_dir/caddy-agentcy-deploy-recovery.conf" /etc/systemd/system/caddy.service.d/agentcy-deploy-recovery.conf
-
-        sudoers_tmp="$(mktemp)"
-        trap 'rm -f -- "$sudoers_tmp"' EXIT
-        printf '%s\n' \
-            'Cmnd_Alias AGENTCY_DEPLOY = /usr/local/sbin/agentcy-deploy preflight *, /usr/local/sbin/agentcy-deploy activate *, /usr/local/sbin/agentcy-deploy status, /usr/local/sbin/agentcy-deploy logs' \
-            'agentdeploy ALL=(root) NOPASSWD: AGENTCY_DEPLOY' \
-            > "$sudoers_tmp"
-        visudo -cf "$sudoers_tmp"
-        install -m 0440 -o root -g root "$sudoers_tmp" /etc/sudoers.d/{{AG_USER}}
-        rm -f -- "$sudoers_tmp"
-        trap - EXIT
-
-        chown root:root {{AG_PATH}}
-        chmod 0755 {{AG_PATH}}
-        chown -R {{AG_RUNTIME_USER}}:{{AG_RUNTIME_USER}} {{AG_PATH}}/data
-        chmod 0750 {{AG_PATH}}/data
-        chown -R root:root {{AG_PATH}}/agent
-        chown -R root:root {{AG_PATH}}/flue-store
-        chmod 0755 {{AG_PATH}}/bin {{AG_PATH}}/public {{AG_PATH}}/agent {{AG_PATH}}/agent/releases {{AG_PATH}}/flue-store {{AG_PATH}}/flue-store/releases
-        chown -R {{AG_RUNTIME_USER}}:{{AG_RUNTIME_USER}} /ag/workspaces /ag/run /ag/logs
-        chown root:agentcy-vmctl /ag/jailer
-        chown root:{{AG_RUNTIME_USER}} /etc/agentcy
-        chmod 0750 /ag/workspaces /ag/run /ag/logs /ag/jailer /etc/agentcy
-        chmod 0700 /ag/run/harness-staging
-        printf '%s\n' \
-            'AG_ENV=production' \
-            'AG_SECRET_ENCRYPTION_ENABLED=true' \
-            'AG_LISTEN_ADDR=0.0.0.0:8081' \
-            'AG_PRIVATE_LISTENER_PROTECTED=true' \
-            'AG_HOST_HARNESS_SANDBOX_REQUIRED=true' \
-            'AG_MICROVM_ALLOW_UNJAILED=false' \
-            'AG_EGRESS_PROXY_REQUIRED=true' \
-            > /etc/agentcy/agentcy-safety.env
-        chown root:{{AG_RUNTIME_USER}} /etc/agentcy/agentcy-safety.env
-        chmod 0640 /etc/agentcy/agentcy-safety.env
-
-        /usr/local/sbin/agentcy-deploy ensure-recovery
-
-        echo ""
-        echo "Server setup complete!"
-    AGENTCY_SETUP
-
-    # Generate .env if it does not exist
-    if ssh -o ConnectTimeout=10 {{AG_BOOTSTRAP_USER}}@{{AG_HOST}} "test -f {{AG_PATH}}/.env"; then
-        echo ".env already exists on server"
-    else
-        echo "Creating .env from template..."
-        ENCRYPTION_KEY=$(openssl rand -base64 32)
-        METRICS_TOKEN=$(openssl rand -hex 32)
-        FLUE_STORE_TOKEN=$(openssl rand -hex 32)
-        EGRESS_CONTROL_TOKEN=$(openssl rand -hex 32)
-        EGRESS_SERVICE_TOKEN=$(openssl rand -hex 32)
-        VM_UID="$(ssh -o ConnectTimeout=10 {{AG_BOOTSTRAP_USER}}@{{AG_HOST}} 'id -u agentcy-vm')"
-        VM_GID="$(ssh -o ConnectTimeout=10 {{AG_BOOTSTRAP_USER}}@{{AG_HOST}} 'id -g agentcy-vm')"
-        sed \
-            -e "s|^AG_SECRET_ENCRYPTION_KEY=.*|AG_SECRET_ENCRYPTION_KEY=${ENCRYPTION_KEY}|" \
-            -e "s|^AG_METRICS_BEARER_TOKEN=.*|AG_METRICS_BEARER_TOKEN=${METRICS_TOKEN}|" \
-            -e "s|^AG_FLUE_STORE_TOKEN=.*|AG_FLUE_STORE_TOKEN=${FLUE_STORE_TOKEN}|" \
-            -e "s|^AG_EGRESS_PROXY_CONTROL_TOKEN=.*|AG_EGRESS_PROXY_CONTROL_TOKEN=${EGRESS_CONTROL_TOKEN}|" \
-            -e "s|^AG_EGRESS_PROXY_SERVICE_TOKEN=.*|AG_EGRESS_PROXY_SERVICE_TOKEN=${EGRESS_SERVICE_TOKEN}|" \
-            -e "s|^AG_MICROVM_JAILER_UID=.*|AG_MICROVM_JAILER_UID=${VM_UID}|" \
-            -e "s|^AG_MICROVM_JAILER_GID=.*|AG_MICROVM_JAILER_GID=${VM_GID}|" \
-            deploy/agentcy.env.example | \
-            ssh -o ConnectTimeout=10 {{AG_BOOTSTRAP_USER}}@{{AG_HOST}} "umask 077; cat > {{AG_PATH}}/.env && chown root:{{AG_RUNTIME_USER}} {{AG_PATH}}/.env && chmod 0640 {{AG_PATH}}/.env"
-        echo ".env created (admin credentials NOT set — edit before first start)"
-        echo "  ssh {{AG_BOOTSTRAP_USER}}@{{AG_HOST}} 'vi {{AG_PATH}}/.env'"
-    fi
-
-# Ship to production (build + deploy)
-ship:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    VERSION="${AG_RELEASE_VERSION:-$(awk '/^## \[v[0-9]+\.[0-9]+\.[0-9]+([-+][^]]+)?\]/{gsub(/^## \[|\].*/, ""); print; exit}' CHANGELOG.md)}"
-    if [[ -z "$VERSION" ]]; then
-        echo "Could not determine release version from CHANGELOG.md; set AG_RELEASE_VERSION=vX.Y.Z" >&2
-        exit 1
-    fi
-    if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
-        echo "Release version must be semver-like (for example v0.17.0): ${VERSION}" >&2
-        exit 1
-    fi
-    if ((${#VERSION} > 80)); then
-        echo "Release version is too long for deployment unit and path names" >&2
-        exit 1
-    fi
-    RELEASE_TAG="${VERSION}"
-    DEPLOY_NONCE="$(date -u +%Y%m%dT%H%M%SZ)-$$-$(openssl rand -hex 8)"
-    DEPLOY_ID="deploy-${RELEASE_TAG}-${DEPLOY_NONCE}"
-    REMOTE_TMP="/var/lib/agentcy-deploy/incoming/${DEPLOY_ID}"
-    DEPLOY_MANIFEST=""
-
-    echo "Shipping Agentcy to {{AG_HOST}}"
-    echo "  Version: ${RELEASE_TAG}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-    # Pre-flight checks (local only — no SSH yet)
-    echo ""
-    echo "Pre-flight checks..."
-    [ -f "deploy/Caddyfile" ] || { echo "deploy/Caddyfile not found"; exit 1; }
-    [ -f "deploy/apparmor-agentcy-bwrap" ] || { echo "deploy/apparmor-agentcy-bwrap not found"; exit 1; }
-    [ -f "deploy/agentcy.service" ] || { echo "deploy/agentcy.service not found"; exit 1; }
-    [ -f "deploy/agentcy-flue-store.service" ] || { echo "deploy/agentcy-flue-store.service not found"; exit 1; }
-    [ -f "deploy/agentcy-vmlauncher.service" ] || { echo "deploy/agentcy-vmlauncher.service not found"; exit 1; }
-    [ -f "deploy/agentcy-microvm-network.service" ] || { echo "deploy/agentcy-microvm-network.service not found"; exit 1; }
-    [ -f "deploy/agentcy-egress-proxy.service" ] || { echo "deploy/agentcy-egress-proxy.service not found"; exit 1; }
-    [ -x "scripts/deploy/agentcy-deploy" ] || { echo "scripts/deploy/agentcy-deploy is not executable"; exit 1; }
-    [ -f "deploy/agentcy-deploy-recovery.service" ] || { echo "deploy/agentcy-deploy-recovery.service not found"; exit 1; }
-    [ -f "deploy/agentcy-deploy@.service" ] || { echo "deploy/agentcy-deploy@.service not found"; exit 1; }
-    [ -f "deploy/caddy-agentcy-deploy-recovery.conf" ] || { echo "deploy/caddy-agentcy-deploy-recovery.conf not found"; exit 1; }
-    [ -x "scripts/microvm-host-network-setup.sh" ] || { echo "scripts/microvm-host-network-setup.sh is not executable"; exit 1; }
-    [ -f "deploy/agentcy-backup.service" ] || { echo "deploy/agentcy-backup.service not found"; exit 1; }
-    [ -f "deploy/agentcy-backup.timer" ] || { echo "deploy/agentcy-backup.timer not found"; exit 1; }
-    [ -x "scripts/backup/pg-dump.sh" ] || { echo "scripts/backup/pg-dump.sh is not executable"; exit 1; }
-    [ -x "scripts/backup/restore-drill.sh" ] || { echo "scripts/backup/restore-drill.sh is not executable"; exit 1; }
-    [ -x "scripts/backup/full-backup.sh" ] || { echo "scripts/backup/full-backup.sh is not executable"; exit 1; }
-    [ -x "scripts/backup/full-restore-drill.sh" ] || { echo "scripts/backup/full-restore-drill.sh is not executable"; exit 1; }
-    [ -x "scripts/backup/service-state.sh" ] || { echo "scripts/backup/service-state.sh is not executable"; exit 1; }
-    TRUSTED_MICROVM_PUBLIC_KEY="${AG_MICROVM_PUBLIC_KEY:-}"
-    TRUSTED_MICROVM_PUBLIC_KEY_SHA256="$(printf '%s' "${AG_MICROVM_PUBLIC_KEY_SHA256:-}" | tr '[:upper:]' '[:lower:]')"
-    [ -f "$TRUSTED_MICROVM_PUBLIC_KEY" ] || { echo "AG_MICROVM_PUBLIC_KEY must point to an independently supplied public key"; exit 1; }
-    [[ "$TRUSTED_MICROVM_PUBLIC_KEY_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "AG_MICROVM_PUBLIC_KEY_SHA256 must be the key's canonical DER SHA-256"; exit 1; }
-    ACTUAL_MICROVM_PUBLIC_KEY_SHA256="$(openssl pkey -pubin -in "$TRUSTED_MICROVM_PUBLIC_KEY" -outform DER 2>/dev/null | sha256sum | awk '{print $1}')"
-    [[ "$ACTUAL_MICROVM_PUBLIC_KEY_SHA256" == "$TRUSTED_MICROVM_PUBLIC_KEY_SHA256" ]] || { echo "trusted microVM public key fingerprint mismatch"; exit 1; }
-    env -u AG_MICROVM_PUBLIC_KEY -u AG_MICROVM_PUBLIC_KEY_SHA256 -u TMPDIR just preship
-    echo "Pre-flight checks passed"
-
-    # Step 1: Build frontend
-    echo ""
-    echo "Building frontend..."
-    cd frontend && npm run build && cd ..
-    FLUE_ARCHIVE="releases/agentcy-flue-store-${RELEASE_TAG}.tar.gz"
-    flue-store/scripts/package-production.sh \
-        --output-dir tmp/flue-store-production \
-        --archive "$FLUE_ARCHIVE"
-    FLUE_ARCHIVE_SHA="$(sha256sum "$FLUE_ARCHIVE" | awk '{print $1}')"
-    FLUE_RELEASE_ID="${RELEASE_TAG}-${FLUE_ARCHIVE_SHA:0:16}"
-    HARNESS_ARCHIVE="releases/agentcy-harness-${RELEASE_TAG}.tar.gz"
-    agent/scripts/package-production.sh \
-        --output-dir tmp/agent-harness-production \
-        --archive "$HARNESS_ARCHIVE"
-    HARNESS_ARCHIVE_SHA="$(sha256sum "$HARNESS_ARCHIVE" | awk '{print $1}')"
-    HARNESS_RELEASE_ID="${RELEASE_TAG}-${HARNESS_ARCHIVE_SHA:0:16}"
-
-    # Step 2: Cross-compile Go binary for linux/amd64
-    echo ""
-    echo "Building Go binary (linux/amd64)..."
-    mkdir -p bin
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o bin/agentcy-linux-amd64 ./cmd/agentcy
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o bin/agentcy-backup-verify-linux-amd64 ./cmd/agentcy-backup-verify
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o bin/agentcy-vmlauncher-linux-amd64 ./cmd/agentcy-vmlauncher
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o bin/agentcy-egress-proxy-linux-amd64 ./cmd/agentcy-egress-proxy
-
-    # Step 3: Build Firecracker microVM artifacts
-    echo ""
-    echo "Building Firecracker microVM artifacts..."
-    just build-microvm-images
-
-    # Step 4: Package microVM artifacts
-    echo ""
-    echo "Packaging Firecracker microVM artifacts..."
-    mkdir -p releases
-    MICROVM_ARTIFACT_DIR="$(readlink -f releases/microvm/latest)"
-    scripts/microvm-image/verify.sh "$MICROVM_ARTIFACT_DIR" "$TRUSTED_MICROVM_PUBLIC_KEY" "$TRUSTED_MICROVM_PUBLIC_KEY_SHA256"
-    [ -f "${MICROVM_ARTIFACT_DIR}/kernel" ] || { echo "Missing ${MICROVM_ARTIFACT_DIR}/kernel"; exit 1; }
-    [ -f "${MICROVM_ARTIFACT_DIR}/rootfs.ext4" ] || { echo "Missing ${MICROVM_ARTIFACT_DIR}/rootfs.ext4"; exit 1; }
-    [ -f "${MICROVM_ARTIFACT_DIR}/shared.img" ] || { echo "Missing ${MICROVM_ARTIFACT_DIR}/shared.img"; exit 1; }
-    tar -C "${MICROVM_ARTIFACT_DIR}" -czf releases/agentcy-microvm-artifacts.tar.gz .
-    MICROVM_ARCHIVE_SHA="$(sha256sum releases/agentcy-microvm-artifacts.tar.gz | awk '{print $1}')"
-    MICROVM_RELEASE_ID="${RELEASE_TAG}-${MICROVM_ARCHIVE_SHA:0:16}"
-    echo "  Artifact dir: ${MICROVM_ARTIFACT_DIR}"
-    echo "  Artifact SHA-256: ${MICROVM_ARCHIVE_SHA}"
-    echo "  Size: $(du -h releases/agentcy-microvm-artifacts.tar.gz | cut -f1)"
-
-    # Open SSH control socket (one TCP connection for all remote operations)
-    SSH_SOCK="/tmp/agentcy-deploy-$$"
-    SSH_OPTS=(-o ControlMaster=auto -o "ControlPath=${SSH_SOCK}" -o ControlPersist=300 -o ConnectTimeout=30 -o ServerAliveInterval=15)
-    CONNECTED=false
-    cleanup_ship() {
-        if [[ "$CONNECTED" == true ]]; then
-            ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} "rm -rf -- '$REMOTE_TMP'" >/dev/null 2>&1 || true
-            ssh "${SSH_OPTS[@]}" -O exit {{AG_USER}}@{{AG_HOST}} >/dev/null 2>&1 || true
-        fi
-        rm -f -- "$SSH_SOCK"
-        [[ -z "$DEPLOY_MANIFEST" ]] || rm -f -- "$DEPLOY_MANIFEST"
-    }
-    trap cleanup_ship EXIT
-
-    echo ""
-    echo "Connecting to {{AG_HOST}}..."
-    for attempt in 1 2 3; do
-        if ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} "echo ok" >/dev/null 2>&1; then
-            CONNECTED=true
-            break
-        fi
-        echo "  Connection attempt $attempt/3 failed, retrying..."
-        sleep 2
-    done
-    if [ "$CONNECTED" != "true" ]; then
-        echo "Cannot reach {{AG_HOST}} via SSH. Check server status."
-        exit 1
-    fi
-    DEPLOY_HELPER_SHA256="$(sha256sum scripts/deploy/agentcy-deploy | awk '{print $1}')"
-    ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} \
-        "sudo -n /usr/local/sbin/agentcy-deploy preflight '$TRUSTED_MICROVM_PUBLIC_KEY_SHA256' '$DEPLOY_HELPER_SHA256'" || {
-        echo "Production deployment preflight failed. Run 'just setup-server' with the dedicated deploy key after reviewing the host error." >&2
-        exit 1
-    }
-
-    # Step 5: Upload while the currently selected release remains available.
-    echo ""
-    echo "Uploading to {{AG_HOST}}..."
-    DEPLOY_MANIFEST="$(mktemp)"
-    printf '%s\n' \
-        'format=1' \
-        "transaction_id=${DEPLOY_ID}" \
-        "release_tag=${RELEASE_TAG}" \
-        "harness_archive_sha256=${HARNESS_ARCHIVE_SHA}" \
-        "harness_release_id=${HARNESS_RELEASE_ID}" \
-        "flue_archive_sha256=${FLUE_ARCHIVE_SHA}" \
-        "flue_release_id=${FLUE_RELEASE_ID}" \
-        "microvm_archive_sha256=${MICROVM_ARCHIVE_SHA}" \
-        "microvm_release_id=${MICROVM_RELEASE_ID}" \
-        "trusted_key_sha256=${TRUSTED_MICROVM_PUBLIC_KEY_SHA256}" \
-        > "$DEPLOY_MANIFEST"
-    chmod 0600 "$DEPLOY_MANIFEST"
-    ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} "umask 077; mkdir -- '$REMOTE_TMP'"
-    scp "${SSH_OPTS[@]}" bin/agentcy-linux-amd64 {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/agentcy
-    scp "${SSH_OPTS[@]}" bin/agentcy-backup-verify-linux-amd64 {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/agentcy-backup-verify
-    scp "${SSH_OPTS[@]}" bin/agentcy-vmlauncher-linux-amd64 {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/agentcy-vmlauncher
-    scp "${SSH_OPTS[@]}" bin/agentcy-egress-proxy-linux-amd64 {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/agentcy-egress-proxy
-    scp "${SSH_OPTS[@]}" "$HARNESS_ARCHIVE" {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/agentcy-harness.tar.gz
-    scp "${SSH_OPTS[@]}" "$FLUE_ARCHIVE" {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/agentcy-flue-store.tar.gz
-    scp "${SSH_OPTS[@]}" -r cmd/agentcy/public {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/public
-    scp "${SSH_OPTS[@]}" -r db/migrations {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/migrations
-    scp "${SSH_OPTS[@]}" releases/agentcy-microvm-artifacts.tar.gz {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/agentcy-microvm-artifacts.tar.gz
-    scp "${SSH_OPTS[@]}" deploy/Caddyfile {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/Caddyfile
-    scp "${SSH_OPTS[@]}" deploy/apparmor-agentcy-bwrap {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/apparmor-agentcy-bwrap
-    scp "${SSH_OPTS[@]}" deploy/agentcy.service {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/agentcy.service
-    scp "${SSH_OPTS[@]}" deploy/agentcy-flue-store.service {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/agentcy-flue-store.service
-    scp "${SSH_OPTS[@]}" deploy/agentcy-vmlauncher.service {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/agentcy-vmlauncher.service
-    scp "${SSH_OPTS[@]}" deploy/agentcy-microvm-network.service {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/agentcy-microvm-network.service
-    scp "${SSH_OPTS[@]}" deploy/agentcy-egress-proxy.service {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/agentcy-egress-proxy.service
-    scp "${SSH_OPTS[@]}" deploy/agentcy-backup.service {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/agentcy-backup.service
-    scp "${SSH_OPTS[@]}" deploy/agentcy-backup.timer {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/agentcy-backup.timer
-    scp "${SSH_OPTS[@]}" -r scripts/backup {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/backup-scripts
-    scp "${SSH_OPTS[@]}" scripts/microvm-host-network-setup.sh {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/microvm-host-network-setup.sh
-    ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} "mkdir -p ${REMOTE_TMP}/microvm-verify/rootfs"
-    scp "${SSH_OPTS[@]}" scripts/microvm-image/verify.sh scripts/microvm-image/verify-browser-surface.sh {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/microvm-verify/
-    scp "${SSH_OPTS[@]}" scripts/microvm-image/rootfs/verify-standard-toolset.sh {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/microvm-verify/rootfs/
-    # Publish the manifest last so the root helper never observes a complete
-    # request before every payload member has arrived.
-    scp "${SSH_OPTS[@]}" "$DEPLOY_MANIFEST" {{AG_USER}}@{{AG_HOST}}:${REMOTE_TMP}/manifest
-
-    # Step 6: Hand activation to a systemd-owned transaction. The SSH
-    # client waits for the result, but disconnecting it does not kill the worker.
-    echo ""
-    echo "Activating the staged release..."
-    ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} \
-        "sudo -n /usr/local/sbin/agentcy-deploy activate '${DEPLOY_ID}'"
-
-    echo "Health checks and durable activation commit passed"
-    ssh "${SSH_OPTS[@]}" {{AG_USER}}@{{AG_HOST}} \
-        "sudo -n /usr/local/sbin/agentcy-deploy status" || true
-
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "Deployment complete!"
-    echo "  Version: ${RELEASE_TAG}"
-    echo "  URL: https://{{AG_HOST}}"
-
-# Open an administrative production shell through the bootstrap/root identity.
-# The restricted deploy key intentionally cannot allocate a PTY.
-ssh-prod:
-    ssh {{AG_BOOTSTRAP_USER}}@{{AG_HOST}}
-
-# View production logs
-logs-prod:
-    ssh {{AG_USER}}@{{AG_HOST}} "sudo -n /usr/local/sbin/agentcy-deploy logs"
-
-# Check production status
-status-prod:
-    ssh {{AG_USER}}@{{AG_HOST}} "sudo -n /usr/local/sbin/agentcy-deploy status"
