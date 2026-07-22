@@ -1,6 +1,8 @@
 package runtimecontext
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -162,6 +164,23 @@ func StableJSON(v any) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+func StableHash(v any) (string, error) {
+	stable, err := StableJSON(v)
+	if err != nil {
+		return "", err
+	}
+	var normalized any
+	if err := json.Unmarshal([]byte(stable), &normalized); err != nil {
+		return "", err
+	}
+	canonical, err := json.Marshal(normalized)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(canonical)
+	return hex.EncodeToString(digest[:]), nil
 }
 
 func compactSortedStrings(values []string) []string {
