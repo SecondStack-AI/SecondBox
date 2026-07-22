@@ -1,6 +1,7 @@
 package runtimecontext
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -164,6 +165,30 @@ func StableJSON(v any) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+// CanonicalContentHash implements the channel-runtime contract's canonical
+// JSON hashing: recursive lexicographic key ordering, UTF-8 without HTML
+// escaping, number fidelity via json.Number, lowercase SHA-256.
+func CanonicalContentHash(v any) (string, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var normalized any
+	if err := decoder.Decode(&normalized); err != nil {
+		return "", err
+	}
+	var canonical bytes.Buffer
+	encoder := json.NewEncoder(&canonical)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(normalized); err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(bytes.TrimSuffix(canonical.Bytes(), []byte{'\n'}))
+	return hex.EncodeToString(digest[:]), nil
 }
 
 func StableHash(v any) (string, error) {
