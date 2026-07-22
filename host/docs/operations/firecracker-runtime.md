@@ -211,6 +211,16 @@ Firecracker. `CreateWorkspaceThinSnapshot` freezes the guest workspace over
 vsock, creates a host-side dm-thin snapshot device, and thaws the guest in a
 defer path so backup readers can inspect a consistent point-in-time block view.
 
+### Logical versions and terminal checkpoints
+
+The default ext4 backend records a monotonic logical workspace version for every terminal turn, including failed and cancelled turns. Before the first runtime acquisition for a turn, the Sandbox Broker reads the ext4 image offline with `debugfs` and stores a canonical filesystem manifest. Terminal handling fences new acquisitions, rejects an active lease, drains the runtime, and repeats that storage-boundary inspection. It does not trust model or tool reports to decide whether a workspace changed.
+
+A changed manifest creates a content-addressed ext4 checkpoint. Its manifest binds the execution subject, compartment, source generation, terminal turn and status, filesystem-manifest digest, whole-image digest, and size. A clean turn creates no turn checkpoint, but still creates its database logical-version record. Generation bases and terminal markers are durable under `.workspace-durability` in `AG_MICROVM_WORKSPACE_DIR`; those files and `agents.workspace_logical_versions` must be included with workspace backups.
+
+Exact fork materialization verifies the recorded manifest and image evidence before copying either the retained dirty checkpoint or, for a generation with no mutations, its original generation base. Missing, altered, or mismatched evidence fails closed. Every dirty checkpoint remains retained while a logical version or channel branch can reference it, so the current deterministic mutation lineage is empty and bounded. The dm-thin backend does not yet implement this canonical per-turn checkpoint path and rejects logical-version operations; enabling dm-thin for converged channel execution therefore requires the privileged thin-snapshot qualification and a durable evidence implementation.
+
+Golden snapshots, `vmstate.snap`, and `memory.snap` are rebuildable acceleration artifacts only. Logical-version recovery never reads them: canonical Session state comes from Agent Service/Flue persistence, while workspace state comes from the generation base or verified terminal checkpoint. Deleting golden snapshots cannot change which committed workspace version is recovered.
+
 ## Required host privileges
 
 In SecondStack these privileges belong exclusively to the `agent-sandbox-host` artifact. Agent Service remains an unprivileged control plane and reaches the launcher through its Unix socket. See [SecondStack Agent Manager Artifacts](secondstack-artifacts.md) for the rendered-Compose validation command and the exact forbidden control-plane mounts/capabilities.
