@@ -637,15 +637,19 @@ test:
 test-fast *ARGS:
     scripts/test/go-fast.sh {{ARGS}}
 
+# Run Channel Runtime operation, authority, semantic, and mapping contract fixtures.
+test-channel-runtime-contract:
+    go test ./contracts/channel-runtime/v1/... ./contracts/managed-agents/v1/gen/go/managedagents
+
 # Generate sqlc registry query code.
 sqlc:
     scripts/sqlc-generate.sh
 
-# Generate Go and TypeScript Managed Agents public contract artifacts.
+# Generate Managed Agents and Channel Runtime public contract artifacts.
 generate-managed-agents-contracts:
     node scripts/contracts/generate-managed-agents.mjs
 
-# Verify contract generation, inventory, provenance hashes, and local signed artifacts.
+# Verify public contract generation, inventory, provenance hashes, and local signed artifacts.
 verify-managed-agents-baseline artifact_dir="releases/microvm/latest":
     node scripts/contracts/generate-managed-agents.mjs --check
     node scripts/contracts/verify-managed-agents-baseline.mjs --verify-artifact-dir {{artifact_dir}}
