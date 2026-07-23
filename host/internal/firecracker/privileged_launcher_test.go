@@ -15,6 +15,19 @@ import (
 	"agentcy/internal/runtimemanager"
 )
 
+func TestLauncherOutputBufferPreservesModelVisibleInventory(t *testing.T) {
+	buf := newLauncherOutputBuffer()
+	if _, err := buf.Write([]byte(`model_visible_runtime_inventory={"toolNames":["bash"],"handNames":["platform_sandbox"]}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := buf.Write([]byte(strings.Repeat("x", maxLauncherHarnessOutputBytes+128))); err != nil {
+		t.Fatal(err)
+	}
+	if inventory := buf.String(); !strings.Contains(inventory, `"toolNames":["bash"]`) {
+		t.Fatalf("inventory line was evicted from bounded launcher output: %q", inventory[:min(len(inventory), 256)])
+	}
+}
+
 func testPrivilegedLauncherConfig(t *testing.T) PrivilegedLauncherConfig {
 	t.Helper()
 	managerUID := os.Getuid()

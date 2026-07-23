@@ -2082,11 +2082,16 @@ func sliceContainsSequence(values []string, sequence ...string) bool {
 }
 
 const maxLauncherHarnessOutputBytes = 512 << 10
+const maxLauncherModelVisibleInventoryLines = 100
+const maxLauncherModelVisibleInventoryScanTailBytes = 32 << 10
+const launcherModelVisibleInventoryMarker = "model_visible_runtime_inventory="
 
 type launcherOutputBuffer struct {
-	mu       sync.Mutex
-	buf      bytes.Buffer
-	activity chan struct{}
+	mu                         sync.Mutex
+	buf                        bytes.Buffer
+	activity                   chan struct{}
+	modelVisibleInventoryLines []string
+	modelVisibleInventoryTail  string
 }
 
 func newLauncherOutputBuffer() *launcherOutputBuffer {
@@ -2095,6 +2100,7 @@ func newLauncherOutputBuffer() *launcherOutputBuffer {
 
 func (b *launcherOutputBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
+	b.captureModelVisibleInventoryLines(p)
 	n, err := b.buf.Write(p)
 	if b.buf.Len() > maxLauncherHarnessOutputBytes {
 		data := b.buf.Bytes()
@@ -2110,9 +2116,27 @@ func (b *launcherOutputBuffer) Write(p []byte) (int, error) {
 	return n, err
 }
 
+func (b *launcherOutputBuffer) captureModelVisibleInventoryLines(p []byte) {
+	scan := b.modelVisibleInventoryTail + string(p)
+	lines := strings.Split(scan, "\n")
+	b.modelVisibleInventoryTail = lines[len(lines)-1]
+	if len(b.modelVisibleInventoryTail) > maxLauncherModelVisibleInventoryScanTailBytes {
+		b.modelVisibleInventoryTail = b.modelVisibleInventoryTail[len(b.modelVisibleInventoryTail)-maxLauncherModelVisibleInventoryScanTailBytes:]
+	}
+	for _, line := range lines[:len(lines)-1] {
+		if strings.Contains(line, launcherModelVisibleInventoryMarker) &&
+			len(b.modelVisibleInventoryLines) < maxLauncherModelVisibleInventoryLines {
+			b.modelVisibleInventoryLines = append(b.modelVisibleInventoryLines, line)
+		}
+	}
+}
+
 func (b *launcherOutputBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if len(b.modelVisibleInventoryLines) > 0 {
+		return strings.Join(b.modelVisibleInventoryLines, "\n") + "\n" + b.buf.String()
+	}
 	return b.buf.String()
 }
 
