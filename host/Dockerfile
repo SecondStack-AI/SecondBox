@@ -11,6 +11,7 @@ RUN HARNESS_SOURCE_SHA256="$(scripts/harness-source-sha256.sh)" \
     && test "${#HARNESS_SOURCE_SHA256}" -eq 64 \
     && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-X agentcy/internal/microvm.harnessBuildID=${HARNESS_SOURCE_SHA256}" -o /out/agentcy ./cmd/agentcy \
 	&& CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o /out/agentcy-mcp-cutover ./cmd/agentcy-mcp-cutover \
+	&& CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o /out/agentcy-memory-cutover ./cmd/agentcy-memory-cutover \
     && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o /out/agentcy-egress-proxy ./cmd/agentcy-egress-proxy \
     && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-X agentcy/internal/microvm.harnessBuildID=${HARNESS_SOURCE_SHA256}" -o /out/agentcy-vmlauncher ./cmd/agentcy-vmlauncher
 
@@ -41,6 +42,7 @@ RUN apt-get update \
 
 COPY --from=go-builder /out/agentcy /usr/local/bin/agentcy
 COPY --from=go-builder /out/agentcy-mcp-cutover /usr/local/bin/agentcy-mcp-cutover
+COPY --from=go-builder /out/agentcy-memory-cutover /usr/local/bin/agentcy-memory-cutover
 COPY --from=harness-builder --chown=10001:10001 /src/agent/package.json /opt/agent-harness/package.json
 COPY --from=harness-builder --chown=10001:10001 /src/agent/package-lock.json /opt/agent-harness/package-lock.json
 COPY --from=harness-builder --chown=10001:10001 /src/agent/node_modules /opt/agent-harness/node_modules
