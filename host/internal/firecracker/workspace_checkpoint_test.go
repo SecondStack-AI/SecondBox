@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	managedagents "agentcy/contracts/managed-agents/v1/gen/go/managedagents"
 	"agentcy/internal/config"
@@ -55,6 +56,37 @@ func mutateWorkspaceImage(t *testing.T, backend *SandboxBrokerBackend, identity 
 	}
 }
 
+func TestWorkspaceFilesystemManifestIsStableWithSymlinks(t *testing.T) {
+	backend, identity, policy := newWorkspaceCheckpointBackend(t)
+	if _, err := backend.CaptureWorkspaceBaseline(t.Context(), identity, policy); err != nil {
+		t.Fatal(err)
+	}
+	workspacePath, err := backend.workspacePath(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := t.TempDir()
+	if err := os.Symlink("/usr/bin/python3", filepath.Join(source, "python")); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command("mkfs.ext4", "-F", "-d", source, workspacePath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("format symlink workspace image: %v: %s", err, output)
+	}
+	first, err := workspaceFilesystemManifestSHA256(t.Context(), workspacePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(25 * time.Millisecond)
+	second, err := workspaceFilesystemManifestSHA256(t.Context(), workspacePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatalf("symlink workspace manifest is unstable: first=%s second=%s", first, second)
+	}
+}
+
 func TestExt4CleanTurnDoesNotCreateTurnCheckpoint(t *testing.T) {
 	backend, identity, policy := newWorkspaceCheckpointBackend(t)
 	baseline, err := backend.CaptureWorkspaceBaseline(context.Background(), identity, policy)
@@ -93,6 +125,31 @@ func TestExt4DirtyTurnCreatesContentVerifiedCheckpoint(t *testing.T) {
 	}
 	if _, _, err := backend.verifyWorkspaceArtifact(commit.CheckpointRef, commit.CheckpointManifestSHA256, commit.CheckpointSHA256, commit.CheckpointSizeBytes); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWorkspaceArtifactRejectsContentEvidenceFromDifferentImage(t *testing.T) {
+	backend, identity, policy := newWorkspaceCheckpointBackend(t)
+	baseline, err := backend.CaptureWorkspaceBaseline(context.Background(), identity, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutateWorkspaceImage(t, backend, identity, "changed-after-evidence.txt", "new logical content")
+	workspacePath, err := backend.workspacePath(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = backend.createWorkspaceArtifact(
+		context.Background(),
+		"turn_checkpoint",
+		identity,
+		workspacePath,
+		baseline.ManifestSHA256,
+		"turn-stale-content-evidence",
+		sandboxbroker.WorkspaceTerminalCompleted,
+	)
+	if !errors.Is(err, sandboxbroker.ErrWorkspaceCheckpointCorrupt) {
+		t.Fatalf("create artifact with stale content evidence error = %v", err)
 	}
 }
 

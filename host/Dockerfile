@@ -7,10 +7,12 @@ RUN go mod download && go mod verify
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o /out/agentcy ./cmd/agentcy \
+RUN HARNESS_SOURCE_SHA256="$(scripts/harness-source-sha256.sh)" \
+    && test "${#HARNESS_SOURCE_SHA256}" -eq 64 \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-X agentcy/internal/microvm.harnessBuildID=${HARNESS_SOURCE_SHA256}" -o /out/agentcy ./cmd/agentcy \
 	&& CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o /out/agentcy-mcp-cutover ./cmd/agentcy-mcp-cutover \
     && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o /out/agentcy-egress-proxy ./cmd/agentcy-egress-proxy \
-    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o /out/agentcy-vmlauncher ./cmd/agentcy-vmlauncher
+    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-X agentcy/internal/microvm.harnessBuildID=${HARNESS_SOURCE_SHA256}" -o /out/agentcy-vmlauncher ./cmd/agentcy-vmlauncher
 
 FROM node:22.23.1-bookworm-slim AS harness-builder
 

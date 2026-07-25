@@ -34,6 +34,10 @@ const maxPrivilegedLauncherResponseBytes = 4 << 20
 
 const launcherSourceGuardTable = "agentcy_source_guard"
 
+// harnessBuildID is replaced at image build time with a digest of the harness
+// source tree compiled into both the manager and privileged launcher binaries.
+var harnessBuildID = "development"
+
 var launcherInstanceIDPattern = regexp.MustCompile(`^fc-[A-Za-z0-9][A-Za-z0-9_-]{2,180}$`)
 var launcherPathSegmentPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,180}$`)
 var launcherHarnessCellIDPattern = regexp.MustCompile(`^hcell-[A-Za-z0-9][A-Za-z0-9_-]{2,90}$`)
@@ -77,6 +81,7 @@ type privilegedLauncherResponse struct {
 	ExecutionStarted bool                  `json:"executionStarted,omitempty"`
 	ExitCode         int                   `json:"exitCode,omitempty"`
 	Version          string                `json:"version,omitempty"`
+	HarnessBuildID   string                `json:"harnessBuildId,omitempty"`
 	NetworkPosture   *NetworkPostureReport `json:"networkPosture,omitempty"`
 }
 
@@ -144,6 +149,9 @@ func (c *privilegedLauncherClient) Ping(ctx context.Context) error {
 	}
 	if resp.Version != expectedFirecrackerVersionString() {
 		return fmt.Errorf("privileged launcher firecracker version %q does not match %q", resp.Version, expectedFirecrackerVersionString())
+	}
+	if resp.HarnessBuildID != harnessBuildID {
+		return fmt.Errorf("privileged launcher harness build %q does not match manager build %q", resp.HarnessBuildID, harnessBuildID)
 	}
 	if resp.NetworkPosture == nil {
 		return fmt.Errorf("privileged launcher response is missing the required network posture report")
@@ -1026,6 +1034,7 @@ func (s *PrivilegedLauncherServer) handle(ctx context.Context, req privilegedLau
 	switch req.Op {
 	case "ping":
 		resp.Version = expectedFirecrackerVersionString()
+		resp.HarnessBuildID = harnessBuildID
 		posture := s.networkPosture(ctx)
 		resp.NetworkPosture = &posture
 	case "configure_tap":

@@ -151,6 +151,17 @@ func (b *SandboxBrokerBackend) Drain(ctx context.Context, handle sandboxbroker.R
 	return b.manager.drainSandboxBrokerRuntime(ctx, runtime.agentID, runtime.compartmentID)
 }
 
+// DrainWorkspace stops a runtime started by the Agent hand surface, which uses
+// the same physical workspace but carries richer runtime context than the
+// generic broker Acquire contract.
+func (b *SandboxBrokerBackend) DrainWorkspace(ctx context.Context, identity sandboxbroker.WorkspaceIdentity) error {
+	runtime, err := sandboxBrokerRuntimeFor(identity, sandboxbroker.LeasePolicy{})
+	if err != nil {
+		return err
+	}
+	return b.manager.drainSandboxBrokerRuntime(ctx, runtime.agentID, runtime.compartmentID)
+}
+
 func (b *SandboxBrokerBackend) Destroy(ctx context.Context, identity sandboxbroker.WorkspaceIdentity) error {
 	if err := ctx.Err(); err != nil {
 		return err
