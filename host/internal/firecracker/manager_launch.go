@@ -764,22 +764,6 @@ func createWorkspaceImage(ctx context.Context, path string, sizeMiB int, seedDir
 	return nil
 }
 
-func debugfsReadFile(ctx context.Context, imagePath, guestPath string) ([]byte, bool, error) {
-	out, err := exec.CommandContext(ctx, "debugfs", "-R", "cat "+guestPath, imagePath).CombinedOutput()
-	text := string(out)
-	if strings.Contains(text, "File not found") || strings.Contains(text, "File not found by ext2_lookup") {
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, fmt.Errorf("debugfs cat %s: %w: %s", guestPath, err, strings.TrimSpace(text))
-	}
-	lines := strings.SplitN(text, "\n", 2)
-	if len(lines) == 2 && strings.HasPrefix(lines[0], "debugfs ") {
-		text = lines[1]
-	}
-	return []byte(text), true, nil
-}
-
 func (m *Manager) prepareWorkspace(ctx context.Context, agentID, compartmentID string) (string, error) {
 	return m.prepareWorkspaceSized(ctx, agentID, compartmentID, m.cfg.MicroVMWorkspaceSizeMiB)
 }
@@ -849,10 +833,6 @@ type networkIface struct {
 	IfaceID     string `json:"iface_id"`
 	GuestMAC    string `json:"guest_mac,omitempty"`
 	HostDevName string `json:"host_dev_name,omitempty"`
-}
-
-func buildFirecrackerConfig(cfg *config.Config, kernelPath, rootfsPath, workspacePath, sharedImagePath, vsockUDS, tapName, guestIP string) firecrackerConfig {
-	return buildFirecrackerConfigWithPolicy(cfg, kernelPath, rootfsPath, workspacePath, sharedImagePath, vsockUDS, tapName, guestIP, nil)
 }
 
 func buildFirecrackerConfigWithPolicy(cfg *config.Config, kernelPath, rootfsPath, workspacePath, sharedImagePath, vsockUDS, tapName, guestIP string, policy *runtimemanager.SandboxRuntimePolicy) firecrackerConfig {

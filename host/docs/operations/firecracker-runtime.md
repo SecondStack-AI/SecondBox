@@ -223,7 +223,7 @@ Golden snapshots, `vmstate.snap`, and `memory.snap` are rebuildable acceleration
 
 ## Required host privileges
 
-In SecondStack these privileges belong exclusively to the `agent-sandbox-host` artifact. Agent Service remains an unprivileged control plane and reaches the launcher through its Unix socket. See [SecondStack Agent Manager Artifacts](secondstack-artifacts.md) for the rendered-Compose validation command and the exact forbidden control-plane mounts/capabilities.
+In SecondStack these privileges belong exclusively to the `agent-sandbox-host` artifact. Agent Service remains an unprivileged control plane and reaches the launcher through its Unix socket. See [SecondStack deployment artifacts](secondstack-artifacts.md) for the rendered-Compose validation command and the exact forbidden control-plane mounts/capabilities.
 
 A staging or production host needs KVM plus enough privilege for:
 
