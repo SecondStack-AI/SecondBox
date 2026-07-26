@@ -4,11 +4,11 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 
-out_dir="${1:-${AG_MICROVM_KERNEL_OUT_DIR:-$repo_root/tmp/microvm-kernel}}"
-lock_file="${AG_MICROVM_KERNEL_LOCK:-$script_dir/kernel.lock}"
-cache_dir="${AG_MICROVM_KERNEL_CACHE:-$repo_root/tmp/microvm-kernel-cache}"
-jobs="${AG_MICROVM_KERNEL_JOBS:-$(nproc)}"
-verify_only="${AG_MICROVM_KERNEL_VERIFY_ONLY:-false}"
+out_dir="${1:-${AGENT_MANAGER_MICROVM_KERNEL_OUT_DIR:-$repo_root/tmp/microvm-kernel}}"
+lock_file="${AGENT_MANAGER_MICROVM_KERNEL_LOCK:-$script_dir/kernel.lock}"
+cache_dir="${AGENT_MANAGER_MICROVM_KERNEL_CACHE:-$repo_root/tmp/microvm-kernel-cache}"
+jobs="${AGENT_MANAGER_MICROVM_KERNEL_JOBS:-$(nproc)}"
+verify_only="${AGENT_MANAGER_MICROVM_KERNEL_VERIFY_ONLY:-false}"
 
 usage() {
     cat >&2 <<'USAGE'
@@ -18,11 +18,11 @@ Builds the pinned Firecracker guest kernel described by kernel.lock. The output
 directory receives vmlinux, config, System.map, and kernel-provenance.json.
 
 Environment:
-  AG_MICROVM_KERNEL_LOCK       Lock file with KERNEL_VERSION/URL/SHA256.
-  AG_MICROVM_KERNEL_CACHE      Download cache directory.
-  AG_MICROVM_KERNEL_JOBS       Parallel make jobs.
-  AG_MICROVM_KERNEL_VERIFY_ONLY Verify the locked source tarball and exit.
-  AG_MICROVM_KERNEL_OUT_DIR    Output directory when no argument is supplied.
+  AGENT_MANAGER_MICROVM_KERNEL_LOCK       Lock file with KERNEL_VERSION/URL/SHA256.
+  AGENT_MANAGER_MICROVM_KERNEL_CACHE      Download cache directory.
+  AGENT_MANAGER_MICROVM_KERNEL_JOBS       Parallel make jobs.
+  AGENT_MANAGER_MICROVM_KERNEL_VERIFY_ONLY Verify the locked source tarball and exit.
+  AGENT_MANAGER_MICROVM_KERNEL_OUT_DIR    Output directory when no argument is supplied.
 USAGE
 }
 
@@ -70,8 +70,8 @@ build_dir="$work_dir/build"
 mkdir -p "$build_dir"
 
 export ARCH=x86_64
-export KBUILD_BUILD_USER="${KBUILD_BUILD_USER:-agentcy}"
-export KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST:-agentcy-ci}"
+export KBUILD_BUILD_USER="${KBUILD_BUILD_USER:-agent-manager}"
+export KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST:-agent-manager-ci}"
 export KBUILD_BUILD_TIMESTAMP="${KBUILD_BUILD_TIMESTAMP:-$(date -u -d "@${KERNEL_SOURCE_DATE_EPOCH:-0}" '+%Y-%m-%d %H:%M:%S')}"
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-${KERNEL_SOURCE_DATE_EPOCH:-0}}"
 export KCFLAGS="${KCFLAGS:--Wno-error=date-time}"

@@ -30,23 +30,23 @@ platform_port=18081
 explicit_proxy_port=13128
 transparent_proxy_port=18080
 denied_port=15432
-state_dir="${RUNNER_TEMP:-/tmp}/agentcy-network-test-$suffix"
+state_dir="${RUNNER_TEMP:-/tmp}/agent-manager-network-test-$suffix"
 server_log="$state_dir/server.log"
 server_pid=""
 
 network_setup() {
   ip netns exec "$host_ns" env \
-    AG_MICROVM_BRIDGE_NAME="$bridge" \
-    AG_MICROVM_BRIDGE_CIDR="$bridge_cidr" \
-    AG_MICROVM_GUEST_CIDR="$guest_cidr" \
-    AG_MICROVM_TAP_PREFIX="$tap_prefix" \
-    AG_EGRESS_PROXY_LISTEN_PORT="$explicit_proxy_port" \
-    AG_EGRESS_PROXY_TRANSPARENT_HTTP_PORT="$transparent_proxy_port" \
-    AG_MICROVM_INSTALL_CIDR_TRANSPARENT_HTTP=true \
-    AG_AGENTCY_PRIVATE_LISTEN_PORT="$platform_port" \
-    AG_AGENTCY_PRIVATE_IFACES="lo,$bridge,$host_veth" \
-    AG_MICROVM_NETWORK_STATE_DIR="$state_dir/network-state" \
-    AG_MICROVM_DELETE_BRIDGE=true \
+    AGENT_MANAGER_MICROVM_BRIDGE_NAME="$bridge" \
+    AGENT_MANAGER_MICROVM_BRIDGE_CIDR="$bridge_cidr" \
+    AGENT_MANAGER_MICROVM_GUEST_CIDR="$guest_cidr" \
+    AGENT_MANAGER_MICROVM_TAP_PREFIX="$tap_prefix" \
+    AGENT_MANAGER_EGRESS_PROXY_LISTEN_PORT="$explicit_proxy_port" \
+    AGENT_MANAGER_EGRESS_PROXY_TRANSPARENT_HTTP_PORT="$transparent_proxy_port" \
+    AGENT_MANAGER_MICROVM_INSTALL_CIDR_TRANSPARENT_HTTP=true \
+    AGENT_MANAGER_PRIVATE_LISTEN_PORT="$platform_port" \
+    AGENT_MANAGER_PRIVATE_IFACES="lo,$bridge,$host_veth" \
+    AGENT_MANAGER_MICROVM_NETWORK_STATE_DIR="$state_dir/network-state" \
+    AGENT_MANAGER_MICROVM_DELETE_BRIDGE=true \
     "$setup_script" "$1"
 }
 

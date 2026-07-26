@@ -18,21 +18,21 @@ func completeNetworkPostureRunner(cfg PrivilegedLauncherConfig) commandRunner {
 		case name == "sysctl":
 			return []byte("1\n"), nil
 		case name == "iptables" && strings.Contains(joined, "-S INPUT"):
-			return []byte("-A INPUT -i " + cfg.BridgeName + " -m comment --comment agentcy-sandbox-input -j AGENTCY_SANDBOX_IN\n-A INPUT -i " + cfg.TapPrefix + "+ -m comment --comment agentcy-sandbox-input -j AGENTCY_SANDBOX_IN\n-A INPUT -j ACCEPT\n"), nil
+			return []byte("-A INPUT -i " + cfg.BridgeName + " -m comment --comment agent-manager-sandbox-input -j AGENT_MANAGER_SANDBOX_IN\n-A INPUT -i " + cfg.TapPrefix + "+ -m comment --comment agent-manager-sandbox-input -j AGENT_MANAGER_SANDBOX_IN\n-A INPUT -j ACCEPT\n"), nil
 		case name == "iptables" && strings.Contains(joined, "-S FORWARD"):
-			return []byte("-A FORWARD -o " + cfg.TapPrefix + "+ -m comment --comment agentcy-microvm-forward-input-policy -j AGENTCY_GUEST_FWD_IN\n-A FORWARD -o " + cfg.BridgeName + " -m comment --comment agentcy-microvm-forward-input-policy -j AGENTCY_GUEST_FWD_IN\n-A FORWARD -i " + cfg.TapPrefix + "+ -m comment --comment agentcy-microvm-forward-policy -j AGENTCY_GUEST_FWD\n-A FORWARD -i " + cfg.BridgeName + " -m comment --comment agentcy-microvm-forward-policy -j AGENTCY_GUEST_FWD\n-A FORWARD -j ACCEPT\n"), nil
-		case name == "iptables" && strings.Contains(joined, "-S AGENTCY_GUEST_FWD_IN"):
-			return []byte("-A AGENTCY_GUEST_FWD_IN -m comment --comment agentcy-microvm-forward-in-deny -j DROP\n"), nil
-		case name == "iptables" && strings.Contains(joined, "-S AGENTCY_GUEST_FWD"):
-			return []byte("-A AGENTCY_GUEST_FWD -m comment --comment agentcy-microvm-forward-deny -j DROP\n"), nil
+			return []byte("-A FORWARD -o " + cfg.TapPrefix + "+ -m comment --comment agent-manager-microvm-forward-input-policy -j AGENT_MANAGER_GUEST_FWD_IN\n-A FORWARD -o " + cfg.BridgeName + " -m comment --comment agent-manager-microvm-forward-input-policy -j AGENT_MANAGER_GUEST_FWD_IN\n-A FORWARD -i " + cfg.TapPrefix + "+ -m comment --comment agent-manager-microvm-forward-policy -j AGENT_MANAGER_GUEST_FWD\n-A FORWARD -i " + cfg.BridgeName + " -m comment --comment agent-manager-microvm-forward-policy -j AGENT_MANAGER_GUEST_FWD\n-A FORWARD -j ACCEPT\n"), nil
+		case name == "iptables" && strings.Contains(joined, "-S AGENT_MANAGER_GUEST_FWD_IN"):
+			return []byte("-A AGENT_MANAGER_GUEST_FWD_IN -m comment --comment agent-manager-microvm-forward-in-deny -j DROP\n"), nil
+		case name == "iptables" && strings.Contains(joined, "-S AGENT_MANAGER_GUEST_FWD"):
+			return []byte("-A AGENT_MANAGER_GUEST_FWD -m comment --comment agent-manager-microvm-forward-deny -j DROP\n"), nil
 		case name == "ip6tables" && strings.Contains(joined, "-S INPUT"):
-			return []byte("-A INPUT -i " + cfg.BridgeName + " -m comment --comment agentcy-sandbox-ipv6-input -j AGENTCY_SANDBOX6_IN\n-A INPUT -i " + cfg.TapPrefix + "+ -m comment --comment agentcy-sandbox-ipv6-input -j AGENTCY_SANDBOX6_IN\n-A INPUT -j ACCEPT\n"), nil
+			return []byte("-A INPUT -i " + cfg.BridgeName + " -m comment --comment agent-manager-sandbox-ipv6-input -j AGENT_MANAGER_SANDBOX6_IN\n-A INPUT -i " + cfg.TapPrefix + "+ -m comment --comment agent-manager-sandbox-ipv6-input -j AGENT_MANAGER_SANDBOX6_IN\n-A INPUT -j ACCEPT\n"), nil
 		case name == "ip6tables" && strings.Contains(joined, "-S FORWARD"):
-			return []byte("-A FORWARD -o " + cfg.TapPrefix + "+ -m comment --comment agentcy-sandbox-ipv6-forward-in -j AGENTCY_SANDBOX6_FWD\n-A FORWARD -o " + cfg.BridgeName + " -m comment --comment agentcy-sandbox-ipv6-forward-in -j AGENTCY_SANDBOX6_FWD\n-A FORWARD -i " + cfg.TapPrefix + "+ -m comment --comment agentcy-sandbox-ipv6-forward -j AGENTCY_SANDBOX6_FWD\n-A FORWARD -i " + cfg.BridgeName + " -m comment --comment agentcy-sandbox-ipv6-forward -j AGENTCY_SANDBOX6_FWD\n-A FORWARD -j ACCEPT\n"), nil
-		case name == "ip6tables" && strings.Contains(joined, "-S AGENTCY_SANDBOX6_IN"):
-			return []byte("-A AGENTCY_SANDBOX6_IN -m comment --comment agentcy-sandbox-ipv6-deny -j DROP\n"), nil
-		case name == "ip6tables" && strings.Contains(joined, "-S AGENTCY_SANDBOX6_FWD"):
-			return []byte("-A AGENTCY_SANDBOX6_FWD -m comment --comment agentcy-sandbox-ipv6-forward-deny -j DROP\n"), nil
+			return []byte("-A FORWARD -o " + cfg.TapPrefix + "+ -m comment --comment agent-manager-sandbox-ipv6-forward-in -j AGENT_MANAGER_SANDBOX6_FWD\n-A FORWARD -o " + cfg.BridgeName + " -m comment --comment agent-manager-sandbox-ipv6-forward-in -j AGENT_MANAGER_SANDBOX6_FWD\n-A FORWARD -i " + cfg.TapPrefix + "+ -m comment --comment agent-manager-sandbox-ipv6-forward -j AGENT_MANAGER_SANDBOX6_FWD\n-A FORWARD -i " + cfg.BridgeName + " -m comment --comment agent-manager-sandbox-ipv6-forward -j AGENT_MANAGER_SANDBOX6_FWD\n-A FORWARD -j ACCEPT\n"), nil
+		case name == "ip6tables" && strings.Contains(joined, "-S AGENT_MANAGER_SANDBOX6_IN"):
+			return []byte("-A AGENT_MANAGER_SANDBOX6_IN -m comment --comment agent-manager-sandbox-ipv6-deny -j DROP\n"), nil
+		case name == "ip6tables" && strings.Contains(joined, "-S AGENT_MANAGER_SANDBOX6_FWD"):
+			return []byte("-A AGENT_MANAGER_SANDBOX6_FWD -m comment --comment agent-manager-sandbox-ipv6-forward-deny -j DROP\n"), nil
 		default:
 			return nil, nil
 		}
@@ -51,7 +51,7 @@ func TestProbeNetworkPostureReportsMissingFirewallInvariant(t *testing.T) {
 	cfg := PrivilegedLauncherConfig{BridgeName: "agfc0", BridgeCIDR: "172.30.0.1/24", TapPrefix: "agtap", HarnessIPCommand: "ip"}
 	complete := completeNetworkPostureRunner(cfg)
 	runner := func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		if name == "iptables" && strings.Contains(strings.Join(args, " "), "agentcy-microvm-forward-deny") {
+		if name == "iptables" && strings.Contains(strings.Join(args, " "), "agent-manager-microvm-forward-deny") {
 			return nil, errors.New("rule missing")
 		}
 		return complete(ctx, name, args...)
@@ -116,8 +116,8 @@ func TestProbeNetworkPostureRejectsUnexpectedAcceptBeforeTerminalDeny(t *testing
 	complete := completeNetworkPostureRunner(cfg)
 	runner := func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		joined := strings.Join(args, " ")
-		if name == "iptables" && strings.Contains(joined, "-S AGENTCY_GUEST_FWD") && !strings.Contains(joined, "_IN") {
-			return []byte("-A AGENTCY_GUEST_FWD -j ACCEPT\n-A AGENTCY_GUEST_FWD -m comment --comment agentcy-microvm-forward-deny -j DROP\n"), nil
+		if name == "iptables" && strings.Contains(joined, "-S AGENT_MANAGER_GUEST_FWD") && !strings.Contains(joined, "_IN") {
+			return []byte("-A AGENT_MANAGER_GUEST_FWD -j ACCEPT\n-A AGENT_MANAGER_GUEST_FWD -m comment --comment agent-manager-microvm-forward-deny -j DROP\n"), nil
 		}
 		return complete(ctx, name, args...)
 	}
@@ -153,7 +153,7 @@ func TestRequireNetworkPostureMetersMissingInvariant(t *testing.T) {
 		cfg:             cfg,
 		postureFailures: map[string]uint64{},
 		runHost: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-			if name == "ip6tables" && strings.Contains(strings.Join(args, " "), "agentcy-sandbox-ipv6-forward-deny") {
+			if name == "ip6tables" && strings.Contains(strings.Join(args, " "), "agent-manager-sandbox-ipv6-forward-deny") {
 				return nil, errors.New("rule missing")
 			}
 			return complete(ctx, name, args...)

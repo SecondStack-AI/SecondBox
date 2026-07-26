@@ -31,8 +31,8 @@ for forbidden in \
     fi
 done
 
-patterns='(^[[:space:]]*-{5}BEGIN [A-Z ]*PRIVATE KEY-{5}|AGENT_PLATFORM_TOKEN=|AG_AGENT_RUNTIME_AUTH_SECRET=|xox[baprs]-[A-Za-z0-9-]{10,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,})'
-scan_out="/tmp/agentcy-microvm-secret-scan.$$"
+patterns='(^[[:space:]]*-{5}BEGIN [A-Z ]*PRIVATE KEY-{5}|AGENT_PLATFORM_TOKEN=|AGENT_MANAGER_AGENT_RUNTIME_AUTH_SECRET=|xox[baprs]-[A-Za-z0-9-]{10,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,})'
+scan_out="/tmp/agent-manager-microvm-secret-scan.$$"
 if command -v rg >/dev/null 2>&1; then
     scan_cmd=(rg -n --hidden --no-ignore
         -g '!**/node_modules/**'

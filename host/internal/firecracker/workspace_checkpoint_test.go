@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	managedagents "agentcy/contracts/managed-agents/v1/gen/go/managedagents"
-	"agentcy/internal/config"
-	"agentcy/internal/sandboxbroker"
+	managedagents "agent-manager/contracts/managed-agents/v1/gen/go/managedagents"
+	"agent-manager/internal/config"
+	"agent-manager/internal/sandboxbroker"
 )
 
 func newWorkspaceCheckpointBackend(t *testing.T) (*SandboxBrokerBackend, sandboxbroker.WorkspaceIdentity, sandboxbroker.LeasePolicy) {

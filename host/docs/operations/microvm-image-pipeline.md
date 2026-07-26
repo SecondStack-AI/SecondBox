@@ -10,15 +10,15 @@ The Firecracker backend consumes three versioned artifacts:
 Build locally with a supplied kernel:
 
 ```sh
-AG_MICROVM_KERNEL_PATH=/path/to/vmlinux \
-AG_MICROVM_KERNEL_CONFIG=/path/to/linux/.config \
+AGENT_MANAGER_MICROVM_KERNEL_PATH=/path/to/vmlinux \
+AGENT_MANAGER_MICROVM_KERNEL_CONFIG=/path/to/linux/.config \
 just build-microvm-images
 ```
 
 Build with the pinned kernel described by `scripts/microvm-image/kernel.lock`:
 
 ```sh
-AG_MICROVM_BUILD_KERNEL=true \
+AGENT_MANAGER_MICROVM_BUILD_KERNEL=true \
 just build-microvm-images
 ```
 
@@ -30,29 +30,29 @@ The build writes `kernel-provenance.json`, `rootfs-source-manifest.json`,
 `manifest.json`, `SHA256SUMS`, `manifest.sig`, and `signing.pub` alongside the artifacts under
 `releases/microvm/<version>/`.
 `manifest.json` records `/init` as the guest entrypoint and
-`/usr/local/bin/agentcy-microvm-entrypoint` as the runtime bootstrap. The
+`/usr/local/bin/agent-manager-microvm-entrypoint` as the runtime bootstrap. The
 manifest includes the kernel provenance and rootfs source-manifest hashes, so
 the OpenSSL signature covers provenance as well as the artifact hashes.
 
 Verify an artifact set with a trusted public key:
 
 ```sh
-AG_MICROVM_OUT_DIR=releases/microvm/<version> \
-AG_MICROVM_PUBLIC_KEY=releases/microvm/<version>/signing.pub \
+AGENT_MANAGER_MICROVM_OUT_DIR=releases/microvm/<version> \
+AGENT_MANAGER_MICROVM_PUBLIC_KEY=releases/microvm/<version>/signing.pub \
 just verify-microvm-images
 ```
 
-For production, replace `AG_MICROVM_PUBLIC_KEY` with the pinned deployment
+For production, replace `AGENT_MANAGER_MICROVM_PUBLIC_KEY` with the pinned deployment
 public key, not the artifact's bundled `signing.pub`. Omitting
-`AG_MICROVM_PUBLIC_KEY` intentionally skips signature trust verification and
+`AGENT_MANAGER_MICROVM_PUBLIC_KEY` intentionally skips signature trust verification and
 checks content integrity only.
 
 The build pipeline:
 
 - validates the supplied or built kernel config for virtio block/net/vsock, ext4, FUSE,
   user namespaces, and seccomp;
-- copies the prepared guest rootfs from `AG_MICROVM_ROOTFS_SOURCE_DIR`;
-- injects `agentcy-microvm-agent`, `/init`, and the microVM entrypoint;
+- copies the prepared guest rootfs from `AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_DIR`;
+- injects `agent-manager-microvm-agent`, `/init`, and the microVM entrypoint;
 - creates an ext4 rootfs image and a shared image (`auto` prefers erofs, then
   squashfs, then ext4);
 - scans the staged rootfs for forbidden runtime credential files and obvious
@@ -62,16 +62,16 @@ The build pipeline:
 For generated images, set:
 
 ```sh
-AG_MICROVM_KERNEL_PATH=/absolute/path/to/kernel
-AG_MICROVM_ROOTFS_PATH=/absolute/path/to/rootfs.ext4
-AG_MICROVM_SHARED_IMAGE_PATH=/absolute/path/to/shared.img
-AG_MICROVM_KERNEL_ARGS="console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/init"
+AGENT_MANAGER_MICROVM_KERNEL_PATH=/absolute/path/to/kernel
+AGENT_MANAGER_MICROVM_ROOTFS_PATH=/absolute/path/to/rootfs.ext4
+AGENT_MANAGER_MICROVM_SHARED_IMAGE_PATH=/absolute/path/to/shared.img
+AGENT_MANAGER_MICROVM_KERNEL_ARGS="console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/init"
 ```
 
 For local smoke on minimal hosts, force the portable shared-image fallback:
 
 ```sh
-AG_MICROVM_SHARED_FORMAT=ext4
+AGENT_MANAGER_MICROVM_SHARED_FORMAT=ext4
 ```
 
 ## Standard package set (reproducible rootfs source)
@@ -97,7 +97,7 @@ copies the source manifest into the artifact directory and covers it from
 The old base-extension path remains available for emergency rollbacks:
 
 ```sh
-AG_MICROVM_ROOTFS_SOURCE_MODE=extend just build-microvm-images-std
+AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_MODE=extend just build-microvm-images-std
 ```
 
 The package lists are the tracked source of truth; edit them and rerun to change

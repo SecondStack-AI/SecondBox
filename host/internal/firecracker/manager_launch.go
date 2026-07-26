@@ -1,10 +1,10 @@
 package microvm
 
 import (
-	"agentcy/internal/config"
-	"agentcy/internal/registry"
-	"agentcy/internal/runtimecontext"
-	"agentcy/internal/runtimemanager"
+	"agent-manager/internal/config"
+	"agent-manager/internal/registry"
+	"agent-manager/internal/runtimecontext"
+	"agent-manager/internal/runtimemanager"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -63,15 +63,15 @@ func relocateRunDirForUnixSockets(runDir string) (string, bool) {
 			return candidate, true
 		}
 	}
-	return filepath.Join(os.TempDir(), fmt.Sprintf("agentcy-%d", os.Getuid()), "run"), true
+	return filepath.Join(os.TempDir(), fmt.Sprintf("agent-manager-%d", os.Getuid()), "run"), true
 }
 
 func shortMicroVMRunDirCandidates() []string {
 	var candidates []string
 	if cacheDir, err := os.UserCacheDir(); err == nil && strings.TrimSpace(cacheDir) != "" {
-		candidates = append(candidates, filepath.Join(cacheDir, "agentcy", "microvm", "run"))
+		candidates = append(candidates, filepath.Join(cacheDir, "agent-manager", "run"))
 	}
-	candidates = append(candidates, filepath.Join(os.TempDir(), fmt.Sprintf("agentcy-%d", os.Getuid()), "run"))
+	candidates = append(candidates, filepath.Join(os.TempDir(), fmt.Sprintf("agent-manager-%d", os.Getuid()), "run"))
 	return candidates
 }
 
@@ -427,10 +427,10 @@ func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, 
 	if m.cfg.MicroVMAllowUnjailed {
 		socket := filepath.Join(dir, firecrackerSockName)
 		vsockUDS := filepath.Join(dir, vsockUDSName)
-		if err := checkUnixSocketPath("firecracker api", socket, "AG_MICROVM_RUN_DIR"); err != nil {
+		if err := checkUnixSocketPath("firecracker api", socket, "AGENT_MANAGER_MICROVM_RUN_DIR"); err != nil {
 			return firecrackerLaunch{}, err
 		}
-		if err := checkUnixSocketPath("vsock", vsockUDS, "AG_MICROVM_RUN_DIR"); err != nil {
+		if err := checkUnixSocketPath("vsock", vsockUDS, "AGENT_MANAGER_MICROVM_RUN_DIR"); err != nil {
 			return firecrackerLaunch{}, err
 		}
 		configPath := filepath.Join(dir, configName)
@@ -447,10 +447,10 @@ func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, 
 	jailRoot := m.jailerRoot(instanceID)
 	socket := filepath.Join(jailRoot, firecrackerSockName)
 	vsockUDS := filepath.Join(jailRoot, vsockUDSName)
-	if err := checkUnixSocketPath("jailed firecracker api", socket, "AG_MICROVM_JAILER_CHROOT_BASE_DIR"); err != nil {
+	if err := checkUnixSocketPath("jailed firecracker api", socket, "AGENT_MANAGER_MICROVM_JAILER_CHROOT_BASE_DIR"); err != nil {
 		return firecrackerLaunch{}, err
 	}
-	if err := checkUnixSocketPath("jailed vsock", vsockUDS, "AG_MICROVM_JAILER_CHROOT_BASE_DIR"); err != nil {
+	if err := checkUnixSocketPath("jailed vsock", vsockUDS, "AGENT_MANAGER_MICROVM_JAILER_CHROOT_BASE_DIR"); err != nil {
 		return firecrackerLaunch{}, err
 	}
 	if err := os.MkdirAll(jailRoot, 0o700); err != nil {
@@ -632,7 +632,7 @@ func reflinkOnlyFile(dst, src string, mode os.FileMode) error {
 		_ = os.Remove(dst)
 		hint := "the run dir must be on the same copy-on-write filesystem (btrfs/xfs) as the rootfs image"
 		if errors.Is(err, syscall.EXDEV) {
-			hint = "dst and src are on different filesystems; set AG_MICROVM_RUN_DIR to a path on the same filesystem as AG_MICROVM_ROOTFS_PATH"
+			hint = "dst and src are on different filesystems; set AGENT_MANAGER_MICROVM_RUN_DIR to a path on the same filesystem as AGENT_MANAGER_MICROVM_ROOTFS_PATH"
 		}
 		return fmt.Errorf("reflink rootfs %s -> %s: %w (%s)", src, dst, err, hint)
 	}
@@ -682,7 +682,7 @@ func stageWorkspaceJailFile(dst, src string, uid, gid int) error {
 	_ = os.Remove(dst)
 	if err := hardLinkFile(src, dst); err != nil {
 		if errors.Is(err, syscall.EXDEV) {
-			return fmt.Errorf("link workspace image into jail: %w (jailer chroot base dir must be on the same filesystem as AG_MICROVM_WORKSPACE_DIR)", err)
+			return fmt.Errorf("link workspace image into jail: %w (jailer chroot base dir must be on the same filesystem as AGENT_MANAGER_MICROVM_WORKSPACE_DIR)", err)
 		}
 		return err
 	}
@@ -877,7 +877,7 @@ func buildFirecrackerConfigWithPolicy(cfg *config.Config, kernelPath, rootfsPath
 		BootSource: bootSource{KernelImagePath: kernelPath, BootArgs: effectiveKernelArgsWithProcessLimit(cfg, guestIP, processLimit)},
 		Drives:     drives,
 		Machine:    machineConfig{VCPUCount: vcpus, MemSizeMiB: memoryMiB, SMT: false, CPUTemplate: cfg.MicroVMCPUTemplate},
-		Vsock:      vsockConfig{VsockID: "agentcy-vsock", GuestCID: 3, UDSPath: vsockUDS},
+		Vsock:      vsockConfig{VsockID: "agent-manager-vsock", GuestCID: 3, UDSPath: vsockUDS},
 	}
 	if strings.TrimSpace(tapName) != "" {
 		fc.NetworkIfaces = []networkIface{{
@@ -892,7 +892,7 @@ func buildFirecrackerConfigWithPolicy(cfg *config.Config, kernelPath, rootfsPath
 func effectiveKernelArgsWithProcessLimit(cfg *config.Config, guestIP string, processLimit int) string {
 	args := effectiveKernelArgs(cfg, guestIP)
 	if processLimit > 0 {
-		args += " agentcy.process_limit=" + strconv.Itoa(processLimit)
+		args += " agent-manager.process_limit=" + strconv.Itoa(processLimit)
 	}
 	return args
 }
@@ -965,29 +965,29 @@ const controlPlaneReadyTimeout = 60 * time.Second
 // proxy CA material) delivered to the guest over vsock after boot. The guest
 // needs its scoped identity and proxy settings, but it must not receive
 // control-plane runtime or Flue credentials; durable agent execution runs in host
-// harness cells with a separately scoped AGENTCY_HARNESS_TOKEN.
+// harness cells with a separately scoped AGENT_MANAGER_HARNESS_TOKEN.
 func (m *Manager) buildStartupSecretBundle(agentID, instanceID string, opts runtimemanager.StartOpts) (SecretBundle, error) {
 	env := map[string]string{
 		"PLATFORM_API_URL": m.cfg.PlatformAPIURL,
 		// sudo is a preserved capability and safe under the microVM
 		// hypervisor boundary.
-		"AGENT_ENABLE_SUDO":      "true",
-		"AGENT_ID":               agentID,
-		"AGENT_HOST_GID":         strconv.Itoa(os.Getgid()),
-		"AGENTCY_COMPARTMENT_ID": normalizeRuntimeCompartmentID(opts.CompartmentID),
-		"TZ":                     registry.NormalizeTimezone(opts.Timezone),
+		"AGENT_ENABLE_SUDO":            "true",
+		"AGENT_ID":                     agentID,
+		"AGENT_HOST_GID":               strconv.Itoa(os.Getgid()),
+		"AGENT_MANAGER_COMPARTMENT_ID": normalizeRuntimeCompartmentID(opts.CompartmentID),
+		"TZ":                           registry.NormalizeTimezone(opts.Timezone),
 	}
 	if strings.TrimSpace(instanceID) != "" {
-		env["AGENTCY_RUNTIME_CREDENTIAL_ID"] = agentID + ":" + normalizeRuntimeCompartmentID(opts.CompartmentID) + ":" + strings.TrimSpace(instanceID)
+		env["AGENT_MANAGER_RUNTIME_CREDENTIAL_ID"] = agentID + ":" + normalizeRuntimeCompartmentID(opts.CompartmentID) + ":" + strings.TrimSpace(instanceID)
 	}
 	files := map[string]string{}
 	if opts.ProxyEgress != nil && opts.ProxyEgress.Enabled {
 		proxyURL := m.proxyURLForGuest(opts.ProxyEgress)
 		const gitHubAskpassPath = "/runtime-private/github-askpass"
 		const gitConfigPath = "/runtime-private/gitconfig"
-		env["AGENTCY_PROXY_EGRESS_ENABLED"] = "true"
-		env["GH_TOKEN"] = "agentcy-proxy:github"
-		env["GITHUB_TOKEN"] = "agentcy-proxy:github"
+		env["AGENT_MANAGER_PROXY_EGRESS_ENABLED"] = "true"
+		env["GH_TOKEN"] = "agent-service-proxy:github"
+		env["GITHUB_TOKEN"] = "agent-service-proxy:github"
 		env["GIT_ASKPASS"] = gitHubAskpassPath
 		env["GIT_CONFIG_GLOBAL"] = gitConfigPath
 		env["GIT_TERMINAL_PROMPT"] = "0"
@@ -1005,7 +1005,7 @@ func (m *Manager) buildStartupSecretBundle(agentID, instanceID string, opts runt
 		files["github-askpass"] = gitHubAskpassScript()
 		files["gitconfig"] = gitHubProxyGitConfig()
 		if token := strings.TrimSpace(opts.ProxyEgress.ContextToken); token != "" {
-			env["AGENTCY_EGRESS_CONTEXT_TOKEN"] = token
+			env["AGENT_MANAGER_EGRESS_CONTEXT_TOKEN"] = token
 		}
 		if strings.TrimSpace(opts.ProxyEgress.CACertPath) != "" {
 			data, err := os.ReadFile(opts.ProxyEgress.CACertPath)
@@ -1072,7 +1072,7 @@ func (m *Manager) proxyURLForGuest(proxy *runtimemanager.ProxyEgressConfig) stri
 		return rawURL
 	}
 	host := strings.Trim(strings.ToLower(parsed.Hostname()), "[]")
-	if host == "agentcy-egress-proxy" {
+	if host == "agent-manager-egress-proxy" {
 		gateway, _, err := net.ParseCIDR(strings.TrimSpace(m.cfg.MicroVMBridgeCIDR))
 		if err == nil && gateway != nil {
 			port := parsed.Port()
@@ -1084,7 +1084,7 @@ func (m *Manager) proxyURLForGuest(proxy *runtimemanager.ProxyEgressConfig) stri
 		}
 	}
 	if token := strings.TrimSpace(proxy.ContextToken); token != "" {
-		parsed.User = url.UserPassword("AgentcyContext", token)
+		parsed.User = url.UserPassword("AgentServiceContext", token)
 	}
 	return parsed.String()
 }

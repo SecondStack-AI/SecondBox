@@ -13,8 +13,8 @@ import (
 	"strings"
 	"sync"
 
-	"agentcy/internal/runtimemanager"
-	"agentcy/internal/sandboxbroker"
+	"agent-manager/internal/runtimemanager"
+	"agent-manager/internal/sandboxbroker"
 )
 
 type SandboxBrokerBackend struct {

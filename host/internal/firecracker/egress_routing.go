@@ -133,7 +133,7 @@ func transparentRouteArgs(action string, route TransparentRoute) []string {
 		"-p", "tcp",
 		"--dport", "80",
 		"-m", "comment",
-		"--comment", "agentcy-microvm-egress:" + route.InstanceID,
+		"--comment", "agent-manager-microvm-egress:" + route.InstanceID,
 	}
 	if iface := strings.TrimSpace(route.InterfaceID); iface != "" {
 		args = append(args, "-i", iface)

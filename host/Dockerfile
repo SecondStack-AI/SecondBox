@@ -9,11 +9,11 @@ COPY . .
 
 RUN HARNESS_SOURCE_SHA256="$(scripts/harness-source-sha256.sh)" \
     && test "${#HARNESS_SOURCE_SHA256}" -eq 64 \
-    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-X agentcy/internal/microvm.harnessBuildID=${HARNESS_SOURCE_SHA256}" -o /out/agentcy ./cmd/agentcy \
-	&& CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o /out/agentcy-mcp-cutover ./cmd/agentcy-mcp-cutover \
-	&& CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o /out/agentcy-memory-cutover ./cmd/agentcy-memory-cutover \
-    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o /out/agentcy-egress-proxy ./cmd/agentcy-egress-proxy \
-    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-X agentcy/internal/microvm.harnessBuildID=${HARNESS_SOURCE_SHA256}" -o /out/agentcy-vmlauncher ./cmd/agentcy-vmlauncher
+    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-X agent-manager/internal/microvm.harnessBuildID=${HARNESS_SOURCE_SHA256}" -o /out/agent-manager ./cmd/agent-manager \
+	&& CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o /out/agent-manager-mcp-cutover ./cmd/agent-manager-mcp-cutover \
+	&& CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o /out/agent-manager-memory-cutover ./cmd/agent-manager-memory-cutover \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o /out/agent-manager-egress-proxy ./cmd/agent-manager-egress-proxy \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags="-X agent-manager/internal/microvm.harnessBuildID=${HARNESS_SOURCE_SHA256}" -o /out/agent-manager-vmlauncher ./cmd/agent-manager-vmlauncher
 
 FROM node:22.23.1-bookworm-slim AS harness-builder
 
@@ -40,21 +40,21 @@ RUN apt-get update \
     && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
     && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
 
-COPY --from=go-builder /out/agentcy /usr/local/bin/agentcy
-COPY --from=go-builder /out/agentcy-mcp-cutover /usr/local/bin/agentcy-mcp-cutover
-COPY --from=go-builder /out/agentcy-memory-cutover /usr/local/bin/agentcy-memory-cutover
+COPY --from=go-builder /out/agent-manager /usr/local/bin/agent-manager
+COPY --from=go-builder /out/agent-manager-mcp-cutover /usr/local/bin/agent-manager-mcp-cutover
+COPY --from=go-builder /out/agent-manager-memory-cutover /usr/local/bin/agent-manager-memory-cutover
 COPY --from=harness-builder --chown=10001:10001 /src/agent/package.json /opt/agent-harness/package.json
 COPY --from=harness-builder --chown=10001:10001 /src/agent/package-lock.json /opt/agent-harness/package-lock.json
 COPY --from=harness-builder --chown=10001:10001 /src/agent/node_modules /opt/agent-harness/node_modules
 COPY --from=harness-builder --chown=10001:10001 /src/agent/dist /opt/agent-harness/dist
 COPY LICENSE /usr/share/licenses/agent-manager/LICENSE
-COPY --chmod=0755 scripts/container/agent-service-entrypoint.sh /usr/local/bin/agent-service-entrypoint
+COPY --chmod=0755 scripts/container/agent-manager-entrypoint.sh /usr/local/bin/agent-manager-entrypoint
 
 USER 0:0
 WORKDIR /var/lib/agent-manager
 EXPOSE 8081
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=4 CMD ["wget", "--quiet", "--output-document=-", "http://127.0.0.1:8081/api/health"]
-ENTRYPOINT ["/usr/local/bin/agent-service-entrypoint"]
+ENTRYPOINT ["/usr/local/bin/agent-manager-entrypoint"]
 
 FROM debian:12.12-slim AS agent-egress-proxy
 
@@ -65,14 +65,14 @@ RUN apt-get update \
     && useradd --system --uid 10002 --gid 10002 --home-dir /var/lib/agent-egress --create-home --shell /usr/sbin/nologin agent-egress \
     && install -d -o 10002 -g 10002 -m 0750 /var/lib/agent-egress /run/agent-egress
 
-COPY --from=go-builder /out/agentcy-egress-proxy /usr/local/bin/agentcy-egress-proxy
+COPY --from=go-builder /out/agent-manager-egress-proxy /usr/local/bin/agent-manager-egress-proxy
 COPY LICENSE /usr/share/licenses/agent-manager/LICENSE
 COPY --chmod=0755 scripts/container/egress-proxy-entrypoint.sh /usr/local/bin/egress-proxy-entrypoint
 
 USER 0:0
 WORKDIR /var/lib/agent-egress
 EXPOSE 18080 18099
-HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=4 CMD ["/usr/local/bin/agentcy-egress-proxy", "-healthcheck", "-healthcheck-url", "http://127.0.0.1:18099", "-healthcheck-timeout", "5s"]
+HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=4 CMD ["/usr/local/bin/agent-manager-egress-proxy", "-healthcheck", "-healthcheck-url", "http://127.0.0.1:18099", "-healthcheck-timeout", "5s"]
 ENTRYPOINT ["/usr/local/bin/egress-proxy-entrypoint"]
 
 FROM debian:12.12-slim AS firecracker-release
@@ -117,7 +117,7 @@ RUN apt-get update \
     && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
     && install -d -m 0700 /run/agent-sandbox-host /var/lib/agent-sandbox-host
 
-COPY --from=go-builder /out/agentcy-vmlauncher /usr/local/bin/agentcy-vmlauncher
+COPY --from=go-builder /out/agent-manager-vmlauncher /usr/local/bin/agent-manager-vmlauncher
 COPY --from=firecracker-release /out-firecracker /usr/local/bin/firecracker
 COPY --from=firecracker-release /out-jailer /usr/local/bin/jailer
 COPY --from=firecracker-release /out-LICENSE /usr/share/licenses/firecracker/LICENSE
@@ -137,7 +137,7 @@ RUN ln -s /etc/systemd/system/secondstack-agent-sandbox-host.service /etc/system
 USER 0:0
 WORKDIR /var/lib/agent-sandbox-host
 STOPSIGNAL SIGRTMIN+3
-HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=4 CMD ["/usr/bin/setpriv", "--reuid=10001", "--regid=10001", "--clear-groups", "/usr/local/bin/agentcy-vmlauncher", "-healthcheck", "-healthcheck-timeout", "5s"]
+HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=4 CMD ["/usr/bin/setpriv", "--reuid=10001", "--regid=10001", "--clear-groups", "/usr/local/bin/agent-manager-vmlauncher", "-healthcheck", "-healthcheck-timeout", "5s"]
 ENTRYPOINT ["/usr/local/bin/sandbox-host-entrypoint"]
 CMD ["/lib/systemd/systemd"]
 

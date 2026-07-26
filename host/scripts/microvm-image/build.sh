@@ -4,34 +4,34 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 
-artifact_version="${AG_MICROVM_ARTIFACT_VERSION:-$(date -u +%Y%m%d%H%M%S)}"
-out_dir="${AG_MICROVM_OUT_DIR:-$repo_root/releases/microvm/$artifact_version}"
-rootfs_source_dir="${AG_MICROVM_ROOTFS_SOURCE_DIR:-}"
-kernel_path="${AG_MICROVM_KERNEL_PATH:-}"
-kernel_config="${AG_MICROVM_KERNEL_CONFIG:-}"
-signing_key="${AG_MICROVM_SIGNING_KEY:-$repo_root/releases/microvm/signing.key}"
-trusted_public_key="${AG_MICROVM_PUBLIC_KEY:-}"
-trusted_public_key_sha="${AG_MICROVM_PUBLIC_KEY_SHA256:-}"
-rootfs_size_mib="${AG_MICROVM_ROOTFS_SIZE_MIB:-8192}"
-shared_format="${AG_MICROVM_SHARED_FORMAT:-auto}"
-rootfs_uuid="${AG_MICROVM_ROOTFS_UUID:-11111111-2222-3333-4444-555555555555}"
-build_kernel="${AG_MICROVM_BUILD_KERNEL:-false}"
+artifact_version="${AGENT_MANAGER_MICROVM_ARTIFACT_VERSION:-$(date -u +%Y%m%d%H%M%S)}"
+out_dir="${AGENT_MANAGER_MICROVM_OUT_DIR:-$repo_root/releases/microvm/$artifact_version}"
+rootfs_source_dir="${AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_DIR:-}"
+kernel_path="${AGENT_MANAGER_MICROVM_KERNEL_PATH:-}"
+kernel_config="${AGENT_MANAGER_MICROVM_KERNEL_CONFIG:-}"
+signing_key="${AGENT_MANAGER_MICROVM_SIGNING_KEY:-$repo_root/releases/microvm/signing.key}"
+trusted_public_key="${AGENT_MANAGER_MICROVM_PUBLIC_KEY:-}"
+trusted_public_key_sha="${AGENT_MANAGER_MICROVM_PUBLIC_KEY_SHA256:-}"
+rootfs_size_mib="${AGENT_MANAGER_MICROVM_ROOTFS_SIZE_MIB:-8192}"
+shared_format="${AGENT_MANAGER_MICROVM_SHARED_FORMAT:-auto}"
+rootfs_uuid="${AGENT_MANAGER_MICROVM_ROOTFS_UUID:-11111111-2222-3333-4444-555555555555}"
+build_kernel="${AGENT_MANAGER_MICROVM_BUILD_KERNEL:-false}"
 
 usage() {
     cat >&2 <<'USAGE'
 Usage: build.sh
 
 Environment:
-  AG_MICROVM_BUILD_KERNEL      Build the pinned kernel from kernel.lock when true.
-  AG_MICROVM_KERNEL_PATH       Required path to the guest kernel image unless AG_MICROVM_BUILD_KERNEL=true.
-  AG_MICROVM_KERNEL_CONFIG     Optional kernel .config to validate.
-  AG_MICROVM_OUT_DIR           Output dir (default releases/microvm/<timestamp>).
-  AG_MICROVM_ROOTFS_SOURCE_DIR Prepared guest rootfs directory to copy.
-  AG_MICROVM_SIGNING_KEY       OpenSSL private key path for manifest signing.
-  AG_MICROVM_PUBLIC_KEY        Optional trusted public key for verification.
-  AG_MICROVM_PUBLIC_KEY_SHA256 Optional trusted public key DER SHA-256.
-  AG_MICROVM_ROOTFS_SIZE_MIB   Rootfs image size, default 8192.
-  AG_MICROVM_SHARED_FORMAT     auto|erofs|squashfs|ext4, default auto.
+  AGENT_MANAGER_MICROVM_BUILD_KERNEL      Build the pinned kernel from kernel.lock when true.
+  AGENT_MANAGER_MICROVM_KERNEL_PATH       Required path to the guest kernel image unless AGENT_MANAGER_MICROVM_BUILD_KERNEL=true.
+  AGENT_MANAGER_MICROVM_KERNEL_CONFIG     Optional kernel .config to validate.
+  AGENT_MANAGER_MICROVM_OUT_DIR           Output dir (default releases/microvm/<timestamp>).
+  AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_DIR Prepared guest rootfs directory to copy.
+  AGENT_MANAGER_MICROVM_SIGNING_KEY       OpenSSL private key path for manifest signing.
+  AGENT_MANAGER_MICROVM_PUBLIC_KEY        Optional trusted public key for verification.
+  AGENT_MANAGER_MICROVM_PUBLIC_KEY_SHA256 Optional trusted public key DER SHA-256.
+  AGENT_MANAGER_MICROVM_ROOTFS_SIZE_MIB   Rootfs image size, default 8192.
+  AGENT_MANAGER_MICROVM_SHARED_FORMAT     auto|erofs|squashfs|ext4, default auto.
 USAGE
 }
 
@@ -48,12 +48,12 @@ case "$build_kernel" in
 esac
 
 if [ -z "$kernel_path" ] || [ ! -f "$kernel_path" ]; then
-    echo "AG_MICROVM_KERNEL_PATH must point to a kernel image" >&2
+    echo "AGENT_MANAGER_MICROVM_KERNEL_PATH must point to a kernel image" >&2
     exit 2
 fi
 
 if [ -z "$rootfs_source_dir" ] || [ ! -d "$rootfs_source_dir" ]; then
-    echo "AG_MICROVM_ROOTFS_SOURCE_DIR must point to a prepared guest rootfs directory" >&2
+    echo "AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_DIR must point to a prepared guest rootfs directory" >&2
     exit 2
 fi
 
@@ -90,9 +90,9 @@ install -m 0755 "$script_dir/init" "$root_dir/init"
 
 echo "Building guest supervisor" >&2
 install -d -m 0755 "$root_dir/usr/local/bin"
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$root_dir/usr/local/bin/agentcy-microvm-agent" "$repo_root/cmd/agentcy-microvm-agent"
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$root_dir/usr/local/bin/agent-manager-microvm-agent" "$repo_root/cmd/agent-manager-microvm-agent"
 # Tool-executor microVMs run the tool-exec server only (no in-VM agent runtime).
-install -m 0755 "$repo_root/agent/tool-entrypoint.sh" "$root_dir/usr/local/bin/agentcy-microvm-entrypoint"
+install -m 0755 "$repo_root/agent/tool-entrypoint.sh" "$root_dir/usr/local/bin/agent-manager-microvm-entrypoint"
 
 "$script_dir/rootfs/verify-standard-toolset.sh" --root-dir "$root_dir"
 
@@ -100,7 +100,7 @@ if [ -d "$root_dir/builtin-skills" ]; then
     mkdir -p "$shared_dir"
     cp -a "$root_dir/builtin-skills" "$shared_dir/builtin-skills"
 fi
-printf '%s\n' "$artifact_version" > "$shared_dir/agentcy-microvm-artifact-version"
+printf '%s\n' "$artifact_version" > "$shared_dir/agent-manager-microvm-artifact-version"
 
 "$script_dir/scan-no-secrets.sh" "$root_dir"
 
@@ -124,14 +124,14 @@ case "$shared_format" in
         fi
         ;;
     erofs|squashfs|ext4) ;;
-    *) echo "invalid AG_MICROVM_SHARED_FORMAT: $shared_format" >&2; exit 2 ;;
+    *) echo "invalid AGENT_MANAGER_MICROVM_SHARED_FORMAT: $shared_format" >&2; exit 2 ;;
 esac
 if [ "$shared_format" = "erofs" ]; then
     mkfs.erofs "$shared" "$shared_dir" >/dev/null
 elif [ "$shared_format" = "squashfs" ]; then
     mksquashfs "$shared_dir" "$shared" -noappend -all-root -quiet
 else
-    shared_size_mib="${AG_MICROVM_SHARED_SIZE_MIB:-128}"
+    shared_size_mib="${AGENT_MANAGER_MICROVM_SHARED_SIZE_MIB:-128}"
     truncate -s "${shared_size_mib}M" "$shared"
     mkfs.ext4 -F -q -d "$shared_dir" "$shared"
 fi
@@ -215,7 +215,7 @@ cat > "$out_dir/manifest.json" <<EOF
   "rootfs": {"path": "rootfs.ext4", "sha256": "$rootfs_sha", "format": "ext4", "sizeMiB": $rootfs_size_mib},
   "shared": {"path": "shared.img", "sha256": "$shared_sha", "format": "$shared_format"},
   "entrypoint": "/init",
-  "runtimeEntrypoint": "/usr/local/bin/agentcy-microvm-entrypoint"
+  "runtimeEntrypoint": "/usr/local/bin/agent-manager-microvm-entrypoint"
 }
 EOF
 

@@ -14,19 +14,19 @@ runtime. The root-owned vmlauncher owns per-VM tap creation and per-instance
 transparent HTTP redirect rules; the network-facing manager remains unprivileged.
 
 Environment:
-  AG_MICROVM_BRIDGE_NAME                      bridge name, default agfc0
-  AG_MICROVM_BRIDGE_CIDR                      bridge address, default 172.30.0.1/24
-  AG_MICROVM_GUEST_CIDR                       guest subnet, default 172.30.0.0/24
-  AG_MICROVM_TAP_PREFIX                       per-VM tap prefix, default agfc
-  AG_EGRESS_PROXY_LISTEN_PORT                 explicit HTTP(S) proxy port, default 3128
-  AG_EGRESS_PROXY_TRANSPARENT_HTTP_PORT       local transparent proxy port
-  AG_MICROVM_INSTALL_CIDR_TRANSPARENT_HTTP    optional broad CIDR redirect, default false
-  AG_MICROVM_ENABLE_DIRECT_NAT                optional direct outbound NAT, default false
-  AG_MICROVM_EGRESS_IFACE                     outbound interface for direct NAT
-  AG_MICROVM_DELETE_BRIDGE                    remove bridge in remove mode, default false
-  AG_AGENTCY_PRIVATE_LISTEN_PORT              protected Agentcy port, default 8081
-  AG_AGENTCY_PRIVATE_IFACES                   comma-separated allowed interfaces
-  AG_MICROVM_NETWORK_STATE_DIR                root-owned rollback state directory
+  AGENT_MANAGER_MICROVM_BRIDGE_NAME                      bridge name, default agfc0
+  AGENT_MANAGER_MICROVM_BRIDGE_CIDR                      bridge address, default 172.30.0.1/24
+  AGENT_MANAGER_MICROVM_GUEST_CIDR                       guest subnet, default 172.30.0.0/24
+  AGENT_MANAGER_MICROVM_TAP_PREFIX                       per-VM tap prefix, default agfc
+  AGENT_MANAGER_EGRESS_PROXY_LISTEN_PORT                 explicit HTTP(S) proxy port, default 3128
+  AGENT_MANAGER_EGRESS_PROXY_TRANSPARENT_HTTP_PORT       local transparent proxy port
+  AGENT_MANAGER_MICROVM_INSTALL_CIDR_TRANSPARENT_HTTP    optional broad CIDR redirect, default false
+  AGENT_MANAGER_MICROVM_ENABLE_DIRECT_NAT                optional direct outbound NAT, default false
+  AGENT_MANAGER_MICROVM_EGRESS_IFACE                     outbound interface for direct NAT
+  AGENT_MANAGER_MICROVM_DELETE_BRIDGE                    remove bridge in remove mode, default false
+  AGENT_MANAGER_PRIVATE_LISTEN_PORT              protected Agent Service port, default 8081
+  AGENT_MANAGER_PRIVATE_IFACES                   comma-separated allowed interfaces
+  AGENT_MANAGER_MICROVM_NETWORK_STATE_DIR                root-owned rollback state directory
 USAGE
   exit 0
 fi
@@ -41,27 +41,27 @@ if [[ "$(id -u)" != "0" ]]; then
   exit 1
 fi
 
-bridge="${AG_MICROVM_BRIDGE_NAME:-agfc0}"
-bridge_cidr="${AG_MICROVM_BRIDGE_CIDR:-172.30.0.1/24}"
-guest_cidr="${AG_MICROVM_GUEST_CIDR:-172.30.0.0/24}"
-tap_prefix="${AG_MICROVM_TAP_PREFIX:-agfc}"
+bridge="${AGENT_MANAGER_MICROVM_BRIDGE_NAME:-agfc0}"
+bridge_cidr="${AGENT_MANAGER_MICROVM_BRIDGE_CIDR:-172.30.0.1/24}"
+guest_cidr="${AGENT_MANAGER_MICROVM_GUEST_CIDR:-172.30.0.0/24}"
+tap_prefix="${AGENT_MANAGER_MICROVM_TAP_PREFIX:-agfc}"
 tap_pattern="${tap_prefix}+"
-proxy_listen_port="${AG_EGRESS_PROXY_LISTEN_PORT:-3128}"
-proxy_port="${AG_EGRESS_PROXY_TRANSPARENT_HTTP_PORT:-}"
-install_cidr_redirect="${AG_MICROVM_INSTALL_CIDR_TRANSPARENT_HTTP:-false}"
-direct_nat="${AG_MICROVM_ENABLE_DIRECT_NAT:-false}"
-egress_iface="${AG_MICROVM_EGRESS_IFACE:-}"
-delete_bridge="${AG_MICROVM_DELETE_BRIDGE:-false}"
-agentcy_port="${AG_AGENTCY_PRIVATE_LISTEN_PORT:-8081}"
-agentcy_ifaces="${AG_AGENTCY_PRIVATE_IFACES:-lo,$bridge,agh+}"
-agentcy_chain="AGENTCY_PRIVATE_IN"
-sandbox_input_chain="AGENTCY_SANDBOX_IN"
-harness_input_chain="AGENTCY_HARNESS_IN"
-guest_forward_chain="AGENTCY_GUEST_FWD"
-guest_forward_input_chain="AGENTCY_GUEST_FWD_IN"
-sandbox_ipv6_input_chain="AGENTCY_SANDBOX6_IN"
-sandbox_ipv6_forward_chain="AGENTCY_SANDBOX6_FWD"
-network_state_dir="${AG_MICROVM_NETWORK_STATE_DIR:-/run/agentcy-microvm-network}"
+proxy_listen_port="${AGENT_MANAGER_EGRESS_PROXY_LISTEN_PORT:-3128}"
+proxy_port="${AGENT_MANAGER_EGRESS_PROXY_TRANSPARENT_HTTP_PORT:-}"
+install_cidr_redirect="${AGENT_MANAGER_MICROVM_INSTALL_CIDR_TRANSPARENT_HTTP:-false}"
+direct_nat="${AGENT_MANAGER_MICROVM_ENABLE_DIRECT_NAT:-false}"
+egress_iface="${AGENT_MANAGER_MICROVM_EGRESS_IFACE:-}"
+delete_bridge="${AGENT_MANAGER_MICROVM_DELETE_BRIDGE:-false}"
+agent_manager_port="${AGENT_MANAGER_PRIVATE_LISTEN_PORT:-8081}"
+agent_manager_ifaces="${AGENT_MANAGER_PRIVATE_IFACES:-lo,$bridge,agh+}"
+agent_manager_chain="AGENT_MANAGER_PRIVATE_IN"
+sandbox_input_chain="AGENT_MANAGER_SANDBOX_IN"
+harness_input_chain="AGENT_MANAGER_HARNESS_IN"
+guest_forward_chain="AGENT_MANAGER_GUEST_FWD"
+guest_forward_input_chain="AGENT_MANAGER_GUEST_FWD_IN"
+sandbox_ipv6_input_chain="AGENT_MANAGER_SANDBOX6_IN"
+sandbox_ipv6_forward_chain="AGENT_MANAGER_SANDBOX6_FWD"
+network_state_dir="${AGENT_MANAGER_MICROVM_NETWORK_STATE_DIR:-/run/agent-manager-microvm-network}"
 ip_forward_state_path="$network_state_dir/ip-forward.previous"
 preserve_network_state=false
 apply_recovery=false
@@ -138,32 +138,32 @@ ip6tables_delete() {
 }
 
 install_reconcile_guards() {
-  iptables_insert filter INPUT -p tcp --dport "$agentcy_port" -m comment --comment agentcy-reconcile-private-guard -j DROP
+  iptables_insert filter INPUT -p tcp --dport "$agent_manager_port" -m comment --comment agent-manager-reconcile-private-guard -j DROP
   for iface in "$bridge" "$tap_pattern"; do
-    iptables_insert filter INPUT -i "$iface" -m comment --comment agentcy-reconcile-sandbox-input-guard -j DROP
+    iptables_insert filter INPUT -i "$iface" -m comment --comment agent-manager-reconcile-sandbox-input-guard -j DROP
   done
-  iptables_insert filter INPUT -i 'agh+' -m comment --comment agentcy-reconcile-harness-input-guard -j DROP
+  iptables_insert filter INPUT -i 'agh+' -m comment --comment agent-manager-reconcile-harness-input-guard -j DROP
   for iface in "$bridge" "$tap_pattern" 'agh+'; do
-    iptables_insert filter FORWARD -i "$iface" -m comment --comment agentcy-reconcile-forward-guard -j DROP
-    iptables_insert filter FORWARD -o "$iface" -m comment --comment agentcy-reconcile-forward-in-guard -j DROP
-    ip6tables_insert INPUT -i "$iface" -m comment --comment agentcy-reconcile-ipv6-input-guard -j DROP
-    ip6tables_insert FORWARD -i "$iface" -m comment --comment agentcy-reconcile-ipv6-forward-guard -j DROP
-    ip6tables_insert FORWARD -o "$iface" -m comment --comment agentcy-reconcile-ipv6-forward-in-guard -j DROP
+    iptables_insert filter FORWARD -i "$iface" -m comment --comment agent-manager-reconcile-forward-guard -j DROP
+    iptables_insert filter FORWARD -o "$iface" -m comment --comment agent-manager-reconcile-forward-in-guard -j DROP
+    ip6tables_insert INPUT -i "$iface" -m comment --comment agent-manager-reconcile-ipv6-input-guard -j DROP
+    ip6tables_insert FORWARD -i "$iface" -m comment --comment agent-manager-reconcile-ipv6-forward-guard -j DROP
+    ip6tables_insert FORWARD -o "$iface" -m comment --comment agent-manager-reconcile-ipv6-forward-in-guard -j DROP
   done
 }
 
 remove_reconcile_guards() {
-  iptables_delete filter INPUT -p tcp --dport "$agentcy_port" -m comment --comment agentcy-reconcile-private-guard -j DROP
+  iptables_delete filter INPUT -p tcp --dport "$agent_manager_port" -m comment --comment agent-manager-reconcile-private-guard -j DROP
   for iface in "$bridge" "$tap_pattern"; do
-    iptables_delete filter INPUT -i "$iface" -m comment --comment agentcy-reconcile-sandbox-input-guard -j DROP
+    iptables_delete filter INPUT -i "$iface" -m comment --comment agent-manager-reconcile-sandbox-input-guard -j DROP
   done
-  iptables_delete filter INPUT -i 'agh+' -m comment --comment agentcy-reconcile-harness-input-guard -j DROP
+  iptables_delete filter INPUT -i 'agh+' -m comment --comment agent-manager-reconcile-harness-input-guard -j DROP
   for iface in "$bridge" "$tap_pattern" 'agh+'; do
-    iptables_delete filter FORWARD -i "$iface" -m comment --comment agentcy-reconcile-forward-guard -j DROP
-    iptables_delete filter FORWARD -o "$iface" -m comment --comment agentcy-reconcile-forward-in-guard -j DROP
-    ip6tables_delete INPUT -i "$iface" -m comment --comment agentcy-reconcile-ipv6-input-guard -j DROP
-    ip6tables_delete FORWARD -i "$iface" -m comment --comment agentcy-reconcile-ipv6-forward-guard -j DROP
-    ip6tables_delete FORWARD -o "$iface" -m comment --comment agentcy-reconcile-ipv6-forward-in-guard -j DROP
+    iptables_delete filter FORWARD -i "$iface" -m comment --comment agent-manager-reconcile-forward-guard -j DROP
+    iptables_delete filter FORWARD -o "$iface" -m comment --comment agent-manager-reconcile-forward-in-guard -j DROP
+    ip6tables_delete INPUT -i "$iface" -m comment --comment agent-manager-reconcile-ipv6-input-guard -j DROP
+    ip6tables_delete FORWARD -i "$iface" -m comment --comment agent-manager-reconcile-ipv6-forward-guard -j DROP
+    ip6tables_delete FORWARD -o "$iface" -m comment --comment agent-manager-reconcile-ipv6-forward-in-guard -j DROP
   done
 }
 
@@ -184,12 +184,12 @@ rule_config_fingerprint() {
   printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s' \
     "$bridge" "$bridge_cidr" "$guest_cidr" "$tap_pattern" "$proxy_listen_port" \
     "$proxy_port" "$install_cidr_redirect" "$direct_nat" "$egress_iface" \
-    "$agentcy_port" "$agentcy_ifaces"
+    "$agent_manager_port" "$agent_manager_ifaces"
 }
 
 apply_rule_config() {
   IFS='|' read -r bridge bridge_cidr guest_cidr tap_pattern proxy_listen_port \
-    proxy_port install_cidr_redirect direct_nat egress_iface agentcy_port agentcy_ifaces <<< "$1"
+    proxy_port install_cidr_redirect direct_nat egress_iface agent_manager_port agent_manager_ifaces <<< "$1"
 }
 
 read_network_state() {
@@ -225,16 +225,16 @@ apply_config() {
   require_cmd sysctl
 
   if [[ ! "$tap_prefix" =~ ^[A-Za-z0-9]{1,5}$ ]]; then
-    echo "AG_MICROVM_TAP_PREFIX must be 1-5 alphanumeric characters to match launcher tap names" >&2
+    echo "AGENT_MANAGER_MICROVM_TAP_PREFIX must be 1-5 alphanumeric characters to match launcher tap names" >&2
     exit 1
   fi
-  validate_port AG_AGENTCY_PRIVATE_LISTEN_PORT "$agentcy_port"
-  validate_port AG_EGRESS_PROXY_LISTEN_PORT "$proxy_listen_port"
+  validate_port AGENT_MANAGER_PRIVATE_LISTEN_PORT "$agent_manager_port"
+  validate_port AGENT_MANAGER_EGRESS_PROXY_LISTEN_PORT "$proxy_listen_port"
   if [[ -n "$proxy_port" ]]; then
-    validate_port AG_EGRESS_PROXY_TRANSPARENT_HTTP_PORT "$proxy_port"
+    validate_port AGENT_MANAGER_EGRESS_PROXY_TRANSPARENT_HTTP_PORT "$proxy_port"
   fi
   if [[ "$install_cidr_redirect" == "true" && -z "$proxy_port" ]]; then
-    echo "AG_EGRESS_PROXY_TRANSPARENT_HTTP_PORT is required when AG_MICROVM_INSTALL_CIDR_TRANSPARENT_HTTP=true" >&2
+    echo "AGENT_MANAGER_EGRESS_PROXY_TRANSPARENT_HTTP_PORT is required when AGENT_MANAGER_MICROVM_INSTALL_CIDR_TRANSPARENT_HTTP=true" >&2
     return 1
   fi
   if [[ "$direct_nat" == "true" ]]; then
@@ -242,7 +242,7 @@ apply_config() {
       egress_iface="$(default_egress_iface)"
     fi
     if [[ -z "$egress_iface" ]]; then
-      echo "could not determine egress interface; set AG_MICROVM_EGRESS_IFACE" >&2
+      echo "could not determine egress interface; set AGENT_MANAGER_MICROVM_EGRESS_IFACE" >&2
       return 1
     fi
   fi
@@ -312,20 +312,20 @@ apply_config() {
     install_reconcile_guards
   fi
 
-  # Agentcy needs a bridge/private-mesh listener for guests and operators, but
+  # Agent Service needs a bridge/private-mesh listener for guests and operators, but
   # the raw port must never become public. A dedicated chain installed at the
   # front of INPUT makes that policy explicit and independently removable.
-  iptables -N "$agentcy_chain" >/dev/null 2>&1 || true
-  iptables -F "$agentcy_chain"
-  IFS=',' read -r -a private_ifaces <<< "$agentcy_ifaces"
+  iptables -N "$agent_manager_chain" >/dev/null 2>&1 || true
+  iptables -F "$agent_manager_chain"
+  IFS=',' read -r -a private_ifaces <<< "$agent_manager_ifaces"
   for iface in "${private_ifaces[@]}"; do
     iface="${iface//[[:space:]]/}"
     [[ -n "$iface" ]] || continue
-    iptables_insert filter "$agentcy_chain" -i "$iface" -j ACCEPT
+    iptables_insert filter "$agent_manager_chain" -i "$iface" -j ACCEPT
   done
-  iptables_add filter "$agentcy_chain" -j DROP
-  if ! iptables -C INPUT -p tcp --dport "$agentcy_port" -m comment --comment agentcy-private-listener -j "$agentcy_chain" >/dev/null 2>&1; then
-    iptables -I INPUT 1 -p tcp --dport "$agentcy_port" -m comment --comment agentcy-private-listener -j "$agentcy_chain"
+  iptables_add filter "$agent_manager_chain" -j DROP
+  if ! iptables -C INPUT -p tcp --dport "$agent_manager_port" -m comment --comment agent-manager-private-listener -j "$agent_manager_chain" >/dev/null 2>&1; then
+    iptables -I INPUT 1 -p tcp --dport "$agent_manager_port" -m comment --comment agent-manager-private-listener -j "$agent_manager_chain"
   fi
 
   # Sandboxes may reach only the platform API and the two egress-proxy
@@ -333,45 +333,45 @@ apply_config() {
   # host INPUT policy while denying SSH, Postgres, and other host services.
   iptables -N "$sandbox_input_chain" >/dev/null 2>&1 || true
   iptables -F "$sandbox_input_chain"
-  iptables_insert filter "$sandbox_input_chain" -p tcp --dport "$agentcy_port" -m comment --comment agentcy-sandbox-platform -j ACCEPT
-  iptables_insert filter "$sandbox_input_chain" -p tcp --dport "$proxy_listen_port" -m comment --comment agentcy-sandbox-explicit-proxy -j ACCEPT
+  iptables_insert filter "$sandbox_input_chain" -p tcp --dport "$agent_manager_port" -m comment --comment agent-manager-sandbox-platform -j ACCEPT
+  iptables_insert filter "$sandbox_input_chain" -p tcp --dport "$proxy_listen_port" -m comment --comment agent-manager-sandbox-explicit-proxy -j ACCEPT
   if [[ -n "$proxy_port" && "$proxy_port" != "$proxy_listen_port" ]]; then
-    iptables_insert filter "$sandbox_input_chain" -p tcp --dport "$proxy_port" -m comment --comment agentcy-sandbox-transparent-proxy -j ACCEPT
+    iptables_insert filter "$sandbox_input_chain" -p tcp --dport "$proxy_port" -m comment --comment agent-manager-sandbox-transparent-proxy -j ACCEPT
   fi
-  iptables_add filter "$sandbox_input_chain" -m comment --comment agentcy-sandbox-input-deny -j DROP
+  iptables_add filter "$sandbox_input_chain" -m comment --comment agent-manager-sandbox-input-deny -j DROP
   for iface in "$bridge" "$tap_pattern"; do
-    iptables_insert filter INPUT -i "$iface" -m comment --comment agentcy-sandbox-input -j "$sandbox_input_chain"
+    iptables_insert filter INPUT -i "$iface" -m comment --comment agent-manager-sandbox-input -j "$sandbox_input_chain"
   done
   iptables -N "$harness_input_chain" >/dev/null 2>&1 || true
   iptables -F "$harness_input_chain"
-  iptables_insert filter "$harness_input_chain" -p tcp --dport "$agentcy_port" -m comment --comment agentcy-harness-platform -j ACCEPT
-  iptables_insert filter "$harness_input_chain" -p tcp --dport "$proxy_listen_port" -m comment --comment agentcy-harness-explicit-proxy -j ACCEPT
-  iptables_add filter "$harness_input_chain" -m comment --comment agentcy-harness-input-deny -j DROP
-  iptables_insert filter INPUT -i 'agh+' -m comment --comment agentcy-harness-input -j "$harness_input_chain"
+  iptables_insert filter "$harness_input_chain" -p tcp --dport "$agent_manager_port" -m comment --comment agent-manager-harness-platform -j ACCEPT
+  iptables_insert filter "$harness_input_chain" -p tcp --dport "$proxy_listen_port" -m comment --comment agent-manager-harness-explicit-proxy -j ACCEPT
+  iptables_add filter "$harness_input_chain" -m comment --comment agent-manager-harness-input-deny -j DROP
+  iptables_insert filter INPUT -i 'agh+' -m comment --comment agent-manager-harness-input -j "$harness_input_chain"
 
   # Production services are IPv4-only. Drop all IPv6 traffic arriving from or
   # forwarded out of sandbox interfaces, including link-local traffic.
   ip6tables -N "$sandbox_ipv6_input_chain" >/dev/null 2>&1 || true
   ip6tables -F "$sandbox_ipv6_input_chain"
-  ip6tables_add "$sandbox_ipv6_input_chain" -m comment --comment agentcy-sandbox-ipv6-deny -j DROP
+  ip6tables_add "$sandbox_ipv6_input_chain" -m comment --comment agent-manager-sandbox-ipv6-deny -j DROP
   for iface in "$bridge" "$tap_pattern" 'agh+'; do
-    ip6tables_insert INPUT -i "$iface" -m comment --comment agentcy-sandbox-ipv6-input -j "$sandbox_ipv6_input_chain"
+    ip6tables_insert INPUT -i "$iface" -m comment --comment agent-manager-sandbox-ipv6-input -j "$sandbox_ipv6_input_chain"
   done
 
   ip6tables -N "$sandbox_ipv6_forward_chain" >/dev/null 2>&1 || true
   ip6tables -F "$sandbox_ipv6_forward_chain"
-  ip6tables_add "$sandbox_ipv6_forward_chain" -m comment --comment agentcy-sandbox-ipv6-forward-deny -j DROP
+  ip6tables_add "$sandbox_ipv6_forward_chain" -m comment --comment agent-manager-sandbox-ipv6-forward-deny -j DROP
   for iface in "$bridge" "$tap_pattern" 'agh+'; do
-    ip6tables_insert FORWARD -i "$iface" -m comment --comment agentcy-sandbox-ipv6-forward -j "$sandbox_ipv6_forward_chain"
-    ip6tables_insert FORWARD -o "$iface" -m comment --comment agentcy-sandbox-ipv6-forward-in -j "$sandbox_ipv6_forward_chain"
+    ip6tables_insert FORWARD -i "$iface" -m comment --comment agent-manager-sandbox-ipv6-forward -j "$sandbox_ipv6_forward_chain"
+    ip6tables_insert FORWARD -o "$iface" -m comment --comment agent-manager-sandbox-ipv6-forward-in -j "$sandbox_ipv6_forward_chain"
   done
 
   if [[ "$install_cidr_redirect" == "true" ]]; then
-    iptables_add nat PREROUTING -i "$bridge" -s "$guest_cidr" -p tcp --dport 80 -m comment --comment agentcy-microvm-egress:cidr -j REDIRECT --to-ports "$proxy_port"
+    iptables_add nat PREROUTING -i "$bridge" -s "$guest_cidr" -p tcp --dport 80 -m comment --comment agent-manager-microvm-egress:cidr -j REDIRECT --to-ports "$proxy_port"
   fi
 
   if [[ "$direct_nat" == "true" ]]; then
-    iptables_add nat POSTROUTING -s "$guest_cidr" -o "$egress_iface" -m comment --comment agentcy-microvm-direct-nat -j MASQUERADE
+    iptables_add nat POSTROUTING -s "$guest_cidr" -o "$egress_iface" -m comment --comment agent-manager-microvm-direct-nat -j MASQUERADE
   fi
 
   # Forwarding is denied for guest-originated packets unless direct NAT is an
@@ -380,21 +380,21 @@ apply_config() {
   iptables -N "$guest_forward_chain" >/dev/null 2>&1 || true
   iptables -F "$guest_forward_chain"
   if [[ "$direct_nat" == "true" ]]; then
-    iptables_insert filter "$guest_forward_chain" -s "$guest_cidr" -o "$egress_iface" -m comment --comment agentcy-microvm-forward-out -j ACCEPT
+    iptables_insert filter "$guest_forward_chain" -s "$guest_cidr" -o "$egress_iface" -m comment --comment agent-manager-microvm-forward-out -j ACCEPT
   fi
-  iptables_add filter "$guest_forward_chain" -m comment --comment agentcy-microvm-forward-deny -j DROP
+  iptables_add filter "$guest_forward_chain" -m comment --comment agent-manager-microvm-forward-deny -j DROP
   for iface in "$bridge" "$tap_pattern" 'agh+'; do
-    iptables_insert filter FORWARD -i "$iface" -m comment --comment agentcy-microvm-forward-policy -j "$guest_forward_chain"
+    iptables_insert filter FORWARD -i "$iface" -m comment --comment agent-manager-microvm-forward-policy -j "$guest_forward_chain"
   done
 
   iptables -N "$guest_forward_input_chain" >/dev/null 2>&1 || true
   iptables -F "$guest_forward_input_chain"
   if [[ "$direct_nat" == "true" ]]; then
-    iptables_insert filter "$guest_forward_input_chain" -i "$egress_iface" -d "$guest_cidr" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment agentcy-microvm-forward-in -j ACCEPT
+    iptables_insert filter "$guest_forward_input_chain" -i "$egress_iface" -d "$guest_cidr" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment agent-manager-microvm-forward-in -j ACCEPT
   fi
-  iptables_add filter "$guest_forward_input_chain" -m comment --comment agentcy-microvm-forward-in-deny -j DROP
+  iptables_add filter "$guest_forward_input_chain" -m comment --comment agent-manager-microvm-forward-in-deny -j DROP
   for iface in "$bridge" "$tap_pattern" 'agh+'; do
-    iptables_insert filter FORWARD -o "$iface" -m comment --comment agentcy-microvm-forward-input-policy -j "$guest_forward_input_chain"
+    iptables_insert filter FORWARD -o "$iface" -m comment --comment agent-manager-microvm-forward-input-policy -j "$guest_forward_input_chain"
   done
 
   write_network_state active
@@ -404,14 +404,14 @@ apply_config() {
 
   echo "configured $bridge ($bridge_cidr) for Firecracker microVM networking"
   echo "guest subnet: $guest_cidr"
-  echo "protected Agentcy tcp/$agentcy_port on interfaces: $agentcy_ifaces"
+  echo "protected Agent Service tcp/$agent_manager_port on interfaces: $agent_manager_ifaces"
   if [[ -n "$proxy_port" ]]; then
     echo "allowed transparent proxy input on tcp/$proxy_port from $bridge"
   fi
   if [[ "$install_cidr_redirect" == "true" ]]; then
     echo "installed optional CIDR HTTP redirect to tcp/$proxy_port"
   else
-    echo "per-instance HTTP redirect remains owned by agentcy-vmlauncher"
+    echo "per-instance HTTP redirect remains owned by agent-manager-vmlauncher"
   fi
   if [[ "$direct_nat" == "true" ]]; then
     echo "enabled optional direct NAT through $egress_iface"
@@ -437,58 +437,58 @@ remove_config() {
   remove_reconcile_guards
 
   for iface in "$bridge" "$tap_pattern" 'agh+'; do
-    ip6tables_delete FORWARD -o "$iface" -m comment --comment agentcy-sandbox-ipv6-forward-in -j "$sandbox_ipv6_forward_chain"
-    ip6tables_delete FORWARD -i "$iface" -m comment --comment agentcy-sandbox-ipv6-forward -j "$sandbox_ipv6_forward_chain"
+    ip6tables_delete FORWARD -o "$iface" -m comment --comment agent-manager-sandbox-ipv6-forward-in -j "$sandbox_ipv6_forward_chain"
+    ip6tables_delete FORWARD -i "$iface" -m comment --comment agent-manager-sandbox-ipv6-forward -j "$sandbox_ipv6_forward_chain"
   done
   ip6tables -F "$sandbox_ipv6_forward_chain" >/dev/null 2>&1 || true
   ip6tables -X "$sandbox_ipv6_forward_chain" >/dev/null 2>&1 || true
   for iface in "$bridge" "$tap_pattern" 'agh+'; do
-    ip6tables_delete INPUT -i "$iface" -m comment --comment agentcy-sandbox-ipv6-input -j "$sandbox_ipv6_input_chain"
+    ip6tables_delete INPUT -i "$iface" -m comment --comment agent-manager-sandbox-ipv6-input -j "$sandbox_ipv6_input_chain"
   done
   ip6tables -F "$sandbox_ipv6_input_chain" >/dev/null 2>&1 || true
   ip6tables -X "$sandbox_ipv6_input_chain" >/dev/null 2>&1 || true
 
   for iface in "$bridge" "$tap_pattern" 'agh+'; do
-    iptables_delete filter FORWARD -o "$iface" -m comment --comment agentcy-microvm-forward-input-policy -j "$guest_forward_input_chain"
-    iptables_delete filter FORWARD -i "$iface" -m comment --comment agentcy-microvm-forward-policy -j "$guest_forward_chain"
+    iptables_delete filter FORWARD -o "$iface" -m comment --comment agent-manager-microvm-forward-input-policy -j "$guest_forward_input_chain"
+    iptables_delete filter FORWARD -i "$iface" -m comment --comment agent-manager-microvm-forward-policy -j "$guest_forward_chain"
   done
   iptables -F "$guest_forward_input_chain" >/dev/null 2>&1 || true
   iptables -X "$guest_forward_input_chain" >/dev/null 2>&1 || true
   iptables -F "$guest_forward_chain" >/dev/null 2>&1 || true
   iptables -X "$guest_forward_chain" >/dev/null 2>&1 || true
 
-  iptables_delete filter INPUT -i 'agh+' -m comment --comment agentcy-harness-input -j "$harness_input_chain"
+  iptables_delete filter INPUT -i 'agh+' -m comment --comment agent-manager-harness-input -j "$harness_input_chain"
   iptables -F "$harness_input_chain" >/dev/null 2>&1 || true
   iptables -X "$harness_input_chain" >/dev/null 2>&1 || true
 
   for iface in "$bridge" "$tap_pattern"; do
-    iptables_delete filter INPUT -i "$iface" -m comment --comment agentcy-sandbox-input -j "$sandbox_input_chain"
+    iptables_delete filter INPUT -i "$iface" -m comment --comment agent-manager-sandbox-input -j "$sandbox_input_chain"
   done
   iptables -F "$sandbox_input_chain" >/dev/null 2>&1 || true
   iptables -X "$sandbox_input_chain" >/dev/null 2>&1 || true
 
-  while iptables -C INPUT -p tcp --dport "$agentcy_port" -m comment --comment agentcy-private-listener -j "$agentcy_chain" >/dev/null 2>&1; do
-    iptables -D INPUT -p tcp --dport "$agentcy_port" -m comment --comment agentcy-private-listener -j "$agentcy_chain"
+  while iptables -C INPUT -p tcp --dport "$agent_manager_port" -m comment --comment agent-manager-private-listener -j "$agent_manager_chain" >/dev/null 2>&1; do
+    iptables -D INPUT -p tcp --dport "$agent_manager_port" -m comment --comment agent-manager-private-listener -j "$agent_manager_chain"
   done
-  iptables -F "$agentcy_chain" >/dev/null 2>&1 || true
-  iptables -X "$agentcy_chain" >/dev/null 2>&1 || true
+  iptables -F "$agent_manager_chain" >/dev/null 2>&1 || true
+  iptables -X "$agent_manager_chain" >/dev/null 2>&1 || true
 
   if [[ "$direct_nat" == "true" ]]; then
     if [[ -z "$egress_iface" ]]; then
       egress_iface="$(default_egress_iface || true)"
     fi
     if [[ -n "$egress_iface" ]]; then
-      iptables_delete filter FORWARD -i "$egress_iface" -o "$bridge" -d "$guest_cidr" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment agentcy-microvm-forward-in -j ACCEPT
-      iptables_delete filter FORWARD -i "$bridge" -o "$egress_iface" -s "$guest_cidr" -m comment --comment agentcy-microvm-forward-out -j ACCEPT
-      iptables_delete nat POSTROUTING -s "$guest_cidr" -o "$egress_iface" -m comment --comment agentcy-microvm-direct-nat -j MASQUERADE
+      iptables_delete filter FORWARD -i "$egress_iface" -o "$bridge" -d "$guest_cidr" -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment agent-manager-microvm-forward-in -j ACCEPT
+      iptables_delete filter FORWARD -i "$bridge" -o "$egress_iface" -s "$guest_cidr" -m comment --comment agent-manager-microvm-forward-out -j ACCEPT
+      iptables_delete nat POSTROUTING -s "$guest_cidr" -o "$egress_iface" -m comment --comment agent-manager-microvm-direct-nat -j MASQUERADE
     fi
   fi
 
   if [[ "$install_cidr_redirect" == "true" && -n "$proxy_port" ]]; then
-    iptables_delete nat PREROUTING -i "$bridge" -s "$guest_cidr" -p tcp --dport 80 -m comment --comment agentcy-microvm-egress:cidr -j REDIRECT --to-ports "$proxy_port"
+    iptables_delete nat PREROUTING -i "$bridge" -s "$guest_cidr" -p tcp --dport 80 -m comment --comment agent-manager-microvm-egress:cidr -j REDIRECT --to-ports "$proxy_port"
   fi
   if [[ -n "$proxy_port" ]]; then
-    iptables_delete filter INPUT -i "$bridge" -p tcp --dport "$proxy_port" -m comment --comment agentcy-microvm-proxy-input -j ACCEPT
+    iptables_delete filter INPUT -i "$bridge" -p tcp --dport "$proxy_port" -m comment --comment agent-manager-microvm-proxy-input -j ACCEPT
   fi
 
   if [[ "$bridge_created" == "1" && -d "/sys/class/net/$bridge" ]]; then

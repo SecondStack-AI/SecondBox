@@ -2,10 +2,10 @@
 set -euo pipefail
 
 # Produce a prepared guest rootfs directory for scripts/microvm-image/build.sh
-# (its AG_MICROVM_ROOTFS_SOURCE_DIR input). The default mode creates a fresh
+# (its AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_DIR input). The default mode creates a fresh
 # Debian rootfs with debootstrap, then applies the standard package set
 # (apt-std.txt + requirements-std.txt + config/) in Docker. Set
-# AG_MICROVM_ROOTFS_SOURCE_MODE=extend to preserve the legacy behavior of
+# AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_MODE=extend to preserve the legacy behavior of
 # extending an existing signed rootfs.ext4.
 #
 # Requires: docker, tar, and debootstrap for the default mode. Legacy extend mode
@@ -21,17 +21,17 @@ if [ -f "$lock_file" ]; then
     . "$lock_file"
 fi
 
-mode="${AG_MICROVM_ROOTFS_SOURCE_MODE:-debootstrap}"
-base_rootfs="${AG_MICROVM_BASE_ROOTFS:-$repo_root/releases/microvm/latest/rootfs.ext4}"
-out_dir="${AG_MICROVM_ROOTFS_SOURCE_DIR:-$repo_root/tmp/microvm-rootfs-src}"
-base_tag="${AG_MICROVM_BASE_IMAGE:-agentcy-rootfs:base}"
-std_tag="${AG_MICROVM_STD_IMAGE:-agentcy-rootfs:std}"
-stage_dir="${AG_MICROVM_STAGE_DIR:-$repo_root/tmp/agentcy-rootfs-stage}"
-debian_suite="${AG_MICROVM_DEBIAN_SUITE:-${AG_MICROVM_DEBIAN_SUITE_DEFAULT:-bookworm}}"
-debian_arch="${AG_MICROVM_DEBIAN_ARCH:-${AG_MICROVM_DEBIAN_ARCH_DEFAULT:-amd64}}"
-debian_mirror="${AG_MICROVM_DEBIAN_MIRROR:-${AG_MICROVM_DEBIAN_MIRROR_DEFAULT:-http://deb.debian.org/debian}}"
-debootstrap_include="${AG_MICROVM_DEBOOTSTRAP_INCLUDE:-${AG_MICROVM_DEBOOTSTRAP_INCLUDE_DEFAULT:-ca-certificates,bash,locales,tzdata,python3}}"
-apt_check_valid_until="${AG_MICROVM_APT_CHECK_VALID_UNTIL:-${AG_MICROVM_APT_CHECK_VALID_UNTIL_DEFAULT:-true}}"
+mode="${AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_MODE:-debootstrap}"
+base_rootfs="${AGENT_MANAGER_MICROVM_BASE_ROOTFS:-$repo_root/releases/microvm/latest/rootfs.ext4}"
+out_dir="${AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_DIR:-$repo_root/tmp/microvm-rootfs-src}"
+base_tag="${AGENT_MANAGER_MICROVM_BASE_IMAGE:-agent-manager-rootfs:base}"
+std_tag="${AGENT_MANAGER_MICROVM_STD_IMAGE:-agent-manager-rootfs:std}"
+stage_dir="${AGENT_MANAGER_MICROVM_STAGE_DIR:-$repo_root/tmp/agent-manager-rootfs-stage}"
+debian_suite="${AGENT_MANAGER_MICROVM_DEBIAN_SUITE:-${AGENT_MANAGER_MICROVM_DEBIAN_SUITE_DEFAULT:-bookworm}}"
+debian_arch="${AGENT_MANAGER_MICROVM_DEBIAN_ARCH:-${AGENT_MANAGER_MICROVM_DEBIAN_ARCH_DEFAULT:-amd64}}"
+debian_mirror="${AGENT_MANAGER_MICROVM_DEBIAN_MIRROR:-${AGENT_MANAGER_MICROVM_DEBIAN_MIRROR_DEFAULT:-http://deb.debian.org/debian}}"
+debootstrap_include="${AGENT_MANAGER_MICROVM_DEBOOTSTRAP_INCLUDE:-${AGENT_MANAGER_MICROVM_DEBOOTSTRAP_INCLUDE_DEFAULT:-ca-certificates,bash,locales,tzdata,python3}}"
+apt_check_valid_until="${AGENT_MANAGER_MICROVM_APT_CHECK_VALID_UNTIL:-${AGENT_MANAGER_MICROVM_APT_CHECK_VALID_UNTIL_DEFAULT:-true}}"
 
 json_escape() {
     printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
@@ -122,7 +122,7 @@ prepare_debootstrap_base() {
         "$debian_mirror"
     if [ "$apt_check_valid_until" = "false" ]; then
         run_root install -d -m 0755 "$stage_dir/etc/apt/apt.conf.d"
-        printf 'Acquire::Check-Valid-Until "false";\n' | run_root tee "$stage_dir/etc/apt/apt.conf.d/99agentcy-snapshot" >/dev/null
+        printf 'Acquire::Check-Valid-Until "false";\n' | run_root tee "$stage_dir/etc/apt/apt.conf.d/99agent-manager-snapshot" >/dev/null
     fi
 }
 
@@ -141,7 +141,7 @@ prepare_extended_base() {
 case "$mode" in
     debootstrap) prepare_debootstrap_base ;;
     extend) prepare_extended_base ;;
-    *) echo "invalid AG_MICROVM_ROOTFS_SOURCE_MODE: $mode (expected debootstrap or extend)" >&2; exit 2 ;;
+    *) echo "invalid AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_MODE: $mode (expected debootstrap or extend)" >&2; exit 2 ;;
 esac
 
 echo "[2/4] Importing base → $base_tag (forcing root ownership)" >&2
@@ -172,4 +172,4 @@ write_source_manifest
 
 echo "Prepared rootfs source: $out_dir ($(du -sh "$out_dir" 2>/dev/null | cut -f1))" >&2
 echo "Source manifest: $out_dir/rootfs-source-manifest.json" >&2
-echo "Next: AG_MICROVM_ROOTFS_SOURCE_DIR=$out_dir AG_MICROVM_KERNEL_PATH=<kernel> scripts/microvm-image/build.sh" >&2
+echo "Next: AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_DIR=$out_dir AGENT_MANAGER_MICROVM_KERNEL_PATH=<kernel> scripts/microvm-image/build.sh" >&2

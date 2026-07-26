@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"agentcy/internal/config"
+	"agent-manager/internal/config"
 )
 
 func TestCreateGoldenSnapshotPausesSnapshotsResumesAndWritesManifest(t *testing.T) {

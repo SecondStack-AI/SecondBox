@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	oauthpkg "agentcy/internal/oauth"
-	"agentcy/internal/registry"
+	oauthpkg "agent-manager/internal/oauth"
+	"agent-manager/internal/registry"
 )
 
 type Store interface {

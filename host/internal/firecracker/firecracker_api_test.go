@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"agentcy/internal/config"
+	"agent-manager/internal/config"
 )
 
 func TestFirecrackerAPIClientSnapshotAndMMDS(t *testing.T) {
@@ -70,7 +70,7 @@ func TestFirecrackerAPIClientLoadSnapshotWithOverrides(t *testing.T) {
 			IfaceID:     "eth0",
 			HostDevName: "agfc123",
 		}},
-		VsockOverride: &vsockOverride{UDSPath: "agentcy.vsock"},
+		VsockOverride: &vsockOverride{UDSPath: "agent-manager.vsock"},
 	})
 	if err != nil {
 		t.Fatalf("load snapshot: %v", err)
@@ -85,7 +85,7 @@ func TestFirecrackerAPIClientLoadSnapshotWithOverrides(t *testing.T) {
 		t.Fatalf("network override = %#v", overrides[0])
 	}
 	vsock, ok := call.Body["vsock_override"].(map[string]any)
-	if !ok || vsock["uds_path"] != "agentcy.vsock" {
+	if !ok || vsock["uds_path"] != "agent-manager.vsock" {
 		t.Fatalf("vsock override = %#v", call.Body["vsock_override"])
 	}
 }

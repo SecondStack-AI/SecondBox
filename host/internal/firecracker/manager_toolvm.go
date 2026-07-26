@@ -1,8 +1,8 @@
 package microvm
 
 import (
-	"agentcy/internal/flow"
-	"agentcy/internal/runtimemanager"
+	"agent-manager/internal/flow"
+	"agent-manager/internal/runtimemanager"
 	"context"
 	"fmt"
 	"log/slog"

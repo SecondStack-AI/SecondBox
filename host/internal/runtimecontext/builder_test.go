@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	oauthpkg "agentcy/internal/oauth"
-	"agentcy/internal/registry"
-	"agentcy/internal/registry/registrytest"
+	oauthpkg "agent-manager/internal/oauth"
+	"agent-manager/internal/registry"
+	"agent-manager/internal/registry/registrytest"
 )
 
 var errRuntimeContextSecretStoreCalled = errors.New("runtime context build should not read oauth secrets")
@@ -232,12 +232,6 @@ func TestBuildWithRegistryStoreDoesNotReadOAuthSecrets(t *testing.T) {
 	if err := store.CreateAgent(agent); err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
-	if err := store.CreateUser(&registry.User{
-		ID:    "user-alice",
-		Email: "alice@example.com",
-	}); err != nil {
-		t.Fatalf("create user: %v", err)
-	}
 	if err := store.UpsertOAuthToken(&registry.OAuthToken{
 		AgentID:         agent.ID,
 		Service:         registry.OAuthServiceGitHub,
@@ -401,7 +395,7 @@ func TestBuildProjectsUserDelegatedMissingConnectionConnectURLs(t *testing.T) {
 	req := BuildRequest{
 		AgentID:         "agent-1",
 		CompartmentID:   "cmp-1",
-		PublicBaseURL:   "https://agentcy.example.com/",
+		PublicBaseURL:   "https://agent-service.example.com/",
 		EffectivePolicy: registry.CredentialPolicyUserDelegated,
 	}
 	applyActorInput(&req, freshVerifiedActor("user-alice"))
@@ -422,7 +416,7 @@ func TestBuildProjectsUserDelegatedMissingConnectionConnectURLs(t *testing.T) {
 	} {
 		assertProjectedJSONField(t, projection, tc.path, "reason", "user_connection_required")
 		assertProjectedJSONField(t, projection, tc.path, "details.service", tc.service)
-		assertProjectedJSONField(t, projection, tc.path, "connectUrl", "https://agentcy.example.com/#/settings/connections?oauth_service="+tc.service)
+		assertProjectedJSONField(t, projection, tc.path, "connectUrl", "https://agent-service.example.com/#/settings/connections?oauth_service="+tc.service)
 		assertProjectedJSONFieldAbsent(t, projection, tc.path, "access_token")
 	}
 }
@@ -690,7 +684,7 @@ func TestBuildNormalizesOmittedPathsForMissingExpiredAndIncompleteGrants(t *test
 				req := BuildRequest{
 					AgentID:         "agent-1",
 					CompartmentID:   "cmp-1",
-					PublicBaseURL:   "https://agentcy.example.com",
+					PublicBaseURL:   "https://agent-service.example.com",
 					EffectivePolicy: registry.CredentialPolicyUserDelegated,
 				}
 				applyActorInput(&req, freshVerifiedActor("user-alice"))

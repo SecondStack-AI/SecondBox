@@ -16,7 +16,7 @@ import (
 	"strings"
 	"syscall"
 
-	"agentcy/internal/sandboxbroker"
+	"agent-manager/internal/sandboxbroker"
 
 	"golang.org/x/sys/unix"
 )
@@ -429,7 +429,7 @@ func (b *SandboxBrokerBackend) verifyWorkspaceArtifact(ref, wantManifestSHA, wan
 }
 
 func workspaceFilesystemManifestSHA256(ctx context.Context, imagePath string) (string, error) {
-	dumpRoot, err := os.MkdirTemp("", "agentcy-workspace-manifest-*")
+	dumpRoot, err := os.MkdirTemp("", "agent-manager-workspace-manifest-*")
 	if err != nil {
 		return "", err
 	}

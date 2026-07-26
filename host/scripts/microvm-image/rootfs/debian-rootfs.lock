@@ -2,10 +2,10 @@
 #
 # The default mirror is a Debian snapshot, not the moving bookworm suite. That
 # pins apt repository inputs for deterministic rebuilds while still allowing an
-# operator override via AG_MICROVM_DEBIAN_MIRROR during emergency rebuilds.
+# operator override via AGENT_MANAGER_MICROVM_DEBIAN_MIRROR during emergency rebuilds.
 
-AG_MICROVM_DEBIAN_SUITE_DEFAULT="bookworm"
-AG_MICROVM_DEBIAN_ARCH_DEFAULT="amd64"
-AG_MICROVM_DEBIAN_MIRROR_DEFAULT="https://snapshot.debian.org/archive/debian/20250701T000000Z/"
-AG_MICROVM_APT_CHECK_VALID_UNTIL_DEFAULT="false"
-AG_MICROVM_DEBOOTSTRAP_INCLUDE_DEFAULT="ca-certificates,bash,locales,tzdata,python3"
+AGENT_MANAGER_MICROVM_DEBIAN_SUITE_DEFAULT="bookworm"
+AGENT_MANAGER_MICROVM_DEBIAN_ARCH_DEFAULT="amd64"
+AGENT_MANAGER_MICROVM_DEBIAN_MIRROR_DEFAULT="https://snapshot.debian.org/archive/debian/20250701T000000Z/"
+AGENT_MANAGER_MICROVM_APT_CHECK_VALID_UNTIL_DEFAULT="false"
+AGENT_MANAGER_MICROVM_DEBOOTSTRAP_INCLUDE_DEFAULT="ca-certificates,bash,locales,tzdata,python3"

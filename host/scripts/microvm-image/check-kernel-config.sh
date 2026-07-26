@@ -6,7 +6,7 @@ usage() {
 Usage: check-kernel-config.sh <kernel-config> [required-config]
 
 Validates that the kernel config used for the Firecracker guest has the minimum
-features required by the Agentcy rootfs: virtio block/net/vsock, ext4, FUSE,
+features required by the Agent Service rootfs: virtio block/net/vsock, ext4, FUSE,
 namespaces, user namespaces, and seccomp.
 USAGE
 }
