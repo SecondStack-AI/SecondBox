@@ -136,3 +136,13 @@ func TestCleanCloneMatrixUsesIsolatedCachesAndExactCommit(t *testing.T) {
 		}
 	}
 }
+
+func TestGeneratedClientVerificationDoesNotWritePythonBytecode(t *testing.T) {
+	verification := readRepositoryFile(t, "scripts/verify-generated.sh")
+	if !strings.Contains(
+		verification,
+		"PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=sdk/python python3 -c 'import secondbox_client_gen'",
+	) {
+		t.Error("SecondBox generated-client verification must import Python without mutating the clean clone")
+	}
+}

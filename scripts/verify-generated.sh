@@ -8,7 +8,7 @@ scripts/verify-runner-protocol-generated.sh
 scripts/verify-guest-protocol-generated.sh
 go test ./sdk/go/secondboxclient
 python3 -c 'from pathlib import Path; source = Path("sdk/python/secondbox_client_gen.py").read_text(); compile(source, "sdk/python/secondbox_client_gen.py", "exec")'
-PYTHONPATH=sdk/python python3 -c 'import secondbox_client_gen'
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=sdk/python python3 -c 'import secondbox_client_gen'
 
 if [[ ! -x node_modules/.bin/tsc ]]; then
   echo "SecondBox TypeScript validation requires npm ci --ignore-scripts" >&2
