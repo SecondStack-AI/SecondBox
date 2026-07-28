@@ -212,7 +212,7 @@ Make a clean installation, upgrade, backup, and incident workflow reproducible w
 
 Release only after the clean contract, one-host path, multi-runner path, durability, security boundary, and client integrations are proven against packaged artifacts.
 
-- [ ] Run all non-KVM tests in CI from a clean clone without reaching into the SecondStack repository.
+- [x] Run all non-KVM tests in CI from a clean clone without reaching into the SecondStack repository.
 - [ ] Run real KVM qualification on supported Linux hosts using the packaged runner, guest assets, systemd/Compose deployment, and documented network configuration.
 - [x] Prove an ephemeral agent-turn profile and a durable coding-session profile created explicitly by the operator, without shipping them as hidden defaults.
 - [x] Prove two independent application projects cannot list, inspect, execute in, read files from, attach to, or delete one another's Sandboxes.
