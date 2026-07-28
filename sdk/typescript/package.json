@@ -1,0 +1,46 @@
+{
+  "name": "@secondstack-ai/secondbox",
+  "version": "0.0.0-development",
+  "description": "Generated SecondBox v1 transport with lifecycle, polling, execution, filesystem, terminal, and Flue helpers.",
+  "type": "module",
+  "license": "MIT",
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SecondStack-AI/SecondBox.git",
+    "directory": "sdk/typescript"
+  },
+  "homepage": "https://github.com/SecondStack-AI/SecondBox",
+  "bugs": {
+    "url": "https://github.com/SecondStack-AI/SecondBox/issues"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "flue-runtime-beta9-LICENSE.txt",
+    "flue-runtime-beta9-source.json"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js"
+    },
+    "./generated": {
+      "types": "./dist/secondbox-client.gen.d.ts",
+      "import": "./dist/secondbox-client.gen.js"
+    },
+    "./flue": {
+      "types": "./dist/flue.d.ts",
+      "import": "./dist/flue.js"
+    }
+  },
+  "scripts": {
+    "build": "node ./prepare-package.mjs",
+    "prepack": "npm run build"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

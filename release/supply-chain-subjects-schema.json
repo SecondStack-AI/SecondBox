@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://secondbox.dev/schemas/release-supply-chain-subjects-v1.json",
+  "title": "SecondBox release supply-chain subjects",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "releaseVersion",
+    "sourceCommit",
+    "status",
+    "summary",
+    "subjects"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "releaseVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sourceCommit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "status": {
+      "enum": ["passed", "blocked", "failed"]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "subjects": {
+      "type": "array",
+      "minItems": 13,
+      "maxItems": 13,
+      "items": {
+        "$ref": "#/$defs/subject"
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "status", "summary"],
+      "properties": {
+        "id": {
+          "enum": [
+            "linux-release-package",
+            "secondbox",
+            "secondbox-artifact-evidence",
+            "secondbox-guest-agent",
+            "secondbox-runner",
+            "secondbox-runner-identity",
+            "secondboxd",
+            "control-plane-image",
+            "runner-image",
+            "guest-execution-bundle",
+            "guest-artifact-image",
+            "go-sdk-package",
+            "typescript-sdk-package"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "release-package",
+            "linux-binary",
+            "oci-image",
+            "guest-bundle",
+            "go-sdk",
+            "npm-package"
+          ]
+        },
+        "status": {
+          "enum": ["passed", "blocked", "failed"]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "locator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "digest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sha256"],
+          "properties": {
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "bindings": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["subjectId", "digest"],
+            "properties": {
+              "subjectId": {
+                "const": "guest-execution-bundle"
+              },
+              "digest": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["sha256"],
+                "properties": {
+                  "sha256": {
+                    "$ref": "#/$defs/sha256"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "passed"
+              }
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "locator": true,
+              "digest": true
+            },
+            "required": ["locator", "digest"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "id": {
+                "const": "guest-artifact-image"
+              },
+              "status": {
+                "const": "passed"
+              }
+            },
+            "required": ["id", "status"]
+          },
+          "then": {
+            "properties": {
+              "bindings": true
+            },
+            "required": ["bindings"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "id": {
+                "const": "guest-artifact-image"
+              }
+            },
+            "required": ["id"]
+          },
+          "else": {
+            "properties": {
+              "bindings": false
+            }
+          }
+        }
+      ]
+    }
+  }
+}

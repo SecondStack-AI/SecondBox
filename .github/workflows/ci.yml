@@ -1,0 +1,144 @@
+name: SecondBox CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: secondbox-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CI: "true"
+
+jobs:
+  clean-clone-non-kvm:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.4-bookworm
+        env:
+          POSTGRES_DB: secondbox_clean_clone_conformance
+          POSTGRES_PASSWORD: secondbox-clean-clone-test-password
+          POSTGRES_USER: secondbox
+        options: >-
+          --health-cmd "grep -qx 1 /var/lib/postgresql/18/docker/postmaster.pid && pg_isready -U secondbox -d secondbox_clean_clone_conformance"
+          --health-interval 1s
+          --health-timeout 5s
+          --health-retries 30
+        ports:
+          - 5432:5432
+    env:
+      SECONDBOX_TEST_DATABASE_URL: postgresql://secondbox:secondbox-clean-clone-test-password@127.0.0.1:5432/secondbox_clean_clone_conformance?sslmode=disable
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+      - name: Run every non-KVM test from an isolated clean clone
+        run: scripts/test-clean-clone-isolation.sh --non-kvm
+
+  generated-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - name: Install pinned TypeScript validator
+        run: npm ci --ignore-scripts
+      - name: Verify generated clients
+        run: scripts/verify-generated.sh
+
+  go-tests-vet:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.4-bookworm
+        env:
+          POSTGRES_DB: secondbox_conformance
+          POSTGRES_PASSWORD: secondbox-test-password
+          POSTGRES_USER: secondbox
+        options: >-
+          --health-cmd "grep -qx 1 /var/lib/postgresql/18/docker/postmaster.pid && pg_isready -U secondbox -d secondbox_conformance"
+          --health-interval 1s
+          --health-timeout 5s
+          --health-retries 30
+        ports:
+          - 5432:5432
+    env:
+      SECONDBOX_TEST_DATABASE_URL: postgresql://secondbox:secondbox-test-password@127.0.0.1:5432/secondbox_conformance?sslmode=disable
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            runner/go.sum
+      - name: Test and vet control plane and runner
+        run: scripts/test-go.sh
+
+  contract-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            runner/go.sum
+      - name: Test public, runner, and guest contracts
+        run: scripts/test-contract.sh
+
+  compose-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Test Compose migration and startup
+        run: scripts/test-compose.sh
+
+  image-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Test guest image policy
+        run: scripts/test-image-policy.sh
+
+  build-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            runner/go.sum
+      - name: Build standalone binaries
+        run: scripts/build-artifacts.sh
+      - name: Upload standalone binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: secondbox-linux-${{ runner.arch }}
+          path: dist/
+          if-no-files-found: error

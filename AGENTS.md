@@ -1,8 +1,14 @@
-# Sandbox Service Development Rules
+# SecondBox Development Rules
 
-- Sandbox Service owns durable Environments, workspaces, generations, leases, snapshots, artifacts, lifecycle policy, and replaceable compute Instances in the `sandbox` PostgreSQL schema.
-- Public and Sandbox Host contracts use Sandbox domain language. Firecracker, KVM, container, vsock, host path, and network implementation details are forbidden outside a host adapter.
-- The control-plane process is unprivileged. Only the separately deployed Sandbox Host may perform privileged compute, filesystem, and network operations.
-- Cross-service references are logical strings. Do not add PostgreSQL foreign keys or CHECK constraints.
-- Every required runtime setting comes from the root environment flow. Application code and deployment templates must not provide defaults.
-- Run `just test` and `just verify-generated` before handing off changes.
+- `Sandbox` is the durable public resource. `Instance` is replaceable compute fenced to one Sandbox generation.
+- The control plane is unprivileged. Only separately deployed SecondBox runners may use KVM, Firecracker, TUN/TAP, host cgroups, or host workspace paths.
+- Runners establish authenticated outbound connections to the control plane. Application API credentials and runner credentials are separate authorities.
+- PostgreSQL owns desired state, assignments, generations, leases, profiles, audit, and reconciliation. S3-compatible storage owns portable checkpoints, snapshots, artifacts, and immutable execution assets.
+- Firecracker is the only implemented v1 backend. Keep the provider-neutral compute port and its conformance suite, but do not add placeholder backends or fallback execution.
+- Operators create every profile explicitly. A Sandbox is pinned to the immutable profile revision resolved at creation.
+- Public contracts use provider-neutral SecondBox domain language. Firecracker, KVM, runner credentials, host paths, storage keys, fencing tokens, and backend references do not enter public schemas.
+- Cross-resource references are logical strings. Do not add PostgreSQL foreign keys or CHECK constraints.
+- Every runtime setting is explicit. Application code and deployment templates must not provide defaults for required environment variables.
+- Do not catch, log, and swallow errors. Implement one intended path and fail explicitly when its prerequisites are absent.
+- Keep exported names and error prefixes greppable and domain-specific. Remove replaced code instead of retaining compatibility paths.
+- Run `just verify-generated`, `just test`, and the relevant contract, Compose, runner, or Firecracker suite before handoff.

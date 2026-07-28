@@ -1,0 +1,108 @@
+services:
+  postgres:
+    image: docker.io/library/postgres:18.4-bookworm
+    environment:
+      POSTGRES_DB: secondbox_compose_test
+      POSTGRES_PASSWORD: secondbox-compose-test-password
+      POSTGRES_USER: secondbox
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          test "$$(head -n 1 "$$PGDATA/postmaster.pid")" = "1" &&
+          pg_isready -U secondbox -d secondbox_compose_test
+      interval: 1s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - ../migrations/postgres/0001_secondbox.sql:/docker-entrypoint-initdb.d/001-secondbox.sql:ro
+      - ./compose-test-init.sql:/docker-entrypoint-initdb.d/002-live-fixtures.sql:ro
+
+  control-plane:
+    image: docker.io/library/golang:1.25.12-bookworm
+    user: "${SECONDBOX_COMPOSE_TEST_UID:?SECONDBOX_COMPOSE_TEST_UID is required}:${SECONDBOX_COMPOSE_TEST_GID:?SECONDBOX_COMPOSE_TEST_GID is required}"
+    command: ["/opt/secondbox/secondboxd"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SECONDBOX_API_KEY_HASH_SECRET: compose-test-api-key-hash-secret-0000000000000000
+      SECONDBOX_BOOTSTRAP_ADMIN_TOKEN: compose-test-bootstrap-admin-token
+      SECONDBOX_DATABASE_URL: postgresql://secondbox:secondbox-compose-test-password@postgres:5432/secondbox_compose_test?sslmode=disable
+      SECONDBOX_DEFAULT_PROFILE_MAX_ACTIVE_INSTANCES: "10"
+      SECONDBOX_DEFAULT_PROFILE_MAX_ARTIFACTS: "100"
+      SECONDBOX_DEFAULT_PROFILE_MAX_CONCURRENT_OPERATIONS: "20"
+      SECONDBOX_DEFAULT_PROFILE_MAX_CPU_MILLIS: "100000"
+      SECONDBOX_DEFAULT_PROFILE_MAX_MEMORY_BYTES: "107374182400"
+      SECONDBOX_DEFAULT_PROFILE_MAX_PORT_SESSIONS: "100"
+      SECONDBOX_DEFAULT_PROFILE_MAX_RETAINED_BYTES: "1099511627776"
+      SECONDBOX_DEFAULT_PROFILE_MAX_SANDBOXES: "100"
+      SECONDBOX_DEFAULT_PROFILE_MAX_SNAPSHOTS: "100"
+      SECONDBOX_DEFAULT_PROJECT_MAX_ACTIVE_INSTANCES: "10"
+      SECONDBOX_DEFAULT_PROJECT_MAX_ARTIFACTS: "100"
+      SECONDBOX_DEFAULT_PROJECT_MAX_CONCURRENT_OPERATIONS: "20"
+      SECONDBOX_DEFAULT_PROJECT_MAX_CPU_MILLIS: "100000"
+      SECONDBOX_DEFAULT_PROJECT_MAX_MEMORY_BYTES: "107374182400"
+      SECONDBOX_DEFAULT_PROJECT_MAX_PORT_SESSIONS: "100"
+      SECONDBOX_DEFAULT_PROJECT_MAX_RETAINED_BYTES: "1099511627776"
+      SECONDBOX_DEFAULT_PROJECT_MAX_SANDBOXES: "100"
+      SECONDBOX_DEFAULT_PROJECT_MAX_SNAPSHOTS: "100"
+      SECONDBOX_HTTP_TIMEOUT_SECONDS: "5"
+      SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS: "100"
+      SECONDBOX_DATA_PLANE_CLAIM_DURATION_MILLISECONDS: "5000"
+      SECONDBOX_DATA_PLANE_RETENTION_SECONDS: "3600"
+      SECONDBOX_DATA_PLANE_MAXIMUM_FRAME_BYTES: "1048576"
+      SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES: "16777216"
+      SECONDBOX_LIFECYCLE_RECONCILE_POLL_INTERVAL_MILLISECONDS: "100"
+      SECONDBOX_LIFECYCLE_RECONCILE_CLAIM_DURATION_MILLISECONDS: "5000"
+      SECONDBOX_ASSIGNMENT_CLAIM_DURATION_MILLISECONDS: "5000"
+      SECONDBOX_ASSIGNMENT_DEADLINE_MILLISECONDS: "30000"
+      SECONDBOX_ASSIGNMENT_RETRY_LIMIT: "2"
+      SECONDBOX_SCHEDULER_SERIALIZATION_RETRY_LIMIT: "3"
+      SECONDBOX_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS: "5000"
+      SECONDBOX_SIGNED_ASSET_CATALOG_PATH: /opt/secondbox/signed-assets.json
+      SECONDBOX_OBJECT_STORE_ENDPOINT: http://127.0.0.1:9000
+      SECONDBOX_OBJECT_STORE_REGION: us-east-1
+      SECONDBOX_OBJECT_STORE_BUCKET: compose-test
+      SECONDBOX_OBJECT_STORE_ROOT_USER: compose-test-object-user
+      SECONDBOX_OBJECT_STORE_ROOT_PASSWORD: compose-test-object-password-000000000000
+      SECONDBOX_OBJECT_STORE_USE_PATH_STYLE: "true"
+      SECONDBOX_OBJECT_STORE_RETRY_MAX_ATTEMPTS: "2"
+      SECONDBOX_OBJECT_STORE_HTTP_TIMEOUT_MILLISECONDS: "1000"
+      SECONDBOX_OBJECT_STORE_TEMP_DIRECTORY: /tmp
+      SECONDBOX_OBJECT_STORE_MAX_OBJECT_BYTES: "1073741824"
+      SECONDBOX_CHECKPOINT_SPOOL_DIRECTORY: /tmp
+      SECONDBOX_LISTEN_ADDR: ":8080"
+      SECONDBOX_PUBLIC_BASE_URL: http://127.0.0.1:8080
+      SECONDBOX_LOG_PATH: /tmp/secondbox-compose-test.log
+      SECONDBOX_RUNNER_CA_CERTIFICATE: /opt/secondbox/pki/runner-ca.crt
+      SECONDBOX_RUNNER_CA_PRIVATE_KEY: /opt/secondbox/pki/runner-ca.key
+      SECONDBOX_RUNNER_CERTIFICATE_LIFETIME_SECONDS: "86400"
+      SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS: "100"
+      SECONDBOX_RUNNER_CREDENTIAL_VERIFICATION_TIMEOUT_MILLISECONDS: "2000"
+      SECONDBOX_RUNNER_ENABLED_FEATURES: evidence
+      SECONDBOX_RUNNER_ENROLLMENT_HASH_SECRET: compose-test-runner-enrollment-hash-secret-0000000000000000
+      SECONDBOX_RUNNER_HEARTBEAT_INTERVAL_MILLISECONDS: "1000"
+      SECONDBOX_RUNNER_LISTEN_ADDR: ":9443"
+      SECONDBOX_RUNNER_PROTOCOL_MAXIMUM: "1"
+      SECONDBOX_RUNNER_PROTOCOL_MINIMUM: "1"
+      SECONDBOX_RUNNER_SERVER_CERTIFICATE: /opt/secondbox/pki/server.crt
+      SECONDBOX_RUNNER_SERVER_PRIVATE_KEY: /opt/secondbox/pki/server.key
+    ports:
+      - "127.0.0.1::8080"
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8080 &&
+          printf 'GET /readyz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q '"status":"ready"' <&3
+      interval: 1s
+      timeout: 5s
+      retries: 60
+    volumes:
+      - ../.tmp/compose-test/secondboxd:/opt/secondbox/secondboxd:ro
+      - ${SECONDBOX_COMPOSE_TEST_PKI_DIR:?SECONDBOX_COMPOSE_TEST_PKI_DIR is required}:/opt/secondbox/pki:ro
+      - ./compose-test-signed-assets.json:/opt/secondbox/signed-assets.json:ro

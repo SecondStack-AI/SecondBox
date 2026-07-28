@@ -1,0 +1,236 @@
+name: SecondBox Release Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      release-version:
+        description: Candidate SemVer without a leading v, used only to label non-published evidence
+        required: true
+        type: string
+      qualification-run-id:
+        description: Optional same-repository workflow run containing subject-bound qualification records for this exact commit
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  CI: "true"
+  SECONDBOX_DEPENDENCY_MINIMUM_AGE_SECONDS: "345600"
+  SECONDBOX_RELEASE_VERSION: ${{ inputs.release-version }}
+  SECONDBOX_RELEASE_SOURCE_COMMIT: ${{ github.sha }}
+  SECONDBOX_RELEASE_BUILDER_IDENTITY: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+jobs:
+  clean-clone-isolation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            runner/go.sum
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - name: Prove clean-clone isolation
+        run: |
+          mkdir -p .tmp/clean-clone-artifact/qualification
+          scripts/test-clean-clone-isolation.sh 2>&1 | tee .tmp/clean-clone-artifact/qualification/clean-clone-isolation.log
+      - name: Upload clean-clone evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: clean-clone-isolation
+          path: .tmp/clean-clone-artifact/
+          if-no-files-found: error
+
+  non-kvm-qualification:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.4-bookworm
+        env:
+          POSTGRES_DB: secondbox_release_conformance
+          POSTGRES_PASSWORD: secondbox-release-test-password
+          POSTGRES_USER: secondbox
+        options: >-
+          --health-cmd "grep -qx 1 /var/lib/postgresql/18/docker/postmaster.pid && pg_isready -U secondbox -d secondbox_release_conformance"
+          --health-interval 1s
+          --health-timeout 5s
+          --health-retries 30
+        ports:
+          - 5432:5432
+    env:
+      SECONDBOX_TEST_DATABASE_URL: postgresql://secondbox:secondbox-release-test-password@127.0.0.1:5432/secondbox_release_conformance?sslmode=disable
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            runner/go.sum
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - name: Install pinned JavaScript dependencies
+        run: npm ci --ignore-scripts
+      - name: Run non-KVM qualification matrix
+        run: |
+          mkdir -p .tmp/non-kvm-artifact/qualification
+          {
+            scripts/verify-generated.sh
+            scripts/test-go.sh
+            scripts/test-contract.sh
+            scripts/test-compose.sh
+            scripts/test-image-policy.sh
+            scripts/test-source-asset-policy.sh
+            scripts/build-artifacts.sh
+            go test ./tests/release ./tests/operations
+            echo "SecondBox non-KVM qualification passed for commit $GITHUB_SHA"
+          } 2>&1 | tee .tmp/non-kvm-artifact/qualification/non-kvm.log
+          cp -a dist .tmp/non-kvm-artifact/dist
+      - name: Upload non-KVM evidence and binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: non-kvm-qualification
+          path: .tmp/non-kvm-artifact/
+          if-no-files-found: error
+
+  release-evidence:
+    if: always()
+    needs:
+      - clean-clone-isolation
+      - non-kvm-qualification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            runner/go.sum
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - name: Install pinned JavaScript dependencies
+        run: npm ci --ignore-scripts
+      - name: Install pinned Go vulnerability scanner
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+      - name: Create evidence directories
+        run: |
+          mkdir -p .tmp/release-evidence/qualification .tmp/release-evidence/package .tmp/release-evidence/sdk .tmp/release-evidence/guest .tmp/release-evidence/sbom .tmp/release-evidence/vulnerabilities .tmp/release-evidence/licenses .tmp/release-evidence/checksums .tmp/release-evidence/signatures .tmp/release-evidence/tools
+          echo "SECONDBOX_RELEASE_EVIDENCE_TIMESTAMP=$(date --utc +%Y-%m-%dT%H:%M:%SZ)" >>"$GITHUB_ENV"
+      - name: Install age-qualified checksum-pinned evidence scanners
+        run: |
+          scripts/install-release-evidence-tools.sh .tmp/release-evidence/tools
+          echo "$GITHUB_WORKSPACE/.tmp/release-evidence/tools" >>"$GITHUB_PATH"
+      - name: Download clean-clone evidence
+        if: needs.clean-clone-isolation.result == 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: clean-clone-isolation
+          path: .tmp/release-evidence
+      - name: Download non-KVM evidence
+        if: needs.non-kvm-qualification.result == 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: non-kvm-qualification
+          path: .tmp/release-evidence
+      - name: Generate candidate subject manifest
+        run: |
+          test -d .tmp/release-evidence/dist
+          scripts/package-release-artifacts.sh \
+            .tmp/release-evidence/dist \
+            .tmp/release-evidence/package \
+            "$SECONDBOX_RELEASE_VERSION" \
+            "$SECONDBOX_RELEASE_SOURCE_COMMIT"
+          scripts/package-release-sdk-artifacts.sh \
+            .tmp/release-evidence/sdk \
+            "$SECONDBOX_RELEASE_VERSION" \
+            "$SECONDBOX_RELEASE_SOURCE_COMMIT"
+          node scripts/generate-release-subject-manifest.mjs \
+            .tmp/release-evidence \
+            .tmp/release-evidence/release-subjects.json
+      - name: Download structured qualification evidence
+        if: inputs.qualification-run-id != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.qualification-run-id }}
+          name: release-qualification-${{ github.sha }}
+          path: .tmp/release-qualification-import
+      - name: Import structured qualification evidence
+        if: inputs.qualification-run-id != ''
+        run: |
+          node scripts/import-release-qualification-evidence.mjs \
+            .tmp/release-qualification-import \
+            .tmp/release-evidence
+      - name: Generate supply-chain and aggregate evidence
+        run: |
+          scripts/generate-release-sboms.sh \
+            .tmp/release-evidence/sbom \
+            .tmp/release-evidence/dist \
+            .tmp/release-evidence/release-subjects.json
+          scripts/generate-vulnerability-evidence.sh \
+            .tmp/release-evidence/vulnerabilities \
+            .tmp/release-evidence/dist \
+            .tmp/release-evidence/release-subjects.json
+          scripts/generate-dependency-age-evidence.sh \
+            .tmp/release-evidence/dependency-age.json \
+            .tmp/release-evidence/release-subjects.json
+          scripts/generate-license-evidence.sh \
+            .tmp/release-evidence/licenses \
+            .tmp/release-evidence/release-subjects.json
+          scripts/generate-release-checksum-evidence.sh \
+            .tmp/release-evidence/release-subjects.json \
+            .tmp/release-evidence/checksums
+          scripts/generate-release-signature-evidence.sh \
+            .tmp/release-evidence/release-subjects.json \
+            .tmp/release-evidence/signatures
+          scripts/generate-release-provenance.sh \
+            .tmp/release-evidence/release-subjects.json \
+            .tmp/release-evidence/provenance.intoto.json
+          scripts/assemble-release-evidence.sh \
+            .tmp/release-evidence \
+            "$SECONDBOX_RELEASE_VERSION" \
+            "$SECONDBOX_RELEASE_SOURCE_COMMIT"
+      - name: Upload non-published release evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-evidence-${{ github.sha }}
+          path: .tmp/release-evidence/
+          if-no-files-found: error
+
+  publication-eligibility:
+    if: always()
+    needs:
+      - clean-clone-isolation
+      - non-kvm-qualification
+      - release-evidence
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - name: Install pinned evidence validator
+        run: npm ci --ignore-scripts
+      - name: Download release evidence
+        if: needs.release-evidence.result == 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-evidence-${{ github.sha }}
+          path: evidence
+      - name: Hard-gate publication eligibility
+        run: scripts/verify-release-publication-eligibility.sh evidence/release-evidence.json

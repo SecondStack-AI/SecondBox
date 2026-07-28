@@ -1,0 +1,12 @@
+{
+  "assets": [
+    {
+      "artifactId": "compose-test-runtime",
+      "manifestDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "signatureKeyId": "compose-test-signing-key",
+      "architecture": "amd64",
+      "guestProtocolGeneration": 1,
+      "mandatoryGuestFeatures": []
+    }
+  ]
+}

@@ -1,0 +1,202 @@
+name: Publish Qualified SecondBox Release
+
+on:
+  workflow_run:
+    workflows: ["SecondBox Release Evidence"]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: secondbox-public-release
+  cancel-in-progress: false
+
+env:
+  CI: "true"
+  SECONDBOX_RELEASE_TRUSTED_PUBLIC_KEY_SHA256: ${{ vars.SECONDBOX_RELEASE_TRUSTED_PUBLIC_KEY_SHA256 }}
+
+jobs:
+  validate-qualified-evidence:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Check out the exact qualified source commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+      - name: Install the pinned evidence validator
+        run: npm ci --ignore-scripts
+      - name: Require the qualified commit to remain protected main
+        run: |
+          git fetch --no-tags origin refs/heads/main
+          test "$(git rev-parse FETCH_HEAD)" = "${{ github.event.workflow_run.head_sha }}"
+      - name: Require one unexpired evidence artifact from the triggering run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_ARTIFACT: release-evidence-${{ github.event.workflow_run.head_sha }}
+          EVIDENCE_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          test "$(
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$EVIDENCE_RUN_ID/artifacts" \
+              --jq "[.artifacts[] | select(.name == \"$EVIDENCE_ARTIFACT\" and .expired == false)] | length"
+          )" = 1
+      - name: Download exact evidence from the triggering workflow run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+          name: release-evidence-${{ github.event.workflow_run.head_sha }}
+          path: evidence
+      - name: Revalidate signed eligibility and publication identity
+        run: |
+          scripts/verify-release-publication-eligibility.sh evidence/release-evidence.json
+          node scripts/verify-qualified-publication-inputs.mjs \
+            "$GITHUB_EVENT_PATH" \
+            evidence/release-evidence.json
+
+  publish-qualified-ghcr-tags:
+    needs: validate-qualified-evidence
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    steps:
+      - name: Check out the exact qualified source commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+      - run: npm ci --ignore-scripts
+      - name: Download exact qualified evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+          name: release-evidence-${{ github.event.workflow_run.head_sha }}
+          path: evidence
+      - name: Publish version tags for exact qualified GHCR manifests
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          scripts/publish-qualified-release.sh \
+            publish-ghcr-tags \
+            "$GITHUB_EVENT_PATH" \
+            evidence/release-evidence.json
+
+  publish-qualified-npm-package:
+    needs: publish-qualified-ghcr-tags
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the exact qualified source commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+          registry-url: https://registry.npmjs.org
+      - run: npm ci --ignore-scripts
+      - name: Download exact qualified evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+          name: release-evidence-${{ github.event.workflow_run.head_sha }}
+          path: evidence
+      - name: Publish exact qualified npm tarball through OIDC
+        env:
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          scripts/publish-qualified-release.sh \
+            publish-npm \
+            "$GITHUB_EVENT_PATH" \
+            evidence/release-evidence.json
+
+  publish-github-release-last:
+    needs: publish-qualified-npm-package
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Check out the exact qualified source commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+      - run: npm ci --ignore-scripts
+      - name: Download exact qualified evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+          name: release-evidence-${{ github.event.workflow_run.head_sha }}
+          path: evidence
+      - name: Publish immutable GitHub release after registry publication
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          scripts/publish-qualified-release.sh \
+            publish-github-release \
+            "$GITHUB_EVENT_PATH" \
+            evidence/release-evidence.json
+
+  verify-public-release:
+    needs: publish-github-release-last
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Check out the exact qualified source commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+      - run: npm ci --ignore-scripts
+      - name: Download exact qualified evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+          name: release-evidence-${{ github.event.workflow_run.head_sha }}
+          path: evidence
+      - name: Verify every public release surface without registry credentials
+        run: |
+          scripts/publish-qualified-release.sh \
+            verify-public-release \
+            "$GITHUB_EVENT_PATH" \
+            evidence/release-evidence.json

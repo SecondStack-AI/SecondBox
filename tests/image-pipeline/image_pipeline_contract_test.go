@@ -1,0 +1,285 @@
+package imagepipeline_test
+
+import (
+	"encoding/json"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strings"
+	"testing"
+)
+
+const immutableOCIReference = "registry.example/secondbox/rootfs@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+func TestSecondBoxImagePipelineRequiresExplicitImmutableInput(t *testing.T) {
+	outputDir := filepath.Join(t.TempDir(), "prepared-rootfs")
+	baseEnvironment := []string{
+		"PATH=" + os.Getenv("PATH"),
+		"SECONDBOX_RUNNER_MICROVM_ROOTFS_SOURCE_DIR=" + outputDir,
+	}
+
+	output, err := runSecondBoxInputValidation(t, baseEnvironment)
+	if err == nil || !strings.Contains(output, "an immutable OCI base reference or explicit SecondBox image definition is required") {
+		t.Fatalf("missing source = (%v, %q), want explicit rejection", err, output)
+	}
+
+	mutableEnvironment := append(
+		slicesClone(baseEnvironment),
+		"SECONDBOX_RUNNER_MICROVM_OCI_BASE_REFERENCE=registry.example/secondbox/rootfs:stable",
+	)
+	output, err = runSecondBoxInputValidation(t, mutableEnvironment)
+	if err == nil || !strings.Contains(output, "must end with @sha256:") {
+		t.Fatalf("mutable OCI source = (%v, %q), want digest rejection", err, output)
+	}
+
+	immutableEnvironment := append(
+		slicesClone(baseEnvironment),
+		"SECONDBOX_RUNNER_MICROVM_OCI_BASE_REFERENCE="+immutableOCIReference,
+	)
+	output, err = runSecondBoxInputValidation(t, immutableEnvironment)
+	if err != nil || !strings.Contains(output, "inputs valid: oci") {
+		t.Fatalf("immutable OCI source = (%v, %q), want acceptance", err, output)
+	}
+
+	definitionPath := filepath.Join(
+		repositoryRoot(t),
+		"runner/scripts/microvm-image/rootfs/secondbox-debian-image-definition.json",
+	)
+	definitionEnvironment := append(
+		slicesClone(baseEnvironment),
+		"SECONDBOX_RUNNER_MICROVM_IMAGE_DEFINITION="+definitionPath,
+	)
+	output, err = runSecondBoxInputValidation(t, definitionEnvironment)
+	if err != nil || !strings.Contains(output, "inputs valid: secondbox_image_definition") {
+		t.Fatalf("explicit image definition = (%v, %q), want acceptance", err, output)
+	}
+
+	undatedDefinition := filepath.Join(t.TempDir(), "undated-image-definition.json")
+	definitionContent, err := os.ReadFile(definitionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	definitionContent = []byte(strings.Replace(
+		string(definitionContent),
+		"https://snapshot.debian.org/archive/debian/20250701T000000Z/",
+		"https://deb.debian.org/debian/",
+		1,
+	))
+	if err := os.WriteFile(undatedDefinition, definitionContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	undatedEnvironment := append(
+		slicesClone(baseEnvironment),
+		"SECONDBOX_RUNNER_MICROVM_IMAGE_DEFINITION="+undatedDefinition,
+	)
+	output, err = runSecondBoxInputValidation(t, undatedEnvironment)
+	if err == nil || !strings.Contains(output, "Debian snapshot must be dated and immutable") {
+		t.Fatalf("undated image definition = (%v, %q), want rejection", err, output)
+	}
+
+	ambiguousEnvironment := append(
+		slicesClone(definitionEnvironment),
+		"SECONDBOX_RUNNER_MICROVM_OCI_BASE_REFERENCE="+immutableOCIReference,
+	)
+	output, err = runSecondBoxInputValidation(t, ambiguousEnvironment)
+	if err == nil || !strings.Contains(output, "set exactly one of") {
+		t.Fatalf("ambiguous source = (%v, %q), want rejection", err, output)
+	}
+}
+
+func TestSecondBoxImagePipelineHasNoInheritedProductVocabulary(t *testing.T) {
+	rootfsDir := filepath.Join(repositoryRoot(t), "runner/scripts/microvm-image/rootfs")
+	forbidden := []string{
+		"agent",
+		"secondstack",
+		"profile.d",
+		"releases/microvm/latest",
+		"apt-std.txt",
+		"requirements-std.txt",
+		"build-rootfs-source.sh",
+		"verify-standard-toolset.sh",
+		"debian-rootfs.lock",
+	}
+
+	err := filepath.WalkDir(rootfsDir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relativePath, err := filepath.Rel(rootfsDir, path)
+		if err != nil {
+			return err
+		}
+		lowerPath := strings.ToLower(relativePath)
+		for _, forbiddenText := range forbidden {
+			if strings.Contains(lowerPath, forbiddenText) {
+				t.Errorf("forbidden inherited vocabulary %q remains in path %s", forbiddenText, relativePath)
+			}
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		lowerContent := strings.ToLower(string(content))
+		for _, forbiddenText := range forbidden {
+			if strings.Contains(lowerContent, forbiddenText) {
+				t.Errorf("forbidden inherited vocabulary %q remains in %s", forbiddenText, relativePath)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSecondBoxImagePipelineHasNoBaseImageDefaultOrMutableTag(t *testing.T) {
+	dockerfile := readRepositoryFile(t, "runner/scripts/microvm-image/rootfs/Dockerfile")
+	if !strings.Contains(dockerfile, "ARG BASE_IMAGE\nFROM ${BASE_IMAGE}") {
+		t.Fatal("Dockerfile must consume a caller-supplied BASE_IMAGE")
+	}
+	if strings.Contains(dockerfile, "ARG BASE_IMAGE=") {
+		t.Fatal("Dockerfile must not default BASE_IMAGE")
+	}
+
+	allInputs := strings.Join([]string{
+		dockerfile,
+		readRepositoryFile(t, "runner/scripts/microvm-image/rootfs/build-secondbox-rootfs-source.sh"),
+		readRepositoryFile(t, "runner/scripts/microvm-image/rootfs/README.md"),
+	}, "\n")
+	for _, forbidden := range []string{
+		":latest",
+		":base",
+		":std",
+		"MICROVM_BASE_IMAGE",
+		"MICROVM_BASE_ROOTFS",
+		"MICROVM_ROOTFS_SOURCE_MODE",
+	} {
+		if strings.Contains(allInputs, forbidden) {
+			t.Errorf("mutable/default base assumption %q remains", forbidden)
+		}
+	}
+	if !strings.Contains(allInputs, `@sha256:[0-9a-f]{64}`) {
+		t.Fatal("build input validation must require an OCI sha256 digest")
+	}
+}
+
+func TestSecondBoxImageDefinitionAndPythonRequirementsArePinned(t *testing.T) {
+	type imageDefinition struct {
+		SchemaVersion int    `json:"schemaVersion"`
+		Kind          string `json:"kind"`
+		Debian        struct {
+			Snapshot string `json:"snapshot"`
+		} `json:"debian"`
+	}
+	var definition imageDefinition
+	definitionText := readRepositoryFile(
+		t,
+		"runner/scripts/microvm-image/rootfs/secondbox-debian-image-definition.json",
+	)
+	if err := json.Unmarshal([]byte(definitionText), &definition); err != nil {
+		t.Fatal(err)
+	}
+	if definition.SchemaVersion != 1 || definition.Kind != "secondbox.microvm-rootfs" {
+		t.Fatalf("unexpected image definition identity: %#v", definition)
+	}
+	datedSnapshot := regexp.MustCompile(
+		`^https://snapshot\.debian\.org/archive/debian/[0-9]{8}T[0-9]{6}Z/$`,
+	)
+	if !datedSnapshot.MatchString(definition.Debian.Snapshot) {
+		t.Fatalf("Debian snapshot is not dated and immutable: %q", definition.Debian.Snapshot)
+	}
+
+	requirementPattern := regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*==[A-Za-z0-9][A-Za-z0-9_.+!-]*$`)
+	requirements := readRepositoryFile(
+		t,
+		"runner/scripts/microvm-image/rootfs/secondbox-python-requirements.txt",
+	)
+	pinnedCount := 0
+	for _, line := range strings.Split(requirements, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		pinnedCount++
+		if !requirementPattern.MatchString(line) {
+			t.Errorf("Python requirement is not exactly pinned: %q", line)
+		}
+	}
+	if pinnedCount == 0 {
+		t.Fatal("Python requirements must not be empty")
+	}
+}
+
+func TestSecondBoxImagePipelineEmitsLicenseAndResolvedProvenance(t *testing.T) {
+	requiredOutputs := []string{
+		"rootfs-source-manifest.json",
+		"rootfs-debian-packages.lock",
+		"rootfs-python.freeze",
+		"rootfs-debian-license-inventory.json",
+		"rootfs-python-license-inventory.json",
+	}
+	pipelineFiles := strings.Join([]string{
+		readRepositoryFile(t, "runner/scripts/microvm-image/rootfs/Dockerfile"),
+		readRepositoryFile(t, "runner/scripts/microvm-image/rootfs/build-secondbox-rootfs-source.sh"),
+		readRepositoryFile(t, "runner/scripts/microvm-image/rootfs/collect-secondbox-rootfs-provenance.py"),
+		readRepositoryFile(t, "runner/scripts/microvm-image/rootfs/README.md"),
+	}, "\n")
+	for _, output := range requiredOutputs {
+		if !strings.Contains(pipelineFiles, output) {
+			t.Errorf("required provenance output %q is not wired through the pipeline", output)
+		}
+	}
+	for _, requiredEvidence := range []string{
+		"copyrightSha256",
+		"licenseExpression",
+		"licenseClassifiers",
+		"metadataSha256",
+		"pythonRequirementsSha256",
+		"aptPackagesSha256",
+		"debianSnapshot",
+	} {
+		if !strings.Contains(pipelineFiles, requiredEvidence) {
+			t.Errorf("required provenance evidence %q is missing", requiredEvidence)
+		}
+	}
+}
+
+func runSecondBoxInputValidation(t *testing.T, environment []string) (string, error) {
+	t.Helper()
+	script := filepath.Join(
+		repositoryRoot(t),
+		"runner/scripts/microvm-image/rootfs/build-secondbox-rootfs-source.sh",
+	)
+	command := exec.Command("bash", script, "--validate-inputs-only")
+	command.Env = environment
+	output, err := command.CombinedOutput()
+	return string(output), err
+}
+
+func readRepositoryFile(t *testing.T, path string) string {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(repositoryRoot(t), path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(content)
+}
+
+func slicesClone(values []string) []string {
+	return append([]string(nil), values...)
+}
+
+func repositoryRoot(t *testing.T) string {
+	t.Helper()
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve image-pipeline test path")
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
+}

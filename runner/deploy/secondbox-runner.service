@@ -1,0 +1,19 @@
+[Unit]
+Description=SecondBox Firecracker Runner
+After=local-fs.target network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/secondbox-runner
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# This required file forwards the explicit guest control/protocol vsock ports
+# and guest heartbeat duration without service-unit defaults.
+EnvironmentFile=/run/secondbox-runner/runner.env
+Restart=on-failure
+RestartSec=2s
+KillMode=mixed
+TimeoutStopSec=45s
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,250 @@
+package service
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"mime"
+	"regexp"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/SecondStack-AI/SecondBox/internal/objectstore"
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
+)
+
+var artifactSHA256Pattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
+
+// ArtifactUpload is one validated multipart Artifact publication request.
+type ArtifactUpload struct {
+	Name      string
+	MediaType string
+	SHA256    string
+	Metadata  map[string]string
+	Content   []byte
+}
+
+// UploadSandboxArtifact publishes immutable bytes only after durable admission and provider verification.
+func (service *ControlPlaneService) UploadSandboxArtifact(
+	ctx context.Context,
+	principal contracts.Principal,
+	sandboxID string,
+	generation int64,
+	leaseID string,
+	idempotencyKey string,
+	upload ArtifactUpload,
+) (contracts.Artifact, error) {
+	if err := service.requireArtifacts(principal); err != nil {
+		return contracts.Artifact{}, err
+	}
+	if generation < 1 {
+		return contracts.Artifact{}, errors.New("SecondBox Artifact generation must be positive")
+	}
+	if err := validateIdempotencyKey(idempotencyKey); err != nil {
+		return contracts.Artifact{}, err
+	}
+	if err := validateArtifactUpload(upload); err != nil {
+		return contracts.Artifact{}, err
+	}
+	actualSHA256 := sha256.Sum256(upload.Content)
+	if hex.EncodeToString(actualSHA256[:]) != upload.SHA256 {
+		return contracts.Artifact{}, ports.ErrArtifactIntegrity
+	}
+	_, checkpointPolicy, err := service.store.GetSandboxLifecyclePolicy(
+		ctx, principal.ProjectID, sandboxID,
+	)
+	if err != nil {
+		return contracts.Artifact{}, err
+	}
+	requestHash, err := hashCanonicalRequest(struct {
+		Name      string            `json:"name"`
+		MediaType string            `json:"mediaType"`
+		SHA256    string            `json:"sha256"`
+		Metadata  map[string]string `json:"metadata"`
+		SizeBytes int64             `json:"sizeBytes"`
+	}{
+		Name: upload.Name, MediaType: upload.MediaType, SHA256: upload.SHA256,
+		Metadata: upload.Metadata, SizeBytes: int64(len(upload.Content)),
+	})
+	if err != nil {
+		return contracts.Artifact{}, err
+	}
+	now := service.now().UTC()
+	artifact := contracts.Artifact{
+		ID: service.newID("art"), ProjectID: principal.ProjectID, SandboxID: sandboxID,
+		SourceGeneration: generation, Name: upload.Name, MediaType: upload.MediaType,
+		SizeBytes: int64(len(upload.Content)), SHA256: upload.SHA256,
+		Metadata: cloneMetadata(upload.Metadata),
+		RetainUntil: now.Add(
+			time.Duration(checkpointPolicy.ArtifactRetentionSeconds) * time.Second,
+		),
+		CreatedAt: now,
+	}
+	storageKey := artifactStorageKey(artifact)
+	publication := ports.ArtifactPublicationInput{
+		Artifact: artifact, StorageKey: storageKey, ExpectedGeneration: generation,
+		ServiceAccountID: principal.ServiceAccountID, LeaseID: leaseID,
+		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
+		IdempotencyEnds: now.Add(idempotencyRetention),
+	}
+	staged, err := service.store.StageArtifact(ctx, publication)
+	if err != nil {
+		return contracts.Artifact{}, err
+	}
+	if staged.State == contracts.ObjectStatePublished {
+		return staged, nil
+	}
+	publication.Artifact = staged
+	publication.StorageKey = artifactStorageKey(staged)
+	if _, err := service.objectStore.PutImmutable(
+		ctx, publication.StorageKey, bytes.NewReader(upload.Content),
+		staged.SizeBytes, staged.SHA256,
+	); err != nil {
+		return contracts.Artifact{}, fmt.Errorf("%w: %v", ports.ErrArtifactStorage, err)
+	}
+	publication.Audit = service.newAudit(
+		ctx, principal, "artifact.published", "artifact", staged.ID, principal.ProjectID, now,
+	)
+	return service.store.PublishArtifact(ctx, publication, now)
+}
+
+// ListSandboxArtifacts returns one retained Artifact page inside the authenticated Project.
+func (service *ControlPlaneService) ListSandboxArtifacts(
+	ctx context.Context,
+	principal contracts.Principal,
+	sandboxID string,
+	limit int,
+	cursor string,
+) (contracts.ArtifactPage, error) {
+	if err := service.requireArtifacts(principal); err != nil {
+		return contracts.ArtifactPage{}, err
+	}
+	if len(cursor) > 512 {
+		return contracts.ArtifactPage{}, errors.New("SecondBox Artifact page cursor exceeds its bound")
+	}
+	return service.store.ListArtifacts(
+		ctx, principal.ProjectID, sandboxID, boundedLimit(limit), cursor, service.now().UTC(),
+	)
+}
+
+// GetArtifact returns retained metadata without exposing private provider identity.
+func (service *ControlPlaneService) GetArtifact(
+	ctx context.Context,
+	principal contracts.Principal,
+	artifactID string,
+) (contracts.Artifact, error) {
+	if err := service.requireArtifacts(principal); err != nil {
+		return contracts.Artifact{}, err
+	}
+	object, err := service.store.GetArtifactObject(
+		ctx, principal.ProjectID, artifactID, service.now().UTC(),
+	)
+	return object.Artifact, err
+}
+
+// DownloadArtifact returns verified immutable bytes and metadata.
+func (service *ControlPlaneService) DownloadArtifact(
+	ctx context.Context,
+	principal contracts.Principal,
+	artifactID string,
+) ([]byte, contracts.Artifact, error) {
+	if err := service.requireArtifacts(principal); err != nil {
+		return nil, contracts.Artifact{}, err
+	}
+	object, err := service.store.GetArtifactObject(
+		ctx, principal.ProjectID, artifactID, service.now().UTC(),
+	)
+	if err != nil {
+		return nil, contracts.Artifact{}, err
+	}
+	body, evidence, err := service.objectStore.GetVerified(ctx, object.StorageKey, objectstore.Evidence{
+		SHA256: object.Artifact.SHA256, SizeBytes: object.Artifact.SizeBytes,
+	})
+	if err != nil {
+		return nil, contracts.Artifact{}, fmt.Errorf("%w: %v", ports.ErrArtifactStorage, err)
+	}
+	content, readErr := io.ReadAll(body)
+	closeErr := body.Close()
+	if readErr != nil || closeErr != nil {
+		return nil, contracts.Artifact{}, fmt.Errorf(
+			"%w: Artifact verified download read=%v close=%v",
+			ports.ErrArtifactStorage, readErr, closeErr,
+		)
+	}
+	if evidence.SHA256 != object.Artifact.SHA256 ||
+		evidence.SizeBytes != object.Artifact.SizeBytes ||
+		int64(len(content)) != object.Artifact.SizeBytes {
+		return nil, contracts.Artifact{}, ports.ErrArtifactIntegrity
+	}
+	return content, object.Artifact, nil
+}
+
+// DeleteArtifact ends retention idempotently and leaves provider deletion to garbage collection.
+func (service *ControlPlaneService) DeleteArtifact(
+	ctx context.Context,
+	principal contracts.Principal,
+	artifactID string,
+	idempotencyKey string,
+) error {
+	if err := service.requireArtifacts(principal); err != nil {
+		return err
+	}
+	if err := validateIdempotencyKey(idempotencyKey); err != nil {
+		return err
+	}
+	requestHash, err := hashCanonicalRequest(struct {
+		ArtifactID string `json:"artifactId"`
+	}{ArtifactID: artifactID})
+	if err != nil {
+		return err
+	}
+	now := service.now().UTC()
+	return service.store.EndArtifactRetention(ctx, ports.ArtifactRetentionInput{
+		ProjectID: principal.ProjectID, ArtifactID: artifactID,
+		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
+		IdempotencyEnds: now.Add(idempotencyRetention), Now: now,
+		Audit: service.newAudit(
+			ctx, principal, "artifact.retention_ended", "artifact",
+			artifactID, principal.ProjectID, now,
+		),
+	})
+}
+
+func (service *ControlPlaneService) requireArtifacts(principal contracts.Principal) error {
+	if service.objectStore == nil {
+		return ports.ErrArtifactStorage
+	}
+	if principal.ProjectID == "" || principal.ServiceAccountID == "" ||
+		!principal.HasScope(contracts.ScopeSandboxArtifacts) {
+		return ports.ErrAuthorizationDenied
+	}
+	return nil
+}
+
+func validateArtifactUpload(upload ArtifactUpload) error {
+	if !utf8.ValidString(upload.Name) || strings.TrimSpace(upload.Name) == "" ||
+		len(upload.Name) > 255 ||
+		!utf8.ValidString(upload.MediaType) || len(upload.MediaType) < 1 ||
+		len(upload.MediaType) > 255 ||
+		!artifactSHA256Pattern.MatchString(upload.SHA256) {
+		return errors.New("SecondBox Artifact name, media type, or SHA-256 is invalid")
+	}
+	mediaType, parameters, err := mime.ParseMediaType(upload.MediaType)
+	if err != nil || mediaType == "" || len(parameters) > 16 {
+		return errors.New("SecondBox Artifact media type is invalid")
+	}
+	if err := validateSandboxMetadata(upload.Metadata); err != nil {
+		return err
+	}
+	return nil
+}
+
+func artifactStorageKey(artifact contracts.Artifact) string {
+	return "artifacts/" + artifact.ProjectID + "/" + artifact.SandboxID + "/" + artifact.ID
+}

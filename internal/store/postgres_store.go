@@ -1,1004 +1,1561 @@
+// Package store implements PostgreSQL-backed SecondBox control-plane authority.
 package store
 
 import (
 	"context"
+	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"secondstack/sandbox-service/internal/ports"
-	"secondstack/sandbox-service/pkg/contracts"
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
-// PostgresEnvironmentStore persists Sandbox Service authority in the sandbox schema.
-type PostgresEnvironmentStore struct {
+// PostgresControlPlaneStore persists standalone SecondBox authority.
+type PostgresControlPlaneStore struct {
 	pool *pgxpool.Pool
 }
 
-// NewPostgresEnvironmentStore connects to the required PostgreSQL authority.
-func NewPostgresEnvironmentStore(ctx context.Context, databaseURL string) (*PostgresEnvironmentStore, error) {
+// NewPostgresControlPlaneStore connects to the required PostgreSQL authority.
+func NewPostgresControlPlaneStore(ctx context.Context, databaseURL string) (*PostgresControlPlaneStore, error) {
 	pool, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
-		return nil, fmt.Errorf("create Sandbox Service PostgreSQL pool: %w", err)
+		return nil, fmt.Errorf("SecondBox PostgreSQL pool creation failed: %w", err)
 	}
-	store := &PostgresEnvironmentStore{pool: pool}
-	if err := store.Ping(ctx); err != nil {
+	controlPlaneStore := &PostgresControlPlaneStore{pool: pool}
+	if err := controlPlaneStore.Ping(ctx); err != nil {
 		pool.Close()
 		return nil, err
 	}
-	return store, nil
+	return controlPlaneStore, nil
 }
 
-// Close releases all Sandbox Service PostgreSQL connections.
-func (s *PostgresEnvironmentStore) Close() { s.pool.Close() }
+// Close releases all PostgreSQL connections.
+func (store *PostgresControlPlaneStore) Close() {
+	store.pool.Close()
+}
 
-func (s *PostgresEnvironmentStore) Ping(ctx context.Context) error {
-	if err := s.pool.Ping(ctx); err != nil {
-		return fmt.Errorf("ping Sandbox Service PostgreSQL: %w", err)
+// Ping proves the PostgreSQL authority is reachable.
+func (store *PostgresControlPlaneStore) Ping(ctx context.Context) error {
+	if err := store.pool.Ping(ctx); err != nil {
+		return fmt.Errorf("SecondBox PostgreSQL readiness failed: %w", err)
 	}
 	return nil
 }
 
-func (s *PostgresEnvironmentStore) CountRetainedWorkspaces(ctx context.Context) (int64, error) {
-	var count int64
-	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM sandbox.workspaces`).Scan(&count); err != nil {
-		return 0, fmt.Errorf("count retained Sandbox workspaces: %w", err)
+// InitializeBootstrapAdmin creates the first operator authority exactly once.
+func (store *PostgresControlPlaneStore) InitializeBootstrapAdmin(
+	ctx context.Context,
+	credentialHash []byte,
+	now time.Time,
+	audit contracts.AuditEvent,
+) error {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("SecondBox bootstrap transaction failed: %w", err)
 	}
-	return count, nil
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('secondbox-bootstrap-admin',0))`); err != nil {
+		return fmt.Errorf("SecondBox bootstrap lock failed: %w", err)
+	}
+	var storedHash []byte
+	err = tx.QueryRow(ctx, `
+		SELECT credential_hash FROM secondbox.operator_credentials
+		WHERE id='bootstrap_operator_credential' FOR UPDATE`).Scan(&storedHash)
+	if err == nil {
+		if subtle.ConstantTimeCompare(storedHash, credentialHash) != 1 {
+			return errors.New("SecondBox configured bootstrap credential does not match durable operator authority")
+		}
+		return tx.Commit(ctx)
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("SecondBox bootstrap authority lookup failed: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.operators (id,name,state,revision,created_at,updated_at)
+		VALUES ('bootstrap_operator','Bootstrap operator','active',1,$1,$1)`, now.UTC()); err != nil {
+		return fmt.Errorf("SecondBox bootstrap operator insert failed: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.operator_credentials (
+			id,operator_id,credential_hash,state,last_used_at,revision,created_at,updated_at
+		) VALUES ('bootstrap_operator_credential','bootstrap_operator',$1,'active',NULL,1,$2,$2)`,
+		credentialHash, now.UTC(),
+	); err != nil {
+		return fmt.Errorf("SecondBox bootstrap credential insert failed: %w", err)
+	}
+	if err := insertAuditEvent(ctx, tx, audit); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("SecondBox bootstrap commit failed: %w", err)
+	}
+	return nil
 }
 
-func (s *PostgresEnvironmentStore) GetWorkspaceUsage(ctx context.Context, tenantRef, subjectRef string) (contracts.WorkspaceUsage, error) {
-	usage := contracts.WorkspaceUsage{
-		ContractVersion: contracts.ContractVersionV1,
-		TenantRef:       tenantRef,
-		SubjectRef:      subjectRef,
+// AuthenticateBootstrapAdmin validates the durable operator credential hash.
+func (store *PostgresControlPlaneStore) AuthenticateBootstrapAdmin(
+	ctx context.Context,
+	presentedHash []byte,
+	now time.Time,
+	audit contracts.AuditEvent,
+) (contracts.Principal, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.Principal{}, fmt.Errorf("SecondBox operator authentication transaction failed: %w", err)
 	}
-	if err := s.pool.QueryRow(ctx, `
-		SELECT count(*), COALESCE(sum(resource_class.disk_bytes), 0), COALESCE(sum(snapshot.size_bytes), 0)
-		FROM sandbox.environments AS environment
-		JOIN sandbox.resource_classes AS resource_class ON resource_class.id = environment.resource_class_id
-		LEFT JOIN sandbox.snapshots AS snapshot ON snapshot.id = NULLIF(environment.snapshot_id, '')
-		WHERE environment.tenant_ref = $1 AND environment.subject_ref = $2`,
-		tenantRef, subjectRef,
-	).Scan(&usage.EnvironmentCount, &usage.QuotaBytes, &usage.UsageBytes); err != nil {
-		return contracts.WorkspaceUsage{}, fmt.Errorf("read subject workspace usage: %w", err)
+	defer tx.Rollback(ctx)
+	var operatorID, operatorState, credentialState string
+	var storedHash []byte
+	if err := tx.QueryRow(ctx, `
+		SELECT operator.id,operator.state,credential.credential_hash,credential.state
+		FROM secondbox.operator_credentials AS credential
+		JOIN secondbox.operators AS operator ON operator.id=credential.operator_id
+		WHERE credential.id='bootstrap_operator_credential'
+		FOR UPDATE OF credential`).Scan(
+		&operatorID, &operatorState, &storedHash, &credentialState,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return contracts.Principal{}, ports.ErrAuthenticationFailed
+		}
+		return contracts.Principal{}, fmt.Errorf("SecondBox operator authentication lookup failed: %w", err)
 	}
-	return usage, nil
+	if operatorState != "active" || credentialState != "active" ||
+		subtle.ConstantTimeCompare(storedHash, presentedHash) != 1 {
+		return contracts.Principal{}, ports.ErrAuthenticationFailed
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.operator_credentials
+		SET last_used_at=$1,updated_at=$1 WHERE id='bootstrap_operator_credential'`, now.UTC()); err != nil {
+		return contracts.Principal{}, fmt.Errorf("SecondBox operator last-use update failed: %w", err)
+	}
+	audit.ActorID = operatorID
+	audit.ResourceID = operatorID
+	if err := insertAuditEvent(ctx, tx, audit); err != nil {
+		return contracts.Principal{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Principal{}, fmt.Errorf("SecondBox operator authentication commit failed: %w", err)
+	}
+	return contracts.Principal{
+		Kind: "operator", ID: operatorID, BootstrapAdmin: true,
+		Scopes: []string{
+			contracts.ScopeAdminProjects, contracts.ScopeAdminKeys, contracts.ScopeAdminProfiles,
+			contracts.ScopeAdminAudit, contracts.ScopeDiagnostics,
+		},
+	}, nil
 }
 
-func postgresEnvironmentNaturalKey(environment contracts.Environment) (string, error) {
-	encoded, err := json.Marshal([]string{
-		environment.TenantRef,
-		environment.SubjectRef,
-		environment.EnvironmentKey,
+func (store *PostgresControlPlaneStore) CreateProject(
+	ctx context.Context,
+	project contracts.Project,
+	quota contracts.QuotaLimits,
+	audit contracts.AuditEvent,
+) (contracts.Project, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.Project{}, fmt.Errorf("SecondBox Project create transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.projects (id,name,state,revision,created_at,updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6)`,
+		project.ID, project.Name, project.State, project.Revision, project.CreatedAt, project.UpdatedAt,
+	); err != nil {
+		return contracts.Project{}, fmt.Errorf("SecondBox Project insert failed: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.project_quotas (
+			project_id,max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
+			max_retained_bytes,max_snapshots,max_artifacts,max_port_sessions,max_concurrent_operations,updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		project.ID, quota.MaxSandboxes, quota.MaxActiveInstances, quota.MaxCPUMillis,
+		quota.MaxMemoryBytes, quota.MaxRetainedBytes, quota.MaxSnapshots, quota.MaxArtifacts,
+		quota.MaxPortSessions, quota.MaxConcurrentOperations, project.UpdatedAt,
+	); err != nil {
+		return contracts.Project{}, fmt.Errorf("SecondBox Project quota insert failed: %w", err)
+	}
+	if err := insertAuditEvent(ctx, tx, audit); err != nil {
+		return contracts.Project{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Project{}, fmt.Errorf("SecondBox Project create commit failed: %w", err)
+	}
+	return project, nil
+}
+
+func (store *PostgresControlPlaneStore) UpdateProject(
+	ctx context.Context,
+	projectID string,
+	update contracts.UpdateProjectRequest,
+	expectedRevision int64,
+	now time.Time,
+	audit contracts.AuditEvent,
+) (contracts.Project, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.Project{}, fmt.Errorf("SecondBox Project update transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	project, err := scanProject(tx.QueryRow(ctx, `
+		SELECT id,name,state,revision,created_at,updated_at
+		FROM secondbox.projects WHERE id=$1 FOR UPDATE`, projectID))
+	if err != nil {
+		return contracts.Project{}, mapNotFound(err, ports.ErrProjectNotFound)
+	}
+	if expectedRevision > 0 && expectedRevision != project.Revision {
+		return contracts.Project{}, ports.ErrRevisionConflict
+	}
+	if update.Name != nil {
+		project.Name = *update.Name
+	}
+	if update.State != nil {
+		project.State = *update.State
+	}
+	project.Revision++
+	project.UpdatedAt = now.UTC()
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.projects SET name=$2,state=$3,revision=$4,updated_at=$5 WHERE id=$1`,
+		project.ID, project.Name, project.State, project.Revision, project.UpdatedAt,
+	); err != nil {
+		return contracts.Project{}, fmt.Errorf("SecondBox Project update failed: %w", err)
+	}
+	if err := insertAuditEvent(ctx, tx, audit); err != nil {
+		return contracts.Project{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Project{}, fmt.Errorf("SecondBox Project update commit failed: %w", err)
+	}
+	return project, nil
+}
+
+func (store *PostgresControlPlaneStore) GetProject(ctx context.Context, projectID string) (contracts.Project, error) {
+	project, err := scanProject(store.pool.QueryRow(ctx, `
+		SELECT id,name,state,revision,created_at,updated_at FROM secondbox.projects WHERE id=$1`, projectID))
+	return project, mapNotFound(err, ports.ErrProjectNotFound)
+}
+
+func (store *PostgresControlPlaneStore) ListProjects(ctx context.Context, limit int) ([]contracts.Project, error) {
+	rows, err := store.pool.Query(ctx, `
+		SELECT id,name,state,revision,created_at,updated_at
+		FROM secondbox.projects ORDER BY created_at,id LIMIT $1`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox Project list failed: %w", err)
+	}
+	defer rows.Close()
+	projects := make([]contracts.Project, 0)
+	for rows.Next() {
+		project, scanErr := scanProject(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("SecondBox Project list scan failed: %w", scanErr)
+		}
+		projects = append(projects, project)
+	}
+	return projects, rows.Err()
+}
+
+func (store *PostgresControlPlaneStore) CreateServiceAccount(
+	ctx context.Context,
+	account contracts.ServiceAccount,
+	audit contracts.AuditEvent,
+) (contracts.ServiceAccount, error) {
+	scopesJSON, grantsJSON, err := encodeAuthorityLists(account.Scopes, account.ProfileGrants)
+	if err != nil {
+		return contracts.ServiceAccount{}, err
+	}
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.ServiceAccount{}, fmt.Errorf("SecondBox ServiceAccount create transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var projectState string
+	if err := tx.QueryRow(ctx, `SELECT state FROM secondbox.projects WHERE id=$1 FOR UPDATE`, account.ProjectID).Scan(&projectState); err != nil {
+		return contracts.ServiceAccount{}, mapNotFound(err, ports.ErrProjectNotFound)
+	}
+	if projectState != contracts.ProjectStateActive {
+		return contracts.ServiceAccount{}, ports.ErrAuthorizationDenied
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.service_accounts (
+			id,project_id,name,state,scopes_json,profile_grants_json,revision,created_at,updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		account.ID, account.ProjectID, account.Name, account.State, scopesJSON, grantsJSON,
+		account.Revision, account.CreatedAt, account.UpdatedAt,
+	); err != nil {
+		return contracts.ServiceAccount{}, fmt.Errorf("SecondBox ServiceAccount insert failed: %w", err)
+	}
+	if err := insertAuditEvent(ctx, tx, audit); err != nil {
+		return contracts.ServiceAccount{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.ServiceAccount{}, fmt.Errorf("SecondBox ServiceAccount create commit failed: %w", err)
+	}
+	return account, nil
+}
+
+func (store *PostgresControlPlaneStore) UpdateServiceAccount(
+	ctx context.Context,
+	projectID string,
+	accountID string,
+	update contracts.UpdateServiceAccountRequest,
+	expectedRevision int64,
+	now time.Time,
+	audit contracts.AuditEvent,
+) (contracts.ServiceAccount, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.ServiceAccount{}, fmt.Errorf("SecondBox ServiceAccount update transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	account, err := scanServiceAccount(tx.QueryRow(ctx, serviceAccountSelect+` WHERE project_id=$1 AND id=$2 FOR UPDATE`, projectID, accountID))
+	if err != nil {
+		return contracts.ServiceAccount{}, mapNotFound(err, ports.ErrServiceAccountNotFound)
+	}
+	if expectedRevision > 0 && expectedRevision != account.Revision {
+		return contracts.ServiceAccount{}, ports.ErrRevisionConflict
+	}
+	if update.Name != nil {
+		account.Name = *update.Name
+	}
+	if update.State != nil {
+		account.State = *update.State
+	}
+	if update.Scopes != nil {
+		account.Scopes = append([]string(nil), (*update.Scopes)...)
+	}
+	if update.ProfileGrants != nil {
+		account.ProfileGrants = append([]string(nil), (*update.ProfileGrants)...)
+	}
+	scopesJSON, grantsJSON, err := encodeAuthorityLists(account.Scopes, account.ProfileGrants)
+	if err != nil {
+		return contracts.ServiceAccount{}, err
+	}
+	account.Revision++
+	account.UpdatedAt = now.UTC()
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.service_accounts
+		SET name=$3,state=$4,scopes_json=$5,profile_grants_json=$6,revision=$7,updated_at=$8
+		WHERE project_id=$1 AND id=$2`,
+		projectID, accountID, account.Name, account.State, scopesJSON, grantsJSON,
+		account.Revision, account.UpdatedAt,
+	); err != nil {
+		return contracts.ServiceAccount{}, fmt.Errorf("SecondBox ServiceAccount update failed: %w", err)
+	}
+	if err := insertAuditEvent(ctx, tx, audit); err != nil {
+		return contracts.ServiceAccount{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.ServiceAccount{}, fmt.Errorf("SecondBox ServiceAccount update commit failed: %w", err)
+	}
+	return account, nil
+}
+
+func (store *PostgresControlPlaneStore) GetServiceAccount(
+	ctx context.Context,
+	projectID string,
+	accountID string,
+) (contracts.ServiceAccount, error) {
+	account, err := scanServiceAccount(store.pool.QueryRow(ctx, serviceAccountSelect+` WHERE project_id=$1 AND id=$2`, projectID, accountID))
+	return account, mapNotFound(err, ports.ErrServiceAccountNotFound)
+}
+
+func (store *PostgresControlPlaneStore) ListServiceAccounts(
+	ctx context.Context,
+	projectID string,
+	limit int,
+) ([]contracts.ServiceAccount, error) {
+	rows, err := store.pool.Query(ctx, serviceAccountSelect+` WHERE project_id=$1 ORDER BY created_at,id LIMIT $2`, projectID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox ServiceAccount list failed: %w", err)
+	}
+	defer rows.Close()
+	accounts := make([]contracts.ServiceAccount, 0)
+	for rows.Next() {
+		account, scanErr := scanServiceAccount(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("SecondBox ServiceAccount list scan failed: %w", scanErr)
+		}
+		accounts = append(accounts, account)
+	}
+	return accounts, rows.Err()
+}
+
+func (store *PostgresControlPlaneStore) CreateAPIKey(
+	ctx context.Context,
+	storedKey ports.StoredAPIKey,
+	audit contracts.AuditEvent,
+) (contracts.APIKey, error) {
+	scopesJSON, err := json.Marshal(storedKey.APIKey.Scopes)
+	if err != nil {
+		return contracts.APIKey{}, fmt.Errorf("SecondBox APIKey scopes encoding failed: %w", err)
+	}
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.APIKey{}, fmt.Errorf("SecondBox APIKey create transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	account, err := scanServiceAccount(tx.QueryRow(ctx, serviceAccountSelect+` WHERE project_id=$1 AND id=$2 FOR UPDATE`,
+		storedKey.ProjectID, storedKey.APIKey.ServiceAccountID))
+	if err != nil {
+		return contracts.APIKey{}, mapNotFound(err, ports.ErrServiceAccountNotFound)
+	}
+	if account.State != contracts.ServiceAccountStateActive || !isScopeSubset(storedKey.APIKey.Scopes, account.Scopes) {
+		return contracts.APIKey{}, ports.ErrAuthorizationDenied
+	}
+	key := storedKey.APIKey
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.api_keys (
+			id,project_id,service_account_id,name,prefix,credential_hash,state,scopes_json,
+			expires_at,revoked_at,last_used_at,revision,created_at,updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+		key.ID, storedKey.ProjectID, key.ServiceAccountID, key.Name, key.Prefix,
+		storedKey.CredentialHash, key.State, scopesJSON, key.ExpiresAt, key.RevokedAt,
+		key.LastUsedAt, key.Revision, key.CreatedAt, storedKey.UpdatedAt,
+	); err != nil {
+		return contracts.APIKey{}, fmt.Errorf("SecondBox APIKey insert failed: %w", err)
+	}
+	if err := insertAuditEvent(ctx, tx, audit); err != nil {
+		return contracts.APIKey{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.APIKey{}, fmt.Errorf("SecondBox APIKey create commit failed: %w", err)
+	}
+	return key, nil
+}
+
+func (store *PostgresControlPlaneStore) RotateAPIKey(
+	ctx context.Context,
+	projectID string,
+	accountID string,
+	keyID string,
+	prefix string,
+	credentialHash []byte,
+	now time.Time,
+	audit contracts.AuditEvent,
+) (contracts.APIKey, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.APIKey{}, fmt.Errorf("SecondBox APIKey rotation transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	key, err := scanAPIKey(tx.QueryRow(ctx, apiKeySelect+`
+		WHERE project_id=$1 AND service_account_id=$2 AND id=$3 FOR UPDATE`, projectID, accountID, keyID))
+	if err != nil {
+		return contracts.APIKey{}, mapNotFound(err, ports.ErrAPIKeyNotFound)
+	}
+	key.Prefix = prefix
+	key.State = contracts.APIKeyStateActive
+	key.RevokedAt = nil
+	key.LastUsedAt = nil
+	key.Revision++
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.api_keys
+		SET prefix=$4,credential_hash=$5,state=$6,revoked_at=NULL,last_used_at=NULL,revision=$7,updated_at=$8
+		WHERE project_id=$1 AND service_account_id=$2 AND id=$3`,
+		projectID, accountID, keyID, prefix, credentialHash, key.State, key.Revision, now.UTC(),
+	); err != nil {
+		return contracts.APIKey{}, fmt.Errorf("SecondBox APIKey rotation failed: %w", err)
+	}
+	if err := insertAuditEvent(ctx, tx, audit); err != nil {
+		return contracts.APIKey{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.APIKey{}, fmt.Errorf("SecondBox APIKey rotation commit failed: %w", err)
+	}
+	return key, nil
+}
+
+func (store *PostgresControlPlaneStore) RevokeAPIKey(
+	ctx context.Context,
+	projectID string,
+	accountID string,
+	keyID string,
+	now time.Time,
+	audit contracts.AuditEvent,
+) (contracts.APIKey, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.APIKey{}, fmt.Errorf("SecondBox APIKey revocation transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	key, err := scanAPIKey(tx.QueryRow(ctx, apiKeySelect+`
+		WHERE project_id=$1 AND service_account_id=$2 AND id=$3 FOR UPDATE`, projectID, accountID, keyID))
+	if err != nil {
+		return contracts.APIKey{}, mapNotFound(err, ports.ErrAPIKeyNotFound)
+	}
+	if key.State != contracts.APIKeyStateRevoked {
+		revokedAt := now.UTC()
+		key.State = contracts.APIKeyStateRevoked
+		key.RevokedAt = &revokedAt
+		key.Revision++
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.api_keys
+			SET state=$4,revoked_at=$5,revision=$6,updated_at=$5
+			WHERE project_id=$1 AND service_account_id=$2 AND id=$3`,
+			projectID, accountID, keyID, key.State, revokedAt, key.Revision,
+		); err != nil {
+			return contracts.APIKey{}, fmt.Errorf("SecondBox APIKey revocation failed: %w", err)
+		}
+	}
+	if err := insertAuditEvent(ctx, tx, audit); err != nil {
+		return contracts.APIKey{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.APIKey{}, fmt.Errorf("SecondBox APIKey revocation commit failed: %w", err)
+	}
+	return key, nil
+}
+
+func (store *PostgresControlPlaneStore) GetAPIKey(
+	ctx context.Context,
+	projectID string,
+	accountID string,
+	keyID string,
+) (contracts.APIKey, error) {
+	key, err := scanAPIKey(store.pool.QueryRow(ctx, apiKeySelect+`
+		WHERE project_id=$1 AND service_account_id=$2 AND id=$3`, projectID, accountID, keyID))
+	return key, mapNotFound(err, ports.ErrAPIKeyNotFound)
+}
+
+func (store *PostgresControlPlaneStore) ListAPIKeys(
+	ctx context.Context,
+	projectID string,
+	accountID string,
+	limit int,
+) ([]contracts.APIKey, error) {
+	rows, err := store.pool.Query(ctx, apiKeySelect+`
+		WHERE project_id=$1 AND service_account_id=$2 ORDER BY created_at,id LIMIT $3`,
+		projectID, accountID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox APIKey list failed: %w", err)
+	}
+	defer rows.Close()
+	keys := make([]contracts.APIKey, 0)
+	for rows.Next() {
+		key, scanErr := scanAPIKey(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("SecondBox APIKey list scan failed: %w", scanErr)
+		}
+		keys = append(keys, key)
+	}
+	return keys, rows.Err()
+}
+
+func (store *PostgresControlPlaneStore) AuthenticateAPIKey(
+	ctx context.Context,
+	prefix string,
+	presentedHash []byte,
+	now time.Time,
+	audit contracts.AuditEvent,
+) (contracts.Principal, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.Principal{}, fmt.Errorf("SecondBox APIKey authentication transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var keyID, projectID, accountID, keyState, projectState, accountState string
+	var storedHash, keyScopesJSON, accountScopesJSON []byte
+	var expiresAt *time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT key.id,key.project_id,key.service_account_id,key.credential_hash,key.state,key.scopes_json,key.expires_at,
+		       project.state,account.state,account.scopes_json
+		FROM secondbox.api_keys AS key
+		JOIN secondbox.projects AS project ON project.id=key.project_id
+		JOIN secondbox.service_accounts AS account ON account.id=key.service_account_id
+		WHERE key.prefix=$1 FOR UPDATE OF key`, prefix).Scan(
+		&keyID, &projectID, &accountID, &storedHash, &keyState, &keyScopesJSON, &expiresAt,
+		&projectState, &accountState, &accountScopesJSON,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return contracts.Principal{}, ports.ErrAuthenticationFailed
+		}
+		return contracts.Principal{}, fmt.Errorf("SecondBox APIKey authentication lookup failed: %w", err)
+	}
+	if subtle.ConstantTimeCompare(storedHash, presentedHash) != 1 ||
+		keyState != contracts.APIKeyStateActive ||
+		projectState != contracts.ProjectStateActive ||
+		accountState != contracts.ServiceAccountStateActive ||
+		(expiresAt != nil && !expiresAt.After(now)) {
+		return contracts.Principal{}, ports.ErrAuthenticationFailed
+	}
+	var keyScopes, accountScopes []string
+	if err := json.Unmarshal(keyScopesJSON, &keyScopes); err != nil {
+		return contracts.Principal{}, fmt.Errorf("SecondBox APIKey scopes decoding failed: %w", err)
+	}
+	if err := json.Unmarshal(accountScopesJSON, &accountScopes); err != nil {
+		return contracts.Principal{}, fmt.Errorf("SecondBox ServiceAccount scopes decoding failed: %w", err)
+	}
+	principal := contracts.Principal{
+		Kind: "service_account", ID: accountID, ProjectID: projectID,
+		ServiceAccountID: accountID, Scopes: intersectScopes(keyScopes, accountScopes),
+	}
+	if _, err := tx.Exec(ctx, `UPDATE secondbox.api_keys SET last_used_at=$2,updated_at=$2 WHERE id=$1`, keyID, now.UTC()); err != nil {
+		return contracts.Principal{}, fmt.Errorf("SecondBox APIKey last-use update failed: %w", err)
+	}
+	audit.ProjectID = projectID
+	audit.ActorID = accountID
+	audit.ResourceID = keyID
+	if err := insertAuditEvent(ctx, tx, audit); err != nil {
+		return contracts.Principal{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Principal{}, fmt.Errorf("SecondBox APIKey authentication commit failed: %w", err)
+	}
+	return principal, nil
+}
+
+func (store *PostgresControlPlaneStore) CreateProfile(
+	ctx context.Context,
+	profile contracts.Profile,
+	quota contracts.QuotaLimits,
+	audit contracts.AuditEvent,
+) (contracts.Profile, error) {
+	specJSON, err := json.Marshal(profile.CurrentRevision.Spec)
+	if err != nil {
+		return contracts.Profile{}, fmt.Errorf("SecondBox ProfileRevision spec encoding failed: %w", err)
+	}
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.Profile{}, fmt.Errorf("SecondBox Profile create transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.profiles (name,state,current_revision_id,revision,created_at,updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6)`,
+		profile.Name, profile.State, profile.CurrentRevision.ID, profile.Revision, profile.CreatedAt, profile.UpdatedAt,
+	); err != nil {
+		return contracts.Profile{}, fmt.Errorf("SecondBox Profile insert failed: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.profile_revisions (id,profile_name,revision_number,spec_json,created_at)
+		VALUES ($1,$2,$3,$4,$5)`,
+		profile.CurrentRevision.ID, profile.Name, profile.CurrentRevision.Number, specJSON, profile.CurrentRevision.CreatedAt,
+	); err != nil {
+		return contracts.Profile{}, fmt.Errorf("SecondBox ProfileRevision insert failed: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.profile_quotas (
+			profile_name,max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
+			max_retained_bytes,max_snapshots,max_artifacts,max_port_sessions,max_concurrent_operations,updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		profile.Name, quota.MaxSandboxes, quota.MaxActiveInstances, quota.MaxCPUMillis,
+		quota.MaxMemoryBytes, quota.MaxRetainedBytes, quota.MaxSnapshots, quota.MaxArtifacts,
+		quota.MaxPortSessions, quota.MaxConcurrentOperations, profile.UpdatedAt,
+	); err != nil {
+		return contracts.Profile{}, fmt.Errorf("SecondBox Profile quota insert failed: %w", err)
+	}
+	if err := insertAuditEvent(ctx, tx, audit); err != nil {
+		return contracts.Profile{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Profile{}, fmt.Errorf("SecondBox Profile create commit failed: %w", err)
+	}
+	return profile, nil
+}
+
+func (store *PostgresControlPlaneStore) ReviseProfile(
+	ctx context.Context,
+	name string,
+	revision contracts.ProfileRevision,
+	expectedRevision int64,
+	now time.Time,
+	audit contracts.AuditEvent,
+) (contracts.Profile, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.Profile{}, fmt.Errorf("SecondBox Profile revise transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	profile, err := scanProfile(tx.QueryRow(ctx, profileSelect+` WHERE profile.name=$1 FOR UPDATE OF profile`, name))
+	if err != nil {
+		return contracts.Profile{}, mapNotFound(err, ports.ErrProfileNotFound)
+	}
+	if expectedRevision > 0 && expectedRevision != profile.Revision {
+		return contracts.Profile{}, ports.ErrRevisionConflict
+	}
+	revision.Number = profile.CurrentRevision.Number + 1
+	specJSON, err := json.Marshal(revision.Spec)
+	if err != nil {
+		return contracts.Profile{}, fmt.Errorf("SecondBox ProfileRevision spec encoding failed: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.profile_revisions (id,profile_name,revision_number,spec_json,created_at)
+		VALUES ($1,$2,$3,$4,$5)`, revision.ID, name, revision.Number, specJSON, revision.CreatedAt,
+	); err != nil {
+		return contracts.Profile{}, fmt.Errorf("SecondBox ProfileRevision append failed: %w", err)
+	}
+	profile.CurrentRevision = revision
+	profile.Revision++
+	profile.UpdatedAt = now.UTC()
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.profiles SET current_revision_id=$2,revision=$3,updated_at=$4 WHERE name=$1`,
+		name, revision.ID, profile.Revision, profile.UpdatedAt,
+	); err != nil {
+		return contracts.Profile{}, fmt.Errorf("SecondBox Profile head update failed: %w", err)
+	}
+	if err := insertAuditEvent(ctx, tx, audit); err != nil {
+		return contracts.Profile{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Profile{}, fmt.Errorf("SecondBox Profile revise commit failed: %w", err)
+	}
+	return profile, nil
+}
+
+func (store *PostgresControlPlaneStore) DisableProfile(
+	ctx context.Context,
+	name string,
+	expectedRevision int64,
+	now time.Time,
+	audit contracts.AuditEvent,
+) (contracts.Profile, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.Profile{}, fmt.Errorf("SecondBox Profile disable transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	profile, err := scanProfile(tx.QueryRow(ctx, profileSelect+` WHERE profile.name=$1 FOR UPDATE OF profile`, name))
+	if err != nil {
+		return contracts.Profile{}, mapNotFound(err, ports.ErrProfileNotFound)
+	}
+	if expectedRevision > 0 && expectedRevision != profile.Revision {
+		return contracts.Profile{}, ports.ErrRevisionConflict
+	}
+	if profile.State != contracts.ProfileStateDisabled {
+		profile.State = contracts.ProfileStateDisabled
+		profile.Revision++
+		profile.UpdatedAt = now.UTC()
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.profiles SET state=$2,revision=$3,updated_at=$4 WHERE name=$1`,
+			name, profile.State, profile.Revision, profile.UpdatedAt,
+		); err != nil {
+			return contracts.Profile{}, fmt.Errorf("SecondBox Profile disable failed: %w", err)
+		}
+	}
+	if err := insertAuditEvent(ctx, tx, audit); err != nil {
+		return contracts.Profile{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Profile{}, fmt.Errorf("SecondBox Profile disable commit failed: %w", err)
+	}
+	return profile, nil
+}
+
+func (store *PostgresControlPlaneStore) GetProfile(ctx context.Context, name string) (contracts.Profile, error) {
+	profile, err := scanProfile(store.pool.QueryRow(ctx, profileSelect+` WHERE profile.name=$1`, name))
+	return profile, mapNotFound(err, ports.ErrProfileNotFound)
+}
+
+func (store *PostgresControlPlaneStore) ListProfiles(ctx context.Context, limit int) ([]contracts.Profile, error) {
+	rows, err := store.pool.Query(ctx, profileSelect+` ORDER BY profile.created_at,profile.name LIMIT $1`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox Profile list failed: %w", err)
+	}
+	defer rows.Close()
+	profiles := make([]contracts.Profile, 0)
+	for rows.Next() {
+		profile, scanErr := scanProfile(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("SecondBox Profile list scan failed: %w", scanErr)
+		}
+		profiles = append(profiles, profile)
+	}
+	return profiles, rows.Err()
+}
+
+func (store *PostgresControlPlaneStore) RegisterRunnerPool(
+	ctx context.Context,
+	pool contracts.RunnerPool,
+) error {
+	architecturesJSON, err := json.Marshal(pool.Architectures)
+	if err != nil {
+		return fmt.Errorf("SecondBox runner-pool architectures encoding failed: %w", err)
+	}
+	capabilitiesJSON, err := json.Marshal(pool.Capabilities)
+	if err != nil {
+		return fmt.Errorf("SecondBox runner-pool capabilities encoding failed: %w", err)
+	}
+	capacityPolicyJSON, err := json.Marshal(pool.CapacityPolicy)
+	if err != nil {
+		return fmt.Errorf("SecondBox runner-pool capacity policy encoding failed: %w", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO secondbox.runner_pools (
+			name,state,architectures_json,capabilities_json,capacity_policy_json,
+			ready_runner_count,revision,created_at,updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		ON CONFLICT (name) DO UPDATE SET
+			state=EXCLUDED.state,architectures_json=EXCLUDED.architectures_json,
+			capabilities_json=EXCLUDED.capabilities_json,
+			capacity_policy_json=EXCLUDED.capacity_policy_json,
+			ready_runner_count=EXCLUDED.ready_runner_count,
+			revision=secondbox.runner_pools.revision+1,updated_at=EXCLUDED.updated_at`,
+		pool.Name, pool.State, architecturesJSON, capabilitiesJSON, capacityPolicyJSON,
+		pool.ReadyRunnerCount, pool.Revision, pool.CreatedAt, pool.UpdatedAt,
+	); err != nil {
+		return fmt.Errorf("SecondBox RunnerPool registration failed: %w", err)
+	}
+	return nil
+}
+
+func (store *PostgresControlPlaneStore) CreateSandbox(
+	ctx context.Context,
+	input ports.CreateSandboxInput,
+) (contracts.Sandbox, contracts.Operation, bool, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox create transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	lockKey := input.Principal.ProjectID + "\x1fcreate-sandbox\x1f" + input.IdempotencyKey
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey); err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox idempotency lock failed: %w", err)
+	}
+	var priorHash, priorSandboxID string
+	idempotencyErr := tx.QueryRow(ctx, `
+		SELECT request_hash,response_resource_id
+		FROM secondbox.idempotency_records
+		WHERE project_id=$1 AND operation='sandbox.create' AND target_id='' AND idempotency_key=$2`,
+		input.Principal.ProjectID, input.IdempotencyKey,
+	).Scan(&priorHash, &priorSandboxID)
+	if idempotencyErr == nil {
+		if priorHash != input.RequestHash {
+			return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrIdempotencyConflict
+		}
+		sandbox, err := getSandboxWithQuerier(ctx, tx, input.Principal.ProjectID, priorSandboxID)
+		if err != nil {
+			return contracts.Sandbox{}, contracts.Operation{}, false, err
+		}
+		operation, err := getCreateOperationWithQuerier(ctx, tx, input.Principal.ProjectID, priorSandboxID)
+		if err != nil {
+			return contracts.Sandbox{}, contracts.Operation{}, false, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox idempotency replay commit failed: %w", err)
+		}
+		return sandbox, operation, false, nil
+	}
+	if !errors.Is(idempotencyErr, pgx.ErrNoRows) {
+		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox idempotency lookup failed: %w", idempotencyErr)
+	}
+
+	var projectState string
+	if err := tx.QueryRow(ctx, `SELECT state FROM secondbox.projects WHERE id=$1 FOR UPDATE`, input.Principal.ProjectID).Scan(&projectState); err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, mapNotFound(err, ports.ErrProjectNotFound)
+	}
+	if projectState != contracts.ProjectStateActive {
+		return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrAuthorizationDenied
+	}
+	account, err := scanServiceAccount(tx.QueryRow(ctx, serviceAccountSelect+`
+		WHERE project_id=$1 AND id=$2`, input.Principal.ProjectID, input.Principal.ServiceAccountID))
+	if err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrAuthorizationDenied
+	}
+	if account.State != contracts.ServiceAccountStateActive || !contains(account.ProfileGrants, input.Sandbox.Profile) {
+		return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrProfileNotGranted
+	}
+	profile, err := scanProfile(tx.QueryRow(ctx, profileSelect+`
+		WHERE profile.name=$1 FOR UPDATE OF profile`, input.Sandbox.Profile))
+	if err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, mapNotFound(err, ports.ErrProfileNotFound)
+	}
+	if profile.State != contracts.ProfileStateEnabled {
+		return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrProfileDisabled
+	}
+	if err := ensureCompatibleRunnerPool(ctx, tx, profile.CurrentRevision.Spec); err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, err
+	}
+	projectQuota, err := readQuota(ctx, tx, "project_quotas", "project_id", input.Principal.ProjectID)
+	if err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, err
+	}
+	profileQuota, err := readQuota(ctx, tx, "profile_quotas", "profile_name", profile.Name)
+	if err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, err
+	}
+	projectUsage, err := readQuotaUsage(ctx, tx, "sandbox.project_id=$1", input.Principal.ProjectID)
+	if err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, err
+	}
+	profileUsage, err := readQuotaUsage(ctx, tx, "sandbox.profile_name=$1", profile.Name)
+	if err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, err
+	}
+	requestedCPU := profile.CurrentRevision.Spec.Resources.CPUMillis
+	requestedMemory := profile.CurrentRevision.Spec.Resources.MemoryBytes
+	if quotaWouldExceed(projectQuota, projectUsage, requestedCPU, requestedMemory) ||
+		quotaWouldExceed(profileQuota, profileUsage, requestedCPU, requestedMemory) {
+		return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrQuotaExceeded
+	}
+
+	sandbox := input.Sandbox
+	sandbox.ProjectID = input.Principal.ProjectID
+	sandbox.ProfileRevisionID = profile.CurrentRevision.ID
+	sandbox.Workspace = input.Workspace
+	sandbox.Workspace.Generation = sandbox.Generation
+	initialLifecycleIntent := ""
+	if profile.CurrentRevision.Spec.Lifecycle.InitialState == contracts.SandboxDesiredStateRunning {
+		sandbox.DesiredState = contracts.SandboxDesiredStateRunning
+		sandbox.State = contracts.SandboxStateCreating
+		input.Operation.State = contracts.OperationStatePending
+		initialLifecycleIntent = "create"
+	} else {
+		sandbox.DesiredState = contracts.SandboxDesiredStateStopped
+		sandbox.State = contracts.SandboxStateStopped
+		input.Operation.State = contracts.OperationStateSucceeded
+		input.Operation.Sandbox = &sandbox
+	}
+	metadataJSON, err := json.Marshal(sandbox.Metadata)
+	if err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox metadata encoding failed: %w", err)
+	}
+	compatibilityJSON, err := json.Marshal(map[string]any{
+		"pool": profile.CurrentRevision.Spec.Pool, "architecture": profile.CurrentRevision.Spec.Architecture,
+		"backend": profile.CurrentRevision.Spec.Backend,
 	})
 	if err != nil {
-		return "", fmt.Errorf("encode Environment natural key for PostgreSQL lock: %w", err)
+		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox compatibility encoding failed: %w", err)
 	}
-	return string(encoded), nil
-}
-
-func (s *PostgresEnvironmentStore) ResolveEnvironment(ctx context.Context, input ports.ResolveEnvironmentInput) (contracts.Environment, bool, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return contracts.Environment{}, false, fmt.Errorf("begin Environment resolve: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	lockKey, err := postgresEnvironmentNaturalKey(input.Environment)
-	if err != nil {
-		return contracts.Environment{}, false, err
-	}
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
-		return contracts.Environment{}, false, fmt.Errorf("lock Environment natural key: %w", err)
-	}
-	existing, err := scanEnvironment(tx.QueryRow(ctx, environmentByNaturalKeySQL,
-		input.Environment.TenantRef, input.Environment.SubjectRef, input.Environment.EnvironmentKey))
-	if err == nil {
-		if err := tx.Commit(ctx); err != nil {
-			return contracts.Environment{}, false, fmt.Errorf("commit existing Environment resolve: %w", err)
-		}
-		return existing, false, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return contracts.Environment{}, false, fmt.Errorf("query Environment natural key: %w", err)
-	}
-	workspace := input.Workspace
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO sandbox.workspaces (
-			id, tenant_ref, subject_ref, storage_ref, generation, retain_until, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-		workspace.ID, workspace.TenantRef, workspace.SubjectRef, workspace.StorageRef, workspace.Generation,
-		workspace.RetainUntil, workspace.CreatedAt, workspace.UpdatedAt,
+		INSERT INTO secondbox.workspaces (
+			id,project_id,sandbox_id,generation,retained_bytes,current_checkpoint_id,
+			current_checkpoint_sha256,current_checkpoint_size_bytes,retention_state,
+			garbage_collection_state,created_at,updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+		sandbox.Workspace.ID, sandbox.ProjectID, sandbox.ID, sandbox.Workspace.Generation,
+		sandbox.Workspace.RetainedBytes, "", "", 0, "retained", "reachable",
+		sandbox.Workspace.CreatedAt, sandbox.Workspace.UpdatedAt,
 	); err != nil {
-		return contracts.Environment{}, false, fmt.Errorf("insert Environment workspace: %w", err)
-	}
-	environment := input.Environment
-	portsJSON, metadataJSON, err := environmentJSON(environment)
-	if err != nil {
-		return contracts.Environment{}, false, err
+		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Workspace insert failed: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO sandbox.environments (
-			id,tenant_ref,subject_ref,environment_key,workspace_id,image_ref,toolchain_ref,
-			resource_class_id,lifecycle_policy_id,desired_state,state,current_generation,
-			current_instance_id,snapshot_id,exposed_ports_json,metadata_json,last_activity_at,created_at,updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
-		environment.ID, environment.TenantRef, environment.SubjectRef, environment.EnvironmentKey,
-		environment.WorkspaceID, environment.ImageRef, environment.ToolchainRef, environment.ResourceClassID,
-		environment.LifecyclePolicyID, environment.DesiredState, environment.State, environment.CurrentGeneration,
-		environment.CurrentInstanceID, environment.SnapshotID, portsJSON, metadataJSON,
-		environment.LastActivityAt, environment.CreatedAt, environment.UpdatedAt,
+		INSERT INTO secondbox.sandboxes (
+			id,project_id,profile_name,profile_revision_id,state,desired_state,generation,workspace_id,
+			current_instance_id,metadata_json,compatibility_summary_json,last_activity_at,revision,
+			lifecycle_termination_reason,lifecycle_failure_class,lifecycle_failure_message,lifecycle_intent_kind,
+			reconcile_owner,reconcile_claim_expires_at,next_reconcile_at,reconcile_retry_count,
+			reconcile_retry_limit,created_at,updated_at,deleted_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
+		sandbox.ID, sandbox.ProjectID, sandbox.Profile, sandbox.ProfileRevisionID, sandbox.State,
+		sandbox.DesiredState, sandbox.Generation, sandbox.Workspace.ID, "", metadataJSON,
+		compatibilityJSON, sandbox.LastActivityAt, sandbox.Revision, "", "", "", initialLifecycleIntent,
+		"", nil, sandbox.UpdatedAt, 0, 8, sandbox.CreatedAt, sandbox.UpdatedAt, sandbox.DeletedAt,
 	); err != nil {
-		return contracts.Environment{}, false, fmt.Errorf("insert Environment: %w", err)
+		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox insert failed: %w", err)
+	}
+	input.Operation.SandboxID = sandbox.ID
+	if err := insertOperation(ctx, tx, sandbox.ProjectID, input.Operation); err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.idempotency_records (
+			project_id,operation,target_id,idempotency_key,request_hash,response_resource_id,created_at,expires_at
+		) VALUES ($1,'sandbox.create','',$2,$3,$4,$5,$6)`,
+		sandbox.ProjectID, input.IdempotencyKey, input.RequestHash, sandbox.ID,
+		sandbox.CreatedAt, input.IdempotencyEnds,
+	); err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox idempotency insert failed: %w", err)
+	}
+	input.Audit.ProjectID = sandbox.ProjectID
+	input.Audit.ResourceID = sandbox.ID
+	if err := insertAuditEvent(ctx, tx, input.Audit); err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return contracts.Environment{}, false, fmt.Errorf("commit Environment resolve: %w", err)
+		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox create commit failed: %w", err)
 	}
-	return environment, true, nil
+	return sandbox, input.Operation, true, nil
 }
 
-func (s *PostgresEnvironmentStore) GetEnvironment(ctx context.Context, id string) (contracts.Environment, error) {
-	environment, err := scanEnvironment(s.pool.QueryRow(ctx, environmentByIDSQL, id))
-	return environment, mapEnvironmentError(err)
+func (store *PostgresControlPlaneStore) GetSandbox(
+	ctx context.Context,
+	projectID string,
+	sandboxID string,
+) (contracts.Sandbox, error) {
+	return getSandboxWithQuerier(ctx, store.pool, projectID, sandboxID)
 }
 
-func (s *PostgresEnvironmentStore) GetWorkspace(ctx context.Context, id string) (contracts.Workspace, error) {
-	var workspace contracts.Workspace
-	err := s.pool.QueryRow(ctx, `
-		SELECT id,tenant_ref,subject_ref,storage_ref,generation,retain_until,created_at,updated_at
-		FROM sandbox.workspaces WHERE id=$1`, id).Scan(
-		&workspace.ID, &workspace.TenantRef, &workspace.SubjectRef, &workspace.StorageRef,
-		&workspace.Generation, &workspace.RetainUntil, &workspace.CreatedAt, &workspace.UpdatedAt,
-	)
-	workspace.ContractVersion = contracts.ContractVersionV1
-	return workspace, mapEnvironmentError(err)
-}
-
-func (s *PostgresEnvironmentStore) GetCurrentInstance(ctx context.Context, environmentID string) (*contracts.Instance, error) {
-	var instance contracts.Instance
-	err := scanInstance(s.pool.QueryRow(ctx, `
-		SELECT i.id,i.environment_id,i.generation,i.state,i.backend_ref,i.failure_code,
-		       i.prepared_at,i.ready_at,i.stopped_at,i.updated_at
-		FROM sandbox.environments e
-		JOIN sandbox.instances i ON i.id=e.current_instance_id
-		WHERE e.id=$1 AND e.current_instance_id<>''`, environmentID), &instance)
-	if errors.Is(err, pgx.ErrNoRows) {
-		if _, environmentErr := s.GetEnvironment(ctx, environmentID); environmentErr != nil {
-			return nil, environmentErr
-		}
-		return nil, nil
-	}
+func (store *PostgresControlPlaneStore) ListSandboxes(
+	ctx context.Context,
+	projectID string,
+	limit int,
+) ([]contracts.Sandbox, error) {
+	rows, err := store.pool.Query(ctx, sandboxSelect+`
+		WHERE sandbox.project_id=$1 ORDER BY sandbox.created_at,sandbox.id LIMIT $2`, projectID, limit)
 	if err != nil {
-		return nil, fmt.Errorf("get current Environment Instance: %w", err)
-	}
-	return &instance, nil
-}
-
-func (s *PostgresEnvironmentStore) ListInstances(ctx context.Context, environmentID string) ([]contracts.Instance, error) {
-	if _, err := s.GetEnvironment(ctx, environmentID); err != nil {
-		return nil, err
-	}
-	rows, err := s.pool.Query(ctx, `
-		SELECT id,environment_id,generation,state,backend_ref,failure_code,prepared_at,ready_at,stopped_at,updated_at
-		FROM sandbox.instances WHERE environment_id=$1 ORDER BY generation,id`, environmentID)
-	if err != nil {
-		return nil, fmt.Errorf("list Environment Instances: %w", err)
+		return nil, fmt.Errorf("SecondBox Sandbox list failed: %w", err)
 	}
 	defer rows.Close()
-	items := make([]contracts.Instance, 0)
+	sandboxes := make([]contracts.Sandbox, 0)
 	for rows.Next() {
-		var instance contracts.Instance
-		if err := scanInstance(rows, &instance); err != nil {
-			return nil, fmt.Errorf("scan Environment Instance: %w", err)
+		sandbox, scanErr := scanSandbox(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("SecondBox Sandbox list scan failed: %w", scanErr)
 		}
-		items = append(items, instance)
+		sandboxes = append(sandboxes, sandbox)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate Environment Instances: %w", err)
-	}
-	return items, nil
+	return sandboxes, rows.Err()
 }
 
-func (s *PostgresEnvironmentStore) GetResourceClass(ctx context.Context, id string) (contracts.ResourceClass, error) {
-	var resourceClass contracts.ResourceClass
-	err := s.pool.QueryRow(ctx, `
-		SELECT id,cpu_millis,memory_bytes,disk_bytes,process_limit,max_exposed_ports,created_at,updated_at
-		FROM sandbox.resource_classes WHERE id=$1`, id).Scan(
-		&resourceClass.ID, &resourceClass.CPUMillis, &resourceClass.MemoryBytes, &resourceClass.DiskBytes,
-		&resourceClass.ProcessLimit, &resourceClass.MaxExposedPorts, &resourceClass.CreatedAt, &resourceClass.UpdatedAt,
+func (store *PostgresControlPlaneStore) GetOperation(
+	ctx context.Context,
+	projectID string,
+	operationID string,
+) (contracts.Operation, error) {
+	return getOperationWithQuerier(ctx, store.pool, projectID, `id=$2`, operationID)
+}
+
+func getCreateOperationWithQuerier(
+	ctx context.Context,
+	querier queryRower,
+	projectID string,
+	sandboxID string,
+) (contracts.Operation, error) {
+	return getOperationWithQuerier(ctx, querier, projectID, `sandbox_id=$2 AND kind='create'`, sandboxID)
+}
+
+func getOperationWithQuerier(
+	ctx context.Context,
+	querier queryRower,
+	projectID string,
+	predicate string,
+	identifier string,
+) (contracts.Operation, error) {
+	queries := map[string]string{
+		"id=$2":                           `WHERE project_id=$1 AND id=$2`,
+		"sandbox_id=$2 AND kind='create'": `WHERE project_id=$1 AND sandbox_id=$2 AND kind='create'`,
+	}
+	where, ok := queries[predicate]
+	if !ok {
+		return contracts.Operation{}, errors.New("SecondBox Operation lookup predicate is invalid")
+	}
+	var operation contracts.Operation
+	var errorCode, errorMessage string
+	var retryable bool
+	var requestMetadataJSON []byte
+	err := querier.QueryRow(ctx, `
+		SELECT id,sandbox_id,kind,state,request_id,request_metadata_json,error_code,error_message,retryable,
+		       created_at,started_at,completed_at,updated_at
+		FROM secondbox.operations `+where+` ORDER BY created_at LIMIT 1`, projectID, identifier).Scan(
+		&operation.ID, &operation.SandboxID, &operation.Kind, &operation.State, &operation.RequestID,
+		&requestMetadataJSON,
+		&errorCode, &errorMessage, &retryable, &operation.CreatedAt, &operation.StartedAt,
+		&operation.CompletedAt, &operation.UpdatedAt,
 	)
-	resourceClass.ContractVersion = contracts.ContractVersionV1
-	return resourceClass, mapEnvironmentError(err)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return contracts.Operation{}, ports.ErrSandboxNotFound
+	}
+	if err != nil {
+		return contracts.Operation{}, fmt.Errorf("SecondBox Operation lookup failed: %w", err)
+	}
+	if errorCode != "" {
+		operation.Error = &contracts.Problem{
+			Type:  "https://secondbox.dev/problems/" + errorCode,
+			Title: errorMessage, Status: 503, Code: errorCode,
+			RequestID: operation.RequestID, Retryable: retryable,
+		}
+	}
+	if len(requestMetadataJSON) > 0 {
+		if err := json.Unmarshal(requestMetadataJSON, &operation.RequestMetadata); err != nil {
+			return contracts.Operation{}, fmt.Errorf("SecondBox Operation request metadata decoding failed: %w", err)
+		}
+	}
+	return operation, nil
 }
 
-func (s *PostgresEnvironmentStore) ListResourceClasses(ctx context.Context) ([]contracts.ResourceClass, error) {
-	rows, err := s.pool.Query(ctx, `
-		SELECT id,cpu_millis,memory_bytes,disk_bytes,process_limit,max_exposed_ports,created_at,updated_at
-		FROM sandbox.resource_classes ORDER BY id LIMIT 100`)
+func (store *PostgresControlPlaneStore) ListAuditEvents(
+	ctx context.Context,
+	projectID string,
+	limit int,
+) ([]contracts.AuditEvent, error) {
+	rows, err := store.pool.Query(ctx, `
+		SELECT id,project_id,actor_kind,actor_id,action,resource_kind,resource_id,
+		       outcome,request_id,details_json,created_at
+		FROM secondbox.audit_events
+		WHERE ($1='' OR project_id=$1)
+		ORDER BY created_at DESC,id DESC LIMIT $2`, projectID, limit)
 	if err != nil {
-		return nil, fmt.Errorf("list Resource Classes: %w", err)
+		return nil, fmt.Errorf("SecondBox audit list failed: %w", err)
 	}
 	defer rows.Close()
-	items := make([]contracts.ResourceClass, 0)
+	events := make([]contracts.AuditEvent, 0)
 	for rows.Next() {
-		var item contracts.ResourceClass
-		if err := rows.Scan(&item.ID, &item.CPUMillis, &item.MemoryBytes, &item.DiskBytes,
-			&item.ProcessLimit, &item.MaxExposedPorts, &item.CreatedAt, &item.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("scan Resource Class: %w", err)
+		var event contracts.AuditEvent
+		var detailsJSON []byte
+		if err := rows.Scan(
+			&event.ID, &event.ProjectID, &event.ActorKind, &event.ActorID, &event.Action,
+			&event.ResourceKind, &event.ResourceID, &event.Outcome, &event.RequestID,
+			&detailsJSON, &event.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("SecondBox audit list scan failed: %w", err)
 		}
-		item.ContractVersion = contracts.ContractVersionV1
-		items = append(items, item)
-	}
-	return items, rows.Err()
-}
-
-func (s *PostgresEnvironmentStore) GetLifecyclePolicy(ctx context.Context, id string) (contracts.LifecyclePolicy, error) {
-	var policy contracts.LifecyclePolicy
-	err := s.pool.QueryRow(ctx, `
-		SELECT id,idle_stop_after_seconds,retention_seconds,stop_compute_when_idle,
-		       retain_on_explicit_stop,keep_running_without_wake,created_at,updated_at
-		FROM sandbox.lifecycle_policies WHERE id=$1`, id).Scan(
-		&policy.ID, &policy.IdleStopAfterSeconds, &policy.RetentionSeconds, &policy.StopComputeWhenIdle,
-		&policy.RetainOnExplicitStop, &policy.KeepRunningWithoutWake, &policy.CreatedAt, &policy.UpdatedAt,
-	)
-	policy.ContractVersion = contracts.ContractVersionV1
-	return policy, mapEnvironmentError(err)
-}
-
-func (s *PostgresEnvironmentStore) ListLifecyclePolicies(ctx context.Context) ([]contracts.LifecyclePolicy, error) {
-	rows, err := s.pool.Query(ctx, `
-		SELECT id,idle_stop_after_seconds,retention_seconds,stop_compute_when_idle,
-		       retain_on_explicit_stop,keep_running_without_wake,created_at,updated_at
-		FROM sandbox.lifecycle_policies ORDER BY id LIMIT 100`)
-	if err != nil {
-		return nil, fmt.Errorf("list Lifecycle Policies: %w", err)
-	}
-	defer rows.Close()
-	items := make([]contracts.LifecyclePolicy, 0)
-	for rows.Next() {
-		var item contracts.LifecyclePolicy
-		if err := rows.Scan(&item.ID, &item.IdleStopAfterSeconds, &item.RetentionSeconds, &item.StopComputeWhenIdle,
-			&item.RetainOnExplicitStop, &item.KeepRunningWithoutWake, &item.CreatedAt, &item.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("scan Lifecycle Policy: %w", err)
+		if err := json.Unmarshal(detailsJSON, &event.Details); err != nil {
+			return nil, fmt.Errorf("SecondBox audit details decoding failed: %w", err)
 		}
-		item.ContractVersion = contracts.ContractVersionV1
-		items = append(items, item)
+		events = append(events, event)
 	}
-	return items, rows.Err()
+	return events, rows.Err()
 }
 
-func (s *PostgresEnvironmentStore) BeginStart(ctx context.Context, environmentID string, expectedGeneration int64, instanceID string, now time.Time) (ports.StartGenerationResult, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return ports.StartGenerationResult{}, fmt.Errorf("begin Environment start: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	environment, err := scanEnvironment(tx.QueryRow(ctx, environmentByIDForUpdateSQL, environmentID))
-	if err != nil {
-		return ports.StartGenerationResult{}, mapEnvironmentError(err)
-	}
-	if expectedGeneration > 0 && expectedGeneration != environment.CurrentGeneration {
-		return ports.StartGenerationResult{}, ports.ErrGenerationFenced
-	}
-	if (environment.State == contracts.EnvironmentStatePreparing ||
-		environment.State == contracts.EnvironmentStateReady) &&
-		environment.CurrentInstanceID != "" {
-		var instance contracts.Instance
-		if err := scanInstance(tx.QueryRow(ctx, instanceByIDSQL, environment.CurrentInstanceID), &instance); err != nil {
-			return ports.StartGenerationResult{}, fmt.Errorf("load active Instance start: %w", err)
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return ports.StartGenerationResult{}, fmt.Errorf("commit reused Environment start: %w", err)
-		}
-		return ports.StartGenerationResult{Environment: environment, Instance: instance}, nil
-	}
-	generation := environment.CurrentGeneration + 1
-	instance := contracts.Instance{
-		ContractVersion: contracts.ContractVersionV1,
-		ID:              instanceID, EnvironmentID: environmentID, Generation: generation,
-		State: contracts.InstanceStatePreparing, PreparedAt: now.UTC(), UpdatedAt: now.UTC(),
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO sandbox.instances (
-			id,environment_id,generation,state,backend_ref,failure_code,prepared_at,ready_at,stopped_at,updated_at
-		) VALUES ($1,$2,$3,$4,'','',$5,NULL,NULL,$5)`,
-		instance.ID, instance.EnvironmentID, instance.Generation, instance.State, now.UTC()); err != nil {
-		return ports.StartGenerationResult{}, fmt.Errorf("insert preparing Instance: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE sandbox.environments SET current_generation=$2,current_instance_id=$3,
-		       desired_state=$4,state=$5,updated_at=$6 WHERE id=$1`,
-		environmentID, generation, instanceID, contracts.DesiredStateRunning, contracts.EnvironmentStatePreparing, now.UTC()); err != nil {
-		return ports.StartGenerationResult{}, fmt.Errorf("reserve Environment generation: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE sandbox.leases SET state=$3,updated_at=$4
-		WHERE environment_id=$1 AND generation<$2 AND state=$5`,
-		environmentID, generation, contracts.LeaseStateExpired, now.UTC(), contracts.LeaseStateActive); err != nil {
-		return ports.StartGenerationResult{}, fmt.Errorf("fence prior Environment leases: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return ports.StartGenerationResult{}, fmt.Errorf("commit Environment start: %w", err)
-	}
-	environment.CurrentGeneration = generation
-	environment.CurrentInstanceID = instanceID
-	environment.DesiredState = contracts.DesiredStateRunning
-	environment.State = contracts.EnvironmentStatePreparing
-	environment.UpdatedAt = now.UTC()
-	return ports.StartGenerationResult{Environment: environment, Instance: instance, Created: true}, nil
-}
-
-func (s *PostgresEnvironmentStore) MarkInstanceReady(ctx context.Context, environmentID, instanceID string, generation int64, backendRef string, now time.Time) (contracts.Environment, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return contracts.Environment{}, fmt.Errorf("begin Instance ready: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	environment, err := scanEnvironment(tx.QueryRow(ctx, environmentByIDForUpdateSQL, environmentID))
-	if err != nil {
-		return contracts.Environment{}, mapEnvironmentError(err)
-	}
-	if environment.CurrentGeneration != generation || environment.CurrentInstanceID != instanceID {
-		return contracts.Environment{}, ports.ErrGenerationFenced
-	}
-	tag, err := tx.Exec(ctx, `
-		UPDATE sandbox.instances SET state=$4,backend_ref=$5,ready_at=$6,updated_at=$6
-		WHERE id=$1 AND environment_id=$2 AND generation=$3`,
-		instanceID, environmentID, generation, contracts.InstanceStateReady, backendRef, now.UTC())
-	if err != nil {
-		return contracts.Environment{}, fmt.Errorf("mark Instance ready: %w", err)
-	}
-	if tag.RowsAffected() != 1 {
-		return contracts.Environment{}, ports.ErrGenerationFenced
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE sandbox.environments SET desired_state=$2,state=$3,last_activity_at=$4,updated_at=$4 WHERE id=$1`,
-		environmentID, contracts.DesiredStateRunning, contracts.EnvironmentStateReady, now.UTC()); err != nil {
-		return contracts.Environment{}, fmt.Errorf("mark Environment ready: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return contracts.Environment{}, fmt.Errorf("commit Instance ready: %w", err)
-	}
-	environment.State = contracts.EnvironmentStateReady
-	environment.DesiredState = contracts.DesiredStateRunning
-	environment.LastActivityAt = now.UTC()
-	environment.UpdatedAt = now.UTC()
-	return environment, nil
-}
-
-func (s *PostgresEnvironmentStore) MarkInstanceFailed(ctx context.Context, environmentID, instanceID string, generation int64, failureCode string, now time.Time) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin Instance failure: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	environment, err := scanEnvironment(tx.QueryRow(ctx, environmentByIDForUpdateSQL, environmentID))
-	if err != nil {
-		return mapEnvironmentError(err)
-	}
-	if environment.CurrentGeneration != generation || environment.CurrentInstanceID != instanceID {
-		return ports.ErrGenerationFenced
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE sandbox.instances SET state=$4,failure_code=$5,updated_at=$6
-		WHERE id=$1 AND environment_id=$2 AND generation=$3`,
-		instanceID, environmentID, generation, contracts.InstanceStateFailed, failureCode, now.UTC()); err != nil {
-		return fmt.Errorf("mark Instance failed: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE sandbox.environments SET desired_state=$2,state=$3,updated_at=$4 WHERE id=$1`,
-		environmentID, contracts.DesiredStateStopped, contracts.EnvironmentStateFailed, now.UTC()); err != nil {
-		return fmt.Errorf("mark Environment failed: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit Instance failure: %w", err)
-	}
-	return nil
-}
-
-func (s *PostgresEnvironmentStore) BeginStop(ctx context.Context, environmentID string, expectedGeneration int64, now time.Time) (contracts.Environment, *contracts.Instance, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return contracts.Environment{}, nil, fmt.Errorf("begin Environment stop: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	environment, err := scanEnvironment(tx.QueryRow(ctx, environmentByIDForUpdateSQL, environmentID))
-	if err != nil {
-		return contracts.Environment{}, nil, mapEnvironmentError(err)
-	}
-	if expectedGeneration > 0 && expectedGeneration != environment.CurrentGeneration {
-		return contracts.Environment{}, nil, ports.ErrGenerationFenced
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE sandbox.leases SET state=$2,updated_at=$3
-		WHERE environment_id=$1 AND state=$4`,
-		environmentID, contracts.LeaseStateExpired, now.UTC(), contracts.LeaseStateActive); err != nil {
-		return contracts.Environment{}, nil, fmt.Errorf("fence Environment leases for stop: %w", err)
-	}
-	var instance *contracts.Instance
-	if environment.CurrentInstanceID != "" && environment.State != contracts.EnvironmentStateStopped {
-		current := contracts.Instance{}
-		if err := scanInstance(tx.QueryRow(ctx, instanceByIDSQL, environment.CurrentInstanceID), &current); err != nil {
-			return contracts.Environment{}, nil, fmt.Errorf("load stopping Instance: %w", err)
-		}
-		if _, err := tx.Exec(ctx, `UPDATE sandbox.instances SET state=$2,updated_at=$3 WHERE id=$1`,
-			current.ID, contracts.InstanceStateStopping, now.UTC()); err != nil {
-			return contracts.Environment{}, nil, fmt.Errorf("mark Instance stopping: %w", err)
-		}
-		current.State = contracts.InstanceStateStopping
-		current.UpdatedAt = now.UTC()
-		instance = &current
-		environment.State = contracts.EnvironmentStateStopping
-	} else {
-		environment.State = contracts.EnvironmentStateStopped
-	}
-	environment.DesiredState = contracts.DesiredStateStopped
-	environment.UpdatedAt = now.UTC()
-	if _, err := tx.Exec(ctx, `
-		UPDATE sandbox.environments SET desired_state=$2,state=$3,updated_at=$4 WHERE id=$1`,
-		environmentID, environment.DesiredState, environment.State, now.UTC()); err != nil {
-		return contracts.Environment{}, nil, fmt.Errorf("mark Environment stopping: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return contracts.Environment{}, nil, fmt.Errorf("commit Environment stop: %w", err)
-	}
-	return environment, instance, nil
-}
-
-func (s *PostgresEnvironmentStore) CompleteStop(ctx context.Context, environmentID, instanceID string, generation int64, instanceState string, now time.Time) (contracts.Environment, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return contracts.Environment{}, fmt.Errorf("begin Environment stop completion: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	environment, err := scanEnvironment(tx.QueryRow(ctx, environmentByIDForUpdateSQL, environmentID))
-	if err != nil {
-		return contracts.Environment{}, mapEnvironmentError(err)
-	}
-	if environment.CurrentGeneration != generation || environment.CurrentInstanceID != instanceID {
-		return contracts.Environment{}, ports.ErrGenerationFenced
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE sandbox.instances SET state=$4,stopped_at=$5,updated_at=$5
-		WHERE id=$1 AND environment_id=$2 AND generation=$3`,
-		instanceID, environmentID, generation, instanceState, now.UTC()); err != nil {
-		return contracts.Environment{}, fmt.Errorf("complete Instance stop: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE sandbox.environments SET desired_state=$2,state=$3,current_instance_id='',updated_at=$4 WHERE id=$1`,
-		environmentID, contracts.DesiredStateStopped, contracts.EnvironmentStateStopped, now.UTC()); err != nil {
-		return contracts.Environment{}, fmt.Errorf("complete Environment stop: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return contracts.Environment{}, fmt.Errorf("commit Environment stop completion: %w", err)
-	}
-	environment.DesiredState = contracts.DesiredStateStopped
-	environment.State = contracts.EnvironmentStateStopped
-	environment.CurrentInstanceID = ""
-	environment.UpdatedAt = now.UTC()
-	return environment, nil
-}
-
-func (s *PostgresEnvironmentStore) MarkInstanceLost(ctx context.Context, environmentID, instanceID string, generation int64, now time.Time) (contracts.Environment, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return contracts.Environment{}, fmt.Errorf("begin lost Instance transition: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	environment, err := scanEnvironment(tx.QueryRow(ctx, environmentByIDForUpdateSQL, environmentID))
-	if err != nil {
-		return contracts.Environment{}, mapEnvironmentError(err)
-	}
-	if environment.CurrentGeneration != generation || environment.CurrentInstanceID != instanceID {
-		return contracts.Environment{}, ports.ErrGenerationFenced
-	}
-	if _, err := tx.Exec(ctx, `UPDATE sandbox.instances SET state=$2,updated_at=$3 WHERE id=$1`,
-		instanceID, contracts.InstanceStateLost, now.UTC()); err != nil {
-		return contracts.Environment{}, fmt.Errorf("mark Instance lost: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE sandbox.environments SET desired_state=$2,state=$3,current_instance_id='',updated_at=$4 WHERE id=$1`,
-		environmentID, contracts.DesiredStateStopped, contracts.EnvironmentStateLost, now.UTC()); err != nil {
-		return contracts.Environment{}, fmt.Errorf("mark Environment lost: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE sandbox.leases SET state=$2,updated_at=$3
-		WHERE environment_id=$1 AND state=$4`,
-		environmentID, contracts.LeaseStateExpired, now.UTC(), contracts.LeaseStateActive); err != nil {
-		return contracts.Environment{}, fmt.Errorf("fence leases after Instance loss: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return contracts.Environment{}, fmt.Errorf("commit lost Instance transition: %w", err)
-	}
-	environment.DesiredState = contracts.DesiredStateStopped
-	environment.State = contracts.EnvironmentStateLost
-	environment.CurrentInstanceID = ""
-	environment.UpdatedAt = now.UTC()
-	return environment, nil
-}
-
-func (s *PostgresEnvironmentStore) TouchEnvironment(ctx context.Context, environmentID string, generation int64, now time.Time) error {
-	tag, err := s.pool.Exec(ctx, `
-		UPDATE sandbox.environments SET last_activity_at=$3,updated_at=$3
-		WHERE id=$1 AND current_generation=$2`, environmentID, generation, now.UTC())
-	if err != nil {
-		return fmt.Errorf("touch Environment activity: %w", err)
-	}
-	if tag.RowsAffected() != 1 {
-		return ports.ErrGenerationFenced
-	}
-	return nil
-}
-
-func (s *PostgresEnvironmentStore) CreateLease(ctx context.Context, lease contracts.Lease, now time.Time) (contracts.Lease, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return contracts.Lease{}, fmt.Errorf("begin lease acquisition: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	environment, err := scanEnvironment(tx.QueryRow(ctx, environmentByIDForUpdateSQL, lease.EnvironmentID))
-	if err != nil {
-		return contracts.Lease{}, mapEnvironmentError(err)
-	}
-	if environment.CurrentGeneration != lease.Generation || environment.State != contracts.EnvironmentStateReady {
-		return contracts.Lease{}, ports.ErrGenerationFenced
-	}
-	lease.ContractVersion = contracts.ContractVersionV1
-	lease.State = contracts.LeaseStateActive
-	lease.CreatedAt = now.UTC()
-	lease.UpdatedAt = now.UTC()
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO sandbox.leases (
-			id,environment_id,generation,holder_ref,state,expires_at,created_at,updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$7)`,
-		lease.ID, lease.EnvironmentID, lease.Generation, lease.HolderRef, lease.State,
-		lease.ExpiresAt, now.UTC()); err != nil {
-		return contracts.Lease{}, fmt.Errorf("insert Environment lease: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return contracts.Lease{}, fmt.Errorf("commit lease acquisition: %w", err)
-	}
-	return lease, nil
-}
-
-func (s *PostgresEnvironmentStore) GetLease(ctx context.Context, id string) (contracts.Lease, error) {
-	var lease contracts.Lease
-	err := s.pool.QueryRow(ctx, `
-		SELECT id,environment_id,generation,holder_ref,state,expires_at,created_at,updated_at
-		FROM sandbox.leases WHERE id=$1`, id).Scan(
-		&lease.ID, &lease.EnvironmentID, &lease.Generation, &lease.HolderRef, &lease.State,
-		&lease.ExpiresAt, &lease.CreatedAt, &lease.UpdatedAt,
-	)
-	lease.ContractVersion = contracts.ContractVersionV1
-	if errors.Is(err, pgx.ErrNoRows) {
-		return contracts.Lease{}, ports.ErrLeaseNotFound
-	}
-	return lease, err
-}
-
-func (s *PostgresEnvironmentStore) HasActiveLease(ctx context.Context, environmentID string, now time.Time) (bool, error) {
-	if _, err := s.GetEnvironment(ctx, environmentID); err != nil {
-		return false, err
-	}
-	var active bool
-	err := s.pool.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM sandbox.leases
-			WHERE environment_id=$1 AND state=$2 AND expires_at>$3
-		)`, environmentID, contracts.LeaseStateActive, now.UTC()).Scan(&active)
-	return active, err
-}
-
-func (s *PostgresEnvironmentStore) RenewLease(ctx context.Context, id string, expiresAt, now time.Time) (contracts.Lease, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return contracts.Lease{}, fmt.Errorf("begin lease renewal: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	lease, err := scanLease(tx.QueryRow(ctx, `
-		SELECT id,environment_id,generation,holder_ref,state,expires_at,created_at,updated_at
-		FROM sandbox.leases WHERE id=$1 FOR UPDATE`, id))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return contracts.Lease{}, ports.ErrLeaseNotFound
-	}
-	if err != nil {
-		return contracts.Lease{}, fmt.Errorf("load lease for renewal: %w", err)
-	}
-	environment, err := scanEnvironment(tx.QueryRow(ctx, environmentByIDSQL, lease.EnvironmentID))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return contracts.Lease{}, ports.ErrGenerationFenced
-	}
-	if err != nil {
-		return contracts.Lease{}, fmt.Errorf("load lease Environment for renewal: %w", err)
-	}
-	if environment.CurrentGeneration != lease.Generation {
-		return contracts.Lease{}, ports.ErrGenerationFenced
-	}
-	if lease.State != contracts.LeaseStateActive {
-		return contracts.Lease{}, ports.ErrLeaseReleased
-	}
-	if !lease.ExpiresAt.After(now) {
-		if _, err := tx.Exec(ctx, `UPDATE sandbox.leases SET state=$2,updated_at=$3 WHERE id=$1`,
-			id, contracts.LeaseStateExpired, now.UTC()); err != nil {
-			return contracts.Lease{}, fmt.Errorf("expire stale lease: %w", err)
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return contracts.Lease{}, fmt.Errorf("commit stale lease expiry: %w", err)
-		}
-		return contracts.Lease{}, ports.ErrLeaseExpired
-	}
-	if _, err := tx.Exec(ctx, `UPDATE sandbox.leases SET expires_at=$2,updated_at=$3 WHERE id=$1`,
-		id, expiresAt.UTC(), now.UTC()); err != nil {
-		return contracts.Lease{}, fmt.Errorf("renew Environment lease: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return contracts.Lease{}, fmt.Errorf("commit lease renewal: %w", err)
-	}
-	lease.ExpiresAt = expiresAt.UTC()
-	lease.UpdatedAt = now.UTC()
-	return lease, nil
-}
-
-func (s *PostgresEnvironmentStore) ReleaseLease(ctx context.Context, id string, now time.Time) (contracts.Lease, error) {
-	lease, err := s.GetLease(ctx, id)
-	if err != nil {
-		return contracts.Lease{}, err
-	}
-	tag, err := s.pool.Exec(ctx, `
-		UPDATE sandbox.leases SET state=$2,updated_at=$3 WHERE id=$1`,
-		id, contracts.LeaseStateReleased, now.UTC())
-	if err != nil {
-		return contracts.Lease{}, fmt.Errorf("release Environment lease: %w", err)
-	}
-	if tag.RowsAffected() != 1 {
-		return contracts.Lease{}, ports.ErrLeaseNotFound
-	}
-	lease.State = contracts.LeaseStateReleased
-	lease.UpdatedAt = now.UTC()
-	return lease, nil
-}
-
-func (s *PostgresEnvironmentStore) SaveSnapshot(ctx context.Context, snapshot contracts.Snapshot, now time.Time) (contracts.Snapshot, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return contracts.Snapshot{}, fmt.Errorf("begin Snapshot persistence: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	environment, err := scanEnvironment(tx.QueryRow(ctx, environmentByIDForUpdateSQL, snapshot.EnvironmentID))
-	if err != nil {
-		return contracts.Snapshot{}, mapEnvironmentError(err)
-	}
-	if environment.CurrentGeneration != snapshot.Generation {
-		return contracts.Snapshot{}, ports.ErrGenerationFenced
-	}
-	metadataJSON, err := json.Marshal(snapshot.Metadata)
-	if err != nil {
-		return contracts.Snapshot{}, fmt.Errorf("encode Snapshot metadata: %w", err)
-	}
-	snapshot.ContractVersion = contracts.ContractVersionV1
-	snapshot.CreatedAt = now.UTC()
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO sandbox.snapshots (
-			id,environment_id,workspace_id,generation,parent_snapshot_id,opaque_ref,content_hash,size_bytes,metadata_json,created_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-		snapshot.ID, snapshot.EnvironmentID, snapshot.WorkspaceID, snapshot.Generation,
-		snapshot.ParentSnapshotID, snapshot.OpaqueRef, snapshot.ContentHash, snapshot.SizeBytes, metadataJSON, snapshot.CreatedAt); err != nil {
-		return contracts.Snapshot{}, fmt.Errorf("insert Environment Snapshot: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `UPDATE sandbox.environments SET snapshot_id=$2,updated_at=$3 WHERE id=$1`,
-		snapshot.EnvironmentID, snapshot.ID, now.UTC()); err != nil {
-		return contracts.Snapshot{}, fmt.Errorf("attach Environment Snapshot: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return contracts.Snapshot{}, fmt.Errorf("commit Snapshot persistence: %w", err)
-	}
-	return snapshot, nil
-}
-
-func (s *PostgresEnvironmentStore) GetSnapshot(ctx context.Context, id string) (contracts.Snapshot, error) {
-	var snapshot contracts.Snapshot
-	var metadataJSON []byte
-	err := s.pool.QueryRow(ctx, `
-		SELECT id,environment_id,workspace_id,generation,parent_snapshot_id,opaque_ref,content_hash,size_bytes,metadata_json,created_at
-		FROM sandbox.snapshots WHERE id=$1`, id).Scan(
-		&snapshot.ID, &snapshot.EnvironmentID, &snapshot.WorkspaceID, &snapshot.Generation,
-		&snapshot.ParentSnapshotID, &snapshot.OpaqueRef, &snapshot.ContentHash, &snapshot.SizeBytes,
-		&metadataJSON, &snapshot.CreatedAt,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return contracts.Snapshot{}, ports.ErrEnvironmentNotFound
-	}
-	if err != nil {
-		return contracts.Snapshot{}, err
-	}
-	snapshot.ContractVersion = contracts.ContractVersionV1
-	if err := json.Unmarshal(metadataJSON, &snapshot.Metadata); err != nil {
-		return contracts.Snapshot{}, fmt.Errorf("decode Snapshot metadata: %w", err)
-	}
-	return snapshot, nil
-}
-
-func (s *PostgresEnvironmentStore) CommitWorkspaceVersion(ctx context.Context, version contracts.WorkspaceVersion) (contracts.WorkspaceVersion, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return contracts.WorkspaceVersion{}, err
-	}
-	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "sandbox-workspace-version:"+version.EnvironmentID); err != nil {
-		return contracts.WorkspaceVersion{}, err
-	}
-	existing, err := scanWorkspaceVersion(tx.QueryRow(ctx, workspaceVersionByTurnSQL, version.EnvironmentID, version.TerminalTurnID))
-	if err == nil {
-		if err := tx.Commit(ctx); err != nil {
-			return contracts.WorkspaceVersion{}, err
-		}
-		return existing, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return contracts.WorkspaceVersion{}, err
-	}
-	var previous *contracts.WorkspaceVersion
-	current, err := scanWorkspaceVersion(tx.QueryRow(ctx, currentWorkspaceVersionForUpdateSQL, version.EnvironmentID))
-	if err == nil {
-		previous = &current
-	} else if !errors.Is(err, pgx.ErrNoRows) {
-		return contracts.WorkspaceVersion{}, err
-	}
-	version.ContractVersion = contracts.ContractVersionV1
-	version.LogicalVersion = 1
-	if previous != nil {
-		version.LogicalVersion = previous.LogicalVersion + 1
-		if !version.Dirty && previous.SourceGeneration == version.SourceGeneration {
-			version.SnapshotID = previous.SnapshotID
-			version.SnapshotLogicalVersion = previous.SnapshotLogicalVersion
-		}
-	}
-	if version.Dirty {
-		version.SnapshotLogicalVersion = version.LogicalVersion
-	}
-	version, err = scanWorkspaceVersion(tx.QueryRow(ctx, `
-		INSERT INTO sandbox.workspace_versions (
-			environment_id,logical_version,source_generation,terminal_turn_id,terminal_status,
-			workspace_present,dirty,content_hash,snapshot_id,snapshot_logical_version,created_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-		RETURNING environment_id,logical_version,source_generation,terminal_turn_id,terminal_status,
-		          workspace_present,dirty,content_hash,snapshot_id,snapshot_logical_version,created_at`,
-		version.EnvironmentID, version.LogicalVersion, version.SourceGeneration, version.TerminalTurnID,
-		version.TerminalStatus, version.WorkspacePresent, version.Dirty, version.ContentHash,
-		version.SnapshotID, version.SnapshotLogicalVersion, version.CreatedAt,
-	))
-	if err != nil {
-		return contracts.WorkspaceVersion{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return contracts.WorkspaceVersion{}, err
-	}
-	return version, nil
-}
-
-func (s *PostgresEnvironmentStore) GetCurrentWorkspaceVersion(ctx context.Context, environmentID string) (*contracts.WorkspaceVersion, error) {
-	version, err := scanWorkspaceVersion(s.pool.QueryRow(ctx, currentWorkspaceVersionSQL, environmentID))
-	if errors.Is(err, pgx.ErrNoRows) {
-		if _, environmentErr := s.GetEnvironment(ctx, environmentID); environmentErr != nil {
-			return nil, environmentErr
-		}
-		return nil, nil
-	}
-	return &version, err
-}
-
-func (s *PostgresEnvironmentStore) GetWorkspaceVersion(ctx context.Context, environmentID string, logicalVersion int64) (contracts.WorkspaceVersion, error) {
-	version, err := scanWorkspaceVersion(s.pool.QueryRow(ctx, workspaceVersionByNumberSQL, environmentID, logicalVersion))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return contracts.WorkspaceVersion{}, ports.ErrEnvironmentNotFound
-	}
-	return version, err
-}
-
-func (s *PostgresEnvironmentStore) SaveArtifact(ctx context.Context, artifact contracts.Artifact, now time.Time) (contracts.Artifact, error) {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return contracts.Artifact{}, fmt.Errorf("begin Artifact persistence: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	environment, err := scanEnvironment(tx.QueryRow(ctx, environmentByIDForUpdateSQL, artifact.EnvironmentID))
-	if err != nil {
-		return contracts.Artifact{}, mapEnvironmentError(err)
-	}
-	if environment.CurrentGeneration != artifact.Generation {
-		return contracts.Artifact{}, ports.ErrGenerationFenced
-	}
-	metadataJSON, err := json.Marshal(artifact.Metadata)
-	if err != nil {
-		return contracts.Artifact{}, fmt.Errorf("encode Artifact metadata: %w", err)
-	}
-	artifact.ContractVersion = contracts.ContractVersionV1
-	artifact.CreatedAt = now.UTC()
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO sandbox.artifacts (
-			id,environment_id,generation,name,mime_type,size_bytes,sha256,opaque_ref,metadata_json,created_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-		artifact.ID, artifact.EnvironmentID, artifact.Generation, artifact.Name, artifact.MimeType,
-		artifact.SizeBytes, artifact.SHA256, artifact.OpaqueRef, metadataJSON, artifact.CreatedAt); err != nil {
-		return contracts.Artifact{}, fmt.Errorf("insert Environment Artifact: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return contracts.Artifact{}, fmt.Errorf("commit Artifact persistence: %w", err)
-	}
-	return artifact, nil
-}
-
-func (s *PostgresEnvironmentStore) ListLifecycleCandidates(ctx context.Context, now time.Time, limit int) ([]contracts.Environment, error) {
-	rows, err := s.pool.Query(ctx, `
-		SELECT e.id,e.tenant_ref,e.subject_ref,e.environment_key,e.workspace_id,e.image_ref,e.toolchain_ref,
-		       e.resource_class_id,e.lifecycle_policy_id,e.desired_state,e.state,e.current_generation,
-		       e.current_instance_id,e.snapshot_id,e.exposed_ports_json,e.metadata_json,
-		       e.last_activity_at,e.created_at,e.updated_at
-		FROM sandbox.environments e
-		WHERE NOT EXISTS (
-			SELECT 1 FROM sandbox.leases l
-			WHERE l.environment_id=e.id AND l.state=$1 AND l.expires_at>$2
-		)
-		ORDER BY e.last_activity_at,e.id LIMIT $3`,
-		contracts.LeaseStateActive, now.UTC(), limit)
-	if err != nil {
-		return nil, fmt.Errorf("list Environment lifecycle candidates: %w", err)
-	}
-	defer rows.Close()
-	items := make([]contracts.Environment, 0)
-	for rows.Next() {
-		item, err := scanEnvironment(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan Environment lifecycle candidate: %w", err)
-		}
-		items = append(items, item)
-	}
-	return items, rows.Err()
-}
-
-func (s *PostgresEnvironmentStore) PurgeEnvironment(ctx context.Context, environmentID string, generation int64, _ time.Time) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin Environment purge: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	environment, err := scanEnvironment(tx.QueryRow(ctx, environmentByIDForUpdateSQL, environmentID))
-	if err != nil {
-		return mapEnvironmentError(err)
-	}
-	if environment.CurrentGeneration != generation {
-		return ports.ErrGenerationFenced
-	}
-	for _, statement := range []string{
-		`DELETE FROM sandbox.artifacts WHERE environment_id=$1`,
-		`DELETE FROM sandbox.workspace_versions WHERE environment_id=$1`,
-		`DELETE FROM sandbox.snapshots WHERE environment_id=$1`,
-		`DELETE FROM sandbox.leases WHERE environment_id=$1`,
-		`DELETE FROM sandbox.instances WHERE environment_id=$1`,
-		`DELETE FROM sandbox.environments WHERE id=$1`,
+func (store *PostgresControlPlaneStore) ReadMetricsSnapshot(
+	ctx context.Context,
+) (contracts.MetricsSnapshot, error) {
+	snapshot := contracts.MetricsSnapshot{
+		SandboxStates: map[string]int64{
+			contracts.SandboxStateCreating: 0, contracts.SandboxStateStopped: 0,
+			contracts.SandboxStateStarting: 0, contracts.SandboxStateReady: 0,
+			contracts.SandboxStateDraining: 0, contracts.SandboxStateStopping: 0,
+			contracts.SandboxStateCheckpointing: 0,
+			contracts.SandboxStateFailed:        0, contracts.SandboxStateDeleting: 0,
+			contracts.SandboxStateDeleted: 0,
+		},
+		OperationStates: map[string]int64{
+			contracts.OperationStatePending: 0, contracts.OperationStateRunning: 0,
+			contracts.OperationStateSucceeded: 0, contracts.OperationStateFailed: 0,
+			contracts.OperationStateCancelled: 0,
+		},
+		APIKeyStates: map[string]int64{
+			contracts.APIKeyStateActive: 0, contracts.APIKeyStateRevoked: 0,
+			contracts.APIKeyStateExpired: 0,
+		},
+	}
+	for query, destination := range map[string]map[string]int64{
+		`SELECT state,count(*) FROM secondbox.sandboxes GROUP BY state`:  snapshot.SandboxStates,
+		`SELECT state,count(*) FROM secondbox.operations GROUP BY state`: snapshot.OperationStates,
+		`SELECT state,count(*) FROM secondbox.api_keys GROUP BY state`:   snapshot.APIKeyStates,
 	} {
-		if _, err := tx.Exec(ctx, statement, environmentID); err != nil {
-			return fmt.Errorf("purge Environment authority rows: %w", err)
+		rows, err := store.pool.Query(ctx, query)
+		if err != nil {
+			return contracts.MetricsSnapshot{}, fmt.Errorf("SecondBox metrics projection failed: %w", err)
 		}
+		for rows.Next() {
+			var state string
+			var count int64
+			if err := rows.Scan(&state, &count); err != nil {
+				rows.Close()
+				return contracts.MetricsSnapshot{}, fmt.Errorf("SecondBox metrics projection scan failed: %w", err)
+			}
+			if _, fixed := destination[state]; fixed {
+				destination[state] = count
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return contracts.MetricsSnapshot{}, fmt.Errorf("SecondBox metrics projection iteration failed: %w", err)
+		}
+		rows.Close()
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM sandbox.workspaces WHERE id=$1`, environment.WorkspaceID); err != nil {
-		return fmt.Errorf("purge Environment workspace: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit Environment purge: %w", err)
-	}
-	return nil
+	return snapshot, nil
 }
-
-const workspaceVersionColumns = `
-	environment_id,logical_version,source_generation,terminal_turn_id,terminal_status,
-	workspace_present,dirty,content_hash,snapshot_id,snapshot_logical_version,created_at`
-const workspaceVersionByTurnSQL = `SELECT ` + workspaceVersionColumns + ` FROM sandbox.workspace_versions WHERE environment_id=$1 AND terminal_turn_id=$2`
-const workspaceVersionByNumberSQL = `SELECT ` + workspaceVersionColumns + ` FROM sandbox.workspace_versions WHERE environment_id=$1 AND logical_version=$2`
-const currentWorkspaceVersionSQL = `SELECT ` + workspaceVersionColumns + ` FROM sandbox.workspace_versions WHERE environment_id=$1 ORDER BY logical_version DESC LIMIT 1`
-const currentWorkspaceVersionForUpdateSQL = currentWorkspaceVersionSQL + ` FOR UPDATE`
-
-func scanWorkspaceVersion(row rowScanner) (contracts.WorkspaceVersion, error) {
-	var version contracts.WorkspaceVersion
-	err := row.Scan(
-		&version.EnvironmentID, &version.LogicalVersion, &version.SourceGeneration,
-		&version.TerminalTurnID, &version.TerminalStatus, &version.WorkspacePresent,
-		&version.Dirty, &version.ContentHash, &version.SnapshotID,
-		&version.SnapshotLogicalVersion, &version.CreatedAt,
-	)
-	version.ContractVersion = contracts.ContractVersionV1
-	return version, err
-}
-
-const environmentColumns = `
-	id,tenant_ref,subject_ref,environment_key,workspace_id,image_ref,toolchain_ref,
-	resource_class_id,lifecycle_policy_id,desired_state,state,current_generation,
-	current_instance_id,snapshot_id,exposed_ports_json,metadata_json,last_activity_at,created_at,updated_at`
-
-const environmentByIDSQL = `SELECT ` + environmentColumns + ` FROM sandbox.environments WHERE id=$1`
-const environmentByIDForUpdateSQL = environmentByIDSQL + ` FOR UPDATE`
-const environmentByNaturalKeySQL = `SELECT ` + environmentColumns + `
-	FROM sandbox.environments WHERE tenant_ref=$1 AND subject_ref=$2 AND environment_key=$3`
 
 type rowScanner interface {
 	Scan(...any) error
 }
 
-func scanEnvironment(row rowScanner) (contracts.Environment, error) {
-	var environment contracts.Environment
-	var portsJSON, metadataJSON []byte
-	err := row.Scan(
-		&environment.ID, &environment.TenantRef, &environment.SubjectRef, &environment.EnvironmentKey,
-		&environment.WorkspaceID, &environment.ImageRef, &environment.ToolchainRef, &environment.ResourceClassID,
-		&environment.LifecyclePolicyID, &environment.DesiredState, &environment.State, &environment.CurrentGeneration,
-		&environment.CurrentInstanceID, &environment.SnapshotID, &portsJSON, &metadataJSON,
-		&environment.LastActivityAt, &environment.CreatedAt, &environment.UpdatedAt,
-	)
-	if err != nil {
-		return contracts.Environment{}, err
-	}
-	environment.ContractVersion = contracts.ContractVersionV1
-	if err := json.Unmarshal(portsJSON, &environment.ExposedPorts); err != nil {
-		return contracts.Environment{}, fmt.Errorf("decode Environment exposed ports: %w", err)
-	}
-	if err := json.Unmarshal(metadataJSON, &environment.Metadata); err != nil {
-		return contracts.Environment{}, fmt.Errorf("decode Environment metadata: %w", err)
-	}
-	return environment, nil
+type queryRower interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
-const instanceByIDSQL = `
-	SELECT id,environment_id,generation,state,backend_ref,failure_code,prepared_at,ready_at,stopped_at,updated_at
-	FROM sandbox.instances WHERE id=$1`
+func scanProject(row rowScanner) (contracts.Project, error) {
+	var project contracts.Project
+	err := row.Scan(&project.ID, &project.Name, &project.State, &project.Revision, &project.CreatedAt, &project.UpdatedAt)
+	return project, err
+}
 
-func scanInstance(row rowScanner, instance *contracts.Instance) error {
-	var readyAt, stoppedAt *time.Time
-	err := row.Scan(
-		&instance.ID, &instance.EnvironmentID, &instance.Generation, &instance.State, &instance.BackendRef,
-		&instance.FailureCode, &instance.PreparedAt, &readyAt, &stoppedAt, &instance.UpdatedAt,
-	)
+const serviceAccountSelect = `
+	SELECT id,project_id,name,state,scopes_json,profile_grants_json,revision,created_at,updated_at
+	FROM secondbox.service_accounts`
+
+func scanServiceAccount(row rowScanner) (contracts.ServiceAccount, error) {
+	var account contracts.ServiceAccount
+	var scopesJSON, grantsJSON []byte
+	if err := row.Scan(
+		&account.ID, &account.ProjectID, &account.Name, &account.State, &scopesJSON,
+		&grantsJSON, &account.Revision, &account.CreatedAt, &account.UpdatedAt,
+	); err != nil {
+		return contracts.ServiceAccount{}, err
+	}
+	if err := json.Unmarshal(scopesJSON, &account.Scopes); err != nil {
+		return contracts.ServiceAccount{}, fmt.Errorf("SecondBox ServiceAccount scopes decoding failed: %w", err)
+	}
+	if err := json.Unmarshal(grantsJSON, &account.ProfileGrants); err != nil {
+		return contracts.ServiceAccount{}, fmt.Errorf("SecondBox ServiceAccount profile grants decoding failed: %w", err)
+	}
+	return account, nil
+}
+
+const apiKeySelect = `
+	SELECT id,service_account_id,name,prefix,state,scopes_json,expires_at,revoked_at,last_used_at,revision,created_at
+	FROM secondbox.api_keys`
+
+func scanAPIKey(row rowScanner) (contracts.APIKey, error) {
+	var key contracts.APIKey
+	var scopesJSON []byte
+	if err := row.Scan(
+		&key.ID, &key.ServiceAccountID, &key.Name, &key.Prefix, &key.State, &scopesJSON,
+		&key.ExpiresAt, &key.RevokedAt, &key.LastUsedAt, &key.Revision, &key.CreatedAt,
+	); err != nil {
+		return contracts.APIKey{}, err
+	}
+	if err := json.Unmarshal(scopesJSON, &key.Scopes); err != nil {
+		return contracts.APIKey{}, fmt.Errorf("SecondBox APIKey scopes decoding failed: %w", err)
+	}
+	return key, nil
+}
+
+const profileSelect = `
+	SELECT profile.name,profile.state,profile.revision,profile.created_at,profile.updated_at,
+	       revision.id,revision.revision_number,revision.spec_json,revision.created_at
+	FROM secondbox.profiles AS profile
+	JOIN secondbox.profile_revisions AS revision ON revision.id=profile.current_revision_id`
+
+func scanProfile(row rowScanner) (contracts.Profile, error) {
+	var profile contracts.Profile
+	var specJSON []byte
+	if err := row.Scan(
+		&profile.Name, &profile.State, &profile.Revision, &profile.CreatedAt, &profile.UpdatedAt,
+		&profile.CurrentRevision.ID, &profile.CurrentRevision.Number, &specJSON,
+		&profile.CurrentRevision.CreatedAt,
+	); err != nil {
+		return contracts.Profile{}, err
+	}
+	if err := json.Unmarshal(specJSON, &profile.CurrentRevision.Spec); err != nil {
+		return contracts.Profile{}, fmt.Errorf("SecondBox ProfileRevision spec decoding failed: %w", err)
+	}
+	return profile, nil
+}
+
+const sandboxSelect = `
+	SELECT sandbox.id,sandbox.project_id,sandbox.profile_name,sandbox.profile_revision_id,
+	       sandbox.state,sandbox.desired_state,sandbox.generation,sandbox.metadata_json,
+	       sandbox.last_activity_at,sandbox.revision,sandbox.created_at,sandbox.updated_at,sandbox.deleted_at,
+	       workspace.id,workspace.generation,workspace.retained_bytes,workspace.current_checkpoint_id,
+	       COALESCE(workspace.current_checkpoint_sha256,''),COALESCE(workspace.current_checkpoint_size_bytes,0),
+	       COALESCE(workspace.retention_state,''),workspace.created_at,workspace.updated_at,
+	       instance.id,instance.state,COALESCE(instance.guest_liveness,''),instance.termination_reason,
+	       instance.created_at,instance.updated_at,instance.ready_at,instance.guest_heartbeat_at,instance.stopped_at
+	FROM secondbox.sandboxes AS sandbox
+	JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+	LEFT JOIN secondbox.instances AS instance ON instance.id=sandbox.current_instance_id`
+
+func scanSandbox(row rowScanner) (contracts.Sandbox, error) {
+	var sandbox contracts.Sandbox
+	var metadataJSON []byte
+	var instanceID, instanceState, guestLiveness, terminationReason sql.NullString
+	var instanceCreatedAt, instanceUpdatedAt sql.NullTime
+	var readyAt, guestHeartbeatAt, stoppedAt sql.NullTime
+	if err := row.Scan(
+		&sandbox.ID, &sandbox.ProjectID, &sandbox.Profile, &sandbox.ProfileRevisionID,
+		&sandbox.State, &sandbox.DesiredState, &sandbox.Generation, &metadataJSON,
+		&sandbox.LastActivityAt, &sandbox.Revision, &sandbox.CreatedAt, &sandbox.UpdatedAt,
+		&sandbox.DeletedAt, &sandbox.Workspace.ID, &sandbox.Workspace.Generation,
+		&sandbox.Workspace.RetainedBytes, &sandbox.Workspace.CurrentCheckpointID,
+		&sandbox.Workspace.CurrentCheckpointHash, &sandbox.Workspace.CurrentCheckpointSize,
+		&sandbox.Workspace.RetentionState, &sandbox.Workspace.CreatedAt, &sandbox.Workspace.UpdatedAt,
+		&instanceID, &instanceState, &guestLiveness, &terminationReason,
+		&instanceCreatedAt, &instanceUpdatedAt, &readyAt, &guestHeartbeatAt, &stoppedAt,
+	); err != nil {
+		return contracts.Sandbox{}, err
+	}
+	if err := json.Unmarshal(metadataJSON, &sandbox.Metadata); err != nil {
+		return contracts.Sandbox{}, fmt.Errorf("SecondBox Sandbox metadata decoding failed: %w", err)
+	}
+	if instanceID.Valid {
+		sandbox.Instance = &contracts.Instance{
+			ID: instanceID.String, SandboxID: sandbox.ID, Generation: sandbox.Generation,
+			State: instanceState.String, GuestLiveness: guestLiveness.String,
+			TerminationReason: terminationReason.String, CreatedAt: instanceCreatedAt.Time,
+			UpdatedAt: instanceUpdatedAt.Time,
+		}
+		if readyAt.Valid {
+			sandbox.Instance.ReadyAt = &readyAt.Time
+		}
+		if guestHeartbeatAt.Valid {
+			sandbox.Instance.GuestHeartbeatAt = &guestHeartbeatAt.Time
+		}
+		if stoppedAt.Valid {
+			sandbox.Instance.StoppedAt = &stoppedAt.Time
+		}
+	}
+	return sandbox, nil
+}
+
+func getSandboxWithQuerier(
+	ctx context.Context,
+	querier queryRower,
+	projectID string,
+	sandboxID string,
+) (contracts.Sandbox, error) {
+	sandbox, err := scanSandbox(querier.QueryRow(ctx, sandboxSelect+`
+		WHERE sandbox.project_id=$1 AND sandbox.id=$2`, projectID, sandboxID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return contracts.Sandbox{}, ports.ErrSandboxNotFound
+	}
 	if err != nil {
-		return err
+		return contracts.Sandbox{}, fmt.Errorf("SecondBox Sandbox lookup failed: %w", err)
 	}
-	instance.ContractVersion = contracts.ContractVersionV1
-	if readyAt != nil {
-		instance.ReadyAt = *readyAt
+	return sandbox, nil
+}
+
+func encodeAuthorityLists(scopes []string, grants []string) ([]byte, []byte, error) {
+	scopesJSON, err := json.Marshal(scopes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("SecondBox scopes encoding failed: %w", err)
 	}
-	if stoppedAt != nil {
-		instance.StoppedAt = *stoppedAt
+	grantsJSON, err := json.Marshal(grants)
+	if err != nil {
+		return nil, nil, fmt.Errorf("SecondBox profile grants encoding failed: %w", err)
+	}
+	return scopesJSON, grantsJSON, nil
+}
+
+func insertAuditEvent(ctx context.Context, tx pgx.Tx, event contracts.AuditEvent) error {
+	if event.Details == nil {
+		event.Details = map[string]string{}
+	}
+	detailsJSON, err := json.Marshal(event.Details)
+	if err != nil {
+		return fmt.Errorf("SecondBox audit details encoding failed: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.audit_events (
+			id,project_id,actor_kind,actor_id,action,resource_kind,resource_id,
+			outcome,request_id,details_json,created_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		event.ID, event.ProjectID, event.ActorKind, event.ActorID, event.Action,
+		event.ResourceKind, event.ResourceID, event.Outcome, event.RequestID,
+		detailsJSON, event.CreatedAt,
+	); err != nil {
+		return fmt.Errorf("SecondBox audit insert failed: %w", err)
 	}
 	return nil
 }
 
-func scanLease(row rowScanner) (contracts.Lease, error) {
-	var lease contracts.Lease
-	err := row.Scan(
-		&lease.ID, &lease.EnvironmentID, &lease.Generation, &lease.HolderRef, &lease.State,
-		&lease.ExpiresAt, &lease.CreatedAt, &lease.UpdatedAt,
-	)
-	lease.ContractVersion = contracts.ContractVersionV1
-	return lease, err
+func insertOperation(ctx context.Context, tx pgx.Tx, projectID string, operation contracts.Operation) error {
+	var errorCode, errorMessage string
+	var retryable bool
+	if operation.Error != nil {
+		errorCode = operation.Error.Code
+		errorMessage = operation.Error.Title
+		retryable = operation.Error.Retryable
+	}
+	requestMetadataJSON, err := json.Marshal(operation.RequestMetadata)
+	if err != nil {
+		return fmt.Errorf("SecondBox Operation request metadata encoding failed: %w", err)
+	}
+	completedAt := operation.CompletedAt
+	if completedAt == nil && (operation.State == contracts.OperationStateSucceeded || operation.State == contracts.OperationStateFailed) {
+		value := operation.UpdatedAt
+		completedAt = &value
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.operations (
+			id,project_id,sandbox_id,kind,state,request_id,request_metadata_json,error_code,error_message,retryable,
+			created_at,started_at,completed_at,updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+		operation.ID, projectID, operation.SandboxID, operation.Kind, operation.State, operation.RequestID,
+		requestMetadataJSON, errorCode, errorMessage, retryable, operation.CreatedAt,
+		operation.StartedAt, completedAt, operation.UpdatedAt,
+	); err != nil {
+		return fmt.Errorf("SecondBox Operation insert failed: %w", err)
+	}
+	return nil
 }
 
-func environmentJSON(environment contracts.Environment) ([]byte, []byte, error) {
-	portsJSON, err := json.Marshal(environment.ExposedPorts)
-	if err != nil {
-		return nil, nil, fmt.Errorf("encode Environment exposed ports: %w", err)
+func ensureCompatibleRunnerPool(ctx context.Context, tx pgx.Tx, spec contracts.ProfileRevisionSpec) error {
+	var state string
+	var architecturesJSON, capabilitiesJSON []byte
+	if err := tx.QueryRow(ctx, `
+		SELECT state,architectures_json,capabilities_json
+		FROM secondbox.runner_pools WHERE name=$1 AND ready_runner_count>0`, spec.Pool).Scan(
+		&state, &architecturesJSON, &capabilitiesJSON,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ports.ErrRunnerPoolUnavailable
+		}
+		return fmt.Errorf("SecondBox runner-pool compatibility lookup failed: %w", err)
 	}
-	metadataJSON, err := json.Marshal(environment.Metadata)
-	if err != nil {
-		return nil, nil, fmt.Errorf("encode Environment metadata: %w", err)
+	if state != contracts.RunnerPoolStateReady {
+		return ports.ErrRunnerPoolUnavailable
 	}
-	return portsJSON, metadataJSON, nil
+	var architectures, capabilities []string
+	if err := json.Unmarshal(architecturesJSON, &architectures); err != nil {
+		return fmt.Errorf("SecondBox runner-pool architectures decoding failed: %w", err)
+	}
+	if err := json.Unmarshal(capabilitiesJSON, &capabilities); err != nil {
+		return fmt.Errorf("SecondBox runner-pool capabilities decoding failed: %w", err)
+	}
+	requiredCapabilities := []string{"firecracker"}
+	if spec.Checkpoint.OnStop {
+		requiredCapabilities = append(requiredCapabilities, "checkpoint")
+	}
+	if !contains(architectures, spec.Architecture) || !isScopeSubset(requiredCapabilities, capabilities) {
+		return ports.ErrRunnerPoolUnavailable
+	}
+	return nil
 }
 
-func mapEnvironmentError(err error) error {
+type quotaUsage struct {
+	sandboxes, activeInstances, cpuMillis, memoryBytes int64
+	retainedBytes, snapshots, artifacts, portSessions  int64
+	concurrentOperations                               int64
+}
+
+func readQuota(
+	ctx context.Context,
+	tx pgx.Tx,
+	table string,
+	column string,
+	identifier string,
+) (contracts.QuotaLimits, error) {
+	allowed := map[string]string{
+		"project_quotas.project_id":   "SELECT max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,max_retained_bytes,max_snapshots,max_artifacts,max_port_sessions,max_concurrent_operations FROM secondbox.project_quotas WHERE project_id=$1",
+		"profile_quotas.profile_name": "SELECT max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,max_retained_bytes,max_snapshots,max_artifacts,max_port_sessions,max_concurrent_operations FROM secondbox.profile_quotas WHERE profile_name=$1",
+	}
+	query, exists := allowed[table+"."+column]
+	if !exists {
+		return contracts.QuotaLimits{}, errors.New("SecondBox quota lookup target is invalid")
+	}
+	var quota contracts.QuotaLimits
+	if err := tx.QueryRow(ctx, query, identifier).Scan(
+		&quota.MaxSandboxes, &quota.MaxActiveInstances, &quota.MaxCPUMillis,
+		&quota.MaxMemoryBytes, &quota.MaxRetainedBytes, &quota.MaxSnapshots,
+		&quota.MaxArtifacts, &quota.MaxPortSessions, &quota.MaxConcurrentOperations,
+	); err != nil {
+		return contracts.QuotaLimits{}, fmt.Errorf("SecondBox quota lookup failed: %w", err)
+	}
+	return quota, nil
+}
+
+func readQuotaUsage(
+	ctx context.Context,
+	tx pgx.Tx,
+	predicate string,
+	identifier string,
+) (quotaUsage, error) {
+	allowed := map[string]string{
+		"sandbox.project_id=$1": `
+			SELECT count(*),
+			       count(*) FILTER (WHERE sandbox.state IN ('starting','ready','draining','stopping')),
+			       COALESCE(sum((revision.spec_json->'resources'->>'cpuMillis')::bigint),0),
+			       COALESCE(sum((revision.spec_json->'resources'->>'memoryBytes')::bigint),0),
+			       COALESCE(sum(workspace.retained_bytes),0)
+			         +(SELECT COALESCE(sum(size_bytes),0) FROM secondbox.artifacts
+			           WHERE project_id=$1 AND state<>'deleted')
+			         +(SELECT COALESCE(sum(size_bytes),0) FROM secondbox.workspace_checkpoints
+			           WHERE project_id=$1 AND state IN ('staging','verified')),
+			       (SELECT count(*) FROM secondbox.snapshots
+			        WHERE project_id=$1 AND state='published'),
+			       (SELECT count(*) FROM secondbox.artifacts
+			        WHERE project_id=$1 AND state<>'deleted'),
+			       (SELECT count(*) FROM secondbox.port_sessions WHERE project_id=$1 AND state='open'),
+			       (SELECT count(*) FROM secondbox.data_plane_sessions WHERE project_id=$1 AND state IN ('pending','running','cancelling'))
+			FROM secondbox.sandboxes AS sandbox
+			JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
+			JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+			WHERE sandbox.project_id=$1 AND sandbox.state<>'deleted'`,
+		"sandbox.profile_name=$1": `
+			SELECT count(*),
+			       count(*) FILTER (WHERE sandbox.state IN ('starting','ready','draining','stopping')),
+			       COALESCE(sum((revision.spec_json->'resources'->>'cpuMillis')::bigint),0),
+			       COALESCE(sum((revision.spec_json->'resources'->>'memoryBytes')::bigint),0),
+			       COALESCE(sum(workspace.retained_bytes),0)
+			         +(SELECT COALESCE(sum(artifact.size_bytes),0)
+			           FROM secondbox.artifacts AS artifact
+			           JOIN secondbox.sandboxes AS owned ON owned.id=artifact.sandbox_id
+			           WHERE owned.profile_name=$1 AND artifact.state<>'deleted')
+			         +(SELECT COALESCE(sum(checkpoint.size_bytes),0)
+			           FROM secondbox.workspace_checkpoints AS checkpoint
+			           JOIN secondbox.sandboxes AS owned ON owned.id=checkpoint.sandbox_id
+			           WHERE owned.profile_name=$1 AND checkpoint.state IN ('staging','verified')),
+			       (SELECT count(*) FROM secondbox.snapshots AS snapshot
+			        JOIN secondbox.sandboxes AS owned ON owned.id=snapshot.sandbox_id
+			        WHERE owned.profile_name=$1 AND snapshot.state='published'),
+			       (SELECT count(*) FROM secondbox.artifacts AS artifact
+			        JOIN secondbox.sandboxes AS owned ON owned.id=artifact.sandbox_id
+			        WHERE owned.profile_name=$1 AND artifact.state<>'deleted'),
+			       (SELECT count(*) FROM secondbox.port_sessions AS session
+			        JOIN secondbox.sandboxes AS owned ON owned.id=session.sandbox_id
+			        WHERE owned.profile_name=$1 AND session.state='open'),
+			       (SELECT count(*) FROM secondbox.data_plane_sessions AS session
+			        JOIN secondbox.sandboxes AS owned ON owned.id=session.sandbox_id
+			        WHERE owned.profile_name=$1 AND session.state IN ('pending','running','cancelling'))
+			FROM secondbox.sandboxes AS sandbox
+			JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
+			JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+			WHERE sandbox.profile_name=$1 AND sandbox.state<>'deleted'`,
+	}
+	query, exists := allowed[predicate]
+	if !exists {
+		return quotaUsage{}, errors.New("SecondBox quota usage predicate is invalid")
+	}
+	var usage quotaUsage
+	if err := tx.QueryRow(ctx, query, identifier).Scan(
+		&usage.sandboxes, &usage.activeInstances, &usage.cpuMillis, &usage.memoryBytes,
+		&usage.retainedBytes, &usage.snapshots, &usage.artifacts, &usage.portSessions,
+		&usage.concurrentOperations,
+	); err != nil {
+		return quotaUsage{}, fmt.Errorf("SecondBox quota usage lookup failed: %w", err)
+	}
+	return usage, nil
+}
+
+func quotaWouldExceed(
+	quota contracts.QuotaLimits,
+	usage quotaUsage,
+	requestedCPU int64,
+	requestedMemory int64,
+) bool {
+	return usage.sandboxes+1 > quota.MaxSandboxes ||
+		usage.activeInstances > quota.MaxActiveInstances ||
+		usage.cpuMillis+requestedCPU > quota.MaxCPUMillis ||
+		usage.memoryBytes+requestedMemory > quota.MaxMemoryBytes ||
+		usage.retainedBytes > quota.MaxRetainedBytes ||
+		usage.snapshots > quota.MaxSnapshots ||
+		usage.artifacts > quota.MaxArtifacts ||
+		usage.portSessions > quota.MaxPortSessions ||
+		usage.concurrentOperations > quota.MaxConcurrentOperations
+}
+
+func mapNotFound(err error, notFound error) error {
 	if errors.Is(err, pgx.ErrNoRows) {
-		return ports.ErrEnvironmentNotFound
+		return notFound
 	}
 	return err
+}
+
+func contains(values []string, candidate string) bool {
+	for _, value := range values {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func isScopeSubset(subset []string, superset []string) bool {
+	for _, candidate := range subset {
+		if !contains(superset, candidate) {
+			return false
+		}
+	}
+	return true
+}
+
+func intersectScopes(first []string, second []string) []string {
+	result := make([]string, 0)
+	for _, scope := range first {
+		if contains(second, scope) {
+			result = append(result, scope)
+		}
+	}
+	sort.Strings(result)
+	return result
 }

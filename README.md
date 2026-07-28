@@ -1,51 +1,58 @@
-# Sandbox Service
+# SecondBox
 
-Sandbox Service is the durable control plane for isolated compute Environments. An Environment and its workspace survive Instance stop, loss, replacement, and service restart. Instances are generation-fenced replaceable compute.
+SecondBox is a self-hostable network service for durable, isolated development sandboxes. The current unprivileged Go control plane exposes the v1 HTTP resource API and mTLS Runner control endpoint, and stores desired state in PostgreSQL. The repository also contains the versioned runner protocol, credential authority, scheduler, reconciliation logic, and a separately built Firecracker runner.
 
-The service supports three built-in lifecycle policies:
+A `Sandbox` is the durable public resource and its running `Instance` is replaceable compute fenced to one Sandbox generation. `secondboxd` composes verified S3-compatible checkpoint publication and restore, immutable named Snapshots of committed stopped-state disk, and immutable application Artifact storage. Runner identity administration is available as a separate CLI, and Compose contains an optional same-host Runner profile, but production RunnerPool provisioning, KVM qualification, and remote multi-runner qualification remain separate requirements.
 
-- `agent-compartment`: retained workspace, disposable compute, idle shutdown, and bounded retention.
-- `chat-thread`: retained thread workspace with Chat-specific idle shutdown and retention.
-- `coding-environment`: explicit start and stop, retained workspace, long retention, and compute that may remain active without a wake owner.
+SecondBox v1 implements Firecracker only. It does not ship built-in profiles: operators explicitly create profiles that fix image, toolchain, resource, lifecycle, storage, networking, execution, and runner-pool policy before clients can create Sandboxes.
 
-The production compute adapter calls a privileged Sandbox Host through a provider-neutral internal contract. The service never receives Firecracker, KVM, container, host-path, or network implementation details.
+## Repository layout
 
-Required environment variables are documented by `internal/config.Config`. They intentionally have no application defaults.
+- `cmd/secondboxd` — unprivileged control plane
+- `cmd/secondbox` — administrative and application CLI
+- `contracts` — canonical public, runner, and guest-agent protocols
+- `internal` — control-plane domain, API, scheduling, reconciliation, and persistence
+- `migrations/postgres` — SecondBox database migration lineage
+- `runner` — privileged Firecracker runner and guest agent
+- `sdk` — generated transports and handwritten client helpers
+- `deploy` — Compose, systemd, and deployment examples
+- `docs/design` — current architecture and compatibility contracts
+- `docs/operations` — installation, qualification, backup, and diagnostics
 
-The authenticated `/metrics` endpoint exports fixed-cardinality lifecycle, Instance failure, retained-workspace, and artifact usage metrics. Tenant identifiers, provider details, backend references, and Sandbox Host credentials are never metric dimensions.
+## Validation
 
-## Operations
-
-The Sandbox Service owns backup and recovery of its `sandbox` PostgreSQL schema together with opaque Sandbox Host state. A valid recovery point requires both parts from the same quiesced window.
-
-```sh
-SANDBOX_BACKUP_DATABASE_URL=postgresql://... \
-SANDBOX_HOST_STATE_DIR=/var/lib/secondstack/sandbox-host \
-SANDBOX_BACKUP_DIR=/var/backups/secondstack/sandbox \
-scripts/backup.sh
-
-SANDBOX_RESTORE_DATABASE_URL=postgresql://... \
-SANDBOX_RESTORE_BUNDLE=/var/backups/secondstack/sandbox/sandbox-backup-....tar \
-SANDBOX_RESTORE_STAGE_DIR=/var/tmp \
-scripts/restore-drill.sh
-```
-
-The backup command hashes the database dump and Host state archive, writes a versioned manifest, then extracts and verifies the finished bundle. The restore drill verifies both checksum layers, restores into a throwaway database, confirms the `sandbox` schema, and extracts Host state only into a temporary drill directory.
-
-Operational logs are JSON Lines at `SANDBOX_SERVICE_LOG_PATH`. The Sandbox Host writes its separate provider log at `SANDBOX_HOST_LOG_PATH`. Restart the dependency chain with `./force_restart.sh sandbox-host`; the service graph recreates the Host network sidecar, waits for Sandbox Service health, and then recreates Agent and Chat consumers.
-
-Correlate Environment, Instance, generation, lease, workspace-version, and artifact IDs with the originating wake or trace ID. Sandbox Service owns lifecycle state; Sandbox Host logs are execution evidence, not a second control plane. See [Agent platform service boundaries](../../docs/design/agent-platform-service-boundaries.md).
+The non-KVM gate runs from the repository root:
 
 ```sh
-SANDBOX_SERVICE_TEST_DATABASE_URL=postgresql://.../sandbox_service_test \
-just test
-just verify-generated
-
-cd host
-just test
-just verify-microvm-images /absolute/path/to/signed/artifacts
+just test-non-kvm
 ```
 
-`just test` resets the `sandbox` schema in `SANDBOX_SERVICE_TEST_DATABASE_URL` for PostgreSQL EnvironmentStore conformance. The database must be disposable and its name must contain `test` or `conformance`; the suite refuses canonical database names.
+CI runs the same gate through `just test-clean-clone`. That command refuses a dirty source tree and executes the complete portable matrix from an independently cloned commit with isolated Go and npm caches.
 
-`host/` is a separate Go module and image boundary. It owns the `sandbox-host` and `sandbox-guest-agent` commands, the Firecracker adapter, signed microVM image pipeline, privileged host scripts, and deployment unit. Provider operations and image construction are documented in [Firecracker runtime operations](host/docs/operations/firecracker-runtime.md), and the unsupported Kubernetes boundary is documented in [Kubernetes Sandbox Host](host/docs/operations/kubernetes-sandbox-host.md).
+Firecracker and multi-runner qualification require dedicated Linux hosts that satisfy the prerequisites in [qualification gates](docs/operations/qualification.md):
+
+```sh
+just test-firecracker
+just test-multirunner
+```
+
+## Development deployment
+
+The Compose deployment starts the unprivileged control plane and offers loopback-only PostgreSQL and RustFS S3-compatible dependencies under the `development` profile. It never embeds a shared credential; bootstrap creates a private environment file with unique generated secrets.
+
+```sh
+install -d -m 700 .tmp/secondbox-deploy
+just deploy-bootstrap .tmp/secondbox-deploy/environment
+just deploy-validate .tmp/secondbox-deploy/environment
+docker build --tag secondbox-control-plane:development .
+docker compose --env-file .tmp/secondbox-deploy/environment --file deploy/compose.yml --profile development up -d postgres object-store
+docker compose --env-file .tmp/secondbox-deploy/environment --file deploy/compose.yml up -d control-plane
+```
+
+Read [deployment and runtime operations](docs/operations/deployment.md) before exposing the API or using external PostgreSQL. The supplied RustFS service is a loopback-only development implementation of the object-store dependency consumed by checkpoint and Artifact operations. The coordinated backup command and isolated restore drill prove portable PostgreSQL/object-store recovery and fresh-Runner checkpoint materialization; they do not replace provider durability or packaged KVM and multi-runner qualification.
+
+The implementation plan is tracked in [SecondBox standalone service](docs/plans/2026-07-28-secondbox-standalone-service.md).
+
+## License
+
+SecondBox source is licensed under the MIT License. Third-party components and execution assets retain their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

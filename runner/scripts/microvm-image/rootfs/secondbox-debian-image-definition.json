@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "kind": "secondbox.microvm-rootfs",
+  "guestProtocol": {
+    "minimum": 1,
+    "maximum": 1
+  },
+  "debian": {
+    "suite": "bookworm",
+    "architecture": "amd64",
+    "snapshot": "https://snapshot.debian.org/archive/debian/20250701T000000Z/",
+    "aptCheckValidUntil": false,
+    "debootstrapInclude": [
+      "bash",
+      "ca-certificates",
+      "locales",
+      "python3",
+      "tzdata"
+    ]
+  }
+}

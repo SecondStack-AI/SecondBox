@@ -1,162 +1,295 @@
-// Package ports defines Sandbox Service interfaces in Sandbox domain language.
+// Package ports defines SecondBox control-plane persistence boundaries.
 package ports
 
 import (
 	"context"
 	"errors"
-	"io"
 	"time"
 
-	"secondstack/sandbox-service/pkg/contracts"
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
 var (
-	ErrEnvironmentNotFound = errors.New("sandbox environment not found")
-	ErrLeaseNotFound       = errors.New("sandbox lease not found")
-	ErrGenerationFenced    = errors.New("sandbox generation fenced")
-	ErrLeaseExpired        = errors.New("sandbox lease expired")
-	ErrLeaseReleased       = errors.New("sandbox lease released")
-	ErrEnvironmentBusy     = errors.New("sandbox environment has active leases")
+	ErrAuthenticationFailed    = errors.New("SecondBox credential authentication failed")
+	ErrAuthorizationDenied     = errors.New("SecondBox authorization denied")
+	ErrProjectNotFound         = errors.New("SecondBox Project not found")
+	ErrServiceAccountNotFound  = errors.New("SecondBox ServiceAccount not found")
+	ErrAPIKeyNotFound          = errors.New("SecondBox APIKey not found")
+	ErrProfileNotFound         = errors.New("SecondBox Profile not found")
+	ErrProfileDisabled         = errors.New("SecondBox Profile is disabled")
+	ErrProfileNotGranted       = errors.New("SecondBox Profile is not granted")
+	ErrRunnerPoolNotFound      = errors.New("SecondBox RunnerPool not found")
+	ErrRunnerPoolExists        = errors.New("SecondBox RunnerPool already exists")
+	ErrRunnerNotFound          = errors.New("SecondBox Runner not found")
+	ErrRunnerPoolUnavailable   = errors.New("SecondBox compatible runner pool unavailable")
+	ErrSandboxNotFound         = errors.New("SecondBox Sandbox not found")
+	ErrIdempotencyConflict     = errors.New("SecondBox idempotency key payload conflict")
+	ErrQuotaExceeded           = errors.New("SecondBox quota exceeded")
+	ErrRevisionConflict        = errors.New("SecondBox resource revision conflict")
+	ErrLifecycleUnavailable    = errors.New("SecondBox lifecycle unavailable without a runner assignment")
+	ErrGenerationFenced        = errors.New("SecondBox Sandbox generation is fenced")
+	ErrLeaseNotFound           = errors.New("SecondBox Lease not found")
+	ErrLeaseInactive           = errors.New("SecondBox Lease is not active")
+	ErrActivitySessionNotFound = errors.New("SecondBox activity session not found")
+	ErrMaterializationConflict = errors.New("SecondBox Workspace already has an active materialization")
+	ErrCheckpointIntegrity     = errors.New("SecondBox Workspace checkpoint integrity failed")
+	ErrCheckpointNotFound      = errors.New("SecondBox Workspace checkpoint not found")
+	ErrSnapshotNotFound        = errors.New("SecondBox Snapshot not found")
+	ErrSnapshotUnavailable     = errors.New("SecondBox Snapshot requires stopped committed disk state")
+	ErrArtifactIntegrity       = errors.New("SecondBox Artifact integrity failed")
+	ErrArtifactNotFound        = errors.New("SecondBox Artifact not found")
+	ErrArtifactStorage         = errors.New("SecondBox Artifact storage unavailable")
+	ErrPortSessionNotFound     = errors.New("SecondBox PortSession not found")
+	ErrPortPolicyDenied        = errors.New("SecondBox exposed port is not approved by the pinned Profile")
+	ErrPortTokenInvalid        = errors.New("SecondBox port tunnel token is invalid")
+	ErrPortTokenConsumed       = errors.New("SecondBox port tunnel token was already consumed")
+	ErrPortBackpressure        = errors.New("SecondBox port tunnel has no available byte credit")
+	ErrWaitExpired             = errors.New("SecondBox Sandbox wait deadline expired")
 )
 
-// ResolveEnvironmentInput captures validated durable Environment intent.
-type ResolveEnvironmentInput struct {
-	Environment contracts.Environment
-	Workspace   contracts.Workspace
+// StoredAPIKey carries the keyed hash only across the private persistence port.
+type StoredAPIKey struct {
+	APIKey         contracts.APIKey
+	ProjectID      string
+	CredentialHash []byte
+	UpdatedAt      time.Time
 }
 
-// StartGenerationResult reserves one fenced generation for a replaceable Instance.
-type StartGenerationResult struct {
-	Environment contracts.Environment
-	Instance    contracts.Instance
-	Created     bool
+// CreateSandboxInput contains server-resolved identity and transaction evidence.
+type CreateSandboxInput struct {
+	Principal       contracts.Principal
+	Sandbox         contracts.Sandbox
+	Workspace       contracts.Workspace
+	Operation       contracts.Operation
+	IdempotencyKey  string
+	RequestHash     string
+	IdempotencyEnds time.Time
+	Audit           contracts.AuditEvent
 }
 
-// ExecutionRevoker fences Agent execution after Sandbox commits an Agent-compartment stop.
-type ExecutionRevoker interface {
-	RevokeEnvironmentExecutions(context.Context, string) error
+// LifecycleIntentInput records desired state and one durable asynchronous operation.
+type LifecycleIntentInput struct {
+	Principal        contracts.Principal
+	SandboxID        string
+	DesiredState     string
+	Operation        contracts.Operation
+	Audit            contracts.AuditEvent
+	Now              time.Time
+	IdempotencyKey   string
+	RequestHash      string
+	IdempotencyEnds  time.Time
+	ExpectedRevision int64
 }
 
-// EnvironmentStore persists Environment intent and fenced lifecycle evidence.
-type EnvironmentStore interface {
+// LeaseInput creates or renews bounded activity authority.
+type LeaseInput struct {
+	Lease            contracts.Lease
+	ProjectID        string
+	SandboxID        string
+	Generation       int64
+	ServiceAccountID string
+	ExpiresAt        time.Time
+	Now              time.Time
+	IdempotencyKey   string
+	RequestHash      string
+	IdempotencyEnds  time.Time
+}
+
+// GenerationInput fences a lifecycle report to current Sandbox authority.
+type GenerationInput struct {
+	ProjectID  string
+	SandboxID  string
+	Generation int64
+	Now        time.Time
+}
+
+// ActivityInput records useful work without conflating guest liveness.
+type ActivityInput struct {
+	GenerationInput
+	Session          contracts.ActivitySession
+	LeaseID          string
+	ServiceAccountID string
+	IdempotencyKey   string
+	RequestHash      string
+}
+
+// MaterializationInput creates exclusive runner-local writer authority.
+type MaterializationInput struct {
+	Materialization             contracts.WorkspaceMaterialization
+	ExpectedWorkspaceGeneration int64
+}
+
+// CheckpointPublicationInput atomically publishes verified immutable bytes.
+type CheckpointPublicationInput struct {
+	Checkpoint                  contracts.WorkspaceCheckpoint
+	StorageKey                  string
+	ExpectedWorkspaceGeneration int64
+}
+
+// SnapshotCreationInput retains the current published checkpoint under immutable metadata.
+type SnapshotCreationInput struct {
+	Snapshot         contracts.Snapshot
+	IdempotencyKey   string
+	RequestHash      string
+	IdempotencyEnds  time.Time
+	ExpectedRevision int64
+	Audit            contracts.AuditEvent
+}
+
+// SnapshotRetentionInput ends one immutable metadata root idempotently.
+type SnapshotRetentionInput struct {
+	ProjectID       string
+	SnapshotID      string
+	IdempotencyKey  string
+	RequestHash     string
+	IdempotencyEnds time.Time
+	Now             time.Time
+	Audit           contracts.AuditEvent
+}
+
+// ArtifactPublicationInput publishes immutable application exchange evidence.
+type ArtifactPublicationInput struct {
+	Artifact           contracts.Artifact
+	StorageKey         string
+	ExpectedGeneration int64
+	ServiceAccountID   string
+	LeaseID            string
+	IdempotencyKey     string
+	RequestHash        string
+	IdempotencyEnds    time.Time
+	Audit              contracts.AuditEvent
+}
+
+// ArtifactObject binds public metadata to its private immutable provider key.
+type ArtifactObject struct {
+	Artifact   contracts.Artifact
+	StorageKey string
+}
+
+// ArtifactRetentionInput ends public reachability idempotently before provider garbage collection.
+type ArtifactRetentionInput struct {
+	ProjectID       string
+	ArtifactID      string
+	IdempotencyKey  string
+	RequestHash     string
+	IdempotencyEnds time.Time
+	Now             time.Time
+	Audit           contracts.AuditEvent
+}
+
+// GarbageObject is private provider evidence for one unreachable immutable object.
+type GarbageObject struct {
+	Kind       string
+	ID         string
+	StorageKey string
+	SHA256     string
+	SizeBytes  int64
+}
+
+// LifecycleReconcileClaim is one revision-fenced desired-state work item.
+type LifecycleReconcileClaim struct {
+	SandboxID                 string
+	WorkerID                  string
+	Revision                  int64
+	ObservedState             string
+	DesiredState              string
+	IntentKind                string
+	IntentTerminationReason   string
+	MaterializationState      string
+	CheckpointState           string
+	StopEffectState           string
+	GuestLiveness             string
+	InstanceTerminationReason string
+	HasInstance               bool
+	ActiveSessions            int64
+	CheckpointOnStop          bool
+	ForceCheckpoint           bool
+	DrainStartedAt            *time.Time
+	ReadyAt                   *time.Time
+	LastActivityAt            *time.Time
+	DrainGraceSeconds         int64
+	IdleSeconds               int64
+	MaximumDurationSeconds    int64
+}
+
+// LifecycleStore persists generation-fenced lifecycle and durability evidence.
+type LifecycleStore interface {
+	GetSandboxLifecyclePolicy(context.Context, string, string) (contracts.LifecyclePolicy, contracts.CheckpointPolicy, error)
+	SetSandboxDesiredState(context.Context, LifecycleIntentInput) (contracts.Operation, error)
+	AcquireLease(context.Context, LeaseInput) (contracts.Lease, error)
+	GetLease(context.Context, string, string, string) (contracts.Lease, error)
+	GetLeaseByID(context.Context, string, string) (contracts.Lease, error)
+	RenewLease(context.Context, LeaseInput) (contracts.Lease, error)
+	ReleaseLease(context.Context, LeaseInput) (contracts.Lease, error)
+	PingGuest(context.Context, GenerationInput, string) (contracts.Instance, error)
+	ReadSandboxInspection(context.Context, GenerationInput) (contracts.SandboxInspection, error)
+	TouchActivity(context.Context, ActivityInput) (time.Time, error)
+	OpenActivitySession(context.Context, ActivityInput) (contracts.ActivitySession, error)
+	CloseActivitySession(context.Context, ActivityInput) (contracts.ActivitySession, error)
+	AcquireMaterialization(context.Context, MaterializationInput) (contracts.WorkspaceMaterialization, error)
+	ConfirmMaterialization(context.Context, MaterializationInput, time.Time) (contracts.WorkspaceMaterialization, error)
+	ReleaseMaterialization(context.Context, MaterializationInput, map[string]string, time.Time) (contracts.WorkspaceMaterialization, error)
+	StageCheckpoint(context.Context, CheckpointPublicationInput) (contracts.WorkspaceCheckpoint, error)
+	VerifyCheckpoint(context.Context, CheckpointPublicationInput, time.Time) (contracts.WorkspaceCheckpoint, error)
+	PublishCheckpoint(context.Context, CheckpointPublicationInput, time.Time) (contracts.WorkspaceCheckpoint, error)
+	CreateSnapshot(context.Context, SnapshotCreationInput) (contracts.Snapshot, error)
+	ListSnapshots(context.Context, string, string, int, string, time.Time) (contracts.SnapshotPage, error)
+	GetSnapshot(context.Context, string, string, time.Time) (contracts.Snapshot, error)
+	EndSnapshotRetention(context.Context, SnapshotRetentionInput) error
+	StageArtifact(context.Context, ArtifactPublicationInput) (contracts.Artifact, error)
+	PublishArtifact(context.Context, ArtifactPublicationInput, time.Time) (contracts.Artifact, error)
+	ListArtifacts(context.Context, string, string, int, string, time.Time) (contracts.ArtifactPage, error)
+	GetArtifactObject(context.Context, string, string, time.Time) (ArtifactObject, error)
+	EndArtifactRetention(context.Context, ArtifactRetentionInput) error
+	ListGarbageObjectsDue(context.Context, time.Time, time.Duration, int) ([]GarbageObject, error)
+	CompleteGarbageObject(context.Context, GarbageObject, time.Time) error
+	ClaimLifecycle(context.Context, string, time.Time, time.Duration) (LifecycleReconcileClaim, bool, error)
+	ApplyLifecycleAction(context.Context, LifecycleReconcileClaim, string, string, time.Time, time.Time) error
+}
+
+// ControlPlaneStore persists standalone SecondBox identity, policy, and Sandbox intent.
+type ControlPlaneStore interface {
+	LifecycleStore
 	Ping(context.Context) error
-	CountRetainedWorkspaces(context.Context) (int64, error)
-	GetWorkspaceUsage(context.Context, string, string) (contracts.WorkspaceUsage, error)
-	ResolveEnvironment(context.Context, ResolveEnvironmentInput) (contracts.Environment, bool, error)
-	GetEnvironment(context.Context, string) (contracts.Environment, error)
-	GetWorkspace(context.Context, string) (contracts.Workspace, error)
-	GetCurrentInstance(context.Context, string) (*contracts.Instance, error)
-	ListInstances(context.Context, string) ([]contracts.Instance, error)
-	GetResourceClass(context.Context, string) (contracts.ResourceClass, error)
-	ListResourceClasses(context.Context) ([]contracts.ResourceClass, error)
-	GetLifecyclePolicy(context.Context, string) (contracts.LifecyclePolicy, error)
-	ListLifecyclePolicies(context.Context) ([]contracts.LifecyclePolicy, error)
-	BeginStart(context.Context, string, int64, string, time.Time) (StartGenerationResult, error)
-	MarkInstanceReady(context.Context, string, string, int64, string, time.Time) (contracts.Environment, error)
-	MarkInstanceFailed(context.Context, string, string, int64, string, time.Time) error
-	BeginStop(context.Context, string, int64, time.Time) (contracts.Environment, *contracts.Instance, error)
-	CompleteStop(context.Context, string, string, int64, string, time.Time) (contracts.Environment, error)
-	MarkInstanceLost(context.Context, string, string, int64, time.Time) (contracts.Environment, error)
-	TouchEnvironment(context.Context, string, int64, time.Time) error
-	CreateLease(context.Context, contracts.Lease, time.Time) (contracts.Lease, error)
-	GetLease(context.Context, string) (contracts.Lease, error)
-	HasActiveLease(context.Context, string, time.Time) (bool, error)
-	RenewLease(context.Context, string, time.Time, time.Time) (contracts.Lease, error)
-	ReleaseLease(context.Context, string, time.Time) (contracts.Lease, error)
-	SaveSnapshot(context.Context, contracts.Snapshot, time.Time) (contracts.Snapshot, error)
-	GetSnapshot(context.Context, string) (contracts.Snapshot, error)
-	CommitWorkspaceVersion(context.Context, contracts.WorkspaceVersion) (contracts.WorkspaceVersion, error)
-	GetCurrentWorkspaceVersion(context.Context, string) (*contracts.WorkspaceVersion, error)
-	GetWorkspaceVersion(context.Context, string, int64) (contracts.WorkspaceVersion, error)
-	SaveArtifact(context.Context, contracts.Artifact, time.Time) (contracts.Artifact, error)
-	ListLifecycleCandidates(context.Context, time.Time, int) ([]contracts.Environment, error)
-	PurgeEnvironment(context.Context, string, int64, time.Time) error
-}
+	Close()
+	InitializeBootstrapAdmin(context.Context, []byte, time.Time, contracts.AuditEvent) error
+	AuthenticateBootstrapAdmin(context.Context, []byte, time.Time, contracts.AuditEvent) (contracts.Principal, error)
 
-// ComputeRequest contains only provider-neutral, bounded compute intent.
-type ComputeRequest struct {
-	Environment   contracts.Environment   `json:"environment"`
-	Workspace     contracts.Workspace     `json:"workspace"`
-	ResourceClass contracts.ResourceClass `json:"resourceClass"`
-	Instance      contracts.Instance      `json:"instance"`
-}
+	CreateProject(context.Context, contracts.Project, contracts.QuotaLimits, contracts.AuditEvent) (contracts.Project, error)
+	UpdateProject(context.Context, string, contracts.UpdateProjectRequest, int64, time.Time, contracts.AuditEvent) (contracts.Project, error)
+	GetProject(context.Context, string) (contracts.Project, error)
+	ListProjects(context.Context, int) ([]contracts.Project, error)
 
-// PreparedCompute is opaque evidence returned by Sandbox Host preparation.
-type PreparedCompute struct {
-	OperationRef string `json:"operationRef"`
-}
+	CreateServiceAccount(context.Context, contracts.ServiceAccount, contracts.AuditEvent) (contracts.ServiceAccount, error)
+	UpdateServiceAccount(context.Context, string, string, contracts.UpdateServiceAccountRequest, int64, time.Time, contracts.AuditEvent) (contracts.ServiceAccount, error)
+	GetServiceAccount(context.Context, string, string) (contracts.ServiceAccount, error)
+	ListServiceAccounts(context.Context, string, int) ([]contracts.ServiceAccount, error)
 
-// RunningCompute is opaque evidence for compute accepted by Sandbox Host.
-type RunningCompute struct {
-	BackendRef string `json:"backendRef"`
-	State      string `json:"state"`
-}
+	CreateAPIKey(context.Context, StoredAPIKey, contracts.AuditEvent) (contracts.APIKey, error)
+	RotateAPIKey(context.Context, string, string, string, string, []byte, time.Time, contracts.AuditEvent) (contracts.APIKey, error)
+	RevokeAPIKey(context.Context, string, string, string, time.Time, contracts.AuditEvent) (contracts.APIKey, error)
+	GetAPIKey(context.Context, string, string, string) (contracts.APIKey, error)
+	ListAPIKeys(context.Context, string, string, int) ([]contracts.APIKey, error)
+	AuthenticateAPIKey(context.Context, string, []byte, time.Time, contracts.AuditEvent) (contracts.Principal, error)
 
-// ComputeIdentity selects one exact replaceable Instance generation.
-type ComputeIdentity struct {
-	EnvironmentID string `json:"environmentId"`
-	InstanceID    string `json:"instanceId"`
-	Generation    int64  `json:"generation"`
-	BackendRef    string `json:"backendRef"`
-}
+	CreateProfile(context.Context, contracts.Profile, contracts.QuotaLimits, contracts.AuditEvent) (contracts.Profile, error)
+	ReviseProfile(context.Context, string, contracts.ProfileRevision, int64, time.Time, contracts.AuditEvent) (contracts.Profile, error)
+	DisableProfile(context.Context, string, int64, time.Time, contracts.AuditEvent) (contracts.Profile, error)
+	GetProfile(context.Context, string) (contracts.Profile, error)
+	ListProfiles(context.Context, int) ([]contracts.Profile, error)
+	CreateRunnerPool(context.Context, contracts.RunnerPool, contracts.AuditEvent) (contracts.RunnerPool, error)
+	UpdateRunnerPool(context.Context, string, contracts.UpdateRunnerPoolRequest, int64, time.Time, contracts.AuditEvent) (contracts.RunnerPool, error)
+	GetRunnerPool(context.Context, string) (contracts.RunnerPool, error)
+	ListRunnerPools(context.Context, int) ([]contracts.RunnerPool, error)
+	GetRunner(context.Context, string) (contracts.Runner, error)
+	ListRunners(context.Context, string, int) ([]contracts.Runner, error)
+	RegisterRunnerPool(context.Context, contracts.RunnerPool) error
 
-// ComputeStatus is provider-neutral Sandbox Host lifecycle state.
-type ComputeStatus struct {
-	State string `json:"state"`
-}
+	CreateSandbox(context.Context, CreateSandboxInput) (contracts.Sandbox, contracts.Operation, bool, error)
+	GetSandbox(context.Context, string, string) (contracts.Sandbox, error)
+	ListSandboxes(context.Context, string, int) ([]contracts.Sandbox, error)
+	GetOperation(context.Context, string, string) (contracts.Operation, error)
 
-// CheckpointResult is immutable opaque snapshot evidence returned by Sandbox Host.
-type CheckpointResult struct {
-	OpaqueRef   string `json:"opaqueRef"`
-	ContentHash string `json:"contentHash"`
-	SizeBytes   int64  `json:"sizeBytes"`
-}
-
-// ArtifactExchangeInput selects a bounded artifact from one exact generation.
-type ArtifactExchangeInput struct {
-	Identity  ComputeIdentity   `json:"identity"`
-	SourceRef string            `json:"sourceRef"`
-	Name      string            `json:"name"`
-	MimeType  string            `json:"mimeType"`
-	Metadata  map[string]string `json:"metadata"`
-}
-
-// ArtifactExchangeResult is opaque immutable artifact evidence returned by Sandbox Host.
-type ArtifactExchangeResult struct {
-	OpaqueRef string `json:"opaqueRef"`
-	SizeBytes int64  `json:"sizeBytes"`
-	SHA256    string `json:"sha256"`
-}
-
-type ExecuteInput struct {
-	Identity  ComputeIdentity          `json:"identity"`
-	Operation contracts.ExecuteRequest `json:"operation"`
-}
-
-type WorkspaceFileInput struct {
-	Identity ComputeIdentity
-	Path     string
-}
-
-type WorkspaceFileWriteResult struct {
-	SizeBytes int64
-	SHA256    string
-}
-
-// ComputeBackend controls replaceable compute without exposing provider implementation types.
-type ComputeBackend interface {
-	Ready(context.Context) error
-	Prepare(context.Context, ComputeRequest) (PreparedCompute, error)
-	Start(context.Context, PreparedCompute, ComputeRequest) (RunningCompute, error)
-	Inspect(context.Context, ComputeIdentity) (ComputeStatus, error)
-	Stop(context.Context, ComputeIdentity) error
-	Destroy(context.Context, ComputeIdentity) error
-	Purge(context.Context, contracts.Environment, contracts.Workspace) error
-	Checkpoint(context.Context, ComputeIdentity) (CheckpointResult, error)
-	CheckpointWorkspace(context.Context, contracts.Environment, contracts.Workspace) (CheckpointResult, error)
-	MaterializeWorkspace(context.Context, contracts.Environment, contracts.Workspace, contracts.Snapshot) error
-	ExchangeArtifact(context.Context, ArtifactExchangeInput) (ArtifactExchangeResult, error)
-	Execute(context.Context, ExecuteInput) (contracts.ExecuteResult, error)
-	OpenWorkspaceFile(context.Context, WorkspaceFileInput) (io.ReadCloser, int64, error)
-	PutWorkspaceFile(context.Context, WorkspaceFileInput, io.Reader) (WorkspaceFileWriteResult, error)
+	ListAuditEvents(context.Context, string, int) ([]contracts.AuditEvent, error)
+	ReadMetricsSnapshot(context.Context) (contracts.MetricsSnapshot, error)
 }

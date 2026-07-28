@@ -1,0 +1,17 @@
+{
+  "name": "secondbox-contract-validation",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build:sdk-typescript": "npm --prefix sdk/typescript run build",
+    "pack:sdk-typescript": "npm pack --dry-run ./sdk/typescript",
+    "test:sdk-typescript": "node --test sdk/typescript/*.test.ts",
+    "typecheck:sdk-typescript": "tsc -p sdk/typescript/tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "ajv": "8.20.0",
+    "typescript": "7.0.2"
+  }
+}

@@ -1,0 +1,133 @@
+{
+  "schema_generation": 1,
+  "host_window": {
+    "minimum": 1,
+    "maximum": 1
+  },
+  "handshake_cases": [
+    {
+      "name": "current_generation_and_features",
+      "guest_minimum": 1,
+      "guest_maximum": 1,
+      "mandatory_features": [
+        "streaming_exec",
+        "descriptor_pinned_filesystem"
+      ],
+      "guest_features": [
+        "streaming_exec",
+        "descriptor_pinned_filesystem",
+        "activity_events"
+      ],
+      "binding_matches": true,
+      "selected_generation": 1,
+      "rejection": ""
+    },
+    {
+      "name": "future_guest",
+      "guest_minimum": 2,
+      "guest_maximum": 2,
+      "mandatory_features": [],
+      "guest_features": [
+        "streaming_exec"
+      ],
+      "binding_matches": true,
+      "selected_generation": 0,
+      "rejection": "version_unsupported"
+    },
+    {
+      "name": "missing_mandatory_feature",
+      "guest_minimum": 1,
+      "guest_maximum": 1,
+      "mandatory_features": [
+        "checkpoint_freeze"
+      ],
+      "guest_features": [
+        "streaming_exec"
+      ],
+      "binding_matches": true,
+      "selected_generation": 0,
+      "rejection": "feature_unsupported"
+    },
+    {
+      "name": "connection_binding_mismatch",
+      "guest_minimum": 1,
+      "guest_maximum": 1,
+      "mandatory_features": [],
+      "guest_features": [
+        "streaming_exec"
+      ],
+      "binding_matches": false,
+      "selected_generation": 0,
+      "rejection": "binding_mismatch"
+    }
+  ],
+  "frame_identity_cases": [
+    {
+      "name": "next_frame",
+      "connection_nonce": "nonce-a",
+      "sandbox_generation": 4,
+      "operation_id": "operation-1",
+      "stream_id": "stream-1",
+      "previous_sequence": 1,
+      "incoming_sequence": 2,
+      "outcome": "accept"
+    },
+    {
+      "name": "duplicate_frame",
+      "connection_nonce": "nonce-a",
+      "sandbox_generation": 4,
+      "operation_id": "operation-1",
+      "stream_id": "stream-1",
+      "previous_sequence": 2,
+      "incoming_sequence": 2,
+      "outcome": "duplicate"
+    },
+    {
+      "name": "reordered_frame",
+      "connection_nonce": "nonce-a",
+      "sandbox_generation": 4,
+      "operation_id": "operation-1",
+      "stream_id": "stream-1",
+      "previous_sequence": 3,
+      "incoming_sequence": 2,
+      "outcome": "stale"
+    },
+    {
+      "name": "sequence_gap",
+      "connection_nonce": "nonce-a",
+      "sandbox_generation": 4,
+      "operation_id": "operation-1",
+      "stream_id": "stream-1",
+      "previous_sequence": 2,
+      "incoming_sequence": 4,
+      "outcome": "gap"
+    },
+    {
+      "name": "wrong_generation",
+      "connection_nonce": "nonce-a",
+      "sandbox_generation": 3,
+      "operation_id": "operation-1",
+      "stream_id": "stream-1",
+      "previous_sequence": 1,
+      "incoming_sequence": 2,
+      "outcome": "binding_mismatch"
+    },
+    {
+      "name": "wrong_connection_nonce",
+      "connection_nonce": "nonce-old",
+      "sandbox_generation": 4,
+      "operation_id": "operation-1",
+      "stream_id": "stream-1",
+      "previous_sequence": 1,
+      "incoming_sequence": 2,
+      "outcome": "binding_mismatch"
+    }
+  ],
+  "terminal_outcomes": [
+    "exited",
+    "spawn_failed",
+    "deadline_exceeded",
+    "cancelled",
+    "output_exhausted"
+  ]
+}
