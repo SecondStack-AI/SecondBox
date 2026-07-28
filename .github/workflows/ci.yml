@@ -44,10 +44,16 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24.18.0
-      - name: Install protocol and source-scan tools
+      - name: Install source-scan tool
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends protobuf-compiler ripgrep
+          sudo apt-get install -y --no-install-recommends ripgrep
+      - name: Install pinned protocol compiler
+        run: |
+          scripts/install-protoc.sh .tmp/protoc
+          echo "$GITHUB_WORKSPACE/.tmp/protoc/bin" >>"$GITHUB_PATH"
+      - name: Install PostgreSQL 18 client
+        run: sudo scripts/install-postgresql-client.sh
       - name: Run every non-KVM test from an isolated clean clone
         run: scripts/test-clean-clone-isolation.sh --non-kvm
 
@@ -63,10 +69,10 @@ jobs:
         with:
           node-version: 24.18.0
           cache: npm
-      - name: Install protocol compiler
+      - name: Install pinned protocol compiler
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends protobuf-compiler
+          scripts/install-protoc.sh .tmp/protoc
+          echo "$GITHUB_WORKSPACE/.tmp/protoc/bin" >>"$GITHUB_PATH"
       - name: Install pinned TypeScript validator
         run: npm ci --ignore-scripts
       - name: Verify generated clients
@@ -102,12 +108,18 @@ jobs:
         with:
           node-version: 24.18.0
           cache: npm
-      - name: Install protocol and source-scan tools
+      - name: Install source-scan tool
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends protobuf-compiler ripgrep
+          sudo apt-get install -y --no-install-recommends ripgrep
+      - name: Install pinned protocol compiler
+        run: |
+          scripts/install-protoc.sh .tmp/protoc
+          echo "$GITHUB_WORKSPACE/.tmp/protoc/bin" >>"$GITHUB_PATH"
       - name: Install pinned JavaScript validators
         run: npm ci --ignore-scripts
+      - name: Install PostgreSQL 18 client
+        run: sudo scripts/install-postgresql-client.sh
       - name: Test and vet control plane and runner
         run: scripts/test-go.sh
 
@@ -121,10 +133,10 @@ jobs:
           cache-dependency-path: |
             go.sum
             runner/go.sum
-      - name: Install protocol compiler
+      - name: Install pinned protocol compiler
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends protobuf-compiler
+          scripts/install-protoc.sh .tmp/protoc
+          echo "$GITHUB_WORKSPACE/.tmp/protoc/bin" >>"$GITHUB_PATH"
       - name: Test public, runner, and guest contracts
         run: scripts/test-contract.sh
 

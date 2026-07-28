@@ -3,8 +3,8 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
-	"reflect"
 	"testing"
 	"time"
 
@@ -172,10 +172,13 @@ func TestPostgresRelayPublicCancellationIsAtomicAndKeyScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 	replayedSession, replayed, err := relay.CancelPublicDataPlaneSession(t.Context(), cancellation)
-	if err != nil || !replayed || !reflect.DeepEqual(replayedSession, first) {
+	firstJSON, firstJSONError := json.Marshal(first)
+	replayedJSON, replayedJSONError := json.Marshal(replayedSession)
+	if err != nil || firstJSONError != nil || replayedJSONError != nil ||
+		!replayed || !bytes.Equal(replayedJSON, firstJSON) {
 		t.Fatalf(
-			"public cancellation replay = %#v, replayed=%t, error=%v; want %#v",
-			replayedSession, replayed, err, first,
+			"public cancellation replay = %#v, replayed=%t, error=%v, encode errors=(%v,%v); want %#v",
+			replayedSession, replayed, err, firstJSONError, replayedJSONError, first,
 		)
 	}
 	conflicting := cancellation
