@@ -19,9 +19,8 @@ import (
 	"testing"
 	"time"
 
-	"agent-manager/internal/registry"
-	"agent-manager/internal/runtimecontext"
-	"agent-manager/internal/sandboxlimits"
+	"secondstack/sandbox-host/internal/runtimecontext"
+	"secondstack/sandbox-host/internal/sandboxlimits"
 )
 
 func TestHeartbeat(t *testing.T) {
@@ -579,7 +578,7 @@ func TestApplySecretsRuntimeContextPolicyNoneScrubsContextFiles(t *testing.T) {
 		}
 	}
 	err := server.applySecrets(SecretBundle{RuntimeContextProjection: runtimecontext.Projection{
-		EffectivePolicy:       registry.CredentialPolicyNone,
+		EffectivePolicy:       "none",
 		OmittedPaths:          runtimecontext.AllProjectionPaths(),
 		PartialRolloutVersion: runtimecontext.PartialRolloutVersionGitHub,
 	}})

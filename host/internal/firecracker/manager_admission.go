@@ -1,10 +1,10 @@
-package microvm
+package firecracker
 
 import (
-	"agent-manager/internal/config"
-	"agent-manager/internal/runtimemanager"
 	"fmt"
 	"net"
+	"secondstack/sandbox-host/internal/config"
+	"secondstack/sandbox-host/internal/runtime"
 	"sort"
 	"strings"
 	"time"
@@ -29,7 +29,7 @@ func (m *Manager) admitCompartmentSpawnLocked(key runtimeInstanceKey) error {
 			bridgeCIDR = strings.TrimSpace(m.cfg.MicroVMBridgeCIDR)
 		}
 		if normalizeRuntimeCompartmentID(inst.compartmentID) != key.compartmentID && bridgeCIDR == "" {
-			return fmt.Errorf("cannot start compartment %q for agent %q while another compartment is live without AGENT_MANAGER_MICROVM_BRIDGE_CIDR; single AGENT_MANAGER_MICROVM_GUEST_IP fallback cannot safely isolate concurrent compartment VMs", key.compartmentID, key.agentID)
+			return fmt.Errorf("cannot start compartment %q for agent %q while another compartment is live without SANDBOX_HOST_MICROVM_BRIDGE_CIDR; single SANDBOX_HOST_MICROVM_GUEST_IP fallback cannot safely isolate concurrent compartment VMs", key.compartmentID, key.agentID)
 		}
 	}
 	for pendingKey, count := range m.pendingSpawns {
@@ -46,7 +46,7 @@ func (m *Manager) admitCompartmentSpawnLocked(key runtimeInstanceKey) error {
 			bridgeCIDR = strings.TrimSpace(m.cfg.MicroVMBridgeCIDR)
 		}
 		if pendingKey.compartmentID != key.compartmentID && bridgeCIDR == "" {
-			return fmt.Errorf("cannot start compartment %q for agent %q while another compartment is pending without AGENT_MANAGER_MICROVM_BRIDGE_CIDR; single AGENT_MANAGER_MICROVM_GUEST_IP fallback cannot safely isolate concurrent compartment VMs", key.compartmentID, key.agentID)
+			return fmt.Errorf("cannot start compartment %q for agent %q while another compartment is pending without SANDBOX_HOST_MICROVM_BRIDGE_CIDR; single SANDBOX_HOST_MICROVM_GUEST_IP fallback cannot safely isolate concurrent compartment VMs", key.compartmentID, key.agentID)
 		}
 	}
 	cap := 0
@@ -54,7 +54,7 @@ func (m *Manager) admitCompartmentSpawnLocked(key runtimeInstanceKey) error {
 		cap = m.cfg.MicroVMMaxConcurrentPerAgent
 	}
 	if cap > 0 && liveForAgent >= cap {
-		return fmt.Errorf("agent %q has reached AGENT_MANAGER_MICROVM_MAX_CONCURRENT_PER_AGENT=%d", key.agentID, cap)
+		return fmt.Errorf("agent %q has reached SANDBOX_HOST_MICROVM_MAX_CONCURRENT_PER_AGENT=%d", key.agentID, cap)
 	}
 	globalCap := 0
 	memoryBudgetMiB := 0
@@ -65,10 +65,10 @@ func (m *Manager) admitCompartmentSpawnLocked(key runtimeInstanceKey) error {
 		memoryMiB = m.cfg.MicroVMMemoryMiB
 	}
 	if globalCap > 0 && liveTotal >= globalCap {
-		return fmt.Errorf("host has reached AGENT_MANAGER_MICROVM_MAX_CONCURRENT_GLOBAL=%d", globalCap)
+		return fmt.Errorf("host has reached SANDBOX_HOST_MICROVM_MAX_CONCURRENT_GLOBAL=%d", globalCap)
 	}
 	if memoryBudgetMiB > 0 && memoryMiB > 0 && (liveTotal+1)*memoryMiB > memoryBudgetMiB {
-		return fmt.Errorf("projected microVM memory exceeds AGENT_MANAGER_MICROVM_MEMORY_BUDGET_MIB=%d", memoryBudgetMiB)
+		return fmt.Errorf("projected microVM memory exceeds SANDBOX_HOST_MICROVM_MEMORY_BUDGET_MIB=%d", memoryBudgetMiB)
 	}
 	return nil
 }

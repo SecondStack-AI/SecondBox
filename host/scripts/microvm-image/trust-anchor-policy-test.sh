@@ -21,7 +21,7 @@ if "$script_dir/verify.sh" "$work_dir" "$work_dir/public.pem" invalid >"$work_di
 fi
 grep -q 'expected public key fingerprint must be 64 lowercase hex characters' "$work_dir/err"
 
-if AGENT_MANAGER_MICROVM_PUBLIC_KEY_SHA256="$fingerprint" "$script_dir/verify.sh" "$work_dir" >"$work_dir/out" 2>"$work_dir/err"; then
+if SANDBOX_HOST_MICROVM_PUBLIC_KEY_SHA256="$fingerprint" "$script_dir/verify.sh" "$work_dir" >"$work_dir/out" 2>"$work_dir/err"; then
     echo "verify accepted a fingerprint pin without a trusted public key" >&2
     exit 1
 fi

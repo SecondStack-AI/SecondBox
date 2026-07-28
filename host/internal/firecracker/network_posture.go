@@ -1,4 +1,4 @@
-package microvm
+package firecracker
 
 import (
 	"context"
@@ -44,23 +44,23 @@ func probeNetworkPosture(ctx context.Context, cfg PrivilegedLauncherConfig, run 
 		{name: "bridge_link_up", command: ipCommand, args: []string{"-o", "link", "show", "up", "dev", bridge}, contains: bridge},
 		{name: "bridge_ipv4_address", command: ipCommand, args: []string{"-4", "-o", "addr", "show", "dev", bridge}, contains: strings.TrimSpace(cfg.BridgeCIDR)},
 		{name: "ipv4_forwarding", command: "sysctl", args: []string{"-n", "net.ipv4.ip_forward"}, contains: "1"},
-		{name: "guest_host_input_hook", command: "iptables", args: []string{"-t", "filter", "-C", "INPUT", "-i", bridge, "-m", "comment", "--comment", "agent-manager-sandbox-input", "-j", "AGENT_MANAGER_SANDBOX_IN"}},
-		{name: "guest_host_input_tap_hook", command: "iptables", args: []string{"-t", "filter", "-C", "INPUT", "-i", tapPattern, "-m", "comment", "--comment", "agent-manager-sandbox-input", "-j", "AGENT_MANAGER_SANDBOX_IN"}},
-		{name: "guest_host_input_default_deny", command: "iptables", args: []string{"-t", "filter", "-C", "AGENT_MANAGER_SANDBOX_IN", "-m", "comment", "--comment", "agent-manager-sandbox-input-deny", "-j", "DROP"}},
-		{name: "guest_forward_hook", command: "iptables", args: []string{"-t", "filter", "-C", "FORWARD", "-i", bridge, "-m", "comment", "--comment", "agent-manager-microvm-forward-policy", "-j", "AGENT_MANAGER_GUEST_FWD"}},
-		{name: "guest_forward_tap_hook", command: "iptables", args: []string{"-t", "filter", "-C", "FORWARD", "-i", tapPattern, "-m", "comment", "--comment", "agent-manager-microvm-forward-policy", "-j", "AGENT_MANAGER_GUEST_FWD"}},
-		{name: "guest_forward_default_deny", command: "iptables", args: []string{"-t", "filter", "-C", "AGENT_MANAGER_GUEST_FWD", "-m", "comment", "--comment", "agent-manager-microvm-forward-deny", "-j", "DROP"}},
-		{name: "guest_forward_input_hook", command: "iptables", args: []string{"-t", "filter", "-C", "FORWARD", "-o", bridge, "-m", "comment", "--comment", "agent-manager-microvm-forward-input-policy", "-j", "AGENT_MANAGER_GUEST_FWD_IN"}},
-		{name: "guest_forward_input_tap_hook", command: "iptables", args: []string{"-t", "filter", "-C", "FORWARD", "-o", tapPattern, "-m", "comment", "--comment", "agent-manager-microvm-forward-input-policy", "-j", "AGENT_MANAGER_GUEST_FWD_IN"}},
-		{name: "guest_forward_input_default_deny", command: "iptables", args: []string{"-t", "filter", "-C", "AGENT_MANAGER_GUEST_FWD_IN", "-m", "comment", "--comment", "agent-manager-microvm-forward-in-deny", "-j", "DROP"}},
-		{name: "guest_ipv6_input_hook", command: "ip6tables", args: []string{"-C", "INPUT", "-i", bridge, "-m", "comment", "--comment", "agent-manager-sandbox-ipv6-input", "-j", "AGENT_MANAGER_SANDBOX6_IN"}},
-		{name: "guest_ipv6_input_tap_hook", command: "ip6tables", args: []string{"-C", "INPUT", "-i", tapPattern, "-m", "comment", "--comment", "agent-manager-sandbox-ipv6-input", "-j", "AGENT_MANAGER_SANDBOX6_IN"}},
-		{name: "guest_ipv6_input_deny", command: "ip6tables", args: []string{"-C", "AGENT_MANAGER_SANDBOX6_IN", "-m", "comment", "--comment", "agent-manager-sandbox-ipv6-deny", "-j", "DROP"}},
-		{name: "guest_ipv6_forward_hook", command: "ip6tables", args: []string{"-C", "FORWARD", "-i", bridge, "-m", "comment", "--comment", "agent-manager-sandbox-ipv6-forward", "-j", "AGENT_MANAGER_SANDBOX6_FWD"}},
-		{name: "guest_ipv6_forward_tap_hook", command: "ip6tables", args: []string{"-C", "FORWARD", "-i", tapPattern, "-m", "comment", "--comment", "agent-manager-sandbox-ipv6-forward", "-j", "AGENT_MANAGER_SANDBOX6_FWD"}},
-		{name: "guest_ipv6_forward_input_hook", command: "ip6tables", args: []string{"-C", "FORWARD", "-o", bridge, "-m", "comment", "--comment", "agent-manager-sandbox-ipv6-forward-in", "-j", "AGENT_MANAGER_SANDBOX6_FWD"}},
-		{name: "guest_ipv6_forward_input_tap_hook", command: "ip6tables", args: []string{"-C", "FORWARD", "-o", tapPattern, "-m", "comment", "--comment", "agent-manager-sandbox-ipv6-forward-in", "-j", "AGENT_MANAGER_SANDBOX6_FWD"}},
-		{name: "guest_ipv6_forward_deny", command: "ip6tables", args: []string{"-C", "AGENT_MANAGER_SANDBOX6_FWD", "-m", "comment", "--comment", "agent-manager-sandbox-ipv6-forward-deny", "-j", "DROP"}},
+		{name: "guest_host_input_hook", command: "iptables", args: []string{"-t", "filter", "-C", "INPUT", "-i", bridge, "-m", "comment", "--comment", "sandbox-host-guest-input", "-j", "SANDBOX_HOST_GUEST_IN"}},
+		{name: "guest_host_input_tap_hook", command: "iptables", args: []string{"-t", "filter", "-C", "INPUT", "-i", tapPattern, "-m", "comment", "--comment", "sandbox-host-guest-input", "-j", "SANDBOX_HOST_GUEST_IN"}},
+		{name: "guest_host_input_default_deny", command: "iptables", args: []string{"-t", "filter", "-C", "SANDBOX_HOST_GUEST_IN", "-m", "comment", "--comment", "sandbox-host-guest-input-deny", "-j", "DROP"}},
+		{name: "guest_forward_hook", command: "iptables", args: []string{"-t", "filter", "-C", "FORWARD", "-i", bridge, "-m", "comment", "--comment", "sandbox-host-guest-forward-policy", "-j", "SANDBOX_HOST_GUEST_FWD"}},
+		{name: "guest_forward_tap_hook", command: "iptables", args: []string{"-t", "filter", "-C", "FORWARD", "-i", tapPattern, "-m", "comment", "--comment", "sandbox-host-guest-forward-policy", "-j", "SANDBOX_HOST_GUEST_FWD"}},
+		{name: "guest_forward_default_deny", command: "iptables", args: []string{"-t", "filter", "-C", "SANDBOX_HOST_GUEST_FWD", "-m", "comment", "--comment", "sandbox-host-guest-forward-deny", "-j", "DROP"}},
+		{name: "guest_forward_input_hook", command: "iptables", args: []string{"-t", "filter", "-C", "FORWARD", "-o", bridge, "-m", "comment", "--comment", "sandbox-host-guest-forward-input-policy", "-j", "SANDBOX_HOST_GUEST_FWD_IN"}},
+		{name: "guest_forward_input_tap_hook", command: "iptables", args: []string{"-t", "filter", "-C", "FORWARD", "-o", tapPattern, "-m", "comment", "--comment", "sandbox-host-guest-forward-input-policy", "-j", "SANDBOX_HOST_GUEST_FWD_IN"}},
+		{name: "guest_forward_input_default_deny", command: "iptables", args: []string{"-t", "filter", "-C", "SANDBOX_HOST_GUEST_FWD_IN", "-m", "comment", "--comment", "sandbox-host-guest-forward-in-deny", "-j", "DROP"}},
+		{name: "guest_ipv6_input_hook", command: "ip6tables", args: []string{"-C", "INPUT", "-i", bridge, "-m", "comment", "--comment", "sandbox-host-guest-ipv6-input", "-j", "SANDBOX_HOST_GUEST6_IN"}},
+		{name: "guest_ipv6_input_tap_hook", command: "ip6tables", args: []string{"-C", "INPUT", "-i", tapPattern, "-m", "comment", "--comment", "sandbox-host-guest-ipv6-input", "-j", "SANDBOX_HOST_GUEST6_IN"}},
+		{name: "guest_ipv6_input_deny", command: "ip6tables", args: []string{"-C", "SANDBOX_HOST_GUEST6_IN", "-m", "comment", "--comment", "sandbox-host-guest-ipv6-deny", "-j", "DROP"}},
+		{name: "guest_ipv6_forward_hook", command: "ip6tables", args: []string{"-C", "FORWARD", "-i", bridge, "-m", "comment", "--comment", "sandbox-host-guest-ipv6-forward", "-j", "SANDBOX_HOST_GUEST6_FWD"}},
+		{name: "guest_ipv6_forward_tap_hook", command: "ip6tables", args: []string{"-C", "FORWARD", "-i", tapPattern, "-m", "comment", "--comment", "sandbox-host-guest-ipv6-forward", "-j", "SANDBOX_HOST_GUEST6_FWD"}},
+		{name: "guest_ipv6_forward_input_hook", command: "ip6tables", args: []string{"-C", "FORWARD", "-o", bridge, "-m", "comment", "--comment", "sandbox-host-guest-ipv6-forward-in", "-j", "SANDBOX_HOST_GUEST6_FWD"}},
+		{name: "guest_ipv6_forward_input_tap_hook", command: "ip6tables", args: []string{"-C", "FORWARD", "-o", tapPattern, "-m", "comment", "--comment", "sandbox-host-guest-ipv6-forward-in", "-j", "SANDBOX_HOST_GUEST6_FWD"}},
+		{name: "guest_ipv6_forward_deny", command: "ip6tables", args: []string{"-C", "SANDBOX_HOST_GUEST6_FWD", "-m", "comment", "--comment", "sandbox-host-guest-ipv6-forward-deny", "-j", "DROP"}},
 	}
 	if bridge == "" || strings.TrimSpace(cfg.TapPrefix) == "" || strings.TrimSpace(cfg.BridgeCIDR) == "" {
 		return NetworkPostureReport{Healthy: false, Missing: []string{"bridge_contract_config"}}
@@ -74,14 +74,14 @@ func probeNetworkPosture(ctx context.Context, cfg PrivilegedLauncherConfig, run 
 		}
 	}
 	orderingChecks := []firewallOrderingCheck{
-		{name: "guest_host_input_precedence", command: "iptables", chain: "INPUT", requiredBeforeAccept: [][]string{{"-i " + bridge, "--comment agent-manager-sandbox-input", "-j AGENT_MANAGER_SANDBOX_IN"}, {"-i " + tapPattern, "--comment agent-manager-sandbox-input", "-j AGENT_MANAGER_SANDBOX_IN"}}},
-		{name: "guest_forward_precedence", command: "iptables", chain: "FORWARD", requiredBeforeAccept: [][]string{{"-i " + bridge, "--comment agent-manager-microvm-forward-policy", "-j AGENT_MANAGER_GUEST_FWD"}, {"-i " + tapPattern, "--comment agent-manager-microvm-forward-policy", "-j AGENT_MANAGER_GUEST_FWD"}, {"-o " + bridge, "--comment agent-manager-microvm-forward-input-policy", "-j AGENT_MANAGER_GUEST_FWD_IN"}, {"-o " + tapPattern, "--comment agent-manager-microvm-forward-input-policy", "-j AGENT_MANAGER_GUEST_FWD_IN"}}},
-		{name: "guest_forward_default_deny_order", command: "iptables", chain: "AGENT_MANAGER_GUEST_FWD", terminalDenyComment: "agent-manager-microvm-forward-deny", allowedAcceptComments: []string{"agent-manager-microvm-forward-out"}},
-		{name: "guest_forward_input_default_deny_order", command: "iptables", chain: "AGENT_MANAGER_GUEST_FWD_IN", terminalDenyComment: "agent-manager-microvm-forward-in-deny", allowedAcceptComments: []string{"agent-manager-microvm-forward-in"}},
-		{name: "guest_ipv6_input_precedence", command: "ip6tables", chain: "INPUT", requiredBeforeAccept: [][]string{{"-i " + bridge, "--comment agent-manager-sandbox-ipv6-input", "-j AGENT_MANAGER_SANDBOX6_IN"}, {"-i " + tapPattern, "--comment agent-manager-sandbox-ipv6-input", "-j AGENT_MANAGER_SANDBOX6_IN"}}},
-		{name: "guest_ipv6_forward_precedence", command: "ip6tables", chain: "FORWARD", requiredBeforeAccept: [][]string{{"-i " + bridge, "--comment agent-manager-sandbox-ipv6-forward", "-j AGENT_MANAGER_SANDBOX6_FWD"}, {"-i " + tapPattern, "--comment agent-manager-sandbox-ipv6-forward", "-j AGENT_MANAGER_SANDBOX6_FWD"}, {"-o " + bridge, "--comment agent-manager-sandbox-ipv6-forward-in", "-j AGENT_MANAGER_SANDBOX6_FWD"}, {"-o " + tapPattern, "--comment agent-manager-sandbox-ipv6-forward-in", "-j AGENT_MANAGER_SANDBOX6_FWD"}}},
-		{name: "guest_ipv6_input_deny_order", command: "ip6tables", chain: "AGENT_MANAGER_SANDBOX6_IN", terminalDenyComment: "agent-manager-sandbox-ipv6-deny"},
-		{name: "guest_ipv6_forward_deny_order", command: "ip6tables", chain: "AGENT_MANAGER_SANDBOX6_FWD", terminalDenyComment: "agent-manager-sandbox-ipv6-forward-deny"},
+		{name: "guest_host_input_precedence", command: "iptables", chain: "INPUT", requiredBeforeAccept: [][]string{{"-i " + bridge, "--comment sandbox-host-guest-input", "-j SANDBOX_HOST_GUEST_IN"}, {"-i " + tapPattern, "--comment sandbox-host-guest-input", "-j SANDBOX_HOST_GUEST_IN"}}},
+		{name: "guest_forward_precedence", command: "iptables", chain: "FORWARD", requiredBeforeAccept: [][]string{{"-i " + bridge, "--comment sandbox-host-guest-forward-policy", "-j SANDBOX_HOST_GUEST_FWD"}, {"-i " + tapPattern, "--comment sandbox-host-guest-forward-policy", "-j SANDBOX_HOST_GUEST_FWD"}, {"-o " + bridge, "--comment sandbox-host-guest-forward-input-policy", "-j SANDBOX_HOST_GUEST_FWD_IN"}, {"-o " + tapPattern, "--comment sandbox-host-guest-forward-input-policy", "-j SANDBOX_HOST_GUEST_FWD_IN"}}},
+		{name: "guest_forward_default_deny_order", command: "iptables", chain: "SANDBOX_HOST_GUEST_FWD", terminalDenyComment: "sandbox-host-guest-forward-deny", allowedAcceptComments: []string{"sandbox-host-guest-forward-out"}},
+		{name: "guest_forward_input_default_deny_order", command: "iptables", chain: "SANDBOX_HOST_GUEST_FWD_IN", terminalDenyComment: "sandbox-host-guest-forward-in-deny", allowedAcceptComments: []string{"sandbox-host-guest-forward-in"}},
+		{name: "guest_ipv6_input_precedence", command: "ip6tables", chain: "INPUT", requiredBeforeAccept: [][]string{{"-i " + bridge, "--comment sandbox-host-guest-ipv6-input", "-j SANDBOX_HOST_GUEST6_IN"}, {"-i " + tapPattern, "--comment sandbox-host-guest-ipv6-input", "-j SANDBOX_HOST_GUEST6_IN"}}},
+		{name: "guest_ipv6_forward_precedence", command: "ip6tables", chain: "FORWARD", requiredBeforeAccept: [][]string{{"-i " + bridge, "--comment sandbox-host-guest-ipv6-forward", "-j SANDBOX_HOST_GUEST6_FWD"}, {"-i " + tapPattern, "--comment sandbox-host-guest-ipv6-forward", "-j SANDBOX_HOST_GUEST6_FWD"}, {"-o " + bridge, "--comment sandbox-host-guest-ipv6-forward-in", "-j SANDBOX_HOST_GUEST6_FWD"}, {"-o " + tapPattern, "--comment sandbox-host-guest-ipv6-forward-in", "-j SANDBOX_HOST_GUEST6_FWD"}}},
+		{name: "guest_ipv6_input_deny_order", command: "ip6tables", chain: "SANDBOX_HOST_GUEST6_IN", terminalDenyComment: "sandbox-host-guest-ipv6-deny"},
+		{name: "guest_ipv6_forward_deny_order", command: "ip6tables", chain: "SANDBOX_HOST_GUEST6_FWD", terminalDenyComment: "sandbox-host-guest-ipv6-forward-deny"},
 	}
 	for _, check := range orderingChecks {
 		out, err := run(ctx, check.command, "-t", "filter", "-S", check.chain)

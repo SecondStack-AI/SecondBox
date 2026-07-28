@@ -1,9 +1,6 @@
-package microvm
+package firecracker
 
 import (
-	"agent-manager/internal/config"
-	"agent-manager/internal/egressproxy"
-	"agent-manager/internal/runtimemanager"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -11,6 +8,8 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"secondstack/sandbox-host/internal/config"
+	"secondstack/sandbox-host/internal/runtime"
 	"strings"
 	"time"
 )
@@ -28,13 +27,11 @@ func (m *Manager) SetHostEgressRouter(router HostEgressRouter) {
 }
 
 func (m *Manager) networkRequired(opts runtimemanager.StartOpts) bool {
+	_ = opts
 	if strings.TrimSpace(m.cfg.MicroVMBridgeName) != "" {
 		return true
 	}
-	if strings.TrimSpace(m.cfg.MicroVMGuestIP) != "" {
-		return true
-	}
-	return opts.ProxyEgress != nil && opts.ProxyEgress.Enabled
+	return strings.TrimSpace(m.cfg.MicroVMGuestIP) != ""
 }
 
 func (m *Manager) tapOwnerUID() int {
@@ -135,7 +132,7 @@ func (m *Manager) guestIP(instanceID string) string {
 
 // guestIPBootArg renders the kernel ip= autoconfiguration argument for a per-VM
 // guest IP. It is only emitted in bridge mode, where the gateway and netmask are
-// known; single-IP mode relies on operator-provided AGENT_MANAGER_MICROVM_KERNEL_ARGS.
+// known; single-IP mode relies on operator-provided SANDBOX_HOST_MICROVM_KERNEL_ARGS.
 func guestIPBootArg(cfg *config.Config, guestIP string) string {
 	guestIP = strings.TrimSpace(guestIP)
 	cidr := strings.TrimSpace(cfg.MicroVMBridgeCIDR)
@@ -149,76 +146,55 @@ func guestIPBootArg(cfg *config.Config, guestIP string) string {
 	return fmt.Sprintf("ip=%s::%s:%s::eth0:off", guestIP, gwIP.String(), net.IP(ipnet.Mask).String())
 }
 
-func (m *Manager) registerSourceBinding(ctx context.Context, agentID, instanceID string, opts runtimemanager.StartOpts) (string, error) {
+func (m *Manager) registerSourceBinding(
+	ctx context.Context,
+	runtimeInstanceID string,
+	environmentID string,
+	sandboxInstanceID string,
+	generation int64,
+	allowedConnectionIDs []string,
+) (string, error) {
 	if m.sourceBindings == nil {
 		return "", nil
 	}
-	if opts.ProxyEgress == nil || !opts.ProxyEgress.Enabled {
+	if len(allowedConnectionIDs) == 0 {
 		return "", nil
 	}
-	sourceIP := strings.TrimSpace(m.guestIP(instanceID))
+	environmentID = strings.TrimSpace(environmentID)
+	sandboxInstanceID = strings.TrimSpace(sandboxInstanceID)
+	if environmentID == "" || sandboxInstanceID == "" || generation < 1 {
+		return "", fmt.Errorf("register source binding: Sandbox Environment, Instance, and generation are required")
+	}
+	sourceIP := strings.TrimSpace(m.guestIP(runtimeInstanceID))
 	if sourceIP == "" {
-		return "", fmt.Errorf("register proxy source binding: no guest IP reserved for %s (set AGENT_MANAGER_MICROVM_BRIDGE_CIDR or AGENT_MANAGER_MICROVM_GUEST_IP)", instanceID)
+		return "", fmt.Errorf("register source binding: no guest address reserved for runtime %s", runtimeInstanceID)
 	}
-	contextToken := ""
-	if strings.TrimSpace(m.cfg.AgentRuntimeAuthSecret) != "" {
-		var err error
-		contextToken, err = egressproxy.MintContextToken(m.cfg.AgentRuntimeAuthSecret, egressproxy.ContextTokenClaims{
-			AgentID:           agentID,
-			CompartmentID:     normalizeRuntimeCompartmentID(opts.CompartmentID),
-			PlaceID:           strings.TrimSpace(opts.ProxyEgress.PlaceID),
-			CredentialSubject: strings.TrimSpace(opts.ActorPrincipal),
-			PlatformUserID:    strings.TrimSpace(opts.RuntimeActorContext.PlatformUserID),
-			AgentSessionID:    strings.TrimSpace(opts.RuntimeActorContext.SessionID),
-			RequestID:         strings.TrimSpace(opts.RuntimeActorContext.RequestID),
-			TurnID:            strings.TrimSpace(opts.RuntimeActorContext.WakeTurnID),
-			EgressID:          instanceID,
-		}, time.Now().UTC(), egressproxy.ContextTokenTTL)
-		if err != nil {
-			return "", fmt.Errorf("mint proxy egress context token: %w", err)
-		}
+	registration, err := m.sourceBindings.Register(ctx, SourceBinding{
+		EnvironmentID:        environmentID,
+		InstanceID:           sandboxInstanceID,
+		SourceAddress:        sourceIP,
+		Generation:           generation,
+		AllowedConnectionIDs: append([]string(nil), allowedConnectionIDs...),
+	})
+	if err != nil {
+		return "", fmt.Errorf("register source binding: %w", err)
 	}
-	binding := egressproxy.SourceBinding{
-		AgentID:             agentID,
-		CompartmentID:       normalizeRuntimeCompartmentID(opts.CompartmentID),
-		ContainerID:         instanceID,
-		SourceIP:            sourceIP,
-		Generation:          instanceID,
-		ContextToken:        contextToken,
-		AllowlistEnabled:    opts.ProxyEgress.AllowlistEnabled,
-		AllowedHosts:        append([]string(nil), opts.ProxyEgress.AllowedHosts...),
-		ToolCredentialHosts: append([]string(nil), opts.ProxyEgress.ToolCredentialHosts...),
-	}
-	if err := m.sourceBindings.Register(binding); err != nil {
-		return "", fmt.Errorf("register proxy source binding: %w", err)
-	}
-	if opts.ProxyEgress.TransparentHTTPPort > 0 && m.egressRouter != nil {
-		tapName := ""
-		if inst := m.lookup(instanceID); inst != nil {
-			tapName = inst.tapName
-		}
-		if err := m.egressRouter.RegisterTransparentRoute(ctx, TransparentRoute{
-			AgentID:     agentID,
-			InstanceID:  instanceID,
-			SourceIP:    sourceIP,
-			HTTPPort:    opts.ProxyEgress.TransparentHTTPPort,
-			InterfaceID: tapName,
-		}); err != nil {
-			m.unregisterSourceBinding(instanceID)
-			return "", fmt.Errorf("register transparent egress route: %w", err)
-		}
-	}
-	return contextToken, nil
+	return strings.TrimSpace(registration.SourceToken), nil
 }
 
-func (m *Manager) unregisterSourceBinding(instanceID string) {
-	if m.sourceBindings == nil || strings.TrimSpace(instanceID) == "" {
-		return
+func (m *Manager) unregisterSourceBinding(ctx context.Context, inst *instance) error {
+	if m.sourceBindings == nil || inst == nil || strings.TrimSpace(inst.guestIP) == "" {
+		return nil
 	}
-	m.sourceBindings.UnregisterContainer(instanceID)
-	if m.egressRouter != nil {
-		m.egressRouter.UnregisterContainer(instanceID)
+	if err := m.sourceBindings.Unregister(ctx, SourceBinding{
+		EnvironmentID: inst.environmentID,
+		InstanceID:    inst.sandboxInstanceID,
+		SourceAddress: inst.guestIP,
+		Generation:    inst.generation,
+	}); err != nil {
+		return fmt.Errorf("unregister source binding: %w", err)
 	}
+	return nil
 }
 
 func (m *Manager) cleanupTap(ctx context.Context, tapName string) {

@@ -1,4 +1,4 @@
-package microvm
+package firecracker
 
 import (
 	"context"
@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"agent-manager/internal/harness"
-	"agent-manager/internal/runtimemanager"
+	"secondstack/sandbox-host/internal/harness"
+	"secondstack/sandbox-host/internal/runtime"
 )
 
 func TestLauncherOutputBufferPreservesModelVisibleInventory(t *testing.T) {
@@ -83,7 +83,7 @@ func testPrivilegedLauncherConfig(t *testing.T) PrivilegedLauncherConfig {
 		JailerUID:              1234,
 		JailerGID:              1234,
 		JailerCgroupVersion:    2,
-		JailerParentCgroup:     "agent-manager",
+		JailerParentCgroup:     "sandbox-host",
 		MemoryMiB:              2048,
 		VCPUs:                  2,
 		WorkspaceSizeMiB:       8192,
@@ -96,8 +96,6 @@ func testPrivilegedLauncherConfig(t *testing.T) PrivilegedLauncherConfig {
 		HarnessIPCommand:       "/bin/true",
 		HarnessSystemdRun:      "/bin/true",
 		HarnessSystemctl:       "/bin/true",
-		HarnessShell:           "/bin/sh",
-		HarnessEnvCommand:      "/usr/bin/env",
 		NftPath:                "/bin/true",
 		HarnessResultRoot:      filepath.Join(dir, "harness-results"),
 		HarnessMemoryBytes:     2 * 1024 * 1024 * 1024,
@@ -900,7 +898,8 @@ func TestPrivilegedLauncherDerivesAndRecoversHarnessNetwork(t *testing.T) {
 			t.Fatalf("harness network commands omit %q:\n%s", required, joined)
 		}
 	}
-	if _, err := server.readHarnessState(cellID); err != nil {
+	preparedState, err := server.readHarnessState(cellID)
+	if err != nil {
 		t.Fatalf("read prepared harness state: %v", err)
 	}
 	for _, want := range []struct {
@@ -933,12 +932,18 @@ func TestPrivilegedLauncherDerivesAndRecoversHarnessNetwork(t *testing.T) {
 		Namespace:   *partialNamespace,
 		ResultPath:  filepath.Join(cfg.HarnessResultRoot, partialCellID+".json"),
 		SeccompPath: filepath.Join(cfg.HarnessResultRoot, partialCellID+".bpf"),
+		EnvPath:     filepath.Join(cfg.StateRoot, "harness", partialCellID+".env"),
 		UnitName:    harnessUnitName(*partialNamespace),
 		GuestMAC:    launcherSourceMAC(partialCellID),
 		SourceGuard: launcherSourceGuardChain(partialCellID),
 	}
 	if err := server.writeHarnessState(partialState); err != nil {
 		t.Fatalf("persist partial harness intent: %v", err)
+	}
+	for _, crashState := range []privilegedHarnessState{preparedState, partialState} {
+		if err := server.writeHarnessEnvironmentFile(crashState, []string{"PATH=/usr/bin", "AGENT_MANAGER_HARNESS_TOKEN=crash-scoped-token"}); err != nil {
+			t.Fatalf("persist crash environment file: %v", err)
+		}
 	}
 
 	// A launcher restart removes any transient unit, namespace, exchange files,
@@ -955,6 +960,11 @@ func TestPrivilegedLauncherDerivesAndRecoversHarnessNetwork(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(cfg.StateRoot, "harness", partialCellID+".json")); !os.IsNotExist(err) {
 		t.Fatalf("partial harness intent still exists: %v", err)
+	}
+	for _, envPath := range []string{preparedState.EnvPath, partialState.EnvPath} {
+		if _, err := os.Stat(envPath); !os.IsNotExist(err) {
+			t.Fatalf("recovered harness environment still exists: %v", err)
+		}
 	}
 	if _, err := NewPrivilegedLauncherServer(cfg); err != nil {
 		t.Fatalf("idempotent launcher recovery: %v", err)
@@ -979,6 +989,7 @@ func TestPrivilegedLauncherHarnessExecIsFixedUnprivilegedTransientUnit(t *testin
 		Namespace:   *namespace,
 		ResultPath:  filepath.Join(cfg.HarnessResultRoot, cellID+".json"),
 		SeccompPath: filepath.Join(cfg.HarnessResultRoot, cellID+".bpf"),
+		EnvPath:     filepath.Join(cfg.StateRoot, "harness", cellID+".env"),
 		UnitName:    harnessUnitName(*namespace),
 		GuestMAC:    launcherSourceMAC(cellID),
 		SourceGuard: launcherSourceGuardChain(cellID),
@@ -990,9 +1001,17 @@ func TestPrivilegedLauncherHarnessExecIsFixedUnprivilegedTransientUnit(t *testin
 			"--uid", "65534", "--gid", "65534", "--disable-userns", "--assert-userns-disabled",
 			"--die-with-parent", "--new-session", "--proc", "/proc", "--dev", "/dev",
 			"--tmpfs", "/tmp", "--dir", "/run", "--setenv", "HOME", "/tmp",
-			"--bind", state.ResultPath, state.ResultPath, "--seccomp", "3", "/bin/true",
+			"--bind", state.ResultPath, state.ResultPath,
+			"--setenv", "AGENT_MANAGER_HARNESS_TOKEN", "scoped-secret-token",
+			"--setenv", "HARNESS_WAKE_JSON", `{"message":"private wake payload"}`,
+			"--seccomp", "3", "/bin/true",
 		},
-		Env:         []string{"PATH=/usr/bin", "HARNESS_RESULT_PATH=" + state.ResultPath},
+		Env: []string{
+			"PATH=/usr/bin",
+			"HARNESS_RESULT_PATH=" + state.ResultPath,
+			"AGENT_MANAGER_HARNESS_TOKEN=scoped-secret-token",
+			`HARNESS_WAKE_JSON={"message":"private wake payload"}`,
+		},
 		SeccompBPF:  []byte{1, 2, 3},
 		MemoryBytes: cfg.HarnessMemoryBytes,
 		NanoCPUs:    cfg.HarnessNanoCPUs,
@@ -1003,22 +1022,54 @@ func TestPrivilegedLauncherHarnessExecIsFixedUnprivilegedTransientUnit(t *testin
 	if err := server.validateHarnessExecutionRequest(req); err != nil {
 		t.Fatalf("valid harness execution: %v", err)
 	}
-	args := server.harnessSystemdRunArgs(state, req)
+	args, err := server.harnessSystemdRunArgs(state, req)
+	if err != nil {
+		t.Fatalf("build transient harness command: %v", err)
+	}
+	launcherExecutable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
 	joined := strings.Join(args, " ")
+	environmentPath := filepath.Join(cfg.StateRoot, "harness", cellID+".env")
 	for _, required := range []string{
 		"User=" + strconv.Itoa(cfg.AllowedUID),
 		"Group=" + strconv.Itoa(cfg.ManagerGID),
 		"SupplementaryGroups=",
 		"NoNewPrivileges=yes",
 		"CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SETUID CAP_SETGID CAP_SETFCAP",
+		"RestrictNamespaces=user pid ipc uts mnt cgroup",
 		"NetworkNamespacePath=/run/netns/" + namespace.NamespaceName,
 		"MemoryMax=" + strconv.FormatInt(cfg.HarnessMemoryBytes, 10),
-		" -- " + cfg.HarnessEnvCommand + " -i -- ",
-		cfg.HarnessShell + " -c",
+		"EnvironmentFile=" + environmentPath,
+		launcherExecutable + " harness-exec",
 	} {
 		if !strings.Contains(" "+joined+" ", required) {
 			t.Fatalf("transient harness command omits %q:\n%s", required, joined)
 		}
+	}
+	for _, forbidden := range []string{
+		"scoped-secret-token",
+		"private wake payload",
+		"AGENT_MANAGER_HARNESS_TOKEN=",
+		"HARNESS_WAKE_JSON=",
+		"/usr/bin/env",
+		"--setenv",
+	} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("transient harness command exposes %q:\n%s", forbidden, joined)
+		}
+	}
+	mismatched := *req
+	mismatched.Args = append([]string(nil), req.Args...)
+	for i, arg := range mismatched.Args {
+		if arg == "scoped-secret-token" {
+			mismatched.Args[i] = "different-token"
+			break
+		}
+	}
+	if err := server.validateHarnessExecutionRequest(&mismatched); err == nil || !strings.Contains(err.Error(), "does not match EnvironmentFile") {
+		t.Fatalf("mismatched bwrap environment assignment error = %v", err)
 	}
 	req.Command = "/bin/sh"
 	if err := server.validateHarnessExecutionRequest(req); err == nil || !strings.Contains(err.Error(), "command does not match") {
@@ -1029,6 +1080,223 @@ func TestPrivilegedLauncherHarnessExecIsFixedUnprivilegedTransientUnit(t *testin
 	req.Args = append(append(append([]string(nil), req.Args[:len(req.Args)-1]...), "--uid", "0"), command)
 	if err := server.validateHarnessExecutionRequest(req); err == nil || !strings.Contains(err.Error(), "exactly one --uid 65534") {
 		t.Fatalf("duplicate harness uid error = %v", err)
+	}
+}
+
+func TestHarnessExecEnvironmentContainsOnlyFixedAndRequestedVariables(t *testing.T) {
+	got, err := harnessExecEnvironment(
+		[]string{"PATH", "AGENT_MANAGER_HARNESS_TOKEN", "HARNESS_WAKE_JSON"},
+		[]string{
+			"HOME=/manager-home",
+			"PATH=/usr/bin",
+			"AGENT_MANAGER_HARNESS_TOKEN=scoped-secret-token",
+			`HARNESS_WAKE_JSON={"message":"private wake payload"}`,
+			"JOURNAL_STREAM=9:999",
+			"INVOCATION_ID=manager-injected",
+			"LEAKED_PARENT_ENV=must-not-reach-bwrap",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"HOME=/tmp",
+		"PATH=/usr/bin",
+		"AGENT_MANAGER_HARNESS_TOKEN=scoped-secret-token",
+		`HARNESS_WAKE_JSON={"message":"private wake payload"}`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("filtered harness environment = %#v, want %#v", got, want)
+	}
+	if _, err := harnessExecEnvironment([]string{"MISSING"}, []string{"PATH=/usr/bin"}); err == nil {
+		t.Fatal("missing required harness environment variable was accepted")
+	}
+}
+
+func TestPrivilegedLauncherHarnessEnvironmentFileIsPrivateAndExclusive(t *testing.T) {
+	cfg := testPrivilegedLauncherConfig(t)
+	server, err := NewPrivilegedLauncherServer(cfg)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	cellID := "hcell-environment-file"
+	state := privilegedHarnessState{
+		CellID:  cellID,
+		EnvPath: server.harnessEnvironmentPath(cellID),
+	}
+	environment := []string{
+		"PATH=/usr/bin",
+		"AGENT_MANAGER_HARNESS_TOKEN=scoped-secret-token",
+		`HARNESS_WAKE_JSON={"message":"private $wake with ` + "`" + `tick and \\ slash"}`,
+		"HARNESS_RESULT_PATH=/run/private-result.json",
+	}
+	if err := server.writeHarnessEnvironmentFile(state, environment); err != nil {
+		t.Fatalf("write harness environment file: %v", err)
+	}
+	info, err := os.Lstat(state.EnvPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatalf("unexpected environment file stat payload %T", info.Sys())
+	}
+	if info.Mode().Perm() != 0o600 || int(stat.Uid) != launcherRootUID(cfg) {
+		t.Fatalf("environment file mode/owner = %o uid=%d, want 0600 uid=%d", info.Mode().Perm(), stat.Uid, launcherRootUID(cfg))
+	}
+	contents, err := os.ReadFile(state.EnvPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(contents)
+	for _, required := range []string{
+		`HOME="/tmp"`,
+		`PATH="/usr/bin"`,
+		`AGENT_MANAGER_HARNESS_TOKEN="scoped-secret-token"`,
+		`HARNESS_WAKE_JSON="{\"message\":\"private `,
+		`\$wake`,
+		"with \\`tick",
+		`and \\\\ slash\"}"`,
+		`HARNESS_RESULT_PATH="/run/private-result.json"`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("private environment file omits %q:\n%s", required, text)
+		}
+	}
+	if strings.Contains(text, "LEAKED_PARENT_ENV") {
+		t.Fatalf("private environment file inherited launcher environment:\n%s", text)
+	}
+	if err := server.writeHarnessEnvironmentFile(state, []string{"PATH=/malicious"}); err == nil {
+		t.Fatal("existing harness environment file was overwritten")
+	}
+	unchanged, err := os.ReadFile(state.EnvPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(unchanged) != text {
+		t.Fatal("failed exclusive environment publication changed existing content")
+	}
+}
+
+func TestPrivilegedLauncherHarnessEnvironmentFileLifecycle(t *testing.T) {
+	cfg := testPrivilegedLauncherConfig(t)
+	cellID := "hcell-environment-lifecycle"
+	environmentPath := filepath.Join(cfg.StateRoot, "harness", cellID+".env")
+	markerPath := filepath.Join(filepath.Dir(cfg.StateRoot), "systemd-run-observed")
+	systemdRun := filepath.Join(filepath.Dir(cfg.StateRoot), "systemd-run")
+	script := "#!/bin/sh\n" +
+		"set -eu\n" +
+		"environment_file=''\n" +
+		"for arg in \"$@\"; do\n" +
+		"  case \"$arg\" in EnvironmentFile=*) environment_file=\"${arg#EnvironmentFile=}\" ;; esac\n" +
+		"done\n" +
+		"test \"$environment_file\" = '" + environmentPath + "'\n" +
+		"test \"$(stat -c %a \"$environment_file\")\" = 600\n" +
+		"grep -F 'AGENT_MANAGER_HARNESS_TOKEN=\"scoped-secret-token\"' \"$environment_file\" >/dev/null\n" +
+		"grep -F 'HARNESS_WAKE_JSON=\"{\\\"message\\\":\\\"private wake payload\\\"}\"' \"$environment_file\" >/dev/null\n" +
+		": > '" + markerPath + "'\n"
+	if err := os.WriteFile(systemdRun, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg.HarnessSystemdRun = systemdRun
+	server, err := NewPrivilegedLauncherServer(cfg)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	server.runHost = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name == cfg.HarnessSystemctl && len(args) > 0 && args[0] == "show" {
+			return []byte("inactive\n"), nil
+		}
+		return nil, nil
+	}
+	namespace, err := harness.DeriveNetworkNamespace(cellID, cfg.HarnessCIDR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	namespace.ProxyIP = cfg.HarnessProxyIP
+	namespace.PlatformIP = cfg.HarnessPlatformIP
+	if _, err := server.prepareHarnessNetwork(context.Background(), &privilegedHarnessPrepareRequest{
+		CellID: cellID, Namespace: *namespace,
+	}); err != nil {
+		t.Fatalf("prepare harness network: %v", err)
+	}
+	state, err := server.readHarnessState(cellID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := &privilegedHarnessExecRequest{
+		CellID: cellID, Namespace: *namespace, Command: cfg.HarnessBubblewrap,
+		Args: []string{
+			"--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
+			"--uid", "65534", "--gid", "65534", "--disable-userns", "--assert-userns-disabled",
+			"--die-with-parent", "--new-session", "--proc", "/proc", "--dev", "/dev",
+			"--tmpfs", "/tmp", "--dir", "/run", "--setenv", "HOME", "/tmp",
+			"--bind", state.ResultPath, state.ResultPath,
+			"--setenv", "AGENT_MANAGER_HARNESS_TOKEN", "scoped-secret-token",
+			"--setenv", "HARNESS_WAKE_JSON", `{"message":"private wake payload"}`,
+			"--seccomp", "3", "/bin/true",
+		},
+		Env: []string{
+			"PATH=/usr/bin",
+			"HARNESS_RESULT_PATH=" + state.ResultPath,
+			"AGENT_MANAGER_HARNESS_TOKEN=scoped-secret-token",
+			`HARNESS_WAKE_JSON={"message":"private wake payload"}`,
+		},
+		SeccompBPF:  []byte{1, 2, 3},
+		MemoryBytes: cfg.HarnessMemoryBytes,
+		NanoCPUs:    cfg.HarnessNanoCPUs,
+		PidsLimit:   cfg.HarnessPidsLimit,
+		MaxRuntime:  cfg.HarnessMaxRuntime.Milliseconds(),
+		IdleTimeout: cfg.HarnessIdleTimeout.Milliseconds(),
+	}
+	resp, err := server.executeHarnessNetwork(context.Background(), req)
+	if err != nil || !resp.ExecutionStarted {
+		t.Fatalf("execute harness network: response=%+v error=%v", resp, err)
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Fatalf("fake systemd-run did not observe private environment file: %v", err)
+	}
+	if _, err := os.Stat(state.EnvPath); !os.IsNotExist(err) {
+		t.Fatalf("completed harness environment file still exists: %v", err)
+	}
+
+	failingCellID := "hcell-environment-start-failure"
+	failingNamespace, err := harness.DeriveNetworkNamespace(failingCellID, cfg.HarnessCIDR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failingNamespace.ProxyIP = cfg.HarnessProxyIP
+	failingNamespace.PlatformIP = cfg.HarnessPlatformIP
+	if _, err := server.prepareHarnessNetwork(context.Background(), &privilegedHarnessPrepareRequest{
+		CellID: failingCellID, Namespace: *failingNamespace,
+	}); err != nil {
+		t.Fatalf("prepare failing harness network: %v", err)
+	}
+	failingState, err := server.readHarnessState(failingCellID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failingReq := *req
+	failingReq.CellID = failingCellID
+	failingReq.Namespace = *failingNamespace
+	failingReq.Args = append([]string(nil), req.Args...)
+	failingReq.Env = append([]string(nil), req.Env...)
+	for i, arg := range failingReq.Args {
+		if arg == state.ResultPath {
+			failingReq.Args[i] = failingState.ResultPath
+		}
+	}
+	for i, entry := range failingReq.Env {
+		if entry == "HARNESS_RESULT_PATH="+state.ResultPath {
+			failingReq.Env[i] = "HARNESS_RESULT_PATH=" + failingState.ResultPath
+		}
+	}
+	server.cfg.HarnessSystemdRun = filepath.Join(filepath.Dir(cfg.StateRoot), "missing-systemd-run")
+	if _, err := server.executeHarnessNetwork(context.Background(), &failingReq); err == nil || !strings.Contains(err.Error(), "start transient harness unit") {
+		t.Fatalf("missing systemd-run error = %v", err)
+	}
+	if _, err := os.Stat(failingState.EnvPath); !os.IsNotExist(err) {
+		t.Fatalf("failed-start harness environment file still exists: %v", err)
 	}
 }
 
@@ -1049,6 +1317,7 @@ func TestPrivilegedLauncherKeepsHarnessGuardUntilUnitStops(t *testing.T) {
 		CellID:      cellID,
 		Namespace:   *namespace,
 		UnitName:    harnessUnitName(*namespace),
+		EnvPath:     filepath.Join(cfg.StateRoot, "harness", cellID+".env"),
 		GuestMAC:    launcherSourceMAC(cellID),
 		SourceGuard: launcherSourceGuardChain(cellID),
 	}

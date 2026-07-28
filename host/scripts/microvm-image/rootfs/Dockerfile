@@ -5,6 +5,8 @@
 # CURRENT signed rootfs, imported by build-rootfs-source.sh; this Dockerfile adds
 # packages/config and replaces known-bad base tool shims when needed.
 ARG BASE_IMAGE=agent-manager-rootfs:base
+
+FROM ghcr.io/astral-sh/uv:0.11.29 AS uv
 FROM ${BASE_IMAGE}
 
 ARG APT_CHECK_VALID_UNTIL=true
@@ -37,6 +39,8 @@ COPY requirements-std.txt /tmp/agent-manager/requirements-std.txt
 COPY verify-standard-toolset.sh /tmp/agent-manager/verify-standard-toolset.sh
 RUN python3 -m pip install --no-cache-dir --break-system-packages \
       -r /tmp/agent-manager/requirements-std.txt
+
+COPY --from=uv /uv /uvx /usr/local/bin/
 
 # Config bakes: relax ImageMagick PDF/PS policy, matplotlib headless env, and
 # pre-warm the matplotlib font cache in the default HOME location so the first

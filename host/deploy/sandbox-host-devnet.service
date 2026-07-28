@@ -6,9 +6,9 @@
 # the server on first VM launch and vanishes on reboot, which breaks the dev
 # loop until a VM happens to launch again.
 #
-# Placeholders are substituted from .env (AGENT_MANAGER_MICROVM_BRIDGE_NAME /
-# AGENT_MANAGER_MICROVM_BRIDGE_CIDR) by `just net-install`.
-Description=Agent Service dev microVM bridge (@BRIDGE_NAME@)
+# Placeholders are substituted from .env (SANDBOX_HOST_MICROVM_BRIDGE_NAME /
+# SANDBOX_HOST_MICROVM_BRIDGE_CIDR) by `just net-install`.
+Description=Sandbox Host development microVM bridge (@BRIDGE_NAME@)
 After=network-pre.target
 Wants=network-pre.target
 

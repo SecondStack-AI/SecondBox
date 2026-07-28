@@ -1,10 +1,6 @@
-package microvm
+package firecracker
 
 import (
-	"agent-manager/internal/config"
-	"agent-manager/internal/registry"
-	"agent-manager/internal/runtimecontext"
-	"agent-manager/internal/runtimemanager"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -13,12 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"secondstack/sandbox-host/internal/config"
+	"secondstack/sandbox-host/internal/runtime"
+	"secondstack/sandbox-host/internal/runtimecontext"
 	"sort"
 	"strconv"
 	"strings"
@@ -63,15 +60,15 @@ func relocateRunDirForUnixSockets(runDir string) (string, bool) {
 			return candidate, true
 		}
 	}
-	return filepath.Join(os.TempDir(), fmt.Sprintf("agent-manager-%d", os.Getuid()), "run"), true
+	return filepath.Join(os.TempDir(), fmt.Sprintf("sandbox-host-%d", os.Getuid()), "run"), true
 }
 
 func shortMicroVMRunDirCandidates() []string {
 	var candidates []string
 	if cacheDir, err := os.UserCacheDir(); err == nil && strings.TrimSpace(cacheDir) != "" {
-		candidates = append(candidates, filepath.Join(cacheDir, "agent-manager", "run"))
+		candidates = append(candidates, filepath.Join(cacheDir, "sandbox-host", "run"))
 	}
-	candidates = append(candidates, filepath.Join(os.TempDir(), fmt.Sprintf("agent-manager-%d", os.Getuid()), "run"))
+	candidates = append(candidates, filepath.Join(os.TempDir(), fmt.Sprintf("sandbox-host-%d", os.Getuid()), "run"))
 	return candidates
 }
 
@@ -427,10 +424,10 @@ func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, 
 	if m.cfg.MicroVMAllowUnjailed {
 		socket := filepath.Join(dir, firecrackerSockName)
 		vsockUDS := filepath.Join(dir, vsockUDSName)
-		if err := checkUnixSocketPath("firecracker api", socket, "AGENT_MANAGER_MICROVM_RUN_DIR"); err != nil {
+		if err := checkUnixSocketPath("firecracker api", socket, "SANDBOX_HOST_MICROVM_RUN_DIR"); err != nil {
 			return firecrackerLaunch{}, err
 		}
-		if err := checkUnixSocketPath("vsock", vsockUDS, "AGENT_MANAGER_MICROVM_RUN_DIR"); err != nil {
+		if err := checkUnixSocketPath("vsock", vsockUDS, "SANDBOX_HOST_MICROVM_RUN_DIR"); err != nil {
 			return firecrackerLaunch{}, err
 		}
 		configPath := filepath.Join(dir, configName)
@@ -447,10 +444,10 @@ func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, 
 	jailRoot := m.jailerRoot(instanceID)
 	socket := filepath.Join(jailRoot, firecrackerSockName)
 	vsockUDS := filepath.Join(jailRoot, vsockUDSName)
-	if err := checkUnixSocketPath("jailed firecracker api", socket, "AGENT_MANAGER_MICROVM_JAILER_CHROOT_BASE_DIR"); err != nil {
+	if err := checkUnixSocketPath("jailed firecracker api", socket, "SANDBOX_HOST_MICROVM_JAILER_CHROOT_BASE_DIR"); err != nil {
 		return firecrackerLaunch{}, err
 	}
-	if err := checkUnixSocketPath("jailed vsock", vsockUDS, "AGENT_MANAGER_MICROVM_JAILER_CHROOT_BASE_DIR"); err != nil {
+	if err := checkUnixSocketPath("jailed vsock", vsockUDS, "SANDBOX_HOST_MICROVM_JAILER_CHROOT_BASE_DIR"); err != nil {
 		return firecrackerLaunch{}, err
 	}
 	if err := os.MkdirAll(jailRoot, 0o700); err != nil {
@@ -556,12 +553,12 @@ func newInstanceID(agentID, compartmentID string) (string, error) {
 
 func instanceAgentIDSegment(agentID string) string {
 	agentID = strings.TrimSpace(agentID)
-	const maxBytes = 35
+	const maxBytes = 13
 	if len(agentID) <= maxBytes {
 		return agentID
 	}
 	digest := sha256.Sum256([]byte(agentID))
-	return agentID[:22] + "-" + hex.EncodeToString(digest[:6])
+	return agentID[:4] + "-" + hex.EncodeToString(digest[:4])
 }
 
 func compartmentIDSegment(compartmentID string) string {
@@ -632,7 +629,7 @@ func reflinkOnlyFile(dst, src string, mode os.FileMode) error {
 		_ = os.Remove(dst)
 		hint := "the run dir must be on the same copy-on-write filesystem (btrfs/xfs) as the rootfs image"
 		if errors.Is(err, syscall.EXDEV) {
-			hint = "dst and src are on different filesystems; set AGENT_MANAGER_MICROVM_RUN_DIR to a path on the same filesystem as AGENT_MANAGER_MICROVM_ROOTFS_PATH"
+			hint = "dst and src are on different filesystems; set SANDBOX_HOST_MICROVM_RUN_DIR to a path on the same filesystem as SANDBOX_HOST_MICROVM_ROOTFS_PATH"
 		}
 		return fmt.Errorf("reflink rootfs %s -> %s: %w (%s)", src, dst, err, hint)
 	}
@@ -682,7 +679,7 @@ func stageWorkspaceJailFile(dst, src string, uid, gid int) error {
 	_ = os.Remove(dst)
 	if err := hardLinkFile(src, dst); err != nil {
 		if errors.Is(err, syscall.EXDEV) {
-			return fmt.Errorf("link workspace image into jail: %w (jailer chroot base dir must be on the same filesystem as AGENT_MANAGER_MICROVM_WORKSPACE_DIR)", err)
+			return fmt.Errorf("link workspace image into jail: %w (jailer chroot base dir must be on the same filesystem as SANDBOX_HOST_MICROVM_WORKSPACE_DIR)", err)
 		}
 		return err
 	}
@@ -904,28 +901,28 @@ func hasKernelArg(args, name string) bool {
 }
 
 type identityFile struct {
-	InstanceID    string `json:"instanceId"`
-	AgentID       string `json:"agentId"`
-	CompartmentID string `json:"compartmentId"`
-	Timezone      string `json:"timezone"`
-	PlatformURL   string `json:"platformApiUrl"`
-	FlueStoreURL  string `json:"flueStoreUrl"`
-	CreatedAt     string `json:"createdAt"`
+	InstanceID      string `json:"instanceId"`
+	AgentID         string `json:"agentId"`
+	CompartmentID   string `json:"compartmentId"`
+	Timezone        string `json:"timezone"`
+	PlatformURL     string `json:"platformApiUrl"`
+	SessionStoreURL string `json:"sessionStoreUrl"`
+	CreatedAt       string `json:"createdAt"`
 }
 
-func (m *Manager) flueStoreURL(agentID string) string {
-	return strings.TrimRight(m.cfg.PlatformAPIURL, "/") + "/api/agents/" + agentID + "/flue-store"
+func (m *Manager) sessionStoreURL(agentID string) string {
+	return strings.TrimRight(m.cfg.PlatformAPIURL, "/") + "/api/agents/" + agentID + "/session-store"
 }
 
 func (m *Manager) writeIdentityFile(dir, instanceID, agentID string, opts runtimemanager.StartOpts) error {
 	identity := identityFile{
-		InstanceID:    instanceID,
-		AgentID:       agentID,
-		CompartmentID: normalizeRuntimeCompartmentID(opts.CompartmentID),
-		Timezone:      strings.TrimSpace(opts.Timezone),
-		PlatformURL:   m.cfg.PlatformAPIURL,
-		FlueStoreURL:  m.flueStoreURL(agentID),
-		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
+		InstanceID:      instanceID,
+		AgentID:         agentID,
+		CompartmentID:   normalizeRuntimeCompartmentID(opts.CompartmentID),
+		Timezone:        strings.TrimSpace(opts.Timezone),
+		PlatformURL:     m.cfg.PlatformAPIURL,
+		SessionStoreURL: m.sessionStoreURL(agentID),
+		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
 	}
 	data, err := json.MarshalIndent(identity, "", "  ")
 	if err != nil {
@@ -955,52 +952,12 @@ func (m *Manager) buildStartupSecretBundle(agentID, instanceID string, opts runt
 		"AGENT_ID":                     agentID,
 		"AGENT_HOST_GID":               strconv.Itoa(os.Getgid()),
 		"AGENT_MANAGER_COMPARTMENT_ID": normalizeRuntimeCompartmentID(opts.CompartmentID),
-		"TZ":                           registry.NormalizeTimezone(opts.Timezone),
+		"TZ":                           normalizeTimezone(opts.Timezone),
 	}
 	if strings.TrimSpace(instanceID) != "" {
 		env["AGENT_MANAGER_RUNTIME_CREDENTIAL_ID"] = agentID + ":" + normalizeRuntimeCompartmentID(opts.CompartmentID) + ":" + strings.TrimSpace(instanceID)
 	}
 	files := map[string]string{}
-	if opts.ProxyEgress != nil && opts.ProxyEgress.Enabled {
-		proxyURL := m.proxyURLForGuest(opts.ProxyEgress)
-		const gitHubAskpassPath = "/runtime-private/github-askpass"
-		const gitConfigPath = "/runtime-private/gitconfig"
-		env["AGENT_MANAGER_PROXY_EGRESS_ENABLED"] = "true"
-		env["GH_TOKEN"] = "agent-service-proxy:github"
-		env["GITHUB_TOKEN"] = "agent-service-proxy:github"
-		env["GIT_ASKPASS"] = gitHubAskpassPath
-		env["GIT_CONFIG_GLOBAL"] = gitConfigPath
-		env["GIT_TERMINAL_PROMPT"] = "0"
-		env["HTTP_PROXY"] = proxyURL
-		env["HTTPS_PROXY"] = proxyURL
-		env["http_proxy"] = proxyURL
-		env["https_proxy"] = proxyURL
-		env["NO_PROXY"] = opts.ProxyEgress.NoProxy
-		env["no_proxy"] = opts.ProxyEgress.NoProxy
-		env["npm_config_proxy"] = proxyURL
-		env["npm_config_https_proxy"] = proxyURL
-		if strings.TrimSpace(opts.ProxyEgress.NoProxy) != "" {
-			env["npm_config_noproxy"] = opts.ProxyEgress.NoProxy
-		}
-		files["github-askpass"] = gitHubAskpassScript()
-		files["gitconfig"] = gitHubProxyGitConfig()
-		if token := strings.TrimSpace(opts.ProxyEgress.ContextToken); token != "" {
-			env["AGENT_MANAGER_EGRESS_CONTEXT_TOKEN"] = token
-		}
-		if strings.TrimSpace(opts.ProxyEgress.CACertPath) != "" {
-			data, err := os.ReadFile(opts.ProxyEgress.CACertPath)
-			if err != nil {
-				return SecretBundle{}, fmt.Errorf("read egress proxy CA cert: %w", err)
-			}
-			const guestCAPath = "/runtime-private/proxy-ca.crt"
-			files["proxy-ca.crt"] = string(data)
-			env["NODE_EXTRA_CA_CERTS"] = guestCAPath
-			env["REQUESTS_CA_BUNDLE"] = guestCAPath
-			env["SSL_CERT_FILE"] = guestCAPath
-			env["GIT_SSL_CAINFO"] = guestCAPath
-			env["CURL_CA_BUNDLE"] = guestCAPath
-		}
-	}
 	bundle := SecretBundle{Env: env}
 	if len(files) > 0 {
 		bundle.Files = files
@@ -1013,60 +970,6 @@ func (m *Manager) buildStartupSecretBundle(agentID, instanceID string, opts runt
 		bundle.RuntimeContextProjection = projection
 	}
 	return bundle, nil
-}
-
-func gitHubAskpassScript() string {
-	return `#!/bin/sh
-case "$1" in
-  *Username*|*username*)
-    printf '%s\n' 'x-access-token'
-    ;;
-  *Password*|*password*)
-    printf '%s\n' "${GITHUB_TOKEN:-${GH_TOKEN:-}}"
-    ;;
-  *)
-    printf '\n'
-    ;;
-esac
-`
-}
-
-func gitHubProxyGitConfig() string {
-	return `[credential "https://github.com"]
-	username = x-access-token
-	helper =
-	useHttpPath = true
-[url "https://github.com/"]
-	insteadOf = git@github.com:
-	insteadOf = ssh://git@github.com/
-`
-}
-
-func (m *Manager) proxyURLForGuest(proxy *runtimemanager.ProxyEgressConfig) string {
-	if proxy == nil {
-		return ""
-	}
-	rawURL := strings.TrimSpace(proxy.ProxyURL)
-	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return rawURL
-	}
-	host := strings.Trim(strings.ToLower(parsed.Hostname()), "[]")
-	if host == "agent-manager-egress-proxy" {
-		gateway, _, err := net.ParseCIDR(strings.TrimSpace(m.cfg.MicroVMBridgeCIDR))
-		if err == nil && gateway != nil {
-			port := parsed.Port()
-			if port != "" {
-				parsed.Host = net.JoinHostPort(gateway.String(), port)
-			} else {
-				parsed.Host = gateway.String()
-			}
-		}
-	}
-	if token := strings.TrimSpace(proxy.ContextToken); token != "" {
-		parsed.User = url.UserPassword("AgentServiceContext", token)
-	}
-	return parsed.String()
 }
 
 func (m *Manager) startupFingerprint(agentID, compartmentID string, opts runtimemanager.StartOpts) (string, error) {
@@ -1132,6 +1035,14 @@ func canonicalRuntimeActorContext(actor runtimecontext.VerifiedActorContext) run
 	actor.TurnContextID = strings.TrimSpace(actor.TurnContextID)
 	actor.RequestID = strings.TrimSpace(actor.RequestID)
 	return actor
+}
+
+func normalizeTimezone(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "UTC"
+	}
+	return value
 }
 
 func executorContractVersionForFingerprint(runtimeClass runtimemanager.RuntimeClass) int {

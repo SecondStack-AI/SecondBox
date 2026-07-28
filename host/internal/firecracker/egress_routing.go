@@ -1,4 +1,4 @@
-package microvm
+package firecracker
 
 import (
 	"context"
@@ -133,7 +133,7 @@ func transparentRouteArgs(action string, route TransparentRoute) []string {
 		"-p", "tcp",
 		"--dport", "80",
 		"-m", "comment",
-		"--comment", "agent-manager-microvm-egress:" + route.InstanceID,
+		"--comment", "sandbox-host-guest-egress:" + route.InstanceID,
 	}
 	if iface := strings.TrimSpace(route.InterfaceID); iface != "" {
 		args = append(args, "-i", iface)

@@ -4,34 +4,34 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../.." && pwd)"
 
-artifact_version="${AGENT_MANAGER_MICROVM_ARTIFACT_VERSION:-$(date -u +%Y%m%d%H%M%S)}"
-out_dir="${AGENT_MANAGER_MICROVM_OUT_DIR:-$repo_root/releases/microvm/$artifact_version}"
-rootfs_source_dir="${AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_DIR:-}"
-kernel_path="${AGENT_MANAGER_MICROVM_KERNEL_PATH:-}"
-kernel_config="${AGENT_MANAGER_MICROVM_KERNEL_CONFIG:-}"
-signing_key="${AGENT_MANAGER_MICROVM_SIGNING_KEY:-$repo_root/releases/microvm/signing.key}"
-trusted_public_key="${AGENT_MANAGER_MICROVM_PUBLIC_KEY:-}"
-trusted_public_key_sha="${AGENT_MANAGER_MICROVM_PUBLIC_KEY_SHA256:-}"
-rootfs_size_mib="${AGENT_MANAGER_MICROVM_ROOTFS_SIZE_MIB:-8192}"
-shared_format="${AGENT_MANAGER_MICROVM_SHARED_FORMAT:-auto}"
-rootfs_uuid="${AGENT_MANAGER_MICROVM_ROOTFS_UUID:-11111111-2222-3333-4444-555555555555}"
-build_kernel="${AGENT_MANAGER_MICROVM_BUILD_KERNEL:-false}"
+artifact_version="${SANDBOX_HOST_MICROVM_ARTIFACT_VERSION:-$(date -u +%Y%m%d%H%M%S)}"
+out_dir="${SANDBOX_HOST_MICROVM_OUT_DIR:-$repo_root/releases/microvm/$artifact_version}"
+rootfs_source_dir="${SANDBOX_HOST_MICROVM_ROOTFS_SOURCE_DIR:-}"
+kernel_path="${SANDBOX_HOST_MICROVM_KERNEL_PATH:-}"
+kernel_config="${SANDBOX_HOST_MICROVM_KERNEL_CONFIG:-}"
+signing_key="${SANDBOX_HOST_MICROVM_SIGNING_KEY:-$repo_root/releases/microvm/signing.key}"
+trusted_public_key="${SANDBOX_HOST_MICROVM_PUBLIC_KEY:-}"
+trusted_public_key_sha="${SANDBOX_HOST_MICROVM_PUBLIC_KEY_SHA256:-}"
+rootfs_size_mib="${SANDBOX_HOST_MICROVM_ROOTFS_SIZE_MIB:-8192}"
+shared_format="${SANDBOX_HOST_MICROVM_SHARED_FORMAT:-auto}"
+rootfs_uuid="${SANDBOX_HOST_MICROVM_ROOTFS_UUID:-11111111-2222-3333-4444-555555555555}"
+build_kernel="${SANDBOX_HOST_MICROVM_BUILD_KERNEL:-false}"
 
 usage() {
     cat >&2 <<'USAGE'
 Usage: build.sh
 
 Environment:
-  AGENT_MANAGER_MICROVM_BUILD_KERNEL      Build the pinned kernel from kernel.lock when true.
-  AGENT_MANAGER_MICROVM_KERNEL_PATH       Required path to the guest kernel image unless AGENT_MANAGER_MICROVM_BUILD_KERNEL=true.
-  AGENT_MANAGER_MICROVM_KERNEL_CONFIG     Optional kernel .config to validate.
-  AGENT_MANAGER_MICROVM_OUT_DIR           Output dir (default releases/microvm/<timestamp>).
-  AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_DIR Prepared guest rootfs directory to copy.
-  AGENT_MANAGER_MICROVM_SIGNING_KEY       OpenSSL private key path for manifest signing.
-  AGENT_MANAGER_MICROVM_PUBLIC_KEY        Optional trusted public key for verification.
-  AGENT_MANAGER_MICROVM_PUBLIC_KEY_SHA256 Optional trusted public key DER SHA-256.
-  AGENT_MANAGER_MICROVM_ROOTFS_SIZE_MIB   Rootfs image size, default 8192.
-  AGENT_MANAGER_MICROVM_SHARED_FORMAT     auto|erofs|squashfs|ext4, default auto.
+  SANDBOX_HOST_MICROVM_BUILD_KERNEL      Build the pinned kernel from kernel.lock when true.
+  SANDBOX_HOST_MICROVM_KERNEL_PATH       Required path to the guest kernel image unless SANDBOX_HOST_MICROVM_BUILD_KERNEL=true.
+  SANDBOX_HOST_MICROVM_KERNEL_CONFIG     Optional kernel .config to validate.
+  SANDBOX_HOST_MICROVM_OUT_DIR           Output dir (default releases/microvm/<timestamp>).
+  SANDBOX_HOST_MICROVM_ROOTFS_SOURCE_DIR Prepared guest rootfs directory to copy.
+  SANDBOX_HOST_MICROVM_SIGNING_KEY       OpenSSL private key path for manifest signing.
+  SANDBOX_HOST_MICROVM_PUBLIC_KEY        Optional trusted public key for verification.
+  SANDBOX_HOST_MICROVM_PUBLIC_KEY_SHA256 Optional trusted public key DER SHA-256.
+  SANDBOX_HOST_MICROVM_ROOTFS_SIZE_MIB   Rootfs image size, default 8192.
+  SANDBOX_HOST_MICROVM_SHARED_FORMAT     auto|erofs|squashfs|ext4, default auto.
 USAGE
 }
 
@@ -48,16 +48,16 @@ case "$build_kernel" in
 esac
 
 if [ -z "$kernel_path" ] || [ ! -f "$kernel_path" ]; then
-    echo "AGENT_MANAGER_MICROVM_KERNEL_PATH must point to a kernel image" >&2
+    echo "SANDBOX_HOST_MICROVM_KERNEL_PATH must point to a kernel image" >&2
     exit 2
 fi
 
 if [ -z "$rootfs_source_dir" ] || [ ! -d "$rootfs_source_dir" ]; then
-    echo "AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_DIR must point to a prepared guest rootfs directory" >&2
+    echo "SANDBOX_HOST_MICROVM_ROOTFS_SOURCE_DIR must point to a prepared guest rootfs directory" >&2
     exit 2
 fi
 
-for cmd in debugfs go sha256sum openssl mkfs.ext4 tar; do
+for cmd in debugfs file go sha256sum openssl mkfs.ext4 tar; do
     command -v "$cmd" >/dev/null 2>&1 || { echo "missing required command: $cmd" >&2; exit 2; }
 done
 
@@ -90,9 +90,9 @@ install -m 0755 "$script_dir/init" "$root_dir/init"
 
 echo "Building guest supervisor" >&2
 install -d -m 0755 "$root_dir/usr/local/bin"
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$root_dir/usr/local/bin/agent-manager-microvm-agent" "$repo_root/cmd/agent-manager-microvm-agent"
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$root_dir/usr/local/bin/sandbox-guest-agent" "$repo_root/cmd/sandbox-guest-agent"
 # Tool-executor microVMs run the tool-exec server only (no in-VM agent runtime).
-install -m 0755 "$repo_root/agent/tool-entrypoint.sh" "$root_dir/usr/local/bin/agent-manager-microvm-entrypoint"
+install -m 0755 "$script_dir/tool-entrypoint.sh" "$root_dir/usr/local/bin/sandbox-tool-entrypoint"
 
 "$script_dir/rootfs/verify-standard-toolset.sh" --root-dir "$root_dir"
 
@@ -100,7 +100,7 @@ if [ -d "$root_dir/builtin-skills" ]; then
     mkdir -p "$shared_dir"
     cp -a "$root_dir/builtin-skills" "$shared_dir/builtin-skills"
 fi
-printf '%s\n' "$artifact_version" > "$shared_dir/agent-manager-microvm-artifact-version"
+printf '%s\n' "$artifact_version" > "$shared_dir/sandbox-host-guest-artifact-version"
 
 "$script_dir/scan-no-secrets.sh" "$root_dir"
 
@@ -124,14 +124,14 @@ case "$shared_format" in
         fi
         ;;
     erofs|squashfs|ext4) ;;
-    *) echo "invalid AGENT_MANAGER_MICROVM_SHARED_FORMAT: $shared_format" >&2; exit 2 ;;
+    *) echo "invalid SANDBOX_HOST_MICROVM_SHARED_FORMAT: $shared_format" >&2; exit 2 ;;
 esac
 if [ "$shared_format" = "erofs" ]; then
     mkfs.erofs "$shared" "$shared_dir" >/dev/null
 elif [ "$shared_format" = "squashfs" ]; then
     mksquashfs "$shared_dir" "$shared" -noappend -all-root -quiet
 else
-    shared_size_mib="${AGENT_MANAGER_MICROVM_SHARED_SIZE_MIB:-128}"
+    shared_size_mib="${SANDBOX_HOST_MICROVM_SHARED_SIZE_MIB:-128}"
     truncate -s "${shared_size_mib}M" "$shared"
     mkfs.ext4 -F -q -d "$shared_dir" "$shared"
 fi
@@ -215,7 +215,7 @@ cat > "$out_dir/manifest.json" <<EOF
   "rootfs": {"path": "rootfs.ext4", "sha256": "$rootfs_sha", "format": "ext4", "sizeMiB": $rootfs_size_mib},
   "shared": {"path": "shared.img", "sha256": "$shared_sha", "format": "$shared_format"},
   "entrypoint": "/init",
-  "runtimeEntrypoint": "/usr/local/bin/agent-manager-microvm-entrypoint"
+  "runtimeEntrypoint": "/usr/local/bin/sandbox-tool-entrypoint"
 }
 EOF
 
@@ -226,6 +226,7 @@ if [ ! -f "$signing_key" ]; then
 fi
 openssl pkey -in "$signing_key" -pubout -out "$out_dir/signing.pub" >/dev/null 2>&1
 openssl dgst -sha256 -sign "$signing_key" -out "$out_dir/manifest.sig" "$out_dir/manifest.json"
+chmod 0644 "$out_dir/signing.pub" "$out_dir/manifest.sig"
 openssl dgst -sha256 -verify "$out_dir/signing.pub" -signature "$out_dir/manifest.sig" "$out_dir/manifest.json" >/dev/null
 
 "$script_dir/verify.sh" "$out_dir" "$trusted_public_key" "$trusted_public_key_sha"

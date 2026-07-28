@@ -1,0 +1,82 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "SecondStack Sandbox Service",
+    "version": "sandbox.secondstack.ai/v1"
+  },
+  "servers": [{"url": "/"}],
+  "security": [{"internalBearer": []}],
+  "paths": {
+    "/v1/environments:resolve": {"post": {"operationId": "resolveEnvironment", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ResolveEnvironmentRequest"}}}}, "responses": {"200": {"description": "Resolved"}, "201": {"description": "Created"}}}},
+    "/v1/environments/{environmentId}": {"get": {"operationId": "getEnvironment", "parameters": [{"$ref": "#/components/parameters/environmentId"}], "responses": {"200": {"description": "Environment"}}}},
+    "/v1/environments/{environmentId}:start": {"post": {"operationId": "startEnvironment", "parameters": [{"$ref": "#/components/parameters/environmentId"}], "requestBody": {"$ref": "#/components/requestBodies/generation"}, "responses": {"200": {"description": "Started"}}}},
+    "/v1/environments/{environmentId}:inspect": {"post": {"operationId": "inspectEnvironment", "parameters": [{"$ref": "#/components/parameters/environmentId"}], "responses": {"200": {"description": "Inspected"}}}},
+    "/v1/environments/{environmentId}:stop": {"post": {"operationId": "stopEnvironment", "parameters": [{"$ref": "#/components/parameters/environmentId"}], "requestBody": {"$ref": "#/components/requestBodies/generation"}, "responses": {"200": {"description": "Stopped"}}}},
+    "/v1/environments/{environmentId}:execute": {"post": {"operationId": "executeEnvironment", "parameters": [{"$ref": "#/components/parameters/environmentId"}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ExecuteRequest"}}}}, "responses": {"200": {"description": "Executed", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ExecuteResult"}}}}}}},
+    "/v1/environments/{environmentId}:purge": {"post": {"operationId": "purgeEnvironment", "parameters": [{"$ref": "#/components/parameters/environmentId"}], "responses": {"200": {"description": "Purged"}}}},
+    "/v1/environments/{environmentId}:materialize": {"post": {"operationId": "materializeWorkspaceVersion", "parameters": [{"$ref": "#/components/parameters/environmentId"}], "responses": {"200": {"description": "Materialized"}}}},
+    "/v1/environments/{environmentId}:checkpoint": {"post": {"operationId": "checkpointEnvironment", "parameters": [{"$ref": "#/components/parameters/environmentId"}], "responses": {"201": {"description": "Checkpointed"}}}},
+    "/v1/environments/{environmentId}/versions:commit": {"post": {"operationId": "commitWorkspaceVersion", "parameters": [{"$ref": "#/components/parameters/environmentId"}], "responses": {"201": {"description": "Committed"}}}},
+    "/v1/environments/{environmentId}/versions:current": {"get": {"operationId": "getCurrentWorkspaceVersion", "parameters": [{"$ref": "#/components/parameters/environmentId"}], "responses": {"200": {"description": "Current version"}}}},
+    "/v1/environments/{environmentId}/versions/{logicalVersion}": {"get": {"operationId": "getWorkspaceVersion", "parameters": [{"$ref": "#/components/parameters/environmentId"}, {"$ref": "#/components/parameters/logicalVersion"}], "responses": {"200": {"description": "Workspace version"}}}},
+    "/v1/environments/{environmentId}/files": {
+      "get": {
+        "operationId": "openWorkspaceFile",
+        "parameters": [{"$ref": "#/components/parameters/environmentId"}, {"$ref": "#/components/parameters/expectedGeneration"}, {"$ref": "#/components/parameters/leaseIdQuery"}, {"$ref": "#/components/parameters/workspacePath"}],
+        "responses": {"200": {"description": "Workspace file stream", "content": {"application/octet-stream": {"schema": {"type": "string", "contentEncoding": "binary"}}}}}
+      },
+      "put": {
+        "operationId": "putWorkspaceFile",
+        "parameters": [{"$ref": "#/components/parameters/environmentId"}, {"$ref": "#/components/parameters/expectedGeneration"}, {"$ref": "#/components/parameters/leaseIdQuery"}, {"$ref": "#/components/parameters/workspacePath"}],
+        "requestBody": {"required": true, "content": {"application/octet-stream": {"schema": {"type": "string", "contentEncoding": "binary"}}}},
+        "responses": {"200": {"description": "Workspace file written"}}
+      }
+    },
+    "/v1/environments/{environmentId}/artifacts:exchange": {"post": {"operationId": "exchangeArtifact", "parameters": [{"$ref": "#/components/parameters/environmentId"}], "responses": {"201": {"description": "Exchanged"}}}},
+    "/v1/environments/{environmentId}/leases:acquire": {"post": {"operationId": "acquireLease", "parameters": [{"$ref": "#/components/parameters/environmentId"}], "responses": {"201": {"description": "Acquired"}}}},
+    "/v1/leases/{leaseId}:renew": {"post": {"operationId": "renewLease", "parameters": [{"$ref": "#/components/parameters/leaseId"}], "responses": {"200": {"description": "Renewed"}}}},
+    "/v1/leases/{leaseId}:release": {"post": {"operationId": "releaseLease", "parameters": [{"$ref": "#/components/parameters/leaseId"}], "responses": {"200": {"description": "Released"}}}},
+    "/v1/resource-classes": {"get": {"operationId": "listResourceClasses", "responses": {"200": {"description": "Resource classes"}}}},
+    "/v1/lifecycle-policies": {"get": {"operationId": "listLifecyclePolicies", "responses": {"200": {"description": "Lifecycle policies"}}}},
+    "/v1/workspace-usage": {"get": {"operationId": "getWorkspaceUsage", "parameters": [{"$ref": "#/components/parameters/tenantRef"}, {"$ref": "#/components/parameters/subjectRef"}], "responses": {"200": {"description": "Subject workspace usage", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WorkspaceUsage"}}}}}}}
+  },
+  "components": {
+    "securitySchemes": {"internalBearer": {"type": "http", "scheme": "bearer"}},
+    "parameters": {
+      "environmentId": {"name": "environmentId", "in": "path", "required": true, "schema": {"type": "string"}},
+      "leaseId": {"name": "leaseId", "in": "path", "required": true, "schema": {"type": "string"}}
+      ,"logicalVersion": {"name": "logicalVersion", "in": "path", "required": true, "schema": {"type": "integer", "minimum": 1}},
+      "expectedGeneration": {"name": "expectedGeneration", "in": "query", "required": true, "schema": {"type": "integer", "minimum": 1}},
+      "leaseIdQuery": {"name": "leaseId", "in": "query", "required": true, "schema": {"type": "string"}},
+      "workspacePath": {"name": "path", "in": "query", "required": true, "schema": {"type": "string"}},
+      "tenantRef": {"name": "tenantRef", "in": "query", "required": true, "schema": {"type": "string"}},
+      "subjectRef": {"name": "subjectRef", "in": "query", "required": true, "schema": {"type": "string"}}
+    },
+    "requestBodies": {
+      "generation": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EnvironmentGenerationRequest"}}}}
+    },
+    "schemas": {
+      "Environment": {"type": "object", "required": ["contractVersion", "id", "tenantRef", "subjectRef", "environmentKey", "workspaceId", "imageRef", "toolchainRef", "resourceClassId", "lifecyclePolicyId", "desiredState", "state", "currentGeneration", "exposedPorts", "metadata", "lastActivityAt", "createdAt", "updatedAt"]},
+      "Instance": {"type": "object", "required": ["contractVersion", "id", "environmentId", "generation", "state", "preparedAt", "updatedAt"]},
+      "Lease": {"type": "object", "required": ["contractVersion", "id", "environmentId", "generation", "holderRef", "state", "expiresAt", "createdAt", "updatedAt"]},
+      "Workspace": {"type": "object", "required": ["contractVersion", "id", "tenantRef", "subjectRef", "storageRef", "generation", "retainUntil", "createdAt", "updatedAt"]},
+      "WorkspaceUsage": {"type": "object", "required": ["contractVersion", "tenantRef", "subjectRef", "environmentCount", "quotaBytes", "usageBytes"]},
+      "Snapshot": {"type": "object", "required": ["contractVersion", "id", "environmentId", "workspaceId", "generation", "opaqueRef", "contentHash", "metadata", "createdAt"]},
+      "Artifact": {"type": "object", "required": ["contractVersion", "id", "environmentId", "generation", "name", "mimeType", "sizeBytes", "sha256", "opaqueRef", "metadata", "createdAt"]},
+      "ResourceClass": {"type": "object", "required": ["contractVersion", "id", "cpuMillis", "memoryBytes", "diskBytes", "processLimit", "maxExposedPorts", "createdAt", "updatedAt"]},
+      "LifecyclePolicy": {"type": "object", "required": ["contractVersion", "id", "idleStopAfterSeconds", "retentionSeconds", "stopComputeWhenIdle", "retainOnExplicitStop", "keepRunningWithoutWake", "createdAt", "updatedAt"]},
+      "WorkspaceVersion": {"type": "object", "required": ["contractVersion", "environmentId", "logicalVersion", "sourceGeneration", "terminalTurnId", "terminalStatus", "workspacePresent", "dirty", "contentHash", "createdAt"]},
+      "ResolveEnvironmentRequest": {"type": "object", "required": ["contractVersion", "tenantRef", "subjectRef", "environmentKey", "imageRef", "toolchainRef", "resourceClassId", "lifecyclePolicyId", "metadata"]},
+      "EnvironmentGenerationRequest": {"type": "object", "required": ["contractVersion"]},
+      "AcquireLeaseRequest": {"type": "object", "required": ["contractVersion", "holderRef"]},
+      "RenewLeaseRequest": {"type": "object", "required": ["contractVersion"]},
+      "ExecuteRequest": {"type": "object", "required": ["contractVersion", "expectedGeneration", "leaseId", "operation", "allowedConnectionIds"], "properties": {"allowedConnectionIds": {"type": "array", "maxItems": 100, "items": {"type": "string", "minLength": 1, "maxLength": 500}}}},
+      "ExecuteResult": {"type": "object", "required": ["instanceId"]},
+      "CommitWorkspaceVersionRequest": {"type": "object", "required": ["contractVersion", "expectedGeneration", "terminalTurnId", "terminalStatus"]},
+      "MaterializeWorkspaceVersionRequest": {"type": "object", "required": ["contractVersion", "sourceEnvironmentId", "sourceLogicalVersion", "expectedTargetGeneration"]},
+      "PurgeEnvironmentRequest": {"type": "object", "required": ["contractVersion", "expectedGeneration"]},
+      "CheckpointRequest": {"type": "object", "required": ["contractVersion", "expectedGeneration", "metadata"]},
+      "ExchangeArtifactRequest": {"type": "object", "required": ["contractVersion", "expectedGeneration", "sourceRef", "name", "mimeType", "metadata"]}
+    }
+  }
+}

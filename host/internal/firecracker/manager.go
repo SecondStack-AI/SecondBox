@@ -1,4 +1,4 @@
-package microvm
+package firecracker
 
 import (
 	"bufio"
@@ -19,10 +19,8 @@ import (
 	"syscall"
 	"time"
 
-	"agent-manager/internal/config"
-	"agent-manager/internal/flow"
-	"agent-manager/internal/registry"
-	"agent-manager/internal/runtimemanager"
+	"secondstack/sandbox-host/internal/config"
+	"secondstack/sandbox-host/internal/runtime"
 )
 
 const (
@@ -71,20 +69,10 @@ type Manager struct {
 	executeTool      func(context.Context, string, ToolExecRequest) (ToolExecResponse, error)
 	freezeWorkspace  func(context.Context, string) (BackupResponse, error)
 	removeInstance   func(context.Context, string) error
-	flowRecorder     flow.Recorder
 	startDurations   []time.Duration
 	mountLocks       map[runtimeInstanceKey]*sync.Mutex
 	thinDeviceIDs    *thinDeviceIDAllocator
 	thinDeviceIDOnce sync.Once
-}
-
-func (m *Manager) SetFlowRecorder(recorder flow.Recorder) {
-	if m == nil {
-		return
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.flowRecorder = recorder
 }
 
 type runtimeInstanceKey struct {
@@ -107,6 +95,9 @@ type instance struct {
 	workspacePath      string
 	sharedImagePath    string
 	guestIP            string
+	environmentID      string
+	sandboxInstanceID  string
+	generation         int64
 	startupFingerprint string
 	cmd                *exec.Cmd
 	startedAt          time.Time
@@ -509,7 +500,7 @@ func ensureFirecrackerVersion(fcPath string) error {
 		return fmt.Errorf("parse embedded firecracker.lock")
 	}
 	if maj != wantMaj || minr != wantMin || pat != wantPatch {
-		return fmt.Errorf("firecracker %d.%d.%d does not match pinned version %d.%d.%d; rebuild snapshots/artifacts with the pinned VMM or update internal/microvm/firecracker.lock deliberately", maj, minr, pat, wantMaj, wantMin, wantPatch)
+		return fmt.Errorf("firecracker %d.%d.%d does not match pinned version %d.%d.%d; rebuild snapshots/artifacts with the pinned VMM or update internal/firecracker/firecracker.lock deliberately", maj, minr, pat, wantMaj, wantMin, wantPatch)
 	}
 	return nil
 }
@@ -882,6 +873,9 @@ func (m *Manager) createAndStartCold(ctx context.Context, agentID, compartmentID
 		workspacePath:      workspacePath,
 		sharedImagePath:    launchImage.SharedImagePath,
 		guestIP:            guestIP,
+		environmentID:      strings.TrimSpace(opts.EnvironmentID),
+		sandboxInstanceID:  strings.TrimSpace(opts.InstanceID),
+		generation:         opts.Generation,
 		startupFingerprint: startupFingerprint,
 		cmd:                cmd,
 		startedAt:          time.Now().UTC(),
@@ -893,15 +887,6 @@ func (m *Manager) createAndStartCold(ctx context.Context, agentID, compartmentID
 	// waited on (no zombie) and cleanup runs exactly once.
 	go m.reap(inst)
 	timer.mark("instance_registered")
-	contextToken, err := m.registerSourceBinding(setupCtx, agentID, id, opts)
-	if err != nil {
-		_ = m.stopInstance(setupCtx, inst, true)
-		return "", err
-	}
-	if opts.ProxyEgress != nil {
-		opts.ProxyEgress.ContextToken = contextToken
-	}
-	timer.mark("source_binding_registered")
 	if err := m.deliverStartupSecrets(setupCtx, inst, agentID, opts, timer); err != nil {
 		_ = m.stopInstance(setupCtx, inst, true)
 		return "", fmt.Errorf("deliver runtime startup secrets: %w", err)
@@ -976,7 +961,9 @@ func (m *Manager) finishInstance(inst *instance) {
 		m.mu.Lock()
 		m.removeInstanceLocked(inst)
 		m.mu.Unlock()
-		m.unregisterSourceBinding(inst.id)
+		if err := m.unregisterSourceBinding(context.Background(), inst); err != nil {
+			slog.Error("Sandbox Host source binding cleanup failed", "instance", inst.id, "error", err)
+		}
 		// Release the guest identity only after the launcher tap and state are gone.
 		// If cleanup fails the launcher may still claim this IP/MAC, so retain the
 		// reservation fail-closed rather than let a concurrent start recycle it into
@@ -1475,7 +1462,7 @@ func validateRuntimeCompartmentID(compartmentID string) error {
 	if compartmentID == "" {
 		return fmt.Errorf("compartment id is required")
 	}
-	if compartmentID == registry.CompartmentKindDefault {
+	if compartmentID == "default" {
 		return fmt.Errorf("default is not a valid runtime compartment")
 	}
 	return nil

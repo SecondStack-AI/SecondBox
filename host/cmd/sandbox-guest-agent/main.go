@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"agent-manager/internal/microvmguest"
+	"secondstack/sandbox-host/internal/guest"
 
 	"golang.org/x/sys/unix"
 )

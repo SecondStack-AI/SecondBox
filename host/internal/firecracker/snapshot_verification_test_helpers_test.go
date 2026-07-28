@@ -1,4 +1,4 @@
-package microvm
+package firecracker
 
 import (
 	"fmt"

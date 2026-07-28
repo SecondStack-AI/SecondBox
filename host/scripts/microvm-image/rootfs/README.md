@@ -14,7 +14,7 @@ imports that base into Docker, applies `apt-std.txt`, pinned
 for `scripts/microvm-image/build.sh`.
 
 The legacy "extend the current signed rootfs" path is still available with
-`AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_MODE=extend` for emergency rollbacks, but it is no
+`SANDBOX_HOST_MICROVM_ROOTFS_SOURCE_MODE=extend` for emergency rollbacks, but it is no
 longer the default because it depends on an opaque, gitignored
 `releases/microvm/latest/rootfs.ext4`.
 
@@ -67,9 +67,9 @@ builder against it:
 scripts/microvm-image/rootfs/build-rootfs-source.sh   # -> tmp/microvm-rootfs-src
 
 # 2. Build signed kernel/rootfs/shared artifacts from it (reuses the current kernel).
-AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_DIR=tmp/microvm-rootfs-src \
-AGENT_MANAGER_MICROVM_KERNEL_PATH=releases/microvm/latest/kernel \
-AGENT_MANAGER_MICROVM_ROOTFS_SIZE_MIB=10240 \
+SANDBOX_HOST_MICROVM_ROOTFS_SOURCE_DIR=tmp/microvm-rootfs-src \
+SANDBOX_HOST_MICROVM_KERNEL_PATH=releases/microvm/latest/kernel \
+SANDBOX_HOST_MICROVM_ROOTFS_SIZE_MIB=10240 \
 scripts/microvm-image/build.sh
 ```
 
@@ -78,8 +78,8 @@ Or via `just build-microvm-images-std`, which chains both.
 To use the legacy extension path:
 
 ```sh
-AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_MODE=extend \
-AGENT_MANAGER_MICROVM_BASE_ROOTFS=releases/microvm/latest/rootfs.ext4 \
+SANDBOX_HOST_MICROVM_ROOTFS_SOURCE_MODE=extend \
+SANDBOX_HOST_MICROVM_BASE_ROOTFS=releases/microvm/latest/rootfs.ext4 \
 scripts/microvm-image/rootfs/build-rootfs-source.sh
 ```
 

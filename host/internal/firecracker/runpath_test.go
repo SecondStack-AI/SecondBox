@@ -1,4 +1,4 @@
-package microvm
+package firecracker
 
 import (
 	"fmt"
@@ -30,7 +30,7 @@ func TestRelocateRunDirForUnixSockets(t *testing.T) {
 		if strings.HasPrefix(got, "/run/user/1000/") {
 			t.Fatalf("expected relocation outside XDG_RUNTIME_DIR, got %q", got)
 		}
-		want := "/c/agent-manager/run"
+		want := "/c/sandbox-host/run"
 		if got != want {
 			t.Fatalf("expected cache relocation %q, got %q", want, got)
 		}
@@ -47,7 +47,7 @@ func TestRelocateRunDirForUnixSockets(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected relocation for %q", deep)
 		}
-		want := filepath.Join(os.TempDir(), fmt.Sprintf("agent-manager-%d", os.Getuid()), "run")
+		want := filepath.Join(os.TempDir(), fmt.Sprintf("sandbox-host-%d", os.Getuid()), "run")
 		if got != want {
 			t.Fatalf("expected fallback %q, got %q", want, got)
 		}
@@ -63,7 +63,7 @@ func TestRelocateRunDirForUnixSockets(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected relocation for %q", deep)
 		}
-		want := filepath.Join(os.TempDir(), fmt.Sprintf("agent-manager-%d", os.Getuid()), "run")
+		want := filepath.Join(os.TempDir(), fmt.Sprintf("sandbox-host-%d", os.Getuid()), "run")
 		if got != want {
 			t.Fatalf("expected fallback %q, got %q", want, got)
 		}
@@ -76,14 +76,14 @@ func TestCheckUnixSocketPath(t *testing.T) {
 		path    string
 		wantErr bool
 	}{
-		{name: "fits", path: "/run/user/1000/agent-manager/run/fc-abc-cmp-123-4567/firecracker.sock", wantErr: false},
+		{name: "fits", path: "/run/user/1000/sandbox-host/run/fc-abc-cmp-123-4567/firecracker.sock", wantErr: false},
 		{name: "too long", path: "/" + strings.Repeat("a", maxUnixSocketPathLen), wantErr: true},
 		{name: "exactly at limit is rejected", path: strings.Repeat("b", maxUnixSocketPathLen), wantErr: true},
 		{name: "one under limit fits", path: strings.Repeat("c", maxUnixSocketPathLen-1), wantErr: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := checkUnixSocketPath("test", tt.path, "AGENT_MANAGER_MICROVM_RUN_DIR")
+			err := checkUnixSocketPath("test", tt.path, "SANDBOX_HOST_MICROVM_RUN_DIR")
 			if tt.wantErr && err == nil {
 				t.Fatalf("expected error for path of len %d", len(tt.path))
 			}

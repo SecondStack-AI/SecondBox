@@ -1,4 +1,4 @@
-package microvm
+package firecracker
 
 import (
 	"context"
@@ -11,23 +11,23 @@ import (
 	"testing"
 	"time"
 
-	"agent-manager/internal/config"
-	"agent-manager/internal/runtimemanager"
+	"secondstack/sandbox-host/internal/config"
+	"secondstack/sandbox-host/internal/runtime"
 )
 
 func TestSmokeBootFirecracker(t *testing.T) {
-	if os.Getenv("AGENT_MANAGER_MICROVM_SMOKE") != "1" {
-		t.Skip("set AGENT_MANAGER_MICROVM_SMOKE=1 to boot a local Firecracker microVM")
+	if os.Getenv("SANDBOX_HOST_MICROVM_SMOKE") != "1" {
+		t.Skip("set SANDBOX_HOST_MICROVM_SMOKE=1 to boot a local Firecracker microVM")
 	}
 	workDir := shortSmokeDir(t)
 	cfg := &config.Config{
-		FirecrackerPath:         requiredEnv(t, "AGENT_MANAGER_FIRECRACKER_PATH"),
-		MicroVMKernelPath:       requiredEnv(t, "AGENT_MANAGER_MICROVM_KERNEL_PATH"),
-		MicroVMRootfsPath:       requiredEnv(t, "AGENT_MANAGER_MICROVM_ROOTFS_PATH"),
+		FirecrackerPath:         requiredEnv(t, "SANDBOX_HOST_FIRECRACKER_PATH"),
+		MicroVMKernelPath:       requiredEnv(t, "SANDBOX_HOST_MICROVM_KERNEL_PATH"),
+		MicroVMRootfsPath:       requiredEnv(t, "SANDBOX_HOST_MICROVM_ROOTFS_PATH"),
 		MicroVMWorkspaceDir:     filepath.Join(workDir, "workspaces"),
 		MicroVMRunDir:           filepath.Join(workDir, "run"),
 		MicroVMLogDir:           filepath.Join(workDir, "logs"),
-		MicroVMKernelArgs:       os.Getenv("AGENT_MANAGER_MICROVM_KERNEL_ARGS"),
+		MicroVMKernelArgs:       os.Getenv("SANDBOX_HOST_MICROVM_KERNEL_ARGS"),
 		MicroVMMemoryMiB:        256,
 		MicroVMVCPUs:            1,
 		MicroVMWorkspaceSizeMiB: 64,
@@ -59,22 +59,22 @@ func TestSmokeBootFirecracker(t *testing.T) {
 }
 
 func TestSmokeGeneratedImageBootsControlAndRuntime(t *testing.T) {
-	if os.Getenv("AGENT_MANAGER_MICROVM_GENERATED_SMOKE") != "1" {
-		t.Skip("set AGENT_MANAGER_MICROVM_GENERATED_SMOKE=1 to boot generated microVM artifacts")
+	if os.Getenv("SANDBOX_HOST_MICROVM_GENERATED_SMOKE") != "1" {
+		t.Skip("set SANDBOX_HOST_MICROVM_GENERATED_SMOKE=1 to boot generated microVM artifacts")
 	}
 	workDir := shortSmokeDir(t)
 	cfg := &config.Config{
-		FirecrackerPath:         requiredEnv(t, "AGENT_MANAGER_FIRECRACKER_PATH"),
-		MicroVMKernelPath:       requiredEnv(t, "AGENT_MANAGER_MICROVM_KERNEL_PATH"),
-		MicroVMRootfsPath:       requiredEnv(t, "AGENT_MANAGER_MICROVM_ROOTFS_PATH"),
-		MicroVMSharedImagePath:  os.Getenv("AGENT_MANAGER_MICROVM_SHARED_IMAGE_PATH"),
+		FirecrackerPath:         requiredEnv(t, "SANDBOX_HOST_FIRECRACKER_PATH"),
+		MicroVMKernelPath:       requiredEnv(t, "SANDBOX_HOST_MICROVM_KERNEL_PATH"),
+		MicroVMRootfsPath:       requiredEnv(t, "SANDBOX_HOST_MICROVM_ROOTFS_PATH"),
+		MicroVMSharedImagePath:  os.Getenv("SANDBOX_HOST_MICROVM_SHARED_IMAGE_PATH"),
 		MicroVMWorkspaceDir:     filepath.Join(workDir, "workspaces"),
 		MicroVMRunDir:           filepath.Join(workDir, "run"),
 		MicroVMLogDir:           filepath.Join(workDir, "logs"),
-		MicroVMKernelArgs:       envOrDefault("AGENT_MANAGER_MICROVM_KERNEL_ARGS", "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/init"),
-		MicroVMMemoryMiB:        envIntOrDefault("AGENT_MANAGER_MICROVM_MEMORY_MIB", 2048),
+		MicroVMKernelArgs:       envOrDefault("SANDBOX_HOST_MICROVM_KERNEL_ARGS", "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/init"),
+		MicroVMMemoryMiB:        envIntOrDefault("SANDBOX_HOST_MICROVM_MEMORY_MIB", 2048),
 		MicroVMVCPUs:            1,
-		MicroVMWorkspaceSizeMiB: envIntOrDefault("AGENT_MANAGER_MICROVM_WORKSPACE_SIZE_MIB", 256),
+		MicroVMWorkspaceSizeMiB: envIntOrDefault("SANDBOX_HOST_MICROVM_WORKSPACE_SIZE_MIB", 256),
 		MicroVMAllowUnjailed:    true,
 	}
 	mgr, err := New(cfg)
@@ -117,8 +117,8 @@ func TestSmokeGeneratedImageBootsControlAndRuntime(t *testing.T) {
 }
 
 func TestSmokeGeneratedToolExecutorImageReadiness(t *testing.T) {
-	if os.Getenv("AGENT_MANAGER_MICROVM_TOOL_EXECUTOR_SMOKE") != "1" {
-		t.Skip("set AGENT_MANAGER_MICROVM_TOOL_EXECUTOR_SMOKE=1 to boot generated tool-executor artifacts")
+	if os.Getenv("SANDBOX_HOST_MICROVM_TOOL_EXECUTOR_SMOKE") != "1" {
+		t.Skip("set SANDBOX_HOST_MICROVM_TOOL_EXECUTOR_SMOKE=1 to boot generated tool-executor artifacts")
 	}
 	for name, value := range map[string]string{
 		"AGENT_PLATFORM_TOKEN":  "host-platform-secret-must-not-cross-vm-boundary",
@@ -131,24 +131,24 @@ func TestSmokeGeneratedToolExecutorImageReadiness(t *testing.T) {
 		t.Setenv(name, value)
 	}
 	workDir := shortSmokeDir(t)
-	rootfsPath := requiredEnv(t, "AGENT_MANAGER_MICROVM_ROOTFS_PATH")
-	sharedImagePath := os.Getenv("AGENT_MANAGER_MICROVM_SHARED_IMAGE_PATH")
+	rootfsPath := requiredEnv(t, "SANDBOX_HOST_MICROVM_ROOTFS_PATH")
+	sharedImagePath := os.Getenv("SANDBOX_HOST_MICROVM_SHARED_IMAGE_PATH")
 	cfg := &config.Config{
-		FirecrackerPath:            requiredEnv(t, "AGENT_MANAGER_FIRECRACKER_PATH"),
-		MicroVMKernelPath:          requiredEnv(t, "AGENT_MANAGER_MICROVM_KERNEL_PATH"),
+		FirecrackerPath:            requiredEnv(t, "SANDBOX_HOST_FIRECRACKER_PATH"),
+		MicroVMKernelPath:          requiredEnv(t, "SANDBOX_HOST_MICROVM_KERNEL_PATH"),
 		MicroVMRootfsPath:          rootfsPath,
 		MicroVMSharedImagePath:     sharedImagePath,
-		MicroVMToolRootfsPath:      envOrDefault("AGENT_MANAGER_MICROVM_TOOL_ROOTFS_PATH", rootfsPath),
-		MicroVMToolSharedImagePath: envOrDefault("AGENT_MANAGER_MICROVM_TOOL_SHARED_IMAGE_PATH", sharedImagePath),
-		MicroVMPublicKeyPath:       requiredEnv(t, "AGENT_MANAGER_MICROVM_PUBLIC_KEY"),
-		MicroVMPublicKeySHA256:     requiredEnv(t, "AGENT_MANAGER_MICROVM_PUBLIC_KEY_SHA256"),
+		MicroVMToolRootfsPath:      envOrDefault("SANDBOX_HOST_MICROVM_TOOL_ROOTFS_PATH", rootfsPath),
+		MicroVMToolSharedImagePath: envOrDefault("SANDBOX_HOST_MICROVM_TOOL_SHARED_IMAGE_PATH", sharedImagePath),
+		MicroVMPublicKeyPath:       requiredEnv(t, "SANDBOX_HOST_MICROVM_PUBLIC_KEY"),
+		MicroVMPublicKeySHA256:     requiredEnv(t, "SANDBOX_HOST_MICROVM_PUBLIC_KEY_SHA256"),
 		MicroVMWorkspaceDir:        filepath.Join(workDir, "workspaces"),
-		MicroVMRunDir:              envOrDefault("AGENT_MANAGER_MICROVM_SMOKE_RUN_DIR", filepath.Join(workDir, "run")),
+		MicroVMRunDir:              envOrDefault("SANDBOX_HOST_MICROVM_SMOKE_RUN_DIR", filepath.Join(workDir, "run")),
 		MicroVMLogDir:              filepath.Join(workDir, "logs"),
-		MicroVMKernelArgs:          envOrDefault("AGENT_MANAGER_MICROVM_KERNEL_ARGS", "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/init"),
-		MicroVMMemoryMiB:           envIntOrDefault("AGENT_MANAGER_MICROVM_MEMORY_MIB", 2048),
+		MicroVMKernelArgs:          envOrDefault("SANDBOX_HOST_MICROVM_KERNEL_ARGS", "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/init"),
+		MicroVMMemoryMiB:           envIntOrDefault("SANDBOX_HOST_MICROVM_MEMORY_MIB", 2048),
 		MicroVMVCPUs:               1,
-		MicroVMWorkspaceSizeMiB:    envIntOrDefault("AGENT_MANAGER_MICROVM_WORKSPACE_SIZE_MIB", 256),
+		MicroVMWorkspaceSizeMiB:    envIntOrDefault("SANDBOX_HOST_MICROVM_WORKSPACE_SIZE_MIB", 256),
 		MicroVMAllowUnjailed:       true,
 	}
 	rejectedCfg := *cfg
@@ -310,7 +310,7 @@ func TestSmokeGeneratedToolExecutorImageReadiness(t *testing.T) {
 	if err != nil || rmResp.Error != "" {
 		t.Fatalf("rm through tool executor: resp=%+v err=%v\n%s", rmResp, err, smokeLogPath(t, logPath))
 	}
-	if os.Getenv("AGENT_MANAGER_MICROVM_CONTINUITY_SMOKE") != "1" {
+	if os.Getenv("SANDBOX_HOST_MICROVM_CONTINUITY_SMOKE") != "1" {
 		npmResp, err := mgr.ExecuteTool(ctx, instanceID, ToolExecRequest{
 			Operation: ToolOpExec,
 			Command:   "sh",
@@ -450,24 +450,24 @@ func TestSmokeGeneratedToolExecutorImageReadiness(t *testing.T) {
 }
 
 func TestSmokeGoldenSnapshotCreateGeneratedImage(t *testing.T) {
-	if os.Getenv("AGENT_MANAGER_MICROVM_SNAPSHOT_SMOKE") != "1" {
-		t.Skip("set AGENT_MANAGER_MICROVM_SNAPSHOT_SMOKE=1 to create a local Firecracker snapshot")
+	if os.Getenv("SANDBOX_HOST_MICROVM_SNAPSHOT_SMOKE") != "1" {
+		t.Skip("set SANDBOX_HOST_MICROVM_SNAPSHOT_SMOKE=1 to create a local Firecracker snapshot")
 	}
 	workDir := shortSmokeDir(t)
 	cfg := &config.Config{
-		FirecrackerPath:         requiredEnv(t, "AGENT_MANAGER_FIRECRACKER_PATH"),
-		MicroVMKernelPath:       requiredEnv(t, "AGENT_MANAGER_MICROVM_KERNEL_PATH"),
-		MicroVMRootfsPath:       requiredEnv(t, "AGENT_MANAGER_MICROVM_ROOTFS_PATH"),
-		MicroVMSharedImagePath:  os.Getenv("AGENT_MANAGER_MICROVM_SHARED_IMAGE_PATH"),
-		MicroVMPublicKeyPath:    requiredEnv(t, "AGENT_MANAGER_MICROVM_PUBLIC_KEY"),
-		MicroVMPublicKeySHA256:  requiredEnv(t, "AGENT_MANAGER_MICROVM_PUBLIC_KEY_SHA256"),
+		FirecrackerPath:         requiredEnv(t, "SANDBOX_HOST_FIRECRACKER_PATH"),
+		MicroVMKernelPath:       requiredEnv(t, "SANDBOX_HOST_MICROVM_KERNEL_PATH"),
+		MicroVMRootfsPath:       requiredEnv(t, "SANDBOX_HOST_MICROVM_ROOTFS_PATH"),
+		MicroVMSharedImagePath:  os.Getenv("SANDBOX_HOST_MICROVM_SHARED_IMAGE_PATH"),
+		MicroVMPublicKeyPath:    requiredEnv(t, "SANDBOX_HOST_MICROVM_PUBLIC_KEY"),
+		MicroVMPublicKeySHA256:  requiredEnv(t, "SANDBOX_HOST_MICROVM_PUBLIC_KEY_SHA256"),
 		MicroVMWorkspaceDir:     filepath.Join(workDir, "workspaces"),
 		MicroVMRunDir:           filepath.Join(workDir, "run"),
 		MicroVMLogDir:           filepath.Join(workDir, "logs"),
-		MicroVMKernelArgs:       envOrDefault("AGENT_MANAGER_MICROVM_KERNEL_ARGS", "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/init"),
-		MicroVMMemoryMiB:        envIntOrDefault("AGENT_MANAGER_MICROVM_MEMORY_MIB", 2048),
+		MicroVMKernelArgs:       envOrDefault("SANDBOX_HOST_MICROVM_KERNEL_ARGS", "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/init"),
+		MicroVMMemoryMiB:        envIntOrDefault("SANDBOX_HOST_MICROVM_MEMORY_MIB", 2048),
 		MicroVMVCPUs:            1,
-		MicroVMWorkspaceSizeMiB: envIntOrDefault("AGENT_MANAGER_MICROVM_WORKSPACE_SIZE_MIB", 256),
+		MicroVMWorkspaceSizeMiB: envIntOrDefault("SANDBOX_HOST_MICROVM_WORKSPACE_SIZE_MIB", 256),
 		MicroVMAllowUnjailed:    true,
 	}
 	mgr, err := New(cfg)
@@ -509,55 +509,49 @@ func TestSmokeGoldenSnapshotCreateGeneratedImage(t *testing.T) {
 }
 
 func TestSmokeJailedTapAndTransparentRouteGeneratedImage(t *testing.T) {
-	if os.Getenv("AGENT_MANAGER_MICROVM_JAILED_NET_SMOKE") != "1" {
-		t.Skip("set AGENT_MANAGER_MICROVM_JAILED_NET_SMOKE=1 to run jailed Firecracker tap/iptables smoke")
+	if os.Getenv("SANDBOX_HOST_MICROVM_JAILED_NET_SMOKE") != "1" {
+		t.Skip("set SANDBOX_HOST_MICROVM_JAILED_NET_SMOKE=1 to run jailed Firecracker tap/iptables smoke")
 	}
 	if os.Geteuid() != 0 {
 		t.Skip("jailed tap/iptables smoke requires root")
 	}
 	workDir := shortSmokeDir(t)
 	cfg := &config.Config{
-		FirecrackerPath:                requiredEnv(t, "AGENT_MANAGER_FIRECRACKER_PATH"),
-		JailerPath:                     requiredEnv(t, "AGENT_MANAGER_FIRECRACKER_JAILER_PATH"),
-		MicroVMKernelPath:              requiredEnv(t, "AGENT_MANAGER_MICROVM_KERNEL_PATH"),
-		MicroVMRootfsPath:              requiredEnv(t, "AGENT_MANAGER_MICROVM_ROOTFS_PATH"),
-		MicroVMSharedImagePath:         os.Getenv("AGENT_MANAGER_MICROVM_SHARED_IMAGE_PATH"),
-		MicroVMPublicKeyPath:           requiredEnv(t, "AGENT_MANAGER_MICROVM_PUBLIC_KEY"),
-		MicroVMPublicKeySHA256:         requiredEnv(t, "AGENT_MANAGER_MICROVM_PUBLIC_KEY_SHA256"),
-		MicroVMWorkspaceDir:            filepath.Join(workDir, "workspaces"),
-		MicroVMRunDir:                  filepath.Join(workDir, "run"),
-		MicroVMLogDir:                  filepath.Join(workDir, "logs"),
-		MicroVMKernelArgs:              envOrDefault("AGENT_MANAGER_MICROVM_KERNEL_ARGS", "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/init"),
-		MicroVMMemoryMiB:               envIntOrDefault("AGENT_MANAGER_MICROVM_MEMORY_MIB", 2048),
-		MicroVMVCPUs:                   1,
-		MicroVMWorkspaceSizeMiB:        envIntOrDefault("AGENT_MANAGER_MICROVM_WORKSPACE_SIZE_MIB", 256),
-		MicroVMAllowUnjailed:           false,
-		MicroVMJailerChrootBaseDir:     requiredEnv(t, "AGENT_MANAGER_MICROVM_JAILER_CHROOT_BASE_DIR"),
-		MicroVMJailerUID:               envIntOrDefaultAllowZero("AGENT_MANAGER_MICROVM_JAILER_UID", os.Geteuid()),
-		MicroVMJailerGID:               envIntOrDefaultAllowZero("AGENT_MANAGER_MICROVM_JAILER_GID", os.Getegid()),
-		MicroVMJailerCgroupVersion:     envIntOrDefaultAllowZero("AGENT_MANAGER_MICROVM_JAILER_CGROUP_VERSION", 2),
-		MicroVMJailerParentCgroup:      envOrDefault("AGENT_MANAGER_MICROVM_JAILER_PARENT_CGROUP", "agent-manager"),
-		MicroVMBridgeName:              requiredEnv(t, "AGENT_MANAGER_MICROVM_BRIDGE_NAME"),
-		MicroVMBridgeCIDR:              requiredEnv(t, "AGENT_MANAGER_MICROVM_BRIDGE_CIDR"),
-		MicroVMGuestIP:                 requiredEnv(t, "AGENT_MANAGER_MICROVM_GUEST_IP"),
-		MicroVMTapPrefix:               envOrDefault("AGENT_MANAGER_MICROVM_TAP_PREFIX", "agfc"),
-		EgressProxyTransparentHTTPPort: envIntOrDefault("AGENT_MANAGER_EGRESS_PROXY_TRANSPARENT_HTTP_PORT", 18080),
+		FirecrackerPath:            requiredEnv(t, "SANDBOX_HOST_FIRECRACKER_PATH"),
+		JailerPath:                 requiredEnv(t, "SANDBOX_HOST_FIRECRACKER_JAILER_PATH"),
+		MicroVMKernelPath:          requiredEnv(t, "SANDBOX_HOST_MICROVM_KERNEL_PATH"),
+		MicroVMRootfsPath:          requiredEnv(t, "SANDBOX_HOST_MICROVM_ROOTFS_PATH"),
+		MicroVMSharedImagePath:     os.Getenv("SANDBOX_HOST_MICROVM_SHARED_IMAGE_PATH"),
+		MicroVMPublicKeyPath:       requiredEnv(t, "SANDBOX_HOST_MICROVM_PUBLIC_KEY"),
+		MicroVMPublicKeySHA256:     requiredEnv(t, "SANDBOX_HOST_MICROVM_PUBLIC_KEY_SHA256"),
+		MicroVMWorkspaceDir:        filepath.Join(workDir, "workspaces"),
+		MicroVMRunDir:              filepath.Join(workDir, "run"),
+		MicroVMLogDir:              filepath.Join(workDir, "logs"),
+		MicroVMKernelArgs:          envOrDefault("SANDBOX_HOST_MICROVM_KERNEL_ARGS", "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/init"),
+		MicroVMMemoryMiB:           envIntOrDefault("SANDBOX_HOST_MICROVM_MEMORY_MIB", 2048),
+		MicroVMVCPUs:               1,
+		MicroVMWorkspaceSizeMiB:    envIntOrDefault("SANDBOX_HOST_MICROVM_WORKSPACE_SIZE_MIB", 256),
+		MicroVMAllowUnjailed:       false,
+		MicroVMJailerChrootBaseDir: requiredEnv(t, "SANDBOX_HOST_MICROVM_JAILER_CHROOT_BASE_DIR"),
+		MicroVMJailerUID:           envIntOrDefaultAllowZero("SANDBOX_HOST_MICROVM_JAILER_UID", os.Geteuid()),
+		MicroVMJailerGID:           envIntOrDefaultAllowZero("SANDBOX_HOST_MICROVM_JAILER_GID", os.Getegid()),
+		MicroVMJailerCgroupVersion: envIntOrDefaultAllowZero("SANDBOX_HOST_MICROVM_JAILER_CGROUP_VERSION", 2),
+		MicroVMJailerParentCgroup:  envOrDefault("SANDBOX_HOST_MICROVM_JAILER_PARENT_CGROUP", "sandbox-host"),
+		MicroVMBridgeName:          requiredEnv(t, "SANDBOX_HOST_MICROVM_BRIDGE_NAME"),
+		MicroVMBridgeCIDR:          requiredEnv(t, "SANDBOX_HOST_MICROVM_BRIDGE_CIDR"),
+		MicroVMGuestIP:             requiredEnv(t, "SANDBOX_HOST_MICROVM_GUEST_IP"),
+		MicroVMTapPrefix:           envOrDefault("SANDBOX_HOST_MICROVM_TAP_PREFIX", "agfc"),
 	}
 	mgr, err := New(cfg)
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
-	mgr.SetSourceBindingRegistrar(&fakeSourceBindingRegistrar{})
 	mgr.SetHostEgressRouter(NewIPTablesEgressRouter())
 
 	ctx := context.Background()
 	instanceID, err := mgr.createAndStart(ctx, "0123456789abcdef", runtimemanager.StartOpts{
 		Timezone:      "UTC",
 		CompartmentID: "cmp_smoke_jailed",
-		ProxyEgress: &runtimemanager.ProxyEgressConfig{
-			Enabled:             true,
-			TransparentHTTPPort: cfg.EgressProxyTransparentHTTPPort,
-		},
 	})
 	if err != nil {
 		t.Fatalf("start jailed networked microVM: %v\n%s\n%s", err, smokeJailerConfig(cfg), latestSmokeLog(t, workDir))
@@ -574,11 +568,11 @@ func TestSmokeJailedTapAndTransparentRouteGeneratedImage(t *testing.T) {
 		}
 	}
 	if err := mgr.ApplySecrets(ctx, instanceID, SecretBundle{Env: map[string]string{
-		"AGENT_ID":                      "0123456789abcdef",
-		"AGENT_PLATFORM_TOKEN":          "generated-jailed-smoke-token",
-		"PLATFORM_API_URL":              "http://127.0.0.1:1",
-		"AGENT_MANAGER_FLUE_STORE_URL":  "http://127.0.0.1:1/api/agents/0123456789abcdef/flue-store",
-		"AGENT_MANAGER_SMOKE_GENERATED": "1",
+		"AGENT_ID":                        "0123456789abcdef",
+		"AGENT_PLATFORM_TOKEN":            "generated-jailed-smoke-token",
+		"PLATFORM_API_URL":                "http://127.0.0.1:1",
+		"AGENT_MANAGER_SESSION_STORE_URL": "http://127.0.0.1:1/api/agents/0123456789abcdef/session-store",
+		"AGENT_MANAGER_SMOKE_GENERATED":   "1",
 	}}); err != nil {
 		t.Fatalf("apply jailed smoke secrets: %v\n%s", err, smokeLogPath(t, logPath))
 	}
@@ -595,10 +589,6 @@ func TestSmokeJailedTapAndTransparentRouteGeneratedImage(t *testing.T) {
 	secondID, err := mgr.createAndStart(ctx, "0123456789abcdef", runtimemanager.StartOpts{
 		Timezone:      "UTC",
 		CompartmentID: "cmp_smoke_jailed_concurrent",
-		ProxyEgress: &runtimemanager.ProxyEgressConfig{
-			Enabled:             true,
-			TransparentHTTPPort: cfg.EgressProxyTransparentHTTPPort,
-		},
 	})
 	if err != nil {
 		t.Fatalf("start concurrent jailed compartment: %v\n%s\n%s", err, smokeJailerConfig(cfg), latestSmokeLog(t, workDir))
@@ -622,14 +612,14 @@ func requiredEnv(t *testing.T, key string) string {
 	t.Helper()
 	value := os.Getenv(key)
 	if value == "" {
-		t.Fatalf("%s is required for AGENT_MANAGER_MICROVM_SMOKE=1", key)
+		t.Fatalf("%s is required for SANDBOX_HOST_MICROVM_SMOKE=1", key)
 	}
 	return value
 }
 
 func shortSmokeDir(t *testing.T) string {
 	t.Helper()
-	parent := os.Getenv("AGENT_MANAGER_MICROVM_SMOKE_PARENT_DIR")
+	parent := os.Getenv("SANDBOX_HOST_MICROVM_SMOKE_PARENT_DIR")
 	if parent == "" {
 		parent = "/tmp"
 	}

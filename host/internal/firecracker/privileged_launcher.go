@@ -1,4 +1,4 @@
-package microvm
+package firecracker
 
 import (
 	"bufio"
@@ -20,11 +20,12 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
-	"agent-manager/internal/config"
-	"agent-manager/internal/harness"
-	"agent-manager/internal/runtimemanager"
 	"golang.org/x/sys/unix"
+	"secondstack/sandbox-host/internal/config"
+	"secondstack/sandbox-host/internal/harness"
+	"secondstack/sandbox-host/internal/runtime"
 )
 
 const privilegedLauncherProtocolVersion = 1
@@ -305,8 +306,6 @@ type PrivilegedLauncherConfig struct {
 	HarnessIPCommand       string
 	HarnessSystemdRun      string
 	HarnessSystemctl       string
-	HarnessShell           string
-	HarnessEnvCommand      string
 	NftPath                string
 	HarnessResultRoot      string
 	HarnessMemoryBytes     int64
@@ -329,104 +328,102 @@ func LoadPrivilegedLauncherConfigFromEnv() (PrivilegedLauncherConfig, error) {
 		}
 		return value, nil
 	}
-	allowedUID, err := intEnv("AGENT_MANAGER_VM_LAUNCHER_ALLOWED_UID", -1)
+	allowedUID, err := intEnv("SANDBOX_HOST_LAUNCHER_ALLOWED_UID", -1)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	socketGID, err := intEnv("AGENT_MANAGER_VM_LAUNCHER_SOCKET_GID", -1)
+	socketGID, err := intEnv("SANDBOX_HOST_LAUNCHER_SOCKET_GID", -1)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	managerGID, err := intEnv("AGENT_MANAGER_VM_LAUNCHER_MANAGER_GID", -1)
+	managerGID, err := intEnv("SANDBOX_HOST_LAUNCHER_MANAGER_GID", -1)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	jailerUID, err := intEnv("AGENT_MANAGER_MICROVM_JAILER_UID", -1)
+	jailerUID, err := intEnv("SANDBOX_HOST_MICROVM_JAILER_UID", -1)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	jailerGID, err := intEnv("AGENT_MANAGER_MICROVM_JAILER_GID", -1)
+	jailerGID, err := intEnv("SANDBOX_HOST_MICROVM_JAILER_GID", -1)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	cgroupVersion, err := intEnv("AGENT_MANAGER_MICROVM_JAILER_CGROUP_VERSION", 2)
+	cgroupVersion, err := intEnv("SANDBOX_HOST_MICROVM_JAILER_CGROUP_VERSION", 2)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	memoryMiB, err := intEnv("AGENT_MANAGER_MICROVM_MEMORY_MIB", 2048)
+	memoryMiB, err := intEnv("SANDBOX_HOST_MICROVM_MEMORY_MIB", 2048)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	vcpus, err := intEnv("AGENT_MANAGER_MICROVM_VCPUS", 2)
+	vcpus, err := intEnv("SANDBOX_HOST_MICROVM_VCPUS", 2)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	workspaceSizeMiB, err := intEnv("AGENT_MANAGER_MICROVM_WORKSPACE_SIZE_MIB", 8192)
+	workspaceSizeMiB, err := intEnv("SANDBOX_HOST_MICROVM_WORKSPACE_SIZE_MIB", 8192)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	transparentPort, err := intEnv("AGENT_MANAGER_EGRESS_PROXY_TRANSPARENT_HTTP_PORT", 0)
+	transparentPort, err := intEnv("SANDBOX_HOST_EGRESS_PROXY_TRANSPARENT_HTTP_PORT", 0)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	harnessMemoryBytes, err := intEnv("AGENT_MANAGER_VM_LAUNCHER_HARNESS_MEMORY_BYTES", 2*1024*1024*1024)
+	harnessMemoryBytes, err := intEnv("SANDBOX_HOST_LAUNCHER_HARNESS_MEMORY_BYTES", 2*1024*1024*1024)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	harnessNanoCPUs, err := intEnv("AGENT_MANAGER_VM_LAUNCHER_HARNESS_NANO_CPUS", 2_000_000_000)
+	harnessNanoCPUs, err := intEnv("SANDBOX_HOST_LAUNCHER_HARNESS_NANO_CPUS", 2_000_000_000)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	harnessPidsLimit, err := intEnv("AGENT_MANAGER_VM_LAUNCHER_HARNESS_PIDS_LIMIT", 256)
+	harnessPidsLimit, err := intEnv("SANDBOX_HOST_LAUNCHER_HARNESS_PIDS_LIMIT", 256)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	harnessMaxRuntime, err := intEnv("AGENT_MANAGER_VM_LAUNCHER_HARNESS_MAX_RUNTIME_SECONDS", 600)
+	harnessMaxRuntime, err := intEnv("SANDBOX_HOST_LAUNCHER_HARNESS_MAX_RUNTIME_SECONDS", 600)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	harnessIdleTimeout, err := intEnv("AGENT_MANAGER_VM_LAUNCHER_HARNESS_IDLE_TIMEOUT_SECONDS", 300)
+	harnessIdleTimeout, err := intEnv("SANDBOX_HOST_LAUNCHER_HARNESS_IDLE_TIMEOUT_SECONDS", 300)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
 	return PrivilegedLauncherConfig{
-		SocketPath:          strings.TrimSpace(os.Getenv("AGENT_MANAGER_MICROVM_LAUNCHER_SOCKET")),
+		SocketPath:          strings.TrimSpace(os.Getenv("SANDBOX_HOST_LAUNCHER_SOCKET")),
 		SocketGID:           socketGID,
 		AllowedUID:          allowedUID,
 		ManagerGID:          managerGID,
-		FirecrackerPath:     strings.TrimSpace(os.Getenv("AGENT_MANAGER_FIRECRACKER_PATH")),
-		JailerPath:          strings.TrimSpace(os.Getenv("AGENT_MANAGER_FIRECRACKER_JAILER_PATH")),
-		ArtifactRoot:        strings.TrimSpace(os.Getenv("AGENT_MANAGER_VM_LAUNCHER_ARTIFACT_ROOT")),
-		KernelPath:          strings.TrimSpace(os.Getenv("AGENT_MANAGER_MICROVM_KERNEL_PATH")),
-		WorkspaceRoot:       strings.TrimSpace(os.Getenv("AGENT_MANAGER_MICROVM_WORKSPACE_DIR")),
-		RunRoot:             strings.TrimSpace(os.Getenv("AGENT_MANAGER_MICROVM_RUN_DIR")),
-		LogRoot:             strings.TrimSpace(os.Getenv("AGENT_MANAGER_MICROVM_LOG_DIR")),
-		JailRoot:            strings.TrimSpace(os.Getenv("AGENT_MANAGER_MICROVM_JAILER_CHROOT_BASE_DIR")),
-		StateRoot:           strings.TrimSpace(os.Getenv("AGENT_MANAGER_VM_LAUNCHER_STATE_DIR")),
-		BridgeName:          strings.TrimSpace(os.Getenv("AGENT_MANAGER_MICROVM_BRIDGE_NAME")),
-		BridgeCIDR:          strings.TrimSpace(os.Getenv("AGENT_MANAGER_MICROVM_BRIDGE_CIDR")),
-		TapPrefix:           strings.TrimSpace(os.Getenv("AGENT_MANAGER_MICROVM_TAP_PREFIX")),
+		FirecrackerPath:     strings.TrimSpace(os.Getenv("SANDBOX_HOST_FIRECRACKER_PATH")),
+		JailerPath:          strings.TrimSpace(os.Getenv("SANDBOX_HOST_FIRECRACKER_JAILER_PATH")),
+		ArtifactRoot:        strings.TrimSpace(os.Getenv("SANDBOX_HOST_LAUNCHER_ARTIFACT_ROOT")),
+		KernelPath:          strings.TrimSpace(os.Getenv("SANDBOX_HOST_MICROVM_KERNEL_PATH")),
+		WorkspaceRoot:       strings.TrimSpace(os.Getenv("SANDBOX_HOST_MICROVM_WORKSPACE_DIR")),
+		RunRoot:             strings.TrimSpace(os.Getenv("SANDBOX_HOST_MICROVM_RUN_DIR")),
+		LogRoot:             strings.TrimSpace(os.Getenv("SANDBOX_HOST_MICROVM_LOG_DIR")),
+		JailRoot:            strings.TrimSpace(os.Getenv("SANDBOX_HOST_MICROVM_JAILER_CHROOT_BASE_DIR")),
+		StateRoot:           strings.TrimSpace(os.Getenv("SANDBOX_HOST_LAUNCHER_STATE_DIR")),
+		BridgeName:          strings.TrimSpace(os.Getenv("SANDBOX_HOST_MICROVM_BRIDGE_NAME")),
+		BridgeCIDR:          strings.TrimSpace(os.Getenv("SANDBOX_HOST_MICROVM_BRIDGE_CIDR")),
+		TapPrefix:           strings.TrimSpace(os.Getenv("SANDBOX_HOST_MICROVM_TAP_PREFIX")),
 		JailerUID:           jailerUID,
 		JailerGID:           jailerGID,
 		JailerCgroupVersion: cgroupVersion,
-		JailerParentCgroup:  strings.TrimSpace(os.Getenv("AGENT_MANAGER_MICROVM_JAILER_PARENT_CGROUP")),
+		JailerParentCgroup:  strings.TrimSpace(os.Getenv("SANDBOX_HOST_MICROVM_JAILER_PARENT_CGROUP")),
 		MemoryMiB:           memoryMiB,
 		VCPUs:               vcpus,
 		WorkspaceSizeMiB:    workspaceSizeMiB,
-		CPUTemplate:         normalizeLauncherCPUTemplate(os.Getenv("AGENT_MANAGER_MICROVM_CPU_TEMPLATE")),
-		KernelArgs:          strings.TrimSpace(os.Getenv("AGENT_MANAGER_MICROVM_KERNEL_ARGS")),
+		CPUTemplate:         normalizeLauncherCPUTemplate(os.Getenv("SANDBOX_HOST_MICROVM_CPU_TEMPLATE")),
+		KernelArgs:          strings.TrimSpace(os.Getenv("SANDBOX_HOST_MICROVM_KERNEL_ARGS")),
 		TransparentHTTPPort: transparentPort,
-		HarnessCIDR:         strings.TrimSpace(os.Getenv("AGENT_MANAGER_HARNESS_NETNS_CIDR")),
-		HarnessProxyIP:      strings.TrimSpace(os.Getenv("AGENT_MANAGER_VM_LAUNCHER_HARNESS_PROXY_IP")),
-		HarnessPlatformIP:   strings.TrimSpace(os.Getenv("AGENT_MANAGER_VM_LAUNCHER_HARNESS_PLATFORM_IP")),
-		HarnessBubblewrap:   strings.TrimSpace(envOr("AGENT_MANAGER_VM_LAUNCHER_HARNESS_BWRAP_PATH", "/usr/bin/bwrap")),
-		HarnessIPCommand:    strings.TrimSpace(envOr("AGENT_MANAGER_VM_LAUNCHER_HARNESS_IP_PATH", "/usr/sbin/ip")),
-		HarnessSystemdRun:   strings.TrimSpace(envOr("AGENT_MANAGER_VM_LAUNCHER_HARNESS_SYSTEMD_RUN_PATH", "/usr/bin/systemd-run")),
-		HarnessSystemctl:    strings.TrimSpace(envOr("AGENT_MANAGER_VM_LAUNCHER_HARNESS_SYSTEMCTL_PATH", "/usr/bin/systemctl")),
-		HarnessShell:        strings.TrimSpace(envOr("AGENT_MANAGER_VM_LAUNCHER_HARNESS_SHELL_PATH", "/bin/sh")),
-		HarnessEnvCommand:   strings.TrimSpace(envOr("AGENT_MANAGER_VM_LAUNCHER_HARNESS_ENV_PATH", "/usr/bin/env")),
-		NftPath:             strings.TrimSpace(envOr("AGENT_MANAGER_VM_LAUNCHER_NFT_PATH", "/usr/sbin/nft")),
-		HarnessResultRoot:   strings.TrimSpace(os.Getenv("AGENT_MANAGER_VM_LAUNCHER_HARNESS_RESULT_DIR")),
+		HarnessCIDR:         strings.TrimSpace(os.Getenv("SANDBOX_HOST_HARNESS_NETNS_CIDR")),
+		HarnessProxyIP:      strings.TrimSpace(os.Getenv("SANDBOX_HOST_LAUNCHER_HARNESS_PROXY_IP")),
+		HarnessPlatformIP:   strings.TrimSpace(os.Getenv("SANDBOX_HOST_LAUNCHER_HARNESS_PLATFORM_IP")),
+		HarnessBubblewrap:   strings.TrimSpace(envOr("SANDBOX_HOST_LAUNCHER_HARNESS_BWRAP_PATH", "/usr/bin/bwrap")),
+		HarnessIPCommand:    strings.TrimSpace(envOr("SANDBOX_HOST_LAUNCHER_HARNESS_IP_PATH", "/usr/sbin/ip")),
+		HarnessSystemdRun:   strings.TrimSpace(envOr("SANDBOX_HOST_LAUNCHER_HARNESS_SYSTEMD_RUN_PATH", "/usr/bin/systemd-run")),
+		HarnessSystemctl:    strings.TrimSpace(envOr("SANDBOX_HOST_LAUNCHER_HARNESS_SYSTEMCTL_PATH", "/usr/bin/systemctl")),
+		NftPath:             strings.TrimSpace(envOr("SANDBOX_HOST_LAUNCHER_NFT_PATH", "/usr/sbin/nft")),
+		HarnessResultRoot:   strings.TrimSpace(os.Getenv("SANDBOX_HOST_LAUNCHER_HARNESS_RESULT_DIR")),
 		HarnessMemoryBytes:  int64(harnessMemoryBytes),
 		HarnessNanoCPUs:     int64(harnessNanoCPUs),
 		HarnessPidsLimit:    int64(harnessPidsLimit),
@@ -539,6 +536,7 @@ type privilegedHarnessState struct {
 	Namespace   harness.NetworkNamespace `json:"namespace"`
 	ResultPath  string                   `json:"resultPath"`
 	SeccompPath string                   `json:"seccompPath"`
+	EnvPath     string                   `json:"envPath"`
 	UnitName    string                   `json:"unitName"`
 	GuestMAC    string                   `json:"guestMac,omitempty"`
 	SourceGuard string                   `json:"sourceGuard,omitempty"`
@@ -771,16 +769,16 @@ func validatePrivilegedLauncherConfig(cfg *PrivilegedLauncherConfig) error {
 		return fmt.Errorf("privileged launcher config is required")
 	}
 	if cfg.AllowedUID <= 0 {
-		return fmt.Errorf("AGENT_MANAGER_VM_LAUNCHER_ALLOWED_UID must select a non-root identity")
+		return fmt.Errorf("SANDBOX_HOST_LAUNCHER_ALLOWED_UID must select a non-root identity")
 	}
 	if cfg.SocketGID <= 0 {
-		return fmt.Errorf("AGENT_MANAGER_VM_LAUNCHER_SOCKET_GID must select a non-root group")
+		return fmt.Errorf("SANDBOX_HOST_LAUNCHER_SOCKET_GID must select a non-root group")
 	}
 	if cfg.ManagerGID <= 0 {
-		return fmt.Errorf("AGENT_MANAGER_VM_LAUNCHER_MANAGER_GID must select a non-root group")
+		return fmt.Errorf("SANDBOX_HOST_LAUNCHER_MANAGER_GID must select a non-root group")
 	}
 	if cfg.JailerUID <= 0 || cfg.JailerGID <= 0 {
-		return fmt.Errorf("AGENT_MANAGER_MICROVM_JAILER_UID/GID must select a non-root identity")
+		return fmt.Errorf("SANDBOX_HOST_MICROVM_JAILER_UID/GID must select a non-root identity")
 	}
 	if cfg.MemoryMiB <= 0 || cfg.VCPUs <= 0 || cfg.WorkspaceSizeMiB <= 0 {
 		return fmt.Errorf("microVM memory, vCPUs, and workspace size must be positive")
@@ -837,8 +835,6 @@ func validatePrivilegedLauncherConfig(cfg *PrivilegedLauncherConfig) error {
 		"harness ip":          cfg.HarnessIPCommand,
 		"harness systemd-run": cfg.HarnessSystemdRun,
 		"harness systemctl":   cfg.HarnessSystemctl,
-		"harness shell":       cfg.HarnessShell,
-		"harness env":         cfg.HarnessEnvCommand,
 		"nft":                 cfg.NftPath,
 	} {
 		if err := requireExecutable(name, value); err != nil {
@@ -1295,11 +1291,13 @@ func (s *PrivilegedLauncherServer) prepareHarnessNetwork(ctx context.Context, re
 	}
 	resultPath := filepath.Join(s.cfg.HarnessResultRoot, req.CellID+".json")
 	seccompPath := filepath.Join(s.cfg.HarnessResultRoot, req.CellID+".bpf")
+	envPath := s.harnessEnvironmentPath(req.CellID)
 	state := privilegedHarnessState{
 		CellID:      req.CellID,
 		Namespace:   namespace,
 		ResultPath:  resultPath,
 		SeccompPath: seccompPath,
+		EnvPath:     envPath,
 		UnitName:    harnessUnitName(namespace),
 		GuestMAC:    launcherSourceMAC(req.CellID),
 		SourceGuard: launcherSourceGuardChain(req.CellID),
@@ -1311,6 +1309,13 @@ func (s *PrivilegedLauncherServer) prepareHarnessNetwork(ctx context.Context, re
 		if err := rejectExistingLauncherPath(path); err != nil {
 			return "", err
 		}
+	}
+	harnessStateRoot := filepath.Join(s.cfg.StateRoot, "harness")
+	if err := ensureContainedPath(harnessStateRoot, envPath); err != nil {
+		return "", err
+	}
+	if err := rejectExistingLauncherPath(envPath); err != nil {
+		return "", err
 	}
 	if err := s.writeHarnessState(state); err != nil {
 		return "", err
@@ -1446,7 +1451,16 @@ func (s *PrivilegedLauncherServer) executeHarnessNetwork(ctx context.Context, re
 		}
 	}()
 
-	args := s.harnessSystemdRunArgs(state, req)
+	args, err := s.harnessSystemdRunArgs(state, req)
+	if err != nil {
+		return resp, err
+	}
+	if err := s.writeHarnessEnvironmentFile(state, req.Env); err != nil {
+		return resp, err
+	}
+	removeEnvironment := func() error {
+		return removeLauncherStatePath(filepath.Join(s.cfg.StateRoot, "harness"), state.EnvPath)
+	}
 	cmd := exec.Command(s.cfg.HarnessSystemdRun, args...)
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C", "LC_ALL=C"}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGKILL}
@@ -1454,19 +1468,26 @@ func (s *PrivilegedLauncherServer) executeHarnessNetwork(ctx context.Context, re
 	cmd.Stdout = output
 	cmd.Stderr = output
 	if err := cmd.Start(); err != nil {
-		return resp, fmt.Errorf("start transient harness unit: %w", err)
+		return resp, errors.Join(
+			fmt.Errorf("start transient harness unit: %w", err),
+			removeEnvironment(),
+		)
 	}
 	resp.ExecutionStarted = true
 	waitCh := make(chan error, 1)
 	go func() { waitCh <- cmd.Wait() }()
 	err = s.waitHarnessUnit(ctx, state.UnitName, cmd.Process.Pid, waitCh, output.Activity(), time.Duration(req.IdleTimeout)*time.Millisecond, time.Duration(req.MaxRuntime)*time.Millisecond)
 	resp.Output = strings.TrimSpace(output.String())
+	environmentCleanupErr := removeEnvironment()
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			resp.ExitCode = exitErr.ExitCode()
 		}
-		return resp, err
+		return resp, errors.Join(err, environmentCleanupErr)
+	}
+	if environmentCleanupErr != nil {
+		return resp, fmt.Errorf("remove harness environment file: %w", environmentCleanupErr)
 	}
 	return resp, nil
 }
@@ -1519,7 +1540,7 @@ func (s *PrivilegedLauncherServer) cleanupHarnessNetwork(ctx context.Context, st
 			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete harness veth: %w: %s", err, strings.TrimSpace(string(out))))
 		}
 	}
-	for _, path := range []string{state.ResultPath, state.SeccompPath} {
+	for _, path := range []string{state.ResultPath, state.SeccompPath, state.EnvPath} {
 		if strings.TrimSpace(path) != "" {
 			_ = os.Remove(path)
 		}
@@ -1596,9 +1617,12 @@ func (s *PrivilegedLauncherServer) validateHarnessExecutionRequest(req *privileg
 	seenEnv := make(map[string]struct{}, len(req.Env))
 	for _, entry := range req.Env {
 		total += len(entry)
-		key, _, ok := strings.Cut(entry, "=")
-		if !ok || !launcherEnvKeyPattern.MatchString(key) || strings.ContainsRune(entry, 0) {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || !launcherEnvKeyPattern.MatchString(key) || strings.ContainsRune(entry, 0) || !utf8.ValidString(value) || strings.ContainsRune(value, '\ufeff') {
 			return fmt.Errorf("harness execution environment is invalid")
+		}
+		if key == "HOME" {
+			return fmt.Errorf("harness execution environment may not override fixed HOME")
 		}
 		if _, duplicate := seenEnv[key]; duplicate {
 			return fmt.Errorf("harness execution environment repeats %s", key)
@@ -1623,7 +1647,66 @@ func (s *PrivilegedLauncherServer) validateHarnessExecutionRequest(req *privileg
 			return fmt.Errorf("harness bubblewrap request contains forbidden namespace/capability argument %q", forbidden)
 		}
 	}
+	if _, err := harnessBubblewrapArgsWithoutEnvironmentValues(req.Args, req.Env); err != nil {
+		return err
+	}
 	return nil
+}
+
+// harnessBubblewrapArgsWithoutEnvironmentValues removes environment
+// assignments from the transient unit argv after proving that each requested
+// assignment is identical to the validated EnvironmentFile value.
+func harnessBubblewrapArgsWithoutEnvironmentValues(args, environment []string) ([]string, error) {
+	environmentValues := make(map[string]string, len(environment))
+	for _, entry := range environment {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			return nil, fmt.Errorf("harness execution environment is invalid")
+		}
+		environmentValues[key] = value
+	}
+
+	sanitized := make([]string, 0, len(args))
+	for i := 0; i < len(args); {
+		arg := args[i]
+		if !strings.HasPrefix(arg, "--") {
+			sanitized = append(sanitized, args[i:]...)
+			break
+		}
+		arity, ok := launcherBubblewrapOptionArity(arg)
+		if !ok || i+arity >= len(args) {
+			return nil, fmt.Errorf("harness bubblewrap option %q is invalid", arg)
+		}
+		if arg == "--setenv" {
+			key, value := args[i+1], args[i+2]
+			if key == "HOME" {
+				if value != "/tmp" {
+					return nil, fmt.Errorf("harness bubblewrap HOME assignment does not match launcher policy")
+				}
+			} else if environmentValue, exists := environmentValues[key]; !exists || environmentValue != value {
+				return nil, fmt.Errorf("harness bubblewrap environment assignment for %s does not match EnvironmentFile", key)
+			}
+			i += 3
+			continue
+		}
+		sanitized = append(sanitized, args[i:i+arity+1]...)
+		i += arity + 1
+	}
+	return sanitized, nil
+}
+
+func launcherBubblewrapOptionArity(option string) (int, bool) {
+	switch option {
+	case "--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
+		"--disable-userns", "--assert-userns-disabled", "--die-with-parent", "--new-session":
+		return 0, true
+	case "--uid", "--gid", "--proc", "--dev", "--tmpfs", "--dir", "--seccomp":
+		return 1, true
+	case "--bind", "--ro-bind", "--setenv":
+		return 2, true
+	default:
+		return 0, false
+	}
 }
 
 func validateLauncherBubblewrapArgs(args []string) error {
@@ -1652,12 +1735,6 @@ func validateLauncherBubblewrapArgs(args []string) error {
 			return fmt.Errorf("harness bubblewrap request does not match the fixed sandbox prefix")
 		}
 	}
-	optionArity := map[string]int{
-		"--unshare-user": 0, "--unshare-pid": 0, "--unshare-ipc": 0, "--unshare-uts": 0,
-		"--disable-userns": 0, "--assert-userns-disabled": 0, "--die-with-parent": 0, "--new-session": 0,
-		"--uid": 1, "--gid": 1, "--proc": 1, "--dev": 1, "--tmpfs": 1, "--dir": 1, "--seccomp": 1,
-		"--bind": 2, "--ro-bind": 2, "--setenv": 2,
-	}
 	seenSeccomp := false
 	commandIndex := -1
 	for i := 0; i < len(args); {
@@ -1669,7 +1746,7 @@ func validateLauncherBubblewrapArgs(args []string) error {
 			commandIndex = i
 			break
 		}
-		arity, ok := optionArity[arg]
+		arity, ok := launcherBubblewrapOptionArity(arg)
 		if !ok {
 			return fmt.Errorf("harness bubblewrap request contains unsupported option %q", arg)
 		}
@@ -1708,8 +1785,12 @@ func validateHarnessStateBoundExecution(state privilegedHarnessState, req *privi
 	return nil
 }
 
-func (s *PrivilegedLauncherServer) harnessSystemdRunArgs(state privilegedHarnessState, req *privilegedHarnessExecRequest) []string {
+func (s *PrivilegedLauncherServer) harnessSystemdRunArgs(state privilegedHarnessState, req *privilegedHarnessExecRequest) ([]string, error) {
 	cpuQuota := float64(req.NanoCPUs) / 1e9 * 100
+	launcherExecutable, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("resolve harness execution helper: %w", err)
+	}
 	properties := []string{
 		"User=" + strconv.Itoa(s.cfg.AllowedUID),
 		"Group=" + strconv.Itoa(s.cfg.ManagerGID),
@@ -1720,6 +1801,7 @@ func (s *PrivilegedLauncherServer) harnessSystemdRunArgs(state privilegedHarness
 		// namespace; an empty bounding set prevents it from mounting /proc.
 		"CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SETUID CAP_SETGID CAP_SETFCAP",
 		"AmbientCapabilities=",
+		"EnvironmentFile=" + state.EnvPath,
 		"NetworkNamespacePath=/run/netns/" + state.Namespace.NamespaceName,
 		"MemoryMax=" + strconv.FormatInt(req.MemoryBytes, 10),
 		"MemorySwapMax=0",
@@ -1739,25 +1821,115 @@ func (s *PrivilegedLauncherServer) harnessSystemdRunArgs(state privilegedHarness
 		"ProtectHome=yes",
 		"ProtectKernelModules=yes",
 		"RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
-		"RestrictNamespaces=user pid ipc uts mnt",
+		"RestrictNamespaces=user pid ipc uts mnt cgroup",
 		"RestrictRealtime=yes",
 		"SystemCallArchitectures=native",
 	}
-	args := []string{"--quiet", "--wait", "--pipe", "--collect", "--service-type=exec", "--unit", state.UnitName}
+	args := []string{
+		"--quiet", "--wait", "--pipe", "--collect", "--service-type=exec",
+		"--unit", state.UnitName,
+		"--description", "SecondStack isolated harness cell",
+	}
 	for _, property := range properties {
 		args = append(args, "--property", property)
 	}
-	args = append(args, "--", s.cfg.HarnessEnvCommand, "-i", "--")
-	args = append(args, req.Env...)
+	bubblewrapArgs, err := harnessBubblewrapArgsWithoutEnvironmentValues(req.Args, req.Env)
+	if err != nil {
+		return nil, err
+	}
 	args = append(args,
-		s.cfg.HarnessShell,
-		"-c",
-		`seccomp="$1"; shift; exec "$@" 3<"$seccomp"`,
-		"agent-manager-harness-sandbox",
+		"--",
+		launcherExecutable,
+		"harness-exec",
 		state.SeccompPath,
-		s.cfg.HarnessBubblewrap,
+		strconv.Itoa(len(req.Env)),
 	)
-	return append(args, req.Args...)
+	for _, entry := range req.Env {
+		key, _, _ := strings.Cut(entry, "=")
+		args = append(args, key)
+	}
+	args = append(args, s.cfg.HarnessBubblewrap)
+	return append(args, bubblewrapArgs...), nil
+}
+
+// RunHarnessExec is the non-root transient-unit entrypoint that strips
+// systemd-injected variables before replacing itself with bubblewrap.
+func RunHarnessExec(args []string) error {
+	if os.Geteuid() == 0 {
+		return fmt.Errorf("harness execution helper may not run as root")
+	}
+	seccompPath, environmentKeys, command, err := parseHarnessExecArgs(args)
+	if err != nil {
+		return err
+	}
+	environment, err := harnessExecEnvironment(environmentKeys, os.Environ())
+	if err != nil {
+		return err
+	}
+	seccompFile, err := os.OpenFile(seccompPath, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return fmt.Errorf("open harness seccomp policy: %w", err)
+	}
+	defer seccompFile.Close()
+	seccompFD := int(seccompFile.Fd())
+	if seccompFD == 3 {
+		if _, err := unix.FcntlInt(seccompFile.Fd(), unix.F_SETFD, 0); err != nil {
+			return fmt.Errorf("retain harness seccomp descriptor: %w", err)
+		}
+	} else {
+		if err := unix.Dup3(seccompFD, 3, 0); err != nil {
+			return fmt.Errorf("install harness seccomp descriptor: %w", err)
+		}
+		defer unix.Close(3)
+	}
+	if err := unix.Exec(command[0], command, environment); err != nil {
+		return fmt.Errorf("execute harness bubblewrap: %w", err)
+	}
+	return nil
+}
+
+func parseHarnessExecArgs(args []string) (string, []string, []string, error) {
+	if len(args) < 3 || !filepath.IsAbs(args[0]) {
+		return "", nil, nil, fmt.Errorf("harness execution helper arguments are invalid")
+	}
+	environmentCount, err := strconv.Atoi(args[1])
+	if err != nil || environmentCount < 0 || environmentCount > 256 || len(args) < environmentCount+3 {
+		return "", nil, nil, fmt.Errorf("harness execution helper environment count is invalid")
+	}
+	environmentKeys := args[2 : 2+environmentCount]
+	command := args[2+environmentCount:]
+	if len(command) == 0 || !filepath.IsAbs(command[0]) {
+		return "", nil, nil, fmt.Errorf("harness execution helper command is invalid")
+	}
+	return filepath.Clean(args[0]), environmentKeys, command, nil
+}
+
+func harnessExecEnvironment(keys, inherited []string) ([]string, error) {
+	inheritedValues := make(map[string]string, len(inherited))
+	for _, entry := range inherited {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok {
+			inheritedValues[key] = value
+		}
+	}
+	environment := make([]string, 0, len(keys)+1)
+	environment = append(environment, "HOME=/tmp")
+	seen := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		if !launcherEnvKeyPattern.MatchString(key) || key == "HOME" {
+			return nil, fmt.Errorf("harness execution helper environment key is invalid")
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return nil, fmt.Errorf("harness execution helper repeats environment key %s", key)
+		}
+		seen[key] = struct{}{}
+		value, exists := inheritedValues[key]
+		if !exists {
+			return nil, fmt.Errorf("harness execution helper is missing environment key %s", key)
+		}
+		environment = append(environment, key+"="+value)
+	}
+	return environment, nil
 }
 
 func (s *PrivilegedLauncherServer) waitHarnessUnit(ctx context.Context, unitName string, pid int, waitCh <-chan error, activity <-chan struct{}, idleTimeout, maxRuntime time.Duration) error {
@@ -1840,6 +2012,91 @@ func (s *PrivilegedLauncherServer) harnessStatePath(cellID string) string {
 	return filepath.Join(s.cfg.StateRoot, "harness", cellID+".json")
 }
 
+func (s *PrivilegedLauncherServer) harnessEnvironmentPath(cellID string) string {
+	return filepath.Join(s.cfg.StateRoot, "harness", cellID+".env")
+}
+
+// writeHarnessEnvironmentFile publishes the minimal transient-unit environment
+// as a root-owned state file so secret values never enter process argv.
+func (s *PrivilegedLauncherServer) writeHarnessEnvironmentFile(state privilegedHarnessState, environment []string) error {
+	root := filepath.Join(s.cfg.StateRoot, "harness")
+	if state.EnvPath != s.harnessEnvironmentPath(state.CellID) {
+		return fmt.Errorf("harness environment file path does not match launcher state")
+	}
+	if err := ensureContainedPath(root, state.EnvPath); err != nil {
+		return fmt.Errorf("validate harness environment file path: %w", err)
+	}
+	data, err := encodeHarnessEnvironmentFile(environment)
+	if err != nil {
+		return err
+	}
+
+	file, err := os.OpenFile(state.EnvPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return fmt.Errorf("create harness environment file: %w", err)
+	}
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(state.EnvPath)
+		}
+	}()
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("chmod harness environment file: %w", err)
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write harness environment file: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("sync harness environment file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close harness environment file: %w", err)
+	}
+	if err := syncDirectory(root); err != nil {
+		return fmt.Errorf("sync harness environment file directory: %w", err)
+	}
+	cleanup = false
+	return nil
+}
+
+func encodeHarnessEnvironmentFile(environment []string) ([]byte, error) {
+	var contents strings.Builder
+	contents.WriteString(`HOME="/tmp"` + "\n")
+	seen := make(map[string]struct{}, len(environment))
+	for _, entry := range environment {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || !launcherEnvKeyPattern.MatchString(key) || strings.ContainsRune(value, 0) || !utf8.ValidString(value) || strings.ContainsRune(value, '\ufeff') {
+			return nil, fmt.Errorf("harness environment file contains an invalid entry")
+		}
+		if key == "HOME" {
+			return nil, fmt.Errorf("harness environment file may not override fixed HOME")
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return nil, fmt.Errorf("harness environment file repeats %s", key)
+		}
+		seen[key] = struct{}{}
+		contents.WriteString(key)
+		contents.WriteString(`="`)
+		contents.WriteString(escapeSystemdEnvironmentValue(value))
+		contents.WriteString("\"\n")
+	}
+	return []byte(contents.String()), nil
+}
+
+func escapeSystemdEnvironmentValue(value string) string {
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		`"`, `\"`,
+		`$`, `\$`,
+		"`", "\\`",
+	)
+	return replacer.Replace(value)
+}
+
 func (s *PrivilegedLauncherServer) readHarnessState(cellID string) (privilegedHarnessState, error) {
 	if err := validateHarnessCellID(cellID); err != nil {
 		return privilegedHarnessState{}, err
@@ -1863,7 +2120,8 @@ func (s *PrivilegedLauncherServer) readHarnessState(cellID string) (privilegedHa
 	}
 	wantResult := filepath.Join(s.cfg.HarnessResultRoot, cellID+".json")
 	wantSeccomp := filepath.Join(s.cfg.HarnessResultRoot, cellID+".bpf")
-	if state.ResultPath != wantResult || state.SeccompPath != wantSeccomp || state.UnitName != harnessUnitName(state.Namespace) || state.GuestMAC != launcherSourceMAC(cellID) || state.SourceGuard != launcherSourceGuardChain(cellID) {
+	wantEnv := s.harnessEnvironmentPath(cellID)
+	if state.ResultPath != wantResult || state.SeccompPath != wantSeccomp || state.EnvPath != wantEnv || state.UnitName != harnessUnitName(state.Namespace) || state.GuestMAC != launcherSourceMAC(cellID) || state.SourceGuard != launcherSourceGuardChain(cellID) {
 		return privilegedHarnessState{}, fmt.Errorf("harness launcher state paths do not match policy")
 	}
 	return state, nil
@@ -1875,7 +2133,8 @@ func (s *PrivilegedLauncherServer) writeHarnessState(state privilegedHarnessStat
 	}
 	wantResult := filepath.Join(s.cfg.HarnessResultRoot, state.CellID+".json")
 	wantSeccomp := filepath.Join(s.cfg.HarnessResultRoot, state.CellID+".bpf")
-	if state.ResultPath != wantResult || state.SeccompPath != wantSeccomp || state.UnitName != harnessUnitName(state.Namespace) || state.GuestMAC != launcherSourceMAC(state.CellID) || state.SourceGuard != launcherSourceGuardChain(state.CellID) {
+	wantEnv := s.harnessEnvironmentPath(state.CellID)
+	if state.ResultPath != wantResult || state.SeccompPath != wantSeccomp || state.EnvPath != wantEnv || state.UnitName != harnessUnitName(state.Namespace) || state.GuestMAC != launcherSourceMAC(state.CellID) || state.SourceGuard != launcherSourceGuardChain(state.CellID) {
 		return fmt.Errorf("harness launcher state paths do not match policy")
 	}
 	data, err := json.Marshal(state)
@@ -1955,7 +2214,7 @@ func clonePostureFailures(source map[string]uint64) map[string]uint64 {
 }
 
 func harnessUnitName(namespace harness.NetworkNamespace) string {
-	return "agent-manager-harness-" + strings.TrimPrefix(namespace.NamespaceName, "ag-") + ".service"
+	return "sandbox-host-harness-" + strings.TrimPrefix(namespace.NamespaceName, "ag-") + ".service"
 }
 
 func validateHarnessCellID(cellID string) error {

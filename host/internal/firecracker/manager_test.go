@@ -1,4 +1,4 @@
-package microvm
+package firecracker
 
 import (
 	"context"
@@ -17,10 +17,9 @@ import (
 	"testing"
 	"time"
 
-	"agent-manager/internal/config"
-	"agent-manager/internal/egressproxy"
-	"agent-manager/internal/runtimecontext"
-	"agent-manager/internal/runtimemanager"
+	"secondstack/sandbox-host/internal/config"
+	"secondstack/sandbox-host/internal/runtime"
+	"secondstack/sandbox-host/internal/runtimecontext"
 )
 
 type recordingHostNetworkConfigurer struct {
@@ -78,6 +77,26 @@ func TestNewInstanceIDIncludesCompartmentSegment(t *testing.T) {
 	}
 	if !strings.HasPrefix(emptyID, "fc-agent-1-compartment-") {
 		t.Fatalf("empty-compartment instance id %q does not include fallback segment", emptyID)
+	}
+
+	productionID, err := newInstanceID(
+		"3228ade9370612d8e6b01dff6e3f2cef",
+		"cmp_12c176d7ad7e8c50e589c75fbfce359f",
+	)
+	if err != nil {
+		t.Fatalf("new production-length instance id: %v", err)
+	}
+	for _, socketName := range []string{firecrackerSockName, vsockUDSName} {
+		socketPath := filepath.Join(
+			"/agent-sandbox/state/jailer",
+			"firecracker",
+			productionID,
+			"root",
+			socketName,
+		)
+		if len(socketPath) >= maxUnixSocketPathLen {
+			t.Fatalf("default jailed socket path is %d bytes: %q", len(socketPath), socketPath)
+		}
 	}
 }
 
@@ -1675,7 +1694,7 @@ func TestCreateAndStartRequiresCIDRForSecondCompartment(t *testing.T) {
 	}
 
 	_, err := m.createAndStart(context.Background(), "agent-start", runtimemanager.StartOpts{CompartmentID: "cmp_b"})
-	if err == nil || !strings.Contains(err.Error(), "AGENT_MANAGER_MICROVM_BRIDGE_CIDR") {
+	if err == nil || !strings.Contains(err.Error(), "SANDBOX_HOST_MICROVM_BRIDGE_CIDR") {
 		t.Fatalf("expected missing bridge CIDR refusal, got %v", err)
 	}
 }
@@ -2113,7 +2132,7 @@ func TestPrepareLaunchUnjailedIncludesInstanceID(t *testing.T) {
 	}
 }
 
-func TestRegisterSourceBindingUsesConfiguredGuestIP(t *testing.T) {
+func TestRegisterSourceBindingUsesSandboxIdentityAndConfiguredGuestAddress(t *testing.T) {
 	registrar := &fakeSourceBindingRegistrar{}
 	m := &Manager{
 		cfg:            &config.Config{MicroVMGuestIP: "172.30.0.10"},
@@ -2123,14 +2142,9 @@ func TestRegisterSourceBindingUsesConfiguredGuestIP(t *testing.T) {
 	if _, err := m.reserveGuestIP("fc-agent-1"); err != nil {
 		t.Fatalf("reserve guest IP: %v", err)
 	}
-	_, err := m.registerSourceBinding(context.Background(), "agent-1", "fc-agent-1", runtimemanager.StartOpts{
-		CompartmentID: "cmp_a",
-		ProxyEgress: &runtimemanager.ProxyEgressConfig{
-			Enabled:          true,
-			AllowlistEnabled: true,
-			AllowedHosts:     []string{"api.example.com"},
-		},
-	})
+	token, err := m.registerSourceBinding(
+		context.Background(), "fc-agent-1", "env-1", "instance-1", 4, []string{"connection-1"},
+	)
 	if err != nil {
 		t.Fatalf("register source binding: %v", err)
 	}
@@ -2138,47 +2152,25 @@ func TestRegisterSourceBindingUsesConfiguredGuestIP(t *testing.T) {
 		t.Fatalf("registered bindings = %#v", registrar.registered)
 	}
 	got := registrar.registered[0]
-	if got.AgentID != "agent-1" || got.CompartmentID != "cmp_a" || got.ContainerID != "fc-agent-1" || got.SourceIP != "172.30.0.10" || got.Generation != "fc-agent-1" {
+	if got.EnvironmentID != "env-1" || got.InstanceID != "instance-1" || got.SourceAddress != "172.30.0.10" || got.Generation != 4 {
 		t.Fatalf("binding = %#v", got)
 	}
-	if !got.AllowlistEnabled || len(got.AllowedHosts) != 1 || got.AllowedHosts[0] != "api.example.com" {
-		t.Fatalf("allowlist = %#v", got)
+	if token != registrar.sourceToken {
+		t.Fatalf("source token = %q, want %q", token, registrar.sourceToken)
 	}
 }
 
-func TestRegisterSourceBindingPopulatesCompartmentID(t *testing.T) {
-	registrar := &fakeSourceBindingRegistrar{}
-	instanceID := "fc-agent-1-cmp-a"
+func TestRegisterSourceBindingRequiresSandboxIdentity(t *testing.T) {
 	m := &Manager{
-		cfg:            &config.Config{MicroVMBridgeCIDR: "172.30.0.1/24"},
-		guestIPs:       map[string]string{instanceID: "172.30.0.20"},
-		sourceBindings: registrar,
-	}
-	_, err := m.registerSourceBinding(context.Background(), "agent-1", instanceID, runtimemanager.StartOpts{
-		CompartmentID: "cmp_a",
-		ProxyEgress:   &runtimemanager.ProxyEgressConfig{Enabled: true},
-	})
-	if err != nil {
-		t.Fatalf("register source binding: %v", err)
-	}
-	if len(registrar.registered) != 1 {
-		t.Fatalf("registered bindings = %#v", registrar.registered)
-	}
-	if registrar.registered[0].CompartmentID != "cmp_a" {
-		t.Fatalf("compartment id = %q, want cmp_a", registrar.registered[0].CompartmentID)
-	}
-}
-
-func TestRegisterSourceBindingRequiresGuestIP(t *testing.T) {
-	m := &Manager{
-		cfg:            &config.Config{},
+		cfg:            &config.Config{MicroVMGuestIP: "172.30.0.10"},
+		guestIPs:       map[string]string{"runtime-1": "172.30.0.10"},
 		sourceBindings: &fakeSourceBindingRegistrar{},
 	}
-	_, err := m.registerSourceBinding(context.Background(), "agent-1", "fc-agent-1", runtimemanager.StartOpts{
-		ProxyEgress: &runtimemanager.ProxyEgressConfig{Enabled: true},
-	})
-	if err == nil || !strings.Contains(err.Error(), "AGENT_MANAGER_MICROVM_GUEST_IP") {
-		t.Fatalf("expected guest IP error, got %v", err)
+	_, err := m.registerSourceBinding(
+		context.Background(), "runtime-1", "", "", 0, []string{"connection-1"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "Environment") {
+		t.Fatalf("expected Sandbox identity error, got %v", err)
 	}
 }
 
@@ -2216,64 +2208,6 @@ func TestUntrackedInstanceIDsExcludesTrackedSiblings(t *testing.T) {
 		if !want[id] {
 			t.Fatalf("untracked included a tracked instance: %q in %v", id, got)
 		}
-	}
-}
-
-func TestRegisterSourceBindingRegistersTransparentRoute(t *testing.T) {
-	registrar := &fakeSourceBindingRegistrar{}
-	router := &fakeHostEgressRouter{}
-	instanceID := "fc-agent-1"
-	m := &Manager{
-		cfg:            &config.Config{MicroVMGuestIP: "172.30.0.10"},
-		sourceBindings: registrar,
-		egressRouter:   router,
-		guestIPs:       map[string]string{instanceID: "172.30.0.10"},
-		instances: map[string]*instance{
-			instanceID: {id: instanceID, tapName: "agfc123"},
-		},
-	}
-	_, err := m.registerSourceBinding(context.Background(), "agent-1", instanceID, runtimemanager.StartOpts{
-		ProxyEgress: &runtimemanager.ProxyEgressConfig{
-			Enabled:             true,
-			TransparentHTTPPort: 18081,
-		},
-	})
-	if err != nil {
-		t.Fatalf("register source binding: %v", err)
-	}
-	if len(router.registered) != 1 {
-		t.Fatalf("routes = %#v", router.registered)
-	}
-	route := router.registered[0]
-	if route.AgentID != "agent-1" || route.InstanceID != instanceID || route.SourceIP != "172.30.0.10" || route.HTTPPort != 18081 || route.InterfaceID != "agfc123" {
-		t.Fatalf("route = %#v", route)
-	}
-}
-
-func TestRegisterSourceBindingCleansUpWhenTransparentRouteFails(t *testing.T) {
-	registrar := &fakeSourceBindingRegistrar{}
-	router := &fakeHostEgressRouter{err: os.ErrPermission}
-	instanceID := "fc-agent-1"
-	m := &Manager{
-		cfg:            &config.Config{MicroVMGuestIP: "172.30.0.10"},
-		sourceBindings: registrar,
-		egressRouter:   router,
-		guestIPs:       map[string]string{instanceID: "172.30.0.10"},
-		instances: map[string]*instance{
-			instanceID: {id: instanceID, tapName: "agfc123"},
-		},
-	}
-	_, err := m.registerSourceBinding(context.Background(), "agent-1", instanceID, runtimemanager.StartOpts{
-		ProxyEgress: &runtimemanager.ProxyEgressConfig{
-			Enabled:             true,
-			TransparentHTTPPort: 18081,
-		},
-	})
-	if err == nil {
-		t.Fatal("expected transparent route failure")
-	}
-	if len(registrar.unregistered) != 1 || registrar.unregistered[0] != instanceID {
-		t.Fatalf("source binding cleanup = %#v", registrar.unregistered)
 	}
 }
 
@@ -2378,7 +2312,7 @@ func TestPrepareJailedLaunchRejectsUnixSocketPathOverflowBeforeStaging(t *testin
 	if err == nil || !strings.Contains(err.Error(), "exceeding the unix socket limit") {
 		t.Fatalf("overlong jailed socket path error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "AGENT_MANAGER_MICROVM_JAILER_CHROOT_BASE_DIR") {
+	if !strings.Contains(err.Error(), "SANDBOX_HOST_MICROVM_JAILER_CHROOT_BASE_DIR") {
 		t.Fatalf("overlong jailed socket path did not identify its setting: %v", err)
 	}
 	if _, statErr := os.Stat(m.jailerRoot("fc-agent-123")); !errors.Is(statErr, os.ErrNotExist) {
@@ -2465,7 +2399,7 @@ func TestStageWorkspaceJailFileRejectsCrossDeviceCopyFallback(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected EXDEV error")
 	}
-	if !strings.Contains(err.Error(), "jailer chroot base dir must be on the same filesystem as AGENT_MANAGER_MICROVM_WORKSPACE_DIR") {
+	if !strings.Contains(err.Error(), "jailer chroot base dir must be on the same filesystem as SANDBOX_HOST_MICROVM_WORKSPACE_DIR") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, statErr := os.Stat(dst); !os.IsNotExist(statErr) {
@@ -2860,29 +2794,28 @@ func TestManagerUsesGuestControlForLiveVerbs(t *testing.T) {
 }
 
 type fakeSourceBindingRegistrar struct {
-	registered   []egressproxy.SourceBinding
-	unregistered []string
-	retained     [][]string
+	registered   []SourceBinding
+	unregistered []SourceBinding
+	sourceToken  string
 	err          error
 }
 
-func (f *fakeSourceBindingRegistrar) Register(binding egressproxy.SourceBinding) error {
+func (f *fakeSourceBindingRegistrar) Register(_ context.Context, binding SourceBinding) (SourceBindingRegistration, error) {
 	if f.err != nil {
-		return f.err
+		return SourceBindingRegistration{}, f.err
 	}
 	f.registered = append(f.registered, binding)
-	return nil
+	if f.sourceToken == "" {
+		f.sourceToken = "opaque-source-token"
+	}
+	return SourceBindingRegistration{SourceToken: f.sourceToken}, nil
 }
 
-func (f *fakeSourceBindingRegistrar) UnregisterContainer(instanceID string) {
-	f.unregistered = append(f.unregistered, instanceID)
-}
-
-func (f *fakeSourceBindingRegistrar) RetainContainers(containerIDs []string) error {
+func (f *fakeSourceBindingRegistrar) Unregister(_ context.Context, binding SourceBinding) error {
 	if f.err != nil {
 		return f.err
 	}
-	f.retained = append(f.retained, append([]string(nil), containerIDs...))
+	f.unregistered = append(f.unregistered, binding)
 	return nil
 }
 
@@ -3064,7 +2997,7 @@ func TestAdmitCompartmentSpawnLocked(t *testing.T) {
 			name:      "per-agent cap",
 			cfg:       config.Config{MicroVMBridgeCIDR: "10.0.0.1/24", MicroVMMaxConcurrentPerAgent: 1},
 			instances: map[string]*instance{"a": live("cmp-a", "agent-1", false)},
-			wantErr:   "AGENT_MANAGER_MICROVM_MAX_CONCURRENT_PER_AGENT",
+			wantErr:   "SANDBOX_HOST_MICROVM_MAX_CONCURRENT_PER_AGENT",
 		},
 		{
 			name: "global cap across agents",
@@ -3073,7 +3006,7 @@ func TestAdmitCompartmentSpawnLocked(t *testing.T) {
 				"a": live("cmp-a", "agent-1", false),
 				"b": live("cmp-b", "agent-2", false),
 			},
-			wantErr: "AGENT_MANAGER_MICROVM_MAX_CONCURRENT_GLOBAL",
+			wantErr: "SANDBOX_HOST_MICROVM_MAX_CONCURRENT_GLOBAL",
 		},
 		{
 			name: "memory budget",
@@ -3082,7 +3015,7 @@ func TestAdmitCompartmentSpawnLocked(t *testing.T) {
 				"a": live("cmp-a", "agent-1", false),
 				"b": live("cmp-b", "agent-2", false),
 			},
-			wantErr: "AGENT_MANAGER_MICROVM_MEMORY_BUDGET_MIB",
+			wantErr: "SANDBOX_HOST_MICROVM_MEMORY_BUDGET_MIB",
 		},
 		{
 			name:      "all zero is unlimited",
@@ -3093,7 +3026,7 @@ func TestAdmitCompartmentSpawnLocked(t *testing.T) {
 			name:      "reaping instances retain capacity",
 			cfg:       config.Config{MicroVMBridgeCIDR: "10.0.0.1/24", MicroVMMaxConcurrentPerAgent: 1, MicroVMMaxConcurrentGlobal: 1, MicroVMMemoryMiB: 2048, MicroVMMemoryBudgetMiB: 2048},
 			instances: map[string]*instance{"a": live("cmp-a", "agent-1", true)},
-			wantErr:   "AGENT_MANAGER_MICROVM_MAX_CONCURRENT_PER_AGENT",
+			wantErr:   "SANDBOX_HOST_MICROVM_MAX_CONCURRENT_PER_AGENT",
 		},
 		{
 			name:      "non-positive vm memory skips memory check",
@@ -3121,7 +3054,7 @@ func TestAdmitCompartmentSpawnLockedCountsPendingReservations(t *testing.T) {
 		instances:     map[string]*instance{},
 		pendingSpawns: map[runtimeInstanceKey]int{{agentID: "agent-1", compartmentID: "cmp-a"}: 2},
 	}
-	if err := m.admitCompartmentSpawnLocked(runtimeInstanceKey{agentID: "agent-2", compartmentID: "cmp-b"}); err == nil || !strings.Contains(err.Error(), "AGENT_MANAGER_MICROVM_MAX_CONCURRENT_GLOBAL") {
+	if err := m.admitCompartmentSpawnLocked(runtimeInstanceKey{agentID: "agent-2", compartmentID: "cmp-b"}); err == nil || !strings.Contains(err.Error(), "SANDBOX_HOST_MICROVM_MAX_CONCURRENT_GLOBAL") {
 		t.Fatalf("admit with pending reservations = %v, want global cap", err)
 	}
 	got := m.RuntimeMetricsSnapshot()
@@ -3303,7 +3236,7 @@ func TestBuildStartupSecretBundleCarriesScopedToolEnv(t *testing.T) {
 	t.Setenv("MOM_BROWSER_HEADLESS", "false")
 	t.Setenv("MOM_BROWSER_PRESTART", "true")
 
-	m := &Manager{cfg: &config.Config{PlatformAPIURL: "https://platform.example/", AgentRuntimeAuthSecret: "runtime-secret"}}
+	m := &Manager{cfg: &config.Config{PlatformAPIURL: "https://platform.example/"}}
 	bundle, err := m.buildStartupSecretBundle("agent-9", "fc-agent-9-cmp-a-1", runtimemanager.StartOpts{Timezone: "UTC", CompartmentID: "cmp_a"})
 	if err != nil {
 		t.Fatalf("build bundle: %v", err)
@@ -3323,7 +3256,7 @@ func TestBuildStartupSecretBundleCarriesScopedToolEnv(t *testing.T) {
 	if got := bundle.Env["AGENT_PLATFORM_TOKEN"]; got != "" {
 		t.Fatalf("AGENT_PLATFORM_TOKEN must not be injected into persistent runtime env, got %q", got)
 	}
-	for _, key := range []string{"AGENT_MANAGER_FLUE_STORE_URL", "AGENT_MANAGER_FLUE_STORE_TOKEN", "AGENT_MANAGER_RUNTIME_TOKEN"} {
+	for _, key := range []string{"AGENT_MANAGER_SESSION_STORE_URL", "AGENT_MANAGER_SESSION_STORE_TOKEN", "AGENT_MANAGER_RUNTIME_TOKEN"} {
 		if got := bundle.Env[key]; got != "" {
 			t.Fatalf("%s must not be injected into the tool runtime, got %q", key, got)
 		}
@@ -3337,7 +3270,7 @@ func TestBuildStartupSecretBundleCarriesScopedToolEnv(t *testing.T) {
 }
 
 func TestBuildStartupSecretBundleCarriesRuntimeContextProjection(t *testing.T) {
-	m := &Manager{cfg: &config.Config{PlatformAPIURL: "https://platform.example/", AgentRuntimeAuthSecret: "runtime-secret"}}
+	m := &Manager{cfg: &config.Config{PlatformAPIURL: "https://platform.example/"}}
 	bundle, err := m.buildStartupSecretBundle("agent-9", "fc-agent-9-cmp-a-1", runtimemanager.StartOpts{
 		Timezone:      "UTC",
 		CompartmentID: "cmp_a",
@@ -3362,143 +3295,29 @@ func TestBuildStartupSecretBundleCarriesRuntimeContextProjection(t *testing.T) {
 	}
 }
 
-func TestBuildStartupSecretBundleRewritesEgressProxyURLForMicroVMBridge(t *testing.T) {
-	m := &Manager{cfg: &config.Config{
-		PlatformAPIURL:    "http://10.0.0.1:8081",
-		MicroVMBridgeCIDR: "10.0.0.1/24",
-	}}
-	bundle, err := m.buildStartupSecretBundle("agent-9", "fc-agent-9-cmp-a-1", runtimemanager.StartOpts{
-		CompartmentID: "cmp_a",
-		ProxyEgress: &runtimemanager.ProxyEgressConfig{
-			Enabled:             true,
-			ProxyURL:            "http://agent-manager-egress-proxy:3128",
-			TransparentHTTPPort: 18080,
-			NoProxy:             "localhost,127.0.0.1",
-		},
-	})
-	if err != nil {
-		t.Fatalf("build bundle: %v", err)
-	}
-	if got, want := bundle.Env["HTTP_PROXY"], "http://10.0.0.1:3128"; got != want {
-		t.Fatalf("HTTP_PROXY = %q, want %q", got, want)
-	}
-	if bundle.Env["HTTPS_PROXY"] != bundle.Env["HTTP_PROXY"] || bundle.Env["http_proxy"] != bundle.Env["HTTP_PROXY"] || bundle.Env["https_proxy"] != bundle.Env["HTTP_PROXY"] {
-		t.Fatalf("proxy env mismatch: %#v", bundle.Env)
-	}
-	if got := bundle.Env["npm_config_proxy"]; got != bundle.Env["HTTP_PROXY"] {
-		t.Fatalf("npm_config_proxy = %q, want %q", got, bundle.Env["HTTP_PROXY"])
-	}
-	if got := bundle.Env["npm_config_https_proxy"]; got != bundle.Env["HTTP_PROXY"] {
-		t.Fatalf("npm_config_https_proxy = %q, want %q", got, bundle.Env["HTTP_PROXY"])
-	}
-	if got := bundle.Env["npm_config_noproxy"]; got != "localhost,127.0.0.1" {
-		t.Fatalf("npm_config_noproxy = %q, want no-proxy list", got)
-	}
-	if bundle.Env["GH_TOKEN"] != "agent-service-proxy:github" || bundle.Env["GITHUB_TOKEN"] != "agent-service-proxy:github" {
-		t.Fatalf("github proxy env mismatch: %#v", bundle.Env)
-	}
-	if got, want := bundle.Env["GIT_ASKPASS"], "/runtime-private/github-askpass"; got != want {
-		t.Fatalf("GIT_ASKPASS = %q, want %q", got, want)
-	}
-	if got, want := bundle.Env["GIT_CONFIG_GLOBAL"], "/runtime-private/gitconfig"; got != want {
-		t.Fatalf("GIT_CONFIG_GLOBAL = %q, want %q", got, want)
-	}
-	if got := bundle.Env["GIT_TERMINAL_PROMPT"]; got != "0" {
-		t.Fatalf("GIT_TERMINAL_PROMPT = %q, want 0", got)
-	}
-	if script := bundle.Files["github-askpass"]; !strings.Contains(script, "x-access-token") || !strings.Contains(script, "GITHUB_TOKEN") {
-		t.Fatalf("github askpass script missing expected content: %q", script)
-	}
-	if cfg := bundle.Files["gitconfig"]; !strings.Contains(cfg, "useHttpPath = true") || !strings.Contains(cfg, "insteadOf = git@github.com:") {
-		t.Fatalf("gitconfig missing expected content: %q", cfg)
-	}
-}
-
-func TestSourceBindingContextTokenCarriesIntoStartupProxyEnv(t *testing.T) {
+func TestIntegrationSourceBindingReturnsOpaqueToken(t *testing.T) {
 	registrar := &fakeSourceBindingRegistrar{}
 	instanceID := "fc-agent-9-cmp-a-1"
 	m := &Manager{
-		cfg: &config.Config{
-			AgentRuntimeAuthSecret: "runtime-secret",
-			PlatformAPIURL:         "http://10.0.0.1:8081",
-			MicroVMBridgeCIDR:      "10.0.0.1/24",
-		},
+		cfg:            &config.Config{PlatformAPIURL: "http://10.0.0.1:8081"},
 		guestIPs:       map[string]string{instanceID: "10.0.0.7"},
 		sourceBindings: registrar,
 	}
-	opts := runtimemanager.StartOpts{
-		CompartmentID:  "cmp_a",
-		ActorPrincipal: "slack:user:U1",
-		RuntimeActorContext: runtimecontext.VerifiedActorContext{
-			PlatformUserID: "user-1",
-			SessionID:      "session-1",
-			RequestID:      "request-1",
-			WakeTurnID:     "turn-1",
-			Verified:       true,
-		},
-		ProxyEgress: &runtimemanager.ProxyEgressConfig{
-			Enabled:  true,
-			ProxyURL: "http://agent-manager-egress-proxy:3128",
-			PlaceID:  "plc_123",
-		},
-	}
-	token, err := m.registerSourceBinding(context.Background(), "agent-9", instanceID, opts)
+	token, err := m.registerSourceBinding(
+		context.Background(), instanceID, "environment-9", "instance-9", 2, []string{"connection-9"},
+	)
 	if err != nil {
 		t.Fatalf("register source binding: %v", err)
 	}
 	if token == "" {
 		t.Fatal("expected context token")
 	}
-	if len(registrar.registered) != 1 || registrar.registered[0].ContextToken != token {
-		t.Fatalf("registered binding token = %#v, want %q", registrar.registered, token)
-	}
-	claims, err := egressproxy.VerifyContextToken(m.cfg.AgentRuntimeAuthSecret, token, time.Now().UTC())
-	if err != nil {
-		t.Fatalf("verify context token: %v", err)
-	}
-	if claims.AgentID != "agent-9" ||
-		claims.CompartmentID != "cmp_a" ||
-		claims.PlaceID != "plc_123" ||
-		claims.CredentialSubject != "slack:user:U1" ||
-		claims.PlatformUserID != "user-1" ||
-		claims.AgentSessionID != "session-1" ||
-		claims.RequestID != "request-1" ||
-		claims.TurnID != "turn-1" ||
-		claims.EgressID != instanceID {
-		t.Fatalf("context token claims = %#v", claims)
+	if len(registrar.registered) != 1 || registrar.registered[0].EnvironmentID != "environment-9" {
+		t.Fatalf("registered binding = %#v", registrar.registered)
 	}
 
-	opts.ProxyEgress.ContextToken = token
-	bundle, err := m.buildStartupSecretBundle("agent-9", instanceID, opts)
-	if err != nil {
-		t.Fatalf("build bundle: %v", err)
-	}
-	if bundle.Env["AGENT_MANAGER_EGRESS_CONTEXT_TOKEN"] != token {
-		t.Fatalf("AGENT_MANAGER_EGRESS_CONTEXT_TOKEN = %q, want minted token", bundle.Env["AGENT_MANAGER_EGRESS_CONTEXT_TOKEN"])
-	}
-	if got := bundle.Env["HTTP_PROXY"]; !strings.Contains(got, "AgentServiceContext:"+token+"@10.0.0.1:3128") {
-		t.Fatalf("HTTP_PROXY = %q, want context token credentials", got)
-	}
-}
-
-func TestBuildStartupSecretBundleKeepsExternalProxyURL(t *testing.T) {
-	m := &Manager{cfg: &config.Config{
-		PlatformAPIURL:    "http://10.0.0.1:8081",
-		MicroVMBridgeCIDR: "10.0.0.1/24",
-	}}
-	bundle, err := m.buildStartupSecretBundle("agent-9", "fc-agent-9-cmp-a-1", runtimemanager.StartOpts{
-		CompartmentID: "cmp_a",
-		ProxyEgress: &runtimemanager.ProxyEgressConfig{
-			Enabled:             true,
-			ProxyURL:            "http://proxy.example.internal:3128",
-			TransparentHTTPPort: 18080,
-		},
-	})
-	if err != nil {
-		t.Fatalf("build bundle: %v", err)
-	}
-	if got, want := bundle.Env["HTTP_PROXY"], "http://proxy.example.internal:3128"; got != want {
-		t.Fatalf("HTTP_PROXY = %q, want %q", got, want)
+	if token != "opaque-source-token" {
+		t.Fatalf("source token = %q", token)
 	}
 }
 

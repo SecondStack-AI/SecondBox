@@ -1,4 +1,4 @@
-package microvm
+package firecracker
 
 import (
 	"context"
@@ -60,7 +60,7 @@ func TestTransparentRouteArgsIncludeTapInterface(t *testing.T) {
 		"-A PREROUTING",
 		"-s 172.30.0.10/32",
 		"-i agfc123",
-		"--comment agent-manager-microvm-egress:fc-agent-1",
+		"--comment sandbox-host-guest-egress:fc-agent-1",
 		"--to-ports 18081",
 	} {
 		if !strings.Contains(got, want) {

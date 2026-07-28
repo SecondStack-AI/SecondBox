@@ -7,11 +7,11 @@ if [ -w /proc/sys/kernel/unprivileged_userns_clone ]; then
     echo 1 > /proc/sys/kernel/unprivileged_userns_clone
 fi
 
-# Tool-executor microVMs run ONLY the in-guest tool-exec server (agent-manager-microvm-agent).
-# No runtime command is passed after the flags, so the agent serves /tool/exec over vsock
+# Tool-executor microVMs run only the Sandbox Host guest agent.
+# No runtime command is passed after the flags, so the guest serves /tool/exec over vsock
 # for one dangerous operation and does NOT launch the full TypeScript agent runtime or the
 # browser stack. The agent loop itself runs on the host as a Flue harness cell.
-exec /usr/local/bin/agent-manager-microvm-agent \
+exec /usr/local/bin/sandbox-guest-agent \
     --vsock-port "${AGENT_MANAGER_GUEST_VSOCK_PORT:-1024}" \
     --workspace "${AGENT_MANAGER_WORKSPACE_DIR:-/workspace}" \
     --runtime-private "${AGENT_MANAGER_RUNTIME_PRIVATE_DIR:-/runtime-private}" \

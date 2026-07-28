@@ -1,4 +1,4 @@
-package microvm
+package firecracker
 
 import (
 	"context"
@@ -6,14 +6,25 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-
-	"agent-manager/internal/egressproxy"
+	"time"
 )
 
 type SourceBindingRegistrar interface {
-	Register(egressproxy.SourceBinding) error
-	UnregisterContainer(containerID string)
-	RetainContainers(containerIDs []string) error
+	Register(context.Context, SourceBinding) (SourceBindingRegistration, error)
+	Unregister(context.Context, SourceBinding) error
+}
+
+type SourceBinding struct {
+	EnvironmentID        string    `json:"environmentId"`
+	InstanceID           string    `json:"instanceId"`
+	SourceAddress        string    `json:"sourceAddress"`
+	Generation           int64     `json:"generation"`
+	ExpiresAt            time.Time `json:"expiresAt"`
+	AllowedConnectionIDs []string  `json:"allowedConnectionIds"`
+}
+
+type SourceBindingRegistration struct {
+	SourceToken string `json:"sourceToken"`
 }
 
 type HostNetworkConfigurer interface {

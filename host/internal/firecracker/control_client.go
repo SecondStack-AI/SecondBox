@@ -1,4 +1,4 @@
-package microvm
+package firecracker
 
 import (
 	"bufio"
@@ -16,10 +16,10 @@ import (
 	"strings"
 	"time"
 
-	"agent-manager/internal/runtimecontext"
-	"agent-manager/internal/runtimemanager"
-	"agent-manager/internal/sandboxlimits"
-	"agent-manager/internal/toolexecutor"
+	"secondstack/sandbox-host/internal/runtime"
+	"secondstack/sandbox-host/internal/runtimecontext"
+	"secondstack/sandbox-host/internal/sandboxlimits"
+	"secondstack/sandbox-host/internal/toolexecutor"
 )
 
 const defaultControlPort = 1024

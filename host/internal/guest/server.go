@@ -20,10 +20,9 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"agent-manager/internal/registry"
-	"agent-manager/internal/runtimecontext"
-	"agent-manager/internal/sandboxlimits"
-	"agent-manager/internal/toolexecutor"
+	"secondstack/sandbox-host/internal/runtimecontext"
+	"secondstack/sandbox-host/internal/sandboxlimits"
+	"secondstack/sandbox-host/internal/toolexecutor"
 )
 
 const maxCommandOutputStreamBytes = 256 << 10
@@ -970,7 +969,7 @@ func (s Server) applyRuntimeContextProjection(projection runtimecontext.Projecti
 		currentFiles[file.Path] = struct{}{}
 	}
 	deletePaths := map[string]struct{}{}
-	if strings.TrimSpace(projection.EffectivePolicy) == registry.CredentialPolicyNone {
+	if strings.TrimSpace(projection.EffectivePolicy) == "none" {
 		for _, path := range runtimecontext.AllProjectionPaths() {
 			deletePaths[path] = struct{}{}
 		}

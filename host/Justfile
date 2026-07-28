@@ -1,108 +1,12 @@
-# Agent Service build, development, and validation tasks.
+# Sandbox Host build and validation tasks.
 
 default:
     @just --list
 
-# Start the Agent Service backend with hot reload. Platform dependencies and
-# configuration must already be loaded by the repository environment wrapper.
-dev: dev-api
-
-dev-api:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    : "${AGENT_MANAGER_DATABASE_URL:?AGENT_MANAGER_DATABASE_URL is required}"
-    : "${AGENT_MANAGER_FLUE_STORE_URL:?AGENT_MANAGER_FLUE_STORE_URL is required}"
-    : "${AGENT_MANAGER_FLUE_STORE_TOKEN:?AGENT_MANAGER_FLUE_STORE_TOKEN is required}"
-    AIR_BIN="$(command -v air)"
-    exec "$AIR_BIN"
-
-# Start only the private Flue store from an explicitly loaded environment.
-dev-flue-store:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    : "${DATABASE_URL:?DATABASE_URL is required}"
-    : "${FLUE_STORE_PORT:?FLUE_STORE_PORT is required}"
-    : "${FLUE_STORE_TOKEN:?FLUE_STORE_TOKEN is required}"
-    : "${FLUE_STORE_COMPLETED_SESSION_RETENTION_DAYS:?FLUE_STORE_COMPLETED_SESSION_RETENTION_DAYS is required}"
-    cd flue-store
-    exec npm exec -- tsx src/main.ts
-
-# Install the persistent Firecracker development bridge.
-net-install:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    : "${AGENT_MANAGER_MICROVM_BRIDGE_NAME:?AGENT_MANAGER_MICROVM_BRIDGE_NAME is required}"
-    : "${AGENT_MANAGER_MICROVM_BRIDGE_CIDR:?AGENT_MANAGER_MICROVM_BRIDGE_CIDR is required}"
-    UNIT_DST="/etc/systemd/system/agent-manager-devnet.service"
-    sed -e "s|@BRIDGE_NAME@|${AGENT_MANAGER_MICROVM_BRIDGE_NAME}|g" \
-        -e "s|@BRIDGE_CIDR@|${AGENT_MANAGER_MICROVM_BRIDGE_CIDR}|g" \
-        deploy/agent-manager-devnet.service | sudo tee "$UNIT_DST" >/dev/null
-    sudo systemctl daemon-reload
-    sudo systemctl enable --now agent-manager-devnet.service
-    ip addr show to "${AGENT_MANAGER_MICROVM_BRIDGE_CIDR%%/*}/32" | grep -q .
-
-# Grant the current user the narrow ip/iptables privileges used by the devnet shims.
-net-sudoers:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    USER_NAME="$(id -un)"
-    IP_BIN="$(command -v ip)"
-    IPTABLES_BIN="$(command -v iptables)"
-    DROPIN="/etc/sudoers.d/agent-manager-devnet"
-    TMP="$(mktemp)"
-    trap 'rm -f "$TMP"' EXIT
-    printf '%s\n' \
-        "# Installed by Agent Service for Firecracker development networking." \
-        "${USER_NAME} ALL=(root) NOPASSWD: ${IP_BIN}, ${IPTABLES_BIN}" > "$TMP"
-    sudo visudo -cf "$TMP"
-    sudo install -m 0440 -o root -g root "$TMP" "$DROPIN"
-
-# Remove the persistent Firecracker development bridge.
-net-uninstall:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    sudo systemctl disable --now agent-manager-devnet.service
-    sudo rm -f /etc/systemd/system/agent-manager-devnet.service
-    sudo systemctl daemon-reload
-
-# Restore project-local runtime data ownership after an accidental root run.
-data-fix-perms:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    : "${AGENT_MANAGER_DATA_DIR:?AGENT_MANAGER_DATA_DIR is required}"
-    USER_NAME="$(id -un)"
-    GROUP_NAME="$(id -gn "$USER_NAME")"
-    [[ "$USER_NAME" != "root" ]]
-    targets=()
-    for target in "$AGENT_MANAGER_DATA_DIR" tmp/jail; do
-        [[ -e "$target" ]] && targets+=("$target")
-    done
-    if [[ "${#targets[@]}" -gt 0 ]]; then
-        sudo chown -R "${USER_NAME}:${GROUP_NAME}" "${targets[@]}"
-    fi
-
 build:
     mkdir -p bin
-    go build -o bin/agent-manager ./cmd/agent-manager
-    go build -o bin/agent-manager-mcp-cutover ./cmd/agent-manager-mcp-cutover
-    go build -o bin/agent-manager-memory-cutover ./cmd/agent-manager-memory-cutover
-    go build -o bin/agent-manager-backup-verify ./cmd/agent-manager-backup-verify
-
-build-recovery-artifacts:
-    mkdir -p bin
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o bin/agent-manager ./cmd/agent-manager
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o bin/agent-manager-backup-verify ./cmd/agent-manager-backup-verify
-    flue-store/scripts/package-production.sh --output-dir tmp/flue-store-production
-    agent/scripts/package-production.sh --output-dir tmp/agent-harness-production
-
-build-egress-proxy:
-    go build -o bin/agent-manager-egress-proxy ./cmd/agent-manager-egress-proxy
-
-build-agent:
-    cd agent && npm run build
-
-build-flue-store:
-    cd flue-store && npm run build
+    go build -o bin/sandbox-host ./cmd/sandbox-host
+    go build -o bin/sandbox-guest-agent ./cmd/sandbox-guest-agent
 
 build-microvm-images:
     scripts/microvm-image/build.sh
@@ -111,84 +15,63 @@ build-microvm-images-std:
     #!/usr/bin/env bash
     set -euo pipefail
     scripts/microvm-image/rootfs/build-rootfs-source.sh
-    AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_DIR=tmp/microvm-rootfs-src \
-    AGENT_MANAGER_MICROVM_KERNEL_PATH=releases/microvm/latest/kernel \
-    AGENT_MANAGER_MICROVM_ROOTFS_SIZE_MIB=10240 \
+    SANDBOX_HOST_MICROVM_ROOTFS_SOURCE_DIR=tmp/microvm-rootfs-src \
+    SANDBOX_HOST_MICROVM_KERNEL_PATH=releases/microvm/latest/kernel \
+    SANDBOX_HOST_MICROVM_ROOTFS_SIZE_MIB=10240 \
     scripts/microvm-image/build.sh
-
-build-runtime: build-microvm-images
 
 build-microvm-kernel:
     scripts/microvm-image/build-kernel.sh tmp/microvm-kernel
 
-verify-microvm-images:
-    scripts/microvm-image/verify.sh releases/microvm/latest releases/microvm/latest/signing.pub
+verify-microvm-images artifact_dir="releases/microvm/latest":
+    scripts/microvm-image/verify.sh {{ artifact_dir }} {{ artifact_dir }}/signing.pub
 
 verify-microvm-staging *ARGS:
     scripts/microvm-stage-check.sh {{ ARGS }}
 
-all: build build-egress-proxy build-agent build-flue-store
-    @echo "All builds complete"
+# Install the persistent Firecracker development bridge.
+net-install:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${SANDBOX_HOST_MICROVM_BRIDGE_NAME:?SANDBOX_HOST_MICROVM_BRIDGE_NAME is required}"
+    : "${SANDBOX_HOST_MICROVM_BRIDGE_CIDR:?SANDBOX_HOST_MICROVM_BRIDGE_CIDR is required}"
+    UNIT_DST="/etc/systemd/system/sandbox-host-devnet.service"
+    sed -e "s|@BRIDGE_NAME@|${SANDBOX_HOST_MICROVM_BRIDGE_NAME}|g" \
+        -e "s|@BRIDGE_CIDR@|${SANDBOX_HOST_MICROVM_BRIDGE_CIDR}|g" \
+        deploy/sandbox-host-devnet.service | sudo tee "$UNIT_DST" >/dev/null
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now sandbox-host-devnet.service
+    ip addr show to "${SANDBOX_HOST_MICROVM_BRIDGE_CIDR%%/*}/32" | grep -q .
+
+# Grant the current user the narrow ip/iptables privileges used by the devnet shims.
+net-sudoers:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    USER_NAME="$(id -un)"
+    IP_BIN="$(command -v ip)"
+    IPTABLES_BIN="$(command -v iptables)"
+    DROPIN="/etc/sudoers.d/sandbox-host-devnet"
+    TMP="$(mktemp)"
+    trap 'rm -f "$TMP"' EXIT
+    printf '%s\n' \
+        "# Installed by Sandbox Host for Firecracker development networking." \
+        "${USER_NAME} ALL=(root) NOPASSWD: ${IP_BIN}, ${IPTABLES_BIN}" > "$TMP"
+    sudo visudo -cf "$TMP"
+    sudo install -m 0440 -o root -g root "$TMP" "$DROPIN"
+
+# Remove the persistent Firecracker development bridge.
+net-uninstall:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    sudo systemctl disable --now sandbox-host-devnet.service
+    sudo rm -f /etc/systemd/system/sandbox-host-devnet.service
+    sudo systemctl daemon-reload
 
 test:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    : "${AGENT_MANAGER_TEST_DATABASE_URL:?AGENT_MANAGER_TEST_DATABASE_URL is required}"
-    export AGENT_MANAGER_DATABASE_URL="$AGENT_MANAGER_TEST_DATABASE_URL"
-    scripts/test/go-fast.sh
-    scripts/test/go-db.sh
+    scripts/ci_paths_test.sh
+    scripts/microvm-image/browser-surface-policy-test.sh
+    scripts/microvm-image/trust-anchor-policy-test.sh
+    go test ./... -count=1
+    go vet ./...
 
-test-fast *ARGS:
-    scripts/test/go-fast.sh {{ ARGS }}
-
-test-channel-runtime-contract:
-    go test ./contracts/channel-runtime/v1/... ./contracts/managed-agents/v1/gen/go/managedagents
-
-sqlc:
-    scripts/sqlc-generate.sh
-
-generate-managed-agents-contracts:
-    node scripts/contracts/generate-managed-agents.mjs
-
-verify-managed-agents-baseline artifact_dir="releases/microvm/latest":
-    node scripts/contracts/generate-managed-agents.mjs --check
-    node scripts/contracts/verify-managed-agents-baseline.mjs --verify-artifact-dir {{ artifact_dir }}
-    scripts/microvm-image/verify.sh {{ artifact_dir }} {{ artifact_dir }}/signing.pub
-
-test-flue-store:
-    cd flue-store && npm test
-
-test-flue-store-contract:
-    cd flue-store && npm run test:contract
-
-preship:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    scripts/test/backend-checks.sh
-    just test
-    (cd flue-store && npm test && npm run test:contract && npm run build)
-    (cd agent && npm run typecheck && npm run lint && npm test && npm run build)
-
-backup:
-    scripts/backup/pg-dump.sh
-
-restore-drill:
-    scripts/backup/restore-drill.sh
-
-tidy:
-    go mod tidy
-
-install-deps:
-    cd agent && npm install
-    cd flue-store && npm install
-
-install-dev-tools:
-    go install github.com/air-verse/air@latest
-
-setup: install-deps tidy install-dev-tools
-    @echo "Setup complete"
-
-clean:
-    rm -rf bin/
-    cd agent && npm run clean
-    rm -rf flue-store/dist/
+preship: test build

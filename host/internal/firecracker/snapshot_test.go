@@ -1,4 +1,4 @@
-package microvm
+package firecracker
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"agent-manager/internal/config"
+	"secondstack/sandbox-host/internal/config"
 )
 
 func TestCreateGoldenSnapshotPausesSnapshotsResumesAndWritesManifest(t *testing.T) {

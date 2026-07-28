@@ -13,8 +13,8 @@ for command in ip iptables ip6tables python3 sysctl timeout; do
   fi
 done
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-setup_script="$repo_root/scripts/microvm-host-network-setup.sh"
+host_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+setup_script="$host_root/scripts/microvm-host-network-setup.sh"
 suffix="$(printf '%x' "$$")"
 host_ns="aghost-$suffix"
 guest_ns="agguest-$suffix"
@@ -30,23 +30,23 @@ platform_port=18081
 explicit_proxy_port=13128
 transparent_proxy_port=18080
 denied_port=15432
-state_dir="${RUNNER_TEMP:-/tmp}/agent-manager-network-test-$suffix"
+state_dir="${RUNNER_TEMP:-/tmp}/sandbox-host-network-test-$suffix"
 server_log="$state_dir/server.log"
 server_pid=""
 
 network_setup() {
   ip netns exec "$host_ns" env \
-    AGENT_MANAGER_MICROVM_BRIDGE_NAME="$bridge" \
-    AGENT_MANAGER_MICROVM_BRIDGE_CIDR="$bridge_cidr" \
-    AGENT_MANAGER_MICROVM_GUEST_CIDR="$guest_cidr" \
-    AGENT_MANAGER_MICROVM_TAP_PREFIX="$tap_prefix" \
-    AGENT_MANAGER_EGRESS_PROXY_LISTEN_PORT="$explicit_proxy_port" \
-    AGENT_MANAGER_EGRESS_PROXY_TRANSPARENT_HTTP_PORT="$transparent_proxy_port" \
-    AGENT_MANAGER_MICROVM_INSTALL_CIDR_TRANSPARENT_HTTP=true \
-    AGENT_MANAGER_PRIVATE_LISTEN_PORT="$platform_port" \
-    AGENT_MANAGER_PRIVATE_IFACES="lo,$bridge,$host_veth" \
-    AGENT_MANAGER_MICROVM_NETWORK_STATE_DIR="$state_dir/network-state" \
-    AGENT_MANAGER_MICROVM_DELETE_BRIDGE=true \
+    SANDBOX_HOST_MICROVM_BRIDGE_NAME="$bridge" \
+    SANDBOX_HOST_MICROVM_BRIDGE_CIDR="$bridge_cidr" \
+    SANDBOX_HOST_MICROVM_GUEST_CIDR="$guest_cidr" \
+    SANDBOX_HOST_MICROVM_TAP_PREFIX="$tap_prefix" \
+    SANDBOX_HOST_EGRESS_PROXY_LISTEN_PORT="$explicit_proxy_port" \
+    SANDBOX_HOST_EGRESS_PROXY_TRANSPARENT_HTTP_PORT="$transparent_proxy_port" \
+    SANDBOX_HOST_MICROVM_INSTALL_CIDR_TRANSPARENT_HTTP=true \
+    SANDBOX_HOST_AGENT_SERVICE_PRIVATE_LISTEN_PORT="$platform_port" \
+    SANDBOX_HOST_AGENT_SERVICE_PRIVATE_IFACES="lo,$bridge,$host_veth" \
+    SANDBOX_HOST_MICROVM_NETWORK_STATE_DIR="$state_dir/network-state" \
+    SANDBOX_HOST_MICROVM_DELETE_BRIDGE=true \
     "$setup_script" "$1"
 }
 

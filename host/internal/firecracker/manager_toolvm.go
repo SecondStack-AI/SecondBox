@@ -1,11 +1,10 @@
-package microvm
+package firecracker
 
 import (
-	"agent-manager/internal/flow"
-	"agent-manager/internal/runtimemanager"
 	"context"
 	"fmt"
 	"log/slog"
+	"secondstack/sandbox-host/internal/runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -458,33 +457,6 @@ func (m *Manager) logMicroVMToolTiming(agentID, compartmentID, leaseID, instance
 	} else {
 		slog.Info("microvm tool executor timing", attrs...)
 	}
-	if m == nil || m.flowRecorder == nil {
-		return
-	}
-	flowStatus := flow.StatusCompleted
-	if err != nil {
-		flowStatus = flow.StatusFailed
-	}
-	event := flow.NewEvent(agentID, "tool-vm", string(req.Operation), flowStatus, started)
-	event.CompartmentID = compartmentID
-	event.DurationMs = time.Since(started).Milliseconds()
-	if err != nil {
-		event.Error = err.Error()
-	}
-	event.Attrs = flow.Attrs(
-		"lease", leaseID,
-		"instance", instanceID,
-		"operation", req.Operation,
-		"path", req.Path,
-		"reusable", reusable,
-		"reused", reused,
-		"startVMMs", startVMMs,
-		"execMs", execMs,
-		"freezeMs", freezeMs,
-		"exitCode", resp.ExitCode,
-		"timedOut", resp.TimedOut,
-	)
-	m.flowRecorder.RecordFlowEvent(context.Background(), event)
 }
 
 func toolRequestWritesWorkspace(req ToolExecRequest) bool {

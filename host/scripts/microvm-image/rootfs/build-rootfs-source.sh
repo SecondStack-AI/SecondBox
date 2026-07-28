@@ -2,10 +2,10 @@
 set -euo pipefail
 
 # Produce a prepared guest rootfs directory for scripts/microvm-image/build.sh
-# (its AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_DIR input). The default mode creates a fresh
+# (its SANDBOX_HOST_MICROVM_ROOTFS_SOURCE_DIR input). The default mode creates a fresh
 # Debian rootfs with debootstrap, then applies the standard package set
 # (apt-std.txt + requirements-std.txt + config/) in Docker. Set
-# AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_MODE=extend to preserve the legacy behavior of
+# SANDBOX_HOST_MICROVM_ROOTFS_SOURCE_MODE=extend to preserve the legacy behavior of
 # extending an existing signed rootfs.ext4.
 #
 # Requires: docker, tar, and debootstrap for the default mode. Legacy extend mode
@@ -21,17 +21,17 @@ if [ -f "$lock_file" ]; then
     . "$lock_file"
 fi
 
-mode="${AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_MODE:-debootstrap}"
-base_rootfs="${AGENT_MANAGER_MICROVM_BASE_ROOTFS:-$repo_root/releases/microvm/latest/rootfs.ext4}"
-out_dir="${AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_DIR:-$repo_root/tmp/microvm-rootfs-src}"
-base_tag="${AGENT_MANAGER_MICROVM_BASE_IMAGE:-agent-manager-rootfs:base}"
-std_tag="${AGENT_MANAGER_MICROVM_STD_IMAGE:-agent-manager-rootfs:std}"
-stage_dir="${AGENT_MANAGER_MICROVM_STAGE_DIR:-$repo_root/tmp/agent-manager-rootfs-stage}"
-debian_suite="${AGENT_MANAGER_MICROVM_DEBIAN_SUITE:-${AGENT_MANAGER_MICROVM_DEBIAN_SUITE_DEFAULT:-bookworm}}"
-debian_arch="${AGENT_MANAGER_MICROVM_DEBIAN_ARCH:-${AGENT_MANAGER_MICROVM_DEBIAN_ARCH_DEFAULT:-amd64}}"
-debian_mirror="${AGENT_MANAGER_MICROVM_DEBIAN_MIRROR:-${AGENT_MANAGER_MICROVM_DEBIAN_MIRROR_DEFAULT:-http://deb.debian.org/debian}}"
-debootstrap_include="${AGENT_MANAGER_MICROVM_DEBOOTSTRAP_INCLUDE:-${AGENT_MANAGER_MICROVM_DEBOOTSTRAP_INCLUDE_DEFAULT:-ca-certificates,bash,locales,tzdata,python3}}"
-apt_check_valid_until="${AGENT_MANAGER_MICROVM_APT_CHECK_VALID_UNTIL:-${AGENT_MANAGER_MICROVM_APT_CHECK_VALID_UNTIL_DEFAULT:-true}}"
+mode="${SANDBOX_HOST_MICROVM_ROOTFS_SOURCE_MODE:-debootstrap}"
+base_rootfs="${SANDBOX_HOST_MICROVM_BASE_ROOTFS:-$repo_root/releases/microvm/latest/rootfs.ext4}"
+out_dir="${SANDBOX_HOST_MICROVM_ROOTFS_SOURCE_DIR:-$repo_root/tmp/microvm-rootfs-src}"
+base_tag="${SANDBOX_HOST_MICROVM_BASE_IMAGE:-agent-manager-rootfs:base}"
+std_tag="${SANDBOX_HOST_MICROVM_STD_IMAGE:-agent-manager-rootfs:std}"
+stage_dir="${SANDBOX_HOST_MICROVM_STAGE_DIR:-$repo_root/tmp/agent-manager-rootfs-stage}"
+debian_suite="${SANDBOX_HOST_MICROVM_DEBIAN_SUITE:-${SANDBOX_HOST_MICROVM_DEBIAN_SUITE_DEFAULT:-bookworm}}"
+debian_arch="${SANDBOX_HOST_MICROVM_DEBIAN_ARCH:-${SANDBOX_HOST_MICROVM_DEBIAN_ARCH_DEFAULT:-amd64}}"
+debian_mirror="${SANDBOX_HOST_MICROVM_DEBIAN_MIRROR:-${SANDBOX_HOST_MICROVM_DEBIAN_MIRROR_DEFAULT:-http://deb.debian.org/debian}}"
+debootstrap_include="${SANDBOX_HOST_MICROVM_DEBOOTSTRAP_INCLUDE:-${SANDBOX_HOST_MICROVM_DEBOOTSTRAP_INCLUDE_DEFAULT:-ca-certificates,bash,locales,tzdata,python3}}"
+apt_check_valid_until="${SANDBOX_HOST_MICROVM_APT_CHECK_VALID_UNTIL:-${SANDBOX_HOST_MICROVM_APT_CHECK_VALID_UNTIL_DEFAULT:-true}}"
 
 json_escape() {
     printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
@@ -141,7 +141,7 @@ prepare_extended_base() {
 case "$mode" in
     debootstrap) prepare_debootstrap_base ;;
     extend) prepare_extended_base ;;
-    *) echo "invalid AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_MODE: $mode (expected debootstrap or extend)" >&2; exit 2 ;;
+    *) echo "invalid SANDBOX_HOST_MICROVM_ROOTFS_SOURCE_MODE: $mode (expected debootstrap or extend)" >&2; exit 2 ;;
 esac
 
 echo "[2/4] Importing base → $base_tag (forcing root ownership)" >&2
@@ -172,4 +172,4 @@ write_source_manifest
 
 echo "Prepared rootfs source: $out_dir ($(du -sh "$out_dir" 2>/dev/null | cut -f1))" >&2
 echo "Source manifest: $out_dir/rootfs-source-manifest.json" >&2
-echo "Next: AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_DIR=$out_dir AGENT_MANAGER_MICROVM_KERNEL_PATH=<kernel> scripts/microvm-image/build.sh" >&2
+echo "Next: SANDBOX_HOST_MICROVM_ROOTFS_SOURCE_DIR=$out_dir SANDBOX_HOST_MICROVM_KERNEL_PATH=<kernel> scripts/microvm-image/build.sh" >&2

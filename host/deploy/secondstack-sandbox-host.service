@@ -1,12 +1,12 @@
 [Unit]
-Description=SecondStack Agent Manager Sandbox Host launcher
+Description=SecondStack Sandbox Host
 After=local-fs.target network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/agent-manager-vmlauncher
+ExecStart=/usr/local/bin/sandbox-host
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-EnvironmentFile=/run/agent-sandbox-host/launcher.env
+EnvironmentFile=/run/sandbox-host/host.env
 Restart=on-failure
 RestartSec=2s
 KillMode=mixed

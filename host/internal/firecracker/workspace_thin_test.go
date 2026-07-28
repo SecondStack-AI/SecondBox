@@ -1,4 +1,4 @@
-package microvm
+package firecracker
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"agent-manager/internal/config"
+	"secondstack/sandbox-host/internal/config"
 )
 
 type fakeHostExitError struct{ code int }

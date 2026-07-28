@@ -41,7 +41,7 @@ if [ -b /dev/vdc ]; then
     mount -o ro /dev/vdc /shared
 fi
 
-exec /usr/local/bin/agent-manager-microvm-entrypoint \
+exec /usr/local/bin/sandbox-tool-entrypoint \
     --agents=/workspace/config/agents.md \
     --soul=/workspace/config/soul.md \
     --tools=/workspace/config/tools.md \
