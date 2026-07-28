@@ -45,10 +45,16 @@ jobs:
         with:
           node-version: 24.18.0
           cache: npm
-      - name: Install protocol and source-scan tools
+      - name: Install source-scan tool
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends protobuf-compiler ripgrep
+          sudo apt-get install -y --no-install-recommends ripgrep
+      - name: Install pinned protocol compiler
+        run: |
+          scripts/install-protoc.sh .tmp/protoc
+          echo "$GITHUB_WORKSPACE/.tmp/protoc/bin" >>"$GITHUB_PATH"
+      - name: Install PostgreSQL 18 client
+        run: sudo scripts/install-postgresql-client.sh
       - name: Prove clean-clone isolation
         run: |
           mkdir -p .tmp/clean-clone-artifact/qualification
@@ -90,12 +96,18 @@ jobs:
         with:
           node-version: 24.18.0
           cache: npm
-      - name: Install protocol and source-scan tools
+      - name: Install source-scan tool
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends protobuf-compiler ripgrep
+          sudo apt-get install -y --no-install-recommends ripgrep
+      - name: Install pinned protocol compiler
+        run: |
+          scripts/install-protoc.sh .tmp/protoc
+          echo "$GITHUB_WORKSPACE/.tmp/protoc/bin" >>"$GITHUB_PATH"
       - name: Install pinned JavaScript dependencies
         run: npm ci --ignore-scripts
+      - name: Install PostgreSQL 18 client
+        run: sudo scripts/install-postgresql-client.sh
       - name: Run non-KVM qualification matrix
         run: |
           mkdir -p .tmp/non-kvm-artifact/qualification
