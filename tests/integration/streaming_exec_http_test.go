@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -196,6 +197,107 @@ func TestPublicStreamingExecIsDurableBackpressuredAndCancellable(t *testing.T) {
 		t.Fatalf("cancelled outcome = %#v", cancelledOutcome)
 	}
 	cancelledConnection.Close()
+
+	httpCancelled := createStreamingExecSession(
+		t, server.URL, key.Credential, sandbox, "", "stream-http-cancelled", "wait-http-cancel", 16,
+	)
+	cancelRequest, err := http.NewRequestWithContext(
+		t.Context(),
+		http.MethodPost,
+		server.URL+"/v1/sandboxes/"+sandbox.ID+"/exec-streams/"+httpCancelled.ID+":cancel",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setDataPlaneHeaders(cancelRequest, key.Credential, sandbox.Generation, "stream-http-cancel-request")
+	cancelResponse := doHTTP(t, cancelRequest)
+	assertHTTPStatus(t, cancelResponse, http.StatusAccepted)
+	if cancelResponse.Header.Get("Idempotency-Replayed") != "false" {
+		t.Fatalf("HTTP Exec cancellation replay header = %q", cancelResponse.Header.Get("Idempotency-Replayed"))
+	}
+	var cancellingSession contracts.ExecStreamSession
+	decodeHTTPJSON(t, cancelResponse, &cancellingSession)
+	if cancellingSession.ID != httpCancelled.ID || cancellingSession.State != "closing" {
+		t.Fatalf("HTTP-cancelled Exec session = %#v", cancellingSession)
+	}
+	waitStreamingRunnerEvent(t, fake.events, "cancel:wait-http-cancel")
+	waitDataPlaneSessionState(
+		t, relay, project.ID, string(httpCancelled.ID), "completed",
+	)
+
+	replayCancelRequest, err := http.NewRequestWithContext(
+		t.Context(),
+		http.MethodPost,
+		server.URL+"/v1/sandboxes/"+sandbox.ID+"/exec-streams/"+httpCancelled.ID+":cancel",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setDataPlaneHeaders(replayCancelRequest, key.Credential, sandbox.Generation, "stream-http-cancel-request")
+	replayCancelResponse := doHTTP(t, replayCancelRequest)
+	assertHTTPStatus(t, replayCancelResponse, http.StatusAccepted)
+	if replayCancelResponse.Header.Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("HTTP Exec cancellation replay header = %q", replayCancelResponse.Header.Get("Idempotency-Replayed"))
+	}
+	var replayedCancellingSession contracts.ExecStreamSession
+	decodeHTTPJSON(t, replayCancelResponse, &replayedCancellingSession)
+	if !reflect.DeepEqual(replayedCancellingSession, cancellingSession) {
+		t.Fatalf(
+			"HTTP Exec cancellation replay changed response: first=%#v replay=%#v",
+			cancellingSession, replayedCancellingSession,
+		)
+	}
+
+	newKeyCancelRequest, err := http.NewRequestWithContext(
+		t.Context(),
+		http.MethodPost,
+		server.URL+"/v1/sandboxes/"+sandbox.ID+"/exec-streams/"+httpCancelled.ID+":cancel",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setDataPlaneHeaders(
+		newKeyCancelRequest, key.Credential, sandbox.Generation,
+		"stream-http-cancel-new-request",
+	)
+	newKeyCancelResponse := doHTTP(t, newKeyCancelRequest)
+	assertHTTPStatus(t, newKeyCancelResponse, http.StatusAccepted)
+	if newKeyCancelResponse.Header.Get("Idempotency-Replayed") != "false" {
+		t.Fatalf(
+			"new-key HTTP Exec cancellation replay header = %q",
+			newKeyCancelResponse.Header.Get("Idempotency-Replayed"),
+		)
+	}
+	var newKeyCancellingSession contracts.ExecStreamSession
+	decodeHTTPJSON(t, newKeyCancelResponse, &newKeyCancellingSession)
+	if newKeyCancellingSession.ID != httpCancelled.ID ||
+		newKeyCancellingSession.State != "closed" {
+		t.Fatalf("new-key HTTP Exec cancellation response = %#v", newKeyCancellingSession)
+	}
+
+	conflictingCancelRequest, err := http.NewRequestWithContext(
+		t.Context(),
+		http.MethodPost,
+		server.URL+"/v1/sandboxes/"+sandbox.ID+"/exec-streams/"+httpCancelled.ID+":cancel",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setDataPlaneHeaders(
+		conflictingCancelRequest, key.Credential, sandbox.Generation+1,
+		"stream-http-cancel-request",
+	)
+	conflictingCancelResponse := doHTTP(t, conflictingCancelRequest)
+	assertHTTPStatus(t, conflictingCancelResponse, http.StatusConflict)
+	var conflictingCancelProblem contracts.Problem
+	decodeHTTPJSON(t, conflictingCancelResponse, &conflictingCancelProblem)
+	if conflictingCancelProblem.Code != "idempotency_conflict" {
+		t.Fatalf("HTTP Exec cancellation conflict = %#v", conflictingCancelProblem)
+	}
 
 	detached := createStreamingExecSession(
 		t, server.URL, key.Credential, sandbox, "", "stream-detached", "disconnect", 16,
@@ -547,4 +649,27 @@ func waitStreamingRunnerEvent(t *testing.T, events <-chan string, expected strin
 	case <-time.After(time.Second):
 		t.Fatalf("streaming runner event %q was not observed", strings.TrimSpace(expected))
 	}
+}
+
+func waitDataPlaneSessionState(
+	t *testing.T,
+	relay *runnercontrol.PostgresFrameRelay,
+	projectID string,
+	sessionID string,
+	expected string,
+) runnercontrol.DataPlaneSession {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		session, err := relay.GetDataPlaneSession(t.Context(), projectID, sessionID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if session.State == expected {
+			return session
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("data-plane session %s did not reach state %q", sessionID, expected)
+	return runnercontrol.DataPlaneSession{}
 }

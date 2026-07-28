@@ -124,11 +124,12 @@ func (service *ControlPlaneService) ListRunnerPools(
 	ctx context.Context,
 	principal contracts.Principal,
 	limit int,
-) ([]contracts.RunnerPool, error) {
+	cursor string,
+) (contracts.RunnerPoolPage, error) {
 	if err := requireAdminScope(principal, contracts.ScopeAdminRunners); err != nil {
-		return nil, err
+		return contracts.RunnerPoolPage{}, err
 	}
-	return service.store.ListRunnerPools(ctx, boundedLimit(limit))
+	return service.store.ListRunnerPools(ctx, boundedLimit(limit), cursor)
 }
 
 // GetRunner returns one enrolled execution identity and current capacity evidence.
@@ -152,14 +153,15 @@ func (service *ControlPlaneService) ListRunners(
 	principal contracts.Principal,
 	poolName string,
 	limit int,
-) ([]contracts.Runner, error) {
+	cursor string,
+) (contracts.RunnerPage, error) {
 	if err := requireAdminScope(principal, contracts.ScopeAdminRunners); err != nil {
-		return nil, err
+		return contracts.RunnerPage{}, err
 	}
 	if poolName != "" && !profileNamePattern.MatchString(poolName) {
-		return nil, errors.New("SecondBox Runner pool filter is invalid")
+		return contracts.RunnerPage{}, errors.New("SecondBox Runner pool filter is invalid")
 	}
-	return service.store.ListRunners(ctx, poolName, boundedLimit(limit))
+	return service.store.ListRunners(ctx, poolName, boundedLimit(limit), cursor)
 }
 
 func validateRunnerPoolPolicy(

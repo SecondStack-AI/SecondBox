@@ -4,11 +4,13 @@
 
 ## Common HTTP rules
 
-All paths are under `/v1`. JSON schemas close request objects with `additionalProperties: false`. Identifiers are opaque. Timestamps are UTC RFC 3339 with fractional seconds. Lists use `limit` plus an opaque `cursor`, return stable ordering and `nextCursor`, and never expose database offsets.
+All paths are under `/v1`. JSON schemas close request objects with `additionalProperties: false`. Identifiers are opaque. Timestamps are UTC RFC 3339 with fractional seconds. Lists use `limit` plus an opaque `cursor`, return stable ordering and `nextCursor`, and never expose database offsets. A cursor is a canonical URL-safe token bound to the resource kind and exact Project or filter scope; malformed, stale, cross-resource, and cross-scope cursors return `400 invalid_request`. Traversal uses immutable creation order with an opaque resource key as its tie-breaker, so inserts ahead of an existing cursor cannot duplicate already-returned resources.
 
 Every response carries `X-Request-ID`; a valid client-supplied `X-Request-ID` is preserved, otherwise the server creates one. Mutating resources return `ETag`. Update and lifecycle requests use `If-Match`; a stale value returns `412 precondition_failed`. Data-plane admission also binds the current public `generation`. Internal fencing tokens never cross the public API.
 
-`Idempotency-Key` is required for create and state-changing POST operations. Its scope is authenticated Project, operation, and target. Repeating the same key and canonical payload returns the original durable result. Reusing it with a different payload returns `409 idempotency_conflict`. Keys have a documented bounded retention period and outlive ordinary HTTP retries.
+`Idempotency-Key` is required for declared create and state-changing operations, including the canonical POST, PATCH, PUT, and DELETE mutations that expose it. Its scope is authenticated Project or operator, operation, and target. Repeating the same key and canonical payload returns the original durable result and sets `Idempotency-Replayed: true`; reusing it with a different canonical payload returns `409 idempotency_conflict`. The record and mutation commit in one PostgreSQL transaction. API-key create and rotate records contain the non-secret response plus an authenticated encrypted copy of the one-time credential under a server-held key, so a lost response can be replayed without storing plaintext credential material. Records expire after the documented retention interval and outlive ordinary HTTP retries.
+
+Streaming Exec and Terminal cancellation apply that key contract independently of session state. The cancellation frame, the transition to `closing`, and the response snapshot commit atomically. Repeating a key returns that exact snapshot even after the runner has acknowledged cancellation and the live session is `closed`. A different key is a new accepted request with `Idempotency-Replayed: false`, including when the session is already closing or closed; state idempotency is not request replay.
 
 Errors use `application/problem+json` with stable `type`, `title`, `status`, `code`, `requestId`, `retryable`, and bounded structured `details`. Messages are diagnostic, not machine contracts. Authentication, authorization, quota, admission, generation, lease, guest, runner, infrastructure, and transport failures have distinct codes.
 
@@ -33,7 +35,7 @@ Project identity comes from authentication. The request cannot override backend,
 
 ## Lifecycle semantics
 
-Create, start, drain, stop, checkpoint, and delete are idempotent asynchronous mutations. They return `202` with an `Operation` when work remains and the final resource directly only when the requested state is already durably satisfied. `GET /v1/operations/{id}` is the canonical polling surface. `wait` is a bounded long-poll for declared Sandbox states and never changes activity.
+Create, start, drain, stop, checkpoint, and delete are idempotent asynchronous mutations that return `202` with a durable `Operation`. `GET /v1/operations/{id}` is the canonical polling surface. `wait` is a bounded long-poll for declared Sandbox states and never changes activity.
 
 `get` and `list` return durable projections. `inspect` returns the latest generation-fenced guest heartbeat and active-session evidence persisted by the runner path; it does not renew activity or synthesize a fresh observation while no synchronous runner-effect broker exists. `ping` reports that same persisted guest liveness without touch. `touch` explicitly renews useful activity for the current generation and may carry a Lease. `drain` rejects new work immediately, waits only through the profile grace, and then allows stop to fence remaining work. `stop` removes compute without deleting the Sandbox or workspace. `delete` never occurs on connection loss.
 

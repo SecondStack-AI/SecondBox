@@ -68,7 +68,8 @@
             "description": "Project created.",
             "headers": {
               "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
-              "ETag": {"$ref": "#/components/headers/ETag"}
+              "ETag": {"$ref": "#/components/headers/ETag"},
+              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
             },
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Project"}}}
           },
@@ -119,7 +120,8 @@
             "description": "Updated Project.",
             "headers": {
               "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
-              "ETag": {"$ref": "#/components/headers/ETag"}
+              "ETag": {"$ref": "#/components/headers/ETag"},
+              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
             },
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Project"}}}
           },
@@ -170,7 +172,8 @@
             "description": "ServiceAccount created.",
             "headers": {
               "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
-              "ETag": {"$ref": "#/components/headers/ETag"}
+              "ETag": {"$ref": "#/components/headers/ETag"},
+              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
             },
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ServiceAccount"}}}
           },
@@ -224,7 +227,8 @@
             "description": "Updated ServiceAccount.",
             "headers": {
               "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
-              "ETag": {"$ref": "#/components/headers/ETag"}
+              "ETag": {"$ref": "#/components/headers/ETag"},
+              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
             },
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ServiceAccount"}}}
           },
@@ -275,7 +279,10 @@
         "responses": {
           "201": {
             "description": "APIKey and one-time plaintext credential.",
-            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+            "headers": {
+              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
+              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
+            },
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateAPIKeyResponse"}}}
           },
           "400": {"$ref": "#/components/responses/BadRequest"},
@@ -303,10 +310,42 @@
             "description": "Revoked APIKey metadata.",
             "headers": {
               "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
-              "ETag": {"$ref": "#/components/headers/ETag"}
+              "ETag": {"$ref": "#/components/headers/ETag"},
+              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
             },
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/APIKey"}}}
           },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "412": {"$ref": "#/components/responses/PreconditionFailed"}
+        }
+      }
+    },
+    "/v1/projects/{projectId}/service-accounts/{serviceAccountId}/api-keys/{apiKeyId}:rotate": {
+      "post": {
+        "tags": ["APIKeys"],
+        "operationId": "rotateAPIKey",
+        "parameters": [
+          {"$ref": "#/components/parameters/ProjectID"},
+          {"$ref": "#/components/parameters/ServiceAccountID"},
+          {"$ref": "#/components/parameters/APIKeyID"},
+          {"$ref": "#/components/parameters/IfMatch"},
+          {"$ref": "#/components/parameters/IdempotencyKey"},
+          {"$ref": "#/components/parameters/RequestID"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated APIKey authority and its one-time replacement plaintext credential.",
+            "headers": {
+              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
+              "ETag": {"$ref": "#/components/headers/ETag"},
+              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
+            },
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateAPIKeyResponse"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
           "404": {"$ref": "#/components/responses/NotFound"},
@@ -350,7 +389,8 @@
             "description": "Profile created with its first immutable revision.",
             "headers": {
               "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
-              "ETag": {"$ref": "#/components/headers/ETag"}
+              "ETag": {"$ref": "#/components/headers/ETag"},
+              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
             },
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Profile"}}}
           },
@@ -403,7 +443,8 @@
             "description": "Profile with new immutable current revision.",
             "headers": {
               "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
-              "ETag": {"$ref": "#/components/headers/ETag"}
+              "ETag": {"$ref": "#/components/headers/ETag"},
+              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
             },
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Profile"}}}
           },
@@ -431,7 +472,8 @@
             "description": "Disabled Profile.",
             "headers": {
               "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
-              "ETag": {"$ref": "#/components/headers/ETag"}
+              "ETag": {"$ref": "#/components/headers/ETag"},
+              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
             },
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Profile"}}}
           },
@@ -615,15 +657,6 @@
           "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateSandboxRequest"}}}
         },
         "responses": {
-          "201": {
-            "description": "Sandbox durably created in its profile-selected initial state.",
-            "headers": {
-              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
-              "ETag": {"$ref": "#/components/headers/ETag"},
-              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
-            },
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Sandbox"}}}
-          },
           "202": {
             "description": "Sandbox creation accepted and observable as an Operation.",
             "headers": {
@@ -673,12 +706,12 @@
         ],
         "responses": {
           "202": {
-            "description": "Terminal cancellation accepted; the session remains observable until its terminal acknowledgement.",
+            "description": "Sandbox deletion accepted as a durable lifecycle operation.",
             "headers": {
               "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
               "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
             },
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TerminalSession"}}}
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Operation"}}}
           },
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
@@ -924,7 +957,10 @@
         "responses": {
           "200": {
             "description": "Typed terminal command outcome.",
-            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+            "headers": {
+              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
+              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
+            },
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ExecOutcome"}}}
           },
           "400": {"$ref": "#/components/responses/BadRequest"},
@@ -955,7 +991,10 @@
         "responses": {
           "201": {
             "description": "Backpressured WebSocket exec session.",
-            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+            "headers": {
+              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
+              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
+            },
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ExecStreamSession"}}}
           },
           "400": {"$ref": "#/components/responses/BadRequest"},
@@ -979,7 +1018,14 @@
           {"$ref": "#/components/parameters/RequestID"}
         ],
         "responses": {
-          "202": {"$ref": "#/components/responses/AcceptedOperation"},
+          "202": {
+            "description": "Streaming Exec cancellation accepted; the session remains observable until its terminal acknowledgement.",
+            "headers": {
+              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
+              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
+            },
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ExecStreamSession"}}}
+          },
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
           "404": {"$ref": "#/components/responses/NotFound"},
@@ -1005,7 +1051,10 @@
         "responses": {
           "201": {
             "description": "Reconnectable PTY session.",
-            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+            "headers": {
+              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
+              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
+            },
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TerminalSession"}}}
           },
           "400": {"$ref": "#/components/responses/BadRequest"},
@@ -1051,7 +1100,14 @@
           {"$ref": "#/components/parameters/RequestID"}
         ],
         "responses": {
-          "202": {"$ref": "#/components/responses/AcceptedOperation"},
+          "202": {
+            "description": "Terminal cancellation accepted; the session remains observable until its terminal acknowledgement.",
+            "headers": {
+              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
+              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
+            },
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TerminalSession"}}}
+          },
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
           "404": {"$ref": "#/components/responses/NotFound"},
@@ -1106,7 +1162,10 @@
         "responses": {
           "200": {
             "description": "Committed file evidence.",
-            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+            "headers": {
+              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
+              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
+            },
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/FileWriteResult"}}}
           },
           "400": {"$ref": "#/components/responses/BadRequest"},
@@ -1184,7 +1243,10 @@
         "responses": {
           "204": {
             "description": "Directory exists.",
-            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}
+            "headers": {
+              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
+              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
+            }
           },
           "400": {"$ref": "#/components/responses/BadRequest"},
           "401": {"$ref": "#/components/responses/Unauthorized"},
@@ -1210,7 +1272,10 @@
         "responses": {
           "204": {
             "description": "Path removed or force-absent.",
-            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}
+            "headers": {
+              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
+              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
+            }
           },
           "400": {"$ref": "#/components/responses/BadRequest"},
           "401": {"$ref": "#/components/responses/Unauthorized"},
@@ -1439,7 +1504,10 @@
         "responses": {
           "201": {
             "description": "Authenticated expiring port proxy session.",
-            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+            "headers": {
+              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
+              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
+            },
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PortSession"}}}
           },
           "400": {"$ref": "#/components/responses/BadRequest"},
@@ -1565,6 +1633,7 @@
         "name": "cursor",
         "in": "query",
         "required": false,
+        "description": "Opaque continuation token returned as nextCursor by the same endpoint and exact filter scope.",
         "schema": {"type": "string", "minLength": 1, "maxLength": 512}
       },
       "ProjectID": {"name": "projectId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/OpaqueID"}},

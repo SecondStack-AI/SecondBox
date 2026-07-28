@@ -120,13 +120,13 @@ func (broker *PostgresEffectBroker) queueCheckpoint(
 		       (revision.spec_json->'checkpoint'->>'retentionSeconds')::bigint,
 		       COALESCE((
 		         SELECT operation.id FROM secondbox.operations AS operation
-		         WHERE operation.sandbox_id=sandbox.id AND operation.kind='checkpoint'
+		         WHERE operation.sandbox_id=sandbox.id
 		           AND operation.state IN ('pending','running')
 		         ORDER BY operation.created_at DESC,operation.id DESC LIMIT 1
 		       ),''),
 		       COALESCE((
 		         SELECT operation.request_id FROM secondbox.operations AS operation
-		         WHERE operation.sandbox_id=sandbox.id AND operation.kind='checkpoint'
+		         WHERE operation.sandbox_id=sandbox.id
 		           AND operation.state IN ('pending','running')
 		         ORDER BY operation.created_at DESC,operation.id DESC LIMIT 1
 		       ),''),
@@ -176,6 +176,14 @@ func (broker *PostgresEffectBroker) queueCheckpoint(
 	effectID := stableEffectID("checkpoint-effect", claim.SandboxID, generationText)
 	checkpointID := stableEffectID("checkpoint", claim.SandboxID, generationText)
 	commandID := stableEffectID("checkpoint-command", claim.SandboxID, generationText)
+	if (operationID == "") != (requestID == "") {
+		return errors.New("SecondBox lifecycle checkpoint correlation is incomplete")
+	}
+	if operationID == "" && requestID == "" {
+		// Policy-triggered checkpoints use stable effect identities when no client lifecycle operation exists.
+		operationID = effectID
+		requestID = commandID
+	}
 	storageObjectID := "checkpoints/" + claim.SandboxID + "/" + generationText + "/" + checkpointID + ".ext4"
 	deadline := now.UTC().Add(broker.config.AssignmentDeadline)
 	command := &runnerv1.CheckpointCommand{

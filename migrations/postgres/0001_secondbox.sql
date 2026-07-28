@@ -37,6 +37,7 @@ CREATE TABLE secondbox.projects (
     updated_at timestamptz NOT NULL
 );
 CREATE UNIQUE INDEX projects_name_idx ON secondbox.projects (name);
+CREATE INDEX projects_created_idx ON secondbox.projects (created_at, id);
 
 CREATE TABLE secondbox.project_quotas (
     project_id text PRIMARY KEY,
@@ -102,6 +103,7 @@ CREATE TABLE secondbox.profile_revisions (
     created_at timestamptz NOT NULL
 );
 CREATE UNIQUE INDEX profile_revisions_profile_number_idx ON secondbox.profile_revisions (profile_name, revision_number);
+CREATE INDEX profiles_created_idx ON secondbox.profiles (created_at, name);
 
 CREATE TABLE secondbox.profile_quotas (
     profile_name text PRIMARY KEY,
@@ -128,6 +130,7 @@ CREATE TABLE secondbox.runner_pools (
     created_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL
 );
+CREATE INDEX runner_pools_created_idx ON secondbox.runner_pools (created_at, name);
 
 CREATE TABLE secondbox.runners (
     id text PRIMARY KEY,
@@ -152,6 +155,8 @@ CREATE TABLE secondbox.runners (
     updated_at timestamptz NOT NULL
 );
 CREATE INDEX runners_pool_state_idx ON secondbox.runners (pool_name, state, id);
+CREATE INDEX runners_pool_created_idx ON secondbox.runners (pool_name, created_at, id);
+CREATE INDEX runners_created_idx ON secondbox.runners (created_at, id);
 
 CREATE TABLE secondbox.runner_enrollment_tokens (
     id text PRIMARY KEY,
@@ -641,6 +646,8 @@ CREATE TABLE secondbox.idempotency_records (
     idempotency_key text NOT NULL,
     request_hash text NOT NULL,
     response_resource_id text NOT NULL,
+    response_json jsonb,
+    response_secret bytea,
     created_at timestamptz NOT NULL,
     expires_at timestamptz NOT NULL
 );

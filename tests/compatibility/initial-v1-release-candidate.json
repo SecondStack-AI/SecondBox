@@ -5,7 +5,7 @@
   "publicAPI": {
     "major": 1,
     "contractPath": "contracts/openapi/v1/secondbox.openapi.json",
-    "contractSHA256": "90ee902600bd204bb4fbbd22dda45b9b887fdd2fba3d7123172c0d1d968f9bf4",
+    "contractSHA256": "aa3f6969ea9655b88d5a6e12969986c30bc51f2fce20b98e2b359816dce40811",
     "clientPath": "tests/compatibility/initialv1client/client.go",
     "clientSHA256": "7b9d86fe0a3c131881b8c828b7fb0db163162fbfa732a963d1ff164ea1d1bd9f"
   },
@@ -24,7 +24,7 @@
       {
         "version": "0001_secondbox",
         "path": "migrations/postgres/0001_secondbox.sql",
-        "sha256": "a5eff8df06c21c5a6f605f33e2f4df64fb04c98a14b53772eec40687b5a2bdbe"
+        "sha256": "7f2bc395ce2190145fc2c51825786ab87813c25e6ff78517ee457e1ce093220a"
       }
     ]
   },

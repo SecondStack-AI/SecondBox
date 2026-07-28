@@ -1,4 +1,4 @@
-# Code generated from contracts/openapi/v1/secondbox.openapi.json (sha256 90ee902600bd204bb4fbbd22dda45b9b887fdd2fba3d7123172c0d1d968f9bf4); DO NOT EDIT.
+# Code generated from contracts/openapi/v1/secondbox.openapi.json (sha256 aa3f6969ea9655b88d5a6e12969986c30bc51f2fce20b98e2b359816dce40811); DO NOT EDIT.
 
 from __future__ import annotations
 
@@ -973,7 +973,7 @@ OPERATIONS: Final[Mapping[str, OperationMetadata]] = {
         ),
         request_body_required=False,
         responses=(
-            OperationResponse(status_code="202", content_type="application/json", schema="Operation"),
+            OperationResponse(status_code="202", content_type="application/json", schema="ExecStreamSession"),
             OperationResponse(status_code="401", content_type="", schema=""),
             OperationResponse(status_code="403", content_type="", schema=""),
             OperationResponse(status_code="404", content_type="", schema=""),
@@ -995,7 +995,7 @@ OPERATIONS: Final[Mapping[str, OperationMetadata]] = {
         ),
         request_body_required=False,
         responses=(
-            OperationResponse(status_code="202", content_type="application/json", schema="Operation"),
+            OperationResponse(status_code="202", content_type="application/json", schema="TerminalSession"),
             OperationResponse(status_code="401", content_type="", schema=""),
             OperationResponse(status_code="403", content_type="", schema=""),
             OperationResponse(status_code="404", content_type="", schema=""),
@@ -1141,7 +1141,6 @@ OPERATIONS: Final[Mapping[str, OperationMetadata]] = {
         ),
         request_body_required=True,
         responses=(
-            OperationResponse(status_code="201", content_type="application/json", schema="Sandbox"),
             OperationResponse(status_code="202", content_type="application/json", schema="Operation"),
             OperationResponse(status_code="400", content_type="", schema=""),
             OperationResponse(status_code="401", content_type="", schema=""),
@@ -1330,7 +1329,7 @@ OPERATIONS: Final[Mapping[str, OperationMetadata]] = {
         ),
         request_body_required=False,
         responses=(
-            OperationResponse(status_code="202", content_type="application/json", schema="TerminalSession"),
+            OperationResponse(status_code="202", content_type="application/json", schema="Operation"),
             OperationResponse(status_code="401", content_type="", schema=""),
             OperationResponse(status_code="403", content_type="", schema=""),
             OperationResponse(status_code="404", content_type="", schema=""),
@@ -2032,6 +2031,31 @@ OPERATIONS: Final[Mapping[str, OperationMetadata]] = {
         request_body_required=False,
         responses=(
             OperationResponse(status_code="200", content_type="application/json", schema="APIKey"),
+            OperationResponse(status_code="401", content_type="", schema=""),
+            OperationResponse(status_code="403", content_type="", schema=""),
+            OperationResponse(status_code="404", content_type="", schema=""),
+            OperationResponse(status_code="409", content_type="", schema=""),
+            OperationResponse(status_code="412", content_type="", schema=""),
+        ),
+    ),
+    "rotateAPIKey": OperationMetadata(
+        operation_id="rotateAPIKey",
+        method="POST",
+        path_template="/v1/projects/{projectId}/service-accounts/{serviceAccountId}/api-keys/{apiKeyId}:rotate",
+        parameters=(
+            OperationParameter(name="Idempotency-Key", location="header", required=True, schema="string"),
+            OperationParameter(name="If-Match", location="header", required=True, schema="string"),
+            OperationParameter(name="X-Request-ID", location="header", required=False, schema="CorrelationID"),
+            OperationParameter(name="apiKeyId", location="path", required=True, schema="OpaqueID"),
+            OperationParameter(name="projectId", location="path", required=True, schema="OpaqueID"),
+            OperationParameter(name="serviceAccountId", location="path", required=True, schema="OpaqueID"),
+        ),
+        request_body=(
+        ),
+        request_body_required=False,
+        responses=(
+            OperationResponse(status_code="200", content_type="application/json", schema="CreateAPIKeyResponse"),
+            OperationResponse(status_code="400", content_type="", schema=""),
             OperationResponse(status_code="401", content_type="", schema=""),
             OperationResponse(status_code="403", content_type="", schema=""),
             OperationResponse(status_code="404", content_type="", schema=""),

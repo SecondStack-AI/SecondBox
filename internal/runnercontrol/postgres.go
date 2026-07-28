@@ -565,7 +565,7 @@ func recordCheckpointEvent(
 		if result.Sha256 == "" || result.SizeBytes == 0 || len(result.Compatibility) == 0 {
 			return errors.New("SecondBox runner created CheckpointResult lacks integrity evidence")
 		}
-		state = "runner_created"
+		return nil
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.lifecycle_effects

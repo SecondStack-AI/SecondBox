@@ -77,17 +77,9 @@ func (apiHandler *handler) cancelSandboxTerminal(writer http.ResponseWriter, req
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	changed, err := apiHandler.service.CancelSandboxTerminal(
+	session, replayed, err := apiHandler.service.CancelSandboxTerminal(
 		request.Context(), requestPrincipal(request), request.PathValue("sandboxID"),
 		request.PathValue("terminalSessionID"), generation, request.Header.Get("Idempotency-Key"),
-	)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	session, err := apiHandler.service.GetSandboxTerminal(
-		request.Context(), requestPrincipal(request), request.PathValue("sandboxID"),
-		request.PathValue("terminalSessionID"), generation,
 	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
@@ -98,7 +90,7 @@ func (apiHandler *handler) cancelSandboxTerminal(writer http.ResponseWriter, req
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writer.Header().Set("Idempotency-Replayed", fmt.Sprintf("%t", !changed))
+	writer.Header().Set("Idempotency-Replayed", fmt.Sprintf("%t", replayed))
 	writeJSON(writer, http.StatusAccepted, response)
 }
 

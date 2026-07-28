@@ -232,21 +232,10 @@ else
 fi
 if [[ "$signature_paths_valid" != true ]]; then
   echo "SecondBox release publication blocked: signed release-subject evidence is incomplete" >&2
-elif ! jq -e \
-  --arg sourceCommit "$source_commit" \
-  --arg releaseVersion "$release_version" '
-  .schemaVersion == 1 and
-  .releaseVersion == $releaseVersion and
-  .sourceCommit == $sourceCommit and
-  .status == "passed" and
-  (.subjects | type == "array" and length == 12) and
-  all(
-    .subjects[];
-    .status == "passed" and
-    (.digest.sha256 | test("^[0-9a-f]{64}$"))
-  )
-' "$resolved_signature_manifest" >/dev/null; then
-  echo "SecondBox release publication blocked: signed release-subject manifest is invalid" >&2
+elif [[ -z "${resolved_subject_manifest-}" ||
+        "$(sha256sum "$resolved_signature_manifest" | awk '{print $1}')" != \
+          "$(sha256sum "$resolved_subject_manifest" | awk '{print $1}')" ]]; then
+  echo "SecondBox release publication blocked: signed manifest is not the exact canonical release-subject manifest" >&2
   publication_blocked=true
 elif [[ ! "$trusted_public_key_sha256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "SecondBox release publication blocked: SECONDBOX_RELEASE_TRUSTED_PUBLIC_KEY_SHA256 must identify the approved release key" >&2

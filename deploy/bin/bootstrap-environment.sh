@@ -23,7 +23,7 @@ if [[ ! -e "$environment_path" ]]; then
   install -m 600 "$template_path" "$environment_path"
 fi
 
-if ! grep -Eq 'GENERATE_WITH_DEPLOY_BOOTSTRAP|GENERATE_LOCAL_DATABASE_URL|GENERATE_RUNNER_PKI' "$environment_path"; then
+if ! grep -Eq 'GENERATE_WITH_DEPLOY_BOOTSTRAP|GENERATE_LOCAL_DATABASE_URL|GENERATE_RUNNER_PKI|GENERATE_DEVELOPMENT_ASSET_CATALOG' "$environment_path"; then
   chmod 600 "$environment_path"
   echo "Environment already bootstrapped: $environment_path"
   exit 0
@@ -36,9 +36,10 @@ for required_command in openssl awk grep install mktemp mv chmod; do
   fi
 done
 
-runner_server_name="$(
-  awk -F= '
-    $1 == "SECONDBOX_RUNNER_SERVER_NAME" {
+environment_value() {
+  local key="$1"
+  awk -F= -v key="$key" '
+    $1 == key {
       sub(/^[^=]*=/, "")
       print
       found++
@@ -49,6 +50,30 @@ runner_server_name="$(
       }
     }
   ' "$environment_path"
+}
+
+deployment_mode="$(environment_value SECONDBOX_DEPLOYMENT_MODE)" || {
+  echo "Bootstrap requires exactly one SECONDBOX_DEPLOYMENT_MODE" >&2
+  exit 1
+}
+signed_asset_catalog_host_path="$(
+  environment_value SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH
+)" || {
+  echo "Bootstrap requires exactly one SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH" >&2
+  exit 1
+}
+if [[ "$deployment_mode" != "development" && "$deployment_mode" != "production" ]]; then
+  echo "SECONDBOX_DEPLOYMENT_MODE must be development or production" >&2
+  exit 1
+fi
+if [[ "$deployment_mode" == "production" &&
+      "$signed_asset_catalog_host_path" == "GENERATE_DEVELOPMENT_ASSET_CATALOG" ]]; then
+  echo "SecondBox production requires an operator-supplied SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH" >&2
+  exit 1
+fi
+
+runner_server_name="$(
+  environment_value SECONDBOX_RUNNER_SERVER_NAME
 )" || {
   echo "Bootstrap requires exactly one SECONDBOX_RUNNER_SERVER_NAME" >&2
   exit 1
@@ -96,6 +121,26 @@ runner_enrollment_hash_secret="$(openssl rand -hex 48)"
 environment_directory="$(cd "$(dirname "$environment_path")" && pwd)"
 environment_basename="$(basename "$environment_path")"
 runner_pki_directory="$environment_directory/${environment_basename}.secrets/runner-pki"
+development_asset_catalog_path="$environment_directory/${environment_basename}.secrets/development-signed-assets.json"
+temporary_path=""
+runner_pki_created=false
+development_asset_catalog_created=false
+
+cleanup_incomplete_bootstrap() {
+  local status="$?"
+  trap - EXIT
+  if [[ -n "$temporary_path" ]]; then
+    rm -f -- "$temporary_path"
+  fi
+  if [[ "$development_asset_catalog_created" == "true" ]]; then
+    rm -f -- "$development_asset_catalog_path"
+  fi
+  if [[ "$runner_pki_created" == "true" ]]; then
+    rm -rf -- "$runner_pki_directory"
+  fi
+  exit "$status"
+}
+trap cleanup_incomplete_bootstrap EXIT
 
 if [[ -L "$runner_pki_directory" ]]; then
   echo "Refusing symbolic-link runner PKI directory: $runner_pki_directory" >&2
@@ -106,6 +151,7 @@ if [[ -e "$runner_pki_directory" ]]; then
   exit 1
 fi
 install -d -m 700 "$runner_pki_directory"
+runner_pki_created=true
 openssl genpkey \
   -algorithm RSA \
   -pkeyopt rsa_keygen_bits:3072 \
@@ -151,8 +197,31 @@ rm -f \
 chmod 600 "$runner_pki_directory/runner-ca.key" "$runner_pki_directory/server.key"
 chmod 644 "$runner_pki_directory/runner-ca.crt" "$runner_pki_directory/server.crt"
 
+if [[ "$signed_asset_catalog_host_path" == "GENERATE_DEVELOPMENT_ASSET_CATALOG" ]]; then
+  if [[ -L "$development_asset_catalog_path" || -e "$development_asset_catalog_path" ]]; then
+    echo "Refusing to replace an existing development asset catalog: $development_asset_catalog_path" >&2
+    exit 1
+  fi
+  install -m 644 /dev/null "$development_asset_catalog_path"
+  development_asset_catalog_created=true
+  printf '%s\n' \
+    '{' \
+    '  "assets": [' \
+    '    {' \
+    '      "artifactId": "secondbox-development-bootstrap",' \
+    '      "manifestDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",' \
+    '      "signatureKeyId": "secondbox-development-local-trust",' \
+    '      "architecture": "amd64",' \
+    '      "guestProtocolGeneration": 1,' \
+    '      "mandatoryGuestFeatures": []' \
+    '    }' \
+    '  ]' \
+    '}' >"$development_asset_catalog_path"
+  chmod 644 "$development_asset_catalog_path"
+  signed_asset_catalog_host_path="$development_asset_catalog_path"
+fi
+
 temporary_path="$(mktemp "${environment_path}.tmp.XXXXXX")"
-trap 'rm -f "$temporary_path"; rm -rf "$runner_pki_directory"' EXIT
 
 awk \
   -v postgres_password="$postgres_password" \
@@ -161,7 +230,8 @@ awk \
   -v bootstrap_admin_token="$bootstrap_admin_token" \
   -v api_key_hash_secret="$api_key_hash_secret" \
   -v runner_enrollment_hash_secret="$runner_enrollment_hash_secret" \
-  -v runner_pki_directory="$runner_pki_directory" '
+  -v runner_pki_directory="$runner_pki_directory" \
+  -v signed_asset_catalog_host_path="$signed_asset_catalog_host_path" '
   /^SECONDBOX_POSTGRES_PASSWORD=/ {
     print "SECONDBOX_POSTGRES_PASSWORD=" postgres_password
     next
@@ -194,10 +264,18 @@ awk \
     print "SECONDBOX_RUNNER_PKI_HOST_DIR=" runner_pki_directory
     next
   }
+  /^SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH=/ {
+    print "SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH=" signed_asset_catalog_host_path
+    next
+  }
   { print }
   ' "$environment_path" >"$temporary_path"
 
 chmod 600 "$temporary_path"
 mv "$temporary_path" "$environment_path"
 trap - EXIT
-echo "Generated unique deployment credentials and runner PKI in private paths"
+if [[ "$development_asset_catalog_created" == "true" ]]; then
+  echo "Generated unique deployment credentials, development inventory, and runner PKI in private paths"
+else
+  echo "Generated unique deployment credentials and runner PKI in private paths"
+fi

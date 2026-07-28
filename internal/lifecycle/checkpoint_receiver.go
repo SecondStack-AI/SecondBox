@@ -276,7 +276,7 @@ func (receiver *CheckpointReceiver) publish(
 	if _, err := receiver.pool.Exec(ctx, `
 		UPDATE secondbox.lifecycle_effects
 		SET state='published',evidence_json=$2,updated_at=$3
-		WHERE checkpoint_id=$1 AND state IN ('queued','runner_created')`,
+		WHERE checkpoint_id=$1 AND state='queued'`,
 		result.CheckpointId, evidenceJSON, now,
 	); err != nil {
 		return fmt.Errorf("SecondBox checkpoint effect publication update: %w", err)

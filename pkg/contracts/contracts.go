@@ -145,6 +145,12 @@ type Project struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
+// ProjectPage is one bounded stable Project traversal page.
+type ProjectPage struct {
+	Items      []Project `json:"items"`
+	NextCursor *string   `json:"nextCursor,omitempty"`
+}
+
 // CreateProjectRequest creates one explicitly named Project.
 type CreateProjectRequest struct {
 	Name string `json:"name"`
@@ -167,6 +173,12 @@ type ServiceAccount struct {
 	Revision      int64     `json:"revision"`
 	CreatedAt     time.Time `json:"createdAt"`
 	UpdatedAt     time.Time `json:"updatedAt"`
+}
+
+// ServiceAccountPage is one bounded stable Project identity traversal page.
+type ServiceAccountPage struct {
+	Items      []ServiceAccount `json:"items"`
+	NextCursor *string          `json:"nextCursor,omitempty"`
 }
 
 // CreateServiceAccountRequest declares bounded application authority.
@@ -199,6 +211,12 @@ type APIKey struct {
 	CreatedAt        time.Time  `json:"createdAt"`
 }
 
+// APIKeyPage is one bounded stable non-secret credential metadata traversal page.
+type APIKeyPage struct {
+	Items      []APIKey `json:"items"`
+	NextCursor *string  `json:"nextCursor,omitempty"`
+}
+
 // CreateAPIKeyRequest declares the independently bounded key authority.
 type CreateAPIKeyRequest struct {
 	Name      string     `json:"name"`
@@ -220,6 +238,12 @@ type Profile struct {
 	Revision        int64           `json:"revision"`
 	CreatedAt       time.Time       `json:"createdAt"`
 	UpdatedAt       time.Time       `json:"updatedAt"`
+}
+
+// ProfilePage is one bounded stable Profile traversal page.
+type ProfilePage struct {
+	Items      []Profile `json:"items"`
+	NextCursor *string   `json:"nextCursor,omitempty"`
 }
 
 // ProfileRevision is immutable policy selected by future Sandbox creation.
@@ -327,6 +351,12 @@ type RunnerPool struct {
 	UpdatedAt        time.Time        `json:"updatedAt"`
 }
 
+// RunnerPoolPage is one bounded stable administrative placement traversal page.
+type RunnerPoolPage struct {
+	Items      []RunnerPool `json:"items"`
+	NextCursor *string      `json:"nextCursor,omitempty"`
+}
+
 // CreateRunnerPoolRequest declares one operator-owned runner placement boundary.
 type CreateRunnerPoolRequest struct {
 	Name           string           `json:"name"`
@@ -359,6 +389,12 @@ type Runner struct {
 	Revision         int64            `json:"revision"`
 	CreatedAt        time.Time        `json:"createdAt"`
 	UpdatedAt        time.Time        `json:"updatedAt"`
+}
+
+// RunnerPage is one bounded stable administrative Runner traversal page.
+type RunnerPage struct {
+	Items      []Runner `json:"items"`
+	NextCursor *string  `json:"nextCursor,omitempty"`
 }
 
 // Assignment is internal writer authority for one Sandbox generation.
@@ -572,6 +608,12 @@ type Sandbox struct {
 	CreatedAt         time.Time         `json:"createdAt"`
 	UpdatedAt         time.Time         `json:"updatedAt"`
 	DeletedAt         *time.Time        `json:"deletedAt,omitempty"`
+}
+
+// SandboxPage is one bounded stable Project Sandbox traversal page.
+type SandboxPage struct {
+	Items      []Sandbox `json:"items"`
+	NextCursor *string   `json:"nextCursor,omitempty"`
 }
 
 // CreateSandboxRequest contains only caller-selected Profile and bounded metadata.

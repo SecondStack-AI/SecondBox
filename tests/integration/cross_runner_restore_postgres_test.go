@@ -241,10 +241,10 @@ func TestStoppedCheckpointRelocatesThroughProductionSchedulerToAnotherRunnerExcl
 			},
 		},
 	}
-	if err := receiver.ReceiveCheckpoint(t.Context(), chunkEvent, now.Add(7*time.Millisecond)); err != nil {
+	if _, err := stateStore.RecordEvent(t.Context(), chunkEvent, now.Add(7*time.Millisecond)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := stateStore.RecordEvent(t.Context(), chunkEvent, now.Add(7*time.Millisecond)); err != nil {
+	if err := receiver.ReceiveCheckpoint(t.Context(), chunkEvent, now.Add(7*time.Millisecond)); err != nil {
 		t.Fatal(err)
 	}
 	resultEvent := runnercontrol.Event{
@@ -265,10 +265,22 @@ func TestStoppedCheckpointRelocatesThroughProductionSchedulerToAnotherRunnerExcl
 			},
 		},
 	}
-	if err := receiver.ReceiveCheckpoint(t.Context(), resultEvent, now.Add(8*time.Millisecond)); err != nil {
-		t.Fatal(err)
+	if correlation := resultEvent.Message.GetCheckpointResult().Correlation; correlation == nil ||
+		correlation.RequestId == "" || correlation.OperationId == "" ||
+		correlation.SandboxId != checkpointCommand.Fence.SandboxId ||
+		correlation.InstanceId != checkpointCommand.Fence.InstanceId ||
+		correlation.SandboxGeneration != checkpointCommand.Fence.SandboxGeneration ||
+		correlation.AssignmentId != checkpointCommand.Fence.AssignmentId ||
+		correlation.RunnerId != firstRunnerID {
+		t.Fatalf(
+			"checkpoint correlation = %#v, fence=%#v, runner=%q",
+			correlation, checkpointCommand.Fence, firstRunnerID,
+		)
 	}
 	if _, err := stateStore.RecordEvent(t.Context(), resultEvent, now.Add(8*time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if err := receiver.ReceiveCheckpoint(t.Context(), resultEvent, now.Add(8*time.Millisecond)); err != nil {
 		t.Fatal(err)
 	}
 

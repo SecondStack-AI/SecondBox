@@ -4,14 +4,110 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestRunnerProtocolServiceReconnectsAndReadvertisesActiveAssignments(t *testing.T) {
+	assignment := resolvedAssignmentCommand()
+	firstStream := &recordingProtocolStream{
+		inbound: []*runnerprotocol.ControlPlaneToRunner{
+			runnerWelcomeFrame("connection-1"),
+			{
+				Message: &runnerprotocol.ControlPlaneToRunner_Assignment{
+					Assignment: assignment,
+				},
+			},
+		},
+	}
+	secondStream := &blockingProtocolStream{
+		inbound: []*runnerprotocol.ControlPlaneToRunner{
+			runnerWelcomeFrame("connection-2"),
+		},
+		heartbeats: make(chan *runnerprotocol.RunnerHeartbeat, 1),
+	}
+	connector := &sequenceProtocolConnector{
+		streams: []RunnerProtocolStream{firstStream, secondStream},
+	}
+	backend := &recordingAssignmentBackend{
+		readiness: BackendReadiness{
+			Capacity:     &runnerprotocol.Capacity{},
+			Reserved:     &runnerprotocol.Capacity{},
+			Capabilities: &runnerprotocol.RunnerCapabilities{},
+		},
+		instance: BackendInstance{
+			BackendKind:      "firecracker",
+			BackendReference: "fc-instance-1",
+		},
+	}
+	service, err := NewRunnerProtocolService(testRunnerConfig(), backend, connector)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runContext, cancelRun := context.WithCancel(t.Context())
+	runResult := make(chan error, 1)
+	go func() {
+		runResult <- service.Run(runContext)
+	}()
+
+	select {
+	case heartbeat := <-secondStream.heartbeats:
+		if heartbeat.ConnectionId != "connection-2" {
+			t.Fatalf("reconnect heartbeat connection = %q, want connection-2", heartbeat.ConnectionId)
+		}
+		if len(heartbeat.ActiveAssignments) != 1 ||
+			!proto.Equal(
+				heartbeat.ActiveAssignments[0],
+				&runnerprotocol.ActiveAssignmentSummary{
+					AssignmentId:      assignment.Fence.AssignmentId,
+					SandboxId:         assignment.Fence.SandboxId,
+					InstanceId:        assignment.Fence.InstanceId,
+					SandboxGeneration: assignment.Fence.SandboxGeneration,
+					FencingToken:      assignment.Fence.FencingToken,
+				},
+			) {
+			t.Fatalf(
+				"reconnect active assignments = %#v, want retained assignment %q",
+				heartbeat.ActiveAssignments,
+				assignment.Fence.AssignmentId,
+			)
+		}
+	case runErr := <-runResult:
+		t.Fatalf("Run() stopped after transient stream loss: %v", runErr)
+	case <-time.After(3 * time.Second):
+		t.Fatal("reconnect did not re-advertise the active assignment")
+	}
+
+	if got := backend.startCalls.Load(); got != 1 {
+		t.Fatalf("backend assignment starts = %d, want exactly one", got)
+	}
+	if got := backend.fenceCalls.Load(); got != 0 {
+		t.Fatalf("backend assignment fences = %d, want none during reconnect", got)
+	}
+	if got := connector.connectCalls.Load(); got != 2 {
+		t.Fatalf("control-plane connections = %d, want two", got)
+	}
+	if got := connector.closeCalls.Load(); got != 1 {
+		t.Fatalf("closed control-plane sessions before cancellation = %d, want one", got)
+	}
+
+	cancelRun()
+	if runErr := <-runResult; !errors.Is(runErr, context.Canceled) {
+		t.Fatalf("Run() cancellation error = %v, want context canceled", runErr)
+	}
+	if got := connector.closeCalls.Load(); got != 2 {
+		t.Fatalf("closed control-plane sessions after cancellation = %d, want two", got)
+	}
+}
 
 func TestRunnerProtocolServiceNegotiatesBeforeProfileResolvedAssignment(t *testing.T) {
 	assignment := resolvedAssignmentCommand()
@@ -61,7 +157,7 @@ func TestRunnerProtocolServiceNegotiatesBeforeProfileResolvedAssignment(t *testi
 	evidenceSink := &recordingEvidenceSink{}
 	service.SetEvidenceSink(evidenceSink)
 
-	err = service.Run(t.Context())
+	_, err = service.runProtocolSession(t.Context())
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Run() error = %v, want stream EOF", err)
 	}
@@ -137,7 +233,7 @@ func TestRunnerProtocolServiceRejectsUnresolvedAssignmentBeforeBackend(t *testin
 		t.Fatal(err)
 	}
 
-	err = service.Run(t.Context())
+	_, err = service.runProtocolSession(t.Context())
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Run() error = %v, want stream EOF", err)
 	}
@@ -172,6 +268,51 @@ func TestRunnerProtocolServiceRejectsMutationBeforeWelcome(t *testing.T) {
 	}
 	if backend.started != nil {
 		t.Fatal("pre-negotiation mutation reached the compute backend")
+	}
+}
+
+func TestRunnerProtocolServiceStopsOnTerminalAuthenticationFailure(t *testing.T) {
+	connector := &terminalErrorProtocolConnector{
+		err: status.Error(codes.Unauthenticated, "runner credential revoked"),
+	}
+	service, err := NewRunnerProtocolService(
+		testRunnerConfig(),
+		&recordingAssignmentBackend{},
+		connector,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = service.Run(t.Context())
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("Run() error = %v, want unauthenticated", err)
+	}
+	if got := connector.connectCalls.Load(); got != 1 {
+		t.Fatalf("terminal authentication connection attempts = %d, want one", got)
+	}
+}
+
+func TestRunnerProtocolReconnectBackoffIsBounded(t *testing.T) {
+	delay := runnerReconnectInitialDelay
+	for delay < runnerReconnectMaximumDelay {
+		next := nextRunnerProtocolReconnectDelay(delay)
+		if next <= delay || next > runnerReconnectMaximumDelay {
+			t.Fatalf(
+				"next reconnect delay after %s = %s, want increasing delay bounded by %s",
+				delay,
+				next,
+				runnerReconnectMaximumDelay,
+			)
+		}
+		delay = next
+	}
+	if next := nextRunnerProtocolReconnectDelay(delay); next != runnerReconnectMaximumDelay {
+		t.Fatalf(
+			"reconnect delay after maximum = %s, want %s",
+			next,
+			runnerReconnectMaximumDelay,
+		)
 	}
 }
 
@@ -343,7 +484,7 @@ func TestRunnerProtocolServiceDrainReportsRemainingReadyAssignment(t *testing.T)
 		t.Fatal(err)
 	}
 
-	err = service.Run(t.Context())
+	_, err = service.runProtocolSession(t.Context())
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Run() error = %v, want stream EOF", err)
 	}
@@ -493,10 +634,79 @@ func (c staticProtocolConnector) Connect(context.Context) (RunnerProtocolStream,
 
 func (staticProtocolConnector) Close() error { return nil }
 
+type sequenceProtocolConnector struct {
+	mu           sync.Mutex
+	streams      []RunnerProtocolStream
+	connectCalls atomic.Uint32
+	closeCalls   atomic.Uint32
+}
+
+func (c *sequenceProtocolConnector) Connect(ctx context.Context) (RunnerProtocolStream, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.connectCalls.Add(1)
+	if len(c.streams) == 0 {
+		return nil, errors.New("test connector has no remaining control-plane stream")
+	}
+	stream := c.streams[0]
+	c.streams = c.streams[1:]
+	if blocking, ok := stream.(*blockingProtocolStream); ok {
+		blocking.ctx = ctx
+	}
+	return stream, nil
+}
+
+func (c *sequenceProtocolConnector) Close() error {
+	c.closeCalls.Add(1)
+	return nil
+}
+
+type terminalErrorProtocolConnector struct {
+	err          error
+	connectCalls atomic.Uint32
+}
+
+func (c *terminalErrorProtocolConnector) Connect(context.Context) (RunnerProtocolStream, error) {
+	c.connectCalls.Add(1)
+	return nil, c.err
+}
+
+func (*terminalErrorProtocolConnector) Close() error { return nil }
+
+type blockingProtocolStream struct {
+	ctx        context.Context
+	mu         sync.Mutex
+	inbound    []*runnerprotocol.ControlPlaneToRunner
+	heartbeats chan *runnerprotocol.RunnerHeartbeat
+}
+
+func (s *blockingProtocolStream) Send(message *runnerprotocol.RunnerToControlPlane) error {
+	heartbeat := message.GetHeartbeat()
+	if heartbeat != nil {
+		s.heartbeats <- proto.Clone(heartbeat).(*runnerprotocol.RunnerHeartbeat)
+	}
+	return nil
+}
+
+func (s *blockingProtocolStream) Recv() (*runnerprotocol.ControlPlaneToRunner, error) {
+	s.mu.Lock()
+	if len(s.inbound) != 0 {
+		message := s.inbound[0]
+		s.inbound = s.inbound[1:]
+		s.mu.Unlock()
+		return message, nil
+	}
+	s.mu.Unlock()
+	<-s.ctx.Done()
+	return nil, s.ctx.Err()
+}
+
 type recordingAssignmentBackend struct {
-	readiness BackendReadiness
-	instance  BackendInstance
-	started   *runnerprotocol.AssignmentCommand
+	readiness  BackendReadiness
+	instance   BackendInstance
+	started    *runnerprotocol.AssignmentCommand
+	startCalls atomic.Uint32
+	fenceCalls atomic.Uint32
 }
 
 func (b *recordingAssignmentBackend) Readiness(context.Context) (BackendReadiness, error) {
@@ -512,6 +722,7 @@ func (b *recordingAssignmentBackend) StartAssignment(
 	assignment *runnerprotocol.AssignmentCommand,
 	progress func(runnerprotocol.AssignmentProgressStage) error,
 ) (BackendInstance, error) {
+	b.startCalls.Add(1)
 	b.started = assignment
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY); err != nil {
 		return BackendInstance{}, err
@@ -522,8 +733,22 @@ func (b *recordingAssignmentBackend) StartAssignment(
 	return b.instance, nil
 }
 
-func (*recordingAssignmentBackend) FenceAssignment(context.Context, *runnerprotocol.FenceCommand) (FenceEvidence, error) {
+func (b *recordingAssignmentBackend) FenceAssignment(context.Context, *runnerprotocol.FenceCommand) (FenceEvidence, error) {
+	b.fenceCalls.Add(1)
 	return FenceEvidence{}, nil
+}
+
+func runnerWelcomeFrame(connectionID string) *runnerprotocol.ControlPlaneToRunner {
+	return &runnerprotocol.ControlPlaneToRunner{
+		Message: &runnerprotocol.ControlPlaneToRunner_Welcome{
+			Welcome: &runnerprotocol.RunnerWelcome{
+				ConnectionId:        connectionID,
+				SelectedVersion:     1,
+				EnabledFeatures:     []runnerprotocol.RunnerFeature{runnerprotocol.RunnerFeature_RUNNER_FEATURE_EVIDENCE},
+				HeartbeatIntervalMs: 60_000,
+			},
+		},
+	}
 }
 
 func findAssignmentAck(messages []*runnerprotocol.RunnerToControlPlane) *runnerprotocol.AssignmentAck {

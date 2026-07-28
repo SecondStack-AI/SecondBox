@@ -157,19 +157,31 @@ func (store *PostgresControlPlaneStore) CreateProject(
 	ctx context.Context,
 	project contracts.Project,
 	quota contracts.QuotaLimits,
+	idempotency ports.AdminIdempotencyInput,
 	audit contracts.AuditEvent,
-) (contracts.Project, error) {
+) (contracts.Project, ports.AdminIdempotencyResult, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
-		return contracts.Project{}, fmt.Errorf("SecondBox Project create transaction failed: %w", err)
+		return contracts.Project{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Project create transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	var replayed contracts.Project
+	idempotencyResult, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.Project{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.Project{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Project idempotency replay commit failed: %w", err)
+		}
+		return replayed, idempotencyResult, nil
+	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.projects (id,name,state,revision,created_at,updated_at)
 		VALUES ($1,$2,$3,$4,$5,$6)`,
 		project.ID, project.Name, project.State, project.Revision, project.CreatedAt, project.UpdatedAt,
 	); err != nil {
-		return contracts.Project{}, fmt.Errorf("SecondBox Project insert failed: %w", err)
+		return contracts.Project{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Project insert failed: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.project_quotas (
@@ -180,15 +192,19 @@ func (store *PostgresControlPlaneStore) CreateProject(
 		quota.MaxMemoryBytes, quota.MaxRetainedBytes, quota.MaxSnapshots, quota.MaxArtifacts,
 		quota.MaxPortSessions, quota.MaxConcurrentOperations, project.UpdatedAt,
 	); err != nil {
-		return contracts.Project{}, fmt.Errorf("SecondBox Project quota insert failed: %w", err)
+		return contracts.Project{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Project quota insert failed: %w", err)
 	}
 	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.Project{}, err
+		return contracts.Project{}, ports.AdminIdempotencyResult{}, err
+	}
+	idempotencyResult, err = insertAdminIdempotency(ctx, tx, idempotency, project)
+	if err != nil {
+		return contracts.Project{}, ports.AdminIdempotencyResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return contracts.Project{}, fmt.Errorf("SecondBox Project create commit failed: %w", err)
+		return contracts.Project{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Project create commit failed: %w", err)
 	}
-	return project, nil
+	return project, idempotencyResult, nil
 }
 
 func (store *PostgresControlPlaneStore) UpdateProject(
@@ -197,21 +213,33 @@ func (store *PostgresControlPlaneStore) UpdateProject(
 	update contracts.UpdateProjectRequest,
 	expectedRevision int64,
 	now time.Time,
+	idempotency ports.AdminIdempotencyInput,
 	audit contracts.AuditEvent,
-) (contracts.Project, error) {
+) (contracts.Project, ports.AdminIdempotencyResult, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
-		return contracts.Project{}, fmt.Errorf("SecondBox Project update transaction failed: %w", err)
+		return contracts.Project{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Project update transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	var replayed contracts.Project
+	idempotencyResult, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.Project{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.Project{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Project idempotency replay commit failed: %w", err)
+		}
+		return replayed, idempotencyResult, nil
+	}
 	project, err := scanProject(tx.QueryRow(ctx, `
 		SELECT id,name,state,revision,created_at,updated_at
 		FROM secondbox.projects WHERE id=$1 FOR UPDATE`, projectID))
 	if err != nil {
-		return contracts.Project{}, mapNotFound(err, ports.ErrProjectNotFound)
+		return contracts.Project{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrProjectNotFound)
 	}
 	if expectedRevision > 0 && expectedRevision != project.Revision {
-		return contracts.Project{}, ports.ErrRevisionConflict
+		return contracts.Project{}, ports.AdminIdempotencyResult{}, ports.ErrRevisionConflict
 	}
 	if update.Name != nil {
 		project.Name = *update.Name
@@ -225,15 +253,19 @@ func (store *PostgresControlPlaneStore) UpdateProject(
 		UPDATE secondbox.projects SET name=$2,state=$3,revision=$4,updated_at=$5 WHERE id=$1`,
 		project.ID, project.Name, project.State, project.Revision, project.UpdatedAt,
 	); err != nil {
-		return contracts.Project{}, fmt.Errorf("SecondBox Project update failed: %w", err)
+		return contracts.Project{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Project update failed: %w", err)
 	}
 	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.Project{}, err
+		return contracts.Project{}, ports.AdminIdempotencyResult{}, err
+	}
+	idempotencyResult, err = insertAdminIdempotency(ctx, tx, idempotency, project)
+	if err != nil {
+		return contracts.Project{}, ports.AdminIdempotencyResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return contracts.Project{}, fmt.Errorf("SecondBox Project update commit failed: %w", err)
+		return contracts.Project{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Project update commit failed: %w", err)
 	}
-	return project, nil
+	return project, idempotencyResult, nil
 }
 
 func (store *PostgresControlPlaneStore) GetProject(ctx context.Context, projectID string) (contracts.Project, error) {
@@ -242,45 +274,87 @@ func (store *PostgresControlPlaneStore) GetProject(ctx context.Context, projectI
 	return project, mapNotFound(err, ports.ErrProjectNotFound)
 }
 
-func (store *PostgresControlPlaneStore) ListProjects(ctx context.Context, limit int) ([]contracts.Project, error) {
+func (store *PostgresControlPlaneStore) ListProjects(
+	ctx context.Context,
+	limit int,
+	cursor string,
+) (contracts.ProjectPage, error) {
+	boundary, err := store.resolvePostgresListCursor(
+		ctx,
+		projectListCursorResource,
+		"",
+		cursor,
+		`SELECT created_at FROM secondbox.projects WHERE id=$1`,
+	)
+	if err != nil {
+		return contracts.ProjectPage{}, err
+	}
 	rows, err := store.pool.Query(ctx, `
 		SELECT id,name,state,revision,created_at,updated_at
-		FROM secondbox.projects ORDER BY created_at,id LIMIT $1`, limit)
+		FROM secondbox.projects
+		WHERE NOT $1 OR (created_at,id) > ($2,$3)
+		ORDER BY created_at,id
+		LIMIT $4`,
+		boundary.Active, boundary.CreatedAt, boundary.ItemKey, limit+1)
 	if err != nil {
-		return nil, fmt.Errorf("SecondBox Project list failed: %w", err)
+		return contracts.ProjectPage{}, fmt.Errorf("SecondBox Project list failed: %w", err)
 	}
 	defer rows.Close()
-	projects := make([]contracts.Project, 0)
+	page := contracts.ProjectPage{Items: make([]contracts.Project, 0)}
 	for rows.Next() {
 		project, scanErr := scanProject(rows)
 		if scanErr != nil {
-			return nil, fmt.Errorf("SecondBox Project list scan failed: %w", scanErr)
+			return contracts.ProjectPage{}, fmt.Errorf("SecondBox Project list scan failed: %w", scanErr)
 		}
-		projects = append(projects, project)
+		page.Items = append(page.Items, project)
 	}
-	return projects, rows.Err()
+	if err := rows.Err(); err != nil {
+		return contracts.ProjectPage{}, fmt.Errorf("SecondBox Project list rows failed: %w", err)
+	}
+	if len(page.Items) > limit {
+		page.Items = page.Items[:limit]
+		page.NextCursor, err = encodePostgresListNextCursor(
+			projectListCursorResource, "", page.Items[limit-1].ID,
+		)
+		if err != nil {
+			return contracts.ProjectPage{}, err
+		}
+	}
+	return page, nil
 }
 
 func (store *PostgresControlPlaneStore) CreateServiceAccount(
 	ctx context.Context,
 	account contracts.ServiceAccount,
+	idempotency ports.AdminIdempotencyInput,
 	audit contracts.AuditEvent,
-) (contracts.ServiceAccount, error) {
+) (contracts.ServiceAccount, ports.AdminIdempotencyResult, error) {
 	scopesJSON, grantsJSON, err := encodeAuthorityLists(account.Scopes, account.ProfileGrants)
 	if err != nil {
-		return contracts.ServiceAccount{}, err
+		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, err
 	}
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
-		return contracts.ServiceAccount{}, fmt.Errorf("SecondBox ServiceAccount create transaction failed: %w", err)
+		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ServiceAccount create transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	var replayed contracts.ServiceAccount
+	idempotencyResult, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ServiceAccount idempotency replay commit failed: %w", err)
+		}
+		return replayed, idempotencyResult, nil
+	}
 	var projectState string
 	if err := tx.QueryRow(ctx, `SELECT state FROM secondbox.projects WHERE id=$1 FOR UPDATE`, account.ProjectID).Scan(&projectState); err != nil {
-		return contracts.ServiceAccount{}, mapNotFound(err, ports.ErrProjectNotFound)
+		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrProjectNotFound)
 	}
 	if projectState != contracts.ProjectStateActive {
-		return contracts.ServiceAccount{}, ports.ErrAuthorizationDenied
+		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, ports.ErrAuthorizationDenied
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.service_accounts (
@@ -289,15 +363,19 @@ func (store *PostgresControlPlaneStore) CreateServiceAccount(
 		account.ID, account.ProjectID, account.Name, account.State, scopesJSON, grantsJSON,
 		account.Revision, account.CreatedAt, account.UpdatedAt,
 	); err != nil {
-		return contracts.ServiceAccount{}, fmt.Errorf("SecondBox ServiceAccount insert failed: %w", err)
+		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ServiceAccount insert failed: %w", err)
 	}
 	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.ServiceAccount{}, err
+		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, err
+	}
+	idempotencyResult, err = insertAdminIdempotency(ctx, tx, idempotency, account)
+	if err != nil {
+		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return contracts.ServiceAccount{}, fmt.Errorf("SecondBox ServiceAccount create commit failed: %w", err)
+		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ServiceAccount create commit failed: %w", err)
 	}
-	return account, nil
+	return account, idempotencyResult, nil
 }
 
 func (store *PostgresControlPlaneStore) UpdateServiceAccount(
@@ -307,19 +385,31 @@ func (store *PostgresControlPlaneStore) UpdateServiceAccount(
 	update contracts.UpdateServiceAccountRequest,
 	expectedRevision int64,
 	now time.Time,
+	idempotency ports.AdminIdempotencyInput,
 	audit contracts.AuditEvent,
-) (contracts.ServiceAccount, error) {
+) (contracts.ServiceAccount, ports.AdminIdempotencyResult, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
-		return contracts.ServiceAccount{}, fmt.Errorf("SecondBox ServiceAccount update transaction failed: %w", err)
+		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ServiceAccount update transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	var replayed contracts.ServiceAccount
+	idempotencyResult, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ServiceAccount idempotency replay commit failed: %w", err)
+		}
+		return replayed, idempotencyResult, nil
+	}
 	account, err := scanServiceAccount(tx.QueryRow(ctx, serviceAccountSelect+` WHERE project_id=$1 AND id=$2 FOR UPDATE`, projectID, accountID))
 	if err != nil {
-		return contracts.ServiceAccount{}, mapNotFound(err, ports.ErrServiceAccountNotFound)
+		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrServiceAccountNotFound)
 	}
 	if expectedRevision > 0 && expectedRevision != account.Revision {
-		return contracts.ServiceAccount{}, ports.ErrRevisionConflict
+		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, ports.ErrRevisionConflict
 	}
 	if update.Name != nil {
 		account.Name = *update.Name
@@ -335,7 +425,7 @@ func (store *PostgresControlPlaneStore) UpdateServiceAccount(
 	}
 	scopesJSON, grantsJSON, err := encodeAuthorityLists(account.Scopes, account.ProfileGrants)
 	if err != nil {
-		return contracts.ServiceAccount{}, err
+		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, err
 	}
 	account.Revision++
 	account.UpdatedAt = now.UTC()
@@ -346,15 +436,19 @@ func (store *PostgresControlPlaneStore) UpdateServiceAccount(
 		projectID, accountID, account.Name, account.State, scopesJSON, grantsJSON,
 		account.Revision, account.UpdatedAt,
 	); err != nil {
-		return contracts.ServiceAccount{}, fmt.Errorf("SecondBox ServiceAccount update failed: %w", err)
+		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ServiceAccount update failed: %w", err)
 	}
 	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.ServiceAccount{}, err
+		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, err
+	}
+	idempotencyResult, err = insertAdminIdempotency(ctx, tx, idempotency, account)
+	if err != nil {
+		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return contracts.ServiceAccount{}, fmt.Errorf("SecondBox ServiceAccount update commit failed: %w", err)
+		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ServiceAccount update commit failed: %w", err)
 	}
-	return account, nil
+	return account, idempotencyResult, nil
 }
 
 func (store *PostgresControlPlaneStore) GetServiceAccount(
@@ -370,44 +464,86 @@ func (store *PostgresControlPlaneStore) ListServiceAccounts(
 	ctx context.Context,
 	projectID string,
 	limit int,
-) ([]contracts.ServiceAccount, error) {
-	rows, err := store.pool.Query(ctx, serviceAccountSelect+` WHERE project_id=$1 ORDER BY created_at,id LIMIT $2`, projectID, limit)
+	cursor string,
+) (contracts.ServiceAccountPage, error) {
+	scope := "project=" + projectID
+	boundary, err := store.resolvePostgresListCursor(
+		ctx,
+		serviceAccountListCursorResource,
+		scope,
+		cursor,
+		`SELECT created_at FROM secondbox.service_accounts WHERE project_id=$1 AND id=$2`,
+		projectID,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("SecondBox ServiceAccount list failed: %w", err)
+		return contracts.ServiceAccountPage{}, err
+	}
+	rows, err := store.pool.Query(ctx, serviceAccountSelect+`
+		WHERE project_id=$1
+		  AND (NOT $2 OR (created_at,id) > ($3,$4))
+		ORDER BY created_at,id
+		LIMIT $5`,
+		projectID, boundary.Active, boundary.CreatedAt, boundary.ItemKey, limit+1)
+	if err != nil {
+		return contracts.ServiceAccountPage{}, fmt.Errorf("SecondBox ServiceAccount list failed: %w", err)
 	}
 	defer rows.Close()
-	accounts := make([]contracts.ServiceAccount, 0)
+	page := contracts.ServiceAccountPage{Items: make([]contracts.ServiceAccount, 0)}
 	for rows.Next() {
 		account, scanErr := scanServiceAccount(rows)
 		if scanErr != nil {
-			return nil, fmt.Errorf("SecondBox ServiceAccount list scan failed: %w", scanErr)
+			return contracts.ServiceAccountPage{}, fmt.Errorf("SecondBox ServiceAccount list scan failed: %w", scanErr)
 		}
-		accounts = append(accounts, account)
+		page.Items = append(page.Items, account)
 	}
-	return accounts, rows.Err()
+	if err := rows.Err(); err != nil {
+		return contracts.ServiceAccountPage{}, fmt.Errorf("SecondBox ServiceAccount list rows failed: %w", err)
+	}
+	if len(page.Items) > limit {
+		page.Items = page.Items[:limit]
+		page.NextCursor, err = encodePostgresListNextCursor(
+			serviceAccountListCursorResource, scope, page.Items[limit-1].ID,
+		)
+		if err != nil {
+			return contracts.ServiceAccountPage{}, err
+		}
+	}
+	return page, nil
 }
 
 func (store *PostgresControlPlaneStore) CreateAPIKey(
 	ctx context.Context,
 	storedKey ports.StoredAPIKey,
+	idempotency ports.AdminIdempotencyInput,
 	audit contracts.AuditEvent,
-) (contracts.APIKey, error) {
+) (contracts.APIKey, ports.AdminIdempotencyResult, error) {
 	scopesJSON, err := json.Marshal(storedKey.APIKey.Scopes)
 	if err != nil {
-		return contracts.APIKey{}, fmt.Errorf("SecondBox APIKey scopes encoding failed: %w", err)
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey scopes encoding failed: %w", err)
 	}
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
-		return contracts.APIKey{}, fmt.Errorf("SecondBox APIKey create transaction failed: %w", err)
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey create transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	var replayed contracts.APIKey
+	idempotencyResult, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey idempotency replay commit failed: %w", err)
+		}
+		return replayed, idempotencyResult, nil
+	}
 	account, err := scanServiceAccount(tx.QueryRow(ctx, serviceAccountSelect+` WHERE project_id=$1 AND id=$2 FOR UPDATE`,
 		storedKey.ProjectID, storedKey.APIKey.ServiceAccountID))
 	if err != nil {
-		return contracts.APIKey{}, mapNotFound(err, ports.ErrServiceAccountNotFound)
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrServiceAccountNotFound)
 	}
 	if account.State != contracts.ServiceAccountStateActive || !isScopeSubset(storedKey.APIKey.Scopes, account.Scopes) {
-		return contracts.APIKey{}, ports.ErrAuthorizationDenied
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, ports.ErrAuthorizationDenied
 	}
 	key := storedKey.APIKey
 	if _, err := tx.Exec(ctx, `
@@ -419,15 +555,19 @@ func (store *PostgresControlPlaneStore) CreateAPIKey(
 		storedKey.CredentialHash, key.State, scopesJSON, key.ExpiresAt, key.RevokedAt,
 		key.LastUsedAt, key.Revision, key.CreatedAt, storedKey.UpdatedAt,
 	); err != nil {
-		return contracts.APIKey{}, fmt.Errorf("SecondBox APIKey insert failed: %w", err)
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey insert failed: %w", err)
 	}
 	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.APIKey{}, err
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, err
+	}
+	idempotencyResult, err = insertAdminIdempotency(ctx, tx, idempotency, key)
+	if err != nil {
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return contracts.APIKey{}, fmt.Errorf("SecondBox APIKey create commit failed: %w", err)
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey create commit failed: %w", err)
 	}
-	return key, nil
+	return key, idempotencyResult, nil
 }
 
 func (store *PostgresControlPlaneStore) RotateAPIKey(
@@ -437,18 +577,34 @@ func (store *PostgresControlPlaneStore) RotateAPIKey(
 	keyID string,
 	prefix string,
 	credentialHash []byte,
+	expectedRevision int64,
 	now time.Time,
+	idempotency ports.AdminIdempotencyInput,
 	audit contracts.AuditEvent,
-) (contracts.APIKey, error) {
+) (contracts.APIKey, ports.AdminIdempotencyResult, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
-		return contracts.APIKey{}, fmt.Errorf("SecondBox APIKey rotation transaction failed: %w", err)
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey rotation transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	var replayed contracts.APIKey
+	idempotencyResult, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey idempotency replay commit failed: %w", err)
+		}
+		return replayed, idempotencyResult, nil
+	}
 	key, err := scanAPIKey(tx.QueryRow(ctx, apiKeySelect+`
 		WHERE project_id=$1 AND service_account_id=$2 AND id=$3 FOR UPDATE`, projectID, accountID, keyID))
 	if err != nil {
-		return contracts.APIKey{}, mapNotFound(err, ports.ErrAPIKeyNotFound)
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrAPIKeyNotFound)
+	}
+	if expectedRevision > 0 && expectedRevision != key.Revision {
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, ports.ErrRevisionConflict
 	}
 	key.Prefix = prefix
 	key.State = contracts.APIKeyStateActive
@@ -461,15 +617,19 @@ func (store *PostgresControlPlaneStore) RotateAPIKey(
 		WHERE project_id=$1 AND service_account_id=$2 AND id=$3`,
 		projectID, accountID, keyID, prefix, credentialHash, key.State, key.Revision, now.UTC(),
 	); err != nil {
-		return contracts.APIKey{}, fmt.Errorf("SecondBox APIKey rotation failed: %w", err)
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey rotation failed: %w", err)
 	}
 	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.APIKey{}, err
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, err
+	}
+	idempotencyResult, err = insertAdminIdempotency(ctx, tx, idempotency, key)
+	if err != nil {
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return contracts.APIKey{}, fmt.Errorf("SecondBox APIKey rotation commit failed: %w", err)
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey rotation commit failed: %w", err)
 	}
-	return key, nil
+	return key, idempotencyResult, nil
 }
 
 func (store *PostgresControlPlaneStore) RevokeAPIKey(
@@ -477,18 +637,34 @@ func (store *PostgresControlPlaneStore) RevokeAPIKey(
 	projectID string,
 	accountID string,
 	keyID string,
+	expectedRevision int64,
 	now time.Time,
+	idempotency ports.AdminIdempotencyInput,
 	audit contracts.AuditEvent,
-) (contracts.APIKey, error) {
+) (contracts.APIKey, ports.AdminIdempotencyResult, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
-		return contracts.APIKey{}, fmt.Errorf("SecondBox APIKey revocation transaction failed: %w", err)
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey revocation transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	var replayed contracts.APIKey
+	idempotencyResult, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey idempotency replay commit failed: %w", err)
+		}
+		return replayed, idempotencyResult, nil
+	}
 	key, err := scanAPIKey(tx.QueryRow(ctx, apiKeySelect+`
 		WHERE project_id=$1 AND service_account_id=$2 AND id=$3 FOR UPDATE`, projectID, accountID, keyID))
 	if err != nil {
-		return contracts.APIKey{}, mapNotFound(err, ports.ErrAPIKeyNotFound)
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrAPIKeyNotFound)
+	}
+	if expectedRevision > 0 && expectedRevision != key.Revision {
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, ports.ErrRevisionConflict
 	}
 	if key.State != contracts.APIKeyStateRevoked {
 		revokedAt := now.UTC()
@@ -501,16 +677,20 @@ func (store *PostgresControlPlaneStore) RevokeAPIKey(
 			WHERE project_id=$1 AND service_account_id=$2 AND id=$3`,
 			projectID, accountID, keyID, key.State, revokedAt, key.Revision,
 		); err != nil {
-			return contracts.APIKey{}, fmt.Errorf("SecondBox APIKey revocation failed: %w", err)
+			return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey revocation failed: %w", err)
 		}
 	}
 	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.APIKey{}, err
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, err
+	}
+	idempotencyResult, err = insertAdminIdempotency(ctx, tx, idempotency, key)
+	if err != nil {
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return contracts.APIKey{}, fmt.Errorf("SecondBox APIKey revocation commit failed: %w", err)
+		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey revocation commit failed: %w", err)
 	}
-	return key, nil
+	return key, idempotencyResult, nil
 }
 
 func (store *PostgresControlPlaneStore) GetAPIKey(
@@ -529,23 +709,53 @@ func (store *PostgresControlPlaneStore) ListAPIKeys(
 	projectID string,
 	accountID string,
 	limit int,
-) ([]contracts.APIKey, error) {
-	rows, err := store.pool.Query(ctx, apiKeySelect+`
-		WHERE project_id=$1 AND service_account_id=$2 ORDER BY created_at,id LIMIT $3`,
-		projectID, accountID, limit)
+	cursor string,
+) (contracts.APIKeyPage, error) {
+	scope := "project=" + projectID + "\x1fservice_account=" + accountID
+	boundary, err := store.resolvePostgresListCursor(
+		ctx,
+		apiKeyListCursorResource,
+		scope,
+		cursor,
+		`SELECT created_at FROM secondbox.api_keys
+		 WHERE project_id=$1 AND service_account_id=$2 AND id=$3`,
+		projectID, accountID,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("SecondBox APIKey list failed: %w", err)
+		return contracts.APIKeyPage{}, err
+	}
+	rows, err := store.pool.Query(ctx, apiKeySelect+`
+		WHERE project_id=$1
+		  AND service_account_id=$2
+		  AND (NOT $3 OR (created_at,id) > ($4,$5))
+		ORDER BY created_at,id
+		LIMIT $6`,
+		projectID, accountID, boundary.Active, boundary.CreatedAt, boundary.ItemKey, limit+1)
+	if err != nil {
+		return contracts.APIKeyPage{}, fmt.Errorf("SecondBox APIKey list failed: %w", err)
 	}
 	defer rows.Close()
-	keys := make([]contracts.APIKey, 0)
+	page := contracts.APIKeyPage{Items: make([]contracts.APIKey, 0)}
 	for rows.Next() {
 		key, scanErr := scanAPIKey(rows)
 		if scanErr != nil {
-			return nil, fmt.Errorf("SecondBox APIKey list scan failed: %w", scanErr)
+			return contracts.APIKeyPage{}, fmt.Errorf("SecondBox APIKey list scan failed: %w", scanErr)
 		}
-		keys = append(keys, key)
+		page.Items = append(page.Items, key)
 	}
-	return keys, rows.Err()
+	if err := rows.Err(); err != nil {
+		return contracts.APIKeyPage{}, fmt.Errorf("SecondBox APIKey list rows failed: %w", err)
+	}
+	if len(page.Items) > limit {
+		page.Items = page.Items[:limit]
+		page.NextCursor, err = encodePostgresListNextCursor(
+			apiKeyListCursorResource, scope, page.Items[limit-1].ID,
+		)
+		if err != nil {
+			return contracts.APIKeyPage{}, err
+		}
+	}
+	return page, nil
 }
 
 func (store *PostgresControlPlaneStore) AuthenticateAPIKey(
@@ -615,30 +825,42 @@ func (store *PostgresControlPlaneStore) CreateProfile(
 	ctx context.Context,
 	profile contracts.Profile,
 	quota contracts.QuotaLimits,
+	idempotency ports.AdminIdempotencyInput,
 	audit contracts.AuditEvent,
-) (contracts.Profile, error) {
+) (contracts.Profile, ports.AdminIdempotencyResult, error) {
 	specJSON, err := json.Marshal(profile.CurrentRevision.Spec)
 	if err != nil {
-		return contracts.Profile{}, fmt.Errorf("SecondBox ProfileRevision spec encoding failed: %w", err)
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ProfileRevision spec encoding failed: %w", err)
 	}
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
-		return contracts.Profile{}, fmt.Errorf("SecondBox Profile create transaction failed: %w", err)
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Profile create transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	var replayed contracts.Profile
+	idempotencyResult, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.Profile{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Profile idempotency replay commit failed: %w", err)
+		}
+		return replayed, idempotencyResult, nil
+	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.profiles (name,state,current_revision_id,revision,created_at,updated_at)
 		VALUES ($1,$2,$3,$4,$5,$6)`,
 		profile.Name, profile.State, profile.CurrentRevision.ID, profile.Revision, profile.CreatedAt, profile.UpdatedAt,
 	); err != nil {
-		return contracts.Profile{}, fmt.Errorf("SecondBox Profile insert failed: %w", err)
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Profile insert failed: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.profile_revisions (id,profile_name,revision_number,spec_json,created_at)
 		VALUES ($1,$2,$3,$4,$5)`,
 		profile.CurrentRevision.ID, profile.Name, profile.CurrentRevision.Number, specJSON, profile.CurrentRevision.CreatedAt,
 	); err != nil {
-		return contracts.Profile{}, fmt.Errorf("SecondBox ProfileRevision insert failed: %w", err)
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ProfileRevision insert failed: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.profile_quotas (
@@ -649,15 +871,19 @@ func (store *PostgresControlPlaneStore) CreateProfile(
 		quota.MaxMemoryBytes, quota.MaxRetainedBytes, quota.MaxSnapshots, quota.MaxArtifacts,
 		quota.MaxPortSessions, quota.MaxConcurrentOperations, profile.UpdatedAt,
 	); err != nil {
-		return contracts.Profile{}, fmt.Errorf("SecondBox Profile quota insert failed: %w", err)
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Profile quota insert failed: %w", err)
 	}
 	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.Profile{}, err
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, err
+	}
+	idempotencyResult, err = insertAdminIdempotency(ctx, tx, idempotency, profile)
+	if err != nil {
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return contracts.Profile{}, fmt.Errorf("SecondBox Profile create commit failed: %w", err)
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Profile create commit failed: %w", err)
 	}
-	return profile, nil
+	return profile, idempotencyResult, nil
 }
 
 func (store *PostgresControlPlaneStore) ReviseProfile(
@@ -666,30 +892,42 @@ func (store *PostgresControlPlaneStore) ReviseProfile(
 	revision contracts.ProfileRevision,
 	expectedRevision int64,
 	now time.Time,
+	idempotency ports.AdminIdempotencyInput,
 	audit contracts.AuditEvent,
-) (contracts.Profile, error) {
+) (contracts.Profile, ports.AdminIdempotencyResult, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
-		return contracts.Profile{}, fmt.Errorf("SecondBox Profile revise transaction failed: %w", err)
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Profile revise transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	var replayed contracts.Profile
+	idempotencyResult, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.Profile{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Profile idempotency replay commit failed: %w", err)
+		}
+		return replayed, idempotencyResult, nil
+	}
 	profile, err := scanProfile(tx.QueryRow(ctx, profileSelect+` WHERE profile.name=$1 FOR UPDATE OF profile`, name))
 	if err != nil {
-		return contracts.Profile{}, mapNotFound(err, ports.ErrProfileNotFound)
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrProfileNotFound)
 	}
 	if expectedRevision > 0 && expectedRevision != profile.Revision {
-		return contracts.Profile{}, ports.ErrRevisionConflict
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, ports.ErrRevisionConflict
 	}
 	revision.Number = profile.CurrentRevision.Number + 1
 	specJSON, err := json.Marshal(revision.Spec)
 	if err != nil {
-		return contracts.Profile{}, fmt.Errorf("SecondBox ProfileRevision spec encoding failed: %w", err)
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ProfileRevision spec encoding failed: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.profile_revisions (id,profile_name,revision_number,spec_json,created_at)
 		VALUES ($1,$2,$3,$4,$5)`, revision.ID, name, revision.Number, specJSON, revision.CreatedAt,
 	); err != nil {
-		return contracts.Profile{}, fmt.Errorf("SecondBox ProfileRevision append failed: %w", err)
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ProfileRevision append failed: %w", err)
 	}
 	profile.CurrentRevision = revision
 	profile.Revision++
@@ -698,15 +936,19 @@ func (store *PostgresControlPlaneStore) ReviseProfile(
 		UPDATE secondbox.profiles SET current_revision_id=$2,revision=$3,updated_at=$4 WHERE name=$1`,
 		name, revision.ID, profile.Revision, profile.UpdatedAt,
 	); err != nil {
-		return contracts.Profile{}, fmt.Errorf("SecondBox Profile head update failed: %w", err)
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Profile head update failed: %w", err)
 	}
 	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.Profile{}, err
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, err
+	}
+	idempotencyResult, err = insertAdminIdempotency(ctx, tx, idempotency, profile)
+	if err != nil {
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return contracts.Profile{}, fmt.Errorf("SecondBox Profile revise commit failed: %w", err)
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Profile revise commit failed: %w", err)
 	}
-	return profile, nil
+	return profile, idempotencyResult, nil
 }
 
 func (store *PostgresControlPlaneStore) DisableProfile(
@@ -714,19 +956,31 @@ func (store *PostgresControlPlaneStore) DisableProfile(
 	name string,
 	expectedRevision int64,
 	now time.Time,
+	idempotency ports.AdminIdempotencyInput,
 	audit contracts.AuditEvent,
-) (contracts.Profile, error) {
+) (contracts.Profile, ports.AdminIdempotencyResult, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
-		return contracts.Profile{}, fmt.Errorf("SecondBox Profile disable transaction failed: %w", err)
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Profile disable transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	var replayed contracts.Profile
+	idempotencyResult, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
+	if err != nil {
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, err
+	}
+	if found {
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.Profile{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Profile idempotency replay commit failed: %w", err)
+		}
+		return replayed, idempotencyResult, nil
+	}
 	profile, err := scanProfile(tx.QueryRow(ctx, profileSelect+` WHERE profile.name=$1 FOR UPDATE OF profile`, name))
 	if err != nil {
-		return contracts.Profile{}, mapNotFound(err, ports.ErrProfileNotFound)
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrProfileNotFound)
 	}
 	if expectedRevision > 0 && expectedRevision != profile.Revision {
-		return contracts.Profile{}, ports.ErrRevisionConflict
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, ports.ErrRevisionConflict
 	}
 	if profile.State != contracts.ProfileStateDisabled {
 		profile.State = contracts.ProfileStateDisabled
@@ -736,16 +990,20 @@ func (store *PostgresControlPlaneStore) DisableProfile(
 			UPDATE secondbox.profiles SET state=$2,revision=$3,updated_at=$4 WHERE name=$1`,
 			name, profile.State, profile.Revision, profile.UpdatedAt,
 		); err != nil {
-			return contracts.Profile{}, fmt.Errorf("SecondBox Profile disable failed: %w", err)
+			return contracts.Profile{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Profile disable failed: %w", err)
 		}
 	}
 	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.Profile{}, err
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, err
+	}
+	idempotencyResult, err = insertAdminIdempotency(ctx, tx, idempotency, profile)
+	if err != nil {
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return contracts.Profile{}, fmt.Errorf("SecondBox Profile disable commit failed: %w", err)
+		return contracts.Profile{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Profile disable commit failed: %w", err)
 	}
-	return profile, nil
+	return profile, idempotencyResult, nil
 }
 
 func (store *PostgresControlPlaneStore) GetProfile(ctx context.Context, name string) (contracts.Profile, error) {
@@ -753,21 +1011,51 @@ func (store *PostgresControlPlaneStore) GetProfile(ctx context.Context, name str
 	return profile, mapNotFound(err, ports.ErrProfileNotFound)
 }
 
-func (store *PostgresControlPlaneStore) ListProfiles(ctx context.Context, limit int) ([]contracts.Profile, error) {
-	rows, err := store.pool.Query(ctx, profileSelect+` ORDER BY profile.created_at,profile.name LIMIT $1`, limit)
+func (store *PostgresControlPlaneStore) ListProfiles(
+	ctx context.Context,
+	limit int,
+	cursor string,
+) (contracts.ProfilePage, error) {
+	boundary, err := store.resolvePostgresListCursor(
+		ctx,
+		profileListCursorResource,
+		"",
+		cursor,
+		`SELECT created_at FROM secondbox.profiles WHERE name=$1`,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("SecondBox Profile list failed: %w", err)
+		return contracts.ProfilePage{}, err
+	}
+	rows, err := store.pool.Query(ctx, profileSelect+`
+		WHERE NOT $1 OR (profile.created_at,profile.name) > ($2,$3)
+		ORDER BY profile.created_at,profile.name
+		LIMIT $4`,
+		boundary.Active, boundary.CreatedAt, boundary.ItemKey, limit+1)
+	if err != nil {
+		return contracts.ProfilePage{}, fmt.Errorf("SecondBox Profile list failed: %w", err)
 	}
 	defer rows.Close()
-	profiles := make([]contracts.Profile, 0)
+	page := contracts.ProfilePage{Items: make([]contracts.Profile, 0)}
 	for rows.Next() {
 		profile, scanErr := scanProfile(rows)
 		if scanErr != nil {
-			return nil, fmt.Errorf("SecondBox Profile list scan failed: %w", scanErr)
+			return contracts.ProfilePage{}, fmt.Errorf("SecondBox Profile list scan failed: %w", scanErr)
 		}
-		profiles = append(profiles, profile)
+		page.Items = append(page.Items, profile)
 	}
-	return profiles, rows.Err()
+	if err := rows.Err(); err != nil {
+		return contracts.ProfilePage{}, fmt.Errorf("SecondBox Profile list rows failed: %w", err)
+	}
+	if len(page.Items) > limit {
+		page.Items = page.Items[:limit]
+		page.NextCursor, err = encodePostgresListNextCursor(
+			profileListCursorResource, "", page.Items[limit-1].Name,
+		)
+		if err != nil {
+			return contracts.ProfilePage{}, err
+		}
+	}
+	return page, nil
 }
 
 func (store *PostgresControlPlaneStore) RegisterRunnerPool(
@@ -986,22 +1274,51 @@ func (store *PostgresControlPlaneStore) ListSandboxes(
 	ctx context.Context,
 	projectID string,
 	limit int,
-) ([]contracts.Sandbox, error) {
-	rows, err := store.pool.Query(ctx, sandboxSelect+`
-		WHERE sandbox.project_id=$1 ORDER BY sandbox.created_at,sandbox.id LIMIT $2`, projectID, limit)
+	cursor string,
+) (contracts.SandboxPage, error) {
+	scope := "project=" + projectID
+	boundary, err := store.resolvePostgresListCursor(
+		ctx,
+		sandboxListCursorResource,
+		scope,
+		cursor,
+		`SELECT created_at FROM secondbox.sandboxes WHERE project_id=$1 AND id=$2`,
+		projectID,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("SecondBox Sandbox list failed: %w", err)
+		return contracts.SandboxPage{}, err
+	}
+	rows, err := store.pool.Query(ctx, sandboxSelect+`
+		WHERE sandbox.project_id=$1
+		  AND (NOT $2 OR (sandbox.created_at,sandbox.id) > ($3,$4))
+		ORDER BY sandbox.created_at,sandbox.id
+		LIMIT $5`,
+		projectID, boundary.Active, boundary.CreatedAt, boundary.ItemKey, limit+1)
+	if err != nil {
+		return contracts.SandboxPage{}, fmt.Errorf("SecondBox Sandbox list failed: %w", err)
 	}
 	defer rows.Close()
-	sandboxes := make([]contracts.Sandbox, 0)
+	page := contracts.SandboxPage{Items: make([]contracts.Sandbox, 0)}
 	for rows.Next() {
 		sandbox, scanErr := scanSandbox(rows)
 		if scanErr != nil {
-			return nil, fmt.Errorf("SecondBox Sandbox list scan failed: %w", scanErr)
+			return contracts.SandboxPage{}, fmt.Errorf("SecondBox Sandbox list scan failed: %w", scanErr)
 		}
-		sandboxes = append(sandboxes, sandbox)
+		page.Items = append(page.Items, sandbox)
 	}
-	return sandboxes, rows.Err()
+	if err := rows.Err(); err != nil {
+		return contracts.SandboxPage{}, fmt.Errorf("SecondBox Sandbox list rows failed: %w", err)
+	}
+	if len(page.Items) > limit {
+		page.Items = page.Items[:limit]
+		page.NextCursor, err = encodePostgresListNextCursor(
+			sandboxListCursorResource, scope, page.Items[limit-1].ID,
+		)
+		if err != nil {
+			return contracts.SandboxPage{}, err
+		}
+	}
+	return page, nil
 }
 
 func (store *PostgresControlPlaneStore) GetOperation(

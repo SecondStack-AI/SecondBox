@@ -2,16 +2,197 @@ package integration_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestPostgresRelayPublicCancellationIsAtomicAndKeyScoped(t *testing.T) {
+	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
+	admin := controlPlane.BootstrapAdmin()
+	project, account, credential := createProjectAccountAndCredential(
+		t, controlPlane, admin, "relay-public-cancel",
+	)
+	profile := createGrantedProfile(
+		t, controlPlane, databaseStore, admin, account, "profile-relay-public-cancel",
+	)
+	principal := authenticateCredential(t, controlPlane, credential)
+	sandbox, _, err := controlPlane.CreateSandbox(
+		t.Context(), principal, "relay-public-cancel-create",
+		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 28, 22, 0, 0, 0, time.UTC)
+	seedRelayReadyAssignment(t, sandbox, now)
+	relay, err := runnercontrol.NewPostgresFrameRelay(
+		t.Context(),
+		runnercontrol.PostgresFrameRelayConfig{
+			DatabaseURL: integrationDatabaseURL, ClaimDuration: time.Second,
+			Retention: time.Hour, MaximumFrameBytes: 1 << 20, MaximumSessionBytes: 4 << 20,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(relay.Close)
+	session, _, err := relay.AdmitDataPlane(
+		t.Context(),
+		runnercontrol.DataPlaneAdmission{
+			ID: "dps_relay_public_cancel", StreamID: "stream_relay_public_cancel",
+			ProjectID: project.ID, SandboxID: sandbox.ID,
+			ServiceAccountID: principal.ServiceAccountID, Generation: sandbox.Generation,
+			RequestID: "request-relay-public-cancel",
+			Kind:      "exec", Operation: "exec-stream",
+			IdempotencyKey: "relay-public-cancel-create", RequestHash: "relay-public-cancel-create-hash",
+			DeadlineAt: now.Add(time.Minute), MaximumResponseBytes: 1024,
+			StreamWindowBytes: 4096, DeferResponseCredit: true,
+			ExecOpen: &runnerv1.ExecOpen{
+				Command:          &runnerv1.ExecOpen_Shell{Shell: "sleep 60"},
+				DeadlineUnixMs:   uint64(now.Add(time.Minute).UnixMilli()),
+				OutputLimitBytes: 1024, Streaming: true,
+			},
+			Now: now,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+
+	const failureTrigger = "test_fail_public_session_cancellation_record"
+	const failureFunction = "secondbox.test_fail_public_session_cancellation_record"
+	if _, err := pool.Exec(t.Context(), `
+		CREATE OR REPLACE FUNCTION `+failureFunction+`() RETURNS trigger
+		LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.idempotency_key = 'relay-public-cancel-atomic-failure' THEN
+				RAISE EXCEPTION 'intentional public session cancellation record failure';
+			END IF;
+			RETURN NEW;
+		END
+		$$;
+		DROP TRIGGER IF EXISTS `+failureTrigger+` ON secondbox.idempotency_records;
+		CREATE TRIGGER `+failureTrigger+`
+		BEFORE INSERT ON secondbox.idempotency_records
+		FOR EACH ROW EXECUTE FUNCTION `+failureFunction+`();
+	`); err != nil {
+		t.Fatal(err)
+	}
+	removeFailureTrigger := func(ctx context.Context) {
+		if _, err := pool.Exec(ctx, `
+			DROP TRIGGER IF EXISTS `+failureTrigger+` ON secondbox.idempotency_records;
+			DROP FUNCTION IF EXISTS `+failureFunction+`();
+		`); err != nil {
+			t.Errorf("remove cancellation failure trigger: %v", err)
+		}
+	}
+	t.Cleanup(func() { removeFailureTrigger(context.Background()) })
+
+	cancellation := runnercontrol.PublicDataPlaneCancellation{
+		ProjectID: project.ID, SandboxID: sandbox.ID, SessionID: session.ID,
+		SessionKind: "exec", SessionOperation: "exec-stream",
+		IdempotencyKey: "relay-public-cancel-atomic-failure",
+		RequestHash:    "relay-public-cancel-fingerprint", Reason: "public cancellation",
+		Generation: sandbox.Generation, Now: now.Add(time.Second),
+		IdempotencyEnds: now.Add(24 * time.Hour),
+	}
+	if _, _, err := relay.CancelPublicDataPlaneSession(
+		t.Context(), cancellation,
+	); err == nil {
+		t.Fatal("public cancellation succeeded despite idempotency record failure")
+	}
+	unchanged, err := relay.GetDataPlaneSession(t.Context(), project.ID, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.State != session.State {
+		t.Fatalf("failed cancellation changed session state from %q to %q", session.State, unchanged.State)
+	}
+	var cancelFrameCount int
+	if err := pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM secondbox.data_plane_frames
+		WHERE session_id=$1 AND priority=-100`,
+		session.ID,
+	).Scan(&cancelFrameCount); err != nil {
+		t.Fatal(err)
+	}
+	if cancelFrameCount != 0 {
+		t.Fatalf("failed cancellation retained %d cancellation frames", cancelFrameCount)
+	}
+	var failureRecordCount int
+	if err := pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM secondbox.idempotency_records
+		WHERE project_id=$1 AND operation='exec-stream-cancel'
+		  AND target_id=$2 AND idempotency_key=$3`,
+		project.ID, session.ID, cancellation.IdempotencyKey,
+	).Scan(&failureRecordCount); err != nil {
+		t.Fatal(err)
+	}
+	if failureRecordCount != 0 {
+		t.Fatalf("failed cancellation retained %d idempotency records", failureRecordCount)
+	}
+
+	removeFailureTrigger(t.Context())
+	cancellation.IdempotencyKey = "relay-public-cancel-durable"
+	first, replayed, err := relay.CancelPublicDataPlaneSession(t.Context(), cancellation)
+	if err != nil || replayed || first.State != "cancelling" {
+		t.Fatalf("first public cancellation = %#v, replayed=%t, error=%v", first, replayed, err)
+	}
+	closingNewKey := cancellation
+	closingNewKey.IdempotencyKey = "relay-public-cancel-new-key-closing"
+	closingNewKey.Now = now.Add(1500 * time.Millisecond)
+	stillClosing, replayed, err := relay.CancelPublicDataPlaneSession(t.Context(), closingNewKey)
+	if err != nil || replayed || stillClosing.State != "cancelling" {
+		t.Fatalf(
+			"new-key closing cancellation = %#v, replayed=%t, error=%v",
+			stillClosing, replayed, err,
+		)
+	}
+	if _, err := pool.Exec(t.Context(), `
+		UPDATE secondbox.data_plane_sessions
+		SET state='completed',completed_at=$2,updated_at=$2
+		WHERE id=$1`,
+		session.ID, now.Add(2*time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	replayedSession, replayed, err := relay.CancelPublicDataPlaneSession(t.Context(), cancellation)
+	if err != nil || !replayed || !reflect.DeepEqual(replayedSession, first) {
+		t.Fatalf(
+			"public cancellation replay = %#v, replayed=%t, error=%v; want %#v",
+			replayedSession, replayed, err, first,
+		)
+	}
+	conflicting := cancellation
+	conflicting.RequestHash = "changed-public-cancel-fingerprint"
+	if _, _, err := relay.CancelPublicDataPlaneSession(
+		t.Context(), conflicting,
+	); !errors.Is(err, ports.ErrIdempotencyConflict) {
+		t.Fatalf("changed public cancellation fingerprint error = %v", err)
+	}
+	newKey := cancellation
+	newKey.IdempotencyKey = "relay-public-cancel-new-key"
+	newKey.Now = now.Add(3 * time.Second)
+	current, replayed, err := relay.CancelPublicDataPlaneSession(t.Context(), newKey)
+	if err != nil || replayed || current.State != "completed" {
+		t.Fatalf("new-key public cancellation = %#v, replayed=%t, error=%v", current, replayed, err)
+	}
+}
 
 func TestPostgresRelayDurablyFencesSequencesAndReconnectDelivery(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
@@ -626,10 +807,11 @@ func TestPostgresRelayDurablySequencesPublicStreamingExecFrames(t *testing.T) {
 }
 
 type relayReadySeed struct {
-	Fence         *runnerv1.AssignmentFence
-	RunnerID      string
-	ConnectionOne string
-	ConnectionTwo string
+	Fence            *runnerv1.AssignmentFence
+	RunnerID         string
+	CredentialSerial string
+	ConnectionOne    string
+	ConnectionTwo    string
 }
 
 func assertRelayCorrelation(
@@ -667,6 +849,7 @@ func seedRelayReadyAssignment(
 	}
 	t.Cleanup(pool.Close)
 	runnerID := "run_relay_" + sandbox.ID
+	credentialSerial := "serial_relay_" + sandbox.ID
 	connectionOne := "connection_relay_1_" + sandbox.ID
 	connectionTwo := "connection_relay_2_" + sandbox.ID
 	fence := &runnerv1.AssignmentFence{
@@ -705,19 +888,29 @@ func seedRelayReadyAssignment(
 	); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := pool.Exec(t.Context(), `
+		INSERT INTO secondbox.runner_credentials (
+			serial_number,runner_id,certificate_fingerprint_sha256,state,
+			not_before,not_after,rotated_from_serial,revoked_at,created_at,updated_at
+		) VALUES ($1,$2,$3,'active',$4,$5,'',NULL,$4,$4)`,
+		credentialSerial, runnerID, "fingerprint_relay_"+sandbox.ID,
+		now.Add(-time.Minute), now.Add(time.Hour),
+	); err != nil {
+		t.Fatal(err)
+	}
 	for _, connectionID := range []string{connectionOne, connectionTwo} {
 		if _, err := pool.Exec(t.Context(), `
 			INSERT INTO secondbox.runner_connections (
 				id,runner_id,credential_serial,protocol_version,state,last_sequence,
 				last_control_sequence,connected_at,last_seen_at,disconnected_at
-			) VALUES ($1,$2,'serial',1,'active',0,0,$3,$3,NULL)`,
-			connectionID, runnerID, now,
+			) VALUES ($1,$2,$3,1,'active',0,0,$4,$4,NULL)`,
+			connectionID, runnerID, credentialSerial, now,
 		); err != nil {
 			t.Fatal(err)
 		}
 	}
 	return relayReadySeed{
-		Fence: fence, RunnerID: runnerID,
+		Fence: fence, RunnerID: runnerID, CredentialSerial: credentialSerial,
 		ConnectionOne: connectionOne, ConnectionTwo: connectionTwo,
 	}
 }

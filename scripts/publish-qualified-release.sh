@@ -353,6 +353,60 @@ github_api_optional() {
   publication_fail "GitHub API request failed: $(<"$error_path")"
 }
 
+write_expected_github_asset_names() {
+  local asset_directory="$1"
+  local output_path="$2"
+  find "$asset_directory" -maxdepth 1 -type f -printf '%f\n' |
+    LC_ALL=C sort |
+    jq -Rsc 'split("\n") | map(select(length > 0))' >"$output_path"
+}
+
+fetch_github_release_inventory() {
+  local releases_path="$1"
+  gh api --paginate \
+    "repos/$expected_repository/releases?per_page=100" \
+    --slurp \
+    --jq '[.[][]]' >"$releases_path"
+}
+
+fetch_github_release_assets() {
+  local release_id="$1"
+  local assets_path="$2"
+  gh api --paginate \
+    "repos/$expected_repository/releases/$release_id/assets?per_page=100" \
+    --slurp \
+    --jq '[.[][]]' >"$assets_path"
+}
+
+verify_github_immutable_release_configuration() {
+  local configuration_path="$1"
+  : "${SECONDBOX_RELEASE_CONFIGURATION_TOKEN:?set SECONDBOX_RELEASE_CONFIGURATION_TOKEN}"
+  GH_TOKEN="$SECONDBOX_RELEASE_CONFIGURATION_TOKEN" \
+    gh api \
+      -H "Accept: application/vnd.github+json" \
+      -H "X-GitHub-Api-Version: 2026-03-10" \
+      "repos/$expected_repository/immutable-releases" \
+      >"$configuration_path" ||
+    publication_fail "could not prove repository immutable releases are enabled"
+  jq -e '.enabled == true' "$configuration_path" >/dev/null ||
+    publication_fail "repository immutable releases are not enabled"
+}
+
+verify_github_release_inventory() {
+  local phase="$1"
+  local immutable_configuration="$2"
+  local expected_names="$3"
+  local releases_path="$4"
+  local assets_path="$5"
+  node "$repo_root/scripts/verify-github-release-state.mjs" \
+    "$immutable_configuration" \
+    "$releases_path" \
+    "$assets_path" \
+    "$expected_names" \
+    "$release_tag" \
+    "$phase"
+}
+
 ensure_exact_github_tag() {
   local ref_record="$publication_working_directory/github-tag.json"
   if github_api_optional "$ref_record" \
@@ -407,6 +461,11 @@ publish_qualified_github_release() {
   local release_record="$publication_working_directory/github-release.json"
   local release_notes="$publication_working_directory/release-notes.md"
   local asset_directory="$publication_working_directory/github-assets"
+  local expected_asset_names="$publication_working_directory/expected-github-assets.json"
+  local immutable_configuration="$publication_working_directory/immutable-release-configuration.json"
+  local releases_path="$publication_working_directory/github-releases.json"
+  local assets_path="$publication_working_directory/github-release-assets.json"
+  local release_count
   local release_id
   local release_is_draft
   local asset_path
@@ -416,7 +475,31 @@ publish_qualified_github_release() {
   : "${GITHUB_TOKEN:?set GITHUB_TOKEN}"
   verify_public_ghcr_subjects
   verify_published_npm_package
-  ensure_exact_github_tag
+  prepare_github_release_assets "$asset_directory"
+  write_expected_github_asset_names "$asset_directory" "$expected_asset_names"
+  verify_github_immutable_release_configuration "$immutable_configuration"
+  fetch_github_release_inventory "$releases_path"
+  release_count="$(
+    jq --arg release_tag "$release_tag" \
+      '[.[] | select(.tag_name == $release_tag)] | length' \
+      "$releases_path"
+  )"
+  if [[ "$release_count" == 1 ]]; then
+    release_id="$(
+      jq -er --arg release_tag "$release_tag" \
+        '.[] | select(.tag_name == $release_tag) | .id' \
+        "$releases_path"
+    )"
+    fetch_github_release_assets "$release_id" "$assets_path"
+  else
+    printf '[]\n' >"$assets_path"
+  fi
+  verify_github_release_inventory \
+    before-upload \
+    "$immutable_configuration" \
+    "$expected_asset_names" \
+    "$releases_path" \
+    "$assets_path"
 
   cat >"$release_notes" <<EOF
 SecondBox $release_tag
@@ -431,8 +514,8 @@ Qualified images:
 Every published byte and digest is bound by release-subjects.json and release-evidence.json.
 EOF
 
-  if ! github_api_optional "$release_record" \
-    "repos/$expected_repository/releases/tags/$release_tag"; then
+  ensure_exact_github_tag
+  if [[ "$release_count" == 0 ]]; then
     gh api \
       --method POST \
       "repos/$expected_repository/releases" \
@@ -443,15 +526,42 @@ EOF
       -F "draft=true" \
       -F "prerelease=false" >"$release_record"
   fi
+  fetch_github_release_inventory "$releases_path"
+  release_id="$(
+    jq -er --arg release_tag "$release_tag" '
+      [.[] | select(.tag_name == $release_tag)] |
+      if length == 1 then .[0].id else error("release is absent or duplicate") end
+    ' "$releases_path"
+  )"
+  fetch_github_release_assets "$release_id" "$assets_path"
+  verify_github_release_inventory \
+    before-upload \
+    "$immutable_configuration" \
+    "$expected_asset_names" \
+    "$releases_path" \
+    "$assets_path"
+  jq -er --arg release_tag "$release_tag" \
+    '.[] | select(.tag_name == $release_tag)' \
+    "$releases_path" >"$release_record"
   release_id="$(jq -er '.id' "$release_record")"
   release_is_draft="$(jq -er '.draft' "$release_record")"
-  [[ "$(jq -er '.tag_name' "$release_record")" == "$release_tag" ]] ||
-    publication_fail "GitHub release tag does not match qualified tag"
+  if [[ "$(jq -er '.tag_name' "$release_record")" != "$release_tag" ||
+        "$(jq -er '.name' "$release_record")" != "SecondBox $release_tag" ||
+        "$(jq -er '.prerelease' "$release_record")" != "false" ]]; then
+    publication_fail "GitHub release identity does not match the qualified stable release"
+  fi
 
-  prepare_github_release_assets "$asset_directory"
   while IFS= read -r asset_path; do
     ensure_exact_github_asset "$release_id" "$release_is_draft" "$asset_path"
   done < <(find "$asset_directory" -maxdepth 1 -type f -print | LC_ALL=C sort)
+  fetch_github_release_inventory "$releases_path"
+  fetch_github_release_assets "$release_id" "$assets_path"
+  verify_github_release_inventory \
+    after-upload \
+    "$immutable_configuration" \
+    "$expected_asset_names" \
+    "$releases_path" \
+    "$assets_path"
 
   if [[ "$release_is_draft" == "true" ]]; then
     gh api \
@@ -469,12 +579,17 @@ verify_public_github_release() {
   local release_id
   local asset_directory="$publication_working_directory/public-assets"
   local expected_assets="$publication_working_directory/expected-assets"
+  local expected_asset_names="$publication_working_directory/expected-public-assets.json"
+  local public_releases="$publication_working_directory/public-releases.json"
+  local public_assets="$publication_working_directory/public-assets.json"
   local expected_asset
   local asset_name
   local asset_url
   local downloaded_asset
 
   curl --fail --silent --show-error \
+    -H "Accept: application/vnd.github+json" \
+    -H "X-GitHub-Api-Version: 2026-03-10" \
     "https://api.github.com/repos/$expected_repository/releases/tags/$release_tag" \
     >"$public_release"
   if [[ "$(jq -er '.draft' "$public_release")" != "false" ||
@@ -493,13 +608,22 @@ verify_public_github_release() {
 
   prepare_github_release_assets "$expected_assets"
   release_id="$(jq -er '.id' "$public_release")"
+  write_expected_github_asset_names "$expected_assets" "$expected_asset_names"
+  jq -s . "$public_release" >"$public_releases"
+  fetch_github_release_assets "$release_id" "$public_assets"
+  verify_github_release_inventory \
+    public \
+    - \
+    "$expected_asset_names" \
+    "$public_releases" \
+    "$public_assets"
   install -d -m 0700 "$asset_directory"
   while IFS= read -r expected_asset; do
     asset_name="$(basename "$expected_asset")"
     asset_url="$(
       jq -er --arg name "$asset_name" \
-        '.assets[] | select(.name == $name) | .browser_download_url' \
-        "$public_release"
+        '.[] | select(.name == $name) | .browser_download_url' \
+        "$public_assets"
     )"
     downloaded_asset="$asset_directory/$asset_name"
     curl --fail --silent --show-error --location \

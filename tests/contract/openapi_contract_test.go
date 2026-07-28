@@ -186,7 +186,7 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 			}
 		}
 		for _, required := range []string{
-			"createProject", "createServiceAccount", "createAPIKey", "revokeAPIKey",
+			"createProject", "createServiceAccount", "createAPIKey", "rotateAPIKey", "revokeAPIKey",
 			"createProfile", "reviseProfile", "createSandbox", "startSandbox",
 			"drainSandbox", "stopSandbox", "checkpointSandbox", "getOperation",
 			"executeSandboxCommand", "createSandboxExecStream", "readSandboxFile",
@@ -218,6 +218,49 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 		encodedParameters, _ := json.Marshal(create["parameters"])
 		if !strings.Contains(string(encodedParameters), "#/components/parameters/IdempotencyKey") {
 			t.Error("createSandbox must require the reusable Idempotency-Key header")
+		}
+	})
+
+	t.Run("administrative mutation replays are observable", func(t *testing.T) {
+		required := map[string]bool{
+			"createProject": true, "updateProject": true,
+			"createServiceAccount": true, "updateServiceAccount": true,
+			"createAPIKey": true, "rotateAPIKey": true, "revokeAPIKey": true,
+			"createProfile": true, "reviseProfile": true, "disableProfile": true,
+		}
+		paths := object(t, document["paths"], "paths")
+		for path, pathValue := range paths {
+			pathItem := object(t, pathValue, path)
+			for _, method := range []string{"patch", "post"} {
+				operationValue, exists := pathItem[method]
+				if !exists {
+					continue
+				}
+				operation := object(t, operationValue, method+" "+path)
+				operationID, _ := operation["operationId"].(string)
+				if !required[operationID] {
+					continue
+				}
+				parameters, _ := json.Marshal(operation["parameters"])
+				if !strings.Contains(string(parameters), "#/components/parameters/IdempotencyKey") {
+					t.Errorf("%s must require Idempotency-Key", operationID)
+				}
+				responses := object(t, operation["responses"], operationID+".responses")
+				for status, responseValue := range responses {
+					if !strings.HasPrefix(status, "2") {
+						continue
+					}
+					response := object(t, responseValue, operationID+" "+status)
+					headers := object(t, response["headers"], operationID+" "+status+" headers")
+					if _, exists := headers["Idempotency-Replayed"]; !exists {
+						t.Errorf("%s %s must expose Idempotency-Replayed", operationID, status)
+					}
+				}
+				delete(required, operationID)
+			}
+		}
+		for operationID := range required {
+			t.Errorf("missing administrative mutation %s", operationID)
 		}
 	})
 
@@ -290,6 +333,62 @@ func TestSandboxCreateRejectsInfrastructureAuthorityOverrides(t *testing.T) {
 			err := validateClosedCreateShape(t, createSchema, payload)
 			if err == nil || !strings.Contains(err.Error(), forbidden) {
 				t.Fatalf("CreateSandboxRequest did not reject %q: %v", forbidden, err)
+			}
+		})
+	}
+}
+
+func TestCanonicalMutationResponsesMatchDurableResources(t *testing.T) {
+	document := loadOpenAPIContract(t)
+	paths := object(t, document["paths"], "paths")
+	tests := []struct {
+		name       string
+		path       string
+		method     string
+		statusCode string
+		schema     string
+	}{
+		{
+			name: "Sandbox deletion returns its durable lifecycle Operation",
+			path: "/v1/sandboxes/{sandboxId}", method: "delete",
+			statusCode: "202", schema: "Operation",
+		},
+		{
+			name: "streaming Exec cancellation returns its durable session",
+			path: "/v1/sandboxes/{sandboxId}/exec-streams/{execSessionId}:cancel", method: "post",
+			statusCode: "202", schema: "ExecStreamSession",
+		},
+		{
+			name: "Terminal cancellation returns its durable session",
+			path: "/v1/sandboxes/{sandboxId}/terminals/{terminalSessionId}", method: "delete",
+			statusCode: "202", schema: "TerminalSession",
+		},
+		{
+			name: "Profile revision updates the existing Profile",
+			path: "/v1/profiles/{profileName}:revise", method: "post",
+			statusCode: "200", schema: "Profile",
+		},
+		{
+			name: "API key rotation updates the existing API key authority",
+			path: "/v1/projects/{projectId}/service-accounts/{serviceAccountId}/api-keys/{apiKeyId}:rotate", method: "post",
+			statusCode: "200", schema: "CreateAPIKeyResponse",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pathItem := object(t, paths[test.path], test.path)
+			operation := object(t, pathItem[test.method], test.method+" "+test.path)
+			responses := object(t, operation["responses"], "responses")
+			response := object(t, responses[test.statusCode], "response "+test.statusCode)
+			if reference, ok := response["$ref"].(string); ok {
+				response = object(t, resolveLocalReference(t, document, reference), "resolved response")
+			}
+			content := object(t, response["content"], "response content")
+			mediaType := object(t, content["application/json"], "application/json")
+			schema := object(t, mediaType["schema"], "response schema")
+			wantReference := "#/components/schemas/" + test.schema
+			if schema["$ref"] != wantReference {
+				t.Fatalf("response schema = %v, want %q", schema["$ref"], wantReference)
 			}
 		})
 	}

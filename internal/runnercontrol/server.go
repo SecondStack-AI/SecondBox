@@ -244,13 +244,18 @@ func (server *Server) persistEvent(ctx context.Context, event Event) error {
 		if server.config.CheckpointReceiver == nil {
 			return errors.New("SecondBox runner checkpoint receiver is not configured")
 		}
-		if err := server.config.CheckpointReceiver.ReceiveCheckpoint(
-			ctx, event, server.config.Now(),
+		now := server.config.Now()
+		if _, err := server.config.StateStore.RecordEvent(
+			ctx, event, now,
 		); err != nil {
 			return err
 		}
-		_, err := server.config.StateStore.RecordEvent(ctx, event, server.config.Now())
-		return err
+		if err := server.config.CheckpointReceiver.ReceiveCheckpoint(
+			ctx, event, now,
+		); err != nil {
+			return err
+		}
+		return nil
 	case EventAssignment, EventFence, EventDrain, EventEvidence, EventInstanceTerminal:
 		_, err := server.config.StateStore.RecordEvent(ctx, event, server.config.Now())
 		return err

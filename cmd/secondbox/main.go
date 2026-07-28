@@ -29,6 +29,7 @@ var commandAliases = map[string]commandAlias{
 	"keys list":               {operation: "listAPIKeys"},
 	"keys create":             {operation: "createAPIKey"},
 	"keys revoke":             {operation: "revokeAPIKey"},
+	"keys rotate":             {operation: "rotateAPIKey"},
 	"profiles list":           {operation: "listProfiles"},
 	"profiles create":         {operation: "createProfile"},
 	"profiles get":            {operation: "getProfile"},

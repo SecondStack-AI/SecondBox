@@ -45,11 +45,11 @@ install -d -m 700 .tmp/secondbox-deploy
 just deploy-bootstrap .tmp/secondbox-deploy/environment
 just deploy-validate .tmp/secondbox-deploy/environment
 docker build --tag secondbox-control-plane:development .
-docker compose --env-file .tmp/secondbox-deploy/environment --file deploy/compose.yml --profile development up -d postgres object-store
+just deploy-development-prepare .tmp/secondbox-deploy/environment
 docker compose --env-file .tmp/secondbox-deploy/environment --file deploy/compose.yml up -d control-plane
 ```
 
-Read [deployment and runtime operations](docs/operations/deployment.md) before exposing the API or using external PostgreSQL. The supplied RustFS service is a loopback-only development implementation of the object-store dependency consumed by checkpoint and Artifact operations. The coordinated backup command and isolated restore drill prove portable PostgreSQL/object-store recovery and fresh-Runner checkpoint materialization; they do not replace provider durability or packaged KVM and multi-runner qualification.
+The preparation command is safe to repeat: it validates the bootstrapped development inventory, starts PostgreSQL and RustFS, and creates the explicitly configured bucket before the control plane starts. Read [deployment and runtime operations](docs/operations/deployment.md) before exposing the API or using external PostgreSQL. The supplied RustFS service is a loopback-only development implementation of the object-store dependency consumed by checkpoint and Artifact operations. The coordinated backup command and isolated restore drill prove portable PostgreSQL/object-store recovery and fresh-Runner checkpoint materialization; they do not replace provider durability or packaged KVM and multi-runner qualification.
 
 The implementation plan is tracked in [SecondBox standalone service](docs/plans/2026-07-28-secondbox-standalone-service.md).
 

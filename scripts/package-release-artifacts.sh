@@ -109,6 +109,7 @@ for deployment_path in \
   compose.yml \
   environment.example \
   bin/bootstrap-environment.sh \
+  bin/prepare-development-inventory.sh \
   bin/bootstrap-runner-trust.sh \
   bin/collect-support-bundle.sh \
   bin/diagnose-runner-host.sh \

@@ -3,6 +3,7 @@ package operations_test
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +25,7 @@ func TestComposeSeparatesOptionalPrivilegedRunnerFromControlPlane(t *testing.T) 
 		"object-store:",
 		"profiles: [\"development\"]",
 		"profiles: [\"same-host-runner\"]",
+		"pg_isready -h 127.0.0.1",
 		"image: ${SECONDBOX_RUNNER_IMAGE:?",
 		"org.secondbox.runner.qualification: \"not-established-by-compose\"",
 		"${SECONDBOX_RUNNER_IDENTITY_HOST_DIR:?",
@@ -362,6 +364,197 @@ func TestBootstrapIsPrivateIdempotentAndDoesNotPrintSecrets(t *testing.T) {
 	}
 }
 
+func TestBootstrapCreatesPrivateIdempotentDevelopmentAssetCatalog(t *testing.T) {
+	repositoryRoot := repositoryRootForDeploymentPolicy(t)
+	environmentPath := filepath.Join(t.TempDir(), "environment")
+	bootstrap := filepath.Join(repositoryRoot, "deploy", "bin", "bootstrap-environment.sh")
+
+	if output, err := exec.Command(bootstrap, environmentPath).CombinedOutput(); err != nil {
+		t.Fatalf("bootstrap development environment: %v\n%s", err, output)
+	}
+	environment := readEnvironmentSettings(t, environmentPath)
+	catalogPath := environment["SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH"]
+	wantCatalogPath := filepath.Join(environmentPath+".secrets", "development-signed-assets.json")
+	if catalogPath != wantCatalogPath {
+		t.Fatalf("development asset catalog path = %q, want %q", catalogPath, wantCatalogPath)
+	}
+	fileInfo, err := os.Lstat(catalogPath)
+	if err != nil {
+		t.Fatalf("inspect development asset catalog: %v", err)
+	}
+	if !fileInfo.Mode().IsRegular() || fileInfo.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("development asset catalog must be a regular non-symbolic-link file: %s", catalogPath)
+	}
+	if fileInfo.Mode().Perm() != 0o644 {
+		t.Fatalf("development asset catalog mode = %o, want 644", fileInfo.Mode().Perm())
+	}
+
+	var catalog struct {
+		Assets []struct {
+			ArtifactID              string   `json:"artifactId"`
+			ManifestDigest          string   `json:"manifestDigest"`
+			SignatureKeyID          string   `json:"signatureKeyId"`
+			Architecture            string   `json:"architecture"`
+			GuestProtocolGeneration int      `json:"guestProtocolGeneration"`
+			MandatoryGuestFeatures  []string `json:"mandatoryGuestFeatures"`
+		} `json:"assets"`
+	}
+	catalogBytes, err := os.ReadFile(catalogPath)
+	if err != nil {
+		t.Fatalf("read development asset catalog: %v", err)
+	}
+	if err := json.Unmarshal(catalogBytes, &catalog); err != nil {
+		t.Fatalf("decode development asset catalog: %v", err)
+	}
+	if len(catalog.Assets) != 1 {
+		t.Fatalf("development asset catalog has %d assets, want 1", len(catalog.Assets))
+	}
+	asset := catalog.Assets[0]
+	if asset.ArtifactID == "" ||
+		!strings.HasPrefix(asset.ManifestDigest, "sha256:") ||
+		len(asset.ManifestDigest) != len("sha256:")+64 ||
+		asset.SignatureKeyID == "" ||
+		asset.Architecture != "amd64" ||
+		asset.GuestProtocolGeneration != 1 ||
+		asset.MandatoryGuestFeatures == nil {
+		t.Fatalf("development asset catalog entry is incomplete: %#v", asset)
+	}
+	firstHash := sha256.Sum256(catalogBytes)
+
+	if output, err := exec.Command(bootstrap, environmentPath).CombinedOutput(); err != nil {
+		t.Fatalf("repeat development bootstrap: %v\n%s", err, output)
+	}
+	repeatedBytes, err := os.ReadFile(catalogPath)
+	if err != nil {
+		t.Fatalf("read repeated development asset catalog: %v", err)
+	}
+	if sha256.Sum256(repeatedBytes) != firstHash {
+		t.Fatal("idempotent development bootstrap changed the asset catalog")
+	}
+}
+
+func TestDevelopmentInventoryPreparationCreatesConfiguredBucketBeforeControlPlane(t *testing.T) {
+	repositoryRoot := repositoryRootForDeploymentPolicy(t)
+	testDirectory := t.TempDir()
+	environmentPath := filepath.Join(testDirectory, "environment")
+	bootstrap := filepath.Join(repositoryRoot, "deploy", "bin", "bootstrap-environment.sh")
+	if output, err := exec.Command(bootstrap, environmentPath).CombinedOutput(); err != nil {
+		t.Fatalf("bootstrap development environment: %v\n%s", err, output)
+	}
+
+	fakeBin := filepath.Join(testDirectory, "bin")
+	if err := os.Mkdir(fakeBin, 0o700); err != nil {
+		t.Fatalf("create fake command directory: %v", err)
+	}
+	dockerLog := filepath.Join(testDirectory, "docker.log")
+	fakeDocker := `#!/bin/sh
+set -eu
+printf '%s\n' "$*" >>"$FAKE_DOCKER_LOG"
+`
+	if err := os.WriteFile(filepath.Join(fakeBin, "docker"), []byte(fakeDocker), 0o700); err != nil {
+		t.Fatalf("write fake docker: %v", err)
+	}
+
+	prepare := filepath.Join(repositoryRoot, "deploy", "bin", "prepare-development-inventory.sh")
+	for attempt := 0; attempt < 2; attempt++ {
+		command := exec.Command(prepare, environmentPath)
+		command.Env = append(
+			os.Environ(),
+			"PATH="+fakeBin+":"+os.Getenv("PATH"),
+			"FAKE_DOCKER_LOG="+dockerLog,
+		)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("prepare development inventory attempt %d: %v\n%s", attempt+1, err, output)
+		}
+	}
+
+	dockerCalls, err := os.ReadFile(dockerLog)
+	if err != nil {
+		t.Fatalf("read fake Docker calls: %v", err)
+	}
+	callLog := string(dockerCalls)
+	for _, required := range []string{
+		"compose --env-file " + environmentPath + " --file " + filepath.Join(repositoryRoot, "deploy", "compose.yml") + " --profile development up --detach --wait",
+		"postgres object-store",
+		"compose --env-file " + environmentPath + " --file " + filepath.Join(repositoryRoot, "deploy", "compose.yml") + " --profile development run --rm --no-deps object-store-init",
+	} {
+		if !strings.Contains(callLog, required) {
+			t.Fatalf("development inventory preparation did not run %q:\n%s", required, callLog)
+		}
+	}
+	if strings.Contains(callLog, "control-plane") {
+		t.Fatalf("development inventory preparation started the control plane:\n%s", callLog)
+	}
+
+	compose := readRepositoryFile(t, "deploy/compose.yml")
+	for _, required := range []string{
+		"object-store-init:",
+		"image: ${SECONDBOX_OBJECT_STORE_CLIENT_IMAGE:?",
+		"MC_HOST_secondbox:",
+		"- mb\n      - --ignore-existing",
+		"secondbox/${SECONDBOX_OBJECT_STORE_BUCKET:?",
+	} {
+		if !strings.Contains(compose, required) {
+			t.Errorf("development object-store initializer must contain %q", required)
+		}
+	}
+}
+
+func TestProductionBootstrapRequiresOperatorSuppliedAssetCatalog(t *testing.T) {
+	repositoryRoot := repositoryRootForDeploymentPolicy(t)
+	template := readRepositoryFile(t, "deploy/environment.example")
+	template = strings.Replace(
+		template,
+		"SECONDBOX_DEPLOYMENT_MODE=development",
+		"SECONDBOX_DEPLOYMENT_MODE=production",
+		1,
+	)
+	environmentPath := filepath.Join(t.TempDir(), "environment")
+	if err := os.WriteFile(environmentPath, []byte(template), 0o600); err != nil {
+		t.Fatalf("write production bootstrap environment: %v", err)
+	}
+
+	bootstrap := filepath.Join(repositoryRoot, "deploy", "bin", "bootstrap-environment.sh")
+	output, err := exec.Command(bootstrap, environmentPath).CombinedOutput()
+	if err == nil {
+		t.Fatal("production bootstrap generated development asset inventory")
+	}
+	if !bytes.Contains(output, []byte("production requires an operator-supplied SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH")) {
+		t.Fatalf("production bootstrap did not identify the required asset catalog:\n%s", output)
+	}
+}
+
+func TestProductionValidatorRejectsDevelopmentAssetCatalog(t *testing.T) {
+	repositoryRoot := repositoryRootForDeploymentPolicy(t)
+	environmentPath := filepath.Join(t.TempDir(), "environment")
+	bootstrap := filepath.Join(repositoryRoot, "deploy", "bin", "bootstrap-environment.sh")
+	if output, err := exec.Command(bootstrap, environmentPath).CombinedOutput(); err != nil {
+		t.Fatalf("bootstrap development environment: %v\n%s", err, output)
+	}
+	environment, err := os.ReadFile(environmentPath)
+	if err != nil {
+		t.Fatalf("read bootstrapped environment: %v", err)
+	}
+	productionEnvironment := strings.Replace(
+		string(environment),
+		"SECONDBOX_DEPLOYMENT_MODE=development",
+		"SECONDBOX_DEPLOYMENT_MODE=production",
+		1,
+	)
+	if err := os.WriteFile(environmentPath, []byte(productionEnvironment), 0o600); err != nil {
+		t.Fatalf("write production-mode environment: %v", err)
+	}
+
+	validator := filepath.Join(repositoryRoot, "deploy", "bin", "validate-environment.sh")
+	output, err := exec.Command(validator, environmentPath).CombinedOutput()
+	if err == nil {
+		t.Fatal("production validation accepted development asset trust inventory")
+	}
+	if !bytes.Contains(output, []byte("Production requires an operator-supplied signed asset catalog")) {
+		t.Fatalf("production validator did not reject the development catalog:\n%s", output)
+	}
+}
+
 func TestSupportBundleCollectionIsBoundedAndSecretAvoiding(t *testing.T) {
 	script := readRepositoryFile(t, "deploy/bin/collect-support-bundle.sh")
 
@@ -536,7 +729,7 @@ func TestBootstrapGeneratesCertificateForConfiguredRunnerServerName(t *testing.T
 	}
 	template = strings.Replace(
 		template,
-		"SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH=/var/lib/secondbox/signed-assets.json",
+		"SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH=GENERATE_DEVELOPMENT_ASSET_CATALOG",
 		"SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH="+catalogPath,
 		1,
 	)
@@ -1023,6 +1216,26 @@ func repositoryRootForDeploymentPolicy(t *testing.T) string {
 		t.Fatal("resolve deployment policy test source path")
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", ".."))
+}
+
+func readEnvironmentSettings(t *testing.T, path string) map[string]string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read environment settings: %v", err)
+	}
+	settings := make(map[string]string)
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, found := strings.Cut(line, "=")
+		if !found {
+			t.Fatalf("environment line is not KEY=VALUE: %q", line)
+		}
+		settings[key] = value
+	}
+	return settings
 }
 
 func hashDeploymentAuthority(t *testing.T, environmentPath string) [32]byte {

@@ -3,6 +3,8 @@ package service
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -180,20 +182,53 @@ func (service *ControlPlaneService) CreateProject(
 	principal contracts.Principal,
 	request contracts.CreateProjectRequest,
 ) (contracts.Project, error) {
+	project, _, err := service.createProject(ctx, principal, "", request)
+	return project, err
+}
+
+// CreateProjectIdempotent creates or replays one exact administrative Project response.
+func (service *ControlPlaneService) CreateProjectIdempotent(
+	ctx context.Context,
+	principal contracts.Principal,
+	idempotencyKey string,
+	request contracts.CreateProjectRequest,
+) (contracts.Project, bool, error) {
+	if err := validateIdempotencyKey(idempotencyKey); err != nil {
+		return contracts.Project{}, false, err
+	}
+	return service.createProject(ctx, principal, idempotencyKey, request)
+}
+
+func (service *ControlPlaneService) createProject(
+	ctx context.Context,
+	principal contracts.Principal,
+	idempotencyKey string,
+	request contracts.CreateProjectRequest,
+) (contracts.Project, bool, error) {
 	if err := requireAdminScope(principal, contracts.ScopeAdminProjects); err != nil {
-		return contracts.Project{}, err
+		return contracts.Project{}, false, err
 	}
 	name := strings.TrimSpace(request.Name)
 	if name == "" || utf8.RuneCountInString(name) > 120 {
-		return contracts.Project{}, errors.New("SecondBox Project name must contain between 1 and 120 characters")
+		return contracts.Project{}, false, errors.New("SecondBox Project name must contain between 1 and 120 characters")
 	}
+	request.Name = name
 	now := service.now().UTC()
+	idempotency, err := service.adminIdempotency(
+		principal, "project.create", principal.ID, idempotencyKey, request, now,
+	)
+	if err != nil {
+		return contracts.Project{}, false, err
+	}
 	project := contracts.Project{
 		ID: service.newID("prj"), Name: name, State: contracts.ProjectStateActive,
 		Revision: 1, CreatedAt: now, UpdatedAt: now,
 	}
 	audit := service.newAudit(ctx, principal, "project.created", "project", project.ID, project.ID, now)
-	return service.store.CreateProject(ctx, project, service.defaultProjectQuota, audit)
+	project, result, err := service.store.CreateProject(
+		ctx, project, service.defaultProjectQuota, idempotency, audit,
+	)
+	return project, result.Replayed, err
 }
 
 // UpdateProject changes supplied Project fields under optimistic revision fencing.
@@ -204,25 +239,68 @@ func (service *ControlPlaneService) UpdateProject(
 	request contracts.UpdateProjectRequest,
 	expectedRevision int64,
 ) (contracts.Project, error) {
+	project, _, err := service.updateProject(
+		ctx, principal, projectID, "", request, expectedRevision,
+	)
+	return project, err
+}
+
+// UpdateProjectIdempotent updates or replays one exact revision-fenced Project response.
+func (service *ControlPlaneService) UpdateProjectIdempotent(
+	ctx context.Context,
+	principal contracts.Principal,
+	projectID string,
+	idempotencyKey string,
+	request contracts.UpdateProjectRequest,
+	expectedRevision int64,
+) (contracts.Project, bool, error) {
+	if err := validateIdempotencyKey(idempotencyKey); err != nil {
+		return contracts.Project{}, false, err
+	}
+	return service.updateProject(ctx, principal, projectID, idempotencyKey, request, expectedRevision)
+}
+
+func (service *ControlPlaneService) updateProject(
+	ctx context.Context,
+	principal contracts.Principal,
+	projectID string,
+	idempotencyKey string,
+	request contracts.UpdateProjectRequest,
+	expectedRevision int64,
+) (contracts.Project, bool, error) {
 	if err := requireAdminScope(principal, contracts.ScopeAdminProjects); err != nil {
-		return contracts.Project{}, err
+		return contracts.Project{}, false, err
 	}
 	if request.Name == nil && request.State == nil {
-		return contracts.Project{}, errors.New("SecondBox Project update requires a mutable field")
+		return contracts.Project{}, false, errors.New("SecondBox Project update requires a mutable field")
 	}
 	if request.Name != nil {
 		name := strings.TrimSpace(*request.Name)
 		if name == "" || utf8.RuneCountInString(name) > 120 {
-			return contracts.Project{}, errors.New("SecondBox Project name must contain between 1 and 120 characters")
+			return contracts.Project{}, false, errors.New("SecondBox Project name must contain between 1 and 120 characters")
 		}
 		request.Name = &name
 	}
 	if request.State != nil && *request.State != contracts.ProjectStateActive && *request.State != contracts.ProjectStateDisabled {
-		return contracts.Project{}, errors.New("SecondBox Project state must be active or disabled")
+		return contracts.Project{}, false, errors.New("SecondBox Project state must be active or disabled")
 	}
 	now := service.now().UTC()
+	idempotency, err := service.adminIdempotency(
+		principal, "project.update", projectID, idempotencyKey,
+		struct {
+			Request          contracts.UpdateProjectRequest `json:"request"`
+			ExpectedRevision int64                          `json:"expectedRevision"`
+		}{Request: request, ExpectedRevision: expectedRevision},
+		now,
+	)
+	if err != nil {
+		return contracts.Project{}, false, err
+	}
 	audit := service.newAudit(ctx, principal, "project.updated", "project", projectID, projectID, now)
-	return service.store.UpdateProject(ctx, projectID, request, expectedRevision, now, audit)
+	project, result, err := service.store.UpdateProject(
+		ctx, projectID, request, expectedRevision, now, idempotency, audit,
+	)
+	return project, result.Replayed, err
 }
 
 // GetProject returns one Project to bootstrap administration.
@@ -242,11 +320,12 @@ func (service *ControlPlaneService) ListProjects(
 	ctx context.Context,
 	principal contracts.Principal,
 	limit int,
-) ([]contracts.Project, error) {
+	cursor string,
+) (contracts.ProjectPage, error) {
 	if err := requireAdminScope(principal, contracts.ScopeAdminProjects); err != nil {
-		return nil, err
+		return contracts.ProjectPage{}, err
 	}
-	return service.store.ListProjects(ctx, boundedLimit(limit))
+	return service.store.ListProjects(ctx, boundedLimit(limit), cursor)
 }
 
 // CreateServiceAccount creates one project-scoped application identity.
@@ -256,20 +335,55 @@ func (service *ControlPlaneService) CreateServiceAccount(
 	projectID string,
 	request contracts.CreateServiceAccountRequest,
 ) (contracts.ServiceAccount, error) {
+	account, _, err := service.createServiceAccount(ctx, principal, projectID, "", request)
+	return account, err
+}
+
+// CreateServiceAccountIdempotent creates or replays one exact application identity response.
+func (service *ControlPlaneService) CreateServiceAccountIdempotent(
+	ctx context.Context,
+	principal contracts.Principal,
+	projectID string,
+	idempotencyKey string,
+	request contracts.CreateServiceAccountRequest,
+) (contracts.ServiceAccount, bool, error) {
+	if err := validateIdempotencyKey(idempotencyKey); err != nil {
+		return contracts.ServiceAccount{}, false, err
+	}
+	return service.createServiceAccount(ctx, principal, projectID, idempotencyKey, request)
+}
+
+func (service *ControlPlaneService) createServiceAccount(
+	ctx context.Context,
+	principal contracts.Principal,
+	projectID string,
+	idempotencyKey string,
+	request contracts.CreateServiceAccountRequest,
+) (contracts.ServiceAccount, bool, error) {
 	if err := requireAdminScope(principal, contracts.ScopeAdminProjects); err != nil {
-		return contracts.ServiceAccount{}, err
+		return contracts.ServiceAccount{}, false, err
 	}
 	if err := validateServiceAccountAuthority(request.Name, request.Scopes, request.ProfileGrants); err != nil {
-		return contracts.ServiceAccount{}, err
+		return contracts.ServiceAccount{}, false, err
 	}
+	request.Name = strings.TrimSpace(request.Name)
+	request.Scopes = sortedUnique(request.Scopes)
+	request.ProfileGrants = sortedUnique(request.ProfileGrants)
 	now := service.now().UTC()
+	idempotency, err := service.adminIdempotency(
+		principal, "service_account.create", projectID, idempotencyKey, request, now,
+	)
+	if err != nil {
+		return contracts.ServiceAccount{}, false, err
+	}
 	account := contracts.ServiceAccount{
-		ID: service.newID("svc"), ProjectID: projectID, Name: strings.TrimSpace(request.Name),
-		State: contracts.ServiceAccountStateActive, Scopes: sortedUnique(request.Scopes),
-		ProfileGrants: sortedUnique(request.ProfileGrants), Revision: 1, CreatedAt: now, UpdatedAt: now,
+		ID: service.newID("svc"), ProjectID: projectID, Name: request.Name,
+		State: contracts.ServiceAccountStateActive, Scopes: request.Scopes,
+		ProfileGrants: request.ProfileGrants, Revision: 1, CreatedAt: now, UpdatedAt: now,
 	}
 	audit := service.newAudit(ctx, principal, "service_account.created", "service_account", account.ID, projectID, now)
-	return service.store.CreateServiceAccount(ctx, account, audit)
+	account, result, err := service.store.CreateServiceAccount(ctx, account, idempotency, audit)
+	return account, result.Replayed, err
 }
 
 // UpdateServiceAccount changes supplied application authority fields.
@@ -280,7 +394,10 @@ func (service *ControlPlaneService) UpdateServiceAccount(
 	accountID string,
 	request contracts.UpdateServiceAccountRequest,
 ) (contracts.ServiceAccount, error) {
-	return service.updateServiceAccountAtRevision(ctx, principal, projectID, accountID, request, 0)
+	account, _, err := service.updateServiceAccountAtRevision(
+		ctx, principal, projectID, accountID, "", request, 0,
+	)
+	return account, err
 }
 
 // UpdateServiceAccountAtRevision applies HTTP If-Match fencing.
@@ -292,7 +409,28 @@ func (service *ControlPlaneService) UpdateServiceAccountAtRevision(
 	request contracts.UpdateServiceAccountRequest,
 	expectedRevision int64,
 ) (contracts.ServiceAccount, error) {
-	return service.updateServiceAccountAtRevision(ctx, principal, projectID, accountID, request, expectedRevision)
+	account, _, err := service.updateServiceAccountAtRevision(
+		ctx, principal, projectID, accountID, "", request, expectedRevision,
+	)
+	return account, err
+}
+
+// UpdateServiceAccountAtRevisionIdempotent updates or replays an exact fenced identity response.
+func (service *ControlPlaneService) UpdateServiceAccountAtRevisionIdempotent(
+	ctx context.Context,
+	principal contracts.Principal,
+	projectID string,
+	accountID string,
+	idempotencyKey string,
+	request contracts.UpdateServiceAccountRequest,
+	expectedRevision int64,
+) (contracts.ServiceAccount, bool, error) {
+	if err := validateIdempotencyKey(idempotencyKey); err != nil {
+		return contracts.ServiceAccount{}, false, err
+	}
+	return service.updateServiceAccountAtRevision(
+		ctx, principal, projectID, accountID, idempotencyKey, request, expectedRevision,
+	)
 }
 
 func (service *ControlPlaneService) updateServiceAccountAtRevision(
@@ -300,24 +438,29 @@ func (service *ControlPlaneService) updateServiceAccountAtRevision(
 	principal contracts.Principal,
 	projectID string,
 	accountID string,
+	idempotencyKey string,
 	request contracts.UpdateServiceAccountRequest,
 	expectedRevision int64,
-) (contracts.ServiceAccount, error) {
+) (contracts.ServiceAccount, bool, error) {
 	if err := requireAdminScope(principal, contracts.ScopeAdminProjects); err != nil {
-		return contracts.ServiceAccount{}, err
+		return contracts.ServiceAccount{}, false, err
 	}
 	if request.Name == nil && request.State == nil && request.Scopes == nil && request.ProfileGrants == nil {
-		return contracts.ServiceAccount{}, errors.New("SecondBox ServiceAccount update requires a mutable field")
+		return contracts.ServiceAccount{}, false, errors.New("SecondBox ServiceAccount update requires a mutable field")
 	}
 	if request.Name != nil && (strings.TrimSpace(*request.Name) == "" || utf8.RuneCountInString(*request.Name) > 120) {
-		return contracts.ServiceAccount{}, errors.New("SecondBox ServiceAccount name must contain between 1 and 120 characters")
+		return contracts.ServiceAccount{}, false, errors.New("SecondBox ServiceAccount name must contain between 1 and 120 characters")
+	}
+	if request.Name != nil {
+		name := strings.TrimSpace(*request.Name)
+		request.Name = &name
 	}
 	if request.State != nil && *request.State != contracts.ServiceAccountStateActive && *request.State != contracts.ServiceAccountStateDisabled {
-		return contracts.ServiceAccount{}, errors.New("SecondBox ServiceAccount state must be active or disabled")
+		return contracts.ServiceAccount{}, false, errors.New("SecondBox ServiceAccount state must be active or disabled")
 	}
 	if request.Scopes != nil {
 		if err := validateApplicationScopes(*request.Scopes); err != nil {
-			return contracts.ServiceAccount{}, err
+			return contracts.ServiceAccount{}, false, err
 		}
 		scopes := sortedUnique(*request.Scopes)
 		request.Scopes = &scopes
@@ -325,13 +468,27 @@ func (service *ControlPlaneService) updateServiceAccountAtRevision(
 	if request.ProfileGrants != nil {
 		grants := sortedUnique(*request.ProfileGrants)
 		if len(grants) > 128 {
-			return contracts.ServiceAccount{}, errors.New("SecondBox ServiceAccount profile grants must not exceed 128 entries")
+			return contracts.ServiceAccount{}, false, errors.New("SecondBox ServiceAccount profile grants must not exceed 128 entries")
 		}
 		request.ProfileGrants = &grants
 	}
 	now := service.now().UTC()
+	idempotency, err := service.adminIdempotency(
+		principal, "service_account.update", accountID, idempotencyKey,
+		struct {
+			Request          contracts.UpdateServiceAccountRequest `json:"request"`
+			ExpectedRevision int64                                 `json:"expectedRevision"`
+		}{Request: request, ExpectedRevision: expectedRevision},
+		now,
+	)
+	if err != nil {
+		return contracts.ServiceAccount{}, false, err
+	}
 	audit := service.newAudit(ctx, principal, "service_account.updated", "service_account", accountID, projectID, now)
-	return service.store.UpdateServiceAccount(ctx, projectID, accountID, request, expectedRevision, now, audit)
+	account, result, err := service.store.UpdateServiceAccount(
+		ctx, projectID, accountID, request, expectedRevision, now, idempotency, audit,
+	)
+	return account, result.Replayed, err
 }
 
 // GetServiceAccount returns one identity inside an explicit Project.
@@ -353,11 +510,12 @@ func (service *ControlPlaneService) ListServiceAccounts(
 	principal contracts.Principal,
 	projectID string,
 	limit int,
-) ([]contracts.ServiceAccount, error) {
+	cursor string,
+) (contracts.ServiceAccountPage, error) {
 	if err := requireAdminScope(principal, contracts.ScopeAdminProjects); err != nil {
-		return nil, err
+		return contracts.ServiceAccountPage{}, err
 	}
-	return service.store.ListServiceAccounts(ctx, projectID, boundedLimit(limit))
+	return service.store.ListServiceAccounts(ctx, projectID, boundedLimit(limit), cursor)
 }
 
 // CreateAPIKey returns plaintext exactly once while persisting only a keyed hash.
@@ -368,33 +526,80 @@ func (service *ControlPlaneService) CreateAPIKey(
 	accountID string,
 	request contracts.CreateAPIKeyRequest,
 ) (contracts.CreateAPIKeyResponse, error) {
+	response, _, err := service.createAPIKey(ctx, principal, projectID, accountID, "", request)
+	return response, err
+}
+
+// CreateAPIKeyIdempotent creates or replays the exact one-time credential response.
+func (service *ControlPlaneService) CreateAPIKeyIdempotent(
+	ctx context.Context,
+	principal contracts.Principal,
+	projectID string,
+	accountID string,
+	idempotencyKey string,
+	request contracts.CreateAPIKeyRequest,
+) (contracts.CreateAPIKeyResponse, bool, error) {
+	if err := validateIdempotencyKey(idempotencyKey); err != nil {
+		return contracts.CreateAPIKeyResponse{}, false, err
+	}
+	return service.createAPIKey(ctx, principal, projectID, accountID, idempotencyKey, request)
+}
+
+func (service *ControlPlaneService) createAPIKey(
+	ctx context.Context,
+	principal contracts.Principal,
+	projectID string,
+	accountID string,
+	idempotencyKey string,
+	request contracts.CreateAPIKeyRequest,
+) (contracts.CreateAPIKeyResponse, bool, error) {
 	if err := requireAdminScope(principal, contracts.ScopeAdminKeys); err != nil {
-		return contracts.CreateAPIKeyResponse{}, err
+		return contracts.CreateAPIKeyResponse{}, false, err
 	}
 	if strings.TrimSpace(request.Name) == "" || utf8.RuneCountInString(request.Name) > 120 {
-		return contracts.CreateAPIKeyResponse{}, errors.New("SecondBox APIKey name must contain between 1 and 120 characters")
+		return contracts.CreateAPIKeyResponse{}, false, errors.New("SecondBox APIKey name must contain between 1 and 120 characters")
 	}
 	if err := validateApplicationScopes(request.Scopes); err != nil {
-		return contracts.CreateAPIKeyResponse{}, err
+		return contracts.CreateAPIKeyResponse{}, false, err
 	}
+	request.Name = strings.TrimSpace(request.Name)
+	request.Scopes = sortedUnique(request.Scopes)
 	now := service.now().UTC()
 	if request.ExpiresAt != nil && !request.ExpiresAt.After(now) {
-		return contracts.CreateAPIKeyResponse{}, errors.New("SecondBox APIKey expiry must be in the future")
+		return contracts.CreateAPIKeyResponse{}, false, errors.New("SecondBox APIKey expiry must be in the future")
+	}
+	idempotency, err := service.adminIdempotency(
+		principal, "api_key.create", accountID, idempotencyKey, request, now,
+	)
+	if err != nil {
+		return contracts.CreateAPIKeyResponse{}, false, err
 	}
 	credential, prefix := service.issueCredential()
+	if idempotency.Key != "" {
+		idempotency.ResponseSecret, err = service.sealIdempotentCredential(idempotency, credential)
+		if err != nil {
+			return contracts.CreateAPIKeyResponse{}, false, err
+		}
+	}
 	key := contracts.APIKey{
-		ID: service.newID("key"), ServiceAccountID: accountID, Name: strings.TrimSpace(request.Name),
-		Prefix: prefix, State: contracts.APIKeyStateActive, Scopes: sortedUnique(request.Scopes),
+		ID: service.newID("key"), ServiceAccountID: accountID, Name: request.Name,
+		Prefix: prefix, State: contracts.APIKeyStateActive, Scopes: request.Scopes,
 		ExpiresAt: request.ExpiresAt, Revision: 1, CreatedAt: now,
 	}
 	audit := service.newAudit(ctx, principal, "api_key.created", "api_key", key.ID, projectID, now)
-	persisted, err := service.store.CreateAPIKey(ctx, ports.StoredAPIKey{
+	persisted, result, err := service.store.CreateAPIKey(ctx, ports.StoredAPIKey{
 		APIKey: key, ProjectID: projectID, CredentialHash: service.hashCredential(credential), UpdatedAt: now,
-	}, audit)
+	}, idempotency, audit)
 	if err != nil {
-		return contracts.CreateAPIKeyResponse{}, err
+		return contracts.CreateAPIKeyResponse{}, false, err
 	}
-	return contracts.CreateAPIKeyResponse{APIKey: persisted, Credential: credential}, nil
+	if result.Replayed {
+		credential, err = service.openIdempotentCredential(idempotency, result.ResponseSecret)
+		if err != nil {
+			return contracts.CreateAPIKeyResponse{}, false, err
+		}
+	}
+	return contracts.CreateAPIKeyResponse{APIKey: persisted, Credential: credential}, result.Replayed, nil
 }
 
 // RotateAPIKey invalidates old plaintext and returns one replacement credential.
@@ -405,19 +610,90 @@ func (service *ControlPlaneService) RotateAPIKey(
 	accountID string,
 	keyID string,
 ) (contracts.CreateAPIKeyResponse, error) {
-	if err := requireAdminScope(principal, contracts.ScopeAdminKeys); err != nil {
-		return contracts.CreateAPIKeyResponse{}, err
+	response, _, err := service.rotateAPIKeyAtRevision(
+		ctx, principal, projectID, accountID, keyID, "", 0,
+	)
+	return response, err
+}
+
+// RotateAPIKeyAtRevision applies HTTP If-Match fencing before replacing credential authority.
+func (service *ControlPlaneService) RotateAPIKeyAtRevision(
+	ctx context.Context,
+	principal contracts.Principal,
+	projectID string,
+	accountID string,
+	keyID string,
+	expectedRevision int64,
+) (contracts.CreateAPIKeyResponse, error) {
+	response, _, err := service.rotateAPIKeyAtRevision(
+		ctx, principal, projectID, accountID, keyID, "", expectedRevision,
+	)
+	return response, err
+}
+
+// RotateAPIKeyAtRevisionIdempotent replaces or replays an exact fenced credential response.
+func (service *ControlPlaneService) RotateAPIKeyAtRevisionIdempotent(
+	ctx context.Context,
+	principal contracts.Principal,
+	projectID string,
+	accountID string,
+	keyID string,
+	idempotencyKey string,
+	expectedRevision int64,
+) (contracts.CreateAPIKeyResponse, bool, error) {
+	if err := validateIdempotencyKey(idempotencyKey); err != nil {
+		return contracts.CreateAPIKeyResponse{}, false, err
 	}
-	credential, prefix := service.issueCredential()
+	return service.rotateAPIKeyAtRevision(
+		ctx, principal, projectID, accountID, keyID, idempotencyKey, expectedRevision,
+	)
+}
+
+func (service *ControlPlaneService) rotateAPIKeyAtRevision(
+	ctx context.Context,
+	principal contracts.Principal,
+	projectID string,
+	accountID string,
+	keyID string,
+	idempotencyKey string,
+	expectedRevision int64,
+) (contracts.CreateAPIKeyResponse, bool, error) {
+	if err := requireAdminScope(principal, contracts.ScopeAdminKeys); err != nil {
+		return contracts.CreateAPIKeyResponse{}, false, err
+	}
 	now := service.now().UTC()
-	audit := service.newAudit(ctx, principal, "api_key.rotated", "api_key", keyID, projectID, now)
-	key, err := service.store.RotateAPIKey(
-		ctx, projectID, accountID, keyID, prefix, service.hashCredential(credential), now, audit,
+	idempotency, err := service.adminIdempotency(
+		principal, "api_key.rotate", keyID, idempotencyKey,
+		struct {
+			ExpectedRevision int64 `json:"expectedRevision"`
+		}{ExpectedRevision: expectedRevision},
+		now,
 	)
 	if err != nil {
-		return contracts.CreateAPIKeyResponse{}, err
+		return contracts.CreateAPIKeyResponse{}, false, err
 	}
-	return contracts.CreateAPIKeyResponse{APIKey: key, Credential: credential}, nil
+	credential, prefix := service.issueCredential()
+	if idempotency.Key != "" {
+		idempotency.ResponseSecret, err = service.sealIdempotentCredential(idempotency, credential)
+		if err != nil {
+			return contracts.CreateAPIKeyResponse{}, false, err
+		}
+	}
+	audit := service.newAudit(ctx, principal, "api_key.rotated", "api_key", keyID, projectID, now)
+	key, result, err := service.store.RotateAPIKey(
+		ctx, projectID, accountID, keyID, prefix, service.hashCredential(credential),
+		expectedRevision, now, idempotency, audit,
+	)
+	if err != nil {
+		return contracts.CreateAPIKeyResponse{}, false, err
+	}
+	if result.Replayed {
+		credential, err = service.openIdempotentCredential(idempotency, result.ResponseSecret)
+		if err != nil {
+			return contracts.CreateAPIKeyResponse{}, false, err
+		}
+	}
+	return contracts.CreateAPIKeyResponse{APIKey: key, Credential: credential}, result.Replayed, nil
 }
 
 // RevokeAPIKey immediately prevents future admission and lease renewal.
@@ -428,12 +704,73 @@ func (service *ControlPlaneService) RevokeAPIKey(
 	accountID string,
 	keyID string,
 ) (contracts.APIKey, error) {
+	key, _, err := service.revokeAPIKeyAtRevision(
+		ctx, principal, projectID, accountID, keyID, "", 0,
+	)
+	return key, err
+}
+
+// RevokeAPIKeyAtRevision applies HTTP If-Match fencing before invalidating credential authority.
+func (service *ControlPlaneService) RevokeAPIKeyAtRevision(
+	ctx context.Context,
+	principal contracts.Principal,
+	projectID string,
+	accountID string,
+	keyID string,
+	expectedRevision int64,
+) (contracts.APIKey, error) {
+	key, _, err := service.revokeAPIKeyAtRevision(
+		ctx, principal, projectID, accountID, keyID, "", expectedRevision,
+	)
+	return key, err
+}
+
+// RevokeAPIKeyAtRevisionIdempotent revokes or replays an exact fenced APIKey response.
+func (service *ControlPlaneService) RevokeAPIKeyAtRevisionIdempotent(
+	ctx context.Context,
+	principal contracts.Principal,
+	projectID string,
+	accountID string,
+	keyID string,
+	idempotencyKey string,
+	expectedRevision int64,
+) (contracts.APIKey, bool, error) {
+	if err := validateIdempotencyKey(idempotencyKey); err != nil {
+		return contracts.APIKey{}, false, err
+	}
+	return service.revokeAPIKeyAtRevision(
+		ctx, principal, projectID, accountID, keyID, idempotencyKey, expectedRevision,
+	)
+}
+
+func (service *ControlPlaneService) revokeAPIKeyAtRevision(
+	ctx context.Context,
+	principal contracts.Principal,
+	projectID string,
+	accountID string,
+	keyID string,
+	idempotencyKey string,
+	expectedRevision int64,
+) (contracts.APIKey, bool, error) {
 	if err := requireAdminScope(principal, contracts.ScopeAdminKeys); err != nil {
-		return contracts.APIKey{}, err
+		return contracts.APIKey{}, false, err
 	}
 	now := service.now().UTC()
+	idempotency, err := service.adminIdempotency(
+		principal, "api_key.revoke", keyID, idempotencyKey,
+		struct {
+			ExpectedRevision int64 `json:"expectedRevision"`
+		}{ExpectedRevision: expectedRevision},
+		now,
+	)
+	if err != nil {
+		return contracts.APIKey{}, false, err
+	}
 	audit := service.newAudit(ctx, principal, "api_key.revoked", "api_key", keyID, projectID, now)
-	return service.store.RevokeAPIKey(ctx, projectID, accountID, keyID, now, audit)
+	key, result, err := service.store.RevokeAPIKey(
+		ctx, projectID, accountID, keyID, expectedRevision, now, idempotency, audit,
+	)
+	return key, result.Replayed, err
 }
 
 // ListAPIKeys returns non-secret key metadata and last-use evidence.
@@ -442,11 +779,13 @@ func (service *ControlPlaneService) ListAPIKeys(
 	principal contracts.Principal,
 	projectID string,
 	accountID string,
-) ([]contracts.APIKey, error) {
+	limit int,
+	cursor string,
+) (contracts.APIKeyPage, error) {
 	if err := requireAdminScope(principal, contracts.ScopeAdminKeys); err != nil {
-		return nil, err
+		return contracts.APIKeyPage{}, err
 	}
-	return service.store.ListAPIKeys(ctx, projectID, accountID, 200)
+	return service.store.ListAPIKeys(ctx, projectID, accountID, boundedLimit(limit), cursor)
 }
 
 // CreateProfile creates one explicit Profile and immutable revision.
@@ -455,16 +794,45 @@ func (service *ControlPlaneService) CreateProfile(
 	principal contracts.Principal,
 	request contracts.CreateProfileRequest,
 ) (contracts.Profile, error) {
+	profile, _, err := service.createProfile(ctx, principal, "", request)
+	return profile, err
+}
+
+// CreateProfileIdempotent creates or replays one exact Profile response.
+func (service *ControlPlaneService) CreateProfileIdempotent(
+	ctx context.Context,
+	principal contracts.Principal,
+	idempotencyKey string,
+	request contracts.CreateProfileRequest,
+) (contracts.Profile, bool, error) {
+	if err := validateIdempotencyKey(idempotencyKey); err != nil {
+		return contracts.Profile{}, false, err
+	}
+	return service.createProfile(ctx, principal, idempotencyKey, request)
+}
+
+func (service *ControlPlaneService) createProfile(
+	ctx context.Context,
+	principal contracts.Principal,
+	idempotencyKey string,
+	request contracts.CreateProfileRequest,
+) (contracts.Profile, bool, error) {
 	if err := requireAdminScope(principal, contracts.ScopeAdminProfiles); err != nil {
-		return contracts.Profile{}, err
+		return contracts.Profile{}, false, err
 	}
 	if !profileNamePattern.MatchString(request.Name) {
-		return contracts.Profile{}, errors.New("SecondBox Profile name must match ^[a-z][a-z0-9-]{0,79}$")
+		return contracts.Profile{}, false, errors.New("SecondBox Profile name must match ^[a-z][a-z0-9-]{0,79}$")
 	}
 	if err := validateProfileRevisionSpec(request.Spec); err != nil {
-		return contracts.Profile{}, err
+		return contracts.Profile{}, false, err
 	}
 	now := service.now().UTC()
+	idempotency, err := service.adminIdempotency(
+		principal, "profile.create", principal.ID, idempotencyKey, request, now,
+	)
+	if err != nil {
+		return contracts.Profile{}, false, err
+	}
 	profile := contracts.Profile{
 		Name: request.Name, State: contracts.ProfileStateEnabled, Revision: 1,
 		CreatedAt: now, UpdatedAt: now,
@@ -473,7 +841,10 @@ func (service *ControlPlaneService) CreateProfile(
 		},
 	}
 	audit := service.newAudit(ctx, principal, "profile.created", "profile", profile.Name, "", now)
-	return service.store.CreateProfile(ctx, profile, service.defaultProfileQuota, audit)
+	profile, result, err := service.store.CreateProfile(
+		ctx, profile, service.defaultProfileQuota, idempotency, audit,
+	)
+	return profile, result.Replayed, err
 }
 
 // ReviseProfile appends immutable policy without mutating pinned Sandboxes.
@@ -483,7 +854,8 @@ func (service *ControlPlaneService) ReviseProfile(
 	name string,
 	request contracts.ReviseProfileRequest,
 ) (contracts.Profile, error) {
-	return service.reviseProfileAtRevision(ctx, principal, name, request, 0)
+	profile, _, err := service.reviseProfileAtRevision(ctx, principal, name, "", request, 0)
+	return profile, err
 }
 
 // ReviseProfileAtRevision applies HTTP If-Match fencing before appending policy.
@@ -494,28 +866,63 @@ func (service *ControlPlaneService) ReviseProfileAtRevision(
 	request contracts.ReviseProfileRequest,
 	expectedRevision int64,
 ) (contracts.Profile, error) {
-	return service.reviseProfileAtRevision(ctx, principal, name, request, expectedRevision)
+	profile, _, err := service.reviseProfileAtRevision(
+		ctx, principal, name, "", request, expectedRevision,
+	)
+	return profile, err
+}
+
+// ReviseProfileAtRevisionIdempotent appends or replays one exact immutable Profile revision.
+func (service *ControlPlaneService) ReviseProfileAtRevisionIdempotent(
+	ctx context.Context,
+	principal contracts.Principal,
+	name string,
+	idempotencyKey string,
+	request contracts.ReviseProfileRequest,
+	expectedRevision int64,
+) (contracts.Profile, bool, error) {
+	if err := validateIdempotencyKey(idempotencyKey); err != nil {
+		return contracts.Profile{}, false, err
+	}
+	return service.reviseProfileAtRevision(
+		ctx, principal, name, idempotencyKey, request, expectedRevision,
+	)
 }
 
 func (service *ControlPlaneService) reviseProfileAtRevision(
 	ctx context.Context,
 	principal contracts.Principal,
 	name string,
+	idempotencyKey string,
 	request contracts.ReviseProfileRequest,
 	expectedRevision int64,
-) (contracts.Profile, error) {
+) (contracts.Profile, bool, error) {
 	if err := requireAdminScope(principal, contracts.ScopeAdminProfiles); err != nil {
-		return contracts.Profile{}, err
+		return contracts.Profile{}, false, err
 	}
 	if err := validateProfileRevisionSpec(request.Spec); err != nil {
-		return contracts.Profile{}, err
+		return contracts.Profile{}, false, err
 	}
 	now := service.now().UTC()
+	idempotency, err := service.adminIdempotency(
+		principal, "profile.revise", name, idempotencyKey,
+		struct {
+			Request          contracts.ReviseProfileRequest `json:"request"`
+			ExpectedRevision int64                          `json:"expectedRevision"`
+		}{Request: request, ExpectedRevision: expectedRevision},
+		now,
+	)
+	if err != nil {
+		return contracts.Profile{}, false, err
+	}
 	revision := contracts.ProfileRevision{
 		ID: service.newID("prv"), Spec: request.Spec, CreatedAt: now,
 	}
 	audit := service.newAudit(ctx, principal, "profile.revised", "profile", name, "", now)
-	return service.store.ReviseProfile(ctx, name, revision, expectedRevision, now, audit)
+	profile, result, err := service.store.ReviseProfile(
+		ctx, name, revision, expectedRevision, now, idempotency, audit,
+	)
+	return profile, result.Replayed, err
 }
 
 // DisableProfile blocks future creation without rewriting pinned Sandboxes.
@@ -524,7 +931,8 @@ func (service *ControlPlaneService) DisableProfile(
 	principal contracts.Principal,
 	name string,
 ) (contracts.Profile, error) {
-	return service.disableProfileAtRevision(ctx, principal, name, 0)
+	profile, _, err := service.disableProfileAtRevision(ctx, principal, name, "", 0)
+	return profile, err
 }
 
 // DisableProfileAtRevision applies HTTP If-Match fencing before disabling creation.
@@ -534,21 +942,54 @@ func (service *ControlPlaneService) DisableProfileAtRevision(
 	name string,
 	expectedRevision int64,
 ) (contracts.Profile, error) {
-	return service.disableProfileAtRevision(ctx, principal, name, expectedRevision)
+	profile, _, err := service.disableProfileAtRevision(
+		ctx, principal, name, "", expectedRevision,
+	)
+	return profile, err
+}
+
+// DisableProfileAtRevisionIdempotent disables or replays one exact fenced Profile response.
+func (service *ControlPlaneService) DisableProfileAtRevisionIdempotent(
+	ctx context.Context,
+	principal contracts.Principal,
+	name string,
+	idempotencyKey string,
+	expectedRevision int64,
+) (contracts.Profile, bool, error) {
+	if err := validateIdempotencyKey(idempotencyKey); err != nil {
+		return contracts.Profile{}, false, err
+	}
+	return service.disableProfileAtRevision(
+		ctx, principal, name, idempotencyKey, expectedRevision,
+	)
 }
 
 func (service *ControlPlaneService) disableProfileAtRevision(
 	ctx context.Context,
 	principal contracts.Principal,
 	name string,
+	idempotencyKey string,
 	expectedRevision int64,
-) (contracts.Profile, error) {
+) (contracts.Profile, bool, error) {
 	if err := requireAdminScope(principal, contracts.ScopeAdminProfiles); err != nil {
-		return contracts.Profile{}, err
+		return contracts.Profile{}, false, err
 	}
 	now := service.now().UTC()
+	idempotency, err := service.adminIdempotency(
+		principal, "profile.disable", name, idempotencyKey,
+		struct {
+			ExpectedRevision int64 `json:"expectedRevision"`
+		}{ExpectedRevision: expectedRevision},
+		now,
+	)
+	if err != nil {
+		return contracts.Profile{}, false, err
+	}
 	audit := service.newAudit(ctx, principal, "profile.disabled", "profile", name, "", now)
-	return service.store.DisableProfile(ctx, name, expectedRevision, now, audit)
+	profile, result, err := service.store.DisableProfile(
+		ctx, name, expectedRevision, now, idempotency, audit,
+	)
+	return profile, result.Replayed, err
 }
 
 // GetProfile returns a Profile head and its current immutable revision.
@@ -568,11 +1009,12 @@ func (service *ControlPlaneService) ListProfiles(
 	ctx context.Context,
 	principal contracts.Principal,
 	limit int,
-) ([]contracts.Profile, error) {
+	cursor string,
+) (contracts.ProfilePage, error) {
 	if err := requireAdminScope(principal, contracts.ScopeAdminProfiles); err != nil {
-		return nil, err
+		return contracts.ProfilePage{}, err
 	}
-	return service.store.ListProfiles(ctx, boundedLimit(limit))
+	return service.store.ListProfiles(ctx, boundedLimit(limit), cursor)
 }
 
 // CreateSandbox transactionally resolves authorization, compatibility, quota, and idempotency.
@@ -662,11 +1104,12 @@ func (service *ControlPlaneService) ListSandboxes(
 	ctx context.Context,
 	principal contracts.Principal,
 	limit int,
-) ([]contracts.Sandbox, error) {
+	cursor string,
+) (contracts.SandboxPage, error) {
 	if !principal.HasScope(contracts.ScopeSandboxRead) || principal.ProjectID == "" {
-		return nil, ports.ErrAuthorizationDenied
+		return contracts.SandboxPage{}, ports.ErrAuthorizationDenied
 	}
-	return service.store.ListSandboxes(ctx, principal.ProjectID, boundedLimit(limit))
+	return service.store.ListSandboxes(ctx, principal.ProjectID, boundedLimit(limit), cursor)
 }
 
 // GetOperation returns one durable mutation observation inside the authenticated Project.
@@ -1196,6 +1639,91 @@ func (service *ControlPlaneService) hashCredential(credential string) []byte {
 	hasher := hmac.New(sha256.New, service.apiKeyHashSecret)
 	_, _ = hasher.Write([]byte(credential))
 	return hasher.Sum(nil)
+}
+
+func (service *ControlPlaneService) adminIdempotency(
+	principal contracts.Principal,
+	operation string,
+	targetID string,
+	idempotencyKey string,
+	request any,
+	now time.Time,
+) (ports.AdminIdempotencyInput, error) {
+	if idempotencyKey == "" {
+		return ports.AdminIdempotencyInput{}, nil
+	}
+	if err := validateIdempotencyKey(idempotencyKey); err != nil {
+		return ports.AdminIdempotencyInput{}, err
+	}
+	requestHash, err := hashCanonicalRequest(request)
+	if err != nil {
+		return ports.AdminIdempotencyInput{}, err
+	}
+	return ports.AdminIdempotencyInput{
+		ProjectID: principal.ProjectID, Operation: operation, TargetID: targetID,
+		Key: idempotencyKey, RequestHash: requestHash,
+		Now: now.UTC(), Ends: now.UTC().Add(idempotencyRetention),
+	}, nil
+}
+
+func (service *ControlPlaneService) sealIdempotentCredential(
+	idempotency ports.AdminIdempotencyInput,
+	credential string,
+) ([]byte, error) {
+	aead, err := service.idempotencyCredentialAEAD()
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("SecondBox idempotency credential nonce generation failed: %w", err)
+	}
+	sealed := aead.Seal(
+		nil, nonce, []byte(credential), adminIdempotencyAssociatedData(idempotency),
+	)
+	return append(nonce, sealed...), nil
+}
+
+func (service *ControlPlaneService) openIdempotentCredential(
+	idempotency ports.AdminIdempotencyInput,
+	sealed []byte,
+) (string, error) {
+	aead, err := service.idempotencyCredentialAEAD()
+	if err != nil {
+		return "", err
+	}
+	if len(sealed) < aead.NonceSize() {
+		return "", errors.New("SecondBox idempotency credential response is invalid")
+	}
+	plaintext, err := aead.Open(
+		nil, sealed[:aead.NonceSize()], sealed[aead.NonceSize():],
+		adminIdempotencyAssociatedData(idempotency),
+	)
+	if err != nil {
+		return "", fmt.Errorf("SecondBox idempotency credential response authentication failed: %w", err)
+	}
+	return string(plaintext), nil
+}
+
+func (service *ControlPlaneService) idempotencyCredentialAEAD() (cipher.AEAD, error) {
+	keyDerivation := hmac.New(sha256.New, service.apiKeyHashSecret)
+	_, _ = keyDerivation.Write([]byte("SecondBox admin idempotency credential v1"))
+	block, err := aes.NewCipher(keyDerivation.Sum(nil))
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox idempotency credential cipher initialization failed: %w", err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox idempotency credential AEAD initialization failed: %w", err)
+	}
+	return aead, nil
+}
+
+func adminIdempotencyAssociatedData(idempotency ports.AdminIdempotencyInput) []byte {
+	return []byte(
+		idempotency.ProjectID + "\x1f" + idempotency.Operation + "\x1f" +
+			idempotency.TargetID + "\x1f" + idempotency.Key + "\x1f" + idempotency.RequestHash,
+	)
 }
 
 func (service *ControlPlaneService) newAudit(

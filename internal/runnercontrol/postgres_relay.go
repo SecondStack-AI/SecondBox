@@ -83,6 +83,21 @@ type DataPlaneAdmission struct {
 	Now                     time.Time
 }
 
+// PublicDataPlaneCancellation binds one HTTP cancellation key to an exact session response.
+type PublicDataPlaneCancellation struct {
+	ProjectID        string
+	SandboxID        string
+	SessionID        string
+	SessionKind      string
+	SessionOperation string
+	IdempotencyKey   string
+	RequestHash      string
+	Reason           string
+	Generation       int64
+	Now              time.Time
+	IdempotencyEnds  time.Time
+}
+
 // DataPlaneSession is the durable public-operation projection.
 type DataPlaneSession struct {
 	ID                    string
@@ -445,17 +460,27 @@ func (relay *PostgresFrameRelay) ClaimOutboundFrame(
 		return RelayDelivery{}, false, fmt.Errorf("SecondBox relay claim transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	liveCredential, err := lockLiveRelayConnectionCredential(
+		ctx, tx, runnerID, connectionID,
+	)
+	if err != nil {
+		return RelayDelivery{}, false, err
+	}
+	if !liveCredential {
+		if err := tx.Commit(ctx); err != nil {
+			return RelayDelivery{}, false, fmt.Errorf("SecondBox inactive relay claim commit: %w", err)
+		}
+		return RelayDelivery{}, false, nil
+	}
 	var id string
 	var payload []byte
 	err = tx.QueryRow(ctx, `
 		SELECT frame.id,frame.payload
 		FROM secondbox.data_plane_frames AS frame
 		JOIN secondbox.data_plane_sessions AS session ON session.id=frame.session_id
-		JOIN secondbox.runner_connections AS connection
-		  ON connection.id=$2 AND connection.runner_id=$1 AND connection.state='active'
 		WHERE frame.direction='outbound'
 		  AND frame.state IN ('pending','claimed')
-		  AND (frame.state='pending' OR frame.claim_expires_at<=$3)
+		  AND (frame.state='pending' OR frame.claim_expires_at<=$2)
 		  AND session.runner_id=$1
 		  AND session.state IN ('pending','running','cancelling')
 		  AND NOT EXISTS (
@@ -466,7 +491,7 @@ func (relay *PostgresFrameRelay) ClaimOutboundFrame(
 		ORDER BY frame.priority,frame.created_at,frame.id
 		FOR UPDATE OF frame SKIP LOCKED
 		LIMIT 1`,
-		runnerID, connectionID, now.UTC(),
+		runnerID, now.UTC(),
 	).Scan(&id, &payload)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RelayDelivery{}, false, nil
@@ -505,6 +530,15 @@ func (relay *PostgresFrameRelay) MarkOutboundFrameDelivered(
 		return fmt.Errorf("SecondBox outbound relay delivery transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	liveCredential, err := lockLiveRelayConnectionCredential(
+		ctx, tx, "", connectionID,
+	)
+	if err != nil {
+		return err
+	}
+	if !liveCredential {
+		return ErrRelayDeliveryClaim
+	}
 	tag, err := tx.Exec(ctx, `
 		UPDATE secondbox.data_plane_frames
 		SET state='delivered',delivered_at=$3,updated_at=$3
@@ -559,6 +593,15 @@ func (relay *PostgresFrameRelay) PersistInboundFrame(
 		return false, fmt.Errorf("SecondBox inbound relay transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	liveCredential, err := lockLiveRelayConnectionCredential(
+		ctx, tx, input.RunnerID, input.ConnectionID,
+	)
+	if err != nil {
+		return false, err
+	}
+	if !liveCredential {
+		return false, ErrRelayFence
+	}
 	session, nextSequence, inboundBytes, err := lockInboundSession(
 		ctx, tx, input.RunnerID, input.ConnectionID, identity,
 	)
@@ -626,6 +669,45 @@ func (relay *PostgresFrameRelay) PersistInboundFrame(
 		return false, fmt.Errorf("SecondBox inbound relay commit: %w", err)
 	}
 	return true, nil
+}
+
+// lockLiveRelayConnectionCredential linearizes data-plane access with runner credential revocation.
+func lockLiveRelayConnectionCredential(
+	ctx context.Context,
+	tx pgx.Tx,
+	runnerID string,
+	connectionID string,
+) (bool, error) {
+	var credentialState string
+	err := tx.QueryRow(ctx, `
+		SELECT credential.state
+		FROM secondbox.runner_connections AS connection
+		JOIN secondbox.runner_credentials AS credential
+		  ON credential.serial_number=connection.credential_serial
+		WHERE connection.id=$1 AND ($2='' OR connection.runner_id=$2)
+		FOR SHARE OF credential`,
+		connectionID, runnerID,
+	).Scan(&credentialState)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("SecondBox relay credential authority lookup: %w", err)
+	}
+	var connectionState string
+	if err := tx.QueryRow(ctx, `
+		SELECT state FROM secondbox.runner_connections
+		WHERE id=$1 AND ($2='' OR runner_id=$2)
+		FOR SHARE`,
+		connectionID, runnerID,
+	).Scan(&connectionState); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("SecondBox relay connection authority lookup: %w", err)
+	}
+	return connectionState == "active" &&
+		(credentialState == "active" || credentialState == "retiring"), nil
 }
 
 type inboundIdentity struct {

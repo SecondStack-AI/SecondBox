@@ -184,11 +184,13 @@ func TestAPIKeyRotationRevocationIsolationAndAudit(t *testing.T) {
 		t.Fatalf("cross-project GetSandbox error = %v, want ErrSandboxNotFound", err)
 	}
 
-	keys, err := controlPlane.ListAPIKeys(t.Context(), admin, projectA.ID, accountA.ID)
-	if err != nil || len(keys) != 1 || keys[0].LastUsedAt == nil {
-		t.Fatalf("API key last-use evidence = %#v, %v", keys, err)
+	keyPage, err := controlPlane.ListAPIKeys(t.Context(), admin, projectA.ID, accountA.ID, 200, "")
+	if err != nil || len(keyPage.Items) != 1 || keyPage.Items[0].LastUsedAt == nil {
+		t.Fatalf("API key last-use evidence = %#v, %v", keyPage, err)
 	}
-	rotated, err := controlPlane.RotateAPIKey(t.Context(), admin, projectA.ID, accountA.ID, keys[0].ID)
+	rotated, err := controlPlane.RotateAPIKey(
+		t.Context(), admin, projectA.ID, accountA.ID, keyPage.Items[0].ID,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

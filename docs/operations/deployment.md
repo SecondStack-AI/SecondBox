@@ -26,7 +26,9 @@ just deploy-bootstrap .tmp/secondbox-deploy/environment
 just deploy-validate .tmp/secondbox-deploy/environment
 ```
 
-Bootstrap copies `deploy/environment.example` when the target does not exist, generates independent PostgreSQL, RustFS, bootstrap-operator, API-key hashing, and runner-enrollment hash credentials, and creates a deployment-local Runner CA and server certificate. The environment and private keys use mode `0600`; the PKI directory uses `0700`; no secret value is printed. Repeating the command does not change an already bootstrapped file. A symbolic link, non-regular target, or pre-existing untracked PKI directory is rejected.
+Bootstrap copies `deploy/environment.example` when the target does not exist, generates independent PostgreSQL, RustFS, bootstrap-operator, API-key hashing, and runner-enrollment hash credentials, and creates a deployment-local Runner CA and server certificate. In development mode it also replaces the catalog placeholder with a deployment-local catalog containing one clearly development-only trust record, which is sufficient for control-plane startup but is not Runner or release qualification. The environment and private keys use mode `0600`; the catalog uses `0644` so the unprivileged control-plane container can read its non-secret trust metadata; the PKI directory uses `0700`; no secret value is printed. Repeating the command does not change an already bootstrapped file. A symbolic link, non-regular target, or pre-existing untracked PKI directory is rejected.
+
+Production bootstrap never generates asset trust inventory. Set `SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH` to an existing operator-supplied release catalog before bootstrapping a production environment. The validator and control plane fail when that file is absent, and no deployment command creates a production bucket.
 
 Set `SECONDBOX_RUNNER_SERVER_NAME` in the template copy before the first bootstrap when Runners will use a remote DNS name or IPv4 address. Bootstrap validates that value and places exactly that identity in the server certificate SAN. It does not add a hidden loopback or Compose alias. Runners set the same value as `SECONDBOX_RUNNER_CONTROL_PLANE_SERVER_NAME`.
 
@@ -78,15 +80,17 @@ The current negotiated Runner feature inventory contains Exec, File, PTY, eviden
 
 ## Development Compose
 
-Build the control-plane image and start dependencies before the API:
+Build the control-plane image, then prepare the development dependencies and inventory before the API:
 
 ```sh
 docker build --tag secondbox-control-plane:development .
-docker compose --env-file .tmp/secondbox-deploy/environment --file deploy/compose.yml --profile development up -d postgres object-store
+just deploy-development-prepare .tmp/secondbox-deploy/environment
 docker compose --env-file .tmp/secondbox-deploy/environment --file deploy/compose.yml up -d control-plane
 ```
 
-The development profile binds API, PostgreSQL, RustFS S3 API, and RustFS console ports to `127.0.0.1`. PostgreSQL applies `migrations/postgres/0001_secondbox.sql` when initializing a new empty volume. Before opening any store or listener, `secondboxd` then validates and applies the same embedded ordered migration lineage under a PostgreSQL advisory lock. A raw Compose baseline with an empty migration ledger is adopted only when its complete catalog fingerprint exactly matches the frozen initial-v1 catalog; partial or extra schema objects fail startup. RustFS starts in single-node/single-disk development mode with generated root credentials. The configured bucket must already exist before checkpoint or Artifact operations; `secondboxd` consumes it but does not create provider inventory.
+`just deploy-development-prepare` calls `deploy/bin/prepare-development-inventory.sh`. It validates the complete environment, refuses every mode other than `development`, waits the explicitly configured number of seconds for PostgreSQL and RustFS, and runs the pinned `SECONDBOX_OBJECT_STORE_CLIENT_IMAGE` once to create exactly `SECONDBOX_OBJECT_STORE_BUCKET`. Bucket creation uses `--ignore-existing`, so repeating the command preserves existing objects and proves the bucket remains addressable. It does not start the control plane.
+
+The development profile binds API, PostgreSQL, RustFS S3 API, and RustFS console ports to `127.0.0.1`. PostgreSQL applies `migrations/postgres/0001_secondbox.sql` when initializing a new empty volume. Its health probe uses TCP so the temporary Unix-socket-only initialization server cannot make preparation return before the final database server starts. Before opening any store or listener, `secondboxd` then validates and applies the same embedded ordered migration lineage under a PostgreSQL advisory lock. A raw Compose baseline with an empty migration ledger is adopted only when its complete catalog fingerprint exactly matches the frozen initial-v1 catalog; partial or extra schema objects fail startup. RustFS starts in single-node/single-disk development mode with generated root credentials. `secondboxd` consumes the prepared bucket but does not create provider inventory itself.
 
 The control-plane container runs as UID/GID 65532, drops all Linux capabilities, sets `no-new-privileges`, uses a read-only root filesystem and bounded `/tmp`, and has no KVM, TUN/TAP, host cgroup, host path, or container-engine socket. Its only writable mount is the JSON log volume. A short-lived root initializer copies the host-owned mode `0600` Runner keys into a dedicated named volume, assigns them to UID 65532, and exits; the control plane mounts that volume read-only. The initializer receives only `CHOWN`, `DAC_OVERRIDE`, and `FOWNER`.
 
@@ -122,6 +126,7 @@ Set `SECONDBOX_DEPLOYMENT_MODE=production` and supply:
 - an external PostgreSQL URL with TLS verification enabled;
 - an HTTPS public base URL behind an explicitly configured reverse proxy or ingress;
 - an HTTPS S3-compatible endpoint and deployment-specific bucket metadata;
+- an existing deployment-specific bucket and an operator-supplied signed-asset catalog;
 - explicit HTTP and Runner gRPC bind addresses and published ports, timeouts, log path, protocol window, enabled Runner features, and every project/profile quota.
 
 `deploy/bin/validate-environment.sh` rejects mutable production image references, plaintext production object-store URLs, `sslmode=disable`, non-external HTTP TLS termination, placeholders, missing values, duplicate keys, weak file permissions, reused trust-boundary credentials, invalid Runner certificates, and protocol ranges with minimum greater than maximum. The external HTTP proxy must preserve `X-Request-ID`, enforce request and response bounds, and use the readiness endpoint rather than liveness for traffic admission. Runner gRPC terminates its own mTLS and must not be exposed through a proxy that replaces client-certificate identity.

@@ -163,24 +163,48 @@ func (store *PostgresControlPlaneStore) GetRunnerPool(
 func (store *PostgresControlPlaneStore) ListRunnerPools(
 	ctx context.Context,
 	limit int,
-) ([]contracts.RunnerPool, error) {
-	rows, err := store.pool.Query(ctx, runnerPoolSelect+` ORDER BY created_at,name LIMIT $1`, limit)
+	cursor string,
+) (contracts.RunnerPoolPage, error) {
+	boundary, err := store.resolvePostgresListCursor(
+		ctx,
+		runnerPoolListCursorResource,
+		"",
+		cursor,
+		`SELECT created_at FROM secondbox.runner_pools WHERE name=$1`,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("SecondBox RunnerPool list failed: %w", err)
+		return contracts.RunnerPoolPage{}, err
+	}
+	rows, err := store.pool.Query(ctx, runnerPoolSelect+`
+		WHERE NOT $1 OR (created_at,name) > ($2,$3)
+		ORDER BY created_at,name
+		LIMIT $4`,
+		boundary.Active, boundary.CreatedAt, boundary.ItemKey, limit+1)
+	if err != nil {
+		return contracts.RunnerPoolPage{}, fmt.Errorf("SecondBox RunnerPool list failed: %w", err)
 	}
 	defer rows.Close()
-	pools := make([]contracts.RunnerPool, 0)
+	page := contracts.RunnerPoolPage{Items: make([]contracts.RunnerPool, 0)}
 	for rows.Next() {
 		pool, scanErr := scanRunnerPool(rows)
 		if scanErr != nil {
-			return nil, scanErr
+			return contracts.RunnerPoolPage{}, scanErr
 		}
-		pools = append(pools, pool)
+		page.Items = append(page.Items, pool)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("SecondBox RunnerPool list rows failed: %w", err)
+		return contracts.RunnerPoolPage{}, fmt.Errorf("SecondBox RunnerPool list rows failed: %w", err)
 	}
-	return pools, nil
+	if len(page.Items) > limit {
+		page.Items = page.Items[:limit]
+		page.NextCursor, err = encodePostgresListNextCursor(
+			runnerPoolListCursorResource, "", page.Items[limit-1].Name,
+		)
+		if err != nil {
+			return contracts.RunnerPoolPage{}, err
+		}
+	}
+	return page, nil
 }
 
 // GetRunner returns one administrative runner projection without credential material.
@@ -197,25 +221,54 @@ func (store *PostgresControlPlaneStore) ListRunners(
 	ctx context.Context,
 	poolName string,
 	limit int,
-) ([]contracts.Runner, error) {
-	query := runnerAdminSelect + ` WHERE ($1='' OR runner.pool_name=$1) ORDER BY runner.created_at,runner.id LIMIT $2`
-	rows, err := store.pool.Query(ctx, query, poolName, limit)
+	cursor string,
+) (contracts.RunnerPage, error) {
+	scope := "pool=" + poolName
+	boundary, err := store.resolvePostgresListCursor(
+		ctx,
+		runnerListCursorResource,
+		scope,
+		cursor,
+		`SELECT created_at FROM secondbox.runners
+		 WHERE ($1='' OR pool_name=$1) AND id=$2`,
+		poolName,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("SecondBox Runner list failed: %w", err)
+		return contracts.RunnerPage{}, err
+	}
+	query := runnerAdminSelect + `
+		WHERE ($1='' OR runner.pool_name=$1)
+		  AND (NOT $2 OR (runner.created_at,runner.id) > ($3,$4))
+		ORDER BY runner.created_at,runner.id
+		LIMIT $5`
+	rows, err := store.pool.Query(
+		ctx, query, poolName, boundary.Active, boundary.CreatedAt, boundary.ItemKey, limit+1,
+	)
+	if err != nil {
+		return contracts.RunnerPage{}, fmt.Errorf("SecondBox Runner list failed: %w", err)
 	}
 	defer rows.Close()
-	runners := make([]contracts.Runner, 0)
+	page := contracts.RunnerPage{Items: make([]contracts.Runner, 0)}
 	for rows.Next() {
 		runner, scanErr := scanRunnerAdmin(rows)
 		if scanErr != nil {
-			return nil, scanErr
+			return contracts.RunnerPage{}, scanErr
 		}
-		runners = append(runners, runner)
+		page.Items = append(page.Items, runner)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("SecondBox Runner list rows failed: %w", err)
+		return contracts.RunnerPage{}, fmt.Errorf("SecondBox Runner list rows failed: %w", err)
 	}
-	return runners, nil
+	if len(page.Items) > limit {
+		page.Items = page.Items[:limit]
+		page.NextCursor, err = encodePostgresListNextCursor(
+			runnerListCursorResource, scope, page.Items[limit-1].ID,
+		)
+		if err != nil {
+			return contracts.RunnerPage{}, err
+		}
+	}
+	return page, nil
 }
 
 func encodeRunnerPoolPolicy(pool contracts.RunnerPool) ([]byte, []byte, []byte, error) {
