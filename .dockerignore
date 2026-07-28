@@ -1,1 +1,12 @@
-host/
+.git
+.github
+.env
+.tmp
+deploy/environment
+deploy/*.env
+deploy/*.secrets
+deploy/secrets
+dist
+node_modules
+runner/bin
+runner/tmp

@@ -1,0 +1,839 @@
+package microvmguest
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/SecondStack-AI/SecondBox/runner/internal/sandboxlimits"
+)
+
+func TestHeartbeat(t *testing.T) {
+	handler := Server{
+		InstanceID: "vm-1",
+		SandboxID:  "sandbox-1",
+		Now:        func() time.Time { return time.Date(2026, 6, 24, 1, 2, 3, 0, time.UTC) },
+	}.Handler()
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/heartbeat", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["instanceId"] != "vm-1" || body["sandboxId"] != "sandbox-1" || body["healthy"] != true {
+		t.Fatalf("heartbeat body = %#v", body)
+	}
+}
+
+func TestBoundedCommandOutputBufferDiscardsExcess(t *testing.T) {
+	buffer := newCommandOutputBuffer(32)
+	payload := []byte(strings.Repeat("x", 100))
+	if n, err := buffer.Write(payload); err != nil || n != len(payload) {
+		t.Fatalf("write = %d, %v", n, err)
+	}
+	if len(buffer.String()) > 32 || !strings.Contains(buffer.String(), "truncated") {
+		t.Fatalf("bounded output = %q", buffer.String())
+	}
+}
+
+func TestWorkspaceListAndRead(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, "artifacts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "artifacts", "report.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	handler := Server{WorkspaceDir: workspace}.Handler()
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/workspace/list?path=artifacts", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list status = %d: %s", rr.Code, rr.Body.String())
+	}
+	if !bytes.Contains(rr.Body.Bytes(), []byte("artifacts/report.txt")) {
+		t.Fatalf("list body = %s", rr.Body.String())
+	}
+
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/workspace/read?path=artifacts/report.txt", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("read status = %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("Content-Length") != "5" {
+		t.Fatalf("content length = %q", rr.Header().Get("Content-Length"))
+	}
+	if rr.Body.String() != "hello" {
+		t.Fatalf("read body = %q", rr.Body.String())
+	}
+
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/workspace/read?path=artifacts/report.txt&maxBytes=3", nil))
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversize read status = %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "5 bytes") || !strings.Contains(rr.Body.String(), "3 bytes") {
+		t.Fatalf("oversize read body = %s", rr.Body.String())
+	}
+}
+
+func TestWorkspaceRejectsTraversal(t *testing.T) {
+	handler := Server{WorkspaceDir: t.TempDir()}.Handler()
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/workspace/read?path=../../etc/passwd", nil))
+	if rr.Code != http.StatusNotFound && rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestWorkspaceFileTransferRoundTrip(t *testing.T) {
+	workspace := t.TempDir()
+	handler := Server{WorkspaceDir: workspace}.Handler()
+	payload := make([]byte, 5<<20)
+	for i := range payload {
+		payload[i] = byte(i % 251)
+	}
+	wantHash := fmt.Sprintf("%x", sha256.Sum256(payload))
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodPut, "/workspace/write?path=artifacts/blob.bin", bytes.NewReader(payload)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("write status = %d: %s", rr.Code, rr.Body.String())
+	}
+	var writeResp struct {
+		Size   int64  `json:"size"`
+		SHA256 string `json:"sha256"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &writeResp); err != nil {
+		t.Fatalf("decode write response: %v", err)
+	}
+	if writeResp.Size != int64(len(payload)) || writeResp.SHA256 != wantHash {
+		t.Fatalf("write response = %#v, want size=%d sha=%s", writeResp, len(payload), wantHash)
+	}
+
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/workspace/read?path=artifacts/blob.bin", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("read status = %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("Content-Length") != strconv.Itoa(len(payload)) {
+		t.Fatalf("content length = %q", rr.Header().Get("Content-Length"))
+	}
+	gotHash := fmt.Sprintf("%x", sha256.Sum256(rr.Body.Bytes()))
+	if gotHash != wantHash {
+		t.Fatalf("read sha = %s, want %s", gotHash, wantHash)
+	}
+}
+
+func TestWorkspaceFileTransferEmptyFile(t *testing.T) {
+	handler := Server{WorkspaceDir: t.TempDir()}.Handler()
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodPut, "/workspace/write?path=empty.txt", bytes.NewReader(nil)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("write status = %d: %s", rr.Code, rr.Body.String())
+	}
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/workspace/read?path=empty.txt", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("read status = %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("Content-Length") != "0" || rr.Body.Len() != 0 {
+		t.Fatalf("empty read length=%q bodyLen=%d", rr.Header().Get("Content-Length"), rr.Body.Len())
+	}
+}
+
+func TestWorkspaceFileTransferMissingAndRejectedPaths(t *testing.T) {
+	workspace := t.TempDir()
+	handler := Server{WorkspaceDir: workspace}.Handler()
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/workspace/read?path=missing.bin", nil))
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("missing status = %d: %s", rr.Code, rr.Body.String())
+	}
+
+	if err := os.WriteFile(filepath.Join(workspace, "target.txt"), []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target.txt", filepath.Join(workspace, "link.txt")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/workspace/read?path=link.txt", nil))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("symlink status = %d: %s", rr.Code, rr.Body.String())
+	}
+
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodPut, "/workspace/write?path=../escape.txt", strings.NewReader("nope")))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("write traversal status = %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestWorkspaceFileTransferWriteRejectsOversizeAndCleansTemp(t *testing.T) {
+	workspace := t.TempDir()
+	handler := Server{WorkspaceDir: workspace}.Handler()
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodPut, "/workspace/write?path=dir/too-big.bin&maxBytes=3", strings.NewReader("1234")))
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversize write status = %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "4 bytes") || !strings.Contains(rr.Body.String(), "3 bytes") {
+		t.Fatalf("oversize write body = %s", rr.Body.String())
+	}
+	assertNoTransferTempFiles(t, filepath.Join(workspace, "dir"))
+	if _, err := os.Stat(filepath.Join(workspace, "dir", "too-big.bin")); !os.IsNotExist(err) {
+		t.Fatalf("target after failed oversize stat err = %v", err)
+	}
+}
+
+func TestWorkspaceFileTransferAbortedBodyCleansTemp(t *testing.T) {
+	workspace := t.TempDir()
+	handler := Server{WorkspaceDir: workspace}.Handler()
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/workspace/write?path=dir/aborted.bin", &errReader{data: []byte("partial"), err: errors.New("client aborted")})
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("aborted write status = %d: %s", rr.Code, rr.Body.String())
+	}
+	assertNoTransferTempFiles(t, filepath.Join(workspace, "dir"))
+	if _, err := os.Stat(filepath.Join(workspace, "dir", "aborted.bin")); !os.IsNotExist(err) {
+		t.Fatalf("target after aborted write stat err = %v", err)
+	}
+}
+
+func TestWorkspaceFileTransferConcurrentWritesDistinctPaths(t *testing.T) {
+	workspace := t.TempDir()
+	handler := Server{WorkspaceDir: workspace}.Handler()
+	const count = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, count)
+	for i := 0; i < count; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			body := strings.Repeat(fmt.Sprintf("%02d", i), 1024)
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, httptest.NewRequest(http.MethodPut, fmt.Sprintf("/workspace/write?path=concurrent/%d.txt", i), strings.NewReader(body)))
+			if rr.Code != http.StatusOK {
+				errs <- fmt.Errorf("write %d status=%d body=%s", i, rr.Code, rr.Body.String())
+				return
+			}
+			got, err := os.ReadFile(filepath.Join(workspace, "concurrent", fmt.Sprintf("%d.txt", i)))
+			if err != nil {
+				errs <- err
+				return
+			}
+			if string(got) != body {
+				errs <- fmt.Errorf("write %d body mismatch", i)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestTailLogFileHonorsTailAndCap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "guest.log")
+	if err := os.WriteFile(path, []byte("one\ntwo\nthree\nfour\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	data, err := tailLogFile(f, "2", 1<<20)
+	if err != nil {
+		t.Fatalf("tail log: %v", err)
+	}
+	if string(data) != "three\nfour\n" {
+		t.Fatalf("tail data = %q", string(data))
+	}
+	data, err = tailLogFile(f, "", 5)
+	if err != nil {
+		t.Fatalf("cap log: %v", err)
+	}
+	if string(data) != "four\n" {
+		t.Fatalf("capped data = %q", string(data))
+	}
+}
+
+func TestFreezeThawUseConfiguredFreezer(t *testing.T) {
+	freezer := &fakeFreezer{}
+	handler := Server{WorkspaceDir: "/workspace", Freezer: freezer}.Handler()
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/workspace/freeze", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("freeze status = %d: %s", rr.Code, rr.Body.String())
+	}
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/workspace/thaw", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("thaw status = %d: %s", rr.Code, rr.Body.String())
+	}
+	if freezer.freezePath != "/workspace" || freezer.thawPath != "/workspace" {
+		t.Fatalf("freezer paths = %#v", freezer)
+	}
+}
+
+func TestSecretsApplyWritesPrivateFiles(t *testing.T) {
+	privateDir := t.TempDir()
+	handler := Server{RuntimePrivateDir: privateDir}.Handler()
+	body := bytes.NewReader([]byte(`{"env":{"SECONDBOX_RUNTIME_CREDENTIAL_ID":"opaque-token"},"files":{"credentials/token.json":"{\"token\":\"abc\"}","certificate.pem":"certificate-data"}}`))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/secrets/apply", body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rr.Code, rr.Body.String())
+	}
+	envPath := filepath.Join(privateDir, "env.json")
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("read env: %v", err)
+	}
+	if !bytes.Contains(data, []byte("opaque-token")) {
+		t.Fatalf("env data = %s", string(data))
+	}
+	info, err := os.Stat(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("env mode = %o", info.Mode().Perm())
+	}
+	rootInfo, err := os.Stat(privateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rootInfo.Mode().Perm() != 0o711 {
+		t.Fatalf("runtime private dir mode = %o", rootInfo.Mode().Perm())
+	}
+	filePath := filepath.Join(privateDir, "credentials", "token.json")
+	data, err = os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read secret file: %v", err)
+	}
+	if string(data) != `{"token":"abc"}` {
+		t.Fatalf("secret file = %q", string(data))
+	}
+	info, err = os.Stat(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("secret file mode = %o", info.Mode().Perm())
+	}
+	certificatePath := filepath.Join(privateDir, "certificate.pem")
+	data, err = os.ReadFile(certificatePath)
+	if err != nil {
+		t.Fatalf("read certificate: %v", err)
+	}
+	if string(data) != "certificate-data" {
+		t.Fatalf("certificate = %q", string(data))
+	}
+	info, err = os.Stat(certificatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("certificate mode = %o", info.Mode().Perm())
+	}
+}
+
+func TestRestoreHardenUsesConfiguredHardener(t *testing.T) {
+	hardener := &fakeHardener{}
+	handler := Server{Hardener: hardener}.Handler()
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/restore/harden", bytes.NewReader([]byte(`{"hostTime":"2026-06-24T22:00:00Z","entropyBase64":"ZnJlc2gtZW50cm9weQ=="}`))))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rr.Code, rr.Body.String())
+	}
+	if hardener.input.HostTime.Format(time.RFC3339) != "2026-06-24T22:00:00Z" {
+		t.Fatalf("host time = %s", hardener.input.HostTime.Format(time.RFC3339Nano))
+	}
+	if string(hardener.input.Entropy) != "fresh-entropy" {
+		t.Fatalf("entropy = %q", string(hardener.input.Entropy))
+	}
+}
+
+func TestToolExecRunsCommandInWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	handler := Server{WorkspaceDir: workspace}.Handler()
+	resp := postToolExec(t, handler, toolExecRequest{
+		Operation:     toolOpExec,
+		Command:       "sh",
+		Args:          []string{"-c", "printf '%s|%s' \"$PWD\" \"$EXTRA\""},
+		Cwd:           "dir/../sub",
+		Env:           map[string]string{"EXTRA": "from-env"},
+		TimeoutMillis: 1000,
+	})
+	if resp.Error != "" {
+		t.Fatalf("tool error = %s", resp.Error)
+	}
+	want := filepath.Join(workspace, "sub") + "|from-env"
+	if resp.Stdout != want {
+		t.Fatalf("stdout = %q, want %q", resp.Stdout, want)
+	}
+	if resp.ExitCode != 0 {
+		t.Fatalf("exit code = %d", resp.ExitCode)
+	}
+}
+
+func TestToolExecRunsImageHelperCommandsThroughExec(t *testing.T) {
+	workspace := t.TempDir()
+	binDir := filepath.Join(workspace, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	helperPath := filepath.Join(binDir, "browser-helper")
+	if err := os.WriteFile(helperPath, []byte("#!/bin/sh\nprintf 'helper:%s' \"$PWD\"\nprintf 'visited' > browser.out\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	handler := Server{WorkspaceDir: workspace}.Handler()
+	resp := postToolExec(t, handler, toolExecRequest{
+		Operation:     toolOpExec,
+		Command:       "./bin/browser-helper",
+		Cwd:           ".",
+		TimeoutMillis: 1000,
+	})
+	if resp.Error != "" || resp.ExitCode != 0 {
+		t.Fatalf("helper command response = %#v", resp)
+	}
+	if resp.Stdout != "helper:"+workspace {
+		t.Fatalf("stdout = %q", resp.Stdout)
+	}
+	data, err := os.ReadFile(filepath.Join(workspace, "browser.out"))
+	if err != nil {
+		t.Fatalf("read helper output: %v", err)
+	}
+	if string(data) != "visited" {
+		t.Fatalf("helper output = %q", string(data))
+	}
+}
+
+func TestToolExecFileOperationsStayInsideWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	handler := Server{WorkspaceDir: workspace}.Handler()
+
+	resp := postToolExec(t, handler, toolExecRequest{Operation: toolOpMkdir, Path: "notes/nested", Recursive: true})
+	if resp.Error != "" {
+		t.Fatalf("mkdir error = %s", resp.Error)
+	}
+	resp = postToolExec(t, handler, toolExecRequest{Operation: toolOpWriteFile, Path: "notes/nested/readme.txt", Content: "hello"})
+	if resp.Error != "" {
+		t.Fatalf("write error = %s", resp.Error)
+	}
+	resp = postToolExec(t, handler, toolExecRequest{Operation: toolOpReadFile, Path: "notes/nested/readme.txt"})
+	if resp.Error != "" || resp.Content != "hello" {
+		t.Fatalf("read response = %#v", resp)
+	}
+	resp = postToolExec(t, handler, toolExecRequest{Operation: toolOpWriteFile, Path: "notes/nested/blob.bin", ContentBase64: base64.StdEncoding.EncodeToString([]byte{0, 1, 2})})
+	if resp.Error != "" {
+		t.Fatalf("write buffer error = %s", resp.Error)
+	}
+	resp = postToolExec(t, handler, toolExecRequest{Operation: toolOpReadFileBuffer, Path: "notes/nested/blob.bin"})
+	if resp.Error != "" || resp.ContentBase64 != "AAEC" {
+		t.Fatalf("read buffer response = %#v", resp)
+	}
+	resp = postToolExec(t, handler, toolExecRequest{Operation: toolOpStat, Path: "notes/nested/readme.txt"})
+	if resp.Error != "" || resp.Stat["type"] != "file" || resp.Stat["path"] != "notes/nested/readme.txt" {
+		t.Fatalf("stat response = %#v", resp)
+	}
+	resp = postToolExec(t, handler, toolExecRequest{Operation: toolOpReaddir, Path: "notes/nested"})
+	if resp.Error != "" || len(resp.Entries) != 2 {
+		t.Fatalf("readdir response = %#v", resp)
+	}
+	resp = postToolExec(t, handler, toolExecRequest{Operation: toolOpExists, Path: "notes/nested/readme.txt"})
+	if resp.Error != "" || resp.Exists == nil || !*resp.Exists {
+		t.Fatalf("exists response = %#v", resp)
+	}
+	resp = postToolExec(t, handler, toolExecRequest{Operation: toolOpRm, Path: "notes", Recursive: true})
+	if resp.Error != "" {
+		t.Fatalf("rm error = %s", resp.Error)
+	}
+	resp = postToolExec(t, handler, toolExecRequest{Operation: toolOpExists, Path: "notes/nested/readme.txt"})
+	if resp.Error != "" || resp.Exists == nil || *resp.Exists {
+		t.Fatalf("exists after rm response = %#v", resp)
+	}
+}
+
+func TestToolExecWriteFileAtomicallyReplacesAndCleansTemporaryFile(t *testing.T) {
+	workspace := t.TempDir()
+	targetDir := filepath.Join(workspace, "state")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(targetDir, "value.txt")
+	if err := os.WriteFile(target, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resp := postToolExec(t, Server{WorkspaceDir: workspace}.Handler(), toolExecRequest{
+		Operation: toolOpWriteFile,
+		Path:      "state/value.txt",
+		Content:   "durable",
+	})
+	if resp.Error != "" {
+		t.Fatalf("write response = %#v", resp)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "durable" {
+		t.Fatalf("content = %q", data)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("mode = %o, want 644", info.Mode().Perm())
+	}
+	assertNoTransferTempFiles(t, targetDir)
+}
+
+func TestToolExecSessionWarmPersistenceAcrossCalls(t *testing.T) {
+	workspace := t.TempDir()
+	handler := Server{WorkspaceDir: workspace}.Handler()
+
+	resp := postToolExec(t, handler, toolExecRequest{
+		Operation: toolOpWriteFile,
+		Path:      "state/counter.txt",
+		Content:   "1\n",
+	})
+	if resp.Error != "" {
+		t.Fatalf("write error = %s", resp.Error)
+	}
+	resp = postToolExec(t, handler, toolExecRequest{
+		Operation: toolOpExec,
+		Command:   "sh",
+		Args:      []string{"-c", "printf '2\\n' >> state/counter.txt"},
+		Cwd:       ".",
+	})
+	if resp.Error != "" || resp.ExitCode != 0 {
+		t.Fatalf("append command response = %#v", resp)
+	}
+	resp = postToolExec(t, handler, toolExecRequest{
+		Operation: toolOpReadFile,
+		Path:      "state/counter.txt",
+	})
+	if resp.Error != "" || resp.Content != "1\n2\n" {
+		t.Fatalf("state did not persist across tool calls: %#v", resp)
+	}
+}
+
+func TestToolExecReadFileRejectsRawReadLimit(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "too-large.txt"), bytes.Repeat([]byte("a"), int(sandboxlimits.ToolReadRawBytes)+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resp := postToolExec(t, Server{WorkspaceDir: workspace}.Handler(), toolExecRequest{
+		Operation: toolOpReadFile,
+		Path:      "too-large.txt",
+	})
+	if !strings.Contains(resp.Error, "workspace file exceeds read limit") {
+		t.Fatalf("response = %#v, want clean read-limit error", resp)
+	}
+}
+
+func TestToolExecLargeWriteAndNearCeilingReadRoundTrip(t *testing.T) {
+	workspace := t.TempDir()
+	handler := Server{WorkspaceDir: workspace}.Handler()
+	large := strings.Repeat("w", 2<<20)
+	resp := postToolExec(t, handler, toolExecRequest{
+		Operation: toolOpWriteFile,
+		Path:      "large-write.txt",
+		Content:   large,
+	})
+	if resp.Error != "" {
+		t.Fatalf("large write response = %#v", resp)
+	}
+	resp = postToolExec(t, handler, toolExecRequest{
+		Operation: toolOpReadFile,
+		Path:      "large-write.txt",
+	})
+	if resp.Error != "" || resp.Content != large {
+		t.Fatalf("large read response error=%q contentLen=%d", resp.Error, len(resp.Content))
+	}
+
+	nearCeiling := bytes.Repeat([]byte("r"), int(sandboxlimits.ToolReadRawBytes))
+	if err := os.WriteFile(filepath.Join(workspace, "near-ceiling.txt"), nearCeiling, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resp = postToolExec(t, handler, toolExecRequest{
+		Operation: toolOpReadFile,
+		Path:      "near-ceiling.txt",
+	})
+	if resp.Error != "" || len(resp.Content) != len(nearCeiling) {
+		t.Fatalf("near-ceiling read response error=%q contentLen=%d want=%d", resp.Error, len(resp.Content), len(nearCeiling))
+	}
+}
+
+func TestToolExecReadFileRejectsEscapedResponseOverControlLimit(t *testing.T) {
+	workspace := t.TempDir()
+	// NUL bytes are under the raw read ceiling but JSON-escape to six bytes
+	// each, so the marshaled response exceeds the control-client cap.
+	if err := os.WriteFile(filepath.Join(workspace, "escaped.bin"), bytes.Repeat([]byte{0}, 3<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resp := postToolExec(t, Server{WorkspaceDir: workspace}.Handler(), toolExecRequest{
+		Operation: toolOpReadFile,
+		Path:      "escaped.bin",
+	})
+	if !strings.Contains(resp.Error, "readFile response exceeds control response limit") {
+		t.Fatalf("response = %#v, want clean response-limit error", resp)
+	}
+}
+
+func TestToolExecRejectsWorkspaceEscapes(t *testing.T) {
+	handler := Server{WorkspaceDir: t.TempDir()}.Handler()
+	tests := []toolExecRequest{
+		{Operation: toolOpReadFile, Path: "../secret"},
+		{Operation: toolOpReadFile, Path: "/etc/passwd"},
+		{Operation: toolOpWriteFile, Path: "ok\x00bad", Content: "nope"},
+		{Operation: toolOpExec, Command: "pwd", Cwd: "../secret"},
+	}
+	for _, req := range tests {
+		resp := postToolExec(t, handler, req)
+		if resp.Error == "" {
+			t.Fatalf("request %#v should have failed", req)
+		}
+	}
+}
+
+func TestGuestWorkspaceFileAPIsRejectSymlinks(t *testing.T) {
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	outsideSecret := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(outsideSecret, []byte("outside-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "real.txt"), []byte("inside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(workspace, "escape")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := os.Symlink("real.txt", filepath.Join(workspace, "final-link")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	handler := Server{WorkspaceDir: workspace}.Handler()
+
+	toolRequests := []toolExecRequest{
+		{Operation: toolOpReadFile, Path: "escape/secret.txt"},
+		{Operation: toolOpReadFileBuffer, Path: "escape/secret.txt"},
+		{Operation: toolOpStat, Path: "escape/secret.txt"},
+		{Operation: toolOpReaddir, Path: "escape"},
+		{Operation: toolOpExists, Path: "escape/secret.txt"},
+		{Operation: toolOpWriteFile, Path: "escape/created.txt", Content: "nope"},
+		{Operation: toolOpMkdir, Path: "escape/created-dir", Recursive: true},
+		{Operation: toolOpRm, Path: "escape/secret.txt"},
+		{Operation: toolOpReadFile, Path: "final-link"},
+		{Operation: toolOpStat, Path: "final-link"},
+		{Operation: toolOpExists, Path: "final-link"},
+		{Operation: toolOpWriteFile, Path: "final-link", Content: "replacement"},
+		{Operation: toolOpRm, Path: "final-link"},
+	}
+	for _, request := range toolRequests {
+		response := postToolExec(t, handler, request)
+		if response.Error == "" {
+			t.Fatalf("symlink request %#v unexpectedly succeeded: %#v", request, response)
+		}
+	}
+
+	httpRequests := []struct {
+		method string
+		path   string
+		body   io.Reader
+	}{
+		{method: http.MethodGet, path: "/workspace/read?path=escape/secret.txt"},
+		{method: http.MethodGet, path: "/workspace/list?path=escape"},
+		{method: http.MethodPut, path: "/workspace/write?path=escape/http-created.txt", body: strings.NewReader("nope")},
+	}
+	for _, request := range httpRequests {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(request.method, request.path, request.body))
+		if recorder.Code >= 200 && recorder.Code < 300 {
+			t.Fatalf("symlink HTTP request %s %s unexpectedly succeeded: %s", request.method, request.path, recorder.Body.String())
+		}
+		if strings.Contains(recorder.Body.String(), "outside-secret") {
+			t.Fatalf("symlink HTTP request leaked outside content: %s", recorder.Body.String())
+		}
+	}
+
+	retained, err := os.ReadFile(outsideSecret)
+	if err != nil || string(retained) != "outside-secret" {
+		t.Fatalf("outside file changed through workspace API: content=%q err=%v", retained, err)
+	}
+	for _, path := range []string{"created.txt", "created-dir", "http-created.txt"} {
+		if _, err := os.Lstat(filepath.Join(outside, path)); !os.IsNotExist(err) {
+			t.Fatalf("workspace API created outside path %s: %v", path, err)
+		}
+	}
+	if info, err := os.Lstat(filepath.Join(workspace, "final-link")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("workspace API replaced or removed final symlink: info=%v err=%v", info, err)
+	}
+}
+
+func TestToolExecCommandTimeout(t *testing.T) {
+	handler := Server{WorkspaceDir: t.TempDir()}.Handler()
+	resp := postToolExec(t, handler, toolExecRequest{
+		Operation:     toolOpExec,
+		Command:       "sh",
+		Args:          []string{"-c", "sleep 1"},
+		TimeoutMillis: 50,
+	})
+	if !resp.TimedOut || resp.Error == "" {
+		t.Fatalf("timeout response = %#v", resp)
+	}
+}
+
+func TestToolExecCommandErrorShapes(t *testing.T) {
+	handler := Server{WorkspaceDir: t.TempDir()}.Handler()
+	resp := postToolExec(t, handler, toolExecRequest{
+		Operation: toolOpExec,
+		Command:   "sh",
+		Args:      []string{"-c", "echo failed >&2; exit 7"},
+	})
+	if resp.Error != "" || resp.ExitCode != 7 || resp.Stderr != "failed\n" {
+		t.Fatalf("nonzero response = %#v", resp)
+	}
+	resp = postToolExec(t, handler, toolExecRequest{
+		Operation: toolOpExec,
+		Command:   filepath.Join(t.TempDir(), "missing-command"),
+	})
+	if resp.Error == "" || resp.ExitCode != -1 {
+		t.Fatalf("spawn failure response = %#v", resp)
+	}
+}
+
+func TestToolExecFileOperationErrorShapes(t *testing.T) {
+	workspace := t.TempDir()
+	handler := Server{WorkspaceDir: workspace}.Handler()
+	resp := postToolExec(t, handler, toolExecRequest{Operation: toolOpReadFile, Path: "missing.txt"})
+	if resp.Error != "workspace file not found" {
+		t.Fatalf("missing read error = %q", resp.Error)
+	}
+	resp = postToolExec(t, handler, toolExecRequest{Operation: toolOpStat, Path: "missing.txt"})
+	if resp.Error != "workspace path not found" {
+		t.Fatalf("missing stat error = %q", resp.Error)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "plain.txt"), []byte("plain"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resp = postToolExec(t, handler, toolExecRequest{Operation: toolOpReaddir, Path: "plain.txt"})
+	if resp.Error == "" || strings.Contains(resp.Error, "workspace path not found") {
+		t.Fatalf("readdir non-not-found error = %q", resp.Error)
+	}
+	resp = postToolExec(t, handler, toolExecRequest{Operation: toolOpStat, Path: strings.Repeat("x", 5000)})
+	if resp.Error == "" || strings.Contains(resp.Error, "workspace path not found") {
+		t.Fatalf("stat non-not-found error = %q", resp.Error)
+	}
+	resp = postToolExec(t, handler, toolExecRequest{Operation: toolOpRm, Path: "missing.txt"})
+	if resp.Error == "" {
+		t.Fatalf("missing rm should fail: %#v", resp)
+	}
+	resp = postToolExec(t, handler, toolExecRequest{Operation: toolOpRm, Path: "missing.txt", Force: true})
+	if resp.Error != "" {
+		t.Fatalf("forced missing rm should not fail: %#v", resp)
+	}
+}
+
+type fakeFreezer struct {
+	freezePath string
+	thawPath   string
+}
+
+func (f *fakeFreezer) Freeze(_ context.Context, workspaceDir string) error {
+	f.freezePath = workspaceDir
+	return nil
+}
+
+func (f *fakeFreezer) Thaw(_ context.Context, workspaceDir string) error {
+	f.thawPath = workspaceDir
+	return nil
+}
+
+type fakeHardener struct {
+	input RestoreHardenInput
+}
+
+func (f *fakeHardener) Harden(_ context.Context, input RestoreHardenInput) error {
+	f.input = input
+	return nil
+}
+
+func postToolExec(t *testing.T, handler http.Handler, req toolExecRequest) toolExecResponse {
+	t.Helper()
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/tool/exec", bytes.NewReader(data)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp toolExecResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	return resp
+}
+
+type errReader struct {
+	data []byte
+	err  error
+	done bool
+}
+
+func (r *errReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	return copy(p, r.data), r.err
+}
+
+func assertNoTransferTempFiles(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("read temp dir: %v", err)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), ".tmp") {
+			t.Fatalf("left temp file %s in %s", entry.Name(), dir)
+		}
+	}
+}

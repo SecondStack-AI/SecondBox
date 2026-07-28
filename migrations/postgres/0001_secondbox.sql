@@ -1,0 +1,665 @@
+CREATE SCHEMA IF NOT EXISTS secondbox;
+
+CREATE TABLE secondbox.schema_migrations (
+    version text NOT NULL,
+    checksum_sha256 text NOT NULL,
+    applied_at timestamptz NOT NULL
+);
+CREATE UNIQUE INDEX schema_migrations_version_idx ON secondbox.schema_migrations (version);
+
+CREATE TABLE secondbox.operators (
+    id text PRIMARY KEY,
+    name text NOT NULL,
+    state text NOT NULL,
+    revision bigint NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL
+);
+
+CREATE TABLE secondbox.operator_credentials (
+    id text PRIMARY KEY,
+    operator_id text NOT NULL,
+    credential_hash bytea NOT NULL,
+    state text NOT NULL,
+    last_used_at timestamptz,
+    revision bigint NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL
+);
+CREATE UNIQUE INDEX operator_credentials_operator_idx ON secondbox.operator_credentials (operator_id);
+
+CREATE TABLE secondbox.projects (
+    id text PRIMARY KEY,
+    name text NOT NULL,
+    state text NOT NULL,
+    revision bigint NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL
+);
+CREATE UNIQUE INDEX projects_name_idx ON secondbox.projects (name);
+
+CREATE TABLE secondbox.project_quotas (
+    project_id text PRIMARY KEY,
+    max_sandboxes bigint NOT NULL,
+    max_active_instances bigint NOT NULL,
+    max_cpu_millis bigint NOT NULL,
+    max_memory_bytes bigint NOT NULL,
+    max_retained_bytes bigint NOT NULL,
+    max_snapshots bigint NOT NULL,
+    max_artifacts bigint NOT NULL,
+    max_port_sessions bigint NOT NULL,
+    max_concurrent_operations bigint NOT NULL,
+    updated_at timestamptz NOT NULL
+);
+
+CREATE TABLE secondbox.service_accounts (
+    id text PRIMARY KEY,
+    project_id text NOT NULL,
+    name text NOT NULL,
+    state text NOT NULL,
+    scopes_json jsonb NOT NULL,
+    profile_grants_json jsonb NOT NULL,
+    revision bigint NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL
+);
+CREATE UNIQUE INDEX service_accounts_project_name_idx ON secondbox.service_accounts (project_id, name);
+CREATE INDEX service_accounts_project_created_idx ON secondbox.service_accounts (project_id, created_at, id);
+
+CREATE TABLE secondbox.api_keys (
+    id text PRIMARY KEY,
+    project_id text NOT NULL,
+    service_account_id text NOT NULL,
+    name text NOT NULL,
+    prefix text NOT NULL,
+    credential_hash bytea NOT NULL,
+    state text NOT NULL,
+    scopes_json jsonb NOT NULL,
+    expires_at timestamptz,
+    revoked_at timestamptz,
+    last_used_at timestamptz,
+    revision bigint NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL
+);
+CREATE UNIQUE INDEX api_keys_prefix_idx ON secondbox.api_keys (prefix);
+CREATE INDEX api_keys_service_account_created_idx ON secondbox.api_keys (service_account_id, created_at, id);
+
+CREATE TABLE secondbox.profiles (
+    name text PRIMARY KEY,
+    state text NOT NULL,
+    current_revision_id text NOT NULL,
+    revision bigint NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL
+);
+
+CREATE TABLE secondbox.profile_revisions (
+    id text PRIMARY KEY,
+    profile_name text NOT NULL,
+    revision_number bigint NOT NULL,
+    spec_json jsonb NOT NULL,
+    created_at timestamptz NOT NULL
+);
+CREATE UNIQUE INDEX profile_revisions_profile_number_idx ON secondbox.profile_revisions (profile_name, revision_number);
+
+CREATE TABLE secondbox.profile_quotas (
+    profile_name text PRIMARY KEY,
+    max_sandboxes bigint NOT NULL,
+    max_active_instances bigint NOT NULL,
+    max_cpu_millis bigint NOT NULL,
+    max_memory_bytes bigint NOT NULL,
+    max_retained_bytes bigint NOT NULL,
+    max_snapshots bigint NOT NULL,
+    max_artifacts bigint NOT NULL,
+    max_port_sessions bigint NOT NULL,
+    max_concurrent_operations bigint NOT NULL,
+    updated_at timestamptz NOT NULL
+);
+
+CREATE TABLE secondbox.runner_pools (
+    name text PRIMARY KEY,
+    state text NOT NULL,
+    architectures_json jsonb NOT NULL,
+    capabilities_json jsonb NOT NULL,
+    capacity_policy_json jsonb NOT NULL,
+    ready_runner_count bigint NOT NULL,
+    revision bigint NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL
+);
+
+CREATE TABLE secondbox.runners (
+    id text PRIMARY KEY,
+    pool_name text NOT NULL,
+    name text NOT NULL,
+    state text NOT NULL,
+    architectures_json jsonb NOT NULL,
+    capabilities_json jsonb NOT NULL,
+    capacity_json jsonb NOT NULL,
+    protocol_versions_json jsonb NOT NULL,
+    guest_protocol_minimum bigint NOT NULL,
+    guest_protocol_maximum bigint NOT NULL,
+    software_version text NOT NULL,
+    active_connection_id text NOT NULL,
+    last_sequence bigint NOT NULL,
+    drain_phase text NOT NULL,
+    reserved_capacity_json jsonb NOT NULL,
+    artifact_cache_json jsonb NOT NULL,
+    last_seen_at timestamptz,
+    revision bigint NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL
+);
+CREATE INDEX runners_pool_state_idx ON secondbox.runners (pool_name, state, id);
+
+CREATE TABLE secondbox.runner_enrollment_tokens (
+    id text PRIMARY KEY,
+    runner_id text NOT NULL,
+    pool_name text NOT NULL,
+    runner_name text NOT NULL,
+    token_hash bytea NOT NULL,
+    state text NOT NULL,
+    expires_at timestamptz NOT NULL,
+    redeemed_at timestamptz,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL
+);
+CREATE UNIQUE INDEX runner_enrollment_tokens_hash_idx ON secondbox.runner_enrollment_tokens (token_hash);
+CREATE INDEX runner_enrollment_tokens_runner_state_idx ON secondbox.runner_enrollment_tokens (runner_id, state, id);
+
+CREATE TABLE secondbox.runner_credentials (
+    serial_number text PRIMARY KEY,
+    runner_id text NOT NULL,
+    certificate_fingerprint_sha256 text NOT NULL,
+    state text NOT NULL,
+    not_before timestamptz NOT NULL,
+    not_after timestamptz NOT NULL,
+    rotated_from_serial text NOT NULL,
+    revoked_at timestamptz,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL
+);
+CREATE UNIQUE INDEX runner_credentials_fingerprint_idx ON secondbox.runner_credentials (certificate_fingerprint_sha256);
+CREATE INDEX runner_credentials_runner_state_idx ON secondbox.runner_credentials (runner_id, state, serial_number);
+
+CREATE TABLE secondbox.runner_connections (
+    id text PRIMARY KEY,
+    runner_id text NOT NULL,
+    credential_serial text NOT NULL,
+    protocol_version bigint NOT NULL,
+    state text NOT NULL,
+    last_sequence bigint NOT NULL,
+    last_control_sequence bigint NOT NULL,
+    connected_at timestamptz NOT NULL,
+    last_seen_at timestamptz NOT NULL,
+    disconnected_at timestamptz
+);
+CREATE INDEX runner_connections_runner_state_idx ON secondbox.runner_connections (runner_id, state, id);
+
+CREATE TABLE secondbox.runner_messages (
+    connection_id text NOT NULL,
+    message_id text NOT NULL,
+    sequence bigint NOT NULL,
+    kind text NOT NULL,
+    observed_at timestamptz NOT NULL
+);
+CREATE UNIQUE INDEX runner_messages_connection_message_idx ON secondbox.runner_messages (connection_id, message_id);
+CREATE UNIQUE INDEX runner_messages_connection_sequence_idx ON secondbox.runner_messages (connection_id, sequence);
+
+CREATE TABLE secondbox.runner_commands (
+    id text PRIMARY KEY,
+    runner_id text NOT NULL,
+    assignment_id text NOT NULL,
+    kind text NOT NULL,
+    payload bytea NOT NULL,
+    state text NOT NULL,
+    target_connection_id text NOT NULL,
+    delivery_count bigint NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    delivered_at timestamptz
+);
+CREATE INDEX runner_commands_delivery_idx ON secondbox.runner_commands (runner_id, state, created_at, id);
+
+CREATE TABLE secondbox.workspaces (
+    id text PRIMARY KEY,
+    project_id text NOT NULL,
+    sandbox_id text NOT NULL,
+    generation bigint NOT NULL,
+    retained_bytes bigint NOT NULL,
+    current_checkpoint_id text NOT NULL,
+    current_checkpoint_sha256 text,
+    current_checkpoint_size_bytes bigint,
+    retention_state text,
+    garbage_collection_state text,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL
+);
+CREATE UNIQUE INDEX workspaces_sandbox_idx ON secondbox.workspaces (sandbox_id);
+CREATE INDEX workspaces_project_idx ON secondbox.workspaces (project_id, id);
+
+CREATE TABLE secondbox.sandboxes (
+    id text PRIMARY KEY,
+    project_id text NOT NULL,
+    profile_name text NOT NULL,
+    profile_revision_id text NOT NULL,
+    state text NOT NULL,
+    desired_state text NOT NULL,
+    generation bigint NOT NULL,
+    workspace_id text NOT NULL,
+    current_instance_id text NOT NULL,
+    metadata_json jsonb NOT NULL,
+    compatibility_summary_json jsonb NOT NULL,
+    last_activity_at timestamptz,
+    lifecycle_termination_reason text,
+    lifecycle_failure_class text,
+    lifecycle_failure_message text,
+    lifecycle_intent_kind text,
+    lifecycle_action text,
+    lifecycle_request_metadata_json jsonb,
+    drain_started_at timestamptz,
+    reconcile_owner text,
+    reconcile_claim_expires_at timestamptz,
+    next_reconcile_at timestamptz,
+    reconcile_retry_count bigint,
+    reconcile_retry_limit bigint,
+    revision bigint NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    deleted_at timestamptz
+);
+CREATE INDEX sandboxes_project_created_idx ON secondbox.sandboxes (project_id, created_at, id);
+CREATE INDEX sandboxes_project_state_idx ON secondbox.sandboxes (project_id, state, id);
+CREATE INDEX sandboxes_profile_state_idx ON secondbox.sandboxes (profile_name, state, id);
+
+CREATE TABLE secondbox.lifecycle_effects (
+    id text PRIMARY KEY,
+    sandbox_id text NOT NULL,
+    generation bigint NOT NULL,
+    kind text NOT NULL,
+    state text NOT NULL,
+    assignment_id text NOT NULL,
+    instance_id text NOT NULL,
+    runner_id text NOT NULL,
+    command_id text NOT NULL,
+    checkpoint_id text NOT NULL,
+    storage_object_id text NOT NULL,
+    fencing_token bytea NOT NULL,
+    retry_count bigint NOT NULL,
+    retry_limit bigint NOT NULL,
+    effect_deadline timestamptz NOT NULL,
+    claim_owner text NOT NULL,
+    claim_expires_at timestamptz NOT NULL,
+    failure_class text NOT NULL,
+    failure_message text NOT NULL,
+    payload_json jsonb NOT NULL,
+    evidence_json jsonb NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL
+);
+CREATE INDEX lifecycle_effects_due_idx
+    ON secondbox.lifecycle_effects (state, claim_expires_at, created_at, id);
+CREATE INDEX lifecycle_effects_sandbox_generation_idx
+    ON secondbox.lifecycle_effects (sandbox_id, generation, kind, created_at, id);
+
+CREATE TABLE secondbox.instances (
+    id text PRIMARY KEY,
+    sandbox_id text NOT NULL,
+    generation bigint NOT NULL,
+    state text NOT NULL,
+    guest_liveness text,
+    termination_reason text NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    ready_at timestamptz,
+    guest_heartbeat_at timestamptz,
+    maximum_duration_at timestamptz,
+    stopped_at timestamptz
+);
+CREATE UNIQUE INDEX instances_sandbox_generation_idx ON secondbox.instances (sandbox_id, generation);
+
+CREATE TABLE secondbox.instance_terminal_events (
+    instance_id text PRIMARY KEY,
+    sandbox_id text NOT NULL,
+    generation bigint NOT NULL,
+    assignment_id text NOT NULL,
+    runner_id text NOT NULL,
+    reason text NOT NULL,
+    evidence_digest text NOT NULL,
+    observed_at timestamptz NOT NULL,
+    request_id text NOT NULL,
+    operation_id text NOT NULL,
+    lease_id text NOT NULL,
+    created_at timestamptz NOT NULL
+);
+CREATE INDEX instance_terminal_events_assignment_idx ON secondbox.instance_terminal_events (assignment_id);
+
+CREATE TABLE secondbox.assignments (
+    id text PRIMARY KEY,
+    sandbox_id text NOT NULL,
+    instance_id text NOT NULL,
+    runner_id text NOT NULL,
+    profile_revision_id text NOT NULL,
+    backend_kind text NOT NULL,
+    backend_reference text NOT NULL,
+    generation bigint NOT NULL,
+    fencing_token bytea NOT NULL,
+    state text NOT NULL,
+    capability_snapshot_json jsonb NOT NULL,
+    resolved_artifacts_json jsonb NOT NULL,
+    release_proof_json jsonb NOT NULL,
+    failure_class text NOT NULL,
+    retry_count bigint NOT NULL,
+    retry_limit bigint NOT NULL,
+    operation_deadline timestamptz NOT NULL,
+    claim_expires_at timestamptz NOT NULL,
+    reconcile_owner text NOT NULL,
+    reconcile_claim_expires_at timestamptz NOT NULL,
+    next_reconcile_at timestamptz NOT NULL,
+    revision bigint NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL
+);
+CREATE UNIQUE INDEX assignments_sandbox_generation_idx ON secondbox.assignments (sandbox_id, generation);
+CREATE INDEX assignments_runner_state_idx ON secondbox.assignments (runner_id, state, id);
+CREATE INDEX assignments_reconcile_idx ON secondbox.assignments (next_reconcile_at, state, id);
+
+CREATE TABLE secondbox.leases (
+    id text PRIMARY KEY,
+    project_id text NOT NULL,
+    sandbox_id text NOT NULL,
+    generation bigint NOT NULL,
+    service_account_id text NOT NULL,
+    state text NOT NULL,
+    expires_at timestamptz NOT NULL,
+    revision bigint NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL
+);
+CREATE INDEX leases_sandbox_state_expiry_idx ON secondbox.leases (sandbox_id, state, expires_at, id);
+
+CREATE TABLE secondbox.activity_sessions (
+    id text PRIMARY KEY,
+    project_id text NOT NULL,
+    sandbox_id text NOT NULL,
+    generation bigint NOT NULL,
+    kind text NOT NULL,
+    state text NOT NULL,
+    lease_id text NOT NULL,
+    last_activity_at timestamptz NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    closed_at timestamptz
+);
+CREATE INDEX activity_sessions_sandbox_state_idx
+    ON secondbox.activity_sessions (sandbox_id, generation, state, last_activity_at, id);
+
+CREATE TABLE secondbox.activity_touches (
+    project_id text NOT NULL,
+    sandbox_id text NOT NULL,
+    generation bigint NOT NULL,
+    service_account_id text NOT NULL,
+    lease_id text NOT NULL,
+    idempotency_key text NOT NULL,
+    request_hash text NOT NULL,
+    last_activity_at timestamptz NOT NULL,
+    created_at timestamptz NOT NULL
+);
+CREATE UNIQUE INDEX activity_touches_idempotency_idx
+    ON secondbox.activity_touches (project_id, sandbox_id, idempotency_key);
+
+CREATE TABLE secondbox.workspace_materializations (
+    id text PRIMARY KEY,
+    workspace_id text NOT NULL,
+    sandbox_id text NOT NULL,
+    assignment_id text NOT NULL,
+    runner_id text NOT NULL,
+    generation bigint NOT NULL,
+    source_checkpoint_id text NOT NULL,
+    state text NOT NULL,
+    release_proof_json jsonb NOT NULL,
+    revision bigint NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    released_at timestamptz
+);
+CREATE UNIQUE INDEX workspace_materializations_active_workspace_idx
+    ON secondbox.workspace_materializations (workspace_id)
+    WHERE state IN ('preparing','ready');
+CREATE UNIQUE INDEX workspace_materializations_assignment_generation_idx
+    ON secondbox.workspace_materializations (assignment_id, generation);
+CREATE INDEX workspace_materializations_runner_state_idx
+    ON secondbox.workspace_materializations (runner_id, state, id);
+
+CREATE TABLE secondbox.workspace_checkpoints (
+    id text PRIMARY KEY,
+    project_id text NOT NULL,
+    sandbox_id text NOT NULL,
+    workspace_id text NOT NULL,
+    source_generation bigint NOT NULL,
+    state text NOT NULL,
+    sha256 text NOT NULL,
+    size_bytes bigint NOT NULL,
+    compatibility_json jsonb NOT NULL,
+    storage_key text NOT NULL,
+    retain_until timestamptz NOT NULL,
+    created_at timestamptz NOT NULL,
+    verified_at timestamptz,
+    published_at timestamptz,
+    garbage_collection_marked_at timestamptz,
+    garbage_collected_at timestamptz
+);
+CREATE INDEX workspace_checkpoints_workspace_state_idx
+    ON secondbox.workspace_checkpoints (workspace_id, state, created_at DESC, id DESC);
+CREATE INDEX workspace_checkpoints_gc_idx
+    ON secondbox.workspace_checkpoints (state, retain_until, id);
+
+CREATE TABLE secondbox.snapshots (
+    id text PRIMARY KEY,
+    project_id text NOT NULL,
+    sandbox_id text NOT NULL,
+    workspace_id text NOT NULL,
+    checkpoint_id text NOT NULL,
+    source_generation bigint NOT NULL,
+    name text NOT NULL,
+    sha256 text NOT NULL,
+    size_bytes bigint NOT NULL,
+    compatibility_json jsonb NOT NULL,
+    metadata_json jsonb NOT NULL,
+    state text NOT NULL,
+    retain_until timestamptz NOT NULL,
+    created_at timestamptz NOT NULL,
+    retention_ended_at timestamptz
+);
+CREATE INDEX snapshots_project_sandbox_created_idx ON secondbox.snapshots (project_id, sandbox_id, created_at DESC, id DESC);
+CREATE INDEX snapshots_checkpoint_retention_idx ON secondbox.snapshots (checkpoint_id, state, retain_until, id);
+
+CREATE TABLE secondbox.artifacts (
+    id text PRIMARY KEY,
+    project_id text NOT NULL,
+    sandbox_id text NOT NULL,
+    source_generation bigint NOT NULL,
+    name text NOT NULL,
+    media_type text NOT NULL,
+    size_bytes bigint NOT NULL,
+    sha256 text NOT NULL,
+    storage_key text NOT NULL,
+    state text,
+    metadata_json jsonb NOT NULL,
+    retain_until timestamptz NOT NULL,
+    created_at timestamptz NOT NULL,
+    published_at timestamptz,
+    garbage_collection_marked_at timestamptz,
+    garbage_collected_at timestamptz
+);
+CREATE INDEX artifacts_project_sandbox_created_idx ON secondbox.artifacts (project_id, sandbox_id, created_at DESC, id DESC);
+CREATE INDEX artifacts_gc_idx ON secondbox.artifacts (state, retain_until, id);
+
+CREATE TABLE secondbox.port_sessions (
+    id text PRIMARY KEY,
+    project_id text NOT NULL,
+    sandbox_id text NOT NULL,
+    profile_revision_id text NOT NULL,
+    data_plane_session_id text NOT NULL,
+    service_account_id text NOT NULL,
+    lease_id text NOT NULL,
+    generation bigint NOT NULL,
+    name text NOT NULL,
+    guest_port bigint NOT NULL,
+    protocol text NOT NULL,
+    stream_window_bytes bigint NOT NULL,
+    client_credit_bytes bigint NOT NULL,
+    client_bytes bigint NOT NULL,
+    runner_bytes bigint NOT NULL,
+    state text NOT NULL,
+    idempotency_key text NOT NULL,
+    request_hash text NOT NULL,
+    expires_at timestamptz NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    connected_at timestamptz,
+    closed_at timestamptz
+);
+CREATE UNIQUE INDEX port_sessions_idempotency_idx
+    ON secondbox.port_sessions (project_id, sandbox_id, idempotency_key);
+CREATE INDEX port_sessions_project_state_idx ON secondbox.port_sessions (project_id, state, expires_at, id);
+CREATE INDEX port_sessions_sandbox_state_idx ON secondbox.port_sessions (sandbox_id, state, expires_at, id);
+
+CREATE TABLE secondbox.data_plane_sessions (
+    id text PRIMARY KEY,
+    project_id text NOT NULL,
+    sandbox_id text NOT NULL,
+    profile_revision_id text NOT NULL,
+    assignment_id text NOT NULL,
+    instance_id text NOT NULL,
+    runner_id text NOT NULL,
+    generation bigint NOT NULL,
+    fencing_token bytea NOT NULL,
+    service_account_id text NOT NULL,
+    request_id text NOT NULL,
+    lease_id text NOT NULL,
+    kind text NOT NULL,
+    operation text NOT NULL,
+    stream_id text NOT NULL,
+    state text NOT NULL,
+    priority bigint NOT NULL,
+    idempotency_key text NOT NULL,
+    request_hash text NOT NULL,
+    deadline_at timestamptz NOT NULL,
+    maximum_response_bytes bigint NOT NULL,
+    maximum_request_bytes bigint NOT NULL,
+    stream_window_bytes bigint NOT NULL,
+    response_credit_bytes bigint NOT NULL,
+    request_stream_bytes bigint NOT NULL,
+    request_stream_closed boolean NOT NULL,
+    detachable boolean NOT NULL,
+    terminal_detach_seconds bigint NOT NULL,
+    attachment_id text NOT NULL,
+    attached_at timestamptz,
+    detached_at timestamptz,
+    detach_expires_at timestamptz,
+    outbound_bytes bigint NOT NULL,
+    inbound_bytes bigint NOT NULL,
+    next_inbound_sequence bigint NOT NULL,
+    terminal_kind text NOT NULL,
+    terminal_detail text NOT NULL,
+    exit_code integer NOT NULL,
+    signal integer NOT NULL,
+    spawn_failure_reason text NOT NULL,
+    elapsed_milliseconds bigint NOT NULL,
+    limit_bytes bigint NOT NULL,
+    infrastructure_failure_reason text NOT NULL,
+    retryable boolean NOT NULL,
+    terminal_message text NOT NULL,
+    stdout_bytes bytea NOT NULL,
+    stderr_bytes bytea NOT NULL,
+    content_bytes bytea NOT NULL,
+    metadata_json jsonb NOT NULL,
+    request_json jsonb NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    completed_at timestamptz,
+    retain_until timestamptz NOT NULL
+);
+CREATE UNIQUE INDEX data_plane_sessions_stream_idx
+    ON secondbox.data_plane_sessions (kind, assignment_id, id, stream_id);
+CREATE UNIQUE INDEX data_plane_sessions_idempotency_idx
+    ON secondbox.data_plane_sessions (project_id, operation, sandbox_id, idempotency_key)
+    WHERE idempotency_key<>'';
+CREATE INDEX data_plane_sessions_runner_state_idx
+    ON secondbox.data_plane_sessions (runner_id, state, priority, created_at, id);
+CREATE INDEX data_plane_sessions_retention_idx
+    ON secondbox.data_plane_sessions (retain_until, state, id);
+
+CREATE TABLE secondbox.data_plane_frames (
+    id text PRIMARY KEY,
+    session_id text NOT NULL,
+    direction text NOT NULL,
+    sequence bigint NOT NULL,
+    payload_hash text NOT NULL,
+    payload bytea NOT NULL,
+    payload_bytes bigint NOT NULL,
+    priority bigint NOT NULL,
+    state text NOT NULL,
+    claim_owner text NOT NULL,
+    claim_expires_at timestamptz,
+    delivery_count bigint NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    delivered_at timestamptz,
+    consumed_at timestamptz
+);
+CREATE UNIQUE INDEX data_plane_frames_sequence_idx
+    ON secondbox.data_plane_frames (session_id, direction, sequence);
+CREATE INDEX data_plane_frames_delivery_idx
+    ON secondbox.data_plane_frames (direction, state, priority, created_at, id);
+
+CREATE TABLE secondbox.operations (
+    id text PRIMARY KEY,
+    project_id text NOT NULL,
+    sandbox_id text NOT NULL,
+    kind text NOT NULL,
+    state text NOT NULL,
+    request_id text NOT NULL,
+    request_metadata_json jsonb,
+    error_code text NOT NULL,
+    error_message text NOT NULL,
+    retryable boolean NOT NULL,
+    created_at timestamptz NOT NULL,
+    started_at timestamptz,
+    completed_at timestamptz,
+    updated_at timestamptz NOT NULL
+);
+CREATE INDEX operations_project_created_idx ON secondbox.operations (project_id, created_at, id);
+CREATE INDEX operations_state_updated_idx ON secondbox.operations (state, updated_at, id);
+
+CREATE TABLE secondbox.idempotency_records (
+    project_id text NOT NULL,
+    operation text NOT NULL,
+    target_id text NOT NULL,
+    idempotency_key text NOT NULL,
+    request_hash text NOT NULL,
+    response_resource_id text NOT NULL,
+    created_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL
+);
+CREATE UNIQUE INDEX idempotency_records_scope_idx
+    ON secondbox.idempotency_records (project_id, operation, target_id, idempotency_key);
+CREATE INDEX idempotency_records_expiry_idx ON secondbox.idempotency_records (expires_at);
+
+CREATE TABLE secondbox.audit_events (
+    id text PRIMARY KEY,
+    project_id text NOT NULL,
+    actor_kind text NOT NULL,
+    actor_id text NOT NULL,
+    action text NOT NULL,
+    resource_kind text NOT NULL,
+    resource_id text NOT NULL,
+    outcome text NOT NULL,
+    request_id text NOT NULL,
+    details_json jsonb NOT NULL,
+    created_at timestamptz NOT NULL
+);
+CREATE INDEX audit_events_project_created_idx ON secondbox.audit_events (project_id, created_at DESC, id DESC);
+CREATE INDEX audit_events_action_created_idx ON secondbox.audit_events (action, created_at DESC, id DESC);

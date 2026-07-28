@@ -1,0 +1,746 @@
+syntax = "proto3";
+
+package secondbox.runner.v1;
+
+option go_package = "github.com/SecondStack-AI/SecondBox/gen/runner/v1;runnerv1";
+
+// RunnerControl is the single authenticated, runner-initiated control channel.
+// The first messages MUST be RunnerHello and RunnerWelcome (or
+// ProtocolRejection). No registration or mutation is valid before negotiation.
+service RunnerControl {
+  rpc Connect(stream RunnerToControlPlane) returns (stream ControlPlaneToRunner);
+}
+
+message ProtocolVersionRange {
+  uint32 minimum = 1;
+  uint32 maximum = 2;
+}
+
+enum RunnerFeature {
+  RUNNER_FEATURE_UNSPECIFIED = 0;
+  RUNNER_FEATURE_EXEC_STREAMING = 1;
+  RUNNER_FEATURE_FILE_STREAMING = 2;
+  RUNNER_FEATURE_PTY = 3;
+  RUNNER_FEATURE_PORT_PROXY = 4;
+  RUNNER_FEATURE_EVIDENCE = 5;
+  RUNNER_FEATURE_CHECKPOINT = 6;
+}
+
+message RunnerHello {
+  string runner_id = 1;
+  bytes connection_nonce = 2;
+  ProtocolVersionRange supported_versions = 3;
+  repeated RunnerFeature requested_features = 4;
+  repeated RunnerFeature mandatory_features = 5;
+}
+
+message RunnerWelcome {
+  string connection_id = 1;
+  uint32 selected_version = 2;
+  repeated RunnerFeature enabled_features = 3;
+  uint64 heartbeat_interval_ms = 4;
+}
+
+enum ProtocolRejectionKind {
+  PROTOCOL_REJECTION_KIND_UNSPECIFIED = 0;
+  PROTOCOL_REJECTION_KIND_VERSION_UNSUPPORTED = 1;
+  PROTOCOL_REJECTION_KIND_FEATURE_UNSUPPORTED = 2;
+  PROTOCOL_REJECTION_KIND_IDENTITY_MISMATCH = 3;
+  PROTOCOL_REJECTION_KIND_INVALID_HELLO = 4;
+}
+
+message ProtocolRejection {
+  ProtocolRejectionKind kind = 1;
+  string safe_detail = 2;
+}
+
+message Capacity {
+  uint32 vcpu_millis = 1;
+  uint64 memory_bytes = 2;
+  uint64 disk_bytes = 3;
+  uint32 instances = 4;
+  uint32 operations = 5;
+}
+
+message RunnerCapabilities {
+  string architecture = 1;
+  string kernel_release = 2;
+  string firecracker_version = 3;
+  bool kvm_ready = 4;
+  bool jailer_ready = 5;
+  bool cgroup_ready = 6;
+  bool network_policy_ready = 7;
+  bool storage_ready = 8;
+  bool cleanup_ready = 9;
+  ProtocolVersionRange guest_protocol_generations = 10;
+}
+
+message ArtifactCacheEvidence {
+  string artifact_id = 1;
+  string manifest_digest = 2;
+  uint64 verified_at_unix_ms = 3;
+}
+
+enum RunnerReadinessFailure {
+  RUNNER_READINESS_FAILURE_UNSPECIFIED = 0;
+  RUNNER_READINESS_FAILURE_KVM = 1;
+  RUNNER_READINESS_FAILURE_JAILER = 2;
+  RUNNER_READINESS_FAILURE_CGROUP = 3;
+  RUNNER_READINESS_FAILURE_NETWORK = 4;
+  RUNNER_READINESS_FAILURE_STORAGE = 5;
+  RUNNER_READINESS_FAILURE_TRUST = 6;
+  RUNNER_READINESS_FAILURE_CLEANUP = 7;
+}
+
+message RunnerRegistration {
+  string message_id = 1;
+  uint64 sequence = 2;
+  string runner_id = 3;
+  string connection_id = 4;
+  string runner_pool_id = 5;
+  string software_version = 6;
+  uint32 protocol_version = 7;
+  RunnerCapabilities capabilities = 8;
+  Capacity allocatable = 9;
+  Capacity reserved = 10;
+  repeated ArtifactCacheEvidence artifact_cache = 11;
+  repeated RunnerReadinessFailure readiness_failures = 12;
+}
+
+enum DrainPhase {
+  DRAIN_PHASE_UNSPECIFIED = 0;
+  DRAIN_PHASE_ACTIVE = 1;
+  DRAIN_PHASE_DRAINING = 2;
+  DRAIN_PHASE_DRAINED = 3;
+}
+
+message ActiveAssignmentSummary {
+  string assignment_id = 1;
+  string sandbox_id = 2;
+  string instance_id = 3;
+  uint64 sandbox_generation = 4;
+  bytes fencing_token = 5;
+  repeated string active_operation_ids = 6;
+}
+
+message RunnerHeartbeat {
+  string message_id = 1;
+  uint64 sequence = 2;
+  string runner_id = 3;
+  string connection_id = 4;
+  uint64 observed_at_unix_ms = 5;
+  Capacity allocatable = 6;
+  Capacity reserved = 7;
+  repeated ActiveAssignmentSummary active_assignments = 8;
+  DrainPhase drain_phase = 9;
+}
+
+message Correlation {
+  string request_id = 1;
+  string operation_id = 2;
+  string sandbox_id = 3;
+  string instance_id = 4;
+  uint64 sandbox_generation = 5;
+  string assignment_id = 6;
+  string lease_id = 7;
+  string runner_id = 8;
+}
+
+// AssignmentFence is mandatory on every message that can mutate compute or
+// workspace state. Empty tokens and generation zero are invalid.
+message AssignmentFence {
+  string assignment_id = 1;
+  string sandbox_id = 2;
+  string instance_id = 3;
+  uint64 sandbox_generation = 4;
+  bytes fencing_token = 5;
+}
+
+message CapacityReservation {
+  Capacity capacity = 1;
+  string reservation_id = 2;
+}
+
+message ProfileRequirements {
+  uint32 vcpu_count = 1;
+  uint64 memory_bytes = 2;
+  uint64 disk_bytes = 3;
+  string architecture = 4;
+  repeated string required_capabilities = 5;
+  uint64 maximum_operation_ms = 6;
+  uint64 maximum_output_bytes = 7;
+}
+
+message SignedAssetReference {
+  string artifact_id = 1;
+  string manifest_digest = 2;
+  string signature_key_id = 3;
+  string architecture = 4;
+  uint32 guest_protocol_generation = 5;
+  repeated string mandatory_guest_features = 6;
+}
+
+enum NetworkPolicyMode {
+  NETWORK_POLICY_MODE_UNSPECIFIED = 0;
+  NETWORK_POLICY_MODE_DENY_ALL = 1;
+  NETWORK_POLICY_MODE_ALLOW_LIST = 2;
+}
+
+enum NetworkDestinationProtocol {
+  NETWORK_DESTINATION_PROTOCOL_UNSPECIFIED = 0;
+  NETWORK_DESTINATION_PROTOCOL_TCP = 1;
+  NETWORK_DESTINATION_PROTOCOL_HTTP = 2;
+  NETWORK_DESTINATION_PROTOCOL_HTTPS = 3;
+}
+
+message NetworkDestination {
+  oneof target {
+    string domain = 1;
+    string cidr = 2;
+  }
+  NetworkDestinationProtocol protocol = 3;
+  uint32 port = 4;
+}
+
+message NetworkPolicy {
+  NetworkPolicyMode mode = 1;
+  repeated NetworkDestination destinations = 2;
+}
+
+message AssignmentCommand {
+  string message_id = 1;
+  uint64 sequence = 2;
+  AssignmentFence fence = 3;
+  string profile_revision_id = 4;
+  ProfileRequirements requirements = 5;
+  repeated SignedAssetReference assets = 6;
+  string source_checkpoint_id = 7;
+  uint64 deadline_unix_ms = 8;
+  Correlation correlation = 9;
+  NetworkPolicy network_policy = 10;
+}
+
+enum AssignmentDecision {
+  ASSIGNMENT_DECISION_UNSPECIFIED = 0;
+  ASSIGNMENT_DECISION_ACCEPTED = 1;
+  ASSIGNMENT_DECISION_REJECTED_INCOMPATIBLE_PROFILE = 2;
+  ASSIGNMENT_DECISION_REJECTED_CAPACITY = 3;
+  ASSIGNMENT_DECISION_REJECTED_ARTIFACT = 4;
+  ASSIGNMENT_DECISION_REJECTED_PREREQUISITE = 5;
+  ASSIGNMENT_DECISION_REJECTED_DRAINING = 6;
+  ASSIGNMENT_DECISION_REJECTED_FENCED = 7;
+}
+
+message AssignmentAck {
+  string message_id = 1;
+  uint64 sequence = 2;
+  AssignmentFence fence = 3;
+  AssignmentDecision decision = 4;
+  CapacityReservation reservation = 5;
+  string safe_detail = 6;
+}
+
+enum AssignmentProgressStage {
+  ASSIGNMENT_PROGRESS_STAGE_UNSPECIFIED = 0;
+  ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY = 1;
+  ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_MATERIALIZE = 2;
+  ASSIGNMENT_PROGRESS_STAGE_NETWORK_SETUP = 3;
+  ASSIGNMENT_PROGRESS_STAGE_FIRECRACKER_LAUNCH = 4;
+  ASSIGNMENT_PROGRESS_STAGE_GUEST_NEGOTIATION = 5;
+  ASSIGNMENT_PROGRESS_STAGE_READY = 6;
+  ASSIGNMENT_PROGRESS_STAGE_TEARDOWN = 7;
+}
+
+message AssignmentProgress {
+  string message_id = 1;
+  uint64 sequence = 2;
+  AssignmentFence fence = 3;
+  AssignmentProgressStage stage = 4;
+  uint64 observed_at_unix_ms = 5;
+  Correlation correlation = 6;
+}
+
+enum AssignmentTerminalKind {
+  ASSIGNMENT_TERMINAL_KIND_UNSPECIFIED = 0;
+  ASSIGNMENT_TERMINAL_KIND_READY = 1;
+  ASSIGNMENT_TERMINAL_KIND_GUEST_REJECTED = 2;
+  ASSIGNMENT_TERMINAL_KIND_ADMISSION_FAILED = 3;
+  ASSIGNMENT_TERMINAL_KIND_FENCED = 4;
+  ASSIGNMENT_TERMINAL_KIND_GUEST_AGENT_FAILED = 5;
+  ASSIGNMENT_TERMINAL_KIND_RUNNER_FAILED = 6;
+  ASSIGNMENT_TERMINAL_KIND_INFRASTRUCTURE_FAILED = 7;
+  ASSIGNMENT_TERMINAL_KIND_TERMINATED = 8;
+}
+
+message AssignmentResult {
+  string message_id = 1;
+  uint64 sequence = 2;
+  AssignmentFence fence = 3;
+  AssignmentTerminalKind terminal = 4;
+  string backend_kind = 5;
+  string backend_reference = 6;
+  string safe_detail = 7;
+  Correlation correlation = 8;
+}
+
+enum FenceReason {
+  FENCE_REASON_UNSPECIFIED = 0;
+  FENCE_REASON_GENERATION_ADVANCED = 1;
+  FENCE_REASON_ASSIGNMENT_REPLACED = 2;
+  FENCE_REASON_OPERATOR_REQUEST = 3;
+  FENCE_REASON_LEASE_EXPIRED = 4;
+}
+
+message FenceCommand {
+  string message_id = 1;
+  uint64 sequence = 2;
+  AssignmentFence fence = 3;
+  FenceReason reason = 4;
+  uint64 deadline_unix_ms = 5;
+  Correlation correlation = 6;
+}
+
+enum FenceResultKind {
+  FENCE_RESULT_KIND_UNSPECIFIED = 0;
+  FENCE_RESULT_KIND_STOPPED = 1;
+  FENCE_RESULT_KIND_ALREADY_STOPPED = 2;
+  FENCE_RESULT_KIND_FAILED = 3;
+}
+
+message FenceResult {
+  string message_id = 1;
+  uint64 sequence = 2;
+  AssignmentFence fence = 3;
+  FenceResultKind result = 4;
+  string termination_evidence_digest = 5;
+  string safe_detail = 6;
+  Correlation correlation = 7;
+}
+
+enum DrainMode {
+  DRAIN_MODE_UNSPECIFIED = 0;
+  DRAIN_MODE_GRACEFUL = 1;
+  DRAIN_MODE_BOUNDED = 2;
+}
+
+message DrainCommand {
+  string message_id = 1;
+  uint64 sequence = 2;
+  DrainMode mode = 3;
+  uint64 deadline_unix_ms = 4;
+}
+
+message DrainState {
+  string message_id = 1;
+  uint64 sequence = 2;
+  DrainPhase phase = 3;
+  repeated ActiveAssignmentSummary remaining_assignments = 4;
+}
+
+message StreamCredit {
+  uint64 byte_count = 1;
+}
+
+message ExecOpen {
+  oneof command {
+    string shell = 1;
+    ArgvCommand argv = 2;
+  }
+  string cwd = 3;
+  repeated EnvironmentEntry environment = 4;
+  uint64 deadline_unix_ms = 5;
+  uint64 output_limit_bytes = 6;
+  bool allocate_pty = 7;
+  uint32 pty_rows = 8;
+  uint32 pty_columns = 9;
+  bytes stdin = 10;
+  bool streaming = 11;
+}
+
+message ArgvCommand {
+  repeated string argument = 1;
+}
+
+message EnvironmentEntry {
+  string name = 1;
+  bytes value = 2;
+}
+
+message ExecInput {
+  bytes data = 1;
+  bool end_of_input = 2;
+}
+
+enum ExecOutputChannel {
+  EXEC_OUTPUT_CHANNEL_UNSPECIFIED = 0;
+  EXEC_OUTPUT_CHANNEL_STDOUT = 1;
+  EXEC_OUTPUT_CHANNEL_STDERR = 2;
+}
+
+message ExecOutput {
+  ExecOutputChannel channel = 1;
+  bytes data = 2;
+}
+
+message ExecCancel {
+  string reason = 1;
+}
+
+enum ExecTerminalKind {
+  EXEC_TERMINAL_KIND_UNSPECIFIED = 0;
+  EXEC_TERMINAL_KIND_EXITED = 1;
+  EXEC_TERMINAL_KIND_SPAWN_FAILED = 2;
+  EXEC_TERMINAL_KIND_DEADLINE_EXCEEDED = 3;
+  EXEC_TERMINAL_KIND_CANCELLED = 4;
+  EXEC_TERMINAL_KIND_OUTPUT_EXHAUSTED = 5;
+  EXEC_TERMINAL_KIND_GUEST_AGENT_FAILED = 6;
+  EXEC_TERMINAL_KIND_RUNNER_FAILED = 7;
+  EXEC_TERMINAL_KIND_INFRASTRUCTURE_FAILED = 8;
+  EXEC_TERMINAL_KIND_FENCED = 9;
+}
+
+enum SpawnFailureReason {
+  SPAWN_FAILURE_REASON_UNSPECIFIED = 0;
+  SPAWN_FAILURE_REASON_NOT_FOUND = 1;
+  SPAWN_FAILURE_REASON_PERMISSION_DENIED = 2;
+  SPAWN_FAILURE_REASON_INVALID_CWD = 3;
+  SPAWN_FAILURE_REASON_MALFORMED_EXECUTABLE = 4;
+}
+
+enum InfrastructureFailureReason {
+  INFRASTRUCTURE_FAILURE_REASON_UNSPECIFIED = 0;
+  INFRASTRUCTURE_FAILURE_REASON_TRANSPORT = 1;
+  INFRASTRUCTURE_FAILURE_REASON_ADMISSION = 2;
+  INFRASTRUCTURE_FAILURE_REASON_GENERATION_FENCED = 3;
+  INFRASTRUCTURE_FAILURE_REASON_LEASE_FENCED = 4;
+  INFRASTRUCTURE_FAILURE_REASON_GUEST_AGENT = 5;
+  INFRASTRUCTURE_FAILURE_REASON_EXECUTION_NODE = 6;
+  INFRASTRUCTURE_FAILURE_REASON_SERVICE = 7;
+}
+
+message ExecTerminal {
+  ExecTerminalKind kind = 1;
+  int32 exit_code = 2;
+  string safe_detail = 3;
+  int32 signal = 4;
+  SpawnFailureReason spawn_failure_reason = 5;
+  uint64 elapsed_milliseconds = 6;
+  uint64 limit_bytes = 7;
+  InfrastructureFailureReason infrastructure_failure_reason = 8;
+  bool retryable = 9;
+  string message = 10;
+}
+
+message ExecFrame {
+  AssignmentFence fence = 1;
+  string operation_id = 2;
+  string stream_id = 3;
+  uint64 sequence = 4;
+  Correlation correlation = 5;
+  oneof payload {
+    ExecOpen open = 10;
+    ExecInput input = 11;
+    ExecOutput output = 12;
+    StreamCredit credit = 13;
+    ExecCancel cancel = 14;
+    ExecTerminal terminal = 15;
+  }
+}
+
+enum FileOperation {
+  FILE_OPERATION_UNSPECIFIED = 0;
+  FILE_OPERATION_READ = 1;
+  FILE_OPERATION_WRITE = 2;
+  FILE_OPERATION_STAT = 3;
+  FILE_OPERATION_LIST = 4;
+  FILE_OPERATION_EXISTS = 5;
+  FILE_OPERATION_MKDIR = 6;
+  FILE_OPERATION_REMOVE = 7;
+}
+
+message FileOpen {
+  FileOperation operation = 1;
+  string workspace_relative_path = 2;
+  uint64 expected_size = 3;
+  string expected_checksum = 4;
+  bool recursive = 5;
+  bool force = 6;
+}
+
+message FileChunk {
+  uint64 offset = 1;
+  bytes data = 2;
+}
+
+message FileMetadata {
+  bool exists = 1;
+  uint64 size = 2;
+  uint32 mode = 3;
+  string checksum = 4;
+  repeated string direct_children = 5;
+  FileKind kind = 6;
+  uint64 modified_at_unix_ms = 7;
+  repeated FileMetadataEntry direct_child_entries = 8;
+}
+
+enum FileKind {
+  FILE_KIND_UNSPECIFIED = 0;
+  FILE_KIND_FILE = 1;
+  FILE_KIND_DIRECTORY = 2;
+  FILE_KIND_SYMBOLIC_LINK = 3;
+}
+
+message FileMetadataEntry {
+  string path = 1;
+  FileKind kind = 2;
+  uint64 size = 3;
+  uint64 modified_at_unix_ms = 4;
+}
+
+enum FileTerminalKind {
+  FILE_TERMINAL_KIND_UNSPECIFIED = 0;
+  FILE_TERMINAL_KIND_COMPLETED = 1;
+  FILE_TERMINAL_KIND_NOT_FOUND = 2;
+  FILE_TERMINAL_KIND_INVALID_PATH = 3;
+  FILE_TERMINAL_KIND_PERMISSION_DENIED = 4;
+  FILE_TERMINAL_KIND_CHECKSUM_MISMATCH = 5;
+  FILE_TERMINAL_KIND_LIMIT_EXCEEDED = 6;
+  FILE_TERMINAL_KIND_CANCELLED = 7;
+  FILE_TERMINAL_KIND_FENCED = 8;
+  FILE_TERMINAL_KIND_FAILED = 9;
+}
+
+message FileTerminal {
+  FileTerminalKind kind = 1;
+  string safe_detail = 2;
+}
+
+message FileFrame {
+  AssignmentFence fence = 1;
+  string operation_id = 2;
+  string stream_id = 3;
+  uint64 sequence = 4;
+  Correlation correlation = 5;
+  oneof payload {
+    FileOpen open = 10;
+    FileChunk chunk = 11;
+    FileMetadata metadata = 12;
+    StreamCredit credit = 13;
+    ExecCancel cancel = 14;
+    FileTerminal terminal = 15;
+  }
+}
+
+message PtyInput {
+  bytes data = 1;
+}
+
+message PtyResize {
+  uint32 rows = 1;
+  uint32 columns = 2;
+}
+
+message PtyDetach {
+  string reconnect_id = 1;
+}
+
+message PtyAttach {
+  string reconnect_id = 1;
+}
+
+message PtyFrame {
+  AssignmentFence fence = 1;
+  string operation_id = 2;
+  string stream_id = 3;
+  uint64 sequence = 4;
+  Correlation correlation = 5;
+  oneof payload {
+    PtyInput input = 10;
+    ExecOutput output = 11;
+    PtyResize resize = 12;
+    PtyDetach detach = 13;
+    PtyAttach attach = 14;
+    StreamCredit credit = 15;
+    ExecTerminal terminal = 16;
+  }
+}
+
+message PortOpen {
+  uint32 guest_port = 1;
+  string protocol = 2;
+  uint64 idle_timeout_ms = 3;
+}
+
+message PortBytes {
+  bytes data = 1;
+}
+
+enum PortTerminalKind {
+  PORT_TERMINAL_KIND_UNSPECIFIED = 0;
+  PORT_TERMINAL_KIND_CLOSED = 1;
+  PORT_TERMINAL_KIND_CANCELLED = 2;
+  PORT_TERMINAL_KIND_POLICY_DENIED = 3;
+  PORT_TERMINAL_KIND_GUEST_UNAVAILABLE = 4;
+  PORT_TERMINAL_KIND_FENCED = 5;
+  PORT_TERMINAL_KIND_FAILED = 6;
+}
+
+message PortTerminal {
+  PortTerminalKind kind = 1;
+  string safe_detail = 2;
+}
+
+message PortFrame {
+  AssignmentFence fence = 1;
+  string operation_id = 2;
+  string stream_id = 3;
+  uint64 sequence = 4;
+  Correlation correlation = 5;
+  oneof payload {
+    PortOpen open = 10;
+    PortBytes bytes = 11;
+    StreamCredit credit = 12;
+    ExecCancel cancel = 13;
+    PortTerminal terminal = 14;
+  }
+}
+
+message CheckpointCommand {
+  string message_id = 1;
+  uint64 sequence = 2;
+  AssignmentFence fence = 3;
+  string checkpoint_id = 4;
+  string storage_object_id = 5;
+  uint64 maximum_size_bytes = 6;
+  uint64 deadline_unix_ms = 7;
+  Correlation correlation = 8;
+}
+
+message CheckpointChunk {
+  string message_id = 1;
+  uint64 sequence = 2;
+  AssignmentFence fence = 3;
+  string checkpoint_id = 4;
+  string storage_object_id = 5;
+  uint64 offset = 6;
+  bytes data = 7;
+  bool end_of_object = 8;
+}
+
+enum CheckpointTerminalKind {
+  CHECKPOINT_TERMINAL_KIND_UNSPECIFIED = 0;
+  CHECKPOINT_TERMINAL_KIND_CREATED = 1;
+  CHECKPOINT_TERMINAL_KIND_FENCED = 2;
+  CHECKPOINT_TERMINAL_KIND_DEADLINE_EXCEEDED = 3;
+  CHECKPOINT_TERMINAL_KIND_INTEGRITY_FAILED = 4;
+  CHECKPOINT_TERMINAL_KIND_RUNNER_FAILED = 5;
+}
+
+message CheckpointResult {
+  string message_id = 1;
+  uint64 sequence = 2;
+  AssignmentFence fence = 3;
+  string checkpoint_id = 4;
+  string storage_object_id = 5;
+  CheckpointTerminalKind terminal = 6;
+  string sha256 = 7;
+  uint64 size_bytes = 8;
+  map<string, string> compatibility = 9;
+  string termination_evidence_digest = 10;
+  string safe_detail = 11;
+  Correlation correlation = 12;
+}
+
+message RestoreBegin {
+  AssignmentFence fence = 1;
+  string checkpoint_id = 2;
+  string storage_object_id = 3;
+  string sha256 = 4;
+  uint64 size_bytes = 5;
+  map<string, string> compatibility = 6;
+  uint64 deadline_unix_ms = 7;
+  Correlation correlation = 8;
+}
+
+message RestoreChunk {
+  AssignmentFence fence = 1;
+  string checkpoint_id = 2;
+  string storage_object_id = 3;
+  uint64 offset = 4;
+  bytes data = 5;
+  bool end_of_object = 6;
+}
+
+// Evidence is deliberately unable to carry fencing tokens, command values,
+// byte streams, paths, network destinations, or workspace content.
+message Evidence {
+  string message_id = 1;
+  uint64 sequence = 2;
+  string event = 3;
+  string outcome = 4;
+  string terminal_kind = 5;
+  uint64 observed_at_unix_ms = 6;
+  Correlation correlation = 7;
+}
+
+// InstanceObservedTerminationReason is limited to post-ready process exit
+// classifications the Runner can prove from owned Firecracker and cgroup
+// evidence. Policy, operator, fencing, and Runner-loss reasons remain
+// control-plane authority.
+enum InstanceObservedTerminationReason {
+  INSTANCE_OBSERVED_TERMINATION_REASON_UNSPECIFIED = 0;
+  INSTANCE_OBSERVED_TERMINATION_REASON_GUEST_SHUTDOWN = 1;
+  INSTANCE_OBSERVED_TERMINATION_REASON_RESOURCE_EXHAUSTION = 2;
+  INSTANCE_OBSERVED_TERMINATION_REASON_INTERNAL_FAILURE = 3;
+}
+
+// InstanceTerminal reports that the current assigned process is gone. It is
+// observation evidence only and does not prove Assignment or materialization
+// release.
+message InstanceTerminal {
+  string message_id = 1;
+  uint64 sequence = 2;
+  AssignmentFence fence = 3;
+  InstanceObservedTerminationReason reason = 4;
+  uint64 observed_at_unix_ms = 5;
+  string termination_evidence_digest = 6;
+  Correlation correlation = 7;
+}
+
+message RunnerToControlPlane {
+  oneof message {
+    RunnerHello hello = 1;
+    RunnerRegistration registration = 2;
+    RunnerHeartbeat heartbeat = 3;
+    AssignmentAck assignment_ack = 4;
+    AssignmentProgress assignment_progress = 5;
+    AssignmentResult assignment_result = 6;
+    FenceResult fence_result = 7;
+    DrainState drain_state = 8;
+    ExecFrame exec = 9;
+    FileFrame file = 10;
+    PtyFrame pty = 11;
+    PortFrame port = 12;
+    Evidence evidence = 13;
+    CheckpointChunk checkpoint_chunk = 14;
+    CheckpointResult checkpoint_result = 15;
+    InstanceTerminal instance_terminal = 16;
+  }
+}
+
+message ControlPlaneToRunner {
+  oneof message {
+    RunnerWelcome welcome = 1;
+    ProtocolRejection rejection = 2;
+    AssignmentCommand assignment = 3;
+    FenceCommand fence = 4;
+    DrainCommand drain = 5;
+    ExecFrame exec = 6;
+    FileFrame file = 7;
+    PtyFrame pty = 8;
+    PortFrame port = 9;
+    CheckpointCommand checkpoint = 10;
+    RestoreBegin restore_begin = 11;
+    RestoreChunk restore_chunk = 12;
+  }
+}

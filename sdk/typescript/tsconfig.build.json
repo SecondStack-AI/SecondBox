@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declaration": true,
+    "declarationMap": true,
+    "noEmit": false,
+    "outDir": "./dist",
+    "rewriteRelativeImportExtensions": true,
+    "rootDir": ".",
+    "sourceMap": true
+  },
+  "include": [
+    "./client.ts",
+    "./flue-runtime-beta9-compat.ts",
+    "./flue.ts",
+    "./secondbox-client.gen.ts"
+  ]
+}

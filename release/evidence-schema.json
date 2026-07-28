@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://secondbox.dev/schemas/release-evidence-v1.json",
+  "title": "SecondBox release evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "releaseVersion",
+    "sourceCommit",
+    "generatedAt",
+    "compatibility",
+    "subjects",
+    "evidence"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "releaseVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sourceCommit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "compatibility": {
+      "type": "string",
+      "minLength": 1
+    },
+    "subjects": {
+      "type": "string",
+      "minLength": 1
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cleanCloneIsolation",
+        "nonKVMQualification",
+        "kvmQualification",
+        "multiRunnerQualification",
+        "durabilityQualification",
+        "dataPlaneQualification",
+        "networkQualification",
+        "securityQualification",
+        "compatibilityQualification",
+        "sboms",
+        "vulnerabilityReports",
+        "dependencyAge",
+        "licenses",
+        "checksums",
+        "signatures",
+        "provenance"
+      ],
+      "properties": {
+        "cleanCloneIsolation": {"$ref": "#/$defs/evidenceRecord"},
+        "nonKVMQualification": {"$ref": "#/$defs/evidenceRecord"},
+        "kvmQualification": {"$ref": "#/$defs/qualificationEvidenceRecord"},
+        "multiRunnerQualification": {"$ref": "#/$defs/qualificationEvidenceRecord"},
+        "durabilityQualification": {"$ref": "#/$defs/qualificationEvidenceRecord"},
+        "dataPlaneQualification": {"$ref": "#/$defs/qualificationEvidenceRecord"},
+        "networkQualification": {"$ref": "#/$defs/qualificationEvidenceRecord"},
+        "securityQualification": {"$ref": "#/$defs/qualificationEvidenceRecord"},
+        "compatibilityQualification": {"$ref": "#/$defs/evidenceRecord"},
+        "sboms": {"$ref": "#/$defs/evidenceRecord"},
+        "vulnerabilityReports": {"$ref": "#/$defs/evidenceRecord"},
+        "dependencyAge": {"$ref": "#/$defs/evidenceRecord"},
+        "licenses": {"$ref": "#/$defs/evidenceRecord"},
+        "checksums": {"$ref": "#/$defs/evidenceRecord"},
+        "signatures": {"$ref": "#/$defs/signatureEvidenceRecord"},
+        "provenance": {"$ref": "#/$defs/evidenceRecord"}
+      }
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "evidenceRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "summary", "artifacts"],
+      "properties": {
+        "status": {
+          "enum": ["passed", "failed", "blocked", "not-applicable"]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/artifact"}
+        }
+      }
+    },
+    "qualificationEvidenceRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "summary", "artifacts"],
+      "properties": {
+        "status": {
+          "enum": ["passed", "failed", "blocked"]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/artifact"}
+        },
+        "record": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "passed"
+              }
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["record"],
+            "properties": {
+              "record": true,
+              "artifacts": {
+                "type": "array",
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "signatureEvidenceRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "summary",
+        "artifacts",
+        "manifest",
+        "signature",
+        "publicKey",
+        "publicKeySHA256"
+      ],
+      "properties": {
+        "status": {
+          "enum": ["passed", "failed", "blocked", "not-applicable"]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/artifact"}
+        },
+        "manifest": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+        },
+        "publicKey": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+        },
+        "publicKeySHA256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}

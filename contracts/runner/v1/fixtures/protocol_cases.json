@@ -1,0 +1,164 @@
+{
+  "schema_generation": 1,
+  "server_window": {
+    "minimum": 1,
+    "maximum": 1
+  },
+  "negotiation_cases": [
+    {
+      "name": "current_generation",
+      "client_minimum": 1,
+      "client_maximum": 1,
+      "mandatory_features": [
+        "exec_streaming",
+        "evidence"
+      ],
+      "server_features": [
+        "exec_streaming",
+        "evidence",
+        "file_streaming"
+      ],
+      "selected_generation": 1,
+      "rejection": ""
+    },
+    {
+      "name": "future_only",
+      "client_minimum": 2,
+      "client_maximum": 3,
+      "mandatory_features": [],
+      "server_features": [
+        "exec_streaming"
+      ],
+      "selected_generation": 0,
+      "rejection": "version_unsupported"
+    },
+    {
+      "name": "invalid_range",
+      "client_minimum": 2,
+      "client_maximum": 1,
+      "mandatory_features": [],
+      "server_features": [
+        "exec_streaming"
+      ],
+      "selected_generation": 0,
+      "rejection": "invalid_range"
+    },
+    {
+      "name": "mandatory_feature_missing",
+      "client_minimum": 1,
+      "client_maximum": 1,
+      "mandatory_features": [
+        "port_proxy"
+      ],
+      "server_features": [
+        "exec_streaming"
+      ],
+      "selected_generation": 0,
+      "rejection": "feature_unsupported"
+    }
+  ],
+  "message_identity_cases": [
+    {
+      "name": "next_message",
+      "previous_message_id": "msg-7",
+      "previous_sequence": 7,
+      "previous_fencing_token": "fence-a",
+      "incoming_message_id": "msg-8",
+      "incoming_sequence": 8,
+      "incoming_fencing_token": "fence-a",
+      "outcome": "accept"
+    },
+    {
+      "name": "exact_duplicate",
+      "previous_message_id": "msg-7",
+      "previous_sequence": 7,
+      "previous_fencing_token": "fence-a",
+      "incoming_message_id": "msg-7",
+      "incoming_sequence": 7,
+      "incoming_fencing_token": "fence-a",
+      "outcome": "duplicate"
+    },
+    {
+      "name": "reordered_stale_message",
+      "previous_message_id": "msg-7",
+      "previous_sequence": 7,
+      "previous_fencing_token": "fence-a",
+      "incoming_message_id": "msg-6",
+      "incoming_sequence": 6,
+      "incoming_fencing_token": "fence-a",
+      "outcome": "stale"
+    },
+    {
+      "name": "sequence_gap",
+      "previous_message_id": "msg-7",
+      "previous_sequence": 7,
+      "previous_fencing_token": "fence-a",
+      "incoming_message_id": "msg-9",
+      "incoming_sequence": 9,
+      "incoming_fencing_token": "fence-a",
+      "outcome": "gap"
+    },
+    {
+      "name": "same_sequence_different_identity",
+      "previous_message_id": "msg-7",
+      "previous_sequence": 7,
+      "previous_fencing_token": "fence-a",
+      "incoming_message_id": "msg-other",
+      "incoming_sequence": 7,
+      "incoming_fencing_token": "fence-a",
+      "outcome": "identity_conflict"
+    },
+    {
+      "name": "superseded_fence",
+      "previous_message_id": "msg-7",
+      "previous_sequence": 7,
+      "previous_fencing_token": "fence-a",
+      "incoming_message_id": "msg-8",
+      "incoming_sequence": 8,
+      "incoming_fencing_token": "fence-old",
+      "outcome": "fenced"
+    }
+  ],
+  "fenced_messages": [
+    {
+      "kind": "assignment_progress",
+      "assignment_id": "assignment-1",
+      "sandbox_generation": 3,
+      "fencing_token": "fence-a",
+      "sequence": 1,
+      "valid": true
+    },
+    {
+      "kind": "exec",
+      "assignment_id": "assignment-1",
+      "sandbox_generation": 3,
+      "fencing_token": "fence-a",
+      "sequence": 2,
+      "valid": true
+    },
+    {
+      "kind": "file",
+      "assignment_id": "assignment-1",
+      "sandbox_generation": 0,
+      "fencing_token": "fence-a",
+      "sequence": 3,
+      "valid": false
+    },
+    {
+      "kind": "port",
+      "assignment_id": "assignment-1",
+      "sandbox_generation": 3,
+      "fencing_token": "",
+      "sequence": 4,
+      "valid": false
+    },
+    {
+      "kind": "evidence",
+      "assignment_id": "",
+      "sandbox_generation": 3,
+      "fencing_token": "fence-a",
+      "sequence": 5,
+      "valid": false
+    }
+  ]
+}

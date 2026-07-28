@@ -1,0 +1,72 @@
+# SecondBox Runner build and validation tasks.
+
+default:
+    @just --list
+
+build:
+    mkdir -p bin
+    go build -o bin/secondbox-runner ./cmd/secondbox-runner
+    go build -o bin/secondbox-guest-agent ./cmd/secondbox-guest-agent
+
+build-microvm-images:
+    scripts/microvm-image/build.sh
+
+build-microvm-images-std:
+    scripts/microvm-image/rootfs/build-secondbox-rootfs-source.sh
+    scripts/microvm-image/build.sh
+
+build-microvm-kernel:
+    scripts/microvm-image/build-kernel.sh tmp/microvm-kernel
+
+verify-microvm-images artifact_dir public_key public_key_sha256:
+    scripts/microvm-image/verify.sh {{ artifact_dir }} {{ public_key }} {{ public_key_sha256 }}
+
+verify-microvm-staging *ARGS:
+    scripts/microvm-stage-check.sh {{ ARGS }}
+
+# Install the persistent Firecracker development bridge.
+net-install:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${SECONDBOX_RUNNER_SANDBOX_BRIDGE_NAME:?SECONDBOX_RUNNER_SANDBOX_BRIDGE_NAME is required}"
+    : "${SECONDBOX_RUNNER_SANDBOX_BRIDGE_CIDR:?SECONDBOX_RUNNER_SANDBOX_BRIDGE_CIDR is required}"
+    UNIT_DST="/etc/systemd/system/secondbox-runner-devnet.service"
+    sed -e "s|@BRIDGE_NAME@|${SECONDBOX_RUNNER_SANDBOX_BRIDGE_NAME}|g" \
+        -e "s|@BRIDGE_CIDR@|${SECONDBOX_RUNNER_SANDBOX_BRIDGE_CIDR}|g" \
+        deploy/secondbox-runner-devnet.service | sudo tee "$UNIT_DST" >/dev/null
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now secondbox-runner-devnet.service
+    ip addr show to "${SECONDBOX_RUNNER_SANDBOX_BRIDGE_CIDR%%/*}/32" | grep -q .
+
+# Grant the current user the narrow ip/iptables privileges used by the devnet shims.
+net-sudoers:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    USER_NAME="$(id -un)"
+    IP_BIN="$(command -v ip)"
+    IPTABLES_BIN="$(command -v iptables)"
+    DROPIN="/etc/sudoers.d/secondbox-runner-devnet"
+    TMP="$(mktemp)"
+    trap 'rm -f "$TMP"' EXIT
+    printf '%s\n' \
+        "# Installed by SecondBox Runner for Firecracker development networking." \
+        "${USER_NAME} ALL=(root) NOPASSWD: ${IP_BIN}, ${IPTABLES_BIN}" > "$TMP"
+    sudo visudo -cf "$TMP"
+    sudo install -m 0440 -o root -g root "$TMP" "$DROPIN"
+
+# Remove the persistent Firecracker development bridge.
+net-uninstall:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    sudo systemctl disable --now secondbox-runner-devnet.service
+    sudo rm -f /etc/systemd/system/secondbox-runner-devnet.service
+    sudo systemctl daemon-reload
+
+test:
+    scripts/ci_paths_test.sh
+    scripts/microvm-image/browser-surface-policy-test.sh
+    scripts/microvm-image/trust-anchor-policy-test.sh
+    go test ./... -count=1
+    go vet ./...
+
+preship: test build

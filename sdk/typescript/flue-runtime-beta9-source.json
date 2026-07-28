@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "package": {
+    "name": "@flue/runtime",
+    "version": "1.0.0-beta.9",
+    "integrity": "sha512-ksh0ZkTVyqQnGvU3OnbVX6luAJwe6tt8q7O0vn99b7Cx6XcPTXzY/YEkXrOtCHzV6ZwfSdO9ZfaWbhTD1tdQuQ==",
+    "publishedAt": "2026-06-30T03:27:13.901Z"
+  },
+  "upstream": {
+    "repository": "https://github.com/withastro/flue",
+    "tag": "v1.0.0-beta.9",
+    "commit": "607d2613eb181a5e31c28a980847e101207d9fd3",
+    "license": "Apache-2.0",
+    "licenseFile": {
+      "path": "LICENSE",
+      "sha256": "6acd933eaec32c0d8683f749c1232da0ecbc9e99d77e55c87be3da68d799183d"
+    },
+    "sourceFiles": [
+      {
+        "path": "packages/runtime/src/abort.ts",
+        "sha256": "0fa5554959dfe4ce97fce072ea387b4af5105d36c637799a68721d5849bb08ff"
+      },
+      {
+        "path": "packages/runtime/src/sandbox.ts",
+        "sha256": "55fe1bed83b662285eef465bcd8275da4015a508f0faa86a3d6e041348569acb"
+      },
+      {
+        "path": "packages/runtime/src/types.ts",
+        "sha256": "5bcc9808c499d1760213889334de5abf7edfab46fba1375ab7bfeccd048c6204"
+      }
+    ]
+  },
+  "compatibilityModule": {
+    "path": "sdk/typescript/flue-runtime-beta9-compat.ts",
+    "sha256": "dc1a5b9ac1139b5ea3c33c0c2421a448c569f45493c0fb6470272381522f2f0f"
+  },
+  "adaptation": {
+    "retained": [
+      "FileStat",
+      "SandboxApi",
+      "SandboxFactory createSessionEnv",
+      "SessionEnv",
+      "ShellResult",
+      "createSandboxSessionEnv"
+    ],
+    "excluded": "All non-adapter runtime features and the optional custom tool implementation surface"
+  }
+}
