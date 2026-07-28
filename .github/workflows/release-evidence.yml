@@ -54,7 +54,9 @@ jobs:
           scripts/install-protoc.sh .tmp/protoc
           echo "$GITHUB_WORKSPACE/.tmp/protoc/bin" >>"$GITHUB_PATH"
       - name: Install PostgreSQL 18 client
-        run: sudo scripts/install-postgresql-client.sh
+        run: |
+          sudo scripts/install-postgresql-client.sh
+          echo "/usr/lib/postgresql/18/bin" >>"$GITHUB_PATH"
       - name: Prove clean-clone isolation
         run: |
           mkdir -p .tmp/clean-clone-artifact/qualification
@@ -107,7 +109,9 @@ jobs:
       - name: Install pinned JavaScript dependencies
         run: npm ci --ignore-scripts
       - name: Install PostgreSQL 18 client
-        run: sudo scripts/install-postgresql-client.sh
+        run: |
+          sudo scripts/install-postgresql-client.sh
+          echo "/usr/lib/postgresql/18/bin" >>"$GITHUB_PATH"
       - name: Run non-KVM qualification matrix
         run: |
           mkdir -p .tmp/non-kvm-artifact/qualification

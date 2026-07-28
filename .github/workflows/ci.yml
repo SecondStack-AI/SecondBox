@@ -53,7 +53,9 @@ jobs:
           scripts/install-protoc.sh .tmp/protoc
           echo "$GITHUB_WORKSPACE/.tmp/protoc/bin" >>"$GITHUB_PATH"
       - name: Install PostgreSQL 18 client
-        run: sudo scripts/install-postgresql-client.sh
+        run: |
+          sudo scripts/install-postgresql-client.sh
+          echo "/usr/lib/postgresql/18/bin" >>"$GITHUB_PATH"
       - name: Run every non-KVM test from an isolated clean clone
         run: scripts/test-clean-clone-isolation.sh --non-kvm
 
@@ -119,7 +121,9 @@ jobs:
       - name: Install pinned JavaScript validators
         run: npm ci --ignore-scripts
       - name: Install PostgreSQL 18 client
-        run: sudo scripts/install-postgresql-client.sh
+        run: |
+          sudo scripts/install-postgresql-client.sh
+          echo "/usr/lib/postgresql/18/bin" >>"$GITHUB_PATH"
       - name: Test and vet control plane and runner
         run: scripts/test-go.sh
 

@@ -14,6 +14,7 @@ func TestContinuousIntegrationRunsEntireNonKVMMatrixInsideCleanClone(t *testing.
 		"cache: false",
 		"scripts/install-protoc.sh .tmp/protoc",
 		"sudo scripts/install-postgresql-client.sh",
+		`echo "/usr/lib/postgresql/18/bin" >>"$GITHUB_PATH"`,
 		"scripts/test-clean-clone-isolation.sh --non-kvm",
 	} {
 		if !strings.Contains(workflow, required) {
@@ -79,6 +80,7 @@ func TestPostgreSQLClientInstallerUsesAuthenticatedVersionedRepository(t *testin
 		`URIs: https://apt.postgresql.org/pub/repos/apt`,
 		`Signed-By: ${key_path}`,
 		`postgresql-client-18`,
+		`/usr/lib/postgresql/18/bin/pg_dump --version`,
 		`pg_dump (PostgreSQL) 18.`,
 	} {
 		if !strings.Contains(installer, required) {
