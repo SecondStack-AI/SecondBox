@@ -109,3 +109,10 @@ func (*deadlineProofRelay) CancelDataPlaneSession(
 ) (bool, error) {
 	panic("unexpected streaming Exec cancellation")
 }
+
+func (*deadlineProofRelay) CancelPublicDataPlaneSession(
+	context.Context,
+	runnercontrol.PublicDataPlaneCancellation,
+) (runnercontrol.DataPlaneSession, bool, error) {
+	panic("unexpected public streaming session cancellation")
+}

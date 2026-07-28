@@ -175,6 +175,7 @@ func (service *ControlPlaneService) ListSandboxTerminalFrames(
 	)
 }
 
+// CancelSandboxTerminal durably replays one key-scoped public cancellation response.
 func (service *ControlPlaneService) CancelSandboxTerminal(
 	ctx context.Context,
 	principal contracts.Principal,
@@ -182,16 +183,27 @@ func (service *ControlPlaneService) CancelSandboxTerminal(
 	sessionID string,
 	generation int64,
 	idempotencyKey string,
-) (bool, error) {
+) (runnercontrol.DataPlaneSession, bool, error) {
+	if err := service.requireDataPlane(principal, contracts.ScopeSandboxExec); err != nil {
+		return runnercontrol.DataPlaneSession{}, false, err
+	}
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
-		return false, err
+		return runnercontrol.DataPlaneSession{}, false, err
 	}
-	if _, err := service.GetSandboxTerminal(ctx, principal, sandboxID, sessionID, generation); err != nil {
-		return false, err
+	requestHash, err := hashPublicSessionCancellation(sandboxID, sessionID, generation)
+	if err != nil {
+		return runnercontrol.DataPlaneSession{}, false, err
 	}
-	return service.dataPlaneRelay.CancelDataPlaneSession(
-		ctx, principal.ProjectID, sessionID,
-		"public Terminal cancellation", service.now().UTC(),
+	now := service.now().UTC()
+	return service.dataPlaneRelay.CancelPublicDataPlaneSession(
+		ctx,
+		runnercontrol.PublicDataPlaneCancellation{
+			ProjectID: principal.ProjectID, SandboxID: sandboxID, SessionID: sessionID,
+			SessionKind: "terminal", SessionOperation: "terminal",
+			IdempotencyKey: idempotencyKey,
+			RequestHash:    requestHash, Reason: "public Terminal cancellation",
+			Generation: generation, Now: now, IdempotencyEnds: now.Add(idempotencyRetention),
+		},
 	)
 }
 

@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/SecondStack-AI/SecondBox/internal/pagination"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/internal/service"
@@ -89,6 +90,7 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	mux.Handle("POST /v1/sandboxes/{sandboxID}/leases", apiHandler.authenticate(http.HandlerFunc(apiHandler.acquireLease)))
 	mux.Handle("POST /v1/sandboxes/{sandboxID}/exec", apiHandler.authenticate(http.HandlerFunc(apiHandler.executeSandboxCommand)))
 	mux.Handle("POST /v1/sandboxes/{sandboxID}/exec-streams", apiHandler.authenticate(http.HandlerFunc(apiHandler.createSandboxExecStream)))
+	mux.Handle("POST /v1/sandboxes/{sandboxID}/exec-streams/{execSessionAction}", apiHandler.authenticate(http.HandlerFunc(apiHandler.cancelSandboxExecStream)))
 	mux.Handle("GET /v1/sandboxes/{sandboxID}/exec-streams/{execSessionID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.connectSandboxExecStream)))
 	mux.Handle("POST /v1/sandboxes/{sandboxID}/terminals", apiHandler.authenticate(http.HandlerFunc(apiHandler.createSandboxTerminal)))
 	mux.Handle("GET /v1/sandboxes/{sandboxID}/terminals/{terminalSessionID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getOrConnectSandboxTerminal)))
@@ -533,11 +535,14 @@ func (apiHandler *handler) createProject(writer http.ResponseWriter, request *ht
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	project, err := apiHandler.service.CreateProject(request.Context(), requestPrincipal(request), body)
+	project, replayed, err := apiHandler.service.CreateProjectIdempotent(
+		request.Context(), requestPrincipal(request), request.Header.Get("Idempotency-Key"), body,
+	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
 		return
 	}
+	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
 	setRevisionETag(writer, project.Revision)
 	writeJSON(writer, http.StatusCreated, project)
 }
@@ -548,12 +553,14 @@ func (apiHandler *handler) listProjects(writer http.ResponseWriter, request *htt
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	projects, err := apiHandler.service.ListProjects(request.Context(), requestPrincipal(request), limit)
+	page, err := apiHandler.service.ListProjects(
+		request.Context(), requestPrincipal(request), limit, request.URL.Query().Get("cursor"),
+	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"items": projects})
+	writeJSON(writer, http.StatusOK, page)
 }
 
 func (apiHandler *handler) getProject(writer http.ResponseWriter, request *http.Request) {
@@ -577,13 +584,15 @@ func (apiHandler *handler) updateProject(writer http.ResponseWriter, request *ht
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	project, err := apiHandler.service.UpdateProject(
-		request.Context(), requestPrincipal(request), request.PathValue("projectID"), body, expectedRevision,
+	project, replayed, err := apiHandler.service.UpdateProjectIdempotent(
+		request.Context(), requestPrincipal(request), request.PathValue("projectID"),
+		request.Header.Get("Idempotency-Key"), body, expectedRevision,
 	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
 		return
 	}
+	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
 	setRevisionETag(writer, project.Revision)
 	writeJSON(writer, http.StatusOK, project)
 }
@@ -594,13 +603,15 @@ func (apiHandler *handler) createServiceAccount(writer http.ResponseWriter, requ
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	account, err := apiHandler.service.CreateServiceAccount(
-		request.Context(), requestPrincipal(request), request.PathValue("projectID"), body,
+	account, replayed, err := apiHandler.service.CreateServiceAccountIdempotent(
+		request.Context(), requestPrincipal(request), request.PathValue("projectID"),
+		request.Header.Get("Idempotency-Key"), body,
 	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
 		return
 	}
+	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
 	setRevisionETag(writer, account.Revision)
 	writeJSON(writer, http.StatusCreated, account)
 }
@@ -611,14 +622,15 @@ func (apiHandler *handler) listServiceAccounts(writer http.ResponseWriter, reque
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	accounts, err := apiHandler.service.ListServiceAccounts(
-		request.Context(), requestPrincipal(request), request.PathValue("projectID"), limit,
+	page, err := apiHandler.service.ListServiceAccounts(
+		request.Context(), requestPrincipal(request), request.PathValue("projectID"),
+		limit, request.URL.Query().Get("cursor"),
 	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"items": accounts})
+	writeJSON(writer, http.StatusOK, page)
 }
 
 func (apiHandler *handler) getServiceAccount(writer http.ResponseWriter, request *http.Request) {
@@ -645,14 +657,16 @@ func (apiHandler *handler) updateServiceAccount(writer http.ResponseWriter, requ
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	account, err := apiHandler.service.UpdateServiceAccountAtRevision(
+	account, replayed, err := apiHandler.service.UpdateServiceAccountAtRevisionIdempotent(
 		request.Context(), requestPrincipal(request), request.PathValue("projectID"),
-		request.PathValue("serviceAccountID"), body, expectedRevision,
+		request.PathValue("serviceAccountID"), request.Header.Get("Idempotency-Key"),
+		body, expectedRevision,
 	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
 		return
 	}
+	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
 	setRevisionETag(writer, account.Revision)
 	writeJSON(writer, http.StatusOK, account)
 }
@@ -663,27 +677,33 @@ func (apiHandler *handler) createAPIKey(writer http.ResponseWriter, request *htt
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	key, err := apiHandler.service.CreateAPIKey(
+	key, replayed, err := apiHandler.service.CreateAPIKeyIdempotent(
 		request.Context(), requestPrincipal(request), request.PathValue("projectID"),
-		request.PathValue("serviceAccountID"), body,
+		request.PathValue("serviceAccountID"), request.Header.Get("Idempotency-Key"), body,
 	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
 		return
 	}
+	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
 	writeJSON(writer, http.StatusCreated, key)
 }
 
 func (apiHandler *handler) listAPIKeys(writer http.ResponseWriter, request *http.Request) {
-	keys, err := apiHandler.service.ListAPIKeys(
+	limit, err := queryLimit(request)
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	page, err := apiHandler.service.ListAPIKeys(
 		request.Context(), requestPrincipal(request), request.PathValue("projectID"),
-		request.PathValue("serviceAccountID"),
+		request.PathValue("serviceAccountID"), limit, request.URL.Query().Get("cursor"),
 	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"items": keys})
+	writeJSON(writer, http.StatusOK, page)
 }
 
 func (apiHandler *handler) mutateAPIKey(writer http.ResponseWriter, request *http.Request) {
@@ -696,19 +716,47 @@ func (apiHandler *handler) mutateAPIKey(writer http.ResponseWriter, request *htt
 	accountID := request.PathValue("serviceAccountID")
 	switch action {
 	case "revoke":
-		key, err := apiHandler.service.RevokeAPIKey(request.Context(), requestPrincipal(request), projectID, accountID, keyID)
+		if err := requireEmptyBody(request); err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		expectedRevision, err := parseIfMatch(request)
 		if err != nil {
 			apiHandler.writeError(writer, request, err)
 			return
 		}
+		key, replayed, err := apiHandler.service.RevokeAPIKeyAtRevisionIdempotent(
+			request.Context(), requestPrincipal(request), projectID, accountID, keyID,
+			request.Header.Get("Idempotency-Key"), expectedRevision,
+		)
+		if err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
+		setRevisionETag(writer, key.Revision)
 		writeJSON(writer, http.StatusOK, key)
 	case "rotate":
-		key, err := apiHandler.service.RotateAPIKey(request.Context(), requestPrincipal(request), projectID, accountID, keyID)
+		if err := requireEmptyBody(request); err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		expectedRevision, err := parseIfMatch(request)
 		if err != nil {
 			apiHandler.writeError(writer, request, err)
 			return
 		}
-		writeJSON(writer, http.StatusCreated, key)
+		key, replayed, err := apiHandler.service.RotateAPIKeyAtRevisionIdempotent(
+			request.Context(), requestPrincipal(request), projectID, accountID, keyID,
+			request.Header.Get("Idempotency-Key"), expectedRevision,
+		)
+		if err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
+		setRevisionETag(writer, key.APIKey.Revision)
+		writeJSON(writer, http.StatusOK, key)
 	default:
 		apiHandler.writeError(writer, request, ports.ErrAPIKeyNotFound)
 	}
@@ -720,11 +768,14 @@ func (apiHandler *handler) createProfile(writer http.ResponseWriter, request *ht
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	profile, err := apiHandler.service.CreateProfile(request.Context(), requestPrincipal(request), body)
+	profile, replayed, err := apiHandler.service.CreateProfileIdempotent(
+		request.Context(), requestPrincipal(request), request.Header.Get("Idempotency-Key"), body,
+	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
 		return
 	}
+	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
 	setRevisionETag(writer, profile.Revision)
 	writeJSON(writer, http.StatusCreated, profile)
 }
@@ -735,12 +786,14 @@ func (apiHandler *handler) listProfiles(writer http.ResponseWriter, request *htt
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	profiles, err := apiHandler.service.ListProfiles(request.Context(), requestPrincipal(request), limit)
+	page, err := apiHandler.service.ListProfiles(
+		request.Context(), requestPrincipal(request), limit, request.URL.Query().Get("cursor"),
+	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"items": profiles})
+	writeJSON(writer, http.StatusOK, page)
 }
 
 func (apiHandler *handler) getProfile(writer http.ResponseWriter, request *http.Request) {
@@ -771,28 +824,32 @@ func (apiHandler *handler) mutateProfile(writer http.ResponseWriter, request *ht
 			apiHandler.writeError(writer, request, err)
 			return
 		}
-		profile, err := apiHandler.service.ReviseProfileAtRevision(
-			request.Context(), requestPrincipal(request), name, body, expectedRevision,
+		profile, replayed, err := apiHandler.service.ReviseProfileAtRevisionIdempotent(
+			request.Context(), requestPrincipal(request), name,
+			request.Header.Get("Idempotency-Key"), body, expectedRevision,
 		)
 		if err != nil {
 			apiHandler.writeError(writer, request, err)
 			return
 		}
+		writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
 		setRevisionETag(writer, profile.Revision)
-		writeJSON(writer, http.StatusCreated, profile)
+		writeJSON(writer, http.StatusOK, profile)
 	case "disable":
 		expectedRevision, err := parseIfMatch(request)
 		if err != nil {
 			apiHandler.writeError(writer, request, err)
 			return
 		}
-		profile, err := apiHandler.service.DisableProfileAtRevision(
-			request.Context(), requestPrincipal(request), name, expectedRevision,
+		profile, replayed, err := apiHandler.service.DisableProfileAtRevisionIdempotent(
+			request.Context(), requestPrincipal(request), name,
+			request.Header.Get("Idempotency-Key"), expectedRevision,
 		)
 		if err != nil {
 			apiHandler.writeError(writer, request, err)
 			return
 		}
+		writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
 		setRevisionETag(writer, profile.Revision)
 		writeJSON(writer, http.StatusOK, profile)
 	default:
@@ -823,12 +880,14 @@ func (apiHandler *handler) listSandboxes(writer http.ResponseWriter, request *ht
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	sandboxes, err := apiHandler.service.ListSandboxes(request.Context(), requestPrincipal(request), limit)
+	page, err := apiHandler.service.ListSandboxes(
+		request.Context(), requestPrincipal(request), limit, request.URL.Query().Get("cursor"),
+	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"items": sandboxes})
+	writeJSON(writer, http.StatusOK, page)
 }
 
 func (apiHandler *handler) getSandbox(writer http.ResponseWriter, request *http.Request) {
@@ -1118,6 +1177,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusUnauthorized, "authentication_failed", "Port tunnel token is invalid", false
 	case errors.Is(err, ports.ErrAuthorizationDenied), errors.Is(err, ports.ErrProfileNotGranted):
 		return http.StatusForbidden, "authorization_failed", "Authorization failed", false
+	case errors.Is(err, pagination.ErrInvalidListCursor):
+		return http.StatusBadRequest, "invalid_request", "List page cursor is invalid", false
 	case errors.Is(err, ports.ErrPortPolicyDenied):
 		return http.StatusForbidden, "authorization_failed", "Exposed port is not permitted", false
 	case errors.Is(err, runnercontrol.ErrFilePermission):

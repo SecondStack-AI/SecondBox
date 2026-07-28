@@ -26,6 +26,8 @@ A Runner is privileged on its host and can observe active guest memory and its l
 
 Control-plane fencing prevents a compromised or stale Runner from committing authoritative state for a newer generation. It cannot erase the need for host remediation: a compromised Runner is drained, its credential revoked, its assignments fenced, and affected Sandboxes restored from the last trusted durable checkpoint on fresh hosts.
 
+Credential revocation is also a live transport boundary. The credential row, all active connections using it, any connection-bound command delivery, and the Runner's current online projection change in one PostgreSQL transaction. Relay claims and inbound locks independently require a live credential as well as an active connection, including Exec, File, PTY, and Port frames. Checkpoint ordering and credential admission commit before any spool, object-store, or checkpoint-database side effect.
+
 ## Malicious guest
 
 Firecracker, jailer, cgroups, namespaces, minimal devices, signed images, and a narrow guest protocol form defense in depth. Guest paths are resolved beneath descriptor-pinned workspace roots. Resource and output bounds apply at admission and execution. Guest traffic follows [Networking and ports](networking-and-ports.md).

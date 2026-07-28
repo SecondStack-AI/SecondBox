@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -208,6 +209,79 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 		t.Fatalf("Terminal cancel response = %#v", cancellingSession)
 	}
 	waitTerminalRunnerEvent(t, fake.events, "cancel:wait-cancel")
+	waitTerminalState(
+		t, server.URL, key.Credential, sandbox, string(cancelled.ID), "closed",
+	)
+
+	replayCancelRequest, err := http.NewRequest(
+		http.MethodDelete,
+		server.URL+"/v1/sandboxes/"+sandbox.ID+"/terminals/"+string(cancelled.ID),
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setDataPlaneHeaders(replayCancelRequest, key.Credential, sandbox.Generation, "")
+	replayCancelRequest.Header.Set("Idempotency-Key", "terminal-http-cancel-request")
+	replayCancelResponse := doHTTP(t, replayCancelRequest)
+	assertHTTPStatus(t, replayCancelResponse, http.StatusAccepted)
+	if replayCancelResponse.Header.Get("Idempotency-Replayed") != "true" {
+		t.Fatalf(
+			"Terminal cancellation replay header = %q",
+			replayCancelResponse.Header.Get("Idempotency-Replayed"),
+		)
+	}
+	var replayedCancellingSession contracts.TerminalSession
+	decodeHTTPJSON(t, replayCancelResponse, &replayedCancellingSession)
+	if !reflect.DeepEqual(replayedCancellingSession, cancellingSession) {
+		t.Fatalf(
+			"Terminal cancellation replay changed response: first=%#v replay=%#v",
+			cancellingSession, replayedCancellingSession,
+		)
+	}
+
+	newKeyCancelRequest, err := http.NewRequest(
+		http.MethodDelete,
+		server.URL+"/v1/sandboxes/"+sandbox.ID+"/terminals/"+string(cancelled.ID),
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setDataPlaneHeaders(newKeyCancelRequest, key.Credential, sandbox.Generation, "")
+	newKeyCancelRequest.Header.Set("Idempotency-Key", "terminal-http-cancel-new-request")
+	newKeyCancelResponse := doHTTP(t, newKeyCancelRequest)
+	assertHTTPStatus(t, newKeyCancelResponse, http.StatusAccepted)
+	if newKeyCancelResponse.Header.Get("Idempotency-Replayed") != "false" {
+		t.Fatalf(
+			"new-key Terminal cancellation replay header = %q",
+			newKeyCancelResponse.Header.Get("Idempotency-Replayed"),
+		)
+	}
+	var newKeyCancellingSession contracts.TerminalSession
+	decodeHTTPJSON(t, newKeyCancelResponse, &newKeyCancellingSession)
+	if newKeyCancellingSession.ID != cancelled.ID ||
+		newKeyCancellingSession.State != "closed" {
+		t.Fatalf("new-key Terminal cancellation response = %#v", newKeyCancellingSession)
+	}
+
+	conflictingCancelRequest, err := http.NewRequest(
+		http.MethodDelete,
+		server.URL+"/v1/sandboxes/"+sandbox.ID+"/terminals/"+string(cancelled.ID),
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setDataPlaneHeaders(conflictingCancelRequest, key.Credential, sandbox.Generation+1, "")
+	conflictingCancelRequest.Header.Set("Idempotency-Key", "terminal-http-cancel-request")
+	conflictingCancelResponse := doHTTP(t, conflictingCancelRequest)
+	assertHTTPStatus(t, conflictingCancelResponse, http.StatusConflict)
+	var conflictingCancelProblem contracts.Problem
+	decodeHTTPJSON(t, conflictingCancelResponse, &conflictingCancelProblem)
+	if conflictingCancelProblem.Code != "idempotency_conflict" {
+		t.Fatalf("Terminal cancellation conflict = %#v", conflictingCancelProblem)
+	}
 
 	nonDetachable := createTerminalSession(
 		t, server.URL, key.Credential, sandbox, lease.ID,

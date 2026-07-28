@@ -41,12 +41,12 @@ func TestRunnerPoolAdministrationIsAuditedAndRevisionGuarded(t *testing.T) {
 		t.Fatalf("created RunnerPool = %#v", created)
 	}
 
-	listed, err := controlPlane.ListRunnerPools(t.Context(), admin, 100)
+	listed, err := controlPlane.ListRunnerPools(t.Context(), admin, 100, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var listedCreated bool
-	for _, runnerPool := range listed {
+	for _, runnerPool := range listed.Items {
 		listedCreated = listedCreated || runnerPool.Name == created.Name
 	}
 	if !listedCreated {
@@ -82,7 +82,7 @@ func TestRunnerPoolAdministrationIsAuditedAndRevisionGuarded(t *testing.T) {
 	if principal.ProjectID != project.ID {
 		t.Fatalf("application Principal project = %q, want %q", principal.ProjectID, project.ID)
 	}
-	if _, err := controlPlane.ListRunnerPools(t.Context(), principal, 10); !errors.Is(err, ports.ErrAuthorizationDenied) {
+	if _, err := controlPlane.ListRunnerPools(t.Context(), principal, 10, ""); !errors.Is(err, ports.ErrAuthorizationDenied) {
 		t.Fatalf("application RunnerPool list error = %v, want ErrAuthorizationDenied", err)
 	}
 
@@ -178,11 +178,11 @@ func TestRunnerAdministrationProjectsIdentityWithoutCredentialMaterial(t *testin
 		runner.Capacity["instances"] != 4 {
 		t.Fatalf("Runner administrative projection = %#v", runner)
 	}
-	runners, err := controlPlane.ListRunners(t.Context(), admin, "runner-admin-pool", 100)
+	runners, err := controlPlane.ListRunners(t.Context(), admin, "runner-admin-pool", 100, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(runners) != 1 || runners[0].ID != runner.ID {
+	if len(runners.Items) != 1 || runners.Items[0].ID != runner.ID {
 		t.Fatalf("Runner administrative list = %#v", runners)
 	}
 }

@@ -255,6 +255,7 @@ func TestReleaseArchiveEnforcesArchitectureTrustBootstrapAndModes(t *testing.T) 
 		"ELF64",
 		"Advanced Micro Devices X86-64",
 		"bin/bootstrap-runner-trust.sh",
+		"bin/prepare-development-inventory.sh",
 		`if [[ "$deployment_path" == bin/*.sh ]]`,
 		"deployment_mode=0755",
 		`--arg mode "$(stat -c %a "$file_path")"`,

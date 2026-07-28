@@ -49,6 +49,23 @@ func TestReleaseSubjectSchemaRequiresGuestArtifactImage(t *testing.T) {
 	}
 }
 
+func TestPublicationGateSignsExactCanonicalThirteenSubjectManifest(t *testing.T) {
+	gate := readReleaseRepositoryFile(t, "scripts/verify-release-publication-eligibility.sh")
+	for _, required := range []string{
+		`-z "${resolved_subject_manifest-}"`,
+		`sha256sum "$resolved_signature_manifest"`,
+		`sha256sum "$resolved_subject_manifest"`,
+		"signed manifest is not the exact canonical release-subject manifest",
+	} {
+		if !strings.Contains(gate, required) {
+			t.Errorf("release publication gate must contain %q", required)
+		}
+	}
+	if strings.Contains(gate, "length == 12") {
+		t.Error("release publication gate still hardcodes the obsolete twelve-subject contract")
+	}
+}
+
 func TestMissingGuestArtifactImageDigestBlocksSubject(t *testing.T) {
 	repositoryRoot := releaseRepositoryRoot(t)
 	evidenceDirectory := t.TempDir()

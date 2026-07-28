@@ -55,6 +55,24 @@ type StoredAPIKey struct {
 	UpdatedAt      time.Time
 }
 
+// AdminIdempotencyInput binds one administrative mutation to an exact durable response.
+type AdminIdempotencyInput struct {
+	ProjectID      string
+	Operation      string
+	TargetID       string
+	Key            string
+	RequestHash    string
+	ResponseSecret []byte
+	Now            time.Time
+	Ends           time.Time
+}
+
+// AdminIdempotencyResult reports whether a stored response was replayed.
+type AdminIdempotencyResult struct {
+	Replayed       bool
+	ResponseSecret []byte
+}
+
 // CreateSandboxInput contains server-resolved identity and transaction evidence.
 type CreateSandboxInput struct {
 	Principal       contracts.Principal
@@ -255,39 +273,39 @@ type ControlPlaneStore interface {
 	InitializeBootstrapAdmin(context.Context, []byte, time.Time, contracts.AuditEvent) error
 	AuthenticateBootstrapAdmin(context.Context, []byte, time.Time, contracts.AuditEvent) (contracts.Principal, error)
 
-	CreateProject(context.Context, contracts.Project, contracts.QuotaLimits, contracts.AuditEvent) (contracts.Project, error)
-	UpdateProject(context.Context, string, contracts.UpdateProjectRequest, int64, time.Time, contracts.AuditEvent) (contracts.Project, error)
+	CreateProject(context.Context, contracts.Project, contracts.QuotaLimits, AdminIdempotencyInput, contracts.AuditEvent) (contracts.Project, AdminIdempotencyResult, error)
+	UpdateProject(context.Context, string, contracts.UpdateProjectRequest, int64, time.Time, AdminIdempotencyInput, contracts.AuditEvent) (contracts.Project, AdminIdempotencyResult, error)
 	GetProject(context.Context, string) (contracts.Project, error)
-	ListProjects(context.Context, int) ([]contracts.Project, error)
+	ListProjects(context.Context, int, string) (contracts.ProjectPage, error)
 
-	CreateServiceAccount(context.Context, contracts.ServiceAccount, contracts.AuditEvent) (contracts.ServiceAccount, error)
-	UpdateServiceAccount(context.Context, string, string, contracts.UpdateServiceAccountRequest, int64, time.Time, contracts.AuditEvent) (contracts.ServiceAccount, error)
+	CreateServiceAccount(context.Context, contracts.ServiceAccount, AdminIdempotencyInput, contracts.AuditEvent) (contracts.ServiceAccount, AdminIdempotencyResult, error)
+	UpdateServiceAccount(context.Context, string, string, contracts.UpdateServiceAccountRequest, int64, time.Time, AdminIdempotencyInput, contracts.AuditEvent) (contracts.ServiceAccount, AdminIdempotencyResult, error)
 	GetServiceAccount(context.Context, string, string) (contracts.ServiceAccount, error)
-	ListServiceAccounts(context.Context, string, int) ([]contracts.ServiceAccount, error)
+	ListServiceAccounts(context.Context, string, int, string) (contracts.ServiceAccountPage, error)
 
-	CreateAPIKey(context.Context, StoredAPIKey, contracts.AuditEvent) (contracts.APIKey, error)
-	RotateAPIKey(context.Context, string, string, string, string, []byte, time.Time, contracts.AuditEvent) (contracts.APIKey, error)
-	RevokeAPIKey(context.Context, string, string, string, time.Time, contracts.AuditEvent) (contracts.APIKey, error)
+	CreateAPIKey(context.Context, StoredAPIKey, AdminIdempotencyInput, contracts.AuditEvent) (contracts.APIKey, AdminIdempotencyResult, error)
+	RotateAPIKey(context.Context, string, string, string, string, []byte, int64, time.Time, AdminIdempotencyInput, contracts.AuditEvent) (contracts.APIKey, AdminIdempotencyResult, error)
+	RevokeAPIKey(context.Context, string, string, string, int64, time.Time, AdminIdempotencyInput, contracts.AuditEvent) (contracts.APIKey, AdminIdempotencyResult, error)
 	GetAPIKey(context.Context, string, string, string) (contracts.APIKey, error)
-	ListAPIKeys(context.Context, string, string, int) ([]contracts.APIKey, error)
+	ListAPIKeys(context.Context, string, string, int, string) (contracts.APIKeyPage, error)
 	AuthenticateAPIKey(context.Context, string, []byte, time.Time, contracts.AuditEvent) (contracts.Principal, error)
 
-	CreateProfile(context.Context, contracts.Profile, contracts.QuotaLimits, contracts.AuditEvent) (contracts.Profile, error)
-	ReviseProfile(context.Context, string, contracts.ProfileRevision, int64, time.Time, contracts.AuditEvent) (contracts.Profile, error)
-	DisableProfile(context.Context, string, int64, time.Time, contracts.AuditEvent) (contracts.Profile, error)
+	CreateProfile(context.Context, contracts.Profile, contracts.QuotaLimits, AdminIdempotencyInput, contracts.AuditEvent) (contracts.Profile, AdminIdempotencyResult, error)
+	ReviseProfile(context.Context, string, contracts.ProfileRevision, int64, time.Time, AdminIdempotencyInput, contracts.AuditEvent) (contracts.Profile, AdminIdempotencyResult, error)
+	DisableProfile(context.Context, string, int64, time.Time, AdminIdempotencyInput, contracts.AuditEvent) (contracts.Profile, AdminIdempotencyResult, error)
 	GetProfile(context.Context, string) (contracts.Profile, error)
-	ListProfiles(context.Context, int) ([]contracts.Profile, error)
+	ListProfiles(context.Context, int, string) (contracts.ProfilePage, error)
 	CreateRunnerPool(context.Context, contracts.RunnerPool, contracts.AuditEvent) (contracts.RunnerPool, error)
 	UpdateRunnerPool(context.Context, string, contracts.UpdateRunnerPoolRequest, int64, time.Time, contracts.AuditEvent) (contracts.RunnerPool, error)
 	GetRunnerPool(context.Context, string) (contracts.RunnerPool, error)
-	ListRunnerPools(context.Context, int) ([]contracts.RunnerPool, error)
+	ListRunnerPools(context.Context, int, string) (contracts.RunnerPoolPage, error)
 	GetRunner(context.Context, string) (contracts.Runner, error)
-	ListRunners(context.Context, string, int) ([]contracts.Runner, error)
+	ListRunners(context.Context, string, int, string) (contracts.RunnerPage, error)
 	RegisterRunnerPool(context.Context, contracts.RunnerPool) error
 
 	CreateSandbox(context.Context, CreateSandboxInput) (contracts.Sandbox, contracts.Operation, bool, error)
 	GetSandbox(context.Context, string, string) (contracts.Sandbox, error)
-	ListSandboxes(context.Context, string, int) ([]contracts.Sandbox, error)
+	ListSandboxes(context.Context, string, int, string) (contracts.SandboxPage, error)
 	GetOperation(context.Context, string, string) (contracts.Operation, error)
 
 	ListAuditEvents(context.Context, string, int) ([]contracts.AuditEvent, error)

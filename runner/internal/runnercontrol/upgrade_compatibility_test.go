@@ -42,7 +42,7 @@ func TestRunnerUpgradeRegistersTheNegotiatedLowerProtocolGeneration(t *testing.T
 		t.Fatal(err)
 	}
 
-	if err := service.Run(t.Context()); !errors.Is(err, io.EOF) {
+	if _, err := service.runProtocolSession(t.Context()); !errors.Is(err, io.EOF) {
 		t.Fatalf("Run() error = %v, want stream EOF after registration", err)
 	}
 	if got := stream.outbound[0].GetHello().GetSupportedVersions(); got.GetMinimum() != 1 || got.GetMaximum() != 2 {

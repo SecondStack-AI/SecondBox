@@ -1,4 +1,4 @@
-// Code generated from contracts/openapi/v1/secondbox.openapi.json (sha256 90ee902600bd204bb4fbbd22dda45b9b887fdd2fba3d7123172c0d1d968f9bf4); DO NOT EDIT.
+// Code generated from contracts/openapi/v1/secondbox.openapi.json (sha256 aa3f6969ea9655b88d5a6e12969986c30bc51f2fce20b98e2b359816dce40811); DO NOT EDIT.
 
 /** OpenAPI info.version represented by this generated transport. */
 export const CONTRACT_VERSION = "1.0.0";
@@ -1257,7 +1257,7 @@ export const OPERATIONS = {
     ],
     requestBodyRequired: false,
     responses: [
-      {statusCode: "202", contentType: "application/json", schema: "Operation"},
+      {statusCode: "202", contentType: "application/json", schema: "ExecStreamSession"},
       {statusCode: "401", contentType: "", schema: ""},
       {statusCode: "403", contentType: "", schema: ""},
       {statusCode: "404", contentType: "", schema: ""},
@@ -1280,7 +1280,7 @@ export const OPERATIONS = {
     ],
     requestBodyRequired: false,
     responses: [
-      {statusCode: "202", contentType: "application/json", schema: "Operation"},
+      {statusCode: "202", contentType: "application/json", schema: "TerminalSession"},
       {statusCode: "401", contentType: "", schema: ""},
       {statusCode: "403", contentType: "", schema: ""},
       {statusCode: "404", contentType: "", schema: ""},
@@ -1433,7 +1433,6 @@ export const OPERATIONS = {
     ],
     requestBodyRequired: true,
     responses: [
-      {statusCode: "201", contentType: "application/json", schema: "Sandbox"},
       {statusCode: "202", contentType: "application/json", schema: "Operation"},
       {statusCode: "400", contentType: "", schema: ""},
       {statusCode: "401", contentType: "", schema: ""},
@@ -1630,7 +1629,7 @@ export const OPERATIONS = {
     ],
     requestBodyRequired: false,
     responses: [
-      {statusCode: "202", contentType: "application/json", schema: "TerminalSession"},
+      {statusCode: "202", contentType: "application/json", schema: "Operation"},
       {statusCode: "401", contentType: "", schema: ""},
       {statusCode: "403", contentType: "", schema: ""},
       {statusCode: "404", contentType: "", schema: ""},
@@ -2367,6 +2366,32 @@ export const OPERATIONS = {
     requestBodyRequired: false,
     responses: [
       {statusCode: "200", contentType: "application/json", schema: "APIKey"},
+      {statusCode: "401", contentType: "", schema: ""},
+      {statusCode: "403", contentType: "", schema: ""},
+      {statusCode: "404", contentType: "", schema: ""},
+      {statusCode: "409", contentType: "", schema: ""},
+      {statusCode: "412", contentType: "", schema: ""},
+    ],
+  },
+  /** The rotateAPIKey OpenAPI operation. */
+  rotateAPIKey: {
+    operationId: "rotateAPIKey",
+    method: "POST",
+    pathTemplate: "/v1/projects/{projectId}/service-accounts/{serviceAccountId}/api-keys/{apiKeyId}:rotate",
+    parameters: [
+      {name: "Idempotency-Key", location: "header", required: true, schema: "string"},
+      {name: "If-Match", location: "header", required: true, schema: "string"},
+      {name: "X-Request-ID", location: "header", required: false, schema: "CorrelationID"},
+      {name: "apiKeyId", location: "path", required: true, schema: "OpaqueID"},
+      {name: "projectId", location: "path", required: true, schema: "OpaqueID"},
+      {name: "serviceAccountId", location: "path", required: true, schema: "OpaqueID"},
+    ],
+    requestBody: [
+    ],
+    requestBodyRequired: false,
+    responses: [
+      {statusCode: "200", contentType: "application/json", schema: "CreateAPIKeyResponse"},
+      {statusCode: "400", contentType: "", schema: ""},
       {statusCode: "401", contentType: "", schema: ""},
       {statusCode: "403", contentType: "", schema: ""},
       {statusCode: "404", contentType: "", schema: ""},

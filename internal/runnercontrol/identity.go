@@ -325,17 +325,69 @@ func (authority *CredentialAuthority) RevokeCredential(
 	serial string,
 ) error {
 	now := authority.now().UTC()
-	command, err := authority.pool.Exec(ctx, `
+	tx, err := authority.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("SecondBox runner credential revocation transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var runnerID string
+	err = tx.QueryRow(ctx, `
 		UPDATE secondbox.runner_credentials
 		SET state='revoked',revoked_at=$2,updated_at=$2
-		WHERE serial_number=$1 AND state IN ('active','retiring')`,
+		WHERE serial_number=$1 AND state IN ('active','retiring')
+		RETURNING runner_id`,
 		serial, now,
-	)
+	).Scan(&runnerID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrRunnerCredentialRevoked
+	}
 	if err != nil {
 		return fmt.Errorf("SecondBox runner credential revocation: %w", err)
 	}
-	if command.RowsAffected() != 1 {
-		return ErrRunnerCredentialRevoked
+	rows, err := tx.Query(ctx, `
+		UPDATE secondbox.runner_connections
+		SET state='revoked',last_seen_at=$2,disconnected_at=$2
+		WHERE credential_serial=$1 AND state='active'
+		RETURNING id`,
+		serial, now,
+	)
+	if err != nil {
+		return fmt.Errorf("SecondBox revoked runner connection update: %w", err)
+	}
+	revokedConnectionIDs := make([]string, 0)
+	for rows.Next() {
+		var connectionID string
+		if err := rows.Scan(&connectionID); err != nil {
+			rows.Close()
+			return fmt.Errorf("SecondBox revoked runner connection scan: %w", err)
+		}
+		revokedConnectionIDs = append(revokedConnectionIDs, connectionID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("SecondBox revoked runner connection iteration: %w", err)
+	}
+	rows.Close()
+	if len(revokedConnectionIDs) > 0 {
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.runner_commands
+			SET state='pending',target_connection_id='',updated_at=$2
+			WHERE target_connection_id=ANY($1) AND state='delivering'`,
+			revokedConnectionIDs, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox revoked runner command recovery: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.runners
+			SET state='offline',active_connection_id='',revision=revision+1,updated_at=$3
+			WHERE id=$1 AND active_connection_id=ANY($2)`,
+			runnerID, revokedConnectionIDs, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox revoked runner state update: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("SecondBox runner credential revocation commit: %w", err)
 	}
 	return nil
 }

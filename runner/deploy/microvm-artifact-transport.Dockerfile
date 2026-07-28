@@ -12,6 +12,8 @@ COPY rootfs-debian-packages.lock /secondbox-runner-microvm/rootfs-debian-package
 COPY rootfs-python.freeze /secondbox-runner-microvm/rootfs-python.freeze
 COPY rootfs-debian-license-inventory.json /secondbox-runner-microvm/rootfs-debian-license-inventory.json
 COPY rootfs-python-license-inventory.json /secondbox-runner-microvm/rootfs-python-license-inventory.json
+COPY runtime-manifest.json /secondbox-runner-microvm/runtime-manifest.json
+COPY toolchain-manifest.json /secondbox-runner-microvm/toolchain-manifest.json
 COPY manifest.json /secondbox-runner-microvm/manifest.json
 COPY manifest.sig /secondbox-runner-microvm/manifest.sig
 COPY signing.pub /secondbox-runner-microvm/signing.pub

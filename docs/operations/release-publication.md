@@ -10,7 +10,7 @@ Each publication job downloads that artifact directly from the triggering run, c
 - `ghcr.io/secondstack-ai/secondbox-runner`
 - `ghcr.io/secondstack-ai/secondbox-guest-artifacts`
 
-Publication never builds, packages, or substitutes a subject. It adds `v<version>` tags to already qualified image manifests, publishes the already qualified npm tarball, and creates the GitHub tag and immutable release last. Existing state is accepted only when its commit or bytes exactly match the qualified record. A differing image tag, npm tarball, Git tag, or GitHub release asset fails the run; the workflow never overwrites it.
+Publication never builds, packages, or substitutes a subject. It adds `v<version>` tags to already qualified image manifests, publishes the already qualified npm tarball, and creates the GitHub tag and immutable release last. Existing state is accepted only when its commit or bytes exactly match the qualified record. Before creating the Git tag or release, it calls GitHub's immutable-release configuration endpoint and requires `enabled: true`. It inventories every draft and public release for the tag and every asset: duplicate releases, duplicate asset names, unexpected assets, changed bytes, or a missing asset on an already public release fail the run. The complete expected asset set is checked again before the draft is published and during public verification; the workflow never overwrites or silently preserves an extra asset.
 
 ## Repository configuration
 
@@ -18,13 +18,13 @@ Before the first release:
 
 1. Make `SecondStack-AI/SecondBox` public. npm provenance is unavailable from a private source repository.
 2. Protect `main` and `v*` tags. Permit the publication workflow to create a new version tag, but never to move or delete one.
-3. Enable GitHub immutable releases. Publication creates a draft, uploads the complete explicit asset set, then publishes it. Public verification requires the GitHub API to report the release as immutable.
+3. Enable GitHub immutable releases. Publication creates a draft, uploads the complete explicit asset set, then publishes it. Public verification requires the GitHub API to report the release as immutable. Add protected environment secret `SECONDBOX_RELEASE_CONFIGURATION_TOKEN`, using an expiring fine-grained token with only repository Administration read permission. GitHub's immutable-release configuration endpoint requires that permission; this token cannot create tags, releases, packages, or npm versions.
 4. Create a GitHub environment named exactly `release`. Require a reviewer, prevent self-review and administrator bypass, and restrict deployments to protected `main`.
 5. Define repository variable `SECONDBOX_RELEASE_TRUSTED_PUBLIC_KEY_SHA256` as the independently approved lowercase SHA-256 of the release signing public-key PEM. The publication workflow receives no release private key.
 6. Link the three GHCR packages to this repository and make them public after their exact candidate digests pass release evidence. GHCR packages begin private. Public verification uses a fresh Docker configuration with no registry credential and rejects a digest or version tag that cannot be pulled anonymously.
 7. Enable immutable or protected version-tag policy for the three GHCR packages when the organization provides it. Operators and automation must consume the digest locators recorded in `release-subjects.json`, not mutable tags.
 
-The protected `release` environment contains no GitHub, GHCR, or npm long-lived token. GitHub jobs use narrowly scoped `GITHUB_TOKEN` permissions:
+The protected `release` environment contains no GitHub-content, GHCR-write, or npm token. Its configuration token is read-only, narrowly scoped, and expiring; rotate it according to the organization's credential policy. GitHub jobs otherwise use narrowly scoped `GITHUB_TOKEN` permissions:
 
 | Job | Permissions |
 | --- | --- |
@@ -58,7 +58,7 @@ The jobs execute serially:
 1. revalidate signed evidence;
 2. publish the three exact GHCR version tags;
 3. publish the exact npm tarball through OIDC;
-4. verify the public images and npm package, then create the Git tag, draft, assets, and immutable GitHub release;
+4. verify the public images and npm package, preflight immutable-release configuration and the complete existing release/asset inventory, then create the Git tag, draft, assets, and immutable GitHub release;
 5. verify all public surfaces without package-registry credentials.
 
 GitHub, GHCR, and npm do not offer one transaction. A stopped run is resumed by rerunning the successful evidence workflow or its resulting publication run. Exact existing state is idempotent; changed state fails. The GitHub release is published last and is the completion signal.

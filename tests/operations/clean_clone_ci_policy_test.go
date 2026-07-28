@@ -12,10 +12,42 @@ func TestContinuousIntegrationRunsEntireNonKVMMatrixInsideCleanClone(t *testing.
 		"postgres:18.4-bookworm",
 		"SECONDBOX_TEST_DATABASE_URL:",
 		"cache: false",
+		"sudo apt-get install -y --no-install-recommends protobuf-compiler ripgrep",
 		"scripts/test-clean-clone-isolation.sh --non-kvm",
 	} {
 		if !strings.Contains(workflow, required) {
 			t.Errorf("SecondBox CI clean-clone gate must contain %q", required)
+		}
+	}
+}
+
+func TestContinuousIntegrationInstallsProtocolCompilerForEveryProtocolConsumer(t *testing.T) {
+	workflow := readRepositoryFile(t, ".github/workflows/ci.yml")
+	if count := strings.Count(workflow, "sudo apt-get install -y --no-install-recommends protobuf-compiler"); count != 4 {
+		t.Errorf("SecondBox CI must install protoc in exactly four protocol-consuming jobs; found %d", count)
+	}
+	goJobStart := strings.Index(workflow, "  go-tests-vet:")
+	goJobEnd := strings.Index(workflow, "  contract-tests:")
+	if goJobStart < 0 || goJobEnd <= goJobStart {
+		t.Fatal("SecondBox CI does not contain the expected go-tests-vet job")
+	}
+	goJob := workflow[goJobStart:goJobEnd]
+	for _, required := range []string{
+		"actions/setup-node@",
+		"npm ci --ignore-scripts",
+	} {
+		if !strings.Contains(goJob, required) {
+			t.Errorf("SecondBox Go/release-policy job must contain %q", required)
+		}
+	}
+
+	releaseWorkflow := readRepositoryFile(t, ".github/workflows/release-evidence.yml")
+	for _, required := range []string{
+		"sudo apt-get install -y --no-install-recommends protobuf-compiler ripgrep",
+		"sudo apt-get install -y --no-install-recommends ripgrep",
+	} {
+		if !strings.Contains(releaseWorkflow, required) {
+			t.Errorf("SecondBox release evidence CI must contain %q", required)
 		}
 	}
 }

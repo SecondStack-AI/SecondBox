@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createHash } from "node:crypto";
 import {
   constants as fsConstants,
   copyFileSync,
@@ -48,6 +49,7 @@ const gates = [
   "security",
 ];
 const importedPaths = new Set();
+const importedDigests = new Map();
 let recordCount = 0;
 
 for (const gate of gates) {
@@ -82,10 +84,13 @@ for (const gate of gates) {
     process.stderr.write(verification.stderr);
     fail(`SecondBox qualification import rejected ${relativeRecordPath}`);
   }
-  const record = JSON.parse(
-    secureFile(recordPath, `qualification record ${relativeRecordPath}`),
+  const recordContents = secureFile(
+    recordPath,
+    `qualification record ${relativeRecordPath}`,
   );
+  const record = JSON.parse(recordContents);
   importedPaths.add(relativeRecordPath);
+  importedDigests.set(relativeRecordPath, sha256(recordContents));
   for (const scenario of record.scenarios) {
     for (const artifact of scenario.artifacts) {
       if (!artifact.path.startsWith("qualification/")) {
@@ -93,7 +98,17 @@ for (const gate of gates) {
           `SecondBox qualification import artifact must remain under qualification/: ${artifact.path}`,
         );
       }
+      const existingDigest = importedDigests.get(artifact.path);
+      if (
+        existingDigest !== undefined &&
+        existingDigest !== artifact.sha256
+      ) {
+        fail(
+          `SecondBox qualification import has conflicting digests for ${artifact.path}`,
+        );
+      }
       importedPaths.add(artifact.path);
+      importedDigests.set(artifact.path, artifact.sha256);
     }
   }
   recordCount += 1;
@@ -135,6 +150,12 @@ for (const relativePath of [...importedPaths].sort()) {
   );
   ensureDestinationDirectory(path.posix.dirname(relativePath));
   copyFileSync(sourcePath, destinationPath, fsConstants.COPYFILE_EXCL);
+  const destinationDigest = sha256(readFileSync(destinationPath));
+  if (destinationDigest !== importedDigests.get(relativePath)) {
+    fail(
+      `SecondBox qualification import copied changed bytes for ${relativePath}`,
+    );
+  }
 }
 
 console.log(
@@ -144,6 +165,10 @@ console.log(
 function fail(message) {
   console.error(message);
   process.exit(1);
+}
+
+function sha256(contents) {
+  return createHash("sha256").update(contents).digest("hex");
 }
 
 function secureDirectory(directoryPath, label) {

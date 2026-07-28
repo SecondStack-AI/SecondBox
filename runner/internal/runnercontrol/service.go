@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"sync"
@@ -15,10 +16,17 @@ import (
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
 var immutableManifestDigest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+const (
+	runnerReconnectInitialDelay = 250 * time.Millisecond
+	runnerReconnectMaximumDelay = 30 * time.Second
+)
 
 // ErrRunnerProtocolNegotiation identifies a connection rejected before registration.
 var ErrRunnerProtocolNegotiation = errors.New("SecondBox runner protocol negotiation failed")
@@ -251,19 +259,48 @@ func (s *RunnerProtocolService) SetEvidenceSink(sink runnerevidence.Sink) {
 	}
 }
 
-// Run negotiates, registers, and consumes control-plane commands until disconnect.
-func (s *RunnerProtocolService) Run(ctx context.Context) (runErr error) {
+// Run preserves Runner-owned Instances while reconnecting transient control-plane sessions.
+func (s *RunnerProtocolService) Run(ctx context.Context) error {
+	reconnectDelay := runnerReconnectInitialDelay
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		sessionEstablished, sessionErr := s.runProtocolSession(ctx)
+		sessionErr = errors.Join(sessionErr, s.connector.Close())
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if isTerminalRunnerProtocolError(sessionErr) {
+			return sessionErr
+		}
+		if sessionErr == nil {
+			sessionErr = errors.New("SecondBox runner protocol session ended without an error")
+		}
+		if sessionEstablished {
+			reconnectDelay = runnerReconnectInitialDelay
+		}
+		slog.Warn(
+			"SecondBox runner protocol session lost; reconnecting",
+			"error", sessionErr,
+			"retryDelay", reconnectDelay,
+		)
+		if err := waitRunnerProtocolReconnect(ctx, reconnectDelay); err != nil {
+			return err
+		}
+		reconnectDelay = nextRunnerProtocolReconnectDelay(reconnectDelay)
+	}
+}
+
+func (s *RunnerProtocolService) runProtocolSession(ctx context.Context) (bool, error) {
 	stream, err := s.connector.Connect(ctx)
 	if err != nil {
-		return fmt.Errorf("SecondBox runner protocol connect: %w", err)
+		return false, fmt.Errorf("SecondBox runner protocol connect: %w", err)
 	}
-	defer func() {
-		runErr = errors.Join(runErr, s.connector.Close())
-	}()
 
 	connectionNonce := make([]byte, 32)
 	if _, err := rand.Read(connectionNonce); err != nil {
-		return fmt.Errorf("SecondBox runner protocol connection nonce: %w", err)
+		return false, fmt.Errorf("SecondBox runner protocol connection nonce: %w", err)
 	}
 	if err := s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
 		Message: &runnerprotocol.RunnerToControlPlane_Hello{
@@ -279,24 +316,24 @@ func (s *RunnerProtocolService) Run(ctx context.Context) (runErr error) {
 			},
 		},
 	}); err != nil {
-		return fmt.Errorf("SecondBox runner protocol send hello: %w", err)
+		return false, fmt.Errorf("SecondBox runner protocol send hello: %w", err)
 	}
 
 	first, err := stream.Recv()
 	if err != nil {
-		return fmt.Errorf("%w: receive welcome: %v", ErrRunnerProtocolNegotiation, err)
+		return false, fmt.Errorf("SecondBox runner protocol receive welcome: %w", err)
 	}
 	if rejection := first.GetRejection(); rejection != nil {
-		return fmt.Errorf("%w: %s", ErrRunnerProtocolNegotiation, rejection.GetSafeDetail())
+		return false, fmt.Errorf("%w: %s", ErrRunnerProtocolNegotiation, rejection.GetSafeDetail())
 	}
 	welcome := first.GetWelcome()
 	if err := s.validateWelcome(welcome); err != nil {
-		return err
+		return false, err
 	}
 
 	readiness, err := s.backend.Readiness(ctx)
 	if err != nil {
-		return fmt.Errorf("SecondBox runner readiness failed: %w", err)
+		return false, fmt.Errorf("SecondBox runner readiness failed: %w", err)
 	}
 	if err := s.sendRegistration(
 		stream,
@@ -304,9 +341,49 @@ func (s *RunnerProtocolService) Run(ctx context.Context) (runErr error) {
 		welcome.SelectedVersion,
 		readiness,
 	); err != nil {
-		return err
+		return false, err
 	}
-	return s.consumeCommands(ctx, stream, welcome, readiness)
+	if err := s.sendHeartbeat(stream, welcome.ConnectionId, readiness); err != nil {
+		return true, err
+	}
+	return true, s.consumeCommands(ctx, stream, welcome, readiness)
+}
+
+func isTerminalRunnerProtocolError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrRunnerProtocolNegotiation) {
+		return true
+	}
+	switch status.Code(err) {
+	case codes.Unauthenticated,
+		codes.PermissionDenied,
+		codes.InvalidArgument,
+		codes.FailedPrecondition,
+		codes.Unimplemented:
+		return true
+	default:
+		return false
+	}
+}
+
+func waitRunnerProtocolReconnect(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func nextRunnerProtocolReconnectDelay(current time.Duration) time.Duration {
+	if current >= runnerReconnectMaximumDelay/2 {
+		return runnerReconnectMaximumDelay
+	}
+	return current * 2
 }
 
 func (s *RunnerProtocolService) validateWelcome(welcome *runnerprotocol.RunnerWelcome) error {

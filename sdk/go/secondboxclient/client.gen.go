@@ -1,4 +1,4 @@
-// Code generated from contracts/openapi/v1/secondbox.openapi.json (sha256 90ee902600bd204bb4fbbd22dda45b9b887fdd2fba3d7123172c0d1d968f9bf4); DO NOT EDIT.
+// Code generated from contracts/openapi/v1/secondbox.openapi.json (sha256 aa3f6969ea9655b88d5a6e12969986c30bc51f2fce20b98e2b359816dce40811); DO NOT EDIT.
 
 package secondboxclient
 
@@ -1897,7 +1897,7 @@ var CancelSandboxExecStreamOperation = OperationMetadata{
 	},
 	RequestBodyRequired: false,
 	Responses: []OperationResponse{
-		{StatusCode: "202", ContentType: "application/json", Schema: "Operation"},
+		{StatusCode: "202", ContentType: "application/json", Schema: "ExecStreamSession"},
 		{StatusCode: "401", ContentType: "", Schema: ""},
 		{StatusCode: "403", ContentType: "", Schema: ""},
 		{StatusCode: "404", ContentType: "", Schema: ""},
@@ -1919,7 +1919,7 @@ var CancelSandboxTerminalOperation = OperationMetadata{
 	},
 	RequestBodyRequired: false,
 	Responses: []OperationResponse{
-		{StatusCode: "202", ContentType: "application/json", Schema: "Operation"},
+		{StatusCode: "202", ContentType: "application/json", Schema: "TerminalSession"},
 		{StatusCode: "401", ContentType: "", Schema: ""},
 		{StatusCode: "403", ContentType: "", Schema: ""},
 		{StatusCode: "404", ContentType: "", Schema: ""},
@@ -2077,7 +2077,6 @@ var CreateSandboxOperation = OperationMetadata{
 	},
 	RequestBodyRequired: true,
 	Responses: []OperationResponse{
-		{StatusCode: "201", ContentType: "application/json", Schema: "Sandbox"},
 		{StatusCode: "202", ContentType: "application/json", Schema: "Operation"},
 		{StatusCode: "400", ContentType: "", Schema: ""},
 		{StatusCode: "401", ContentType: "", Schema: ""},
@@ -2278,7 +2277,7 @@ var DeleteSandboxOperation = OperationMetadata{
 	},
 	RequestBodyRequired: false,
 	Responses: []OperationResponse{
-		{StatusCode: "202", ContentType: "application/json", Schema: "TerminalSession"},
+		{StatusCode: "202", ContentType: "application/json", Schema: "Operation"},
 		{StatusCode: "401", ContentType: "", Schema: ""},
 		{StatusCode: "403", ContentType: "", Schema: ""},
 		{StatusCode: "404", ContentType: "", Schema: ""},
@@ -2996,6 +2995,31 @@ var RevokeAPIKeyOperation = OperationMetadata{
 	},
 }
 
+// RotateAPIKeyOperation describes the rotateAPIKey OpenAPI operation.
+var RotateAPIKeyOperation = OperationMetadata{
+	OperationID:  "rotateAPIKey",
+	Method:       "POST",
+	PathTemplate: "/v1/projects/{projectId}/service-accounts/{serviceAccountId}/api-keys/{apiKeyId}:rotate",
+	Parameters: []OperationParameter{
+		{Name: "Idempotency-Key", Location: "header", Required: true, Schema: "string"},
+		{Name: "If-Match", Location: "header", Required: true, Schema: "string"},
+		{Name: "X-Request-ID", Location: "header", Required: false, Schema: "CorrelationID"},
+		{Name: "apiKeyId", Location: "path", Required: true, Schema: "OpaqueID"},
+		{Name: "projectId", Location: "path", Required: true, Schema: "OpaqueID"},
+		{Name: "serviceAccountId", Location: "path", Required: true, Schema: "OpaqueID"},
+	},
+	RequestBodyRequired: false,
+	Responses: []OperationResponse{
+		{StatusCode: "200", ContentType: "application/json", Schema: "CreateAPIKeyResponse"},
+		{StatusCode: "400", ContentType: "", Schema: ""},
+		{StatusCode: "401", ContentType: "", Schema: ""},
+		{StatusCode: "403", ContentType: "", Schema: ""},
+		{StatusCode: "404", ContentType: "", Schema: ""},
+		{StatusCode: "409", ContentType: "", Schema: ""},
+		{StatusCode: "412", ContentType: "", Schema: ""},
+	},
+}
+
 // SandboxFileExistsOperation describes the sandboxFileExists OpenAPI operation.
 var SandboxFileExistsOperation = OperationMetadata{
 	OperationID:  "sandboxFileExists",
@@ -3374,6 +3398,8 @@ func LookupOperation(operationID string) (OperationMetadata, bool) {
 		return ReviseProfileOperation, true
 	case "revokeAPIKey":
 		return RevokeAPIKeyOperation, true
+	case "rotateAPIKey":
+		return RotateAPIKeyOperation, true
 	case "sandboxFileExists":
 		return SandboxFileExistsOperation, true
 	case "startSandbox":

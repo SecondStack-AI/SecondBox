@@ -41,17 +41,66 @@ func (apiHandler *handler) createSandboxExecStream(writer http.ResponseWriter, r
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	endpoint, err := apiHandler.service.SandboxExecStreamEndpoint(session.SandboxID, session.ID)
+	response, err := apiHandler.publicExecStreamSession(session)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
 		return
 	}
 	writer.Header().Set("Idempotency-Replayed", fmt.Sprintf("%t", replayed))
-	writeJSON(writer, http.StatusCreated, contracts.ExecStreamSession{
+	writeJSON(writer, http.StatusCreated, response)
+}
+
+func (apiHandler *handler) cancelSandboxExecStream(writer http.ResponseWriter, request *http.Request) {
+	sessionID, action, ok := splitAction(request.PathValue("execSessionAction"))
+	if !ok || action != "cancel" {
+		apiHandler.writeError(writer, request, runnercontrol.ErrDataPlaneNotFound)
+		return
+	}
+	if err := requireEmptyBody(request); err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	generation, err := parseGeneration(request)
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	session, replayed, err := apiHandler.service.CancelSandboxExecStreamAtGeneration(
+		request.Context(), requestPrincipal(request), request.PathValue("sandboxID"),
+		sessionID, generation, request.Header.Get("Idempotency-Key"),
+	)
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	response, err := apiHandler.publicExecStreamSession(session)
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	writer.Header().Set("Idempotency-Replayed", fmt.Sprintf("%t", replayed))
+	writeJSON(writer, http.StatusAccepted, response)
+}
+
+func (apiHandler *handler) publicExecStreamSession(
+	session runnercontrol.DataPlaneSession,
+) (contracts.ExecStreamSession, error) {
+	endpoint, err := apiHandler.service.SandboxExecStreamEndpoint(session.SandboxID, session.ID)
+	if err != nil {
+		return contracts.ExecStreamSession{}, err
+	}
+	state := "open"
+	switch session.State {
+	case "cancelling":
+		state = "closing"
+	case "completed", "failed", "cancelled", "expired":
+		state = "closed"
+	}
+	return contracts.ExecStreamSession{
 		ID: session.ID, SandboxID: session.SandboxID, Generation: session.Generation,
-		State: "open", WebsocketURL: endpoint, Subprotocol: execStreamSubprotocol,
+		State: state, WebsocketURL: endpoint, Subprotocol: execStreamSubprotocol,
 		ExpiresAt: session.DeadlineAt,
-	})
+	}, nil
 }
 
 func (apiHandler *handler) connectSandboxExecStream(writer http.ResponseWriter, request *http.Request) {

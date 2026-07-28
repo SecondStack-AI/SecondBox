@@ -40,7 +40,7 @@ if [[ ! "$trusted_public_key_sha256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "SECONDBOX_RELEASE_GUEST_TRUSTED_PUBLIC_KEY_SHA256 must be 64 lowercase hexadecimal characters" >&2
   exit 1
 fi
-for required_command in git jq openssl sha256sum tar; do
+for required_command in find git gzip jq openssl sha256sum tar; do
   if ! command -v "$required_command" >/dev/null 2>&1; then
     echo "SecondBox guest packaging requires command: $required_command" >&2
     exit 1
@@ -78,28 +78,63 @@ fi
 package_name="secondbox-$release_version-guest-amd64"
 package_archive="$output_directory/$package_name.tar.gz"
 package_checksums="$output_directory/$package_name.SHA256SUMS"
+guest_package_files=(
+  kernel
+  kernel-provenance.json
+  manifest.json
+  manifest.sig
+  rootfs-debian-license-inventory.json
+  rootfs-debian-packages.lock
+  rootfs-python-license-inventory.json
+  rootfs-python.freeze
+  rootfs-source-manifest.json
+  rootfs.ext4
+  runtime-manifest.json
+  secondbox-rootfs-contract.json
+  SHA256SUMS
+  shared.img
+  signing.pub
+  toolchain-manifest.json
+)
 for output_path in "$package_archive" "$package_checksums"; do
   if [[ -e "$output_path" ]]; then
     echo "SecondBox guest packaging refuses to overwrite: $output_path" >&2
     exit 1
   fi
 done
-if find "$artifact_directory" -type l -print -quit | grep -q .; then
-  echo "SecondBox guest package must not contain symbolic links" >&2
+actual_guest_files="$(
+  find "$artifact_directory" \
+    -mindepth 1 \
+    -maxdepth 1 \
+    -type f \
+    -printf '%f\n' |
+    LC_ALL=C sort
+)"
+expected_guest_files="$(printf '%s\n' "${guest_package_files[@]}" | LC_ALL=C sort)"
+if [[ "$actual_guest_files" != "$expected_guest_files" ]] ||
+   find "$artifact_directory" \
+     -mindepth 1 \
+     -maxdepth 1 \
+     ! -type f \
+     -print -quit |
+     grep -q .; then
+  echo "SecondBox guest package source differs from the canonical signed artifact allowlist" >&2
   exit 1
 fi
 
 source_epoch="$(git -C "$repo_root" show -s --format=%ct "$source_commit")"
 tar \
+  --format=gnu \
   --sort=name \
   --mtime="@$source_epoch" \
   --owner=0 \
   --group=0 \
   --numeric-owner \
-  --transform="s|^\\./|$package_name/|" \
+  --transform="s|^|$package_name/|" \
   -C "$artifact_directory" \
-  -czf "$package_archive" \
-  .
+  -cf - \
+  "${guest_package_files[@]}" |
+  gzip --best --no-name >"$package_archive"
 (
   cd "$output_directory"
   sha256sum "$(basename "$package_archive")" >"$(basename "$package_checksums")"

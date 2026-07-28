@@ -161,6 +161,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_TOKEN: ${{ github.token }}
           GH_TOKEN: ${{ github.token }}
+          SECONDBOX_RELEASE_CONFIGURATION_TOKEN: ${{ secrets.SECONDBOX_RELEASE_CONFIGURATION_TOKEN }}
         run: |
           scripts/publish-qualified-release.sh \
             publish-github-release \
@@ -195,6 +196,8 @@ jobs:
           name: release-evidence-${{ github.event.workflow_run.head_sha }}
           path: evidence
       - name: Verify every public release surface without registry credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           scripts/publish-qualified-release.sh \
             verify-public-release \

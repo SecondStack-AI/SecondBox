@@ -31,16 +31,17 @@ func (apiHandler *handler) listRunnerPools(writer http.ResponseWriter, request *
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	pools, err := apiHandler.service.ListRunnerPools(
+	page, err := apiHandler.service.ListRunnerPools(
 		request.Context(),
 		requestPrincipal(request),
 		limit,
+		request.URL.Query().Get("cursor"),
 	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"items": pools})
+	writeJSON(writer, http.StatusOK, page)
 }
 
 func (apiHandler *handler) getRunnerPool(writer http.ResponseWriter, request *http.Request) {
@@ -89,17 +90,18 @@ func (apiHandler *handler) listRunners(writer http.ResponseWriter, request *http
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	runners, err := apiHandler.service.ListRunners(
+	page, err := apiHandler.service.ListRunners(
 		request.Context(),
 		requestPrincipal(request),
 		request.URL.Query().Get("pool"),
 		limit,
+		request.URL.Query().Get("cursor"),
 	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"items": runners})
+	writeJSON(writer, http.StatusOK, page)
 }
 
 func (apiHandler *handler) getRunner(writer http.ResponseWriter, request *http.Request) {

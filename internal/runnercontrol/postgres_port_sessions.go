@@ -671,8 +671,13 @@ func validateLivePortAuthority(ctx context.Context, tx pgx.Tx, tunnel PortTunnel
 		SELECT sandbox.generation,sandbox.state,assignment.state,assignment.fencing_token,
 		       lease.generation,lease.state,lease.service_account_id,lease.expires_at,
 		       EXISTS (
-		         SELECT 1 FROM secondbox.runner_connections
-		         WHERE runner_id=assignment.runner_id AND state='active'
+		         SELECT 1
+		         FROM secondbox.runner_connections AS connection
+		         JOIN secondbox.runner_credentials AS credential
+		           ON credential.serial_number=connection.credential_serial
+		         WHERE connection.runner_id=assignment.runner_id
+		           AND connection.state='active'
+		           AND credential.state IN ('active','retiring')
 		       )
 		FROM secondbox.sandboxes AS sandbox
 		JOIN secondbox.assignments AS assignment ON assignment.id=$3
@@ -698,7 +703,13 @@ func (relay *PostgresFrameRelay) ensurePortRunnerConnected(ctx context.Context, 
 	var active bool
 	if err := relay.pool.QueryRow(ctx, `
 		SELECT EXISTS (
-		  SELECT 1 FROM secondbox.runner_connections WHERE runner_id=$1 AND state='active'
+		  SELECT 1
+		  FROM secondbox.runner_connections AS connection
+		  JOIN secondbox.runner_credentials AS credential
+		    ON credential.serial_number=connection.credential_serial
+		  WHERE connection.runner_id=$1
+		    AND connection.state='active'
+		    AND credential.state IN ('active','retiring')
 		)`, runnerID,
 	).Scan(&active); err != nil {
 		return fmt.Errorf("SecondBox Port runner connection lookup: %w", err)

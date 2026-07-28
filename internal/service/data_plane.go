@@ -25,6 +25,7 @@ type DataPlaneRelay interface {
 	AppendExecClientFrame(context.Context, string, string, runnercontrol.ExecClientFrame, time.Time) (bool, error)
 	ListExecServerFrames(context.Context, string, string, int64, int) ([]runnercontrol.ExecServerFrame, error)
 	CancelDataPlaneSession(context.Context, string, string, string, time.Time) (bool, error)
+	CancelPublicDataPlaneSession(context.Context, runnercontrol.PublicDataPlaneCancellation) (runnercontrol.DataPlaneSession, bool, error)
 }
 
 type terminalDataPlaneRelay interface {
@@ -150,6 +151,52 @@ func (service *ControlPlaneService) CancelSandboxExecStream(
 	return service.dataPlaneRelay.CancelDataPlaneSession(
 		ctx, principal.ProjectID, sessionID, reason, service.now().UTC(),
 	)
+}
+
+// CancelSandboxExecStreamAtGeneration durably replays one key-scoped public cancellation response.
+func (service *ControlPlaneService) CancelSandboxExecStreamAtGeneration(
+	ctx context.Context,
+	principal contracts.Principal,
+	sandboxID string,
+	sessionID string,
+	generation int64,
+	idempotencyKey string,
+) (runnercontrol.DataPlaneSession, bool, error) {
+	if err := service.requireDataPlane(principal, contracts.ScopeSandboxExec); err != nil {
+		return runnercontrol.DataPlaneSession{}, false, err
+	}
+	if err := validateIdempotencyKey(idempotencyKey); err != nil {
+		return runnercontrol.DataPlaneSession{}, false, err
+	}
+	requestHash, err := hashPublicSessionCancellation(sandboxID, sessionID, generation)
+	if err != nil {
+		return runnercontrol.DataPlaneSession{}, false, err
+	}
+	now := service.now().UTC()
+	return service.dataPlaneRelay.CancelPublicDataPlaneSession(
+		ctx,
+		runnercontrol.PublicDataPlaneCancellation{
+			ProjectID: principal.ProjectID, SandboxID: sandboxID, SessionID: sessionID,
+			SessionKind: "exec", SessionOperation: "exec-stream",
+			IdempotencyKey: idempotencyKey,
+			RequestHash:    requestHash, Reason: "public streaming client cancelled",
+			Generation: generation, Now: now, IdempotencyEnds: now.Add(idempotencyRetention),
+		},
+	)
+}
+
+func hashPublicSessionCancellation(
+	sandboxID string,
+	sessionID string,
+	generation int64,
+) (string, error) {
+	return hashCanonicalRequest(struct {
+		SandboxID  string `json:"sandboxId"`
+		SessionID  string `json:"sessionId"`
+		Generation int64  `json:"generation"`
+	}{
+		SandboxID: sandboxID, SessionID: sessionID, Generation: generation,
+	})
 }
 
 func (service *ControlPlaneService) SandboxExecStreamEndpoint(

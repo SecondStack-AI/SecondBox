@@ -1,0 +1,192 @@
+name: Build Protected SecondBox Release Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      release-version:
+        description: Candidate SemVer without a leading v
+        required: true
+        type: string
+
+permissions: {}
+
+env:
+  CI: "true"
+  SECONDBOX_RELEASE_VERSION: ${{ inputs.release-version }}
+  SECONDBOX_RELEASE_SOURCE_COMMIT: ${{ github.sha }}
+  SECONDBOX_RELEASE_GUEST_TRUSTED_PUBLIC_KEY_SHA256: ${{ vars.SECONDBOX_RELEASE_GUEST_TRUSTED_PUBLIC_KEY_SHA256 }}
+  SECONDBOX_RELEASE_GUEST_SOURCE_DIRECTORY: ${{ vars.SECONDBOX_RELEASE_GUEST_SOURCE_DIRECTORY }}
+  SECONDBOX_RELEASE_CANDIDATE_BUILDER_IDENTITY: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+
+jobs:
+  assemble-release-candidate:
+    name: assemble-release-candidate
+    environment: release-candidate
+    env:
+      DOCKER_CONFIG: ${{ github.workspace }}/.tmp/release-docker-config
+    runs-on:
+      group: secondbox-release
+      labels: [self-hosted, linux, x64, secondbox-release-builder]
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    steps:
+      - name: Check out protected main candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            runner/go.sum
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - name: Require protected main and explicit trusted guest source
+        run: |
+          test "$GITHUB_REPOSITORY" = SecondStack-AI/SecondBox
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -n "$SECONDBOX_RELEASE_GUEST_SOURCE_DIRECTORY"
+          test -n "$SECONDBOX_RELEASE_GUEST_TRUSTED_PUBLIC_KEY_SHA256"
+          test "$(realpath -e -- "$SECONDBOX_RELEASE_GUEST_SOURCE_DIRECTORY")" = "$SECONDBOX_RELEASE_GUEST_SOURCE_DIRECTORY"
+          test -d "$SECONDBOX_RELEASE_GUEST_SOURCE_DIRECTORY"
+          test ! -L "$SECONDBOX_RELEASE_GUEST_SOURCE_DIRECTORY"
+      - name: Verify protected candidate environment configuration
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          install -d -m 0755 .tmp/release-candidate
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/$GITHUB_REPOSITORY/environments/release-candidate" \
+            >.tmp/release-candidate/protected-environment.json
+          node scripts/verify-protected-release-environment.mjs \
+            .tmp/release-candidate/protected-environment.json \
+            release-candidate
+      - name: Install pinned JavaScript dependencies
+        run: npm ci --ignore-scripts
+      - name: Build exact local release subjects
+        run: |
+          install -d -m 0755 \
+            .tmp/release-candidate/dist \
+            .tmp/release-candidate/package \
+            .tmp/release-candidate/sdk \
+            .tmp/release-candidate-guest
+          scripts/build-artifacts.sh
+          cp -a dist/. .tmp/release-candidate/dist/
+          scripts/package-release-artifacts.sh \
+            .tmp/release-candidate/dist \
+            .tmp/release-candidate/package \
+            "$SECONDBOX_RELEASE_VERSION" \
+            "$SECONDBOX_RELEASE_SOURCE_COMMIT"
+          scripts/package-release-sdk-artifacts.sh \
+            .tmp/release-candidate/sdk \
+            "$SECONDBOX_RELEASE_VERSION" \
+            "$SECONDBOX_RELEASE_SOURCE_COMMIT"
+          SECONDBOX_RELEASE_GUEST_TRUSTED_PUBLIC_KEY="$SECONDBOX_RELEASE_GUEST_SOURCE_DIRECTORY/signing.pub" \
+            scripts/package-release-guest-assets.sh \
+              "$SECONDBOX_RELEASE_GUEST_SOURCE_DIRECTORY" \
+              .tmp/release-candidate-guest \
+              "$SECONDBOX_RELEASE_VERSION" \
+              "$SECONDBOX_RELEASE_SOURCE_COMMIT"
+      - name: Build and push commit-and-run-scoped candidate images
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          install -d -m 0700 "$DOCKER_CONFIG"
+          printf '%s' "$GITHUB_TOKEN" |
+            docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          candidate_suffix="candidate-$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          build_candidate_image() {
+            image_repository="$1"
+            dockerfile="$2"
+            build_context="$3"
+            metadata_path="$4"
+            docker buildx build \
+              --file "$dockerfile" \
+              --platform linux/amd64 \
+              --provenance=true \
+              --sbom=true \
+              --push \
+              --tag "$image_repository:$candidate_suffix" \
+              --metadata-file "$metadata_path" \
+              "$build_context" >&2
+            image_digest="$(jq -er '."containerimage.digest"' "$metadata_path")"
+            test "${image_digest#sha256:}" != "$image_digest"
+            test "${#image_digest}" = 71
+            docker buildx imagetools inspect "$image_repository@$image_digest" >&2
+            printf '%s@%s\n' "$image_repository" "$image_digest"
+          }
+          control_plane_image="$(
+            build_candidate_image \
+              ghcr.io/secondstack-ai/secondbox-control-plane \
+              Dockerfile \
+              . \
+              .tmp/control-plane-image-metadata.json
+          )"
+          runner_image="$(
+            build_candidate_image \
+              ghcr.io/secondstack-ai/secondbox-runner \
+              runner/Dockerfile \
+              . \
+              .tmp/runner-image-metadata.json
+          )"
+          guest_artifact_image="$(
+            build_candidate_image \
+              ghcr.io/secondstack-ai/secondbox-guest-artifacts \
+              runner/deploy/microvm-artifact-transport.Dockerfile \
+              "$SECONDBOX_RELEASE_GUEST_SOURCE_DIRECTORY" \
+              .tmp/guest-artifact-image-metadata.json
+          )"
+          {
+            echo "SECONDBOX_RELEASE_CONTROL_PLANE_IMAGE=$control_plane_image"
+            echo "SECONDBOX_RELEASE_RUNNER_IMAGE=$runner_image"
+            echo "SECONDBOX_RELEASE_GUEST_ARTIFACT_IMAGE=$guest_artifact_image"
+          } >>"$GITHUB_ENV"
+      - name: Bind candidate provenance and workflow identity
+        run: |
+          guest_archive=".tmp/release-candidate-guest/secondbox-$SECONDBOX_RELEASE_VERSION-guest-amd64.tar.gz"
+          node scripts/generate-release-candidate-provenance.mjs \
+            .tmp/release-candidate \
+            "$SECONDBOX_RELEASE_VERSION" \
+            "$SECONDBOX_RELEASE_SOURCE_COMMIT" \
+            "$guest_archive" \
+            "$SECONDBOX_RELEASE_CONTROL_PLANE_IMAGE" \
+            "$SECONDBOX_RELEASE_RUNNER_IMAGE" \
+            "$SECONDBOX_RELEASE_GUEST_ARTIFACT_IMAGE"
+          node scripts/write-protected-release-workflow-identity.mjs \
+            candidate \
+            .tmp/release-candidate/protected-workflow-identity.json \
+            release-candidate
+          node scripts/generate-release-candidate-inputs.mjs \
+            .tmp/release-candidate \
+            "$SECONDBOX_RELEASE_VERSION" \
+            "$SECONDBOX_RELEASE_SOURCE_COMMIT" \
+            "$SECONDBOX_RELEASE_CONTROL_PLANE_IMAGE" \
+            "$SECONDBOX_RELEASE_RUNNER_IMAGE" \
+            "$SECONDBOX_RELEASE_GUEST_ARTIFACT_IMAGE" \
+            "$guest_archive"
+      - name: Upload exact protected candidate inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-candidate-${{ github.sha }}
+          path: .tmp/release-candidate/
+          if-no-files-found: error
+          compression-level: 0
+      - name: Remove protected candidate workspace material
+        if: always()
+        run: |
+          test -n "$GITHUB_WORKSPACE"
+          test "$(pwd)" = "$GITHUB_WORKSPACE"
+          rm -rf -- \
+            "$GITHUB_WORKSPACE/.tmp/release-docker-config" \
+            "$GITHUB_WORKSPACE/.tmp/release-candidate" \
+            "$GITHUB_WORKSPACE/.tmp/release-candidate-guest" \
+            "$GITHUB_WORKSPACE/dist"

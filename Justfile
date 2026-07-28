@@ -49,6 +49,9 @@ test-multirunner:
 deploy-bootstrap environment:
     deploy/bin/bootstrap-environment.sh "{{environment}}"
 
+deploy-development-prepare environment:
+    deploy/bin/prepare-development-inventory.sh "{{environment}}"
+
 deploy-validate environment:
     deploy/bin/validate-environment.sh "{{environment}}"
 

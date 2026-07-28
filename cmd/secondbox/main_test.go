@@ -29,6 +29,7 @@ func TestResolveCommandAliases(t *testing.T) {
 		{[]string{"auth", "check"}, "listProjects", []string{"--query", "limit=1"}},
 		{[]string{"projects", "create", "--body", "project.json"}, "createProject", []string{"--body", "project.json"}},
 		{[]string{"keys", "revoke"}, "revokeAPIKey", nil},
+		{[]string{"keys", "rotate"}, "rotateAPIKey", nil},
 		{[]string{"profiles", "disable"}, "disableProfile", nil},
 		{[]string{"runner-pools", "create"}, "createRunnerPool", nil},
 		{[]string{"runner-pools", "update"}, "updateRunnerPool", nil},
