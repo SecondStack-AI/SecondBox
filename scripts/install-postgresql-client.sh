@@ -58,7 +58,7 @@ printf '%s\n' \
 apt-get update
 apt-get install -y --no-install-recommends postgresql-client-18
 
-case "$(pg_dump --version)" in
+case "$(/usr/lib/postgresql/18/bin/pg_dump --version)" in
   "pg_dump (PostgreSQL) 18."*) ;;
   *)
     echo "SecondBox pg_dump installation did not provide PostgreSQL 18" >&2
