@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"agentcy/internal/egressproxy"
+	"agent-manager/internal/egressproxy"
 )
 
 type SourceBindingRegistrar interface {

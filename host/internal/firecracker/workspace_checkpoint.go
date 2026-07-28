@@ -16,7 +16,7 @@ import (
 	"strings"
 	"syscall"
 
-	"agentcy/internal/sandboxbroker"
+	"agent-manager/internal/sandboxbroker"
 
 	"golang.org/x/sys/unix"
 )
@@ -251,13 +251,34 @@ func (b *SandboxBrokerBackend) loadWorkspaceGenerationBaseMarker(path string, id
 }
 
 func (b *SandboxBrokerBackend) createWorkspaceArtifact(ctx context.Context, kind string, identity sandboxbroker.WorkspaceIdentity, sourcePath, contentSHA, turnID, status string) (workspaceArtifactEvidence, error) {
-	imageSHA, err := fileSHA256(sourcePath)
-	if err != nil {
-		return workspaceArtifactEvidence{}, fmt.Errorf("hash workspace image: %w", err)
-	}
 	info, err := os.Stat(sourcePath)
 	if err != nil {
 		return workspaceArtifactEvidence{}, err
+	}
+	artifactRoot := b.workspaceArtifactRoot()
+	if err := os.MkdirAll(artifactRoot, 0o700); err != nil {
+		return workspaceArtifactEvidence{}, err
+	}
+	tempDir, err := os.MkdirTemp(artifactRoot, ".workspace-artifact-*")
+	if err != nil {
+		return workspaceArtifactEvidence{}, err
+	}
+	defer os.RemoveAll(tempDir)
+	imagePath := filepath.Join(tempDir, workspaceName)
+	imageFile, err := os.OpenFile(imagePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return workspaceArtifactEvidence{}, err
+	}
+	imageSHA, err := captureWorkspaceImage(imageFile, sourcePath, info.Size())
+	if err != nil {
+		return workspaceArtifactEvidence{}, err
+	}
+	capturedContentSHA, err := workspaceFilesystemManifestSHA256(ctx, imagePath)
+	if err != nil {
+		return workspaceArtifactEvidence{}, fmt.Errorf("hash captured workspace content manifest: %w", err)
+	}
+	if capturedContentSHA != contentSHA {
+		return workspaceArtifactEvidence{}, fmt.Errorf("%w: captured workspace content manifest mismatch", sandboxbroker.ErrWorkspaceCheckpointCorrupt)
 	}
 	manifest := workspaceArtifactManifest{
 		SchemaVersion: workspaceDurabilitySchemaVersion, Kind: kind, Workspace: identity.WorkspaceRef,
@@ -285,14 +306,6 @@ func (b *SandboxBrokerBackend) createWorkspaceArtifact(ctx context.Context, kind
 		return workspaceArtifactEvidence{}, err
 	}
 	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
-		return workspaceArtifactEvidence{}, err
-	}
-	tempDir, err := os.MkdirTemp(filepath.Dir(dir), ".workspace-artifact-*")
-	if err != nil {
-		return workspaceArtifactEvidence{}, err
-	}
-	defer os.RemoveAll(tempDir)
-	if err := copyWorkspaceImageAtomically(sourcePath, filepath.Join(tempDir, workspaceName), imageSHA, info.Size()); err != nil {
 		return workspaceArtifactEvidence{}, err
 	}
 	if err := writeWorkspaceFileDurably(filepath.Join(tempDir, "manifest.json"), append(manifestJSON, '\n')); err != nil {
@@ -416,7 +429,7 @@ func (b *SandboxBrokerBackend) verifyWorkspaceArtifact(ref, wantManifestSHA, wan
 }
 
 func workspaceFilesystemManifestSHA256(ctx context.Context, imagePath string) (string, error) {
-	dumpRoot, err := os.MkdirTemp("", "agentcy-workspace-manifest-*")
+	dumpRoot, err := os.MkdirTemp("", "agent-manager-workspace-manifest-*")
 	if err != nil {
 		return "", err
 	}
@@ -455,6 +468,10 @@ func workspaceFilesystemManifestSHA256(ctx context.Context, imagePath string) (s
 			}
 		case info.Mode()&os.ModeSymlink != 0:
 			item.Kind = "symlink"
+			// debugfs rdump recreates symlinks with the extraction timestamp
+			// instead of preserving the ext4 inode timestamp. Hashing that host
+			// timestamp makes identical images produce different manifests.
+			item.ModTimeUnixNano = 0
 			item.LinkTarget, err = os.Readlink(path)
 			if err != nil {
 				return err
@@ -487,43 +504,55 @@ func copyWorkspaceImageAtomically(sourcePath, targetPath, wantSHA string, wantSi
 	}
 	tempPath := temp.Name()
 	defer func() { _ = os.Remove(tempPath) }()
-	if err := temp.Chmod(0o600); err != nil {
-		temp.Close()
-		return err
-	}
-	source, err := os.Open(sourcePath)
-	if err != nil {
-		temp.Close()
-		return err
-	}
-	copyErr := copySparseWorkspaceImage(temp, source, wantSize)
-	closeSourceErr := source.Close()
-	if copyErr != nil || closeSourceErr != nil {
-		temp.Close()
-		return errors.Join(copyErr, closeSourceErr)
-	}
-	if err := temp.Sync(); err != nil {
-		temp.Close()
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		return err
-	}
-	info, err := os.Stat(tempPath)
+	gotSHA, err := captureWorkspaceImage(temp, sourcePath, wantSize)
 	if err != nil {
 		return err
 	}
-	gotSHA, err := fileSHA256(tempPath)
-	if err != nil {
-		return err
-	}
-	if info.Size() != wantSize || gotSHA != wantSHA {
+	if gotSHA != wantSHA {
 		return fmt.Errorf("%w: copied workspace image evidence mismatch", sandboxbroker.ErrWorkspaceCheckpointCorrupt)
 	}
 	if err := os.Rename(tempPath, targetPath); err != nil {
 		return err
 	}
 	return syncDirectory(filepath.Dir(targetPath))
+}
+
+func captureWorkspaceImage(target *os.File, sourcePath string, wantSize int64) (string, error) {
+	if err := target.Chmod(0o600); err != nil {
+		target.Close()
+		return "", err
+	}
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		target.Close()
+		return "", err
+	}
+	copyErr := copySparseWorkspaceImage(target, source, wantSize)
+	closeSourceErr := source.Close()
+	if copyErr != nil || closeSourceErr != nil {
+		target.Close()
+		return "", errors.Join(copyErr, closeSourceErr)
+	}
+	if err := target.Sync(); err != nil {
+		target.Close()
+		return "", err
+	}
+	targetPath := target.Name()
+	if err := target.Close(); err != nil {
+		return "", err
+	}
+	info, err := os.Stat(targetPath)
+	if err != nil {
+		return "", err
+	}
+	if info.Size() != wantSize {
+		return "", fmt.Errorf("%w: captured workspace image size mismatch", sandboxbroker.ErrWorkspaceCheckpointCorrupt)
+	}
+	imageSHA, err := fileSHA256(targetPath)
+	if err != nil {
+		return "", err
+	}
+	return imageSHA, nil
 }
 
 func copySparseWorkspaceImage(target, source *os.File, size int64) error {

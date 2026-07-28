@@ -14,7 +14,7 @@ imports that base into Docker, applies `apt-std.txt`, pinned
 for `scripts/microvm-image/build.sh`.
 
 The legacy "extend the current signed rootfs" path is still available with
-`AG_MICROVM_ROOTFS_SOURCE_MODE=extend` for emergency rollbacks, but it is no
+`AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_MODE=extend` for emergency rollbacks, but it is no
 longer the default because it depends on an opaque, gitignored
 `releases/microvm/latest/rootfs.ext4`.
 
@@ -27,7 +27,7 @@ longer the default because it depends on an opaque, gitignored
 | `requirements-std.txt` | pip-only Python libs not packaged in Debian |
 | `Dockerfile` | applies the two lists + config bakes on top of `${BASE_IMAGE}` |
 | `config/imagemagick-relax-policy.sh` | re-enable ImageMagick PDF/PS/EPS coders |
-| `config/profile.d-agentcy-std.sh` | headless matplotlib env (`MPLBACKEND=Agg`) |
+| `config/profile.d-agent-manager-std.sh` | headless matplotlib env (`MPLBACKEND=Agg`) |
 | `build-rootfs-source.sh` | orchestrates import → docker build → export to a dir |
 | `verify-standard-toolset.sh` | verifies documented CLI paths and Python imports in live/source/image modes |
 
@@ -67,9 +67,9 @@ builder against it:
 scripts/microvm-image/rootfs/build-rootfs-source.sh   # -> tmp/microvm-rootfs-src
 
 # 2. Build signed kernel/rootfs/shared artifacts from it (reuses the current kernel).
-AG_MICROVM_ROOTFS_SOURCE_DIR=tmp/microvm-rootfs-src \
-AG_MICROVM_KERNEL_PATH=releases/microvm/latest/kernel \
-AG_MICROVM_ROOTFS_SIZE_MIB=10240 \
+AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_DIR=tmp/microvm-rootfs-src \
+AGENT_MANAGER_MICROVM_KERNEL_PATH=releases/microvm/latest/kernel \
+AGENT_MANAGER_MICROVM_ROOTFS_SIZE_MIB=10240 \
 scripts/microvm-image/build.sh
 ```
 
@@ -78,8 +78,8 @@ Or via `just build-microvm-images-std`, which chains both.
 To use the legacy extension path:
 
 ```sh
-AG_MICROVM_ROOTFS_SOURCE_MODE=extend \
-AG_MICROVM_BASE_ROOTFS=releases/microvm/latest/rootfs.ext4 \
+AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_MODE=extend \
+AGENT_MANAGER_MICROVM_BASE_ROOTFS=releases/microvm/latest/rootfs.ext4 \
 scripts/microvm-image/rootfs/build-rootfs-source.sh
 ```
 

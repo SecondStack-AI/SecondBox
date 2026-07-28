@@ -1,669 +1,166 @@
-# Agentcy — build and development tasks
+# Agent Service build, development, and validation tasks.
 
-set dotenv-load
-
-# Default recipe - show help
 default:
     @just --list
 
-# =============================================================================
-# Development
-# =============================================================================
+# Start the Agent Service backend with hot reload. Platform dependencies and
+# configuration must already be loaded by the repository environment wrapper.
+dev: dev-api
 
-# Start the Agent Service with hot-reload
-dev:
-    @just _dev-impl
-
-# Ensure local dev has an encryption key without silently invalidating an existing database.
-_ensure-dev-secret-encryption-key:
+dev-api:
     #!/usr/bin/env bash
     set -euo pipefail
+    : "${AGENT_MANAGER_DATABASE_URL:?AGENT_MANAGER_DATABASE_URL is required}"
+    : "${AGENT_MANAGER_FLUE_STORE_URL:?AGENT_MANAGER_FLUE_STORE_URL is required}"
+    : "${AGENT_MANAGER_FLUE_STORE_TOKEN:?AGENT_MANAGER_FLUE_STORE_TOKEN is required}"
+    AIR_BIN="$(command -v air)"
+    exec "$AIR_BIN"
 
-    enabled="${AG_SECRET_ENCRYPTION_ENABLED:-true}"
-    enabled="$(printf '%s' "$enabled" | tr '[:upper:]' '[:lower:]')"
-    case "$enabled" in
-        true|1|yes|on) ;;
-        *) exit 0 ;;
-    esac
-
-    if [[ -n "${AG_SECRET_ENCRYPTION_KEY:-}" ]]; then
-        exit 0
-    fi
-
-    PROJECT_ROOT="${JUST_INVOCATION_DIRECTORY:-.}"
-    ENV_FILE="$PROJECT_ROOT/.env"
-    DATA_DIR="${AG_DATA_DIR:-./data}"
-    case "$DATA_DIR" in
-        /*) MARKER_PATH="$DATA_DIR/.secret-key-generated" ;;
-        *) MARKER_PATH="$PROJECT_ROOT/${DATA_DIR#./}/.secret-key-generated" ;;
-    esac
-
-    if [[ -f "$MARKER_PATH" ]]; then
-        echo "AG_SECRET_ENCRYPTION_KEY is missing while secret encryption is enabled."
-        echo "A prior generated-key marker exists at $MARKER_PATH, so local dev will not auto-generate a replacement key."
-        echo "Restore the original AG_SECRET_ENCRYPTION_KEY in .env, or remove the marker only if local encrypted secrets can be discarded."
-        exit 1
-    fi
-
-    if [[ ! -f "$ENV_FILE" ]]; then
-        cp "$PROJECT_ROOT/.env.sample" "$ENV_FILE"
-    fi
-
-    ENCRYPTION_KEY="$(openssl rand -base64 32 | tr -d '\n')"
-    if grep -q '^AG_SECRET_ENCRYPTION_KEY=' "$ENV_FILE"; then
-        TMP_FILE="$(mktemp)"
-        sed "s|^AG_SECRET_ENCRYPTION_KEY=.*|AG_SECRET_ENCRYPTION_KEY=${ENCRYPTION_KEY}|" "$ENV_FILE" > "$TMP_FILE"
-        mv "$TMP_FILE" "$ENV_FILE"
-    else
-        printf '\nAG_SECRET_ENCRYPTION_KEY=%s\n' "$ENCRYPTION_KEY" >> "$ENV_FILE"
-    fi
-
-    mkdir -p "$(dirname "$MARKER_PATH")"
-    touch "$MARKER_PATH"
-    echo "Generated AG_SECRET_ENCRYPTION_KEY in $ENV_FILE for local development."
-
-# Internal dev implementation
-_dev-impl:
+# Start only the private Flue store from an explicitly loaded environment.
+dev-flue-store:
     #!/usr/bin/env bash
-    set -e
+    set -euo pipefail
+    : "${DATABASE_URL:?DATABASE_URL is required}"
+    : "${FLUE_STORE_PORT:?FLUE_STORE_PORT is required}"
+    : "${FLUE_STORE_TOKEN:?FLUE_STORE_TOKEN is required}"
+    : "${FLUE_STORE_COMPLETED_SESSION_RETENTION_DAYS:?FLUE_STORE_COMPLETED_SESSION_RETENTION_DAYS is required}"
+    cd flue-store
+    exec npm exec -- tsx src/main.ts
 
-    PROJECT_ROOT="${JUST_INVOCATION_DIRECTORY:-.}"
-    cd "$PROJECT_ROOT"
-
-    just _ensure-dev-secret-encryption-key
-
-    if [[ -z "${AG_DATABASE_URL:-}" ]]; then
-        if [[ -n "${FLUE_STORE_DATABASE_URL:-}" ]]; then
-            export AG_DATABASE_URL="$FLUE_STORE_DATABASE_URL"
-        else
-            echo "Set AG_DATABASE_URL for the control-plane Postgres database, or FLUE_STORE_DATABASE_URL for the local unified dev database." >&2
-            exit 1
-        fi
-    fi
-
-    START_LOCAL_FLUE_STORE=false
-    if [[ -z "${AG_FLUE_STORE_URL:-}" ]]; then
-        if [[ -z "${FLUE_STORE_DATABASE_URL:-}" ]]; then
-            echo "Set AG_FLUE_STORE_URL for an existing Flue store, or FLUE_STORE_DATABASE_URL so just dev can start the host Flue store." >&2
-            exit 1
-        fi
-        START_LOCAL_FLUE_STORE=true
-        export AG_FLUE_STORE_URL="http://127.0.0.1:${FLUE_STORE_PORT:-8092}"
-        export DATABASE_URL="$FLUE_STORE_DATABASE_URL"
-    fi
-    export AG_FLUE_STORE_TOKEN="${AG_FLUE_STORE_TOKEN:-dev-flue-store-token}"
-    export FLUE_STORE_TOKEN="$AG_FLUE_STORE_TOKEN"
-    START_LOCAL_EGRESS_PROXY=false
-    EGRESS_PROXY_BRIDGE_IP="${AG_MICROVM_BRIDGE_CIDR:-172.30.0.1/24}"
-    EGRESS_PROXY_BRIDGE_IP="${EGRESS_PROXY_BRIDGE_IP%%/*}"
-    EGRESS_PROXY_REQUESTED_HOST="${AG_EGRESS_PROXY_URL:-}"
-    EGRESS_PROXY_REQUESTED_HOST="${EGRESS_PROXY_REQUESTED_HOST#*://}"
-    EGRESS_PROXY_REQUESTED_HOST="${EGRESS_PROXY_REQUESTED_HOST%%/*}"
-    EGRESS_PROXY_REQUESTED_HOST="${EGRESS_PROXY_REQUESTED_HOST%%:*}"
-    EGRESS_PROXY_REQUESTED_HOST="${EGRESS_PROXY_REQUESTED_HOST#[}"
-    EGRESS_PROXY_REQUESTED_HOST="${EGRESS_PROXY_REQUESTED_HOST%]}"
-    if [[ "${AG_EGRESS_PROXY_URL:-}" == *"agentcy-egress-proxy"* || "$EGRESS_PROXY_REQUESTED_HOST" == "$EGRESS_PROXY_BRIDGE_IP" ]]; then
-        START_LOCAL_EGRESS_PROXY=true
-        EGRESS_PROXY_LISTEN="${AG_EGRESS_PROXY_HOST_LISTEN_ADDR:-${EGRESS_PROXY_BRIDGE_IP}:3128}"
-        export AG_EGRESS_PROXY_URL="http://${EGRESS_PROXY_LISTEN}"
-    fi
-    if [[ "$START_LOCAL_EGRESS_PROXY" == "true" ]]; then
-        if [[ -z "${AG_EGRESS_PROXY_HOST_LISTEN_ADDR:-}" ]] && ! ip addr show to "${EGRESS_PROXY_BRIDGE_IP}/32" 2>/dev/null | grep -q .; then
-            echo "microVM bridge gateway ${EGRESS_PROXY_BRIDGE_IP} is not assigned to any host interface; the egress proxy cannot bind there." >&2
-            echo "Run 'just net-install' once to create the persistent bridge (survives reboots), then restart dev." >&2
-            echo "Continuing without the local egress proxy — agent egress credential injection is unavailable until the bridge exists." >&2
-            START_LOCAL_EGRESS_PROXY=false
-        fi
-        if [[ "$START_LOCAL_EGRESS_PROXY" == "true" ]]; then
-            EGRESS_PROXY_CONTROL_URL="${AG_EGRESS_PROXY_CONTROL_URL:-http://127.0.0.1:18099}"
-            EGRESS_PROXY_CONTROL_LISTEN="${EGRESS_PROXY_CONTROL_URL#http://}"
-            EGRESS_PROXY_CONTROL_LISTEN="${EGRESS_PROXY_CONTROL_LISTEN#https://}"
-            EGRESS_PROXY_CONTROL_LISTEN="${EGRESS_PROXY_CONTROL_LISTEN%%/*}"
-            EGRESS_PROXY_CONTROL_LISTEN="${EGRESS_PROXY_CONTROL_LISTEN/localhost/127.0.0.1}"
-            EGRESS_PROXY_DECISION_ENDPOINT="${AG_EGRESS_PROXY_DECISION_ENDPOINT:-http://127.0.0.1:8081}"
-            EGRESS_PROXY_CA_OUT="${AG_EGRESS_PROXY_MITM_CA_CERT_OUT:-${AG_EGRESS_PROXY_CA_CERT_HOST_PATH:-}}"
-            if [[ -z "$EGRESS_PROXY_CA_OUT" ]]; then
-                EGRESS_PROXY_CA_OUT="$PWD/data/egress-ca/egress-proxy-ca.pem"
-            fi
-            EGRESS_PROXY_CA_KEY="${AG_EGRESS_PROXY_MITM_CA_KEY_PATH:-$PWD/data/egress-ca/mitm-ca-key.enc}"
-            mkdir -p "$(dirname "$EGRESS_PROXY_CA_OUT")"
-            mkdir -p "$(dirname "$EGRESS_PROXY_CA_KEY")"
-            go build -o bin/agentcy-egress-proxy ./cmd/agentcy-egress-proxy
-            if timeout 1 bash -c ":</dev/tcp/${EGRESS_PROXY_BRIDGE_IP}/3128" >/dev/null 2>&1; then
-                echo "Using existing Firecracker egress proxy at ${EGRESS_PROXY_LISTEN}"
-                START_LOCAL_EGRESS_PROXY=false
-            elif timeout 1 bash -c ":</dev/tcp/${EGRESS_PROXY_CONTROL_LISTEN%:*}/${EGRESS_PROXY_CONTROL_LISTEN##*:}" >/dev/null 2>&1; then
-                echo "Egress proxy control port is already in use at ${EGRESS_PROXY_CONTROL_LISTEN}, but ${EGRESS_PROXY_LISTEN} is not listening." >&2
-                echo "Stop the stale egress proxy or change AG_EGRESS_PROXY_CONTROL_URL before starting Firecracker dev." >&2
-                exit 1
-            fi
-        fi
-    fi
-
-    cleanup_stale_host_harness_netns() {
-        if ! sudo -n ip netns list >/dev/null 2>&1; then
-            return 0
-        fi
-        if pgrep -af 'agent-harness|harness-main|ip netns exec ag-' >/dev/null 2>&1; then
-            echo "Skipping stale host harness netns cleanup because a harness process is running."
-            return 0
-        fi
-        local removed=0
-        while read -r ns; do
-            [[ -n "$ns" ]] || continue
-            sudo -n ip netns delete "$ns" >/dev/null 2>&1 || true
-            removed=$((removed + 1))
-        done < <(sudo -n ip netns list | awk '{print $1}' | grep -E '^ag-[0-9a-f]{8}$' || true)
-        if [[ "$removed" -gt 0 ]]; then
-            echo "Removed ${removed} stale host harness network namespace(s)."
-        fi
-    }
-
-    cleanup_stale_egress_proxy_bindings() {
-        if pgrep -af 'agent-harness|harness-main|ip netns exec ag-|firecracker|agentcy-microvm-agent|jailer' >/dev/null 2>&1; then
-            return 0
-        fi
-        local control_url="${AG_EGRESS_PROXY_CONTROL_URL:-}"
-        local token="${AG_EGRESS_PROXY_CONTROL_TOKEN:-}"
-        [[ -n "$control_url" && -n "$token" ]] || return 0
-        command -v curl >/dev/null 2>&1 || return 0
-        if curl -fsS -m 2 -X POST \
-            -H "Authorization: Bearer ${token}" \
-            -H 'Content-Type: application/json' \
-            -d '{"containerIds":[]}' \
-            "${control_url%/}/source-bindings/retain" >/dev/null 2>&1; then
-            echo "Cleared stale egress proxy source bindings."
-        fi
-    }
-
-    cleanup_stale_host_harness_netns
-
-    echo "Starting Agentcy development environment..."
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  API:      http://localhost:8081"
-    echo "  Flue:     $AG_FLUE_STORE_URL"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-
-    AIR_BIN="$(command -v air || true)"
-    if [[ -z "$AIR_BIN" ]]; then
-        GOBIN_DIR="$(go env GOBIN 2>/dev/null || true)"
-        if [[ -n "$GOBIN_DIR" && -x "$GOBIN_DIR/air" ]]; then
-            AIR_BIN="$GOBIN_DIR/air"
-        fi
-    fi
-    if [[ -z "$AIR_BIN" ]]; then
-        GOPATH_DIR="$(go env GOPATH 2>/dev/null || true)"
-        if [[ -n "$GOPATH_DIR" && -x "$GOPATH_DIR/bin/air" ]]; then
-            AIR_BIN="$GOPATH_DIR/bin/air"
-        fi
-    fi
-    if [[ -z "$AIR_BIN" ]]; then
-        echo "air is required for hot reload but was not found."
-        echo "Install it with: go install github.com/air-verse/air@latest"
-        exit 1
-    fi
-
-    wait_for_flue_store() {
-        local pid="${1:-}"
-        for i in $(seq 1 60); do
-            if command -v curl >/dev/null 2>&1 && curl -fsS "$AG_FLUE_STORE_URL/healthz" >/dev/null 2>&1; then
-                return 0
-            fi
-            if [[ -n "$pid" ]] && ! kill -0 "$pid" >/dev/null 2>&1; then
-                echo "Flue store process exited before becoming healthy." >&2
-                return 1
-            fi
-            sleep 0.5
-        done
-        echo "Timed out waiting for Flue store at $AG_FLUE_STORE_URL." >&2
-        return 1
-    }
-
-    trap "kill 0" EXIT
-    if [[ "$START_LOCAL_FLUE_STORE" == "true" ]]; then
-        if command -v curl >/dev/null 2>&1 && curl -fsS "$AG_FLUE_STORE_URL/healthz" >/dev/null 2>&1; then
-            echo "Using existing Flue store at $AG_FLUE_STORE_URL"
-        else
-            (cd flue-store && npm exec -- tsx src/main.ts) &
-            FLUE_STORE_PID=$!
-            wait_for_flue_store "$FLUE_STORE_PID"
-        fi
-    else
-        wait_for_flue_store ""
-    fi
-    if [[ "$START_LOCAL_EGRESS_PROXY" == "true" ]]; then
-            bin/agentcy-egress-proxy \
-                -listen "$EGRESS_PROXY_LISTEN" \
-                -control-listen "$EGRESS_PROXY_CONTROL_LISTEN" \
-            -control-token "${AG_EGRESS_PROXY_CONTROL_TOKEN:-}" \
-            -decision-endpoint "$EGRESS_PROXY_DECISION_ENDPOINT" \
-            -service-token "${AG_EGRESS_PROXY_SERVICE_TOKEN:-}" \
-            -inject-cache-ttl "${AG_EGRESS_PROXY_INJECT_CACHE_TTL:-30s}" \
-                -mitm -mitm-ca-key-path "$EGRESS_PROXY_CA_KEY" \
-                -mitm-ca-cert-out "$EGRESS_PROXY_CA_OUT" \
-                -require-source-identity &
-            sleep 0.2
-    fi
-    cleanup_stale_egress_proxy_bindings
-    if [[ "${AG_MICROVM_ALLOW_UNJAILED:-}" == "true" ]]; then
-        if [[ -x "$PWD/scripts/devnet/ip" ]] && sudo -n /usr/bin/ip -V >/dev/null 2>&1; then
-            export PATH="$PWD/scripts/devnet:$PATH"
-            echo "Unjailed microVM mode: ip/iptables routed via passwordless-sudo shims (non-root VM launch)."
-        else
-            echo "AG_MICROVM_ALLOW_UNJAILED=true but passwordless sudo for ip is not configured." >&2
-            echo "Run 'just net-sudoers' once; until then microVM launches need root (the API still works)." >&2
-        fi
-    fi
-    "$AIR_BIN"
-
-# Start only the Go backend with hot-reload
-dev-api:
-    @just _dev-api-impl
-
-_dev-api-impl:
-    #!/usr/bin/env bash
-    set -e
-
-    PROJECT_ROOT="${JUST_INVOCATION_DIRECTORY:-.}"
-    cd "$PROJECT_ROOT"
-
-    just _ensure-dev-secret-encryption-key
-
-    if [[ -z "${AG_DATABASE_URL:-}" ]]; then
-        if [[ -n "${FLUE_STORE_DATABASE_URL:-}" ]]; then
-            export AG_DATABASE_URL="$FLUE_STORE_DATABASE_URL"
-        else
-            echo "Set AG_DATABASE_URL for the control-plane Postgres database, or FLUE_STORE_DATABASE_URL for the local unified dev database." >&2
-            exit 1
-        fi
-    fi
-
-    START_LOCAL_FLUE_STORE=false
-    if [[ -z "${AG_FLUE_STORE_URL:-}" ]]; then
-        if [[ -z "${FLUE_STORE_DATABASE_URL:-}" ]]; then
-            echo "Set AG_FLUE_STORE_URL for an existing Flue store, or FLUE_STORE_DATABASE_URL so just dev-api can start the host Flue store." >&2
-            exit 1
-        fi
-        START_LOCAL_FLUE_STORE=true
-        export AG_FLUE_STORE_URL="http://127.0.0.1:${FLUE_STORE_PORT:-8092}"
-        export DATABASE_URL="$FLUE_STORE_DATABASE_URL"
-    fi
-    export AG_FLUE_STORE_TOKEN="${AG_FLUE_STORE_TOKEN:-dev-flue-store-token}"
-    export FLUE_STORE_TOKEN="$AG_FLUE_STORE_TOKEN"
-    START_LOCAL_EGRESS_PROXY=false
-    EGRESS_PROXY_BRIDGE_IP="${AG_MICROVM_BRIDGE_CIDR:-172.30.0.1/24}"
-    EGRESS_PROXY_BRIDGE_IP="${EGRESS_PROXY_BRIDGE_IP%%/*}"
-    EGRESS_PROXY_REQUESTED_HOST="${AG_EGRESS_PROXY_URL:-}"
-    EGRESS_PROXY_REQUESTED_HOST="${EGRESS_PROXY_REQUESTED_HOST#*://}"
-    EGRESS_PROXY_REQUESTED_HOST="${EGRESS_PROXY_REQUESTED_HOST%%/*}"
-    EGRESS_PROXY_REQUESTED_HOST="${EGRESS_PROXY_REQUESTED_HOST%%:*}"
-    EGRESS_PROXY_REQUESTED_HOST="${EGRESS_PROXY_REQUESTED_HOST#[}"
-    EGRESS_PROXY_REQUESTED_HOST="${EGRESS_PROXY_REQUESTED_HOST%]}"
-    if [[ "${AG_EGRESS_PROXY_URL:-}" == *"agentcy-egress-proxy"* || "$EGRESS_PROXY_REQUESTED_HOST" == "$EGRESS_PROXY_BRIDGE_IP" ]]; then
-        START_LOCAL_EGRESS_PROXY=true
-        EGRESS_PROXY_LISTEN="${AG_EGRESS_PROXY_HOST_LISTEN_ADDR:-${EGRESS_PROXY_BRIDGE_IP}:3128}"
-        export AG_EGRESS_PROXY_URL="http://${EGRESS_PROXY_LISTEN}"
-    fi
-    if [[ "$START_LOCAL_EGRESS_PROXY" == "true" ]]; then
-        if [[ -z "${AG_EGRESS_PROXY_HOST_LISTEN_ADDR:-}" ]] && ! ip addr show to "${EGRESS_PROXY_BRIDGE_IP}/32" 2>/dev/null | grep -q .; then
-            echo "microVM bridge gateway ${EGRESS_PROXY_BRIDGE_IP} is not assigned to any host interface; the egress proxy cannot bind there." >&2
-            echo "Run 'just net-install' once to create the persistent bridge (survives reboots), then restart dev." >&2
-            echo "Continuing without the local egress proxy — agent egress credential injection is unavailable until the bridge exists." >&2
-            START_LOCAL_EGRESS_PROXY=false
-        fi
-        if [[ "$START_LOCAL_EGRESS_PROXY" == "true" ]]; then
-            EGRESS_PROXY_CONTROL_URL="${AG_EGRESS_PROXY_CONTROL_URL:-http://127.0.0.1:18099}"
-            EGRESS_PROXY_CONTROL_LISTEN="${EGRESS_PROXY_CONTROL_URL#http://}"
-            EGRESS_PROXY_CONTROL_LISTEN="${EGRESS_PROXY_CONTROL_LISTEN#https://}"
-            EGRESS_PROXY_CONTROL_LISTEN="${EGRESS_PROXY_CONTROL_LISTEN%%/*}"
-            EGRESS_PROXY_CONTROL_LISTEN="${EGRESS_PROXY_CONTROL_LISTEN/localhost/127.0.0.1}"
-            EGRESS_PROXY_DECISION_ENDPOINT="${AG_EGRESS_PROXY_DECISION_ENDPOINT:-http://127.0.0.1:8081}"
-            EGRESS_PROXY_CA_OUT="${AG_EGRESS_PROXY_MITM_CA_CERT_OUT:-${AG_EGRESS_PROXY_CA_CERT_HOST_PATH:-}}"
-            if [[ -z "$EGRESS_PROXY_CA_OUT" ]]; then
-                EGRESS_PROXY_CA_OUT="$PWD/data/egress-ca/egress-proxy-ca.pem"
-            fi
-            EGRESS_PROXY_CA_KEY="${AG_EGRESS_PROXY_MITM_CA_KEY_PATH:-$PWD/data/egress-ca/mitm-ca-key.enc}"
-            mkdir -p "$(dirname "$EGRESS_PROXY_CA_OUT")"
-            mkdir -p "$(dirname "$EGRESS_PROXY_CA_KEY")"
-            go build -o bin/agentcy-egress-proxy ./cmd/agentcy-egress-proxy
-            if timeout 1 bash -c ":</dev/tcp/${EGRESS_PROXY_BRIDGE_IP}/3128" >/dev/null 2>&1; then
-                echo "Using existing Firecracker egress proxy at ${EGRESS_PROXY_LISTEN}"
-                START_LOCAL_EGRESS_PROXY=false
-            elif timeout 1 bash -c ":</dev/tcp/${EGRESS_PROXY_CONTROL_LISTEN%:*}/${EGRESS_PROXY_CONTROL_LISTEN##*:}" >/dev/null 2>&1; then
-                echo "Egress proxy control port is already in use at ${EGRESS_PROXY_CONTROL_LISTEN}, but ${EGRESS_PROXY_LISTEN} is not listening." >&2
-                echo "Stop the stale egress proxy or change AG_EGRESS_PROXY_CONTROL_URL before starting Firecracker dev." >&2
-                exit 1
-            fi
-        fi
-    fi
-
-    AIR_BIN="$(command -v air || true)"
-    if [[ -z "$AIR_BIN" ]]; then
-        GOBIN_DIR="$(go env GOBIN 2>/dev/null || true)"
-        if [[ -n "$GOBIN_DIR" && -x "$GOBIN_DIR/air" ]]; then
-            AIR_BIN="$GOBIN_DIR/air"
-        fi
-    fi
-    if [[ -z "$AIR_BIN" ]]; then
-        GOPATH_DIR="$(go env GOPATH 2>/dev/null || true)"
-        if [[ -n "$GOPATH_DIR" && -x "$GOPATH_DIR/bin/air" ]]; then
-            AIR_BIN="$GOPATH_DIR/bin/air"
-        fi
-    fi
-    if [[ -z "$AIR_BIN" ]]; then
-        echo "air is required for hot reload but was not found."
-        echo "Install it with: go install github.com/air-verse/air@latest"
-        exit 1
-    fi
-
-    wait_for_flue_store() {
-        local pid="${1:-}"
-        for i in $(seq 1 60); do
-            if command -v curl >/dev/null 2>&1 && curl -fsS "$AG_FLUE_STORE_URL/healthz" >/dev/null 2>&1; then
-                return 0
-            fi
-            if [[ -n "$pid" ]] && ! kill -0 "$pid" >/dev/null 2>&1; then
-                echo "Flue store process exited before becoming healthy." >&2
-                return 1
-            fi
-            sleep 0.5
-        done
-        echo "Timed out waiting for Flue store at $AG_FLUE_STORE_URL." >&2
-        return 1
-    }
-
-    trap "kill 0" EXIT
-    if [[ "$START_LOCAL_FLUE_STORE" == "true" ]]; then
-        if command -v curl >/dev/null 2>&1 && curl -fsS "$AG_FLUE_STORE_URL/healthz" >/dev/null 2>&1; then
-            echo "Using existing Flue store at $AG_FLUE_STORE_URL"
-        else
-            (cd flue-store && npm exec -- tsx src/main.ts) &
-            FLUE_STORE_PID=$!
-            wait_for_flue_store "$FLUE_STORE_PID"
-        fi
-    else
-        wait_for_flue_store ""
-    fi
-    if [[ "$START_LOCAL_EGRESS_PROXY" == "true" ]]; then
-        bin/agentcy-egress-proxy \
-            -listen "$EGRESS_PROXY_LISTEN" \
-            -control-listen "$EGRESS_PROXY_CONTROL_LISTEN" \
-            -control-token "${AG_EGRESS_PROXY_CONTROL_TOKEN:-}" \
-            -decision-endpoint "$EGRESS_PROXY_DECISION_ENDPOINT" \
-            -service-token "${AG_EGRESS_PROXY_SERVICE_TOKEN:-}" \
-            -inject-cache-ttl "${AG_EGRESS_PROXY_INJECT_CACHE_TTL:-30s}" \
-            -mitm -mitm-ca-key-path "$EGRESS_PROXY_CA_KEY" \
-            -mitm-ca-cert-out "$EGRESS_PROXY_CA_OUT" \
-            -require-source-identity &
-    fi
-    if [[ "${AG_MICROVM_ALLOW_UNJAILED:-}" == "true" ]]; then
-        if [[ -x "$PWD/scripts/devnet/ip" ]] && sudo -n /usr/bin/ip -V >/dev/null 2>&1; then
-            export PATH="$PWD/scripts/devnet:$PATH"
-            echo "Unjailed microVM mode: ip/iptables routed via passwordless-sudo shims (non-root VM launch)."
-        else
-            echo "AG_MICROVM_ALLOW_UNJAILED=true but passwordless sudo for ip is not configured." >&2
-            echo "Run 'just net-sudoers' once; until then microVM launches need root (the API still works)." >&2
-        fi
-    fi
-    "$AIR_BIN" &
-    wait -n
-
-# =============================================================================
-# Dev networking (persistent microVM bridge)
-# =============================================================================
-
-# Reads bridge name/CIDR from .env (AG_MICROVM_BRIDGE_NAME / AG_MICROVM_BRIDGE_CIDR)
-# and installs a boot-time systemd service that survives reboots. Needs sudo once.
-# Install the persistent Firecracker microVM bridge (run once; survives reboots)
+# Install the persistent Firecracker development bridge.
 net-install:
     #!/usr/bin/env bash
     set -euo pipefail
-    PROJECT_ROOT="${JUST_INVOCATION_DIRECTORY:-.}"
-    cd "$PROJECT_ROOT"
-
-    read_env() { grep -E "^$1=" .env 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '"'; }
-    BRIDGE_NAME="$(read_env AG_MICROVM_BRIDGE_NAME)"; BRIDGE_NAME="${BRIDGE_NAME:-agfc0}"
-    BRIDGE_CIDR="$(read_env AG_MICROVM_BRIDGE_CIDR)"; BRIDGE_CIDR="${BRIDGE_CIDR:-172.30.0.1/24}"
-    UNIT_DST="/etc/systemd/system/agentcy-devnet.service"
-
-    echo "Installing ${UNIT_DST} for bridge ${BRIDGE_NAME} (${BRIDGE_CIDR})..."
-    sed -e "s|@BRIDGE_NAME@|${BRIDGE_NAME}|g" -e "s|@BRIDGE_CIDR@|${BRIDGE_CIDR}|g" \
-        deploy/agentcy-devnet.service | sudo tee "$UNIT_DST" >/dev/null
+    : "${AGENT_MANAGER_MICROVM_BRIDGE_NAME:?AGENT_MANAGER_MICROVM_BRIDGE_NAME is required}"
+    : "${AGENT_MANAGER_MICROVM_BRIDGE_CIDR:?AGENT_MANAGER_MICROVM_BRIDGE_CIDR is required}"
+    UNIT_DST="/etc/systemd/system/agent-manager-devnet.service"
+    sed -e "s|@BRIDGE_NAME@|${AGENT_MANAGER_MICROVM_BRIDGE_NAME}|g" \
+        -e "s|@BRIDGE_CIDR@|${AGENT_MANAGER_MICROVM_BRIDGE_CIDR}|g" \
+        deploy/agent-manager-devnet.service | sudo tee "$UNIT_DST" >/dev/null
     sudo systemctl daemon-reload
-    sudo systemctl enable --now agentcy-devnet.service
+    sudo systemctl enable --now agent-manager-devnet.service
+    ip addr show to "${AGENT_MANAGER_MICROVM_BRIDGE_CIDR%%/*}/32" | grep -q .
 
-    if ip addr show to "${BRIDGE_CIDR%%/*}/32" 2>/dev/null | grep -q .; then
-        echo "✓ Bridge ${BRIDGE_NAME} is up with ${BRIDGE_CIDR}; dev/dev-api will start cleanly across reboots."
-    else
-        echo "✗ Bridge did not come up. Inspect: systemctl status agentcy-devnet.service" >&2
-        exit 1
-    fi
-
-# Pairs with AG_MICROVM_ALLOW_UNJAILED=true and the scripts/devnet shims; the rule
-# is validated with visudo before install.
-# Grant passwordless ip/iptables for non-root microVM launch (run once)
+# Grant the current user the narrow ip/iptables privileges used by the devnet shims.
 net-sudoers:
     #!/usr/bin/env bash
     set -euo pipefail
     USER_NAME="$(id -un)"
     IP_BIN="$(command -v ip)"
     IPTABLES_BIN="$(command -v iptables)"
-    DROPIN="/etc/sudoers.d/agentcy-devnet"
+    DROPIN="/etc/sudoers.d/agent-manager-devnet"
     TMP="$(mktemp)"
     trap 'rm -f "$TMP"' EXIT
     printf '%s\n' \
-        "# Installed by 'just net-sudoers'. Lets ${USER_NAME} manage Firecracker microVM" \
-        "# networking (tap + iptables) so the dev server runs unjailed as non-root." \
+        "# Installed by Agent Service for Firecracker development networking." \
         "${USER_NAME} ALL=(root) NOPASSWD: ${IP_BIN}, ${IPTABLES_BIN}" > "$TMP"
     sudo visudo -cf "$TMP"
     sudo install -m 0440 -o root -g root "$TMP" "$DROPIN"
-    echo "✓ Installed ${DROPIN} (passwordless ${IP_BIN} + ${IPTABLES_BIN} for ${USER_NAME})."
 
-# Remove the persistent microVM bridge service and tear the bridge down.
+# Remove the persistent Firecracker development bridge.
 net-uninstall:
     #!/usr/bin/env bash
     set -euo pipefail
-    sudo systemctl disable --now agentcy-devnet.service 2>/dev/null || true
-    sudo rm -f /etc/systemd/system/agentcy-devnet.service
+    sudo systemctl disable --now agent-manager-devnet.service
+    sudo rm -f /etc/systemd/system/agent-manager-devnet.service
     sudo systemctl daemon-reload
-    echo "Removed agentcy-devnet.service."
 
-# Reclaims data/microvm, the egress CA cert, and tmp/jail left root-owned by earlier
-# `sudo just dev-api` runs. Idempotent; no-op when already yours. One sudo.
-# Restore data/ ownership after a sudo run so the non-root dev server can use it
+# Restore project-local runtime data ownership after an accidental root run.
 data-fix-perms:
     #!/usr/bin/env bash
     set -euo pipefail
-    PROJECT_ROOT="${JUST_INVOCATION_DIRECTORY:-.}"
-    cd "$PROJECT_ROOT"
-
-    read_env() { grep -E "^$1=" .env 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '"'; }
-    DATA_DIR="$(read_env AG_DATA_DIR)"; DATA_DIR="${DATA_DIR:-./data}"
-    # Resolve the REAL invoking user, even under `sudo just …`, so we never chown to
-    # root. SUDO_USER is set when invoked via sudo; otherwise fall back to id -un.
-    USER_NAME="${SUDO_USER:-$(id -un)}"; GROUP_NAME="$(id -gn "$USER_NAME")"
-    if [[ "$USER_NAME" == "root" ]]; then
-        echo "Refusing to chown to root. Run 'just data-fix-perms' WITHOUT sudo (it elevates only the chown)." >&2
-        exit 1
-    fi
-
-    # Project-local trees a root-run server may have created. tmp/jail is a stale
-    # jailer chroot that also breaks `go build ./...` when left root-owned.
+    : "${AGENT_MANAGER_DATA_DIR:?AGENT_MANAGER_DATA_DIR is required}"
+    USER_NAME="$(id -un)"
+    GROUP_NAME="$(id -gn "$USER_NAME")"
+    [[ "$USER_NAME" != "root" ]]
     targets=()
-    for t in "$DATA_DIR" tmp/jail; do
-        [ -e "$t" ] && targets+=("$t")
+    for target in "$AGENT_MANAGER_DATA_DIR" tmp/jail; do
+        [[ -e "$target" ]] && targets+=("$target")
     done
-    if [[ "${#targets[@]}" -eq 0 ]]; then
-        echo "Nothing to fix (no $DATA_DIR or tmp/jail present)."
-        exit 0
+    if [[ "${#targets[@]}" -gt 0 ]]; then
+        sudo chown -R "${USER_NAME}:${GROUP_NAME}" "${targets[@]}"
     fi
 
-    count=0
-    for t in "${targets[@]}"; do
-        c="$(find "$t" ! -user "$USER_NAME" 2>/dev/null | wc -l)"
-        count=$((count + c))
-    done
-    if [[ "$count" -eq 0 ]]; then
-        echo "No non-${USER_NAME}-owned files under: ${targets[*]}. Nothing to do."
-        exit 0
-    fi
-
-    echo "Found ~${count} non-${USER_NAME} paths under: ${targets[*]} — reclaiming (one sudo)..."
-    for t in "${targets[@]}"; do
-        sudo chown -R "${USER_NAME}:${GROUP_NAME}" "$t"
-    done
-    echo "✓ Ownership restored to ${USER_NAME}:${GROUP_NAME}. Use plain 'just dev-api' (never 'sudo just dev-api') to keep it this way."
-
-# =============================================================================
-# Build
-# =============================================================================
-
-# Build the Go backend
 build:
     mkdir -p bin
-    go build -o bin/agentcy ./cmd/agentcy
-    go build -o bin/agentcy-mcp-cutover ./cmd/agentcy-mcp-cutover
-    go build -o bin/agentcy-backup-verify ./cmd/agentcy-backup-verify
+    go build -o bin/agent-manager ./cmd/agent-manager
+    go build -o bin/agent-manager-mcp-cutover ./cmd/agent-manager-mcp-cutover
+    go build -o bin/agent-manager-memory-cutover ./cmd/agent-manager-memory-cutover
+    go build -o bin/agent-manager-backup-verify ./cmd/agent-manager-backup-verify
 
-# Reproduce the exact Linux artifacts used by backup provenance and clean-host restore.
 build-recovery-artifacts:
     mkdir -p bin
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o bin/agentcy ./cmd/agentcy
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o bin/agentcy-backup-verify ./cmd/agentcy-backup-verify
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o bin/agent-manager ./cmd/agent-manager
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o bin/agent-manager-backup-verify ./cmd/agent-manager-backup-verify
     flue-store/scripts/package-production.sh --output-dir tmp/flue-store-production
     agent/scripts/package-production.sh --output-dir tmp/agent-harness-production
 
-# Build the shared egress proxy
 build-egress-proxy:
-    go build -o bin/agentcy-egress-proxy ./cmd/agentcy-egress-proxy
+    go build -o bin/agent-manager-egress-proxy ./cmd/agent-manager-egress-proxy
 
-# Build the agent Node.js code
 build-agent:
     cd agent && npm run build
 
-# Build a production-only, lockfile-backed host-harness tree and normalized archive.
-package-agent-production output_dir="tmp/agent-harness-production" archive="releases/agentcy-harness.tar.gz":
-    agent/scripts/package-production.sh --output-dir "{{output_dir}}" --archive "{{archive}}"
-
-# Build the Flue durable-store service
 build-flue-store:
     cd flue-store && npm run build
 
-# Build a production-only, lockfile-backed Flue Store tree and normalized archive.
-package-flue-store-production output_dir="tmp/flue-store-production" archive="releases/agentcy-flue-store.tar.gz":
-    flue-store/scripts/package-production.sh --output-dir "{{output_dir}}" --archive "{{archive}}"
-
-# Build the monorepo release payload: control-plane binaries, private Flue,
-# immutable harness, notices, checksums, and the minimal privileged launcher.
-package-secondstack-artifacts output_dir="releases/secondstack-agent-manager":
-    scripts/release/package-secondstack-artifacts.sh "{{output_dir}}"
-
-# Generate an SPDX JSON dependency/license SBOM with the repository-pinned Trivy image.
-generate-secondstack-sbom output_file="tmp/secondstack-agent-manager.spdx.json":
-    scripts/release/generate-sbom.sh "{{output_file}}"
-
-# Build signed Firecracker kernel/rootfs/shared-image artifacts for agent runtimes.
 build-microvm-images:
     scripts/microvm-image/build.sh
 
-# Build signed images from a reproducible standard rootfs source
-# (scripts/microvm-image/rootfs/). Prepares the source dir via debootstrap+docker,
-# then builds and signs, reusing the current kernel. Needs Docker and network
-# egress; a digest-pinned container supplies debootstrap when host root is absent.
 build-microvm-images-std:
     #!/usr/bin/env bash
     set -euo pipefail
     scripts/microvm-image/rootfs/build-rootfs-source.sh
-    AG_MICROVM_ROOTFS_SOURCE_DIR="${AG_MICROVM_ROOTFS_SOURCE_DIR:-tmp/microvm-rootfs-src}" \
-    AG_MICROVM_KERNEL_PATH="${AG_MICROVM_KERNEL_PATH:-releases/microvm/latest/kernel}" \
-    AG_MICROVM_ROOTFS_SIZE_MIB="${AG_MICROVM_ROOTFS_SIZE_MIB:-10240}" \
+    AGENT_MANAGER_MICROVM_ROOTFS_SOURCE_DIR=tmp/microvm-rootfs-src \
+    AGENT_MANAGER_MICROVM_KERNEL_PATH=releases/microvm/latest/kernel \
+    AGENT_MANAGER_MICROVM_ROOTFS_SIZE_MIB=10240 \
     scripts/microvm-image/build.sh
 
-# Build the deployable agent runtime artifacts.
 build-runtime: build-microvm-images
 
-# Build only the pinned Firecracker guest kernel from scripts/microvm-image/kernel.lock.
 build-microvm-kernel:
-    scripts/microvm-image/build-kernel.sh "${AG_MICROVM_KERNEL_OUT_DIR:-tmp/microvm-kernel}"
+    scripts/microvm-image/build-kernel.sh tmp/microvm-kernel
 
-# Verify signed Firecracker artifacts. Override AG_MICROVM_OUT_DIR to select a build.
 verify-microvm-images:
-    scripts/microvm-image/verify.sh "${AG_MICROVM_OUT_DIR:-releases/microvm/latest}" "${AG_MICROVM_PUBLIC_KEY:-}"
+    scripts/microvm-image/verify.sh releases/microvm/latest releases/microvm/latest/signing.pub
 
-# Validate Firecracker staging host prerequisites. Pass --static via ARGS for
-# non-root config/artifact checks only.
 verify-microvm-staging *ARGS:
-    scripts/microvm-stage-check.sh {{ARGS}}
+    scripts/microvm-stage-check.sh {{ ARGS }}
 
-# Image paths may name releases/microvm/latest/*; manager startup pins the concrete target.
-# Rebuild Firecracker runtime artifacts and restart running agents.
-rollout-microvm-images api_url="http://localhost:8081":
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    just build-microvm-images
-
-    TOKEN="${AGENTCY_API_TOKEN:-${AG_API_AUTH_TOKEN:-}}"
-    HEADERS=(-H "Content-Type: application/json")
-    if [ -n "$TOKEN" ]; then
-        HEADERS+=(-H "X-Agentcy-Token: $TOKEN")
-    fi
-
-    curl -fsS -X POST "{{api_url}}/api/admin/restart-running-agents" "${HEADERS[@]}"
-
-# Use `just build-runtime` when a prepared AG_MICROVM_ROOTFS_SOURCE_DIR is available for signed Firecracker images.
-# Build all self-contained code artifacts
 all: build build-egress-proxy build-agent build-flue-store
     @echo "All builds complete"
 
-# =============================================================================
-# Testing
-# =============================================================================
-
-# Run the authoritative Go test gate, including Postgres-backed DB contracts.
 test:
     #!/usr/bin/env bash
     set -euo pipefail
-    export AG_TEST_DATABASE_URL="${AG_TEST_DATABASE_URL:-${FLUE_STORE_CONTRACT_DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable}}"
-    export AG_DATABASE_URL="${AG_DATABASE_URL:-$AG_TEST_DATABASE_URL}"
+    : "${AGENT_MANAGER_TEST_DATABASE_URL:?AGENT_MANAGER_TEST_DATABASE_URL is required}"
+    export AGENT_MANAGER_DATABASE_URL="$AGENT_MANAGER_TEST_DATABASE_URL"
     scripts/test/go-fast.sh
     scripts/test/go-db.sh
 
-# Compile every Go test package, then run packages whose test dependency graph
-# does not include the shared Postgres fixture. The full `just test` gate remains
-# authoritative for database contracts.
 test-fast *ARGS:
-    scripts/test/go-fast.sh {{ARGS}}
+    scripts/test/go-fast.sh {{ ARGS }}
 
-# Run Channel Runtime operation, authority, semantic, and mapping contract fixtures.
 test-channel-runtime-contract:
     go test ./contracts/channel-runtime/v1/... ./contracts/managed-agents/v1/gen/go/managedagents
 
-# Generate sqlc registry query code.
 sqlc:
     scripts/sqlc-generate.sh
 
-# Generate Managed Agents and Channel Runtime public contract artifacts.
 generate-managed-agents-contracts:
     node scripts/contracts/generate-managed-agents.mjs
 
-# Verify public contract generation, inventory, provenance hashes, and local signed artifacts.
 verify-managed-agents-baseline artifact_dir="releases/microvm/latest":
     node scripts/contracts/generate-managed-agents.mjs --check
-    node scripts/contracts/verify-managed-agents-baseline.mjs --verify-artifact-dir {{artifact_dir}}
-    scripts/microvm-image/verify.sh {{artifact_dir}} {{artifact_dir}}/signing.pub
+    node scripts/contracts/verify-managed-agents-baseline.mjs --verify-artifact-dir {{ artifact_dir }}
+    scripts/microvm-image/verify.sh {{ artifact_dir }} {{ artifact_dir }}/signing.pub
 
-# Run Flue durable-store service tests
 test-flue-store:
     cd flue-store && npm test
 
-# Run Flue's published Postgres store contract suite.
 test-flue-store-contract:
     cd flue-store && npm run test:contract
 
-# Run the same suites that gate CI before production deploys.
 preship:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -672,36 +169,25 @@ preship:
     (cd flue-store && npm test && npm run test:contract && npm run build)
     (cd agent && npm run typecheck && npm run lint && npm test && npm run build)
 
-# Create a local Agentcy Postgres dump.
 backup:
     scripts/backup/pg-dump.sh
 
-# Restore the latest dump into a throwaway DB and prove health + secret decryption.
 restore-drill:
     scripts/backup/restore-drill.sh
 
-# =============================================================================
-# Utilities
-# =============================================================================
-
-# Tidy Go modules
 tidy:
     go mod tidy
 
-# Install all npm dependencies
 install-deps:
     cd agent && npm install
     cd flue-store && npm install
 
-# Install Go-based local development tools
 install-dev-tools:
     go install github.com/air-verse/air@latest
 
-# Full development setup
 setup: install-deps tidy install-dev-tools
     @echo "Setup complete"
 
-# Clean build artifacts
 clean:
     rm -rf bin/
     cd agent && npm run clean

@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"testing"
 
-	"agentcy/internal/config"
-	"agentcy/internal/egressproxy"
-	"agentcy/internal/registry"
-	"agentcy/internal/runtimemanager"
+	"agent-manager/internal/config"
+	"agent-manager/internal/egressproxy"
+	"agent-manager/internal/registry"
+	"agent-manager/internal/runtimemanager"
 )
 
 func TestCompartmentIsolationGateDerivesDistinctCompartments(t *testing.T) {

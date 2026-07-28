@@ -13,15 +13,15 @@ rm -f /dev/mem /dev/kmem /dev/port /dev/kvm /dev/net/tun
 mkdir -p /dev/shm
 mountpoint -q /dev/shm || mount -t tmpfs -o rw,nosuid,nodev,mode=1777,size=512m tmpfs /dev/shm
 
-process_limit="$(sed -n 's/.*agentcy\.process_limit=\([0-9][0-9]*\).*/\1/p' /proc/cmdline)"
+process_limit="$(sed -n 's/.*agent-manager\.process_limit=\([0-9][0-9]*\).*/\1/p' /proc/cmdline)"
 if [ -n "$process_limit" ]; then
     mkdir -p /sys/fs/cgroup
     mountpoint -q /sys/fs/cgroup || mount -t cgroup2 cgroup2 /sys/fs/cgroup
     grep -qw pids /sys/fs/cgroup/cgroup.controllers
     grep -qw pids /sys/fs/cgroup/cgroup.subtree_control || printf '%s\n' +pids > /sys/fs/cgroup/cgroup.subtree_control
-    mkdir -p /sys/fs/cgroup/agentcy-tools
-    printf '%s\n' "$process_limit" > /sys/fs/cgroup/agentcy-tools/pids.max
-    printf '%s\n' "$$" > /sys/fs/cgroup/agentcy-tools/cgroup.procs
+    mkdir -p /sys/fs/cgroup/agent-manager-tools
+    printf '%s\n' "$process_limit" > /sys/fs/cgroup/agent-manager-tools/pids.max
+    printf '%s\n' "$$" > /sys/fs/cgroup/agent-manager-tools/cgroup.procs
 fi
 
 mkdir -p /workspace /runtime-private
@@ -41,7 +41,7 @@ if [ -b /dev/vdc ]; then
     mount -o ro /dev/vdc /shared
 fi
 
-exec /usr/local/bin/agentcy-microvm-entrypoint \
+exec /usr/local/bin/agent-manager-microvm-entrypoint \
     --agents=/workspace/config/agents.md \
     --soul=/workspace/config/soul.md \
     --tools=/workspace/config/tools.md \

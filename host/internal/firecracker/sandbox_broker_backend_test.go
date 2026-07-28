@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	managedagents "agentcy/contracts/managed-agents/v1/gen/go/managedagents"
-	"agentcy/internal/runtimemanager"
-	"agentcy/internal/sandboxbroker"
+	managedagents "agent-manager/contracts/managed-agents/v1/gen/go/managedagents"
+	"agent-manager/internal/runtimemanager"
+	"agent-manager/internal/sandboxbroker"
 )
 
 func TestSandboxBrokerMicroVMBackendIsLazyReusableAndResetFenced(t *testing.T) {

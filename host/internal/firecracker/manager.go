@@ -19,10 +19,10 @@ import (
 	"syscall"
 	"time"
 
-	"agentcy/internal/config"
-	"agentcy/internal/flow"
-	"agentcy/internal/registry"
-	"agentcy/internal/runtimemanager"
+	"agent-manager/internal/config"
+	"agent-manager/internal/flow"
+	"agent-manager/internal/registry"
+	"agent-manager/internal/runtimemanager"
 )
 
 const (
@@ -32,14 +32,14 @@ const (
 	kernelName          = "vmlinux"
 	sharedImageName     = "shared.img"
 	firecrackerSockName = "firecracker.sock"
-	vsockUDSName        = "agentcy.vsock"
+	vsockUDSName        = "agent-manager.vsock"
 	configName          = "firecracker.json"
 )
 
 // maxUnixSocketPathLen is the kernel's sockaddr_un.sun_path capacity (including the
 // trailing NUL). Firecracker's API socket and the vsock UDS must fit within it.
 // Jailed mode binds a short path relative to the jail chroot; unjailed mode has no
-// chroot and binds the full host path, so a deep AG_DATA_DIR otherwise yields the
+// chroot and binds the full host path, so a deep AGENT_MANAGER_DATA_DIR otherwise yields the
 // cryptic "path must be shorter than SUN_LEN" at boot.
 const maxUnixSocketPathLen = 108
 

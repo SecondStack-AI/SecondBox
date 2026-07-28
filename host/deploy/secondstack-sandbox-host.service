@@ -4,7 +4,7 @@ After=local-fs.target network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/agentcy-vmlauncher
+ExecStart=/usr/local/bin/agent-manager-vmlauncher
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EnvironmentFile=/run/agent-sandbox-host/launcher.env
 Restart=on-failure

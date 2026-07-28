@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"agentcy/internal/config"
-	"agentcy/internal/runtimemanager"
+	"agent-manager/internal/config"
+	"agent-manager/internal/runtimemanager"
 )
 
 func TestMicroVMInitRemovesForbiddenDeviceNodesBeforeEntrypoint(t *testing.T) {
@@ -23,48 +23,48 @@ func TestMicroVMInitRemovesForbiddenDeviceNodesBeforeEntrypoint(t *testing.T) {
 	content := string(initScript)
 	devtmpfs := strings.Index(content, "mount -t devtmpfs devtmpfs /dev")
 	restrictDevices := strings.Index(content, "rm -f /dev/mem /dev/kmem /dev/port /dev/kvm /dev/net/tun")
-	guestEntrypoint := strings.Index(content, "exec /usr/local/bin/agentcy-microvm-entrypoint")
+	guestEntrypoint := strings.Index(content, "exec /usr/local/bin/agent-manager-microvm-entrypoint")
 	if devtmpfs < 0 || restrictDevices <= devtmpfs || guestEntrypoint <= restrictDevices {
 		t.Fatalf("microVM init must remove raw memory, KVM, and TUN nodes after devtmpfs and before the guest entrypoint")
 	}
 }
 
 func TestThreatModelJailedGuestEscapeAndResourceExhaustion(t *testing.T) {
-	if os.Getenv("AG_MICROVM_THREAT_SMOKE") != "1" {
-		t.Skip("set AG_MICROVM_THREAT_SMOKE=1 to run hostile workloads in a jailed KVM guest")
+	if os.Getenv("AGENT_MANAGER_MICROVM_THREAT_SMOKE") != "1" {
+		t.Skip("set AGENT_MANAGER_MICROVM_THREAT_SMOKE=1 to run hostile workloads in a jailed KVM guest")
 	}
 	if os.Geteuid() != 0 {
 		t.Fatal("host threat qualification requires root for jailer and cgroup enforcement")
 	}
 	workDir := shortSmokeDir(t)
-	memoryMiB := threatRequiredPositiveInt(t, "AG_MICROVM_MEMORY_MIB")
-	workspaceMiB := threatRequiredPositiveInt(t, "AG_MICROVM_WORKSPACE_SIZE_MIB")
-	cgroupVersion := threatRequiredPositiveInt(t, "AG_MICROVM_JAILER_CGROUP_VERSION")
-	jailerUID := threatRequiredNonNegativeInt(t, "AG_MICROVM_JAILER_UID")
-	jailerGID := threatRequiredNonNegativeInt(t, "AG_MICROVM_JAILER_GID")
+	memoryMiB := threatRequiredPositiveInt(t, "AGENT_MANAGER_MICROVM_MEMORY_MIB")
+	workspaceMiB := threatRequiredPositiveInt(t, "AGENT_MANAGER_MICROVM_WORKSPACE_SIZE_MIB")
+	cgroupVersion := threatRequiredPositiveInt(t, "AGENT_MANAGER_MICROVM_JAILER_CGROUP_VERSION")
+	jailerUID := threatRequiredNonNegativeInt(t, "AGENT_MANAGER_MICROVM_JAILER_UID")
+	jailerGID := threatRequiredNonNegativeInt(t, "AGENT_MANAGER_MICROVM_JAILER_GID")
 	cfg := &config.Config{
-		FirecrackerPath:            requiredEnv(t, "AG_FIRECRACKER_PATH"),
-		JailerPath:                 requiredEnv(t, "AG_FIRECRACKER_JAILER_PATH"),
-		MicroVMKernelPath:          requiredEnv(t, "AG_MICROVM_KERNEL_PATH"),
-		MicroVMRootfsPath:          requiredEnv(t, "AG_MICROVM_ROOTFS_PATH"),
-		MicroVMSharedImagePath:     requiredEnv(t, "AG_MICROVM_SHARED_IMAGE_PATH"),
-		MicroVMToolRootfsPath:      requiredEnv(t, "AG_MICROVM_ROOTFS_PATH"),
-		MicroVMToolSharedImagePath: requiredEnv(t, "AG_MICROVM_SHARED_IMAGE_PATH"),
-		MicroVMPublicKeyPath:       requiredEnv(t, "AG_MICROVM_PUBLIC_KEY"),
-		MicroVMPublicKeySHA256:     requiredEnv(t, "AG_MICROVM_PUBLIC_KEY_SHA256"),
+		FirecrackerPath:            requiredEnv(t, "AGENT_MANAGER_FIRECRACKER_PATH"),
+		JailerPath:                 requiredEnv(t, "AGENT_MANAGER_FIRECRACKER_JAILER_PATH"),
+		MicroVMKernelPath:          requiredEnv(t, "AGENT_MANAGER_MICROVM_KERNEL_PATH"),
+		MicroVMRootfsPath:          requiredEnv(t, "AGENT_MANAGER_MICROVM_ROOTFS_PATH"),
+		MicroVMSharedImagePath:     requiredEnv(t, "AGENT_MANAGER_MICROVM_SHARED_IMAGE_PATH"),
+		MicroVMToolRootfsPath:      requiredEnv(t, "AGENT_MANAGER_MICROVM_ROOTFS_PATH"),
+		MicroVMToolSharedImagePath: requiredEnv(t, "AGENT_MANAGER_MICROVM_SHARED_IMAGE_PATH"),
+		MicroVMPublicKeyPath:       requiredEnv(t, "AGENT_MANAGER_MICROVM_PUBLIC_KEY"),
+		MicroVMPublicKeySHA256:     requiredEnv(t, "AGENT_MANAGER_MICROVM_PUBLIC_KEY_SHA256"),
 		MicroVMWorkspaceDir:        filepath.Join(workDir, "workspaces"),
 		MicroVMRunDir:              filepath.Join(workDir, "run"),
 		MicroVMLogDir:              filepath.Join(workDir, "logs"),
-		MicroVMKernelArgs:          requiredEnv(t, "AG_MICROVM_KERNEL_ARGS"),
+		MicroVMKernelArgs:          requiredEnv(t, "AGENT_MANAGER_MICROVM_KERNEL_ARGS"),
 		MicroVMMemoryMiB:           memoryMiB,
 		MicroVMVCPUs:               1,
 		MicroVMWorkspaceSizeMiB:    workspaceMiB,
 		MicroVMAllowUnjailed:       false,
-		MicroVMJailerChrootBaseDir: requiredEnv(t, "AG_MICROVM_JAILER_CHROOT_BASE_DIR"),
+		MicroVMJailerChrootBaseDir: requiredEnv(t, "AGENT_MANAGER_MICROVM_JAILER_CHROOT_BASE_DIR"),
 		MicroVMJailerUID:           jailerUID,
 		MicroVMJailerGID:           jailerGID,
 		MicroVMJailerCgroupVersion: cgroupVersion,
-		MicroVMJailerParentCgroup:  requiredEnv(t, "AG_MICROVM_JAILER_PARENT_CGROUP"),
+		MicroVMJailerParentCgroup:  requiredEnv(t, "AGENT_MANAGER_MICROVM_JAILER_PARENT_CGROUP"),
 	}
 	hostSentinel := filepath.Join(workDir, "host-only-sentinel")
 	hostContent := []byte("host boundary must remain outside the guest")

@@ -1,9 +1,9 @@
 package microvm
 
 import (
-	"agentcy/internal/config"
-	"agentcy/internal/egressproxy"
-	"agentcy/internal/runtimemanager"
+	"agent-manager/internal/config"
+	"agent-manager/internal/egressproxy"
+	"agent-manager/internal/runtimemanager"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -135,7 +135,7 @@ func (m *Manager) guestIP(instanceID string) string {
 
 // guestIPBootArg renders the kernel ip= autoconfiguration argument for a per-VM
 // guest IP. It is only emitted in bridge mode, where the gateway and netmask are
-// known; single-IP mode relies on operator-provided AG_MICROVM_KERNEL_ARGS.
+// known; single-IP mode relies on operator-provided AGENT_MANAGER_MICROVM_KERNEL_ARGS.
 func guestIPBootArg(cfg *config.Config, guestIP string) string {
 	guestIP = strings.TrimSpace(guestIP)
 	cidr := strings.TrimSpace(cfg.MicroVMBridgeCIDR)
@@ -158,7 +158,7 @@ func (m *Manager) registerSourceBinding(ctx context.Context, agentID, instanceID
 	}
 	sourceIP := strings.TrimSpace(m.guestIP(instanceID))
 	if sourceIP == "" {
-		return "", fmt.Errorf("register proxy source binding: no guest IP reserved for %s (set AG_MICROVM_BRIDGE_CIDR or AG_MICROVM_GUEST_IP)", instanceID)
+		return "", fmt.Errorf("register proxy source binding: no guest IP reserved for %s (set AGENT_MANAGER_MICROVM_BRIDGE_CIDR or AGENT_MANAGER_MICROVM_GUEST_IP)", instanceID)
 	}
 	contextToken := ""
 	if strings.TrimSpace(m.cfg.AgentRuntimeAuthSecret) != "" {

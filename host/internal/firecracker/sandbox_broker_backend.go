@@ -13,8 +13,8 @@ import (
 	"strings"
 	"sync"
 
-	"agentcy/internal/runtimemanager"
-	"agentcy/internal/sandboxbroker"
+	"agent-manager/internal/runtimemanager"
+	"agent-manager/internal/sandboxbroker"
 )
 
 type SandboxBrokerBackend struct {
@@ -147,6 +147,17 @@ func (b *SandboxBrokerBackend) Drain(ctx context.Context, handle sandboxbroker.R
 	b.mu.Unlock()
 	if !ok {
 		return nil
+	}
+	return b.manager.drainSandboxBrokerRuntime(ctx, runtime.agentID, runtime.compartmentID)
+}
+
+// DrainWorkspace stops a runtime started by the Agent hand surface, which uses
+// the same physical workspace but carries richer runtime context than the
+// generic broker Acquire contract.
+func (b *SandboxBrokerBackend) DrainWorkspace(ctx context.Context, identity sandboxbroker.WorkspaceIdentity) error {
+	runtime, err := sandboxBrokerRuntimeFor(identity, sandboxbroker.LeasePolicy{})
+	if err != nil {
+		return err
 	}
 	return b.manager.drainSandboxBrokerRuntime(ctx, runtime.agentID, runtime.compartmentID)
 }

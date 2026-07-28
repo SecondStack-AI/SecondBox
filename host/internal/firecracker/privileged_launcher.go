@@ -21,9 +21,9 @@ import (
 	"syscall"
 	"time"
 
-	"agentcy/internal/config"
-	"agentcy/internal/harness"
-	"agentcy/internal/runtimemanager"
+	"agent-manager/internal/config"
+	"agent-manager/internal/harness"
+	"agent-manager/internal/runtimemanager"
 	"golang.org/x/sys/unix"
 )
 
@@ -32,7 +32,11 @@ const privilegedLauncherProtocolVersion = 1
 const maxPrivilegedLauncherMessageBytes = 1 << 20
 const maxPrivilegedLauncherResponseBytes = 4 << 20
 
-const launcherSourceGuardTable = "agentcy_source_guard"
+const launcherSourceGuardTable = "agent_manager_source_guard"
+
+// harnessBuildID is replaced at image build time with a digest of the harness
+// source tree compiled into both the manager and privileged launcher binaries.
+var harnessBuildID = "development"
 
 var launcherInstanceIDPattern = regexp.MustCompile(`^fc-[A-Za-z0-9][A-Za-z0-9_-]{2,180}$`)
 var launcherPathSegmentPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,180}$`)
@@ -77,6 +81,7 @@ type privilegedLauncherResponse struct {
 	ExecutionStarted bool                  `json:"executionStarted,omitempty"`
 	ExitCode         int                   `json:"exitCode,omitempty"`
 	Version          string                `json:"version,omitempty"`
+	HarnessBuildID   string                `json:"harnessBuildId,omitempty"`
 	NetworkPosture   *NetworkPostureReport `json:"networkPosture,omitempty"`
 }
 
@@ -144,6 +149,9 @@ func (c *privilegedLauncherClient) Ping(ctx context.Context) error {
 	}
 	if resp.Version != expectedFirecrackerVersionString() {
 		return fmt.Errorf("privileged launcher firecracker version %q does not match %q", resp.Version, expectedFirecrackerVersionString())
+	}
+	if resp.HarnessBuildID != harnessBuildID {
+		return fmt.Errorf("privileged launcher harness build %q does not match manager build %q", resp.HarnessBuildID, harnessBuildID)
 	}
 	if resp.NetworkPosture == nil {
 		return fmt.Errorf("privileged launcher response is missing the required network posture report")
@@ -321,104 +329,104 @@ func LoadPrivilegedLauncherConfigFromEnv() (PrivilegedLauncherConfig, error) {
 		}
 		return value, nil
 	}
-	allowedUID, err := intEnv("AG_VM_LAUNCHER_ALLOWED_UID", -1)
+	allowedUID, err := intEnv("AGENT_MANAGER_VM_LAUNCHER_ALLOWED_UID", -1)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	socketGID, err := intEnv("AG_VM_LAUNCHER_SOCKET_GID", -1)
+	socketGID, err := intEnv("AGENT_MANAGER_VM_LAUNCHER_SOCKET_GID", -1)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	managerGID, err := intEnv("AG_VM_LAUNCHER_MANAGER_GID", -1)
+	managerGID, err := intEnv("AGENT_MANAGER_VM_LAUNCHER_MANAGER_GID", -1)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	jailerUID, err := intEnv("AG_MICROVM_JAILER_UID", -1)
+	jailerUID, err := intEnv("AGENT_MANAGER_MICROVM_JAILER_UID", -1)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	jailerGID, err := intEnv("AG_MICROVM_JAILER_GID", -1)
+	jailerGID, err := intEnv("AGENT_MANAGER_MICROVM_JAILER_GID", -1)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	cgroupVersion, err := intEnv("AG_MICROVM_JAILER_CGROUP_VERSION", 2)
+	cgroupVersion, err := intEnv("AGENT_MANAGER_MICROVM_JAILER_CGROUP_VERSION", 2)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	memoryMiB, err := intEnv("AG_MICROVM_MEMORY_MIB", 2048)
+	memoryMiB, err := intEnv("AGENT_MANAGER_MICROVM_MEMORY_MIB", 2048)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	vcpus, err := intEnv("AG_MICROVM_VCPUS", 2)
+	vcpus, err := intEnv("AGENT_MANAGER_MICROVM_VCPUS", 2)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	workspaceSizeMiB, err := intEnv("AG_MICROVM_WORKSPACE_SIZE_MIB", 8192)
+	workspaceSizeMiB, err := intEnv("AGENT_MANAGER_MICROVM_WORKSPACE_SIZE_MIB", 8192)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	transparentPort, err := intEnv("AG_EGRESS_PROXY_TRANSPARENT_HTTP_PORT", 0)
+	transparentPort, err := intEnv("AGENT_MANAGER_EGRESS_PROXY_TRANSPARENT_HTTP_PORT", 0)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	harnessMemoryBytes, err := intEnv("AG_VM_LAUNCHER_HARNESS_MEMORY_BYTES", 2*1024*1024*1024)
+	harnessMemoryBytes, err := intEnv("AGENT_MANAGER_VM_LAUNCHER_HARNESS_MEMORY_BYTES", 2*1024*1024*1024)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	harnessNanoCPUs, err := intEnv("AG_VM_LAUNCHER_HARNESS_NANO_CPUS", 2_000_000_000)
+	harnessNanoCPUs, err := intEnv("AGENT_MANAGER_VM_LAUNCHER_HARNESS_NANO_CPUS", 2_000_000_000)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	harnessPidsLimit, err := intEnv("AG_VM_LAUNCHER_HARNESS_PIDS_LIMIT", 256)
+	harnessPidsLimit, err := intEnv("AGENT_MANAGER_VM_LAUNCHER_HARNESS_PIDS_LIMIT", 256)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	harnessMaxRuntime, err := intEnv("AG_VM_LAUNCHER_HARNESS_MAX_RUNTIME_SECONDS", 600)
+	harnessMaxRuntime, err := intEnv("AGENT_MANAGER_VM_LAUNCHER_HARNESS_MAX_RUNTIME_SECONDS", 600)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
-	harnessIdleTimeout, err := intEnv("AG_VM_LAUNCHER_HARNESS_IDLE_TIMEOUT_SECONDS", 300)
+	harnessIdleTimeout, err := intEnv("AGENT_MANAGER_VM_LAUNCHER_HARNESS_IDLE_TIMEOUT_SECONDS", 300)
 	if err != nil {
 		return PrivilegedLauncherConfig{}, err
 	}
 	return PrivilegedLauncherConfig{
-		SocketPath:          strings.TrimSpace(os.Getenv("AG_MICROVM_LAUNCHER_SOCKET")),
+		SocketPath:          strings.TrimSpace(os.Getenv("AGENT_MANAGER_MICROVM_LAUNCHER_SOCKET")),
 		SocketGID:           socketGID,
 		AllowedUID:          allowedUID,
 		ManagerGID:          managerGID,
-		FirecrackerPath:     strings.TrimSpace(os.Getenv("AG_FIRECRACKER_PATH")),
-		JailerPath:          strings.TrimSpace(os.Getenv("AG_FIRECRACKER_JAILER_PATH")),
-		ArtifactRoot:        strings.TrimSpace(os.Getenv("AG_VM_LAUNCHER_ARTIFACT_ROOT")),
-		KernelPath:          strings.TrimSpace(os.Getenv("AG_MICROVM_KERNEL_PATH")),
-		WorkspaceRoot:       strings.TrimSpace(os.Getenv("AG_MICROVM_WORKSPACE_DIR")),
-		RunRoot:             strings.TrimSpace(os.Getenv("AG_MICROVM_RUN_DIR")),
-		LogRoot:             strings.TrimSpace(os.Getenv("AG_MICROVM_LOG_DIR")),
-		JailRoot:            strings.TrimSpace(os.Getenv("AG_MICROVM_JAILER_CHROOT_BASE_DIR")),
-		StateRoot:           strings.TrimSpace(os.Getenv("AG_VM_LAUNCHER_STATE_DIR")),
-		BridgeName:          strings.TrimSpace(os.Getenv("AG_MICROVM_BRIDGE_NAME")),
-		BridgeCIDR:          strings.TrimSpace(os.Getenv("AG_MICROVM_BRIDGE_CIDR")),
-		TapPrefix:           strings.TrimSpace(os.Getenv("AG_MICROVM_TAP_PREFIX")),
+		FirecrackerPath:     strings.TrimSpace(os.Getenv("AGENT_MANAGER_FIRECRACKER_PATH")),
+		JailerPath:          strings.TrimSpace(os.Getenv("AGENT_MANAGER_FIRECRACKER_JAILER_PATH")),
+		ArtifactRoot:        strings.TrimSpace(os.Getenv("AGENT_MANAGER_VM_LAUNCHER_ARTIFACT_ROOT")),
+		KernelPath:          strings.TrimSpace(os.Getenv("AGENT_MANAGER_MICROVM_KERNEL_PATH")),
+		WorkspaceRoot:       strings.TrimSpace(os.Getenv("AGENT_MANAGER_MICROVM_WORKSPACE_DIR")),
+		RunRoot:             strings.TrimSpace(os.Getenv("AGENT_MANAGER_MICROVM_RUN_DIR")),
+		LogRoot:             strings.TrimSpace(os.Getenv("AGENT_MANAGER_MICROVM_LOG_DIR")),
+		JailRoot:            strings.TrimSpace(os.Getenv("AGENT_MANAGER_MICROVM_JAILER_CHROOT_BASE_DIR")),
+		StateRoot:           strings.TrimSpace(os.Getenv("AGENT_MANAGER_VM_LAUNCHER_STATE_DIR")),
+		BridgeName:          strings.TrimSpace(os.Getenv("AGENT_MANAGER_MICROVM_BRIDGE_NAME")),
+		BridgeCIDR:          strings.TrimSpace(os.Getenv("AGENT_MANAGER_MICROVM_BRIDGE_CIDR")),
+		TapPrefix:           strings.TrimSpace(os.Getenv("AGENT_MANAGER_MICROVM_TAP_PREFIX")),
 		JailerUID:           jailerUID,
 		JailerGID:           jailerGID,
 		JailerCgroupVersion: cgroupVersion,
-		JailerParentCgroup:  strings.TrimSpace(os.Getenv("AG_MICROVM_JAILER_PARENT_CGROUP")),
+		JailerParentCgroup:  strings.TrimSpace(os.Getenv("AGENT_MANAGER_MICROVM_JAILER_PARENT_CGROUP")),
 		MemoryMiB:           memoryMiB,
 		VCPUs:               vcpus,
 		WorkspaceSizeMiB:    workspaceSizeMiB,
-		CPUTemplate:         normalizeLauncherCPUTemplate(os.Getenv("AG_MICROVM_CPU_TEMPLATE")),
-		KernelArgs:          strings.TrimSpace(os.Getenv("AG_MICROVM_KERNEL_ARGS")),
+		CPUTemplate:         normalizeLauncherCPUTemplate(os.Getenv("AGENT_MANAGER_MICROVM_CPU_TEMPLATE")),
+		KernelArgs:          strings.TrimSpace(os.Getenv("AGENT_MANAGER_MICROVM_KERNEL_ARGS")),
 		TransparentHTTPPort: transparentPort,
-		HarnessCIDR:         strings.TrimSpace(os.Getenv("AG_HARNESS_NETNS_CIDR")),
-		HarnessProxyIP:      strings.TrimSpace(os.Getenv("AG_VM_LAUNCHER_HARNESS_PROXY_IP")),
-		HarnessPlatformIP:   strings.TrimSpace(os.Getenv("AG_VM_LAUNCHER_HARNESS_PLATFORM_IP")),
-		HarnessBubblewrap:   strings.TrimSpace(envOr("AG_VM_LAUNCHER_HARNESS_BWRAP_PATH", "/usr/bin/bwrap")),
-		HarnessIPCommand:    strings.TrimSpace(envOr("AG_VM_LAUNCHER_HARNESS_IP_PATH", "/usr/sbin/ip")),
-		HarnessSystemdRun:   strings.TrimSpace(envOr("AG_VM_LAUNCHER_HARNESS_SYSTEMD_RUN_PATH", "/usr/bin/systemd-run")),
-		HarnessSystemctl:    strings.TrimSpace(envOr("AG_VM_LAUNCHER_HARNESS_SYSTEMCTL_PATH", "/usr/bin/systemctl")),
-		HarnessShell:        strings.TrimSpace(envOr("AG_VM_LAUNCHER_HARNESS_SHELL_PATH", "/bin/sh")),
-		HarnessEnvCommand:   strings.TrimSpace(envOr("AG_VM_LAUNCHER_HARNESS_ENV_PATH", "/usr/bin/env")),
-		NftPath:             strings.TrimSpace(envOr("AG_VM_LAUNCHER_NFT_PATH", "/usr/sbin/nft")),
-		HarnessResultRoot:   strings.TrimSpace(os.Getenv("AG_VM_LAUNCHER_HARNESS_RESULT_DIR")),
+		HarnessCIDR:         strings.TrimSpace(os.Getenv("AGENT_MANAGER_HARNESS_NETNS_CIDR")),
+		HarnessProxyIP:      strings.TrimSpace(os.Getenv("AGENT_MANAGER_VM_LAUNCHER_HARNESS_PROXY_IP")),
+		HarnessPlatformIP:   strings.TrimSpace(os.Getenv("AGENT_MANAGER_VM_LAUNCHER_HARNESS_PLATFORM_IP")),
+		HarnessBubblewrap:   strings.TrimSpace(envOr("AGENT_MANAGER_VM_LAUNCHER_HARNESS_BWRAP_PATH", "/usr/bin/bwrap")),
+		HarnessIPCommand:    strings.TrimSpace(envOr("AGENT_MANAGER_VM_LAUNCHER_HARNESS_IP_PATH", "/usr/sbin/ip")),
+		HarnessSystemdRun:   strings.TrimSpace(envOr("AGENT_MANAGER_VM_LAUNCHER_HARNESS_SYSTEMD_RUN_PATH", "/usr/bin/systemd-run")),
+		HarnessSystemctl:    strings.TrimSpace(envOr("AGENT_MANAGER_VM_LAUNCHER_HARNESS_SYSTEMCTL_PATH", "/usr/bin/systemctl")),
+		HarnessShell:        strings.TrimSpace(envOr("AGENT_MANAGER_VM_LAUNCHER_HARNESS_SHELL_PATH", "/bin/sh")),
+		HarnessEnvCommand:   strings.TrimSpace(envOr("AGENT_MANAGER_VM_LAUNCHER_HARNESS_ENV_PATH", "/usr/bin/env")),
+		NftPath:             strings.TrimSpace(envOr("AGENT_MANAGER_VM_LAUNCHER_NFT_PATH", "/usr/sbin/nft")),
+		HarnessResultRoot:   strings.TrimSpace(os.Getenv("AGENT_MANAGER_VM_LAUNCHER_HARNESS_RESULT_DIR")),
 		HarnessMemoryBytes:  int64(harnessMemoryBytes),
 		HarnessNanoCPUs:     int64(harnessNanoCPUs),
 		HarnessPidsLimit:    int64(harnessPidsLimit),
@@ -763,16 +771,16 @@ func validatePrivilegedLauncherConfig(cfg *PrivilegedLauncherConfig) error {
 		return fmt.Errorf("privileged launcher config is required")
 	}
 	if cfg.AllowedUID <= 0 {
-		return fmt.Errorf("AG_VM_LAUNCHER_ALLOWED_UID must select a non-root identity")
+		return fmt.Errorf("AGENT_MANAGER_VM_LAUNCHER_ALLOWED_UID must select a non-root identity")
 	}
 	if cfg.SocketGID <= 0 {
-		return fmt.Errorf("AG_VM_LAUNCHER_SOCKET_GID must select a non-root group")
+		return fmt.Errorf("AGENT_MANAGER_VM_LAUNCHER_SOCKET_GID must select a non-root group")
 	}
 	if cfg.ManagerGID <= 0 {
-		return fmt.Errorf("AG_VM_LAUNCHER_MANAGER_GID must select a non-root group")
+		return fmt.Errorf("AGENT_MANAGER_VM_LAUNCHER_MANAGER_GID must select a non-root group")
 	}
 	if cfg.JailerUID <= 0 || cfg.JailerGID <= 0 {
-		return fmt.Errorf("AG_MICROVM_JAILER_UID/GID must select a non-root identity")
+		return fmt.Errorf("AGENT_MANAGER_MICROVM_JAILER_UID/GID must select a non-root identity")
 	}
 	if cfg.MemoryMiB <= 0 || cfg.VCPUs <= 0 || cfg.WorkspaceSizeMiB <= 0 {
 		return fmt.Errorf("microVM memory, vCPUs, and workspace size must be positive")
@@ -1026,6 +1034,7 @@ func (s *PrivilegedLauncherServer) handle(ctx context.Context, req privilegedLau
 	switch req.Op {
 	case "ping":
 		resp.Version = expectedFirecrackerVersionString()
+		resp.HarnessBuildID = harnessBuildID
 		posture := s.networkPosture(ctx)
 		resp.NetworkPosture = &posture
 	case "configure_tap":
@@ -1744,7 +1753,7 @@ func (s *PrivilegedLauncherServer) harnessSystemdRunArgs(state privilegedHarness
 		s.cfg.HarnessShell,
 		"-c",
 		`seccomp="$1"; shift; exec "$@" 3<"$seccomp"`,
-		"agentcy-harness-sandbox",
+		"agent-manager-harness-sandbox",
 		state.SeccompPath,
 		s.cfg.HarnessBubblewrap,
 	)
@@ -1946,7 +1955,7 @@ func clonePostureFailures(source map[string]uint64) map[string]uint64 {
 }
 
 func harnessUnitName(namespace harness.NetworkNamespace) string {
-	return "agentcy-harness-" + strings.TrimPrefix(namespace.NamespaceName, "ag-") + ".service"
+	return "agent-manager-harness-" + strings.TrimPrefix(namespace.NamespaceName, "ag-") + ".service"
 }
 
 func validateHarnessCellID(cellID string) error {

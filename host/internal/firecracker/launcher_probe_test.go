@@ -35,6 +35,7 @@ func TestProbePrivilegedLauncherPerformsVersionedPing(t *testing.T) {
 		serverErr <- json.NewEncoder(conn).Encode(privilegedLauncherResponse{
 			OK:             true,
 			Version:        expectedFirecrackerVersionString(),
+			HarnessBuildID: harnessBuildID,
 			NetworkPosture: &NetworkPostureReport{Healthy: true},
 		})
 	}()
@@ -49,6 +50,36 @@ func TestProbePrivilegedLauncherPerformsVersionedPing(t *testing.T) {
 	req := <-requestSeen
 	if req.Op != "ping" || req.Version != privilegedLauncherProtocolVersion {
 		t.Fatalf("probe request = %+v", req)
+	}
+}
+
+func TestProbePrivilegedLauncherRejectsDifferentHarnessBuild(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "launcher.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer conn.Close()
+		var req privilegedLauncherRequest
+		_ = json.NewDecoder(conn).Decode(&req)
+		_ = json.NewEncoder(conn).Encode(privilegedLauncherResponse{
+			OK:             true,
+			Version:        expectedFirecrackerVersionString(),
+			HarnessBuildID: "stale-harness-build",
+			NetworkPosture: &NetworkPostureReport{Healthy: true},
+		})
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err = ProbePrivilegedLauncher(ctx, socketPath)
+	if err == nil || !strings.Contains(err.Error(), "harness build") {
+		t.Fatalf("probe error = %v, want harness build mismatch", err)
 	}
 }
 
@@ -67,7 +98,9 @@ func TestProbePrivilegedLauncherRejectsMissingNetworkPosture(t *testing.T) {
 		defer conn.Close()
 		var req privilegedLauncherRequest
 		_ = json.NewDecoder(conn).Decode(&req)
-		_ = json.NewEncoder(conn).Encode(privilegedLauncherResponse{OK: true, Version: expectedFirecrackerVersionString()})
+		_ = json.NewEncoder(conn).Encode(privilegedLauncherResponse{
+			OK: true, Version: expectedFirecrackerVersionString(), HarnessBuildID: harnessBuildID,
+		})
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -104,6 +137,7 @@ func TestWaitForPrivilegedLauncherRetriesUntilSocketIsReady(t *testing.T) {
 		_ = json.NewEncoder(conn).Encode(privilegedLauncherResponse{
 			OK:             true,
 			Version:        expectedFirecrackerVersionString(),
+			HarnessBuildID: harnessBuildID,
 			NetworkPosture: &NetworkPostureReport{Healthy: true},
 		})
 	}()

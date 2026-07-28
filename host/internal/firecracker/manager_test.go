@@ -17,10 +17,10 @@ import (
 	"testing"
 	"time"
 
-	"agentcy/internal/config"
-	"agentcy/internal/egressproxy"
-	"agentcy/internal/runtimecontext"
-	"agentcy/internal/runtimemanager"
+	"agent-manager/internal/config"
+	"agent-manager/internal/egressproxy"
+	"agent-manager/internal/runtimecontext"
+	"agent-manager/internal/runtimemanager"
 )
 
 type recordingHostNetworkConfigurer struct {
@@ -1675,7 +1675,7 @@ func TestCreateAndStartRequiresCIDRForSecondCompartment(t *testing.T) {
 	}
 
 	_, err := m.createAndStart(context.Background(), "agent-start", runtimemanager.StartOpts{CompartmentID: "cmp_b"})
-	if err == nil || !strings.Contains(err.Error(), "AG_MICROVM_BRIDGE_CIDR") {
+	if err == nil || !strings.Contains(err.Error(), "AGENT_MANAGER_MICROVM_BRIDGE_CIDR") {
 		t.Fatalf("expected missing bridge CIDR refusal, got %v", err)
 	}
 }
@@ -1689,7 +1689,7 @@ func TestBuildFirecrackerConfigIncludesWorkspaceAndVsock(t *testing.T) {
 		MicroVMCPUTemplate:     "None",
 	}
 
-	got := buildFirecrackerConfig(cfg, cfg.MicroVMKernelPath, "/run/rootfs.ext4", "/vol/workspace.ext4", cfg.MicroVMSharedImagePath, "/run/agentcy.vsock", "", "")
+	got := buildFirecrackerConfig(cfg, cfg.MicroVMKernelPath, "/run/rootfs.ext4", "/vol/workspace.ext4", cfg.MicroVMSharedImagePath, "/run/agent-manager.vsock", "", "")
 
 	if got.BootSource.KernelImagePath != "/artifacts/vmlinux" {
 		t.Fatalf("kernel path = %q", got.BootSource.KernelImagePath)
@@ -1706,7 +1706,7 @@ func TestBuildFirecrackerConfigIncludesWorkspaceAndVsock(t *testing.T) {
 	if got.Machine.VCPUCount != 2 || got.Machine.MemSizeMiB != 2048 || got.Machine.SMT || got.Machine.CPUTemplate != "None" {
 		t.Fatalf("machine config = %#v", got.Machine)
 	}
-	if got.Vsock.GuestCID == 0 || got.Vsock.UDSPath != "/run/agentcy.vsock" {
+	if got.Vsock.GuestCID == 0 || got.Vsock.UDSPath != "/run/agent-manager.vsock" {
 		t.Fatalf("vsock config = %#v", got.Vsock)
 	}
 	if len(got.Drives) != 3 {
@@ -1736,7 +1736,7 @@ func TestBuildFirecrackerConfigEnforcesSandboxRuntimePolicy(t *testing.T) {
 	if len(got.Drives) != 3 || !got.Drives[1].IsReadOnly || !got.Drives[2].IsReadOnly {
 		t.Fatalf("drive policy = %+v", got.Drives)
 	}
-	if !strings.Contains(got.BootSource.BootArgs, "agentcy.process_limit=16") {
+	if !strings.Contains(got.BootSource.BootArgs, "agent-manager.process_limit=16") {
 		t.Fatalf("boot args = %q", got.BootSource.BootArgs)
 	}
 }
@@ -2082,7 +2082,7 @@ func TestBuildFirecrackerConfigIncludesTapInterface(t *testing.T) {
 		MicroVMVCPUs:      1,
 		MicroVMMemoryMiB:  512,
 	}
-	got := buildFirecrackerConfig(cfg, cfg.MicroVMKernelPath, "/run/rootfs.ext4", "/vol/workspace.ext4", cfg.MicroVMSharedImagePath, "/run/agentcy.vsock", "agfc123456", "")
+	got := buildFirecrackerConfig(cfg, cfg.MicroVMKernelPath, "/run/rootfs.ext4", "/vol/workspace.ext4", cfg.MicroVMSharedImagePath, "/run/agent-manager.vsock", "agfc123456", "")
 	if len(got.NetworkIfaces) != 1 {
 		t.Fatalf("network interfaces = %#v", got.NetworkIfaces)
 	}
@@ -2177,7 +2177,7 @@ func TestRegisterSourceBindingRequiresGuestIP(t *testing.T) {
 	_, err := m.registerSourceBinding(context.Background(), "agent-1", "fc-agent-1", runtimemanager.StartOpts{
 		ProxyEgress: &runtimemanager.ProxyEgressConfig{Enabled: true},
 	})
-	if err == nil || !strings.Contains(err.Error(), "AG_MICROVM_GUEST_IP") {
+	if err == nil || !strings.Contains(err.Error(), "AGENT_MANAGER_MICROVM_GUEST_IP") {
 		t.Fatalf("expected guest IP error, got %v", err)
 	}
 }
@@ -2308,7 +2308,7 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 		MicroVMJailerUID:           os.Getuid(),
 		MicroVMJailerGID:           os.Getgid(),
 		MicroVMJailerCgroupVersion: 2,
-		MicroVMJailerParentCgroup:  "agentcy-test",
+		MicroVMJailerParentCgroup:  "agent-manager-test",
 		MicroVMMemoryMiB:           512,
 		MicroVMVCPUs:               1,
 		MicroVMWorkspaceSizeMiB:    8,
@@ -2378,7 +2378,7 @@ func TestPrepareJailedLaunchRejectsUnixSocketPathOverflowBeforeStaging(t *testin
 	if err == nil || !strings.Contains(err.Error(), "exceeding the unix socket limit") {
 		t.Fatalf("overlong jailed socket path error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "AG_MICROVM_JAILER_CHROOT_BASE_DIR") {
+	if !strings.Contains(err.Error(), "AGENT_MANAGER_MICROVM_JAILER_CHROOT_BASE_DIR") {
 		t.Fatalf("overlong jailed socket path did not identify its setting: %v", err)
 	}
 	if _, statErr := os.Stat(m.jailerRoot("fc-agent-123")); !errors.Is(statErr, os.ErrNotExist) {
@@ -2410,7 +2410,7 @@ func TestStageLinkedJailFileFallsBackToCopyAcrossDevices(t *testing.T) {
 	if err := os.WriteFile(src, []byte("rootfs"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	dstDir, err := os.MkdirTemp("/dev/shm", "agentcy-jail-stage-*")
+	dstDir, err := os.MkdirTemp("/dev/shm", "agent-manager-jail-stage-*")
 	if err != nil {
 		t.Skipf("create tmpfs dir: %v", err)
 	}
@@ -2465,7 +2465,7 @@ func TestStageWorkspaceJailFileRejectsCrossDeviceCopyFallback(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected EXDEV error")
 	}
-	if !strings.Contains(err.Error(), "jailer chroot base dir must be on the same filesystem as AG_MICROVM_WORKSPACE_DIR") {
+	if !strings.Contains(err.Error(), "jailer chroot base dir must be on the same filesystem as AGENT_MANAGER_MICROVM_WORKSPACE_DIR") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, statErr := os.Stat(dst); !os.IsNotExist(statErr) {
@@ -2481,7 +2481,7 @@ func TestReflinkOnlyFileFailsAcrossDevicesWithoutCopy(t *testing.T) {
 	if err := os.WriteFile(src, []byte("rootfs"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	dstDir, err := os.MkdirTemp("/dev/shm", "agentcy-reflink-*")
+	dstDir, err := os.MkdirTemp("/dev/shm", "agent-manager-reflink-*")
 	if err != nil {
 		t.Skipf("create tmpfs dir: %v", err)
 	}
@@ -3064,7 +3064,7 @@ func TestAdmitCompartmentSpawnLocked(t *testing.T) {
 			name:      "per-agent cap",
 			cfg:       config.Config{MicroVMBridgeCIDR: "10.0.0.1/24", MicroVMMaxConcurrentPerAgent: 1},
 			instances: map[string]*instance{"a": live("cmp-a", "agent-1", false)},
-			wantErr:   "AG_MICROVM_MAX_CONCURRENT_PER_AGENT",
+			wantErr:   "AGENT_MANAGER_MICROVM_MAX_CONCURRENT_PER_AGENT",
 		},
 		{
 			name: "global cap across agents",
@@ -3073,7 +3073,7 @@ func TestAdmitCompartmentSpawnLocked(t *testing.T) {
 				"a": live("cmp-a", "agent-1", false),
 				"b": live("cmp-b", "agent-2", false),
 			},
-			wantErr: "AG_MICROVM_MAX_CONCURRENT_GLOBAL",
+			wantErr: "AGENT_MANAGER_MICROVM_MAX_CONCURRENT_GLOBAL",
 		},
 		{
 			name: "memory budget",
@@ -3082,7 +3082,7 @@ func TestAdmitCompartmentSpawnLocked(t *testing.T) {
 				"a": live("cmp-a", "agent-1", false),
 				"b": live("cmp-b", "agent-2", false),
 			},
-			wantErr: "AG_MICROVM_MEMORY_BUDGET_MIB",
+			wantErr: "AGENT_MANAGER_MICROVM_MEMORY_BUDGET_MIB",
 		},
 		{
 			name:      "all zero is unlimited",
@@ -3093,7 +3093,7 @@ func TestAdmitCompartmentSpawnLocked(t *testing.T) {
 			name:      "reaping instances retain capacity",
 			cfg:       config.Config{MicroVMBridgeCIDR: "10.0.0.1/24", MicroVMMaxConcurrentPerAgent: 1, MicroVMMaxConcurrentGlobal: 1, MicroVMMemoryMiB: 2048, MicroVMMemoryBudgetMiB: 2048},
 			instances: map[string]*instance{"a": live("cmp-a", "agent-1", true)},
-			wantErr:   "AG_MICROVM_MAX_CONCURRENT_PER_AGENT",
+			wantErr:   "AGENT_MANAGER_MICROVM_MAX_CONCURRENT_PER_AGENT",
 		},
 		{
 			name:      "non-positive vm memory skips memory check",
@@ -3121,7 +3121,7 @@ func TestAdmitCompartmentSpawnLockedCountsPendingReservations(t *testing.T) {
 		instances:     map[string]*instance{},
 		pendingSpawns: map[runtimeInstanceKey]int{{agentID: "agent-1", compartmentID: "cmp-a"}: 2},
 	}
-	if err := m.admitCompartmentSpawnLocked(runtimeInstanceKey{agentID: "agent-2", compartmentID: "cmp-b"}); err == nil || !strings.Contains(err.Error(), "AG_MICROVM_MAX_CONCURRENT_GLOBAL") {
+	if err := m.admitCompartmentSpawnLocked(runtimeInstanceKey{agentID: "agent-2", compartmentID: "cmp-b"}); err == nil || !strings.Contains(err.Error(), "AGENT_MANAGER_MICROVM_MAX_CONCURRENT_GLOBAL") {
 		t.Fatalf("admit with pending reservations = %v, want global cap", err)
 	}
 	got := m.RuntimeMetricsSnapshot()
@@ -3314,16 +3314,16 @@ func TestBuildStartupSecretBundleCarriesScopedToolEnv(t *testing.T) {
 	if bundle.Env["AGENT_ID"] != "agent-9" {
 		t.Fatalf("AGENT_ID = %q", bundle.Env["AGENT_ID"])
 	}
-	if bundle.Env["AGENTCY_COMPARTMENT_ID"] != "cmp_a" {
-		t.Fatalf("AGENTCY_COMPARTMENT_ID = %q", bundle.Env["AGENTCY_COMPARTMENT_ID"])
+	if bundle.Env["AGENT_MANAGER_COMPARTMENT_ID"] != "cmp_a" {
+		t.Fatalf("AGENT_MANAGER_COMPARTMENT_ID = %q", bundle.Env["AGENT_MANAGER_COMPARTMENT_ID"])
 	}
-	if bundle.Env["AGENTCY_RUNTIME_CREDENTIAL_ID"] != "agent-9:cmp_a:fc-agent-9-cmp-a-1" {
-		t.Fatalf("AGENTCY_RUNTIME_CREDENTIAL_ID = %q", bundle.Env["AGENTCY_RUNTIME_CREDENTIAL_ID"])
+	if bundle.Env["AGENT_MANAGER_RUNTIME_CREDENTIAL_ID"] != "agent-9:cmp_a:fc-agent-9-cmp-a-1" {
+		t.Fatalf("AGENT_MANAGER_RUNTIME_CREDENTIAL_ID = %q", bundle.Env["AGENT_MANAGER_RUNTIME_CREDENTIAL_ID"])
 	}
 	if got := bundle.Env["AGENT_PLATFORM_TOKEN"]; got != "" {
 		t.Fatalf("AGENT_PLATFORM_TOKEN must not be injected into persistent runtime env, got %q", got)
 	}
-	for _, key := range []string{"AG_FLUE_STORE_URL", "AG_FLUE_STORE_TOKEN", "AGENTCY_RUNTIME_TOKEN"} {
+	for _, key := range []string{"AGENT_MANAGER_FLUE_STORE_URL", "AGENT_MANAGER_FLUE_STORE_TOKEN", "AGENT_MANAGER_RUNTIME_TOKEN"} {
 		if got := bundle.Env[key]; got != "" {
 			t.Fatalf("%s must not be injected into the tool runtime, got %q", key, got)
 		}
@@ -3362,7 +3362,7 @@ func TestBuildStartupSecretBundleCarriesRuntimeContextProjection(t *testing.T) {
 	}
 }
 
-func TestBuildStartupSecretBundleRewritesServiceProxyURLForMicroVMBridge(t *testing.T) {
+func TestBuildStartupSecretBundleRewritesEgressProxyURLForMicroVMBridge(t *testing.T) {
 	m := &Manager{cfg: &config.Config{
 		PlatformAPIURL:    "http://10.0.0.1:8081",
 		MicroVMBridgeCIDR: "10.0.0.1/24",
@@ -3371,7 +3371,7 @@ func TestBuildStartupSecretBundleRewritesServiceProxyURLForMicroVMBridge(t *test
 		CompartmentID: "cmp_a",
 		ProxyEgress: &runtimemanager.ProxyEgressConfig{
 			Enabled:             true,
-			ProxyURL:            "http://agentcy-egress-proxy:3128",
+			ProxyURL:            "http://agent-manager-egress-proxy:3128",
 			TransparentHTTPPort: 18080,
 			NoProxy:             "localhost,127.0.0.1",
 		},
@@ -3394,7 +3394,7 @@ func TestBuildStartupSecretBundleRewritesServiceProxyURLForMicroVMBridge(t *test
 	if got := bundle.Env["npm_config_noproxy"]; got != "localhost,127.0.0.1" {
 		t.Fatalf("npm_config_noproxy = %q, want no-proxy list", got)
 	}
-	if bundle.Env["GH_TOKEN"] != "agentcy-proxy:github" || bundle.Env["GITHUB_TOKEN"] != "agentcy-proxy:github" {
+	if bundle.Env["GH_TOKEN"] != "agent-service-proxy:github" || bundle.Env["GITHUB_TOKEN"] != "agent-service-proxy:github" {
 		t.Fatalf("github proxy env mismatch: %#v", bundle.Env)
 	}
 	if got, want := bundle.Env["GIT_ASKPASS"], "/runtime-private/github-askpass"; got != want {
@@ -3438,7 +3438,7 @@ func TestSourceBindingContextTokenCarriesIntoStartupProxyEnv(t *testing.T) {
 		},
 		ProxyEgress: &runtimemanager.ProxyEgressConfig{
 			Enabled:  true,
-			ProxyURL: "http://agentcy-egress-proxy:3128",
+			ProxyURL: "http://agent-manager-egress-proxy:3128",
 			PlaceID:  "plc_123",
 		},
 	}
@@ -3473,10 +3473,10 @@ func TestSourceBindingContextTokenCarriesIntoStartupProxyEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build bundle: %v", err)
 	}
-	if bundle.Env["AGENTCY_EGRESS_CONTEXT_TOKEN"] != token {
-		t.Fatalf("AGENTCY_EGRESS_CONTEXT_TOKEN = %q, want minted token", bundle.Env["AGENTCY_EGRESS_CONTEXT_TOKEN"])
+	if bundle.Env["AGENT_MANAGER_EGRESS_CONTEXT_TOKEN"] != token {
+		t.Fatalf("AGENT_MANAGER_EGRESS_CONTEXT_TOKEN = %q, want minted token", bundle.Env["AGENT_MANAGER_EGRESS_CONTEXT_TOKEN"])
 	}
-	if got := bundle.Env["HTTP_PROXY"]; !strings.Contains(got, "AgentcyContext:"+token+"@10.0.0.1:3128") {
+	if got := bundle.Env["HTTP_PROXY"]; !strings.Contains(got, "AgentServiceContext:"+token+"@10.0.0.1:3128") {
 		t.Fatalf("HTTP_PROXY = %q, want context token credentials", got)
 	}
 }

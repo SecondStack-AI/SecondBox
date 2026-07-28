@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"agentcy/internal/config"
+	"agent-manager/internal/config"
 )
 
 type fakeHostExitError struct{ code int }
@@ -35,23 +35,23 @@ func TestEnsureThinWorkspaceCreatesAndFormatsDevice(t *testing.T) {
 
 	m := &Manager{cfg: &config.Config{
 		MicroVMWorkspaceBackend: "dm-thin",
-		MicroVMThinPoolDevice:   "/dev/mapper/agentcy-pool",
+		MicroVMThinPoolDevice:   "/dev/mapper/agent-manager-pool",
 		MicroVMWorkspaceSizeMiB: 1024,
 	}}
 	path, err := m.ensureThinWorkspace(context.Background(), "agent-1", "cmp_a")
 	if err != nil {
 		t.Fatalf("ensure thin workspace: %v", err)
 	}
-	if path != "/dev/mapper/agentcy-ws-agent-1-cmp_a" {
+	if path != "/dev/mapper/agent-manager-ws-agent-1-cmp_a" {
 		t.Fatalf("path = %q", path)
 	}
 	joined := strings.Join(calls, "\n")
 	for _, want := range []string{
-		"dmsetup info agentcy-ws-agent-1-cmp_a",
-		"dmsetup message /dev/mapper/agentcy-pool 0 create_thin ",
-		"dmsetup create agentcy-ws-agent-1-cmp_a --table 0 2097152 thin /dev/mapper/agentcy-pool ",
-		"blkid -o value -s TYPE /dev/mapper/agentcy-ws-agent-1-cmp_a",
-		"mkfs.ext4 -F -q -E lazy_itable_init=1,lazy_journal_init=1,nodiscard /dev/mapper/agentcy-ws-agent-1-cmp_a",
+		"dmsetup info agent-manager-ws-agent-1-cmp_a",
+		"dmsetup message /dev/mapper/agent-manager-pool 0 create_thin ",
+		"dmsetup create agent-manager-ws-agent-1-cmp_a --table 0 2097152 thin /dev/mapper/agent-manager-pool ",
+		"blkid -o value -s TYPE /dev/mapper/agent-manager-ws-agent-1-cmp_a",
+		"mkfs.ext4 -F -q -E lazy_itable_init=1,lazy_journal_init=1,nodiscard /dev/mapper/agent-manager-ws-agent-1-cmp_a",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("calls missing %q:\n%s", want, joined)
@@ -86,7 +86,7 @@ func TestEnsureThinWorkspaceReactivationDoesNotReformatExistingDevice(t *testing
 
 	m := &Manager{cfg: &config.Config{
 		MicroVMWorkspaceBackend: "dm-thin",
-		MicroVMThinPoolDevice:   "/dev/mapper/agentcy-pool",
+		MicroVMThinPoolDevice:   "/dev/mapper/agent-manager-pool",
 		MicroVMWorkspaceSizeMiB: 1024,
 	}}
 	for wake := 0; wake < 2; wake++ {
@@ -114,12 +114,12 @@ func TestEnsureThinWorkspaceFormatsActiveDeviceLeftUnformattedByCrash(t *testing
 	})
 	defer restore()
 
-	m := &Manager{cfg: &config.Config{MicroVMThinPoolDevice: "/dev/mapper/agentcy-pool", MicroVMWorkspaceSizeMiB: 1024}}
+	m := &Manager{cfg: &config.Config{MicroVMThinPoolDevice: "/dev/mapper/agent-manager-pool", MicroVMWorkspaceSizeMiB: 1024}}
 	if _, err := m.ensureThinWorkspace(context.Background(), "agent-crash", "cmp_a"); err != nil {
 		t.Fatal(err)
 	}
 	joined := strings.Join(calls, "\n")
-	if !strings.Contains(joined, "blkid -o value -s TYPE /dev/mapper/agentcy-ws-agent-crash-cmp_a") ||
+	if !strings.Contains(joined, "blkid -o value -s TYPE /dev/mapper/agent-manager-ws-agent-crash-cmp_a") ||
 		!strings.Contains(joined, "mkfs.ext4 -F -q") {
 		t.Fatalf("active unformatted device was not recovered:\n%s", joined)
 	}
@@ -153,7 +153,7 @@ func TestEnsureThinWorkspaceSeedsNewDeviceFromCompartmentWorkspace(t *testing.T)
 	defer restore()
 	m := &Manager{cfg: &config.Config{
 		DataDir:                 dataDir,
-		MicroVMThinPoolDevice:   "/dev/mapper/agentcy-pool",
+		MicroVMThinPoolDevice:   "/dev/mapper/agent-manager-pool",
 		MicroVMWorkspaceSizeMiB: 1024,
 		MicroVMWorkspaceBackend: "dm-thin",
 	}}
@@ -174,20 +174,20 @@ func TestCreateThinSnapshotCommands(t *testing.T) {
 	defer restore()
 
 	m := &Manager{cfg: &config.Config{
-		MicroVMThinPoolDevice:   "/dev/mapper/agentcy-pool",
+		MicroVMThinPoolDevice:   "/dev/mapper/agent-manager-pool",
 		MicroVMWorkspaceSizeMiB: 512,
 	}}
-	snap, err := m.createThinSnapshot(context.Background(), "agentcy-ws-agent-1", "backup:daily")
+	snap, err := m.createThinSnapshot(context.Background(), "agent-manager-ws-agent-1", "backup:daily")
 	if err != nil {
 		t.Fatalf("create thin snapshot: %v", err)
 	}
-	if snap.DevicePath != "/dev/mapper/agentcy-ws-agent-1-snap-backup-daily" {
+	if snap.DevicePath != "/dev/mapper/agent-manager-ws-agent-1-snap-backup-daily" {
 		t.Fatalf("snapshot = %#v", snap)
 	}
 	joined := strings.Join(calls, "\n")
 	for _, want := range []string{
-		"dmsetup message /dev/mapper/agentcy-pool 0 create_snap ",
-		"dmsetup create agentcy-ws-agent-1-snap-backup-daily --table 0 1048576 thin /dev/mapper/agentcy-pool ",
+		"dmsetup message /dev/mapper/agent-manager-pool 0 create_snap ",
+		"dmsetup create agent-manager-ws-agent-1-snap-backup-daily --table 0 1048576 thin /dev/mapper/agent-manager-pool ",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("calls missing %q:\n%s", want, joined)
@@ -263,7 +263,7 @@ func TestThinDeviceIDAllocatorExhaustionAndSaveRollback(t *testing.T) {
 
 func assertThinIDsInRange(t *testing.T, commands string) {
 	t.Helper()
-	matches := regexp.MustCompile(`(?:create_thin|create_snap|thin /dev/mapper/agentcy-pool) (\d+)`).FindAllStringSubmatch(commands, -1)
+	matches := regexp.MustCompile(`(?:create_thin|create_snap|thin /dev/mapper/agent-manager-pool) (\d+)`).FindAllStringSubmatch(commands, -1)
 	if len(matches) == 0 {
 		t.Fatalf("no dm-thin ids found in commands:\n%s", commands)
 	}

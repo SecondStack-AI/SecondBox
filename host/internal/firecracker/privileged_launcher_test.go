@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"agentcy/internal/harness"
-	"agentcy/internal/runtimemanager"
+	"agent-manager/internal/harness"
+	"agent-manager/internal/runtimemanager"
 )
 
 func TestLauncherOutputBufferPreservesModelVisibleInventory(t *testing.T) {
@@ -83,7 +83,7 @@ func testPrivilegedLauncherConfig(t *testing.T) PrivilegedLauncherConfig {
 		JailerUID:              1234,
 		JailerGID:              1234,
 		JailerCgroupVersion:    2,
-		JailerParentCgroup:     "agentcy",
+		JailerParentCgroup:     "agent-manager",
 		MemoryMiB:              2048,
 		VCPUs:                  2,
 		WorkspaceSizeMiB:       8192,
@@ -1115,7 +1115,7 @@ func TestPrivilegedLauncherUnixClientUsesPeerCredentialedProtocol(t *testing.T) 
 }
 
 func TestPrivilegedLauncherHandsManagerOnlySocketAccessAcrossJail(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "agentcy-launcher-")
+	dir, err := os.MkdirTemp("/tmp", "agent-manager-launcher-")
 	if err != nil {
 		t.Fatal(err)
 	}

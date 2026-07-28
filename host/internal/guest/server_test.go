@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	"agentcy/internal/registry"
-	"agentcy/internal/runtimecontext"
-	"agentcy/internal/sandboxlimits"
+	"agent-manager/internal/registry"
+	"agent-manager/internal/runtimecontext"
+	"agent-manager/internal/sandboxlimits"
 )
 
 func TestHeartbeat(t *testing.T) {
@@ -413,24 +413,24 @@ func TestToolExecInheritsSafeRuntimeProxyEnv(t *testing.T) {
 	privateDir := t.TempDir()
 	server := Server{WorkspaceDir: workspace, RuntimePrivateDir: privateDir}
 	if err := server.applySecrets(SecretBundle{Env: map[string]string{
-		"HTTP_PROXY":             "http://10.0.0.1:3128",
-		"HTTPS_PROXY":            "http://10.0.0.1:3128",
-		"NO_PROXY":               "localhost,127.0.0.1",
-		"GIT_SSL_CAINFO":         "/runtime-private/proxy-ca.crt",
-		"GIT_ASKPASS":            "/runtime-private/github-askpass",
-		"GIT_CONFIG_GLOBAL":      "/runtime-private/gitconfig",
-		"GIT_TERMINAL_PROMPT":    "0",
-		"CURL_CA_BUNDLE":         "/runtime-private/proxy-ca.crt",
-		"AG_FLUE_STORE_TOKEN":    "secret-token",
-		"AGENT_PLATFORM_TOKEN":   "runtime-secret",
-		"AGENTCY_RUNTIME_TOKEN":  "runtime-token",
-		"GH_TOKEN":               "agentcy-proxy:github",
-		"GITHUB_TOKEN":           "agentcy-proxy:github",
-		"PLATFORM_API_URL":       "http://10.0.0.1:8081",
-		"REQUESTS_CA_BUNDLE":     "/runtime-private/proxy-ca.crt",
-		"SSL_CERT_FILE":          "/runtime-private/proxy-ca.crt",
-		"NODE_EXTRA_CA_CERTS":    "/runtime-private/proxy-ca.crt",
-		"AGENTCY_COMPARTMENT_ID": "cmp_123",
+		"HTTP_PROXY":                     "http://10.0.0.1:3128",
+		"HTTPS_PROXY":                    "http://10.0.0.1:3128",
+		"NO_PROXY":                       "localhost,127.0.0.1",
+		"GIT_SSL_CAINFO":                 "/runtime-private/proxy-ca.crt",
+		"GIT_ASKPASS":                    "/runtime-private/github-askpass",
+		"GIT_CONFIG_GLOBAL":              "/runtime-private/gitconfig",
+		"GIT_TERMINAL_PROMPT":            "0",
+		"CURL_CA_BUNDLE":                 "/runtime-private/proxy-ca.crt",
+		"AGENT_MANAGER_FLUE_STORE_TOKEN": "secret-token",
+		"AGENT_PLATFORM_TOKEN":           "runtime-secret",
+		"AGENT_MANAGER_RUNTIME_TOKEN":    "runtime-token",
+		"GH_TOKEN":                       "agent-service-proxy:github",
+		"GITHUB_TOKEN":                   "agent-service-proxy:github",
+		"PLATFORM_API_URL":               "http://10.0.0.1:8081",
+		"REQUESTS_CA_BUNDLE":             "/runtime-private/proxy-ca.crt",
+		"SSL_CERT_FILE":                  "/runtime-private/proxy-ca.crt",
+		"NODE_EXTRA_CA_CERTS":            "/runtime-private/proxy-ca.crt",
+		"AGENT_MANAGER_COMPARTMENT_ID":   "cmp_123",
 	}}); err != nil {
 		t.Fatalf("apply secrets: %v", err)
 	}
@@ -445,8 +445,8 @@ func TestToolExecInheritsSafeRuntimeProxyEnv(t *testing.T) {
 			"printf 'gitprompt=%s\\n' \"$GIT_TERMINAL_PROMPT\"",
 			"printf 'curlca=%s\\n' \"$CURL_CA_BUNDLE\"",
 			"printf 'sslcert=%s\\n' \"$SSL_CERT_FILE\"",
-			"printf 'token=%s\\n' \"$AG_FLUE_STORE_TOKEN\"",
-			"printf 'runtime=%s\\n' \"$AGENTCY_RUNTIME_TOKEN\"",
+			"printf 'token=%s\\n' \"$AGENT_MANAGER_FLUE_STORE_TOKEN\"",
+			"printf 'runtime=%s\\n' \"$AGENT_MANAGER_RUNTIME_TOKEN\"",
 			"printf 'ghtoken=%s\\n' \"$GH_TOKEN\"",
 			"printf 'githubtoken=%s\\n' \"$GITHUB_TOKEN\"",
 			"printf 'platform=%s\\n' \"$PLATFORM_API_URL\"",
@@ -465,8 +465,8 @@ func TestToolExecInheritsSafeRuntimeProxyEnv(t *testing.T) {
 		!strings.Contains(resp.Stdout, "curlca=/runtime-private/proxy-ca.crt\n") ||
 		!strings.Contains(resp.Stdout, "sslcert=/runtime-private/proxy-ca.crt\n") ||
 		!strings.Contains(resp.Stdout, "runtime=runtime-token\n") ||
-		!strings.Contains(resp.Stdout, "ghtoken=agentcy-proxy:github\n") ||
-		!strings.Contains(resp.Stdout, "githubtoken=agentcy-proxy:github\n") ||
+		!strings.Contains(resp.Stdout, "ghtoken=agent-service-proxy:github\n") ||
+		!strings.Contains(resp.Stdout, "githubtoken=agent-service-proxy:github\n") ||
 		!strings.Contains(resp.Stdout, "platform=http://10.0.0.1:8081\n") ||
 		!strings.Contains(resp.Stdout, "extra=request\n") {
 		t.Fatalf("stdout missing safe env:\n%s", resp.Stdout)

@@ -10,15 +10,15 @@ Usage: verify.sh <artifact-dir> [public-key.pem] [public-key-der-sha256]
 Verifies the Firecracker artifact set emitted by build.sh: required files,
 checksums, optional OpenSSL manifest signature, and manifest consistency.
 
-When a public key is supplied, AG_MICROVM_PUBLIC_KEY_SHA256 (or the third
+When a public key is supplied, AGENT_MANAGER_MICROVM_PUBLIC_KEY_SHA256 (or the third
 argument) may pin the canonical DER fingerprint. Production activation should
 provide both the independently provisioned key and its expected fingerprint.
 USAGE
 }
 
 dir="${1:-}"
-pubkey="${2:-${AG_MICROVM_PUBLIC_KEY:-}}"
-expected_pubkey_sha="${3:-${AG_MICROVM_PUBLIC_KEY_SHA256:-}}"
+pubkey="${2:-${AGENT_MANAGER_MICROVM_PUBLIC_KEY:-}}"
+expected_pubkey_sha="${3:-${AGENT_MANAGER_MICROVM_PUBLIC_KEY_SHA256:-}}"
 if [ "${dir:-}" = "-h" ] || [ "${dir:-}" = "--help" ]; then
     usage
     exit 0
@@ -105,5 +105,5 @@ if [ -n "$pubkey" ]; then
     fi
     openssl dgst -sha256 -verify "$pubkey" -signature "$dir/manifest.sig" "$dir/manifest.json" >/dev/null
 else
-    echo "manifest signature not verified: pass a trusted public key or set AG_MICROVM_PUBLIC_KEY" >&2
+    echo "manifest signature not verified: pass a trusted public key or set AGENT_MANAGER_MICROVM_PUBLIC_KEY" >&2
 fi

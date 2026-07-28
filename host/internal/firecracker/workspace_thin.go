@@ -312,7 +312,7 @@ func thinWorkspaceName(agentID, compartmentID string) string {
 	if len(name) > 64 {
 		name = name[:64]
 	}
-	return "agentcy-ws-" + name
+	return "agent-manager-ws-" + name
 }
 
 func thinSnapshotName(originName, snapshotName string) string {

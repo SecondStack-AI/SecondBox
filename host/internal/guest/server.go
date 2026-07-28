@@ -20,10 +20,10 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"agentcy/internal/registry"
-	"agentcy/internal/runtimecontext"
-	"agentcy/internal/sandboxlimits"
-	"agentcy/internal/toolexecutor"
+	"agent-manager/internal/registry"
+	"agent-manager/internal/runtimecontext"
+	"agent-manager/internal/sandboxlimits"
+	"agent-manager/internal/toolexecutor"
 )
 
 const maxCommandOutputStreamBytes = 256 << 10
@@ -116,29 +116,29 @@ const (
 type toolExecRequest = toolexecutor.Request
 
 var toolCommandRuntimeEnvAllowlist = map[string]bool{
-	"AGENT_ID":                      true,
-	"AGENTCY_COMPARTMENT_ID":        true,
-	"AGENTCY_PROXY_EGRESS_ENABLED":  true,
-	"AGENTCY_RUNTIME_CREDENTIAL_ID": true,
-	"AGENTCY_RUNTIME_TOKEN":         true,
-	"CURL_CA_BUNDLE":                true,
-	"GIT_SSL_CAINFO":                true,
-	"GIT_ASKPASS":                   true,
-	"GIT_CONFIG_GLOBAL":             true,
-	"GIT_TERMINAL_PROMPT":           true,
-	"GH_TOKEN":                      true,
-	"GITHUB_TOKEN":                  true,
-	"HTTP_PROXY":                    true,
-	"HTTPS_PROXY":                   true,
-	"NODE_EXTRA_CA_CERTS":           true,
-	"NO_PROXY":                      true,
-	"PLATFORM_API_URL":              true,
-	"REQUESTS_CA_BUNDLE":            true,
-	"SSL_CERT_FILE":                 true,
-	"TZ":                            true,
-	"http_proxy":                    true,
-	"https_proxy":                   true,
-	"no_proxy":                      true,
+	"AGENT_ID":                            true,
+	"AGENT_MANAGER_COMPARTMENT_ID":        true,
+	"AGENT_MANAGER_PROXY_EGRESS_ENABLED":  true,
+	"AGENT_MANAGER_RUNTIME_CREDENTIAL_ID": true,
+	"AGENT_MANAGER_RUNTIME_TOKEN":         true,
+	"CURL_CA_BUNDLE":                      true,
+	"GIT_SSL_CAINFO":                      true,
+	"GIT_ASKPASS":                         true,
+	"GIT_CONFIG_GLOBAL":                   true,
+	"GIT_TERMINAL_PROMPT":                 true,
+	"GH_TOKEN":                            true,
+	"GITHUB_TOKEN":                        true,
+	"HTTP_PROXY":                          true,
+	"HTTPS_PROXY":                         true,
+	"NODE_EXTRA_CA_CERTS":                 true,
+	"NO_PROXY":                            true,
+	"PLATFORM_API_URL":                    true,
+	"REQUESTS_CA_BUNDLE":                  true,
+	"SSL_CERT_FILE":                       true,
+	"TZ":                                  true,
+	"http_proxy":                          true,
+	"https_proxy":                         true,
+	"no_proxy":                            true,
 }
 
 type toolExecResponse = toolexecutor.Response

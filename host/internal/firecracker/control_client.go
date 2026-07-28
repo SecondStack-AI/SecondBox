@@ -16,10 +16,10 @@ import (
 	"strings"
 	"time"
 
-	"agentcy/internal/runtimecontext"
-	"agentcy/internal/runtimemanager"
-	"agentcy/internal/sandboxlimits"
-	"agentcy/internal/toolexecutor"
+	"agent-manager/internal/runtimecontext"
+	"agent-manager/internal/runtimemanager"
+	"agent-manager/internal/sandboxlimits"
+	"agent-manager/internal/toolexecutor"
 )
 
 const defaultControlPort = 1024
