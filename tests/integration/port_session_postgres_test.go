@@ -1,6 +1,8 @@
 package integration_test
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"strings"
@@ -19,17 +21,17 @@ import (
 func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	project, account, _ := createProjectAccountAndCredential(t, controlPlane, admin, "port-session")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "port-session-profile")
-	scopes := []string{contracts.ScopeSandboxRead, contracts.ScopeSandboxLifecycle, contracts.ScopeSandboxPorts}
-	if _, err := controlPlane.UpdateServiceAccount(
+	scopes := []string{"sandbox:read", "sandbox:lifecycle", "sandbox:ports"}
+	if _, err := updateFixtureServiceAccount(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
 		contracts.UpdateServiceAccountRequest{Scopes: &scopes},
 	); err != nil {
 		t.Fatal(err)
 	}
-	key, err := controlPlane.CreateAPIKey(
+	key, err := createFixtureAPIKey(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
 		contracts.CreateAPIKeyRequest{Name: "port-session", Scopes: scopes},
 	)
@@ -60,10 +62,9 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 	}
 	t.Cleanup(relay.Close)
 	portService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		Store: databaseStore, BootstrapAdminToken: "bootstrap-administrator-secret",
-		APIKeyHashSecret:    []byte("test-keyed-api-hash-secret-at-least-32-bytes"),
-		DefaultProjectQuota: generousQuota(), DefaultProfileQuota: generousQuota(),
-		Now: func() time.Time { return now }, NewID: service.NewOpaqueID,
+		Store: databaseStore, PlatformToken: testPlatformToken,
+		DefaultSubjectQuota: generousQuota(),
+		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		DataPlaneRelay:        relay, DataPlanePollInterval: time.Millisecond,
 		PortSessionRelay: relay, PublicBaseURL: "https://secondbox.example",
@@ -125,6 +126,7 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 	}
 	crossProject := principal
 	crossProject.ProjectID = "project-outside-port-authority"
+	crossProject.TenantRef = "tenant-outside-port-authority"
 	if _, err := portService.GetSandboxPortSession(
 		t.Context(), crossProject, sandbox.ID, session.ID,
 	); !errors.Is(err, ports.ErrPortSessionNotFound) {
@@ -143,6 +145,29 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 		t.Context(), "port-session-mismatch", parsedEndpoint.Fragment,
 	); !errors.Is(err, ports.ErrPortTokenInvalid) {
 		t.Fatalf("mismatched PortSession token error = %v", err)
+	}
+	payloadPart, signaturePart, found := strings.Cut(parsedEndpoint.Fragment, ".")
+	if !found {
+		t.Fatal("PortSession token is missing its signature")
+	}
+	payload, err := base64.RawURLEncoding.Strict().DecodeString(payloadPart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		t.Fatal(err)
+	}
+	claims["sub"] = "another-subject"
+	alteredPayload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anotherSubjectToken := base64.RawURLEncoding.EncodeToString(alteredPayload) + "." + signaturePart
+	if _, err := portService.ConsumePortTunnelToken(
+		t.Context(), session.ID, anotherSubjectToken,
+	); !errors.Is(err, ports.ErrPortTokenInvalid) {
+		t.Fatalf("cross-subject PortSession token error = %v", err)
 	}
 
 	tunnel, err := portService.ConsumePortTunnel(t.Context(), session.Endpoint)

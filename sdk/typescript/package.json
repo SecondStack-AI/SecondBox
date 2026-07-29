@@ -1,7 +1,7 @@
 {
   "name": "@secondstack-ai/secondbox",
   "version": "0.0.0-development",
-  "description": "Generated SecondBox v1 transport with lifecycle, polling, execution, filesystem, terminal, and Flue helpers.",
+  "description": "Thin SecondBox transport with lifecycle, execution, filesystem, terminal, and Flue helpers.",
   "type": "module",
   "license": "MIT",
   "sideEffects": false,
@@ -25,10 +25,6 @@
     ".": {
       "types": "./dist/client.d.ts",
       "import": "./dist/client.js"
-    },
-    "./generated": {
-      "types": "./dist/secondbox-client.gen.d.ts",
-      "import": "./dist/secondbox-client.gen.js"
     },
     "./flue": {
       "types": "./dist/flue.d.ts",

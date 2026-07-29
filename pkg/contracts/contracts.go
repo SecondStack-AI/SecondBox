@@ -96,43 +96,16 @@ const (
 	TerminationReasonStartupFailed      = "startup_failed"
 	TerminationReasonFenced             = "fenced"
 	TerminationReasonInternalFailure    = "internal_failure"
-
-	ScopeSandboxRead      = "sandbox:read"
-	ScopeSandboxLifecycle = "sandbox:lifecycle"
-	ScopeSandboxExec      = "sandbox:exec"
-	ScopeSandboxFiles     = "sandbox:files"
-	ScopeSandboxArtifacts = "sandbox:artifacts"
-	ScopeSandboxPorts     = "sandbox:ports"
-
-	ScopeAdminProjects = "admin:projects"
-	ScopeAdminKeys     = "admin:keys"
-	ScopeAdminProfiles = "admin:profiles"
-	ScopeAdminRunners  = "admin:runners"
-	ScopeAdminAudit    = "admin:audit"
-	ScopeDiagnostics   = "admin:diagnostics"
 )
 
-// Principal is authenticated SecondBox authority derived from one credential.
+// Principal is the platform-asserted ownership scope for one request.
 type Principal struct {
-	Kind             string   `json:"kind"`
-	ID               string   `json:"id"`
-	ProjectID        string   `json:"projectId,omitempty"`
-	ServiceAccountID string   `json:"serviceAccountId,omitempty"`
-	Scopes           []string `json:"scopes"`
-	BootstrapAdmin   bool     `json:"-"`
-}
-
-// HasScope reports whether the authenticated principal carries one exact scope.
-func (principal Principal) HasScope(scope string) bool {
-	if principal.BootstrapAdmin {
-		return true
-	}
-	for _, candidate := range principal.Scopes {
-		if candidate == scope {
-			return true
-		}
-	}
-	return false
+	Kind             string `json:"kind"`
+	ID               string `json:"id"`
+	ProjectID        string `json:"projectId,omitempty"`
+	ServiceAccountID string `json:"serviceAccountId,omitempty"`
+	TenantRef        string `json:"tenantRef,omitempty"`
+	SubjectRef       string `json:"subjectRef,omitempty"`
 }
 
 // Project is the application isolation and quota boundary.
@@ -418,6 +391,8 @@ type Assignment struct {
 type Lease struct {
 	ID               string    `json:"id"`
 	ProjectID        string    `json:"-"`
+	TenantRef        string    `json:"-"`
+	SubjectRef       string    `json:"-"`
 	SandboxID        string    `json:"sandboxId"`
 	Generation       int64     `json:"generation"`
 	ServiceAccountID string    `json:"-"`
@@ -432,6 +407,8 @@ type Lease struct {
 type Snapshot struct {
 	ID                 string            `json:"id"`
 	ProjectID          string            `json:"-"`
+	TenantRef          string            `json:"-"`
+	SubjectRef         string            `json:"-"`
 	SandboxID          string            `json:"sandboxId"`
 	WorkspaceID        string            `json:"-"`
 	CheckpointID       string            `json:"-"`
@@ -464,6 +441,8 @@ type SnapshotPage struct {
 type Artifact struct {
 	ID                 string            `json:"id"`
 	ProjectID          string            `json:"-"`
+	TenantRef          string            `json:"-"`
+	SubjectRef         string            `json:"-"`
 	SandboxID          string            `json:"sandboxId"`
 	SourceGeneration   int64             `json:"generation"`
 	Name               string            `json:"name"`
@@ -503,7 +482,7 @@ type PortSession struct {
 	ExpiresAt  time.Time `json:"expiresAt"`
 }
 
-// QuotaLimits bounds Project or Profile aggregate reservations.
+// QuotaLimits bounds one subject's aggregate reservations.
 type QuotaLimits struct {
 	MaxSandboxes            int64 `json:"maxSandboxes"`
 	MaxActiveInstances      int64 `json:"maxActiveInstances"`
@@ -516,9 +495,32 @@ type QuotaLimits struct {
 	MaxConcurrentOperations int64 `json:"maxConcurrentOperations"`
 }
 
+// QuotaUsage projects one subject's aggregate persisted reservations.
+type QuotaUsage struct {
+	Sandboxes            int64 `json:"sandboxes"`
+	ActiveInstances      int64 `json:"activeInstances"`
+	CPUMillis            int64 `json:"cpuMillis"`
+	MemoryBytes          int64 `json:"memoryBytes"`
+	RetainedBytes        int64 `json:"retainedBytes"`
+	Snapshots            int64 `json:"snapshots"`
+	Artifacts            int64 `json:"artifacts"`
+	PortSessions         int64 `json:"portSessions"`
+	ConcurrentOperations int64 `json:"concurrentOperations"`
+}
+
+// SubjectUsage reports one trusted caller subject's limits and current usage.
+type SubjectUsage struct {
+	TenantRef  string      `json:"tenantRef"`
+	SubjectRef string      `json:"subjectRef"`
+	Limits     QuotaLimits `json:"limits"`
+	Usage      QuotaUsage  `json:"usage"`
+}
+
 // Workspace is public retained-workspace evidence without a provider location.
 type Workspace struct {
 	ID                    string    `json:"id"`
+	TenantRef             string    `json:"tenantRef"`
+	SubjectRef            string    `json:"subjectRef"`
 	Generation            int64     `json:"generation"`
 	RetainedBytes         int64     `json:"retainedBytes"`
 	CurrentCheckpointID   string    `json:"currentCheckpointId,omitempty"`
@@ -548,6 +550,8 @@ type Instance struct {
 type ActivitySession struct {
 	ID             string     `json:"id"`
 	ProjectID      string     `json:"projectId"`
+	TenantRef      string     `json:"tenantRef"`
+	SubjectRef     string     `json:"subjectRef"`
 	SandboxID      string     `json:"sandboxId"`
 	Generation     int64      `json:"generation"`
 	Kind           string     `json:"kind"`
@@ -578,6 +582,8 @@ type WorkspaceMaterialization struct {
 type WorkspaceCheckpoint struct {
 	ID                 string            `json:"id"`
 	ProjectID          string            `json:"projectId"`
+	TenantRef          string            `json:"tenantRef"`
+	SubjectRef         string            `json:"subjectRef"`
 	SandboxID          string            `json:"sandboxId"`
 	WorkspaceID        string            `json:"workspaceId"`
 	SourceGeneration   int64             `json:"sourceGeneration"`
@@ -595,6 +601,8 @@ type WorkspaceCheckpoint struct {
 type Sandbox struct {
 	ID                string            `json:"id"`
 	ProjectID         string            `json:"projectId"`
+	TenantRef         string            `json:"tenantRef"`
+	SubjectRef        string            `json:"subjectRef"`
 	Profile           string            `json:"profile"`
 	ProfileRevisionID string            `json:"profileRevisionId"`
 	State             string            `json:"state"`
@@ -917,6 +925,8 @@ type TouchResult struct {
 // Operation is durable asynchronous mutation evidence.
 type Operation struct {
 	ID              string            `json:"id"`
+	TenantRef       string            `json:"-"`
+	SubjectRef      string            `json:"-"`
 	SandboxID       string            `json:"sandboxId"`
 	Kind            string            `json:"kind"`
 	State           string            `json:"state"`
@@ -951,6 +961,8 @@ type ProblemDetail struct {
 type AuditEvent struct {
 	ID           string            `json:"id"`
 	ProjectID    string            `json:"projectId,omitempty"`
+	TenantRef    string            `json:"tenantRef,omitempty"`
+	SubjectRef   string            `json:"subjectRef,omitempty"`
 	ActorKind    string            `json:"actorKind"`
 	ActorID      string            `json:"actorId"`
 	Action       string            `json:"action"`
@@ -966,5 +978,4 @@ type AuditEvent struct {
 type MetricsSnapshot struct {
 	SandboxStates   map[string]int64
 	OperationStates map[string]int64
-	APIKeyStates    map[string]int64
 }

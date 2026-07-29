@@ -13,6 +13,6 @@
     "./client.ts",
     "./flue-runtime-beta9-compat.ts",
     "./flue.ts",
-    "./secondbox-client.gen.ts"
+    "./transport.ts"
   ]
 }

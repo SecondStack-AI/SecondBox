@@ -57,17 +57,6 @@ func (store *PostgresStateStore) OpenConnection(
 		return fmt.Errorf("SecondBox runner connection transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	var credentialState string
-	if err := tx.QueryRow(ctx, `
-		SELECT state FROM secondbox.runner_credentials
-		WHERE serial_number=$1 AND runner_id=$2 FOR UPDATE`,
-		identity.CredentialSerial, identity.RunnerID,
-	).Scan(&credentialState); err != nil {
-		return fmt.Errorf("SecondBox runner connection credential lookup: %w", err)
-	}
-	if credentialState != "active" && credentialState != "retiring" {
-		return ErrRunnerCredentialRevoked
-	}
 	now = now.UTC()
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.runner_connections
@@ -92,14 +81,6 @@ func (store *PostgresStateStore) OpenConnection(
 		identity.RunnerID, now,
 	); err != nil {
 		return fmt.Errorf("SecondBox runner pending command recovery: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.runners
-		SET active_connection_id=$2,last_sequence=0,state='connected',
-			revision=revision+1,updated_at=$3 WHERE id=$1`,
-		identity.RunnerID, connectionID, now,
-	); err != nil {
-		return fmt.Errorf("SecondBox runner active connection update: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("SecondBox runner connection commit: %w", err)
@@ -178,6 +159,31 @@ func (store *PostgresStateStore) RecordRegistration(
 		return duplicate, err
 	}
 	defer tx.Rollback(ctx)
+	var poolState string
+	if err := tx.QueryRow(ctx, `
+		SELECT state FROM secondbox.runner_pools WHERE name=$1`,
+		registration.RunnerPoolId,
+	).Scan(&poolState); err != nil {
+		return false, fmt.Errorf("SecondBox runner Registration pool lookup: %w", err)
+	}
+	if poolState != "ready" {
+		return false, errors.New("SecondBox RunnerPool is not accepting runners")
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.runners (
+			id,pool_name,name,state,architectures_json,capabilities_json,capacity_json,
+			protocol_versions_json,guest_protocol_minimum,guest_protocol_maximum,
+			software_version,active_connection_id,last_sequence,drain_phase,
+			reserved_capacity_json,artifact_cache_json,last_seen_at,revision,created_at,updated_at
+		) VALUES ($1,$2,$1,'connected','[]','{}','{}','[]',0,0,'',$3,0,'active','{}','[]',NULL,1,$4,$4)
+		ON CONFLICT (id) DO UPDATE SET
+			pool_name=EXCLUDED.pool_name,active_connection_id=EXCLUDED.active_connection_id,
+			state='connected',last_sequence=0,revision=secondbox.runners.revision+1,
+			updated_at=EXCLUDED.updated_at`,
+		registration.RunnerId, registration.RunnerPoolId, registration.ConnectionId, now.UTC(),
+	); err != nil {
+		return false, fmt.Errorf("SecondBox runner Registration identity upsert: %w", err)
+	}
 	command, err := tx.Exec(ctx, `
 		UPDATE secondbox.runners
 		SET state='ready',architectures_json=$3,capabilities_json=$4,
@@ -594,20 +600,17 @@ func (store *PostgresStateStore) beginOrderedMessage(
 	if err != nil {
 		return nil, false, fmt.Errorf("SecondBox runner message transaction: %w", err)
 	}
-	var storedRunnerID, connectionState, credentialState string
+	var storedRunnerID, connectionState string
 	var lastSequence int64
 	if err := tx.QueryRow(ctx, `
-		SELECT connection.runner_id,connection.state,connection.last_sequence,credential.state
+		SELECT connection.runner_id,connection.state,connection.last_sequence
 		FROM secondbox.runner_connections AS connection
-		JOIN secondbox.runner_credentials AS credential
-			ON credential.serial_number=connection.credential_serial
 		WHERE connection.id=$1 FOR UPDATE OF connection`, connectionID,
-	).Scan(&storedRunnerID, &connectionState, &lastSequence, &credentialState); err != nil {
+	).Scan(&storedRunnerID, &connectionState, &lastSequence); err != nil {
 		tx.Rollback(ctx)
 		return nil, false, fmt.Errorf("SecondBox runner connection ordering lookup: %w", err)
 	}
-	if storedRunnerID != runnerID || connectionState != "active" ||
-		(credentialState != "active" && credentialState != "retiring") {
+	if storedRunnerID != runnerID || connectionState != "active" {
 		tx.Rollback(ctx)
 		return nil, false, errors.New("SecondBox runner message connection identity is inactive")
 	}

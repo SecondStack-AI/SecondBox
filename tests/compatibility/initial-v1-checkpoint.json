@@ -1,7 +1,0 @@
-{
-  "architecture": "amd64",
-  "backend": "firecracker",
-  "workspaceFormat": "ext4",
-  "guestProtocolGeneration": "1",
-  "mandatoryGuestFeatures": ""
-}

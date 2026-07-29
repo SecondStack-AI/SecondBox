@@ -41,15 +41,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
 )
 
-const (
-	freshRunnerRestoreHelperEnvironment = "SECONDBOX_FRESH_RUNNER_RESTORE_HELPER"
-	freshRunnerRestoreAPIHashSecret     = "fresh-runner-restore-api-hash-secret-000000000000"
-	freshRunnerRestoreBootstrapToken    = "fresh-runner-restore-bootstrap-token"
-)
+const freshRunnerRestoreHelperEnvironment = "SECONDBOX_FRESH_RUNNER_RESTORE_HELPER"
 
 // TestBackupRestoreDrillMaterializesCheckpointOnFreshRunner proves the portable recovery boundary.
 func TestBackupRestoreDrillMaterializesCheckpointOnFreshRunner(t *testing.T) {
@@ -90,6 +87,7 @@ func TestBackupRestoreDrillMaterializesCheckpointOnFreshRunner(t *testing.T) {
 	sandboxID, credential := seedBackupRestoreSource(
 		t, sourceDatabaseURL, checkpointStorageKey, checkpointSHA256, int64(len(checkpointBytes)),
 	)
+	sourcePrincipal := fixturePrincipalForCredential(t, sourceDatabaseURL, credential)
 	backupDirectory := t.TempDir()
 	backup := exec.Command(repositoryScriptPath(t, "backup.sh"))
 	backup.Env = append(os.Environ(),
@@ -127,14 +125,14 @@ exec "$SECONDBOX_FRESH_RUNNER_RESTORE_TEST_BINARY" -test.run '^TestFreshRunnerRe
 		freshRunnerRestoreHelperEnvironment+"=1",
 		"SECONDBOX_FRESH_RUNNER_RESTORE_TEST_BINARY="+testExecutable,
 		"SECONDBOX_FRESH_RUNNER_RESTORE_LISTEN_ADDRESS="+listenAddress,
-		"SECONDBOX_FRESH_RUNNER_RESTORE_API_HASH_SECRET="+freshRunnerRestoreAPIHashSecret,
-		"SECONDBOX_FRESH_RUNNER_RESTORE_BOOTSTRAP_TOKEN="+freshRunnerRestoreBootstrapToken,
 		"SECONDBOX_RESTORE_DATABASE_URL="+integrationDatabaseURL,
 		"SECONDBOX_RESTORE_BUNDLE="+bundles[0],
 		"SECONDBOX_RESTORE_STAGE_DIR="+t.TempDir(),
 		"SECONDBOX_RESTORE_OBJECT_TARGET="+restoreObjectTarget,
 		"SECONDBOX_RESTORE_CONTROL_PLANE_URL="+controlPlaneURL,
-		"SECONDBOX_RESTORE_CONTROL_PLANE_TOKEN="+credential,
+		"SECONDBOX_RESTORE_CONTROL_PLANE_TOKEN="+testPlatformToken,
+		"SECONDBOX_RESTORE_TENANT_REF="+sourcePrincipal.TenantRef,
+		"SECONDBOX_RESTORE_SUBJECT_REF="+sourcePrincipal.SubjectRef,
 		"SECONDBOX_RESTORE_FRESH_RUNNER_RESULT="+freshRunnerResult,
 		"SECONDBOX_RESTORE_FRESH_RUNNER_VERIFY_COMMAND="+verifierWrapper,
 		"SECONDBOX_RESTORE_FRESH_RUNNER_VERIFY_TIMEOUT_SECONDS=30",
@@ -190,35 +188,23 @@ func runFreshRunnerRestoreVerifier(t *testing.T) {
 	recoveryPointID := requiredBackupRestoreEnvironment(
 		t, "SECONDBOX_RESTORE_VERIFICATION_RECOVERY_POINT_ID",
 	)
-	controlPlaneToken := requiredBackupRestoreEnvironment(
-		t, "SECONDBOX_RESTORE_CONTROL_PLANE_TOKEN",
-	)
-	apiHashSecret := requiredBackupRestoreEnvironment(
-		t, "SECONDBOX_FRESH_RUNNER_RESTORE_API_HASH_SECRET",
-	)
-	bootstrapToken := requiredBackupRestoreEnvironment(
-		t, "SECONDBOX_FRESH_RUNNER_RESTORE_BOOTSTRAP_TOKEN",
-	)
-
+	tenantRef := requiredBackupRestoreEnvironment(t, "SECONDBOX_RESTORE_TENANT_REF")
+	subjectRef := requiredBackupRestoreEnvironment(t, "SECONDBOX_RESTORE_SUBJECT_REF")
 	databaseStore, err := store.NewPostgresControlPlaneStore(t.Context(), databaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer databaseStore.Close()
 	controlPlane, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		Store: databaseStore, BootstrapAdminToken: bootstrapToken,
-		APIKeyHashSecret: []byte(apiHashSecret), DefaultProjectQuota: generousQuota(),
-		DefaultProfileQuota: generousQuota(), Now: service.SystemClock,
+		Store: databaseStore, PlatformToken: testPlatformToken, DefaultSubjectQuota: generousQuota(),
+		Now:   service.SystemClock,
 		NewID: service.NewOpaqueID, NewCredentialMaterial: service.NewCredentialMaterial,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := controlPlane.InitializeBootstrapAdmin(t.Context()); err != nil {
-		t.Fatal(err)
-	}
 	handler, err := api.NewHandler(api.HandlerConfig{
-		Service: controlPlane, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Service: controlPlane, PlatformToken: testPlatformToken, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		MaximumDataPlaneBodyBytes: 4 << 20,
 	})
 	if err != nil {
@@ -276,9 +262,10 @@ func runFreshRunnerRestoreVerifier(t *testing.T) {
 		t, databaseURL, stateStore, restoreSender, runnerID, now,
 	)
 
-	principal, err := controlPlane.AuthenticateCredential(t.Context(), controlPlaneToken)
-	if err != nil {
-		t.Fatal(err)
+	principal := contracts.Principal{
+		Kind: "platform", ID: subjectRef,
+		ProjectID: tenantRef, ServiceAccountID: subjectRef,
+		TenantRef: tenantRef, SubjectRef: subjectRef,
 	}
 	if _, err := controlPlane.StartSandbox(
 		t.Context(), principal, sandboxID, "fresh-runner-restore-start", sandboxRevision,
@@ -377,6 +364,7 @@ func runFreshRunnerRestoreVerifier(t *testing.T) {
 	)
 	if _, err := databaseStore.PingGuest(t.Context(), ports.GenerationInput{
 		ProjectID: principal.ProjectID, SandboxID: sandboxID,
+		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
 		Generation: int64(assignment.Fence.SandboxGeneration),
 		Now:        now.Add(5 * time.Millisecond),
 	}, contracts.GuestLivenessReady); err != nil {
@@ -468,20 +456,9 @@ func startFreshRunnerRestoreProtocol(
 		t.Fatal("fresh-Runner verifier protocol is not bound to the restored database")
 	}
 	caCertificate, caPrivateKey := task4CertificateAuthority(t, now)
-	authority := task4CredentialAuthority(t, caCertificate, caPrivateKey, now)
-	enrollment, err := authority.CreateEnrollment(
-		t.Context(), runnercontrol.EnrollmentRequest{
-			TokenID: "enrollment-" + runnerID, RunnerID: runnerID,
-			PoolName: "default-pool", RunnerName: runnerID, ExpiresAt: now.Add(time.Hour),
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	authority := newTask4CredentialAuthority(t, caCertificate, caPrivateKey, now)
 	certificateRequest, runnerPrivateKey := freshRunnerRestoreCertificateRequest(t)
-	issued, err := authority.RedeemEnrollment(
-		t.Context(), enrollment.Token, certificateRequest,
-	)
+	issued, err := authority.Issue(runnerID, certificateRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -539,7 +516,10 @@ func startFreshRunnerRestoreProtocol(
 	t.Cleanup(func() {
 		_ = connection.Close()
 	})
-	stream, err := runnerv1.NewRunnerControlClient(connection).Connect(t.Context())
+	streamContext := metadata.AppendToOutgoingContext(
+		t.Context(), "x-secondbox-runner-credential", task4RunnerCredential,
+	)
+	stream, err := runnerv1.NewRunnerControlClient(connection).Connect(streamContext)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -770,29 +750,22 @@ func seedBackupRestoreSource(
 		t.Fatal(err)
 	}
 	controlPlane, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		Store: databaseStore, BootstrapAdminToken: freshRunnerRestoreBootstrapToken,
-		APIKeyHashSecret:    []byte(freshRunnerRestoreAPIHashSecret),
-		DefaultProjectQuota: generousQuota(), DefaultProfileQuota: generousQuota(),
-		Now: service.SystemClock, NewID: service.NewOpaqueID,
+		Store: databaseStore, PlatformToken: testPlatformToken,
+		DefaultSubjectQuota: generousQuota(),
+		Now:                 service.SystemClock, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := controlPlane.InitializeBootstrapAdmin(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(
 		t, controlPlane, admin, "backup-restore-source",
 	)
 	profile := createGrantedProfile(
 		t, controlPlane, databaseStore, admin, account, "backup-restore-profile",
 	)
-	principal, err := controlPlane.AuthenticateCredential(t.Context(), credential)
-	if err != nil {
-		t.Fatal(err)
-	}
+	principal := fixturePrincipalForCredential(t, databaseURL, credential)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "backup-restore-sandbox",
 		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
@@ -823,11 +796,12 @@ func seedBackupRestoreSource(
 	defer tx.Rollback(t.Context())
 	if _, err := tx.Exec(t.Context(), `
 		INSERT INTO secondbox.workspace_checkpoints (
-			id,project_id,sandbox_id,workspace_id,source_generation,state,
+			id,tenant_ref,subject_ref,sandbox_id,workspace_id,source_generation,state,
 			sha256,size_bytes,compatibility_json,storage_key,retain_until,
 			created_at,verified_at,published_at
-		) VALUES ($1,$2,$3,$4,1,'published',$5,$6,$7,$8,$9,$10,$10,$10)`,
-		checkpointID, sandbox.ProjectID, sandbox.ID, sandbox.Workspace.ID,
+		) VALUES ($1,$2,$3,$4,$5,1,'published',$6,$7,$8,$9,$10,$11,$11,$11)`,
+		checkpointID, sandbox.TenantRef, sandbox.SubjectRef,
+		sandbox.ID, sandbox.Workspace.ID,
 		checkpointSHA256, checkpointSize, compatibility, storageKey,
 		now.Add(24*time.Hour), now,
 	); err != nil {

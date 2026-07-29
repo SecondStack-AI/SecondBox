@@ -12,8 +12,8 @@ import (
 
 // GarbageCatalog publishes only objects that have passed a durable reachability grace.
 type GarbageCatalog interface {
-	ListGarbageObjectsDue(context.Context, time.Time, time.Duration, int) ([]ports.GarbageObject, error)
-	CompleteGarbageObject(context.Context, ports.GarbageObject, time.Time) error
+	ListGarbageObjectsDue(ctx context.Context, now time.Time, grace time.Duration, limit int) ([]ports.GarbageObject, error)
+	CompleteGarbageObject(ctx context.Context, object ports.GarbageObject, now time.Time) error
 }
 
 // GarbageCollector removes unreachable immutable bytes and records terminal evidence.

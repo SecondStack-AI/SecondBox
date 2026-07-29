@@ -2,7 +2,6 @@
 package ports
 
 import (
-	"context"
 	"errors"
 	"time"
 
@@ -47,42 +46,34 @@ var (
 	ErrWaitExpired             = errors.New("SecondBox Sandbox wait deadline expired")
 )
 
-// StoredAPIKey carries the keyed hash only across the private persistence port.
-type StoredAPIKey struct {
-	APIKey         contracts.APIKey
-	ProjectID      string
-	CredentialHash []byte
-	UpdatedAt      time.Time
-}
-
 // AdminIdempotencyInput binds one administrative mutation to an exact durable response.
 type AdminIdempotencyInput struct {
-	ProjectID      string
-	Operation      string
-	TargetID       string
-	Key            string
-	RequestHash    string
-	ResponseSecret []byte
-	Now            time.Time
-	Ends           time.Time
+	ProjectID   string
+	TenantRef   string
+	SubjectRef  string
+	Operation   string
+	TargetID    string
+	Key         string
+	RequestHash string
+	Now         time.Time
+	Ends        time.Time
 }
 
 // AdminIdempotencyResult reports whether a stored response was replayed.
 type AdminIdempotencyResult struct {
-	Replayed       bool
-	ResponseSecret []byte
+	Replayed bool
 }
 
 // CreateSandboxInput contains server-resolved identity and transaction evidence.
 type CreateSandboxInput struct {
 	Principal       contracts.Principal
+	SubjectQuota    contracts.QuotaLimits
 	Sandbox         contracts.Sandbox
 	Workspace       contracts.Workspace
 	Operation       contracts.Operation
 	IdempotencyKey  string
 	RequestHash     string
 	IdempotencyEnds time.Time
-	Audit           contracts.AuditEvent
 }
 
 // LifecycleIntentInput records desired state and one durable asynchronous operation.
@@ -91,7 +82,6 @@ type LifecycleIntentInput struct {
 	SandboxID        string
 	DesiredState     string
 	Operation        contracts.Operation
-	Audit            contracts.AuditEvent
 	Now              time.Time
 	IdempotencyKey   string
 	RequestHash      string
@@ -103,6 +93,8 @@ type LifecycleIntentInput struct {
 type LeaseInput struct {
 	Lease            contracts.Lease
 	ProjectID        string
+	TenantRef        string
+	SubjectRef       string
 	SandboxID        string
 	Generation       int64
 	ServiceAccountID string
@@ -116,6 +108,8 @@ type LeaseInput struct {
 // GenerationInput fences a lifecycle report to current Sandbox authority.
 type GenerationInput struct {
 	ProjectID  string
+	TenantRef  string
+	SubjectRef string
 	SandboxID  string
 	Generation int64
 	Now        time.Time
@@ -151,18 +145,18 @@ type SnapshotCreationInput struct {
 	RequestHash      string
 	IdempotencyEnds  time.Time
 	ExpectedRevision int64
-	Audit            contracts.AuditEvent
 }
 
 // SnapshotRetentionInput ends one immutable metadata root idempotently.
 type SnapshotRetentionInput struct {
 	ProjectID       string
+	TenantRef       string
+	SubjectRef      string
 	SnapshotID      string
 	IdempotencyKey  string
 	RequestHash     string
 	IdempotencyEnds time.Time
 	Now             time.Time
-	Audit           contracts.AuditEvent
 }
 
 // ArtifactPublicationInput publishes immutable application exchange evidence.
@@ -175,7 +169,6 @@ type ArtifactPublicationInput struct {
 	IdempotencyKey     string
 	RequestHash        string
 	IdempotencyEnds    time.Time
-	Audit              contracts.AuditEvent
 }
 
 // ArtifactObject binds public metadata to its private immutable provider key.
@@ -187,12 +180,13 @@ type ArtifactObject struct {
 // ArtifactRetentionInput ends public reachability idempotently before provider garbage collection.
 type ArtifactRetentionInput struct {
 	ProjectID       string
+	TenantRef       string
+	SubjectRef      string
 	ArtifactID      string
 	IdempotencyKey  string
 	RequestHash     string
 	IdempotencyEnds time.Time
 	Now             time.Time
-	Audit           contracts.AuditEvent
 }
 
 // GarbageObject is private provider evidence for one unreachable immutable object.
@@ -228,86 +222,4 @@ type LifecycleReconcileClaim struct {
 	DrainGraceSeconds         int64
 	IdleSeconds               int64
 	MaximumDurationSeconds    int64
-}
-
-// LifecycleStore persists generation-fenced lifecycle and durability evidence.
-type LifecycleStore interface {
-	GetSandboxLifecyclePolicy(context.Context, string, string) (contracts.LifecyclePolicy, contracts.CheckpointPolicy, error)
-	SetSandboxDesiredState(context.Context, LifecycleIntentInput) (contracts.Operation, error)
-	AcquireLease(context.Context, LeaseInput) (contracts.Lease, error)
-	GetLease(context.Context, string, string, string) (contracts.Lease, error)
-	GetLeaseByID(context.Context, string, string) (contracts.Lease, error)
-	RenewLease(context.Context, LeaseInput) (contracts.Lease, error)
-	ReleaseLease(context.Context, LeaseInput) (contracts.Lease, error)
-	PingGuest(context.Context, GenerationInput, string) (contracts.Instance, error)
-	ReadSandboxInspection(context.Context, GenerationInput) (contracts.SandboxInspection, error)
-	TouchActivity(context.Context, ActivityInput) (time.Time, error)
-	OpenActivitySession(context.Context, ActivityInput) (contracts.ActivitySession, error)
-	CloseActivitySession(context.Context, ActivityInput) (contracts.ActivitySession, error)
-	AcquireMaterialization(context.Context, MaterializationInput) (contracts.WorkspaceMaterialization, error)
-	ConfirmMaterialization(context.Context, MaterializationInput, time.Time) (contracts.WorkspaceMaterialization, error)
-	ReleaseMaterialization(context.Context, MaterializationInput, map[string]string, time.Time) (contracts.WorkspaceMaterialization, error)
-	StageCheckpoint(context.Context, CheckpointPublicationInput) (contracts.WorkspaceCheckpoint, error)
-	VerifyCheckpoint(context.Context, CheckpointPublicationInput, time.Time) (contracts.WorkspaceCheckpoint, error)
-	PublishCheckpoint(context.Context, CheckpointPublicationInput, time.Time) (contracts.WorkspaceCheckpoint, error)
-	CreateSnapshot(context.Context, SnapshotCreationInput) (contracts.Snapshot, error)
-	ListSnapshots(context.Context, string, string, int, string, time.Time) (contracts.SnapshotPage, error)
-	GetSnapshot(context.Context, string, string, time.Time) (contracts.Snapshot, error)
-	EndSnapshotRetention(context.Context, SnapshotRetentionInput) error
-	StageArtifact(context.Context, ArtifactPublicationInput) (contracts.Artifact, error)
-	PublishArtifact(context.Context, ArtifactPublicationInput, time.Time) (contracts.Artifact, error)
-	ListArtifacts(context.Context, string, string, int, string, time.Time) (contracts.ArtifactPage, error)
-	GetArtifactObject(context.Context, string, string, time.Time) (ArtifactObject, error)
-	EndArtifactRetention(context.Context, ArtifactRetentionInput) error
-	ListGarbageObjectsDue(context.Context, time.Time, time.Duration, int) ([]GarbageObject, error)
-	CompleteGarbageObject(context.Context, GarbageObject, time.Time) error
-	ClaimLifecycle(context.Context, string, time.Time, time.Duration) (LifecycleReconcileClaim, bool, error)
-	ApplyLifecycleAction(context.Context, LifecycleReconcileClaim, string, string, time.Time, time.Time) error
-}
-
-// ControlPlaneStore persists standalone SecondBox identity, policy, and Sandbox intent.
-type ControlPlaneStore interface {
-	LifecycleStore
-	Ping(context.Context) error
-	Close()
-	InitializeBootstrapAdmin(context.Context, []byte, time.Time, contracts.AuditEvent) error
-	AuthenticateBootstrapAdmin(context.Context, []byte, time.Time, contracts.AuditEvent) (contracts.Principal, error)
-
-	CreateProject(context.Context, contracts.Project, contracts.QuotaLimits, AdminIdempotencyInput, contracts.AuditEvent) (contracts.Project, AdminIdempotencyResult, error)
-	UpdateProject(context.Context, string, contracts.UpdateProjectRequest, int64, time.Time, AdminIdempotencyInput, contracts.AuditEvent) (contracts.Project, AdminIdempotencyResult, error)
-	GetProject(context.Context, string) (contracts.Project, error)
-	ListProjects(context.Context, int, string) (contracts.ProjectPage, error)
-
-	CreateServiceAccount(context.Context, contracts.ServiceAccount, AdminIdempotencyInput, contracts.AuditEvent) (contracts.ServiceAccount, AdminIdempotencyResult, error)
-	UpdateServiceAccount(context.Context, string, string, contracts.UpdateServiceAccountRequest, int64, time.Time, AdminIdempotencyInput, contracts.AuditEvent) (contracts.ServiceAccount, AdminIdempotencyResult, error)
-	GetServiceAccount(context.Context, string, string) (contracts.ServiceAccount, error)
-	ListServiceAccounts(context.Context, string, int, string) (contracts.ServiceAccountPage, error)
-
-	CreateAPIKey(context.Context, StoredAPIKey, AdminIdempotencyInput, contracts.AuditEvent) (contracts.APIKey, AdminIdempotencyResult, error)
-	RotateAPIKey(context.Context, string, string, string, string, []byte, int64, time.Time, AdminIdempotencyInput, contracts.AuditEvent) (contracts.APIKey, AdminIdempotencyResult, error)
-	RevokeAPIKey(context.Context, string, string, string, int64, time.Time, AdminIdempotencyInput, contracts.AuditEvent) (contracts.APIKey, AdminIdempotencyResult, error)
-	GetAPIKey(context.Context, string, string, string) (contracts.APIKey, error)
-	ListAPIKeys(context.Context, string, string, int, string) (contracts.APIKeyPage, error)
-	AuthenticateAPIKey(context.Context, string, []byte, time.Time, contracts.AuditEvent) (contracts.Principal, error)
-
-	CreateProfile(context.Context, contracts.Profile, contracts.QuotaLimits, AdminIdempotencyInput, contracts.AuditEvent) (contracts.Profile, AdminIdempotencyResult, error)
-	ReviseProfile(context.Context, string, contracts.ProfileRevision, int64, time.Time, AdminIdempotencyInput, contracts.AuditEvent) (contracts.Profile, AdminIdempotencyResult, error)
-	DisableProfile(context.Context, string, int64, time.Time, AdminIdempotencyInput, contracts.AuditEvent) (contracts.Profile, AdminIdempotencyResult, error)
-	GetProfile(context.Context, string) (contracts.Profile, error)
-	ListProfiles(context.Context, int, string) (contracts.ProfilePage, error)
-	CreateRunnerPool(context.Context, contracts.RunnerPool, contracts.AuditEvent) (contracts.RunnerPool, error)
-	UpdateRunnerPool(context.Context, string, contracts.UpdateRunnerPoolRequest, int64, time.Time, contracts.AuditEvent) (contracts.RunnerPool, error)
-	GetRunnerPool(context.Context, string) (contracts.RunnerPool, error)
-	ListRunnerPools(context.Context, int, string) (contracts.RunnerPoolPage, error)
-	GetRunner(context.Context, string) (contracts.Runner, error)
-	ListRunners(context.Context, string, int, string) (contracts.RunnerPage, error)
-	RegisterRunnerPool(context.Context, contracts.RunnerPool) error
-
-	CreateSandbox(context.Context, CreateSandboxInput) (contracts.Sandbox, contracts.Operation, bool, error)
-	GetSandbox(context.Context, string, string) (contracts.Sandbox, error)
-	ListSandboxes(context.Context, string, int, string) (contracts.SandboxPage, error)
-	GetOperation(context.Context, string, string) (contracts.Operation, error)
-
-	ListAuditEvents(context.Context, string, int) ([]contracts.AuditEvent, error)
-	ReadMetricsSnapshot(context.Context) (contracts.MetricsSnapshot, error)
 }

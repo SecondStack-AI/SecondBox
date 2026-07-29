@@ -2,13 +2,11 @@
 
 Profiles are server-owned policy. Application clients select an authorized profile name; they do not assemble compute policy in a Sandbox request.
 
-## Identity model
+## Trusted-caller model
 
-Bootstrap creates the first operator through a local, one-time administrative flow. Operators create Projects, ServiceAccounts, APIKeys, Profiles, RunnerPools, and runner enrollment credentials through administrative scopes.
+Every HTTP request authenticates with the deployment-wide `SECONDBOX_PLATFORM_TOKEN` and carries `X-SecondBox-Tenant-Ref` plus `X-SecondBox-Subject-Ref`. Both references are bounded opaque strings. SecondBox stores and compares them on every owned read and write, but does not verify that the caller is entitled to assert them.
 
-An application authenticates with an API key belonging to one ServiceAccount and therefore exactly one Project. The authenticated Project is the tenancy boundary; request bodies cannot contain a tenant, subject, project override, or arbitrary actor identity. Authorization evaluates the key state, expiry, scopes, ServiceAccount state, Project state, and profile grant on every request. Revocation takes effect at admission and prevents renewal of existing Leases.
-
-API keys are scoped independently for Sandbox lifecycle, execution, files, artifacts, ports, and read-only access. Administrative project, key, profile, runner, audit, and diagnostics scopes are not available to ordinary application keys. Plaintext key material is never stored or returned after its one creation response.
+The upstream platform is therefore the authorization boundary. A bad assertion can cross subjects; SecondBox deliberately accepts that risk to avoid duplicating the upstream identity graph. The Runner channel remains separate and requires the pre-shared Runner credential plus a CA-signed mTLS identity.
 
 ## Profile and revision
 
@@ -26,20 +24,27 @@ Every ProfileRevision contains:
 - outbound network and DNS policy;
 - approved exposed ports, protocols, and session limits.
 
-There is no built-in or fallback profile. Installation examples may show explicit profile creation, but the server starts with none. Profile names do not trigger application-specific behavior. Disposable-compute and durable-coding behavior are ordinary policy combinations in the immutable revision pinned to each Sandbox. In particular, `checkpoint.onStop=false` drains and stops the active Instance without publishing its latest writes, while `checkpoint.onStop=true` publishes the current generation before stopping. Start continues from the Workspace's last published checkpoint when one exists, or from an empty Workspace otherwise; it never adopts a newer Profile head.
+SecondBox ships two versioned built-in Profiles:
+
+- `agent-compartment` is bounded ephemeral compute for Flue-style agent turns. It starts immediately, has short idle and maximum-duration bounds, exposes no ports, and does not checkpoint on stop.
+- `coding-environment` is a long-running coding workspace with larger inline CPU, memory, disk, process, operation, transfer, PTY-detach, checkpoint, and development-port bounds.
+
+Built-ins are materialized as ordinary immutable ProfileRevisions with deterministic version IDs when first resolved. Their names are reserved: operators cannot create, revise, or disable them. A later SecondBox release may advance a built-in head, but existing Sandboxes retain the exact earlier revision they pinned. Operator-defined Profiles remain fully supported and follow the same immutable pinning rules. There is no missing-profile fallback and no other profile name triggers application-specific behavior.
+
+In particular, `checkpoint.onStop=false` drains and stops the active Instance without publishing its latest writes, while `checkpoint.onStop=true` publishes the current generation before stopping. Start continues from the Workspace's last published checkpoint when one exists, or from an empty Workspace otherwise; it never adopts a newer Profile head.
 
 ## Creation and compatibility
 
 `POST /v1/sandboxes` contains only `profile` and bounded string metadata. The client supplies `Idempotency-Key` as a header. Resource, backend, image, lifecycle, storage, network, timeout, port, and placement fields are rejected as unknown properties.
 
-Creation fails before allocating durable intent when the profile is absent, disabled, not granted to the ServiceAccount, or has no RunnerPool capable of its immutable requirements. Successful creation persists the exact ProfileRevision ID and a resolved compatibility summary. Later runner availability changes do not rewrite that selection.
+Creation fails before allocating durable intent when the profile is absent, disabled, or has no RunnerPool capable of its immutable requirements. Successful creation persists the exact ProfileRevision ID and a resolved compatibility summary. Later runner availability changes do not rewrite that selection.
 
 Profiles may be disabled to stop future creation. Disablement does not mutate pinned Sandboxes. A profile revision and its referenced assets cannot be deleted while reachable from a Sandbox, checkpoint, or retention record.
 
 ## Quotas
 
-Project and profile quotas cover total Sandboxes, active Instances, vCPU, memory, retained bytes, snapshots, artifacts, exposed-port sessions, and concurrent data-plane operations. Admission and quota reservation are transactional. A concurrent race either commits one authorized reservation or returns a typed quota error; it never overcommits and repairs later.
+`subject_quotas` is the only persisted quota set. It covers total Sandboxes, active Instances, vCPU, memory, retained bytes, snapshots, artifacts, exposed-port sessions, and concurrent data-plane operations for the asserted tenant and subject. Profile resource limits, including the built-ins' limits, remain inline immutable execution policy rather than a second quota table. Admission and quota reservation are transactional. A concurrent race either commits one authorized reservation or returns a typed quota error; it never overcommits and repairs later.
 
-Metrics use fixed-cardinality labels. Project names, ServiceAccount IDs, API key prefixes, Sandbox IDs, profile names, workspace paths, and artifact names are audit fields rather than metric dimensions.
+Metrics use fixed-cardinality labels. Tenant refs, subject refs, Sandbox IDs, profile names, workspace paths, and artifact names are audit fields rather than metric dimensions.
 
-See [Domain and lifecycle](domain-lifecycle.md), [API conventions](api-conventions.md), [Security](security.md), and [Compatibility policy](compatibility-policy.md).
+See [Domain and lifecycle](domain-lifecycle.md), [API conventions](api-conventions.md), and [Security](security.md).

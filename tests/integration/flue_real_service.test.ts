@@ -8,14 +8,18 @@ import {
 import {
   SecondBoxClient,
   type Sandbox,
-} from "../../sdk/typescript/secondbox-client.gen.ts";
+} from "../../sdk/typescript/client.ts";
 import { createSecondBoxFlueAdapter } from "../../sdk/typescript/flue.ts";
 
 test("Flue complete command and filesystem subset uses the real SecondBox service contract", async () => {
   const baseURL = requiredEnvironment("SECONDBOX_FLUE_TEST_BASE_URL");
-  const credential = requiredEnvironment("SECONDBOX_FLUE_TEST_CREDENTIAL");
+  const platformToken = requiredEnvironment("SECONDBOX_FLUE_TEST_PLATFORM_TOKEN");
+  const tenantRef = requiredEnvironment("SECONDBOX_FLUE_TEST_TENANT_REF");
+  const subjectRef = requiredEnvironment("SECONDBOX_FLUE_TEST_SUBJECT_REF");
   const sandboxID = requiredEnvironment("SECONDBOX_FLUE_TEST_SANDBOX_ID");
-  const api = new SecondBox(new SecondBoxClient(baseURL, credential, fetch));
+  const api = new SecondBox(
+    new SecondBoxClient(baseURL, platformToken, fetch, tenantRef, subjectRef),
+  );
   const sandbox = await api.requestJSON<Sandbox>("getSandbox", {
     pathParameters: { sandboxId: sandboxID },
   });

@@ -21,7 +21,14 @@ func (relay *PostgresFrameRelay) AdmitPortSession(
 	ctx context.Context,
 	input PortSessionAdmission,
 ) (PortTunnel, bool, error) {
+	if input.TenantRef == "" {
+		input.TenantRef = input.ProjectID
+	}
+	if input.SubjectRef == "" {
+		input.SubjectRef = input.ServiceAccountID
+	}
 	if input.Session.ID == "" || input.StreamID == "" || input.ProjectID == "" ||
+		input.TenantRef == "" || input.SubjectRef == "" ||
 		input.Session.SandboxID == "" || input.ServiceAccountID == "" ||
 		input.RequestID == "" || input.LeaseID == "" || input.IdempotencyKey == "" ||
 		input.RequestHash == "" || input.Session.Generation < 1 ||
@@ -34,22 +41,24 @@ func (relay *PostgresFrameRelay) AdmitPortSession(
 		return PortTunnel{}, false, fmt.Errorf("SecondBox PortSession transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	lockKey := input.ProjectID + "\x1fport-session\x1f" + input.Session.SandboxID + "\x1f" + input.IdempotencyKey
+	lockKey := input.TenantRef + "\x1f" + input.SubjectRef +
+		"\x1fport-session\x1f" + input.Session.SandboxID + "\x1f" + input.IdempotencyKey
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey); err != nil {
 		return PortTunnel{}, false, fmt.Errorf("SecondBox PortSession idempotency lock: %w", err)
 	}
 	var replayHash, replayID string
 	err = tx.QueryRow(ctx, `
 		SELECT request_hash,id FROM secondbox.port_sessions
-		WHERE project_id=$1 AND sandbox_id=$2 AND idempotency_key=$3`,
-		input.ProjectID, input.Session.SandboxID, input.IdempotencyKey,
+		WHERE tenant_ref=$1 AND subject_ref=$2 AND sandbox_id=$3 AND idempotency_key=$4`,
+		input.TenantRef, input.SubjectRef, input.Session.SandboxID, input.IdempotencyKey,
 	).Scan(&replayHash, &replayID)
 	if err == nil {
 		if replayHash != input.RequestHash {
 			return PortTunnel{}, false, ports.ErrIdempotencyConflict
 		}
 		tunnel, err := scanPortTunnel(tx.QueryRow(ctx, portTunnelSelect+`
-			WHERE port.project_id=$1 AND port.id=$2`, input.ProjectID, replayID))
+			WHERE port.tenant_ref=$1 AND port.subject_ref=$2 AND port.id=$3`,
+			input.TenantRef, input.SubjectRef, replayID))
 		if err != nil {
 			return PortTunnel{}, false, err
 		}
@@ -62,8 +71,9 @@ func (relay *PostgresFrameRelay) AdmitPortSession(
 		return PortTunnel{}, false, fmt.Errorf("SecondBox PortSession replay lookup: %w", err)
 	}
 	for _, capacityKey := range []string{
-		input.ProjectID + "\x1fport-session-capacity",
-		input.ProjectID + "\x1fport-session-capacity\x1f" + input.Session.SandboxID,
+		input.TenantRef + "\x1f" + input.SubjectRef + "\x1fport-session-capacity",
+		input.TenantRef + "\x1f" + input.SubjectRef +
+			"\x1fport-session-capacity\x1f" + input.Session.SandboxID,
 	} {
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, capacityKey); err != nil {
 			return PortTunnel{}, false, fmt.Errorf("SecondBox PortSession capacity lock: %w", err)
@@ -91,7 +101,8 @@ func (relay *PostgresFrameRelay) AdmitPortSession(
 	}
 	session := DataPlaneSession{
 		ID: input.Session.ID, StreamID: input.StreamID,
-		ProjectID: input.ProjectID, SandboxID: input.Session.SandboxID,
+		ProjectID: input.ProjectID, TenantRef: tunnel.TenantRef, SubjectRef: tunnel.SubjectRef,
+		SandboxID:         input.Session.SandboxID,
 		ProfileRevisionID: tunnel.ProfileRevisionID, AssignmentID: tunnel.AssignmentID,
 		InstanceID: tunnel.InstanceID, RunnerID: tunnel.RunnerID,
 		Generation: input.Session.Generation, FencingToken: bytes.Clone(tunnel.FencingToken),
@@ -122,7 +133,7 @@ func (relay *PostgresFrameRelay) AdmitPortSession(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.data_plane_sessions (
-			id,project_id,sandbox_id,profile_revision_id,assignment_id,instance_id,
+			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,assignment_id,instance_id,
 			runner_id,generation,fencing_token,service_account_id,request_id,lease_id,kind,operation,
 			stream_id,state,priority,idempotency_key,request_hash,deadline_at,
 			maximum_response_bytes,maximum_request_bytes,stream_window_bytes,response_credit_bytes,
@@ -134,11 +145,12 @@ func (relay *PostgresFrameRelay) AdmitPortSession(
 			stdout_bytes,stderr_bytes,content_bytes,metadata_json,request_json,
 			created_at,updated_at,completed_at,retain_until
 		) VALUES (
-			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'port',$13,$14,'pending',0,$15,$16,$17,
-			$18,$18,$19,0,0,false,false,0,'',NULL,NULL,NULL,$20,0,1,'','',0,0,'',0,0,'',false,'',
-			$21,$21,$21,'{}',$22,$23,$23,NULL,$24
+			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'port',$14,$15,'pending',0,$16,$17,$18,
+			$19,$19,$20,0,0,false,false,0,'',NULL,NULL,NULL,$21,0,1,'','',0,0,'',0,0,'',false,'',
+			$22,$22,$22,'{}',$23,$24,$24,NULL,$25
 		)`,
-		session.ID, session.ProjectID, session.SandboxID, session.ProfileRevisionID,
+		session.ID, session.TenantRef, session.SubjectRef,
+		session.SandboxID, session.ProfileRevisionID,
 		session.AssignmentID, session.InstanceID, session.RunnerID, session.Generation,
 		session.FencingToken, input.ServiceAccountID, input.RequestID, input.LeaseID,
 		session.Operation, session.StreamID, input.IdempotencyKey, input.RequestHash,
@@ -159,12 +171,13 @@ func (relay *PostgresFrameRelay) AdmitPortSession(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.port_sessions (
-			id,project_id,sandbox_id,profile_revision_id,data_plane_session_id,
+			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,data_plane_session_id,
 			service_account_id,lease_id,generation,name,guest_port,protocol,stream_window_bytes,
 			client_credit_bytes,client_bytes,runner_bytes,state,idempotency_key,request_hash,
 			expires_at,created_at,updated_at,connected_at,closed_at
-		) VALUES ($1,$2,$3,$4,$1,$5,$6,$7,$8,$9,$10,$11,0,0,0,'open',$12,$13,$14,$15,$15,NULL,NULL)`,
-		input.Session.ID, input.ProjectID, input.Session.SandboxID, tunnel.ProfileRevisionID,
+		) VALUES ($1,$2,$3,$4,$5,$1,$6,$7,$8,$9,$10,$11,$12,0,0,0,'open',$13,$14,$15,$16,$16,NULL,NULL)`,
+		input.Session.ID, tunnel.TenantRef, tunnel.SubjectRef,
+		input.Session.SandboxID, tunnel.ProfileRevisionID,
 		input.ServiceAccountID, input.LeaseID, input.Session.Generation, input.Session.Name,
 		policy.Port, policy.Protocol, tunnel.StreamWindowBytes, input.IdempotencyKey,
 		input.RequestHash, input.Session.ExpiresAt.UTC(), input.Now.UTC(),
@@ -179,14 +192,16 @@ func (relay *PostgresFrameRelay) AdmitPortSession(
 
 func (relay *PostgresFrameRelay) GetPortSession(
 	ctx context.Context,
-	projectID string,
+	tenantRef string,
+	subjectRef string,
 	sandboxID string,
 	sessionID string,
 	now time.Time,
 ) (contracts.PortSession, error) {
 	tunnel, err := scanPortTunnel(relay.pool.QueryRow(ctx, portTunnelSelect+`
-		WHERE port.project_id=$1 AND port.sandbox_id=$2 AND port.id=$3`,
-		projectID, sandboxID, sessionID,
+		WHERE port.tenant_ref=$1 AND port.subject_ref=$2
+		  AND port.sandbox_id=$3 AND port.id=$4`,
+		tenantRef, subjectRef, sandboxID, sessionID,
 	))
 	if err != nil {
 		return contracts.PortSession{}, err
@@ -207,7 +222,8 @@ func (relay *PostgresFrameRelay) GetPortSession(
 
 func (relay *PostgresFrameRelay) ConsumePortSession(
 	ctx context.Context,
-	projectID string,
+	tenantRef string,
+	subjectRef string,
 	sessionID string,
 	now time.Time,
 ) (PortTunnel, error) {
@@ -216,7 +232,7 @@ func (relay *PostgresFrameRelay) ConsumePortSession(
 		return PortTunnel{}, fmt.Errorf("SecondBox Port tunnel consume transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	tunnel, err := lockPortTunnel(ctx, tx, projectID, "", sessionID)
+	tunnel, err := lockPortTunnel(ctx, tx, tenantRef, subjectRef, "", sessionID)
 	if err != nil {
 		return PortTunnel{}, err
 	}
@@ -241,11 +257,11 @@ func (relay *PostgresFrameRelay) ConsumePortSession(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.activity_sessions (
-			id,project_id,sandbox_id,generation,kind,state,lease_id,last_activity_at,
+			id,tenant_ref,subject_ref,sandbox_id,generation,kind,state,lease_id,last_activity_at,
 			created_at,updated_at,closed_at
-		) VALUES ($1,$2,$3,$4,'port','active',$5,$6,$6,$6,NULL)`,
-		tunnel.Session.ID, tunnel.ProjectID, tunnel.Session.SandboxID,
-		tunnel.Session.Generation, tunnel.LeaseID, now.UTC(),
+		) VALUES ($1,$2,$3,$4,$5,'port','active',$6,$7,$7,$7,NULL)`,
+		tunnel.Session.ID, tunnel.TenantRef, tunnel.SubjectRef,
+		tunnel.Session.SandboxID, tunnel.Session.Generation, tunnel.LeaseID, now.UTC(),
 	); err != nil {
 		return PortTunnel{}, fmt.Errorf("SecondBox Port activity insert: %w", err)
 	}
@@ -264,7 +280,14 @@ func (relay *PostgresFrameRelay) ClosePortSession(
 	ctx context.Context,
 	input PortTunnelClose,
 ) (contracts.PortSession, error) {
-	if input.ProjectID == "" || input.SandboxID == "" || input.SessionID == "" || input.Reason == "" {
+	if input.TenantRef == "" {
+		input.TenantRef = input.ProjectID
+	}
+	if input.SubjectRef == "" {
+		input.SubjectRef = input.ServiceAccountID
+	}
+	if input.TenantRef == "" || input.SubjectRef == "" ||
+		input.SandboxID == "" || input.SessionID == "" || input.Reason == "" {
 		return contracts.PortSession{}, errors.New("SecondBox PortSession close authority is incomplete")
 	}
 	tx, err := relay.pool.Begin(ctx)
@@ -273,15 +296,17 @@ func (relay *PostgresFrameRelay) ClosePortSession(
 	}
 	defer tx.Rollback(ctx)
 	if input.IdempotencyKey != "" {
-		lockKey := input.ProjectID + "\x1fport-session-close\x1f" + input.SessionID + "\x1f" + input.IdempotencyKey
+		lockKey := input.TenantRef + "\x1f" + input.SubjectRef +
+			"\x1fport-session-close\x1f" + input.SessionID + "\x1f" + input.IdempotencyKey
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey); err != nil {
 			return contracts.PortSession{}, fmt.Errorf("SecondBox PortSession close lock: %w", err)
 		}
 		var priorHash string
 		err := tx.QueryRow(ctx, `
 			SELECT request_hash FROM secondbox.idempotency_records
-			WHERE project_id=$1 AND operation='port_session.close' AND target_id=$2 AND idempotency_key=$3`,
-			input.ProjectID, input.SessionID, input.IdempotencyKey,
+			WHERE tenant_ref=$1 AND subject_ref=$2
+			  AND operation='port_session.close' AND target_id=$3 AND idempotency_key=$4`,
+			input.TenantRef, input.SubjectRef, input.SessionID, input.IdempotencyKey,
 		).Scan(&priorHash)
 		if err == nil && priorHash != input.RequestHash {
 			return contracts.PortSession{}, ports.ErrIdempotencyConflict
@@ -291,7 +316,7 @@ func (relay *PostgresFrameRelay) ClosePortSession(
 		}
 	}
 	tunnel, err := lockPortTunnel(
-		ctx, tx, input.ProjectID, input.SandboxID, input.SessionID,
+		ctx, tx, input.TenantRef, input.SubjectRef, input.SandboxID, input.SessionID,
 	)
 	if err != nil {
 		return contracts.PortSession{}, err
@@ -328,11 +353,12 @@ func (relay *PostgresFrameRelay) ClosePortSession(
 	if input.IdempotencyKey != "" {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO secondbox.idempotency_records (
-				project_id,operation,target_id,idempotency_key,request_hash,response_resource_id,
+				tenant_ref,subject_ref,operation,target_id,idempotency_key,request_hash,response_resource_id,
 				created_at,expires_at
-			) VALUES ($1,'port_session.close',$2,$3,$4,$2,$5,$6)
-			ON CONFLICT (project_id,operation,target_id,idempotency_key) DO NOTHING`,
-			input.ProjectID, input.SessionID, input.IdempotencyKey, input.RequestHash,
+			) VALUES ($1,$2,'port_session.close',$3,$4,$5,$3,$6,$7)
+			ON CONFLICT (tenant_ref,subject_ref,operation,target_id,idempotency_key) DO NOTHING`,
+			input.TenantRef, input.SubjectRef,
+			input.SessionID, input.IdempotencyKey, input.RequestHash,
 			input.Now.UTC(), input.Now.UTC().Add(24*time.Hour),
 		); err != nil {
 			return contracts.PortSession{}, fmt.Errorf("SecondBox PortSession close idempotency insert: %w", err)
@@ -346,7 +372,8 @@ func (relay *PostgresFrameRelay) ClosePortSession(
 
 func (relay *PostgresFrameRelay) QueuePortClientBytes(
 	ctx context.Context,
-	projectID string,
+	tenantRef string,
+	subjectRef string,
 	sessionID string,
 	data []byte,
 	now time.Time,
@@ -359,7 +386,7 @@ func (relay *PostgresFrameRelay) QueuePortClientBytes(
 		return fmt.Errorf("SecondBox Port client-byte transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	tunnel, err := lockPortTunnel(ctx, tx, projectID, "", sessionID)
+	tunnel, err := lockPortTunnel(ctx, tx, tenantRef, subjectRef, "", sessionID)
 	if err != nil {
 		return err
 	}
@@ -415,7 +442,8 @@ func (relay *PostgresFrameRelay) QueuePortClientBytes(
 
 func (relay *PostgresFrameRelay) NextPortTunnelEvent(
 	ctx context.Context,
-	projectID string,
+	tenantRef string,
+	subjectRef string,
 	sessionID string,
 	afterSequence int64,
 	now time.Time,
@@ -424,7 +452,8 @@ func (relay *PostgresFrameRelay) NextPortTunnelEvent(
 		return PortTunnelEvent{}, false, errors.New("SecondBox Port event sequence is invalid")
 	}
 	tunnel, err := scanPortTunnel(relay.pool.QueryRow(ctx, portTunnelSelect+`
-		WHERE port.project_id=$1 AND port.id=$2`, projectID, sessionID,
+		WHERE port.tenant_ref=$1 AND port.subject_ref=$2 AND port.id=$3`,
+		tenantRef, subjectRef, sessionID,
 	))
 	if err != nil {
 		return PortTunnelEvent{}, false, err
@@ -484,7 +513,7 @@ func (relay *PostgresFrameRelay) NextPortTunnelEvent(
 			return event, true, nil
 		}
 		if err := relay.AcknowledgePortTunnelEvent(
-			ctx, projectID, sessionID, sequence, now.UTC(),
+			ctx, tenantRef, subjectRef, sessionID, sequence, now.UTC(),
 		); err != nil {
 			return PortTunnelEvent{}, false, err
 		}
@@ -494,7 +523,8 @@ func (relay *PostgresFrameRelay) NextPortTunnelEvent(
 
 func (relay *PostgresFrameRelay) AcknowledgePortTunnelEvent(
 	ctx context.Context,
-	projectID string,
+	tenantRef string,
+	subjectRef string,
 	sessionID string,
 	sequence int64,
 	now time.Time,
@@ -504,7 +534,7 @@ func (relay *PostgresFrameRelay) AcknowledgePortTunnelEvent(
 		return fmt.Errorf("SecondBox Port event acknowledgement transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	tunnel, err := lockPortTunnel(ctx, tx, projectID, "", sessionID)
+	tunnel, err := lockPortTunnel(ctx, tx, tenantRef, subjectRef, "", sessionID)
 	if err != nil {
 		return err
 	}
@@ -550,7 +580,8 @@ func lockPortAdmissionAuthority(
 	var sandboxState, assignmentState string
 	var specJSON []byte
 	err := tx.QueryRow(ctx, `
-		SELECT sandbox.profile_revision_id,sandbox.generation,sandbox.state,
+		SELECT sandbox.tenant_ref,sandbox.subject_ref,
+		       sandbox.profile_revision_id,sandbox.generation,sandbox.state,
 		       assignment.id,assignment.instance_id,assignment.runner_id,
 		       assignment.fencing_token,assignment.state,revision.spec_json
 		FROM secondbox.sandboxes AS sandbox
@@ -559,10 +590,11 @@ func lockPortAdmissionAuthority(
 		  AND assignment.sandbox_id=sandbox.id
 		  AND assignment.generation=sandbox.generation
 		JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
-		WHERE sandbox.project_id=$1 AND sandbox.id=$2
+		WHERE sandbox.tenant_ref=$1 AND sandbox.subject_ref=$2 AND sandbox.id=$3
 		FOR UPDATE OF sandbox,assignment`,
-		input.ProjectID, input.Session.SandboxID,
+		input.TenantRef, input.SubjectRef, input.Session.SandboxID,
 	).Scan(
+		&tunnel.TenantRef, &tunnel.SubjectRef,
 		&tunnel.ProfileRevisionID, &tunnel.Session.Generation, &sandboxState,
 		&tunnel.AssignmentID, &tunnel.InstanceID, &tunnel.RunnerID,
 		&tunnel.FencingToken, &assignmentState, &specJSON,
@@ -583,16 +615,16 @@ func lockPortAdmissionAuthority(
 	var leaseAccount, leaseState string
 	var leaseExpiry time.Time
 	if err := tx.QueryRow(ctx, `
-		SELECT generation,service_account_id,state,expires_at FROM secondbox.leases
-		WHERE project_id=$1 AND sandbox_id=$2 AND id=$3 FOR UPDATE`,
-		input.ProjectID, input.Session.SandboxID, input.LeaseID,
+		SELECT generation,subject_ref,state,expires_at FROM secondbox.leases
+		WHERE tenant_ref=$1 AND subject_ref=$2 AND sandbox_id=$3 AND id=$4 FOR UPDATE`,
+		input.TenantRef, input.SubjectRef, input.Session.SandboxID, input.LeaseID,
 	).Scan(&leaseGeneration, &leaseAccount, &leaseState, &leaseExpiry); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return PortTunnel{}, contracts.ProfileRevisionSpec{}, contracts.PortPolicy{}, ports.ErrLeaseNotFound
 		}
 		return PortTunnel{}, contracts.ProfileRevisionSpec{}, contracts.PortPolicy{}, fmt.Errorf("SecondBox Port Lease lookup: %w", err)
 	}
-	if leaseGeneration != input.Session.Generation || leaseAccount != input.ServiceAccountID ||
+	if leaseGeneration != input.Session.Generation || leaseAccount != input.SubjectRef ||
 		leaseState != contracts.LeaseStateActive || !input.Now.Before(leaseExpiry) ||
 		input.Session.ExpiresAt.After(leaseExpiry) {
 		return PortTunnel{}, contracts.ProfileRevisionSpec{}, contracts.PortPolicy{}, ports.ErrLeaseInactive
@@ -613,39 +645,30 @@ func enforcePortSessionCapacity(
 	ctx context.Context,
 	tx pgx.Tx,
 	input PortSessionAdmission,
-	profileRevisionID string,
+	_ string,
 	policy contracts.PortPolicy,
 ) error {
-	var projectMaximum, profileMaximum int64
+	var subjectMaximum int64
 	if err := tx.QueryRow(ctx, `
-		SELECT max_port_sessions FROM secondbox.project_quotas WHERE project_id=$1`,
-		input.ProjectID,
-	).Scan(&projectMaximum); err != nil {
-		return fmt.Errorf("SecondBox Project PortSession quota lookup: %w", err)
+		SELECT max_port_sessions FROM secondbox.subject_quotas
+		WHERE tenant_ref=$1 AND subject_ref=$2 FOR UPDATE`,
+		input.TenantRef, input.SubjectRef,
+	).Scan(&subjectMaximum); err != nil {
+		return fmt.Errorf("SecondBox subject PortSession quota lookup: %w", err)
 	}
-	if err := tx.QueryRow(ctx, `
-		SELECT quota.max_port_sessions
-		FROM secondbox.profile_quotas AS quota
-		JOIN secondbox.profile_revisions AS revision ON revision.profile_name=quota.profile_name
-		WHERE revision.id=$1`,
-		profileRevisionID,
-	).Scan(&profileMaximum); err != nil {
-		return fmt.Errorf("SecondBox Profile PortSession quota lookup: %w", err)
-	}
-	var projectActive, profileActive, namedActive int64
+	var subjectActive, namedActive int64
 	if err := tx.QueryRow(ctx, `
 		SELECT
-		  count(*) FILTER (WHERE project_id=$1),
-		  count(*) FILTER (WHERE profile_revision_id=$2),
+		  count(*) FILTER (WHERE tenant_ref=$1 AND subject_ref=$2),
 		  count(*) FILTER (WHERE sandbox_id=$3 AND name=$4)
 		FROM secondbox.port_sessions
 		WHERE state IN ('open','closing') AND expires_at>$5`,
-		input.ProjectID, profileRevisionID, input.Session.SandboxID, input.Session.Name, input.Now.UTC(),
-	).Scan(&projectActive, &profileActive, &namedActive); err != nil {
+		input.TenantRef, input.SubjectRef,
+		input.Session.SandboxID, input.Session.Name, input.Now.UTC(),
+	).Scan(&subjectActive, &namedActive); err != nil {
 		return fmt.Errorf("SecondBox PortSession usage lookup: %w", err)
 	}
-	if projectActive >= projectMaximum || profileActive >= profileMaximum ||
-		namedActive >= policy.MaximumSessions {
+	if subjectActive >= subjectMaximum || namedActive >= policy.MaximumSessions {
 		return ports.ErrQuotaExceeded
 	}
 	return nil
@@ -659,22 +682,21 @@ func validateLivePortAuthority(ctx context.Context, tx pgx.Tx, tunnel PortTunnel
 	var activeRunner bool
 	err := tx.QueryRow(ctx, `
 		SELECT sandbox.generation,sandbox.state,assignment.state,assignment.fencing_token,
-		       lease.generation,lease.state,lease.service_account_id,lease.expires_at,
+		       lease.generation,lease.state,lease.subject_ref,lease.expires_at,
 		       EXISTS (
 		         SELECT 1
 		         FROM secondbox.runner_connections AS connection
-		         JOIN secondbox.runner_credentials AS credential
-		           ON credential.serial_number=connection.credential_serial
 		         WHERE connection.runner_id=assignment.runner_id
 		           AND connection.state='active'
-		           AND credential.state IN ('active','retiring')
 		       )
 		FROM secondbox.sandboxes AS sandbox
 		JOIN secondbox.assignments AS assignment ON assignment.id=$3
 		JOIN secondbox.leases AS lease
-		  ON lease.project_id=$1 AND lease.sandbox_id=sandbox.id AND lease.id=$4
-		WHERE sandbox.project_id=$1 AND sandbox.id=$2`,
-		tunnel.ProjectID, tunnel.Session.SandboxID, tunnel.AssignmentID, tunnel.LeaseID,
+		  ON lease.tenant_ref=$1 AND lease.subject_ref=$2
+		  AND lease.sandbox_id=sandbox.id AND lease.id=$5
+		WHERE sandbox.tenant_ref=$1 AND sandbox.subject_ref=$2 AND sandbox.id=$4`,
+		tunnel.TenantRef, tunnel.SubjectRef, tunnel.AssignmentID,
+		tunnel.Session.SandboxID, tunnel.LeaseID,
 	).Scan(
 		&sandboxGeneration, &sandboxState, &assignmentState, &fence,
 		&leaseGeneration, &leaseState, &leaseAccount, &leaseExpiry, &activeRunner,
@@ -682,7 +704,7 @@ func validateLivePortAuthority(ctx context.Context, tx pgx.Tx, tunnel PortTunnel
 	if err != nil || sandboxGeneration != tunnel.Session.Generation ||
 		leaseGeneration != tunnel.Session.Generation || sandboxState != contracts.SandboxStateReady ||
 		assignmentState != "ready" || !bytes.Equal(fence, tunnel.FencingToken) ||
-		leaseState != contracts.LeaseStateActive || leaseAccount != tunnel.ServiceAccountID ||
+		leaseState != contracts.LeaseStateActive || leaseAccount != tunnel.SubjectRef ||
 		!now.Before(leaseExpiry) || !now.Before(tunnel.Session.ExpiresAt) || !activeRunner {
 		return ports.ErrLeaseInactive
 	}
@@ -695,11 +717,8 @@ func (relay *PostgresFrameRelay) ensurePortRunnerConnected(ctx context.Context, 
 		SELECT EXISTS (
 		  SELECT 1
 		  FROM secondbox.runner_connections AS connection
-		  JOIN secondbox.runner_credentials AS credential
-		    ON credential.serial_number=connection.credential_serial
 		  WHERE connection.runner_id=$1
 		    AND connection.state='active'
-		    AND credential.state IN ('active','retiring')
 		)`, runnerID,
 	).Scan(&active); err != nil {
 		return fmt.Errorf("SecondBox Port runner connection lookup: %w", err)
@@ -726,7 +745,7 @@ func (relay *PostgresFrameRelay) terminatePortSession(
 	}
 	defer tx.Rollback(ctx)
 	tunnel, err := lockPortTunnel(
-		ctx, tx, expected.ProjectID, "", expected.Session.ID,
+		ctx, tx, expected.TenantRef, expected.SubjectRef, "", expected.Session.ID,
 	)
 	if err != nil {
 		return err
@@ -845,18 +864,21 @@ func portRelayMessage(
 const portTunnelSelect = `
 	SELECT
 	  port.id,port.sandbox_id,port.generation,port.name,port.protocol,port.state,
-	  port.created_at,port.expires_at,port.project_id,port.service_account_id,port.lease_id,
+	  port.created_at,port.expires_at,port.service_account_id,port.lease_id,
 	  port.profile_revision_id,session.assignment_id,session.instance_id,session.runner_id,
 	  session.request_id,
-	  session.stream_id,session.fencing_token,port.guest_port,port.stream_window_bytes
+	  session.stream_id,session.fencing_token,port.guest_port,port.stream_window_bytes,
+	  sandbox.tenant_ref,sandbox.subject_ref
 	FROM secondbox.port_sessions AS port
-	JOIN secondbox.data_plane_sessions AS session ON session.id=port.data_plane_session_id`
+	JOIN secondbox.data_plane_sessions AS session ON session.id=port.data_plane_session_id
+	JOIN secondbox.sandboxes AS sandbox ON sandbox.id=port.sandbox_id`
 
 // lockPortTunnel follows the inbound relay's session-then-port lock order.
 func lockPortTunnel(
 	ctx context.Context,
 	tx pgx.Tx,
-	projectID string,
+	tenantRef string,
+	subjectRef string,
 	sandboxID string,
 	sessionID string,
 ) (PortTunnel, error) {
@@ -865,9 +887,10 @@ func lockPortTunnel(
 		SELECT session.id
 		FROM secondbox.data_plane_sessions AS session
 		JOIN secondbox.port_sessions AS port ON port.data_plane_session_id=session.id
-		WHERE port.project_id=$1 AND ($2='' OR port.sandbox_id=$2) AND port.id=$3
+		WHERE port.tenant_ref=$1 AND port.subject_ref=$2
+		  AND ($3='' OR port.sandbox_id=$3) AND port.id=$4
 		FOR UPDATE OF session`,
-		projectID, sandboxID, sessionID,
+		tenantRef, subjectRef, sandboxID, sessionID,
 	).Scan(&lockedSessionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PortTunnel{}, ports.ErrPortSessionNotFound
@@ -876,9 +899,10 @@ func lockPortTunnel(
 		return PortTunnel{}, fmt.Errorf("SecondBox PortSession data-plane lock: %w", err)
 	}
 	return scanPortTunnel(tx.QueryRow(ctx, portTunnelSelect+`
-		WHERE port.project_id=$1 AND ($2='' OR port.sandbox_id=$2) AND port.id=$3
+		WHERE port.tenant_ref=$1 AND port.subject_ref=$2
+		  AND ($3='' OR port.sandbox_id=$3) AND port.id=$4
 		FOR UPDATE OF port`,
-		projectID, sandboxID, lockedSessionID,
+		tenantRef, subjectRef, sandboxID, lockedSessionID,
 	))
 }
 
@@ -887,10 +911,11 @@ func scanPortTunnel(row relayRow) (PortTunnel, error) {
 	err := row.Scan(
 		&tunnel.Session.ID, &tunnel.Session.SandboxID, &tunnel.Session.Generation,
 		&tunnel.Session.Name, &tunnel.Session.Protocol, &tunnel.Session.State,
-		&tunnel.Session.CreatedAt, &tunnel.Session.ExpiresAt, &tunnel.ProjectID,
+		&tunnel.Session.CreatedAt, &tunnel.Session.ExpiresAt,
 		&tunnel.ServiceAccountID, &tunnel.LeaseID, &tunnel.ProfileRevisionID,
 		&tunnel.AssignmentID, &tunnel.InstanceID, &tunnel.RunnerID, &tunnel.RequestID, &tunnel.StreamID,
 		&tunnel.FencingToken, &tunnel.GuestPort, &tunnel.StreamWindowBytes,
+		&tunnel.TenantRef, &tunnel.SubjectRef,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PortTunnel{}, ports.ErrPortSessionNotFound
@@ -898,6 +923,7 @@ func scanPortTunnel(row relayRow) (PortTunnel, error) {
 	if err != nil {
 		return PortTunnel{}, fmt.Errorf("SecondBox PortSession lookup: %w", err)
 	}
+	tunnel.ProjectID = tunnel.TenantRef
 	return tunnel, nil
 }
 

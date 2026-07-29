@@ -3,6 +3,7 @@ package integration_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,19 +25,19 @@ import (
 
 func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	project, account, _ := createProjectAccountAndCredential(t, controlPlane, admin, "port-tunnel-http")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-port-tunnel-http")
 	scopes := []string{
-		contracts.ScopeSandboxRead, contracts.ScopeSandboxLifecycle, contracts.ScopeSandboxPorts,
+		"sandbox:read", "sandbox:lifecycle", "sandbox:ports",
 	}
-	if _, err := controlPlane.UpdateServiceAccount(
+	if _, err := updateFixtureServiceAccount(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
 		contracts.UpdateServiceAccountRequest{Scopes: &scopes},
 	); err != nil {
 		t.Fatal(err)
 	}
-	key, err := controlPlane.CreateAPIKey(
+	key, err := createFixtureAPIKey(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
 		contracts.CreateAPIKeyRequest{Name: "port-tunnel-http", Scopes: scopes},
 	)
@@ -80,10 +81,9 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 	t.Cleanup(relay.Close)
 	server := httptest.NewUnstartedServer(nil)
 	portService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		Store: databaseStore, BootstrapAdminToken: "bootstrap-administrator-secret",
-		APIKeyHashSecret:    []byte("test-keyed-api-hash-secret-at-least-32-bytes"),
-		DefaultProjectQuota: generousQuota(), DefaultProfileQuota: generousQuota(),
-		Now: func() time.Time { return now }, NewID: service.NewOpaqueID,
+		Store: databaseStore, PlatformToken: testPlatformToken,
+		DefaultSubjectQuota: generousQuota(),
+		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		DataPlaneRelay:        relay, DataPlanePollInterval: time.Millisecond,
 		PortSessionRelay: relay, PublicBaseURL: "http://" + server.Listener.Addr().String(),
@@ -92,7 +92,7 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 		t.Fatal(err)
 	}
 	handler, err := api.NewHandler(api.HandlerConfig{
-		Service: portService, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Service: portService, PlatformToken: testPlatformToken, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		MaximumDataPlaneBodyBytes: 64 << 20,
 	})
 	if err != nil {
@@ -103,7 +103,31 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 	t.Cleanup(server.Close)
 
 	session := createPortSessionHTTP(t, server.URL, key.Credential, sandbox, lease.ID)
-	open := claimPortFrame(t, relay, seed, now)
+	firstOpen, found, err := relay.ClaimOutboundFrame(
+		t.Context(), seed.RunnerID, seed.ConnectionOne, now,
+	)
+	if err != nil || !found || firstOpen.Message.GetPort() == nil {
+		t.Fatalf("first Port Open claim = %#v found=%t error=%v", firstOpen, found, err)
+	}
+	reclaimedOpen, found, err := relay.ClaimOutboundFrame(
+		t.Context(), seed.RunnerID, seed.ConnectionOne, now.Add(51*time.Millisecond),
+	)
+	if err != nil || !found || reclaimedOpen.ID != firstOpen.ID {
+		t.Fatalf("reclaimed Port Open = %#v found=%t error=%v", reclaimedOpen, found, err)
+	}
+	if err := relay.MarkOutboundFrameDelivered(
+		t.Context(), firstOpen.ID, seed.ConnectionOne, firstOpen.ClaimAttempt,
+		now.Add(51*time.Millisecond),
+	); !errors.Is(err, runnercontrol.ErrRelayDeliveryClaim) {
+		t.Fatalf("expired Port Open claim delivery error = %v, want ErrRelayDeliveryClaim", err)
+	}
+	if err := relay.MarkOutboundFrameDelivered(
+		t.Context(), reclaimedOpen.ID, seed.ConnectionOne, reclaimedOpen.ClaimAttempt,
+		now.Add(51*time.Millisecond),
+	); err != nil {
+		t.Fatal(err)
+	}
+	open := reclaimedOpen.Message.GetPort()
 	if open.GetOpen() == nil || open.GetOpen().GuestPort != 8080 || open.GetOpen().Protocol != "tcp" {
 		t.Fatalf("Port Open = %#v", open.GetOpen())
 	}
@@ -199,7 +223,7 @@ func createPortSessionHTTP(
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Header.Set("Authorization", "Bearer "+credential)
+	setPlatformAuthorization(t, request, credential)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("SecondBox-Generation", fmt.Sprintf("%d", sandbox.Generation))
 	request.Header.Set("SecondBox-Lease-ID", leaseID)
@@ -253,7 +277,7 @@ func claimPortFrame(
 		t.Fatalf("claim Port frame = %#v found=%t error=%v", delivery, found, err)
 	}
 	if err := relay.MarkOutboundFrameDelivered(
-		t.Context(), delivery.ID, seed.ConnectionOne, now,
+		t.Context(), delivery.ID, seed.ConnectionOne, delivery.ClaimAttempt, now,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +304,7 @@ func claimPortFrameEventually(
 				t.Fatalf("claimed non-Port frame = %#v", delivery.Message)
 			}
 			if err := relay.MarkOutboundFrameDelivered(
-				t.Context(), delivery.ID, seed.ConnectionOne, now,
+				t.Context(), delivery.ID, seed.ConnectionOne, delivery.ClaimAttempt, now,
 			); err != nil {
 				t.Fatal(err)
 			}

@@ -23,7 +23,7 @@ const (
 
 	// initialV1CatalogSHA256 freezes all SecondBox tables, columns, indexes,
 	// constraints, triggers, sequences, and functions created by migration 0001.
-	initialV1CatalogSHA256 = "d0bebde73afb726cc9003722f25ef3ad525338d5523fdf0fffa7cb047fe6a9ba"
+	initialV1CatalogSHA256 = "9b52a68fcbea07699bdfc2712d54484aeafe380bb3040744cdd7be32bcd8767a"
 )
 
 //go:embed *.sql

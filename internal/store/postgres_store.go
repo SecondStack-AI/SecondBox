@@ -3,11 +3,11 @@ package store
 
 import (
 	"context"
-	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"time"
 
@@ -50,783 +50,10 @@ func (store *PostgresControlPlaneStore) Ping(ctx context.Context) error {
 	return nil
 }
 
-// InitializeBootstrapAdmin creates the first operator authority exactly once.
-func (store *PostgresControlPlaneStore) InitializeBootstrapAdmin(
-	ctx context.Context,
-	credentialHash []byte,
-	now time.Time,
-	audit contracts.AuditEvent,
-) error {
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("SecondBox bootstrap transaction failed: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('secondbox-bootstrap-admin',0))`); err != nil {
-		return fmt.Errorf("SecondBox bootstrap lock failed: %w", err)
-	}
-	var storedHash []byte
-	err = tx.QueryRow(ctx, `
-		SELECT credential_hash FROM secondbox.operator_credentials
-		WHERE id='bootstrap_operator_credential' FOR UPDATE`).Scan(&storedHash)
-	if err == nil {
-		if subtle.ConstantTimeCompare(storedHash, credentialHash) != 1 {
-			return errors.New("SecondBox configured bootstrap credential does not match durable operator authority")
-		}
-		return tx.Commit(ctx)
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("SecondBox bootstrap authority lookup failed: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO secondbox.operators (id,name,state,revision,created_at,updated_at)
-		VALUES ('bootstrap_operator','Bootstrap operator','active',1,$1,$1)`, now.UTC()); err != nil {
-		return fmt.Errorf("SecondBox bootstrap operator insert failed: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO secondbox.operator_credentials (
-			id,operator_id,credential_hash,state,last_used_at,revision,created_at,updated_at
-		) VALUES ('bootstrap_operator_credential','bootstrap_operator',$1,'active',NULL,1,$2,$2)`,
-		credentialHash, now.UTC(),
-	); err != nil {
-		return fmt.Errorf("SecondBox bootstrap credential insert failed: %w", err)
-	}
-	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("SecondBox bootstrap commit failed: %w", err)
-	}
-	return nil
-}
-
-// AuthenticateBootstrapAdmin validates the durable operator credential hash.
-func (store *PostgresControlPlaneStore) AuthenticateBootstrapAdmin(
-	ctx context.Context,
-	presentedHash []byte,
-	now time.Time,
-	audit contracts.AuditEvent,
-) (contracts.Principal, error) {
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return contracts.Principal{}, fmt.Errorf("SecondBox operator authentication transaction failed: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	var operatorID, operatorState, credentialState string
-	var storedHash []byte
-	if err := tx.QueryRow(ctx, `
-		SELECT operator.id,operator.state,credential.credential_hash,credential.state
-		FROM secondbox.operator_credentials AS credential
-		JOIN secondbox.operators AS operator ON operator.id=credential.operator_id
-		WHERE credential.id='bootstrap_operator_credential'
-		FOR UPDATE OF credential`).Scan(
-		&operatorID, &operatorState, &storedHash, &credentialState,
-	); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return contracts.Principal{}, ports.ErrAuthenticationFailed
-		}
-		return contracts.Principal{}, fmt.Errorf("SecondBox operator authentication lookup failed: %w", err)
-	}
-	if operatorState != "active" || credentialState != "active" ||
-		subtle.ConstantTimeCompare(storedHash, presentedHash) != 1 {
-		return contracts.Principal{}, ports.ErrAuthenticationFailed
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.operator_credentials
-		SET last_used_at=$1,updated_at=$1 WHERE id='bootstrap_operator_credential'`, now.UTC()); err != nil {
-		return contracts.Principal{}, fmt.Errorf("SecondBox operator last-use update failed: %w", err)
-	}
-	audit.ActorID = operatorID
-	audit.ResourceID = operatorID
-	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.Principal{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return contracts.Principal{}, fmt.Errorf("SecondBox operator authentication commit failed: %w", err)
-	}
-	return contracts.Principal{
-		Kind: "operator", ID: operatorID, BootstrapAdmin: true,
-		Scopes: []string{
-			contracts.ScopeAdminProjects, contracts.ScopeAdminKeys, contracts.ScopeAdminProfiles,
-			contracts.ScopeAdminAudit, contracts.ScopeDiagnostics,
-		},
-	}, nil
-}
-
-func (store *PostgresControlPlaneStore) CreateProject(
-	ctx context.Context,
-	project contracts.Project,
-	quota contracts.QuotaLimits,
-	idempotency ports.AdminIdempotencyInput,
-	audit contracts.AuditEvent,
-) (contracts.Project, ports.AdminIdempotencyResult, error) {
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return contracts.Project{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Project create transaction failed: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	var replayed contracts.Project
-	idempotencyResult, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
-	if err != nil {
-		return contracts.Project{}, ports.AdminIdempotencyResult{}, err
-	}
-	if found {
-		if err := tx.Commit(ctx); err != nil {
-			return contracts.Project{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Project idempotency replay commit failed: %w", err)
-		}
-		return replayed, idempotencyResult, nil
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO secondbox.projects (id,name,state,revision,created_at,updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6)`,
-		project.ID, project.Name, project.State, project.Revision, project.CreatedAt, project.UpdatedAt,
-	); err != nil {
-		return contracts.Project{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Project insert failed: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO secondbox.project_quotas (
-			project_id,max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
-			max_retained_bytes,max_snapshots,max_artifacts,max_port_sessions,max_concurrent_operations,updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-		project.ID, quota.MaxSandboxes, quota.MaxActiveInstances, quota.MaxCPUMillis,
-		quota.MaxMemoryBytes, quota.MaxRetainedBytes, quota.MaxSnapshots, quota.MaxArtifacts,
-		quota.MaxPortSessions, quota.MaxConcurrentOperations, project.UpdatedAt,
-	); err != nil {
-		return contracts.Project{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Project quota insert failed: %w", err)
-	}
-	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.Project{}, ports.AdminIdempotencyResult{}, err
-	}
-	idempotencyResult, err = insertAdminIdempotency(ctx, tx, idempotency, project)
-	if err != nil {
-		return contracts.Project{}, ports.AdminIdempotencyResult{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return contracts.Project{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Project create commit failed: %w", err)
-	}
-	return project, idempotencyResult, nil
-}
-
-func (store *PostgresControlPlaneStore) UpdateProject(
-	ctx context.Context,
-	projectID string,
-	update contracts.UpdateProjectRequest,
-	expectedRevision int64,
-	now time.Time,
-	idempotency ports.AdminIdempotencyInput,
-	audit contracts.AuditEvent,
-) (contracts.Project, ports.AdminIdempotencyResult, error) {
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return contracts.Project{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Project update transaction failed: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	var replayed contracts.Project
-	idempotencyResult, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
-	if err != nil {
-		return contracts.Project{}, ports.AdminIdempotencyResult{}, err
-	}
-	if found {
-		if err := tx.Commit(ctx); err != nil {
-			return contracts.Project{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Project idempotency replay commit failed: %w", err)
-		}
-		return replayed, idempotencyResult, nil
-	}
-	project, err := scanProject(tx.QueryRow(ctx, `
-		SELECT id,name,state,revision,created_at,updated_at
-		FROM secondbox.projects WHERE id=$1 FOR UPDATE`, projectID))
-	if err != nil {
-		return contracts.Project{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrProjectNotFound)
-	}
-	if expectedRevision > 0 && expectedRevision != project.Revision {
-		return contracts.Project{}, ports.AdminIdempotencyResult{}, ports.ErrRevisionConflict
-	}
-	if update.Name != nil {
-		project.Name = *update.Name
-	}
-	if update.State != nil {
-		project.State = *update.State
-	}
-	project.Revision++
-	project.UpdatedAt = now.UTC()
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.projects SET name=$2,state=$3,revision=$4,updated_at=$5 WHERE id=$1`,
-		project.ID, project.Name, project.State, project.Revision, project.UpdatedAt,
-	); err != nil {
-		return contracts.Project{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Project update failed: %w", err)
-	}
-	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.Project{}, ports.AdminIdempotencyResult{}, err
-	}
-	idempotencyResult, err = insertAdminIdempotency(ctx, tx, idempotency, project)
-	if err != nil {
-		return contracts.Project{}, ports.AdminIdempotencyResult{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return contracts.Project{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Project update commit failed: %w", err)
-	}
-	return project, idempotencyResult, nil
-}
-
-func (store *PostgresControlPlaneStore) GetProject(ctx context.Context, projectID string) (contracts.Project, error) {
-	project, err := scanProject(store.pool.QueryRow(ctx, `
-		SELECT id,name,state,revision,created_at,updated_at FROM secondbox.projects WHERE id=$1`, projectID))
-	return project, mapNotFound(err, ports.ErrProjectNotFound)
-}
-
-func (store *PostgresControlPlaneStore) ListProjects(
-	ctx context.Context,
-	limit int,
-	cursor string,
-) (contracts.ProjectPage, error) {
-	boundary, err := store.resolvePostgresListCursor(
-		ctx,
-		projectListCursorResource,
-		"",
-		cursor,
-		`SELECT created_at FROM secondbox.projects WHERE id=$1`,
-	)
-	if err != nil {
-		return contracts.ProjectPage{}, err
-	}
-	rows, err := store.pool.Query(ctx, `
-		SELECT id,name,state,revision,created_at,updated_at
-		FROM secondbox.projects
-		WHERE NOT $1 OR (created_at,id) > ($2,$3)
-		ORDER BY created_at,id
-		LIMIT $4`,
-		boundary.Active, boundary.CreatedAt, boundary.ItemKey, limit+1)
-	if err != nil {
-		return contracts.ProjectPage{}, fmt.Errorf("SecondBox Project list failed: %w", err)
-	}
-	defer rows.Close()
-	page := contracts.ProjectPage{Items: make([]contracts.Project, 0)}
-	for rows.Next() {
-		project, scanErr := scanProject(rows)
-		if scanErr != nil {
-			return contracts.ProjectPage{}, fmt.Errorf("SecondBox Project list scan failed: %w", scanErr)
-		}
-		page.Items = append(page.Items, project)
-	}
-	if err := rows.Err(); err != nil {
-		return contracts.ProjectPage{}, fmt.Errorf("SecondBox Project list rows failed: %w", err)
-	}
-	if len(page.Items) > limit {
-		page.Items = page.Items[:limit]
-		page.NextCursor, err = encodePostgresListNextCursor(
-			projectListCursorResource, "", page.Items[limit-1].ID,
-		)
-		if err != nil {
-			return contracts.ProjectPage{}, err
-		}
-	}
-	return page, nil
-}
-
-func (store *PostgresControlPlaneStore) CreateServiceAccount(
-	ctx context.Context,
-	account contracts.ServiceAccount,
-	idempotency ports.AdminIdempotencyInput,
-	audit contracts.AuditEvent,
-) (contracts.ServiceAccount, ports.AdminIdempotencyResult, error) {
-	scopesJSON, grantsJSON, err := encodeAuthorityLists(account.Scopes, account.ProfileGrants)
-	if err != nil {
-		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, err
-	}
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ServiceAccount create transaction failed: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	var replayed contracts.ServiceAccount
-	idempotencyResult, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
-	if err != nil {
-		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, err
-	}
-	if found {
-		if err := tx.Commit(ctx); err != nil {
-			return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ServiceAccount idempotency replay commit failed: %w", err)
-		}
-		return replayed, idempotencyResult, nil
-	}
-	var projectState string
-	if err := tx.QueryRow(ctx, `SELECT state FROM secondbox.projects WHERE id=$1 FOR UPDATE`, account.ProjectID).Scan(&projectState); err != nil {
-		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrProjectNotFound)
-	}
-	if projectState != contracts.ProjectStateActive {
-		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, ports.ErrAuthorizationDenied
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO secondbox.service_accounts (
-			id,project_id,name,state,scopes_json,profile_grants_json,revision,created_at,updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		account.ID, account.ProjectID, account.Name, account.State, scopesJSON, grantsJSON,
-		account.Revision, account.CreatedAt, account.UpdatedAt,
-	); err != nil {
-		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ServiceAccount insert failed: %w", err)
-	}
-	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, err
-	}
-	idempotencyResult, err = insertAdminIdempotency(ctx, tx, idempotency, account)
-	if err != nil {
-		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ServiceAccount create commit failed: %w", err)
-	}
-	return account, idempotencyResult, nil
-}
-
-func (store *PostgresControlPlaneStore) UpdateServiceAccount(
-	ctx context.Context,
-	projectID string,
-	accountID string,
-	update contracts.UpdateServiceAccountRequest,
-	expectedRevision int64,
-	now time.Time,
-	idempotency ports.AdminIdempotencyInput,
-	audit contracts.AuditEvent,
-) (contracts.ServiceAccount, ports.AdminIdempotencyResult, error) {
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ServiceAccount update transaction failed: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	var replayed contracts.ServiceAccount
-	idempotencyResult, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
-	if err != nil {
-		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, err
-	}
-	if found {
-		if err := tx.Commit(ctx); err != nil {
-			return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ServiceAccount idempotency replay commit failed: %w", err)
-		}
-		return replayed, idempotencyResult, nil
-	}
-	account, err := scanServiceAccount(tx.QueryRow(ctx, serviceAccountSelect+` WHERE project_id=$1 AND id=$2 FOR UPDATE`, projectID, accountID))
-	if err != nil {
-		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrServiceAccountNotFound)
-	}
-	if expectedRevision > 0 && expectedRevision != account.Revision {
-		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, ports.ErrRevisionConflict
-	}
-	if update.Name != nil {
-		account.Name = *update.Name
-	}
-	if update.State != nil {
-		account.State = *update.State
-	}
-	if update.Scopes != nil {
-		account.Scopes = append([]string(nil), (*update.Scopes)...)
-	}
-	if update.ProfileGrants != nil {
-		account.ProfileGrants = append([]string(nil), (*update.ProfileGrants)...)
-	}
-	scopesJSON, grantsJSON, err := encodeAuthorityLists(account.Scopes, account.ProfileGrants)
-	if err != nil {
-		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, err
-	}
-	account.Revision++
-	account.UpdatedAt = now.UTC()
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.service_accounts
-		SET name=$3,state=$4,scopes_json=$5,profile_grants_json=$6,revision=$7,updated_at=$8
-		WHERE project_id=$1 AND id=$2`,
-		projectID, accountID, account.Name, account.State, scopesJSON, grantsJSON,
-		account.Revision, account.UpdatedAt,
-	); err != nil {
-		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ServiceAccount update failed: %w", err)
-	}
-	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, err
-	}
-	idempotencyResult, err = insertAdminIdempotency(ctx, tx, idempotency, account)
-	if err != nil {
-		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return contracts.ServiceAccount{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ServiceAccount update commit failed: %w", err)
-	}
-	return account, idempotencyResult, nil
-}
-
-func (store *PostgresControlPlaneStore) GetServiceAccount(
-	ctx context.Context,
-	projectID string,
-	accountID string,
-) (contracts.ServiceAccount, error) {
-	account, err := scanServiceAccount(store.pool.QueryRow(ctx, serviceAccountSelect+` WHERE project_id=$1 AND id=$2`, projectID, accountID))
-	return account, mapNotFound(err, ports.ErrServiceAccountNotFound)
-}
-
-func (store *PostgresControlPlaneStore) ListServiceAccounts(
-	ctx context.Context,
-	projectID string,
-	limit int,
-	cursor string,
-) (contracts.ServiceAccountPage, error) {
-	scope := "project=" + projectID
-	boundary, err := store.resolvePostgresListCursor(
-		ctx,
-		serviceAccountListCursorResource,
-		scope,
-		cursor,
-		`SELECT created_at FROM secondbox.service_accounts WHERE project_id=$1 AND id=$2`,
-		projectID,
-	)
-	if err != nil {
-		return contracts.ServiceAccountPage{}, err
-	}
-	rows, err := store.pool.Query(ctx, serviceAccountSelect+`
-		WHERE project_id=$1
-		  AND (NOT $2 OR (created_at,id) > ($3,$4))
-		ORDER BY created_at,id
-		LIMIT $5`,
-		projectID, boundary.Active, boundary.CreatedAt, boundary.ItemKey, limit+1)
-	if err != nil {
-		return contracts.ServiceAccountPage{}, fmt.Errorf("SecondBox ServiceAccount list failed: %w", err)
-	}
-	defer rows.Close()
-	page := contracts.ServiceAccountPage{Items: make([]contracts.ServiceAccount, 0)}
-	for rows.Next() {
-		account, scanErr := scanServiceAccount(rows)
-		if scanErr != nil {
-			return contracts.ServiceAccountPage{}, fmt.Errorf("SecondBox ServiceAccount list scan failed: %w", scanErr)
-		}
-		page.Items = append(page.Items, account)
-	}
-	if err := rows.Err(); err != nil {
-		return contracts.ServiceAccountPage{}, fmt.Errorf("SecondBox ServiceAccount list rows failed: %w", err)
-	}
-	if len(page.Items) > limit {
-		page.Items = page.Items[:limit]
-		page.NextCursor, err = encodePostgresListNextCursor(
-			serviceAccountListCursorResource, scope, page.Items[limit-1].ID,
-		)
-		if err != nil {
-			return contracts.ServiceAccountPage{}, err
-		}
-	}
-	return page, nil
-}
-
-func (store *PostgresControlPlaneStore) CreateAPIKey(
-	ctx context.Context,
-	storedKey ports.StoredAPIKey,
-	idempotency ports.AdminIdempotencyInput,
-	audit contracts.AuditEvent,
-) (contracts.APIKey, ports.AdminIdempotencyResult, error) {
-	scopesJSON, err := json.Marshal(storedKey.APIKey.Scopes)
-	if err != nil {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey scopes encoding failed: %w", err)
-	}
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey create transaction failed: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	var replayed contracts.APIKey
-	idempotencyResult, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
-	if err != nil {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, err
-	}
-	if found {
-		if err := tx.Commit(ctx); err != nil {
-			return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey idempotency replay commit failed: %w", err)
-		}
-		return replayed, idempotencyResult, nil
-	}
-	account, err := scanServiceAccount(tx.QueryRow(ctx, serviceAccountSelect+` WHERE project_id=$1 AND id=$2 FOR UPDATE`,
-		storedKey.ProjectID, storedKey.APIKey.ServiceAccountID))
-	if err != nil {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrServiceAccountNotFound)
-	}
-	if account.State != contracts.ServiceAccountStateActive || !isScopeSubset(storedKey.APIKey.Scopes, account.Scopes) {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, ports.ErrAuthorizationDenied
-	}
-	key := storedKey.APIKey
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO secondbox.api_keys (
-			id,project_id,service_account_id,name,prefix,credential_hash,state,scopes_json,
-			expires_at,revoked_at,last_used_at,revision,created_at,updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-		key.ID, storedKey.ProjectID, key.ServiceAccountID, key.Name, key.Prefix,
-		storedKey.CredentialHash, key.State, scopesJSON, key.ExpiresAt, key.RevokedAt,
-		key.LastUsedAt, key.Revision, key.CreatedAt, storedKey.UpdatedAt,
-	); err != nil {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey insert failed: %w", err)
-	}
-	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, err
-	}
-	idempotencyResult, err = insertAdminIdempotency(ctx, tx, idempotency, key)
-	if err != nil {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey create commit failed: %w", err)
-	}
-	return key, idempotencyResult, nil
-}
-
-func (store *PostgresControlPlaneStore) RotateAPIKey(
-	ctx context.Context,
-	projectID string,
-	accountID string,
-	keyID string,
-	prefix string,
-	credentialHash []byte,
-	expectedRevision int64,
-	now time.Time,
-	idempotency ports.AdminIdempotencyInput,
-	audit contracts.AuditEvent,
-) (contracts.APIKey, ports.AdminIdempotencyResult, error) {
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey rotation transaction failed: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	var replayed contracts.APIKey
-	idempotencyResult, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
-	if err != nil {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, err
-	}
-	if found {
-		if err := tx.Commit(ctx); err != nil {
-			return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey idempotency replay commit failed: %w", err)
-		}
-		return replayed, idempotencyResult, nil
-	}
-	key, err := scanAPIKey(tx.QueryRow(ctx, apiKeySelect+`
-		WHERE project_id=$1 AND service_account_id=$2 AND id=$3 FOR UPDATE`, projectID, accountID, keyID))
-	if err != nil {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrAPIKeyNotFound)
-	}
-	if expectedRevision > 0 && expectedRevision != key.Revision {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, ports.ErrRevisionConflict
-	}
-	key.Prefix = prefix
-	key.State = contracts.APIKeyStateActive
-	key.RevokedAt = nil
-	key.LastUsedAt = nil
-	key.Revision++
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.api_keys
-		SET prefix=$4,credential_hash=$5,state=$6,revoked_at=NULL,last_used_at=NULL,revision=$7,updated_at=$8
-		WHERE project_id=$1 AND service_account_id=$2 AND id=$3`,
-		projectID, accountID, keyID, prefix, credentialHash, key.State, key.Revision, now.UTC(),
-	); err != nil {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey rotation failed: %w", err)
-	}
-	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, err
-	}
-	idempotencyResult, err = insertAdminIdempotency(ctx, tx, idempotency, key)
-	if err != nil {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey rotation commit failed: %w", err)
-	}
-	return key, idempotencyResult, nil
-}
-
-func (store *PostgresControlPlaneStore) RevokeAPIKey(
-	ctx context.Context,
-	projectID string,
-	accountID string,
-	keyID string,
-	expectedRevision int64,
-	now time.Time,
-	idempotency ports.AdminIdempotencyInput,
-	audit contracts.AuditEvent,
-) (contracts.APIKey, ports.AdminIdempotencyResult, error) {
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey revocation transaction failed: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	var replayed contracts.APIKey
-	idempotencyResult, found, err := lookupAdminIdempotency(ctx, tx, idempotency, &replayed)
-	if err != nil {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, err
-	}
-	if found {
-		if err := tx.Commit(ctx); err != nil {
-			return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey idempotency replay commit failed: %w", err)
-		}
-		return replayed, idempotencyResult, nil
-	}
-	key, err := scanAPIKey(tx.QueryRow(ctx, apiKeySelect+`
-		WHERE project_id=$1 AND service_account_id=$2 AND id=$3 FOR UPDATE`, projectID, accountID, keyID))
-	if err != nil {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, mapNotFound(err, ports.ErrAPIKeyNotFound)
-	}
-	if expectedRevision > 0 && expectedRevision != key.Revision {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, ports.ErrRevisionConflict
-	}
-	if key.State != contracts.APIKeyStateRevoked {
-		revokedAt := now.UTC()
-		key.State = contracts.APIKeyStateRevoked
-		key.RevokedAt = &revokedAt
-		key.Revision++
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.api_keys
-			SET state=$4,revoked_at=$5,revision=$6,updated_at=$5
-			WHERE project_id=$1 AND service_account_id=$2 AND id=$3`,
-			projectID, accountID, keyID, key.State, revokedAt, key.Revision,
-		); err != nil {
-			return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey revocation failed: %w", err)
-		}
-	}
-	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, err
-	}
-	idempotencyResult, err = insertAdminIdempotency(ctx, tx, idempotency, key)
-	if err != nil {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return contracts.APIKey{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox APIKey revocation commit failed: %w", err)
-	}
-	return key, idempotencyResult, nil
-}
-
-func (store *PostgresControlPlaneStore) GetAPIKey(
-	ctx context.Context,
-	projectID string,
-	accountID string,
-	keyID string,
-) (contracts.APIKey, error) {
-	key, err := scanAPIKey(store.pool.QueryRow(ctx, apiKeySelect+`
-		WHERE project_id=$1 AND service_account_id=$2 AND id=$3`, projectID, accountID, keyID))
-	return key, mapNotFound(err, ports.ErrAPIKeyNotFound)
-}
-
-func (store *PostgresControlPlaneStore) ListAPIKeys(
-	ctx context.Context,
-	projectID string,
-	accountID string,
-	limit int,
-	cursor string,
-) (contracts.APIKeyPage, error) {
-	scope := "project=" + projectID + "\x1fservice_account=" + accountID
-	boundary, err := store.resolvePostgresListCursor(
-		ctx,
-		apiKeyListCursorResource,
-		scope,
-		cursor,
-		`SELECT created_at FROM secondbox.api_keys
-		 WHERE project_id=$1 AND service_account_id=$2 AND id=$3`,
-		projectID, accountID,
-	)
-	if err != nil {
-		return contracts.APIKeyPage{}, err
-	}
-	rows, err := store.pool.Query(ctx, apiKeySelect+`
-		WHERE project_id=$1
-		  AND service_account_id=$2
-		  AND (NOT $3 OR (created_at,id) > ($4,$5))
-		ORDER BY created_at,id
-		LIMIT $6`,
-		projectID, accountID, boundary.Active, boundary.CreatedAt, boundary.ItemKey, limit+1)
-	if err != nil {
-		return contracts.APIKeyPage{}, fmt.Errorf("SecondBox APIKey list failed: %w", err)
-	}
-	defer rows.Close()
-	page := contracts.APIKeyPage{Items: make([]contracts.APIKey, 0)}
-	for rows.Next() {
-		key, scanErr := scanAPIKey(rows)
-		if scanErr != nil {
-			return contracts.APIKeyPage{}, fmt.Errorf("SecondBox APIKey list scan failed: %w", scanErr)
-		}
-		page.Items = append(page.Items, key)
-	}
-	if err := rows.Err(); err != nil {
-		return contracts.APIKeyPage{}, fmt.Errorf("SecondBox APIKey list rows failed: %w", err)
-	}
-	if len(page.Items) > limit {
-		page.Items = page.Items[:limit]
-		page.NextCursor, err = encodePostgresListNextCursor(
-			apiKeyListCursorResource, scope, page.Items[limit-1].ID,
-		)
-		if err != nil {
-			return contracts.APIKeyPage{}, err
-		}
-	}
-	return page, nil
-}
-
-func (store *PostgresControlPlaneStore) AuthenticateAPIKey(
-	ctx context.Context,
-	prefix string,
-	presentedHash []byte,
-	now time.Time,
-	audit contracts.AuditEvent,
-) (contracts.Principal, error) {
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return contracts.Principal{}, fmt.Errorf("SecondBox APIKey authentication transaction failed: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	var keyID, projectID, accountID, keyState, projectState, accountState string
-	var storedHash, keyScopesJSON, accountScopesJSON []byte
-	var expiresAt *time.Time
-	if err := tx.QueryRow(ctx, `
-		SELECT key.id,key.project_id,key.service_account_id,key.credential_hash,key.state,key.scopes_json,key.expires_at,
-		       project.state,account.state,account.scopes_json
-		FROM secondbox.api_keys AS key
-		JOIN secondbox.projects AS project ON project.id=key.project_id
-		JOIN secondbox.service_accounts AS account ON account.id=key.service_account_id
-		WHERE key.prefix=$1 FOR UPDATE OF key`, prefix).Scan(
-		&keyID, &projectID, &accountID, &storedHash, &keyState, &keyScopesJSON, &expiresAt,
-		&projectState, &accountState, &accountScopesJSON,
-	); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return contracts.Principal{}, ports.ErrAuthenticationFailed
-		}
-		return contracts.Principal{}, fmt.Errorf("SecondBox APIKey authentication lookup failed: %w", err)
-	}
-	if subtle.ConstantTimeCompare(storedHash, presentedHash) != 1 ||
-		keyState != contracts.APIKeyStateActive ||
-		projectState != contracts.ProjectStateActive ||
-		accountState != contracts.ServiceAccountStateActive ||
-		(expiresAt != nil && !expiresAt.After(now)) {
-		return contracts.Principal{}, ports.ErrAuthenticationFailed
-	}
-	var keyScopes, accountScopes []string
-	if err := json.Unmarshal(keyScopesJSON, &keyScopes); err != nil {
-		return contracts.Principal{}, fmt.Errorf("SecondBox APIKey scopes decoding failed: %w", err)
-	}
-	if err := json.Unmarshal(accountScopesJSON, &accountScopes); err != nil {
-		return contracts.Principal{}, fmt.Errorf("SecondBox ServiceAccount scopes decoding failed: %w", err)
-	}
-	principal := contracts.Principal{
-		Kind: "service_account", ID: accountID, ProjectID: projectID,
-		ServiceAccountID: accountID, Scopes: intersectScopes(keyScopes, accountScopes),
-	}
-	if _, err := tx.Exec(ctx, `UPDATE secondbox.api_keys SET last_used_at=$2,updated_at=$2 WHERE id=$1`, keyID, now.UTC()); err != nil {
-		return contracts.Principal{}, fmt.Errorf("SecondBox APIKey last-use update failed: %w", err)
-	}
-	audit.ProjectID = projectID
-	audit.ActorID = accountID
-	audit.ResourceID = keyID
-	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.Principal{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return contracts.Principal{}, fmt.Errorf("SecondBox APIKey authentication commit failed: %w", err)
-	}
-	return principal, nil
-}
-
 func (store *PostgresControlPlaneStore) CreateProfile(
 	ctx context.Context,
 	profile contracts.Profile,
-	quota contracts.QuotaLimits,
 	idempotency ports.AdminIdempotencyInput,
-	audit contracts.AuditEvent,
 ) (contracts.Profile, ports.AdminIdempotencyResult, error) {
 	specJSON, err := json.Marshal(profile.CurrentRevision.Spec)
 	if err != nil {
@@ -862,20 +89,6 @@ func (store *PostgresControlPlaneStore) CreateProfile(
 	); err != nil {
 		return contracts.Profile{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ProfileRevision insert failed: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO secondbox.profile_quotas (
-			profile_name,max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
-			max_retained_bytes,max_snapshots,max_artifacts,max_port_sessions,max_concurrent_operations,updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-		profile.Name, quota.MaxSandboxes, quota.MaxActiveInstances, quota.MaxCPUMillis,
-		quota.MaxMemoryBytes, quota.MaxRetainedBytes, quota.MaxSnapshots, quota.MaxArtifacts,
-		quota.MaxPortSessions, quota.MaxConcurrentOperations, profile.UpdatedAt,
-	); err != nil {
-		return contracts.Profile{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Profile quota insert failed: %w", err)
-	}
-	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.Profile{}, ports.AdminIdempotencyResult{}, err
-	}
 	idempotencyResult, err = insertAdminIdempotency(ctx, tx, idempotency, profile)
 	if err != nil {
 		return contracts.Profile{}, ports.AdminIdempotencyResult{}, err
@@ -886,6 +99,102 @@ func (store *PostgresControlPlaneStore) CreateProfile(
 	return profile, idempotencyResult, nil
 }
 
+// EnsureBuiltInProfile materializes or advances one code-owned immutable Profile revision.
+func (store *PostgresControlPlaneStore) EnsureBuiltInProfile(
+	ctx context.Context,
+	desired contracts.Profile,
+) (contracts.Profile, error) {
+	specJSON, err := json.Marshal(desired.CurrentRevision.Spec)
+	if err != nil {
+		return contracts.Profile{}, fmt.Errorf("SecondBox built-in ProfileRevision spec encoding failed: %w", err)
+	}
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.Profile{}, fmt.Errorf("SecondBox built-in Profile transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(
+		ctx,
+		`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`,
+		"secondbox-built-in-profile:"+desired.Name,
+	); err != nil {
+		return contracts.Profile{}, fmt.Errorf("SecondBox built-in Profile lock failed: %w", err)
+	}
+	current, err := scanProfile(tx.QueryRow(
+		ctx, profileSelect+` WHERE profile.name=$1 FOR UPDATE OF profile`, desired.Name,
+	))
+	if errors.Is(err, pgx.ErrNoRows) {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO secondbox.profiles (
+				name,state,current_revision_id,revision,created_at,updated_at
+			) VALUES ($1,$2,$3,$4,$5,$6)`,
+			desired.Name, desired.State, desired.CurrentRevision.ID,
+			desired.Revision, desired.CreatedAt, desired.UpdatedAt,
+		); err != nil {
+			return contracts.Profile{}, fmt.Errorf("SecondBox built-in Profile insert failed: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO secondbox.profile_revisions (
+				id,profile_name,revision_number,spec_json,created_at
+			) VALUES ($1,$2,$3,$4,$5)`,
+			desired.CurrentRevision.ID, desired.Name, desired.CurrentRevision.Number,
+			specJSON, desired.CurrentRevision.CreatedAt,
+		); err != nil {
+			return contracts.Profile{}, fmt.Errorf("SecondBox built-in ProfileRevision insert failed: %w", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.Profile{}, fmt.Errorf("SecondBox built-in Profile commit failed: %w", err)
+		}
+		return desired, nil
+	}
+	if err != nil {
+		return contracts.Profile{}, fmt.Errorf("SecondBox built-in Profile lookup failed: %w", err)
+	}
+	if current.State != contracts.ProfileStateEnabled {
+		return contracts.Profile{}, errors.New("SecondBox built-in Profile durable state is disabled")
+	}
+	switch {
+	case current.CurrentRevision.Number > desired.CurrentRevision.Number:
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.Profile{}, fmt.Errorf("SecondBox built-in Profile forward-version commit failed: %w", err)
+		}
+		return current, nil
+	case current.CurrentRevision.Number == desired.CurrentRevision.Number:
+		if current.CurrentRevision.ID != desired.CurrentRevision.ID ||
+			!reflect.DeepEqual(current.CurrentRevision.Spec, desired.CurrentRevision.Spec) {
+			return contracts.Profile{}, errors.New("SecondBox built-in Profile revision drift detected")
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return contracts.Profile{}, fmt.Errorf("SecondBox built-in Profile verification commit failed: %w", err)
+		}
+		return current, nil
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.profile_revisions (
+			id,profile_name,revision_number,spec_json,created_at
+		) VALUES ($1,$2,$3,$4,$5)`,
+		desired.CurrentRevision.ID, desired.Name, desired.CurrentRevision.Number,
+		specJSON, desired.CurrentRevision.CreatedAt,
+	); err != nil {
+		return contracts.Profile{}, fmt.Errorf("SecondBox built-in ProfileRevision append failed: %w", err)
+	}
+	current.CurrentRevision = desired.CurrentRevision
+	current.Revision++
+	current.UpdatedAt = desired.UpdatedAt.UTC()
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.profiles
+		SET current_revision_id=$2,revision=$3,updated_at=$4
+		WHERE name=$1`,
+		current.Name, current.CurrentRevision.ID, current.Revision, current.UpdatedAt,
+	); err != nil {
+		return contracts.Profile{}, fmt.Errorf("SecondBox built-in Profile head update failed: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.Profile{}, fmt.Errorf("SecondBox built-in Profile revision commit failed: %w", err)
+	}
+	return current, nil
+}
+
 func (store *PostgresControlPlaneStore) ReviseProfile(
 	ctx context.Context,
 	name string,
@@ -893,7 +202,6 @@ func (store *PostgresControlPlaneStore) ReviseProfile(
 	expectedRevision int64,
 	now time.Time,
 	idempotency ports.AdminIdempotencyInput,
-	audit contracts.AuditEvent,
 ) (contracts.Profile, ports.AdminIdempotencyResult, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
@@ -938,9 +246,6 @@ func (store *PostgresControlPlaneStore) ReviseProfile(
 	); err != nil {
 		return contracts.Profile{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Profile head update failed: %w", err)
 	}
-	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.Profile{}, ports.AdminIdempotencyResult{}, err
-	}
 	idempotencyResult, err = insertAdminIdempotency(ctx, tx, idempotency, profile)
 	if err != nil {
 		return contracts.Profile{}, ports.AdminIdempotencyResult{}, err
@@ -957,7 +262,6 @@ func (store *PostgresControlPlaneStore) DisableProfile(
 	expectedRevision int64,
 	now time.Time,
 	idempotency ports.AdminIdempotencyInput,
-	audit contracts.AuditEvent,
 ) (contracts.Profile, ports.AdminIdempotencyResult, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
@@ -992,9 +296,6 @@ func (store *PostgresControlPlaneStore) DisableProfile(
 		); err != nil {
 			return contracts.Profile{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox Profile disable failed: %w", err)
 		}
-	}
-	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.Profile{}, ports.AdminIdempotencyResult{}, err
 	}
 	idempotencyResult, err = insertAdminIdempotency(ctx, tx, idempotency, profile)
 	if err != nil {
@@ -1102,7 +403,8 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox create transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	lockKey := input.Principal.ProjectID + "\x1fcreate-sandbox\x1f" + input.IdempotencyKey
+	lockKey := input.Principal.TenantRef + "\x1f" + input.Principal.SubjectRef +
+		"\x1fcreate-sandbox\x1f" + input.IdempotencyKey
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox idempotency lock failed: %w", err)
 	}
@@ -1110,18 +412,23 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	idempotencyErr := tx.QueryRow(ctx, `
 		SELECT request_hash,response_resource_id
 		FROM secondbox.idempotency_records
-		WHERE project_id=$1 AND operation='sandbox.create' AND target_id='' AND idempotency_key=$2`,
-		input.Principal.ProjectID, input.IdempotencyKey,
+		WHERE tenant_ref=$1 AND subject_ref=$2
+		  AND operation='sandbox.create' AND target_id='' AND idempotency_key=$3`,
+		input.Principal.TenantRef, input.Principal.SubjectRef, input.IdempotencyKey,
 	).Scan(&priorHash, &priorSandboxID)
 	if idempotencyErr == nil {
 		if priorHash != input.RequestHash {
 			return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrIdempotencyConflict
 		}
-		sandbox, err := getSandboxWithQuerier(ctx, tx, input.Principal.ProjectID, priorSandboxID)
+		sandbox, err := getSandboxWithQuerier(
+			ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, priorSandboxID,
+		)
 		if err != nil {
 			return contracts.Sandbox{}, contracts.Operation{}, false, err
 		}
-		operation, err := getCreateOperationWithQuerier(ctx, tx, input.Principal.ProjectID, priorSandboxID)
+		operation, err := getCreateOperationWithQuerier(
+			ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, priorSandboxID,
+		)
 		if err != nil {
 			return contracts.Sandbox{}, contracts.Operation{}, false, err
 		}
@@ -1134,21 +441,6 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox idempotency lookup failed: %w", idempotencyErr)
 	}
 
-	var projectState string
-	if err := tx.QueryRow(ctx, `SELECT state FROM secondbox.projects WHERE id=$1 FOR UPDATE`, input.Principal.ProjectID).Scan(&projectState); err != nil {
-		return contracts.Sandbox{}, contracts.Operation{}, false, mapNotFound(err, ports.ErrProjectNotFound)
-	}
-	if projectState != contracts.ProjectStateActive {
-		return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrAuthorizationDenied
-	}
-	account, err := scanServiceAccount(tx.QueryRow(ctx, serviceAccountSelect+`
-		WHERE project_id=$1 AND id=$2`, input.Principal.ProjectID, input.Principal.ServiceAccountID))
-	if err != nil {
-		return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrAuthorizationDenied
-	}
-	if account.State != contracts.ServiceAccountStateActive || !contains(account.ProfileGrants, input.Sandbox.Profile) {
-		return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrProfileNotGranted
-	}
 	profile, err := scanProfile(tx.QueryRow(ctx, profileSelect+`
 		WHERE profile.name=$1 FOR UPDATE OF profile`, input.Sandbox.Profile))
 	if err != nil {
@@ -1160,33 +452,37 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	if err := ensureCompatibleRunnerPool(ctx, tx, profile.CurrentRevision.Spec); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
-	projectQuota, err := readQuota(ctx, tx, "project_quotas", "project_id", input.Principal.ProjectID)
+	if err := ensureSubjectQuota(ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, input.SubjectQuota, input.Sandbox.CreatedAt); err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, err
+	}
+	subjectQuota, err := readSubjectQuota(ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef)
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
-	profileQuota, err := readQuota(ctx, tx, "profile_quotas", "profile_name", profile.Name)
-	if err != nil {
-		return contracts.Sandbox{}, contracts.Operation{}, false, err
-	}
-	projectUsage, err := readQuotaUsage(ctx, tx, "sandbox.project_id=$1", input.Principal.ProjectID)
-	if err != nil {
-		return contracts.Sandbox{}, contracts.Operation{}, false, err
-	}
-	profileUsage, err := readQuotaUsage(ctx, tx, "sandbox.profile_name=$1", profile.Name)
+	subjectUsage, err := readSubjectQuotaUsage(ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef)
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
 	requestedCPU := profile.CurrentRevision.Spec.Resources.CPUMillis
 	requestedMemory := profile.CurrentRevision.Spec.Resources.MemoryBytes
-	if quotaWouldExceed(projectQuota, projectUsage, requestedCPU, requestedMemory) ||
-		quotaWouldExceed(profileQuota, profileUsage, requestedCPU, requestedMemory) {
+	requestedActiveInstances := int64(0)
+	if profile.CurrentRevision.Spec.Lifecycle.InitialState == contracts.SandboxDesiredStateRunning {
+		requestedActiveInstances = 1
+	}
+	if quotaWouldExceed(
+		subjectQuota, subjectUsage, requestedCPU, requestedMemory, requestedActiveInstances,
+	) {
 		return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrQuotaExceeded
 	}
 
 	sandbox := input.Sandbox
 	sandbox.ProjectID = input.Principal.ProjectID
+	sandbox.TenantRef = input.Principal.TenantRef
+	sandbox.SubjectRef = input.Principal.SubjectRef
 	sandbox.ProfileRevisionID = profile.CurrentRevision.ID
 	sandbox.Workspace = input.Workspace
+	sandbox.Workspace.TenantRef = input.Principal.TenantRef
+	sandbox.Workspace.SubjectRef = input.Principal.SubjectRef
 	sandbox.Workspace.Generation = sandbox.Generation
 	initialLifecycleIntent := ""
 	if profile.CurrentRevision.Spec.Lifecycle.InitialState == contracts.SandboxDesiredStateRunning {
@@ -1213,11 +509,12 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.workspaces (
-			id,project_id,sandbox_id,generation,retained_bytes,current_checkpoint_id,
+			id,tenant_ref,subject_ref,sandbox_id,generation,retained_bytes,current_checkpoint_id,
 			current_checkpoint_sha256,current_checkpoint_size_bytes,retention_state,
 			garbage_collection_state,created_at,updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-		sandbox.Workspace.ID, sandbox.ProjectID, sandbox.ID, sandbox.Workspace.Generation,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+		sandbox.Workspace.ID, sandbox.TenantRef, sandbox.SubjectRef,
+		sandbox.ID, sandbox.Workspace.Generation,
 		sandbox.Workspace.RetainedBytes, "", "", 0, "retained", "reachable",
 		sandbox.Workspace.CreatedAt, sandbox.Workspace.UpdatedAt,
 	); err != nil {
@@ -1225,13 +522,14 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.sandboxes (
-			id,project_id,profile_name,profile_revision_id,state,desired_state,generation,workspace_id,
+			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,generation,workspace_id,
 			current_instance_id,metadata_json,compatibility_summary_json,last_activity_at,revision,
 			lifecycle_termination_reason,lifecycle_failure_class,lifecycle_failure_message,lifecycle_intent_kind,
 			reconcile_owner,reconcile_claim_expires_at,next_reconcile_at,reconcile_retry_count,
 			reconcile_retry_limit,created_at,updated_at,deleted_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)`,
-		sandbox.ID, sandbox.ProjectID, sandbox.Profile, sandbox.ProfileRevisionID, sandbox.State,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)`,
+		sandbox.ID, sandbox.TenantRef, sandbox.SubjectRef,
+		sandbox.Profile, sandbox.ProfileRevisionID, sandbox.State,
 		sandbox.DesiredState, sandbox.Generation, sandbox.Workspace.ID, "", metadataJSON,
 		compatibilityJSON, sandbox.LastActivityAt, sandbox.Revision, "", "", "", initialLifecycleIntent,
 		"", nil, sandbox.UpdatedAt, 0, 8, sandbox.CreatedAt, sandbox.UpdatedAt, sandbox.DeletedAt,
@@ -1239,22 +537,21 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox insert failed: %w", err)
 	}
 	input.Operation.SandboxID = sandbox.ID
-	if err := insertOperation(ctx, tx, sandbox.ProjectID, input.Operation); err != nil {
+	if err := insertOperation(
+		ctx, tx, sandbox.TenantRef, sandbox.SubjectRef, input.Operation,
+	); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.idempotency_records (
-			project_id,operation,target_id,idempotency_key,request_hash,response_resource_id,created_at,expires_at
-		) VALUES ($1,'sandbox.create','',$2,$3,$4,$5,$6)`,
-		sandbox.ProjectID, input.IdempotencyKey, input.RequestHash, sandbox.ID,
+			tenant_ref,subject_ref,operation,target_id,idempotency_key,
+			request_hash,response_resource_id,created_at,expires_at
+		) VALUES ($1,$2,'sandbox.create','',$3,$4,$5,$6,$7)`,
+		sandbox.TenantRef, sandbox.SubjectRef,
+		input.IdempotencyKey, input.RequestHash, sandbox.ID,
 		sandbox.CreatedAt, input.IdempotencyEnds,
 	); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox idempotency insert failed: %w", err)
-	}
-	input.Audit.ProjectID = sandbox.ProjectID
-	input.Audit.ResourceID = sandbox.ID
-	if err := insertAuditEvent(ctx, tx, input.Audit); err != nil {
-		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox create commit failed: %w", err)
@@ -1264,36 +561,74 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 
 func (store *PostgresControlPlaneStore) GetSandbox(
 	ctx context.Context,
-	projectID string,
+	tenantRef string,
+	subjectRef string,
 	sandboxID string,
 ) (contracts.Sandbox, error) {
-	return getSandboxWithQuerier(ctx, store.pool, projectID, sandboxID)
+	return getSandboxWithQuerier(ctx, store.pool, tenantRef, subjectRef, sandboxID)
+}
+
+// GetSubjectUsage reads one subject's current quota and aggregate reservations.
+func (store *PostgresControlPlaneStore) GetSubjectUsage(
+	ctx context.Context,
+	tenantRef string,
+	subjectRef string,
+) (contracts.SubjectUsage, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return contracts.SubjectUsage{}, fmt.Errorf("SecondBox subject usage transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	limits, err := readSubjectQuota(ctx, tx, tenantRef, subjectRef)
+	if err != nil {
+		return contracts.SubjectUsage{}, err
+	}
+	usage, err := readSubjectQuotaUsage(ctx, tx, tenantRef, subjectRef)
+	if err != nil {
+		return contracts.SubjectUsage{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return contracts.SubjectUsage{}, fmt.Errorf("SecondBox subject usage commit failed: %w", err)
+	}
+	return contracts.SubjectUsage{
+		TenantRef: tenantRef, SubjectRef: subjectRef, Limits: limits,
+		Usage: contracts.QuotaUsage{
+			Sandboxes: usage.sandboxes, ActiveInstances: usage.activeInstances,
+			CPUMillis: usage.cpuMillis, MemoryBytes: usage.memoryBytes,
+			RetainedBytes: usage.retainedBytes, Snapshots: usage.snapshots,
+			Artifacts: usage.artifacts, PortSessions: usage.portSessions,
+			ConcurrentOperations: usage.concurrentOperations,
+		},
+	}, nil
 }
 
 func (store *PostgresControlPlaneStore) ListSandboxes(
 	ctx context.Context,
-	projectID string,
+	tenantRef string,
+	subjectRef string,
 	limit int,
 	cursor string,
 ) (contracts.SandboxPage, error) {
-	scope := "project=" + projectID
+	scope := "tenant=" + tenantRef + "\x1fsubject=" + subjectRef
 	boundary, err := store.resolvePostgresListCursor(
 		ctx,
 		sandboxListCursorResource,
 		scope,
 		cursor,
-		`SELECT created_at FROM secondbox.sandboxes WHERE project_id=$1 AND id=$2`,
-		projectID,
+		`SELECT created_at FROM secondbox.sandboxes
+		 WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3`,
+		tenantRef,
+		subjectRef,
 	)
 	if err != nil {
 		return contracts.SandboxPage{}, err
 	}
 	rows, err := store.pool.Query(ctx, sandboxSelect+`
-		WHERE sandbox.project_id=$1
-		  AND (NOT $2 OR (sandbox.created_at,sandbox.id) > ($3,$4))
+		WHERE sandbox.tenant_ref=$1 AND sandbox.subject_ref=$2
+		  AND (NOT $3 OR (sandbox.created_at,sandbox.id) > ($4,$5))
 		ORDER BY sandbox.created_at,sandbox.id
-		LIMIT $5`,
-		projectID, boundary.Active, boundary.CreatedAt, boundary.ItemKey, limit+1)
+		LIMIT $6`,
+		tenantRef, subjectRef, boundary.Active, boundary.CreatedAt, boundary.ItemKey, limit+1)
 	if err != nil {
 		return contracts.SandboxPage{}, fmt.Errorf("SecondBox Sandbox list failed: %w", err)
 	}
@@ -1323,31 +658,40 @@ func (store *PostgresControlPlaneStore) ListSandboxes(
 
 func (store *PostgresControlPlaneStore) GetOperation(
 	ctx context.Context,
-	projectID string,
+	tenantRef string,
+	subjectRef string,
 	operationID string,
 ) (contracts.Operation, error) {
-	return getOperationWithQuerier(ctx, store.pool, projectID, `id=$2`, operationID)
+	return getOperationWithQuerier(
+		ctx, store.pool, tenantRef, subjectRef, `id=$3`, operationID,
+	)
 }
 
 func getCreateOperationWithQuerier(
 	ctx context.Context,
 	querier queryRower,
-	projectID string,
+	tenantRef string,
+	subjectRef string,
 	sandboxID string,
 ) (contracts.Operation, error) {
-	return getOperationWithQuerier(ctx, querier, projectID, `sandbox_id=$2 AND kind='create'`, sandboxID)
+	return getOperationWithQuerier(
+		ctx, querier, tenantRef, subjectRef,
+		`sandbox_id=$3 AND kind='create'`, sandboxID,
+	)
 }
 
 func getOperationWithQuerier(
 	ctx context.Context,
 	querier queryRower,
-	projectID string,
+	tenantRef string,
+	subjectRef string,
 	predicate string,
 	identifier string,
 ) (contracts.Operation, error) {
 	queries := map[string]string{
-		"id=$2":                           `WHERE project_id=$1 AND id=$2`,
-		"sandbox_id=$2 AND kind='create'": `WHERE project_id=$1 AND sandbox_id=$2 AND kind='create'`,
+		"id=$3": `WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3`,
+		"sandbox_id=$3 AND kind='create'": `WHERE tenant_ref=$1 AND subject_ref=$2
+			AND sandbox_id=$3 AND kind='create'`,
 	}
 	where, ok := queries[predicate]
 	if !ok {
@@ -1358,10 +702,13 @@ func getOperationWithQuerier(
 	var retryable bool
 	var requestMetadataJSON []byte
 	err := querier.QueryRow(ctx, `
-		SELECT id,sandbox_id,kind,state,request_id,request_metadata_json,error_code,error_message,retryable,
+		SELECT id,tenant_ref,subject_ref,sandbox_id,kind,state,request_id,request_metadata_json,error_code,error_message,retryable,
 		       created_at,started_at,completed_at,updated_at
-		FROM secondbox.operations `+where+` ORDER BY created_at LIMIT 1`, projectID, identifier).Scan(
-		&operation.ID, &operation.SandboxID, &operation.Kind, &operation.State, &operation.RequestID,
+		FROM secondbox.operations `+where+` ORDER BY created_at LIMIT 1`,
+		tenantRef, subjectRef, identifier,
+	).Scan(
+		&operation.ID, &operation.TenantRef, &operation.SubjectRef,
+		&operation.SandboxID, &operation.Kind, &operation.State, &operation.RequestID,
 		&requestMetadataJSON,
 		&errorCode, &errorMessage, &retryable, &operation.CreatedAt, &operation.StartedAt,
 		&operation.CompletedAt, &operation.UpdatedAt,
@@ -1389,15 +736,15 @@ func getOperationWithQuerier(
 
 func (store *PostgresControlPlaneStore) ListAuditEvents(
 	ctx context.Context,
-	projectID string,
+	tenantRef string,
 	limit int,
 ) ([]contracts.AuditEvent, error) {
 	rows, err := store.pool.Query(ctx, `
-		SELECT id,project_id,actor_kind,actor_id,action,resource_kind,resource_id,
+		SELECT id,tenant_ref,subject_ref,actor_kind,actor_id,action,resource_kind,resource_id,
 		       outcome,request_id,details_json,created_at
 		FROM secondbox.audit_events
-		WHERE ($1='' OR project_id=$1)
-		ORDER BY created_at DESC,id DESC LIMIT $2`, projectID, limit)
+		WHERE ($1='' OR tenant_ref=$1)
+		ORDER BY created_at DESC,id DESC LIMIT $2`, tenantRef, limit)
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox audit list failed: %w", err)
 	}
@@ -1407,18 +754,39 @@ func (store *PostgresControlPlaneStore) ListAuditEvents(
 		var event contracts.AuditEvent
 		var detailsJSON []byte
 		if err := rows.Scan(
-			&event.ID, &event.ProjectID, &event.ActorKind, &event.ActorID, &event.Action,
+			&event.ID, &event.TenantRef, &event.SubjectRef,
+			&event.ActorKind, &event.ActorID, &event.Action,
 			&event.ResourceKind, &event.ResourceID, &event.Outcome, &event.RequestID,
 			&detailsJSON, &event.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("SecondBox audit list scan failed: %w", err)
 		}
+		event.ProjectID = event.TenantRef
 		if err := json.Unmarshal(detailsJSON, &event.Details); err != nil {
 			return nil, fmt.Errorf("SecondBox audit details decoding failed: %w", err)
 		}
 		events = append(events, event)
 	}
 	return events, rows.Err()
+}
+
+// AppendAuditEvent persists service-layer mutation evidence.
+func (store *PostgresControlPlaneStore) AppendAuditEvent(
+	ctx context.Context,
+	event contracts.AuditEvent,
+) error {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("SecondBox audit transaction failed: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := insertAuditEvent(ctx, tx, event); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("SecondBox audit commit failed: %w", err)
+	}
+	return nil
 }
 
 func (store *PostgresControlPlaneStore) ReadMetricsSnapshot(
@@ -1438,15 +806,10 @@ func (store *PostgresControlPlaneStore) ReadMetricsSnapshot(
 			contracts.OperationStateSucceeded: 0, contracts.OperationStateFailed: 0,
 			contracts.OperationStateCancelled: 0,
 		},
-		APIKeyStates: map[string]int64{
-			contracts.APIKeyStateActive: 0, contracts.APIKeyStateRevoked: 0,
-			contracts.APIKeyStateExpired: 0,
-		},
 	}
 	for query, destination := range map[string]map[string]int64{
 		`SELECT state,count(*) FROM secondbox.sandboxes GROUP BY state`:  snapshot.SandboxStates,
 		`SELECT state,count(*) FROM secondbox.operations GROUP BY state`: snapshot.OperationStates,
-		`SELECT state,count(*) FROM secondbox.api_keys GROUP BY state`:   snapshot.APIKeyStates,
 	} {
 		rows, err := store.pool.Query(ctx, query)
 		if err != nil {
@@ -1480,53 +843,6 @@ type queryRower interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
-func scanProject(row rowScanner) (contracts.Project, error) {
-	var project contracts.Project
-	err := row.Scan(&project.ID, &project.Name, &project.State, &project.Revision, &project.CreatedAt, &project.UpdatedAt)
-	return project, err
-}
-
-const serviceAccountSelect = `
-	SELECT id,project_id,name,state,scopes_json,profile_grants_json,revision,created_at,updated_at
-	FROM secondbox.service_accounts`
-
-func scanServiceAccount(row rowScanner) (contracts.ServiceAccount, error) {
-	var account contracts.ServiceAccount
-	var scopesJSON, grantsJSON []byte
-	if err := row.Scan(
-		&account.ID, &account.ProjectID, &account.Name, &account.State, &scopesJSON,
-		&grantsJSON, &account.Revision, &account.CreatedAt, &account.UpdatedAt,
-	); err != nil {
-		return contracts.ServiceAccount{}, err
-	}
-	if err := json.Unmarshal(scopesJSON, &account.Scopes); err != nil {
-		return contracts.ServiceAccount{}, fmt.Errorf("SecondBox ServiceAccount scopes decoding failed: %w", err)
-	}
-	if err := json.Unmarshal(grantsJSON, &account.ProfileGrants); err != nil {
-		return contracts.ServiceAccount{}, fmt.Errorf("SecondBox ServiceAccount profile grants decoding failed: %w", err)
-	}
-	return account, nil
-}
-
-const apiKeySelect = `
-	SELECT id,service_account_id,name,prefix,state,scopes_json,expires_at,revoked_at,last_used_at,revision,created_at
-	FROM secondbox.api_keys`
-
-func scanAPIKey(row rowScanner) (contracts.APIKey, error) {
-	var key contracts.APIKey
-	var scopesJSON []byte
-	if err := row.Scan(
-		&key.ID, &key.ServiceAccountID, &key.Name, &key.Prefix, &key.State, &scopesJSON,
-		&key.ExpiresAt, &key.RevokedAt, &key.LastUsedAt, &key.Revision, &key.CreatedAt,
-	); err != nil {
-		return contracts.APIKey{}, err
-	}
-	if err := json.Unmarshal(scopesJSON, &key.Scopes); err != nil {
-		return contracts.APIKey{}, fmt.Errorf("SecondBox APIKey scopes decoding failed: %w", err)
-	}
-	return key, nil
-}
-
 const profileSelect = `
 	SELECT profile.name,profile.state,profile.revision,profile.created_at,profile.updated_at,
 	       revision.id,revision.revision_number,revision.spec_json,revision.created_at
@@ -1550,10 +866,12 @@ func scanProfile(row rowScanner) (contracts.Profile, error) {
 }
 
 const sandboxSelect = `
-	SELECT sandbox.id,sandbox.project_id,sandbox.profile_name,sandbox.profile_revision_id,
+	SELECT sandbox.id,sandbox.tenant_ref,sandbox.subject_ref,
+	       sandbox.profile_name,sandbox.profile_revision_id,
 	       sandbox.state,sandbox.desired_state,sandbox.generation,sandbox.metadata_json,
 	       sandbox.last_activity_at,sandbox.revision,sandbox.created_at,sandbox.updated_at,sandbox.deleted_at,
-	       workspace.id,workspace.generation,workspace.retained_bytes,workspace.current_checkpoint_id,
+	       workspace.id,workspace.tenant_ref,workspace.subject_ref,
+	       workspace.generation,workspace.retained_bytes,workspace.current_checkpoint_id,
 	       COALESCE(workspace.current_checkpoint_sha256,''),COALESCE(workspace.current_checkpoint_size_bytes,0),
 	       COALESCE(workspace.retention_state,''),workspace.created_at,workspace.updated_at,
 	       instance.id,instance.state,COALESCE(instance.guest_liveness,''),instance.termination_reason,
@@ -1569,10 +887,13 @@ func scanSandbox(row rowScanner) (contracts.Sandbox, error) {
 	var instanceCreatedAt, instanceUpdatedAt sql.NullTime
 	var readyAt, guestHeartbeatAt, stoppedAt sql.NullTime
 	if err := row.Scan(
-		&sandbox.ID, &sandbox.ProjectID, &sandbox.Profile, &sandbox.ProfileRevisionID,
+		&sandbox.ID, &sandbox.TenantRef, &sandbox.SubjectRef,
+		&sandbox.Profile, &sandbox.ProfileRevisionID,
 		&sandbox.State, &sandbox.DesiredState, &sandbox.Generation, &metadataJSON,
 		&sandbox.LastActivityAt, &sandbox.Revision, &sandbox.CreatedAt, &sandbox.UpdatedAt,
-		&sandbox.DeletedAt, &sandbox.Workspace.ID, &sandbox.Workspace.Generation,
+		&sandbox.DeletedAt, &sandbox.Workspace.ID,
+		&sandbox.Workspace.TenantRef, &sandbox.Workspace.SubjectRef,
+		&sandbox.Workspace.Generation,
 		&sandbox.Workspace.RetainedBytes, &sandbox.Workspace.CurrentCheckpointID,
 		&sandbox.Workspace.CurrentCheckpointHash, &sandbox.Workspace.CurrentCheckpointSize,
 		&sandbox.Workspace.RetentionState, &sandbox.Workspace.CreatedAt, &sandbox.Workspace.UpdatedAt,
@@ -1581,6 +902,7 @@ func scanSandbox(row rowScanner) (contracts.Sandbox, error) {
 	); err != nil {
 		return contracts.Sandbox{}, err
 	}
+	sandbox.ProjectID = sandbox.TenantRef
 	if err := json.Unmarshal(metadataJSON, &sandbox.Metadata); err != nil {
 		return contracts.Sandbox{}, fmt.Errorf("SecondBox Sandbox metadata decoding failed: %w", err)
 	}
@@ -1607,11 +929,13 @@ func scanSandbox(row rowScanner) (contracts.Sandbox, error) {
 func getSandboxWithQuerier(
 	ctx context.Context,
 	querier queryRower,
-	projectID string,
+	tenantRef string,
+	subjectRef string,
 	sandboxID string,
 ) (contracts.Sandbox, error) {
 	sandbox, err := scanSandbox(querier.QueryRow(ctx, sandboxSelect+`
-		WHERE sandbox.project_id=$1 AND sandbox.id=$2`, projectID, sandboxID))
+		WHERE sandbox.tenant_ref=$1 AND sandbox.subject_ref=$2 AND sandbox.id=$3`,
+		tenantRef, subjectRef, sandboxID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return contracts.Sandbox{}, ports.ErrSandboxNotFound
 	}
@@ -1634,6 +958,18 @@ func encodeAuthorityLists(scopes []string, grants []string) ([]byte, []byte, err
 }
 
 func insertAuditEvent(ctx context.Context, tx pgx.Tx, event contracts.AuditEvent) error {
+	if event.TenantRef == "" {
+		event.TenantRef = event.ProjectID
+	}
+	if event.TenantRef == "" {
+		event.TenantRef = "secondbox"
+	}
+	if event.SubjectRef == "" {
+		event.SubjectRef = event.ActorID
+	}
+	if event.SubjectRef == "" {
+		event.SubjectRef = "secondbox"
+	}
 	if event.Details == nil {
 		event.Details = map[string]string{}
 	}
@@ -1643,10 +979,11 @@ func insertAuditEvent(ctx context.Context, tx pgx.Tx, event contracts.AuditEvent
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.audit_events (
-			id,project_id,actor_kind,actor_id,action,resource_kind,resource_id,
+			id,tenant_ref,subject_ref,actor_kind,actor_id,action,resource_kind,resource_id,
 			outcome,request_id,details_json,created_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-		event.ID, event.ProjectID, event.ActorKind, event.ActorID, event.Action,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+		event.ID, event.TenantRef, event.SubjectRef,
+		event.ActorKind, event.ActorID, event.Action,
 		event.ResourceKind, event.ResourceID, event.Outcome, event.RequestID,
 		detailsJSON, event.CreatedAt,
 	); err != nil {
@@ -1655,7 +992,13 @@ func insertAuditEvent(ctx context.Context, tx pgx.Tx, event contracts.AuditEvent
 	return nil
 }
 
-func insertOperation(ctx context.Context, tx pgx.Tx, projectID string, operation contracts.Operation) error {
+func insertOperation(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantRef string,
+	subjectRef string,
+	operation contracts.Operation,
+) error {
 	var errorCode, errorMessage string
 	var retryable bool
 	if operation.Error != nil {
@@ -1674,10 +1017,11 @@ func insertOperation(ctx context.Context, tx pgx.Tx, projectID string, operation
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.operations (
-			id,project_id,sandbox_id,kind,state,request_id,request_metadata_json,error_code,error_message,retryable,
+			id,tenant_ref,subject_ref,sandbox_id,kind,state,request_id,request_metadata_json,error_code,error_message,retryable,
 			created_at,started_at,completed_at,updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-		operation.ID, projectID, operation.SandboxID, operation.Kind, operation.State, operation.RequestID,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+		operation.ID, tenantRef, subjectRef,
+		operation.SandboxID, operation.Kind, operation.State, operation.RequestID,
 		requestMetadataJSON, errorCode, errorMessage, retryable, operation.CreatedAt,
 		operation.StartedAt, completedAt, operation.UpdatedAt,
 	); err != nil {
@@ -1725,23 +1069,43 @@ type quotaUsage struct {
 	concurrentOperations                               int64
 }
 
-func readQuota(
+func ensureSubjectQuota(
 	ctx context.Context,
 	tx pgx.Tx,
-	table string,
-	column string,
-	identifier string,
+	tenantRef string,
+	subjectRef string,
+	quota contracts.QuotaLimits,
+	now time.Time,
+) error {
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.subject_quotas (
+			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
+			max_retained_bytes,max_snapshots,max_artifacts,max_port_sessions,max_concurrent_operations,updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		ON CONFLICT (tenant_ref,subject_ref) DO NOTHING`,
+		tenantRef, subjectRef, quota.MaxSandboxes, quota.MaxActiveInstances,
+		quota.MaxCPUMillis, quota.MaxMemoryBytes, quota.MaxRetainedBytes,
+		quota.MaxSnapshots, quota.MaxArtifacts, quota.MaxPortSessions,
+		quota.MaxConcurrentOperations, now.UTC(),
+	); err != nil {
+		return fmt.Errorf("SecondBox subject quota initialization failed: %w", err)
+	}
+	return nil
+}
+
+func readSubjectQuota(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantRef string,
+	subjectRef string,
 ) (contracts.QuotaLimits, error) {
-	allowed := map[string]string{
-		"project_quotas.project_id":   "SELECT max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,max_retained_bytes,max_snapshots,max_artifacts,max_port_sessions,max_concurrent_operations FROM secondbox.project_quotas WHERE project_id=$1",
-		"profile_quotas.profile_name": "SELECT max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,max_retained_bytes,max_snapshots,max_artifacts,max_port_sessions,max_concurrent_operations FROM secondbox.profile_quotas WHERE profile_name=$1",
-	}
-	query, exists := allowed[table+"."+column]
-	if !exists {
-		return contracts.QuotaLimits{}, errors.New("SecondBox quota lookup target is invalid")
-	}
 	var quota contracts.QuotaLimits
-	if err := tx.QueryRow(ctx, query, identifier).Scan(
+	if err := tx.QueryRow(ctx, `
+		SELECT max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
+		       max_retained_bytes,max_snapshots,max_artifacts,max_port_sessions,max_concurrent_operations
+		FROM secondbox.subject_quotas
+		WHERE tenant_ref=$1 AND subject_ref=$2
+		FOR UPDATE`, tenantRef, subjectRef).Scan(
 		&quota.MaxSandboxes, &quota.MaxActiveInstances, &quota.MaxCPUMillis,
 		&quota.MaxMemoryBytes, &quota.MaxRetainedBytes, &quota.MaxSnapshots,
 		&quota.MaxArtifacts, &quota.MaxPortSessions, &quota.MaxConcurrentOperations,
@@ -1751,70 +1115,36 @@ func readQuota(
 	return quota, nil
 }
 
-func readQuotaUsage(
+func readSubjectQuotaUsage(
 	ctx context.Context,
 	tx pgx.Tx,
-	predicate string,
-	identifier string,
+	tenantRef string,
+	subjectRef string,
 ) (quotaUsage, error) {
-	allowed := map[string]string{
-		"sandbox.project_id=$1": `
-			SELECT count(*),
-			       count(*) FILTER (WHERE sandbox.state IN ('starting','ready','draining','stopping')),
-			       COALESCE(sum((revision.spec_json->'resources'->>'cpuMillis')::bigint),0),
-			       COALESCE(sum((revision.spec_json->'resources'->>'memoryBytes')::bigint),0),
-			       COALESCE(sum(workspace.retained_bytes),0)
-			         +(SELECT COALESCE(sum(size_bytes),0) FROM secondbox.artifacts
-			           WHERE project_id=$1 AND state<>'deleted')
-			         +(SELECT COALESCE(sum(size_bytes),0) FROM secondbox.workspace_checkpoints
-			           WHERE project_id=$1 AND state IN ('staging','verified')),
-			       (SELECT count(*) FROM secondbox.snapshots
-			        WHERE project_id=$1 AND state='published'),
-			       (SELECT count(*) FROM secondbox.artifacts
-			        WHERE project_id=$1 AND state<>'deleted'),
-			       (SELECT count(*) FROM secondbox.port_sessions WHERE project_id=$1 AND state='open'),
-			       (SELECT count(*) FROM secondbox.data_plane_sessions WHERE project_id=$1 AND state IN ('pending','running','cancelling'))
-			FROM secondbox.sandboxes AS sandbox
-			JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
-			JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
-			WHERE sandbox.project_id=$1 AND sandbox.state<>'deleted'`,
-		"sandbox.profile_name=$1": `
-			SELECT count(*),
-			       count(*) FILTER (WHERE sandbox.state IN ('starting','ready','draining','stopping')),
-			       COALESCE(sum((revision.spec_json->'resources'->>'cpuMillis')::bigint),0),
-			       COALESCE(sum((revision.spec_json->'resources'->>'memoryBytes')::bigint),0),
-			       COALESCE(sum(workspace.retained_bytes),0)
-			         +(SELECT COALESCE(sum(artifact.size_bytes),0)
-			           FROM secondbox.artifacts AS artifact
-			           JOIN secondbox.sandboxes AS owned ON owned.id=artifact.sandbox_id
-			           WHERE owned.profile_name=$1 AND artifact.state<>'deleted')
-			         +(SELECT COALESCE(sum(checkpoint.size_bytes),0)
-			           FROM secondbox.workspace_checkpoints AS checkpoint
-			           JOIN secondbox.sandboxes AS owned ON owned.id=checkpoint.sandbox_id
-			           WHERE owned.profile_name=$1 AND checkpoint.state IN ('staging','verified')),
-			       (SELECT count(*) FROM secondbox.snapshots AS snapshot
-			        JOIN secondbox.sandboxes AS owned ON owned.id=snapshot.sandbox_id
-			        WHERE owned.profile_name=$1 AND snapshot.state='published'),
-			       (SELECT count(*) FROM secondbox.artifacts AS artifact
-			        JOIN secondbox.sandboxes AS owned ON owned.id=artifact.sandbox_id
-			        WHERE owned.profile_name=$1 AND artifact.state<>'deleted'),
-			       (SELECT count(*) FROM secondbox.port_sessions AS session
-			        JOIN secondbox.sandboxes AS owned ON owned.id=session.sandbox_id
-			        WHERE owned.profile_name=$1 AND session.state='open'),
-			       (SELECT count(*) FROM secondbox.data_plane_sessions AS session
-			        JOIN secondbox.sandboxes AS owned ON owned.id=session.sandbox_id
-			        WHERE owned.profile_name=$1 AND session.state IN ('pending','running','cancelling'))
-			FROM secondbox.sandboxes AS sandbox
-			JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
-			JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
-			WHERE sandbox.profile_name=$1 AND sandbox.state<>'deleted'`,
-	}
-	query, exists := allowed[predicate]
-	if !exists {
-		return quotaUsage{}, errors.New("SecondBox quota usage predicate is invalid")
-	}
 	var usage quotaUsage
-	if err := tx.QueryRow(ctx, query, identifier).Scan(
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*),
+		       count(*) FILTER (WHERE sandbox.state IN ('starting','ready','draining','stopping')),
+		       COALESCE(sum((revision.spec_json->'resources'->>'cpuMillis')::bigint),0),
+		       COALESCE(sum((revision.spec_json->'resources'->>'memoryBytes')::bigint),0),
+		       COALESCE(sum(workspace.retained_bytes),0)
+		         +(SELECT COALESCE(sum(size_bytes),0) FROM secondbox.artifacts
+		           WHERE tenant_ref=$1 AND subject_ref=$2 AND state<>'deleted')
+		         +(SELECT COALESCE(sum(size_bytes),0) FROM secondbox.workspace_checkpoints
+		           WHERE tenant_ref=$1 AND subject_ref=$2 AND state IN ('staging','verified')),
+		       (SELECT count(*) FROM secondbox.snapshots
+		        WHERE tenant_ref=$1 AND subject_ref=$2 AND state='published'),
+		       (SELECT count(*) FROM secondbox.artifacts
+		        WHERE tenant_ref=$1 AND subject_ref=$2 AND state<>'deleted'),
+		       (SELECT count(*) FROM secondbox.port_sessions
+		        WHERE tenant_ref=$1 AND subject_ref=$2 AND state='open'),
+		       (SELECT count(*) FROM secondbox.data_plane_sessions
+		        WHERE tenant_ref=$1 AND subject_ref=$2 AND state IN ('pending','running','cancelling'))
+		FROM secondbox.sandboxes AS sandbox
+		JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
+		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+		WHERE sandbox.tenant_ref=$1 AND sandbox.subject_ref=$2 AND sandbox.state<>'deleted'`,
+		tenantRef, subjectRef).Scan(
 		&usage.sandboxes, &usage.activeInstances, &usage.cpuMillis, &usage.memoryBytes,
 		&usage.retainedBytes, &usage.snapshots, &usage.artifacts, &usage.portSessions,
 		&usage.concurrentOperations,
@@ -1829,9 +1159,10 @@ func quotaWouldExceed(
 	usage quotaUsage,
 	requestedCPU int64,
 	requestedMemory int64,
+	requestedActiveInstances int64,
 ) bool {
 	return usage.sandboxes+1 > quota.MaxSandboxes ||
-		usage.activeInstances > quota.MaxActiveInstances ||
+		usage.activeInstances+requestedActiveInstances > quota.MaxActiveInstances ||
 		usage.cpuMillis+requestedCPU > quota.MaxCPUMillis ||
 		usage.memoryBytes+requestedMemory > quota.MaxMemoryBytes ||
 		usage.retainedBytes > quota.MaxRetainedBytes ||

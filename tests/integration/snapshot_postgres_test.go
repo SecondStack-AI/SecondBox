@@ -23,7 +23,7 @@ import (
 
 func TestSnapshotHTTPContractEnforcesAuthRevisionAndStoppedCheckpointAuthority(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	project, account, credential := createProjectAccountAndCredential(
 		t, controlPlane, admin, "snapshot-http",
 	)
@@ -65,7 +65,7 @@ func TestSnapshotHTTPContractEnforcesAuthRevisionAndStoppedCheckpointAuthority(t
 	}, sandbox.Generation, now)
 
 	handler, err := api.NewHandler(api.HandlerConfig{
-		Service: controlPlane, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Service: controlPlane, PlatformToken: testPlatformToken, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		MaximumDataPlaneBodyBytes: 1 << 20,
 	})
 	if err != nil {
@@ -105,6 +105,35 @@ func TestSnapshotHTTPContractEnforcesAuthRevisionAndStoppedCheckpointAuthority(t
 	if len(page.Items) != 1 || page.Items[0].ID != created.ID {
 		t.Fatalf("public Snapshot page = %#v", page)
 	}
+
+	snapshotScopes := []string{
+		"sandbox:read", "sandbox:lifecycle",
+	}
+	otherSubject, err := createFixtureServiceAccount(t, controlPlane,
+		t.Context(), admin, project.ID,
+		contracts.CreateServiceAccountRequest{
+			Name: "snapshot-http-other-subject", Scopes: snapshotScopes,
+			ProfileGrants: []string{profile.Name},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSubjectKey, err := createFixtureAPIKey(t, controlPlane,
+		t.Context(), admin, project.ID, otherSubject.ID,
+		contracts.CreateAPIKeyRequest{
+			Name: "snapshot-http-other-subject", Scopes: snapshotScopes,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crossSubject := snapshotJSONRequest(
+		t, http.MethodGet, server.URL+"/v1/snapshots/"+created.ID,
+		otherSubjectKey.Credential, "", 0, nil,
+	)
+	assertHTTPStatus(t, crossSubject, http.StatusNotFound)
+	crossSubject.Body.Close()
 
 	_, _, otherCredential := createProjectAccountAndCredential(
 		t, controlPlane, admin, "snapshot-http-other",
@@ -163,7 +192,7 @@ func TestSnapshotHTTPContractEnforcesAuthRevisionAndStoppedCheckpointAuthority(t
 
 func TestSnapshotsRetainPublishedStoppedStateAndProtectCheckpointGarbageCollection(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	project, account, credential := createProjectAccountAndCredential(
 		t, controlPlane, admin, "snapshot-retention",
 	)
@@ -254,6 +283,12 @@ func TestSnapshotsRetainPublishedStoppedStateAndProtectCheckpointGarbageCollecti
 	if err != nil || got.ID != created.ID {
 		t.Fatalf("Snapshot get = %#v, %v", got, err)
 	}
+	if _, err := databaseStore.GetSnapshot(
+		t.Context(), principal.TenantRef, principal.SubjectRef,
+		created.ID, created.RetainUntil,
+	); !errors.Is(err, ports.ErrSnapshotNotFound) {
+		t.Fatalf("retention-expired Snapshot get error = %v, want ErrSnapshotNotFound", err)
+	}
 
 	secondCheckpoint := contracts.WorkspaceCheckpoint{
 		ID: "chk_snapshot_second", WorkspaceID: sandbox.Workspace.ID,
@@ -303,7 +338,7 @@ func TestSnapshotsRetainPublishedStoppedStateAndProtectCheckpointGarbageCollecti
 
 func TestSnapshotPolicyLimitIsTransactionalAndRetentionReleaseRestoresCapacity(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(
 		t, controlPlane, admin, "snapshot-capacity",
 	)
@@ -430,7 +465,7 @@ func snapshotJSONRequest(
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Header.Set("Authorization", "Bearer "+credential)
+	setPlatformAuthorization(t, request, credential)
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}

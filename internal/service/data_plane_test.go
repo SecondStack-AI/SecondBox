@@ -45,7 +45,7 @@ func TestWaitForFileDeadlineRequiresGuestTerminalProof(t *testing.T) {
 		now: func() time.Time { return time.Unix(100, 0).UTC() },
 	}
 	session, err := service.waitForDataPlane(
-		t.Context(), "project", runnercontrol.DataPlaneSession{
+		t.Context(), "tenant", "subject", runnercontrol.DataPlaneSession{
 			ID: "session", Kind: "file", State: "running",
 		}, 1,
 	)
@@ -73,7 +73,7 @@ func (*deadlineProofRelay) AdmitDataPlane(context.Context, runnercontrol.DataPla
 	panic("unexpected admission")
 }
 
-func (relay *deadlineProofRelay) GetDataPlaneSession(context.Context, string, string) (runnercontrol.DataPlaneSession, error) {
+func (relay *deadlineProofRelay) GetDataPlaneSession(context.Context, string, string, string) (runnercontrol.DataPlaneSession, error) {
 	relay.getCalls++
 	if !relay.expired {
 		return runnercontrol.DataPlaneSession{ID: "session", Kind: "file", State: "running"}, nil
@@ -84,7 +84,7 @@ func (relay *deadlineProofRelay) GetDataPlaneSession(context.Context, string, st
 	}, nil
 }
 
-func (relay *deadlineProofRelay) ExpireDataPlaneSession(context.Context, string, string, time.Time) (runnercontrol.DataPlaneSession, error) {
+func (relay *deadlineProofRelay) ExpireDataPlaneSession(context.Context, string, string, string, time.Time) (runnercontrol.DataPlaneSession, error) {
 	relay.expired = true
 	return runnercontrol.DataPlaneSession{
 		ID: "session", Kind: "file", State: "cancelling",
@@ -93,19 +93,19 @@ func (relay *deadlineProofRelay) ExpireDataPlaneSession(context.Context, string,
 }
 
 func (*deadlineProofRelay) AppendExecClientFrame(
-	context.Context, string, string, runnercontrol.ExecClientFrame, time.Time,
+	context.Context, string, string, string, runnercontrol.ExecClientFrame, time.Time,
 ) (bool, error) {
 	panic("unexpected streaming Exec frame")
 }
 
 func (*deadlineProofRelay) ListExecServerFrames(
-	context.Context, string, string, int64, int,
+	context.Context, string, string, string, int64, int,
 ) ([]runnercontrol.ExecServerFrame, error) {
 	panic("unexpected streaming Exec frame lookup")
 }
 
 func (*deadlineProofRelay) CancelDataPlaneSession(
-	context.Context, string, string, string, time.Time,
+	context.Context, string, string, string, string, time.Time,
 ) (bool, error) {
 	panic("unexpected streaming Exec cancellation")
 }

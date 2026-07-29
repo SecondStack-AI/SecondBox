@@ -63,8 +63,8 @@ required_settings=(
   SECONDBOX_RUNNER_SERVER_PRIVATE_KEY
   SECONDBOX_RUNNER_CA_CERTIFICATE
   SECONDBOX_RUNNER_CA_PRIVATE_KEY
-  SECONDBOX_RUNNER_ENROLLMENT_HASH_SECRET
-  SECONDBOX_RUNNER_CERTIFICATE_LIFETIME_SECONDS
+  SECONDBOX_RUNNER_CREDENTIAL
+  SECONDBOX_RUNNER_CERTIFICATE_LIFETIME_DAYS
   SECONDBOX_RUNNER_HEARTBEAT_INTERVAL_MILLISECONDS
   SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS
   SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS
@@ -81,7 +81,6 @@ required_settings=(
   SECONDBOX_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS
   SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH
   SECONDBOX_SIGNED_ASSET_CATALOG_PATH
-  SECONDBOX_RUNNER_CREDENTIAL_VERIFICATION_TIMEOUT_MILLISECONDS
   SECONDBOX_RUNNER_PROTOCOL_MINIMUM
   SECONDBOX_RUNNER_PROTOCOL_MAXIMUM
   SECONDBOX_RUNNER_ENABLED_FEATURES
@@ -167,26 +166,16 @@ required_settings=(
   SECONDBOX_OBJECT_STORE_TEMP_DIRECTORY
   SECONDBOX_OBJECT_STORE_MAX_OBJECT_BYTES
   SECONDBOX_CHECKPOINT_SPOOL_DIRECTORY
-  SECONDBOX_BOOTSTRAP_ADMIN_TOKEN
-  SECONDBOX_API_KEY_HASH_SECRET
-  SECONDBOX_DEFAULT_PROJECT_MAX_SANDBOXES
-  SECONDBOX_DEFAULT_PROJECT_MAX_ACTIVE_INSTANCES
-  SECONDBOX_DEFAULT_PROJECT_MAX_CPU_MILLIS
-  SECONDBOX_DEFAULT_PROJECT_MAX_MEMORY_BYTES
-  SECONDBOX_DEFAULT_PROJECT_MAX_RETAINED_BYTES
-  SECONDBOX_DEFAULT_PROJECT_MAX_SNAPSHOTS
-  SECONDBOX_DEFAULT_PROJECT_MAX_ARTIFACTS
-  SECONDBOX_DEFAULT_PROJECT_MAX_PORT_SESSIONS
-  SECONDBOX_DEFAULT_PROJECT_MAX_CONCURRENT_OPERATIONS
-  SECONDBOX_DEFAULT_PROFILE_MAX_SANDBOXES
-  SECONDBOX_DEFAULT_PROFILE_MAX_ACTIVE_INSTANCES
-  SECONDBOX_DEFAULT_PROFILE_MAX_CPU_MILLIS
-  SECONDBOX_DEFAULT_PROFILE_MAX_MEMORY_BYTES
-  SECONDBOX_DEFAULT_PROFILE_MAX_RETAINED_BYTES
-  SECONDBOX_DEFAULT_PROFILE_MAX_SNAPSHOTS
-  SECONDBOX_DEFAULT_PROFILE_MAX_ARTIFACTS
-  SECONDBOX_DEFAULT_PROFILE_MAX_PORT_SESSIONS
-  SECONDBOX_DEFAULT_PROFILE_MAX_CONCURRENT_OPERATIONS
+  SECONDBOX_PLATFORM_TOKEN
+  SECONDBOX_DEFAULT_SUBJECT_MAX_SANDBOXES
+  SECONDBOX_DEFAULT_SUBJECT_MAX_ACTIVE_INSTANCES
+  SECONDBOX_DEFAULT_SUBJECT_MAX_CPU_MILLIS
+  SECONDBOX_DEFAULT_SUBJECT_MAX_MEMORY_BYTES
+  SECONDBOX_DEFAULT_SUBJECT_MAX_RETAINED_BYTES
+  SECONDBOX_DEFAULT_SUBJECT_MAX_SNAPSHOTS
+  SECONDBOX_DEFAULT_SUBJECT_MAX_ARTIFACTS
+  SECONDBOX_DEFAULT_SUBJECT_MAX_PORT_SESSIONS
+  SECONDBOX_DEFAULT_SUBJECT_MAX_CONCURRENT_OPERATIONS
 )
 
 for setting in "${required_settings[@]}"; do
@@ -202,41 +191,31 @@ for setting in "${required_settings[@]}"; do
   fi
 done
 
-bootstrap_admin_token="$(value_for SECONDBOX_BOOTSTRAP_ADMIN_TOKEN)"
-api_key_hash_secret="$(value_for SECONDBOX_API_KEY_HASH_SECRET)"
+platform_token="$(value_for SECONDBOX_PLATFORM_TOKEN)"
 postgres_password="$(value_for SECONDBOX_POSTGRES_PASSWORD)"
 object_store_password="$(value_for SECONDBOX_OBJECT_STORE_ROOT_PASSWORD)"
-runner_enrollment_hash_secret="$(value_for SECONDBOX_RUNNER_ENROLLMENT_HASH_SECRET)"
+runner_credential="$(value_for SECONDBOX_RUNNER_CREDENTIAL)"
 for secret_setting in \
-  SECONDBOX_BOOTSTRAP_ADMIN_TOKEN \
-  SECONDBOX_API_KEY_HASH_SECRET \
+  SECONDBOX_PLATFORM_TOKEN \
   SECONDBOX_POSTGRES_PASSWORD \
   SECONDBOX_OBJECT_STORE_ROOT_PASSWORD \
-  SECONDBOX_RUNNER_ENROLLMENT_HASH_SECRET; do
+  SECONDBOX_RUNNER_CREDENTIAL; do
   secret_value="$(value_for "$secret_setting")"
   if (( ${#secret_value} < 24 )); then
     echo "$secret_setting must contain at least 24 bytes" >&2
     exit 1
   fi
 done
-if (( ${#api_key_hash_secret} < 32 )); then
-  echo "SECONDBOX_API_KEY_HASH_SECRET must contain at least 32 bytes" >&2
+if (( ${#runner_credential} < 32 )); then
+  echo "SECONDBOX_RUNNER_CREDENTIAL must contain at least 32 bytes" >&2
   exit 1
 fi
-if (( ${#runner_enrollment_hash_secret} < 32 )); then
-  echo "SECONDBOX_RUNNER_ENROLLMENT_HASH_SECRET must contain at least 32 bytes" >&2
-  exit 1
-fi
-if [[ "$bootstrap_admin_token" == "$api_key_hash_secret" ||
-      "$bootstrap_admin_token" == "$postgres_password" ||
-      "$bootstrap_admin_token" == "$object_store_password" ||
-      "$bootstrap_admin_token" == "$runner_enrollment_hash_secret" ||
-      "$api_key_hash_secret" == "$postgres_password" ||
-      "$api_key_hash_secret" == "$object_store_password" ||
-      "$api_key_hash_secret" == "$runner_enrollment_hash_secret" ||
+if [[ "$platform_token" == "$postgres_password" ||
+      "$platform_token" == "$object_store_password" ||
+      "$platform_token" == "$runner_credential" ||
       "$postgres_password" == "$object_store_password" ||
-      "$postgres_password" == "$runner_enrollment_hash_secret" ||
-      "$object_store_password" == "$runner_enrollment_hash_secret" ]]; then
+      "$postgres_password" == "$runner_credential" ||
+      "$object_store_password" == "$runner_credential" ]]; then
   echo "SecondBox deployment credentials must be unique per trust boundary" >&2
   exit 1
 fi
@@ -327,7 +306,7 @@ fi
 
 for positive_setting in \
   SECONDBOX_HTTP_TIMEOUT_SECONDS \
-  SECONDBOX_RUNNER_CERTIFICATE_LIFETIME_SECONDS \
+  SECONDBOX_RUNNER_CERTIFICATE_LIFETIME_DAYS \
   SECONDBOX_RUNNER_HEARTBEAT_INTERVAL_MILLISECONDS \
   SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS \
   SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS \
@@ -344,7 +323,6 @@ for positive_setting in \
   SECONDBOX_OBJECT_STORE_HTTP_TIMEOUT_MILLISECONDS \
   SECONDBOX_DEVELOPMENT_PREPARE_WAIT_TIMEOUT_SECONDS \
   SECONDBOX_OBJECT_STORE_MAX_OBJECT_BYTES \
-  SECONDBOX_RUNNER_CREDENTIAL_VERIFICATION_TIMEOUT_MILLISECONDS \
   SECONDBOX_RUNNER_PROTOCOL_MINIMUM \
   SECONDBOX_RUNNER_PROTOCOL_MAXIMUM; do
   positive_value="$(value_for "$positive_setting")"
@@ -530,8 +508,7 @@ done
 for setting_and_path in \
   "SECONDBOX_RUNNER_SERVER_CERTIFICATE=/run/secondbox-runner-pki/server.crt" \
   "SECONDBOX_RUNNER_SERVER_PRIVATE_KEY=/run/secondbox-runner-pki/server.key" \
-  "SECONDBOX_RUNNER_CA_CERTIFICATE=/run/secondbox-runner-pki/runner-ca.crt" \
-  "SECONDBOX_RUNNER_CA_PRIVATE_KEY=/run/secondbox-runner-pki/runner-ca.key"; do
+  "SECONDBOX_RUNNER_CA_CERTIFICATE=/run/secondbox-runner-pki/runner-ca.crt"; do
   setting="${setting_and_path%%=*}"
   expected_path="${setting_and_path#*=}"
   if [[ "$(value_for "$setting")" != "$expected_path" ]]; then
@@ -539,6 +516,10 @@ for setting_and_path in \
     exit 1
   fi
 done
+if [[ "$(value_for SECONDBOX_RUNNER_CA_PRIVATE_KEY)" != "$runner_pki_directory/runner-ca.key" ]]; then
+  echo "SECONDBOX_RUNNER_CA_PRIVATE_KEY must identify the private runner CA in SECONDBOX_RUNNER_PKI_HOST_DIR" >&2
+  exit 1
+fi
 if ! openssl verify \
   -CAfile "$runner_pki_directory/runner-ca.crt" \
   "$runner_pki_directory/server.crt" >/dev/null; then

@@ -42,7 +42,7 @@ func (apiHandler *handler) createSandboxTerminal(writer http.ResponseWriter, req
 		return
 	}
 	writer.Header().Set("Idempotency-Replayed", fmt.Sprintf("%t", replayed))
-	writeJSON(writer, http.StatusCreated, response)
+	apiHandler.writeJSON(writer, request, http.StatusCreated, response)
 }
 
 func (apiHandler *handler) getOrConnectSandboxTerminal(writer http.ResponseWriter, request *http.Request) {
@@ -68,7 +68,7 @@ func (apiHandler *handler) getOrConnectSandboxTerminal(writer http.ResponseWrite
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, response)
+	apiHandler.writeJSON(writer, request, http.StatusOK, response)
 }
 
 func (apiHandler *handler) cancelSandboxTerminal(writer http.ResponseWriter, request *http.Request) {
@@ -91,7 +91,7 @@ func (apiHandler *handler) cancelSandboxTerminal(writer http.ResponseWriter, req
 		return
 	}
 	writer.Header().Set("Idempotency-Replayed", fmt.Sprintf("%t", replayed))
-	writeJSON(writer, http.StatusAccepted, response)
+	apiHandler.writeJSON(writer, request, http.StatusAccepted, response)
 }
 
 func (apiHandler *handler) publicTerminalSession(

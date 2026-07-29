@@ -26,21 +26,21 @@ import (
 
 func TestPublicStreamingExecIsDurableBackpressuredAndCancellable(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	project, account, _ := createProjectAccountAndCredential(t, controlPlane, admin, "streaming-exec-http")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-streaming-exec-http")
 	scopes := []string{
-		contracts.ScopeSandboxRead,
-		contracts.ScopeSandboxLifecycle,
-		contracts.ScopeSandboxExec,
+		"sandbox:read",
+		"sandbox:lifecycle",
+		"sandbox:exec",
 	}
-	if _, err := controlPlane.UpdateServiceAccount(
+	if _, err := updateFixtureServiceAccount(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
 		contracts.UpdateServiceAccountRequest{Scopes: &scopes},
 	); err != nil {
 		t.Fatal(err)
 	}
-	key, err := controlPlane.CreateAPIKey(
+	key, err := createFixtureAPIKey(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
 		contracts.CreateAPIKeyRequest{Name: "streaming-exec-http", Scopes: scopes},
 	)
@@ -79,10 +79,9 @@ func TestPublicStreamingExecIsDurableBackpressuredAndCancellable(t *testing.T) {
 	server := httptest.NewUnstartedServer(nil)
 	publicBaseURL := "http://" + server.Listener.Addr().String()
 	dataPlaneService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		Store: databaseStore, BootstrapAdminToken: "bootstrap-administrator-secret",
-		APIKeyHashSecret:    []byte("test-keyed-api-hash-secret-at-least-32-bytes"),
-		DefaultProjectQuota: generousQuota(), DefaultProfileQuota: generousQuota(),
-		Now: func() time.Time { return now }, NewID: service.NewOpaqueID,
+		Store: databaseStore, PlatformToken: testPlatformToken,
+		DefaultSubjectQuota: generousQuota(),
+		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		DataPlaneRelay:        relay, DataPlanePollInterval: time.Millisecond,
 		PublicBaseURL: publicBaseURL,
@@ -91,7 +90,7 @@ func TestPublicStreamingExecIsDurableBackpressuredAndCancellable(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler, err := api.NewHandler(api.HandlerConfig{
-		Service: dataPlaneService, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Service: dataPlaneService, PlatformToken: testPlatformToken, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		MaximumDataPlaneBodyBytes: 64 << 20,
 	})
 	if err != nil {
@@ -119,7 +118,7 @@ func TestPublicStreamingExecIsDurableBackpressuredAndCancellable(t *testing.T) {
 	ordered := createStreamingExecSession(
 		t, server.URL, key.Credential, sandbox, "", "stream-ordered", "stream-order", 16,
 	)
-	staleGenerationHeaders := streamingExecHeaders(key.Credential, sandbox.Generation+1)
+	staleGenerationHeaders := streamingExecHeaders(t, key.Credential, sandbox.Generation+1)
 	staleGenerationDialer := websocket.Dialer{Subprotocols: []string{"secondbox.exec.v1"}}
 	_, response, err := staleGenerationDialer.Dial(ordered.WebsocketURL, staleGenerationHeaders)
 	if err == nil {
@@ -146,7 +145,10 @@ func TestPublicStreamingExecIsDurableBackpressuredAndCancellable(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitStreamingRunnerEvent(t, fake.events, "eof:stream-order")
-	frames, err := relay.ListExecServerFrames(t.Context(), project.ID, string(ordered.ID), -1, 10)
+	frames, err := relay.ListExecServerFrames(
+		t.Context(), principal.TenantRef, principal.SubjectRef,
+		string(ordered.ID), -1, 10,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +212,7 @@ func TestPublicStreamingExecIsDurableBackpressuredAndCancellable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	setDataPlaneHeaders(cancelRequest, key.Credential, sandbox.Generation, "stream-http-cancel-request")
+	setDataPlaneHeaders(t, cancelRequest, key.Credential, sandbox.Generation, "stream-http-cancel-request")
 	cancelResponse := doHTTP(t, cancelRequest)
 	assertHTTPStatus(t, cancelResponse, http.StatusAccepted)
 	if cancelResponse.Header.Get("Idempotency-Replayed") != "false" {
@@ -223,7 +225,8 @@ func TestPublicStreamingExecIsDurableBackpressuredAndCancellable(t *testing.T) {
 	}
 	waitStreamingRunnerEvent(t, fake.events, "cancel:wait-http-cancel")
 	waitDataPlaneSessionState(
-		t, relay, project.ID, string(httpCancelled.ID), "completed",
+		t, relay, principal.TenantRef, principal.SubjectRef,
+		string(httpCancelled.ID), "completed",
 	)
 
 	replayCancelRequest, err := http.NewRequestWithContext(
@@ -235,7 +238,7 @@ func TestPublicStreamingExecIsDurableBackpressuredAndCancellable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	setDataPlaneHeaders(replayCancelRequest, key.Credential, sandbox.Generation, "stream-http-cancel-request")
+	setDataPlaneHeaders(t, replayCancelRequest, key.Credential, sandbox.Generation, "stream-http-cancel-request")
 	replayCancelResponse := doHTTP(t, replayCancelRequest)
 	assertHTTPStatus(t, replayCancelResponse, http.StatusAccepted)
 	if replayCancelResponse.Header.Get("Idempotency-Replayed") != "true" {
@@ -259,7 +262,7 @@ func TestPublicStreamingExecIsDurableBackpressuredAndCancellable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	setDataPlaneHeaders(
+	setDataPlaneHeaders(t,
 		newKeyCancelRequest, key.Credential, sandbox.Generation,
 		"stream-http-cancel-new-request",
 	)
@@ -287,7 +290,7 @@ func TestPublicStreamingExecIsDurableBackpressuredAndCancellable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	setDataPlaneHeaders(
+	setDataPlaneHeaders(t,
 		conflictingCancelRequest, key.Credential, sandbox.Generation+1,
 		"stream-http-cancel-request",
 	)
@@ -379,7 +382,7 @@ func (fake *streamingExecFakeRunner) run(ctx context.Context) error {
 			continue
 		}
 		if err := fake.relay.MarkOutboundFrameDelivered(
-			ctx, delivery.ID, fake.connectionID, now,
+			ctx, delivery.ID, fake.connectionID, delivery.ClaimAttempt, now,
 		); err != nil {
 			return err
 		}
@@ -545,7 +548,7 @@ func createStreamingExecSessionResponse(
 	if err != nil {
 		t.Fatal(err)
 	}
-	setDataPlaneHeaders(request, credential, sandbox.Generation, idempotencyKey)
+	setDataPlaneHeaders(t, request, credential, sandbox.Generation, idempotencyKey)
 	request.Header.Set("Content-Type", "application/json")
 	if leaseID != "" {
 		request.Header.Set("SecondBox-Lease-ID", leaseID)
@@ -561,7 +564,7 @@ func dialStreamingExec(
 ) *websocket.Conn {
 	t.Helper()
 	dialer := websocket.Dialer{Subprotocols: []string{"secondbox.exec.v1"}}
-	connection, response, err := dialer.Dial(session.WebsocketURL, streamingExecHeaders(credential, generation))
+	connection, response, err := dialer.Dial(session.WebsocketURL, streamingExecHeaders(t, credential, generation))
 	if err != nil {
 		if response != nil {
 			body, _ := io.ReadAll(response.Body)
@@ -577,9 +580,9 @@ func dialStreamingExec(
 	return connection
 }
 
-func streamingExecHeaders(credential string, generation int64) http.Header {
+func streamingExecHeaders(t *testing.T, credential string, generation int64) http.Header {
 	headers := make(http.Header)
-	headers.Set("Authorization", "Bearer "+credential)
+	setPlatformAuthorizationHeaders(t, headers, credential)
 	headers.Set("SecondBox-Generation", fmt.Sprintf("%d", generation))
 	return headers
 }
@@ -654,14 +657,17 @@ func waitStreamingRunnerEvent(t *testing.T, events <-chan string, expected strin
 func waitDataPlaneSessionState(
 	t *testing.T,
 	relay *runnercontrol.PostgresFrameRelay,
-	projectID string,
+	tenantRef string,
+	subjectRef string,
 	sessionID string,
 	expected string,
 ) runnercontrol.DataPlaneSession {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		session, err := relay.GetDataPlaneSession(t.Context(), projectID, sessionID)
+		session, err := relay.GetDataPlaneSession(
+			t.Context(), tenantRef, subjectRef, sessionID,
+		)
 		if err != nil {
 			t.Fatal(err)
 		}

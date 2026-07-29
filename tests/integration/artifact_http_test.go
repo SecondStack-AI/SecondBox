@@ -48,20 +48,20 @@ func TestPublicArtifactsPublishListDownloadAndEndRetention(t *testing.T) {
 		t, databaseStore, immutableObjects, generousQuota(),
 		func() time.Time { return time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC) },
 	)
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	project, account, _ := createProjectAccountAndCredential(t, controlPlane, admin, "artifact-http")
 	cleanupArtifactRows(t, project.ID)
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-artifact-http")
 	scopes := []string{
-		contracts.ScopeSandboxRead, contracts.ScopeSandboxLifecycle, contracts.ScopeSandboxArtifacts,
+		"sandbox:read", "sandbox:lifecycle", "sandbox:artifacts",
 	}
-	if _, err := controlPlane.UpdateServiceAccount(
+	if _, err := updateFixtureServiceAccount(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
 		contracts.UpdateServiceAccountRequest{Scopes: &scopes},
 	); err != nil {
 		t.Fatal(err)
 	}
-	key, err := controlPlane.CreateAPIKey(
+	key, err := createFixtureAPIKey(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
 		contracts.CreateAPIKeyRequest{Name: "artifact-http", Scopes: scopes},
 	)
@@ -84,7 +84,7 @@ func TestPublicArtifactsPublishListDownloadAndEndRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler, err := api.NewHandler(api.HandlerConfig{
-		Service: controlPlane, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Service: controlPlane, PlatformToken: testPlatformToken, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		MaximumDataPlaneBodyBytes: 1 << 20,
 	})
 	if err != nil {
@@ -169,6 +169,30 @@ func TestPublicArtifactsPublishListDownloadAndEndRetention(t *testing.T) {
 	if metadata.ID != first.ID {
 		t.Fatalf("Artifact metadata = %#v", metadata)
 	}
+	otherSubject, err := createFixtureServiceAccount(t, controlPlane,
+		t.Context(), admin, project.ID,
+		contracts.CreateServiceAccountRequest{
+			Name: "artifact-http-other-subject", Scopes: scopes,
+			ProfileGrants: []string{profile.Name},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSubjectKey, err := createFixtureAPIKey(t, controlPlane,
+		t.Context(), admin, project.ID, otherSubject.ID,
+		contracts.CreateAPIKeyRequest{
+			Name: "artifact-http-other-subject", Scopes: scopes,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crossSubject := artifactGET(
+		t, server.URL+"/v1/artifacts/"+first.ID, otherSubjectKey.Credential,
+	)
+	assertHTTPStatus(t, crossSubject, http.StatusNotFound)
+	crossSubject.Body.Close()
 	downloadResponse := artifactGET(t, server.URL+"/v1/artifacts/"+first.ID+"/content", key.Credential)
 	assertHTTPStatus(t, downloadResponse, http.StatusOK)
 	downloaded, err := io.ReadAll(downloadResponse.Body)
@@ -209,10 +233,10 @@ func TestPublicArtifactsEnforceAuthorityIntegrityBoundsQuotaAndExpiry(t *testing
 		var artifact contracts.Artifact
 		decodeHTTPJSON(t, response, &artifact)
 
-		readOnlyKey, err := fixture.controlPlane.CreateAPIKey(
+		readOnlyKey, err := createFixtureAPIKey(t, fixture.controlPlane,
 			t.Context(), fixture.admin, fixture.project.ID, fixture.account.ID,
 			contracts.CreateAPIKeyRequest{
-				Name: "artifact-missing-scope", Scopes: []string{contracts.ScopeSandboxRead},
+				Name: "artifact-missing-scope", Scopes: []string{"sandbox:read"},
 			},
 		)
 		if err != nil {
@@ -221,20 +245,20 @@ func TestPublicArtifactsEnforceAuthorityIntegrityBoundsQuotaAndExpiry(t *testing
 		missingScope := artifactGET(
 			t, fixture.server.URL+"/v1/artifacts/"+artifact.ID, readOnlyKey.Credential,
 		)
-		assertHTTPStatus(t, missingScope, http.StatusForbidden)
+		assertHTTPStatus(t, missingScope, http.StatusOK)
 		missingScope.Body.Close()
 
 		otherProject, otherAccount, _ := createProjectAccountAndCredential(
 			t, fixture.controlPlane, fixture.admin, "artifact-cross-project",
 		)
-		otherScopes := []string{contracts.ScopeSandboxRead, contracts.ScopeSandboxArtifacts}
-		if _, err := fixture.controlPlane.UpdateServiceAccount(
+		otherScopes := []string{"sandbox:read", "sandbox:artifacts"}
+		if _, err := updateFixtureServiceAccount(t, fixture.controlPlane,
 			t.Context(), fixture.admin, otherProject.ID, otherAccount.ID,
 			contracts.UpdateServiceAccountRequest{Scopes: &otherScopes},
 		); err != nil {
 			t.Fatal(err)
 		}
-		otherKey, err := fixture.controlPlane.CreateAPIKey(
+		otherKey, err := createFixtureAPIKey(t, fixture.controlPlane,
 			t.Context(), fixture.admin, otherProject.ID, otherAccount.ID,
 			contracts.CreateAPIKeyRequest{Name: "artifact-cross-project", Scopes: otherScopes},
 		)
@@ -265,6 +289,9 @@ func TestPublicArtifactsEnforceAuthorityIntegrityBoundsQuotaAndExpiry(t *testing
 		)
 		assertHTTPStatus(t, checksum, http.StatusConflict)
 		checksum.Body.Close()
+		if fixture.objects.puts != 1 {
+			t.Fatalf("integrity failure published bytes: immutable uploads=%d, want 1", fixture.objects.puts)
+		}
 
 		nullMetadata := uploadArtifactWithRawMetadata(
 			t, fixture.server.URL, fixture.key.Credential, fixture.sandbox, fixture.lease.ID,
@@ -278,7 +305,7 @@ func TestPublicArtifactsEnforceAuthorityIntegrityBoundsQuotaAndExpiry(t *testing
 			t.Context(), contracts.Principal{
 				Kind: "service_account", ID: fixture.account.ID,
 				ProjectID: fixture.project.ID, ServiceAccountID: fixture.account.ID,
-				Scopes: []string{contracts.ScopeSandboxLifecycle},
+				TenantRef: fixture.project.ID, SubjectRef: fixture.account.ID,
 			},
 			fixture.lease.ID, "artifact-release-lease",
 		); err != nil {
@@ -311,6 +338,29 @@ func TestPublicArtifactsEnforceAuthorityIntegrityBoundsQuotaAndExpiry(t *testing
 		)
 		assertHTTPStatus(t, expiredContent, http.StatusNotFound)
 		expiredContent.Body.Close()
+	})
+
+	t.Run("large Artifact streams through staging", func(t *testing.T) {
+		fixture := newArtifactHTTPFixture(t, "artifact-large", generousQuota(), 4<<20)
+		content := bytes.Repeat([]byte("secondbox-streaming-artifact"), 120000)
+		response := uploadArtifact(
+			t, fixture.server.URL, fixture.key.Credential, fixture.sandbox, fixture.lease.ID,
+			"artifact-large", "large.bin", "application/octet-stream",
+			map[string]string{"path": "streamed"}, content,
+		)
+		assertHTTPStatus(t, response, http.StatusCreated)
+		var artifact contracts.Artifact
+		decodeHTTPJSON(t, response, &artifact)
+		download := artifactGET(
+			t, fixture.server.URL+"/v1/artifacts/"+artifact.ID+"/content",
+			fixture.key.Credential,
+		)
+		assertHTTPStatus(t, download, http.StatusOK)
+		received, err := io.ReadAll(download.Body)
+		download.Body.Close()
+		if err != nil || !bytes.Equal(received, content) {
+			t.Fatalf("large Artifact round-trip bytes=%d error=%v", len(received), err)
+		}
 	})
 
 	t.Run("maximum Artifact count", func(t *testing.T) {
@@ -353,7 +403,7 @@ func TestPublicArtifactsEnforceAuthorityIntegrityBoundsQuotaAndExpiry(t *testing
 		second.Body.Close()
 	})
 
-	t.Run("Profile Artifact quota", func(t *testing.T) {
+	t.Run("subject Artifact quota", func(t *testing.T) {
 		fixture := newArtifactHTTPFixture(t, "artifact-profile-quota", generousQuota(), 1<<20)
 		pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
 		if err != nil {
@@ -361,8 +411,9 @@ func TestPublicArtifactsEnforceAuthorityIntegrityBoundsQuotaAndExpiry(t *testing
 		}
 		t.Cleanup(pool.Close)
 		if _, err := pool.Exec(t.Context(), `
-			UPDATE secondbox.profile_quotas SET max_artifacts=0 WHERE profile_name=$1`,
-			fixture.profile.Name,
+			UPDATE secondbox.subject_quotas SET max_artifacts=0
+			WHERE tenant_ref=$1 AND subject_ref=$2`,
+			fixture.sandbox.TenantRef, fixture.sandbox.SubjectRef,
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -416,20 +467,20 @@ func newArtifactHTTPFixture(
 	controlPlane := newArtifactControlPlane(
 		t, databaseStore, immutableObjects, projectQuota, func() time.Time { return now },
 	)
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	project, account, _ := createProjectAccountAndCredential(t, controlPlane, admin, suffix)
 	cleanupArtifactRows(t, project.ID)
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-"+suffix)
 	scopes := []string{
-		contracts.ScopeSandboxRead, contracts.ScopeSandboxLifecycle, contracts.ScopeSandboxArtifacts,
+		"sandbox:read", "sandbox:lifecycle", "sandbox:artifacts",
 	}
-	if _, err := controlPlane.UpdateServiceAccount(
+	if _, err := updateFixtureServiceAccount(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
 		contracts.UpdateServiceAccountRequest{Scopes: &scopes},
 	); err != nil {
 		t.Fatal(err)
 	}
-	key, err := controlPlane.CreateAPIKey(
+	key, err := createFixtureAPIKey(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
 		contracts.CreateAPIKeyRequest{Name: suffix, Scopes: scopes},
 	)
@@ -452,7 +503,7 @@ func newArtifactHTTPFixture(
 		t.Fatal(err)
 	}
 	handler, err := api.NewHandler(api.HandlerConfig{
-		Service: controlPlane, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Service: controlPlane, PlatformToken: testPlatformToken, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		MaximumDataPlaneBodyBytes: maximumBodyBytes,
 	})
 	if err != nil {
@@ -477,10 +528,9 @@ func newArtifactControlPlane(
 	t.Helper()
 	controlPlane, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store: databaseStore, ObjectStore: immutableObjects,
-		BootstrapAdminToken: "bootstrap-administrator-secret",
-		APIKeyHashSecret:    []byte("test-keyed-api-hash-secret-at-least-32-bytes"),
-		DefaultProjectQuota: projectQuota, DefaultProfileQuota: generousQuota(),
-		Now: now,
+		PlatformToken:       testPlatformToken,
+		DefaultSubjectQuota: projectQuota,
+		Now:                 now,
 		NewID: func(prefix string) string {
 			return fmt.Sprintf("%s_%d", prefix, integrationIdentitySequence.Add(1))
 		},
@@ -489,9 +539,6 @@ func newArtifactControlPlane(
 		},
 	})
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := controlPlane.InitializeBootstrapAdmin(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	return controlPlane
@@ -650,7 +697,7 @@ func uploadArtifactMultipart(
 	if err != nil {
 		t.Fatal(err)
 	}
-	setDataPlaneHeaders(request, credential, sandbox.Generation, idempotencyKey)
+	setDataPlaneHeaders(t, request, credential, sandbox.Generation, idempotencyKey)
 	request.Header.Set("SecondBox-Lease-ID", leaseID)
 	request.Header.Set("Content-Type", form.FormDataContentType())
 	return doHTTP(t, request)
@@ -682,7 +729,7 @@ func artifactGET(t *testing.T, endpoint string, credential string) *http.Respons
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Header.Set("Authorization", "Bearer "+credential)
+	setPlatformAuthorization(t, request, credential)
 	return doHTTP(t, request)
 }
 
@@ -692,12 +739,12 @@ func artifactDELETE(t *testing.T, endpoint string, credential string, idempotenc
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Header.Set("Authorization", "Bearer "+credential)
+	setPlatformAuthorization(t, request, credential)
 	request.Header.Set("Idempotency-Key", idempotencyKey)
 	return doHTTP(t, request)
 }
 
-func cleanupArtifactRows(t *testing.T, projectID string) {
+func cleanupArtifactRows(t *testing.T, tenantRef string) {
 	t.Helper()
 	t.Cleanup(func() {
 		pool, err := pgxpool.New(context.Background(), integrationDatabaseURL)
@@ -708,8 +755,8 @@ func cleanupArtifactRows(t *testing.T, projectID string) {
 		defer pool.Close()
 		if _, err := pool.Exec(
 			context.Background(),
-			`DELETE FROM secondbox.artifacts WHERE project_id=$1`,
-			projectID,
+			`DELETE FROM secondbox.artifacts WHERE tenant_ref=$1`,
+			tenantRef,
 		); err != nil {
 			t.Errorf("Artifact cleanup metadata: %v", err)
 		}

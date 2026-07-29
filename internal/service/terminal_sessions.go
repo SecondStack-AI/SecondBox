@@ -31,7 +31,7 @@ func (service *ControlPlaneService) CreateSandboxTerminal(
 	idempotencyKey string,
 	request contracts.CreateTerminalRequest,
 ) (runnercontrol.DataPlaneSession, bool, error) {
-	if err := service.requireDataPlane(principal, contracts.ScopeSandboxExec); err != nil {
+	if err := service.requireDataPlane(principal); err != nil {
 		return runnercontrol.DataPlaneSession{}, false, err
 	}
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
@@ -62,6 +62,7 @@ func (service *ControlPlaneService) CreateSandboxTerminal(
 	return service.dataPlaneRelay.AdmitDataPlane(ctx, runnercontrol.DataPlaneAdmission{
 		ID: service.newID("term"), StreamID: service.newID("stream"),
 		ProjectID: principal.ProjectID, SandboxID: sandboxID,
+		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
 		ServiceAccountID: principal.ServiceAccountID, LeaseID: leaseID,
 		RequestID: requestID, Generation: generation,
 		Kind: "terminal", Operation: "terminal", IdempotencyKey: idempotencyKey,
@@ -80,10 +81,12 @@ func (service *ControlPlaneService) GetSandboxTerminal(
 	sessionID string,
 	generation int64,
 ) (runnercontrol.DataPlaneSession, error) {
-	if err := service.requireDataPlane(principal, contracts.ScopeSandboxExec); err != nil {
+	if err := service.requireDataPlane(principal); err != nil {
 		return runnercontrol.DataPlaneSession{}, err
 	}
-	session, err := service.dataPlaneRelay.GetDataPlaneSession(ctx, principal.ProjectID, sessionID)
+	session, err := service.dataPlaneRelay.GetDataPlaneSession(
+		ctx, principal.TenantRef, principal.SubjectRef, sessionID,
+	)
 	if err != nil {
 		return runnercontrol.DataPlaneSession{}, err
 	}
@@ -105,7 +108,7 @@ func (service *ControlPlaneService) AcquireSandboxTerminalAttachment(
 	sessionID string,
 	generation int64,
 ) (runnercontrol.DataPlaneSession, string, error) {
-	if err := service.requireDataPlane(principal, contracts.ScopeSandboxExec); err != nil {
+	if err := service.requireDataPlane(principal); err != nil {
 		return runnercontrol.DataPlaneSession{}, "", err
 	}
 	relay, err := service.terminalRelay()
@@ -114,8 +117,8 @@ func (service *ControlPlaneService) AcquireSandboxTerminalAttachment(
 	}
 	attachmentID := service.newID("attach")
 	session, err := relay.AcquireTerminalAttachment(
-		ctx, principal.ProjectID, principal.ServiceAccountID,
-		sandboxID, sessionID, generation, attachmentID, service.now().UTC(),
+		ctx, principal.TenantRef, principal.SubjectRef, sandboxID,
+		sessionID, generation, attachmentID, service.now().UTC(),
 	)
 	return session, attachmentID, err
 }
@@ -126,7 +129,7 @@ func (service *ControlPlaneService) DetachSandboxTerminalAttachment(
 	sessionID string,
 	attachmentID string,
 ) (bool, error) {
-	if err := service.requireDataPlane(principal, contracts.ScopeSandboxExec); err != nil {
+	if err := service.requireDataPlane(principal); err != nil {
 		return false, err
 	}
 	relay, err := service.terminalRelay()
@@ -134,7 +137,8 @@ func (service *ControlPlaneService) DetachSandboxTerminalAttachment(
 		return false, err
 	}
 	return relay.DetachTerminalAttachment(
-		ctx, principal.ProjectID, sessionID, attachmentID, service.now().UTC(),
+		ctx, principal.TenantRef, principal.SubjectRef,
+		sessionID, attachmentID, service.now().UTC(),
 	)
 }
 
@@ -145,7 +149,7 @@ func (service *ControlPlaneService) AppendSandboxTerminalFrame(
 	attachmentID string,
 	frame runnercontrol.TerminalClientFrame,
 ) (bool, error) {
-	if err := service.requireDataPlane(principal, contracts.ScopeSandboxExec); err != nil {
+	if err := service.requireDataPlane(principal); err != nil {
 		return false, err
 	}
 	relay, err := service.terminalRelay()
@@ -153,7 +157,8 @@ func (service *ControlPlaneService) AppendSandboxTerminalFrame(
 		return false, err
 	}
 	return relay.AppendTerminalClientFrame(
-		ctx, principal.ProjectID, sessionID, attachmentID, frame, service.now().UTC(),
+		ctx, principal.TenantRef, principal.SubjectRef,
+		sessionID, attachmentID, frame, service.now().UTC(),
 	)
 }
 
@@ -163,7 +168,7 @@ func (service *ControlPlaneService) ListSandboxTerminalFrames(
 	sessionID string,
 	afterSequence int64,
 ) ([]runnercontrol.TerminalServerFrame, error) {
-	if err := service.requireDataPlane(principal, contracts.ScopeSandboxExec); err != nil {
+	if err := service.requireDataPlane(principal); err != nil {
 		return nil, err
 	}
 	relay, err := service.terminalRelay()
@@ -171,7 +176,7 @@ func (service *ControlPlaneService) ListSandboxTerminalFrames(
 		return nil, err
 	}
 	return relay.ListTerminalServerFrames(
-		ctx, principal.ProjectID, sessionID, afterSequence, 64,
+		ctx, principal.TenantRef, principal.SubjectRef, sessionID, afterSequence, 64,
 	)
 }
 
@@ -184,7 +189,7 @@ func (service *ControlPlaneService) CancelSandboxTerminal(
 	generation int64,
 	idempotencyKey string,
 ) (runnercontrol.DataPlaneSession, bool, error) {
-	if err := service.requireDataPlane(principal, contracts.ScopeSandboxExec); err != nil {
+	if err := service.requireDataPlane(principal); err != nil {
 		return runnercontrol.DataPlaneSession{}, false, err
 	}
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
@@ -199,6 +204,7 @@ func (service *ControlPlaneService) CancelSandboxTerminal(
 		ctx,
 		runnercontrol.PublicDataPlaneCancellation{
 			ProjectID: principal.ProjectID, SandboxID: sandboxID, SessionID: sessionID,
+			TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
 			SessionKind: "terminal", SessionOperation: "terminal",
 			IdempotencyKey: idempotencyKey,
 			RequestHash:    requestHash, Reason: "public Terminal cancellation",
@@ -232,7 +238,9 @@ func (service *ControlPlaneService) SandboxTerminalOutcome(
 	principal contracts.Principal,
 	sessionID string,
 ) (any, error) {
-	session, err := service.dataPlaneRelay.GetDataPlaneSession(ctx, principal.ProjectID, sessionID)
+	session, err := service.dataPlaneRelay.GetDataPlaneSession(
+		ctx, principal.TenantRef, principal.SubjectRef, sessionID,
+	)
 	if err != nil {
 		return nil, err
 	}

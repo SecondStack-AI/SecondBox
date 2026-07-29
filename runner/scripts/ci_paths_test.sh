@@ -19,9 +19,5 @@ if ! grep -Eq '^test-firecracker:' "$repo_root/Justfile"; then
     echo "SecondBox root Justfile is missing test-firecracker" >&2
     exit 1
 fi
-if ! grep -Eq '^test-multirunner:' "$repo_root/Justfile"; then
-    echo "SecondBox root Justfile is missing test-multirunner" >&2
-    exit 1
-fi
 
-echo "SecondBox standalone CI and qualified-host entry points are discoverable"
+echo "SecondBox standalone CI and Firecracker test entry point are discoverable"

@@ -18,92 +18,10 @@ import (
 const composeRunnerPoolName = "compose-live-pool"
 
 func TestGoSDKLiveControlPlaneContract(t *testing.T) {
-	baseURL := requireLiveTestEnvironment(t, "SECONDBOX_LIVE_BASE_URL")
-	adminToken := requireLiveTestEnvironment(t, "SECONDBOX_LIVE_ADMIN_TOKEN")
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	fixture := newGoLiveSubjectFixture(t)
+	applicationClient := fixture.applicationClient
+	profile := fixture.profile
 
-	adminClient, err := secondboxclient.NewSecondBoxClient(baseURL, adminToken, httpClient)
-	if err != nil {
-		t.Fatal(err)
-	}
-	project := requestLiveJSON[secondboxclient.Project](
-		t,
-		adminClient,
-		"createProject",
-		secondboxclient.CallOptions{
-			Headers: liveIdempotencyHeaders("go-create-project"),
-			Body: encodeLiveJSON(t, secondboxclient.CreateProjectRequest{
-				Name: "Go SDK live project",
-			}),
-		},
-	)
-	if project.ID == "" || project.Name != "Go SDK live project" {
-		t.Fatalf("Go SDK live Project = %#v", project)
-	}
-
-	profileName := secondboxclient.ProfileName("go-sdk-live")
-	profile := requestLiveJSON[secondboxclient.Profile](
-		t,
-		adminClient,
-		"createProfile",
-		secondboxclient.CallOptions{
-			Headers: liveIdempotencyHeaders("go-create-profile"),
-			Body: encodeLiveJSON(t, secondboxclient.CreateProfileRequest{
-				Name: profileName,
-				Spec: liveProfileRevisionSpec(),
-			}),
-		},
-	)
-	if profile.CurrentRevision.ID == "" || profile.Name != profileName {
-		t.Fatalf("Go SDK live Profile = %#v", profile)
-	}
-
-	scopes := []secondboxclient.ServiceAccountScope{
-		secondboxclient.ServiceAccountScopeSandboxRead,
-		secondboxclient.ServiceAccountScopeSandboxLifecycle,
-	}
-	account := requestLiveJSON[secondboxclient.ServiceAccount](
-		t,
-		adminClient,
-		"createServiceAccount",
-		secondboxclient.CallOptions{
-			PathParameters: map[string]string{"projectId": string(project.ID)},
-			Headers:        liveIdempotencyHeaders("go-create-service-account"),
-			Body: encodeLiveJSON(t, secondboxclient.CreateServiceAccountRequest{
-				Name:          "go-sdk-live",
-				Scopes:        scopes,
-				ProfileGrants: []secondboxclient.ProfileName{profileName},
-			}),
-		},
-	)
-	if account.ID == "" || account.ProjectID != project.ID {
-		t.Fatalf("Go SDK live ServiceAccount = %#v", account)
-	}
-
-	key := requestLiveJSON[secondboxclient.CreateAPIKeyResponse](
-		t,
-		adminClient,
-		"createAPIKey",
-		secondboxclient.CallOptions{
-			PathParameters: map[string]string{
-				"projectId":        string(project.ID),
-				"serviceAccountId": string(account.ID),
-			},
-			Headers: liveIdempotencyHeaders("go-create-api-key"),
-			Body: encodeLiveJSON(t, secondboxclient.CreateAPIKeyRequest{
-				Name:   "go-sdk-live",
-				Scopes: scopes,
-			}),
-		},
-	)
-	if key.Credential == "" || key.APIKey.ID == "" {
-		t.Fatalf("Go SDK live APIKey response omitted one-time credential or metadata: %#v", key)
-	}
-
-	applicationClient, err := secondboxclient.NewSecondBoxClient(baseURL, key.Credential, httpClient)
-	if err != nil {
-		t.Fatal(err)
-	}
 	operation := requestLiveJSON[secondboxclient.Operation](
 		t,
 		applicationClient,
@@ -111,7 +29,7 @@ func TestGoSDKLiveControlPlaneContract(t *testing.T) {
 		secondboxclient.CallOptions{
 			Headers: liveIdempotencyHeaders("go-create-sandbox"),
 			Body: encodeLiveJSON(t, secondboxclient.CreateSandboxRequest{
-				Profile: profileName,
+				Profile: profile.Name,
 				Metadata: secondboxclient.Metadata{
 					"sdk":     "go",
 					"purpose": "live-contract",
@@ -155,6 +73,46 @@ func TestGoSDKLiveControlPlaneContract(t *testing.T) {
 	if apiFailure.StatusCode != http.StatusNotFound || apiFailure.Problem == nil ||
 		apiFailure.Problem.Code != "not_found" || apiFailure.Problem.RequestID == "" {
 		t.Fatalf("Go SDK structured API error = %#v", apiFailure)
+	}
+}
+
+type goLiveSubjectFixture struct {
+	applicationClient *secondboxclient.Client
+	profile           secondboxclient.Profile
+}
+
+func newGoLiveSubjectFixture(t *testing.T) goLiveSubjectFixture {
+	t.Helper()
+	baseURL := requireLiveTestEnvironment(t, "SECONDBOX_LIVE_BASE_URL")
+	platformToken := requireLiveTestEnvironment(t, "SECONDBOX_LIVE_PLATFORM_TOKEN")
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+
+	applicationClient, err := secondboxclient.NewSecondBoxSubjectClient(
+		baseURL, platformToken, "sdk-live-go", "sdk-live-go-subject", httpClient,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileName := secondboxclient.ProfileName("go-sdk-live")
+	profile := requestLiveJSON[secondboxclient.Profile](
+		t,
+		applicationClient,
+		"createProfile",
+		secondboxclient.CallOptions{
+			Headers: liveIdempotencyHeaders("go-create-profile"),
+			Body: encodeLiveJSON(t, secondboxclient.CreateProfileRequest{
+				Name: profileName,
+				Spec: liveProfileRevisionSpec(),
+			}),
+		},
+	)
+	if profile.CurrentRevision.ID == "" || profile.Name != profileName {
+		t.Fatalf("Go SDK live Profile = %#v", profile)
+	}
+
+	return goLiveSubjectFixture{
+		applicationClient: applicationClient,
+		profile:           profile,
 	}
 }
 

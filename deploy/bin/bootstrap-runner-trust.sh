@@ -41,6 +41,11 @@ validate_identity() {
     echo "Runner certificate and private key do not match" >&2
     return 1
   fi
+  if ! openssl x509 -in "$directory/runner.crt" -noout -ext subjectAltName |
+      grep -Fq "URI:spiffe://secondbox/runner/$SECONDBOX_RUNNER_ID"; then
+    echo "Runner certificate identity does not match SECONDBOX_RUNNER_ID" >&2
+    return 1
+  fi
 }
 
 if [[ -e "$identity_directory" ]]; then
@@ -53,13 +58,24 @@ if [[ -e "$identity_directory" ]]; then
   exit 0
 fi
 
-: "${SECONDBOX_RUNNER_IDENTITY_BINARY:?set SECONDBOX_RUNNER_IDENTITY_BINARY}"
-: "${SECONDBOX_RUNNER_ENROLLMENT_TOKEN:?set SECONDBOX_RUNNER_ENROLLMENT_TOKEN}"
-if [[ ! -x "$SECONDBOX_RUNNER_IDENTITY_BINARY" ]]; then
-  echo "SECONDBOX_RUNNER_IDENTITY_BINARY must be an executable file" >&2
+: "${SECONDBOX_RUNNER_CA_PRIVATE_KEY:?set SECONDBOX_RUNNER_CA_PRIVATE_KEY}"
+: "${SECONDBOX_RUNNER_CERTIFICATE_LIFETIME_DAYS:?set SECONDBOX_RUNNER_CERTIFICATE_LIFETIME_DAYS}"
+if [[ -L "$SECONDBOX_RUNNER_CA_PRIVATE_KEY" || ! -f "$SECONDBOX_RUNNER_CA_PRIVATE_KEY" ]]; then
+  echo "SECONDBOX_RUNNER_CA_PRIVATE_KEY must be a regular non-symbolic-link file" >&2
   exit 1
 fi
-for required_command in openssl install mktemp mv chmod cmp; do
+if [[ ! "$SECONDBOX_RUNNER_CERTIFICATE_LIFETIME_DAYS" =~ ^[0-9]+$ ]] ||
+   (( SECONDBOX_RUNNER_CERTIFICATE_LIFETIME_DAYS < 1 )); then
+  echo "SECONDBOX_RUNNER_CERTIFICATE_LIFETIME_DAYS must be a positive integer" >&2
+  exit 1
+fi
+ca_certificate_public_key="$(openssl x509 -in "$SECONDBOX_RUNNER_CA_CERTIFICATE" -pubkey -noout)"
+ca_private_public_key="$(openssl pkey -in "$SECONDBOX_RUNNER_CA_PRIVATE_KEY" -pubout)"
+if [[ "$ca_certificate_public_key" != "$ca_private_public_key" ]]; then
+  echo "Runner CA certificate and private key do not match" >&2
+  exit 1
+fi
+for required_command in openssl install mktemp mv chmod cmp grep rm; do
   if ! command -v "$required_command" >/dev/null 2>&1; then
     echo "Runner trust bootstrap requires command: $required_command" >&2
     exit 1
@@ -89,12 +105,26 @@ openssl req \
   -key "$staging_directory/runner.key" \
   -subj "/CN=$SECONDBOX_RUNNER_ID" \
   -out "$staging_directory/runner.csr"
-"$SECONDBOX_RUNNER_IDENTITY_BINARY" redeem \
-  --csr "$staging_directory/runner.csr" \
-  --certificate-output "$staging_directory/runner.crt"
+printf '%s\n' \
+  'basicConstraints=critical,CA:FALSE' \
+  'keyUsage=critical,digitalSignature' \
+  'extendedKeyUsage=clientAuth' \
+  "subjectAltName=URI:spiffe://secondbox/runner/$SECONDBOX_RUNNER_ID" \
+  >"$staging_directory/runner.ext"
+certificate_serial="0x$(openssl rand -hex 16)"
+openssl x509 \
+  -req \
+  -sha256 \
+  -days "$SECONDBOX_RUNNER_CERTIFICATE_LIFETIME_DAYS" \
+  -set_serial "$certificate_serial" \
+  -in "$staging_directory/runner.csr" \
+  -CA "$SECONDBOX_RUNNER_CA_CERTIFICATE" \
+  -CAkey "$SECONDBOX_RUNNER_CA_PRIVATE_KEY" \
+  -extfile "$staging_directory/runner.ext" \
+  -out "$staging_directory/runner.crt" 2>/dev/null
 install -m 644 "$SECONDBOX_RUNNER_CA_CERTIFICATE" "$staging_directory/runner-ca.crt"
 chmod 600 "$staging_directory/runner.key" "$staging_directory/runner.crt"
-rm "$staging_directory/runner.csr"
+rm "$staging_directory/runner.csr" "$staging_directory/runner.ext"
 validate_identity "$staging_directory"
 mv "$staging_directory" "$identity_directory"
 trap - EXIT

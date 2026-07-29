@@ -35,20 +35,20 @@ import (
 
 func TestPublicBufferedExecAndOrdinaryFilesystemUseDurableRelay(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	project, account, _ := createProjectAccountAndCredential(t, controlPlane, admin, "data-plane-http")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-data-plane-http")
 	scopes := []string{
-		contracts.ScopeSandboxRead, contracts.ScopeSandboxLifecycle,
-		contracts.ScopeSandboxExec, contracts.ScopeSandboxFiles,
+		"sandbox:read", "sandbox:lifecycle",
+		"sandbox:exec", "sandbox:files",
 	}
-	if _, err := controlPlane.UpdateServiceAccount(
+	if _, err := updateFixtureServiceAccount(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
 		contracts.UpdateServiceAccountRequest{Scopes: &scopes},
 	); err != nil {
 		t.Fatal(err)
 	}
-	key, err := controlPlane.CreateAPIKey(
+	key, err := createFixtureAPIKey(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
 		contracts.CreateAPIKeyRequest{Name: "data-plane-http", Scopes: scopes},
 	)
@@ -74,10 +74,9 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseDurableRelay(t *testing.T) {
 	}
 	t.Cleanup(relay.Close)
 	dataPlaneService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		Store: databaseStore, BootstrapAdminToken: "bootstrap-administrator-secret",
-		APIKeyHashSecret:    []byte("test-keyed-api-hash-secret-at-least-32-bytes"),
-		DefaultProjectQuota: generousQuota(), DefaultProfileQuota: generousQuota(),
-		Now: func() time.Time { return now }, NewID: service.NewOpaqueID,
+		Store: databaseStore, PlatformToken: testPlatformToken,
+		DefaultSubjectQuota: generousQuota(),
+		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		DataPlaneRelay:        relay, DataPlanePollInterval: time.Millisecond,
 	})
@@ -85,7 +84,7 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseDurableRelay(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler, err := api.NewHandler(api.HandlerConfig{
-		Service: dataPlaneService, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Service: dataPlaneService, PlatformToken: testPlatformToken, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		MaximumDataPlaneBodyBytes: 64 << 20,
 	})
 	if err != nil {
@@ -129,7 +128,7 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseDurableRelay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	setDataPlaneHeaders(writeRequest, key.Credential, sandbox.Generation, "write-http-key")
+	setDataPlaneHeaders(t, writeRequest, key.Credential, sandbox.Generation, "write-http-key")
 	writeRequest.Header.Set("Content-Type", "application/octet-stream")
 	writeRequest.Header.Set("Digest", digest)
 	writeResponse := doHTTP(t, writeRequest)
@@ -196,20 +195,20 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseDurableRelay(t *testing.T) {
 
 func TestFlueAdapterCompleteSubsetAgainstRealServiceContract(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	project, account, _ := createProjectAccountAndCredential(t, controlPlane, admin, "flue-real-service")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-flue-real-service")
 	scopes := []string{
-		contracts.ScopeSandboxRead, contracts.ScopeSandboxLifecycle,
-		contracts.ScopeSandboxExec, contracts.ScopeSandboxFiles,
+		"sandbox:read", "sandbox:lifecycle",
+		"sandbox:exec", "sandbox:files",
 	}
-	if _, err := controlPlane.UpdateServiceAccount(
+	if _, err := updateFixtureServiceAccount(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
 		contracts.UpdateServiceAccountRequest{Scopes: &scopes},
 	); err != nil {
 		t.Fatal(err)
 	}
-	key, err := controlPlane.CreateAPIKey(
+	key, err := createFixtureAPIKey(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
 		contracts.CreateAPIKeyRequest{Name: "flue-real-service", Scopes: scopes},
 	)
@@ -235,10 +234,9 @@ func TestFlueAdapterCompleteSubsetAgainstRealServiceContract(t *testing.T) {
 	}
 	t.Cleanup(relay.Close)
 	dataPlaneService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		Store: databaseStore, BootstrapAdminToken: "bootstrap-administrator-secret",
-		APIKeyHashSecret:    []byte("test-keyed-api-hash-secret-at-least-32-bytes"),
-		DefaultProjectQuota: generousQuota(), DefaultProfileQuota: generousQuota(),
-		Now: func() time.Time { return now }, NewID: service.NewOpaqueID,
+		Store: databaseStore, PlatformToken: testPlatformToken,
+		DefaultSubjectQuota: generousQuota(),
+		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		DataPlaneRelay:        relay, DataPlanePollInterval: time.Millisecond,
 	})
@@ -246,7 +244,7 @@ func TestFlueAdapterCompleteSubsetAgainstRealServiceContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler, err := api.NewHandler(api.HandlerConfig{
-		Service: dataPlaneService, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Service: dataPlaneService, PlatformToken: testPlatformToken, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		MaximumDataPlaneBodyBytes: 64 << 20,
 	})
 	if err != nil {
@@ -272,7 +270,9 @@ func TestFlueAdapterCompleteSubsetAgainstRealServiceContract(t *testing.T) {
 	command.Env = append(
 		os.Environ(),
 		"SECONDBOX_FLUE_TEST_BASE_URL="+server.URL,
-		"SECONDBOX_FLUE_TEST_CREDENTIAL="+key.Credential,
+		"SECONDBOX_FLUE_TEST_PLATFORM_TOKEN="+testPlatformToken,
+		"SECONDBOX_FLUE_TEST_TENANT_REF="+principal.TenantRef,
+		"SECONDBOX_FLUE_TEST_SUBJECT_REF="+principal.SubjectRef,
 		"SECONDBOX_FLUE_TEST_SANDBOX_ID="+sandbox.ID,
 	)
 	output, err := command.CombinedOutput()
@@ -296,7 +296,7 @@ func TestFlueAdapterCompleteSubsetAgainstRealServiceContract(t *testing.T) {
 
 func TestIndependentProjectsCannotObserveOrMutateAnotherSandbox(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	ownerProject, ownerAccount, _ := createProjectAccountAndCredential(
 		t, controlPlane, admin, "isolation-owner",
 	)
@@ -307,8 +307,8 @@ func TestIndependentProjectsCannotObserveOrMutateAnotherSandbox(t *testing.T) {
 		t, controlPlane, databaseStore, admin, ownerAccount, "profile-isolation-owner",
 	)
 	scopes := []string{
-		contracts.ScopeSandboxRead, contracts.ScopeSandboxLifecycle,
-		contracts.ScopeSandboxExec, contracts.ScopeSandboxFiles,
+		"sandbox:read", "sandbox:lifecycle",
+		"sandbox:exec", "sandbox:files",
 	}
 	for _, identity := range []struct {
 		projectID string
@@ -318,21 +318,21 @@ func TestIndependentProjectsCannotObserveOrMutateAnotherSandbox(t *testing.T) {
 		{ownerProject.ID, ownerAccount.ID, "isolation-owner"},
 		{otherProject.ID, otherAccount.ID, "isolation-other"},
 	} {
-		if _, err := controlPlane.UpdateServiceAccount(
+		if _, err := updateFixtureServiceAccount(t, controlPlane,
 			t.Context(), admin, identity.projectID, identity.accountID,
 			contracts.UpdateServiceAccountRequest{Scopes: &scopes},
 		); err != nil {
 			t.Fatal(err)
 		}
 	}
-	ownerKey, err := controlPlane.CreateAPIKey(
+	ownerKey, err := createFixtureAPIKey(t, controlPlane,
 		t.Context(), admin, ownerProject.ID, ownerAccount.ID,
 		contracts.CreateAPIKeyRequest{Name: "isolation-owner", Scopes: scopes},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherKey, err := controlPlane.CreateAPIKey(
+	otherKey, err := createFixtureAPIKey(t, controlPlane,
 		t.Context(), admin, otherProject.ID, otherAccount.ID,
 		contracts.CreateAPIKeyRequest{Name: "isolation-other", Scopes: scopes},
 	)
@@ -366,10 +366,9 @@ func TestIndependentProjectsCannotObserveOrMutateAnotherSandbox(t *testing.T) {
 	}
 	t.Cleanup(relay.Close)
 	isolationService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		Store: databaseStore, BootstrapAdminToken: "bootstrap-administrator-secret",
-		APIKeyHashSecret:    []byte("test-keyed-api-hash-secret-at-least-32-bytes"),
-		DefaultProjectQuota: generousQuota(), DefaultProfileQuota: generousQuota(),
-		Now: func() time.Time { return now }, NewID: service.NewOpaqueID,
+		Store: databaseStore, PlatformToken: testPlatformToken,
+		DefaultSubjectQuota: generousQuota(),
+		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		DataPlaneRelay:        relay, DataPlanePollInterval: time.Millisecond,
 		PublicBaseURL: "http://secondbox.invalid",
@@ -390,7 +389,7 @@ func TestIndependentProjectsCannotObserveOrMutateAnotherSandbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler, err := api.NewHandler(api.HandlerConfig{
-		Service: isolationService, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Service: isolationService, PlatformToken: testPlatformToken, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		MaximumDataPlaneBodyBytes: 64 << 20,
 	})
 	if err != nil {
@@ -405,7 +404,7 @@ func TestIndependentProjectsCannotObserveOrMutateAnotherSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	listRequest.Header.Set("Authorization", "Bearer "+otherKey.Credential)
+	setPlatformAuthorization(t, listRequest, otherKey.Credential)
 	listResponse := doHTTP(t, listRequest)
 	assertHTTPStatus(t, listResponse, http.StatusOK)
 	listBody, err := io.ReadAll(listResponse.Body)
@@ -424,7 +423,7 @@ func TestIndependentProjectsCannotObserveOrMutateAnotherSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	inspectRequest.Header.Set("Authorization", "Bearer "+otherKey.Credential)
+	setPlatformAuthorization(t, inspectRequest, otherKey.Credential)
 	assertHTTPStatusAndClose(t, doHTTP(t, inspectRequest), http.StatusNotFound)
 
 	execResponse := dataPlaneJSONRequest(
@@ -456,14 +455,14 @@ func TestIndependentProjectsCannotObserveOrMutateAnotherSandbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	setDataPlaneHeaders(
-		terminalRequest, otherKey.Credential, sandbox.Generation, "",
+		t, terminalRequest, otherKey.Credential, sandbox.Generation, "",
 	)
 	assertHTTPStatusAndClose(t, doHTTP(t, terminalRequest), http.StatusNotFound)
 
 	websocketURL := "ws" + strings.TrimPrefix(server.URL, "http") +
 		"/v1/sandboxes/" + sandbox.ID + "/terminals/" + terminal.ID
 	headers := make(http.Header)
-	headers.Set("Authorization", "Bearer "+otherKey.Credential)
+	setPlatformAuthorizationHeaders(t, headers, otherKey.Credential)
 	headers.Set("SecondBox-Generation", fmt.Sprintf("%d", sandbox.Generation))
 	headers.Set("Origin", server.URL)
 	connection, websocketResponse, websocketErr := (&websocket.Dialer{
@@ -488,7 +487,7 @@ func TestIndependentProjectsCannotObserveOrMutateAnotherSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deleteRequest.Header.Set("Authorization", "Bearer "+otherKey.Credential)
+	setPlatformAuthorization(t, deleteRequest, otherKey.Credential)
 	deleteRequest.Header.Set("Idempotency-Key", "isolation-other-delete")
 	deleteRequest.Header.Set("If-Match", fmt.Sprintf("\"%d\"", sandbox.Revision))
 	assertHTTPStatusAndClose(t, doHTTP(t, deleteRequest), http.StatusNotFound)
@@ -510,7 +509,7 @@ func TestIndependentProjectsCannotObserveOrMutateAnotherSandbox(t *testing.T) {
 	var otherProjectSessions int64
 	if err := pool.QueryRow(t.Context(), `
 		SELECT count(*) FROM secondbox.data_plane_sessions
-		WHERE project_id=$1`, otherProject.ID,
+		WHERE tenant_ref=$1 AND subject_ref=$2`, otherProject.ID, otherAccount.ID,
 	).Scan(&otherProjectSessions); err != nil {
 		t.Fatal(err)
 	}
@@ -575,7 +574,9 @@ func (fake *relayFakeRunner) run(ctx context.Context) error {
 			time.Sleep(time.Millisecond)
 			continue
 		}
-		if err := fake.relay.MarkOutboundFrameDelivered(ctx, delivery.ID, fake.connectionID, now); err != nil {
+		if err := fake.relay.MarkOutboundFrameDelivered(
+			ctx, delivery.ID, fake.connectionID, delivery.ClaimAttempt, now,
+		); err != nil {
 			return err
 		}
 		if err := fake.handle(ctx, delivery.Message, now); err != nil {
@@ -966,7 +967,7 @@ func dataPlaneJSONRequestWithMethod(t *testing.T, method, endpoint, credential s
 	if err != nil {
 		t.Fatal(err)
 	}
-	setDataPlaneHeaders(request, credential, generation, idempotencyKey)
+	setDataPlaneHeaders(t, request, credential, generation, idempotencyKey)
 	request.Header.Set("Content-Type", "application/json")
 	return doHTTP(t, request)
 }
@@ -977,12 +978,12 @@ func dataPlaneGET(t *testing.T, endpoint, credential string, generation int64) *
 	if err != nil {
 		t.Fatal(err)
 	}
-	setDataPlaneHeaders(request, credential, generation, "")
+	setDataPlaneHeaders(t, request, credential, generation, "")
 	return doHTTP(t, request)
 }
 
-func setDataPlaneHeaders(request *http.Request, credential string, generation int64, idempotencyKey string) {
-	request.Header.Set("Authorization", "Bearer "+credential)
+func setDataPlaneHeaders(t *testing.T, request *http.Request, credential string, generation int64, idempotencyKey string) {
+	setPlatformAuthorization(t, request, credential)
 	request.Header.Set("SecondBox-Generation", fmt.Sprintf("%d", generation))
 	if idempotencyKey != "" {
 		request.Header.Set("Idempotency-Key", idempotencyKey)

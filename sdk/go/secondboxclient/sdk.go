@@ -172,7 +172,7 @@ func (handle *SandboxHandle) Wait(
 	current := handle.Snapshot()
 	body, err := json.Marshal(WaitSandboxRequest{
 		States:               states,
-		DeadlineMilliseconds: int(deadline.Milliseconds()),
+		DeadlineMilliseconds: deadline.Milliseconds(),
 	})
 	if err != nil {
 		return Sandbox{}, fmt.Errorf("SecondBox Sandbox encode wait request: %w", err)

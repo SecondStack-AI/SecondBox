@@ -21,7 +21,7 @@ These local commands do not require or transmit API credentials. The path must b
 
 - `GET /healthz` reports only that the HTTP process can answer.
 - `GET /readyz` verifies PostgreSQL connectivity and returns a normal problem response on failure.
-- `GET /metrics` reports counts by bounded state values for sandboxes, operations, and API keys. It has no Project, Sandbox, runner, request, or user labels.
+- `GET /metrics` reports counts by bounded Sandbox and Operation state values. It has no tenant, subject, Sandbox, Runner, request, or user labels.
 - Every HTTP response carries `X-Request-ID`. Clients should supply one when it is at most 128 bytes and record the returned value.
 - The validated request identifier is bound to the request context and retained by asynchronous Operations, transactional audit rows, data-plane relay frames, Runner operation evidence, problem responses, and the structured HTTP completion log. The log records only the method and matched route template, never the bearer credential, raw URL, query string, or workspace path.
 
@@ -80,4 +80,4 @@ deploy/bin/diagnose-runner-host.sh /secure/path/secondbox-runner-diagnostic.txt
 
 It records bounded journal output, systemd state, `/dev/kvm`, cgroup filesystem type, kernel information, and filesystem capacity. It does not read the Runner environment file or mTLS keys. Review journal content before sharing because guest-controlled error text is untrusted.
 
-The runner binary also implements `secondbox-runner --healthcheck`, which opens the authenticated runner protocol stream and exits. It requires the complete runner environment and an issued, non-revoked client certificate. Runner gRPC has no unauthenticated health endpoint; control-plane HTTP readiness currently proves PostgreSQL connectivity but not acceptance of a Runner stream.
+The runner binary also implements `secondbox-runner --healthcheck`, which opens the authenticated runner protocol stream and exits. It requires the complete runner environment, the pre-shared Runner credential, and a CA-signed client certificate. Runner gRPC has no unauthenticated health endpoint; control-plane HTTP readiness currently proves PostgreSQL connectivity but not acceptance of a Runner stream.

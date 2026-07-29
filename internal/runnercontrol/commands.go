@@ -29,20 +29,16 @@ func (store *PostgresStateStore) ClaimCommand(
 		return CommandDelivery{}, false, fmt.Errorf("SecondBox runner command claim transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	var storedRunnerID, state, credentialState string
+	var storedRunnerID, state string
 	var lastControlSequence int64
 	if err := tx.QueryRow(ctx, `
-		SELECT connection.runner_id,connection.state,connection.last_control_sequence,
-			credential.state
+		SELECT connection.runner_id,connection.state,connection.last_control_sequence
 		FROM secondbox.runner_connections AS connection
-		JOIN secondbox.runner_credentials AS credential
-			ON credential.serial_number=connection.credential_serial
 		WHERE connection.id=$1 FOR UPDATE OF connection`, connectionID,
-	).Scan(&storedRunnerID, &state, &lastControlSequence, &credentialState); err != nil {
+	).Scan(&storedRunnerID, &state, &lastControlSequence); err != nil {
 		return CommandDelivery{}, false, fmt.Errorf("SecondBox runner command connection lookup: %w", err)
 	}
-	if storedRunnerID != runnerID || state != "active" ||
-		(credentialState != "active" && credentialState != "retiring") {
+	if storedRunnerID != runnerID || state != "active" {
 		return CommandDelivery{}, false, errors.New("SecondBox runner command connection is inactive")
 	}
 	var delivery CommandDelivery

@@ -33,7 +33,7 @@ func (service *ControlPlaneService) CreateSandboxSnapshot(
 		return contracts.Snapshot{}, err
 	}
 	_, checkpointPolicy, err := service.store.GetSandboxLifecyclePolicy(
-		ctx, principal.ProjectID, sandboxID,
+		ctx, principal.TenantRef, principal.SubjectRef, sandboxID,
 	)
 	if err != nil {
 		return contracts.Snapshot{}, err
@@ -44,18 +44,26 @@ func (service *ControlPlaneService) CreateSandboxSnapshot(
 	}
 	now := service.now().UTC()
 	snapshot := contracts.Snapshot{
-		ID: service.newID("snp"), ProjectID: principal.ProjectID, SandboxID: sandboxID,
+		ID: service.newID("snp"), ProjectID: principal.ProjectID,
+		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef, SandboxID: sandboxID,
 		Name: request.Name, Metadata: cloneMetadata(request.Metadata),
 		RetainUntil: now.Add(time.Duration(checkpointPolicy.RetentionSeconds) * time.Second),
 		CreatedAt:   now,
 	}
-	return service.store.CreateSnapshot(ctx, ports.SnapshotCreationInput{
+	audit := service.newAudit(
+		ctx, principal, "snapshot.created", "snapshot", snapshot.ID, principal.ProjectID, now,
+	)
+	created, err := service.store.CreateSnapshot(ctx, ports.SnapshotCreationInput{
 		Snapshot: snapshot, IdempotencyKey: idempotencyKey, RequestHash: requestHash,
 		IdempotencyEnds: now.Add(idempotencyRetention), ExpectedRevision: expectedRevision,
-		Audit: service.newAudit(
-			ctx, principal, "snapshot.created", "snapshot", snapshot.ID, principal.ProjectID, now,
-		),
 	})
+	if err != nil {
+		return contracts.Snapshot{}, err
+	}
+	if err := service.store.AppendAuditEvent(ctx, audit); err != nil {
+		return contracts.Snapshot{}, err
+	}
+	return created, nil
 }
 
 // ListSandboxSnapshots returns one retained Snapshot page inside the authenticated Project.
@@ -73,7 +81,8 @@ func (service *ControlPlaneService) ListSandboxSnapshots(
 		return contracts.SnapshotPage{}, errors.New("SecondBox Snapshot page cursor exceeds its bound")
 	}
 	return service.store.ListSnapshots(
-		ctx, principal.ProjectID, sandboxID, boundedLimit(limit), cursor, service.now().UTC(),
+		ctx, principal.TenantRef, principal.SubjectRef, sandboxID,
+		boundedLimit(limit), cursor, service.now().UTC(),
 	)
 }
 
@@ -86,7 +95,9 @@ func (service *ControlPlaneService) GetSnapshot(
 	if err := requireSnapshotRead(principal); err != nil {
 		return contracts.Snapshot{}, err
 	}
-	return service.store.GetSnapshot(ctx, principal.ProjectID, snapshotID, service.now().UTC())
+	return service.store.GetSnapshot(
+		ctx, principal.TenantRef, principal.SubjectRef, snapshotID, service.now().UTC(),
+	)
 }
 
 // DeleteSnapshot ends one checkpoint retention root idempotently.
@@ -109,28 +120,30 @@ func (service *ControlPlaneService) DeleteSnapshot(
 		return err
 	}
 	now := service.now().UTC()
-	return service.store.EndSnapshotRetention(ctx, ports.SnapshotRetentionInput{
-		ProjectID: principal.ProjectID, SnapshotID: snapshotID,
+	audit := service.newAudit(
+		ctx, principal, "snapshot.retention_ended", "snapshot",
+		snapshotID, principal.ProjectID, now,
+	)
+	if err := service.store.EndSnapshotRetention(ctx, ports.SnapshotRetentionInput{
+		ProjectID: principal.ProjectID, TenantRef: principal.TenantRef,
+		SubjectRef: principal.SubjectRef, SnapshotID: snapshotID,
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
 		IdempotencyEnds: now.Add(idempotencyRetention), Now: now,
-		Audit: service.newAudit(
-			ctx, principal, "snapshot.retention_ended", "snapshot",
-			snapshotID, principal.ProjectID, now,
-		),
-	})
+	}); err != nil {
+		return err
+	}
+	return service.store.AppendAuditEvent(ctx, audit)
 }
 
 func requireSnapshotLifecycle(principal contracts.Principal) error {
-	if principal.ProjectID == "" || principal.ServiceAccountID == "" ||
-		!principal.HasScope(contracts.ScopeSandboxLifecycle) {
+	if principal.TenantRef == "" || principal.SubjectRef == "" {
 		return ports.ErrAuthorizationDenied
 	}
 	return nil
 }
 
 func requireSnapshotRead(principal contracts.Principal) error {
-	if principal.ProjectID == "" || principal.ServiceAccountID == "" ||
-		!principal.HasScope(contracts.ScopeSandboxRead) {
+	if principal.TenantRef == "" || principal.SubjectRef == "" {
 		return ports.ErrAuthorizationDenied
 	}
 	return nil

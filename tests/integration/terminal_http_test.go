@@ -26,21 +26,21 @@ import (
 
 func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	project, account, _ := createProjectAccountAndCredential(t, controlPlane, admin, "terminal-http")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-terminal-http")
 	scopes := []string{
-		contracts.ScopeSandboxRead,
-		contracts.ScopeSandboxLifecycle,
-		contracts.ScopeSandboxExec,
+		"sandbox:read",
+		"sandbox:lifecycle",
+		"sandbox:exec",
 	}
-	if _, err := controlPlane.UpdateServiceAccount(
+	if _, err := updateFixtureServiceAccount(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
 		contracts.UpdateServiceAccountRequest{Scopes: &scopes},
 	); err != nil {
 		t.Fatal(err)
 	}
-	key, err := controlPlane.CreateAPIKey(
+	key, err := createFixtureAPIKey(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
 		contracts.CreateAPIKeyRequest{Name: "terminal-http", Scopes: scopes},
 	)
@@ -86,10 +86,9 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 	server := httptest.NewUnstartedServer(nil)
 	publicBaseURL := "http://" + server.Listener.Addr().String()
 	dataPlaneService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		Store: databaseStore, BootstrapAdminToken: "bootstrap-administrator-secret",
-		APIKeyHashSecret:    []byte("test-keyed-api-hash-secret-at-least-32-bytes"),
-		DefaultProjectQuota: generousQuota(), DefaultProfileQuota: generousQuota(),
-		Now: func() time.Time { return time.Now().UTC() }, NewID: service.NewOpaqueID,
+		Store: databaseStore, PlatformToken: testPlatformToken,
+		DefaultSubjectQuota: generousQuota(),
+		Now:                 func() time.Time { return time.Now().UTC() }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		DataPlaneRelay:        relay, DataPlanePollInterval: time.Millisecond,
 		PublicBaseURL: publicBaseURL,
@@ -98,7 +97,7 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 		t.Fatal(err)
 	}
 	handler, err := api.NewHandler(api.HandlerConfig{
-		Service: dataPlaneService, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Service: dataPlaneService, PlatformToken: testPlatformToken, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		MaximumDataPlaneBodyBytes: 64 << 20,
 	})
 	if err != nil {
@@ -138,7 +137,7 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 	connection := dialTerminal(t, session, key.Credential, sandbox.Generation)
 	secondDialer := websocket.Dialer{Subprotocols: []string{"secondbox.terminal.v1"}}
 	_, secondResponse, secondErr := secondDialer.Dial(
-		session.WebsocketURL, terminalHTTPHeaders(key.Credential, sandbox.Generation),
+		session.WebsocketURL, terminalHTTPHeaders(t, key.Credential, sandbox.Generation),
 	)
 	if secondErr == nil {
 		t.Fatal("parallel Terminal attachment was accepted")
@@ -198,7 +197,7 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	setDataPlaneHeaders(cancelRequest, key.Credential, sandbox.Generation, "")
+	setDataPlaneHeaders(t, cancelRequest, key.Credential, sandbox.Generation, "")
 	cancelRequest.Header.Set("Idempotency-Key", "terminal-http-cancel-request")
 	cancelResponse := doHTTP(t, cancelRequest)
 	assertHTTPStatus(t, cancelResponse, http.StatusAccepted)
@@ -221,7 +220,7 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	setDataPlaneHeaders(replayCancelRequest, key.Credential, sandbox.Generation, "")
+	setDataPlaneHeaders(t, replayCancelRequest, key.Credential, sandbox.Generation, "")
 	replayCancelRequest.Header.Set("Idempotency-Key", "terminal-http-cancel-request")
 	replayCancelResponse := doHTTP(t, replayCancelRequest)
 	assertHTTPStatus(t, replayCancelResponse, http.StatusAccepted)
@@ -248,7 +247,7 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	setDataPlaneHeaders(newKeyCancelRequest, key.Credential, sandbox.Generation, "")
+	setDataPlaneHeaders(t, newKeyCancelRequest, key.Credential, sandbox.Generation, "")
 	newKeyCancelRequest.Header.Set("Idempotency-Key", "terminal-http-cancel-new-request")
 	newKeyCancelResponse := doHTTP(t, newKeyCancelRequest)
 	assertHTTPStatus(t, newKeyCancelResponse, http.StatusAccepted)
@@ -273,7 +272,7 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	setDataPlaneHeaders(conflictingCancelRequest, key.Credential, sandbox.Generation+1, "")
+	setDataPlaneHeaders(t, conflictingCancelRequest, key.Credential, sandbox.Generation+1, "")
 	conflictingCancelRequest.Header.Set("Idempotency-Key", "terminal-http-cancel-request")
 	conflictingCancelResponse := doHTTP(t, conflictingCancelRequest)
 	assertHTTPStatus(t, conflictingCancelResponse, http.StatusConflict)
@@ -356,7 +355,7 @@ func (fake *terminalHTTPFakeRunner) run(ctx context.Context) error {
 			continue
 		}
 		if err := fake.relay.MarkOutboundFrameDelivered(
-			ctx, delivery.ID, fake.connectionID, now,
+			ctx, delivery.ID, fake.connectionID, delivery.ClaimAttempt, now,
 		); err != nil {
 			return err
 		}
@@ -531,7 +530,7 @@ func createTerminalSessionResponse(
 	if err != nil {
 		t.Fatal(err)
 	}
-	setDataPlaneHeaders(request, credential, sandbox.Generation, idempotencyKey)
+	setDataPlaneHeaders(t, request, credential, sandbox.Generation, idempotencyKey)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("SecondBox-Lease-ID", leaseID)
 	return doHTTP(t, request)
@@ -546,7 +545,7 @@ func dialTerminal(
 	t.Helper()
 	dialer := websocket.Dialer{Subprotocols: []string{"secondbox.terminal.v1"}}
 	connection, response, err := dialer.Dial(
-		session.WebsocketURL, terminalHTTPHeaders(credential, generation),
+		session.WebsocketURL, terminalHTTPHeaders(t, credential, generation),
 	)
 	if err != nil {
 		if response != nil {
@@ -563,9 +562,9 @@ func dialTerminal(
 	return connection
 }
 
-func terminalHTTPHeaders(credential string, generation int64) http.Header {
+func terminalHTTPHeaders(t *testing.T, credential string, generation int64) http.Header {
 	headers := make(http.Header)
-	headers.Set("Authorization", "Bearer "+credential)
+	setPlatformAuthorizationHeaders(t, headers, credential)
 	headers.Set("SecondBox-Generation", fmt.Sprintf("%d", generation))
 	return headers
 }

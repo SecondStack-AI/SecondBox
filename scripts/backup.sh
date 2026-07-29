@@ -227,10 +227,6 @@ SELECT jsonb_build_object(
     'danglingCheckpointReferences',(
         SELECT count(*) FROM dangling_checkpoint_references
     ),
-    'runnerCredentialSerials',(
-        SELECT COALESCE(jsonb_agg(serial_number ORDER BY serial_number),'[]'::jsonb)
-        FROM secondbox.runner_credentials
-    ),
     'objects',object_manifest.objects
 )
 FROM object_manifest
@@ -247,7 +243,6 @@ read_database_state() {
   jq -e '
     .contractVersion == "secondbox-backup-database-state/v1" and
     (.databaseRecoveryPosition | type == "string" and length > 0) and
-    (.runnerCredentialSerials | type == "array") and
     (.objects | type == "array")
   ' "$output" >/dev/null
 }

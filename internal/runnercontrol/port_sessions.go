@@ -12,6 +12,8 @@ type PortSessionAdmission struct {
 	Session          contracts.PortSession
 	StreamID         string
 	ProjectID        string
+	TenantRef        string
+	SubjectRef       string
 	ServiceAccountID string
 	RequestID        string
 	LeaseID          string
@@ -24,6 +26,8 @@ type PortSessionAdmission struct {
 type PortTunnel struct {
 	Session           contracts.PortSession
 	ProjectID         string
+	TenantRef         string
+	SubjectRef        string
 	ServiceAccountID  string
 	RequestID         string
 	LeaseID           string
@@ -40,6 +44,8 @@ type PortTunnel struct {
 // PortTunnelClose identifies one authenticated or already-consumed tunnel.
 type PortTunnelClose struct {
 	ProjectID        string
+	TenantRef        string
+	SubjectRef       string
 	SandboxID        string
 	SessionID        string
 	Generation       int64
@@ -61,10 +67,10 @@ type PortTunnelEvent struct {
 // PortSessionRelay persists port admission, single-use connection state, and bounded bytes.
 type PortSessionRelay interface {
 	AdmitPortSession(context.Context, PortSessionAdmission) (PortTunnel, bool, error)
-	GetPortSession(context.Context, string, string, string, time.Time) (contracts.PortSession, error)
+	GetPortSession(context.Context, string, string, string, string, time.Time) (contracts.PortSession, error)
 	ClosePortSession(context.Context, PortTunnelClose) (contracts.PortSession, error)
-	ConsumePortSession(context.Context, string, string, time.Time) (PortTunnel, error)
-	QueuePortClientBytes(context.Context, string, string, []byte, time.Time) error
-	NextPortTunnelEvent(context.Context, string, string, int64, time.Time) (PortTunnelEvent, bool, error)
-	AcknowledgePortTunnelEvent(context.Context, string, string, int64, time.Time) error
+	ConsumePortSession(context.Context, string, string, string, time.Time) (PortTunnel, error)
+	QueuePortClientBytes(context.Context, string, string, string, []byte, time.Time) error
+	NextPortTunnelEvent(context.Context, string, string, string, int64, time.Time) (PortTunnelEvent, bool, error)
+	AcknowledgePortTunnelEvent(context.Context, string, string, string, int64, time.Time) error
 }

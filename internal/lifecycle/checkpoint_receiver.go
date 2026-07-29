@@ -25,12 +25,19 @@ import (
 
 var checkpointIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$`)
 
+// CheckpointPublicationStore owns restart-safe checkpoint publication state.
+type CheckpointPublicationStore interface {
+	StageCheckpoint(ctx context.Context, input ports.CheckpointPublicationInput) (contracts.WorkspaceCheckpoint, error)
+	VerifyCheckpoint(ctx context.Context, input ports.CheckpointPublicationInput, now time.Time) (contracts.WorkspaceCheckpoint, error)
+	PublishCheckpoint(ctx context.Context, input ports.CheckpointPublicationInput, now time.Time) (contracts.WorkspaceCheckpoint, error)
+}
+
 // CheckpointReceiverConfig binds restart-safe spool and immutable publication authority.
 type CheckpointReceiverConfig struct {
 	DatabaseURL    string
 	SpoolDirectory string
 	ObjectStore    objectstore.Store
-	LifecycleStore ports.LifecycleStore
+	LifecycleStore CheckpointPublicationStore
 }
 
 // CheckpointReceiver ingests opaque runner bytes and publishes verified checkpoints.
@@ -38,7 +45,7 @@ type CheckpointReceiver struct {
 	pool      *pgxpool.Pool
 	spool     string
 	objects   objectstore.Store
-	lifecycle ports.LifecycleStore
+	lifecycle CheckpointPublicationStore
 }
 
 // NewCheckpointReceiver validates the checkpoint ingestion trust boundary.

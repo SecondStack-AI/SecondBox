@@ -12,6 +12,7 @@ import (
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 )
 
 // GRPCConnectorConfig contains the mutually authenticated control-plane endpoint.
@@ -21,6 +22,7 @@ type GRPCConnectorConfig struct {
 	ClientCertificate string
 	ClientKey         string
 	CertificatePool   string
+	Credential        string
 }
 
 // LoadRunnerProtocolConfigFromEnv loads explicit runner identity and mTLS settings.
@@ -64,6 +66,13 @@ func LoadRunnerProtocolConfigFromEnv() (RunnerProtocolConfig, GRPCConnectorConfi
 	if err != nil {
 		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, err
 	}
+	credential, err := required("SECONDBOX_RUNNER_CREDENTIAL")
+	if err != nil {
+		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, err
+	}
+	if len(credential) < 32 {
+		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, fmt.Errorf("SecondBox runner credential must contain at least 32 bytes")
+	}
 
 	return RunnerProtocolConfig{
 			RunnerID:        runnerID,
@@ -85,12 +94,14 @@ func LoadRunnerProtocolConfigFromEnv() (RunnerProtocolConfig, GRPCConnectorConfi
 			ClientCertificate: clientCertificate,
 			ClientKey:         clientKey,
 			CertificatePool:   certificatePool,
+			Credential:        credential,
 		}, nil
 }
 
 // GRPCConnector creates one outbound runner stream over mutually authenticated TLS.
 type GRPCConnector struct {
 	address    string
+	credential string
 	tlsConfig  *tls.Config
 	mu         sync.Mutex
 	connection *grpc.ClientConn
@@ -104,10 +115,14 @@ func NewGRPCConnector(config GRPCConnectorConfig) (*GRPCConnector, error) {
 		"runner client certificate":           config.ClientCertificate,
 		"runner client key":                   config.ClientKey,
 		"control-plane certificate authority": config.CertificatePool,
+		"pre-shared runner credential":        config.Credential,
 	} {
 		if strings.TrimSpace(value) == "" {
 			return nil, fmt.Errorf("SecondBox runner mTLS config requires %s", name)
 		}
+	}
+	if len(config.Credential) < 32 {
+		return nil, fmt.Errorf("SecondBox runner credential must contain at least 32 bytes")
 	}
 	certificate, err := tls.LoadX509KeyPair(config.ClientCertificate, config.ClientKey)
 	if err != nil {
@@ -122,7 +137,8 @@ func NewGRPCConnector(config GRPCConnectorConfig) (*GRPCConnector, error) {
 		return nil, fmt.Errorf("SecondBox runner mTLS control-plane CA has no certificates")
 	}
 	return &GRPCConnector{
-		address: strings.TrimSpace(config.Address),
+		address:    strings.TrimSpace(config.Address),
+		credential: config.Credential,
 		tlsConfig: &tls.Config{
 			MinVersion:   tls.VersionTLS13,
 			ServerName:   strings.TrimSpace(config.ServerName),
@@ -144,7 +160,10 @@ func (c *GRPCConnector) Connect(ctx context.Context) (RunnerProtocolStream, erro
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox runner gRPC client: %w", err)
 	}
-	stream, err := runnerprotocol.NewRunnerControlClient(connection).Connect(ctx)
+	streamContext := metadata.AppendToOutgoingContext(
+		ctx, "x-secondbox-runner-credential", c.credential,
+	)
+	stream, err := runnerprotocol.NewRunnerControlClient(connection).Connect(streamContext)
 	if err != nil {
 		connection.Close()
 		return nil, fmt.Errorf("SecondBox runner gRPC stream: %w", err)

@@ -476,12 +476,15 @@ func (store *PostgresStore) AdvanceFencedGeneration(
 		return 0, fmt.Errorf("SecondBox fenced Sandbox lock: %w", err)
 	}
 
-	var projectID, workspaceID, currentInstanceID string
+	var tenantRef, subjectRef, workspaceID, currentInstanceID string
 	var sandboxGeneration int64
 	if err := tx.QueryRow(ctx, `
-		SELECT project_id,workspace_id,current_instance_id,generation
+		SELECT tenant_ref,subject_ref,workspace_id,current_instance_id,generation
 		FROM secondbox.sandboxes WHERE id=$1 FOR UPDATE`, sandboxID,
-	).Scan(&projectID, &workspaceID, &currentInstanceID, &sandboxGeneration); err != nil {
+	).Scan(
+		&tenantRef, &subjectRef,
+		&workspaceID, &currentInstanceID, &sandboxGeneration,
+	); err != nil {
 		return 0, fmt.Errorf("SecondBox fenced Sandbox lookup: %w", err)
 	}
 	var lockedSandboxID, instanceID, state string
@@ -595,10 +598,10 @@ func (store *PostgresStore) AdvanceFencedGeneration(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.operations (
-			id,project_id,sandbox_id,kind,state,request_id,request_metadata_json,
+			id,tenant_ref,subject_ref,sandbox_id,kind,state,request_id,request_metadata_json,
 			error_code,error_message,retryable,created_at,started_at,completed_at,updated_at
-		) VALUES ($1,$2,$3,'start','pending',$4,'{}','','',false,$5,NULL,NULL,$5)`,
-		"operation-runner-loss-"+assignmentID, projectID, sandboxID,
+		) VALUES ($1,$2,$3,$4,'start','pending',$5,'{}','','',false,$6,NULL,NULL,$6)`,
+		"operation-runner-loss-"+assignmentID, tenantRef, subjectRef, sandboxID,
 		"request-runner-loss-"+assignmentID, now,
 	); err != nil {
 		return 0, fmt.Errorf("SecondBox Runner-loss replacement Operation insert: %w", err)

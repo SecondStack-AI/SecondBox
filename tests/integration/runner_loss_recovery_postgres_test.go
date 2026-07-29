@@ -25,7 +25,7 @@ func TestRunnerLossRecoveryFencesOldAuthorityAndRestoresCheckpointOnAnotherRunne
 	t *testing.T,
 ) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(
 		t, controlPlane, admin, "runner-loss-recovery",
 	)
@@ -220,6 +220,7 @@ func TestRunnerLossRecoveryFencesOldAuthorityAndRestoresCheckpointOnAnotherRunne
 	activity, err := databaseStore.OpenActivitySession(t.Context(), ports.ActivityInput{
 		GenerationInput: ports.GenerationInput{
 			ProjectID: principal.ProjectID, SandboxID: sandbox.ID,
+			TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
 			Generation: ready.Generation, Now: now.Add(4 * time.Millisecond),
 		},
 		Session: contracts.ActivitySession{
@@ -359,6 +360,19 @@ func TestRunnerLossRecoveryFencesOldAuthorityAndRestoresCheckpointOnAnotherRunne
 	decision, found, err = restartedWorker.RunOnce(t.Context(), lossAt.Add(2*time.Millisecond))
 	if err != nil || !found || decision.Action != reconcile.ActionAdvanceGeneration {
 		t.Fatalf("restarted Runner-loss decision = %#v, %t, %v", decision, found, err)
+	}
+	var operationTenantRef, operationSubjectRef string
+	if err := pool.QueryRow(t.Context(), `
+		SELECT tenant_ref,subject_ref FROM secondbox.operations WHERE id=$1`,
+		"operation-runner-loss-"+firstAssignment.Fence.AssignmentId,
+	).Scan(&operationTenantRef, &operationSubjectRef); err != nil {
+		t.Fatal(err)
+	}
+	if operationTenantRef != principal.TenantRef || operationSubjectRef != principal.SubjectRef {
+		t.Fatalf(
+			"Runner-loss replacement Operation ownership = %q/%q, want %q/%q",
+			operationTenantRef, operationSubjectRef, principal.TenantRef, principal.SubjectRef,
+		)
 	}
 
 	var (

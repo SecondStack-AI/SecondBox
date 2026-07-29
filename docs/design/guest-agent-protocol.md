@@ -44,4 +44,4 @@ Heartbeat reports guest liveness and protocol health. Useful-activity events sep
 
 The guest never receives object-store, database, runner enrollment, application API-key, or model-provider credentials. SecondBox v1 does not provide a general secret-injection protocol.
 
-See [API conventions](api-conventions.md), [Runner protocol](runner-protocol.md), [Workspace durability](workspace-durability.md), and [Compatibility policy](compatibility-policy.md).
+See [API conventions](api-conventions.md), [Runner protocol](runner-protocol.md), and [Workspace durability](workspace-durability.md).

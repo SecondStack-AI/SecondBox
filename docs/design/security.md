@@ -1,49 +1,33 @@
 # Security model
 
-SecondBox assumes application clients and guest workloads may be malicious. It separates application tenancy, unprivileged orchestration, privileged execution, and durable bytes so compromise of one boundary does not silently grant every other authority.
+SecondBox assumes guest workloads and network peers may be malicious. Its control plane is also a trusted subsystem: callers holding the platform token may assert any tenant and subject reference. SecondBox preserves strict row scoping for those assertions, but it does not claim to authenticate end users or defend one subject from a compromised trusted caller.
 
-## Assets and principals
+## Principals and authority
 
-Protected assets include API and runner credentials, profile and assignment authority, workspace and artifact content, released execution assets, audit evidence, control-plane availability, Runner host integrity, and other Projects' existence and data.
+The HTTP API accepts one deployment-wide `SECONDBOX_PLATFORM_TOKEN`. Every request also supplies bounded opaque `X-SecondBox-Tenant-Ref` and `X-SecondBox-Subject-Ref` values. PostgreSQL queries scope owned resources, idempotency, quota, and audit records to both values. The upstream platform must authorize those assertions before calling SecondBox.
 
-Runner operation evidence is structurally payload-free. Assignment, Exec, File, Port, checkpoint, restore, fence, network-failure, and teardown terminals use one fixed record correlated by request, operation, Sandbox, Instance, generation, Assignment, optional Lease, and Runner IDs. The evidence types cannot represent fencing tokens, credentials, commands, environment values, byte streams, file paths/content, checksums, network destinations, or workspace data. Definitive terminal paths fail hard if their local evidence cannot be recorded. Correlation IDs belong in audit evidence rather than metric labels.
+Runner authority is separate. A Runner establishes an outbound TLS 1.3 connection, presents a CA-signed client identity, and proves the deployment-wide pre-shared Runner credential. The control plane compares the certificate identity, configured Runner identity, and protocol identity. HTTP tokens are never accepted on this channel, and Runner credentials are never accepted by the HTTP API.
 
-Principals are bootstrap and ongoing operators, project-scoped ServiceAccounts, control-plane replicas, enrolled Runners, guest agents tied to one Instance generation, and external object-store/PostgreSQL services. End users are application concepts and are not SecondBox principals.
+Browser-facing PTY and port-tunnel connections do not rely on caller-supplied tenancy. They use single-use, session-bound, expiring HMAC capability tokens carried in the WebSocket subprotocol. Generation, Lease, Assignment, and attachment checks still apply at admission.
 
-## Application tenancy
+## Control-plane boundary
 
-Authentication derives exactly one Project. Authorization checks scope and Project ownership before lookup results are disclosed, preventing cross-Project enumeration as well as mutation. Metadata is bounded and treated as untrusted display data. API key hashes, prefixes, rotation, revocation, expiry, and last-use evidence are stored separately from plaintext.
+The control plane has database and object-store authority and can schedule Runners, so compromise is severe. It remains unprivileged and has no KVM, TUN/TAP, host cgroups, host paths, container-engine socket, Runner private keys, or Runner shell access. The Runner CA private key stays outside the control-plane deployment.
 
-Idempotency, quota reservation, generation checks, and optimistic concurrency are transactional. A stale Lease, stream, Instance, or Assignment cannot mutate a newer generation. Audit records capture denied and accepted security-sensitive operations without storing secrets or workspace content.
+Idempotency, subject quota reservation, generation checks, ownership checks, and optimistic concurrency are transactional. A stale Lease, stream, Instance, Assignment, or reconciliation claim cannot mutate a newer generation. Audit records capture security-sensitive mutations without storing credentials or workspace content.
 
-## Control-plane compromise
+## Runner and guest boundary
 
-The control plane has database and object-store authority and can schedule Runners, so compromise is severe. Its process remains unprivileged and has no KVM, TUN, host cgroups, host paths, container-engine socket, or Runner shell access. Runner mTLS credentials and application API keys are distinct. Short-lived credentials, rotation, least-privilege database/object-store roles, immutable release artifacts, and fixed outbound dependencies limit persistence and lateral movement.
+A Runner is privileged on its host and can observe active guest memory and its local workspace cache. Runner pools are explicit trust and placement boundaries. A Runner receives only fully resolved assignments for its pool. It does not receive the platform token, PostgreSQL credentials, or global object-store credentials.
 
-## Runner compromise
+Firecracker, jailer, cgroups, namespaces, minimal devices, signed images, and a narrow guest protocol provide defense in depth. Guest paths resolve beneath descriptor-pinned workspace roots. Resource, deadline, payload, transfer, and output bounds apply at admission and execution. Guest output, filenames, log text, and protocol errors are untrusted and bounded.
 
-A Runner is privileged on its host and can observe active guest memory and its local workspace cache. Runner pools are therefore explicit trust and placement boundaries. A Runner receives only assignments for its pool, resolved policy, and the minimum object access needed for those assignments. It does not receive application API keys or global object-store credentials.
+Control-plane fencing prevents a stale Runner from committing authoritative state for a newer generation. It cannot remediate a compromised host: operators replace the shared Runner credential, remove the host, fence its assignments, and restore affected Sandboxes from the last verified checkpoint on fresh hosts.
 
-Control-plane fencing prevents a compromised or stale Runner from committing authoritative state for a newer generation. It cannot erase the need for host remediation: a compromised Runner is drained, its credential revoked, its assignments fenced, and affected Sandboxes restored from the last trusted durable checkpoint on fresh hosts.
+## Durable bytes and recovery
 
-Credential revocation is also a live transport boundary. The credential row, all active connections using it, any connection-bound command delivery, and the Runner's current online projection change in one PostgreSQL transaction. Relay claims and inbound locks independently require a live credential as well as an active connection, including Exec, File, PTY, and Port frames. Checkpoint ordering and credential admission commit before any spool, object-store, or checkpoint-database side effect.
+Checkpoint and Artifact publication uses immutable keys, declared size and SHA-256 evidence, verified object reads, atomic metadata publication, retention, and two-phase garbage collection. Uploads spool and hash before durable admission; downloads are fully integrity-verified before response bytes are exposed. Missing or corrupt reachable bytes fail explicitly.
 
-## Malicious guest
-
-Firecracker, jailer, cgroups, namespaces, minimal devices, signed images, and a narrow guest protocol form defense in depth. Guest paths are resolved beneath descriptor-pinned workspace roots. Resource and output bounds apply at admission and execution. Guest traffic follows [Networking and ports](networking-and-ports.md).
-
-The guest receives no database, object-store, runner enrollment, application API-key, or general provider secret. V1 does not inject model or application credentials. Guest output, filenames, log text, and protocol errors are untrusted and bounded before logging or returning to clients.
-
-## Supply chain
-
-Profiles reference immutable signed kernel, rootfs, guest-agent, and toolchain bundles. Runners verify signature, trusted-key fingerprint, checksum manifest, architecture, Firecracker compatibility, and guest-protocol metadata before advertising or using an asset. Mutable tags, unsigned local substitution, and arbitrary runtime pulls do not satisfy assignments.
-
-Release artifacts include checksums, signatures, SBOMs, provenance, license notices, vulnerability results, and dependency-age evidence. Trust-anchor rotation is explicit and audited; overlapping trust is bounded and old keys are revocable.
-
-## Availability and recovery
-
-All work is deadline- and size-bounded. Per-Project and per-profile quotas protect shared control-plane and Runner capacity. Backpressure prevents slow clients from creating unbounded output buffers. Database, object-store, Runner, and guest failures produce explicit state rather than fallback execution or empty-data success.
-
-Security incidents use correlation across request, operation, Project, Sandbox, Instance, generation, Assignment, Lease, and Runner. Support bundles are bounded, redact credentials and workspace content, and require an administrative scope.
+All work is deadline- and size-bounded. Per-subject quotas protect shared control-plane and Runner capacity. Backpressure prevents slow clients from creating unbounded output buffers. Database, object-store, Runner, and guest failures produce explicit state rather than fallback execution or empty-data success.
 
 See [Service boundaries](service-boundaries.md), [Profiles and authorization](profiles-and-authorization.md), [Runner protocol](runner-protocol.md), and [Recovery and reconciliation](recovery-and-reconciliation.md).

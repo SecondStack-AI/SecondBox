@@ -13,13 +13,10 @@
   ],
   "security": [
     {
-      "serviceAccountBearer": []
+      "platformBearer": []
     }
   ],
   "tags": [
-    {"name": "Projects"},
-    {"name": "ServiceAccounts"},
-    {"name": "APIKeys"},
     {"name": "Profiles"},
     {"name": "RunnerPools"},
     {"name": "Runners"},
@@ -33,328 +30,8 @@
     {"name": "Ports"}
   ],
   "paths": {
-    "/v1/projects": {
-      "get": {
-        "tags": ["Projects"],
-        "operationId": "listProjects",
-        "parameters": [
-          {"$ref": "#/components/parameters/PageLimit"},
-          {"$ref": "#/components/parameters/PageCursor"},
-          {"$ref": "#/components/parameters/RequestID"}
-        ],
-        "responses": {
-          "200": {
-            "description": "Project page.",
-            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ProjectPage"}}}
-          },
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"}
-        }
-      },
-      "post": {
-        "tags": ["Projects"],
-        "operationId": "createProject",
-        "parameters": [
-          {"$ref": "#/components/parameters/IdempotencyKey"},
-          {"$ref": "#/components/parameters/RequestID"}
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateProjectRequest"}}}
-        },
-        "responses": {
-          "201": {
-            "description": "Project created.",
-            "headers": {
-              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
-              "ETag": {"$ref": "#/components/headers/ETag"},
-              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
-            },
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Project"}}}
-          },
-          "400": {"$ref": "#/components/responses/BadRequest"},
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"},
-          "409": {"$ref": "#/components/responses/Conflict"}
-        }
-      }
-    },
-    "/v1/projects/{projectId}": {
-      "get": {
-        "tags": ["Projects"],
-        "operationId": "getProject",
-        "parameters": [
-          {"$ref": "#/components/parameters/ProjectID"},
-          {"$ref": "#/components/parameters/RequestID"}
-        ],
-        "responses": {
-          "200": {
-            "description": "Project.",
-            "headers": {
-              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
-              "ETag": {"$ref": "#/components/headers/ETag"}
-            },
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Project"}}}
-          },
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"},
-          "404": {"$ref": "#/components/responses/NotFound"}
-        }
-      },
-      "patch": {
-        "tags": ["Projects"],
-        "operationId": "updateProject",
-        "parameters": [
-          {"$ref": "#/components/parameters/ProjectID"},
-          {"$ref": "#/components/parameters/IfMatch"},
-          {"$ref": "#/components/parameters/IdempotencyKey"},
-          {"$ref": "#/components/parameters/RequestID"}
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UpdateProjectRequest"}}}
-        },
-        "responses": {
-          "200": {
-            "description": "Updated Project.",
-            "headers": {
-              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
-              "ETag": {"$ref": "#/components/headers/ETag"},
-              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
-            },
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Project"}}}
-          },
-          "400": {"$ref": "#/components/responses/BadRequest"},
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"},
-          "404": {"$ref": "#/components/responses/NotFound"},
-          "409": {"$ref": "#/components/responses/Conflict"},
-          "412": {"$ref": "#/components/responses/PreconditionFailed"}
-        }
-      }
-    },
-    "/v1/projects/{projectId}/service-accounts": {
-      "get": {
-        "tags": ["ServiceAccounts"],
-        "operationId": "listServiceAccounts",
-        "parameters": [
-          {"$ref": "#/components/parameters/ProjectID"},
-          {"$ref": "#/components/parameters/PageLimit"},
-          {"$ref": "#/components/parameters/PageCursor"},
-          {"$ref": "#/components/parameters/RequestID"}
-        ],
-        "responses": {
-          "200": {
-            "description": "ServiceAccount page.",
-            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ServiceAccountPage"}}}
-          },
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"},
-          "404": {"$ref": "#/components/responses/NotFound"}
-        }
-      },
-      "post": {
-        "tags": ["ServiceAccounts"],
-        "operationId": "createServiceAccount",
-        "parameters": [
-          {"$ref": "#/components/parameters/ProjectID"},
-          {"$ref": "#/components/parameters/IdempotencyKey"},
-          {"$ref": "#/components/parameters/RequestID"}
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateServiceAccountRequest"}}}
-        },
-        "responses": {
-          "201": {
-            "description": "ServiceAccount created.",
-            "headers": {
-              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
-              "ETag": {"$ref": "#/components/headers/ETag"},
-              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
-            },
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ServiceAccount"}}}
-          },
-          "400": {"$ref": "#/components/responses/BadRequest"},
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"},
-          "404": {"$ref": "#/components/responses/NotFound"},
-          "409": {"$ref": "#/components/responses/Conflict"}
-        }
-      }
-    },
-    "/v1/projects/{projectId}/service-accounts/{serviceAccountId}": {
-      "get": {
-        "tags": ["ServiceAccounts"],
-        "operationId": "getServiceAccount",
-        "parameters": [
-          {"$ref": "#/components/parameters/ProjectID"},
-          {"$ref": "#/components/parameters/ServiceAccountID"},
-          {"$ref": "#/components/parameters/RequestID"}
-        ],
-        "responses": {
-          "200": {
-            "description": "ServiceAccount.",
-            "headers": {
-              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
-              "ETag": {"$ref": "#/components/headers/ETag"}
-            },
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ServiceAccount"}}}
-          },
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"},
-          "404": {"$ref": "#/components/responses/NotFound"}
-        }
-      },
-      "patch": {
-        "tags": ["ServiceAccounts"],
-        "operationId": "updateServiceAccount",
-        "parameters": [
-          {"$ref": "#/components/parameters/ProjectID"},
-          {"$ref": "#/components/parameters/ServiceAccountID"},
-          {"$ref": "#/components/parameters/IfMatch"},
-          {"$ref": "#/components/parameters/IdempotencyKey"},
-          {"$ref": "#/components/parameters/RequestID"}
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UpdateServiceAccountRequest"}}}
-        },
-        "responses": {
-          "200": {
-            "description": "Updated ServiceAccount.",
-            "headers": {
-              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
-              "ETag": {"$ref": "#/components/headers/ETag"},
-              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
-            },
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ServiceAccount"}}}
-          },
-          "400": {"$ref": "#/components/responses/BadRequest"},
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"},
-          "404": {"$ref": "#/components/responses/NotFound"},
-          "409": {"$ref": "#/components/responses/Conflict"},
-          "412": {"$ref": "#/components/responses/PreconditionFailed"}
-        }
-      }
-    },
-    "/v1/projects/{projectId}/service-accounts/{serviceAccountId}/api-keys": {
-      "get": {
-        "tags": ["APIKeys"],
-        "operationId": "listAPIKeys",
-        "parameters": [
-          {"$ref": "#/components/parameters/ProjectID"},
-          {"$ref": "#/components/parameters/ServiceAccountID"},
-          {"$ref": "#/components/parameters/PageLimit"},
-          {"$ref": "#/components/parameters/PageCursor"},
-          {"$ref": "#/components/parameters/RequestID"}
-        ],
-        "responses": {
-          "200": {
-            "description": "APIKey page without credential material.",
-            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/APIKeyPage"}}}
-          },
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"},
-          "404": {"$ref": "#/components/responses/NotFound"}
-        }
-      },
-      "post": {
-        "tags": ["APIKeys"],
-        "operationId": "createAPIKey",
-        "parameters": [
-          {"$ref": "#/components/parameters/ProjectID"},
-          {"$ref": "#/components/parameters/ServiceAccountID"},
-          {"$ref": "#/components/parameters/IdempotencyKey"},
-          {"$ref": "#/components/parameters/RequestID"}
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateAPIKeyRequest"}}}
-        },
-        "responses": {
-          "201": {
-            "description": "APIKey and one-time plaintext credential.",
-            "headers": {
-              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
-              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
-            },
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateAPIKeyResponse"}}}
-          },
-          "400": {"$ref": "#/components/responses/BadRequest"},
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"},
-          "404": {"$ref": "#/components/responses/NotFound"},
-          "409": {"$ref": "#/components/responses/Conflict"}
-        }
-      }
-    },
-    "/v1/projects/{projectId}/service-accounts/{serviceAccountId}/api-keys/{apiKeyId}:revoke": {
-      "post": {
-        "tags": ["APIKeys"],
-        "operationId": "revokeAPIKey",
-        "parameters": [
-          {"$ref": "#/components/parameters/ProjectID"},
-          {"$ref": "#/components/parameters/ServiceAccountID"},
-          {"$ref": "#/components/parameters/APIKeyID"},
-          {"$ref": "#/components/parameters/IfMatch"},
-          {"$ref": "#/components/parameters/IdempotencyKey"},
-          {"$ref": "#/components/parameters/RequestID"}
-        ],
-        "responses": {
-          "200": {
-            "description": "Revoked APIKey metadata.",
-            "headers": {
-              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
-              "ETag": {"$ref": "#/components/headers/ETag"},
-              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
-            },
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/APIKey"}}}
-          },
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"},
-          "404": {"$ref": "#/components/responses/NotFound"},
-          "409": {"$ref": "#/components/responses/Conflict"},
-          "412": {"$ref": "#/components/responses/PreconditionFailed"}
-        }
-      }
-    },
-    "/v1/projects/{projectId}/service-accounts/{serviceAccountId}/api-keys/{apiKeyId}:rotate": {
-      "post": {
-        "tags": ["APIKeys"],
-        "operationId": "rotateAPIKey",
-        "parameters": [
-          {"$ref": "#/components/parameters/ProjectID"},
-          {"$ref": "#/components/parameters/ServiceAccountID"},
-          {"$ref": "#/components/parameters/APIKeyID"},
-          {"$ref": "#/components/parameters/IfMatch"},
-          {"$ref": "#/components/parameters/IdempotencyKey"},
-          {"$ref": "#/components/parameters/RequestID"}
-        ],
-        "responses": {
-          "200": {
-            "description": "Updated APIKey authority and its one-time replacement plaintext credential.",
-            "headers": {
-              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
-              "ETag": {"$ref": "#/components/headers/ETag"},
-              "Idempotency-Replayed": {"$ref": "#/components/headers/IdempotencyReplayed"}
-            },
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateAPIKeyResponse"}}}
-          },
-          "400": {"$ref": "#/components/responses/BadRequest"},
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"},
-          "404": {"$ref": "#/components/responses/NotFound"},
-          "409": {"$ref": "#/components/responses/Conflict"},
-          "412": {"$ref": "#/components/responses/PreconditionFailed"}
-        }
-      }
-    },
     "/v1/profiles": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
         "tags": ["Profiles"],
         "operationId": "listProfiles",
@@ -402,6 +79,7 @@
       }
     },
     "/v1/profiles/{profileName}": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
         "tags": ["Profiles"],
         "operationId": "getProfile",
@@ -425,6 +103,7 @@
       }
     },
     "/v1/profiles/{profileName}:revise": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "post": {
         "tags": ["Profiles"],
         "operationId": "reviseProfile",
@@ -458,6 +137,7 @@
       }
     },
     "/v1/profiles/{profileName}:disable": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "post": {
         "tags": ["Profiles"],
         "operationId": "disableProfile",
@@ -486,6 +166,7 @@
       }
     },
     "/v1/runner-pools": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
         "tags": ["RunnerPools"],
         "operationId": "listRunnerPools",
@@ -531,6 +212,7 @@
       }
     },
     "/v1/runner-pools/{runnerPoolName}": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
         "tags": ["RunnerPools"],
         "operationId": "getRunnerPool",
@@ -583,6 +265,7 @@
       }
     },
     "/v1/runners": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
         "tags": ["Runners"],
         "operationId": "listRunners",
@@ -604,6 +287,7 @@
       }
     },
     "/v1/runners/{runnerId}": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
         "tags": ["Runners"],
         "operationId": "getRunner",
@@ -627,6 +311,7 @@
       }
     },
     "/v1/sandboxes": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
         "tags": ["Sandboxes"],
         "operationId": "listSandboxes",
@@ -674,6 +359,7 @@
       }
     },
     "/v1/sandboxes/{sandboxId}": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
         "tags": ["Sandboxes"],
         "operationId": "getSandbox",
@@ -723,6 +409,7 @@
     },
     "/v1/sandboxes/{sandboxId}:start": {"$ref": "#/components/pathItems/StartSandbox"},
     "/v1/sandboxes/{sandboxId}:inspect": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "post": {
         "tags": ["Sandboxes"],
         "operationId": "inspectSandbox",
@@ -745,6 +432,7 @@
       }
     },
     "/v1/sandboxes/{sandboxId}:ping": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "post": {
         "tags": ["Sandboxes"],
         "operationId": "pingSandbox",
@@ -768,6 +456,7 @@
       }
     },
     "/v1/sandboxes/{sandboxId}:touch": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "post": {
         "tags": ["Sandboxes"],
         "operationId": "touchSandbox",
@@ -796,6 +485,7 @@
     "/v1/sandboxes/{sandboxId}:stop": {"$ref": "#/components/pathItems/StopSandbox"},
     "/v1/sandboxes/{sandboxId}:checkpoint": {"$ref": "#/components/pathItems/CheckpointSandbox"},
     "/v1/sandboxes/{sandboxId}:wait": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "post": {
         "tags": ["Sandboxes"],
         "operationId": "waitForSandbox",
@@ -826,6 +516,7 @@
       }
     },
     "/v1/operations/{operationId}": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
         "tags": ["Operations"],
         "operationId": "getOperation",
@@ -846,6 +537,7 @@
       }
     },
     "/v1/sandboxes/{sandboxId}/leases": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "post": {
         "tags": ["Leases"],
         "operationId": "acquireSandboxLease",
@@ -874,6 +566,7 @@
       }
     },
     "/v1/leases/{leaseId}": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
         "tags": ["Leases"],
         "operationId": "getSandboxLease",
@@ -913,6 +606,7 @@
       }
     },
     "/v1/leases/{leaseId}:renew": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "post": {
         "tags": ["Leases"],
         "operationId": "renewSandboxLease",
@@ -940,6 +634,7 @@
       }
     },
     "/v1/sandboxes/{sandboxId}/exec": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "post": {
         "tags": ["Execution"],
         "operationId": "executeSandboxCommand",
@@ -974,6 +669,7 @@
       }
     },
     "/v1/sandboxes/{sandboxId}/exec-streams": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "post": {
         "tags": ["Execution"],
         "operationId": "createSandboxExecStream",
@@ -1007,6 +703,7 @@
       }
     },
     "/v1/sandboxes/{sandboxId}/exec-streams/{execSessionId}:cancel": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "post": {
         "tags": ["Execution"],
         "operationId": "cancelSandboxExecStream",
@@ -1034,6 +731,7 @@
       }
     },
     "/v1/sandboxes/{sandboxId}/terminals": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "post": {
         "tags": ["Execution"],
         "operationId": "createSandboxTerminal",
@@ -1067,6 +765,7 @@
       }
     },
     "/v1/sandboxes/{sandboxId}/terminals/{terminalSessionId}": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
         "tags": ["Execution"],
         "operationId": "reconnectSandboxTerminal",
@@ -1116,6 +815,7 @@
       }
     },
     "/v1/sandboxes/{sandboxId}/files": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
         "tags": ["Files"],
         "operationId": "readSandboxFile",
@@ -1179,6 +879,7 @@
     },
     "/v1/sandboxes/{sandboxId}/files:stat": {"$ref": "#/components/pathItems/StatSandboxFile"},
     "/v1/sandboxes/{sandboxId}/files:exists": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
         "tags": ["Files"],
         "operationId": "sandboxFileExists",
@@ -1203,6 +904,7 @@
       }
     },
     "/v1/sandboxes/{sandboxId}/directories": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
         "tags": ["Files"],
         "operationId": "listSandboxDirectory",
@@ -1286,6 +988,7 @@
       }
     },
     "/v1/sandboxes/{sandboxId}/artifacts": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
         "tags": ["Artifacts"],
         "operationId": "listSandboxArtifacts",
@@ -1336,6 +1039,7 @@
       }
     },
     "/v1/artifacts/{artifactId}": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
         "tags": ["Artifacts"],
         "operationId": "getArtifact",
@@ -1375,6 +1079,7 @@
       }
     },
     "/v1/artifacts/{artifactId}/content": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
         "tags": ["Artifacts"],
         "operationId": "downloadArtifactContent",
@@ -1398,6 +1103,7 @@
       }
     },
     "/v1/sandboxes/{sandboxId}/snapshots": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
         "tags": ["Snapshots"],
         "operationId": "listSandboxSnapshots",
@@ -1448,6 +1154,7 @@
       }
     },
     "/v1/snapshots/{snapshotId}": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
         "tags": ["Snapshots"],
         "operationId": "getSnapshot",
@@ -1487,6 +1194,7 @@
       }
     },
     "/v1/sandboxes/{sandboxId}/port-sessions": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "post": {
         "tags": ["Ports"],
         "operationId": "createSandboxPortSession",
@@ -1520,6 +1228,7 @@
       }
     },
     "/v1/sandboxes/{sandboxId}/port-sessions/{portSessionId}": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
         "tags": ["Ports"],
         "operationId": "getSandboxPortSession",
@@ -1562,10 +1271,10 @@
   },
   "components": {
     "securitySchemes": {
-      "serviceAccountBearer": {
+      "platformBearer": {
         "type": "http",
         "scheme": "bearer",
-        "bearerFormat": "SecondBox service-account API key"
+        "bearerFormat": "SecondBox platform token"
       }
     },
     "headers": {
@@ -1587,6 +1296,18 @@
       }
     },
     "parameters": {
+      "TenantRef": {
+        "name": "X-SecondBox-Tenant-Ref",
+        "in": "header",
+        "required": true,
+        "schema": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[!-~]+$"}
+      },
+      "SubjectRef": {
+        "name": "X-SecondBox-Subject-Ref",
+        "in": "header",
+        "required": true,
+        "schema": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[!-~]+$"}
+      },
       "RequestID": {
         "name": "X-Request-ID",
         "in": "header",
@@ -1636,9 +1357,6 @@
         "description": "Opaque continuation token returned as nextCursor by the same endpoint and exact filter scope.",
         "schema": {"type": "string", "minLength": 1, "maxLength": 512}
       },
-      "ProjectID": {"name": "projectId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/OpaqueID"}},
-      "ServiceAccountID": {"name": "serviceAccountId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/OpaqueID"}},
-      "APIKeyID": {"name": "apiKeyId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/OpaqueID"}},
       "ProfileName": {"name": "profileName", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/ProfileName"}},
       "RunnerPoolName": {"name": "runnerPoolName", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/ProfileName"}},
       "RunnerPoolFilter": {"name": "pool", "in": "query", "required": false, "schema": {"$ref": "#/components/schemas/ProfileName"}},
@@ -1660,6 +1378,7 @@
     },
     "pathItems": {
       "StartSandbox": {
+        "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
         "post": {
           "tags": ["Sandboxes"],
           "operationId": "startSandbox",
@@ -1681,6 +1400,7 @@
         }
       },
       "DrainSandbox": {
+        "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
         "post": {
           "tags": ["Sandboxes"],
           "operationId": "drainSandbox",
@@ -1701,6 +1421,7 @@
         }
       },
       "StopSandbox": {
+        "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
         "post": {
           "tags": ["Sandboxes"],
           "operationId": "stopSandbox",
@@ -1721,6 +1442,7 @@
         }
       },
       "CheckpointSandbox": {
+        "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
         "post": {
           "tags": ["Sandboxes"],
           "operationId": "checkpointSandbox",
@@ -1746,6 +1468,7 @@
         }
       },
       "StatSandboxFile": {
+        "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
         "get": {
           "tags": ["Files"],
           "operationId": "statSandboxFile",
@@ -1853,142 +1576,6 @@
         "maxProperties": 128,
         "propertyNames": {"type": "string", "minLength": 1, "maxLength": 256},
         "additionalProperties": {"type": "string", "maxLength": 8192}
-      },
-      "ProjectState": {"type": "string", "enum": ["active", "disabled"]},
-      "Project": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "name", "state", "revision", "createdAt", "updatedAt"],
-        "properties": {
-          "id": {"$ref": "#/components/schemas/OpaqueID"},
-          "name": {"type": "string", "minLength": 1, "maxLength": 120},
-          "state": {"$ref": "#/components/schemas/ProjectState"},
-          "revision": {"type": "integer", "format": "int64", "minimum": 1},
-          "createdAt": {"$ref": "#/components/schemas/Timestamp"},
-          "updatedAt": {"$ref": "#/components/schemas/Timestamp"}
-        }
-      },
-      "CreateProjectRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["name"],
-        "properties": {"name": {"type": "string", "minLength": 1, "maxLength": 120}}
-      },
-      "UpdateProjectRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "minProperties": 1,
-        "properties": {
-          "name": {"type": "string", "minLength": 1, "maxLength": 120},
-          "state": {"$ref": "#/components/schemas/ProjectState"}
-        }
-      },
-      "ProjectPage": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["items"],
-        "properties": {
-          "items": {"type": "array", "maxItems": 200, "items": {"$ref": "#/components/schemas/Project"}},
-          "nextCursor": {"type": "string", "minLength": 1, "maxLength": 512}
-        }
-      },
-      "ServiceAccountState": {"type": "string", "enum": ["active", "disabled"]},
-      "ServiceAccountScope": {
-        "type": "string",
-        "enum": ["sandbox:read", "sandbox:lifecycle", "sandbox:exec", "sandbox:files", "sandbox:artifacts", "sandbox:ports"]
-      },
-      "ServiceAccount": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "projectId", "name", "state", "scopes", "profileGrants", "revision", "createdAt", "updatedAt"],
-        "properties": {
-          "id": {"$ref": "#/components/schemas/OpaqueID"},
-          "projectId": {"$ref": "#/components/schemas/OpaqueID"},
-          "name": {"type": "string", "minLength": 1, "maxLength": 120},
-          "state": {"$ref": "#/components/schemas/ServiceAccountState"},
-          "scopes": {"type": "array", "uniqueItems": true, "maxItems": 32, "items": {"$ref": "#/components/schemas/ServiceAccountScope"}},
-          "profileGrants": {"type": "array", "uniqueItems": true, "maxItems": 128, "items": {"$ref": "#/components/schemas/ProfileName"}},
-          "revision": {"type": "integer", "format": "int64", "minimum": 1},
-          "createdAt": {"$ref": "#/components/schemas/Timestamp"},
-          "updatedAt": {"$ref": "#/components/schemas/Timestamp"}
-        }
-      },
-      "CreateServiceAccountRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["name", "scopes", "profileGrants"],
-        "properties": {
-          "name": {"type": "string", "minLength": 1, "maxLength": 120},
-          "scopes": {"type": "array", "uniqueItems": true, "maxItems": 32, "items": {"$ref": "#/components/schemas/ServiceAccountScope"}},
-          "profileGrants": {"type": "array", "uniqueItems": true, "maxItems": 128, "items": {"$ref": "#/components/schemas/ProfileName"}}
-        }
-      },
-      "UpdateServiceAccountRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "minProperties": 1,
-        "properties": {
-          "name": {"type": "string", "minLength": 1, "maxLength": 120},
-          "state": {"$ref": "#/components/schemas/ServiceAccountState"},
-          "scopes": {"type": "array", "uniqueItems": true, "maxItems": 32, "items": {"$ref": "#/components/schemas/ServiceAccountScope"}},
-          "profileGrants": {"type": "array", "uniqueItems": true, "maxItems": 128, "items": {"$ref": "#/components/schemas/ProfileName"}}
-        }
-      },
-      "ServiceAccountPage": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["items"],
-        "properties": {
-          "items": {"type": "array", "maxItems": 200, "items": {"$ref": "#/components/schemas/ServiceAccount"}},
-          "nextCursor": {"type": "string", "minLength": 1, "maxLength": 512}
-        }
-      },
-      "APIKeyState": {"type": "string", "enum": ["active", "revoked", "expired"]},
-      "APIKey": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "serviceAccountId", "name", "prefix", "state", "scopes", "revision", "createdAt"],
-        "properties": {
-          "id": {"$ref": "#/components/schemas/OpaqueID"},
-          "serviceAccountId": {"$ref": "#/components/schemas/OpaqueID"},
-          "name": {"type": "string", "minLength": 1, "maxLength": 120},
-          "prefix": {"type": "string", "minLength": 4, "maxLength": 24},
-          "state": {"$ref": "#/components/schemas/APIKeyState"},
-          "scopes": {"type": "array", "uniqueItems": true, "maxItems": 32, "items": {"$ref": "#/components/schemas/ServiceAccountScope"}},
-          "expiresAt": {"$ref": "#/components/schemas/Timestamp"},
-          "revokedAt": {"$ref": "#/components/schemas/Timestamp"},
-          "lastUsedAt": {"$ref": "#/components/schemas/Timestamp"},
-          "revision": {"type": "integer", "format": "int64", "minimum": 1},
-          "createdAt": {"$ref": "#/components/schemas/Timestamp"}
-        }
-      },
-      "CreateAPIKeyRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["name", "scopes"],
-        "properties": {
-          "name": {"type": "string", "minLength": 1, "maxLength": 120},
-          "scopes": {"type": "array", "uniqueItems": true, "maxItems": 32, "items": {"$ref": "#/components/schemas/ServiceAccountScope"}},
-          "expiresAt": {"$ref": "#/components/schemas/Timestamp"}
-        }
-      },
-      "CreateAPIKeyResponse": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["apiKey", "credential"],
-        "properties": {
-          "apiKey": {"$ref": "#/components/schemas/APIKey"},
-          "credential": {"type": "string", "minLength": 24, "maxLength": 512, "writeOnly": true}
-        }
-      },
-      "APIKeyPage": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["items"],
-        "properties": {
-          "items": {"type": "array", "maxItems": 200, "items": {"$ref": "#/components/schemas/APIKey"}},
-          "nextCursor": {"type": "string", "minLength": 1, "maxLength": 512}
-        }
       },
       "ProfileState": {"type": "string", "enum": ["enabled", "disabled"]},
       "Profile": {
@@ -2219,7 +1806,7 @@
           "poolName": {"$ref": "#/components/schemas/ProfileName"},
           "name": {"type": "string", "minLength": 1, "maxLength": 120},
           "state": {"type": "string", "enum": ["enrolling", "enrolled", "connected", "ready", "draining", "drained", "offline"]},
-          "credentialState": {"type": "string", "enum": ["active", "retiring", "revoked", "absent"]},
+          "credentialState": {"type": "string", "enum": ["pre_shared"]},
           "architectures": {"type": "array", "maxItems": 8, "uniqueItems": true, "items": {"type": "string", "enum": ["amd64", "arm64"]}},
           "capabilities": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}},
           "capacity": {"type": "object", "maxProperties": 32, "additionalProperties": {"type": "integer", "format": "int64", "minimum": 0}},

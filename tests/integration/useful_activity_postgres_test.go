@@ -13,7 +13,7 @@ func TestEveryUsefulSessionKindSuppressesIdleReclamationWhileGuestHeartbeatDoesN
 	t *testing.T,
 ) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(
 		t, controlPlane, admin, "useful-session-idle",
 	)
@@ -21,12 +21,6 @@ func TestEveryUsefulSessionKindSuppressesIdleReclamationWhileGuestHeartbeatDoesN
 		t, controlPlane, databaseStore, admin, account, "profile-useful-session-idle",
 	)
 	principal := authenticateCredential(t, controlPlane, credential)
-	principal.Scopes = append(
-		principal.Scopes,
-		contracts.ScopeSandboxExec,
-		contracts.ScopeSandboxFiles,
-		contracts.ScopeSandboxPorts,
-	)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "useful-session-idle-create",
 		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},

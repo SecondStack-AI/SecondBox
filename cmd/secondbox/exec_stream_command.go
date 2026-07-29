@@ -29,6 +29,8 @@ func runExecStreamCommand(
 	ctx context.Context,
 	rawURL string,
 	token string,
+	tenantRef string,
+	subjectRef string,
 	args []string,
 	input io.Reader,
 	output io.Writer,
@@ -49,8 +51,9 @@ func runExecStreamCommand(
 	if len(flags.Args()) != 0 {
 		return fmt.Errorf("SecondBox CLI unexpected exec stream arguments: %s", strings.Join(flags.Args(), " "))
 	}
-	if strings.TrimSpace(rawURL) == "" || strings.TrimSpace(token) == "" {
-		return errors.New("SecondBox CLI exec stream requires --url and --token")
+	if strings.TrimSpace(rawURL) == "" || strings.TrimSpace(token) == "" ||
+		strings.TrimSpace(tenantRef) == "" || strings.TrimSpace(subjectRef) == "" {
+		return errors.New("SecondBox CLI exec stream requires --url, --token, --tenant-ref, and --subject-ref")
 	}
 	if strings.TrimSpace(*sandboxID) == "" ||
 		strings.TrimSpace(*generationText) == "" ||
@@ -72,7 +75,9 @@ func runExecStreamCommand(
 	if err := errors.Join(decodeErr, closeErr); err != nil {
 		return fmt.Errorf("SecondBox CLI read exec stream request: %w", err)
 	}
-	client, err := secondboxclient.NewSecondBoxClient(rawURL, token, httpClient)
+	client, err := secondboxclient.NewSecondBoxSubjectClient(
+		rawURL, token, tenantRef, subjectRef, httpClient,
+	)
 	if err != nil {
 		return err
 	}

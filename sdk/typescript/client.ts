@@ -26,18 +26,25 @@ import {
   type TerminalSession,
   type TransportRequestOptions,
   type WaitSandboxRequest,
-} from "./secondbox-client.gen.ts";
+} from "./transport.ts";
 
 export type {
+  CreateAPIKeyResponse,
   ExecStreamFrame,
   FileStat,
   Metadata,
   Operation,
+  Profile,
+  ProfileRevisionSpec,
   Problem,
+  Project,
   Sandbox,
   SandboxState,
+  ServiceAccount,
+  ServiceAccountScope,
   TerminalFrame,
-} from "./secondbox-client.gen.ts";
+} from "./transport.ts";
+export { SecondBoxClient, encodeJSONBody } from "./transport.ts";
 
 /** A decoded non-successful SecondBox response. */
 export class SecondBoxProblemError extends Error {

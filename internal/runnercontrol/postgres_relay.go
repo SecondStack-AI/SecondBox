@@ -57,6 +57,8 @@ type DataPlaneAdmission struct {
 	ID                      string
 	StreamID                string
 	ProjectID               string
+	TenantRef               string
+	SubjectRef              string
 	SandboxID               string
 	ServiceAccountID        string
 	LeaseID                 string
@@ -86,6 +88,8 @@ type DataPlaneAdmission struct {
 // PublicDataPlaneCancellation binds one HTTP cancellation key to an exact session response.
 type PublicDataPlaneCancellation struct {
 	ProjectID        string
+	TenantRef        string
+	SubjectRef       string
 	SandboxID        string
 	SessionID        string
 	SessionKind      string
@@ -103,6 +107,8 @@ type DataPlaneSession struct {
 	ID                    string
 	StreamID              string
 	ProjectID             string
+	TenantRef             string
+	SubjectRef            string
 	SandboxID             string
 	ProfileRevisionID     string
 	AssignmentID          string
@@ -183,6 +189,12 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 	ctx context.Context,
 	input DataPlaneAdmission,
 ) (DataPlaneSession, bool, error) {
+	if input.TenantRef == "" {
+		input.TenantRef = input.ProjectID
+	}
+	if input.SubjectRef == "" {
+		input.SubjectRef = input.ServiceAccountID
+	}
 	if err := validateDataPlaneAdmission(input); err != nil {
 		return DataPlaneSession{}, false, err
 	}
@@ -191,14 +203,15 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 		return DataPlaneSession{}, false, fmt.Errorf("SecondBox data-plane admission transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	lockKey := input.ProjectID + "\x1fdata-plane\x1f" + input.Operation + "\x1f" +
+	lockKey := input.TenantRef + "\x1f" + input.SubjectRef +
+		"\x1fdata-plane\x1f" + input.Operation + "\x1f" +
 		input.SandboxID + "\x1f" + input.IdempotencyKey
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey); err != nil {
 		return DataPlaneSession{}, false, fmt.Errorf("SecondBox data-plane idempotency lock: %w", err)
 	}
 	if input.IdempotencyKey != "" {
 		session, found, err := lookupDataPlaneReplay(
-			ctx, tx, input.ProjectID, input.SandboxID, input.Operation,
+			ctx, tx, input.TenantRef, input.SubjectRef, input.SandboxID, input.Operation,
 			input.IdempotencyKey, input.RequestHash,
 		)
 		if err != nil {
@@ -211,7 +224,7 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 			return session, true, nil
 		}
 	}
-	projectCapacityKey := input.ProjectID + "\x1fdata-plane-capacity"
+	projectCapacityKey := input.TenantRef + "\x1f" + input.SubjectRef + "\x1fdata-plane-capacity"
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, projectCapacityKey); err != nil {
 		return DataPlaneSession{}, false, fmt.Errorf("SecondBox data-plane capacity lock: %w", err)
 	}
@@ -263,6 +276,7 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 	}
 	session.ID, session.StreamID = input.ID, input.StreamID
 	session.ProjectID, session.SandboxID = input.ProjectID, input.SandboxID
+	session.TenantRef, session.SubjectRef = input.TenantRef, input.SubjectRef
 	session.RequestID, session.LeaseID = input.RequestID, input.LeaseID
 	session.Kind, session.Operation = input.Kind, input.Operation
 	session.State, session.DeadlineAt = "pending", input.DeadlineAt.UTC()
@@ -286,7 +300,7 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.data_plane_sessions (
-			id,project_id,sandbox_id,profile_revision_id,assignment_id,instance_id,
+			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,assignment_id,instance_id,
 			runner_id,generation,fencing_token,service_account_id,request_id,lease_id,kind,operation,
 			stream_id,state,priority,idempotency_key,request_hash,deadline_at,
 			maximum_response_bytes,maximum_request_bytes,stream_window_bytes,response_credit_bytes,
@@ -298,10 +312,11 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 			stdout_bytes,stderr_bytes,content_bytes,metadata_json,request_json,
 			created_at,updated_at,completed_at,retain_until
 		) VALUES (
-			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'pending',$16,$17,$18,$19,
-			$20,$21,$22,0,0,false,$23,$24,'',NULL,NULL,NULL,$25,0,1,'','',0,0,'',0,0,'',false,'',$26,$26,$26,'{}',$27,$28,$28,NULL,$29
+			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'pending',$17,$18,$19,$20,
+			$21,$22,$23,0,0,false,$24,$25,'',NULL,NULL,NULL,$26,0,1,'','',0,0,'',0,0,'',false,'',$27,$27,$27,'{}',$28,$29,$29,NULL,$30
 		)`,
-		session.ID, session.ProjectID, session.SandboxID, session.ProfileRevisionID,
+		session.ID, session.TenantRef, session.SubjectRef,
+		session.SandboxID, session.ProfileRevisionID,
 		session.AssignmentID, session.InstanceID, session.RunnerID, session.Generation,
 		session.FencingToken, input.ServiceAccountID, session.RequestID, session.LeaseID,
 		session.Kind, session.Operation, session.StreamID, input.Priority, input.IdempotencyKey,
@@ -327,11 +342,11 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.activity_sessions (
-			id,project_id,sandbox_id,generation,kind,state,lease_id,last_activity_at,
+			id,tenant_ref,subject_ref,sandbox_id,generation,kind,state,lease_id,last_activity_at,
 			created_at,updated_at,closed_at
-		) VALUES ($1,$2,$3,$4,$5,'active',$6,$7,$7,$7,NULL)`,
-		session.ID, session.ProjectID, session.SandboxID, session.Generation,
-		session.Kind, input.LeaseID, session.CreatedAt,
+		) VALUES ($1,$2,$3,$4,$5,$6,'active',$7,$8,$8,$8,NULL)`,
+		session.ID, session.TenantRef, session.SubjectRef,
+		session.SandboxID, session.Generation, session.Kind, input.LeaseID, session.CreatedAt,
 	); err != nil {
 		return DataPlaneSession{}, false, fmt.Errorf("SecondBox data-plane activity insert: %w", err)
 	}
@@ -474,8 +489,9 @@ func (relay *PostgresFrameRelay) ClaimOutboundFrame(
 	}
 	var id string
 	var payload []byte
+	var deliveryCount int64
 	err = tx.QueryRow(ctx, `
-		SELECT frame.id,frame.payload
+		SELECT frame.id,frame.payload,frame.delivery_count
 		FROM secondbox.data_plane_frames AS frame
 		JOIN secondbox.data_plane_sessions AS session ON session.id=frame.session_id
 		WHERE frame.direction='outbound'
@@ -492,19 +508,21 @@ func (relay *PostgresFrameRelay) ClaimOutboundFrame(
 		FOR UPDATE OF frame SKIP LOCKED
 		LIMIT 1`,
 		runnerID, now.UTC(),
-	).Scan(&id, &payload)
+	).Scan(&id, &payload, &deliveryCount)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RelayDelivery{}, false, nil
 	}
 	if err != nil {
 		return RelayDelivery{}, false, fmt.Errorf("SecondBox outbound relay claim lookup: %w", err)
 	}
+	claimAttempt := deliveryCount + 1
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.data_plane_frames
 		SET state='claimed',claim_owner=$2,claim_expires_at=$3,
 		    delivery_count=delivery_count+1,updated_at=$4
 		WHERE id=$1`,
-		id, connectionID, now.UTC().Add(relay.claimDuration), now.UTC(),
+		id, relayClaimOwner(connectionID, claimAttempt),
+		now.UTC().Add(relay.claimDuration), now.UTC(),
 	); err != nil {
 		return RelayDelivery{}, false, fmt.Errorf("SecondBox outbound relay claim update: %w", err)
 	}
@@ -515,7 +533,7 @@ func (relay *PostgresFrameRelay) ClaimOutboundFrame(
 	if err := proto.Unmarshal(payload, message); err != nil {
 		return RelayDelivery{}, false, fmt.Errorf("SecondBox outbound relay frame decoding: %w", err)
 	}
-	return RelayDelivery{ID: id, Message: message}, true, nil
+	return RelayDelivery{ID: id, ClaimAttempt: claimAttempt, Message: message}, true, nil
 }
 
 // MarkOutboundFrameDelivered commits transport success for the exact connection claim.
@@ -523,8 +541,12 @@ func (relay *PostgresFrameRelay) MarkOutboundFrameDelivered(
 	ctx context.Context,
 	deliveryID string,
 	connectionID string,
+	claimAttempt int64,
 	now time.Time,
 ) error {
+	if claimAttempt <= 0 {
+		return ErrRelayDeliveryClaim
+	}
 	tx, err := relay.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("SecondBox outbound relay delivery transaction: %w", err)
@@ -543,7 +565,7 @@ func (relay *PostgresFrameRelay) MarkOutboundFrameDelivered(
 		UPDATE secondbox.data_plane_frames
 		SET state='delivered',delivered_at=$3,updated_at=$3
 		WHERE id=$1 AND state='claimed' AND claim_owner=$2`,
-		deliveryID, connectionID, now.UTC(),
+		deliveryID, relayClaimOwner(connectionID, claimAttempt), now.UTC(),
 	)
 	if err != nil {
 		return fmt.Errorf("SecondBox outbound relay delivery update: %w", err)
@@ -564,6 +586,10 @@ func (relay *PostgresFrameRelay) MarkOutboundFrameDelivered(
 		return fmt.Errorf("SecondBox outbound relay delivery commit: %w", err)
 	}
 	return nil
+}
+
+func relayClaimOwner(connectionID string, claimAttempt int64) string {
+	return fmt.Sprintf("%s\x1f%d", connectionID, claimAttempt)
 }
 
 // PersistInboundFrame commits one contiguous, assignment-fenced runner frame.
@@ -671,43 +697,28 @@ func (relay *PostgresFrameRelay) PersistInboundFrame(
 	return true, nil
 }
 
-// lockLiveRelayConnectionCredential linearizes data-plane access with runner credential revocation.
+// lockLiveRelayConnectionCredential linearizes data-plane access with connection replacement.
 func lockLiveRelayConnectionCredential(
 	ctx context.Context,
 	tx pgx.Tx,
 	runnerID string,
 	connectionID string,
 ) (bool, error) {
-	var credentialState string
+	var connectionState string
 	err := tx.QueryRow(ctx, `
-		SELECT credential.state
+		SELECT connection.state
 		FROM secondbox.runner_connections AS connection
-		JOIN secondbox.runner_credentials AS credential
-		  ON credential.serial_number=connection.credential_serial
 		WHERE connection.id=$1 AND ($2='' OR connection.runner_id=$2)
-		FOR SHARE OF credential`,
+		FOR SHARE OF connection`,
 		connectionID, runnerID,
-	).Scan(&credentialState)
+	).Scan(&connectionState)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("SecondBox relay credential authority lookup: %w", err)
-	}
-	var connectionState string
-	if err := tx.QueryRow(ctx, `
-		SELECT state FROM secondbox.runner_connections
-		WHERE id=$1 AND ($2='' OR runner_id=$2)
-		FOR SHARE`,
-		connectionID, runnerID,
-	).Scan(&connectionState); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
-		}
 		return false, fmt.Errorf("SecondBox relay connection authority lookup: %w", err)
 	}
-	return connectionState == "active" &&
-		(credentialState == "active" || credentialState == "retiring"), nil
+	return connectionState == "active", nil
 }
 
 type inboundIdentity struct {
@@ -763,1028 +774,16 @@ func inboundFrameIdentity(message *runnerv1.RunnerToControlPlane) (inboundIdenti
 
 func (relay *PostgresFrameRelay) GetDataPlaneSession(
 	ctx context.Context,
-	projectID string,
+	tenantRef string,
+	subjectRef string,
 	sessionID string,
 ) (DataPlaneSession, error) {
 	return scanDataPlaneSession(relay.pool.QueryRow(ctx, dataPlaneSessionSelect+`
-		WHERE project_id=$1 AND id=$2`, projectID, sessionID))
+		WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3`,
+		tenantRef, subjectRef, sessionID))
 }
 
 // ExecClientFrame is one ordered public WebSocket control translated into the Runner stream.
-type ExecClientFrame struct {
-	Sequence int64
-	Input    []byte
-	EndInput bool
-	Credit   int64
-	Cancel   bool
-}
-
-// ExecServerFrame is one durable Runner frame projected onto the public WebSocket.
-type ExecServerFrame struct {
-	Sequence int64
-	Output   *runnerv1.ExecOutput
-	Terminal *runnerv1.ExecTerminal
-}
-
-// TerminalClientFrame is exactly one ordered public PTY input, resize, credit, or cancellation.
-type TerminalClientFrame struct {
-	Sequence      int64
-	Input         []byte
-	ResizeRows    uint32
-	ResizeColumns uint32
-	Credit        int64
-	Cancel        bool
-}
-
-// TerminalServerFrame is one retained PTY output or terminal acknowledgement.
-type TerminalServerFrame struct {
-	Sequence int64
-	Output   []byte
-	Terminal *runnerv1.ExecTerminal
-}
-
-// AcquireTerminalAttachment atomically grants the only active public attachment.
-func (relay *PostgresFrameRelay) AcquireTerminalAttachment(
-	ctx context.Context,
-	projectID string,
-	serviceAccountID string,
-	sandboxID string,
-	sessionID string,
-	generation int64,
-	attachmentID string,
-	now time.Time,
-) (DataPlaneSession, error) {
-	if projectID == "" || serviceAccountID == "" || sandboxID == "" ||
-		sessionID == "" || generation < 1 || attachmentID == "" {
-		return DataPlaneSession{}, errors.New("SecondBox Terminal attachment authority is incomplete")
-	}
-	tx, err := relay.pool.Begin(ctx)
-	if err != nil {
-		return DataPlaneSession{}, fmt.Errorf("SecondBox Terminal attachment transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	session, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
-		WHERE project_id=$1 AND id=$2 FOR UPDATE`, projectID, sessionID))
-	if err != nil {
-		return DataPlaneSession{}, err
-	}
-	if session.Kind != "terminal" || session.Operation != "terminal" ||
-		session.SandboxID != sandboxID || session.Generation != generation {
-		return DataPlaneSession{}, ErrDataPlaneNotFound
-	}
-	if session.ServiceAccountID != serviceAccountID {
-		return DataPlaneSession{}, ports.ErrAuthorizationDenied
-	}
-	if session.State != "pending" && session.State != "running" {
-		return DataPlaneSession{}, ErrTerminalDetached
-	}
-	if session.AttachmentID != "" {
-		return DataPlaneSession{}, ErrTerminalAttached
-	}
-	if session.DetachExpiresAt != nil && !now.UTC().Before(*session.DetachExpiresAt) {
-		if err := relay.enqueueCancellation(
-			ctx, tx, session,
-			runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED.String(),
-			"Terminal detach interval expired", now.UTC(),
-		); err != nil {
-			return DataPlaneSession{}, err
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return DataPlaneSession{}, fmt.Errorf("SecondBox Terminal detach expiry commit: %w", err)
-		}
-		return DataPlaneSession{}, ErrTerminalDetached
-	}
-	var sandboxState, assignmentState, leaseState string
-	var currentGeneration, leaseGeneration int64
-	var currentInstance, assignmentID, runnerID, leaseAccount string
-	var currentFence []byte
-	var leaseExpiry time.Time
-	err = tx.QueryRow(ctx, `
-		SELECT sandbox.state,sandbox.generation,sandbox.current_instance_id,
-		       assignment.id,assignment.runner_id,assignment.fencing_token,assignment.state,
-		       lease.generation,lease.service_account_id,lease.state,lease.expires_at
-		FROM secondbox.sandboxes AS sandbox
-		JOIN secondbox.assignments AS assignment
-		  ON assignment.sandbox_id=sandbox.id
-		  AND assignment.instance_id=sandbox.current_instance_id
-		  AND assignment.generation=sandbox.generation
-		JOIN secondbox.leases AS lease
-		  ON lease.project_id=sandbox.project_id
-		  AND lease.sandbox_id=sandbox.id
-		  AND lease.id=$4
-		WHERE sandbox.project_id=$1 AND sandbox.id=$2 AND sandbox.generation=$3
-		FOR UPDATE OF sandbox,assignment,lease`,
-		projectID, sandboxID, generation, session.LeaseID,
-	).Scan(
-		&sandboxState, &currentGeneration, &currentInstance,
-		&assignmentID, &runnerID, &currentFence, &assignmentState,
-		&leaseGeneration, &leaseAccount, &leaseState, &leaseExpiry,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return DataPlaneSession{}, ports.ErrGenerationFenced
-	}
-	if err != nil {
-		return DataPlaneSession{}, fmt.Errorf("SecondBox Terminal attachment authority lookup: %w", err)
-	}
-	if sandboxState != contracts.SandboxStateReady ||
-		currentGeneration != session.Generation ||
-		currentInstance != session.InstanceID ||
-		assignmentID != session.AssignmentID ||
-		runnerID != session.RunnerID ||
-		!bytes.Equal(currentFence, session.FencingToken) ||
-		assignmentState != "ready" {
-		return DataPlaneSession{}, ports.ErrGenerationFenced
-	}
-	if leaseGeneration != session.Generation ||
-		leaseAccount != serviceAccountID ||
-		leaseState != contracts.LeaseStateActive ||
-		!now.UTC().Before(leaseExpiry) {
-		return DataPlaneSession{}, ports.ErrLeaseInactive
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.data_plane_sessions
-		SET attachment_id=$2,attached_at=$3,detached_at=NULL,detach_expires_at=NULL,updated_at=$3
-		WHERE id=$1`,
-		session.ID, attachmentID, now.UTC(),
-	); err != nil {
-		return DataPlaneSession{}, fmt.Errorf("SecondBox Terminal attachment update: %w", err)
-	}
-	if err := touchDataPlaneActivity(ctx, tx, session, now.UTC()); err != nil {
-		return DataPlaneSession{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return DataPlaneSession{}, fmt.Errorf("SecondBox Terminal attachment commit: %w", err)
-	}
-	session.AttachmentID = attachmentID
-	attachedAt := now.UTC()
-	session.AttachedAt = &attachedAt
-	session.DetachedAt = nil
-	session.DetachExpiresAt = nil
-	return session, nil
-}
-
-// DetachTerminalAttachment releases one active attachment or requests cancellation.
-func (relay *PostgresFrameRelay) DetachTerminalAttachment(
-	ctx context.Context,
-	projectID string,
-	sessionID string,
-	attachmentID string,
-	now time.Time,
-) (bool, error) {
-	tx, err := relay.pool.Begin(ctx)
-	if err != nil {
-		return false, fmt.Errorf("SecondBox Terminal detach transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	session, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
-		WHERE project_id=$1 AND id=$2 FOR UPDATE`, projectID, sessionID))
-	if err != nil {
-		return false, err
-	}
-	if session.Kind != "terminal" || session.Operation != "terminal" {
-		return false, ErrDataPlaneNotFound
-	}
-	if session.AttachmentID != attachmentID || attachmentID == "" {
-		return false, ErrTerminalDetached
-	}
-	if session.State != "pending" && session.State != "running" {
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.data_plane_sessions
-			SET attachment_id='',updated_at=$2 WHERE id=$1`,
-			session.ID, now.UTC(),
-		); err != nil {
-			return false, fmt.Errorf("SecondBox terminal attachment cleanup: %w", err)
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return false, fmt.Errorf("SecondBox terminal attachment cleanup commit: %w", err)
-		}
-		return true, nil
-	}
-	if !session.Detachable || session.TerminalDetachSeconds == 0 {
-		if err := relay.enqueueCancellation(
-			ctx, tx, session,
-			runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED.String(),
-			"public Terminal client disconnected", now.UTC(),
-		); err != nil {
-			return false, err
-		}
-	} else {
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.data_plane_sessions
-			SET attachment_id='',detached_at=$2,
-			    detach_expires_at=$2::timestamptz+($3::bigint * interval '1 second'),updated_at=$2
-			WHERE id=$1`,
-			session.ID, now.UTC(), session.TerminalDetachSeconds,
-		); err != nil {
-			return false, fmt.Errorf("SecondBox Terminal detach update: %w", err)
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("SecondBox Terminal detach commit: %w", err)
-	}
-	return true, nil
-}
-
-// AppendTerminalClientFrame durably appends one exactly ordered attached PTY control.
-func (relay *PostgresFrameRelay) AppendTerminalClientFrame(
-	ctx context.Context,
-	projectID string,
-	sessionID string,
-	attachmentID string,
-	frame TerminalClientFrame,
-	now time.Time,
-) (bool, error) {
-	if projectID == "" || sessionID == "" || attachmentID == "" || frame.Sequence < 0 {
-		return false, errors.New("SecondBox public Terminal frame identity is incomplete")
-	}
-	kinds := 0
-	if frame.Input != nil {
-		kinds++
-	}
-	if frame.ResizeRows != 0 || frame.ResizeColumns != 0 {
-		kinds++
-	}
-	if frame.Credit != 0 {
-		kinds++
-	}
-	if frame.Cancel {
-		kinds++
-	}
-	if kinds != 1 || frame.Credit < 0 ||
-		((frame.ResizeRows == 0) != (frame.ResizeColumns == 0)) {
-		return false, errors.New("SecondBox public Terminal frame requires exactly one valid payload")
-	}
-	tx, err := relay.pool.Begin(ctx)
-	if err != nil {
-		return false, fmt.Errorf("SecondBox public Terminal frame transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	session, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
-		WHERE project_id=$1 AND id=$2 FOR UPDATE`, projectID, sessionID))
-	if err != nil {
-		return false, err
-	}
-	if session.Kind != "terminal" || session.Operation != "terminal" {
-		return false, ErrDataPlaneNotFound
-	}
-	if session.AttachmentID != attachmentID {
-		return false, ErrTerminalDetached
-	}
-	if session.State != "pending" && session.State != "running" {
-		return false, ErrRelaySequence
-	}
-	if frame.Input != nil && len(frame.Input) == 0 {
-		return false, errors.New("SecondBox public Terminal input is empty")
-	}
-	if frame.ResizeRows > 1000 || frame.ResizeColumns > 1000 {
-		return false, errors.New("SecondBox public Terminal resize is invalid")
-	}
-	if frame.Input != nil &&
-		session.RequestStreamBytes+int64(len(frame.Input)) > session.MaximumRequestBytes {
-		return false, ErrRelaySessionLimit
-	}
-	if frame.Credit > 0 {
-		emitted := int64(len(session.Stdout) + len(session.Stderr))
-		if session.ResponseCreditBytes-emitted+frame.Credit > session.StreamWindowBytes {
-			return false, ErrRelayFrameLimit
-		}
-	}
-	runnerSequence := frame.Sequence + 2
-	fence := &runnerv1.AssignmentFence{
-		AssignmentId: session.AssignmentID, SandboxId: session.SandboxID,
-		InstanceId: session.InstanceID, SandboxGeneration: uint64(session.Generation),
-		FencingToken: bytes.Clone(session.FencingToken),
-	}
-	var message *runnerv1.ControlPlaneToRunner
-	if frame.Cancel {
-		message = &runnerv1.ControlPlaneToRunner{
-			Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: &runnerv1.ExecFrame{
-				Fence: fence, OperationId: session.ID, StreamId: session.StreamID,
-				Sequence: uint64(runnerSequence), Correlation: dataPlaneCorrelation(session),
-				Payload: &runnerv1.ExecFrame_Cancel{Cancel: &runnerv1.ExecCancel{
-					Reason: "public Terminal client cancellation",
-				}},
-			}},
-		}
-	} else {
-		pty := &runnerv1.PtyFrame{
-			Fence: fence, OperationId: session.ID, StreamId: session.StreamID,
-			Sequence: uint64(runnerSequence), Correlation: dataPlaneCorrelation(session),
-		}
-		switch {
-		case frame.Input != nil:
-			pty.Payload = &runnerv1.PtyFrame_Input{Input: &runnerv1.PtyInput{Data: bytes.Clone(frame.Input)}}
-		case frame.Credit > 0:
-			pty.Payload = &runnerv1.PtyFrame_Credit{Credit: &runnerv1.StreamCredit{ByteCount: uint64(frame.Credit)}}
-		default:
-			pty.Payload = &runnerv1.PtyFrame_Resize{Resize: &runnerv1.PtyResize{
-				Rows: frame.ResizeRows, Columns: frame.ResizeColumns,
-			}}
-		}
-		message = &runnerv1.ControlPlaneToRunner{
-			Message: &runnerv1.ControlPlaneToRunner_Pty{Pty: pty},
-		}
-	}
-	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(message)
-	if err != nil {
-		return false, fmt.Errorf("SecondBox public Terminal frame encoding: %w", err)
-	}
-	if int64(len(payload)) > relay.maximumFrameBytes {
-		return false, ErrRelayFrameLimit
-	}
-	hash := sha256.Sum256(payload)
-	payloadHash := hex.EncodeToString(hash[:])
-	var priorHash string
-	err = tx.QueryRow(ctx, `
-		SELECT payload_hash FROM secondbox.data_plane_frames
-		WHERE session_id=$1 AND direction='outbound' AND sequence=$2`,
-		session.ID, runnerSequence,
-	).Scan(&priorHash)
-	if err == nil {
-		if priorHash != payloadHash {
-			return false, ErrRelaySequence
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return false, fmt.Errorf("SecondBox public Terminal duplicate commit: %w", err)
-		}
-		return false, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return false, fmt.Errorf("SecondBox public Terminal sequence lookup: %w", err)
-	}
-	var nextSequence int64
-	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(max(sequence),0)+1 FROM secondbox.data_plane_frames
-		WHERE session_id=$1 AND direction='outbound'`, session.ID,
-	).Scan(&nextSequence); err != nil {
-		return false, fmt.Errorf("SecondBox public Terminal next sequence lookup: %w", err)
-	}
-	if runnerSequence != nextSequence {
-		return false, ErrRelaySequence
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO secondbox.data_plane_frames (
-			id,session_id,direction,sequence,payload_hash,payload,payload_bytes,
-			priority,state,claim_owner,claim_expires_at,delivery_count,
-			created_at,updated_at,delivered_at
-		) VALUES ($1,$2,'outbound',$3,$4,$5,$6,0,'pending','',NULL,0,$7,$7,NULL)`,
-		fmt.Sprintf("%s_terminal_%d", session.ID, frame.Sequence), session.ID,
-		runnerSequence, payloadHash, payload, len(payload), now.UTC(),
-	); err != nil {
-		return false, fmt.Errorf("SecondBox public Terminal frame insert: %w", err)
-	}
-	inputBytes := int64(len(frame.Input))
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.data_plane_sessions
-		SET request_stream_bytes=request_stream_bytes+$2,
-		    outbound_bytes=outbound_bytes+$3,
-		    response_credit_bytes=response_credit_bytes+$4,
-		    state=CASE WHEN $5 THEN 'cancelling' ELSE state END,
-		    terminal_kind=CASE WHEN $5 THEN $6 ELSE terminal_kind END,
-		    terminal_detail=CASE WHEN $5 THEN 'public Terminal client cancellation' ELSE terminal_detail END,
-		    updated_at=$7
-		WHERE id=$1`,
-		session.ID, inputBytes, len(payload), frame.Credit, frame.Cancel,
-		runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED.String(), now.UTC(),
-	); err != nil {
-		return false, fmt.Errorf("SecondBox public Terminal session update: %w", err)
-	}
-	if err := touchDataPlaneActivity(ctx, tx, session, now.UTC()); err != nil {
-		return false, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("SecondBox public Terminal frame commit: %w", err)
-	}
-	return true, nil
-}
-
-// ListTerminalServerFrames returns retained PTY output and terminal frames.
-func (relay *PostgresFrameRelay) ListTerminalServerFrames(
-	ctx context.Context,
-	projectID string,
-	sessionID string,
-	afterSequence int64,
-	limit int,
-) ([]TerminalServerFrame, error) {
-	if projectID == "" || sessionID == "" || afterSequence < -1 || limit < 1 || limit > 256 {
-		return nil, errors.New("SecondBox public Terminal frame query is invalid")
-	}
-	var kind, operation string
-	if err := relay.pool.QueryRow(ctx, `
-		SELECT kind,operation FROM secondbox.data_plane_sessions
-		WHERE project_id=$1 AND id=$2`, projectID, sessionID,
-	).Scan(&kind, &operation); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrDataPlaneNotFound
-		}
-		return nil, fmt.Errorf("SecondBox public Terminal session lookup: %w", err)
-	}
-	if kind != "terminal" || operation != "terminal" {
-		return nil, ErrDataPlaneNotFound
-	}
-	rows, err := relay.pool.Query(ctx, `
-		SELECT sequence,payload FROM secondbox.data_plane_frames
-		WHERE session_id=$1 AND direction='inbound' AND sequence>$2
-		ORDER BY sequence
-		LIMIT $3`, sessionID, afterSequence+1, limit,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("SecondBox public Terminal frame lookup: %w", err)
-	}
-	defer rows.Close()
-	result := make([]TerminalServerFrame, 0, limit)
-	for rows.Next() {
-		var runnerSequence int64
-		var payload []byte
-		if err := rows.Scan(&runnerSequence, &payload); err != nil {
-			return nil, fmt.Errorf("SecondBox public Terminal frame scan: %w", err)
-		}
-		var message runnerv1.RunnerToControlPlane
-		if err := proto.Unmarshal(payload, &message); err != nil {
-			return nil, fmt.Errorf("SecondBox public Terminal frame decoding: %w", err)
-		}
-		pty := message.GetPty()
-		if pty == nil || (pty.GetOutput() == nil && pty.GetTerminal() == nil) {
-			return nil, errors.New("SecondBox public Terminal retained frame is invalid")
-		}
-		var output []byte
-		if pty.GetOutput() != nil {
-			output = bytes.Clone(pty.GetOutput().Data)
-		}
-		result = append(result, TerminalServerFrame{
-			Sequence: runnerSequence - 1, Output: output, Terminal: pty.GetTerminal(),
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("SecondBox public Terminal frame rows: %w", err)
-	}
-	return result, nil
-}
-
-// AppendExecClientFrame durably appends one exactly ordered public stream frame.
-func (relay *PostgresFrameRelay) AppendExecClientFrame(
-	ctx context.Context,
-	projectID string,
-	sessionID string,
-	frame ExecClientFrame,
-	now time.Time,
-) (bool, error) {
-	if projectID == "" || sessionID == "" || frame.Sequence < 0 {
-		return false, errors.New("SecondBox public Exec frame identity is incomplete")
-	}
-	isInput := frame.Input != nil || frame.EndInput
-	selected := 0
-	if isInput {
-		selected++
-	}
-	if frame.Credit > 0 {
-		selected++
-	}
-	if frame.Cancel {
-		selected++
-	}
-	if selected != 1 {
-		return false, errors.New("SecondBox public Exec frame requires exactly one payload")
-	}
-	tx, err := relay.pool.Begin(ctx)
-	if err != nil {
-		return false, fmt.Errorf("SecondBox public Exec frame transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	session, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
-		WHERE project_id=$1 AND id=$2 FOR UPDATE`, projectID, sessionID))
-	if err != nil {
-		return false, err
-	}
-	if session.Kind != "exec" || session.Operation != "exec-stream" {
-		return false, ErrDataPlaneNotFound
-	}
-	runnerSequence := frame.Sequence + 2
-	message := &runnerv1.ControlPlaneToRunner{
-		Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: &runnerv1.ExecFrame{
-			Fence: &runnerv1.AssignmentFence{
-				AssignmentId: session.AssignmentID, SandboxId: session.SandboxID,
-				InstanceId: session.InstanceID, SandboxGeneration: uint64(session.Generation),
-				FencingToken: bytes.Clone(session.FencingToken),
-			},
-			OperationId: session.ID, StreamId: session.StreamID, Sequence: uint64(runnerSequence),
-			Correlation: dataPlaneCorrelation(session),
-		}},
-	}
-	execFrame := message.GetExec()
-	switch {
-	case isInput:
-		execFrame.Payload = &runnerv1.ExecFrame_Input{Input: &runnerv1.ExecInput{
-			Data: bytes.Clone(frame.Input), EndOfInput: frame.EndInput,
-		}}
-	case frame.Credit > 0:
-		execFrame.Payload = &runnerv1.ExecFrame_Credit{Credit: &runnerv1.StreamCredit{
-			ByteCount: uint64(frame.Credit),
-		}}
-	case frame.Cancel:
-		execFrame.Payload = &runnerv1.ExecFrame_Cancel{Cancel: &runnerv1.ExecCancel{
-			Reason: "public streaming client cancellation",
-		}}
-	}
-	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(message)
-	if err != nil {
-		return false, fmt.Errorf("SecondBox public Exec frame encoding: %w", err)
-	}
-	if int64(len(payload)) > relay.maximumFrameBytes {
-		return false, ErrRelayFrameLimit
-	}
-	hash := sha256.Sum256(payload)
-	payloadHash := hex.EncodeToString(hash[:])
-	var priorHash string
-	err = tx.QueryRow(ctx, `
-		SELECT payload_hash FROM secondbox.data_plane_frames
-		WHERE session_id=$1 AND direction='outbound' AND sequence=$2`,
-		session.ID, runnerSequence,
-	).Scan(&priorHash)
-	if err == nil {
-		if priorHash != payloadHash {
-			return false, ErrRelaySequence
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return false, fmt.Errorf("SecondBox public Exec duplicate commit: %w", err)
-		}
-		return false, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return false, fmt.Errorf("SecondBox public Exec sequence lookup: %w", err)
-	}
-	if session.State != "pending" && session.State != "running" {
-		return false, ErrRelaySequence
-	}
-	if isInput && session.RequestStreamClosed {
-		return false, ErrRelaySequence
-	}
-	if isInput && len(frame.Input) == 0 && !frame.EndInput {
-		return false, errors.New("SecondBox public Exec stdin frame is empty")
-	}
-	if isInput &&
-		session.RequestStreamBytes+int64(len(frame.Input)) > session.MaximumRequestBytes {
-		return false, ErrRelaySessionLimit
-	}
-	if frame.Credit > 0 {
-		emittedBytes := int64(len(session.Stdout) + len(session.Stderr))
-		if session.ResponseCreditBytes-emittedBytes+frame.Credit > session.StreamWindowBytes {
-			return false, ErrRelayFrameLimit
-		}
-	}
-	var nextSequence int64
-	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(max(sequence),0)+1 FROM secondbox.data_plane_frames
-		WHERE session_id=$1 AND direction='outbound'`, session.ID,
-	).Scan(&nextSequence); err != nil {
-		return false, fmt.Errorf("SecondBox public Exec next sequence lookup: %w", err)
-	}
-	if runnerSequence != nextSequence {
-		return false, ErrRelaySequence
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO secondbox.data_plane_frames (
-			id,session_id,direction,sequence,payload_hash,payload,payload_bytes,
-			priority,state,claim_owner,claim_expires_at,delivery_count,
-			created_at,updated_at,delivered_at
-		) VALUES ($1,$2,'outbound',$3,$4,$5,$6,0,'pending','',NULL,0,$7,$7,NULL)`,
-		fmt.Sprintf("%s_client_%d", session.ID, frame.Sequence), session.ID,
-		runnerSequence, payloadHash, payload, len(payload), now.UTC(),
-	); err != nil {
-		return false, fmt.Errorf("SecondBox public Exec frame insert: %w", err)
-	}
-	requestBytes := int64(0)
-	if isInput {
-		requestBytes = int64(len(frame.Input))
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.data_plane_sessions
-		SET request_stream_bytes=request_stream_bytes+$2,
-		    request_stream_closed=request_stream_closed OR $8,
-		    outbound_bytes=outbound_bytes+$3,
-		    response_credit_bytes=response_credit_bytes+$7,
-		    state=CASE WHEN $4 THEN 'cancelling' ELSE state END,
-		    terminal_kind=CASE WHEN $4 THEN $5 ELSE terminal_kind END,
-		    terminal_detail=CASE WHEN $4 THEN 'public streaming client cancellation' ELSE terminal_detail END,
-		    updated_at=$6
-		WHERE id=$1`,
-		session.ID, requestBytes, len(payload), frame.Cancel,
-		runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED.String(), now.UTC(), frame.Credit,
-		frame.EndInput,
-	); err != nil {
-		return false, fmt.Errorf("SecondBox public Exec session update: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("SecondBox public Exec frame commit: %w", err)
-	}
-	return true, nil
-}
-
-// ListExecServerFrames returns retained Runner frames after one public sequence.
-func (relay *PostgresFrameRelay) ListExecServerFrames(
-	ctx context.Context,
-	projectID string,
-	sessionID string,
-	afterSequence int64,
-	limit int,
-) ([]ExecServerFrame, error) {
-	if projectID == "" || sessionID == "" || afterSequence < -1 || limit < 1 || limit > 256 {
-		return nil, errors.New("SecondBox public Exec frame query is invalid")
-	}
-	var kind, operation string
-	if err := relay.pool.QueryRow(ctx, `
-		SELECT kind,operation FROM secondbox.data_plane_sessions
-		WHERE project_id=$1 AND id=$2`, projectID, sessionID,
-	).Scan(&kind, &operation); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrDataPlaneNotFound
-		}
-		return nil, fmt.Errorf("SecondBox public Exec session lookup: %w", err)
-	}
-	if kind != "exec" || operation != "exec-stream" {
-		return nil, ErrDataPlaneNotFound
-	}
-	rows, err := relay.pool.Query(ctx, `
-		SELECT sequence,payload FROM secondbox.data_plane_frames
-		WHERE session_id=$1 AND direction='inbound' AND sequence>$2
-		ORDER BY sequence
-		LIMIT $3`, sessionID, afterSequence+1, limit,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("SecondBox public Exec frame lookup: %w", err)
-	}
-	defer rows.Close()
-	result := make([]ExecServerFrame, 0, limit)
-	for rows.Next() {
-		var runnerSequence int64
-		var payload []byte
-		if err := rows.Scan(&runnerSequence, &payload); err != nil {
-			return nil, fmt.Errorf("SecondBox public Exec frame scan: %w", err)
-		}
-		var message runnerv1.RunnerToControlPlane
-		if err := proto.Unmarshal(payload, &message); err != nil {
-			return nil, fmt.Errorf("SecondBox public Exec frame decoding: %w", err)
-		}
-		execFrame := message.GetExec()
-		if execFrame == nil || execFrame.GetOutput() == nil && execFrame.GetTerminal() == nil {
-			return nil, errors.New("SecondBox public Exec retained frame is invalid")
-		}
-		result = append(result, ExecServerFrame{
-			Sequence: runnerSequence - 1,
-			Output:   execFrame.GetOutput(),
-			Terminal: execFrame.GetTerminal(),
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("SecondBox public Exec frame rows: %w", err)
-	}
-	return result, nil
-}
-
-// CancelDataPlaneSession durably requests guest cancellation for one public session.
-func (relay *PostgresFrameRelay) CancelDataPlaneSession(
-	ctx context.Context,
-	projectID string,
-	sessionID string,
-	reason string,
-	now time.Time,
-) (bool, error) {
-	return relay.cancelDataPlaneSession(ctx, projectID, sessionID, reason, now)
-}
-
-// SweepDataPlane requests cancellation for due work and removes expired relay payloads.
-func (relay *PostgresFrameRelay) SweepDataPlane(
-	ctx context.Context,
-	now time.Time,
-	limit int,
-) (bool, error) {
-	if limit < 1 || limit > 1000 {
-		return false, errors.New("SecondBox data-plane sweep limit is invalid")
-	}
-	rows, err := relay.pool.Query(ctx, `
-		SELECT session.project_id,session.id,session.sandbox_id,session.generation,session.kind,
-		       CASE
-		         WHEN session.kind='terminal'
-		              AND session.attachment_id=''
-		              AND session.detach_expires_at IS NOT NULL
-		              AND session.detach_expires_at<=$1
-		           THEN 'Terminal detach interval expired'
-		         WHEN session.lease_id<>''
-		              AND NOT EXISTS (
-		                SELECT 1 FROM secondbox.leases AS lease
-		                WHERE lease.id=session.lease_id
-		                  AND lease.project_id=session.project_id
-		                  AND lease.sandbox_id=session.sandbox_id
-		                  AND lease.generation=session.generation
-		                  AND lease.state='active'
-		                  AND lease.expires_at>$1
-		              )
-		           THEN 'operation Lease is inactive'
-		         ELSE 'operation deadline exceeded'
-		       END
-		FROM secondbox.data_plane_sessions AS session
-		WHERE session.state IN ('pending','running')
-		  AND (
-		    session.deadline_at<=$1
-		    OR (
-		      session.kind='terminal'
-		      AND session.attachment_id=''
-		      AND session.detach_expires_at IS NOT NULL
-		      AND session.detach_expires_at<=$1
-		    )
-		    OR (
-		      session.lease_id<>''
-		      AND NOT EXISTS (
-		        SELECT 1 FROM secondbox.leases AS lease
-		        WHERE lease.id=session.lease_id
-		          AND lease.project_id=session.project_id
-		          AND lease.sandbox_id=session.sandbox_id
-		          AND lease.generation=session.generation
-		          AND lease.state='active'
-		          AND lease.expires_at>$1
-		      )
-		    )
-		  )
-		ORDER BY session.deadline_at,session.id
-		LIMIT $2`,
-		now.UTC(), limit,
-	)
-	if err != nil {
-		return false, fmt.Errorf("SecondBox due data-plane lookup: %w", err)
-	}
-	type dueSession struct {
-		projectID  string
-		id         string
-		sandboxID  string
-		generation int64
-		kind       string
-		reason     string
-	}
-	due := make([]dueSession, 0, limit)
-	for rows.Next() {
-		var session dueSession
-		if err := rows.Scan(
-			&session.projectID, &session.id, &session.sandboxID,
-			&session.generation, &session.kind, &session.reason,
-		); err != nil {
-			rows.Close()
-			return false, fmt.Errorf("SecondBox due data-plane scan: %w", err)
-		}
-		due = append(due, session)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return false, fmt.Errorf("SecondBox due data-plane rows: %w", err)
-	}
-	rows.Close()
-	for _, session := range due {
-		if session.kind == "port" {
-			if _, err := relay.ClosePortSession(ctx, PortTunnelClose{
-				ProjectID: session.projectID, SandboxID: session.sandboxID,
-				SessionID: session.id, Generation: session.generation,
-				Reason: session.reason, Now: now.UTC(),
-			}); err != nil {
-				return false, err
-			}
-			continue
-		}
-		if session.reason == "operation deadline exceeded" {
-			if _, err := relay.ExpireDataPlaneSession(ctx, session.projectID, session.id, now.UTC()); err != nil {
-				return false, err
-			}
-		} else {
-			if _, err := relay.cancelDataPlaneSession(
-				ctx, session.projectID, session.id, session.reason, now.UTC(),
-			); err != nil {
-				return false, err
-			}
-		}
-	}
-	tx, err := relay.pool.Begin(ctx)
-	if err != nil {
-		return false, fmt.Errorf("SecondBox retained data-plane cleanup transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	retainedRows, err := tx.Query(ctx, `
-		SELECT id FROM secondbox.data_plane_sessions
-		WHERE state IN ('completed','failed','cancelled','expired') AND retain_until<=$1
-		ORDER BY retain_until,id
-		FOR UPDATE SKIP LOCKED
-		LIMIT $2`,
-		now.UTC(), limit,
-	)
-	if err != nil {
-		return false, fmt.Errorf("SecondBox retained data-plane lookup: %w", err)
-	}
-	retainedIDs := make([]string, 0, limit)
-	for retainedRows.Next() {
-		var id string
-		if err := retainedRows.Scan(&id); err != nil {
-			retainedRows.Close()
-			return false, fmt.Errorf("SecondBox retained data-plane scan: %w", err)
-		}
-		retainedIDs = append(retainedIDs, id)
-	}
-	if err := retainedRows.Err(); err != nil {
-		retainedRows.Close()
-		return false, fmt.Errorf("SecondBox retained data-plane rows: %w", err)
-	}
-	retainedRows.Close()
-	if len(retainedIDs) > 0 {
-		if _, err := tx.Exec(ctx, `DELETE FROM secondbox.data_plane_frames WHERE session_id=ANY($1)`, retainedIDs); err != nil {
-			return false, fmt.Errorf("SecondBox retained relay frame cleanup: %w", err)
-		}
-		if _, err := tx.Exec(ctx, `DELETE FROM secondbox.data_plane_sessions WHERE id=ANY($1)`, retainedIDs); err != nil {
-			return false, fmt.Errorf("SecondBox retained relay session cleanup: %w", err)
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("SecondBox retained data-plane cleanup commit: %w", err)
-	}
-	return len(due) > 0 || len(retainedIDs) > 0, nil
-}
-
-// ExpireDataPlaneSession requests deadline cancellation without declaring guest work stopped.
-func (relay *PostgresFrameRelay) ExpireDataPlaneSession(
-	ctx context.Context,
-	projectID string,
-	sessionID string,
-	now time.Time,
-) (DataPlaneSession, error) {
-	tx, err := relay.pool.Begin(ctx)
-	if err != nil {
-		return DataPlaneSession{}, fmt.Errorf("SecondBox data-plane expiry transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	session, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
-		WHERE project_id=$1 AND id=$2 FOR UPDATE`, projectID, sessionID))
-	if err != nil {
-		return DataPlaneSession{}, err
-	}
-	if session.State == "completed" || session.State == "failed" ||
-		session.State == "expired" || session.State == "cancelled" {
-		return session, tx.Commit(ctx)
-	}
-	if session.State == "cancelling" {
-		if err := tx.Commit(ctx); err != nil {
-			return DataPlaneSession{}, fmt.Errorf("SecondBox data-plane expiry replay commit: %w", err)
-		}
-		return session, nil
-	}
-	if err := relay.enqueueCancellation(
-		ctx, tx, session, relayDeadlineTerminal(session), "operation deadline exceeded", now.UTC(),
-	); err != nil {
-		return DataPlaneSession{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return DataPlaneSession{}, fmt.Errorf("SecondBox data-plane expiry commit: %w", err)
-	}
-	session.State = "cancelling"
-	session.TerminalKind = relayDeadlineTerminal(session)
-	session.TerminalDetail = "operation deadline exceeded"
-	session.ElapsedMilliseconds = max(0, now.UTC().Sub(session.CreatedAt).Milliseconds())
-	session.UpdatedAt = now.UTC()
-	return session, nil
-}
-
-// CancelSandboxSessions requests bounded termination of every active generation operation.
-func (relay *PostgresFrameRelay) CancelSandboxSessions(
-	ctx context.Context,
-	sandboxID string,
-	generation int64,
-	reason string,
-	now time.Time,
-) (int64, error) {
-	if sandboxID == "" || generation < 1 || reason == "" {
-		return 0, errors.New("SecondBox Sandbox session cancellation authority is incomplete")
-	}
-	rows, err := relay.pool.Query(ctx, `
-		SELECT project_id,id FROM secondbox.data_plane_sessions
-		WHERE sandbox_id=$1 AND generation=$2 AND state IN ('pending','running')
-		ORDER BY created_at,id`,
-		sandboxID, generation,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("SecondBox Sandbox session cancellation lookup: %w", err)
-	}
-	type sessionIdentity struct {
-		projectID string
-		sessionID string
-	}
-	var sessions []sessionIdentity
-	for rows.Next() {
-		var identity sessionIdentity
-		if err := rows.Scan(&identity.projectID, &identity.sessionID); err != nil {
-			rows.Close()
-			return 0, fmt.Errorf("SecondBox Sandbox session cancellation scan: %w", err)
-		}
-		sessions = append(sessions, identity)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return 0, fmt.Errorf("SecondBox Sandbox session cancellation rows: %w", err)
-	}
-	rows.Close()
-	var cancelled int64
-	for _, identity := range sessions {
-		changed, err := relay.cancelDataPlaneSession(
-			ctx, identity.projectID, identity.sessionID, reason, now.UTC(),
-		)
-		if err != nil {
-			return cancelled, err
-		}
-		if changed {
-			cancelled++
-		}
-	}
-	return cancelled, nil
-}
-
-func (relay *PostgresFrameRelay) cancelDataPlaneSession(
-	ctx context.Context,
-	projectID string,
-	sessionID string,
-	reason string,
-	now time.Time,
-) (bool, error) {
-	tx, err := relay.pool.Begin(ctx)
-	if err != nil {
-		return false, fmt.Errorf("SecondBox data-plane cancellation transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	session, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
-		WHERE project_id=$1 AND id=$2 FOR UPDATE`, projectID, sessionID))
-	if err != nil {
-		return false, err
-	}
-	if session.State != "pending" && session.State != "running" {
-		if err := tx.Commit(ctx); err != nil {
-			return false, fmt.Errorf("SecondBox data-plane cancellation replay commit: %w", err)
-		}
-		return false, nil
-	}
-	terminalKind := runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_CANCELLED.String()
-	if session.Kind == "exec" || session.Kind == "terminal" {
-		terminalKind = runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED.String()
-	}
-	if err := relay.enqueueCancellation(ctx, tx, session, terminalKind, reason, now.UTC()); err != nil {
-		return false, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("SecondBox data-plane cancellation commit: %w", err)
-	}
-	return true, nil
-}
-
-func (relay *PostgresFrameRelay) enqueueCancellation(
-	ctx context.Context,
-	tx pgx.Tx,
-	session DataPlaneSession,
-	terminalKind string,
-	detail string,
-	now time.Time,
-) error {
-	var sequence int64
-	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(max(sequence),0)+1 FROM secondbox.data_plane_frames
-		WHERE session_id=$1 AND direction='outbound'`, session.ID,
-	).Scan(&sequence); err != nil {
-		return fmt.Errorf("SecondBox cancellation sequence lookup: %w", err)
-	}
-	message := cancellationMessage(session, uint64(sequence), detail)
-	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(message)
-	if err != nil {
-		return fmt.Errorf("SecondBox cancellation frame encoding: %w", err)
-	}
-	hash := sha256.Sum256(payload)
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO secondbox.data_plane_frames (
-			id,session_id,direction,sequence,payload_hash,payload,payload_bytes,
-			priority,state,claim_owner,claim_expires_at,delivery_count,
-			created_at,updated_at,delivered_at
-		) VALUES ($1,$2,'outbound',$3,$4,$5,$6,-100,'pending','',NULL,0,$7,$7,NULL)`,
-		fmt.Sprintf("%s_cancel_%d", session.ID, sequence), session.ID, sequence,
-		hex.EncodeToString(hash[:]), payload, len(payload), now.UTC(),
-	); err != nil {
-		return fmt.Errorf("SecondBox cancellation frame insert: %w", err)
-	}
-	elapsedMilliseconds := max(0, now.UTC().Sub(session.CreatedAt).Milliseconds())
-	limitBytes := int64(0)
-	if terminalKind == runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_OUTPUT_EXHAUSTED.String() {
-		limitBytes = session.MaximumResponseBytes
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.data_plane_sessions
-		SET state='cancelling',terminal_kind=$2,terminal_detail=$3,
-		    elapsed_milliseconds=$4,limit_bytes=$5,updated_at=$6
-		WHERE id=$1`,
-		session.ID, terminalKind, detail, elapsedMilliseconds, limitBytes, now.UTC(),
-	); err != nil {
-		return fmt.Errorf("SecondBox data-plane cancellation update: %w", err)
-	}
-	return nil
-}
-
 func relayDeadlineTerminal(session DataPlaneSession) string {
 	if session.Kind == "exec" || session.Kind == "terminal" {
 		return runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_DEADLINE_EXCEEDED.String()
@@ -1828,7 +827,8 @@ func cancellationMessage(
 }
 
 func validateDataPlaneAdmission(input DataPlaneAdmission) error {
-	if input.ID == "" || input.StreamID == "" || input.ProjectID == "" || input.SandboxID == "" ||
+	if input.ID == "" || input.StreamID == "" || input.ProjectID == "" ||
+		input.TenantRef == "" || input.SubjectRef == "" || input.SandboxID == "" ||
 		input.ServiceAccountID == "" || input.RequestID == "" ||
 		input.Generation < 1 || input.DeadlineAt.IsZero() ||
 		input.MaximumResponseBytes < 0 || input.MaximumRequestBytes < 0 || input.RequestHash == "" {
@@ -1863,7 +863,8 @@ func validateDataPlaneAdmission(input DataPlaneAdmission) error {
 func lookupDataPlaneReplay(
 	ctx context.Context,
 	tx pgx.Tx,
-	projectID string,
+	tenantRef string,
+	subjectRef string,
 	sandboxID string,
 	operation string,
 	idempotencyKey string,
@@ -1872,8 +873,9 @@ func lookupDataPlaneReplay(
 	var priorHash, sessionID string
 	err := tx.QueryRow(ctx, `
 		SELECT request_hash,id FROM secondbox.data_plane_sessions
-		WHERE project_id=$1 AND sandbox_id=$2 AND operation=$3 AND idempotency_key=$4`,
-		projectID, sandboxID, operation, idempotencyKey,
+		WHERE tenant_ref=$1 AND subject_ref=$2 AND sandbox_id=$3
+		  AND operation=$4 AND idempotency_key=$5`,
+		tenantRef, subjectRef, sandboxID, operation, idempotencyKey,
 	).Scan(&priorHash, &sessionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DataPlaneSession{}, false, nil
@@ -1885,7 +887,8 @@ func lookupDataPlaneReplay(
 		return DataPlaneSession{}, false, ports.ErrIdempotencyConflict
 	}
 	session, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
-		WHERE project_id=$1 AND id=$2`, projectID, sessionID))
+		WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3`,
+		tenantRef, subjectRef, sessionID))
 	return session, true, err
 }
 
@@ -1898,7 +901,8 @@ func lockDataPlaneAuthority(
 	var sandboxState, assignmentState string
 	var specJSON []byte
 	err := tx.QueryRow(ctx, `
-		SELECT sandbox.profile_revision_id,sandbox.generation,sandbox.state,
+		SELECT sandbox.tenant_ref,sandbox.subject_ref,
+		       sandbox.profile_revision_id,sandbox.generation,sandbox.state,
 		       assignment.id,assignment.instance_id,assignment.runner_id,
 		       assignment.fencing_token,assignment.state,revision.spec_json
 		FROM secondbox.sandboxes AS sandbox
@@ -1907,10 +911,11 @@ func lockDataPlaneAuthority(
 		  AND assignment.sandbox_id=sandbox.id
 		  AND assignment.generation=sandbox.generation
 		JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
-		WHERE sandbox.project_id=$1 AND sandbox.id=$2
+		WHERE sandbox.tenant_ref=$1 AND sandbox.subject_ref=$2 AND sandbox.id=$3
 		FOR UPDATE OF sandbox,assignment`,
-		input.ProjectID, input.SandboxID,
+		input.TenantRef, input.SubjectRef, input.SandboxID,
 	).Scan(
+		&session.TenantRef, &session.SubjectRef,
 		&session.ProfileRevisionID, &session.Generation, &sandboxState,
 		&session.AssignmentID, &session.InstanceID, &session.RunnerID,
 		&session.FencingToken, &assignmentState, &specJSON,
@@ -1932,17 +937,17 @@ func lockDataPlaneAuthority(
 		var leaseAccount, leaseState string
 		var leaseExpiry time.Time
 		if err := tx.QueryRow(ctx, `
-			SELECT generation,service_account_id,state,expires_at
+			SELECT generation,subject_ref,state,expires_at
 			FROM secondbox.leases
-			WHERE project_id=$1 AND sandbox_id=$2 AND id=$3 FOR UPDATE`,
-			input.ProjectID, input.SandboxID, input.LeaseID,
+			WHERE tenant_ref=$1 AND subject_ref=$2 AND sandbox_id=$3 AND id=$4 FOR UPDATE`,
+			input.TenantRef, input.SubjectRef, input.SandboxID, input.LeaseID,
 		).Scan(&leaseGeneration, &leaseAccount, &leaseState, &leaseExpiry); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrLeaseNotFound
 			}
 			return DataPlaneSession{}, contracts.ExecutionPolicy{}, fmt.Errorf("SecondBox data-plane Lease lookup: %w", err)
 		}
-		if leaseGeneration != input.Generation || leaseAccount != input.ServiceAccountID ||
+		if leaseGeneration != input.Generation || leaseAccount != input.SubjectRef ||
 			leaseState != contracts.LeaseStateActive || !input.Now.Before(leaseExpiry) {
 			return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrLeaseInactive
 		}
@@ -1951,7 +956,7 @@ func lockDataPlaneAuthority(
 	if err := json.Unmarshal(specJSON, &spec); err != nil {
 		return DataPlaneSession{}, contracts.ExecutionPolicy{}, fmt.Errorf("SecondBox data-plane Profile policy decoding: %w", err)
 	}
-	var sandboxActive, projectActive, projectMaximum int64
+	var sandboxActive, subjectActive, subjectMaximum int64
 	if err := tx.QueryRow(ctx, `
 		SELECT count(*) FROM secondbox.data_plane_sessions
 		WHERE sandbox_id=$1 AND state IN ('pending','running','cancelling')`,
@@ -1962,20 +967,23 @@ func lockDataPlaneAuthority(
 	if err := tx.QueryRow(ctx, `
 		SELECT quota.max_concurrent_operations,
 		       (SELECT count(*) FROM secondbox.data_plane_sessions
-		        WHERE project_id=$1 AND state IN ('pending','running','cancelling'))
-		FROM secondbox.project_quotas AS quota WHERE quota.project_id=$1`,
-		input.ProjectID,
-	).Scan(&projectMaximum, &projectActive); err != nil {
-		return DataPlaneSession{}, contracts.ExecutionPolicy{}, fmt.Errorf("SecondBox Project operation quota lookup: %w", err)
+		        WHERE tenant_ref=$1 AND subject_ref=$2
+		          AND state IN ('pending','running','cancelling'))
+		FROM secondbox.subject_quotas AS quota
+		WHERE quota.tenant_ref=$1 AND quota.subject_ref=$2
+		FOR UPDATE`,
+		input.TenantRef, input.SubjectRef,
+	).Scan(&subjectMaximum, &subjectActive); err != nil {
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, fmt.Errorf("SecondBox subject operation quota lookup: %w", err)
 	}
-	if sandboxActive >= spec.Resources.ConcurrentOperations || projectActive >= projectMaximum {
+	if sandboxActive >= spec.Resources.ConcurrentOperations || subjectActive >= subjectMaximum {
 		return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrQuotaExceeded
 	}
 	return session, spec.Execution, nil
 }
 
 const dataPlaneSessionSelect = `
-	SELECT id,stream_id,project_id,sandbox_id,profile_revision_id,assignment_id,
+	SELECT id,stream_id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,assignment_id,
 	       instance_id,runner_id,generation,fencing_token,service_account_id,request_id,lease_id,kind,operation,state,
 	       deadline_at,maximum_response_bytes,maximum_request_bytes,stream_window_bytes,
 	       response_credit_bytes,request_stream_bytes,request_stream_closed,detachable,
@@ -2001,7 +1009,8 @@ func scanDataPlaneSession(row relayRow) (DataPlaneSession, error) {
 	var session DataPlaneSession
 	var metadataJSON []byte
 	err := row.Scan(
-		&session.ID, &session.StreamID, &session.ProjectID, &session.SandboxID,
+		&session.ID, &session.StreamID, &session.TenantRef,
+		&session.SubjectRef, &session.SandboxID,
 		&session.ProfileRevisionID, &session.AssignmentID, &session.InstanceID,
 		&session.RunnerID, &session.Generation, &session.FencingToken,
 		&session.ServiceAccountID, &session.RequestID, &session.LeaseID, &session.Kind, &session.Operation,
@@ -2024,6 +1033,7 @@ func scanDataPlaneSession(row relayRow) (DataPlaneSession, error) {
 	if err != nil {
 		return DataPlaneSession{}, fmt.Errorf("SecondBox data-plane session lookup: %w", err)
 	}
+	session.ProjectID = session.TenantRef
 	if len(metadataJSON) > 0 && string(metadataJSON) != "{}" {
 		session.Metadata = &runnerv1.FileMetadata{}
 		if err := protojson.Unmarshal(metadataJSON, session.Metadata); err != nil {

@@ -39,18 +39,8 @@ func newPostgresConformanceBoundary(
 	t.Helper()
 	task4InsertRunnerPool(t, "pool-conformance", now)
 	caCertificate, caPrivateKey := task4CertificateAuthority(t, now)
-	authority := task4CredentialAuthority(t, caCertificate, caPrivateKey, now)
-	enrollment, err := authority.CreateEnrollment(t.Context(), runnercontrol.EnrollmentRequest{
-		TokenID: task4ID("conformance-enrollment"), RunnerID: "runner-conformance",
-		PoolName: "pool-conformance", RunnerName: "conformance runner",
-		ExpiresAt: now.Add(time.Hour),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	issued, err := authority.RedeemEnrollment(
-		t.Context(), enrollment.Token, task4CertificateRequest(t),
-	)
+	authority := newTask4CredentialAuthority(t, caCertificate, caPrivateKey, now)
+	issued, err := authority.Issue("runner-conformance", task4CertificateRequest(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,8 +281,6 @@ func (boundary *postgresConformanceBoundary) close() {
 		)`,
 		`DELETE FROM secondbox.runner_commands WHERE runner_id='runner-conformance'`,
 		`DELETE FROM secondbox.runner_connections WHERE runner_id='runner-conformance'`,
-		`DELETE FROM secondbox.runner_credentials WHERE runner_id='runner-conformance'`,
-		`DELETE FROM secondbox.runner_enrollment_tokens WHERE runner_id='runner-conformance'`,
 		`DELETE FROM secondbox.assignments WHERE runner_id='runner-conformance'`,
 		`DELETE FROM secondbox.instances WHERE sandbox_id='sandbox-conformance'`,
 		`DELETE FROM secondbox.sandboxes WHERE id='sandbox-conformance'`,

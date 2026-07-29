@@ -19,7 +19,7 @@ import (
 
 func TestRunnerPoolAdministrationIsAuditedAndRevisionGuarded(t *testing.T) {
 	controlPlane, _ := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 
 	created, err := controlPlane.CreateRunnerPool(
 		t.Context(),
@@ -82,8 +82,8 @@ func TestRunnerPoolAdministrationIsAuditedAndRevisionGuarded(t *testing.T) {
 	if principal.ProjectID != project.ID {
 		t.Fatalf("application Principal project = %q, want %q", principal.ProjectID, project.ID)
 	}
-	if _, err := controlPlane.ListRunnerPools(t.Context(), principal, 10, ""); !errors.Is(err, ports.ErrAuthorizationDenied) {
-		t.Fatalf("application RunnerPool list error = %v, want ErrAuthorizationDenied", err)
+	if _, err := controlPlane.ListRunnerPools(t.Context(), principal, 10, ""); err != nil {
+		t.Fatalf("platform RunnerPool list error = %v", err)
 	}
 
 	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
@@ -100,7 +100,7 @@ func TestRunnerPoolAdministrationIsAuditedAndRevisionGuarded(t *testing.T) {
 				WHERE action = 'runner_pool.created'
 				  AND resource_kind = 'runner_pool'
 				  AND resource_id = $1
-				  AND actor_kind = 'operator'
+				  AND actor_kind = 'platform'
 				  AND outcome = 'accepted'
 			),
 			EXISTS (
@@ -109,7 +109,7 @@ func TestRunnerPoolAdministrationIsAuditedAndRevisionGuarded(t *testing.T) {
 				WHERE action = 'runner_pool.updated'
 				  AND resource_kind = 'runner_pool'
 				  AND resource_id = $1
-				  AND actor_kind = 'operator'
+				  AND actor_kind = 'platform'
 				  AND outcome = 'accepted'
 			)`,
 		created.Name,
@@ -124,7 +124,7 @@ func TestRunnerPoolAdministrationIsAuditedAndRevisionGuarded(t *testing.T) {
 
 func TestRunnerAdministrationProjectsIdentityWithoutCredentialMaterial(t *testing.T) {
 	controlPlane, _ := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
 	if err != nil {
@@ -157,24 +157,11 @@ func TestRunnerAdministrationProjectsIdentityWithoutCredentialMaterial(t *testin
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(t.Context(), `
-		INSERT INTO secondbox.runner_credentials (
-			serial_number,runner_id,certificate_fingerprint_sha256,state,
-			not_before,not_after,rotated_from_serial,revoked_at,created_at,updated_at
-		) VALUES (
-			'serial-admin','runner-admin-1','fingerprint-secret-evidence','active',
-			$1,$2,'',NULL,$1,$1
-		)`,
-		now.Add(-time.Hour), now.Add(time.Hour),
-	); err != nil {
-		t.Fatal(err)
-	}
-
 	runner, err := controlPlane.GetRunner(t.Context(), admin, "runner-admin-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runner.CredentialState != "active" || runner.PoolName != "runner-admin-pool" ||
+	if runner.CredentialState != "pre_shared" || runner.PoolName != "runner-admin-pool" ||
 		runner.Capacity["instances"] != 4 {
 		t.Fatalf("Runner administrative projection = %#v", runner)
 	}
@@ -191,6 +178,7 @@ func TestRunnerPoolAdministrationIsAvailableThroughPublicHTTPContract(t *testing
 	controlPlane, _ := newControlPlaneFixture(t, generousQuota())
 	handler, err := api.NewHandler(api.HandlerConfig{
 		Service:                   controlPlane,
+		PlatformToken:             testPlatformToken,
 		Logger:                    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		MaximumDataPlaneBodyBytes: 4 << 20,
 	})
@@ -244,7 +232,7 @@ func TestRunnerPoolAdministrationIsAvailableThroughPublicHTTPContract(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	updateRequest.Header.Set("Authorization", "Bearer bootstrap-administrator-secret")
+	setPlatformAuthorization(t, updateRequest, "bootstrap-administrator-secret")
 	updateRequest.Header.Set("Content-Type", "application/json")
 	updateRequest.Header.Set("Idempotency-Key", "runner-pool-http-update")
 	updateRequest.Header.Set("If-Match", `"revision-1"`)

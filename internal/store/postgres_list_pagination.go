@@ -12,13 +12,10 @@ import (
 )
 
 const (
-	projectListCursorResource        = "projects"
-	serviceAccountListCursorResource = "service_accounts"
-	apiKeyListCursorResource         = "api_keys"
-	profileListCursorResource        = "profiles"
-	runnerPoolListCursorResource     = "runner_pools"
-	runnerListCursorResource         = "runners"
-	sandboxListCursorResource        = "sandboxes"
+	profileListCursorResource    = "profiles"
+	runnerPoolListCursorResource = "runner_pools"
+	runnerListCursorResource     = "runners"
+	sandboxListCursorResource    = "sandboxes"
 )
 
 type postgresListCursorBoundary struct {

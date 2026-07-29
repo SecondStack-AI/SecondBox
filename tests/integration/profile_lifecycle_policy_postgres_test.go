@@ -20,7 +20,7 @@ import (
 
 func TestPinnedProfilePolicyDrivesDisposableAndDurableRestartWithoutNameSemantics(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(
 		t, controlPlane, admin, "profile-policy-lifecycle",
 	)
@@ -192,7 +192,7 @@ func TestOperatorExplicitlyDefinesEphemeralAndDurableProfilesWithoutDefaults(t *
 	}
 	t.Cleanup(databaseStore.Close)
 	controlPlane := newControlPlaneService(t, databaseStore, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	project, account, credential := createProjectAccountAndCredential(
 		t, controlPlane, admin, "operator-profile-qualification",
 	)
@@ -251,7 +251,7 @@ func TestOperatorExplicitlyDefinesEphemeralAndDurableProfilesWithoutDefaults(t *
 		t.Fatal(err)
 	}
 	grants := []string{ephemeralName, durableName}
-	if _, err := controlPlane.UpdateServiceAccount(
+	if _, err := updateFixtureServiceAccount(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
 		contracts.UpdateServiceAccountRequest{ProfileGrants: &grants},
 	); err != nil {
