@@ -99,7 +99,7 @@ func insertAdminIdempotency(
 func adminIdempotencyRefs(input ports.AdminIdempotencyInput) (string, string) {
 	tenantRef, subjectRef := input.TenantRef, input.SubjectRef
 	if tenantRef == "" {
-		tenantRef = input.ProjectID
+		tenantRef = input.TenantRef
 	}
 	if tenantRef == "" {
 		tenantRef = "secondbox"

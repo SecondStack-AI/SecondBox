@@ -36,13 +36,13 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 	}
 	if _, err := updateFixtureServiceAccount(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
-		contracts.UpdateServiceAccountRequest{Scopes: &scopes},
+		fixtureUpdateServiceAccountRequest{Scopes: &scopes},
 	); err != nil {
 		t.Fatal(err)
 	}
 	key, err := createFixtureAPIKey(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
-		contracts.CreateAPIKeyRequest{Name: "terminal-http", Scopes: scopes},
+		fixtureCreateAPIKeyRequest{Name: "terminal-http", Scopes: scopes},
 	)
 	if err != nil {
 		t.Fatal(err)

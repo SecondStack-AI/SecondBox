@@ -253,7 +253,7 @@ func TestOperatorExplicitlyDefinesEphemeralAndDurableProfilesWithoutDefaults(t *
 	grants := []string{ephemeralName, durableName}
 	if _, err := updateFixtureServiceAccount(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
-		contracts.UpdateServiceAccountRequest{ProfileGrants: &grants},
+		fixtureUpdateServiceAccountRequest{ProfileGrants: &grants},
 	); err != nil {
 		t.Fatal(err)
 	}

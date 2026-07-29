@@ -14,7 +14,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/SecondStack-AI/SecondBox/internal/objectstore"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
@@ -483,8 +482,7 @@ func (service *ControlPlaneService) createSandboxOperation(
 	idempotencyKey string,
 	request contracts.CreateSandboxRequest,
 ) (contracts.Sandbox, contracts.Operation, bool, error) {
-	if principal.ProjectID == "" || principal.ServiceAccountID == "" ||
-		principal.TenantRef == "" || principal.SubjectRef == "" {
+	if principal.TenantRef == "" || principal.SubjectRef == "" {
 		return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrAuthorizationDenied
 	}
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
@@ -523,7 +521,7 @@ func (service *ControlPlaneService) createSandboxOperation(
 		ID: operationID, SandboxID: sandboxID, Kind: "create", State: contracts.OperationStatePending,
 		RequestID: requestID, CreatedAt: now, UpdatedAt: now,
 	}
-	audit := service.newAudit(ctx, principal, "sandbox.created", "sandbox", sandboxID, principal.ProjectID, now)
+	audit := service.newAudit(ctx, principal, "sandbox.created", "sandbox", sandboxID, principal.TenantRef, now)
 	storedSandbox, storedOperation, created, err := service.store.CreateSandbox(ctx, ports.CreateSandboxInput{
 		Principal: principal, SubjectQuota: service.defaultSubjectQuota,
 		Sandbox: sandbox, Workspace: sandbox.Workspace, Operation: operation,
@@ -678,7 +676,7 @@ func (service *ControlPlaneService) setSandboxDesiredState(
 	requestMetadata map[string]string,
 	replayed *bool,
 ) (contracts.Operation, error) {
-	if principal.ProjectID == "" {
+	if principal.TenantRef == "" {
 		return contracts.Operation{}, ports.ErrAuthorizationDenied
 	}
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
@@ -702,7 +700,7 @@ func (service *ControlPlaneService) setSandboxDesiredState(
 		RequestMetadata: cloneMetadata(requestMetadata), CreatedAt: now, UpdatedAt: now,
 	}
 	audit := service.newAudit(
-		ctx, principal, "sandbox."+kind, "sandbox", sandboxID, principal.ProjectID, now,
+		ctx, principal, "sandbox."+kind, "sandbox", sandboxID, principal.TenantRef, now,
 	)
 	storedOperation, err := service.store.SetSandboxDesiredState(ctx, ports.LifecycleIntentInput{
 		Principal: principal, SandboxID: sandboxID, DesiredState: desiredState,
@@ -790,10 +788,9 @@ func (service *ControlPlaneService) AcquireSandboxLease(
 	now := service.now().UTC()
 	return service.store.AcquireLease(ctx, ports.LeaseInput{
 		Lease:     contracts.Lease{ID: service.newID("lea")},
-		ProjectID: principal.ProjectID, SandboxID: sandboxID, Generation: generation,
-		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
-		ServiceAccountID: principal.ServiceAccountID,
-		ExpiresAt:        now.Add(time.Duration(durationSeconds) * time.Second), Now: now,
+		TenantRef: principal.TenantRef, SandboxID: sandboxID, Generation: generation,
+		SubjectRef: principal.SubjectRef,
+		ExpiresAt:  now.Add(time.Duration(durationSeconds) * time.Second), Now: now,
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
 		IdempotencyEnds: now.Add(idempotencyRetention),
 	})
@@ -851,10 +848,10 @@ func (service *ControlPlaneService) RenewSandboxLease(
 	}
 	now := service.now().UTC()
 	return service.store.RenewLease(ctx, ports.LeaseInput{
-		Lease: lease, ProjectID: principal.ProjectID, SandboxID: lease.SandboxID,
-		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
-		Generation: lease.Generation, ServiceAccountID: principal.ServiceAccountID,
-		ExpiresAt: now.Add(time.Duration(durationSeconds) * time.Second), Now: now,
+		Lease: lease, TenantRef: principal.TenantRef, SandboxID: lease.SandboxID,
+		SubjectRef: principal.SubjectRef,
+		Generation: lease.Generation,
+		ExpiresAt:  now.Add(time.Duration(durationSeconds) * time.Second), Now: now,
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
 		IdempotencyEnds: now.Add(idempotencyRetention),
 	})
@@ -890,10 +887,10 @@ func (service *ControlPlaneService) ReleaseSandboxLease(
 	}
 	now := service.now().UTC()
 	return service.store.ReleaseLease(ctx, ports.LeaseInput{
-		Lease: lease, ProjectID: principal.ProjectID, SandboxID: lease.SandboxID,
-		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
-		Generation: lease.Generation, ServiceAccountID: principal.ServiceAccountID,
-		Now: now, IdempotencyKey: idempotencyKey, RequestHash: requestHash,
+		Lease: lease, TenantRef: principal.TenantRef, SandboxID: lease.SandboxID,
+		SubjectRef: principal.SubjectRef,
+		Generation: lease.Generation,
+		Now:        now, IdempotencyKey: idempotencyKey, RequestHash: requestHash,
 		IdempotencyEnds: now.Add(idempotencyRetention),
 	})
 }
@@ -910,8 +907,8 @@ func (service *ControlPlaneService) ReportGuestLiveness(
 		return contracts.Instance{}, ports.ErrAuthorizationDenied
 	}
 	return service.store.PingGuest(ctx, ports.GenerationInput{
-		ProjectID: principal.ProjectID, SandboxID: sandboxID,
-		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
+		TenantRef: principal.TenantRef, SandboxID: sandboxID,
+		SubjectRef: principal.SubjectRef,
 		Generation: generation, Now: service.now().UTC(),
 	}, liveness)
 }
@@ -930,8 +927,8 @@ func (service *ControlPlaneService) InspectSandbox(
 		return contracts.SandboxInspection{}, errors.New("SecondBox inspection generation must be positive")
 	}
 	return service.store.ReadSandboxInspection(ctx, ports.GenerationInput{
-		ProjectID: principal.ProjectID, SandboxID: sandboxID,
-		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
+		TenantRef: principal.TenantRef, SandboxID: sandboxID,
+		SubjectRef: principal.SubjectRef,
 		Generation: generation, Now: service.now().UTC(),
 	})
 }
@@ -980,11 +977,11 @@ func (service *ControlPlaneService) TouchSandbox(
 	}
 	touchedAt, err := service.store.TouchActivity(ctx, ports.ActivityInput{
 		GenerationInput: ports.GenerationInput{
-			ProjectID: principal.ProjectID, SandboxID: sandboxID,
-			TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
+			TenantRef: principal.TenantRef, SandboxID: sandboxID,
+			SubjectRef: principal.SubjectRef,
 			Generation: generation, Now: service.now().UTC(),
 		},
-		LeaseID: leaseID, ServiceAccountID: principal.ServiceAccountID,
+		LeaseID:        leaseID,
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
 	})
 	if err != nil {
@@ -1060,11 +1057,11 @@ func (service *ControlPlaneService) OpenActivitySession(
 	now := service.now().UTC()
 	return service.store.OpenActivitySession(ctx, ports.ActivityInput{
 		GenerationInput: ports.GenerationInput{
-			ProjectID: principal.ProjectID, SandboxID: sandboxID, Generation: generation, Now: now,
-			TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
+			TenantRef: principal.TenantRef, SandboxID: sandboxID, Generation: generation, Now: now,
+			SubjectRef: principal.SubjectRef,
 		},
 		Session: contracts.ActivitySession{ID: service.newID("act"), Kind: kind},
-		LeaseID: leaseID, ServiceAccountID: principal.ServiceAccountID,
+		LeaseID: leaseID,
 	})
 }
 
@@ -1081,12 +1078,11 @@ func (service *ControlPlaneService) CloseActivitySession(
 	}
 	return service.store.CloseActivitySession(ctx, ports.ActivityInput{
 		GenerationInput: ports.GenerationInput{
-			ProjectID: principal.ProjectID, SandboxID: sandboxID,
-			TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
+			TenantRef: principal.TenantRef, SandboxID: sandboxID,
+			SubjectRef: principal.SubjectRef,
 			Generation: generation, Now: service.now().UTC(),
 		},
-		Session:          contracts.ActivitySession{ID: sessionID},
-		ServiceAccountID: principal.ServiceAccountID,
+		Session: contracts.ActivitySession{ID: sessionID},
 	})
 }
 
@@ -1119,7 +1115,7 @@ func (service *ControlPlaneService) adminIdempotency(
 		return ports.AdminIdempotencyInput{}, err
 	}
 	return ports.AdminIdempotencyInput{
-		ProjectID: principal.ProjectID, Operation: operation, TargetID: targetID,
+		TenantRef: principal.TenantRef, Operation: operation, TargetID: targetID,
 		Key: idempotencyKey, RequestHash: requestHash,
 		Now: now.UTC(), Ends: now.UTC().Add(idempotencyRetention),
 	}, nil
@@ -1148,30 +1144,12 @@ func (service *ControlPlaneService) newAudit(
 		subjectRef = "secondbox"
 	}
 	return contracts.AuditEvent{
-		ID: service.newID("aud"), ProjectID: projectID,
-		TenantRef: tenantRef, SubjectRef: subjectRef, ActorKind: principal.Kind,
+		ID: service.newID("aud"), TenantRef: projectID,
+		SubjectRef: subjectRef, ActorKind: principal.Kind,
 		ActorID: principal.ID, Action: action, ResourceKind: resourceKind,
 		ResourceID: resourceID, Outcome: "accepted", RequestID: service.requestID(ctx),
 		Details: map[string]string{}, CreatedAt: now,
 	}
-}
-
-func validateServiceAccountAuthority(name string, scopes []string, grants []string) error {
-	if strings.TrimSpace(name) == "" || utf8.RuneCountInString(name) > 120 {
-		return errors.New("SecondBox ServiceAccount name must contain between 1 and 120 characters")
-	}
-	if err := validateApplicationScopes(scopes); err != nil {
-		return err
-	}
-	if len(sortedUnique(grants)) > 128 {
-		return errors.New("SecondBox ServiceAccount profile grants must not exceed 128 entries")
-	}
-	for _, grant := range grants {
-		if !profileNamePattern.MatchString(grant) {
-			return errors.New("SecondBox ServiceAccount profile grant is invalid")
-		}
-	}
-	return nil
 }
 
 func validateApplicationScopes(scopes []string) error {

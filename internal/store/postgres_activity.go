@@ -150,12 +150,11 @@ func (store *PostgresControlPlaneStore) TouchActivity(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.activity_touches (
-			tenant_ref,subject_ref,sandbox_id,generation,service_account_id,lease_id,
-			idempotency_key,request_hash,last_activity_at,created_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)`,
-		input.TenantRef, input.SubjectRef, input.SandboxID,
-		input.Generation, input.ServiceAccountID, input.LeaseID,
-		input.IdempotencyKey, input.RequestHash, input.Now.UTC(),
+			tenant_ref,subject_ref,sandbox_id,generation,lease_id,idempotency_key,request_hash,last_activity_at,created_at
+		) VALUES (
+			$1,$2,$3,$4,$5,$6,$7,$8,$8
+		)`,
+		input.TenantRef, input.SubjectRef, input.SandboxID, input.Generation, input.LeaseID, input.IdempotencyKey, input.RequestHash, input.Now.UTC(),
 	); err != nil {
 		return time.Time{}, fmt.Errorf("SecondBox touch idempotency insert failed: %w", err)
 	}
@@ -182,7 +181,7 @@ func (store *PostgresControlPlaneStore) OpenActivitySession(
 		return contracts.ActivitySession{}, err
 	}
 	session := input.Session
-	session.ProjectID, session.SandboxID, session.Generation = input.ProjectID, input.SandboxID, input.Generation
+	session.TenantRef, session.SandboxID, session.Generation = input.TenantRef, input.SandboxID, input.Generation
 	session.TenantRef, session.SubjectRef = input.TenantRef, input.SubjectRef
 	session.State, session.LeaseID = contracts.ActivitySessionStateActive, input.LeaseID
 	session.CreatedAt, session.LastActivityAt = input.Now.UTC(), input.Now.UTC()
@@ -237,7 +236,6 @@ func (store *PostgresControlPlaneStore) CloseActivitySession(
 	if err != nil {
 		return contracts.ActivitySession{}, fmt.Errorf("SecondBox activity session close failed: %w", err)
 	}
-	session.ProjectID = session.TenantRef
 	return session, nil
 }
 

@@ -61,10 +61,10 @@ func (service *ControlPlaneService) CreateSandboxTerminal(
 	open.Streaming = true
 	return service.dataPlaneRelay.AdmitDataPlane(ctx, runnercontrol.DataPlaneAdmission{
 		ID: service.newID("term"), StreamID: service.newID("stream"),
-		ProjectID: principal.ProjectID, SandboxID: sandboxID,
-		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
-		ServiceAccountID: principal.ServiceAccountID, LeaseID: leaseID,
-		RequestID: requestID, Generation: generation,
+		TenantRef: principal.TenantRef, SandboxID: sandboxID,
+		SubjectRef: principal.SubjectRef,
+		LeaseID:    leaseID,
+		RequestID:  requestID, Generation: generation,
 		Kind: "terminal", Operation: "terminal", IdempotencyKey: idempotencyKey,
 		RequestHash: requestHash, DeadlineAt: deadline,
 		UseProfileResponseLimit: true, UseProfileRequestLimit: true,
@@ -203,8 +203,8 @@ func (service *ControlPlaneService) CancelSandboxTerminal(
 	return service.dataPlaneRelay.CancelPublicDataPlaneSession(
 		ctx,
 		runnercontrol.PublicDataPlaneCancellation{
-			ProjectID: principal.ProjectID, SandboxID: sandboxID, SessionID: sessionID,
-			TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
+			TenantRef: principal.TenantRef, SandboxID: sandboxID, SessionID: sessionID,
+			SubjectRef:  principal.SubjectRef,
 			SessionKind: "terminal", SessionOperation: "terminal",
 			IdempotencyKey: idempotencyKey,
 			RequestHash:    requestHash, Reason: "public Terminal cancellation",

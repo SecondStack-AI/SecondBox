@@ -57,13 +57,13 @@ func TestPublicArtifactsPublishListDownloadAndEndRetention(t *testing.T) {
 	}
 	if _, err := updateFixtureServiceAccount(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
-		contracts.UpdateServiceAccountRequest{Scopes: &scopes},
+		fixtureUpdateServiceAccountRequest{Scopes: &scopes},
 	); err != nil {
 		t.Fatal(err)
 	}
 	key, err := createFixtureAPIKey(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
-		contracts.CreateAPIKeyRequest{Name: "artifact-http", Scopes: scopes},
+		fixtureCreateAPIKeyRequest{Name: "artifact-http", Scopes: scopes},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func TestPublicArtifactsPublishListDownloadAndEndRetention(t *testing.T) {
 		first.Name != "first.bin" || first.MediaType != "application/octet-stream" ||
 		first.SizeBytes != int64(len(firstContent)) ||
 		first.SHA256 != hex.EncodeToString(firstHash[:]) ||
-		first.State != "" || first.ProjectID != "" ||
+		first.State != "" || first.TenantRef != "" ||
 		!first.RetainUntil.Equal(time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)) {
 		t.Fatalf("published Artifact = %#v", first)
 	}
@@ -171,7 +171,7 @@ func TestPublicArtifactsPublishListDownloadAndEndRetention(t *testing.T) {
 	}
 	otherSubject, err := createFixtureServiceAccount(t, controlPlane,
 		t.Context(), admin, project.ID,
-		contracts.CreateServiceAccountRequest{
+		fixtureCreateServiceAccountRequest{
 			Name: "artifact-http-other-subject", Scopes: scopes,
 			ProfileGrants: []string{profile.Name},
 		},
@@ -181,7 +181,7 @@ func TestPublicArtifactsPublishListDownloadAndEndRetention(t *testing.T) {
 	}
 	otherSubjectKey, err := createFixtureAPIKey(t, controlPlane,
 		t.Context(), admin, project.ID, otherSubject.ID,
-		contracts.CreateAPIKeyRequest{
+		fixtureCreateAPIKeyRequest{
 			Name: "artifact-http-other-subject", Scopes: scopes,
 		},
 	)
@@ -235,7 +235,7 @@ func TestPublicArtifactsEnforceAuthorityIntegrityBoundsQuotaAndExpiry(t *testing
 
 		readOnlyKey, err := createFixtureAPIKey(t, fixture.controlPlane,
 			t.Context(), fixture.admin, fixture.project.ID, fixture.account.ID,
-			contracts.CreateAPIKeyRequest{
+			fixtureCreateAPIKeyRequest{
 				Name: "artifact-missing-scope", Scopes: []string{"sandbox:read"},
 			},
 		)
@@ -254,13 +254,13 @@ func TestPublicArtifactsEnforceAuthorityIntegrityBoundsQuotaAndExpiry(t *testing
 		otherScopes := []string{"sandbox:read", "sandbox:artifacts"}
 		if _, err := updateFixtureServiceAccount(t, fixture.controlPlane,
 			t.Context(), fixture.admin, otherProject.ID, otherAccount.ID,
-			contracts.UpdateServiceAccountRequest{Scopes: &otherScopes},
+			fixtureUpdateServiceAccountRequest{Scopes: &otherScopes},
 		); err != nil {
 			t.Fatal(err)
 		}
 		otherKey, err := createFixtureAPIKey(t, fixture.controlPlane,
 			t.Context(), fixture.admin, otherProject.ID, otherAccount.ID,
-			contracts.CreateAPIKeyRequest{Name: "artifact-cross-project", Scopes: otherScopes},
+			fixtureCreateAPIKeyRequest{Name: "artifact-cross-project", Scopes: otherScopes},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -304,7 +304,6 @@ func TestPublicArtifactsEnforceAuthorityIntegrityBoundsQuotaAndExpiry(t *testing
 		if _, err := fixture.controlPlane.ReleaseSandboxLease(
 			t.Context(), contracts.Principal{
 				Kind: "service_account", ID: fixture.account.ID,
-				ProjectID: fixture.project.ID, ServiceAccountID: fixture.account.ID,
 				TenantRef: fixture.project.ID, SubjectRef: fixture.account.ID,
 			},
 			fixture.lease.ID, "artifact-release-lease",
@@ -432,10 +431,10 @@ type artifactHTTPFixture struct {
 	server       *httptest.Server
 	objects      *artifactObjectServer
 	admin        contracts.Principal
-	project      contracts.Project
-	account      contracts.ServiceAccount
+	project      fixtureProject
+	account      fixtureServiceAccount
 	profile      contracts.Profile
-	key          contracts.CreateAPIKeyResponse
+	key          fixtureCreateAPIKeyResponse
 	sandbox      contracts.Sandbox
 	lease        contracts.Lease
 	now          *time.Time
@@ -476,13 +475,13 @@ func newArtifactHTTPFixture(
 	}
 	if _, err := updateFixtureServiceAccount(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
-		contracts.UpdateServiceAccountRequest{Scopes: &scopes},
+		fixtureUpdateServiceAccountRequest{Scopes: &scopes},
 	); err != nil {
 		t.Fatal(err)
 	}
 	key, err := createFixtureAPIKey(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
-		contracts.CreateAPIKeyRequest{Name: suffix, Scopes: scopes},
+		fixtureCreateAPIKeyRequest{Name: suffix, Scopes: scopes},
 	)
 	if err != nil {
 		t.Fatal(err)

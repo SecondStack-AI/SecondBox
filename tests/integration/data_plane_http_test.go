@@ -44,13 +44,13 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseDurableRelay(t *testing.T) {
 	}
 	if _, err := updateFixtureServiceAccount(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
-		contracts.UpdateServiceAccountRequest{Scopes: &scopes},
+		fixtureUpdateServiceAccountRequest{Scopes: &scopes},
 	); err != nil {
 		t.Fatal(err)
 	}
 	key, err := createFixtureAPIKey(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
-		contracts.CreateAPIKeyRequest{Name: "data-plane-http", Scopes: scopes},
+		fixtureCreateAPIKeyRequest{Name: "data-plane-http", Scopes: scopes},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -204,13 +204,13 @@ func TestFlueAdapterCompleteSubsetAgainstRealServiceContract(t *testing.T) {
 	}
 	if _, err := updateFixtureServiceAccount(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
-		contracts.UpdateServiceAccountRequest{Scopes: &scopes},
+		fixtureUpdateServiceAccountRequest{Scopes: &scopes},
 	); err != nil {
 		t.Fatal(err)
 	}
 	key, err := createFixtureAPIKey(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
-		contracts.CreateAPIKeyRequest{Name: "flue-real-service", Scopes: scopes},
+		fixtureCreateAPIKeyRequest{Name: "flue-real-service", Scopes: scopes},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -320,21 +320,21 @@ func TestIndependentProjectsCannotObserveOrMutateAnotherSandbox(t *testing.T) {
 	} {
 		if _, err := updateFixtureServiceAccount(t, controlPlane,
 			t.Context(), admin, identity.projectID, identity.accountID,
-			contracts.UpdateServiceAccountRequest{Scopes: &scopes},
+			fixtureUpdateServiceAccountRequest{Scopes: &scopes},
 		); err != nil {
 			t.Fatal(err)
 		}
 	}
 	ownerKey, err := createFixtureAPIKey(t, controlPlane,
 		t.Context(), admin, ownerProject.ID, ownerAccount.ID,
-		contracts.CreateAPIKeyRequest{Name: "isolation-owner", Scopes: scopes},
+		fixtureCreateAPIKeyRequest{Name: "isolation-owner", Scopes: scopes},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	otherKey, err := createFixtureAPIKey(t, controlPlane,
 		t.Context(), admin, otherProject.ID, otherAccount.ID,
-		contracts.CreateAPIKeyRequest{Name: "isolation-other", Scopes: scopes},
+		fixtureCreateAPIKeyRequest{Name: "isolation-other", Scopes: scopes},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -496,7 +496,7 @@ func TestIndependentProjectsCannotObserveOrMutateAnotherSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ownerView.ProjectID != ownerProject.ID ||
+	if ownerView.TenantRef != ownerProject.ID ||
 		ownerView.Metadata["secret"] != "owner-only" ||
 		ownerView.DesiredState != contracts.SandboxDesiredStateRunning {
 		t.Fatalf("cross-Project attempts changed owner Sandbox: %#v", ownerView)

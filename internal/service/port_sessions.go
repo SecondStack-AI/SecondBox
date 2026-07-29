@@ -69,10 +69,10 @@ func (service *ControlPlaneService) CreateSandboxPortSession(
 			Name: request.Name, State: contracts.PortSessionStateOpen,
 			CreatedAt: now, ExpiresAt: now.Add(time.Duration(request.DurationSeconds) * time.Second),
 		},
-		StreamID: service.newID("stream"), ProjectID: principal.ProjectID,
-		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
-		ServiceAccountID: principal.ServiceAccountID, RequestID: requestID,
-		LeaseID: leaseID, IdempotencyKey: idempotencyKey, RequestHash: requestHash, Now: now,
+		StreamID: service.newID("stream"), TenantRef: principal.TenantRef,
+		SubjectRef: principal.SubjectRef,
+		RequestID:  requestID,
+		LeaseID:    leaseID, IdempotencyKey: idempotencyKey, RequestHash: requestHash, Now: now,
 	})
 	if err != nil {
 		return contracts.PortSession{}, false, err
@@ -98,8 +98,8 @@ func (service *ControlPlaneService) GetSandboxPortSession(
 		return contracts.PortSession{}, err
 	}
 	session.Endpoint, err = service.portTunnelEndpoint(runnercontrol.PortTunnel{
-		Session: session, ProjectID: principal.ProjectID,
-		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
+		Session: session, TenantRef: principal.TenantRef,
+		SubjectRef: principal.SubjectRef,
 	})
 	return session, err
 }
@@ -125,10 +125,10 @@ func (service *ControlPlaneService) CloseSandboxPortSession(
 		return err
 	}
 	_, err = service.portSessionRelay.ClosePortSession(ctx, runnercontrol.PortTunnelClose{
-		ProjectID: principal.ProjectID, SandboxID: sandboxID, SessionID: sessionID,
-		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
-		ServiceAccountID: principal.ServiceAccountID, IdempotencyKey: idempotencyKey,
-		RequestHash: requestHash, Reason: "application requested close", Now: service.now().UTC(),
+		TenantRef: principal.TenantRef, SandboxID: sandboxID, SessionID: sessionID,
+		SubjectRef:     principal.SubjectRef,
+		IdempotencyKey: idempotencyKey,
+		RequestHash:    requestHash, Reason: "application requested close", Now: service.now().UTC(),
 	})
 	return err
 }
@@ -181,10 +181,10 @@ func (service *ControlPlaneService) ClosePortTunnel(
 		return errors.New("SecondBox PortSession close reason is required")
 	}
 	_, err := service.portSessionRelay.ClosePortSession(ctx, runnercontrol.PortTunnelClose{
-		ProjectID: tunnel.ProjectID, SandboxID: tunnel.Session.SandboxID,
-		TenantRef: tunnel.TenantRef, SubjectRef: tunnel.SubjectRef,
-		SessionID: tunnel.Session.ID, Generation: tunnel.Session.Generation,
-		ServiceAccountID: tunnel.ServiceAccountID, Reason: reason, Now: service.now().UTC(),
+		TenantRef: tunnel.TenantRef, SandboxID: tunnel.Session.SandboxID,
+		SubjectRef: tunnel.SubjectRef,
+		SessionID:  tunnel.Session.ID, Generation: tunnel.Session.Generation,
+		Reason: reason, Now: service.now().UTC(),
 	})
 	return err
 }

@@ -9,16 +9,6 @@ import (
 )
 
 const (
-	ProjectStateActive   = "active"
-	ProjectStateDisabled = "disabled"
-
-	ServiceAccountStateActive   = "active"
-	ServiceAccountStateDisabled = "disabled"
-
-	APIKeyStateActive  = "active"
-	APIKeyStateRevoked = "revoked"
-	APIKeyStateExpired = "expired"
-
 	ProfileStateEnabled  = "enabled"
 	ProfileStateDisabled = "disabled"
 
@@ -100,107 +90,10 @@ const (
 
 // Principal is the platform-asserted ownership scope for one request.
 type Principal struct {
-	Kind             string `json:"kind"`
-	ID               string `json:"id"`
-	ProjectID        string `json:"projectId,omitempty"`
-	ServiceAccountID string `json:"serviceAccountId,omitempty"`
-	TenantRef        string `json:"tenantRef,omitempty"`
-	SubjectRef       string `json:"subjectRef,omitempty"`
-}
-
-// Project is the application isolation and quota boundary.
-type Project struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	State     string    `json:"state"`
-	Revision  int64     `json:"revision"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
-}
-
-// ProjectPage is one bounded stable Project traversal page.
-type ProjectPage struct {
-	Items      []Project `json:"items"`
-	NextCursor *string   `json:"nextCursor,omitempty"`
-}
-
-// CreateProjectRequest creates one explicitly named Project.
-type CreateProjectRequest struct {
-	Name string `json:"name"`
-}
-
-// UpdateProjectRequest changes only supplied mutable Project fields.
-type UpdateProjectRequest struct {
-	Name  *string `json:"name,omitempty"`
-	State *string `json:"state,omitempty"`
-}
-
-// ServiceAccount is one non-human application identity inside a Project.
-type ServiceAccount struct {
-	ID            string    `json:"id"`
-	ProjectID     string    `json:"projectId"`
-	Name          string    `json:"name"`
-	State         string    `json:"state"`
-	Scopes        []string  `json:"scopes"`
-	ProfileGrants []string  `json:"profileGrants"`
-	Revision      int64     `json:"revision"`
-	CreatedAt     time.Time `json:"createdAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
-}
-
-// ServiceAccountPage is one bounded stable Project identity traversal page.
-type ServiceAccountPage struct {
-	Items      []ServiceAccount `json:"items"`
-	NextCursor *string          `json:"nextCursor,omitempty"`
-}
-
-// CreateServiceAccountRequest declares bounded application authority.
-type CreateServiceAccountRequest struct {
-	Name          string   `json:"name"`
-	Scopes        []string `json:"scopes"`
-	ProfileGrants []string `json:"profileGrants"`
-}
-
-// UpdateServiceAccountRequest changes only supplied authority fields.
-type UpdateServiceAccountRequest struct {
-	Name          *string   `json:"name,omitempty"`
-	State         *string   `json:"state,omitempty"`
-	Scopes        *[]string `json:"scopes,omitempty"`
-	ProfileGrants *[]string `json:"profileGrants,omitempty"`
-}
-
-// APIKey contains non-secret credential metadata; plaintext is never persisted.
-type APIKey struct {
-	ID               string     `json:"id"`
-	ServiceAccountID string     `json:"serviceAccountId"`
-	Name             string     `json:"name"`
-	Prefix           string     `json:"prefix"`
-	State            string     `json:"state"`
-	Scopes           []string   `json:"scopes"`
-	ExpiresAt        *time.Time `json:"expiresAt,omitempty"`
-	RevokedAt        *time.Time `json:"revokedAt,omitempty"`
-	LastUsedAt       *time.Time `json:"lastUsedAt,omitempty"`
-	Revision         int64      `json:"revision"`
-	CreatedAt        time.Time  `json:"createdAt"`
-}
-
-// APIKeyPage is one bounded stable non-secret credential metadata traversal page.
-type APIKeyPage struct {
-	Items      []APIKey `json:"items"`
-	NextCursor *string  `json:"nextCursor,omitempty"`
-}
-
-// CreateAPIKeyRequest declares the independently bounded key authority.
-type CreateAPIKeyRequest struct {
-	Name      string     `json:"name"`
-	Scopes    []string   `json:"scopes"`
-	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
-}
-
-// CreateAPIKeyResponse is the only response that contains plaintext credential material.
-type CreateAPIKeyResponse struct {
-	APIKey     APIKey `json:"apiKey"`
-	Credential string `json:"credential"`
+	Kind       string `json:"kind"`
+	ID         string `json:"id"`
+	TenantRef  string `json:"tenantRef,omitempty"`
+	SubjectRef string `json:"subjectRef,omitempty"`
 }
 
 // Profile is the stable name and mutable head for immutable policy revisions.
@@ -389,24 +282,21 @@ type Assignment struct {
 
 // Lease is bounded Project authority for one Sandbox generation.
 type Lease struct {
-	ID               string    `json:"id"`
-	ProjectID        string    `json:"-"`
-	TenantRef        string    `json:"-"`
-	SubjectRef       string    `json:"-"`
-	SandboxID        string    `json:"sandboxId"`
-	Generation       int64     `json:"generation"`
-	ServiceAccountID string    `json:"-"`
-	State            string    `json:"state"`
-	ExpiresAt        time.Time `json:"expiresAt"`
-	Revision         int64     `json:"-"`
-	CreatedAt        time.Time `json:"createdAt"`
-	UpdatedAt        time.Time `json:"updatedAt"`
+	ID         string    `json:"id"`
+	TenantRef  string    `json:"-"`
+	SubjectRef string    `json:"-"`
+	SandboxID  string    `json:"sandboxId"`
+	Generation int64     `json:"generation"`
+	State      string    `json:"state"`
+	ExpiresAt  time.Time `json:"expiresAt"`
+	Revision   int64     `json:"-"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 // Snapshot is one immutable retained projection of a committed workspace checkpoint.
 type Snapshot struct {
 	ID                 string            `json:"id"`
-	ProjectID          string            `json:"-"`
 	TenantRef          string            `json:"-"`
 	SubjectRef         string            `json:"-"`
 	SandboxID          string            `json:"sandboxId"`
@@ -440,7 +330,6 @@ type SnapshotPage struct {
 // Artifact is immutable application exchange evidence.
 type Artifact struct {
 	ID                 string            `json:"id"`
-	ProjectID          string            `json:"-"`
 	TenantRef          string            `json:"-"`
 	SubjectRef         string            `json:"-"`
 	SandboxID          string            `json:"sandboxId"`
@@ -549,7 +438,6 @@ type Instance struct {
 // ActivitySession is useful generation-bound work that prevents idle reclamation.
 type ActivitySession struct {
 	ID             string     `json:"id"`
-	ProjectID      string     `json:"projectId"`
 	TenantRef      string     `json:"tenantRef"`
 	SubjectRef     string     `json:"subjectRef"`
 	SandboxID      string     `json:"sandboxId"`
@@ -581,7 +469,6 @@ type WorkspaceMaterialization struct {
 // WorkspaceCheckpoint is immutable portable workspace publication evidence.
 type WorkspaceCheckpoint struct {
 	ID                 string            `json:"id"`
-	ProjectID          string            `json:"projectId"`
 	TenantRef          string            `json:"tenantRef"`
 	SubjectRef         string            `json:"subjectRef"`
 	SandboxID          string            `json:"sandboxId"`
@@ -600,9 +487,8 @@ type WorkspaceCheckpoint struct {
 // Sandbox is durable Project intent pinned to one immutable ProfileRevision.
 type Sandbox struct {
 	ID                string            `json:"id"`
-	ProjectID         string            `json:"projectId"`
-	TenantRef         string            `json:"tenantRef"`
-	SubjectRef        string            `json:"subjectRef"`
+	TenantRef         string            `json:"-"`
+	SubjectRef        string            `json:"-"`
 	Profile           string            `json:"profile"`
 	ProfileRevisionID string            `json:"profileRevisionId"`
 	State             string            `json:"state"`
@@ -960,7 +846,6 @@ type ProblemDetail struct {
 // AuditEvent is immutable security and administration evidence without secrets.
 type AuditEvent struct {
 	ID           string            `json:"id"`
-	ProjectID    string            `json:"projectId,omitempty"`
 	TenantRef    string            `json:"tenantRef,omitempty"`
 	SubjectRef   string            `json:"subjectRef,omitempty"`
 	ActorKind    string            `json:"actorKind"`

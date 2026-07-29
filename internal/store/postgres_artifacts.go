@@ -255,7 +255,6 @@ func (store *PostgresControlPlaneStore) PublishArtifact(
 	if err := json.Unmarshal(metadataJSON, &artifact.Metadata); err != nil {
 		return contracts.Artifact{}, fmt.Errorf("SecondBox Artifact metadata decoding failed: %w", err)
 	}
-	artifact.ProjectID = artifact.TenantRef
 	if err := tx.Commit(ctx); err != nil {
 		return contracts.Artifact{}, fmt.Errorf("SecondBox Artifact publication commit failed: %w", err)
 	}
@@ -441,6 +440,5 @@ func scanArtifact(row artifactRow) (contracts.Artifact, string, error) {
 	if err := json.Unmarshal(metadataJSON, &artifact.Metadata); err != nil {
 		return contracts.Artifact{}, "", fmt.Errorf("SecondBox Artifact metadata decoding failed: %w", err)
 	}
-	artifact.ProjectID = artifact.TenantRef
 	return artifact, storageKey, nil
 }

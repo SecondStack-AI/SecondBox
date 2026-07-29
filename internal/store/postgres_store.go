@@ -476,7 +476,7 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	}
 
 	sandbox := input.Sandbox
-	sandbox.ProjectID = input.Principal.ProjectID
+	sandbox.TenantRef = input.Principal.TenantRef
 	sandbox.TenantRef = input.Principal.TenantRef
 	sandbox.SubjectRef = input.Principal.SubjectRef
 	sandbox.ProfileRevisionID = profile.CurrentRevision.ID
@@ -761,7 +761,6 @@ func (store *PostgresControlPlaneStore) ListAuditEvents(
 		); err != nil {
 			return nil, fmt.Errorf("SecondBox audit list scan failed: %w", err)
 		}
-		event.ProjectID = event.TenantRef
 		if err := json.Unmarshal(detailsJSON, &event.Details); err != nil {
 			return nil, fmt.Errorf("SecondBox audit details decoding failed: %w", err)
 		}
@@ -902,7 +901,6 @@ func scanSandbox(row rowScanner) (contracts.Sandbox, error) {
 	); err != nil {
 		return contracts.Sandbox{}, err
 	}
-	sandbox.ProjectID = sandbox.TenantRef
 	if err := json.Unmarshal(metadataJSON, &sandbox.Metadata); err != nil {
 		return contracts.Sandbox{}, fmt.Errorf("SecondBox Sandbox metadata decoding failed: %w", err)
 	}
@@ -958,9 +956,6 @@ func encodeAuthorityLists(scopes []string, grants []string) ([]byte, []byte, err
 }
 
 func insertAuditEvent(ctx context.Context, tx pgx.Tx, event contracts.AuditEvent) error {
-	if event.TenantRef == "" {
-		event.TenantRef = event.ProjectID
-	}
 	if event.TenantRef == "" {
 		event.TenantRef = "secondbox"
 	}

@@ -81,8 +81,8 @@ func (service *ControlPlaneService) UploadSandboxArtifact(
 	}
 	now := service.now().UTC()
 	artifact := contracts.Artifact{
-		ID: service.newID("art"), ProjectID: principal.ProjectID,
-		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef, SandboxID: sandboxID,
+		ID: service.newID("art"), TenantRef: principal.TenantRef,
+		SubjectRef: principal.SubjectRef, SandboxID: sandboxID,
 		SourceGeneration: generation, Name: upload.Name, MediaType: upload.MediaType,
 		SizeBytes: upload.SizeBytes, SHA256: upload.SHA256,
 		Metadata: cloneMetadata(upload.Metadata),
@@ -94,7 +94,7 @@ func (service *ControlPlaneService) UploadSandboxArtifact(
 	storageKey := artifactStorageKey(artifact)
 	publication := ports.ArtifactPublicationInput{
 		Artifact: artifact, StorageKey: storageKey, ExpectedGeneration: generation,
-		ServiceAccountID: principal.ServiceAccountID, LeaseID: leaseID,
+		LeaseID:        leaseID,
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
 		IdempotencyEnds: now.Add(idempotencyRetention),
 	}
@@ -117,7 +117,7 @@ func (service *ControlPlaneService) UploadSandboxArtifact(
 		return contracts.Artifact{}, fmt.Errorf("%w: %v", ports.ErrArtifactStorage, err)
 	}
 	audit := service.newAudit(
-		ctx, principal, "artifact.published", "artifact", staged.ID, principal.ProjectID, now,
+		ctx, principal, "artifact.published", "artifact", staged.ID, principal.TenantRef, now,
 	)
 	published, err := service.store.PublishArtifact(ctx, publication, now)
 	if err != nil {
@@ -215,10 +215,10 @@ func (service *ControlPlaneService) DeleteArtifact(
 	now := service.now().UTC()
 	audit := service.newAudit(
 		ctx, principal, "artifact.retention_ended", "artifact",
-		artifactID, principal.ProjectID, now,
+		artifactID, principal.TenantRef, now,
 	)
 	if err := service.store.EndArtifactRetention(ctx, ports.ArtifactRetentionInput{
-		ProjectID: principal.ProjectID, TenantRef: principal.TenantRef,
+		TenantRef:  principal.TenantRef,
 		SubjectRef: principal.SubjectRef, ArtifactID: artifactID,
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
 		IdempotencyEnds: now.Add(idempotencyRetention), Now: now,
@@ -257,5 +257,5 @@ func validateArtifactUpload(upload ArtifactUpload) error {
 }
 
 func artifactStorageKey(artifact contracts.Artifact) string {
-	return "artifacts/" + artifact.ProjectID + "/" + artifact.SandboxID + "/" + artifact.ID
+	return "artifacts/" + artifact.TenantRef + "/" + artifact.SandboxID + "/" + artifact.ID
 }

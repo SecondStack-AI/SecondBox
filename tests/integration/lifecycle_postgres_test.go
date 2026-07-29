@@ -426,8 +426,8 @@ func TestDurableLifecycleGenerationActivityAndWorkspaceAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	artifact := contracts.Artifact{
-		ID: "art_lifecycle", ProjectID: sandbox.ProjectID, SandboxID: sandbox.ID,
-		TenantRef: sandbox.TenantRef, SubjectRef: sandbox.SubjectRef,
+		ID: "art_lifecycle", TenantRef: sandbox.TenantRef, SandboxID: sandbox.ID,
+		SubjectRef:       sandbox.SubjectRef,
 		SourceGeneration: nextGeneration, Name: "result.tar", MediaType: "application/x-tar",
 		SizeBytes: 1024,
 		SHA256:    "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",

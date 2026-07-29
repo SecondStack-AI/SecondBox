@@ -11,12 +11,8 @@ import (
 var (
 	ErrAuthenticationFailed    = errors.New("SecondBox credential authentication failed")
 	ErrAuthorizationDenied     = errors.New("SecondBox authorization denied")
-	ErrProjectNotFound         = errors.New("SecondBox Project not found")
-	ErrServiceAccountNotFound  = errors.New("SecondBox ServiceAccount not found")
-	ErrAPIKeyNotFound          = errors.New("SecondBox APIKey not found")
 	ErrProfileNotFound         = errors.New("SecondBox Profile not found")
 	ErrProfileDisabled         = errors.New("SecondBox Profile is disabled")
-	ErrProfileNotGranted       = errors.New("SecondBox Profile is not granted")
 	ErrRunnerPoolNotFound      = errors.New("SecondBox RunnerPool not found")
 	ErrRunnerPoolExists        = errors.New("SecondBox RunnerPool already exists")
 	ErrRunnerNotFound          = errors.New("SecondBox Runner not found")
@@ -48,7 +44,6 @@ var (
 
 // AdminIdempotencyInput binds one administrative mutation to an exact durable response.
 type AdminIdempotencyInput struct {
-	ProjectID   string
 	TenantRef   string
 	SubjectRef  string
 	Operation   string
@@ -91,23 +86,20 @@ type LifecycleIntentInput struct {
 
 // LeaseInput creates or renews bounded activity authority.
 type LeaseInput struct {
-	Lease            contracts.Lease
-	ProjectID        string
-	TenantRef        string
-	SubjectRef       string
-	SandboxID        string
-	Generation       int64
-	ServiceAccountID string
-	ExpiresAt        time.Time
-	Now              time.Time
-	IdempotencyKey   string
-	RequestHash      string
-	IdempotencyEnds  time.Time
+	Lease           contracts.Lease
+	TenantRef       string
+	SubjectRef      string
+	SandboxID       string
+	Generation      int64
+	ExpiresAt       time.Time
+	Now             time.Time
+	IdempotencyKey  string
+	RequestHash     string
+	IdempotencyEnds time.Time
 }
 
 // GenerationInput fences a lifecycle report to current Sandbox authority.
 type GenerationInput struct {
-	ProjectID  string
 	TenantRef  string
 	SubjectRef string
 	SandboxID  string
@@ -118,11 +110,10 @@ type GenerationInput struct {
 // ActivityInput records useful work without conflating guest liveness.
 type ActivityInput struct {
 	GenerationInput
-	Session          contracts.ActivitySession
-	LeaseID          string
-	ServiceAccountID string
-	IdempotencyKey   string
-	RequestHash      string
+	Session        contracts.ActivitySession
+	LeaseID        string
+	IdempotencyKey string
+	RequestHash    string
 }
 
 // MaterializationInput creates exclusive runner-local writer authority.
@@ -149,7 +140,6 @@ type SnapshotCreationInput struct {
 
 // SnapshotRetentionInput ends one immutable metadata root idempotently.
 type SnapshotRetentionInput struct {
-	ProjectID       string
 	TenantRef       string
 	SubjectRef      string
 	SnapshotID      string
@@ -164,7 +154,6 @@ type ArtifactPublicationInput struct {
 	Artifact           contracts.Artifact
 	StorageKey         string
 	ExpectedGeneration int64
-	ServiceAccountID   string
 	LeaseID            string
 	IdempotencyKey     string
 	RequestHash        string
@@ -179,7 +168,6 @@ type ArtifactObject struct {
 
 // ArtifactRetentionInput ends public reachability idempotently before provider garbage collection.
 type ArtifactRetentionInput struct {
-	ProjectID       string
 	TenantRef       string
 	SubjectRef      string
 	ArtifactID      string

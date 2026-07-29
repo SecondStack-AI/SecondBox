@@ -27,13 +27,13 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 	scopes := []string{"sandbox:read", "sandbox:lifecycle", "sandbox:ports"}
 	if _, err := updateFixtureServiceAccount(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
-		contracts.UpdateServiceAccountRequest{Scopes: &scopes},
+		fixtureUpdateServiceAccountRequest{Scopes: &scopes},
 	); err != nil {
 		t.Fatal(err)
 	}
 	key, err := createFixtureAPIKey(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
-		contracts.CreateAPIKeyRequest{Name: "port-session", Scopes: scopes},
+		fixtureCreateAPIKeyRequest{Name: "port-session", Scopes: scopes},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +125,7 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 		t.Fatalf("stale generation error = %v", err)
 	}
 	crossProject := principal
-	crossProject.ProjectID = "project-outside-port-authority"
+	crossProject.TenantRef = "project-outside-port-authority"
 	crossProject.TenantRef = "tenant-outside-port-authority"
 	if _, err := portService.GetSandboxPortSession(
 		t.Context(), crossProject, sandbox.ID, session.ID,

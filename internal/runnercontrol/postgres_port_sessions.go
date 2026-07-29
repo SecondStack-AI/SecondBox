@@ -21,15 +21,10 @@ func (relay *PostgresFrameRelay) AdmitPortSession(
 	ctx context.Context,
 	input PortSessionAdmission,
 ) (PortTunnel, bool, error) {
-	if input.TenantRef == "" {
-		input.TenantRef = input.ProjectID
-	}
 	if input.SubjectRef == "" {
-		input.SubjectRef = input.ServiceAccountID
 	}
-	if input.Session.ID == "" || input.StreamID == "" || input.ProjectID == "" ||
-		input.TenantRef == "" || input.SubjectRef == "" ||
-		input.Session.SandboxID == "" || input.ServiceAccountID == "" ||
+	if input.Session.ID == "" || input.StreamID == "" || input.TenantRef == "" ||
+		input.Session.SandboxID == "" || input.SubjectRef == "" ||
 		input.RequestID == "" || input.LeaseID == "" || input.IdempotencyKey == "" ||
 		input.RequestHash == "" || input.Session.Generation < 1 ||
 		input.Session.Name == "" || input.Session.ExpiresAt.IsZero() ||
@@ -85,7 +80,7 @@ func (relay *PostgresFrameRelay) AdmitPortSession(
 	}
 	tunnel.Session = input.Session
 	tunnel.Session.Protocol = policy.Protocol
-	tunnel.ProjectID, tunnel.ServiceAccountID = input.ProjectID, input.ServiceAccountID
+	tunnel.TenantRef, tunnel.SubjectRef = input.TenantRef, input.SubjectRef
 	tunnel.RequestID, tunnel.LeaseID, tunnel.StreamID = input.RequestID, input.LeaseID, input.StreamID
 	tunnel.GuestPort, tunnel.StreamWindowBytes = policy.Port, spec.Execution.StreamWindowBytes
 	if input.Session.ExpiresAt.After(input.Now.Add(time.Duration(policy.MaximumSessionSeconds) * time.Second)) {
@@ -101,7 +96,7 @@ func (relay *PostgresFrameRelay) AdmitPortSession(
 	}
 	session := DataPlaneSession{
 		ID: input.Session.ID, StreamID: input.StreamID,
-		ProjectID: input.ProjectID, TenantRef: tunnel.TenantRef, SubjectRef: tunnel.SubjectRef,
+		TenantRef: tunnel.TenantRef, SubjectRef: tunnel.SubjectRef,
 		SandboxID:         input.Session.SandboxID,
 		ProfileRevisionID: tunnel.ProfileRevisionID, AssignmentID: tunnel.AssignmentID,
 		InstanceID: tunnel.InstanceID, RunnerID: tunnel.RunnerID,
@@ -133,29 +128,11 @@ func (relay *PostgresFrameRelay) AdmitPortSession(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.data_plane_sessions (
-			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,assignment_id,instance_id,
-			runner_id,generation,fencing_token,service_account_id,request_id,lease_id,kind,operation,
-			stream_id,state,priority,idempotency_key,request_hash,deadline_at,
-			maximum_response_bytes,maximum_request_bytes,stream_window_bytes,response_credit_bytes,
-			request_stream_bytes,request_stream_closed,detachable,terminal_detach_seconds,
-			attachment_id,attached_at,detached_at,detach_expires_at,
-			outbound_bytes,inbound_bytes,next_inbound_sequence,
-			terminal_kind,terminal_detail,exit_code,signal,spawn_failure_reason,
-			elapsed_milliseconds,limit_bytes,infrastructure_failure_reason,retryable,terminal_message,
-			stdout_bytes,stderr_bytes,content_bytes,metadata_json,request_json,
-			created_at,updated_at,completed_at,retain_until
+			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,assignment_id,instance_id,runner_id,generation,fencing_token,request_id,lease_id,kind,operation,stream_id,state,priority,idempotency_key,request_hash,deadline_at,maximum_response_bytes,maximum_request_bytes,stream_window_bytes,response_credit_bytes,request_stream_bytes,request_stream_closed,detachable,terminal_detach_seconds,attachment_id,attached_at,detached_at,detach_expires_at,outbound_bytes,inbound_bytes,next_inbound_sequence,terminal_kind,terminal_detail,exit_code,signal,spawn_failure_reason,elapsed_milliseconds,limit_bytes,infrastructure_failure_reason,retryable,terminal_message,stdout_bytes,stderr_bytes,content_bytes,metadata_json,request_json,created_at,updated_at,completed_at,retain_until
 		) VALUES (
-			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'port',$14,$15,'pending',0,$16,$17,$18,
-			$19,$19,$20,0,0,false,false,0,'',NULL,NULL,NULL,$21,0,1,'','',0,0,'',0,0,'',false,'',
-			$22,$22,$22,'{}',$23,$24,$24,NULL,$25
+			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'port',$13,$14,'pending',0,$15,$16,$17,$18,$18,$19,0,0,false,false,0,'',NULL,NULL,NULL,$20,0,1,'','',0,0,'',0,0,'',false,'',$21,$21,$21,'{}',$22,$23,$23,NULL,$24
 		)`,
-		session.ID, session.TenantRef, session.SubjectRef,
-		session.SandboxID, session.ProfileRevisionID,
-		session.AssignmentID, session.InstanceID, session.RunnerID, session.Generation,
-		session.FencingToken, input.ServiceAccountID, input.RequestID, input.LeaseID,
-		session.Operation, session.StreamID, input.IdempotencyKey, input.RequestHash,
-		session.DeadlineAt, maximumPayloadBytes, tunnel.StreamWindowBytes,
-		len(openPayload), []byte{}, requestJSON, input.Now.UTC(), input.Now.UTC().Add(relay.retention),
+		session.ID, session.TenantRef, session.SubjectRef, session.SandboxID, session.ProfileRevisionID, session.AssignmentID, session.InstanceID, session.RunnerID, session.Generation, session.FencingToken, input.RequestID, input.LeaseID, session.Operation, session.StreamID, input.IdempotencyKey, input.RequestHash, session.DeadlineAt, maximumPayloadBytes, tunnel.StreamWindowBytes, len(openPayload), []byte{}, requestJSON, input.Now.UTC(), input.Now.UTC().Add(relay.retention),
 	); err != nil {
 		return PortTunnel{}, false, fmt.Errorf("SecondBox Port data-plane insert: %w", err)
 	}
@@ -171,16 +148,11 @@ func (relay *PostgresFrameRelay) AdmitPortSession(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.port_sessions (
-			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,data_plane_session_id,
-			service_account_id,lease_id,generation,name,guest_port,protocol,stream_window_bytes,
-			client_credit_bytes,client_bytes,runner_bytes,state,idempotency_key,request_hash,
-			expires_at,created_at,updated_at,connected_at,closed_at
-		) VALUES ($1,$2,$3,$4,$5,$1,$6,$7,$8,$9,$10,$11,$12,0,0,0,'open',$13,$14,$15,$16,$16,NULL,NULL)`,
-		input.Session.ID, tunnel.TenantRef, tunnel.SubjectRef,
-		input.Session.SandboxID, tunnel.ProfileRevisionID,
-		input.ServiceAccountID, input.LeaseID, input.Session.Generation, input.Session.Name,
-		policy.Port, policy.Protocol, tunnel.StreamWindowBytes, input.IdempotencyKey,
-		input.RequestHash, input.Session.ExpiresAt.UTC(), input.Now.UTC(),
+			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,data_plane_session_id,lease_id,generation,name,guest_port,protocol,stream_window_bytes,client_credit_bytes,client_bytes,runner_bytes,state,idempotency_key,request_hash,expires_at,created_at,updated_at,connected_at,closed_at
+		) VALUES (
+			$1,$2,$3,$4,$5,$1,$6,$7,$8,$9,$10,$11,0,0,0,'open',$12,$13,$14,$15,$15,NULL,NULL
+		)`,
+		input.Session.ID, tunnel.TenantRef, tunnel.SubjectRef, input.Session.SandboxID, tunnel.ProfileRevisionID, input.LeaseID, input.Session.Generation, input.Session.Name, policy.Port, policy.Protocol, tunnel.StreamWindowBytes, input.IdempotencyKey, input.RequestHash, input.Session.ExpiresAt.UTC(), input.Now.UTC(),
 	); err != nil {
 		return PortTunnel{}, false, fmt.Errorf("SecondBox PortSession insert: %w", err)
 	}
@@ -280,11 +252,7 @@ func (relay *PostgresFrameRelay) ClosePortSession(
 	ctx context.Context,
 	input PortTunnelClose,
 ) (contracts.PortSession, error) {
-	if input.TenantRef == "" {
-		input.TenantRef = input.ProjectID
-	}
 	if input.SubjectRef == "" {
-		input.SubjectRef = input.ServiceAccountID
 	}
 	if input.TenantRef == "" || input.SubjectRef == "" ||
 		input.SandboxID == "" || input.SessionID == "" || input.Reason == "" {
@@ -864,7 +832,7 @@ func portRelayMessage(
 const portTunnelSelect = `
 	SELECT
 	  port.id,port.sandbox_id,port.generation,port.name,port.protocol,port.state,
-	  port.created_at,port.expires_at,port.service_account_id,port.lease_id,
+	  port.created_at,port.expires_at,port.lease_id,
 	  port.profile_revision_id,session.assignment_id,session.instance_id,session.runner_id,
 	  session.request_id,
 	  session.stream_id,session.fencing_token,port.guest_port,port.stream_window_bytes,
@@ -912,7 +880,7 @@ func scanPortTunnel(row relayRow) (PortTunnel, error) {
 		&tunnel.Session.ID, &tunnel.Session.SandboxID, &tunnel.Session.Generation,
 		&tunnel.Session.Name, &tunnel.Session.Protocol, &tunnel.Session.State,
 		&tunnel.Session.CreatedAt, &tunnel.Session.ExpiresAt,
-		&tunnel.ServiceAccountID, &tunnel.LeaseID, &tunnel.ProfileRevisionID,
+		&tunnel.LeaseID, &tunnel.ProfileRevisionID,
 		&tunnel.AssignmentID, &tunnel.InstanceID, &tunnel.RunnerID, &tunnel.RequestID, &tunnel.StreamID,
 		&tunnel.FencingToken, &tunnel.GuestPort, &tunnel.StreamWindowBytes,
 		&tunnel.TenantRef, &tunnel.SubjectRef,
@@ -923,7 +891,6 @@ func scanPortTunnel(row relayRow) (PortTunnel, error) {
 	if err != nil {
 		return PortTunnel{}, fmt.Errorf("SecondBox PortSession lookup: %w", err)
 	}
-	tunnel.ProjectID = tunnel.TenantRef
 	return tunnel, nil
 }
 
