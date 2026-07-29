@@ -248,81 +248,95 @@ type rollbackManifest struct {
 	CapacityBytes      int64  `json:"capacityBytes"`
 }
 
+func (store *Store) mutate(
+	ctx context.Context,
+	request any,
+	mutation Mutation,
+	kind string,
+	apply func() (Receipt, error),
+) (Receipt, error) {
+	if err := ctx.Err(); err != nil {
+		return Receipt{}, err
+	}
+	if err := validateMutation(mutation); err != nil {
+		return Receipt{}, err
+	}
+	digest, err := inputDigest(request, mutation.FencingToken)
+	if err != nil {
+		return Receipt{}, err
+	}
+	if receipt, found, err := store.loadReceipt(mutation, digest, kind); found || err != nil {
+		return receipt, err
+	}
+	lock, err := store.lockWorkspace(mutation.WorkspaceID)
+	if err != nil {
+		return Receipt{}, err
+	}
+	defer closeLockedFile(lock)
+	if receipt, found, err := store.loadReceipt(mutation, digest, kind); found || err != nil {
+		return receipt, err
+	}
+	receipt, err := apply()
+	if err != nil {
+		return Receipt{}, err
+	}
+	receipt.Kind = kind
+	receipt.OperationID = mutation.OperationID
+	receipt.WorkspaceID = mutation.WorkspaceID
+	receipt.InputDigest = digest
+	return store.recordReceipt(receipt)
+}
+
 // Create creates and formats one sparse raw ext4 image, then atomically
 // publishes generation one and its durable operation receipt.
 func (store *Store) Create(
 	ctx context.Context,
 	request CreateWorkspaceRequest,
 ) (Receipt, error) {
-	if err := validateMutation(request.Mutation); err != nil {
-		return Receipt{}, err
-	}
 	if request.CapacityBytes < minimumExt4Bytes {
 		return Receipt{}, fmt.Errorf(
 			"SecondBox WorkspaceStore logical capacity must be at least %d bytes",
 			minimumExt4Bytes,
 		)
 	}
-	digest, err := inputDigest(request)
-	if err != nil {
-		return Receipt{}, err
-	}
-	if receipt, found, err := store.loadReceipt(request.Mutation, digest, ReceiptWorkspaceCreate); found || err != nil {
-		return receipt, err
-	}
-	lock, err := store.lockWorkspace(request.WorkspaceID)
-	if err != nil {
-		return Receipt{}, err
-	}
-	defer closeLockedFile(lock)
-	if receipt, found, err := store.loadReceipt(request.Mutation, digest, ReceiptWorkspaceCreate); found || err != nil {
-		return receipt, err
-	}
-
-	if err := store.ensureWorkspaceLayout(request.WorkspaceID); err != nil {
-		return Receipt{}, err
-	}
-	manifest, manifestErr := store.readCurrentManifest(request.WorkspaceID)
-	if manifestErr == nil {
-		if manifest.Generation != 1 || manifest.CapacityBytes != request.CapacityBytes {
-			return Receipt{}, ErrConflictingReplay
-		}
-		if err := store.validateImage(request.WorkspaceID, manifest.Image, request.CapacityBytes); err != nil {
+	return store.mutate(ctx, request, request.Mutation, ReceiptWorkspaceCreate, func() (Receipt, error) {
+		if err := store.ensureWorkspaceLayout(request.WorkspaceID); err != nil {
 			return Receipt{}, err
 		}
-		return store.recordReceipt(Receipt{
-			Kind: ReceiptWorkspaceCreate, OperationID: request.OperationID,
-			WorkspaceID: request.WorkspaceID, InputDigest: digest,
-			Generation: 1, CapacityBytes: request.CapacityBytes,
-		})
-	}
-	if !errors.Is(manifestErr, ErrWorkspaceNotFound) {
-		return Receipt{}, manifestErr
-	}
+		manifest, manifestErr := store.readCurrentManifest(request.WorkspaceID)
+		if manifestErr == nil {
+			if manifest.Generation != 1 || manifest.CapacityBytes != request.CapacityBytes {
+				return Receipt{}, ErrConflictingReplay
+			}
+			if err := store.validateImage(request.WorkspaceID, manifest.Image, request.CapacityBytes); err != nil {
+				return Receipt{}, err
+			}
+			return Receipt{Generation: 1, CapacityBytes: request.CapacityBytes}, nil
+		}
+		if !errors.Is(manifestErr, ErrWorkspaceNotFound) {
+			return Receipt{}, manifestErr
+		}
 
-	imageName := generationImageName(1, "create")
-	imagePath := store.versionPath(request.WorkspaceID, imageName)
-	if err := store.createFormattedImage(
-		ctx,
-		request.WorkspaceID,
-		request.OperationID,
-		imagePath,
-		request.CapacityBytes,
-	); err != nil {
-		return Receipt{}, err
-	}
-	manifest = currentManifest{
-		FormatVersion: currentManifestFormatVersion,
-		WorkspaceID:   request.WorkspaceID, Generation: 1,
-		Image: imageName, CapacityBytes: request.CapacityBytes,
-	}
-	if err := store.publishCurrentManifest(request.WorkspaceID, manifest); err != nil {
-		return Receipt{}, err
-	}
-	return store.recordReceipt(Receipt{
-		Kind: ReceiptWorkspaceCreate, OperationID: request.OperationID,
-		WorkspaceID: request.WorkspaceID, InputDigest: digest,
-		Generation: 1, CapacityBytes: request.CapacityBytes,
+		imageName := generationImageName(1, "create")
+		imagePath := store.versionPath(request.WorkspaceID, imageName)
+		if err := store.createFormattedImage(
+			ctx,
+			request.WorkspaceID,
+			request.OperationID,
+			imagePath,
+			request.CapacityBytes,
+		); err != nil {
+			return Receipt{}, err
+		}
+		manifest = currentManifest{
+			FormatVersion: currentManifestFormatVersion,
+			WorkspaceID:   request.WorkspaceID, Generation: 1,
+			Image: imageName, CapacityBytes: request.CapacityBytes,
+		}
+		if err := store.publishCurrentManifest(request.WorkspaceID, manifest); err != nil {
+			return Receipt{}, err
+		}
+		return Receipt{Generation: 1, CapacityBytes: request.CapacityBytes}, nil
 	})
 }
 
@@ -390,53 +404,36 @@ func (store *Store) AdvanceGeneration(
 	ctx context.Context,
 	request AdvanceGenerationRequest,
 ) (Receipt, error) {
-	if err := validateMutation(request.Mutation); err != nil {
-		return Receipt{}, err
-	}
 	if request.NextGeneration != request.ExpectedGeneration+1 {
 		return Receipt{}, ErrStaleGeneration
 	}
-	digest, err := inputDigest(request)
-	if err != nil {
-		return Receipt{}, err
-	}
-	if receipt, found, err := store.loadReceipt(request.Mutation, digest, ReceiptGenerationAdvance); found || err != nil {
-		return receipt, err
-	}
-	lock, err := store.lockWorkspace(request.WorkspaceID)
-	if err != nil {
-		return Receipt{}, err
-	}
-	defer closeLockedFile(lock)
-	manifest, err := store.readCurrentManifest(request.WorkspaceID)
-	if err != nil {
-		return Receipt{}, err
-	}
-	if manifest.Generation == request.NextGeneration {
-		return store.recordReceipt(Receipt{
-			Kind: ReceiptGenerationAdvance, OperationID: request.OperationID,
-			WorkspaceID: request.WorkspaceID, InputDigest: digest,
+	return store.mutate(ctx, request, request.Mutation, ReceiptGenerationAdvance, func() (Receipt, error) {
+		manifest, err := store.readCurrentManifest(request.WorkspaceID)
+		if err != nil {
+			return Receipt{}, err
+		}
+		if manifest.Generation == request.NextGeneration {
+			return Receipt{
+				PreviousGeneration: request.ExpectedGeneration,
+				Generation:         request.NextGeneration, CapacityBytes: manifest.CapacityBytes,
+			}, nil
+		}
+		if manifest.Generation != request.ExpectedGeneration {
+			return Receipt{}, ErrStaleGeneration
+		}
+		if pending, err := store.stagedRestorePending(request.WorkspaceID); err != nil {
+			return Receipt{}, err
+		} else if pending {
+			return Receipt{}, ErrRestorePending
+		}
+		manifest.Generation = request.NextGeneration
+		if err := store.publishCurrentManifest(request.WorkspaceID, manifest); err != nil {
+			return Receipt{}, err
+		}
+		return Receipt{
 			PreviousGeneration: request.ExpectedGeneration,
 			Generation:         request.NextGeneration, CapacityBytes: manifest.CapacityBytes,
-		})
-	}
-	if manifest.Generation != request.ExpectedGeneration {
-		return Receipt{}, ErrStaleGeneration
-	}
-	if pending, err := store.stagedRestorePending(request.WorkspaceID); err != nil {
-		return Receipt{}, err
-	} else if pending {
-		return Receipt{}, ErrRestorePending
-	}
-	manifest.Generation = request.NextGeneration
-	if err := store.publishCurrentManifest(request.WorkspaceID, manifest); err != nil {
-		return Receipt{}, err
-	}
-	return store.recordReceipt(Receipt{
-		Kind: ReceiptGenerationAdvance, OperationID: request.OperationID,
-		WorkspaceID: request.WorkspaceID, InputDigest: digest,
-		PreviousGeneration: request.ExpectedGeneration,
-		Generation:         request.NextGeneration, CapacityBytes: manifest.CapacityBytes,
+		}, nil
 	})
 }
 
@@ -446,91 +443,74 @@ func (store *Store) CreateSnapshot(
 	ctx context.Context,
 	request CreateSnapshotRequest,
 ) (Receipt, error) {
-	if err := validateMutation(request.Mutation); err != nil {
-		return Receipt{}, err
-	}
 	if err := validateID(request.SnapshotID); err != nil {
 		return Receipt{}, err
 	}
-	digest, err := inputDigest(request)
-	if err != nil {
-		return Receipt{}, err
-	}
-	if receipt, found, err := store.loadReceipt(request.Mutation, digest, ReceiptSnapshotCreate); found || err != nil {
-		return receipt, err
-	}
-	lock, err := store.lockWorkspace(request.WorkspaceID)
-	if err != nil {
-		return Receipt{}, err
-	}
-	defer closeLockedFile(lock)
-	manifest, err := store.readCurrentManifest(request.WorkspaceID)
-	if err != nil {
-		return Receipt{}, err
-	}
-	if manifest.Generation != request.ExpectedGeneration {
-		return Receipt{}, ErrStaleGeneration
-	}
-	if pending, err := store.stagedRestorePending(request.WorkspaceID); err != nil {
-		return Receipt{}, err
-	} else if pending {
-		return Receipt{}, ErrRestorePending
-	}
-	if existing, err := store.readSnapshotManifest(request.SnapshotID); err == nil {
-		if existing.WorkspaceID != request.WorkspaceID ||
-			existing.Generation != request.ExpectedGeneration ||
-			existing.CapacityBytes != manifest.CapacityBytes {
-			return Receipt{}, ErrConflictingReplay
-		}
-		if err := validateExt4Image(store.snapshotImagePath(request.SnapshotID), manifest.CapacityBytes); err != nil {
+	return store.mutate(ctx, request, request.Mutation, ReceiptSnapshotCreate, func() (Receipt, error) {
+		manifest, err := store.readCurrentManifest(request.WorkspaceID)
+		if err != nil {
 			return Receipt{}, err
 		}
-		return store.recordReceipt(Receipt{
-			Kind: ReceiptSnapshotCreate, OperationID: request.OperationID,
-			WorkspaceID: request.WorkspaceID, SnapshotID: request.SnapshotID,
-			InputDigest: digest, Generation: manifest.Generation,
-			CapacityBytes: manifest.CapacityBytes,
-		})
-	} else if !errors.Is(err, ErrSnapshotNotFound) {
-		return Receipt{}, err
-	}
+		if manifest.Generation != request.ExpectedGeneration {
+			return Receipt{}, ErrStaleGeneration
+		}
+		if pending, err := store.stagedRestorePending(request.WorkspaceID); err != nil {
+			return Receipt{}, err
+		} else if pending {
+			return Receipt{}, ErrRestorePending
+		}
+		if existing, err := store.readSnapshotManifest(request.SnapshotID); err == nil {
+			if existing.WorkspaceID != request.WorkspaceID ||
+				existing.Generation != request.ExpectedGeneration ||
+				existing.CapacityBytes != manifest.CapacityBytes {
+				return Receipt{}, ErrConflictingReplay
+			}
+			if err := validateExt4Image(store.snapshotImagePath(request.SnapshotID), manifest.CapacityBytes); err != nil {
+				return Receipt{}, err
+			}
+			return Receipt{
+				SnapshotID: request.SnapshotID, Generation: manifest.Generation,
+				CapacityBytes: manifest.CapacityBytes,
+			}, nil
+		} else if !errors.Is(err, ErrSnapshotNotFound) {
+			return Receipt{}, err
+		}
 
-	if err := os.Mkdir(store.snapshotDir(request.SnapshotID), privateDirectoryMode); err != nil &&
-		!errors.Is(err, os.ErrExist) {
-		return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore create Snapshot directory: %w", err)
-	}
-	sourcePath, err := store.validatedVersionPath(request.WorkspaceID, manifest.Image)
-	if err != nil {
-		return Receipt{}, err
-	}
-	if err := store.cloneImage(
-		sourcePath,
-		store.snapshotImagePath(request.SnapshotID),
-		snapshotImageMode,
-		manifest.CapacityBytes,
-		request.OperationID,
-	); err != nil {
-		return Receipt{}, err
-	}
-	snapshot := snapshotManifest{
-		FormatVersion: currentManifestFormatVersion,
-		SnapshotID:    request.SnapshotID, WorkspaceID: request.WorkspaceID,
-		Generation: manifest.Generation, CapacityBytes: manifest.CapacityBytes,
-	}
-	if err := atomicJSON(store.snapshotManifestPath(request.SnapshotID), snapshot); err != nil {
-		return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore publish Snapshot manifest: %w", err)
-	}
-	if err := syncDir(store.snapshotDir(request.SnapshotID)); err != nil {
-		return Receipt{}, err
-	}
-	if err := syncDir(store.snapshotsRoot()); err != nil {
-		return Receipt{}, err
-	}
-	return store.recordReceipt(Receipt{
-		Kind: ReceiptSnapshotCreate, OperationID: request.OperationID,
-		WorkspaceID: request.WorkspaceID, SnapshotID: request.SnapshotID,
-		InputDigest: digest, Generation: manifest.Generation,
-		CapacityBytes: manifest.CapacityBytes,
+		if err := os.Mkdir(store.snapshotDir(request.SnapshotID), privateDirectoryMode); err != nil &&
+			!errors.Is(err, os.ErrExist) {
+			return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore create Snapshot directory: %w", err)
+		}
+		sourcePath, err := store.validatedVersionPath(request.WorkspaceID, manifest.Image)
+		if err != nil {
+			return Receipt{}, err
+		}
+		if err := store.cloneImage(
+			sourcePath,
+			store.snapshotImagePath(request.SnapshotID),
+			snapshotImageMode,
+			manifest.CapacityBytes,
+			request.OperationID,
+		); err != nil {
+			return Receipt{}, err
+		}
+		snapshot := snapshotManifest{
+			FormatVersion: currentManifestFormatVersion,
+			SnapshotID:    request.SnapshotID, WorkspaceID: request.WorkspaceID,
+			Generation: manifest.Generation, CapacityBytes: manifest.CapacityBytes,
+		}
+		if err := atomicJSON(store.snapshotManifestPath(request.SnapshotID), snapshot); err != nil {
+			return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore publish Snapshot manifest: %w", err)
+		}
+		if err := syncDir(store.snapshotDir(request.SnapshotID)); err != nil {
+			return Receipt{}, err
+		}
+		if err := syncDir(store.snapshotsRoot()); err != nil {
+			return Receipt{}, err
+		}
+		return Receipt{
+			SnapshotID: request.SnapshotID, Generation: manifest.Generation,
+			CapacityBytes: manifest.CapacityBytes,
+		}, nil
 	})
 }
 
@@ -540,70 +520,48 @@ func (store *Store) DeleteSnapshot(
 	ctx context.Context,
 	request DeleteSnapshotRequest,
 ) (Receipt, error) {
-	if err := ctx.Err(); err != nil {
-		return Receipt{}, err
-	}
-	if err := validateMutation(request.Mutation); err != nil {
-		return Receipt{}, err
-	}
 	if err := validateID(request.SnapshotID); err != nil {
 		return Receipt{}, err
 	}
-	digest, err := inputDigest(request)
-	if err != nil {
-		return Receipt{}, err
-	}
-	if receipt, found, err := store.loadReceipt(request.Mutation, digest, ReceiptSnapshotDelete); found || err != nil {
-		return receipt, err
-	}
-	lock, err := store.lockWorkspace(request.WorkspaceID)
-	if err != nil {
-		return Receipt{}, err
-	}
-	defer closeLockedFile(lock)
-	snapshot, err := store.readSnapshotManifest(request.SnapshotID)
-	if errors.Is(err, ErrSnapshotNotFound) {
-		return store.recordReceipt(Receipt{
-			Kind: ReceiptSnapshotDelete, OperationID: request.OperationID,
-			WorkspaceID: request.WorkspaceID, SnapshotID: request.SnapshotID,
-			InputDigest: digest,
-		})
-	}
-	if err != nil {
-		return Receipt{}, err
-	}
-	if snapshot.WorkspaceID != request.WorkspaceID {
-		return Receipt{}, ErrConflictingReplay
-	}
-	inUse, err := store.snapshotReferencedByRestore(request.WorkspaceID, request.SnapshotID)
-	if err != nil {
-		return Receipt{}, err
-	}
-	if inUse {
-		return Receipt{}, ErrSnapshotInUse
-	}
-	if err := os.Chmod(store.snapshotImagePath(request.SnapshotID), writableImageMode); err != nil &&
-		!errors.Is(err, os.ErrNotExist) {
-		return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore make Snapshot deletable: %w", err)
-	}
-	if err := removeExactFile(store.snapshotImagePath(request.SnapshotID)); err != nil {
-		return Receipt{}, err
-	}
-	if err := removeExactFile(store.snapshotManifestPath(request.SnapshotID)); err != nil {
-		return Receipt{}, err
-	}
-	if err := os.Remove(store.snapshotDir(request.SnapshotID)); err != nil &&
-		!errors.Is(err, os.ErrNotExist) {
-		return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore remove Snapshot directory: %w", err)
-	}
-	if err := syncDir(store.snapshotsRoot()); err != nil {
-		return Receipt{}, err
-	}
-	return store.recordReceipt(Receipt{
-		Kind: ReceiptSnapshotDelete, OperationID: request.OperationID,
-		WorkspaceID: request.WorkspaceID, SnapshotID: request.SnapshotID,
-		InputDigest: digest, Generation: snapshot.Generation,
-		CapacityBytes: snapshot.CapacityBytes,
+	return store.mutate(ctx, request, request.Mutation, ReceiptSnapshotDelete, func() (Receipt, error) {
+		snapshot, err := store.readSnapshotManifest(request.SnapshotID)
+		if errors.Is(err, ErrSnapshotNotFound) {
+			return Receipt{SnapshotID: request.SnapshotID}, nil
+		}
+		if err != nil {
+			return Receipt{}, err
+		}
+		if snapshot.WorkspaceID != request.WorkspaceID {
+			return Receipt{}, ErrConflictingReplay
+		}
+		inUse, err := store.snapshotReferencedByRestore(request.WorkspaceID, request.SnapshotID)
+		if err != nil {
+			return Receipt{}, err
+		}
+		if inUse {
+			return Receipt{}, ErrSnapshotInUse
+		}
+		if err := os.Chmod(store.snapshotImagePath(request.SnapshotID), writableImageMode); err != nil &&
+			!errors.Is(err, os.ErrNotExist) {
+			return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore make Snapshot deletable: %w", err)
+		}
+		if err := removeExactFile(store.snapshotImagePath(request.SnapshotID)); err != nil {
+			return Receipt{}, err
+		}
+		if err := removeExactFile(store.snapshotManifestPath(request.SnapshotID)); err != nil {
+			return Receipt{}, err
+		}
+		if err := os.Remove(store.snapshotDir(request.SnapshotID)); err != nil &&
+			!errors.Is(err, os.ErrNotExist) {
+			return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore remove Snapshot directory: %w", err)
+		}
+		if err := syncDir(store.snapshotsRoot()); err != nil {
+			return Receipt{}, err
+		}
+		return Receipt{
+			SnapshotID: request.SnapshotID, Generation: snapshot.Generation,
+			CapacityBytes: snapshot.CapacityBytes,
+		}, nil
 	})
 }
 
@@ -621,93 +579,79 @@ func (store *Store) PrepareRestore(
 	); err != nil {
 		return Receipt{}, err
 	}
-	digest, err := inputDigest(request)
-	if err != nil {
-		return Receipt{}, err
-	}
-	if receipt, found, err := store.loadReceipt(request.Mutation, digest, ReceiptRestorePrepare); found || err != nil {
-		return receipt, err
-	}
-	lock, err := store.lockWorkspace(request.WorkspaceID)
-	if err != nil {
-		return Receipt{}, err
-	}
-	defer closeLockedFile(lock)
-	manifest, err := store.readCurrentManifest(request.WorkspaceID)
-	if err != nil {
-		return Receipt{}, err
-	}
-	if manifest.Generation != request.ExpectedGeneration {
-		return Receipt{}, ErrStaleGeneration
-	}
-	snapshot, err := store.readSnapshotManifest(request.SnapshotID)
-	if err != nil {
-		return Receipt{}, err
-	}
-	if snapshot.WorkspaceID != request.WorkspaceID ||
-		snapshot.CapacityBytes != manifest.CapacityBytes {
-		return Receipt{}, ErrConflictingReplay
-	}
-	if err := validateExt4Image(
-		store.snapshotImagePath(request.SnapshotID),
-		snapshot.CapacityBytes,
-	); errors.Is(err, os.ErrNotExist) {
-		return Receipt{}, ErrSnapshotNotFound
-	} else if err != nil {
-		return Receipt{}, err
-	}
-	if pending, err := store.pendingRestoreOperation(request.WorkspaceID); err != nil {
-		return Receipt{}, err
-	} else if pending != "" && pending != request.OperationID {
-		return Receipt{}, ErrRestorePending
-	}
-	if staged, err := store.readStagedRestore(request.WorkspaceID, request.OperationID); err == nil {
-		if !stagedMatches(staged, request) {
+	return store.mutate(ctx, request, request.Mutation, ReceiptRestorePrepare, func() (Receipt, error) {
+		manifest, err := store.readCurrentManifest(request.WorkspaceID)
+		if err != nil {
+			return Receipt{}, err
+		}
+		if manifest.Generation != request.ExpectedGeneration {
+			return Receipt{}, ErrStaleGeneration
+		}
+		snapshot, err := store.readSnapshotManifest(request.SnapshotID)
+		if err != nil {
+			return Receipt{}, err
+		}
+		if snapshot.WorkspaceID != request.WorkspaceID ||
+			snapshot.CapacityBytes != manifest.CapacityBytes {
 			return Receipt{}, ErrConflictingReplay
 		}
 		if err := validateExt4Image(
+			store.snapshotImagePath(request.SnapshotID),
+			snapshot.CapacityBytes,
+		); errors.Is(err, os.ErrNotExist) {
+			return Receipt{}, ErrSnapshotNotFound
+		} else if err != nil {
+			return Receipt{}, err
+		}
+		if pending, err := store.pendingRestoreOperation(request.WorkspaceID); err != nil {
+			return Receipt{}, err
+		} else if pending != "" && pending != request.OperationID {
+			return Receipt{}, ErrRestorePending
+		}
+		if staged, err := store.readStagedRestore(request.WorkspaceID, request.OperationID); err == nil {
+			if !stagedMatches(staged, request) {
+				return Receipt{}, ErrConflictingReplay
+			}
+			if err := validateExt4Image(
+				store.stagedImagePath(request.WorkspaceID, request.OperationID),
+				manifest.CapacityBytes,
+			); err != nil {
+				return Receipt{}, err
+			}
+			return Receipt{
+				SnapshotID: request.SnapshotID, PreviousGeneration: request.ExpectedGeneration,
+				Generation: request.NextGeneration, CapacityBytes: manifest.CapacityBytes,
+			}, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return Receipt{}, err
+		}
+		if err := store.cloneImage(
+			store.snapshotImagePath(request.SnapshotID),
 			store.stagedImagePath(request.WorkspaceID, request.OperationID),
+			writableImageMode,
 			manifest.CapacityBytes,
+			request.OperationID,
 		); err != nil {
 			return Receipt{}, err
 		}
-		return store.recordReceipt(Receipt{
-			Kind: ReceiptRestorePrepare, OperationID: request.OperationID,
-			WorkspaceID: request.WorkspaceID, SnapshotID: request.SnapshotID,
-			InputDigest: digest, PreviousGeneration: request.ExpectedGeneration,
+		staged := stagedRestore{
+			FormatVersion: currentManifestFormatVersion,
+			OperationID:   request.OperationID, WorkspaceID: request.WorkspaceID,
+			SnapshotID: request.SnapshotID, ExpectedGeneration: request.ExpectedGeneration,
+			NextGeneration: request.NextGeneration,
+			Image:          generationImageName(request.NextGeneration, "restore-"+request.OperationID),
+			CapacityBytes:  manifest.CapacityBytes,
+		}
+		if err := atomicJSON(store.stagedManifestPath(request.WorkspaceID, request.OperationID), staged); err != nil {
+			return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore publish staged restore: %w", err)
+		}
+		if err := syncDir(store.stagedDir(request.WorkspaceID)); err != nil {
+			return Receipt{}, err
+		}
+		return Receipt{
+			SnapshotID: request.SnapshotID, PreviousGeneration: request.ExpectedGeneration,
 			Generation: request.NextGeneration, CapacityBytes: manifest.CapacityBytes,
-		})
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return Receipt{}, err
-	}
-	if err := store.cloneImage(
-		store.snapshotImagePath(request.SnapshotID),
-		store.stagedImagePath(request.WorkspaceID, request.OperationID),
-		writableImageMode,
-		manifest.CapacityBytes,
-		request.OperationID,
-	); err != nil {
-		return Receipt{}, err
-	}
-	staged := stagedRestore{
-		FormatVersion: currentManifestFormatVersion,
-		OperationID:   request.OperationID, WorkspaceID: request.WorkspaceID,
-		SnapshotID: request.SnapshotID, ExpectedGeneration: request.ExpectedGeneration,
-		NextGeneration: request.NextGeneration,
-		Image:          generationImageName(request.NextGeneration, "restore-"+request.OperationID),
-		CapacityBytes:  manifest.CapacityBytes,
-	}
-	if err := atomicJSON(store.stagedManifestPath(request.WorkspaceID, request.OperationID), staged); err != nil {
-		return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore publish staged restore: %w", err)
-	}
-	if err := syncDir(store.stagedDir(request.WorkspaceID)); err != nil {
-		return Receipt{}, err
-	}
-	return store.recordReceipt(Receipt{
-		Kind: ReceiptRestorePrepare, OperationID: request.OperationID,
-		WorkspaceID: request.WorkspaceID, SnapshotID: request.SnapshotID,
-		InputDigest: digest, PreviousGeneration: request.ExpectedGeneration,
-		Generation: request.NextGeneration, CapacityBytes: manifest.CapacityBytes,
+		}, nil
 	})
 }
 
@@ -717,9 +661,6 @@ func (store *Store) SwapRestore(
 	ctx context.Context,
 	request SwapRestoreRequest,
 ) (Receipt, error) {
-	if err := ctx.Err(); err != nil {
-		return Receipt{}, err
-	}
 	if err := validateRestoreRequest(
 		request.Mutation,
 		request.SnapshotID,
@@ -728,95 +669,81 @@ func (store *Store) SwapRestore(
 	); err != nil {
 		return Receipt{}, err
 	}
-	digest, err := inputDigest(request)
-	if err != nil {
-		return Receipt{}, err
-	}
-	if receipt, found, err := store.loadReceipt(request.Mutation, digest, ReceiptRestoreSwap); found || err != nil {
-		return receipt, err
-	}
-	lock, err := store.lockWorkspace(request.WorkspaceID)
-	if err != nil {
-		return Receipt{}, err
-	}
-	defer closeLockedFile(lock)
-	staged, err := store.readStagedRestore(request.WorkspaceID, request.OperationID)
-	if err != nil {
-		return Receipt{}, fmt.Errorf("%w: staged restore: %v", ErrCorruptState, err)
-	}
-	swapRequest := PrepareRestoreRequest{
-		Mutation: request.Mutation, SnapshotID: request.SnapshotID,
-		ExpectedGeneration: request.ExpectedGeneration,
-		NextGeneration:     request.NextGeneration,
-	}
-	if !stagedMatches(staged, swapRequest) {
-		return Receipt{}, ErrConflictingReplay
-	}
-	manifest, err := store.readCurrentManifest(request.WorkspaceID)
-	if err != nil {
-		return Receipt{}, err
-	}
-	if manifest.Generation == request.NextGeneration && manifest.Image == staged.Image {
-		rollback, rollbackErr := store.readRollback(request.WorkspaceID, request.OperationID)
-		if rollbackErr != nil {
-			return Receipt{}, fmt.Errorf("%w: swapped restore lacks rollback evidence", ErrCorruptState)
+	return store.mutate(ctx, request, request.Mutation, ReceiptRestoreSwap, func() (Receipt, error) {
+		staged, err := store.readStagedRestore(request.WorkspaceID, request.OperationID)
+		if err != nil {
+			return Receipt{}, fmt.Errorf("%w: staged restore: %v", ErrCorruptState, err)
 		}
-		return store.recordReceipt(Receipt{
-			Kind: ReceiptRestoreSwap, OperationID: request.OperationID,
-			WorkspaceID: request.WorkspaceID, SnapshotID: request.SnapshotID,
-			InputDigest: digest, PreviousGeneration: rollback.PreviousGeneration,
-			Generation: rollback.NextGeneration, CapacityBytes: rollback.CapacityBytes,
-		})
-	}
-	if manifest.Generation != request.ExpectedGeneration {
-		return Receipt{}, ErrStaleGeneration
-	}
-	targetPath := store.versionPath(request.WorkspaceID, staged.Image)
-	if _, err := os.Stat(targetPath); errors.Is(err, os.ErrNotExist) {
-		if err := os.Rename(
-			store.stagedImagePath(request.WorkspaceID, request.OperationID),
-			targetPath,
-		); err != nil {
-			return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore publish restore version: %w", err)
+		swapRequest := PrepareRestoreRequest{
+			Mutation: request.Mutation, SnapshotID: request.SnapshotID,
+			ExpectedGeneration: request.ExpectedGeneration,
+			NextGeneration:     request.NextGeneration,
 		}
-		if err := syncDir(store.stagedDir(request.WorkspaceID)); err != nil {
+		if !stagedMatches(staged, swapRequest) {
+			return Receipt{}, ErrConflictingReplay
+		}
+		manifest, err := store.readCurrentManifest(request.WorkspaceID)
+		if err != nil {
 			return Receipt{}, err
 		}
-		if err := syncDir(store.versionsDir(request.WorkspaceID)); err != nil {
+		if manifest.Generation == request.NextGeneration && manifest.Image == staged.Image {
+			rollback, rollbackErr := store.readRollback(request.WorkspaceID, request.OperationID)
+			if rollbackErr != nil {
+				return Receipt{}, fmt.Errorf("%w: swapped restore lacks rollback evidence", ErrCorruptState)
+			}
+			return Receipt{
+				SnapshotID: request.SnapshotID, PreviousGeneration: rollback.PreviousGeneration,
+				Generation: rollback.NextGeneration, CapacityBytes: rollback.CapacityBytes,
+			}, nil
+		}
+		if manifest.Generation != request.ExpectedGeneration {
+			return Receipt{}, ErrStaleGeneration
+		}
+		targetPath := store.versionPath(request.WorkspaceID, staged.Image)
+		if _, err := os.Stat(targetPath); errors.Is(err, os.ErrNotExist) {
+			if err := os.Rename(
+				store.stagedImagePath(request.WorkspaceID, request.OperationID),
+				targetPath,
+			); err != nil {
+				return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore publish restore version: %w", err)
+			}
+			if err := syncDir(store.stagedDir(request.WorkspaceID)); err != nil {
+				return Receipt{}, err
+			}
+			if err := syncDir(store.versionsDir(request.WorkspaceID)); err != nil {
+				return Receipt{}, err
+			}
+		} else if err != nil {
+			return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore inspect restore version: %w", err)
+		}
+		if err := validateExt4Image(targetPath, manifest.CapacityBytes); err != nil {
 			return Receipt{}, err
 		}
-	} else if err != nil {
-		return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore inspect restore version: %w", err)
-	}
-	if err := validateExt4Image(targetPath, manifest.CapacityBytes); err != nil {
-		return Receipt{}, err
-	}
-	rollback := rollbackManifest{
-		FormatVersion: currentManifestFormatVersion,
-		OperationID:   request.OperationID, WorkspaceID: request.WorkspaceID,
-		SnapshotID:         request.SnapshotID,
-		PreviousGeneration: manifest.Generation, PreviousImage: manifest.Image,
-		NextGeneration: request.NextGeneration, NextImage: staged.Image,
-		CapacityBytes: manifest.CapacityBytes,
-	}
-	if err := atomicJSON(store.rollbackPath(request.WorkspaceID, request.OperationID), rollback); err != nil {
-		return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore publish rollback state: %w", err)
-	}
-	if err := syncDir(store.rollbackDir(request.WorkspaceID)); err != nil {
-		return Receipt{}, err
-	}
-	if err := store.publishCurrentManifest(request.WorkspaceID, currentManifest{
-		FormatVersion: currentManifestFormatVersion,
-		WorkspaceID:   request.WorkspaceID, Generation: request.NextGeneration,
-		Image: staged.Image, CapacityBytes: manifest.CapacityBytes,
-	}); err != nil {
-		return Receipt{}, err
-	}
-	return store.recordReceipt(Receipt{
-		Kind: ReceiptRestoreSwap, OperationID: request.OperationID,
-		WorkspaceID: request.WorkspaceID, SnapshotID: request.SnapshotID,
-		InputDigest: digest, PreviousGeneration: request.ExpectedGeneration,
-		Generation: request.NextGeneration, CapacityBytes: manifest.CapacityBytes,
+		rollback := rollbackManifest{
+			FormatVersion: currentManifestFormatVersion,
+			OperationID:   request.OperationID, WorkspaceID: request.WorkspaceID,
+			SnapshotID:         request.SnapshotID,
+			PreviousGeneration: manifest.Generation, PreviousImage: manifest.Image,
+			NextGeneration: request.NextGeneration, NextImage: staged.Image,
+			CapacityBytes: manifest.CapacityBytes,
+		}
+		if err := atomicJSON(store.rollbackPath(request.WorkspaceID, request.OperationID), rollback); err != nil {
+			return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore publish rollback state: %w", err)
+		}
+		if err := syncDir(store.rollbackDir(request.WorkspaceID)); err != nil {
+			return Receipt{}, err
+		}
+		if err := store.publishCurrentManifest(request.WorkspaceID, currentManifest{
+			FormatVersion: currentManifestFormatVersion,
+			WorkspaceID:   request.WorkspaceID, Generation: request.NextGeneration,
+			Image: staged.Image, CapacityBytes: manifest.CapacityBytes,
+		}); err != nil {
+			return Receipt{}, err
+		}
+		return Receipt{
+			SnapshotID: request.SnapshotID, PreviousGeneration: request.ExpectedGeneration,
+			Generation: request.NextGeneration, CapacityBytes: manifest.CapacityBytes,
+		}, nil
 	})
 }
 
@@ -826,86 +753,64 @@ func (store *Store) FinalizeRestore(
 	ctx context.Context,
 	request RestoreMutation,
 ) (Receipt, error) {
-	if err := ctx.Err(); err != nil {
-		return Receipt{}, err
-	}
-	if err := validateMutation(request.Mutation); err != nil {
-		return Receipt{}, err
-	}
-	digest, err := inputDigest(request)
-	if err != nil {
-		return Receipt{}, err
-	}
-	if receipt, found, err := store.loadReceipt(request.Mutation, digest, ReceiptRestoreFinalize); found || err != nil {
-		return receipt, err
-	}
-	lock, err := store.lockWorkspace(request.WorkspaceID)
-	if err != nil {
-		return Receipt{}, err
-	}
-	defer closeLockedFile(lock)
-	rollback, err := store.readRollback(request.WorkspaceID, request.OperationID)
-	if errors.Is(err, os.ErrNotExist) {
-		swapReceipt, found, receiptErr := store.loadAnyReceipt(
-			request.Mutation,
-			ReceiptRestoreSwap,
-		)
-		if receiptErr != nil {
-			return Receipt{}, receiptErr
+	return store.mutate(ctx, request, request.Mutation, ReceiptRestoreFinalize, func() (Receipt, error) {
+		rollback, err := store.readRollback(request.WorkspaceID, request.OperationID)
+		if errors.Is(err, os.ErrNotExist) {
+			swapReceipt, found, receiptErr := store.loadAnyReceipt(
+				request.Mutation,
+				ReceiptRestoreSwap,
+			)
+			if receiptErr != nil {
+				return Receipt{}, receiptErr
+			}
+			if !found {
+				return Receipt{}, fmt.Errorf("%w: restore swap receipt is absent", ErrCorruptState)
+			}
+			return Receipt{
+				SnapshotID: swapReceipt.SnapshotID, PreviousGeneration: swapReceipt.PreviousGeneration,
+				Generation: swapReceipt.Generation, CapacityBytes: swapReceipt.CapacityBytes,
+			}, nil
 		}
-		if !found {
-			return Receipt{}, fmt.Errorf("%w: restore swap receipt is absent", ErrCorruptState)
-		}
-		return store.recordReceipt(Receipt{
-			Kind: ReceiptRestoreFinalize, OperationID: request.OperationID,
-			WorkspaceID: request.WorkspaceID, SnapshotID: swapReceipt.SnapshotID,
-			InputDigest: digest, PreviousGeneration: swapReceipt.PreviousGeneration,
-			Generation: swapReceipt.Generation, CapacityBytes: swapReceipt.CapacityBytes,
-		})
-	}
-	if err != nil {
-		return Receipt{}, err
-	}
-	manifest, err := store.readCurrentManifest(request.WorkspaceID)
-	if err != nil {
-		return Receipt{}, err
-	}
-	if manifest.Generation != rollback.NextGeneration || manifest.Image != rollback.NextImage {
-		return Receipt{}, ErrStaleGeneration
-	}
-	previousPath, err := store.validatedVersionPath(request.WorkspaceID, rollback.PreviousImage)
-	if err != nil {
-		return Receipt{}, err
-	}
-	if previousPath == store.versionPath(request.WorkspaceID, manifest.Image) {
-		return Receipt{}, fmt.Errorf("%w: rollback image is current", ErrCorruptState)
-	}
-	if err := removeExactFile(previousPath); err != nil {
-		return Receipt{}, err
-	}
-	if err := removeExactFile(store.stagedImagePath(request.WorkspaceID, request.OperationID)); err != nil {
-		return Receipt{}, err
-	}
-	if err := removeExactFile(store.stagedManifestPath(request.WorkspaceID, request.OperationID)); err != nil {
-		return Receipt{}, err
-	}
-	if err := removeExactFile(store.rollbackPath(request.WorkspaceID, request.OperationID)); err != nil {
-		return Receipt{}, err
-	}
-	for _, directory := range []string{
-		store.versionsDir(request.WorkspaceID),
-		store.stagedDir(request.WorkspaceID),
-		store.rollbackDir(request.WorkspaceID),
-	} {
-		if err := syncDir(directory); err != nil {
+		if err != nil {
 			return Receipt{}, err
 		}
-	}
-	return store.recordReceipt(Receipt{
-		Kind: ReceiptRestoreFinalize, OperationID: request.OperationID,
-		WorkspaceID: request.WorkspaceID, SnapshotID: rollback.SnapshotID,
-		InputDigest: digest, PreviousGeneration: rollback.PreviousGeneration,
-		Generation: rollback.NextGeneration, CapacityBytes: rollback.CapacityBytes,
+		manifest, err := store.readCurrentManifest(request.WorkspaceID)
+		if err != nil {
+			return Receipt{}, err
+		}
+		if manifest.Generation != rollback.NextGeneration || manifest.Image != rollback.NextImage {
+			return Receipt{}, ErrStaleGeneration
+		}
+		previousPath, err := store.validatedVersionPath(request.WorkspaceID, rollback.PreviousImage)
+		if err != nil {
+			return Receipt{}, err
+		}
+		if previousPath == store.versionPath(request.WorkspaceID, manifest.Image) {
+			return Receipt{}, fmt.Errorf("%w: rollback image is current", ErrCorruptState)
+		}
+		for _, path := range []string{
+			previousPath,
+			store.stagedImagePath(request.WorkspaceID, request.OperationID),
+			store.stagedManifestPath(request.WorkspaceID, request.OperationID),
+			store.rollbackPath(request.WorkspaceID, request.OperationID),
+		} {
+			if err := removeExactFile(path); err != nil {
+				return Receipt{}, err
+			}
+		}
+		for _, directory := range []string{
+			store.versionsDir(request.WorkspaceID),
+			store.stagedDir(request.WorkspaceID),
+			store.rollbackDir(request.WorkspaceID),
+		} {
+			if err := syncDir(directory); err != nil {
+				return Receipt{}, err
+			}
+		}
+		return Receipt{
+			SnapshotID: rollback.SnapshotID, PreviousGeneration: rollback.PreviousGeneration,
+			Generation: rollback.NextGeneration, CapacityBytes: rollback.CapacityBytes,
+		}, nil
 	})
 }
 
@@ -915,53 +820,34 @@ func (store *Store) AbortRestore(
 	ctx context.Context,
 	request RestoreMutation,
 ) (Receipt, error) {
-	if err := ctx.Err(); err != nil {
-		return Receipt{}, err
-	}
-	if err := validateMutation(request.Mutation); err != nil {
-		return Receipt{}, err
-	}
-	digest, err := inputDigest(request)
-	if err != nil {
-		return Receipt{}, err
-	}
-	if receipt, found, err := store.loadReceipt(request.Mutation, digest, ReceiptRestoreAbort); found || err != nil {
-		return receipt, err
-	}
-	lock, err := store.lockWorkspace(request.WorkspaceID)
-	if err != nil {
-		return Receipt{}, err
-	}
-	defer closeLockedFile(lock)
-	if _, err := store.readRollback(request.WorkspaceID, request.OperationID); err == nil {
-		return Receipt{}, ErrRestorePending
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return Receipt{}, err
-	}
-	staged, err := store.readStagedRestore(request.WorkspaceID, request.OperationID)
-	if errors.Is(err, os.ErrNotExist) {
-		return store.recordReceipt(Receipt{
-			Kind: ReceiptRestoreAbort, OperationID: request.OperationID,
-			WorkspaceID: request.WorkspaceID, InputDigest: digest,
-		})
-	}
-	if err != nil {
-		return Receipt{}, err
-	}
-	if err := removeExactFile(store.stagedImagePath(request.WorkspaceID, request.OperationID)); err != nil {
-		return Receipt{}, err
-	}
-	if err := removeExactFile(store.stagedManifestPath(request.WorkspaceID, request.OperationID)); err != nil {
-		return Receipt{}, err
-	}
-	if err := syncDir(store.stagedDir(request.WorkspaceID)); err != nil {
-		return Receipt{}, err
-	}
-	return store.recordReceipt(Receipt{
-		Kind: ReceiptRestoreAbort, OperationID: request.OperationID,
-		WorkspaceID: request.WorkspaceID, SnapshotID: staged.SnapshotID,
-		InputDigest: digest, PreviousGeneration: staged.ExpectedGeneration,
-		Generation: staged.NextGeneration, CapacityBytes: staged.CapacityBytes,
+	return store.mutate(ctx, request, request.Mutation, ReceiptRestoreAbort, func() (Receipt, error) {
+		if _, err := store.readRollback(request.WorkspaceID, request.OperationID); err == nil {
+			return Receipt{}, ErrRestorePending
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return Receipt{}, err
+		}
+		staged, err := store.readStagedRestore(request.WorkspaceID, request.OperationID)
+		if errors.Is(err, os.ErrNotExist) {
+			return Receipt{}, nil
+		}
+		if err != nil {
+			return Receipt{}, err
+		}
+		for _, path := range []string{
+			store.stagedImagePath(request.WorkspaceID, request.OperationID),
+			store.stagedManifestPath(request.WorkspaceID, request.OperationID),
+		} {
+			if err := removeExactFile(path); err != nil {
+				return Receipt{}, err
+			}
+		}
+		if err := syncDir(store.stagedDir(request.WorkspaceID)); err != nil {
+			return Receipt{}, err
+		}
+		return Receipt{
+			SnapshotID: staged.SnapshotID, PreviousGeneration: staged.ExpectedGeneration,
+			Generation: staged.NextGeneration, CapacityBytes: staged.CapacityBytes,
+		}, nil
 	})
 }
 
@@ -972,78 +858,56 @@ func (store *Store) DeleteWorkspace(
 	ctx context.Context,
 	request DeleteWorkspaceRequest,
 ) (Receipt, error) {
-	if err := ctx.Err(); err != nil {
-		return Receipt{}, err
-	}
-	if err := validateMutation(request.Mutation); err != nil {
-		return Receipt{}, err
-	}
-	digest, err := inputDigest(request)
-	if err != nil {
-		return Receipt{}, err
-	}
-	if receipt, found, err := store.loadReceipt(request.Mutation, digest, ReceiptWorkspaceDelete); found || err != nil {
-		return receipt, err
-	}
-	lock, err := store.lockWorkspace(request.WorkspaceID)
-	if err != nil {
-		return Receipt{}, err
-	}
-	defer closeLockedFile(lock)
-	manifest, err := store.readCurrentManifest(request.WorkspaceID)
-	if errors.Is(err, ErrWorkspaceNotFound) {
-		if _, statErr := os.Lstat(store.workspaceDir(request.WorkspaceID)); statErr == nil {
-			if err := store.deleteWorkspaceSnapshots(request.WorkspaceID); err != nil {
+	return store.mutate(ctx, request, request.Mutation, ReceiptWorkspaceDelete, func() (Receipt, error) {
+		manifest, err := store.readCurrentManifest(request.WorkspaceID)
+		if errors.Is(err, ErrWorkspaceNotFound) {
+			if _, statErr := os.Lstat(store.workspaceDir(request.WorkspaceID)); statErr == nil {
+				if err := store.deleteWorkspaceSnapshots(request.WorkspaceID); err != nil {
+					return Receipt{}, err
+				}
+				if err := store.removeWorkspaceTree(request.WorkspaceID); err != nil {
+					return Receipt{}, err
+				}
+				if err := syncDir(store.workspacesRoot()); err != nil {
+					return Receipt{}, err
+				}
+			} else if !errors.Is(statErr, os.ErrNotExist) {
+				return Receipt{}, fmt.Errorf(
+					"SecondBox WorkspaceStore inspect partially deleted Workspace: %w",
+					statErr,
+				)
+			}
+			if err := store.deleteWorkspaceReceipts(request.WorkspaceID); err != nil {
 				return Receipt{}, err
 			}
-			if err := store.removeWorkspaceTree(request.WorkspaceID); err != nil {
-				return Receipt{}, err
-			}
-			if err := syncDir(store.workspacesRoot()); err != nil {
-				return Receipt{}, err
-			}
-		} else if !errors.Is(statErr, os.ErrNotExist) {
-			return Receipt{}, fmt.Errorf(
-				"SecondBox WorkspaceStore inspect partially deleted Workspace: %w",
-				statErr,
-			)
+			return Receipt{Generation: request.ExpectedGeneration}, nil
+		}
+		if err != nil {
+			return Receipt{}, err
+		}
+		if manifest.Generation != request.ExpectedGeneration {
+			return Receipt{}, ErrStaleGeneration
+		}
+		if pending, err := store.restorePending(request.WorkspaceID); err != nil {
+			return Receipt{}, err
+		} else if pending {
+			return Receipt{}, ErrRestorePending
+		}
+		if err := store.deleteWorkspaceSnapshots(request.WorkspaceID); err != nil {
+			return Receipt{}, err
+		}
+		if err := store.removeWorkspaceTree(request.WorkspaceID); err != nil {
+			return Receipt{}, err
+		}
+		if err := syncDir(store.workspacesRoot()); err != nil {
+			return Receipt{}, err
 		}
 		if err := store.deleteWorkspaceReceipts(request.WorkspaceID); err != nil {
 			return Receipt{}, err
 		}
-		return store.recordReceipt(Receipt{
-			Kind: ReceiptWorkspaceDelete, OperationID: request.OperationID,
-			WorkspaceID: request.WorkspaceID, InputDigest: digest,
-			Generation: request.ExpectedGeneration,
-		})
-	}
-	if err != nil {
-		return Receipt{}, err
-	}
-	if manifest.Generation != request.ExpectedGeneration {
-		return Receipt{}, ErrStaleGeneration
-	}
-	if pending, err := store.restorePending(request.WorkspaceID); err != nil {
-		return Receipt{}, err
-	} else if pending {
-		return Receipt{}, ErrRestorePending
-	}
-	if err := store.deleteWorkspaceSnapshots(request.WorkspaceID); err != nil {
-		return Receipt{}, err
-	}
-	if err := store.removeWorkspaceTree(request.WorkspaceID); err != nil {
-		return Receipt{}, err
-	}
-	if err := syncDir(store.workspacesRoot()); err != nil {
-		return Receipt{}, err
-	}
-	if err := store.deleteWorkspaceReceipts(request.WorkspaceID); err != nil {
-		return Receipt{}, err
-	}
-	return store.recordReceipt(Receipt{
-		Kind: ReceiptWorkspaceDelete, OperationID: request.OperationID,
-		WorkspaceID: request.WorkspaceID, InputDigest: digest,
-		Generation: manifest.Generation, CapacityBytes: manifest.CapacityBytes,
+		return Receipt{
+			Generation: manifest.Generation, CapacityBytes: manifest.CapacityBytes,
+		}, nil
 	})
 }
 
@@ -1817,10 +1681,9 @@ func readJSON(path string, value any) error {
 	return nil
 }
 
-func inputDigest(value any) (string, error) {
-	fencingToken, err := operationFencingToken(value)
-	if err != nil {
-		return "", err
+func inputDigest(value any, fencingToken []byte) (string, error) {
+	if len(fencingToken) < 32 {
+		return "", ErrStaleFence
 	}
 	data, err := json.Marshal(value)
 	if err != nil {
@@ -1830,34 +1693,6 @@ func inputDigest(value any) (string, error) {
 	requestDigest := sha256.Sum256(data)
 	return hex.EncodeToString(fenceDigest[:]) + ":" +
 		hex.EncodeToString(requestDigest[:]), nil
-}
-
-func operationFencingToken(value any) ([]byte, error) {
-	var token []byte
-	switch request := value.(type) {
-	case CreateWorkspaceRequest:
-		token = request.FencingToken
-	case AdvanceGenerationRequest:
-		token = request.FencingToken
-	case CreateSnapshotRequest:
-		token = request.FencingToken
-	case DeleteSnapshotRequest:
-		token = request.FencingToken
-	case PrepareRestoreRequest:
-		token = request.FencingToken
-	case SwapRestoreRequest:
-		token = request.FencingToken
-	case RestoreMutation:
-		token = request.FencingToken
-	case DeleteWorkspaceRequest:
-		token = request.FencingToken
-	default:
-		return nil, errors.New("SecondBox WorkspaceStore operation input type is unsupported")
-	}
-	if len(token) < 32 {
-		return nil, ErrStaleFence
-	}
-	return token, nil
 }
 
 func validateMutation(mutation Mutation) error {

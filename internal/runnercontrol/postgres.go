@@ -391,6 +391,7 @@ func recordLocalWorkspaceResult(
 	if locked.WorkspaceID != result.WorkspaceId {
 		return errors.New("SecondBox runner local-workspace result targets the wrong Workspace")
 	}
+	var snapshot rowlock.Snapshot
 	switch result.Kind {
 	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_CREATE,
 		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_DELETE,
@@ -398,73 +399,48 @@ func recordLocalWorkspaceResult(
 		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_SWAP,
 		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE,
 		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT:
-		if _, err := rowlock.SnapshotByID(ctx, tx, locked, result.SnapshotId); err != nil {
+		snapshot, err = rowlock.SnapshotByID(ctx, tx, locked, result.SnapshotId)
+		if err != nil {
 			return errors.New("SecondBox runner local-workspace result has no durable Snapshot")
 		}
 	}
 	switch result.Kind {
 	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION:
-		return recordLocalGenerationAdvanceResult(ctx, tx, runnerID, result, now)
+		return recordLocalGenerationAdvanceResult(ctx, tx, locked, runnerID, result, now)
 	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_DELETE:
-		return recordLocalWorkspaceDeleteResult(ctx, tx, runnerID, result, now)
+		return recordLocalWorkspaceDeleteResult(ctx, tx, locked, runnerID, result, now)
 	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_PREPARE,
 		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_SWAP,
 		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE,
 		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT:
-		return recordLocalRestoreResult(ctx, tx, runnerID, result, now)
+		return recordLocalRestoreResult(ctx, tx, locked, snapshot, runnerID, result, now)
 	}
 	if result.Kind != runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE {
-		return recordLocalSnapshotResult(ctx, tx, runnerID, result, now)
+		return recordLocalSnapshotResult(ctx, tx, locked, snapshot, runnerID, result, now)
 	}
-	var (
-		homeRunnerID, workspaceState, mutationID, mutationState string
-		effectState, commandID, operationID                     string
-		generation, capacityBytes                               int64
-	)
-	err = tx.QueryRow(ctx, `
-		SELECT workspace.home_runner_id,workspace.state,workspace.mutation_id,
-		       workspace.mutation_state,workspace.generation,workspace.logical_capacity_bytes,
-		       effect.state,effect.command_id,workspace.mutation_operation_id
-		FROM secondbox.sandboxes AS sandbox
-		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
-		JOIN secondbox.lifecycle_effects AS effect
-		  ON effect.id=workspace.mutation_effect_id
-		WHERE sandbox.id=$1 AND workspace.id=$2 AND effect.id=$3
-		FOR UPDATE OF sandbox,workspace,effect`,
-		result.SandboxId, result.WorkspaceId, result.EffectId,
-	).Scan(
-		&homeRunnerID, &workspaceState, &mutationID, &mutationState,
-		&generation, &capacityBytes, &effectState, &commandID, &operationID,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return errors.New("SecondBox runner local-workspace result has no durable effect")
-	}
+	effect, err := lockLocalWorkspaceEffect(ctx, tx, result.EffectId)
 	if err != nil {
-		return fmt.Errorf("SecondBox runner local-workspace effect lookup: %w", err)
+		return err
 	}
-	if homeRunnerID != runnerID {
+	workspace := locked.Workspace
+	if workspace.HomeRunnerID != runnerID {
 		return errors.New("SecondBox runner local-workspace result came from the wrong home runner")
 	}
-	if mutationID != result.EffectId || mutationState == "" ||
-		operationID != result.OperationId || generation != int64(result.Generation) ||
-		capacityBytes != int64(result.LogicalCapacityBytes) {
+	if workspace.Mutation.ID != result.EffectId || workspace.Mutation.State == "" ||
+		workspace.Mutation.OperationID != result.OperationId ||
+		workspace.Generation != int64(result.Generation) ||
+		workspace.LogicalCapacityBytes != int64(result.LogicalCapacityBytes) {
 		return errors.New("SecondBox runner local-workspace result conflicts with durable authority")
 	}
-	if effectState == "succeeded" || effectState == "runner_failed" {
+	if effect.state == "succeeded" || effect.state == "runner_failed" {
 		return nil
 	}
-	if workspaceState != "creating" || effectState != "queued" {
+	if workspace.State != "creating" || effect.state != "queued" {
 		return errors.New("SecondBox runner local-workspace result is reordered")
 	}
-	evidenceJSON, err := json.Marshal(map[string]any{
-		"effectId":          result.EffectId,
-		"generation":        result.Generation,
-		"logicalCapacity":   result.LogicalCapacityBytes,
-		"receiptRecordedAt": result.ReceiptRecordedAtUnixMs,
-		"terminal":          result.Terminal.String(),
-	})
+	evidenceJSON, err := localWorkspaceEvidence(result, false, false)
 	if err != nil {
-		return fmt.Errorf("SecondBox runner local-workspace evidence encoding: %w", err)
+		return err
 	}
 	if result.Terminal == runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED {
 		if result.ReceiptRecordedAtUnixMs == 0 {
@@ -483,7 +459,8 @@ func recordLocalWorkspaceResult(
 			    mutation_state=CASE WHEN $4 THEN 'queued' ELSE '' END,
 			    updated_at=$3
 			WHERE id=$1`,
-			result.WorkspaceId, evidenceJSON, now, keepStartMutation, operationID, generation,
+			result.WorkspaceId, evidenceJSON, now, keepStartMutation,
+			workspace.Mutation.OperationID, workspace.Generation,
 		); err != nil {
 			return fmt.Errorf("SecondBox runner Workspace create completion: %w", err)
 		}
@@ -501,22 +478,16 @@ func recordLocalWorkspaceResult(
 			return fmt.Errorf("SecondBox runner Sandbox create completion: %w", err)
 		}
 		if !keepStartMutation {
-			if _, err := tx.Exec(ctx, `
-				UPDATE secondbox.operations
-				SET state='succeeded',completed_at=$2,updated_at=$2
-				WHERE id=$1 AND state='pending'`,
-				operationID, now,
+			if err := finishPendingOperation(
+				ctx, tx, workspace.Mutation.OperationID, "succeeded", "", "", now,
 			); err != nil {
-				return fmt.Errorf("SecondBox runner Workspace create Operation completion: %w", err)
+				return err
 			}
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.lifecycle_effects
-			SET state='succeeded',evidence_json=$2,updated_at=$3
-			WHERE id=$1`,
-			result.EffectId, evidenceJSON, now,
+		if err := finishLocalWorkspaceEffect(
+			ctx, tx, result.EffectId, "succeeded", "", "", evidenceJSON, now,
 		); err != nil {
-			return fmt.Errorf("SecondBox runner Workspace create effect completion: %w", err)
+			return err
 		}
 	} else {
 		errorCode := localWorkspaceOperationErrorCode(result.Terminal)
@@ -542,110 +513,68 @@ func recordLocalWorkspaceResult(
 		); err != nil {
 			return fmt.Errorf("SecondBox runner Sandbox create failure: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.operations
-			SET state='failed',error_code=$2,error_message=$3,retryable=false,
-			    completed_at=$4,updated_at=$4
-			WHERE id=$1 AND state='pending'`,
-			operationID, errorCode, result.SafeDetail, now,
+		if err := finishPendingOperation(
+			ctx, tx, workspace.Mutation.OperationID, "failed", errorCode, result.SafeDetail, now,
 		); err != nil {
-			return fmt.Errorf("SecondBox runner Workspace create Operation failure: %w", err)
+			return err
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.lifecycle_effects
-			SET state='runner_failed',failure_class=$2,failure_message=$3,
-			    evidence_json=$4,updated_at=$5
-			WHERE id=$1`,
-			result.EffectId, errorCode, result.SafeDetail, evidenceJSON, now,
+		if err := finishLocalWorkspaceEffect(
+			ctx, tx, result.EffectId, "runner_failed",
+			errorCode, result.SafeDetail, evidenceJSON, now,
 		); err != nil {
-			return fmt.Errorf("SecondBox runner Workspace create effect failure: %w", err)
+			return err
 		}
 	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.runner_commands
-		SET state='acknowledged',updated_at=$2
-		WHERE id=$1`,
-		commandID, now,
-	); err != nil {
-		return fmt.Errorf("SecondBox runner local-workspace command acknowledgement: %w", err)
-	}
-	return nil
+	return acknowledgeRunnerCommand(ctx, tx, effect.commandID, now)
 }
 
 func recordLocalWorkspaceDeleteResult(
 	ctx context.Context,
 	tx pgx.Tx,
+	locked rowlock.SandboxWorkspace,
 	runnerID string,
 	result *runnerv1.LocalWorkspaceResult,
 	now time.Time,
 ) error {
-	var (
-		homeRunnerID, workspaceState, mutationKind, mutationID string
-		mutationEffectID, mutationOperationID, mutationState   string
-		effectState, commandID, sandboxState, desiredState     string
-		generation, capacity                                   int64
-	)
-	err := tx.QueryRow(ctx, `
-		SELECT workspace.home_runner_id,workspace.state,workspace.mutation_kind,
-		       workspace.mutation_id,workspace.mutation_effect_id,
-		       workspace.mutation_operation_id,workspace.mutation_state,
-		       workspace.generation,workspace.logical_capacity_bytes,
-		       effect.state,effect.command_id,sandbox.state,sandbox.desired_state
-		FROM secondbox.sandboxes AS sandbox
-		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
-		JOIN secondbox.lifecycle_effects AS effect ON effect.id=$3
-		WHERE sandbox.id=$1 AND workspace.id=$2
-		FOR UPDATE OF sandbox,workspace,effect`,
-		result.SandboxId, result.WorkspaceId, result.EffectId,
-	).Scan(
-		&homeRunnerID, &workspaceState, &mutationKind, &mutationID,
-		&mutationEffectID, &mutationOperationID, &mutationState,
-		&generation, &capacity, &effectState, &commandID, &sandboxState, &desiredState,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return errors.New("SecondBox runner Workspace delete result has no durable effect")
-	}
+	effect, err := lockLocalWorkspaceEffect(ctx, tx, result.EffectId)
 	if err != nil {
-		return fmt.Errorf("SecondBox runner Workspace delete authority lookup: %w", err)
+		return err
 	}
-	if effectState == "succeeded" {
-		if homeRunnerID == runnerID &&
-			workspaceState == "deleted" &&
-			sandboxState == "deleted" &&
-			generation == int64(result.Generation) {
+	workspace := locked.Workspace
+	if effect.state == "succeeded" {
+		if workspace.HomeRunnerID == runnerID &&
+			workspace.State == "deleted" &&
+			locked.SandboxState == "deleted" &&
+			workspace.Generation == int64(result.Generation) {
 			return nil
 		}
 		return errors.New("SecondBox runner Workspace delete completion replay conflicts with durable authority")
 	}
-	if homeRunnerID != runnerID ||
-		workspaceState != "deleting" ||
-		sandboxState != "deleting" ||
-		desiredState != "deleted" ||
-		mutationKind != "workspace_delete" ||
-		mutationID != result.EffectId ||
-		mutationEffectID != result.EffectId ||
-		mutationOperationID != result.OperationId ||
-		mutationState == "" ||
-		generation != int64(result.Generation) {
+	if workspace.HomeRunnerID != runnerID ||
+		workspace.State != "deleting" ||
+		locked.SandboxState != "deleting" ||
+		locked.DesiredState != "deleted" ||
+		workspace.Mutation.Kind != "workspace_delete" ||
+		workspace.Mutation.ID != result.EffectId ||
+		workspace.Mutation.EffectID != result.EffectId ||
+		workspace.Mutation.OperationID != result.OperationId ||
+		workspace.Mutation.State == "" ||
+		workspace.Generation != int64(result.Generation) {
 		return errors.New("SecondBox runner Workspace delete result conflicts with durable authority")
 	}
-	if result.LogicalCapacityBytes != 0 && result.LogicalCapacityBytes != uint64(capacity) {
+	if result.LogicalCapacityBytes != 0 &&
+		result.LogicalCapacityBytes != uint64(workspace.LogicalCapacityBytes) {
 		return errors.New("SecondBox runner Workspace delete receipt has inconsistent capacity")
 	}
-	if effectState == "runner_failed" {
+	if effect.state == "runner_failed" {
 		return nil
 	}
-	if effectState != "queued" {
+	if effect.state != "queued" {
 		return errors.New("SecondBox runner Workspace delete result is reordered")
 	}
-	evidenceJSON, err := json.Marshal(map[string]any{
-		"effectId": result.EffectId, "generation": result.Generation,
-		"logicalCapacity":   result.LogicalCapacityBytes,
-		"receiptRecordedAt": result.ReceiptRecordedAtUnixMs,
-		"terminal":          result.Terminal.String(),
-	})
+	evidenceJSON, err := localWorkspaceEvidence(result, false, false)
 	if err != nil {
-		return fmt.Errorf("SecondBox runner Workspace delete evidence encoding: %w", err)
+		return err
 	}
 	succeeded := result.Terminal ==
 		runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED
@@ -707,13 +636,10 @@ func recordLocalWorkspaceDeleteResult(
 		); err != nil {
 			return fmt.Errorf("SecondBox runner Workspace delete superseded Operation completion: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.lifecycle_effects
-			SET state='succeeded',evidence_json=$2,failure_class='',
-			    failure_message='',updated_at=$3 WHERE id=$1`,
-			result.EffectId, evidenceJSON, now,
+		if err := finishLocalWorkspaceEffect(
+			ctx, tx, result.EffectId, "succeeded", "", "", evidenceJSON, now,
 		); err != nil {
-			return fmt.Errorf("SecondBox runner Workspace delete effect completion: %w", err)
+			return err
 		}
 	} else {
 		errorCode := localWorkspaceOperationErrorCode(result.Terminal)
@@ -725,13 +651,11 @@ func recordLocalWorkspaceDeleteResult(
 		); err != nil {
 			return fmt.Errorf("SecondBox runner Workspace delete mutation failure: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.lifecycle_effects
-			SET state='runner_failed',failure_class=$2,failure_message=$3,
-			    evidence_json=$4,updated_at=$5 WHERE id=$1`,
-			result.EffectId, errorCode, result.SafeDetail, evidenceJSON, now,
+		if err := finishLocalWorkspaceEffect(
+			ctx, tx, result.EffectId, "runner_failed",
+			errorCode, result.SafeDetail, evidenceJSON, now,
 		); err != nil {
-			return fmt.Errorf("SecondBox runner Workspace delete effect failure: %w", err)
+			return err
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE secondbox.sandboxes
@@ -743,7 +667,7 @@ func recordLocalWorkspaceDeleteResult(
 			return fmt.Errorf("SecondBox runner Workspace delete retry scheduling: %w", err)
 		}
 	}
-	if err := acknowledgeRunnerCommand(ctx, tx, commandID, now); err != nil {
+	if err := acknowledgeRunnerCommand(ctx, tx, effect.commandID, now); err != nil {
 		return err
 	}
 	return nil
@@ -752,6 +676,8 @@ func recordLocalWorkspaceDeleteResult(
 func recordLocalSnapshotResult(
 	ctx context.Context,
 	tx pgx.Tx,
+	locked rowlock.SandboxWorkspace,
+	snapshot rowlock.Snapshot,
 	runnerID string,
 	result *runnerv1.LocalWorkspaceResult,
 	now time.Time,
@@ -762,34 +688,11 @@ func recordLocalSnapshotResult(
 	default:
 		return nil
 	}
-	var (
-		homeRunnerID, mutationKind, mutationEffectID, mutationOperationID string
-		mutationState, effectState, commandID, snapshotState              string
-		generation, capacity                                              int64
-	)
-	err := tx.QueryRow(ctx, `
-		SELECT workspace.home_runner_id,workspace.mutation_kind,
-		       workspace.mutation_effect_id,workspace.mutation_operation_id,
-		       workspace.mutation_state,workspace.generation,workspace.logical_capacity_bytes,
-		       effect.state,effect.command_id,snapshot.state
-		FROM secondbox.sandboxes AS sandbox
-		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
-		JOIN secondbox.snapshots AS snapshot
-		  ON snapshot.id=$4 AND snapshot.workspace_id=workspace.id
-		JOIN secondbox.lifecycle_effects AS effect ON effect.id=$3
-		WHERE sandbox.id=$1 AND workspace.id=$2
-		FOR UPDATE OF sandbox,workspace,snapshot,effect`,
-		result.SandboxId, result.WorkspaceId, result.EffectId, result.SnapshotId,
-	).Scan(
-		&homeRunnerID, &mutationKind, &mutationEffectID, &mutationOperationID,
-		&mutationState, &generation, &capacity, &effectState, &commandID, &snapshotState,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return errors.New("SecondBox runner local Snapshot result has no durable effect")
-	}
+	effect, err := lockLocalWorkspaceEffect(ctx, tx, result.EffectId)
 	if err != nil {
-		return fmt.Errorf("SecondBox runner local Snapshot effect lookup: %w", err)
+		return err
 	}
+	workspace := locked.Workspace
 	expectedMutationKind := "snapshot_create"
 	expectedSnapshotState := "creating"
 	successSnapshotState := "ready"
@@ -798,28 +701,28 @@ func recordLocalSnapshotResult(
 		expectedSnapshotState = "deleting"
 		successSnapshotState = "deleted"
 	}
-	if homeRunnerID != runnerID || mutationKind != expectedMutationKind ||
-		mutationEffectID != result.EffectId || mutationOperationID != result.OperationId ||
-		mutationState == "" || snapshotState != expectedSnapshotState {
+	if workspace.HomeRunnerID != runnerID ||
+		workspace.Mutation.Kind != expectedMutationKind ||
+		workspace.Mutation.EffectID != result.EffectId ||
+		workspace.Mutation.OperationID != result.OperationId ||
+		workspace.Mutation.State == "" ||
+		snapshot.State != expectedSnapshotState {
 		return errors.New("SecondBox runner local Snapshot result conflicts with durable authority")
 	}
-	if effectState == "succeeded" || effectState == "runner_failed" {
+	if effect.state == "succeeded" || effect.state == "runner_failed" {
 		return nil
 	}
-	if effectState != "queued" {
+	if effect.state != "queued" {
 		return errors.New("SecondBox runner local Snapshot result is reordered")
 	}
 	if result.Kind == runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_CREATE &&
-		(result.Generation != uint64(generation) || result.LogicalCapacityBytes != uint64(capacity)) {
+		(result.Generation != uint64(workspace.Generation) ||
+			result.LogicalCapacityBytes != uint64(workspace.LogicalCapacityBytes)) {
 		return errors.New("SecondBox runner local Snapshot receipt has inconsistent generation or capacity")
 	}
-	evidenceJSON, err := json.Marshal(map[string]any{
-		"effectId": result.EffectId, "snapshotId": result.SnapshotId,
-		"generation": result.Generation, "logicalCapacity": result.LogicalCapacityBytes,
-		"receiptRecordedAt": result.ReceiptRecordedAtUnixMs, "terminal": result.Terminal.String(),
-	})
+	evidenceJSON, err := localWorkspaceEvidence(result, true, false)
 	if err != nil {
-		return fmt.Errorf("SecondBox runner local Snapshot evidence encoding: %w", err)
+		return err
 	}
 	succeeded := result.Terminal == runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED
 	if succeeded && result.ReceiptRecordedAtUnixMs == 0 {
@@ -835,20 +738,15 @@ func recordLocalSnapshotResult(
 		); err != nil {
 			return fmt.Errorf("SecondBox runner local Snapshot completion: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.operations
-			SET state='succeeded',completed_at=$2,updated_at=$2
-			WHERE id=$1 AND state='pending'`,
-			result.OperationId, now,
+		if err := finishPendingOperation(
+			ctx, tx, result.OperationId, "succeeded", "", "", now,
 		); err != nil {
-			return fmt.Errorf("SecondBox runner local Snapshot Operation completion: %w", err)
+			return err
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.lifecycle_effects
-			SET state='succeeded',evidence_json=$2,updated_at=$3 WHERE id=$1`,
-			result.EffectId, evidenceJSON, now,
+		if err := finishLocalWorkspaceEffect(
+			ctx, tx, result.EffectId, "succeeded", "", "", evidenceJSON, now,
 		); err != nil {
-			return fmt.Errorf("SecondBox runner local Snapshot effect completion: %w", err)
+			return err
 		}
 	} else {
 		errorCode := localWorkspaceOperationErrorCode(result.Terminal)
@@ -859,22 +757,16 @@ func recordLocalSnapshotResult(
 		); err != nil {
 			return fmt.Errorf("SecondBox runner local Snapshot failure: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.operations
-			SET state='failed',error_code=$2,error_message=$3,retryable=false,
-			    completed_at=$4,updated_at=$4
-			WHERE id=$1 AND state='pending'`,
-			result.OperationId, errorCode, result.SafeDetail, now,
+		if err := finishPendingOperation(
+			ctx, tx, result.OperationId, "failed", errorCode, result.SafeDetail, now,
 		); err != nil {
-			return fmt.Errorf("SecondBox runner local Snapshot Operation failure: %w", err)
+			return err
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.lifecycle_effects
-			SET state='runner_failed',failure_class=$2,failure_message=$3,
-			    evidence_json=$4,updated_at=$5 WHERE id=$1`,
-			result.EffectId, errorCode, result.SafeDetail, evidenceJSON, now,
+		if err := finishLocalWorkspaceEffect(
+			ctx, tx, result.EffectId, "runner_failed",
+			errorCode, result.SafeDetail, evidenceJSON, now,
 		); err != nil {
-			return fmt.Errorf("SecondBox runner local Snapshot effect failure: %w", err)
+			return err
 		}
 	}
 	if _, err := tx.Exec(ctx, `
@@ -886,89 +778,50 @@ func recordLocalSnapshotResult(
 	); err != nil {
 		return fmt.Errorf("SecondBox runner local Snapshot mutation release: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.runner_commands
-		SET state='acknowledged',updated_at=$2 WHERE id=$1`,
-		commandID, now,
-	); err != nil {
-		return fmt.Errorf("SecondBox runner local Snapshot command acknowledgement: %w", err)
-	}
-	return nil
+	return acknowledgeRunnerCommand(ctx, tx, effect.commandID, now)
 }
 
 func recordLocalGenerationAdvanceResult(
 	ctx context.Context,
 	tx pgx.Tx,
+	locked rowlock.SandboxWorkspace,
 	runnerID string,
 	result *runnerv1.LocalWorkspaceResult,
 	now time.Time,
 ) error {
-	var (
-		homeRunnerID, workspaceState, mutationKind, mutationID string
-		mutationEffectID, mutationOperationID, mutationState   string
-		effectKind, effectState, commandID, sandboxState       string
-		workspaceGeneration, sandboxGeneration, capacity       int64
-	)
-	err := tx.QueryRow(ctx, `
-		SELECT workspace.home_runner_id,workspace.state,workspace.mutation_kind,
-		       workspace.mutation_id,workspace.mutation_effect_id,
-		       workspace.mutation_operation_id,workspace.mutation_state,
-		       workspace.generation,workspace.logical_capacity_bytes,
-		       effect.kind,effect.state,effect.command_id,
-		       sandbox.state,sandbox.generation
-		FROM secondbox.sandboxes AS sandbox
-		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
-		JOIN secondbox.lifecycle_effects AS effect ON effect.id=$3
-		WHERE sandbox.id=$1 AND workspace.id=$2
-		FOR UPDATE OF sandbox,workspace,effect`,
-		result.SandboxId, result.WorkspaceId, result.EffectId,
-	).Scan(
-		&homeRunnerID, &workspaceState, &mutationKind,
-		&mutationID, &mutationEffectID, &mutationOperationID, &mutationState,
-		&workspaceGeneration, &capacity, &effectKind, &effectState, &commandID,
-		&sandboxState, &sandboxGeneration,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return errors.New("SecondBox runner generation-advance result has no durable stop effect")
-	}
+	effect, err := lockLocalWorkspaceEffect(ctx, tx, result.EffectId)
 	if err != nil {
-		return fmt.Errorf("SecondBox runner generation-advance authority lookup: %w", err)
+		return err
 	}
-	if homeRunnerID != runnerID ||
-		workspaceState != "ready" ||
-		sandboxState != "stopping" ||
-		effectKind != "stop" ||
-		mutationKind != "stop" ||
-		mutationID != result.EffectId ||
-		mutationEffectID != result.EffectId ||
-		mutationOperationID != result.OperationId ||
-		sandboxGeneration != workspaceGeneration {
+	workspace := locked.Workspace
+	if workspace.HomeRunnerID != runnerID ||
+		workspace.State != "ready" ||
+		locked.SandboxState != "stopping" ||
+		effect.kind != "stop" ||
+		workspace.Mutation.Kind != "stop" ||
+		workspace.Mutation.ID != result.EffectId ||
+		workspace.Mutation.EffectID != result.EffectId ||
+		workspace.Mutation.OperationID != result.OperationId ||
+		locked.Generation != workspace.Generation {
 		return errors.New("SecondBox runner generation-advance result conflicts with durable authority")
 	}
-	if effectState == "runner_succeeded" || effectState == "runner_failed" {
+	if effect.state == "runner_succeeded" || effect.state == "runner_failed" {
 		return nil
 	}
-	if effectState != "queued" || mutationState != "advancing" {
+	if effect.state != "queued" || workspace.Mutation.State != "advancing" {
 		return errors.New("SecondBox runner generation-advance result is reordered")
 	}
-	evidenceJSON, err := json.Marshal(map[string]any{
-		"effectId":           result.EffectId,
-		"previousGeneration": result.PreviousGeneration,
-		"generation":         result.Generation,
-		"logicalCapacity":    result.LogicalCapacityBytes,
-		"receiptRecordedAt":  result.ReceiptRecordedAtUnixMs,
-		"terminal":           result.Terminal.String(),
-	})
+	evidenceJSON, err := localWorkspaceEvidence(result, false, true)
 	if err != nil {
-		return fmt.Errorf("SecondBox runner generation-advance evidence encoding: %w", err)
+		return err
 	}
 	succeeded := result.Terminal ==
 		runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED
 	if succeeded {
 		if result.ReceiptRecordedAtUnixMs == 0 ||
-			result.PreviousGeneration != uint64(workspaceGeneration) ||
-			result.Generation != uint64(workspaceGeneration+1) ||
-			result.LogicalCapacityBytes != uint64(capacity) {
+			result.PreviousGeneration != uint64(workspace.Generation) ||
+			result.Generation != uint64(workspace.Generation+1) ||
+			result.LogicalCapacityBytes != uint64(workspace.LogicalCapacityBytes) {
 			return errors.New("SecondBox runner generation-advance receipt is inconsistent")
 		}
 		if _, err := tx.Exec(ctx, `
@@ -979,13 +832,10 @@ func recordLocalGenerationAdvanceResult(
 		); err != nil {
 			return fmt.Errorf("SecondBox runner generation-advance Workspace evidence: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.lifecycle_effects
-			SET state='runner_succeeded',evidence_json=$2,
-			    failure_class='',failure_message='',updated_at=$3 WHERE id=$1`,
-			result.EffectId, evidenceJSON, now,
+		if err := finishLocalWorkspaceEffect(
+			ctx, tx, result.EffectId, "runner_succeeded", "", "", evidenceJSON, now,
 		); err != nil {
-			return fmt.Errorf("SecondBox runner generation-advance effect completion: %w", err)
+			return err
 		}
 	} else {
 		errorCode := localWorkspaceOperationErrorCode(result.Terminal)
@@ -996,16 +846,14 @@ func recordLocalGenerationAdvanceResult(
 		); err != nil {
 			return fmt.Errorf("SecondBox runner generation-advance Workspace failure: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.lifecycle_effects
-			SET state='runner_failed',failure_class=$2,failure_message=$3,
-			    evidence_json=$4,updated_at=$5 WHERE id=$1`,
-			result.EffectId, errorCode, result.SafeDetail, evidenceJSON, now,
+		if err := finishLocalWorkspaceEffect(
+			ctx, tx, result.EffectId, "runner_failed",
+			errorCode, result.SafeDetail, evidenceJSON, now,
 		); err != nil {
-			return fmt.Errorf("SecondBox runner generation-advance effect failure: %w", err)
+			return err
 		}
 	}
-	if err := acknowledgeRunnerCommand(ctx, tx, commandID, now); err != nil {
+	if err := acknowledgeRunnerCommand(ctx, tx, effect.commandID, now); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `
@@ -1576,20 +1424,33 @@ type localRestorePhase struct {
 	commandID     string
 	expectedState string
 	effectKind    string
-	receiptColumn string
 }
 
 func recordLocalRestoreResult(
 	ctx context.Context,
 	tx pgx.Tx,
+	locked rowlock.SandboxWorkspace,
+	snapshot rowlock.Snapshot,
 	runnerID string,
 	result *runnerv1.LocalWorkspaceResult,
 	now time.Time,
 ) error {
-	var authority localRestoreAuthority
+	authority := localRestoreAuthority{
+		sandboxID:           locked.SandboxID,
+		workspaceID:         locked.WorkspaceID,
+		snapshotID:          snapshot.ID,
+		mutationID:          locked.Workspace.Mutation.ID,
+		mutationKind:        locked.Workspace.Mutation.Kind,
+		mutationEffectID:    locked.Workspace.Mutation.EffectID,
+		mutationOperationID: locked.Workspace.Mutation.OperationID,
+		mutationState:       locked.Workspace.Mutation.State,
+		workspaceGeneration: locked.Workspace.Generation,
+		sandboxState:        locked.SandboxState,
+		sandboxGeneration:   locked.Generation,
+		capacity:            locked.Workspace.LogicalCapacityBytes,
+	}
 	err := tx.QueryRow(ctx, `
-		SELECT restore.id,restore.sandbox_id,restore.workspace_id,restore.snapshot_id,
-		       restore.home_runner_id,restore.operation_id,
+		SELECT restore.id,restore.home_runner_id,restore.operation_id,
 		       restore.tenant_ref,restore.subject_ref,
 		       restore.prepare_effect_id,restore.swap_effect_id,
 		       restore.finalize_effect_id,restore.abort_effect_id,
@@ -1597,25 +1458,15 @@ func recordLocalRestoreResult(
 		       restore.finalize_command_id,restore.abort_command_id,
 		       restore.state,restore.failure_class,restore.failure_message,
 		       restore.expected_generation,restore.target_generation,
-		       workspace.mutation_id,workspace.mutation_kind,
-		       workspace.mutation_effect_id,workspace.mutation_operation_id,
-		       workspace.mutation_state,workspace.generation,
-		       sandbox.state,sandbox.generation,workspace.logical_capacity_bytes,
-		       operation.request_id,effect.state,effect.command_id,
-		       effect.retry_count,effect.fencing_token
+		       operation.request_id
 		FROM secondbox.workspace_restores AS restore
-		JOIN secondbox.sandboxes AS sandbox ON sandbox.id=restore.sandbox_id
-		JOIN secondbox.workspaces AS workspace ON workspace.id=restore.workspace_id
-		JOIN secondbox.snapshots AS snapshot ON snapshot.id=restore.snapshot_id
 		JOIN secondbox.operations AS operation ON operation.id=restore.operation_id
-		JOIN secondbox.lifecycle_effects AS effect ON effect.id=$4
 		WHERE restore.operation_id=$1 AND restore.sandbox_id=$2
-		  AND restore.workspace_id=$3 AND snapshot.workspace_id=restore.workspace_id
-		FOR UPDATE OF sandbox,workspace,snapshot,restore,effect`,
-		result.OperationId, result.SandboxId, result.WorkspaceId, result.EffectId,
+		  AND restore.workspace_id=$3 AND restore.snapshot_id=$4
+		FOR UPDATE OF restore`,
+		result.OperationId, result.SandboxId, result.WorkspaceId, result.SnapshotId,
 	).Scan(
-		&authority.restoreID, &authority.sandboxID, &authority.workspaceID,
-		&authority.snapshotID, &authority.homeRunnerID, &authority.operationID,
+		&authority.restoreID, &authority.homeRunnerID, &authority.operationID,
 		&authority.tenantRef, &authority.subjectRef,
 		&authority.prepareEffectID, &authority.swapEffectID,
 		&authority.finalizeEffectID, &authority.abortEffectID,
@@ -1623,12 +1474,7 @@ func recordLocalRestoreResult(
 		&authority.finalizeCommandID, &authority.abortCommandID,
 		&authority.restoreState, &authority.failureClass, &authority.failureMessage,
 		&authority.expectedGeneration, &authority.targetGeneration,
-		&authority.mutationID, &authority.mutationKind,
-		&authority.mutationEffectID, &authority.mutationOperationID,
-		&authority.mutationState, &authority.workspaceGeneration,
-		&authority.sandboxState, &authority.sandboxGeneration, &authority.capacity,
-		&authority.requestID, &authority.effectState, &authority.effectCommandID,
-		&authority.effectRetryCount, &authority.fencingToken,
+		&authority.requestID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return errors.New("SecondBox runner local restore result has no durable authority")
@@ -1636,6 +1482,14 @@ func recordLocalRestoreResult(
 	if err != nil {
 		return fmt.Errorf("SecondBox runner local restore authority lookup: %w", err)
 	}
+	effect, err := lockLocalWorkspaceEffect(ctx, tx, result.EffectId)
+	if err != nil {
+		return err
+	}
+	authority.effectState = effect.state
+	authority.effectCommandID = effect.commandID
+	authority.effectRetryCount = effect.retryCount
+	authority.fencingToken = effect.fencingToken
 	phase, err := restorePhaseForResult(authority, result.Kind)
 	if err != nil {
 		return err
@@ -1665,15 +1519,9 @@ func recordLocalRestoreResult(
 		authority.sandboxGeneration != authority.targetGeneration {
 		return errors.New("SecondBox runner local restore finalize precedes the database commit")
 	}
-	evidenceJSON, err := json.Marshal(map[string]any{
-		"effectId": result.EffectId, "snapshotId": authority.snapshotID,
-		"previousGeneration": result.PreviousGeneration, "generation": result.Generation,
-		"logicalCapacity":   result.LogicalCapacityBytes,
-		"receiptRecordedAt": result.ReceiptRecordedAtUnixMs,
-		"terminal":          result.Terminal.String(),
-	})
+	evidenceJSON, err := localWorkspaceEvidence(result, true, true)
 	if err != nil {
-		return fmt.Errorf("SecondBox runner local restore evidence encoding: %w", err)
+		return err
 	}
 	succeeded := result.Terminal ==
 		runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED
@@ -1701,25 +1549,21 @@ func restorePhaseForResult(
 		return localRestorePhase{
 			effectID: authority.prepareEffectID, commandID: authority.prepareCommandID,
 			expectedState: "requested", effectKind: "local_snapshot_restore_prepare",
-			receiptColumn: "prepare_receipt_json",
 		}, nil
 	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_SWAP:
 		return localRestorePhase{
 			effectID: authority.swapEffectID, commandID: authority.swapCommandID,
 			expectedState: "prepared", effectKind: "local_snapshot_restore_swap",
-			receiptColumn: "swap_receipt_json",
 		}, nil
 	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE:
 		return localRestorePhase{
 			effectID: authority.finalizeEffectID, commandID: authority.finalizeCommandID,
 			expectedState: "database_committed", effectKind: "local_snapshot_restore_finalize",
-			receiptColumn: "finalize_receipt_json",
 		}, nil
 	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT:
 		return localRestorePhase{
 			effectID: authority.abortEffectID, commandID: authority.abortCommandID,
 			expectedState: "aborting", effectKind: "local_snapshot_restore_abort",
-			receiptColumn: "abort_receipt_json",
 		}, nil
 	default:
 		return localRestorePhase{}, errors.New("SecondBox runner local restore kind is unsupported")
@@ -1752,13 +1596,10 @@ func completeLocalRestorePhase(
 	evidenceJSON []byte,
 	now time.Time,
 ) error {
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.lifecycle_effects
-		SET state='succeeded',evidence_json=$2,failure_class='',failure_message='',
-		    updated_at=$3 WHERE id=$1`,
-		result.EffectId, evidenceJSON, now,
+	if err := finishLocalWorkspaceEffect(
+		ctx, tx, result.EffectId, "succeeded", "", "", evidenceJSON, now,
 	); err != nil {
-		return fmt.Errorf("SecondBox runner local restore effect completion: %w", err)
+		return err
 	}
 	if err := acknowledgeRunnerCommand(ctx, tx, authority.effectCommandID, now); err != nil {
 		return err
@@ -1807,13 +1648,11 @@ func completeLocalRestorePhase(
 		); err != nil {
 			return fmt.Errorf("SecondBox runner local restore abort completion: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.operations
-			SET state='failed',error_code=$2,error_message=$3,retryable=false,
-			    completed_at=$4,updated_at=$4 WHERE id=$1 AND state='pending'`,
-			authority.operationID, errorCode, authority.failureMessage, now,
+		if err := finishPendingOperation(
+			ctx, tx, authority.operationID, "failed",
+			errorCode, authority.failureMessage, now,
 		); err != nil {
-			return fmt.Errorf("SecondBox runner local restore failed Operation completion: %w", err)
+			return err
 		}
 		return releaseRestoreWorkspaceMutation(ctx, tx, authority.workspaceID, now)
 	default:
@@ -1867,13 +1706,10 @@ func commitLocalRestore(
 	); err != nil {
 		return fmt.Errorf("SecondBox runner local restore database commit evidence: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.operations
-		SET state='succeeded',completed_at=$2,updated_at=$2
-		WHERE id=$1 AND state='pending'`,
-		authority.operationID, now,
+	if err := finishPendingOperation(
+		ctx, tx, authority.operationID, "succeeded", "", "", now,
 	); err != nil {
-		return fmt.Errorf("SecondBox runner local restore Operation completion: %w", err)
+		return err
 	}
 	auditDetails, err := json.Marshal(map[string]string{
 		"restoreId":          authority.restoreID,
@@ -1918,13 +1754,11 @@ func beginLocalRestoreAbort(
 	now time.Time,
 ) error {
 	errorCode := localWorkspaceOperationErrorCode(result.Terminal)
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.lifecycle_effects
-		SET state='runner_failed',failure_class=$2,failure_message=$3,
-		    evidence_json=$4,updated_at=$5 WHERE id=$1`,
-		result.EffectId, errorCode, result.SafeDetail, evidenceJSON, now,
+	if err := finishLocalWorkspaceEffect(
+		ctx, tx, result.EffectId, "runner_failed",
+		errorCode, result.SafeDetail, evidenceJSON, now,
 	); err != nil {
-		return fmt.Errorf("SecondBox runner local restore prepare failure: %w", err)
+		return err
 	}
 	if err := acknowledgeRunnerCommand(ctx, tx, authority.effectCommandID, now); err != nil {
 		return err
@@ -2122,6 +1956,109 @@ func restoreCommandPayload(
 	return command, payload, nil
 }
 
+type localWorkspaceEffect struct {
+	kind         string
+	state        string
+	commandID    string
+	retryCount   int64
+	fencingToken []byte
+}
+
+func lockLocalWorkspaceEffect(
+	ctx context.Context,
+	tx pgx.Tx,
+	effectID string,
+) (localWorkspaceEffect, error) {
+	var effect localWorkspaceEffect
+	err := tx.QueryRow(ctx, `
+		SELECT kind,state,command_id,retry_count,fencing_token
+		FROM secondbox.lifecycle_effects WHERE id=$1 FOR UPDATE`,
+		effectID,
+	).Scan(
+		&effect.kind, &effect.state, &effect.commandID,
+		&effect.retryCount, &effect.fencingToken,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return localWorkspaceEffect{}, errors.New(
+			"SecondBox runner local Workspace result has no durable effect",
+		)
+	}
+	if err != nil {
+		return localWorkspaceEffect{}, fmt.Errorf(
+			"SecondBox runner local Workspace effect lookup: %w",
+			err,
+		)
+	}
+	return effect, nil
+}
+
+func localWorkspaceEvidence(
+	result *runnerv1.LocalWorkspaceResult,
+	includeSnapshot bool,
+	includePreviousGeneration bool,
+) ([]byte, error) {
+	evidence := map[string]any{
+		"effectId":          result.EffectId,
+		"generation":        result.Generation,
+		"logicalCapacity":   result.LogicalCapacityBytes,
+		"receiptRecordedAt": result.ReceiptRecordedAtUnixMs,
+		"terminal":          result.Terminal.String(),
+	}
+	if includeSnapshot {
+		evidence["snapshotId"] = result.SnapshotId
+	}
+	if includePreviousGeneration {
+		evidence["previousGeneration"] = result.PreviousGeneration
+	}
+	encoded, err := json.Marshal(evidence)
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox runner local Workspace evidence encoding: %w", err)
+	}
+	return encoded, nil
+}
+
+func finishLocalWorkspaceEffect(
+	ctx context.Context,
+	tx pgx.Tx,
+	effectID string,
+	state string,
+	failureClass string,
+	failureMessage string,
+	evidence []byte,
+	now time.Time,
+) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.lifecycle_effects
+		SET state=$2,failure_class=$3,failure_message=$4,evidence_json=$5,updated_at=$6
+		WHERE id=$1`,
+		effectID, state, failureClass, failureMessage, evidence, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner local Workspace effect transition: %w", err)
+	}
+	return nil
+}
+
+func finishPendingOperation(
+	ctx context.Context,
+	tx pgx.Tx,
+	operationID string,
+	state string,
+	errorCode string,
+	errorMessage string,
+	now time.Time,
+) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.operations
+		SET state=$2,error_code=$3,error_message=$4,retryable=false,
+		    completed_at=$5,updated_at=$5
+		WHERE id=$1 AND state='pending'`,
+		operationID, state, errorCode, errorMessage, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner local Workspace Operation transition: %w", err)
+	}
+	return nil
+}
+
 func acknowledgeRunnerCommand(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -2255,36 +2192,31 @@ func fenceGenerationAuthority(
 	return nil
 }
 
-func localWorkspaceOperationErrorCode(
-	terminal runnerv1.LocalWorkspaceTerminalKind,
-) string {
-	switch terminal {
-	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_LOCAL_DATA_ABSENT:
-		return "workspace_local_data_absent"
-	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_ACTIVE_WRITER:
-		return "workspace_active_writer"
-	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STORAGE_INCOMPATIBLE:
-		return "workspace_storage_incompatible"
-	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_INSUFFICIENT_SPACE:
-		return "workspace_insufficient_space"
-	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_CORRUPT_RECEIPT:
-		return "workspace_receipt_corrupt"
-	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_CONFLICTING_REPLAY:
-		return "workspace_replay_conflict"
-	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_WRONG_HOME_RUNNER:
-		return "home_runner_mismatch"
-	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SNAPSHOT_IN_USE:
-		return "snapshot_in_use"
-	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_RESTORE_PENDING:
-		return "snapshot_restore_pending"
-	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_RUNNER_FAILED:
-		return "workspace_runner_failed"
-	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STALE_GENERATION,
-		runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STALE_FENCE:
-		return "workspace_authority_stale"
-	default:
-		return "workspace_operation_failed"
+type localWorkspaceFailure struct {
+	code   string
+	detail string
+}
+
+var localWorkspaceFailures = map[runnerv1.LocalWorkspaceTerminalKind]localWorkspaceFailure{
+	runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_LOCAL_DATA_ABSENT:    {"workspace_local_data_absent", "local workspace data is absent"},
+	runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_ACTIVE_WRITER:        {"workspace_active_writer", "workspace has an active writer"},
+	runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STORAGE_INCOMPATIBLE: {"workspace_storage_incompatible", "local workspace storage is incompatible"},
+	runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_INSUFFICIENT_SPACE:   {"workspace_insufficient_space", "local workspace storage has insufficient space"},
+	runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_CORRUPT_RECEIPT:      {"workspace_receipt_corrupt", "local workspace receipt is corrupt"},
+	runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_CONFLICTING_REPLAY:   {"workspace_replay_conflict", "local workspace operation conflicts with its durable receipt"},
+	runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_WRONG_HOME_RUNNER:    {"home_runner_mismatch", "workspace is not owned by this runner"},
+	runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SNAPSHOT_IN_USE:      {"snapshot_in_use", "snapshot is in use"},
+	runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_RESTORE_PENDING:      {"snapshot_restore_pending", "workspace restore is pending"},
+	runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_RUNNER_FAILED:        {"workspace_runner_failed", "local workspace operation failed"},
+	runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STALE_GENERATION:     {"workspace_authority_stale", "workspace generation is stale"},
+	runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STALE_FENCE:          {"workspace_authority_stale", "workspace fencing authority is stale"},
+}
+
+func localWorkspaceOperationErrorCode(terminal runnerv1.LocalWorkspaceTerminalKind) string {
+	if failure, ok := localWorkspaceFailures[terminal]; ok {
+		return failure.code
 	}
+	return "workspace_operation_failed"
 }
 
 func validateLocalWorkspaceResult(
@@ -2340,32 +2272,10 @@ func validateLocalWorkspaceResult(
 }
 
 func expectedLocalWorkspaceSafeDetail(terminal runnerv1.LocalWorkspaceTerminalKind) string {
-	switch terminal {
-	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_LOCAL_DATA_ABSENT:
-		return "local workspace data is absent"
-	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_ACTIVE_WRITER:
-		return "workspace has an active writer"
-	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STALE_GENERATION:
-		return "workspace generation is stale"
-	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STALE_FENCE:
-		return "workspace fencing authority is stale"
-	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STORAGE_INCOMPATIBLE:
-		return "local workspace storage is incompatible"
-	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_INSUFFICIENT_SPACE:
-		return "local workspace storage has insufficient space"
-	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_CORRUPT_RECEIPT:
-		return "local workspace receipt is corrupt"
-	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_CONFLICTING_REPLAY:
-		return "local workspace operation conflicts with its durable receipt"
-	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_WRONG_HOME_RUNNER:
-		return "workspace is not owned by this runner"
-	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SNAPSHOT_IN_USE:
-		return "snapshot is in use"
-	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_RESTORE_PENDING:
-		return "workspace restore is pending"
-	default:
-		return "local workspace operation failed"
+	if failure, ok := localWorkspaceFailures[terminal]; ok {
+		return failure.detail
 	}
+	return "local workspace operation failed"
 }
 
 func (store *PostgresStateStore) validatePersistedInstanceTerminal(

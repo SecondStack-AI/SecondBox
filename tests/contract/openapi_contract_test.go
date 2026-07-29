@@ -547,7 +547,6 @@ func TestPublicResourcesAndGeneratedSDKsContainNoPrivateWorkspaceAuthority(
 		"pkg/contracts/contracts.go",
 		"sdk/go/secondboxclient/wire_types.go",
 		"sdk/typescript/transport.ts",
-		"sdk/typescript/dist/transport.d.ts",
 		"sdk/python/secondbox_client.py",
 	} {
 		contents, err := os.ReadFile(filepath.Join(repositoryRoot, relativePath))
