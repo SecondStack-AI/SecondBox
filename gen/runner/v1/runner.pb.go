@@ -24,13 +24,13 @@ const (
 type RunnerFeature int32
 
 const (
-	RunnerFeature_RUNNER_FEATURE_UNSPECIFIED    RunnerFeature = 0
-	RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING RunnerFeature = 1
-	RunnerFeature_RUNNER_FEATURE_FILE_STREAMING RunnerFeature = 2
-	RunnerFeature_RUNNER_FEATURE_PTY            RunnerFeature = 3
-	RunnerFeature_RUNNER_FEATURE_PORT_PROXY     RunnerFeature = 4
-	RunnerFeature_RUNNER_FEATURE_EVIDENCE       RunnerFeature = 5
-	RunnerFeature_RUNNER_FEATURE_CHECKPOINT     RunnerFeature = 6
+	RunnerFeature_RUNNER_FEATURE_UNSPECIFIED     RunnerFeature = 0
+	RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING  RunnerFeature = 1
+	RunnerFeature_RUNNER_FEATURE_FILE_STREAMING  RunnerFeature = 2
+	RunnerFeature_RUNNER_FEATURE_PTY             RunnerFeature = 3
+	RunnerFeature_RUNNER_FEATURE_PORT_PROXY      RunnerFeature = 4
+	RunnerFeature_RUNNER_FEATURE_EVIDENCE        RunnerFeature = 5
+	RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE RunnerFeature = 7
 )
 
 // Enum value maps for RunnerFeature.
@@ -42,16 +42,16 @@ var (
 		3: "RUNNER_FEATURE_PTY",
 		4: "RUNNER_FEATURE_PORT_PROXY",
 		5: "RUNNER_FEATURE_EVIDENCE",
-		6: "RUNNER_FEATURE_CHECKPOINT",
+		7: "RUNNER_FEATURE_LOCAL_WORKSPACE",
 	}
 	RunnerFeature_value = map[string]int32{
-		"RUNNER_FEATURE_UNSPECIFIED":    0,
-		"RUNNER_FEATURE_EXEC_STREAMING": 1,
-		"RUNNER_FEATURE_FILE_STREAMING": 2,
-		"RUNNER_FEATURE_PTY":            3,
-		"RUNNER_FEATURE_PORT_PROXY":     4,
-		"RUNNER_FEATURE_EVIDENCE":       5,
-		"RUNNER_FEATURE_CHECKPOINT":     6,
+		"RUNNER_FEATURE_UNSPECIFIED":     0,
+		"RUNNER_FEATURE_EXEC_STREAMING":  1,
+		"RUNNER_FEATURE_FILE_STREAMING":  2,
+		"RUNNER_FEATURE_PTY":             3,
+		"RUNNER_FEATURE_PORT_PROXY":      4,
+		"RUNNER_FEATURE_EVIDENCE":        5,
+		"RUNNER_FEATURE_LOCAL_WORKSPACE": 7,
 	}
 )
 
@@ -421,14 +421,14 @@ func (AssignmentDecision) EnumDescriptor() ([]byte, []int) {
 type AssignmentProgressStage int32
 
 const (
-	AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_UNSPECIFIED           AssignmentProgressStage = 0
-	AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY       AssignmentProgressStage = 1
-	AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_MATERIALIZE AssignmentProgressStage = 2
-	AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_NETWORK_SETUP         AssignmentProgressStage = 3
-	AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_FIRECRACKER_LAUNCH    AssignmentProgressStage = 4
-	AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_GUEST_NEGOTIATION     AssignmentProgressStage = 5
-	AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_READY                 AssignmentProgressStage = 6
-	AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_TEARDOWN              AssignmentProgressStage = 7
+	AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_UNSPECIFIED        AssignmentProgressStage = 0
+	AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY    AssignmentProgressStage = 1
+	AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_ATTACH   AssignmentProgressStage = 2
+	AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_NETWORK_SETUP      AssignmentProgressStage = 3
+	AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_FIRECRACKER_LAUNCH AssignmentProgressStage = 4
+	AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_GUEST_NEGOTIATION  AssignmentProgressStage = 5
+	AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_READY              AssignmentProgressStage = 6
+	AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_TEARDOWN           AssignmentProgressStage = 7
 )
 
 // Enum value maps for AssignmentProgressStage.
@@ -436,7 +436,7 @@ var (
 	AssignmentProgressStage_name = map[int32]string{
 		0: "ASSIGNMENT_PROGRESS_STAGE_UNSPECIFIED",
 		1: "ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY",
-		2: "ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_MATERIALIZE",
+		2: "ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_ATTACH",
 		3: "ASSIGNMENT_PROGRESS_STAGE_NETWORK_SETUP",
 		4: "ASSIGNMENT_PROGRESS_STAGE_FIRECRACKER_LAUNCH",
 		5: "ASSIGNMENT_PROGRESS_STAGE_GUEST_NEGOTIATION",
@@ -444,14 +444,14 @@ var (
 		7: "ASSIGNMENT_PROGRESS_STAGE_TEARDOWN",
 	}
 	AssignmentProgressStage_value = map[string]int32{
-		"ASSIGNMENT_PROGRESS_STAGE_UNSPECIFIED":           0,
-		"ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY":       1,
-		"ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_MATERIALIZE": 2,
-		"ASSIGNMENT_PROGRESS_STAGE_NETWORK_SETUP":         3,
-		"ASSIGNMENT_PROGRESS_STAGE_FIRECRACKER_LAUNCH":    4,
-		"ASSIGNMENT_PROGRESS_STAGE_GUEST_NEGOTIATION":     5,
-		"ASSIGNMENT_PROGRESS_STAGE_READY":                 6,
-		"ASSIGNMENT_PROGRESS_STAGE_TEARDOWN":              7,
+		"ASSIGNMENT_PROGRESS_STAGE_UNSPECIFIED":        0,
+		"ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY":    1,
+		"ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_ATTACH":   2,
+		"ASSIGNMENT_PROGRESS_STAGE_NETWORK_SETUP":      3,
+		"ASSIGNMENT_PROGRESS_STAGE_FIRECRACKER_LAUNCH": 4,
+		"ASSIGNMENT_PROGRESS_STAGE_GUEST_NEGOTIATION":  5,
+		"ASSIGNMENT_PROGRESS_STAGE_READY":              6,
+		"ASSIGNMENT_PROGRESS_STAGE_TEARDOWN":           7,
 	}
 )
 
@@ -1190,62 +1190,165 @@ func (PortTerminalKind) EnumDescriptor() ([]byte, []int) {
 	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{19}
 }
 
-type CheckpointTerminalKind int32
+// LocalWorkspaceCommand coordinates durable runner-local storage using only
+// logical SecondBox identities. The authenticated stream supplies the home
+// Runner identity; paths and image bytes are never protocol values.
+type LocalWorkspaceCommandKind int32
 
 const (
-	CheckpointTerminalKind_CHECKPOINT_TERMINAL_KIND_UNSPECIFIED       CheckpointTerminalKind = 0
-	CheckpointTerminalKind_CHECKPOINT_TERMINAL_KIND_CREATED           CheckpointTerminalKind = 1
-	CheckpointTerminalKind_CHECKPOINT_TERMINAL_KIND_FENCED            CheckpointTerminalKind = 2
-	CheckpointTerminalKind_CHECKPOINT_TERMINAL_KIND_DEADLINE_EXCEEDED CheckpointTerminalKind = 3
-	CheckpointTerminalKind_CHECKPOINT_TERMINAL_KIND_INTEGRITY_FAILED  CheckpointTerminalKind = 4
-	CheckpointTerminalKind_CHECKPOINT_TERMINAL_KIND_RUNNER_FAILED     CheckpointTerminalKind = 5
+	LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_UNSPECIFIED        LocalWorkspaceCommandKind = 0
+	LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE             LocalWorkspaceCommandKind = 1
+	LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_INSPECT            LocalWorkspaceCommandKind = 2
+	LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_DELETE             LocalWorkspaceCommandKind = 3
+	LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION LocalWorkspaceCommandKind = 4
+	LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_CREATE    LocalWorkspaceCommandKind = 5
+	LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_DELETE    LocalWorkspaceCommandKind = 6
+	LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_PREPARE    LocalWorkspaceCommandKind = 7
+	LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_SWAP       LocalWorkspaceCommandKind = 8
+	LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE   LocalWorkspaceCommandKind = 9
+	LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT      LocalWorkspaceCommandKind = 10
+	LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE          LocalWorkspaceCommandKind = 11
 )
 
-// Enum value maps for CheckpointTerminalKind.
+// Enum value maps for LocalWorkspaceCommandKind.
 var (
-	CheckpointTerminalKind_name = map[int32]string{
-		0: "CHECKPOINT_TERMINAL_KIND_UNSPECIFIED",
-		1: "CHECKPOINT_TERMINAL_KIND_CREATED",
-		2: "CHECKPOINT_TERMINAL_KIND_FENCED",
-		3: "CHECKPOINT_TERMINAL_KIND_DEADLINE_EXCEEDED",
-		4: "CHECKPOINT_TERMINAL_KIND_INTEGRITY_FAILED",
-		5: "CHECKPOINT_TERMINAL_KIND_RUNNER_FAILED",
+	LocalWorkspaceCommandKind_name = map[int32]string{
+		0:  "LOCAL_WORKSPACE_COMMAND_KIND_UNSPECIFIED",
+		1:  "LOCAL_WORKSPACE_COMMAND_KIND_CREATE",
+		2:  "LOCAL_WORKSPACE_COMMAND_KIND_INSPECT",
+		3:  "LOCAL_WORKSPACE_COMMAND_KIND_DELETE",
+		4:  "LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION",
+		5:  "LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_CREATE",
+		6:  "LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_DELETE",
+		7:  "LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_PREPARE",
+		8:  "LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_SWAP",
+		9:  "LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE",
+		10: "LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT",
+		11: "LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE",
 	}
-	CheckpointTerminalKind_value = map[string]int32{
-		"CHECKPOINT_TERMINAL_KIND_UNSPECIFIED":       0,
-		"CHECKPOINT_TERMINAL_KIND_CREATED":           1,
-		"CHECKPOINT_TERMINAL_KIND_FENCED":            2,
-		"CHECKPOINT_TERMINAL_KIND_DEADLINE_EXCEEDED": 3,
-		"CHECKPOINT_TERMINAL_KIND_INTEGRITY_FAILED":  4,
-		"CHECKPOINT_TERMINAL_KIND_RUNNER_FAILED":     5,
+	LocalWorkspaceCommandKind_value = map[string]int32{
+		"LOCAL_WORKSPACE_COMMAND_KIND_UNSPECIFIED":        0,
+		"LOCAL_WORKSPACE_COMMAND_KIND_CREATE":             1,
+		"LOCAL_WORKSPACE_COMMAND_KIND_INSPECT":            2,
+		"LOCAL_WORKSPACE_COMMAND_KIND_DELETE":             3,
+		"LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION": 4,
+		"LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_CREATE":    5,
+		"LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_DELETE":    6,
+		"LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_PREPARE":    7,
+		"LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_SWAP":       8,
+		"LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE":   9,
+		"LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT":      10,
+		"LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE":          11,
 	}
 )
 
-func (x CheckpointTerminalKind) Enum() *CheckpointTerminalKind {
-	p := new(CheckpointTerminalKind)
+func (x LocalWorkspaceCommandKind) Enum() *LocalWorkspaceCommandKind {
+	p := new(LocalWorkspaceCommandKind)
 	*p = x
 	return p
 }
 
-func (x CheckpointTerminalKind) String() string {
+func (x LocalWorkspaceCommandKind) String() string {
 	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (CheckpointTerminalKind) Descriptor() protoreflect.EnumDescriptor {
+func (LocalWorkspaceCommandKind) Descriptor() protoreflect.EnumDescriptor {
 	return file_contracts_runner_v1_runner_proto_enumTypes[20].Descriptor()
 }
 
-func (CheckpointTerminalKind) Type() protoreflect.EnumType {
+func (LocalWorkspaceCommandKind) Type() protoreflect.EnumType {
 	return &file_contracts_runner_v1_runner_proto_enumTypes[20]
 }
 
-func (x CheckpointTerminalKind) Number() protoreflect.EnumNumber {
+func (x LocalWorkspaceCommandKind) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use CheckpointTerminalKind.Descriptor instead.
-func (CheckpointTerminalKind) EnumDescriptor() ([]byte, []int) {
+// Deprecated: Use LocalWorkspaceCommandKind.Descriptor instead.
+func (LocalWorkspaceCommandKind) EnumDescriptor() ([]byte, []int) {
 	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{20}
+}
+
+type LocalWorkspaceTerminalKind int32
+
+const (
+	LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_UNSPECIFIED          LocalWorkspaceTerminalKind = 0
+	LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED            LocalWorkspaceTerminalKind = 1
+	LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_LOCAL_DATA_ABSENT    LocalWorkspaceTerminalKind = 2
+	LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_ACTIVE_WRITER        LocalWorkspaceTerminalKind = 3
+	LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STALE_GENERATION     LocalWorkspaceTerminalKind = 4
+	LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STALE_FENCE          LocalWorkspaceTerminalKind = 5
+	LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STORAGE_INCOMPATIBLE LocalWorkspaceTerminalKind = 6
+	LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_INSUFFICIENT_SPACE   LocalWorkspaceTerminalKind = 7
+	LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_CORRUPT_RECEIPT      LocalWorkspaceTerminalKind = 8
+	LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_CONFLICTING_REPLAY   LocalWorkspaceTerminalKind = 9
+	LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_WRONG_HOME_RUNNER    LocalWorkspaceTerminalKind = 10
+	LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SNAPSHOT_IN_USE      LocalWorkspaceTerminalKind = 11
+	LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_RESTORE_PENDING      LocalWorkspaceTerminalKind = 12
+	LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_RUNNER_FAILED        LocalWorkspaceTerminalKind = 13
+)
+
+// Enum value maps for LocalWorkspaceTerminalKind.
+var (
+	LocalWorkspaceTerminalKind_name = map[int32]string{
+		0:  "LOCAL_WORKSPACE_TERMINAL_KIND_UNSPECIFIED",
+		1:  "LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED",
+		2:  "LOCAL_WORKSPACE_TERMINAL_KIND_LOCAL_DATA_ABSENT",
+		3:  "LOCAL_WORKSPACE_TERMINAL_KIND_ACTIVE_WRITER",
+		4:  "LOCAL_WORKSPACE_TERMINAL_KIND_STALE_GENERATION",
+		5:  "LOCAL_WORKSPACE_TERMINAL_KIND_STALE_FENCE",
+		6:  "LOCAL_WORKSPACE_TERMINAL_KIND_STORAGE_INCOMPATIBLE",
+		7:  "LOCAL_WORKSPACE_TERMINAL_KIND_INSUFFICIENT_SPACE",
+		8:  "LOCAL_WORKSPACE_TERMINAL_KIND_CORRUPT_RECEIPT",
+		9:  "LOCAL_WORKSPACE_TERMINAL_KIND_CONFLICTING_REPLAY",
+		10: "LOCAL_WORKSPACE_TERMINAL_KIND_WRONG_HOME_RUNNER",
+		11: "LOCAL_WORKSPACE_TERMINAL_KIND_SNAPSHOT_IN_USE",
+		12: "LOCAL_WORKSPACE_TERMINAL_KIND_RESTORE_PENDING",
+		13: "LOCAL_WORKSPACE_TERMINAL_KIND_RUNNER_FAILED",
+	}
+	LocalWorkspaceTerminalKind_value = map[string]int32{
+		"LOCAL_WORKSPACE_TERMINAL_KIND_UNSPECIFIED":          0,
+		"LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED":            1,
+		"LOCAL_WORKSPACE_TERMINAL_KIND_LOCAL_DATA_ABSENT":    2,
+		"LOCAL_WORKSPACE_TERMINAL_KIND_ACTIVE_WRITER":        3,
+		"LOCAL_WORKSPACE_TERMINAL_KIND_STALE_GENERATION":     4,
+		"LOCAL_WORKSPACE_TERMINAL_KIND_STALE_FENCE":          5,
+		"LOCAL_WORKSPACE_TERMINAL_KIND_STORAGE_INCOMPATIBLE": 6,
+		"LOCAL_WORKSPACE_TERMINAL_KIND_INSUFFICIENT_SPACE":   7,
+		"LOCAL_WORKSPACE_TERMINAL_KIND_CORRUPT_RECEIPT":      8,
+		"LOCAL_WORKSPACE_TERMINAL_KIND_CONFLICTING_REPLAY":   9,
+		"LOCAL_WORKSPACE_TERMINAL_KIND_WRONG_HOME_RUNNER":    10,
+		"LOCAL_WORKSPACE_TERMINAL_KIND_SNAPSHOT_IN_USE":      11,
+		"LOCAL_WORKSPACE_TERMINAL_KIND_RESTORE_PENDING":      12,
+		"LOCAL_WORKSPACE_TERMINAL_KIND_RUNNER_FAILED":        13,
+	}
+)
+
+func (x LocalWorkspaceTerminalKind) Enum() *LocalWorkspaceTerminalKind {
+	p := new(LocalWorkspaceTerminalKind)
+	*p = x
+	return p
+}
+
+func (x LocalWorkspaceTerminalKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (LocalWorkspaceTerminalKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_contracts_runner_v1_runner_proto_enumTypes[21].Descriptor()
+}
+
+func (LocalWorkspaceTerminalKind) Type() protoreflect.EnumType {
+	return &file_contracts_runner_v1_runner_proto_enumTypes[21]
+}
+
+func (x LocalWorkspaceTerminalKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use LocalWorkspaceTerminalKind.Descriptor instead.
+func (LocalWorkspaceTerminalKind) EnumDescriptor() ([]byte, []int) {
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{21}
 }
 
 // InstanceObservedTerminationReason is limited to post-ready process exit
@@ -1288,11 +1391,11 @@ func (x InstanceObservedTerminationReason) String() string {
 }
 
 func (InstanceObservedTerminationReason) Descriptor() protoreflect.EnumDescriptor {
-	return file_contracts_runner_v1_runner_proto_enumTypes[21].Descriptor()
+	return file_contracts_runner_v1_runner_proto_enumTypes[22].Descriptor()
 }
 
 func (InstanceObservedTerminationReason) Type() protoreflect.EnumType {
-	return &file_contracts_runner_v1_runner_proto_enumTypes[21]
+	return &file_contracts_runner_v1_runner_proto_enumTypes[22]
 }
 
 func (x InstanceObservedTerminationReason) Number() protoreflect.EnumNumber {
@@ -1301,7 +1404,7 @@ func (x InstanceObservedTerminationReason) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use InstanceObservedTerminationReason.Descriptor instead.
 func (InstanceObservedTerminationReason) EnumDescriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{21}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{22}
 }
 
 type ProtocolVersionRange struct {
@@ -2685,19 +2788,19 @@ func (x *NetworkPolicy) GetDestinations() []*NetworkDestination {
 }
 
 type AssignmentCommand struct {
-	state              protoimpl.MessageState  `protogen:"open.v1"`
-	MessageId          string                  `protobuf:"bytes,1,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
-	Sequence           uint64                  `protobuf:"varint,2,opt,name=sequence,proto3" json:"sequence,omitempty"`
-	Fence              *AssignmentFence        `protobuf:"bytes,3,opt,name=fence,proto3" json:"fence,omitempty"`
-	ProfileRevisionId  string                  `protobuf:"bytes,4,opt,name=profile_revision_id,json=profileRevisionId,proto3" json:"profile_revision_id,omitempty"`
-	Requirements       *ProfileRequirements    `protobuf:"bytes,5,opt,name=requirements,proto3" json:"requirements,omitempty"`
-	Assets             []*SignedAssetReference `protobuf:"bytes,6,rep,name=assets,proto3" json:"assets,omitempty"`
-	SourceCheckpointId string                  `protobuf:"bytes,7,opt,name=source_checkpoint_id,json=sourceCheckpointId,proto3" json:"source_checkpoint_id,omitempty"`
-	DeadlineUnixMs     uint64                  `protobuf:"varint,8,opt,name=deadline_unix_ms,json=deadlineUnixMs,proto3" json:"deadline_unix_ms,omitempty"`
-	Correlation        *Correlation            `protobuf:"bytes,9,opt,name=correlation,proto3" json:"correlation,omitempty"`
-	NetworkPolicy      *NetworkPolicy          `protobuf:"bytes,10,opt,name=network_policy,json=networkPolicy,proto3" json:"network_policy,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	state             protoimpl.MessageState  `protogen:"open.v1"`
+	MessageId         string                  `protobuf:"bytes,1,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
+	Sequence          uint64                  `protobuf:"varint,2,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	Fence             *AssignmentFence        `protobuf:"bytes,3,opt,name=fence,proto3" json:"fence,omitempty"`
+	ProfileRevisionId string                  `protobuf:"bytes,4,opt,name=profile_revision_id,json=profileRevisionId,proto3" json:"profile_revision_id,omitempty"`
+	Requirements      *ProfileRequirements    `protobuf:"bytes,5,opt,name=requirements,proto3" json:"requirements,omitempty"`
+	Assets            []*SignedAssetReference `protobuf:"bytes,6,rep,name=assets,proto3" json:"assets,omitempty"`
+	DeadlineUnixMs    uint64                  `protobuf:"varint,8,opt,name=deadline_unix_ms,json=deadlineUnixMs,proto3" json:"deadline_unix_ms,omitempty"`
+	Correlation       *Correlation            `protobuf:"bytes,9,opt,name=correlation,proto3" json:"correlation,omitempty"`
+	NetworkPolicy     *NetworkPolicy          `protobuf:"bytes,10,opt,name=network_policy,json=networkPolicy,proto3" json:"network_policy,omitempty"`
+	WorkspaceId       string                  `protobuf:"bytes,11,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *AssignmentCommand) Reset() {
@@ -2772,13 +2875,6 @@ func (x *AssignmentCommand) GetAssets() []*SignedAssetReference {
 	return nil
 }
 
-func (x *AssignmentCommand) GetSourceCheckpointId() string {
-	if x != nil {
-		return x.SourceCheckpointId
-	}
-	return ""
-}
-
 func (x *AssignmentCommand) GetDeadlineUnixMs() uint64 {
 	if x != nil {
 		return x.DeadlineUnixMs
@@ -2798,6 +2894,13 @@ func (x *AssignmentCommand) GetNetworkPolicy() *NetworkPolicy {
 		return x.NetworkPolicy
 	}
 	return nil
+}
+
+func (x *AssignmentCommand) GetWorkspaceId() string {
+	if x != nil {
+		return x.WorkspaceId
+	}
+	return ""
 }
 
 type AssignmentAck struct {
@@ -5378,34 +5481,40 @@ func (*PortFrame_Cancel) isPortFrame_Payload() {}
 
 func (*PortFrame_Terminal) isPortFrame_Payload() {}
 
-type CheckpointCommand struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	MessageId        string                 `protobuf:"bytes,1,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
-	Sequence         uint64                 `protobuf:"varint,2,opt,name=sequence,proto3" json:"sequence,omitempty"`
-	Fence            *AssignmentFence       `protobuf:"bytes,3,opt,name=fence,proto3" json:"fence,omitempty"`
-	CheckpointId     string                 `protobuf:"bytes,4,opt,name=checkpoint_id,json=checkpointId,proto3" json:"checkpoint_id,omitempty"`
-	StorageObjectId  string                 `protobuf:"bytes,5,opt,name=storage_object_id,json=storageObjectId,proto3" json:"storage_object_id,omitempty"`
-	MaximumSizeBytes uint64                 `protobuf:"varint,6,opt,name=maximum_size_bytes,json=maximumSizeBytes,proto3" json:"maximum_size_bytes,omitempty"`
-	DeadlineUnixMs   uint64                 `protobuf:"varint,7,opt,name=deadline_unix_ms,json=deadlineUnixMs,proto3" json:"deadline_unix_ms,omitempty"`
-	Correlation      *Correlation           `protobuf:"bytes,8,opt,name=correlation,proto3" json:"correlation,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+type LocalWorkspaceCommand struct {
+	state                protoimpl.MessageState    `protogen:"open.v1"`
+	MessageId            string                    `protobuf:"bytes,1,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
+	Sequence             uint64                    `protobuf:"varint,2,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	CommandVersion       uint32                    `protobuf:"varint,3,opt,name=command_version,json=commandVersion,proto3" json:"command_version,omitempty"`
+	Kind                 LocalWorkspaceCommandKind `protobuf:"varint,4,opt,name=kind,proto3,enum=secondbox.runner.v1.LocalWorkspaceCommandKind" json:"kind,omitempty"`
+	OperationId          string                    `protobuf:"bytes,5,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	EffectId             string                    `protobuf:"bytes,6,opt,name=effect_id,json=effectId,proto3" json:"effect_id,omitempty"`
+	SandboxId            string                    `protobuf:"bytes,7,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	WorkspaceId          string                    `protobuf:"bytes,8,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	SnapshotId           string                    `protobuf:"bytes,9,opt,name=snapshot_id,json=snapshotId,proto3" json:"snapshot_id,omitempty"`
+	ExpectedGeneration   uint64                    `protobuf:"varint,10,opt,name=expected_generation,json=expectedGeneration,proto3" json:"expected_generation,omitempty"`
+	NextGeneration       uint64                    `protobuf:"varint,11,opt,name=next_generation,json=nextGeneration,proto3" json:"next_generation,omitempty"`
+	LogicalCapacityBytes uint64                    `protobuf:"varint,12,opt,name=logical_capacity_bytes,json=logicalCapacityBytes,proto3" json:"logical_capacity_bytes,omitempty"`
+	FencingToken         []byte                    `protobuf:"bytes,13,opt,name=fencing_token,json=fencingToken,proto3" json:"fencing_token,omitempty"`
+	Correlation          *Correlation              `protobuf:"bytes,14,opt,name=correlation,proto3" json:"correlation,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
-func (x *CheckpointCommand) Reset() {
-	*x = CheckpointCommand{}
+func (x *LocalWorkspaceCommand) Reset() {
+	*x = LocalWorkspaceCommand{}
 	mi := &file_contracts_runner_v1_runner_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CheckpointCommand) String() string {
+func (x *LocalWorkspaceCommand) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CheckpointCommand) ProtoMessage() {}
+func (*LocalWorkspaceCommand) ProtoMessage() {}
 
-func (x *CheckpointCommand) ProtoReflect() protoreflect.Message {
+func (x *LocalWorkspaceCommand) ProtoReflect() protoreflect.Message {
 	mi := &file_contracts_runner_v1_runner_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -5417,95 +5526,135 @@ func (x *CheckpointCommand) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CheckpointCommand.ProtoReflect.Descriptor instead.
-func (*CheckpointCommand) Descriptor() ([]byte, []int) {
+// Deprecated: Use LocalWorkspaceCommand.ProtoReflect.Descriptor instead.
+func (*LocalWorkspaceCommand) Descriptor() ([]byte, []int) {
 	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{49}
 }
 
-func (x *CheckpointCommand) GetMessageId() string {
+func (x *LocalWorkspaceCommand) GetMessageId() string {
 	if x != nil {
 		return x.MessageId
 	}
 	return ""
 }
 
-func (x *CheckpointCommand) GetSequence() uint64 {
+func (x *LocalWorkspaceCommand) GetSequence() uint64 {
 	if x != nil {
 		return x.Sequence
 	}
 	return 0
 }
 
-func (x *CheckpointCommand) GetFence() *AssignmentFence {
+func (x *LocalWorkspaceCommand) GetCommandVersion() uint32 {
 	if x != nil {
-		return x.Fence
+		return x.CommandVersion
+	}
+	return 0
+}
+
+func (x *LocalWorkspaceCommand) GetKind() LocalWorkspaceCommandKind {
+	if x != nil {
+		return x.Kind
+	}
+	return LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_UNSPECIFIED
+}
+
+func (x *LocalWorkspaceCommand) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *LocalWorkspaceCommand) GetEffectId() string {
+	if x != nil {
+		return x.EffectId
+	}
+	return ""
+}
+
+func (x *LocalWorkspaceCommand) GetSandboxId() string {
+	if x != nil {
+		return x.SandboxId
+	}
+	return ""
+}
+
+func (x *LocalWorkspaceCommand) GetWorkspaceId() string {
+	if x != nil {
+		return x.WorkspaceId
+	}
+	return ""
+}
+
+func (x *LocalWorkspaceCommand) GetSnapshotId() string {
+	if x != nil {
+		return x.SnapshotId
+	}
+	return ""
+}
+
+func (x *LocalWorkspaceCommand) GetExpectedGeneration() uint64 {
+	if x != nil {
+		return x.ExpectedGeneration
+	}
+	return 0
+}
+
+func (x *LocalWorkspaceCommand) GetNextGeneration() uint64 {
+	if x != nil {
+		return x.NextGeneration
+	}
+	return 0
+}
+
+func (x *LocalWorkspaceCommand) GetLogicalCapacityBytes() uint64 {
+	if x != nil {
+		return x.LogicalCapacityBytes
+	}
+	return 0
+}
+
+func (x *LocalWorkspaceCommand) GetFencingToken() []byte {
+	if x != nil {
+		return x.FencingToken
 	}
 	return nil
 }
 
-func (x *CheckpointCommand) GetCheckpointId() string {
-	if x != nil {
-		return x.CheckpointId
-	}
-	return ""
-}
-
-func (x *CheckpointCommand) GetStorageObjectId() string {
-	if x != nil {
-		return x.StorageObjectId
-	}
-	return ""
-}
-
-func (x *CheckpointCommand) GetMaximumSizeBytes() uint64 {
-	if x != nil {
-		return x.MaximumSizeBytes
-	}
-	return 0
-}
-
-func (x *CheckpointCommand) GetDeadlineUnixMs() uint64 {
-	if x != nil {
-		return x.DeadlineUnixMs
-	}
-	return 0
-}
-
-func (x *CheckpointCommand) GetCorrelation() *Correlation {
+func (x *LocalWorkspaceCommand) GetCorrelation() *Correlation {
 	if x != nil {
 		return x.Correlation
 	}
 	return nil
 }
 
-type CheckpointChunk struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	MessageId       string                 `protobuf:"bytes,1,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
-	Sequence        uint64                 `protobuf:"varint,2,opt,name=sequence,proto3" json:"sequence,omitempty"`
-	Fence           *AssignmentFence       `protobuf:"bytes,3,opt,name=fence,proto3" json:"fence,omitempty"`
-	CheckpointId    string                 `protobuf:"bytes,4,opt,name=checkpoint_id,json=checkpointId,proto3" json:"checkpoint_id,omitempty"`
-	StorageObjectId string                 `protobuf:"bytes,5,opt,name=storage_object_id,json=storageObjectId,proto3" json:"storage_object_id,omitempty"`
-	Offset          uint64                 `protobuf:"varint,6,opt,name=offset,proto3" json:"offset,omitempty"`
-	Data            []byte                 `protobuf:"bytes,7,opt,name=data,proto3" json:"data,omitempty"`
-	EndOfObject     bool                   `protobuf:"varint,8,opt,name=end_of_object,json=endOfObject,proto3" json:"end_of_object,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+type LocalWorkspaceInventoryItem struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	WorkspaceId          string                 `protobuf:"bytes,1,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	Generation           uint64                 `protobuf:"varint,2,opt,name=generation,proto3" json:"generation,omitempty"`
+	LogicalCapacityBytes uint64                 `protobuf:"varint,3,opt,name=logical_capacity_bytes,json=logicalCapacityBytes,proto3" json:"logical_capacity_bytes,omitempty"`
+	Formatted            bool                   `protobuf:"varint,4,opt,name=formatted,proto3" json:"formatted,omitempty"`
+	RestorePending       bool                   `protobuf:"varint,5,opt,name=restore_pending,json=restorePending,proto3" json:"restore_pending,omitempty"`
+	ActiveWriter         bool                   `protobuf:"varint,6,opt,name=active_writer,json=activeWriter,proto3" json:"active_writer,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
-func (x *CheckpointChunk) Reset() {
-	*x = CheckpointChunk{}
+func (x *LocalWorkspaceInventoryItem) Reset() {
+	*x = LocalWorkspaceInventoryItem{}
 	mi := &file_contracts_runner_v1_runner_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CheckpointChunk) String() string {
+func (x *LocalWorkspaceInventoryItem) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CheckpointChunk) ProtoMessage() {}
+func (*LocalWorkspaceInventoryItem) ProtoMessage() {}
 
-func (x *CheckpointChunk) ProtoReflect() protoreflect.Message {
+func (x *LocalWorkspaceInventoryItem) ProtoReflect() protoreflect.Message {
 	mi := &file_contracts_runner_v1_runner_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -5517,99 +5666,81 @@ func (x *CheckpointChunk) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CheckpointChunk.ProtoReflect.Descriptor instead.
-func (*CheckpointChunk) Descriptor() ([]byte, []int) {
+// Deprecated: Use LocalWorkspaceInventoryItem.ProtoReflect.Descriptor instead.
+func (*LocalWorkspaceInventoryItem) Descriptor() ([]byte, []int) {
 	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{50}
 }
 
-func (x *CheckpointChunk) GetMessageId() string {
+func (x *LocalWorkspaceInventoryItem) GetWorkspaceId() string {
 	if x != nil {
-		return x.MessageId
+		return x.WorkspaceId
 	}
 	return ""
 }
 
-func (x *CheckpointChunk) GetSequence() uint64 {
+func (x *LocalWorkspaceInventoryItem) GetGeneration() uint64 {
 	if x != nil {
-		return x.Sequence
+		return x.Generation
 	}
 	return 0
 }
 
-func (x *CheckpointChunk) GetFence() *AssignmentFence {
+func (x *LocalWorkspaceInventoryItem) GetLogicalCapacityBytes() uint64 {
 	if x != nil {
-		return x.Fence
-	}
-	return nil
-}
-
-func (x *CheckpointChunk) GetCheckpointId() string {
-	if x != nil {
-		return x.CheckpointId
-	}
-	return ""
-}
-
-func (x *CheckpointChunk) GetStorageObjectId() string {
-	if x != nil {
-		return x.StorageObjectId
-	}
-	return ""
-}
-
-func (x *CheckpointChunk) GetOffset() uint64 {
-	if x != nil {
-		return x.Offset
+		return x.LogicalCapacityBytes
 	}
 	return 0
 }
 
-func (x *CheckpointChunk) GetData() []byte {
+func (x *LocalWorkspaceInventoryItem) GetFormatted() bool {
 	if x != nil {
-		return x.Data
-	}
-	return nil
-}
-
-func (x *CheckpointChunk) GetEndOfObject() bool {
-	if x != nil {
-		return x.EndOfObject
+		return x.Formatted
 	}
 	return false
 }
 
-type CheckpointResult struct {
-	state                     protoimpl.MessageState `protogen:"open.v1"`
-	MessageId                 string                 `protobuf:"bytes,1,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
-	Sequence                  uint64                 `protobuf:"varint,2,opt,name=sequence,proto3" json:"sequence,omitempty"`
-	Fence                     *AssignmentFence       `protobuf:"bytes,3,opt,name=fence,proto3" json:"fence,omitempty"`
-	CheckpointId              string                 `protobuf:"bytes,4,opt,name=checkpoint_id,json=checkpointId,proto3" json:"checkpoint_id,omitempty"`
-	StorageObjectId           string                 `protobuf:"bytes,5,opt,name=storage_object_id,json=storageObjectId,proto3" json:"storage_object_id,omitempty"`
-	Terminal                  CheckpointTerminalKind `protobuf:"varint,6,opt,name=terminal,proto3,enum=secondbox.runner.v1.CheckpointTerminalKind" json:"terminal,omitempty"`
-	Sha256                    string                 `protobuf:"bytes,7,opt,name=sha256,proto3" json:"sha256,omitempty"`
-	SizeBytes                 uint64                 `protobuf:"varint,8,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
-	Compatibility             map[string]string      `protobuf:"bytes,9,rep,name=compatibility,proto3" json:"compatibility,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	TerminationEvidenceDigest string                 `protobuf:"bytes,10,opt,name=termination_evidence_digest,json=terminationEvidenceDigest,proto3" json:"termination_evidence_digest,omitempty"`
-	SafeDetail                string                 `protobuf:"bytes,11,opt,name=safe_detail,json=safeDetail,proto3" json:"safe_detail,omitempty"`
-	Correlation               *Correlation           `protobuf:"bytes,12,opt,name=correlation,proto3" json:"correlation,omitempty"`
-	unknownFields             protoimpl.UnknownFields
-	sizeCache                 protoimpl.SizeCache
+func (x *LocalWorkspaceInventoryItem) GetRestorePending() bool {
+	if x != nil {
+		return x.RestorePending
+	}
+	return false
 }
 
-func (x *CheckpointResult) Reset() {
-	*x = CheckpointResult{}
+func (x *LocalWorkspaceInventoryItem) GetActiveWriter() bool {
+	if x != nil {
+		return x.ActiveWriter
+	}
+	return false
+}
+
+type LocalWorkspaceReceiptItem struct {
+	state                   protoimpl.MessageState    `protogen:"open.v1"`
+	Kind                    LocalWorkspaceCommandKind `protobuf:"varint,1,opt,name=kind,proto3,enum=secondbox.runner.v1.LocalWorkspaceCommandKind" json:"kind,omitempty"`
+	OperationId             string                    `protobuf:"bytes,2,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	WorkspaceId             string                    `protobuf:"bytes,3,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	SnapshotId              string                    `protobuf:"bytes,4,opt,name=snapshot_id,json=snapshotId,proto3" json:"snapshot_id,omitempty"`
+	PreviousGeneration      uint64                    `protobuf:"varint,5,opt,name=previous_generation,json=previousGeneration,proto3" json:"previous_generation,omitempty"`
+	Generation              uint64                    `protobuf:"varint,6,opt,name=generation,proto3" json:"generation,omitempty"`
+	LogicalCapacityBytes    uint64                    `protobuf:"varint,7,opt,name=logical_capacity_bytes,json=logicalCapacityBytes,proto3" json:"logical_capacity_bytes,omitempty"`
+	ReceiptRecordedAtUnixMs uint64                    `protobuf:"varint,8,opt,name=receipt_recorded_at_unix_ms,json=receiptRecordedAtUnixMs,proto3" json:"receipt_recorded_at_unix_ms,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *LocalWorkspaceReceiptItem) Reset() {
+	*x = LocalWorkspaceReceiptItem{}
 	mi := &file_contracts_runner_v1_runner_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CheckpointResult) String() string {
+func (x *LocalWorkspaceReceiptItem) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CheckpointResult) ProtoMessage() {}
+func (*LocalWorkspaceReceiptItem) ProtoMessage() {}
 
-func (x *CheckpointResult) ProtoReflect() protoreflect.Message {
+func (x *LocalWorkspaceReceiptItem) ProtoReflect() protoreflect.Message {
 	mi := &file_contracts_runner_v1_runner_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -5621,277 +5752,245 @@ func (x *CheckpointResult) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CheckpointResult.ProtoReflect.Descriptor instead.
-func (*CheckpointResult) Descriptor() ([]byte, []int) {
+// Deprecated: Use LocalWorkspaceReceiptItem.ProtoReflect.Descriptor instead.
+func (*LocalWorkspaceReceiptItem) Descriptor() ([]byte, []int) {
 	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{51}
 }
 
-func (x *CheckpointResult) GetMessageId() string {
+func (x *LocalWorkspaceReceiptItem) GetKind() LocalWorkspaceCommandKind {
+	if x != nil {
+		return x.Kind
+	}
+	return LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_UNSPECIFIED
+}
+
+func (x *LocalWorkspaceReceiptItem) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+func (x *LocalWorkspaceReceiptItem) GetWorkspaceId() string {
+	if x != nil {
+		return x.WorkspaceId
+	}
+	return ""
+}
+
+func (x *LocalWorkspaceReceiptItem) GetSnapshotId() string {
+	if x != nil {
+		return x.SnapshotId
+	}
+	return ""
+}
+
+func (x *LocalWorkspaceReceiptItem) GetPreviousGeneration() uint64 {
+	if x != nil {
+		return x.PreviousGeneration
+	}
+	return 0
+}
+
+func (x *LocalWorkspaceReceiptItem) GetGeneration() uint64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+func (x *LocalWorkspaceReceiptItem) GetLogicalCapacityBytes() uint64 {
+	if x != nil {
+		return x.LogicalCapacityBytes
+	}
+	return 0
+}
+
+func (x *LocalWorkspaceReceiptItem) GetReceiptRecordedAtUnixMs() uint64 {
+	if x != nil {
+		return x.ReceiptRecordedAtUnixMs
+	}
+	return 0
+}
+
+type LocalWorkspaceResult struct {
+	state                   protoimpl.MessageState         `protogen:"open.v1"`
+	MessageId               string                         `protobuf:"bytes,1,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
+	Sequence                uint64                         `protobuf:"varint,2,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	CommandVersion          uint32                         `protobuf:"varint,3,opt,name=command_version,json=commandVersion,proto3" json:"command_version,omitempty"`
+	Kind                    LocalWorkspaceCommandKind      `protobuf:"varint,4,opt,name=kind,proto3,enum=secondbox.runner.v1.LocalWorkspaceCommandKind" json:"kind,omitempty"`
+	Terminal                LocalWorkspaceTerminalKind     `protobuf:"varint,5,opt,name=terminal,proto3,enum=secondbox.runner.v1.LocalWorkspaceTerminalKind" json:"terminal,omitempty"`
+	OperationId             string                         `protobuf:"bytes,6,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	EffectId                string                         `protobuf:"bytes,7,opt,name=effect_id,json=effectId,proto3" json:"effect_id,omitempty"`
+	SandboxId               string                         `protobuf:"bytes,8,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	WorkspaceId             string                         `protobuf:"bytes,9,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	SnapshotId              string                         `protobuf:"bytes,10,opt,name=snapshot_id,json=snapshotId,proto3" json:"snapshot_id,omitempty"`
+	PreviousGeneration      uint64                         `protobuf:"varint,11,opt,name=previous_generation,json=previousGeneration,proto3" json:"previous_generation,omitempty"`
+	Generation              uint64                         `protobuf:"varint,12,opt,name=generation,proto3" json:"generation,omitempty"`
+	LogicalCapacityBytes    uint64                         `protobuf:"varint,13,opt,name=logical_capacity_bytes,json=logicalCapacityBytes,proto3" json:"logical_capacity_bytes,omitempty"`
+	ReceiptRecordedAtUnixMs uint64                         `protobuf:"varint,14,opt,name=receipt_recorded_at_unix_ms,json=receiptRecordedAtUnixMs,proto3" json:"receipt_recorded_at_unix_ms,omitempty"`
+	Inventory               []*LocalWorkspaceInventoryItem `protobuf:"bytes,15,rep,name=inventory,proto3" json:"inventory,omitempty"`
+	SafeDetail              string                         `protobuf:"bytes,16,opt,name=safe_detail,json=safeDetail,proto3" json:"safe_detail,omitempty"`
+	Correlation             *Correlation                   `protobuf:"bytes,17,opt,name=correlation,proto3" json:"correlation,omitempty"`
+	Receipts                []*LocalWorkspaceReceiptItem   `protobuf:"bytes,18,rep,name=receipts,proto3" json:"receipts,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *LocalWorkspaceResult) Reset() {
+	*x = LocalWorkspaceResult{}
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[52]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LocalWorkspaceResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LocalWorkspaceResult) ProtoMessage() {}
+
+func (x *LocalWorkspaceResult) ProtoReflect() protoreflect.Message {
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[52]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LocalWorkspaceResult.ProtoReflect.Descriptor instead.
+func (*LocalWorkspaceResult) Descriptor() ([]byte, []int) {
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{52}
+}
+
+func (x *LocalWorkspaceResult) GetMessageId() string {
 	if x != nil {
 		return x.MessageId
 	}
 	return ""
 }
 
-func (x *CheckpointResult) GetSequence() uint64 {
+func (x *LocalWorkspaceResult) GetSequence() uint64 {
 	if x != nil {
 		return x.Sequence
 	}
 	return 0
 }
 
-func (x *CheckpointResult) GetFence() *AssignmentFence {
+func (x *LocalWorkspaceResult) GetCommandVersion() uint32 {
 	if x != nil {
-		return x.Fence
-	}
-	return nil
-}
-
-func (x *CheckpointResult) GetCheckpointId() string {
-	if x != nil {
-		return x.CheckpointId
-	}
-	return ""
-}
-
-func (x *CheckpointResult) GetStorageObjectId() string {
-	if x != nil {
-		return x.StorageObjectId
-	}
-	return ""
-}
-
-func (x *CheckpointResult) GetTerminal() CheckpointTerminalKind {
-	if x != nil {
-		return x.Terminal
-	}
-	return CheckpointTerminalKind_CHECKPOINT_TERMINAL_KIND_UNSPECIFIED
-}
-
-func (x *CheckpointResult) GetSha256() string {
-	if x != nil {
-		return x.Sha256
-	}
-	return ""
-}
-
-func (x *CheckpointResult) GetSizeBytes() uint64 {
-	if x != nil {
-		return x.SizeBytes
+		return x.CommandVersion
 	}
 	return 0
 }
 
-func (x *CheckpointResult) GetCompatibility() map[string]string {
+func (x *LocalWorkspaceResult) GetKind() LocalWorkspaceCommandKind {
 	if x != nil {
-		return x.Compatibility
+		return x.Kind
 	}
-	return nil
+	return LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_UNSPECIFIED
 }
 
-func (x *CheckpointResult) GetTerminationEvidenceDigest() string {
+func (x *LocalWorkspaceResult) GetTerminal() LocalWorkspaceTerminalKind {
 	if x != nil {
-		return x.TerminationEvidenceDigest
+		return x.Terminal
+	}
+	return LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_UNSPECIFIED
+}
+
+func (x *LocalWorkspaceResult) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
 	}
 	return ""
 }
 
-func (x *CheckpointResult) GetSafeDetail() string {
+func (x *LocalWorkspaceResult) GetEffectId() string {
+	if x != nil {
+		return x.EffectId
+	}
+	return ""
+}
+
+func (x *LocalWorkspaceResult) GetSandboxId() string {
+	if x != nil {
+		return x.SandboxId
+	}
+	return ""
+}
+
+func (x *LocalWorkspaceResult) GetWorkspaceId() string {
+	if x != nil {
+		return x.WorkspaceId
+	}
+	return ""
+}
+
+func (x *LocalWorkspaceResult) GetSnapshotId() string {
+	if x != nil {
+		return x.SnapshotId
+	}
+	return ""
+}
+
+func (x *LocalWorkspaceResult) GetPreviousGeneration() uint64 {
+	if x != nil {
+		return x.PreviousGeneration
+	}
+	return 0
+}
+
+func (x *LocalWorkspaceResult) GetGeneration() uint64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+func (x *LocalWorkspaceResult) GetLogicalCapacityBytes() uint64 {
+	if x != nil {
+		return x.LogicalCapacityBytes
+	}
+	return 0
+}
+
+func (x *LocalWorkspaceResult) GetReceiptRecordedAtUnixMs() uint64 {
+	if x != nil {
+		return x.ReceiptRecordedAtUnixMs
+	}
+	return 0
+}
+
+func (x *LocalWorkspaceResult) GetInventory() []*LocalWorkspaceInventoryItem {
+	if x != nil {
+		return x.Inventory
+	}
+	return nil
+}
+
+func (x *LocalWorkspaceResult) GetSafeDetail() string {
 	if x != nil {
 		return x.SafeDetail
 	}
 	return ""
 }
 
-func (x *CheckpointResult) GetCorrelation() *Correlation {
+func (x *LocalWorkspaceResult) GetCorrelation() *Correlation {
 	if x != nil {
 		return x.Correlation
 	}
 	return nil
 }
 
-type RestoreBegin struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Fence           *AssignmentFence       `protobuf:"bytes,1,opt,name=fence,proto3" json:"fence,omitempty"`
-	CheckpointId    string                 `protobuf:"bytes,2,opt,name=checkpoint_id,json=checkpointId,proto3" json:"checkpoint_id,omitempty"`
-	StorageObjectId string                 `protobuf:"bytes,3,opt,name=storage_object_id,json=storageObjectId,proto3" json:"storage_object_id,omitempty"`
-	Sha256          string                 `protobuf:"bytes,4,opt,name=sha256,proto3" json:"sha256,omitempty"`
-	SizeBytes       uint64                 `protobuf:"varint,5,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
-	Compatibility   map[string]string      `protobuf:"bytes,6,rep,name=compatibility,proto3" json:"compatibility,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	DeadlineUnixMs  uint64                 `protobuf:"varint,7,opt,name=deadline_unix_ms,json=deadlineUnixMs,proto3" json:"deadline_unix_ms,omitempty"`
-	Correlation     *Correlation           `protobuf:"bytes,8,opt,name=correlation,proto3" json:"correlation,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
-}
-
-func (x *RestoreBegin) Reset() {
-	*x = RestoreBegin{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[52]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RestoreBegin) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RestoreBegin) ProtoMessage() {}
-
-func (x *RestoreBegin) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[52]
+func (x *LocalWorkspaceResult) GetReceipts() []*LocalWorkspaceReceiptItem {
 	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RestoreBegin.ProtoReflect.Descriptor instead.
-func (*RestoreBegin) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{52}
-}
-
-func (x *RestoreBegin) GetFence() *AssignmentFence {
-	if x != nil {
-		return x.Fence
+		return x.Receipts
 	}
 	return nil
-}
-
-func (x *RestoreBegin) GetCheckpointId() string {
-	if x != nil {
-		return x.CheckpointId
-	}
-	return ""
-}
-
-func (x *RestoreBegin) GetStorageObjectId() string {
-	if x != nil {
-		return x.StorageObjectId
-	}
-	return ""
-}
-
-func (x *RestoreBegin) GetSha256() string {
-	if x != nil {
-		return x.Sha256
-	}
-	return ""
-}
-
-func (x *RestoreBegin) GetSizeBytes() uint64 {
-	if x != nil {
-		return x.SizeBytes
-	}
-	return 0
-}
-
-func (x *RestoreBegin) GetCompatibility() map[string]string {
-	if x != nil {
-		return x.Compatibility
-	}
-	return nil
-}
-
-func (x *RestoreBegin) GetDeadlineUnixMs() uint64 {
-	if x != nil {
-		return x.DeadlineUnixMs
-	}
-	return 0
-}
-
-func (x *RestoreBegin) GetCorrelation() *Correlation {
-	if x != nil {
-		return x.Correlation
-	}
-	return nil
-}
-
-type RestoreChunk struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Fence           *AssignmentFence       `protobuf:"bytes,1,opt,name=fence,proto3" json:"fence,omitempty"`
-	CheckpointId    string                 `protobuf:"bytes,2,opt,name=checkpoint_id,json=checkpointId,proto3" json:"checkpoint_id,omitempty"`
-	StorageObjectId string                 `protobuf:"bytes,3,opt,name=storage_object_id,json=storageObjectId,proto3" json:"storage_object_id,omitempty"`
-	Offset          uint64                 `protobuf:"varint,4,opt,name=offset,proto3" json:"offset,omitempty"`
-	Data            []byte                 `protobuf:"bytes,5,opt,name=data,proto3" json:"data,omitempty"`
-	EndOfObject     bool                   `protobuf:"varint,6,opt,name=end_of_object,json=endOfObject,proto3" json:"end_of_object,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
-}
-
-func (x *RestoreChunk) Reset() {
-	*x = RestoreChunk{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[53]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RestoreChunk) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RestoreChunk) ProtoMessage() {}
-
-func (x *RestoreChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[53]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RestoreChunk.ProtoReflect.Descriptor instead.
-func (*RestoreChunk) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{53}
-}
-
-func (x *RestoreChunk) GetFence() *AssignmentFence {
-	if x != nil {
-		return x.Fence
-	}
-	return nil
-}
-
-func (x *RestoreChunk) GetCheckpointId() string {
-	if x != nil {
-		return x.CheckpointId
-	}
-	return ""
-}
-
-func (x *RestoreChunk) GetStorageObjectId() string {
-	if x != nil {
-		return x.StorageObjectId
-	}
-	return ""
-}
-
-func (x *RestoreChunk) GetOffset() uint64 {
-	if x != nil {
-		return x.Offset
-	}
-	return 0
-}
-
-func (x *RestoreChunk) GetData() []byte {
-	if x != nil {
-		return x.Data
-	}
-	return nil
-}
-
-func (x *RestoreChunk) GetEndOfObject() bool {
-	if x != nil {
-		return x.EndOfObject
-	}
-	return false
 }
 
 // Evidence is deliberately unable to carry fencing tokens, command values,
@@ -5911,7 +6010,7 @@ type Evidence struct {
 
 func (x *Evidence) Reset() {
 	*x = Evidence{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[54]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5923,7 +6022,7 @@ func (x *Evidence) String() string {
 func (*Evidence) ProtoMessage() {}
 
 func (x *Evidence) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[54]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5936,7 +6035,7 @@ func (x *Evidence) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Evidence.ProtoReflect.Descriptor instead.
 func (*Evidence) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{54}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *Evidence) GetMessageId() string {
@@ -5989,7 +6088,7 @@ func (x *Evidence) GetCorrelation() *Correlation {
 }
 
 // InstanceTerminal reports that the current assigned process is gone. It is
-// observation evidence only and does not prove Assignment or materialization
+// observation evidence only and does not prove Assignment or Workspace release
 // release.
 type InstanceTerminal struct {
 	state                     protoimpl.MessageState            `protogen:"open.v1"`
@@ -6006,7 +6105,7 @@ type InstanceTerminal struct {
 
 func (x *InstanceTerminal) Reset() {
 	*x = InstanceTerminal{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[55]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6018,7 +6117,7 @@ func (x *InstanceTerminal) String() string {
 func (*InstanceTerminal) ProtoMessage() {}
 
 func (x *InstanceTerminal) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[55]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6031,7 +6130,7 @@ func (x *InstanceTerminal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstanceTerminal.ProtoReflect.Descriptor instead.
 func (*InstanceTerminal) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{55}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *InstanceTerminal) GetMessageId() string {
@@ -6100,9 +6199,8 @@ type RunnerToControlPlane struct {
 	//	*RunnerToControlPlane_Pty
 	//	*RunnerToControlPlane_Port
 	//	*RunnerToControlPlane_Evidence
-	//	*RunnerToControlPlane_CheckpointChunk
-	//	*RunnerToControlPlane_CheckpointResult
 	//	*RunnerToControlPlane_InstanceTerminal
+	//	*RunnerToControlPlane_LocalWorkspaceResult
 	Message       isRunnerToControlPlane_Message `protobuf_oneof:"message"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -6110,7 +6208,7 @@ type RunnerToControlPlane struct {
 
 func (x *RunnerToControlPlane) Reset() {
 	*x = RunnerToControlPlane{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[56]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6122,7 +6220,7 @@ func (x *RunnerToControlPlane) String() string {
 func (*RunnerToControlPlane) ProtoMessage() {}
 
 func (x *RunnerToControlPlane) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[56]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6135,7 +6233,7 @@ func (x *RunnerToControlPlane) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunnerToControlPlane.ProtoReflect.Descriptor instead.
 func (*RunnerToControlPlane) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{56}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *RunnerToControlPlane) GetMessage() isRunnerToControlPlane_Message {
@@ -6262,28 +6360,19 @@ func (x *RunnerToControlPlane) GetEvidence() *Evidence {
 	return nil
 }
 
-func (x *RunnerToControlPlane) GetCheckpointChunk() *CheckpointChunk {
-	if x != nil {
-		if x, ok := x.Message.(*RunnerToControlPlane_CheckpointChunk); ok {
-			return x.CheckpointChunk
-		}
-	}
-	return nil
-}
-
-func (x *RunnerToControlPlane) GetCheckpointResult() *CheckpointResult {
-	if x != nil {
-		if x, ok := x.Message.(*RunnerToControlPlane_CheckpointResult); ok {
-			return x.CheckpointResult
-		}
-	}
-	return nil
-}
-
 func (x *RunnerToControlPlane) GetInstanceTerminal() *InstanceTerminal {
 	if x != nil {
 		if x, ok := x.Message.(*RunnerToControlPlane_InstanceTerminal); ok {
 			return x.InstanceTerminal
+		}
+	}
+	return nil
+}
+
+func (x *RunnerToControlPlane) GetLocalWorkspaceResult() *LocalWorkspaceResult {
+	if x != nil {
+		if x, ok := x.Message.(*RunnerToControlPlane_LocalWorkspaceResult); ok {
+			return x.LocalWorkspaceResult
 		}
 	}
 	return nil
@@ -6345,16 +6434,12 @@ type RunnerToControlPlane_Evidence struct {
 	Evidence *Evidence `protobuf:"bytes,13,opt,name=evidence,proto3,oneof"`
 }
 
-type RunnerToControlPlane_CheckpointChunk struct {
-	CheckpointChunk *CheckpointChunk `protobuf:"bytes,14,opt,name=checkpoint_chunk,json=checkpointChunk,proto3,oneof"`
-}
-
-type RunnerToControlPlane_CheckpointResult struct {
-	CheckpointResult *CheckpointResult `protobuf:"bytes,15,opt,name=checkpoint_result,json=checkpointResult,proto3,oneof"`
-}
-
 type RunnerToControlPlane_InstanceTerminal struct {
 	InstanceTerminal *InstanceTerminal `protobuf:"bytes,16,opt,name=instance_terminal,json=instanceTerminal,proto3,oneof"`
+}
+
+type RunnerToControlPlane_LocalWorkspaceResult struct {
+	LocalWorkspaceResult *LocalWorkspaceResult `protobuf:"bytes,17,opt,name=local_workspace_result,json=localWorkspaceResult,proto3,oneof"`
 }
 
 func (*RunnerToControlPlane_Hello) isRunnerToControlPlane_Message() {}
@@ -6383,11 +6468,9 @@ func (*RunnerToControlPlane_Port) isRunnerToControlPlane_Message() {}
 
 func (*RunnerToControlPlane_Evidence) isRunnerToControlPlane_Message() {}
 
-func (*RunnerToControlPlane_CheckpointChunk) isRunnerToControlPlane_Message() {}
-
-func (*RunnerToControlPlane_CheckpointResult) isRunnerToControlPlane_Message() {}
-
 func (*RunnerToControlPlane_InstanceTerminal) isRunnerToControlPlane_Message() {}
+
+func (*RunnerToControlPlane_LocalWorkspaceResult) isRunnerToControlPlane_Message() {}
 
 type ControlPlaneToRunner struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -6402,9 +6485,7 @@ type ControlPlaneToRunner struct {
 	//	*ControlPlaneToRunner_File
 	//	*ControlPlaneToRunner_Pty
 	//	*ControlPlaneToRunner_Port
-	//	*ControlPlaneToRunner_Checkpoint
-	//	*ControlPlaneToRunner_RestoreBegin
-	//	*ControlPlaneToRunner_RestoreChunk
+	//	*ControlPlaneToRunner_LocalWorkspace
 	Message       isControlPlaneToRunner_Message `protobuf_oneof:"message"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -6412,7 +6493,7 @@ type ControlPlaneToRunner struct {
 
 func (x *ControlPlaneToRunner) Reset() {
 	*x = ControlPlaneToRunner{}
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[57]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6424,7 +6505,7 @@ func (x *ControlPlaneToRunner) String() string {
 func (*ControlPlaneToRunner) ProtoMessage() {}
 
 func (x *ControlPlaneToRunner) ProtoReflect() protoreflect.Message {
-	mi := &file_contracts_runner_v1_runner_proto_msgTypes[57]
+	mi := &file_contracts_runner_v1_runner_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6437,7 +6518,7 @@ func (x *ControlPlaneToRunner) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ControlPlaneToRunner.ProtoReflect.Descriptor instead.
 func (*ControlPlaneToRunner) Descriptor() ([]byte, []int) {
-	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{57}
+	return file_contracts_runner_v1_runner_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *ControlPlaneToRunner) GetMessage() isControlPlaneToRunner_Message {
@@ -6528,28 +6609,10 @@ func (x *ControlPlaneToRunner) GetPort() *PortFrame {
 	return nil
 }
 
-func (x *ControlPlaneToRunner) GetCheckpoint() *CheckpointCommand {
+func (x *ControlPlaneToRunner) GetLocalWorkspace() *LocalWorkspaceCommand {
 	if x != nil {
-		if x, ok := x.Message.(*ControlPlaneToRunner_Checkpoint); ok {
-			return x.Checkpoint
-		}
-	}
-	return nil
-}
-
-func (x *ControlPlaneToRunner) GetRestoreBegin() *RestoreBegin {
-	if x != nil {
-		if x, ok := x.Message.(*ControlPlaneToRunner_RestoreBegin); ok {
-			return x.RestoreBegin
-		}
-	}
-	return nil
-}
-
-func (x *ControlPlaneToRunner) GetRestoreChunk() *RestoreChunk {
-	if x != nil {
-		if x, ok := x.Message.(*ControlPlaneToRunner_RestoreChunk); ok {
-			return x.RestoreChunk
+		if x, ok := x.Message.(*ControlPlaneToRunner_LocalWorkspace); ok {
+			return x.LocalWorkspace
 		}
 	}
 	return nil
@@ -6595,16 +6658,8 @@ type ControlPlaneToRunner_Port struct {
 	Port *PortFrame `protobuf:"bytes,9,opt,name=port,proto3,oneof"`
 }
 
-type ControlPlaneToRunner_Checkpoint struct {
-	Checkpoint *CheckpointCommand `protobuf:"bytes,10,opt,name=checkpoint,proto3,oneof"`
-}
-
-type ControlPlaneToRunner_RestoreBegin struct {
-	RestoreBegin *RestoreBegin `protobuf:"bytes,11,opt,name=restore_begin,json=restoreBegin,proto3,oneof"`
-}
-
-type ControlPlaneToRunner_RestoreChunk struct {
-	RestoreChunk *RestoreChunk `protobuf:"bytes,12,opt,name=restore_chunk,json=restoreChunk,proto3,oneof"`
+type ControlPlaneToRunner_LocalWorkspace struct {
+	LocalWorkspace *LocalWorkspaceCommand `protobuf:"bytes,13,opt,name=local_workspace,json=localWorkspace,proto3,oneof"`
 }
 
 func (*ControlPlaneToRunner_Welcome) isControlPlaneToRunner_Message() {}
@@ -6625,11 +6680,7 @@ func (*ControlPlaneToRunner_Pty) isControlPlaneToRunner_Message() {}
 
 func (*ControlPlaneToRunner_Port) isControlPlaneToRunner_Message() {}
 
-func (*ControlPlaneToRunner_Checkpoint) isControlPlaneToRunner_Message() {}
-
-func (*ControlPlaneToRunner_RestoreBegin) isControlPlaneToRunner_Message() {}
-
-func (*ControlPlaneToRunner_RestoreChunk) isControlPlaneToRunner_Message() {}
+func (*ControlPlaneToRunner_LocalWorkspace) isControlPlaneToRunner_Message() {}
 
 var File_contracts_runner_v1_runner_proto protoreflect.FileDescriptor
 
@@ -6766,7 +6817,7 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\x06target\"\x98\x01\n" +
 	"\rNetworkPolicy\x12:\n" +
 	"\x04mode\x18\x01 \x01(\x0e2&.secondbox.runner.v1.NetworkPolicyModeR\x04mode\x12K\n" +
-	"\fdestinations\x18\x02 \x03(\v2'.secondbox.runner.v1.NetworkDestinationR\fdestinations\"\xb6\x04\n" +
+	"\fdestinations\x18\x02 \x03(\v2'.secondbox.runner.v1.NetworkDestinationR\fdestinations\"\xad\x04\n" +
 	"\x11AssignmentCommand\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1a\n" +
@@ -6774,12 +6825,12 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\x05fence\x18\x03 \x01(\v2$.secondbox.runner.v1.AssignmentFenceR\x05fence\x12.\n" +
 	"\x13profile_revision_id\x18\x04 \x01(\tR\x11profileRevisionId\x12L\n" +
 	"\frequirements\x18\x05 \x01(\v2(.secondbox.runner.v1.ProfileRequirementsR\frequirements\x12A\n" +
-	"\x06assets\x18\x06 \x03(\v2).secondbox.runner.v1.SignedAssetReferenceR\x06assets\x120\n" +
-	"\x14source_checkpoint_id\x18\a \x01(\tR\x12sourceCheckpointId\x12(\n" +
+	"\x06assets\x18\x06 \x03(\v2).secondbox.runner.v1.SignedAssetReferenceR\x06assets\x12(\n" +
 	"\x10deadline_unix_ms\x18\b \x01(\x04R\x0edeadlineUnixMs\x12B\n" +
 	"\vcorrelation\x18\t \x01(\v2 .secondbox.runner.v1.CorrelationR\vcorrelation\x12I\n" +
 	"\x0enetwork_policy\x18\n" +
-	" \x01(\v2\".secondbox.runner.v1.NetworkPolicyR\rnetworkPolicy\"\xb8\x02\n" +
+	" \x01(\v2\".secondbox.runner.v1.NetworkPolicyR\rnetworkPolicy\x12!\n" +
+	"\fworkspace_id\x18\v \x01(\tR\vworkspaceIdJ\x04\b\a\x10\b\"\xb8\x02\n" +
 	"\rAssignmentAck\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1a\n" +
@@ -6990,67 +7041,73 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\x06credit\x18\f \x01(\v2!.secondbox.runner.v1.StreamCreditH\x00R\x06credit\x129\n" +
 	"\x06cancel\x18\r \x01(\v2\x1f.secondbox.runner.v1.ExecCancelH\x00R\x06cancel\x12?\n" +
 	"\bterminal\x18\x0e \x01(\v2!.secondbox.runner.v1.PortTerminalH\x00R\bterminalB\t\n" +
-	"\apayload\"\xf7\x02\n" +
-	"\x11CheckpointCommand\x12\x1d\n" +
+	"\apayload\"\xdb\x04\n" +
+	"\x15LocalWorkspaceCommand\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1a\n" +
-	"\bsequence\x18\x02 \x01(\x04R\bsequence\x12:\n" +
-	"\x05fence\x18\x03 \x01(\v2$.secondbox.runner.v1.AssignmentFenceR\x05fence\x12#\n" +
-	"\rcheckpoint_id\x18\x04 \x01(\tR\fcheckpointId\x12*\n" +
-	"\x11storage_object_id\x18\x05 \x01(\tR\x0fstorageObjectId\x12,\n" +
-	"\x12maximum_size_bytes\x18\x06 \x01(\x04R\x10maximumSizeBytes\x12(\n" +
-	"\x10deadline_unix_ms\x18\a \x01(\x04R\x0edeadlineUnixMs\x12B\n" +
-	"\vcorrelation\x18\b \x01(\v2 .secondbox.runner.v1.CorrelationR\vcorrelation\"\xa9\x02\n" +
-	"\x0fCheckpointChunk\x12\x1d\n" +
+	"\bsequence\x18\x02 \x01(\x04R\bsequence\x12'\n" +
+	"\x0fcommand_version\x18\x03 \x01(\rR\x0ecommandVersion\x12B\n" +
+	"\x04kind\x18\x04 \x01(\x0e2..secondbox.runner.v1.LocalWorkspaceCommandKindR\x04kind\x12!\n" +
+	"\foperation_id\x18\x05 \x01(\tR\voperationId\x12\x1b\n" +
+	"\teffect_id\x18\x06 \x01(\tR\beffectId\x12\x1d\n" +
+	"\n" +
+	"sandbox_id\x18\a \x01(\tR\tsandboxId\x12!\n" +
+	"\fworkspace_id\x18\b \x01(\tR\vworkspaceId\x12\x1f\n" +
+	"\vsnapshot_id\x18\t \x01(\tR\n" +
+	"snapshotId\x12/\n" +
+	"\x13expected_generation\x18\n" +
+	" \x01(\x04R\x12expectedGeneration\x12'\n" +
+	"\x0fnext_generation\x18\v \x01(\x04R\x0enextGeneration\x124\n" +
+	"\x16logical_capacity_bytes\x18\f \x01(\x04R\x14logicalCapacityBytes\x12#\n" +
+	"\rfencing_token\x18\r \x01(\fR\ffencingToken\x12B\n" +
+	"\vcorrelation\x18\x0e \x01(\v2 .secondbox.runner.v1.CorrelationR\vcorrelation\"\x82\x02\n" +
+	"\x1bLocalWorkspaceInventoryItem\x12!\n" +
+	"\fworkspace_id\x18\x01 \x01(\tR\vworkspaceId\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x02 \x01(\x04R\n" +
+	"generation\x124\n" +
+	"\x16logical_capacity_bytes\x18\x03 \x01(\x04R\x14logicalCapacityBytes\x12\x1c\n" +
+	"\tformatted\x18\x04 \x01(\bR\tformatted\x12'\n" +
+	"\x0frestore_pending\x18\x05 \x01(\bR\x0erestorePending\x12#\n" +
+	"\ractive_writer\x18\x06 \x01(\bR\factiveWriter\"\x8b\x03\n" +
+	"\x19LocalWorkspaceReceiptItem\x12B\n" +
+	"\x04kind\x18\x01 \x01(\x0e2..secondbox.runner.v1.LocalWorkspaceCommandKindR\x04kind\x12!\n" +
+	"\foperation_id\x18\x02 \x01(\tR\voperationId\x12!\n" +
+	"\fworkspace_id\x18\x03 \x01(\tR\vworkspaceId\x12\x1f\n" +
+	"\vsnapshot_id\x18\x04 \x01(\tR\n" +
+	"snapshotId\x12/\n" +
+	"\x13previous_generation\x18\x05 \x01(\x04R\x12previousGeneration\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x06 \x01(\x04R\n" +
+	"generation\x124\n" +
+	"\x16logical_capacity_bytes\x18\a \x01(\x04R\x14logicalCapacityBytes\x12<\n" +
+	"\x1breceipt_recorded_at_unix_ms\x18\b \x01(\x04R\x17receiptRecordedAtUnixMs\"\xf4\x06\n" +
+	"\x14LocalWorkspaceResult\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1a\n" +
-	"\bsequence\x18\x02 \x01(\x04R\bsequence\x12:\n" +
-	"\x05fence\x18\x03 \x01(\v2$.secondbox.runner.v1.AssignmentFenceR\x05fence\x12#\n" +
-	"\rcheckpoint_id\x18\x04 \x01(\tR\fcheckpointId\x12*\n" +
-	"\x11storage_object_id\x18\x05 \x01(\tR\x0fstorageObjectId\x12\x16\n" +
-	"\x06offset\x18\x06 \x01(\x04R\x06offset\x12\x12\n" +
-	"\x04data\x18\a \x01(\fR\x04data\x12\"\n" +
-	"\rend_of_object\x18\b \x01(\bR\vendOfObject\"\xa1\x05\n" +
-	"\x10CheckpointResult\x12\x1d\n" +
+	"\bsequence\x18\x02 \x01(\x04R\bsequence\x12'\n" +
+	"\x0fcommand_version\x18\x03 \x01(\rR\x0ecommandVersion\x12B\n" +
+	"\x04kind\x18\x04 \x01(\x0e2..secondbox.runner.v1.LocalWorkspaceCommandKindR\x04kind\x12K\n" +
+	"\bterminal\x18\x05 \x01(\x0e2/.secondbox.runner.v1.LocalWorkspaceTerminalKindR\bterminal\x12!\n" +
+	"\foperation_id\x18\x06 \x01(\tR\voperationId\x12\x1b\n" +
+	"\teffect_id\x18\a \x01(\tR\beffectId\x12\x1d\n" +
 	"\n" +
-	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1a\n" +
-	"\bsequence\x18\x02 \x01(\x04R\bsequence\x12:\n" +
-	"\x05fence\x18\x03 \x01(\v2$.secondbox.runner.v1.AssignmentFenceR\x05fence\x12#\n" +
-	"\rcheckpoint_id\x18\x04 \x01(\tR\fcheckpointId\x12*\n" +
-	"\x11storage_object_id\x18\x05 \x01(\tR\x0fstorageObjectId\x12G\n" +
-	"\bterminal\x18\x06 \x01(\x0e2+.secondbox.runner.v1.CheckpointTerminalKindR\bterminal\x12\x16\n" +
-	"\x06sha256\x18\a \x01(\tR\x06sha256\x12\x1d\n" +
+	"sandbox_id\x18\b \x01(\tR\tsandboxId\x12!\n" +
+	"\fworkspace_id\x18\t \x01(\tR\vworkspaceId\x12\x1f\n" +
+	"\vsnapshot_id\x18\n" +
+	" \x01(\tR\n" +
+	"snapshotId\x12/\n" +
+	"\x13previous_generation\x18\v \x01(\x04R\x12previousGeneration\x12\x1e\n" +
 	"\n" +
-	"size_bytes\x18\b \x01(\x04R\tsizeBytes\x12^\n" +
-	"\rcompatibility\x18\t \x03(\v28.secondbox.runner.v1.CheckpointResult.CompatibilityEntryR\rcompatibility\x12>\n" +
-	"\x1btermination_evidence_digest\x18\n" +
-	" \x01(\tR\x19terminationEvidenceDigest\x12\x1f\n" +
-	"\vsafe_detail\x18\v \x01(\tR\n" +
+	"generation\x18\f \x01(\x04R\n" +
+	"generation\x124\n" +
+	"\x16logical_capacity_bytes\x18\r \x01(\x04R\x14logicalCapacityBytes\x12<\n" +
+	"\x1breceipt_recorded_at_unix_ms\x18\x0e \x01(\x04R\x17receiptRecordedAtUnixMs\x12N\n" +
+	"\tinventory\x18\x0f \x03(\v20.secondbox.runner.v1.LocalWorkspaceInventoryItemR\tinventory\x12\x1f\n" +
+	"\vsafe_detail\x18\x10 \x01(\tR\n" +
 	"safeDetail\x12B\n" +
-	"\vcorrelation\x18\f \x01(\v2 .secondbox.runner.v1.CorrelationR\vcorrelation\x1a@\n" +
-	"\x12CompatibilityEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xde\x03\n" +
-	"\fRestoreBegin\x12:\n" +
-	"\x05fence\x18\x01 \x01(\v2$.secondbox.runner.v1.AssignmentFenceR\x05fence\x12#\n" +
-	"\rcheckpoint_id\x18\x02 \x01(\tR\fcheckpointId\x12*\n" +
-	"\x11storage_object_id\x18\x03 \x01(\tR\x0fstorageObjectId\x12\x16\n" +
-	"\x06sha256\x18\x04 \x01(\tR\x06sha256\x12\x1d\n" +
-	"\n" +
-	"size_bytes\x18\x05 \x01(\x04R\tsizeBytes\x12Z\n" +
-	"\rcompatibility\x18\x06 \x03(\v24.secondbox.runner.v1.RestoreBegin.CompatibilityEntryR\rcompatibility\x12(\n" +
-	"\x10deadline_unix_ms\x18\a \x01(\x04R\x0edeadlineUnixMs\x12B\n" +
-	"\vcorrelation\x18\b \x01(\v2 .secondbox.runner.v1.CorrelationR\vcorrelation\x1a@\n" +
-	"\x12CompatibilityEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xeb\x01\n" +
-	"\fRestoreChunk\x12:\n" +
-	"\x05fence\x18\x01 \x01(\v2$.secondbox.runner.v1.AssignmentFenceR\x05fence\x12#\n" +
-	"\rcheckpoint_id\x18\x02 \x01(\tR\fcheckpointId\x12*\n" +
-	"\x11storage_object_id\x18\x03 \x01(\tR\x0fstorageObjectId\x12\x16\n" +
-	"\x06offset\x18\x04 \x01(\x04R\x06offset\x12\x12\n" +
-	"\x04data\x18\x05 \x01(\fR\x04data\x12\"\n" +
-	"\rend_of_object\x18\x06 \x01(\bR\vendOfObject\"\x8d\x02\n" +
+	"\vcorrelation\x18\x11 \x01(\v2 .secondbox.runner.v1.CorrelationR\vcorrelation\x12J\n" +
+	"\breceipts\x18\x12 \x03(\v2..secondbox.runner.v1.LocalWorkspaceReceiptItemR\breceipts\"\x8d\x02\n" +
 	"\bEvidence\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1a\n" +
@@ -7068,7 +7125,7 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\x06reason\x18\x04 \x01(\x0e26.secondbox.runner.v1.InstanceObservedTerminationReasonR\x06reason\x12-\n" +
 	"\x13observed_at_unix_ms\x18\x05 \x01(\x04R\x10observedAtUnixMs\x12>\n" +
 	"\x1btermination_evidence_digest\x18\x06 \x01(\tR\x19terminationEvidenceDigest\x12B\n" +
-	"\vcorrelation\x18\a \x01(\v2 .secondbox.runner.v1.CorrelationR\vcorrelation\"\x8b\t\n" +
+	"\vcorrelation\x18\a \x01(\v2 .secondbox.runner.v1.CorrelationR\vcorrelation\"\xd1\b\n" +
 	"\x14RunnerToControlPlane\x128\n" +
 	"\x05hello\x18\x01 \x01(\v2 .secondbox.runner.v1.RunnerHelloH\x00R\x05hello\x12M\n" +
 	"\fregistration\x18\x02 \x01(\v2'.secondbox.runner.v1.RunnerRegistrationH\x00R\fregistration\x12D\n" +
@@ -7084,11 +7141,10 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	" \x01(\v2\x1e.secondbox.runner.v1.FileFrameH\x00R\x04file\x121\n" +
 	"\x03pty\x18\v \x01(\v2\x1d.secondbox.runner.v1.PtyFrameH\x00R\x03pty\x124\n" +
 	"\x04port\x18\f \x01(\v2\x1e.secondbox.runner.v1.PortFrameH\x00R\x04port\x12;\n" +
-	"\bevidence\x18\r \x01(\v2\x1d.secondbox.runner.v1.EvidenceH\x00R\bevidence\x12Q\n" +
-	"\x10checkpoint_chunk\x18\x0e \x01(\v2$.secondbox.runner.v1.CheckpointChunkH\x00R\x0fcheckpointChunk\x12T\n" +
-	"\x11checkpoint_result\x18\x0f \x01(\v2%.secondbox.runner.v1.CheckpointResultH\x00R\x10checkpointResult\x12T\n" +
-	"\x11instance_terminal\x18\x10 \x01(\v2%.secondbox.runner.v1.InstanceTerminalH\x00R\x10instanceTerminalB\t\n" +
-	"\amessage\"\x9c\x06\n" +
+	"\bevidence\x18\r \x01(\v2\x1d.secondbox.runner.v1.EvidenceH\x00R\bevidence\x12T\n" +
+	"\x11instance_terminal\x18\x10 \x01(\v2%.secondbox.runner.v1.InstanceTerminalH\x00R\x10instanceTerminal\x12a\n" +
+	"\x16local_workspace_result\x18\x11 \x01(\v2).secondbox.runner.v1.LocalWorkspaceResultH\x00R\x14localWorkspaceResultB\t\n" +
+	"\amessageJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10\"\xa7\x05\n" +
 	"\x14ControlPlaneToRunner\x12>\n" +
 	"\awelcome\x18\x01 \x01(\v2\".secondbox.runner.v1.RunnerWelcomeH\x00R\awelcome\x12F\n" +
 	"\trejection\x18\x02 \x01(\v2&.secondbox.runner.v1.ProtocolRejectionH\x00R\trejection\x12H\n" +
@@ -7100,22 +7156,18 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\x04exec\x18\x06 \x01(\v2\x1e.secondbox.runner.v1.ExecFrameH\x00R\x04exec\x124\n" +
 	"\x04file\x18\a \x01(\v2\x1e.secondbox.runner.v1.FileFrameH\x00R\x04file\x121\n" +
 	"\x03pty\x18\b \x01(\v2\x1d.secondbox.runner.v1.PtyFrameH\x00R\x03pty\x124\n" +
-	"\x04port\x18\t \x01(\v2\x1e.secondbox.runner.v1.PortFrameH\x00R\x04port\x12H\n" +
-	"\n" +
-	"checkpoint\x18\n" +
-	" \x01(\v2&.secondbox.runner.v1.CheckpointCommandH\x00R\n" +
-	"checkpoint\x12H\n" +
-	"\rrestore_begin\x18\v \x01(\v2!.secondbox.runner.v1.RestoreBeginH\x00R\frestoreBegin\x12H\n" +
-	"\rrestore_chunk\x18\f \x01(\v2!.secondbox.runner.v1.RestoreChunkH\x00R\frestoreChunkB\t\n" +
-	"\amessage*\xe8\x01\n" +
+	"\x04port\x18\t \x01(\v2\x1e.secondbox.runner.v1.PortFrameH\x00R\x04port\x12U\n" +
+	"\x0flocal_workspace\x18\r \x01(\v2*.secondbox.runner.v1.LocalWorkspaceCommandH\x00R\x0elocalWorkspaceB\t\n" +
+	"\amessageJ\x04\b\n" +
+	"\x10\vJ\x04\b\v\x10\fJ\x04\b\f\x10\r*\xf3\x01\n" +
 	"\rRunnerFeature\x12\x1e\n" +
 	"\x1aRUNNER_FEATURE_UNSPECIFIED\x10\x00\x12!\n" +
 	"\x1dRUNNER_FEATURE_EXEC_STREAMING\x10\x01\x12!\n" +
 	"\x1dRUNNER_FEATURE_FILE_STREAMING\x10\x02\x12\x16\n" +
 	"\x12RUNNER_FEATURE_PTY\x10\x03\x12\x1d\n" +
 	"\x19RUNNER_FEATURE_PORT_PROXY\x10\x04\x12\x1b\n" +
-	"\x17RUNNER_FEATURE_EVIDENCE\x10\x05\x12\x1d\n" +
-	"\x19RUNNER_FEATURE_CHECKPOINT\x10\x06*\xfc\x01\n" +
+	"\x17RUNNER_FEATURE_EVIDENCE\x10\x05\x12\"\n" +
+	"\x1eRUNNER_FEATURE_LOCAL_WORKSPACE\x10\a\"\x04\b\x06\x10\x06*\xfc\x01\n" +
 	"\x15ProtocolRejectionKind\x12'\n" +
 	"#PROTOCOL_REJECTION_KIND_UNSPECIFIED\x10\x00\x12/\n" +
 	"+PROTOCOL_REJECTION_KIND_VERSION_UNSUPPORTED\x10\x01\x12/\n" +
@@ -7154,11 +7206,11 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"%ASSIGNMENT_DECISION_REJECTED_ARTIFACT\x10\x04\x12-\n" +
 	")ASSIGNMENT_DECISION_REJECTED_PREREQUISITE\x10\x05\x12)\n" +
 	"%ASSIGNMENT_DECISION_REJECTED_DRAINING\x10\x06\x12'\n" +
-	"#ASSIGNMENT_DECISION_REJECTED_FENCED\x10\a*\x85\x03\n" +
+	"#ASSIGNMENT_DECISION_REJECTED_FENCED\x10\a*\x80\x03\n" +
 	"\x17AssignmentProgressStage\x12)\n" +
 	"%ASSIGNMENT_PROGRESS_STAGE_UNSPECIFIED\x10\x00\x12-\n" +
-	")ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY\x10\x01\x123\n" +
-	"/ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_MATERIALIZE\x10\x02\x12+\n" +
+	")ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY\x10\x01\x12.\n" +
+	"*ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_ATTACH\x10\x02\x12+\n" +
 	"'ASSIGNMENT_PROGRESS_STAGE_NETWORK_SETUP\x10\x03\x120\n" +
 	",ASSIGNMENT_PROGRESS_STAGE_FIRECRACKER_LAUNCH\x10\x04\x12/\n" +
 	"+ASSIGNMENT_PROGRESS_STAGE_GUEST_NEGOTIATION\x10\x05\x12#\n" +
@@ -7251,14 +7303,37 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	" PORT_TERMINAL_KIND_POLICY_DENIED\x10\x03\x12(\n" +
 	"$PORT_TERMINAL_KIND_GUEST_UNAVAILABLE\x10\x04\x12\x1d\n" +
 	"\x19PORT_TERMINAL_KIND_FENCED\x10\x05\x12\x1d\n" +
-	"\x19PORT_TERMINAL_KIND_FAILED\x10\x06*\x98\x02\n" +
-	"\x16CheckpointTerminalKind\x12(\n" +
-	"$CHECKPOINT_TERMINAL_KIND_UNSPECIFIED\x10\x00\x12$\n" +
-	" CHECKPOINT_TERMINAL_KIND_CREATED\x10\x01\x12#\n" +
-	"\x1fCHECKPOINT_TERMINAL_KIND_FENCED\x10\x02\x12.\n" +
-	"*CHECKPOINT_TERMINAL_KIND_DEADLINE_EXCEEDED\x10\x03\x12-\n" +
-	")CHECKPOINT_TERMINAL_KIND_INTEGRITY_FAILED\x10\x04\x12*\n" +
-	"&CHECKPOINT_TERMINAL_KIND_RUNNER_FAILED\x10\x05*\x8b\x02\n" +
+	"\x19PORT_TERMINAL_KIND_FAILED\x10\x06*\xce\x04\n" +
+	"\x19LocalWorkspaceCommandKind\x12,\n" +
+	"(LOCAL_WORKSPACE_COMMAND_KIND_UNSPECIFIED\x10\x00\x12'\n" +
+	"#LOCAL_WORKSPACE_COMMAND_KIND_CREATE\x10\x01\x12(\n" +
+	"$LOCAL_WORKSPACE_COMMAND_KIND_INSPECT\x10\x02\x12'\n" +
+	"#LOCAL_WORKSPACE_COMMAND_KIND_DELETE\x10\x03\x123\n" +
+	"/LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION\x10\x04\x120\n" +
+	",LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_CREATE\x10\x05\x120\n" +
+	",LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_DELETE\x10\x06\x120\n" +
+	",LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_PREPARE\x10\a\x12-\n" +
+	")LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_SWAP\x10\b\x121\n" +
+	"-LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE\x10\t\x12.\n" +
+	"*LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT\x10\n" +
+	"\x12*\n" +
+	"&LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE\x10\v*\xe4\x05\n" +
+	"\x1aLocalWorkspaceTerminalKind\x12-\n" +
+	")LOCAL_WORKSPACE_TERMINAL_KIND_UNSPECIFIED\x10\x00\x12+\n" +
+	"'LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED\x10\x01\x123\n" +
+	"/LOCAL_WORKSPACE_TERMINAL_KIND_LOCAL_DATA_ABSENT\x10\x02\x12/\n" +
+	"+LOCAL_WORKSPACE_TERMINAL_KIND_ACTIVE_WRITER\x10\x03\x122\n" +
+	".LOCAL_WORKSPACE_TERMINAL_KIND_STALE_GENERATION\x10\x04\x12-\n" +
+	")LOCAL_WORKSPACE_TERMINAL_KIND_STALE_FENCE\x10\x05\x126\n" +
+	"2LOCAL_WORKSPACE_TERMINAL_KIND_STORAGE_INCOMPATIBLE\x10\x06\x124\n" +
+	"0LOCAL_WORKSPACE_TERMINAL_KIND_INSUFFICIENT_SPACE\x10\a\x121\n" +
+	"-LOCAL_WORKSPACE_TERMINAL_KIND_CORRUPT_RECEIPT\x10\b\x124\n" +
+	"0LOCAL_WORKSPACE_TERMINAL_KIND_CONFLICTING_REPLAY\x10\t\x123\n" +
+	"/LOCAL_WORKSPACE_TERMINAL_KIND_WRONG_HOME_RUNNER\x10\n" +
+	"\x121\n" +
+	"-LOCAL_WORKSPACE_TERMINAL_KIND_SNAPSHOT_IN_USE\x10\v\x121\n" +
+	"-LOCAL_WORKSPACE_TERMINAL_KIND_RESTORE_PENDING\x10\f\x12/\n" +
+	"+LOCAL_WORKSPACE_TERMINAL_KIND_RUNNER_FAILED\x10\r*\x8b\x02\n" +
 	"!InstanceObservedTerminationReason\x124\n" +
 	"0INSTANCE_OBSERVED_TERMINATION_REASON_UNSPECIFIED\x10\x00\x127\n" +
 	"3INSTANCE_OBSERVED_TERMINATION_REASON_GUEST_SHUTDOWN\x10\x01\x12<\n" +
@@ -7279,8 +7354,8 @@ func file_contracts_runner_v1_runner_proto_rawDescGZIP() []byte {
 	return file_contracts_runner_v1_runner_proto_rawDescData
 }
 
-var file_contracts_runner_v1_runner_proto_enumTypes = make([]protoimpl.EnumInfo, 22)
-var file_contracts_runner_v1_runner_proto_msgTypes = make([]protoimpl.MessageInfo, 60)
+var file_contracts_runner_v1_runner_proto_enumTypes = make([]protoimpl.EnumInfo, 23)
+var file_contracts_runner_v1_runner_proto_msgTypes = make([]protoimpl.MessageInfo, 57)
 var file_contracts_runner_v1_runner_proto_goTypes = []any{
 	(RunnerFeature)(0),                     // 0: secondbox.runner.v1.RunnerFeature
 	(ProtocolRejectionKind)(0),             // 1: secondbox.runner.v1.ProtocolRejectionKind
@@ -7302,206 +7377,198 @@ var file_contracts_runner_v1_runner_proto_goTypes = []any{
 	(FileKind)(0),                          // 17: secondbox.runner.v1.FileKind
 	(FileTerminalKind)(0),                  // 18: secondbox.runner.v1.FileTerminalKind
 	(PortTerminalKind)(0),                  // 19: secondbox.runner.v1.PortTerminalKind
-	(CheckpointTerminalKind)(0),            // 20: secondbox.runner.v1.CheckpointTerminalKind
-	(InstanceObservedTerminationReason)(0), // 21: secondbox.runner.v1.InstanceObservedTerminationReason
-	(*ProtocolVersionRange)(nil),           // 22: secondbox.runner.v1.ProtocolVersionRange
-	(*RunnerHello)(nil),                    // 23: secondbox.runner.v1.RunnerHello
-	(*RunnerWelcome)(nil),                  // 24: secondbox.runner.v1.RunnerWelcome
-	(*ProtocolRejection)(nil),              // 25: secondbox.runner.v1.ProtocolRejection
-	(*Capacity)(nil),                       // 26: secondbox.runner.v1.Capacity
-	(*RunnerCapabilities)(nil),             // 27: secondbox.runner.v1.RunnerCapabilities
-	(*ArtifactCacheEvidence)(nil),          // 28: secondbox.runner.v1.ArtifactCacheEvidence
-	(*RunnerRegistration)(nil),             // 29: secondbox.runner.v1.RunnerRegistration
-	(*ActiveAssignmentSummary)(nil),        // 30: secondbox.runner.v1.ActiveAssignmentSummary
-	(*RunnerHeartbeat)(nil),                // 31: secondbox.runner.v1.RunnerHeartbeat
-	(*Correlation)(nil),                    // 32: secondbox.runner.v1.Correlation
-	(*AssignmentFence)(nil),                // 33: secondbox.runner.v1.AssignmentFence
-	(*CapacityReservation)(nil),            // 34: secondbox.runner.v1.CapacityReservation
-	(*ProfileRequirements)(nil),            // 35: secondbox.runner.v1.ProfileRequirements
-	(*SignedAssetReference)(nil),           // 36: secondbox.runner.v1.SignedAssetReference
-	(*NetworkDestination)(nil),             // 37: secondbox.runner.v1.NetworkDestination
-	(*NetworkPolicy)(nil),                  // 38: secondbox.runner.v1.NetworkPolicy
-	(*AssignmentCommand)(nil),              // 39: secondbox.runner.v1.AssignmentCommand
-	(*AssignmentAck)(nil),                  // 40: secondbox.runner.v1.AssignmentAck
-	(*AssignmentProgress)(nil),             // 41: secondbox.runner.v1.AssignmentProgress
-	(*AssignmentResult)(nil),               // 42: secondbox.runner.v1.AssignmentResult
-	(*FenceCommand)(nil),                   // 43: secondbox.runner.v1.FenceCommand
-	(*FenceResult)(nil),                    // 44: secondbox.runner.v1.FenceResult
-	(*DrainCommand)(nil),                   // 45: secondbox.runner.v1.DrainCommand
-	(*DrainState)(nil),                     // 46: secondbox.runner.v1.DrainState
-	(*StreamCredit)(nil),                   // 47: secondbox.runner.v1.StreamCredit
-	(*ExecOpen)(nil),                       // 48: secondbox.runner.v1.ExecOpen
-	(*ArgvCommand)(nil),                    // 49: secondbox.runner.v1.ArgvCommand
-	(*EnvironmentEntry)(nil),               // 50: secondbox.runner.v1.EnvironmentEntry
-	(*ExecInput)(nil),                      // 51: secondbox.runner.v1.ExecInput
-	(*ExecOutput)(nil),                     // 52: secondbox.runner.v1.ExecOutput
-	(*ExecCancel)(nil),                     // 53: secondbox.runner.v1.ExecCancel
-	(*ExecTerminal)(nil),                   // 54: secondbox.runner.v1.ExecTerminal
-	(*ExecFrame)(nil),                      // 55: secondbox.runner.v1.ExecFrame
-	(*FileOpen)(nil),                       // 56: secondbox.runner.v1.FileOpen
-	(*FileChunk)(nil),                      // 57: secondbox.runner.v1.FileChunk
-	(*FileMetadata)(nil),                   // 58: secondbox.runner.v1.FileMetadata
-	(*FileMetadataEntry)(nil),              // 59: secondbox.runner.v1.FileMetadataEntry
-	(*FileTerminal)(nil),                   // 60: secondbox.runner.v1.FileTerminal
-	(*FileFrame)(nil),                      // 61: secondbox.runner.v1.FileFrame
-	(*PtyInput)(nil),                       // 62: secondbox.runner.v1.PtyInput
-	(*PtyResize)(nil),                      // 63: secondbox.runner.v1.PtyResize
-	(*PtyDetach)(nil),                      // 64: secondbox.runner.v1.PtyDetach
-	(*PtyAttach)(nil),                      // 65: secondbox.runner.v1.PtyAttach
-	(*PtyFrame)(nil),                       // 66: secondbox.runner.v1.PtyFrame
-	(*PortOpen)(nil),                       // 67: secondbox.runner.v1.PortOpen
-	(*PortBytes)(nil),                      // 68: secondbox.runner.v1.PortBytes
-	(*PortTerminal)(nil),                   // 69: secondbox.runner.v1.PortTerminal
-	(*PortFrame)(nil),                      // 70: secondbox.runner.v1.PortFrame
-	(*CheckpointCommand)(nil),              // 71: secondbox.runner.v1.CheckpointCommand
-	(*CheckpointChunk)(nil),                // 72: secondbox.runner.v1.CheckpointChunk
-	(*CheckpointResult)(nil),               // 73: secondbox.runner.v1.CheckpointResult
-	(*RestoreBegin)(nil),                   // 74: secondbox.runner.v1.RestoreBegin
-	(*RestoreChunk)(nil),                   // 75: secondbox.runner.v1.RestoreChunk
+	(LocalWorkspaceCommandKind)(0),         // 20: secondbox.runner.v1.LocalWorkspaceCommandKind
+	(LocalWorkspaceTerminalKind)(0),        // 21: secondbox.runner.v1.LocalWorkspaceTerminalKind
+	(InstanceObservedTerminationReason)(0), // 22: secondbox.runner.v1.InstanceObservedTerminationReason
+	(*ProtocolVersionRange)(nil),           // 23: secondbox.runner.v1.ProtocolVersionRange
+	(*RunnerHello)(nil),                    // 24: secondbox.runner.v1.RunnerHello
+	(*RunnerWelcome)(nil),                  // 25: secondbox.runner.v1.RunnerWelcome
+	(*ProtocolRejection)(nil),              // 26: secondbox.runner.v1.ProtocolRejection
+	(*Capacity)(nil),                       // 27: secondbox.runner.v1.Capacity
+	(*RunnerCapabilities)(nil),             // 28: secondbox.runner.v1.RunnerCapabilities
+	(*ArtifactCacheEvidence)(nil),          // 29: secondbox.runner.v1.ArtifactCacheEvidence
+	(*RunnerRegistration)(nil),             // 30: secondbox.runner.v1.RunnerRegistration
+	(*ActiveAssignmentSummary)(nil),        // 31: secondbox.runner.v1.ActiveAssignmentSummary
+	(*RunnerHeartbeat)(nil),                // 32: secondbox.runner.v1.RunnerHeartbeat
+	(*Correlation)(nil),                    // 33: secondbox.runner.v1.Correlation
+	(*AssignmentFence)(nil),                // 34: secondbox.runner.v1.AssignmentFence
+	(*CapacityReservation)(nil),            // 35: secondbox.runner.v1.CapacityReservation
+	(*ProfileRequirements)(nil),            // 36: secondbox.runner.v1.ProfileRequirements
+	(*SignedAssetReference)(nil),           // 37: secondbox.runner.v1.SignedAssetReference
+	(*NetworkDestination)(nil),             // 38: secondbox.runner.v1.NetworkDestination
+	(*NetworkPolicy)(nil),                  // 39: secondbox.runner.v1.NetworkPolicy
+	(*AssignmentCommand)(nil),              // 40: secondbox.runner.v1.AssignmentCommand
+	(*AssignmentAck)(nil),                  // 41: secondbox.runner.v1.AssignmentAck
+	(*AssignmentProgress)(nil),             // 42: secondbox.runner.v1.AssignmentProgress
+	(*AssignmentResult)(nil),               // 43: secondbox.runner.v1.AssignmentResult
+	(*FenceCommand)(nil),                   // 44: secondbox.runner.v1.FenceCommand
+	(*FenceResult)(nil),                    // 45: secondbox.runner.v1.FenceResult
+	(*DrainCommand)(nil),                   // 46: secondbox.runner.v1.DrainCommand
+	(*DrainState)(nil),                     // 47: secondbox.runner.v1.DrainState
+	(*StreamCredit)(nil),                   // 48: secondbox.runner.v1.StreamCredit
+	(*ExecOpen)(nil),                       // 49: secondbox.runner.v1.ExecOpen
+	(*ArgvCommand)(nil),                    // 50: secondbox.runner.v1.ArgvCommand
+	(*EnvironmentEntry)(nil),               // 51: secondbox.runner.v1.EnvironmentEntry
+	(*ExecInput)(nil),                      // 52: secondbox.runner.v1.ExecInput
+	(*ExecOutput)(nil),                     // 53: secondbox.runner.v1.ExecOutput
+	(*ExecCancel)(nil),                     // 54: secondbox.runner.v1.ExecCancel
+	(*ExecTerminal)(nil),                   // 55: secondbox.runner.v1.ExecTerminal
+	(*ExecFrame)(nil),                      // 56: secondbox.runner.v1.ExecFrame
+	(*FileOpen)(nil),                       // 57: secondbox.runner.v1.FileOpen
+	(*FileChunk)(nil),                      // 58: secondbox.runner.v1.FileChunk
+	(*FileMetadata)(nil),                   // 59: secondbox.runner.v1.FileMetadata
+	(*FileMetadataEntry)(nil),              // 60: secondbox.runner.v1.FileMetadataEntry
+	(*FileTerminal)(nil),                   // 61: secondbox.runner.v1.FileTerminal
+	(*FileFrame)(nil),                      // 62: secondbox.runner.v1.FileFrame
+	(*PtyInput)(nil),                       // 63: secondbox.runner.v1.PtyInput
+	(*PtyResize)(nil),                      // 64: secondbox.runner.v1.PtyResize
+	(*PtyDetach)(nil),                      // 65: secondbox.runner.v1.PtyDetach
+	(*PtyAttach)(nil),                      // 66: secondbox.runner.v1.PtyAttach
+	(*PtyFrame)(nil),                       // 67: secondbox.runner.v1.PtyFrame
+	(*PortOpen)(nil),                       // 68: secondbox.runner.v1.PortOpen
+	(*PortBytes)(nil),                      // 69: secondbox.runner.v1.PortBytes
+	(*PortTerminal)(nil),                   // 70: secondbox.runner.v1.PortTerminal
+	(*PortFrame)(nil),                      // 71: secondbox.runner.v1.PortFrame
+	(*LocalWorkspaceCommand)(nil),          // 72: secondbox.runner.v1.LocalWorkspaceCommand
+	(*LocalWorkspaceInventoryItem)(nil),    // 73: secondbox.runner.v1.LocalWorkspaceInventoryItem
+	(*LocalWorkspaceReceiptItem)(nil),      // 74: secondbox.runner.v1.LocalWorkspaceReceiptItem
+	(*LocalWorkspaceResult)(nil),           // 75: secondbox.runner.v1.LocalWorkspaceResult
 	(*Evidence)(nil),                       // 76: secondbox.runner.v1.Evidence
 	(*InstanceTerminal)(nil),               // 77: secondbox.runner.v1.InstanceTerminal
 	(*RunnerToControlPlane)(nil),           // 78: secondbox.runner.v1.RunnerToControlPlane
 	(*ControlPlaneToRunner)(nil),           // 79: secondbox.runner.v1.ControlPlaneToRunner
-	nil,                                    // 80: secondbox.runner.v1.CheckpointResult.CompatibilityEntry
-	nil,                                    // 81: secondbox.runner.v1.RestoreBegin.CompatibilityEntry
 }
 var file_contracts_runner_v1_runner_proto_depIdxs = []int32{
-	22,  // 0: secondbox.runner.v1.RunnerHello.supported_versions:type_name -> secondbox.runner.v1.ProtocolVersionRange
+	23,  // 0: secondbox.runner.v1.RunnerHello.supported_versions:type_name -> secondbox.runner.v1.ProtocolVersionRange
 	0,   // 1: secondbox.runner.v1.RunnerHello.requested_features:type_name -> secondbox.runner.v1.RunnerFeature
 	0,   // 2: secondbox.runner.v1.RunnerHello.mandatory_features:type_name -> secondbox.runner.v1.RunnerFeature
 	0,   // 3: secondbox.runner.v1.RunnerWelcome.enabled_features:type_name -> secondbox.runner.v1.RunnerFeature
 	1,   // 4: secondbox.runner.v1.ProtocolRejection.kind:type_name -> secondbox.runner.v1.ProtocolRejectionKind
-	22,  // 5: secondbox.runner.v1.RunnerCapabilities.guest_protocol_generations:type_name -> secondbox.runner.v1.ProtocolVersionRange
-	27,  // 6: secondbox.runner.v1.RunnerRegistration.capabilities:type_name -> secondbox.runner.v1.RunnerCapabilities
-	26,  // 7: secondbox.runner.v1.RunnerRegistration.allocatable:type_name -> secondbox.runner.v1.Capacity
-	26,  // 8: secondbox.runner.v1.RunnerRegistration.reserved:type_name -> secondbox.runner.v1.Capacity
-	28,  // 9: secondbox.runner.v1.RunnerRegistration.artifact_cache:type_name -> secondbox.runner.v1.ArtifactCacheEvidence
+	23,  // 5: secondbox.runner.v1.RunnerCapabilities.guest_protocol_generations:type_name -> secondbox.runner.v1.ProtocolVersionRange
+	28,  // 6: secondbox.runner.v1.RunnerRegistration.capabilities:type_name -> secondbox.runner.v1.RunnerCapabilities
+	27,  // 7: secondbox.runner.v1.RunnerRegistration.allocatable:type_name -> secondbox.runner.v1.Capacity
+	27,  // 8: secondbox.runner.v1.RunnerRegistration.reserved:type_name -> secondbox.runner.v1.Capacity
+	29,  // 9: secondbox.runner.v1.RunnerRegistration.artifact_cache:type_name -> secondbox.runner.v1.ArtifactCacheEvidence
 	2,   // 10: secondbox.runner.v1.RunnerRegistration.readiness_failures:type_name -> secondbox.runner.v1.RunnerReadinessFailure
-	26,  // 11: secondbox.runner.v1.RunnerHeartbeat.allocatable:type_name -> secondbox.runner.v1.Capacity
-	26,  // 12: secondbox.runner.v1.RunnerHeartbeat.reserved:type_name -> secondbox.runner.v1.Capacity
-	30,  // 13: secondbox.runner.v1.RunnerHeartbeat.active_assignments:type_name -> secondbox.runner.v1.ActiveAssignmentSummary
+	27,  // 11: secondbox.runner.v1.RunnerHeartbeat.allocatable:type_name -> secondbox.runner.v1.Capacity
+	27,  // 12: secondbox.runner.v1.RunnerHeartbeat.reserved:type_name -> secondbox.runner.v1.Capacity
+	31,  // 13: secondbox.runner.v1.RunnerHeartbeat.active_assignments:type_name -> secondbox.runner.v1.ActiveAssignmentSummary
 	3,   // 14: secondbox.runner.v1.RunnerHeartbeat.drain_phase:type_name -> secondbox.runner.v1.DrainPhase
-	26,  // 15: secondbox.runner.v1.CapacityReservation.capacity:type_name -> secondbox.runner.v1.Capacity
+	27,  // 15: secondbox.runner.v1.CapacityReservation.capacity:type_name -> secondbox.runner.v1.Capacity
 	5,   // 16: secondbox.runner.v1.NetworkDestination.protocol:type_name -> secondbox.runner.v1.NetworkDestinationProtocol
 	4,   // 17: secondbox.runner.v1.NetworkPolicy.mode:type_name -> secondbox.runner.v1.NetworkPolicyMode
-	37,  // 18: secondbox.runner.v1.NetworkPolicy.destinations:type_name -> secondbox.runner.v1.NetworkDestination
-	33,  // 19: secondbox.runner.v1.AssignmentCommand.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	35,  // 20: secondbox.runner.v1.AssignmentCommand.requirements:type_name -> secondbox.runner.v1.ProfileRequirements
-	36,  // 21: secondbox.runner.v1.AssignmentCommand.assets:type_name -> secondbox.runner.v1.SignedAssetReference
-	32,  // 22: secondbox.runner.v1.AssignmentCommand.correlation:type_name -> secondbox.runner.v1.Correlation
-	38,  // 23: secondbox.runner.v1.AssignmentCommand.network_policy:type_name -> secondbox.runner.v1.NetworkPolicy
-	33,  // 24: secondbox.runner.v1.AssignmentAck.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	38,  // 18: secondbox.runner.v1.NetworkPolicy.destinations:type_name -> secondbox.runner.v1.NetworkDestination
+	34,  // 19: secondbox.runner.v1.AssignmentCommand.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	36,  // 20: secondbox.runner.v1.AssignmentCommand.requirements:type_name -> secondbox.runner.v1.ProfileRequirements
+	37,  // 21: secondbox.runner.v1.AssignmentCommand.assets:type_name -> secondbox.runner.v1.SignedAssetReference
+	33,  // 22: secondbox.runner.v1.AssignmentCommand.correlation:type_name -> secondbox.runner.v1.Correlation
+	39,  // 23: secondbox.runner.v1.AssignmentCommand.network_policy:type_name -> secondbox.runner.v1.NetworkPolicy
+	34,  // 24: secondbox.runner.v1.AssignmentAck.fence:type_name -> secondbox.runner.v1.AssignmentFence
 	6,   // 25: secondbox.runner.v1.AssignmentAck.decision:type_name -> secondbox.runner.v1.AssignmentDecision
-	34,  // 26: secondbox.runner.v1.AssignmentAck.reservation:type_name -> secondbox.runner.v1.CapacityReservation
-	33,  // 27: secondbox.runner.v1.AssignmentProgress.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	35,  // 26: secondbox.runner.v1.AssignmentAck.reservation:type_name -> secondbox.runner.v1.CapacityReservation
+	34,  // 27: secondbox.runner.v1.AssignmentProgress.fence:type_name -> secondbox.runner.v1.AssignmentFence
 	7,   // 28: secondbox.runner.v1.AssignmentProgress.stage:type_name -> secondbox.runner.v1.AssignmentProgressStage
-	32,  // 29: secondbox.runner.v1.AssignmentProgress.correlation:type_name -> secondbox.runner.v1.Correlation
-	33,  // 30: secondbox.runner.v1.AssignmentResult.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	33,  // 29: secondbox.runner.v1.AssignmentProgress.correlation:type_name -> secondbox.runner.v1.Correlation
+	34,  // 30: secondbox.runner.v1.AssignmentResult.fence:type_name -> secondbox.runner.v1.AssignmentFence
 	8,   // 31: secondbox.runner.v1.AssignmentResult.terminal:type_name -> secondbox.runner.v1.AssignmentTerminalKind
-	32,  // 32: secondbox.runner.v1.AssignmentResult.correlation:type_name -> secondbox.runner.v1.Correlation
-	33,  // 33: secondbox.runner.v1.FenceCommand.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	33,  // 32: secondbox.runner.v1.AssignmentResult.correlation:type_name -> secondbox.runner.v1.Correlation
+	34,  // 33: secondbox.runner.v1.FenceCommand.fence:type_name -> secondbox.runner.v1.AssignmentFence
 	9,   // 34: secondbox.runner.v1.FenceCommand.reason:type_name -> secondbox.runner.v1.FenceReason
-	32,  // 35: secondbox.runner.v1.FenceCommand.correlation:type_name -> secondbox.runner.v1.Correlation
-	33,  // 36: secondbox.runner.v1.FenceResult.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	33,  // 35: secondbox.runner.v1.FenceCommand.correlation:type_name -> secondbox.runner.v1.Correlation
+	34,  // 36: secondbox.runner.v1.FenceResult.fence:type_name -> secondbox.runner.v1.AssignmentFence
 	10,  // 37: secondbox.runner.v1.FenceResult.result:type_name -> secondbox.runner.v1.FenceResultKind
-	32,  // 38: secondbox.runner.v1.FenceResult.correlation:type_name -> secondbox.runner.v1.Correlation
+	33,  // 38: secondbox.runner.v1.FenceResult.correlation:type_name -> secondbox.runner.v1.Correlation
 	11,  // 39: secondbox.runner.v1.DrainCommand.mode:type_name -> secondbox.runner.v1.DrainMode
 	3,   // 40: secondbox.runner.v1.DrainState.phase:type_name -> secondbox.runner.v1.DrainPhase
-	30,  // 41: secondbox.runner.v1.DrainState.remaining_assignments:type_name -> secondbox.runner.v1.ActiveAssignmentSummary
-	49,  // 42: secondbox.runner.v1.ExecOpen.argv:type_name -> secondbox.runner.v1.ArgvCommand
-	50,  // 43: secondbox.runner.v1.ExecOpen.environment:type_name -> secondbox.runner.v1.EnvironmentEntry
+	31,  // 41: secondbox.runner.v1.DrainState.remaining_assignments:type_name -> secondbox.runner.v1.ActiveAssignmentSummary
+	50,  // 42: secondbox.runner.v1.ExecOpen.argv:type_name -> secondbox.runner.v1.ArgvCommand
+	51,  // 43: secondbox.runner.v1.ExecOpen.environment:type_name -> secondbox.runner.v1.EnvironmentEntry
 	12,  // 44: secondbox.runner.v1.ExecOutput.channel:type_name -> secondbox.runner.v1.ExecOutputChannel
 	13,  // 45: secondbox.runner.v1.ExecTerminal.kind:type_name -> secondbox.runner.v1.ExecTerminalKind
 	14,  // 46: secondbox.runner.v1.ExecTerminal.spawn_failure_reason:type_name -> secondbox.runner.v1.SpawnFailureReason
 	15,  // 47: secondbox.runner.v1.ExecTerminal.infrastructure_failure_reason:type_name -> secondbox.runner.v1.InfrastructureFailureReason
-	33,  // 48: secondbox.runner.v1.ExecFrame.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	32,  // 49: secondbox.runner.v1.ExecFrame.correlation:type_name -> secondbox.runner.v1.Correlation
-	48,  // 50: secondbox.runner.v1.ExecFrame.open:type_name -> secondbox.runner.v1.ExecOpen
-	51,  // 51: secondbox.runner.v1.ExecFrame.input:type_name -> secondbox.runner.v1.ExecInput
-	52,  // 52: secondbox.runner.v1.ExecFrame.output:type_name -> secondbox.runner.v1.ExecOutput
-	47,  // 53: secondbox.runner.v1.ExecFrame.credit:type_name -> secondbox.runner.v1.StreamCredit
-	53,  // 54: secondbox.runner.v1.ExecFrame.cancel:type_name -> secondbox.runner.v1.ExecCancel
-	54,  // 55: secondbox.runner.v1.ExecFrame.terminal:type_name -> secondbox.runner.v1.ExecTerminal
+	34,  // 48: secondbox.runner.v1.ExecFrame.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	33,  // 49: secondbox.runner.v1.ExecFrame.correlation:type_name -> secondbox.runner.v1.Correlation
+	49,  // 50: secondbox.runner.v1.ExecFrame.open:type_name -> secondbox.runner.v1.ExecOpen
+	52,  // 51: secondbox.runner.v1.ExecFrame.input:type_name -> secondbox.runner.v1.ExecInput
+	53,  // 52: secondbox.runner.v1.ExecFrame.output:type_name -> secondbox.runner.v1.ExecOutput
+	48,  // 53: secondbox.runner.v1.ExecFrame.credit:type_name -> secondbox.runner.v1.StreamCredit
+	54,  // 54: secondbox.runner.v1.ExecFrame.cancel:type_name -> secondbox.runner.v1.ExecCancel
+	55,  // 55: secondbox.runner.v1.ExecFrame.terminal:type_name -> secondbox.runner.v1.ExecTerminal
 	16,  // 56: secondbox.runner.v1.FileOpen.operation:type_name -> secondbox.runner.v1.FileOperation
 	17,  // 57: secondbox.runner.v1.FileMetadata.kind:type_name -> secondbox.runner.v1.FileKind
-	59,  // 58: secondbox.runner.v1.FileMetadata.direct_child_entries:type_name -> secondbox.runner.v1.FileMetadataEntry
+	60,  // 58: secondbox.runner.v1.FileMetadata.direct_child_entries:type_name -> secondbox.runner.v1.FileMetadataEntry
 	17,  // 59: secondbox.runner.v1.FileMetadataEntry.kind:type_name -> secondbox.runner.v1.FileKind
 	18,  // 60: secondbox.runner.v1.FileTerminal.kind:type_name -> secondbox.runner.v1.FileTerminalKind
-	33,  // 61: secondbox.runner.v1.FileFrame.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	32,  // 62: secondbox.runner.v1.FileFrame.correlation:type_name -> secondbox.runner.v1.Correlation
-	56,  // 63: secondbox.runner.v1.FileFrame.open:type_name -> secondbox.runner.v1.FileOpen
-	57,  // 64: secondbox.runner.v1.FileFrame.chunk:type_name -> secondbox.runner.v1.FileChunk
-	58,  // 65: secondbox.runner.v1.FileFrame.metadata:type_name -> secondbox.runner.v1.FileMetadata
-	47,  // 66: secondbox.runner.v1.FileFrame.credit:type_name -> secondbox.runner.v1.StreamCredit
-	53,  // 67: secondbox.runner.v1.FileFrame.cancel:type_name -> secondbox.runner.v1.ExecCancel
-	60,  // 68: secondbox.runner.v1.FileFrame.terminal:type_name -> secondbox.runner.v1.FileTerminal
-	33,  // 69: secondbox.runner.v1.PtyFrame.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	32,  // 70: secondbox.runner.v1.PtyFrame.correlation:type_name -> secondbox.runner.v1.Correlation
-	62,  // 71: secondbox.runner.v1.PtyFrame.input:type_name -> secondbox.runner.v1.PtyInput
-	52,  // 72: secondbox.runner.v1.PtyFrame.output:type_name -> secondbox.runner.v1.ExecOutput
-	63,  // 73: secondbox.runner.v1.PtyFrame.resize:type_name -> secondbox.runner.v1.PtyResize
-	64,  // 74: secondbox.runner.v1.PtyFrame.detach:type_name -> secondbox.runner.v1.PtyDetach
-	65,  // 75: secondbox.runner.v1.PtyFrame.attach:type_name -> secondbox.runner.v1.PtyAttach
-	47,  // 76: secondbox.runner.v1.PtyFrame.credit:type_name -> secondbox.runner.v1.StreamCredit
-	54,  // 77: secondbox.runner.v1.PtyFrame.terminal:type_name -> secondbox.runner.v1.ExecTerminal
+	34,  // 61: secondbox.runner.v1.FileFrame.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	33,  // 62: secondbox.runner.v1.FileFrame.correlation:type_name -> secondbox.runner.v1.Correlation
+	57,  // 63: secondbox.runner.v1.FileFrame.open:type_name -> secondbox.runner.v1.FileOpen
+	58,  // 64: secondbox.runner.v1.FileFrame.chunk:type_name -> secondbox.runner.v1.FileChunk
+	59,  // 65: secondbox.runner.v1.FileFrame.metadata:type_name -> secondbox.runner.v1.FileMetadata
+	48,  // 66: secondbox.runner.v1.FileFrame.credit:type_name -> secondbox.runner.v1.StreamCredit
+	54,  // 67: secondbox.runner.v1.FileFrame.cancel:type_name -> secondbox.runner.v1.ExecCancel
+	61,  // 68: secondbox.runner.v1.FileFrame.terminal:type_name -> secondbox.runner.v1.FileTerminal
+	34,  // 69: secondbox.runner.v1.PtyFrame.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	33,  // 70: secondbox.runner.v1.PtyFrame.correlation:type_name -> secondbox.runner.v1.Correlation
+	63,  // 71: secondbox.runner.v1.PtyFrame.input:type_name -> secondbox.runner.v1.PtyInput
+	53,  // 72: secondbox.runner.v1.PtyFrame.output:type_name -> secondbox.runner.v1.ExecOutput
+	64,  // 73: secondbox.runner.v1.PtyFrame.resize:type_name -> secondbox.runner.v1.PtyResize
+	65,  // 74: secondbox.runner.v1.PtyFrame.detach:type_name -> secondbox.runner.v1.PtyDetach
+	66,  // 75: secondbox.runner.v1.PtyFrame.attach:type_name -> secondbox.runner.v1.PtyAttach
+	48,  // 76: secondbox.runner.v1.PtyFrame.credit:type_name -> secondbox.runner.v1.StreamCredit
+	55,  // 77: secondbox.runner.v1.PtyFrame.terminal:type_name -> secondbox.runner.v1.ExecTerminal
 	19,  // 78: secondbox.runner.v1.PortTerminal.kind:type_name -> secondbox.runner.v1.PortTerminalKind
-	33,  // 79: secondbox.runner.v1.PortFrame.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	32,  // 80: secondbox.runner.v1.PortFrame.correlation:type_name -> secondbox.runner.v1.Correlation
-	67,  // 81: secondbox.runner.v1.PortFrame.open:type_name -> secondbox.runner.v1.PortOpen
-	68,  // 82: secondbox.runner.v1.PortFrame.bytes:type_name -> secondbox.runner.v1.PortBytes
-	47,  // 83: secondbox.runner.v1.PortFrame.credit:type_name -> secondbox.runner.v1.StreamCredit
-	53,  // 84: secondbox.runner.v1.PortFrame.cancel:type_name -> secondbox.runner.v1.ExecCancel
-	69,  // 85: secondbox.runner.v1.PortFrame.terminal:type_name -> secondbox.runner.v1.PortTerminal
-	33,  // 86: secondbox.runner.v1.CheckpointCommand.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	32,  // 87: secondbox.runner.v1.CheckpointCommand.correlation:type_name -> secondbox.runner.v1.Correlation
-	33,  // 88: secondbox.runner.v1.CheckpointChunk.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	33,  // 89: secondbox.runner.v1.CheckpointResult.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	20,  // 90: secondbox.runner.v1.CheckpointResult.terminal:type_name -> secondbox.runner.v1.CheckpointTerminalKind
-	80,  // 91: secondbox.runner.v1.CheckpointResult.compatibility:type_name -> secondbox.runner.v1.CheckpointResult.CompatibilityEntry
-	32,  // 92: secondbox.runner.v1.CheckpointResult.correlation:type_name -> secondbox.runner.v1.Correlation
-	33,  // 93: secondbox.runner.v1.RestoreBegin.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	81,  // 94: secondbox.runner.v1.RestoreBegin.compatibility:type_name -> secondbox.runner.v1.RestoreBegin.CompatibilityEntry
-	32,  // 95: secondbox.runner.v1.RestoreBegin.correlation:type_name -> secondbox.runner.v1.Correlation
-	33,  // 96: secondbox.runner.v1.RestoreChunk.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	32,  // 97: secondbox.runner.v1.Evidence.correlation:type_name -> secondbox.runner.v1.Correlation
-	33,  // 98: secondbox.runner.v1.InstanceTerminal.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	21,  // 99: secondbox.runner.v1.InstanceTerminal.reason:type_name -> secondbox.runner.v1.InstanceObservedTerminationReason
-	32,  // 100: secondbox.runner.v1.InstanceTerminal.correlation:type_name -> secondbox.runner.v1.Correlation
-	23,  // 101: secondbox.runner.v1.RunnerToControlPlane.hello:type_name -> secondbox.runner.v1.RunnerHello
-	29,  // 102: secondbox.runner.v1.RunnerToControlPlane.registration:type_name -> secondbox.runner.v1.RunnerRegistration
-	31,  // 103: secondbox.runner.v1.RunnerToControlPlane.heartbeat:type_name -> secondbox.runner.v1.RunnerHeartbeat
-	40,  // 104: secondbox.runner.v1.RunnerToControlPlane.assignment_ack:type_name -> secondbox.runner.v1.AssignmentAck
-	41,  // 105: secondbox.runner.v1.RunnerToControlPlane.assignment_progress:type_name -> secondbox.runner.v1.AssignmentProgress
-	42,  // 106: secondbox.runner.v1.RunnerToControlPlane.assignment_result:type_name -> secondbox.runner.v1.AssignmentResult
-	44,  // 107: secondbox.runner.v1.RunnerToControlPlane.fence_result:type_name -> secondbox.runner.v1.FenceResult
-	46,  // 108: secondbox.runner.v1.RunnerToControlPlane.drain_state:type_name -> secondbox.runner.v1.DrainState
-	55,  // 109: secondbox.runner.v1.RunnerToControlPlane.exec:type_name -> secondbox.runner.v1.ExecFrame
-	61,  // 110: secondbox.runner.v1.RunnerToControlPlane.file:type_name -> secondbox.runner.v1.FileFrame
-	66,  // 111: secondbox.runner.v1.RunnerToControlPlane.pty:type_name -> secondbox.runner.v1.PtyFrame
-	70,  // 112: secondbox.runner.v1.RunnerToControlPlane.port:type_name -> secondbox.runner.v1.PortFrame
-	76,  // 113: secondbox.runner.v1.RunnerToControlPlane.evidence:type_name -> secondbox.runner.v1.Evidence
-	72,  // 114: secondbox.runner.v1.RunnerToControlPlane.checkpoint_chunk:type_name -> secondbox.runner.v1.CheckpointChunk
-	73,  // 115: secondbox.runner.v1.RunnerToControlPlane.checkpoint_result:type_name -> secondbox.runner.v1.CheckpointResult
-	77,  // 116: secondbox.runner.v1.RunnerToControlPlane.instance_terminal:type_name -> secondbox.runner.v1.InstanceTerminal
-	24,  // 117: secondbox.runner.v1.ControlPlaneToRunner.welcome:type_name -> secondbox.runner.v1.RunnerWelcome
-	25,  // 118: secondbox.runner.v1.ControlPlaneToRunner.rejection:type_name -> secondbox.runner.v1.ProtocolRejection
-	39,  // 119: secondbox.runner.v1.ControlPlaneToRunner.assignment:type_name -> secondbox.runner.v1.AssignmentCommand
-	43,  // 120: secondbox.runner.v1.ControlPlaneToRunner.fence:type_name -> secondbox.runner.v1.FenceCommand
-	45,  // 121: secondbox.runner.v1.ControlPlaneToRunner.drain:type_name -> secondbox.runner.v1.DrainCommand
-	55,  // 122: secondbox.runner.v1.ControlPlaneToRunner.exec:type_name -> secondbox.runner.v1.ExecFrame
-	61,  // 123: secondbox.runner.v1.ControlPlaneToRunner.file:type_name -> secondbox.runner.v1.FileFrame
-	66,  // 124: secondbox.runner.v1.ControlPlaneToRunner.pty:type_name -> secondbox.runner.v1.PtyFrame
-	70,  // 125: secondbox.runner.v1.ControlPlaneToRunner.port:type_name -> secondbox.runner.v1.PortFrame
-	71,  // 126: secondbox.runner.v1.ControlPlaneToRunner.checkpoint:type_name -> secondbox.runner.v1.CheckpointCommand
-	74,  // 127: secondbox.runner.v1.ControlPlaneToRunner.restore_begin:type_name -> secondbox.runner.v1.RestoreBegin
-	75,  // 128: secondbox.runner.v1.ControlPlaneToRunner.restore_chunk:type_name -> secondbox.runner.v1.RestoreChunk
-	78,  // 129: secondbox.runner.v1.RunnerControl.Connect:input_type -> secondbox.runner.v1.RunnerToControlPlane
-	79,  // 130: secondbox.runner.v1.RunnerControl.Connect:output_type -> secondbox.runner.v1.ControlPlaneToRunner
-	130, // [130:131] is the sub-list for method output_type
-	129, // [129:130] is the sub-list for method input_type
-	129, // [129:129] is the sub-list for extension type_name
-	129, // [129:129] is the sub-list for extension extendee
-	0,   // [0:129] is the sub-list for field type_name
+	34,  // 79: secondbox.runner.v1.PortFrame.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	33,  // 80: secondbox.runner.v1.PortFrame.correlation:type_name -> secondbox.runner.v1.Correlation
+	68,  // 81: secondbox.runner.v1.PortFrame.open:type_name -> secondbox.runner.v1.PortOpen
+	69,  // 82: secondbox.runner.v1.PortFrame.bytes:type_name -> secondbox.runner.v1.PortBytes
+	48,  // 83: secondbox.runner.v1.PortFrame.credit:type_name -> secondbox.runner.v1.StreamCredit
+	54,  // 84: secondbox.runner.v1.PortFrame.cancel:type_name -> secondbox.runner.v1.ExecCancel
+	70,  // 85: secondbox.runner.v1.PortFrame.terminal:type_name -> secondbox.runner.v1.PortTerminal
+	20,  // 86: secondbox.runner.v1.LocalWorkspaceCommand.kind:type_name -> secondbox.runner.v1.LocalWorkspaceCommandKind
+	33,  // 87: secondbox.runner.v1.LocalWorkspaceCommand.correlation:type_name -> secondbox.runner.v1.Correlation
+	20,  // 88: secondbox.runner.v1.LocalWorkspaceReceiptItem.kind:type_name -> secondbox.runner.v1.LocalWorkspaceCommandKind
+	20,  // 89: secondbox.runner.v1.LocalWorkspaceResult.kind:type_name -> secondbox.runner.v1.LocalWorkspaceCommandKind
+	21,  // 90: secondbox.runner.v1.LocalWorkspaceResult.terminal:type_name -> secondbox.runner.v1.LocalWorkspaceTerminalKind
+	73,  // 91: secondbox.runner.v1.LocalWorkspaceResult.inventory:type_name -> secondbox.runner.v1.LocalWorkspaceInventoryItem
+	33,  // 92: secondbox.runner.v1.LocalWorkspaceResult.correlation:type_name -> secondbox.runner.v1.Correlation
+	74,  // 93: secondbox.runner.v1.LocalWorkspaceResult.receipts:type_name -> secondbox.runner.v1.LocalWorkspaceReceiptItem
+	33,  // 94: secondbox.runner.v1.Evidence.correlation:type_name -> secondbox.runner.v1.Correlation
+	34,  // 95: secondbox.runner.v1.InstanceTerminal.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	22,  // 96: secondbox.runner.v1.InstanceTerminal.reason:type_name -> secondbox.runner.v1.InstanceObservedTerminationReason
+	33,  // 97: secondbox.runner.v1.InstanceTerminal.correlation:type_name -> secondbox.runner.v1.Correlation
+	24,  // 98: secondbox.runner.v1.RunnerToControlPlane.hello:type_name -> secondbox.runner.v1.RunnerHello
+	30,  // 99: secondbox.runner.v1.RunnerToControlPlane.registration:type_name -> secondbox.runner.v1.RunnerRegistration
+	32,  // 100: secondbox.runner.v1.RunnerToControlPlane.heartbeat:type_name -> secondbox.runner.v1.RunnerHeartbeat
+	41,  // 101: secondbox.runner.v1.RunnerToControlPlane.assignment_ack:type_name -> secondbox.runner.v1.AssignmentAck
+	42,  // 102: secondbox.runner.v1.RunnerToControlPlane.assignment_progress:type_name -> secondbox.runner.v1.AssignmentProgress
+	43,  // 103: secondbox.runner.v1.RunnerToControlPlane.assignment_result:type_name -> secondbox.runner.v1.AssignmentResult
+	45,  // 104: secondbox.runner.v1.RunnerToControlPlane.fence_result:type_name -> secondbox.runner.v1.FenceResult
+	47,  // 105: secondbox.runner.v1.RunnerToControlPlane.drain_state:type_name -> secondbox.runner.v1.DrainState
+	56,  // 106: secondbox.runner.v1.RunnerToControlPlane.exec:type_name -> secondbox.runner.v1.ExecFrame
+	62,  // 107: secondbox.runner.v1.RunnerToControlPlane.file:type_name -> secondbox.runner.v1.FileFrame
+	67,  // 108: secondbox.runner.v1.RunnerToControlPlane.pty:type_name -> secondbox.runner.v1.PtyFrame
+	71,  // 109: secondbox.runner.v1.RunnerToControlPlane.port:type_name -> secondbox.runner.v1.PortFrame
+	76,  // 110: secondbox.runner.v1.RunnerToControlPlane.evidence:type_name -> secondbox.runner.v1.Evidence
+	77,  // 111: secondbox.runner.v1.RunnerToControlPlane.instance_terminal:type_name -> secondbox.runner.v1.InstanceTerminal
+	75,  // 112: secondbox.runner.v1.RunnerToControlPlane.local_workspace_result:type_name -> secondbox.runner.v1.LocalWorkspaceResult
+	25,  // 113: secondbox.runner.v1.ControlPlaneToRunner.welcome:type_name -> secondbox.runner.v1.RunnerWelcome
+	26,  // 114: secondbox.runner.v1.ControlPlaneToRunner.rejection:type_name -> secondbox.runner.v1.ProtocolRejection
+	40,  // 115: secondbox.runner.v1.ControlPlaneToRunner.assignment:type_name -> secondbox.runner.v1.AssignmentCommand
+	44,  // 116: secondbox.runner.v1.ControlPlaneToRunner.fence:type_name -> secondbox.runner.v1.FenceCommand
+	46,  // 117: secondbox.runner.v1.ControlPlaneToRunner.drain:type_name -> secondbox.runner.v1.DrainCommand
+	56,  // 118: secondbox.runner.v1.ControlPlaneToRunner.exec:type_name -> secondbox.runner.v1.ExecFrame
+	62,  // 119: secondbox.runner.v1.ControlPlaneToRunner.file:type_name -> secondbox.runner.v1.FileFrame
+	67,  // 120: secondbox.runner.v1.ControlPlaneToRunner.pty:type_name -> secondbox.runner.v1.PtyFrame
+	71,  // 121: secondbox.runner.v1.ControlPlaneToRunner.port:type_name -> secondbox.runner.v1.PortFrame
+	72,  // 122: secondbox.runner.v1.ControlPlaneToRunner.local_workspace:type_name -> secondbox.runner.v1.LocalWorkspaceCommand
+	78,  // 123: secondbox.runner.v1.RunnerControl.Connect:input_type -> secondbox.runner.v1.RunnerToControlPlane
+	79,  // 124: secondbox.runner.v1.RunnerControl.Connect:output_type -> secondbox.runner.v1.ControlPlaneToRunner
+	124, // [124:125] is the sub-list for method output_type
+	123, // [123:124] is the sub-list for method input_type
+	123, // [123:123] is the sub-list for extension type_name
+	123, // [123:123] is the sub-list for extension extendee
+	0,   // [0:123] is the sub-list for field type_name
 }
 
 func init() { file_contracts_runner_v1_runner_proto_init() }
@@ -7549,7 +7616,7 @@ func file_contracts_runner_v1_runner_proto_init() {
 		(*PortFrame_Cancel)(nil),
 		(*PortFrame_Terminal)(nil),
 	}
-	file_contracts_runner_v1_runner_proto_msgTypes[56].OneofWrappers = []any{
+	file_contracts_runner_v1_runner_proto_msgTypes[55].OneofWrappers = []any{
 		(*RunnerToControlPlane_Hello)(nil),
 		(*RunnerToControlPlane_Registration)(nil),
 		(*RunnerToControlPlane_Heartbeat)(nil),
@@ -7563,11 +7630,10 @@ func file_contracts_runner_v1_runner_proto_init() {
 		(*RunnerToControlPlane_Pty)(nil),
 		(*RunnerToControlPlane_Port)(nil),
 		(*RunnerToControlPlane_Evidence)(nil),
-		(*RunnerToControlPlane_CheckpointChunk)(nil),
-		(*RunnerToControlPlane_CheckpointResult)(nil),
 		(*RunnerToControlPlane_InstanceTerminal)(nil),
+		(*RunnerToControlPlane_LocalWorkspaceResult)(nil),
 	}
-	file_contracts_runner_v1_runner_proto_msgTypes[57].OneofWrappers = []any{
+	file_contracts_runner_v1_runner_proto_msgTypes[56].OneofWrappers = []any{
 		(*ControlPlaneToRunner_Welcome)(nil),
 		(*ControlPlaneToRunner_Rejection)(nil),
 		(*ControlPlaneToRunner_Assignment)(nil),
@@ -7577,17 +7643,15 @@ func file_contracts_runner_v1_runner_proto_init() {
 		(*ControlPlaneToRunner_File)(nil),
 		(*ControlPlaneToRunner_Pty)(nil),
 		(*ControlPlaneToRunner_Port)(nil),
-		(*ControlPlaneToRunner_Checkpoint)(nil),
-		(*ControlPlaneToRunner_RestoreBegin)(nil),
-		(*ControlPlaneToRunner_RestoreChunk)(nil),
+		(*ControlPlaneToRunner_LocalWorkspace)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_contracts_runner_v1_runner_proto_rawDesc), len(file_contracts_runner_v1_runner_proto_rawDesc)),
-			NumEnums:      22,
-			NumMessages:   60,
+			NumEnums:      23,
+			NumMessages:   57,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

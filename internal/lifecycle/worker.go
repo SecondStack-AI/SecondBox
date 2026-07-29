@@ -49,17 +49,15 @@ func (reconciler Reconciler) RunOnce(ctx context.Context, now time.Time) (Decisi
 	}
 	view := View{
 		Observed: claim.ObservedState, Desired: claim.DesiredState,
-		MaterializationState: claim.MaterializationState,
-		CheckpointState:      claim.CheckpointState, StopEffectState: claim.StopEffectState,
+		StopEffectState:           claim.StopEffectState,
 		GuestLiveness:             claim.GuestLiveness,
 		InstanceTerminationReason: claim.InstanceTerminationReason,
 		IntentTerminationReason:   claim.IntentTerminationReason,
 		HasInstance:               claim.HasInstance,
-		ActiveSessions:            claim.ActiveSessions, CheckpointOnStop: claim.CheckpointOnStop,
-		ForceCheckpoint: claim.ForceCheckpoint,
-		DrainGrace:      time.Duration(claim.DrainGraceSeconds) * time.Second,
-		IdleTimeout:     time.Duration(claim.IdleSeconds) * time.Second,
-		MaximumDuration: time.Duration(claim.MaximumDurationSeconds) * time.Second,
+		ActiveSessions:            claim.ActiveSessions,
+		DrainGrace:                time.Duration(claim.DrainGraceSeconds) * time.Second,
+		IdleTimeout:               time.Duration(claim.IdleSeconds) * time.Second,
+		MaximumDuration:           time.Duration(claim.MaximumDurationSeconds) * time.Second,
 	}
 	if claim.ReadyAt != nil {
 		view.ReadyAt = claim.ReadyAt.UTC()
@@ -93,7 +91,7 @@ func (reconciler Reconciler) RunOnce(ctx context.Context, now time.Time) (Decisi
 
 func actionRequiresEffect(action Action) bool {
 	switch action {
-	case ActionMaterialize, ActionStartInstance, ActionCheckpoint, ActionStopInstance:
+	case ActionStartInstance, ActionStopInstance, ActionDelete:
 		return true
 	default:
 		return false

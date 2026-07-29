@@ -58,7 +58,7 @@ type BackendInstance struct {
 }
 
 // BackendInstanceTerminal is bounded post-ready runtime evidence. It cannot
-// release assignment authority or workspace materialization.
+// release assignment authority or the runner-local Workspace attachment.
 type BackendInstanceTerminal struct {
 	Fence          *runnerprotocol.AssignmentFence
 	Correlation    *runnerprotocol.Correlation
@@ -73,27 +73,23 @@ type FenceEvidence struct {
 	TerminationEvidenceDigest string
 }
 
-// CheckpointEvidence is runner-produced immutable workspace metadata.
-type CheckpointEvidence struct {
-	SHA256                    string
-	SizeBytes                 uint64
-	Compatibility             map[string]string
-	TerminationEvidenceDigest string
+// LocalWorkspaceEvidence is bounded logical receipt or inventory evidence. It
+// cannot carry a host path or workspace image bytes.
+type LocalWorkspaceEvidence struct {
+	PreviousGeneration uint64
+	Generation         uint64
+	LogicalCapacity    uint64
+	ReceiptRecordedAt  time.Time
+	Inventory          []*runnerprotocol.LocalWorkspaceInventoryItem
+	Receipts           []*runnerprotocol.LocalWorkspaceReceiptItem
 }
 
-// CheckpointBackend freezes and streams one exactly fenced workspace.
-type CheckpointBackend interface {
-	CreateCheckpoint(
+// LocalWorkspaceBackend executes versioned runner-local storage commands.
+type LocalWorkspaceBackend interface {
+	ExecuteLocalWorkspace(
 		context.Context,
-		*runnerprotocol.CheckpointCommand,
-		func([]byte) error,
-	) (CheckpointEvidence, error)
-}
-
-// RestoreBackend ingests verified provider-neutral checkpoint bytes before assignment.
-type RestoreBackend interface {
-	BeginRestore(context.Context, *runnerprotocol.RestoreBegin) error
-	WriteRestoreChunk(context.Context, *runnerprotocol.RestoreChunk) error
+		*runnerprotocol.LocalWorkspaceCommand,
+	) (LocalWorkspaceEvidence, error)
 }
 
 // AssignmentBackend accepts only immutable, profile-resolved assignments.
@@ -128,15 +124,6 @@ type receivedControlPlaneFrame struct {
 	err     error
 }
 
-type runnerRestoreOperation struct {
-	fence           *runnerprotocol.AssignmentFence
-	correlation     *runnerprotocol.Correlation
-	checkpointID    string
-	storageObjectID string
-	terminal        bool
-	terminalFrame   []byte
-}
-
 // RunnerProtocolConnector establishes one mutually authenticated outbound stream.
 type RunnerProtocolConnector interface {
 	Connect(context.Context) (RunnerProtocolStream, error)
@@ -149,8 +136,7 @@ type RunnerProtocolService struct {
 	backend           AssignmentBackend
 	dataPlaneBackend  DataPlaneBackend
 	portBackend       PortBackend
-	checkpointBackend CheckpointBackend
-	restoreBackend    RestoreBackend
+	workspaceBackend  LocalWorkspaceBackend
 	terminalBackend   instanceTerminalBackend
 	instanceTerminals <-chan BackendInstanceTerminal
 	connector         RunnerProtocolConnector
@@ -166,7 +152,6 @@ type RunnerProtocolService struct {
 	execTerminalOrder []string
 	fileTerminalOrder []string
 	portTerminalOrder []string
-	restoreOperations map[string]*runnerRestoreOperation
 	evidence          runnerevidence.Sink
 	correlations      map[string]*runnerprotocol.Correlation
 }
@@ -197,8 +182,7 @@ func NewRunnerProtocolService(
 	dataPlaneBackend, implementsDataPlane := backend.(DataPlaneBackend)
 	_, implementsPTY := backend.(PTYDataPlaneBackend)
 	portBackend, implementsPort := backend.(PortBackend)
-	checkpointBackend, implementsCheckpoint := backend.(CheckpointBackend)
-	restoreBackend, implementsRestore := backend.(RestoreBackend)
+	workspaceBackend, implementsWorkspace := backend.(LocalWorkspaceBackend)
 	terminalBackend, implementsTerminal := backend.(instanceTerminalBackend)
 	for _, feature := range config.MandatoryFeatures {
 		if (feature == runnerprotocol.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING ||
@@ -212,28 +196,26 @@ func NewRunnerProtocolService(
 		if feature == runnerprotocol.RunnerFeature_RUNNER_FEATURE_PORT_PROXY && !implementsPort {
 			return nil, fmt.Errorf("SecondBox runner Port proxy feature requires a Port backend")
 		}
-		if feature == runnerprotocol.RunnerFeature_RUNNER_FEATURE_CHECKPOINT &&
-			(!implementsCheckpoint || !implementsRestore) {
-			return nil, fmt.Errorf("SecondBox runner checkpoint feature requires checkpoint create and restore backends")
+		if feature == runnerprotocol.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE &&
+			!implementsWorkspace {
+			return nil, fmt.Errorf("SecondBox runner local-workspace feature requires a WorkspaceStore backend")
 		}
 	}
 	service := &RunnerProtocolService{
-		config:            config,
-		backend:           backend,
-		dataPlaneBackend:  dataPlaneBackend,
-		portBackend:       portBackend,
-		checkpointBackend: checkpointBackend,
-		restoreBackend:    restoreBackend,
-		terminalBackend:   terminalBackend,
-		connector:         connector,
-		drain:             runnerprotocol.DrainPhase_DRAIN_PHASE_ACTIVE,
-		active:            make(map[string]*runnerprotocol.ActiveAssignmentSummary),
-		execOperations:    make(map[string]*runnerExecOperation),
-		fileOperations:    make(map[string]*runnerFileOperation),
-		portOperations:    make(map[string]*runnerPortOperation),
-		restoreOperations: make(map[string]*runnerRestoreOperation),
-		evidence:          runnerevidence.SlogSink{},
-		correlations:      make(map[string]*runnerprotocol.Correlation),
+		config:           config,
+		backend:          backend,
+		dataPlaneBackend: dataPlaneBackend,
+		portBackend:      portBackend,
+		workspaceBackend: workspaceBackend,
+		terminalBackend:  terminalBackend,
+		connector:        connector,
+		drain:            runnerprotocol.DrainPhase_DRAIN_PHASE_ACTIVE,
+		active:           make(map[string]*runnerprotocol.ActiveAssignmentSummary),
+		execOperations:   make(map[string]*runnerExecOperation),
+		fileOperations:   make(map[string]*runnerFileOperation),
+		portOperations:   make(map[string]*runnerPortOperation),
+		evidence:         runnerevidence.SlogSink{},
+		correlations:     make(map[string]*runnerprotocol.Correlation),
 	}
 	if implementsTerminal {
 		service.instanceTerminals = terminalBackend.InstanceTerminals()
@@ -539,9 +521,9 @@ func (state *controlCommandState) accept(
 	case message.GetDrain() != nil:
 		messageID = message.GetDrain().MessageId
 		sequence = message.GetDrain().Sequence
-	case message.GetCheckpoint() != nil:
-		messageID = message.GetCheckpoint().MessageId
-		sequence = message.GetCheckpoint().Sequence
+	case message.GetLocalWorkspace() != nil:
+		messageID = message.GetLocalWorkspace().MessageId
+		sequence = message.GetLocalWorkspace().Sequence
 	default:
 		return false, nil
 	}
@@ -588,270 +570,145 @@ func (s *RunnerProtocolService) handleCommand(
 		return s.handleFileFrame(ctx, stream, message.GetFile(), enabled, asyncErrors)
 	case message.GetPort() != nil:
 		return s.handlePortFrame(ctx, stream, message.GetPort(), enabled, asyncErrors)
-	case message.GetCheckpoint() != nil:
-		if !enabled[runnerprotocol.RunnerFeature_RUNNER_FEATURE_CHECKPOINT] ||
-			s.checkpointBackend == nil {
-			return fmt.Errorf("SecondBox runner checkpoint feature was not negotiated")
+	case message.GetLocalWorkspace() != nil:
+		if !enabled[runnerprotocol.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE] ||
+			s.workspaceBackend == nil {
+			return fmt.Errorf("SecondBox runner local-workspace feature was not negotiated")
 		}
-		return s.handleCheckpoint(ctx, stream, message.GetCheckpoint())
-	case message.GetRestoreBegin() != nil:
-		if !enabled[runnerprotocol.RunnerFeature_RUNNER_FEATURE_CHECKPOINT] ||
-			s.restoreBackend == nil {
-			return fmt.Errorf("SecondBox runner checkpoint restore feature was not negotiated")
-		}
-		return s.handleRestoreBegin(ctx, message.GetRestoreBegin())
-	case message.GetRestoreChunk() != nil:
-		if !enabled[runnerprotocol.RunnerFeature_RUNNER_FEATURE_CHECKPOINT] ||
-			s.restoreBackend == nil {
-			return fmt.Errorf("SecondBox runner checkpoint restore feature was not negotiated")
-		}
-		return s.handleRestoreChunk(ctx, message.GetRestoreChunk())
+		return s.handleLocalWorkspace(ctx, stream, message.GetLocalWorkspace())
 	default:
 		return fmt.Errorf("SecondBox runner protocol received unsupported control-plane frame")
 	}
 }
 
-func (s *RunnerProtocolService) handleCheckpoint(
+func (s *RunnerProtocolService) handleLocalWorkspace(
 	ctx context.Context,
 	stream RunnerProtocolStream,
-	command *runnerprotocol.CheckpointCommand,
+	command *runnerprotocol.LocalWorkspaceCommand,
 ) error {
-	if command == nil || command.Fence == nil || command.CheckpointId == "" ||
-		command.StorageObjectId == "" || command.MaximumSizeBytes == 0 ||
-		command.DeadlineUnixMs == 0 || !s.hasActiveFence(command.Fence) {
-		return fmt.Errorf("SecondBox runner Checkpoint command authority is incomplete or stale")
+	if command == nil ||
+		command.CommandVersion != 1 ||
+		command.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_UNSPECIFIED ||
+		strings.TrimSpace(command.EffectId) == "" {
+		return fmt.Errorf("SecondBox runner local-workspace command is incomplete")
 	}
-	if err := s.validateOperationCorrelation(
-		command.Fence,
-		command.GetCorrelation().GetOperationId(),
-		command.Correlation,
-	); err != nil {
-		return err
+	if command.Kind != runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE &&
+		(strings.TrimSpace(command.SandboxId) == "" ||
+			strings.TrimSpace(command.WorkspaceId) == "") {
+		return fmt.Errorf("SecondBox runner local-workspace identity is incomplete")
 	}
-	deadline := time.UnixMilli(int64(command.DeadlineUnixMs))
-	if !deadline.After(time.Now()) {
-		return s.sendCheckpointResult(
-			stream, command, CheckpointEvidence{},
-			runnerprotocol.CheckpointTerminalKind_CHECKPOINT_TERMINAL_KIND_DEADLINE_EXCEEDED,
-			"checkpoint deadline expired",
-		)
-	}
-	checkpointContext, cancel := context.WithDeadline(ctx, deadline)
-	defer cancel()
-	var offset uint64
-	emit := func(data []byte) error {
-		if len(data) == 0 {
-			return nil
+	switch command.Kind {
+	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_DELETE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_CREATE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_DELETE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_PREPARE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_SWAP,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT:
+		if len(command.FencingToken) == 0 {
+			return fmt.Errorf("SecondBox runner local-workspace fencing token is required")
 		}
-		if uint64(len(data)) > command.MaximumSizeBytes-offset {
-			return fmt.Errorf("SecondBox runner checkpoint exceeds command size bound")
-		}
-		sequence := s.nextSequence()
-		if err := s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-			Message: &runnerprotocol.RunnerToControlPlane_CheckpointChunk{
-				CheckpointChunk: &runnerprotocol.CheckpointChunk{
-					MessageId: s.messageID(sequence), Sequence: sequence, Fence: command.Fence,
-					CheckpointId: command.CheckpointId, StorageObjectId: command.StorageObjectId,
-					Offset: offset, Data: append([]byte(nil), data...),
-				},
-			},
-		}); err != nil {
-			return err
-		}
-		offset += uint64(len(data))
-		return nil
 	}
-	evidence, err := s.checkpointBackend.CreateCheckpoint(checkpointContext, command, emit)
-	if err != nil {
-		terminal := runnerprotocol.CheckpointTerminalKind_CHECKPOINT_TERMINAL_KIND_RUNNER_FAILED
-		if errors.Is(checkpointContext.Err(), context.DeadlineExceeded) {
-			terminal = runnerprotocol.CheckpointTerminalKind_CHECKPOINT_TERMINAL_KIND_DEADLINE_EXCEEDED
-		}
-		return s.sendCheckpointResult(stream, command, evidence, terminal, "runner checkpoint failed")
-	}
-	if evidence.SizeBytes != offset || evidence.SizeBytes > command.MaximumSizeBytes ||
-		evidence.SHA256 == "" || len(evidence.Compatibility) == 0 {
-		return s.sendCheckpointResult(
-			stream, command, evidence,
-			runnerprotocol.CheckpointTerminalKind_CHECKPOINT_TERMINAL_KIND_INTEGRITY_FAILED,
-			"checkpoint evidence does not match streamed bytes",
-		)
-	}
-	sequence := s.nextSequence()
-	if err := s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-		Message: &runnerprotocol.RunnerToControlPlane_CheckpointChunk{
-			CheckpointChunk: &runnerprotocol.CheckpointChunk{
-				MessageId: s.messageID(sequence), Sequence: sequence, Fence: command.Fence,
-				CheckpointId: command.CheckpointId, StorageObjectId: command.StorageObjectId,
-				Offset: offset, EndOfObject: true,
-			},
-		},
-	}); err != nil {
-		return err
-	}
-	return s.sendCheckpointResult(
-		stream, command, evidence,
-		runnerprotocol.CheckpointTerminalKind_CHECKPOINT_TERMINAL_KIND_CREATED, "",
+	var (
+		evidence     LocalWorkspaceEvidence
+		executionErr error
 	)
-}
-
-func (s *RunnerProtocolService) sendCheckpointResult(
-	stream RunnerProtocolStream,
-	command *runnerprotocol.CheckpointCommand,
-	evidence CheckpointEvidence,
-	terminal runnerprotocol.CheckpointTerminalKind,
-	safeDetail string,
-) error {
-	if err := s.emitEvidence(
-		context.Background(),
-		runnerevidence.EventCheckpointTerminal,
-		command.Fence,
-		command.Correlation,
-		command.GetCorrelation().GetOperationId(),
-		terminal.String(),
-		terminalOutcome(terminal.String()),
-	); err != nil {
-		return err
+	if command.Correlation == nil || command.Correlation.RunnerId != s.config.RunnerID {
+		executionErr = localWorkspaceCommandError{
+			terminal: runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_WRONG_HOME_RUNNER,
+		}
+	} else {
+		evidence, executionErr = s.workspaceBackend.ExecuteLocalWorkspace(ctx, command)
 	}
+	terminal := localWorkspaceTerminal(executionErr)
 	sequence := s.nextSequence()
+	result := &runnerprotocol.LocalWorkspaceResult{
+		MessageId:            s.messageID(sequence),
+		Sequence:             sequence,
+		CommandVersion:       command.CommandVersion,
+		Kind:                 command.Kind,
+		Terminal:             terminal,
+		OperationId:          command.OperationId,
+		EffectId:             command.EffectId,
+		SandboxId:            command.SandboxId,
+		WorkspaceId:          command.WorkspaceId,
+		SnapshotId:           command.SnapshotId,
+		PreviousGeneration:   evidence.PreviousGeneration,
+		Generation:           evidence.Generation,
+		LogicalCapacityBytes: evidence.LogicalCapacity,
+		Inventory:            evidence.Inventory,
+		Receipts:             evidence.Receipts,
+		Correlation:          cloneRunnerCorrelation(command.Correlation),
+	}
+	if !evidence.ReceiptRecordedAt.IsZero() {
+		result.ReceiptRecordedAtUnixMs = uint64(evidence.ReceiptRecordedAt.UTC().UnixMilli())
+	}
+	if executionErr != nil {
+		result.SafeDetail = localWorkspaceSafeDetail(terminal)
+	}
 	return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-		Message: &runnerprotocol.RunnerToControlPlane_CheckpointResult{
-			CheckpointResult: &runnerprotocol.CheckpointResult{
-				MessageId: s.messageID(sequence), Sequence: sequence, Fence: command.Fence,
-				CheckpointId: command.CheckpointId, StorageObjectId: command.StorageObjectId,
-				Terminal: terminal, Sha256: evidence.SHA256, SizeBytes: evidence.SizeBytes,
-				Compatibility:             evidence.Compatibility,
-				TerminationEvidenceDigest: evidence.TerminationEvidenceDigest,
-				SafeDetail:                safeDetail, Correlation: command.Correlation,
-			},
+		Message: &runnerprotocol.RunnerToControlPlane_LocalWorkspaceResult{
+			LocalWorkspaceResult: result,
 		},
 	})
 }
 
-func (s *RunnerProtocolService) handleRestoreBegin(
-	ctx context.Context,
-	begin *runnerprotocol.RestoreBegin,
-) error {
-	if begin == nil || begin.Fence == nil || begin.CheckpointId == "" ||
-		begin.StorageObjectId == "" || begin.Sha256 == "" || begin.SizeBytes == 0 ||
-		begin.DeadlineUnixMs == 0 {
-		return fmt.Errorf("SecondBox runner Restore begin authority is incomplete")
+func localWorkspaceSafeDetail(terminal runnerprotocol.LocalWorkspaceTerminalKind) string {
+	switch terminal {
+	case runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_LOCAL_DATA_ABSENT:
+		return "local workspace data is absent"
+	case runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_ACTIVE_WRITER:
+		return "workspace has an active writer"
+	case runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STALE_GENERATION:
+		return "workspace generation is stale"
+	case runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STALE_FENCE:
+		return "workspace fencing authority is stale"
+	case runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STORAGE_INCOMPATIBLE:
+		return "local workspace storage is incompatible"
+	case runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_INSUFFICIENT_SPACE:
+		return "local workspace storage has insufficient space"
+	case runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_CORRUPT_RECEIPT:
+		return "local workspace receipt is corrupt"
+	case runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_CONFLICTING_REPLAY:
+		return "local workspace operation conflicts with its durable receipt"
+	case runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_WRONG_HOME_RUNNER:
+		return "workspace is not owned by this runner"
+	case runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SNAPSHOT_IN_USE:
+		return "snapshot is in use"
+	case runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_RESTORE_PENDING:
+		return "workspace restore is pending"
+	default:
+		return "local workspace operation failed"
 	}
-	operationID := begin.GetCorrelation().GetOperationId()
-	if err := s.validateOperationCorrelation(begin.Fence, operationID, begin.Correlation); err != nil {
-		return err
-	}
-	key := runnerRestoreOperationKey(begin.Fence, begin.CheckpointId)
-	s.operationMu.Lock()
-	existing := s.restoreOperations[key]
-	if existing != nil {
-		matches := sameRunnerFence(existing.fence, begin.Fence) &&
-			existing.storageObjectID == begin.StorageObjectId &&
-			proto.Equal(existing.correlation, begin.Correlation)
-		s.operationMu.Unlock()
-		if !matches {
-			return fmt.Errorf("SecondBox runner Restore begin conflicts with retained operation state")
-		}
-		return nil
-	}
-	s.operationMu.Unlock()
-	if err := s.restoreBackend.BeginRestore(ctx, begin); err != nil {
-		evidenceErr := s.emitEvidence(
-			context.Background(),
-			runnerevidence.EventRestoreTerminal,
-			begin.Fence,
-			begin.Correlation,
-			operationID,
-			"begin_failed",
-			"failed",
-		)
-		return errors.Join(err, evidenceErr)
-	}
-	s.operationMu.Lock()
-	s.restoreOperations[key] = &runnerRestoreOperation{
-		fence: cloneRunnerFence(begin.Fence), correlation: cloneRunnerCorrelation(begin.Correlation),
-		checkpointID: begin.CheckpointId, storageObjectID: begin.StorageObjectId,
-	}
-	s.operationMu.Unlock()
-	return nil
 }
 
-func (s *RunnerProtocolService) handleRestoreChunk(
-	ctx context.Context,
-	chunk *runnerprotocol.RestoreChunk,
-) error {
-	if chunk == nil || chunk.Fence == nil || chunk.CheckpointId == "" ||
-		chunk.StorageObjectId == "" {
-		return fmt.Errorf("SecondBox runner Restore chunk authority is incomplete")
-	}
-	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(chunk)
-	if err != nil {
-		return fmt.Errorf("SecondBox runner Restore chunk encoding: %w", err)
-	}
-	key := runnerRestoreOperationKey(chunk.Fence, chunk.CheckpointId)
-	s.operationMu.Lock()
-	state := s.restoreOperations[key]
-	if state == nil ||
-		!sameRunnerFence(state.fence, chunk.Fence) ||
-		state.storageObjectID != chunk.StorageObjectId {
-		s.operationMu.Unlock()
-		return fmt.Errorf("SecondBox runner Restore chunk correlation is missing or stale")
-	}
-	if state.terminal {
-		duplicate := bytes.Equal(state.terminalFrame, encoded)
-		s.operationMu.Unlock()
-		if duplicate {
-			return nil
-		}
-		return fmt.Errorf("SecondBox runner Restore chunk follows terminal state")
-	}
-	s.operationMu.Unlock()
-	if err := s.restoreBackend.WriteRestoreChunk(ctx, chunk); err != nil {
-		evidenceErr := s.emitEvidence(
-			context.Background(),
-			runnerevidence.EventRestoreTerminal,
-			state.fence,
-			state.correlation,
-			state.correlation.OperationId,
-			"restore_failed",
-			"failed",
-		)
-		s.operationMu.Lock()
-		state.terminal = true
-		state.terminalFrame = bytes.Clone(encoded)
-		s.operationMu.Unlock()
-		return errors.Join(err, evidenceErr)
-	}
-	if !chunk.EndOfObject {
-		return nil
-	}
-	if err := s.emitEvidence(
-		context.Background(),
-		runnerevidence.EventRestoreTerminal,
-		state.fence,
-		state.correlation,
-		state.correlation.OperationId,
-		"restored",
-		"completed",
-	); err != nil {
-		return err
-	}
-	s.operationMu.Lock()
-	state.terminal = true
-	state.terminalFrame = bytes.Clone(encoded)
-	s.operationMu.Unlock()
-	return nil
+type localWorkspaceTerminalError interface {
+	LocalWorkspaceTerminal() runnerprotocol.LocalWorkspaceTerminalKind
 }
 
-func runnerRestoreOperationKey(
-	fence *runnerprotocol.AssignmentFence,
-	checkpointID string,
-) string {
-	return strings.Join([]string{
-		fence.AssignmentId,
-		fmt.Sprintf("%d", fence.SandboxGeneration),
-		checkpointID,
-	}, "\x00")
+type localWorkspaceCommandError struct {
+	terminal runnerprotocol.LocalWorkspaceTerminalKind
+}
+
+func (failure localWorkspaceCommandError) Error() string {
+	return localWorkspaceSafeDetail(failure.terminal)
+}
+
+func (failure localWorkspaceCommandError) LocalWorkspaceTerminal() runnerprotocol.LocalWorkspaceTerminalKind {
+	return failure.terminal
+}
+
+func localWorkspaceTerminal(err error) runnerprotocol.LocalWorkspaceTerminalKind {
+	if err == nil {
+		return runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED
+	}
+	var typed localWorkspaceTerminalError
+	if errors.As(err, &typed) {
+		return typed.LocalWorkspaceTerminal()
+	}
+	return runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_RUNNER_FAILED
 }
 
 func (s *RunnerProtocolService) handleAssignment(

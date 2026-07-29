@@ -27,7 +27,7 @@ func TestRunnerPoolAdministrationIsAuditedAndRevisionGuarded(t *testing.T) {
 			Name:          "qualified-amd64",
 			State:         contracts.RunnerPoolStateReady,
 			Architectures: []string{"amd64"},
-			Capabilities:  []string{"checkpoint", "firecracker"},
+			Capabilities:  []string{"compute", "local-workspace"},
 			CapacityPolicy: map[string]int64{
 				"maximumInstances": 32,
 			},
@@ -134,7 +134,7 @@ func TestRunnerAdministrationProjectsIdentityWithoutCredentialMaterial(t *testin
 		INSERT INTO secondbox.runner_pools (
 			name,state,architectures_json,capabilities_json,capacity_policy_json,
 			ready_runner_count,revision,created_at,updated_at
-		) VALUES ('runner-admin-pool','ready','["amd64"]','["firecracker"]',
+		) VALUES ('runner-admin-pool','ready','["amd64"]','["compute"]',
 		          '{"maxInstances":4}',1,1,$1,$1)`,
 		now,
 	); err != nil {
@@ -149,7 +149,7 @@ func TestRunnerAdministrationProjectsIdentityWithoutCredentialMaterial(t *testin
 			created_at,updated_at
 		) VALUES (
 			'runner-admin-1','runner-admin-pool','qualified-runner','ready',
-			'["amd64"]','["firecracker"]','{"instances":4}','["1"]',
+			'["amd64"]','["compute"]','{"instances":4}','["1"]',
 			1,1,'1.0.0','connection-admin',7,'active','{}','[]',$1,3,$1,$1
 		)`,
 		now,
@@ -197,7 +197,7 @@ func TestRunnerPoolAdministrationIsAvailableThroughPublicHTTPContract(t *testing
 			Name:           "http-runner-pool",
 			State:          contracts.RunnerPoolStateReady,
 			Architectures:  []string{"amd64"},
-			Capabilities:   []string{"firecracker"},
+			Capabilities:   []string{"compute"},
 			CapacityPolicy: map[string]int64{"maxInstances": 4},
 		},
 	)

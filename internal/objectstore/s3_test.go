@@ -70,10 +70,10 @@ func TestS3StorePublishesAndVerifiesImmutableObject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	content := []byte("portable-workspace-checkpoint")
+	content := []byte("immutable-application-artifact")
 	sum := sha256.Sum256(content)
 	evidence, err := store.PutImmutable(
-		t.Context(), "checkpoints/checkpoint-1", bytes.NewReader(content),
+		t.Context(), "artifacts/artifact-1", bytes.NewReader(content),
 		int64(len(content)), hex.EncodeToString(sum[:]),
 	)
 	if err != nil {
@@ -82,7 +82,7 @@ func TestS3StorePublishesAndVerifiesImmutableObject(t *testing.T) {
 	if evidence.SizeBytes != int64(len(content)) || evidence.SHA256 != hex.EncodeToString(sum[:]) {
 		t.Fatalf("publication evidence = %#v", evidence)
 	}
-	body, verified, err := store.GetVerified(t.Context(), "checkpoints/checkpoint-1", evidence)
+	body, verified, err := store.GetVerified(t.Context(), "artifacts/artifact-1", evidence)
 	if err != nil {
 		t.Fatal(err)
 	}

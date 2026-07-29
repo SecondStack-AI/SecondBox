@@ -74,7 +74,7 @@ func (store *PostgresControlPlaneStore) StageArtifact(
 	}
 	if artifact.SizeBytes > spec.Execution.MaximumTransferBytes ||
 		!artifact.RetainUntil.Equal(artifact.CreatedAt.Add(
-			time.Duration(spec.Checkpoint.ArtifactRetentionSeconds)*time.Second,
+			time.Duration(spec.Retention.ArtifactRetentionSeconds)*time.Second,
 		)) {
 		return contracts.Artifact{}, ports.ErrQuotaExceeded
 	}
@@ -125,7 +125,7 @@ func (store *PostgresControlPlaneStore) StageArtifact(
 		return contracts.Artifact{}, err
 	}
 	if subjectUsage.artifacts+1 > subjectQuota.MaxArtifacts ||
-		subjectUsage.retainedBytes+artifact.SizeBytes > subjectQuota.MaxRetainedBytes {
+		subjectUsage.artifactBytes+artifact.SizeBytes > subjectQuota.MaxArtifactBytes {
 		return contracts.Artifact{}, ports.ErrQuotaExceeded
 	}
 	tag, err := tx.Exec(ctx, `

@@ -21,6 +21,10 @@ type vmStateRequest struct {
 	State string `json:"state"`
 }
 
+type instanceActionRequest struct {
+	ActionType string `json:"action_type"`
+}
+
 type snapshotCreateRequest struct {
 	SnapshotType string `json:"snapshot_type"`
 	SnapshotPath string `json:"snapshot_path"`
@@ -63,6 +67,15 @@ func (c FirecrackerAPIClient) Pause(ctx context.Context) error {
 
 func (c FirecrackerAPIClient) Resume(ctx context.Context) error {
 	return c.patchJSON(ctx, "/vm", vmStateRequest{State: "Resumed"}, nil)
+}
+
+func (c FirecrackerAPIClient) SendCtrlAltDel(ctx context.Context) error {
+	return c.putJSON(
+		ctx,
+		"/actions",
+		instanceActionRequest{ActionType: "SendCtrlAltDel"},
+		nil,
+	)
 }
 
 func (c FirecrackerAPIClient) CreateFullSnapshot(ctx context.Context, snapshotPath, memFilePath string) error {

@@ -2,7 +2,8 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "$script_dir/../.." && pwd)"
+runner_root="$(cd "$script_dir/../.." && pwd)"
+repo_root="$(cd "$runner_root/.." && pwd)"
 
 usage() {
     cat >&2 <<'USAGE'
@@ -128,7 +129,10 @@ install -m 0755 "$script_dir/init" "$root_dir/init"
 
 echo "Building guest supervisor" >&2
 install -d -m 0755 "$root_dir/usr/local/bin"
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$root_dir/usr/local/bin/secondbox-guest-agent" "$repo_root/cmd/secondbox-guest-agent"
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go -C "$runner_root" build \
+        -o "$root_dir/usr/local/bin/secondbox-guest-agent" \
+        ./cmd/secondbox-guest-agent
 # Tool-executor microVMs run the tool-exec server only.
 install -m 0755 "$script_dir/tool-entrypoint.sh" "$root_dir/usr/local/bin/secondbox-runner-guest-entrypoint"
 
@@ -309,5 +313,6 @@ openssl dgst -sha256 -verify "$out_dir/signing.pub" -signature "$out_dir/manifes
 
 "$script_dir/verify.sh" "$out_dir" "$trusted_public_key" "$trusted_public_key_sha"
 out_dir_abs="$(cd "$out_dir" && pwd)"
-ln -sfn "$out_dir_abs" "$repo_root/releases/microvm/latest"
+mkdir -p "$runner_root/releases/microvm"
+ln -sfn "$out_dir_abs" "$runner_root/releases/microvm/latest"
 echo "$out_dir"

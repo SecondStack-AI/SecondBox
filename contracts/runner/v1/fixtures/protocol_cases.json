@@ -11,12 +11,14 @@
       "client_maximum": 1,
       "mandatory_features": [
         "exec_streaming",
-        "evidence"
+        "evidence",
+        "local_workspace"
       ],
       "server_features": [
         "exec_streaming",
         "evidence",
-        "file_streaming"
+        "file_streaming",
+        "local_workspace"
       ],
       "selected_generation": 1,
       "rejection": ""
@@ -52,6 +54,21 @@
       ],
       "server_features": [
         "exec_streaming"
+      ],
+      "selected_generation": 0,
+      "rejection": "feature_unsupported"
+    },
+    {
+      "name": "portable_checkpoint_runner_is_not_compatible",
+      "client_minimum": 1,
+      "client_maximum": 1,
+      "mandatory_features": [
+        "evidence",
+        "portable_checkpoint"
+      ],
+      "server_features": [
+        "evidence",
+        "local_workspace"
       ],
       "selected_generation": 0,
       "rejection": "feature_unsupported"

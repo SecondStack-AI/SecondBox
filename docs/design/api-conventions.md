@@ -18,7 +18,7 @@ Errors use `application/problem+json` with stable `type`, `title`, `status`, `co
 
 The HTTP resources cover Profiles and revisions, RunnerPools, Runners, Sandboxes, Operations, Leases, exec sessions, terminal sessions, files, snapshots, artifacts, and port sessions. Runner projections never appear inside Sandbox responses.
 
-Snapshot creation is a lifecycle-scoped, revision-guarded, idempotent projection of the current published stopped-state checkpoint. Snapshot list/get operations use read scope, and deletion ends retention without exposing or mutating the underlying provider object. Snapshot responses contain the source generation, size, checksum, expiry, name, and bounded metadata; they contain no Workspace ID, checkpoint ID, compatibility manifest, or storage key.
+Snapshot creation is a lifecycle-scoped, revision-guarded, idempotent reflink of the stopped Sandbox's current local Workspace image. Snapshot create, delete, and restore return durable Operations; list and get use read scope. Snapshot responses contain logical size, creation time, optional expiry, lifecycle state, and bounded metadata. They contain no Workspace-image checksum, home Runner, host path, provider reference, or storage key.
 
 `POST /v1/sandboxes` accepts only:
 
@@ -35,7 +35,7 @@ Tenant and subject ownership come from the trusted request headers. A Sandbox re
 
 ## Lifecycle semantics
 
-Create, start, drain, stop, checkpoint, and delete are idempotent asynchronous mutations that return `202` with a durable `Operation`. `GET /v1/operations/{id}` is the canonical polling surface. `wait` is a bounded long-poll for declared Sandbox states and never changes activity.
+Create, start, drain, stop, Snapshot create/delete/restore, and Sandbox delete are idempotent asynchronous mutations that return `202` with a durable `Operation`. `GET /v1/operations/{id}` is the canonical polling surface. `wait` is a bounded long-poll for declared Sandbox states and never changes activity.
 
 `get` and `list` return durable projections. `inspect` returns the latest generation-fenced guest heartbeat and active-session evidence persisted by the runner path; it does not renew activity or synthesize a fresh observation while no synchronous runner-effect broker exists. `ping` reports that same persisted guest liveness without touch. `touch` explicitly renews useful activity for the current generation and may carry a Lease. `drain` rejects new work immediately, waits only through the profile grace, and then allows stop to fence remaining work. `stop` removes compute without deleting the Sandbox or workspace. `delete` never occurs on connection loss.
 

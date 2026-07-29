@@ -11,14 +11,18 @@ from urllib.request import Request, urlopen
 
 
 _OPERATIONS = {
-    "checkpointSandbox": ("POST", "/v1/sandboxes/{sandboxId}:checkpoint"),
+    "createSandboxSnapshot": ("POST", "/v1/sandboxes/{sandboxId}/snapshots"),
     "createProfile": ("POST", "/v1/profiles"),
     "createSandbox": ("POST", "/v1/sandboxes"),
     "deleteSandbox": ("DELETE", "/v1/sandboxes/{sandboxId}"),
+    "deleteSnapshot": ("DELETE", "/v1/snapshots/{snapshotId}"),
     "drainSandbox": ("POST", "/v1/sandboxes/{sandboxId}:drain"),
     "executeSandboxCommand": ("POST", "/v1/sandboxes/{sandboxId}/exec"),
     "getOperation": ("GET", "/v1/operations/{operationId}"),
     "getSandbox": ("GET", "/v1/sandboxes/{sandboxId}"),
+    "getSnapshot": ("GET", "/v1/snapshots/{snapshotId}"),
+    "listSandboxSnapshots": ("GET", "/v1/sandboxes/{sandboxId}/snapshots"),
+    "restoreSandboxSnapshot": ("POST", "/v1/sandboxes/{sandboxId}:restore"),
     "startSandbox": ("POST", "/v1/sandboxes/{sandboxId}:start"),
     "stopSandbox": ("POST", "/v1/sandboxes/{sandboxId}:stop"),
     "waitForSandbox": ("POST", "/v1/sandboxes/{sandboxId}:wait"),
@@ -128,4 +132,3 @@ class SecondBoxClient:
         return self.request_json(
             "getSandbox", path_parameters={"sandboxId": sandbox_id}
         )
-

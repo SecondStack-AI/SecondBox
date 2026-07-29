@@ -130,6 +130,67 @@ func TestNegotiateGuestProtocolOverFirecrackerVsockTransport(t *testing.T) {
 	})
 }
 
+func TestNegotiateGuestProtocolWaitsForFirecrackerVsockTransport(t *testing.T) {
+	socketPath := shortUnixSocketPath(t, "guest-protocol-delayed.sock")
+	server := grpc.NewServer()
+	service, err := microvmguest.NewProtocolService(
+		microvmguest.Server{
+			WorkspaceDir:      t.TempDir(),
+			RuntimePrivateDir: t.TempDir(),
+			InstanceID:        "instance-delayed",
+			SandboxID:         "sandbox-delayed",
+		},
+		microvmguest.ProtocolIdentity{
+			InstanceID:              "instance-delayed",
+			SandboxID:               "sandbox-delayed",
+			SandboxGeneration:       3,
+			GuestBuildID:            "guest-build-delayed",
+			ImageManifestDigest:     "sha256:image-delayed",
+			ToolchainManifestDigest: "sha256:toolchain-delayed",
+			HeartbeatInterval:       time.Second,
+		},
+	)
+	if err != nil {
+		t.Fatalf("create delayed guest protocol service: %v", err)
+	}
+	guestv1.RegisterGuestAgentServer(server, service)
+	listenResult := make(chan error, 1)
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		raw, listenErr := net.Listen("unix", socketPath)
+		if listenErr != nil {
+			listenResult <- listenErr
+			return
+		}
+		listenResult <- nil
+		_ = server.Serve(&firecrackerVsockTestListener{
+			Listener: raw,
+			port:     4097,
+		})
+	}()
+	defer server.Stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	session, err := NegotiateGuestProtocol(ctx, GuestProtocolNegotiation{
+		UDSPath:                         socketPath,
+		Port:                            4097,
+		InstanceID:                      "instance-delayed",
+		SandboxID:                       "sandbox-delayed",
+		SandboxGeneration:               3,
+		ExpectedGuestBuildID:            "guest-build-delayed",
+		ExpectedImageManifestDigest:     "sha256:image-delayed",
+		ExpectedToolchainManifestDigest: "sha256:toolchain-delayed",
+	})
+	if listenErr := <-listenResult; listenErr != nil {
+		t.Fatalf("listen after negotiation began: %v", listenErr)
+	}
+	if err != nil {
+		t.Fatalf("negotiate after delayed listener readiness: %v", err)
+	}
+	defer session.Close()
+}
+
 func assertPTYOverTransport(t *testing.T, session *GuestProtocolSession) {
 	t.Helper()
 	controls := make(chan GuestPTYControl, 4)

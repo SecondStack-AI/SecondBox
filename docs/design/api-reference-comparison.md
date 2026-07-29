@@ -15,7 +15,7 @@ SecondBox borrows proven ergonomic shapes without inheriting another product's o
 
 Gondolin exposes a local `VM` object with explicit create/start/close and a local session registry. Closing ends the VM. Microsandbox exposes local builder, start/get/list/remove, handle, stop, wait, snapshot, and attachment APIs. Kilntainers lazily creates one Sandbox for an MCP session and stops it with the session. These shapes validate the value of explicit handles and idempotent stop, but their local-process or session ownership is not SecondBox ownership.
 
-SecondBox makes Sandbox durable server state, separates it from Instance compute, and never maps SDK object disposal, transport disconnect, or framework harness close to deletion. Start, drain, stop, checkpoint, and delete are durable asynchronous Operations. A stopped Sandbox can resume from its committed checkpoint on another compatible Runner.
+SecondBox makes Sandbox durable server state, separates it from Instance compute, and never maps SDK object disposal, transport disconnect, or framework harness close to deletion. Start, drain, stop, Snapshot create/delete/restore, and Sandbox delete are durable asynchronous Operations. A stopped Sandbox resumes only on its immutable home Runner from the current local Workspace image.
 
 ## Execution and cancellation
 

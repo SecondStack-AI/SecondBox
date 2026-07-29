@@ -30,27 +30,11 @@ type ProtocolStateStore interface {
 	MarkCommandDelivered(context.Context, string, string, time.Time) error
 }
 
-// CheckpointReceiver durably ingests provider-neutral checkpoint frames.
-type CheckpointReceiver interface {
-	ReceiveCheckpoint(context.Context, Event, time.Time) error
-}
-
-// CheckpointRestoreSender streams verified checkpoint bytes before an assignment is delivered.
-type CheckpointRestoreSender interface {
-	StreamRestore(
-		context.Context,
-		*runnerv1.AssignmentCommand,
-		func(*runnerv1.ControlPlaneToRunner) error,
-	) error
-}
-
 // ServerConfig contains explicit protocol compatibility and durable dependencies.
 type ServerConfig struct {
 	CredentialVerifier  CredentialVerifier
 	StateStore          ProtocolStateStore
 	FrameRelay          ProtocolFrameRelay
-	CheckpointReceiver  CheckpointReceiver
-	CheckpointRestore   CheckpointRestoreSender
 	SupportedVersions   VersionRange
 	EnabledFeatures     []runnerv1.RunnerFeature
 	HeartbeatInterval   time.Duration
@@ -92,10 +76,6 @@ func NewServer(config ServerConfig) (*Server, error) {
 			feature == runnerv1.RunnerFeature_RUNNER_FEATURE_PORT_PROXY) &&
 			config.FrameRelay == nil {
 			return nil, errors.New("SecondBox runner control data-plane features require a durable frame relay")
-		}
-		if feature == runnerv1.RunnerFeature_RUNNER_FEATURE_CHECKPOINT &&
-			(config.CheckpointReceiver == nil || config.CheckpointRestore == nil) {
-			return nil, errors.New("SecondBox runner checkpoint feature requires durable checkpoint receive and restore")
 		}
 	}
 	return &Server{config: config}, nil
@@ -209,17 +189,6 @@ func (server *Server) sendNextOutboundFrame(
 		return err
 	}
 	if found {
-		if assignment := delivery.Message.GetAssignment(); assignment != nil &&
-			assignment.SourceCheckpointId != "" {
-			if server.config.CheckpointRestore == nil {
-				return errors.New("SecondBox runner checkpoint restore sender is not configured")
-			}
-			if err := server.config.CheckpointRestore.StreamRestore(
-				ctx, assignment, stream.Send,
-			); err != nil {
-				return fmt.Errorf("SecondBox runner checkpoint restore stream: %w", err)
-			}
-		}
 		if err := stream.Send(delivery.Message); err != nil {
 			return fmt.Errorf("SecondBox runner control command send: %w", err)
 		}
@@ -243,23 +212,8 @@ func (server *Server) persistEvent(ctx context.Context, event Event) error {
 	case EventHeartbeat:
 		_, err := server.config.StateStore.RecordHeartbeat(ctx, event.Heartbeat, server.config.Now())
 		return err
-	case EventCheckpoint:
-		if server.config.CheckpointReceiver == nil {
-			return errors.New("SecondBox runner checkpoint receiver is not configured")
-		}
-		now := server.config.Now()
-		if _, err := server.config.StateStore.RecordEvent(
-			ctx, event, now,
-		); err != nil {
-			return err
-		}
-		if err := server.config.CheckpointReceiver.ReceiveCheckpoint(
-			ctx, event, now,
-		); err != nil {
-			return err
-		}
-		return nil
-	case EventAssignment, EventFence, EventDrain, EventEvidence, EventInstanceTerminal:
+	case EventAssignment, EventFence, EventDrain, EventEvidence, EventInstanceTerminal,
+		EventLocalWorkspace:
 		_, err := server.config.StateStore.RecordEvent(ctx, event, server.config.Now())
 		return err
 	case EventExec, EventFile, EventPort:

@@ -8,6 +8,7 @@ import (
 )
 
 var ErrNoCompatibleRunner = errors.New("SecondBox scheduler found no compatible runner")
+var ErrHomeRunnerUnavailable = errors.New("SecondBox Sandbox home runner is unavailable")
 
 const (
 	DrainPhaseActive   = "active"
@@ -32,7 +33,6 @@ type Requirements struct {
 	RequiredCapabilities     []string
 	Capacity                 Capacity
 	GuestProtocolGeneration  uint32
-	WorkspaceCheckpointID    string
 	PreferredArtifactDigests []string
 }
 
@@ -46,7 +46,6 @@ type RunnerSnapshot struct {
 	Reserved             Capacity
 	DrainPhase           string
 	LastHeartbeatAt      time.Time
-	WorkspaceCheckpoints []string
 	ArtifactDigests      []string
 	GuestProtocolMinimum uint32
 	GuestProtocolMaximum uint32
@@ -60,9 +59,8 @@ func SelectRunner(
 	heartbeatTimeout time.Duration,
 ) (RunnerSnapshot, error) {
 	type rankedRunner struct {
-		runner            RunnerSnapshot
-		workspaceLocality bool
-		artifactLocality  int
+		runner           RunnerSnapshot
+		artifactLocality int
 	}
 	ranked := make([]rankedRunner, 0, len(runners))
 	for _, runner := range runners {
@@ -70,9 +68,7 @@ func SelectRunner(
 			continue
 		}
 		ranked = append(ranked, rankedRunner{
-			runner: runner,
-			workspaceLocality: requirements.WorkspaceCheckpointID != "" &&
-				contains(runner.WorkspaceCheckpoints, requirements.WorkspaceCheckpointID),
+			runner:           runner,
 			artifactLocality: intersectionCount(runner.ArtifactDigests, requirements.PreferredArtifactDigests),
 		})
 	}
@@ -80,9 +76,6 @@ func SelectRunner(
 		return RunnerSnapshot{}, ErrNoCompatibleRunner
 	}
 	sort.Slice(ranked, func(left, right int) bool {
-		if ranked[left].workspaceLocality != ranked[right].workspaceLocality {
-			return ranked[left].workspaceLocality
-		}
 		if ranked[left].artifactLocality != ranked[right].artifactLocality {
 			return ranked[left].artifactLocality > ranked[right].artifactLocality
 		}
@@ -102,6 +95,32 @@ func SelectRunner(
 	return ranked[0].runner, nil
 }
 
+// SelectHomeRunner admits only the immutable home Runner. Compatible
+// non-home Runners are deliberately invisible after initial placement.
+func SelectHomeRunner(
+	homeRunnerID string,
+	requirements Requirements,
+	runners []RunnerSnapshot,
+	now time.Time,
+	heartbeatTimeout time.Duration,
+) (RunnerSnapshot, error) {
+	if homeRunnerID == "" {
+		return RunnerSnapshot{}, ErrHomeRunnerUnavailable
+	}
+	homeCandidates := make([]RunnerSnapshot, 0, 1)
+	for _, runner := range runners {
+		if runner.ID == homeRunnerID {
+			homeCandidates = append(homeCandidates, runner)
+			break
+		}
+	}
+	selected, err := SelectRunner(requirements, homeCandidates, now, heartbeatTimeout)
+	if errors.Is(err, ErrNoCompatibleRunner) {
+		return RunnerSnapshot{}, ErrHomeRunnerUnavailable
+	}
+	return selected, err
+}
+
 func compatible(
 	requirements Requirements,
 	runner RunnerSnapshot,
@@ -114,7 +133,7 @@ func compatible(
 		runner.LastHeartbeatAt.Before(now.Add(-heartbeatTimeout)) {
 		return false
 	}
-	if requirements.BackendKind != "firecracker" || !runner.Capabilities["firecracker"] {
+	if requirements.BackendKind != "firecracker" || !runner.Capabilities["compute"] {
 		return false
 	}
 	if requirements.GuestProtocolGeneration == 0 ||
@@ -128,7 +147,7 @@ func compatible(
 		}
 	}
 	for _, prerequisite := range []string{
-		"kvm", "jailer", "cgroup", "network-policy", "storage", "cleanup",
+		"network-policy", "storage", "cleanup", "local-workspace",
 	} {
 		if !runner.Capabilities[prerequisite] {
 			return false

@@ -92,7 +92,10 @@ func NegotiateGuestProtocol(ctx context.Context, request GuestProtocolNegotiatio
 		sessionCancel()
 		return nil, errors.Join(err, connection.Close())
 	}
-	stream, err := guestv1.NewGuestAgentClient(connection).Connect(sessionCtx)
+	stream, err := guestv1.NewGuestAgentClient(connection).Connect(
+		sessionCtx,
+		grpc.WaitForReady(true),
+	)
 	if err != nil {
 		return closeWithError(fmt.Errorf("open guest protocol stream: %w", err))
 	}
@@ -201,8 +204,6 @@ func guestFeatureFromContractName(name string) (guestv1.GuestFeature, error) {
 		return guestv1.GuestFeature_GUEST_FEATURE_DESCRIPTOR_PINNED_FILESYSTEM, nil
 	case "activity_events":
 		return guestv1.GuestFeature_GUEST_FEATURE_ACTIVITY_EVENTS, nil
-	case "checkpoint_freeze":
-		return guestv1.GuestFeature_GUEST_FEATURE_CHECKPOINT_FREEZE, nil
 	case "port_proxy":
 		return guestv1.GuestFeature_GUEST_FEATURE_PORT_PROXY, nil
 	default:

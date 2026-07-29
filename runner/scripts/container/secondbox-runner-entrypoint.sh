@@ -2,11 +2,10 @@
 set -euo pipefail
 
 required_paths=(
-    SECONDBOX_RUNNER_SANDBOX_WORKSPACE_DIR
+    SECONDBOX_RUNNER_WORKSPACE_ROOT
     SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR
     SECONDBOX_RUNNER_FIRECRACKER_LOG_DIR
     SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT
-    SECONDBOX_RUNNER_STATE_DIR
     SECONDBOX_RUNNER_LOG_DIR
 )
 for variable in "${required_paths[@]}"; do
@@ -16,16 +15,15 @@ for variable in "${required_paths[@]}"; do
     fi
 done
 
-install -d -o 10001 -g 10001 -m 0750 "$SECONDBOX_RUNNER_SANDBOX_WORKSPACE_DIR"
+install -d -o 10001 -g 10001 -m 0750 "$SECONDBOX_RUNNER_WORKSPACE_ROOT"
 install -d -o 10001 -g 10001 -m 0750 "$SECONDBOX_RUNNER_LOG_DIR"
 install -d -o 0 -g 0 -m 0700 \
     "$SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR" \
     "$SECONDBOX_RUNNER_FIRECRACKER_LOG_DIR" \
-    "$SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT" \
-    "$SECONDBOX_RUNNER_STATE_DIR"
+    "$SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT"
 
 # systemd does not retain a container's process environment in its manager
-# environment. Materialize only the reviewed standalone runner namespace.
+# environment. Retain only the reviewed standalone runner namespace.
 environment_file=/run/secondbox-runner/runner.env
 umask 077
 : > "$environment_file"

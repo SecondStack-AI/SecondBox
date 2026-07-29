@@ -65,10 +65,6 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		return prefixes, nil
 	}
 
-	dataDir, err := required("SECONDBOX_RUNNER_STATE_DIR")
-	if err != nil {
-		return nil, err
-	}
 	firecrackerPath, err := required("SECONDBOX_RUNNER_FIRECRACKER_PATH")
 	if err != nil {
 		return nil, err
@@ -117,11 +113,7 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	workspaceDir, err := required("SECONDBOX_RUNNER_SANDBOX_WORKSPACE_DIR")
-	if err != nil {
-		return nil, err
-	}
-	checkpointRestoreSpoolDir, err := required("SECONDBOX_RUNNER_CHECKPOINT_RESTORE_SPOOL_DIR")
+	runnerWorkspaceRoot, err := required("SECONDBOX_RUNNER_WORKSPACE_ROOT")
 	if err != nil {
 		return nil, err
 	}
@@ -175,10 +167,6 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	workspaceBackend, err := required("SECONDBOX_RUNNER_SANDBOX_STORAGE_BACKEND")
-	if err != nil {
-		return nil, err
-	}
 	storagePressureRecoveryPercent, err := requiredInt("SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT")
 	if err != nil {
 		return nil, err
@@ -197,17 +185,6 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		AdmissionDenyPercent: storagePressureAdmissionDenyPercent,
 	}).Validate(); err != nil {
 		return nil, fmt.Errorf("SecondBox Firecracker config: %w", err)
-	}
-	thinPoolDevice := ""
-	switch workspaceBackend {
-	case "ext4":
-	case "dm-thin":
-		thinPoolDevice, err = required("SECONDBOX_RUNNER_SANDBOX_THIN_POOL_DEVICE")
-		if err != nil {
-			return nil, err
-		}
-	default:
-		return nil, fmt.Errorf("SecondBox Firecracker config requires SECONDBOX_RUNNER_SANDBOX_STORAGE_BACKEND to be ext4 or dm-thin")
 	}
 	guestIP, err := required("SECONDBOX_RUNNER_SANDBOX_GUEST_IP")
 	if err != nil {
@@ -283,7 +260,6 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 	}
 
 	return &config.Config{
-		DataDir:                                    dataDir,
 		FirecrackerPath:                            firecrackerPath,
 		JailerPath:                                 jailerPath,
 		MicroVMJailerChrootBaseDir:                 jailRoot,
@@ -298,8 +274,7 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		MicroVMToolSharedImagePath:                 sharedImagePath,
 		MicroVMPublicKeyPath:                       publicKeyPath,
 		MicroVMPublicKeySHA256:                     publicKeySHA256,
-		MicroVMWorkspaceDir:                        workspaceDir,
-		MicroVMCheckpointRestoreSpoolDir:           checkpointRestoreSpoolDir,
+		RunnerWorkspaceRoot:                        runnerWorkspaceRoot,
 		MicroVMRunDir:                              runDir,
 		MicroVMLogDir:                              logDir,
 		MicroVMKernelArgs:                          kernelArgs,
@@ -310,8 +285,6 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		MicroVMVCPUs:                               vcpus,
 		MicroVMCPUTemplate:                         cpuTemplate,
 		MicroVMWorkspaceSizeMiB:                    workspaceSizeMiB,
-		MicroVMWorkspaceBackend:                    workspaceBackend,
-		MicroVMThinPoolDevice:                      thinPoolDevice,
 		MicroVMStoragePressureRecoveryPercent:      storagePressureRecoveryPercent,
 		MicroVMStoragePressureWarningPercent:       storagePressureWarningPercent,
 		MicroVMStoragePressureAdmissionDenyPercent: storagePressureAdmissionDenyPercent,

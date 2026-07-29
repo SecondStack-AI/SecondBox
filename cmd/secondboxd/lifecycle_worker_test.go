@@ -128,8 +128,8 @@ func (store *contentionLifecycleStore) ClaimLifecycle(
 	if store.claimCalls == 1 {
 		return ports.LifecycleReconcileClaim{
 			SandboxID: "sbx-contention", WorkerID: workerID, Revision: 2,
-			ObservedState: contracts.SandboxStateStopped,
-			DesiredState:  contracts.SandboxDesiredStateDeleted,
+			ObservedState: contracts.SandboxStateCreating,
+			DesiredState:  contracts.SandboxDesiredStateStopped,
 		}, true, nil
 	}
 	store.cancel()

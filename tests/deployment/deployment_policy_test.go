@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +13,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/SecondStack-AI/SecondBox/internal/scheduler"
 )
 
 func TestComposeSeparatesOptionalPrivilegedRunnerFromControlPlane(t *testing.T) {
@@ -32,7 +35,6 @@ func TestComposeSeparatesOptionalPrivilegedRunnerFromControlPlane(t *testing.T) 
 		"${SECONDBOX_RUNNER_ARTIFACT_HOST_DIR:?",
 		"${SECONDBOX_RUNNER_STATE_HOST_DIR:?",
 		"${SECONDBOX_RUNNER_WORKSPACE_HOST_DIR:?",
-		"${SECONDBOX_RUNNER_CHECKPOINT_RESTORE_SPOOL_HOST_DIR:?",
 		"${SECONDBOX_RUNNER_NETWORK_POLICY_NFT_PATH:?",
 		"${SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS:?",
 		"${SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL:?",
@@ -42,7 +44,7 @@ func TestComposeSeparatesOptionalPrivilegedRunnerFromControlPlane(t *testing.T) 
 		"${SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT:?",
 		"${SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT:?",
 		"${SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT:?",
-		"${SECONDBOX_RUNNER_CHECKPOINT_RESTORE_SPOOL_DIR:?",
+		"${SECONDBOX_RUNNER_WORKSPACE_ROOT:?",
 		"/dev/kvm:/dev/kvm",
 		"/dev/net/tun:/dev/net/tun",
 		"secondbox-runner\", \"-healthcheck\"",
@@ -85,6 +87,51 @@ func TestComposeSeparatesOptionalPrivilegedRunnerFromControlPlane(t *testing.T) 
 	}
 }
 
+func TestDeploymentCannotReconstructAbsentHomeFromAvailableObjectStore(t *testing.T) {
+	objectStore := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer objectStore.Close()
+	response, err := http.Get(objectStore.URL)
+	if err != nil {
+		t.Fatalf("prove object store availability: %v", err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("object store status = %d", response.StatusCode)
+	}
+
+	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	requirements := scheduler.Requirements{
+		PoolName: "deployment", BackendKind: "firecracker", Architecture: "amd64",
+		RequiredCapabilities:    []string{"local-workspace"},
+		GuestProtocolGeneration: 1,
+		Capacity: scheduler.Capacity{
+			CPUMillis: 1000, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
+			Instances: 1, Operations: 1,
+		},
+	}
+	replacement := scheduler.RunnerSnapshot{
+		ID: "runner-replacement", PoolName: "deployment", Architecture: "amd64",
+		Capabilities: map[string]bool{
+			"compute": true, "network-policy": true, "storage": true,
+			"cleanup": true, "local-workspace": true,
+		},
+		Allocatable: scheduler.Capacity{
+			CPUMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30,
+			Instances: 8, Operations: 32,
+		},
+		DrainPhase: scheduler.DrainPhaseActive, LastHeartbeatAt: now,
+		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1,
+	}
+	if _, err := scheduler.SelectHomeRunner(
+		"runner-home", requirements, []scheduler.RunnerSnapshot{replacement},
+		now, 30*time.Second,
+	); !errors.Is(err, scheduler.ErrHomeRunnerUnavailable) {
+		t.Fatalf("available S3 and replacement Runner changed exact-home result: %v", err)
+	}
+}
+
 func TestDeploymentEnvironmentHasNoBlankOrSharedCredentials(t *testing.T) {
 	example := readRepositoryFile(t, "deploy/environment.example")
 
@@ -94,7 +141,7 @@ func TestDeploymentEnvironmentHasNoBlankOrSharedCredentials(t *testing.T) {
 		"SECONDBOX_RUNNER_GUEST_CONTROL_VSOCK_PORT=1024",
 		"SECONDBOX_RUNNER_GUEST_PROTOCOL_VSOCK_PORT=1025",
 		"SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL=5s",
-		"SECONDBOX_RUNNER_ENABLED_FEATURES=exec-streaming,file-streaming,pty,evidence,checkpoint,port-proxy",
+		"SECONDBOX_RUNNER_ENABLED_FEATURES=exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy",
 		"SECONDBOX_RUNNER_NETWORK_POLICY_NFT_PATH=/usr/sbin/nft",
 		"SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS=256",
 		"SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL=5m",
@@ -104,9 +151,8 @@ func TestDeploymentEnvironmentHasNoBlankOrSharedCredentials(t *testing.T) {
 		"SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT=70",
 		"SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT=80",
 		"SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT=90",
-		"SECONDBOX_RUNNER_CHECKPOINT_RESTORE_SPOOL_DIR=/var/lib/secondbox-runner/checkpoint-restore-spool",
+		"SECONDBOX_RUNNER_WORKSPACE_ROOT=/var/lib/secondbox-runner/workspaces",
 		"SECONDBOX_RUNNER_WORKSPACE_HOST_DIR=/var/lib/secondbox/runner-workspaces",
-		"SECONDBOX_RUNNER_CHECKPOINT_RESTORE_SPOOL_HOST_DIR=/var/lib/secondbox/runner-restore-spool",
 		"SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS=250",
 		"SECONDBOX_DATA_PLANE_CLAIM_DURATION_MILLISECONDS=30000",
 		"SECONDBOX_DATA_PLANE_RETENTION_SECONDS=86400",
@@ -757,17 +803,16 @@ func TestBootstrapGeneratesCertificateForConfiguredRunnerServerName(t *testing.T
 	}
 }
 
-func TestRecoveryScriptsRejectRunnerLocalStateAndRequireQualifiedEvidence(t *testing.T) {
+func TestBackupScriptContainsOnlyDatabaseAndArtifactAuthority(t *testing.T) {
 	backup := readRepositoryFile(t, "scripts/backup.sh")
-	restore := readRepositoryFile(t, "scripts/restore-drill.sh")
 
 	for _, required := range []string{
-		"secondbox-backup/v2",
-		"secondbox-backup-database-state/v1",
+		"secondbox-backup/v3",
+		"secondbox-backup-database-state/v2",
 		"secondbox-backup-publication-fence/v1",
 		"database-share-lock-held",
 		"SECONDBOX_BACKUP_OBJECT_EXPORT",
-		"secondbox-checkpoint-reachability/v1",
+		"secondbox-artifact-reachability/v1",
 		"databaseRecoveryPosition",
 		"--schema=secondbox",
 		"psql",
@@ -777,54 +822,26 @@ func TestRecoveryScriptsRejectRunnerLocalStateAndRequireQualifiedEvidence(t *tes
 			t.Errorf("backup script must contain %q", required)
 		}
 	}
-	for _, required := range []string{
-		"secondbox-backup/v2",
-		"secondbox-backup-publication-fence/v1",
-		"database-share-lock-held",
-		"SECONDBOX_RESTORE_FRESH_RUNNER_RESULT",
-		"SECONDBOX_RESTORE_FRESH_RUNNER_VERIFY_COMMAND",
-		"SECONDBOX_RESTORE_CONTROL_PLANE_URL",
-		"SECONDBOX_RESTORE_CONTROL_PLANE_TOKEN",
-		"SECONDBOX_RESTORE_TENANT_REF",
-		"SECONDBOX_RESTORE_SUBJECT_REF",
-		"SECONDBOX_RESTORE_OBJECT_TARGET",
-		"checkpointReachability",
-		"freshRunnerVerification",
-		"to_regnamespace('secondbox')",
-		"secondbox-restore-database-roots/v1",
-		"secondbox-fresh-runner-database-verification/v1",
-		"secondbox-fresh-runner-identity/v1",
-		"generation_fenced",
-		"readyMaterialization",
-	} {
-		if !strings.Contains(restore, required) {
-			t.Errorf("restore drill must contain %q", required)
-		}
-	}
-	for _, script := range []string{backup, restore} {
-		for _, forbidden := range []string{
-			"SECONDBOX_RUNNER_STATE_DIR",
-			"SECONDBOX_BACKUP_QUIESCENCE_EVIDENCE",
-			"SECONDBOX_BACKUP_FENCING_EVIDENCE",
-			"SECONDBOX_BACKUP_CHECKPOINT_REACHABILITY_EVIDENCE",
-			"SECONDBOX_RESTORE_FRESH_RUNNER_EVIDENCE",
-			"--schema=sandbox",
-			"host-state.tar",
-			"to_regnamespace('sandbox')",
-		} {
-			if strings.Contains(script, forbidden) {
-				t.Errorf("recovery script must not contain stale authority %q", forbidden)
-			}
-		}
-	}
 	for _, forbidden := range []string{
-		".newCredential == true",
-		".checkpointRestored == true",
-		".staleGenerationRejected == true",
+		"SECONDBOX_RUNNER_STATE_DIR",
+		"SECONDBOX_BACKUP_QUIESCENCE_EVIDENCE",
+		"SECONDBOX_BACKUP_FENCING_EVIDENCE",
+		"SECONDBOX_BACKUP_CHECKPOINT_REACHABILITY_EVIDENCE",
+		"--schema=sandbox",
+		"host-state.tar",
+		"workspace_checkpoints",
+		"current_checkpoint",
+		"checkpoint",
+		"freshRunner",
+		"materialization",
 	} {
-		if strings.Contains(restore, forbidden) {
-			t.Errorf("restore drill must not accept boolean-only evidence %q", forbidden)
+		if strings.Contains(backup, forbidden) {
+			t.Errorf("artifact-only backup script contains stale Workspace authority %q", forbidden)
 		}
+	}
+	restorePath := filepath.Join(repositoryRootForDeploymentPolicy(t), "scripts", "restore-drill.sh")
+	if _, err := os.Stat(restorePath); !os.IsNotExist(err) {
+		t.Fatalf("portable restore drill still exists: %v", err)
 	}
 }
 
@@ -852,7 +869,7 @@ case "$*" in
     ;;
 esac
 printf '%s\n' \
-  '{"contractVersion":"secondbox-backup-database-state/v1","databaseRecoveryPosition":"0/ABC","quiescence":{"activeSandboxes":1,"activeAssignments":0,"activeLifecycleEffects":0,"activeObjectPublications":0,"activeDataPlaneSessions":0},"fencing":{"activeInstances":0,"activeAssignments":0},"danglingCheckpointReferences":0,"objects":[]}'`)
+  '{"contractVersion":"secondbox-backup-database-state/v2","databaseRecoveryPosition":"0/ABC","quiescence":{"activeSandboxes":1,"activeAssignments":0,"activeLifecycleEffects":0,"activeObjectPublications":0,"activeDataPlaneSessions":0},"fencing":{"activeInstances":0,"activeAssignments":0},"objects":[]}'`)
 	command := exec.Command(filepath.Join(repositoryRoot, "scripts", "backup.sh"))
 	command.Env = append(os.Environ(),
 		"PATH="+fakeBin+":"+os.Getenv("PATH"),
@@ -906,234 +923,17 @@ func TestBackupHoldsSharedDatabasePublicationFenceThroughDump(t *testing.T) {
 	}
 }
 
-func TestRestoreDrillSupervisesFreshRunnerVerifierThroughLiveChecks(t *testing.T) {
-	restore := readRepositoryFile(t, "scripts/restore-drill.sh")
-	for _, required := range []string{
-		"SECONDBOX_RESTORE_FRESH_RUNNER_VERIFY_TIMEOUT_SECONDS",
-		"fresh_runner_verifier_pid",
-		"kill -TERM",
-		"wait \"$fresh_runner_verifier_pid\"",
-	} {
-		if !strings.Contains(restore, required) {
-			t.Fatalf("restore drill does not supervise the fresh-Runner verifier: missing %q", required)
+func TestBackupArtifactManifestContainsNoWorkspaceImages(t *testing.T) {
+	backup := readRepositoryFile(t, "scripts/backup.sh")
+	for _, required := range []string{"secondbox-backup/v3", "secondbox-artifact-reachability/v1", "artifactReachability"} {
+		if !strings.Contains(backup, required) {
+			t.Errorf("artifact-only backup script must contain %q", required)
 		}
 	}
-}
-
-func TestBackupAndRestoreScriptsPreserveCoordinatedEvidenceContract(t *testing.T) {
-	repositoryRoot := repositoryRootForDeploymentPolicy(t)
-	fakeBin := t.TempDir()
-	backupFenceMarker := filepath.Join(t.TempDir(), "backup-fence-active")
-	writeFakeExecutable := func(name, body string) {
-		t.Helper()
-		if err := os.WriteFile(filepath.Join(fakeBin, name), []byte("#!/bin/sh\nset -eu\n"+body+"\n"), 0o700); err != nil {
-			t.Fatalf("write fake %s: %v", name, err)
+	for _, forbidden := range []string{"checkpoint", "workspace_checkpoints", "current_checkpoint", "freshRunner", "materialization"} {
+		if strings.Contains(backup, forbidden) {
+			t.Errorf("artifact-only backup script retains %q", forbidden)
 		}
-	}
-	writeFakeExecutable("pg_dump", `
-if [ ! -f "$FAKE_BACKUP_FENCE_ACTIVE" ]; then
-  echo "pg_dump ran without the shared backup publication fence" >&2
-  exit 1
-fi
-for argument in "$@"; do
-  case "$argument" in --file=*) output="${argument#--file=}";; esac
-done
-printf 'test database dump\n' >"$output"`)
-	writeFakeExecutable("createdb", "exit 0")
-	writeFakeExecutable("dropdb", "exit 0")
-	writeFakeExecutable("pg_restore", "printf 'SELECT 1;\\n'")
-	writeFakeExecutable("psql", `
-case "$*" in
-  *--no-psqlrc*)
-    while IFS= read -r line; do
-      case "$line" in
-        *SECONDBOX_BACKUP_FENCE_READY*)
-          : >"$FAKE_BACKUP_FENCE_ACTIVE"
-          printf '%s\n' 'SECONDBOX_BACKUP_FENCE_READY'
-          ;;
-        COMMIT\;)
-          rm -f "$FAKE_BACKUP_FENCE_ACTIVE"
-          exit 0
-          ;;
-      esac
-    done
-    exit 1
-    ;;
-esac
-input="$(cat)"
-case "$* $input" in
-  *secondbox-backup-database-state/v1*)
-    printf '{"contractVersion":"secondbox-backup-database-state/v1","databaseRecoveryPosition":"0/ABC","quiescence":{"activeSandboxes":0,"activeAssignments":0,"activeLifecycleEffects":0,"activeObjectPublications":0,"activeDataPlaneSessions":0},"fencing":{"activeInstances":0,"activeAssignments":0},"danglingCheckpointReferences":0,"objects":[{"kind":"checkpoint","id":"chk-operations","storageObjectId":"checkpoint.bin","sha256":"%s","sizeBytes":19}]}\n' "$FAKE_OBJECT_SHA256"
-    ;;
-  *secondbox-restore-database-roots/v1*)
-    printf '{"contractVersion":"secondbox-restore-database-roots/v1","objects":[{"kind":"checkpoint","id":"chk-operations","storageObjectId":"checkpoint.bin","sha256":"%s","sizeBytes":19}]}\n' "$FAKE_RESTORED_OBJECT_SHA256"
-    ;;
-  *secondbox-fresh-runner-database-verification/v1*)
-    printf '%s\n' '{"contractVersion":"secondbox-fresh-runner-database-verification/v1","freshCredential":true,"readyAssignment":true,"readyMaterialization":true,"authoritativeCheckpoint":true}'
-    ;;
-  *to_regnamespace*) printf 't\n' ;;
-  *) : ;;
-esac`)
-
-	recoveryPointID := "operations-contract-1"
-	evidenceDirectory := t.TempDir()
-	objectExport := t.TempDir()
-	checkpointBytes := []byte("portable checkpoint")
-	if err := os.WriteFile(filepath.Join(objectExport, "checkpoint.bin"), checkpointBytes, 0o600); err != nil {
-		t.Fatalf("write object export: %v", err)
-	}
-	checkpointSHA := sha256.Sum256(checkpointBytes)
-	if err := os.WriteFile(filepath.Join(objectExport, "unreachable.bin"), []byte("not rooted"), 0o600); err != nil {
-		t.Fatalf("write unreachable object: %v", err)
-	}
-	rejectedBackup := exec.Command(filepath.Join(repositoryRoot, "scripts", "backup.sh"))
-	rejectedBackup.Env = append(os.Environ(),
-		"PATH="+fakeBin+":"+os.Getenv("PATH"),
-		"FAKE_BACKUP_FENCE_ACTIVE="+backupFenceMarker,
-		fmt.Sprintf("FAKE_OBJECT_SHA256=%x", checkpointSHA),
-		fmt.Sprintf("FAKE_RESTORED_OBJECT_SHA256=%x", checkpointSHA),
-		"SECONDBOX_BACKUP_DATABASE_URL=postgresql://backup@example/secondbox",
-		"SECONDBOX_BACKUP_DIR="+t.TempDir(),
-		"SECONDBOX_BACKUP_RECOVERY_POINT_ID="+recoveryPointID,
-		"SECONDBOX_BACKUP_OBJECT_EXPORT="+objectExport,
-	)
-	if output, err := rejectedBackup.CombinedOutput(); err == nil {
-		t.Fatal("backup accepted an object export containing a non-database-rooted object")
-	} else if !bytes.Contains(output, []byte("differs from database roots")) {
-		t.Fatalf("backup object-root mismatch was not diagnosed:\n%s", output)
-	}
-	if _, err := os.Stat(backupFenceMarker); !os.IsNotExist(err) {
-		t.Fatal("failed backup retained the shared database publication fence")
-	}
-	if err := os.Remove(filepath.Join(objectExport, "unreachable.bin")); err != nil {
-		t.Fatalf("remove unreachable object fixture: %v", err)
-	}
-	backupDirectory := t.TempDir()
-	backup := exec.Command(filepath.Join(repositoryRoot, "scripts", "backup.sh"))
-	backup.Env = append(os.Environ(),
-		"PATH="+fakeBin+":"+os.Getenv("PATH"),
-		"FAKE_BACKUP_FENCE_ACTIVE="+backupFenceMarker,
-		fmt.Sprintf("FAKE_OBJECT_SHA256=%x", checkpointSHA),
-		fmt.Sprintf("FAKE_RESTORED_OBJECT_SHA256=%x", checkpointSHA),
-		"SECONDBOX_BACKUP_DATABASE_URL=postgresql://backup@example/secondbox",
-		"SECONDBOX_BACKUP_DIR="+backupDirectory,
-		"SECONDBOX_BACKUP_RECOVERY_POINT_ID="+recoveryPointID,
-		"SECONDBOX_BACKUP_OBJECT_EXPORT="+objectExport,
-	)
-	if output, err := backup.CombinedOutput(); err != nil {
-		t.Fatalf("create coordinated backup contract: %v\n%s", err, output)
-	}
-	if _, err := os.Stat(backupFenceMarker); !os.IsNotExist(err) {
-		t.Fatal("successful backup retained the shared database publication fence")
-	}
-	bundles, err := filepath.Glob(filepath.Join(backupDirectory, "secondbox-backup-*.tar"))
-	if err != nil || len(bundles) != 1 {
-		t.Fatalf("backup bundles = %v, error = %v", bundles, err)
-	}
-	portableDirectory := t.TempDir()
-	portableBundle := filepath.Join(portableDirectory, filepath.Base(bundles[0]))
-	if err := os.Rename(bundles[0], portableBundle); err != nil {
-		t.Fatalf("move recovery bundle: %v", err)
-	}
-	if err := os.Rename(bundles[0]+".sha256", portableBundle+".sha256"); err != nil {
-		t.Fatalf("move recovery bundle checksum: %v", err)
-	}
-
-	freshRunnerEvidence := filepath.Join(evidenceDirectory, "fresh-runner.json")
-	freshRunnerVerifier := filepath.Join(fakeBin, "verify-fresh-runner")
-	writeFakeExecutable("verify-fresh-runner", `
-output="$1"
-printf '{"contractVersion":"secondbox-fresh-runner-identity/v1","recoveryPointId":"%s","runner":{"id":"runner-after-restore","credentialSerial":"credential-after-restore"},"restoration":{"sandboxId":"sandbox-restored","workspaceId":"workspace-restored","assignmentId":"assignment-restored","materializationId":"materialization-restored","checkpointId":"chk-operations","checkpointSHA256":"%s","generation":8}}\n' \
-  "$SECONDBOX_RESTORE_VERIFICATION_RECOVERY_POINT_ID" "$FAKE_OBJECT_SHA256" >"$output.tmp"
-chmod 600 "$output.tmp"
-mv "$output.tmp" "$output"
-trap 'exit 0' TERM
-while :; do sleep 1; done`)
-	controlPlaneToken := "restore-drill-token"
-	restoreTenantRef := "restore-drill-tenant"
-	restoreSubjectRef := "restore-drill-subject"
-	controlPlane := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodPost ||
-			request.URL.Path != "/v1/sandboxes/sandbox-restored:ping" ||
-			request.Header.Get("Authorization") != "Bearer "+controlPlaneToken ||
-			request.Header.Get("X-SecondBox-Tenant-Ref") != restoreTenantRef ||
-			request.Header.Get("X-SecondBox-Subject-Ref") != restoreSubjectRef {
-			http.Error(writer, "unexpected restore-drill request", http.StatusBadRequest)
-			return
-		}
-		switch request.Header.Get("SecondBox-Generation") {
-		case "8":
-			writer.Header().Set("Content-Type", "application/json")
-			_, _ = writer.Write([]byte(
-				`{"sandboxId":"sandbox-restored","generation":8,"healthy":true,"observedAt":"2026-07-28T19:00:00Z"}`,
-			))
-		case "7":
-			writer.Header().Set("Content-Type", "application/problem+json")
-			writer.WriteHeader(http.StatusConflict)
-			_, _ = writer.Write([]byte(
-				`{"type":"https://secondbox.dev/problems/generation_fenced","title":"Sandbox generation is fenced","status":409,"code":"generation_fenced","requestId":"restore-drill-stale-generation","retryable":false}`,
-			))
-		default:
-			http.Error(writer, "unexpected generation", http.StatusBadRequest)
-		}
-	}))
-	defer controlPlane.Close()
-	restoreParent := t.TempDir()
-	objectTarget := filepath.Join(restoreParent, "restored-objects")
-	restore := exec.Command(filepath.Join(repositoryRoot, "scripts", "restore-drill.sh"))
-	restore.Env = append(os.Environ(),
-		"PATH="+fakeBin+":"+os.Getenv("PATH"),
-		fmt.Sprintf("FAKE_OBJECT_SHA256=%x", checkpointSHA),
-		fmt.Sprintf("FAKE_RESTORED_OBJECT_SHA256=%x", checkpointSHA),
-		"SECONDBOX_RESTORE_DATABASE_URL=postgresql://restore@example/postgres",
-		"SECONDBOX_RESTORE_CONTROL_PLANE_URL="+controlPlane.URL,
-		"SECONDBOX_RESTORE_CONTROL_PLANE_TOKEN="+controlPlaneToken,
-		"SECONDBOX_RESTORE_TENANT_REF="+restoreTenantRef,
-		"SECONDBOX_RESTORE_SUBJECT_REF="+restoreSubjectRef,
-		"SECONDBOX_RESTORE_BUNDLE="+portableBundle,
-		"SECONDBOX_RESTORE_STAGE_DIR="+t.TempDir(),
-		"SECONDBOX_RESTORE_OBJECT_TARGET="+objectTarget,
-		"SECONDBOX_RESTORE_FRESH_RUNNER_RESULT="+freshRunnerEvidence,
-		"SECONDBOX_RESTORE_FRESH_RUNNER_VERIFY_COMMAND="+freshRunnerVerifier,
-		"SECONDBOX_RESTORE_FRESH_RUNNER_VERIFY_TIMEOUT_SECONDS=10",
-	)
-	if output, err := restore.CombinedOutput(); err != nil {
-		t.Fatalf("run isolated restore contract: %v\n%s", err, output)
-	}
-	restoredObject, err := os.ReadFile(filepath.Join(objectTarget, "checkpoint.bin"))
-	if err != nil {
-		t.Fatalf("read restored object: %v", err)
-	}
-	if string(restoredObject) != "portable checkpoint" {
-		t.Fatalf("restored object = %q", restoredObject)
-	}
-
-	mismatchedEvidence := filepath.Join(evidenceDirectory, "fresh-runner-mismatched-roots.json")
-	mismatchedRestoreParent := t.TempDir()
-	mismatchedRestore := exec.Command(filepath.Join(repositoryRoot, "scripts", "restore-drill.sh"))
-	mismatchedRestore.Env = append(os.Environ(),
-		"PATH="+fakeBin+":"+os.Getenv("PATH"),
-		fmt.Sprintf("FAKE_OBJECT_SHA256=%x", checkpointSHA),
-		"FAKE_RESTORED_OBJECT_SHA256="+strings.Repeat("0", 64),
-		"SECONDBOX_RESTORE_DATABASE_URL=postgresql://restore@example/postgres",
-		"SECONDBOX_RESTORE_CONTROL_PLANE_URL="+controlPlane.URL,
-		"SECONDBOX_RESTORE_CONTROL_PLANE_TOKEN="+controlPlaneToken,
-		"SECONDBOX_RESTORE_TENANT_REF="+restoreTenantRef,
-		"SECONDBOX_RESTORE_SUBJECT_REF="+restoreSubjectRef,
-		"SECONDBOX_RESTORE_BUNDLE="+portableBundle,
-		"SECONDBOX_RESTORE_STAGE_DIR="+t.TempDir(),
-		"SECONDBOX_RESTORE_OBJECT_TARGET="+filepath.Join(mismatchedRestoreParent, "restored-objects"),
-		"SECONDBOX_RESTORE_FRESH_RUNNER_RESULT="+mismatchedEvidence,
-		"SECONDBOX_RESTORE_FRESH_RUNNER_VERIFY_COMMAND="+freshRunnerVerifier,
-		"SECONDBOX_RESTORE_FRESH_RUNNER_VERIFY_TIMEOUT_SECONDS=10",
-	)
-	if output, err := mismatchedRestore.CombinedOutput(); err == nil {
-		t.Fatal("restore drill accepted database roots that differed from the recovery manifest")
-	} else if !bytes.Contains(output, []byte("Restored database roots differ")) {
-		t.Fatalf("restore database-root mismatch was not diagnosed:\n%s", output)
-	}
-	if _, err := os.Stat(mismatchedEvidence); !os.IsNotExist(err) {
-		t.Fatal("restore invoked the fresh-Runner verifier before database-root comparison passed")
 	}
 }
 

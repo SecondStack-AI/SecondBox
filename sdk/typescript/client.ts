@@ -3,7 +3,6 @@ import {
   SecondBoxAPIError,
   SecondBoxClient,
   encodeJSONBody,
-  type CheckpointSandboxRequest,
   type CreateDirectoryRequest,
   type CreateTerminalRequest,
   type DirectoryListing,
@@ -18,6 +17,7 @@ import {
   type Operation,
   type OperationID,
   type Problem,
+  type RestoreSnapshotRequest,
   type RemovePathRequest,
   type Sandbox,
   type SandboxState,
@@ -537,12 +537,12 @@ export class SandboxHandle implements SandboxFilesystem {
     return this.lifecycle("stopSandbox", options);
   }
 
-  public checkpoint(
-    metadata: Metadata,
+  public restore(
+    snapshotId: string,
     options: LifecycleOptions,
   ): Promise<Operation> {
-    const body: CheckpointSandboxRequest = { metadata };
-    return this.lifecycle("checkpointSandbox", options, body as unknown as JSONValue);
+    const body: RestoreSnapshotRequest = { snapshotId };
+    return this.lifecycle("restoreSandboxSnapshot", options, body as unknown as JSONValue);
   }
 
   public delete(options: LifecycleOptions): Promise<Operation> {
@@ -819,7 +819,7 @@ export class SandboxHandle implements SandboxFilesystem {
       | "startSandbox"
       | "drainSandbox"
       | "stopSandbox"
-      | "checkpointSandbox"
+      | "restoreSandboxSnapshot"
       | "deleteSandbox",
     options: LifecycleOptions,
     body?: JSONValue,

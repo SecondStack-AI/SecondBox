@@ -11,8 +11,10 @@ import (
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"google.golang.org/protobuf/proto"
 )
 
 // PostgresStateStore persists registration, heartbeat, capacity, cache, and message ordering.
@@ -52,6 +54,25 @@ func (store *PostgresStateStore) OpenConnection(
 		connectionID == "" || protocolVersion == 0 {
 		return errors.New("SecondBox runner connection requires credential identity, connection, and protocol version")
 	}
+	reconcileID := "workspace-reconcile-" + connectionID
+	reconcilePayload, err := proto.Marshal(&runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_LocalWorkspace{
+			LocalWorkspace: &runnerv1.LocalWorkspaceCommand{
+				CommandVersion: 1,
+				Kind:           runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE,
+				OperationId:    reconcileID,
+				EffectId:       reconcileID,
+				Correlation: &runnerv1.Correlation{
+					RequestId:   reconcileID,
+					OperationId: reconcileID,
+					RunnerId:    identity.RunnerID,
+				},
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("SecondBox runner Workspace reconciliation command encoding: %w", err)
+	}
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("SecondBox runner connection transaction: %w", err)
@@ -77,10 +98,29 @@ func (store *PostgresStateStore) OpenConnection(
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.runner_commands
 		SET state='pending',target_connection_id='',updated_at=$2
-		WHERE runner_id=$1 AND state='delivering'`,
+		WHERE runner_id=$1 AND state IN ('delivering','delivered')`,
 		identity.RunnerID, now,
 	); err != nil {
-		return fmt.Errorf("SecondBox runner pending command recovery: %w", err)
+		return fmt.Errorf("SecondBox runner unacknowledged command recovery: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.runner_commands
+		SET state='expired',target_connection_id='',updated_at=$2
+		WHERE runner_id=$1
+		  AND assignment_id LIKE 'workspace-reconcile-%'
+		  AND state IN ('pending','delivering','delivered')`,
+		identity.RunnerID, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner prior Workspace reconciliation expiry: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.runner_commands (
+			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
+			delivery_count,created_at,updated_at,delivered_at
+		) VALUES ($1,$2,$1,'local-workspace',$3,'pending','',0,$4,$4,NULL)`,
+		reconcileID, identity.RunnerID, reconcilePayload, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner Workspace reconciliation command insert: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("SecondBox runner connection commit: %w", err)
@@ -100,7 +140,7 @@ func (store *PostgresStateStore) RecordRegistration(
 	if len(registration.ReadinessFailures) != 0 {
 		return false, ErrRunnerPrerequisites
 	}
-	capabilities := map[string]bool{
+	prerequisites := map[string]bool{
 		"firecracker":    registration.Capabilities != nil && registration.Capabilities.FirecrackerVersion != "",
 		"kvm":            registration.Capabilities != nil && registration.Capabilities.KvmReady,
 		"jailer":         registration.Capabilities != nil && registration.Capabilities.JailerReady,
@@ -109,14 +149,17 @@ func (store *PostgresStateStore) RecordRegistration(
 		"storage":        registration.Capabilities != nil && registration.Capabilities.StorageReady,
 		"cleanup":        registration.Capabilities != nil && registration.Capabilities.CleanupReady,
 	}
-	capabilities["checkpoint"] = capabilities["storage"] && capabilities["cleanup"]
+	prerequisites["local-workspace"] = prerequisites["storage"] && prerequisites["cleanup"]
 	if registration.Capabilities == nil ||
 		registration.Capabilities.GuestProtocolGenerations == nil ||
 		registration.Capabilities.GuestProtocolGenerations.Minimum == 0 ||
 		registration.Capabilities.GuestProtocolGenerations.Minimum >
 			registration.Capabilities.GuestProtocolGenerations.Maximum ||
-		!allPrerequisitesReady(capabilities) {
+		!allPrerequisitesReady(prerequisites) {
 		return false, ErrRunnerPrerequisites
+	}
+	capabilities := []string{
+		"compute", "network-policy", "storage", "cleanup", "local-workspace",
 	}
 	architecturesJSON, err := json.Marshal([]string{registration.Capabilities.Architecture})
 	if err != nil {
@@ -139,8 +182,7 @@ func (store *PostgresStateStore) RecordRegistration(
 		return false, fmt.Errorf("SecondBox runner protocol versions encoding: %w", err)
 	}
 	cache := struct {
-		ArtifactDigests      []string `json:"artifactDigests"`
-		WorkspaceCheckpoints []string `json:"workspaceCheckpoints"`
+		ArtifactDigests []string `json:"artifactDigests"`
 	}{ArtifactDigests: make([]string, 0, len(registration.ArtifactCache))}
 	for _, evidence := range registration.ArtifactCache {
 		if evidence != nil {
@@ -305,8 +347,10 @@ func (store *PostgresStateStore) RecordEvent(
 		if err := validateRunnerEvidence(event.RunnerID, event.Message.GetEvidence()); err != nil {
 			return false, err
 		}
-	case EventCheckpoint:
-		if err := recordCheckpointEvent(ctx, tx, event.RunnerID, event.Message, now.UTC()); err != nil {
+	case EventLocalWorkspace:
+		if err := recordLocalWorkspaceResult(
+			ctx, tx, event.RunnerID, event.Message.GetLocalWorkspaceResult(), now.UTC(),
+		); err != nil {
 			return false, err
 		}
 	case EventInstanceTerminal:
@@ -322,6 +366,2006 @@ func (store *PostgresStateStore) RecordEvent(
 		return false, fmt.Errorf("SecondBox runner event commit: %w", err)
 	}
 	return false, nil
+}
+
+func recordLocalWorkspaceResult(
+	ctx context.Context,
+	tx pgx.Tx,
+	runnerID string,
+	result *runnerv1.LocalWorkspaceResult,
+	now time.Time,
+) error {
+	if err := validateLocalWorkspaceResult(runnerID, result); err != nil {
+		return err
+	}
+	if result.Kind == runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE {
+		return recordLocalWorkspaceReconciliation(ctx, tx, runnerID, result, now)
+	}
+	locked, err := rowlock.SandboxWorkspaceByID(ctx, tx, result.SandboxId)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errors.New("SecondBox runner local-workspace result has no durable Sandbox")
+	}
+	if err != nil {
+		return fmt.Errorf("SecondBox runner local-workspace Sandbox/Workspace lock: %w", err)
+	}
+	if locked.WorkspaceID != result.WorkspaceId {
+		return errors.New("SecondBox runner local-workspace result targets the wrong Workspace")
+	}
+	switch result.Kind {
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_CREATE,
+		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_DELETE,
+		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_PREPARE,
+		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_SWAP,
+		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE,
+		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT:
+		if _, err := rowlock.SnapshotByID(ctx, tx, locked, result.SnapshotId); err != nil {
+			return errors.New("SecondBox runner local-workspace result has no durable Snapshot")
+		}
+	}
+	switch result.Kind {
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION:
+		return recordLocalGenerationAdvanceResult(ctx, tx, runnerID, result, now)
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_DELETE:
+		return recordLocalWorkspaceDeleteResult(ctx, tx, runnerID, result, now)
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_PREPARE,
+		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_SWAP,
+		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE,
+		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT:
+		return recordLocalRestoreResult(ctx, tx, runnerID, result, now)
+	}
+	if result.Kind != runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE {
+		return recordLocalSnapshotResult(ctx, tx, runnerID, result, now)
+	}
+	var (
+		homeRunnerID, workspaceState, mutationID, mutationState string
+		effectState, commandID, operationID                     string
+		generation, capacityBytes                               int64
+	)
+	err = tx.QueryRow(ctx, `
+		SELECT workspace.home_runner_id,workspace.state,workspace.mutation_id,
+		       workspace.mutation_state,workspace.generation,workspace.logical_capacity_bytes,
+		       effect.state,effect.command_id,workspace.mutation_operation_id
+		FROM secondbox.sandboxes AS sandbox
+		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+		JOIN secondbox.lifecycle_effects AS effect
+		  ON effect.id=workspace.mutation_effect_id
+		WHERE sandbox.id=$1 AND workspace.id=$2 AND effect.id=$3
+		FOR UPDATE OF sandbox,workspace,effect`,
+		result.SandboxId, result.WorkspaceId, result.EffectId,
+	).Scan(
+		&homeRunnerID, &workspaceState, &mutationID, &mutationState,
+		&generation, &capacityBytes, &effectState, &commandID, &operationID,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errors.New("SecondBox runner local-workspace result has no durable effect")
+	}
+	if err != nil {
+		return fmt.Errorf("SecondBox runner local-workspace effect lookup: %w", err)
+	}
+	if homeRunnerID != runnerID {
+		return errors.New("SecondBox runner local-workspace result came from the wrong home runner")
+	}
+	if mutationID != result.EffectId || mutationState == "" ||
+		operationID != result.OperationId || generation != int64(result.Generation) ||
+		capacityBytes != int64(result.LogicalCapacityBytes) {
+		return errors.New("SecondBox runner local-workspace result conflicts with durable authority")
+	}
+	if effectState == "succeeded" || effectState == "runner_failed" {
+		return nil
+	}
+	if workspaceState != "creating" || effectState != "queued" {
+		return errors.New("SecondBox runner local-workspace result is reordered")
+	}
+	evidenceJSON, err := json.Marshal(map[string]any{
+		"effectId":          result.EffectId,
+		"generation":        result.Generation,
+		"logicalCapacity":   result.LogicalCapacityBytes,
+		"receiptRecordedAt": result.ReceiptRecordedAtUnixMs,
+		"terminal":          result.Terminal.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("SecondBox runner local-workspace evidence encoding: %w", err)
+	}
+	if result.Terminal == runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED {
+		if result.ReceiptRecordedAtUnixMs == 0 {
+			return errors.New("SecondBox runner local-workspace success lacks a durable receipt")
+		}
+		keepStartMutation := locked.DesiredState == "running"
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.workspaces
+			SET state='ready',local_receipt_json=$2,
+			    mutation_kind=CASE WHEN $4 THEN 'start' ELSE '' END,
+			    mutation_id=CASE WHEN $4 THEN $5 ELSE '' END,
+			    mutation_effect_id=CASE WHEN $4 THEN $5 ELSE '' END,
+			    mutation_operation_id=CASE WHEN $4 THEN $5 ELSE '' END,
+			    mutation_expected_generation=CASE WHEN $4 THEN $6::bigint ELSE NULL END,
+			    mutation_target_generation=CASE WHEN $4 THEN $6::bigint ELSE NULL END,
+			    mutation_state=CASE WHEN $4 THEN 'queued' ELSE '' END,
+			    updated_at=$3
+			WHERE id=$1`,
+			result.WorkspaceId, evidenceJSON, now, keepStartMutation, operationID, generation,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner Workspace create completion: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.sandboxes
+			SET state='stopped',lifecycle_intent_kind='',
+			    next_reconcile_at=CASE
+			      WHEN desired_state IN ('running','deleted') THEN $2::timestamptz
+			      ELSE NULL::timestamptz
+			    END,
+			    revision=revision+1,updated_at=$2
+			WHERE id=$1`,
+			result.SandboxId, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner Sandbox create completion: %w", err)
+		}
+		if !keepStartMutation {
+			if _, err := tx.Exec(ctx, `
+				UPDATE secondbox.operations
+				SET state='succeeded',completed_at=$2,updated_at=$2
+				WHERE id=$1 AND state='pending'`,
+				operationID, now,
+			); err != nil {
+				return fmt.Errorf("SecondBox runner Workspace create Operation completion: %w", err)
+			}
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.lifecycle_effects
+			SET state='succeeded',evidence_json=$2,updated_at=$3
+			WHERE id=$1`,
+			result.EffectId, evidenceJSON, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner Workspace create effect completion: %w", err)
+		}
+	} else {
+		errorCode := localWorkspaceOperationErrorCode(result.Terminal)
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.workspaces
+			SET state='failed',local_receipt_json=$2,mutation_state='failed',updated_at=$3
+			WHERE id=$1`,
+			result.WorkspaceId, evidenceJSON, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner Workspace create failure: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.sandboxes
+			SET state='failed',lifecycle_failure_class=$2,
+			    lifecycle_failure_message=$3,
+			    next_reconcile_at=CASE
+			      WHEN desired_state='deleted' THEN $4::timestamptz
+			      ELSE next_reconcile_at
+			    END,
+			    revision=revision+1,updated_at=$4
+			WHERE id=$1`,
+			result.SandboxId, errorCode, result.SafeDetail, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner Sandbox create failure: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.operations
+			SET state='failed',error_code=$2,error_message=$3,retryable=false,
+			    completed_at=$4,updated_at=$4
+			WHERE id=$1 AND state='pending'`,
+			operationID, errorCode, result.SafeDetail, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner Workspace create Operation failure: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.lifecycle_effects
+			SET state='runner_failed',failure_class=$2,failure_message=$3,
+			    evidence_json=$4,updated_at=$5
+			WHERE id=$1`,
+			result.EffectId, errorCode, result.SafeDetail, evidenceJSON, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner Workspace create effect failure: %w", err)
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.runner_commands
+		SET state='acknowledged',updated_at=$2
+		WHERE id=$1`,
+		commandID, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner local-workspace command acknowledgement: %w", err)
+	}
+	return nil
+}
+
+func recordLocalWorkspaceDeleteResult(
+	ctx context.Context,
+	tx pgx.Tx,
+	runnerID string,
+	result *runnerv1.LocalWorkspaceResult,
+	now time.Time,
+) error {
+	var (
+		homeRunnerID, workspaceState, mutationKind, mutationID string
+		mutationEffectID, mutationOperationID, mutationState   string
+		effectState, commandID, sandboxState, desiredState     string
+		generation, capacity                                   int64
+	)
+	err := tx.QueryRow(ctx, `
+		SELECT workspace.home_runner_id,workspace.state,workspace.mutation_kind,
+		       workspace.mutation_id,workspace.mutation_effect_id,
+		       workspace.mutation_operation_id,workspace.mutation_state,
+		       workspace.generation,workspace.logical_capacity_bytes,
+		       effect.state,effect.command_id,sandbox.state,sandbox.desired_state
+		FROM secondbox.sandboxes AS sandbox
+		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+		JOIN secondbox.lifecycle_effects AS effect ON effect.id=$3
+		WHERE sandbox.id=$1 AND workspace.id=$2
+		FOR UPDATE OF sandbox,workspace,effect`,
+		result.SandboxId, result.WorkspaceId, result.EffectId,
+	).Scan(
+		&homeRunnerID, &workspaceState, &mutationKind, &mutationID,
+		&mutationEffectID, &mutationOperationID, &mutationState,
+		&generation, &capacity, &effectState, &commandID, &sandboxState, &desiredState,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errors.New("SecondBox runner Workspace delete result has no durable effect")
+	}
+	if err != nil {
+		return fmt.Errorf("SecondBox runner Workspace delete authority lookup: %w", err)
+	}
+	if effectState == "succeeded" {
+		if homeRunnerID == runnerID &&
+			workspaceState == "deleted" &&
+			sandboxState == "deleted" &&
+			generation == int64(result.Generation) {
+			return nil
+		}
+		return errors.New("SecondBox runner Workspace delete completion replay conflicts with durable authority")
+	}
+	if homeRunnerID != runnerID ||
+		workspaceState != "deleting" ||
+		sandboxState != "deleting" ||
+		desiredState != "deleted" ||
+		mutationKind != "workspace_delete" ||
+		mutationID != result.EffectId ||
+		mutationEffectID != result.EffectId ||
+		mutationOperationID != result.OperationId ||
+		mutationState == "" ||
+		generation != int64(result.Generation) {
+		return errors.New("SecondBox runner Workspace delete result conflicts with durable authority")
+	}
+	if result.LogicalCapacityBytes != 0 && result.LogicalCapacityBytes != uint64(capacity) {
+		return errors.New("SecondBox runner Workspace delete receipt has inconsistent capacity")
+	}
+	if effectState == "runner_failed" {
+		return nil
+	}
+	if effectState != "queued" {
+		return errors.New("SecondBox runner Workspace delete result is reordered")
+	}
+	evidenceJSON, err := json.Marshal(map[string]any{
+		"effectId": result.EffectId, "generation": result.Generation,
+		"logicalCapacity":   result.LogicalCapacityBytes,
+		"receiptRecordedAt": result.ReceiptRecordedAtUnixMs,
+		"terminal":          result.Terminal.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("SecondBox runner Workspace delete evidence encoding: %w", err)
+	}
+	succeeded := result.Terminal ==
+		runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED
+	if succeeded && result.ReceiptRecordedAtUnixMs == 0 {
+		return errors.New("SecondBox runner Workspace delete success lacks a durable receipt")
+	}
+	if succeeded {
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.snapshots
+			SET state='deleted',retention_ended_at=COALESCE(retention_ended_at,$2),updated_at=$2
+			WHERE workspace_id=$1 AND state<>'deleted'`,
+			result.WorkspaceId, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner Workspace delete Snapshot finalization: %w", err)
+		}
+		tag, err := tx.Exec(ctx, `
+			UPDATE secondbox.workspaces
+			SET state='deleted',local_receipt_json=$2,
+			    mutation_kind='',mutation_id='',mutation_effect_id='',
+			    mutation_operation_id='',mutation_expected_generation=NULL,
+			    mutation_target_generation=NULL,mutation_state='',updated_at=$3
+			WHERE id=$1 AND mutation_kind='workspace_delete'`,
+			result.WorkspaceId, evidenceJSON, now,
+		)
+		if err != nil {
+			return fmt.Errorf("SecondBox runner Workspace delete completion: %w", err)
+		}
+		if tag.RowsAffected() != 1 {
+			return errors.New("SecondBox runner Workspace delete mutation changed before completion")
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.sandboxes
+			SET state='deleted',current_instance_id='',deleted_at=$2,
+			    next_reconcile_at=NULL,reconcile_owner='',
+			    reconcile_claim_expires_at=NULL,revision=revision+1,updated_at=$2
+			WHERE id=$1 AND state='deleting' AND desired_state='deleted'`,
+			result.SandboxId, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner Workspace delete Sandbox finalization: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.operations
+			SET state='succeeded',started_at=COALESCE(started_at,$2),
+			    completed_at=$2,updated_at=$2
+			WHERE id=$1 AND kind='delete' AND state IN ('pending','running')`,
+			result.OperationId, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner Workspace delete Operation completion: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.operations
+			SET state='failed',error_code='state_conflict',
+			    error_message='Sandbox deletion superseded the lifecycle operation',
+			    retryable=false,started_at=COALESCE(started_at,$2),
+			    completed_at=$2,updated_at=$2
+			WHERE sandbox_id=$1 AND kind IN ('create','start','drain','stop')
+			  AND state IN ('pending','running')`,
+			result.SandboxId, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner Workspace delete superseded Operation completion: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.lifecycle_effects
+			SET state='succeeded',evidence_json=$2,failure_class='',
+			    failure_message='',updated_at=$3 WHERE id=$1`,
+			result.EffectId, evidenceJSON, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner Workspace delete effect completion: %w", err)
+		}
+	} else {
+		errorCode := localWorkspaceOperationErrorCode(result.Terminal)
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.workspaces
+			SET mutation_state='failed',updated_at=$2
+			WHERE id=$1 AND mutation_id=$3`,
+			result.WorkspaceId, now, result.EffectId,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner Workspace delete mutation failure: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.lifecycle_effects
+			SET state='runner_failed',failure_class=$2,failure_message=$3,
+			    evidence_json=$4,updated_at=$5 WHERE id=$1`,
+			result.EffectId, errorCode, result.SafeDetail, evidenceJSON, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner Workspace delete effect failure: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.sandboxes
+			SET next_reconcile_at=$2,reconcile_owner='',
+			    reconcile_claim_expires_at=NULL,revision=revision+1,updated_at=$2
+			WHERE id=$1 AND state='deleting'`,
+			result.SandboxId, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner Workspace delete retry scheduling: %w", err)
+		}
+	}
+	if err := acknowledgeRunnerCommand(ctx, tx, commandID, now); err != nil {
+		return err
+	}
+	return nil
+}
+
+func recordLocalSnapshotResult(
+	ctx context.Context,
+	tx pgx.Tx,
+	runnerID string,
+	result *runnerv1.LocalWorkspaceResult,
+	now time.Time,
+) error {
+	switch result.Kind {
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_CREATE,
+		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_DELETE:
+	default:
+		return nil
+	}
+	var (
+		homeRunnerID, mutationKind, mutationEffectID, mutationOperationID string
+		mutationState, effectState, commandID, snapshotState              string
+		generation, capacity                                              int64
+	)
+	err := tx.QueryRow(ctx, `
+		SELECT workspace.home_runner_id,workspace.mutation_kind,
+		       workspace.mutation_effect_id,workspace.mutation_operation_id,
+		       workspace.mutation_state,workspace.generation,workspace.logical_capacity_bytes,
+		       effect.state,effect.command_id,snapshot.state
+		FROM secondbox.sandboxes AS sandbox
+		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+		JOIN secondbox.snapshots AS snapshot
+		  ON snapshot.id=$4 AND snapshot.workspace_id=workspace.id
+		JOIN secondbox.lifecycle_effects AS effect ON effect.id=$3
+		WHERE sandbox.id=$1 AND workspace.id=$2
+		FOR UPDATE OF sandbox,workspace,snapshot,effect`,
+		result.SandboxId, result.WorkspaceId, result.EffectId, result.SnapshotId,
+	).Scan(
+		&homeRunnerID, &mutationKind, &mutationEffectID, &mutationOperationID,
+		&mutationState, &generation, &capacity, &effectState, &commandID, &snapshotState,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errors.New("SecondBox runner local Snapshot result has no durable effect")
+	}
+	if err != nil {
+		return fmt.Errorf("SecondBox runner local Snapshot effect lookup: %w", err)
+	}
+	expectedMutationKind := "snapshot_create"
+	expectedSnapshotState := "creating"
+	successSnapshotState := "ready"
+	if result.Kind == runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_DELETE {
+		expectedMutationKind = "snapshot_delete"
+		expectedSnapshotState = "deleting"
+		successSnapshotState = "deleted"
+	}
+	if homeRunnerID != runnerID || mutationKind != expectedMutationKind ||
+		mutationEffectID != result.EffectId || mutationOperationID != result.OperationId ||
+		mutationState == "" || snapshotState != expectedSnapshotState {
+		return errors.New("SecondBox runner local Snapshot result conflicts with durable authority")
+	}
+	if effectState == "succeeded" || effectState == "runner_failed" {
+		return nil
+	}
+	if effectState != "queued" {
+		return errors.New("SecondBox runner local Snapshot result is reordered")
+	}
+	if result.Kind == runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_CREATE &&
+		(result.Generation != uint64(generation) || result.LogicalCapacityBytes != uint64(capacity)) {
+		return errors.New("SecondBox runner local Snapshot receipt has inconsistent generation or capacity")
+	}
+	evidenceJSON, err := json.Marshal(map[string]any{
+		"effectId": result.EffectId, "snapshotId": result.SnapshotId,
+		"generation": result.Generation, "logicalCapacity": result.LogicalCapacityBytes,
+		"receiptRecordedAt": result.ReceiptRecordedAtUnixMs, "terminal": result.Terminal.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("SecondBox runner local Snapshot evidence encoding: %w", err)
+	}
+	succeeded := result.Terminal == runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED
+	if succeeded && result.ReceiptRecordedAtUnixMs == 0 {
+		return errors.New("SecondBox runner local Snapshot success lacks a durable receipt")
+	}
+	if succeeded {
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.snapshots
+			SET state=$2,runner_receipt_json=$3,updated_at=$4,
+			    retention_ended_at=CASE WHEN $2='deleted' THEN $4 ELSE retention_ended_at END
+			WHERE id=$1`,
+			result.SnapshotId, successSnapshotState, evidenceJSON, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner local Snapshot completion: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.operations
+			SET state='succeeded',completed_at=$2,updated_at=$2
+			WHERE id=$1 AND state='pending'`,
+			result.OperationId, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner local Snapshot Operation completion: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.lifecycle_effects
+			SET state='succeeded',evidence_json=$2,updated_at=$3 WHERE id=$1`,
+			result.EffectId, evidenceJSON, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner local Snapshot effect completion: %w", err)
+		}
+	} else {
+		errorCode := localWorkspaceOperationErrorCode(result.Terminal)
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.snapshots
+			SET state='failed',runner_receipt_json=$2,updated_at=$3 WHERE id=$1`,
+			result.SnapshotId, evidenceJSON, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner local Snapshot failure: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.operations
+			SET state='failed',error_code=$2,error_message=$3,retryable=false,
+			    completed_at=$4,updated_at=$4
+			WHERE id=$1 AND state='pending'`,
+			result.OperationId, errorCode, result.SafeDetail, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner local Snapshot Operation failure: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.lifecycle_effects
+			SET state='runner_failed',failure_class=$2,failure_message=$3,
+			    evidence_json=$4,updated_at=$5 WHERE id=$1`,
+			result.EffectId, errorCode, result.SafeDetail, evidenceJSON, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner local Snapshot effect failure: %w", err)
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.workspaces
+		SET mutation_kind='',mutation_id='',mutation_effect_id='',mutation_operation_id='',
+		    mutation_expected_generation=NULL,mutation_target_generation=NULL,
+		    mutation_state='',updated_at=$2 WHERE id=$1`,
+		result.WorkspaceId, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner local Snapshot mutation release: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.runner_commands
+		SET state='acknowledged',updated_at=$2 WHERE id=$1`,
+		commandID, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner local Snapshot command acknowledgement: %w", err)
+	}
+	return nil
+}
+
+func recordLocalGenerationAdvanceResult(
+	ctx context.Context,
+	tx pgx.Tx,
+	runnerID string,
+	result *runnerv1.LocalWorkspaceResult,
+	now time.Time,
+) error {
+	var (
+		homeRunnerID, workspaceState, mutationKind, mutationID string
+		mutationEffectID, mutationOperationID, mutationState   string
+		effectKind, effectState, commandID, sandboxState       string
+		workspaceGeneration, sandboxGeneration, capacity       int64
+	)
+	err := tx.QueryRow(ctx, `
+		SELECT workspace.home_runner_id,workspace.state,workspace.mutation_kind,
+		       workspace.mutation_id,workspace.mutation_effect_id,
+		       workspace.mutation_operation_id,workspace.mutation_state,
+		       workspace.generation,workspace.logical_capacity_bytes,
+		       effect.kind,effect.state,effect.command_id,
+		       sandbox.state,sandbox.generation
+		FROM secondbox.sandboxes AS sandbox
+		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+		JOIN secondbox.lifecycle_effects AS effect ON effect.id=$3
+		WHERE sandbox.id=$1 AND workspace.id=$2
+		FOR UPDATE OF sandbox,workspace,effect`,
+		result.SandboxId, result.WorkspaceId, result.EffectId,
+	).Scan(
+		&homeRunnerID, &workspaceState, &mutationKind,
+		&mutationID, &mutationEffectID, &mutationOperationID, &mutationState,
+		&workspaceGeneration, &capacity, &effectKind, &effectState, &commandID,
+		&sandboxState, &sandboxGeneration,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errors.New("SecondBox runner generation-advance result has no durable stop effect")
+	}
+	if err != nil {
+		return fmt.Errorf("SecondBox runner generation-advance authority lookup: %w", err)
+	}
+	if homeRunnerID != runnerID ||
+		workspaceState != "ready" ||
+		sandboxState != "stopping" ||
+		effectKind != "stop" ||
+		mutationKind != "stop" ||
+		mutationID != result.EffectId ||
+		mutationEffectID != result.EffectId ||
+		mutationOperationID != result.OperationId ||
+		sandboxGeneration != workspaceGeneration {
+		return errors.New("SecondBox runner generation-advance result conflicts with durable authority")
+	}
+	if effectState == "runner_succeeded" || effectState == "runner_failed" {
+		return nil
+	}
+	if effectState != "queued" || mutationState != "advancing" {
+		return errors.New("SecondBox runner generation-advance result is reordered")
+	}
+	evidenceJSON, err := json.Marshal(map[string]any{
+		"effectId":           result.EffectId,
+		"previousGeneration": result.PreviousGeneration,
+		"generation":         result.Generation,
+		"logicalCapacity":    result.LogicalCapacityBytes,
+		"receiptRecordedAt":  result.ReceiptRecordedAtUnixMs,
+		"terminal":           result.Terminal.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("SecondBox runner generation-advance evidence encoding: %w", err)
+	}
+	succeeded := result.Terminal ==
+		runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED
+	if succeeded {
+		if result.ReceiptRecordedAtUnixMs == 0 ||
+			result.PreviousGeneration != uint64(workspaceGeneration) ||
+			result.Generation != uint64(workspaceGeneration+1) ||
+			result.LogicalCapacityBytes != uint64(capacity) {
+			return errors.New("SecondBox runner generation-advance receipt is inconsistent")
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.workspaces
+			SET local_receipt_json=$2,mutation_state='runner_succeeded',updated_at=$3
+			WHERE id=$1`,
+			result.WorkspaceId, evidenceJSON, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner generation-advance Workspace evidence: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.lifecycle_effects
+			SET state='runner_succeeded',evidence_json=$2,
+			    failure_class='',failure_message='',updated_at=$3 WHERE id=$1`,
+			result.EffectId, evidenceJSON, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner generation-advance effect completion: %w", err)
+		}
+	} else {
+		errorCode := localWorkspaceOperationErrorCode(result.Terminal)
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.workspaces
+			SET mutation_state='failed',updated_at=$2 WHERE id=$1`,
+			result.WorkspaceId, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner generation-advance Workspace failure: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.lifecycle_effects
+			SET state='runner_failed',failure_class=$2,failure_message=$3,
+			    evidence_json=$4,updated_at=$5 WHERE id=$1`,
+			result.EffectId, errorCode, result.SafeDetail, evidenceJSON, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner generation-advance effect failure: %w", err)
+		}
+	}
+	if err := acknowledgeRunnerCommand(ctx, tx, commandID, now); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.sandboxes
+		SET next_reconcile_at=$2,updated_at=$2 WHERE id=$1`,
+		result.SandboxId, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner generation-advance reconciliation wake: %w", err)
+	}
+	return nil
+}
+
+func recordLocalWorkspaceReconciliation(
+	ctx context.Context,
+	tx pgx.Tx,
+	runnerID string,
+	result *runnerv1.LocalWorkspaceResult,
+	now time.Time,
+) error {
+	if result.Correlation == nil ||
+		result.Correlation.RunnerId != runnerID ||
+		result.OperationId != result.EffectId {
+		return errors.New("SecondBox runner Workspace reconciliation authority is invalid")
+	}
+	var commandState string
+	if err := tx.QueryRow(ctx, `
+		SELECT state FROM secondbox.runner_commands
+		WHERE id=$1 AND runner_id=$2 AND assignment_id=$1 AND kind='local-workspace'
+		FOR UPDATE`,
+		result.EffectId,
+		runnerID,
+	).Scan(&commandState); err != nil {
+		return fmt.Errorf("SecondBox runner Workspace reconciliation command lookup: %w", err)
+	}
+	if commandState == "acknowledged" {
+		return nil
+	}
+	if commandState != "delivering" &&
+		commandState != "delivered" &&
+		commandState != "pending" {
+		return errors.New("SecondBox runner Workspace reconciliation command is not active")
+	}
+	if result.Terminal ==
+		runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED {
+		for _, receipt := range result.Receipts {
+			if _, err := replayReconciledWorkspaceReceipt(
+				ctx,
+				tx,
+				runnerID,
+				receipt,
+				now,
+			); err != nil {
+				return err
+			}
+		}
+	}
+	inventory := make(map[string]*runnerv1.LocalWorkspaceInventoryItem, len(result.Inventory))
+	for _, item := range result.Inventory {
+		if _, duplicate := inventory[item.WorkspaceId]; duplicate {
+			return errors.New("SecondBox runner Workspace reconciliation inventory contains duplicate identities")
+		}
+		inventory[item.WorkspaceId] = item
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT sandbox.id
+		FROM secondbox.sandboxes AS sandbox
+		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+		WHERE workspace.home_runner_id=$1
+		  AND workspace.state<>'deleted'
+		  AND sandbox.state<>'deleted'
+		ORDER BY sandbox.id`,
+		runnerID,
+	)
+	if err != nil {
+		return fmt.Errorf("SecondBox runner Workspace reconciliation expected-state lookup: %w", err)
+	}
+	var sandboxIDs []string
+	for rows.Next() {
+		var sandboxID string
+		if err := rows.Scan(&sandboxID); err != nil {
+			rows.Close()
+			return fmt.Errorf("SecondBox runner Workspace reconciliation expected-state scan: %w", err)
+		}
+		sandboxIDs = append(sandboxIDs, sandboxID)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("SecondBox runner Workspace reconciliation expected-state iteration: %w", err)
+	}
+	failureClass := ""
+	if result.Terminal !=
+		runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED {
+		failureClass = localWorkspaceOperationErrorCode(result.Terminal)
+	}
+	for _, sandboxID := range sandboxIDs {
+		locked, err := rowlock.SandboxWorkspaceByID(ctx, tx, sandboxID)
+		if err != nil {
+			return fmt.Errorf("SecondBox runner Workspace reconciliation authority lock: %w", err)
+		}
+		item, found := inventory[locked.WorkspaceID]
+		delete(inventory, locked.WorkspaceID)
+		if failureClass != "" {
+			if err := failReconciledWorkspace(
+				ctx,
+				tx,
+				locked,
+				result.EffectId,
+				failureClass,
+				result.SafeDetail,
+				now,
+			); err != nil {
+				return err
+			}
+			continue
+		}
+		if !found {
+			if err := failReconciledWorkspace(
+				ctx,
+				tx,
+				locked,
+				result.EffectId,
+				"home_workspace_missing",
+				"home runner reported no local Workspace",
+				now,
+			); err != nil {
+				return err
+			}
+			continue
+		}
+		var activeAssignment bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM secondbox.assignments
+				WHERE sandbox_id=$1 AND generation=$2 AND runner_id=$3
+				  AND state IN ('assigned','accepted','starting','ready','uncertain','fencing')
+			)`,
+			locked.SandboxID,
+			locked.Generation,
+			runnerID,
+		).Scan(&activeAssignment); err != nil {
+			return fmt.Errorf("SecondBox runner Workspace reconciliation Assignment lookup: %w", err)
+		}
+		var restorePending bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM secondbox.workspace_restores
+				WHERE workspace_id=$1 AND state NOT IN ('finalized','failed')
+			)`,
+			locked.WorkspaceID,
+		).Scan(&restorePending); err != nil {
+			return fmt.Errorf("SecondBox runner Workspace reconciliation restore lookup: %w", err)
+		}
+		if item.Generation != uint64(locked.Workspace.Generation) ||
+			item.LogicalCapacityBytes != uint64(locked.Workspace.LogicalCapacityBytes) ||
+			!item.Formatted ||
+			item.RestorePending != restorePending ||
+			item.ActiveWriter != activeAssignment {
+			if err := failReconciledWorkspace(
+				ctx,
+				tx,
+				locked,
+				result.EffectId,
+				"home_workspace_conflict",
+				"home runner local Workspace evidence conflicts with durable authority",
+				now,
+			); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := recoverReconciledWorkspace(
+			ctx,
+			tx,
+			locked,
+			activeAssignment,
+			result.EffectId,
+			now,
+		); err != nil {
+			return err
+		}
+	}
+	for workspaceID := range inventory {
+		if err := insertWorkspaceReconciliationAudit(
+			ctx,
+			tx,
+			result.EffectId+"-unexpected-"+workspaceID,
+			"",
+			"",
+			"runner.workspace_inventory_conflict",
+			"runner",
+			runnerID,
+			"failed",
+			result.Correlation.RequestId,
+			map[string]string{
+				"class":       "unexpected_local_workspace",
+				"workspaceId": workspaceID,
+			},
+			now,
+		); err != nil {
+			return err
+		}
+	}
+	if err := acknowledgeRunnerCommand(ctx, tx, result.EffectId, now); err != nil {
+		return err
+	}
+	return nil
+}
+
+func replayReconciledWorkspaceReceipt(
+	ctx context.Context,
+	tx pgx.Tx,
+	runnerID string,
+	receipt *runnerv1.LocalWorkspaceReceiptItem,
+	now time.Time,
+) (bool, error) {
+	if receipt == nil {
+		return false, errors.New("SecondBox runner Workspace reconciliation receipt is absent")
+	}
+	var sandboxID string
+	err := tx.QueryRow(ctx, `
+		SELECT sandbox_id FROM secondbox.workspaces
+		WHERE id=$1 AND home_runner_id=$2`,
+		receipt.WorkspaceId,
+		runnerID,
+	).Scan(&sandboxID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("SecondBox runner Workspace reconciliation receipt lookup: %w", err)
+	}
+	locked, err := rowlock.SandboxWorkspaceByID(ctx, tx, sandboxID)
+	if err != nil {
+		return false, fmt.Errorf("SecondBox runner Workspace reconciliation receipt lock: %w", err)
+	}
+	if locked.WorkspaceID != receipt.WorkspaceId ||
+		locked.Workspace.HomeRunnerID != runnerID {
+		return false, errors.New("SecondBox runner Workspace reconciliation receipt has wrong authority")
+	}
+	effectID := ""
+	snapshotID := receipt.SnapshotId
+	operationID := receipt.OperationId
+	switch receipt.Kind {
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_PREPARE,
+		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_SWAP,
+		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE,
+		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT:
+		var (
+			storedSnapshotID string
+			prepareEffectID  string
+			swapEffectID     string
+			finalizeEffectID string
+			abortEffectID    string
+		)
+		err := tx.QueryRow(ctx, `
+			SELECT snapshot_id,prepare_effect_id,swap_effect_id,finalize_effect_id,
+			       abort_effect_id
+			FROM secondbox.workspace_restores
+			WHERE operation_id=$1 AND workspace_id=$2`,
+			receipt.OperationId,
+			receipt.WorkspaceId,
+		).Scan(
+			&storedSnapshotID,
+			&prepareEffectID,
+			&swapEffectID,
+			&finalizeEffectID,
+			&abortEffectID,
+		)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("SecondBox runner Workspace reconciliation restore receipt lookup: %w", err)
+		}
+		if snapshotID != storedSnapshotID {
+			return false, errors.New("SecondBox runner Workspace reconciliation restore receipt targets the wrong Snapshot")
+		}
+		switch receipt.Kind {
+		case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_PREPARE:
+			effectID = prepareEffectID
+		case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_SWAP:
+			effectID = swapEffectID
+		case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE:
+			effectID = finalizeEffectID
+		case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT:
+			effectID = abortEffectID
+		}
+	default:
+		if locked.Workspace.Mutation.State == "" ||
+			!workspaceMutationMatchesReceipt(locked.Workspace.Mutation.Kind, receipt.Kind) {
+			return false, nil
+		}
+		if receipt.OperationId != locked.Workspace.Mutation.OperationID &&
+			receipt.OperationId != locked.Workspace.Mutation.ID &&
+			receipt.OperationId != locked.Workspace.Mutation.EffectID {
+			return false, nil
+		}
+		effectID = locked.Workspace.Mutation.EffectID
+		operationID = locked.Workspace.Mutation.OperationID
+	}
+	if effectID == "" || operationID == "" {
+		return false, nil
+	}
+	replayed := &runnerv1.LocalWorkspaceResult{
+		CommandVersion:          1,
+		Kind:                    receipt.Kind,
+		Terminal:                runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED,
+		OperationId:             operationID,
+		EffectId:                effectID,
+		SandboxId:               locked.SandboxID,
+		WorkspaceId:             locked.WorkspaceID,
+		SnapshotId:              snapshotID,
+		PreviousGeneration:      receipt.PreviousGeneration,
+		Generation:              receipt.Generation,
+		LogicalCapacityBytes:    receipt.LogicalCapacityBytes,
+		ReceiptRecordedAtUnixMs: receipt.ReceiptRecordedAtUnixMs,
+		Correlation: &runnerv1.Correlation{
+			OperationId: operationID,
+			SandboxId:   locked.SandboxID,
+			RunnerId:    runnerID,
+		},
+	}
+	if err := recordLocalWorkspaceResult(ctx, tx, runnerID, replayed, now); err != nil {
+		return false, fmt.Errorf("SecondBox runner Workspace reconciliation receipt replay: %w", err)
+	}
+	return true, nil
+}
+
+func workspaceMutationMatchesReceipt(
+	mutationKind string,
+	receiptKind runnerv1.LocalWorkspaceCommandKind,
+) bool {
+	switch receiptKind {
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE:
+		return mutationKind == "create"
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_DELETE:
+		return mutationKind == "workspace_delete"
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION:
+		return mutationKind == "stop"
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_CREATE:
+		return mutationKind == "snapshot_create"
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_DELETE:
+		return mutationKind == "snapshot_delete"
+	default:
+		return false
+	}
+}
+
+func failReconciledWorkspace(
+	ctx context.Context,
+	tx pgx.Tx,
+	locked rowlock.SandboxWorkspace,
+	reconcileID string,
+	failureClass string,
+	failureMessage string,
+	now time.Time,
+) error {
+	evidenceJSON, err := json.Marshal(map[string]string{
+		"reconciliationId": reconcileID,
+		"class":            failureClass,
+		"message":          failureMessage,
+	})
+	if err != nil {
+		return fmt.Errorf("SecondBox runner Workspace reconciliation evidence encoding: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.workspaces
+		SET state='failed',local_receipt_json=$2,
+		    mutation_state=CASE
+		      WHEN mutation_state='' THEN '' ELSE 'failed'
+		    END,
+		    updated_at=$3
+		WHERE id=$1`,
+		locked.WorkspaceID,
+		evidenceJSON,
+		now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner Workspace reconciliation failure update: %w", err)
+	}
+	if locked.Workspace.Mutation.OperationID != "" {
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.operations
+			SET state='failed',error_code=$2,error_message=$3,retryable=false,
+			    completed_at=$4,updated_at=$4
+			WHERE id=$1 AND state IN ('pending','running')`,
+			locked.Workspace.Mutation.OperationID,
+			failureClass,
+			failureMessage,
+			now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner Workspace reconciliation Operation failure: %w", err)
+		}
+	}
+	if locked.Workspace.Mutation.EffectID != "" {
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.lifecycle_effects
+			SET state='runner_failed',failure_class=$2,failure_message=$3,
+			    evidence_json=$4,claim_owner='',claim_expires_at=$5,updated_at=$5
+			WHERE id=$1 AND state='queued'`,
+			locked.Workspace.Mutation.EffectID,
+			failureClass,
+			failureMessage,
+			evidenceJSON,
+			now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner Workspace reconciliation effect failure: %w", err)
+		}
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.sandboxes
+		SET state='failed',lifecycle_failure_class=$2,lifecycle_failure_message=$3,
+		    reconcile_owner='',reconcile_claim_expires_at=NULL,
+		    revision=revision+1,updated_at=$4
+		WHERE id=$1 AND state<>'deleted'`,
+		locked.SandboxID,
+		failureClass,
+		failureMessage,
+		now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner Workspace reconciliation Sandbox failure: %w", err)
+	}
+	return insertWorkspaceReconciliationAudit(
+		ctx,
+		tx,
+		reconcileID+"-failed-"+locked.WorkspaceID,
+		locked.TenantRef,
+		locked.SubjectRef,
+		"runner.workspace_reconciliation",
+		"sandbox",
+		locked.SandboxID,
+		"failed",
+		reconcileID,
+		map[string]string{
+			"class":       failureClass,
+			"workspaceId": locked.WorkspaceID,
+		},
+		now,
+	)
+}
+
+func recoverReconciledWorkspace(
+	ctx context.Context,
+	tx pgx.Tx,
+	locked rowlock.SandboxWorkspace,
+	activeWriter bool,
+	reconcileID string,
+	now time.Time,
+) error {
+	if locked.Workspace.State != "failed" ||
+		locked.Workspace.Mutation.State != "" ||
+		!strings.HasPrefix(locked.SandboxState, "failed") {
+		return nil
+	}
+	var failureClass string
+	if err := tx.QueryRow(ctx, `
+		SELECT lifecycle_failure_class FROM secondbox.sandboxes WHERE id=$1`,
+		locked.SandboxID,
+	).Scan(&failureClass); err != nil {
+		return fmt.Errorf("SecondBox runner Workspace recovery failure lookup: %w", err)
+	}
+	if !strings.HasPrefix(failureClass, "home_workspace_") {
+		return nil
+	}
+	nextSandboxState := "stopped"
+	if activeWriter {
+		nextSandboxState = "ready"
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.workspaces
+		SET state='ready',local_receipt_json=$2,updated_at=$3 WHERE id=$1`,
+		locked.WorkspaceID,
+		[]byte(`{"reconciled":true}`),
+		now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner Workspace reconciliation recovery update: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.sandboxes
+		SET state=$2,lifecycle_failure_class='',lifecycle_failure_message='',
+		    revision=revision+1,updated_at=$3 WHERE id=$1`,
+		locked.SandboxID,
+		nextSandboxState,
+		now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner Workspace reconciliation Sandbox recovery: %w", err)
+	}
+	return insertWorkspaceReconciliationAudit(
+		ctx,
+		tx,
+		reconcileID+"-recovered-"+locked.WorkspaceID,
+		locked.TenantRef,
+		locked.SubjectRef,
+		"runner.workspace_reconciliation",
+		"sandbox",
+		locked.SandboxID,
+		"succeeded",
+		reconcileID,
+		map[string]string{
+			"class":       "home_workspace_recovered",
+			"workspaceId": locked.WorkspaceID,
+		},
+		now,
+	)
+}
+
+func insertWorkspaceReconciliationAudit(
+	ctx context.Context,
+	tx pgx.Tx,
+	id string,
+	tenantRef string,
+	subjectRef string,
+	action string,
+	resourceKind string,
+	resourceID string,
+	outcome string,
+	requestID string,
+	details map[string]string,
+	now time.Time,
+) error {
+	if tenantRef == "" {
+		tenantRef = "secondbox"
+	}
+	if subjectRef == "" {
+		subjectRef = "runner-reconciler"
+	}
+	detailsJSON, err := json.Marshal(details)
+	if err != nil {
+		return fmt.Errorf("SecondBox runner Workspace reconciliation audit encoding: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.audit_events (
+			id,tenant_ref,subject_ref,actor_kind,actor_id,action,resource_kind,
+			resource_id,outcome,request_id,details_json,created_at
+		) VALUES (
+			$1,$2,$3,'system','runner-reconciler',$4,$5,$6,$7,$8,$9,$10
+		) ON CONFLICT (id) DO NOTHING`,
+		id,
+		tenantRef,
+		subjectRef,
+		action,
+		resourceKind,
+		resourceID,
+		outcome,
+		requestID,
+		detailsJSON,
+		now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner Workspace reconciliation audit insert: %w", err)
+	}
+	return nil
+}
+
+type localRestoreAuthority struct {
+	restoreID, sandboxID, workspaceID, snapshotID, homeRunnerID, operationID string
+	tenantRef, subjectRef                                                    string
+	prepareEffectID, swapEffectID, finalizeEffectID, abortEffectID           string
+	prepareCommandID, swapCommandID, finalizeCommandID, abortCommandID       string
+	restoreState, failureClass, failureMessage                               string
+	mutationID, mutationKind, mutationEffectID, mutationOperationID          string
+	mutationState, sandboxState, requestID, effectState, effectCommandID     string
+	expectedGeneration, targetGeneration, workspaceGeneration                int64
+	sandboxGeneration, capacity, effectRetryCount                            int64
+	fencingToken                                                             []byte
+}
+
+type localRestorePhase struct {
+	effectID      string
+	commandID     string
+	expectedState string
+	effectKind    string
+	receiptColumn string
+}
+
+func recordLocalRestoreResult(
+	ctx context.Context,
+	tx pgx.Tx,
+	runnerID string,
+	result *runnerv1.LocalWorkspaceResult,
+	now time.Time,
+) error {
+	var authority localRestoreAuthority
+	err := tx.QueryRow(ctx, `
+		SELECT restore.id,restore.sandbox_id,restore.workspace_id,restore.snapshot_id,
+		       restore.home_runner_id,restore.operation_id,
+		       restore.tenant_ref,restore.subject_ref,
+		       restore.prepare_effect_id,restore.swap_effect_id,
+		       restore.finalize_effect_id,restore.abort_effect_id,
+		       restore.prepare_command_id,restore.swap_command_id,
+		       restore.finalize_command_id,restore.abort_command_id,
+		       restore.state,restore.failure_class,restore.failure_message,
+		       restore.expected_generation,restore.target_generation,
+		       workspace.mutation_id,workspace.mutation_kind,
+		       workspace.mutation_effect_id,workspace.mutation_operation_id,
+		       workspace.mutation_state,workspace.generation,
+		       sandbox.state,sandbox.generation,workspace.logical_capacity_bytes,
+		       operation.request_id,effect.state,effect.command_id,
+		       effect.retry_count,effect.fencing_token
+		FROM secondbox.workspace_restores AS restore
+		JOIN secondbox.sandboxes AS sandbox ON sandbox.id=restore.sandbox_id
+		JOIN secondbox.workspaces AS workspace ON workspace.id=restore.workspace_id
+		JOIN secondbox.snapshots AS snapshot ON snapshot.id=restore.snapshot_id
+		JOIN secondbox.operations AS operation ON operation.id=restore.operation_id
+		JOIN secondbox.lifecycle_effects AS effect ON effect.id=$4
+		WHERE restore.operation_id=$1 AND restore.sandbox_id=$2
+		  AND restore.workspace_id=$3 AND snapshot.workspace_id=restore.workspace_id
+		FOR UPDATE OF sandbox,workspace,snapshot,restore,effect`,
+		result.OperationId, result.SandboxId, result.WorkspaceId, result.EffectId,
+	).Scan(
+		&authority.restoreID, &authority.sandboxID, &authority.workspaceID,
+		&authority.snapshotID, &authority.homeRunnerID, &authority.operationID,
+		&authority.tenantRef, &authority.subjectRef,
+		&authority.prepareEffectID, &authority.swapEffectID,
+		&authority.finalizeEffectID, &authority.abortEffectID,
+		&authority.prepareCommandID, &authority.swapCommandID,
+		&authority.finalizeCommandID, &authority.abortCommandID,
+		&authority.restoreState, &authority.failureClass, &authority.failureMessage,
+		&authority.expectedGeneration, &authority.targetGeneration,
+		&authority.mutationID, &authority.mutationKind,
+		&authority.mutationEffectID, &authority.mutationOperationID,
+		&authority.mutationState, &authority.workspaceGeneration,
+		&authority.sandboxState, &authority.sandboxGeneration, &authority.capacity,
+		&authority.requestID, &authority.effectState, &authority.effectCommandID,
+		&authority.effectRetryCount, &authority.fencingToken,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errors.New("SecondBox runner local restore result has no durable authority")
+	}
+	if err != nil {
+		return fmt.Errorf("SecondBox runner local restore authority lookup: %w", err)
+	}
+	phase, err := restorePhaseForResult(authority, result.Kind)
+	if err != nil {
+		return err
+	}
+	if authority.homeRunnerID != runnerID ||
+		authority.operationID != result.OperationId ||
+		authority.snapshotID != result.SnapshotId ||
+		phase.effectID != result.EffectId {
+		return errors.New("SecondBox runner local restore result conflicts with durable authority")
+	}
+	if authority.effectState == "succeeded" || authority.effectState == "runner_failed" {
+		return nil
+	}
+	if authority.effectState != "queued" || authority.restoreState != phase.expectedState {
+		return errors.New("SecondBox runner local restore result is reordered")
+	}
+	if result.Kind != runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE {
+		if authority.mutationID != authority.restoreID ||
+			authority.mutationKind != "snapshot_restore" ||
+			authority.mutationOperationID != authority.operationID {
+			return errors.New("SecondBox runner local restore result lacks the durable Workspace mutation")
+		}
+		if authority.mutationEffectID != result.EffectId {
+			return errors.New("SecondBox runner local restore effect is not the active Workspace mutation")
+		}
+	} else if authority.workspaceGeneration != authority.targetGeneration ||
+		authority.sandboxGeneration != authority.targetGeneration {
+		return errors.New("SecondBox runner local restore finalize precedes the database commit")
+	}
+	evidenceJSON, err := json.Marshal(map[string]any{
+		"effectId": result.EffectId, "snapshotId": authority.snapshotID,
+		"previousGeneration": result.PreviousGeneration, "generation": result.Generation,
+		"logicalCapacity":   result.LogicalCapacityBytes,
+		"receiptRecordedAt": result.ReceiptRecordedAtUnixMs,
+		"terminal":          result.Terminal.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("SecondBox runner local restore evidence encoding: %w", err)
+	}
+	succeeded := result.Terminal ==
+		runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED
+	if succeeded {
+		if result.ReceiptRecordedAtUnixMs == 0 {
+			return errors.New("SecondBox runner local restore success lacks a durable receipt")
+		}
+		if err := validateLocalRestoreReceipt(authority, result); err != nil {
+			return err
+		}
+		return completeLocalRestorePhase(ctx, tx, authority, phase, result, evidenceJSON, now)
+	}
+	if result.Kind == runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_PREPARE {
+		return beginLocalRestoreAbort(ctx, tx, authority, result, evidenceJSON, now)
+	}
+	return retryLocalRestorePhase(ctx, tx, authority, phase, result, evidenceJSON, now)
+}
+
+func restorePhaseForResult(
+	authority localRestoreAuthority,
+	kind runnerv1.LocalWorkspaceCommandKind,
+) (localRestorePhase, error) {
+	switch kind {
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_PREPARE:
+		return localRestorePhase{
+			effectID: authority.prepareEffectID, commandID: authority.prepareCommandID,
+			expectedState: "requested", effectKind: "local_snapshot_restore_prepare",
+			receiptColumn: "prepare_receipt_json",
+		}, nil
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_SWAP:
+		return localRestorePhase{
+			effectID: authority.swapEffectID, commandID: authority.swapCommandID,
+			expectedState: "prepared", effectKind: "local_snapshot_restore_swap",
+			receiptColumn: "swap_receipt_json",
+		}, nil
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE:
+		return localRestorePhase{
+			effectID: authority.finalizeEffectID, commandID: authority.finalizeCommandID,
+			expectedState: "database_committed", effectKind: "local_snapshot_restore_finalize",
+			receiptColumn: "finalize_receipt_json",
+		}, nil
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT:
+		return localRestorePhase{
+			effectID: authority.abortEffectID, commandID: authority.abortCommandID,
+			expectedState: "aborting", effectKind: "local_snapshot_restore_abort",
+			receiptColumn: "abort_receipt_json",
+		}, nil
+	default:
+		return localRestorePhase{}, errors.New("SecondBox runner local restore kind is unsupported")
+	}
+}
+
+func validateLocalRestoreReceipt(
+	authority localRestoreAuthority,
+	result *runnerv1.LocalWorkspaceResult,
+) error {
+	if result.Kind == runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT &&
+		result.PreviousGeneration == 0 && result.Generation == 0 &&
+		result.LogicalCapacityBytes == 0 {
+		return nil
+	}
+	if result.PreviousGeneration != uint64(authority.expectedGeneration) ||
+		result.Generation != uint64(authority.targetGeneration) ||
+		result.LogicalCapacityBytes != uint64(authority.capacity) {
+		return errors.New("SecondBox runner local restore receipt has inconsistent generation or capacity")
+	}
+	return nil
+}
+
+func completeLocalRestorePhase(
+	ctx context.Context,
+	tx pgx.Tx,
+	authority localRestoreAuthority,
+	phase localRestorePhase,
+	result *runnerv1.LocalWorkspaceResult,
+	evidenceJSON []byte,
+	now time.Time,
+) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.lifecycle_effects
+		SET state='succeeded',evidence_json=$2,failure_class='',failure_message='',
+		    updated_at=$3 WHERE id=$1`,
+		result.EffectId, evidenceJSON, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner local restore effect completion: %w", err)
+	}
+	if err := acknowledgeRunnerCommand(ctx, tx, authority.effectCommandID, now); err != nil {
+		return err
+	}
+	switch result.Kind {
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_PREPARE:
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.workspace_restores
+			SET state='prepared',prepare_receipt_json=$2,updated_at=$3 WHERE id=$1`,
+			authority.restoreID, evidenceJSON, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner local restore prepare completion: %w", err)
+		}
+		if err := advanceRestoreWorkspaceMutation(
+			ctx, tx, authority, authority.swapEffectID, "queued", now,
+		); err != nil {
+			return err
+		}
+		return queueRestorePhase(
+			ctx, tx, authority, authority.swapEffectID, authority.swapCommandID,
+			runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_SWAP,
+			"local_snapshot_restore_swap", authority.expectedGeneration, now,
+		)
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_SWAP:
+		return commitLocalRestore(ctx, tx, authority, evidenceJSON, now)
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE:
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.workspace_restores
+			SET state='finalized',finalize_receipt_json=$2,finalized_at=$3,updated_at=$3
+			WHERE id=$1`,
+			authority.restoreID, evidenceJSON, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner local restore finalize completion: %w", err)
+		}
+		return nil
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT:
+		errorCode := authority.failureClass
+		if errorCode == "" {
+			errorCode = "workspace_restore_failed"
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.workspace_restores
+			SET state='failed',abort_receipt_json=$2,failed_at=$3,updated_at=$3
+			WHERE id=$1`,
+			authority.restoreID, evidenceJSON, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner local restore abort completion: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.operations
+			SET state='failed',error_code=$2,error_message=$3,retryable=false,
+			    completed_at=$4,updated_at=$4 WHERE id=$1 AND state='pending'`,
+			authority.operationID, errorCode, authority.failureMessage, now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner local restore failed Operation completion: %w", err)
+		}
+		return releaseRestoreWorkspaceMutation(ctx, tx, authority.workspaceID, now)
+	default:
+		return errors.New("SecondBox runner local restore completion kind is unsupported")
+	}
+}
+
+func commitLocalRestore(
+	ctx context.Context,
+	tx pgx.Tx,
+	authority localRestoreAuthority,
+	evidenceJSON []byte,
+	now time.Time,
+) error {
+	if authority.sandboxState != "stopped" ||
+		authority.sandboxGeneration != authority.expectedGeneration ||
+		authority.workspaceGeneration != authority.expectedGeneration {
+		return errors.New("SecondBox runner local restore swap conflicts with current generation")
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.sandboxes
+		SET generation=$2,revision=revision+1,updated_at=$3
+		WHERE id=$1 AND generation=$4 AND state='stopped'`,
+		authority.sandboxID, authority.targetGeneration, now, authority.expectedGeneration,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner local restore Sandbox commit: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.workspaces
+		SET generation=$2,local_receipt_json=$3,
+		    mutation_kind='',mutation_id='',mutation_effect_id='',
+		    mutation_operation_id='',mutation_expected_generation=NULL,
+		    mutation_target_generation=NULL,mutation_state='',updated_at=$4
+		WHERE id=$1 AND generation=$5`,
+		authority.workspaceID, authority.targetGeneration, evidenceJSON, now,
+		authority.expectedGeneration,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner local restore Workspace commit: %w", err)
+	}
+	if err := fenceGenerationAuthority(
+		ctx, tx, authority.sandboxID, authority.operationID,
+		authority.expectedGeneration, now,
+	); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.workspace_restores
+		SET state='database_committed',swap_receipt_json=$2,
+		    database_committed_at=$3,updated_at=$3 WHERE id=$1`,
+		authority.restoreID, evidenceJSON, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner local restore database commit evidence: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.operations
+		SET state='succeeded',completed_at=$2,updated_at=$2
+		WHERE id=$1 AND state='pending'`,
+		authority.operationID, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner local restore Operation completion: %w", err)
+	}
+	auditDetails, err := json.Marshal(map[string]string{
+		"restoreId":          authority.restoreID,
+		"snapshotId":         authority.snapshotID,
+		"previousGeneration": fmt.Sprintf("%d", authority.expectedGeneration),
+		"generation":         fmt.Sprintf("%d", authority.targetGeneration),
+	})
+	if err != nil {
+		return fmt.Errorf("SecondBox runner local restore audit encoding: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.audit_events (
+			id,tenant_ref,subject_ref,actor_kind,actor_id,action,resource_kind,
+			resource_id,outcome,request_id,details_json,created_at
+		) VALUES (
+			$1,$2,$3,'system','runner-reconciler','snapshot.restore_committed',
+			'sandbox',$4,'succeeded',$5,$6,$7
+		)`,
+		"audit_snapshot_restore_commit_"+authority.restoreID,
+		authority.tenantRef,
+		authority.subjectRef,
+		authority.sandboxID,
+		authority.requestID,
+		auditDetails,
+		now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner local restore audit insert: %w", err)
+	}
+	return queueRestorePhase(
+		ctx, tx, authority, authority.finalizeEffectID, authority.finalizeCommandID,
+		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE,
+		"local_snapshot_restore_finalize", authority.targetGeneration, now,
+	)
+}
+
+func beginLocalRestoreAbort(
+	ctx context.Context,
+	tx pgx.Tx,
+	authority localRestoreAuthority,
+	result *runnerv1.LocalWorkspaceResult,
+	evidenceJSON []byte,
+	now time.Time,
+) error {
+	errorCode := localWorkspaceOperationErrorCode(result.Terminal)
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.lifecycle_effects
+		SET state='runner_failed',failure_class=$2,failure_message=$3,
+		    evidence_json=$4,updated_at=$5 WHERE id=$1`,
+		result.EffectId, errorCode, result.SafeDetail, evidenceJSON, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner local restore prepare failure: %w", err)
+	}
+	if err := acknowledgeRunnerCommand(ctx, tx, authority.effectCommandID, now); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.workspace_restores
+		SET state='aborting',failure_class=$2,failure_message=$3,updated_at=$4
+		WHERE id=$1`,
+		authority.restoreID, errorCode, result.SafeDetail, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner local restore abort transition: %w", err)
+	}
+	if err := advanceRestoreWorkspaceMutation(
+		ctx, tx, authority, authority.abortEffectID, "queued", now,
+	); err != nil {
+		return err
+	}
+	return queueRestorePhase(
+		ctx, tx, authority, authority.abortEffectID, authority.abortCommandID,
+		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT,
+		"local_snapshot_restore_abort", authority.expectedGeneration, now,
+	)
+}
+
+func retryLocalRestorePhase(
+	ctx context.Context,
+	tx pgx.Tx,
+	authority localRestoreAuthority,
+	phase localRestorePhase,
+	result *runnerv1.LocalWorkspaceResult,
+	evidenceJSON []byte,
+	now time.Time,
+) error {
+	if err := acknowledgeRunnerCommand(ctx, tx, authority.effectCommandID, now); err != nil {
+		return err
+	}
+	nextRetry := authority.effectRetryCount + 1
+	retryCommandID := fmt.Sprintf("%s-retry-%d", phase.commandID, nextRetry)
+	commandKind := result.Kind
+	_, payload, err := restoreCommandPayload(
+		authority, phase.effectID, retryCommandID, commandKind,
+	)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.runner_commands (
+			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
+			delivery_count,created_at,updated_at,delivered_at
+		) VALUES ($1,$2,$3,'local-workspace',$4,'pending','',0,$5,$5,NULL)`,
+		retryCommandID, authority.homeRunnerID, phase.effectID, payload, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner local restore retry command insert: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.lifecycle_effects
+		SET state='queued',command_id=$2,retry_count=$3,
+		    effect_deadline=$4,failure_class=$5,failure_message=$6,
+		    evidence_json=$7,updated_at=$8 WHERE id=$1`,
+		phase.effectID, retryCommandID, nextRetry, now.Add(10*time.Minute),
+		localWorkspaceOperationErrorCode(result.Terminal), result.SafeDetail,
+		evidenceJSON, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner local restore retry effect update: %w", err)
+	}
+	if result.Kind != runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE {
+		if err := advanceRestoreWorkspaceMutation(
+			ctx, tx, authority, phase.effectID, "queued", now,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func advanceRestoreWorkspaceMutation(
+	ctx context.Context,
+	tx pgx.Tx,
+	authority localRestoreAuthority,
+	effectID string,
+	state string,
+	now time.Time,
+) error {
+	tag, err := tx.Exec(ctx, `
+		UPDATE secondbox.workspaces
+		SET mutation_effect_id=$2,mutation_state=$3,updated_at=$4
+		WHERE id=$1 AND mutation_id=$5 AND mutation_kind='snapshot_restore'
+		  AND mutation_operation_id=$6`,
+		authority.workspaceID, effectID, state, now,
+		authority.restoreID, authority.operationID,
+	)
+	if err != nil {
+		return fmt.Errorf("SecondBox runner local restore Workspace mutation advance: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.New("SecondBox runner local restore Workspace mutation was lost")
+	}
+	return nil
+}
+
+func releaseRestoreWorkspaceMutation(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID string,
+	now time.Time,
+) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.workspaces
+		SET mutation_kind='',mutation_id='',mutation_effect_id='',mutation_operation_id='',
+		    mutation_expected_generation=NULL,mutation_target_generation=NULL,
+		    mutation_state='',updated_at=$2 WHERE id=$1`,
+		workspaceID, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner local restore Workspace mutation release: %w", err)
+	}
+	return nil
+}
+
+func queueRestorePhase(
+	ctx context.Context,
+	tx pgx.Tx,
+	authority localRestoreAuthority,
+	effectID string,
+	commandID string,
+	kind runnerv1.LocalWorkspaceCommandKind,
+	effectKind string,
+	generation int64,
+	now time.Time,
+) error {
+	_, payload, err := restoreCommandPayload(authority, effectID, commandID, kind)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.lifecycle_effects (
+			id,sandbox_id,generation,kind,state,assignment_id,instance_id,runner_id,
+			command_id,storage_object_id,fencing_token,retry_count,retry_limit,effect_deadline,
+			claim_owner,claim_expires_at,failure_class,failure_message,payload_json,evidence_json,
+			created_at,updated_at
+		) VALUES (
+			$1,$2,$3,$4,'queued','','',$5,$6,$7,$8,0,8,$9,'',$10,'','','{}','{}',$10,$10
+		)`,
+		effectID, authority.sandboxID, generation, effectKind, authority.homeRunnerID,
+		commandID, authority.snapshotID, authority.fencingToken,
+		now.Add(10*time.Minute), now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner local restore effect queue: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.runner_commands (
+			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
+			delivery_count,created_at,updated_at,delivered_at
+		) VALUES ($1,$2,$3,'local-workspace',$4,'pending','',0,$5,$5,NULL)`,
+		commandID, authority.homeRunnerID, effectID, payload, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner local restore command queue: %w", err)
+	}
+	return nil
+}
+
+func restoreCommandPayload(
+	authority localRestoreAuthority,
+	effectID string,
+	commandID string,
+	kind runnerv1.LocalWorkspaceCommandKind,
+) (*runnerv1.LocalWorkspaceCommand, []byte, error) {
+	correlationGeneration := authority.expectedGeneration
+	if kind == runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE {
+		correlationGeneration = authority.targetGeneration
+	}
+	command := &runnerv1.LocalWorkspaceCommand{
+		MessageId: commandID, CommandVersion: 1, Kind: kind,
+		OperationId: authority.operationID, EffectId: effectID,
+		SandboxId: authority.sandboxID, WorkspaceId: authority.workspaceID,
+		SnapshotId:           authority.snapshotID,
+		ExpectedGeneration:   uint64(authority.expectedGeneration),
+		NextGeneration:       uint64(authority.targetGeneration),
+		LogicalCapacityBytes: uint64(authority.capacity),
+		FencingToken:         append([]byte(nil), authority.fencingToken...),
+		Correlation: &runnerv1.Correlation{
+			RequestId: authority.requestID, OperationId: authority.operationID,
+			SandboxId:         authority.sandboxID,
+			SandboxGeneration: uint64(correlationGeneration),
+			RunnerId:          authority.homeRunnerID,
+		},
+	}
+	payload, err := proto.Marshal(&runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_LocalWorkspace{
+			LocalWorkspace: command,
+		},
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("SecondBox runner local restore command encoding: %w", err)
+	}
+	return command, payload, nil
+}
+
+func acknowledgeRunnerCommand(
+	ctx context.Context,
+	tx pgx.Tx,
+	commandID string,
+	now time.Time,
+) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.runner_commands
+		SET state='acknowledged',updated_at=$2 WHERE id=$1`,
+		commandID, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner local Workspace command acknowledgement: %w", err)
+	}
+	return nil
+}
+
+func fenceGenerationAuthority(
+	ctx context.Context,
+	tx pgx.Tx,
+	sandboxID string,
+	restoreOperationID string,
+	generation int64,
+	now time.Time,
+) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.assignments
+		SET state='fenced',reconcile_owner='',reconcile_claim_expires_at=$3,
+		    failure_class=CASE
+		      WHEN failure_class='' THEN 'fencing' ELSE failure_class
+		    END,
+		    revision=revision+1,updated_at=$3
+		WHERE sandbox_id=$1 AND generation=$2
+		  AND state NOT IN ('fenced','released')`,
+		sandboxID, generation, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox restored generation Assignment fence: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.instances
+		SET state='stopped',guest_liveness='lost',
+		    termination_reason=CASE
+		      WHEN termination_reason='' THEN 'fenced' ELSE termination_reason
+		    END,
+		    stopped_at=COALESCE(stopped_at,$3),updated_at=$3
+		WHERE sandbox_id=$1 AND generation=$2 AND state<>'stopped'`,
+		sandboxID, generation, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox restored generation Instance fence: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.runner_commands
+		SET state='expired',target_connection_id='',updated_at=$3
+		WHERE state IN ('pending','delivering','delivered')
+		  AND (
+		    assignment_id IN (
+		      SELECT id FROM secondbox.assignments
+		      WHERE sandbox_id=$1 AND generation=$2
+		    )
+		    OR assignment_id IN (
+		      SELECT id FROM secondbox.lifecycle_effects
+		      WHERE sandbox_id=$1 AND generation=$2 AND state='queued'
+		    )
+		  )`,
+		sandboxID, generation, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox restored generation Runner command fence: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.lifecycle_effects
+		SET state='runner_failed',failure_class='generation_fenced',
+		    failure_message='Sandbox generation was fenced by Snapshot restore',
+		    claim_owner='',claim_expires_at=$3,updated_at=$3
+		WHERE sandbox_id=$1 AND generation=$2 AND state='queued'`,
+		sandboxID, generation, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox restored generation lifecycle effect fence: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.operations
+		SET state='failed',error_code='generation_fenced',
+		    error_message='Sandbox generation was fenced by Snapshot restore',
+		    retryable=false,completed_at=$3,updated_at=$3
+		WHERE sandbox_id=$1 AND id<>$2
+		  AND state IN ('pending','running')`,
+		sandboxID, restoreOperationID, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox restored generation Operation fence: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.leases
+		SET state='fenced',revision=revision+1,updated_at=$3
+		WHERE sandbox_id=$1 AND generation=$2 AND state='active'`,
+		sandboxID, generation, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox restored generation Lease fence: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.data_plane_sessions
+		SET state='failed',
+		    terminal_kind=CASE
+		      WHEN kind IN ('exec','terminal') THEN 'EXEC_TERMINAL_KIND_INFRASTRUCTURE_FAILED'
+		      WHEN kind='port' THEN 'PORT_TERMINAL_KIND_FENCED'
+		      ELSE 'FILE_TERMINAL_KIND_FENCED'
+		    END,
+		    terminal_detail='Sandbox generation was fenced',
+		    infrastructure_failure_reason='INFRASTRUCTURE_FAILURE_REASON_GENERATION_FENCED',
+		    retryable=false,terminal_message='Sandbox generation was fenced',
+		    completed_at=$3,updated_at=$3,retain_until=GREATEST(retain_until,$3)
+		WHERE sandbox_id=$1 AND generation=$2
+		  AND state IN ('pending','running','cancelling')`,
+		sandboxID, generation, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox restored generation data-plane fence: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.port_sessions
+		SET state='fenced',closed_at=$3,updated_at=$3
+		WHERE sandbox_id=$1 AND generation=$2 AND state IN ('open','closing')`,
+		sandboxID, generation, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox restored generation PortSession fence: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.activity_sessions
+		SET state='closed',closed_at=COALESCE(closed_at,$3),updated_at=$3
+		WHERE sandbox_id=$1 AND generation=$2 AND state='active'`,
+		sandboxID, generation, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox restored generation activity fence: %w", err)
+	}
+	return nil
+}
+
+func localWorkspaceOperationErrorCode(
+	terminal runnerv1.LocalWorkspaceTerminalKind,
+) string {
+	switch terminal {
+	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_LOCAL_DATA_ABSENT:
+		return "workspace_local_data_absent"
+	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_ACTIVE_WRITER:
+		return "workspace_active_writer"
+	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STORAGE_INCOMPATIBLE:
+		return "workspace_storage_incompatible"
+	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_INSUFFICIENT_SPACE:
+		return "workspace_insufficient_space"
+	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_CORRUPT_RECEIPT:
+		return "workspace_receipt_corrupt"
+	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_CONFLICTING_REPLAY:
+		return "workspace_replay_conflict"
+	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_WRONG_HOME_RUNNER:
+		return "home_runner_mismatch"
+	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SNAPSHOT_IN_USE:
+		return "snapshot_in_use"
+	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_RESTORE_PENDING:
+		return "snapshot_restore_pending"
+	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_RUNNER_FAILED:
+		return "workspace_runner_failed"
+	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STALE_GENERATION,
+		runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STALE_FENCE:
+		return "workspace_authority_stale"
+	default:
+		return "workspace_operation_failed"
+	}
+}
+
+func validateLocalWorkspaceResult(
+	runnerID string,
+	result *runnerv1.LocalWorkspaceResult,
+) error {
+	if strings.TrimSpace(runnerID) == "" ||
+		result == nil ||
+		result.CommandVersion != 1 ||
+		result.Kind == runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_UNSPECIFIED ||
+		result.Terminal == runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_UNSPECIFIED ||
+		strings.TrimSpace(result.EffectId) == "" {
+		return errors.New("SecondBox runner local-workspace result is incomplete")
+	}
+	if result.Kind != runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE &&
+		(strings.TrimSpace(result.SandboxId) == "" ||
+			strings.TrimSpace(result.WorkspaceId) == "") {
+		return errors.New("SecondBox runner local-workspace result identity is incomplete")
+	}
+	for _, item := range result.Inventory {
+		if item == nil || strings.TrimSpace(item.WorkspaceId) == "" ||
+			item.Generation == 0 ||
+			item.LogicalCapacityBytes == 0 ||
+			item.LogicalCapacityBytes > uint64(^uint64(0)>>1) {
+			return errors.New("SecondBox runner local-workspace inventory is incomplete")
+		}
+	}
+	for _, receipt := range result.Receipts {
+		if receipt == nil ||
+			receipt.Kind == runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_UNSPECIFIED ||
+			receipt.Kind == runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_INSPECT ||
+			receipt.Kind == runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE ||
+			strings.TrimSpace(receipt.OperationId) == "" ||
+			strings.TrimSpace(receipt.WorkspaceId) == "" ||
+			receipt.ReceiptRecordedAtUnixMs == 0 {
+			return errors.New("SecondBox runner local-workspace receipt inventory is incomplete")
+		}
+		if receipt.Kind != runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT &&
+			(receipt.Generation == 0 ||
+				receipt.LogicalCapacityBytes == 0 ||
+				receipt.LogicalCapacityBytes > uint64(^uint64(0)>>1)) {
+			return errors.New("SecondBox runner local-workspace receipt authority is incomplete")
+		}
+	}
+	if result.Terminal == runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED {
+		if result.SafeDetail != "" {
+			return errors.New("SecondBox runner local-workspace success contains failure detail")
+		}
+	} else if result.SafeDetail != expectedLocalWorkspaceSafeDetail(result.Terminal) {
+		return errors.New("SecondBox runner local-workspace failure detail is not canonical")
+	}
+	return nil
+}
+
+func expectedLocalWorkspaceSafeDetail(terminal runnerv1.LocalWorkspaceTerminalKind) string {
+	switch terminal {
+	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_LOCAL_DATA_ABSENT:
+		return "local workspace data is absent"
+	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_ACTIVE_WRITER:
+		return "workspace has an active writer"
+	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STALE_GENERATION:
+		return "workspace generation is stale"
+	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STALE_FENCE:
+		return "workspace fencing authority is stale"
+	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STORAGE_INCOMPATIBLE:
+		return "local workspace storage is incompatible"
+	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_INSUFFICIENT_SPACE:
+		return "local workspace storage has insufficient space"
+	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_CORRUPT_RECEIPT:
+		return "local workspace receipt is corrupt"
+	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_CONFLICTING_REPLAY:
+		return "local workspace operation conflicts with its durable receipt"
+	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_WRONG_HOME_RUNNER:
+		return "workspace is not owned by this runner"
+	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SNAPSHOT_IN_USE:
+		return "snapshot is in use"
+	case runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_RESTORE_PENDING:
+		return "workspace restore is pending"
+	default:
+		return "local workspace operation failed"
+	}
 }
 
 func (store *PostgresStateStore) validatePersistedInstanceTerminal(
@@ -511,79 +2555,6 @@ func observedInstanceTerminationReason(
 	}
 }
 
-func recordCheckpointEvent(
-	ctx context.Context,
-	tx pgx.Tx,
-	runnerID string,
-	message *runnerv1.RunnerToControlPlane,
-	now time.Time,
-) error {
-	var (
-		fence           *runnerv1.AssignmentFence
-		checkpointID    string
-		storageObjectID string
-	)
-	switch {
-	case message.GetCheckpointChunk() != nil:
-		chunk := message.GetCheckpointChunk()
-		fence, checkpointID, storageObjectID = chunk.Fence, chunk.CheckpointId, chunk.StorageObjectId
-	case message.GetCheckpointResult() != nil:
-		result := message.GetCheckpointResult()
-		fence, checkpointID, storageObjectID = result.Fence, result.CheckpointId, result.StorageObjectId
-	default:
-		return ErrRunnerMessage
-	}
-	if checkpointID == "" || storageObjectID == "" {
-		return errors.New("SecondBox runner checkpoint identity is incomplete")
-	}
-	if err := lockAndValidateFence(ctx, tx, runnerID, fence); err != nil {
-		return err
-	}
-	var effectState string
-	if err := tx.QueryRow(ctx, `
-		SELECT state FROM secondbox.lifecycle_effects
-		WHERE checkpoint_id=$1 AND storage_object_id=$2 AND assignment_id=$3
-		  AND runner_id=$4 AND generation=$5 FOR UPDATE`,
-		checkpointID, storageObjectID, fence.AssignmentId, runnerID, fence.SandboxGeneration,
-	).Scan(&effectState); err != nil {
-		return fmt.Errorf("SecondBox runner checkpoint effect lookup: %w", err)
-	}
-	if effectState == "published" {
-		return nil
-	}
-	result := message.GetCheckpointResult()
-	if result == nil {
-		return nil
-	}
-	if err := validateOperationCorrelation(runnerID, result.Fence, result.Correlation); err != nil {
-		return err
-	}
-	evidenceJSON, err := json.Marshal(map[string]any{
-		"terminal": result.Terminal.String(), "sha256": result.Sha256,
-		"sizeBytes": result.SizeBytes, "compatibility": result.Compatibility,
-		"terminationEvidenceDigest": result.TerminationEvidenceDigest,
-	})
-	if err != nil {
-		return fmt.Errorf("SecondBox runner CheckpointResult evidence encoding: %w", err)
-	}
-	state := "runner_failed"
-	if result.Terminal == runnerv1.CheckpointTerminalKind_CHECKPOINT_TERMINAL_KIND_CREATED {
-		if result.Sha256 == "" || result.SizeBytes == 0 || len(result.Compatibility) == 0 {
-			return errors.New("SecondBox runner created CheckpointResult lacks integrity evidence")
-		}
-		return nil
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.lifecycle_effects
-		SET state=$2,evidence_json=$3,updated_at=$4
-		WHERE checkpoint_id=$1`,
-		checkpointID, state, evidenceJSON, now,
-	); err != nil {
-		return fmt.Errorf("SecondBox runner CheckpointResult update: %w", err)
-	}
-	return nil
-}
-
 func (store *PostgresStateStore) beginOrderedMessage(
 	ctx context.Context,
 	runnerID string,
@@ -729,6 +2700,11 @@ func recordAssignmentEvent(
 		); err != nil {
 			return fmt.Errorf("SecondBox runner AssignmentAck update: %w", err)
 		}
+		if state == "failed" {
+			if err := releaseFailedStartMutation(ctx, tx, runnerID, ack.Fence, now); err != nil {
+				return err
+			}
+		}
 	case message.GetAssignmentProgress() != nil:
 		progress := message.GetAssignmentProgress()
 		if err := lockAndValidateFence(ctx, tx, runnerID, progress.Fence); err != nil {
@@ -781,13 +2757,25 @@ func recordAssignmentEvent(
 			); err != nil {
 				return fmt.Errorf("SecondBox runner ready Instance update: %w", err)
 			}
-			if _, err := tx.Exec(ctx, `
-				UPDATE secondbox.workspace_materializations
-				SET state='ready',revision=revision+1,updated_at=$2
-				WHERE assignment_id=$1 AND generation=$3 AND state IN ('preparing','ready')`,
-				result.Fence.AssignmentId, now, result.Fence.SandboxGeneration,
-			); err != nil {
-				return fmt.Errorf("SecondBox runner ready Workspace materialization update: %w", err)
+			command, err := tx.Exec(ctx, `
+				UPDATE secondbox.workspaces AS workspace
+				SET mutation_kind='',mutation_id='',mutation_effect_id='',
+				    mutation_operation_id='',mutation_expected_generation=NULL,
+				    mutation_target_generation=NULL,mutation_state='',updated_at=$1
+				FROM secondbox.sandboxes AS sandbox
+				WHERE sandbox.id=$2 AND sandbox.workspace_id=workspace.id
+				  AND workspace.home_runner_id=$3
+				  AND workspace.mutation_kind='start'
+				  AND workspace.mutation_operation_id=$4
+				  AND workspace.mutation_expected_generation=$5`,
+				now, result.Fence.SandboxId, runnerID,
+				result.Correlation.OperationId, result.Fence.SandboxGeneration,
+			)
+			if err != nil {
+				return fmt.Errorf("SecondBox runner ready Workspace start release: %w", err)
+			}
+			if command.RowsAffected() != 1 {
+				return errors.New("SecondBox runner ready AssignmentResult lacks the durable Workspace start mutation")
 			}
 			return nil
 		}
@@ -798,8 +2786,40 @@ func recordAssignmentEvent(
 		); err != nil {
 			return fmt.Errorf("SecondBox runner failed AssignmentResult update: %w", err)
 		}
+		if err := releaseFailedStartMutation(ctx, tx, runnerID, result.Fence, now); err != nil {
+			return err
+		}
 	default:
 		return ErrRunnerMessage
+	}
+	return nil
+}
+
+func releaseFailedStartMutation(
+	ctx context.Context,
+	tx pgx.Tx,
+	runnerID string,
+	fence *runnerv1.AssignmentFence,
+	now time.Time,
+) error {
+	tag, err := tx.Exec(ctx, `
+		UPDATE secondbox.workspaces AS workspace
+		SET mutation_kind='',mutation_id='',mutation_effect_id='',
+		    mutation_operation_id='',mutation_expected_generation=NULL,
+		    mutation_target_generation=NULL,mutation_state='',updated_at=$1
+		FROM secondbox.sandboxes AS sandbox
+		WHERE sandbox.id=$2 AND sandbox.workspace_id=workspace.id
+		  AND sandbox.current_instance_id=$3 AND sandbox.generation=$4
+		  AND workspace.home_runner_id=$5
+		  AND workspace.mutation_kind='start'
+		  AND workspace.mutation_expected_generation=$4`,
+		now, fence.SandboxId, fence.InstanceId, fence.SandboxGeneration, runnerID,
+	)
+	if err != nil {
+		return fmt.Errorf("SecondBox runner failed start Workspace mutation release: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.New("SecondBox runner failed Assignment lacks the durable Workspace start mutation")
 	}
 	return nil
 }
@@ -861,20 +2881,58 @@ func recordFenceEvent(
 	if err != nil {
 		return fmt.Errorf("SecondBox runner FenceResult proof encoding: %w", err)
 	}
+	var (
+		stopEffectID, stopCommandID, workspaceID, homeRunnerID    string
+		mutationKind, mutationID, mutationEffectID, mutationState string
+		workspaceGeneration, capacity                             int64
+	)
+	stopAuthorityErr := tx.QueryRow(ctx, `
+		SELECT effect.id,effect.command_id,workspace.id,workspace.home_runner_id,
+		       workspace.mutation_kind,workspace.mutation_id,
+		       workspace.mutation_effect_id,workspace.mutation_state,
+		       workspace.generation,workspace.logical_capacity_bytes
+		FROM secondbox.lifecycle_effects AS effect
+		JOIN secondbox.sandboxes AS sandbox ON sandbox.id=effect.sandbox_id
+		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+		WHERE effect.assignment_id=$1 AND effect.kind='stop' AND effect.state='queued'
+		FOR UPDATE OF effect,workspace`,
+		result.Fence.AssignmentId,
+	).Scan(
+		&stopEffectID, &stopCommandID, &workspaceID, &homeRunnerID,
+		&mutationKind, &mutationID, &mutationEffectID, &mutationState,
+		&workspaceGeneration, &capacity,
+	)
+	hasStopAuthority := stopAuthorityErr == nil
+	if stopAuthorityErr != nil && !errors.Is(stopAuthorityErr, pgx.ErrNoRows) {
+		return fmt.Errorf("SecondBox runner stop Workspace authority lookup: %w", stopAuthorityErr)
+	}
+	if hasStopAuthority {
+		if homeRunnerID != runnerID ||
+			mutationKind != "stop" ||
+			mutationID != stopEffectID ||
+			mutationEffectID != stopEffectID ||
+			mutationState == "" ||
+			workspaceGeneration != int64(result.Fence.SandboxGeneration) {
+			return errors.New("SecondBox runner stop Workspace mutation conflicts with durable authority")
+		}
+	} else {
+		var failureClass string
+		if err := tx.QueryRow(ctx, `
+			SELECT failure_class FROM secondbox.assignments WHERE id=$1`,
+			result.Fence.AssignmentId,
+		).Scan(&failureClass); err != nil {
+			return fmt.Errorf("SecondBox runner-loss Assignment classification lookup: %w", err)
+		}
+		if failureClass != "fencing" {
+			return errors.New("SecondBox runner FenceResult lacks a durable stop effect")
+		}
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.assignments
 		SET state='fenced',release_proof_json=$2,revision=revision+1,updated_at=$3
 		WHERE id=$1`, result.Fence.AssignmentId, proofJSON, now,
 	); err != nil {
 		return fmt.Errorf("SecondBox runner successful FenceResult update: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.lifecycle_effects
-		SET state='runner_succeeded',evidence_json=$2,updated_at=$3
-		WHERE assignment_id=$1 AND kind='stop' AND state='queued'`,
-		result.Fence.AssignmentId, proofJSON, now,
-	); err != nil {
-		return fmt.Errorf("SecondBox runner successful stop effect update: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.instances AS instance
@@ -900,21 +2958,68 @@ func recordFenceEvent(
 		return fmt.Errorf("SecondBox runner fenced Instance update: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.workspace_materializations
-		SET state='released',release_proof_json=$2,revision=revision+1,
-		    released_at=$3,updated_at=$3
-		WHERE assignment_id=$1 AND generation=$4 AND state IN ('preparing','ready')`,
-		result.Fence.AssignmentId, proofJSON, now, result.Fence.SandboxGeneration,
-	); err != nil {
-		return fmt.Errorf("SecondBox runner fenced Workspace materialization release: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.activity_sessions
 		SET state='closed',closed_at=$2,last_activity_at=$2
 		WHERE sandbox_id=$1 AND generation=$3 AND state='active'`,
 		result.Fence.SandboxId, now, result.Fence.SandboxGeneration,
 	); err != nil {
 		return fmt.Errorf("SecondBox runner fenced activity session closure: %w", err)
+	}
+	if !hasStopAuthority {
+		return nil
+	}
+	localCommandID := stopEffectID + "-generation-advance"
+	localCommand := &runnerv1.LocalWorkspaceCommand{
+		MessageId: localCommandID, CommandVersion: 1,
+		Kind:        runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION,
+		OperationId: stopEffectID, EffectId: stopEffectID,
+		SandboxId: result.Fence.SandboxId, WorkspaceId: workspaceID,
+		ExpectedGeneration:   result.Fence.SandboxGeneration,
+		NextGeneration:       result.Fence.SandboxGeneration + 1,
+		LogicalCapacityBytes: uint64(capacity),
+		FencingToken:         append([]byte(nil), result.Fence.FencingToken...),
+		Correlation: &runnerv1.Correlation{
+			RequestId: result.Correlation.RequestId, OperationId: stopEffectID,
+			SandboxId:         result.Fence.SandboxId,
+			SandboxGeneration: result.Fence.SandboxGeneration,
+			RunnerId:          runnerID,
+		},
+	}
+	payload, err := proto.Marshal(&runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_LocalWorkspace{
+			LocalWorkspace: localCommand,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("SecondBox runner stop generation-advance command encoding: %w", err)
+	}
+	if err := acknowledgeRunnerCommand(ctx, tx, stopCommandID, now); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.runner_commands (
+			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
+			delivery_count,created_at,updated_at,delivered_at
+		) VALUES ($1,$2,$3,'local-workspace',$4,'pending','',0,$5,$5,NULL)`,
+		localCommandID, runnerID, stopEffectID, payload, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner stop generation-advance command queue: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.lifecycle_effects
+		SET command_id=$2,state='queued',evidence_json=$3,updated_at=$4
+		WHERE id=$1`,
+		stopEffectID, localCommandID, proofJSON, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner stop generation-advance effect update: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.workspaces
+		SET mutation_state='advancing',updated_at=$2
+		WHERE id=$1 AND mutation_id=$3`,
+		workspaceID, now, stopEffectID,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner stop generation-advance mutation update: %w", err)
 	}
 	return nil
 }
@@ -993,6 +3098,14 @@ func lockAndValidateFence(
 	if fence == nil || fence.AssignmentId == "" || fence.SandboxId == "" ||
 		fence.InstanceId == "" || fence.SandboxGeneration == 0 ||
 		len(fence.FencingToken) == 0 {
+		return ErrStaleAssignmentEvidence
+	}
+	locked, err := rowlock.SandboxWorkspaceByID(ctx, tx, fence.SandboxId)
+	if err != nil {
+		return fmt.Errorf("SecondBox runner Sandbox/Workspace fence lookup: %w", err)
+	}
+	if locked.Generation != int64(fence.SandboxGeneration) ||
+		locked.CurrentInstanceID != fence.InstanceId {
 		return ErrStaleAssignmentEvidence
 	}
 	var storedSandboxID, storedInstanceID, storedRunnerID string

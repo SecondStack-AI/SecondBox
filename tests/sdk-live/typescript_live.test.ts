@@ -97,7 +97,6 @@ function liveIdempotencyHeaders(value: string): Readonly<Record<string, string>>
 
 function liveProfileRevisionSpec(): ProfileRevisionSpec {
   return {
-    backend: "firecracker",
     pool: composeRunnerPoolName,
     architecture: "amd64",
     runtimeBundleDigest: `sha256:${"a".repeat(64)}`,
@@ -116,10 +115,9 @@ function liveProfileRevisionSpec(): ProfileRevisionSpec {
       maximumDurationSeconds: 3600,
       leaseSeconds: 60,
     },
-    checkpoint: {
-      onStop: false,
-      retentionSeconds: 86400,
+    retention: {
       snapshotLimit: 8,
+      snapshotRetentionSeconds: 86400,
       artifactRetentionSeconds: 86400,
     },
     execution: {

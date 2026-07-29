@@ -862,6 +862,14 @@ func (LinuxRestoreHardener) Harden(_ context.Context, input RestoreHardenInput) 
 		_ = f.Close()
 		return fmt.Errorf("mix entropy: %w", err)
 	}
+	if err := unix.IoctlSetPointerInt(
+		int(f.Fd()),
+		unix.RNDADDTOENTCNT,
+		len(input.Entropy)*8,
+	); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("credit host entropy: %w", err)
+	}
 	// Force an immediate CSPRNG reseed so cloned restores get divergent entropy.
 	// Firecracker's minimal kernel runs without ACPI, so CONFIG_VMGENID (an ACPI
 	// driver) is unavailable; this explicit reseed of host-supplied entropy is the

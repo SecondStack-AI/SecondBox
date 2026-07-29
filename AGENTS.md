@@ -3,7 +3,10 @@
 - `Sandbox` is the durable public resource. `Instance` is replaceable compute fenced to one Sandbox generation.
 - The control plane is unprivileged. Only separately deployed SecondBox runners may use KVM, Firecracker, TUN/TAP, host cgroups, or host workspace paths.
 - Runners establish authenticated outbound connections to the control plane. Application API credentials and runner credentials are separate authorities.
-- PostgreSQL owns desired state, assignments, generations, leases, profiles, audit, and reconciliation. S3-compatible storage owns portable checkpoints, snapshots, artifacts, and immutable execution assets.
+- PostgreSQL owns desired state, immutable home assignments, generations, leases, profiles, audit, and reconciliation. Each runner's reflink-capable workspace root owns the Workspaces and Snapshots homed there. S3-compatible storage owns Artifacts and immutable execution assets only.
+- A Sandbox never relocates after initial placement. Loss of an unbacked home-runner workspace filesystem loses that Sandbox; PostgreSQL or S3 recovery alone is insufficient.
+- Workspace persistence is reflink-only and runner-local. Do not stream image bytes, expose local paths, add copy fallbacks, or reconstruct an empty Workspace when local data is absent.
+- Only the runner's WorkspaceStore resolves local paths. Compute backends receive an opaque provider-neutral Workspace attachment and must preserve its generation fence and exclusive writer lock.
 - Firecracker is the only implemented v1 backend. Keep the provider-neutral compute port and its conformance suite, but do not add placeholder backends or fallback execution.
 - Operators create every profile explicitly. A Sandbox is pinned to the immutable profile revision resolved at creation.
 - Public contracts use provider-neutral SecondBox domain language. Firecracker, KVM, runner credentials, host paths, storage keys, fencing tokens, and backend references do not enter public schemas.

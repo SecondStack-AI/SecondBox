@@ -68,7 +68,7 @@ func TestAssignmentWorkerSeparatesStartupTimeoutFromRunnerLoss(t *testing.T) {
 		FailureClass: FailureFencing,
 	}
 	if decision := assignmentWorkerDecision(runnerLoss, now); decision.Action != ActionAdvanceGeneration ||
-		!decision.MayReassign || decision.NextGeneration != 5 {
+		decision.NextGeneration != 5 {
 		t.Fatalf("proved Runner loss decision = %#v", decision)
 	}
 	ordinaryStop := AssignmentState{

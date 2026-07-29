@@ -13,7 +13,7 @@ do
             deb\ *|deb-src\ *|URIs:\ *)
                 found_source=1
                 printf '%s\n' "$source_line" |
-                    grep -Eq 'https://snapshot\.debian\.org/archive/debian/[0-9]{8}T[0-9]{6}Z/' ||
+                    grep -Eq 'https://snapshot\.debian\.org/archive/debian/[0-9]{8}T[0-9]{6}Z/?([[:space:]]|$)' ||
                     {
                         echo "SecondBox rootfs build failed: non-snapshot Debian source in $source_file" >&2
                         exit 2

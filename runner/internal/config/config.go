@@ -19,7 +19,6 @@ import (
 )
 
 type Config struct {
-	DataDir                                    string
 	FirecrackerPath                            string
 	JailerPath                                 string
 	MicroVMJailerChrootBaseDir                 string
@@ -34,8 +33,7 @@ type Config struct {
 	MicroVMToolSharedImagePath                 string
 	MicroVMPublicKeyPath                       string
 	MicroVMPublicKeySHA256                     string
-	MicroVMWorkspaceDir                        string
-	MicroVMCheckpointRestoreSpoolDir           string
+	RunnerWorkspaceRoot                        string
 	MicroVMRunDir                              string
 	MicroVMLogDir                              string
 	MicroVMKernelArgs                          string
@@ -46,8 +44,6 @@ type Config struct {
 	MicroVMVCPUs                               int
 	MicroVMCPUTemplate                         string
 	MicroVMWorkspaceSizeMiB                    int
-	MicroVMWorkspaceBackend                    string
-	MicroVMThinPoolDevice                      string
 	MicroVMStoragePressureRecoveryPercent      int
 	MicroVMStoragePressureWarningPercent       int
 	MicroVMStoragePressureAdmissionDenyPercent int
@@ -72,10 +68,6 @@ type Config struct {
 
 func (c *Config) ToolVMReuseEffective() bool {
 	return c != nil && c.MicroVMToolVMReuseEnabled && strings.TrimSpace(c.MicroVMBridgeCIDR) != ""
-}
-
-func (c *Config) SandboxesDir() string {
-	return filepath.Join(c.DataDir, "sandboxes")
 }
 
 func (c *Config) ValidateMicroVMTrustAnchor() error {

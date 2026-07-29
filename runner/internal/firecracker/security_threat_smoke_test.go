@@ -52,7 +52,6 @@ func TestThreatModelJailedGuestEscapeAndResourceExhaustion(t *testing.T) {
 		MicroVMToolSharedImagePath: requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"),
 		MicroVMPublicKeyPath:       requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"),
 		MicroVMPublicKeySHA256:     requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256"),
-		MicroVMWorkspaceDir:        filepath.Join(workDir, "workspaces"),
 		MicroVMRunDir:              filepath.Join(workDir, "run"),
 		MicroVMLogDir:              filepath.Join(workDir, "logs"),
 		MicroVMKernelArgs:          requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS"),

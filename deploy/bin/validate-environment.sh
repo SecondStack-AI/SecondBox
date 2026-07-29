@@ -97,8 +97,6 @@ required_settings=(
   SECONDBOX_RUNNER_ARTIFACT_HOST_DIR
   SECONDBOX_RUNNER_STATE_HOST_DIR
   SECONDBOX_RUNNER_WORKSPACE_HOST_DIR
-  SECONDBOX_RUNNER_CHECKPOINT_RESTORE_SPOOL_HOST_DIR
-  SECONDBOX_RUNNER_STATE_DIR
   SECONDBOX_RUNNER_LOG_PATH
   SECONDBOX_RUNNER_LOG_DIR
   SECONDBOX_RUNNER_FIRECRACKER_PATH
@@ -118,10 +116,7 @@ required_settings=(
   SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED
   SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY
   SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256
-  SECONDBOX_RUNNER_SANDBOX_WORKSPACE_DIR
-  SECONDBOX_RUNNER_CHECKPOINT_RESTORE_SPOOL_DIR
-  SECONDBOX_RUNNER_SANDBOX_STORAGE_BACKEND
-  SECONDBOX_RUNNER_SANDBOX_THIN_POOL_DEVICE
+  SECONDBOX_RUNNER_WORKSPACE_ROOT
   SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT
   SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT
   SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT
@@ -165,13 +160,12 @@ required_settings=(
   SECONDBOX_DEVELOPMENT_PREPARE_WAIT_TIMEOUT_SECONDS
   SECONDBOX_OBJECT_STORE_TEMP_DIRECTORY
   SECONDBOX_OBJECT_STORE_MAX_OBJECT_BYTES
-  SECONDBOX_CHECKPOINT_SPOOL_DIRECTORY
   SECONDBOX_PLATFORM_TOKEN
   SECONDBOX_DEFAULT_SUBJECT_MAX_SANDBOXES
   SECONDBOX_DEFAULT_SUBJECT_MAX_ACTIVE_INSTANCES
   SECONDBOX_DEFAULT_SUBJECT_MAX_CPU_MILLIS
   SECONDBOX_DEFAULT_SUBJECT_MAX_MEMORY_BYTES
-  SECONDBOX_DEFAULT_SUBJECT_MAX_RETAINED_BYTES
+  SECONDBOX_DEFAULT_SUBJECT_MAX_ARTIFACT_BYTES
   SECONDBOX_DEFAULT_SUBJECT_MAX_SNAPSHOTS
   SECONDBOX_DEFAULT_SUBJECT_MAX_ARTIFACTS
   SECONDBOX_DEFAULT_SUBJECT_MAX_PORT_SESSIONS
@@ -343,8 +337,7 @@ if [[ "$(value_for SECONDBOX_OBJECT_STORE_USE_PATH_STYLE)" != "true" &&
   exit 1
 fi
 for absolute_directory_setting in \
-  SECONDBOX_OBJECT_STORE_TEMP_DIRECTORY \
-  SECONDBOX_CHECKPOINT_SPOOL_DIRECTORY; do
+  SECONDBOX_OBJECT_STORE_TEMP_DIRECTORY; do
   absolute_directory="$(value_for "$absolute_directory_setting")"
   if [[ "$absolute_directory" != /* ]]; then
     echo "$absolute_directory_setting must be absolute" >&2
@@ -409,8 +402,7 @@ if [[ "$same_host_runner_enabled" == "true" ]]; then
     SECONDBOX_RUNNER_IDENTITY_HOST_DIR \
     SECONDBOX_RUNNER_ARTIFACT_HOST_DIR \
     SECONDBOX_RUNNER_STATE_HOST_DIR \
-    SECONDBOX_RUNNER_WORKSPACE_HOST_DIR \
-    SECONDBOX_RUNNER_CHECKPOINT_RESTORE_SPOOL_HOST_DIR; do
+    SECONDBOX_RUNNER_WORKSPACE_HOST_DIR; do
     runner_host_directory="$(value_for "$runner_host_directory_setting")"
     if [[ "$runner_host_directory" != /* || -L "$runner_host_directory" || ! -d "$runner_host_directory" ]]; then
       echo "$runner_host_directory_setting must be an existing absolute non-symbolic-link directory" >&2
@@ -419,11 +411,8 @@ if [[ "$same_host_runner_enabled" == "true" ]]; then
   done
   runner_root_device="$(stat -c '%d' /)"
   runner_workspace_device="$(stat -c '%d' "$(value_for SECONDBOX_RUNNER_WORKSPACE_HOST_DIR)")"
-  runner_restore_spool_device="$(stat -c '%d' "$(value_for SECONDBOX_RUNNER_CHECKPOINT_RESTORE_SPOOL_HOST_DIR)")"
-  if [[ "$runner_workspace_device" == "$runner_root_device" ||
-        "$runner_restore_spool_device" == "$runner_root_device" ||
-        "$runner_workspace_device" == "$runner_restore_spool_device" ]]; then
-    echo "Runner workspace and restore spool must use distinct dedicated non-root filesystems" >&2
+  if [[ "$runner_workspace_device" == "$runner_root_device" ]]; then
+    echo "Runner workspace root must use a dedicated non-root filesystem" >&2
     exit 1
   fi
   for runner_identity_file in runner.crt runner.key runner-ca.crt; do

@@ -23,8 +23,8 @@ func TestReconcilerConsumesDurableClaimAndCommitsOneTransition(t *testing.T) {
 	decision, found, err := reconciler.RunOnce(
 		t.Context(), time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
 	)
-	if err != nil || !found || decision.Action != ActionMaterialize ||
-		effects.action != ActionMaterialize || store.action != "" {
+	if err != nil || !found || decision.Action != ActionStartInstance ||
+		effects.action != ActionStartInstance || store.action != "" {
 		t.Fatalf(
 			"reconciliation = %#v, %t, %v, effect %q, database-only commit %q",
 			decision, found, err, effects.action, store.action,

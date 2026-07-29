@@ -167,6 +167,19 @@ func TestSecondBoxImagePipelineHasNoBaseImageDefaultOrMutableTag(t *testing.T) {
 	if !strings.Contains(allInputs, `@sha256:[0-9a-f]{64}`) {
 		t.Fatal("build input validation must require an OCI sha256 digest")
 	}
+	sourceBuilder := readRepositoryFile(
+		t,
+		"runner/scripts/microvm-image/rootfs/build-secondbox-rootfs-source.sh",
+	)
+	if !strings.Contains(sourceBuilder, `base_image_reference="$oci_base_reference"`) ||
+		!strings.Contains(sourceBuilder, `--build-arg "BASE_IMAGE=$base_image_reference"`) {
+		t.Fatal("OCI builds must preserve the repository-qualified digest reference for BuildKit")
+	}
+	for _, excludedRuntimeTree := range []string{"dev/*", "proc/*", "sys/*"} {
+		if !strings.Contains(sourceBuilder, "--exclude='"+excludedRuntimeTree+"'") {
+			t.Errorf("unprivileged rootfs export must exclude %s", excludedRuntimeTree)
+		}
+	}
 }
 
 func TestSecondBoxImageDefinitionAndPythonRequirementsArePinned(t *testing.T) {
@@ -247,6 +260,39 @@ func TestSecondBoxImagePipelineEmitsLicenseAndResolvedProvenance(t *testing.T) {
 		if !strings.Contains(pipelineFiles, requiredEvidence) {
 			t.Errorf("required provenance evidence %q is missing", requiredEvidence)
 		}
+	}
+}
+
+func TestDebianSnapshotSourcePolicyAcceptsBothCanonicalURLForms(t *testing.T) {
+	policy := readRepositoryFile(
+		t,
+		"runner/scripts/microvm-image/rootfs/config/verify-debian-snapshot-sources.sh",
+	)
+	pattern := regexp.MustCompile(
+		`https://snapshot\\\.debian\\\.org/archive/debian/\[0-9\]\{8\}T\[0-9\]\{6\}Z/\?\(\[\[:space:\]\]\|\$\)`,
+	)
+	if !pattern.MatchString(policy) {
+		t.Fatal("snapshot source policy must accept dated Debian URLs with or without a trailing slash")
+	}
+}
+
+func TestMicroVMArtifactBuilderResolvesRunnerModuleGuestAgent(t *testing.T) {
+	builder := readRepositoryFile(t, "runner/scripts/microvm-image/build.sh")
+	if !strings.Contains(builder, `runner_root="$(cd "$script_dir/../.." && pwd)"`) ||
+		!strings.Contains(builder, `repo_root="$(cd "$runner_root/.." && pwd)"`) {
+		t.Fatal("artifact builder must distinguish the runner module from the repository root")
+	}
+	if !strings.Contains(
+		builder,
+		`go -C "$runner_root" build`,
+	) || !strings.Contains(
+		builder,
+		`./cmd/secondbox-guest-agent`,
+	) {
+		t.Fatal("artifact builder must compile the guest agent from the runner module")
+	}
+	if !strings.Contains(builder, `mkdir -p "$runner_root/releases/microvm"`) {
+		t.Fatal("artifact builder must create the release-link parent directory")
 	}
 }
 

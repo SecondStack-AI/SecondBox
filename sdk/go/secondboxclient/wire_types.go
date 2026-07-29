@@ -19,34 +19,36 @@ type (
 	ServiceAccountScope = string
 	ProblemCode         = string
 
-	Profile                  = contracts.Profile
-	ProfileRevisionSpec      = contracts.ProfileRevisionSpec
-	ResourcePolicy           = contracts.ResourcePolicy
-	LifecyclePolicy          = contracts.LifecyclePolicy
-	CheckpointPolicy         = contracts.CheckpointPolicy
-	ExecutionPolicy          = contracts.ExecutionPolicy
-	NetworkPolicy            = contracts.NetworkPolicy
-	NetworkDestination       = contracts.NetworkDestination
-	PortPolicy               = contracts.PortPolicy
-	CreateProfileRequest     = contracts.CreateProfileRequest
-	Sandbox                  = contracts.Sandbox
-	CreateSandboxRequest     = contracts.CreateSandboxRequest
-	CheckpointSandboxRequest = contracts.CheckpointSandboxRequest
-	Operation                = contracts.Operation
-	Problem                  = contracts.Problem
+	Profile                = contracts.Profile
+	ProfileRevisionSpec    = contracts.ProfileRevisionSpec
+	ResourcePolicy         = contracts.ResourcePolicy
+	LifecyclePolicy        = contracts.LifecyclePolicy
+	RetentionPolicy        = contracts.RetentionPolicy
+	ExecutionPolicy        = contracts.ExecutionPolicy
+	NetworkPolicy          = contracts.NetworkPolicy
+	NetworkDestination     = contracts.NetworkDestination
+	PortPolicy             = contracts.PortPolicy
+	CreateProfileRequest   = contracts.CreateProfileRequest
+	Sandbox                = contracts.Sandbox
+	CreateSandboxRequest   = contracts.CreateSandboxRequest
+	RestoreSnapshotRequest = contracts.RestoreSnapshotRequest
+	CreateSnapshotRequest  = contracts.CreateSnapshotRequest
+	Snapshot               = contracts.Snapshot
+	SnapshotPage           = contracts.SnapshotPage
+	Operation              = contracts.Operation
+	Problem                = contracts.Problem
 )
 
 const (
-	SandboxStateCreating      = contracts.SandboxStateCreating
-	SandboxStateStopped       = contracts.SandboxStateStopped
-	SandboxStateStarting      = contracts.SandboxStateStarting
-	SandboxStateReady         = contracts.SandboxStateReady
-	SandboxStateDraining      = contracts.SandboxStateDraining
-	SandboxStateStopping      = contracts.SandboxStateStopping
-	SandboxStateCheckpointing = contracts.SandboxStateCheckpointing
-	SandboxStateFailed        = contracts.SandboxStateFailed
-	SandboxStateDeleting      = contracts.SandboxStateDeleting
-	SandboxStateDeleted       = contracts.SandboxStateDeleted
+	SandboxStateCreating = contracts.SandboxStateCreating
+	SandboxStateStopped  = contracts.SandboxStateStopped
+	SandboxStateStarting = contracts.SandboxStateStarting
+	SandboxStateReady    = contracts.SandboxStateReady
+	SandboxStateDraining = contracts.SandboxStateDraining
+	SandboxStateStopping = contracts.SandboxStateStopping
+	SandboxStateFailed   = contracts.SandboxStateFailed
+	SandboxStateDeleting = contracts.SandboxStateDeleting
+	SandboxStateDeleted  = contracts.SandboxStateDeleted
 
 	OperationStatePending   = contracts.OperationStatePending
 	OperationStateRunning   = contracts.OperationStateRunning

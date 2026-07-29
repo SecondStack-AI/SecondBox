@@ -73,6 +73,36 @@ func TestSessionRejectsRegistrationWithFailedPrerequisitesAndVersionSkew(t *test
 	}
 }
 
+func TestSessionRejectsPortableCheckpointOnlyRunner(t *testing.T) {
+	session := NewSession(SessionConfig{
+		AuthenticatedRunnerID: "runner-old",
+		SupportedVersions:     VersionRange{Minimum: 1, Maximum: 1},
+		EnabledFeatures: []runnerv1.RunnerFeature{
+			runnerv1.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
+			runnerv1.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE,
+		},
+		HeartbeatInterval: 10 * time.Second,
+		ConnectionID:      "connection-old",
+	})
+	oldRunner := helloFrame("runner-old", 1, 1)
+	oldRunner.GetHello().MandatoryFeatures = []runnerv1.RunnerFeature{
+		runnerv1.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
+		runnerv1.RunnerFeature(6), // reserved former portable-checkpoint feature
+	}
+	response, err := session.Accept(oldRunner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GetRejection().GetKind() !=
+		runnerv1.ProtocolRejectionKind_PROTOCOL_REJECTION_KIND_FEATURE_UNSUPPORTED {
+		t.Fatalf("portable-checkpoint runner rejection = %#v", response.GetRejection())
+	}
+	if response.GetRejection().GetSafeDetail() !=
+		"runner does not implement the mandatory local-workspace protocol" {
+		t.Fatalf("portable-checkpoint runner detail = %q", response.GetRejection().GetSafeDetail())
+	}
+}
+
 func TestSessionValidatesRunnerRelayFeatureFenceSequenceAndDuplicates(t *testing.T) {
 	session := negotiatedRelaySession(t)
 	if _, err := session.Accept(registrationFrame("runner-1", "connection-1", 1)); err != nil {

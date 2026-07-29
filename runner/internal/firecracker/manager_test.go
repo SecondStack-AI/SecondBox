@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -18,7 +17,39 @@ import (
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
+
+type managerTestComputeAttachment struct {
+	workspaceID string
+	generation  uint64
+	image       *os.File
+}
+
+func (*managerTestComputeAttachment) Handle() workspacestore.WorkspaceHandle {
+	return workspacestore.WorkspaceHandle{}
+}
+
+func (attachment *managerTestComputeAttachment) WorkspaceID() string {
+	return attachment.workspaceID
+}
+
+func (attachment *managerTestComputeAttachment) Generation() uint64 {
+	return attachment.generation
+}
+
+func (attachment *managerTestComputeAttachment) Image() *os.File {
+	return attachment.image
+}
+
+func (attachment *managerTestComputeAttachment) Close() error {
+	if attachment.image == nil {
+		return nil
+	}
+	err := attachment.image.Close()
+	attachment.image = nil
+	return err
+}
 
 type recordingHostNetworkConfigurer struct {
 	tap TapConfig
@@ -295,13 +326,11 @@ func newWarmToolTestManager(t *testing.T) *Manager {
 		}
 	}
 	cfg := &config.Config{
-		DataDir:                        dir,
 		MicroVMRootfsPath:              rootfs,
 		MicroVMSharedImagePath:         shared,
 		MicroVMToolVMReuseEnabled:      true,
 		MicroVMToolVMIdleTTL:           time.Minute,
 		MicroVMBridgeCIDR:              "172.30.0.1/24",
-		MicroVMWorkspaceDir:            filepath.Join(dir, "workspaces"),
 		MicroVMRunDir:                  filepath.Join(dir, "run"),
 		MicroVMLogDir:                  filepath.Join(dir, "logs"),
 		MicroVMWorkspaceSizeMiB:        8,
@@ -1543,7 +1572,6 @@ func TestStartupFingerprintIncludesRuntimeClassAndSelectedImage(t *testing.T) {
 	agentRootfs := write("agent-rootfs.ext4", "agent-rootfs")
 	toolRootfs := write("tool-rootfs.ext4", "tool-rootfs")
 	m := &Manager{cfg: &config.Config{
-		DataDir:               dir,
 		MicroVMRootfsPath:     agentRootfs,
 		MicroVMToolRootfsPath: toolRootfs,
 	}}
@@ -1580,7 +1608,6 @@ func TestStartupFingerprintIncludesToolExecutorContractAndCapabilities(t *testin
 	}
 	toolRootfs := write("tool-rootfs.ext4", "tool-rootfs")
 	m := &Manager{cfg: &config.Config{
-		DataDir:               dir,
 		MicroVMRootfsPath:     toolRootfs,
 		MicroVMToolRootfsPath: toolRootfs,
 	}}
@@ -1630,7 +1657,6 @@ func TestStartupFingerprintUsesEffectiveProfileHash(t *testing.T) {
 	toolRootfs := write("tool-rootfs.ext4", "tool-rootfs")
 	shared := write("shared.img", "shared")
 	m := &Manager{cfg: &config.Config{
-		DataDir:                    dir,
 		MicroVMRootfsPath:          toolRootfs,
 		MicroVMToolRootfsPath:      toolRootfs,
 		MicroVMSharedImagePath:     shared,
@@ -1913,7 +1939,7 @@ func TestStageWorkspaceJailFileRejectsCrossDeviceCopyFallback(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected EXDEV error")
 	}
-	if !strings.Contains(err.Error(), "jailer chroot base dir must be on the same filesystem as SECONDBOX_RUNNER_SANDBOX_WORKSPACE_DIR") {
+	if !strings.Contains(err.Error(), "jailer chroot base dir must be on the same filesystem as SECONDBOX_RUNNER_WORKSPACE_ROOT") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, statErr := os.Stat(dst); !os.IsNotExist(statErr) {
@@ -1981,172 +2007,11 @@ func TestCopyFilePreservesContentAndMode(t *testing.T) {
 	}
 }
 
-func TestEnsureWorkspaceImageCreatesExt4Image(t *testing.T) {
-	if _, err := os.Stat("/usr/bin/mkfs.ext4"); err != nil {
-		t.Skip("mkfs.ext4 unavailable")
-	}
-	path := filepath.Join(t.TempDir(), "workspace.ext4")
-	if err := ensureWorkspaceImage(context.Background(), path, 8, ""); err != nil {
-		t.Fatalf("ensure workspace image: %v", err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat workspace image: %v", err)
-	}
-	if info.Size() != 8*1024*1024 {
-		t.Fatalf("image size = %d", info.Size())
-	}
-	if err := ensureWorkspaceImage(context.Background(), path, 8, ""); err != nil {
-		t.Fatalf("ensure existing workspace image: %v", err)
-	}
-}
-
-func TestEnsureWorkspaceImageSeedsFromExistingWorkspace(t *testing.T) {
-	if _, err := os.Stat("/usr/bin/mkfs.ext4"); err != nil {
-		t.Skip("mkfs.ext4 unavailable")
-	}
-	if _, err := exec.LookPath("debugfs"); err != nil {
-		t.Skip("debugfs unavailable")
-	}
-	dir := t.TempDir()
-	seed := filepath.Join(dir, "seed")
-	if err := os.MkdirAll(filepath.Join(seed, "artifacts", "images"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(seed, "artifacts", "images", "seed.txt"), []byte("artifact"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "workspace.ext4")
-	if err := ensureWorkspaceImage(context.Background(), path, 8, seed); err != nil {
-		t.Fatalf("ensure seeded workspace image: %v", err)
-	}
-	out, err := exec.Command("debugfs", "-R", "cat /artifacts/images/seed.txt", path).CombinedOutput()
-	if err != nil {
-		t.Fatalf("read seeded artifact: %v: %s", err, out)
-	}
-	if got := strings.TrimSpace(string(out)); !strings.Contains(got, "artifact") {
-		t.Fatalf("seeded artifact = %q", got)
-	}
-}
-
-func TestPrepareWorkspaceFromPreparedCompartmentHasNoGeneratedConfig(t *testing.T) {
-	if _, err := os.Stat("/usr/bin/mkfs.ext4"); err != nil {
-		t.Skip("mkfs.ext4 unavailable")
-	}
-	if _, err := exec.LookPath("debugfs"); err != nil {
-		t.Skip("debugfs unavailable")
-	}
-	dir := t.TempDir()
-	m := &Manager{cfg: &config.Config{
-		DataDir:                 dir,
-		MicroVMWorkspaceDir:     filepath.Join(dir, "workspaces"),
-		MicroVMWorkspaceSizeMiB: 8,
-	}}
-	seed := filepath.Join(m.cfg.SandboxesDir(), "agent-1", "compartments", "cmp_a", "workspace")
-	if err := os.MkdirAll(filepath.Join(seed, "artifacts"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(seed, "artifacts", "note.txt"), []byte("hello"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	workspacePath, err := m.prepareWorkspace(context.Background(), "agent-1", "cmp_a")
-	if err != nil {
-		t.Fatalf("prepare workspace: %v", err)
-	}
-	if _, ok, err := debugfsReadFile(context.Background(), workspacePath, "/config/runtime.json"); err != nil {
-		t.Fatalf("read runtime config: %v", err)
-	} else if ok {
-		t.Fatal("fresh prepared workspace image contains generated runtime config")
-	}
-	if _, ok, err := debugfsReadFile(context.Background(), workspacePath, "/config/auth.json"); err != nil {
-		t.Fatalf("read auth config: %v", err)
-	} else if ok {
-		t.Fatal("fresh prepared workspace image contains generated auth config")
-	}
-}
-
-func TestEnsureWorkspaceImageLeavesExistingImageUntouched(t *testing.T) {
-	if _, err := os.Stat("/usr/bin/mkfs.ext4"); err != nil {
-		t.Skip("mkfs.ext4 unavailable")
-	}
-	if _, err := exec.LookPath("debugfs"); err != nil {
-		t.Skip("debugfs unavailable")
-	}
-	dir := t.TempDir()
-	path := filepath.Join(dir, "workspace.ext4")
-	if err := ensureWorkspaceImage(context.Background(), path, 8, ""); err != nil {
-		t.Fatalf("ensure blank workspace image: %v", err)
-	}
-	seed := filepath.Join(dir, "seed")
-	if err := os.MkdirAll(filepath.Join(seed, "config"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(seed, "config", "runtime.json"), []byte(`{"model":"openai:test"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := ensureWorkspaceImage(context.Background(), path, 8, seed); err != nil {
-		t.Fatalf("ensure existing workspace image: %v", err)
-	}
-	if _, ok, err := debugfsReadFile(context.Background(), path, "/config/runtime.json"); err != nil {
-		t.Fatalf("read runtime config: %v", err)
-	} else if ok {
-		t.Fatal("existing workspace image was mutated with seed config")
-	}
-}
-
-func TestEnsureWorkspaceImageDoesNotSyncConfigIntoExistingWorkspace(t *testing.T) {
-	if _, err := os.Stat("/usr/bin/mkfs.ext4"); err != nil {
-		t.Skip("mkfs.ext4 unavailable")
-	}
-	if _, err := exec.LookPath("debugfs"); err != nil {
-		t.Skip("debugfs unavailable")
-	}
-	dir := t.TempDir()
-	seed := filepath.Join(dir, "seed")
-	if err := os.MkdirAll(filepath.Join(seed, "config"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(seed, "config", "runtime.json"), []byte(`{"model":"openai:old"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(seed, "artifacts", "images"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(seed, "artifacts", "images", "kept.txt"), []byte("artifact"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "workspace.ext4")
-	if err := ensureWorkspaceImage(context.Background(), path, 8, seed); err != nil {
-		t.Fatalf("ensure seeded workspace image: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(seed, "config", "runtime.json"), []byte(`{"model":"openai:new"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := ensureWorkspaceImage(context.Background(), path, 8, seed); err != nil {
-		t.Fatalf("ensure existing workspace image: %v", err)
-	}
-	out, err := exec.Command("debugfs", "-R", "cat /config/runtime.json", path).CombinedOutput()
-	if err != nil {
-		t.Fatalf("read original runtime.json: %v: %s", err, out)
-	}
-	if got := strings.TrimSpace(string(out)); !strings.Contains(got, `{"model":"openai:old"}`) {
-		t.Fatalf("runtime.json was unexpectedly synced from seed = %q", got)
-	}
-	out, err = exec.Command("debugfs", "-R", "cat /artifacts/images/kept.txt", path).CombinedOutput()
-	if err != nil {
-		t.Fatalf("read preserved artifact: %v: %s", err, out)
-	}
-	if got := strings.TrimSpace(string(out)); !strings.Contains(got, "artifact") {
-		t.Fatalf("preserved artifact = %q", got)
-	}
-}
-
 func TestNewFailsClosedWhenFirecrackerMissing(t *testing.T) {
 	_, err := New(&config.Config{
 		FirecrackerPath:         filepath.Join(t.TempDir(), "missing-firecracker"),
 		MicroVMKernelPath:       "/missing/kernel",
 		MicroVMRootfsPath:       "/missing/rootfs",
-		MicroVMWorkspaceDir:     t.TempDir(),
 		MicroVMRunDir:           t.TempDir(),
 		MicroVMLogDir:           t.TempDir(),
 		MicroVMAllowUnjailed:    true,
@@ -2355,89 +2220,6 @@ func TestReserveGuestIPAllocatesDistinctAddressesForCompartments(t *testing.T) {
 	}
 	if a == b {
 		t.Fatalf("compartment guest IPs collided: %s", a)
-	}
-}
-
-func TestPrepareWorkspaceUsesPerCompartmentImages(t *testing.T) {
-	root := t.TempDir()
-	m := &Manager{cfg: &config.Config{
-		DataDir:                 root,
-		MicroVMWorkspaceDir:     filepath.Join(root, "workspaces"),
-		MicroVMWorkspaceSizeMiB: 8,
-		MicroVMWorkspaceBackend: "ext4",
-	}}
-	if err := os.MkdirAll(filepath.Join(m.cfg.SandboxesDir(), "agent-1", "workspace"), 0o700); err != nil {
-		t.Fatalf("create seed workspace: %v", err)
-	}
-	a, err := m.prepareWorkspace(context.Background(), "agent-1", "cmp_a")
-	if err != nil {
-		t.Fatalf("prepare cmp_a workspace: %v", err)
-	}
-	b, err := m.prepareWorkspace(context.Background(), "agent-1", "cmp_b")
-	if err != nil {
-		t.Fatalf("prepare cmp_b workspace: %v", err)
-	}
-	if a == b {
-		t.Fatalf("compartments share workspace image %q", a)
-	}
-	if !strings.Contains(a, filepath.Join("agent-1", "cmp_a."+workspaceName)) || !strings.Contains(b, filepath.Join("agent-1", "cmp_b."+workspaceName)) {
-		t.Fatalf("workspace paths are not compartment-scoped: a=%q b=%q", a, b)
-	}
-}
-
-func TestPrepareWorkspaceUsesCompartmentImagePath(t *testing.T) {
-	root := t.TempDir()
-	m := &Manager{cfg: &config.Config{
-		DataDir:                 root,
-		MicroVMWorkspaceDir:     filepath.Join(root, "workspaces"),
-		MicroVMWorkspaceSizeMiB: 8,
-		MicroVMWorkspaceBackend: "ext4",
-	}}
-	if err := os.MkdirAll(filepath.Join(m.cfg.SandboxesDir(), "agent-1", "workspace"), 0o700); err != nil {
-		t.Fatalf("create seed workspace: %v", err)
-	}
-	path, err := m.prepareWorkspace(context.Background(), "agent-1", "cmp_a")
-	if err != nil {
-		t.Fatalf("prepare compartment workspace: %v", err)
-	}
-	want := filepath.Join(m.cfg.MicroVMWorkspaceDir, "agent-1", "cmp_a."+workspaceName)
-	if path != want {
-		t.Fatalf("compartment workspace path = %q, want %q", path, want)
-	}
-}
-
-func TestPrepareWorkspaceBindsSandboxGenerationToAttachmentPath(t *testing.T) {
-	root := t.TempDir()
-	m := &Manager{cfg: &config.Config{
-		DataDir:                 root,
-		MicroVMWorkspaceDir:     filepath.Join(root, "workspaces"),
-		MicroVMWorkspaceSizeMiB: 8,
-		MicroVMWorkspaceBackend: "ext4",
-	}}
-	first, err := m.prepareWorkspaceSizedForAttachment(
-		context.Background(),
-		"sandbox-1",
-		"instance-1",
-		"instance-1-generation-7",
-		8,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := m.prepareWorkspaceSizedForAttachment(
-		context.Background(),
-		"sandbox-1",
-		"instance-1",
-		"instance-1-generation-8",
-		8,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first == second ||
-		!strings.Contains(first, "instance-1-generation-7."+workspaceName) ||
-		!strings.Contains(second, "instance-1-generation-8."+workspaceName) {
-		t.Fatalf("generation-bound workspace paths: first=%q second=%q", first, second)
 	}
 }
 
@@ -2768,6 +2550,19 @@ func TestBuildStartupSecretBundleCarriesScopedToolEnv(t *testing.T) {
 	}
 }
 
+func TestCreateAndStartColdRequiresWorkspaceAttachment(t *testing.T) {
+	_, err := (&Manager{}).createAndStartCold(
+		context.Background(),
+		"sandbox-required-attachment",
+		"instance-required-attachment",
+		runtimemanager.StartOpts{},
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "Workspace attachment is required") {
+		t.Fatalf("missing Workspace attachment error = %v", err)
+	}
+}
+
 func TestCreateAndStartColdCleansInstanceDirOnFailure(t *testing.T) {
 	root := t.TempDir()
 	runDir := filepath.Join(root, "run")
@@ -2780,12 +2575,11 @@ func TestCreateAndStartColdCleansInstanceDirOnFailure(t *testing.T) {
 	}
 	m := &Manager{
 		cfg: &config.Config{
-			MicroVMRunDir:       runDir,
-			MicroVMLogDir:       logDir,
-			MicroVMWorkspaceDir: wsDir,
-			MicroVMRootfsPath:   filepath.Join(root, "missing-rootfs.ext4"),
-			MicroVMBridgeName:   "agbr0",
-			MicroVMBridgeCIDR:   "10.0.0.1/24",
+			MicroVMRunDir:     runDir,
+			MicroVMLogDir:     logDir,
+			MicroVMRootfsPath: filepath.Join(root, "missing-rootfs.ext4"),
+			MicroVMBridgeName: "agbr0",
+			MicroVMBridgeCIDR: "10.0.0.1/24",
 		},
 		instances: map[string]*instance{},
 		guestIPs:  map[string]string{},
@@ -2802,10 +2596,22 @@ func TestCreateAndStartColdCleansInstanceDirOnFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.defaultNetworkPolicy = compiledPolicy
+	workspaceImage, err := os.CreateTemp(root, "workspace-*.raw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workspaceImage.Close()
 
 	// The rootfs source does not exist, so the cold start fails at "prepare
 	// rootfs" — after the per-instance dir and the guest IP have been allocated.
-	_, err = m.createAndStartCold(context.Background(), "agent-1", "cmp_a", runtimemanager.StartOpts{}, nil)
+	_, err = m.createAndStartCold(context.Background(), "agent-1", "cmp_a", runtimemanager.StartOpts{
+		SandboxGeneration: 1,
+		WorkspaceAttachment: &managerTestComputeAttachment{
+			workspaceID: "workspace-cleanup-test",
+			generation:  1,
+			image:       workspaceImage,
+		},
+	}, nil)
 	if err == nil {
 		t.Fatal("expected createAndStartCold to fail on missing rootfs")
 	}

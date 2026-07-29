@@ -740,13 +740,27 @@ func (apiHandler *handler) mutateSandbox(writer http.ResponseWriter, request *ht
 			return
 		}
 		apiHandler.mutateSandboxLifecycle(writer, request, sandboxID, action, nil)
-	case "checkpoint":
-		var body contracts.CheckpointSandboxRequest
+	case "restore":
+		var body contracts.RestoreSnapshotRequest
 		if err := decodeStrictJSON(request, &body); err != nil {
 			apiHandler.writeError(writer, request, err)
 			return
 		}
-		apiHandler.mutateSandboxLifecycle(writer, request, sandboxID, action, body.Metadata)
+		expectedRevision, err := parseIfMatch(request)
+		if err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		operation, replayed, err := apiHandler.service.RestoreSandboxSnapshot(
+			request.Context(), requestPrincipal(request), sandboxID,
+			request.Header.Get("Idempotency-Key"), expectedRevision, body,
+		)
+		if err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
+		apiHandler.writeJSON(writer, request, http.StatusAccepted, operation)
 	case "wait":
 		var body contracts.WaitSandboxRequest
 		if err := decodeStrictJSON(request, &body); err != nil {
@@ -1024,7 +1038,7 @@ func classifyError(err error) (int, string, string, bool) {
 	case errors.Is(err, ports.ErrProfileNotFound),
 		errors.Is(err, ports.ErrRunnerPoolNotFound), errors.Is(err, ports.ErrRunnerNotFound),
 		errors.Is(err, ports.ErrSandboxNotFound), errors.Is(err, ports.ErrLeaseNotFound),
-		errors.Is(err, ports.ErrArtifactNotFound), errors.Is(err, ports.ErrCheckpointNotFound),
+		errors.Is(err, ports.ErrArtifactNotFound),
 		errors.Is(err, ports.ErrSnapshotNotFound), errors.Is(err, ports.ErrPortSessionNotFound),
 		errors.Is(err, runnercontrol.ErrDataPlaneNotFound):
 		return http.StatusNotFound, "not_found", "Resource not found", false
@@ -1032,6 +1046,10 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusConflict, "profile_unavailable", "Profile is unavailable", false
 	case errors.Is(err, ports.ErrSnapshotUnavailable):
 		return http.StatusConflict, "state_conflict", "Snapshot requires stopped committed disk state", false
+	case errors.Is(err, ports.ErrWorkspaceMutation):
+		return http.StatusConflict, "workspace_mutation_conflict", "Workspace has a conflicting mutation", false
+	case errors.Is(err, ports.ErrHomeRunnerUnavailable):
+		return http.StatusServiceUnavailable, "home_runner_unavailable", "Sandbox home runner is unavailable", true
 	case errors.Is(err, ports.ErrRunnerPoolUnavailable):
 		return http.StatusConflict, "execution_node_unavailable", "Compatible execution node unavailable", true
 	case errors.Is(err, ports.ErrRunnerPoolExists):

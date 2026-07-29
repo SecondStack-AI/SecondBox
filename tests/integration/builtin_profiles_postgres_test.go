@@ -184,7 +184,7 @@ func registerBuiltInProfilePool(
 	err := databaseStore.RegisterRunnerPool(t.Context(), contracts.RunnerPool{
 		Name: "default-pool", State: contracts.RunnerPoolStateReady,
 		Architectures: []string{"amd64"},
-		Capabilities:  []string{"firecracker", "checkpoint"},
+		Capabilities:  []string{"compute", "local-workspace"},
 		CapacityPolicy: map[string]int64{
 			"maxInstances": 100,
 		},
@@ -193,4 +193,5 @@ func registerBuiltInProfilePool(
 	if err != nil {
 		t.Fatal(err)
 	}
+	seedFixtureHomeRunner(t, "default-pool", "runner-builtin-profile")
 }

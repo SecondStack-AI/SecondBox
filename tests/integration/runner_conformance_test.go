@@ -162,17 +162,17 @@ func (boundary *postgresConformanceBoundary) SeedAssignment(
 	now time.Time,
 ) error {
 	workspaceID := task4InsertSchedulableSandbox(
-		boundary.t, fence.SandboxId, "profile-revision-conformance", now,
+		boundary.t, fence.SandboxId, "profile-revision-conformance", "runner-conformance", now,
 	)
 	runtimeDigest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	_, created, err := boundary.schedulerStore.Schedule(ctx, scheduler.ScheduleRequest{
 		AssignmentID: fence.AssignmentId, AssignmentCommandID: "assignment-command-" + fence.AssignmentId,
 		InstanceID: fence.InstanceId, SandboxID: fence.SandboxId,
 		ProfileRevisionID: "profile-revision-conformance",
-		WorkspaceID:       workspaceID, MaterializationID: "materialization-" + fence.AssignmentId,
+		WorkspaceID:       workspaceID, StartMutationID: "workspace-start-" + fence.AssignmentId,
 		Requirements: scheduler.Requirements{
 			PoolName: "pool-conformance", BackendKind: "firecracker",
-			Architecture: "amd64", RequiredCapabilities: []string{"checkpoint"},
+			Architecture: "amd64", RequiredCapabilities: []string{"local-workspace"},
 			GuestProtocolGeneration: 1,
 			Capacity: scheduler.Capacity{
 				CPUMillis: 1000, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
@@ -181,10 +181,10 @@ func (boundary *postgresConformanceBoundary) SeedAssignment(
 			PreferredArtifactDigests: []string{runtimeDigest},
 		},
 		AssignmentCommand: &runnerv1.AssignmentCommand{
-			Fence: fence, ProfileRevisionId: "profile-revision-conformance",
+			Fence: fence, ProfileRevisionId: "profile-revision-conformance", WorkspaceId: workspaceID,
 			Requirements: &runnerv1.ProfileRequirements{
 				VcpuCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
-				Architecture: "amd64", RequiredCapabilities: []string{"checkpoint"},
+				Architecture: "amd64", RequiredCapabilities: []string{"local-workspace"},
 				MaximumOperationMs: 60_000, MaximumOutputBytes: 1 << 20,
 			},
 			Assets: []*runnerv1.SignedAssetReference{

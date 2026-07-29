@@ -16,16 +16,15 @@ const (
 	RunnerPoolStateDraining = "draining"
 	RunnerPoolStateOffline  = "offline"
 
-	SandboxStateCreating      = "creating"
-	SandboxStateStopped       = "stopped"
-	SandboxStateStarting      = "starting"
-	SandboxStateReady         = "ready"
-	SandboxStateDraining      = "draining"
-	SandboxStateStopping      = "stopping"
-	SandboxStateCheckpointing = "checkpointing"
-	SandboxStateFailed        = "failed"
-	SandboxStateDeleting      = "deleting"
-	SandboxStateDeleted       = "deleted"
+	SandboxStateCreating = "creating"
+	SandboxStateStopped  = "stopped"
+	SandboxStateStarting = "starting"
+	SandboxStateReady    = "ready"
+	SandboxStateDraining = "draining"
+	SandboxStateStopping = "stopping"
+	SandboxStateFailed   = "failed"
+	SandboxStateDeleting = "deleting"
+	SandboxStateDeleted  = "deleted"
 
 	SandboxDesiredStateRunning = "running"
 	SandboxDesiredStateStopped = "stopped"
@@ -60,11 +59,6 @@ const (
 	PortSessionStateClosed  = "closed"
 	PortSessionStateExpired = "expired"
 	PortSessionStateFenced  = "fenced"
-
-	MaterializationStatePreparing = "preparing"
-	MaterializationStateReady     = "ready"
-	MaterializationStateReleased  = "released"
-	MaterializationStateLost      = "lost"
 
 	ObjectStateStaging         = "staging"
 	ObjectStateVerified        = "verified"
@@ -122,17 +116,16 @@ type ProfileRevision struct {
 
 // ProfileRevisionSpec resolves every execution, durability, and placement bound.
 type ProfileRevisionSpec struct {
-	Backend               string           `json:"backend"`
-	Pool                  string           `json:"pool"`
-	Architecture          string           `json:"architecture"`
-	RuntimeBundleDigest   string           `json:"runtimeBundleDigest"`
-	ToolchainBundleDigest string           `json:"toolchainBundleDigest"`
-	Resources             ResourcePolicy   `json:"resources"`
-	Lifecycle             LifecyclePolicy  `json:"lifecycle"`
-	Checkpoint            CheckpointPolicy `json:"checkpoint"`
-	Execution             ExecutionPolicy  `json:"execution"`
-	Network               NetworkPolicy    `json:"network"`
-	Ports                 []PortPolicy     `json:"ports"`
+	Pool                  string          `json:"pool"`
+	Architecture          string          `json:"architecture"`
+	RuntimeBundleDigest   string          `json:"runtimeBundleDigest"`
+	ToolchainBundleDigest string          `json:"toolchainBundleDigest"`
+	Resources             ResourcePolicy  `json:"resources"`
+	Lifecycle             LifecyclePolicy `json:"lifecycle"`
+	Retention             RetentionPolicy `json:"retention"`
+	Execution             ExecutionPolicy `json:"execution"`
+	Network               NetworkPolicy   `json:"network"`
+	Ports                 []PortPolicy    `json:"ports"`
 }
 
 // ResourcePolicy contains per-Sandbox enforceable compute and workspace limits.
@@ -153,11 +146,10 @@ type LifecyclePolicy struct {
 	LeaseSeconds           int64  `json:"leaseSeconds"`
 }
 
-// CheckpointPolicy bounds durable workspace and artifact retention.
-type CheckpointPolicy struct {
-	OnStop                   bool  `json:"onStop"`
-	RetentionSeconds         int64 `json:"retentionSeconds"`
+// RetentionPolicy bounds local Snapshot count/lifetime and Artifact retention.
+type RetentionPolicy struct {
 	SnapshotLimit            int64 `json:"snapshotLimit"`
+	SnapshotRetentionSeconds int64 `json:"snapshotRetentionSeconds"`
 	ArtifactRetentionSeconds int64 `json:"artifactRetentionSeconds"`
 }
 
@@ -294,22 +286,19 @@ type Lease struct {
 	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
-// Snapshot is one immutable retained projection of a committed workspace checkpoint.
+// Snapshot is one immutable runner-local projection of a committed Workspace.
 type Snapshot struct {
 	ID                 string            `json:"id"`
 	TenantRef          string            `json:"-"`
 	SubjectRef         string            `json:"-"`
 	SandboxID          string            `json:"sandboxId"`
 	WorkspaceID        string            `json:"-"`
-	CheckpointID       string            `json:"-"`
 	SourceGeneration   int64             `json:"generation"`
 	Name               string            `json:"name"`
 	SizeBytes          int64             `json:"sizeBytes"`
-	SHA256             string            `json:"sha256"`
-	State              string            `json:"-"`
+	State              string            `json:"state"`
 	Metadata           map[string]string `json:"metadata"`
-	Compatibility      map[string]string `json:"-"`
-	RetainUntil        time.Time         `json:"expiresAt"`
+	RetainUntil        *time.Time        `json:"expiresAt,omitempty"`
 	CreatedAt          time.Time         `json:"createdAt"`
 	RetentionEndedAt   *time.Time        `json:"-"`
 	GarbageCollectedAt *time.Time        `json:"-"`
@@ -377,7 +366,7 @@ type QuotaLimits struct {
 	MaxActiveInstances      int64 `json:"maxActiveInstances"`
 	MaxCPUMillis            int64 `json:"maxCpuMillis"`
 	MaxMemoryBytes          int64 `json:"maxMemoryBytes"`
-	MaxRetainedBytes        int64 `json:"maxRetainedBytes"`
+	MaxArtifactBytes        int64 `json:"maxArtifactBytes"`
 	MaxSnapshots            int64 `json:"maxSnapshots"`
 	MaxArtifacts            int64 `json:"maxArtifacts"`
 	MaxPortSessions         int64 `json:"maxPortSessions"`
@@ -390,7 +379,7 @@ type QuotaUsage struct {
 	ActiveInstances      int64 `json:"activeInstances"`
 	CPUMillis            int64 `json:"cpuMillis"`
 	MemoryBytes          int64 `json:"memoryBytes"`
-	RetainedBytes        int64 `json:"retainedBytes"`
+	ArtifactBytes        int64 `json:"artifactBytes"`
 	Snapshots            int64 `json:"snapshots"`
 	Artifacts            int64 `json:"artifacts"`
 	PortSessions         int64 `json:"portSessions"`
@@ -407,17 +396,14 @@ type SubjectUsage struct {
 
 // Workspace is public retained-workspace evidence without a provider location.
 type Workspace struct {
-	ID                    string    `json:"id"`
-	TenantRef             string    `json:"-"`
-	SubjectRef            string    `json:"-"`
-	Generation            int64     `json:"generation"`
-	RetainedBytes         int64     `json:"retainedBytes"`
-	CurrentCheckpointID   string    `json:"currentCheckpointId,omitempty"`
-	CurrentCheckpointHash string    `json:"currentCheckpointHash,omitempty"`
-	CurrentCheckpointSize int64     `json:"currentCheckpointSize,omitempty"`
-	RetentionState        string    `json:"retentionState"`
-	CreatedAt             time.Time `json:"createdAt"`
-	UpdatedAt             time.Time `json:"updatedAt"`
+	ID         string    `json:"id"`
+	TenantRef  string    `json:"-"`
+	SubjectRef string    `json:"-"`
+	Generation int64     `json:"generation"`
+	State      string    `json:"state"`
+	SizeBytes  int64     `json:"sizeBytes"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 // Instance is replaceable compute evidence without runner or backend authority.
@@ -448,40 +434,6 @@ type ActivitySession struct {
 	LastActivityAt time.Time  `json:"lastActivityAt"`
 	CreatedAt      time.Time  `json:"createdAt"`
 	ClosedAt       *time.Time `json:"closedAt,omitempty"`
-}
-
-// WorkspaceMaterialization is exclusive runner-local writer evidence.
-type WorkspaceMaterialization struct {
-	ID                 string            `json:"id"`
-	WorkspaceID        string            `json:"workspaceId"`
-	SandboxID          string            `json:"sandboxId"`
-	AssignmentID       string            `json:"assignmentId"`
-	RunnerID           string            `json:"runnerId"`
-	Generation         int64             `json:"generation"`
-	SourceCheckpointID string            `json:"sourceCheckpointId,omitempty"`
-	State              string            `json:"state"`
-	ReleaseProof       map[string]string `json:"releaseProof,omitempty"`
-	Revision           int64             `json:"revision"`
-	CreatedAt          time.Time         `json:"createdAt"`
-	UpdatedAt          time.Time         `json:"updatedAt"`
-}
-
-// WorkspaceCheckpoint is immutable portable workspace publication evidence.
-type WorkspaceCheckpoint struct {
-	ID                 string            `json:"id"`
-	TenantRef          string            `json:"tenantRef"`
-	SubjectRef         string            `json:"subjectRef"`
-	SandboxID          string            `json:"sandboxId"`
-	WorkspaceID        string            `json:"workspaceId"`
-	SourceGeneration   int64             `json:"sourceGeneration"`
-	State              string            `json:"state"`
-	SHA256             string            `json:"sha256"`
-	SizeBytes          int64             `json:"sizeBytes"`
-	Compatibility      map[string]string `json:"compatibility"`
-	RetainUntil        time.Time         `json:"retainUntil"`
-	CreatedAt          time.Time         `json:"createdAt"`
-	PublishedAt        *time.Time        `json:"publishedAt,omitempty"`
-	GarbageCollectedAt *time.Time        `json:"garbageCollectedAt,omitempty"`
 }
 
 // Sandbox is durable Project intent pinned to one immutable ProfileRevision.
@@ -516,9 +468,9 @@ type CreateSandboxRequest struct {
 	Metadata map[string]string `json:"metadata"`
 }
 
-// CheckpointSandboxRequest retains bounded metadata with an explicit checkpoint intent.
-type CheckpointSandboxRequest struct {
-	Metadata map[string]string `json:"metadata"`
+// RestoreSnapshotRequest selects one Snapshot owned by the stopped Sandbox.
+type RestoreSnapshotRequest struct {
+	SnapshotID string `json:"snapshotId"`
 }
 
 // WaitSandboxRequest bounds lifecycle observation without renewing activity.
@@ -819,6 +771,7 @@ type Operation struct {
 	RequestID       string            `json:"requestId"`
 	RequestMetadata map[string]string `json:"-"`
 	Sandbox         *Sandbox          `json:"sandbox,omitempty"`
+	Snapshot        *Snapshot         `json:"snapshot,omitempty"`
 	Error           *Problem          `json:"error,omitempty"`
 	CreatedAt       time.Time         `json:"createdAt"`
 	StartedAt       *time.Time        `json:"startedAt,omitempty"`

@@ -13,7 +13,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"google.golang.org/protobuf/proto"
 
+	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
@@ -99,7 +101,7 @@ func (store *PostgresControlPlaneStore) CreateProfile(
 	return profile, idempotencyResult, nil
 }
 
-// EnsureBuiltInProfile materializes or advances one code-owned immutable Profile revision.
+// EnsureBuiltInProfile persists or advances one code-owned immutable Profile revision.
 func (store *PostgresControlPlaneStore) EnsureBuiltInProfile(
 	ctx context.Context,
 	desired contracts.Profile,
@@ -452,6 +454,10 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	if err := ensureCompatibleRunnerPool(ctx, tx, profile.CurrentRevision.Spec); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
+	homeRunnerID, err := selectInitialHomeRunner(ctx, tx, profile.CurrentRevision.Spec)
+	if err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, err
+	}
 	if err := ensureSubjectQuota(ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, input.SubjectQuota, input.Sandbox.CreatedAt); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
@@ -484,38 +490,40 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	sandbox.Workspace.TenantRef = input.Principal.TenantRef
 	sandbox.Workspace.SubjectRef = input.Principal.SubjectRef
 	sandbox.Workspace.Generation = sandbox.Generation
-	initialLifecycleIntent := ""
-	if profile.CurrentRevision.Spec.Lifecycle.InitialState == contracts.SandboxDesiredStateRunning {
-		sandbox.DesiredState = contracts.SandboxDesiredStateRunning
-		sandbox.State = contracts.SandboxStateCreating
-		input.Operation.State = contracts.OperationStatePending
-		initialLifecycleIntent = "create"
-	} else {
-		sandbox.DesiredState = contracts.SandboxDesiredStateStopped
-		sandbox.State = contracts.SandboxStateStopped
-		input.Operation.State = contracts.OperationStateSucceeded
-		input.Operation.Sandbox = &sandbox
+	sandbox.Workspace.State = "creating"
+	sandbox.Workspace.SizeBytes = profile.CurrentRevision.Spec.Resources.WorkspaceBytes
+	if input.WorkspaceEffectID == "" || input.WorkspaceCommandID == "" || len(input.FencingToken) < 32 {
+		return contracts.Sandbox{}, contracts.Operation{}, false,
+			errors.New("SecondBox Workspace create effect identity and fence are required")
 	}
+	sandbox.DesiredState = profile.CurrentRevision.Spec.Lifecycle.InitialState
+	sandbox.State = contracts.SandboxStateCreating
+	input.Operation.State = contracts.OperationStatePending
+	initialLifecycleIntent := "create_workspace"
 	metadataJSON, err := json.Marshal(sandbox.Metadata)
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox metadata encoding failed: %w", err)
 	}
 	compatibilityJSON, err := json.Marshal(map[string]any{
 		"pool": profile.CurrentRevision.Spec.Pool, "architecture": profile.CurrentRevision.Spec.Architecture,
-		"backend": profile.CurrentRevision.Spec.Backend,
 	})
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox compatibility encoding failed: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.workspaces (
-			id,tenant_ref,subject_ref,sandbox_id,generation,retained_bytes,current_checkpoint_id,
-			current_checkpoint_sha256,current_checkpoint_size_bytes,retention_state,
-			garbage_collection_state,created_at,updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+			id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,logical_capacity_bytes,
+			generation,mutation_kind,mutation_id,mutation_effect_id,mutation_operation_id,
+			mutation_expected_generation,mutation_target_generation,mutation_state,local_receipt_json,
+			created_at,updated_at
+		) VALUES (
+			$1,$2,$3,$4,$5,'creating',$6,$7,
+			'create',$8,$8,$9,$7,$7,'queued','{}',
+			$10,$11
+		)`,
 		sandbox.Workspace.ID, sandbox.TenantRef, sandbox.SubjectRef,
-		sandbox.ID, sandbox.Workspace.Generation,
-		sandbox.Workspace.RetainedBytes, "", "", 0, "retained", "reachable",
+		sandbox.ID, homeRunnerID, profile.CurrentRevision.Spec.Resources.WorkspaceBytes,
+		sandbox.Workspace.Generation, input.WorkspaceEffectID, input.Operation.ID,
 		sandbox.Workspace.CreatedAt, sandbox.Workspace.UpdatedAt,
 	); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Workspace insert failed: %w", err)
@@ -541,6 +549,56 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 		ctx, tx, sandbox.TenantRef, sandbox.SubjectRef, input.Operation,
 	); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
+	}
+	localCommand := &runnerv1.LocalWorkspaceCommand{
+		CommandVersion: 1,
+		Kind:           runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE,
+		OperationId:    input.Operation.ID, EffectId: input.WorkspaceEffectID,
+		SandboxId: sandbox.ID, WorkspaceId: sandbox.Workspace.ID,
+		ExpectedGeneration:   uint64(sandbox.Generation),
+		NextGeneration:       uint64(sandbox.Generation),
+		LogicalCapacityBytes: uint64(profile.CurrentRevision.Spec.Resources.WorkspaceBytes),
+		FencingToken:         append([]byte(nil), input.FencingToken...),
+		Correlation: &runnerv1.Correlation{
+			RequestId: input.Operation.RequestID, OperationId: input.Operation.ID,
+			SandboxId: sandbox.ID, SandboxGeneration: uint64(sandbox.Generation),
+			RunnerId: homeRunnerID,
+		},
+	}
+	commandPayload, err := proto.Marshal(&runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_LocalWorkspace{LocalWorkspace: localCommand},
+	})
+	if err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false,
+			fmt.Errorf("SecondBox Workspace create command encoding failed: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.lifecycle_effects (
+			id,sandbox_id,generation,kind,state,assignment_id,instance_id,runner_id,
+			command_id,storage_object_id,fencing_token,retry_count,retry_limit,
+			effect_deadline,claim_owner,claim_expires_at,failure_class,failure_message,
+			payload_json,evidence_json,created_at,updated_at
+		) VALUES (
+			$1,$2,$3,'local_workspace_create','queued','','',$4,$5,'',$6,0,8,
+			$7,'',$8,'','','{}','{}',$8,$8
+		)`,
+		input.WorkspaceEffectID, sandbox.ID, sandbox.Generation, homeRunnerID,
+		input.WorkspaceCommandID, input.FencingToken, input.Operation.CreatedAt.Add(10*time.Minute),
+		input.Operation.CreatedAt,
+	); err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false,
+			fmt.Errorf("SecondBox Workspace create effect insert failed: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.runner_commands (
+			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
+			delivery_count,created_at,updated_at,delivered_at
+		) VALUES ($1,$2,$3,'local-workspace',$4,'pending','',0,$5,$5,NULL)`,
+		input.WorkspaceCommandID, homeRunnerID, input.WorkspaceEffectID,
+		commandPayload, input.Operation.CreatedAt,
+	); err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false,
+			fmt.Errorf("SecondBox Workspace create command insert failed: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.idempotency_records (
@@ -595,7 +653,7 @@ func (store *PostgresControlPlaneStore) GetSubjectUsage(
 		Usage: contracts.QuotaUsage{
 			Sandboxes: usage.sandboxes, ActiveInstances: usage.activeInstances,
 			CPUMillis: usage.cpuMillis, MemoryBytes: usage.memoryBytes,
-			RetainedBytes: usage.retainedBytes, Snapshots: usage.snapshots,
+			ArtifactBytes: usage.artifactBytes, Snapshots: usage.snapshots,
 			Artifacts: usage.artifacts, PortSessions: usage.portSessions,
 			ConcurrentOperations: usage.concurrentOperations,
 		},
@@ -698,17 +756,17 @@ func getOperationWithQuerier(
 		return contracts.Operation{}, errors.New("SecondBox Operation lookup predicate is invalid")
 	}
 	var operation contracts.Operation
-	var errorCode, errorMessage string
+	var errorCode, errorMessage, snapshotID string
 	var retryable bool
 	var requestMetadataJSON []byte
 	err := querier.QueryRow(ctx, `
-		SELECT id,tenant_ref,subject_ref,sandbox_id,kind,state,request_id,request_metadata_json,error_code,error_message,retryable,
+		SELECT id,tenant_ref,subject_ref,sandbox_id,snapshot_id,kind,state,request_id,request_metadata_json,error_code,error_message,retryable,
 		       created_at,started_at,completed_at,updated_at
 		FROM secondbox.operations `+where+` ORDER BY created_at LIMIT 1`,
 		tenantRef, subjectRef, identifier,
 	).Scan(
 		&operation.ID, &operation.TenantRef, &operation.SubjectRef,
-		&operation.SandboxID, &operation.Kind, &operation.State, &operation.RequestID,
+		&operation.SandboxID, &snapshotID, &operation.Kind, &operation.State, &operation.RequestID,
 		&requestMetadataJSON,
 		&errorCode, &errorMessage, &retryable, &operation.CreatedAt, &operation.StartedAt,
 		&operation.CompletedAt, &operation.UpdatedAt,
@@ -730,6 +788,16 @@ func getOperationWithQuerier(
 		if err := json.Unmarshal(requestMetadataJSON, &operation.RequestMetadata); err != nil {
 			return contracts.Operation{}, fmt.Errorf("SecondBox Operation request metadata decoding failed: %w", err)
 		}
+	}
+	if snapshotID != "" {
+		snapshot, err := scanSnapshot(querier.QueryRow(
+			ctx, snapshotSelect+` WHERE id=$1 AND tenant_ref=$2 AND subject_ref=$3`,
+			snapshotID, tenantRef, subjectRef,
+		))
+		if err != nil {
+			return contracts.Operation{}, fmt.Errorf("SecondBox Operation Snapshot projection failed: %w", err)
+		}
+		operation.Snapshot = &snapshot
 	}
 	return operation, nil
 }
@@ -796,8 +864,7 @@ func (store *PostgresControlPlaneStore) ReadMetricsSnapshot(
 			contracts.SandboxStateCreating: 0, contracts.SandboxStateStopped: 0,
 			contracts.SandboxStateStarting: 0, contracts.SandboxStateReady: 0,
 			contracts.SandboxStateDraining: 0, contracts.SandboxStateStopping: 0,
-			contracts.SandboxStateCheckpointing: 0,
-			contracts.SandboxStateFailed:        0, contracts.SandboxStateDeleting: 0,
+			contracts.SandboxStateFailed: 0, contracts.SandboxStateDeleting: 0,
 			contracts.SandboxStateDeleted: 0,
 		},
 		OperationStates: map[string]int64{
@@ -870,9 +937,8 @@ const sandboxSelect = `
 	       sandbox.state,sandbox.desired_state,sandbox.generation,sandbox.metadata_json,
 	       sandbox.last_activity_at,sandbox.revision,sandbox.created_at,sandbox.updated_at,sandbox.deleted_at,
 	       workspace.id,workspace.tenant_ref,workspace.subject_ref,
-	       workspace.generation,workspace.retained_bytes,workspace.current_checkpoint_id,
-	       COALESCE(workspace.current_checkpoint_sha256,''),COALESCE(workspace.current_checkpoint_size_bytes,0),
-	       COALESCE(workspace.retention_state,''),workspace.created_at,workspace.updated_at,
+	       workspace.generation,workspace.state,workspace.logical_capacity_bytes,
+	       workspace.created_at,workspace.updated_at,
 	       instance.id,instance.state,COALESCE(instance.guest_liveness,''),instance.termination_reason,
 	       instance.created_at,instance.updated_at,instance.ready_at,instance.guest_heartbeat_at,instance.stopped_at
 	FROM secondbox.sandboxes AS sandbox
@@ -892,10 +958,8 @@ func scanSandbox(row rowScanner) (contracts.Sandbox, error) {
 		&sandbox.LastActivityAt, &sandbox.Revision, &sandbox.CreatedAt, &sandbox.UpdatedAt,
 		&sandbox.DeletedAt, &sandbox.Workspace.ID,
 		&sandbox.Workspace.TenantRef, &sandbox.Workspace.SubjectRef,
-		&sandbox.Workspace.Generation,
-		&sandbox.Workspace.RetainedBytes, &sandbox.Workspace.CurrentCheckpointID,
-		&sandbox.Workspace.CurrentCheckpointHash, &sandbox.Workspace.CurrentCheckpointSize,
-		&sandbox.Workspace.RetentionState, &sandbox.Workspace.CreatedAt, &sandbox.Workspace.UpdatedAt,
+		&sandbox.Workspace.Generation, &sandbox.Workspace.State, &sandbox.Workspace.SizeBytes,
+		&sandbox.Workspace.CreatedAt, &sandbox.Workspace.UpdatedAt,
 		&instanceID, &instanceState, &guestLiveness, &terminationReason,
 		&instanceCreatedAt, &instanceUpdatedAt, &readyAt, &guestHeartbeatAt, &stoppedAt,
 	); err != nil {
@@ -1012,17 +1076,24 @@ func insertOperation(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.operations (
-			id,tenant_ref,subject_ref,sandbox_id,kind,state,request_id,request_metadata_json,error_code,error_message,retryable,
+			id,tenant_ref,subject_ref,sandbox_id,snapshot_id,kind,state,request_id,request_metadata_json,error_code,error_message,retryable,
 			created_at,started_at,completed_at,updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
 		operation.ID, tenantRef, subjectRef,
-		operation.SandboxID, operation.Kind, operation.State, operation.RequestID,
+		operation.SandboxID, operationSnapshotID(operation), operation.Kind, operation.State, operation.RequestID,
 		requestMetadataJSON, errorCode, errorMessage, retryable, operation.CreatedAt,
 		operation.StartedAt, completedAt, operation.UpdatedAt,
 	); err != nil {
 		return fmt.Errorf("SecondBox Operation insert failed: %w", err)
 	}
 	return nil
+}
+
+func operationSnapshotID(operation contracts.Operation) string {
+	if operation.Snapshot == nil {
+		return ""
+	}
+	return operation.Snapshot.ID
 }
 
 func ensureCompatibleRunnerPool(ctx context.Context, tx pgx.Tx, spec contracts.ProfileRevisionSpec) error {
@@ -1048,19 +1119,82 @@ func ensureCompatibleRunnerPool(ctx context.Context, tx pgx.Tx, spec contracts.P
 	if err := json.Unmarshal(capabilitiesJSON, &capabilities); err != nil {
 		return fmt.Errorf("SecondBox runner-pool capabilities decoding failed: %w", err)
 	}
-	requiredCapabilities := []string{"firecracker"}
-	if spec.Checkpoint.OnStop {
-		requiredCapabilities = append(requiredCapabilities, "checkpoint")
-	}
+	requiredCapabilities := []string{"compute", "local-workspace"}
 	if !contains(architectures, spec.Architecture) || !isScopeSubset(requiredCapabilities, capabilities) {
 		return ports.ErrRunnerPoolUnavailable
 	}
 	return nil
 }
 
+func selectInitialHomeRunner(
+	ctx context.Context,
+	tx pgx.Tx,
+	spec contracts.ProfileRevisionSpec,
+) (string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id,architectures_json,capabilities_json,capacity_json,reserved_capacity_json
+		FROM secondbox.runners
+		WHERE pool_name=$1 AND state='ready' AND drain_phase='active'
+		  AND active_connection_id<>''
+		ORDER BY id
+		FOR UPDATE`,
+		spec.Pool,
+	)
+	if err != nil {
+		return "", fmt.Errorf("SecondBox initial home Runner candidates failed: %w", err)
+	}
+	defer rows.Close()
+	type capacity struct {
+		CPUMillis   int64
+		MemoryBytes int64
+		DiskBytes   int64
+		Instances   int64
+		Operations  int64
+	}
+	for rows.Next() {
+		var runnerID string
+		var architecturesJSON, capabilitiesJSON, capacityJSON, reservedJSON []byte
+		if err := rows.Scan(
+			&runnerID, &architecturesJSON, &capabilitiesJSON, &capacityJSON, &reservedJSON,
+		); err != nil {
+			return "", fmt.Errorf("SecondBox initial home Runner scan failed: %w", err)
+		}
+		var architectures []string
+		var capabilities []string
+		var allocatable, reserved capacity
+		if err := json.Unmarshal(architecturesJSON, &architectures); err != nil {
+			return "", fmt.Errorf("SecondBox initial home Runner architectures decoding failed: %w", err)
+		}
+		if err := json.Unmarshal(capabilitiesJSON, &capabilities); err != nil {
+			return "", fmt.Errorf("SecondBox initial home Runner capabilities decoding failed: %w", err)
+		}
+		if err := json.Unmarshal(capacityJSON, &allocatable); err != nil {
+			return "", fmt.Errorf("SecondBox initial home Runner capacity decoding failed: %w", err)
+		}
+		if err := json.Unmarshal(reservedJSON, &reserved); err != nil {
+			return "", fmt.Errorf("SecondBox initial home Runner reservation decoding failed: %w", err)
+		}
+		if !contains(architectures, spec.Architecture) ||
+			!contains(capabilities, "compute") ||
+			!contains(capabilities, "local-workspace") ||
+			allocatable.CPUMillis-reserved.CPUMillis < spec.Resources.CPUMillis ||
+			allocatable.MemoryBytes-reserved.MemoryBytes < spec.Resources.MemoryBytes ||
+			allocatable.DiskBytes-reserved.DiskBytes < spec.Resources.WorkspaceBytes ||
+			allocatable.Instances-reserved.Instances < 1 ||
+			allocatable.Operations-reserved.Operations < spec.Resources.ConcurrentOperations {
+			continue
+		}
+		return runnerID, nil
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("SecondBox initial home Runner iteration failed: %w", err)
+	}
+	return "", ports.ErrHomeRunnerUnavailable
+}
+
 type quotaUsage struct {
 	sandboxes, activeInstances, cpuMillis, memoryBytes int64
-	retainedBytes, snapshots, artifacts, portSessions  int64
+	artifactBytes, snapshots, artifacts, portSessions  int64
 	concurrentOperations                               int64
 }
 
@@ -1075,11 +1209,11 @@ func ensureSubjectQuota(
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.subject_quotas (
 			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
-			max_retained_bytes,max_snapshots,max_artifacts,max_port_sessions,max_concurrent_operations,updated_at
+			max_artifact_bytes,max_snapshots,max_artifacts,max_port_sessions,max_concurrent_operations,updated_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 		ON CONFLICT (tenant_ref,subject_ref) DO NOTHING`,
 		tenantRef, subjectRef, quota.MaxSandboxes, quota.MaxActiveInstances,
-		quota.MaxCPUMillis, quota.MaxMemoryBytes, quota.MaxRetainedBytes,
+		quota.MaxCPUMillis, quota.MaxMemoryBytes, quota.MaxArtifactBytes,
 		quota.MaxSnapshots, quota.MaxArtifacts, quota.MaxPortSessions,
 		quota.MaxConcurrentOperations, now.UTC(),
 	); err != nil {
@@ -1097,12 +1231,12 @@ func readSubjectQuota(
 	var quota contracts.QuotaLimits
 	if err := tx.QueryRow(ctx, `
 		SELECT max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
-		       max_retained_bytes,max_snapshots,max_artifacts,max_port_sessions,max_concurrent_operations
+		       max_artifact_bytes,max_snapshots,max_artifacts,max_port_sessions,max_concurrent_operations
 		FROM secondbox.subject_quotas
 		WHERE tenant_ref=$1 AND subject_ref=$2
 		FOR UPDATE`, tenantRef, subjectRef).Scan(
 		&quota.MaxSandboxes, &quota.MaxActiveInstances, &quota.MaxCPUMillis,
-		&quota.MaxMemoryBytes, &quota.MaxRetainedBytes, &quota.MaxSnapshots,
+		&quota.MaxMemoryBytes, &quota.MaxArtifactBytes, &quota.MaxSnapshots,
 		&quota.MaxArtifacts, &quota.MaxPortSessions, &quota.MaxConcurrentOperations,
 	); err != nil {
 		return contracts.QuotaLimits{}, fmt.Errorf("SecondBox quota lookup failed: %w", err)
@@ -1122,13 +1256,11 @@ func readSubjectQuotaUsage(
 		       count(*) FILTER (WHERE sandbox.state IN ('starting','ready','draining','stopping')),
 		       COALESCE(sum((revision.spec_json->'resources'->>'cpuMillis')::bigint),0),
 		       COALESCE(sum((revision.spec_json->'resources'->>'memoryBytes')::bigint),0),
-		       COALESCE(sum(workspace.retained_bytes),0)
-		         +(SELECT COALESCE(sum(size_bytes),0) FROM secondbox.artifacts
-		           WHERE tenant_ref=$1 AND subject_ref=$2 AND state<>'deleted')
-		         +(SELECT COALESCE(sum(size_bytes),0) FROM secondbox.workspace_checkpoints
-		           WHERE tenant_ref=$1 AND subject_ref=$2 AND state IN ('staging','verified')),
+		       (SELECT COALESCE(sum(size_bytes),0) FROM secondbox.artifacts
+		        WHERE tenant_ref=$1 AND subject_ref=$2 AND state<>'deleted'),
 		       (SELECT count(*) FROM secondbox.snapshots
-		        WHERE tenant_ref=$1 AND subject_ref=$2 AND state='published'),
+		        WHERE tenant_ref=$1 AND subject_ref=$2
+		          AND state IN ('creating','ready','deleting')),
 		       (SELECT count(*) FROM secondbox.artifacts
 		        WHERE tenant_ref=$1 AND subject_ref=$2 AND state<>'deleted'),
 		       (SELECT count(*) FROM secondbox.port_sessions
@@ -1141,7 +1273,7 @@ func readSubjectQuotaUsage(
 		WHERE sandbox.tenant_ref=$1 AND sandbox.subject_ref=$2 AND sandbox.state<>'deleted'`,
 		tenantRef, subjectRef).Scan(
 		&usage.sandboxes, &usage.activeInstances, &usage.cpuMillis, &usage.memoryBytes,
-		&usage.retainedBytes, &usage.snapshots, &usage.artifacts, &usage.portSessions,
+		&usage.artifactBytes, &usage.snapshots, &usage.artifacts, &usage.portSessions,
 		&usage.concurrentOperations,
 	); err != nil {
 		return quotaUsage{}, fmt.Errorf("SecondBox quota usage lookup failed: %w", err)
@@ -1160,7 +1292,7 @@ func quotaWouldExceed(
 		usage.activeInstances+requestedActiveInstances > quota.MaxActiveInstances ||
 		usage.cpuMillis+requestedCPU > quota.MaxCPUMillis ||
 		usage.memoryBytes+requestedMemory > quota.MaxMemoryBytes ||
-		usage.retainedBytes > quota.MaxRetainedBytes ||
+		usage.artifactBytes > quota.MaxArtifactBytes ||
 		usage.snapshots > quota.MaxSnapshots ||
 		usage.artifacts > quota.MaxArtifacts ||
 		usage.portSessions > quota.MaxPortSessions ||

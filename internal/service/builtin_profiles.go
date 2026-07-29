@@ -23,7 +23,7 @@ func defaultBuiltInProfiles() []contracts.Profile {
 			BuiltInProfileAgentCompartment,
 			"prv_builtin_agent_compartment_v1",
 			contracts.ProfileRevisionSpec{
-				Backend: "firecracker", Pool: "default-pool", Architecture: "amd64",
+				Pool: "default-pool", Architecture: "amd64",
 				RuntimeBundleDigest:   "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 				ToolchainBundleDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 				Resources: contracts.ResourcePolicy{
@@ -35,9 +35,9 @@ func defaultBuiltInProfiles() []contracts.Profile {
 					DrainGraceSeconds: 10, IdleSeconds: 60,
 					MaximumDurationSeconds: 900, LeaseSeconds: 60,
 				},
-				Checkpoint: contracts.CheckpointPolicy{
-					OnStop: false, RetentionSeconds: 3600,
-					SnapshotLimit: 0, ArtifactRetentionSeconds: 86400,
+				Retention: contracts.RetentionPolicy{
+					SnapshotLimit: 0, SnapshotRetentionSeconds: 3600,
+					ArtifactRetentionSeconds: 86400,
 				},
 				Execution: contracts.ExecutionPolicy{
 					MaximumDeadlineMilliseconds: 120000,
@@ -56,7 +56,7 @@ func defaultBuiltInProfiles() []contracts.Profile {
 			BuiltInProfileCodingEnvironment,
 			"prv_builtin_coding_environment_v1",
 			contracts.ProfileRevisionSpec{
-				Backend: "firecracker", Pool: "default-pool", Architecture: "amd64",
+				Pool: "default-pool", Architecture: "amd64",
 				RuntimeBundleDigest:   "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
 				ToolchainBundleDigest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
 				Resources: contracts.ResourcePolicy{
@@ -68,9 +68,9 @@ func defaultBuiltInProfiles() []contracts.Profile {
 					DrainGraceSeconds: 120, IdleSeconds: 28800,
 					MaximumDurationSeconds: 604800, LeaseSeconds: 300,
 				},
-				Checkpoint: contracts.CheckpointPolicy{
-					OnStop: true, RetentionSeconds: 2592000,
-					SnapshotLimit: 64, ArtifactRetentionSeconds: 2592000,
+				Retention: contracts.RetentionPolicy{
+					SnapshotLimit: 64, SnapshotRetentionSeconds: 2592000,
+					ArtifactRetentionSeconds: 2592000,
 				},
 				Execution: contracts.ExecutionPolicy{
 					MaximumDeadlineMilliseconds: 86400000,

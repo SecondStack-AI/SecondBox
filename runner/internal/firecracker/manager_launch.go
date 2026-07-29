@@ -666,7 +666,7 @@ func stageWorkspaceJailFile(dst, src string, uid, gid int) error {
 	_ = os.Remove(dst)
 	if err := hardLinkFile(src, dst); err != nil {
 		if errors.Is(err, syscall.EXDEV) {
-			return fmt.Errorf("link workspace image into jail: %w (jailer chroot base dir must be on the same filesystem as SECONDBOX_RUNNER_SANDBOX_WORKSPACE_DIR)", err)
+			return fmt.Errorf("link workspace image into jail: %w (jailer chroot base dir must be on the same filesystem as SECONDBOX_RUNNER_WORKSPACE_ROOT)", err)
 		}
 		return err
 	}
@@ -690,144 +690,6 @@ func chownIfDifferent(path string, uid, gid int) error {
 		return fmt.Errorf("chown %s to %d:%d: %w", path, uid, gid, err)
 	}
 	return nil
-}
-
-func ensureWorkspaceImage(ctx context.Context, path string, sizeMiB int, seedDir string) error {
-	if info, err := os.Stat(path); err == nil {
-		want := int64(sizeMiB) * 1024 * 1024
-		if info.Size() != want {
-			return fmt.Errorf("existing workspace image is %d bytes, requested policy requires %d bytes", info.Size(), want)
-		}
-		return nil
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	return createWorkspaceImage(ctx, path, sizeMiB, seedDir)
-}
-
-func restoreWorkspaceImage(sourcePath, destinationPath string, expectedBytes int64) (resultErr error) {
-	if strings.TrimSpace(sourcePath) == "" || strings.TrimSpace(destinationPath) == "" ||
-		expectedBytes <= 0 {
-		return fmt.Errorf("restore workspace image paths and size are required")
-	}
-	sourceInfo, err := os.Stat(sourcePath)
-	if err != nil {
-		return fmt.Errorf("stat verified workspace checkpoint: %w", err)
-	}
-	if !sourceInfo.Mode().IsRegular() || sourceInfo.Size() != expectedBytes {
-		return fmt.Errorf(
-			"verified workspace checkpoint size is %d, requested workspace requires %d",
-			sourceInfo.Size(), expectedBytes,
-		)
-	}
-	source, err := os.Open(sourcePath)
-	if err != nil {
-		return fmt.Errorf("open verified workspace checkpoint: %w", err)
-	}
-	defer func() {
-		resultErr = errors.Join(resultErr, source.Close())
-	}()
-	destination, err := os.OpenFile(destinationPath, os.O_WRONLY, 0)
-	if err != nil {
-		return fmt.Errorf("open generation workspace for restore: %w", err)
-	}
-	defer func() {
-		resultErr = errors.Join(resultErr, destination.Close())
-	}()
-	written, err := io.Copy(destination, io.LimitReader(source, expectedBytes+1))
-	if err != nil {
-		return fmt.Errorf("restore generation workspace bytes: %w", err)
-	}
-	if written != expectedBytes {
-		return fmt.Errorf(
-			"restored workspace bytes are %d, requested workspace requires %d",
-			written, expectedBytes,
-		)
-	}
-	if err := destination.Sync(); err != nil {
-		return fmt.Errorf("sync restored generation workspace: %w", err)
-	}
-	return nil
-}
-
-func createWorkspaceImage(ctx context.Context, path string, sizeMiB int, seedDir string) error {
-	if _, err := os.Stat(path); err == nil {
-		return nil
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	sizeBytes := int64(sizeMiB) * 1024 * 1024
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	if err := f.Truncate(sizeBytes); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	args := []string{
-		"-F",
-		"-q",
-		"-E", "lazy_itable_init=1,lazy_journal_init=1,nodiscard",
-	}
-	if seedDir != "" {
-		if info, err := os.Stat(seedDir); err == nil && info.IsDir() {
-			args = append(args, "-d", seedDir)
-		} else if err != nil && !os.IsNotExist(err) {
-			_ = os.Remove(path)
-			return fmt.Errorf("stat workspace seed dir: %w", err)
-		}
-	}
-	args = append(args, path)
-	cmd := exec.CommandContext(ctx, "mkfs.ext4", args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		_ = os.Remove(path)
-		return fmt.Errorf("mkfs.ext4: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-func (m *Manager) prepareWorkspace(ctx context.Context, sandboxID, compartmentID string) (string, error) {
-	return m.prepareWorkspaceSized(ctx, sandboxID, compartmentID, m.cfg.MicroVMWorkspaceSizeMiB)
-}
-
-func (m *Manager) prepareWorkspaceSized(ctx context.Context, sandboxID, compartmentID string, sizeMiB int) (string, error) {
-	return m.prepareWorkspaceSizedForAttachment(ctx, sandboxID, compartmentID, compartmentID, sizeMiB)
-}
-
-func (m *Manager) prepareWorkspaceSizedForAttachment(ctx context.Context, sandboxID, compartmentID, attachmentID string, sizeMiB int) (string, error) {
-	if strings.TrimSpace(attachmentID) == "" {
-		attachmentID = compartmentID
-	}
-	attachmentID = normalizeRuntimeCompartmentID(attachmentID)
-	if err := validateRuntimeCompartmentID(attachmentID); err != nil {
-		return "", fmt.Errorf("invalid workspace attachment identity: %w", err)
-	}
-	if strings.EqualFold(m.cfg.MicroVMWorkspaceBackend, "dm-thin") {
-		if sizeMiB != m.cfg.MicroVMWorkspaceSizeMiB {
-			return "", fmt.Errorf("dm-thin workspace size %d MiB cannot enforce requested %d MiB", m.cfg.MicroVMWorkspaceSizeMiB, sizeMiB)
-		}
-		return m.ensureThinWorkspaceForAttachment(ctx, sandboxID, compartmentID, attachmentID)
-	}
-	compartmentID = normalizeRuntimeCompartmentID(compartmentID)
-	if err := validateRuntimeCompartmentID(compartmentID); err != nil {
-		return "", err
-	}
-	workspacePath := filepath.Join(m.cfg.MicroVMWorkspaceDir, sandboxID, attachmentID+"."+workspaceName)
-	if err := os.MkdirAll(filepath.Dir(workspacePath), 0o700); err != nil {
-		return "", fmt.Errorf("create compartment workspace dir: %w", err)
-	}
-	seedDir := m.workspaceSeedDir(sandboxID, compartmentID)
-	if err := ensureWorkspaceImage(ctx, workspacePath, sizeMiB, seedDir); err != nil {
-		return "", err
-	}
-	return workspacePath, nil
 }
 
 type firecrackerConfig struct {
@@ -1051,6 +913,10 @@ func (m *Manager) startupFingerprintWithEffectiveProfileHash(sandboxID, compartm
 	if err != nil {
 		return "", fmt.Errorf("stat startup shared image: %w", err)
 	}
+	workspaceID := ""
+	if opts.WorkspaceAttachment != nil {
+		workspaceID = strings.TrimSpace(opts.WorkspaceAttachment.WorkspaceID())
+	}
 	fingerprintInput := struct {
 		SecretBundle            SecretBundle                `json:"secretBundle"`
 		RuntimeClass            runtimemanager.RuntimeClass `json:"runtimeClass"`
@@ -1058,7 +924,7 @@ func (m *Manager) startupFingerprintWithEffectiveProfileHash(sandboxID, compartm
 		RootfsIdentity          *ArtifactIdentity           `json:"rootfsIdentity,omitempty"`
 		SharedPath              string                      `json:"sharedPath,omitempty"`
 		SharedIdentity          *ArtifactIdentity           `json:"sharedIdentity,omitempty"`
-		WorkspaceAttachmentID   string                      `json:"workspaceAttachmentId,omitempty"`
+		WorkspaceID             string                      `json:"workspaceId,omitempty"`
 		EffectiveProfileHash    string                      `json:"effectiveProfileHash,omitempty"`
 		ExecutorContractVersion int                         `json:"executorContractVersion,omitempty"`
 		ExecutorCapabilities    []string                    `json:"executorCapabilities,omitempty"`
@@ -1069,7 +935,7 @@ func (m *Manager) startupFingerprintWithEffectiveProfileHash(sandboxID, compartm
 		RootfsIdentity:          rootfsIdentity,
 		SharedPath:              image.SharedImagePath,
 		SharedIdentity:          sharedIdentity,
-		WorkspaceAttachmentID:   strings.TrimSpace(opts.WorkspaceAttachmentID),
+		WorkspaceID:             workspaceID,
 		EffectiveProfileHash:    effectiveProfileHash,
 		ExecutorContractVersion: executorContractVersionForFingerprint(image.RuntimeClass),
 		ExecutorCapabilities:    executorCapabilitiesForFingerprint(image.RuntimeClass),
@@ -1111,19 +977,6 @@ func executorCapabilitiesForFingerprint(runtimeClass runtimemanager.RuntimeClass
 	caps := append([]string(nil), toolExecutorFingerprintCapabilities...)
 	sort.Strings(caps)
 	return caps
-}
-
-func (m *Manager) workspaceSeedDir(sandboxID, compartmentID string) string {
-	defaultSeed := filepath.Join(m.cfg.SandboxesDir(), sandboxID, "workspace")
-	compartmentID = normalizeRuntimeCompartmentID(compartmentID)
-	if compartmentID == "" {
-		return defaultSeed
-	}
-	compartmentSeed := filepath.Join(m.cfg.SandboxesDir(), sandboxID, "compartments", compartmentID, "workspace")
-	if info, err := os.Stat(compartmentSeed); err == nil && info.IsDir() {
-		return compartmentSeed
-	}
-	return defaultSeed
 }
 
 // waitForControlPlane blocks until the in-guest control service answers a heartbeat over
@@ -1180,7 +1033,12 @@ func (m *Manager) deliverStartupSecrets(ctx context.Context, inst *instance, san
 		return err
 	}
 	timer.mark("control_plane_ready")
-	if err := inst.controlClient(15*time.Second).ApplySecrets(ctx, bundle); err != nil {
+	controlClient := inst.controlClient(15 * time.Second)
+	if err := controlClient.HardenPostRestore(ctx, time.Now().UTC()); err != nil {
+		return fmt.Errorf("seed guest entropy and clock: %w", err)
+	}
+	timer.mark("guest_entropy_ready")
+	if err := controlClient.ApplySecrets(ctx, bundle); err != nil {
 		return fmt.Errorf("apply runtime secrets: %w", err)
 	}
 	timer.mark("startup_secrets_applied")

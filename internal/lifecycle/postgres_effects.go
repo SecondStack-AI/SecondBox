@@ -12,6 +12,7 @@ import (
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/scheduler"
+	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -86,18 +87,18 @@ func (broker *PostgresEffectBroker) ExecuteLifecycleEffect(
 	nextReconcileAt time.Time,
 ) error {
 	switch decision.Action {
-	case ActionMaterialize, ActionStartInstance:
-		return broker.materializeAndStart(ctx, claim, now, nextReconcileAt)
+	case ActionStartInstance:
+		return broker.scheduleAndStart(ctx, claim, now, nextReconcileAt)
 	case ActionStopInstance:
 		return broker.queueStop(ctx, claim, decision.TerminationReason, now, nextReconcileAt)
-	case ActionCheckpoint:
-		return broker.queueCheckpoint(ctx, claim, now, nextReconcileAt)
+	case ActionDelete:
+		return broker.queueWorkspaceDelete(ctx, claim, now, nextReconcileAt)
 	default:
 		return fmt.Errorf("SecondBox lifecycle effect action %q is unsupported", decision.Action)
 	}
 }
 
-func (broker *PostgresEffectBroker) queueCheckpoint(
+func (broker *PostgresEffectBroker) queueWorkspaceDelete(
 	ctx context.Context,
 	claim ports.LifecycleReconcileClaim,
 	now time.Time,
@@ -105,115 +106,85 @@ func (broker *PostgresEffectBroker) queueCheckpoint(
 ) error {
 	tx, err := broker.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("SecondBox lifecycle checkpoint transaction failed: %w", err)
+		return fmt.Errorf("SecondBox lifecycle Workspace delete transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	var (
-		assignmentID, instanceID, runnerID, workspaceID, operationID, requestID string
-		generation, activeSessions, workspaceBytes, retentionSeconds            int64
-		fencingToken                                                            []byte
-	)
+	locked, err := rowlock.SandboxWorkspaceByID(ctx, tx, claim.SandboxID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ports.ErrRevisionConflict
+	}
+	if err != nil {
+		return fmt.Errorf("SecondBox lifecycle Workspace delete lock failed: %w", err)
+	}
+	if locked.Revision != claim.Revision ||
+		locked.ReconcileOwner != claim.WorkerID ||
+		locked.DesiredState != contracts.SandboxDesiredStateDeleted {
+		return ports.ErrRevisionConflict
+	}
+	if locked.CurrentInstanceID != "" {
+		return ports.ErrWorkspaceMutation
+	}
+	workspace := locked.Workspace
+	if workspace.State != "ready" && workspace.State != "failed" && workspace.State != "deleting" {
+		return ports.ErrWorkspaceMutation
+	}
+	var pendingRestores int64
 	if err := tx.QueryRow(ctx, `
-		SELECT assignment.id,assignment.instance_id,assignment.runner_id,
-		       assignment.generation,assignment.fencing_token,sandbox.workspace_id,
-		       (revision.spec_json->'resources'->>'workspaceBytes')::bigint,
-		       (revision.spec_json->'checkpoint'->>'retentionSeconds')::bigint,
-		       COALESCE((
-		         SELECT operation.id FROM secondbox.operations AS operation
-		         WHERE operation.sandbox_id=sandbox.id
-		           AND operation.state IN ('pending','running')
-		         ORDER BY operation.created_at DESC,operation.id DESC LIMIT 1
-		       ),''),
-		       COALESCE((
-		         SELECT operation.request_id FROM secondbox.operations AS operation
-		         WHERE operation.sandbox_id=sandbox.id
-		           AND operation.state IN ('pending','running')
-		         ORDER BY operation.created_at DESC,operation.id DESC LIMIT 1
-		       ),''),
-		       (
-		         SELECT count(*) FROM secondbox.activity_sessions AS session
-		         WHERE session.sandbox_id=sandbox.id AND session.generation=sandbox.generation
-		           AND session.state='active'
-		       )
-		FROM secondbox.assignments AS assignment
-		JOIN secondbox.sandboxes AS sandbox ON sandbox.id=assignment.sandbox_id
-		JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
-		WHERE sandbox.id=$1 AND sandbox.reconcile_owner=$2 AND sandbox.revision=$3
-		  AND assignment.generation=sandbox.generation AND assignment.state='ready'
-		ORDER BY assignment.created_at DESC,assignment.id DESC LIMIT 1
-		FOR UPDATE OF assignment,sandbox`,
-		claim.SandboxID, claim.WorkerID, claim.Revision,
-	).Scan(
-		&assignmentID, &instanceID, &runnerID, &generation, &fencingToken,
-		&workspaceID, &workspaceBytes, &retentionSeconds, &operationID, &requestID, &activeSessions,
-	); err != nil {
+		SELECT count(*) FROM secondbox.workspace_restores
+		WHERE workspace_id=$1 AND state NOT IN ('finalized','failed')`,
+		workspace.ID,
+	).Scan(&pendingRestores); err != nil {
+		return fmt.Errorf("SecondBox lifecycle Workspace delete restore lookup failed: %w", err)
+	}
+	if pendingRestores != 0 {
+		return ports.ErrWorkspaceMutation
+	}
+	var operationID, requestID string
+	if err := tx.QueryRow(ctx, `
+		SELECT id,request_id FROM secondbox.operations
+		WHERE sandbox_id=$1 AND kind='delete' AND state IN ('pending','running')
+		ORDER BY created_at DESC,id DESC LIMIT 1`,
+		claim.SandboxID,
+	).Scan(&operationID, &requestID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ports.ErrRevisionConflict
 		}
-		return fmt.Errorf("SecondBox lifecycle checkpoint authority lookup failed: %w", err)
+		return fmt.Errorf("SecondBox lifecycle Workspace delete Operation lookup failed: %w", err)
 	}
-	if activeSessions != 0 {
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.sandboxes
-			SET next_reconcile_at=$2,reconcile_owner='',reconcile_claim_expires_at=NULL,
-			    revision=revision+1,updated_at=$3
-			WHERE id=$1 AND revision=$4 AND reconcile_owner=$5`,
-			claim.SandboxID, nextReconcileAt.UTC(), now.UTC(), claim.Revision, claim.WorkerID,
-		); err != nil {
-			return fmt.Errorf("SecondBox lifecycle checkpoint active-session wait failed: %w", err)
+	generationText := fmt.Sprintf("%d", locked.Generation)
+	effectID := stableEffectID("workspace-delete-effect", claim.SandboxID, generationText)
+	initialCommandID := stableEffectID("workspace-delete-command", claim.SandboxID, generationText)
+	replaceFailedCreate := workspace.Mutation.Kind == "create" &&
+		workspace.Mutation.State == "failed"
+	if workspace.Mutation.State == "" || replaceFailedCreate {
+		tag, err := tx.Exec(ctx, `
+			UPDATE secondbox.workspaces
+			SET state='deleting',mutation_kind='workspace_delete',mutation_id=$2,
+			    mutation_effect_id=$2,mutation_operation_id=$3,
+			    mutation_expected_generation=$4,mutation_target_generation=$4,
+			    mutation_state='deleting',updated_at=$5
+			WHERE id=$1 AND (
+			  mutation_state='' OR
+			  (mutation_kind='create' AND mutation_state='failed')
+			)`,
+			workspace.ID, effectID, operationID, locked.Generation, now.UTC(),
+		)
+		if err != nil {
+			return fmt.Errorf("SecondBox lifecycle Workspace delete mutation acquisition failed: %w", err)
 		}
-		if err := tx.Commit(ctx); err != nil {
-			return fmt.Errorf("SecondBox lifecycle checkpoint active-session wait commit failed: %w", err)
+		if tag.RowsAffected() != 1 {
+			return ports.ErrWorkspaceMutation
 		}
-		if _, err := broker.config.SessionCanceller.CancelSandboxSessions(
-			ctx, claim.SandboxID, generation, "Sandbox drain grace expired", now.UTC(),
-		); err != nil {
-			return fmt.Errorf("SecondBox lifecycle forced session cancellation failed: %w", err)
-		}
-		return nil
+	} else if workspace.Mutation.Kind != "workspace_delete" ||
+		workspace.Mutation.ID != effectID ||
+		workspace.Mutation.EffectID != effectID ||
+		workspace.Mutation.OperationID != operationID ||
+		workspace.Mutation.ExpectedGeneration != locked.Generation {
+		return ports.ErrWorkspaceMutation
 	}
-	generationText := fmt.Sprintf("%d", generation)
-	effectID := stableEffectID("checkpoint-effect", claim.SandboxID, generationText)
-	checkpointID := stableEffectID("checkpoint", claim.SandboxID, generationText)
-	commandID := stableEffectID("checkpoint-command", claim.SandboxID, generationText)
-	if (operationID == "") != (requestID == "") {
-		return errors.New("SecondBox lifecycle checkpoint correlation is incomplete")
-	}
-	if operationID == "" && requestID == "" {
-		// Policy-triggered checkpoints use stable effect identities when no client lifecycle operation exists.
-		operationID = effectID
-		requestID = commandID
-	}
-	storageObjectID := "checkpoints/" + claim.SandboxID + "/" + generationText + "/" + checkpointID + ".ext4"
-	deadline := now.UTC().Add(broker.config.AssignmentDeadline)
-	command := &runnerv1.CheckpointCommand{
-		Fence: &runnerv1.AssignmentFence{
-			AssignmentId: assignmentID, SandboxId: claim.SandboxID, InstanceId: instanceID,
-			SandboxGeneration: uint64(generation), FencingToken: fencingToken,
-		},
-		CheckpointId: checkpointID, StorageObjectId: storageObjectID,
-		MaximumSizeBytes: uint64(workspaceBytes), DeadlineUnixMs: uint64(deadline.UnixMilli()),
-		Correlation: &runnerv1.Correlation{
-			RequestId: requestID, OperationId: operationID, SandboxId: claim.SandboxID, InstanceId: instanceID,
-			SandboxGeneration: uint64(generation), AssignmentId: assignmentID, RunnerId: runnerID,
-		},
-	}
-	payload, err := proto.Marshal(&runnerv1.ControlPlaneToRunner{
-		Message: &runnerv1.ControlPlaneToRunner_Checkpoint{Checkpoint: command},
-	})
-	if err != nil {
-		return fmt.Errorf("SecondBox lifecycle Checkpoint command encoding failed: %w", err)
-	}
-	effectPayload, err := json.Marshal(map[string]any{
-		"workspaceId": workspaceID, "retainUntil": now.UTC().Add(time.Duration(retentionSeconds) * time.Second),
-		"maximumSizeBytes": workspaceBytes,
-	})
-	if err != nil {
-		return fmt.Errorf("SecondBox lifecycle checkpoint effect encoding failed: %w", err)
-	}
-	handled, err := broker.resumeCheckpointEffect(
-		ctx, tx, claim, effectID, commandID, runnerID, assignmentID,
-		payload, deadline, now.UTC(), nextReconcileAt.UTC(),
+	handled, err := broker.resumeWorkspaceDeleteEffect(
+		ctx, tx, claim, locked, effectID, initialCommandID,
+		operationID, requestID, now.UTC(), nextReconcileAt.UTC(),
 	)
 	if err != nil {
 		return err
@@ -221,122 +192,97 @@ func (broker *PostgresEffectBroker) queueCheckpoint(
 	if handled {
 		return tx.Commit(ctx)
 	}
+	fencingToken, err := broker.config.NewFencingToken()
+	if err != nil {
+		return fmt.Errorf("SecondBox lifecycle Workspace delete fencing token generation failed: %w", err)
+	}
+	if len(fencingToken) < 32 {
+		return errors.New("SecondBox lifecycle Workspace delete fencing token must contain at least 32 bytes")
+	}
+	deadline := now.UTC().Add(broker.config.AssignmentDeadline)
+	payload, err := workspaceDeletePayload(
+		initialCommandID, operationID, effectID, requestID, locked, fencingToken,
+	)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.lifecycle_effects (
 			id,sandbox_id,generation,kind,state,assignment_id,instance_id,runner_id,
-			command_id,checkpoint_id,storage_object_id,fencing_token,retry_count,retry_limit,
+			command_id,storage_object_id,fencing_token,retry_count,retry_limit,
 			effect_deadline,claim_owner,claim_expires_at,failure_class,failure_message,
 			payload_json,evidence_json,created_at,updated_at
 		) VALUES (
-			$1,$2,$3,'checkpoint','queued',$4,$5,$6,$7,$8,$9,$10,0,$11,$12,'',$13,
-			'','',$14,'{}',$15,$15
-		) ON CONFLICT (id) DO NOTHING`,
-		effectID, claim.SandboxID, generation, assignmentID, instanceID, runnerID,
-		commandID, checkpointID, storageObjectID, fencingToken, broker.config.RetryLimit,
-		deadline, now.UTC(), effectPayload, now.UTC(),
+			$1,$2,$3,'local_workspace_delete','queued','','',$4,$5,'',$6,0,$7,$8,
+			'',$9,'','','{}','{}',$9,$9
+		)`,
+		effectID, claim.SandboxID, locked.Generation, workspace.HomeRunnerID,
+		initialCommandID, fencingToken, broker.config.RetryLimit, deadline, now.UTC(),
 	); err != nil {
-		return fmt.Errorf("SecondBox lifecycle checkpoint effect insert failed: %w", err)
+		return fmt.Errorf("SecondBox lifecycle Workspace delete effect insert failed: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.runner_commands (
 			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
 			delivery_count,created_at,updated_at,delivered_at
-		) VALUES ($1,$2,$3,'checkpoint',$4,'pending','',0,$5,$5,NULL)
-		ON CONFLICT (id) DO NOTHING`,
-		commandID, runnerID, assignmentID, payload, now.UTC(),
+		) VALUES ($1,$2,$3,'local-workspace',$4,'pending','',0,$5,$5,NULL)`,
+		initialCommandID, workspace.HomeRunnerID, effectID, payload, now.UTC(),
 	); err != nil {
-		return fmt.Errorf("SecondBox lifecycle Checkpoint command insert failed: %w", err)
+		return fmt.Errorf("SecondBox lifecycle Workspace delete command insert failed: %w", err)
 	}
 	tag, err := tx.Exec(ctx, `
 		UPDATE secondbox.sandboxes
-		SET state='checkpointing',lifecycle_action='checkpoint',next_reconcile_at=$2,
-		    reconcile_owner='',reconcile_claim_expires_at=NULL,revision=revision+1,updated_at=$3
+		SET state='deleting',lifecycle_action='delete',next_reconcile_at=$2,
+		    reconcile_owner='',reconcile_claim_expires_at=NULL,
+		    revision=revision+1,updated_at=$3
 		WHERE id=$1 AND revision=$4 AND reconcile_owner=$5`,
 		claim.SandboxID, nextReconcileAt.UTC(), now.UTC(), claim.Revision, claim.WorkerID,
 	)
 	if err != nil {
-		return fmt.Errorf("SecondBox lifecycle checkpoint transition failed: %w", err)
+		return fmt.Errorf("SecondBox lifecycle Workspace delete transition failed: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
 		return ports.ErrRevisionConflict
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("SecondBox lifecycle checkpoint commit failed: %w", err)
+		return fmt.Errorf("SecondBox lifecycle Workspace delete commit failed: %w", err)
 	}
 	return nil
 }
 
-func (broker *PostgresEffectBroker) resumeCheckpointEffect(
+func (broker *PostgresEffectBroker) resumeWorkspaceDeleteEffect(
 	ctx context.Context,
 	tx pgx.Tx,
 	claim ports.LifecycleReconcileClaim,
+	locked rowlock.SandboxWorkspace,
 	effectID string,
 	initialCommandID string,
-	runnerID string,
-	assignmentID string,
-	commandPayload []byte,
-	nextDeadline time.Time,
+	operationID string,
+	requestID string,
 	now time.Time,
 	nextReconcileAt time.Time,
 ) (bool, error) {
-	var state string
-	var retryCount, retryLimit int64
+	var state, currentCommandID string
+	var retryCount int64
 	var effectDeadline time.Time
+	var fencingToken []byte
 	err := tx.QueryRow(ctx, `
-		SELECT state,retry_count,retry_limit,effect_deadline
+		SELECT state,command_id,retry_count,effect_deadline,fencing_token
 		FROM secondbox.lifecycle_effects WHERE id=$1 FOR UPDATE`,
 		effectID,
-	).Scan(&state, &retryCount, &retryLimit, &effectDeadline)
+	).Scan(&state, &currentCommandID, &retryCount, &effectDeadline, &fencingToken)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("SecondBox lifecycle checkpoint retry lookup failed: %w", err)
+		return false, fmt.Errorf("SecondBox lifecycle Workspace delete retry lookup failed: %w", err)
 	}
-	if state != "queued" || effectDeadline.After(now) {
-		if err := releaseCheckpointReconcileClaim(
-			ctx, tx, claim, now, nextReconcileAt,
-		); err != nil {
-			return false, err
-		}
-		return true, nil
+	if state == "succeeded" {
+		return false, errors.New("SecondBox lifecycle Workspace delete succeeded without finalizing its Sandbox")
 	}
-	var currentCommandID string
-	if err := tx.QueryRow(ctx, `
-		SELECT command_id FROM secondbox.lifecycle_effects WHERE id=$1`,
-		effectID,
-	).Scan(&currentCommandID); err != nil {
-		return false, fmt.Errorf("SecondBox lifecycle checkpoint current command lookup failed: %w", err)
-	}
-	if retryCount >= retryLimit {
-		const failureMessage = "checkpoint command exhausted its delivery deadline retry bound"
-		tag, err := tx.Exec(ctx, `
-			UPDATE secondbox.lifecycle_effects
-			SET state='runner_failed',failure_class='checkpoint_retry_exhausted',
-			    failure_message=$2,updated_at=$3
-			WHERE id=$1 AND state='queued' AND retry_count=$4`,
-			effectID, failureMessage, now, retryCount,
-		)
-		if err != nil {
-			return false, fmt.Errorf("SecondBox lifecycle checkpoint retry exhaustion failed: %w", err)
-		}
-		if tag.RowsAffected() != 1 {
-			return false, ports.ErrRevisionConflict
-		}
-		commandTag, err := tx.Exec(ctx, `
-			UPDATE secondbox.runner_commands
-			SET state='failed',target_connection_id='',updated_at=$2
-			WHERE id=$1 AND state IN ('pending','delivering','delivered')`,
-			currentCommandID, now,
-		)
-		if err != nil {
-			return false, fmt.Errorf("SecondBox lifecycle checkpoint exhausted command failed: %w", err)
-		}
-		if commandTag.RowsAffected() != 1 {
-			return false, errors.New("SecondBox lifecycle checkpoint exhausted command is missing")
-		}
-		if err := releaseCheckpointReconcileClaim(
-			ctx, tx, claim, now, nextReconcileAt,
+	if state == "queued" && effectDeadline.After(now) {
+		if err := releaseEffectReconcileClaim(
+			ctx, tx, claim, now, nextReconcileAt, "Workspace delete",
 		); err != nil {
 			return false, err
 		}
@@ -346,92 +292,123 @@ func (broker *PostgresEffectBroker) resumeCheckpointEffect(
 	retryCommandID := stableEffectID(
 		initialCommandID, fmt.Sprintf("retry-%d", nextRetryCount),
 	)
+	payload, err := workspaceDeletePayload(
+		retryCommandID, operationID, effectID, requestID, locked, fencingToken,
+	)
+	if err != nil {
+		return false, err
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.runner_commands
-		SET state='expired',target_connection_id='',updated_at=$2
-		WHERE id=$1 AND state IN ('pending','delivering','delivered')`,
+		SET state=CASE WHEN state='acknowledged' THEN state ELSE 'expired' END,
+		    target_connection_id='',updated_at=$2
+		WHERE id=$1`,
 		currentCommandID, now,
 	); err != nil {
-		return false, fmt.Errorf("SecondBox lifecycle checkpoint expired command update failed: %w", err)
+		return false, fmt.Errorf("SecondBox lifecycle Workspace delete prior command update failed: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.runner_commands (
 			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
 			delivery_count,created_at,updated_at,delivered_at
-		) VALUES ($1,$2,$3,'checkpoint',$4,'pending','',0,$5,$5,NULL)`,
-		retryCommandID, runnerID, assignmentID, commandPayload, now,
+		) VALUES ($1,$2,$3,'local-workspace',$4,'pending','',0,$5,$5,NULL)
+		ON CONFLICT (id) DO NOTHING`,
+		retryCommandID, locked.Workspace.HomeRunnerID, effectID, payload, now,
 	); err != nil {
-		return false, fmt.Errorf("SecondBox lifecycle checkpoint retry command insert failed: %w", err)
+		return false, fmt.Errorf("SecondBox lifecycle Workspace delete retry command insert failed: %w", err)
 	}
+	deadline := now.Add(broker.config.AssignmentDeadline)
 	tag, err := tx.Exec(ctx, `
 		UPDATE secondbox.lifecycle_effects
-		SET command_id=$2,retry_count=$3,effect_deadline=$4,
-		    failure_class='checkpoint_deadline_retry',
-		    failure_message='checkpoint command delivery deadline expired; retry queued',
-		    updated_at=$5
-		WHERE id=$1 AND state='queued' AND retry_count=$6`,
-		effectID, retryCommandID, nextRetryCount, nextDeadline, now, retryCount,
+		SET state='queued',command_id=$2,retry_count=$3,effect_deadline=$4,
+		    failure_class='',failure_message='',updated_at=$5
+		WHERE id=$1 AND retry_count=$6`,
+		effectID, retryCommandID, nextRetryCount, deadline, now, retryCount,
 	)
 	if err != nil {
-		return false, fmt.Errorf("SecondBox lifecycle checkpoint retry evidence update failed: %w", err)
+		return false, fmt.Errorf("SecondBox lifecycle Workspace delete retry update failed: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
 		return false, ports.ErrRevisionConflict
 	}
-	if err := releaseCheckpointReconcileClaim(
-		ctx, tx, claim, now, nextReconcileAt,
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.workspaces
+		SET mutation_state='deleting',updated_at=$2
+		WHERE id=$1 AND mutation_id=$3`,
+		locked.WorkspaceID, now, effectID,
+	); err != nil {
+		return false, fmt.Errorf("SecondBox lifecycle Workspace delete retry mutation update failed: %w", err)
+	}
+	if err := releaseEffectReconcileClaim(
+		ctx, tx, claim, now, nextReconcileAt, "Workspace delete",
 	); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func releaseCheckpointReconcileClaim(
-	ctx context.Context,
-	tx pgx.Tx,
-	claim ports.LifecycleReconcileClaim,
-	now time.Time,
-	nextReconcileAt time.Time,
-) error {
-	tag, err := tx.Exec(ctx, `
-		UPDATE secondbox.sandboxes
-		SET next_reconcile_at=$2,reconcile_owner='',reconcile_claim_expires_at=NULL,
-		    revision=revision+1,updated_at=$3
-		WHERE id=$1 AND revision=$4 AND reconcile_owner=$5`,
-		claim.SandboxID, nextReconcileAt, now, claim.Revision, claim.WorkerID,
-	)
+func workspaceDeletePayload(
+	commandID string,
+	operationID string,
+	effectID string,
+	requestID string,
+	locked rowlock.SandboxWorkspace,
+	fencingToken []byte,
+) ([]byte, error) {
+	command := &runnerv1.LocalWorkspaceCommand{
+		MessageId: commandID, CommandVersion: 1,
+		Kind:        runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_DELETE,
+		OperationId: operationID, EffectId: effectID,
+		SandboxId: locked.SandboxID, WorkspaceId: locked.WorkspaceID,
+		ExpectedGeneration:   uint64(locked.Generation),
+		NextGeneration:       uint64(locked.Generation),
+		LogicalCapacityBytes: uint64(locked.Workspace.LogicalCapacityBytes),
+		FencingToken:         append([]byte(nil), fencingToken...),
+		Correlation: &runnerv1.Correlation{
+			RequestId: requestID, OperationId: operationID,
+			SandboxId: locked.SandboxID, SandboxGeneration: uint64(locked.Generation),
+			RunnerId: locked.Workspace.HomeRunnerID,
+		},
+	}
+	payload, err := proto.Marshal(&runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_LocalWorkspace{
+			LocalWorkspace: command,
+		},
+	})
 	if err != nil {
-		return fmt.Errorf("SecondBox lifecycle checkpoint reconcile release failed: %w", err)
+		return nil, fmt.Errorf("SecondBox lifecycle Workspace delete command encoding failed: %w", err)
 	}
-	if tag.RowsAffected() != 1 {
-		return ports.ErrRevisionConflict
-	}
-	return nil
+	return payload, nil
 }
 
-type materializePlan struct {
-	workspaceID        string
-	generation         int64
-	profileRevisionID  string
-	sourceCheckpointID string
-	operationID        string
-	requestID          string
-	spec               contracts.ProfileRevisionSpec
+type startPlan struct {
+	workspaceID       string
+	mutationID        string
+	generation        int64
+	profileRevisionID string
+	operationID       string
+	requestID         string
+	spec              contracts.ProfileRevisionSpec
 }
 
-func (broker *PostgresEffectBroker) materializeAndStart(
+func (broker *PostgresEffectBroker) scheduleAndStart(
 	ctx context.Context,
 	claim ports.LifecycleReconcileClaim,
 	now time.Time,
 	nextReconcileAt time.Time,
 ) error {
-	plan, err := broker.loadMaterializePlan(ctx, claim)
+	plan, err := broker.loadStartPlan(ctx, claim)
 	if err != nil {
 		return err
 	}
 	assignmentID := broker.config.NewID("assignment")
 	instanceID := broker.config.NewID("instance")
-	materializationID := broker.config.NewID("materialization")
+	startMutationID := plan.mutationID
+	if startMutationID == "" {
+		startMutationID = stableEffectID(
+			"workspace-start", claim.SandboxID, fmt.Sprintf("%d", plan.generation),
+		)
+	}
 	commandID := broker.config.NewID("assignment-command")
 	fencingToken, err := broker.config.NewFencingToken()
 	if err != nil {
@@ -450,10 +427,7 @@ func (broker *PostgresEffectBroker) materializeAndStart(
 	if err != nil {
 		return err
 	}
-	requiredCapabilities := []string{"network-policy", "storage", "cleanup"}
-	if plan.sourceCheckpointID != "" || plan.spec.Checkpoint.OnStop {
-		requiredCapabilities = append(requiredCapabilities, "checkpoint")
-	}
+	requiredCapabilities := []string{"network-policy", "storage", "cleanup", "local-workspace"}
 	deadline := now.UTC().Add(broker.config.AssignmentDeadline)
 	assignmentCommand := &runnerv1.AssignmentCommand{
 		Fence: &runnerv1.AssignmentFence{
@@ -470,7 +444,8 @@ func (broker *PostgresEffectBroker) materializeAndStart(
 			MaximumOperationMs:   uint64(plan.spec.Execution.MaximumDeadlineMilliseconds),
 			MaximumOutputBytes:   uint64(plan.spec.Execution.MaximumBufferedOutputBytes),
 		},
-		Assets: assets, SourceCheckpointId: plan.sourceCheckpointID,
+		Assets:         assets,
+		WorkspaceId:    plan.workspaceID,
 		DeadlineUnixMs: uint64(deadline.UnixMilli()),
 		Correlation: &runnerv1.Correlation{
 			RequestId: plan.requestID, OperationId: plan.operationID, SandboxId: claim.SandboxID,
@@ -481,10 +456,10 @@ func (broker *PostgresEffectBroker) materializeAndStart(
 	assignment, _, err := broker.scheduler.Schedule(ctx, scheduler.ScheduleRequest{
 		AssignmentID: assignmentID, AssignmentCommandID: commandID,
 		InstanceID: instanceID, SandboxID: claim.SandboxID,
-		WorkspaceID: plan.workspaceID, MaterializationID: materializationID,
-		SourceCheckpointID: plan.sourceCheckpointID, ProfileRevisionID: plan.profileRevisionID,
+		WorkspaceID: plan.workspaceID, StartMutationID: startMutationID,
+		ProfileRevisionID: plan.profileRevisionID,
 		Requirements: scheduler.Requirements{
-			PoolName: plan.spec.Pool, BackendKind: plan.spec.Backend,
+			PoolName: plan.spec.Pool, BackendKind: "firecracker",
 			Architecture: plan.spec.Architecture, RequiredCapabilities: requiredCapabilities,
 			Capacity: scheduler.Capacity{
 				CPUMillis:   plan.spec.Resources.CPUMillis,
@@ -493,7 +468,6 @@ func (broker *PostgresEffectBroker) materializeAndStart(
 				Instances:   1, Operations: plan.spec.Resources.ConcurrentOperations,
 			},
 			GuestProtocolGeneration: guestProtocolGeneration,
-			WorkspaceCheckpointID:   plan.sourceCheckpointID,
 			PreferredArtifactDigests: []string{
 				plan.spec.RuntimeBundleDigest, plan.spec.ToolchainBundleDigest,
 			},
@@ -512,7 +486,7 @@ func (broker *PostgresEffectBroker) materializeAndStart(
 	}
 	tag, err := broker.pool.Exec(ctx, `
 		UPDATE secondbox.sandboxes
-		SET lifecycle_action='materialize',next_reconcile_at=$4,reconcile_owner='',
+		SET lifecycle_action='start_instance',next_reconcile_at=$4,reconcile_owner='',
 		    reconcile_claim_expires_at=NULL,revision=revision+1,updated_at=$3
 		WHERE id=$1 AND generation=$2 AND current_instance_id=$5
 		  AND reconcile_owner=$6`,
@@ -520,7 +494,7 @@ func (broker *PostgresEffectBroker) materializeAndStart(
 		assignment.InstanceID, claim.WorkerID,
 	)
 	if err != nil {
-		return fmt.Errorf("SecondBox lifecycle materialize claim completion failed: %w", err)
+		return fmt.Errorf("SecondBox lifecycle start claim completion failed: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		var currentInstanceID string
@@ -528,7 +502,7 @@ func (broker *PostgresEffectBroker) materializeAndStart(
 			SELECT current_instance_id FROM secondbox.sandboxes
 			WHERE id=$1 AND generation=$2`, claim.SandboxID, plan.generation,
 		).Scan(&currentInstanceID); err != nil {
-			return fmt.Errorf("SecondBox lifecycle materialize completion lookup failed: %w", err)
+			return fmt.Errorf("SecondBox lifecycle start completion lookup failed: %w", err)
 		}
 		if currentInstanceID != assignment.InstanceID {
 			return ports.ErrRevisionConflict
@@ -573,20 +547,15 @@ func resolveProfileAssets(
 	return assets, runtimeAsset.GuestProtocolGeneration, nil
 }
 
-func (broker *PostgresEffectBroker) loadMaterializePlan(
+func (broker *PostgresEffectBroker) loadStartPlan(
 	ctx context.Context,
 	claim ports.LifecycleReconcileClaim,
-) (materializePlan, error) {
-	var plan materializePlan
+) (startPlan, error) {
+	var plan startPlan
 	var specJSON []byte
 	err := broker.pool.QueryRow(ctx, `
 		SELECT sandbox.workspace_id,sandbox.generation,sandbox.profile_revision_id,
-		       revision.spec_json,
-		       COALESCE((
-		         SELECT checkpoint.id FROM secondbox.workspace_checkpoints AS checkpoint
-		         WHERE checkpoint.id=workspace.current_checkpoint_id
-		           AND checkpoint.state='published'
-		       ),''),
+		       revision.spec_json,workspace.mutation_id,
 		       COALESCE((
 		         SELECT operation.id FROM secondbox.operations AS operation
 		         WHERE operation.sandbox_id=sandbox.id
@@ -606,16 +575,16 @@ func (broker *PostgresEffectBroker) loadMaterializePlan(
 		claim.SandboxID, claim.WorkerID,
 	).Scan(
 		&plan.workspaceID, &plan.generation, &plan.profileRevisionID,
-		&specJSON, &plan.sourceCheckpointID, &plan.operationID, &plan.requestID,
+		&specJSON, &plan.mutationID, &plan.operationID, &plan.requestID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return materializePlan{}, ports.ErrRevisionConflict
+		return startPlan{}, ports.ErrRevisionConflict
 	}
 	if err != nil {
-		return materializePlan{}, fmt.Errorf("SecondBox lifecycle materialize plan lookup failed: %w", err)
+		return startPlan{}, fmt.Errorf("SecondBox lifecycle start plan lookup failed: %w", err)
 	}
 	if err := json.Unmarshal(specJSON, &plan.spec); err != nil {
-		return materializePlan{}, fmt.Errorf("SecondBox lifecycle materialize Profile decoding failed: %w", err)
+		return startPlan{}, fmt.Errorf("SecondBox lifecycle start Profile decoding failed: %w", err)
 	}
 	return plan, nil
 }
@@ -632,6 +601,16 @@ func (broker *PostgresEffectBroker) queueStop(
 		return fmt.Errorf("SecondBox lifecycle stop transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	locked, err := rowlock.SandboxWorkspaceByID(ctx, tx, claim.SandboxID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ports.ErrRevisionConflict
+	}
+	if err != nil {
+		return fmt.Errorf("SecondBox lifecycle stop Sandbox/Workspace lock failed: %w", err)
+	}
+	if locked.Revision != claim.Revision {
+		return ports.ErrRevisionConflict
+	}
 	var assignmentID, instanceID, runnerID, operationID, requestID string
 	var generation int64
 	var fencingToken []byte
@@ -670,6 +649,36 @@ func (broker *PostgresEffectBroker) queueStop(
 	generationText := fmt.Sprintf("%d", generation)
 	effectID := stableEffectID("stop-effect", claim.SandboxID, generationText)
 	commandID := stableEffectID("stop-command", claim.SandboxID, generationText)
+	if operationID == "" {
+		operationID = effectID
+	}
+	workspace := locked.Workspace
+	if workspace.State != "ready" || workspace.Generation != generation ||
+		locked.Generation != generation {
+		return ports.ErrGenerationFenced
+	}
+	if workspace.Mutation.State == "" {
+		tag, err := tx.Exec(ctx, `
+			UPDATE secondbox.workspaces
+			SET mutation_kind='stop',mutation_id=$2,mutation_effect_id=$2,
+			    mutation_operation_id=$2,mutation_expected_generation=$3,
+			    mutation_target_generation=$4,mutation_state='stopping',updated_at=$5
+			WHERE id=$1 AND mutation_state=''`,
+			workspace.ID, effectID, generation, generation+1, now.UTC(),
+		)
+		if err != nil {
+			return fmt.Errorf("SecondBox lifecycle stop Workspace mutation acquisition failed: %w", err)
+		}
+		if tag.RowsAffected() != 1 {
+			return ports.ErrWorkspaceMutation
+		}
+	} else if workspace.Mutation.Kind != "stop" ||
+		workspace.Mutation.ID != effectID ||
+		workspace.Mutation.EffectID != effectID ||
+		workspace.Mutation.ExpectedGeneration != generation ||
+		workspace.Mutation.TargetGeneration != generation+1 {
+		return ports.ErrWorkspaceMutation
+	}
 	deadline := now.UTC().Add(broker.config.AssignmentDeadline)
 	command := &runnerv1.FenceCommand{
 		Fence: &runnerv1.AssignmentFence{
@@ -703,11 +712,11 @@ func (broker *PostgresEffectBroker) queueStop(
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.lifecycle_effects (
 			id,sandbox_id,generation,kind,state,assignment_id,instance_id,runner_id,
-			command_id,checkpoint_id,storage_object_id,fencing_token,retry_count,retry_limit,
+			command_id,storage_object_id,fencing_token,retry_count,retry_limit,
 			effect_deadline,claim_owner,claim_expires_at,failure_class,failure_message,
 			payload_json,evidence_json,created_at,updated_at
 		) VALUES (
-			$1,$2,$3,'stop','queued',$4,$5,$6,$7,'','',$8,0,$9,$10,'',$11,
+			$1,$2,$3,'stop','queued',$4,$5,$6,$7,'',$8,0,$9,$10,'',$11,
 			'','','{}','{}',$12,$12
 		) ON CONFLICT (id) DO NOTHING`,
 		effectID, claim.SandboxID, generation, assignmentID, instanceID, runnerID,

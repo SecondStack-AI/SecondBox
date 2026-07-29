@@ -3,17 +3,23 @@ package firecracker
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
 
 func TestSmokeBootFirecracker(t *testing.T) {
@@ -25,7 +31,7 @@ func TestSmokeBootFirecracker(t *testing.T) {
 		FirecrackerPath:         requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_PATH"),
 		MicroVMKernelPath:       requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"),
 		MicroVMRootfsPath:       requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"),
-		MicroVMWorkspaceDir:     filepath.Join(workDir, "workspaces"),
+		RunnerWorkspaceRoot:     filepath.Join(workDir, "durable-workspaces"),
 		MicroVMRunDir:           filepath.Join(workDir, "run"),
 		MicroVMLogDir:           filepath.Join(workDir, "logs"),
 		MicroVMKernelArgs:       requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS"),
@@ -39,8 +45,43 @@ func TestSmokeBootFirecracker(t *testing.T) {
 		t.Fatalf("new manager: %v", err)
 	}
 	ctx := context.Background()
-	instanceID, err := mgr.createAndStart(ctx, "0123456789abcdef", smokeGuestProtocolOpts(t, cfg, runtimemanager.StartOpts{Timezone: "UTC", CompartmentID: "cmp_smoke_boot"}))
+	workspaceStore, err := workspacestore.New(
+		ctx,
+		workspacestore.Config{Root: cfg.RunnerWorkspaceRoot},
+	)
 	if err != nil {
+		t.Fatalf("new smoke WorkspaceStore: %v", err)
+	}
+	if err := mgr.SetWorkspaceStore(workspaceStore); err != nil {
+		t.Fatalf("bind smoke WorkspaceStore: %v", err)
+	}
+	const (
+		sandboxID   = "0123456789abcdef"
+		workspaceID = "workspace-smoke-boot"
+	)
+	if _, err := workspaceStore.Create(ctx, workspacestore.CreateWorkspaceRequest{
+		Mutation: workspacestore.Mutation{
+			OperationID: "create-smoke-boot",
+			WorkspaceID: workspaceID,
+			FencingToken: []byte(
+				"01234567890123456789012345678901",
+			),
+		},
+		CapacityBytes: 64 << 20,
+	}); err != nil {
+		t.Fatalf("create smoke Workspace: %v", err)
+	}
+	attachment, err := workspaceStore.Open(ctx, workspaceID, 1)
+	if err != nil {
+		t.Fatalf("open smoke Workspace attachment: %v", err)
+	}
+	instanceID, err := mgr.createAndStart(ctx, sandboxID, smokeGuestProtocolOpts(t, cfg, runtimemanager.StartOpts{
+		Timezone:            "UTC",
+		CompartmentID:       "cmp_smoke_boot",
+		WorkspaceAttachment: attachment,
+	}))
+	if err != nil {
+		_ = attachment.Close()
 		t.Fatalf("start microVM: %v", err)
 	}
 	defer mgr.Remove(context.Background(), instanceID)
@@ -69,7 +110,6 @@ func TestSmokeGeneratedImageBootsControlAndRuntime(t *testing.T) {
 		MicroVMKernelPath:       requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"),
 		MicroVMRootfsPath:       requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"),
 		MicroVMSharedImagePath:  requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"),
-		MicroVMWorkspaceDir:     filepath.Join(workDir, "workspaces"),
 		MicroVMRunDir:           filepath.Join(workDir, "run"),
 		MicroVMLogDir:           filepath.Join(workDir, "logs"),
 		MicroVMKernelArgs:       requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS"),
@@ -141,7 +181,6 @@ func TestSmokeGeneratedToolExecutorImageReadiness(t *testing.T) {
 		MicroVMToolSharedImagePath: sharedImagePath,
 		MicroVMPublicKeyPath:       requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"),
 		MicroVMPublicKeySHA256:     requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256"),
-		MicroVMWorkspaceDir:        filepath.Join(workDir, "workspaces"),
 		MicroVMRunDir:              filepath.Join(workDir, "run"),
 		MicroVMLogDir:              filepath.Join(workDir, "logs"),
 		MicroVMKernelArgs:          requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS"),
@@ -448,6 +487,493 @@ func TestSmokeGeneratedToolExecutorImageReadiness(t *testing.T) {
 	}
 }
 
+func TestSmokeRunnerLocalSnapshotRestore(t *testing.T) {
+	if os.Getenv("SECONDBOX_RUNNER_QUALIFY_FIRECRACKER") != "1" {
+		t.Skip("set SECONDBOX_RUNNER_QUALIFY_FIRECRACKER=1 to qualify runner-local Snapshot restore")
+	}
+	workDir := shortSmokeDir(t)
+	cfg := &config.Config{
+		FirecrackerPath:            requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_PATH"),
+		MicroVMKernelPath:          requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"),
+		MicroVMRootfsPath:          requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"),
+		MicroVMSharedImagePath:     requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"),
+		MicroVMPublicKeyPath:       requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"),
+		MicroVMPublicKeySHA256:     requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256"),
+		MicroVMRunDir:              filepath.Join(workDir, "run"),
+		MicroVMLogDir:              filepath.Join(workDir, "logs"),
+		MicroVMKernelArgs:          requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS"),
+		MicroVMMemoryMiB:           requiredPositiveEnvInt(t, "SECONDBOX_RUNNER_SANDBOX_MAX_MEMORY_MIB"),
+		MicroVMVCPUs:               1,
+		MicroVMWorkspaceSizeMiB:    64,
+		MicroVMAllowUnjailed:       true,
+		MicroVMToolRootfsPath:      requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"),
+		MicroVMToolSharedImagePath: requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"),
+	}
+	ctx := context.Background()
+	workspaceStore, err := workspacestore.New(
+		ctx,
+		workspacestore.Config{Root: filepath.Join(workDir, "durable-workspaces")},
+	)
+	if err != nil {
+		t.Fatalf("new qualified WorkspaceStore: %v", err)
+	}
+	manager, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	manager.SetRunnerEvidenceSink(
+		runnerevidence.SlogSink{},
+		"runner-qualified-local-restore",
+	)
+	if err := manager.SetWorkspaceStore(workspaceStore); err != nil {
+		t.Fatalf("bind WorkspaceStore: %v", err)
+	}
+	const (
+		sandboxID   = "0123456789abcdef"
+		workspaceID = "workspace-qualified-restore"
+		snapshotID  = "snapshot-qualified-restore"
+	)
+	mutation := func(operationID string) workspacestore.Mutation {
+		return workspacestore.Mutation{
+			OperationID: operationID,
+			WorkspaceID: workspaceID,
+			FencingToken: []byte(
+				"01234567890123456789012345678901",
+			),
+		}
+	}
+	if _, err := workspaceStore.Create(ctx, workspacestore.CreateWorkspaceRequest{
+		Mutation:      mutation("create-qualified-restore"),
+		CapacityBytes: 64 << 20,
+	}); err != nil {
+		t.Fatalf("create qualified Workspace: %v", err)
+	}
+	boot := func(generation uint64) (string, string) {
+		t.Helper()
+		attachment, err := workspaceStore.Open(ctx, workspaceID, generation)
+		if err != nil {
+			t.Fatalf("open generation %d attachment: %v", generation, err)
+		}
+		generationText := strconv.FormatUint(generation, 10)
+		opts := smokeGuestProtocolOpts(t, cfg, runtimemanager.StartOpts{
+			Timezone:            "UTC",
+			CompartmentID:       "cmp_qualified_local_restore",
+			RuntimeClass:        runtimemanager.RuntimeClassToolExecutor,
+			WorkspaceAttachment: attachment,
+			RequestID:           "request-qualified-local-restore-g" + generationText,
+			OperationID:         "operation-qualified-local-restore-g" + generationText,
+			AssignmentID:        "assignment-qualified-local-restore-g" + generationText,
+			LeaseID:             "lease-qualified-local-restore-g" + generationText,
+		})
+		opts.SandboxGeneration = generation
+		instanceID, err := manager.createAndStart(ctx, sandboxID, opts)
+		if err != nil {
+			_ = attachment.Close()
+			t.Fatalf(
+				"start generation %d microVM: %v\n%s",
+				generation,
+				err,
+				latestSmokeLog(t, workDir),
+			)
+		}
+		logPath := ""
+		if instance := manager.lookup(instanceID); instance != nil {
+			logPath = instance.logPath
+		}
+		var heartbeatErr error
+		waitForSmoke(t, 30*time.Second, func() bool {
+			heartbeat, err := manager.Heartbeat(ctx, instanceID)
+			heartbeatErr = err
+			return err == nil && heartbeat.Healthy
+		}, func() string {
+			return "generation " + strconv.FormatUint(generation, 10) +
+				" heartbeat error: " + errorString(heartbeatErr) + "\n" +
+				smokeLogPath(t, logPath)
+		})
+		return instanceID, logPath
+	}
+	writeState := func(instanceID string, logPath string, state string) {
+		t.Helper()
+		response, err := manager.ExecuteTool(ctx, instanceID, ToolExecRequest{
+			Operation: ToolOpWriteFile,
+			Path:      "restore-state.txt",
+			Content:   state,
+		})
+		if err != nil || response.Error != "" {
+			t.Fatalf(
+				"write state %q: response=%+v error=%v\n%s",
+				state,
+				response,
+				err,
+				smokeLogPath(t, logPath),
+			)
+		}
+	}
+	stop := func(instanceID string, logPath string) {
+		t.Helper()
+		if err := manager.Remove(ctx, instanceID); err != nil {
+			t.Fatalf("stop microVM: %v\n%s", err, smokeLogPath(t, logPath))
+		}
+	}
+
+	instanceID, logPath := boot(1)
+	writeState(instanceID, logPath, "A")
+	stop(instanceID, logPath)
+	if _, err := workspaceStore.AdvanceGeneration(
+		ctx,
+		workspacestore.AdvanceGenerationRequest{
+			Mutation:           mutation("stop-after-state-a"),
+			ExpectedGeneration: 1,
+			NextGeneration:     2,
+		},
+	); err != nil {
+		t.Fatalf("advance after state A: %v", err)
+	}
+	if _, err := workspaceStore.CreateSnapshot(
+		ctx,
+		workspacestore.CreateSnapshotRequest{
+			Mutation:           mutation("snapshot-state-a"),
+			SnapshotID:         snapshotID,
+			ExpectedGeneration: 2,
+		},
+	); err != nil {
+		t.Fatalf("create Snapshot A: %v", err)
+	}
+	instanceID, logPath = boot(2)
+	writeState(instanceID, logPath, "B")
+	stop(instanceID, logPath)
+	if _, err := workspaceStore.AdvanceGeneration(
+		ctx,
+		workspacestore.AdvanceGenerationRequest{
+			Mutation:           mutation("stop-after-state-b"),
+			ExpectedGeneration: 2,
+			NextGeneration:     3,
+		},
+	); err != nil {
+		t.Fatalf("advance after state B: %v", err)
+	}
+	restoreMutation := mutation("restore-state-a")
+	if _, err := workspaceStore.PrepareRestore(
+		ctx,
+		workspacestore.PrepareRestoreRequest{
+			Mutation:           restoreMutation,
+			SnapshotID:         snapshotID,
+			ExpectedGeneration: 3,
+			NextGeneration:     4,
+		},
+	); err != nil {
+		t.Fatalf("prepare restore A: %v", err)
+	}
+	if _, err := workspaceStore.SwapRestore(
+		ctx,
+		workspacestore.SwapRestoreRequest{
+			Mutation:           restoreMutation,
+			SnapshotID:         snapshotID,
+			ExpectedGeneration: 3,
+			NextGeneration:     4,
+		},
+	); err != nil {
+		t.Fatalf("swap restore A: %v", err)
+	}
+	if _, err := workspaceStore.FinalizeRestore(
+		ctx,
+		workspacestore.RestoreMutation{Mutation: restoreMutation},
+	); err != nil {
+		t.Fatalf("finalize restore A: %v", err)
+	}
+	if _, err := workspaceStore.Open(
+		ctx,
+		workspaceID,
+		3,
+	); !errors.Is(err, workspacestore.ErrStaleGeneration) {
+		t.Fatalf("stale generation attachment error = %v", err)
+	}
+	instanceID, logPath = boot(4)
+	defer func() {
+		_ = manager.Remove(context.Background(), instanceID)
+	}()
+	response, err := manager.ExecuteTool(ctx, instanceID, ToolExecRequest{
+		Operation: ToolOpReadFile,
+		Path:      "restore-state.txt",
+	})
+	if err != nil || response.Error != "" || response.Content != "A" {
+		t.Fatalf(
+			"restored state response=%+v error=%v\n%s",
+			response,
+			err,
+			smokeLogPath(t, logPath),
+		)
+	}
+}
+
+func TestSmokeRunnerLocalLifecycleStopPaths(t *testing.T) {
+	if os.Getenv("SECONDBOX_RUNNER_QUALIFY_FIRECRACKER") != "1" {
+		t.Skip("set SECONDBOX_RUNNER_QUALIFY_FIRECRACKER=1 to qualify runner-local lifecycle stops")
+	}
+	var objectStoreRequests atomic.Int64
+	objectStoreTrap := httptest.NewServer(http.HandlerFunc(func(
+		response http.ResponseWriter,
+		_ *http.Request,
+	) {
+		objectStoreRequests.Add(1)
+		http.Error(response, "unexpected Workspace object-store request", http.StatusTeapot)
+	}))
+	defer objectStoreTrap.Close()
+	for name, value := range map[string]string{
+		"SECONDBOX_OBJECT_STORE_ENDPOINT":                  objectStoreTrap.URL,
+		"SECONDBOX_OBJECT_STORE_REGION":                    "qualification",
+		"SECONDBOX_OBJECT_STORE_BUCKET":                    "must-not-be-used",
+		"SECONDBOX_OBJECT_STORE_ROOT_USER":                 "must-not-be-used",
+		"SECONDBOX_OBJECT_STORE_ROOT_PASSWORD":             "must-not-be-used-credential",
+		"SECONDBOX_OBJECT_STORE_USE_PATH_STYLE":            "true",
+		"SECONDBOX_OBJECT_STORE_RETRY_MAX_ATTEMPTS":        "1",
+		"SECONDBOX_OBJECT_STORE_HTTP_TIMEOUT_MILLISECONDS": "1000",
+		"SECONDBOX_OBJECT_STORE_TEMP_DIRECTORY":            t.TempDir(),
+		"SECONDBOX_OBJECT_STORE_MAX_OBJECT_BYTES":          "10737418240",
+	} {
+		t.Setenv(name, value)
+	}
+	t.Cleanup(func() {
+		if got := objectStoreRequests.Load(); got != 0 {
+			t.Errorf("lifecycle stops issued %d object-store requests, want zero", got)
+		}
+	})
+	workDir := shortSmokeDir(t)
+	cfg := &config.Config{
+		FirecrackerPath:            requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_PATH"),
+		MicroVMKernelPath:          requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"),
+		MicroVMRootfsPath:          requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"),
+		MicroVMSharedImagePath:     requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"),
+		MicroVMPublicKeyPath:       requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"),
+		MicroVMPublicKeySHA256:     requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256"),
+		MicroVMRunDir:              filepath.Join(workDir, "run"),
+		MicroVMLogDir:              filepath.Join(workDir, "logs"),
+		MicroVMKernelArgs:          requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS"),
+		MicroVMMemoryMiB:           requiredPositiveEnvInt(t, "SECONDBOX_RUNNER_SANDBOX_MAX_MEMORY_MIB"),
+		MicroVMVCPUs:               1,
+		MicroVMWorkspaceSizeMiB:    64,
+		MicroVMAllowUnjailed:       true,
+		MicroVMToolRootfsPath:      requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"),
+		MicroVMToolSharedImagePath: requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"),
+	}
+	ctx := context.Background()
+	workspaceStore, err := workspacestore.New(
+		ctx,
+		workspacestore.Config{Root: filepath.Join(workDir, "durable-workspaces")},
+	)
+	if err != nil {
+		t.Fatalf("new lifecycle qualification WorkspaceStore: %v", err)
+	}
+	manager, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new lifecycle qualification manager: %v", err)
+	}
+	defer manager.Shutdown(context.Background())
+	manager.SetRunnerEvidenceSink(
+		runnerevidence.SlogSink{},
+		"runner-qualified-local-stop-paths",
+	)
+	if err := manager.SetWorkspaceStore(workspaceStore); err != nil {
+		t.Fatalf("bind lifecycle qualification WorkspaceStore: %v", err)
+	}
+	const (
+		sandboxID   = "fedcba9876543210"
+		workspaceID = "workspace-qualified-stop-paths"
+	)
+	mutation := func(operationID string) workspacestore.Mutation {
+		return workspacestore.Mutation{
+			OperationID: operationID,
+			WorkspaceID: workspaceID,
+			FencingToken: []byte(
+				"01234567890123456789012345678901",
+			),
+		}
+	}
+	if _, err := workspaceStore.Create(ctx, workspacestore.CreateWorkspaceRequest{
+		Mutation:      mutation("create-qualified-stop-paths"),
+		CapacityBytes: 64 << 20,
+	}); err != nil {
+		t.Fatalf("create lifecycle qualification Workspace: %v", err)
+	}
+	boot := func(generation uint64, cause string) (string, string) {
+		t.Helper()
+		attachment, err := workspaceStore.Open(ctx, workspaceID, generation)
+		if err != nil {
+			t.Fatalf("open %s generation %d attachment: %v", cause, generation, err)
+		}
+		generationText := strconv.FormatUint(generation, 10)
+		opts := smokeGuestProtocolOpts(t, cfg, runtimemanager.StartOpts{
+			Timezone:            "UTC",
+			CompartmentID:       "cmp_qualified_stop_" + strings.ReplaceAll(cause, "-", "_"),
+			RuntimeClass:        runtimemanager.RuntimeClassToolExecutor,
+			WorkspaceAttachment: attachment,
+			RequestID:           "request-qualified-stop-" + cause + "-g" + generationText,
+			OperationID:         "operation-qualified-stop-" + cause + "-g" + generationText,
+			AssignmentID:        "assignment-qualified-stop-" + cause + "-g" + generationText,
+			LeaseID:             "lease-qualified-stop-" + cause + "-g" + generationText,
+		})
+		opts.SandboxGeneration = generation
+		instanceID, err := manager.createAndStart(ctx, sandboxID, opts)
+		if err != nil {
+			_ = attachment.Close()
+			t.Fatalf(
+				"start %s generation %d microVM: %v\n%s",
+				cause,
+				generation,
+				err,
+				latestSmokeLog(t, workDir),
+			)
+		}
+		logPath := ""
+		if instance := manager.lookup(instanceID); instance != nil {
+			logPath = instance.logPath
+		}
+		var heartbeatErr error
+		waitForSmoke(t, 30*time.Second, func() bool {
+			heartbeat, err := manager.Heartbeat(ctx, instanceID)
+			heartbeatErr = err
+			return err == nil && heartbeat.Healthy
+		}, func() string {
+			return cause + " generation " + generationText +
+				" heartbeat error: " + errorString(heartbeatErr) + "\n" +
+				smokeLogPath(t, logPath)
+		})
+		return instanceID, logPath
+	}
+	readMarker := func(instanceID string, logPath string, cause string) {
+		t.Helper()
+		response, err := manager.ExecuteTool(ctx, instanceID, ToolExecRequest{
+			Operation: ToolOpReadFile,
+			Path:      "lifecycle-" + cause + ".txt",
+		})
+		if err != nil || response.Error != "" || response.Content != cause {
+			t.Fatalf(
+				"read preserved %s marker: response=%+v error=%v\n%s",
+				cause,
+				response,
+				err,
+				smokeLogPath(t, logPath),
+			)
+		}
+	}
+	causes := []string{
+		"explicit-stop",
+		"drain",
+		"idle-timeout",
+		"maximum-duration",
+		"guest-shutdown",
+		"liveness-loss",
+	}
+	for index, cause := range causes {
+		generation := uint64(index + 1)
+		instanceID, logPath := boot(generation, cause)
+		for _, prior := range causes[:index] {
+			readMarker(instanceID, logPath, prior)
+		}
+		response, err := manager.ExecuteTool(ctx, instanceID, ToolExecRequest{
+			Operation: ToolOpWriteFile,
+			Path:      "lifecycle-" + cause + ".txt",
+			Content:   cause,
+		})
+		if err != nil || response.Error != "" {
+			t.Fatalf(
+				"write %s marker: response=%+v error=%v\n%s",
+				cause,
+				response,
+				err,
+				smokeLogPath(t, logPath),
+			)
+		}
+		if cause == "guest-shutdown" {
+			if err := manager.requestGuestShutdown(ctx, instanceID); err != nil {
+				t.Fatalf(
+					"request guest shutdown: %v\n%s",
+					err,
+					smokeLogPath(t, logPath),
+				)
+			}
+			waitForSmoke(t, 30*time.Second, func() bool {
+				return manager.lookup(instanceID) == nil
+			}, func() string {
+				return "guest-shutdown microVM remained active\n" +
+					smokeLogPath(t, logPath)
+			})
+		} else if err := manager.Remove(ctx, instanceID); err != nil {
+			t.Fatalf("stop %s microVM: %v\n%s", cause, err, smokeLogPath(t, logPath))
+		}
+		nextGeneration := generation + 1
+		readBytesBefore, writeBytesBefore := smokeProcessIO(t)
+		if _, err := workspaceStore.AdvanceGeneration(
+			ctx,
+			workspacestore.AdvanceGenerationRequest{
+				Mutation:           mutation("stop-qualified-" + cause),
+				ExpectedGeneration: generation,
+				NextGeneration:     nextGeneration,
+			},
+		); err != nil {
+			t.Fatalf("advance after %s: %v", cause, err)
+		}
+		readBytesAfter, writeBytesAfter := smokeProcessIO(t)
+		if readBytesAfter-readBytesBefore >= 32<<20 ||
+			writeBytesAfter-writeBytesBefore >= 32<<20 {
+			t.Fatalf(
+				"%s generation advance performed image-sized I/O: read=%d write=%d",
+				cause,
+				readBytesAfter-readBytesBefore,
+				writeBytesAfter-writeBytesBefore,
+			)
+		}
+		inspection, err := workspaceStore.Inspect(ctx, workspaceID)
+		if err != nil ||
+			inspection.Generation != nextGeneration ||
+			inspection.CapacityBytes != 64<<20 ||
+			!inspection.Formatted ||
+			inspection.RestorePending ||
+			inspection.ActiveWriter {
+			t.Fatalf("post-%s filesystem integrity = %#v, %v", cause, inspection, err)
+		}
+		report, err := workspaceStore.Reconcile(ctx)
+		if err != nil || len(report.Workspaces) != 1 ||
+			report.Workspaces[0] != inspection ||
+			len(report.Receipts) != index+2 ||
+			report.Receipts[len(report.Receipts)-1].Kind !=
+				workspacestore.ReceiptGenerationAdvance {
+			t.Fatalf("post-%s local receipt evidence = %#v, %v", cause, report, err)
+		}
+	}
+	instanceID, logPath := boot(uint64(len(causes)+1), "final-verification")
+	defer manager.Remove(context.Background(), instanceID)
+	for _, cause := range causes {
+		readMarker(instanceID, logPath, cause)
+	}
+}
+
+func smokeProcessIO(t *testing.T) (uint64, uint64) {
+	t.Helper()
+	data, err := os.ReadFile("/proc/self/io")
+	if err != nil {
+		t.Fatalf("read qualification process I/O counters: %v", err)
+	}
+	var readBytes, writeBytes uint64
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		value, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			t.Fatalf("parse qualification process I/O counter %q: %v", line, err)
+		}
+		switch fields[0] {
+		case "read_bytes:":
+			readBytes = value
+		case "write_bytes:":
+			writeBytes = value
+		}
+	}
+	return readBytes, writeBytes
+}
+
 func TestSmokeGoldenSnapshotCreateGeneratedImage(t *testing.T) {
 	if os.Getenv("SECONDBOX_RUNNER_QUALIFY_SNAPSHOT") != "1" {
 		t.Skip("set SECONDBOX_RUNNER_QUALIFY_SNAPSHOT=1 to create a local Firecracker snapshot")
@@ -460,7 +986,6 @@ func TestSmokeGoldenSnapshotCreateGeneratedImage(t *testing.T) {
 		MicroVMSharedImagePath:  requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"),
 		MicroVMPublicKeyPath:    requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"),
 		MicroVMPublicKeySHA256:  requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256"),
-		MicroVMWorkspaceDir:     filepath.Join(workDir, "workspaces"),
 		MicroVMRunDir:           filepath.Join(workDir, "run"),
 		MicroVMLogDir:           filepath.Join(workDir, "logs"),
 		MicroVMKernelArgs:       requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS"),
@@ -523,7 +1048,6 @@ func TestSmokeJailedTapGeneratedImage(t *testing.T) {
 		MicroVMSharedImagePath:     requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH"),
 		MicroVMPublicKeyPath:       requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"),
 		MicroVMPublicKeySHA256:     requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256"),
-		MicroVMWorkspaceDir:        filepath.Join(workDir, "workspaces"),
 		MicroVMRunDir:              filepath.Join(workDir, "run"),
 		MicroVMLogDir:              filepath.Join(workDir, "logs"),
 		MicroVMKernelArgs:          requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS"),
@@ -674,7 +1198,19 @@ func smokeGuestProtocolOpts(t *testing.T, cfg *config.Config, opts runtimemanage
 
 func shortSmokeDir(t *testing.T) string {
 	t.Helper()
-	parent := "/tmp"
+	parent := strings.TrimSpace(
+		os.Getenv("SECONDBOX_RUNNER_QUALIFICATION_TEMP_ROOT"),
+	)
+	if parent == "" {
+		parent = "/tmp"
+	}
+	if !filepath.IsAbs(parent) || filepath.Clean(parent) != parent ||
+		parent == string(filepath.Separator) {
+		t.Fatalf(
+			"SECONDBOX_RUNNER_QUALIFICATION_TEMP_ROOT %q must be a clean non-root absolute path",
+			parent,
+		)
+	}
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		t.Fatalf("create smoke parent dir: %v", err)
 	}

@@ -46,7 +46,7 @@ func (store *PostgresStateStore) ClaimCommand(
 	err = tx.QueryRow(ctx, `
 		SELECT id,payload FROM secondbox.runner_commands
 		WHERE runner_id=$1 AND state='pending'
-		ORDER BY created_at,id
+		ORDER BY (id LIKE 'workspace-reconcile-%') DESC,created_at,id
 		FOR UPDATE SKIP LOCKED LIMIT 1`, runnerID,
 	).Scan(&delivery.ID, &payload)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -123,11 +123,11 @@ func setControlCommandEnvelope(
 	case message.GetDrain() != nil:
 		message.GetDrain().MessageId = messageID
 		message.GetDrain().Sequence = sequence
-	case message.GetCheckpoint() != nil:
-		message.GetCheckpoint().MessageId = messageID
-		message.GetCheckpoint().Sequence = sequence
+	case message.GetLocalWorkspace() != nil:
+		message.GetLocalWorkspace().MessageId = messageID
+		message.GetLocalWorkspace().Sequence = sequence
 	default:
-		return errors.New("SecondBox runner command queue accepts assignment, fence, drain, or checkpoint commands")
+		return errors.New("SecondBox runner command queue accepts assignment, fence, drain, or local-workspace commands")
 	}
 	return nil
 }

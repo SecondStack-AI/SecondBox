@@ -15,8 +15,6 @@ const (
 	EventExecTerminal       Event = "exec_terminal"
 	EventFileTerminal       Event = "file_terminal"
 	EventPortTerminal       Event = "port_terminal"
-	EventCheckpointTerminal Event = "checkpoint_terminal"
-	EventRestoreTerminal    Event = "restore_terminal"
 	EventFenceTerminal      Event = "fence_terminal"
 	EventNetworkFailure     Event = "network_failure"
 	EventStoragePressure    Event = "storage_pressure"

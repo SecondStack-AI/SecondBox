@@ -388,7 +388,8 @@ function sandbox(state: Sandbox["state"]): Sandbox {
     workspace: {
       id: "workspace-1",
       generation: 7,
-      retainedBytes: 0,
+      state: "ready",
+      sizeBytes: 1_073_741_824,
       createdAt: "2026-07-28T00:00:00Z",
       updatedAt: "2026-07-28T00:00:00Z",
     },

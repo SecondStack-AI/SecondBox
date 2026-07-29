@@ -85,7 +85,7 @@ func LoadRunnerProtocolConfigFromEnv() (RunnerProtocolConfig, GRPCConnectorConfi
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_FILE_STREAMING,
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_PTY,
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
-				runnerprotocol.RunnerFeature_RUNNER_FEATURE_CHECKPOINT,
+				runnerprotocol.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE,
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_PORT_PROXY,
 			},
 		}, GRPCConnectorConfig{

@@ -17,9 +17,12 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"google.golang.org/protobuf/proto"
 
+	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/api"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/internal/store"
 	postgresmigrations "github.com/SecondStack-AI/SecondBox/migrations/postgres"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
@@ -29,14 +32,6 @@ var integrationDatabaseURL string
 var integrationIdentitySequence atomic.Int64
 
 func TestMain(m *testing.M) {
-	if os.Getenv(freshRunnerRestoreHelperEnvironment) == "1" {
-		integrationDatabaseURL = os.Getenv("SECONDBOX_RESTORE_VERIFICATION_DATABASE_URL")
-		if strings.TrimSpace(integrationDatabaseURL) == "" {
-			fmt.Fprintln(os.Stderr, "SECONDBOX_RESTORE_VERIFICATION_DATABASE_URL is required for the fresh-Runner restore verifier")
-			os.Exit(2)
-		}
-		os.Exit(m.Run())
-	}
 	integrationDatabaseURL = os.Getenv("SECONDBOX_TEST_DATABASE_URL")
 	if strings.TrimSpace(integrationDatabaseURL) == "" {
 		fmt.Fprintln(os.Stderr, "SECONDBOX_TEST_DATABASE_URL is required for PostgreSQL integration tests")
@@ -60,7 +55,7 @@ func TestMain(m *testing.M) {
 func TestConcurrentSandboxCreationIsIdempotentAndPinsProfileRevision(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, contracts.QuotaLimits{
 		MaxSandboxes: 20, MaxActiveInstances: 20, MaxCPUMillis: 40000,
-		MaxMemoryBytes: 40 << 30, MaxRetainedBytes: 100 << 30,
+		MaxMemoryBytes: 40 << 30, MaxArtifactBytes: 100 << 30,
 		MaxSnapshots: 100, MaxArtifacts: 100, MaxPortSessions: 20,
 		MaxConcurrentOperations: 20,
 	})
@@ -105,6 +100,28 @@ func TestConcurrentSandboxCreationIsIdempotentAndPinsProfileRevision(t *testing.
 			t.Errorf("Sandbox pinned ProfileRevision %q, want %q", sandbox.ProfileRevisionID, profile.CurrentRevision.ID)
 		}
 	}
+	var homeRunnerID, workspaceState string
+	var logicalCapacity int64
+	privatePool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(privatePool.Close)
+	if err := privatePool.QueryRow(t.Context(), `
+		SELECT workspace.home_runner_id,workspace.state,workspace.logical_capacity_bytes
+		FROM secondbox.workspaces AS workspace
+		WHERE workspace.sandbox_id=$1`,
+		sandboxID,
+	).Scan(&homeRunnerID, &workspaceState, &logicalCapacity); err != nil {
+		t.Fatal(err)
+	}
+	if homeRunnerID == "" || workspaceState != "creating" ||
+		logicalCapacity != profile.CurrentRevision.Spec.Resources.WorkspaceBytes {
+		t.Fatalf(
+			"private home Workspace = runner %q state %q capacity %d",
+			homeRunnerID, workspaceState, logicalCapacity,
+		)
+	}
 	if _, _, err := controlPlane.CreateSandbox(t.Context(), principal, "same-request", contracts.CreateSandboxRequest{
 		Profile: profile.Name, Metadata: map[string]string{"purpose": "different-payload"},
 	}); !errors.Is(err, ports.ErrIdempotencyConflict) {
@@ -133,6 +150,121 @@ func TestConcurrentSandboxCreationIsIdempotentAndPinsProfileRevision(t *testing.
 	if future.TenantRef != project.ID || future.ProfileRevisionID != revised.CurrentRevision.ID {
 		t.Fatalf("future Sandbox = project %q revision %q, want %q and %q", future.TenantRef, future.ProfileRevisionID, project.ID, revised.CurrentRevision.ID)
 	}
+}
+
+func TestSandboxCreationWaitsForDurableHomeWorkspaceReceipt(t *testing.T) {
+	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
+	admin := fixtureAdmin(t, controlPlane)
+	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "local-create")
+	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "local-create")
+	principal := authenticateCredential(t, controlPlane, credential)
+	operation, created, err := controlPlane.CreateSandboxOperation(
+		t.Context(), principal, "local-create",
+		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created || operation.State != contracts.OperationStatePending {
+		t.Fatalf("create Operation = %#v, created=%t", operation, created)
+	}
+	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	var homeRunnerID, workspaceID, effectID string
+	var generation, logicalCapacity int64
+	var commandPayload []byte
+	if err := pool.QueryRow(t.Context(), `
+		SELECT workspace.home_runner_id,workspace.id,workspace.generation,
+		       workspace.logical_capacity_bytes,effect.id,command.payload
+		FROM secondbox.workspaces AS workspace
+		JOIN secondbox.lifecycle_effects AS effect ON effect.id=workspace.mutation_effect_id
+		JOIN secondbox.runner_commands AS command ON command.id=effect.command_id
+		WHERE workspace.sandbox_id=$1`,
+		operation.SandboxID,
+	).Scan(
+		&homeRunnerID, &workspaceID, &generation, &logicalCapacity, &effectID, &commandPayload,
+	); err != nil {
+		t.Fatal(err)
+	}
+	var envelope runnerv1.ControlPlaneToRunner
+	if err := proto.Unmarshal(commandPayload, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	command := envelope.GetLocalWorkspace()
+	if command == nil || command.Kind != runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE ||
+		command.WorkspaceId != workspaceID || command.EffectId != effectID ||
+		command.LogicalCapacityBytes != uint64(logicalCapacity) {
+		t.Fatalf("durable local Workspace create command = %#v", command)
+	}
+	const connectionID = "connection-local-create"
+	now := time.Date(2026, 7, 28, 12, 0, 1, 0, time.UTC)
+	if _, err := pool.Exec(t.Context(), `
+		UPDATE secondbox.runners SET active_connection_id=$2 WHERE id=$1`,
+		homeRunnerID, connectionID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), `
+		INSERT INTO secondbox.runner_connections (
+			id,runner_id,credential_serial,protocol_version,state,last_sequence,
+			last_control_sequence,connected_at,last_seen_at,disconnected_at
+		) VALUES ($2,$1,'fixture',1,'active',0,0,$3,$3,NULL)`,
+		homeRunnerID, connectionID, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	stateStore, err := runnercontrol.NewPostgresStateStore(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stateStore.Close)
+	result := &runnerv1.LocalWorkspaceResult{
+		MessageId: "workspace-create-result", Sequence: 1, CommandVersion: 1,
+		Kind:        command.Kind,
+		Terminal:    runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED,
+		OperationId: operation.ID, EffectId: effectID, SandboxId: operation.SandboxID,
+		WorkspaceId: workspaceID, Generation: uint64(generation),
+		LogicalCapacityBytes:    logicalCapacityToUint64(t, logicalCapacity),
+		ReceiptRecordedAtUnixMs: uint64(now.UnixMilli()),
+		Correlation:             command.Correlation,
+	}
+	duplicate, err := stateStore.RecordEvent(t.Context(), runnercontrol.Event{
+		Kind: runnercontrol.EventLocalWorkspace, RunnerID: homeRunnerID, ConnectionID: connectionID,
+		Message: &runnerv1.RunnerToControlPlane{
+			Message: &runnerv1.RunnerToControlPlane_LocalWorkspaceResult{LocalWorkspaceResult: result},
+		},
+	}, now)
+	if err != nil || duplicate {
+		t.Fatalf("record local Workspace result duplicate=%t error=%v", duplicate, err)
+	}
+	completed, err := controlPlane.GetOperation(t.Context(), principal, operation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.State != contracts.OperationStateSucceeded {
+		t.Fatalf("completed create Operation = %#v", completed)
+	}
+	var workspaceState, mutationState string
+	if err := pool.QueryRow(t.Context(), `
+		SELECT state,mutation_state FROM secondbox.workspaces WHERE id=$1`,
+		workspaceID,
+	).Scan(&workspaceState, &mutationState); err != nil {
+		t.Fatal(err)
+	}
+	if workspaceState != "ready" || mutationState != "" {
+		t.Fatalf("completed Workspace state=%q mutation=%q", workspaceState, mutationState)
+	}
+}
+
+func logicalCapacityToUint64(t *testing.T, capacity int64) uint64 {
+	t.Helper()
+	if capacity < 0 {
+		t.Fatalf("negative logical capacity %d", capacity)
+	}
+	return uint64(capacity)
 }
 
 func TestProfileIdempotencyReplaysAfterIdentityTablesAreRemoved(t *testing.T) {

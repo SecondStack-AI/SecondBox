@@ -30,7 +30,6 @@ SECONDBOX_RUNNER_CONTROL_PLANE_CA
 Firecracker, isolation, artifacts, and storage:
 
 ```text
-SECONDBOX_RUNNER_STATE_DIR
 SECONDBOX_RUNNER_LOG_PATH
 SECONDBOX_RUNNER_FIRECRACKER_PATH
 SECONDBOX_RUNNER_FIRECRACKER_JAILER_PATH
@@ -52,10 +51,7 @@ SECONDBOX_RUNNER_FIRECRACKER_LOG_DIR
 SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED
 SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY
 SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256
-SECONDBOX_RUNNER_SANDBOX_WORKSPACE_DIR
-SECONDBOX_RUNNER_CHECKPOINT_RESTORE_SPOOL_DIR
-SECONDBOX_RUNNER_SANDBOX_STORAGE_BACKEND
-SECONDBOX_RUNNER_SANDBOX_THIN_POOL_DEVICE
+SECONDBOX_RUNNER_WORKSPACE_ROOT
 SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT
 SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT
 SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT
@@ -72,11 +68,11 @@ SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL
 SECONDBOX_RUNNER_FILE_TRANSFER_MAX_BYTES
 ```
 
-Production and qualification hosts set `SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED=false`. The jailer UID and GID identify the unprivileged process inside the jail and must be positive. The runner remains root so it can create jail roots, cgroups, TAP devices, and device-mapper resources.
+Production and qualification hosts set `SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED=false`. The jailer UID and GID identify the unprivileged process inside the jail and must be positive. The runner remains root so it can create jail roots, cgroups, TAP devices, and the required jailed file bindings.
 
 The guest HTTP bootstrap/control surface and the canonical bidirectional gRPC data plane use distinct, explicitly configured vsock ports. `SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL` is a positive Go duration no greater than 60 seconds. The runner does not report an assignment ready until the canonical stream has negotiated the exact assignment Instance, Sandbox generation, random connection nonce, signed guest build and manifest identities, protocol generation, and mandatory features. `/workspace` and `/runtime-private` are signed image ABI mount points: init mounts the persistent workspace at the former and a RAM-only secret tmpfs at the latter.
 
-Startup verifies that the Firecracker binary exactly matches `runner/internal/firecracker/firecracker.lock`. Snapshot compatibility depends on that exact version. The guest kernel source is separately pinned in `runner/scripts/microvm-image/kernel.lock`.
+Startup verifies that the Firecracker binary exactly matches `runner/internal/firecracker/firecracker.lock`. Runtime qualification depends on that exact version. The guest kernel source is separately pinned in `runner/scripts/microvm-image/kernel.lock`.
 
 ## Signed artifact readiness
 
@@ -102,7 +98,7 @@ Each assignment receives a bounded opaque Firecracker instance ID and a jail roo
 ${SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT}/firecracker/${instance_id}/root
 ```
 
-The jail contains only its kernel, rootfs clone, workspace image, optional shared image, Firecracker configuration, API socket, and `guest.vsock`. Unix socket paths are checked before staging. Cross-filesystem hard-link failures are fatal; configure the run, workspace, and jail locations on compatible filesystems.
+The jail contains only its kernel, rootfs clone, attached Workspace image, optional shared image, Firecracker configuration, API socket, and `guest.vsock`. Unix socket paths are checked before staging. The Runner resolves the private Workspace attachment inside the process and never copies or reformats it during start.
 
 The runner sets the configured cgroup version and parent on every jailed process. It also enforces the profile-resolved vCPU, memory, and disk limits in the Firecracker configuration and guest boot contract.
 
@@ -139,19 +135,33 @@ The base policy allows established traffic and otherwise denies guest-to-host in
 
 ## Workspace storage and cleanup
 
-The ext4 backend stores one persistent workspace image per sandbox, instance, and assigned generation. The `dm-thin` backend binds the generation into the device identity, requires the explicit `SECONDBOX_RUNNER_SANDBOX_THIN_POOL_DEVICE`, and creates devices with the `secondbox-ws-` prefix.
+`SECONDBOX_RUNNER_WORKSPACE_ROOT` is one required clean absolute path on a
+dedicated reflink-capable filesystem. It contains versioned sparse raw ext4
+Workspace images, atomic current-image manifests, immutable local Snapshot
+reflinks, staged and rollback restore state, locks, and durable operation
+receipts. The directory must not be a symbolic link or the filesystem root.
 
-Runner storage must be isolated from the host root filesystem. `SECONDBOX_RUNNER_SANDBOX_WORKSPACE_DIR` and `SECONDBOX_RUNNER_CHECKPOINT_RESTORE_SPOOL_DIR` must be non-symbolic-link directories on separate dedicated filesystems with device identities different from `/` and each other. The dm-thin pressure probe samples and allocates only the exact configured pool; a failed `dmsetup` probe is fatal and never falls back to filesystem capacity. The restore spool has its own filesystem probe and reservations, so its capacity is never inferred from thin-pool capacity.
+Runner startup creates the deterministic private layout, proves the Workspace
+and Snapshot roots share one device, performs a real `FICLONE`, and verifies
+copy-on-write mutation isolation. Any failure makes the Runner unready; there is
+no byte-copy, alternate backend, or object-store fallback. `mke2fs` is required
+to create a Workspace and formats it once with the stable `SECONDBOX-WORKSPACE`
+filesystem label.
 
-The same-host Compose profile mounts `SECONDBOX_RUNNER_WORKSPACE_HOST_DIR` and `SECONDBOX_RUNNER_CHECKPOINT_RESTORE_SPOOL_HOST_DIR` independently at those runtime paths. The deployment validator requires both host directories to exist and verifies that their filesystem devices differ from the host root and from each other.
+The same-host Compose profile mounts the explicitly configured
+`SECONDBOX_RUNNER_WORKSPACE_HOST_DIR` at
+`SECONDBOX_RUNNER_WORKSPACE_ROOT`. The deployment validator requires that host
+directory to exist on a device distinct from the host root. Operators must back
+up this directory together with the stable Runner identity; it is authoritative
+durable state, not expendable cache.
 
 The recovery, warning, and admission-denial percentages are required integers satisfying `0 < recovery < warning < admission deny < 100`. One storage-pressure controller combines measured consumption with atomic reservations for accepted-but-not-yet-materialized assignment disks. It emits bounded `storage_pressure` evidence on warning, admission denial, probe failure, and recovery. Warning does not reject work. Admission denial occurs before workspace progress or allocation, remains latched while utilization is above the recovery threshold, and makes readiness fail closed. Probe errors also fail readiness and admission rather than returning partial success.
 
-Cleanup is explicit and generation-fenced. Failed and expired restores remove their exact partial spool file and release its reservation; a successfully materialized restore is consumed before the replacement assignment becomes ready. Fencing releases an assignment reservation only after the exact generation has been removed. Under admission pressure, cleanup may remove only released generation workspaces whose checkpoint stream completed before fencing. Active assignments, replacement generations, and uncheckpointed local durable roots are never cleanup candidates. A cleanup failure remains retryable, emits `storage_pressure_cleanup_failed`, and keeps admission closed. The next observation reopens admission and emits recovery only after measured and reserved utilization reaches the configured recovery threshold.
+Cleanup is explicit, operation-scoped, and generation-fenced. Restore abort may remove only pre-swap staged files. After a swap, the previous image and rollback manifest remain until PostgreSQL commits the matching generation and sends finalize. Snapshot and Workspace deletion validate exact logical paths and persist receipts before acknowledgement. Storage pressure never authorizes deletion of a Sandbox Workspace or Snapshot; admission remains closed until explicit deletion or operator capacity work returns utilization to the recovery threshold.
 
 Natural Firecracker exit and explicit fencing both pass through the same idempotent cleanup path. The runner waits or polls for the jailed process, removes the assignment index, removes its TAP, releases the guest address only after TAP cleanup succeeds, and retains the address on cleanup failure. Generation and opaque fencing tokens must match exactly before a live assignment can be stopped.
 
-Snapshot creation remains an operator diagnostic. Golden VM state is rebuildable and is not the source of truth for assignment generation or workspace state.
+Firecracker VM-state diagnostic snapshots, if used during qualification, are unrelated to public Sandbox Snapshots. Public Snapshots are immutable local reflinks of a stopped Sandbox Workspace and never contain Firecracker process state.
 
 ## Qualification
 
@@ -164,7 +174,7 @@ runner/scripts/microvm-stage-check.sh --static
 Privileged qualification uses the same explicit environment and runs as root:
 
 ```sh
-sudo --preserve-env=SECONDBOX_RUNNER_FIRECRACKER_PATH,SECONDBOX_RUNNER_FIRECRACKER_JAILER_PATH,SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH,SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH,SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH,SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT,SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID,SECONDBOX_RUNNER_FIRECRACKER_JAILER_GID,SECONDBOX_RUNNER_FIRECRACKER_CGROUP_VERSION,SECONDBOX_RUNNER_FIRECRACKER_CGROUP_PARENT,SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED,SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS,SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY,SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256,SECONDBOX_RUNNER_SANDBOX_BRIDGE_NAME,SECONDBOX_RUNNER_SANDBOX_BRIDGE_CIDR,SECONDBOX_RUNNER_SANDBOX_GUEST_IP,SECONDBOX_RUNNER_SANDBOX_TAP_PREFIX,SECONDBOX_RUNNER_SANDBOX_STORAGE_BACKEND,SECONDBOX_RUNNER_SANDBOX_MAX_MEMORY_MIB,SECONDBOX_RUNNER_SANDBOX_MAX_DISK_MIB,SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT,SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT,SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT,SECONDBOX_RUNNER_CHECKPOINT_RESTORE_SPOOL_DIR \
+sudo --preserve-env=SECONDBOX_RUNNER_FIRECRACKER_PATH,SECONDBOX_RUNNER_FIRECRACKER_JAILER_PATH,SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH,SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH,SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH,SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT,SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID,SECONDBOX_RUNNER_FIRECRACKER_JAILER_GID,SECONDBOX_RUNNER_FIRECRACKER_CGROUP_VERSION,SECONDBOX_RUNNER_FIRECRACKER_CGROUP_PARENT,SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED,SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS,SECONDBOX_RUNNER_GUEST_CONTROL_VSOCK_PORT,SECONDBOX_RUNNER_GUEST_PROTOCOL_VSOCK_PORT,SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL,SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY,SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256,SECONDBOX_RUNNER_SANDBOX_BRIDGE_NAME,SECONDBOX_RUNNER_SANDBOX_BRIDGE_CIDR,SECONDBOX_RUNNER_SANDBOX_GUEST_IP,SECONDBOX_RUNNER_SANDBOX_TAP_PREFIX,SECONDBOX_RUNNER_WORKSPACE_ROOT,SECONDBOX_RUNNER_SANDBOX_MAX_MEMORY_MIB,SECONDBOX_RUNNER_SANDBOX_MAX_DISK_MIB,SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT,SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT,SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT \
   runner/scripts/microvm-stage-check.sh
 ```
 

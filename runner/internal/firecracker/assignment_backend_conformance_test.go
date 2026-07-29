@@ -1,7 +1,6 @@
 package firecracker
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -20,11 +19,20 @@ import (
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol/conformance"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 	"google.golang.org/protobuf/proto"
 )
 
 func TestAssignmentBackendComputeConformance(t *testing.T) {
 	conformance.Run(t, newFirecrackerConformanceFixture)
+}
+
+func TestAssignmentBackendRequiresWorkspaceStore(t *testing.T) {
+	manager := &Manager{cfg: &config.Config{}}
+	if _, err := NewAssignmentBackend(manager); err == nil ||
+		!strings.Contains(err.Error(), "requires a WorkspaceStore") {
+		t.Fatalf("assignment backend without WorkspaceStore error = %v", err)
+	}
 }
 
 func TestSignedArtifactCompatibilityMetadataFailsClosed(t *testing.T) {
@@ -75,158 +83,6 @@ func TestAssignmentBackendRejectsImmutableAssetSubstitution(t *testing.T) {
 				t.Fatalf("accepted immutable asset substitution: %+v", assignment.Assets)
 			}
 		})
-	}
-}
-
-func TestAssignmentBackendRestoresVerifiedCheckpointAcrossIndependentRunnerRoots(t *testing.T) {
-	sourceRunnerWorkspaceDirectory := t.TempDir()
-	sourceRunnerRestoreSpoolDirectory := t.TempDir()
-	sourceBackend, err := NewAssignmentBackend(&Manager{cfg: &config.Config{
-		MicroVMWorkspaceDir: sourceRunnerWorkspaceDirectory, MicroVMWorkspaceSizeMiB: 1,
-		MicroVMCheckpointRestoreSpoolDir:           sourceRunnerRestoreSpoolDirectory,
-		MicroVMWorkspaceBackend:                    "ext4",
-		MicroVMStoragePressureRecoveryPercent:      70,
-		MicroVMStoragePressureWarningPercent:       80,
-		MicroVMStoragePressureAdmissionDenyPercent: 90,
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	restoringRunnerWorkspaceDirectory := t.TempDir()
-	restoringRunnerRestoreSpoolDirectory := t.TempDir()
-	restoringBackend, err := NewAssignmentBackend(&Manager{cfg: &config.Config{
-		MicroVMWorkspaceDir: restoringRunnerWorkspaceDirectory, MicroVMWorkspaceSizeMiB: 1,
-		MicroVMCheckpointRestoreSpoolDir:           restoringRunnerRestoreSpoolDirectory,
-		MicroVMWorkspaceBackend:                    "ext4",
-		MicroVMStoragePressureRecoveryPercent:      70,
-		MicroVMStoragePressureWarningPercent:       80,
-		MicroVMStoragePressureAdmissionDenyPercent: 90,
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	restoringBackend.restoreSpoolPressure, err = newStoragePressureController(
-		storagePressurePolicy{RecoveryPercent: 70, WarningPercent: 80, AdmissionDenyPercent: 90},
-		&mutableStoragePressureProbe{sample: storagePressureSample{
-			Backend: "restore-spool", TotalBytes: 100 << 20, UsedBytes: 1 << 20,
-		}},
-		func(context.Context, string) error { return nil },
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	content := make([]byte, 1<<20)
-	copy(content, []byte("cross-runner workspace"))
-	sourceCheckpointPath := filepath.Join(
-		sourceRunnerWorkspaceDirectory, "committed-checkpoint.ext4",
-	)
-	if err := os.WriteFile(sourceCheckpointPath, content, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	checkpointBytes, err := os.ReadFile(sourceCheckpointPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(checkpointBytes)
-	fence := &runnerprotocol.AssignmentFence{
-		AssignmentId: "assignment-restore", SandboxId: "sandbox-restore",
-		InstanceId: "instance-restore", SandboxGeneration: 2,
-		FencingToken: []byte("01234567890123456789012345678901"),
-	}
-	begin := &runnerprotocol.RestoreBegin{
-		Fence: fence, CheckpointId: "checkpoint-restore",
-		StorageObjectId: "checkpoints/checkpoint-restore.ext4",
-		Sha256:          hex.EncodeToString(sum[:]), SizeBytes: uint64(len(checkpointBytes)),
-		Compatibility: map[string]string{
-			"architecture": runtime.GOARCH, "backend": "firecracker",
-			"profileRevisionId": "profile-restore", "workspaceFormat": "ext4",
-		},
-		DeadlineUnixMs: uint64(time.Now().Add(time.Minute).UnixMilli()),
-	}
-	if err := restoringBackend.BeginRestore(t.Context(), begin); err != nil {
-		t.Fatal(err)
-	}
-	first := checkpointBytes[:256*1024]
-	if err := restoringBackend.WriteRestoreChunk(t.Context(), &runnerprotocol.RestoreChunk{
-		Fence: fence, CheckpointId: begin.CheckpointId, StorageObjectId: begin.StorageObjectId,
-		Data: first,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := restoringBackend.WriteRestoreChunk(t.Context(), &runnerprotocol.RestoreChunk{
-		Fence: fence, CheckpointId: begin.CheckpointId, StorageObjectId: begin.StorageObjectId,
-		Data: first,
-	}); err != nil {
-		t.Fatalf("identical restore replay failed: %v", err)
-	}
-	if err := restoringBackend.WriteRestoreChunk(t.Context(), &runnerprotocol.RestoreChunk{
-		Fence: fence, CheckpointId: begin.CheckpointId, StorageObjectId: begin.StorageObjectId,
-		Offset: uint64(len(first) + 1), Data: []byte("gap"),
-	}); err == nil {
-		t.Fatal("restore offset gap succeeded")
-	}
-	if err := restoringBackend.BeginRestore(t.Context(), begin); err != nil {
-		t.Fatalf("restart failed restore: %v", err)
-	}
-	if err := restoringBackend.WriteRestoreChunk(t.Context(), &runnerprotocol.RestoreChunk{
-		Fence: fence, CheckpointId: begin.CheckpointId, StorageObjectId: begin.StorageObjectId,
-		Data: first,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := restoringBackend.WriteRestoreChunk(t.Context(), &runnerprotocol.RestoreChunk{
-		Fence: fence, CheckpointId: begin.CheckpointId, StorageObjectId: begin.StorageObjectId,
-		Offset: uint64(len(first)), Data: checkpointBytes[len(first):],
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := restoringBackend.WriteRestoreChunk(t.Context(), &runnerprotocol.RestoreChunk{
-		Fence: fence, CheckpointId: begin.CheckpointId, StorageObjectId: begin.StorageObjectId,
-		Offset: uint64(len(checkpointBytes)), EndOfObject: true,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	restore := restoringBackend.restores[begin.CheckpointId]
-	if restore == nil || !restore.complete {
-		t.Fatalf("verified restore = %#v", restore)
-	}
-	if len(sourceBackend.restores) != 0 ||
-		!strings.HasPrefix(
-			restore.path,
-			restoringRunnerRestoreSpoolDirectory+string(os.PathSeparator),
-		) ||
-		strings.HasPrefix(
-			restore.path,
-			sourceRunnerWorkspaceDirectory+string(os.PathSeparator),
-		) {
-		t.Fatalf(
-			"cross-Runner restore paths share local authority: source=%q restoring=%q",
-			sourceCheckpointPath, restore.path,
-		)
-	}
-	rebound := proto.Clone(begin).(*runnerprotocol.RestoreBegin)
-	rebound.Fence = proto.Clone(fence).(*runnerprotocol.AssignmentFence)
-	rebound.Fence.AssignmentId = "assignment-restore-rebound"
-	rebound.Fence.InstanceId = "instance-restore-rebound"
-	if err := restoringBackend.BeginRestore(t.Context(), rebound); err != nil {
-		t.Fatalf("verified checkpoint rebind failed: %v", err)
-	}
-	if restoringBackend.restores[begin.CheckpointId].fence.AssignmentId != rebound.Fence.AssignmentId {
-		t.Fatal("verified checkpoint did not bind to the new fenced assignment")
-	}
-	destination := filepath.Join(restoringRunnerWorkspaceDirectory, "generation.ext4")
-	if err := os.WriteFile(destination, make([]byte, len(checkpointBytes)), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := restoreWorkspaceImage(restore.path, destination, int64(len(checkpointBytes))); err != nil {
-		t.Fatal(err)
-	}
-	restored, err := os.ReadFile(destination)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(restored, checkpointBytes) {
-		t.Fatal("generation workspace bytes differ from verified checkpoint")
 	}
 }
 
@@ -297,9 +153,7 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 			MicroVMVCPUs:                               2,
 			MicroVMMemoryMiB:                           1024,
 			MicroVMWorkspaceSizeMiB:                    2048,
-			MicroVMWorkspaceDir:                        t.TempDir(),
-			MicroVMCheckpointRestoreSpoolDir:           t.TempDir(),
-			MicroVMWorkspaceBackend:                    "ext4",
+			RunnerWorkspaceRoot:                        t.TempDir(),
 			MicroVMStoragePressureRecoveryPercent:      70,
 			MicroVMStoragePressureWarningPercent:       80,
 			MicroVMStoragePressureAdmissionDenyPercent: 90,
@@ -316,30 +170,60 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 		networkPolicy:  &recordingHostNetworkPolicyEnforcer{},
 		runnerID:       "runner-1",
 	}
+	workspacePath := filepath.Join(t.TempDir(), "workspace.raw")
+	if err := os.WriteFile(workspacePath, make([]byte, 4096), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workspaceStore := &conformanceWorkspaceStore{
+		workspaceID: "workspace-1",
+		generation:  7,
+		imagePath:   workspacePath,
+	}
 	manager.startCompartment = func(_ context.Context, sandboxID, compartmentID string, opts runtimemanager.StartOpts) (string, error) {
-		if opts.WorkspaceAttachmentID != compartmentID+"-generation-7" {
-			t.Fatalf("workspace attachment identity = %q", opts.WorkspaceAttachmentID)
+		if opts.WorkspaceAttachment == nil ||
+			opts.WorkspaceAttachment.WorkspaceID() != "workspace-1" ||
+			opts.WorkspaceAttachment.Generation() != opts.SandboxGeneration ||
+			opts.WorkspaceAttachment.Image() == nil {
+			t.Fatalf("resolved Workspace attachment = %#v", opts.WorkspaceAttachment)
+		}
+		marker := []byte("SecondBox-attachment")
+		switch opts.SandboxGeneration {
+		case 7:
+			if _, err := opts.WorkspaceAttachment.Image().WriteAt(marker, 0); err != nil {
+				t.Fatalf("write Workspace mutation: %v", err)
+			}
+		case 8:
+			got := make([]byte, len(marker))
+			if _, err := opts.WorkspaceAttachment.Image().ReadAt(got, 0); err != nil {
+				t.Fatalf("read persisted Workspace mutation: %v", err)
+			}
+			if string(got) != string(marker) {
+				t.Fatalf("persisted Workspace mutation = %q", got)
+			}
+		default:
+			t.Fatalf("unexpected conformance generation %d", opts.SandboxGeneration)
 		}
 		if opts.NetworkPolicy == nil || opts.NetworkPolicy.Mode() != networkpolicy.ModeDenyAll {
 			t.Fatalf("assignment network policy was not compiled and forwarded: %#v", opts.NetworkPolicy)
 		}
-		if opts.RequestID != "request-1" ||
-			opts.OperationID != "operation-1" ||
-			opts.LeaseID != "lease-1" ||
-			opts.AssignmentID != "assignment-1" {
+		if opts.RequestID == "" ||
+			opts.OperationID == "" ||
+			opts.LeaseID == "" ||
+			opts.AssignmentID == "" {
 			t.Fatalf("assignment evidence correlation was not forwarded: %+v", opts)
 		}
-		id := "fc-conformance"
+		id := fmt.Sprintf("fc-conformance-%d", opts.SandboxGeneration)
 		manager.mu.Lock()
 		manager.addInstanceLocked(&instance{
-			id:                id,
-			sandboxID:         sandboxID,
-			sandboxGeneration: opts.SandboxGeneration,
-			compartmentID:     compartmentID,
-			requestID:         opts.RequestID,
-			operationID:       opts.OperationID,
-			leaseID:           opts.LeaseID,
-			assignmentID:      opts.AssignmentID,
+			id:                  id,
+			sandboxID:           sandboxID,
+			sandboxGeneration:   opts.SandboxGeneration,
+			compartmentID:       compartmentID,
+			workspaceAttachment: opts.WorkspaceAttachment,
+			requestID:           opts.RequestID,
+			operationID:         opts.OperationID,
+			leaseID:             opts.LeaseID,
+			assignmentID:        opts.AssignmentID,
 			guestProtocolSession: &GuestProtocolSession{
 				Binding: &guestv1.ConnectionBinding{
 					InstanceId:        compartmentID,
@@ -356,19 +240,10 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 		manager.mu.Unlock()
 		return id, nil
 	}
-	backend, err := NewAssignmentBackend(manager)
-	if err != nil {
+	if err := manager.SetWorkspaceStore(workspaceStore); err != nil {
 		t.Fatal(err)
 	}
-	backend.restoreSpoolPressure, err = newStoragePressureController(
-		storagePressurePolicy{
-			RecoveryPercent: 70, WarningPercent: 80, AdmissionDenyPercent: 90,
-		},
-		&mutableStoragePressureProbe{sample: storagePressureSample{
-			Backend: "restore-spool", TotalBytes: 100 << 30, UsedBytes: 1 << 30,
-		}},
-		func(context.Context, string) error { return nil },
-	)
+	backend, err := NewAssignmentBackend(manager)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,6 +261,18 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 	}
 	return conformance.Fixture{
 		Backend: backend,
+		AdvanceWorkspace: func(
+			_ context.Context,
+			workspaceID string,
+			expectedGeneration uint64,
+			nextGeneration uint64,
+		) error {
+			return workspaceStore.Advance(
+				workspaceID,
+				expectedGeneration,
+				nextGeneration,
+			)
+		},
 		Assignment: &runnerprotocol.AssignmentCommand{
 			Fence: &runnerprotocol.AssignmentFence{
 				AssignmentId:      "assignment-1",
@@ -395,6 +282,7 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 				FencingToken:      []byte("opaque-fencing-token"),
 			},
 			ProfileRevisionId: "profile-revision-1",
+			WorkspaceId:       "workspace-1",
 			Requirements: &runnerprotocol.ProfileRequirements{
 				VcpuCount:            1,
 				MemoryBytes:          512 << 20,
@@ -427,4 +315,75 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 			},
 		},
 	}
+}
+
+type conformanceWorkspaceStore struct {
+	workspacestore.WorkspaceStore
+	workspaceID string
+	generation  uint64
+	imagePath   string
+}
+
+func (store *conformanceWorkspaceStore) Open(
+	_ context.Context,
+	workspaceID string,
+	generation uint64,
+) (workspacestore.ComputeAttachment, error) {
+	if store.workspaceID != workspaceID || store.generation != generation {
+		return nil, workspacestore.ErrStaleGeneration
+	}
+	image, err := os.OpenFile(store.imagePath, os.O_RDWR, 0)
+	if err != nil {
+		return nil, err
+	}
+	return &conformanceComputeAttachment{
+		workspaceID: workspaceID,
+		generation:  generation,
+		image:       image,
+	}, nil
+}
+
+func (store *conformanceWorkspaceStore) Advance(
+	workspaceID string,
+	expectedGeneration uint64,
+	nextGeneration uint64,
+) error {
+	if store.workspaceID != workspaceID ||
+		store.generation != expectedGeneration ||
+		nextGeneration != expectedGeneration+1 {
+		return workspacestore.ErrStaleGeneration
+	}
+	store.generation = nextGeneration
+	return nil
+}
+
+type conformanceComputeAttachment struct {
+	workspaceID string
+	generation  uint64
+	image       *os.File
+}
+
+func (*conformanceComputeAttachment) Handle() workspacestore.WorkspaceHandle {
+	return workspacestore.WorkspaceHandle{}
+}
+
+func (attachment *conformanceComputeAttachment) WorkspaceID() string {
+	return attachment.workspaceID
+}
+
+func (attachment *conformanceComputeAttachment) Generation() uint64 {
+	return attachment.generation
+}
+
+func (attachment *conformanceComputeAttachment) Image() *os.File {
+	return attachment.image
+}
+
+func (attachment *conformanceComputeAttachment) Close() error {
+	if attachment.image == nil {
+		return nil
+	}
+	err := attachment.image.Close()
+	attachment.image = nil
+	return err
 }

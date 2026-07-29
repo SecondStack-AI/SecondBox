@@ -1,64 +1,136 @@
 # Recovery and reconciliation
 
-PostgreSQL desired state is the control-plane authority. Reconcilers are restart-safe workers that claim bounded work transactionally and emit durable Operations and audit evidence. Process memory, HTTP connections, and a particular control-plane replica never own a Sandbox.
+PostgreSQL desired state is the control-plane authority. Reconcilers are
+restart-safe workers that claim bounded work transactionally and emit durable
+Operations and audit evidence. Process memory, HTTP connections, and a
+particular control-plane replica never own a Sandbox. The home Runner's local
+WorkspaceStore is the authority for Workspace image state.
 
 ## Reconciliation model
 
-Each mutable record has a revision. A reconciler reads state, computes one idempotent action, claims it with a compare-and-swap transaction, performs bounded external work, then commits evidence only if the claim and revision remain current. Duplicate, late, or reordered runner results are matched by operation, Assignment, generation, and fencing token.
+Each mutable record has a revision. A reconciler reads state, computes one
+idempotent action, claims it with a compare-and-swap transaction, performs
+bounded external work, then commits evidence only if the claim and revision
+remain current. Duplicate, late, or reordered Runner results are matched by
+effect or operation ID, Assignment, generation, and fencing token.
 
-Multiple replicas may scan the same Sandbox, but only one claim commits. A crashed worker leaves an expiring claim that another replica resumes from durable evidence. Retry classification is explicit: transient transport and dependency failures may retry within operation policy; admission, compatibility, fencing, integrity, and authorization failures are terminal until an operator or desired-state change addresses them.
+Multiple replicas may scan the same Sandbox, but only one claim commits. A
+crashed worker leaves an expiring claim that another replica resumes from
+durable database state and Runner receipts. Retry classification is explicit:
+transient transport and dependency failures may retry within operation policy;
+admission, compatibility, fencing, local-integrity, and authorization failures
+are terminal until an operator or desired-state change addresses them.
 
-Revision conflicts and lost reconciliation claims are expected concurrency outcomes, so the corresponding worker immediately retries from fresh PostgreSQL state. Other errors remain visible and stop the worker so process supervision can surface the failed dependency instead of silently spinning.
+One durable Workspace mutation slot serializes start, stop, Snapshot create and
+delete, restore, and Sandbox deletion. Transactions lock Sandbox, Workspace,
+then Snapshot when present. A pending start retains the slot until ready or
+terminal failure. Every stop-producing path adopts a stable stop effect ID and
+retains the slot through compute detach, local generation advance, and the
+matching PostgreSQL generation commit.
 
-Sandbox lifecycle reconciliation uses the same model as Assignment recovery. Each pass consumes at most one due Sandbox and records one of the durable actions `materialize`, `start_instance`, `mark_ready`, `drain`, `checkpoint`, `stop_instance`, `finish_stop`, `delete`, `finish_delete`, `wait`, or `fail`. The decision inputs keep guest heartbeat, useful activity, lease authority, current checkpoint publication, and active materialization as separate evidence.
+Runner-facing mutations pass through durable effects. Each local-storage command
+has a stable effect ID, expected generation, and immutable home Runner. The
+Runner persists a receipt before acknowledging the result. A control-plane crash
+before database commit therefore replays the same command and converges on the
+same receipt instead of repeating or guessing the filesystem mutation.
 
-The control-plane process runs this lifecycle claim loop with explicitly configured poll and claim durations. Database-only transitions, including create-to-stopped and deletion of an already stopped Sandbox, complete their Operations in the loop. Runner-facing actions pass through the durable effect broker: scheduling atomically records Instance, Assignment, exclusive preparing materialization, capacity reservation, and Assignment command; readiness records Assignment, guest, and materialization evidence before the lifecycle worker marks the Sandbox ready. Stop and checkpoint commands retain generation- and assignment-fenced authority across restart. A `wait` pass preserves the last runner-facing action instead of implying that it ran.
-
-Assignments carry a reconciliation owner, expiring claim, next-action time, retry counter and limit, operation deadline, failure class, and revision. A dedicated Assignment worker runs beside the Sandbox lifecycle worker, marks heartbeat-expired Runners offline, and claims due Assignment rows with `FOR UPDATE SKIP LOCKED`. PostgreSQL serialization failures are retried only within the explicit scheduler retry bound supplied by the caller.
-
-An Assignment that produces no terminal result by its operation deadline is fenced with the exact Assignment, Instance, Sandbox generation, and token authority before its startup Operation fails. A delivered Fence that produces no terminal result is expired and replaced by a distinct command with a renewed deadline only within the persisted retry bound. Exhaustion records terminal Assignment, Instance, Sandbox, command, and Operation failure evidence without releasing the unproved active materialization or advancing the generation. A late valid FenceResult can still establish release proof, but late readiness cannot revive fenced startup authority.
+Assignments carry a reconciliation owner, expiring claim, next-action time,
+retry counter and limit, operation deadline, failure class, and revision. A
+dedicated Assignment worker runs beside Sandbox lifecycle reconciliation, marks
+heartbeat-expired Runners offline, and claims due rows with
+`FOR UPDATE SKIP LOCKED`. PostgreSQL serialization failures retry only within
+the caller's explicit bound.
 
 ## Control-plane and dependency restart
 
-After a control-plane restart, reconcilers rebuild no authority from memory. They inspect nonterminal Operations, current runner connections, assignment leases, object publication state, and desired versus observed Sandbox state.
+After a control-plane restart, reconcilers rebuild no authority from memory.
+They inspect nonterminal Operations, Workspace mutation slots, current Runner
+connections, Assignment leases, desired and observed Sandbox state, and durable
+local-workspace results.
 
-A PostgreSQL outage rejects mutations and pauses reconciliation. The system does not continue from stale caches. An object-store outage prevents checkpoint publication, restore, artifact transfer, and any stop policy that requires a durable checkpoint. It never records a checkpoint as committed without verified reachable bytes.
+A PostgreSQL outage rejects mutations and pauses reconciliation. The system does
+not continue from stale caches. An object-store outage affects Artifact and
+immutable execution-asset operations only; ordinary Sandbox start, stop,
+Snapshot, and restore never depend on S3-compatible storage.
 
-Checkpointing remains an effect-producing reconciliation state until publication or terminal failure, even when a concurrent intent changes the desired state. If a queued command reaches its effect deadline without a matching terminal, one transaction expires the old command, increments the persisted retry count, installs a new command ID and deadline, and requeues delivery. Reaching the configured retry limit records `checkpoint_retry_exhausted`, moves the effect to `runner_failed`, and fails the old command. Stop and start intents then enter the explicit failed state; delete intent continues through fenced Instance stop and durable deletion because a failed optional checkpoint cannot strand resource removal. Reconnect and replica replacement therefore do not depend on an in-memory timer.
+If a Runner has completed a local mutation but PostgreSQL did not commit it, the
+replayed receipt drives recovery:
 
-Stopping uses the same durable effect discipline. A missing FenceResult causes a distinct bounded Fence retry with a renewed command deadline. Exhaustion records `stop_retry_exhausted`, fails the final command, and moves the Sandbox to an explicit terminal failure instead of leaving `stopping` nonterminal forever.
+- Workspace creation remains pending until the create receipt is recorded.
+- Ordinary stop remains pending after local generation advance until
+  `finish_stop` commits that exact generation.
+- Snapshot creation and deletion remain pending until their local receipts
+  finalize the Snapshot row.
+- Restore records requested, staged, swapped, database-committed, and finalized
+  phases. A swapped receipt commits the new generation before rollback cleanup.
+- Workspace deletion remains pending until the home Runner proves all local
+  images, Snapshots, staging, rollback, and receipt state has been removed.
 
-Natural post-ready Instance termination is an observation, not a release transition. A current fenced `InstanceTerminal` atomically stores its immutable reason and digest, marks guest liveness stopped, and makes the Sandbox due. A running Sandbox then drains and enters the existing stop effect. No replacement is materialized until a matching FenceResult proves the retained Assignment and mutable materialization released, `finish_stop` advances the generation, and lifecycle reconciliation starts the new Instance. Duplicate evidence is harmless; changed or stale evidence fails.
+Start stays blocked whenever PostgreSQL and the current-image manifest disagree
+about generation.
+
+Natural post-ready Instance termination is an observation, not release proof. A
+current fenced terminal event records its bounded reason and makes the Sandbox
+due. The retained Assignment must still be stopped and its Workspace attachment
+released before local generation advance and `finish_stop`.
 
 ## Runner reconnect and loss
 
-A reconnecting Runner reports its stable identity, new connection ID, active Assignments, Instances, operation states, and local materialization evidence. The control plane accepts only entries matching current database authority. Unknown or stale entries receive fence-and-cleanup commands.
+A reconnecting Runner reports its stable identity, new connection ID, active
+Assignments, current Workspace inventory, generation manifests, and
+unacknowledged local-operation receipts. The control plane accepts only evidence
+matching the Workspace's immutable home and current database authority. Stale
+compute receives fence-and-cleanup commands. Missing or conflicting local data
+becomes an explicit operator-visible failure; it never triggers empty Workspace
+creation.
 
-Heartbeat expiry makes the Runner unavailable and marks its Assignments uncertain. It does not prove compute stopped and never authorizes reassignment. Recovery follows one of two safe paths:
+Heartbeat expiry marks the Runner unavailable and makes its Sandboxes
+unavailable. It does not prove compute stopped, advance a generation, or
+authorize another Runner. No scheduler path relocates the Workspace or restores
+it from object storage.
 
-1. the same trusted Runner reconnects with evidence that still matches current Assignment authority; or
-2. that Runner returns verifiable stop and materialization-release evidence for the exact fence, after which the control plane advances authority and restores only the last committed checkpoint on another compatible Runner.
-
-The replacement never attaches the old mutable image. V1 makes no claim that writes after the last committed checkpoint survive Runner loss.
-
-An uncertain Assignment transitions to fencing before replacement. A successful FenceResult must match Runner, Assignment, Instance, Sandbox, generation, opaque fencing token, and durable operation correlation, and it must include a termination-evidence digest. Only then does one PostgreSQL transaction release the Assignment, expire its remaining commands, mark the Instance `stopped` with lost guest liveness and stable `runner_lost` reason, fence old-generation Leases, activity, exec/file/port data-plane sessions, and open PortSessions, terminate any still-active materialization, advance Sandbox and Workspace generation together, preserve the current checkpoint, create the durably correlated replacement start Operation, clear the current Instance, and wake lifecycle reconciliation. A restarted control-plane worker resumes this transaction from persisted fence proof. Late Assignment results, Lease use, and data-plane frames for the released generation are rejected.
+Recovery requires the same trusted Runner identity and WorkspaceStore to return.
+Machine-level recovery must restore the stable Runner identity and
+`SECONDBOX_RUNNER_WORKSPACE_ROOT` as one consistent unit. Rebinding those files
+to a new Runner ID is outside the v1 contract.
 
 ## Lifecycle races
 
-Concurrent start requests converge on one current generation and Instance. Stop during start changes desired state and drains or fences the startup operation. Start during stop waits for stop and checkpoint policy to finish, then creates a new generation. Delete dominates start, touch, and new data-plane admission.
+Concurrent requests serialize through the Workspace mutation slot and Sandbox
+revision:
 
-Drain records its admission barrier before waiting for in-flight work. New work is rejected after that barrier. Drain-grace expiry durably queues current-Assignment cancellation frames for admitted operations. Checkpointing waits for their fenced terminal evidence so guest writes cannot race the immutable workspace image.
+- concurrent starts converge on one Instance;
+- Snapshot create and restore require a stopped Sandbox and conflict with a
+  pending start or stop;
+- Snapshot delete may run while compute is active only when no restore references
+  it;
+- start waits while stop or restore owns the slot;
+- delete dominates new start, Snapshot, restore, touch, and data-plane admission,
+  but remains pending while the home Runner is unavailable.
 
-Lease expiry removes authority for that generation but does not delete a Sandbox. Before counting useful activity, lifecycle claiming transactionally expires due Leases and closes sessions bound to released, expired, or fenced Leases, so abandoned session rows cannot suppress reclamation. Profile policy decides whether active authority contributes to drain. Ping and lifecycle polling never delay idle reconciliation; explicit touch and currently authorized active sessions do.
+Runner-side Workspace locking independently enforces one writer. It is not
+weakened by a control-plane race or replica failure.
 
-## Checkpoint and garbage-collection recovery
+Lease expiry removes authority for that generation but does not delete a
+Sandbox. Before counting useful activity, lifecycle claiming transactionally
+expires due Leases and closes sessions bound to released, expired, or fenced
+Leases, so abandoned session rows cannot suppress reclamation.
 
-Checkpoint staging objects are not reachable until checksum verification and atomic PostgreSQL publication. Reconciliation resumes or deletes abandoned staging uploads. A database record that references missing or corrupt object bytes enters an integrity-failed state and blocks restore; it does not materialize an empty workspace.
+## Retention and garbage collection
 
-Garbage collection marks candidates transactionally, rechecks reachability after its grace, deletes immutable objects idempotently, and records completion. Current Workspace checkpoints, retained Snapshots, Artifacts, active downloads, restore Operations, and backup manifests are roots.
+Expired local Snapshots are selected from PostgreSQL and deleted through the
+same idempotent home-Runner effect as explicit deletion. Snapshot rows are
+removed only after a durable local receipt. The object-store garbage collector
+handles application Artifacts and immutable execution assets only; Workspace
+images, local Snapshots, restore state, and Runner receipts are never S3 roots.
 
 ## Operational evidence
 
-Every nonterminal state has a next action, deadline, and observable reason. Operators can inspect desired state, last successful evidence, retry classification, Runner health, checkpoint reachability, and correlation IDs without accessing workspace content. Reconciliation metrics use fixed-cardinality state and reason classes.
+Every nonterminal state has a next action, deadline, and observable reason.
+Operators can inspect desired state, current mutation, last durable receipt,
+retry classification, home Runner health, local-inventory consistency, and
+correlation IDs without accessing Workspace content. Reconciliation metrics use
+fixed-cardinality state and reason classes.
 
-See [Domain and lifecycle](domain-lifecycle.md), [Runner protocol](runner-protocol.md), and [Workspace durability](workspace-durability.md).
+See [Domain and lifecycle](domain-lifecycle.md), [Runner protocol](runner-protocol.md),
+and [Workspace durability](workspace-durability.md).

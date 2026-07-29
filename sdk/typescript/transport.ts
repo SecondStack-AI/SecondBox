@@ -14,7 +14,6 @@ export type SandboxState =
   | "ready"
   | "draining"
   | "stopping"
-  | "checkpointing"
   | "failed"
   | "deleting"
   | "deleted";
@@ -55,8 +54,21 @@ export interface Operation {
   readonly state: "pending" | "running" | "succeeded" | "failed" | "cancelled";
   readonly requestId: string;
   readonly sandbox?: Sandbox;
+  readonly snapshot?: Snapshot;
   readonly error?: Problem;
-  readonly [key: string]: JSONValue | Sandbox | Problem | undefined;
+  readonly [key: string]: JSONValue | Sandbox | Snapshot | Problem | undefined;
+}
+
+export interface Snapshot {
+  readonly id: string;
+  readonly sandboxId: string;
+  readonly generation: number;
+  readonly name: string;
+  readonly sizeBytes: number;
+  readonly metadata: Metadata;
+  readonly state: "creating" | "ready" | "deleting" | "failed";
+  readonly expiresAt?: string;
+  readonly createdAt: string;
 }
 
 export interface Project {
@@ -84,7 +96,6 @@ export interface CreateAPIKeyResponse {
 }
 
 export interface ProfileRevisionSpec {
-  readonly backend: "firecracker";
   readonly pool: string;
   readonly architecture: "amd64" | "arm64";
   readonly runtimeBundleDigest: string;
@@ -103,10 +114,9 @@ export interface ProfileRevisionSpec {
     readonly maximumDurationSeconds: number;
     readonly leaseSeconds: number;
   };
-  readonly checkpoint: {
-    readonly onStop: boolean;
-    readonly retentionSeconds: number;
+  readonly retention: {
     readonly snapshotLimit: number;
+    readonly snapshotRetentionSeconds: number;
     readonly artifactRetentionSeconds: number;
   };
   readonly execution: {
@@ -128,8 +138,8 @@ export interface WaitSandboxRequest {
   readonly deadlineMilliseconds: number;
 }
 
-export interface CheckpointSandboxRequest {
-  readonly metadata: Metadata;
+export interface RestoreSnapshotRequest {
+  readonly snapshotId: string;
 }
 
 export interface StreamingExecRequest {
@@ -237,21 +247,25 @@ export interface RemovePathRequest {
 
 export type OperationID =
   | "cancelSandboxTerminal"
-  | "checkpointSandbox"
   | "createProfile"
   | "createSandbox"
   | "createSandboxDirectory"
   | "createSandboxExecStream"
   | "createSandboxTerminal"
+  | "createSandboxSnapshot"
+  | "deleteSnapshot"
   | "deleteSandbox"
   | "drainSandbox"
   | "executeSandboxCommand"
   | "getOperation"
   | "getSandbox"
+  | "getSnapshot"
+  | "listSandboxSnapshots"
   | "listSandboxDirectory"
   | "readSandboxFile"
   | "reconnectSandboxTerminal"
   | "removeSandboxPath"
+  | "restoreSandboxSnapshot"
   | "sandboxFileExists"
   | "startSandbox"
   | "statSandboxFile"
@@ -267,21 +281,25 @@ interface Route {
 
 export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   cancelSandboxTerminal: { method: "DELETE", path: "/v1/sandboxes/{sandboxId}/terminals/{terminalSessionId}" },
-  checkpointSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:checkpoint", contentType: "application/json" },
   createProfile: { method: "POST", path: "/v1/profiles", contentType: "application/json" },
   createSandbox: { method: "POST", path: "/v1/sandboxes", contentType: "application/json" },
   createSandboxDirectory: { method: "POST", path: "/v1/sandboxes/{sandboxId}/directories", contentType: "application/json" },
   createSandboxExecStream: { method: "POST", path: "/v1/sandboxes/{sandboxId}/exec-streams", contentType: "application/json" },
   createSandboxTerminal: { method: "POST", path: "/v1/sandboxes/{sandboxId}/terminals", contentType: "application/json" },
+  createSandboxSnapshot: { method: "POST", path: "/v1/sandboxes/{sandboxId}/snapshots", contentType: "application/json" },
+  deleteSnapshot: { method: "DELETE", path: "/v1/snapshots/{snapshotId}" },
   deleteSandbox: { method: "DELETE", path: "/v1/sandboxes/{sandboxId}" },
   drainSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:drain" },
   executeSandboxCommand: { method: "POST", path: "/v1/sandboxes/{sandboxId}/exec", contentType: "application/json" },
   getOperation: { method: "GET", path: "/v1/operations/{operationId}" },
   getSandbox: { method: "GET", path: "/v1/sandboxes/{sandboxId}" },
+  getSnapshot: { method: "GET", path: "/v1/snapshots/{snapshotId}" },
+  listSandboxSnapshots: { method: "GET", path: "/v1/sandboxes/{sandboxId}/snapshots" },
   listSandboxDirectory: { method: "GET", path: "/v1/sandboxes/{sandboxId}/directories" },
   readSandboxFile: { method: "GET", path: "/v1/sandboxes/{sandboxId}/files" },
   reconnectSandboxTerminal: { method: "GET", path: "/v1/sandboxes/{sandboxId}/terminals/{terminalSessionId}" },
   removeSandboxPath: { method: "DELETE", path: "/v1/sandboxes/{sandboxId}/directories", contentType: "application/json" },
+  restoreSandboxSnapshot: { method: "POST", path: "/v1/sandboxes/{sandboxId}:restore", contentType: "application/json" },
   sandboxFileExists: { method: "GET", path: "/v1/sandboxes/{sandboxId}/files:exists" },
   startSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:start" },
   statSandboxFile: { method: "GET", path: "/v1/sandboxes/{sandboxId}/files:stat" },

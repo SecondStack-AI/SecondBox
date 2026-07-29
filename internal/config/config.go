@@ -51,7 +51,6 @@ type Config struct {
 	ObjectStoreHTTPTimeout           time.Duration
 	ObjectStoreTempDirectory         string
 	ObjectStoreMaxObjectBytes        int64
-	CheckpointSpoolDirectory         string
 	RunnerProtocolMinimum            uint32
 	RunnerProtocolMaximum            uint32
 	RunnerEnabledFeatures            []string
@@ -218,10 +217,6 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	checkpointSpoolDirectory, err := requiredAbsolutePath("SECONDBOX_CHECKPOINT_SPOOL_DIRECTORY")
-	if err != nil {
-		return Config{}, err
-	}
 	runnerProtocolMinimum, err := requiredUint32("SECONDBOX_RUNNER_PROTOCOL_MINIMUM")
 	if err != nil {
 		return Config{}, err
@@ -273,7 +268,6 @@ func FromEnvironment() (Config, error) {
 		ObjectStoreHTTPTimeout:      time.Duration(objectStoreHTTPTimeoutMilliseconds) * time.Millisecond,
 		ObjectStoreTempDirectory:    objectStoreTempDirectory,
 		ObjectStoreMaxObjectBytes:   objectStoreMaxObjectBytes,
-		CheckpointSpoolDirectory:    checkpointSpoolDirectory,
 		RunnerProtocolMinimum:       runnerProtocolMinimum, RunnerProtocolMaximum: runnerProtocolMaximum,
 		RunnerEnabledFeatures: runnerEnabledFeatures,
 		DefaultSubjectQuota:   subjectQuota,
@@ -350,7 +344,7 @@ func requiredBool(name string) (bool, error) {
 func requiredQuota(prefix string) (contracts.QuotaLimits, error) {
 	names := []string{
 		"MAX_SANDBOXES", "MAX_ACTIVE_INSTANCES", "MAX_CPU_MILLIS", "MAX_MEMORY_BYTES",
-		"MAX_RETAINED_BYTES", "MAX_SNAPSHOTS", "MAX_ARTIFACTS", "MAX_PORT_SESSIONS",
+		"MAX_ARTIFACT_BYTES", "MAX_SNAPSHOTS", "MAX_ARTIFACTS", "MAX_PORT_SESSIONS",
 		"MAX_CONCURRENT_OPERATIONS",
 	}
 	values := make([]int64, len(names))
@@ -363,7 +357,7 @@ func requiredQuota(prefix string) (contracts.QuotaLimits, error) {
 	}
 	return contracts.QuotaLimits{
 		MaxSandboxes: values[0], MaxActiveInstances: values[1], MaxCPUMillis: values[2],
-		MaxMemoryBytes: values[3], MaxRetainedBytes: values[4], MaxSnapshots: values[5],
+		MaxMemoryBytes: values[3], MaxArtifactBytes: values[4], MaxSnapshots: values[5],
 		MaxArtifacts: values[6], MaxPortSessions: values[7], MaxConcurrentOperations: values[8],
 	}, nil
 }

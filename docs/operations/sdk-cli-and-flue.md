@@ -19,7 +19,7 @@ go build -o ./dist/secondbox ./cmd/secondbox
   sandboxes list
 ```
 
-Grouped aliases cover Profiles, RunnerPools, Runners, Sandboxes, Operations, Leases, buffered and streaming exec, terminal negotiation, files, checkpoints, snapshots, artifacts, and ports. Their remaining arguments are thin transport values:
+Grouped aliases cover Profiles, RunnerPools, Runners, Sandboxes, Operations, Leases, buffered and streaming exec, terminal negotiation, files, Snapshot create/list/get/delete/restore, Artifacts, and ports. Their remaining arguments are thin transport values:
 
 ```sh
 ./dist/secondbox \

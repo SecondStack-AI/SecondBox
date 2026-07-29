@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
@@ -34,7 +35,7 @@ func (apiHandler *handler) createSandboxSnapshot(writer http.ResponseWriter, req
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	snapshot, err := apiHandler.service.CreateSandboxSnapshot(
+	operation, replayed, err := apiHandler.service.CreateSandboxSnapshot(
 		request.Context(), requestPrincipal(request), request.PathValue("sandboxID"),
 		request.Header.Get("Idempotency-Key"), expectedRevision, body,
 	)
@@ -42,7 +43,8 @@ func (apiHandler *handler) createSandboxSnapshot(writer http.ResponseWriter, req
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	apiHandler.writeJSON(writer, request, http.StatusCreated, snapshot)
+	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
+	apiHandler.writeJSON(writer, request, http.StatusAccepted, operation)
 }
 
 func (apiHandler *handler) getSnapshot(writer http.ResponseWriter, request *http.Request) {
@@ -61,12 +63,14 @@ func (apiHandler *handler) deleteSnapshot(writer http.ResponseWriter, request *h
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	if err := apiHandler.service.DeleteSnapshot(
+	operation, replayed, err := apiHandler.service.DeleteSnapshot(
 		request.Context(), requestPrincipal(request), request.PathValue("snapshotID"),
 		request.Header.Get("Idempotency-Key"),
-	); err != nil {
+	)
+	if err != nil {
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writer.WriteHeader(http.StatusNoContent)
+	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
+	apiHandler.writeJSON(writer, request, http.StatusAccepted, operation)
 }

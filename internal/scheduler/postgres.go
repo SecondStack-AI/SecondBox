@@ -9,6 +9,7 @@ import (
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -31,8 +32,7 @@ type ScheduleRequest struct {
 	InstanceID              string
 	SandboxID               string
 	WorkspaceID             string
-	MaterializationID       string
-	SourceCheckpointID      string
+	StartMutationID         string
 	ProfileRevisionID       string
 	Requirements            Requirements
 	AssignmentCommand       *runnerv1.AssignmentCommand
@@ -122,13 +122,24 @@ func (store *PostgresStore) scheduleOnce(
 	); err != nil {
 		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Sandbox lock: %w", err)
 	}
-	var generation int64
-	var pinnedProfileRevisionID, currentInstanceID string
-	if err := tx.QueryRow(ctx, `
-		SELECT generation,profile_revision_id,current_instance_id
-		FROM secondbox.sandboxes WHERE id=$1 FOR UPDATE`, request.SandboxID,
-	).Scan(&generation, &pinnedProfileRevisionID, &currentInstanceID); err != nil {
-		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Sandbox lookup: %w", err)
+	locked, err := rowlock.SandboxWorkspaceByID(ctx, tx, request.SandboxID)
+	if err != nil {
+		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Sandbox/Workspace lookup: %w", err)
+	}
+	if locked.WorkspaceID != request.WorkspaceID {
+		return DurableAssignment{}, false, ErrProfileRevisionMismatch
+	}
+	generation := locked.Generation
+	pinnedProfileRevisionID := locked.ProfileRevisionID
+	currentInstanceID := locked.CurrentInstanceID
+	workspace := locked.Workspace
+	homeRunnerID := workspace.HomeRunnerID
+	if homeRunnerID == "" {
+		return DurableAssignment{}, false, ErrHomeRunnerUnavailable
+	}
+	if workspace.Generation != generation ||
+		(workspace.State != "creating" && workspace.State != "ready") {
+		return DurableAssignment{}, false, ErrProfileRevisionMismatch
 	}
 	if pinnedProfileRevisionID != request.ProfileRevisionID {
 		return DurableAssignment{}, false, ErrProfileRevisionMismatch
@@ -146,6 +157,10 @@ func (store *PostgresStore) scheduleOnce(
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return DurableAssignment{}, false, err
 	}
+	if workspace.Mutation.State != "" &&
+		(workspace.Mutation.ID != request.StartMutationID || workspace.Mutation.Kind != "start") {
+		return DurableAssignment{}, false, errors.New("SecondBox scheduler Workspace has a conflicting local mutation")
+	}
 	if currentInstanceID != "" {
 		return DurableAssignment{}, false, errors.New("SecondBox scheduler Sandbox has an Instance without durable assignment")
 	}
@@ -153,8 +168,9 @@ func (store *PostgresStore) scheduleOnce(
 	if err != nil {
 		return DurableAssignment{}, false, err
 	}
-	selected, err := SelectRunner(
-		request.Requirements, runners, request.Now.UTC(), request.HeartbeatTimeout,
+	selected, err := SelectHomeRunner(
+		homeRunnerID, request.Requirements, runners,
+		request.Now.UTC(), request.HeartbeatTimeout,
 	)
 	if err != nil {
 		return DurableAssignment{}, false, err
@@ -169,6 +185,33 @@ func (store *PostgresStore) scheduleOnce(
 		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler resolved artifacts encoding: %w", err)
 	}
 	now := request.Now.UTC()
+	if workspace.Mutation.State == "" {
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.workspaces
+			SET mutation_kind='start',mutation_id=$2,mutation_effect_id=$3,
+			    mutation_operation_id=$4,mutation_expected_generation=$5,
+			    mutation_target_generation=$5,mutation_state='assigned',updated_at=$6
+			WHERE id=$1`,
+			request.WorkspaceID, request.StartMutationID, request.AssignmentCommandID,
+			request.AssignmentCommand.Correlation.OperationId, generation, now,
+		); err != nil {
+			return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Workspace start mutation acquisition: %w", err)
+		}
+	} else {
+		result, err := tx.Exec(ctx, `
+			UPDATE secondbox.workspaces
+			SET mutation_effect_id=$2,mutation_state='assigned',updated_at=$3
+			WHERE id=$1 AND mutation_kind='start' AND mutation_id=$4`,
+			request.WorkspaceID, request.AssignmentCommandID, now, request.StartMutationID,
+		)
+		if err != nil {
+			return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Workspace start mutation adoption: %w", err)
+		}
+		if result.RowsAffected() != 1 {
+			return DurableAssignment{}, false,
+				errors.New("SecondBox scheduler Workspace start mutation changed before adoption")
+		}
+	}
 	assignment := DurableAssignment{
 		ID: request.AssignmentID, SandboxID: request.SandboxID, InstanceID: request.InstanceID,
 		RunnerID: selected.ID, ProfileRevisionID: request.ProfileRevisionID,
@@ -222,16 +265,6 @@ func (store *PostgresStore) scheduleOnce(
 		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Assignment command encoding: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO secondbox.workspace_materializations (
-			id,workspace_id,sandbox_id,assignment_id,runner_id,generation,
-			source_checkpoint_id,state,release_proof_json,revision,created_at,updated_at,released_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,'preparing','{}',1,$8,$8,NULL)`,
-		request.MaterializationID, request.WorkspaceID, assignment.SandboxID,
-		assignment.ID, assignment.RunnerID, generation, request.SourceCheckpointID, now,
-	); err != nil {
-		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Workspace materialization insert: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.runner_commands (
 			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
 			delivery_count,created_at,updated_at,delivered_at
@@ -269,7 +302,7 @@ func (store *PostgresStore) scheduleOnce(
 func validateScheduleRequest(request ScheduleRequest) error {
 	if request.AssignmentID == "" || request.AssignmentCommandID == "" ||
 		request.InstanceID == "" || request.SandboxID == "" ||
-		request.WorkspaceID == "" || request.MaterializationID == "" ||
+		request.WorkspaceID == "" || request.StartMutationID == "" ||
 		request.ProfileRevisionID == "" || request.Requirements.PoolName == "" ||
 		request.Requirements.BackendKind == "" || request.Requirements.Architecture == "" ||
 		request.Requirements.GuestProtocolGeneration == 0 ||
@@ -286,7 +319,7 @@ func validateScheduleRequest(request ScheduleRequest) error {
 		command.Fence.SandboxGeneration == 0 ||
 		!bytes.Equal(command.Fence.FencingToken, request.FencingToken) ||
 		command.ProfileRevisionId != request.ProfileRevisionID ||
-		command.SourceCheckpointId != request.SourceCheckpointID ||
+		command.WorkspaceId != request.WorkspaceID ||
 		command.Requirements == nil ||
 		command.Correlation == nil ||
 		command.Correlation.RequestId == "" ||
@@ -337,8 +370,13 @@ func lockRunnerCandidates(
 			return nil, fmt.Errorf("SecondBox scheduler Runner architecture evidence is invalid")
 		}
 		runner.Architecture = architectures[0]
-		if err := json.Unmarshal(capabilitiesJSON, &runner.Capabilities); err != nil {
+		var capabilities []string
+		if err := json.Unmarshal(capabilitiesJSON, &capabilities); err != nil {
 			return nil, fmt.Errorf("SecondBox scheduler Runner capabilities decoding: %w", err)
+		}
+		runner.Capabilities = make(map[string]bool, len(capabilities))
+		for _, capability := range capabilities {
+			runner.Capabilities[capability] = true
 		}
 		if err := json.Unmarshal(allocatableJSON, &runner.Allocatable); err != nil {
 			return nil, fmt.Errorf("SecondBox scheduler Runner capacity decoding: %w", err)
@@ -347,14 +385,12 @@ func lockRunnerCandidates(
 			return nil, fmt.Errorf("SecondBox scheduler Runner reservation decoding: %w", err)
 		}
 		var cacheEvidence struct {
-			ArtifactDigests      []string `json:"artifactDigests"`
-			WorkspaceCheckpoints []string `json:"workspaceCheckpoints"`
+			ArtifactDigests []string `json:"artifactDigests"`
 		}
 		if err := json.Unmarshal(cacheJSON, &cacheEvidence); err != nil {
 			return nil, fmt.Errorf("SecondBox scheduler Runner cache decoding: %w", err)
 		}
 		runner.ArtifactDigests = cacheEvidence.ArtifactDigests
-		runner.WorkspaceCheckpoints = cacheEvidence.WorkspaceCheckpoints
 		runners = append(runners, runner)
 	}
 	if err := rows.Err(); err != nil {

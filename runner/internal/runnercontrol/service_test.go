@@ -1,9 +1,11 @@
 package runnercontrol
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -107,6 +109,420 @@ func TestRunnerProtocolServiceReconnectsAndReadvertisesActiveAssignments(t *test
 	if got := connector.closeCalls.Load(); got != 2 {
 		t.Fatalf("closed control-plane sessions after cancellation = %d, want two", got)
 	}
+}
+
+func TestRunnerProtocolServiceReturnsLogicalLocalWorkspaceReceipt(t *testing.T) {
+	backend := &recordingLocalWorkspaceBackend{
+		recordingAssignmentBackend: &recordingAssignmentBackend{},
+		evidence: LocalWorkspaceEvidence{
+			PreviousGeneration: 4,
+			Generation:         5,
+			LogicalCapacity:    16 << 20,
+			ReceiptRecordedAt:  time.Unix(100, 0).UTC(),
+		},
+	}
+	config := testRunnerConfig()
+	config.MandatoryFeatures = append(
+		config.MandatoryFeatures,
+		runnerprotocol.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE,
+	)
+	service, err := NewRunnerProtocolService(
+		config,
+		backend,
+		staticProtocolConnector{stream: &recordingProtocolStream{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := &recordingProtocolStream{}
+	command := &runnerprotocol.LocalWorkspaceCommand{
+		MessageId:          "message-local-workspace",
+		Sequence:           1,
+		CommandVersion:     1,
+		Kind:               runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION,
+		OperationId:        "operation-stop",
+		EffectId:           "effect-stop",
+		SandboxId:          "sandbox-one",
+		WorkspaceId:        "workspace-one",
+		ExpectedGeneration: 4,
+		NextGeneration:     5,
+		FencingToken:       []byte("fencing-token"),
+		Correlation: &runnerprotocol.Correlation{
+			RequestId:   "request-stop",
+			OperationId: "operation-stop",
+			SandboxId:   "sandbox-one",
+			RunnerId:    "runner-1",
+		},
+	}
+	if err := service.handleLocalWorkspace(t.Context(), stream, command); err != nil {
+		t.Fatalf("handle local Workspace: %v", err)
+	}
+	if backend.command != command {
+		t.Fatal("local Workspace command did not reach backend")
+	}
+	if len(stream.outbound) != 1 {
+		t.Fatalf("local Workspace result frames = %d", len(stream.outbound))
+	}
+	result := stream.outbound[0].GetLocalWorkspaceResult()
+	if result == nil ||
+		result.Terminal != runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED ||
+		result.EffectId != command.EffectId ||
+		result.WorkspaceId != command.WorkspaceId ||
+		result.PreviousGeneration != 4 ||
+		result.Generation != 5 ||
+		result.LogicalCapacityBytes != 16<<20 ||
+		result.ReceiptRecordedAtUnixMs != uint64(time.Unix(100, 0).UnixMilli()) {
+		t.Fatalf("local Workspace result = %#v", result)
+	}
+	encoded, err := proto.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range [][]byte{
+		[]byte("/var/lib"),
+		[]byte("workspace.ext4"),
+		[]byte("storage_object"),
+	} {
+		if bytes.Contains(encoded, forbidden) {
+			t.Fatalf("local Workspace result leaked %q", forbidden)
+		}
+	}
+}
+
+func TestRunnerProtocolServiceReturnsReconciliationInventoryAndReceipts(t *testing.T) {
+	backend := &recordingLocalWorkspaceBackend{
+		recordingAssignmentBackend: &recordingAssignmentBackend{},
+		evidence: LocalWorkspaceEvidence{
+			Inventory: []*runnerprotocol.LocalWorkspaceInventoryItem{{
+				WorkspaceId:          "workspace-one",
+				Generation:           5,
+				LogicalCapacityBytes: 16 << 20,
+				Formatted:            true,
+				ActiveWriter:         true,
+			}},
+			Receipts: []*runnerprotocol.LocalWorkspaceReceiptItem{{
+				Kind:                 runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_CREATE,
+				OperationId:          "operation-snapshot",
+				WorkspaceId:          "workspace-one",
+				SnapshotId:           "snapshot-one",
+				Generation:           5,
+				LogicalCapacityBytes: 16 << 20,
+				ReceiptRecordedAtUnixMs: uint64(
+					time.Unix(100, 0).UnixMilli(),
+				),
+			}},
+		},
+	}
+	config := testRunnerConfig()
+	config.MandatoryFeatures = append(
+		config.MandatoryFeatures,
+		runnerprotocol.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE,
+	)
+	service, err := NewRunnerProtocolService(
+		config,
+		backend,
+		staticProtocolConnector{stream: &recordingProtocolStream{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := &recordingProtocolStream{}
+	command := &runnerprotocol.LocalWorkspaceCommand{
+		MessageId:      "workspace-reconcile-connection",
+		Sequence:       1,
+		CommandVersion: 1,
+		Kind:           runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE,
+		OperationId:    "workspace-reconcile-connection",
+		EffectId:       "workspace-reconcile-connection",
+		Correlation: &runnerprotocol.Correlation{
+			RequestId:   "workspace-reconcile-connection",
+			OperationId: "workspace-reconcile-connection",
+			RunnerId:    "runner-1",
+		},
+	}
+	if err := service.handleLocalWorkspace(t.Context(), stream, command); err != nil {
+		t.Fatal(err)
+	}
+	result := findLocalWorkspaceResult(stream.outbound)
+	if result == nil ||
+		len(result.Inventory) != 1 ||
+		!result.Inventory[0].ActiveWriter ||
+		len(result.Receipts) != 1 ||
+		result.Receipts[0].SnapshotId != "snapshot-one" ||
+		result.Receipts[0].ReceiptRecordedAtUnixMs == 0 {
+		t.Fatalf("Workspace reconciliation result = %#v", result)
+	}
+}
+
+func TestRunnerProtocolReconnectReplaysDurableLocalWorkspaceResult(t *testing.T) {
+	for _, kind := range allLocalWorkspaceCommandKinds() {
+		t.Run(kind.String(), func(t *testing.T) {
+			receiptTime := time.Date(2026, 7, 29, 23, 0, 0, 0, time.UTC)
+			backend := &recordingLocalWorkspaceBackend{
+				recordingAssignmentBackend: &recordingAssignmentBackend{
+					readiness: BackendReadiness{
+						Capacity:     &runnerprotocol.Capacity{},
+						Reserved:     &runnerprotocol.Capacity{},
+						Capabilities: &runnerprotocol.RunnerCapabilities{},
+					},
+				},
+				evidence: LocalWorkspaceEvidence{
+					PreviousGeneration: 4,
+					Generation:         5,
+					LogicalCapacity:    16 << 20,
+					ReceiptRecordedAt:  receiptTime,
+				},
+			}
+			config := testRunnerConfig()
+			config.MandatoryFeatures = append(
+				config.MandatoryFeatures,
+				runnerprotocol.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE,
+			)
+			command := localWorkspaceReconnectCommand(kind)
+			first := &recordingProtocolStream{
+				inbound: []*runnerprotocol.ControlPlaneToRunner{
+					localWorkspaceWelcomeFrame("connection-1"),
+					{Message: &runnerprotocol.ControlPlaneToRunner_LocalWorkspace{
+						LocalWorkspace: proto.Clone(command).(*runnerprotocol.LocalWorkspaceCommand),
+					}},
+				},
+				sendError: func(message *runnerprotocol.RunnerToControlPlane) error {
+					if message.GetLocalWorkspaceResult() != nil {
+						return io.ErrUnexpectedEOF
+					}
+					return nil
+				},
+			}
+			secondCommand := proto.Clone(command).(*runnerprotocol.LocalWorkspaceCommand)
+			secondCommand.Sequence = 1
+			second := &recordingProtocolStream{
+				inbound: []*runnerprotocol.ControlPlaneToRunner{
+					localWorkspaceWelcomeFrame("connection-2"),
+					{Message: &runnerprotocol.ControlPlaneToRunner_LocalWorkspace{
+						LocalWorkspace: secondCommand,
+					}},
+				},
+			}
+			connector := &sequenceProtocolConnector{streams: []RunnerProtocolStream{first, second}}
+			service, err := NewRunnerProtocolService(config, backend, connector)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if established, err := service.runProtocolSession(t.Context()); !established ||
+				!errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Fatalf("first session = established %t, error %v", established, err)
+			}
+			if established, err := service.runProtocolSession(t.Context()); !established ||
+				!errors.Is(err, io.EOF) {
+				t.Fatalf("second session = established %t, error %v", established, err)
+			}
+			if backend.localCalls.Load() != 2 {
+				t.Fatalf("local Workspace executions = %d, want receipt replay", backend.localCalls.Load())
+			}
+			firstResult := findLocalWorkspaceResult(first.outbound)
+			secondResult := findLocalWorkspaceResult(second.outbound)
+			if firstResult == nil || secondResult == nil {
+				t.Fatalf("replayed results = first %#v, second %#v", firstResult, secondResult)
+			}
+			firstResult.MessageId, secondResult.MessageId = "", ""
+			firstResult.Sequence, secondResult.Sequence = 0, 0
+			if !proto.Equal(firstResult, secondResult) {
+				t.Fatalf("replayed local Workspace result changed:\nfirst  %#v\nsecond %#v", firstResult, secondResult)
+			}
+		})
+	}
+}
+
+func TestRunnerProtocolReconnectRetriesLocalWorkspaceWithoutReceipt(t *testing.T) {
+	for _, kind := range allLocalWorkspaceCommandKinds() {
+		t.Run(kind.String(), func(t *testing.T) {
+			backend := &recordingLocalWorkspaceBackend{
+				recordingAssignmentBackend: &recordingAssignmentBackend{
+					readiness: BackendReadiness{
+						Capacity:     &runnerprotocol.Capacity{},
+						Reserved:     &runnerprotocol.Capacity{},
+						Capabilities: &runnerprotocol.RunnerCapabilities{},
+					},
+				},
+				err: errors.New("interrupted before durable receipt"),
+			}
+			config := testRunnerConfig()
+			config.MandatoryFeatures = append(
+				config.MandatoryFeatures,
+				runnerprotocol.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE,
+			)
+			command := localWorkspaceReconnectCommand(kind)
+			first := &recordingProtocolStream{
+				inbound: []*runnerprotocol.ControlPlaneToRunner{
+					localWorkspaceWelcomeFrame("connection-1"),
+					{Message: &runnerprotocol.ControlPlaneToRunner_LocalWorkspace{
+						LocalWorkspace: proto.Clone(command).(*runnerprotocol.LocalWorkspaceCommand),
+					}},
+				},
+				sendError: func(message *runnerprotocol.RunnerToControlPlane) error {
+					if message.GetLocalWorkspaceResult() != nil {
+						return io.ErrUnexpectedEOF
+					}
+					return nil
+				},
+			}
+			second := &recordingProtocolStream{
+				inbound: []*runnerprotocol.ControlPlaneToRunner{
+					localWorkspaceWelcomeFrame("connection-2"),
+					{Message: &runnerprotocol.ControlPlaneToRunner_LocalWorkspace{
+						LocalWorkspace: proto.Clone(command).(*runnerprotocol.LocalWorkspaceCommand),
+					}},
+				},
+			}
+			connector := &sequenceProtocolConnector{streams: []RunnerProtocolStream{first, second}}
+			service, err := NewRunnerProtocolService(config, backend, connector)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.runProtocolSession(t.Context()); !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Fatalf("pre-receipt session error = %v", err)
+			}
+			firstResult := findLocalWorkspaceResult(first.outbound)
+			if firstResult == nil ||
+				firstResult.Terminal !=
+					runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_RUNNER_FAILED ||
+				firstResult.ReceiptRecordedAtUnixMs != 0 {
+				t.Fatalf("pre-receipt result = %#v", firstResult)
+			}
+			backend.err = nil
+			backend.evidence = LocalWorkspaceEvidence{
+				PreviousGeneration: 4, Generation: 5, LogicalCapacity: 16 << 20,
+				ReceiptRecordedAt: time.Date(2026, 7, 29, 23, 30, 0, 0, time.UTC),
+			}
+			if _, err := service.runProtocolSession(t.Context()); !errors.Is(err, io.EOF) {
+				t.Fatalf("retried session error = %v", err)
+			}
+			secondResult := findLocalWorkspaceResult(second.outbound)
+			if secondResult == nil ||
+				secondResult.Terminal !=
+					runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED ||
+				secondResult.ReceiptRecordedAtUnixMs == 0 {
+				t.Fatalf("retried result = %#v", secondResult)
+			}
+		})
+	}
+}
+
+func allLocalWorkspaceCommandKinds() []runnerprotocol.LocalWorkspaceCommandKind {
+	return []runnerprotocol.LocalWorkspaceCommandKind{
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_INSPECT,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_DELETE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_CREATE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_DELETE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_PREPARE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_SWAP,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE,
+	}
+}
+
+func localWorkspaceReconnectCommand(
+	kind runnerprotocol.LocalWorkspaceCommandKind,
+) *runnerprotocol.LocalWorkspaceCommand {
+	return &runnerprotocol.LocalWorkspaceCommand{
+		MessageId: "command-" + kind.String(), Sequence: 1, CommandVersion: 1,
+		Kind:        kind,
+		OperationId: "operation-local", EffectId: "effect-local",
+		SandboxId: "sandbox-one", WorkspaceId: "workspace-one", SnapshotId: "snapshot-one",
+		ExpectedGeneration: 4, NextGeneration: 5, LogicalCapacityBytes: 16 << 20,
+		FencingToken: []byte("01234567890123456789012345678901"),
+		Correlation: &runnerprotocol.Correlation{
+			OperationId: "operation-local", SandboxId: "sandbox-one", RunnerId: "runner-1",
+		},
+	}
+}
+
+func TestRunnerProtocolServiceRedactsLocalWorkspaceFailureDetails(t *testing.T) {
+	backend := &recordingLocalWorkspaceBackend{
+		recordingAssignmentBackend: &recordingAssignmentBackend{},
+		err: typedLocalWorkspaceTestError{
+			terminal: runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STORAGE_INCOMPATIBLE,
+			detail:   "reflink failed for /var/lib/secondbox/private/workspace.ext4",
+		},
+	}
+	config := testRunnerConfig()
+	config.MandatoryFeatures = append(
+		config.MandatoryFeatures,
+		runnerprotocol.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE,
+	)
+	service, err := NewRunnerProtocolService(
+		config, backend, staticProtocolConnector{stream: &recordingProtocolStream{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := &recordingProtocolStream{}
+	if err := service.handleLocalWorkspace(t.Context(), stream, &runnerprotocol.LocalWorkspaceCommand{
+		CommandVersion: 1,
+		Kind:           runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE,
+		EffectId:       "effect-create", SandboxId: "sandbox-one", WorkspaceId: "workspace-one",
+		FencingToken: []byte("fencing-token"),
+		Correlation:  &runnerprotocol.Correlation{RunnerId: "runner-1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result := stream.outbound[0].GetLocalWorkspaceResult()
+	if result.SafeDetail != "local workspace storage is incompatible" ||
+		strings.Contains(result.SafeDetail, "/var/lib") ||
+		strings.Contains(result.SafeDetail, "ext4") {
+		t.Fatalf("local Workspace safe detail = %q", result.SafeDetail)
+	}
+}
+
+func TestRunnerProtocolServiceRejectsLocalWorkspaceForAnotherHomeRunner(t *testing.T) {
+	backend := &recordingLocalWorkspaceBackend{
+		recordingAssignmentBackend: &recordingAssignmentBackend{},
+	}
+	config := testRunnerConfig()
+	config.MandatoryFeatures = append(
+		config.MandatoryFeatures,
+		runnerprotocol.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE,
+	)
+	service, err := NewRunnerProtocolService(
+		config, backend, staticProtocolConnector{stream: &recordingProtocolStream{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := &recordingProtocolStream{}
+	if err := service.handleLocalWorkspace(t.Context(), stream, &runnerprotocol.LocalWorkspaceCommand{
+		CommandVersion: 1,
+		Kind:           runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE,
+		EffectId:       "effect-create", SandboxId: "sandbox-one", WorkspaceId: "workspace-one",
+		FencingToken: []byte("fencing-token"),
+		Correlation:  &runnerprotocol.Correlation{RunnerId: "runner-other"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if backend.command != nil {
+		t.Fatal("wrong-home local Workspace command reached the backend")
+	}
+	result := stream.outbound[0].GetLocalWorkspaceResult()
+	if result.Terminal != runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_WRONG_HOME_RUNNER ||
+		result.SafeDetail != "workspace is not owned by this runner" {
+		t.Fatalf("wrong-home local Workspace result = %#v", result)
+	}
+}
+
+type typedLocalWorkspaceTestError struct {
+	terminal runnerprotocol.LocalWorkspaceTerminalKind
+	detail   string
+}
+
+func (failure typedLocalWorkspaceTestError) Error() string {
+	return failure.detail
+}
+
+func (failure typedLocalWorkspaceTestError) LocalWorkspaceTerminal() runnerprotocol.LocalWorkspaceTerminalKind {
+	return failure.terminal
 }
 
 func TestRunnerProtocolServiceNegotiatesBeforeProfileResolvedAssignment(t *testing.T) {
@@ -606,12 +1022,16 @@ func testRunnerConfig() RunnerProtocolConfig {
 }
 
 type recordingProtocolStream struct {
-	inbound  []*runnerprotocol.ControlPlaneToRunner
-	outbound []*runnerprotocol.RunnerToControlPlane
+	inbound   []*runnerprotocol.ControlPlaneToRunner
+	outbound  []*runnerprotocol.RunnerToControlPlane
+	sendError func(*runnerprotocol.RunnerToControlPlane) error
 }
 
 func (s *recordingProtocolStream) Send(message *runnerprotocol.RunnerToControlPlane) error {
 	s.outbound = append(s.outbound, message)
+	if s.sendError != nil {
+		return s.sendError(message)
+	}
 	return nil
 }
 
@@ -709,6 +1129,23 @@ type recordingAssignmentBackend struct {
 	fenceCalls atomic.Uint32
 }
 
+type recordingLocalWorkspaceBackend struct {
+	*recordingAssignmentBackend
+	command    *runnerprotocol.LocalWorkspaceCommand
+	evidence   LocalWorkspaceEvidence
+	err        error
+	localCalls atomic.Uint32
+}
+
+func (backend *recordingLocalWorkspaceBackend) ExecuteLocalWorkspace(
+	_ context.Context,
+	command *runnerprotocol.LocalWorkspaceCommand,
+) (LocalWorkspaceEvidence, error) {
+	backend.localCalls.Add(1)
+	backend.command = command
+	return backend.evidence, backend.err
+}
+
 func (b *recordingAssignmentBackend) Readiness(context.Context) (BackendReadiness, error) {
 	return b.readiness, nil
 }
@@ -749,6 +1186,26 @@ func runnerWelcomeFrame(connectionID string) *runnerprotocol.ControlPlaneToRunne
 			},
 		},
 	}
+}
+
+func localWorkspaceWelcomeFrame(connectionID string) *runnerprotocol.ControlPlaneToRunner {
+	welcome := runnerWelcomeFrame(connectionID)
+	welcome.GetWelcome().EnabledFeatures = append(
+		welcome.GetWelcome().EnabledFeatures,
+		runnerprotocol.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE,
+	)
+	return welcome
+}
+
+func findLocalWorkspaceResult(
+	messages []*runnerprotocol.RunnerToControlPlane,
+) *runnerprotocol.LocalWorkspaceResult {
+	for _, message := range messages {
+		if result := message.GetLocalWorkspaceResult(); result != nil {
+			return proto.Clone(result).(*runnerprotocol.LocalWorkspaceResult)
+		}
+	}
+	return nil
 }
 
 func findAssignmentAck(messages []*runnerprotocol.RunnerToControlPlane) *runnerprotocol.AssignmentAck {

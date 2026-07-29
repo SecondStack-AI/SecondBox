@@ -1,6 +1,6 @@
 # Deployment and runtime operations
 
-SecondBox deploys an unprivileged `secondboxd` control plane backed by PostgreSQL and an S3-compatible immutable-object store. Privileged Firecracker Runners are separate processes on qualified Linux hosts and establish outbound mTLS connections to the control plane.
+SecondBox deploys an unprivileged `secondboxd` control plane backed by PostgreSQL and an S3-compatible Artifact store. Privileged Firecracker Runners are separate processes on qualified Linux hosts, establish outbound mTLS connections to the control plane, and own their durable local Workspace filesystems.
 
 ## Release flow
 
@@ -79,7 +79,7 @@ Production inventory is entirely explicit. It includes:
 
 - a digest-pinned control-plane image and any explicitly deployed dependency images;
 - TLS-verified external PostgreSQL;
-- an HTTPS S3-compatible endpoint, existing bucket, and deployment-specific credentials;
+- an HTTPS S3-compatible Artifact endpoint, existing bucket, and deployment-specific credentials;
 - an HTTPS public base URL behind a reverse proxy that preserves `X-Request-ID`;
 - the platform token, pre-shared Runner credential, Runner CA certificate, and server keypair;
 - explicit bind addresses, ports, timeouts, log path, protocol window, enabled Runner features, object limits, and per-subject quota limits;
@@ -87,7 +87,7 @@ Production inventory is entirely explicit. It includes:
 
 `deploy/bin/validate-environment.sh` rejects missing values, duplicate keys, placeholders, weak file permissions, mutable production image references, plaintext production object-store URLs, disabled PostgreSQL TLS, reused cross-boundary credentials, invalid certificates, and invalid protocol ranges.
 
-PostgreSQL owns desired state, ownership refs, assignments, generations, Leases, profile revisions, audit, and reconciliation. The S3-compatible store owns portable checkpoints, snapshots, Artifacts, and immutable execution assets. Runner-local workspace state is a replaceable cache of the last committed checkpoint.
+PostgreSQL owns desired state, ownership refs, immutable home assignments, generations, Leases, profile revisions, audit, and reconciliation. The S3-compatible store owns application Artifacts and immutable execution assets only. Each home Runner's `SECONDBOX_RUNNER_WORKSPACE_ROOT` owns its durable Workspace images, local Snapshots, manifests, and receipts; it is not a cache and cannot be reconstructed by the control plane.
 
 ## Migrations and replacement
 
@@ -95,12 +95,12 @@ Every `secondboxd` validates and applies the embedded ordered migration lineage 
 
 Use coordinated replacement unless the exact deployment has independently proven mixed-version operation:
 
-1. complete and verify a coordinated PostgreSQL/object-store backup;
+1. complete and verify a coordinated PostgreSQL/Artifact backup and quiescent backups of every affected Runner identity plus workspace root;
 2. stop admission and old control-plane replicas;
 3. start the new replicas and require readiness;
 4. reopen traffic.
 
-The backup and restore scripts preserve a shared database publication fence, immutable-object evidence, and fresh-Runner verification. They do not replace provider durability or real Firecracker recovery testing.
+`scripts/backup.sh` preserves a shared database publication fence and verifies reachable Artifact objects. SecondBox provides no managed restore script for Runner-local Workspaces. Operators must recover each stable Runner identity and its workspace root as one consistent unit; see [backup and recovery](backup-and-restore.md).
 
 ## Startup checks
 

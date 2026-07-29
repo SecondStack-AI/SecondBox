@@ -18,11 +18,11 @@ func TestResolveCommandAliases(t *testing.T) {
 		{[]string{"runner-pools", "update"}, "updateRunnerPool", nil},
 		{[]string{"runners", "list"}, "listRunners", nil},
 		{[]string{"runners", "get"}, "getRunner", nil},
-		{[]string{"sandboxes", "checkpoint"}, "checkpointSandbox", nil},
+		{[]string{"sandboxes", "restore"}, "restoreSandboxSnapshot", nil},
 		{[]string{"exec"}, "executeSandboxCommand", nil},
 		{[]string{"shell", "create"}, "createSandboxTerminal", nil},
 		{[]string{"files", "read"}, "readSandboxFile", nil},
-		{[]string{"checkpoints", "create"}, "checkpointSandbox", nil},
+		{[]string{"snapshots", "create"}, "createSandboxSnapshot", nil},
 		{[]string{"operation", "getSandbox", "--path", "sandboxId=sandbox-1"}, "getSandbox", []string{"--path", "sandboxId=sandbox-1"}},
 	}
 	for _, test := range tests {

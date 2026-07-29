@@ -23,7 +23,8 @@ enum RunnerFeature {
   RUNNER_FEATURE_PTY = 3;
   RUNNER_FEATURE_PORT_PROXY = 4;
   RUNNER_FEATURE_EVIDENCE = 5;
-  RUNNER_FEATURE_CHECKPOINT = 6;
+  reserved 6;
+  RUNNER_FEATURE_LOCAL_WORKSPACE = 7;
 }
 
 message RunnerHello {
@@ -208,16 +209,17 @@ message NetworkPolicy {
 }
 
 message AssignmentCommand {
+  reserved 7;
   string message_id = 1;
   uint64 sequence = 2;
   AssignmentFence fence = 3;
   string profile_revision_id = 4;
   ProfileRequirements requirements = 5;
   repeated SignedAssetReference assets = 6;
-  string source_checkpoint_id = 7;
   uint64 deadline_unix_ms = 8;
   Correlation correlation = 9;
   NetworkPolicy network_policy = 10;
+  string workspace_id = 11;
 }
 
 enum AssignmentDecision {
@@ -243,7 +245,7 @@ message AssignmentAck {
 enum AssignmentProgressStage {
   ASSIGNMENT_PROGRESS_STAGE_UNSPECIFIED = 0;
   ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY = 1;
-  ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_MATERIALIZE = 2;
+  ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_ATTACH = 2;
   ASSIGNMENT_PROGRESS_STAGE_NETWORK_SETUP = 3;
   ASSIGNMENT_PROGRESS_STAGE_FIRECRACKER_LAUNCH = 4;
   ASSIGNMENT_PROGRESS_STAGE_GUEST_NEGOTIATION = 5;
@@ -605,70 +607,97 @@ message PortFrame {
   }
 }
 
-message CheckpointCommand {
+// LocalWorkspaceCommand coordinates durable runner-local storage using only
+// logical SecondBox identities. The authenticated stream supplies the home
+// Runner identity; paths and image bytes are never protocol values.
+enum LocalWorkspaceCommandKind {
+  LOCAL_WORKSPACE_COMMAND_KIND_UNSPECIFIED = 0;
+  LOCAL_WORKSPACE_COMMAND_KIND_CREATE = 1;
+  LOCAL_WORKSPACE_COMMAND_KIND_INSPECT = 2;
+  LOCAL_WORKSPACE_COMMAND_KIND_DELETE = 3;
+  LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION = 4;
+  LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_CREATE = 5;
+  LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_DELETE = 6;
+  LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_PREPARE = 7;
+  LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_SWAP = 8;
+  LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE = 9;
+  LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT = 10;
+  LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE = 11;
+}
+
+message LocalWorkspaceCommand {
   string message_id = 1;
   uint64 sequence = 2;
-  AssignmentFence fence = 3;
-  string checkpoint_id = 4;
-  string storage_object_id = 5;
-  uint64 maximum_size_bytes = 6;
-  uint64 deadline_unix_ms = 7;
-  Correlation correlation = 8;
+  uint32 command_version = 3;
+  LocalWorkspaceCommandKind kind = 4;
+  string operation_id = 5;
+  string effect_id = 6;
+  string sandbox_id = 7;
+  string workspace_id = 8;
+  string snapshot_id = 9;
+  uint64 expected_generation = 10;
+  uint64 next_generation = 11;
+  uint64 logical_capacity_bytes = 12;
+  bytes fencing_token = 13;
+  Correlation correlation = 14;
 }
 
-message CheckpointChunk {
+enum LocalWorkspaceTerminalKind {
+  LOCAL_WORKSPACE_TERMINAL_KIND_UNSPECIFIED = 0;
+  LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED = 1;
+  LOCAL_WORKSPACE_TERMINAL_KIND_LOCAL_DATA_ABSENT = 2;
+  LOCAL_WORKSPACE_TERMINAL_KIND_ACTIVE_WRITER = 3;
+  LOCAL_WORKSPACE_TERMINAL_KIND_STALE_GENERATION = 4;
+  LOCAL_WORKSPACE_TERMINAL_KIND_STALE_FENCE = 5;
+  LOCAL_WORKSPACE_TERMINAL_KIND_STORAGE_INCOMPATIBLE = 6;
+  LOCAL_WORKSPACE_TERMINAL_KIND_INSUFFICIENT_SPACE = 7;
+  LOCAL_WORKSPACE_TERMINAL_KIND_CORRUPT_RECEIPT = 8;
+  LOCAL_WORKSPACE_TERMINAL_KIND_CONFLICTING_REPLAY = 9;
+  LOCAL_WORKSPACE_TERMINAL_KIND_WRONG_HOME_RUNNER = 10;
+  LOCAL_WORKSPACE_TERMINAL_KIND_SNAPSHOT_IN_USE = 11;
+  LOCAL_WORKSPACE_TERMINAL_KIND_RESTORE_PENDING = 12;
+  LOCAL_WORKSPACE_TERMINAL_KIND_RUNNER_FAILED = 13;
+}
+
+message LocalWorkspaceInventoryItem {
+  string workspace_id = 1;
+  uint64 generation = 2;
+  uint64 logical_capacity_bytes = 3;
+  bool formatted = 4;
+  bool restore_pending = 5;
+  bool active_writer = 6;
+}
+
+message LocalWorkspaceReceiptItem {
+  LocalWorkspaceCommandKind kind = 1;
+  string operation_id = 2;
+  string workspace_id = 3;
+  string snapshot_id = 4;
+  uint64 previous_generation = 5;
+  uint64 generation = 6;
+  uint64 logical_capacity_bytes = 7;
+  uint64 receipt_recorded_at_unix_ms = 8;
+}
+
+message LocalWorkspaceResult {
   string message_id = 1;
   uint64 sequence = 2;
-  AssignmentFence fence = 3;
-  string checkpoint_id = 4;
-  string storage_object_id = 5;
-  uint64 offset = 6;
-  bytes data = 7;
-  bool end_of_object = 8;
-}
-
-enum CheckpointTerminalKind {
-  CHECKPOINT_TERMINAL_KIND_UNSPECIFIED = 0;
-  CHECKPOINT_TERMINAL_KIND_CREATED = 1;
-  CHECKPOINT_TERMINAL_KIND_FENCED = 2;
-  CHECKPOINT_TERMINAL_KIND_DEADLINE_EXCEEDED = 3;
-  CHECKPOINT_TERMINAL_KIND_INTEGRITY_FAILED = 4;
-  CHECKPOINT_TERMINAL_KIND_RUNNER_FAILED = 5;
-}
-
-message CheckpointResult {
-  string message_id = 1;
-  uint64 sequence = 2;
-  AssignmentFence fence = 3;
-  string checkpoint_id = 4;
-  string storage_object_id = 5;
-  CheckpointTerminalKind terminal = 6;
-  string sha256 = 7;
-  uint64 size_bytes = 8;
-  map<string, string> compatibility = 9;
-  string termination_evidence_digest = 10;
-  string safe_detail = 11;
-  Correlation correlation = 12;
-}
-
-message RestoreBegin {
-  AssignmentFence fence = 1;
-  string checkpoint_id = 2;
-  string storage_object_id = 3;
-  string sha256 = 4;
-  uint64 size_bytes = 5;
-  map<string, string> compatibility = 6;
-  uint64 deadline_unix_ms = 7;
-  Correlation correlation = 8;
-}
-
-message RestoreChunk {
-  AssignmentFence fence = 1;
-  string checkpoint_id = 2;
-  string storage_object_id = 3;
-  uint64 offset = 4;
-  bytes data = 5;
-  bool end_of_object = 6;
+  uint32 command_version = 3;
+  LocalWorkspaceCommandKind kind = 4;
+  LocalWorkspaceTerminalKind terminal = 5;
+  string operation_id = 6;
+  string effect_id = 7;
+  string sandbox_id = 8;
+  string workspace_id = 9;
+  string snapshot_id = 10;
+  uint64 previous_generation = 11;
+  uint64 generation = 12;
+  uint64 logical_capacity_bytes = 13;
+  uint64 receipt_recorded_at_unix_ms = 14;
+  repeated LocalWorkspaceInventoryItem inventory = 15;
+  string safe_detail = 16;
+  Correlation correlation = 17;
+  repeated LocalWorkspaceReceiptItem receipts = 18;
 }
 
 // Evidence is deliberately unable to carry fencing tokens, command values,
@@ -695,7 +724,7 @@ enum InstanceObservedTerminationReason {
 }
 
 // InstanceTerminal reports that the current assigned process is gone. It is
-// observation evidence only and does not prove Assignment or materialization
+// observation evidence only and does not prove Assignment or Workspace release
 // release.
 message InstanceTerminal {
   string message_id = 1;
@@ -708,6 +737,7 @@ message InstanceTerminal {
 }
 
 message RunnerToControlPlane {
+  reserved 14, 15;
   oneof message {
     RunnerHello hello = 1;
     RunnerRegistration registration = 2;
@@ -722,13 +752,13 @@ message RunnerToControlPlane {
     PtyFrame pty = 11;
     PortFrame port = 12;
     Evidence evidence = 13;
-    CheckpointChunk checkpoint_chunk = 14;
-    CheckpointResult checkpoint_result = 15;
     InstanceTerminal instance_terminal = 16;
+    LocalWorkspaceResult local_workspace_result = 17;
   }
 }
 
 message ControlPlaneToRunner {
+  reserved 10, 11, 12;
   oneof message {
     RunnerWelcome welcome = 1;
     ProtocolRejection rejection = 2;
@@ -739,8 +769,6 @@ message ControlPlaneToRunner {
     FileFrame file = 7;
     PtyFrame pty = 8;
     PortFrame port = 9;
-    CheckpointCommand checkpoint = 10;
-    RestoreBegin restore_begin = 11;
-    RestoreChunk restore_chunk = 12;
+    LocalWorkspaceCommand local_workspace = 13;
   }
 }

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 
@@ -92,7 +93,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		return err
 	}
 	defer dataPlaneRelay.Close()
-	immutableObjects, err := objectstore.NewS3Store(processContext, objectstore.S3Config{
+	artifactObjects, err := objectstore.NewS3Store(processContext, objectstore.S3Config{
 		Endpoint: processConfig.ObjectStoreEndpoint, Region: processConfig.ObjectStoreRegion,
 		Bucket: processConfig.ObjectStoreBucket, AccessKeyID: processConfig.ObjectStoreAccessKeyID,
 		SecretAccessKey:  processConfig.ObjectStoreSecretAccessKey,
@@ -111,7 +112,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		DefaultSubjectQuota: processConfig.DefaultSubjectQuota,
 		Now:                 service.SystemClock, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
-		ObjectStore:           immutableObjects,
+		ArtifactObjectStore:   artifactObjects,
 		DataPlaneRelay:        dataPlaneRelay, DataPlanePollInterval: processConfig.DataPlanePollInterval,
 		PortSessionRelay: dataPlaneRelay, PublicBaseURL: processConfig.PublicBaseURL,
 	})
@@ -173,28 +174,6 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		return err
 	}
 	defer lifecycleEffects.Close()
-	checkpointReceiver, err := lifecycle.NewCheckpointReceiver(
-		processContext,
-		lifecycle.CheckpointReceiverConfig{
-			DatabaseURL:    processConfig.DatabaseURL,
-			SpoolDirectory: processConfig.CheckpointSpoolDirectory,
-			ObjectStore:    immutableObjects, LifecycleStore: controlPlaneStore,
-		},
-	)
-	if err != nil {
-		return err
-	}
-	defer checkpointReceiver.Close()
-	checkpointRestore, err := lifecycle.NewCheckpointRestoreSender(
-		processContext,
-		lifecycle.CheckpointRestoreSenderConfig{
-			DatabaseURL: processConfig.DatabaseURL, ObjectStore: immutableObjects,
-		},
-	)
-	if err != nil {
-		return err
-	}
-	defer checkpointRestore.Close()
 	runnerServerCertificate, err := tls.LoadX509KeyPair(
 		processConfig.RunnerServerCertificatePath,
 		processConfig.RunnerServerPrivateKeyPath,
@@ -212,8 +191,6 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	}
 	runnerControlServer, err := runnercontrol.NewServer(runnercontrol.ServerConfig{
 		CredentialVerifier: runnerCredentialAuthority, StateStore: runnerStateStore,
-		CheckpointReceiver: checkpointReceiver,
-		CheckpointRestore:  checkpointRestore,
 		SupportedVersions: runnercontrol.VersionRange{
 			Minimum: processConfig.RunnerProtocolMinimum,
 			Maximum: processConfig.RunnerProtocolMaximum,
@@ -252,6 +229,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	runnerServerErrors := make(chan error, 1)
 	lifecycleErrors := make(chan error, 1)
 	assignmentErrors := make(chan error, 1)
+	snapshotRetentionErrors := make(chan error, 1)
 	dataPlaneErrors := make(chan error, 1)
 	go func() {
 		logger.Info("SecondBox listening", "address", processConfig.ListenAddress)
@@ -284,6 +262,17 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		)
 	}()
 	go func() {
+		snapshotRetentionErrors <- runSnapshotRetentionWorker(
+			processContext,
+			lifecycle.SnapshotRetentionWorker{
+				Store:           controlPlaneStore,
+				PollInterval:    processConfig.LifecycleReconcilePollInterval,
+				NewID:           service.NewOpaqueID,
+				NewFencingToken: newLifecycleFencingToken,
+			},
+		)
+	}()
+	go func() {
 		dataPlaneErrors <- runDataPlaneSweeper(
 			processContext, dataPlaneRelay, processConfig.DataPlanePollInterval,
 		)
@@ -291,6 +280,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	var serveErr error
 	lifecycleExited := false
 	assignmentExited := false
+	snapshotRetentionExited := false
 	dataPlaneExited := false
 	select {
 	case <-processContext.Done():
@@ -315,6 +305,13 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 			serveErr = assignmentErr
 		} else if processContext.Err() == nil {
 			serveErr = errors.New("SecondBox Assignment reconciler stopped unexpectedly")
+		}
+	case snapshotRetentionErr := <-snapshotRetentionErrors:
+		snapshotRetentionExited = true
+		if snapshotRetentionErr != nil {
+			serveErr = snapshotRetentionErr
+		} else if processContext.Err() == nil {
+			serveErr = errors.New("SecondBox Snapshot retention worker stopped unexpectedly")
 		}
 	case dataPlaneErr := <-dataPlaneErrors:
 		dataPlaneExited = true
@@ -348,6 +345,17 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		}
 	}
 	var dataPlaneShutdownErr error
+	var snapshotRetentionShutdownErr error
+	if !snapshotRetentionExited {
+		select {
+		case snapshotRetentionShutdownErr = <-snapshotRetentionErrors:
+		case <-shutdownContext.Done():
+			snapshotRetentionShutdownErr = fmt.Errorf(
+				"SecondBox Snapshot retention worker shutdown: %w",
+				shutdownContext.Err(),
+			)
+		}
+	}
 	if !dataPlaneExited {
 		select {
 		case dataPlaneShutdownErr = <-dataPlaneErrors:
@@ -357,7 +365,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	}
 	if err := errors.Join(
 		serveErr, httpShutdownErr, grpcShutdownErr, lifecycleShutdownErr,
-		assignmentShutdownErr, dataPlaneShutdownErr,
+		assignmentShutdownErr, snapshotRetentionShutdownErr, dataPlaneShutdownErr,
 	); err != nil {
 		return fmt.Errorf("SecondBox coordinated server shutdown: %w", err)
 	}
@@ -457,6 +465,33 @@ func runAssignmentReconciler(
 	}
 }
 
+func runSnapshotRetentionWorker(
+	ctx context.Context,
+	worker lifecycle.SnapshotRetentionWorker,
+) error {
+	for {
+		queued, err := worker.RunOnce(ctx, service.SystemClock())
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("SecondBox Snapshot retention failed: %w", err)
+		}
+		if queued {
+			continue
+		}
+		timer := time.NewTimer(worker.PollInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil
+		case <-timer.C:
+		}
+	}
+}
+
 func stopGRPCServer(ctx context.Context, server *grpc.Server) error {
 	stopped := make(chan struct{})
 	go func() {
@@ -475,12 +510,12 @@ func stopGRPCServer(ctx context.Context, server *grpc.Server) error {
 
 func configuredRunnerFeatures(names []string) ([]runnerv1.RunnerFeature, error) {
 	known := map[string]runnerv1.RunnerFeature{
-		"exec-streaming": runnerv1.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING,
-		"file-streaming": runnerv1.RunnerFeature_RUNNER_FEATURE_FILE_STREAMING,
-		"pty":            runnerv1.RunnerFeature_RUNNER_FEATURE_PTY,
-		"port-proxy":     runnerv1.RunnerFeature_RUNNER_FEATURE_PORT_PROXY,
-		"evidence":       runnerv1.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
-		"checkpoint":     runnerv1.RunnerFeature_RUNNER_FEATURE_CHECKPOINT,
+		"exec-streaming":  runnerv1.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING,
+		"file-streaming":  runnerv1.RunnerFeature_RUNNER_FEATURE_FILE_STREAMING,
+		"pty":             runnerv1.RunnerFeature_RUNNER_FEATURE_PTY,
+		"port-proxy":      runnerv1.RunnerFeature_RUNNER_FEATURE_PORT_PROXY,
+		"evidence":        runnerv1.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
+		"local-workspace": runnerv1.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE,
 	}
 	features := make([]runnerv1.RunnerFeature, 0, len(names))
 	for _, name := range names {
@@ -489,6 +524,12 @@ func configuredRunnerFeatures(names []string) ([]runnerv1.RunnerFeature, error) 
 			return nil, fmt.Errorf("SecondBox runner feature %q is unsupported", name)
 		}
 		features = append(features, feature)
+	}
+	if !slices.Contains(
+		features,
+		runnerv1.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE,
+	) {
+		return nil, errors.New("SecondBox runner features require local-workspace")
 	}
 	return features, nil
 }

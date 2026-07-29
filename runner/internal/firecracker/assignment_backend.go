@@ -8,14 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,36 +24,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-var (
-	restoreCheckpointIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$`)
-	restoreSHA256Pattern       = regexp.MustCompile(`^[0-9a-f]{64}$`)
-)
-
-const maxStoragePressureCleanupBatch = 16
-
 type activeRunnerAssignment struct {
-	fence                 *runnerprotocol.AssignmentFence
-	correlation           *runnerprotocol.Correlation
-	backendReference      string
-	compatibility         map[string]string
-	workspaceAttachmentID string
-	checkpointCreated     bool
-}
-
-type releasedWorkspaceCleanup struct {
-	sandboxID    string
-	attachmentID string
-}
-
-type restoredCheckpoint struct {
-	fence           *runnerprotocol.AssignmentFence
-	storageObjectID string
-	sha256          string
-	sizeBytes       uint64
-	compatibility   map[string]string
-	path            string
-	complete        bool
-	deadlineUnixMs  uint64
+	fence            *runnerprotocol.AssignmentFence
+	correlation      *runnerprotocol.Correlation
+	backendReference string
 }
 
 type signedArtifactManifest struct {
@@ -80,21 +50,20 @@ type signedArtifactComponent struct {
 
 // AssignmentBackend adapts profile-resolved runner assignments to Firecracker.
 type AssignmentBackend struct {
-	manager                 *Manager
-	storagePressure         *storagePressureController
-	restoreSpoolPressure    *storagePressureController
-	mu                      sync.Mutex
-	assignments             map[string]activeRunnerAssignment
-	restores                map[string]*restoredCheckpoint
-	releasedWorkspaces      map[string]releasedWorkspaceCleanup
-	removeReleasedWorkspace func(context.Context, string, string) error
-	instanceTerminals       chan runnercontrol.BackendInstanceTerminal
+	manager           *Manager
+	storagePressure   *storagePressureController
+	mu                sync.Mutex
+	assignments       map[string]activeRunnerAssignment
+	instanceTerminals chan runnercontrol.BackendInstanceTerminal
 }
 
 // NewAssignmentBackend exposes the Firecracker compute conformance port.
 func NewAssignmentBackend(manager *Manager) (*AssignmentBackend, error) {
 	if manager == nil || manager.cfg == nil {
 		return nil, fmt.Errorf("SecondBox Firecracker assignment backend requires a manager")
+	}
+	if manager.workspaceStore == nil {
+		return nil, fmt.Errorf("SecondBox Firecracker assignment backend requires a WorkspaceStore")
 	}
 	emitStoragePressure := func(ctx context.Context, terminalKind string) error {
 		record := runnerevidence.NewRecord(
@@ -110,19 +79,11 @@ func NewAssignmentBackend(manager *Manager) (*AssignmentBackend, error) {
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox Firecracker assignment backend storage pressure: %w", err)
 	}
-	restoreSpoolPressure, err := newConfiguredRestoreSpoolPressureController(manager.cfg, emitStoragePressure)
-	if err != nil {
-		return nil, fmt.Errorf("SecondBox Firecracker assignment backend restore spool pressure: %w", err)
-	}
 	return &AssignmentBackend{
-		manager:                 manager,
-		storagePressure:         storagePressure,
-		restoreSpoolPressure:    restoreSpoolPressure,
-		assignments:             make(map[string]activeRunnerAssignment),
-		restores:                make(map[string]*restoredCheckpoint),
-		releasedWorkspaces:      make(map[string]releasedWorkspaceCleanup),
-		removeReleasedWorkspace: manager.removeReleasedWorkspace,
-		instanceTerminals:       make(chan runnercontrol.BackendInstanceTerminal, manager.cfg.MicroVMMaxConcurrentGlobal),
+		manager:           manager,
+		storagePressure:   storagePressure,
+		assignments:       make(map[string]activeRunnerAssignment),
+		instanceTerminals: make(chan runnercontrol.BackendInstanceTerminal, manager.cfg.MicroVMMaxConcurrentGlobal),
 	}, nil
 }
 
@@ -262,17 +223,12 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 	if err := b.manager.networkPolicy.Ready(context.Background()); err != nil {
 		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Firecracker readiness host network policy: %w", err)
 	}
-	workspaceInfo, err := os.Stat(cfg.MicroVMWorkspaceDir)
+	workspaceInfo, err := os.Stat(cfg.RunnerWorkspaceRoot)
 	if err != nil {
-		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Firecracker readiness workspace storage %q: %w", cfg.MicroVMWorkspaceDir, err)
+		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Firecracker readiness workspace storage %q: %w", cfg.RunnerWorkspaceRoot, err)
 	}
 	if !workspaceInfo.IsDir() {
-		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Firecracker readiness workspace storage %q is not a directory", cfg.MicroVMWorkspaceDir)
-	}
-	if strings.EqualFold(cfg.MicroVMWorkspaceBackend, "dm-thin") {
-		if _, err := os.Stat(cfg.MicroVMThinPoolDevice); err != nil {
-			return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Firecracker readiness dm-thin pool: %w", err)
-		}
+		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Firecracker readiness workspace storage %q is not a directory", cfg.RunnerWorkspaceRoot)
 	}
 	storagePressureState, err := b.storagePressure.Observe(ctx)
 	if err != nil {
@@ -284,19 +240,6 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 	if storagePressureState == storagePressureStateAdmissionDenied {
 		return runnercontrol.BackendReadiness{}, fmt.Errorf(
 			"SecondBox Firecracker readiness storage pressure: %w",
-			ErrStoragePressureAdmissionDenied,
-		)
-	}
-	if err := b.cleanupExpiredRestores(ctx, uint64(time.Now().UnixMilli())); err != nil {
-		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Firecracker readiness expired restore cleanup: %w", err)
-	}
-	restoreSpoolState, err := b.restoreSpoolPressure.Observe(ctx)
-	if err != nil {
-		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Firecracker readiness restore spool pressure: %w", err)
-	}
-	if restoreSpoolState == storagePressureStateAdmissionDenied {
-		return runnercontrol.BackendReadiness{}, fmt.Errorf(
-			"SecondBox Firecracker readiness restore spool pressure: %w",
 			ErrStoragePressureAdmissionDenied,
 		)
 	}
@@ -388,6 +331,9 @@ func (b *AssignmentBackend) ValidateAssignment(
 	if assignment == nil || assignment.Fence == nil || assignment.Requirements == nil {
 		return fmt.Errorf("SecondBox Firecracker assignment is incomplete")
 	}
+	if strings.TrimSpace(assignment.WorkspaceId) == "" {
+		return fmt.Errorf("SecondBox Firecracker assignment Workspace identity is required")
+	}
 	const mib = uint64(1 << 20)
 	requirements := assignment.Requirements
 	if requirements.MemoryBytes%mib != 0 || requirements.DiskBytes%mib != 0 {
@@ -426,24 +372,8 @@ func (b *AssignmentBackend) ValidateAssignment(
 	if _, err := b.compileAssignmentNetworkPolicy(assignment); err != nil {
 		return err
 	}
-	guestStart, err := b.assignmentGuestProtocolStart(assignment)
-	if err != nil {
+	if _, err := b.assignmentGuestProtocolStart(assignment); err != nil {
 		return err
-	}
-	if strings.TrimSpace(assignment.SourceCheckpointId) != "" {
-		b.mu.Lock()
-		restore := b.restores[assignment.SourceCheckpointId]
-		b.mu.Unlock()
-		expectedCompatibility, err := assignmentCheckpointCompatibility(assignment, guestStart)
-		if err != nil {
-			return err
-		}
-		if restore == nil || !restore.complete ||
-			!sameAssignmentFence(restore.fence, assignment.Fence) ||
-			restore.sizeBytes != requirements.DiskBytes ||
-			!mapsEqual(restore.compatibility, expectedCompatibility) {
-			return fmt.Errorf("SecondBox Firecracker assignment source checkpoint is incomplete or incompatible")
-		}
 	}
 	if err := b.checkWorkspaceAdmission(ctx, requirements.DiskBytes); err != nil {
 		return fmt.Errorf("SecondBox Firecracker assignment storage pressure: %w", err)
@@ -452,44 +382,7 @@ func (b *AssignmentBackend) ValidateAssignment(
 }
 
 func (b *AssignmentBackend) checkWorkspaceAdmission(ctx context.Context, requestedBytes uint64) error {
-	err := b.storagePressure.CheckAdmission(ctx, requestedBytes)
-	if !errors.Is(err, ErrStoragePressureAdmissionDenied) {
-		return err
-	}
-	if cleanupErr := b.cleanupReleasedWorkspaces(ctx); cleanupErr != nil {
-		return errors.Join(err, cleanupErr)
-	}
 	return b.storagePressure.CheckAdmission(ctx, requestedBytes)
-}
-
-func (b *AssignmentBackend) cleanupReleasedWorkspaces(ctx context.Context) error {
-	b.mu.Lock()
-	candidates := make(map[string]releasedWorkspaceCleanup, maxStoragePressureCleanupBatch)
-	for assignmentID, candidate := range b.releasedWorkspaces {
-		candidates[assignmentID] = candidate
-		if len(candidates) == maxStoragePressureCleanupBatch {
-			break
-		}
-	}
-	b.mu.Unlock()
-	for assignmentID, candidate := range candidates {
-		if err := b.removeReleasedWorkspace(ctx, candidate.sandboxID, candidate.attachmentID); err != nil {
-			record := runnerevidence.NewRecord(
-				runnerevidence.EventStoragePressure,
-				"failed",
-				"storage_pressure_cleanup_failed",
-				time.Now().UTC(),
-			)
-			record.AssignmentID = assignmentID
-			record.SandboxID = candidate.sandboxID
-			record.RunnerID = b.manager.runnerID
-			return errors.Join(err, b.manager.evidenceSink().Emit(ctx, record))
-		}
-		b.mu.Lock()
-		delete(b.releasedWorkspaces, assignmentID)
-		b.mu.Unlock()
-	}
-	return nil
 }
 
 // StartAssignment launches one already-validated profile-resolved assignment.
@@ -549,7 +442,7 @@ func (b *AssignmentBackend) StartAssignment(
 	}
 	const mib = uint64(1 << 20)
 	requirements := assignment.Requirements
-	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_MATERIALIZE); err != nil {
+	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_ATTACH); err != nil {
 		return runnercontrol.BackendInstance{}, err
 	}
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_NETWORK_SETUP); err != nil {
@@ -559,30 +452,29 @@ func (b *AssignmentBackend) StartAssignment(
 	if err != nil {
 		return runnercontrol.BackendInstance{}, err
 	}
-	checkpointCompatibility, err := assignmentCheckpointCompatibility(assignment, guestStart)
-	if err != nil {
-		return runnercontrol.BackendInstance{}, err
-	}
 	compiledNetworkPolicy, err := b.compileAssignmentNetworkPolicy(assignment)
 	if err != nil {
 		return runnercontrol.BackendInstance{}, err
 	}
-	workspaceCheckpointPath := ""
-	if assignment.SourceCheckpointId != "" {
-		b.mu.Lock()
-		restore := b.restores[assignment.SourceCheckpointId]
-		if restore != nil && restore.complete {
-			workspaceCheckpointPath = restore.path
-		}
-		b.mu.Unlock()
-		if workspaceCheckpointPath == "" {
-			return runnercontrol.BackendInstance{}, fmt.Errorf("SecondBox Firecracker assignment restore bytes are unavailable")
-		}
+	workspaceAttachment, err := b.manager.workspaceStore.Open(
+		ctx,
+		assignment.WorkspaceId,
+		assignment.Fence.SandboxGeneration,
+	)
+	if err != nil {
+		return runnercontrol.BackendInstance{}, fmt.Errorf(
+			"SecondBox Firecracker resolve Workspace attachment: %w",
+			err,
+		)
 	}
+	defer func() {
+		if resultErr != nil {
+			resultErr = errors.Join(resultErr, workspaceAttachment.Close())
+		}
+	}()
 	backendReference, err := b.manager.createAndStart(ctx, assignment.Fence.SandboxId, runtimemanager.StartOpts{
 		CompartmentID:           assignment.Fence.InstanceId,
-		WorkspaceAttachmentID:   fmt.Sprintf("%s-generation-%d", assignment.Fence.InstanceId, assignment.Fence.SandboxGeneration),
-		WorkspaceCheckpointPath: workspaceCheckpointPath,
+		WorkspaceAttachment:     workspaceAttachment,
 		ShapeFingerprint:        assignment.ProfileRevisionId,
 		SandboxGeneration:       assignment.Fence.SandboxGeneration,
 		GuestBuildID:            guestStart.GuestBuildID,
@@ -624,11 +516,6 @@ func (b *AssignmentBackend) StartAssignment(
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_GUEST_NEGOTIATION); err != nil {
 		return cleanupLaunchFailure(err)
 	}
-	if assignment.SourceCheckpointId != "" {
-		if err := b.consumeRestore(ctx, assignment.SourceCheckpointId); err != nil {
-			return cleanupLaunchFailure(err)
-		}
-	}
 	b.mu.Lock()
 	b.assignments[assignment.Fence.AssignmentId] = activeRunnerAssignment{
 		fence: &runnerprotocol.AssignmentFence{
@@ -649,12 +536,6 @@ func (b *AssignmentBackend) StartAssignment(
 			RunnerId:          b.manager.runnerID,
 		},
 		backendReference: backendReference,
-		compatibility:    checkpointCompatibility,
-		workspaceAttachmentID: fmt.Sprintf(
-			"%s-generation-%d",
-			assignment.Fence.InstanceId,
-			assignment.Fence.SandboxGeneration,
-		),
 	}
 	b.mu.Unlock()
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_READY); err != nil {
@@ -670,355 +551,14 @@ func (b *AssignmentBackend) StartAssignment(
 	}, nil
 }
 
-// BeginRestore opens or resumes one assignment-fenced checkpoint spool.
-func (b *AssignmentBackend) BeginRestore(
-	ctx context.Context,
-	begin *runnerprotocol.RestoreBegin,
-) (resultErr error) {
-	if begin == nil || begin.Fence == nil ||
-		!restoreCheckpointIDPattern.MatchString(begin.CheckpointId) ||
-		begin.StorageObjectId == "" || !restoreSHA256Pattern.MatchString(begin.Sha256) ||
-		begin.SizeBytes == 0 || begin.DeadlineUnixMs == 0 ||
-		time.Now().UnixMilli() >= int64(begin.DeadlineUnixMs) ||
-		begin.Compatibility["architecture"] != runtime.GOARCH ||
-		begin.Compatibility["backend"] != "firecracker" ||
-		begin.Compatibility["workspaceFormat"] != "ext4" {
-		return fmt.Errorf("SecondBox Firecracker restore authority is incomplete or incompatible")
-	}
-	maximumBytes := uint64(b.manager.cfg.MicroVMWorkspaceSizeMiB) * 1024 * 1024
-	if begin.SizeBytes > maximumBytes {
-		return fmt.Errorf("SecondBox Firecracker restore exceeds local workspace capacity")
-	}
-	if err := b.cleanupExpiredRestores(ctx, uint64(time.Now().UnixMilli())); err != nil {
-		return err
-	}
-	b.mu.Lock()
-	existing := b.restores[begin.CheckpointId]
-	b.mu.Unlock()
-	if existing != nil {
-		if existing.storageObjectID != begin.StorageObjectId ||
-			existing.sha256 != begin.Sha256 || existing.sizeBytes != begin.SizeBytes ||
-			!mapsEqual(existing.compatibility, begin.Compatibility) {
-			return fmt.Errorf("SecondBox Firecracker restore checkpoint identity was reused")
-		}
-		if !sameAssignmentFence(existing.fence, begin.Fence) {
-			if !existing.complete {
-				return fmt.Errorf("SecondBox Firecracker partial restore belongs to another assignment")
-			}
-			b.mu.Lock()
-			existing.fence = cloneAssignmentFence(begin.Fence)
-			existing.deadlineUnixMs = begin.DeadlineUnixMs
-			b.mu.Unlock()
-		}
-		return nil
-	}
-	reservationID := "restore:" + begin.CheckpointId
-	restoreDirectory := b.manager.cfg.MicroVMCheckpointRestoreSpoolDir
-	partialPath := filepath.Join(restoreDirectory, begin.CheckpointId+".partial")
-	verifiedPath := filepath.Join(restoreDirectory, begin.CheckpointId+".verified")
-	if err := b.restoreSpoolPressure.Reserve(ctx, reservationID, begin.SizeBytes); err != nil {
-		return fmt.Errorf("SecondBox Firecracker restore spool admission: %w", err)
-	}
-	keepReservation := false
-	defer func() {
-		if !keepReservation {
-			cleanupErr := errors.Join(
-				removeRestoreSpoolPath(partialPath),
-				removeRestoreSpoolPath(verifiedPath),
-			)
-			resultErr = errors.Join(resultErr, cleanupErr)
-			if cleanupErr == nil {
-				resultErr = errors.Join(
-					resultErr,
-					b.restoreSpoolPressure.Release(context.Background(), reservationID),
-				)
-			}
-		}
-	}()
-	if err := os.MkdirAll(restoreDirectory, 0o700); err != nil {
-		return fmt.Errorf("SecondBox Firecracker restore spool directory: %w", err)
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	path := partialPath
-	complete := false
-	if info, err := os.Stat(verifiedPath); err == nil {
-		if uint64(info.Size()) != begin.SizeBytes {
-			return fmt.Errorf("SecondBox Firecracker verified restore size differs")
-		}
-		digest, err := fileSHA256(verifiedPath)
-		if err != nil {
-			return err
-		}
-		if digest != begin.Sha256 {
-			return fmt.Errorf("SecondBox Firecracker verified restore digest differs")
-		}
-		path = verifiedPath
-		complete = true
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("SecondBox Firecracker restore spool inspection: %w", err)
-	} else if info, err := os.Stat(partialPath); err == nil {
-		if uint64(info.Size()) > begin.SizeBytes {
-			return fmt.Errorf("SecondBox Firecracker partial restore exceeds declared size")
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("SecondBox Firecracker partial restore inspection: %w", err)
-	}
-	b.restores[begin.CheckpointId] = &restoredCheckpoint{
-		fence:           cloneAssignmentFence(begin.Fence),
-		storageObjectID: begin.StorageObjectId, sha256: begin.Sha256,
-		sizeBytes: begin.SizeBytes, compatibility: cloneStringMap(begin.Compatibility),
-		path: path, complete: complete,
-		deadlineUnixMs: begin.DeadlineUnixMs,
-	}
-	keepReservation = true
-	return nil
-}
-
-func removeRestoreSpoolPath(path string) error {
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
-}
-
-func (b *AssignmentBackend) cleanupExpiredRestores(ctx context.Context, nowUnixMs uint64) error {
-	b.mu.Lock()
-	var expired []*restoredCheckpoint
-	var checkpointIDs []string
-	for checkpointID, restore := range b.restores {
-		if restore != nil && restore.deadlineUnixMs != 0 && restore.deadlineUnixMs <= nowUnixMs {
-			expired = append(expired, restore)
-			checkpointIDs = append(checkpointIDs, checkpointID)
-		}
-	}
-	b.mu.Unlock()
-	var cleanupErr error
-	for index, restore := range expired {
-		if err := os.Remove(restore.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			cleanupErr = errors.Join(cleanupErr, err)
-			continue
-		}
-		b.mu.Lock()
-		delete(b.restores, checkpointIDs[index])
-		b.mu.Unlock()
-		cleanupErr = errors.Join(
-			cleanupErr,
-			b.restoreSpoolPressure.Release(ctx, "restore:"+checkpointIDs[index]),
-		)
-	}
-	return cleanupErr
-}
-
-func (b *AssignmentBackend) consumeRestore(ctx context.Context, checkpointID string) error {
-	b.mu.Lock()
-	restore := b.restores[checkpointID]
-	b.mu.Unlock()
-	if restore == nil || !restore.complete {
-		return fmt.Errorf("SecondBox Firecracker consumed restore is unavailable")
-	}
-	if err := os.Remove(restore.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("SecondBox Firecracker consumed restore cleanup: %w", err)
-	}
-	b.mu.Lock()
-	delete(b.restores, checkpointID)
-	b.mu.Unlock()
-	if err := b.restoreSpoolPressure.Release(ctx, "restore:"+checkpointID); err != nil {
-		return fmt.Errorf("SecondBox Firecracker consumed restore pressure release: %w", err)
-	}
-	return nil
-}
-
-func cloneAssignmentFence(fence *runnerprotocol.AssignmentFence) *runnerprotocol.AssignmentFence {
+func cloneAssignmentFence(
+	fence *runnerprotocol.AssignmentFence,
+) *runnerprotocol.AssignmentFence {
 	return &runnerprotocol.AssignmentFence{
 		AssignmentId: fence.AssignmentId, SandboxId: fence.SandboxId,
 		InstanceId: fence.InstanceId, SandboxGeneration: fence.SandboxGeneration,
 		FencingToken: bytes.Clone(fence.FencingToken),
 	}
-}
-
-// WriteRestoreChunk appends or idempotently replays bytes and verifies the terminal digest.
-func (b *AssignmentBackend) WriteRestoreChunk(
-	ctx context.Context,
-	chunk *runnerprotocol.RestoreChunk,
-) (resultErr error) {
-	if chunk == nil || chunk.Fence == nil || !restoreCheckpointIDPattern.MatchString(chunk.CheckpointId) {
-		return fmt.Errorf("SecondBox Firecracker restore chunk identity is incomplete")
-	}
-	b.mu.Lock()
-	restore := b.restores[chunk.CheckpointId]
-	if restore == nil || !sameAssignmentFence(restore.fence, chunk.Fence) ||
-		restore.storageObjectID != chunk.StorageObjectId {
-		b.mu.Unlock()
-		return fmt.Errorf("SecondBox Firecracker restore chunk fence is stale")
-	}
-	defer func() {
-		b.mu.Unlock()
-		if resultErr == nil {
-			return
-		}
-		cleanupErr := removeRestoreSpoolPath(restore.path)
-		resultErr = errors.Join(resultErr, cleanupErr)
-		if cleanupErr != nil {
-			return
-		}
-		b.mu.Lock()
-		delete(b.restores, chunk.CheckpointId)
-		b.mu.Unlock()
-		resultErr = errors.Join(
-			resultErr,
-			b.restoreSpoolPressure.Release(ctx, "restore:"+chunk.CheckpointId),
-		)
-	}()
-	file, err := os.OpenFile(restore.path, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return fmt.Errorf("SecondBox Firecracker restore spool open: %w", err)
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return fmt.Errorf("SecondBox Firecracker restore spool stat: %w", err)
-	}
-	size := uint64(info.Size())
-	if chunk.Offset > size || uint64(len(chunk.Data)) > restore.sizeBytes-chunk.Offset {
-		return fmt.Errorf("SecondBox Firecracker restore chunk offset or size is invalid")
-	}
-	if chunk.Offset < size {
-		existing := make([]byte, len(chunk.Data))
-		count, err := file.ReadAt(existing, int64(chunk.Offset))
-		if err != nil && !errors.Is(err, io.EOF) {
-			return fmt.Errorf("SecondBox Firecracker restore replay read: %w", err)
-		}
-		if count != len(chunk.Data) || !bytes.Equal(existing, chunk.Data) {
-			return fmt.Errorf("SecondBox Firecracker restore replay content differs")
-		}
-	} else if len(chunk.Data) != 0 {
-		if _, err := file.WriteAt(chunk.Data, int64(chunk.Offset)); err != nil {
-			return fmt.Errorf("SecondBox Firecracker restore append: %w", err)
-		}
-		if err := file.Sync(); err != nil {
-			return fmt.Errorf("SecondBox Firecracker restore sync: %w", err)
-		}
-		size += uint64(len(chunk.Data))
-	}
-	if !chunk.EndOfObject {
-		return nil
-	}
-	if size != restore.sizeBytes {
-		return fmt.Errorf("SecondBox Firecracker restore ended before declared size")
-	}
-	digest, err := fileSHA256(restore.path)
-	if err != nil {
-		return err
-	}
-	if digest != restore.sha256 {
-		return fmt.Errorf("SecondBox Firecracker restore digest differs")
-	}
-	if !restore.complete {
-		verifiedPath := strings.TrimSuffix(restore.path, ".partial") + ".verified"
-		if err := os.Rename(restore.path, verifiedPath); err != nil {
-			return fmt.Errorf("SecondBox Firecracker restore publication: %w", err)
-		}
-		restore.path = verifiedPath
-		restore.complete = true
-	}
-	return nil
-}
-
-func mapsEqual(left, right map[string]string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for key, value := range left {
-		if right[key] != value {
-			return false
-		}
-	}
-	return true
-}
-
-func cloneStringMap(source map[string]string) map[string]string {
-	cloned := make(map[string]string, len(source))
-	for key, value := range source {
-		cloned[key] = value
-	}
-	return cloned
-}
-
-func assignmentCheckpointCompatibility(
-	assignment *runnerprotocol.AssignmentCommand,
-	guestStart assignmentGuestProtocolStart,
-) (map[string]string, error) {
-	var runtimeGeneration, toolchainGeneration uint32
-	for _, asset := range assignment.Assets {
-		if asset == nil {
-			continue
-		}
-		switch asset.ManifestDigest {
-		case guestStart.ImageManifestDigest:
-			runtimeGeneration = asset.GuestProtocolGeneration
-		case guestStart.ToolchainManifestDigest:
-			toolchainGeneration = asset.GuestProtocolGeneration
-		}
-	}
-	if runtimeGeneration == 0 || runtimeGeneration != toolchainGeneration {
-		return nil, fmt.Errorf("SecondBox Firecracker checkpoint asset generations are incomplete")
-	}
-	features := append([]string(nil), guestStart.MandatoryFeatures...)
-	sort.Strings(features)
-	return map[string]string{
-		"architecture":            runtime.GOARCH,
-		"backend":                 "firecracker",
-		"profileRevisionId":       assignment.ProfileRevisionId,
-		"workspaceFormat":         "ext4",
-		"runtimeManifestDigest":   guestStart.ImageManifestDigest,
-		"toolchainManifestDigest": guestStart.ToolchainManifestDigest,
-		"guestProtocolGeneration": strconv.FormatUint(uint64(runtimeGeneration), 10),
-		"mandatoryGuestFeatures":  strings.Join(features, ","),
-	}, nil
-}
-
-// CreateCheckpoint freezes and streams one active generation without exposing a local path.
-func (b *AssignmentBackend) CreateCheckpoint(
-	ctx context.Context,
-	command *runnerprotocol.CheckpointCommand,
-	emit func([]byte) error,
-) (runnercontrol.CheckpointEvidence, error) {
-	if command == nil || command.Fence == nil || command.CheckpointId == "" ||
-		command.StorageObjectId == "" || command.MaximumSizeBytes == 0 {
-		return runnercontrol.CheckpointEvidence{}, fmt.Errorf("SecondBox Firecracker checkpoint command is incomplete")
-	}
-	b.mu.Lock()
-	active, ok := b.assignments[command.Fence.AssignmentId]
-	b.mu.Unlock()
-	if !ok || !sameAssignmentFence(active.fence, command.Fence) {
-		return runnercontrol.CheckpointEvidence{}, fmt.Errorf("SecondBox Firecracker checkpoint fence is stale")
-	}
-	digest, sizeBytes, err := b.manager.StreamWorkspaceCheckpoint(
-		ctx, active.backendReference, command.MaximumSizeBytes, emit,
-	)
-	if err != nil {
-		return runnercontrol.CheckpointEvidence{}, err
-	}
-	b.mu.Lock()
-	current, stillActive := b.assignments[command.Fence.AssignmentId]
-	sameGeneration := stillActive && sameAssignmentFence(current.fence, command.Fence)
-	if sameGeneration {
-		current.checkpointCreated = true
-		b.assignments[command.Fence.AssignmentId] = current
-	}
-	b.mu.Unlock()
-	if !sameGeneration {
-		return runnercontrol.CheckpointEvidence{}, fmt.Errorf("SecondBox Firecracker checkpoint generation was fenced before publication")
-	}
-	terminal := sha256.Sum256([]byte(
-		command.CheckpointId + "\x00" + command.StorageObjectId + "\x00" + digest,
-	))
-	return runnercontrol.CheckpointEvidence{
-		SHA256: digest, SizeBytes: sizeBytes,
-		Compatibility:             cloneStringMap(active.compatibility),
-		TerminationEvidenceDigest: "sha256:" + hex.EncodeToString(terminal[:]),
-	}, nil
 }
 
 func (b *AssignmentBackend) compileAssignmentNetworkPolicy(
@@ -1061,12 +601,6 @@ func (b *AssignmentBackend) FenceAssignment(
 		return runnercontrol.FenceEvidence{}, err
 	}
 	b.mu.Lock()
-	if active.checkpointCreated {
-		b.releasedWorkspaces[command.Fence.AssignmentId] = releasedWorkspaceCleanup{
-			sandboxID:    active.fence.SandboxId,
-			attachmentID: active.workspaceAttachmentID,
-		}
-	}
 	delete(b.assignments, command.Fence.AssignmentId)
 	b.mu.Unlock()
 	if err := b.storagePressure.Release(ctx, command.Fence.AssignmentId); err != nil {

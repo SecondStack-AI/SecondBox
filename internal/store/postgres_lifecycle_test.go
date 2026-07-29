@@ -12,10 +12,30 @@ func TestPostgresFinishStopAdvancesGenerationAndFencesActivity(t *testing.T) {
 	controlPlaneStore := openStoreTest(t)
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	if _, err := controlPlaneStore.pool.Exec(t.Context(), `
+		INSERT INTO secondbox.lifecycle_effects (
+			id,sandbox_id,generation,kind,state,assignment_id,instance_id,runner_id,
+			command_id,storage_object_id,fencing_token,retry_count,retry_limit,
+			effect_deadline,claim_owner,claim_expires_at,failure_class,failure_message,
+			payload_json,evidence_json,created_at,updated_at
+		) VALUES (
+			'effect_store_stop','sbx_store_stop',3,'stop','runner_succeeded','','',
+			'runner-store','command_store_stop','',$1,0,8,$2,'',$2,'','','{}','{}',$3,$3
+		)`,
+		[]byte("01234567890123456789012345678901"), now.Add(time.Minute), now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controlPlaneStore.pool.Exec(t.Context(), `
 		INSERT INTO secondbox.workspaces (
-			id,tenant_ref,subject_ref,sandbox_id,generation,retained_bytes,
-			current_checkpoint_id,created_at,updated_at
-		) VALUES ('wrk_store_stop','tenant','subject','sbx_store_stop',3,0,'',$1,$1)`,
+			id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,logical_capacity_bytes,
+			generation,mutation_kind,mutation_id,mutation_effect_id,mutation_operation_id,
+			mutation_expected_generation,mutation_target_generation,
+			mutation_state,local_receipt_json,created_at,updated_at
+		) VALUES (
+			'wrk_store_stop','tenant','subject','sbx_store_stop','runner-store','ready',1048576,
+			3,'stop','effect_store_stop','effect_store_stop','effect_store_stop',
+			3,4,'runner_succeeded','{}',$1,$1
+		)`,
 		now,
 	); err != nil {
 		t.Fatal(err)

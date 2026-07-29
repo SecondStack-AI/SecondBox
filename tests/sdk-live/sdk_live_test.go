@@ -156,7 +156,6 @@ func liveIdempotencyHeaders(value string) http.Header {
 
 func liveProfileRevisionSpec() secondboxclient.ProfileRevisionSpec {
 	return secondboxclient.ProfileRevisionSpec{
-		Backend:               "firecracker",
 		Pool:                  composeRunnerPoolName,
 		Architecture:          "amd64",
 		RuntimeBundleDigest:   "sha256:" + strings.Repeat("a", 64),
@@ -169,9 +168,9 @@ func liveProfileRevisionSpec() secondboxclient.ProfileRevisionSpec {
 			InitialState: "stopped", DrainGraceSeconds: 30, IdleSeconds: 300,
 			MaximumDurationSeconds: 3600, LeaseSeconds: 60,
 		},
-		Checkpoint: secondboxclient.CheckpointPolicy{
-			OnStop: false, RetentionSeconds: 86400,
-			SnapshotLimit: 8, ArtifactRetentionSeconds: 86400,
+		Retention: secondboxclient.RetentionPolicy{
+			SnapshotLimit: 8, SnapshotRetentionSeconds: 86400,
+			ArtifactRetentionSeconds: 86400,
 		},
 		Execution: secondboxclient.ExecutionPolicy{
 			MaximumDeadlineMilliseconds: 60000, MaximumBufferedOutputBytes: 1 << 20,

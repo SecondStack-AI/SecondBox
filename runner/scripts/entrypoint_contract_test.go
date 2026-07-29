@@ -13,10 +13,9 @@ func TestRunnerEntrypointCreatesOnlyStandaloneRuntimeDirectories(t *testing.T) {
 	}
 	entrypoint := string(source)
 	for _, required := range []string{
-		"SECONDBOX_RUNNER_SANDBOX_WORKSPACE_DIR",
+		"SECONDBOX_RUNNER_WORKSPACE_ROOT",
 		"SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR",
 		"SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT",
-		"SECONDBOX_RUNNER_STATE_DIR",
 		`if [[ "$variable" == SECONDBOX_RUNNER_* ]]`,
 	} {
 		if !strings.Contains(entrypoint, required) {

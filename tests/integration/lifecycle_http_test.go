@@ -30,6 +30,11 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	completeFixtureSandboxCreation(t, sandbox.ID)
+	sandbox, err = controlPlane.GetSandbox(t.Context(), principal, sandbox.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler, err := api.NewHandler(api.HandlerConfig{
 		Service: controlPlane, PlatformToken: testPlatformToken, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		MaximumDataPlaneBodyBytes: 4 << 20,
@@ -100,42 +105,38 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 			"/v1/sandboxes/"+sandbox.ID+":"+mutation.action, mutation.key,
 			strconv.FormatInt(reloaded.Revision, 10), "", mutation.body,
 		)
-		if response.StatusCode != http.StatusAccepted || response.Header.Get("Idempotency-Replayed") != "false" {
-			t.Fatalf("%s status=%d replay=%q body=%s", mutation.action, response.StatusCode, response.Header.Get("Idempotency-Replayed"), readResponse(t, response))
-		}
-		var operation contracts.Operation
-		decodeResponseJSON(t, response, &operation)
-		if operation.State != contracts.OperationStateSucceeded {
-			t.Fatalf("%s already-stopped Operation state=%q", mutation.action, operation.State)
-		}
-		reloaded = getHTTPSandbox(t, server.URL, credential, sandbox.ID)
+		assertProblem(
+			t,
+			response,
+			http.StatusConflict,
+			"workspace_mutation_conflict",
+		)
 	}
-	stoppedCheckpoint := lifecycleHTTPRequest(
-		t, server.URL, credential, http.MethodPost,
-		"/v1/sandboxes/"+sandbox.ID+":checkpoint", "lifecycle-http-checkpoint",
-		strconv.FormatInt(reloaded.Revision, 10), "",
-		map[string]any{"metadata": map[string]string{"label": "api"}},
+	deleteSandbox, _, err := controlPlane.CreateSandbox(
+		t.Context(), principal, "lifecycle-http-delete-create",
+		contracts.CreateSandboxRequest{
+			Profile: profile.Name, Metadata: map[string]string{},
+		},
 	)
-	assertProblem(t, stoppedCheckpoint, http.StatusConflict, "execution_node_unavailable")
-	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(pool.Close)
-	var pendingCheckpointCount int
-	if err := pool.QueryRow(t.Context(), `
-		SELECT count(*) FROM secondbox.operations
-		WHERE sandbox_id=$1 AND kind='checkpoint' AND state IN ('pending','running')`,
-		sandbox.ID,
-	).Scan(&pendingCheckpointCount); err != nil {
+	completeFixtureSandboxCreation(t, deleteSandbox.ID)
+	deleteSandbox, err = controlPlane.GetSandbox(
+		t.Context(),
+		principal,
+		deleteSandbox.ID,
+	)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if pendingCheckpointCount != 0 {
-		t.Fatalf("stopped checkpoint left %d pending Operations", pendingCheckpointCount)
-	}
 	deleteResponse := lifecycleHTTPRequest(
-		t, server.URL, credential, http.MethodDelete, "/v1/sandboxes/"+sandbox.ID,
-		"lifecycle-http-delete", strconv.FormatInt(reloaded.Revision, 10), "", nil,
+		t, server.URL, credential, http.MethodDelete,
+		"/v1/sandboxes/"+deleteSandbox.ID,
+		"lifecycle-http-delete",
+		strconv.FormatInt(deleteSandbox.Revision, 10),
+		"",
+		nil,
 	)
 	if deleteResponse.StatusCode != http.StatusAccepted {
 		t.Fatalf("delete status=%d body=%s", deleteResponse.StatusCode, readResponse(t, deleteResponse))
@@ -153,6 +154,11 @@ func TestHTTPRequestIDCorrelatesOperationAuditAndStructuredLog(t *testing.T) {
 		t.Context(), principal, "request-correlation-create",
 		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeFixtureSandboxCreation(t, sandbox.ID)
+	sandbox, err = controlPlane.GetSandbox(t.Context(), principal, sandbox.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,21 +414,6 @@ func TestWaitInspectLeasePingAndTouchHTTPContract(t *testing.T) {
 		t.Fatalf("lease release status=%d body=%s", release.StatusCode, readResponse(t, release))
 	}
 	release.Body.Close()
-	running := getHTTPSandbox(t, server.URL, credential, sandbox.ID)
-	checkpoint := lifecycleHTTPRequest(
-		t, server.URL, credential, http.MethodPost,
-		"/v1/sandboxes/"+sandbox.ID+":checkpoint", "activity-http-checkpoint",
-		strconv.FormatInt(running.Revision, 10), "",
-		map[string]any{"metadata": map[string]string{"label": "running"}},
-	)
-	if checkpoint.StatusCode != http.StatusAccepted ||
-		checkpoint.Header.Get("Idempotency-Replayed") != "false" {
-		t.Fatalf(
-			"running checkpoint status=%d replay=%q body=%s",
-			checkpoint.StatusCode, checkpoint.Header.Get("Idempotency-Replayed"), readResponse(t, checkpoint),
-		)
-	}
-	checkpoint.Body.Close()
 }
 
 func lifecycleHTTPRequest(

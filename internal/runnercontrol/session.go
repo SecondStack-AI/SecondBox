@@ -30,7 +30,7 @@ const (
 	EventFence            EventKind = "fence"
 	EventDrain            EventKind = "drain"
 	EventEvidence         EventKind = "evidence"
-	EventCheckpoint       EventKind = "checkpoint"
+	EventLocalWorkspace   EventKind = "local_workspace"
 	EventExec             EventKind = "exec"
 	EventFile             EventKind = "file"
 	EventPort             EventKind = "port"
@@ -412,8 +412,16 @@ func (session *Session) acceptHello(hello *runnerv1.RunnerHello) (Event, error) 
 		), nil
 	}
 	enabled := featureSet(session.config.EnabledFeatures)
-	for _, mandatory := range hello.MandatoryFeatures {
-		if !enabled[mandatory] {
+	mandatory := featureSet(hello.MandatoryFeatures)
+	if enabled[runnerv1.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE] &&
+		!mandatory[runnerv1.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE] {
+		return session.rejection(
+			runnerv1.ProtocolRejectionKind_PROTOCOL_REJECTION_KIND_FEATURE_UNSUPPORTED,
+			"runner does not implement the mandatory local-workspace protocol",
+		), nil
+	}
+	for _, feature := range hello.MandatoryFeatures {
+		if !enabled[feature] {
 			return session.rejection(
 				runnerv1.ProtocolRejectionKind_PROTOCOL_REJECTION_KIND_FEATURE_UNSUPPORTED,
 				"runner mandatory feature is unsupported",
@@ -500,10 +508,8 @@ func runnerEnvelope(message *runnerv1.RunnerToControlPlane) (string, uint64, err
 		return validateEnvelope(message.GetDrainState().MessageId, message.GetDrainState().Sequence)
 	case message.GetEvidence() != nil:
 		return validateEnvelope(message.GetEvidence().MessageId, message.GetEvidence().Sequence)
-	case message.GetCheckpointChunk() != nil:
-		return validateEnvelope(message.GetCheckpointChunk().MessageId, message.GetCheckpointChunk().Sequence)
-	case message.GetCheckpointResult() != nil:
-		return validateEnvelope(message.GetCheckpointResult().MessageId, message.GetCheckpointResult().Sequence)
+	case message.GetLocalWorkspaceResult() != nil:
+		return validateEnvelope(message.GetLocalWorkspaceResult().MessageId, message.GetLocalWorkspaceResult().Sequence)
 	case message.GetInstanceTerminal() != nil:
 		return validateEnvelope(message.GetInstanceTerminal().MessageId, message.GetInstanceTerminal().Sequence)
 	default:
@@ -530,8 +536,8 @@ func classifyRunnerMessage(message *runnerv1.RunnerToControlPlane) EventKind {
 		return EventDrain
 	case message.GetEvidence() != nil:
 		return EventEvidence
-	case message.GetCheckpointChunk() != nil, message.GetCheckpointResult() != nil:
-		return EventCheckpoint
+	case message.GetLocalWorkspaceResult() != nil:
+		return EventLocalWorkspace
 	case message.GetInstanceTerminal() != nil:
 		return EventInstanceTerminal
 	default:

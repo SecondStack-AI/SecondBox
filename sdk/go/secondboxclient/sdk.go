@@ -205,13 +205,18 @@ func (handle *SandboxHandle) Stop(ctx context.Context, options LifecycleOptions)
 	return handle.lifecycle(ctx, "stopSandbox", options, nil)
 }
 
-// Checkpoint requests a durable checkpoint with caller-supplied metadata.
-func (handle *SandboxHandle) Checkpoint(
+// Restore replaces the stopped Sandbox workspace with a writable Snapshot copy.
+func (handle *SandboxHandle) Restore(
 	ctx context.Context,
 	options LifecycleOptions,
-	metadata Metadata,
+	snapshotID string,
 ) (Operation, error) {
-	return handle.lifecycle(ctx, "checkpointSandbox", options, CheckpointSandboxRequest{Metadata: metadata})
+	if snapshotID == "" {
+		return Operation{}, errors.New("SecondBox Snapshot restore ID is required")
+	}
+	return handle.lifecycle(
+		ctx, "restoreSandboxSnapshot", options, RestoreSnapshotRequest{SnapshotID: snapshotID},
+	)
 }
 
 // Delete requests deletion; it is never called implicitly by this handle.
@@ -260,6 +265,42 @@ func (handle *SandboxHandle) store(sandbox Sandbox) {
 	handle.mu.Lock()
 	defer handle.mu.Unlock()
 	handle.snapshot = sandbox
+}
+
+// CreateSnapshot admits one asynchronous Snapshot clone.
+func (handle *SandboxHandle) CreateSnapshot(
+	ctx context.Context,
+	options LifecycleOptions,
+	request CreateSnapshotRequest,
+) (Operation, error) {
+	body, err := json.Marshal(request)
+	if err != nil {
+		return Operation{}, fmt.Errorf("SecondBox Snapshot encode request: %w", err)
+	}
+	headers := make(http.Header)
+	headers.Set("Idempotency-Key", options.IdempotencyKey)
+	headers.Set("If-Match", options.IfMatch)
+	var operation Operation
+	err = handle.client.RequestJSON(ctx, "createSandboxSnapshot", CallOptions{
+		PathParameters: map[string]string{"sandboxId": handle.Snapshot().ID},
+		Headers: headers, Body: bytes.NewReader(body), ContentType: "application/json",
+	}, &operation)
+	return operation, err
+}
+
+// DeleteSnapshot admits one asynchronous Snapshot deletion.
+func (client *Client) DeleteSnapshot(
+	ctx context.Context,
+	snapshotID string,
+	idempotencyKey string,
+) (Operation, error) {
+	headers := make(http.Header)
+	headers.Set("Idempotency-Key", idempotencyKey)
+	var operation Operation
+	err := client.RequestJSON(ctx, "deleteSnapshot", CallOptions{
+		PathParameters: map[string]string{"snapshotId": snapshotID}, Headers: headers,
+	}, &operation)
+	return operation, err
 }
 
 // GenerationHeaders binds a data-plane request to the handle's observed generation.

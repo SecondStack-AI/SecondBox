@@ -269,6 +269,7 @@ if [ "$source_kind" = "oci" ]; then
     echo "[1/4] Resolving immutable OCI base $oci_base_reference" >&2
     docker pull "$oci_base_reference"
     base_image_id="$(docker image inspect --format '{{.Id}}' "$oci_base_reference")"
+    base_image_reference="$oci_base_reference"
 else
     require_secondbox_build_command debootstrap
     stage_dir="$(mktemp -d)"
@@ -291,14 +292,15 @@ else
             -C "$stage_dir" --owner=0 --group=0 --numeric-owner -cf - . |
             docker import -
     )"
+    base_image_reference="$base_image_id"
     run_secondbox_build_as_root rm -rf "$stage_dir"
     stage_dir=""
 fi
 
-echo "[2/4] Building SecondBox guest rootfs from $base_image_id" >&2
+echo "[2/4] Building SecondBox guest rootfs from $base_image_reference ($base_image_id)" >&2
 built_image_id_file="$(mktemp)"
 docker build \
-    --build-arg "BASE_IMAGE=$base_image_id" \
+    --build-arg "BASE_IMAGE=$base_image_reference" \
     --build-arg "APT_CHECK_VALID_UNTIL=$apt_check_valid_until" \
     --iidfile "$built_image_id_file" \
     "$script_dir"
@@ -309,7 +311,12 @@ built_image_id_file=""
 echo "[3/4] Exporting prepared rootfs to $out_dir" >&2
 mkdir -p "$out_dir"
 container_id="$(docker create "$built_image_id" /bin/true)"
-docker export "$container_id" | tar -C "$out_dir" --numeric-owner -xf -
+docker export "$container_id" |
+    tar -C "$out_dir" --numeric-owner \
+        --exclude='dev/*' \
+        --exclude='proc/*' \
+        --exclude='sys/*' \
+        -xf -
 docker rm -f "$container_id" >/dev/null
 container_id=""
 

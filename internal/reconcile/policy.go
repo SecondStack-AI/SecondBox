@@ -37,18 +37,18 @@ type AssignmentState struct {
 	Deadline         time.Time
 }
 
-// Decision is one idempotent action; reassignment is explicit and fence-gated.
+// Decision is one idempotent action. Runner loss can advance authority only
+// through the pinned home runner's durable local Workspace receipt.
 type Decision struct {
 	Action         Action
-	MayReassign    bool
 	NextGeneration int64
 }
 
-// DecideRunnerLoss prevents replacement until termination or generation fencing is durable.
+// DecideRunnerLoss fences uncertain compute before queuing a local generation advance.
 func DecideRunnerLoss(state AssignmentState, now time.Time) Decision {
 	if state.State == "fenced" && state.FenceProofDigest != "" {
 		return Decision{
-			Action: ActionAdvanceGeneration, MayReassign: true,
+			Action:         ActionAdvanceGeneration,
 			NextGeneration: state.Generation + 1,
 		}
 	}

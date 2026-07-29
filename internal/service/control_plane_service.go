@@ -65,7 +65,7 @@ type SandboxStore interface {
 
 // ActivityStore owns lifecycle intent, leases, and useful-activity evidence.
 type ActivityStore interface {
-	GetSandboxLifecyclePolicy(ctx context.Context, tenantRef, subjectRef, sandboxID string) (contracts.LifecyclePolicy, contracts.CheckpointPolicy, error)
+	GetSandboxLifecyclePolicy(ctx context.Context, tenantRef, subjectRef, sandboxID string) (contracts.LifecyclePolicy, contracts.RetentionPolicy, error)
 	SetSandboxDesiredState(ctx context.Context, input ports.LifecycleIntentInput) (contracts.Operation, error)
 	AcquireLease(ctx context.Context, input ports.LeaseInput) (contracts.Lease, error)
 	GetLeaseByID(ctx context.Context, tenantRef, subjectRef, leaseID string) (contracts.Lease, error)
@@ -80,10 +80,11 @@ type ActivityStore interface {
 
 // SnapshotStore owns durable user snapshots.
 type SnapshotStore interface {
-	CreateSnapshot(ctx context.Context, input ports.SnapshotCreationInput) (contracts.Snapshot, error)
+	CreateSnapshot(ctx context.Context, input ports.SnapshotCreationInput) (contracts.Operation, error)
+	DeleteSnapshot(ctx context.Context, input ports.SnapshotDeletionInput) (contracts.Operation, error)
+	RestoreSnapshot(ctx context.Context, input ports.SnapshotRestoreInput) (contracts.Operation, error)
 	ListSnapshots(ctx context.Context, tenantRef, subjectRef, sandboxID string, limit int, cursor string, now time.Time) (contracts.SnapshotPage, error)
 	GetSnapshot(ctx context.Context, tenantRef, subjectRef, snapshotID string, now time.Time) (contracts.Snapshot, error)
-	EndSnapshotRetention(ctx context.Context, input ports.SnapshotRetentionInput) error
 }
 
 // ArtifactStore owns immutable artifact publication and retention.
@@ -121,7 +122,7 @@ type ControlPlaneConfig struct {
 	Now                   func() time.Time
 	NewID                 func(string) string
 	NewCredentialMaterial func() string
-	ObjectStore           objectstore.Store
+	ArtifactObjectStore   objectstore.Store
 	DataPlaneRelay        DataPlaneRelay
 	DataPlanePollInterval time.Duration
 	PortSessionRelay      runnercontrol.PortSessionRelay
@@ -137,7 +138,7 @@ type ControlPlaneService struct {
 	now                   func() time.Time
 	newID                 func(string) string
 	newCredentialMaterial func() string
-	objectStore           objectstore.Store
+	artifactObjectStore   objectstore.Store
 	dataPlaneRelay        DataPlaneRelay
 	dataPlanePollInterval time.Duration
 	portSessionRelay      runnercontrol.PortSessionRelay
@@ -173,8 +174,8 @@ func NewControlPlaneService(config ControlPlaneConfig) (*ControlPlaneService, er
 		credentialSealSecret: []byte(config.PlatformToken),
 		defaultSubjectQuota:  config.DefaultSubjectQuota,
 		now:                  config.Now, newID: config.NewID, newCredentialMaterial: config.NewCredentialMaterial,
-		objectStore:    config.ObjectStore,
-		dataPlaneRelay: config.DataPlaneRelay, dataPlanePollInterval: config.DataPlanePollInterval,
+		artifactObjectStore: config.ArtifactObjectStore,
+		dataPlaneRelay:      config.DataPlaneRelay, dataPlanePollInterval: config.DataPlanePollInterval,
 		portSessionRelay: config.PortSessionRelay, publicBaseURL: config.PublicBaseURL,
 		builtInProfiles: builtInProfiles,
 	}
@@ -508,12 +509,16 @@ func (service *ControlPlaneService) createSandboxOperation(
 	sandboxID := service.newID("sbx")
 	workspaceID := service.newID("wsp")
 	operationID := service.newID("op")
+	workspaceEffectID := service.newID("effect")
+	workspaceCommandID := service.newID("command")
+	workspaceFence := []byte(service.newCredentialMaterial())
 	requestID := service.requestID(ctx)
 	sandbox := contracts.Sandbox{
 		ID: sandboxID, Profile: request.Profile, State: contracts.SandboxStateCreating,
 		DesiredState: contracts.SandboxDesiredStateStopped, Generation: 1,
 		Workspace: contracts.Workspace{
-			ID: workspaceID, Generation: 1, RetainedBytes: 0, CreatedAt: now, UpdatedAt: now,
+			ID: workspaceID, Generation: 1, State: "creating",
+			CreatedAt: now, UpdatedAt: now,
 		},
 		Metadata: cloneMetadata(request.Metadata), Revision: 1, CreatedAt: now, UpdatedAt: now,
 	}
@@ -526,7 +531,9 @@ func (service *ControlPlaneService) createSandboxOperation(
 		Principal: principal, SubjectQuota: service.defaultSubjectQuota,
 		Sandbox: sandbox, Workspace: sandbox.Workspace, Operation: operation,
 		IdempotencyKey: idempotencyKey, RequestHash: hex.EncodeToString(requestHash[:]),
-		IdempotencyEnds: now.Add(idempotencyRetention),
+		IdempotencyEnds:   now.Add(idempotencyRetention),
+		WorkspaceEffectID: workspaceEffectID, WorkspaceCommandID: workspaceCommandID,
+		FencingToken: workspaceFence,
 	})
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
@@ -619,7 +626,7 @@ func (service *ControlPlaneService) DrainSandbox(
 	)
 }
 
-// StopSandbox converges the Sandbox to stopped under its pinned checkpoint policy.
+// StopSandbox converges the Sandbox to stopped after durable local generation advance.
 func (service *ControlPlaneService) StopSandbox(
 	ctx context.Context,
 	principal contracts.Principal,
@@ -630,24 +637,6 @@ func (service *ControlPlaneService) StopSandbox(
 	return service.setSandboxDesiredState(
 		ctx, principal, sandboxID, "stop", contracts.SandboxDesiredStateStopped,
 		idempotencyKey, expectedRevision, nil, nil,
-	)
-}
-
-// CheckpointSandbox drains before publishing an immutable stopped-state checkpoint.
-func (service *ControlPlaneService) CheckpointSandbox(
-	ctx context.Context,
-	principal contracts.Principal,
-	sandboxID string,
-	idempotencyKey string,
-	expectedRevision int64,
-	metadata map[string]string,
-) (contracts.Operation, error) {
-	if err := validateSandboxMetadata(metadata); err != nil {
-		return contracts.Operation{}, err
-	}
-	return service.setSandboxDesiredState(
-		ctx, principal, sandboxID, "checkpoint", contracts.SandboxDesiredStateStopped,
-		idempotencyKey, expectedRevision, metadata, nil,
 	)
 }
 
@@ -735,10 +724,6 @@ func (service *ControlPlaneService) MutateSandbox(
 	case "start":
 		desiredState = contracts.SandboxDesiredStateRunning
 	case "drain", "stop":
-	case "checkpoint":
-		if err := validateSandboxMetadata(metadata); err != nil {
-			return contracts.Operation{}, false, err
-		}
 	case "delete":
 		desiredState = contracts.SandboxDesiredStateDeleted
 	default:
@@ -1165,9 +1150,6 @@ func validateApplicationScopes(scopes []string) error {
 }
 
 func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
-	if spec.Backend != "firecracker" {
-		return errors.New("SecondBox Profile backend must be firecracker")
-	}
 	if !profileNamePattern.MatchString(spec.Pool) {
 		return errors.New("SecondBox Profile runner pool selector is invalid")
 	}
@@ -1189,9 +1171,9 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 		spec.Lifecycle.MaximumDurationSeconds < 1 || spec.Lifecycle.LeaseSeconds < 1 {
 		return errors.New("SecondBox Profile lifecycle limits must be positive")
 	}
-	if spec.Checkpoint.RetentionSeconds < 1 ||
-		spec.Checkpoint.SnapshotLimit < 0 || spec.Checkpoint.ArtifactRetentionSeconds < 1 {
-		return errors.New("SecondBox Profile checkpoint limits are invalid")
+	if spec.Retention.SnapshotRetentionSeconds < 1 ||
+		spec.Retention.SnapshotLimit < 0 || spec.Retention.ArtifactRetentionSeconds < 1 {
+		return errors.New("SecondBox Profile retention limits are invalid")
 	}
 	if spec.Execution.MaximumDeadlineMilliseconds < 1 || spec.Execution.MaximumBufferedOutputBytes < 1 ||
 		spec.Execution.StreamWindowBytes < 4096 || spec.Execution.MaximumTransferBytes < 1 ||
@@ -1256,7 +1238,6 @@ func validSandboxState(state string) bool {
 		contracts.SandboxStateReady,
 		contracts.SandboxStateDraining,
 		contracts.SandboxStateStopping,
-		contracts.SandboxStateCheckpointing,
 		contracts.SandboxStateFailed,
 		contracts.SandboxStateDeleting,
 		contracts.SandboxStateDeleted:
@@ -1272,7 +1253,7 @@ func validateQuotaLimits(name string, quota contracts.QuotaLimits) error {
 	}
 	values := []int64{
 		quota.MaxActiveInstances, quota.MaxCPUMillis,
-		quota.MaxMemoryBytes, quota.MaxRetainedBytes, quota.MaxSnapshots,
+		quota.MaxMemoryBytes, quota.MaxArtifactBytes, quota.MaxSnapshots,
 		quota.MaxArtifacts, quota.MaxPortSessions, quota.MaxConcurrentOperations,
 	}
 	for _, value := range values {

@@ -60,7 +60,7 @@ func (service *ControlPlaneService) UploadSandboxArtifact(
 	if upload.Content == nil || upload.SizeBytes < 0 || upload.ActualSHA256 != upload.SHA256 {
 		return contracts.Artifact{}, ports.ErrArtifactIntegrity
 	}
-	_, checkpointPolicy, err := service.store.GetSandboxLifecyclePolicy(
+	_, retentionPolicy, err := service.store.GetSandboxLifecyclePolicy(
 		ctx, principal.TenantRef, principal.SubjectRef, sandboxID,
 	)
 	if err != nil {
@@ -87,7 +87,7 @@ func (service *ControlPlaneService) UploadSandboxArtifact(
 		SizeBytes: upload.SizeBytes, SHA256: upload.SHA256,
 		Metadata: cloneMetadata(upload.Metadata),
 		RetainUntil: now.Add(
-			time.Duration(checkpointPolicy.ArtifactRetentionSeconds) * time.Second,
+			time.Duration(retentionPolicy.ArtifactRetentionSeconds) * time.Second,
 		),
 		CreatedAt: now,
 	}
@@ -110,7 +110,7 @@ func (service *ControlPlaneService) UploadSandboxArtifact(
 	if _, err := upload.Content.Seek(0, io.SeekStart); err != nil {
 		return contracts.Artifact{}, fmt.Errorf("%w: rewind Artifact staging file: %v", ports.ErrArtifactStorage, err)
 	}
-	if _, err := service.objectStore.PutImmutable(
+	if _, err := service.artifactObjectStore.PutImmutable(
 		ctx, publication.StorageKey, upload.Content,
 		staged.SizeBytes, staged.SHA256,
 	); err != nil {
@@ -179,7 +179,7 @@ func (service *ControlPlaneService) DownloadArtifact(
 	if err != nil {
 		return nil, contracts.Artifact{}, err
 	}
-	body, evidence, err := service.objectStore.GetVerified(ctx, object.StorageKey, objectstore.Evidence{
+	body, evidence, err := service.artifactObjectStore.GetVerified(ctx, object.StorageKey, objectstore.Evidence{
 		SHA256: object.Artifact.SHA256, SizeBytes: object.Artifact.SizeBytes,
 	})
 	if err != nil {
@@ -229,7 +229,7 @@ func (service *ControlPlaneService) DeleteArtifact(
 }
 
 func (service *ControlPlaneService) requireArtifacts(principal contracts.Principal) error {
-	if service.objectStore == nil {
+	if service.artifactObjectStore == nil {
 		return ports.ErrArtifactStorage
 	}
 	if principal.TenantRef == "" || principal.SubjectRef == "" {

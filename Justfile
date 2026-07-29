@@ -27,15 +27,14 @@ test-non-kvm:
 test-deployment:
     go test ./tests/deployment -count=1
 
-test-backup-restore:
-    @test -n "${SECONDBOX_TEST_DATABASE_URL}" || (echo "SECONDBOX_TEST_DATABASE_URL is required" >&2; exit 2)
-    go test ./tests/integration -run '^TestBackupRestoreDrillMaterializesCheckpointOnFreshRunner$' -count=1
-
 build-artifacts:
     scripts/build-artifacts.sh
 
 test-firecracker:
     scripts/test-firecracker.sh
+
+test-multirunner:
+    scripts/test-multirunner.sh
 
 deploy-bootstrap environment:
     deploy/bin/bootstrap-environment.sh "{{environment}}"

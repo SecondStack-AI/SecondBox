@@ -108,7 +108,7 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 				Name:           poolName,
 				State:          contracts.RunnerPoolStateReady,
 				Architectures:  []string{"amd64"},
-				Capabilities:   []string{"firecracker"},
+				Capabilities:   []string{"compute"},
 				CapacityPolicy: map[string]int64{"maximumInstances": 4},
 			},
 		)
@@ -126,7 +126,7 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 			Name:           runnerPoolName,
 			State:          contracts.RunnerPoolStateReady,
 			Architectures:  []string{"amd64"},
-			Capabilities:   []string{"firecracker"},
+			Capabilities:   []string{"compute"},
 			CapacityPolicy: map[string]int64{"maximumInstances": 4},
 		},
 	); err != nil {
@@ -225,7 +225,7 @@ func seedPaginationRunners(t *testing.T, poolName string, suffix string) []strin
 				reserved_capacity_json,artifact_cache_json,last_seen_at,revision,
 				created_at,updated_at
 			) VALUES (
-				$1,$2,$3,'offline','["amd64"]','["firecracker"]','{"instances":0}','["1"]',
+				$1,$2,$3,'offline','["amd64"]','["compute"]','{"instances":0}','["1"]',
 				1,1,'1.0.0','',0,'active','{}','[]',NULL,1,$4,$4
 			)`,
 			runnerID,

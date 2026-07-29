@@ -487,7 +487,33 @@
     },
     "/v1/sandboxes/{sandboxId}:drain": {"$ref": "#/components/pathItems/DrainSandbox"},
     "/v1/sandboxes/{sandboxId}:stop": {"$ref": "#/components/pathItems/StopSandbox"},
-    "/v1/sandboxes/{sandboxId}:checkpoint": {"$ref": "#/components/pathItems/CheckpointSandbox"},
+    "/v1/sandboxes/{sandboxId}:restore": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
+      "post": {
+        "tags": ["Snapshots"],
+        "operationId": "restoreSandboxSnapshot",
+        "description": "Asynchronously replaces a stopped Sandbox workspace with a writable copy of one of that Sandbox's ready Snapshots.",
+        "parameters": [
+          {"$ref": "#/components/parameters/SandboxID"},
+          {"$ref": "#/components/parameters/IfMatch"},
+          {"$ref": "#/components/parameters/IdempotencyKey"},
+          {"$ref": "#/components/parameters/RequestID"}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RestoreSnapshotRequest"}}}
+        },
+        "responses": {
+          "202": {"$ref": "#/components/responses/AcceptedOperation"},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "412": {"$ref": "#/components/responses/PreconditionFailed"}
+        }
+      }
+    },
     "/v1/sandboxes/{sandboxId}:wait": {
       "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "post": {
@@ -1143,11 +1169,7 @@
           "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateSnapshotRequest"}}}
         },
         "responses": {
-          "201": {
-            "description": "Immutable projection of the current published stopped-state checkpoint.",
-            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Snapshot"}}}
-          },
+          "202": {"$ref": "#/components/responses/AcceptedOperation"},
           "400": {"$ref": "#/components/responses/BadRequest"},
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
@@ -1187,10 +1209,7 @@
           {"$ref": "#/components/parameters/RequestID"}
         ],
         "responses": {
-          "204": {
-            "description": "Snapshot retention ended.",
-            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}
-          },
+          "202": {"$ref": "#/components/responses/AcceptedOperation"},
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
           "404": {"$ref": "#/components/responses/NotFound"},
@@ -1447,32 +1466,6 @@
           }
         }
       },
-      "CheckpointSandbox": {
-        "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
-        "post": {
-          "tags": ["Sandboxes"],
-          "operationId": "checkpointSandbox",
-          "parameters": [
-            {"$ref": "#/components/parameters/SandboxID"},
-            {"$ref": "#/components/parameters/IfMatch"},
-            {"$ref": "#/components/parameters/IdempotencyKey"},
-            {"$ref": "#/components/parameters/RequestID"}
-          ],
-          "requestBody": {
-            "required": true,
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CheckpointSandboxRequest"}}}
-          },
-          "responses": {
-            "202": {"$ref": "#/components/responses/AcceptedOperation"},
-            "400": {"$ref": "#/components/responses/BadRequest"},
-            "401": {"$ref": "#/components/responses/Unauthorized"},
-            "403": {"$ref": "#/components/responses/Forbidden"},
-            "404": {"$ref": "#/components/responses/NotFound"},
-            "409": {"$ref": "#/components/responses/Conflict"},
-            "412": {"$ref": "#/components/responses/PreconditionFailed"}
-          }
-        }
-      },
       "StatSandboxFile": {
         "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
         "get": {
@@ -1612,16 +1605,15 @@
       "ProfileRevisionSpec": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["backend", "pool", "architecture", "runtimeBundleDigest", "toolchainBundleDigest", "resources", "lifecycle", "checkpoint", "execution", "network", "ports"],
+        "required": ["pool", "architecture", "runtimeBundleDigest", "toolchainBundleDigest", "resources", "lifecycle", "retention", "execution", "network", "ports"],
         "properties": {
-          "backend": {"type": "string", "enum": ["firecracker"]},
           "pool": {"type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-z][a-z0-9-]*$"},
           "architecture": {"type": "string", "enum": ["amd64", "arm64"]},
           "runtimeBundleDigest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
           "toolchainBundleDigest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
           "resources": {"$ref": "#/components/schemas/ResourcePolicy"},
           "lifecycle": {"$ref": "#/components/schemas/LifecyclePolicy"},
-          "checkpoint": {"$ref": "#/components/schemas/CheckpointPolicy"},
+          "retention": {"$ref": "#/components/schemas/RetentionPolicy"},
           "execution": {"$ref": "#/components/schemas/ExecutionPolicy"},
           "network": {"$ref": "#/components/schemas/NetworkPolicy"},
           "ports": {"type": "array", "maxItems": 32, "items": {"$ref": "#/components/schemas/PortPolicy"}}
@@ -1651,14 +1643,13 @@
           "leaseSeconds": {"type": "integer", "minimum": 1}
         }
       },
-      "CheckpointPolicy": {
+      "RetentionPolicy": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["onStop", "retentionSeconds", "snapshotLimit", "artifactRetentionSeconds"],
+        "required": ["snapshotLimit", "snapshotRetentionSeconds", "artifactRetentionSeconds"],
         "properties": {
-          "onStop": {"type": "boolean"},
-          "retentionSeconds": {"type": "integer", "minimum": 1},
           "snapshotLimit": {"type": "integer", "minimum": 0},
+          "snapshotRetentionSeconds": {"type": "integer", "minimum": 1},
           "artifactRetentionSeconds": {"type": "integer", "minimum": 1}
         }
       },
@@ -1747,7 +1738,10 @@
         "minItems": 1,
         "maxItems": 64,
         "uniqueItems": true,
-        "items": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}
+        "items": {
+          "type": "string",
+          "enum": ["compute", "network-policy", "storage", "cleanup", "local-workspace", "exec-streaming", "file-streaming", "pty", "port-proxy", "evidence"]
+        }
       },
       "RunnerCapacityPolicy": {
         "type": "object",
@@ -1815,7 +1809,7 @@
           "state": {"type": "string", "enum": ["enrolling", "enrolled", "connected", "ready", "draining", "drained", "offline"]},
           "credentialState": {"type": "string", "enum": ["pre_shared"]},
           "architectures": {"type": "array", "maxItems": 8, "uniqueItems": true, "items": {"type": "string", "enum": ["amd64", "arm64"]}},
-          "capabilities": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}},
+          "capabilities": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "enum": ["compute", "network-policy", "storage", "cleanup", "local-workspace", "exec-streaming", "file-streaming", "pty", "port-proxy", "evidence"]}},
           "capacity": {"type": "object", "maxProperties": 32, "additionalProperties": {"type": "integer", "format": "int64", "minimum": 0}},
           "protocolVersions": {"type": "array", "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 32}},
           "lastSeenAt": {"$ref": "#/components/schemas/Timestamp"},
@@ -1835,7 +1829,7 @@
       },
       "SandboxState": {
         "type": "string",
-        "enum": ["creating", "stopped", "starting", "ready", "draining", "stopping", "checkpointing", "failed", "deleting", "deleted"]
+        "enum": ["creating", "stopped", "starting", "ready", "draining", "stopping", "failed", "deleting", "deleted"]
       },
       "SandboxDesiredState": {"type": "string", "enum": ["running", "stopped", "deleted"]},
       "Sandbox": {
@@ -1880,15 +1874,12 @@
       "Workspace": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "generation", "retainedBytes", "retentionState", "createdAt", "updatedAt"],
+        "required": ["id", "generation", "state", "sizeBytes", "createdAt", "updatedAt"],
         "properties": {
           "id": {"$ref": "#/components/schemas/OpaqueID"},
           "generation": {"type": "integer", "format": "int64", "minimum": 1},
-          "retainedBytes": {"type": "integer", "format": "int64", "minimum": 0},
-          "currentCheckpointId": {"$ref": "#/components/schemas/OpaqueID"},
-          "currentCheckpointHash": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
-          "currentCheckpointSize": {"type": "integer", "format": "int64", "minimum": 0},
-          "retentionState": {"type": "string"},
+          "state": {"type": "string", "enum": ["creating", "ready", "deleting", "deleted", "failed"]},
+          "sizeBytes": {"type": "integer", "format": "int64", "minimum": 1048576},
           "createdAt": {"$ref": "#/components/schemas/Timestamp"},
           "updatedAt": {"$ref": "#/components/schemas/Timestamp"}
         }
@@ -1917,7 +1908,7 @@
           "updatedAt": {"$ref": "#/components/schemas/Timestamp"}
         }
       },
-      "OperationKind": {"type": "string", "enum": ["create", "start", "drain", "stop", "checkpoint", "delete", "cancel_exec", "cancel_terminal"]},
+      "OperationKind": {"type": "string", "enum": ["create", "start", "drain", "stop", "delete", "snapshot_create", "snapshot_delete", "snapshot_restore", "cancel_exec", "cancel_terminal"]},
       "OperationState": {"type": "string", "enum": ["pending", "running", "succeeded", "failed", "cancelled"]},
       "Operation": {
         "type": "object",
@@ -1930,6 +1921,7 @@
           "state": {"$ref": "#/components/schemas/OperationState"},
           "requestId": {"$ref": "#/components/schemas/CorrelationID"},
           "sandbox": {"$ref": "#/components/schemas/Sandbox"},
+          "snapshot": {"$ref": "#/components/schemas/Snapshot"},
           "error": {"$ref": "#/components/schemas/Problem"},
           "createdAt": {"$ref": "#/components/schemas/Timestamp"},
           "startedAt": {"$ref": "#/components/schemas/Timestamp"},
@@ -1946,11 +1938,11 @@
           "deadlineMilliseconds": {"type": "integer", "minimum": 1, "maximum": 60000}
         }
       },
-      "CheckpointSandboxRequest": {
+      "RestoreSnapshotRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["metadata"],
-        "properties": {"metadata": {"$ref": "#/components/schemas/Metadata"}}
+        "required": ["snapshotId"],
+        "properties": {"snapshotId": {"$ref": "#/components/schemas/OpaqueID"}}
       },
       "SandboxInspection": {
         "type": "object",
@@ -2427,15 +2419,15 @@
       "Snapshot": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "sandboxId", "generation", "name", "sizeBytes", "sha256", "metadata", "expiresAt", "createdAt"],
+        "required": ["id", "sandboxId", "generation", "name", "sizeBytes", "metadata", "state", "createdAt"],
         "properties": {
           "id": {"$ref": "#/components/schemas/OpaqueID"},
           "sandboxId": {"$ref": "#/components/schemas/OpaqueID"},
           "generation": {"type": "integer", "format": "int64", "minimum": 1},
           "name": {"type": "string", "minLength": 1, "maxLength": 255},
           "sizeBytes": {"type": "integer", "format": "int64", "minimum": 0},
-          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
           "metadata": {"$ref": "#/components/schemas/Metadata"},
+          "state": {"type": "string", "enum": ["creating", "ready", "deleting", "failed"]},
           "expiresAt": {"$ref": "#/components/schemas/Timestamp"},
           "createdAt": {"$ref": "#/components/schemas/Timestamp"}
         }
@@ -2493,9 +2485,11 @@
           "idempotency_conflict",
           "precondition_failed",
           "state_conflict",
+          "workspace_mutation_conflict",
           "generation_fenced",
           "lease_fenced",
           "profile_unavailable",
+          "home_runner_unavailable",
           "quota_exceeded",
           "limit_exceeded",
           "guest_unavailable",

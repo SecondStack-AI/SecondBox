@@ -8,6 +8,7 @@ import (
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
+	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -83,7 +84,6 @@ func testPostgresInstanceTerminalReason(
 		}{
 			{`DELETE FROM secondbox.instance_terminal_events WHERE instance_id=$1`, instanceID},
 			{`DELETE FROM secondbox.runner_commands WHERE assignment_id=$1`, assignmentID},
-			{`DELETE FROM secondbox.workspace_materializations WHERE assignment_id=$1`, assignmentID},
 			{`DELETE FROM secondbox.assignments WHERE id=$1`, assignmentID},
 			{`DELETE FROM secondbox.instances WHERE id=$1`, instanceID},
 			{`DELETE FROM secondbox.sandboxes WHERE id=$1`, sandboxID},
@@ -95,7 +95,7 @@ func testPostgresInstanceTerminalReason(
 		}
 	})
 	correlation := &runnerv1.Correlation{
-		RequestId: "request-terminal", OperationId: "operation-terminal", LeaseId: "lease-terminal",
+		RequestId: "request-terminal", OperationId: "operation-conformance", LeaseId: "lease-terminal",
 		SandboxId: sandboxID, InstanceId: instanceID, SandboxGeneration: 1,
 		AssignmentId: assignmentID, RunnerId: "runner-conformance",
 	}
@@ -150,40 +150,38 @@ func testPostgresInstanceTerminalReason(
 	}
 
 	var (
-		instanceState, guestLiveness, reason                string
-		assignmentState, materializationState, sandboxState string
-		currentInstance                                     string
-		generation, terminalRows                            int64
-		nextReconcileAt                                     time.Time
+		instanceState, guestLiveness, reason string
+		assignmentState, sandboxState        string
+		currentInstance                      string
+		generation, terminalRows             int64
+		nextReconcileAt                      time.Time
 	)
 	if err := boundary.pool.QueryRow(t.Context(), `
 		SELECT instance.state,instance.guest_liveness,instance.termination_reason,
-		       assignment.state,materialization.state,sandbox.state,
+		       assignment.state,sandbox.state,
 		       sandbox.current_instance_id,sandbox.generation,sandbox.next_reconcile_at,
 		       (SELECT count(*) FROM secondbox.instance_terminal_events
 		        WHERE instance_id=instance.id)
 		FROM secondbox.instances AS instance
 		JOIN secondbox.assignments AS assignment ON assignment.instance_id=instance.id
-		JOIN secondbox.workspace_materializations AS materialization
-		  ON materialization.assignment_id=assignment.id
 		JOIN secondbox.sandboxes AS sandbox ON sandbox.id=instance.sandbox_id
 		WHERE instance.id=$1`,
 		instanceID,
 	).Scan(
 		&instanceState, &guestLiveness, &reason,
-		&assignmentState, &materializationState, &sandboxState,
+		&assignmentState, &sandboxState,
 		&currentInstance, &generation, &nextReconcileAt, &terminalRows,
 	); err != nil {
 		t.Fatal(err)
 	}
 	if instanceState != "stopped" || guestLiveness != "stopped" ||
 		reason != stableReason ||
-		assignmentState != "ready" || materializationState != "ready" ||
+		assignmentState != "ready" ||
 		sandboxState != "ready" || currentInstance != instanceID || generation != 1 ||
 		nextReconcileAt.After(now.Add(3*time.Millisecond)) || terminalRows != 1 {
 		t.Fatalf(
-			"terminal authority = instance %q/%q/%q assignment %q materialization %q sandbox %q current %q generation %d due %s rows %d",
-			instanceState, guestLiveness, reason, assignmentState, materializationState,
+			"terminal authority = instance %q/%q/%q assignment %q sandbox %q current %q generation %d due %s rows %d",
+			instanceState, guestLiveness, reason, assignmentState,
 			sandboxState, currentInstance, generation, nextReconcileAt, terminalRows,
 		)
 	}
@@ -282,7 +280,7 @@ func TestPostgresFenceResultPreservesStableCausalTerminationReasons(t *testing.T
 				t.Fatal(err)
 			}
 			correlation := &runnerv1.Correlation{
-				RequestId: "request-" + assignmentID, OperationId: "operation-" + assignmentID,
+				RequestId: "request-" + assignmentID, OperationId: "operation-conformance",
 				SandboxId: sandboxID, InstanceId: instanceID, SandboxGeneration: 1,
 				AssignmentId: assignmentID, RunnerId: "runner-conformance",
 			}
@@ -330,6 +328,38 @@ func TestPostgresFenceResultPreservesStableCausalTerminationReasons(t *testing.T
 					t.Fatal(err)
 				}
 			}
+			stopEffectID := "stop-effect-" + assignmentID
+			if cause.reason != "runner_lost" {
+				correlation.OperationId = stopEffectID
+				if _, err := boundary.pool.Exec(t.Context(), `
+					UPDATE secondbox.workspaces
+					SET mutation_kind='stop',mutation_id=$2,mutation_effect_id=$2,
+					    mutation_operation_id=$2,mutation_expected_generation=1,
+					    mutation_target_generation=2,mutation_state='stopping'
+					WHERE sandbox_id=$1;
+					INSERT INTO secondbox.lifecycle_effects (
+						id,sandbox_id,generation,kind,state,assignment_id,instance_id,runner_id,
+						command_id,storage_object_id,fencing_token,retry_count,retry_limit,
+						effect_deadline,claim_owner,claim_expires_at,failure_class,failure_message,
+						payload_json,evidence_json,created_at,updated_at
+					) VALUES (
+						$2,$1,1,'stop','queued',$3,$4,'runner-conformance',
+						$5,'',$6,0,8,$7,'',$7,'','','{}','{}',$7,$7
+					);
+					INSERT INTO secondbox.runner_commands (
+						id,runner_id,assignment_id,kind,payload,state,target_connection_id,
+						delivery_count,created_at,updated_at,delivered_at
+					) VALUES (
+						$5,'runner-conformance',$3,'fence',$8,'delivered',$9,1,$7,$7,$7
+					)`,
+					pgx.QueryExecModeSimpleProtocol,
+					sandboxID, stopEffectID, assignmentID, instanceID,
+					"stop-command-"+assignmentID, fence.FencingToken, now,
+					[]byte{}, connectionID,
+				); err != nil {
+					t.Fatal(err)
+				}
+			}
 			fenceSequence := sequence
 			sequence++
 			if _, err := boundary.stateStore.RecordEvent(t.Context(), runnercontrol.Event{
@@ -349,24 +379,21 @@ func TestPostgresFenceResultPreservesStableCausalTerminationReasons(t *testing.T
 			}, now.Add(time.Millisecond)); err != nil {
 				t.Fatal(err)
 			}
-			var reason, assignmentState, materializationState string
+			var reason, assignmentState string
 			if err := boundary.pool.QueryRow(t.Context(), `
-				SELECT instance.termination_reason,assignment.state,materialization.state
+				SELECT instance.termination_reason,assignment.state
 				FROM secondbox.instances AS instance
 				JOIN secondbox.assignments AS assignment ON assignment.instance_id=instance.id
-				JOIN secondbox.workspace_materializations AS materialization
-				  ON materialization.assignment_id=assignment.id
 				WHERE instance.id=$1`,
 				instanceID,
-			).Scan(&reason, &assignmentState, &materializationState); err != nil {
+			).Scan(&reason, &assignmentState); err != nil {
 				t.Fatal(err)
 			}
 			if reason != cause.reason ||
-				assignmentState != "fenced" ||
-				materializationState != "released" {
+				assignmentState != "fenced" {
 				t.Fatalf(
-					"reason propagation = %q, assignment %q, materialization %q",
-					reason, assignmentState, materializationState,
+					"reason propagation = %q, assignment %q",
+					reason, assignmentState,
 				)
 			}
 			for _, cleanup := range []struct {
@@ -374,7 +401,8 @@ func TestPostgresFenceResultPreservesStableCausalTerminationReasons(t *testing.T
 				value string
 			}{
 				{`DELETE FROM secondbox.runner_commands WHERE assignment_id=$1`, assignmentID},
-				{`DELETE FROM secondbox.workspace_materializations WHERE assignment_id=$1`, assignmentID},
+				{`DELETE FROM secondbox.runner_commands WHERE assignment_id=$1`, stopEffectID},
+				{`DELETE FROM secondbox.lifecycle_effects WHERE sandbox_id=$1`, sandboxID},
 				{`DELETE FROM secondbox.assignments WHERE id=$1`, assignmentID},
 				{`DELETE FROM secondbox.instances WHERE id=$1`, instanceID},
 				{`DELETE FROM secondbox.sandboxes WHERE id=$1`, sandboxID},

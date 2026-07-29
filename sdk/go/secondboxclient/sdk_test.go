@@ -469,7 +469,7 @@ func sandboxJSON(id, state string) string {
 		"id": id, "projectId": "project-1", "profile": "default", "profileRevisionId": "profile-revision-1",
 		"state": state, "desiredState": "running", "generation": 1,
 		"workspace": map[string]any{
-			"id": "workspace-1", "generation": 1, "retainedBytes": 0,
+			"id": "workspace-1", "generation": 1, "state": "ready", "sizeBytes": 1073741824,
 			"createdAt": "2026-07-28T00:00:00Z", "updatedAt": "2026-07-28T00:00:00Z",
 		},
 		"metadata": map[string]string{}, "revision": 1,

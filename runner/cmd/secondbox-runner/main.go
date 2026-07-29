@@ -16,6 +16,7 @@ import (
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/firecracker"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
 
 func main() {
@@ -66,9 +67,19 @@ func run(arguments []string) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("load SecondBox Firecracker config: %w", err)
 	}
+	workspaceStore, err := workspacestore.New(
+		context.Background(),
+		workspacestore.Config{Root: firecrackerConfig.RunnerWorkspaceRoot},
+	)
+	if err != nil {
+		return fmt.Errorf("initialize SecondBox runner WorkspaceStore: %w", err)
+	}
 	manager, err := firecracker.New(firecrackerConfig)
 	if err != nil {
 		return fmt.Errorf("create SecondBox Firecracker backend: %w", err)
+	}
+	if err := manager.SetWorkspaceStore(workspaceStore); err != nil {
+		return fmt.Errorf("bind SecondBox runner WorkspaceStore: %w", err)
 	}
 	if err := manager.Start(context.Background()); err != nil {
 		return fmt.Errorf("start SecondBox Firecracker backend: %w", err)

@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/internal/service"
 	"github.com/SecondStack-AI/SecondBox/internal/store"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
@@ -227,13 +230,14 @@ func createGrantedProfile(
 	t.Helper()
 	if err := databaseStore.RegisterRunnerPool(t.Context(), contracts.RunnerPool{
 		Name: "default-pool", State: contracts.RunnerPoolStateReady,
-		Architectures: []string{"amd64"}, Capabilities: []string{"firecracker", "checkpoint"},
+		Architectures: []string{"amd64"}, Capabilities: []string{"compute", "local-workspace"},
 		CapacityPolicy: map[string]int64{"maxInstances": 100}, ReadyRunnerCount: 1,
 		Revision: 1, CreatedAt: time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
 		UpdatedAt: time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
 	}); err != nil {
 		t.Fatal(err)
 	}
+	seedFixtureHomeRunner(t, "default-pool", "runner-fixture-"+name)
 	profile, err := controlPlane.CreateProfile(
 		t.Context(),
 		admin,
@@ -258,9 +262,99 @@ func createGrantedProfile(
 	return profile
 }
 
+func seedFixtureHomeRunner(t *testing.T, poolName string, runnerID string) {
+	t.Helper()
+	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	now := time.Date(2099, 7, 28, 12, 0, 0, 0, time.UTC)
+	if _, err := pool.Exec(t.Context(), `
+		INSERT INTO secondbox.runners (
+			id,pool_name,name,state,architectures_json,capabilities_json,capacity_json,
+			protocol_versions_json,guest_protocol_minimum,guest_protocol_maximum,
+			software_version,active_connection_id,last_sequence,drain_phase,
+			reserved_capacity_json,artifact_cache_json,last_seen_at,revision,created_at,updated_at
+		) VALUES (
+			$1,$2,$1,'ready','["amd64"]',
+			'["compute","network-policy","storage","cleanup","local-workspace"]',
+			'{"CPUMillis":1000000,"MemoryBytes":1099511627776,"DiskBytes":10995116277760,
+			  "Instances":1000,"Operations":1000}',
+			'[1]',1,1,'fixture','fixture-connection',1,'active',
+			'{"CPUMillis":0,"MemoryBytes":0,"DiskBytes":0,"Instances":0,"Operations":0}',
+			'{"artifactDigests":[]}',
+			$3,1,$3,$3
+		)
+		ON CONFLICT (id) DO UPDATE SET
+			state='ready',active_connection_id='fixture-connection',drain_phase='active',
+			last_seen_at=EXCLUDED.last_seen_at,updated_at=EXCLUDED.updated_at`,
+		runnerID, poolName, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func completeFixtureSandboxCreation(t *testing.T, sandboxID string) {
+	t.Helper()
+	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	var homeRunnerID, workspaceID, operationID string
+	if err := pool.QueryRow(t.Context(), `
+		SELECT workspace.home_runner_id,workspace.id,operation.id
+		FROM secondbox.workspaces AS workspace
+		JOIN secondbox.operations AS operation
+		  ON operation.sandbox_id=workspace.sandbox_id
+		 AND operation.kind='create'
+		WHERE workspace.sandbox_id=$1`,
+		sandboxID,
+	).Scan(&homeRunnerID, &workspaceID, &operationID); err != nil {
+		t.Fatal(err)
+	}
+	stateStore, err := runnercontrol.NewPostgresStateStore(
+		t.Context(),
+		integrationDatabaseURL,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stateStore.Close)
+	connectionID := fmt.Sprintf(
+		"fixture-workspace-create-%d",
+		integrationIdentitySequence.Add(1),
+	)
+	if err := stateStore.OpenConnection(
+		t.Context(),
+		runnercontrol.RunnerIdentity{
+			RunnerID:         homeRunnerID,
+			CredentialSerial: "fixture-workspace-create",
+		},
+		connectionID,
+		1,
+		time.Date(2026, 7, 28, 12, 0, 1, 0, time.UTC),
+	); err != nil {
+		t.Fatal(err)
+	}
+	multirunnerCompleteWorkspaceCreate(
+		t,
+		stateStore,
+		pool,
+		homeRunnerID,
+		connectionID,
+		sandboxID,
+		workspaceID,
+		operationID,
+		1,
+		time.Date(2026, 7, 28, 12, 0, 2, 0, time.UTC),
+	)
+}
+
 func testProfileSpec(cpuMillis int64) contracts.ProfileRevisionSpec {
 	return contracts.ProfileRevisionSpec{
-		Backend: "firecracker", Pool: "default-pool", Architecture: "amd64",
+		Pool: "default-pool", Architecture: "amd64",
 		RuntimeBundleDigest:   "sha256:" + strings.Repeat("a", 64),
 		ToolchainBundleDigest: "sha256:" + strings.Repeat("b", 64),
 		Resources: contracts.ResourcePolicy{
@@ -271,9 +365,9 @@ func testProfileSpec(cpuMillis int64) contracts.ProfileRevisionSpec {
 			InitialState: "stopped", DrainGraceSeconds: 30, IdleSeconds: 300,
 			MaximumDurationSeconds: 3600, LeaseSeconds: 60,
 		},
-		Checkpoint: contracts.CheckpointPolicy{
-			OnStop: true, RetentionSeconds: 86400,
-			SnapshotLimit: 8, ArtifactRetentionSeconds: 86400,
+		Retention: contracts.RetentionPolicy{
+			SnapshotRetentionSeconds: 86400,
+			SnapshotLimit:            8, ArtifactRetentionSeconds: 86400,
 		},
 		Execution: contracts.ExecutionPolicy{
 			MaximumDeadlineMilliseconds: 60000, MaximumBufferedOutputBytes: 1 << 20,
@@ -294,7 +388,7 @@ func testProfileSpec(cpuMillis int64) contracts.ProfileRevisionSpec {
 func generousQuota() contracts.QuotaLimits {
 	return contracts.QuotaLimits{
 		MaxSandboxes: 100, MaxActiveInstances: 100, MaxCPUMillis: 100000,
-		MaxMemoryBytes: 100 << 30, MaxRetainedBytes: 1 << 40,
+		MaxMemoryBytes: 100 << 30, MaxArtifactBytes: 1 << 40,
 		MaxSnapshots: 1000, MaxArtifacts: 1000, MaxPortSessions: 100,
 		MaxConcurrentOperations: 100,
 	}
