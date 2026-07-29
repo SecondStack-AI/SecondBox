@@ -19,7 +19,27 @@ env:
   SECONDBOX_RELEASE_VERSION: ${{ inputs.release-version }}
   SECONDBOX_RELEASE_SOURCE_COMMIT: ${{ github.sha }}
   SECONDBOX_RELEASE_GUEST_TRUSTED_PUBLIC_KEY_SHA256: ${{ vars.SECONDBOX_RELEASE_GUEST_TRUSTED_PUBLIC_KEY_SHA256 }}
-  SECONDBOX_RELEASE_QUALIFICATION_RESULTS_DIRECTORY: ${{ vars.SECONDBOX_RELEASE_QUALIFICATION_RESULTS_DIRECTORY }}
+  SECONDBOX_RELEASE_QUALIFICATION_HOSTS_FILE: ${{ vars.SECONDBOX_RELEASE_QUALIFICATION_HOSTS_FILE }}
+  SECONDBOX_RELEASE_QUALIFICATION_CONTROLLER_DIRECTORY: ${{ vars.SECONDBOX_RELEASE_QUALIFICATION_CONTROLLER_DIRECTORY }}
+  SECONDBOX_MULTIRUNNER_QUALIFIED_DEPLOYMENT: ${{ vars.SECONDBOX_MULTIRUNNER_QUALIFIED_DEPLOYMENT }}
+  SECONDBOX_MULTIRUNNER_API_URL: ${{ vars.SECONDBOX_MULTIRUNNER_API_URL }}
+  SECONDBOX_MULTIRUNNER_PROFILE: ${{ vars.SECONDBOX_MULTIRUNNER_PROFILE }}
+  SECONDBOX_MULTIRUNNER_POOL: ${{ vars.SECONDBOX_MULTIRUNNER_POOL }}
+  SECONDBOX_MULTIRUNNER_RUNNER_A_ID: ${{ vars.SECONDBOX_MULTIRUNNER_RUNNER_A_ID }}
+  SECONDBOX_MULTIRUNNER_RUNNER_B_ID: ${{ vars.SECONDBOX_MULTIRUNNER_RUNNER_B_ID }}
+  SECONDBOX_MULTIRUNNER_HOST_A_ID: ${{ vars.SECONDBOX_MULTIRUNNER_HOST_A_ID }}
+  SECONDBOX_MULTIRUNNER_HOST_B_ID: ${{ vars.SECONDBOX_MULTIRUNNER_HOST_B_ID }}
+  SECONDBOX_MULTIRUNNER_HOST_A_SSH: ${{ vars.SECONDBOX_MULTIRUNNER_HOST_A_SSH }}
+  SECONDBOX_MULTIRUNNER_HOST_B_SSH: ${{ vars.SECONDBOX_MULTIRUNNER_HOST_B_SSH }}
+  SECONDBOX_MULTIRUNNER_HOST_A_SERVICE: ${{ vars.SECONDBOX_MULTIRUNNER_HOST_A_SERVICE }}
+  SECONDBOX_MULTIRUNNER_HOST_B_SERVICE: ${{ vars.SECONDBOX_MULTIRUNNER_HOST_B_SERVICE }}
+  SECONDBOX_MULTIRUNNER_HOST_A_RUNNER_BINARY: ${{ vars.SECONDBOX_MULTIRUNNER_HOST_A_RUNNER_BINARY }}
+  SECONDBOX_MULTIRUNNER_HOST_B_RUNNER_BINARY: ${{ vars.SECONDBOX_MULTIRUNNER_HOST_B_RUNNER_BINARY }}
+  SECONDBOX_MULTIRUNNER_HOST_A_ENVIRONMENT_FILE: ${{ vars.SECONDBOX_MULTIRUNNER_HOST_A_ENVIRONMENT_FILE }}
+  SECONDBOX_MULTIRUNNER_HOST_B_ENVIRONMENT_FILE: ${{ vars.SECONDBOX_MULTIRUNNER_HOST_B_ENVIRONMENT_FILE }}
+  SECONDBOX_MULTIRUNNER_HOST_SENTINEL_PATH: ${{ vars.SECONDBOX_MULTIRUNNER_HOST_SENTINEL_PATH }}
+  SECONDBOX_MULTIRUNNER_TIMEOUT_SECONDS: ${{ vars.SECONDBOX_MULTIRUNNER_TIMEOUT_SECONDS }}
+  SECONDBOX_MULTIRUNNER_PROBE_TIMEOUT_SECONDS: ${{ vars.SECONDBOX_MULTIRUNNER_PROBE_TIMEOUT_SECONDS }}
 
 jobs:
   qualify-packaged-release:
@@ -48,10 +68,14 @@ jobs:
           test "$GITHUB_REPOSITORY" = SecondStack-AI/SecondBox
           test "$GITHUB_REF" = refs/heads/main
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test -n "$SECONDBOX_RELEASE_QUALIFICATION_RESULTS_DIRECTORY"
-          test "$(realpath -e -- "$SECONDBOX_RELEASE_QUALIFICATION_RESULTS_DIRECTORY")" = "$SECONDBOX_RELEASE_QUALIFICATION_RESULTS_DIRECTORY"
-          test -d "$SECONDBOX_RELEASE_QUALIFICATION_RESULTS_DIRECTORY"
-          test ! -L "$SECONDBOX_RELEASE_QUALIFICATION_RESULTS_DIRECTORY"
+          test -n "$SECONDBOX_RELEASE_QUALIFICATION_HOSTS_FILE"
+          test "$(realpath -e -- "$SECONDBOX_RELEASE_QUALIFICATION_HOSTS_FILE")" = "$SECONDBOX_RELEASE_QUALIFICATION_HOSTS_FILE"
+          test -f "$SECONDBOX_RELEASE_QUALIFICATION_HOSTS_FILE"
+          test ! -L "$SECONDBOX_RELEASE_QUALIFICATION_HOSTS_FILE"
+          test -n "$SECONDBOX_RELEASE_QUALIFICATION_CONTROLLER_DIRECTORY"
+          test "$(realpath -e -- "$SECONDBOX_RELEASE_QUALIFICATION_CONTROLLER_DIRECTORY")" = "$SECONDBOX_RELEASE_QUALIFICATION_CONTROLLER_DIRECTORY"
+          test -d "$SECONDBOX_RELEASE_QUALIFICATION_CONTROLLER_DIRECTORY"
+          test ! -L "$SECONDBOX_RELEASE_QUALIFICATION_CONTROLLER_DIRECTORY"
       - name: Verify protected qualification environment configuration
         env:
           GH_TOKEN: ${{ github.token }}
@@ -154,6 +178,53 @@ jobs:
             .tmp/qualification-candidate/release-subjects.json
           jq -e '.status == "passed" and (.subjects | length == 13)' \
             .tmp/qualification-candidate/release-subjects.json >/dev/null
+      - name: Execute packaged non-multi-runner qualification
+        run: |
+          install -d -m 0755 .tmp/qualification-executed
+          node scripts/run-packaged-release-qualification.mjs \
+            .tmp/qualification-candidate \
+            .tmp/qualification-candidate/release-subjects.json \
+            "$SECONDBOX_RELEASE_QUALIFICATION_HOSTS_FILE" \
+            "$SECONDBOX_RELEASE_QUALIFICATION_CONTROLLER_DIRECTORY" \
+            .tmp/qualification-executed \
+            kvm \
+            durability \
+            data-plane \
+            network \
+            security
+      - name: Execute packaged multi-runner qualification
+        env:
+          SECONDBOX_RELEASE_QUALIFICATION_CANDIDATE_DIRECTORY: ${{ github.workspace }}/.tmp/qualification-candidate
+          SECONDBOX_RELEASE_QUALIFICATION_SUBJECT_MANIFEST: ${{ github.workspace }}/.tmp/qualification-candidate/release-subjects.json
+          SECONDBOX_RELEASE_QUALIFICATION_OUTPUT_DIRECTORY: ${{ github.workspace }}/.tmp/qualification-executed
+          SECONDBOX_MULTIRUNNER_API_TOKEN: ${{ secrets.SECONDBOX_MULTIRUNNER_API_TOKEN }}
+          SECONDBOX_MULTIRUNNER_DATABASE_URL: ${{ secrets.SECONDBOX_MULTIRUNNER_DATABASE_URL }}
+          SECONDBOX_MULTIRUNNER_SSH_PRIVATE_KEY: ${{ secrets.SECONDBOX_MULTIRUNNER_SSH_PRIVATE_KEY }}
+          SECONDBOX_MULTIRUNNER_SSH_KNOWN_HOSTS: ${{ vars.SECONDBOX_MULTIRUNNER_SSH_KNOWN_HOSTS }}
+          SECONDBOX_MULTIRUNNER_API_CA_PEM: ${{ vars.SECONDBOX_MULTIRUNNER_API_CA_PEM }}
+          SECONDBOX_MULTIRUNNER_CONTROLLER_HOST_ID: ${{ runner.name }}
+        run: |
+          test -n "$SECONDBOX_MULTIRUNNER_API_TOKEN"
+          test -n "$SECONDBOX_MULTIRUNNER_DATABASE_URL"
+          test -n "$SECONDBOX_MULTIRUNNER_SSH_PRIVATE_KEY"
+          test -n "$SECONDBOX_MULTIRUNNER_SSH_KNOWN_HOSTS"
+          test -n "$SECONDBOX_MULTIRUNNER_API_CA_PEM"
+          install -d -m 0700 .tmp/multirunner-authority
+          identity_file="$GITHUB_WORKSPACE/.tmp/multirunner-authority/id"
+          known_hosts_file="$GITHUB_WORKSPACE/.tmp/multirunner-authority/known_hosts"
+          api_ca_file="$GITHUB_WORKSPACE/.tmp/multirunner-authority/api-ca.pem"
+          cleanup_multirunner_authority() {
+            rm -f -- "$identity_file" "$known_hosts_file" "$api_ca_file"
+          }
+          trap cleanup_multirunner_authority EXIT
+          printf '%s\n' "$SECONDBOX_MULTIRUNNER_SSH_PRIVATE_KEY" >"$identity_file"
+          printf '%s\n' "$SECONDBOX_MULTIRUNNER_SSH_KNOWN_HOSTS" >"$known_hosts_file"
+          printf '%s\n' "$SECONDBOX_MULTIRUNNER_API_CA_PEM" >"$api_ca_file"
+          chmod 600 "$identity_file" "$known_hosts_file" "$api_ca_file"
+          export SECONDBOX_MULTIRUNNER_SSH_IDENTITY_FILE="$identity_file"
+          export SECONDBOX_MULTIRUNNER_SSH_KNOWN_HOSTS_FILE="$known_hosts_file"
+          export SECONDBOX_MULTIRUNNER_API_CA_FILE="$api_ca_file"
+          scripts/test-multirunner.sh
       - name: Verify every protected qualification record
         run: |
           install -d -m 0755 \
@@ -163,7 +234,7 @@ jobs:
             .tmp/qualification-candidate/release-subjects.json \
             .tmp/qualification-validation/release-subjects.json
           node scripts/import-release-qualification-evidence.mjs \
-            "$SECONDBOX_RELEASE_QUALIFICATION_RESULTS_DIRECTORY" \
+            .tmp/qualification-executed \
             .tmp/qualification-validation
           for gate in \
             kvm \
@@ -200,6 +271,7 @@ jobs:
             "$GITHUB_WORKSPACE/.tmp/release-docker-config" \
             "$GITHUB_WORKSPACE/.tmp/candidate-authority" \
             "$GITHUB_WORKSPACE/.tmp/qualification-candidate" \
+            "$GITHUB_WORKSPACE/.tmp/qualification-executed" \
             "$GITHUB_WORKSPACE/.tmp/qualification-guest-source" \
             "$GITHUB_WORKSPACE/.tmp/qualification-validation" \
             "$GITHUB_WORKSPACE/.tmp/release-candidate-import" \
