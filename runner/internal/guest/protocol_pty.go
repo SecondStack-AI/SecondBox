@@ -67,7 +67,6 @@ func (p *protocolPTYProcess) Resize(rows, columns uint32) error {
 func (p *protocolPTYProcess) Wait() error {
 	p.waitOnce.Do(func() {
 		p.waitErr = p.command.Wait()
-		p.waitErr = errors.Join(p.waitErr, p.master.Close())
 		close(p.waitDone)
 	})
 	<-p.waitDone

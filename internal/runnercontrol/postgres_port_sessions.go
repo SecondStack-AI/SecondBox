@@ -216,10 +216,7 @@ func (relay *PostgresFrameRelay) ConsumePortSession(
 		return PortTunnel{}, fmt.Errorf("SecondBox Port tunnel consume transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	tunnel, err := scanPortTunnel(tx.QueryRow(ctx, portTunnelSelect+`
-		WHERE port.project_id=$1 AND port.id=$2 FOR UPDATE OF port,session`,
-		projectID, sessionID,
-	))
+	tunnel, err := lockPortTunnel(ctx, tx, projectID, "", sessionID)
 	if err != nil {
 		return PortTunnel{}, err
 	}
@@ -293,10 +290,9 @@ func (relay *PostgresFrameRelay) ClosePortSession(
 			return contracts.PortSession{}, fmt.Errorf("SecondBox PortSession close replay lookup: %w", err)
 		}
 	}
-	tunnel, err := scanPortTunnel(tx.QueryRow(ctx, portTunnelSelect+`
-		WHERE port.project_id=$1 AND port.sandbox_id=$2 AND port.id=$3 FOR UPDATE OF port,session`,
-		input.ProjectID, input.SandboxID, input.SessionID,
-	))
+	tunnel, err := lockPortTunnel(
+		ctx, tx, input.ProjectID, input.SandboxID, input.SessionID,
+	)
 	if err != nil {
 		return contracts.PortSession{}, err
 	}
@@ -363,10 +359,7 @@ func (relay *PostgresFrameRelay) QueuePortClientBytes(
 		return fmt.Errorf("SecondBox Port client-byte transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	tunnel, err := scanPortTunnel(tx.QueryRow(ctx, portTunnelSelect+`
-		WHERE port.project_id=$1 AND port.id=$2 FOR UPDATE OF port,session`,
-		projectID, sessionID,
-	))
+	tunnel, err := lockPortTunnel(ctx, tx, projectID, "", sessionID)
 	if err != nil {
 		return err
 	}
@@ -511,10 +504,7 @@ func (relay *PostgresFrameRelay) AcknowledgePortTunnelEvent(
 		return fmt.Errorf("SecondBox Port event acknowledgement transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	tunnel, err := scanPortTunnel(tx.QueryRow(ctx, portTunnelSelect+`
-		WHERE port.project_id=$1 AND port.id=$2 FOR UPDATE OF port,session`,
-		projectID, sessionID,
-	))
+	tunnel, err := lockPortTunnel(ctx, tx, projectID, "", sessionID)
 	if err != nil {
 		return err
 	}
@@ -735,10 +725,9 @@ func (relay *PostgresFrameRelay) terminatePortSession(
 		return fmt.Errorf("SecondBox Port terminal projection transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	tunnel, err := scanPortTunnel(tx.QueryRow(ctx, portTunnelSelect+`
-		WHERE port.project_id=$1 AND port.id=$2 FOR UPDATE OF port,session`,
-		expected.ProjectID, expected.Session.ID,
-	))
+	tunnel, err := lockPortTunnel(
+		ctx, tx, expected.ProjectID, "", expected.Session.ID,
+	)
 	if err != nil {
 		return err
 	}
@@ -862,6 +851,36 @@ const portTunnelSelect = `
 	  session.stream_id,session.fencing_token,port.guest_port,port.stream_window_bytes
 	FROM secondbox.port_sessions AS port
 	JOIN secondbox.data_plane_sessions AS session ON session.id=port.data_plane_session_id`
+
+// lockPortTunnel follows the inbound relay's session-then-port lock order.
+func lockPortTunnel(
+	ctx context.Context,
+	tx pgx.Tx,
+	projectID string,
+	sandboxID string,
+	sessionID string,
+) (PortTunnel, error) {
+	var lockedSessionID string
+	err := tx.QueryRow(ctx, `
+		SELECT session.id
+		FROM secondbox.data_plane_sessions AS session
+		JOIN secondbox.port_sessions AS port ON port.data_plane_session_id=session.id
+		WHERE port.project_id=$1 AND ($2='' OR port.sandbox_id=$2) AND port.id=$3
+		FOR UPDATE OF session`,
+		projectID, sandboxID, sessionID,
+	).Scan(&lockedSessionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PortTunnel{}, ports.ErrPortSessionNotFound
+	}
+	if err != nil {
+		return PortTunnel{}, fmt.Errorf("SecondBox PortSession data-plane lock: %w", err)
+	}
+	return scanPortTunnel(tx.QueryRow(ctx, portTunnelSelect+`
+		WHERE port.project_id=$1 AND ($2='' OR port.sandbox_id=$2) AND port.id=$3
+		FOR UPDATE OF port`,
+		projectID, sandboxID, lockedSessionID,
+	))
+}
 
 func scanPortTunnel(row relayRow) (PortTunnel, error) {
 	var tunnel PortTunnel

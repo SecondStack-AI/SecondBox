@@ -137,7 +137,7 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 	}, now)
 	clientBytes := claimPortFrameEventually(t, relay, seed, now)
 	if !bytes.Equal(clientBytes.GetBytes().GetData(), clientPayload) {
-		t.Fatalf("runner-bound Port bytes = %v", clientBytes.GetBytes().GetData())
+		t.Fatalf("runner-bound Port frame = %v, want bytes %v", clientBytes, clientPayload)
 	}
 
 	runnerPayload := []byte{0xff, 0, 3, 0}
