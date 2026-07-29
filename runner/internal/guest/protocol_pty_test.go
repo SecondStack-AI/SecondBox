@@ -3,9 +3,11 @@ package microvmguest
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -55,6 +57,25 @@ func TestProtocolPTYProcessIsRealTerminalWithMergedOutputAndResize(t *testing.T)
 		!strings.Contains(normalized, "stderr\n") ||
 		!strings.Contains(normalized, "40 120\n") {
 		t.Fatalf("PTY output = %q", normalized)
+	}
+}
+
+func TestProtocolPTYProcessWaitPreservesUnreadOutput(t *testing.T) {
+	cmd := exec.Command("/bin/sh", "-c", "printf 'drain-after-wait'")
+	process, err := startProtocolPTYProcess(cmd, &guestv1.PtyDimensions{Rows: 24, Columns: 80})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer process.Close()
+	if err := process.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	output, readErr := io.ReadAll(process)
+	if readErr != nil && !errors.Is(readErr, syscall.EIO) {
+		t.Fatal(readErr)
+	}
+	if string(output) != "drain-after-wait" {
+		t.Fatalf("PTY output after wait = %q", output)
 	}
 }
 
