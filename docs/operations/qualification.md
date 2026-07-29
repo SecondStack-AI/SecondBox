@@ -19,21 +19,35 @@ The ordinary CI workflow runs `scripts/test-clean-clone-isolation.sh --non-kvm` 
 
 The optional Compose `same-host-runner` profile is deployment wiring, not part of this portable gate and not KVM evidence. The backup script enforces a PostgreSQL-wide publication fence and rejects non-quiescent runtime authority. The checkpoint receiver retains its verified spool and leaves PostgreSQL publication authority unchanged when object-store publication is interrupted, then completes idempotently after the store and receiver recover. `just test-backup-restore` restores a recovery point into isolated database and object namespaces, enrolls a fresh mTLS Runner protocol authority, streams and hashes the retained checkpoint through the production scheduler and checkpoint sender, and proves current and stale generation behavior through the restored HTTP API. This qualifies portable recovery mechanics, not a privileged Firecracker boot.
 
-## Firecracker qualified-host contract
+## Packaged qualification harness
 
-Run `sudo --preserve-env just test-firecracker` only on a disposable, dedicated Linux runner host. The gate fails before running tests unless every prerequisite is explicit:
+`scripts/run-packaged-release-qualification.mjs` is the operator-driven runner for the KVM, durability, data-plane, network, and security gates. It accepts only explicit positional inputs: the reconstructed candidate directory, that directory's canonical `release-subjects.json`, a qualified-host inventory, a scenario-controller directory, an empty output directory, and one or more named gates. It does not build from the checkout, choose hosts, discover a prior result, synthesize a pass, or provide a prerequisite default.
 
-- `SECONDBOX_FIRECRACKER_QUALIFIED_HOST=1` acknowledges that the host is dedicated to destructive qualification.
-- `/dev/kvm` and `/dev/net/tun` are readable and writable by the root test process. Nested virtualization must be enabled when the host is itself virtualized.
-- cgroup v2 is mounted and exposes the `cpu`, `memory`, and `pids` controllers. The filesystem containing the jailer root permits device nodes.
-- `go`, `ip`, `iptables`, `ip6tables`, `nft`, `mkfs.ext4`, `findmnt`, `mountpoint`, `sysctl`, and `timeout` are installed. The process has the effective capabilities needed to create network namespaces, TAP devices, routes, firewall rules, mounts, and cgroups.
-- `SECONDBOX_RUNNER_FIRECRACKER_PATH` and `SECONDBOX_RUNNER_FIRECRACKER_JAILER_PATH` identify the exact executable release under test.
-- `SECONDBOX_RUNNER_MICROVM_ARTIFACTS_DIR` contains `kernel`, `rootfs.ext4`, `shared.img`, provenance, checksums, manifest, and signature files from one immutable bundle. `SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY` and `SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256` identify its trusted verification key and pinned DER fingerprint.
-- `SECONDBOX_RUNNER_NETWORK_POLICY_NFT_PATH`, `SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS`, `SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL`, `SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES`, `SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS`, and `SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM` identify the exact fail-closed nftables and controlled-DNS qualification boundary.
-- `SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT`, `SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT`, and `SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT` define the ordered pressure hysteresis. Workspace and `SECONDBOX_RUNNER_CHECKPOINT_RESTORE_SPOOL_DIR` filesystems must be dedicated, non-root, and distinct; dm-thin additionally requires the exact pool device.
-- The host has enough free RAM and disk for the profile under test plus bounded failure overhead. Qualification must not share its thin pool, workspace directory, run directory, bridge, TAP prefix, or cgroup subtree with a production runner.
+The host inventory conforms to `release/qualification-hosts-schema.json`. A host declaration is inventory, not proof: the `qualified-host-prerequisites` controller must inspect the actual host before any KVM scenario and capture `/dev/kvm`, TUN/TAP, cgroup-v2 controller, jailer-filesystem, network-namespace, nftables, storage, memory, disk, and privilege evidence. KVM qualification requires two dedicated Linux/amd64 KVM Runner hosts and includes both packaged systemd and digest-pinned Compose deployments. Durability also requires two such hosts; data-plane, network, and security require at least one.
 
-The gate verifies the signed bundle, validates privileged staging, boots the jailed Firecracker/network path through the existing smoke suite, and runs the destructive network-namespace policy test. A non-root invocation, missing artifact, inaccessible kernel feature, or skipped host suite is a failure.
+The controller directory has an executable regular file at `<gate>/<scenario-id>` for every scenario in `release/qualification-requirements.json`, with no missing or extra file inside a requested gate. The harness invokes each executable directly, without a shell command string, with these six arguments:
+
+1. canonical candidate directory;
+2. canonical subject manifest;
+3. canonical qualified-host inventory;
+4. a new per-scenario artifact directory;
+5. gate;
+6. scenario ID.
+
+The controller must drive the installed package, digest-pinned images, signed guest bundle, and released clients on the named hosts. Source-tree Go tests, a copied success marker, and a controller that merely describes an intended scenario are not release qualification. The controller writes `result.json` conforming to `release/qualification-scenario-result-schema.json` plus every referenced raw observation into its artifact directory. The result binds the exact release version, commit, subject-manifest digest, host IDs, and subject IDs. The harness captures controller stdout and stderr, rejects unknown hosts or subjects, missing/extra/symbolic-link artifacts, checksum drift, skipped/failed controllers, and candidate byte drift, then creates the gate record and runs the canonical record verifier.
+
+`just test-firecracker` is the packaged KVM-only entry point and requires all five paths explicitly:
+
+```sh
+export SECONDBOX_RELEASE_QUALIFICATION_CANDIDATE_DIRECTORY=/secure/candidate
+export SECONDBOX_RELEASE_QUALIFICATION_SUBJECT_MANIFEST=/secure/candidate/release-subjects.json
+export SECONDBOX_RELEASE_QUALIFICATION_HOSTS_FILE=/secure/qualification/qualified-hosts.json
+export SECONDBOX_RELEASE_QUALIFICATION_CONTROLLER_DIRECTORY=/secure/qualification/controllers
+export SECONDBOX_RELEASE_QUALIFICATION_OUTPUT_DIRECTORY=/secure/qualification/output
+just test-firecracker
+```
+
+The protected workflow calls the same harness once for all five non-multi-runner gates after reconstructing and hashing the protected candidate. A missing packaged artifact, controller, host, KVM capability, destructive-test prerequisite, result receipt, or evidence file fails the workflow; it is never represented as a skip.
 
 ## Runner qualification coverage matrix
 
@@ -57,7 +71,7 @@ The removed `launcher_probe`, `privileged_launcher`, `sandbox_host_http`, `sourc
 
 ## Reboot and destructive disk-pressure qualification
 
-Reboot recovery and destructive real-host disk pressure require an external host controller because the process running the test cannot survive or safely coordinate every event it validates. The repository's portable disk-pressure tests establish the Runner policy and probe contract, but no destructive filesystem or thin-pool fill record is included in `test-firecracker`; host-level pressure qualification may not be claimed as passing.
+Reboot recovery and destructive real-host disk pressure require operator controllers because the process running on the mutated host cannot survive or safely coordinate every event it validates. The repository's portable disk-pressure tests establish the Runner policy and probe contract, but they are not accepted by the packaged harness as destructive host evidence.
 
 A reboot controller must persist the expected assignment, workspace, TAP, cgroup, and process evidence outside the runner; reboot the host; restart the packaged runner through its system service; and verify bounded orphan cleanup, generation fencing, workspace integrity, and readiness before scheduling new work.
 
@@ -65,7 +79,9 @@ A disk-pressure controller must use a dedicated bounded filesystem or thin pool;
 
 ## Multi-runner qualification
 
-`just test-multirunner` deliberately fails until a remote-runner qualification controller is supplied. A qualified topology requires two independent hosts that each satisfy the Firecracker contract, distinct revocable runner credentials, one compatible runner pool, shared PostgreSQL authority, shared S3-compatible checkpoint storage, and automated placement, drain, loss, stale-message, fencing, and stopped-Sandbox relocation scenarios.
+`just test-multirunner` drives two explicit remote systemd Runner hosts after the packaged KVM record exists. Both hosts must be distinct dedicated Linux/amd64 KVM machines in the qualified inventory, run the candidate's exact Runner binary, use distinct revocable mTLS identities, and share the qualification PostgreSQL and checkpoint authorities. The controller proves placement, bounded drain, stopped-Sandbox relocation with exact checkpoint bytes, crash uncertainty without premature replacement, authenticated stale-result rejection, and cross-Runner generation fencing. It adds only the multi-runner record and candidate-bound scenario artifacts to the existing qualification output.
+
+The controller is destructive and refuses implicit hosts, credentials, paths, timeouts, SSH trust, API trust, or database targets. Run it only against a fresh disposable qualification deployment whose database name contains `qualification`; partial state is intentionally retained after failure. The complete protected-environment inventory, host preparation, secret boundary, and scenario sequence are documented in [multi-runner qualification](multi-runner-qualification.md).
 
 ## Structured release records
 
@@ -75,11 +91,13 @@ Each record must conform to `release/qualification-record-schema.json` and pass 
 
 `release/qualification-requirements.json` is the authoritative scenario matrix. KVM qualification requires two dedicated Linux/amd64 KVM Runner hosts and proves both packaged systemd and Compose deployment. Multi-runner and durability qualification require two dedicated KVM Runner hosts. Data-plane, network, and security records require at least one such host. The verifier also rejects duplicate host identities, an incomplete scenario set, unexpected scenarios, candidate identity drift, a changed subject-manifest digest, and a completion timestamp before the start timestamp.
 
+The non-multi-runner records are created only by `scripts/run-packaged-release-qualification.mjs` from controllers that it executes during the protected job. The workflow does not import pre-authored KVM, durability, data-plane, network, or security records from a host directory. Per-scenario result receipts and captured observations remain beneath `qualification/scenarios/<gate>/<scenario-id>/` and every file is checksum-bound into its record.
+
 The data-plane record covers buffered and streaming Exec, typed spawn failures, deadline/cancellation/output limits, PTY detach and reattach, file transfer, Artifacts, exposed ports, the Go and TypeScript SDKs, the CLI, and the Flue adapter. The network record covers default deny for private, loopback, link-local, cloud-metadata, Runner-host, DNS-rebinding, and unobserved-domain destinations, plus explicit-profile allow and the authenticated tunnel as the exclusive exposed-port path. The security record covers application tenant isolation, the malicious-guest host boundary, Runner credential revocation, artifact substitution rejection, and control-plane secret isolation.
 
 `.github/workflows/release-qualification.yml` is the only Actions authority allowed to upload `release-qualification-<commit>`. It is manually dispatched from protected `main`, runs in the protected `release-qualification` environment on the `secondbox-release` Runner group, and requires the `secondbox-release-qualification` host label. It reconstructs the exact candidate identified by a canonical protected candidate run, verifies all six records, and records the repository, workflow, event, environment, commit, run, attempt, job, Runner name, OS, and architecture. The artifact also includes the environment API response captured by the job; the verifier requires a reviewer, self-review prevention, and a protected-branch-only policy.
 
-The canonical workflow also requires its actual Actions Runner name to appear as a host ID in every imported record. The evidence workflow queries the Actions run and jobs APIs for the supplied run ID and compares them with that protected workflow identity. It rejects another workflow path, branch, event, commit, failed or duplicate job, generic Runner group, missing label, changed Runner name, changed run attempt, absent host binding, or caller-authored run ID. Merely uploading a same-repository artifact with the expected name is not authority. The qualified host must exercise already packaged and content-addressed release subjects; source-tree binaries or replacement subject manifests are not release qualification.
+The canonical workflow also requires its actual Actions Runner name to appear as a host ID in every record. The evidence workflow queries the Actions run and jobs APIs for the supplied run ID and compares them with that protected workflow identity. It rejects another workflow path, branch, event, commit, failed or duplicate job, generic Runner group, missing label, changed Runner name, changed run attempt, absent host binding, or caller-authored run ID. Merely uploading a same-repository artifact with the expected name is not authority. The qualified host must exercise already packaged and content-addressed release subjects; source-tree binaries or replacement subject manifests are not release qualification.
 
 ## Release qualification status
 
