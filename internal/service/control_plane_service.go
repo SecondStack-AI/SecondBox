@@ -100,6 +100,9 @@ type ArtifactStore interface {
 type ObservabilityStore interface {
 	AppendAuditEvent(ctx context.Context, event contracts.AuditEvent) error
 	ReadMetricsSnapshot(ctx context.Context) (contracts.MetricsSnapshot, error)
+	ReadSandboxTiming(ctx context.Context, tenantRef, subjectRef, sandboxID string, limit int) (contracts.SandboxTiming, error)
+	ReadOperationTiming(ctx context.Context, tenantRef, subjectRef, operationID string) (contracts.OperationTiming, error)
+	ReadDeploymentTiming(ctx context.Context, since, until time.Time) (contracts.DeploymentTimingSummary, error)
 }
 
 // ControlPlaneStore is the service's composite consumer-side store contract.

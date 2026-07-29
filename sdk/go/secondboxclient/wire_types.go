@@ -19,24 +19,31 @@ type (
 	ServiceAccountScope = string
 	ProblemCode         = string
 
-	Profile                = contracts.Profile
-	ProfileRevisionSpec    = contracts.ProfileRevisionSpec
-	ResourcePolicy         = contracts.ResourcePolicy
-	LifecyclePolicy        = contracts.LifecyclePolicy
-	RetentionPolicy        = contracts.RetentionPolicy
-	ExecutionPolicy        = contracts.ExecutionPolicy
-	NetworkPolicy          = contracts.NetworkPolicy
-	NetworkDestination     = contracts.NetworkDestination
-	PortPolicy             = contracts.PortPolicy
-	CreateProfileRequest   = contracts.CreateProfileRequest
-	Sandbox                = contracts.Sandbox
-	CreateSandboxRequest   = contracts.CreateSandboxRequest
-	RestoreSnapshotRequest = contracts.RestoreSnapshotRequest
-	CreateSnapshotRequest  = contracts.CreateSnapshotRequest
-	Snapshot               = contracts.Snapshot
-	SnapshotPage           = contracts.SnapshotPage
-	Operation              = contracts.Operation
-	Problem                = contracts.Problem
+	Profile                 = contracts.Profile
+	ProfileRevisionSpec     = contracts.ProfileRevisionSpec
+	ResourcePolicy          = contracts.ResourcePolicy
+	LifecyclePolicy         = contracts.LifecyclePolicy
+	RetentionPolicy         = contracts.RetentionPolicy
+	ExecutionPolicy         = contracts.ExecutionPolicy
+	NetworkPolicy           = contracts.NetworkPolicy
+	NetworkDestination      = contracts.NetworkDestination
+	PortPolicy              = contracts.PortPolicy
+	CreateProfileRequest    = contracts.CreateProfileRequest
+	Sandbox                 = contracts.Sandbox
+	CreateSandboxRequest    = contracts.CreateSandboxRequest
+	RestoreSnapshotRequest  = contracts.RestoreSnapshotRequest
+	CreateSnapshotRequest   = contracts.CreateSnapshotRequest
+	Snapshot                = contracts.Snapshot
+	SnapshotPage            = contracts.SnapshotPage
+	Operation               = contracts.Operation
+	DurationPercentiles     = contracts.DurationPercentiles
+	BootStageTiming         = contracts.BootStageTiming
+	BootTiming              = contracts.BootTiming
+	OperationTiming         = contracts.OperationTiming
+	ExecTiming              = contracts.ExecTiming
+	SandboxTiming           = contracts.SandboxTiming
+	DeploymentTimingSummary = contracts.DeploymentTimingSummary
+	Problem                 = contracts.Problem
 )
 
 const (

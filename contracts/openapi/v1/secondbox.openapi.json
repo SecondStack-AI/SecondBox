@@ -313,6 +313,27 @@
         }
       }
     },
+    "/v1/timings": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
+      "get": {
+        "tags": ["Observability"],
+        "operationId": "getDeploymentTiming",
+        "parameters": [
+          {"$ref": "#/components/parameters/TimingWindowSeconds"},
+          {"$ref": "#/components/parameters/RequestID"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded current-deployment timing percentiles without resource identifiers.",
+            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DeploymentTimingSummary"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
     "/v1/sandboxes": {
       "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
@@ -408,6 +429,29 @@
           "404": {"$ref": "#/components/responses/NotFound"},
           "409": {"$ref": "#/components/responses/Conflict"},
           "412": {"$ref": "#/components/responses/PreconditionFailed"}
+        }
+      }
+    },
+    "/v1/sandboxes/{sandboxId}/timings": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
+      "get": {
+        "tags": ["Observability"],
+        "operationId": "getSandboxTiming",
+        "parameters": [
+          {"$ref": "#/components/parameters/SandboxID"},
+          {"$ref": "#/components/parameters/TimingLimit"},
+          {"$ref": "#/components/parameters/RequestID"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded Project-scoped Sandbox lifecycle, boot-stage, and Exec timing history.",
+            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SandboxTiming"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"}
         }
       }
     },
@@ -559,6 +603,27 @@
             "description": "Project-scoped asynchronous Operation.",
             "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Operation"}}}
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/v1/operations/{operationId}/timings": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
+      "get": {
+        "tags": ["Observability"],
+        "operationId": "getOperationTiming",
+        "parameters": [
+          {"$ref": "#/components/parameters/OperationID"},
+          {"$ref": "#/components/parameters/RequestID"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Project-scoped Operation queue, execution, and boot-stage timing.",
+            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperationTiming"}}}
           },
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
@@ -1374,6 +1439,20 @@
         "required": false,
         "schema": {"type": "integer", "minimum": 1, "maximum": 200}
       },
+      "TimingLimit": {
+        "name": "limit",
+        "in": "query",
+        "required": true,
+        "description": "Maximum number of recent Operations and recent Execs returned independently.",
+        "schema": {"type": "integer", "minimum": 1, "maximum": 200}
+      },
+      "TimingWindowSeconds": {
+        "name": "windowSeconds",
+        "in": "query",
+        "required": true,
+        "description": "Current-deployment aggregation window. API timing uses fixed one-minute buckets.",
+        "schema": {"type": "integer", "format": "int64", "minimum": 60, "maximum": 3600}
+      },
       "PageCursor": {
         "name": "cursor",
         "in": "query",
@@ -1929,6 +2008,175 @@
           "startedAt": {"$ref": "#/components/schemas/Timestamp"},
           "completedAt": {"$ref": "#/components/schemas/Timestamp"},
           "updatedAt": {"$ref": "#/components/schemas/Timestamp"}
+        }
+      },
+      "DurationPercentiles": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["count"],
+        "properties": {
+          "count": {"type": "integer", "format": "int64", "minimum": 0},
+          "p50Milliseconds": {"type": "integer", "format": "int64", "minimum": 0},
+          "p95Milliseconds": {"type": "integer", "format": "int64", "minimum": 0},
+          "p99Milliseconds": {"type": "integer", "format": "int64", "minimum": 0}
+        }
+      },
+      "BootStage": {
+        "type": "string",
+        "enum": ["artifact_verify", "workspace_attach", "network_setup", "compute_launch", "guest_negotiation", "ready"]
+      },
+      "BootStageTiming": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["stage", "observedAt", "receivedAt", "elapsedMilliseconds", "cumulativeMilliseconds"],
+        "properties": {
+          "stage": {"$ref": "#/components/schemas/BootStage"},
+          "observedAt": {"$ref": "#/components/schemas/Timestamp"},
+          "receivedAt": {"$ref": "#/components/schemas/Timestamp"},
+          "elapsedMilliseconds": {"type": "integer", "format": "int64", "minimum": 0},
+          "cumulativeMilliseconds": {"type": "integer", "format": "int64", "minimum": 0}
+        }
+      },
+      "BootTiming": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["generation", "durationMilliseconds", "completed", "stages"],
+        "properties": {
+          "generation": {"type": "integer", "format": "int64", "minimum": 1},
+          "durationMilliseconds": {"type": "integer", "format": "int64", "minimum": 0},
+          "completed": {"type": "boolean"},
+          "stages": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {"$ref": "#/components/schemas/BootStageTiming"}
+          }
+        }
+      },
+      "OperationTiming": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operationId", "sandboxId", "kind", "state", "createdAt", "boots"],
+        "properties": {
+          "operationId": {"$ref": "#/components/schemas/OpaqueID"},
+          "sandboxId": {"$ref": "#/components/schemas/OpaqueID"},
+          "kind": {"$ref": "#/components/schemas/OperationKind"},
+          "state": {"$ref": "#/components/schemas/OperationState"},
+          "createdAt": {"$ref": "#/components/schemas/Timestamp"},
+          "startedAt": {"$ref": "#/components/schemas/Timestamp"},
+          "completedAt": {"$ref": "#/components/schemas/Timestamp"},
+          "queueMilliseconds": {"type": "integer", "format": "int64", "minimum": 0},
+          "executionMilliseconds": {"type": "integer", "format": "int64", "minimum": 0},
+          "totalMilliseconds": {"type": "integer", "format": "int64", "minimum": 0},
+          "boots": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {"$ref": "#/components/schemas/BootTiming"}
+          }
+        }
+      },
+      "ExecTiming": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sessionId", "mode", "outcome", "elapsedMilliseconds", "createdAt", "completedAt"],
+        "properties": {
+          "sessionId": {"$ref": "#/components/schemas/OpaqueID"},
+          "mode": {"type": "string", "enum": ["buffered", "streaming"]},
+          "outcome": {"type": "string", "enum": ["exited", "deadline_exceeded"]},
+          "elapsedMilliseconds": {"type": "integer", "format": "int64", "minimum": 0},
+          "createdAt": {"$ref": "#/components/schemas/Timestamp"},
+          "completedAt": {"$ref": "#/components/schemas/Timestamp"}
+        }
+      },
+      "SandboxTiming": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sandboxId", "operations", "execs"],
+        "properties": {
+          "sandboxId": {"$ref": "#/components/schemas/OpaqueID"},
+          "operations": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {"$ref": "#/components/schemas/OperationTiming"}
+          },
+          "execs": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {"$ref": "#/components/schemas/ExecTiming"}
+          }
+        }
+      },
+      "BootStageTimingSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["stage", "duration"],
+        "properties": {
+          "stage": {"$ref": "#/components/schemas/BootStage"},
+          "duration": {"$ref": "#/components/schemas/DurationPercentiles"}
+        }
+      },
+      "ExecTimingSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mode", "outcome", "duration"],
+        "properties": {
+          "mode": {"type": "string", "enum": ["buffered", "streaming"]},
+          "outcome": {"type": "string", "enum": ["exited", "deadline_exceeded"]},
+          "duration": {"$ref": "#/components/schemas/DurationPercentiles"}
+        }
+      },
+      "OperationTimingSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "state", "queue", "execution", "total"],
+        "properties": {
+          "kind": {"$ref": "#/components/schemas/OperationKind"},
+          "state": {"$ref": "#/components/schemas/OperationState"},
+          "queue": {"$ref": "#/components/schemas/DurationPercentiles"},
+          "execution": {"$ref": "#/components/schemas/DurationPercentiles"},
+          "total": {"$ref": "#/components/schemas/DurationPercentiles"}
+        }
+      },
+      "HTTPRouteTimingSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["route", "statusClass", "duration"],
+        "properties": {
+          "route": {"type": "string", "minLength": 1, "maxLength": 256},
+          "statusClass": {"type": "string", "enum": ["1xx", "2xx", "3xx", "4xx", "5xx", "other"]},
+          "duration": {"$ref": "#/components/schemas/DurationPercentiles"}
+        }
+      },
+      "DeploymentTimingSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["windowSeconds", "observedAt", "boot", "bootStages", "exec", "execSeries", "api", "apiSeries", "operations"],
+        "properties": {
+          "windowSeconds": {"type": "integer", "format": "int64", "minimum": 60, "maximum": 3600},
+          "observedAt": {"$ref": "#/components/schemas/Timestamp"},
+          "boot": {"$ref": "#/components/schemas/DurationPercentiles"},
+          "bootStages": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {"$ref": "#/components/schemas/BootStageTimingSummary"}
+          },
+          "dominantBootStage": {"$ref": "#/components/schemas/BootStageTimingSummary"},
+          "exec": {"$ref": "#/components/schemas/DurationPercentiles"},
+          "execSeries": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {"$ref": "#/components/schemas/ExecTimingSummary"}
+          },
+          "api": {"$ref": "#/components/schemas/DurationPercentiles"},
+          "apiSeries": {
+            "type": "array",
+            "maxItems": 512,
+            "items": {"$ref": "#/components/schemas/HTTPRouteTimingSummary"}
+          },
+          "operations": {
+            "type": "array",
+            "maxItems": 30,
+            "items": {"$ref": "#/components/schemas/OperationTimingSummary"}
+          }
         }
       },
       "WaitSandboxRequest": {

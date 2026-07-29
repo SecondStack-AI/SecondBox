@@ -596,6 +596,10 @@ func TestHTTPAuthenticationStrictCreateAndFixedCardinalityMetrics(t *testing.T) 
 		`secondbox_http_request_duration_seconds_count{route="POST /v1/sandboxes",status_class="2xx"} 1`,
 		`secondbox_http_request_duration_seconds_count{route="POST /v1/sandboxes",status_class="4xx"} 1`,
 		"# TYPE secondbox_operation_duration_seconds histogram",
+		"# TYPE secondbox_sandbox_start_duration_seconds histogram",
+		"secondbox_sandbox_start_duration_seconds_count 0",
+		"# TYPE secondbox_sandbox_start_stage_duration_seconds histogram",
+		"# TYPE secondbox_exec_duration_seconds histogram",
 	} {
 		if !strings.Contains(metricsBody, required) {
 			t.Errorf("metrics lack %q: %s", required, metricsBody)

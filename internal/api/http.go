@@ -86,9 +86,11 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	mux.Handle("PATCH /v1/runner-pools/{runnerPoolName}", apiHandler.authenticate(http.HandlerFunc(apiHandler.updateRunnerPool)))
 	mux.Handle("GET /v1/runners", apiHandler.authenticate(http.HandlerFunc(apiHandler.listRunners)))
 	mux.Handle("GET /v1/runners/{runnerID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getRunner)))
+	mux.Handle("GET /v1/timings", apiHandler.authenticate(http.HandlerFunc(apiHandler.getDeploymentTiming)))
 	mux.Handle("GET /v1/sandboxes", apiHandler.authenticate(http.HandlerFunc(apiHandler.listSandboxes)))
 	mux.Handle("POST /v1/sandboxes", apiHandler.authenticate(http.HandlerFunc(apiHandler.createSandbox)))
 	mux.Handle("GET /v1/sandboxes/{sandboxID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getSandbox)))
+	mux.Handle("GET /v1/sandboxes/{sandboxID}/timings", apiHandler.authenticate(http.HandlerFunc(apiHandler.getSandboxTiming)))
 	mux.Handle("DELETE /v1/sandboxes/{sandboxID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.deleteSandbox)))
 	mux.Handle("POST /v1/sandboxes/{sandboxAction}", apiHandler.authenticate(http.HandlerFunc(apiHandler.mutateSandbox)))
 	mux.Handle("POST /v1/sandboxes/{sandboxID}/leases", apiHandler.authenticate(http.HandlerFunc(apiHandler.acquireLease)))
@@ -123,6 +125,7 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	mux.Handle("DELETE /v1/leases/{leaseID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.releaseLease)))
 	mux.Handle("POST /v1/leases/{leaseAction}", apiHandler.authenticate(http.HandlerFunc(apiHandler.renewLease)))
 	mux.Handle("GET /v1/operations/{operationID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getOperation)))
+	mux.Handle("GET /v1/operations/{operationID}/timings", apiHandler.authenticate(http.HandlerFunc(apiHandler.getOperationTiming)))
 	return apiHandler.withRequestID(mux), nil
 }
 
@@ -601,6 +604,10 @@ func (apiHandler *handler) metrics(writer http.ResponseWriter, request *http.Req
 		apiHandler.logResponseAbort(request, "Operation duration metrics response", err)
 		return
 	}
+	if err := writeDatabaseTimingMetrics(writer, snapshot); err != nil {
+		apiHandler.logResponseAbort(request, "database timing metrics response", err)
+		return
+	}
 }
 
 func (apiHandler *handler) createProfile(writer http.ResponseWriter, request *http.Request) {
@@ -1013,8 +1020,11 @@ func (apiHandler *handler) withRequestID(next http.Handler) http.Handler {
 		if status == 0 {
 			status = http.StatusOK
 		}
-		duration := time.Since(startedAt)
-		apiHandler.timings.ObserveHTTP(request.Pattern, httpStatusClass(status), duration)
+		completedAt := time.Now()
+		duration := completedAt.Sub(startedAt)
+		apiHandler.timings.ObserveHTTPAt(
+			request.Pattern, httpStatusClass(status), duration, completedAt,
+		)
 		apiHandler.logger.InfoContext(
 			request.Context(),
 			"SecondBox HTTP request completed",
@@ -1316,6 +1326,65 @@ func writeOperationDurationMetrics(
 	return nil
 }
 
+func writeDatabaseTimingMetrics(
+	writer io.Writer,
+	snapshot contracts.MetricsSnapshot,
+) error {
+	if _, err := fmt.Fprintln(
+		writer, "# TYPE secondbox_sandbox_start_duration_seconds histogram",
+	); err != nil {
+		return fmt.Errorf("SecondBox Sandbox start duration metric type write failed: %w", err)
+	}
+	if err := writeDurationHistogram(
+		writer,
+		"secondbox_sandbox_start_duration_seconds",
+		"",
+		publicMetricHistogram(snapshot.BootDuration),
+	); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(
+		writer, "# TYPE secondbox_sandbox_start_stage_duration_seconds histogram",
+	); err != nil {
+		return fmt.Errorf("SecondBox Sandbox start stage duration metric type write failed: %w", err)
+	}
+	for _, metric := range snapshot.BootStageDurations {
+		if err := writeDurationHistogram(
+			writer,
+			"secondbox_sandbox_start_stage_duration_seconds",
+			fmt.Sprintf("stage=%q", metric.Stage),
+			publicMetricHistogram(metric.Histogram),
+		); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintln(
+		writer, "# TYPE secondbox_exec_duration_seconds histogram",
+	); err != nil {
+		return fmt.Errorf("SecondBox Exec duration metric type write failed: %w", err)
+	}
+	for _, metric := range snapshot.ExecDurations {
+		if err := writeDurationHistogram(
+			writer,
+			"secondbox_exec_duration_seconds",
+			fmt.Sprintf("mode=%q,outcome=%q", metric.Mode, metric.Outcome),
+			publicMetricHistogram(metric.Histogram),
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func publicMetricHistogram(
+	histogram contracts.MetricDurationHistogram,
+) observability.DurationHistogram {
+	return observability.DurationHistogram{
+		Count: histogram.Count, SumSeconds: histogram.SumSeconds,
+		BucketCounts: histogram.BucketCounts,
+	}
+}
+
 func writeDurationHistogram(
 	writer io.Writer,
 	name string,
@@ -1326,27 +1395,39 @@ func writeDurationHistogram(
 		return errors.New("SecondBox metrics duration histogram has invalid bucket count")
 	}
 	for index, upperBound := range observability.DurationBucketsSeconds {
+		bucketLabels := fmt.Sprintf("le=%q", strconv.FormatFloat(upperBound, 'g', -1, 64))
+		if labels != "" {
+			bucketLabels = labels + "," + bucketLabels
+		}
 		if _, err := fmt.Fprintf(
-			writer, "%s_bucket{%s,le=%q} %d\n",
-			name, labels, strconv.FormatFloat(upperBound, 'g', -1, 64),
+			writer, "%s_bucket{%s} %d\n",
+			name, bucketLabels,
 			histogram.BucketCounts[index],
 		); err != nil {
 			return fmt.Errorf("SecondBox metrics duration bucket write failed: %w", err)
 		}
 	}
+	infiniteLabels := `le="+Inf"`
+	if labels != "" {
+		infiniteLabels = labels + "," + infiniteLabels
+	}
 	if _, err := fmt.Fprintf(
-		writer, "%s_bucket{%s,le=\"+Inf\"} %d\n", name, labels, histogram.Count,
+		writer, "%s_bucket{%s} %d\n", name, infiniteLabels, histogram.Count,
 	); err != nil {
 		return fmt.Errorf("SecondBox metrics duration infinite bucket write failed: %w", err)
 	}
+	metricLabels := ""
+	if labels != "" {
+		metricLabels = "{" + labels + "}"
+	}
 	if _, err := fmt.Fprintf(
-		writer, "%s_sum{%s} %s\n", name, labels,
+		writer, "%s_sum%s %s\n", name, metricLabels,
 		strconv.FormatFloat(histogram.SumSeconds, 'g', -1, 64),
 	); err != nil {
 		return fmt.Errorf("SecondBox metrics duration sum write failed: %w", err)
 	}
 	if _, err := fmt.Fprintf(
-		writer, "%s_count{%s} %d\n", name, labels, histogram.Count,
+		writer, "%s_count%s %d\n", name, metricLabels, histogram.Count,
 	); err != nil {
 		return fmt.Errorf("SecondBox metrics duration count write failed: %w", err)
 	}

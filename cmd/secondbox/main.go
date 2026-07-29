@@ -21,60 +21,60 @@ type commandAlias struct {
 }
 
 var commandAliases = map[string]commandAlias{
-	"profiles list":        {operation: "listProfiles"},
-	"profiles create":      {operation: "createProfile"},
-	"profiles get":         {operation: "getProfile"},
-	"profiles revise":      {operation: "reviseProfile"},
-	"profiles disable":     {operation: "disableProfile"},
-	"runner-pools list":    {operation: "listRunnerPools"},
-	"runner-pools create":  {operation: "createRunnerPool"},
-	"runner-pools get":     {operation: "getRunnerPool"},
-	"runner-pools update":  {operation: "updateRunnerPool"},
-	"runners list":         {operation: "listRunners"},
-	"runners get":          {operation: "getRunner"},
-	"sandboxes list":       {operation: "listSandboxes"},
-	"sandboxes create":     {operation: "createSandbox"},
-	"sandboxes get":        {operation: "getSandbox"},
-	"sandboxes start":      {operation: "startSandbox"},
-	"sandboxes drain":      {operation: "drainSandbox"},
-	"sandboxes stop":       {operation: "stopSandbox"},
-	"sandboxes restore":    {operation: "restoreSandboxSnapshot"},
-	"sandboxes delete":     {operation: "deleteSandbox"},
-	"sandboxes inspect":    {operation: "inspectSandbox"},
-	"sandboxes ping":       {operation: "pingSandbox"},
-	"sandboxes touch":      {operation: "touchSandbox"},
-	"sandboxes wait":       {operation: "waitForSandbox"},
-	"operations get":       {operation: "getOperation"},
-	"exec":                 {operation: "executeSandboxCommand"},
-	"exec stream":          {operation: "createSandboxExecStream"},
-	"exec cancel":          {operation: "cancelSandboxExecStream"},
-	"shell create":         {operation: "createSandboxTerminal"},
-	"shell reconnect":      {operation: "reconnectSandboxTerminal"},
-	"shell close":          {operation: "cancelSandboxTerminal"},
-	"files read":           {operation: "readSandboxFile"},
-	"files write":          {operation: "writeSandboxFile"},
-	"files stat":           {operation: "statSandboxFile"},
-	"files exists":         {operation: "sandboxFileExists"},
-	"files list":           {operation: "listSandboxDirectory"},
-	"files mkdir":          {operation: "createSandboxDirectory"},
-	"files rm":             {operation: "removeSandboxPath"},
-	"snapshots create":     {operation: "createSandboxSnapshot"},
-	"snapshots list":       {operation: "listSandboxSnapshots"},
-	"snapshots get":        {operation: "getSnapshot"},
-	"snapshots delete":     {operation: "deleteSnapshot"},
-	"snapshots restore":    {operation: "restoreSandboxSnapshot"},
-	"artifacts list":       {operation: "listSandboxArtifacts"},
-	"artifacts upload":     {operation: "uploadSandboxArtifact"},
-	"artifacts get":        {operation: "getArtifact"},
-	"artifacts download":   {operation: "downloadArtifactContent"},
-	"artifacts delete":     {operation: "deleteArtifact"},
-	"leases acquire":       {operation: "acquireSandboxLease"},
-	"leases get":           {operation: "getSandboxLease"},
-	"leases renew":         {operation: "renewSandboxLease"},
-	"leases release":       {operation: "releaseSandboxLease"},
-	"ports create":         {operation: "createSandboxPortSession"},
-	"ports get":            {operation: "getSandboxPortSession"},
-	"ports close":          {operation: "closeSandboxPortSession"},
+	"profiles list":       {operation: "listProfiles"},
+	"profiles create":     {operation: "createProfile"},
+	"profiles get":        {operation: "getProfile"},
+	"profiles revise":     {operation: "reviseProfile"},
+	"profiles disable":    {operation: "disableProfile"},
+	"runner-pools list":   {operation: "listRunnerPools"},
+	"runner-pools create": {operation: "createRunnerPool"},
+	"runner-pools get":    {operation: "getRunnerPool"},
+	"runner-pools update": {operation: "updateRunnerPool"},
+	"runners list":        {operation: "listRunners"},
+	"runners get":         {operation: "getRunner"},
+	"sandboxes list":      {operation: "listSandboxes"},
+	"sandboxes create":    {operation: "createSandbox"},
+	"sandboxes get":       {operation: "getSandbox"},
+	"sandboxes start":     {operation: "startSandbox"},
+	"sandboxes drain":     {operation: "drainSandbox"},
+	"sandboxes stop":      {operation: "stopSandbox"},
+	"sandboxes restore":   {operation: "restoreSandboxSnapshot"},
+	"sandboxes delete":    {operation: "deleteSandbox"},
+	"sandboxes inspect":   {operation: "inspectSandbox"},
+	"sandboxes ping":      {operation: "pingSandbox"},
+	"sandboxes touch":     {operation: "touchSandbox"},
+	"sandboxes wait":      {operation: "waitForSandbox"},
+	"operations get":      {operation: "getOperation"},
+	"exec":                {operation: "executeSandboxCommand"},
+	"exec stream":         {operation: "createSandboxExecStream"},
+	"exec cancel":         {operation: "cancelSandboxExecStream"},
+	"shell create":        {operation: "createSandboxTerminal"},
+	"shell reconnect":     {operation: "reconnectSandboxTerminal"},
+	"shell close":         {operation: "cancelSandboxTerminal"},
+	"files read":          {operation: "readSandboxFile"},
+	"files write":         {operation: "writeSandboxFile"},
+	"files stat":          {operation: "statSandboxFile"},
+	"files exists":        {operation: "sandboxFileExists"},
+	"files list":          {operation: "listSandboxDirectory"},
+	"files mkdir":         {operation: "createSandboxDirectory"},
+	"files rm":            {operation: "removeSandboxPath"},
+	"snapshots create":    {operation: "createSandboxSnapshot"},
+	"snapshots list":      {operation: "listSandboxSnapshots"},
+	"snapshots get":       {operation: "getSnapshot"},
+	"snapshots delete":    {operation: "deleteSnapshot"},
+	"snapshots restore":   {operation: "restoreSandboxSnapshot"},
+	"artifacts list":      {operation: "listSandboxArtifacts"},
+	"artifacts upload":    {operation: "uploadSandboxArtifact"},
+	"artifacts get":       {operation: "getArtifact"},
+	"artifacts download":  {operation: "downloadArtifactContent"},
+	"artifacts delete":    {operation: "deleteArtifact"},
+	"leases acquire":      {operation: "acquireSandboxLease"},
+	"leases get":          {operation: "getSandboxLease"},
+	"leases renew":        {operation: "renewSandboxLease"},
+	"leases release":      {operation: "releaseSandboxLease"},
+	"ports create":        {operation: "createSandboxPortSession"},
+	"ports get":           {operation: "getSandboxPortSession"},
+	"ports close":         {operation: "closeSandboxPortSession"},
 }
 
 func main() {
@@ -169,6 +169,18 @@ func runOperationalCommand(
 			ctx, rawURL, token, tenantRef, subjectRef,
 			args[2:], os.Stdin, output, http.DefaultClient, nil,
 		)
+	case args[0] == "timings" &&
+		(args[1] == "sandbox" || args[1] == "operation" || args[1] == "summary"):
+		return true, runTimingCommand(
+			ctx, rawURL, token, tenantRef, subjectRef,
+			args[1], args[2:], output, http.DefaultClient,
+		)
+	case args[0] == "diagnostics" && args[1] == "bundle":
+		return true, runDiagnosticsBundleCommand(
+			ctx, rawURL, token, args[2:], output, http.DefaultClient,
+		)
+	case args[0] == "logs" && (args[1] == "tail" || args[1] == "follow"):
+		return true, runLogsCommand(ctx, args[1], args[2:], output)
 	default:
 		return false, nil
 	}
@@ -294,7 +306,11 @@ func commandSummary() string {
 	for key := range commandAliases {
 		keys = append(keys, key)
 	}
-	keys = append(keys, "diagnostics bundle", "logs follow", "logs tail", "sandbox shell")
+	keys = append(
+		keys,
+		"diagnostics bundle", "logs follow", "logs tail", "sandbox shell",
+		"timings operation", "timings sandbox", "timings summary",
+	)
 	sort.Strings(keys)
 	return strings.Join(keys, ", ")
 }

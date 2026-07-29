@@ -54,6 +54,9 @@ func TestSecondBoxBaselineOwnsCleanLogicalSchemaWithoutPhysicalCrossTableConstra
 		"create index workspace_restores_home_state_idx",
 		"create table secondbox.assignment_stage_timings",
 		"primary key (assignment_id, stage)",
+		"create index assignment_stage_timings_ready_idx",
+		"create index data_plane_sessions_sandbox_timing_idx",
+		"create index operations_sandbox_created_idx",
 	} {
 		if !strings.Contains(sql, fragment) {
 			t.Errorf("SecondBox baseline is missing local Workspace authority %q", fragment)

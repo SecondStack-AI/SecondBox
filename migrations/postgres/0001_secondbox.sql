@@ -288,6 +288,8 @@ CREATE INDEX assignment_stage_timings_operation_idx
     ON secondbox.assignment_stage_timings (operation_id, observed_at, assignment_id, stage);
 CREATE INDEX assignment_stage_timings_sandbox_idx
     ON secondbox.assignment_stage_timings (sandbox_id, observed_at, assignment_id, stage);
+CREATE INDEX assignment_stage_timings_ready_idx
+    ON secondbox.assignment_stage_timings (stage, observed_at, assignment_id);
 
 CREATE TABLE secondbox.leases (
     id text PRIMARY KEY,
@@ -511,6 +513,10 @@ CREATE INDEX data_plane_sessions_runner_state_idx
     ON secondbox.data_plane_sessions (runner_id, state, priority, created_at, id);
 CREATE INDEX data_plane_sessions_retention_idx
     ON secondbox.data_plane_sessions (retain_until, state, id);
+CREATE INDEX data_plane_sessions_sandbox_timing_idx
+    ON secondbox.data_plane_sessions (
+        tenant_ref, subject_ref, sandbox_id, kind, completed_at DESC, id DESC
+    );
 
 CREATE TABLE secondbox.data_plane_frames (
     id text PRIMARY KEY,
@@ -555,6 +561,8 @@ CREATE TABLE secondbox.operations (
 );
 CREATE INDEX operations_project_created_idx ON secondbox.operations (tenant_ref, subject_ref, created_at, id);
 CREATE INDEX operations_state_updated_idx ON secondbox.operations (state, updated_at, id);
+CREATE INDEX operations_sandbox_created_idx
+    ON secondbox.operations (tenant_ref, subject_ref, sandbox_id, created_at DESC, id DESC);
 
 CREATE TABLE secondbox.idempotency_records (
     tenant_ref text NOT NULL,

@@ -34,7 +34,7 @@ The runner performs prerequisite and trust validation before advertising schedul
 
 Heartbeats carry monotonically increasing sequence numbers, connection identity, capacity, active assignment summaries, and drain state. A heartbeat is runner liveness; it is not Sandbox useful activity.
 
-Registration and heartbeats also carry the bounded process-lifetime Sandbox startup sample count and p95 already maintained by the Runner. This provider-neutral timing evidence is administrative capacity information; it contains no Sandbox identifiers or backend references.
+Registration and heartbeats also carry the retained Sandbox startup sample count and p95 already maintained by the Runner. The count is bounded by the Runner's 256-sample window rather than being a process-lifetime counter. This provider-neutral timing evidence is administrative capacity information; it contains no Sandbox identifiers or backend references.
 
 Connections and message envelopes are persisted. A reconnect supersedes the prior connection ID without changing the Runner identity. Duplicate message IDs are idempotent; a new message at an old or repeated sequence is rejected. This ordering evidence remains effective when a runner reconnects to a different control-plane replica.
 

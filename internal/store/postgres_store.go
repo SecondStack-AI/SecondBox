@@ -949,6 +949,10 @@ func (store *PostgresControlPlaneStore) ReadMetricsSnapshot(
 	if err := rows.Err(); err != nil {
 		return contracts.MetricsSnapshot{}, fmt.Errorf("SecondBox Operation duration metrics iteration failed: %w", err)
 	}
+	rows.Close()
+	if err := store.readTimingMetrics(ctx, &snapshot); err != nil {
+		return contracts.MetricsSnapshot{}, err
+	}
 	return snapshot, nil
 }
 
