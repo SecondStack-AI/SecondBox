@@ -23,13 +23,13 @@ func createFixtureProject(
 	_ *service.ControlPlaneService,
 	_ context.Context,
 	_ contracts.Principal,
-	request contracts.CreateProjectRequest,
-) (contracts.Project, error) {
+	request fixtureCreateProjectRequest,
+) (fixtureProject, error) {
 	t.Helper()
 	tenantRef, _ := newSubject(t)
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	return contracts.Project{
-		ID: tenantRef, Name: request.Name, State: contracts.ProjectStateActive,
+	return fixtureProject{
+		ID: tenantRef, Name: request.Name, State: fixtureProjectStateActive,
 		Revision: 1, CreatedAt: now, UpdatedAt: now,
 	}, nil
 }
@@ -40,14 +40,14 @@ func createFixtureServiceAccount(
 	_ context.Context,
 	_ contracts.Principal,
 	projectID string,
-	request contracts.CreateServiceAccountRequest,
-) (contracts.ServiceAccount, error) {
+	request fixtureCreateServiceAccountRequest,
+) (fixtureServiceAccount, error) {
 	t.Helper()
 	_, subjectRef := newSubject(t)
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	return contracts.ServiceAccount{
-		ID: subjectRef, ProjectID: projectID, Name: request.Name,
-		State: contracts.ServiceAccountStateActive, Scopes: request.Scopes,
+	return fixtureServiceAccount{
+		ID: subjectRef, TenantRef: projectID, Name: request.Name,
+		State: fixtureServiceAccountStateActive, Scopes: request.Scopes,
 		ProfileGrants: request.ProfileGrants, Revision: 1, CreatedAt: now, UpdatedAt: now,
 	}, nil
 }
@@ -59,23 +59,22 @@ func createFixtureAPIKey(
 	_ contracts.Principal,
 	projectID string,
 	accountID string,
-	request contracts.CreateAPIKeyRequest,
-) (contracts.CreateAPIKeyResponse, error) {
+	request fixtureCreateAPIKeyRequest,
+) (fixtureCreateAPIKeyResponse, error) {
 	t.Helper()
 	sequence := integrationIdentitySequence.Add(1)
 	credential := fmt.Sprintf("fixture_%012d_%032d", sequence, sequence)
-	response := contracts.CreateAPIKeyResponse{
-		APIKey: contracts.APIKey{
-			ID: fmt.Sprintf("key_%d", sequence), ServiceAccountID: accountID,
+	response := fixtureCreateAPIKeyResponse{
+		APIKey: fixtureAPIKey{
+			ID: fmt.Sprintf("key_%d", sequence), SubjectRef: accountID,
 			Name: request.Name, Prefix: fmt.Sprintf("%012d", sequence),
-			State: contracts.APIKeyStateActive, Scopes: request.Scopes,
+			State: fixtureAPIKeyStateActive, Scopes: request.Scopes,
 			Revision: 1, CreatedAt: time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
 		},
 		Credential: credential,
 	}
 	fixtureCredentialPrincipals.Store(credential, contracts.Principal{
 		Kind: "platform", ID: accountID,
-		ProjectID: projectID, ServiceAccountID: accountID,
 		TenantRef: projectID, SubjectRef: accountID,
 	})
 	return response, nil
@@ -88,11 +87,11 @@ func updateFixtureServiceAccount(
 	_ contracts.Principal,
 	projectID string,
 	accountID string,
-	request contracts.UpdateServiceAccountRequest,
-) (contracts.ServiceAccount, error) {
+	request fixtureUpdateServiceAccountRequest,
+) (fixtureServiceAccount, error) {
 	t.Helper()
-	account := contracts.ServiceAccount{
-		ID: accountID, ProjectID: projectID, State: contracts.ServiceAccountStateActive, Revision: 2,
+	account := fixtureServiceAccount{
+		ID: accountID, TenantRef: projectID, State: fixtureServiceAccountStateActive, Revision: 2,
 	}
 	if request.Name != nil {
 		account.Name = *request.Name
@@ -152,7 +151,6 @@ func fixtureAdmin(
 	t.Helper()
 	return contracts.Principal{
 		Kind: "platform", ID: "secondbox-admin",
-		ProjectID: "secondbox", ServiceAccountID: "secondbox-admin",
 		TenantRef: "secondbox", SubjectRef: "secondbox-admin",
 	}
 }
@@ -162,12 +160,12 @@ func createProjectAccountAndCredential(
 	controlPlane *service.ControlPlaneService,
 	admin contracts.Principal,
 	suffix string,
-) (contracts.Project, contracts.ServiceAccount, string) {
+) (fixtureProject, fixtureServiceAccount, string) {
 	t.Helper()
 	project, err := createFixtureProject(t, controlPlane,
 		t.Context(),
 		admin,
-		contracts.CreateProjectRequest{Name: "project-" + suffix},
+		fixtureCreateProjectRequest{Name: "project-" + suffix},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +174,7 @@ func createProjectAccountAndCredential(
 		t.Context(),
 		admin,
 		project.ID,
-		contracts.CreateServiceAccountRequest{
+		fixtureCreateServiceAccountRequest{
 			Name: "service-" + suffix,
 			Scopes: []string{
 				"sandbox:lifecycle",
@@ -200,7 +198,7 @@ func createProjectAccountAndCredential(
 		admin,
 		project.ID,
 		account.ID,
-		contracts.CreateAPIKeyRequest{
+		fixtureCreateAPIKeyRequest{
 			Name: "key-" + suffix,
 			Scopes: []string{
 				"sandbox:lifecycle",
@@ -213,7 +211,6 @@ func createProjectAccountAndCredential(
 	}
 	fixtureCredentialPrincipals.Store(createdKey.Credential, contracts.Principal{
 		Kind: "platform", ID: account.ID,
-		ProjectID: project.ID, ServiceAccountID: account.ID,
 		TenantRef: project.ID, SubjectRef: account.ID,
 	})
 	return project, account, createdKey.Credential
@@ -224,7 +221,7 @@ func createGrantedProfile(
 	controlPlane *service.ControlPlaneService,
 	databaseStore *store.PostgresControlPlaneStore,
 	admin contracts.Principal,
-	account contracts.ServiceAccount,
+	account fixtureServiceAccount,
 	name string,
 ) contracts.Profile {
 	t.Helper()
@@ -252,9 +249,9 @@ func createGrantedProfile(
 	if _, err := updateFixtureServiceAccount(t, controlPlane,
 		t.Context(),
 		admin,
-		account.ProjectID,
+		account.TenantRef,
 		account.ID,
-		contracts.UpdateServiceAccountRequest{ProfileGrants: &grants},
+		fixtureUpdateServiceAccountRequest{ProfileGrants: &grants},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +309,6 @@ func authenticateCredential(
 	if credential == "bootstrap-administrator-secret" || credential == testPlatformToken {
 		return contracts.Principal{
 			Kind: "platform", ID: "secondbox-admin",
-			ProjectID: "secondbox", ServiceAccountID: "secondbox-admin",
 			TenantRef: "secondbox", SubjectRef: "secondbox-admin",
 		}
 	}

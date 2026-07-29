@@ -53,19 +53,18 @@ func (store *PostgresControlPlaneStore) AcquireLease(
 		return contracts.Lease{}, fmt.Errorf("SecondBox expired Lease update failed: %w", err)
 	}
 	lease := input.Lease
-	lease.ProjectID, lease.SandboxID, lease.Generation = input.ProjectID, input.SandboxID, input.Generation
 	lease.TenantRef, lease.SubjectRef = input.TenantRef, input.SubjectRef
-	lease.ServiceAccountID, lease.State = input.ServiceAccountID, contracts.LeaseStateActive
+	lease.SandboxID, lease.Generation = input.SandboxID, input.Generation
+	lease.State = contracts.LeaseStateActive
 	lease.ExpiresAt, lease.Revision = input.ExpiresAt.UTC(), 1
 	lease.CreatedAt, lease.UpdatedAt = input.Now.UTC(), input.Now.UTC()
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.leases (
-			id,tenant_ref,subject_ref,sandbox_id,generation,service_account_id,state,expires_at,
-			revision,created_at,updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-		lease.ID, lease.TenantRef, lease.SubjectRef,
-		lease.SandboxID, lease.Generation, lease.ServiceAccountID,
-		lease.State, lease.ExpiresAt, lease.Revision, lease.CreatedAt, lease.UpdatedAt,
+			id,tenant_ref,subject_ref,sandbox_id,generation,state,expires_at,revision,created_at,updated_at
+		) VALUES (
+			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10
+		)`,
+		lease.ID, lease.TenantRef, lease.SubjectRef, lease.SandboxID, lease.Generation, lease.State, lease.ExpiresAt, lease.Revision, lease.CreatedAt, lease.UpdatedAt,
 	); err != nil {
 		return contracts.Lease{}, fmt.Errorf("SecondBox Lease insert failed: %w", err)
 	}
@@ -89,7 +88,7 @@ func (store *PostgresControlPlaneStore) GetLease(
 	leaseID string,
 ) (contracts.Lease, error) {
 	return scanLease(store.pool.QueryRow(ctx, `
-		SELECT id,tenant_ref,subject_ref,sandbox_id,generation,service_account_id,state,expires_at,
+		SELECT id,tenant_ref,subject_ref,sandbox_id,generation,state,expires_at,
 		       revision,created_at,updated_at
 		FROM secondbox.leases
 		WHERE tenant_ref=$1 AND subject_ref=$2 AND sandbox_id=$3 AND id=$4`,
@@ -105,7 +104,7 @@ func (store *PostgresControlPlaneStore) GetLeaseByID(
 	leaseID string,
 ) (contracts.Lease, error) {
 	return scanLease(store.pool.QueryRow(ctx, `
-		SELECT id,tenant_ref,subject_ref,sandbox_id,generation,service_account_id,state,expires_at,
+		SELECT id,tenant_ref,subject_ref,sandbox_id,generation,state,expires_at,
 		       revision,created_at,updated_at
 		FROM secondbox.leases WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3`,
 		tenantRef, subjectRef, leaseID,
@@ -148,7 +147,7 @@ func (store *PostgresControlPlaneStore) RenewLease(
 		return contracts.Lease{}, err
 	}
 	lease, err := scanLease(tx.QueryRow(ctx, `
-		SELECT id,tenant_ref,subject_ref,sandbox_id,generation,service_account_id,state,expires_at,
+		SELECT id,tenant_ref,subject_ref,sandbox_id,generation,state,expires_at,
 		       revision,created_at,updated_at
 		FROM secondbox.leases
 		WHERE tenant_ref=$1 AND subject_ref=$2 AND sandbox_id=$3 AND id=$4 FOR UPDATE`,
@@ -209,7 +208,7 @@ func (store *PostgresControlPlaneStore) ReleaseLease(
 		return replayedLease, nil
 	}
 	lease, err := scanLease(tx.QueryRow(ctx, `
-		SELECT id,tenant_ref,subject_ref,sandbox_id,generation,service_account_id,state,expires_at,
+		SELECT id,tenant_ref,subject_ref,sandbox_id,generation,state,expires_at,
 		       revision,created_at,updated_at
 		FROM secondbox.leases
 		WHERE tenant_ref=$1 AND subject_ref=$2 AND sandbox_id=$3 AND id=$4 FOR UPDATE`,
@@ -247,7 +246,7 @@ func scanLease(row rowScanner) (contracts.Lease, error) {
 	if err := row.Scan(
 		&lease.ID, &lease.TenantRef, &lease.SubjectRef,
 		&lease.SandboxID, &lease.Generation,
-		&lease.ServiceAccountID, &lease.State, &lease.ExpiresAt, &lease.Revision,
+		&lease.State, &lease.ExpiresAt, &lease.Revision,
 		&lease.CreatedAt, &lease.UpdatedAt,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -255,7 +254,6 @@ func scanLease(row rowScanner) (contracts.Lease, error) {
 		}
 		return contracts.Lease{}, fmt.Errorf("SecondBox Lease lookup failed: %w", err)
 	}
-	lease.ProjectID = lease.TenantRef
 	return lease, nil
 }
 
@@ -286,7 +284,7 @@ func lookupLeaseIdempotency(
 		return contracts.Lease{}, false, ports.ErrIdempotencyConflict
 	}
 	lease, err := scanLease(tx.QueryRow(ctx, `
-		SELECT id,tenant_ref,subject_ref,sandbox_id,generation,service_account_id,state,expires_at,
+		SELECT id,tenant_ref,subject_ref,sandbox_id,generation,state,expires_at,
 		       revision,created_at,updated_at
 		FROM secondbox.leases
 		WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3`,

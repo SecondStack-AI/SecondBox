@@ -75,10 +75,10 @@ func (service *ControlPlaneService) CreateSandboxExecStream(
 	open.Streaming = true
 	return service.dataPlaneRelay.AdmitDataPlane(ctx, runnercontrol.DataPlaneAdmission{
 		ID: service.newID("dps"), StreamID: service.newID("stream"),
-		ProjectID: principal.ProjectID, SandboxID: sandboxID,
-		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
-		ServiceAccountID: principal.ServiceAccountID, LeaseID: leaseID,
-		RequestID: requestID, Generation: generation,
+		TenantRef: principal.TenantRef, SandboxID: sandboxID,
+		SubjectRef: principal.SubjectRef,
+		LeaseID:    leaseID,
+		RequestID:  requestID, Generation: generation,
 		Kind: "exec", Operation: "exec-stream", IdempotencyKey: idempotencyKey,
 		RequestHash:          requestHash,
 		DeadlineAt:           now.Add(time.Duration(request.DeadlineMilliseconds) * time.Millisecond),
@@ -179,8 +179,8 @@ func (service *ControlPlaneService) CancelSandboxExecStreamAtGeneration(
 	return service.dataPlaneRelay.CancelPublicDataPlaneSession(
 		ctx,
 		runnercontrol.PublicDataPlaneCancellation{
-			ProjectID: principal.ProjectID, SandboxID: sandboxID, SessionID: sessionID,
-			TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
+			TenantRef: principal.TenantRef, SandboxID: sandboxID, SessionID: sessionID,
+			SubjectRef:  principal.SubjectRef,
 			SessionKind: "exec", SessionOperation: "exec-stream",
 			IdempotencyKey: idempotencyKey,
 			RequestHash:    requestHash, Reason: "public streaming client cancelled",
@@ -273,9 +273,9 @@ func (service *ControlPlaneService) ExecuteSandboxCommand(
 	)
 	session, replayed, err := service.dataPlaneRelay.AdmitDataPlane(ctx, runnercontrol.DataPlaneAdmission{
 		ID: service.newID("dps"), StreamID: service.newID("stream"),
-		ProjectID: principal.ProjectID, SandboxID: sandboxID,
-		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
-		ServiceAccountID: principal.ServiceAccountID, LeaseID: leaseID,
+		TenantRef: principal.TenantRef, SandboxID: sandboxID,
+		SubjectRef: principal.SubjectRef,
+		LeaseID:    leaseID,
 		RequestID:  requestID,
 		Generation: generation, Kind: "exec", Operation: "exec",
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
@@ -513,9 +513,9 @@ func (service *ControlPlaneService) runFileOperation(
 	const fileDeadlineMilliseconds int64 = 30_000
 	session, replayed, err := service.dataPlaneRelay.AdmitDataPlane(ctx, runnercontrol.DataPlaneAdmission{
 		ID: service.newID("dps"), StreamID: service.newID("stream"),
-		ProjectID: principal.ProjectID, SandboxID: sandboxID,
-		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
-		ServiceAccountID: principal.ServiceAccountID, LeaseID: leaseID,
+		TenantRef: principal.TenantRef, SandboxID: sandboxID,
+		SubjectRef: principal.SubjectRef,
+		LeaseID:    leaseID,
 		RequestID:  requestID,
 		Generation: generation, Kind: "file", Operation: operation,
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,

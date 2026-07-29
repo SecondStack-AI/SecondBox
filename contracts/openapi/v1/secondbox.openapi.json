@@ -1300,13 +1300,13 @@
         "name": "X-SecondBox-Tenant-Ref",
         "in": "header",
         "required": true,
-        "schema": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[!-~]+$"}
+        "schema": {"$ref": "#/components/schemas/OwnershipRef"}
       },
       "SubjectRef": {
         "name": "X-SecondBox-Subject-Ref",
         "in": "header",
         "required": true,
-        "schema": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[!-~]+$"}
+        "schema": {"$ref": "#/components/schemas/OwnershipRef"}
       },
       "RequestID": {
         "name": "X-Request-ID",
@@ -1560,6 +1560,7 @@
     },
     "schemas": {
       "OpaqueID": {"type": "string", "minLength": 8, "maxLength": 128, "pattern": "^[A-Za-z0-9_-]+$"},
+      "OwnershipRef": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[!-~]+$"},
       "CorrelationID": {"type": "string", "minLength": 8, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]+$"},
       "Timestamp": {"type": "string", "format": "date-time"},
       "ProfileName": {"type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-z][a-z0-9-]*$"},
@@ -1834,10 +1835,9 @@
       "Sandbox": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "projectId", "profile", "profileRevisionId", "state", "desiredState", "generation", "workspace", "metadata", "revision", "createdAt", "updatedAt"],
+        "required": ["id", "profile", "profileRevisionId", "state", "desiredState", "generation", "workspace", "metadata", "revision", "createdAt", "updatedAt"],
         "properties": {
           "id": {"$ref": "#/components/schemas/OpaqueID"},
-          "projectId": {"$ref": "#/components/schemas/OpaqueID"},
           "profile": {"$ref": "#/components/schemas/ProfileName"},
           "profileRevisionId": {"$ref": "#/components/schemas/OpaqueID"},
           "state": {"$ref": "#/components/schemas/SandboxState"},

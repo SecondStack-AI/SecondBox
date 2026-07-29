@@ -43,8 +43,8 @@ func TestPostgresTerminalRelayOwnsAttachmentDetachReplayAndFenceAuthority(t *tes
 	t.Cleanup(relay.Close)
 	session, replayed, err := relay.AdmitDataPlane(t.Context(), runnercontrol.DataPlaneAdmission{
 		ID: "dps_terminal_relay", StreamID: "stream_terminal_relay",
-		ProjectID: principal.ProjectID, SandboxID: sandbox.ID,
-		ServiceAccountID: principal.ServiceAccountID, LeaseID: lease.ID,
+		TenantRef: principal.TenantRef, SandboxID: sandbox.ID,
+		SubjectRef: principal.SubjectRef, LeaseID: lease.ID,
 		Generation: sandbox.Generation, RequestID: "request-terminal-relay",
 		Kind: "terminal", Operation: "terminal", IdempotencyKey: "terminal-relay",
 		RequestHash: "terminal-request-hash", DeadlineAt: now.Add(time.Minute),
@@ -213,8 +213,8 @@ func TestPostgresTerminalRelayOwnsAttachmentDetachReplayAndFenceAuthority(t *tes
 		t.Helper()
 		admitted, _, err := relay.AdmitDataPlane(t.Context(), runnercontrol.DataPlaneAdmission{
 			ID: "dps_" + id, StreamID: "stream_" + id,
-			ProjectID: principal.ProjectID, SandboxID: sandbox.ID,
-			ServiceAccountID: principal.ServiceAccountID, LeaseID: leaseID,
+			TenantRef: principal.TenantRef, SandboxID: sandbox.ID,
+			SubjectRef: principal.SubjectRef, LeaseID: leaseID,
 			Generation: sandbox.Generation, RequestID: "request-" + id,
 			Kind: "terminal", Operation: "terminal", IdempotencyKey: id,
 			RequestHash: id + "-hash", DeadlineAt: now.Add(time.Minute),

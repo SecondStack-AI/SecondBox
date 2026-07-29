@@ -963,7 +963,6 @@ func (apiHandler *handler) authenticate(next http.Handler) http.Handler {
 		}
 		principal := contracts.Principal{
 			Kind: "platform", ID: subjectRef,
-			ProjectID: tenantRef, ServiceAccountID: subjectRef,
 			TenantRef: tenantRef, SubjectRef: subjectRef,
 		}
 		next.ServeHTTP(writer, request.WithContext(context.WithValue(request.Context(), principalContextKey{}, principal)))
@@ -1014,7 +1013,7 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusUnauthorized, "authentication_failed", "Authentication failed", false
 	case errors.Is(err, ports.ErrPortTokenInvalid):
 		return http.StatusUnauthorized, "authentication_failed", "Port tunnel token is invalid", false
-	case errors.Is(err, ports.ErrAuthorizationDenied), errors.Is(err, ports.ErrProfileNotGranted):
+	case errors.Is(err, ports.ErrAuthorizationDenied):
 		return http.StatusForbidden, "authorization_failed", "Authorization failed", false
 	case errors.Is(err, pagination.ErrInvalidListCursor):
 		return http.StatusBadRequest, "invalid_request", "List page cursor is invalid", false
@@ -1022,8 +1021,7 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusForbidden, "authorization_failed", "Exposed port is not permitted", false
 	case errors.Is(err, runnercontrol.ErrFilePermission):
 		return http.StatusForbidden, "file_permission_denied", "File operation permission denied", false
-	case errors.Is(err, ports.ErrProjectNotFound), errors.Is(err, ports.ErrServiceAccountNotFound),
-		errors.Is(err, ports.ErrAPIKeyNotFound), errors.Is(err, ports.ErrProfileNotFound),
+	case errors.Is(err, ports.ErrProfileNotFound),
 		errors.Is(err, ports.ErrRunnerPoolNotFound), errors.Is(err, ports.ErrRunnerNotFound),
 		errors.Is(err, ports.ErrSandboxNotFound), errors.Is(err, ports.ErrLeaseNotFound),
 		errors.Is(err, ports.ErrArtifactNotFound), errors.Is(err, ports.ErrCheckpointNotFound),

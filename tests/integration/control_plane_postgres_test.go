@@ -131,8 +131,8 @@ func TestConcurrentSandboxCreationIsIdempotentAndPinsProfileRevision(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if future.ProjectID != project.ID || future.ProfileRevisionID != revised.CurrentRevision.ID {
-		t.Fatalf("future Sandbox = project %q revision %q, want %q and %q", future.ProjectID, future.ProfileRevisionID, project.ID, revised.CurrentRevision.ID)
+	if future.TenantRef != project.ID || future.ProfileRevisionID != revised.CurrentRevision.ID {
+		t.Fatalf("future Sandbox = project %q revision %q, want %q and %q", future.TenantRef, future.ProfileRevisionID, project.ID, revised.CurrentRevision.ID)
 	}
 }
 
@@ -188,7 +188,7 @@ func TestSandboxReadsAreScopedToTenantAndSubject(t *testing.T) {
 		t.Context(),
 		admin,
 		project.ID,
-		contracts.CreateServiceAccountRequest{
+		fixtureCreateServiceAccountRequest{
 			Name: "subject-isolation-other", Scopes: scopes,
 			ProfileGrants: []string{profile.Name},
 		},
@@ -201,7 +201,7 @@ func TestSandboxReadsAreScopedToTenantAndSubject(t *testing.T) {
 		admin,
 		project.ID,
 		otherAccount.ID,
-		contracts.CreateAPIKeyRequest{Name: "subject-isolation-other", Scopes: scopes},
+		fixtureCreateAPIKeyRequest{Name: "subject-isolation-other", Scopes: scopes},
 	)
 	if err != nil {
 		t.Fatal(err)

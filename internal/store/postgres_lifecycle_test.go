@@ -35,9 +35,9 @@ func TestPostgresFinishStopAdvancesGenerationAndFencesActivity(t *testing.T) {
 	}
 	if _, err := controlPlaneStore.pool.Exec(t.Context(), `
 		INSERT INTO secondbox.leases (
-			id,tenant_ref,subject_ref,sandbox_id,generation,service_account_id,state,
+			id,tenant_ref,subject_ref,sandbox_id,generation,state,
 			expires_at,revision,created_at,updated_at
-		) VALUES ('lease_store_stop','tenant','subject','sbx_store_stop',3,'subject','active',$2,1,$1,$1)`,
+		) VALUES ('lease_store_stop','tenant','subject','sbx_store_stop',3,'active',$2,1,$1,$1)`,
 		now, now.Add(time.Hour),
 	); err != nil {
 		t.Fatal(err)

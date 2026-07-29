@@ -264,7 +264,6 @@ func runFreshRunnerRestoreVerifier(t *testing.T) {
 
 	principal := contracts.Principal{
 		Kind: "platform", ID: subjectRef,
-		ProjectID: tenantRef, ServiceAccountID: subjectRef,
 		TenantRef: tenantRef, SubjectRef: subjectRef,
 	}
 	if _, err := controlPlane.StartSandbox(
@@ -363,8 +362,8 @@ func runFreshRunnerRestoreVerifier(t *testing.T) {
 		t, &reconciler, sandboxID, now.Add(4*time.Millisecond), lifecycle.ActionMarkReady,
 	)
 	if _, err := databaseStore.PingGuest(t.Context(), ports.GenerationInput{
-		ProjectID: principal.ProjectID, SandboxID: sandboxID,
-		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
+		TenantRef: principal.TenantRef, SandboxID: sandboxID,
+		SubjectRef: principal.SubjectRef,
 		Generation: int64(assignment.Fence.SandboxGeneration),
 		Now:        now.Add(5 * time.Millisecond),
 	}, contracts.GuestLivenessReady); err != nil {

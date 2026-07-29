@@ -56,11 +56,9 @@ type PostgresFrameRelay struct {
 type DataPlaneAdmission struct {
 	ID                      string
 	StreamID                string
-	ProjectID               string
 	TenantRef               string
 	SubjectRef              string
 	SandboxID               string
-	ServiceAccountID        string
 	LeaseID                 string
 	Generation              int64
 	Kind                    string
@@ -87,7 +85,6 @@ type DataPlaneAdmission struct {
 
 // PublicDataPlaneCancellation binds one HTTP cancellation key to an exact session response.
 type PublicDataPlaneCancellation struct {
-	ProjectID        string
 	TenantRef        string
 	SubjectRef       string
 	SandboxID        string
@@ -106,7 +103,6 @@ type PublicDataPlaneCancellation struct {
 type DataPlaneSession struct {
 	ID                    string
 	StreamID              string
-	ProjectID             string
 	TenantRef             string
 	SubjectRef            string
 	SandboxID             string
@@ -116,7 +112,6 @@ type DataPlaneSession struct {
 	RunnerID              string
 	Generation            int64
 	FencingToken          []byte
-	ServiceAccountID      string
 	RequestID             string
 	LeaseID               string
 	Kind                  string
@@ -189,11 +184,7 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 	ctx context.Context,
 	input DataPlaneAdmission,
 ) (DataPlaneSession, bool, error) {
-	if input.TenantRef == "" {
-		input.TenantRef = input.ProjectID
-	}
 	if input.SubjectRef == "" {
-		input.SubjectRef = input.ServiceAccountID
 	}
 	if err := validateDataPlaneAdmission(input); err != nil {
 		return DataPlaneSession{}, false, err
@@ -275,7 +266,7 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 		return DataPlaneSession{}, false, ports.ErrQuotaExceeded
 	}
 	session.ID, session.StreamID = input.ID, input.StreamID
-	session.ProjectID, session.SandboxID = input.ProjectID, input.SandboxID
+	session.TenantRef, session.SandboxID = input.TenantRef, input.SandboxID
 	session.TenantRef, session.SubjectRef = input.TenantRef, input.SubjectRef
 	session.RequestID, session.LeaseID = input.RequestID, input.LeaseID
 	session.Kind, session.Operation = input.Kind, input.Operation
@@ -300,30 +291,11 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.data_plane_sessions (
-			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,assignment_id,instance_id,
-			runner_id,generation,fencing_token,service_account_id,request_id,lease_id,kind,operation,
-			stream_id,state,priority,idempotency_key,request_hash,deadline_at,
-			maximum_response_bytes,maximum_request_bytes,stream_window_bytes,response_credit_bytes,
-			request_stream_bytes,request_stream_closed,detachable,terminal_detach_seconds,
-			attachment_id,attached_at,detached_at,detach_expires_at,outbound_bytes,inbound_bytes,
-			next_inbound_sequence,terminal_kind,terminal_detail,
-			exit_code,signal,spawn_failure_reason,elapsed_milliseconds,limit_bytes,
-			infrastructure_failure_reason,retryable,terminal_message,
-			stdout_bytes,stderr_bytes,content_bytes,metadata_json,request_json,
-			created_at,updated_at,completed_at,retain_until
+			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,assignment_id,instance_id,runner_id,generation,fencing_token,request_id,lease_id,kind,operation,stream_id,state,priority,idempotency_key,request_hash,deadline_at,maximum_response_bytes,maximum_request_bytes,stream_window_bytes,response_credit_bytes,request_stream_bytes,request_stream_closed,detachable,terminal_detach_seconds,attachment_id,attached_at,detached_at,detach_expires_at,outbound_bytes,inbound_bytes,next_inbound_sequence,terminal_kind,terminal_detail,exit_code,signal,spawn_failure_reason,elapsed_milliseconds,limit_bytes,infrastructure_failure_reason,retryable,terminal_message,stdout_bytes,stderr_bytes,content_bytes,metadata_json,request_json,created_at,updated_at,completed_at,retain_until
 		) VALUES (
-			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'pending',$17,$18,$19,$20,
-			$21,$22,$23,0,0,false,$24,$25,'',NULL,NULL,NULL,$26,0,1,'','',0,0,'',0,0,'',false,'',$27,$27,$27,'{}',$28,$29,$29,NULL,$30
+			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'pending',$16,$17,$18,$19,$20,$21,$22,0,0,false,$23,$24,'',NULL,NULL,NULL,$25,0,1,'','',0,0,'',0,0,'',false,'',$26,$26,$26,'{}',$27,$28,$28,NULL,$29
 		)`,
-		session.ID, session.TenantRef, session.SubjectRef,
-		session.SandboxID, session.ProfileRevisionID,
-		session.AssignmentID, session.InstanceID, session.RunnerID, session.Generation,
-		session.FencingToken, input.ServiceAccountID, session.RequestID, session.LeaseID,
-		session.Kind, session.Operation, session.StreamID, input.Priority, input.IdempotencyKey,
-		input.RequestHash, session.DeadlineAt, session.MaximumResponseBytes,
-		session.MaximumRequestBytes, session.StreamWindowBytes, session.Detachable,
-		session.TerminalDetachSeconds, outboundBytes, []byte{}, requestJSON,
-		session.CreatedAt, session.CreatedAt.Add(relay.retention),
+		session.ID, session.TenantRef, session.SubjectRef, session.SandboxID, session.ProfileRevisionID, session.AssignmentID, session.InstanceID, session.RunnerID, session.Generation, session.FencingToken, session.RequestID, session.LeaseID, session.Kind, session.Operation, session.StreamID, input.Priority, input.IdempotencyKey, input.RequestHash, session.DeadlineAt, session.MaximumResponseBytes, session.MaximumRequestBytes, session.StreamWindowBytes, session.Detachable, session.TerminalDetachSeconds, outboundBytes, []byte{}, requestJSON, session.CreatedAt, session.CreatedAt.Add(relay.retention),
 	); err != nil {
 		return DataPlaneSession{}, false, fmt.Errorf("SecondBox data-plane session insert: %w", err)
 	}
@@ -827,9 +799,8 @@ func cancellationMessage(
 }
 
 func validateDataPlaneAdmission(input DataPlaneAdmission) error {
-	if input.ID == "" || input.StreamID == "" || input.ProjectID == "" ||
-		input.TenantRef == "" || input.SubjectRef == "" || input.SandboxID == "" ||
-		input.ServiceAccountID == "" || input.RequestID == "" ||
+	if input.ID == "" || input.StreamID == "" || input.TenantRef == "" || input.SandboxID == "" ||
+		input.SubjectRef == "" || input.RequestID == "" ||
 		input.Generation < 1 || input.DeadlineAt.IsZero() ||
 		input.MaximumResponseBytes < 0 || input.MaximumRequestBytes < 0 || input.RequestHash == "" {
 		return errors.New("SecondBox data-plane admission identity and bounds are required")
@@ -984,7 +955,7 @@ func lockDataPlaneAuthority(
 
 const dataPlaneSessionSelect = `
 	SELECT id,stream_id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,assignment_id,
-	       instance_id,runner_id,generation,fencing_token,service_account_id,request_id,lease_id,kind,operation,state,
+	       instance_id,runner_id,generation,fencing_token,request_id,lease_id,kind,operation,state,
 	       deadline_at,maximum_response_bytes,maximum_request_bytes,stream_window_bytes,
 	       response_credit_bytes,request_stream_bytes,request_stream_closed,detachable,
 	       terminal_detach_seconds,attachment_id,attached_at,detached_at,detach_expires_at,
@@ -1013,7 +984,7 @@ func scanDataPlaneSession(row relayRow) (DataPlaneSession, error) {
 		&session.SubjectRef, &session.SandboxID,
 		&session.ProfileRevisionID, &session.AssignmentID, &session.InstanceID,
 		&session.RunnerID, &session.Generation, &session.FencingToken,
-		&session.ServiceAccountID, &session.RequestID, &session.LeaseID, &session.Kind, &session.Operation,
+		&session.RequestID, &session.LeaseID, &session.Kind, &session.Operation,
 		&session.State, &session.DeadlineAt,
 		&session.MaximumResponseBytes, &session.MaximumRequestBytes, &session.StreamWindowBytes,
 		&session.ResponseCreditBytes, &session.RequestStreamBytes, &session.RequestStreamClosed,
@@ -1033,7 +1004,6 @@ func scanDataPlaneSession(row relayRow) (DataPlaneSession, error) {
 	if err != nil {
 		return DataPlaneSession{}, fmt.Errorf("SecondBox data-plane session lookup: %w", err)
 	}
-	session.ProjectID = session.TenantRef
 	if len(metadataJSON) > 0 && string(metadataJSON) != "{}" {
 		session.Metadata = &runnerv1.FileMetadata{}
 		if err := protojson.Unmarshal(metadataJSON, session.Metadata); err != nil {

@@ -19,28 +19,21 @@ type (
 	ServiceAccountScope = string
 	ProblemCode         = string
 
-	Project                     = contracts.Project
-	CreateProjectRequest        = contracts.CreateProjectRequest
-	Profile                     = contracts.Profile
-	ProfileRevisionSpec         = contracts.ProfileRevisionSpec
-	ResourcePolicy              = contracts.ResourcePolicy
-	LifecyclePolicy             = contracts.LifecyclePolicy
-	CheckpointPolicy            = contracts.CheckpointPolicy
-	ExecutionPolicy             = contracts.ExecutionPolicy
-	NetworkPolicy               = contracts.NetworkPolicy
-	NetworkDestination          = contracts.NetworkDestination
-	PortPolicy                  = contracts.PortPolicy
-	CreateProfileRequest        = contracts.CreateProfileRequest
-	ServiceAccount              = contracts.ServiceAccount
-	CreateServiceAccountRequest = contracts.CreateServiceAccountRequest
-	APIKey                      = contracts.APIKey
-	CreateAPIKeyRequest         = contracts.CreateAPIKeyRequest
-	CreateAPIKeyResponse        = contracts.CreateAPIKeyResponse
-	Sandbox                     = contracts.Sandbox
-	CreateSandboxRequest        = contracts.CreateSandboxRequest
-	CheckpointSandboxRequest    = contracts.CheckpointSandboxRequest
-	Operation                   = contracts.Operation
-	Problem                     = contracts.Problem
+	Profile                  = contracts.Profile
+	ProfileRevisionSpec      = contracts.ProfileRevisionSpec
+	ResourcePolicy           = contracts.ResourcePolicy
+	LifecyclePolicy          = contracts.LifecyclePolicy
+	CheckpointPolicy         = contracts.CheckpointPolicy
+	ExecutionPolicy          = contracts.ExecutionPolicy
+	NetworkPolicy            = contracts.NetworkPolicy
+	NetworkDestination       = contracts.NetworkDestination
+	PortPolicy               = contracts.PortPolicy
+	CreateProfileRequest     = contracts.CreateProfileRequest
+	Sandbox                  = contracts.Sandbox
+	CreateSandboxRequest     = contracts.CreateSandboxRequest
+	CheckpointSandboxRequest = contracts.CheckpointSandboxRequest
+	Operation                = contracts.Operation
+	Problem                  = contracts.Problem
 )
 
 const (

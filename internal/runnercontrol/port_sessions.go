@@ -9,26 +9,22 @@ import (
 
 // PortSessionAdmission is one authenticated request for a pinned Profile port.
 type PortSessionAdmission struct {
-	Session          contracts.PortSession
-	StreamID         string
-	ProjectID        string
-	TenantRef        string
-	SubjectRef       string
-	ServiceAccountID string
-	RequestID        string
-	LeaseID          string
-	IdempotencyKey   string
-	RequestHash      string
-	Now              time.Time
+	Session        contracts.PortSession
+	StreamID       string
+	TenantRef      string
+	SubjectRef     string
+	RequestID      string
+	LeaseID        string
+	IdempotencyKey string
+	RequestHash    string
+	Now            time.Time
 }
 
 // PortTunnel is the private assignment-bound projection consumed by the proxy.
 type PortTunnel struct {
 	Session           contracts.PortSession
-	ProjectID         string
 	TenantRef         string
 	SubjectRef        string
-	ServiceAccountID  string
 	RequestID         string
 	LeaseID           string
 	ProfileRevisionID string
@@ -43,17 +39,15 @@ type PortTunnel struct {
 
 // PortTunnelClose identifies one authenticated or already-consumed tunnel.
 type PortTunnelClose struct {
-	ProjectID        string
-	TenantRef        string
-	SubjectRef       string
-	SandboxID        string
-	SessionID        string
-	Generation       int64
-	ServiceAccountID string
-	IdempotencyKey   string
-	RequestHash      string
-	Reason           string
-	Now              time.Time
+	TenantRef      string
+	SubjectRef     string
+	SandboxID      string
+	SessionID      string
+	Generation     int64
+	IdempotencyKey string
+	RequestHash    string
+	Reason         string
+	Now            time.Time
 }
 
 // PortTunnelEvent is one runner-to-client payload or terminal outcome.

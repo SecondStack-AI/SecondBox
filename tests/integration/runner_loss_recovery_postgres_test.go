@@ -219,14 +219,14 @@ func TestRunnerLossRecoveryFencesOldAuthorityAndRestoresCheckpointOnAnotherRunne
 	}
 	activity, err := databaseStore.OpenActivitySession(t.Context(), ports.ActivityInput{
 		GenerationInput: ports.GenerationInput{
-			ProjectID: principal.ProjectID, SandboxID: sandbox.ID,
-			TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
+			TenantRef: principal.TenantRef, SandboxID: sandbox.ID,
+			SubjectRef: principal.SubjectRef,
 			Generation: ready.Generation, Now: now.Add(4 * time.Millisecond),
 		},
 		Session: contracts.ActivitySession{
 			ID: "activity-runner-loss-" + sandbox.ID, Kind: contracts.ActivitySessionKindExec,
 		},
-		LeaseID: lease.ID, ServiceAccountID: principal.ServiceAccountID,
+		LeaseID: lease.ID,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -244,8 +244,8 @@ func TestRunnerLossRecoveryFencesOldAuthorityAndRestoresCheckpointOnAnotherRunne
 	execSession, _, err := relay.AdmitDataPlane(
 		t.Context(), runnercontrol.DataPlaneAdmission{
 			ID: "dps-runner-loss-" + sandbox.ID, StreamID: "stream-runner-loss-" + sandbox.ID,
-			ProjectID: principal.ProjectID, SandboxID: sandbox.ID,
-			ServiceAccountID: principal.ServiceAccountID, LeaseID: lease.ID,
+			TenantRef: principal.TenantRef, SandboxID: sandbox.ID,
+			SubjectRef: principal.SubjectRef, LeaseID: lease.ID,
 			Generation: ready.Generation, Kind: "exec", Operation: "exec",
 			RequestID: "request-runner-loss-exec", IdempotencyKey: "runner-loss-exec",
 			RequestHash: "runner-loss-exec-hash", DeadlineAt: now.Add(50 * time.Second),
@@ -268,8 +268,8 @@ func TestRunnerLossRecoveryFencesOldAuthorityAndRestoresCheckpointOnAnotherRunne
 				ID: portID, SandboxID: sandbox.ID, Generation: ready.Generation,
 				Name: "web", ExpiresAt: now.Add(50 * time.Second),
 			},
-			StreamID: "stream-" + portID, ProjectID: principal.ProjectID,
-			ServiceAccountID: principal.ServiceAccountID, RequestID: "request-" + portID,
+			StreamID: "stream-" + portID, TenantRef: principal.TenantRef,
+			SubjectRef: principal.SubjectRef, RequestID: "request-" + portID,
 			LeaseID: lease.ID, IdempotencyKey: "idempotency-" + portID,
 			RequestHash: "hash-" + portID, Now: now.Add(5 * time.Millisecond),
 		},

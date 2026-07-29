@@ -79,8 +79,8 @@ func TestRunnerPoolAdministrationIsAuditedAndRevisionGuarded(t *testing.T) {
 
 	project, _, credential := createProjectAccountAndCredential(t, controlPlane, admin, "runner-admin-denied")
 	principal := authenticateCredential(t, controlPlane, credential)
-	if principal.ProjectID != project.ID {
-		t.Fatalf("application Principal project = %q, want %q", principal.ProjectID, project.ID)
+	if principal.TenantRef != project.ID {
+		t.Fatalf("application Principal project = %q, want %q", principal.TenantRef, project.ID)
 	}
 	if _, err := controlPlane.ListRunnerPools(t.Context(), principal, 10, ""); err != nil {
 		t.Fatalf("platform RunnerPool list error = %v", err)

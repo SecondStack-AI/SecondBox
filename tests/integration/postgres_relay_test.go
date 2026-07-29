@@ -50,8 +50,8 @@ func TestPostgresRelayPublicCancellationIsAtomicAndKeyScoped(t *testing.T) {
 		t.Context(),
 		runnercontrol.DataPlaneAdmission{
 			ID: "dps_relay_public_cancel", StreamID: "stream_relay_public_cancel",
-			ProjectID: project.ID, SandboxID: sandbox.ID,
-			ServiceAccountID: principal.ServiceAccountID, Generation: sandbox.Generation,
+			TenantRef: project.ID, SandboxID: sandbox.ID,
+			SubjectRef: principal.SubjectRef, Generation: sandbox.Generation,
 			RequestID: "request-relay-public-cancel",
 			Kind:      "exec", Operation: "exec-stream",
 			IdempotencyKey: "relay-public-cancel-create", RequestHash: "relay-public-cancel-create-hash",
@@ -104,8 +104,8 @@ func TestPostgresRelayPublicCancellationIsAtomicAndKeyScoped(t *testing.T) {
 	t.Cleanup(func() { removeFailureTrigger(context.Background()) })
 
 	cancellation := runnercontrol.PublicDataPlaneCancellation{
-		ProjectID: project.ID, SandboxID: sandbox.ID, SessionID: session.ID,
-		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
+		TenantRef: project.ID, SandboxID: sandbox.ID, SessionID: session.ID,
+		SubjectRef:  principal.SubjectRef,
 		SessionKind: "exec", SessionOperation: "exec-stream",
 		IdempotencyKey: "relay-public-cancel-atomic-failure",
 		RequestHash:    "relay-public-cancel-fingerprint", Reason: "public cancellation",
@@ -226,8 +226,8 @@ func TestPostgresRelayDurablyFencesSequencesAndReconnectDelivery(t *testing.T) {
 	t.Cleanup(relay.Close)
 	session, replayed, err := relay.AdmitDataPlane(t.Context(), runnercontrol.DataPlaneAdmission{
 		ID: "dps_postgres_relay", StreamID: "stream_postgres_relay",
-		ProjectID: principal.ProjectID, SandboxID: sandbox.ID,
-		ServiceAccountID: principal.ServiceAccountID, Generation: sandbox.Generation,
+		TenantRef: principal.TenantRef, SandboxID: sandbox.ID,
+		SubjectRef: principal.SubjectRef, Generation: sandbox.Generation,
 		RequestID: "request-postgres-relay",
 		Kind:      "exec", Operation: "exec", IdempotencyKey: "postgres-relay-exec",
 		RequestHash: "request-hash", DeadlineAt: now.Add(time.Minute),
@@ -358,8 +358,8 @@ func TestPostgresRelayDurablyFencesSequencesAndReconnectDelivery(t *testing.T) {
 
 	limited, _, err := relay.AdmitDataPlane(t.Context(), runnercontrol.DataPlaneAdmission{
 		ID: "dps_postgres_limited_" + sandbox.ID, StreamID: "stream_postgres_limited_" + sandbox.ID,
-		ProjectID: principal.ProjectID, SandboxID: sandbox.ID,
-		ServiceAccountID: principal.ServiceAccountID, Generation: sandbox.Generation,
+		TenantRef: principal.TenantRef, SandboxID: sandbox.ID,
+		SubjectRef: principal.SubjectRef, Generation: sandbox.Generation,
 		RequestID: "request-postgres-limited",
 		Kind:      "exec", Operation: "exec", IdempotencyKey: "postgres-relay-limited",
 		RequestHash: "limited-request-hash", DeadlineAt: now.Add(time.Minute),
@@ -426,8 +426,8 @@ func TestPostgresRelayDurablyFencesSequencesAndReconnectDelivery(t *testing.T) {
 
 	cancelling, _, err := relay.AdmitDataPlane(t.Context(), runnercontrol.DataPlaneAdmission{
 		ID: "dps_postgres_cancel", StreamID: "stream_postgres_cancel",
-		ProjectID: principal.ProjectID, SandboxID: sandbox.ID,
-		ServiceAccountID: principal.ServiceAccountID, Generation: sandbox.Generation,
+		TenantRef: principal.TenantRef, SandboxID: sandbox.ID,
+		SubjectRef: principal.SubjectRef, Generation: sandbox.Generation,
 		RequestID: "request-postgres-cancel",
 		Kind:      "exec", Operation: "exec", IdempotencyKey: "postgres-relay-cancel",
 		RequestHash: "cancel-request-hash", DeadlineAt: now.Add(30 * time.Second),
@@ -556,8 +556,8 @@ func TestPostgresRelayPreservesDistinctOperationCorrelationAcrossReconnect(t *te
 	t.Cleanup(relay.Close)
 	execSession, _, err := relay.AdmitDataPlane(t.Context(), runnercontrol.DataPlaneAdmission{
 		ID: "dps_correlation_exec_" + sandbox.ID, StreamID: "stream_correlation_exec_" + sandbox.ID,
-		ProjectID: principal.ProjectID, SandboxID: sandbox.ID,
-		ServiceAccountID: principal.ServiceAccountID, RequestID: "request-correlation-exec",
+		TenantRef: principal.TenantRef, SandboxID: sandbox.ID,
+		SubjectRef: principal.SubjectRef, RequestID: "request-correlation-exec",
 		LeaseID: execLease.ID, Generation: sandbox.Generation,
 		Kind: "exec", Operation: "exec", IdempotencyKey: "relay-correlation-exec",
 		RequestHash: "relay-correlation-exec-hash", DeadlineAt: now.Add(30 * time.Second),
@@ -573,8 +573,8 @@ func TestPostgresRelayPreservesDistinctOperationCorrelationAcrossReconnect(t *te
 	}
 	fileSession, _, err := relay.AdmitDataPlane(t.Context(), runnercontrol.DataPlaneAdmission{
 		ID: "dps_correlation_file_" + sandbox.ID, StreamID: "stream_correlation_file_" + sandbox.ID,
-		ProjectID: principal.ProjectID, SandboxID: sandbox.ID,
-		ServiceAccountID: principal.ServiceAccountID, RequestID: "request-correlation-file",
+		TenantRef: principal.TenantRef, SandboxID: sandbox.ID,
+		SubjectRef: principal.SubjectRef, RequestID: "request-correlation-file",
 		LeaseID: fileLease.ID, Generation: sandbox.Generation,
 		Kind: "file", Operation: "mkdir", IdempotencyKey: "relay-correlation-file",
 		RequestHash: "relay-correlation-file-hash", DeadlineAt: now.Add(30 * time.Second),
@@ -665,8 +665,8 @@ func TestPostgresRelayDurablySequencesPublicStreamingExecFrames(t *testing.T) {
 	t.Cleanup(relay.Close)
 	session, _, err := relay.AdmitDataPlane(t.Context(), runnercontrol.DataPlaneAdmission{
 		ID: "dps_stream_" + sandbox.ID, StreamID: "stream_public_" + sandbox.ID,
-		ProjectID: principal.ProjectID, SandboxID: sandbox.ID,
-		ServiceAccountID: principal.ServiceAccountID, RequestID: "request-public-stream",
+		TenantRef: principal.TenantRef, SandboxID: sandbox.ID,
+		SubjectRef: principal.SubjectRef, RequestID: "request-public-stream",
 		Generation: sandbox.Generation, Kind: "exec", Operation: "exec-stream",
 		RequestHash: "public-stream-hash", DeadlineAt: now.Add(time.Minute),
 		MaximumResponseBytes: 12, StreamWindowBytes: 12,

@@ -32,7 +32,7 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 		project, err := createFixtureProject(t, controlPlane,
 			t.Context(),
 			admin,
-			contracts.CreateProjectRequest{Name: fmt.Sprintf("%s-project-%d", suffix, index)},
+			fixtureCreateProjectRequest{Name: fmt.Sprintf("%s-project-%d", suffix, index)},
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -43,7 +43,7 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 	accountProject, err := createFixtureProject(t, controlPlane,
 		t.Context(),
 		admin,
-		contracts.CreateProjectRequest{Name: suffix + "-accounts"},
+		fixtureCreateProjectRequest{Name: suffix + "-accounts"},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +54,7 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 			t.Context(),
 			admin,
 			accountProject.ID,
-			contracts.CreateServiceAccountRequest{
+			fixtureCreateServiceAccountRequest{
 				Name:          fmt.Sprintf("%s-account-%d", suffix, index),
 				Scopes:        []string{"sandbox:read"},
 				ProfileGrants: []string{},
@@ -74,7 +74,7 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 			admin,
 			keyProject.ID,
 			keyAccount.ID,
-			contracts.CreateAPIKeyRequest{
+			fixtureCreateAPIKeyRequest{
 				Name:   fmt.Sprintf("%s-key-%d", suffix, index),
 				Scopes: []string{"sandbox:read"},
 			},
@@ -163,8 +163,8 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 		}
 		sandboxIDs = append(sandboxIDs, sandbox.ID)
 	}
-	if sandboxPrincipal.ProjectID != sandboxProject.ID {
-		t.Fatalf("Sandbox pagination Principal project = %q, want %q", sandboxPrincipal.ProjectID, sandboxProject.ID)
+	if sandboxPrincipal.TenantRef != sandboxProject.ID {
+		t.Fatalf("Sandbox pagination Principal project = %q, want %q", sandboxPrincipal.TenantRef, sandboxProject.ID)
 	}
 
 	handler, err := api.NewHandler(api.HandlerConfig{

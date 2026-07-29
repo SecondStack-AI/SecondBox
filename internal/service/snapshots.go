@@ -44,14 +44,14 @@ func (service *ControlPlaneService) CreateSandboxSnapshot(
 	}
 	now := service.now().UTC()
 	snapshot := contracts.Snapshot{
-		ID: service.newID("snp"), ProjectID: principal.ProjectID,
-		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef, SandboxID: sandboxID,
+		ID: service.newID("snp"), TenantRef: principal.TenantRef,
+		SubjectRef: principal.SubjectRef, SandboxID: sandboxID,
 		Name: request.Name, Metadata: cloneMetadata(request.Metadata),
 		RetainUntil: now.Add(time.Duration(checkpointPolicy.RetentionSeconds) * time.Second),
 		CreatedAt:   now,
 	}
 	audit := service.newAudit(
-		ctx, principal, "snapshot.created", "snapshot", snapshot.ID, principal.ProjectID, now,
+		ctx, principal, "snapshot.created", "snapshot", snapshot.ID, principal.TenantRef, now,
 	)
 	created, err := service.store.CreateSnapshot(ctx, ports.SnapshotCreationInput{
 		Snapshot: snapshot, IdempotencyKey: idempotencyKey, RequestHash: requestHash,
@@ -122,10 +122,10 @@ func (service *ControlPlaneService) DeleteSnapshot(
 	now := service.now().UTC()
 	audit := service.newAudit(
 		ctx, principal, "snapshot.retention_ended", "snapshot",
-		snapshotID, principal.ProjectID, now,
+		snapshotID, principal.TenantRef, now,
 	)
 	if err := service.store.EndSnapshotRetention(ctx, ports.SnapshotRetentionInput{
-		ProjectID: principal.ProjectID, TenantRef: principal.TenantRef,
+		TenantRef:  principal.TenantRef,
 		SubjectRef: principal.SubjectRef, SnapshotID: snapshotID,
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
 		IdempotencyEnds: now.Add(idempotencyRetention), Now: now,

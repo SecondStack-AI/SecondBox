@@ -33,13 +33,13 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 	}
 	if _, err := updateFixtureServiceAccount(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
-		contracts.UpdateServiceAccountRequest{Scopes: &scopes},
+		fixtureUpdateServiceAccountRequest{Scopes: &scopes},
 	); err != nil {
 		t.Fatal(err)
 	}
 	key, err := createFixtureAPIKey(t, controlPlane,
 		t.Context(), admin, project.ID, account.ID,
-		contracts.CreateAPIKeyRequest{Name: "port-tunnel-http", Scopes: scopes},
+		fixtureCreateAPIKeyRequest{Name: "port-tunnel-http", Scopes: scopes},
 	)
 	if err != nil {
 		t.Fatal(err)

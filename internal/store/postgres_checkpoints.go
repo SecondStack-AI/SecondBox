@@ -42,7 +42,7 @@ func (store *PostgresControlPlaneStore) StageCheckpoint(
 		}
 		return contracts.WorkspaceCheckpoint{}, fmt.Errorf("SecondBox checkpoint authority lookup failed: %w", err)
 	}
-	checkpoint.ProjectID, checkpoint.TenantRef, checkpoint.SubjectRef =
+	checkpoint.TenantRef, checkpoint.TenantRef, checkpoint.SubjectRef =
 		tenantRef, tenantRef, subjectRef
 	if _, err := tx.Exec(
 		ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`,
@@ -207,7 +207,6 @@ func (store *PostgresControlPlaneStore) PublishCheckpoint(
 	if err != nil {
 		return contracts.WorkspaceCheckpoint{}, fmt.Errorf("SecondBox checkpoint publication lookup failed: %w", err)
 	}
-	checkpoint.ProjectID = checkpoint.TenantRef
 	if checkpoint.SHA256 != input.Checkpoint.SHA256 ||
 		checkpoint.SizeBytes != input.Checkpoint.SizeBytes || storageKey != input.StorageKey {
 		if _, err := tx.Exec(ctx, `

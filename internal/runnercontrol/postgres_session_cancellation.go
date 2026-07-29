@@ -158,7 +158,7 @@ func validatePublicDataPlaneCancellation(input PublicDataPlaneCancellation) erro
 		input.SessionOperation == "exec-stream" ||
 		input.SessionKind == "terminal" &&
 			input.SessionOperation == "terminal"
-	if input.ProjectID == "" || input.TenantRef == "" || input.SubjectRef == "" ||
+	if input.TenantRef == "" || input.SubjectRef == "" ||
 		input.SandboxID == "" || input.SessionID == "" ||
 		input.IdempotencyKey == "" || input.RequestHash == "" || input.Reason == "" ||
 		input.Generation < 1 || input.Now.IsZero() ||

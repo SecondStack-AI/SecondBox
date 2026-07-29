@@ -89,7 +89,7 @@ func TestSnapshotHTTPContractEnforcesAuthRevisionAndStoppedCheckpointAuthority(t
 	assertHTTPStatus(t, createdResponse, http.StatusCreated)
 	var created contracts.Snapshot
 	decodeHTTPJSON(t, createdResponse, &created)
-	if created.ID == "" || created.ProjectID != "" || created.WorkspaceID != "" ||
+	if created.ID == "" || created.TenantRef != "" || created.WorkspaceID != "" ||
 		created.CheckpointID != "" || created.State != "" ||
 		created.Name != "http-snapshot" {
 		t.Fatalf("public Snapshot = %#v", created)
@@ -111,7 +111,7 @@ func TestSnapshotHTTPContractEnforcesAuthRevisionAndStoppedCheckpointAuthority(t
 	}
 	otherSubject, err := createFixtureServiceAccount(t, controlPlane,
 		t.Context(), admin, project.ID,
-		contracts.CreateServiceAccountRequest{
+		fixtureCreateServiceAccountRequest{
 			Name: "snapshot-http-other-subject", Scopes: snapshotScopes,
 			ProfileGrants: []string{profile.Name},
 		},
@@ -121,7 +121,7 @@ func TestSnapshotHTTPContractEnforcesAuthRevisionAndStoppedCheckpointAuthority(t
 	}
 	otherSubjectKey, err := createFixtureAPIKey(t, controlPlane,
 		t.Context(), admin, project.ID, otherSubject.ID,
-		contracts.CreateAPIKeyRequest{
+		fixtureCreateAPIKeyRequest{
 			Name: "snapshot-http-other-subject", Scopes: snapshotScopes,
 		},
 	)
@@ -246,7 +246,7 @@ func TestSnapshotsRetainPublishedStoppedStateAndProtectCheckpointGarbageCollecti
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.ID == "" || created.ProjectID != project.ID ||
+	if created.ID == "" || created.TenantRef != project.ID ||
 		created.SandboxID != sandbox.ID || created.WorkspaceID != sandbox.Workspace.ID ||
 		created.CheckpointID != firstCheckpoint.ID ||
 		created.SourceGeneration != firstCheckpoint.SourceGeneration ||

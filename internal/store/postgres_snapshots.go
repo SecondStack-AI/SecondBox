@@ -385,6 +385,5 @@ func scanSnapshot(row snapshotScanner) (contracts.Snapshot, error) {
 	if err := json.Unmarshal(compatibilityJSON, &snapshot.Compatibility); err != nil {
 		return contracts.Snapshot{}, fmt.Errorf("SecondBox Snapshot compatibility decoding failed: %w", err)
 	}
-	snapshot.ProjectID = snapshot.TenantRef
 	return snapshot, nil
 }
