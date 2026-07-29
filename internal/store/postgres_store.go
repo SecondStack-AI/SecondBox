@@ -16,6 +16,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/observability"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
@@ -897,6 +898,56 @@ func (store *PostgresControlPlaneStore) ReadMetricsSnapshot(
 			return contracts.MetricsSnapshot{}, fmt.Errorf("SecondBox metrics projection iteration failed: %w", err)
 		}
 		rows.Close()
+	}
+	rows, err := store.pool.Query(ctx, `
+		SELECT kind,state,count(*),
+		       COALESCE(sum(EXTRACT(EPOCH FROM (completed_at-created_at))),0),
+		       count(*) FILTER (WHERE completed_at-created_at <= interval '5 milliseconds'),
+		       count(*) FILTER (WHERE completed_at-created_at <= interval '10 milliseconds'),
+		       count(*) FILTER (WHERE completed_at-created_at <= interval '25 milliseconds'),
+		       count(*) FILTER (WHERE completed_at-created_at <= interval '50 milliseconds'),
+		       count(*) FILTER (WHERE completed_at-created_at <= interval '100 milliseconds'),
+		       count(*) FILTER (WHERE completed_at-created_at <= interval '250 milliseconds'),
+		       count(*) FILTER (WHERE completed_at-created_at <= interval '500 milliseconds'),
+		       count(*) FILTER (WHERE completed_at-created_at <= interval '1 second'),
+		       count(*) FILTER (WHERE completed_at-created_at <= interval '2.5 seconds'),
+		       count(*) FILTER (WHERE completed_at-created_at <= interval '5 seconds'),
+		       count(*) FILTER (WHERE completed_at-created_at <= interval '10 seconds'),
+		       count(*) FILTER (WHERE completed_at-created_at <= interval '30 seconds'),
+		       count(*) FILTER (WHERE completed_at-created_at <= interval '60 seconds'),
+		       count(*) FILTER (WHERE completed_at-created_at <= interval '120 seconds')
+		FROM secondbox.operations
+		WHERE completed_at IS NOT NULL
+		  AND state IN ('succeeded','failed','cancelled')
+		  AND kind IN (
+		      'create','start','drain','stop','delete',
+		      'snapshot_create','snapshot_delete','snapshot_restore',
+		      'cancel_exec','cancel_terminal'
+		  )
+		GROUP BY kind,state
+		ORDER BY kind,state`)
+	if err != nil {
+		return contracts.MetricsSnapshot{}, fmt.Errorf("SecondBox Operation duration metrics projection failed: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var metric contracts.OperationDurationMetric
+		var bucketCounts [len(observability.DurationBucketsSeconds)]uint64
+		destinations := []any{
+			&metric.Kind, &metric.TerminalState, &metric.Histogram.Count,
+			&metric.Histogram.SumSeconds,
+		}
+		for index := range bucketCounts {
+			destinations = append(destinations, &bucketCounts[index])
+		}
+		if err := rows.Scan(destinations...); err != nil {
+			return contracts.MetricsSnapshot{}, fmt.Errorf("SecondBox Operation duration metrics scan failed: %w", err)
+		}
+		metric.Histogram.BucketCounts = append([]uint64(nil), bucketCounts[:]...)
+		snapshot.OperationDurations = append(snapshot.OperationDurations, metric)
+	}
+	if err := rows.Err(); err != nil {
+		return contracts.MetricsSnapshot{}, fmt.Errorf("SecondBox Operation duration metrics iteration failed: %w", err)
 	}
 	return snapshot, nil
 }

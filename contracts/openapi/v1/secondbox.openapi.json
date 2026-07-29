@@ -1801,7 +1801,7 @@
       "Runner": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "poolName", "name", "state", "credentialState", "architectures", "capabilities", "capacity", "protocolVersions", "revision", "createdAt", "updatedAt"],
+        "required": ["id", "poolName", "name", "state", "credentialState", "architectures", "capabilities", "capacity", "protocolVersions", "sandboxStartSampleCount", "sandboxStartP95Milliseconds", "revision", "createdAt", "updatedAt"],
         "properties": {
           "id": {"$ref": "#/components/schemas/RunnerID"},
           "poolName": {"$ref": "#/components/schemas/ProfileName"},
@@ -1812,6 +1812,8 @@
           "capabilities": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "enum": ["compute", "network-policy", "storage", "cleanup", "local-workspace", "exec-streaming", "file-streaming", "pty", "port-proxy", "evidence"]}},
           "capacity": {"type": "object", "maxProperties": 32, "additionalProperties": {"type": "integer", "format": "int64", "minimum": 0}},
           "protocolVersions": {"type": "array", "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 32}},
+          "sandboxStartSampleCount": {"type": "integer", "format": "int64", "minimum": 0},
+          "sandboxStartP95Milliseconds": {"type": "integer", "format": "int64", "minimum": 0},
           "lastSeenAt": {"$ref": "#/components/schemas/Timestamp"},
           "revision": {"type": "integer", "format": "int64", "minimum": 1},
           "createdAt": {"$ref": "#/components/schemas/Timestamp"},
@@ -2068,11 +2070,12 @@
       "ExecExited": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["kind", "exitCode", "output"],
+        "required": ["kind", "exitCode", "elapsedMilliseconds", "output"],
         "properties": {
           "kind": {"const": "exited"},
           "exitCode": {"type": "integer", "minimum": 0, "maximum": 255},
           "signal": {"type": "integer", "minimum": 1, "maximum": 64},
+          "elapsedMilliseconds": {"type": "integer", "format": "int64", "minimum": 0},
           "output": {"$ref": "#/components/schemas/ExecOutput"}
         }
       },

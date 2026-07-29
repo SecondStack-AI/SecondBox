@@ -304,8 +304,27 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	}, now); !errors.Is(err, runnercontrol.ErrStaleAssignmentEvidence) {
 		t.Fatalf("stale ready result error = %v, want ErrStaleAssignmentEvidence", err)
 	}
+	timingObservedAt := now.Add(750 * time.Millisecond)
+	progress := &runnerv1.RunnerToControlPlane{
+		Message: &runnerv1.RunnerToControlPlane_AssignmentProgress{
+			AssignmentProgress: &runnerv1.AssignmentProgress{
+				MessageId: "progress-4", Sequence: 4,
+				Fence:            proto.Clone(delivery.Message.GetAssignment().Fence).(*runnerv1.AssignmentFence),
+				Stage:            runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY,
+				ObservedAtUnixMs: uint64(timingObservedAt.UnixMilli()),
+				Correlation:      proto.Clone(delivery.Message.GetAssignment().Correlation).(*runnerv1.Correlation),
+			},
+		},
+	}
+	if duplicate, err := stateStore.RecordEvent(t.Context(), runnercontrol.Event{
+		Kind: runnercontrol.EventAssignment, RunnerID: runnerID, ConnectionID: connectionID,
+		Message: progress,
+	}, now.Add(time.Second)); err != nil || duplicate {
+		t.Fatalf("AssignmentProgress duplicate, error = %t, %v", duplicate, err)
+	}
 	ready := proto.Clone(staleReady).(*runnerv1.RunnerToControlPlane)
-	ready.GetAssignmentResult().MessageId = "ready-3"
+	ready.GetAssignmentResult().MessageId = "ready-5"
+	ready.GetAssignmentResult().Sequence = 5
 	ready.GetAssignmentResult().Fence.FencingToken = durableAssignment.FencingToken
 	ready.GetAssignmentResult().BackendReference = "fc-instance-1"
 	if _, err := stateStore.RecordEvent(t.Context(), runnercontrol.Event{
@@ -322,25 +341,52 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	t.Cleanup(pool.Close)
 	var count int
 	var backendReference, capabilityJSON, sandboxState, guestLiveness string
+	var sandboxStartSampleCount, sandboxStartP95Milliseconds int64
 	if err := pool.QueryRow(t.Context(), `
 		SELECT count(*),max(assignment.backend_reference),max(assignment.capability_snapshot_json::text),
-		       max(sandbox.state),max(instance.guest_liveness)
+		       max(sandbox.state),max(instance.guest_liveness),
+		       max(runner.sandbox_start_sample_count),max(runner.sandbox_start_p95_milliseconds)
 		FROM secondbox.assignments AS assignment
 		JOIN secondbox.sandboxes AS sandbox ON sandbox.id=assignment.sandbox_id
 		JOIN secondbox.instances AS instance ON instance.id=assignment.instance_id
+		JOIN secondbox.runners AS runner ON runner.id=assignment.runner_id
 		WHERE assignment.sandbox_id=$1`, sandboxID,
 	).Scan(
 		&count, &backendReference, &capabilityJSON, &sandboxState,
-		&guestLiveness,
+		&guestLiveness, &sandboxStartSampleCount, &sandboxStartP95Milliseconds,
 	); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 || backendReference != "fc-instance-1" ||
 		!json.Valid([]byte(capabilityJSON)) ||
-		sandboxState != "starting" || guestLiveness != "ready" {
+		sandboxState != "starting" || guestLiveness != "ready" ||
+		sandboxStartSampleCount != 4 || sandboxStartP95Milliseconds != 75 {
 		t.Fatalf(
-			"durable Assignment evidence = count %d, backend %q, capability %q, Sandbox %q, guest %q",
+			"durable Assignment evidence = count %d, backend %q, capability %q, Sandbox %q, guest %q, starts %d p95 %d",
 			count, backendReference, capabilityJSON, sandboxState, guestLiveness,
+			sandboxStartSampleCount, sandboxStartP95Milliseconds,
+		)
+	}
+	var timingOperationID, timingSandboxID, timingStage string
+	var observedAt, receivedAt time.Time
+	if err := pool.QueryRow(t.Context(), `
+		SELECT operation_id,sandbox_id,stage,observed_at,received_at
+		FROM secondbox.assignment_stage_timings
+		WHERE assignment_id=$1`,
+		durableAssignment.ID,
+	).Scan(
+		&timingOperationID, &timingSandboxID, &timingStage, &observedAt, &receivedAt,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if timingOperationID != delivery.Message.GetAssignment().Correlation.OperationId ||
+		timingSandboxID != sandboxID ||
+		timingStage != "artifact_verify" ||
+		!observedAt.Equal(timingObservedAt) ||
+		!receivedAt.Equal(now.Add(time.Second)) {
+		t.Fatalf(
+			"AssignmentProgress timing = operation %q Sandbox %q stage %q observed %s received %s",
+			timingOperationID, timingSandboxID, timingStage, observedAt, receivedAt,
 		)
 	}
 
@@ -403,7 +449,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 		t.Fatal(err)
 	}
 	fenceResult := &runnerv1.FenceResult{
-		MessageId: "fence-result-5", Sequence: 5,
+		MessageId: "fence-result-6", Sequence: 6,
 		Fence: &runnerv1.AssignmentFence{
 			AssignmentId: durableAssignment.ID, SandboxId: sandboxID,
 			InstanceId:        durableAssignment.InstanceID,
@@ -455,7 +501,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 		Message: &runnerv1.RunnerToControlPlane{
 			Message: &runnerv1.RunnerToControlPlane_LocalWorkspaceResult{
 				LocalWorkspaceResult: &runnerv1.LocalWorkspaceResult{
-					MessageId: "local-generation-result-6", Sequence: 6, CommandVersion: 1,
+					MessageId: "local-generation-result-7", Sequence: 7, CommandVersion: 1,
 					Kind:        runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION,
 					Terminal:    runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED,
 					OperationId: advanceCommand.OperationId, EffectId: advanceCommand.EffectId,
@@ -470,8 +516,8 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 		t.Fatalf("local generation result duplicate, error = %t, %v", duplicate, err)
 	}
 	staleAfterFence := proto.Clone(ready).(*runnerv1.RunnerToControlPlane)
-	staleAfterFence.GetAssignmentResult().MessageId = "ready-after-fence-7"
-	staleAfterFence.GetAssignmentResult().Sequence = 7
+	staleAfterFence.GetAssignmentResult().MessageId = "ready-after-fence-8"
+	staleAfterFence.GetAssignmentResult().Sequence = 8
 	staleAfterFence.GetAssignmentResult().BackendReference = "fc-stale-after-fence"
 	if _, err := stateStore.RecordEvent(t.Context(), runnercontrol.Event{
 		Kind: runnercontrol.EventAssignment, RunnerID: runnerID, ConnectionID: connectionID,
@@ -812,6 +858,7 @@ func task4Registration(
 		ArtifactCache: []*runnerv1.ArtifactCacheEvidence{
 			{ArtifactId: "runtime", ManifestDigest: "sha256:runtime", VerifiedAtUnixMs: 1},
 		},
+		StartupTiming: &runnerv1.StartupTiming{SampleCount: 2, P95Milliseconds: 50},
 	}
 }
 
@@ -830,6 +877,7 @@ func task4Heartbeat(
 			Instances: 8, Operations: 32,
 		},
 		Reserved: &runnerv1.Capacity{}, DrainPhase: phase,
+		StartupTiming: &runnerv1.StartupTiming{SampleCount: 4, P95Milliseconds: 75},
 	}
 }
 

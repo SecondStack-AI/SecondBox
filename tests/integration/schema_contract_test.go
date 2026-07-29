@@ -27,7 +27,7 @@ func TestSecondBoxBaselineOwnsCleanLogicalSchemaWithoutPhysicalCrossTableConstra
 	for _, table := range []string{
 		"profiles", "profile_revisions",
 		"runner_pools", "runners", "sandboxes", "workspaces", "instances",
-		"assignments", "leases", "activity_sessions", "activity_touches",
+		"assignments", "assignment_stage_timings", "leases", "activity_sessions", "activity_touches",
 		"snapshots", "workspace_restores", "artifacts",
 		"port_sessions", "data_plane_sessions", "data_plane_frames",
 		"operations", "idempotency_records", "audit_events",
@@ -52,6 +52,8 @@ func TestSecondBoxBaselineOwnsCleanLogicalSchemaWithoutPhysicalCrossTableConstra
 		"create index workspaces_home_state_idx",
 		"create table secondbox.workspace_restores",
 		"create index workspace_restores_home_state_idx",
+		"create table secondbox.assignment_stage_timings",
+		"primary key (assignment_id, stage)",
 	} {
 		if !strings.Contains(sql, fragment) {
 			t.Errorf("SecondBox baseline is missing local Workspace authority %q", fragment)

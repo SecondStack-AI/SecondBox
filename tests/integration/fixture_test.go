@@ -275,7 +275,8 @@ func seedFixtureHomeRunner(t *testing.T, poolName string, runnerID string) {
 			id,pool_name,name,state,architectures_json,capabilities_json,capacity_json,
 			protocol_versions_json,guest_protocol_minimum,guest_protocol_maximum,
 			software_version,active_connection_id,last_sequence,drain_phase,
-			reserved_capacity_json,artifact_cache_json,last_seen_at,revision,created_at,updated_at
+			reserved_capacity_json,artifact_cache_json,sandbox_start_sample_count,
+			sandbox_start_p95_milliseconds,last_seen_at,revision,created_at,updated_at
 		) VALUES (
 			$1,$2,$1,'ready','["amd64"]',
 			'["compute","network-policy","storage","cleanup","local-workspace"]',
@@ -284,7 +285,7 @@ func seedFixtureHomeRunner(t *testing.T, poolName string, runnerID string) {
 			'[1]',1,1,'fixture','fixture-connection',1,'active',
 			'{"CPUMillis":0,"MemoryBytes":0,"DiskBytes":0,"Instances":0,"Operations":0}',
 			'{"artifactDigests":[]}',
-			$3,1,$3,$3
+			0,0,$3,1,$3,$3
 		)
 		ON CONFLICT (id) DO UPDATE SET
 			state='ready',active_connection_id='fixture-connection',drain_phase='active',

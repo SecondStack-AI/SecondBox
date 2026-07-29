@@ -104,6 +104,10 @@ type AssignmentBackend interface {
 	FenceAssignment(context.Context, *runnerprotocol.FenceCommand) (FenceEvidence, error)
 }
 
+type startupTimingBackend interface {
+	StartupTiming() (uint64, time.Duration)
+}
+
 type evidenceAwareBackend interface {
 	SetRunnerEvidenceSink(runnerevidence.Sink, string)
 }
@@ -417,6 +421,7 @@ func (s *RunnerProtocolService) sendRegistration(
 		Reserved:          readiness.Reserved,
 		ArtifactCache:     readiness.ArtifactCache,
 		ReadinessFailures: readiness.ReadinessFailures,
+		StartupTiming:     s.startupTiming(),
 	}
 	if err := s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
 		Message: &runnerprotocol.RunnerToControlPlane_Registration{Registration: registration},
@@ -996,9 +1001,24 @@ func (s *RunnerProtocolService) sendHeartbeat(
 				Reserved:          readiness.Reserved,
 				ActiveAssignments: s.activeAssignments(),
 				DrainPhase:        s.drainPhase(),
+				StartupTiming:     s.startupTiming(),
 			},
 		},
 	})
+}
+
+func (s *RunnerProtocolService) startupTiming() *runnerprotocol.StartupTiming {
+	backend, ok := s.backend.(startupTimingBackend)
+	if !ok {
+		return &runnerprotocol.StartupTiming{}
+	}
+	count, p95 := backend.StartupTiming()
+	if p95 < 0 {
+		p95 = 0
+	}
+	return &runnerprotocol.StartupTiming{
+		SampleCount: count, P95Milliseconds: uint64(p95.Milliseconds()),
+	}
 }
 
 func (s *RunnerProtocolService) recordActiveAssignment(

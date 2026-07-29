@@ -227,6 +227,8 @@ func TestHTTPRequestIDCorrelatesOperationAuditAndStructuredLog(t *testing.T) {
 		[]byte(`"request_id":"` + requestID + `"`),
 		[]byte(`"method":"POST"`),
 		[]byte(`"route":"POST /v1/sandboxes/{sandboxAction}"`),
+		[]byte(`"status":202`),
+		[]byte(`"duration_ms":`),
 	} {
 		if !bytes.Contains(logBytes, required) {
 			t.Fatalf("structured request log lacks %s: %s", required, logBytes)

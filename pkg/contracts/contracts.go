@@ -234,19 +234,21 @@ type UpdateRunnerPoolRequest struct {
 
 // Runner is enrolled execution identity and fixed-capacity evidence.
 type Runner struct {
-	ID               string           `json:"id"`
-	PoolName         string           `json:"poolName"`
-	Name             string           `json:"name"`
-	State            string           `json:"state"`
-	CredentialState  string           `json:"credentialState"`
-	Architectures    []string         `json:"architectures"`
-	Capabilities     []string         `json:"capabilities"`
-	Capacity         map[string]int64 `json:"capacity"`
-	ProtocolVersions []string         `json:"protocolVersions"`
-	LastSeenAt       *time.Time       `json:"lastSeenAt,omitempty"`
-	Revision         int64            `json:"revision"`
-	CreatedAt        time.Time        `json:"createdAt"`
-	UpdatedAt        time.Time        `json:"updatedAt"`
+	ID                          string           `json:"id"`
+	PoolName                    string           `json:"poolName"`
+	Name                        string           `json:"name"`
+	State                       string           `json:"state"`
+	CredentialState             string           `json:"credentialState"`
+	Architectures               []string         `json:"architectures"`
+	Capabilities                []string         `json:"capabilities"`
+	Capacity                    map[string]int64 `json:"capacity"`
+	ProtocolVersions            []string         `json:"protocolVersions"`
+	SandboxStartSampleCount     int64            `json:"sandboxStartSampleCount"`
+	SandboxStartP95Milliseconds int64            `json:"sandboxStartP95Milliseconds"`
+	LastSeenAt                  *time.Time       `json:"lastSeenAt,omitempty"`
+	Revision                    int64            `json:"revision"`
+	CreatedAt                   time.Time        `json:"createdAt"`
+	UpdatedAt                   time.Time        `json:"updatedAt"`
 }
 
 // RunnerPage is one bounded stable administrative Runner traversal page.
@@ -666,10 +668,11 @@ type ExecOutput struct {
 }
 
 type ExecExited struct {
-	Kind     string     `json:"kind"`
-	ExitCode int32      `json:"exitCode"`
-	Signal   *int32     `json:"signal,omitempty"`
-	Output   ExecOutput `json:"output"`
+	Kind                string     `json:"kind"`
+	ExitCode            int32      `json:"exitCode"`
+	Signal              *int32     `json:"signal,omitempty"`
+	ElapsedMilliseconds int64      `json:"elapsedMilliseconds"`
+	Output              ExecOutput `json:"output"`
 }
 
 type ExecSpawnFailed struct {
@@ -812,8 +815,23 @@ type AuditEvent struct {
 	CreatedAt    time.Time         `json:"createdAt"`
 }
 
-// MetricsSnapshot contains only fixed-cardinality state and outcome counts.
+// MetricDurationHistogram is one cumulative duration histogram.
+type MetricDurationHistogram struct {
+	Count        uint64
+	SumSeconds   float64
+	BucketCounts []uint64
+}
+
+// OperationDurationMetric is one bounded Operation kind and terminal-state series.
+type OperationDurationMetric struct {
+	Kind          string
+	TerminalState string
+	Histogram     MetricDurationHistogram
+}
+
+// MetricsSnapshot contains only fixed-cardinality state, outcome, and timing signals.
 type MetricsSnapshot struct {
-	SandboxStates   map[string]int64
-	OperationStates map[string]int64
+	SandboxStates      map[string]int64
+	OperationStates    map[string]int64
+	OperationDurations []OperationDurationMetric
 }

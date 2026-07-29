@@ -189,10 +189,11 @@ type ExecOutput struct {
 }
 
 type ExecExited struct {
-	ExitCode int        `json:"exitCode"`
-	Kind     string     `json:"kind"`
-	Output   ExecOutput `json:"output"`
-	Signal   *int       `json:"signal,omitempty"`
+	ElapsedMilliseconds int64      `json:"elapsedMilliseconds"`
+	ExitCode            int        `json:"exitCode"`
+	Kind                string     `json:"kind"`
+	Output              ExecOutput `json:"output"`
+	Signal              *int       `json:"signal,omitempty"`
 }
 
 type ExecSpawnFailed struct {

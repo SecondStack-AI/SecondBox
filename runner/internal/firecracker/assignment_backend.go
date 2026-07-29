@@ -163,6 +163,12 @@ func runnercontrolValidObservedTerminationReason(
 	return reason != runnerprotocol.InstanceObservedTerminationReason_INSTANCE_OBSERVED_TERMINATION_REASON_UNSPECIFIED
 }
 
+// StartupTiming reports bounded process-lifetime Sandbox startup observations.
+func (b *AssignmentBackend) StartupTiming() (uint64, time.Duration) {
+	snapshot := b.manager.RuntimeMetricsSnapshot()
+	return uint64(snapshot.ColdStartCount), snapshot.ColdStartP95
+}
+
 // Readiness verifies signed artifacts and host prerequisites before capacity advertisement.
 func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.BackendReadiness, error) {
 	if err := b.manager.CleanupHealth(); err != nil {

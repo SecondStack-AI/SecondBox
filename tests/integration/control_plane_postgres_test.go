@@ -591,6 +591,16 @@ func TestHTTPAuthenticationStrictCreateAndFixedCardinalityMetrics(t *testing.T) 
 	}
 	metricsBody := readResponse(t, metricsResponse)
 	metricsResponse.Body.Close()
+	for _, required := range []string{
+		"# TYPE secondbox_http_request_duration_seconds histogram",
+		`secondbox_http_request_duration_seconds_count{route="POST /v1/sandboxes",status_class="2xx"} 1`,
+		`secondbox_http_request_duration_seconds_count{route="POST /v1/sandboxes",status_class="4xx"} 1`,
+		"# TYPE secondbox_operation_duration_seconds histogram",
+	} {
+		if !strings.Contains(metricsBody, required) {
+			t.Errorf("metrics lack %q: %s", required, metricsBody)
+		}
+	}
 	for _, forbidden := range []string{project.Name, profile.Name, account.ID, "project=", "sandbox_id=", "api_key=", "backend=", "workspace_path="} {
 		if strings.Contains(metricsBody, forbidden) {
 			t.Errorf("metrics contain forbidden high-cardinality value %q: %s", forbidden, metricsBody)

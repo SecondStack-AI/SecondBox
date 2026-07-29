@@ -222,11 +222,12 @@ func seedPaginationRunners(t *testing.T, poolName string, suffix string) []strin
 				id,pool_name,name,state,architectures_json,capabilities_json,capacity_json,
 				protocol_versions_json,guest_protocol_minimum,guest_protocol_maximum,
 				software_version,active_connection_id,last_sequence,drain_phase,
-				reserved_capacity_json,artifact_cache_json,last_seen_at,revision,
+				reserved_capacity_json,artifact_cache_json,sandbox_start_sample_count,
+				sandbox_start_p95_milliseconds,last_seen_at,revision,
 				created_at,updated_at
 			) VALUES (
 				$1,$2,$3,'offline','["amd64"]','["compute"]','{"instances":0}','["1"]',
-				1,1,'1.0.0','',0,'active','{}','[]',NULL,1,$4,$4
+				1,1,'1.0.0','',0,'active','{}','[]',0,0,NULL,1,$4,$4
 			)`,
 			runnerID,
 			poolName,

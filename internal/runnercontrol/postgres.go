@@ -193,6 +193,10 @@ func (store *PostgresStateStore) RecordRegistration(
 	if err != nil {
 		return false, fmt.Errorf("SecondBox runner cache evidence encoding: %w", err)
 	}
+	startCount, startP95Milliseconds, err := protocolStartupTiming(registration.StartupTiming)
+	if err != nil {
+		return false, err
+	}
 	tx, duplicate, err := store.beginOrderedMessage(
 		ctx, registration.RunnerId, registration.ConnectionId,
 		registration.MessageId, registration.Sequence, "registration", now,
@@ -216,8 +220,9 @@ func (store *PostgresStateStore) RecordRegistration(
 			id,pool_name,name,state,architectures_json,capabilities_json,capacity_json,
 			protocol_versions_json,guest_protocol_minimum,guest_protocol_maximum,
 			software_version,active_connection_id,last_sequence,drain_phase,
-			reserved_capacity_json,artifact_cache_json,last_seen_at,revision,created_at,updated_at
-		) VALUES ($1,$2,$1,'connected','[]','{}','{}','[]',0,0,'',$3,0,'active','{}','[]',NULL,1,$4,$4)
+			reserved_capacity_json,artifact_cache_json,sandbox_start_sample_count,
+			sandbox_start_p95_milliseconds,last_seen_at,revision,created_at,updated_at
+		) VALUES ($1,$2,$1,'connected','[]','{}','{}','[]',0,0,'',$3,0,'active','{}','[]',0,0,NULL,1,$4,$4)
 		ON CONFLICT (id) DO UPDATE SET
 			pool_name=EXCLUDED.pool_name,active_connection_id=EXCLUDED.active_connection_id,
 			state='connected',last_sequence=0,revision=secondbox.runners.revision+1,
@@ -232,14 +237,17 @@ func (store *PostgresStateStore) RecordRegistration(
 			capacity_json=$5,protocol_versions_json=$6,
 			guest_protocol_minimum=$7,guest_protocol_maximum=$8,software_version=$9,
 			last_sequence=$10,drain_phase='active',reserved_capacity_json=$11,
-			artifact_cache_json=$12,last_seen_at=$13,revision=revision+1,updated_at=$13
-		WHERE id=$1 AND pool_name=$2 AND active_connection_id=$14`,
+			artifact_cache_json=$12,sandbox_start_sample_count=$13,
+			sandbox_start_p95_milliseconds=$14,last_seen_at=$15,
+			revision=revision+1,updated_at=$15
+		WHERE id=$1 AND pool_name=$2 AND active_connection_id=$16`,
 		registration.RunnerId, registration.RunnerPoolId, architecturesJSON, capabilitiesJSON,
 		allocatableJSON, versionsJSON,
 		registration.Capabilities.GuestProtocolGenerations.Minimum,
 		registration.Capabilities.GuestProtocolGenerations.Maximum,
 		registration.SoftwareVersion, registration.Sequence,
-		reservedJSON, cacheJSON, now.UTC(), registration.ConnectionId,
+		reservedJSON, cacheJSON, startCount, startP95Milliseconds,
+		now.UTC(), registration.ConnectionId,
 	)
 	if err != nil {
 		return false, fmt.Errorf("SecondBox runner Registration update: %w", err)
@@ -274,6 +282,10 @@ func (store *PostgresStateStore) RecordHeartbeat(
 	if err != nil {
 		return false, err
 	}
+	startCount, startP95Milliseconds, err := protocolStartupTiming(heartbeat.StartupTiming)
+	if err != nil {
+		return false, err
+	}
 	tx, duplicate, err := store.beginOrderedMessage(
 		ctx, heartbeat.RunnerId, heartbeat.ConnectionId,
 		heartbeat.MessageId, heartbeat.Sequence, "heartbeat", now,
@@ -285,10 +297,13 @@ func (store *PostgresStateStore) RecordHeartbeat(
 	command, err := tx.Exec(ctx, `
 		UPDATE secondbox.runners
 		SET state=$2,capacity_json=$3,reserved_capacity_json=$4,last_sequence=$5,
-			drain_phase=$6,last_seen_at=$7,revision=revision+1,updated_at=$7
-		WHERE id=$1 AND active_connection_id=$8`,
+			drain_phase=$6,sandbox_start_sample_count=$7,
+			sandbox_start_p95_milliseconds=$8,last_seen_at=$9,
+			revision=revision+1,updated_at=$9
+		WHERE id=$1 AND active_connection_id=$10`,
 		heartbeat.RunnerId, runnerState, allocatableJSON, reservedJSON,
-		heartbeat.Sequence, drainPhase, now.UTC(), heartbeat.ConnectionId,
+		heartbeat.Sequence, drainPhase, startCount, startP95Milliseconds,
+		now.UTC(), heartbeat.ConnectionId,
 	)
 	if err != nil {
 		return false, fmt.Errorf("SecondBox runner Heartbeat update: %w", err)
@@ -2566,6 +2581,15 @@ func encodeProtocolCapacity(capacity *runnerv1.Capacity) ([]byte, error) {
 	return encoded, nil
 }
 
+func protocolStartupTiming(timing *runnerv1.StartupTiming) (int64, int64, error) {
+	if timing == nil ||
+		timing.SampleCount > uint64(^uint64(0)>>1) ||
+		timing.P95Milliseconds > uint64(^uint64(0)>>1) {
+		return 0, 0, errors.New("SecondBox runner startup timing evidence is required")
+	}
+	return int64(timing.SampleCount), int64(timing.P95Milliseconds), nil
+}
+
 func protocolDrainState(phase runnerv1.DrainPhase) (string, string, error) {
 	switch phase {
 	case runnerv1.DrainPhase_DRAIN_PHASE_ACTIVE:
@@ -2627,6 +2651,42 @@ func recordAssignmentEvent(
 			ctx, tx, progress.Fence.AssignmentId, "assigned", "accepted", "starting",
 		); err != nil {
 			return err
+		}
+		stage, err := assignmentProgressStageName(progress.Stage)
+		if err != nil {
+			return err
+		}
+		if progress.ObservedAtUnixMs == 0 || progress.ObservedAtUnixMs > uint64(^uint64(0)>>1) {
+			return errors.New("SecondBox runner AssignmentProgress observed time is invalid")
+		}
+		observedAt := time.UnixMilli(int64(progress.ObservedAtUnixMs)).UTC()
+		inserted, err := tx.Exec(ctx, `
+			INSERT INTO secondbox.assignment_stage_timings (
+				assignment_id,operation_id,sandbox_id,stage,observed_at,received_at
+			) VALUES ($1,$2,$3,$4,$5,$6)
+			ON CONFLICT (assignment_id,stage) DO NOTHING`,
+			progress.Fence.AssignmentId, progress.Correlation.OperationId,
+			progress.Fence.SandboxId, stage, observedAt, now,
+		)
+		if err != nil {
+			return fmt.Errorf("SecondBox runner AssignmentProgress timing insert: %w", err)
+		}
+		if inserted.RowsAffected() == 0 {
+			var persistedOperationID, persistedSandboxID string
+			var persistedObservedAt time.Time
+			if err := tx.QueryRow(ctx, `
+				SELECT operation_id,sandbox_id,observed_at
+				FROM secondbox.assignment_stage_timings
+				WHERE assignment_id=$1 AND stage=$2`,
+				progress.Fence.AssignmentId, stage,
+			).Scan(&persistedOperationID, &persistedSandboxID, &persistedObservedAt); err != nil {
+				return fmt.Errorf("SecondBox runner AssignmentProgress timing replay lookup: %w", err)
+			}
+			if persistedOperationID != progress.Correlation.OperationId ||
+				persistedSandboxID != progress.Fence.SandboxId ||
+				!persistedObservedAt.Equal(observedAt) {
+				return errors.New("SecondBox runner AssignmentProgress stage was repeated with different evidence")
+			}
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE secondbox.assignments
@@ -2703,6 +2763,27 @@ func recordAssignmentEvent(
 		return ErrRunnerMessage
 	}
 	return nil
+}
+
+func assignmentProgressStageName(stage runnerv1.AssignmentProgressStage) (string, error) {
+	switch stage {
+	case runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY:
+		return "artifact_verify", nil
+	case runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_ATTACH:
+		return "workspace_attach", nil
+	case runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_NETWORK_SETUP:
+		return "network_setup", nil
+	case runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_FIRECRACKER_LAUNCH:
+		return "compute_launch", nil
+	case runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_GUEST_NEGOTIATION:
+		return "guest_negotiation", nil
+	case runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_READY:
+		return "ready", nil
+	case runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_TEARDOWN:
+		return "teardown", nil
+	default:
+		return "", errors.New("SecondBox runner AssignmentProgress stage is unspecified")
+	}
 }
 
 func releaseFailedStartMutation(

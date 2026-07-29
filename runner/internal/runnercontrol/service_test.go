@@ -49,6 +49,8 @@ func TestRunnerProtocolServiceReconnectsAndReadvertisesActiveAssignments(t *test
 			BackendKind:      "firecracker",
 			BackendReference: "fc-instance-1",
 		},
+		startupCount: 4,
+		startupP95:   75 * time.Millisecond,
 	}
 	service, err := NewRunnerProtocolService(testRunnerConfig(), backend, connector)
 	if err != nil {
@@ -82,6 +84,11 @@ func TestRunnerProtocolServiceReconnectsAndReadvertisesActiveAssignments(t *test
 				heartbeat.ActiveAssignments,
 				assignment.Fence.AssignmentId,
 			)
+		}
+		if heartbeat.StartupTiming == nil ||
+			heartbeat.StartupTiming.SampleCount != 4 ||
+			heartbeat.StartupTiming.P95Milliseconds != 75 {
+			t.Fatalf("reconnect startup timing = %#v", heartbeat.StartupTiming)
 		}
 	case runErr := <-runResult:
 		t.Fatalf("Run() stopped after transient stream loss: %v", runErr)
@@ -564,7 +571,9 @@ func TestRunnerProtocolServiceNegotiatesBeforeProfileResolvedAssignment(t *testi
 				GuestProtocolGenerations: &runnerprotocol.ProtocolVersionRange{Minimum: 1, Maximum: 1},
 			},
 		},
-		instance: BackendInstance{BackendKind: "firecracker", BackendReference: "fc-instance-1"},
+		instance:     BackendInstance{BackendKind: "firecracker", BackendReference: "fc-instance-1"},
+		startupCount: 3,
+		startupP95:   40 * time.Millisecond,
 	}
 	service, err := NewRunnerProtocolService(testRunnerConfig(), backend, staticProtocolConnector{stream: stream})
 	if err != nil {
@@ -586,8 +595,14 @@ func TestRunnerProtocolServiceNegotiatesBeforeProfileResolvedAssignment(t *testi
 	if stream.outbound[0].GetHello() == nil {
 		t.Fatal("first outbound runner message was not Hello")
 	}
-	if stream.outbound[1].GetRegistration() == nil {
+	registration := stream.outbound[1].GetRegistration()
+	if registration == nil {
 		t.Fatal("registration was sent before protocol negotiation or omitted")
+	}
+	if registration.StartupTiming == nil ||
+		registration.StartupTiming.SampleCount != 3 ||
+		registration.StartupTiming.P95Milliseconds != 40 {
+		t.Fatalf("registration startup timing = %#v", registration.StartupTiming)
 	}
 	ack := findAssignmentAck(stream.outbound)
 	if ack == nil || ack.Decision != runnerprotocol.AssignmentDecision_ASSIGNMENT_DECISION_ACCEPTED {
@@ -1122,11 +1137,17 @@ func (s *blockingProtocolStream) Recv() (*runnerprotocol.ControlPlaneToRunner, e
 }
 
 type recordingAssignmentBackend struct {
-	readiness  BackendReadiness
-	instance   BackendInstance
-	started    *runnerprotocol.AssignmentCommand
-	startCalls atomic.Uint32
-	fenceCalls atomic.Uint32
+	readiness    BackendReadiness
+	instance     BackendInstance
+	started      *runnerprotocol.AssignmentCommand
+	startupCount uint64
+	startupP95   time.Duration
+	startCalls   atomic.Uint32
+	fenceCalls   atomic.Uint32
+}
+
+func (b *recordingAssignmentBackend) StartupTiming() (uint64, time.Duration) {
+	return b.startupCount, b.startupP95
 }
 
 type recordingLocalWorkspaceBackend struct {

@@ -106,7 +106,8 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseDurableRelay(t *testing.T) {
 	assertHTTPStatus(t, execResponse, http.StatusOK)
 	var exited contracts.ExecExited
 	decodeHTTPJSON(t, execResponse, &exited)
-	if exited.Kind != "exited" || exited.ExitCode != 0 {
+	if exited.Kind != "exited" || exited.ExitCode != 0 ||
+		exited.ElapsedMilliseconds != 42 {
 		t.Fatalf("Exec outcome = %#v", exited)
 	}
 	stdout, err := base64.StdEncoding.DecodeString(exited.Output.StdoutBase64)
@@ -633,6 +634,7 @@ func (fake *relayFakeRunner) handle(ctx context.Context, message *runnerv1.Contr
 					StreamId: frame.StreamId, Sequence: sequence,
 					Payload: &runnerv1.ExecFrame_Terminal{Terminal: &runnerv1.ExecTerminal{
 						Kind: runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED, ExitCode: exitCode,
+						ElapsedMilliseconds: 42,
 					}},
 				}},
 			}, now)

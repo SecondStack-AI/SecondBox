@@ -331,6 +331,14 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 				t.Errorf("%s must not encode failure as a synthetic exit code", name)
 			}
 		}
+		exited := componentSchema(t, document, "ExecExited")
+		exitedRequired := map[string]bool{}
+		for _, value := range array(t, exited["required"], "ExecExited.required") {
+			exitedRequired[value.(string)] = true
+		}
+		if !exitedRequired["elapsedMilliseconds"] {
+			t.Error("ExecExited must expose successful command elapsed time")
+		}
 	})
 
 	t.Run("public profile omits virtualization backend selection", func(t *testing.T) {

@@ -2,6 +2,7 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -13,13 +14,16 @@ import (
 	"io"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/SecondStack-AI/SecondBox/internal/observability"
 	"github.com/SecondStack-AI/SecondBox/internal/pagination"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
@@ -45,6 +49,7 @@ type handler struct {
 	logger                    *slog.Logger
 	platformTokenHash         [sha256.Size]byte
 	maximumDataPlaneBodyBytes int64
+	timings                   *observability.TimingRecorder
 }
 
 // NewHandler constructs the public and administrative SecondBox HTTP surface.
@@ -65,6 +70,7 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 		service: config.Service, logger: config.Logger,
 		platformTokenHash:         sha256.Sum256([]byte(config.PlatformToken)),
 		maximumDataPlaneBodyBytes: config.MaximumDataPlaneBodyBytes,
+		timings:                   observability.NewTimingRecorder(),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", apiHandler.health)
@@ -587,6 +593,14 @@ func (apiHandler *handler) metrics(writer http.ResponseWriter, request *http.Req
 			return
 		}
 	}
+	if err := writeHTTPDurationMetrics(writer, apiHandler.timings.HTTPSnapshot()); err != nil {
+		apiHandler.logResponseAbort(request, "HTTP duration metrics response", err)
+		return
+	}
+	if err := writeOperationDurationMetrics(writer, snapshot.OperationDurations); err != nil {
+		apiHandler.logResponseAbort(request, "Operation duration metrics response", err)
+		return
+	}
 }
 
 func (apiHandler *handler) createProfile(writer http.ResponseWriter, request *http.Request) {
@@ -985,22 +999,102 @@ func (apiHandler *handler) authenticate(next http.Handler) http.Handler {
 
 func (apiHandler *handler) withRequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		startedAt := time.Now()
 		requestID := request.Header.Get("X-Request-ID")
 		if !correlationIDPattern.MatchString(requestID) {
 			requestID = service.NewOpaqueID("req")
 		}
-		writer.Header().Set("X-Request-ID", requestID)
+		statusWriter := &statusResponseWriter{ResponseWriter: writer}
+		statusWriter.Header().Set("X-Request-ID", requestID)
 		request.Header.Set("X-Request-ID", requestID)
 		request = request.WithContext(service.ContextWithRequestID(request.Context(), requestID))
-		next.ServeHTTP(writer, request)
+		next.ServeHTTP(statusWriter, request)
+		status := statusWriter.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		duration := time.Since(startedAt)
+		apiHandler.timings.ObserveHTTP(request.Pattern, httpStatusClass(status), duration)
 		apiHandler.logger.InfoContext(
 			request.Context(),
 			"SecondBox HTTP request completed",
 			"request_id", requestID,
 			"method", request.Method,
 			"route", request.Pattern,
+			"status", status,
+			"duration_ms", duration.Milliseconds(),
 		)
 	})
+}
+
+type statusResponseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (writer *statusResponseWriter) WriteHeader(status int) {
+	if writer.status != 0 {
+		return
+	}
+	writer.status = status
+	writer.ResponseWriter.WriteHeader(status)
+}
+
+func (writer *statusResponseWriter) Write(content []byte) (int, error) {
+	if writer.status == 0 {
+		writer.status = http.StatusOK
+	}
+	return writer.ResponseWriter.Write(content)
+}
+
+func (writer *statusResponseWriter) Flush() {
+	if writer.status == 0 {
+		writer.status = http.StatusOK
+	}
+	if flusher, ok := writer.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (writer *statusResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := writer.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("SecondBox HTTP response does not support connection hijacking")
+	}
+	connection, buffer, err := hijacker.Hijack()
+	if err == nil && writer.status == 0 {
+		writer.status = http.StatusSwitchingProtocols
+	}
+	return connection, buffer, err
+}
+
+func (writer *statusResponseWriter) Push(target string, options *http.PushOptions) error {
+	pusher, ok := writer.ResponseWriter.(http.Pusher)
+	if !ok {
+		return http.ErrNotSupported
+	}
+	return pusher.Push(target, options)
+}
+
+func (writer *statusResponseWriter) Unwrap() http.ResponseWriter {
+	return writer.ResponseWriter
+}
+
+func httpStatusClass(status int) string {
+	switch status / 100 {
+	case 1:
+		return "1xx"
+	case 2:
+		return "2xx"
+	case 3:
+		return "3xx"
+	case 4:
+		return "4xx"
+	case 5:
+		return "5xx"
+	default:
+		return "other"
+	}
 }
 
 func (apiHandler *handler) writeError(writer http.ResponseWriter, request *http.Request, err error) {
@@ -1172,6 +1266,89 @@ func writeMetricFamily(writer io.Writer, name string, values map[string]int64) e
 		if _, err := fmt.Fprintf(writer, "%s{state=%q} %d\n", name, state, values[state]); err != nil {
 			return fmt.Errorf("SecondBox metrics response write failed: %w", err)
 		}
+	}
+	return nil
+}
+
+func writeHTTPDurationMetrics(
+	writer io.Writer,
+	series []observability.HTTPDuration,
+) error {
+	if _, err := fmt.Fprintln(writer, "# TYPE secondbox_http_request_duration_seconds histogram"); err != nil {
+		return fmt.Errorf("SecondBox HTTP duration metric type write failed: %w", err)
+	}
+	for _, metric := range series {
+		labels := fmt.Sprintf(
+			"route=%q,status_class=%q",
+			metric.Route, metric.StatusClass,
+		)
+		if err := writeDurationHistogram(
+			writer, "secondbox_http_request_duration_seconds", labels, metric.Histogram,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeOperationDurationMetrics(
+	writer io.Writer,
+	series []contracts.OperationDurationMetric,
+) error {
+	if _, err := fmt.Fprintln(writer, "# TYPE secondbox_operation_duration_seconds histogram"); err != nil {
+		return fmt.Errorf("SecondBox Operation duration metric type write failed: %w", err)
+	}
+	for _, metric := range series {
+		labels := fmt.Sprintf(
+			"kind=%q,terminal_state=%q",
+			metric.Kind, metric.TerminalState,
+		)
+		histogram := observability.DurationHistogram{
+			Count: metric.Histogram.Count, SumSeconds: metric.Histogram.SumSeconds,
+			BucketCounts: metric.Histogram.BucketCounts,
+		}
+		if err := writeDurationHistogram(
+			writer, "secondbox_operation_duration_seconds", labels, histogram,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeDurationHistogram(
+	writer io.Writer,
+	name string,
+	labels string,
+	histogram observability.DurationHistogram,
+) error {
+	if len(histogram.BucketCounts) != len(observability.DurationBucketsSeconds) {
+		return errors.New("SecondBox metrics duration histogram has invalid bucket count")
+	}
+	for index, upperBound := range observability.DurationBucketsSeconds {
+		if _, err := fmt.Fprintf(
+			writer, "%s_bucket{%s,le=%q} %d\n",
+			name, labels, strconv.FormatFloat(upperBound, 'g', -1, 64),
+			histogram.BucketCounts[index],
+		); err != nil {
+			return fmt.Errorf("SecondBox metrics duration bucket write failed: %w", err)
+		}
+	}
+	if _, err := fmt.Fprintf(
+		writer, "%s_bucket{%s,le=\"+Inf\"} %d\n", name, labels, histogram.Count,
+	); err != nil {
+		return fmt.Errorf("SecondBox metrics duration infinite bucket write failed: %w", err)
+	}
+	if _, err := fmt.Fprintf(
+		writer, "%s_sum{%s} %s\n", name, labels,
+		strconv.FormatFloat(histogram.SumSeconds, 'g', -1, 64),
+	); err != nil {
+		return fmt.Errorf("SecondBox metrics duration sum write failed: %w", err)
+	}
+	if _, err := fmt.Fprintf(
+		writer, "%s_count{%s} %d\n", name, labels, histogram.Count,
+	); err != nil {
+		return fmt.Errorf("SecondBox metrics duration count write failed: %w", err)
 	}
 	return nil
 }
