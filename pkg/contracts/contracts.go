@@ -408,8 +408,8 @@ type SubjectUsage struct {
 // Workspace is public retained-workspace evidence without a provider location.
 type Workspace struct {
 	ID                    string    `json:"id"`
-	TenantRef             string    `json:"tenantRef"`
-	SubjectRef            string    `json:"subjectRef"`
+	TenantRef             string    `json:"-"`
+	SubjectRef            string    `json:"-"`
 	Generation            int64     `json:"generation"`
 	RetainedBytes         int64     `json:"retainedBytes"`
 	CurrentCheckpointID   string    `json:"currentCheckpointId,omitempty"`

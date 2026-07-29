@@ -12,7 +12,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
@@ -90,7 +89,7 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseDurableRelay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(handler)
+	server := contractServer(t, handler)
 	t.Cleanup(server.Close)
 	fake := newRelayFakeRunner(relay, seed.RunnerID, seed.ConnectionTwo)
 	fakeContext, stopFake := context.WithCancel(t.Context())
@@ -250,7 +249,7 @@ func TestFlueAdapterCompleteSubsetAgainstRealServiceContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(handler)
+	server := contractServer(t, handler)
 	t.Cleanup(server.Close)
 	fake := newRelayFakeRunner(relay, seed.RunnerID, seed.ConnectionTwo)
 	fakeContext, stopFake := context.WithCancel(t.Context())
@@ -395,7 +394,7 @@ func TestIndependentProjectsCannotObserveOrMutateAnotherSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(handler)
+	server := contractServer(t, handler)
 	t.Cleanup(server.Close)
 
 	listRequest, err := http.NewRequest(

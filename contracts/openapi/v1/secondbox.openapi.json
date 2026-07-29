@@ -46,6 +46,7 @@
             "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ProfilePage"}}}
           },
+          "400": {"$ref": "#/components/responses/BadRequest"},
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"}
         }
@@ -181,6 +182,7 @@
             "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RunnerPoolPage"}}}
           },
+          "400": {"$ref": "#/components/responses/BadRequest"},
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"}
         }
@@ -281,6 +283,7 @@
             "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RunnerPage"}}}
           },
+          "400": {"$ref": "#/components/responses/BadRequest"},
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"}
         }
@@ -326,6 +329,7 @@
             "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SandboxPage"}}}
           },
+          "400": {"$ref": "#/components/responses/BadRequest"},
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"}
         }
@@ -1030,6 +1034,7 @@
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Artifact"}}}
           },
           "400": {"$ref": "#/components/responses/BadRequest"},
+          "429": {"$ref": "#/components/responses/TooManyRequests"},
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
           "404": {"$ref": "#/components/responses/NotFound"},
@@ -1390,6 +1395,7 @@
           ],
           "responses": {
             "202": {"$ref": "#/components/responses/AcceptedOperation"},
+            "400": {"$ref": "#/components/responses/BadRequest"},
             "401": {"$ref": "#/components/responses/Unauthorized"},
             "403": {"$ref": "#/components/responses/Forbidden"},
             "404": {"$ref": "#/components/responses/NotFound"},
@@ -1874,18 +1880,21 @@
       "Workspace": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "generation", "retainedBytes", "createdAt", "updatedAt"],
+        "required": ["id", "generation", "retainedBytes", "retentionState", "createdAt", "updatedAt"],
         "properties": {
           "id": {"$ref": "#/components/schemas/OpaqueID"},
           "generation": {"type": "integer", "format": "int64", "minimum": 1},
           "retainedBytes": {"type": "integer", "format": "int64", "minimum": 0},
-          "currentSnapshotId": {"$ref": "#/components/schemas/OpaqueID"},
-          "retainUntil": {"$ref": "#/components/schemas/Timestamp"},
+          "currentCheckpointId": {"$ref": "#/components/schemas/OpaqueID"},
+          "currentCheckpointHash": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+          "currentCheckpointSize": {"type": "integer", "format": "int64", "minimum": 0},
+          "retentionState": {"type": "string"},
           "createdAt": {"$ref": "#/components/schemas/Timestamp"},
           "updatedAt": {"$ref": "#/components/schemas/Timestamp"}
         }
       },
       "InstanceState": {"type": "string", "enum": ["starting", "ready", "draining", "stopping", "stopped", "lost", "failed"]},
+      "GuestLiveness": {"type": "string", "enum": ["unknown", "starting", "ready", "lost", "stopped"]},
       "InstanceTerminationReason": {
         "type": "string",
         "enum": ["requested_drain", "requested_stop", "idle_timeout", "maximum_duration", "guest_shutdown", "resource_exhaustion", "guest_agent_lost", "runner_lost", "startup_failed", "fenced", "internal_failure"]
@@ -1893,15 +1902,17 @@
       "Instance": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "sandboxId", "generation", "state", "createdAt", "updatedAt"],
+        "required": ["id", "sandboxId", "generation", "state", "guestLiveness", "createdAt", "updatedAt"],
         "properties": {
           "id": {"$ref": "#/components/schemas/OpaqueID"},
           "sandboxId": {"$ref": "#/components/schemas/OpaqueID"},
           "generation": {"type": "integer", "format": "int64", "minimum": 1},
           "state": {"$ref": "#/components/schemas/InstanceState"},
+          "guestLiveness": {"$ref": "#/components/schemas/GuestLiveness"},
           "terminationReason": {"$ref": "#/components/schemas/InstanceTerminationReason"},
           "createdAt": {"$ref": "#/components/schemas/Timestamp"},
           "readyAt": {"$ref": "#/components/schemas/Timestamp"},
+          "guestHeartbeatAt": {"$ref": "#/components/schemas/Timestamp"},
           "stoppedAt": {"$ref": "#/components/schemas/Timestamp"},
           "updatedAt": {"$ref": "#/components/schemas/Timestamp"}
         }

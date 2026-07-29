@@ -167,9 +167,7 @@ func newControlPlaneWithBuiltIns(
 		Now: func() time.Time {
 			return time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 		},
-		NewID: func(prefix string) string {
-			return fmt.Sprintf("%s_%d", prefix, integrationIdentitySequence.Add(1))
-		},
+		NewID: newFixtureID,
 		NewCredentialMaterial: func() string {
 			return fmt.Sprintf("credential-material-%032d", integrationIdentitySequence.Add(1))
 		},

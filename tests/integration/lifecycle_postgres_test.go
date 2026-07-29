@@ -1458,6 +1458,10 @@ func TestFinishStopCompletesEveryCompatiblePendingLifecycleOperation(t *testing.
 	}
 }
 
+// policyDisabledSeconds is far enough out that a lifecycle policy cannot fire
+// during a test while still satisfying the contract's minimum of one second.
+const policyDisabledSeconds int64 = 86400
+
 func TestLifecycleReconcilerPersistsPolicyTerminationCauses(t *testing.T) {
 	for _, test := range []struct {
 		name     string
@@ -1466,16 +1470,21 @@ func TestLifecycleReconcilerPersistsPolicyTerminationCauses(t *testing.T) {
 		maximum  int64
 		liveness string
 	}{
+		// The policy that must not fire is set far in the future rather than to
+		// zero. Zero disables a policy in the reconciler but the API rejects it
+		// (validateProfileRevisionSpec requires >= 1), so a profile carrying it
+		// is a state no client can create and no contract describes.
 		{
 			name: "idle_timeout", reason: contracts.TerminationReasonIdleTimeout,
-			idle: 1, liveness: contracts.GuestLivenessReady,
+			idle: 1, maximum: policyDisabledSeconds, liveness: contracts.GuestLivenessReady,
 		},
 		{
 			name: "maximum_duration", reason: contracts.TerminationReasonMaximumDuration,
-			maximum: 1, liveness: contracts.GuestLivenessReady,
+			idle: policyDisabledSeconds, maximum: 1, liveness: contracts.GuestLivenessReady,
 		},
 		{
 			name: "guest_agent_lost", reason: contracts.TerminationReasonGuestAgentLost,
+			idle: policyDisabledSeconds, maximum: policyDisabledSeconds,
 			liveness: contracts.GuestLivenessLost,
 		},
 	} {

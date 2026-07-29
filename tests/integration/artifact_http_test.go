@@ -90,7 +90,7 @@ func TestPublicArtifactsPublishListDownloadAndEndRetention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(handler)
+	server := contractServer(t, handler)
 	t.Cleanup(server.Close)
 
 	firstContent := []byte{0, 1, 0xff, 'a'}
@@ -508,7 +508,7 @@ func newArtifactHTTPFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(handler)
+	server := contractServer(t, handler)
 	t.Cleanup(server.Close)
 	return artifactHTTPFixture{
 		controlPlane: controlPlane, server: server, objects: objects,
@@ -530,9 +530,7 @@ func newArtifactControlPlane(
 		PlatformToken:       testPlatformToken,
 		DefaultSubjectQuota: projectQuota,
 		Now:                 now,
-		NewID: func(prefix string) string {
-			return fmt.Sprintf("%s_%d", prefix, integrationIdentitySequence.Add(1))
-		},
+		NewID:               newFixtureID,
 		NewCredentialMaterial: func() string {
 			return fmt.Sprintf("credential-material-%032d", integrationIdentitySequence.Add(1))
 		},

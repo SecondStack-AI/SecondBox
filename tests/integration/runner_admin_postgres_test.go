@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -185,7 +184,7 @@ func TestRunnerPoolAdministrationIsAvailableThroughPublicHTTPContract(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(handler)
+	server := contractServer(t, handler)
 	t.Cleanup(server.Close)
 
 	createdResponse := authenticatedJSONRequest(

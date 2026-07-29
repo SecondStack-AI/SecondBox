@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"strconv"
 	"testing"
 	"time"
@@ -38,7 +37,7 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(handler)
+	server := contractServer(t, handler)
 	t.Cleanup(server.Close)
 
 	missingHeaders := lifecycleHTTPRequest(
@@ -168,7 +167,7 @@ func TestHTTPRequestIDCorrelatesOperationAuditAndStructuredLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(handler)
+	server := contractServer(t, handler)
 	t.Cleanup(server.Close)
 
 	const requestID = "request-correlation-http-1"
@@ -277,7 +276,7 @@ func TestWaitInspectLeasePingAndTouchHTTPContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(handler)
+	server := contractServer(t, handler)
 	t.Cleanup(server.Close)
 	generation := strconv.FormatInt(sandbox.Generation, 10)
 
