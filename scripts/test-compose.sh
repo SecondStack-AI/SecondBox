@@ -108,6 +108,15 @@ if [[ "$readiness_body" != '{"status":"ready"}' ]]; then
   exit 1
 fi
 
+if ! compose exec -T postgres psql \
+  --username secondbox \
+  --dbname secondbox_compose_test \
+  --set ON_ERROR_STOP=on \
+  --quiet <"$repo_root/scripts/compose-test-init.sql" >/dev/null; then
+  echo "SecondBox Compose smoke test failed: live fixture insert failed" >&2
+  exit 1
+fi
+
 export SECONDBOX_LIVE_BASE_URL="$live_base_url"
 export SECONDBOX_LIVE_PLATFORM_TOKEN="compose-test-platform-token-0000000000000000"
 go test -count=1 -tags=sdk_live -v ./tests/sdk-live

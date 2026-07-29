@@ -14,9 +14,9 @@ services:
       interval: 1s
       timeout: 5s
       retries: 30
-    volumes:
-      - ../migrations/postgres/0001_secondbox.sql:/docker-entrypoint-initdb.d/001-secondbox.sql:ro
-      - ./compose-test-init.sql:/docker-entrypoint-initdb.d/002-live-fixtures.sql:ro
+    # The database starts empty on purpose: the control plane owns its schema and
+    # applies its own migration lineage at startup, which is what a real
+    # deployment does. Live fixtures are inserted afterwards by test-compose.sh.
 
   control-plane:
     image: docker.io/library/golang:1.25.12-bookworm
