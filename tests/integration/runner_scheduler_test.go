@@ -537,8 +537,13 @@ func (authority *task4TestCredentialAuthority) Issue(
 	serial := big.NewInt(10_000 + task4Sequence.Add(1))
 	template := &x509.Certificate{
 		SerialNumber: serial, Subject: pkix.Name{CommonName: runnerID},
-		NotBefore: authority.now.Add(-time.Minute), NotAfter: authority.now.Add(24 * time.Hour),
-		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		// x509 verification uses wall-clock time, not the frozen logical clock
+		// these tests reason with, so the validity window must be expressed in
+		// wall-clock. Deriving it from the frozen date made every runner-trust
+		// test expire exactly one day after that date.
+		NotBefore: time.Now().UTC().Add(-time.Hour),
+		NotAfter:  time.Now().UTC().Add(365 * 24 * time.Hour),
+		KeyUsage:  x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 		URIs: []*url.URL{{Scheme: "spiffe", Host: "secondbox", Path: "/runner/" + url.PathEscape(runnerID)}},
 	}
 	der, err := x509.CreateCertificate(
@@ -588,8 +593,10 @@ func task4CertificateAuthority(
 	}
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(9001), Subject: pkix.Name{CommonName: "Task 4 runner CA"},
-		NotBefore: now.Add(-time.Minute), NotAfter: now.Add(365 * 24 * time.Hour),
-		IsCA: true, BasicConstraintsValid: true,
+		// Wall-clock for the same reason as the leaf certificates below.
+		NotBefore: time.Now().UTC().Add(-time.Hour),
+		NotAfter:  time.Now().UTC().Add(10 * 365 * 24 * time.Hour),
+		IsCA:      true, BasicConstraintsValid: true,
 		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
 	}
 	certificateDER, err := x509.CreateCertificate(rand.Reader, template, template, publicKey, privateKey)
@@ -644,8 +651,10 @@ func task4ServerCertificate(
 	}
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(9100), Subject: pkix.Name{CommonName: "control.secondbox.test"},
-		DNSNames:  []string{"control.secondbox.test"},
-		NotBefore: now.Add(-time.Minute), NotAfter: now.Add(24 * time.Hour),
+		DNSNames: []string{"control.secondbox.test"},
+		// Wall-clock, for the same reason as the CA and leaf certificates.
+		NotBefore:   time.Now().UTC().Add(-time.Hour),
+		NotAfter:    time.Now().UTC().Add(365 * 24 * time.Hour),
 		KeyUsage:    x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}

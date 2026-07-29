@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"strconv"
 	"sync"
 	"testing"
@@ -71,7 +70,7 @@ func TestSnapshotHTTPContractEnforcesAuthRevisionAndStoppedCheckpointAuthority(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(handler)
+	server := contractServer(t, handler)
 	t.Cleanup(server.Close)
 
 	unauthenticated, err := http.Get(server.URL + "/v1/sandboxes/" + sandbox.ID + "/snapshots")

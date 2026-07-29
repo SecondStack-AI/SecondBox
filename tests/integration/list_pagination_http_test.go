@@ -5,7 +5,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"sort"
 	"testing"
@@ -174,7 +173,7 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(handler)
+	server := contractServer(t, handler)
 	t.Cleanup(server.Close)
 
 	testCases := []struct {
