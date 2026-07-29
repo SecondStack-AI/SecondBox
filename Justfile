@@ -3,9 +3,6 @@
 default:
     @just --list
 
-generate:
-    go run ./cmd/generate-clients
-
 verify-generated:
     scripts/verify-generated.sh
 
@@ -27,11 +24,8 @@ test-image-policy:
 test-non-kvm:
     scripts/test-non-kvm.sh
 
-test-clean-clone:
-    scripts/test-clean-clone-isolation.sh --non-kvm
-
-test-operations:
-    go test ./tests/operations -count=1
+test-deployment:
+    go test ./tests/deployment -count=1
 
 test-backup-restore:
     @test -n "${SECONDBOX_TEST_DATABASE_URL}" || (echo "SECONDBOX_TEST_DATABASE_URL is required" >&2; exit 2)
@@ -42,9 +36,6 @@ build-artifacts:
 
 test-firecracker:
     scripts/test-firecracker.sh
-
-test-multirunner:
-    scripts/test-multirunner.sh
 
 deploy-bootstrap environment:
     deploy/bin/bootstrap-environment.sh "{{environment}}"

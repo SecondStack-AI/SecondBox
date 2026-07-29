@@ -9,8 +9,9 @@ import (
 
 // RelayDelivery is one durably claimed root-to-runner data-plane frame.
 type RelayDelivery struct {
-	ID      string
-	Message *runnerv1.ControlPlaneToRunner
+	ID           string
+	ClaimAttempt int64
+	Message      *runnerv1.ControlPlaneToRunner
 }
 
 // InboundRelayFrame binds runner output to the authenticated connection that
@@ -37,6 +38,6 @@ type ProtocolFrameRelay interface {
 		string,
 		time.Time,
 	) (RelayDelivery, bool, error)
-	MarkOutboundFrameDelivered(context.Context, string, string, time.Time) error
+	MarkOutboundFrameDelivered(context.Context, string, string, int64, time.Time) error
 	PersistInboundFrame(context.Context, InboundRelayFrame, time.Time) (bool, error)
 }

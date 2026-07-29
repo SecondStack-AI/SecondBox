@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
@@ -10,6 +11,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"math/big"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -25,55 +27,34 @@ import (
 
 var task4Sequence atomic.Int64
 
-func TestRunnerEnrollmentRotationRevocationAndMTLSIdentity(t *testing.T) {
+func TestRunnerPreSharedCredentialAndMTLSIdentity(t *testing.T) {
 	now := time.Date(2026, 7, 28, 14, 0, 0, 0, time.UTC)
 	poolName := task4ID("credential-pool")
 	task4InsertRunnerPool(t, poolName, now)
 	caCertificate, caPrivateKey := task4CertificateAuthority(t, now)
-	authority := task4CredentialAuthority(t, caCertificate, caPrivateKey, now)
-	enrollment, err := authority.CreateEnrollment(t.Context(), runnercontrol.EnrollmentRequest{
-		TokenID: task4ID("enrollment"), RunnerID: task4ID("runner"),
-		PoolName: poolName, RunnerName: "credential runner", ExpiresAt: now.Add(time.Hour),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	authority := newTask4CredentialAuthority(t, caCertificate, caPrivateKey, now)
+	runnerID := task4ID("runner")
 	csr := task4CertificateRequest(t)
-	issued, err := authority.RedeemEnrollment(t.Context(), enrollment.Token, csr)
+	issued, err := authority.Issue(runnerID, csr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	certificate := task4ParseCertificate(t, issued.CertificatePEM)
-	identity, err := authority.VerifyClientCertificate(t.Context(), certificate)
+	identity, err := authority.VerifyClientCertificate(
+		t.Context(), certificate, task4RunnerCredential,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if identity.RunnerID != enrollment.RunnerID {
-		t.Fatalf("certificate Runner identity = %q, want %q", identity.RunnerID, enrollment.RunnerID)
+	if identity.RunnerID != runnerID {
+		t.Fatalf("certificate Runner identity = %q, want %q", identity.RunnerID, runnerID)
 	}
-	if _, err := authority.RedeemEnrollment(t.Context(), enrollment.Token, task4CertificateRequest(t)); !errors.Is(err, runnercontrol.ErrRunnerEnrollmentInvalid) {
-		t.Fatalf("reused enrollment error = %v, want ErrRunnerEnrollmentInvalid", err)
-	}
-
-	rotated, err := authority.RotateCredential(t.Context(), identity, task4CertificateRequest(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := authority.VerifyClientCertificate(t.Context(), certificate); err != nil {
-		t.Fatalf("retiring credential was not valid during rotation overlap: %v", err)
-	}
-	rotatedCertificate := task4ParseCertificate(t, rotated.CertificatePEM)
-	if _, err := authority.VerifyClientCertificate(t.Context(), rotatedCertificate); err != nil {
-		t.Fatalf("replacement credential was not active: %v", err)
-	}
-	if err := authority.RevokeCredential(t.Context(), identity.CredentialSerial); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := authority.VerifyClientCertificate(t.Context(), certificate); !errors.Is(err, runnercontrol.ErrRunnerCredentialRevoked) {
-		t.Fatalf("revoked credential verification error = %v, want ErrRunnerCredentialRevoked", err)
-	}
-	if _, err := authority.VerifyClientCertificate(t.Context(), rotatedCertificate); err != nil {
-		t.Fatalf("replacement credential was revoked with predecessor: %v", err)
+	for _, credential := range []string{"", "mismatched-runner-credential-material-000000"} {
+		if _, err := authority.verifier.VerifyClientCertificate(
+			t.Context(), certificate, credential,
+		); !errors.Is(err, runnercontrol.ErrRunnerCredentialInvalid) {
+			t.Fatalf("credential %q error = %v, want ErrRunnerCredentialInvalid", credential, err)
+		}
 	}
 
 	serverCertificate := task4ServerCertificate(t, caCertificate, caPrivateKey, now)
@@ -81,39 +62,31 @@ func TestRunnerEnrollmentRotationRevocationAndMTLSIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tlsConfig.MinVersion != 0x0304 || tlsConfig.VerifyConnection == nil {
-		t.Fatalf("runner mTLS server config lacks TLS 1.3 or revocation callback: %#v", tlsConfig)
-	}
-
-	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
-	var persistedHash []byte
-	if err := pool.QueryRow(t.Context(), `
-		SELECT token_hash FROM secondbox.runner_enrollment_tokens WHERE id=$1`,
-		enrollment.TokenID,
-	).Scan(&persistedHash); err != nil {
-		t.Fatal(err)
-	}
-	if len(persistedHash) != 32 || string(persistedHash) == enrollment.Token {
-		t.Fatalf("runner enrollment did not persist exactly one non-plaintext keyed hash: %x", persistedHash)
+	if tlsConfig.MinVersion != tls.VersionTLS13 ||
+		tlsConfig.ClientAuth != tls.RequireAndVerifyClientCert {
+		t.Fatalf("runner mTLS server config lacks TLS 1.3 or client verification: %#v", tlsConfig)
 	}
 }
 
-func TestRunnerEnrollmentRejectsPoolsThatAreNotReady(t *testing.T) {
+func TestRunnerRegistrationRejectsPoolsThatAreNotReady(t *testing.T) {
 	now := time.Date(2026, 7, 28, 14, 30, 0, 0, time.UTC)
 	caCertificate, caPrivateKey := task4CertificateAuthority(t, now)
-	authority := task4CredentialAuthority(t, caCertificate, caPrivateKey, now)
+	authority := newTask4CredentialAuthority(t, caCertificate, caPrivateKey, now)
 	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
+	stateStore, err := runnercontrol.NewPostgresStateStore(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stateStore.Close)
 
 	for _, state := range []string{"draining", "offline"} {
 		poolName := task4ID(state + "-pool")
+		runnerID := task4ID(state + "-runner")
+		connectionID := task4ID(state + "-connection")
 		task4InsertRunnerPool(t, poolName, now)
 		if _, err := pool.Exec(
 			t.Context(),
@@ -123,15 +96,18 @@ func TestRunnerEnrollmentRejectsPoolsThatAreNotReady(t *testing.T) {
 		); err != nil {
 			t.Fatal(err)
 		}
-		_, err := authority.CreateEnrollment(t.Context(), runnercontrol.EnrollmentRequest{
-			TokenID:    task4ID(state + "-enrollment"),
-			RunnerID:   task4ID(state + "-runner"),
-			PoolName:   poolName,
-			RunnerName: state + " pool runner",
-			ExpiresAt:  now.Add(time.Hour),
-		})
-		if err == nil || err.Error() != "SecondBox RunnerPool is not accepting enrollment" {
-			t.Fatalf("%s pool enrollment error = %v", state, err)
+		issued, err := authority.Issue(runnerID, task4CertificateRequest(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := stateStore.OpenConnection(t.Context(), issued.Identity, connectionID, 1, now); err != nil {
+			t.Fatal(err)
+		}
+		_, err = stateStore.RecordRegistration(
+			t.Context(), task4Registration(runnerID, connectionID, poolName), now,
+		)
+		if err == nil || err.Error() != "SecondBox RunnerPool is not accepting runners" {
+			t.Fatalf("%s pool registration error = %v", state, err)
 		}
 	}
 }
@@ -143,15 +119,8 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	connectionID := task4ID("connection")
 	task4InsertRunnerPool(t, poolName, now)
 	caCertificate, caPrivateKey := task4CertificateAuthority(t, now)
-	authority := task4CredentialAuthority(t, caCertificate, caPrivateKey, now)
-	enrollment, err := authority.CreateEnrollment(t.Context(), runnercontrol.EnrollmentRequest{
-		TokenID: task4ID("enrollment"), RunnerID: runnerID, PoolName: poolName,
-		RunnerName: "scheduler runner", ExpiresAt: now.Add(time.Hour),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	issued, err := authority.RedeemEnrollment(t.Context(), enrollment.Token, task4CertificateRequest(t))
+	authority := newTask4CredentialAuthority(t, caCertificate, caPrivateKey, now)
+	issued, err := authority.Issue(runnerID, task4CertificateRequest(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -519,28 +488,93 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	}
 }
 
-func task4CredentialAuthority(
+const task4RunnerCredential = "task-4-pre-shared-runner-credential-material"
+
+type task4IssuedCertificate struct {
+	Identity       runnercontrol.RunnerIdentity
+	CertificatePEM []byte
+}
+
+type task4TestCredentialAuthority struct {
+	t           *testing.T
+	verifier    *runnercontrol.CredentialAuthority
+	certificate *x509.Certificate
+	privateKey  ed25519.PrivateKey
+	now         time.Time
+}
+
+func newTask4CredentialAuthority(
 	t *testing.T,
 	caCertificate *x509.Certificate,
 	caPrivateKey ed25519.PrivateKey,
 	now time.Time,
-) *runnercontrol.CredentialAuthority {
+) *task4TestCredentialAuthority {
 	t.Helper()
-	authority, err := runnercontrol.NewCredentialAuthority(t.Context(), runnercontrol.CredentialAuthorityConfig{
-		DatabaseURL:          integrationDatabaseURL,
-		EnrollmentHashSecret: []byte("task-4-runner-enrollment-hash-secret-32-bytes"),
-		CACertificate:        caCertificate, CAPrivateKey: caPrivateKey,
-		CertificateLifetime:           24 * time.Hour,
-		CredentialVerificationTimeout: 5 * time.Second,
-		Now:                           func() time.Time { return now },
-		NewToken:                      func() string { return "runner-enrollment-secret-material-0123456789" },
-		NewSerial:                     func() *big.Int { return big.NewInt(10_000 + task4Sequence.Add(1)) },
+	verifier, err := runnercontrol.NewCredentialAuthority(runnercontrol.CredentialAuthorityConfig{
+		Credential: task4RunnerCredential, CACertificate: caCertificate,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(authority.Close)
-	return authority
+	return &task4TestCredentialAuthority{
+		t: t, verifier: verifier, certificate: caCertificate,
+		privateKey: caPrivateKey, now: now,
+	}
+}
+
+func (authority *task4TestCredentialAuthority) Issue(
+	runnerID string,
+	certificateRequestPEM []byte,
+) (task4IssuedCertificate, error) {
+	block, remainder := pem.Decode(certificateRequestPEM)
+	if block == nil || len(remainder) != 0 {
+		return task4IssuedCertificate{}, errors.New("invalid test CSR")
+	}
+	request, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		return task4IssuedCertificate{}, err
+	}
+	serial := big.NewInt(10_000 + task4Sequence.Add(1))
+	template := &x509.Certificate{
+		SerialNumber: serial, Subject: pkix.Name{CommonName: runnerID},
+		NotBefore: authority.now.Add(-time.Minute), NotAfter: authority.now.Add(24 * time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		URIs: []*url.URL{{Scheme: "spiffe", Host: "secondbox", Path: "/runner/" + url.PathEscape(runnerID)}},
+	}
+	der, err := x509.CreateCertificate(
+		rand.Reader, template, authority.certificate, request.PublicKey, authority.privateKey,
+	)
+	if err != nil {
+		return task4IssuedCertificate{}, err
+	}
+	certificate, err := x509.ParseCertificate(der)
+	if err != nil {
+		return task4IssuedCertificate{}, err
+	}
+	identity, err := authority.VerifyClientCertificate(
+		context.Background(), certificate, task4RunnerCredential,
+	)
+	if err != nil {
+		return task4IssuedCertificate{}, err
+	}
+	return task4IssuedCertificate{
+		Identity:       identity,
+		CertificatePEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+	}, nil
+}
+
+func (authority *task4TestCredentialAuthority) VerifyClientCertificate(
+	ctx context.Context,
+	certificate *x509.Certificate,
+	credential string,
+) (runnercontrol.RunnerIdentity, error) {
+	return authority.verifier.VerifyClientCertificate(ctx, certificate, credential)
+}
+
+func (authority *task4TestCredentialAuthority) ServerTLSConfig(
+	certificate tls.Certificate,
+) (*tls.Config, error) {
+	return authority.verifier.ServerTLSConfig(certificate)
 }
 
 func task4CertificateAuthority(
@@ -657,20 +691,20 @@ func task4InsertSchedulableSandbox(
 	workspaceID := task4ID("workspace")
 	if _, err := pool.Exec(t.Context(), `
 		INSERT INTO secondbox.workspaces (
-			id,project_id,sandbox_id,generation,retained_bytes,current_checkpoint_id,
+			id,tenant_ref,subject_ref,sandbox_id,generation,retained_bytes,current_checkpoint_id,
 			created_at,updated_at
-		) VALUES ($1,'task4-project',$2,1,0,'checkpoint-current',$3,$3)`,
+		) VALUES ($1,'task4-project','task4-subject',$2,1,0,'checkpoint-current',$3,$3)`,
 		workspaceID, sandboxID, now,
 	); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(t.Context(), `
 		INSERT INTO secondbox.sandboxes (
-			id,project_id,profile_name,profile_revision_id,state,desired_state,generation,
+			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,generation,
 			workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
 			last_activity_at,revision,created_at,updated_at,deleted_at
 		) VALUES (
-			$2,'task4-project','task4-profile',$4,'creating','running',1,$1,'',
+			$2,'task4-project','task4-subject','task4-profile',$4,'creating','running',1,$1,'',
 			'{}','{}',NULL,1,$3,$3,NULL
 		)`, workspaceID, sandboxID, now, profileRevisionID,
 	); err != nil {

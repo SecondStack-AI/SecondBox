@@ -33,7 +33,7 @@ Guest traffic cannot reach Runner listeners, the Runner's control-plane connecti
 
 ## Exposed ports
 
-A ProfileRevision lists approved guest ports, protocols, session duration, and concurrency. An application with port scope requests a session for one named approved port on a ready Sandbox generation and supplies the current Lease. Admission transactionally binds the Project, service account, pinned ProfileRevision, Lease, assignment fence, generation, named port, protocol, duration, and Project/Profile/port-session limits.
+A ProfileRevision lists approved guest ports, protocols, session duration, and concurrency. A trusted caller requests a session for one named approved port on a ready Sandbox generation and supplies the current Lease. Admission transactionally binds the tenant, subject, pinned ProfileRevision, Lease, assignment fence, generation, named port, protocol, duration, and subject/Profile/port-session limits.
 
 The control plane returns an expiring WebSocket endpoint whose single-use signed credential is carried in the URI fragment. Clients remove the fragment from the request URL and pass it as the `secondbox.port.token.<credential>` WebSocket protocol alongside `secondbox.port.v1`; this keeps the credential out of the HTTP path, query, and request log. The control plane atomically consumes the credential before upgrading, then proxies binary WebSocket messages through durable, fenced Runner Port frames. Credit in each direction bounds retained bytes and is returned only after the downstream write succeeds.
 

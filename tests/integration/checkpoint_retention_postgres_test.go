@@ -16,7 +16,7 @@ func TestCheckpointReservationsAreTransactionalAndInterruptedUploadsAreCollected
 	projectQuota := generousQuota()
 	projectQuota.MaxRetainedBytes = 8192
 	controlPlane, databaseStore := newControlPlaneFixture(t, projectQuota)
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(
 		t, controlPlane, admin, "checkpoint-reservation",
 	)

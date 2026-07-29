@@ -73,6 +73,7 @@ func (relay *memoryRelayBoundary) MarkOutboundFrameDelivered(
 	_ context.Context,
 	id string,
 	connectionID string,
+	_ int64,
 	_ time.Time,
 ) error {
 	relay.mu.Lock()

@@ -19,7 +19,7 @@ type RelayBoundary interface {
 	SeedOperation(context.Context, *runnerv1.AssignmentFence) error
 	SeedOutbound(context.Context, string, *runnerv1.ControlPlaneToRunner) error
 	ClaimOutboundFrame(context.Context, string, string, time.Time) (string, *runnerv1.ControlPlaneToRunner, bool, error)
-	MarkOutboundFrameDelivered(context.Context, string, string, time.Time) error
+	MarkOutboundFrameDelivered(context.Context, string, string, int64, time.Time) error
 	PersistInboundFrame(context.Context, string, string, *runnerv1.RunnerToControlPlane, time.Time) (bool, error)
 }
 
@@ -53,7 +53,7 @@ func RunRelayConformanceSuite(t *testing.T, factory RelayBoundaryFactory) {
 		if err != nil || !found || id != "relay-1" {
 			t.Fatalf("reconnect claim = %q, %t, %v", id, found, err)
 		}
-		if err := boundary.MarkOutboundFrameDelivered(t.Context(), id, "connection-2", now.Add(time.Second)); err != nil {
+		if err := boundary.MarkOutboundFrameDelivered(t.Context(), id, "connection-2", 2, now.Add(time.Second)); err != nil {
 			t.Fatal(err)
 		}
 		if _, _, found, err := boundary.ClaimOutboundFrame(t.Context(), "runner-1", "connection-3", now.Add(2*time.Second)); err != nil || found {

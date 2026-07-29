@@ -15,52 +15,47 @@ import (
 
 // Config contains only explicitly configured control-plane settings.
 type Config struct {
-	ListenAddress                       string
-	PublicBaseURL                       string
-	RunnerListenAddress                 string
-	DatabaseURL                         string
-	LogPath                             string
-	BootstrapAdminToken                 string
-	APIKeyHashSecret                    string
-	HTTPTimeout                         time.Duration
-	RunnerServerCertificatePath         string
-	RunnerServerPrivateKeyPath          string
-	RunnerCACertificatePath             string
-	RunnerCAPrivateKeyPath              string
-	RunnerEnrollmentHashSecret          string
-	RunnerCertificateLifetime           time.Duration
-	RunnerCredentialVerificationTimeout time.Duration
-	RunnerHeartbeatInterval             time.Duration
-	RunnerCommandPollInterval           time.Duration
-	DataPlanePollInterval               time.Duration
-	DataPlaneClaimDuration              time.Duration
-	DataPlaneRetention                  time.Duration
-	DataPlaneMaximumFrameBytes          int64
-	DataPlaneMaximumSessionBytes        int64
-	LifecycleReconcilePollInterval      time.Duration
-	LifecycleReconcileClaimDuration     time.Duration
-	AssignmentClaimDuration             time.Duration
-	AssignmentDeadline                  time.Duration
-	RunnerHeartbeatTimeout              time.Duration
-	AssignmentRetryLimit                int64
-	SchedulerSerializationRetryLimit    int
-	SignedAssetCatalogPath              string
-	ObjectStoreEndpoint                 string
-	ObjectStoreRegion                   string
-	ObjectStoreBucket                   string
-	ObjectStoreAccessKeyID              string
-	ObjectStoreSecretAccessKey          string
-	ObjectStoreUsePathStyle             bool
-	ObjectStoreRetryMaxAttempts         int
-	ObjectStoreHTTPTimeout              time.Duration
-	ObjectStoreTempDirectory            string
-	ObjectStoreMaxObjectBytes           int64
-	CheckpointSpoolDirectory            string
-	RunnerProtocolMinimum               uint32
-	RunnerProtocolMaximum               uint32
-	RunnerEnabledFeatures               []string
-	DefaultProjectQuota                 contracts.QuotaLimits
-	DefaultProfileQuota                 contracts.QuotaLimits
+	ListenAddress                    string
+	PublicBaseURL                    string
+	RunnerListenAddress              string
+	DatabaseURL                      string
+	LogPath                          string
+	PlatformToken                    string
+	HTTPTimeout                      time.Duration
+	RunnerServerCertificatePath      string
+	RunnerServerPrivateKeyPath       string
+	RunnerCACertificatePath          string
+	RunnerCredential                 string
+	RunnerHeartbeatInterval          time.Duration
+	RunnerCommandPollInterval        time.Duration
+	DataPlanePollInterval            time.Duration
+	DataPlaneClaimDuration           time.Duration
+	DataPlaneRetention               time.Duration
+	DataPlaneMaximumFrameBytes       int64
+	DataPlaneMaximumSessionBytes     int64
+	LifecycleReconcilePollInterval   time.Duration
+	LifecycleReconcileClaimDuration  time.Duration
+	AssignmentClaimDuration          time.Duration
+	AssignmentDeadline               time.Duration
+	RunnerHeartbeatTimeout           time.Duration
+	AssignmentRetryLimit             int64
+	SchedulerSerializationRetryLimit int
+	SignedAssetCatalogPath           string
+	ObjectStoreEndpoint              string
+	ObjectStoreRegion                string
+	ObjectStoreBucket                string
+	ObjectStoreAccessKeyID           string
+	ObjectStoreSecretAccessKey       string
+	ObjectStoreUsePathStyle          bool
+	ObjectStoreRetryMaxAttempts      int
+	ObjectStoreHTTPTimeout           time.Duration
+	ObjectStoreTempDirectory         string
+	ObjectStoreMaxObjectBytes        int64
+	CheckpointSpoolDirectory         string
+	RunnerProtocolMinimum            uint32
+	RunnerProtocolMaximum            uint32
+	RunnerEnabledFeatures            []string
+	DefaultSubjectQuota              contracts.QuotaLimits
 }
 
 // FromEnvironment fails when any required setting is absent or invalid.
@@ -88,15 +83,11 @@ func FromEnvironment() (Config, error) {
 	if !filepath.IsAbs(logPath) {
 		return Config{}, errorsForEnvironment("SECONDBOX_LOG_PATH must be an absolute path")
 	}
-	bootstrapToken, err := requiredSecret("SECONDBOX_BOOTSTRAP_ADMIN_TOKEN", 24)
+	platformToken, err := requiredSecret("SECONDBOX_PLATFORM_TOKEN", 24)
 	if err != nil {
 		return Config{}, err
 	}
-	hashSecret, err := requiredSecret("SECONDBOX_API_KEY_HASH_SECRET", 32)
-	if err != nil {
-		return Config{}, err
-	}
-	runnerEnrollmentHashSecret, err := requiredSecret("SECONDBOX_RUNNER_ENROLLMENT_HASH_SECRET", 32)
+	runnerCredential, err := requiredSecret("SECONDBOX_RUNNER_CREDENTIAL", 32)
 	if err != nil {
 		return Config{}, err
 	}
@@ -112,15 +103,7 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	runnerCAPrivateKeyPath, err := requiredAbsolutePath("SECONDBOX_RUNNER_CA_PRIVATE_KEY")
-	if err != nil {
-		return Config{}, err
-	}
 	httpSeconds, err := requiredPositiveInt64("SECONDBOX_HTTP_TIMEOUT_SECONDS")
-	if err != nil {
-		return Config{}, err
-	}
-	runnerCertificateLifetimeSeconds, err := requiredPositiveInt64("SECONDBOX_RUNNER_CERTIFICATE_LIFETIME_SECONDS")
 	if err != nil {
 		return Config{}, err
 	}
@@ -239,10 +222,6 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	runnerCredentialVerificationMilliseconds, err := requiredPositiveInt64("SECONDBOX_RUNNER_CREDENTIAL_VERIFICATION_TIMEOUT_MILLISECONDS")
-	if err != nil {
-		return Config{}, err
-	}
 	runnerProtocolMinimum, err := requiredUint32("SECONDBOX_RUNNER_PROTOCOL_MINIMUM")
 	if err != nil {
 		return Config{}, err
@@ -258,42 +237,35 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	projectQuota, err := requiredQuota("SECONDBOX_DEFAULT_PROJECT")
-	if err != nil {
-		return Config{}, err
-	}
-	profileQuota, err := requiredQuota("SECONDBOX_DEFAULT_PROFILE")
+	subjectQuota, err := requiredQuota("SECONDBOX_DEFAULT_SUBJECT")
 	if err != nil {
 		return Config{}, err
 	}
 	return Config{
 		ListenAddress: listenAddress, PublicBaseURL: publicBaseURL, RunnerListenAddress: runnerListenAddress,
 		DatabaseURL: databaseURL, LogPath: logPath,
-		BootstrapAdminToken: bootstrapToken, APIKeyHashSecret: hashSecret,
-		HTTPTimeout:                         time.Duration(httpSeconds) * time.Second,
-		RunnerServerCertificatePath:         runnerServerCertificatePath,
-		RunnerServerPrivateKeyPath:          runnerServerPrivateKeyPath,
-		RunnerCACertificatePath:             runnerCACertificatePath,
-		RunnerCAPrivateKeyPath:              runnerCAPrivateKeyPath,
-		RunnerEnrollmentHashSecret:          runnerEnrollmentHashSecret,
-		RunnerCertificateLifetime:           time.Duration(runnerCertificateLifetimeSeconds) * time.Second,
-		RunnerCredentialVerificationTimeout: time.Duration(runnerCredentialVerificationMilliseconds) * time.Millisecond,
-		RunnerHeartbeatInterval:             time.Duration(runnerHeartbeatMilliseconds) * time.Millisecond,
-		RunnerCommandPollInterval:           time.Duration(runnerCommandPollMilliseconds) * time.Millisecond,
-		DataPlanePollInterval:               time.Duration(dataPlanePollMilliseconds) * time.Millisecond,
-		DataPlaneClaimDuration:              time.Duration(dataPlaneClaimMilliseconds) * time.Millisecond,
-		DataPlaneRetention:                  time.Duration(dataPlaneRetentionSeconds) * time.Second,
-		DataPlaneMaximumFrameBytes:          dataPlaneMaximumFrameBytes,
-		DataPlaneMaximumSessionBytes:        dataPlaneMaximumSessionBytes,
-		LifecycleReconcilePollInterval:      time.Duration(lifecycleReconcilePollMilliseconds) * time.Millisecond,
-		LifecycleReconcileClaimDuration:     time.Duration(lifecycleReconcileClaimMilliseconds) * time.Millisecond,
-		AssignmentClaimDuration:             time.Duration(assignmentClaimMilliseconds) * time.Millisecond,
-		AssignmentDeadline:                  time.Duration(assignmentDeadlineMilliseconds) * time.Millisecond,
-		RunnerHeartbeatTimeout:              time.Duration(runnerHeartbeatTimeoutMilliseconds) * time.Millisecond,
-		AssignmentRetryLimit:                assignmentRetryLimit,
-		SchedulerSerializationRetryLimit:    schedulerSerializationRetryLimitInt,
-		SignedAssetCatalogPath:              signedAssetCatalogPath,
-		ObjectStoreEndpoint:                 objectStoreEndpoint, ObjectStoreRegion: objectStoreRegion,
+		PlatformToken:                    platformToken,
+		HTTPTimeout:                      time.Duration(httpSeconds) * time.Second,
+		RunnerServerCertificatePath:      runnerServerCertificatePath,
+		RunnerServerPrivateKeyPath:       runnerServerPrivateKeyPath,
+		RunnerCACertificatePath:          runnerCACertificatePath,
+		RunnerCredential:                 runnerCredential,
+		RunnerHeartbeatInterval:          time.Duration(runnerHeartbeatMilliseconds) * time.Millisecond,
+		RunnerCommandPollInterval:        time.Duration(runnerCommandPollMilliseconds) * time.Millisecond,
+		DataPlanePollInterval:            time.Duration(dataPlanePollMilliseconds) * time.Millisecond,
+		DataPlaneClaimDuration:           time.Duration(dataPlaneClaimMilliseconds) * time.Millisecond,
+		DataPlaneRetention:               time.Duration(dataPlaneRetentionSeconds) * time.Second,
+		DataPlaneMaximumFrameBytes:       dataPlaneMaximumFrameBytes,
+		DataPlaneMaximumSessionBytes:     dataPlaneMaximumSessionBytes,
+		LifecycleReconcilePollInterval:   time.Duration(lifecycleReconcilePollMilliseconds) * time.Millisecond,
+		LifecycleReconcileClaimDuration:  time.Duration(lifecycleReconcileClaimMilliseconds) * time.Millisecond,
+		AssignmentClaimDuration:          time.Duration(assignmentClaimMilliseconds) * time.Millisecond,
+		AssignmentDeadline:               time.Duration(assignmentDeadlineMilliseconds) * time.Millisecond,
+		RunnerHeartbeatTimeout:           time.Duration(runnerHeartbeatTimeoutMilliseconds) * time.Millisecond,
+		AssignmentRetryLimit:             assignmentRetryLimit,
+		SchedulerSerializationRetryLimit: schedulerSerializationRetryLimitInt,
+		SignedAssetCatalogPath:           signedAssetCatalogPath,
+		ObjectStoreEndpoint:              objectStoreEndpoint, ObjectStoreRegion: objectStoreRegion,
 		ObjectStoreBucket: objectStoreBucket, ObjectStoreAccessKeyID: objectStoreAccessKeyID,
 		ObjectStoreSecretAccessKey:  objectStoreSecretAccessKey,
 		ObjectStoreUsePathStyle:     objectStoreUsePathStyle,
@@ -304,7 +276,7 @@ func FromEnvironment() (Config, error) {
 		CheckpointSpoolDirectory:    checkpointSpoolDirectory,
 		RunnerProtocolMinimum:       runnerProtocolMinimum, RunnerProtocolMaximum: runnerProtocolMaximum,
 		RunnerEnabledFeatures: runnerEnabledFeatures,
-		DefaultProjectQuota:   projectQuota, DefaultProfileQuota: profileQuota,
+		DefaultSubjectQuota:   subjectQuota,
 	}, nil
 }
 

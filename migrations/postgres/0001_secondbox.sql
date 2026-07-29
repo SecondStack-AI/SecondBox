@@ -7,40 +7,9 @@ CREATE TABLE secondbox.schema_migrations (
 );
 CREATE UNIQUE INDEX schema_migrations_version_idx ON secondbox.schema_migrations (version);
 
-CREATE TABLE secondbox.operators (
-    id text PRIMARY KEY,
-    name text NOT NULL,
-    state text NOT NULL,
-    revision bigint NOT NULL,
-    created_at timestamptz NOT NULL,
-    updated_at timestamptz NOT NULL
-);
-
-CREATE TABLE secondbox.operator_credentials (
-    id text PRIMARY KEY,
-    operator_id text NOT NULL,
-    credential_hash bytea NOT NULL,
-    state text NOT NULL,
-    last_used_at timestamptz,
-    revision bigint NOT NULL,
-    created_at timestamptz NOT NULL,
-    updated_at timestamptz NOT NULL
-);
-CREATE UNIQUE INDEX operator_credentials_operator_idx ON secondbox.operator_credentials (operator_id);
-
-CREATE TABLE secondbox.projects (
-    id text PRIMARY KEY,
-    name text NOT NULL,
-    state text NOT NULL,
-    revision bigint NOT NULL,
-    created_at timestamptz NOT NULL,
-    updated_at timestamptz NOT NULL
-);
-CREATE UNIQUE INDEX projects_name_idx ON secondbox.projects (name);
-CREATE INDEX projects_created_idx ON secondbox.projects (created_at, id);
-
-CREATE TABLE secondbox.project_quotas (
-    project_id text PRIMARY KEY,
+CREATE TABLE secondbox.subject_quotas (
+    tenant_ref text NOT NULL,
+    subject_ref text NOT NULL,
     max_sandboxes bigint NOT NULL,
     max_active_instances bigint NOT NULL,
     max_cpu_millis bigint NOT NULL,
@@ -50,41 +19,9 @@ CREATE TABLE secondbox.project_quotas (
     max_artifacts bigint NOT NULL,
     max_port_sessions bigint NOT NULL,
     max_concurrent_operations bigint NOT NULL,
-    updated_at timestamptz NOT NULL
+    updated_at timestamptz NOT NULL,
+    PRIMARY KEY (tenant_ref, subject_ref)
 );
-
-CREATE TABLE secondbox.service_accounts (
-    id text PRIMARY KEY,
-    project_id text NOT NULL,
-    name text NOT NULL,
-    state text NOT NULL,
-    scopes_json jsonb NOT NULL,
-    profile_grants_json jsonb NOT NULL,
-    revision bigint NOT NULL,
-    created_at timestamptz NOT NULL,
-    updated_at timestamptz NOT NULL
-);
-CREATE UNIQUE INDEX service_accounts_project_name_idx ON secondbox.service_accounts (project_id, name);
-CREATE INDEX service_accounts_project_created_idx ON secondbox.service_accounts (project_id, created_at, id);
-
-CREATE TABLE secondbox.api_keys (
-    id text PRIMARY KEY,
-    project_id text NOT NULL,
-    service_account_id text NOT NULL,
-    name text NOT NULL,
-    prefix text NOT NULL,
-    credential_hash bytea NOT NULL,
-    state text NOT NULL,
-    scopes_json jsonb NOT NULL,
-    expires_at timestamptz,
-    revoked_at timestamptz,
-    last_used_at timestamptz,
-    revision bigint NOT NULL,
-    created_at timestamptz NOT NULL,
-    updated_at timestamptz NOT NULL
-);
-CREATE UNIQUE INDEX api_keys_prefix_idx ON secondbox.api_keys (prefix);
-CREATE INDEX api_keys_service_account_created_idx ON secondbox.api_keys (service_account_id, created_at, id);
 
 CREATE TABLE secondbox.profiles (
     name text PRIMARY KEY,
@@ -104,20 +41,6 @@ CREATE TABLE secondbox.profile_revisions (
 );
 CREATE UNIQUE INDEX profile_revisions_profile_number_idx ON secondbox.profile_revisions (profile_name, revision_number);
 CREATE INDEX profiles_created_idx ON secondbox.profiles (created_at, name);
-
-CREATE TABLE secondbox.profile_quotas (
-    profile_name text PRIMARY KEY,
-    max_sandboxes bigint NOT NULL,
-    max_active_instances bigint NOT NULL,
-    max_cpu_millis bigint NOT NULL,
-    max_memory_bytes bigint NOT NULL,
-    max_retained_bytes bigint NOT NULL,
-    max_snapshots bigint NOT NULL,
-    max_artifacts bigint NOT NULL,
-    max_port_sessions bigint NOT NULL,
-    max_concurrent_operations bigint NOT NULL,
-    updated_at timestamptz NOT NULL
-);
 
 CREATE TABLE secondbox.runner_pools (
     name text PRIMARY KEY,
@@ -157,36 +80,6 @@ CREATE TABLE secondbox.runners (
 CREATE INDEX runners_pool_state_idx ON secondbox.runners (pool_name, state, id);
 CREATE INDEX runners_pool_created_idx ON secondbox.runners (pool_name, created_at, id);
 CREATE INDEX runners_created_idx ON secondbox.runners (created_at, id);
-
-CREATE TABLE secondbox.runner_enrollment_tokens (
-    id text PRIMARY KEY,
-    runner_id text NOT NULL,
-    pool_name text NOT NULL,
-    runner_name text NOT NULL,
-    token_hash bytea NOT NULL,
-    state text NOT NULL,
-    expires_at timestamptz NOT NULL,
-    redeemed_at timestamptz,
-    created_at timestamptz NOT NULL,
-    updated_at timestamptz NOT NULL
-);
-CREATE UNIQUE INDEX runner_enrollment_tokens_hash_idx ON secondbox.runner_enrollment_tokens (token_hash);
-CREATE INDEX runner_enrollment_tokens_runner_state_idx ON secondbox.runner_enrollment_tokens (runner_id, state, id);
-
-CREATE TABLE secondbox.runner_credentials (
-    serial_number text PRIMARY KEY,
-    runner_id text NOT NULL,
-    certificate_fingerprint_sha256 text NOT NULL,
-    state text NOT NULL,
-    not_before timestamptz NOT NULL,
-    not_after timestamptz NOT NULL,
-    rotated_from_serial text NOT NULL,
-    revoked_at timestamptz,
-    created_at timestamptz NOT NULL,
-    updated_at timestamptz NOT NULL
-);
-CREATE UNIQUE INDEX runner_credentials_fingerprint_idx ON secondbox.runner_credentials (certificate_fingerprint_sha256);
-CREATE INDEX runner_credentials_runner_state_idx ON secondbox.runner_credentials (runner_id, state, serial_number);
 
 CREATE TABLE secondbox.runner_connections (
     id text PRIMARY KEY,
@@ -229,7 +122,8 @@ CREATE INDEX runner_commands_delivery_idx ON secondbox.runner_commands (runner_i
 
 CREATE TABLE secondbox.workspaces (
     id text PRIMARY KEY,
-    project_id text NOT NULL,
+    tenant_ref text NOT NULL,
+    subject_ref text NOT NULL,
     sandbox_id text NOT NULL,
     generation bigint NOT NULL,
     retained_bytes bigint NOT NULL,
@@ -242,11 +136,12 @@ CREATE TABLE secondbox.workspaces (
     updated_at timestamptz NOT NULL
 );
 CREATE UNIQUE INDEX workspaces_sandbox_idx ON secondbox.workspaces (sandbox_id);
-CREATE INDEX workspaces_project_idx ON secondbox.workspaces (project_id, id);
+CREATE INDEX workspaces_subject_idx ON secondbox.workspaces (tenant_ref, subject_ref, id);
 
 CREATE TABLE secondbox.sandboxes (
     id text PRIMARY KEY,
-    project_id text NOT NULL,
+    tenant_ref text NOT NULL,
+    subject_ref text NOT NULL,
     profile_name text NOT NULL,
     profile_revision_id text NOT NULL,
     state text NOT NULL,
@@ -274,8 +169,8 @@ CREATE TABLE secondbox.sandboxes (
     updated_at timestamptz NOT NULL,
     deleted_at timestamptz
 );
-CREATE INDEX sandboxes_project_created_idx ON secondbox.sandboxes (project_id, created_at, id);
-CREATE INDEX sandboxes_project_state_idx ON secondbox.sandboxes (project_id, state, id);
+CREATE INDEX sandboxes_subject_created_idx ON secondbox.sandboxes (tenant_ref, subject_ref, created_at, id);
+CREATE INDEX sandboxes_subject_state_idx ON secondbox.sandboxes (tenant_ref, subject_ref, state, id);
 CREATE INDEX sandboxes_profile_state_idx ON secondbox.sandboxes (profile_name, state, id);
 
 CREATE TABLE secondbox.lifecycle_effects (
@@ -372,7 +267,8 @@ CREATE INDEX assignments_reconcile_idx ON secondbox.assignments (next_reconcile_
 
 CREATE TABLE secondbox.leases (
     id text PRIMARY KEY,
-    project_id text NOT NULL,
+    tenant_ref text NOT NULL,
+    subject_ref text NOT NULL,
     sandbox_id text NOT NULL,
     generation bigint NOT NULL,
     service_account_id text NOT NULL,
@@ -386,7 +282,8 @@ CREATE INDEX leases_sandbox_state_expiry_idx ON secondbox.leases (sandbox_id, st
 
 CREATE TABLE secondbox.activity_sessions (
     id text PRIMARY KEY,
-    project_id text NOT NULL,
+    tenant_ref text NOT NULL,
+    subject_ref text NOT NULL,
     sandbox_id text NOT NULL,
     generation bigint NOT NULL,
     kind text NOT NULL,
@@ -401,7 +298,8 @@ CREATE INDEX activity_sessions_sandbox_state_idx
     ON secondbox.activity_sessions (sandbox_id, generation, state, last_activity_at, id);
 
 CREATE TABLE secondbox.activity_touches (
-    project_id text NOT NULL,
+    tenant_ref text NOT NULL,
+    subject_ref text NOT NULL,
     sandbox_id text NOT NULL,
     generation bigint NOT NULL,
     service_account_id text NOT NULL,
@@ -412,7 +310,7 @@ CREATE TABLE secondbox.activity_touches (
     created_at timestamptz NOT NULL
 );
 CREATE UNIQUE INDEX activity_touches_idempotency_idx
-    ON secondbox.activity_touches (project_id, sandbox_id, idempotency_key);
+    ON secondbox.activity_touches (tenant_ref, subject_ref, sandbox_id, idempotency_key);
 
 CREATE TABLE secondbox.workspace_materializations (
     id text PRIMARY KEY,
@@ -439,7 +337,8 @@ CREATE INDEX workspace_materializations_runner_state_idx
 
 CREATE TABLE secondbox.workspace_checkpoints (
     id text PRIMARY KEY,
-    project_id text NOT NULL,
+    tenant_ref text NOT NULL,
+    subject_ref text NOT NULL,
     sandbox_id text NOT NULL,
     workspace_id text NOT NULL,
     source_generation bigint NOT NULL,
@@ -462,7 +361,8 @@ CREATE INDEX workspace_checkpoints_gc_idx
 
 CREATE TABLE secondbox.snapshots (
     id text PRIMARY KEY,
-    project_id text NOT NULL,
+    tenant_ref text NOT NULL,
+    subject_ref text NOT NULL,
     sandbox_id text NOT NULL,
     workspace_id text NOT NULL,
     checkpoint_id text NOT NULL,
@@ -477,12 +377,13 @@ CREATE TABLE secondbox.snapshots (
     created_at timestamptz NOT NULL,
     retention_ended_at timestamptz
 );
-CREATE INDEX snapshots_project_sandbox_created_idx ON secondbox.snapshots (project_id, sandbox_id, created_at DESC, id DESC);
+CREATE INDEX snapshots_project_sandbox_created_idx ON secondbox.snapshots (tenant_ref, subject_ref, sandbox_id, created_at DESC, id DESC);
 CREATE INDEX snapshots_checkpoint_retention_idx ON secondbox.snapshots (checkpoint_id, state, retain_until, id);
 
 CREATE TABLE secondbox.artifacts (
     id text PRIMARY KEY,
-    project_id text NOT NULL,
+    tenant_ref text NOT NULL,
+    subject_ref text NOT NULL,
     sandbox_id text NOT NULL,
     source_generation bigint NOT NULL,
     name text NOT NULL,
@@ -498,12 +399,13 @@ CREATE TABLE secondbox.artifacts (
     garbage_collection_marked_at timestamptz,
     garbage_collected_at timestamptz
 );
-CREATE INDEX artifacts_project_sandbox_created_idx ON secondbox.artifacts (project_id, sandbox_id, created_at DESC, id DESC);
+CREATE INDEX artifacts_project_sandbox_created_idx ON secondbox.artifacts (tenant_ref, subject_ref, sandbox_id, created_at DESC, id DESC);
 CREATE INDEX artifacts_gc_idx ON secondbox.artifacts (state, retain_until, id);
 
 CREATE TABLE secondbox.port_sessions (
     id text PRIMARY KEY,
-    project_id text NOT NULL,
+    tenant_ref text NOT NULL,
+    subject_ref text NOT NULL,
     sandbox_id text NOT NULL,
     profile_revision_id text NOT NULL,
     data_plane_session_id text NOT NULL,
@@ -527,13 +429,14 @@ CREATE TABLE secondbox.port_sessions (
     closed_at timestamptz
 );
 CREATE UNIQUE INDEX port_sessions_idempotency_idx
-    ON secondbox.port_sessions (project_id, sandbox_id, idempotency_key);
-CREATE INDEX port_sessions_project_state_idx ON secondbox.port_sessions (project_id, state, expires_at, id);
+    ON secondbox.port_sessions (tenant_ref, subject_ref, sandbox_id, idempotency_key);
+CREATE INDEX port_sessions_project_state_idx ON secondbox.port_sessions (tenant_ref, subject_ref, state, expires_at, id);
 CREATE INDEX port_sessions_sandbox_state_idx ON secondbox.port_sessions (sandbox_id, state, expires_at, id);
 
 CREATE TABLE secondbox.data_plane_sessions (
     id text PRIMARY KEY,
-    project_id text NOT NULL,
+    tenant_ref text NOT NULL,
+    subject_ref text NOT NULL,
     sandbox_id text NOT NULL,
     profile_revision_id text NOT NULL,
     assignment_id text NOT NULL,
@@ -590,7 +493,7 @@ CREATE TABLE secondbox.data_plane_sessions (
 CREATE UNIQUE INDEX data_plane_sessions_stream_idx
     ON secondbox.data_plane_sessions (kind, assignment_id, id, stream_id);
 CREATE UNIQUE INDEX data_plane_sessions_idempotency_idx
-    ON secondbox.data_plane_sessions (project_id, operation, sandbox_id, idempotency_key)
+    ON secondbox.data_plane_sessions (tenant_ref, subject_ref, operation, sandbox_id, idempotency_key)
     WHERE idempotency_key<>'';
 CREATE INDEX data_plane_sessions_runner_state_idx
     ON secondbox.data_plane_sessions (runner_id, state, priority, created_at, id);
@@ -622,7 +525,8 @@ CREATE INDEX data_plane_frames_delivery_idx
 
 CREATE TABLE secondbox.operations (
     id text PRIMARY KEY,
-    project_id text NOT NULL,
+    tenant_ref text NOT NULL,
+    subject_ref text NOT NULL,
     sandbox_id text NOT NULL,
     kind text NOT NULL,
     state text NOT NULL,
@@ -636,28 +540,29 @@ CREATE TABLE secondbox.operations (
     completed_at timestamptz,
     updated_at timestamptz NOT NULL
 );
-CREATE INDEX operations_project_created_idx ON secondbox.operations (project_id, created_at, id);
+CREATE INDEX operations_project_created_idx ON secondbox.operations (tenant_ref, subject_ref, created_at, id);
 CREATE INDEX operations_state_updated_idx ON secondbox.operations (state, updated_at, id);
 
 CREATE TABLE secondbox.idempotency_records (
-    project_id text NOT NULL,
+    tenant_ref text NOT NULL,
+    subject_ref text NOT NULL,
     operation text NOT NULL,
     target_id text NOT NULL,
     idempotency_key text NOT NULL,
     request_hash text NOT NULL,
     response_resource_id text NOT NULL,
     response_json jsonb,
-    response_secret bytea,
     created_at timestamptz NOT NULL,
     expires_at timestamptz NOT NULL
 );
 CREATE UNIQUE INDEX idempotency_records_scope_idx
-    ON secondbox.idempotency_records (project_id, operation, target_id, idempotency_key);
+    ON secondbox.idempotency_records (tenant_ref, subject_ref, operation, target_id, idempotency_key);
 CREATE INDEX idempotency_records_expiry_idx ON secondbox.idempotency_records (expires_at);
 
 CREATE TABLE secondbox.audit_events (
     id text PRIMARY KEY,
-    project_id text NOT NULL,
+    tenant_ref text NOT NULL,
+    subject_ref text NOT NULL,
     actor_kind text NOT NULL,
     actor_id text NOT NULL,
     action text NOT NULL,
@@ -668,5 +573,5 @@ CREATE TABLE secondbox.audit_events (
     details_json jsonb NOT NULL,
     created_at timestamptz NOT NULL
 );
-CREATE INDEX audit_events_project_created_idx ON secondbox.audit_events (project_id, created_at DESC, id DESC);
+CREATE INDEX audit_events_project_created_idx ON secondbox.audit_events (tenant_ref, subject_ref, created_at DESC, id DESC);
 CREATE INDEX audit_events_action_created_idx ON secondbox.audit_events (action, created_at DESC, id DESC);

@@ -103,7 +103,7 @@ func TestSandboxShellUsesRawTTYResizeBinaryIOAndRestoresOnExit(t *testing.T) {
 
 	var output bytes.Buffer
 	err := runSandboxShellCommand(
-		t.Context(), server.URL, "token",
+		t.Context(), server.URL, "token", "tenant", "subject",
 		[]string{
 			"--sandbox", "sandbox-1", "--generation", "3",
 			"--lease", "lease-1", "--idempotency-key", "sandbox-shell-command",
@@ -171,7 +171,7 @@ func TestSandboxShellCancellationRestoresRawTTY(t *testing.T) {
 	defer server.Close()
 
 	err := runSandboxShellCommand(
-		ctx, server.URL, "token",
+		ctx, server.URL, "token", "tenant", "subject",
 		[]string{
 			"--sandbox", "sandbox-1", "--generation", "3",
 			"--lease", "lease-2", "--idempotency-key", "sandbox-shell-cancel",
@@ -241,7 +241,7 @@ func TestSandboxShellReconnectsStableSessionAtRetainedSequence(t *testing.T) {
 	defer server.Close()
 
 	err := runSandboxShellCommand(
-		t.Context(), server.URL, "token",
+		t.Context(), server.URL, "token", "tenant", "subject",
 		[]string{
 			"--sandbox", "sandbox-1", "--generation", "3",
 			"--session", "term-3",

@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -28,17 +30,20 @@ import (
 type principalContextKey struct{}
 
 var correlationIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{8,128}$`)
+var ownershipRefPattern = regexp.MustCompile(`^[\x21-\x7e]{1,128}$`)
 
 // HandlerConfig contains the control plane and mandatory logger.
 type HandlerConfig struct {
 	Service                   *service.ControlPlaneService
 	Logger                    *slog.Logger
+	PlatformToken             string
 	MaximumDataPlaneBodyBytes int64
 }
 
 type handler struct {
 	service                   *service.ControlPlaneService
 	logger                    *slog.Logger
+	platformTokenHash         [sha256.Size]byte
 	maximumDataPlaneBodyBytes int64
 }
 
@@ -50,28 +55,21 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	if config.Logger == nil {
 		return nil, errors.New("SecondBox HTTP logger is required")
 	}
+	if len(config.PlatformToken) < 24 {
+		return nil, errors.New("SecondBox HTTP platform token must contain at least 24 bytes")
+	}
 	if config.MaximumDataPlaneBodyBytes <= 0 {
 		return nil, errors.New("SecondBox HTTP data-plane body bound is required")
 	}
 	apiHandler := &handler{
 		service: config.Service, logger: config.Logger,
+		platformTokenHash:         sha256.Sum256([]byte(config.PlatformToken)),
 		maximumDataPlaneBodyBytes: config.MaximumDataPlaneBodyBytes,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", apiHandler.health)
 	mux.HandleFunc("GET /readyz", apiHandler.ready)
 	mux.HandleFunc("GET /metrics", apiHandler.metrics)
-	mux.Handle("GET /v1/projects", apiHandler.authenticate(http.HandlerFunc(apiHandler.listProjects)))
-	mux.Handle("POST /v1/projects", apiHandler.authenticate(http.HandlerFunc(apiHandler.createProject)))
-	mux.Handle("GET /v1/projects/{projectID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getProject)))
-	mux.Handle("PATCH /v1/projects/{projectID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.updateProject)))
-	mux.Handle("GET /v1/projects/{projectID}/service-accounts", apiHandler.authenticate(http.HandlerFunc(apiHandler.listServiceAccounts)))
-	mux.Handle("POST /v1/projects/{projectID}/service-accounts", apiHandler.authenticate(http.HandlerFunc(apiHandler.createServiceAccount)))
-	mux.Handle("GET /v1/projects/{projectID}/service-accounts/{serviceAccountID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getServiceAccount)))
-	mux.Handle("PATCH /v1/projects/{projectID}/service-accounts/{serviceAccountID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.updateServiceAccount)))
-	mux.Handle("GET /v1/projects/{projectID}/service-accounts/{serviceAccountID}/api-keys", apiHandler.authenticate(http.HandlerFunc(apiHandler.listAPIKeys)))
-	mux.Handle("POST /v1/projects/{projectID}/service-accounts/{serviceAccountID}/api-keys", apiHandler.authenticate(http.HandlerFunc(apiHandler.createAPIKey)))
-	mux.Handle("POST /v1/projects/{projectID}/service-accounts/{serviceAccountID}/api-keys/{keyAction}", apiHandler.authenticate(http.HandlerFunc(apiHandler.mutateAPIKey)))
 	mux.Handle("GET /v1/profiles", apiHandler.authenticate(http.HandlerFunc(apiHandler.listProfiles)))
 	mux.Handle("POST /v1/profiles", apiHandler.authenticate(http.HandlerFunc(apiHandler.createProfile)))
 	mux.Handle("GET /v1/profiles/{profileName}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getProfile)))
@@ -144,7 +142,7 @@ func (apiHandler *handler) executeSandboxCommand(writer http.ResponseWriter, req
 		return
 	}
 	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
-	writeJSON(writer, http.StatusOK, outcome)
+	apiHandler.writeJSON(writer, request, http.StatusOK, outcome)
 }
 
 func (apiHandler *handler) readSandboxFile(writer http.ResponseWriter, request *http.Request) {
@@ -170,9 +168,7 @@ func (apiHandler *handler) readSandboxFile(writer http.ResponseWriter, request *
 	writer.Header().Set("Content-Type", "application/octet-stream")
 	writer.Header().Set("Digest", digest)
 	writer.WriteHeader(http.StatusOK)
-	if _, err := writer.Write(content); err != nil {
-		panic(fmt.Sprintf("SecondBox binary response write failed: %v", err))
-	}
+	apiHandler.writeResponseBytes(writer, request, "binary File download", content)
 }
 
 func (apiHandler *handler) writeSandboxFile(writer http.ResponseWriter, request *http.Request) {
@@ -215,7 +211,7 @@ func (apiHandler *handler) writeSandboxFile(writer http.ResponseWriter, request 
 		return
 	}
 	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
-	writeJSON(writer, http.StatusOK, result)
+	apiHandler.writeJSON(writer, request, http.StatusOK, result)
 }
 
 func requireBinaryContentType(request *http.Request) error {
@@ -241,7 +237,7 @@ func (apiHandler *handler) statSandboxFile(writer http.ResponseWriter, request *
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, result)
+	apiHandler.writeJSON(writer, request, http.StatusOK, result)
 }
 
 func (apiHandler *handler) sandboxFileExists(writer http.ResponseWriter, request *http.Request) {
@@ -259,7 +255,7 @@ func (apiHandler *handler) sandboxFileExists(writer http.ResponseWriter, request
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, result)
+	apiHandler.writeJSON(writer, request, http.StatusOK, result)
 }
 
 func (apiHandler *handler) listSandboxDirectory(writer http.ResponseWriter, request *http.Request) {
@@ -277,7 +273,7 @@ func (apiHandler *handler) listSandboxDirectory(writer http.ResponseWriter, requ
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, result)
+	apiHandler.writeJSON(writer, request, http.StatusOK, result)
 }
 
 func (apiHandler *handler) createSandboxDirectory(writer http.ResponseWriter, request *http.Request) {
@@ -344,7 +340,7 @@ func (apiHandler *handler) listSandboxArtifacts(writer http.ResponseWriter, requ
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, page)
+	apiHandler.writeJSON(writer, request, http.StatusOK, page)
 }
 
 func (apiHandler *handler) uploadSandboxArtifact(writer http.ResponseWriter, request *http.Request) {
@@ -358,6 +354,11 @@ func (apiHandler *handler) uploadSandboxArtifact(writer http.ResponseWriter, req
 		apiHandler.writeError(writer, request, err)
 		return
 	}
+	defer func() {
+		if closeErr := upload.Content.Close(); closeErr != nil {
+			apiHandler.logResponseAbort(request, "Artifact upload staging close", closeErr)
+		}
+	}()
 	artifact, err := apiHandler.service.UploadSandboxArtifact(
 		request.Context(), requestPrincipal(request), request.PathValue("sandboxID"),
 		generation, request.Header.Get("SecondBox-Lease-ID"),
@@ -367,7 +368,7 @@ func (apiHandler *handler) uploadSandboxArtifact(writer http.ResponseWriter, req
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusCreated, artifact)
+	apiHandler.writeJSON(writer, request, http.StatusCreated, artifact)
 }
 
 func (apiHandler *handler) getArtifact(writer http.ResponseWriter, request *http.Request) {
@@ -378,7 +379,7 @@ func (apiHandler *handler) getArtifact(writer http.ResponseWriter, request *http
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, artifact)
+	apiHandler.writeJSON(writer, request, http.StatusOK, artifact)
 }
 
 func (apiHandler *handler) downloadArtifact(writer http.ResponseWriter, request *http.Request) {
@@ -389,6 +390,11 @@ func (apiHandler *handler) downloadArtifact(writer http.ResponseWriter, request 
 		apiHandler.writeError(writer, request, err)
 		return
 	}
+	defer func() {
+		if closeErr := content.Close(); closeErr != nil {
+			apiHandler.logResponseAbort(request, "Artifact download close", closeErr)
+		}
+	}()
 	digest, err := protocolChecksumToHTTPDigest("sha256:" + artifact.SHA256)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
@@ -397,8 +403,8 @@ func (apiHandler *handler) downloadArtifact(writer http.ResponseWriter, request 
 	writer.Header().Set("Content-Type", "application/octet-stream")
 	writer.Header().Set("Digest", digest)
 	writer.WriteHeader(http.StatusOK)
-	if _, err := writer.Write(content); err != nil {
-		panic(fmt.Sprintf("SecondBox Artifact response write failed: %v", err))
+	if _, err := io.Copy(writer, content); err != nil {
+		apiHandler.logResponseAbort(request, "Artifact download", err)
 	}
 }
 
@@ -428,6 +434,16 @@ func decodeArtifactUpload(
 		return service.ArtifactUpload{}, errors.New("SecondBox Artifact upload must be multipart/form-data")
 	}
 	fields := map[string][]byte{}
+	var contentFile *os.File
+	var contentSize int64
+	var contentSHA256 string
+	cleanupContent := true
+	defer func() {
+		if cleanupContent && contentFile != nil {
+			_ = contentFile.Close()
+			_ = os.Remove(contentFile.Name())
+		}
+	}()
 	for {
 		part, err := reader.NextPart()
 		if errors.Is(err, io.EOF) {
@@ -474,7 +490,31 @@ func decodeArtifactUpload(
 				)
 			}
 		}
-		value, readErr := io.ReadAll(part)
+		if name == "content" {
+			contentFile, err = os.CreateTemp("", "secondbox-artifact-upload-*")
+			if err != nil {
+				return service.ArtifactUpload{}, errors.Join(
+					fmt.Errorf("SecondBox Artifact staging create failed: %w", err),
+					part.Close(),
+				)
+			}
+			hasher := sha256.New()
+			contentSize, err = io.Copy(io.MultiWriter(contentFile, hasher), part)
+			closeErr := part.Close()
+			if err != nil || closeErr != nil {
+				if errors.As(err, &maximumBytesError) {
+					return service.ArtifactUpload{}, runnercontrol.ErrRelaySessionLimit
+				}
+				return service.ArtifactUpload{}, errors.Join(
+					fmt.Errorf("SecondBox Artifact content staging failed: %w", err),
+					closeErr,
+				)
+			}
+			contentSHA256 = hex.EncodeToString(hasher.Sum(nil))
+			fields[name] = nil
+			continue
+		}
+		value, readErr := io.ReadAll(io.LimitReader(part, 1<<20+1))
 		closeErr := part.Close()
 		if readErr != nil || closeErr != nil {
 			if errors.As(readErr, &maximumBytesError) {
@@ -498,14 +538,25 @@ func decodeArtifactUpload(
 	if err := json.Unmarshal(fields["metadata"], &metadata); err != nil || metadata == nil {
 		return service.ArtifactUpload{}, errors.New("SecondBox Artifact metadata must be a JSON string map")
 	}
+	cleanupContent = false
 	return service.ArtifactUpload{
 		Name: string(fields["name"]), MediaType: string(fields["mediaType"]),
-		SHA256: string(fields["sha256"]), Metadata: metadata, Content: fields["content"],
+		SHA256: string(fields["sha256"]), Metadata: metadata, Content: &removingArtifactFile{contentFile},
+		SizeBytes: contentSize, ActualSHA256: contentSHA256,
 	}, nil
 }
 
-func (apiHandler *handler) health(writer http.ResponseWriter, _ *http.Request) {
-	writeJSON(writer, http.StatusOK, map[string]string{"status": "healthy"})
+type removingArtifactFile struct {
+	*os.File
+}
+
+func (file *removingArtifactFile) Close() error {
+	name := file.Name()
+	return errors.Join(file.File.Close(), os.Remove(name))
+}
+
+func (apiHandler *handler) health(writer http.ResponseWriter, request *http.Request) {
+	apiHandler.writeJSON(writer, request, http.StatusOK, map[string]string{"status": "healthy"})
 }
 
 func (apiHandler *handler) ready(writer http.ResponseWriter, request *http.Request) {
@@ -513,7 +564,7 @@ func (apiHandler *handler) ready(writer http.ResponseWriter, request *http.Reque
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]string{"status": "ready"})
+	apiHandler.writeJSON(writer, request, http.StatusOK, map[string]string{"status": "ready"})
 }
 
 func (apiHandler *handler) metrics(writer http.ResponseWriter, request *http.Request) {
@@ -524,241 +575,17 @@ func (apiHandler *handler) metrics(writer http.ResponseWriter, request *http.Req
 	}
 	writer.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	writer.WriteHeader(http.StatusOK)
-	writeMetricFamily(writer, "secondbox_sandboxes", snapshot.SandboxStates)
-	writeMetricFamily(writer, "secondbox_operations", snapshot.OperationStates)
-	writeMetricFamily(writer, "secondbox_api_keys", snapshot.APIKeyStates)
-}
-
-func (apiHandler *handler) createProject(writer http.ResponseWriter, request *http.Request) {
-	var body contracts.CreateProjectRequest
-	if err := decodeStrictJSON(request, &body); err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	project, replayed, err := apiHandler.service.CreateProjectIdempotent(
-		request.Context(), requestPrincipal(request), request.Header.Get("Idempotency-Key"), body,
-	)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
-	setRevisionETag(writer, project.Revision)
-	writeJSON(writer, http.StatusCreated, project)
-}
-
-func (apiHandler *handler) listProjects(writer http.ResponseWriter, request *http.Request) {
-	limit, err := queryLimit(request)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	page, err := apiHandler.service.ListProjects(
-		request.Context(), requestPrincipal(request), limit, request.URL.Query().Get("cursor"),
-	)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	writeJSON(writer, http.StatusOK, page)
-}
-
-func (apiHandler *handler) getProject(writer http.ResponseWriter, request *http.Request) {
-	project, err := apiHandler.service.GetProject(request.Context(), requestPrincipal(request), request.PathValue("projectID"))
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	setRevisionETag(writer, project.Revision)
-	writeJSON(writer, http.StatusOK, project)
-}
-
-func (apiHandler *handler) updateProject(writer http.ResponseWriter, request *http.Request) {
-	var body contracts.UpdateProjectRequest
-	if err := decodeStrictJSON(request, &body); err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	expectedRevision, err := parseIfMatch(request)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	project, replayed, err := apiHandler.service.UpdateProjectIdempotent(
-		request.Context(), requestPrincipal(request), request.PathValue("projectID"),
-		request.Header.Get("Idempotency-Key"), body, expectedRevision,
-	)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
-	setRevisionETag(writer, project.Revision)
-	writeJSON(writer, http.StatusOK, project)
-}
-
-func (apiHandler *handler) createServiceAccount(writer http.ResponseWriter, request *http.Request) {
-	var body contracts.CreateServiceAccountRequest
-	if err := decodeStrictJSON(request, &body); err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	account, replayed, err := apiHandler.service.CreateServiceAccountIdempotent(
-		request.Context(), requestPrincipal(request), request.PathValue("projectID"),
-		request.Header.Get("Idempotency-Key"), body,
-	)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
-	setRevisionETag(writer, account.Revision)
-	writeJSON(writer, http.StatusCreated, account)
-}
-
-func (apiHandler *handler) listServiceAccounts(writer http.ResponseWriter, request *http.Request) {
-	limit, err := queryLimit(request)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	page, err := apiHandler.service.ListServiceAccounts(
-		request.Context(), requestPrincipal(request), request.PathValue("projectID"),
-		limit, request.URL.Query().Get("cursor"),
-	)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	writeJSON(writer, http.StatusOK, page)
-}
-
-func (apiHandler *handler) getServiceAccount(writer http.ResponseWriter, request *http.Request) {
-	account, err := apiHandler.service.GetServiceAccount(
-		request.Context(), requestPrincipal(request),
-		request.PathValue("projectID"), request.PathValue("serviceAccountID"),
-	)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	setRevisionETag(writer, account.Revision)
-	writeJSON(writer, http.StatusOK, account)
-}
-
-func (apiHandler *handler) updateServiceAccount(writer http.ResponseWriter, request *http.Request) {
-	var body contracts.UpdateServiceAccountRequest
-	if err := decodeStrictJSON(request, &body); err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	expectedRevision, err := parseIfMatch(request)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	account, replayed, err := apiHandler.service.UpdateServiceAccountAtRevisionIdempotent(
-		request.Context(), requestPrincipal(request), request.PathValue("projectID"),
-		request.PathValue("serviceAccountID"), request.Header.Get("Idempotency-Key"),
-		body, expectedRevision,
-	)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
-	setRevisionETag(writer, account.Revision)
-	writeJSON(writer, http.StatusOK, account)
-}
-
-func (apiHandler *handler) createAPIKey(writer http.ResponseWriter, request *http.Request) {
-	var body contracts.CreateAPIKeyRequest
-	if err := decodeStrictJSON(request, &body); err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	key, replayed, err := apiHandler.service.CreateAPIKeyIdempotent(
-		request.Context(), requestPrincipal(request), request.PathValue("projectID"),
-		request.PathValue("serviceAccountID"), request.Header.Get("Idempotency-Key"), body,
-	)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
-	writeJSON(writer, http.StatusCreated, key)
-}
-
-func (apiHandler *handler) listAPIKeys(writer http.ResponseWriter, request *http.Request) {
-	limit, err := queryLimit(request)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	page, err := apiHandler.service.ListAPIKeys(
-		request.Context(), requestPrincipal(request), request.PathValue("projectID"),
-		request.PathValue("serviceAccountID"), limit, request.URL.Query().Get("cursor"),
-	)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	writeJSON(writer, http.StatusOK, page)
-}
-
-func (apiHandler *handler) mutateAPIKey(writer http.ResponseWriter, request *http.Request) {
-	keyID, action, ok := splitAction(request.PathValue("keyAction"))
-	if !ok {
-		apiHandler.writeError(writer, request, ports.ErrAPIKeyNotFound)
-		return
-	}
-	projectID := request.PathValue("projectID")
-	accountID := request.PathValue("serviceAccountID")
-	switch action {
-	case "revoke":
-		if err := requireEmptyBody(request); err != nil {
-			apiHandler.writeError(writer, request, err)
+	for _, family := range []struct {
+		name   string
+		values map[string]int64
+	}{
+		{name: "secondbox_sandboxes", values: snapshot.SandboxStates},
+		{name: "secondbox_operations", values: snapshot.OperationStates},
+	} {
+		if err := writeMetricFamily(writer, family.name, family.values); err != nil {
+			apiHandler.logResponseAbort(request, "metrics response", err)
 			return
 		}
-		expectedRevision, err := parseIfMatch(request)
-		if err != nil {
-			apiHandler.writeError(writer, request, err)
-			return
-		}
-		key, replayed, err := apiHandler.service.RevokeAPIKeyAtRevisionIdempotent(
-			request.Context(), requestPrincipal(request), projectID, accountID, keyID,
-			request.Header.Get("Idempotency-Key"), expectedRevision,
-		)
-		if err != nil {
-			apiHandler.writeError(writer, request, err)
-			return
-		}
-		writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
-		setRevisionETag(writer, key.Revision)
-		writeJSON(writer, http.StatusOK, key)
-	case "rotate":
-		if err := requireEmptyBody(request); err != nil {
-			apiHandler.writeError(writer, request, err)
-			return
-		}
-		expectedRevision, err := parseIfMatch(request)
-		if err != nil {
-			apiHandler.writeError(writer, request, err)
-			return
-		}
-		key, replayed, err := apiHandler.service.RotateAPIKeyAtRevisionIdempotent(
-			request.Context(), requestPrincipal(request), projectID, accountID, keyID,
-			request.Header.Get("Idempotency-Key"), expectedRevision,
-		)
-		if err != nil {
-			apiHandler.writeError(writer, request, err)
-			return
-		}
-		writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
-		setRevisionETag(writer, key.APIKey.Revision)
-		writeJSON(writer, http.StatusOK, key)
-	default:
-		apiHandler.writeError(writer, request, ports.ErrAPIKeyNotFound)
 	}
 }
 
@@ -777,7 +604,7 @@ func (apiHandler *handler) createProfile(writer http.ResponseWriter, request *ht
 	}
 	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
 	setRevisionETag(writer, profile.Revision)
-	writeJSON(writer, http.StatusCreated, profile)
+	apiHandler.writeJSON(writer, request, http.StatusCreated, profile)
 }
 
 func (apiHandler *handler) listProfiles(writer http.ResponseWriter, request *http.Request) {
@@ -793,7 +620,7 @@ func (apiHandler *handler) listProfiles(writer http.ResponseWriter, request *htt
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, page)
+	apiHandler.writeJSON(writer, request, http.StatusOK, page)
 }
 
 func (apiHandler *handler) getProfile(writer http.ResponseWriter, request *http.Request) {
@@ -803,7 +630,7 @@ func (apiHandler *handler) getProfile(writer http.ResponseWriter, request *http.
 		return
 	}
 	setRevisionETag(writer, profile.Revision)
-	writeJSON(writer, http.StatusOK, profile)
+	apiHandler.writeJSON(writer, request, http.StatusOK, profile)
 }
 
 func (apiHandler *handler) mutateProfile(writer http.ResponseWriter, request *http.Request) {
@@ -834,7 +661,7 @@ func (apiHandler *handler) mutateProfile(writer http.ResponseWriter, request *ht
 		}
 		writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
 		setRevisionETag(writer, profile.Revision)
-		writeJSON(writer, http.StatusOK, profile)
+		apiHandler.writeJSON(writer, request, http.StatusOK, profile)
 	case "disable":
 		expectedRevision, err := parseIfMatch(request)
 		if err != nil {
@@ -851,7 +678,7 @@ func (apiHandler *handler) mutateProfile(writer http.ResponseWriter, request *ht
 		}
 		writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
 		setRevisionETag(writer, profile.Revision)
-		writeJSON(writer, http.StatusOK, profile)
+		apiHandler.writeJSON(writer, request, http.StatusOK, profile)
 	default:
 		apiHandler.writeError(writer, request, ports.ErrProfileNotFound)
 	}
@@ -871,7 +698,7 @@ func (apiHandler *handler) createSandbox(writer http.ResponseWriter, request *ht
 		return
 	}
 	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(!replayed))
-	writeJSON(writer, http.StatusAccepted, operation)
+	apiHandler.writeJSON(writer, request, http.StatusAccepted, operation)
 }
 
 func (apiHandler *handler) listSandboxes(writer http.ResponseWriter, request *http.Request) {
@@ -887,7 +714,7 @@ func (apiHandler *handler) listSandboxes(writer http.ResponseWriter, request *ht
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, page)
+	apiHandler.writeJSON(writer, request, http.StatusOK, page)
 }
 
 func (apiHandler *handler) getSandbox(writer http.ResponseWriter, request *http.Request) {
@@ -897,7 +724,7 @@ func (apiHandler *handler) getSandbox(writer http.ResponseWriter, request *http.
 		return
 	}
 	setRevisionETag(writer, sandbox.Revision)
-	writeJSON(writer, http.StatusOK, sandbox)
+	apiHandler.writeJSON(writer, request, http.StatusOK, sandbox)
 }
 
 func (apiHandler *handler) mutateSandbox(writer http.ResponseWriter, request *http.Request) {
@@ -934,7 +761,7 @@ func (apiHandler *handler) mutateSandbox(writer http.ResponseWriter, request *ht
 			return
 		}
 		setRevisionETag(writer, sandbox.Revision)
-		writeJSON(writer, http.StatusOK, sandbox)
+		apiHandler.writeJSON(writer, request, http.StatusOK, sandbox)
 	case "inspect":
 		if err := requireEmptyBody(request); err != nil {
 			apiHandler.writeError(writer, request, err)
@@ -952,7 +779,7 @@ func (apiHandler *handler) mutateSandbox(writer http.ResponseWriter, request *ht
 			apiHandler.writeError(writer, request, err)
 			return
 		}
-		writeJSON(writer, http.StatusOK, inspection)
+		apiHandler.writeJSON(writer, request, http.StatusOK, inspection)
 	case "ping":
 		if err := requireEmptyBody(request); err != nil {
 			apiHandler.writeError(writer, request, err)
@@ -970,7 +797,7 @@ func (apiHandler *handler) mutateSandbox(writer http.ResponseWriter, request *ht
 			apiHandler.writeError(writer, request, err)
 			return
 		}
-		writeJSON(writer, http.StatusOK, result)
+		apiHandler.writeJSON(writer, request, http.StatusOK, result)
 	case "touch":
 		if err := requireEmptyBody(request); err != nil {
 			apiHandler.writeError(writer, request, err)
@@ -989,7 +816,7 @@ func (apiHandler *handler) mutateSandbox(writer http.ResponseWriter, request *ht
 			apiHandler.writeError(writer, request, err)
 			return
 		}
-		writeJSON(writer, http.StatusOK, result)
+		apiHandler.writeJSON(writer, request, http.StatusOK, result)
 	default:
 		apiHandler.writeError(writer, request, ports.ErrSandboxNotFound)
 	}
@@ -1016,7 +843,7 @@ func (apiHandler *handler) mutateSandboxLifecycle(
 		return
 	}
 	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
-	writeJSON(writer, http.StatusAccepted, operation)
+	apiHandler.writeJSON(writer, request, http.StatusAccepted, operation)
 }
 
 func (apiHandler *handler) deleteSandbox(writer http.ResponseWriter, request *http.Request) {
@@ -1048,7 +875,7 @@ func (apiHandler *handler) acquireLease(writer http.ResponseWriter, request *htt
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusCreated, lease)
+	apiHandler.writeJSON(writer, request, http.StatusCreated, lease)
 }
 
 func (apiHandler *handler) getLease(writer http.ResponseWriter, request *http.Request) {
@@ -1059,7 +886,7 @@ func (apiHandler *handler) getLease(writer http.ResponseWriter, request *http.Re
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, lease)
+	apiHandler.writeJSON(writer, request, http.StatusOK, lease)
 }
 
 func (apiHandler *handler) renewLease(writer http.ResponseWriter, request *http.Request) {
@@ -1081,7 +908,7 @@ func (apiHandler *handler) renewLease(writer http.ResponseWriter, request *http.
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, lease)
+	apiHandler.writeJSON(writer, request, http.StatusOK, lease)
 }
 
 func (apiHandler *handler) releaseLease(writer http.ResponseWriter, request *http.Request) {
@@ -1097,21 +924,17 @@ func (apiHandler *handler) releaseLease(writer http.ResponseWriter, request *htt
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, lease)
+	apiHandler.writeJSON(writer, request, http.StatusOK, lease)
 }
 
 func (apiHandler *handler) getOperation(writer http.ResponseWriter, request *http.Request) {
 	principal := requestPrincipal(request)
-	if !principal.HasScope(contracts.ScopeSandboxRead) {
-		apiHandler.writeError(writer, request, ports.ErrAuthorizationDenied)
-		return
-	}
 	operation, err := apiHandler.service.GetOperation(request.Context(), principal, request.PathValue("operationID"))
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, operation)
+	apiHandler.writeJSON(writer, request, http.StatusOK, operation)
 }
 
 func (apiHandler *handler) authenticate(next http.Handler) http.Handler {
@@ -1122,10 +945,26 @@ func (apiHandler *handler) authenticate(next http.Handler) http.Handler {
 			apiHandler.writeError(writer, request, ports.ErrAuthenticationFailed)
 			return
 		}
-		principal, err := apiHandler.service.AuthenticateCredential(request.Context(), credential)
-		if err != nil {
-			apiHandler.writeError(writer, request, err)
+		presentedHash := sha256.Sum256([]byte(credential))
+		if subtle.ConstantTimeCompare(presentedHash[:], apiHandler.platformTokenHash[:]) != 1 {
+			apiHandler.writeError(writer, request, ports.ErrAuthenticationFailed)
 			return
+		}
+		tenantRef := request.Header.Get("X-SecondBox-Tenant-Ref")
+		subjectRef := request.Header.Get("X-SecondBox-Subject-Ref")
+		if !ownershipRefPattern.MatchString(tenantRef) ||
+			!ownershipRefPattern.MatchString(subjectRef) {
+			apiHandler.writeError(
+				writer,
+				request,
+				errors.New("SecondBox tenant and subject references must contain 1 to 128 visible ASCII characters"),
+			)
+			return
+		}
+		principal := contracts.Principal{
+			Kind: "platform", ID: subjectRef,
+			ProjectID: tenantRef, ServiceAccountID: subjectRef,
+			TenantRef: tenantRef, SubjectRef: subjectRef,
 		}
 		next.ServeHTTP(writer, request.WithContext(context.WithValue(request.Context(), principalContextKey{}, principal)))
 	})
@@ -1163,7 +1002,7 @@ func (apiHandler *handler) writeError(writer http.ResponseWriter, request *http.
 		)
 	}
 	writer.Header().Set("Content-Type", "application/problem+json")
-	writeJSON(writer, status, contracts.Problem{
+	apiHandler.writeJSON(writer, request, status, contracts.Problem{
 		Type: "https://secondbox.dev/problems/" + code, Title: title, Status: status,
 		Code: code, RequestID: writer.Header().Get("X-Request-ID"), Retryable: retryable,
 	})
@@ -1292,17 +1131,22 @@ func requireEmptyBody(request *http.Request) error {
 	return errors.New("SecondBox request body must be empty")
 }
 
-func writeJSON(writer http.ResponseWriter, status int, value any) {
+func (apiHandler *handler) writeJSON(
+	writer http.ResponseWriter,
+	request *http.Request,
+	status int,
+	value any,
+) {
 	if writer.Header().Get("Content-Type") == "" {
 		writer.Header().Set("Content-Type", "application/json")
 	}
 	writer.WriteHeader(status)
 	if err := json.NewEncoder(writer).Encode(value); err != nil {
-		panic(fmt.Sprintf("SecondBox HTTP response encoding failed: %v", err))
+		apiHandler.logResponseAbort(request, "JSON response", err)
 	}
 }
 
-func writeMetricFamily(writer io.Writer, name string, values map[string]int64) {
+func writeMetricFamily(writer io.Writer, name string, values map[string]int64) error {
 	states := make([]string, 0, len(values))
 	for state := range values {
 		states = append(states, state)
@@ -1310,8 +1154,36 @@ func writeMetricFamily(writer io.Writer, name string, values map[string]int64) {
 	sort.Strings(states)
 	for _, state := range states {
 		if _, err := fmt.Fprintf(writer, "%s{state=%q} %d\n", name, state, values[state]); err != nil {
-			panic(fmt.Sprintf("SecondBox metrics response write failed: %v", err))
+			return fmt.Errorf("SecondBox metrics response write failed: %w", err)
 		}
+	}
+	return nil
+}
+
+func (apiHandler *handler) logResponseAbort(
+	request *http.Request,
+	responseKind string,
+	err error,
+) {
+	apiHandler.logger.ErrorContext(
+		request.Context(),
+		"SecondBox HTTP response write aborted",
+		"response_kind", responseKind,
+		"method", request.Method,
+		"path", request.URL.Path,
+		"request_id", request.Header.Get("X-Request-ID"),
+		"error", err,
+	)
+}
+
+func (apiHandler *handler) writeResponseBytes(
+	writer io.Writer,
+	request *http.Request,
+	responseKind string,
+	content []byte,
+) {
+	if _, err := writer.Write(content); err != nil {
+		apiHandler.logResponseAbort(request, responseKind, err)
 	}
 }
 

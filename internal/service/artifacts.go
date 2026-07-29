@@ -1,10 +1,7 @@
 package service
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -21,13 +18,21 @@ import (
 
 var artifactSHA256Pattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
+type artifactReadSeekCloser interface {
+	io.Reader
+	io.Seeker
+	io.Closer
+}
+
 // ArtifactUpload is one validated multipart Artifact publication request.
 type ArtifactUpload struct {
-	Name      string
-	MediaType string
-	SHA256    string
-	Metadata  map[string]string
-	Content   []byte
+	Name         string
+	MediaType    string
+	SHA256       string
+	Metadata     map[string]string
+	Content      artifactReadSeekCloser
+	SizeBytes    int64
+	ActualSHA256 string
 }
 
 // UploadSandboxArtifact publishes immutable bytes only after durable admission and provider verification.
@@ -52,12 +57,11 @@ func (service *ControlPlaneService) UploadSandboxArtifact(
 	if err := validateArtifactUpload(upload); err != nil {
 		return contracts.Artifact{}, err
 	}
-	actualSHA256 := sha256.Sum256(upload.Content)
-	if hex.EncodeToString(actualSHA256[:]) != upload.SHA256 {
+	if upload.Content == nil || upload.SizeBytes < 0 || upload.ActualSHA256 != upload.SHA256 {
 		return contracts.Artifact{}, ports.ErrArtifactIntegrity
 	}
 	_, checkpointPolicy, err := service.store.GetSandboxLifecyclePolicy(
-		ctx, principal.ProjectID, sandboxID,
+		ctx, principal.TenantRef, principal.SubjectRef, sandboxID,
 	)
 	if err != nil {
 		return contracts.Artifact{}, err
@@ -70,16 +74,17 @@ func (service *ControlPlaneService) UploadSandboxArtifact(
 		SizeBytes int64             `json:"sizeBytes"`
 	}{
 		Name: upload.Name, MediaType: upload.MediaType, SHA256: upload.SHA256,
-		Metadata: upload.Metadata, SizeBytes: int64(len(upload.Content)),
+		Metadata: upload.Metadata, SizeBytes: upload.SizeBytes,
 	})
 	if err != nil {
 		return contracts.Artifact{}, err
 	}
 	now := service.now().UTC()
 	artifact := contracts.Artifact{
-		ID: service.newID("art"), ProjectID: principal.ProjectID, SandboxID: sandboxID,
+		ID: service.newID("art"), ProjectID: principal.ProjectID,
+		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef, SandboxID: sandboxID,
 		SourceGeneration: generation, Name: upload.Name, MediaType: upload.MediaType,
-		SizeBytes: int64(len(upload.Content)), SHA256: upload.SHA256,
+		SizeBytes: upload.SizeBytes, SHA256: upload.SHA256,
 		Metadata: cloneMetadata(upload.Metadata),
 		RetainUntil: now.Add(
 			time.Duration(checkpointPolicy.ArtifactRetentionSeconds) * time.Second,
@@ -102,16 +107,26 @@ func (service *ControlPlaneService) UploadSandboxArtifact(
 	}
 	publication.Artifact = staged
 	publication.StorageKey = artifactStorageKey(staged)
+	if _, err := upload.Content.Seek(0, io.SeekStart); err != nil {
+		return contracts.Artifact{}, fmt.Errorf("%w: rewind Artifact staging file: %v", ports.ErrArtifactStorage, err)
+	}
 	if _, err := service.objectStore.PutImmutable(
-		ctx, publication.StorageKey, bytes.NewReader(upload.Content),
+		ctx, publication.StorageKey, upload.Content,
 		staged.SizeBytes, staged.SHA256,
 	); err != nil {
 		return contracts.Artifact{}, fmt.Errorf("%w: %v", ports.ErrArtifactStorage, err)
 	}
-	publication.Audit = service.newAudit(
+	audit := service.newAudit(
 		ctx, principal, "artifact.published", "artifact", staged.ID, principal.ProjectID, now,
 	)
-	return service.store.PublishArtifact(ctx, publication, now)
+	published, err := service.store.PublishArtifact(ctx, publication, now)
+	if err != nil {
+		return contracts.Artifact{}, err
+	}
+	if err := service.store.AppendAuditEvent(ctx, audit); err != nil {
+		return contracts.Artifact{}, err
+	}
+	return published, nil
 }
 
 // ListSandboxArtifacts returns one retained Artifact page inside the authenticated Project.
@@ -129,7 +144,8 @@ func (service *ControlPlaneService) ListSandboxArtifacts(
 		return contracts.ArtifactPage{}, errors.New("SecondBox Artifact page cursor exceeds its bound")
 	}
 	return service.store.ListArtifacts(
-		ctx, principal.ProjectID, sandboxID, boundedLimit(limit), cursor, service.now().UTC(),
+		ctx, principal.TenantRef, principal.SubjectRef, sandboxID,
+		boundedLimit(limit), cursor, service.now().UTC(),
 	)
 }
 
@@ -143,7 +159,7 @@ func (service *ControlPlaneService) GetArtifact(
 		return contracts.Artifact{}, err
 	}
 	object, err := service.store.GetArtifactObject(
-		ctx, principal.ProjectID, artifactID, service.now().UTC(),
+		ctx, principal.TenantRef, principal.SubjectRef, artifactID, service.now().UTC(),
 	)
 	return object.Artifact, err
 }
@@ -153,12 +169,12 @@ func (service *ControlPlaneService) DownloadArtifact(
 	ctx context.Context,
 	principal contracts.Principal,
 	artifactID string,
-) ([]byte, contracts.Artifact, error) {
+) (io.ReadCloser, contracts.Artifact, error) {
 	if err := service.requireArtifacts(principal); err != nil {
 		return nil, contracts.Artifact{}, err
 	}
 	object, err := service.store.GetArtifactObject(
-		ctx, principal.ProjectID, artifactID, service.now().UTC(),
+		ctx, principal.TenantRef, principal.SubjectRef, artifactID, service.now().UTC(),
 	)
 	if err != nil {
 		return nil, contracts.Artifact{}, err
@@ -169,20 +185,12 @@ func (service *ControlPlaneService) DownloadArtifact(
 	if err != nil {
 		return nil, contracts.Artifact{}, fmt.Errorf("%w: %v", ports.ErrArtifactStorage, err)
 	}
-	content, readErr := io.ReadAll(body)
-	closeErr := body.Close()
-	if readErr != nil || closeErr != nil {
-		return nil, contracts.Artifact{}, fmt.Errorf(
-			"%w: Artifact verified download read=%v close=%v",
-			ports.ErrArtifactStorage, readErr, closeErr,
-		)
-	}
 	if evidence.SHA256 != object.Artifact.SHA256 ||
-		evidence.SizeBytes != object.Artifact.SizeBytes ||
-		int64(len(content)) != object.Artifact.SizeBytes {
+		evidence.SizeBytes != object.Artifact.SizeBytes {
+		_ = body.Close()
 		return nil, contracts.Artifact{}, ports.ErrArtifactIntegrity
 	}
-	return content, object.Artifact, nil
+	return body, object.Artifact, nil
 }
 
 // DeleteArtifact ends retention idempotently and leaves provider deletion to garbage collection.
@@ -205,23 +213,26 @@ func (service *ControlPlaneService) DeleteArtifact(
 		return err
 	}
 	now := service.now().UTC()
-	return service.store.EndArtifactRetention(ctx, ports.ArtifactRetentionInput{
-		ProjectID: principal.ProjectID, ArtifactID: artifactID,
+	audit := service.newAudit(
+		ctx, principal, "artifact.retention_ended", "artifact",
+		artifactID, principal.ProjectID, now,
+	)
+	if err := service.store.EndArtifactRetention(ctx, ports.ArtifactRetentionInput{
+		ProjectID: principal.ProjectID, TenantRef: principal.TenantRef,
+		SubjectRef: principal.SubjectRef, ArtifactID: artifactID,
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
 		IdempotencyEnds: now.Add(idempotencyRetention), Now: now,
-		Audit: service.newAudit(
-			ctx, principal, "artifact.retention_ended", "artifact",
-			artifactID, principal.ProjectID, now,
-		),
-	})
+	}); err != nil {
+		return err
+	}
+	return service.store.AppendAuditEvent(ctx, audit)
 }
 
 func (service *ControlPlaneService) requireArtifacts(principal contracts.Principal) error {
 	if service.objectStore == nil {
 		return ports.ErrArtifactStorage
 	}
-	if principal.ProjectID == "" || principal.ServiceAccountID == "" ||
-		!principal.HasScope(contracts.ScopeSandboxArtifacts) {
+	if principal.TenantRef == "" || principal.SubjectRef == "" {
 		return ports.ErrAuthorizationDenied
 	}
 	return nil

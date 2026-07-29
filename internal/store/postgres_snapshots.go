@@ -30,7 +30,7 @@ func (store *PostgresControlPlaneStore) CreateSnapshot(
 	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(
 		ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`,
-		snapshot.ProjectID+"\x1fsnapshot-capacity",
+		snapshot.TenantRef+"\x1f"+snapshot.SubjectRef+"\x1fsnapshot-capacity",
 	); err != nil {
 		return contracts.Snapshot{}, fmt.Errorf("SecondBox Snapshot Project capacity lock failed: %w", err)
 	}
@@ -51,9 +51,10 @@ func (store *PostgresControlPlaneStore) CreateSnapshot(
 		JOIN secondbox.workspace_checkpoints AS checkpoint
 		  ON checkpoint.id=workspace.current_checkpoint_id
 		JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
-		WHERE sandbox.id=$1 AND sandbox.project_id=$2 AND sandbox.state<>'deleted'
+		WHERE sandbox.id=$1 AND sandbox.tenant_ref=$2 AND sandbox.subject_ref=$3
+		  AND sandbox.state<>'deleted'
 		FOR UPDATE OF sandbox,workspace,checkpoint`,
-		snapshot.SandboxID, snapshot.ProjectID,
+		snapshot.SandboxID, snapshot.TenantRef, snapshot.SubjectRef,
 	).Scan(
 		&sandboxRevision, &profileName, &sandboxState, &workspaceID, &checkpointID,
 		&checkpointGeneration, &checkpointSHA256,
@@ -63,8 +64,8 @@ func (store *PostgresControlPlaneStore) CreateSnapshot(
 		var exists bool
 		existsErr := tx.QueryRow(ctx, `
 			SELECT true FROM secondbox.sandboxes
-			WHERE id=$1 AND project_id=$2 AND state<>'deleted'`,
-			snapshot.SandboxID, snapshot.ProjectID,
+			WHERE id=$1 AND tenant_ref=$2 AND subject_ref=$3 AND state<>'deleted'`,
+			snapshot.SandboxID, snapshot.TenantRef, snapshot.SubjectRef,
 		).Scan(&exists)
 		if errors.Is(existsErr, pgx.ErrNoRows) {
 			return contracts.Snapshot{}, ports.ErrSandboxNotFound
@@ -96,7 +97,7 @@ func (store *PostgresControlPlaneStore) CreateSnapshot(
 		return contracts.Snapshot{}, ports.ErrQuotaExceeded
 	}
 
-	lockKey := snapshot.ProjectID + "\x1fsnapshot.create\x1f" +
+	lockKey := snapshot.TenantRef + "\x1f" + snapshot.SubjectRef + "\x1fsnapshot.create\x1f" +
 		snapshot.SandboxID + "\x1f" + input.IdempotencyKey
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey); err != nil {
 		return contracts.Snapshot{}, fmt.Errorf("SecondBox Snapshot idempotency lock failed: %w", err)
@@ -105,16 +106,17 @@ func (store *PostgresControlPlaneStore) CreateSnapshot(
 	idempotencyErr := tx.QueryRow(ctx, `
 		SELECT request_hash,response_resource_id
 		FROM secondbox.idempotency_records
-		WHERE project_id=$1 AND operation='snapshot.create'
-		  AND target_id=$2 AND idempotency_key=$3`,
-		snapshot.ProjectID, snapshot.SandboxID, input.IdempotencyKey,
+		WHERE tenant_ref=$1 AND subject_ref=$2 AND operation='snapshot.create'
+		  AND target_id=$3 AND idempotency_key=$4`,
+		snapshot.TenantRef, snapshot.SubjectRef, snapshot.SandboxID, input.IdempotencyKey,
 	).Scan(&priorHash, &priorSnapshotID)
 	if idempotencyErr == nil {
 		if priorHash != input.RequestHash {
 			return contracts.Snapshot{}, ports.ErrIdempotencyConflict
 		}
-		replayed, err := scanSnapshot(tx.QueryRow(ctx, snapshotSelect+` WHERE id=$1 AND project_id=$2`,
-			priorSnapshotID, snapshot.ProjectID,
+		replayed, err := scanSnapshot(tx.QueryRow(
+			ctx, snapshotSelect+` WHERE id=$1 AND tenant_ref=$2 AND subject_ref=$3`,
+			priorSnapshotID, snapshot.TenantRef, snapshot.SubjectRef,
 		))
 		if err != nil {
 			return contracts.Snapshot{}, err
@@ -130,45 +132,37 @@ func (store *PostgresControlPlaneStore) CreateSnapshot(
 
 	if _, err := tx.Exec(
 		ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`,
-		profileName+"\x1fsnapshot-capacity",
+		snapshot.TenantRef+"\x1f"+snapshot.SubjectRef+"\x1fsnapshot-capacity",
 	); err != nil {
 		return contracts.Snapshot{}, fmt.Errorf("SecondBox Snapshot Profile capacity lock failed: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.snapshots
 		SET state='expired',retention_ended_at=retain_until
-		WHERE project_id=$1 AND state='published' AND retain_until<=$2`,
-		snapshot.ProjectID, snapshot.CreatedAt.UTC(),
+		WHERE tenant_ref=$1 AND subject_ref=$2 AND state='published' AND retain_until<=$3`,
+		snapshot.TenantRef, snapshot.SubjectRef, snapshot.CreatedAt.UTC(),
 	); err != nil {
 		return contracts.Snapshot{}, fmt.Errorf("SecondBox Snapshot expiry update failed: %w", err)
 	}
-	projectQuota, err := readQuota(ctx, tx, "project_quotas", "project_id", snapshot.ProjectID)
+	subjectQuota, err := readSubjectQuota(ctx, tx, snapshot.TenantRef, snapshot.SubjectRef)
 	if err != nil {
 		return contracts.Snapshot{}, err
 	}
-	projectUsage, err := readQuotaUsage(ctx, tx, "sandbox.project_id=$1", snapshot.ProjectID)
-	if err != nil {
-		return contracts.Snapshot{}, err
-	}
-	profileQuota, err := readQuota(ctx, tx, "profile_quotas", "profile_name", profileName)
-	if err != nil {
-		return contracts.Snapshot{}, err
-	}
-	profileUsage, err := readQuotaUsage(ctx, tx, "sandbox.profile_name=$1", profileName)
+	subjectUsage, err := readSubjectQuotaUsage(ctx, tx, snapshot.TenantRef, snapshot.SubjectRef)
 	if err != nil {
 		return contracts.Snapshot{}, err
 	}
 	var sandboxSnapshotCount int64
 	if err := tx.QueryRow(ctx, `
 		SELECT count(*) FROM secondbox.snapshots
-		WHERE project_id=$1 AND sandbox_id=$2 AND state='published' AND retain_until>$3`,
-		snapshot.ProjectID, snapshot.SandboxID, snapshot.CreatedAt.UTC(),
+		WHERE tenant_ref=$1 AND subject_ref=$2 AND sandbox_id=$3
+		  AND state='published' AND retain_until>$4`,
+		snapshot.TenantRef, snapshot.SubjectRef, snapshot.SandboxID, snapshot.CreatedAt.UTC(),
 	).Scan(&sandboxSnapshotCount); err != nil {
 		return contracts.Snapshot{}, fmt.Errorf("SecondBox Snapshot policy usage lookup failed: %w", err)
 	}
 	if sandboxSnapshotCount+1 > spec.Checkpoint.SnapshotLimit ||
-		projectUsage.snapshots+1 > projectQuota.MaxSnapshots ||
-		profileUsage.snapshots+1 > profileQuota.MaxSnapshots {
+		subjectUsage.snapshots+1 > subjectQuota.MaxSnapshots {
 		return contracts.Snapshot{}, ports.ErrQuotaExceeded
 	}
 
@@ -187,11 +181,12 @@ func (store *PostgresControlPlaneStore) CreateSnapshot(
 	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO secondbox.snapshots (
-			id,project_id,sandbox_id,workspace_id,checkpoint_id,source_generation,
+			id,tenant_ref,subject_ref,sandbox_id,workspace_id,checkpoint_id,source_generation,
 			name,sha256,size_bytes,compatibility_json,metadata_json,state,
 			retain_until,created_at,retention_ended_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'published',$12,$13,NULL)`,
-		snapshot.ID, snapshot.ProjectID, snapshot.SandboxID, snapshot.WorkspaceID,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'published',$13,$14,NULL)`,
+		snapshot.ID, snapshot.TenantRef, snapshot.SubjectRef,
+		snapshot.SandboxID, snapshot.WorkspaceID,
 		snapshot.CheckpointID, snapshot.SourceGeneration, snapshot.Name, snapshot.SHA256,
 		snapshot.SizeBytes, compatibilityJSON, metadataJSON,
 		snapshot.RetainUntil.UTC(), snapshot.CreatedAt.UTC(),
@@ -201,18 +196,14 @@ func (store *PostgresControlPlaneStore) CreateSnapshot(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.idempotency_records (
-			project_id,operation,target_id,idempotency_key,request_hash,
+			tenant_ref,subject_ref,operation,target_id,idempotency_key,request_hash,
 			response_resource_id,created_at,expires_at
-		) VALUES ($1,'snapshot.create',$2,$3,$4,$5,$6,$7)`,
-		snapshot.ProjectID, snapshot.SandboxID, input.IdempotencyKey,
+		) VALUES ($1,$2,'snapshot.create',$3,$4,$5,$6,$7,$8)`,
+		snapshot.TenantRef, snapshot.SubjectRef,
+		snapshot.SandboxID, input.IdempotencyKey,
 		input.RequestHash, snapshot.ID, snapshot.CreatedAt.UTC(), input.IdempotencyEnds.UTC(),
 	); err != nil {
 		return contracts.Snapshot{}, fmt.Errorf("SecondBox Snapshot idempotency insert failed: %w", err)
-	}
-	if input.Audit.ID != "" {
-		if err := insertAuditEvent(ctx, tx, input.Audit); err != nil {
-			return contracts.Snapshot{}, err
-		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return contracts.Snapshot{}, fmt.Errorf("SecondBox Snapshot commit failed: %w", err)
@@ -223,7 +214,8 @@ func (store *PostgresControlPlaneStore) CreateSnapshot(
 // ListSnapshots returns retained Snapshot metadata in deterministic newest-first order.
 func (store *PostgresControlPlaneStore) ListSnapshots(
 	ctx context.Context,
-	projectID string,
+	tenantRef string,
+	subjectRef string,
 	sandboxID string,
 	limit int,
 	cursor string,
@@ -234,9 +226,9 @@ func (store *PostgresControlPlaneStore) ListSnapshots(
 	if cursor != "" {
 		if err := store.pool.QueryRow(ctx, `
 			SELECT created_at,id FROM secondbox.snapshots
-			WHERE id=$1 AND project_id=$2 AND sandbox_id=$3
-			  AND state='published' AND retain_until>$4`,
-			cursor, projectID, sandboxID, now.UTC(),
+			WHERE id=$1 AND tenant_ref=$2 AND subject_ref=$3 AND sandbox_id=$4
+			  AND state='published' AND retain_until>$5`,
+			cursor, tenantRef, subjectRef, sandboxID, now.UTC(),
 		).Scan(&cursorCreatedAt, &cursorID); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return contracts.SnapshotPage{}, errors.New("SecondBox Snapshot page cursor is invalid")
@@ -247,17 +239,18 @@ func (store *PostgresControlPlaneStore) ListSnapshots(
 	var exists bool
 	if err := store.pool.QueryRow(ctx, `
 		SELECT true FROM secondbox.sandboxes
-		WHERE id=$1 AND project_id=$2 AND state<>'deleted'`,
-		sandboxID, projectID,
+		WHERE id=$1 AND tenant_ref=$2 AND subject_ref=$3 AND state<>'deleted'`,
+		sandboxID, tenantRef, subjectRef,
 	).Scan(&exists); err != nil {
 		return contracts.SnapshotPage{}, mapNotFound(err, ports.ErrSandboxNotFound)
 	}
 	rows, err := store.pool.Query(ctx, snapshotSelect+`
-		WHERE project_id=$1 AND sandbox_id=$2 AND state='published' AND retain_until>$3
-		  AND ($4='' OR (created_at,id)<($5,$4))
+		WHERE tenant_ref=$1 AND subject_ref=$2 AND sandbox_id=$3
+		  AND state='published' AND retain_until>$4
+		  AND ($5='' OR (created_at,id)<($6,$5))
 		ORDER BY created_at DESC,id DESC
-		LIMIT $6`,
-		projectID, sandboxID, now.UTC(), cursorID, cursorCreatedAt, limit+1,
+		LIMIT $7`,
+		tenantRef, subjectRef, sandboxID, now.UTC(), cursorID, cursorCreatedAt, limit+1,
 	)
 	if err != nil {
 		return contracts.SnapshotPage{}, fmt.Errorf("SecondBox Snapshot list failed: %w", err)
@@ -286,13 +279,15 @@ func (store *PostgresControlPlaneStore) ListSnapshots(
 // GetSnapshot returns retained Snapshot metadata inside one Project.
 func (store *PostgresControlPlaneStore) GetSnapshot(
 	ctx context.Context,
-	projectID string,
+	tenantRef string,
+	subjectRef string,
 	snapshotID string,
 	now time.Time,
 ) (contracts.Snapshot, error) {
 	snapshot, err := scanSnapshot(store.pool.QueryRow(ctx, snapshotSelect+`
-		WHERE id=$1 AND project_id=$2 AND state='published' AND retain_until>$3`,
-		snapshotID, projectID, now.UTC(),
+		WHERE id=$1 AND tenant_ref=$2 AND subject_ref=$3
+		  AND state='published' AND retain_until>$4`,
+		snapshotID, tenantRef, subjectRef, now.UTC(),
 	))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return contracts.Snapshot{}, ports.ErrSnapshotNotFound
@@ -310,7 +305,7 @@ func (store *PostgresControlPlaneStore) EndSnapshotRetention(
 		return fmt.Errorf("SecondBox Snapshot retention transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	lockKey := input.ProjectID + "\x1fsnapshot.delete\x1f" +
+	lockKey := input.TenantRef + "\x1f" + input.SubjectRef + "\x1fsnapshot.delete\x1f" +
 		input.SnapshotID + "\x1f" + input.IdempotencyKey
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey); err != nil {
 		return fmt.Errorf("SecondBox Snapshot retention idempotency lock failed: %w", err)
@@ -318,9 +313,9 @@ func (store *PostgresControlPlaneStore) EndSnapshotRetention(
 	var priorHash string
 	idempotencyErr := tx.QueryRow(ctx, `
 		SELECT request_hash FROM secondbox.idempotency_records
-		WHERE project_id=$1 AND operation='snapshot.delete'
-		  AND target_id=$2 AND idempotency_key=$3`,
-		input.ProjectID, input.SnapshotID, input.IdempotencyKey,
+		WHERE tenant_ref=$1 AND subject_ref=$2 AND operation='snapshot.delete'
+		  AND target_id=$3 AND idempotency_key=$4`,
+		input.TenantRef, input.SubjectRef, input.SnapshotID, input.IdempotencyKey,
 	).Scan(&priorHash)
 	if idempotencyErr == nil {
 		if priorHash != input.RequestHash {
@@ -333,9 +328,10 @@ func (store *PostgresControlPlaneStore) EndSnapshotRetention(
 	}
 	tag, err := tx.Exec(ctx, `
 		UPDATE secondbox.snapshots
-		SET state='retention_ended',retain_until=$3,retention_ended_at=$3
-		WHERE id=$1 AND project_id=$2 AND state='published' AND retain_until>$3`,
-		input.SnapshotID, input.ProjectID, input.Now.UTC(),
+		SET state='retention_ended',retain_until=$4,retention_ended_at=$4
+		WHERE id=$1 AND tenant_ref=$2 AND subject_ref=$3
+		  AND state='published' AND retain_until>$4`,
+		input.SnapshotID, input.TenantRef, input.SubjectRef, input.Now.UTC(),
 	)
 	if err != nil {
 		return fmt.Errorf("SecondBox Snapshot retention update failed: %w", err)
@@ -345,18 +341,14 @@ func (store *PostgresControlPlaneStore) EndSnapshotRetention(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.idempotency_records (
-			project_id,operation,target_id,idempotency_key,request_hash,
+			tenant_ref,subject_ref,operation,target_id,idempotency_key,request_hash,
 			response_resource_id,created_at,expires_at
-		) VALUES ($1,'snapshot.delete',$2,$3,$4,$2,$5,$6)`,
-		input.ProjectID, input.SnapshotID, input.IdempotencyKey, input.RequestHash,
+		) VALUES ($1,$2,'snapshot.delete',$3,$4,$5,$3,$6,$7)`,
+		input.TenantRef, input.SubjectRef,
+		input.SnapshotID, input.IdempotencyKey, input.RequestHash,
 		input.Now.UTC(), input.IdempotencyEnds.UTC(),
 	); err != nil {
 		return fmt.Errorf("SecondBox Snapshot retention idempotency insert failed: %w", err)
-	}
-	if input.Audit.ID != "" {
-		if err := insertAuditEvent(ctx, tx, input.Audit); err != nil {
-			return err
-		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("SecondBox Snapshot retention commit failed: %w", err)
@@ -365,7 +357,7 @@ func (store *PostgresControlPlaneStore) EndSnapshotRetention(
 }
 
 const snapshotSelect = `
-	SELECT id,project_id,sandbox_id,workspace_id,checkpoint_id,source_generation,
+	SELECT id,tenant_ref,subject_ref,sandbox_id,workspace_id,checkpoint_id,source_generation,
 	       name,sha256,size_bytes,state,metadata_json,compatibility_json,
 	       retain_until,created_at,retention_ended_at
 	FROM secondbox.snapshots`
@@ -378,7 +370,8 @@ func scanSnapshot(row snapshotScanner) (contracts.Snapshot, error) {
 	var snapshot contracts.Snapshot
 	var metadataJSON, compatibilityJSON []byte
 	if err := row.Scan(
-		&snapshot.ID, &snapshot.ProjectID, &snapshot.SandboxID, &snapshot.WorkspaceID,
+		&snapshot.ID, &snapshot.TenantRef, &snapshot.SubjectRef,
+		&snapshot.SandboxID, &snapshot.WorkspaceID,
 		&snapshot.CheckpointID, &snapshot.SourceGeneration, &snapshot.Name,
 		&snapshot.SHA256, &snapshot.SizeBytes, &snapshot.State, &metadataJSON,
 		&compatibilityJSON, &snapshot.RetainUntil, &snapshot.CreatedAt,
@@ -392,5 +385,6 @@ func scanSnapshot(row snapshotScanner) (contracts.Snapshot, error) {
 	if err := json.Unmarshal(compatibilityJSON, &snapshot.Compatibility); err != nil {
 		return contracts.Snapshot{}, fmt.Errorf("SecondBox Snapshot compatibility decoding failed: %w", err)
 	}
+	snapshot.ProjectID = snapshot.TenantRef
 	return snapshot, nil
 }

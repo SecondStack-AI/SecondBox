@@ -1,23 +1,25 @@
 # SecondBox
 
-SecondBox is a self-hostable network service for durable, isolated development sandboxes. The current unprivileged Go control plane exposes the v1 HTTP resource API and mTLS Runner control endpoint, and stores desired state in PostgreSQL. The repository also contains the versioned runner protocol, credential authority, scheduler, reconciliation logic, and a separately built Firecracker runner.
+SecondBox is a self-hostable network service for durable, isolated development sandboxes. The unprivileged Go control plane exposes the v1 HTTP resource API and mTLS Runner control endpoint, and stores desired state in PostgreSQL. The repository also contains the versioned runner protocol, scheduler, reconciliation logic, and a separately built Firecracker runner.
 
-A `Sandbox` is the durable public resource and its running `Instance` is replaceable compute fenced to one Sandbox generation. `secondboxd` composes verified S3-compatible checkpoint publication and restore, immutable named Snapshots of committed stopped-state disk, and immutable application Artifact storage. Runner identity administration is available as a separate CLI, and Compose contains an optional same-host Runner profile, but production RunnerPool provisioning, KVM qualification, and remote multi-runner qualification remain separate requirements.
+A `Sandbox` is the durable public resource and its running `Instance` is replaceable compute fenced to one Sandbox generation. `secondboxd` composes verified S3-compatible checkpoint publication and restore, immutable named Snapshots of committed stopped-state disk, and immutable application Artifact storage. Compose contains an optional same-host Runner profile; production RunnerPool provisioning and Firecracker validation remain separate operator responsibilities.
 
-SecondBox v1 implements Firecracker only. It does not ship built-in profiles: operators explicitly create profiles that fix image, toolchain, resource, lifecycle, storage, networking, execution, and runner-pool policy before clients can create Sandboxes.
+SecondBox v1 implements Firecracker only. It ships immutable `agent-compartment` and `coding-environment` built-in profiles for its two core use cases. Operators may also create explicit profiles that fix image, toolchain, resource, lifecycle, storage, networking, execution, and runner-pool policy. Every Sandbox pins the resolved immutable profile revision at creation.
+
+The HTTP API has one deployment-wide `SECONDBOX_PLATFORM_TOKEN`. A trusted upstream caller also supplies opaque `X-SecondBox-Tenant-Ref` and `X-SecondBox-Subject-Ref` headers; SecondBox scopes every owned row to both values but does not authenticate or resolve them. Runner connections use a separate pre-shared Runner credential plus a CA-signed mTLS identity.
 
 ## Repository layout
 
 - `cmd/secondboxd` — unprivileged control plane
-- `cmd/secondbox` — administrative and application CLI
+- `cmd/secondbox` — profile, runner, Sandbox, and data-plane CLI
 - `contracts` — canonical public, runner, and guest-agent protocols
 - `internal` — control-plane domain, API, scheduling, reconciliation, and persistence
 - `migrations/postgres` — SecondBox database migration lineage
 - `runner` — privileged Firecracker runner and guest agent
-- `sdk` — generated transports and handwritten client helpers
+- `sdk` — thin handwritten Go, TypeScript, and Python clients
 - `deploy` — Compose, systemd, and deployment examples
 - `docs/design` — current architecture and compatibility contracts
-- `docs/operations` — installation, qualification, backup, and diagnostics
+- `docs/operations` — installation, backup, and diagnostics
 
 ## Validation
 
@@ -27,13 +29,12 @@ The non-KVM gate runs from the repository root:
 just test-non-kvm
 ```
 
-CI runs the same gate through `just test-clean-clone`. That command refuses a dirty source tree and executes the complete portable matrix from an independently cloned commit with isolated Go and npm caches.
+CI runs the same command as its portable smoke gate. A release is a Git tag on a commit whose CI run passed; SecondBox has no separate qualification, evidence-assembly, or publication controller.
 
-Firecracker and multi-runner qualification require dedicated Linux hosts that satisfy the prerequisites in [qualification gates](docs/operations/qualification.md):
+Firecracker validation requires a dedicated Linux host with KVM and the configured test assets:
 
 ```sh
 just test-firecracker
-just test-multirunner
 ```
 
 ## Development deployment
@@ -49,9 +50,9 @@ just deploy-development-prepare .tmp/secondbox-deploy/environment
 docker compose --env-file .tmp/secondbox-deploy/environment --file deploy/compose.yml up -d control-plane
 ```
 
-The preparation command is safe to repeat: it validates the bootstrapped development inventory, starts PostgreSQL and RustFS, and creates the explicitly configured bucket before the control plane starts. Read [deployment and runtime operations](docs/operations/deployment.md) before exposing the API or using external PostgreSQL. The supplied RustFS service is a loopback-only development implementation of the object-store dependency consumed by checkpoint and Artifact operations. The coordinated backup command and isolated restore drill prove portable PostgreSQL/object-store recovery and fresh-Runner checkpoint materialization; they do not replace provider durability or packaged KVM and multi-runner qualification.
+The preparation command is safe to repeat: it validates the bootstrapped development inventory, starts PostgreSQL and RustFS, and creates the explicitly configured bucket before the control plane starts. Read [deployment and runtime operations](docs/operations/deployment.md) before exposing the API or using external PostgreSQL. The supplied RustFS service is a loopback-only development implementation of the object-store dependency consumed by checkpoint and Artifact operations. The coordinated backup command and isolated restore drill prove portable PostgreSQL/object-store recovery and fresh-Runner checkpoint materialization; they do not replace provider durability or Firecracker validation on the target host.
 
-The implementation plan is tracked in [SecondBox standalone service](docs/plans/2026-07-28-secondbox-standalone-service.md).
+The original implementation plan is archived as [SecondBox standalone service](docs/plans/2026-07-28-secondbox-standalone-service.md). The simplification record is in `docs/plans/completed/`.
 
 ## License
 

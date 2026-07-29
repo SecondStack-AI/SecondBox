@@ -99,7 +99,7 @@ func TestExecStreamCommandPumpsSequencedJSONLFrames(t *testing.T) {
 	)
 	var output bytes.Buffer
 	err := runExecStreamCommand(
-		t.Context(), server.URL, "token",
+		t.Context(), server.URL, "token", "tenant", "subject",
 		[]string{
 			"--sandbox", "sandbox-1",
 			"--generation", "3",

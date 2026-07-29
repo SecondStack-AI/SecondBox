@@ -17,6 +17,8 @@ Required environment:
   SECONDBOX_RESTORE_OBJECT_TARGET
   SECONDBOX_RESTORE_CONTROL_PLANE_URL
   SECONDBOX_RESTORE_CONTROL_PLANE_TOKEN
+  SECONDBOX_RESTORE_TENANT_REF
+  SECONDBOX_RESTORE_SUBJECT_REF
   SECONDBOX_RESTORE_FRESH_RUNNER_RESULT
   SECONDBOX_RESTORE_FRESH_RUNNER_VERIFY_COMMAND
   SECONDBOX_RESTORE_FRESH_RUNNER_VERIFY_TIMEOUT_SECONDS
@@ -39,6 +41,8 @@ done
 : "${SECONDBOX_RESTORE_OBJECT_TARGET:?set SECONDBOX_RESTORE_OBJECT_TARGET}"
 : "${SECONDBOX_RESTORE_CONTROL_PLANE_URL:?set SECONDBOX_RESTORE_CONTROL_PLANE_URL}"
 : "${SECONDBOX_RESTORE_CONTROL_PLANE_TOKEN:?set SECONDBOX_RESTORE_CONTROL_PLANE_TOKEN}"
+: "${SECONDBOX_RESTORE_TENANT_REF:?set SECONDBOX_RESTORE_TENANT_REF}"
+: "${SECONDBOX_RESTORE_SUBJECT_REF:?set SECONDBOX_RESTORE_SUBJECT_REF}"
 : "${SECONDBOX_RESTORE_FRESH_RUNNER_RESULT:?set SECONDBOX_RESTORE_FRESH_RUNNER_RESULT}"
 : "${SECONDBOX_RESTORE_FRESH_RUNNER_VERIFY_COMMAND:?set SECONDBOX_RESTORE_FRESH_RUNNER_VERIFY_COMMAND}"
 : "${SECONDBOX_RESTORE_FRESH_RUNNER_VERIFY_TIMEOUT_SECONDS:?set SECONDBOX_RESTORE_FRESH_RUNNER_VERIFY_TIMEOUT_SECONDS}"
@@ -227,7 +231,6 @@ jq -e \
   "$stage/checkpoint-reachability.json" >/dev/null
 jq -e '
   .contractVersion == "secondbox-backup-database-state/v1" and
-  (.runnerCredentialSerials | type == "array") and
   (.objects | type == "array")
 ' "$stage/database-state.json" >/dev/null
 if ! jq --sort-keys '.objects' "$stage/database-state.json" |
@@ -462,11 +465,6 @@ materialization_id="$(jq -r '.restoration.materializationId' "$SECONDBOX_RESTORE
 checkpoint_id="$(jq -r '.restoration.checkpointId' "$SECONDBOX_RESTORE_FRESH_RUNNER_RESULT")"
 checkpoint_sha256="$(jq -r '.restoration.checkpointSHA256' "$SECONDBOX_RESTORE_FRESH_RUNNER_RESULT")"
 restored_generation="$(jq -r '.restoration.generation' "$SECONDBOX_RESTORE_FRESH_RUNNER_RESULT")"
-if jq -e --arg serial "$credential_serial" \
-  '.runnerCredentialSerials | index($serial) != null' "$stage/database-state.json" >/dev/null; then
-  echo "Fresh-Runner verifier reused a credential present at backup time" >&2
-  exit 1
-fi
 if ! jq -e --arg checkpointId "$checkpoint_id" --arg sha256 "$checkpoint_sha256" '
   any(.objects[];
       .kind == "checkpoint" and
@@ -482,11 +480,12 @@ SELECT jsonb_build_object(
     'contractVersion','secondbox-fresh-runner-database-verification/v1',
     'freshCredential',EXISTS(
         SELECT 1
-        FROM secondbox.runner_credentials AS credential
-        JOIN secondbox.runners AS runner ON runner.id=credential.runner_id
-        WHERE credential.serial_number=:'credential_serial'
-          AND credential.runner_id=:'runner_id'
-          AND credential.state IN ('active','retiring')
+        FROM secondbox.runner_connections AS connection
+        JOIN secondbox.runners AS runner ON runner.id=connection.runner_id
+        WHERE connection.credential_serial=:'credential_serial'
+          AND connection.runner_id=:'runner_id'
+          AND connection.state='active'
+          AND runner.state IN ('ready','draining')
     ),
     'readyAssignment',EXISTS(
         SELECT 1
@@ -583,6 +582,8 @@ current_status="$(
     --write-out '%{http_code}' \
     --request POST \
     --header "Authorization: Bearer $SECONDBOX_RESTORE_CONTROL_PLANE_TOKEN" \
+    --header "X-SecondBox-Tenant-Ref: $SECONDBOX_RESTORE_TENANT_REF" \
+    --header "X-SecondBox-Subject-Ref: $SECONDBOX_RESTORE_SUBJECT_REF" \
     --header "SecondBox-Generation: $restored_generation" \
     --header "X-Request-ID: restore-drill-current-generation" \
     "$control_plane_url/v1/sandboxes/$sandbox_path:ping"
@@ -601,6 +602,8 @@ stale_status="$(
     --write-out '%{http_code}' \
     --request POST \
     --header "Authorization: Bearer $SECONDBOX_RESTORE_CONTROL_PLANE_TOKEN" \
+    --header "X-SecondBox-Tenant-Ref: $SECONDBOX_RESTORE_TENANT_REF" \
+    --header "X-SecondBox-Subject-Ref: $SECONDBOX_RESTORE_SUBJECT_REF" \
     --header "SecondBox-Generation: $stale_generation" \
     --header "X-Request-ID: restore-drill-stale-generation" \
     "$control_plane_url/v1/sandboxes/$sandbox_path:ping"

@@ -23,7 +23,8 @@ const portTunnelTokenDomain = "secondbox/port-tunnel/v1\x00"
 
 type portTunnelClaims struct {
 	SessionID  string `json:"sid"`
-	ProjectID  string `json:"pid"`
+	TenantRef  string `json:"ten"`
+	SubjectRef string `json:"sub"`
 	SandboxID  string `json:"sbx"`
 	Generation int64  `json:"gen"`
 	ExpiresAt  int64  `json:"exp"`
@@ -69,6 +70,7 @@ func (service *ControlPlaneService) CreateSandboxPortSession(
 			CreatedAt: now, ExpiresAt: now.Add(time.Duration(request.DurationSeconds) * time.Second),
 		},
 		StreamID: service.newID("stream"), ProjectID: principal.ProjectID,
+		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
 		ServiceAccountID: principal.ServiceAccountID, RequestID: requestID,
 		LeaseID: leaseID, IdempotencyKey: idempotencyKey, RequestHash: requestHash, Now: now,
 	})
@@ -89,13 +91,15 @@ func (service *ControlPlaneService) GetSandboxPortSession(
 		return contracts.PortSession{}, err
 	}
 	session, err := service.portSessionRelay.GetPortSession(
-		ctx, principal.ProjectID, sandboxID, sessionID, service.now().UTC(),
+		ctx, principal.TenantRef, principal.SubjectRef,
+		sandboxID, sessionID, service.now().UTC(),
 	)
 	if err != nil {
 		return contracts.PortSession{}, err
 	}
 	session.Endpoint, err = service.portTunnelEndpoint(runnercontrol.PortTunnel{
 		Session: session, ProjectID: principal.ProjectID,
+		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
 	})
 	return session, err
 }
@@ -122,6 +126,7 @@ func (service *ControlPlaneService) CloseSandboxPortSession(
 	}
 	_, err = service.portSessionRelay.ClosePortSession(ctx, runnercontrol.PortTunnelClose{
 		ProjectID: principal.ProjectID, SandboxID: sandboxID, SessionID: sessionID,
+		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
 		ServiceAccountID: principal.ServiceAccountID, IdempotencyKey: idempotencyKey,
 		RequestHash: requestHash, Reason: "application requested close", Now: service.now().UTC(),
 	})
@@ -161,7 +166,9 @@ func (service *ControlPlaneService) ConsumePortTunnelToken(
 	if now.Unix() >= claims.ExpiresAt {
 		return runnercontrol.PortTunnel{}, ports.ErrPortTokenInvalid
 	}
-	return service.portSessionRelay.ConsumePortSession(ctx, claims.ProjectID, claims.SessionID, now)
+	return service.portSessionRelay.ConsumePortSession(
+		ctx, claims.TenantRef, claims.SubjectRef, claims.SessionID, now,
+	)
 }
 
 // ClosePortTunnel terminates a consumed proxy and its useful-activity record.
@@ -175,6 +182,7 @@ func (service *ControlPlaneService) ClosePortTunnel(
 	}
 	_, err := service.portSessionRelay.ClosePortSession(ctx, runnercontrol.PortTunnelClose{
 		ProjectID: tunnel.ProjectID, SandboxID: tunnel.Session.SandboxID,
+		TenantRef: tunnel.TenantRef, SubjectRef: tunnel.SubjectRef,
 		SessionID: tunnel.Session.ID, Generation: tunnel.Session.Generation,
 		ServiceAccountID: tunnel.ServiceAccountID, Reason: reason, Now: service.now().UTC(),
 	})
@@ -188,7 +196,8 @@ func (service *ControlPlaneService) QueuePortTunnelBytes(
 	payload []byte,
 ) error {
 	return service.portSessionRelay.QueuePortClientBytes(
-		ctx, tunnel.ProjectID, tunnel.Session.ID, payload, service.now().UTC(),
+		ctx, tunnel.TenantRef, tunnel.SubjectRef,
+		tunnel.Session.ID, payload, service.now().UTC(),
 	)
 }
 
@@ -199,7 +208,8 @@ func (service *ControlPlaneService) NextPortTunnelEvent(
 	afterSequence int64,
 ) (runnercontrol.PortTunnelEvent, bool, error) {
 	return service.portSessionRelay.NextPortTunnelEvent(
-		ctx, tunnel.ProjectID, tunnel.Session.ID, afterSequence, service.now().UTC(),
+		ctx, tunnel.TenantRef, tunnel.SubjectRef,
+		tunnel.Session.ID, afterSequence, service.now().UTC(),
 	)
 }
 
@@ -210,7 +220,8 @@ func (service *ControlPlaneService) AcknowledgePortTunnelEvent(
 	sequence int64,
 ) error {
 	return service.portSessionRelay.AcknowledgePortTunnelEvent(
-		ctx, tunnel.ProjectID, tunnel.Session.ID, sequence, service.now().UTC(),
+		ctx, tunnel.TenantRef, tunnel.SubjectRef,
+		tunnel.Session.ID, sequence, service.now().UTC(),
 	)
 }
 
@@ -218,8 +229,7 @@ func (service *ControlPlaneService) requirePortAuthority(principal contracts.Pri
 	if service.portSessionRelay == nil {
 		return ports.ErrLifecycleUnavailable
 	}
-	if principal.ProjectID == "" || principal.ServiceAccountID == "" ||
-		!principal.HasScope(contracts.ScopeSandboxPorts) {
+	if principal.TenantRef == "" || principal.SubjectRef == "" {
 		return ports.ErrAuthorizationDenied
 	}
 	return nil
@@ -240,7 +250,7 @@ func (service *ControlPlaneService) portTunnelEndpoint(tunnel runnercontrol.Port
 		return "", err
 	}
 	claims := portTunnelClaims{
-		SessionID: tunnel.Session.ID, ProjectID: tunnel.ProjectID,
+		SessionID: tunnel.Session.ID, TenantRef: tunnel.TenantRef, SubjectRef: tunnel.SubjectRef,
 		SandboxID: tunnel.Session.SandboxID, Generation: tunnel.Session.Generation,
 		ExpiresAt: tunnel.Session.ExpiresAt.UTC().Unix(),
 	}
@@ -249,7 +259,7 @@ func (service *ControlPlaneService) portTunnelEndpoint(tunnel runnercontrol.Port
 		return "", err
 	}
 	payloadPart := base64.RawURLEncoding.EncodeToString(payload)
-	mac := hmac.New(sha256.New, service.apiKeyHashSecret)
+	mac := hmac.New(sha256.New, service.credentialSealSecret)
 	_, _ = mac.Write([]byte(portTunnelTokenDomain))
 	_, _ = mac.Write([]byte(payloadPart))
 	token := payloadPart + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
@@ -285,7 +295,7 @@ func (service *ControlPlaneService) verifyPortTunnelToken(token string) (portTun
 	if err != nil || len(signature) != sha256.Size {
 		return portTunnelClaims{}, ports.ErrPortTokenInvalid
 	}
-	mac := hmac.New(sha256.New, service.apiKeyHashSecret)
+	mac := hmac.New(sha256.New, service.credentialSealSecret)
 	_, _ = mac.Write([]byte(portTunnelTokenDomain))
 	_, _ = mac.Write([]byte(payloadPart))
 	if !hmac.Equal(signature, mac.Sum(nil)) {
@@ -299,7 +309,8 @@ func (service *ControlPlaneService) verifyPortTunnelToken(token string) (portTun
 	decoder := json.NewDecoder(strings.NewReader(string(payload)))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&claims); err != nil ||
-		claims.SessionID == "" || claims.ProjectID == "" || claims.SandboxID == "" ||
+		claims.SessionID == "" || claims.TenantRef == "" || claims.SubjectRef == "" ||
+		claims.SandboxID == "" ||
 		claims.Generation < 1 || claims.ExpiresAt < 1 {
 		return portTunnelClaims{}, ports.ErrPortTokenInvalid
 	}

@@ -17,6 +17,7 @@ func TestLoadRunnerProtocolConfigRequestsOnlyImplementedFeatures(t *testing.T) {
 		"SECONDBOX_RUNNER_CLIENT_CERTIFICATE":        "/run/identity/runner.crt",
 		"SECONDBOX_RUNNER_CLIENT_KEY":                "/run/identity/runner.key",
 		"SECONDBOX_RUNNER_CONTROL_PLANE_CA":          "/run/identity/runner-ca.crt",
+		"SECONDBOX_RUNNER_CREDENTIAL":                "runner-test-credential-material-0000000000",
 	} {
 		t.Setenv(name, value)
 	}

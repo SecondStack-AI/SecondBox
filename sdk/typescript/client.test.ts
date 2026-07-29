@@ -12,9 +12,9 @@ import {
   type TerminalConnection,
   type TerminalConnector,
 } from "./client.ts";
-import { SecondBoxClient } from "./secondbox-client.gen.ts";
+import { SecondBoxClient } from "./transport.ts";
 
-test("requestJSON uses generated operation metadata", async () => {
+test("requestJSON uses hand-maintained operation metadata", async () => {
   let requested = "";
   const fetcher: typeof fetch = async (input) => {
     requested = String(input);
@@ -141,7 +141,7 @@ test("SandboxHandle sends generation and maps buffered output", async () => {
   }
 });
 
-test("SandboxHandle negotiates a generated streaming session", async () => {
+test("SandboxHandle negotiates a streaming session", async () => {
   let requested = "";
   const fetcher: typeof fetch = async (input) => {
     requested = String(input);

@@ -16,7 +16,7 @@ import (
 
 func TestCheckpointPublicationInterruptionRequeuesDurableCheckpointEffect(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(
 		t, controlPlane, admin, "checkpoint-publication-recovery",
 	)

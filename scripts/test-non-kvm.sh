@@ -13,4 +13,4 @@ scripts/test-image-policy.sh
 scripts/build-artifacts.sh
 
 source_commit="$(git rev-parse HEAD)"
-echo "SecondBox non-KVM qualification passed for commit $source_commit"
+echo "SecondBox non-KVM test suite passed for commit $source_commit"

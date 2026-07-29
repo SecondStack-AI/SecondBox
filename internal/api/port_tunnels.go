@@ -41,7 +41,7 @@ func (apiHandler *handler) createSandboxPortSession(writer http.ResponseWriter, 
 		return
 	}
 	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
-	writeJSON(writer, http.StatusCreated, session)
+	apiHandler.writeJSON(writer, request, http.StatusCreated, session)
 }
 
 func (apiHandler *handler) getSandboxPortSession(writer http.ResponseWriter, request *http.Request) {
@@ -53,7 +53,7 @@ func (apiHandler *handler) getSandboxPortSession(writer http.ResponseWriter, req
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, session)
+	apiHandler.writeJSON(writer, request, http.StatusOK, session)
 }
 
 func (apiHandler *handler) closeSandboxPortSession(writer http.ResponseWriter, request *http.Request) {

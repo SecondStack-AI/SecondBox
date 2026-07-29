@@ -186,7 +186,6 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 			}
 		}
 		for _, required := range []string{
-			"createProject", "createServiceAccount", "createAPIKey", "rotateAPIKey", "revokeAPIKey",
 			"createProfile", "reviseProfile", "createSandbox", "startSandbox",
 			"drainSandbox", "stopSandbox", "checkpointSandbox", "getOperation",
 			"executeSandboxCommand", "createSandboxExecStream", "readSandboxFile",
@@ -203,7 +202,10 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 		components := object(t, document["components"], "components")
 		parameters := object(t, components["parameters"], "components.parameters")
 		headers := object(t, components["headers"], "components.headers")
-		for _, name := range []string{"IdempotencyKey", "IfMatch", "PageCursor", "PageLimit", "RequestID"} {
+		for _, name := range []string{
+			"IdempotencyKey", "IfMatch", "PageCursor", "PageLimit", "RequestID",
+			"TenantRef", "SubjectRef",
+		} {
 			if _, exists := parameters[name]; !exists {
 				t.Errorf("missing reusable parameter %q", name)
 			}
@@ -223,14 +225,14 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 
 	t.Run("administrative mutation replays are observable", func(t *testing.T) {
 		required := map[string]bool{
-			"createProject": true, "updateProject": true,
-			"createServiceAccount": true, "updateServiceAccount": true,
-			"createAPIKey": true, "rotateAPIKey": true, "revokeAPIKey": true,
 			"createProfile": true, "reviseProfile": true, "disableProfile": true,
 		}
 		paths := object(t, document["paths"], "paths")
 		for path, pathValue := range paths {
 			pathItem := object(t, pathValue, path)
+			if reference, ok := pathItem["$ref"].(string); ok {
+				pathItem = object(t, resolveLocalReference(t, document, reference), path)
+			}
 			for _, method := range []string{"patch", "post"} {
 				operationValue, exists := pathItem[method]
 				if !exists {
@@ -261,6 +263,37 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 		}
 		for operationID := range required {
 			t.Errorf("missing administrative mutation %s", operationID)
+		}
+	})
+
+	t.Run("platform ownership headers are required and identity administration is absent", func(t *testing.T) {
+		paths := object(t, document["paths"], "paths")
+		for path, pathValue := range paths {
+			pathItem := object(t, pathValue, path)
+			if reference, ok := pathItem["$ref"].(string); ok {
+				pathItem = object(t, resolveLocalReference(t, document, reference), path)
+			}
+			encoded, _ := json.Marshal(pathItem["parameters"])
+			for _, reference := range []string{
+				"#/components/parameters/TenantRef",
+				"#/components/parameters/SubjectRef",
+			} {
+				if !strings.Contains(string(encoded), reference) {
+					t.Errorf("%s does not require %s", path, reference)
+				}
+			}
+		}
+		components := object(t, document["components"], "components")
+		schemas := object(t, components["schemas"], "components.schemas")
+		for _, name := range []string{
+			"Project", "ProjectPage", "CreateProjectRequest", "UpdateProjectRequest",
+			"ServiceAccount", "ServiceAccountPage", "CreateServiceAccountRequest",
+			"UpdateServiceAccountRequest", "APIKey", "APIKeyPage", "CreateAPIKeyRequest",
+			"CreateAPIKeyResponse", "ServiceAccountScope",
+		} {
+			if _, exists := schemas[name]; exists {
+				t.Errorf("removed identity schema %s remains public", name)
+			}
 		}
 	})
 
@@ -367,11 +400,6 @@ func TestCanonicalMutationResponsesMatchDurableResources(t *testing.T) {
 			name: "Profile revision updates the existing Profile",
 			path: "/v1/profiles/{profileName}:revise", method: "post",
 			statusCode: "200", schema: "Profile",
-		},
-		{
-			name: "API key rotation updates the existing API key authority",
-			path: "/v1/projects/{projectId}/service-accounts/{serviceAccountId}/api-keys/{apiKeyId}:rotate", method: "post",
-			statusCode: "200", schema: "CreateAPIKeyResponse",
 		},
 	}
 	for _, test := range tests {

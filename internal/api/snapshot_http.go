@@ -20,7 +20,7 @@ func (apiHandler *handler) listSandboxSnapshots(writer http.ResponseWriter, requ
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, page)
+	apiHandler.writeJSON(writer, request, http.StatusOK, page)
 }
 
 func (apiHandler *handler) createSandboxSnapshot(writer http.ResponseWriter, request *http.Request) {
@@ -42,7 +42,7 @@ func (apiHandler *handler) createSandboxSnapshot(writer http.ResponseWriter, req
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusCreated, snapshot)
+	apiHandler.writeJSON(writer, request, http.StatusCreated, snapshot)
 }
 
 func (apiHandler *handler) getSnapshot(writer http.ResponseWriter, request *http.Request) {
@@ -53,7 +53,7 @@ func (apiHandler *handler) getSnapshot(writer http.ResponseWriter, request *http
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, snapshot)
+	apiHandler.writeJSON(writer, request, http.StatusOK, snapshot)
 }
 
 func (apiHandler *handler) deleteSnapshot(writer http.ResponseWriter, request *http.Request) {

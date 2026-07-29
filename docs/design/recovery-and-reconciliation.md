@@ -61,4 +61,4 @@ Garbage collection marks candidates transactionally, rechecks reachability after
 
 Every nonterminal state has a next action, deadline, and observable reason. Operators can inspect desired state, last successful evidence, retry classification, Runner health, checkpoint reachability, and correlation IDs without accessing workspace content. Reconciliation metrics use fixed-cardinality state and reason classes.
 
-See [Domain and lifecycle](domain-lifecycle.md), [Runner protocol](runner-protocol.md), [Workspace durability](workspace-durability.md), and [Compatibility policy](compatibility-policy.md).
+See [Domain and lifecycle](domain-lifecycle.md), [Runner protocol](runner-protocol.md), and [Workspace durability](workspace-durability.md).

@@ -109,8 +109,9 @@ if [[ "$readiness_body" != '{"status":"ready"}' ]]; then
 fi
 
 export SECONDBOX_LIVE_BASE_URL="$live_base_url"
-export SECONDBOX_LIVE_ADMIN_TOKEN="compose-test-bootstrap-admin-token"
+export SECONDBOX_LIVE_PLATFORM_TOKEN="compose-test-platform-token-0000000000000000"
 go test -count=1 -tags=sdk_live -v ./tests/sdk-live
 node --test tests/sdk-live/typescript_live.test.ts
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=sdk/python python3 tests/sdk-live/python_live_test.py
 
-echo "SecondBox Compose smoke test passed: PostgreSQL readiness and live Go/TypeScript SDK contracts"
+echo "SecondBox Compose smoke test passed: PostgreSQL readiness and live Go/TypeScript/Python SDK contracts"

@@ -67,4 +67,4 @@ The portable recovery drill demonstrates all of the following:
 
 This qualifies the coordinated database/object backup and fresh-authority restore mechanics. It does not qualify a privileged Firecracker boot from the restored image; run the dedicated Linux/KVM release gate for that separate claim.
 
-See [workspace durability](../design/workspace-durability.md), [recovery and reconciliation](../design/recovery-and-reconciliation.md), and [compatibility policy](../design/compatibility-policy.md).
+See [workspace durability](../design/workspace-durability.md) and [recovery and reconciliation](../design/recovery-and-reconciliation.md).

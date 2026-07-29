@@ -17,7 +17,7 @@ env:
   CI: "true"
 
 jobs:
-  clean-clone-non-kvm:
+  non-kvm-smoke:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -56,8 +56,8 @@ jobs:
         run: |
           sudo scripts/install-postgresql-client.sh
           echo "/usr/lib/postgresql/18/bin" >>"$GITHUB_PATH"
-      - name: Run every non-KVM test from an isolated clean clone
-        run: scripts/test-clean-clone-isolation.sh --non-kvm
+      - name: Run the complete non-KVM suite
+        run: just test-non-kvm
 
   generated-checks:
     runs-on: ubuntu-latest

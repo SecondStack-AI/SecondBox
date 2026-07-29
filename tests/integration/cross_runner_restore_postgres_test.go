@@ -24,7 +24,7 @@ func TestStoppedCheckpointRelocatesThroughProductionSchedulerToAnotherRunnerExcl
 	t *testing.T,
 ) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(
 		t, controlPlane, admin, "cross-runner-relocation",
 	)
@@ -475,17 +475,8 @@ func registerCrossRunnerForRestore(
 ) {
 	t.Helper()
 	caCertificate, caPrivateKey := task4CertificateAuthority(t, now)
-	authority := task4CredentialAuthority(t, caCertificate, caPrivateKey, now)
-	enrollment, err := authority.CreateEnrollment(t.Context(), runnercontrol.EnrollmentRequest{
-		TokenID: "enrollment-" + runnerID, RunnerID: runnerID, PoolName: poolName,
-		RunnerName: runnerID, ExpiresAt: now.Add(time.Hour),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	issued, err := authority.RedeemEnrollment(
-		t.Context(), enrollment.Token, task4CertificateRequest(t),
-	)
+	authority := newTask4CredentialAuthority(t, caCertificate, caPrivateKey, now)
+	issued, err := authority.Issue(runnerID, task4CertificateRequest(t))
 	if err != nil {
 		t.Fatal(err)
 	}

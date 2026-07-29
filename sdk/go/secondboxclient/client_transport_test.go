@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-func TestGeneratedOperationCoverage(t *testing.T) {
-	const expectedOperationCount = 54
+func TestHandWrittenOperationCoverage(t *testing.T) {
+	const expectedOperationCount = 53
 	operationIDs := []string{
 		"createSandbox",
 		"startSandbox",
@@ -26,17 +26,17 @@ func TestGeneratedOperationCoverage(t *testing.T) {
 	}
 
 	found := 0
-	for _, operationID := range allGeneratedOperationIDsForTest() {
+	for _, operationID := range allSupportedOperationIDsForTest() {
 		if _, exists := LookupOperation(operationID); exists {
 			found++
 		}
 	}
 	if found != expectedOperationCount {
-		t.Fatalf("generated operation count = %d, want %d", found, expectedOperationCount)
+		t.Fatalf("hand-written operation count = %d, want %d", found, expectedOperationCount)
 	}
 }
 
-func TestSecondBoxClientSendsGeneratedOperation(t *testing.T) {
+func TestSecondBoxClientSendsHandWrittenOperation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet {
 			t.Errorf("request method = %s, want GET", request.Method)
@@ -72,43 +72,44 @@ func TestSecondBoxClientSendsGeneratedOperation(t *testing.T) {
 	}
 }
 
-func allGeneratedOperationIDsForTest() []string {
+func allSupportedOperationIDsForTest() []string {
 	return []string{
 		"acquireSandboxLease",
 		"cancelSandboxExecStream",
 		"cancelSandboxTerminal",
 		"checkpointSandbox",
 		"closeSandboxPortSession",
-		"createAPIKey",
 		"createProfile",
-		"createProject",
+		"createRunnerPool",
 		"createSandbox",
 		"createSandboxDirectory",
 		"createSandboxExecStream",
 		"createSandboxPortSession",
+		"createSandboxSnapshot",
 		"createSandboxTerminal",
-		"createServiceAccount",
 		"deleteArtifact",
 		"deleteSandbox",
+		"deleteSnapshot",
 		"disableProfile",
 		"downloadArtifactContent",
 		"executeSandboxCommand",
 		"getArtifact",
 		"getOperation",
 		"getProfile",
-		"getProject",
+		"getRunner",
+		"getRunnerPool",
 		"getSandbox",
 		"getSandboxLease",
 		"getSandboxPortSession",
-		"getServiceAccount",
+		"getSnapshot",
 		"inspectSandbox",
-		"listAPIKeys",
 		"listProfiles",
-		"listProjects",
+		"listRunnerPools",
+		"listRunners",
 		"listSandboxArtifacts",
 		"listSandboxDirectory",
 		"listSandboxes",
-		"listServiceAccounts",
+		"listSandboxSnapshots",
 		"pingSandbox",
 		"readSandboxFile",
 		"reconnectSandboxTerminal",
@@ -116,14 +117,12 @@ func allGeneratedOperationIDsForTest() []string {
 		"removeSandboxPath",
 		"renewSandboxLease",
 		"reviseProfile",
-		"revokeAPIKey",
 		"sandboxFileExists",
 		"startSandbox",
 		"statSandboxFile",
 		"stopSandbox",
 		"touchSandbox",
-		"updateProject",
-		"updateServiceAccount",
+		"updateRunnerPool",
 		"uploadSandboxArtifact",
 		"waitForSandbox",
 		"writeSandboxFile",

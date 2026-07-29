@@ -23,7 +23,7 @@ if [[ ! -e "$environment_path" ]]; then
   install -m 600 "$template_path" "$environment_path"
 fi
 
-if ! grep -Eq 'GENERATE_WITH_DEPLOY_BOOTSTRAP|GENERATE_LOCAL_DATABASE_URL|GENERATE_RUNNER_PKI|GENERATE_DEVELOPMENT_ASSET_CATALOG' "$environment_path"; then
+if ! grep -Eq 'GENERATE_WITH_DEPLOY_BOOTSTRAP|GENERATE_LOCAL_DATABASE_URL|GENERATE_RUNNER_PKI|GENERATE_RUNNER_CA_PRIVATE_KEY|GENERATE_DEVELOPMENT_ASSET_CATALOG' "$environment_path"; then
   chmod 600 "$environment_path"
   echo "Environment already bootstrapped: $environment_path"
   exit 0
@@ -115,9 +115,8 @@ fi
 postgres_password="$(openssl rand -hex 32)"
 object_store_user="sb$(openssl rand -hex 12)"
 object_store_password="$(openssl rand -hex 32)"
-bootstrap_admin_token="$(openssl rand -hex 32)"
-api_key_hash_secret="$(openssl rand -hex 48)"
-runner_enrollment_hash_secret="$(openssl rand -hex 48)"
+platform_token="$(openssl rand -hex 32)"
+runner_credential="$(openssl rand -hex 48)"
 environment_directory="$(cd "$(dirname "$environment_path")" && pwd)"
 environment_basename="$(basename "$environment_path")"
 runner_pki_directory="$environment_directory/${environment_basename}.secrets/runner-pki"
@@ -227,9 +226,8 @@ awk \
   -v postgres_password="$postgres_password" \
   -v object_store_user="$object_store_user" \
   -v object_store_password="$object_store_password" \
-  -v bootstrap_admin_token="$bootstrap_admin_token" \
-  -v api_key_hash_secret="$api_key_hash_secret" \
-  -v runner_enrollment_hash_secret="$runner_enrollment_hash_secret" \
+  -v platform_token="$platform_token" \
+  -v runner_credential="$runner_credential" \
   -v runner_pki_directory="$runner_pki_directory" \
   -v signed_asset_catalog_host_path="$signed_asset_catalog_host_path" '
   /^SECONDBOX_POSTGRES_PASSWORD=/ {
@@ -248,16 +246,16 @@ awk \
     print "SECONDBOX_OBJECT_STORE_ROOT_PASSWORD=" object_store_password
     next
   }
-  /^SECONDBOX_BOOTSTRAP_ADMIN_TOKEN=/ {
-    print "SECONDBOX_BOOTSTRAP_ADMIN_TOKEN=" bootstrap_admin_token
+  /^SECONDBOX_PLATFORM_TOKEN=/ {
+    print "SECONDBOX_PLATFORM_TOKEN=" platform_token
     next
   }
-  /^SECONDBOX_API_KEY_HASH_SECRET=/ {
-    print "SECONDBOX_API_KEY_HASH_SECRET=" api_key_hash_secret
+  /^SECONDBOX_RUNNER_CREDENTIAL=/ {
+    print "SECONDBOX_RUNNER_CREDENTIAL=" runner_credential
     next
   }
-  /^SECONDBOX_RUNNER_ENROLLMENT_HASH_SECRET=/ {
-    print "SECONDBOX_RUNNER_ENROLLMENT_HASH_SECRET=" runner_enrollment_hash_secret
+  /^SECONDBOX_RUNNER_CA_PRIVATE_KEY=/ {
+    print "SECONDBOX_RUNNER_CA_PRIVATE_KEY=" runner_pki_directory "/runner-ca.key"
     next
   }
   /^SECONDBOX_RUNNER_PKI_HOST_DIR=/ {

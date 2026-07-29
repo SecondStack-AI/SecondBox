@@ -9,12 +9,15 @@ import (
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 )
 
-// CredentialVerifier maps the mTLS peer certificate to revocable runner authority.
+const runnerCredentialMetadata = "x-secondbox-runner-credential"
+
+// CredentialVerifier maps the pre-shared credential and mTLS peer to runner authority.
 type CredentialVerifier interface {
-	VerifyClientCertificate(context.Context, *x509.Certificate) (RunnerIdentity, error)
+	VerifyClientCertificate(context.Context, *x509.Certificate, string) (RunnerIdentity, error)
 }
 
 // ProtocolStateStore persists connection and runner evidence across replicas.
@@ -303,7 +306,7 @@ func (server *Server) sendClaimedRelayFrame(
 		return fmt.Errorf("SecondBox runner relay send frame %q: %w", delivery.ID, err)
 	}
 	if err := server.config.FrameRelay.MarkOutboundFrameDelivered(
-		ctx, delivery.ID, connectionID, server.config.Now(),
+		ctx, delivery.ID, connectionID, delivery.ClaimAttempt, server.config.Now(),
 	); err != nil {
 		return fmt.Errorf("SecondBox runner relay mark frame %q delivered: %w", delivery.ID, err)
 	}
@@ -319,7 +322,15 @@ func (server *Server) peerIdentity(ctx context.Context) (RunnerIdentity, error) 
 	if !ok || len(tlsInfo.State.PeerCertificates) != 1 {
 		return RunnerIdentity{}, errors.New("SecondBox runner control peer is not mutually authenticated")
 	}
+	incoming, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return RunnerIdentity{}, ErrRunnerCredentialInvalid
+	}
+	credentials := incoming.Get(runnerCredentialMetadata)
+	if len(credentials) != 1 || credentials[0] == "" {
+		return RunnerIdentity{}, ErrRunnerCredentialInvalid
+	}
 	return server.config.CredentialVerifier.VerifyClientCertificate(
-		ctx, tlsInfo.State.PeerCertificates[0],
+		ctx, tlsInfo.State.PeerCertificates[0], credentials[0],
 	)
 }

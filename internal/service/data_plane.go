@@ -20,20 +20,20 @@ import (
 // DataPlaneRelay is the durable runner relay used by synchronous public operations.
 type DataPlaneRelay interface {
 	AdmitDataPlane(context.Context, runnercontrol.DataPlaneAdmission) (runnercontrol.DataPlaneSession, bool, error)
-	GetDataPlaneSession(context.Context, string, string) (runnercontrol.DataPlaneSession, error)
-	ExpireDataPlaneSession(context.Context, string, string, time.Time) (runnercontrol.DataPlaneSession, error)
-	AppendExecClientFrame(context.Context, string, string, runnercontrol.ExecClientFrame, time.Time) (bool, error)
-	ListExecServerFrames(context.Context, string, string, int64, int) ([]runnercontrol.ExecServerFrame, error)
-	CancelDataPlaneSession(context.Context, string, string, string, time.Time) (bool, error)
+	GetDataPlaneSession(context.Context, string, string, string) (runnercontrol.DataPlaneSession, error)
+	ExpireDataPlaneSession(context.Context, string, string, string, time.Time) (runnercontrol.DataPlaneSession, error)
+	AppendExecClientFrame(context.Context, string, string, string, runnercontrol.ExecClientFrame, time.Time) (bool, error)
+	ListExecServerFrames(context.Context, string, string, string, int64, int) ([]runnercontrol.ExecServerFrame, error)
+	CancelDataPlaneSession(context.Context, string, string, string, string, time.Time) (bool, error)
 	CancelPublicDataPlaneSession(context.Context, runnercontrol.PublicDataPlaneCancellation) (runnercontrol.DataPlaneSession, bool, error)
 }
 
 type terminalDataPlaneRelay interface {
 	DataPlaneRelay
 	AcquireTerminalAttachment(context.Context, string, string, string, string, int64, string, time.Time) (runnercontrol.DataPlaneSession, error)
-	DetachTerminalAttachment(context.Context, string, string, string, time.Time) (bool, error)
-	AppendTerminalClientFrame(context.Context, string, string, string, runnercontrol.TerminalClientFrame, time.Time) (bool, error)
-	ListTerminalServerFrames(context.Context, string, string, int64, int) ([]runnercontrol.TerminalServerFrame, error)
+	DetachTerminalAttachment(context.Context, string, string, string, string, time.Time) (bool, error)
+	AppendTerminalClientFrame(context.Context, string, string, string, string, runnercontrol.TerminalClientFrame, time.Time) (bool, error)
+	ListTerminalServerFrames(context.Context, string, string, string, int64, int) ([]runnercontrol.TerminalServerFrame, error)
 }
 
 func (service *ControlPlaneService) CreateSandboxExecStream(
@@ -46,7 +46,7 @@ func (service *ControlPlaneService) CreateSandboxExecStream(
 	idempotencyKey string,
 	request contracts.StreamingExecRequest,
 ) (runnercontrol.DataPlaneSession, bool, error) {
-	if err := service.requireDataPlane(principal, contracts.ScopeSandboxExec); err != nil {
+	if err := service.requireDataPlane(principal); err != nil {
 		return runnercontrol.DataPlaneSession{}, false, err
 	}
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
@@ -76,6 +76,7 @@ func (service *ControlPlaneService) CreateSandboxExecStream(
 	return service.dataPlaneRelay.AdmitDataPlane(ctx, runnercontrol.DataPlaneAdmission{
 		ID: service.newID("dps"), StreamID: service.newID("stream"),
 		ProjectID: principal.ProjectID, SandboxID: sandboxID,
+		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
 		ServiceAccountID: principal.ServiceAccountID, LeaseID: leaseID,
 		RequestID: requestID, Generation: generation,
 		Kind: "exec", Operation: "exec-stream", IdempotencyKey: idempotencyKey,
@@ -94,10 +95,12 @@ func (service *ControlPlaneService) GetSandboxExecStream(
 	sessionID string,
 	generation int64,
 ) (runnercontrol.DataPlaneSession, error) {
-	if err := service.requireDataPlane(principal, contracts.ScopeSandboxExec); err != nil {
+	if err := service.requireDataPlane(principal); err != nil {
 		return runnercontrol.DataPlaneSession{}, err
 	}
-	session, err := service.dataPlaneRelay.GetDataPlaneSession(ctx, principal.ProjectID, sessionID)
+	session, err := service.dataPlaneRelay.GetDataPlaneSession(
+		ctx, principal.TenantRef, principal.SubjectRef, sessionID,
+	)
 	if err != nil {
 		return runnercontrol.DataPlaneSession{}, err
 	}
@@ -117,11 +120,11 @@ func (service *ControlPlaneService) AppendSandboxExecStreamFrame(
 	sessionID string,
 	frame runnercontrol.ExecClientFrame,
 ) (bool, error) {
-	if err := service.requireDataPlane(principal, contracts.ScopeSandboxExec); err != nil {
+	if err := service.requireDataPlane(principal); err != nil {
 		return false, err
 	}
 	return service.dataPlaneRelay.AppendExecClientFrame(
-		ctx, principal.ProjectID, sessionID, frame, service.now().UTC(),
+		ctx, principal.TenantRef, principal.SubjectRef, sessionID, frame, service.now().UTC(),
 	)
 }
 
@@ -131,11 +134,11 @@ func (service *ControlPlaneService) ListSandboxExecStreamFrames(
 	sessionID string,
 	afterSequence int64,
 ) ([]runnercontrol.ExecServerFrame, error) {
-	if err := service.requireDataPlane(principal, contracts.ScopeSandboxExec); err != nil {
+	if err := service.requireDataPlane(principal); err != nil {
 		return nil, err
 	}
 	return service.dataPlaneRelay.ListExecServerFrames(
-		ctx, principal.ProjectID, sessionID, afterSequence, 64,
+		ctx, principal.TenantRef, principal.SubjectRef, sessionID, afterSequence, 64,
 	)
 }
 
@@ -145,11 +148,11 @@ func (service *ControlPlaneService) CancelSandboxExecStream(
 	sessionID string,
 	reason string,
 ) (bool, error) {
-	if err := service.requireDataPlane(principal, contracts.ScopeSandboxExec); err != nil {
+	if err := service.requireDataPlane(principal); err != nil {
 		return false, err
 	}
 	return service.dataPlaneRelay.CancelDataPlaneSession(
-		ctx, principal.ProjectID, sessionID, reason, service.now().UTC(),
+		ctx, principal.TenantRef, principal.SubjectRef, sessionID, reason, service.now().UTC(),
 	)
 }
 
@@ -162,7 +165,7 @@ func (service *ControlPlaneService) CancelSandboxExecStreamAtGeneration(
 	generation int64,
 	idempotencyKey string,
 ) (runnercontrol.DataPlaneSession, bool, error) {
-	if err := service.requireDataPlane(principal, contracts.ScopeSandboxExec); err != nil {
+	if err := service.requireDataPlane(principal); err != nil {
 		return runnercontrol.DataPlaneSession{}, false, err
 	}
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
@@ -177,6 +180,7 @@ func (service *ControlPlaneService) CancelSandboxExecStreamAtGeneration(
 		ctx,
 		runnercontrol.PublicDataPlaneCancellation{
 			ProjectID: principal.ProjectID, SandboxID: sandboxID, SessionID: sessionID,
+			TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
 			SessionKind: "exec", SessionOperation: "exec-stream",
 			IdempotencyKey: idempotencyKey,
 			RequestHash:    requestHash, Reason: "public streaming client cancelled",
@@ -225,7 +229,9 @@ func (service *ControlPlaneService) SandboxExecStreamOutcome(
 	principal contracts.Principal,
 	sessionID string,
 ) (any, error) {
-	session, err := service.dataPlaneRelay.GetDataPlaneSession(ctx, principal.ProjectID, sessionID)
+	session, err := service.dataPlaneRelay.GetDataPlaneSession(
+		ctx, principal.TenantRef, principal.SubjectRef, sessionID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +251,7 @@ func (service *ControlPlaneService) ExecuteSandboxCommand(
 	idempotencyKey string,
 	request contracts.BufferedExecRequest,
 ) (any, bool, error) {
-	if err := service.requireDataPlane(principal, contracts.ScopeSandboxExec); err != nil {
+	if err := service.requireDataPlane(principal); err != nil {
 		return nil, false, err
 	}
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
@@ -268,6 +274,7 @@ func (service *ControlPlaneService) ExecuteSandboxCommand(
 	session, replayed, err := service.dataPlaneRelay.AdmitDataPlane(ctx, runnercontrol.DataPlaneAdmission{
 		ID: service.newID("dps"), StreamID: service.newID("stream"),
 		ProjectID: principal.ProjectID, SandboxID: sandboxID,
+		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
 		ServiceAccountID: principal.ServiceAccountID, LeaseID: leaseID,
 		RequestID:  requestID,
 		Generation: generation, Kind: "exec", Operation: "exec",
@@ -279,7 +286,9 @@ func (service *ControlPlaneService) ExecuteSandboxCommand(
 	if err != nil {
 		return nil, false, err
 	}
-	session, err = service.waitForDataPlane(ctx, principal.ProjectID, session, request.DeadlineMilliseconds)
+	session, err = service.waitForDataPlane(
+		ctx, principal.TenantRef, principal.SubjectRef, session, request.DeadlineMilliseconds,
+	)
 	if err != nil {
 		return nil, replayed, err
 	}
@@ -473,7 +482,7 @@ func (service *ControlPlaneService) runFileOperation(
 	generation int64, leaseID string, idempotencyKey string, operation string,
 	path string, recursive bool, force bool, content []byte, checksum string, expectedSize int64,
 ) (runnercontrol.DataPlaneSession, bool, error) {
-	if err := service.requireDataPlane(principal, contracts.ScopeSandboxFiles); err != nil {
+	if err := service.requireDataPlane(principal); err != nil {
 		return runnercontrol.DataPlaneSession{}, false, err
 	}
 	if err := validateWorkspacePath(path); err != nil {
@@ -505,6 +514,7 @@ func (service *ControlPlaneService) runFileOperation(
 	session, replayed, err := service.dataPlaneRelay.AdmitDataPlane(ctx, runnercontrol.DataPlaneAdmission{
 		ID: service.newID("dps"), StreamID: service.newID("stream"),
 		ProjectID: principal.ProjectID, SandboxID: sandboxID,
+		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
 		ServiceAccountID: principal.ServiceAccountID, LeaseID: leaseID,
 		RequestID:  requestID,
 		Generation: generation, Kind: "file", Operation: operation,
@@ -522,12 +532,15 @@ func (service *ControlPlaneService) runFileOperation(
 	if err != nil {
 		return runnercontrol.DataPlaneSession{}, false, err
 	}
-	session, err = service.waitForDataPlane(ctx, principal.ProjectID, session, fileDeadlineMilliseconds)
+	session, err = service.waitForDataPlane(
+		ctx, principal.TenantRef, principal.SubjectRef, session, fileDeadlineMilliseconds,
+	)
 	return session, replayed, err
 }
 
 func (service *ControlPlaneService) waitForDataPlane(
-	ctx context.Context, projectID string, session runnercontrol.DataPlaneSession,
+	ctx context.Context, tenantRef string, subjectRef string,
+	session runnercontrol.DataPlaneSession,
 	maximumWaitMilliseconds int64,
 ) (runnercontrol.DataPlaneSession, error) {
 	if session.State == "completed" || session.State == "failed" {
@@ -544,7 +557,7 @@ func (service *ControlPlaneService) waitForDataPlane(
 			return runnercontrol.DataPlaneSession{}, ctx.Err()
 		case <-timerChannel:
 			expired, err := service.dataPlaneRelay.ExpireDataPlaneSession(
-				ctx, projectID, session.ID, service.now().UTC(),
+				ctx, tenantRef, subjectRef, session.ID, service.now().UTC(),
 			)
 			if err != nil {
 				return runnercontrol.DataPlaneSession{}, err
@@ -554,7 +567,9 @@ func (service *ControlPlaneService) waitForDataPlane(
 			}
 			timerChannel = nil
 		case <-ticker.C:
-			current, err := service.dataPlaneRelay.GetDataPlaneSession(ctx, projectID, session.ID)
+			current, err := service.dataPlaneRelay.GetDataPlaneSession(
+				ctx, tenantRef, subjectRef, session.ID,
+			)
 			if err != nil {
 				return runnercontrol.DataPlaneSession{}, err
 			}
@@ -565,11 +580,11 @@ func (service *ControlPlaneService) waitForDataPlane(
 	}
 }
 
-func (service *ControlPlaneService) requireDataPlane(principal contracts.Principal, scope string) error {
+func (service *ControlPlaneService) requireDataPlane(principal contracts.Principal) error {
 	if service.dataPlaneRelay == nil {
 		return ports.ErrLifecycleUnavailable
 	}
-	if principal.ProjectID == "" || principal.ServiceAccountID == "" || !principal.HasScope(scope) {
+	if principal.TenantRef == "" || principal.SubjectRef == "" {
 		return ports.ErrAuthorizationDenied
 	}
 	return nil

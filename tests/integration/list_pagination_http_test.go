@@ -24,12 +24,12 @@ type listPaginationPage struct {
 
 func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	suffix := fmt.Sprintf("pagination-%d", integrationIdentitySequence.Add(1))
 
 	projectIDs := make([]string, 0, 3)
 	for index := 0; index < 3; index++ {
-		project, err := controlPlane.CreateProject(
+		project, err := createFixtureProject(t, controlPlane,
 			t.Context(),
 			admin,
 			contracts.CreateProjectRequest{Name: fmt.Sprintf("%s-project-%d", suffix, index)},
@@ -40,7 +40,7 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 		projectIDs = append(projectIDs, project.ID)
 	}
 
-	accountProject, err := controlPlane.CreateProject(
+	accountProject, err := createFixtureProject(t, controlPlane,
 		t.Context(),
 		admin,
 		contracts.CreateProjectRequest{Name: suffix + "-accounts"},
@@ -50,13 +50,13 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 	}
 	accountIDs := make([]string, 0, 3)
 	for index := 0; index < 3; index++ {
-		account, err := controlPlane.CreateServiceAccount(
+		account, err := createFixtureServiceAccount(t, controlPlane,
 			t.Context(),
 			admin,
 			accountProject.ID,
 			contracts.CreateServiceAccountRequest{
 				Name:          fmt.Sprintf("%s-account-%d", suffix, index),
-				Scopes:        []string{contracts.ScopeSandboxRead},
+				Scopes:        []string{"sandbox:read"},
 				ProfileGrants: []string{},
 			},
 		)
@@ -69,14 +69,14 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 	keyProject, keyAccount, _ := createProjectAccountAndCredential(t, controlPlane, admin, suffix+"-keys")
 	keyIDs := make([]string, 0, 3)
 	for index := 0; index < 3; index++ {
-		created, err := controlPlane.CreateAPIKey(
+		created, err := createFixtureAPIKey(t, controlPlane,
 			t.Context(),
 			admin,
 			keyProject.ID,
 			keyAccount.ID,
 			contracts.CreateAPIKeyRequest{
 				Name:   fmt.Sprintf("%s-key-%d", suffix, index),
-				Scopes: []string{contracts.ScopeSandboxRead},
+				Scopes: []string{"sandbox:read"},
 			},
 		)
 		if err != nil {
@@ -168,7 +168,7 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 	}
 
 	handler, err := api.NewHandler(api.HandlerConfig{
-		Service: controlPlane, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Service: controlPlane, PlatformToken: testPlatformToken, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		MaximumDataPlaneBodyBytes: 4 << 20,
 	})
 	if err != nil {
@@ -184,16 +184,6 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 		keyField   string
 		expected   []string
 	}{
-		{name: "projects", path: "/v1/projects", credential: "bootstrap-administrator-secret", keyField: "id", expected: projectIDs},
-		{
-			name: "service accounts", credential: "bootstrap-administrator-secret", keyField: "id",
-			path: "/v1/projects/" + accountProject.ID + "/service-accounts", expected: accountIDs,
-		},
-		{
-			name: "API keys", credential: "bootstrap-administrator-secret", keyField: "id",
-			path:     "/v1/projects/" + keyProject.ID + "/service-accounts/" + keyAccount.ID + "/api-keys",
-			expected: keyIDs,
-		},
 		{name: "profiles", path: "/v1/profiles", credential: "bootstrap-administrator-secret", keyField: "name", expected: profileNames},
 		{name: "runner pools", path: "/v1/runner-pools", credential: "bootstrap-administrator-secret", keyField: "name", expected: poolNames},
 		{
@@ -277,7 +267,7 @@ func assertStableListPagination(
 		if err != nil {
 			t.Fatal(err)
 		}
-		request.Header.Set("Authorization", "Bearer "+credential)
+		setPlatformAuthorization(t, request, credential)
 		response := doHTTP(t, request)
 		assertHTTPStatus(t, response, http.StatusOK)
 		var page listPaginationPage
@@ -325,7 +315,7 @@ func assertStableListPagination(
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Header.Set("Authorization", "Bearer "+credential)
+	setPlatformAuthorization(t, request, credential)
 	response := doHTTP(t, request)
 	assertHTTPStatus(t, response, http.StatusBadRequest)
 	if contentType := response.Header.Get("Content-Type"); contentType != "application/problem+json" {

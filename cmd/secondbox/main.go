@@ -21,69 +21,56 @@ type commandAlias struct {
 }
 
 var commandAliases = map[string]commandAlias{
-	"auth check":              {operation: "listProjects", injected: []string{"--query", "limit=1"}},
-	"projects list":           {operation: "listProjects"},
-	"projects create":         {operation: "createProject"},
-	"projects get":            {operation: "getProject"},
-	"projects update":         {operation: "updateProject"},
-	"keys list":               {operation: "listAPIKeys"},
-	"keys create":             {operation: "createAPIKey"},
-	"keys revoke":             {operation: "revokeAPIKey"},
-	"keys rotate":             {operation: "rotateAPIKey"},
-	"profiles list":           {operation: "listProfiles"},
-	"profiles create":         {operation: "createProfile"},
-	"profiles get":            {operation: "getProfile"},
-	"profiles revise":         {operation: "reviseProfile"},
-	"profiles disable":        {operation: "disableProfile"},
-	"runner-pools list":       {operation: "listRunnerPools"},
-	"runner-pools create":     {operation: "createRunnerPool"},
-	"runner-pools get":        {operation: "getRunnerPool"},
-	"runner-pools update":     {operation: "updateRunnerPool"},
-	"runners list":            {operation: "listRunners"},
-	"runners get":             {operation: "getRunner"},
-	"sandboxes list":          {operation: "listSandboxes"},
-	"sandboxes create":        {operation: "createSandbox"},
-	"sandboxes get":           {operation: "getSandbox"},
-	"sandboxes start":         {operation: "startSandbox"},
-	"sandboxes drain":         {operation: "drainSandbox"},
-	"sandboxes stop":          {operation: "stopSandbox"},
-	"sandboxes checkpoint":    {operation: "checkpointSandbox"},
-	"sandboxes delete":        {operation: "deleteSandbox"},
-	"sandboxes inspect":       {operation: "inspectSandbox"},
-	"sandboxes ping":          {operation: "pingSandbox"},
-	"sandboxes touch":         {operation: "touchSandbox"},
-	"sandboxes wait":          {operation: "waitForSandbox"},
-	"operations get":          {operation: "getOperation"},
-	"exec":                    {operation: "executeSandboxCommand"},
-	"exec stream":             {operation: "createSandboxExecStream"},
-	"exec cancel":             {operation: "cancelSandboxExecStream"},
-	"shell create":            {operation: "createSandboxTerminal"},
-	"shell reconnect":         {operation: "reconnectSandboxTerminal"},
-	"shell close":             {operation: "cancelSandboxTerminal"},
-	"files read":              {operation: "readSandboxFile"},
-	"files write":             {operation: "writeSandboxFile"},
-	"files stat":              {operation: "statSandboxFile"},
-	"files exists":            {operation: "sandboxFileExists"},
-	"files list":              {operation: "listSandboxDirectory"},
-	"files mkdir":             {operation: "createSandboxDirectory"},
-	"files rm":                {operation: "removeSandboxPath"},
-	"checkpoints create":      {operation: "checkpointSandbox"},
-	"artifacts list":          {operation: "listSandboxArtifacts"},
-	"artifacts upload":        {operation: "uploadSandboxArtifact"},
-	"artifacts get":           {operation: "getArtifact"},
-	"artifacts download":      {operation: "downloadArtifactContent"},
-	"artifacts delete":        {operation: "deleteArtifact"},
-	"leases acquire":          {operation: "acquireSandboxLease"},
-	"leases get":              {operation: "getSandboxLease"},
-	"leases renew":            {operation: "renewSandboxLease"},
-	"leases release":          {operation: "releaseSandboxLease"},
-	"ports create":            {operation: "createSandboxPortSession"},
-	"ports get":               {operation: "getSandboxPortSession"},
-	"ports close":             {operation: "closeSandboxPortSession"},
-	"service-accounts list":   {operation: "listServiceAccounts"},
-	"service-accounts create": {operation: "createServiceAccount"},
-	"service-accounts get":    {operation: "getServiceAccount"},
-	"service-accounts update": {operation: "updateServiceAccount"},
+	"profiles list":        {operation: "listProfiles"},
+	"profiles create":      {operation: "createProfile"},
+	"profiles get":         {operation: "getProfile"},
+	"profiles revise":      {operation: "reviseProfile"},
+	"profiles disable":     {operation: "disableProfile"},
+	"runner-pools list":    {operation: "listRunnerPools"},
+	"runner-pools create":  {operation: "createRunnerPool"},
+	"runner-pools get":     {operation: "getRunnerPool"},
+	"runner-pools update":  {operation: "updateRunnerPool"},
+	"runners list":         {operation: "listRunners"},
+	"runners get":          {operation: "getRunner"},
+	"sandboxes list":       {operation: "listSandboxes"},
+	"sandboxes create":     {operation: "createSandbox"},
+	"sandboxes get":        {operation: "getSandbox"},
+	"sandboxes start":      {operation: "startSandbox"},
+	"sandboxes drain":      {operation: "drainSandbox"},
+	"sandboxes stop":       {operation: "stopSandbox"},
+	"sandboxes checkpoint": {operation: "checkpointSandbox"},
+	"sandboxes delete":     {operation: "deleteSandbox"},
+	"sandboxes inspect":    {operation: "inspectSandbox"},
+	"sandboxes ping":       {operation: "pingSandbox"},
+	"sandboxes touch":      {operation: "touchSandbox"},
+	"sandboxes wait":       {operation: "waitForSandbox"},
+	"operations get":       {operation: "getOperation"},
+	"exec":                 {operation: "executeSandboxCommand"},
+	"exec stream":          {operation: "createSandboxExecStream"},
+	"exec cancel":          {operation: "cancelSandboxExecStream"},
+	"shell create":         {operation: "createSandboxTerminal"},
+	"shell reconnect":      {operation: "reconnectSandboxTerminal"},
+	"shell close":          {operation: "cancelSandboxTerminal"},
+	"files read":           {operation: "readSandboxFile"},
+	"files write":          {operation: "writeSandboxFile"},
+	"files stat":           {operation: "statSandboxFile"},
+	"files exists":         {operation: "sandboxFileExists"},
+	"files list":           {operation: "listSandboxDirectory"},
+	"files mkdir":          {operation: "createSandboxDirectory"},
+	"files rm":             {operation: "removeSandboxPath"},
+	"checkpoints create":   {operation: "checkpointSandbox"},
+	"artifacts list":       {operation: "listSandboxArtifacts"},
+	"artifacts upload":     {operation: "uploadSandboxArtifact"},
+	"artifacts get":        {operation: "getArtifact"},
+	"artifacts download":   {operation: "downloadArtifactContent"},
+	"artifacts delete":     {operation: "deleteArtifact"},
+	"leases acquire":       {operation: "acquireSandboxLease"},
+	"leases get":           {operation: "getSandboxLease"},
+	"leases renew":         {operation: "renewSandboxLease"},
+	"leases release":       {operation: "releaseSandboxLease"},
+	"ports create":         {operation: "createSandboxPortSession"},
+	"ports get":            {operation: "getSandboxPortSession"},
+	"ports close":          {operation: "closeSandboxPortSession"},
 }
 
 func main() {
@@ -97,11 +84,15 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	global := flag.NewFlagSet("secondbox", flag.ContinueOnError)
 	global.SetOutput(io.Discard)
 	rawURL := global.String("url", "", "absolute SecondBox API endpoint")
-	token := global.String("token", "", "SecondBox service-account token")
+	token := global.String("token", "", "SecondBox platform token")
+	tenantRef := global.String("tenant-ref", "", "trusted caller tenant reference")
+	subjectRef := global.String("subject-ref", "", "trusted caller subject reference")
 	if err := global.Parse(args); err != nil {
 		return fmt.Errorf("SecondBox CLI parse global options: %w", err)
 	}
-	handled, err := runOperationalCommand(ctx, *rawURL, *token, global.Args(), output)
+	handled, err := runOperationalCommand(
+		ctx, *rawURL, *token, *tenantRef, *subjectRef, global.Args(), output,
+	)
 	if handled {
 		return err
 	}
@@ -111,12 +102,17 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	if *token == "" {
 		return errors.New("SecondBox CLI requires --token")
 	}
+	if *tenantRef == "" || *subjectRef == "" {
+		return errors.New("SecondBox CLI requires --tenant-ref and --subject-ref")
+	}
 	operationID, operationArgs, err := resolveCommand(global.Args())
 	if err != nil {
 		return err
 	}
 
-	client, err := secondboxclient.NewSecondBoxClient(*rawURL, *token, http.DefaultClient)
+	client, err := secondboxclient.NewSecondBoxSubjectClient(
+		*rawURL, *token, *tenantRef, *subjectRef, http.DefaultClient,
+	)
 	if err != nil {
 		return err
 	}
@@ -140,6 +136,46 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 		return fmt.Errorf("SecondBox CLI close %s response: %w", operationID, closeErr)
 	}
 	return nil
+}
+
+func runOperationalCommand(
+	ctx context.Context,
+	rawURL string,
+	token string,
+	tenantRef string,
+	subjectRef string,
+	args []string,
+	output io.Writer,
+) (bool, error) {
+	if len(args) < 2 {
+		return false, nil
+	}
+	switch {
+	case args[0] == "sandbox" && args[1] == "shell":
+		return true, runSandboxShellCommand(
+			ctx, rawURL, token, tenantRef, subjectRef, args[2:],
+			sandboxShellEnvironment{
+				input: os.Stdin, output: output,
+				inputFD: int(os.Stdin.Fd()), outputFD: outputFileDescriptor(output),
+				httpClient: http.DefaultClient,
+			},
+		)
+	case args[0] == "exec" && args[1] == "stream":
+		return true, runExecStreamCommand(
+			ctx, rawURL, token, tenantRef, subjectRef,
+			args[2:], os.Stdin, output, http.DefaultClient, nil,
+		)
+	default:
+		return false, nil
+	}
+}
+
+func outputFileDescriptor(output io.Writer) int {
+	file, ok := output.(*os.File)
+	if !ok {
+		return -1
+	}
+	return int(file.Fd())
 }
 
 func resolveCommand(args []string) (string, []string, error) {

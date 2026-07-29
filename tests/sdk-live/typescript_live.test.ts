@@ -8,76 +8,21 @@ import {
 import {
   SecondBoxClient,
   encodeJSONBody,
-  type CreateAPIKeyResponse,
   type Operation,
   type Profile,
   type ProfileRevisionSpec,
-  type Project,
   type Sandbox,
-  type ServiceAccount,
-  type ServiceAccountScope,
-} from "../../sdk/typescript/secondbox-client.gen.ts";
+} from "../../sdk/typescript/client.ts";
 
 const composeRunnerPoolName = "compose-live-pool";
 
 test("TypeScript SDK live control-plane contract", async () => {
-  const baseURL = requireLiveEnvironment("SECONDBOX_LIVE_BASE_URL");
-  const adminToken = requireLiveEnvironment("SECONDBOX_LIVE_ADMIN_TOKEN");
-  const admin = new SecondBox(new SecondBoxClient(baseURL, adminToken, fetch));
+  const { application, profile } = await newTypeScriptLiveSubjectFixture();
 
-  const project = await admin.requestJSON<Project>("createProject", {
-    headers: liveIdempotencyHeaders("typescript-create-project"),
-    body: encodeJSONBody({ name: "TypeScript SDK live project" }),
-  });
-  assert.notEqual(project.id, "");
-  assert.equal(project.name, "TypeScript SDK live project");
-
-  const profileName = "typescript-sdk-live";
-  const profile = await admin.requestJSON<Profile>("createProfile", {
-    headers: liveIdempotencyHeaders("typescript-create-profile"),
-    body: encodeJSONBody({
-      name: profileName,
-      spec: liveProfileRevisionSpec(),
-    }),
-  });
-  assert.notEqual(profile.currentRevision.id, "");
-  assert.equal(profile.name, profileName);
-
-  const scopes = [
-    "sandbox:read",
-    "sandbox:lifecycle",
-  ] satisfies readonly ServiceAccountScope[];
-  const account = await admin.requestJSON<ServiceAccount>("createServiceAccount", {
-    pathParameters: { projectId: project.id },
-    headers: liveIdempotencyHeaders("typescript-create-service-account"),
-    body: encodeJSONBody({
-      name: "typescript-sdk-live",
-      scopes,
-      profileGrants: [profileName],
-    }),
-  });
-  assert.notEqual(account.id, "");
-  assert.equal(account.projectId, project.id);
-
-  const key = await admin.requestJSON<CreateAPIKeyResponse>("createAPIKey", {
-    pathParameters: {
-      projectId: project.id,
-      serviceAccountId: account.id,
-    },
-    headers: liveIdempotencyHeaders("typescript-create-api-key"),
-    body: encodeJSONBody({
-      name: "typescript-sdk-live",
-      scopes,
-    }),
-  });
-  assert.notEqual(key.apiKey.id, "");
-  assert.notEqual(key.credential, "");
-
-  const application = new SecondBox(new SecondBoxClient(baseURL, key.credential, fetch));
   const operation = await application.requestJSON<Operation>("createSandbox", {
     headers: liveIdempotencyHeaders("typescript-create-sandbox"),
     body: encodeJSONBody({
-      profile: profileName,
+      profile: profile.name,
       metadata: {
         sdk: "typescript",
         purpose: "live-contract",
@@ -109,6 +54,34 @@ test("TypeScript SDK live control-plane contract", async () => {
       error.problem.requestId !== "",
   );
 });
+
+async function newTypeScriptLiveSubjectFixture(): Promise<{
+  readonly application: SecondBox;
+  readonly profile: Profile;
+}> {
+  const baseURL = requireLiveEnvironment("SECONDBOX_LIVE_BASE_URL");
+  const platformToken = requireLiveEnvironment("SECONDBOX_LIVE_PLATFORM_TOKEN");
+  const application = new SecondBox(new SecondBoxClient(
+    baseURL,
+    platformToken,
+    fetch,
+    "sdk-live-typescript",
+    "sdk-live-typescript-subject",
+  ));
+
+  const profileName = "typescript-sdk-live";
+  const profile = await application.requestJSON<Profile>("createProfile", {
+    headers: liveIdempotencyHeaders("typescript-create-profile"),
+    body: encodeJSONBody({
+      name: profileName,
+      spec: liveProfileRevisionSpec(),
+    }),
+  });
+  assert.notEqual(profile.currentRevision.id, "");
+  assert.equal(profile.name, profileName);
+
+  return { application, profile };
+}
 
 function requireLiveEnvironment(name: string): string {
   const value = process.env[name]?.trim();

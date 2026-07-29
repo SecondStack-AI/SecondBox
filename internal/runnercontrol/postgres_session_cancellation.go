@@ -27,7 +27,8 @@ func (relay *PostgresFrameRelay) CancelPublicDataPlaneSession(
 	defer tx.Rollback(ctx)
 
 	idempotencyOperation := publicDataPlaneCancellationOperation(input)
-	scope := input.ProjectID + "\x1f" + idempotencyOperation + "\x1f" +
+	scope := input.TenantRef + "\x1f" + input.SubjectRef + "\x1f" +
+		idempotencyOperation + "\x1f" +
 		input.SessionID + "\x1f" + input.IdempotencyKey
 	if _, err := tx.Exec(
 		ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, scope,
@@ -48,8 +49,8 @@ func (relay *PostgresFrameRelay) CancelPublicDataPlaneSession(
 	}
 
 	session, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
-		WHERE project_id=$1 AND id=$2 FOR UPDATE`,
-		input.ProjectID, input.SessionID,
+		WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3 FOR UPDATE`,
+		input.TenantRef, input.SubjectRef, input.SessionID,
 	))
 	if err != nil {
 		return DataPlaneSession{}, false, err
@@ -72,8 +73,8 @@ func (relay *PostgresFrameRelay) CancelPublicDataPlaneSession(
 		}
 	}
 	session, err = scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
-		WHERE project_id=$1 AND id=$2`,
-		input.ProjectID, input.SessionID,
+		WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3`,
+		input.TenantRef, input.SubjectRef, input.SessionID,
 	))
 	if err != nil {
 		return DataPlaneSession{}, false, err
@@ -84,10 +85,11 @@ func (relay *PostgresFrameRelay) CancelPublicDataPlaneSession(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.idempotency_records (
-			project_id,operation,target_id,idempotency_key,request_hash,response_resource_id,
-			response_json,response_secret,created_at,expires_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL,$8,$9)`,
-		input.ProjectID, idempotencyOperation, input.SessionID,
+			tenant_ref,subject_ref,operation,target_id,idempotency_key,request_hash,response_resource_id,
+			response_json,created_at,expires_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		input.TenantRef, input.SubjectRef,
+		idempotencyOperation, input.SessionID,
 		input.IdempotencyKey, input.RequestHash, session.ID, responseJSON,
 		input.Now.UTC(), input.IdempotencyEnds.UTC(),
 	); err != nil {
@@ -112,8 +114,10 @@ func lookupPublicDataPlaneCancellation(
 	err := tx.QueryRow(ctx, `
 		SELECT request_hash,response_resource_id,response_json,expires_at
 		FROM secondbox.idempotency_records
-		WHERE project_id=$1 AND operation=$2 AND target_id=$3 AND idempotency_key=$4`,
-		input.ProjectID, idempotencyOperation, input.SessionID, input.IdempotencyKey,
+		WHERE tenant_ref=$1 AND subject_ref=$2
+		  AND operation=$3 AND target_id=$4 AND idempotency_key=$5`,
+		input.TenantRef, input.SubjectRef,
+		idempotencyOperation, input.SessionID, input.IdempotencyKey,
 	).Scan(&requestHash, &responseResourceID, &responseJSON, &expiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DataPlaneSession{}, false, nil
@@ -124,8 +128,10 @@ func lookupPublicDataPlaneCancellation(
 	if !expiresAt.After(input.Now.UTC()) {
 		if _, err := tx.Exec(ctx, `
 			DELETE FROM secondbox.idempotency_records
-			WHERE project_id=$1 AND operation=$2 AND target_id=$3 AND idempotency_key=$4`,
-			input.ProjectID, idempotencyOperation, input.SessionID, input.IdempotencyKey,
+			WHERE tenant_ref=$1 AND subject_ref=$2
+			  AND operation=$3 AND target_id=$4 AND idempotency_key=$5`,
+			input.TenantRef, input.SubjectRef,
+			idempotencyOperation, input.SessionID, input.IdempotencyKey,
 		); err != nil {
 			return DataPlaneSession{}, false, fmt.Errorf("SecondBox expired public session cancellation cleanup: %w", err)
 		}
@@ -152,7 +158,8 @@ func validatePublicDataPlaneCancellation(input PublicDataPlaneCancellation) erro
 		input.SessionOperation == "exec-stream" ||
 		input.SessionKind == "terminal" &&
 			input.SessionOperation == "terminal"
-	if input.ProjectID == "" || input.SandboxID == "" || input.SessionID == "" ||
+	if input.ProjectID == "" || input.TenantRef == "" || input.SubjectRef == "" ||
+		input.SandboxID == "" || input.SessionID == "" ||
 		input.IdempotencyKey == "" || input.RequestHash == "" || input.Reason == "" ||
 		input.Generation < 1 || input.Now.IsZero() ||
 		!input.IdempotencyEnds.After(input.Now) || !validOperation {

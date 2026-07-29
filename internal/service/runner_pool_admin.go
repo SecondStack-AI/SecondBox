@@ -21,9 +21,6 @@ func (service *ControlPlaneService) CreateRunnerPool(
 	principal contracts.Principal,
 	request contracts.CreateRunnerPoolRequest,
 ) (contracts.RunnerPool, error) {
-	if err := requireAdminScope(principal, contracts.ScopeAdminRunners); err != nil {
-		return contracts.RunnerPool{}, err
-	}
 	if err := validateRunnerPoolPolicy(
 		request.Name,
 		request.State,
@@ -46,7 +43,14 @@ func (service *ControlPlaneService) CreateRunnerPool(
 		UpdatedAt:        now,
 	}
 	audit := service.newAudit(ctx, principal, "runner_pool.created", "runner_pool", pool.Name, "", now)
-	return service.store.CreateRunnerPool(ctx, pool, audit)
+	created, err := service.store.CreateRunnerPool(ctx, pool)
+	if err != nil {
+		return contracts.RunnerPool{}, err
+	}
+	if err := service.store.AppendAuditEvent(ctx, audit); err != nil {
+		return contracts.RunnerPool{}, err
+	}
+	return created, nil
 }
 
 // UpdateRunnerPool changes explicit placement policy under optimistic concurrency.
@@ -57,9 +61,6 @@ func (service *ControlPlaneService) UpdateRunnerPool(
 	request contracts.UpdateRunnerPoolRequest,
 	expectedRevision int64,
 ) (contracts.RunnerPool, error) {
-	if err := requireAdminScope(principal, contracts.ScopeAdminRunners); err != nil {
-		return contracts.RunnerPool{}, err
-	}
 	if !profileNamePattern.MatchString(name) {
 		return contracts.RunnerPool{}, errors.New("SecondBox RunnerPool name is invalid")
 	}
@@ -101,7 +102,14 @@ func (service *ControlPlaneService) UpdateRunnerPool(
 	}
 	now := service.now().UTC()
 	audit := service.newAudit(ctx, principal, "runner_pool.updated", "runner_pool", name, "", now)
-	return service.store.UpdateRunnerPool(ctx, name, request, expectedRevision, now, audit)
+	updated, err := service.store.UpdateRunnerPool(ctx, name, request, expectedRevision, now)
+	if err != nil {
+		return contracts.RunnerPool{}, err
+	}
+	if err := service.store.AppendAuditEvent(ctx, audit); err != nil {
+		return contracts.RunnerPool{}, err
+	}
+	return updated, nil
 }
 
 // GetRunnerPool returns one administrative placement boundary.
@@ -110,9 +118,6 @@ func (service *ControlPlaneService) GetRunnerPool(
 	principal contracts.Principal,
 	name string,
 ) (contracts.RunnerPool, error) {
-	if err := requireAdminScope(principal, contracts.ScopeAdminRunners); err != nil {
-		return contracts.RunnerPool{}, err
-	}
 	if !profileNamePattern.MatchString(name) {
 		return contracts.RunnerPool{}, errors.New("SecondBox RunnerPool name is invalid")
 	}
@@ -126,9 +131,6 @@ func (service *ControlPlaneService) ListRunnerPools(
 	limit int,
 	cursor string,
 ) (contracts.RunnerPoolPage, error) {
-	if err := requireAdminScope(principal, contracts.ScopeAdminRunners); err != nil {
-		return contracts.RunnerPoolPage{}, err
-	}
 	return service.store.ListRunnerPools(ctx, boundedLimit(limit), cursor)
 }
 
@@ -138,9 +140,6 @@ func (service *ControlPlaneService) GetRunner(
 	principal contracts.Principal,
 	runnerID string,
 ) (contracts.Runner, error) {
-	if err := requireAdminScope(principal, contracts.ScopeAdminRunners); err != nil {
-		return contracts.Runner{}, err
-	}
 	if !opaqueRunnerIDPattern.MatchString(runnerID) {
 		return contracts.Runner{}, errors.New("SecondBox Runner ID is invalid")
 	}
@@ -155,9 +154,6 @@ func (service *ControlPlaneService) ListRunners(
 	limit int,
 	cursor string,
 ) (contracts.RunnerPage, error) {
-	if err := requireAdminScope(principal, contracts.ScopeAdminRunners); err != nil {
-		return contracts.RunnerPage{}, err
-	}
 	if poolName != "" && !profileNamePattern.MatchString(poolName) {
 		return contracts.RunnerPage{}, errors.New("SecondBox Runner pool filter is invalid")
 	}

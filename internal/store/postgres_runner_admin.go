@@ -19,21 +19,7 @@ const runnerPoolSelect = `
 
 const runnerAdminSelect = `
 	SELECT runner.id,runner.pool_name,runner.name,runner.state,
-	       COALESCE((
-	         SELECT credential.state
-	         FROM secondbox.runner_credentials AS credential
-	         WHERE credential.runner_id=runner.id
-	         ORDER BY
-	           CASE credential.state
-	             WHEN 'active' THEN 0
-	             WHEN 'retiring' THEN 1
-	             WHEN 'revoked' THEN 2
-	             ELSE 3
-	           END,
-	           credential.created_at DESC,
-	           credential.serial_number
-	         LIMIT 1
-	       ),'absent') AS credential_state,
+	       'pre_shared' AS credential_state,
 	       runner.architectures_json,runner.capabilities_json,runner.capacity_json,
 	       runner.protocol_versions_json,runner.last_seen_at,runner.revision,
 	       runner.created_at,runner.updated_at
@@ -43,7 +29,6 @@ const runnerAdminSelect = `
 func (store *PostgresControlPlaneStore) CreateRunnerPool(
 	ctx context.Context,
 	pool contracts.RunnerPool,
-	audit contracts.AuditEvent,
 ) (contracts.RunnerPool, error) {
 	architecturesJSON, capabilitiesJSON, capacityPolicyJSON, err := encodeRunnerPoolPolicy(pool)
 	if err != nil {
@@ -83,9 +68,6 @@ func (store *PostgresControlPlaneStore) CreateRunnerPool(
 	); err != nil {
 		return contracts.RunnerPool{}, fmt.Errorf("SecondBox RunnerPool insert failed: %w", err)
 	}
-	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.RunnerPool{}, err
-	}
 	if err := tx.Commit(ctx); err != nil {
 		return contracts.RunnerPool{}, fmt.Errorf("SecondBox RunnerPool create commit failed: %w", err)
 	}
@@ -99,7 +81,6 @@ func (store *PostgresControlPlaneStore) UpdateRunnerPool(
 	update contracts.UpdateRunnerPoolRequest,
 	expectedRevision int64,
 	now time.Time,
-	audit contracts.AuditEvent,
 ) (contracts.RunnerPool, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
@@ -140,9 +121,6 @@ func (store *PostgresControlPlaneStore) UpdateRunnerPool(
 		capacityPolicyJSON, pool.Revision, pool.UpdatedAt,
 	); err != nil {
 		return contracts.RunnerPool{}, fmt.Errorf("SecondBox RunnerPool update failed: %w", err)
-	}
-	if err := insertAuditEvent(ctx, tx, audit); err != nil {
-		return contracts.RunnerPool{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return contracts.RunnerPool{}, fmt.Errorf("SecondBox RunnerPool update commit failed: %w", err)

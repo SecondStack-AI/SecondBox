@@ -22,7 +22,7 @@ func TestDrainRejectsNewWorkAndCancelsExistingWorkAtProfileGraceBeforeCheckpoint
 	t *testing.T,
 ) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(
 		t, controlPlane, admin, "drain-admission-barrier",
 	)
@@ -30,7 +30,7 @@ func TestDrainRejectsNewWorkAndCancelsExistingWorkAtProfileGraceBeforeCheckpoint
 		t, controlPlane, databaseStore, admin, account, "profile-drain-admission-barrier",
 	)
 	principal := authenticateCredential(t, controlPlane, credential)
-	principal.Scopes = append(principal.Scopes, contracts.ScopeSandboxExec)
+
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "drain-admission-barrier-create",
 		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
@@ -87,7 +87,7 @@ func TestDrainRejectsNewWorkAndCancelsExistingWorkAtProfileGraceBeforeCheckpoint
 			break
 		}
 		if err := relay.MarkOutboundFrameDelivered(
-			t.Context(), delivery.ID, seed.ConnectionOne, now,
+			t.Context(), delivery.ID, seed.ConnectionOne, delivery.ClaimAttempt, now,
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -156,7 +156,7 @@ func TestDrainRejectsNewWorkAndCancelsExistingWorkAtProfileGraceBeforeCheckpoint
 		t.Fatalf("pre-grace drain decision = %#v, %t, %v", decision, found, err)
 	}
 	stillActive, err := relay.GetDataPlaneSession(
-		t.Context(), principal.ProjectID, existing.ID,
+		t.Context(), principal.TenantRef, principal.SubjectRef, existing.ID,
 	)
 	if err != nil || stillActive.State != "running" {
 		t.Fatalf("pre-grace existing work = %#v, %v", stillActive, err)
@@ -187,7 +187,7 @@ func TestDrainRejectsNewWorkAndCancelsExistingWorkAtProfileGraceBeforeCheckpoint
 		t.Fatalf("expired-grace drain decision = %#v, %t, %v", decision, found, err)
 	}
 	cancelling, err := relay.GetDataPlaneSession(
-		t.Context(), principal.ProjectID, existing.ID,
+		t.Context(), principal.TenantRef, principal.SubjectRef, existing.ID,
 	)
 	if err != nil || cancelling.State != "cancelling" ||
 		cancelling.TerminalKind !=
@@ -201,7 +201,8 @@ func TestDrainRejectsNewWorkAndCancelsExistingWorkAtProfileGraceBeforeCheckpoint
 		t.Fatalf("expired-grace cancellation = %#v, %t, %v", cancelDelivery, found, err)
 	}
 	if err := relay.MarkOutboundFrameDelivered(
-		t.Context(), cancelDelivery.ID, seed.ConnectionOne, now.Add(30*time.Second),
+		t.Context(), cancelDelivery.ID, seed.ConnectionOne,
+		cancelDelivery.ClaimAttempt, now.Add(30*time.Second),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +257,7 @@ func TestStartDuringStopSurvivesControlPlaneRestartAndRunnerCommandReconnect(
 	t *testing.T,
 ) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(
 		t, controlPlane, admin, "restart-stop-start",
 	)
@@ -312,20 +313,8 @@ func TestStartDuringStopSurvivesControlPlaneRestartAndRunnerCommandReconnect(
 		}
 	})
 	caCertificate, caPrivateKey := task4CertificateAuthority(t, now)
-	authority := task4CredentialAuthority(t, caCertificate, caPrivateKey, now)
-	enrollment, err := authority.CreateEnrollment(
-		t.Context(),
-		runnercontrol.EnrollmentRequest{
-			TokenID: "enrollment-restart-stop-start", RunnerID: runnerID,
-			PoolName: runnerPoolID, RunnerName: runnerID, ExpiresAt: now.Add(time.Hour),
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	issued, err := authority.RedeemEnrollment(
-		t.Context(), enrollment.Token, task4CertificateRequest(t),
-	)
+	authority := newTask4CredentialAuthority(t, caCertificate, caPrivateKey, now)
+	issued, err := authority.Issue(runnerID, task4CertificateRequest(t))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,8 +1,8 @@
 # SDK, CLI, and Flue quick starts
 
-The versioned OpenAPI contract generates Go, TypeScript, and Python transports. The handwritten Go and TypeScript layers add request decoding, structured errors, explicit operation polling, caller-owned Sandbox handles, and data-plane helpers without redefining wire models. The Go helpers own authenticated `secondbox.exec.v1` and `secondbox.terminal.v1` WebSocket attachments, ordered binary input, resize, credit, output/outcome reads, cancellation, and detach cleanup. The TypeScript helpers apply the same sequencing and terminal rules over injected authenticated connectors so browser and server runtimes can supply their distinct WebSocket credential mechanism without adding a transport dependency. Python remains generated-only because no current in-repository Python consumer needs additional behavior.
+The versioned OpenAPI contract is canonical, while the Go, TypeScript, and Python clients are small hand-maintained transports for actual repository use cases. The Go and TypeScript layers add structured errors, explicit operation polling, caller-owned Sandbox handles, and data-plane helpers. The Go helpers own authenticated `secondbox.exec.v1` and `secondbox.terminal.v1` WebSocket attachments. The TypeScript helpers apply the same sequencing and terminal rules over injected connectors. Python provides a focused trusted-caller lifecycle transport.
 
-The Go package import path is `github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient`. The TypeScript publication name is `@secondstack-ai/secondbox`; its repository manifest remains at the non-release version `0.0.0-development`. `npm run pack:sdk-typescript` performs a clean declaration/runtime build and dry-packs the exact public files without publishing. A release process must replace the development version with the qualified release version and publish the package from the same source commit only after the release matrix passes.
+The Go package import path is `github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient`. The TypeScript publication name is `@secondstack-ai/secondbox`; its repository manifest remains at the non-release version `0.0.0-development`. `npm run pack:sdk-typescript` performs a clean declaration/runtime build and dry-packs the exact public files without publishing.
 
 ## Same-host CLI
 
@@ -13,22 +13,28 @@ go build -o ./dist/secondbox ./cmd/secondbox
 
 ./dist/secondbox \
   --url http://127.0.0.1:8080 \
-  --token "$SECONDBOX_SERVICE_ACCOUNT_TOKEN" \
-  auth check
+  --token "$SECONDBOX_PLATFORM_TOKEN" \
+  --tenant-ref "$TENANT_REF" \
+  --subject-ref "$SUBJECT_REF" \
+  sandboxes list
 ```
 
-Grouped aliases cover every operation in the current contract: projects, service accounts, keys, profiles, RunnerPools, Runners, Sandboxes, operations, leases, buffered and streaming exec negotiation, terminal negotiation, files, checkpoints, artifacts, and ports. Their remaining arguments are generated transport values:
+Grouped aliases cover Profiles, RunnerPools, Runners, Sandboxes, Operations, Leases, buffered and streaming exec, terminal negotiation, files, checkpoints, snapshots, artifacts, and ports. Their remaining arguments are thin transport values:
 
 ```sh
 ./dist/secondbox \
   --url http://127.0.0.1:8080 \
-  --token "$SECONDBOX_SERVICE_ACCOUNT_TOKEN" \
+  --token "$SECONDBOX_PLATFORM_TOKEN" \
+  --tenant-ref "$TENANT_REF" \
+  --subject-ref "$SUBJECT_REF" \
   sandboxes get \
   --path sandboxId=sbx_123
 
 ./dist/secondbox \
   --url http://127.0.0.1:8080 \
-  --token "$SECONDBOX_SERVICE_ACCOUNT_TOKEN" \
+  --token "$SECONDBOX_PLATFORM_TOKEN" \
+  --tenant-ref "$TENANT_REF" \
+  --subject-ref "$SUBJECT_REF" \
   exec \
   --path sandboxId=sbx_123 \
   --header SecondBox-Generation=4 \
@@ -36,7 +42,7 @@ Grouped aliases cover every operation in the current contract: projects, service
   --body ./exec-request.json
 ```
 
-Use `operation <operationId>` to invoke any operation in the generated contract. `--path`, `--query`, and `--header` accept repeatable `name=value` pairs; `--body` accepts a filename or `-`; `--content-type` selects a declared request media type. File bodies and responses stream between the selected file or standard input/output rather than being buffered by the CLI.
+Use `operation <operationId>` to invoke any route in the hand-maintained transport table. `--path`, `--query`, and `--header` accept repeatable `name=value` pairs; `--body` accepts a filename or `-`; `--content-type` selects the declared request media type. File bodies and responses stream between the selected file or standard input/output rather than being buffered by the CLI.
 
 Local operators can inspect a bounded tail or follow the configured control-plane JSON log without supplying API credentials:
 
@@ -78,7 +84,9 @@ The bundle refuses to overwrite an existing path, is created with mode `0600`, a
     '{"type":"credit","bytes":4096}'
 } | ./dist/secondbox \
   --url http://127.0.0.1:8080 \
-  --token "$SECONDBOX_SERVICE_ACCOUNT_TOKEN" \
+  --token "$SECONDBOX_PLATFORM_TOKEN" \
+  --tenant-ref "$TENANT_REF" \
+  --subject-ref "$SUBJECT_REF" \
   exec stream \
   --sandbox sbx_123 \
   --generation 4 \
@@ -97,7 +105,9 @@ The CLI opens a real interactive Terminal and restores the local terminal state 
 ```sh
 ./dist/secondbox \
   --url https://secondbox.example.com \
-  --token "$SECONDBOX_SERVICE_ACCOUNT_TOKEN" \
+  --token "$SECONDBOX_PLATFORM_TOKEN" \
+  --tenant-ref "$TENANT_REF" \
+  --subject-ref "$SUBJECT_REF" \
   sandbox shell \
   --sandbox sbx_123 \
   --generation 4 \
@@ -107,7 +117,7 @@ The CLI opens a real interactive Terminal and restores the local terminal state 
   --detachable
 ```
 
-When standard input and output are terminals, the command enters raw mode, uses the local dimensions, forwards `SIGWINCH` resizes, and restores the original mode before returning. Binary input and merged PTY output remain byte-exact; delivered bytes replenish the bounded output-credit window. `--session term_123` reconnects an existing detachable session instead of creating another guest process and cannot be combined with creation authority. For automation without a TTY, `--rows` and `--columns` select explicit dimensions. The generic `shell create`, `shell reconnect`, and `shell close` aliases remain available for direct generated-contract access. Audit export remains a database-operator command documented in [Observability and diagnostics](observability-and-diagnostics.md), rather than an HTTP or CLI resource.
+When standard input and output are terminals, the command enters raw mode, uses the local dimensions, forwards `SIGWINCH` resizes, and restores the original mode before returning. Binary input and merged PTY output remain byte-exact; delivered bytes replenish the bounded output-credit window. `--session term_123` reconnects an existing detachable session instead of creating another guest process and cannot be combined with creation authority. For automation without a TTY, `--rows` and `--columns` select explicit dimensions. Audit export remains a database-operator command documented in [Observability and diagnostics](observability-and-diagnostics.md), rather than an HTTP or CLI resource.
 
 ## Remote-runner deployment
 
@@ -116,11 +126,13 @@ Clients still connect only to the control-plane HTTPS endpoint when compute runs
 ```sh
 ./dist/secondbox \
   --url https://secondbox.example.com \
-  --token "$SECONDBOX_SERVICE_ACCOUNT_TOKEN" \
+  --token "$SECONDBOX_PLATFORM_TOKEN" \
+  --tenant-ref "$TENANT_REF" \
+  --subject-ref "$SUBJECT_REF" \
   profiles list
 ```
 
-Runner enrollment, authenticated outbound runner connectivity, and runner placement are operator concerns. SDK request shapes and Sandbox lifecycle calls are identical for same-host and remote-runner deployments.
+Runner certificate issuance, authenticated outbound Runner connectivity, and placement are operator concerns. SDK request shapes and Sandbox lifecycle calls are identical for same-host and remote-runner deployments.
 
 ## TypeScript lifecycle ownership
 
@@ -135,10 +147,10 @@ import {
   SecondBoxClient,
   type Operation,
   type Sandbox,
-} from "./sdk/typescript/secondbox-client.gen.ts";
+} from "./sdk/typescript/client.ts";
 
 const api = new SecondBox(
-  new SecondBoxClient(endpoint, serviceAccountToken, fetch),
+  new SecondBoxClient(endpoint, platformToken, fetch, tenantRef, subjectRef),
 );
 
 const created = await api.requestJSON<Sandbox | Operation>("createSandbox", {

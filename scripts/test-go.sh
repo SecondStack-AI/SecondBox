@@ -8,7 +8,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 go test ./... -count=1
 go vet ./...
-python3 -c 'import ast, pathlib; ast.parse(pathlib.Path("sdk/python/secondbox_client_gen.py").read_text())'
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=sdk/python python3 -m unittest discover -s sdk/python -p 'test_*.py'
 
 cd "$repo_root/runner"
 scripts/ci_paths_test.sh

@@ -19,7 +19,7 @@ import (
 
 func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "lifecycle-http")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-lifecycle-http")
 	_, _, otherCredential := createProjectAccountAndCredential(t, controlPlane, admin, "lifecycle-http-other")
@@ -32,7 +32,7 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler, err := api.NewHandler(api.HandlerConfig{
-		Service: controlPlane, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Service: controlPlane, PlatformToken: testPlatformToken, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		MaximumDataPlaneBodyBytes: 4 << 20,
 	})
 	if err != nil {
@@ -146,7 +146,7 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 
 func TestHTTPRequestIDCorrelatesOperationAuditAndStructuredLog(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	project, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "request-correlation")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-request-correlation")
 	principal := authenticateCredential(t, controlPlane, credential)
@@ -161,6 +161,7 @@ func TestHTTPRequestIDCorrelatesOperationAuditAndStructuredLog(t *testing.T) {
 	var logOutput bytes.Buffer
 	handler, err := api.NewHandler(api.HandlerConfig{
 		Service:                   controlPlane,
+		PlatformToken:             testPlatformToken,
 		Logger:                    slog.New(slog.NewJSONHandler(&logOutput, nil)),
 		MaximumDataPlaneBodyBytes: 4 << 20,
 	})
@@ -180,7 +181,7 @@ func TestHTTPRequestIDCorrelatesOperationAuditAndStructuredLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Header.Set("Authorization", "Bearer "+credential)
+	setPlatformAuthorization(t, request, credential)
 	request.Header.Set("Idempotency-Key", "request-correlation-start")
 	request.Header.Set("If-Match", `"revision-`+strconv.FormatInt(sandbox.Revision, 10)+`"`)
 	request.Header.Set("X-Request-ID", requestID)
@@ -233,7 +234,7 @@ func TestHTTPRequestIDCorrelatesOperationAuditAndStructuredLog(t *testing.T) {
 
 func TestWaitInspectLeasePingAndTouchHTTPContract(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "activity-http")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-activity-http")
 	_, _, otherCredential := createProjectAccountAndCredential(t, controlPlane, admin, "activity-http-other")
@@ -270,7 +271,7 @@ func TestWaitInspectLeasePingAndTouchHTTPContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler, err := api.NewHandler(api.HandlerConfig{
-		Service: controlPlane, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Service: controlPlane, PlatformToken: testPlatformToken, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		MaximumDataPlaneBodyBytes: 4 << 20,
 	})
 	if err != nil {
@@ -484,7 +485,7 @@ func lifecycleHTTPRequestWithLeaseAndRevision(
 	if err != nil {
 		t.Fatal(err)
 	}
-	request.Header.Set("Authorization", "Bearer "+credential)
+	setPlatformAuthorization(t, request, credential)
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}

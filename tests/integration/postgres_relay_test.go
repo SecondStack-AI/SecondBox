@@ -18,7 +18,7 @@ import (
 
 func TestPostgresRelayPublicCancellationIsAtomicAndKeyScoped(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	project, account, credential := createProjectAccountAndCredential(
 		t, controlPlane, admin, "relay-public-cancel",
 	)
@@ -105,6 +105,7 @@ func TestPostgresRelayPublicCancellationIsAtomicAndKeyScoped(t *testing.T) {
 
 	cancellation := runnercontrol.PublicDataPlaneCancellation{
 		ProjectID: project.ID, SandboxID: sandbox.ID, SessionID: session.ID,
+		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
 		SessionKind: "exec", SessionOperation: "exec-stream",
 		IdempotencyKey: "relay-public-cancel-atomic-failure",
 		RequestHash:    "relay-public-cancel-fingerprint", Reason: "public cancellation",
@@ -116,7 +117,9 @@ func TestPostgresRelayPublicCancellationIsAtomicAndKeyScoped(t *testing.T) {
 	); err == nil {
 		t.Fatal("public cancellation succeeded despite idempotency record failure")
 	}
-	unchanged, err := relay.GetDataPlaneSession(t.Context(), project.ID, session.ID)
+	unchanged, err := relay.GetDataPlaneSession(
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,9 +140,9 @@ func TestPostgresRelayPublicCancellationIsAtomicAndKeyScoped(t *testing.T) {
 	var failureRecordCount int
 	if err := pool.QueryRow(t.Context(), `
 		SELECT count(*) FROM secondbox.idempotency_records
-		WHERE project_id=$1 AND operation='exec-stream-cancel'
-		  AND target_id=$2 AND idempotency_key=$3`,
-		project.ID, session.ID, cancellation.IdempotencyKey,
+		WHERE tenant_ref=$1 AND subject_ref=$2 AND operation='exec-stream-cancel'
+		  AND target_id=$3 AND idempotency_key=$4`,
+		principal.TenantRef, principal.SubjectRef, session.ID, cancellation.IdempotencyKey,
 	).Scan(&failureRecordCount); err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +202,7 @@ func TestPostgresRelayPublicCancellationIsAtomicAndKeyScoped(t *testing.T) {
 
 func TestPostgresRelayDurablyFencesSequencesAndReconnectDelivery(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "postgres-relay")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-postgres-relay")
 	principal := authenticateCredential(t, controlPlane, credential)
@@ -264,7 +267,8 @@ func TestPostgresRelayDurablyFencesSequencesAndReconnectDelivery(t *testing.T) {
 		)
 	}
 	if err := relay.MarkOutboundFrameDelivered(
-		t.Context(), reclaimed.ID, seed.ConnectionTwo, now.Add(time.Second),
+		t.Context(), reclaimed.ID, seed.ConnectionTwo,
+		reclaimed.ClaimAttempt, now.Add(time.Second),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +312,7 @@ func TestPostgresRelayDurablyFencesSequencesAndReconnectDelivery(t *testing.T) {
 	}, now.Add(3*time.Second)); err != nil || !inserted {
 		t.Fatalf("terminal persist = %t, %v", inserted, err)
 	}
-	completed, err := relay.GetDataPlaneSession(t.Context(), principal.ProjectID, session.ID)
+	completed, err := relay.GetDataPlaneSession(t.Context(), principal.TenantRef, principal.SubjectRef, session.ID)
 	if err != nil || completed.State != "completed" ||
 		!bytes.Equal(completed.Stdout, []byte{0, 1, 0xff}) {
 		t.Fatalf("completed session = %#v, %v", completed, err)
@@ -338,7 +342,7 @@ func TestPostgresRelayDurablyFencesSequencesAndReconnectDelivery(t *testing.T) {
 	if !lastActivityAt.Equal(now.Add(3 * time.Second)) {
 		t.Fatalf("terminal activity = %s", lastActivityAt)
 	}
-	if _, err := relay.GetDataPlaneSession(t.Context(), principal.ProjectID, session.ID); err != nil {
+	if _, err := relay.GetDataPlaneSession(t.Context(), principal.TenantRef, principal.SubjectRef, session.ID); err != nil {
 		t.Fatal(err)
 	}
 	var afterPolling time.Time
@@ -377,7 +381,8 @@ func TestPostgresRelayDurablyFencesSequencesAndReconnectDelivery(t *testing.T) {
 			t.Fatalf("limited session initial delivery = %#v, %t, %v", delivery, found, err)
 		}
 		if err := relay.MarkOutboundFrameDelivered(
-			t.Context(), delivery.ID, seed.ConnectionOne, now.Add(4*time.Second),
+			t.Context(), delivery.ID, seed.ConnectionOne,
+			delivery.ClaimAttempt, now.Add(4*time.Second),
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -388,7 +393,7 @@ func TestPostgresRelayDurablyFencesSequencesAndReconnectDelivery(t *testing.T) {
 	}, now.Add(5*time.Second)); err != nil || inserted {
 		t.Fatalf("over-limit response persistence = %t, %v", inserted, err)
 	}
-	limitedState, err := relay.GetDataPlaneSession(t.Context(), principal.ProjectID, limited.ID)
+	limitedState, err := relay.GetDataPlaneSession(t.Context(), principal.TenantRef, principal.SubjectRef, limited.ID)
 	if err != nil || limitedState.State != "cancelling" ||
 		limitedState.TerminalKind != runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_OUTPUT_EXHAUSTED.String() {
 		t.Fatalf("over-limit cancellation state = %#v, %v", limitedState, err)
@@ -400,7 +405,8 @@ func TestPostgresRelayDurablyFencesSequencesAndReconnectDelivery(t *testing.T) {
 		t.Fatalf("over-limit cancel claim = %#v, %t, %v", limitCancel, found, err)
 	}
 	if err := relay.MarkOutboundFrameDelivered(
-		t.Context(), limitCancel.ID, seed.ConnectionOne, now.Add(5*time.Second),
+		t.Context(), limitCancel.ID, seed.ConnectionOne,
+		limitCancel.ClaimAttempt, now.Add(5*time.Second),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -443,7 +449,8 @@ func TestPostgresRelayDurablyFencesSequencesAndReconnectDelivery(t *testing.T) {
 			t.Fatalf("cancel session initial delivery = %#v, %t, %v", delivery, found, err)
 		}
 		if err := relay.MarkOutboundFrameDelivered(
-			t.Context(), delivery.ID, seed.ConnectionOne, now.Add(4*time.Second),
+			t.Context(), delivery.ID, seed.ConnectionOne,
+			delivery.ClaimAttempt, now.Add(4*time.Second),
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -462,7 +469,7 @@ func TestPostgresRelayDurablyFencesSequencesAndReconnectDelivery(t *testing.T) {
 		t.Fatalf("forced drain cancellation count = %d, %v", cancelCount, err)
 	}
 	forcedCancellation, err := relay.GetDataPlaneSession(
-		t.Context(), principal.ProjectID, cancelling.ID,
+		t.Context(), principal.TenantRef, principal.SubjectRef, cancelling.ID,
 	)
 	if err != nil || forcedCancellation.State != "cancelling" ||
 		forcedCancellation.CompletedAt != nil ||
@@ -483,7 +490,8 @@ func TestPostgresRelayDurablyFencesSequencesAndReconnectDelivery(t *testing.T) {
 		t.Fatalf("cancel reconnect claim = %#v, %t, %v", cancelReconnect, found, err)
 	}
 	if err := relay.MarkOutboundFrameDelivered(
-		t.Context(), cancelReconnect.ID, seed.ConnectionTwo, now.Add(31*time.Second),
+		t.Context(), cancelReconnect.ID, seed.ConnectionTwo,
+		cancelReconnect.ClaimAttempt, now.Add(31*time.Second),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -501,7 +509,7 @@ func TestPostgresRelayDurablyFencesSequencesAndReconnectDelivery(t *testing.T) {
 	}, now.Add(32*time.Second)); err != nil || !inserted {
 		t.Fatalf("draining cancel terminal = %t, %v", inserted, err)
 	}
-	cancelled, err := relay.GetDataPlaneSession(t.Context(), principal.ProjectID, cancelling.ID)
+	cancelled, err := relay.GetDataPlaneSession(t.Context(), principal.TenantRef, principal.SubjectRef, cancelling.ID)
 	if err != nil || cancelled.State != "completed" ||
 		cancelled.TerminalKind != runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED.String() {
 		t.Fatalf("cancelled session = %#v, %v", cancelled, err)
@@ -510,7 +518,7 @@ func TestPostgresRelayDurablyFencesSequencesAndReconnectDelivery(t *testing.T) {
 
 func TestPostgresRelayPreservesDistinctOperationCorrelationAcrossReconnect(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "relay-correlation")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-relay-correlation")
 	principal := authenticateCredential(t, controlPlane, credential)
@@ -597,7 +605,8 @@ func TestPostgresRelayPreservesDistinctOperationCorrelationAcrossReconnect(t *te
 		execSession.ID, sandbox.ID, execLease.ID, seed,
 	)
 	if err := relay.MarkOutboundFrameDelivered(
-		t.Context(), execReplay.ID, seed.ConnectionTwo, now.Add(2*time.Second),
+		t.Context(), execReplay.ID, seed.ConnectionTwo,
+		execReplay.ClaimAttempt, now.Add(2*time.Second),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -608,7 +617,8 @@ func TestPostgresRelayPreservesDistinctOperationCorrelationAcrossReconnect(t *te
 		t.Fatalf("Exec credit claim = %#v, %t, %v", execCredit, found, err)
 	}
 	if err := relay.MarkOutboundFrameDelivered(
-		t.Context(), execCredit.ID, seed.ConnectionTwo, now.Add(2*time.Second),
+		t.Context(), execCredit.ID, seed.ConnectionTwo,
+		execCredit.ClaimAttempt, now.Add(2*time.Second),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -632,7 +642,7 @@ func TestPostgresRelayPreservesDistinctOperationCorrelationAcrossReconnect(t *te
 
 func TestPostgresRelayDurablySequencesPublicStreamingExecFrames(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "public-stream")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-public-stream")
 	principal := authenticateCredential(t, controlPlane, credential)
@@ -677,7 +687,9 @@ func TestPostgresRelayDurablySequencesPublicStreamingExecFrames(t *testing.T) {
 	if err != nil || !found || open.Message.GetExec().GetOpen() == nil {
 		t.Fatalf("stream open claim = %#v, %t, %v", open, found, err)
 	}
-	if err := relay.MarkOutboundFrameDelivered(t.Context(), open.ID, seed.ConnectionOne, now.Add(time.Second)); err != nil {
+	if err := relay.MarkOutboundFrameDelivered(
+		t.Context(), open.ID, seed.ConnectionOne, open.ClaimAttempt, now.Add(time.Second),
+	); err != nil {
 		t.Fatal(err)
 	}
 	if unexpected, found, err := relay.ClaimOutboundFrame(
@@ -686,25 +698,25 @@ func TestPostgresRelayDurablySequencesPublicStreamingExecFrames(t *testing.T) {
 		t.Fatalf("stream received ungranted output credit = %#v, %t, %v", unexpected, found, err)
 	}
 	if inserted, err := relay.AppendExecClientFrame(
-		t.Context(), principal.ProjectID, session.ID,
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID,
 		runnercontrol.ExecClientFrame{Sequence: 0, Input: []byte("hello")}, now.Add(2*time.Second),
 	); err != nil || !inserted {
 		t.Fatalf("append stdin = %t, %v", inserted, err)
 	}
 	if inserted, err := relay.AppendExecClientFrame(
-		t.Context(), principal.ProjectID, session.ID,
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID,
 		runnercontrol.ExecClientFrame{Sequence: 0, Input: []byte("hello")}, now.Add(2*time.Second),
 	); err != nil || inserted {
 		t.Fatalf("duplicate stdin = %t, %v", inserted, err)
 	}
 	if _, err := relay.AppendExecClientFrame(
-		t.Context(), principal.ProjectID, session.ID,
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID,
 		runnercontrol.ExecClientFrame{Sequence: 3, Credit: 12}, now.Add(2*time.Second),
 	); !errors.Is(err, runnercontrol.ErrRelaySequence) {
 		t.Fatalf("gapped public sequence error = %v", err)
 	}
 	if inserted, err := relay.AppendExecClientFrame(
-		t.Context(), principal.ProjectID, session.ID,
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID,
 		runnercontrol.ExecClientFrame{
 			Sequence: 1, Input: []byte{}, EndInput: true,
 		}, now.Add(2*time.Second),
@@ -712,7 +724,7 @@ func TestPostgresRelayDurablySequencesPublicStreamingExecFrames(t *testing.T) {
 		t.Fatalf("append stdin EOF = %t, %v", inserted, err)
 	}
 	if inserted, err := relay.AppendExecClientFrame(
-		t.Context(), principal.ProjectID, session.ID,
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID,
 		runnercontrol.ExecClientFrame{
 			Sequence: 1, Input: []byte{}, EndInput: true,
 		}, now.Add(2*time.Second),
@@ -720,20 +732,20 @@ func TestPostgresRelayDurablySequencesPublicStreamingExecFrames(t *testing.T) {
 		t.Fatalf("duplicate stdin EOF = %t, %v", inserted, err)
 	}
 	if _, err := relay.AppendExecClientFrame(
-		t.Context(), principal.ProjectID, session.ID,
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID,
 		runnercontrol.ExecClientFrame{Sequence: 2, Input: []byte("after EOF")},
 		now.Add(2*time.Second),
 	); !errors.Is(err, runnercontrol.ErrRelaySequence) {
 		t.Fatalf("stdin after EOF error = %v", err)
 	}
 	if _, err := relay.AppendExecClientFrame(
-		t.Context(), principal.ProjectID, session.ID,
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID,
 		runnercontrol.ExecClientFrame{Sequence: 2, Credit: 13}, now.Add(2*time.Second),
 	); !errors.Is(err, runnercontrol.ErrRelayFrameLimit) {
 		t.Fatalf("credit beyond the negotiated slow-client window error = %v", err)
 	}
 	if inserted, err := relay.AppendExecClientFrame(
-		t.Context(), principal.ProjectID, session.ID,
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID,
 		runnercontrol.ExecClientFrame{Sequence: 2, Credit: 12}, now.Add(2*time.Second),
 	); err != nil || !inserted {
 		t.Fatalf("append credit = %t, %v", inserted, err)
@@ -745,7 +757,9 @@ func TestPostgresRelayDurablySequencesPublicStreamingExecFrames(t *testing.T) {
 		input.Message.GetExec().GetInput().GetEndOfInput() {
 		t.Fatalf("stream stdin claim = %#v, %t, %v", input, found, err)
 	}
-	if err := relay.MarkOutboundFrameDelivered(t.Context(), input.ID, seed.ConnectionOne, now.Add(3*time.Second)); err != nil {
+	if err := relay.MarkOutboundFrameDelivered(
+		t.Context(), input.ID, seed.ConnectionOne, input.ClaimAttempt, now.Add(3*time.Second),
+	); err != nil {
 		t.Fatal(err)
 	}
 	endInput, found, err := relay.ClaimOutboundFrame(
@@ -755,7 +769,10 @@ func TestPostgresRelayDurablySequencesPublicStreamingExecFrames(t *testing.T) {
 		!endInput.Message.GetExec().GetInput().GetEndOfInput() {
 		t.Fatalf("stream stdin EOF claim = %#v, %t, %v", endInput, found, err)
 	}
-	if err := relay.MarkOutboundFrameDelivered(t.Context(), endInput.ID, seed.ConnectionOne, now.Add(3*time.Second)); err != nil {
+	if err := relay.MarkOutboundFrameDelivered(
+		t.Context(), endInput.ID, seed.ConnectionOne, endInput.ClaimAttempt,
+		now.Add(3*time.Second),
+	); err != nil {
 		t.Fatal(err)
 	}
 	credit, found, err := relay.ClaimOutboundFrame(
@@ -764,7 +781,9 @@ func TestPostgresRelayDurablySequencesPublicStreamingExecFrames(t *testing.T) {
 	if err != nil || !found || credit.Message.GetExec().GetCredit().GetByteCount() != 12 {
 		t.Fatalf("stream credit claim = %#v, %t, %v", credit, found, err)
 	}
-	if err := relay.MarkOutboundFrameDelivered(t.Context(), credit.ID, seed.ConnectionOne, now.Add(3*time.Second)); err != nil {
+	if err := relay.MarkOutboundFrameDelivered(
+		t.Context(), credit.ID, seed.ConnectionOne, credit.ClaimAttempt, now.Add(3*time.Second),
+	); err != nil {
 		t.Fatal(err)
 	}
 	for index, output := range []*runnerv1.ExecOutput{
@@ -797,7 +816,7 @@ func TestPostgresRelayDurablySequencesPublicStreamingExecFrames(t *testing.T) {
 	}, now.Add(5*time.Second)); err != nil || !inserted {
 		t.Fatalf("persist stream terminal = %t, %v", inserted, err)
 	}
-	frames, err := relay.ListExecServerFrames(t.Context(), principal.ProjectID, session.ID, -1, 16)
+	frames, err := relay.ListExecServerFrames(t.Context(), principal.TenantRef, principal.SubjectRef, session.ID, -1, 16)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -888,16 +907,6 @@ func seedRelayReadyAssignment(
 		SET state='ready',desired_state='running',current_instance_id=$2,updated_at=$3
 		WHERE id=$1`,
 		sandbox.ID, fence.InstanceId, now,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(t.Context(), `
-		INSERT INTO secondbox.runner_credentials (
-			serial_number,runner_id,certificate_fingerprint_sha256,state,
-			not_before,not_after,rotated_from_serial,revoked_at,created_at,updated_at
-		) VALUES ($1,$2,$3,'active',$4,$5,'',NULL,$4,$4)`,
-		credentialSerial, runnerID, "fingerprint_relay_"+sandbox.ID,
-		now.Add(-time.Minute), now.Add(time.Hour),
 	); err != nil {
 		t.Fatal(err)
 	}

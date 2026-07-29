@@ -11,18 +11,18 @@ import (
 
 // ReconcileStore owns durable claims and compare-and-swap transition commits.
 type ReconcileStore interface {
-	ClaimLifecycle(context.Context, string, time.Time, time.Duration) (ports.LifecycleReconcileClaim, bool, error)
-	ApplyLifecycleAction(context.Context, ports.LifecycleReconcileClaim, string, string, time.Time, time.Time) error
+	ClaimLifecycle(ctx context.Context, workerID string, now time.Time, claimDuration time.Duration) (ports.LifecycleReconcileClaim, bool, error)
+	ApplyLifecycleAction(ctx context.Context, claim ports.LifecycleReconcileClaim, action, terminationReason string, now, nextReconcileAt time.Time) error
 }
 
 // EffectExecutor performs one durable runner or object-store effect.
 type EffectExecutor interface {
 	ExecuteLifecycleEffect(
-		context.Context,
-		ports.LifecycleReconcileClaim,
-		Decision,
-		time.Time,
-		time.Time,
+		ctx context.Context,
+		claim ports.LifecycleReconcileClaim,
+		decision Decision,
+		now time.Time,
+		nextReconcileAt time.Time,
 	) error
 }
 

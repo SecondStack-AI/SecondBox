@@ -8,20 +8,17 @@ All identifiers are server-generated opaque strings. Timestamps are UTC RFC 3339
 
 | Record | Owner and lifecycle |
 | --- | --- |
-| `Project` | Operator-created application isolation boundary. It owns service accounts, Sandboxes, retained bytes, and quota accounting. Disablement rejects new application work without rewriting historical audit. |
-| `ServiceAccount` | Belongs to one Project. It has a display name, state, granted profile names, and allowed scopes. It is not an end-user identity. |
-| `APIKey` | Belongs to one ServiceAccount. Only a keyed hash and non-secret prefix are stored. It has scopes, creation/expiry/revocation timestamps, and last-use evidence. Plaintext is returned once at creation or rotation. |
 | `Profile` | Operator-owned stable name and mutable head. It is enabled or disabled and points to its current immutable ProfileRevision. There is no implicit profile. |
 | `ProfileRevision` | Immutable resolved policy, resources, artifacts, and runner-pool selector. A Sandbox pins one revision for its lifetime. |
-| `Sandbox` | Belongs to one Project and one ProfileRevision. It owns a Workspace, desired and observed state, current generation, lifecycle timestamps, bounded client metadata, and optional current Instance. |
+| `Sandbox` | Belongs to one asserted tenant/subject pair and one ProfileRevision. It owns a Workspace, desired and observed state, current generation, lifecycle timestamps, bounded client metadata, and optional current Instance. |
 | `Instance` | Belongs to one Sandbox generation. It records state, Assignment, start/ready/stop timestamps, and one stable termination reason. It contains no public backend or host location. |
 | `Assignment` | Internal authority joining one Sandbox generation to one Runner. It contains the fencing token, capability snapshot, resolved artifacts, state, and proof of release. |
-| `Lease` | Project-scoped, bounded authority for useful activity against one Sandbox generation. It expires, is released, or is fenced; it never outlives its generation. |
+| `Lease` | Subject-scoped, bounded authority for useful activity against one Sandbox generation. It expires, is released, or is fenced; it never outlives its generation. |
 | `Workspace` | Belongs to one Sandbox. It names the exclusive active materialization, last committed checkpoint, retained-byte evidence, and retention state. |
-| `Snapshot` | Project-owned immutable durable disk-state record derived from a committed checkpoint. It has content hash, byte size, source generation, compatibility metadata, and retention timestamps. |
-| `Artifact` | Project-owned immutable application exchange object with name, media type, size, checksum, source generation, and retention timestamps. It is separate from a workspace path. |
+| `Snapshot` | Subject-owned immutable durable disk-state record derived from a committed checkpoint. It has content hash, byte size, source generation, compatibility metadata, and retention timestamps. |
+| `Artifact` | Subject-owned immutable application exchange object with name, media type, size, checksum, source generation, and retention timestamps. It is separate from a workspace path. |
 | `RunnerPool` | Operator-owned placement and trust boundary. It declares allowed architectures, capabilities, capacity policy, and enrolled Runners. |
-| `Runner` | Operator-owned enrolled execution identity. It belongs to one pool and records credential state, advertised/verified capabilities, capacity, protocol versions, health, and drain state. |
+| `Runner` | Operator-provisioned execution identity. It belongs to one pool and records pre-shared credential state, advertised/verified capabilities, capacity, protocol versions, health, and drain state. |
 
 An `Operation` is the public asynchronous observation record for lifecycle mutations. It identifies the requested action, target Sandbox, status, request correlation, timestamps, and typed terminal result. It does not grant data-plane access.
 

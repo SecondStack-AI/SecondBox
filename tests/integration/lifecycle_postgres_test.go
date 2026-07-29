@@ -29,13 +29,10 @@ import (
 
 func TestDurableLifecycleGenerationActivityAndWorkspaceAuthority(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "lifecycle")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-lifecycle")
 	principal := authenticateCredential(t, controlPlane, credential)
-	principal.Scopes = append(principal.Scopes,
-		contracts.ScopeSandboxExec, contracts.ScopeSandboxFiles, contracts.ScopeSandboxPorts,
-	)
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "lifecycle-create",
 		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
@@ -423,13 +420,14 @@ func TestDurableLifecycleGenerationActivityAndWorkspaceAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, artifactPolicy, err := databaseStore.GetSandboxLifecyclePolicy(
-		t.Context(), sandbox.ProjectID, sandbox.ID,
+		t.Context(), sandbox.TenantRef, sandbox.SubjectRef, sandbox.ID,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	artifact := contracts.Artifact{
 		ID: "art_lifecycle", ProjectID: sandbox.ProjectID, SandboxID: sandbox.ID,
+		TenantRef: sandbox.TenantRef, SubjectRef: sandbox.SubjectRef,
 		SourceGeneration: nextGeneration, Name: "result.tar", MediaType: "application/x-tar",
 		SizeBytes: 1024,
 		SHA256:    "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -508,11 +506,11 @@ func TestDurableLifecycleGenerationActivityAndWorkspaceAuthority(t *testing.T) {
 
 func TestExpiredLeaseSessionCannotSuppressLifecycleReclamation(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "expired-session")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-expired-session")
 	principal := authenticateCredential(t, controlPlane, credential)
-	principal.Scopes = append(principal.Scopes, contracts.ScopeSandboxExec)
+
 	sandbox, _, err := controlPlane.CreateSandbox(
 		t.Context(), principal, "expired-session-create",
 		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
@@ -592,7 +590,7 @@ func TestExpiredLeaseSessionCannotSuppressLifecycleReclamation(t *testing.T) {
 
 func TestCheckpointEffectDeadlineRetriesThenFailsTerminally(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "checkpoint-retry")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-checkpoint-retry")
 	principal := authenticateCredential(t, controlPlane, credential)
@@ -763,7 +761,7 @@ func TestCheckpointEffectDeadlineRetriesThenFailsTerminally(t *testing.T) {
 
 func TestStopEffectDeadlineRetriesThenFailsTerminally(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "stop-retry")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-stop-retry")
 	principal := authenticateCredential(t, controlPlane, credential)
@@ -944,7 +942,7 @@ func TestStopEffectDeadlineRetriesThenFailsTerminally(t *testing.T) {
 
 func TestAssignmentWorkerBoundsMissingResultAndFenceResult(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "assignment-retry")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-assignment-retry")
 	principal := authenticateCredential(t, controlPlane, credential)
@@ -1175,7 +1173,7 @@ func (checkpointUnusedSessionCanceller) CancelSandboxSessions(
 
 func TestLifecycleWorkerPreservesRunnerEffectAndCompletesDatabaseOnlyDelete(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "worker-boundary")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-worker-boundary")
 	principal := authenticateCredential(t, controlPlane, credential)
@@ -1297,7 +1295,7 @@ func TestLifecycleWorkerPreservesRunnerEffectAndCompletesDatabaseOnlyDelete(t *t
 
 func TestFinishStopCompletesEveryCompatiblePendingLifecycleOperation(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "stop-operations")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-stop-operations")
 	principal := authenticateCredential(t, controlPlane, credential)
@@ -1484,7 +1482,7 @@ func TestLifecycleReconcilerPersistsPolicyTerminationCauses(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			slug := strings.ReplaceAll(test.name, "_", "-")
 			controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-			admin := controlPlane.BootstrapAdmin()
+			admin := fixtureAdmin(t, controlPlane)
 			_, account, credential := createProjectAccountAndCredential(
 				t, controlPlane, admin, "termination-"+slug,
 			)
@@ -1573,7 +1571,7 @@ func TestLifecycleReconcilerPersistsPolicyTerminationCauses(t *testing.T) {
 
 func TestCheckpointReceiverPublishesAndStreamsCrossRunnerRestoreIdempotently(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "checkpoint-receiver")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-checkpoint-receiver")
 	principal := authenticateCredential(t, controlPlane, credential)

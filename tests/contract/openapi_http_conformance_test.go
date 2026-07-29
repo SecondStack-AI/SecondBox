@@ -29,18 +29,6 @@ type auditedHTTPOperation struct {
 }
 
 var auditedV1HTTPOperations = map[string]auditedHTTPOperation{
-	"listProjects":             {"listProjects", "200", "ProjectPage", nil, nil},
-	"createProject":            {"createProject", "201", "Project", []string{"Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},
-	"getProject":               {"getProject", "200", "Project", nil, []string{"ETag"}},
-	"updateProject":            {"updateProject", "200", "Project", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
-	"listServiceAccounts":      {"listServiceAccounts", "200", "ServiceAccountPage", nil, nil},
-	"createServiceAccount":     {"createServiceAccount", "201", "ServiceAccount", []string{"Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},
-	"getServiceAccount":        {"getServiceAccount", "200", "ServiceAccount", nil, []string{"ETag"}},
-	"updateServiceAccount":     {"updateServiceAccount", "200", "ServiceAccount", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
-	"listAPIKeys":              {"listAPIKeys", "200", "APIKeyPage", nil, nil},
-	"createAPIKey":             {"createAPIKey", "201", "CreateAPIKeyResponse", []string{"Idempotency-Key"}, []string{"Idempotency-Replayed"}},
-	"revokeAPIKey":             {"mutateAPIKey", "200", "APIKey", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
-	"rotateAPIKey":             {"mutateAPIKey", "200", "CreateAPIKeyResponse", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
 	"listProfiles":             {"listProfiles", "200", "ProfilePage", nil, nil},
 	"createProfile":            {"createProfile", "201", "Profile", []string{"Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},
 	"getProfile":               {"getProfile", "200", "Profile", nil, []string{"ETag"}},
@@ -129,7 +117,9 @@ func TestCanonicalOpenAPIHTTPConformanceInventory(t *testing.T) {
 func TestCanonicalOpenAPIOperationsReachHTTPRouter(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	httpHandler, err := api.NewHandler(api.HandlerConfig{
-		Service: &service.ControlPlaneService{}, Logger: logger, MaximumDataPlaneBodyBytes: 1024,
+		Service: &service.ControlPlaneService{}, Logger: logger,
+		PlatformToken:             "contract-platform-token-at-least-24-bytes",
+		MaximumDataPlaneBodyBytes: 1024,
 	})
 	if err != nil {
 		t.Fatalf("construct SecondBox HTTP handler: %v", err)

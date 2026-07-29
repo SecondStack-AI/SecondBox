@@ -239,6 +239,7 @@ func (relay *recordingFrameRelay) MarkOutboundFrameDelivered(
 	_ context.Context,
 	id string,
 	_ string,
+	_ int64,
 	_ time.Time,
 ) error {
 	if id != relay.delivery.ID {
@@ -271,6 +272,7 @@ type relayCredentialVerifier struct{}
 func (relayCredentialVerifier) VerifyClientCertificate(
 	context.Context,
 	*x509.Certificate,
+	string,
 ) (RunnerIdentity, error) {
 	return RunnerIdentity{}, nil
 }

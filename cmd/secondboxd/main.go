@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -107,10 +106,9 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		return err
 	}
 	controlPlane, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		Store: controlPlaneStore, BootstrapAdminToken: processConfig.BootstrapAdminToken,
-		APIKeyHashSecret:    []byte(processConfig.APIKeyHashSecret),
-		DefaultProjectQuota: processConfig.DefaultProjectQuota,
-		DefaultProfileQuota: processConfig.DefaultProfileQuota,
+		Store:               controlPlaneStore,
+		PlatformToken:       processConfig.PlatformToken,
+		DefaultSubjectQuota: processConfig.DefaultSubjectQuota,
 		Now:                 service.SystemClock, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		ObjectStore:           immutableObjects,
@@ -120,31 +118,18 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	if err := controlPlane.InitializeBootstrapAdmin(processContext); err != nil {
-		return err
-	}
-	runnerCA, runnerCASigner, err := runnercontrol.LoadCertificateAuthority(
-		processConfig.RunnerCACertificatePath, processConfig.RunnerCAPrivateKeyPath,
-	)
+	runnerCA, err := runnercontrol.LoadCertificateAuthority(processConfig.RunnerCACertificatePath)
 	if err != nil {
 		return err
 	}
 	runnerCredentialAuthority, err := runnercontrol.NewCredentialAuthority(
-		processContext,
 		runnercontrol.CredentialAuthorityConfig{
-			DatabaseURL:          processConfig.DatabaseURL,
-			EnrollmentHashSecret: []byte(processConfig.RunnerEnrollmentHashSecret),
-			CACertificate:        runnerCA, CAPrivateKey: runnerCASigner,
-			CertificateLifetime:           processConfig.RunnerCertificateLifetime,
-			CredentialVerificationTimeout: processConfig.RunnerCredentialVerificationTimeout,
-			Now:                           service.SystemClock, NewToken: service.NewCredentialMaterial,
-			NewSerial: newRunnerCertificateSerial,
+			Credential: processConfig.RunnerCredential, CACertificate: runnerCA,
 		},
 	)
 	if err != nil {
 		return err
 	}
-	defer runnerCredentialAuthority.Close()
 	runnerStateStore, err := runnercontrol.NewPostgresStateStore(
 		processContext, processConfig.DatabaseURL,
 	)
@@ -252,6 +237,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	runnerv1.RegisterRunnerControlServer(grpcServer, runnerControlServer)
 	httpHandler, err := api.NewHandler(api.HandlerConfig{
 		Service: controlPlane, Logger: logger,
+		PlatformToken:             processConfig.PlatformToken,
 		MaximumDataPlaneBodyBytes: processConfig.DataPlaneMaximumSessionBytes,
 	})
 	if err != nil {
@@ -485,18 +471,6 @@ func stopGRPCServer(ctx context.Context, server *grpc.Server) error {
 		<-stopped
 		return fmt.Errorf("SecondBox runner control graceful shutdown: %w", ctx.Err())
 	}
-}
-
-func newRunnerCertificateSerial() *big.Int {
-	maximum := new(big.Int).Lsh(big.NewInt(1), 128)
-	serial, err := rand.Int(rand.Reader, maximum)
-	if err != nil {
-		panic(fmt.Sprintf("SecondBox runner certificate serial generation failed: %v", err))
-	}
-	if serial.Sign() == 0 {
-		return big.NewInt(1)
-	}
-	return serial
 }
 
 func configuredRunnerFeatures(names []string) ([]runnerv1.RunnerFeature, error) {

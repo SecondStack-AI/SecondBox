@@ -47,7 +47,7 @@ func (apiHandler *handler) createSandboxExecStream(writer http.ResponseWriter, r
 		return
 	}
 	writer.Header().Set("Idempotency-Replayed", fmt.Sprintf("%t", replayed))
-	writeJSON(writer, http.StatusCreated, response)
+	apiHandler.writeJSON(writer, request, http.StatusCreated, response)
 }
 
 func (apiHandler *handler) cancelSandboxExecStream(writer http.ResponseWriter, request *http.Request) {
@@ -79,7 +79,7 @@ func (apiHandler *handler) cancelSandboxExecStream(writer http.ResponseWriter, r
 		return
 	}
 	writer.Header().Set("Idempotency-Replayed", fmt.Sprintf("%t", replayed))
-	writeJSON(writer, http.StatusAccepted, response)
+	apiHandler.writeJSON(writer, request, http.StatusAccepted, response)
 }
 
 func (apiHandler *handler) publicExecStreamSession(

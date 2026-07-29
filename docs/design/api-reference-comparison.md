@@ -51,4 +51,4 @@ Flue owns no Sandbox lifecycle. Repeated harness initialization may reuse the sa
 
 The integration contract runs the real TypeScript adapter through authenticated public HTTP handlers and the durable PostgreSQL runner relay. It proves missing-parent creation and retry, UTF-8 and binary persistence across separate session environments, stat, directory listing, negative existence, mkdir and remove options, and shell execution with cwd, environment, deadline, output bound, and non-zero exit fidelity.
 
-See [API conventions](api-conventions.md), [Domain and lifecycle](domain-lifecycle.md), and [Compatibility policy](compatibility-policy.md).
+See [API conventions](api-conventions.md) and [Domain and lifecycle](domain-lifecycle.md).

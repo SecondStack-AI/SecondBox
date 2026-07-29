@@ -6,6 +6,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
+// Runner administration is authorized by the platform-token HTTP boundary.
 func (apiHandler *handler) createRunnerPool(writer http.ResponseWriter, request *http.Request) {
 	var body contracts.CreateRunnerPoolRequest
 	if err := decodeStrictJSON(request, &body); err != nil {
@@ -22,7 +23,7 @@ func (apiHandler *handler) createRunnerPool(writer http.ResponseWriter, request 
 		return
 	}
 	setRevisionETag(writer, pool.Revision)
-	writeJSON(writer, http.StatusCreated, pool)
+	apiHandler.writeJSON(writer, request, http.StatusCreated, pool)
 }
 
 func (apiHandler *handler) listRunnerPools(writer http.ResponseWriter, request *http.Request) {
@@ -41,7 +42,7 @@ func (apiHandler *handler) listRunnerPools(writer http.ResponseWriter, request *
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, page)
+	apiHandler.writeJSON(writer, request, http.StatusOK, page)
 }
 
 func (apiHandler *handler) getRunnerPool(writer http.ResponseWriter, request *http.Request) {
@@ -55,7 +56,7 @@ func (apiHandler *handler) getRunnerPool(writer http.ResponseWriter, request *ht
 		return
 	}
 	setRevisionETag(writer, pool.Revision)
-	writeJSON(writer, http.StatusOK, pool)
+	apiHandler.writeJSON(writer, request, http.StatusOK, pool)
 }
 
 func (apiHandler *handler) updateRunnerPool(writer http.ResponseWriter, request *http.Request) {
@@ -81,7 +82,7 @@ func (apiHandler *handler) updateRunnerPool(writer http.ResponseWriter, request 
 		return
 	}
 	setRevisionETag(writer, pool.Revision)
-	writeJSON(writer, http.StatusOK, pool)
+	apiHandler.writeJSON(writer, request, http.StatusOK, pool)
 }
 
 func (apiHandler *handler) listRunners(writer http.ResponseWriter, request *http.Request) {
@@ -101,7 +102,7 @@ func (apiHandler *handler) listRunners(writer http.ResponseWriter, request *http
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, page)
+	apiHandler.writeJSON(writer, request, http.StatusOK, page)
 }
 
 func (apiHandler *handler) getRunner(writer http.ResponseWriter, request *http.Request) {
@@ -115,5 +116,5 @@ func (apiHandler *handler) getRunner(writer http.ResponseWriter, request *http.R
 		return
 	}
 	setRevisionETag(writer, runner.Revision)
-	writeJSON(writer, http.StatusOK, runner)
+	apiHandler.writeJSON(writer, request, http.StatusOK, runner)
 }

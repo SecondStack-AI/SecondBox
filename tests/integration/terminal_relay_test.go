@@ -14,7 +14,7 @@ import (
 
 func TestPostgresTerminalRelayOwnsAttachmentDetachReplayAndFenceAuthority(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := controlPlane.BootstrapAdmin()
+	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "terminal-relay")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-terminal-relay")
 	principal := authenticateCredential(t, controlPlane, credential)
@@ -67,51 +67,51 @@ func TestPostgresTerminalRelayOwnsAttachmentDetachReplayAndFenceAuthority(t *tes
 	if err != nil || !found || !delivery.Message.GetExec().GetOpen().GetAllocatePty() {
 		t.Fatalf("terminal Open delivery = %#v found=%t error=%v", delivery, found, err)
 	}
-	if err := relay.MarkOutboundFrameDelivered(t.Context(), delivery.ID, seed.ConnectionOne, now); err != nil {
+	if err := relay.MarkOutboundFrameDelivered(t.Context(), delivery.ID, seed.ConnectionOne, delivery.ClaimAttempt, now); err != nil {
 		t.Fatal(err)
 	}
 
 	attached, err := relay.AcquireTerminalAttachment(
-		t.Context(), principal.ProjectID, principal.ServiceAccountID,
+		t.Context(), principal.TenantRef, principal.SubjectRef,
 		sandbox.ID, session.ID, sandbox.Generation, "attachment-one", now,
 	)
 	if err != nil || attached.AttachmentID != "attachment-one" {
 		t.Fatalf("first terminal attachment = %#v error=%v", attached, err)
 	}
 	if _, err := relay.AcquireTerminalAttachment(
-		t.Context(), principal.ProjectID, principal.ServiceAccountID,
+		t.Context(), principal.TenantRef, principal.SubjectRef,
 		sandbox.ID, session.ID, sandbox.Generation, "attachment-two", now,
 	); !errors.Is(err, runnercontrol.ErrTerminalAttached) {
 		t.Fatalf("parallel terminal attachment error = %v", err)
 	}
 	inserted, err := relay.AppendTerminalClientFrame(
-		t.Context(), principal.ProjectID, session.ID, "attachment-one",
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID, "attachment-one",
 		runnercontrol.TerminalClientFrame{Sequence: 0, Credit: 4}, now,
 	)
 	if err != nil || !inserted {
 		t.Fatalf("terminal credit append = %t, %v", inserted, err)
 	}
 	inserted, err = relay.AppendTerminalClientFrame(
-		t.Context(), principal.ProjectID, session.ID, "attachment-one",
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID, "attachment-one",
 		runnercontrol.TerminalClientFrame{Sequence: 1, ResizeRows: 40, ResizeColumns: 120}, now,
 	)
 	if err != nil || !inserted {
 		t.Fatalf("terminal resize append = %t, %v", inserted, err)
 	}
 	inserted, err = relay.AppendTerminalClientFrame(
-		t.Context(), principal.ProjectID, session.ID, "attachment-one",
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID, "attachment-one",
 		runnercontrol.TerminalClientFrame{Sequence: 2, Input: []byte{0, 1, 0xfe, 0xff}}, now,
 	)
 	if err != nil || !inserted {
 		t.Fatalf("terminal binary input append = %t, %v", inserted, err)
 	}
 	if detached, err := relay.DetachTerminalAttachment(
-		t.Context(), principal.ProjectID, session.ID, "attachment-one", now.Add(time.Second),
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID, "attachment-one", now.Add(time.Second),
 	); err != nil || !detached {
 		t.Fatalf("terminal detach = %t, %v", detached, err)
 	}
 	reattached, err := relay.AcquireTerminalAttachment(
-		t.Context(), principal.ProjectID, principal.ServiceAccountID,
+		t.Context(), principal.TenantRef, principal.SubjectRef,
 		sandbox.ID, session.ID, sandbox.Generation, "attachment-two", now.Add(29*time.Second),
 	)
 	if err != nil {
@@ -136,13 +136,13 @@ func TestPostgresTerminalRelayOwnsAttachmentDetachReplayAndFenceAuthority(t *tes
 		t.Fatalf("terminal output persistence = %t, %v", inserted, err)
 	}
 	frames, err := relay.ListTerminalServerFrames(
-		t.Context(), principal.ProjectID, session.ID, -1, 64,
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID, -1, 64,
 	)
 	if err != nil || len(frames) != 1 || !bytes.Equal(frames[0].Output, []byte{0, 1, 0xfe, 0xff}) {
 		t.Fatalf("replayed terminal frames = %#v error=%v", frames, err)
 	}
 	if detached, err := relay.DetachTerminalAttachment(
-		t.Context(), principal.ProjectID, session.ID, "attachment-two", now.Add(29*time.Second),
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID, "attachment-two", now.Add(29*time.Second),
 	); err != nil || !detached {
 		t.Fatalf("second terminal detach = %t, %v", detached, err)
 	}
@@ -158,7 +158,7 @@ func TestPostgresTerminalRelayOwnsAttachmentDetachReplayAndFenceAuthority(t *tes
 			t.Fatalf("detached Terminal cancellation claim = %#v found=%t error=%v", delivery, found, err)
 		}
 		if err := relay.MarkOutboundFrameDelivered(
-			t.Context(), delivery.ID, seed.ConnectionOne, now.Add(59*time.Second),
+			t.Context(), delivery.ID, seed.ConnectionOne, delivery.ClaimAttempt, now.Add(59*time.Second),
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -242,7 +242,7 @@ func TestPostgresTerminalRelayOwnsAttachmentDetachReplayAndFenceAuthority(t *tes
 				t.Fatalf("Terminal cancellation claim = %#v found=%t error=%v", delivery, found, err)
 			}
 			if err := relay.MarkOutboundFrameDelivered(
-				t.Context(), delivery.ID, seed.ConnectionOne, now.Add(time.Second),
+				t.Context(), delivery.ID, seed.ConnectionOne, delivery.ClaimAttempt, now.Add(time.Second),
 			); err != nil {
 				t.Fatal(err)
 			}
@@ -280,13 +280,14 @@ func TestPostgresTerminalRelayOwnsAttachmentDetachReplayAndFenceAuthority(t *tes
 	}
 	nonDetachable := admitTerminal("terminal-nondetachable", leaseAttached.ID, false)
 	if _, err := relay.AcquireTerminalAttachment(
-		t.Context(), principal.ProjectID, principal.ServiceAccountID,
+		t.Context(), principal.TenantRef, principal.SubjectRef,
 		sandbox.ID, nonDetachable.ID, sandbox.Generation, "attachment-nondetachable", now,
 	); err != nil {
 		t.Fatal(err)
 	}
 	if detached, err := relay.DetachTerminalAttachment(
-		t.Context(), principal.ProjectID, nonDetachable.ID, "attachment-nondetachable", now,
+		t.Context(), principal.TenantRef, principal.SubjectRef,
+		nonDetachable.ID, "attachment-nondetachable", now,
 	); err != nil || !detached {
 		t.Fatalf("non-detachable Terminal disconnect = %t, %v", detached, err)
 	}

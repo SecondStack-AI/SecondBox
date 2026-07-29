@@ -71,6 +71,8 @@ func runSandboxShellCommand(
 	ctx context.Context,
 	rawURL string,
 	token string,
+	tenantRef string,
+	subjectRef string,
 	args []string,
 	environment sandboxShellEnvironment,
 ) (resultErr error) {
@@ -100,8 +102,9 @@ func runSandboxShellCommand(
 	if len(flags.Args()) != 0 {
 		return fmt.Errorf("SecondBox CLI unexpected sandbox shell arguments: %s", strings.Join(flags.Args(), " "))
 	}
-	if strings.TrimSpace(rawURL) == "" || strings.TrimSpace(token) == "" {
-		return errors.New("SecondBox CLI sandbox shell requires --url and --token")
+	if strings.TrimSpace(rawURL) == "" || strings.TrimSpace(token) == "" ||
+		strings.TrimSpace(tenantRef) == "" || strings.TrimSpace(subjectRef) == "" {
+		return errors.New("SecondBox CLI sandbox shell requires --url, --token, --tenant-ref, and --subject-ref")
 	}
 	if strings.TrimSpace(*sandboxID) == "" || strings.TrimSpace(*generationText) == "" {
 		return errors.New("SecondBox CLI sandbox shell requires --sandbox and --generation")
@@ -158,7 +161,9 @@ func runSandboxShellCommand(
 		}()
 	}
 
-	client, err := secondboxclient.NewSecondBoxClient(rawURL, token, environment.httpClient)
+	client, err := secondboxclient.NewSecondBoxSubjectClient(
+		rawURL, token, tenantRef, subjectRef, environment.httpClient,
+	)
 	if err != nil {
 		return err
 	}
