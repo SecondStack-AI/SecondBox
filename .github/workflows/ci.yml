@@ -18,7 +18,7 @@ env:
 
 jobs:
   clean-clone-non-kvm:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:18.4-bookworm
@@ -60,7 +60,7 @@ jobs:
         run: scripts/test-clean-clone-isolation.sh --non-kvm
 
   generated-checks:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -81,7 +81,7 @@ jobs:
         run: scripts/verify-generated.sh
 
   go-tests-vet:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:18.4-bookworm
@@ -128,7 +128,7 @@ jobs:
         run: scripts/test-go.sh
 
   contract-tests:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -145,7 +145,7 @@ jobs:
         run: scripts/test-contract.sh
 
   compose-tests:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -156,14 +156,14 @@ jobs:
         run: scripts/test-compose.sh
 
   image-policy:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Test guest image policy
         run: scripts/test-image-policy.sh
 
   build-artifacts:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
