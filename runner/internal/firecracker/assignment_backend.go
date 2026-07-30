@@ -442,9 +442,19 @@ func (b *AssignmentBackend) StartAssignment(
 	}
 	b.mu.Unlock()
 
+	// Admission dominates start latency under concurrency: measured p50 rose
+	// from 79 ms at one concurrent assignment to 5,852 ms at thirty-two, while
+	// every other startup stage stayed flat. Record when each assignment enters
+	// the backend and how long each admission phase takes, so queueing ahead of
+	// this call can be told apart from work inside it.
+	admissionTimer := newAssignmentAdmissionTimer(
+		assignment.Fence.AssignmentId, assignment.Fence.SandboxId,
+	)
+	admissionTimer.mark("dedupe_scanned")
 	if err := b.ValidateAssignment(ctx, assignment); err != nil {
 		return runnercontrol.BackendInstance{}, err
 	}
+	admissionTimer.mark("assignment_validated")
 	if err := b.storagePressure.Reserve(
 		ctx,
 		assignment.Fence.AssignmentId,
@@ -455,6 +465,7 @@ func (b *AssignmentBackend) StartAssignment(
 			err,
 		)
 	}
+	admissionTimer.mark("storage_reserved")
 	reservationHeld := true
 	releaseReservationOnReturn := true
 	defer func() {
@@ -478,6 +489,7 @@ func (b *AssignmentBackend) StartAssignment(
 	if err != nil {
 		return runnercontrol.BackendInstance{}, err
 	}
+	admissionTimer.mark("guest_start_resolved")
 	workspaceAttachment, err := b.manager.workspaceStore.Open(
 		ctx,
 		assignment.WorkspaceId,
@@ -489,6 +501,7 @@ func (b *AssignmentBackend) StartAssignment(
 			err,
 		)
 	}
+	admissionTimer.mark("workspace_opened")
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_ATTACH); err != nil {
 		return runnercontrol.BackendInstance{}, err
 	}
