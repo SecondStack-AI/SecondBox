@@ -286,10 +286,13 @@ func (handle *SandboxHandle) AcquireLease(
 }
 
 // RenewLease extends active Lease authority by a new bounded duration.
+//
+// The route requires an idempotency key; an empty one is generated.
 func (client *Client) RenewLease(
 	ctx context.Context,
 	leaseID string,
 	duration time.Duration,
+	idempotencyKey string,
 ) (Lease, error) {
 	seconds := int64(duration / time.Second)
 	if leaseID == "" {
@@ -298,13 +301,20 @@ func (client *Client) RenewLease(
 	if seconds < 1 || seconds > 86400 {
 		return Lease{}, errors.New("SecondBox Lease duration must be from 1 second through 24 hours")
 	}
+	idempotencyKey, err := resolveIdempotencyKey(idempotencyKey)
+	if err != nil {
+		return Lease{}, err
+	}
 	body, err := json.Marshal(RenewLeaseRequest{DurationSeconds: seconds})
 	if err != nil {
 		return Lease{}, fmt.Errorf("SecondBox Lease encode renew request: %w", err)
 	}
+	headers := make(http.Header)
+	headers.Set("Idempotency-Key", idempotencyKey)
 	var lease Lease
 	err = client.RequestJSON(ctx, "renewSandboxLease", CallOptions{
 		PathParameters: map[string]string{"leaseId": leaseID},
+		Headers:        headers,
 		Body:           bytes.NewReader(body),
 		ContentType:    "application/json",
 	}, &lease)
@@ -312,17 +322,38 @@ func (client *Client) RenewLease(
 }
 
 // ReleaseLease surrenders Lease authority before its expiry.
-func (client *Client) ReleaseLease(ctx context.Context, leaseID string) error {
+//
+// The route requires an idempotency key; an empty one is generated.
+func (client *Client) ReleaseLease(
+	ctx context.Context,
+	leaseID string,
+	idempotencyKey string,
+) error {
 	if leaseID == "" {
 		return errors.New("SecondBox Lease release requires a Lease ID")
 	}
+	idempotencyKey, err := resolveIdempotencyKey(idempotencyKey)
+	if err != nil {
+		return err
+	}
+	headers := make(http.Header)
+	headers.Set("Idempotency-Key", idempotencyKey)
 	response, err := client.Request(ctx, "releaseSandboxLease", CallOptions{
 		PathParameters: map[string]string{"leaseId": leaseID},
+		Headers:        headers,
 	})
 	if err != nil {
 		return err
 	}
 	return response.Body.Close()
+}
+
+// resolveIdempotencyKey keeps a caller's key and generates one otherwise.
+func resolveIdempotencyKey(supplied string) (string, error) {
+	if supplied != "" {
+		return supplied, nil
+	}
+	return NewIdempotencyKey()
 }
 
 // defaultMinimumRenewalDelay keeps a very short Lease from busy-looping.
@@ -400,7 +431,7 @@ func (keeper *LeaseKeeper) renew() {
 		case <-timer.C:
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		lease, err := keeper.client.RenewLease(ctx, keeper.ID(), keeper.duration)
+		lease, err := keeper.client.RenewLease(ctx, keeper.ID(), keeper.duration, "")
 		cancel()
 		keeper.mu.Lock()
 		if err != nil {
@@ -434,8 +465,14 @@ func (keeper *LeaseKeeper) Close() error {
 		<-keeper.done
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		releaseErr = keeper.client.ReleaseLease(ctx, keeper.ID())
+		releaseErr = keeper.client.ReleaseLease(ctx, keeper.ID(), "")
 	})
+	// A renewal that stopped is why the work failed; releasing a Lease the
+	// service has already fenced then fails too, and reporting that consequence
+	// instead of its cause sends the caller looking in the wrong place.
+	if failure := keeper.Err(); failure != nil {
+		return fmt.Errorf("SecondBox Lease renewal stopped: %w", failure)
+	}
 	return releaseErr
 }
 

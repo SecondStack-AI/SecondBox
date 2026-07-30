@@ -330,19 +330,57 @@ func TestAcquireLeaseRejectsOutOfRangeDuration(t *testing.T) {
 }
 
 func TestReleaseLeaseIssuesDelete(t *testing.T) {
-	var observedMethod, observedPath string
+	var observedMethod, observedPath, observedKey string
 	client := newLifecycleClient(t, func(writer http.ResponseWriter, request *http.Request) {
 		observedMethod, observedPath = request.Method, request.URL.Path
+		observedKey = request.Header.Get("Idempotency-Key")
 		writer.WriteHeader(http.StatusNoContent)
 	})
-	if err := client.ReleaseLease(context.Background(), "lease-1"); err != nil {
+	if err := client.ReleaseLease(context.Background(), "lease-1", ""); err != nil {
 		t.Fatal(err)
 	}
 	if observedMethod != http.MethodDelete || observedPath != "/v1/leases/lease-1" {
 		t.Errorf("%s %s; want DELETE /v1/leases/lease-1", observedMethod, observedPath)
 	}
-	if err := client.ReleaseLease(context.Background(), ""); err == nil {
+	// The route requires the key; omitting it is a 400 the stub would not show.
+	if !strings.HasPrefix(observedKey, "sbk-") {
+		t.Errorf("Idempotency-Key = %q; want a generated key", observedKey)
+	}
+	if err := client.ReleaseLease(context.Background(), "lease-1", "caller-key"); err != nil {
+		t.Fatal(err)
+	}
+	if observedKey != "caller-key" {
+		t.Errorf("Idempotency-Key = %q; want the caller's key", observedKey)
+	}
+	if err := client.ReleaseLease(context.Background(), "", ""); err == nil {
 		t.Error("releasing without a Lease ID must be rejected")
+	}
+}
+
+// TestRenewLeaseSendsItsRequiredIdempotencyKey guards the contract requirement
+// that a stub answering every request would otherwise hide.
+func TestRenewLeaseSendsItsRequiredIdempotencyKey(t *testing.T) {
+	var observedKey string
+	var observedBody RenewLeaseRequest
+	client := newLifecycleClient(t, func(writer http.ResponseWriter, request *http.Request) {
+		observedKey = request.Header.Get("Idempotency-Key")
+		if err := json.NewDecoder(request.Body).Decode(&observedBody); err != nil {
+			t.Errorf("decode renew body: %v", err)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, leaseJSON("lease-1", time.Now().Add(time.Minute)))
+	})
+	if _, err := client.RenewLease(context.Background(), "lease-1", 90*time.Second, ""); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(observedKey, "sbk-") {
+		t.Errorf("Idempotency-Key = %q; want a generated key", observedKey)
+	}
+	if observedBody.DurationSeconds != 90 {
+		t.Errorf("durationSeconds = %d; want 90", observedBody.DurationSeconds)
+	}
+	if _, err := client.RenewLease(context.Background(), "", time.Minute, ""); err == nil {
+		t.Error("renewing without a Lease ID must be rejected")
 	}
 }
 
@@ -352,6 +390,9 @@ func TestKeepLeaseRenewsUntilClosedThenReleases(t *testing.T) {
 	client := newLifecycleClient(t, func(writer http.ResponseWriter, request *http.Request) {
 		mutex.Lock()
 		defer mutex.Unlock()
+		if request.Header.Get("Idempotency-Key") == "" {
+			t.Errorf("%s %s carried no Idempotency-Key", request.Method, request.URL.Path)
+		}
 		switch {
 		case request.Method == http.MethodDelete:
 			releases++
@@ -421,8 +462,42 @@ func TestKeepLeaseRecordsRenewalFailure(t *testing.T) {
 	if code := ProblemCodeOf(keeper.Err()); code != ProblemCodeLeaseFenced {
 		t.Fatalf("keeper failure code = %q; want %q", code, ProblemCodeLeaseFenced)
 	}
-	if err := keeper.Close(); err != nil {
+	// Close reports the renewal failure rather than the release error it causes,
+	// so a caller is pointed at the cause and can still read the typed code.
+	err = keeper.Close()
+	if err == nil || !strings.Contains(err.Error(), "Lease renewal stopped") {
+		t.Fatalf("Close() = %v; want the renewal failure surfaced", err)
+	}
+	if code := ProblemCodeOf(err); code != ProblemCodeLeaseFenced {
+		t.Errorf("Close() problem code = %q; want %q", code, ProblemCodeLeaseFenced)
+	}
+}
+
+// TestKeepLeaseCloseReportsReleaseFailureWhenRenewalHeld proves the release
+// error still surfaces when renewal itself never failed.
+func TestKeepLeaseCloseReportsReleaseFailureWhenRenewalHeld(t *testing.T) {
+	client := newLifecycleClient(t, func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodDelete {
+			writer.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(writer, `{"code":"internal_error","title":"Release failed"}`)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, leaseJSON("lease-1", time.Now().Add(time.Hour)))
+	})
+	handle := readySandbox(t, client)
+	lease, err := handle.AcquireLease(context.Background(), time.Minute, "")
+	if err != nil {
 		t.Fatal(err)
+	}
+	keeper := newLeaseKeeper(client, lease, time.Minute, time.Hour)
+	keeper.start()
+	if err := keeper.Close(); err == nil ||
+		ProblemCodeOf(err) != "internal_error" {
+		t.Fatalf("Close() = %v; want the release failure", err)
+	}
+	if keeper.Err() != nil {
+		t.Errorf("keeper renewal failure = %v; want none", keeper.Err())
 	}
 }
 
