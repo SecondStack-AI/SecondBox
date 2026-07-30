@@ -399,7 +399,7 @@ func (store *PostgresStateStore) RecordHeartbeat(
 	if err != nil {
 		return false, err
 	}
-	reservedJSON, err := encodeProtocolCapacity(heartbeat.Reserved)
+	reportedReserved, err := runnerCapacityFromProtocol(heartbeat.Reserved)
 	if err != nil {
 		return false, err
 	}
@@ -419,6 +419,19 @@ func (store *PostgresStateStore) RecordHeartbeat(
 		return duplicate, err
 	}
 	defer tx.Rollback(ctx)
+	durableReserved, err := lockDurableRunnerReservation(
+		ctx,
+		tx,
+		heartbeat.RunnerId,
+		heartbeat.ConnectionId,
+	)
+	if err != nil {
+		return false, err
+	}
+	reservedJSON, err := encodeRunnerCapacity(maxRunnerCapacity(reportedReserved, durableReserved))
+	if err != nil {
+		return false, err
+	}
 	command, err := tx.Exec(ctx, `
 		UPDATE secondbox.runners
 		SET state=$2,capacity_json=$3,reserved_capacity_json=$4,last_sequence=$5,
@@ -451,6 +464,52 @@ func (store *PostgresStateStore) RecordHeartbeat(
 		return false, fmt.Errorf("SecondBox runner Heartbeat commit: %w", err)
 	}
 	return false, nil
+}
+
+func lockDurableRunnerReservation(
+	ctx context.Context,
+	tx pgx.Tx,
+	runnerID string,
+	connectionID string,
+) (runnerCapacity, error) {
+	var lockedRunnerID string
+	err := tx.QueryRow(ctx, `
+		SELECT id FROM secondbox.runners
+		WHERE id=$1 AND active_connection_id=$2
+		FOR UPDATE`,
+		runnerID,
+		connectionID,
+	).Scan(&lockedRunnerID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return runnerCapacity{}, errors.New("SecondBox runner Heartbeat connection is no longer active")
+	}
+	if err != nil {
+		return runnerCapacity{}, fmt.Errorf("SecondBox runner Heartbeat reservation lock: %w", err)
+	}
+	var capacity runnerCapacity
+	if err := tx.QueryRow(ctx, `
+		SELECT
+		  COALESCE(sum((revision.spec_json->'resources'->>'cpuMillis')::bigint),0),
+		  COALESCE(sum((revision.spec_json->'resources'->>'memoryBytes')::bigint),0),
+		  COALESCE(sum((revision.spec_json->'resources'->>'workspaceBytes')::bigint),0),
+		  count(*),
+		  COALESCE(sum((revision.spec_json->'resources'->>'concurrentOperations')::bigint),0)
+		FROM secondbox.assignments AS assignment
+		JOIN secondbox.profile_revisions AS revision
+		  ON revision.id=assignment.profile_revision_id
+		WHERE assignment.runner_id=$1
+		  AND assignment.state IN ('assigned','accepted','starting','ready','uncertain')`,
+		runnerID,
+	).Scan(
+		&capacity.CPUMillis,
+		&capacity.MemoryBytes,
+		&capacity.DiskBytes,
+		&capacity.Instances,
+		&capacity.Operations,
+	); err != nil {
+		return runnerCapacity{}, fmt.Errorf("SecondBox runner Heartbeat durable reservation lookup: %w", err)
+	}
+	return capacity, nil
 }
 
 func refreshReadyRunnerCount(
@@ -2771,25 +2830,49 @@ func allPrerequisitesReady(capabilities map[string]bool) bool {
 	return true
 }
 
-func encodeProtocolCapacity(capacity *runnerv1.Capacity) ([]byte, error) {
+type runnerCapacity struct {
+	CPUMillis   int64
+	MemoryBytes int64
+	DiskBytes   int64
+	Instances   int64
+	Operations  int64
+}
+
+func runnerCapacityFromProtocol(capacity *runnerv1.Capacity) (runnerCapacity, error) {
 	if capacity == nil {
-		return nil, errors.New("SecondBox runner capacity is required")
+		return runnerCapacity{}, errors.New("SecondBox runner capacity is required")
 	}
-	encoded, err := json.Marshal(struct {
-		CPUMillis   int64
-		MemoryBytes int64
-		DiskBytes   int64
-		Instances   int64
-		Operations  int64
-	}{
+	return runnerCapacity{
 		CPUMillis: int64(capacity.VcpuMillis), MemoryBytes: int64(capacity.MemoryBytes),
 		DiskBytes: int64(capacity.DiskBytes), Instances: int64(capacity.Instances),
 		Operations: int64(capacity.Operations),
-	})
+	}, nil
+}
+
+func encodeProtocolCapacity(capacity *runnerv1.Capacity) ([]byte, error) {
+	converted, err := runnerCapacityFromProtocol(capacity)
+	if err != nil {
+		return nil, err
+	}
+	return encodeRunnerCapacity(converted)
+}
+
+func encodeRunnerCapacity(capacity runnerCapacity) ([]byte, error) {
+	encoded, err := json.Marshal(capacity)
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox runner capacity encoding: %w", err)
 	}
 	return encoded, nil
+}
+
+func maxRunnerCapacity(left runnerCapacity, right runnerCapacity) runnerCapacity {
+	return runnerCapacity{
+		CPUMillis:   max(left.CPUMillis, right.CPUMillis),
+		MemoryBytes: max(left.MemoryBytes, right.MemoryBytes),
+		DiskBytes:   max(left.DiskBytes, right.DiskBytes),
+		Instances:   max(left.Instances, right.Instances),
+		Operations:  max(left.Operations, right.Operations),
+	}
 }
 
 func protocolStartupTiming(timing *runnerv1.StartupTiming) (int64, int64, error) {

@@ -1,12 +1,101 @@
 package runnercontrol
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/jackc/pgx/v5"
 )
+
+func TestHeartbeatPreservesAndReleasesDurableAssignmentReservations(t *testing.T) {
+	store := openRunnerControlDatabase(t)
+	now := time.Date(2026, 7, 29, 20, 55, 0, 0, time.UTC)
+	seedRunnerConnectionForDataPlaneDisconnect(
+		t,
+		store,
+		"connection-reservation",
+		"connection-reservation",
+		now,
+	)
+	if _, err := store.pool.Exec(t.Context(), `
+		INSERT INTO secondbox.profile_revisions (
+			id,profile_name,revision_number,spec_json,created_at
+		) VALUES (
+			'profile-reservation','profile',1,
+			'{"resources":{"cpuMillis":1000,"memoryBytes":536870912,"workspaceBytes":1073741824,"concurrentOperations":4}}',
+			$1
+		);
+		INSERT INTO secondbox.assignments (
+			id,sandbox_id,instance_id,runner_id,profile_revision_id,backend_kind,
+			backend_reference,generation,fencing_token,state,capability_snapshot_json,
+			resolved_artifacts_json,release_proof_json,failure_class,retry_count,retry_limit,
+			operation_deadline,claim_expires_at,reconcile_owner,reconcile_claim_expires_at,
+			next_reconcile_at,revision,created_at,updated_at
+		) VALUES (
+			'assignment-reservation','sandbox','instance','runner-home',
+			'profile-reservation','firecracker','',1,$2,'assigned','{}','{}','{}','',
+			0,3,$3,$3,'',$3,$1,1,$1,$1
+		)`,
+		pgx.QueryExecModeSimpleProtocol,
+		now,
+		[]byte("01234567890123456789012345678901"),
+		now.Add(time.Hour),
+	); err != nil {
+		t.Fatal(err)
+	}
+	recordHeartbeat := func(sequence uint64) {
+		t.Helper()
+		if _, err := store.RecordHeartbeat(t.Context(), &runnerv1.RunnerHeartbeat{
+			MessageId: "heartbeat-reservation-" + time.Duration(sequence).String(),
+			Sequence:  sequence, RunnerId: "runner-home",
+			ConnectionId:     "connection-reservation",
+			ObservedAtUnixMs: uint64(now.Add(time.Duration(sequence) * time.Second).UnixMilli()),
+			Allocatable: &runnerv1.Capacity{
+				VcpuMillis: 8000, MemoryBytes: 4 << 30, DiskBytes: 8 << 30,
+				Instances: 8, Operations: 32,
+			},
+			Reserved:      &runnerv1.Capacity{},
+			DrainPhase:    runnerv1.DrainPhase_DRAIN_PHASE_ACTIVE,
+			StartupTiming: &runnerv1.StartupTiming{},
+		}, now.Add(time.Duration(sequence)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readReservation := func() runnerCapacity {
+		t.Helper()
+		var encoded []byte
+		if err := store.pool.QueryRow(t.Context(), `
+			SELECT reserved_capacity_json FROM secondbox.runners
+			WHERE id='runner-home'`,
+		).Scan(&encoded); err != nil {
+			t.Fatal(err)
+		}
+		var capacity runnerCapacity
+		if err := json.Unmarshal(encoded, &capacity); err != nil {
+			t.Fatal(err)
+		}
+		return capacity
+	}
+	recordHeartbeat(1)
+	if got := readReservation(); got != (runnerCapacity{
+		CPUMillis: 1000, MemoryBytes: 536870912, DiskBytes: 1073741824,
+		Instances: 1, Operations: 4,
+	}) {
+		t.Fatalf("durable reservation = %#v", got)
+	}
+	if _, err := store.pool.Exec(t.Context(), `
+		UPDATE secondbox.assignments SET state='fenced'
+		WHERE id='assignment-reservation'`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	recordHeartbeat(2)
+	if got := readReservation(); got != (runnerCapacity{}) {
+		t.Fatalf("released reservation = %#v", got)
+	}
+}
 
 func TestCloseCurrentConnectionFailsActiveDataPlaneSessionsWithoutPrematureFencing(t *testing.T) {
 	store := openRunnerControlDatabase(t)
