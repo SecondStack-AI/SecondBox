@@ -117,3 +117,22 @@ func TestWorkspaceQuiesceIsBounded(t *testing.T) {
 		t.Fatalf("quiesce attempt blocked for %s", elapsed)
 	}
 }
+
+// The guest agent is never listening on the first dial, so the reconnect
+// cadence decides when negotiation completes. gRPC's default one-second base
+// delay made startup wait for the backoff boundary rather than for the guest.
+func TestGuestProtocolRetriesOnAMillisecondCadence(t *testing.T) {
+	params := guestProtocolConnectParams()
+	if params.Backoff.BaseDelay > 50*time.Millisecond {
+		t.Fatalf("guest dial base delay = %s, want a millisecond-scale retry", params.Backoff.BaseDelay)
+	}
+	if params.Backoff.MaxDelay > 500*time.Millisecond {
+		t.Fatalf("guest dial maximum delay = %s, want it bounded well below a second", params.Backoff.MaxDelay)
+	}
+	if params.Backoff.Multiplier <= 1 {
+		t.Fatalf("guest dial multiplier = %v, want growth between attempts", params.Backoff.Multiplier)
+	}
+	if params.MinConnectTimeout <= 0 {
+		t.Fatal("guest dial must keep a positive connect timeout")
+	}
+}

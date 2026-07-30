@@ -13,6 +13,7 @@ import (
 
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
@@ -50,6 +51,27 @@ type GuestProtocolSession struct {
 	sendMu                  sync.Mutex
 }
 
+// guestProtocolConnectParams retries the guest vsock dial on a millisecond
+// cadence instead of the gRPC default.
+//
+// The guest agent is never listening when the first dial is attempted, because
+// the microVM has only just been launched. gRPC's default reconnect backoff
+// starts at one second and multiplies by 1.6, so negotiation completed at the
+// backoff boundary rather than when the guest became ready: measured startup
+// spent 1,014 ms waiting for the first retry and 2,567 ms when two retries were
+// needed. Retrying quickly makes negotiation track actual guest readiness.
+func guestProtocolConnectParams() grpc.ConnectParams {
+	return grpc.ConnectParams{
+		Backoff: backoff.Config{
+			BaseDelay:  10 * time.Millisecond,
+			Multiplier: 1.5,
+			Jitter:     0.2,
+			MaxDelay:   250 * time.Millisecond,
+		},
+		MinConnectTimeout: 20 * time.Second,
+	}
+}
+
 func NegotiateGuestProtocol(ctx context.Context, request GuestProtocolNegotiation) (*GuestProtocolSession, error) {
 	if strings.TrimSpace(request.UDSPath) == "" {
 		return nil, fmt.Errorf("guest protocol UDS path is required")
@@ -83,6 +105,7 @@ func NegotiateGuestProtocol(ctx context.Context, request GuestProtocolNegotiatio
 			return dialFirecrackerVsock(ctx, request.UDSPath, request.Port)
 		}),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithConnectParams(guestProtocolConnectParams()),
 	)
 	if err != nil {
 		sessionCancel()
