@@ -7,9 +7,9 @@
   "workloads": [
     "sandbox_create",
     "buffered_exec",
-    "streaming_exec",
     "file_transfer",
-    "snapshot_restore"
+    "snapshot_restore",
+    "streaming_exec"
   ],
   "concurrencyLevels": [1, 2, 4, 8, 16],
   "durationSeconds": 60,
