@@ -583,6 +583,52 @@ func TestReturningRunnerWithoutWriterPreservesUncertainHomeWorkspace(t *testing.
 	}
 }
 
+func TestReturningRunnerWithoutWriterPreservesAssignedWorkspace(t *testing.T) {
+	store := openRunnerControlDatabase(t)
+	now := time.Date(2026, 7, 29, 18, 55, 0, 0, time.UTC)
+	fence := seedStartingAssignment(t, store, "assigned-reconcile", "assigned", now)
+	recordReturningRunnerReconciliation(
+		t,
+		store,
+		"connection-assigned-reconcile",
+		[]*runnerv1.LocalWorkspaceInventoryItem{{
+			WorkspaceId:          "workspace-assigned-reconcile",
+			Generation:           3,
+			LogicalCapacityBytes: 8 << 30,
+			Formatted:            true,
+			ActiveWriter:         false,
+		}},
+		now.Add(time.Second),
+	)
+	var workspaceState, sandboxState, failureClass, assignmentState string
+	if err := store.pool.QueryRow(t.Context(), `
+		SELECT workspace.state,sandbox.state,COALESCE(sandbox.lifecycle_failure_class,''),
+		       assignment.state
+		FROM secondbox.workspaces AS workspace
+		JOIN secondbox.sandboxes AS sandbox ON sandbox.workspace_id=workspace.id
+		JOIN secondbox.assignments AS assignment ON assignment.id=$2
+		WHERE workspace.id=$1`,
+		"workspace-assigned-reconcile",
+		fence.AssignmentId,
+	).Scan(
+		&workspaceState,
+		&sandboxState,
+		&failureClass,
+		&assignmentState,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if workspaceState != "ready" ||
+		sandboxState != "starting" ||
+		failureClass != "" ||
+		assignmentState != "assigned" {
+		t.Fatalf(
+			"assigned reconciliation Workspace=%q Sandbox=%q failure=%q Assignment=%q",
+			workspaceState, sandboxState, failureClass, assignmentState,
+		)
+	}
+}
+
 func TestLocalRestoreResultsDrivePrepareSwapCommitAndFinalize(t *testing.T) {
 	runnerStore := openRunnerControlDatabase(t)
 	now := time.Date(2026, 7, 29, 19, 0, 0, 0, time.UTC)

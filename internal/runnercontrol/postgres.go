@@ -1220,10 +1220,13 @@ func recordLocalWorkspaceReconciliation(
 		).Scan(&restorePending); err != nil {
 			return fmt.Errorf("SecondBox runner Workspace reconciliation restore lookup: %w", err)
 		}
+		writerMayStillBeDetached := activeAssignmentState == "assigned" ||
+			activeAssignmentState == "accepted" ||
+			activeAssignmentState == "starting" ||
+			activeAssignmentState == "uncertain" ||
+			activeAssignmentState == "fencing"
 		writerMatches := item.ActiveWriter == activeAssignment ||
-			(activeAssignmentState == "uncertain" ||
-				activeAssignmentState == "fencing") &&
-				!item.ActiveWriter
+			writerMayStillBeDetached && !item.ActiveWriter
 		expectedGeneration := locked.Workspace.Generation
 		if locked.Workspace.Mutation.Kind == "stop" &&
 			locked.Workspace.Mutation.State == "runner_succeeded" {
