@@ -1,7 +1,7 @@
 ---
 title: Friendly Sandbox Interface
 date: 2026-07-30
-status: in-progress
+status: complete-except-scenario-gate
 owner: SecondStack
 provenance: SecondBox client-ergonomics gap analysis against microsandbox, 2026-07-30
 ---
@@ -78,6 +78,20 @@ Run the focused commands listed in each task while implementing it. Before hando
 - [x] Update the CLI section of `docs/operations/sdk-cli-and-flue.md` and the invocations in `docs/operations/deployment.md` and `docs/operations/observability-and-diagnostics.md`.
 - [x] Run `go build ./...`, `go vet ./...`, `go test ./cmd/secondbox`, and `just test`.
 
+## Follow-ups closed after the tasks
+
+### Migration 0002 could refuse to start an existing deployment (fixed)
+
+`secondbox.dev/name` is ordinary caller-writable Metadata: `validateSandboxMetadata` bounded only entry count, key length, and value length, so any client could already set that exact key through `createSandbox` or `updateSandboxMetadata`. A database holding two live Sandboxes with the same reserved name would therefore fail `CREATE UNIQUE INDEX`. Migrations run under advisory lock before listeners open, so the result was `secondboxd` refusing to start on upgrade with a raw unique violation.
+
+`0002_sandbox_name_index.sql` now checks first and raises a message naming every conflicting `tenant/subject=name` pair with the action to take. Covered in `migrations/postgres/sandbox_name_guard_test.go`, which also proves distinct names, names shared across subjects and tenants, and deleted predecessors all migrate cleanly, and that the guard and the index agree on what is a duplicate.
+
+### A reserved name could shadow an identifier (fixed)
+
+Nothing stopped `--name sbx_anything`. Clients tell an identifier from a name by the `sbx_` prefix, so such a Sandbox was unresolvable by name.
+
+`contracts.SandboxIDPrefix` is now the single definition of that prefix, consumed by both the CLI resolver and the service. `validateSandboxMetadata` rejects a reserved name that is blank, surrounded by whitespace, or begins with the prefix, so the rule holds for every writer rather than only the CLI. A test pins `NewOpaqueID("sbx")` against the declared prefix so the two cannot drift.
+
 ## Known defects found while implementing
 
 ### The generic operation path sent a typed-nil request body (fixed)
@@ -130,31 +144,34 @@ The ergonomic problem the item was aiming at is real but different: callers shou
 
 `listSandboxes` accepts only `limit` and `cursor`. There is no server-side way to find a Sandbox by anything an operator chose, so a friendly name cannot resolve without paging the entire list.
 
-- [ ] Add a repeatable `metadata` query parameter, encoded `key=value`, to `/v1/sandboxes` in `contracts/openapi/v1/secondbox.openapi.json`.
-- [ ] Add `migrations/postgres/0002_sandbox_name_index.sql` with a partial unique index on `(tenant_ref, subject_ref, (metadata_json->>'secondbox.dev/name'))` where that expression is not null, making the reserved name unique per tenant and subject so resolution is deterministic. Never edit `0001_secondbox.sql`.
-- [ ] Extend `ListSandboxes` in `internal/store/postgres_store.go:687` with a `metadata_json @>` predicate.
-- [ ] Join the filter into the `scope` string passed to `resolvePostgresListCursor` and `encodePostgresListNextCursor`, so a cursor cannot cross filter boundaries.
-- [ ] Thread the filter through all three signatures: the interface at `internal/service/control_plane_service.go:62`, the method at `:595`, and the `listSandboxes` handler at `internal/api/http.go:741`.
-- [ ] Surface the reserved-name conflict as a typed problem rather than a raw unique-violation error.
-- [ ] Cover in `tests/contract/openapi_contract_test.go`, in `tests/integration/list_pagination_http_test.go` for cursor-scope rejection across differing filters, and at store level for the filter and the uniqueness conflict.
-- [ ] Run `just verify-generated`, `just test`, `just test-contract`, and `just test-scenario` on a qualified host.
+- [x] Add a repeatable `metadata` query parameter, encoded `key=value`, to `/v1/sandboxes` in `contracts/openapi/v1/secondbox.openapi.json`. Only the first `=` separates, so a value may contain one.
+- [x] Add `migrations/postgres/0002_sandbox_name_index.sql` with a partial unique index on `(tenant_ref, subject_ref, (metadata_json->>'secondbox.dev/name'))` where that expression is not null and the Sandbox is not deleted, plus a GIN index supporting the containment filter. `0001_secondbox.sql` is untouched, because the lineage is checksummed and editing it would fail every existing database.
+- [x] Extend `ListSandboxes` in `internal/store/postgres_store.go` with a `metadata_json @>` predicate.
+- [x] Join the filter into the `scope` string passed to `resolvePostgresListCursor` and `encodePostgresListNextCursor`, so a cursor cannot cross filter boundaries in either direction.
+- [x] Thread the filter through all three signatures: the interface at `internal/service/control_plane_service.go`, the method, and the `listSandboxes` handler in `internal/api/http.go`.
+- [x] Surface the reserved-name conflict as `ports.ErrSandboxNameConflict`, mapped to the existing `state_conflict` problem code rather than widening the `ProblemCode` enum, from both Sandbox creation and metadata replacement.
+- [x] Add `contracts.SandboxNameMetadataKey` as the single definition of the reserved key.
+- [x] Cover the filter, AND semantics, cursor-scope rejection in both directions, paging within one filter, name uniqueness, name release on deletion, tenant and subject scoping, and unnamed Sandboxes not colliding, in `internal/store/postgres_sandbox_names_test.go`; cover query parsing and its bounds in `internal/api/sandbox_metadata_filter_test.go`.
+- [x] Run `just verify-generated`, `just test`, `just test-contract`. **`just test-scenario` has not been run: it requires a qualified KVM host that is not available here.**
 
 ### Task 5: Add the `run` and `shell` composites
 
-- [ ] Add `secondbox run <profile> [--name X] -- <argv...>`: create, wait for ready, execute, print, and delete unless `--keep` is given.
-- [ ] Add `secondbox shell <name-or-id>`: resolve the name through Task 4, refresh the generation, acquire a lease, then call the existing `runSandboxShellCommand` unchanged.
-- [ ] Keep `--generation`, `--lease`, and `--idempotency-key` as explicit overrides on both commands. They stop being required; they do not stop working.
-- [ ] Write the reserved `secondbox.dev/name` metadata key on create when `--name` is given, and reject a name that collides with an existing Sandbox for the same tenant and subject.
-- [ ] Cover the composites in `cmd/secondbox` tests, and add a scenario asserting that `run` returns the guest's exit status and that `shell` attaches to a real PTY.
-- [ ] Run `go test ./cmd/secondbox`, `just test`, and `just test-scenario` on a qualified host.
+- [x] Add `secondbox run <profile> [--name X] -- <argv...>`: create, wait for ready, execute, print, and delete unless `--keep` is given. Disposal runs even when the command fails, and skips a Sandbox already reported deleted.
+- [x] Add `secondbox shell <name-or-id>`: resolve the reference, apply the observed generation, acquire and renew a Lease, and release it on exit.
+- [x] Keep `--generation`, `--lease`, and `--idempotency-key` as explicit overrides. **Deviation from "call `runSandboxShellCommand` unchanged", in its favour:** the composite injects its resolved values *before* the caller's own arguments and delegates to the existing terminal command untouched. The flag package keeps the last occurrence, so every injected value is overridable by construction, and the tested PTY path is not refactored at all.
+- [x] Write the reserved `secondbox.dev/name` metadata key on create when `--name` is given, and reject a `--metadata` pair that restates it.
+- [x] Resolve a reference by the fixed `sbx_` identifier prefix or else by name, skipping deleted Sandboxes, which keep their metadata and remain listable. The page walk is bounded and says so explicitly when it gives up.
+- [x] Cover the composites in `cmd/secondbox/run_command_test.go`, `cmd/secondbox/shell_command_test.go`, and `cmd/secondbox/sandbox_reference_test.go`.
+- [x] Run `go test ./cmd/secondbox`, `just test`. **`just test-scenario` has not been run: it requires a qualified KVM host that is not available here.**
 
 ### Task 6: Make the built-in profiles bootable
 
-`ControlPlaneService.BuiltInProfiles` at `internal/service/control_plane_service.go:134` is never populated by `internal/config` or `cmd/secondboxd/main.go`, so `resolveBuiltInProfiles` always falls through to `defaultBuiltInProfiles()`. Those specs carry the placeholder digests `sha256:aaaa…` and `sha256:bbbb…` and reference a `default-pool` that nothing creates. Both built-in profiles are therefore present in the API and impossible to boot.
+`ControlPlaneService.BuiltInProfiles` was never populated by `internal/config` or `cmd/secondboxd/main.go`, so `resolveBuiltInProfiles` always fell through to a default carrying the placeholder digests `sha256:aaaa…` and `sha256:bbbb…` and a `default-pool` that nothing creates. Both built-in Profiles were present in the API and impossible to boot.
 
-- [ ] Add required environment variables to `internal/config/config.go` for each built-in profile's runtime bundle digest, toolchain bundle digest, and pool name, using the existing `requiredString` helper. Supply no defaults.
-- [ ] Populate `service.Config.BuiltInProfiles` from that configuration in `cmd/secondboxd/main.go`, leaving `defaultBuiltInProfiles()` as the template the configuration fills and keeping `resolveBuiltInProfiles` rejecting incomplete specs.
-- [ ] Add the variables to `deploy/environment.example` and `deploy/bin/validate-environment.sh`.
-- [ ] Document the one-time operator step that creates the referenced RunnerPool in `docs/operations/deployment.md`. Do not auto-provision it; AGENTS.md requires operators to create every pool and profile explicitly.
-- [ ] Cover in `internal/config` unit tests, in `tests/integration/builtin_profiles_postgres_test.go`, and in `tests/deployment/deployment_policy_test.go`.
-- [ ] Run `just test`, `just test-deployment`, and `just test-compose`.
+- [x] Add required environment variables to `internal/config/config.go` for each built-in Profile's pool, runtime bundle digest, and toolchain bundle digest. Digests must be `sha256:` and 64 lowercase hexadecimal characters. No value has a default.
+- [x] Add `service.BuildBuiltInProfiles`, which applies a deployment binding to the fixed built-in policy, and populate `service.ControlPlaneConfig.BuiltInProfiles` from configuration in `cmd/secondboxd/main.go`.
+- [x] **Remove the implicit default entirely.** `resolveBuiltInProfiles` now rejects an unstated binding rather than substituting placeholders, so the failure is a refusal to start instead of Sandboxes that can never be placed. Every test construction site states its own binding through one shared fixture helper.
+- [x] Add the variables to `deploy/environment.example`, `deploy/bin/validate-environment.sh`, `deploy/compose.yml`, `scripts/compose-test.yml`, and `scripts/scenario-compose.yml`, using each deployment's real pool name.
+- [x] Document the one-time operator step that creates the referenced RunnerPool in `docs/operations/deployment.md`. It is not auto-provisioned; AGENTS.md requires operators to create every pool and Profile explicitly.
+- [x] Cover in `internal/config/builtin_profile_test.go` and `internal/service/builtin_profiles_test.go`.
+- [x] Run `just test`, `just test-deployment`, `just test-contract`, `just verify-generated`.

@@ -54,6 +54,23 @@ secondbox \
   --body /secure/runner-pool.json
 ```
 
+## Built-in Profiles
+
+SecondBox ships the immutable `agent-compartment` and `coding-environment` Profiles. Their resource, lifecycle, retention, execution, network, and port policy is fixed; the RunnerPool and the signed runtime and toolchain bundles they pin are deployment-specific and have no default:
+
+```
+SECONDBOX_BUILTIN_AGENT_COMPARTMENT_POOL
+SECONDBOX_BUILTIN_AGENT_COMPARTMENT_RUNTIME_BUNDLE_DIGEST
+SECONDBOX_BUILTIN_AGENT_COMPARTMENT_TOOLCHAIN_BUNDLE_DIGEST
+SECONDBOX_BUILTIN_CODING_ENVIRONMENT_POOL
+SECONDBOX_BUILTIN_CODING_ENVIRONMENT_RUNTIME_BUNDLE_DIGEST
+SECONDBOX_BUILTIN_CODING_ENVIRONMENT_TOOLCHAIN_BUNDLE_DIGEST
+```
+
+Each digest must be `sha256:` followed by 64 lowercase hexadecimal characters and must name a bundle this deployment has verified; `secondboxd` refuses to start otherwise. The digests in `deploy/environment.example` are synthetic development values, exactly as the generated development signed-asset catalog is synthetic, and a production deployment replaces all four.
+
+Creating the referenced RunnerPool remains an explicit operator action, as it is for every other Profile. Create it with `runner-pools create` before any Sandbox is created against a built-in Profile; a Profile that names an absent pool admits Sandboxes that can never be placed.
+
 ## Development Compose
 
 Build and start the unprivileged control plane with loopback-only PostgreSQL and RustFS:
@@ -71,7 +88,7 @@ Preparation validates the complete inventory, starts the development dependencie
 
 The control-plane container runs as UID/GID 65532, drops Linux capabilities, sets `no-new-privileges`, uses a read-only root filesystem and bounded `/tmp`, and has no KVM, TUN/TAP, host-cgroup, host-path, or container-engine access. Its only writable persistent mount is the JSON log volume.
 
-The opt-in `same-host-runner` profile is privileged and mounts `/dev/kvm`, `/dev/net/tun`, host cgroups, issued identity, signed assets, and one dedicated state root. It is packaging for a Linux/amd64 Runner, not evidence that the host passed Firecracker validation.
+The opt-in `same-host-runner` profile is privileged and mounts `/dev/kvm`, `/dev/net/tun`, host cgroups, issued identity, signed assets, and one dedicated state root. The container executes `secondbox-runner` directly as PID 1, sends it `SIGTERM`, and allows 45 seconds for Runner-managed Firecracker teardown before forced removal. It is packaging for a Linux/amd64 Runner, not evidence that the host passed Firecracker validation.
 
 ## Production boundary
 
@@ -92,6 +109,8 @@ PostgreSQL owns desired state, ownership refs, immutable home assignments, gener
 ## Migrations and replacement
 
 Every `secondboxd` validates and applies the embedded ordered migration lineage under a PostgreSQL advisory lock before opening listeners. Missing, reordered, altered, duplicate, or ahead migration records fail startup. Cross-resource references remain logical strings; the schema deliberately contains no foreign keys or CHECK constraints.
+
+Migration `0002` makes the reserved Sandbox name key `secondbox.dev/name` unique per tenant and subject among Sandboxes that are not deleted. That key is ordinary caller-writable Metadata, so a database written before this migration may already hold a duplicate. The migration checks first and fails with the conflicting `tenant/subject=name` values rather than a raw unique violation. Because migrations run before listeners open, a deployment carrying such a duplicate will not start: rename or delete the duplicate Sandboxes, then upgrade.
 
 Use coordinated replacement unless the exact deployment has independently proven mixed-version operation:
 

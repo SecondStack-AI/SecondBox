@@ -84,6 +84,34 @@ Guest standard output and standard error are decoded and written to the CLI's ow
 
 `--deadline` defaults to one minute and `--max-output-bytes` to one mebibyte; the pinned Profile's execution policy bounds both. `--cwd` selects a workspace-relative directory and `--env name=value` is repeatable. `--json` writes the raw `ExecOutcome`, retaining base64 output for scripting, and still exits with the guest's status.
 
+### Naming a Sandbox
+
+Every command that takes a Sandbox accepts either its opaque identifier or a name. Identifiers carry a fixed `sbx_` prefix, so the two are told apart without a speculative request.
+
+A name is the reserved Metadata key `secondbox.dev/name`, which is unique per tenant and subject among Sandboxes that are not deleted. `listSandboxes` filters on it server-side, so a name resolves identically from any host and any SDK; nothing is cached locally. A deleted Sandbox releases its name, and because deleted Sandboxes keep their Metadata and remain listable, resolution skips them.
+
+The service rejects a reserved name that could never resolve: one that is blank, one surrounded by whitespace, and one beginning with `sbx_`, which would shadow an identifier. Uniqueness itself is enforced by the database, and a collision is reported as a `state_conflict`. These rules apply to the Metadata key wherever it is written, through `createSandbox` and `updateSandboxMetadata` alike, not only through the CLI's `--name`.
+
+### Running a one-off command
+
+`run` creates a Sandbox from a Profile, waits for it to become ready, runs one command, and deletes the Sandbox:
+
+```sh
+./dist/secondbox run coding-environment -- python3 -c 'print("hello")'
+```
+
+`--name` reserves a name for later reference and `--keep` retains the Sandbox, reporting its identifier on standard error. `--metadata name=value` is repeatable and cannot restate the reserved name key. `--ready-timeout` bounds the wait for readiness and defaults to five minutes. Output handling and exit status match `exec` exactly, and the Sandbox is disposed of even when the command fails.
+
+### Opening an interactive shell
+
+```sh
+./dist/secondbox shell my-box
+```
+
+`shell` resolves the name, applies the Sandbox's current generation, acquires and renews a Lease for the session, and releases it on exit. It then opens the same real Terminal as `sandbox shell`: raw mode, local dimensions, `SIGWINCH` forwarding, byte-exact binary input and merged PTY output, and the original terminal mode restored on remote exit, cancellation, or transport failure.
+
+Every value it supplies is an overridable default rather than a fixed choice, because injected arguments precede the caller's own. `--lease` or `--session` suppresses Lease acquisition, and `--command`, `--generation`, `--detachable`, `--rows`, `--columns`, and the rest behave as they do for `sandbox shell`. `sandbox shell` itself is unchanged and remains the fully explicit form.
+
 Local operators can inspect a bounded tail or follow the configured control-plane JSON log without supplying API credentials:
 
 ```sh
