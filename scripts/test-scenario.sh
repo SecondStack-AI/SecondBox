@@ -15,8 +15,9 @@ fail() {
   exit 1
 }
 
-if [[ "$scenario_mode" != "suite" && "$scenario_mode" != "stress" ]]; then
-  fail "SECONDBOX_SCENARIO_MODE must be suite or stress"
+if [[ "$scenario_mode" != "suite" && "$scenario_mode" != "stress" &&
+      "$scenario_mode" != "lifecycle" ]]; then
+  fail "SECONDBOX_SCENARIO_MODE must be suite, stress, or lifecycle"
 fi
 
 if [[ "${SECONDBOX_REQUIRE_QUALIFIED_SCENARIO:-}" != "1" ]]; then
@@ -435,6 +436,10 @@ if [[ "$scenario_mode" == "stress" ]]; then
   go run ./tests/scenario/stress \
     --mode prepare \
     --config "$SECONDBOX_STRESS_CONFIG"
+elif [[ "$scenario_mode" == "lifecycle" ]]; then
+  go run ./tests/scenario/lifecycle \
+    --mode prepare \
+    --config "$SECONDBOX_STRESS_CONFIG"
 fi
 
 compose up --detach --wait --wait-timeout 300 secondbox-runner
@@ -445,6 +450,11 @@ if [[ "$scenario_mode" == "suite" ]]; then
     scenario_test_arguments+=(-run "$SECONDBOX_SCENARIO_TEST_PATTERN")
   fi
   go test "${scenario_test_arguments[@]}" ./tests/scenario
+elif [[ "$scenario_mode" == "lifecycle" ]]; then
+  go run ./tests/scenario/lifecycle \
+    --mode run \
+    --config "$SECONDBOX_STRESS_CONFIG" \
+    --output "$SECONDBOX_STRESS_OUTPUT"
 else
   go run ./tests/scenario/stress \
     --mode run \

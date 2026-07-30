@@ -45,6 +45,9 @@ prepare-stress:
 test-stress:
     scripts/test-stress.sh
 
+test-lifecycle:
+    scripts/test-lifecycle.sh
+
 deploy-bootstrap environment:
     deploy/bin/bootstrap-environment.sh "{{environment}}"
 
