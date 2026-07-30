@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/jailersupervisor"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
@@ -1392,7 +1393,7 @@ func TestShutdownReturnsTeardownFailure(t *testing.T) {
 	}
 }
 
-func TestStopJailedInstanceRetriesProcessScanErrors(t *testing.T) {
+func TestStopJailedInstanceWaitsForSupervisorReaper(t *testing.T) {
 	m := newWarmToolTestManager(t)
 	inst := &instance{
 		id: "fc-agent-cmp-a-stop", sandboxID: "agent", sandboxGeneration: 1,
@@ -1400,25 +1401,17 @@ func TestStopJailedInstanceRetriesProcessScanErrors(t *testing.T) {
 		leaseID: "lease-test", assignmentID: "assignment-test",
 		jailedProcess: true, done: make(chan struct{}),
 	}
-	orig := firecrackerProcessRunningFunc
-	var calls atomic.Int32
-	firecrackerProcessRunningFunc = func(string) (bool, error) {
-		if calls.Add(1) == 1 {
-			return false, errors.New("temporary proc scan failure")
-		}
-		return false, nil
-	}
-	t.Cleanup(func() { firecrackerProcessRunningFunc = orig })
 
 	done := make(chan error, 1)
 	go func() {
 		done <- m.stopInstance(context.Background(), inst, false)
 	}()
 	select {
-	case <-inst.done:
-		t.Fatal("done closed on transient process scan error")
+	case err := <-done:
+		t.Fatalf("stopInstance returned before the supervisor reaped Firecracker: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
+	close(inst.done)
 	select {
 	case err := <-done:
 		if err != nil {
@@ -1809,14 +1802,27 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare launch: %v", err)
 	}
-	if launch.executable != m.cfg.JailerPath {
+	if launch.executable != "/proc/self/exe" {
 		t.Fatalf("executable = %q", launch.executable)
 	}
-	args := strings.Join(launch.args, " ")
-	for _, want := range []string{"--id fc-agent-123", "--exec-file " + m.cfg.FirecrackerPath, "--chroot-base-dir " + m.cfg.MicroVMJailerChrootBaseDir, "--new-pid-ns", "--cgroup memory.max=805306368", "-- --api-sock firecracker.sock --config-file firecracker.json"} {
+	if len(launch.args) != 1 || launch.args[0] != jailersupervisor.InvocationArgument {
+		t.Fatalf("supervisor args = %q", launch.args)
+	}
+	args := strings.Join(launch.environment, " ")
+	for _, want := range []string{
+		`"--id","fc-agent-123"`,
+		`"--exec-file","` + m.cfg.FirecrackerPath + `"`,
+		`"--chroot-base-dir","` + m.cfg.MicroVMJailerChrootBaseDir + `"`,
+		`"--new-pid-ns"`,
+		`"--cgroup","memory.max=805306368"`,
+		`"--","--api-sock","firecracker.sock","--config-file","firecracker.json"`,
+	} {
 		if !strings.Contains(args, want) {
-			t.Fatalf("args %q missing %q", args, want)
+			t.Fatalf("supervisor environment %q missing %q", args, want)
 		}
+	}
+	if strings.Contains(strings.Join(launch.args, " "), "--id") {
+		t.Fatalf("supervisor argv exposes Firecracker identity: %q", launch.args)
 	}
 	if launch.config.BootSource.KernelImagePath != kernelName {
 		t.Fatalf("kernel path = %q", launch.config.BootSource.KernelImagePath)
@@ -2697,50 +2703,6 @@ func TestCreateAndStartColdCleansInstanceDirOnFailure(t *testing.T) {
 	}
 }
 
-func TestWatchJailedExitReclaimsOnNaturalExit(t *testing.T) {
-	prev := jailedExitPollInterval
-	jailedExitPollInterval = 10 * time.Millisecond
-	defer func() { jailedExitPollInterval = prev }()
-
-	// No real process runs with this --id, so firecrackerProcessRunning reports
-	// it as gone on the first poll, exercising the natural-exit path.
-	const id = "fc-agent-watch-000000000000"
-	inst := &instance{id: id, sandboxID: "agent-watch", jailedProcess: true, done: make(chan struct{})}
-	m := &Manager{
-		cfg:       &config.Config{},
-		instances: map[string]*instance{id: inst},
-		guestIPs:  map[string]string{id: "172.30.0.20"},
-	}
-
-	returned := make(chan struct{})
-	go func() {
-		m.watchJailedExit(inst)
-		close(returned)
-	}()
-
-	select {
-	case <-returned:
-	case <-time.After(2 * time.Second):
-		t.Fatal("watchJailedExit did not return after the jailed process was absent")
-	}
-
-	m.mu.Lock()
-	_, tracked := m.instances[id]
-	_, ipHeld := m.guestIPs[id]
-	m.mu.Unlock()
-	if tracked {
-		t.Fatal("instance still tracked after natural exit")
-	}
-	if ipHeld {
-		t.Fatal("guest IP not released after natural exit")
-	}
-	select {
-	case <-inst.done:
-	default:
-		t.Fatal("done channel not closed after natural exit")
-	}
-}
-
 func TestFinishInstanceRetainsGuestIdentityUntilTapCleanupCompletes(t *testing.T) {
 	const (
 		oldID = "fc-agent-recycle-old"
@@ -2835,39 +2797,5 @@ func TestFinishInstanceRetainsGuestIdentityWhenTapCleanupFails(t *testing.T) {
 	}
 	if network.removeCalls < 2 {
 		t.Fatalf("expected bounded retry of tap removal, got %d call(s)", network.removeCalls)
-	}
-}
-
-func TestWatchJailedExitDefersToExplicitStop(t *testing.T) {
-	prev := jailedExitPollInterval
-	jailedExitPollInterval = time.Hour // never fires; only the closed done cancels
-	defer func() { jailedExitPollInterval = prev }()
-
-	const id = "fc-agent-cancel-000000000000"
-	inst := &instance{id: id, sandboxID: "agent-cancel", jailedProcess: true, done: make(chan struct{})}
-	m := &Manager{
-		cfg:       &config.Config{},
-		instances: map[string]*instance{id: inst},
-		guestIPs:  map[string]string{id: "172.30.0.21"},
-	}
-	close(inst.done) // an explicit stopInstance has already reclaimed this instance
-
-	returned := make(chan struct{})
-	go func() {
-		m.watchJailedExit(inst)
-		close(returned)
-	}()
-	select {
-	case <-returned:
-	case <-time.After(time.Second):
-		t.Fatal("watchJailedExit did not return when done was closed")
-	}
-
-	// The watcher must not re-run reclamation; that is stopInstance's job.
-	m.mu.Lock()
-	_, ipHeld := m.guestIPs[id]
-	m.mu.Unlock()
-	if !ipHeld {
-		t.Fatal("watcher reclaimed on the cancel path; should defer to stopInstance")
 	}
 }

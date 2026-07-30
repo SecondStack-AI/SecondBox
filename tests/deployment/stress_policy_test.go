@@ -62,6 +62,7 @@ func TestStressQualificationUsesExternalSDKHarnessAndFailsLoudly(t *testing.T) {
 		"privileged: true",
 		"network_mode: host",
 		"cgroup: host",
+		"stop_grace_period: 45s",
 		"- -healthcheck",
 	} {
 		if !strings.Contains(compose, required) {

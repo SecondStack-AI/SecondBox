@@ -8,8 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
-	"github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 	"io"
 	"os"
 	"os/exec"
@@ -20,6 +18,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/jailersupervisor"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 )
 
 // relocateRunDirForUnixSockets returns a shorter run dir (and true) when runDir is
@@ -473,14 +475,19 @@ func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, 
 	}
 	args := m.jailerArgsWithMemory(instanceID, memoryMiB)
 	args = append(args, "--", "--api-sock", firecrackerSockName, "--config-file", configName)
+	supervisorEnvironment, err := jailersupervisor.CommandEnvironment(m.cfg.JailerPath, args)
+	if err != nil {
+		return firecrackerLaunch{}, err
+	}
 	return firecrackerLaunch{
-		executable: m.cfg.JailerPath,
-		args:       args,
-		config:     fcConfig,
-		configPath: configPath,
-		socketPath: socket,
-		vsockUDS:   vsockUDS,
-		jailRoot:   jailRoot,
+		executable:  "/proc/self/exe",
+		args:        []string{jailersupervisor.InvocationArgument},
+		environment: []string{supervisorEnvironment},
+		config:      fcConfig,
+		configPath:  configPath,
+		socketPath:  socket,
+		vsockUDS:    vsockUDS,
+		jailRoot:    jailRoot,
 	}, nil
 }
 

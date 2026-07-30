@@ -15,11 +15,19 @@ import (
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/firecracker"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/jailersupervisor"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
 
 func main() {
+	if handled, err := jailersupervisor.RunInvocation(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "SecondBox jailer supervisor failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	syscall.Umask(0o077)
 	if err := run(os.Args[1:]); err != nil {
 		slog.Error("SecondBox runner stopped", "error", err)

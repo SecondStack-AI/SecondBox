@@ -28,6 +28,7 @@ func TestComposeSeparatesOptionalPrivilegedRunnerFromControlPlane(t *testing.T) 
 		"object-store:",
 		"profiles: [\"development\"]",
 		"profiles: [\"same-host-runner\"]",
+		"stop_grace_period: 45s",
 		"pg_isready -h 127.0.0.1",
 		"image: ${SECONDBOX_RUNNER_IMAGE:?",
 		"org.secondbox.runner.qualification: \"not-established-by-compose\"",
@@ -88,23 +89,48 @@ func TestComposeSeparatesOptionalPrivilegedRunnerFromControlPlane(t *testing.T) 
 	}
 }
 
-// A privileged runner container receives the host's /dev. Any console, seat, or
-// login unit left enabled in the runner image binds to the host's VT, seat0, and
-// DRM devices and evicts a compositor owning that host console.
-func TestRunnerImageMasksHostConsoleAndSeatUnits(t *testing.T) {
+// A privileged runner container receives the host's /dev. It must not boot an
+// init system that can start console, seat, or login services against host
+// devices.
+func TestRunnerImageExecutesRunnerAsPID1WithoutSystemd(t *testing.T) {
 	dockerfile := readRepositoryFile(t, "runner/Dockerfile")
+	entrypoint := readRepositoryFile(t, "runner/scripts/container/secondbox-runner-entrypoint.sh")
 
-	for _, maskedUnit := range []string{
-		"console-getty.service",
-		"getty.target",
-		"getty@.service",
-		"getty-static.service",
-		"serial-getty@.service",
-		"systemd-logind.service",
+	for _, forbidden := range []string{
+		" dbus ",
+		" systemd ",
+		"/lib/systemd/systemd",
+		"/etc/systemd/system",
+		"runner.env",
+		"compgen -e",
 	} {
-		if !strings.Contains(dockerfile, "ln -s /dev/null /etc/systemd/system/"+maskedUnit) {
-			t.Errorf("runner/Dockerfile must mask %q so a privileged runner cannot claim the host console or seat", maskedUnit)
+		if strings.Contains(" "+dockerfile+"\n"+entrypoint+" ", forbidden) {
+			t.Errorf("runner image startup must not contain %q", forbidden)
 		}
+	}
+	for _, required := range []string{
+		`STOPSIGNAL SIGTERM`,
+		`ENTRYPOINT ["/usr/local/bin/secondbox-runner-entrypoint"]`,
+		`CMD ["/usr/local/bin/secondbox-runner"]`,
+	} {
+		if !strings.Contains(dockerfile, required) {
+			t.Errorf("runner/Dockerfile must contain %q", required)
+		}
+	}
+	for _, required := range []string{
+		`"$1" != "/usr/local/bin/secondbox-runner"`,
+		`exec "$@"`,
+	} {
+		if !strings.Contains(entrypoint, required) {
+			t.Errorf("runner entrypoint must contain %q", required)
+		}
+	}
+}
+
+func TestDockerBuildContextExcludesLocalSecondBoxState(t *testing.T) {
+	dockerignore := readRepositoryFile(t, ".dockerignore")
+	if !strings.Contains(dockerignore, "\n.secondbox\n") {
+		t.Fatal(".dockerignore must exclude local .secondbox operator and qualification state")
 	}
 }
 

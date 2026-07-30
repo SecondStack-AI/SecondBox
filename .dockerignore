@@ -1,6 +1,7 @@
 .git
 .github
 .env
+.secondbox
 .tmp
 deploy/environment
 deploy/*.env

@@ -33,11 +33,11 @@ FROM docker.io/library/debian:12.12-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-      bubblewrap ca-certificates dbus e2fsprogs iproute2 iptables nftables procps systemd util-linux \
+      bubblewrap ca-certificates e2fsprogs iproute2 iptables nftables procps util-linux \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 secondbox-runner \
     && useradd --system --uid 10001 --gid 10001 --home-dir /var/lib/secondbox-runner --create-home --shell /usr/sbin/nologin secondbox-runner \
-    && install -d -m 0700 /run/secondbox-runner /var/lib/secondbox-runner
+    && install -d -m 0700 /var/lib/secondbox-runner
 
 LABEL org.opencontainers.image.source="https://github.com/SecondStack-AI/SecondBox" \
       org.opencontainers.image.title="SecondBox Firecracker runner"
@@ -52,28 +52,10 @@ COPY --from=firecracker-release /out-THIRD-PARTY /usr/share/licenses/firecracker
 COPY LICENSE /usr/share/licenses/secondbox-runner/LICENSE
 COPY --chmod=0755 runner/scripts/container/secondbox-runner-entrypoint.sh /usr/local/bin/secondbox-runner-entrypoint
 COPY --chmod=0755 runner/scripts/microvm-host-network-setup.sh /usr/local/bin/microvm-host-network-setup
-COPY runner/deploy/secondbox-runner.service /etc/systemd/system/secondbox-runner.service
-
-RUN ln -s /etc/systemd/system/secondbox-runner.service /etc/systemd/system/multi-user.target.wants/secondbox-runner.service
-
-# The runner boots a full systemd inside a privileged container, and Docker's
-# privileged mode bind-mounts the HOST's /dev. Left enabled, getty@.service
-# satisfies its ConditionPathExists=/dev/tty0 against the host console and starts
-# an agetty on the host's VT 1, stealing the VT and DRM master from whatever
-# compositor owns it; systemd-logind likewise registers the host's seat0 and
-# claims its input and DRM devices. On a workstation host that kills the desktop
-# session every time a runner container starts. A Firecracker runner needs neither
-# console logins nor seat management, so both are masked.
-RUN ln -s /dev/null /etc/systemd/system/console-getty.service \
-    && ln -s /dev/null /etc/systemd/system/getty.target \
-    && ln -s /dev/null /etc/systemd/system/getty@.service \
-    && ln -s /dev/null /etc/systemd/system/getty-static.service \
-    && ln -s /dev/null /etc/systemd/system/serial-getty@.service \
-    && ln -s /dev/null /etc/systemd/system/systemd-logind.service
 
 USER 0:0
 WORKDIR /var/lib/secondbox-runner
-STOPSIGNAL SIGRTMIN+3
+STOPSIGNAL SIGTERM
 HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=4 CMD ["/usr/bin/setpriv", "--reuid=10001", "--regid=10001", "--clear-groups", "/usr/local/bin/secondbox-runner", "-healthcheck", "-healthcheck-timeout", "5s"]
 ENTRYPOINT ["/usr/local/bin/secondbox-runner-entrypoint"]
-CMD ["/lib/systemd/systemd"]
+CMD ["/usr/local/bin/secondbox-runner"]

@@ -144,20 +144,20 @@ type instance struct {
 	baselineOOMKills       *uint64
 	terminationEvidenceErr error
 	terminalObserver       func(context.Context, InstanceTerminalObservation) error
-	// jailedProcess is true for jailed launches where cmd is the short-lived
-	// jailer parent. The real Firecracker process continues as an orphaned
-	// child, identified by --id.
+	// jailedProcess is true when cmd is the runner-owned jailer supervisor.
+	// The supervisor adopts and reaps the jailer's orphaned Firecracker child.
 	jailedProcess bool
 }
 
 type firecrackerLaunch struct {
-	executable string
-	args       []string
-	config     firecrackerConfig
-	configPath string
-	socketPath string
-	vsockUDS   string
-	jailRoot   string
+	executable  string
+	args        []string
+	environment []string
+	config      firecrackerConfig
+	configPath  string
+	socketPath  string
+	vsockUDS    string
+	jailRoot    string
 }
 
 type microVMImageSelection struct {
@@ -975,6 +975,9 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 	cmd.Dir = dir
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+	if len(launch.environment) != 0 {
+		cmd.Env = append(os.Environ(), launch.environment...)
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if startErr := cmd.Start(); startErr != nil {
 		m.cleanupLaunch(launch)
@@ -1096,49 +1099,12 @@ func (m *Manager) reap(inst *instance) {
 	}
 	if err != nil {
 		if inst.jailedProcess {
-			slog.Warn("firecracker jailer parent exited with error", "sandbox", inst.sandboxID, "instance", inst.id, "error", err)
+			slog.Warn("firecracker jailer supervisor exited with error", "sandbox", inst.sandboxID, "instance", inst.id, "error", err)
 		} else {
 			slog.Warn("firecracker microVM exited", "sandbox", inst.sandboxID, "instance", inst.id, "error", err)
 		}
 	}
-	if inst.jailedProcess {
-		// cmd was only the short-lived jailer parent; the real Firecracker
-		// process keeps running as an orphaned child (identified by --id). Watch
-		// for its exit so the guest IP and TAP are reclaimed
-		// when the VM stops on its own, not only via an explicit stopInstance.
-		m.watchJailedExit(inst)
-		return
-	}
 	m.finishInstance(inst)
-}
-
-// jailedExitPollInterval controls how often watchJailedExit polls for the real
-// (orphaned) Firecracker process to exit. It is a var so tests can shorten it.
-var jailedExitPollInterval = 2 * time.Second
-
-// watchJailedExit blocks until the jailed Firecracker process for inst exits, or
-// an explicit stop closes inst.done, then runs finishInstance (made idempotent
-// by doneOnce). Unlike the active stop path, a transient failure to scan /proc
-// is retried rather than treated as an exit, so a live VM is never torn down by
-// mistake.
-func (m *Manager) watchJailedExit(inst *instance) {
-	ticker := time.NewTicker(jailedExitPollInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-inst.done:
-			return
-		case <-ticker.C:
-			running, err := firecrackerProcessRunningFunc(inst.id)
-			if err != nil {
-				continue
-			}
-			if !running {
-				m.finishInstance(inst)
-				return
-			}
-		}
-	}
 }
 
 func (m *Manager) finishInstance(inst *instance) {
@@ -1388,20 +1354,13 @@ func (m *Manager) stopInstance(ctx context.Context, inst *instance, removeFiles 
 		kill := time.AfterFunc(5*time.Second, func() {
 			_ = signalFirecrackerByID(inst.id, syscall.SIGKILL)
 		})
-		ticker := time.NewTicker(100 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			running, err := firecrackerProcessRunningFunc(inst.id)
-			if err == nil && !running {
-				kill.Stop()
-				m.finishInstance(inst)
-				break
-			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-ticker.C:
-			}
+		select {
+		case <-inst.done:
+			kill.Stop()
+		case <-ctx.Done():
+			// Leave the kill timer to escalate. The jailer supervisor remains
+			// responsible for reaping Firecracker when it exits.
+			return ctx.Err()
 		}
 	} else {
 		if inst.cmd == nil || inst.cmd.Process == nil {
