@@ -274,7 +274,7 @@ func (driver *stressDriver) runStreamingExec(
 	ctx context.Context,
 	handle *secondboxclient.SandboxHandle,
 	key string,
-) (returnErr error) {
+) error {
 	command := fmt.Sprintf("head -c %d /dev/zero", driver.config.StreamingOutputBytes)
 	session, err := handle.CreateExecStream(ctx, secondboxclient.StreamingExecRequest{
 		Command: secondboxclient.Command{
@@ -292,9 +292,7 @@ func (driver *stressDriver) runStreamingExec(
 	if err != nil {
 		return err
 	}
-	defer func() {
-		returnErr = errors.Join(returnErr, stream.Close())
-	}()
+	defer stream.Close()
 	if err := stream.CloseInput(); err != nil {
 		return err
 	}
@@ -443,6 +441,11 @@ func (driver *stressDriver) runSnapshotRestore(
 	}
 	if !bytes.Equal(restored, baseline) {
 		return errors.New("SecondBox stress Snapshot restore did not recover the baseline bytes")
+	}
+	if err := driver.transition(
+		ctx, handle, "stop", key+"-stop-before-snapshot-delete", "stopped", "",
+	); err != nil {
+		return err
 	}
 	deleteOperation, err := driver.client.DeleteSnapshot(
 		ctx, snapshotID, key+"-delete-snapshot",
