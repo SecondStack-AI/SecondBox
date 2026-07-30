@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/protobuf/proto"
 
@@ -565,6 +566,9 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 		compatibilityJSON, sandbox.LastActivityAt, sandbox.Revision, "", "", "", initialLifecycleIntent,
 		"", nil, sandbox.UpdatedAt, 0, 8, sandbox.CreatedAt, sandbox.UpdatedAt, sandbox.DeletedAt,
 	); err != nil {
+		if isSandboxNameConflict(err) {
+			return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrSandboxNameConflict
+		}
 		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox insert failed: %w", err)
 	}
 	input.Operation.SandboxID = sandbox.ID
@@ -690,8 +694,16 @@ func (store *PostgresControlPlaneStore) ListSandboxes(
 	subjectRef string,
 	limit int,
 	cursor string,
+	metadata map[string]string,
 ) (contracts.SandboxPage, error) {
-	scope := "tenant=" + tenantRef + "\x1fsubject=" + subjectRef
+	filter, err := encodeSandboxMetadataFilter(metadata)
+	if err != nil {
+		return contracts.SandboxPage{}, err
+	}
+	// The filter joins the cursor scope so a cursor issued for one filter can
+	// never be replayed against a different one.
+	scope := "tenant=" + tenantRef + "\x1fsubject=" + subjectRef +
+		"\x1fmetadata=" + string(filter)
 	boundary, err := store.resolvePostgresListCursor(
 		ctx,
 		sandboxListCursorResource,
@@ -705,12 +717,18 @@ func (store *PostgresControlPlaneStore) ListSandboxes(
 	if err != nil {
 		return contracts.SandboxPage{}, err
 	}
+	var filterArgument any
+	if filter != nil {
+		filterArgument = string(filter)
+	}
 	rows, err := store.pool.Query(ctx, sandboxSelect+`
 		WHERE sandbox.tenant_ref=$1 AND sandbox.subject_ref=$2
 		  AND (NOT $3 OR (sandbox.created_at,sandbox.id) > ($4,$5))
+		  AND ($7::jsonb IS NULL OR sandbox.metadata_json @> $7::jsonb)
 		ORDER BY sandbox.created_at,sandbox.id
 		LIMIT $6`,
-		tenantRef, subjectRef, boundary.Active, boundary.CreatedAt, boundary.ItemKey, limit+1)
+		tenantRef, subjectRef, boundary.Active, boundary.CreatedAt, boundary.ItemKey,
+		limit+1, filterArgument)
 	if err != nil {
 		return contracts.SandboxPage{}, fmt.Errorf("SecondBox Sandbox list failed: %w", err)
 	}
@@ -737,6 +755,31 @@ func (store *PostgresControlPlaneStore) ListSandboxes(
 	}
 	return page, nil
 }
+
+// encodeSandboxMetadataFilter renders a containment filter, or nil when the
+// caller requested no filter.
+func encodeSandboxMetadataFilter(metadata map[string]string) ([]byte, error) {
+	if len(metadata) == 0 {
+		return nil, nil
+	}
+	// json.Marshal sorts map keys, so the encoding is stable across requests and
+	// safe to embed in a page cursor scope.
+	filter, err := json.Marshal(metadata)
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox Sandbox metadata filter encode failed: %w", err)
+	}
+	return filter, nil
+}
+
+// isSandboxNameConflict reports a violation of the reserved-name unique index.
+func isSandboxNameConflict(err error) bool {
+	var postgresError *pgconn.PgError
+	return errors.As(err, &postgresError) &&
+		postgresError.Code == "23505" &&
+		postgresError.ConstraintName == sandboxNameIndexName
+}
+
+const sandboxNameIndexName = "sandboxes_subject_name_idx"
 
 func (store *PostgresControlPlaneStore) GetOperation(
 	ctx context.Context,

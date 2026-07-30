@@ -18,6 +18,7 @@ var (
 	ErrRunnerNotFound          = errors.New("SecondBox Runner not found")
 	ErrRunnerPoolUnavailable   = errors.New("SecondBox compatible runner pool unavailable")
 	ErrSandboxNotFound         = errors.New("SecondBox Sandbox not found")
+	ErrSandboxNameConflict     = errors.New("SecondBox Sandbox name is already in use")
 	ErrIdempotencyConflict     = errors.New("SecondBox idempotency key payload conflict")
 	ErrQuotaExceeded           = errors.New("SecondBox quota exceeded")
 	ErrRevisionConflict        = errors.New("SecondBox resource revision conflict")

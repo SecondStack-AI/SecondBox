@@ -59,7 +59,7 @@ type SandboxStore interface {
 	CreateSandbox(ctx context.Context, input ports.CreateSandboxInput) (contracts.Sandbox, contracts.Operation, bool, error)
 	UpdateSandboxMetadata(ctx context.Context, input ports.UpdateSandboxMetadataInput) (contracts.Sandbox, error)
 	GetSandbox(ctx context.Context, tenantRef, subjectRef, sandboxID string) (contracts.Sandbox, error)
-	ListSandboxes(ctx context.Context, tenantRef, subjectRef string, limit int, cursor string) (contracts.SandboxPage, error)
+	ListSandboxes(ctx context.Context, tenantRef, subjectRef string, limit int, cursor string, metadata map[string]string) (contracts.SandboxPage, error)
 	GetOperation(ctx context.Context, tenantRef, subjectRef, operationID string) (contracts.Operation, error)
 	GetSubjectUsage(ctx context.Context, tenantRef, subjectRef string) (contracts.SubjectUsage, error)
 }
@@ -597,12 +597,13 @@ func (service *ControlPlaneService) ListSandboxes(
 	principal contracts.Principal,
 	limit int,
 	cursor string,
+	metadata map[string]string,
 ) (contracts.SandboxPage, error) {
 	if principal.TenantRef == "" || principal.SubjectRef == "" {
 		return contracts.SandboxPage{}, ports.ErrAuthorizationDenied
 	}
 	return service.store.ListSandboxes(
-		ctx, principal.TenantRef, principal.SubjectRef, boundedLimit(limit), cursor,
+		ctx, principal.TenantRef, principal.SubjectRef, boundedLimit(limit), cursor, metadata,
 	)
 }
 
@@ -1243,6 +1244,29 @@ func validateSandboxMetadata(metadata map[string]string) error {
 		if strings.TrimSpace(key) == "" || len(key) > 128 || len(value) > 1024 {
 			return errors.New("SecondBox Sandbox metadata key or value exceeds its bound")
 		}
+	}
+	return validateReservedSandboxName(metadata)
+}
+
+// validateReservedSandboxName bounds the reserved name so that it identifies one
+// Sandbox unambiguously. Uniqueness is the database's to enforce; this rejects
+// the names that could never resolve in the first place.
+func validateReservedSandboxName(metadata map[string]string) error {
+	name, present := metadata[contracts.SandboxNameMetadataKey]
+	if !present {
+		return nil
+	}
+	if name != strings.TrimSpace(name) || name == "" {
+		return fmt.Errorf(
+			"SecondBox Sandbox metadata %s must not be blank or surrounded by whitespace",
+			contracts.SandboxNameMetadataKey,
+		)
+	}
+	if strings.HasPrefix(name, contracts.SandboxIDPrefix) {
+		return fmt.Errorf(
+			"SecondBox Sandbox metadata %s must not begin with %q, which identifies a Sandbox",
+			contracts.SandboxNameMetadataKey, contracts.SandboxIDPrefix,
+		)
 	}
 	return nil
 }

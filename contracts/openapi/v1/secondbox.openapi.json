@@ -342,6 +342,7 @@
         "parameters": [
           {"$ref": "#/components/parameters/PageLimit"},
           {"$ref": "#/components/parameters/PageCursor"},
+          {"$ref": "#/components/parameters/SandboxMetadataFilter"},
           {"$ref": "#/components/parameters/RequestID"}
         ],
         "responses": {
@@ -1497,6 +1498,19 @@
         "required": false,
         "description": "Opaque continuation token returned as nextCursor by the same endpoint and exact filter scope.",
         "schema": {"type": "string", "minLength": 1, "maxLength": 512}
+      },
+      "SandboxMetadataFilter": {
+        "name": "metadata",
+        "in": "query",
+        "required": false,
+        "description": "Repeatable name=value Metadata containment filter; a Sandbox matches only when it carries every supplied pair. Only the first '=' separates, so a value may contain one. The reserved name key is secondbox.dev/name, unique per tenant and subject among Sandboxes that are not deleted. A nextCursor is bound to the exact filter that produced it and is rejected against any other filter.",
+        "style": "form",
+        "explode": true,
+        "schema": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {"type": "string", "minLength": 2, "maxLength": 1153, "pattern": "^[A-Za-z0-9._/-]{1,128}=[\\s\\S]{0,1024}$"}
+        }
       },
       "ProfileName": {"name": "profileName", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/ProfileName"}},
       "RunnerPoolName": {"name": "runnerPoolName", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/ProfileName"}},

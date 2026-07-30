@@ -744,8 +744,14 @@ func (apiHandler *handler) listSandboxes(writer http.ResponseWriter, request *ht
 		apiHandler.writeError(writer, request, err)
 		return
 	}
+	metadata, err := queryMetadataFilter(request)
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
 	page, err := apiHandler.service.ListSandboxes(
-		request.Context(), requestPrincipal(request), limit, request.URL.Query().Get("cursor"),
+		request.Context(), requestPrincipal(request), limit,
+		request.URL.Query().Get("cursor"), metadata,
 	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
@@ -1202,6 +1208,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusConflict, "execution_node_unavailable", "Compatible execution node unavailable", true
 	case errors.Is(err, ports.ErrRunnerPoolExists):
 		return http.StatusConflict, "state_conflict", "RunnerPool already exists", false
+	case errors.Is(err, ports.ErrSandboxNameConflict):
+		return http.StatusConflict, "state_conflict", "Sandbox name is already in use", false
 	case errors.Is(err, ports.ErrIdempotencyConflict):
 		return http.StatusConflict, "idempotency_conflict", "Idempotency key payload conflict", false
 	case errors.Is(err, ports.ErrArtifactIntegrity):
@@ -1525,6 +1533,38 @@ func queryLimit(request *http.Request) (int, error) {
 		return 0, errors.New("SecondBox list limit must be an integer between 1 and 200")
 	}
 	return value, nil
+}
+
+// maximumMetadataFilterEntries bounds one containment filter.
+const maximumMetadataFilterEntries = 8
+
+// queryMetadataFilter parses the repeatable metadata=name=value containment
+// filter. A value may itself contain '=', so only the first one separates.
+func queryMetadataFilter(request *http.Request) (map[string]string, error) {
+	values := request.URL.Query()["metadata"]
+	if len(values) == 0 {
+		return nil, nil
+	}
+	if len(values) > maximumMetadataFilterEntries {
+		return nil, fmt.Errorf(
+			"SecondBox list metadata filter must not exceed %d entries",
+			maximumMetadataFilterEntries,
+		)
+	}
+	filter := make(map[string]string, len(values))
+	for _, entry := range values {
+		name, value, found := strings.Cut(entry, "=")
+		if !found || strings.TrimSpace(name) == "" || len(name) > 128 || len(value) > 1024 {
+			return nil, errors.New(
+				"SecondBox list metadata filter must be name=value within the Metadata bounds",
+			)
+		}
+		if _, duplicate := filter[name]; duplicate {
+			return nil, errors.New("SecondBox list metadata filter must not repeat a name")
+		}
+		filter[name] = value
+	}
+	return filter, nil
 }
 
 func setRevisionETag(writer http.ResponseWriter, revision int64) {

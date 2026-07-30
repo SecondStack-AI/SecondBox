@@ -41,6 +41,16 @@ const (
 	LeaseStateExpired  = "expired"
 	LeaseStateFenced   = "fenced"
 
+	// SandboxNameMetadataKey is the reserved Metadata key that names a Sandbox.
+	// It is unique per tenant and subject among Sandboxes that are not deleted,
+	// so a name resolves to exactly one Sandbox.
+	SandboxNameMetadataKey = "secondbox.dev/name"
+
+	// SandboxIDPrefix is the fixed prefix every minted Sandbox identifier
+	// carries. Clients tell an identifier from a name by it, so a reserved name
+	// may not begin with it.
+	SandboxIDPrefix = "sbx_"
+
 	GuestLivenessUnknown  = "unknown"
 	GuestLivenessStarting = "starting"
 	GuestLivenessReady    = "ready"

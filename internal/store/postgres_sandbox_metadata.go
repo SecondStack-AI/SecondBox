@@ -55,6 +55,9 @@ func (store *PostgresControlPlaneStore) UpdateSandboxMetadata(
 		metadataJSON,
 		input.Now.UTC(),
 	); err != nil {
+		if isSandboxNameConflict(err) {
+			return contracts.Sandbox{}, ports.ErrSandboxNameConflict
+		}
 		return contracts.Sandbox{}, fmt.Errorf(
 			"SecondBox Sandbox metadata update failed: %w",
 			err,
