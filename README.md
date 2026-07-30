@@ -1,65 +1,248 @@
 # SecondBox
 
-SecondBox is a self-hostable network service for durable, isolated development sandboxes. The unprivileged Go control plane exposes the v1 HTTP resource API and mTLS Runner control endpoint, and stores desired state in PostgreSQL. The repository also contains the versioned runner protocol, scheduler, reconciliation logic, and a separately built Firecracker runner.
+**Durable, isolated development sandboxes — as a service you run yourself.**
 
-A `Sandbox` is the durable public resource and its running `Instance` is replaceable compute fenced to one Sandbox generation. Each Sandbox is pinned to one home Runner whose reflink-capable filesystem owns its durable Workspace and local immutable Snapshots. `secondboxd` stores desired state in PostgreSQL and immutable application Artifacts in S3-compatible storage; it never transports Workspace images. Compose contains an optional same-host Runner profile; production RunnerPool provisioning, runner-filesystem recovery, and Firecracker validation remain separate operator responsibilities.
+[![CI](https://github.com/SecondStack-AI/SecondBox/actions/workflows/ci.yml/badge.svg)](https://github.com/SecondStack-AI/SecondBox/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-SecondBox v1 implements Firecracker only. It ships immutable `agent-compartment` and `coding-environment` built-in profiles for its two core use cases. Operators may also create explicit profiles that fix image, toolchain, resource, lifecycle, storage, networking, execution, and runner-pool policy. Every Sandbox pins the resolved immutable profile revision at creation.
+SecondBox runs untrusted workloads — AI agents, user code, plugins, CI jobs, long-lived dev environments — inside Firecracker microVMs whose filesystems survive between sessions.
 
-The HTTP API accepts the deployment-wide `SECONDBOX_PLATFORM_TOKEN` for operator administration and explicitly configured application authorities for bounded consumer access. Each application token is bound to fixed opaque `X-SecondBox-Tenant-Ref` and `X-SecondBox-Subject-Ref` values, exact Sandbox operation scopes, and explicit Profile grants. SecondBox scopes every owned row to both references. Runner connections use a separate pre-shared Runner credential plus a CA-signed mTLS identity.
+- **Hardware isolation.** Every Sandbox is a Firecracker microVM, not a container.
+- **Durable workspaces.** A Sandbox keeps its disk across stops, restarts, and generations. Snapshot it and restore in place.
+- **Real terminals.** A genuine PTY with raw mode, resize forwarding, and bounded reconnect — not a line-buffered exec loop.
+- **Multi-tenant by construction.** Every row is scoped to an opaque tenant and subject reference. Application tokens carry fixed scopes and explicit Profile grants.
+- **Immutable Profiles.** Operators fix image, resources, lifecycle, network, and port policy. Each Sandbox pins the revision resolved at creation.
+- **Self-hosted.** One unprivileged control plane, PostgreSQL, S3-compatible storage, and one or more privileged runners you place yourself.
+
+> [!NOTE]
+> SecondBox is a **networked control plane**, not an embeddable library. Sandboxes run on separately deployed runners, and a client only ever talks to the control plane over HTTPS. There is no daemonless mode.
+
+## How it works
+
+A **Sandbox** is the durable public resource; the **Instance** running it is replaceable compute fenced to one Sandbox generation. Each Sandbox is pinned at creation to one home **Runner**, whose reflink-capable filesystem owns that Sandbox's **Workspace** and local **Snapshots**. A Sandbox never relocates.
+
+`secondboxd` stores desired state in PostgreSQL and immutable **Artifacts** in S3-compatible storage. It never transports workspace bytes — those stay on the runner that owns them.
+
+## Getting started
+
+### 1. Deploy a control plane
+
+```sh
+install -d -m 700 .tmp/secondbox-deploy
+just deploy-bootstrap  .tmp/secondbox-deploy/environment
+just deploy-validate   .tmp/secondbox-deploy/environment
+
+docker build --tag secondbox-control-plane:development .
+just deploy-development-prepare .tmp/secondbox-deploy/environment
+docker compose --env-file .tmp/secondbox-deploy/environment \
+  --file deploy/compose.yml up -d control-plane
+```
+
+Bootstrap generates unique secrets into a private environment file — no shared credential is ever committed. The `development` profile adds loopback-only PostgreSQL and RustFS. Read [deployment and runtime operations](docs/operations/deployment.md) before exposing the API or using external PostgreSQL.
+
+### 2. Give it somewhere to run
+
+A control plane with no runner admits Sandboxes that can never be placed. You need a RunnerPool, an enrolled Runner, and a Profile that pins verified execution assets. SecondBox ships two built-in Profiles, `agent-compartment` and `coding-environment`, whose pool and bundle digests you supply explicitly — see [built-in Profiles](docs/operations/deployment.md#built-in-profiles) and [the Firecracker runtime](docs/operations/firecracker-runtime.md).
+
+### 3. Install the CLI
+
+```sh
+go build -o ./dist/secondbox ./cmd/secondbox
+```
+
+### 4. Log in once
+
+```sh
+secondbox login \
+  --url https://secondbox.example.com \
+  --token "$SECONDBOX_PLATFORM_TOKEN" \
+  --tenant-ref acme \
+  --subject-ref alice
+```
+
+Credentials are verified against the deployment before anything is written, then stored at mode `0600`. Every later command resolves them from the first source that has them: an explicit flag, then `SECONDBOX_URL` / `SECONDBOX_TOKEN` / `SECONDBOX_TENANT_REF` / `SECONDBOX_SUBJECT_REF`, then that file. `secondbox whoami` shows what resolved and from where; it never prints the token.
+
+### 5. Run something
+
+```sh
+secondbox run coding-environment -- python3 -c 'print("hello from a microVM")'
+```
+
+## Using the CLI
+
+### One-off commands
+
+`run` creates a Sandbox, waits for it, runs one command, and deletes it:
+
+```sh
+secondbox run coding-environment -- python3 -c 'print("hello")'
+secondbox run coding-environment --shell -- 'ls -la /workspace && whoami'
+echo 'piped in' | secondbox run coding-environment --stdin -- cat
+```
+
+The guest's stdout and stderr land on your two streams, unmerged, and **its exit status becomes the CLI's exit status** — so `secondbox run … -- false` exits 1 and prints nothing of its own, exactly like a local command.
+
+### Named Sandboxes
+
+```sh
+# Create one and keep it
+secondbox run coding-environment --name my-box --keep -- true
+
+# Address it by name from any machine
+secondbox exec my-box -- go test ./...
+secondbox exec my-box --shell -- 'cd /workspace && make build'
+secondbox shell my-box
+```
+
+Names are the reserved metadata key `secondbox.dev/name`, unique per tenant and subject and resolved **server-side** — so the same name works from anywhere, with nothing cached locally. A deleted Sandbox releases its name.
+
+`run`, `exec`, and `shell` accept a name or an opaque `sbx_…` identifier, telling them apart by the identifier prefix. The transport-level commands below take the identifier only; `secondbox sandboxes list` shows both.
+
+### Interactive shell
+
+```sh
+secondbox shell my-box
+secondbox shell my-box --command /bin/bash --detachable
+```
+
+`shell` resolves the name, applies the Sandbox's current generation, acquires and renews a Lease for the session, and releases it on exit. You get a real PTY: raw mode, local dimensions, `SIGWINCH` forwarding, byte-exact binary I/O, and your terminal restored on exit, cancellation, or transport failure.
+
+Every value it supplies is an overridable default — pass `--lease`, `--generation`, or `--session` and yours wins.
+
+### Everything else
+
+The remaining commands are thin transport over the published API — repeatable `--path`, `--query`, and `--header` pairs, and `--body` taking a file or `-`:
+
+```sh
+secondbox sandboxes list
+
+secondbox files read --path sandboxId=sbx_123 --query path=/workspace/out.txt \
+  --header SecondBox-Generation=4
+
+secondbox snapshots create --path sandboxId=sbx_123 \
+  --header 'If-Match="revision-5"' --header Idempotency-Key=$(uuidgen) \
+  --body ./snapshot.json
+
+secondbox exec stream --sandbox sbx_123 --generation 4 \
+  --idempotency-key $(uuidgen) --request ./stream.json
+```
+
+Routes that mutate a Sandbox require both `Idempotency-Key` and an `If-Match` revision validator; `secondbox sandboxes get` reports the current revision.
+
+`secondbox operation <operationId>` reaches any route in the table directly. Local operator commands — `logs tail`, `logs follow`, `diagnostics bundle`, `timings summary` — need no API credentials for the log routes.
+
+Full reference: [SDK, CLI, and Flue quick starts](docs/operations/sdk-cli-and-flue.md).
+
+## SDKs
+
+Go, TypeScript, and Python share one composition layer: generated idempotency keys, bounded-wait looping, lease keepers that renew in the background, outcome decoding, and `run`.
+
+```go
+client, _ := secondboxclient.NewSecondBoxSubjectClient(
+    "https://secondbox.example.com", token, "acme", "alice", http.DefaultClient)
+
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+defer cancel()
+
+handle, outcome, err := client.Run(ctx, secondboxclient.RunRequest{
+    Profile: "coding-environment",
+    Command: secondboxclient.Command{ArgvCommand: &secondboxclient.ArgvCommand{
+        Mode: "argv", Executable: "python3", Arguments: []string{"-c", "print('hello')"},
+    }},
+    DeadlineMilliseconds: 30_000,
+    MaximumOutputBytes:   1 << 20,
+})
+fmt.Print(string(outcome.Result.Stdout))
+_ = handle // Run never deletes; disposal is yours
+```
+
+<details>
+<summary><b>TypeScript</b></summary>
+
+```ts
+import { SecondBox, SecondBoxClient } from "@secondstack-ai/secondbox";
+
+const api = new SecondBox(
+  new SecondBoxClient("https://secondbox.example.com", token, fetch, "acme", "alice"),
+);
+
+const { handle, result } = await api.run({
+  profile: "coding-environment",
+  command: "python3 -c 'print(\"hello\")'",
+  deadlineMilliseconds: 30_000,
+  maximumOutputBytes: 1_048_576,
+  readyTimeoutMilliseconds: 300_000,
+});
+
+if (result.kind === "exited") process.stdout.write(result.stdout);
+```
+
+</details>
+
+<details>
+<summary><b>Python</b></summary>
+
+```python
+from secondbox_client import SecondBoxClient
+
+client = SecondBoxClient("https://secondbox.example.com", token, "acme", "alice")
+
+handle, result = client.run(
+    "coding-environment",
+    "python3 -c 'print(\"hello\")'",
+    deadline_milliseconds=30_000,
+    maximum_output_bytes=1_048_576,
+)
+print(result.stdout.decode())
+```
+
+</details>
+
+`Run` never deletes the Sandbox it created, in any of the three clients — disposal stays your decision.
 
 ## Repository layout
 
-- `cmd/secondboxd` — unprivileged control plane
-- `cmd/secondbox` — profile, runner, Sandbox, and data-plane CLI
-- `contracts` — canonical public, runner, and guest-agent protocols
-- `internal` — control-plane domain, API, scheduling, reconciliation, and persistence
-- `migrations/postgres` — SecondBox database migration lineage
-- `runner` — privileged Firecracker runner and guest agent
-- `sdk` — thin handwritten Go, TypeScript, and Python clients
-- `deploy` — Compose, systemd, and deployment examples
-- `docs/design` — current architecture and compatibility contracts
-- `docs/operations` — installation, backup, and diagnostics
+| Path | Contents |
+| --- | --- |
+| `cmd/secondbox` | the CLI |
+| `cmd/secondboxd` | unprivileged control plane |
+| `runner` | privileged Firecracker runner and guest agent |
+| `contracts` | canonical public, runner, and guest-agent protocols |
+| `internal` | domain, API, scheduling, reconciliation, persistence |
+| `migrations/postgres` | database migration lineage |
+| `sdk` | Go, TypeScript, and Python clients |
+| `deploy` | Compose, systemd, and deployment examples |
+| `docs/design` | architecture and compatibility contracts |
+| `docs/operations` | installation, backup, diagnostics |
 
 ## Validation
 
-The non-KVM gate runs from the repository root:
+The portable gate needs no KVM and is what CI runs:
 
 ```sh
 just test-non-kvm
 ```
 
-CI runs the same command as its portable smoke gate. A release is a Git tag on a commit whose CI run passed; SecondBox has no separate qualification, evidence-assembly, or publication controller.
-
-Firecracker validation requires a dedicated Linux host with KVM and the configured test assets:
+Firecracker validation requires a dedicated Linux host with KVM and the configured assets:
 
 ```sh
 just test-firecracker
 ```
 
-The external scenario gate joins the public HTTP API, PostgreSQL, object storage, runner protocol, and real Firecracker guests. It requires a self-hosted Linux x86-64 machine with writable KVM and TUN devices, Docker Compose, cgroup v2, a separately verified signed microVM bundle, and an XFS or Btrfs workspace root with reflink support:
+The external scenario gate joins the HTTP API, PostgreSQL, object storage, the runner protocol, and real Firecracker guests. It needs a self-hosted Linux x86-64 machine with writable KVM and TUN devices, cgroup v2, a separately verified signed microVM bundle, and an XFS or Btrfs workspace root with reflink support:
 
 ```sh
 SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1 just test-scenario
 ```
 
-The artifact trust and host variables are mandatory; see [scenario qualification](docs/operations/scenario-qualification.md) for setup, evidence, and timing budgets. GitHub-hosted runners continue to run `just test-non-kvm`; only the labeled self-hosted KVM job runs this gate.
+See [scenario qualification](docs/operations/scenario-qualification.md) for setup, evidence, and timing budgets. A release is a Git tag on a commit whose CI run passed.
 
-## Development deployment
+## Security
 
-The Compose deployment starts the unprivileged control plane and offers loopback-only PostgreSQL and RustFS S3-compatible dependencies under the `development` profile. It never embeds a shared credential; bootstrap creates a private environment file with unique generated secrets.
+Runner connections require TLS 1.3, a CA-signed certificate identifying the Runner, and a pre-shared Runner credential. The HTTP API accepts the deployment-wide platform token for operators, and explicitly configured application authorities bound to fixed tenant and subject references, exact operation scopes, and named Profile grants. None of these authorities are interchangeable.
 
-```sh
-install -d -m 700 .tmp/secondbox-deploy
-just deploy-bootstrap .tmp/secondbox-deploy/environment
-just deploy-validate .tmp/secondbox-deploy/environment
-docker build --tag secondbox-control-plane:development .
-just deploy-development-prepare .tmp/secondbox-deploy/environment
-docker compose --env-file .tmp/secondbox-deploy/environment --file deploy/compose.yml up -d control-plane
-```
-
-The preparation command is safe to repeat: it validates the bootstrapped development inventory, starts PostgreSQL and RustFS, and creates the explicitly configured bucket before the control plane starts. Read [deployment and runtime operations](docs/operations/deployment.md) before exposing the API or using external PostgreSQL. The supplied RustFS service is a loopback-only development implementation of the object-store dependency consumed by Artifact operations. The coordinated backup command captures PostgreSQL and reachable Artifact objects only. Operators must back up each Runner's stable identity and workspace root as one consistent recovery unit; see [backup and recovery](docs/operations/backup-and-restore.md).
+Loss of an unbacked home-runner workspace filesystem loses that Sandbox: PostgreSQL or S3 recovery alone is not sufficient. Back up each Runner's stable identity and workspace root as one consistent unit — see [backup and recovery](docs/operations/backup-and-restore.md) and the [threat model](docs/design/threat-model.md).
 
 ## License
 
-SecondBox source is licensed under the MIT License. Third-party components and execution assets retain their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+MIT. Third-party components and execution assets retain their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
