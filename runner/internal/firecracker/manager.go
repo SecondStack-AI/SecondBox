@@ -1336,6 +1336,47 @@ func (m *Manager) Remove(ctx context.Context, instanceID string) error {
 	return m.stopInstance(ctx, inst, true)
 }
 
+// quiesceUnavailableGrace bounds termination when the Workspace could not be
+// frozen. The guest may still hold dirty pages, so the VMM is asked to exit
+// first and only escalated afterwards.
+const quiesceUnavailableGrace = 5 * time.Second
+
+// quiescedGrace is a backstop only. A frozen Workspace is already consistent on
+// disk and the VMM receives SIGKILL directly, so this timer should never fire.
+const quiescedGrace = 500 * time.Millisecond
+
+// quiesceWorkspace freezes the guest Workspace filesystem so the VMM can be
+// terminated without waiting for a graceful guest shutdown. It reports whether
+// the filesystem is known to be consistent on disk. A guest that cannot be
+// reached is not an error here: the caller falls back to the slower signal
+// escalation that does not assume a quiesced filesystem.
+func (m *Manager) quiesceWorkspace(ctx context.Context, inst *instance) bool {
+	if m == nil || inst == nil {
+		return false
+	}
+	freeze := m.FreezeWorkspace
+	if m.freezeWorkspace != nil {
+		freeze = m.freezeWorkspace
+	}
+	freezeCtx, cancel := context.WithTimeout(ctx, quiescedGrace)
+	defer cancel()
+	if _, err := freeze(freezeCtx, inst.id); err != nil {
+		slog.Warn(
+			"microVM workspace freeze before termination failed",
+			"instance", inst.id, "error", err,
+		)
+		return false
+	}
+	return true
+}
+
+func (m *Manager) terminationGrace(quiesced bool) time.Duration {
+	if quiesced {
+		return quiescedGrace
+	}
+	return quiesceUnavailableGrace
+}
+
 func (m *Manager) stopInstance(ctx context.Context, inst *instance, removeFiles bool) error {
 	if inst == nil {
 		return nil
@@ -1344,15 +1385,29 @@ func (m *Manager) stopInstance(ctx context.Context, inst *instance, removeFiles 
 	inst.explicitStop = true
 	m.mu.Unlock()
 	var stopErr error
+	// Quiesce the Workspace filesystem before terminating the VMM. A frozen
+	// filesystem has flushed its dirty pages and is consistent on disk, so the
+	// VMM can be terminated immediately. Without this the runner sends SIGTERM
+	// and waits out the escalation grace period on every stop, because the VMM
+	// does not exit on SIGTERM; that grace period dominated stop latency.
+	quiesced := m.quiesceWorkspace(ctx, inst)
 	if err := inst.closeGuestProtocol(); err != nil {
 		stopErr = errors.Join(stopErr, fmt.Errorf("close guest protocol: %w", err))
 	}
 	if inst.jailedProcess {
-		if err := signalFirecrackerByID(inst.id, syscall.SIGTERM); err != nil {
+		signalInstance := signalFirecrackerByID
+		if m.signalInstance != nil {
+			signalInstance = m.signalInstance
+		}
+		terminate := syscall.SIGTERM
+		if quiesced {
+			terminate = syscall.SIGKILL
+		}
+		if err := signalInstance(inst.id, terminate); err != nil {
 			stopErr = errors.Join(stopErr, fmt.Errorf("signal jailed Firecracker %q: %w", inst.id, err))
 		}
-		kill := time.AfterFunc(5*time.Second, func() {
-			_ = signalFirecrackerByID(inst.id, syscall.SIGKILL)
+		kill := time.AfterFunc(m.terminationGrace(quiesced), func() {
+			_ = signalInstance(inst.id, syscall.SIGKILL)
 		})
 		select {
 		case <-inst.done:
@@ -1366,12 +1421,16 @@ func (m *Manager) stopInstance(ctx context.Context, inst *instance, removeFiles 
 		if inst.cmd == nil || inst.cmd.Process == nil {
 			m.finishInstance(inst)
 		} else {
-			if err := syscall.Kill(-inst.cmd.Process.Pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+			terminate := syscall.SIGTERM
+			if quiesced {
+				terminate = syscall.SIGKILL
+			}
+			if err := syscall.Kill(-inst.cmd.Process.Pid, terminate); err != nil && !errors.Is(err, syscall.ESRCH) {
 				stopErr = errors.Join(stopErr, fmt.Errorf("signal Firecracker process group %q: %w", inst.id, err))
 			}
 			// Escalate to SIGKILL after a grace period. The reaper (started at create)
 			// observes exit, runs cleanup exactly once, and signals via inst.done.
-			kill := time.AfterFunc(5*time.Second, func() {
+			kill := time.AfterFunc(m.terminationGrace(quiesced), func() {
 				_ = syscall.Kill(-inst.cmd.Process.Pid, syscall.SIGKILL)
 			})
 			select {
