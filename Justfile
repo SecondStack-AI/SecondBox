@@ -39,6 +39,9 @@ test-multirunner:
 test-scenario:
     scripts/test-scenario.sh
 
+test-stress:
+    scripts/test-stress.sh
+
 deploy-bootstrap environment:
     deploy/bin/bootstrap-environment.sh "{{environment}}"
 

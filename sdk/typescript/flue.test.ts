@@ -135,6 +135,7 @@ class RecordingSandbox implements SandboxFilesystem {
   execResult: ExecResult = {
     kind: "exited",
     exitCode: 42,
+    elapsedMilliseconds: 5,
     stdout: new TextEncoder().encode("out"),
     stderr: new TextEncoder().encode("err"),
   };

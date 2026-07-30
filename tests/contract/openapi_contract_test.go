@@ -191,6 +191,7 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 			"executeSandboxCommand", "createSandboxExecStream", "readSandboxFile",
 			"writeSandboxFile", "uploadSandboxArtifact", "downloadArtifactContent",
 			"createSandboxPortSession",
+			"getSandboxTiming", "getOperationTiming", "getDeploymentTiming",
 		} {
 			if !operationIDs[required] {
 				t.Errorf("canonical contract is missing operationId %q", required)
@@ -331,6 +332,14 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 				t.Errorf("%s must not encode failure as a synthetic exit code", name)
 			}
 		}
+		exited := componentSchema(t, document, "ExecExited")
+		exitedRequired := map[string]bool{}
+		for _, value := range array(t, exited["required"], "ExecExited.required") {
+			exitedRequired[value.(string)] = true
+		}
+		if !exitedRequired["elapsedMilliseconds"] {
+			t.Error("ExecExited must expose successful command elapsed time")
+		}
 	})
 
 	t.Run("public profile omits virtualization backend selection", func(t *testing.T) {
@@ -338,6 +347,36 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 		properties := object(t, spec["properties"], "ProfileRevisionSpec.properties")
 		if _, exists := properties["backend"]; exists {
 			t.Fatal("ProfileRevisionSpec exposes backend selection")
+		}
+	})
+
+	t.Run("timing projections are bounded and provider neutral", func(t *testing.T) {
+		components := object(t, document["components"], "components")
+		parameters := object(t, components["parameters"], "components.parameters")
+		for _, name := range []string{"TimingLimit", "TimingWindowSeconds"} {
+			parameter := object(t, parameters[name], "components.parameters."+name)
+			if parameter["required"] != true {
+				t.Errorf("%s must be required", name)
+			}
+		}
+		var timingSchemas []any
+		for _, name := range []string{
+			"BootStageTiming", "BootTiming", "OperationTiming", "ExecTiming",
+			"SandboxTiming", "DeploymentTimingSummary",
+		} {
+			timingSchemas = append(timingSchemas, componentSchema(t, document, name))
+		}
+		encoded, err := json.Marshal(timingSchemas)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, forbidden := range []string{
+			"firecracker", "kvm", "runnerId", "hostPath", "storageKey",
+			"fencingToken", "backendReference",
+		} {
+			if strings.Contains(string(encoded), forbidden) {
+				t.Errorf("public timing schemas contain internal vocabulary %q", forbidden)
+			}
 		}
 	})
 }

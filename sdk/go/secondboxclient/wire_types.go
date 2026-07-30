@@ -19,24 +19,36 @@ type (
 	ServiceAccountScope = string
 	ProblemCode         = string
 
-	Profile                = contracts.Profile
-	ProfileRevisionSpec    = contracts.ProfileRevisionSpec
-	ResourcePolicy         = contracts.ResourcePolicy
-	LifecyclePolicy        = contracts.LifecyclePolicy
-	RetentionPolicy        = contracts.RetentionPolicy
-	ExecutionPolicy        = contracts.ExecutionPolicy
-	NetworkPolicy          = contracts.NetworkPolicy
-	NetworkDestination     = contracts.NetworkDestination
-	PortPolicy             = contracts.PortPolicy
-	CreateProfileRequest   = contracts.CreateProfileRequest
-	Sandbox                = contracts.Sandbox
-	CreateSandboxRequest   = contracts.CreateSandboxRequest
-	RestoreSnapshotRequest = contracts.RestoreSnapshotRequest
-	CreateSnapshotRequest  = contracts.CreateSnapshotRequest
-	Snapshot               = contracts.Snapshot
-	SnapshotPage           = contracts.SnapshotPage
-	Operation              = contracts.Operation
-	Problem                = contracts.Problem
+	Profile                 = contracts.Profile
+	ProfileRevisionSpec     = contracts.ProfileRevisionSpec
+	ResourcePolicy          = contracts.ResourcePolicy
+	LifecyclePolicy         = contracts.LifecyclePolicy
+	RetentionPolicy         = contracts.RetentionPolicy
+	ExecutionPolicy         = contracts.ExecutionPolicy
+	NetworkPolicy           = contracts.NetworkPolicy
+	NetworkDestination      = contracts.NetworkDestination
+	PortPolicy              = contracts.PortPolicy
+	CreateProfileRequest    = contracts.CreateProfileRequest
+	RunnerPool              = contracts.RunnerPool
+	RunnerPoolPage          = contracts.RunnerPoolPage
+	CreateRunnerPoolRequest = contracts.CreateRunnerPoolRequest
+	Runner                  = contracts.Runner
+	RunnerPage              = contracts.RunnerPage
+	Sandbox                 = contracts.Sandbox
+	CreateSandboxRequest    = contracts.CreateSandboxRequest
+	RestoreSnapshotRequest  = contracts.RestoreSnapshotRequest
+	CreateSnapshotRequest   = contracts.CreateSnapshotRequest
+	Snapshot                = contracts.Snapshot
+	SnapshotPage            = contracts.SnapshotPage
+	Operation               = contracts.Operation
+	DurationPercentiles     = contracts.DurationPercentiles
+	BootStageTiming         = contracts.BootStageTiming
+	BootTiming              = contracts.BootTiming
+	OperationTiming         = contracts.OperationTiming
+	ExecTiming              = contracts.ExecTiming
+	SandboxTiming           = contracts.SandboxTiming
+	DeploymentTimingSummary = contracts.DeploymentTimingSummary
+	Problem                 = contracts.Problem
 )
 
 const (
@@ -189,10 +201,11 @@ type ExecOutput struct {
 }
 
 type ExecExited struct {
-	ExitCode int        `json:"exitCode"`
-	Kind     string     `json:"kind"`
-	Output   ExecOutput `json:"output"`
-	Signal   *int       `json:"signal,omitempty"`
+	ElapsedMilliseconds int64      `json:"elapsedMilliseconds"`
+	ExitCode            int        `json:"exitCode"`
+	Kind                string     `json:"kind"`
+	Output              ExecOutput `json:"output"`
+	Signal              *int       `json:"signal,omitempty"`
 }
 
 type ExecSpawnFailed struct {

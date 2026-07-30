@@ -125,6 +125,7 @@ func (runner *FakeRunner) Registration() *runnerv1.RunnerToControlPlane {
 						VerifiedAtUnixMs: 1,
 					},
 				},
+				StartupTiming: &runnerv1.StartupTiming{},
 			},
 		},
 	})
@@ -143,6 +144,7 @@ func (runner *FakeRunner) Heartbeat(phase runnerv1.DrainPhase) *runnerv1.RunnerT
 					Instances: 8, Operations: 32,
 				},
 				Reserved: &runnerv1.Capacity{}, DrainPhase: phase,
+				StartupTiming: &runnerv1.StartupTiming{},
 			},
 		},
 	})

@@ -183,7 +183,7 @@ export interface TerminalSession {
 }
 
 export type ExecOutcome =
-  | { readonly kind: "exited"; readonly exitCode: number; readonly signal?: number; readonly output: ExecOutput }
+  | { readonly kind: "exited"; readonly exitCode: number; readonly signal?: number; readonly elapsedMilliseconds: number; readonly output: ExecOutput }
   | { readonly kind: "deadline_exceeded"; readonly elapsedMilliseconds: number; readonly output: ExecOutput }
   | { readonly kind: "cancelled"; readonly output: ExecOutput }
   | { readonly kind: "output_exhausted"; readonly limitBytes: number; readonly output: ExecOutput }

@@ -112,6 +112,7 @@ test("SandboxHandle sends generation and maps buffered output", async () => {
     return Response.json({
       kind: "exited",
       exitCode: 23,
+      elapsedMilliseconds: 42,
       output: {
         stdoutBase64: btoa("hello"),
         stderrBase64: btoa("warning"),
@@ -138,6 +139,7 @@ test("SandboxHandle sends generation and maps buffered output", async () => {
   if (result.kind === "exited") {
     assert.equal(new TextDecoder().decode(result.stdout), "hello");
     assert.equal(result.exitCode, 23);
+    assert.equal(result.elapsedMilliseconds, 42);
   }
 });
 
@@ -172,7 +174,7 @@ test("SandboxHandle attaches a sequenced streaming helper with explicit EOF", as
   const sent: string[] = [];
   const received = [
     `{"type":"output","sequence":0,"stream":"stdout","dataBase64":"AQD/"}`,
-    `{"type":"outcome","sequence":1,"outcome":{"kind":"exited","exitCode":0,"output":{"stdoutBase64":"","stderrBase64":""}}}`,
+    `{"type":"outcome","sequence":1,"outcome":{"kind":"exited","exitCode":0,"elapsedMilliseconds":0,"output":{"stdoutBase64":"","stderrBase64":""}}}`,
   ];
   let closed = false;
   const connection: ExecStreamConnection = {

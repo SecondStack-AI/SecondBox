@@ -342,8 +342,9 @@ func registrationFrame(runnerID, connectionID string, sequence uint64) *runnerv1
 					NetworkPolicyReady: true, StorageReady: true, CleanupReady: true,
 					GuestProtocolGenerations: &runnerv1.ProtocolVersionRange{Minimum: 1, Maximum: 1},
 				},
-				Allocatable: &runnerv1.Capacity{VcpuMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30, Instances: 8},
-				Reserved:    &runnerv1.Capacity{},
+				Allocatable:   &runnerv1.Capacity{VcpuMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30, Instances: 8},
+				Reserved:      &runnerv1.Capacity{},
+				StartupTiming: &runnerv1.StartupTiming{},
 			},
 		},
 	}
@@ -357,6 +358,7 @@ func heartbeatFrame(runnerID, connectionID, messageID string, sequence uint64) *
 				ConnectionId: connectionID, ObservedAtUnixMs: 1,
 				Allocatable: &runnerv1.Capacity{VcpuMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30, Instances: 8},
 				Reserved:    &runnerv1.Capacity{}, DrainPhase: runnerv1.DrainPhase_DRAIN_PHASE_ACTIVE,
+				StartupTiming: &runnerv1.StartupTiming{},
 			},
 		},
 	}

@@ -166,6 +166,7 @@ export type ExecResult =
       readonly kind: "exited";
       readonly exitCode: number;
       readonly signal?: number;
+      readonly elapsedMilliseconds: number;
       readonly stdout: Uint8Array;
       readonly stderr: Uint8Array;
     }
@@ -878,6 +879,7 @@ function decodeExecOutcome(outcome: ExecOutcome): ExecResult {
         kind: outcome.kind,
         exitCode: outcome.exitCode,
         ...(outcome.signal === undefined ? {} : { signal: outcome.signal }),
+        elapsedMilliseconds: outcome.elapsedMilliseconds,
         ...decodeOutput(outcome.output),
       };
     case "deadline_exceeded":

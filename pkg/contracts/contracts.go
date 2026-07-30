@@ -234,19 +234,21 @@ type UpdateRunnerPoolRequest struct {
 
 // Runner is enrolled execution identity and fixed-capacity evidence.
 type Runner struct {
-	ID               string           `json:"id"`
-	PoolName         string           `json:"poolName"`
-	Name             string           `json:"name"`
-	State            string           `json:"state"`
-	CredentialState  string           `json:"credentialState"`
-	Architectures    []string         `json:"architectures"`
-	Capabilities     []string         `json:"capabilities"`
-	Capacity         map[string]int64 `json:"capacity"`
-	ProtocolVersions []string         `json:"protocolVersions"`
-	LastSeenAt       *time.Time       `json:"lastSeenAt,omitempty"`
-	Revision         int64            `json:"revision"`
-	CreatedAt        time.Time        `json:"createdAt"`
-	UpdatedAt        time.Time        `json:"updatedAt"`
+	ID                          string           `json:"id"`
+	PoolName                    string           `json:"poolName"`
+	Name                        string           `json:"name"`
+	State                       string           `json:"state"`
+	CredentialState             string           `json:"credentialState"`
+	Architectures               []string         `json:"architectures"`
+	Capabilities                []string         `json:"capabilities"`
+	Capacity                    map[string]int64 `json:"capacity"`
+	ProtocolVersions            []string         `json:"protocolVersions"`
+	SandboxStartSampleCount     int64            `json:"sandboxStartSampleCount"`
+	SandboxStartP95Milliseconds int64            `json:"sandboxStartP95Milliseconds"`
+	LastSeenAt                  *time.Time       `json:"lastSeenAt,omitempty"`
+	Revision                    int64            `json:"revision"`
+	CreatedAt                   time.Time        `json:"createdAt"`
+	UpdatedAt                   time.Time        `json:"updatedAt"`
 }
 
 // RunnerPage is one bounded stable administrative Runner traversal page.
@@ -666,10 +668,11 @@ type ExecOutput struct {
 }
 
 type ExecExited struct {
-	Kind     string     `json:"kind"`
-	ExitCode int32      `json:"exitCode"`
-	Signal   *int32     `json:"signal,omitempty"`
-	Output   ExecOutput `json:"output"`
+	Kind                string     `json:"kind"`
+	ExitCode            int32      `json:"exitCode"`
+	Signal              *int32     `json:"signal,omitempty"`
+	ElapsedMilliseconds int64      `json:"elapsedMilliseconds"`
+	Output              ExecOutput `json:"output"`
 }
 
 type ExecSpawnFailed struct {
@@ -779,6 +782,106 @@ type Operation struct {
 	UpdatedAt       time.Time         `json:"updatedAt"`
 }
 
+// DurationPercentiles is one bounded duration distribution.
+type DurationPercentiles struct {
+	Count           int64  `json:"count"`
+	P50Milliseconds *int64 `json:"p50Milliseconds,omitempty"`
+	P95Milliseconds *int64 `json:"p95Milliseconds,omitempty"`
+	P99Milliseconds *int64 `json:"p99Milliseconds,omitempty"`
+}
+
+// BootStageTiming attributes one provider-neutral Sandbox startup milestone.
+type BootStageTiming struct {
+	Stage                  string    `json:"stage"`
+	ObservedAt             time.Time `json:"observedAt"`
+	ReceivedAt             time.Time `json:"receivedAt"`
+	ElapsedMilliseconds    int64     `json:"elapsedMilliseconds"`
+	CumulativeMilliseconds int64     `json:"cumulativeMilliseconds"`
+}
+
+// BootTiming is one Sandbox generation's bounded startup attribution.
+type BootTiming struct {
+	Generation           int64             `json:"generation"`
+	DurationMilliseconds int64             `json:"durationMilliseconds"`
+	Completed            bool              `json:"completed"`
+	Stages               []BootStageTiming `json:"stages"`
+}
+
+// OperationTiming separates durable queue and execution time.
+type OperationTiming struct {
+	OperationID           string       `json:"operationId"`
+	SandboxID             string       `json:"sandboxId"`
+	Kind                  string       `json:"kind"`
+	State                 string       `json:"state"`
+	CreatedAt             time.Time    `json:"createdAt"`
+	StartedAt             *time.Time   `json:"startedAt,omitempty"`
+	CompletedAt           *time.Time   `json:"completedAt,omitempty"`
+	QueueMilliseconds     *int64       `json:"queueMilliseconds,omitempty"`
+	ExecutionMilliseconds *int64       `json:"executionMilliseconds,omitempty"`
+	TotalMilliseconds     *int64       `json:"totalMilliseconds,omitempty"`
+	Boots                 []BootTiming `json:"boots"`
+}
+
+// ExecTiming reports one completed buffered or streaming execution.
+type ExecTiming struct {
+	SessionID           string    `json:"sessionId"`
+	Mode                string    `json:"mode"`
+	Outcome             string    `json:"outcome"`
+	ElapsedMilliseconds int64     `json:"elapsedMilliseconds"`
+	CreatedAt           time.Time `json:"createdAt"`
+	CompletedAt         time.Time `json:"completedAt"`
+}
+
+// SandboxTiming is a bounded per-Sandbox timing history.
+type SandboxTiming struct {
+	SandboxID  string            `json:"sandboxId"`
+	Operations []OperationTiming `json:"operations"`
+	Execs      []ExecTiming      `json:"execs"`
+}
+
+// BootStageTimingSummary aggregates one provider-neutral startup stage.
+type BootStageTimingSummary struct {
+	Stage    string              `json:"stage"`
+	Duration DurationPercentiles `json:"duration"`
+}
+
+// ExecTimingSummary aggregates one fixed Exec mode and outcome.
+type ExecTimingSummary struct {
+	Mode     string              `json:"mode"`
+	Outcome  string              `json:"outcome"`
+	Duration DurationPercentiles `json:"duration"`
+}
+
+// OperationTimingSummary aggregates one fixed Operation kind and terminal state.
+type OperationTimingSummary struct {
+	Kind      string              `json:"kind"`
+	State     string              `json:"state"`
+	Queue     DurationPercentiles `json:"queue"`
+	Execution DurationPercentiles `json:"execution"`
+	Total     DurationPercentiles `json:"total"`
+}
+
+// HTTPRouteTimingSummary aggregates one fixed route-template and status-class series.
+type HTTPRouteTimingSummary struct {
+	Route       string              `json:"route"`
+	StatusClass string              `json:"statusClass"`
+	Duration    DurationPercentiles `json:"duration"`
+}
+
+// DeploymentTimingSummary is one bounded current-deployment timing projection.
+type DeploymentTimingSummary struct {
+	WindowSeconds     int64                    `json:"windowSeconds"`
+	ObservedAt        time.Time                `json:"observedAt"`
+	Boot              DurationPercentiles      `json:"boot"`
+	BootStages        []BootStageTimingSummary `json:"bootStages"`
+	DominantBootStage *BootStageTimingSummary  `json:"dominantBootStage,omitempty"`
+	Exec              DurationPercentiles      `json:"exec"`
+	ExecSeries        []ExecTimingSummary      `json:"execSeries"`
+	API               DurationPercentiles      `json:"api"`
+	APISeries         []HTTPRouteTimingSummary `json:"apiSeries"`
+	Operations        []OperationTimingSummary `json:"operations"`
+}
+
 // Problem is the stable typed failure envelope.
 type Problem struct {
 	Type      string          `json:"type"`
@@ -812,8 +915,39 @@ type AuditEvent struct {
 	CreatedAt    time.Time         `json:"createdAt"`
 }
 
-// MetricsSnapshot contains only fixed-cardinality state and outcome counts.
+// MetricDurationHistogram is one cumulative duration histogram.
+type MetricDurationHistogram struct {
+	Count        uint64
+	SumSeconds   float64
+	BucketCounts []uint64
+}
+
+// OperationDurationMetric is one bounded Operation kind and terminal-state series.
+type OperationDurationMetric struct {
+	Kind          string
+	TerminalState string
+	Histogram     MetricDurationHistogram
+}
+
+// BootStageDurationMetric is one bounded startup-stage series.
+type BootStageDurationMetric struct {
+	Stage     string
+	Histogram MetricDurationHistogram
+}
+
+// ExecDurationMetric is one bounded Exec mode and outcome series.
+type ExecDurationMetric struct {
+	Mode      string
+	Outcome   string
+	Histogram MetricDurationHistogram
+}
+
+// MetricsSnapshot contains only fixed-cardinality state, outcome, and timing signals.
 type MetricsSnapshot struct {
-	SandboxStates   map[string]int64
-	OperationStates map[string]int64
+	SandboxStates      map[string]int64
+	OperationStates    map[string]int64
+	OperationDurations []OperationDurationMetric
+	BootDuration       MetricDurationHistogram
+	BootStageDurations []BootStageDurationMetric
+	ExecDurations      []ExecDurationMetric
 }

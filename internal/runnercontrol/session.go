@@ -168,6 +168,7 @@ func (session *Session) Accept(message *runnerv1.RunnerToControlPlane) (Event, e
 			heartbeat.ConnectionId != session.config.ConnectionID ||
 			heartbeat.Allocatable == nil ||
 			heartbeat.Reserved == nil ||
+			heartbeat.StartupTiming == nil ||
 			heartbeat.DrainPhase == runnerv1.DrainPhase_DRAIN_PHASE_UNSPECIFIED {
 			return Event{}, fmt.Errorf("%w: Heartbeat identity, capacity, or drain evidence is incomplete", ErrRunnerMessage)
 		}
@@ -488,7 +489,8 @@ func (session *Session) validateRegistration(registration *runnerv1.RunnerRegist
 		registration.ProtocolVersion != session.selectedVersion ||
 		registration.Capabilities == nil ||
 		registration.Allocatable == nil ||
-		registration.Reserved == nil {
+		registration.Reserved == nil ||
+		registration.StartupTiming == nil {
 		return fmt.Errorf("%w: Registration identity, version, or capacity evidence is incomplete", ErrRunnerMessage)
 	}
 	if len(registration.ReadinessFailures) != 0 ||

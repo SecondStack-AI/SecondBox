@@ -66,14 +66,19 @@ The CLI also creates the same secret-avoiding support bundle as the deployment c
 ```sh
 ./dist/secondbox \
   --url http://127.0.0.1:8080 \
+  --token "$SECONDBOX_PLATFORM_TOKEN" \
   diagnostics bundle \
   --output /secure/path/secondbox-support.tar.gz \
   --control-plane-log /var/log/secondbox/control-plane.jsonl \
   --max-log-bytes 1048576 \
-  --http-timeout 5s
+  --max-probe-bytes 1048576 \
+  --http-timeout 5s \
+  --timing-window 15m
 ```
 
-The bundle refuses to overwrite an existing path, is created with mode `0600`, and contains checksummed results only for `healthz`, `readyz`, `metrics`, and the bounded log tail. Probe bodies are individually capped at 1 MiB. Diagnostic probes are intentionally unauthenticated and the CLI never sends `--token` to them.
+The bundle refuses to overwrite an existing path, is created with mode `0600`, and contains checksummed results for `healthz`, `readyz`, `metrics`, the aggregate timing summary, and the bounded log tail. Every HTTP and log bound is explicit. The CLI does not send the token to the three unauthenticated probes; it sends it only to the aggregate timing route and never writes it to the archive.
+
+Use `timings sandbox --sandbox-id ... --limit ...`, `timings operation --operation-id ...`, and `timings summary --window ...` for human-readable lifecycle, boot-stage, Exec, and deployment percentiles. Each timing command requires the global URL, token, tenant, and subject options. See [Observability and diagnostics](observability-and-diagnostics.md) for the bounds and interpretation.
 
 `exec stream` creates and attaches to a streaming session. It reads JSON objects from standard input, assigns their monotonically increasing client sequence, and writes the server's sequenced output and terminal frames as JSON Lines without combining stdout and stderr:
 

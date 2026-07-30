@@ -681,7 +681,8 @@ func execOutcome(session runnercontrol.DataPlaneSession) (any, error) {
 	}
 	switch session.TerminalKind {
 	case runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED.String():
-		if session.ExitCode < 0 || session.ExitCode > 255 || session.Signal < 0 || session.Signal > 64 {
+		if session.ExitCode < 0 || session.ExitCode > 255 || session.Signal < 0 ||
+			session.Signal > 64 || session.ElapsedMilliseconds < 0 {
 			return nil, errors.New("SecondBox Exec terminal outcome is incomplete")
 		}
 		var signal *int32
@@ -689,7 +690,10 @@ func execOutcome(session runnercontrol.DataPlaneSession) (any, error) {
 			value := session.Signal
 			signal = &value
 		}
-		return contracts.ExecExited{Kind: "exited", ExitCode: session.ExitCode, Signal: signal, Output: output}, nil
+		return contracts.ExecExited{
+			Kind: "exited", ExitCode: session.ExitCode, Signal: signal,
+			ElapsedMilliseconds: session.ElapsedMilliseconds, Output: output,
+		}, nil
 	case runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_SPAWN_FAILED.String():
 		reason, err := publicSpawnFailureReason(session.SpawnFailureReason)
 		if err != nil || len(session.TerminalMessage) < 1 || len(session.TerminalMessage) > 2048 {

@@ -72,6 +72,8 @@ CREATE TABLE secondbox.runners (
     drain_phase text NOT NULL,
     reserved_capacity_json jsonb NOT NULL,
     artifact_cache_json jsonb NOT NULL,
+    sandbox_start_sample_count bigint NOT NULL,
+    sandbox_start_p95_milliseconds bigint NOT NULL,
     last_seen_at timestamptz,
     revision bigint NOT NULL,
     created_at timestamptz NOT NULL,
@@ -272,6 +274,22 @@ CREATE TABLE secondbox.assignments (
 CREATE UNIQUE INDEX assignments_sandbox_generation_idx ON secondbox.assignments (sandbox_id, generation);
 CREATE INDEX assignments_runner_state_idx ON secondbox.assignments (runner_id, state, id);
 CREATE INDEX assignments_reconcile_idx ON secondbox.assignments (next_reconcile_at, state, id);
+
+CREATE TABLE secondbox.assignment_stage_timings (
+    assignment_id text NOT NULL,
+    operation_id text NOT NULL,
+    sandbox_id text NOT NULL,
+    stage text NOT NULL,
+    observed_at timestamptz NOT NULL,
+    received_at timestamptz NOT NULL,
+    PRIMARY KEY (assignment_id, stage)
+);
+CREATE INDEX assignment_stage_timings_operation_idx
+    ON secondbox.assignment_stage_timings (operation_id, observed_at, assignment_id, stage);
+CREATE INDEX assignment_stage_timings_sandbox_idx
+    ON secondbox.assignment_stage_timings (sandbox_id, observed_at, assignment_id, stage);
+CREATE INDEX assignment_stage_timings_ready_idx
+    ON secondbox.assignment_stage_timings (stage, observed_at, assignment_id);
 
 CREATE TABLE secondbox.leases (
     id text PRIMARY KEY,
@@ -495,6 +513,10 @@ CREATE INDEX data_plane_sessions_runner_state_idx
     ON secondbox.data_plane_sessions (runner_id, state, priority, created_at, id);
 CREATE INDEX data_plane_sessions_retention_idx
     ON secondbox.data_plane_sessions (retain_until, state, id);
+CREATE INDEX data_plane_sessions_sandbox_timing_idx
+    ON secondbox.data_plane_sessions (
+        tenant_ref, subject_ref, sandbox_id, kind, completed_at DESC, id DESC
+    );
 
 CREATE TABLE secondbox.data_plane_frames (
     id text PRIMARY KEY,
@@ -539,6 +561,8 @@ CREATE TABLE secondbox.operations (
 );
 CREATE INDEX operations_project_created_idx ON secondbox.operations (tenant_ref, subject_ref, created_at, id);
 CREATE INDEX operations_state_updated_idx ON secondbox.operations (state, updated_at, id);
+CREATE INDEX operations_sandbox_created_idx
+    ON secondbox.operations (tenant_ref, subject_ref, sandbox_id, created_at DESC, id DESC);
 
 CREATE TABLE secondbox.idempotency_records (
     tenant_ref text NOT NULL,

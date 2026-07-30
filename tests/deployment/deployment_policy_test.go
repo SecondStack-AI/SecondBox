@@ -622,11 +622,14 @@ func TestSupportBundleCollectionIsBoundedAndSecretAvoiding(t *testing.T) {
 
 	for _, required := range []string{
 		"SECONDBOX_SUPPORT_MAX_LOG_BYTES",
+		"SECONDBOX_SUPPORT_MAX_PROBE_BYTES",
+		"SECONDBOX_SUPPORT_TIMING_WINDOW_SECONDS",
 		"tail -c",
 		"sha256sum",
 		"healthz",
 		"readyz",
 		"metrics",
+		"timing-summary.json",
 	} {
 		if !strings.Contains(script, required) {
 			t.Errorf("support-bundle script must contain %q", required)
@@ -658,6 +661,8 @@ while [ "$#" -gt 0 ]; do
     --output) output="$2"; shift 2 ;;
     --write-out) shift 2 ;;
     --max-time) shift 2 ;;
+    --max-filesize) shift 2 ;;
+    --header) shift 2 ;;
     --silent|--show-error) shift ;;
     *) url="$1"; shift ;;
   esac
@@ -684,7 +689,10 @@ printf '200'
 		"SECONDBOX_SUPPORT_BASE_URL=http://127.0.0.1:8080",
 		"SECONDBOX_SUPPORT_CONTROL_PLANE_LOG="+logPath,
 		"SECONDBOX_SUPPORT_MAX_LOG_BYTES=17",
+		"SECONDBOX_SUPPORT_MAX_PROBE_BYTES=1048576",
 		"SECONDBOX_SUPPORT_HTTP_TIMEOUT_SECONDS=2",
+		"SECONDBOX_SUPPORT_TIMING_WINDOW_SECONDS=300",
+		"SECONDBOX_SUPPORT_PLATFORM_TOKEN=test-support-platform-token-at-least-24-bytes",
 	)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("collect support bundle: %v\n%s", err, output)
@@ -694,7 +702,7 @@ printf '200'
 		t.Fatalf("read probe log: %v", err)
 	}
 	if got, want := string(probes),
-		"http://127.0.0.1:8080/healthz\nhttp://127.0.0.1:8080/readyz\nhttp://127.0.0.1:8080/metrics\n"; got != want {
+		"http://127.0.0.1:8080/healthz\nhttp://127.0.0.1:8080/readyz\nhttp://127.0.0.1:8080/metrics\nhttp://127.0.0.1:8080/v1/timings?windowSeconds=300\n"; got != want {
 		t.Fatalf("support collector probes = %q, want %q", got, want)
 	}
 	extractDirectory := t.TempDir()
@@ -707,6 +715,9 @@ printf '200'
 	}
 	if len(boundedLog) != 17 {
 		t.Fatalf("bounded log bytes = %d, want 17", len(boundedLog))
+	}
+	if _, err := os.Stat(filepath.Join(extractDirectory, "timing-summary.json")); err != nil {
+		t.Fatalf("timing summary missing from support bundle: %v", err)
 	}
 	checksums := exec.Command("sha256sum", "--check", "SHA256SUMS")
 	checksums.Dir = extractDirectory

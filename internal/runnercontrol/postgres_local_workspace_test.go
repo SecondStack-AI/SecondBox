@@ -1077,11 +1077,12 @@ func TestGenerationAdvanceReceiptRetainsStopMutationUntilDatabaseCommit(t *testi
 			id,pool_name,name,state,architectures_json,capabilities_json,capacity_json,
 			protocol_versions_json,guest_protocol_minimum,guest_protocol_maximum,
 			software_version,active_connection_id,last_sequence,drain_phase,
-			reserved_capacity_json,artifact_cache_json,last_seen_at,revision,created_at,updated_at
+			reserved_capacity_json,artifact_cache_json,sandbox_start_sample_count,
+			sandbox_start_p95_milliseconds,last_seen_at,revision,created_at,updated_at
 		) VALUES (
 			'runner-home','pool','runner-home','ready','["amd64"]',
 			'["compute","local-workspace"]','{}','[1]',1,1,'test','connection',0,
-			'active','{}','[]',$1,1,$1,$1
+			'active','{}','[]',0,0,$1,1,$1,$1
 		);
 		INSERT INTO secondbox.workspaces (
 			id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,logical_capacity_bytes,
@@ -2011,11 +2012,12 @@ func seedRunnerLocalRestore(
 			id,pool_name,name,state,architectures_json,capabilities_json,capacity_json,
 			protocol_versions_json,guest_protocol_minimum,guest_protocol_maximum,
 			software_version,active_connection_id,last_sequence,drain_phase,
-			reserved_capacity_json,artifact_cache_json,last_seen_at,revision,created_at,updated_at
+			reserved_capacity_json,artifact_cache_json,sandbox_start_sample_count,
+			sandbox_start_p95_milliseconds,last_seen_at,revision,created_at,updated_at
 		) VALUES (
 			'runner-home','pool','runner-home','ready','["amd64"]',
 			'["compute","local-workspace"]','{}','[1]',1,1,'test','connection',0,
-			'active','{}','[]',$1,1,$1,$1
+			'active','{}','[]',0,0,$1,1,$1,$1
 		);
 		INSERT INTO secondbox.workspaces (
 			id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,logical_capacity_bytes,
