@@ -14,21 +14,21 @@ Make an unsaturated Sandbox reach `ready` in 100–200 ms by resuming an identit
 
 The measured runner-local cold path is 2,609 ms p50 and 2,906 ms p95. Host setup is already about 13 ms: network setup is 10–13 ms, trust verification and launch preparation are about 1 ms each, and starting the compute process is 0–1 ms. Guest protocol negotiation consumes 2,592 ms p50 and 2,890 ms p95. Snapshot resume is therefore the correct path to the target; host micro-optimizations and rootfs trimming are not.
 
-The target is plausible but not yet demonstrated. The previous public `artifact_verify` p50 of 277 ms and p95 of 8,463 ms was assignment delivery/admission time, not verification. The corrected `runner_admission` boundary must first show an unsaturated p95 of at most 25 ms. Snapshot load time is also unmeasured. If the pinned Firecracker version cannot load an immutable file-backed memory snapshot copy-on-write, or if corrected admission remains above 25 ms, 100–200 ms is not reachable with this design as currently composed.
+The target is not reachable with the path as currently composed. The previous public `artifact_verify` p50 of 277 ms and p95 of 8,463 ms was assignment delivery/admission time, not verification. After correcting that boundary, an isolated unsaturated concurrency-1 qualification measured `runner_admission` at 98 ms p50 and 118 ms p95. That exceeds the 25 ms gate below before snapshot load is counted. Snapshot load time is also unmeasured. The architecture remains the right way to remove the 2.6-second guest boot, but the implementation must first reduce admission and prove that the pinned Firecracker version can load an immutable file-backed memory snapshot copy-on-write.
 
 The provisional no-saturation latency budget is:
 
 | Step | Measurement supporting the estimate | Required budget |
 |---|---|---:|
 | API validation and durable admission | Stress API p95 was 5 ms | 5–10 ms |
-| Scheduling, command delivery, and runner admission | Previously mislabeled p50 was 277 ms; the new boundary must isolate it | 10–25 ms |
+| Scheduling, command delivery, and runner admission | Corrected isolated measurement is 98 ms p50 and 118 ms p95 | 98–118 ms now; 10–25 ms required |
 | Signed-template lookup and Workspace attachment | Current trust and attachment stages are 0–1 ms | 1–3 ms |
 | Guest IP, TAP, and host network policy | Current runner measurement is 10–13 ms | 10–15 ms |
 | Process start and file-backed snapshot load | Process start is 0–1 ms; snapshot load is not measured | 30–70 ms |
 | Post-resume hardening, identity bind, network configuration, and Workspace mount | Not measured; current entropy/secrets steps are about 2 ms after a cold boot | 10–30 ms |
 | Assignment result persistence and `ready` projection | Current ready stage is sub-millisecond at the runner | 2–10 ms |
 | Contingency | Required for filesystem and scheduler variance | 20 ms |
-| **Total** | **Conditional on the two unmeasured gates above** | **88–183 ms** |
+| **Total** | **Current admission plus unmeasured snapshot load; target after admission work** | **176–276 ms now; 88–183 ms required** |
 
 ## Fixed architecture
 
