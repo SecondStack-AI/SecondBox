@@ -104,7 +104,7 @@ func TestOutboundPumpPrioritizesControlCommandsOverRelayFrames(t *testing.T) {
 		},
 	}
 	server := &Server{config: ServerConfig{
-		StateStore: state, FrameRelay: relay, Now: time.Now,
+		StateStore: state, FrameRelay: relay, CommandBatchSize: 1, Now: time.Now,
 	}}
 	sender := &recordingControlPlaneSender{}
 	if err := server.sendNextOutboundFrame(
@@ -120,6 +120,36 @@ func TestOutboundPumpPrioritizesControlCommandsOverRelayFrames(t *testing.T) {
 	}
 	if !state.delivered {
 		t.Fatal("control command was not marked delivered")
+	}
+}
+
+func TestOutboundPumpDrainsOnlyTheConfiguredCommandBatch(t *testing.T) {
+	state := &queuedCommandStateStore{
+		deliveries: []CommandDelivery{
+			controlCommandDelivery("fence-1"),
+			controlCommandDelivery("fence-2"),
+			controlCommandDelivery("fence-3"),
+		},
+	}
+	server := &Server{config: ServerConfig{
+		StateStore: state, CommandBatchSize: 2, Now: time.Now,
+	}}
+	sender := &recordingControlPlaneSender{}
+	if err := server.sendNextOutboundFrame(
+		t.Context(), sender, nil, "runner-1", "connection-1",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.messages) != 2 {
+		t.Fatalf("outbound batch sent %d commands, want 2", len(sender.messages))
+	}
+	if len(state.delivered) != 2 ||
+		state.delivered[0] != "fence-1" ||
+		state.delivered[1] != "fence-2" {
+		t.Fatalf("delivered commands = %#v", state.delivered)
+	}
+	if state.claims != 2 {
+		t.Fatalf("command claims = %d, want 2", state.claims)
 	}
 }
 
@@ -145,6 +175,47 @@ func TestRunnerReceivePumpExitsWhenOwnerCancelsBlockedDelivery(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("runner receive pump leaked after owner cancellation")
 	}
+}
+
+func TestOutboundPumpReportsCommandDeliveryFailure(t *testing.T) {
+	server := &Server{config: ServerConfig{
+		StateStore:          failingCommandStateStore{},
+		CommandPollInterval: time.Millisecond,
+		CommandBatchSize:    1,
+		Now:                 time.Now,
+	}}
+	failures := make(chan error, 1)
+	go server.pumpOutboundFrames(
+		t.Context(),
+		&recordingControlPlaneSender{},
+		nil,
+		"runner-1",
+		"connection-1",
+		failures,
+	)
+	select {
+	case err := <-failures:
+		if !errors.Is(err, errCommandClaim) {
+			t.Fatalf("outbound pump error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("outbound pump did not report command claim failure")
+	}
+}
+
+var errCommandClaim = errors.New("command claim failed")
+
+type failingCommandStateStore struct {
+	relayStateStore
+}
+
+func (failingCommandStateStore) ClaimCommand(
+	context.Context,
+	string,
+	string,
+	time.Time,
+) (CommandDelivery, bool, error) {
+	return CommandDelivery{}, false, errCommandClaim
 }
 
 type recordingFrameRelay struct {
@@ -245,8 +316,55 @@ func validRelayServerConfig() ServerConfig {
 		SupportedVersions:   VersionRange{Minimum: 1, Maximum: 1},
 		HeartbeatInterval:   time.Second,
 		CommandPollInterval: time.Millisecond,
+		CommandBatchSize:    1,
 		Now:                 time.Now,
 		NewConnectionID:     func() string { return "connection-1" },
+	}
+}
+
+type queuedCommandStateStore struct {
+	relayStateStore
+	deliveries []CommandDelivery
+	delivered  []string
+	claims     int
+}
+
+func (store *queuedCommandStateStore) ClaimCommand(
+	context.Context,
+	string,
+	string,
+	time.Time,
+) (CommandDelivery, bool, error) {
+	store.claims++
+	if len(store.deliveries) == 0 {
+		return CommandDelivery{}, false, nil
+	}
+	return store.deliveries[0], true, nil
+}
+
+func (store *queuedCommandStateStore) MarkCommandDelivered(
+	_ context.Context,
+	id string,
+	_ string,
+	_ time.Time,
+) error {
+	if len(store.deliveries) == 0 || store.deliveries[0].ID != id {
+		return errors.New("unexpected queued command delivery")
+	}
+	store.delivered = append(store.delivered, id)
+	store.deliveries = store.deliveries[1:]
+	return nil
+}
+
+func controlCommandDelivery(id string) CommandDelivery {
+	return CommandDelivery{
+		ID: id,
+		Message: &runnerv1.ControlPlaneToRunner{
+			Message: &runnerv1.ControlPlaneToRunner_Fence{Fence: &runnerv1.FenceCommand{
+				MessageId: id, Sequence: 1, Fence: relayTestFence(),
+				Reason: runnerv1.FenceReason_FENCE_REASON_OPERATOR_REQUEST,
+			}},
+		},
 	}
 }
 

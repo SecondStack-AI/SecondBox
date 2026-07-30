@@ -41,6 +41,7 @@ type ServerConfig struct {
 	EnabledFeatures     []runnerv1.RunnerFeature
 	HeartbeatInterval   time.Duration
 	CommandPollInterval time.Duration
+	CommandBatchSize    int64
 	Now                 func() time.Time
 	NewConnectionID     func() string
 }
@@ -68,6 +69,7 @@ func NewServer(config ServerConfig) (*Server, error) {
 		config.SupportedVersions.Minimum > config.SupportedVersions.Maximum ||
 		config.HeartbeatInterval <= 0 ||
 		config.CommandPollInterval <= 0 ||
+		config.CommandBatchSize <= 0 ||
 		config.Now == nil ||
 		config.NewConnectionID == nil {
 		return nil, errors.New("SecondBox runner control server requires credential, state, protocol, heartbeat, clock, and connection configuration")
@@ -138,9 +140,7 @@ func (server *Server) Connect(stream runnerv1.RunnerControl_ConnectServer) (retu
 	}()
 	received := make(chan receivedRunnerFrame, 1)
 	go pumpRunnerFrames(stream.Context(), stream.Recv, received)
-	commandTicker := time.NewTicker(server.config.CommandPollInterval)
-	defer commandTicker.Stop()
-	registered := false
+	var outboundFailures <-chan error
 	for {
 		select {
 		case <-stream.Context().Done():
@@ -173,17 +173,19 @@ func (server *Server) Connect(stream runnerv1.RunnerControl_ConnectServer) (retu
 				)
 			}
 			if event.Kind == EventRegistration {
-				registered = true
+				failures := make(chan error, 1)
+				outboundFailures = failures
+				go server.pumpOutboundFrames(
+					stream.Context(),
+					stream,
+					session,
+					identity.RunnerID,
+					connectionID,
+					failures,
+				)
 			}
-		case <-commandTicker.C:
-			if !registered {
-				continue
-			}
-			if err := server.sendNextOutboundFrame(
-				stream.Context(), stream, session, identity.RunnerID, connectionID,
-			); err != nil {
-				return err
-			}
+		case err := <-outboundFailures:
+			return err
 		}
 	}
 }
@@ -206,6 +208,34 @@ func pumpRunnerFrames(
 	}
 }
 
+func (server *Server) pumpOutboundFrames(
+	ctx context.Context,
+	stream controlPlaneFrameSender,
+	session *Session,
+	runnerID string,
+	connectionID string,
+	failures chan<- error,
+) {
+	ticker := time.NewTicker(server.config.CommandPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := server.sendNextOutboundFrame(
+				ctx, stream, session, runnerID, connectionID,
+			); err != nil {
+				select {
+				case failures <- err:
+				case <-ctx.Done():
+				}
+				return
+			}
+		}
+	}
+}
+
 func (server *Server) sendNextOutboundFrame(
 	ctx context.Context,
 	stream controlPlaneFrameSender,
@@ -213,22 +243,44 @@ func (server *Server) sendNextOutboundFrame(
 	runnerID string,
 	connectionID string,
 ) error {
+	for delivered := int64(0); delivered < server.config.CommandBatchSize; delivered++ {
+		found, err := server.sendNextControlCommand(
+			ctx, stream, runnerID, connectionID,
+		)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return server.sendClaimedRelayFrame(
+				ctx, stream, session, runnerID, connectionID,
+			)
+		}
+	}
+	return nil
+}
+
+func (server *Server) sendNextControlCommand(
+	ctx context.Context,
+	stream controlPlaneFrameSender,
+	runnerID string,
+	connectionID string,
+) (bool, error) {
 	deliveryStartedAt := time.Now()
 	claimAt := server.config.Now()
 	delivery, found, err := server.config.StateStore.ClaimCommand(
 		ctx, runnerID, connectionID, claimAt,
 	)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if found {
 		if err := stream.Send(delivery.Message); err != nil {
-			return fmt.Errorf("SecondBox runner control command send: %w", err)
+			return false, fmt.Errorf("SecondBox runner control command send: %w", err)
 		}
 		if err := server.config.StateStore.MarkCommandDelivered(
 			ctx, delivery.ID, connectionID, server.config.Now(),
 		); err != nil {
-			return err
+			return false, err
 		}
 		slog.Info(
 			"SecondBox runner control command delivered",
@@ -238,9 +290,9 @@ func (server *Server) sendNextOutboundFrame(
 			"queueMs", commandQueueDuration(delivery.CreatedAt, claimAt).Milliseconds(),
 			"deliveryMs", time.Since(deliveryStartedAt).Milliseconds(),
 		)
-		return nil
+		return true, nil
 	}
-	return server.sendClaimedRelayFrame(ctx, stream, session, runnerID, connectionID)
+	return false, nil
 }
 
 func commandQueueDuration(createdAt, claimedAt time.Time) time.Duration {

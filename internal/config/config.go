@@ -33,6 +33,7 @@ type Config struct {
 	RunnerCredential                 string
 	RunnerHeartbeatInterval          time.Duration
 	RunnerCommandPollInterval        time.Duration
+	RunnerCommandDeliveryBatchSize   int64
 	DataPlanePollInterval            time.Duration
 	DataPlaneClaimDuration           time.Duration
 	DataPlaneRetention               time.Duration
@@ -141,6 +142,10 @@ func FromEnvironment() (Config, error) {
 		return Config{}, err
 	}
 	runnerCommandPollMilliseconds, err := requiredPositiveInt64("SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS")
+	if err != nil {
+		return Config{}, err
+	}
+	runnerCommandDeliveryBatchSize, err := requiredPositiveInt64("SECONDBOX_RUNNER_COMMAND_DELIVERY_BATCH_SIZE")
 	if err != nil {
 		return Config{}, err
 	}
@@ -286,6 +291,7 @@ func FromEnvironment() (Config, error) {
 		RunnerCredential:                 runnerCredential,
 		RunnerHeartbeatInterval:          time.Duration(runnerHeartbeatMilliseconds) * time.Millisecond,
 		RunnerCommandPollInterval:        time.Duration(runnerCommandPollMilliseconds) * time.Millisecond,
+		RunnerCommandDeliveryBatchSize:   runnerCommandDeliveryBatchSize,
 		DataPlanePollInterval:            time.Duration(dataPlanePollMilliseconds) * time.Millisecond,
 		DataPlaneClaimDuration:           time.Duration(dataPlaneClaimMilliseconds) * time.Millisecond,
 		DataPlaneRetention:               time.Duration(dataPlaneRetentionSeconds) * time.Second,
