@@ -262,6 +262,40 @@ func (driver *stressDriver) deleteSandbox(
 	handle *secondboxclient.SandboxHandle,
 	key string,
 ) error {
+	cleanupContext, cancel := context.WithTimeout(
+		ctx,
+		time.Duration(driver.config.OperationTimeoutSeconds)*time.Second,
+	)
+	defer cancel()
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		attemptKey := key
+		if attempt > 0 {
+			attemptKey = fmt.Sprintf("%s-retry-%d", key, attempt)
+		}
+		err := driver.deleteSandboxOnce(cleanupContext, handle, attemptKey)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !retryableCleanupError(err) {
+			return err
+		}
+		timer := time.NewTimer(time.Duration(driver.config.PollIntervalMilliseconds) * time.Millisecond)
+		select {
+		case <-cleanupContext.Done():
+			timer.Stop()
+			return errors.Join(lastErr, cleanupContext.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func (driver *stressDriver) deleteSandboxOnce(
+	ctx context.Context,
+	handle *secondboxclient.SandboxHandle,
+	key string,
+) error {
 	sandbox, err := handle.Refresh(ctx)
 	if err != nil {
 		return err
@@ -275,15 +309,41 @@ func (driver *stressDriver) deleteSandbox(
 	if err != nil {
 		return err
 	}
-	operationContext, cancel := context.WithTimeout(
-		ctx, time.Duration(driver.config.OperationTimeoutSeconds)*time.Second,
-	)
-	defer cancel()
 	_, err = driver.client.WaitOperation(
-		operationContext, operation.ID,
+		ctx, operation.ID,
 		time.Duration(driver.config.PollIntervalMilliseconds)*time.Millisecond,
 	)
 	return err
+}
+
+func retryableCleanupError(err error) bool {
+	var operationFailure *secondboxclient.OperationFailure
+	if errors.As(err, &operationFailure) && operationFailure.Operation.Error != nil {
+		if operationFailure.Operation.Error.Retryable {
+			return true
+		}
+		switch operationFailure.Operation.Error.Code {
+		case "precondition_failed", "workspace_mutation_conflict",
+			"execution_node_unavailable", "home_runner_unavailable", "backpressure":
+			return true
+		default:
+			return false
+		}
+	}
+	var apiError *secondboxclient.APIError
+	if !errors.As(err, &apiError) || apiError.Problem == nil {
+		return false
+	}
+	if apiError.Problem.Retryable {
+		return true
+	}
+	switch apiError.Problem.Code {
+	case "precondition_failed", "workspace_mutation_conflict",
+		"execution_node_unavailable", "home_runner_unavailable", "backpressure":
+		return true
+	default:
+		return false
+	}
 }
 
 func classifyStressError(err error) (bool, string) {
