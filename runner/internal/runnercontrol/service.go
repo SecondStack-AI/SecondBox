@@ -761,6 +761,7 @@ func (s *RunnerProtocolService) handleAssignment(
 	}
 	progress := func(stage runnerprotocol.AssignmentProgressStage) error {
 		sequence := s.nextSequence()
+		observedAt := time.Now()
 		return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
 			Message: &runnerprotocol.RunnerToControlPlane_AssignmentProgress{
 				AssignmentProgress: &runnerprotocol.AssignmentProgress{
@@ -768,8 +769,9 @@ func (s *RunnerProtocolService) handleAssignment(
 					Sequence:         sequence,
 					Fence:            assignment.Fence,
 					Stage:            stage,
-					ObservedAtUnixMs: uint64(time.Now().UnixMilli()),
+					ObservedAtUnixMs: uint64(observedAt.UnixMilli()),
 					Correlation:      s.assignmentCorrelation(assignment),
+					ObservedAtUnixNs: uint64(observedAt.UnixNano()),
 				},
 			},
 		})

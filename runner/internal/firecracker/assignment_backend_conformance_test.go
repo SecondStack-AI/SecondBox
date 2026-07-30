@@ -212,6 +212,15 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 			opts.AssignmentID == "" {
 			t.Fatalf("assignment evidence correlation was not forwarded: %+v", opts)
 		}
+		if opts.StartupProgress == nil {
+			t.Fatal("assignment startup progress callback was not forwarded")
+		}
+		if err := opts.StartupProgress(runtimemanager.StartupStageNetworkReady); err != nil {
+			return "", err
+		}
+		if err := opts.StartupProgress(runtimemanager.StartupStageComputeStarted); err != nil {
+			return "", err
+		}
 		id := fmt.Sprintf("fc-conformance-%d", opts.SandboxGeneration)
 		manager.mu.Lock()
 		manager.addInstanceLocked(&instance{
@@ -238,6 +247,9 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 			done: make(chan struct{}),
 		})
 		manager.mu.Unlock()
+		if err := opts.StartupProgress(runtimemanager.StartupStageGuestNegotiated); err != nil {
+			return "", err
+		}
 		return id, nil
 	}
 	if err := manager.SetWorkspaceStore(workspaceStore); err != nil {

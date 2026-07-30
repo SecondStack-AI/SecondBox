@@ -2968,10 +2968,18 @@ func recordAssignmentEvent(
 		if err != nil {
 			return err
 		}
-		if progress.ObservedAtUnixMs == 0 || progress.ObservedAtUnixMs > uint64(^uint64(0)>>1) {
+		if progress.ObservedAtUnixMs == 0 ||
+			progress.ObservedAtUnixMs > uint64(^uint64(0)>>1) ||
+			progress.ObservedAtUnixNs > uint64(^uint64(0)>>1) {
 			return errors.New("SecondBox runner AssignmentProgress observed time is invalid")
 		}
 		observedAt := time.UnixMilli(int64(progress.ObservedAtUnixMs)).UTC()
+		if progress.ObservedAtUnixNs != 0 {
+			observedAt = time.Unix(0, int64(progress.ObservedAtUnixNs)).UTC()
+			if observedAt.UnixMilli() != int64(progress.ObservedAtUnixMs) {
+				return errors.New("SecondBox runner AssignmentProgress observed times disagree")
+			}
+		}
 		inserted, err := tx.Exec(ctx, `
 			INSERT INTO secondbox.assignment_stage_timings (
 				assignment_id,operation_id,sandbox_id,stage,observed_at,received_at

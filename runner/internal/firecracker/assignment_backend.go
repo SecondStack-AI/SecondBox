@@ -461,12 +461,6 @@ func (b *AssignmentBackend) StartAssignment(
 	}
 	const mib = uint64(1 << 20)
 	requirements := assignment.Requirements
-	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_ATTACH); err != nil {
-		return runnercontrol.BackendInstance{}, err
-	}
-	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_NETWORK_SETUP); err != nil {
-		return runnercontrol.BackendInstance{}, err
-	}
 	guestStart, err := b.assignmentGuestProtocolStart(assignment)
 	if err != nil {
 		return runnercontrol.BackendInstance{}, err
@@ -485,6 +479,9 @@ func (b *AssignmentBackend) StartAssignment(
 			"SecondBox Firecracker resolve Workspace attachment: %w",
 			err,
 		)
+	}
+	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_ATTACH); err != nil {
+		return runnercontrol.BackendInstance{}, err
 	}
 	defer func() {
 		if resultErr != nil {
@@ -513,6 +510,18 @@ func (b *AssignmentBackend) StartAssignment(
 		OperationID:   assignment.GetCorrelation().GetOperationId(),
 		LeaseID:       assignment.GetCorrelation().GetLeaseId(),
 		AssignmentID:  assignment.Fence.AssignmentId,
+		StartupProgress: func(stage runtimemanager.StartupStage) error {
+			switch stage {
+			case runtimemanager.StartupStageNetworkReady:
+				return progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_NETWORK_SETUP)
+			case runtimemanager.StartupStageComputeStarted:
+				return progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_FIRECRACKER_LAUNCH)
+			case runtimemanager.StartupStageGuestNegotiated:
+				return progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_GUEST_NEGOTIATION)
+			default:
+				return fmt.Errorf("SecondBox runtime reported unknown startup stage %q", stage)
+			}
+		},
 	})
 	if err != nil {
 		return runnercontrol.BackendInstance{}, err
@@ -526,13 +535,7 @@ func (b *AssignmentBackend) StartAssignment(
 		}
 		return runnercontrol.BackendInstance{}, errors.Join(progressErr, cleanupErr)
 	}
-	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_FIRECRACKER_LAUNCH); err != nil {
-		return cleanupLaunchFailure(err)
-	}
 	if err := b.manager.NegotiateAssignmentGuest(ctx, backendReference, assignment.Fence.AssignmentId, guestStart); err != nil {
-		return cleanupLaunchFailure(err)
-	}
-	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_GUEST_NEGOTIATION); err != nil {
 		return cleanupLaunchFailure(err)
 	}
 	b.mu.Lock()

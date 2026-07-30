@@ -2016,9 +2016,9 @@
         "required": ["count"],
         "properties": {
           "count": {"type": "integer", "format": "int64", "minimum": 0},
-          "p50Milliseconds": {"type": "integer", "format": "int64", "minimum": 0},
-          "p95Milliseconds": {"type": "integer", "format": "int64", "minimum": 0},
-          "p99Milliseconds": {"type": "integer", "format": "int64", "minimum": 0}
+          "p50Milliseconds": {"type": "number", "format": "double", "minimum": 0},
+          "p95Milliseconds": {"type": "number", "format": "double", "minimum": 0},
+          "p99Milliseconds": {"type": "number", "format": "double", "minimum": 0}
         }
       },
       "BootStage": {
@@ -2033,8 +2033,8 @@
           "stage": {"$ref": "#/components/schemas/BootStage"},
           "observedAt": {"$ref": "#/components/schemas/Timestamp"},
           "receivedAt": {"$ref": "#/components/schemas/Timestamp"},
-          "elapsedMilliseconds": {"type": "integer", "format": "int64", "minimum": 0},
-          "cumulativeMilliseconds": {"type": "integer", "format": "int64", "minimum": 0}
+          "elapsedMilliseconds": {"type": "number", "format": "double", "minimum": 0},
+          "cumulativeMilliseconds": {"type": "number", "format": "double", "minimum": 0}
         }
       },
       "BootTiming": {
@@ -2043,7 +2043,7 @@
         "required": ["generation", "durationMilliseconds", "completed", "stages"],
         "properties": {
           "generation": {"type": "integer", "format": "int64", "minimum": 1},
-          "durationMilliseconds": {"type": "integer", "format": "int64", "minimum": 0},
+          "durationMilliseconds": {"type": "number", "format": "double", "minimum": 0},
           "completed": {"type": "boolean"},
           "stages": {
             "type": "array",

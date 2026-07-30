@@ -267,6 +267,7 @@ message AssignmentProgress {
   AssignmentProgressStage stage = 4;
   uint64 observed_at_unix_ms = 5;
   Correlation correlation = 6;
+  uint64 observed_at_unix_ns = 7;
 }
 
 enum AssignmentTerminalKind {

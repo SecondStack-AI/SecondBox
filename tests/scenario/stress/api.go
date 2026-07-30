@@ -250,7 +250,7 @@ func (driver *stressDriver) collectBootTiming(ctx context.Context, operationID s
 		for _, stage := range boot.Stages {
 			driver.bootStages[stage.Stage] = append(
 				driver.bootStages[stage.Stage],
-				time.Duration(stage.ElapsedMilliseconds)*time.Millisecond,
+				time.Duration(stage.ElapsedMilliseconds*float64(time.Millisecond)),
 			)
 		}
 	}

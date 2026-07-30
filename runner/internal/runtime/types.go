@@ -12,6 +12,15 @@ type RuntimeClass string
 
 const RuntimeClassToolExecutor RuntimeClass = "tool_executor"
 
+// StartupStage is one provider-neutral runtime startup milestone.
+type StartupStage string
+
+const (
+	StartupStageNetworkReady    StartupStage = "network_ready"
+	StartupStageComputeStarted  StartupStage = "compute_started"
+	StartupStageGuestNegotiated StartupStage = "guest_negotiated"
+)
+
 type StartOpts struct {
 	Timezone                string
 	CompartmentID           string
@@ -30,6 +39,7 @@ type StartOpts struct {
 	OperationID             string
 	LeaseID                 string
 	AssignmentID            string
+	StartupProgress         func(StartupStage) error
 }
 
 type SandboxRuntimePolicy struct {

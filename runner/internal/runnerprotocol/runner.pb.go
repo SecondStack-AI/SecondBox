@@ -3063,6 +3063,7 @@ type AssignmentProgress struct {
 	Stage            AssignmentProgressStage `protobuf:"varint,4,opt,name=stage,proto3,enum=secondbox.runner.v1.AssignmentProgressStage" json:"stage,omitempty"`
 	ObservedAtUnixMs uint64                  `protobuf:"varint,5,opt,name=observed_at_unix_ms,json=observedAtUnixMs,proto3" json:"observed_at_unix_ms,omitempty"`
 	Correlation      *Correlation            `protobuf:"bytes,6,opt,name=correlation,proto3" json:"correlation,omitempty"`
+	ObservedAtUnixNs uint64                  `protobuf:"varint,7,opt,name=observed_at_unix_ns,json=observedAtUnixNs,proto3" json:"observed_at_unix_ns,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -3137,6 +3138,13 @@ func (x *AssignmentProgress) GetCorrelation() *Correlation {
 		return x.Correlation
 	}
 	return nil
+}
+
+func (x *AssignmentProgress) GetObservedAtUnixNs() uint64 {
+	if x != nil {
+		return x.ObservedAtUnixNs
+	}
+	return 0
 }
 
 type AssignmentResult struct {
@@ -6913,7 +6921,7 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\bdecision\x18\x04 \x01(\x0e2'.secondbox.runner.v1.AssignmentDecisionR\bdecision\x12J\n" +
 	"\vreservation\x18\x05 \x01(\v2(.secondbox.runner.v1.CapacityReservationR\vreservation\x12\x1f\n" +
 	"\vsafe_detail\x18\x06 \x01(\tR\n" +
-	"safeDetail\"\xc2\x02\n" +
+	"safeDetail\"\xf1\x02\n" +
 	"\x12AssignmentProgress\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1a\n" +
@@ -6921,7 +6929,8 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\x05fence\x18\x03 \x01(\v2$.secondbox.runner.v1.AssignmentFenceR\x05fence\x12B\n" +
 	"\x05stage\x18\x04 \x01(\x0e2,.secondbox.runner.v1.AssignmentProgressStageR\x05stage\x12-\n" +
 	"\x13observed_at_unix_ms\x18\x05 \x01(\x04R\x10observedAtUnixMs\x12B\n" +
-	"\vcorrelation\x18\x06 \x01(\v2 .secondbox.runner.v1.CorrelationR\vcorrelation\"\x87\x03\n" +
+	"\vcorrelation\x18\x06 \x01(\v2 .secondbox.runner.v1.CorrelationR\vcorrelation\x12-\n" +
+	"\x13observed_at_unix_ns\x18\a \x01(\x04R\x10observedAtUnixNs\"\x87\x03\n" +
 	"\x10AssignmentResult\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1a\n" +
