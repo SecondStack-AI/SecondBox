@@ -368,6 +368,14 @@ if (( $(value_for SECONDBOX_RUNNER_PROTOCOL_MINIMUM) > $(value_for SECONDBOX_RUN
   exit 1
 fi
 
+runner_pki_directory="$(value_for SECONDBOX_RUNNER_PKI_HOST_DIR)"
+if [[ "$runner_pki_directory" != /* ||
+      -L "$runner_pki_directory" ||
+      ! -d "$runner_pki_directory" ]]; then
+  echo "SECONDBOX_RUNNER_PKI_HOST_DIR must be an absolute non-symbolic-link directory" >&2
+  exit 1
+fi
+
 same_host_runner_enabled="$(value_for SECONDBOX_SAME_HOST_RUNNER_ENABLED)"
 if [[ "$same_host_runner_enabled" != "true" && "$same_host_runner_enabled" != "false" ]]; then
   echo "SECONDBOX_SAME_HOST_RUNNER_ENABLED must be true or false" >&2
@@ -479,13 +487,6 @@ if [[ "$signed_asset_catalog_path" != /* ]]; then
   exit 1
 fi
 
-runner_pki_directory="$(value_for SECONDBOX_RUNNER_PKI_HOST_DIR)"
-if [[ "$runner_pki_directory" != /* ||
-      -L "$runner_pki_directory" ||
-      ! -d "$runner_pki_directory" ]]; then
-  echo "SECONDBOX_RUNNER_PKI_HOST_DIR must be an absolute non-symbolic-link directory" >&2
-  exit 1
-fi
 for private_key in runner-ca.key server.key; do
   private_key_path="$runner_pki_directory/$private_key"
   if [[ -L "$private_key_path" || ! -f "$private_key_path" ]]; then
