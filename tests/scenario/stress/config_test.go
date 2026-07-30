@@ -13,7 +13,9 @@ func TestStressConfigRequiresEveryWorkloadAndComputesBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	binding := config.configuredBinding("172.31.0.0/24")
-	if binding.Name != "SECONDBOX_RUNNER_SANDBOX_MEMORY_BUDGET_MIB" || binding.Capacity != 4 {
+	if binding.Name !=
+		"SECONDBOX_RUNNER_SANDBOX_MEMORY_BUDGET_MIB + runner Operations capacity" ||
+		binding.Capacity != 4 {
 		t.Fatalf("binding = %#v", binding)
 	}
 	config.Workloads = config.Workloads[:4]

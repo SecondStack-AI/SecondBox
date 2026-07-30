@@ -325,8 +325,26 @@ func (config stressConfig) configuredBinding(guestCIDR string) configuredLimit {
 	limits := []configuredLimit{
 		{Name: "SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL", Capacity: config.Runner.MaxConcurrentGlobal},
 		{
+			Name: "runner CPU capacity",
+			Capacity: int(
+				int64(config.Runner.SandboxMaxVCPUs*config.Runner.MaxConcurrentGlobal*1000) /
+					config.Profile.CPUMillis,
+			),
+		},
+		{
 			Name:     "SECONDBOX_RUNNER_SANDBOX_MEMORY_BUDGET_MIB",
 			Capacity: config.Runner.MemoryBudgetMiB / config.Runner.SandboxMemoryMiB,
+		},
+		{
+			Name: "runner Workspace capacity",
+			Capacity: int(
+				(int64(config.Runner.SandboxDiskMiB*config.Runner.MaxConcurrentGlobal) << 20) /
+					config.Profile.WorkspaceBytes,
+			),
+		},
+		{
+			Name:     "runner Operations capacity",
+			Capacity: config.Runner.MaxConcurrentGlobal / int(config.Profile.ConcurrentOperations),
 		},
 		{Name: "guest IP capacity", Capacity: guestIPCapacity(guestCIDR)},
 		subjectBinding,
