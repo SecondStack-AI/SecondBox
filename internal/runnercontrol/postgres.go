@@ -3123,6 +3123,8 @@ func recordAssignmentEvent(
 
 func assignmentProgressStageName(stage runnerv1.AssignmentProgressStage) (string, error) {
 	switch stage {
+	case runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_RUNNER_ADMISSION:
+		return "runner_admission", nil
 	case runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY:
 		return "artifact_verify", nil
 	case runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_ATTACH:

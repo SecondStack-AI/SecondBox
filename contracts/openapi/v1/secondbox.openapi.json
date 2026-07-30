@@ -2037,7 +2037,7 @@
       },
       "BootStage": {
         "type": "string",
-        "enum": ["artifact_verify", "workspace_attach", "network_setup", "compute_launch", "guest_negotiation", "ready"]
+        "enum": ["runner_admission", "artifact_verify", "workspace_attach", "network_setup", "compute_launch", "guest_negotiation", "ready"]
       },
       "BootStageTiming": {
         "type": "object",

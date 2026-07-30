@@ -48,6 +48,7 @@ func TestTimingProjectionsJoinLifecycleBootAndExecEvidence(t *testing.T) {
 		INSERT INTO secondbox.assignment_stage_timings (
 			assignment_id,operation_id,sandbox_id,stage,observed_at,received_at
 		) VALUES
+			('assignment-timing','op_timing','sbox_timing','runner_admission',$15,$15),
 			('assignment-timing','op_timing','sbox_timing','artifact_verify',$6,$6),
 			('assignment-timing','op_timing','sbox_timing','workspace_attach',$7,$7),
 			('assignment-timing','op_timing','sbox_timing','network_setup',$8,$8),
@@ -89,6 +90,7 @@ func TestTimingProjectionsJoinLifecycleBootAndExecEvidence(t *testing.T) {
 		base.Add(35*time.Millisecond+875*time.Microsecond),
 		base.Add(2635*time.Millisecond+875*time.Microsecond),
 		base.Add(2636*time.Millisecond),
+		base.Add(24*time.Millisecond+750*time.Microsecond),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -108,14 +110,18 @@ func TestTimingProjectionsJoinLifecycleBootAndExecEvidence(t *testing.T) {
 		operation.TotalMilliseconds == nil || *operation.TotalMilliseconds != 2636 {
 		t.Fatalf("Operation timing = %#v", operation)
 	}
-	if len(operation.Boots) != 1 || len(operation.Boots[0].Stages) != 6 ||
+	if len(operation.Boots) != 1 || len(operation.Boots[0].Stages) != 7 ||
 		operation.Boots[0].DurationMilliseconds != 2636 ||
-		operation.Boots[0].Stages[2].Stage != "network_setup" ||
-		math.Abs(operation.Boots[0].Stages[2].ElapsedMilliseconds-10.5) > 0.001 ||
-		operation.Boots[0].Stages[3].Stage != "compute_launch" ||
-		math.Abs(operation.Boots[0].Stages[3].ElapsedMilliseconds-0.25) > 0.001 ||
-		operation.Boots[0].Stages[4].Stage != "guest_negotiation" ||
-		math.Abs(operation.Boots[0].Stages[4].ElapsedMilliseconds-2600) > 0.001 {
+		operation.Boots[0].Stages[0].Stage != "runner_admission" ||
+		math.Abs(operation.Boots[0].Stages[0].ElapsedMilliseconds-24.75) > 0.001 ||
+		operation.Boots[0].Stages[1].Stage != "artifact_verify" ||
+		math.Abs(operation.Boots[0].Stages[1].ElapsedMilliseconds-0.25) > 0.001 ||
+		operation.Boots[0].Stages[3].Stage != "network_setup" ||
+		math.Abs(operation.Boots[0].Stages[3].ElapsedMilliseconds-10.5) > 0.001 ||
+		operation.Boots[0].Stages[4].Stage != "compute_launch" ||
+		math.Abs(operation.Boots[0].Stages[4].ElapsedMilliseconds-0.25) > 0.001 ||
+		operation.Boots[0].Stages[5].Stage != "guest_negotiation" ||
+		math.Abs(operation.Boots[0].Stages[5].ElapsedMilliseconds-2600) > 0.001 {
 		t.Fatalf("boot timing = %#v", operation.Boots)
 	}
 	if exec := sandboxTiming.Execs[0]; exec.Mode != "buffered" ||
@@ -159,7 +165,7 @@ func TestTimingProjectionsJoinLifecycleBootAndExecEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if metrics.BootDuration.Count < 1 || len(metrics.BootStageDurations) != 6 ||
+	if metrics.BootDuration.Count < 1 || len(metrics.BootStageDurations) != 7 ||
 		len(metrics.ExecDurations) != 1 ||
 		metrics.ExecDurations[0].Mode != "buffered" ||
 		metrics.ExecDurations[0].Histogram.Count != 1 {

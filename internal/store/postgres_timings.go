@@ -17,7 +17,7 @@ import (
 )
 
 const startupTimingStagesSQL = `
-	'artifact_verify','workspace_attach','network_setup',
+	'runner_admission','artifact_verify','workspace_attach','network_setup',
 	'compute_launch','guest_negotiation','ready'`
 
 // ReadSandboxTiming returns one explicitly bounded subject-owned timing history.
