@@ -442,8 +442,19 @@ func (s *RunnerProtocolService) consumeCommands(
 	readiness BackendReadiness,
 ) error {
 	received := make(chan receivedControlPlaneFrame, 1)
+	// Assignment starts run off the receive loop, so the runner admits as many
+	// concurrent assignments as it advertises capacity for. Handling them inline
+	// admitted exactly one at a time: thirty-two concurrent assignments entered
+	// the backend 298-437 ms apart, one full microVM start each, and the
+	// reported admission stage measured that queue wait rather than any work.
+	//
+	// The wait is registered before the cancel so teardown cancels the
+	// connection first and only then waits for in-flight starts to observe it.
+	var assignmentsInFlight sync.WaitGroup
+	defer assignmentsInFlight.Wait()
 	connectionCtx, cancelConnection := context.WithCancel(ctx)
 	defer cancelConnection()
+	assignmentSlots := make(chan struct{}, concurrentAssignmentLimit(readiness))
 	go pumpControlPlaneFrames(connectionCtx, stream.Recv, received)
 	asyncErrors := make(chan error, 1)
 	go s.sendHeartbeats(
@@ -474,6 +485,32 @@ func (s *RunnerProtocolService) consumeCommands(
 			}
 			if duplicate {
 				continue
+			}
+			// Sequence acceptance above already ran in receive order, so a
+			// concurrent start cannot reorder the control command stream.
+			if assignment := frame.message.GetAssignment(); assignment != nil {
+				select {
+				case assignmentSlots <- struct{}{}:
+				case <-connectionCtx.Done():
+					return connectionCtx.Err()
+				}
+				assignmentsInFlight.Add(1)
+				go func() {
+					defer assignmentsInFlight.Done()
+					defer func() { <-assignmentSlots }()
+					if err := s.handleAssignment(connectionCtx, stream, assignment); err != nil {
+						select {
+						case asyncErrors <- err:
+						default:
+						}
+					}
+				}()
+				continue
+			}
+			// Fence and drain decide whether compute may keep running, so they
+			// stay ordered behind any assignment start already in flight.
+			if frame.message.GetFence() != nil || frame.message.GetDrain() != nil {
+				assignmentsInFlight.Wait()
 			}
 			if err := s.handleCommand(connectionCtx, stream, frame.message, enabled, asyncErrors); err != nil {
 				return err
@@ -1411,4 +1448,19 @@ func validateResolvedNetworkPolicy(policy *runnerprotocol.NetworkPolicy) error {
 		return fmt.Errorf("SecondBox runner assignment selects an unknown network policy mode")
 	}
 	return nil
+}
+
+// concurrentAssignmentLimit bounds concurrent assignment starts by the instance
+// capacity the runner advertises to the control plane, so the runner never
+// admits more work than it just claimed it could hold.
+//
+// A runner that advertises no instance capacity keeps the previous behaviour of
+// starting one assignment at a time rather than assuming a bound it has not
+// established.
+func concurrentAssignmentLimit(readiness BackendReadiness) int {
+	limit := int(readiness.Capacity.GetInstances())
+	if limit < 1 {
+		return 1
+	}
+	return limit
 }
