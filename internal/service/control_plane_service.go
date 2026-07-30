@@ -584,11 +584,28 @@ func (service *ControlPlaneService) UpdateSandboxMetadata(
 	if err := validateSandboxMetadata(request.Metadata); err != nil {
 		return contracts.Sandbox{}, err
 	}
-	return service.store.UpdateSandboxMetadata(ctx, ports.UpdateSandboxMetadataInput{
+	now := service.now().UTC()
+	sandbox, err := service.store.UpdateSandboxMetadata(ctx, ports.UpdateSandboxMetadataInput{
 		Principal: principal, SandboxID: sandboxID,
 		Metadata: cloneMetadata(request.Metadata), ExpectedRevision: expectedRevision,
-		Now: service.now().UTC(),
+		Now: now,
 	})
+	if err != nil {
+		return contracts.Sandbox{}, err
+	}
+	audit := service.newAudit(
+		ctx,
+		principal,
+		"sandbox.metadata.updated",
+		"sandbox",
+		sandboxID,
+		principal.TenantRef,
+		now,
+	)
+	if err := service.store.AppendAuditEvent(ctx, audit); err != nil {
+		return contracts.Sandbox{}, err
+	}
+	return sandbox, nil
 }
 
 // ListSandboxes returns only the authenticated Project projection.

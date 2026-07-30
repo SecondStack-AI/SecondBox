@@ -181,6 +181,86 @@ func TestRunnerProtocolServiceHeartbeatsWhileAssignmentStartIsBlocked(t *testing
 	}
 }
 
+func TestSequencedRunnerFramesAllocateSequenceInsideSendOrder(t *testing.T) {
+	service, err := NewRunnerProtocolService(
+		testRunnerConfig(),
+		&recordingAssignmentBackend{},
+		staticProtocolConnector{stream: &recordingProtocolStream{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := &recordingProtocolStream{}
+	firstBuilderStarted := make(chan struct{})
+	releaseFirstBuilder := make(chan struct{})
+	secondBuilderStarted := make(chan struct{})
+	results := make(chan error, 2)
+
+	go func() {
+		results <- service.sendSequencedRunnerFrame(
+			stream,
+			func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
+				close(firstBuilderStarted)
+				<-releaseFirstBuilder
+				return sequencedHeartbeat(service, sequence)
+			},
+		)
+	}()
+	<-firstBuilderStarted
+	go func() {
+		results <- service.sendSequencedRunnerFrame(
+			stream,
+			func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
+				close(secondBuilderStarted)
+				return sequencedHeartbeat(service, sequence)
+			},
+		)
+	}()
+
+	select {
+	case <-secondBuilderStarted:
+		t.Fatal("second sequence was allocated before the first frame was sent")
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(releaseFirstBuilder)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(stream.outbound) != 2 {
+		t.Fatalf("sent frames = %d, want 2", len(stream.outbound))
+	}
+	for index, message := range stream.outbound {
+		heartbeat := message.GetHeartbeat()
+		wantSequence := uint64(index + 1)
+		if heartbeat == nil || heartbeat.Sequence != wantSequence {
+			t.Fatalf("sent frame %d = %#v, want heartbeat sequence %d", index, message, wantSequence)
+		}
+		if heartbeat.MessageId != service.messageID(wantSequence) {
+			t.Fatalf(
+				"heartbeat message ID = %q, want %q",
+				heartbeat.MessageId,
+				service.messageID(wantSequence),
+			)
+		}
+	}
+}
+
+func sequencedHeartbeat(
+	service *RunnerProtocolService,
+	sequence uint64,
+) *runnerprotocol.RunnerToControlPlane {
+	return &runnerprotocol.RunnerToControlPlane{
+		Message: &runnerprotocol.RunnerToControlPlane_Heartbeat{
+			Heartbeat: &runnerprotocol.RunnerHeartbeat{
+				MessageId: service.messageID(sequence),
+				Sequence:  sequence,
+			},
+		},
+	}
+}
+
 func TestRunnerProtocolServiceSeparatesAdmissionFromArtifactProgress(t *testing.T) {
 	backend := &recordingAssignmentBackend{
 		instance: BackendInstance{

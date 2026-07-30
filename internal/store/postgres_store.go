@@ -1373,7 +1373,11 @@ func selectSnapshotCloneHomeRunner(
 		!contains(architectures, spec.Architecture) ||
 		!contains(capabilities, "compute") ||
 		!contains(capabilities, "local-workspace") ||
-		allocatable.DiskBytes-reserved.DiskBytes < spec.Resources.WorkspaceBytes {
+		allocatable.CPUMillis-reserved.CPUMillis < spec.Resources.CPUMillis ||
+		allocatable.MemoryBytes-reserved.MemoryBytes < spec.Resources.MemoryBytes ||
+		allocatable.DiskBytes-reserved.DiskBytes < spec.Resources.WorkspaceBytes ||
+		allocatable.Instances-reserved.Instances < 1 ||
+		allocatable.Operations-reserved.Operations < spec.Resources.ConcurrentOperations {
 		return "", ports.ErrHomeRunnerUnavailable
 	}
 	return homeRunnerID, nil

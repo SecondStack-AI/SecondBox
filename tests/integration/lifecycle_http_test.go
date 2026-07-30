@@ -19,7 +19,7 @@ import (
 func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
 	admin := fixtureAdmin(t, controlPlane)
-	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "lifecycle-http")
+	project, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "lifecycle-http")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-lifecycle-http")
 	_, _, otherCredential := createProjectAccountAndCredential(t, controlPlane, admin, "lifecycle-http-other")
 	principal := authenticateCredential(t, controlPlane, credential)
@@ -76,6 +76,23 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 			sandbox,
 			metadataUpdatedSandbox,
 		)
+	}
+	auditEvents, err := databaseStore.ListAuditEvents(t.Context(), project.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadataAuditFound := false
+	for _, event := range auditEvents {
+		if event.Action == "sandbox.metadata.updated" &&
+			event.ResourceKind == "sandbox" &&
+			event.ResourceID == sandbox.ID &&
+			event.ActorID == principal.ID {
+			metadataAuditFound = true
+			break
+		}
+	}
+	if !metadataAuditFound {
+		t.Fatalf("Sandbox metadata update audit is absent: %#v", auditEvents)
 	}
 	staleMetadataUpdate := lifecycleHTTPRequest(
 		t, server.URL, credential, http.MethodPut,

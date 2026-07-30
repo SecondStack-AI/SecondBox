@@ -259,6 +259,27 @@ func TestSandboxCreationFromSnapshotPinsSourceHomeRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	_, _, err = controlPlane.CreateSandbox(
+		t.Context(),
+		principal,
+		"snapshot-clone-capacity-rejected",
+		contracts.CreateSandboxRequest{
+			Profile:          profile.Name,
+			Metadata:         map[string]string{"fork": "target"},
+			SourceSnapshotID: snapshotID,
+		},
+	)
+	if !errors.Is(err, ports.ErrHomeRunnerUnavailable) {
+		t.Fatalf("Snapshot clone with exhausted home Runner capacity error = %v", err)
+	}
+	if _, err := pool.Exec(t.Context(), `
+		UPDATE secondbox.runners
+		SET reserved_capacity_json='{}',updated_at=$2
+		WHERE id=$1`,
+		sourceRunnerID, now.Add(2*time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
 	target, _, err := controlPlane.CreateSandbox(
 		t.Context(),
 		principal,
@@ -353,6 +374,19 @@ func TestSandboxCreationFromSnapshotPinsSourceHomeRunner(t *testing.T) {
 		LogicalCapacityBytes:    command.LogicalCapacityBytes,
 		ReceiptRecordedAtUnixMs: uint64(now.Add(2 * time.Second).UnixMilli()),
 		Correlation:             command.Correlation,
+	}
+	wrongSource := proto.Clone(result).(*runnerv1.LocalWorkspaceResult)
+	wrongSource.SnapshotId = "snapshot-not-authorized"
+	if _, err := stateStore.RecordEvent(t.Context(), runnercontrol.Event{
+		Kind: runnercontrol.EventLocalWorkspace, RunnerID: targetRunnerID,
+		ConnectionID: connectionID,
+		Message: &runnerv1.RunnerToControlPlane{
+			Message: &runnerv1.RunnerToControlPlane_LocalWorkspaceResult{
+				LocalWorkspaceResult: wrongSource,
+			},
+		},
+	}, now.Add(2*time.Second)); err == nil {
+		t.Fatal("Snapshot clone result with the wrong source Snapshot was accepted")
 	}
 	duplicate, err := stateStore.RecordEvent(t.Context(), runnercontrol.Event{
 		Kind: runnercontrol.EventLocalWorkspace, RunnerID: targetRunnerID,

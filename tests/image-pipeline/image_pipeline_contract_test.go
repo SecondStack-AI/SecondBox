@@ -375,6 +375,14 @@ func TestPreparedOCIImageRemovesMachineIdentityAndScansOnlyRuntimeSecrets(t *tes
 		!strings.Contains(scanner, `-g '!**/opt/go/src/crypto/x509/platform_root_key.pem'`) {
 		t.Fatal("secret scan must distinguish pinned Go toolchain fixtures from runtime credentials")
 	}
+	if strings.Contains(scanner, "--exclude-dir=testdata") ||
+		strings.Contains(scanner, "--exclude=platform_root_key.pem") {
+		t.Fatal("grep fallback must not exempt unrelated files with Go fixture basenames")
+	}
+	if !strings.Contains(scanner, `-path "$root/opt/go/src/*/testdata"`) ||
+		!strings.Contains(scanner, `-path "$root/opt/go/src/crypto/x509/platform_root_key.pem"`) {
+		t.Fatal("grep fallback must scope private-key fixture exclusions to the pinned Go toolchain")
+	}
 }
 
 func TestStandardImageRemovesPackagedPrivateKeyFixtures(t *testing.T) {

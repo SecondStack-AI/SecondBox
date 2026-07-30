@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
@@ -144,7 +143,7 @@ type RunnerProtocolService struct {
 	terminalBackend   instanceTerminalBackend
 	instanceTerminals <-chan BackendInstanceTerminal
 	connector         RunnerProtocolConnector
-	sequence          atomic.Uint64
+	sequence          uint64
 	sendMu            sync.Mutex
 	stateMu           sync.Mutex
 	drain             runnerprotocol.DrainPhase
@@ -407,25 +406,30 @@ func (s *RunnerProtocolService) sendRegistration(
 	selectedProtocolVersion uint32,
 	readiness BackendReadiness,
 ) error {
-	sequence := s.nextSequence()
-	registration := &runnerprotocol.RunnerRegistration{
-		MessageId:         s.messageID(sequence),
-		Sequence:          sequence,
-		RunnerId:          s.config.RunnerID,
-		ConnectionId:      connectionID,
-		RunnerPoolId:      s.config.RunnerPoolID,
-		SoftwareVersion:   s.config.SoftwareVersion,
-		ProtocolVersion:   selectedProtocolVersion,
-		Capabilities:      readiness.Capabilities,
-		Allocatable:       readiness.Capacity,
-		Reserved:          readiness.Reserved,
-		ArtifactCache:     readiness.ArtifactCache,
-		ReadinessFailures: readiness.ReadinessFailures,
-		StartupTiming:     s.startupTiming(),
-	}
-	if err := s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-		Message: &runnerprotocol.RunnerToControlPlane_Registration{Registration: registration},
-	}); err != nil {
+	if err := s.sendSequencedRunnerFrame(
+		stream,
+		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
+			return &runnerprotocol.RunnerToControlPlane{
+				Message: &runnerprotocol.RunnerToControlPlane_Registration{
+					Registration: &runnerprotocol.RunnerRegistration{
+						MessageId:         s.messageID(sequence),
+						Sequence:          sequence,
+						RunnerId:          s.config.RunnerID,
+						ConnectionId:      connectionID,
+						RunnerPoolId:      s.config.RunnerPoolID,
+						SoftwareVersion:   s.config.SoftwareVersion,
+						ProtocolVersion:   selectedProtocolVersion,
+						Capabilities:      readiness.Capabilities,
+						Allocatable:       readiness.Capacity,
+						Reserved:          readiness.Reserved,
+						ArtifactCache:     readiness.ArtifactCache,
+						ReadinessFailures: readiness.ReadinessFailures,
+						StartupTiming:     s.startupTiming(),
+					},
+				},
+			}
+		},
+	); err != nil {
 		return fmt.Errorf("SecondBox runner protocol send registration: %w", err)
 	}
 	return nil
@@ -657,10 +661,7 @@ func (s *RunnerProtocolService) handleLocalWorkspace(
 		evidence, executionErr = s.workspaceBackend.ExecuteLocalWorkspace(ctx, command)
 	}
 	terminal := localWorkspaceTerminal(executionErr)
-	sequence := s.nextSequence()
 	result := &runnerprotocol.LocalWorkspaceResult{
-		MessageId:            s.messageID(sequence),
-		Sequence:             sequence,
 		CommandVersion:       command.CommandVersion,
 		Kind:                 command.Kind,
 		Terminal:             terminal,
@@ -688,11 +689,18 @@ func (s *RunnerProtocolService) handleLocalWorkspace(
 		)
 		result.SafeDetail = localWorkspaceSafeDetail(terminal)
 	}
-	return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-		Message: &runnerprotocol.RunnerToControlPlane_LocalWorkspaceResult{
-			LocalWorkspaceResult: result,
+	return s.sendSequencedRunnerFrame(
+		stream,
+		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
+			result.MessageId = s.messageID(sequence)
+			result.Sequence = sequence
+			return &runnerprotocol.RunnerToControlPlane{
+				Message: &runnerprotocol.RunnerToControlPlane_LocalWorkspaceResult{
+					LocalWorkspaceResult: result,
+				},
+			}
 		},
-	})
+	)
 }
 
 func localWorkspaceSafeDetail(terminal runnerprotocol.LocalWorkspaceTerminalKind) string {
@@ -827,21 +835,25 @@ func (s *RunnerProtocolService) handleAssignment(
 	); evidenceErr != nil {
 		return evidenceErr
 	}
-	sequence := s.nextSequence()
-	if err := s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-		Message: &runnerprotocol.RunnerToControlPlane_AssignmentResult{
-			AssignmentResult: &runnerprotocol.AssignmentResult{
-				MessageId:        s.messageID(sequence),
-				Sequence:         sequence,
-				Fence:            assignment.Fence,
-				Terminal:         terminal,
-				BackendKind:      instance.BackendKind,
-				BackendReference: instance.BackendReference,
-				SafeDetail:       safeDetail,
-				Correlation:      s.assignmentCorrelation(assignment),
-			},
+	if err := s.sendSequencedRunnerFrame(
+		stream,
+		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
+			return &runnerprotocol.RunnerToControlPlane{
+				Message: &runnerprotocol.RunnerToControlPlane_AssignmentResult{
+					AssignmentResult: &runnerprotocol.AssignmentResult{
+						MessageId:        s.messageID(sequence),
+						Sequence:         sequence,
+						Fence:            assignment.Fence,
+						Terminal:         terminal,
+						BackendKind:      instance.BackendKind,
+						BackendReference: instance.BackendReference,
+						SafeDetail:       safeDetail,
+						Correlation:      s.assignmentCorrelation(assignment),
+					},
+				},
+			}
 		},
-	}); err != nil {
+	); err != nil {
 		return err
 	}
 	if terminal == runnerprotocol.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY &&
@@ -859,20 +871,24 @@ func (s *RunnerProtocolService) sendAssignmentProgress(
 	stage runnerprotocol.AssignmentProgressStage,
 	observedAt time.Time,
 ) error {
-	sequence := s.nextSequence()
-	return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-		Message: &runnerprotocol.RunnerToControlPlane_AssignmentProgress{
-			AssignmentProgress: &runnerprotocol.AssignmentProgress{
-				MessageId:        s.messageID(sequence),
-				Sequence:         sequence,
-				Fence:            assignment.Fence,
-				Stage:            stage,
-				ObservedAtUnixMs: uint64(observedAt.UnixMilli()),
-				Correlation:      s.assignmentCorrelation(assignment),
-				ObservedAtUnixNs: uint64(observedAt.UnixNano()),
-			},
+	return s.sendSequencedRunnerFrame(
+		stream,
+		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
+			return &runnerprotocol.RunnerToControlPlane{
+				Message: &runnerprotocol.RunnerToControlPlane_AssignmentProgress{
+					AssignmentProgress: &runnerprotocol.AssignmentProgress{
+						MessageId:        s.messageID(sequence),
+						Sequence:         sequence,
+						Fence:            assignment.Fence,
+						Stage:            stage,
+						ObservedAtUnixMs: uint64(observedAt.UnixMilli()),
+						Correlation:      s.assignmentCorrelation(assignment),
+						ObservedAtUnixNs: uint64(observedAt.UnixNano()),
+					},
+				},
+			}
 		},
-	})
+	)
 }
 
 func (s *RunnerProtocolService) sendInstanceTerminal(
@@ -909,20 +925,24 @@ func (s *RunnerProtocolService) sendInstanceTerminal(
 	); err != nil {
 		return err
 	}
-	sequence := s.nextSequence()
-	return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-		Message: &runnerprotocol.RunnerToControlPlane_InstanceTerminal{
-			InstanceTerminal: &runnerprotocol.InstanceTerminal{
-				MessageId:                 s.messageID(sequence),
-				Sequence:                  sequence,
-				Fence:                     terminal.Fence,
-				Reason:                    terminal.Reason,
-				ObservedAtUnixMs:          uint64(terminal.ObservedAt.UTC().UnixMilli()),
-				TerminationEvidenceDigest: terminal.EvidenceDigest,
-				Correlation:               terminal.Correlation,
-			},
+	return s.sendSequencedRunnerFrame(
+		stream,
+		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
+			return &runnerprotocol.RunnerToControlPlane{
+				Message: &runnerprotocol.RunnerToControlPlane_InstanceTerminal{
+					InstanceTerminal: &runnerprotocol.InstanceTerminal{
+						MessageId:                 s.messageID(sequence),
+						Sequence:                  sequence,
+						Fence:                     terminal.Fence,
+						Reason:                    terminal.Reason,
+						ObservedAtUnixMs:          uint64(terminal.ObservedAt.UTC().UnixMilli()),
+						TerminationEvidenceDigest: terminal.EvidenceDigest,
+						Correlation:               terminal.Correlation,
+					},
+				},
+			}
 		},
-	})
+	)
 }
 
 func validObservedTerminationReason(
@@ -962,18 +982,22 @@ func (s *RunnerProtocolService) sendAssignmentAck(
 			return err
 		}
 	}
-	sequence := s.nextSequence()
-	return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-		Message: &runnerprotocol.RunnerToControlPlane_AssignmentAck{
-			AssignmentAck: &runnerprotocol.AssignmentAck{
-				MessageId:  s.messageID(sequence),
-				Sequence:   sequence,
-				Fence:      assignment.GetFence(),
-				Decision:   decision,
-				SafeDetail: safeDetail,
-			},
+	return s.sendSequencedRunnerFrame(
+		stream,
+		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
+			return &runnerprotocol.RunnerToControlPlane{
+				Message: &runnerprotocol.RunnerToControlPlane_AssignmentAck{
+					AssignmentAck: &runnerprotocol.AssignmentAck{
+						MessageId:  s.messageID(sequence),
+						Sequence:   sequence,
+						Fence:      assignment.GetFence(),
+						Decision:   decision,
+						SafeDetail: safeDetail,
+					},
+				},
+			}
 		},
-	})
+	)
 }
 
 func (s *RunnerProtocolService) handleFence(
@@ -995,10 +1019,7 @@ func (s *RunnerProtocolService) handleFence(
 	} else if command != nil && command.Fence != nil {
 		s.removeActiveAssignment(command.Fence.AssignmentId)
 	}
-	sequence := s.nextSequence()
 	result := &runnerprotocol.FenceResult{
-		MessageId:                 s.messageID(sequence),
-		Sequence:                  sequence,
 		Fence:                     command.GetFence(),
 		Result:                    evidence.Result,
 		TerminationEvidenceDigest: evidence.TerminationEvidenceDigest,
@@ -1018,9 +1039,16 @@ func (s *RunnerProtocolService) handleFence(
 	); evidenceErr != nil {
 		return evidenceErr
 	}
-	return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-		Message: &runnerprotocol.RunnerToControlPlane_FenceResult{FenceResult: result},
-	})
+	return s.sendSequencedRunnerFrame(
+		stream,
+		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
+			result.MessageId = s.messageID(sequence)
+			result.Sequence = sequence
+			return &runnerprotocol.RunnerToControlPlane{
+				Message: &runnerprotocol.RunnerToControlPlane_FenceResult{FenceResult: result},
+			}
+		},
+	)
 }
 
 func (s *RunnerProtocolService) handleDrain(
@@ -1035,17 +1063,21 @@ func (s *RunnerProtocolService) handleDrain(
 	s.stateMu.Lock()
 	s.drain = phase
 	s.stateMu.Unlock()
-	sequence := s.nextSequence()
-	return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-		Message: &runnerprotocol.RunnerToControlPlane_DrainState{
-			DrainState: &runnerprotocol.DrainState{
-				MessageId:            s.messageID(sequence),
-				Sequence:             sequence,
-				Phase:                phase,
-				RemainingAssignments: remaining,
-			},
+	return s.sendSequencedRunnerFrame(
+		stream,
+		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
+			return &runnerprotocol.RunnerToControlPlane{
+				Message: &runnerprotocol.RunnerToControlPlane_DrainState{
+					DrainState: &runnerprotocol.DrainState{
+						MessageId:            s.messageID(sequence),
+						Sequence:             sequence,
+						Phase:                phase,
+						RemainingAssignments: remaining,
+					},
+				},
+			}
 		},
-	})
+	)
 }
 
 func (s *RunnerProtocolService) sendHeartbeat(
@@ -1053,23 +1085,27 @@ func (s *RunnerProtocolService) sendHeartbeat(
 	connectionID string,
 	readiness BackendReadiness,
 ) error {
-	sequence := s.nextSequence()
-	return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-		Message: &runnerprotocol.RunnerToControlPlane_Heartbeat{
-			Heartbeat: &runnerprotocol.RunnerHeartbeat{
-				MessageId:         s.messageID(sequence),
-				Sequence:          sequence,
-				RunnerId:          s.config.RunnerID,
-				ConnectionId:      connectionID,
-				ObservedAtUnixMs:  uint64(time.Now().UnixMilli()),
-				Allocatable:       readiness.Capacity,
-				Reserved:          readiness.Reserved,
-				ActiveAssignments: s.activeAssignments(),
-				DrainPhase:        s.drainPhase(),
-				StartupTiming:     s.startupTiming(),
-			},
+	return s.sendSequencedRunnerFrame(
+		stream,
+		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
+			return &runnerprotocol.RunnerToControlPlane{
+				Message: &runnerprotocol.RunnerToControlPlane_Heartbeat{
+					Heartbeat: &runnerprotocol.RunnerHeartbeat{
+						MessageId:         s.messageID(sequence),
+						Sequence:          sequence,
+						RunnerId:          s.config.RunnerID,
+						ConnectionId:      connectionID,
+						ObservedAtUnixMs:  uint64(time.Now().UnixMilli()),
+						Allocatable:       readiness.Capacity,
+						Reserved:          readiness.Reserved,
+						ActiveAssignments: s.activeAssignments(),
+						DrainPhase:        s.drainPhase(),
+						StartupTiming:     s.startupTiming(),
+					},
+				},
+			}
 		},
-	})
+	)
 }
 
 func (s *RunnerProtocolService) startupTiming() *runnerprotocol.StartupTiming {
@@ -1271,12 +1307,18 @@ func terminalOutcome(terminal string) string {
 	return "failed"
 }
 
-func (s *RunnerProtocolService) nextSequence() uint64 {
-	return s.sequence.Add(1)
-}
-
 func (s *RunnerProtocolService) messageID(sequence uint64) string {
 	return fmt.Sprintf("%s-%d", s.config.RunnerID, sequence)
+}
+
+func (s *RunnerProtocolService) sendSequencedRunnerFrame(
+	stream RunnerProtocolStream,
+	build func(uint64) *runnerprotocol.RunnerToControlPlane,
+) error {
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
+	s.sequence++
+	return stream.Send(build(s.sequence))
 }
 
 func (s *RunnerProtocolService) sendRunnerFrame(

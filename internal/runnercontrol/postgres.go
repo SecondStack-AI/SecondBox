@@ -788,6 +788,22 @@ func recordLocalWorkspaceResult(
 		workspace.LogicalCapacityBytes != int64(result.LogicalCapacityBytes) {
 		return errors.New("SecondBox runner local-workspace result conflicts with durable authority")
 	}
+	switch result.Kind {
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE:
+		if workspace.Mutation.Kind != "create" ||
+			effect.kind != "local_workspace_create" ||
+			effect.storageObjectID != "" ||
+			result.SnapshotId != "" {
+			return errors.New("SecondBox runner Workspace create result conflicts with durable effect authority")
+		}
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CLONE_FROM_SNAPSHOT:
+		if workspace.Mutation.Kind != "clone" ||
+			effect.kind != "local_workspace_clone" ||
+			effect.storageObjectID == "" ||
+			effect.storageObjectID != result.SnapshotId {
+			return errors.New("SecondBox runner Workspace clone result conflicts with durable Snapshot authority")
+		}
+	}
 	if effect.state == "succeeded" || effect.state == "runner_failed" {
 		return nil
 	}
@@ -2376,11 +2392,12 @@ func restoreCommandPayload(
 }
 
 type localWorkspaceEffect struct {
-	kind         string
-	state        string
-	commandID    string
-	retryCount   int64
-	fencingToken []byte
+	kind            string
+	state           string
+	commandID       string
+	storageObjectID string
+	retryCount      int64
+	fencingToken    []byte
 }
 
 func lockLocalWorkspaceEffect(
@@ -2390,11 +2407,11 @@ func lockLocalWorkspaceEffect(
 ) (localWorkspaceEffect, error) {
 	var effect localWorkspaceEffect
 	err := tx.QueryRow(ctx, `
-		SELECT kind,state,command_id,retry_count,fencing_token
+		SELECT kind,state,command_id,storage_object_id,retry_count,fencing_token
 		FROM secondbox.lifecycle_effects WHERE id=$1 FOR UPDATE`,
 		effectID,
 	).Scan(
-		&effect.kind, &effect.state, &effect.commandID,
+		&effect.kind, &effect.state, &effect.commandID, &effect.storageObjectID,
 		&effect.retryCount, &effect.fencingToken,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
