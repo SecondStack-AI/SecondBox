@@ -43,7 +43,7 @@ func (driver *stressDriver) run(
 		},
 	)
 	if err != nil {
-		return nil, secondboxclient.DeploymentTimingSummary{},
+		return results, secondboxclient.DeploymentTimingSummary{},
 			fmt.Errorf("SecondBox stress read deployment timing failed: %w", err)
 	}
 	return results, summary, nil

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 	scenarioharness "github.com/SecondStack-AI/SecondBox/tests/scenario/harness"
 )
 
@@ -89,12 +90,19 @@ func runMain(arguments []string) error {
 			return errors.New("SecondBox stress run mode requires --output")
 		}
 		startedAt := time.Now().UTC()
-		results, deploymentTiming, err := driver.run(context.Background())
-		if err != nil {
-			return err
+		results, deploymentTiming, collectionErr := driver.run(context.Background())
+		if collectionErr != nil && len(results) == 0 {
+			return collectionErr
 		}
 		markLatencyDegradation(results, config.LatencyDegradationRatio)
 		bootStages, dominant := summarizeBootStages(driver.bootStages)
+		var deploymentTimingReport *secondboxclient.DeploymentTimingSummary
+		collectionError := ""
+		if collectionErr == nil {
+			deploymentTimingReport = &deploymentTiming
+		} else {
+			collectionError = collectionErr.Error()
+		}
 		report := stressReport{
 			SchemaVersion: 1, StartedAt: startedAt, CompletedAt: time.Now().UTC(),
 			SourceCommit: inputs.sourceCommit, GoVersion: inputs.goVersion,
@@ -110,7 +118,8 @@ func runMain(arguments []string) error {
 			},
 			ConfiguredBinding: config.configuredBinding(inputs.guestCIDR), Results: results,
 			BootStages: bootStages, DominantBootStage: dominant,
-			DeploymentTiming: &deploymentTiming,
+			DeploymentTiming: deploymentTimingReport,
+			CollectionError:  collectionError,
 		}
 		if err := writeStressReport(*outputPath, report); err != nil {
 			return err
@@ -119,6 +128,9 @@ func runMain(arguments []string) error {
 			return fmt.Errorf("SecondBox stress human report failed: %w", err)
 		}
 		fmt.Printf("Machine-readable stress report: %s\n", *outputPath)
+		if collectionErr != nil {
+			return collectionErr
+		}
 		if err := verifyStressResults(results, report.ConfiguredBinding); err != nil {
 			return err
 		}

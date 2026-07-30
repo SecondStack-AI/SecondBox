@@ -29,6 +29,7 @@ type stressReport struct {
 	BootStages        []bootStageResult                        `json:"bootStages"`
 	DominantBootStage string                                   `json:"dominantBootStage,omitempty"`
 	DeploymentTiming  *secondboxclient.DeploymentTimingSummary `json:"deploymentTiming,omitempty"`
+	CollectionError   string                                   `json:"collectionError,omitempty"`
 }
 
 type stressReportConfiguration struct {
@@ -298,6 +299,13 @@ func writeHumanReport(writer io.Writer, report stressReport) error {
 			optionalMilliseconds(report.DeploymentTiming.Boot.P95Milliseconds),
 			optionalMilliseconds(report.DeploymentTiming.Exec.P95Milliseconds),
 			optionalMilliseconds(report.DeploymentTiming.API.P95Milliseconds),
+		); err != nil {
+			return err
+		}
+	}
+	if report.CollectionError != "" {
+		if _, err := fmt.Fprintf(
+			writer, "Collection error after workload sweep: %s\n", report.CollectionError,
 		); err != nil {
 			return err
 		}

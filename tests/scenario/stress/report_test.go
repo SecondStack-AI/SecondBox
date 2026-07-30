@@ -71,6 +71,7 @@ func TestHumanReportNamesMeasuredAndConfiguredSaturation(t *testing.T) {
 			Latency: latencyPercentiles{Count: 1, P50Milliseconds: &p50, P95Milliseconds: &p95, P99Milliseconds: &p99},
 		}},
 		DominantBootStage: "ready",
+		CollectionError:   "timing summary unavailable",
 	}
 	var output bytes.Buffer
 	if err := writeHumanReport(&output, report); err != nil {
@@ -78,6 +79,7 @@ func TestHumanReportNamesMeasuredAndConfiguredSaturation(t *testing.T) {
 	}
 	for _, required := range []string{
 		"guest IP capacity", "queue+refusal+latency+configured-limit", "Dominant boot stage",
+		"Collection error after workload sweep: timing summary unavailable",
 	} {
 		if !strings.Contains(output.String(), required) {
 			t.Fatalf("output missing %q:\n%s", required, output.String())
