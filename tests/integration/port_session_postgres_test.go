@@ -209,6 +209,11 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 		t.Fatalf("closed port activity rows = %d", closedActivity)
 	}
 
+	if _, err := controlPlane.ReleaseSandboxLease(
+		t.Context(), principal, lease.ID, "port-session-initial-lease-release",
+	); err != nil {
+		t.Fatal(err)
+	}
 	leaseSweep, err := controlPlane.AcquireSandboxLease(
 		t.Context(), principal, sandbox.ID, sandbox.Generation, "port-session-sweep-lease", 60,
 	)
@@ -255,6 +260,12 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 		t.Fatalf("inactive Lease Port state = %#v, %v", leaseSweptState, err)
 	}
 
+	lease, err = controlPlane.AcquireSandboxLease(
+		t.Context(), principal, sandbox.ID, sandbox.Generation, "port-session-final-lease", 60,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	expiring, _, err := portService.CreateSandboxPortSession(
 		t.Context(), principal, "request-port-expiry", sandbox.ID, sandbox.Generation,
 		lease.ID, "port-expiry", contracts.CreatePortSessionRequest{Name: "web", DurationSeconds: 10},

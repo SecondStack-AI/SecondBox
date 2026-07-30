@@ -20,7 +20,7 @@ func (store *PostgresControlPlaneStore) AcquireLease(
 	}
 	defer tx.Rollback(ctx)
 	lockKey := input.TenantRef + "\x1f" + input.SubjectRef +
-		"\x1flease.acquire\x1f" + input.SandboxID + "\x1f" + input.IdempotencyKey
+		"\x1flease.acquire\x1f" + input.SandboxID
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey); err != nil {
 		return contracts.Lease{}, fmt.Errorf("SecondBox Lease acquire idempotency lock failed: %w", err)
 	}

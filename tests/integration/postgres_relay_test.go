@@ -611,20 +611,11 @@ func TestPostgresRelayPreservesDistinctOperationCorrelationAcrossReconnect(t *te
 	}
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	seed := seedRelayReadyAssignment(t, sandbox, now)
-	execLease, err := controlPlane.AcquireSandboxLease(
+	operationLease, err := controlPlane.AcquireSandboxLease(
 		t.Context(), principal, sandbox.ID, sandbox.Generation, "relay-correlation-exec-lease", 60,
 	)
 	if err != nil {
 		t.Fatal(err)
-	}
-	fileLease, err := controlPlane.AcquireSandboxLease(
-		t.Context(), principal, sandbox.ID, sandbox.Generation, "relay-correlation-file-lease", 60,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if execLease.ID == fileLease.ID {
-		t.Fatalf("distinct Lease admissions returned %q", execLease.ID)
 	}
 	relay, err := runnercontrol.NewPostgresFrameRelay(t.Context(), runnercontrol.PostgresFrameRelayConfig{
 		DatabaseURL: integrationDatabaseURL, ClaimDuration: time.Second,
@@ -638,7 +629,7 @@ func TestPostgresRelayPreservesDistinctOperationCorrelationAcrossReconnect(t *te
 		ID: "dps_correlation_exec_" + sandbox.ID, StreamID: "stream_correlation_exec_" + sandbox.ID,
 		TenantRef: principal.TenantRef, SandboxID: sandbox.ID,
 		SubjectRef: principal.SubjectRef, RequestID: "request-correlation-exec",
-		LeaseID: execLease.ID, Generation: sandbox.Generation,
+		LeaseID: operationLease.ID, Generation: sandbox.Generation,
 		Kind: "exec", Operation: "exec", IdempotencyKey: "relay-correlation-exec",
 		RequestHash: "relay-correlation-exec-hash", DeadlineAt: now.Add(30 * time.Second),
 		MaximumResponseBytes: 1024,
@@ -655,7 +646,7 @@ func TestPostgresRelayPreservesDistinctOperationCorrelationAcrossReconnect(t *te
 		ID: "dps_correlation_file_" + sandbox.ID, StreamID: "stream_correlation_file_" + sandbox.ID,
 		TenantRef: principal.TenantRef, SandboxID: sandbox.ID,
 		SubjectRef: principal.SubjectRef, RequestID: "request-correlation-file",
-		LeaseID: fileLease.ID, Generation: sandbox.Generation,
+		LeaseID: operationLease.ID, Generation: sandbox.Generation,
 		Kind: "file", Operation: "mkdir", IdempotencyKey: "relay-correlation-file",
 		RequestHash: "relay-correlation-file-hash", DeadlineAt: now.Add(30 * time.Second),
 		FileOpen: &runnerv1.FileOpen{
@@ -682,7 +673,7 @@ func TestPostgresRelayPreservesDistinctOperationCorrelationAcrossReconnect(t *te
 	}
 	assertRelayCorrelation(
 		t, execReplay.Message.GetExec().GetCorrelation(), "request-correlation-exec",
-		execSession.ID, sandbox.ID, execLease.ID, seed,
+		execSession.ID, sandbox.ID, operationLease.ID, seed,
 	)
 	if err := relay.MarkOutboundFrameDelivered(
 		t.Context(), execReplay.ID, seed.ConnectionTwo,
@@ -716,7 +707,7 @@ func TestPostgresRelayPreservesDistinctOperationCorrelationAcrossReconnect(t *te
 	}
 	assertRelayCorrelation(
 		t, fileReplay.Message.GetFile().GetCorrelation(), "request-correlation-file",
-		fileSession.ID, sandbox.ID, fileLease.ID, seed,
+		fileSession.ID, sandbox.ID, operationLease.ID, seed,
 	)
 }
 
