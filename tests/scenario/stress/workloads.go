@@ -157,23 +157,39 @@ func (driver *stressDriver) prepareWorkerSandboxes(
 		handle *secondboxclient.SandboxHandle
 		err    error
 	}
-	results := make(chan setupResult, concurrency)
-	var workers sync.WaitGroup
-	for index := 0; index < concurrency; index++ {
-		workers.Add(1)
-		go func(workerIndex int) {
-			defer workers.Done()
-			key := fmt.Sprintf("stress-%s-%d-setup", workload, workerIndex)
-			handle, _, _, err := driver.createReadySandbox(ctx, key)
-			results <- setupResult{handle: handle, err: err}
-		}(index)
+	runSetupWave := func(start int, count int) []setupResult {
+		results := make(chan setupResult, count)
+		var workers sync.WaitGroup
+		for index := start; index < start+count; index++ {
+			workers.Add(1)
+			go func(workerIndex int) {
+				defer workers.Done()
+				key := fmt.Sprintf("stress-%s-%d-setup", workload, workerIndex)
+				handle, _, _, err := driver.createReadySandbox(ctx, key)
+				results <- setupResult{handle: handle, err: err}
+			}(index)
+		}
+		workers.Wait()
+		close(results)
+		wave := make([]setupResult, 0, count)
+		for result := range results {
+			wave = append(wave, result)
+		}
+		return wave
 	}
-	workers.Wait()
-	close(results)
+	binding := driver.config.configuredBinding(driver.guestCIDR)
+	saturationWave := min(concurrency, binding.Capacity)
+	results := runSetupWave(0, saturationWave)
+	if saturationWave < concurrency {
+		results = append(
+			results,
+			runSetupWave(saturationWave, concurrency-saturationWave)...,
+		)
+	}
 	handles := make([]*secondboxclient.SandboxHandle, 0, concurrency)
 	samples := workerSamples{problemCounts: make(map[string]int64)}
 	failedIndex := 0
-	for result := range results {
+	for _, result := range results {
 		if result.err == nil {
 			handles = append(handles, result.handle)
 			continue
