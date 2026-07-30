@@ -34,6 +34,8 @@ type Config struct {
 	RunnerHeartbeatInterval          time.Duration
 	RunnerCommandPollInterval        time.Duration
 	RunnerCommandDeliveryBatchSize   int64
+	RunnerEventPersistenceBatchSize  int
+	RunnerEventPersistenceBatchWait  time.Duration
 	DataPlanePollInterval            time.Duration
 	DataPlaneClaimDuration           time.Duration
 	DataPlaneRetention               time.Duration
@@ -146,6 +148,18 @@ func FromEnvironment() (Config, error) {
 		return Config{}, err
 	}
 	runnerCommandDeliveryBatchSize, err := requiredPositiveInt64("SECONDBOX_RUNNER_COMMAND_DELIVERY_BATCH_SIZE")
+	if err != nil {
+		return Config{}, err
+	}
+	runnerEventPersistenceBatchSize, err := requiredPositiveInt64("SECONDBOX_RUNNER_EVENT_PERSISTENCE_BATCH_SIZE")
+	if err != nil {
+		return Config{}, err
+	}
+	runnerEventPersistenceBatchSizeInt := int(runnerEventPersistenceBatchSize)
+	if int64(runnerEventPersistenceBatchSizeInt) != runnerEventPersistenceBatchSize {
+		return Config{}, errorsForEnvironment("runner event persistence batch size exceeds process integer range")
+	}
+	runnerEventPersistenceBatchWaitMilliseconds, err := requiredPositiveInt64("SECONDBOX_RUNNER_EVENT_PERSISTENCE_BATCH_WAIT_MILLISECONDS")
 	if err != nil {
 		return Config{}, err
 	}
@@ -292,6 +306,8 @@ func FromEnvironment() (Config, error) {
 		RunnerHeartbeatInterval:          time.Duration(runnerHeartbeatMilliseconds) * time.Millisecond,
 		RunnerCommandPollInterval:        time.Duration(runnerCommandPollMilliseconds) * time.Millisecond,
 		RunnerCommandDeliveryBatchSize:   runnerCommandDeliveryBatchSize,
+		RunnerEventPersistenceBatchSize:  runnerEventPersistenceBatchSizeInt,
+		RunnerEventPersistenceBatchWait:  time.Duration(runnerEventPersistenceBatchWaitMilliseconds) * time.Millisecond,
 		DataPlanePollInterval:            time.Duration(dataPlanePollMilliseconds) * time.Millisecond,
 		DataPlaneClaimDuration:           time.Duration(dataPlaneClaimMilliseconds) * time.Millisecond,
 		DataPlaneRetention:               time.Duration(dataPlaneRetentionSeconds) * time.Second,

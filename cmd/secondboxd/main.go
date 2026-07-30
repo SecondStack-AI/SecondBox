@@ -215,6 +215,8 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		HeartbeatInterval:   processConfig.RunnerHeartbeatInterval,
 		CommandPollInterval: processConfig.RunnerCommandPollInterval,
 		CommandBatchSize:    processConfig.RunnerCommandDeliveryBatchSize,
+		EventBatchSize:      processConfig.RunnerEventPersistenceBatchSize,
+		EventBatchWait:      processConfig.RunnerEventPersistenceBatchWait,
 		FrameRelay:          dataPlaneRelay,
 		Now:                 service.SystemClock,
 		NewConnectionID:     func() string { return service.NewOpaqueID("rconn") },

@@ -684,42 +684,196 @@ func (store *PostgresStateStore) RecordEvent(
 		return duplicate, err
 	}
 	defer tx.Rollback(ctx)
-	switch event.Kind {
-	case EventAssignment:
-		if err := recordAssignmentEvent(ctx, tx, event.RunnerID, event.Message, now.UTC()); err != nil {
-			return false, err
-		}
-	case EventFence:
-		if err := recordFenceEvent(ctx, tx, event.RunnerID, event.Message.GetFenceResult(), now.UTC()); err != nil {
-			return false, err
-		}
-	case EventDrain:
-		if err := recordDrainEvent(ctx, tx, event.RunnerID, event.Message.GetDrainState(), now.UTC()); err != nil {
-			return false, err
-		}
-	case EventEvidence:
-		if err := validateRunnerEvidence(event.RunnerID, event.Message.GetEvidence()); err != nil {
-			return false, err
-		}
-	case EventLocalWorkspace:
-		if err := recordLocalWorkspaceResult(
-			ctx, tx, event.RunnerID, event.Message.GetLocalWorkspaceResult(), now.UTC(),
-		); err != nil {
-			return false, err
-		}
-	case EventInstanceTerminal:
-		if err := recordInstanceTerminal(
-			ctx, tx, event.RunnerID, event.Message.GetInstanceTerminal(), now.UTC(),
-		); err != nil {
-			return false, err
-		}
-	default:
-		return false, fmt.Errorf("SecondBox runner event kind %q is not durable", event.Kind)
+	if err := recordDurableEvent(ctx, tx, event, now.UTC()); err != nil {
+		return false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, fmt.Errorf("SecondBox runner event commit: %w", err)
 	}
 	return false, nil
+}
+
+// RecordEvents persists one bounded, same-connection event sequence atomically.
+func (store *PostgresStateStore) RecordEvents(
+	ctx context.Context,
+	records []EventPersistenceRecord,
+) error {
+	if len(records) == 0 {
+		return errors.New("SecondBox runner event persistence batch is empty")
+	}
+	if len(records) == 1 {
+		_, err := store.RecordEvent(ctx, records[0].Event, records[0].ReceivedAt)
+		return err
+	}
+	runnerID := records[0].Event.RunnerID
+	connectionID := records[0].Event.ConnectionID
+	messageIDs := make([]string, len(records))
+	sequences := make([]uint64, len(records))
+	for index, record := range records {
+		if record.Event.RunnerID != runnerID ||
+			record.Event.ConnectionID != connectionID {
+			return errors.New("SecondBox runner event persistence batch spans connection identities")
+		}
+		if !durableRunnerEvent(record.Event.Kind) {
+			return fmt.Errorf(
+				"SecondBox runner event persistence batch contains non-durable kind %q",
+				record.Event.Kind,
+			)
+		}
+		messageID, sequence, err := runnerEnvelope(record.Event.Message)
+		if err != nil {
+			return err
+		}
+		messageIDs[index] = messageID
+		sequences[index] = sequence
+	}
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("SecondBox runner event batch transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var storedRunnerID, connectionState string
+	var lastSequence int64
+	if err := tx.QueryRow(ctx, `
+		SELECT connection.runner_id,connection.state,connection.last_sequence
+		FROM secondbox.runner_connections AS connection
+		WHERE connection.id=$1 FOR UPDATE OF connection`, connectionID,
+	).Scan(&storedRunnerID, &connectionState, &lastSequence); err != nil {
+		return fmt.Errorf("SecondBox runner event batch connection ordering lookup: %w", err)
+	}
+	if storedRunnerID != runnerID || connectionState != "active" {
+		return errors.New("SecondBox runner event batch connection identity is inactive")
+	}
+	var containsDuplicate bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM secondbox.runner_messages
+			WHERE connection_id=$1 AND message_id=ANY($2::text[])
+		)`,
+		connectionID,
+		messageIDs,
+	).Scan(&containsDuplicate); err != nil {
+		return fmt.Errorf("SecondBox runner event batch duplicate lookup: %w", err)
+	}
+	if containsDuplicate {
+		if err := tx.Rollback(ctx); err != nil {
+			return fmt.Errorf("SecondBox runner event batch duplicate rollback: %w", err)
+		}
+		for _, record := range records {
+			if _, err := store.RecordEvent(ctx, record.Event, record.ReceivedAt); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, sequence := range sequences {
+		if sequence > uint64(^uint64(0)>>1) || int64(sequence) <= lastSequence {
+			return ErrSequenceReordered
+		}
+		lastSequence = int64(sequence)
+	}
+	orderedWrites := &pgx.Batch{}
+	for index, record := range records {
+		orderedWrites.Queue(`
+			INSERT INTO secondbox.runner_messages (
+				connection_id,message_id,sequence,kind,observed_at
+			) VALUES ($1,$2,$3,$4,$5)`,
+			connectionID,
+			messageIDs[index],
+			sequences[index],
+			string(record.Event.Kind),
+			record.ReceivedAt.UTC(),
+		)
+	}
+	orderedWrites.Queue(`
+		UPDATE secondbox.runner_connections
+		SET last_sequence=$2,last_seen_at=$3 WHERE id=$1`,
+		connectionID,
+		sequences[len(sequences)-1],
+		records[len(records)-1].ReceivedAt.UTC(),
+	)
+	results := tx.SendBatch(ctx, orderedWrites)
+	var writeErr error
+	for range records {
+		if _, err := results.Exec(); err != nil && writeErr == nil {
+			writeErr = fmt.Errorf("SecondBox runner event batch message insert: %w", err)
+		}
+	}
+	if command, err := results.Exec(); err != nil {
+		writeErr = errors.Join(
+			writeErr,
+			fmt.Errorf("SecondBox runner event batch sequence update: %w", err),
+		)
+	} else if command.RowsAffected() != 1 {
+		writeErr = errors.Join(
+			writeErr,
+			errors.New("SecondBox runner event batch sequence update found no connection"),
+		)
+	}
+	if err := results.Close(); err != nil {
+		writeErr = errors.Join(
+			writeErr,
+			fmt.Errorf("SecondBox runner event batch ordered writes close: %w", err),
+		)
+	}
+	if writeErr != nil {
+		return writeErr
+	}
+	for _, record := range records {
+		if err := recordDurableEvent(
+			ctx,
+			tx,
+			record.Event,
+			record.ReceivedAt.UTC(),
+		); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("SecondBox runner event batch commit: %w", err)
+	}
+	return nil
+}
+
+func recordDurableEvent(
+	ctx context.Context,
+	tx pgx.Tx,
+	event Event,
+	now time.Time,
+) error {
+	switch event.Kind {
+	case EventAssignment:
+		if err := recordAssignmentEvent(ctx, tx, event.RunnerID, event.Message, now.UTC()); err != nil {
+			return err
+		}
+	case EventFence:
+		if err := recordFenceEvent(ctx, tx, event.RunnerID, event.Message.GetFenceResult(), now.UTC()); err != nil {
+			return err
+		}
+	case EventDrain:
+		if err := recordDrainEvent(ctx, tx, event.RunnerID, event.Message.GetDrainState(), now.UTC()); err != nil {
+			return err
+		}
+	case EventEvidence:
+		if err := validateRunnerEvidence(event.RunnerID, event.Message.GetEvidence()); err != nil {
+			return err
+		}
+	case EventLocalWorkspace:
+		if err := recordLocalWorkspaceResult(
+			ctx, tx, event.RunnerID, event.Message.GetLocalWorkspaceResult(), now.UTC(),
+		); err != nil {
+			return err
+		}
+	case EventInstanceTerminal:
+		if err := recordInstanceTerminal(
+			ctx, tx, event.RunnerID, event.Message.GetInstanceTerminal(), now.UTC(),
+		); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("SecondBox runner event kind %q is not durable", event.Kind)
+	}
+	return nil
 }
 
 func recordLocalWorkspaceResult(

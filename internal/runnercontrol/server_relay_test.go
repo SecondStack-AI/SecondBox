@@ -177,6 +177,59 @@ func TestRunnerReceivePumpExitsWhenOwnerCancelsBlockedDelivery(t *testing.T) {
 	}
 }
 
+func TestDurableEventBatchStopsBeforeHeartbeatOrderingBoundary(t *testing.T) {
+	session := negotiatedSession(t)
+	if _, err := session.Accept(registrationFrame("runner-1", "connection-1", 1)); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+	server := &Server{config: ServerConfig{
+		EventBatchSize: 8,
+		EventBatchWait: time.Second,
+		Now:            func() time.Time { return now },
+	}}
+	first, err := server.acceptRunnerFrame(
+		session,
+		receivedRunnerFrame{message: evidenceFrame(2)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	received := make(chan receivedRunnerFrame, 2)
+	received <- receivedRunnerFrame{message: evidenceFrame(3)}
+	received <- receivedRunnerFrame{
+		message: heartbeatFrame("runner-1", "connection-1", "heartbeat-4", 4),
+	}
+	records, pending, terminalErr := server.collectDurableEventBatch(
+		t.Context(),
+		session,
+		first,
+		received,
+		nil,
+	)
+	if terminalErr != nil {
+		t.Fatal(terminalErr)
+	}
+	if len(records) != 2 {
+		t.Fatalf("durable event batch size = %d, want 2", len(records))
+	}
+	if pending == nil || pending.event.Kind != EventHeartbeat {
+		t.Fatalf("pending ordering-boundary event = %#v, want heartbeat", pending)
+	}
+	for index, wantSequence := range []uint64{2, 3} {
+		_, sequence, err := runnerEnvelope(records[index].Event.Message)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sequence != wantSequence {
+			t.Fatalf("batch sequence[%d] = %d, want %d", index, sequence, wantSequence)
+		}
+		if !records[index].ReceivedAt.Equal(now) {
+			t.Fatalf("batch receivedAt[%d] = %v, want %v", index, records[index].ReceivedAt, now)
+		}
+	}
+}
+
 func TestOutboundPumpReportsCommandDeliveryFailure(t *testing.T) {
 	server := &Server{config: ServerConfig{
 		StateStore:          failingCommandStateStore{},
@@ -200,6 +253,17 @@ func TestOutboundPumpReportsCommandDeliveryFailure(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("outbound pump did not report command claim failure")
+	}
+}
+
+func evidenceFrame(sequence uint64) *runnerv1.RunnerToControlPlane {
+	return &runnerv1.RunnerToControlPlane{
+		Message: &runnerv1.RunnerToControlPlane_Evidence{
+			Evidence: &runnerv1.Evidence{
+				MessageId: "evidence-" + time.Unix(int64(sequence), 0).UTC().Format("150405"),
+				Sequence:  sequence,
+			},
+		},
 	}
 }
 
@@ -297,8 +361,8 @@ func (relayStateStore) RecordHeartbeat(context.Context, *runnerv1.RunnerHeartbea
 	return true, nil
 }
 
-func (relayStateStore) RecordEvent(context.Context, Event, time.Time) (bool, error) {
-	return true, nil
+func (relayStateStore) RecordEvents(context.Context, []EventPersistenceRecord) error {
+	return nil
 }
 
 func (relayStateStore) ClaimCommand(context.Context, string, string, time.Time) (CommandDelivery, bool, error) {
@@ -317,6 +381,8 @@ func validRelayServerConfig() ServerConfig {
 		HeartbeatInterval:   time.Second,
 		CommandPollInterval: time.Millisecond,
 		CommandBatchSize:    1,
+		EventBatchSize:      1,
+		EventBatchWait:      time.Millisecond,
 		Now:                 time.Now,
 		NewConnectionID:     func() string { return "connection-1" },
 	}

@@ -27,9 +27,15 @@ type ProtocolStateStore interface {
 	CloseConnection(context.Context, string, string, time.Time) error
 	RecordRegistration(context.Context, *runnerv1.RunnerRegistration, time.Time) (bool, error)
 	RecordHeartbeat(context.Context, *runnerv1.RunnerHeartbeat, time.Time) (bool, error)
-	RecordEvent(context.Context, Event, time.Time) (bool, error)
+	RecordEvents(context.Context, []EventPersistenceRecord) error
 	ClaimCommand(context.Context, string, string, time.Time) (CommandDelivery, bool, error)
 	MarkCommandDelivered(context.Context, string, string, time.Time) error
+}
+
+// EventPersistenceRecord keeps the receive timestamp attached to one ordered durable event.
+type EventPersistenceRecord struct {
+	Event      Event
+	ReceivedAt time.Time
 }
 
 // ServerConfig contains explicit protocol compatibility and durable dependencies.
@@ -42,6 +48,8 @@ type ServerConfig struct {
 	HeartbeatInterval   time.Duration
 	CommandPollInterval time.Duration
 	CommandBatchSize    int64
+	EventBatchSize      int
+	EventBatchWait      time.Duration
 	Now                 func() time.Time
 	NewConnectionID     func() string
 }
@@ -61,6 +69,11 @@ type receivedRunnerFrame struct {
 	err     error
 }
 
+type acceptedRunnerEvent struct {
+	event      Event
+	receivedAt time.Time
+}
+
 // NewServer validates the control-plane runner protocol composition.
 func NewServer(config ServerConfig) (*Server, error) {
 	if config.CredentialVerifier == nil ||
@@ -70,6 +83,8 @@ func NewServer(config ServerConfig) (*Server, error) {
 		config.HeartbeatInterval <= 0 ||
 		config.CommandPollInterval <= 0 ||
 		config.CommandBatchSize <= 0 ||
+		config.EventBatchSize <= 0 ||
+		config.EventBatchWait <= 0 ||
 		config.Now == nil ||
 		config.NewConnectionID == nil {
 		return nil, errors.New("SecondBox runner control server requires credential, state, protocol, heartbeat, clock, and connection configuration")
@@ -141,53 +156,151 @@ func (server *Server) Connect(stream runnerv1.RunnerControl_ConnectServer) (retu
 	received := make(chan receivedRunnerFrame, 1)
 	go pumpRunnerFrames(stream.Context(), stream.Recv, received)
 	var outboundFailures <-chan error
+	var pending *acceptedRunnerEvent
 	for {
-		select {
-		case <-stream.Context().Done():
-			return stream.Context().Err()
-		case frame := <-received:
-			if frame.err != nil {
-				return fmt.Errorf("SecondBox runner control receive: %w", frame.err)
-			}
-			event, err := session.Accept(frame.message)
-			if err != nil {
-				return err
-			}
-			persistStartedAt := time.Now()
-			if err := server.persistEvent(stream.Context(), event); err != nil {
-				return err
-			}
-			if durableRunnerEvent(event.Kind) {
-				_, sequence, envelopeErr := runnerEnvelope(event.Message)
-				if envelopeErr != nil {
-					return envelopeErr
+		var accepted acceptedRunnerEvent
+		if pending != nil {
+			accepted = *pending
+			pending = nil
+		} else {
+			select {
+			case <-stream.Context().Done():
+				return stream.Context().Err()
+			case frame := <-received:
+				accepted, err = server.acceptRunnerFrame(session, frame)
+				if err != nil {
+					return err
 				}
-				slog.Info(
-					"SecondBox runner control event persisted",
-					"runnerId", event.RunnerID,
-					"kind", runnerEventSubtype(event.Message),
-					"sequence", sequence,
-					"persistenceMs", time.Since(persistStartedAt).Milliseconds(),
-					"observedToPersistMs",
-					runnerObservedToPersistDuration(event.Message, server.config.Now()).Milliseconds(),
+			case err := <-outboundFailures:
+				return err
+			}
+		}
+		if durableRunnerEvent(accepted.event.Kind) {
+			batch, next, terminalErr := server.collectDurableEventBatch(
+				stream.Context(),
+				session,
+				accepted,
+				received,
+				outboundFailures,
+			)
+			persistContext := stream.Context()
+			cancelPersistence := func() {}
+			if terminalErr != nil {
+				persistContext, cancelPersistence = context.WithTimeout(
+					context.WithoutCancel(stream.Context()),
+					5*time.Second,
 				)
 			}
-			if event.Kind == EventRegistration {
-				failures := make(chan error, 1)
-				outboundFailures = failures
-				go server.pumpOutboundFrames(
-					stream.Context(),
-					stream,
-					session,
-					identity.RunnerID,
-					connectionID,
-					failures,
-				)
+			persistErr := server.persistDurableEventBatch(persistContext, batch)
+			cancelPersistence()
+			if persistErr != nil || terminalErr != nil {
+				return errors.Join(persistErr, terminalErr)
 			}
-		case err := <-outboundFailures:
+			pending = next
+			continue
+		}
+		if err := server.persistEvent(
+			stream.Context(),
+			accepted.event,
+			accepted.receivedAt,
+		); err != nil {
 			return err
 		}
+		if accepted.event.Kind == EventRegistration {
+			failures := make(chan error, 1)
+			outboundFailures = failures
+			go server.pumpOutboundFrames(
+				stream.Context(),
+				stream,
+				session,
+				identity.RunnerID,
+				connectionID,
+				failures,
+			)
+		}
 	}
+}
+
+func (server *Server) acceptRunnerFrame(
+	session *Session,
+	frame receivedRunnerFrame,
+) (acceptedRunnerEvent, error) {
+	if frame.err != nil {
+		return acceptedRunnerEvent{}, fmt.Errorf("SecondBox runner control receive: %w", frame.err)
+	}
+	event, err := session.Accept(frame.message)
+	if err != nil {
+		return acceptedRunnerEvent{}, err
+	}
+	return acceptedRunnerEvent{event: event, receivedAt: server.config.Now()}, nil
+}
+
+func (server *Server) collectDurableEventBatch(
+	ctx context.Context,
+	session *Session,
+	first acceptedRunnerEvent,
+	received <-chan receivedRunnerFrame,
+	outboundFailures <-chan error,
+) ([]EventPersistenceRecord, *acceptedRunnerEvent, error) {
+	records := []EventPersistenceRecord{{
+		Event: first.event, ReceivedAt: first.receivedAt,
+	}}
+	if server.config.EventBatchSize == 1 {
+		return records, nil, nil
+	}
+	timer := time.NewTimer(server.config.EventBatchWait)
+	defer timer.Stop()
+	for len(records) < server.config.EventBatchSize {
+		select {
+		case <-ctx.Done():
+			return records, nil, ctx.Err()
+		case frame := <-received:
+			accepted, err := server.acceptRunnerFrame(session, frame)
+			if err != nil {
+				return records, nil, err
+			}
+			if !durableRunnerEvent(accepted.event.Kind) {
+				return records, &accepted, nil
+			}
+			records = append(records, EventPersistenceRecord{
+				Event: accepted.event, ReceivedAt: accepted.receivedAt,
+			})
+		case err := <-outboundFailures:
+			return records, nil, err
+		case <-timer.C:
+			return records, nil, nil
+		}
+	}
+	return records, nil, nil
+}
+
+func (server *Server) persistDurableEventBatch(
+	ctx context.Context,
+	records []EventPersistenceRecord,
+) error {
+	persistStartedAt := time.Now()
+	if err := server.config.StateStore.RecordEvents(ctx, records); err != nil {
+		return err
+	}
+	persistedAt := server.config.Now()
+	persistenceDuration := time.Since(persistStartedAt)
+	for _, record := range records {
+		_, sequence, err := runnerEnvelope(record.Event.Message)
+		if err != nil {
+			return err
+		}
+		slog.Info(
+			"SecondBox runner control event persisted",
+			"runnerId", record.Event.RunnerID,
+			"kind", runnerEventSubtype(record.Event.Message),
+			"sequence", sequence,
+			"batchSize", len(records),
+			"persistenceMs", persistenceDuration.Milliseconds(),
+			"observedToPersistMs",
+			runnerObservedToPersistDuration(record.Event.Message, persistedAt).Milliseconds(),
+		)
+	}
+	return nil
 }
 
 func pumpRunnerFrames(
@@ -347,20 +460,19 @@ func runnerObservedToPersistDuration(
 	return max(persistedAt.Sub(observedAt), 0)
 }
 
-func (server *Server) persistEvent(ctx context.Context, event Event) error {
+func (server *Server) persistEvent(ctx context.Context, event Event, receivedAt time.Time) error {
 	switch event.Kind {
 	case EventDuplicate:
 		return nil
 	case EventRegistration:
-		_, err := server.config.StateStore.RecordRegistration(ctx, event.Registration, server.config.Now())
+		_, err := server.config.StateStore.RecordRegistration(ctx, event.Registration, receivedAt)
 		return err
 	case EventHeartbeat:
-		_, err := server.config.StateStore.RecordHeartbeat(ctx, event.Heartbeat, server.config.Now())
+		_, err := server.config.StateStore.RecordHeartbeat(ctx, event.Heartbeat, receivedAt)
 		return err
 	case EventAssignment, EventFence, EventDrain, EventEvidence, EventInstanceTerminal,
 		EventLocalWorkspace:
-		_, err := server.config.StateStore.RecordEvent(ctx, event, server.config.Now())
-		return err
+		return errors.New("SecondBox runner durable event bypassed the persistence batch")
 	case EventExec, EventPty, EventFile, EventPort:
 		if server.config.FrameRelay == nil {
 			return errors.New("SecondBox runner control data-plane relay is not configured")
@@ -369,7 +481,7 @@ func (server *Server) persistEvent(ctx context.Context, event Event) error {
 			RunnerID:     event.RunnerID,
 			ConnectionID: event.ConnectionID,
 			Message:      event.Message,
-		}, server.config.Now())
+		}, receivedAt)
 		return err
 	default:
 		return fmt.Errorf("SecondBox runner control received unexpected event %q", event.Kind)
