@@ -545,8 +545,8 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 		t.Fatal(err)
 	}
 	redundantFenceResult := proto.Clone(fenceResult).(*runnerv1.FenceResult)
-	redundantFenceResult.MessageId = "redundant-fence-result-7"
-	redundantFenceResult.Sequence = 7
+	redundantFenceResult.MessageId = "redundant-fence-result-8"
+	redundantFenceResult.Sequence = 8
 	redundantFenceResult.Result =
 		runnerv1.FenceResultKind_FENCE_RESULT_KIND_ALREADY_STOPPED
 	if duplicate, err := stateStore.RecordEvent(t.Context(), runnercontrol.Event{
@@ -573,8 +573,8 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 		)
 	}
 	staleAfterFence := proto.Clone(ready).(*runnerv1.RunnerToControlPlane)
-	staleAfterFence.GetAssignmentResult().MessageId = "ready-after-fence-8"
-	staleAfterFence.GetAssignmentResult().Sequence = 8
+	staleAfterFence.GetAssignmentResult().MessageId = "ready-after-fence-9"
+	staleAfterFence.GetAssignmentResult().Sequence = 9
 	staleAfterFence.GetAssignmentResult().BackendReference = "fc-stale-after-fence"
 	if _, err := stateStore.RecordEvent(t.Context(), runnercontrol.Event{
 		Kind: runnercontrol.EventAssignment, RunnerID: runnerID, ConnectionID: connectionID,
