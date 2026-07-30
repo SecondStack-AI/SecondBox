@@ -92,6 +92,26 @@ Nothing stopped `--name sbx_anything`. Clients tell an identifier from a name by
 
 `contracts.SandboxIDPrefix` is now the single definition of that prefix, consumed by both the CLI resolver and the service. `validateSandboxMetadata` rejects a reserved name that is blank, surrounded by whitespace, or begins with the prefix, so the rule holds for every writer rather than only the CLI. A test pins `NewOpaqueID("sbx")` against the declared prefix so the two cannot drift.
 
+### Lease renewal failure was reported by its consequence (fixed)
+
+`LeaseKeeper.Close` returned the release error. When renewal had already stopped, releasing the fenced Lease failed too, so the caller saw the consequence rather than the cause. Close now reports the renewal failure in preference, in all three clients.
+
+### exec and run could not carry standard input (fixed)
+
+`BufferedExecRequest.stdinBase64` existed and was unused, so `echo x | secondbox exec my-box -- cat` silently sent nothing. Both commands take `--stdin`, bounded at one mebibyte, which is exactly what the schema's base64 field admits. An oversized input is refused rather than truncated, and `run` reads it before creating anything so a refusal leaves no Sandbox behind.
+
+### Two synthetic digests had to agree by hand (fixed)
+
+`deploy/environment.example` hardcoded the digest that `bootstrap-environment.sh` writes into the generated development catalog, with nothing enforcing the match. Bootstrap now defines that digest once and fills both the catalog and the built-in Profile settings from it. A deployment supplying its own catalog keeps a placeholder the validator refuses, so the convenience cannot leak into production.
+
+### TypeScript and Python lacked the composition layer (fixed)
+
+The Go SDK gained helpers the other two did not have. All three now share `newIdempotencyKey`, `revisionETag`, `problemCodeOf`, `decodeExecOutcome`, `waitFor`, `createSandbox`, the lease helpers with a `LeaseKeeper`, and `run`; Python gained a `SandboxHandle` to carry them. `run` deletes nothing in any client.
+
+### The Go lease routes omitted a required header (fixed)
+
+Adding Python parity surfaced that `renewSandboxLease` and `releaseSandboxLease` both require `Idempotency-Key`, and the Go SDK sent neither. Every `LeaseKeeper` renewal and release would have failed against a real service. The stub servers in the Go tests answered every request regardless of headers, so nothing caught it; TypeScript had always passed the key. Both Go routes now take an idempotency key and generate one when it is absent, and the tests assert the header rather than only the response.
+
 ## Known defects found while implementing
 
 ### The generic operation path sent a typed-nil request body (fixed)

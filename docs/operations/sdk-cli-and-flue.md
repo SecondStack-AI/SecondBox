@@ -1,6 +1,25 @@
 # SDK, CLI, and Flue quick starts
 
-The versioned OpenAPI contract is canonical, while the Go, TypeScript, and Python clients are small hand-maintained transports for actual repository use cases. The Go and TypeScript layers add structured errors, explicit operation polling, caller-owned Sandbox handles, and data-plane helpers. The Go helpers own authenticated `secondbox.exec.v1` and `secondbox.terminal.v1` WebSocket attachments. The TypeScript helpers apply the same sequencing and terminal rules over injected connectors. Python provides a focused trusted-caller lifecycle transport.
+The versioned OpenAPI contract is canonical, while the Go, TypeScript, and Python clients are small hand-maintained transports for actual repository use cases. The Go and TypeScript layers add structured errors, explicit operation polling, caller-owned Sandbox handles, and data-plane helpers. The Go helpers own authenticated `secondbox.exec.v1` and `secondbox.terminal.v1` WebSocket attachments. The TypeScript helpers apply the same sequencing and terminal rules over injected connectors. Python carries the same composition layer over a dependency-free synchronous transport, and does not attach WebSocket sessions.
+
+## Composition helpers
+
+All three clients share one composition layer, so a caller states intent rather than sequencing requests:
+
+| Concern | Go | TypeScript | Python |
+| --- | --- | --- | --- |
+| Generate a request key | `NewIdempotencyKey` | `newIdempotencyKey` | `new_idempotency_key` |
+| Render an If-Match validator | `RevisionETag` | `revisionETag` | `revision_etag` |
+| Read a typed problem code | `ProblemCodeOf` | `problemCodeOf` | `problem_code_of` |
+| Decode a terminal outcome | `DecodeExecOutcome` | `decodeExecOutcome` | `decode_exec_outcome` |
+| Wait past the per-request bound | `SandboxHandle.WaitFor` | `SandboxHandle.waitFor` | `SandboxHandle.wait_for` |
+| Create and hold a Sandbox | `CreateSandbox` | `createSandbox` | `create_sandbox_handle` |
+| Hold a Lease active | `KeepLease`, `LeaseKeeper` | `keepLease`, `LeaseKeeper` | `keep_lease`, `LeaseKeeper` |
+| Create, wait, and execute | `Run` | `run` | `run` |
+
+An idempotency key is generated whenever a caller supplies none, and a supplied key is always preserved. `waitFor` issues repeated bounded waits because one `waitForSandbox` request is capped at 60 seconds, and refreshes when the service reports `wait_expired`. A `LeaseKeeper` renews against the expiry the service actually granted rather than the duration requested, since the pinned Profile bounds Lease length; closing one reports a renewal failure in preference to the release error that failure causes. Decoding an outcome yields the output even when the command failed, because a failing command usually explains itself on standard error.
+
+`Run` never deletes the Sandbox it created in any of the three clients. Disposal stays the caller's decision, matching the rule that a handle performs no lifecycle action implicitly.
 
 The Go package import path is `github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient`. The TypeScript publication name is `@secondstack-ai/secondbox`; its repository manifest remains at the non-release version `0.0.0-development`. `npm run pack:sdk-typescript` performs a clean declaration/runtime build and dry-packs the exact public files without publishing.
 
@@ -84,6 +103,8 @@ Guest standard output and standard error are decoded and written to the CLI's ow
 
 `--deadline` defaults to one minute and `--max-output-bytes` to one mebibyte; the pinned Profile's execution policy bounds both. `--cwd` selects a workspace-relative directory and `--env name=value` is repeatable. `--json` writes the raw `ExecOutcome`, retaining base64 output for scripting, and still exits with the guest's status.
 
+`--stdin` sends standard input to the command. The buffered route bounds it at one mebibyte, which is exactly what its base64 field admits, and an input that does not fit is refused rather than truncated; `exec stream` carries unbounded input.
+
 ### Naming a Sandbox
 
 Every command that takes a Sandbox accepts either its opaque identifier or a name. Identifiers carry a fixed `sbx_` prefix, so the two are told apart without a speculative request.
@@ -100,7 +121,7 @@ The service rejects a reserved name that could never resolve: one that is blank,
 ./dist/secondbox run coding-environment -- python3 -c 'print("hello")'
 ```
 
-`--name` reserves a name for later reference and `--keep` retains the Sandbox, reporting its identifier on standard error. `--metadata name=value` is repeatable and cannot restate the reserved name key. `--ready-timeout` bounds the wait for readiness and defaults to five minutes. Output handling and exit status match `exec` exactly, and the Sandbox is disposed of even when the command fails.
+`--name` reserves a name for later reference and `--keep` retains the Sandbox, reporting its identifier on standard error. `--metadata name=value` is repeatable and cannot restate the reserved name key. `--ready-timeout` bounds the wait for readiness and defaults to five minutes. Output handling, `--stdin`, and exit status match `exec` exactly, and the Sandbox is disposed of even when the command fails. Standard input is read before anything is created, so an oversized input leaves no Sandbox behind.
 
 ### Opening an interactive shell
 
