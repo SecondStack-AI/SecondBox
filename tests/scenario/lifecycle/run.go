@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
@@ -43,68 +45,89 @@ func (samples *transitionSamples) recordError(err error) {
 }
 
 type occupancySample struct {
-	OffsetMilliseconds int64 `json:"offsetMilliseconds"`
-	Ready              int64 `json:"ready"`
-	InFlight           int64 `json:"inFlight"`
-	Backlog            int64 `json:"backlog"`
+	OffsetMilliseconds   int64    `json:"offsetMilliseconds"`
+	Ready                int64    `json:"ready"`
+	OutstandingArrivals  int64    `json:"outstandingArrivals"`
+	OfferedRatePerSecond *float64 `json:"offeredRatePerSecond"`
 }
 
-// runCell executes one (cycle, pattern, resident population) combination.
+type cellResources struct {
+	mu      sync.Mutex
+	handles []*secondboxclient.SandboxHandle
+}
+
+func (resources *cellResources) add(handle *secondboxclient.SandboxHandle) {
+	if handle == nil {
+		return
+	}
+	resources.mu.Lock()
+	defer resources.mu.Unlock()
+	resources.handles = append(resources.handles, handle)
+}
+
+func (resources *cellResources) snapshot() []*secondboxclient.SandboxHandle {
+	resources.mu.Lock()
+	defer resources.mu.Unlock()
+	return append([]*secondboxclient.SandboxHandle(nil), resources.handles...)
+}
+
+// runCell executes one (measurement, pattern, resident population) combination.
 //
 // Arrivals are dispatched from a schedule computed before the window opens. When
-// the system cannot keep up, in-flight cycles accumulate and the backlog series
-// grows; the driver does not slow its offered rate in response. That is the
+// the system cannot keep up, outstanding arrivals accumulate; the driver does
+// not slow its offered rate in response. That is the
 // property the previous closed-loop stress harness lacked.
 func (driver *lifecycleDriver) runCell(
 	ctx context.Context,
-	cycle string,
+	measurement string,
 	pattern arrivalPattern,
 	resident int,
-) (cellResult, error) {
+) (result cellResult, returnErr error) {
 	schedule, err := buildArrivalSchedule(pattern)
 	if err != nil {
 		return cellResult{}, err
 	}
 	fmt.Printf(
-		"cycle=%s pattern=%s resident=%d offered=%d\n",
-		cycle, pattern.Name, resident, schedule.offeredCount(),
+		"measurement=%s pattern=%s resident=%d offered=%d\n",
+		measurement, pattern.Name, resident, schedule.offeredCount(),
 	)
 
-	residentHandles, err := driver.establishResident(ctx, cycle, pattern.Name, resident)
+	residentHandles, err := driver.establishResident(
+		ctx, measurement, pattern.Name, resident,
+	)
 	if err != nil {
-		driver.releaseResident(ctx, residentHandles, pattern.Name)
-		return cellResult{}, err
+		cleanupErr := driver.releaseResident(
+			context.WithoutCancel(ctx), residentHandles, pattern.Name,
+		)
+		return cellResult{}, errors.Join(err, cleanupErr)
 	}
-	defer driver.releaseResident(ctx, residentHandles, pattern.Name)
+	defer func() {
+		returnErr = errors.Join(
+			returnErr,
+			driver.releaseResident(
+				context.WithoutCancel(ctx), residentHandles, pattern.Name,
+			),
+		)
+	}()
 
-	// The warm cycle needs Sandboxes that already exist and are stopped, so the
-	// measured edge is start-to-ready rather than create-to-ready. Provisioning
-	// happens before the window opens and is not measured.
-	// Warm arrivals check a Sandbox out of an exclusive pool for the duration of
-	// their cycle. Sharing a handle between two concurrent arrivals would race
-	// start against stop on the same Sandbox and produce meaningless timings.
-	var warmPool []*secondboxclient.SandboxHandle
-	var available chan *secondboxclient.SandboxHandle
-	inFlightLimit := driver.config.MaximumInFlight
-	if cycle == cycleWarm {
-		warmPool, err = driver.provisionWarmPool(ctx, pattern.Name, schedule.offeredCount())
-		if err != nil {
-			driver.releaseWarmPool(ctx, warmPool, pattern.Name)
-			return cellResult{}, err
-		}
-		defer driver.releaseWarmPool(ctx, warmPool, pattern.Name)
-		available = make(chan *secondboxclient.SandboxHandle, len(warmPool))
-		for _, handle := range warmPool {
-			available <- handle
-		}
-		// Never offer more concurrent warm cycles than there are Sandboxes to
-		// run them on, so a checkout always succeeds.
-		if len(warmPool) < inFlightLimit {
-			inFlightLimit = len(warmPool)
-		}
+	resources := &cellResources{}
+	defer func() {
+		returnErr = errors.Join(
+			returnErr,
+			driver.releaseCellResources(
+				context.WithoutCancel(ctx), resources, measurement, pattern.Name,
+			),
+		)
+	}()
+	available, err := driver.prepareMeasurementPool(
+		ctx, measurement, pattern.Name, schedule.offeredCount(), resources,
+	)
+	if err != nil {
+		return cellResult{}, err
 	}
 
 	samples := newTransitionSamples()
+	timings := newStartupTimingSamples()
 	var occupancy []occupancySample
 	var occupancyMu sync.Mutex
 
@@ -123,64 +146,66 @@ func (driver *lifecycleDriver) runCell(
 			case <-windowContext.Done():
 				return
 			case now := <-ticker.C:
+				offset := now.Sub(startedAt)
 				occupancyMu.Lock()
 				occupancy = append(occupancy, occupancySample{
-					OffsetMilliseconds: now.Sub(startedAt).Milliseconds(),
-					Ready:              driver.readyCount.Load(),
-					InFlight:           driver.inFlight.Load(),
-					Backlog:            driver.inFlight.Load(),
+					OffsetMilliseconds:   offset.Milliseconds(),
+					Ready:                driver.readyCount.Load(),
+					OutstandingArrivals:  driver.inFlight.Load(),
+					OfferedRatePerSecond: offeredRateAt(pattern, offset),
 				})
 				occupancyMu.Unlock()
 			}
 		}
 	}()
 
-	var cycles sync.WaitGroup
+	var arrivals sync.WaitGroup
 	completed := int64(0)
 	var completedMu sync.Mutex
+	var peakOutstanding atomic.Int64
 	for index, offset := range schedule.offsets {
 		if wait := time.Until(startedAt.Add(offset)); wait > 0 {
 			timer := time.NewTimer(wait)
 			select {
 			case <-ctx.Done():
 				timer.Stop()
+				arrivals.Wait()
 				cancelWindow()
 				sampler.Wait()
 				return cellResult{}, ctx.Err()
 			case <-timer.C:
 			}
 		}
-		if driver.inFlight.Load() >= int64(inFlightLimit) {
+		if driver.inFlight.Load() >= int64(driver.config.MaximumInFlight) {
 			// Shedding is itself a saturation observation. It is counted
 			// separately so it can never be mistaken for latency.
 			driver.shedArrivals.Add(1)
 			continue
 		}
-		var warm *secondboxclient.SandboxHandle
-		if cycle == cycleWarm {
+		var handle *secondboxclient.SandboxHandle
+		if available != nil {
 			select {
-			case warm = <-available:
+			case handle = <-available:
 			default:
 				driver.shedArrivals.Add(1)
 				continue
 			}
 		}
-		cycles.Add(1)
-		driver.inFlight.Add(1)
+		arrivals.Add(1)
+		recordPeak(&peakOutstanding, driver.inFlight.Add(1))
 		go func(arrival int, handle *secondboxclient.SandboxHandle) {
-			defer cycles.Done()
+			defer arrivals.Done()
 			defer driver.inFlight.Add(-1)
-			if handle != nil {
-				defer func() { available <- handle }()
-			}
-			if driver.runOneCycle(ctx, cycle, pattern.Name, arrival, handle, samples) {
+			if driver.runOneMeasurement(
+				ctx, measurement, pattern.Name, arrival, handle, resources, samples, timings,
+			) {
 				completedMu.Lock()
 				completed++
 				completedMu.Unlock()
 			}
-		}(index, warm)
+		}(index, handle)
 	}
-	cycles.Wait()
+	arrivals.Wait()
 	elapsed := time.Since(startedAt)
 	cancelWindow()
 	sampler.Wait()
@@ -190,65 +215,89 @@ func (driver *lifecycleDriver) runCell(
 	occupancyMu.Unlock()
 
 	return buildCellResult(
-		cycle, pattern, resident, schedule, samples, collected, completed, elapsed,
+		measurement, pattern, resident, schedule, samples, timings, collected,
+		completed, peakOutstanding.Load(), elapsed,
 	), nil
 }
 
-// runOneCycle executes a single arrival and reports whether it completed every
-// transition. Both edges are timed; a failure on either edge records the typed
-// problem and abandons the remainder of that cycle.
-func (driver *lifecycleDriver) runOneCycle(
+func recordPeak(peak *atomic.Int64, candidate int64) {
+	for current := peak.Load(); candidate > current; current = peak.Load() {
+		if peak.CompareAndSwap(current, candidate) {
+			return
+		}
+	}
+}
+
+// runOneMeasurement executes exactly one measured transition. Its prerequisite
+// state and cleanup belong to the cell setup/cleanup, never to arrival latency.
+func (driver *lifecycleDriver) runOneMeasurement(
 	ctx context.Context,
-	cycle string,
+	measurement string,
 	patternName string,
 	arrival int,
-	warm *secondboxclient.SandboxHandle,
+	handle *secondboxclient.SandboxHandle,
+	resources *cellResources,
 	samples *transitionSamples,
+	timings *startupTimingSamples,
 ) bool {
-	key := fmt.Sprintf("lifecycle-%s-%s-%d", cycle, patternName, arrival)
-	cycleContext, cancel := driver.operationContext(ctx)
+	key := fmt.Sprintf("lifecycle-%s-%s-%d", measurement, patternName, arrival)
+	operationContext, cancel := driver.operationContext(ctx)
 	defer cancel()
 
-	if cycle == cycleWarm {
-		if warm == nil {
-			samples.recordError(fmt.Errorf("SecondBox lifecycle warm pool exhausted for %s", key))
-			return false
-		}
-		started, err := driver.startSandbox(cycleContext, warm, key+"-start")
+	switch measurement {
+	case measurementCreateReady:
+		createdHandle, elapsed, err := driver.createSandbox(
+			operationContext, key+"-create", timings,
+		)
+		resources.add(createdHandle)
 		if err != nil {
 			samples.recordError(err)
 			return false
 		}
-		samples.record(transitionStartReady, started)
-		stopped, err := driver.stopSandbox(cycleContext, warm, key+"-stop")
-		if err != nil {
-			samples.recordError(err)
-			return false
-		}
-		samples.record(transitionStopStopped, stopped)
+		samples.record(measurement, elapsed)
 		return true
-	}
-
-	handle, created, err := driver.createSandbox(cycleContext, key+"-create")
-	if err != nil {
-		samples.recordError(err)
-		if handle != nil {
-			if _, deleteErr := driver.deleteSandbox(
-				cycleContext, handle, key+"-failed-delete", false,
-			); deleteErr != nil {
-				samples.recordError(deleteErr)
-			}
+	case measurementStartReady:
+		if handle == nil {
+			samples.recordError(fmt.Errorf("SecondBox lifecycle start pool exhausted for %s", key))
+			return false
 		}
+		elapsed, err := driver.startSandbox(operationContext, handle, key+"-start", timings)
+		if err != nil {
+			samples.recordError(err)
+			return false
+		}
+		samples.record(measurement, elapsed)
+		return true
+	case measurementStopStopped:
+		if handle == nil {
+			samples.recordError(fmt.Errorf("SecondBox lifecycle stop pool exhausted for %s", key))
+			return false
+		}
+		elapsed, err := driver.stopSandbox(operationContext, handle, key+"-stop")
+		if err != nil {
+			samples.recordError(err)
+			return false
+		}
+		samples.record(measurement, elapsed)
+		return true
+	case measurementDeleteGone:
+		if handle == nil {
+			samples.recordError(fmt.Errorf("SecondBox lifecycle delete pool exhausted for %s", key))
+			return false
+		}
+		elapsed, err := driver.deleteSandbox(operationContext, handle, key+"-delete")
+		if err != nil {
+			samples.recordError(err)
+			return false
+		}
+		samples.record(measurement, elapsed)
+		return true
+	default:
+		samples.recordError(fmt.Errorf(
+			"SecondBox lifecycle unsupported measurement %q", measurement,
+		))
 		return false
 	}
-	samples.record(transitionCreateReady, created)
-	deleted, err := driver.deleteSandbox(cycleContext, handle, key+"-delete", true)
-	if err != nil {
-		samples.recordError(err)
-		return false
-	}
-	samples.record(transitionDeleteGone, deleted)
-	return true
 }
 
 // establishResident creates long-lived Sandboxes that stay ready for the whole
@@ -256,15 +305,15 @@ func (driver *lifecycleDriver) runOneCycle(
 // population rather than an idle deployment.
 func (driver *lifecycleDriver) establishResident(
 	ctx context.Context,
-	cycle string,
+	measurement string,
 	patternName string,
 	resident int,
 ) ([]*secondboxclient.SandboxHandle, error) {
 	handles := make([]*secondboxclient.SandboxHandle, 0, resident)
 	for index := 0; index < resident; index++ {
-		key := fmt.Sprintf("lifecycle-resident-%s-%s-%d", cycle, patternName, index)
+		key := fmt.Sprintf("lifecycle-resident-%s-%s-%d", measurement, patternName, index)
 		setupContext, cancel := driver.operationContext(ctx)
-		handle, _, err := driver.createSandbox(setupContext, key)
+		handle, _, err := driver.createSandbox(setupContext, key, nil)
 		cancel()
 		if err != nil {
 			if handle != nil {
@@ -283,79 +332,96 @@ func (driver *lifecycleDriver) releaseResident(
 	ctx context.Context,
 	handles []*secondboxclient.SandboxHandle,
 	patternName string,
-) {
+) error {
+	var cleanupErrors []error
 	for index, handle := range handles {
 		cleanupContext, cancel := driver.operationContext(ctx)
 		if _, err := driver.deleteSandbox(
-			cleanupContext, handle, fmt.Sprintf("lifecycle-resident-%s-%d-cleanup", patternName, index), true,
+			cleanupContext, handle, fmt.Sprintf("lifecycle-resident-%s-%d-cleanup", patternName, index),
 		); err != nil {
-			fmt.Printf("resident cleanup failed for %s index %d: %v\n", patternName, index, err)
+			cleanupErrors = append(cleanupErrors, fmt.Errorf(
+				"SecondBox lifecycle resident cleanup failed for %s index %d: %w",
+				patternName, index, err,
+			))
 		}
 		cancel()
 	}
+	return errors.Join(cleanupErrors...)
 }
 
-// provisionWarmPool creates Sandboxes and stops them so that each measured
-// arrival exercises start-to-ready against a retained Workspace.
-func (driver *lifecycleDriver) provisionWarmPool(
+// prepareMeasurementPool establishes the exact prerequisite state before the
+// arrival window. Each non-create arrival owns one Sandbox and never reuses it
+// inside the measured cell.
+func (driver *lifecycleDriver) prepareMeasurementPool(
 	ctx context.Context,
+	measurement string,
 	patternName string,
 	arrivals int,
-) ([]*secondboxclient.SandboxHandle, error) {
-	size := arrivals
-	if size > driver.config.MaximumInFlight {
-		size = driver.config.MaximumInFlight
+	resources *cellResources,
+) (chan *secondboxclient.SandboxHandle, error) {
+	if measurement == measurementCreateReady {
+		return nil, nil
 	}
-	if size < 1 {
-		size = 1
-	}
-	handles := make([]*secondboxclient.SandboxHandle, 0, size)
-	for index := 0; index < size; index++ {
-		key := fmt.Sprintf("lifecycle-warm-%s-%d", patternName, index)
+	available := make(chan *secondboxclient.SandboxHandle, arrivals)
+	for index := 0; index < arrivals; index++ {
+		key := fmt.Sprintf("lifecycle-%s-pool-%s-%d", measurement, patternName, index)
 		setupContext, cancel := driver.operationContext(ctx)
-		handle, _, err := driver.createSandbox(setupContext, key)
+		handle, _, err := driver.createSandbox(setupContext, key+"-create", nil)
+		resources.add(handle)
 		if err != nil {
 			cancel()
-			if handle != nil {
-				handles = append(handles, handle)
-			}
-			return handles, fmt.Errorf("SecondBox lifecycle warm pool provisioning failed: %w", err)
+			return nil, fmt.Errorf(
+				"SecondBox lifecycle %s pool provisioning failed: %w", measurement, err,
+			)
 		}
-		if _, err := driver.stopSandbox(setupContext, handle, key+"-initial-stop"); err != nil {
-			cancel()
-			handles = append(handles, handle)
-			return handles, fmt.Errorf("SecondBox lifecycle warm pool initial stop failed: %w", err)
+		if measurement == measurementStartReady {
+			if _, err := driver.stopSandbox(setupContext, handle, key+"-initial-stop"); err != nil {
+				cancel()
+				return nil, fmt.Errorf(
+					"SecondBox lifecycle start pool initial stop failed: %w", err,
+				)
+			}
 		}
 		cancel()
-		handles = append(handles, handle)
+		available <- handle
 	}
-	return handles, nil
+	return available, nil
 }
 
-func (driver *lifecycleDriver) releaseWarmPool(
+func (driver *lifecycleDriver) releaseCellResources(
 	ctx context.Context,
-	handles []*secondboxclient.SandboxHandle,
+	resources *cellResources,
+	measurement string,
 	patternName string,
-) {
-	for index, handle := range handles {
+) error {
+	var cleanupErrors []error
+	for index, handle := range resources.snapshot() {
 		cleanupContext, cancel := driver.operationContext(ctx)
 		if _, err := driver.deleteSandbox(
-			cleanupContext, handle, fmt.Sprintf("lifecycle-warm-%s-%d-cleanup", patternName, index), false,
+			cleanupContext,
+			handle,
+			fmt.Sprintf("lifecycle-%s-%s-%d-cleanup", measurement, patternName, index),
 		); err != nil {
-			fmt.Printf("warm pool cleanup failed for %s index %d: %v\n", patternName, index, err)
+			cleanupErrors = append(cleanupErrors, fmt.Errorf(
+				"SecondBox lifecycle measurement cleanup failed for %s/%s index %d: %w",
+				measurement, patternName, index, err,
+			))
 		}
 		cancel()
 	}
+	return errors.Join(cleanupErrors...)
 }
 
 func buildCellResult(
-	cycle string,
+	measurement string,
 	pattern arrivalPattern,
 	resident int,
 	schedule arrivalSchedule,
 	samples *transitionSamples,
+	timings *startupTimingSamples,
 	occupancy []occupancySample,
 	completed int64,
+	peakOutstanding int64,
 	elapsed time.Duration,
 ) cellResult {
 	samples.mu.Lock()
@@ -380,35 +446,43 @@ func buildCellResult(
 	for code, count := range samples.failures {
 		failures[code] = count
 	}
-	offeredWindow := schedule.window()
-	if offeredWindow <= 0 {
-		offeredWindow = elapsed
-	}
-	var offeredRate, completedRate float64
-	if offeredWindow > 0 {
-		offeredRate = float64(schedule.offeredCount()) / offeredWindow.Seconds()
-	}
+	var completedRate float64
 	if elapsed > 0 {
 		completedRate = float64(completed) / elapsed.Seconds()
 	}
-	peakBacklog := int64(0)
-	for _, sample := range occupancy {
-		if sample.Backlog > peakBacklog {
-			peakBacklog = sample.Backlog
-		}
+	timings.mu.Lock()
+	stages := make(map[string][]time.Duration, len(timings.bootStages))
+	for stage, durations := range timings.bootStages {
+		stages[stage] = append([]time.Duration(nil), durations...)
+	}
+	spans := make(map[string][]time.Duration, len(timings.startupSpans))
+	for span, durations := range timings.startupSpans {
+		spans[span] = append([]time.Duration(nil), durations...)
+	}
+	timings.mu.Unlock()
+	bootStages, dominantBootStage := summarizeBootStages(stages)
+	var latency *transitionSummary
+	if summary, exists := transitions[measurement]; exists {
+		latency = &summary
 	}
 	return cellResult{
-		Cycle: cycle, Pattern: pattern.Name, PatternKind: pattern.Kind,
-		ResidentPopulation:     resident,
-		OfferedArrivals:        schedule.offeredCount(),
-		CompletedCycles:        completed,
-		OfferedRatePerSecond:   offeredRate,
-		CompletedRatePerSecond: completedRate,
-		ElapsedMilliseconds:    elapsed.Milliseconds(),
-		PeakBacklog:            peakBacklog,
-		Transitions:            transitions,
-		Refusals:               refusals,
-		Failures:               failures,
-		Occupancy:              occupancy,
+		Measurement:               measurement,
+		Pattern:                   pattern.Name,
+		PatternKind:               pattern.Kind,
+		ResidentPopulation:        resident,
+		OfferedArrivals:           schedule.offeredCount(),
+		CompletedArrivals:         completed,
+		OfferedRatePerSecond:      schedule.offeredRatePerSecond(),
+		CompletionRatePerSecond:   completedRate,
+		ArrivalWindowMilliseconds: schedule.rateWindow.Milliseconds(),
+		ElapsedMilliseconds:       elapsed.Milliseconds(),
+		PeakOutstandingArrivals:   peakOutstanding,
+		Latency:                   latency,
+		BootStages:                bootStages,
+		DominantBootStage:         dominantBootStage,
+		StartupSpans:              summarizeStartupSpans(spans),
+		Refusals:                  refusals,
+		Failures:                  failures,
+		Occupancy:                 occupancy,
 	}
 }

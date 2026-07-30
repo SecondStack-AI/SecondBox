@@ -1,6 +1,6 @@
 # Sandbox lifecycle benchmark
 
-`just test-lifecycle` measures how quickly Sandboxes start and stop under
+`just test-lifecycle` measures one Sandbox lifecycle transition at a time under
 realistic arrival patterns. It deliberately does not measure workload executed
 inside a Sandbox; that belongs to `just test-stress`.
 
@@ -19,20 +19,24 @@ self-limiting, so a queue can never be observed growing and saturation shows up
 only as a latency number with no backlog behind it. Open-loop arrivals make the
 backlog visible directly.
 
-## Cycles
+## Measurements
 
-Two lifecycle cycles are measured, and both edges of each are timed separately.
+Configuration version 2 accepts four measurements. Every prerequisite is
+established before the arrival window and every cleanup runs after it, so a
+startup result never includes teardown and a teardown result never includes
+startup.
 
-| Cycle | Edges measured | Meaning |
+| Measurement | Setup outside the window | Timed transition |
 |---|---|---|
-| `warm` | `start_to_ready`, `stop_to_stopped` | A stopped Sandbox that retains its Workspace is started and stopped again. |
-| `cold` | `create_to_ready`, `delete_to_deleted` | A Sandbox is created from nothing and deleted. |
+| `start_to_ready` | Create and stop one Sandbox per arrival | Start a stopped Sandbox that retains its Workspace. |
+| `create_to_ready` | None | Create a new Sandbox and wait until it is ready. |
+| `stop_to_stopped` | Create one ready Sandbox per arrival | Stop the ready Sandbox. |
+| `delete_to_deleted` | Create one ready Sandbox per arrival | Delete the ready Sandbox and its Workspace. |
 
-**The warm cycle is the primary measurement.** It is the ephemeral hot path: an
-existing Sandbox resumed on demand. Warm Sandboxes are provisioned and stopped
-before the window opens, so provisioning cost is never counted as arrival
-latency. Each warm arrival checks a Sandbox out of an exclusive pool, so two
-concurrent arrivals can never race start against stop on the same Sandbox.
+**`start_to_ready` is the primary measurement.** It is the ephemeral hot path:
+an existing Sandbox resumed on demand. Every arrival owns a distinct Sandbox;
+the driver never races transitions on one Sandbox and never recycles a Sandbox
+inside the measurement window.
 
 ## Arrival patterns
 
@@ -58,16 +62,23 @@ the next one. A cell runs once per resident value, so `[0, 4]` doubles the run.
 
 ## Reading the output
 
-The human-readable table leads with the warm cycle. Two columns matter most:
+The human-readable table leads with `start_to_ready`. Three columns matter most:
 
-- `off/s` versus `done/s` — offered against completed rate. When completed falls
-  below offered, the deployment is not keeping up.
-- `backlog` — peak in-flight cycles. A backlog that grows and does not recover
-  is saturation.
+- `off/s` is present only for `steady` and `ramp`, whose configuration defines a
+  real rate window. It is `null` in JSON and `-` in the table for `burst` and
+  `sawtooth`; drain time must not be repackaged as an offered rate.
+- `drain/s` is completed arrivals divided by the time from the first offer until
+  the last completion. For a burst it describes burst absorption, not sustainable
+  offered throughput.
+- `outstanding` is the peak number of accepted arrivals whose measured
+  transition has not completed.
 
 The machine-readable JSON additionally carries an `occupancy` time series per
-cell (`offsetMilliseconds`, `ready`, `inFlight`, `backlog`), which is the series
-to plot when you want to see whether the system recovers between bursts.
+cell (`offsetMilliseconds`, `ready`, `outstandingArrivals`,
+`offeredRatePerSecond`). The offered rate is exact for steady and ramp patterns
+and `null` for burst and sawtooth. Plot it with outstanding arrivals to locate
+the rate where a ramp begins accumulating work and to see whether the system
+drains between bursts.
 
 Refusals and failures are counted separately from latency and are never folded
 into a percentile. A typed admission refusal (`home_runner_unavailable`,
@@ -79,13 +90,31 @@ reported separately so it can never be mistaken for throughput.
 
 No latency percentile is reported for a cell with zero successful samples.
 
-## Boot stage attribution
+## Startup attribution
 
 Each successful arrival reads the Operation timing and accumulates the public
 stage breakdown: `runner_admission`, `artifact_verify`, `workspace_attach`,
 `network_setup`, `compute_launch`, `guest_negotiation`, and `ready`. The report
 names the dominant stage. Comparing the dominant stage at low and high offered
 rate shows whether the bottleneck moves under load.
+
+Each startup cell also emits its own `startupSpans`; setup boots are excluded.
+These spans overlap and must not be added:
+
+| Span | Boundary |
+|---|---|
+| `operation_total` | Durable Operation creation to completion. |
+| `pre_assignment` | Operation creation to assignment creation, derived from the first runner observation and its assignment-relative cumulative time. This includes Workspace provisioning and scheduling. |
+| `runner_boot` | Assignment creation through the runner's final startup observation. |
+| `runner_event_ingest` | Runner observation to control-plane receipt for every startup stage. |
+| `ready_event_ingest` | Runner `ready` observation to control-plane receipt. |
+| `ready_projection` | Receipt of the `ready` progress event to durable Operation completion. |
+| `client_visibility` | Durable Operation total to the benchmark observing the target state. |
+
+Runner logs additionally record command queue-to-delivery latency, per-event
+persistence latency, local Workspace command execution, and Workspace
+format/fsync/publish time. These runner/operator fields do not enter public
+schemas.
 
 ## Running it
 
@@ -111,11 +140,13 @@ Btrfs. These are the same prerequisites as `just test-scenario`.
 
 ## Sizing a run
 
-Total cells are `cycles × patterns × residentPopulations`. Warm cells also pay
-pool provisioning before their window opens, which is roughly one cold create
-plus one stop per pooled Sandbox.
+Total cells are `measurements × patterns × residentPopulations`.
+`start_to_ready`, `stop_to_stopped`, and `delete_to_deleted` provision one
+Sandbox per offered arrival before their window opens. This can be substantial,
+but it ensures the measured transition is isolated and no Sandbox is reused.
 
-Start small. Two patterns, one resident value, and both cycles is four cells and
-validates the whole path quickly. Add patterns and resident values once the
-numbers look sane. Choose arrival rates that straddle the knee: far below it
-every cell looks healthy, and far above it every cell is shed.
+Start small. Two measurements, two patterns, and one resident value is four
+cells and validates the whole path quickly. Add measurements, patterns, and
+resident values once the numbers look sane. Choose rate-bearing patterns that
+straddle the knee: far below it every cell looks healthy, and far above it every
+cell is shed.

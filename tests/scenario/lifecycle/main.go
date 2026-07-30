@@ -60,8 +60,8 @@ func runMain(arguments []string) error {
 			)
 		}
 		fmt.Printf(
-			"Validated lifecycle config: cycles=%v patterns=%d resident=%v\n",
-			config.Cycles, len(config.Patterns), config.ResidentPopulations,
+			"Validated lifecycle config: measurements=%v patterns=%d resident=%v\n",
+			config.Measurements, len(config.Patterns), config.ResidentPopulations,
 		)
 		return nil
 	}
@@ -82,7 +82,6 @@ func runMain(arguments []string) error {
 	driver := &lifecycleDriver{
 		config: config, client: clients.Subject,
 		runtimeDigest: inputs.runtimeDigest, toolchainDigest: inputs.toolchainDigest,
-		bootStages: make(map[string][]time.Duration),
 	}
 	switch *mode {
 	case "prepare":
@@ -109,34 +108,26 @@ func (driver *lifecycleDriver) runBenchmark(
 	}
 	startedAt := time.Now().UTC()
 	var results []cellResult
-	for _, cycle := range driver.config.Cycles {
+	for _, measurement := range driver.config.Measurements {
 		for _, pattern := range driver.config.Patterns {
 			for _, resident := range driver.config.ResidentPopulations {
-				result, err := driver.runCell(ctx, cycle, pattern, resident)
+				result, err := driver.runCell(ctx, measurement, pattern, resident)
 				if err != nil {
 					return fmt.Errorf(
-						"SecondBox lifecycle cell cycle=%s pattern=%s resident=%d failed: %w",
-						cycle, pattern.Name, resident, err,
+						"SecondBox lifecycle cell measurement=%s pattern=%s resident=%d failed: %w",
+						measurement, pattern.Name, resident, err,
 					)
 				}
 				results = append(results, result)
 			}
 		}
 	}
-	driver.mu.Lock()
-	stages := make(map[string][]time.Duration, len(driver.bootStages))
-	for stage, durations := range driver.bootStages {
-		stages[stage] = append([]time.Duration(nil), durations...)
-	}
-	driver.mu.Unlock()
-	bootStages, dominant := summarizeBootStages(stages)
 	report := lifecycleReport{
-		SchemaVersion: 1, StartedAt: startedAt, CompletedAt: time.Now().UTC(),
+		SchemaVersion: 2, StartedAt: startedAt, CompletedAt: time.Now().UTC(),
 		SourceCommit: inputs.sourceCommit, GoVersion: inputs.goVersion,
 		ArtifactManifest: inputs.artifactManifest,
 		ShedArrivals:     driver.shedArrivals.Load(),
 		Results:          results,
-		BootStages:       bootStages, DominantBootStage: dominant,
 	}
 	if err := writeLifecycleReport(outputPath, report); err != nil {
 		return err

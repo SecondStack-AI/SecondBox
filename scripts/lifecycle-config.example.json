@@ -1,10 +1,15 @@
 {
-  "version": 1,
+  "version": 2,
   "runnerPoolName": "lifecycle-local",
   "profileName": "lifecycle-local",
   "tenantRef": "lifecycle-qualification",
   "subjectRef": "lifecycle-qualification",
-  "cycles": ["warm", "cold"],
+  "measurements": [
+    "start_to_ready",
+    "create_to_ready",
+    "stop_to_stopped",
+    "delete_to_deleted"
+  ],
   "patterns": [
     {
       "name": "burst-8",

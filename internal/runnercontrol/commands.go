@@ -13,8 +13,10 @@ import (
 
 // CommandDelivery is one database-claimed outbound control frame.
 type CommandDelivery struct {
-	ID      string
-	Message *runnerv1.ControlPlaneToRunner
+	ID        string
+	Kind      string
+	CreatedAt time.Time
+	Message   *runnerv1.ControlPlaneToRunner
 }
 
 // ClaimCommand binds one pending command to the active connection and assigns its sequence.
@@ -44,11 +46,11 @@ func (store *PostgresStateStore) ClaimCommand(
 	var delivery CommandDelivery
 	var payload []byte
 	err = tx.QueryRow(ctx, `
-		SELECT id,payload FROM secondbox.runner_commands
+		SELECT id,kind,created_at,payload FROM secondbox.runner_commands
 		WHERE runner_id=$1 AND state='pending'
 		ORDER BY (id LIKE 'workspace-reconcile-%') DESC,created_at,id
 		FOR UPDATE SKIP LOCKED LIMIT 1`, runnerID,
-	).Scan(&delivery.ID, &payload)
+	).Scan(&delivery.ID, &delivery.Kind, &delivery.CreatedAt, &payload)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if err := tx.Commit(ctx); err != nil {
 			return CommandDelivery{}, false, fmt.Errorf("SecondBox empty runner command claim commit: %w", err)

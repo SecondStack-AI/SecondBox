@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -20,6 +21,9 @@ func TestBurstOffersEveryArrivalAtOnce(t *testing.T) {
 			t.Fatalf("burst arrival %d scheduled at %s, want zero", index, offset)
 		}
 	}
+	if rate := schedule.offeredRatePerSecond(); rate != nil {
+		t.Fatalf("burst offered rate = %f, want undefined", *rate)
+	}
 }
 
 func TestSteadyFixedArrivalsMatchTheConfiguredRate(t *testing.T) {
@@ -38,6 +42,10 @@ func TestSteadyFixedArrivalsMatchTheConfiguredRate(t *testing.T) {
 		if gap != 500*time.Millisecond {
 			t.Fatalf("steady gap %d = %s, want 500ms", index, gap)
 		}
+	}
+	rate := schedule.offeredRatePerSecond()
+	if rate == nil || *rate != 2 {
+		t.Fatalf("steady offered rate = %v, want 2", rate)
 	}
 }
 
@@ -99,6 +107,24 @@ func TestRampAcceleratesArrivals(t *testing.T) {
 	}
 }
 
+func TestRampScheduleInvertsTheConfiguredRateIntegral(t *testing.T) {
+	schedule, err := buildArrivalSchedule(arrivalPattern{
+		Name: "integrated-ramp", Kind: patternRamp,
+		StartArrivalsPerSecond: 1, EndArrivalsPerSecond: 3, DurationSeconds: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if schedule.offeredCount() != 3 {
+		t.Fatalf("integrated ramp offered %d arrivals, want 3", schedule.offeredCount())
+	}
+	wantFirst := time.Duration((math.Sqrt(3) - 1) * float64(time.Second))
+	if difference := schedule.offsets[0] - wantFirst; difference < -time.Nanosecond ||
+		difference > time.Nanosecond {
+		t.Fatalf("first integrated ramp arrival = %s, want %s", schedule.offsets[0], wantFirst)
+	}
+}
+
 func TestSawtoothRepeatsBurstsSeparatedByQuietIntervals(t *testing.T) {
 	schedule, err := buildArrivalSchedule(arrivalPattern{
 		Name: "sawtooth", Kind: patternSawtooth, Count: 3, QuietSeconds: 10, Repeats: 4,
@@ -120,6 +146,29 @@ func TestSawtoothRepeatsBurstsSeparatedByQuietIntervals(t *testing.T) {
 		if count != 3 {
 			t.Fatalf("sawtooth burst at %s had %d arrivals, want 3", offset, count)
 		}
+	}
+	if rate := schedule.offeredRatePerSecond(); rate != nil {
+		t.Fatalf("sawtooth offered rate = %f, want undefined", *rate)
+	}
+}
+
+func TestOfferedRateAtTracksRampAndStopsAtWindowEnd(t *testing.T) {
+	pattern := arrivalPattern{
+		Kind: patternRamp, StartArrivalsPerSecond: 1,
+		EndArrivalsPerSecond: 5, DurationSeconds: 20,
+	}
+	midpoint := offeredRateAt(pattern, 10*time.Second)
+	if midpoint == nil || *midpoint != 3 {
+		t.Fatalf("ramp midpoint rate = %v, want 3", midpoint)
+	}
+	after := offeredRateAt(pattern, 20*time.Second)
+	if after == nil || *after != 0 {
+		t.Fatalf("ramp rate after window = %v, want 0", after)
+	}
+	if rate := offeredRateAt(
+		arrivalPattern{Kind: patternBurst, Count: 4}, time.Second,
+	); rate != nil {
+		t.Fatalf("burst instantaneous rate = %v, want undefined", *rate)
 	}
 }
 

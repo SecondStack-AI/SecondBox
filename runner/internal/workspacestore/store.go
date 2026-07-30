@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1172,28 +1173,45 @@ func (store *Store) createFormattedImage(
 		return fmt.Errorf("SecondBox WorkspaceStore close sparse image before format: %w", err)
 	}
 	closeFile = false
+	formatStartedAt := time.Now()
 	if err := store.formatter.Format(ctx, tempPath, deterministicUUID(workspaceID)); err != nil {
 		return err
 	}
+	formatElapsed := time.Since(formatStartedAt)
 	file, err = os.OpenFile(tempPath, os.O_RDWR, 0)
 	if err != nil {
 		return fmt.Errorf("SecondBox WorkspaceStore reopen formatted image: %w", err)
 	}
 	closeFile = true
+	fsyncStartedAt := time.Now()
 	if err := file.Sync(); err != nil {
 		return fmt.Errorf("SecondBox WorkspaceStore fsync formatted image: %w", err)
 	}
+	fsyncElapsed := time.Since(fsyncStartedAt)
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("SecondBox WorkspaceStore close formatted image: %w", err)
 	}
 	closeFile = false
+	publishStartedAt := time.Now()
 	if err := os.Rename(tempPath, finalPath); err != nil {
 		return fmt.Errorf("SecondBox WorkspaceStore publish formatted image: %w", err)
 	}
 	if err := syncDir(store.versionsDir(workspaceID)); err != nil {
 		return err
 	}
-	return validateExt4Image(finalPath, capacityBytes)
+	if err := validateExt4Image(finalPath, capacityBytes); err != nil {
+		return err
+	}
+	slog.Info(
+		"SecondBox WorkspaceStore formatted image published",
+		"workspaceId", workspaceID,
+		"operationId", operationID,
+		"capacityBytes", capacityBytes,
+		"formatMs", formatElapsed.Milliseconds(),
+		"fsyncMs", fsyncElapsed.Milliseconds(),
+		"publishMs", time.Since(publishStartedAt).Milliseconds(),
+	)
+	return nil
 }
 
 func (store *Store) cloneImage(

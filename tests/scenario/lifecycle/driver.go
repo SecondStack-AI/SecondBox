@@ -15,27 +15,28 @@ import (
 	scenarioharness "github.com/SecondStack-AI/SecondBox/tests/scenario/harness"
 )
 
-// Transition names. Every lifecycle edge is timed independently; a refusal or a
-// queue wait is never folded into a latency sample.
-const (
-	transitionCreateReady = "create_to_ready"
-	transitionStartReady  = "start_to_ready"
-	transitionStopStopped = "stop_to_stopped"
-	transitionDeleteGone  = "delete_to_deleted"
-)
-
 type lifecycleDriver struct {
 	config          lifecycleConfig
 	client          *secondboxclient.Client
 	runtimeDigest   string
 	toolchainDigest string
 
-	mu         sync.Mutex
-	bootStages map[string][]time.Duration
-
 	readyCount   atomic.Int64
 	inFlight     atomic.Int64
 	shedArrivals atomic.Int64
+}
+
+type startupTimingSamples struct {
+	mu           sync.Mutex
+	bootStages   map[string][]time.Duration
+	startupSpans map[string][]time.Duration
+}
+
+func newStartupTimingSamples() *startupTimingSamples {
+	return &startupTimingSamples{
+		bootStages:   make(map[string][]time.Duration),
+		startupSpans: make(map[string][]time.Duration),
+	}
 }
 
 func (driver *lifecycleDriver) operationContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -153,6 +154,7 @@ func (driver *lifecycleDriver) waitForRunner(ctx context.Context) error {
 func (driver *lifecycleDriver) createSandbox(
 	ctx context.Context,
 	key string,
+	timings *startupTimingSamples,
 ) (*secondboxclient.SandboxHandle, time.Duration, error) {
 	startedAt := time.Now()
 	operation, err := scenarioharness.RequestJSON[secondboxclient.Operation](
@@ -194,7 +196,11 @@ func (driver *lifecycleDriver) createSandbox(
 		)
 	}
 	driver.readyCount.Add(1)
-	driver.collectBootTiming(ctx, operation.ID)
+	if timings != nil {
+		if err := driver.collectBootTiming(ctx, operation.ID, elapsed, timings); err != nil {
+			return handle, elapsed, err
+		}
+	}
 	return handle, elapsed, nil
 }
 
@@ -204,6 +210,7 @@ func (driver *lifecycleDriver) startSandbox(
 	ctx context.Context,
 	handle *secondboxclient.SandboxHandle,
 	key string,
+	timings *startupTimingSamples,
 ) (time.Duration, error) {
 	sandbox, err := handle.Refresh(ctx)
 	if err != nil {
@@ -227,7 +234,11 @@ func (driver *lifecycleDriver) startSandbox(
 		)
 	}
 	driver.readyCount.Add(1)
-	driver.collectBootTiming(ctx, operation.ID)
+	if timings != nil {
+		if err := driver.collectBootTiming(ctx, operation.ID, elapsed, timings); err != nil {
+			return elapsed, err
+		}
+	}
 	return elapsed, nil
 }
 
@@ -264,25 +275,38 @@ func (driver *lifecycleDriver) deleteSandbox(
 	ctx context.Context,
 	handle *secondboxclient.SandboxHandle,
 	key string,
-	countedReady bool,
 ) (time.Duration, error) {
-	sandbox, err := handle.Refresh(ctx)
-	if err != nil {
-		return 0, err
-	}
-	if sandbox.State == secondboxclient.SandboxStateDeleted {
-		return 0, nil
-	}
 	startedAt := time.Now()
-	operation, err := handle.Delete(ctx, secondboxclient.LifecycleOptions{
-		IdempotencyKey: key, IfMatch: scenarioharness.RevisionETag(sandbox.Revision),
-	})
-	if err != nil {
-		return time.Since(startedAt), err
+	wasReady := false
+	var operation secondboxclient.Operation
+	for attempt := 0; attempt < 3; attempt++ {
+		sandbox, err := handle.Refresh(ctx)
+		if err != nil {
+			return time.Since(startedAt), err
+		}
+		if sandbox.State == secondboxclient.SandboxStateDeleted {
+			return time.Since(startedAt), nil
+		}
+		wasReady = wasReady || sandbox.State == secondboxclient.SandboxStateReady
+		idempotencyKey := key
+		if attempt > 0 {
+			idempotencyKey = fmt.Sprintf("%s-revision-retry-%d", key, attempt)
+		}
+		operation, err = handle.Delete(ctx, secondboxclient.LifecycleOptions{
+			IdempotencyKey: idempotencyKey,
+			IfMatch:        scenarioharness.RevisionETag(sandbox.Revision),
+		})
+		if err == nil {
+			break
+		}
+		if secondboxclient.ProblemCodeOf(err) != secondboxclient.ProblemCodePreconditionFailed ||
+			attempt == 2 {
+			return time.Since(startedAt), err
+		}
 	}
-	_, err = driver.client.WaitOperation(ctx, operation.ID, driver.pollInterval())
+	_, err := driver.client.WaitOperation(ctx, operation.ID, driver.pollInterval())
 	elapsed := time.Since(startedAt)
-	if countedReady {
+	if err == nil && wasReady {
 		driver.readyCount.Add(-1)
 	}
 	return elapsed, err
@@ -302,29 +326,82 @@ func (driver *lifecycleDriver) wait(
 	)
 }
 
-// collectBootTiming records the corrected public stage attribution so the report
-// can name the stage that dominates start latency and show whether the dominant
-// stage changes under load. A timing read failure must not fail the cycle, so it
-// is recorded as an absent sample rather than an error.
-func (driver *lifecycleDriver) collectBootTiming(ctx context.Context, operationID string) {
+// collectBootTiming records runner stages plus non-additive control-plane spans
+// derived from the persisted Operation and runner observation clocks. A timing
+// read failure makes the measurement invalid and fails the arrival explicitly.
+func (driver *lifecycleDriver) collectBootTiming(
+	ctx context.Context,
+	operationID string,
+	clientElapsed time.Duration,
+	timings *startupTimingSamples,
+) error {
 	timing, err := scenarioharness.RequestJSON[secondboxclient.OperationTiming](
 		ctx, driver.client, "getOperationTiming", secondboxclient.CallOptions{
 			PathParameters: map[string]string{"operationId": operationID},
 		},
 	)
 	if err != nil {
-		return
+		return fmt.Errorf("SecondBox lifecycle startup timing read failed: %w", err)
 	}
-	driver.mu.Lock()
-	defer driver.mu.Unlock()
+	timings.mu.Lock()
+	defer timings.mu.Unlock()
+	timings.recordStartupSpanLocked(
+		"operation_total",
+		millisecondsPointerDuration(timing.TotalMilliseconds),
+	)
+	if timing.TotalMilliseconds != nil {
+		visibility := clientElapsed - time.Duration(*timing.TotalMilliseconds)*time.Millisecond
+		timings.recordStartupSpanLocked("client_visibility", max(visibility, 0))
+	}
 	for _, boot := range timing.Boots {
+		if len(boot.Stages) == 0 {
+			continue
+		}
+		first := boot.Stages[0]
+		assignmentCreatedAt := first.ObservedAt.Add(
+			-time.Duration(first.CumulativeMilliseconds * float64(time.Millisecond)),
+		)
+		timings.recordStartupSpanLocked(
+			"pre_assignment",
+			max(assignmentCreatedAt.Sub(timing.CreatedAt), 0),
+		)
+		timings.recordStartupSpanLocked(
+			"runner_boot",
+			time.Duration(boot.DurationMilliseconds*float64(time.Millisecond)),
+		)
 		for _, stage := range boot.Stages {
-			driver.bootStages[stage.Stage] = append(
-				driver.bootStages[stage.Stage],
+			timings.bootStages[stage.Stage] = append(
+				timings.bootStages[stage.Stage],
 				time.Duration(stage.ElapsedMilliseconds*float64(time.Millisecond)),
 			)
+			ingest := max(stage.ReceivedAt.Sub(stage.ObservedAt), 0)
+			timings.recordStartupSpanLocked("runner_event_ingest", ingest)
+			if stage.Stage == "ready" {
+				timings.recordStartupSpanLocked("ready_event_ingest", ingest)
+				if timing.CompletedAt != nil {
+					timings.recordStartupSpanLocked(
+						"ready_projection",
+						max(timing.CompletedAt.Sub(stage.ReceivedAt), 0),
+					)
+				}
+			}
 		}
 	}
+	return nil
+}
+
+func millisecondsPointerDuration(value *int64) time.Duration {
+	if value == nil {
+		return -1
+	}
+	return time.Duration(*value) * time.Millisecond
+}
+
+func (timings *startupTimingSamples) recordStartupSpanLocked(name string, value time.Duration) {
+	if value < 0 {
+		return
+	}
+	timings.startupSpans[name] = append(timings.startupSpans[name], value)
 }
 
 func classifyLifecycleError(err error) (bool, string) {

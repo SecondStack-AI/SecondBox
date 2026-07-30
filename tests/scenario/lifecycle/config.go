@@ -9,11 +9,13 @@ import (
 	"strings"
 )
 
-// Cycle kinds. The warm cycle is the ephemeral hot path: an already-created
-// Sandbox that retains its Workspace is started and stopped repeatedly.
+// Measurement kinds. Setup and cleanup run outside the measurement window so
+// each cell attributes exactly one public lifecycle transition.
 const (
-	cycleWarm = "warm"
-	cycleCold = "cold"
+	measurementCreateReady = "create_to_ready"
+	measurementStartReady  = "start_to_ready"
+	measurementStopStopped = "stop_to_stopped"
+	measurementDeleteGone  = "delete_to_deleted"
 )
 
 // Arrival pattern kinds. Every pattern is open loop: arrivals are offered on a
@@ -85,7 +87,7 @@ type lifecycleConfig struct {
 	ProfileName                 string           `json:"profileName"`
 	TenantRef                   string           `json:"tenantRef"`
 	SubjectRef                  string           `json:"subjectRef"`
-	Cycles                      []string         `json:"cycles"`
+	Measurements                []string         `json:"measurements"`
 	Patterns                    []arrivalPattern `json:"patterns"`
 	ResidentPopulations         []int            `json:"residentPopulations"`
 	MaximumInFlight             int              `json:"maximumInFlight"`
@@ -137,8 +139,8 @@ func readLifecycleConfig(path string) (lifecycleConfig, error) {
 // repository forbids implicit runtime defaults, so an omitted value is an error
 // rather than a substituted constant.
 func validateLifecycleConfig(config lifecycleConfig) error {
-	if config.Version != 1 {
-		return fmt.Errorf("SecondBox lifecycle configuration version must be 1, got %d", config.Version)
+	if config.Version != 2 {
+		return fmt.Errorf("SecondBox lifecycle configuration version must be 2, got %d", config.Version)
 	}
 	for name, value := range map[string]string{
 		"runnerPoolName": config.RunnerPoolName,
@@ -150,18 +152,24 @@ func validateLifecycleConfig(config lifecycleConfig) error {
 			return fmt.Errorf("SecondBox lifecycle configuration requires %s", name)
 		}
 	}
-	if len(config.Cycles) == 0 {
-		return errors.New("SecondBox lifecycle configuration requires at least one cycle")
+	if len(config.Measurements) == 0 {
+		return errors.New("SecondBox lifecycle configuration requires at least one measurement")
 	}
-	seenCycle := make(map[string]struct{}, len(config.Cycles))
-	for _, cycle := range config.Cycles {
-		if cycle != cycleWarm && cycle != cycleCold {
-			return fmt.Errorf("SecondBox lifecycle cycle must be warm or cold, got %q", cycle)
+	seenMeasurement := make(map[string]struct{}, len(config.Measurements))
+	for _, measurement := range config.Measurements {
+		switch measurement {
+		case measurementCreateReady, measurementStartReady,
+			measurementStopStopped, measurementDeleteGone:
+		default:
+			return fmt.Errorf(
+				"SecondBox lifecycle measurement must be create_to_ready, start_to_ready, stop_to_stopped, or delete_to_deleted, got %q",
+				measurement,
+			)
 		}
-		if _, duplicate := seenCycle[cycle]; duplicate {
-			return fmt.Errorf("SecondBox lifecycle cycle %q is duplicated", cycle)
+		if _, duplicate := seenMeasurement[measurement]; duplicate {
+			return fmt.Errorf("SecondBox lifecycle measurement %q is duplicated", measurement)
 		}
-		seenCycle[cycle] = struct{}{}
+		seenMeasurement[measurement] = struct{}{}
 	}
 	if len(config.Patterns) == 0 {
 		return errors.New("SecondBox lifecycle configuration requires at least one arrival pattern")

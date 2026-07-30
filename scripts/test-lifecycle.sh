@@ -2,12 +2,10 @@
 set -Eeuo pipefail
 umask 077
 
-# Sandbox lifecycle benchmark. Measures how quickly Sandboxes start and stop
-# under realistic arrival patterns. It deliberately does not measure workload
-# executed inside a Sandbox; that belongs to the stress qualification.
-#
-# The warm cycle (start/stop against a retained Workspace) is the primary
-# measurement. The cold cycle (create/delete) is reported alongside it.
+# Sandbox lifecycle benchmark. Measures one create, start, stop, or delete
+# transition per cell under realistic arrival patterns. Prerequisite setup and
+# cleanup stay outside the measurement window. Workload execution belongs to
+# the stress qualification.
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 local_root="${SECONDBOX_STRESS_LOCAL_ROOT:-$repo_root/.secondbox/stress}"

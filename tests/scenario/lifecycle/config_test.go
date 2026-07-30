@@ -7,9 +7,12 @@ import (
 
 func validLifecycleConfig() lifecycleConfig {
 	return lifecycleConfig{
-		Version: 1, RunnerPoolName: "lifecycle-local", ProfileName: "lifecycle-local",
+		Version: 2, RunnerPoolName: "lifecycle-local", ProfileName: "lifecycle-local",
 		TenantRef: "lifecycle-qualification", SubjectRef: "lifecycle-qualification",
-		Cycles: []string{cycleWarm, cycleCold},
+		Measurements: []string{
+			measurementCreateReady, measurementStartReady,
+			measurementStopStopped, measurementDeleteGone,
+		},
 		Patterns: []arrivalPattern{{
 			Name: "burst-8", Kind: patternBurst, Count: 8,
 		}},
@@ -37,7 +40,7 @@ func TestAbsentRequiredSettingsAreRejected(t *testing.T) {
 	for name, mutate := range map[string]func(*lifecycleConfig){
 		"version":                     func(c *lifecycleConfig) { c.Version = 0 },
 		"runnerPoolName":              func(c *lifecycleConfig) { c.RunnerPoolName = "" },
-		"cycles":                      func(c *lifecycleConfig) { c.Cycles = nil },
+		"measurements":                func(c *lifecycleConfig) { c.Measurements = nil },
 		"patterns":                    func(c *lifecycleConfig) { c.Patterns = nil },
 		"residentPopulations":         func(c *lifecycleConfig) { c.ResidentPopulations = nil },
 		"maximumInFlight":             func(c *lifecycleConfig) { c.MaximumInFlight = 0 },
@@ -54,19 +57,19 @@ func TestAbsentRequiredSettingsAreRejected(t *testing.T) {
 	}
 }
 
-func TestUnknownCycleIsRejected(t *testing.T) {
+func TestUnknownMeasurementIsRejected(t *testing.T) {
 	config := validLifecycleConfig()
-	config.Cycles = []string{"lukewarm"}
+	config.Measurements = []string{"lukewarm"}
 	if err := validateLifecycleConfig(config); err == nil {
-		t.Fatal("unknown cycle was accepted")
+		t.Fatal("unknown measurement was accepted")
 	}
 }
 
-func TestDuplicateCycleAndPatternAreRejected(t *testing.T) {
+func TestDuplicateMeasurementAndPatternAreRejected(t *testing.T) {
 	config := validLifecycleConfig()
-	config.Cycles = []string{cycleWarm, cycleWarm}
+	config.Measurements = []string{measurementStartReady, measurementStartReady}
 	if err := validateLifecycleConfig(config); err == nil {
-		t.Fatal("duplicate cycle was accepted")
+		t.Fatal("duplicate measurement was accepted")
 	}
 	config = validLifecycleConfig()
 	config.Patterns = append(config.Patterns, config.Patterns[0])

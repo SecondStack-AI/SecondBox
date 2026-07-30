@@ -13,9 +13,10 @@ import (
 // loop. A closed-loop driver stops offering work when the system slows down and
 // therefore can never show a queue growing.
 type arrivalSchedule struct {
-	name    string
-	kind    string
-	offsets []time.Duration
+	name       string
+	kind       string
+	offsets    []time.Duration
+	rateWindow time.Duration
 }
 
 func (schedule arrivalSchedule) offeredCount() int {
@@ -30,6 +31,17 @@ func (schedule arrivalSchedule) window() time.Duration {
 		return 0
 	}
 	return schedule.offsets[len(schedule.offsets)-1]
+}
+
+// offeredRatePerSecond is defined only for patterns with an explicit rate
+// window. A burst is instantaneous and a sawtooth is a sequence of bursts, so
+// reporting either as arrivals/second would manufacture a rate from drain time.
+func (schedule arrivalSchedule) offeredRatePerSecond() *float64 {
+	if schedule.rateWindow <= 0 {
+		return nil
+	}
+	rate := float64(schedule.offeredCount()) / schedule.rateWindow.Seconds()
+	return &rate
 }
 
 func buildArrivalSchedule(pattern arrivalPattern) (arrivalSchedule, error) {
@@ -48,8 +60,10 @@ func buildArrivalSchedule(pattern arrivalPattern) (arrivalSchedule, error) {
 			return arrivalSchedule{}, err
 		}
 		schedule.offsets = offsets
+		schedule.rateWindow = time.Duration(pattern.DurationSeconds) * time.Second
 	case patternRamp:
 		schedule.offsets = rampOffsets(pattern)
+		schedule.rateWindow = time.Duration(pattern.DurationSeconds) * time.Second
 	case patternSawtooth:
 		schedule.offsets = sawtoothOffsets(pattern)
 	default:
@@ -112,13 +126,13 @@ func rampOffsets(pattern arrivalPattern) []time.Duration {
 	end := pattern.EndArrivalsPerSecond
 	slope := (end - start) / window
 	var offsets []time.Duration
-	elapsed := 0.0
-	for {
-		rate := start + slope*elapsed
-		if rate <= 0 {
-			break
-		}
-		elapsed += 1 / rate
+	for arrival := 1; ; arrival++ {
+		// The cumulative arrivals at time t are
+		// start*t + slope*t*t/2. Invert that integral so the schedule
+		// follows the configured linear rate exactly.
+		elapsed := (math.Sqrt(
+			start*start+2*slope*float64(arrival),
+		) - start) / slope
 		if elapsed >= window {
 			break
 		}
@@ -142,21 +156,28 @@ func sawtoothOffsets(pattern arrivalPattern) []time.Duration {
 	return offsets
 }
 
-// arrivalRateAt reports the instantaneous offered rate of a schedule inside a
-// one-second window, used to correlate latency with offered load in the report.
-func arrivalRateAt(schedule arrivalSchedule, at time.Duration) float64 {
-	if len(schedule.offsets) == 0 {
-		return 0
-	}
-	lower := at - time.Second/2
-	upper := at + time.Second/2
-	count := 0
-	for _, offset := range schedule.offsets {
-		if offset >= lower && offset < upper {
-			count++
+// offeredRateAt reports the configured instantaneous rate for rate-bearing
+// patterns. Burst and sawtooth patterns have no continuous offered rate.
+func offeredRateAt(pattern arrivalPattern, at time.Duration) *float64 {
+	switch pattern.Kind {
+	case patternSteady:
+		rate := pattern.ArrivalsPerSecond
+		if at >= time.Duration(pattern.DurationSeconds)*time.Second {
+			rate = 0
 		}
+		return &rate
+	case patternRamp:
+		window := time.Duration(pattern.DurationSeconds) * time.Second
+		rate := float64(0)
+		if at < window {
+			fraction := at.Seconds() / window.Seconds()
+			rate = pattern.StartArrivalsPerSecond +
+				(pattern.EndArrivalsPerSecond-pattern.StartArrivalsPerSecond)*fraction
+		}
+		return &rate
+	default:
+		return nil
 	}
-	return float64(count)
 }
 
 func percentile(samples []time.Duration, fraction float64) time.Duration {

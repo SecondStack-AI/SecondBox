@@ -690,6 +690,7 @@ func (s *RunnerProtocolService) handleLocalWorkspace(
 		evidence     LocalWorkspaceEvidence
 		executionErr error
 	)
+	executionStartedAt := time.Now()
 	if command.Correlation == nil || command.Correlation.RunnerId != s.config.RunnerID {
 		executionErr = localWorkspaceCommandError{
 			terminal: runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_WRONG_HOME_RUNNER,
@@ -698,6 +699,15 @@ func (s *RunnerProtocolService) handleLocalWorkspace(
 		evidence, executionErr = s.workspaceBackend.ExecuteLocalWorkspace(ctx, command)
 	}
 	terminal := localWorkspaceTerminal(executionErr)
+	slog.Info(
+		"SecondBox runner local Workspace command completed",
+		"kind", command.Kind.String(),
+		"operationId", command.OperationId,
+		"sandboxId", command.SandboxId,
+		"workspaceId", command.WorkspaceId,
+		"terminal", terminal.String(),
+		"executionMs", time.Since(executionStartedAt).Milliseconds(),
+	)
 	result := &runnerprotocol.LocalWorkspaceResult{
 		CommandVersion:       command.CommandVersion,
 		Kind:                 command.Kind,

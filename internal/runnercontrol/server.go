@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
@@ -152,8 +153,24 @@ func (server *Server) Connect(stream runnerv1.RunnerControl_ConnectServer) (retu
 			if err != nil {
 				return err
 			}
+			persistStartedAt := time.Now()
 			if err := server.persistEvent(stream.Context(), event); err != nil {
 				return err
+			}
+			if durableRunnerEvent(event.Kind) {
+				_, sequence, envelopeErr := runnerEnvelope(event.Message)
+				if envelopeErr != nil {
+					return envelopeErr
+				}
+				slog.Info(
+					"SecondBox runner control event persisted",
+					"runnerId", event.RunnerID,
+					"kind", runnerEventSubtype(event.Message),
+					"sequence", sequence,
+					"persistenceMs", time.Since(persistStartedAt).Milliseconds(),
+					"observedToPersistMs",
+					runnerObservedToPersistDuration(event.Message, server.config.Now()).Milliseconds(),
+				)
 			}
 			if event.Kind == EventRegistration {
 				registered = true
@@ -196,8 +213,10 @@ func (server *Server) sendNextOutboundFrame(
 	runnerID string,
 	connectionID string,
 ) error {
+	deliveryStartedAt := time.Now()
+	claimAt := server.config.Now()
 	delivery, found, err := server.config.StateStore.ClaimCommand(
-		ctx, runnerID, connectionID, server.config.Now(),
+		ctx, runnerID, connectionID, claimAt,
 	)
 	if err != nil {
 		return err
@@ -211,9 +230,69 @@ func (server *Server) sendNextOutboundFrame(
 		); err != nil {
 			return err
 		}
+		slog.Info(
+			"SecondBox runner control command delivered",
+			"runnerId", runnerID,
+			"commandId", delivery.ID,
+			"kind", delivery.Kind,
+			"queueMs", commandQueueDuration(delivery.CreatedAt, claimAt).Milliseconds(),
+			"deliveryMs", time.Since(deliveryStartedAt).Milliseconds(),
+		)
 		return nil
 	}
 	return server.sendClaimedRelayFrame(ctx, stream, session, runnerID, connectionID)
+}
+
+func commandQueueDuration(createdAt, claimedAt time.Time) time.Duration {
+	if createdAt.IsZero() {
+		return 0
+	}
+	return max(claimedAt.Sub(createdAt), 0)
+}
+
+func durableRunnerEvent(kind EventKind) bool {
+	switch kind {
+	case EventAssignment, EventFence, EventDrain, EventEvidence,
+		EventInstanceTerminal, EventLocalWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
+func runnerEventSubtype(message *runnerv1.RunnerToControlPlane) string {
+	switch {
+	case message.GetAssignmentAck() != nil:
+		return "assignment_ack"
+	case message.GetAssignmentProgress() != nil:
+		return "assignment_progress"
+	case message.GetAssignmentResult() != nil:
+		return "assignment_result"
+	case message.GetFenceResult() != nil:
+		return "fence_result"
+	case message.GetDrainState() != nil:
+		return "drain_state"
+	case message.GetEvidence() != nil:
+		return "evidence"
+	case message.GetInstanceTerminal() != nil:
+		return "instance_terminal"
+	case message.GetLocalWorkspaceResult() != nil:
+		return "local_workspace_result"
+	default:
+		return "unknown"
+	}
+}
+
+func runnerObservedToPersistDuration(
+	message *runnerv1.RunnerToControlPlane,
+	persistedAt time.Time,
+) time.Duration {
+	progress := message.GetAssignmentProgress()
+	if progress == nil || progress.ObservedAtUnixNs == 0 {
+		return 0
+	}
+	observedAt := time.Unix(0, int64(progress.ObservedAtUnixNs))
+	return max(persistedAt.Sub(observedAt), 0)
 }
 
 func (server *Server) persistEvent(ctx context.Context, event Event) error {
