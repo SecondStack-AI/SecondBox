@@ -485,6 +485,11 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		if errors.Is(err, scheduler.ErrProfileRevisionMismatch) {
 			return ports.ErrRevisionConflict
 		}
+		if errors.Is(err, scheduler.ErrHomeRunnerUnavailable) {
+			return broker.deferUnavailableHomeRunnerStart(
+				ctx, claim, plan.generation, now.UTC(), nextReconcileAt.UTC(),
+			)
+		}
 		return err
 	}
 	tag, err := broker.pool.Exec(ctx, `
@@ -510,6 +515,30 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		if currentInstanceID != assignment.InstanceID {
 			return ports.ErrRevisionConflict
 		}
+	}
+	return nil
+}
+
+func (broker *PostgresEffectBroker) deferUnavailableHomeRunnerStart(
+	ctx context.Context,
+	claim ports.LifecycleReconcileClaim,
+	generation int64,
+	now time.Time,
+	nextReconcileAt time.Time,
+) error {
+	tag, err := broker.pool.Exec(ctx, `
+		UPDATE secondbox.sandboxes
+		SET next_reconcile_at=$2,reconcile_owner='',
+		    reconcile_claim_expires_at=NULL,revision=revision+1,updated_at=$3
+		WHERE id=$1 AND generation=$4 AND current_instance_id=''
+		  AND revision=$5 AND reconcile_owner=$6`,
+		claim.SandboxID, nextReconcileAt, now, generation, claim.Revision, claim.WorkerID,
+	)
+	if err != nil {
+		return fmt.Errorf("SecondBox lifecycle unavailable home Runner deferral failed: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return ports.ErrRevisionConflict
 	}
 	return nil
 }

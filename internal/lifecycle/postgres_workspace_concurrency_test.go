@@ -152,6 +152,44 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 			recordingScheduler.request.StartMutationID,
 		)
 	}
+	recordingScheduler.err = scheduler.ErrHomeRunnerUnavailable
+	nextReconcileAt := now.Add(2 * time.Second)
+	if err := broker.ExecuteLifecycleEffect(
+		t.Context(),
+		ports.LifecycleReconcileClaim{
+			SandboxID: "sandbox-automatic-start",
+			WorkerID:  "worker-automatic-start",
+			Revision:  5,
+		},
+		lifecycle.Decision{Action: lifecycle.ActionStartInstance},
+		now.Add(time.Second),
+		nextReconcileAt,
+	); err != nil {
+		t.Fatalf("unavailable home Runner deferral error = %v", err)
+	}
+	var (
+		reconcileOwner       string
+		reconcileClaimExpiry *time.Time
+		persistedNext        time.Time
+		revision             int64
+	)
+	if err := pool.QueryRow(t.Context(), `
+		SELECT reconcile_owner,reconcile_claim_expires_at,next_reconcile_at,revision
+		FROM secondbox.sandboxes WHERE id='sandbox-automatic-start'`,
+	).Scan(
+		&reconcileOwner, &reconcileClaimExpiry, &persistedNext, &revision,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if reconcileOwner != "" ||
+		reconcileClaimExpiry != nil ||
+		!persistedNext.Equal(nextReconcileAt) ||
+		revision != 6 {
+		t.Fatalf(
+			"unavailable home Runner deferral owner=%q expiry=%v next=%s revision=%d",
+			reconcileOwner, reconcileClaimExpiry, persistedNext, revision,
+		)
+	}
 }
 
 func TestOrdinaryStopAndSnapshotDeleteSerializeAcrossControlPlaneReplicas(t *testing.T) {
