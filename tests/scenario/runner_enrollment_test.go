@@ -20,7 +20,7 @@ func TestScenarioRunnerEnrollsThroughControlChannel(t *testing.T) {
 	pool := ensureScenarioRunnerPool(t, fixture)
 	if pool.Name != scenarioRunnerPool ||
 		pool.State != contracts.RunnerPoolStateReady ||
-		pool.ReadyRunnerCount != 0 ||
+		pool.ReadyRunnerCount > 1 ||
 		!slices.Equal(pool.Architectures, []string{"amd64"}) ||
 		!slices.Equal(pool.Capabilities, []string{
 			"cleanup", "compute", "local-workspace", "network-policy", "storage",

@@ -299,7 +299,7 @@ func assertScenarioExited(
 		outcome.ExecExited.ExitCode != exitCode ||
 		decodeScenarioOutput(t, outcome.ExecExited.Output.StdoutBase64) != stdout ||
 		decodeScenarioOutput(t, outcome.ExecExited.Output.StderrBase64) != stderr {
-		t.Fatalf("SecondBox scenario exited outcome = %#v", outcome)
+		t.Fatalf("SecondBox scenario exited outcome = %s", describeScenarioExecOutcome(outcome))
 	}
 }
 

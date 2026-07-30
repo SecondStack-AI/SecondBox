@@ -90,7 +90,14 @@ func TestScenarioPortSessionsLeasesAndGenerationFencing(t *testing.T) {
 		t,
 		ctx,
 		handle,
-		"nohup python3 -m http.server 8080 --directory /workspace >/workspace/port-server.log 2>&1 </dev/null &",
+		`nohup python3 -m http.server 8080 --directory /workspace >/workspace/port-server.log 2>&1 </dev/null & python3 -c 'import socket, time
+for _ in range(50):
+    try:
+        socket.create_connection(("127.0.0.1", 8080), 1).close()
+        raise SystemExit(0)
+    except OSError:
+        time.sleep(0.1)
+raise SystemExit(1)'`,
 		4096,
 		"port-http-server",
 	)
