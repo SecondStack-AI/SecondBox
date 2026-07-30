@@ -519,8 +519,27 @@ func (driver *stressDriver) runSnapshotRestore(
 	if err != nil {
 		return err
 	}
-	_, err = driver.waitOperation(ctx, deleteOperation.ID)
-	return err
+	return finishStressSnapshotCycle(
+		func() error {
+			_, waitErr := driver.waitOperation(ctx, deleteOperation.ID)
+			return waitErr
+		},
+		func() error {
+			return driver.transition(
+				ctx, handle, "start", key+"-start-after-snapshot-delete", "ready", "",
+			)
+		},
+	)
+}
+
+func finishStressSnapshotCycle(waitForDelete func() error, startSandbox func() error) error {
+	if err := waitForDelete(); err != nil {
+		return fmt.Errorf("SecondBox stress Snapshot delete operation failed: %w", err)
+	}
+	if err := startSandbox(); err != nil {
+		return fmt.Errorf("SecondBox stress Snapshot cycle restore ready state failed: %w", err)
+	}
+	return nil
 }
 
 func (driver *stressDriver) transition(
@@ -531,35 +550,39 @@ func (driver *stressDriver) transition(
 	wantState secondboxclient.SandboxState,
 	snapshotID string,
 ) error {
-	sandbox, err := handle.Refresh(ctx)
-	if err != nil {
-		return err
-	}
-	options := secondboxclient.LifecycleOptions{
-		IdempotencyKey: key, IfMatch: scenarioharness.RevisionETag(sandbox.Revision),
-	}
 	var operation secondboxclient.Operation
-	switch action {
-	case "start":
-		operation, err = handle.Start(ctx, options)
-	case "stop":
-		operation, err = handle.Stop(ctx, options)
-	case "restore":
-		operation, err = handle.Restore(ctx, options, snapshotID)
-	default:
-		return fmt.Errorf("SecondBox stress lifecycle action %q is unsupported", action)
-	}
+	err := retryStressRevisionConflict(ctx, func(attempt int) error {
+		sandbox, refreshErr := handle.Refresh(ctx)
+		if refreshErr != nil {
+			return refreshErr
+		}
+		options := secondboxclient.LifecycleOptions{
+			IdempotencyKey: fmt.Sprintf("%s-revision-attempt-%d", key, attempt+1),
+			IfMatch:        scenarioharness.RevisionETag(sandbox.Revision),
+		}
+		switch action {
+		case "start":
+			operation, refreshErr = handle.Start(ctx, options)
+		case "stop":
+			operation, refreshErr = handle.Stop(ctx, options)
+		case "restore":
+			operation, refreshErr = handle.Restore(ctx, options, snapshotID)
+		default:
+			return fmt.Errorf("SecondBox stress lifecycle action %q is unsupported", action)
+		}
+		return refreshErr
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("SecondBox stress lifecycle %s admission failed: %w", action, err)
 	}
 	if _, err := driver.waitOperation(ctx, operation.ID); err != nil {
-		return err
+		return fmt.Errorf("SecondBox stress lifecycle %s operation failed: %w", action, err)
 	}
 	reached, err := driver.waitSandbox(
 		ctx, handle, []secondboxclient.SandboxState{wantState, secondboxclient.SandboxStateFailed},
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("SecondBox stress lifecycle %s wait failed: %w", action, err)
 	}
 	if reached.State != wantState {
 		return fmt.Errorf(
@@ -568,6 +591,37 @@ func (driver *stressDriver) transition(
 		)
 	}
 	return nil
+}
+
+const stressRevisionConflictAttempts = 4
+
+func retryStressRevisionConflict(
+	ctx context.Context,
+	action func(attempt int) error,
+) error {
+	var err error
+	for attempt := 0; attempt < stressRevisionConflictAttempts; attempt++ {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		err = action(attempt)
+		if err == nil || !isStressRevisionConflict(err) {
+			return err
+		}
+	}
+	return fmt.Errorf(
+		"SecondBox stress lifecycle revision changed in %d consecutive attempts: %w",
+		stressRevisionConflictAttempts,
+		err,
+	)
+}
+
+func isStressRevisionConflict(err error) bool {
+	var apiError *secondboxclient.APIError
+	return errors.As(err, &apiError) &&
+		apiError.StatusCode == 412 &&
+		apiError.Problem != nil &&
+		apiError.Problem.Code == "precondition_failed"
 }
 
 func (driver *stressDriver) waitOperation(

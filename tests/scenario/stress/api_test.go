@@ -66,3 +66,67 @@ func TestStressAdmissionRetryDelayHonorsTypedHomeRunnerBackoff(t *testing.T) {
 		t.Fatal("permanent admission failure was retried")
 	}
 }
+
+func TestRetryStressRevisionConflictRefreshesOnlyForTypedPrecondition(t *testing.T) {
+	conflict := &secondboxclient.APIError{
+		StatusCode: 412,
+		Problem:    &secondboxclient.Problem{Code: "precondition_failed"},
+	}
+	attempts := make([]int, 0, 3)
+	err := retryStressRevisionConflict(t.Context(), func(attempt int) error {
+		attempts = append(attempts, attempt)
+		if attempt < 2 {
+			return conflict
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("revision conflict retry failed: %v", err)
+	}
+	if len(attempts) != 3 {
+		t.Fatalf("revision conflict attempts = %v, want [0 1 2]", attempts)
+	}
+
+	permanent := &secondboxclient.APIError{
+		StatusCode: 404,
+		Problem:    &secondboxclient.Problem{Code: "not_found"},
+	}
+	attempts = attempts[:0]
+	err = retryStressRevisionConflict(t.Context(), func(attempt int) error {
+		attempts = append(attempts, attempt)
+		return permanent
+	})
+	if !errors.Is(err, permanent) {
+		t.Fatalf("permanent error = %v, want %v", err, permanent)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("permanent error attempts = %v, want [0]", attempts)
+	}
+}
+
+func TestFinishStressSnapshotCycleStartsSandboxAfterDeletion(t *testing.T) {
+	state := secondboxclient.SandboxStateStopped
+	deleted := false
+	err := finishStressSnapshotCycle(
+		func() error {
+			if state != secondboxclient.SandboxStateStopped {
+				t.Fatalf("Snapshot delete began in state %s", state)
+			}
+			deleted = true
+			return nil
+		},
+		func() error {
+			if !deleted {
+				t.Fatal("Sandbox start ran before Snapshot delete completed")
+			}
+			state = secondboxclient.SandboxStateReady
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("finish Snapshot cycle failed: %v", err)
+	}
+	if state != secondboxclient.SandboxStateReady {
+		t.Fatalf("Snapshot cycle ended in state %s, want ready", state)
+	}
+}
