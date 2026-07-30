@@ -250,6 +250,12 @@ func (driver *stressDriver) runWorker(
 			result.durations = append(result.durations, time.Since(startedAt))
 			continue
 		}
+		if admission, _ := classifyStressError(err); !admission {
+			fmt.Printf(
+				"Workload failure workload=%s worker=%d iteration=%d: %v\n",
+				workload, workerIndex, iteration, err,
+			)
+		}
 		addWorkerError(&result, err)
 		if workload == workloadSnapshotRestore {
 			break
