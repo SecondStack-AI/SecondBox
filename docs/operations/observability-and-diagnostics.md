@@ -78,6 +78,11 @@ Startup `observedAt` is the runner timestamp retained from the control channel; 
 
 The underlying authenticated routes are `GET /v1/sandboxes/{sandboxId}/timings?limit=...`, `GET /v1/operations/{operationId}/timings`, and `GET /v1/timings?windowSeconds=...`. They expose no host paths, Runner identity, backend vocabulary, storage references, or fencing material.
 
+For a real-compute concurrency sweep that records these timing projections alongside workload
+throughput and saturation evidence, see
+[Local stress qualification](stress-qualification.md). The stress gate requires KVM and the signed
+artifact bundle and never substitutes mock compute.
+
 ## Bounded support bundles
 
 The support collector includes the three unauthenticated probes, their HTTP status, an authenticated aggregate timing summary, and a bounded tail of the configured control-plane JSON log. It never collects process environments, environment files, credentials, database contents, object-store objects, workspaces, runner credentials, or guest files. The platform token is sent only to the aggregate timing route and is never written to the archive.

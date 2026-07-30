@@ -36,6 +36,9 @@ test-firecracker:
 test-multirunner:
     scripts/test-multirunner.sh
 
+test-stress:
+    scripts/test-stress.sh
+
 deploy-bootstrap environment:
     deploy/bin/bootstrap-environment.sh "{{environment}}"
 

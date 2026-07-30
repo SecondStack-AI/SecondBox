@@ -29,6 +29,11 @@ type (
 	NetworkDestination      = contracts.NetworkDestination
 	PortPolicy              = contracts.PortPolicy
 	CreateProfileRequest    = contracts.CreateProfileRequest
+	RunnerPool              = contracts.RunnerPool
+	RunnerPoolPage          = contracts.RunnerPoolPage
+	CreateRunnerPoolRequest = contracts.CreateRunnerPoolRequest
+	Runner                  = contracts.Runner
+	RunnerPage              = contracts.RunnerPage
 	Sandbox                 = contracts.Sandbox
 	CreateSandboxRequest    = contracts.CreateSandboxRequest
 	RestoreSnapshotRequest  = contracts.RestoreSnapshotRequest
