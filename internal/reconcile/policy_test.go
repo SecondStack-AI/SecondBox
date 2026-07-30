@@ -47,6 +47,11 @@ func TestRetryClassificationIsBoundedAndDeadlineAware(t *testing.T) {
 			want:  ActionFence,
 		},
 		{
+			name:  "ready ignores elapsed startup deadline",
+			state: AssignmentState{State: "ready", RetryCount: 0, RetryLimit: 3, Deadline: now.Add(-time.Millisecond)},
+			want:  ActionWait,
+		},
+		{
 			name:  "fencing waits before deadline",
 			state: AssignmentState{State: "fencing", FailureClass: FailureFencing, RetryCount: 0, RetryLimit: 1, Deadline: now.Add(time.Minute)},
 			want:  ActionWait,

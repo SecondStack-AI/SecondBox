@@ -52,6 +52,20 @@ func (store *PostgresControlPlaneStore) AcquireLease(
 	); err != nil {
 		return contracts.Lease{}, fmt.Errorf("SecondBox expired Lease update failed: %w", err)
 	}
+	var activeLeaseExists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM secondbox.leases
+			WHERE tenant_ref=$1 AND subject_ref=$2 AND sandbox_id=$3
+			  AND state='active' AND expires_at>$4
+		)`,
+		input.TenantRef, input.SubjectRef, input.SandboxID, input.Now.UTC(),
+	).Scan(&activeLeaseExists); err != nil {
+		return contracts.Lease{}, fmt.Errorf("SecondBox active Lease lookup failed: %w", err)
+	}
+	if activeLeaseExists {
+		return contracts.Lease{}, ports.ErrLeaseAlreadyActive
+	}
 	lease := input.Lease
 	lease.TenantRef, lease.SubjectRef = input.TenantRef, input.SubjectRef
 	lease.SandboxID, lease.Generation = input.SandboxID, input.Generation

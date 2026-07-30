@@ -23,6 +23,7 @@ type CredentialVerifier interface {
 // ProtocolStateStore persists connection and runner evidence across replicas.
 type ProtocolStateStore interface {
 	OpenConnection(context.Context, RunnerIdentity, string, uint32, time.Time) error
+	CloseConnection(context.Context, string, string, time.Time) error
 	RecordRegistration(context.Context, *runnerv1.RunnerRegistration, time.Time) (bool, error)
 	RecordHeartbeat(context.Context, *runnerv1.RunnerHeartbeat, time.Time) (bool, error)
 	RecordEvent(context.Context, Event, time.Time) (bool, error)
@@ -82,7 +83,7 @@ func NewServer(config ServerConfig) (*Server, error) {
 }
 
 // Connect negotiates one mTLS-authenticated outbound runner connection.
-func (server *Server) Connect(stream runnerv1.RunnerControl_ConnectServer) error {
+func (server *Server) Connect(stream runnerv1.RunnerControl_ConnectServer) (returnError error) {
 	identity, err := server.peerIdentity(stream.Context())
 	if err != nil {
 		return err
@@ -121,6 +122,19 @@ func (server *Server) Connect(stream runnerv1.RunnerControl_ConnectServer) error
 	); err != nil {
 		return err
 	}
+	defer func() {
+		closeContext, cancel := context.WithTimeout(
+			context.WithoutCancel(stream.Context()),
+			5*time.Second,
+		)
+		defer cancel()
+		returnError = errors.Join(returnError, server.config.StateStore.CloseConnection(
+			closeContext,
+			identity.RunnerID,
+			connectionID,
+			server.config.Now(),
+		))
+	}()
 	received := make(chan receivedRunnerFrame, 1)
 	go pumpRunnerFrames(stream.Context(), stream.Recv, received)
 	commandTicker := time.NewTicker(server.config.CommandPollInterval)
@@ -216,7 +230,7 @@ func (server *Server) persistEvent(ctx context.Context, event Event) error {
 		EventLocalWorkspace:
 		_, err := server.config.StateStore.RecordEvent(ctx, event, server.config.Now())
 		return err
-	case EventExec, EventFile, EventPort:
+	case EventExec, EventPty, EventFile, EventPort:
 		if server.config.FrameRelay == nil {
 			return errors.New("SecondBox runner control data-plane relay is not configured")
 		}

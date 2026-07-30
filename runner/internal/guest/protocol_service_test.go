@@ -937,9 +937,9 @@ func TestProtocolServiceDescriptorPinnedBinaryFileRoundTrip(t *testing.T) {
 	readBinding.Sequence = 2
 	if err := stream.Send(&guestv1.RunnerToGuest{Message: &guestv1.RunnerToGuest_File{File: &guestv1.FileFrame{
 		Binding: readBinding,
-		Payload: &guestv1.FileFrame_Credit{Credit: &guestv1.ByteCredit{ByteCount: 1024}},
+		Payload: &guestv1.FileFrame_Credit{Credit: &guestv1.ByteCredit{ByteCount: uint64(len(content))}},
 	}}}); err != nil {
-		t.Fatalf("send file credit: %v", err)
+		t.Fatalf("send exact file credit: %v", err)
 	}
 	var got bytes.Buffer
 	for {

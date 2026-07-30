@@ -2,6 +2,7 @@ package lifecycle_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -24,6 +25,134 @@ import (
 )
 
 var lifecyclePostgresTestSequence atomic.Uint64
+
+func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T) {
+	databaseURL := openLifecyclePostgresTestDatabase(t)
+	now := time.Date(2026, 7, 29, 21, 30, 0, 0, time.UTC)
+	pool, err := pgxpool.New(t.Context(), databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	runtimeDigest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	toolchainDigest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	spec := contracts.ProfileRevisionSpec{
+		Pool:                  "pool",
+		Architecture:          "amd64",
+		RuntimeBundleDigest:   runtimeDigest,
+		ToolchainBundleDigest: toolchainDigest,
+		Resources: contracts.ResourcePolicy{
+			CPUMillis: 1000, MemoryBytes: 1 << 30, WorkspaceBytes: 8 << 30,
+			ConcurrentOperations: 1,
+		},
+		Execution: contracts.ExecutionPolicy{
+			MaximumDeadlineMilliseconds: 60000,
+			MaximumBufferedOutputBytes:  1 << 20,
+		},
+		Network: contracts.NetworkPolicy{
+			Mode:         "deny_all",
+			Destinations: []contracts.NetworkDestination{},
+		},
+		Ports: []contracts.PortPolicy{},
+	}
+	specJSON, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), `
+		INSERT INTO secondbox.profile_revisions (
+			id,profile_name,revision_number,spec_json,created_at
+		) VALUES ('revision-automatic-start','profile-automatic-start',1,$1,$2);
+		INSERT INTO secondbox.workspaces (
+			id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,logical_capacity_bytes,
+			generation,mutation_kind,mutation_id,mutation_effect_id,mutation_operation_id,
+			mutation_expected_generation,mutation_target_generation,mutation_state,
+			local_receipt_json,created_at,updated_at
+		) VALUES (
+			'workspace-automatic-start','tenant','subject','sandbox-automatic-start',
+			'runner-home','ready',8589934592,2,'','','','',NULL,NULL,'','{}',$2,$2
+		);
+		INSERT INTO secondbox.sandboxes (
+			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
+			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
+			reconcile_owner,reconcile_claim_expires_at,revision,created_at,updated_at
+		) VALUES (
+			'sandbox-automatic-start','tenant','subject','profile-automatic-start',
+			'revision-automatic-start','stopped','running',2,
+			'workspace-automatic-start','','{}','{}','worker-automatic-start',$3,5,$2,$2
+		)`,
+		pgx.QueryExecModeSimpleProtocol,
+		string(specJSON),
+		now,
+		now.Add(time.Minute),
+	); err != nil {
+		t.Fatal(err)
+	}
+	schedulerFailure := errors.New("captured automatic restart")
+	recordingScheduler := &recordingFailureScheduler{err: schedulerFailure}
+	catalog := fixedLifecycleAssetCatalog{assets: map[string]lifecycle.SignedAsset{
+		runtimeDigest: {
+			ArtifactID: "runtime", ManifestDigest: runtimeDigest,
+			SignatureKeyID: "release-key", Architecture: "amd64",
+			GuestProtocolGeneration: 1,
+		},
+		toolchainDigest: {
+			ArtifactID: "toolchain", ManifestDigest: toolchainDigest,
+			SignatureKeyID: "release-key", Architecture: "amd64",
+			GuestProtocolGeneration: 1,
+		},
+	}}
+	broker, err := lifecycle.NewPostgresEffectBroker(
+		t.Context(),
+		databaseURL,
+		recordingScheduler,
+		lifecycle.EffectBrokerConfig{
+			AssignmentClaimDuration: time.Minute,
+			AssignmentDeadline:      time.Minute,
+			HeartbeatTimeout:        time.Minute,
+			RetryLimit:              2,
+			SerializationRetryLimit: 2,
+			AssetCatalog:            catalog,
+			SessionCanceller:        unusedSessionCanceller{},
+			NewID: func(prefix string) string {
+				return prefix + "-automatic"
+			},
+			NewFencingToken: func() ([]byte, error) {
+				return []byte("01234567890123456789012345678901"), nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(broker.Close)
+	err = broker.ExecuteLifecycleEffect(
+		t.Context(),
+		ports.LifecycleReconcileClaim{
+			SandboxID: "sandbox-automatic-start",
+			WorkerID:  "worker-automatic-start",
+			Revision:  5,
+		},
+		lifecycle.Decision{Action: lifecycle.ActionStartInstance},
+		now,
+		now.Add(time.Second),
+	)
+	if !errors.Is(err, schedulerFailure) {
+		t.Fatalf("automatic restart error = %v, want captured scheduler failure", err)
+	}
+	command := recordingScheduler.request.AssignmentCommand
+	if command == nil ||
+		command.Correlation == nil ||
+		!strings.HasPrefix(command.Correlation.OperationId, "automatic-start-") ||
+		command.Correlation.RequestId != "request-"+command.Correlation.OperationId ||
+		recordingScheduler.request.StartMutationID == "" {
+		t.Fatalf(
+			"automatic restart authority command=%#v mutation=%q",
+			command,
+			recordingScheduler.request.StartMutationID,
+		)
+	}
+}
 
 func TestOrdinaryStopAndSnapshotDeleteSerializeAcrossControlPlaneReplicas(t *testing.T) {
 	databaseURL := openLifecyclePostgresTestDatabase(t)
@@ -359,6 +488,33 @@ func (unusedAssignmentScheduler) Schedule(
 	scheduler.ScheduleRequest,
 ) (scheduler.DurableAssignment, bool, error) {
 	return scheduler.DurableAssignment{}, false, errors.New("unused Assignment scheduler")
+}
+
+type recordingFailureScheduler struct {
+	request scheduler.ScheduleRequest
+	err     error
+}
+
+func (recorder *recordingFailureScheduler) Schedule(
+	_ context.Context,
+	request scheduler.ScheduleRequest,
+) (scheduler.DurableAssignment, bool, error) {
+	recorder.request = request
+	return scheduler.DurableAssignment{}, false, recorder.err
+}
+
+type fixedLifecycleAssetCatalog struct {
+	assets map[string]lifecycle.SignedAsset
+}
+
+func (catalog fixedLifecycleAssetCatalog) Resolve(
+	digest string,
+) (lifecycle.SignedAsset, error) {
+	asset, found := catalog.assets[digest]
+	if !found {
+		return lifecycle.SignedAsset{}, errors.New("missing fixed lifecycle asset")
+	}
+	return asset, nil
 }
 
 type unusedAssetCatalog struct{}

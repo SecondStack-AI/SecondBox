@@ -130,6 +130,23 @@ func TestNewInstanceIDIncludesCompartmentSegment(t *testing.T) {
 	if !strings.HasPrefix(emptyID, "fc-agent-1-compartment-") {
 		t.Fatalf("empty-compartment instance id %q does not include fallback segment", emptyID)
 	}
+	publicID, err := newInstanceID("sbx_public-id", "instance_public-id")
+	if err != nil {
+		t.Fatalf("new public-domain instance id: %v", err)
+	}
+	for index, character := range publicID {
+		if (character < 'a' || character > 'z') &&
+			(character < 'A' || character > 'Z') &&
+			(character < '0' || character > '9') &&
+			character != '-' {
+			t.Fatalf(
+				"instance id %q contains jailer-invalid character %q at %d",
+				publicID,
+				character,
+				index,
+			)
+		}
+	}
 
 	productionID, err := newInstanceID(
 		"3228ade9370612d8e6b01dff6e3f2cef",

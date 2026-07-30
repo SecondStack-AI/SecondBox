@@ -542,33 +542,38 @@ func instanceSandboxIDSegment(sandboxID string) string {
 	sandboxID = strings.TrimSpace(sandboxID)
 	const maxBytes = 13
 	if len(sandboxID) <= maxBytes {
-		return sandboxID
+		return jailerIDSegment(sandboxID, "sandbox", maxBytes)
 	}
 	digest := sha256.Sum256([]byte(sandboxID))
-	return sandboxID[:4] + "-" + hex.EncodeToString(digest[:4])
+	return jailerIDSegment(sandboxID[:4], "sbx", 4) +
+		"-" + hex.EncodeToString(digest[:4])
 }
 
 func compartmentIDSegment(compartmentID string) string {
-	compartmentID = strings.TrimSpace(compartmentID)
+	return jailerIDSegment(compartmentID, "compartment", 16)
+}
+
+func jailerIDSegment(value, fallback string, maximumBytes int) string {
+	value = strings.TrimSpace(value)
 	var b strings.Builder
-	for _, r := range compartmentID {
+	for _, r := range value {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
 			b.WriteRune(r)
 		} else if b.Len() > 0 {
 			b.WriteByte('-')
 		}
-		if b.Len() >= 16 {
+		if b.Len() >= maximumBytes {
 			break
 		}
 	}
 	segment := strings.Trim(b.String(), "-")
 	if segment == "" {
-		segment = "compartment"
+		segment = fallback
 	}
-	if len(segment) <= 16 {
+	if len(segment) <= maximumBytes {
 		return segment
 	}
-	return segment[:16]
+	return segment[:maximumBytes]
 }
 
 func copyFile(dst, src string, mode os.FileMode) error {

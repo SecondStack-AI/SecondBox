@@ -10,15 +10,14 @@ import (
 type Action string
 
 const (
-	ActionWait                Action = "wait"
-	ActionFinishCreateStopped Action = "finish_create_stopped"
-	ActionStartInstance       Action = "start_instance"
-	ActionMarkReady           Action = "mark_ready"
-	ActionDrain               Action = "drain"
-	ActionStopInstance        Action = "stop_instance"
-	ActionFinishStop          Action = "finish_stop"
-	ActionDelete              Action = "delete"
-	ActionFail                Action = "fail"
+	ActionWait          Action = "wait"
+	ActionStartInstance Action = "start_instance"
+	ActionMarkReady     Action = "mark_ready"
+	ActionDrain         Action = "drain"
+	ActionStopInstance  Action = "stop_instance"
+	ActionFinishStop    Action = "finish_stop"
+	ActionDelete        Action = "delete"
+	ActionFail          Action = "fail"
 )
 
 // View contains only durable inputs needed for one idempotent decision.
@@ -68,16 +67,7 @@ func Decide(view View, now time.Time) Decision {
 			}
 			return Decision{Action: ActionStopInstance}
 		case contracts.SandboxStateStopping:
-			if view.StopEffectState == "runner_failed" {
-				return Decision{Action: ActionFail, TerminationReason: contracts.TerminationReasonInternalFailure}
-			}
-			if view.GuestLiveness == contracts.GuestLivenessStopped || !view.HasInstance {
-				if view.StopEffectState == "runner_succeeded" {
-					return Decision{Action: ActionFinishStop}
-				}
-				return Decision{Action: ActionWait}
-			}
-			return Decision{Action: ActionStopInstance}
+			return decideStopping(view)
 		}
 	}
 	if view.Desired == contracts.SandboxDesiredStateStopped {
@@ -85,7 +75,7 @@ func Decide(view View, now time.Time) Decision {
 		case contracts.SandboxStateStopped, contracts.SandboxStateFailed:
 			return Decision{Action: ActionWait}
 		case contracts.SandboxStateCreating:
-			return Decision{Action: ActionFinishCreateStopped}
+			return Decision{Action: ActionWait}
 		case contracts.SandboxStateReady, contracts.SandboxStateStarting:
 			return Decision{Action: ActionDrain, TerminationReason: requestedTerminationReason(view)}
 		case contracts.SandboxStateDraining:
@@ -94,21 +84,14 @@ func Decide(view View, now time.Time) Decision {
 			}
 			return Decision{Action: ActionStopInstance}
 		case contracts.SandboxStateStopping:
-			if view.StopEffectState == "runner_failed" {
-				return Decision{Action: ActionFail, TerminationReason: contracts.TerminationReasonInternalFailure}
-			}
-			if view.GuestLiveness == contracts.GuestLivenessStopped || !view.HasInstance {
-				if view.StopEffectState == "runner_succeeded" {
-					return Decision{Action: ActionFinishStop}
-				}
-				return Decision{Action: ActionWait}
-			}
-			return Decision{Action: ActionStopInstance}
+			return decideStopping(view)
 		}
 	}
 	if view.Desired == contracts.SandboxDesiredStateRunning {
 		switch view.Observed {
-		case contracts.SandboxStateCreating, contracts.SandboxStateStopped:
+		case contracts.SandboxStateCreating:
+			return Decision{Action: ActionWait}
+		case contracts.SandboxStateStopped:
 			return Decision{Action: ActionStartInstance}
 		case contracts.SandboxStateStarting:
 			if view.GuestLiveness == contracts.GuestLivenessReady {
@@ -143,21 +126,28 @@ func Decide(view View, now time.Time) Decision {
 			}
 			return Decision{Action: ActionStopInstance}
 		case contracts.SandboxStateStopping:
-			if view.StopEffectState == "runner_failed" {
-				return Decision{Action: ActionFail, TerminationReason: contracts.TerminationReasonInternalFailure}
-			}
-			if view.GuestLiveness == contracts.GuestLivenessStopped || !view.HasInstance {
-				if view.StopEffectState == "runner_succeeded" {
-					return Decision{Action: ActionFinishStop}
-				}
-				return Decision{Action: ActionWait}
-			}
-			return Decision{Action: ActionStopInstance}
+			return decideStopping(view)
 		case contracts.SandboxStateFailed:
 			return Decision{Action: ActionStartInstance}
 		}
 	}
 	return Decision{Action: ActionFail, TerminationReason: contracts.TerminationReasonInternalFailure}
+}
+
+func decideStopping(view View) Decision {
+	if view.StopEffectState == "runner_failed" {
+		return Decision{Action: ActionFail, TerminationReason: contracts.TerminationReasonInternalFailure}
+	}
+	computeIsTerminal := !view.HasInstance ||
+		view.GuestLiveness == contracts.GuestLivenessStopped ||
+		view.GuestLiveness == contracts.GuestLivenessLost
+	if !computeIsTerminal {
+		return Decision{Action: ActionStopInstance}
+	}
+	if view.StopEffectState == "runner_succeeded" {
+		return Decision{Action: ActionFinishStop}
+	}
+	return Decision{Action: ActionWait}
 }
 
 func requestedTerminationReason(view View) string {

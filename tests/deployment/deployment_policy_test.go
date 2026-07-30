@@ -87,6 +87,42 @@ func TestComposeSeparatesOptionalPrivilegedRunnerFromControlPlane(t *testing.T) 
 	}
 }
 
+func TestScenarioQualificationCIRequiresSelfHostedKVM(t *testing.T) {
+	workflow := readRepositoryFile(t, ".github/workflows/ci.yml")
+	const jobMarker = "  scenario-qualification:\n"
+	jobStart := strings.Index(workflow, jobMarker)
+	if jobStart == -1 {
+		t.Fatal("CI workflow must define the scenario-qualification job")
+	}
+	scenarioJob := workflow[jobStart:]
+	for _, required := range []string{
+		"runs-on: [self-hosted, linux, x64, secondbox-kvm]",
+		"timeout-minutes: 45",
+		`SECONDBOX_REQUIRE_QUALIFIED_SCENARIO: "1"`,
+		"SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR:",
+		"SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY:",
+		"SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256:",
+		"SECONDBOX_RUNNER_WORKSPACE_ROOT:",
+		"run: just test-scenario",
+	} {
+		if !strings.Contains(scenarioJob, required) {
+			t.Errorf("scenario qualification CI job must contain %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"runs-on: ubuntu-latest",
+		"runs-on: ubuntu-",
+	} {
+		if strings.Contains(scenarioJob, forbidden) {
+			t.Errorf("scenario qualification CI job must not contain %q", forbidden)
+		}
+	}
+	if !strings.Contains(workflow, "run: just test-non-kvm") ||
+		!strings.Contains(workflow, "runs-on: ubuntu-latest") {
+		t.Fatal("portable non-KVM CI gate must remain on a GitHub-hosted runner")
+	}
+}
+
 func TestDeploymentCannotReconstructAbsentHomeFromAvailableObjectStore(t *testing.T) {
 	objectStore := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusOK)

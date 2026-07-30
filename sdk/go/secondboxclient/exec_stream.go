@@ -5,9 +5,11 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,13 +56,24 @@ func (handle *SandboxHandle) ConnectExecStream(
 	}
 	headers := make(http.Header)
 	headers.Set("Authorization", "Bearer "+handle.client.token)
+	headers.Set("X-SecondBox-Tenant-Ref", handle.client.tenantRef)
+	headers.Set("X-SecondBox-Subject-Ref", handle.client.subjectRef)
 	headers.Set("SecondBox-Generation", strconv.FormatInt(session.Generation, 10))
 	selectedCopy := *selected
 	selectedCopy.Subprotocols = []string{execStreamSubprotocol}
 	connection, response, err := selectedCopy.DialContext(ctx, endpoint.String(), headers)
 	if err != nil {
 		if response != nil {
-			_ = response.Body.Close()
+			defer response.Body.Close()
+			detail, readErr := io.ReadAll(io.LimitReader(response.Body, 4096))
+			if readErr == nil && len(detail) != 0 {
+				return nil, fmt.Errorf(
+					"SecondBox Exec stream attach failed: status=%d detail=%s: %w",
+					response.StatusCode,
+					strings.TrimSpace(string(detail)),
+					err,
+				)
+			}
 			return nil, fmt.Errorf("SecondBox Exec stream attach failed: status=%d: %w", response.StatusCode, err)
 		}
 		return nil, fmt.Errorf("SecondBox Exec stream attach failed: %w", err)

@@ -14,4 +14,4 @@
 - Every runtime setting is explicit. Application code and deployment templates must not provide defaults for required environment variables.
 - Do not catch, log, and swallow errors. Implement one intended path and fail explicitly when its prerequisites are absent.
 - Keep exported names and error prefixes greppable and domain-specific. Remove replaced code instead of retaining compatibility paths.
-- Run `just verify-generated`, `just test`, and the relevant contract, Compose, runner, or Firecracker suite before handoff.
+- Run `just verify-generated`, `just test`, and the relevant contract, Compose, runner, or Firecracker suite before handoff. Run `just test-scenario` on a qualified host when a change touches the runner protocol, lifecycle reconciliation, or workspace durability.

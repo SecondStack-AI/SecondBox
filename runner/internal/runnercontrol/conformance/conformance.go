@@ -68,6 +68,14 @@ func Run(t *testing.T, newFixture func(*testing.T) Fixture) {
 		if err != nil || second != first {
 			t.Fatalf("idempotent start = %+v, %v; want %+v", second, err, first)
 		}
+		expiredReplay := proto.Clone(fixture.Assignment).(*runnerprotocol.AssignmentCommand)
+		expiredReplay.DeadlineUnixMs = 1
+		if err := fixture.Backend.ValidateAssignment(
+			context.Background(),
+			expiredReplay,
+		); err != nil {
+			t.Fatalf("active assignment replay after original deadline: %v", err)
+		}
 		mismatched := proto.Clone(fixture.Assignment).(*runnerprotocol.AssignmentCommand)
 		mismatched.Fence.FencingToken = []byte("different-token")
 		if _, err := fixture.Backend.StartAssignment(
@@ -104,7 +112,9 @@ func Run(t *testing.T, newFixture func(*testing.T) Fixture) {
 		evidence, err = fixture.Backend.FenceAssignment(context.Background(), &runnerprotocol.FenceCommand{
 			Fence: fixture.Assignment.Fence,
 		})
-		if err != nil || evidence.Result != runnerprotocol.FenceResultKind_FENCE_RESULT_KIND_ALREADY_STOPPED {
+		if err != nil ||
+			evidence.Result != runnerprotocol.FenceResultKind_FENCE_RESULT_KIND_ALREADY_STOPPED ||
+			evidence.TerminationEvidenceDigest == "" {
 			t.Fatalf("repeated fence evidence = %+v, %v", evidence, err)
 		}
 		if fixture.AdvanceWorkspace == nil {

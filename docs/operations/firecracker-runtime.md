@@ -129,7 +129,11 @@ sudo --preserve-env=SECONDBOX_RUNNER_SANDBOX_BRIDGE_NAME,SECONDBOX_RUNNER_SANDBO
   runner/scripts/microvm-host-network-setup.sh remove
 ```
 
-The base policy allows established traffic and otherwise denies guest-to-host input, forwarding, and IPv6. It does not install NAT, redirects, or service-port exceptions. Assignments currently inherit this default-deny connectivity policy.
+The base policy allows established traffic, the runner DNS proxy, and
+assignment-policy-approved connections carrying the runner's private
+connection mark. Only marked IPv4 egress is masqueraded. All other
+guest-to-host input, forwarding, and IPv6 remain denied; no redirect or
+service-port exception is installed.
 
 `runner/scripts/microvm-network-namespace-test.sh` exercises the real bridge and firewall script in isolated Linux network namespaces and proves that an unassigned host port remains unreachable.
 

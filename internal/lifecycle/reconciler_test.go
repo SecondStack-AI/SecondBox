@@ -14,9 +14,9 @@ func TestDesiredStateTransitionsAreExplicit(t *testing.T) {
 		view View
 		want Action
 	}{
-		{"create stopped", View{Observed: contracts.SandboxStateCreating, Desired: contracts.SandboxDesiredStateStopped}, ActionFinishCreateStopped},
+		{"create stopped waits for Workspace evidence", View{Observed: contracts.SandboxStateCreating, Desired: contracts.SandboxDesiredStateStopped}, ActionWait},
 		{"already stopped", View{Observed: contracts.SandboxStateStopped, Desired: contracts.SandboxDesiredStateStopped}, ActionWait},
-		{"create running", View{Observed: contracts.SandboxStateCreating, Desired: contracts.SandboxDesiredStateRunning}, ActionStartInstance},
+		{"create running waits for Workspace receipt", View{Observed: contracts.SandboxStateCreating, Desired: contracts.SandboxDesiredStateRunning}, ActionWait},
 		{"start", View{Observed: contracts.SandboxStateStopped, Desired: contracts.SandboxDesiredStateRunning}, ActionStartInstance},
 		{"restart retries missing durable assignment", View{Observed: contracts.SandboxStateStarting, Desired: contracts.SandboxDesiredStateRunning}, ActionStartInstance},
 		{"assignment awaits runner ready evidence", View{Observed: contracts.SandboxStateStarting, Desired: contracts.SandboxDesiredStateRunning, HasInstance: true}, ActionWait},
@@ -33,6 +33,7 @@ func TestDesiredStateTransitionsAreExplicit(t *testing.T) {
 		{"running intent resumes stop", View{Observed: contracts.SandboxStateStopping, Desired: contracts.SandboxDesiredStateRunning, HasInstance: true}, ActionStopInstance},
 		{"delete intent resumes stop", View{Observed: contracts.SandboxStateStopping, Desired: contracts.SandboxDesiredStateDeleted, HasInstance: true}, ActionStopInstance},
 		{"delete commits local generation before deletion", View{Observed: contracts.SandboxStateStopping, Desired: contracts.SandboxDesiredStateDeleted, GuestLiveness: contracts.GuestLivenessStopped, StopEffectState: "runner_succeeded"}, ActionFinishStop},
+		{"delete commits local generation after runner loss", View{Observed: contracts.SandboxStateStopping, Desired: contracts.SandboxDesiredStateDeleted, HasInstance: true, GuestLiveness: contracts.GuestLivenessLost, StopEffectState: "runner_succeeded"}, ActionFinishStop},
 		{"stop retry exhaustion fails terminally", View{Observed: contracts.SandboxStateStopping, Desired: contracts.SandboxDesiredStateStopped, HasInstance: true, StopEffectState: "runner_failed"}, ActionFail},
 		{"guest loss stops", View{Observed: contracts.SandboxStateDraining, Desired: contracts.SandboxDesiredStateStopped, HasInstance: true, GuestLiveness: contracts.GuestLivenessLost}, ActionStopInstance},
 		{"no instance still waits for local generation receipt", View{Observed: contracts.SandboxStateStopping, Desired: contracts.SandboxDesiredStateStopped}, ActionWait},

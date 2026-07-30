@@ -32,7 +32,7 @@ func TestReconcilerConsumesDurableClaimAndCommitsOneTransition(t *testing.T) {
 	}
 }
 
-func TestReconcilerCommitsDatabaseOnlyTransitionWithoutEffectBroker(t *testing.T) {
+func TestReconcilerWaitsForStoppedWorkspaceCreationEvidence(t *testing.T) {
 	store := &fakeReconcileStore{claim: ports.LifecycleReconcileClaim{
 		SandboxID: "sbx-1", WorkerID: "worker-1", Revision: 3,
 		ObservedState: contracts.SandboxStateCreating,
@@ -46,8 +46,8 @@ func TestReconcilerCommitsDatabaseOnlyTransitionWithoutEffectBroker(t *testing.T
 	decision, found, err := reconciler.RunOnce(
 		t.Context(), time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
 	)
-	if err != nil || !found || decision.Action != ActionFinishCreateStopped ||
-		store.action != string(ActionFinishCreateStopped) || effects.action != "" {
+	if err != nil || !found || decision.Action != ActionWait ||
+		store.action != string(ActionWait) || effects.action != "" {
 		t.Fatalf(
 			"reconciliation = %#v, %t, %v, effect %q, database commit %q",
 			decision, found, err, effects.action, store.action,

@@ -190,6 +190,8 @@ func TestSandboxHandleConnectsAndSequencesExecStream(t *testing.T) {
 	upgrader := websocket.Upgrader{Subprotocols: []string{execStreamSubprotocol}}
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("Authorization") != "Bearer token" ||
+			request.Header.Get("X-SecondBox-Tenant-Ref") != "secondbox" ||
+			request.Header.Get("X-SecondBox-Subject-Ref") != "secondbox-admin" ||
 			request.Header.Get("SecondBox-Generation") != "3" {
 			t.Errorf("stream headers = %#v", request.Header)
 		}
@@ -303,6 +305,8 @@ func TestSandboxHandleConnectsAndSequencesTerminal(t *testing.T) {
 	upgrader := websocket.Upgrader{Subprotocols: []string{terminalSubprotocol}}
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("Authorization") != "Bearer token" ||
+			request.Header.Get("X-SecondBox-Tenant-Ref") != "secondbox" ||
+			request.Header.Get("X-SecondBox-Subject-Ref") != "secondbox-admin" ||
 			request.Header.Get("SecondBox-Generation") != "3" {
 			t.Errorf("Terminal headers = %#v", request.Header)
 		}

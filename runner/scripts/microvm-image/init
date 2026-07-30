@@ -4,6 +4,10 @@ set -eu
 mountpoint -q /proc || mount -t proc proc /proc
 mountpoint -q /sys || mount -t sysfs sysfs /sys
 mountpoint -q /dev || mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts
+mountpoint -q /dev/pts || mount -t devpts -o nosuid,noexec,mode=0620,ptmxmode=0666 devpts /dev/pts
+rm -f /dev/ptmx
+ln -s pts/ptmx /dev/ptmx
 # The tool guest never needs raw memory, KVM, or TUN device access. devtmpfs
 # creates some of these nodes from the guest kernel's built-in device set even
 # though Firecracker did not pass the corresponding host devices through.

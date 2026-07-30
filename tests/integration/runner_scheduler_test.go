@@ -343,6 +343,12 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 			count, backendReference, capabilityJSON, sandboxState, guestLiveness,
 		)
 	}
+	if _, err := pool.Exec(t.Context(), `
+		UPDATE secondbox.runners SET state='offline' WHERE id=$1`,
+		runnerID,
+	); err != nil {
+		t.Fatal(err)
+	}
 
 	reconcileStore, err := reconcile.NewPostgresStore(t.Context(), integrationDatabaseURL)
 	if err != nil {
@@ -469,9 +475,60 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	}, now.Add(5*time.Second)); err != nil || duplicate {
 		t.Fatalf("local generation result duplicate, error = %t, %v", duplicate, err)
 	}
+	redundantFencePayload, err := proto.Marshal(&runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_Fence{
+			Fence: proto.Clone(fenceDelivery.Message.GetFence()).(*runnerv1.FenceCommand),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	redundantFenceCommandID := task4ID("redundant-fence")
+	if _, err := pool.Exec(t.Context(), `
+		INSERT INTO secondbox.runner_commands (
+			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
+			delivery_count,created_at,updated_at,delivered_at
+		) VALUES ($1,$2,$3,'fence',$4,'delivered',$5,1,$6,$6,$6)`,
+		redundantFenceCommandID,
+		runnerID,
+		durableAssignment.ID,
+		redundantFencePayload,
+		connectionID,
+		now.Add(5*time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	redundantFenceResult := proto.Clone(fenceResult).(*runnerv1.FenceResult)
+	redundantFenceResult.MessageId = "redundant-fence-result-7"
+	redundantFenceResult.Sequence = 7
+	redundantFenceResult.Result =
+		runnerv1.FenceResultKind_FENCE_RESULT_KIND_ALREADY_STOPPED
+	if duplicate, err := stateStore.RecordEvent(t.Context(), runnercontrol.Event{
+		Kind: runnercontrol.EventFence, RunnerID: runnerID, ConnectionID: connectionID,
+		Message: &runnerv1.RunnerToControlPlane{
+			Message: &runnerv1.RunnerToControlPlane_FenceResult{
+				FenceResult: redundantFenceResult,
+			},
+		},
+	}, now.Add(5*time.Second)); err != nil || duplicate {
+		t.Fatalf("redundant FenceResult duplicate, error = %t, %v", duplicate, err)
+	}
+	var redundantFenceState string
+	if err := pool.QueryRow(t.Context(), `
+		SELECT state FROM secondbox.runner_commands WHERE id=$1`,
+		redundantFenceCommandID,
+	).Scan(&redundantFenceState); err != nil {
+		t.Fatal(err)
+	}
+	if redundantFenceState != "acknowledged" {
+		t.Fatalf(
+			"redundant Fence command state = %q, want acknowledged",
+			redundantFenceState,
+		)
+	}
 	staleAfterFence := proto.Clone(ready).(*runnerv1.RunnerToControlPlane)
-	staleAfterFence.GetAssignmentResult().MessageId = "ready-after-fence-7"
-	staleAfterFence.GetAssignmentResult().Sequence = 7
+	staleAfterFence.GetAssignmentResult().MessageId = "ready-after-fence-8"
+	staleAfterFence.GetAssignmentResult().Sequence = 8
 	staleAfterFence.GetAssignmentResult().BackendReference = "fc-stale-after-fence"
 	if _, err := stateStore.RecordEvent(t.Context(), runnercontrol.Event{
 		Kind: runnercontrol.EventAssignment, RunnerID: runnerID, ConnectionID: connectionID,

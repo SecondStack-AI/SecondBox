@@ -646,6 +646,12 @@ func (s *RunnerProtocolService) handleLocalWorkspace(
 		result.ReceiptRecordedAtUnixMs = uint64(evidence.ReceiptRecordedAt.UTC().UnixMilli())
 	}
 	if executionErr != nil {
+		slog.Warn(
+			"SecondBox runner local-workspace command failed",
+			"kind", command.Kind.String(),
+			"terminal", terminal.String(),
+			"error", executionErr,
+		)
 		result.SafeDetail = localWorkspaceSafeDetail(terminal)
 	}
 	return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
@@ -767,8 +773,14 @@ func (s *RunnerProtocolService) handleAssignment(
 	terminal := runnerprotocol.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY
 	safeDetail := ""
 	if err != nil {
+		slog.Warn(
+			"SecondBox runner assignment start failed",
+			"assignmentId", assignment.Fence.AssignmentId,
+			"sandboxId", assignment.Fence.SandboxId,
+			"error", err,
+		)
 		terminal = runnerprotocol.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_RUNNER_FAILED
-		safeDetail = err.Error()
+		safeDetail = "runner failed to start assignment"
 	} else {
 		s.recordActiveAssignment(assignment.Fence, instance.BackendReference)
 		s.recordAssignmentCorrelation(assignment)
@@ -880,6 +892,11 @@ func (s *RunnerProtocolService) sendAssignmentAck(
 	safeDetail string,
 ) error {
 	if decision != runnerprotocol.AssignmentDecision_ASSIGNMENT_DECISION_ACCEPTED {
+		slog.Warn(
+			"SecondBox runner assignment rejected",
+			"decision", decision.String(),
+			"safeDetail", safeDetail,
+		)
 		if err := s.emitEvidence(
 			context.Background(),
 			runnerevidence.EventAssignmentTerminal,

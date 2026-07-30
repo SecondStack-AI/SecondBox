@@ -37,6 +37,14 @@ Firecracker validation requires a dedicated Linux host with KVM and the configur
 just test-firecracker
 ```
 
+The external scenario gate joins the public HTTP API, PostgreSQL, object storage, runner protocol, and real Firecracker guests. It requires a self-hosted Linux x86-64 machine with writable KVM and TUN devices, Docker Compose, cgroup v2, a separately verified signed microVM bundle, and an XFS or Btrfs workspace root with reflink support:
+
+```sh
+SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1 just test-scenario
+```
+
+The artifact trust and host variables are mandatory; see [scenario qualification](docs/operations/scenario-qualification.md) for setup, evidence, and timing budgets. GitHub-hosted runners continue to run `just test-non-kvm`; only the labeled self-hosted KVM job runs this gate.
+
 ## Development deployment
 
 The Compose deployment starts the unprivileged control plane and offers loopback-only PostgreSQL and RustFS S3-compatible dependencies under the `development` profile. It never embeds a shared credential; bootstrap creates a private environment file with unique generated secrets.

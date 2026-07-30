@@ -224,11 +224,13 @@ func TestReturningRunnerReplaysDurableWorkspaceCreateReceipt(t *testing.T) {
 	var (
 		workspaceState, mutationState, sandboxState     string
 		operationState, effectState, createCommandState string
-		reconcileCommandState                           string
+		reconcileCommandState, reconcileOwner           string
+		reconcileClaimCleared                           bool
 	)
 	if err := store.pool.QueryRow(t.Context(), `
 		SELECT workspace.state,workspace.mutation_state,sandbox.state,
-		       operation.state,effect.state,create_command.state,reconcile_command.state
+		       operation.state,effect.state,create_command.state,reconcile_command.state,
+		       sandbox.reconcile_owner,sandbox.reconcile_claim_expires_at IS NULL
 		FROM secondbox.workspaces AS workspace
 		JOIN secondbox.sandboxes AS sandbox ON sandbox.workspace_id=workspace.id
 		JOIN secondbox.operations AS operation
@@ -249,6 +251,8 @@ func TestReturningRunnerReplaysDurableWorkspaceCreateReceipt(t *testing.T) {
 		&effectState,
 		&createCommandState,
 		&reconcileCommandState,
+		&reconcileOwner,
+		&reconcileClaimCleared,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -258,9 +262,73 @@ func TestReturningRunnerReplaysDurableWorkspaceCreateReceipt(t *testing.T) {
 		operationState != "succeeded" ||
 		effectState != "succeeded" ||
 		createCommandState != "acknowledged" ||
+		reconcileCommandState != "acknowledged" ||
+		reconcileOwner != "" ||
+		!reconcileClaimCleared {
+		t.Fatalf(
+			"reconciled create Workspace=%q/%q Sandbox=%q Operation=%q effect=%q commands=%q/%q claim=%q/%t",
+			workspaceState,
+			mutationState,
+			sandboxState,
+			operationState,
+			effectState,
+			createCommandState,
+			reconcileCommandState,
+			reconcileOwner,
+			reconcileClaimCleared,
+		)
+	}
+}
+
+func TestReturningRunnerDoesNotFailQueuedWorkspaceCreateMissingFromInventory(t *testing.T) {
+	store := openRunnerControlDatabase(t)
+	now := time.Date(2026, 7, 29, 18, 41, 0, 0, time.UTC)
+	seedPendingWorkspaceCreation(t, store, now)
+	recordReturningRunnerReconciliation(
+		t,
+		store,
+		"connection-before-workspace-create",
+		nil,
+		now.Add(time.Second),
+	)
+	var (
+		workspaceState, mutationState, sandboxState, operationState string
+		effectState, createCommandState, reconcileCommandState      string
+	)
+	if err := store.pool.QueryRow(t.Context(), `
+		SELECT workspace.state,workspace.mutation_state,sandbox.state,
+		       operation.state,effect.state,create_command.state,reconcile_command.state
+		FROM secondbox.workspaces AS workspace
+		JOIN secondbox.sandboxes AS sandbox ON sandbox.workspace_id=workspace.id
+		JOIN secondbox.operations AS operation
+		  ON operation.id='operation-create-reconcile'
+		JOIN secondbox.lifecycle_effects AS effect
+		  ON effect.id='effect-create-reconcile'
+		JOIN secondbox.runner_commands AS create_command
+		  ON create_command.id='command-create-reconcile'
+		JOIN secondbox.runner_commands AS reconcile_command
+		  ON reconcile_command.id='workspace-reconcile-connection-before-workspace-create'
+		WHERE workspace.id='workspace-create-reconcile'`,
+	).Scan(
+		&workspaceState,
+		&mutationState,
+		&sandboxState,
+		&operationState,
+		&effectState,
+		&createCommandState,
+		&reconcileCommandState,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if workspaceState != "creating" ||
+		mutationState != "queued" ||
+		sandboxState != "creating" ||
+		operationState != "pending" ||
+		effectState != "queued" ||
+		createCommandState != "pending" ||
 		reconcileCommandState != "acknowledged" {
 		t.Fatalf(
-			"reconciled create Workspace=%q/%q Sandbox=%q Operation=%q effect=%q commands=%q/%q",
+			"queued create Workspace=%q/%q Sandbox=%q Operation=%q effect=%q commands=%q/%q",
 			workspaceState,
 			mutationState,
 			sandboxState,
@@ -433,6 +501,84 @@ func TestReturningRunnerMissingWorkspaceFailsAndExactEvidenceRecoversWithoutRelo
 			"Workspace reconciliation audits failed=%d recovered=%d",
 			failedAudits,
 			recoveredAudits,
+		)
+	}
+}
+
+func TestReturningRunnerWithoutWriterPreservesUncertainHomeWorkspace(t *testing.T) {
+	store := openRunnerControlDatabase(t)
+	now := time.Date(2026, 7, 29, 18, 50, 0, 0, time.UTC)
+	seedReadyReconciledWorkspace(t, store, now)
+	if _, err := store.pool.Exec(t.Context(), `
+		UPDATE secondbox.sandboxes
+		SET state='ready',desired_state='running',current_instance_id='instance-runner-loss',
+		    updated_at=$1
+		WHERE id='sandbox-ready-reconcile';
+		INSERT INTO secondbox.instances (
+			id,sandbox_id,generation,state,guest_liveness,termination_reason,
+			created_at,updated_at,ready_at,guest_heartbeat_at,maximum_duration_at,stopped_at
+		) VALUES (
+			'instance-runner-loss','sandbox-ready-reconcile',3,'ready','ready','',
+			$1,$1,$1,$1,$2,NULL
+		);
+		INSERT INTO secondbox.assignments (
+			id,sandbox_id,instance_id,runner_id,profile_revision_id,backend_kind,
+			backend_reference,generation,fencing_token,state,capability_snapshot_json,
+			resolved_artifacts_json,release_proof_json,failure_class,retry_count,retry_limit,
+			operation_deadline,claim_expires_at,reconcile_owner,reconcile_claim_expires_at,
+			next_reconcile_at,revision,created_at,updated_at
+		) VALUES (
+			'assignment-runner-loss','sandbox-ready-reconcile','instance-runner-loss',
+			'runner-home','revision','firecracker','fc-runner-loss',3,$3,'uncertain',
+			'{}','{}','{}','transient',0,3,$2,$2,'',$2,$1,2,$1,$1
+		)`,
+		pgx.QueryExecModeSimpleProtocol,
+		now,
+		now.Add(time.Hour),
+		[]byte("01234567890123456789012345678901"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	recordReturningRunnerReconciliation(
+		t,
+		store,
+		"connection-runner-loss",
+		[]*runnerv1.LocalWorkspaceInventoryItem{{
+			WorkspaceId:          "workspace-ready-reconcile",
+			Generation:           3,
+			LogicalCapacityBytes: 8 << 30,
+			Formatted:            true,
+			ActiveWriter:         false,
+		}},
+		now.Add(time.Second),
+	)
+	var workspaceState, sandboxState, failureClass, assignmentState string
+	if err := store.pool.QueryRow(t.Context(), `
+		SELECT workspace.state,sandbox.state,COALESCE(sandbox.lifecycle_failure_class,''),
+		       assignment.state
+		FROM secondbox.workspaces AS workspace
+		JOIN secondbox.sandboxes AS sandbox ON sandbox.workspace_id=workspace.id
+		JOIN secondbox.assignments AS assignment
+		  ON assignment.id='assignment-runner-loss'
+		WHERE workspace.id='workspace-ready-reconcile'`,
+	).Scan(
+		&workspaceState,
+		&sandboxState,
+		&failureClass,
+		&assignmentState,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if workspaceState != "ready" ||
+		sandboxState != "ready" ||
+		failureClass != "" ||
+		assignmentState != "uncertain" {
+		t.Fatalf(
+			"runner-loss reconciliation Workspace=%q Sandbox=%q failure=%q Assignment=%q",
+			workspaceState,
+			sandboxState,
+			failureClass,
+			assignmentState,
 		)
 	}
 }
@@ -1223,7 +1369,7 @@ func TestWorkspaceDeleteReceiptFinalizesSandboxAndAllLocalSnapshotMetadata(t *te
 	}
 }
 
-func TestTerminalStartEvidenceReleasesDurableWorkspaceMutation(t *testing.T) {
+func TestFailedStartEvidenceRetainsDurableWorkspaceMutationForReconciliation(t *testing.T) {
 	testCases := []struct {
 		name            string
 		assignmentState string
@@ -1272,6 +1418,13 @@ func TestTerminalStartEvidenceReleasesDurableWorkspaceMutation(t *testing.T) {
 				t, store, strings.ReplaceAll(testCase.name, " ", "-"),
 				testCase.assignmentState, now,
 			)
+			insertDeliveredAssignmentCommand(
+				t,
+				store,
+				fence,
+				"assignment-command-"+strings.ReplaceAll(testCase.name, " ", "-"),
+				now,
+			)
 			tx, err := store.pool.Begin(t.Context())
 			if err != nil {
 				t.Fatal(err)
@@ -1285,24 +1438,145 @@ func TestTerminalStartEvidenceReleasesDurableWorkspaceMutation(t *testing.T) {
 			if err := tx.Commit(t.Context()); err != nil {
 				t.Fatal(err)
 			}
-			var assignmentState, mutationKind, mutationState string
+			var assignmentState, mutationKind, mutationState, commandState string
 			if err := store.pool.QueryRow(t.Context(), `
-				SELECT assignment.state,workspace.mutation_kind,workspace.mutation_state
+				SELECT assignment.state,workspace.mutation_kind,workspace.mutation_state,
+				       command.state
 				FROM secondbox.assignments AS assignment
 				JOIN secondbox.sandboxes AS sandbox ON sandbox.id=assignment.sandbox_id
 				JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+				JOIN secondbox.runner_commands AS command
+				  ON command.assignment_id=assignment.id AND command.kind='assignment'
 				WHERE assignment.id=$1`,
 				fence.AssignmentId,
-			).Scan(&assignmentState, &mutationKind, &mutationState); err != nil {
+			).Scan(
+				&assignmentState,
+				&mutationKind,
+				&mutationState,
+				&commandState,
+			); err != nil {
 				t.Fatal(err)
 			}
-			if assignmentState != "failed" || mutationKind != "" || mutationState != "" {
+			if assignmentState != "failed" ||
+				mutationKind != "start" ||
+				mutationState != "assigned" ||
+				commandState != "acknowledged" {
 				t.Fatalf(
-					"terminal start assignment=%q mutation=%q/%q",
-					assignmentState, mutationKind, mutationState,
+					"failed start assignment=%q mutation=%q/%q command=%q",
+					assignmentState, mutationKind, mutationState, commandState,
 				)
 			}
 		})
+	}
+}
+
+func TestReadyAssignmentRecordsInitialGuestHeartbeatEvidence(t *testing.T) {
+	store := openRunnerControlDatabase(t)
+	now := time.Date(2026, 7, 29, 20, 45, 0, 0, time.UTC)
+	fence := seedStartingAssignment(t, store, "ready-evidence", "starting", now)
+	insertDeliveredAssignmentCommand(
+		t,
+		store,
+		fence,
+		"assignment-command-ready-evidence",
+		now,
+	)
+	resultAt := now.Add(time.Second)
+	tx, err := store.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(t.Context())
+	if err := recordAssignmentEvent(
+		t.Context(),
+		tx,
+		"runner-home",
+		&runnerv1.RunnerToControlPlane{
+			Message: &runnerv1.RunnerToControlPlane_AssignmentResult{
+				AssignmentResult: &runnerv1.AssignmentResult{
+					Fence:            fence,
+					Terminal:         runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY,
+					BackendKind:      "firecracker",
+					BackendReference: "fc-ready-evidence",
+					Correlation: &runnerv1.Correlation{
+						RequestId: "request-start", OperationId: "operation-start",
+						SandboxId: fence.SandboxId, InstanceId: fence.InstanceId,
+						SandboxGeneration: fence.SandboxGeneration,
+						AssignmentId:      fence.AssignmentId, RunnerId: "runner-home",
+					},
+				},
+			},
+		},
+		resultAt,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var (
+		state, liveness, mutationKind, commandState string
+		readyAt, heartbeatAt                        time.Time
+	)
+	if err := store.pool.QueryRow(t.Context(), `
+		SELECT instance.state,instance.guest_liveness,instance.ready_at,
+		       instance.guest_heartbeat_at,workspace.mutation_kind,command.state
+		FROM secondbox.instances AS instance
+		JOIN secondbox.sandboxes AS sandbox ON sandbox.id=instance.sandbox_id
+		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+		JOIN secondbox.runner_commands AS command
+		  ON command.assignment_id=$2 AND command.kind='assignment'
+		WHERE instance.id=$1`,
+		fence.InstanceId,
+		fence.AssignmentId,
+	).Scan(
+		&state,
+		&liveness,
+		&readyAt,
+		&heartbeatAt,
+		&mutationKind,
+		&commandState,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if state != "ready" ||
+		liveness != "ready" ||
+		!readyAt.Equal(resultAt) ||
+		!heartbeatAt.Equal(resultAt) ||
+		mutationKind != "" ||
+		commandState != "acknowledged" {
+		t.Fatalf(
+			"ready evidence state=%q liveness=%q readyAt=%s heartbeatAt=%s mutation=%q command=%q",
+			state,
+			liveness,
+			readyAt,
+			heartbeatAt,
+			mutationKind,
+			commandState,
+		)
+	}
+}
+
+func insertDeliveredAssignmentCommand(
+	t *testing.T,
+	store *PostgresStateStore,
+	fence *runnerv1.AssignmentFence,
+	commandID string,
+	now time.Time,
+) {
+	t.Helper()
+	if _, err := store.pool.Exec(t.Context(), `
+		INSERT INTO secondbox.runner_commands (
+			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
+			delivery_count,created_at,updated_at,delivered_at
+		) VALUES ($1,'runner-home',$2,'assignment',$3,'delivered',
+		          'connection-old',1,$4,$4,$4)`,
+		commandID,
+		fence.AssignmentId,
+		[]byte{},
+		now,
+	); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -1618,11 +1892,12 @@ func seedPendingWorkspaceCreation(
 		INSERT INTO secondbox.sandboxes (
 			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
 			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
-			lifecycle_intent_kind,next_reconcile_at,revision,created_at,updated_at
+			lifecycle_intent_kind,reconcile_owner,reconcile_claim_expires_at,
+			next_reconcile_at,revision,created_at,updated_at
 		) VALUES (
 			'sandbox-create-reconcile','tenant','subject','profile','revision',
 			'creating','stopped',1,'workspace-create-reconcile','','{}','{}',
-			'create_workspace',$1,1,$1,$1
+			'create_workspace','lifecycle-worker',$3,$1,1,$1,$1
 		);
 		INSERT INTO secondbox.operations (
 			id,tenant_ref,subject_ref,sandbox_id,snapshot_id,kind,state,request_id,

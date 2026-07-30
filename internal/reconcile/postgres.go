@@ -76,9 +76,20 @@ func (store *PostgresStore) MarkExpiredRunners(
 	}
 	defer tx.Rollback(ctx)
 	rows, err := tx.Query(ctx, `
-		UPDATE secondbox.runners
+		UPDATE secondbox.runners AS runner
 		SET state='offline',revision=revision+1,updated_at=$2
-		WHERE last_seen_at<$1 AND state IN ('ready','draining','connected')
+		WHERE runner.last_seen_at<$1
+		  AND (
+		    runner.state IN ('ready','draining','connected')
+		    OR (
+		      runner.state='offline'
+		      AND EXISTS (
+		        SELECT 1 FROM secondbox.assignments AS assignment
+		        WHERE assignment.runner_id=runner.id
+		          AND assignment.state IN ('assigned','accepted','starting','ready')
+		      )
+		    )
+		  )
 		RETURNING id`, heartbeatCutoff.UTC(), now.UTC(),
 	)
 	if err != nil {

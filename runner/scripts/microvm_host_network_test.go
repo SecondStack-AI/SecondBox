@@ -96,7 +96,10 @@ exit 0
 	assertFileText(t, sysctlState, "1")
 	assertFileText(t, filepath.Join(runtimeDir, "host-network.state"), expectedState)
 	assertFileContains(t, firewallState+".iptables", "-C SECONDBOX_SANDBOX_INPUT -m comment --comment secondbox-runner-host-input-deny -j DROP")
+	assertFileContains(t, firewallState+".iptables", "-C SECONDBOX_SANDBOX_INPUT -d 172.30.0.1 -p udp --dport 53 -m comment --comment secondbox-runner-dns -j ACCEPT")
+	assertFileContains(t, firewallState+".iptables", "-C SECONDBOX_SANDBOX_FORWARD -m connmark --mark 0x53425801/0xffffffff -m comment --comment secondbox-sandbox-policy-allow -j ACCEPT")
 	assertFileContains(t, firewallState+".iptables", "-C SECONDBOX_SANDBOX_FORWARD -m comment --comment secondbox-sandbox-forward-deny -j DROP")
+	assertFileContains(t, firewallState+".iptables", "-t nat -C POSTROUTING -s 172.30.0.0/24 ! -d 172.30.0.0/24 -m connmark --mark 0x53425801/0xffffffff -m comment --comment secondbox-sandbox-policy-nat -j MASQUERADE")
 	assertFileContains(t, firewallState+".ip6tables", "-C SECONDBOX_SANDBOX_IPV6 -m comment --comment secondbox-sandbox-ipv6-deny -j DROP")
 
 	if err := os.WriteFile(firewallState+".iptables", nil, 0o600); err != nil {

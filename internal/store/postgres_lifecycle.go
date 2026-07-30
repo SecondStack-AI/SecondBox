@@ -334,7 +334,7 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 	nextState := claim.ObservedState
 	switch action {
 	case "wait":
-	case "finish_create_stopped", "finish_stop":
+	case "finish_stop":
 		nextState = contracts.SandboxStateStopped
 	case "start_instance":
 		nextState = contracts.SandboxStateStarting
@@ -502,12 +502,6 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 		return nil
 	}
 	switch action {
-	case "finish_create_stopped":
-		if err := completeOperations(
-			[]string{"create"}, contracts.OperationStateSucceeded, "", "",
-		); err != nil {
-			return err
-		}
 	case "mark_ready":
 		if err := completeOperations(
 			[]string{"create", "start"}, contracts.OperationStateSucceeded, "", "",

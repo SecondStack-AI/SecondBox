@@ -22,10 +22,13 @@ func TestMicroVMInitRemovesForbiddenDeviceNodesBeforeEntrypoint(t *testing.T) {
 	}
 	content := string(initScript)
 	devtmpfs := strings.Index(content, "mount -t devtmpfs devtmpfs /dev")
+	devpts := strings.Index(content, "mount -t devpts")
+	ptmx := strings.Index(content, "ln -s pts/ptmx /dev/ptmx")
 	restrictDevices := strings.Index(content, "rm -f /dev/mem /dev/kmem /dev/port /dev/kvm /dev/net/tun")
 	guestEntrypoint := strings.Index(content, "exec /usr/local/bin/secondbox-runner-guest-entrypoint")
-	if devtmpfs < 0 || restrictDevices <= devtmpfs || guestEntrypoint <= restrictDevices {
-		t.Fatalf("microVM init must remove raw memory, KVM, and TUN nodes after devtmpfs and before the guest entrypoint")
+	if devtmpfs < 0 || devpts <= devtmpfs || ptmx <= devpts ||
+		restrictDevices <= ptmx || guestEntrypoint <= restrictDevices {
+		t.Fatalf("microVM init must establish PTY devices, then remove forbidden devices before the guest entrypoint")
 	}
 }
 

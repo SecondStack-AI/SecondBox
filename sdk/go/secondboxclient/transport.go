@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -207,8 +208,7 @@ func (client *Client) Do(
 	if options.Body != nil && metadata.RequestBodyRequired && contentType == "" {
 		return nil, fmt.Errorf("SecondBox client content type is required for %s", metadata.OperationID)
 	}
-	if contentType != "" &&
-		(len(metadata.RequestBody) != 1 || metadata.RequestBody[0].ContentType != contentType) {
+	if contentType != "" && !declaresContentType(metadata, contentType) {
 		return nil, fmt.Errorf(
 			"SecondBox client content type %q is not declared for %s",
 			contentType, metadata.OperationID,
@@ -255,6 +255,18 @@ func (client *Client) Do(
 		failure.Problem = &problem
 	}
 	return nil, failure
+}
+
+func declaresContentType(metadata OperationMetadata, contentType string) bool {
+	if len(metadata.RequestBody) != 1 {
+		return false
+	}
+	actual, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return false
+	}
+	declared, _, err := mime.ParseMediaType(metadata.RequestBody[0].ContentType)
+	return err == nil && actual == declared
 }
 
 // EncodeJSONBody encodes one request without buffering a second copy.

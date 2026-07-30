@@ -155,6 +155,95 @@ func TestSessionRejectsRelayFramesWithoutNegotiatedFeature(t *testing.T) {
 	}
 }
 
+func TestSessionAcceptsOrderedOutboundExecInput(t *testing.T) {
+	session := negotiatedRelaySession(t)
+	if _, err := session.Accept(registrationFrame("runner-1", "connection-1", 1)); err != nil {
+		t.Fatal(err)
+	}
+	fence := relayTestFence()
+	for _, frame := range []*runnerv1.ExecFrame{
+		{
+			Fence: fence, OperationId: "operation-1", StreamId: "stream-1", Sequence: 1,
+			Payload: &runnerv1.ExecFrame_Open{Open: &runnerv1.ExecOpen{
+				Command: &runnerv1.ExecOpen_Shell{Shell: "cat"},
+			}},
+		},
+		{
+			Fence: fence, OperationId: "operation-1", StreamId: "stream-1", Sequence: 2,
+			Payload: &runnerv1.ExecFrame_Input{Input: &runnerv1.ExecInput{
+				Data: []byte("payload\n"),
+			}},
+		},
+	} {
+		if err := session.ValidateOutboundRelayFrame(&runnerv1.ControlPlaneToRunner{
+			Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: frame},
+		}); err != nil {
+			t.Fatalf("outbound Exec sequence %d: %v", frame.Sequence, err)
+		}
+	}
+}
+
+func TestSessionAcceptsOrderedTerminalFramesAcrossExecAndPtyEnvelopes(t *testing.T) {
+	session := negotiatedRelaySession(t)
+	if _, err := session.Accept(registrationFrame("runner-1", "connection-1", 1)); err != nil {
+		t.Fatal(err)
+	}
+	fence := relayTestFence()
+	frames := []*runnerv1.ControlPlaneToRunner{
+		{
+			Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: &runnerv1.ExecFrame{
+				Fence: fence, OperationId: "terminal-1", StreamId: "stream-1", Sequence: 1,
+				Payload: &runnerv1.ExecFrame_Open{Open: &runnerv1.ExecOpen{
+					Command: &runnerv1.ExecOpen_Shell{Shell: "sh"}, AllocatePty: true,
+				}},
+			}},
+		},
+		{
+			Message: &runnerv1.ControlPlaneToRunner_Pty{Pty: &runnerv1.PtyFrame{
+				Fence: fence, OperationId: "terminal-1", StreamId: "stream-1", Sequence: 2,
+				Payload: &runnerv1.PtyFrame_Credit{
+					Credit: &runnerv1.StreamCredit{ByteCount: 1024},
+				},
+			}},
+		},
+		{
+			Message: &runnerv1.ControlPlaneToRunner_Pty{Pty: &runnerv1.PtyFrame{
+				Fence: fence, OperationId: "terminal-1", StreamId: "stream-1", Sequence: 3,
+				Payload: &runnerv1.PtyFrame_Input{
+					Input: &runnerv1.PtyInput{Data: []byte("echo ready\n")},
+				},
+			}},
+		},
+		{
+			Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: &runnerv1.ExecFrame{
+				Fence: fence, OperationId: "terminal-1", StreamId: "stream-1", Sequence: 4,
+				Payload: &runnerv1.ExecFrame_Cancel{
+					Cancel: &runnerv1.ExecCancel{Reason: "test cancellation"},
+				},
+			}},
+		},
+	}
+	for index, frame := range frames {
+		if err := session.ValidateOutboundRelayFrame(frame); err != nil {
+			t.Fatalf("outbound Terminal frame %d: %v", index+1, err)
+		}
+	}
+
+	output := &runnerv1.RunnerToControlPlane{
+		Message: &runnerv1.RunnerToControlPlane_Pty{Pty: &runnerv1.PtyFrame{
+			Fence: fence, OperationId: "terminal-1", StreamId: "stream-1", Sequence: 1,
+			Payload: &runnerv1.PtyFrame_Output{Output: &runnerv1.ExecOutput{
+				Channel: runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT,
+				Data:    []byte("ready\r\n"),
+			}},
+		}},
+	}
+	event, err := session.Accept(output)
+	if err != nil || event.Kind != EventPty {
+		t.Fatalf("inbound Terminal event = %#v, %v", event, err)
+	}
+}
+
 func TestSessionClassifiesDurableInstanceTerminalEnvelope(t *testing.T) {
 	session := negotiatedSession(t)
 	if _, err := session.Accept(registrationFrame("runner-1", "connection-1", 1)); err != nil {
@@ -206,6 +295,7 @@ func negotiatedRelaySession(t *testing.T) *Session {
 		EnabledFeatures: []runnerv1.RunnerFeature{
 			runnerv1.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
 			runnerv1.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING,
+			runnerv1.RunnerFeature_RUNNER_FEATURE_PTY,
 			runnerv1.RunnerFeature_RUNNER_FEATURE_FILE_STREAMING,
 		},
 		HeartbeatInterval: 10 * time.Second,

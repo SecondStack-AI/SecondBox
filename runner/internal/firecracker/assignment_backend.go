@@ -334,6 +334,15 @@ func (b *AssignmentBackend) ValidateAssignment(
 	if strings.TrimSpace(assignment.WorkspaceId) == "" {
 		return fmt.Errorf("SecondBox Firecracker assignment Workspace identity is required")
 	}
+	b.mu.Lock()
+	active, alreadyActive := b.assignments[assignment.Fence.AssignmentId]
+	b.mu.Unlock()
+	if alreadyActive {
+		if sameAssignmentFence(active.fence, assignment.Fence) {
+			return nil
+		}
+		return fmt.Errorf("SecondBox Firecracker assignment ID was reused with different fencing")
+	}
 	const mib = uint64(1 << 20)
 	requirements := assignment.Requirements
 	if requirements.MemoryBytes%mib != 0 || requirements.DiskBytes%mib != 0 {
@@ -351,11 +360,15 @@ func (b *AssignmentBackend) ValidateAssignment(
 	}
 	supportedCapabilities := map[string]bool{
 		"cgroup":           true,
+		"cleanup":          true,
 		"evidence":         true,
 		"firecracker":      true,
 		"jailer":           true,
 		"kvm":              true,
+		"local-workspace":  true,
+		"network-policy":   true,
 		"signed-artifacts": true,
+		"storage":          true,
 		"tap":              true,
 		"vsock":            true,
 	}
@@ -591,7 +604,8 @@ func (b *AssignmentBackend) FenceAssignment(
 	b.mu.Unlock()
 	if !ok {
 		return runnercontrol.FenceEvidence{
-			Result: runnerprotocol.FenceResultKind_FENCE_RESULT_KIND_ALREADY_STOPPED,
+			Result:                    runnerprotocol.FenceResultKind_FENCE_RESULT_KIND_ALREADY_STOPPED,
+			TerminationEvidenceDigest: fenceTerminationEvidenceDigest(command.Fence),
 		}, nil
 	}
 	if !sameAssignmentFence(active.fence, command.Fence) {
@@ -609,15 +623,19 @@ func (b *AssignmentBackend) FenceAssignment(
 			err,
 		)
 	}
-	digest := sha256.Sum256([]byte(
-		command.Fence.AssignmentId + "\x00" +
-			command.Fence.InstanceId + "\x00" +
-			fmt.Sprintf("%d", command.Fence.SandboxGeneration),
-	))
 	return runnercontrol.FenceEvidence{
 		Result:                    runnerprotocol.FenceResultKind_FENCE_RESULT_KIND_STOPPED,
-		TerminationEvidenceDigest: "sha256:" + hex.EncodeToString(digest[:]),
+		TerminationEvidenceDigest: fenceTerminationEvidenceDigest(command.Fence),
 	}, nil
+}
+
+func fenceTerminationEvidenceDigest(fence *runnerprotocol.AssignmentFence) string {
+	digest := sha256.Sum256([]byte(
+		fence.AssignmentId + "\x00" +
+			fence.InstanceId + "\x00" +
+			fmt.Sprintf("%d", fence.SandboxGeneration),
+	))
+	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
 func (b *AssignmentBackend) verifyAssignmentAsset(assignment *runnerprotocol.AssignmentCommand) error {

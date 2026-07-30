@@ -526,6 +526,7 @@ type relayFakeRunner struct {
 	mkdirRecursive  *bool
 	removeRecursive *bool
 	removeForce     *bool
+	readMaximumSize uint64
 	execOpen        *runnerv1.ExecOpen
 	workspaceFiles  map[string][]byte
 	directories     map[string]bool
@@ -646,7 +647,12 @@ func (fake *relayFakeRunner) handle(ctx context.Context, message *runnerv1.Contr
 	if open := frame.GetOpen(); open != nil {
 		fake.files[frame.OperationId] = &fakeFileOperation{frame: frame, open: open}
 		switch open.Operation {
-		case runnerv1.FileOperation_FILE_OPERATION_WRITE, runnerv1.FileOperation_FILE_OPERATION_READ:
+		case runnerv1.FileOperation_FILE_OPERATION_WRITE:
+			return nil
+		case runnerv1.FileOperation_FILE_OPERATION_READ:
+			fake.mu.Lock()
+			fake.readMaximumSize = open.ExpectedSize
+			fake.mu.Unlock()
 			return nil
 		case runnerv1.FileOperation_FILE_OPERATION_MKDIR:
 			fake.mu.Lock()
@@ -854,6 +860,9 @@ func (fake *relayFakeRunner) assertObserved() error {
 	if fake.removeRecursive == nil || *fake.removeRecursive ||
 		fake.removeForce == nil || *fake.removeForce {
 		return fmt.Errorf("fake runner remove options = %v/%v", fake.removeRecursive, fake.removeForce)
+	}
+	if fake.readMaximumSize != 1<<30 {
+		return fmt.Errorf("fake runner read maximum size = %d", fake.readMaximumSize)
 	}
 	return nil
 }

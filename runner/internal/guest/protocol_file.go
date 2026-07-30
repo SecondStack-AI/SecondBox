@@ -238,6 +238,10 @@ func (c *protocolConnection) readProtocolFile(state *protocolFileState) {
 			}
 			offset += uint64(n)
 			credit -= uint64(n)
+			if offset == uint64(info.Size()) {
+				c.sendFileTerminalRecorded(state, guestv1.FileTerminalKind_FILE_TERMINAL_KIND_COMPLETED, "")
+				return
+			}
 		}
 		if readErr == io.EOF {
 			c.sendFileTerminalRecorded(state, guestv1.FileTerminalKind_FILE_TERMINAL_KIND_COMPLETED, "")

@@ -32,6 +32,7 @@ const (
 	EventEvidence         EventKind = "evidence"
 	EventLocalWorkspace   EventKind = "local_workspace"
 	EventExec             EventKind = "exec"
+	EventPty              EventKind = "pty"
 	EventFile             EventKind = "file"
 	EventPort             EventKind = "port"
 	EventInstanceTerminal EventKind = "instance_terminal"
@@ -123,7 +124,8 @@ func (session *Session) Accept(message *runnerv1.RunnerToControlPlane) (Event, e
 	if message.GetHello() != nil {
 		return Event{}, fmt.Errorf("%w: Hello may appear only once", ErrRunnerMessage)
 	}
-	if message.GetExec() != nil || message.GetFile() != nil || message.GetPort() != nil {
+	if message.GetExec() != nil || message.GetPty() != nil ||
+		message.GetFile() != nil || message.GetPort() != nil {
 		if !session.registered {
 			return Event{}, ErrRegistrationRequired
 		}
@@ -226,6 +228,21 @@ func (session *Session) acceptRunnerRelayFrame(
 		key = relayStreamKey("file", frame.Fence, frame.OperationId, frame.StreamId)
 		sequence = frame.Sequence
 		payload = frame
+	case message.GetPty() != nil:
+		frame := message.GetPty()
+		if !session.enabledFeatures[runnerv1.RunnerFeature_RUNNER_FEATURE_PTY] {
+			return Event{}, fmt.Errorf("%w: PTY feature was not negotiated", ErrRunnerMessage)
+		}
+		if frame.GetOutput() == nil && frame.GetTerminal() == nil {
+			return Event{}, fmt.Errorf("%w: runner PTY payload is not an output or terminal frame", ErrRunnerMessage)
+		}
+		if err := validateRelayIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
+			return Event{}, err
+		}
+		kind = EventPty
+		key = relayStreamKey("pty", frame.Fence, frame.OperationId, frame.StreamId)
+		sequence = frame.Sequence
+		payload = frame
 	case message.GetPort() != nil:
 		frame := message.GetPort()
 		if !session.enabledFeatures[runnerv1.RunnerFeature_RUNNER_FEATURE_PORT_PROXY] {
@@ -279,8 +296,9 @@ func (session *Session) ValidateOutboundRelayFrame(message *runnerv1.ControlPlan
 		if !session.enabledFeatures[runnerv1.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING] {
 			return fmt.Errorf("%w: Exec streaming feature was not negotiated", ErrRunnerMessage)
 		}
-		if frame.GetOpen() == nil && frame.GetCredit() == nil && frame.GetCancel() == nil {
-			return fmt.Errorf("%w: control-plane Exec payload is not an open, credit, or cancel frame", ErrRunnerMessage)
+		if frame.GetOpen() == nil && frame.GetInput() == nil &&
+			frame.GetCredit() == nil && frame.GetCancel() == nil {
+			return fmt.Errorf("%w: control-plane Exec payload is not open, input, credit, or cancel", ErrRunnerMessage)
 		}
 		if err := validateRelayIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
 			return err
@@ -300,6 +318,24 @@ func (session *Session) ValidateOutboundRelayFrame(message *runnerv1.ControlPlan
 			return err
 		}
 		key = relayStreamKey("file", frame.Fence, frame.OperationId, frame.StreamId)
+		sequence = frame.Sequence
+		payload = frame
+	case message.GetPty() != nil:
+		frame := message.GetPty()
+		if !session.enabledFeatures[runnerv1.RunnerFeature_RUNNER_FEATURE_PTY] {
+			return fmt.Errorf("%w: PTY feature was not negotiated", ErrRunnerMessage)
+		}
+		if frame.GetInput() == nil && frame.GetResize() == nil &&
+			frame.GetAttach() == nil && frame.GetDetach() == nil &&
+			frame.GetCredit() == nil {
+			return fmt.Errorf("%w: control-plane PTY payload is not input, resize, attach, detach, or credit", ErrRunnerMessage)
+		}
+		if err := validateRelayIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
+			return err
+		}
+		// A Terminal begins with an ExecOpen and continues with PTY frames; both
+		// use one operation sequence and therefore one connection-local key.
+		key = relayStreamKey("exec", frame.Fence, frame.OperationId, frame.StreamId)
 		sequence = frame.Sequence
 		payload = frame
 	case message.GetPort() != nil:

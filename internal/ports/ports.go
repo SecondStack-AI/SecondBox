@@ -27,6 +27,7 @@ var (
 	ErrWorkspaceHomeConflict   = errors.New("SecondBox Workspace home runner is immutable")
 	ErrGenerationFenced        = errors.New("SecondBox Sandbox generation is fenced")
 	ErrLeaseNotFound           = errors.New("SecondBox Lease not found")
+	ErrLeaseAlreadyActive      = errors.New("SecondBox Sandbox already has an active Lease")
 	ErrLeaseInactive           = errors.New("SecondBox Lease is not active")
 	ErrActivitySessionNotFound = errors.New("SecondBox activity session not found")
 	ErrSnapshotNotFound        = errors.New("SecondBox Snapshot not found")

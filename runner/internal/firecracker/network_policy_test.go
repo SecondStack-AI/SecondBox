@@ -38,7 +38,10 @@ func TestNFTablesNetworkPolicyEnforcerInstallsDefaultDenyAndExplicitAllows(t *te
 	var scripts []string
 	enforcer := &NFTablesNetworkPolicyEnforcer{
 		run: func(_ context.Context, name string, args []string, stdin string) ([]byte, error) {
-			if name != "/usr/sbin/nft" || len(args) != 1 || args[0] != "-f" {
+			if name != "/usr/sbin/nft" ||
+				len(args) != 2 ||
+				args[0] != "-f" ||
+				args[1] != "-" {
 				t.Fatalf("unexpected command: %s %v", name, args)
 			}
 			scripts = append(scripts, stdin)
@@ -66,9 +69,11 @@ func TestNFTablesNetworkPolicyEnforcerInstallsDefaultDenyAndExplicitAllows(t *te
 	}
 	script := scripts[0]
 	for _, required := range []string{
-		"table inet secondbox_fc_test_1",
-		`iifname "sbtap1" ip daddr 8.8.8.0/24 tcp dport 443 accept`,
-		`iifname "sbtap1" ip daddr 10.20.0.1 udp dport 53 accept`,
+		"table bridge secondbox_fc_test_1",
+		`iifname "sbtap1" arp daddr ip 10.20.0.1 accept`,
+		`oifname "sbtap1" arp saddr ip 10.20.0.1 accept`,
+		`iifname "sbtap1" ip daddr 8.8.8.0/24 tcp dport 443 ct mark set 0x53425801 accept`,
+		`iifname "sbtap1" ip daddr 10.20.0.1 udp dport 53 ct mark set 0x53425801 accept`,
 		`iifname "sbtap1" drop`,
 		`oifname "sbtap1" drop`,
 	} {
@@ -88,7 +93,10 @@ func TestNFTablesNetworkPolicyEnforcerInstallsDefaultDenyAndExplicitAllows(t *te
 	); err != nil {
 		t.Fatalf("observe DNS answer: %v", err)
 	}
-	if !strings.Contains(scripts[len(scripts)-1], `ip daddr 93.184.216.34 tcp dport 8443 accept`) {
+	if !strings.Contains(
+		scripts[len(scripts)-1],
+		`ip daddr 93.184.216.34 tcp dport 8443 ct mark set 0x53425801 accept`,
+	) {
 		t.Fatalf("observed DNS pin was not installed:\n%s", scripts[len(scripts)-1])
 	}
 }

@@ -1076,6 +1076,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusPreconditionFailed, "precondition_failed", "Resource revision changed", false
 	case errors.Is(err, ports.ErrGenerationFenced):
 		return http.StatusConflict, "generation_fenced", "Sandbox generation is fenced", false
+	case errors.Is(err, ports.ErrLeaseAlreadyActive):
+		return http.StatusConflict, "state_conflict", "Sandbox already has an active Lease", false
 	case errors.Is(err, ports.ErrLeaseInactive):
 		return http.StatusConflict, "lease_fenced", "Lease is inactive or missing", false
 	case errors.Is(err, runnercontrol.ErrTerminalAttached):

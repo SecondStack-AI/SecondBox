@@ -482,6 +482,9 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		HeartbeatTimeout:        broker.config.HeartbeatTimeout, Now: now.UTC(),
 	})
 	if err != nil {
+		if errors.Is(err, scheduler.ErrProfileRevisionMismatch) {
+			return ports.ErrRevisionConflict
+		}
 		return err
 	}
 	tag, err := broker.pool.Exec(ctx, `
@@ -556,21 +559,12 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 	err := broker.pool.QueryRow(ctx, `
 		SELECT sandbox.workspace_id,sandbox.generation,sandbox.profile_revision_id,
 		       revision.spec_json,workspace.mutation_id,
-		       COALESCE((
-		         SELECT operation.id FROM secondbox.operations AS operation
-		         WHERE operation.sandbox_id=sandbox.id
-		           AND operation.state IN ('pending','running')
-		         ORDER BY operation.created_at DESC,operation.id DESC LIMIT 1
-		       ),''),
-		       COALESCE((
-		         SELECT operation.request_id FROM secondbox.operations AS operation
-		         WHERE operation.sandbox_id=sandbox.id
-		           AND operation.state IN ('pending','running')
-		         ORDER BY operation.created_at DESC,operation.id DESC LIMIT 1
-		       ),'')
+		       COALESCE(operation.id,''),COALESCE(operation.request_id,'')
 		FROM secondbox.sandboxes AS sandbox
 		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
 		JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
+		LEFT JOIN secondbox.operations AS operation
+		  ON operation.id=workspace.mutation_operation_id
 		WHERE sandbox.id=$1 AND sandbox.reconcile_owner=$2`,
 		claim.SandboxID, claim.WorkerID,
 	).Scan(
@@ -585,6 +579,14 @@ func (broker *PostgresEffectBroker) loadStartPlan(
 	}
 	if err := json.Unmarshal(specJSON, &plan.spec); err != nil {
 		return startPlan{}, fmt.Errorf("SecondBox lifecycle start Profile decoding failed: %w", err)
+	}
+	if plan.operationID == "" {
+		plan.operationID = stableEffectID(
+			"automatic-start",
+			claim.SandboxID,
+			fmt.Sprintf("%d", plan.generation),
+		)
+		plan.requestID = "request-" + plan.operationID
 	}
 	return plan, nil
 }

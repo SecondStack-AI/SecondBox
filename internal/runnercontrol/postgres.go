@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -128,6 +129,118 @@ func (store *PostgresStateStore) OpenConnection(
 	return nil
 }
 
+// CloseConnection makes the currently active runner immediately unschedulable.
+func (store *PostgresStateStore) CloseConnection(
+	ctx context.Context,
+	runnerID string,
+	connectionID string,
+	now time.Time,
+) error {
+	if runnerID == "" || connectionID == "" {
+		return errors.New("SecondBox runner connection close requires runner and connection identifiers")
+	}
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("SecondBox runner connection close transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	now = now.UTC()
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.runner_connections
+		SET state='disconnected',disconnected_at=$3,last_seen_at=$3
+		WHERE id=$1 AND runner_id=$2 AND state='active'`,
+		connectionID, runnerID, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner connection close: %w", err)
+	}
+	var poolName string
+	err = tx.QueryRow(ctx, `
+		UPDATE secondbox.runners
+		SET state='offline',revision=revision+1,updated_at=$3
+		WHERE id=$1 AND active_connection_id=$2
+		RETURNING pool_name`,
+		runnerID, connectionID, now,
+	).Scan(&poolName)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("SecondBox runner offline transition: %w", err)
+	}
+	if err == nil {
+		if err := refreshReadyRunnerCount(ctx, tx, poolName, now); err != nil {
+			return err
+		}
+		if err := failDisconnectedRunnerDataPlaneSessions(
+			ctx,
+			tx,
+			runnerID,
+			now,
+		); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("SecondBox runner connection close commit: %w", err)
+	}
+	return nil
+}
+
+func failDisconnectedRunnerDataPlaneSessions(
+	ctx context.Context,
+	tx pgx.Tx,
+	runnerID string,
+	now time.Time,
+) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.activity_sessions AS activity
+		SET state='closed',closed_at=$2,last_activity_at=$2,updated_at=$2
+		FROM secondbox.data_plane_sessions AS session
+		WHERE activity.id=session.id
+		  AND session.runner_id=$1
+		  AND session.state IN ('pending','running','cancelling')
+		  AND activity.state='active'`,
+		runnerID,
+		now,
+	); err != nil {
+		return fmt.Errorf("SecondBox disconnected runner activity closure: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.port_sessions AS port
+		SET state='closed',closed_at=$2,updated_at=$2
+		FROM secondbox.data_plane_sessions AS session
+		WHERE port.data_plane_session_id=session.id
+		  AND session.runner_id=$1
+		  AND session.state IN ('pending','running','cancelling')
+		  AND port.state IN ('open','closing')`,
+		runnerID,
+		now,
+	); err != nil {
+		return fmt.Errorf("SecondBox disconnected runner PortSession closure: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.data_plane_sessions
+		SET state='failed',
+		    terminal_kind=CASE
+		      WHEN kind IN ('exec','terminal') THEN $2
+		      WHEN kind='port' THEN $3
+		      ELSE $4
+		    END,
+		    terminal_detail='Execution node connection was lost',
+		    infrastructure_failure_reason=$5,
+		    retryable=true,
+		    terminal_message='Execution node connection was lost',
+		    completed_at=$6,updated_at=$6,retain_until=GREATEST(retain_until,$6)
+		WHERE runner_id=$1 AND state IN ('pending','running','cancelling')`,
+		runnerID,
+		runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_INFRASTRUCTURE_FAILED.String(),
+		runnerv1.PortTerminalKind_PORT_TERMINAL_KIND_GUEST_UNAVAILABLE.String(),
+		runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_FAILED.String(),
+		runnerv1.InfrastructureFailureReason_INFRASTRUCTURE_FAILURE_REASON_EXECUTION_NODE.String(),
+		now,
+	); err != nil {
+		return fmt.Errorf("SecondBox disconnected runner data-plane failure: %w", err)
+	}
+	return nil
+}
+
 // RecordRegistration durably records schedulable capability evidence exactly once.
 func (store *PostgresStateStore) RecordRegistration(
 	ctx context.Context,
@@ -177,7 +290,7 @@ func (store *PostgresStateStore) RecordRegistration(
 	if err != nil {
 		return false, err
 	}
-	versionsJSON, err := json.Marshal([]uint32{registration.ProtocolVersion})
+	versionsJSON, err := publicProtocolVersionsJSON(registration.ProtocolVersion)
 	if err != nil {
 		return false, fmt.Errorf("SecondBox runner protocol versions encoding: %w", err)
 	}
@@ -247,10 +360,22 @@ func (store *PostgresStateStore) RecordRegistration(
 	if command.RowsAffected() != 1 {
 		return false, errors.New("SecondBox runner Registration connection is no longer active")
 	}
+	if err := refreshReadyRunnerCount(
+		ctx,
+		tx,
+		registration.RunnerPoolId,
+		now.UTC(),
+	); err != nil {
+		return false, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, fmt.Errorf("SecondBox runner Registration commit: %w", err)
 	}
 	return false, nil
+}
+
+func publicProtocolVersionsJSON(protocolVersion uint32) ([]byte, error) {
+	return json.Marshal([]string{strconv.FormatUint(uint64(protocolVersion), 10)})
 }
 
 // RecordHeartbeat persists current liveness, capacity, assignments, and drain state.
@@ -296,10 +421,47 @@ func (store *PostgresStateStore) RecordHeartbeat(
 	if command.RowsAffected() != 1 {
 		return false, errors.New("SecondBox runner Heartbeat connection is no longer active")
 	}
+	var poolName string
+	if err := tx.QueryRow(
+		ctx,
+		`SELECT pool_name FROM secondbox.runners WHERE id=$1`,
+		heartbeat.RunnerId,
+	).Scan(&poolName); err != nil {
+		return false, fmt.Errorf("SecondBox runner Heartbeat pool lookup: %w", err)
+	}
+	if err := refreshReadyRunnerCount(ctx, tx, poolName, now.UTC()); err != nil {
+		return false, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, fmt.Errorf("SecondBox runner Heartbeat commit: %w", err)
 	}
 	return false, nil
+}
+
+func refreshReadyRunnerCount(
+	ctx context.Context,
+	tx pgx.Tx,
+	poolName string,
+	now time.Time,
+) error {
+	command, err := tx.Exec(ctx, `
+		UPDATE secondbox.runner_pools AS pool
+		SET ready_runner_count=(
+			SELECT count(*)
+			FROM secondbox.runners AS runner
+			WHERE runner.pool_name=pool.name AND runner.state='ready'
+		),updated_at=$2
+		WHERE pool.name=$1`,
+		poolName,
+		now.UTC(),
+	)
+	if err != nil {
+		return fmt.Errorf("SecondBox RunnerPool ready count refresh: %w", err)
+	}
+	if command.RowsAffected() != 1 {
+		return errors.New("SecondBox RunnerPool ready count refresh found no pool")
+	}
+	return nil
 }
 
 // RecordEvent persists assignment, fencing, drain, or evidence results with fence validation.
@@ -467,6 +629,7 @@ func recordLocalWorkspaceResult(
 		if _, err := tx.Exec(ctx, `
 			UPDATE secondbox.sandboxes
 			SET state='stopped',lifecycle_intent_kind='',
+			    reconcile_owner='',reconcile_claim_expires_at=NULL,
 			    next_reconcile_at=CASE
 			      WHEN desired_state IN ('running','deleted') THEN $2::timestamptz
 			      ELSE NULL::timestamptz
@@ -503,6 +666,7 @@ func recordLocalWorkspaceResult(
 			UPDATE secondbox.sandboxes
 			SET state='failed',lifecycle_failure_class=$2,
 			    lifecycle_failure_message=$3,
+			    reconcile_owner='',reconcile_claim_expires_at=NULL,
 			    next_reconcile_at=CASE
 			      WHEN desired_state='deleted' THEN $4::timestamptz
 			      ELSE next_reconcile_at
@@ -922,7 +1086,7 @@ func recordLocalWorkspaceReconciliation(
 		FROM secondbox.sandboxes AS sandbox
 		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
 		WHERE workspace.home_runner_id=$1
-		  AND workspace.state<>'deleted'
+		  AND workspace.state NOT IN ('creating','deleted')
 		  AND sandbox.state<>'deleted'
 		ORDER BY sandbox.id`,
 		runnerID,
@@ -983,19 +1147,22 @@ func recordLocalWorkspaceReconciliation(
 			}
 			continue
 		}
-		var activeAssignment bool
+		var activeAssignmentState string
 		if err := tx.QueryRow(ctx, `
-			SELECT EXISTS (
-				SELECT 1 FROM secondbox.assignments
+			SELECT COALESCE((
+				SELECT state FROM secondbox.assignments
 				WHERE sandbox_id=$1 AND generation=$2 AND runner_id=$3
 				  AND state IN ('assigned','accepted','starting','ready','uncertain','fencing')
-			)`,
+				ORDER BY id
+				LIMIT 1
+			)::text,'')`,
 			locked.SandboxID,
 			locked.Generation,
 			runnerID,
-		).Scan(&activeAssignment); err != nil {
+		).Scan(&activeAssignmentState); err != nil {
 			return fmt.Errorf("SecondBox runner Workspace reconciliation Assignment lookup: %w", err)
 		}
+		activeAssignment := activeAssignmentState != ""
 		var restorePending bool
 		if err := tx.QueryRow(ctx, `
 			SELECT EXISTS (
@@ -1006,11 +1173,15 @@ func recordLocalWorkspaceReconciliation(
 		).Scan(&restorePending); err != nil {
 			return fmt.Errorf("SecondBox runner Workspace reconciliation restore lookup: %w", err)
 		}
+		writerMatches := item.ActiveWriter == activeAssignment ||
+			(activeAssignmentState == "uncertain" ||
+				activeAssignmentState == "fencing") &&
+				!item.ActiveWriter
 		if item.Generation != uint64(locked.Workspace.Generation) ||
 			item.LogicalCapacityBytes != uint64(locked.Workspace.LogicalCapacityBytes) ||
 			!item.Formatted ||
 			item.RestorePending != restorePending ||
-			item.ActiveWriter != activeAssignment {
+			!writerMatches {
 			if err := failReconciledWorkspace(
 				ctx,
 				tx,
@@ -2592,28 +2763,39 @@ func recordAssignmentEvent(
 		if err := lockAndValidateFence(ctx, tx, runnerID, ack.Fence); err != nil {
 			return err
 		}
+		state, err := assignmentEvidenceState(ctx, tx, ack.Fence.AssignmentId)
+		if err != nil {
+			return err
+		}
+		if ack.Decision == runnerv1.AssignmentDecision_ASSIGNMENT_DECISION_ACCEPTED &&
+			(state == "accepted" || state == "starting" || state == "ready") {
+			return nil
+		}
 		if err := validateAssignmentEvidenceState(
 			ctx, tx, ack.Fence.AssignmentId, "assigned",
 		); err != nil {
 			return err
 		}
-		state := "accepted"
+		nextState := "accepted"
 		failureClass := ""
 		if ack.Decision != runnerv1.AssignmentDecision_ASSIGNMENT_DECISION_ACCEPTED {
-			state = "failed"
+			nextState = "failed"
 			failureClass = assignmentDecisionFailureClass(ack.Decision)
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE secondbox.assignments
 			SET state=$2,failure_class=$3,revision=revision+1,updated_at=$4 WHERE id=$1`,
-			ack.Fence.AssignmentId, state, failureClass, now,
+			ack.Fence.AssignmentId, nextState, failureClass, now,
 		); err != nil {
 			return fmt.Errorf("SecondBox runner AssignmentAck update: %w", err)
 		}
-		if state == "failed" {
-			if err := releaseFailedStartMutation(ctx, tx, runnerID, ack.Fence, now); err != nil {
-				return err
-			}
+		if nextState == "failed" {
+			return acknowledgeAssignmentCommands(
+				ctx,
+				tx,
+				ack.Fence.AssignmentId,
+				now,
+			)
 		}
 	case message.GetAssignmentProgress() != nil:
 		progress := message.GetAssignmentProgress()
@@ -2622,6 +2804,13 @@ func recordAssignmentEvent(
 		}
 		if err := validateOperationCorrelation(runnerID, progress.Fence, progress.Correlation); err != nil {
 			return err
+		}
+		state, err := assignmentEvidenceState(ctx, tx, progress.Fence.AssignmentId)
+		if err != nil {
+			return err
+		}
+		if state == "ready" {
+			return nil
 		}
 		if err := validateAssignmentEvidenceState(
 			ctx, tx, progress.Fence.AssignmentId, "assigned", "accepted", "starting",
@@ -2643,6 +2832,33 @@ func recordAssignmentEvent(
 		if err := validateOperationCorrelation(runnerID, result.Fence, result.Correlation); err != nil {
 			return err
 		}
+		state, err := assignmentEvidenceState(ctx, tx, result.Fence.AssignmentId)
+		if err != nil {
+			return err
+		}
+		if state == "ready" {
+			if result.Terminal != runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY ||
+				result.BackendKind == "" || result.BackendReference == "" {
+				return ErrStaleAssignmentEvidence
+			}
+			var backendKind, backendReference string
+			if err := tx.QueryRow(ctx, `
+				SELECT backend_kind,backend_reference
+				FROM secondbox.assignments WHERE id=$1`,
+				result.Fence.AssignmentId,
+			).Scan(&backendKind, &backendReference); err != nil {
+				return fmt.Errorf("SecondBox runner ready AssignmentResult replay lookup: %w", err)
+			}
+			if backendKind != result.BackendKind || backendReference != result.BackendReference {
+				return errors.New("SecondBox runner ready AssignmentResult replay changed backend evidence")
+			}
+			return acknowledgeAssignmentCommands(
+				ctx,
+				tx,
+				result.Fence.AssignmentId,
+				now,
+			)
+		}
 		if err := validateAssignmentEvidenceState(
 			ctx, tx, result.Fence.AssignmentId, "assigned", "accepted", "starting",
 		); err != nil {
@@ -2662,7 +2878,8 @@ func recordAssignmentEvent(
 			}
 			if _, err := tx.Exec(ctx, `
 				UPDATE secondbox.instances
-				SET state='ready',guest_liveness='ready',ready_at=$2,updated_at=$2 WHERE id=$1`,
+				SET state='ready',guest_liveness='ready',ready_at=$2,
+				    guest_heartbeat_at=$2,updated_at=$2 WHERE id=$1`,
 				result.Fence.InstanceId, now,
 			); err != nil {
 				return fmt.Errorf("SecondBox runner ready Instance update: %w", err)
@@ -2687,7 +2904,12 @@ func recordAssignmentEvent(
 			if command.RowsAffected() != 1 {
 				return errors.New("SecondBox runner ready AssignmentResult lacks the durable Workspace start mutation")
 			}
-			return nil
+			return acknowledgeAssignmentCommands(
+				ctx,
+				tx,
+				result.Fence.AssignmentId,
+				now,
+			)
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE secondbox.assignments
@@ -2696,40 +2918,34 @@ func recordAssignmentEvent(
 		); err != nil {
 			return fmt.Errorf("SecondBox runner failed AssignmentResult update: %w", err)
 		}
-		if err := releaseFailedStartMutation(ctx, tx, runnerID, result.Fence, now); err != nil {
-			return err
-		}
+		return acknowledgeAssignmentCommands(
+			ctx,
+			tx,
+			result.Fence.AssignmentId,
+			now,
+		)
 	default:
 		return ErrRunnerMessage
 	}
 	return nil
 }
 
-func releaseFailedStartMutation(
+func acknowledgeAssignmentCommands(
 	ctx context.Context,
 	tx pgx.Tx,
-	runnerID string,
-	fence *runnerv1.AssignmentFence,
+	assignmentID string,
 	now time.Time,
 ) error {
-	tag, err := tx.Exec(ctx, `
-		UPDATE secondbox.workspaces AS workspace
-		SET mutation_kind='',mutation_id='',mutation_effect_id='',
-		    mutation_operation_id='',mutation_expected_generation=NULL,
-		    mutation_target_generation=NULL,mutation_state='',updated_at=$1
-		FROM secondbox.sandboxes AS sandbox
-		WHERE sandbox.id=$2 AND sandbox.workspace_id=workspace.id
-		  AND sandbox.current_instance_id=$3 AND sandbox.generation=$4
-		  AND workspace.home_runner_id=$5
-		  AND workspace.mutation_kind='start'
-		  AND workspace.mutation_expected_generation=$4`,
-		now, fence.SandboxId, fence.InstanceId, fence.SandboxGeneration, runnerID,
-	)
-	if err != nil {
-		return fmt.Errorf("SecondBox runner failed start Workspace mutation release: %w", err)
-	}
-	if tag.RowsAffected() != 1 {
-		return errors.New("SecondBox runner failed Assignment lacks the durable Workspace start mutation")
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.runner_commands
+		SET state='acknowledged',updated_at=$2
+		WHERE assignment_id=$1
+		  AND kind='assignment'
+		  AND state IN ('pending','delivering','delivered')`,
+		assignmentID,
+		now,
+	); err != nil {
+		return fmt.Errorf("SecondBox runner Assignment command acknowledgement: %w", err)
 	}
 	return nil
 }
@@ -2740,12 +2956,9 @@ func validateAssignmentEvidenceState(
 	assignmentID string,
 	allowed ...string,
 ) error {
-	var state string
-	if err := tx.QueryRow(ctx, `
-		SELECT state FROM secondbox.assignments WHERE id=$1 FOR UPDATE`,
-		assignmentID,
-	).Scan(&state); err != nil {
-		return fmt.Errorf("SecondBox runner Assignment state lookup: %w", err)
+	state, err := assignmentEvidenceState(ctx, tx, assignmentID)
+	if err != nil {
+		return err
 	}
 	for _, candidate := range allowed {
 		if state == candidate {
@@ -2753,6 +2966,21 @@ func validateAssignmentEvidenceState(
 		}
 	}
 	return ErrStaleAssignmentEvidence
+}
+
+func assignmentEvidenceState(
+	ctx context.Context,
+	tx pgx.Tx,
+	assignmentID string,
+) (string, error) {
+	var state string
+	if err := tx.QueryRow(ctx, `
+		SELECT state FROM secondbox.assignments WHERE id=$1 FOR UPDATE`,
+		assignmentID,
+	).Scan(&state); err != nil {
+		return "", fmt.Errorf("SecondBox runner Assignment state lookup: %w", err)
+	}
+	return state, nil
 }
 
 func recordFenceEvent(
@@ -2766,6 +2994,21 @@ func recordFenceEvent(
 		return ErrRunnerMessage
 	}
 	if err := lockAndValidateFence(ctx, tx, runnerID, result.Fence); err != nil {
+		if errors.Is(err, ErrStaleAssignmentEvidence) {
+			acknowledged, acknowledgeErr := acknowledgeRedundantFenceResult(
+				ctx,
+				tx,
+				runnerID,
+				result,
+				now,
+			)
+			if acknowledgeErr != nil {
+				return acknowledgeErr
+			}
+			if acknowledged {
+				return nil
+			}
+		}
 		return err
 	}
 	if err := validateOperationCorrelation(runnerID, result.Fence, result.Correlation); err != nil {
@@ -2876,9 +3119,25 @@ func recordFenceEvent(
 		return fmt.Errorf("SecondBox runner fenced activity session closure: %w", err)
 	}
 	if !hasStopAuthority {
+		if _, err := acknowledgeMatchingFenceCommand(
+			ctx,
+			tx,
+			runnerID,
+			result,
+			now,
+		); err != nil {
+			return err
+		}
 		return nil
 	}
 	localCommandID := stopEffectID + "-generation-advance"
+	// A runner can report both STOPPED and the deterministic ALREADY_STOPPED
+	// replay for the same fence. The stop effect remains queued while its
+	// generation-advance command is outstanding, so treat that command as the
+	// durable idempotency marker instead of acknowledging and reinserting it.
+	if stopCommandID == localCommandID {
+		return nil
+	}
 	localCommand := &runnerv1.LocalWorkspaceCommand{
 		MessageId: localCommandID, CommandVersion: 1,
 		Kind:        runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION,
@@ -2932,6 +3191,120 @@ func recordFenceEvent(
 		return fmt.Errorf("SecondBox runner stop generation-advance mutation update: %w", err)
 	}
 	return nil
+}
+
+func acknowledgeRedundantFenceResult(
+	ctx context.Context,
+	tx pgx.Tx,
+	runnerID string,
+	result *runnerv1.FenceResult,
+	now time.Time,
+) (bool, error) {
+	if result == nil || result.Fence == nil ||
+		(result.Result != runnerv1.FenceResultKind_FENCE_RESULT_KIND_STOPPED &&
+			result.Result != runnerv1.FenceResultKind_FENCE_RESULT_KIND_ALREADY_STOPPED) ||
+		result.TerminationEvidenceDigest == "" {
+		return false, nil
+	}
+	var (
+		storedSandboxID, storedInstanceID, storedRunnerID, state string
+		storedGeneration                                         int64
+		storedToken, releaseProofJSON                            []byte
+	)
+	if err := tx.QueryRow(ctx, `
+		SELECT sandbox_id,instance_id,runner_id,generation,fencing_token,state,
+		       release_proof_json
+		FROM secondbox.assignments WHERE id=$1 FOR UPDATE`,
+		result.Fence.AssignmentId,
+	).Scan(
+		&storedSandboxID,
+		&storedInstanceID,
+		&storedRunnerID,
+		&storedGeneration,
+		&storedToken,
+		&state,
+		&releaseProofJSON,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("SecondBox redundant FenceResult Assignment lookup: %w", err)
+	}
+	if storedSandboxID != result.Fence.SandboxId ||
+		storedInstanceID != result.Fence.InstanceId ||
+		storedRunnerID != runnerID ||
+		storedGeneration != int64(result.Fence.SandboxGeneration) ||
+		!bytes.Equal(storedToken, result.Fence.FencingToken) ||
+		(state != "fenced" && state != "released" && state != "failed_terminal") {
+		return false, nil
+	}
+	var proof map[string]string
+	if err := json.Unmarshal(releaseProofJSON, &proof); err != nil {
+		return false, fmt.Errorf("SecondBox redundant FenceResult proof decoding: %w", err)
+	}
+	if proof["terminationEvidenceDigest"] != result.TerminationEvidenceDigest {
+		return false, nil
+	}
+	return acknowledgeMatchingFenceCommand(ctx, tx, runnerID, result, now)
+}
+
+func acknowledgeMatchingFenceCommand(
+	ctx context.Context,
+	tx pgx.Tx,
+	runnerID string,
+	result *runnerv1.FenceResult,
+	now time.Time,
+) (bool, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT id,payload
+		FROM secondbox.runner_commands
+		WHERE runner_id=$1 AND assignment_id=$2 AND kind='fence'
+		  AND state IN ('pending','delivering','delivered')
+		FOR UPDATE`,
+		runnerID,
+		result.Fence.AssignmentId,
+	)
+	if err != nil {
+		return false, fmt.Errorf("SecondBox redundant Fence command lookup: %w", err)
+	}
+	var matchingCommandID string
+	for rows.Next() {
+		var commandID string
+		var payload []byte
+		if err := rows.Scan(&commandID, &payload); err != nil {
+			rows.Close()
+			return false, fmt.Errorf("SecondBox redundant Fence command scan: %w", err)
+		}
+		message := &runnerv1.ControlPlaneToRunner{}
+		if err := proto.Unmarshal(payload, message); err != nil {
+			rows.Close()
+			return false, fmt.Errorf("SecondBox redundant Fence command decoding: %w", err)
+		}
+		command := message.GetFence()
+		if command != nil &&
+			proto.Equal(command.Fence, result.Fence) &&
+			proto.Equal(command.Correlation, result.Correlation) {
+			matchingCommandID = commandID
+			break
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("SecondBox redundant Fence command iteration: %w", err)
+	}
+	if matchingCommandID == "" {
+		return false, nil
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.runner_commands
+		SET state='acknowledged',target_connection_id='',updated_at=$2
+		WHERE id=$1`,
+		matchingCommandID,
+		now,
+	); err != nil {
+		return false, fmt.Errorf("SecondBox redundant Fence command acknowledgement: %w", err)
+	}
+	return true, nil
 }
 
 func validateOperationCorrelation(

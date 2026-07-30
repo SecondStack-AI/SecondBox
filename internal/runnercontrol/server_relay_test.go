@@ -214,6 +214,10 @@ func (relayStateStore) OpenConnection(context.Context, RunnerIdentity, string, u
 	return nil
 }
 
+func (relayStateStore) CloseConnection(context.Context, string, string, time.Time) error {
+	return nil
+}
+
 func (relayStateStore) RecordRegistration(context.Context, *runnerv1.RunnerRegistration, time.Time) (bool, error) {
 	return true, nil
 }

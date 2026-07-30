@@ -57,6 +57,9 @@ func DecideRunnerLoss(state AssignmentState, now time.Time) Decision {
 
 // DecideAssignment classifies bounded retry, deadlines, and terminal failures.
 func DecideAssignment(state AssignmentState, now time.Time) Decision {
+	if state.State == "ready" {
+		return Decision{Action: ActionWait}
+	}
 	if state.State == "fencing" {
 		if state.Deadline.IsZero() || now.Before(state.Deadline) {
 			return Decision{Action: ActionWait}

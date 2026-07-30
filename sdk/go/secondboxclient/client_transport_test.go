@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -70,6 +71,35 @@ func TestSecondBoxClientSendsHandWrittenOperation(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("response status = %d, want 200", response.StatusCode)
 	}
+}
+
+func TestSecondBoxClientPreservesMultipartBoundary(t *testing.T) {
+	const contentType = "multipart/form-data; boundary=secondbox-boundary"
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Content-Type") != contentType {
+			t.Errorf("content type = %q, want %q", request.Header.Get("Content-Type"), contentType)
+		}
+		response.WriteHeader(http.StatusCreated)
+	}))
+	defer server.Close()
+
+	client, err := NewSecondBoxClient(server.URL, "test-token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, found := LookupOperation("uploadSandboxArtifact")
+	if !found {
+		t.Fatal("uploadSandboxArtifact operation is missing")
+	}
+	response, err := client.Do(t.Context(), metadata, RequestOptions{
+		PathParameters: map[string]string{"sandboxId": "sandbox-1"},
+		Body:           strings.NewReader("--secondbox-boundary--\r\n"),
+		ContentType:    contentType,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
 }
 
 func allSupportedOperationIDsForTest() []string {

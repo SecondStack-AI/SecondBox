@@ -245,9 +245,12 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 		}
 	}
 	if input.Kind == "file" && input.FileOpen != nil &&
-		input.FileOpen.Operation == runnerv1.FileOperation_FILE_OPERATION_READ &&
-		input.MaximumResponseBytes == 0 {
-		input.MaximumResponseBytes = policy.MaximumTransferBytes
+		input.FileOpen.Operation == runnerv1.FileOperation_FILE_OPERATION_READ {
+		if input.MaximumResponseBytes == 0 {
+			input.MaximumResponseBytes = policy.MaximumTransferBytes
+		}
+		input.FileOpen = proto.Clone(input.FileOpen).(*runnerv1.FileOpen)
+		input.FileOpen.ExpectedSize = uint64(input.MaximumResponseBytes)
 	}
 	if input.DeadlineAt.After(input.Now.Add(
 		time.Duration(policy.MaximumDeadlineMilliseconds) * time.Millisecond,
@@ -870,12 +873,19 @@ func lockDataPlaneAuthority(
 ) (DataPlaneSession, contracts.ExecutionPolicy, error) {
 	var session DataPlaneSession
 	var sandboxState, assignmentState string
+	var runnerConnected bool
 	var specJSON []byte
 	err := tx.QueryRow(ctx, `
 		SELECT sandbox.tenant_ref,sandbox.subject_ref,
 		       sandbox.profile_revision_id,sandbox.generation,sandbox.state,
 		       assignment.id,assignment.instance_id,assignment.runner_id,
-		       assignment.fencing_token,assignment.state,revision.spec_json
+		       assignment.fencing_token,assignment.state,revision.spec_json,
+		       EXISTS (
+		         SELECT 1
+		         FROM secondbox.runner_connections AS connection
+		         WHERE connection.runner_id=assignment.runner_id
+		           AND connection.state='active'
+		       )
 		FROM secondbox.sandboxes AS sandbox
 		JOIN secondbox.assignments AS assignment
 		  ON assignment.instance_id=sandbox.current_instance_id
@@ -889,7 +899,7 @@ func lockDataPlaneAuthority(
 		&session.TenantRef, &session.SubjectRef,
 		&session.ProfileRevisionID, &session.Generation, &sandboxState,
 		&session.AssignmentID, &session.InstanceID, &session.RunnerID,
-		&session.FencingToken, &assignmentState, &specJSON,
+		&session.FencingToken, &assignmentState, &specJSON, &runnerConnected,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrSandboxNotFound
@@ -900,7 +910,9 @@ func lockDataPlaneAuthority(
 	if session.Generation != input.Generation {
 		return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrGenerationFenced
 	}
-	if sandboxState != contracts.SandboxStateReady || assignmentState != "ready" {
+	if sandboxState != contracts.SandboxStateReady ||
+		assignmentState != "ready" ||
+		!runnerConnected {
 		return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrLifecycleUnavailable
 	}
 	if input.LeaseID != "" {
