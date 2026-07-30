@@ -975,7 +975,6 @@ func recordLocalGenerationAdvanceResult(
 	workspace := locked.Workspace
 	if workspace.HomeRunnerID != runnerID ||
 		workspace.State != "ready" ||
-		locked.SandboxState != "stopping" ||
 		effect.kind != "stop" ||
 		workspace.Mutation.Kind != "stop" ||
 		workspace.Mutation.ID != result.EffectId ||
@@ -984,18 +983,23 @@ func recordLocalGenerationAdvanceResult(
 		locked.Generation != workspace.Generation {
 		return errors.New("SecondBox runner generation-advance result conflicts with durable authority")
 	}
-	if effect.state == "runner_succeeded" || effect.state == "runner_failed" {
+	if effect.state == "runner_succeeded" {
 		return nil
 	}
-	if effect.state != "queued" || workspace.Mutation.State != "advancing" {
+	succeeded := result.Terminal ==
+		runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED
+	if effect.state == "runner_failed" && !succeeded {
+		return nil
+	}
+	if (effect.state != "queued" && effect.state != "runner_failed") ||
+		workspace.Mutation.State != "advancing" ||
+		(locked.SandboxState != "stopping" && locked.SandboxState != "failed") {
 		return errors.New("SecondBox runner generation-advance result is reordered")
 	}
 	evidenceJSON, err := localWorkspaceEvidence(result, false, true)
 	if err != nil {
 		return err
 	}
-	succeeded := result.Terminal ==
-		runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED
 	if succeeded {
 		if result.ReceiptRecordedAtUnixMs == 0 ||
 			result.PreviousGeneration != uint64(workspace.Generation) ||
@@ -1037,8 +1041,13 @@ func recordLocalGenerationAdvanceResult(
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.sandboxes
-		SET next_reconcile_at=$2,updated_at=$2 WHERE id=$1`,
-		result.SandboxId, now,
+		SET state=CASE WHEN $3 AND state='failed' THEN 'stopping' ELSE state END,
+		    lifecycle_failure_class=CASE WHEN $3 THEN '' ELSE lifecycle_failure_class END,
+		    lifecycle_failure_message=CASE WHEN $3 THEN '' ELSE lifecycle_failure_message END,
+		    next_reconcile_at=$2,reconcile_owner='',reconcile_claim_expires_at=NULL,
+		    revision=revision+1,updated_at=$2
+		WHERE id=$1`,
+		result.SandboxId, now, succeeded,
 	); err != nil {
 		return fmt.Errorf("SecondBox runner generation-advance reconciliation wake: %w", err)
 	}

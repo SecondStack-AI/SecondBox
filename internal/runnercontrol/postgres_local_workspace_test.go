@@ -1123,7 +1123,7 @@ func TestGenerationAdvanceReceiptRetainsStopMutationUntilDatabaseCommit(t *testi
 	); err != nil {
 		t.Fatal(err)
 	}
-	recordLocalWorkspaceTestResult(t, store, &runnerv1.LocalWorkspaceResult{
+	result := &runnerv1.LocalWorkspaceResult{
 		CommandVersion: 1,
 		Kind:           runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION,
 		Terminal:       runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED,
@@ -1131,7 +1131,8 @@ func TestGenerationAdvanceReceiptRetainsStopMutationUntilDatabaseCommit(t *testi
 		SandboxId: "sandbox-stop", WorkspaceId: "workspace-stop",
 		PreviousGeneration: 3, Generation: 4, LogicalCapacityBytes: 8 << 30,
 		ReceiptRecordedAtUnixMs: uint64(now.Add(time.Second).UnixMilli()),
-	}, now.Add(time.Second))
+	}
+	recordLocalWorkspaceTestResult(t, store, result, now.Add(time.Second))
 	var workspaceGeneration int64
 	var mutationState, effectState, commandState string
 	if err := store.pool.QueryRow(t.Context(), `
@@ -1152,6 +1153,48 @@ func TestGenerationAdvanceReceiptRetainsStopMutationUntilDatabaseCommit(t *testi
 			workspaceGeneration, mutationState, effectState, commandState,
 		)
 	}
+	if _, err := store.pool.Exec(t.Context(), `
+		UPDATE secondbox.workspaces SET mutation_state='advancing'
+		WHERE id='workspace-stop';
+		UPDATE secondbox.lifecycle_effects
+		SET state='runner_failed',failure_class='stop_retry_exhausted',
+		    failure_message='delivery deadline expired'
+		WHERE id='effect-stop';
+		UPDATE secondbox.runner_commands SET state='delivered'
+		WHERE id='command-advance';
+		UPDATE secondbox.sandboxes
+		SET state='failed',lifecycle_failure_class='internal',
+		    lifecycle_failure_message='stop effect failed',next_reconcile_at=NULL
+		WHERE id='sandbox-stop'`,
+		pgx.QueryExecModeSimpleProtocol,
+	); err != nil {
+		t.Fatal(err)
+	}
+	recordLocalWorkspaceTestResult(t, store, result, now.Add(2*time.Second))
+	var sandboxState, failureClass, failureMessage string
+	if err := store.pool.QueryRow(t.Context(), `
+		SELECT workspace.mutation_state,effect.state,sandbox.state,
+		       sandbox.lifecycle_failure_class,sandbox.lifecycle_failure_message
+		FROM secondbox.workspaces AS workspace
+		JOIN secondbox.lifecycle_effects AS effect ON effect.id=workspace.mutation_effect_id
+		JOIN secondbox.sandboxes AS sandbox ON sandbox.workspace_id=workspace.id
+		WHERE workspace.id='workspace-stop'`,
+	).Scan(
+		&mutationState, &effectState, &sandboxState, &failureClass, &failureMessage,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if mutationState != "runner_succeeded" ||
+		effectState != "runner_succeeded" ||
+		sandboxState != "stopping" ||
+		failureClass != "" ||
+		failureMessage != "" {
+		t.Fatalf(
+			"late generation receipt mutation=%q effect=%q Sandbox=%q failure=%q/%q",
+			mutationState, effectState, sandboxState, failureClass, failureMessage,
+		)
+	}
+	recordLocalWorkspaceTestResult(t, store, result, now.Add(3*time.Second))
 }
 
 func TestWorkspaceCreateReceiptHandsRunningSandboxDirectlyToStartMutation(t *testing.T) {
