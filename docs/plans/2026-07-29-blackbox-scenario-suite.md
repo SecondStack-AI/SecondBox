@@ -1,7 +1,7 @@
 ---
 title: External Blackbox Scenario Suite
 date: 2026-07-29
-status: proposed
+status: completed
 owner: SecondStack
 provenance: SecondBox test-coverage gap analysis, 2026-07-29
 ---
@@ -164,4 +164,4 @@ Make the suite reproducible by an operator who has never run it, and give it a p
 - [x] Record expected wall-clock duration and the guest boot budget in the operations document so a regression in boot time is visible as a timing change rather than an opaque timeout.
 - [x] Update `AGENTS.md` to list `just test-scenario` among the suites to run before handoff when a change touches the runner protocol, lifecycle reconciliation, or workspace durability.
 - [x] Update `README.md` alongside the existing `just test-firecracker` guidance to describe the scenario gate and its host requirements.
-- [ ] Run `just verify-generated`, `just test`, `just test-contract`, `just test-compose`, `just test-deployment`, `just preship`, and `git diff --check` from a clean checkout, then `just test-scenario` on a qualified host.
+- [x] Run `just verify-generated`, `just test`, `just test-contract`, `just test-compose`, `just test-deployment`, `just preship`, and `git diff --check` from a clean checkout, then `just test-scenario` on a qualified host.
