@@ -172,12 +172,14 @@ func runOperationalCommand(
 	}
 	if args[0] == "exec" && !isExecSubcommand(args) {
 		return true, runExecCommand(ctx, session, args[1:], execCommandEnvironment{
-			stdout: output, stderr: os.Stderr, httpClient: http.DefaultClient,
+			stdin: os.Stdin, stdout: output, stderr: os.Stderr,
+			httpClient: http.DefaultClient,
 		})
 	}
 	if args[0] == "run" {
 		return true, runRunCommand(ctx, session, args[1:], execCommandEnvironment{
-			stdout: output, stderr: os.Stderr, httpClient: http.DefaultClient,
+			stdin: os.Stdin, stdout: output, stderr: os.Stderr,
+			httpClient: http.DefaultClient,
 		})
 	}
 	if args[0] == "shell" && !isShellSubcommand(args) {

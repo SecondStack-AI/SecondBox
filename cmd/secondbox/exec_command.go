@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -31,10 +32,35 @@ func (failure *commandExitError) Error() string {
 	return fmt.Sprintf("SecondBox remote command exited with status %d", failure.code)
 }
 
+// maximumExecStdinBytes is the largest standard input the buffered exec schema
+// accepts: its base64 bound of 1398104 characters encodes exactly one mebibyte.
+const maximumExecStdinBytes = 1 << 20
+
 type execCommandEnvironment struct {
+	stdin      io.Reader
 	stdout     io.Writer
 	stderr     io.Writer
 	httpClient *http.Client
+}
+
+// readExecStdin buffers standard input for one bounded buffered command, and
+// refuses rather than truncating when it does not fit.
+func readExecStdin(command string, input io.Reader) (*string, error) {
+	if input == nil {
+		return nil, fmt.Errorf("SecondBox CLI %s --stdin has no input to read", command)
+	}
+	content, err := io.ReadAll(io.LimitReader(input, maximumExecStdinBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox CLI %s read standard input: %w", command, err)
+	}
+	if len(content) > maximumExecStdinBytes {
+		return nil, fmt.Errorf(
+			"SecondBox CLI %s --stdin must not exceed %d bytes; use exec stream for more",
+			command, maximumExecStdinBytes,
+		)
+	}
+	encoded := base64.StdEncoding.EncodeToString(content)
+	return &encoded, nil
 }
 
 func runExecCommand(
@@ -59,6 +85,7 @@ func runExecCommand(
 	)
 	leaseID := flags.String("lease", "", "optional Lease ID")
 	idempotencyKey := flags.String("idempotency-key", "", "optional request idempotency key")
+	forwardStdin := flags.Bool("stdin", false, "send standard input to the command")
 	emitJSON := flags.Bool("json", false, "write the raw ExecOutcome JSON instead of the output")
 	if err := flags.Parse(rest); err != nil {
 		return fmt.Errorf("SecondBox CLI parse exec options: %w", err)
@@ -102,6 +129,13 @@ func runExecCommand(
 	if *cwd != "" {
 		workspacePath := secondboxclient.WorkspacePath(*cwd)
 		request.Cwd = &workspacePath
+	}
+	if *forwardStdin {
+		stdin, err := readExecStdin("exec", environment.stdin)
+		if err != nil {
+			return err
+		}
+		request.StdinBase64 = stdin
 	}
 	outcome, err := handle.Execute(ctx, request, *idempotencyKey, *leaseID)
 	if err != nil {

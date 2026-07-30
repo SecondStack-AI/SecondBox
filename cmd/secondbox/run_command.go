@@ -43,6 +43,7 @@ func runRunCommand(
 	readyTimeout := flags.Duration(
 		"ready-timeout", defaultRunReadyTimeout, "time allowed for the Sandbox to become ready",
 	)
+	forwardStdin := flags.Bool("stdin", false, "send standard input to the command")
 	emitJSON := flags.Bool("json", false, "write the raw ExecOutcome JSON instead of the output")
 	if err := flags.Parse(rest); err != nil {
 		return fmt.Errorf("SecondBox CLI parse run options: %w", err)
@@ -100,6 +101,15 @@ func runRunCommand(
 	if *cwd != "" {
 		workspacePath := secondboxclient.WorkspacePath(*cwd)
 		request.Cwd = &workspacePath
+	}
+	// Read standard input before creating anything, so an oversized input fails
+	// without leaving a Sandbox behind.
+	if *forwardStdin {
+		stdin, err := readExecStdin("run", environment.stdin)
+		if err != nil {
+			return err
+		}
+		request.StdinBase64 = stdin
 	}
 	// The SDK requires a deadline covering both becoming ready and running.
 	runContext, cancel := context.WithTimeout(ctx, *readyTimeout+*deadline)

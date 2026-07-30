@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -297,5 +298,48 @@ func TestSuppliedFlagRecognisesEveryForm(t *testing.T) {
 		if got := suppliedFlag(test.args, test.name); got != test.want {
 			t.Errorf("suppliedFlag(%v, %q) = %v; want %v", test.args, test.name, got, test.want)
 		}
+	}
+}
+
+func TestRunForwardsStandardInput(t *testing.T) {
+	recorder := newRunTestServer(t, exitedOutcomeJSON(0, "", ""))
+	var stdout, stderr bytes.Buffer
+	err := runRunCommand(
+		context.Background(),
+		execTestSession(recorder.server.URL),
+		[]string{"coding-environment", "--stdin", "--", "cat"},
+		execCommandEnvironment{
+			stdin:  strings.NewReader("piped\n"),
+			stdout: &stdout, stderr: &stderr, httpClient: recorder.server.Client(),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recorder.exec.StdinBase64 == nil ||
+		*recorder.exec.StdinBase64 != base64.StdEncoding.EncodeToString([]byte("piped\n")) {
+		t.Errorf("stdinBase64 = %v; want the piped bytes", recorder.exec.StdinBase64)
+	}
+}
+
+// TestRunRefusesOversizedStdinBeforeCreating proves an input that cannot be sent
+// fails before a Sandbox exists, rather than leaving one behind.
+func TestRunRefusesOversizedStdinBeforeCreating(t *testing.T) {
+	recorder := newRunTestServer(t, exitedOutcomeJSON(0, "", ""))
+	var stdout, stderr bytes.Buffer
+	err := runRunCommand(
+		context.Background(),
+		execTestSession(recorder.server.URL),
+		[]string{"coding-environment", "--stdin", "--", "cat"},
+		execCommandEnvironment{
+			stdin:  strings.NewReader(strings.Repeat("x", maximumExecStdinBytes+1)),
+			stdout: &stdout, stderr: &stderr, httpClient: recorder.server.Client(),
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "must not exceed") {
+		t.Fatalf("error = %v; want an oversized-input rejection", err)
+	}
+	if recorder.joinedRequests() != "" {
+		t.Errorf("requests = %s; want nothing created", recorder.joinedRequests())
 	}
 }

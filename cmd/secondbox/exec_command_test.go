@@ -380,3 +380,95 @@ func TestRunOperationalCommandLeavesExecSubcommands(t *testing.T) {
 		t.Errorf("resolveCommand(exec cancel) = %q, %v", operation, err)
 	}
 }
+
+func TestExecForwardsStandardInput(t *testing.T) {
+	recorder := newExecTestServer(t, exitedOutcomeJSON(0, "", ""))
+	var stdout, stderr bytes.Buffer
+	err := runExecCommand(
+		context.Background(),
+		execTestSession(recorder.server.URL),
+		[]string{"sbx_test1", "--stdin", "--", "cat"},
+		execCommandEnvironment{
+			stdin:  strings.NewReader("piped input\n"),
+			stdout: &stdout, stderr: &stderr, httpClient: recorder.server.Client(),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recorder.request.StdinBase64 == nil {
+		t.Fatal("stdinBase64 must be sent when --stdin is given")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(*recorder.request.StdinBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(decoded) != "piped input\n" {
+		t.Errorf("stdin = %q; want the piped bytes", decoded)
+	}
+}
+
+func TestExecOmitsStandardInputByDefault(t *testing.T) {
+	recorder := newExecTestServer(t, exitedOutcomeJSON(0, "", ""))
+	var stdout, stderr bytes.Buffer
+	err := runExecCommand(
+		context.Background(),
+		execTestSession(recorder.server.URL),
+		[]string{"sbx_test1", "--", "true"},
+		execCommandEnvironment{
+			stdin:  strings.NewReader("ignored"),
+			stdout: &stdout, stderr: &stderr, httpClient: recorder.server.Client(),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recorder.request.StdinBase64 != nil {
+		t.Errorf("stdinBase64 = %v; want none without --stdin", *recorder.request.StdinBase64)
+	}
+}
+
+// TestExecRefusesOversizedStandardInput proves the bounded buffered route
+// refuses rather than silently truncating the caller's input.
+func TestExecRefusesOversizedStandardInput(t *testing.T) {
+	recorder := newExecTestServer(t, exitedOutcomeJSON(0, "", ""))
+	var stdout, stderr bytes.Buffer
+	err := runExecCommand(
+		context.Background(),
+		execTestSession(recorder.server.URL),
+		[]string{"sbx_test1", "--stdin", "--", "cat"},
+		execCommandEnvironment{
+			stdin:  strings.NewReader(strings.Repeat("x", maximumExecStdinBytes+1)),
+			stdout: &stdout, stderr: &stderr, httpClient: recorder.server.Client(),
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "must not exceed") {
+		t.Fatalf("error = %v; want an oversized-input rejection", err)
+	}
+	if !strings.Contains(err.Error(), "exec stream") {
+		t.Errorf("error = %v; want it to name the unbounded alternative", err)
+	}
+}
+
+// TestExecAcceptsStandardInputAtTheBound proves the limit matches the schema's
+// base64 bound exactly rather than being conservative by an unstated margin.
+func TestExecAcceptsStandardInputAtTheBound(t *testing.T) {
+	recorder := newExecTestServer(t, exitedOutcomeJSON(0, "", ""))
+	var stdout, stderr bytes.Buffer
+	err := runExecCommand(
+		context.Background(),
+		execTestSession(recorder.server.URL),
+		[]string{"sbx_test1", "--stdin", "--", "cat"},
+		execCommandEnvironment{
+			stdin:  strings.NewReader(strings.Repeat("x", maximumExecStdinBytes)),
+			stdout: &stdout, stderr: &stderr, httpClient: recorder.server.Client(),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(*recorder.request.StdinBase64) != 1398104 {
+		t.Errorf("encoded length = %d; want the schema bound 1398104",
+			len(*recorder.request.StdinBase64))
+	}
+}
