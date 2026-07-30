@@ -17,6 +17,8 @@ secondbox logs follow \
 
 These local commands do not require or transmit API credentials. The path must be an absolute regular file; symbolic links are rejected initially and after replacement. Following survives ordinary regular-file truncation and replacement and ends when the CLI process is interrupted.
 
+The credentialed commands below show fully explicit flags. Each of `--url`, `--token`, `--tenant-ref`, and `--subject-ref` may instead come from the environment or from stored configuration; see [SDK, CLI, and Flue quick starts](sdk-cli-and-flue.md).
+
 ## Signals
 
 - `GET /healthz` reports only that the HTTP process can answer.

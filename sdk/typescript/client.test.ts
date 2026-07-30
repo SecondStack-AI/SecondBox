@@ -3,11 +3,14 @@ import test from "node:test";
 
 import {
   OperationFailedError,
+  PortTunnel,
   SandboxHandle,
   SecondBox,
   SecondBoxProblemError,
   type ExecStreamConnection,
   type ExecStreamConnector,
+  type PortTunnelConnection,
+  type PortTunnelConnector,
   type Sandbox,
   type TerminalConnection,
   type TerminalConnector,
@@ -376,6 +379,181 @@ test("SandboxHandle gets and cancels one stable Terminal session", async () => {
   assert.equal(requests[1]?.method, "DELETE");
   assert.equal(requests[0]?.headers.get("SecondBox-Generation"), "7");
   assert.equal(requests[1]?.headers.get("Idempotency-Key"), "cancel-terminal-1");
+});
+
+test("SandboxHandle creates, gets, and closes one authenticated PortSession", async () => {
+  const requests: Request[] = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request);
+    if (request.method === "DELETE") return new Response(null, { status: 204 });
+    return Response.json({
+      id: "port-1",
+      sandboxId: "sandbox-1",
+      generation: 7,
+      name: "ssh",
+      protocol: "tcp",
+      endpoint: "wss://secondbox.example/v1/port-sessions/port-1#credential",
+      state: "open",
+      createdAt: "2026-07-28T00:00:00Z",
+      expiresAt: "2026-07-28T00:01:00Z",
+    });
+  };
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
+  const handle = new SandboxHandle(api, sandbox("ready"), "lease-1");
+
+  const created = await handle.createPortSession(
+    { name: "ssh", durationSeconds: 60 },
+    "create-port-1",
+  );
+  const current = await handle.getPortSession("port-1");
+  await handle.closePortSession("port-1", "close-port-1");
+
+  assert.equal(created.name, "ssh");
+  assert.equal(current.id, "port-1");
+  assert.equal(requests[0]?.method, "POST");
+  assert.deepEqual(await requests[0]?.json(), { name: "ssh", durationSeconds: 60 });
+  assert.equal(requests[0]?.headers.get("SecondBox-Generation"), "7");
+  assert.equal(requests[0]?.headers.get("SecondBox-Lease-ID"), "lease-1");
+  assert.equal(requests[0]?.headers.get("Idempotency-Key"), "create-port-1");
+  assert.equal(requests[1]?.method, "GET");
+  assert.equal(requests[2]?.method, "DELETE");
+  assert.equal(requests[2]?.headers.get("Idempotency-Key"), "close-port-1");
+});
+
+test("SandboxHandle acquires and API renews and releases a generation Lease", async () => {
+  const requests: Request[] = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request);
+    return Response.json({
+      id: "lease-1",
+      sandboxId: "sandbox-1",
+      generation: 7,
+      state: request.method === "DELETE" ? "released" : "active",
+      expiresAt: "2026-07-28T00:01:00Z",
+      createdAt: "2026-07-28T00:00:00Z",
+      updatedAt: "2026-07-28T00:00:00Z",
+    });
+  };
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
+  const handle = new SandboxHandle(api, sandbox("ready"));
+
+  const acquired = await handle.acquireLease(60, "acquire-lease-1");
+  const current = await api.getLease("lease-1");
+  const renewed = await api.renewLease("lease-1", 90, "renew-lease-1");
+  const released = await api.releaseLease("lease-1", "release-lease-1");
+
+  assert.equal(acquired.id, "lease-1");
+  assert.equal(current.state, "active");
+  assert.equal(renewed.state, "active");
+  assert.equal(released.state, "released");
+  assert.equal(requests[0]?.method, "POST");
+  assert.equal(requests[0]?.headers.get("SecondBox-Generation"), "7");
+  assert.equal(requests[0]?.headers.get("Idempotency-Key"), "acquire-lease-1");
+  assert.deepEqual(await requests[0]?.json(), { durationSeconds: 60 });
+  assert.equal(requests[1]?.method, "GET");
+  assert.equal(requests[2]?.method, "POST");
+  assert.equal(requests[2]?.headers.get("Idempotency-Key"), "renew-lease-1");
+  assert.deepEqual(await requests[2]?.json(), { durationSeconds: 90 });
+  assert.equal(requests[3]?.method, "DELETE");
+  assert.equal(requests[3]?.headers.get("Idempotency-Key"), "release-lease-1");
+});
+
+test("SandboxHandle attaches an authenticated binary Port tunnel", async () => {
+  const sent: Uint8Array[] = [];
+  const received = [new Uint8Array([4, 5, 6])];
+  let closed = false;
+  const connection: PortTunnelConnection = {
+    subprotocol: "secondbox.port.v1",
+    async sendBinary(payload) {
+      sent.push(payload);
+    },
+    async receiveBinary() {
+      const payload = received.shift();
+      if (payload === undefined) throw new Error("missing test Port tunnel frame");
+      return payload;
+    },
+    async close() {
+      closed = true;
+    },
+  };
+  let descriptor: Parameters<PortTunnelConnector["connect"]>[0] | undefined;
+  const connector: PortTunnelConnector = {
+    async connect(value) {
+      descriptor = value;
+      return connection;
+    },
+  };
+  const api = new SecondBox(
+    new SecondBoxClient("https://secondbox.example", "token", async () => Response.json({})),
+  );
+  const handle = new SandboxHandle(api, sandbox("ready"), "lease-1");
+  const tunnel = await handle.connectPortTunnel(
+    {
+      id: "port-1",
+      sandboxId: "sandbox-1",
+      generation: 7,
+      name: "ssh",
+      protocol: "tcp",
+      endpoint: "wss://secondbox.example/v1/port-sessions/port-1#single-use-token",
+      state: "open",
+      createdAt: "2026-07-28T00:00:00Z",
+      expiresAt: "2026-07-28T00:01:00Z",
+    },
+    connector,
+  );
+
+  assert(tunnel instanceof PortTunnel);
+  assert.deepEqual(descriptor, {
+    websocketURL: "wss://secondbox.example/v1/port-sessions/port-1",
+    subprotocols: [
+      "secondbox.port.v1",
+      "secondbox.port.token.single-use-token",
+    ],
+    sandboxID: "sandbox-1",
+    generation: 7,
+    expiresAt: "2026-07-28T00:01:00Z",
+  });
+  const outbound = new Uint8Array([1, 2, 3]);
+  await tunnel.send(outbound);
+  outbound.fill(0);
+  assert.deepEqual(sent, [new Uint8Array([1, 2, 3])]);
+  assert.deepEqual(await tunnel.receive(), new Uint8Array([4, 5, 6]));
+  await tunnel.close();
+  assert.equal(closed, true);
+});
+
+test("SandboxHandle rejects a PortSession without a single-use endpoint credential", async () => {
+  let connected = false;
+  const connector: PortTunnelConnector = {
+    async connect() {
+      connected = true;
+      throw new Error("connector must not run");
+    },
+  };
+  const api = new SecondBox(
+    new SecondBoxClient("https://secondbox.example", "token", async () => Response.json({})),
+  );
+  const handle = new SandboxHandle(api, sandbox("ready"), "lease-1");
+  await assert.rejects(
+    handle.connectPortTunnel(
+      {
+        id: "port-1",
+        sandboxId: "sandbox-1",
+        generation: 7,
+        name: "ssh",
+        protocol: "tcp",
+        endpoint: "wss://secondbox.example/v1/port-sessions/port-1",
+        state: "open",
+        createdAt: "2026-07-28T00:00:00Z",
+        expiresAt: "2026-07-28T00:01:00Z",
+      },
+      connector,
+    ),
+    /endpoint credential is invalid/,
+  );
+  assert.equal(connected, false);
 });
 
 function sandbox(state: Sandbox["state"]): Sandbox {

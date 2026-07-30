@@ -231,7 +231,11 @@ func (handle *SandboxHandle) lifecycle(
 	bodyValue any,
 ) (Operation, error) {
 	if options.IdempotencyKey == "" {
-		return Operation{}, fmt.Errorf("SecondBox %s idempotency key is required", operationID)
+		generated, err := NewIdempotencyKey()
+		if err != nil {
+			return Operation{}, err
+		}
+		options.IdempotencyKey = generated
 	}
 	if options.IfMatch == "" {
 		return Operation{}, fmt.Errorf("SecondBox %s If-Match value is required", operationID)
@@ -383,7 +387,11 @@ func (handle *SandboxHandle) dataPlaneJSON(
 	target any,
 ) error {
 	if idempotencyKey == "" {
-		return fmt.Errorf("SecondBox %s idempotency key is required", operationID)
+		generated, err := NewIdempotencyKey()
+		if err != nil {
+			return err
+		}
+		idempotencyKey = generated
 	}
 	body, err := json.Marshal(request)
 	if err != nil {

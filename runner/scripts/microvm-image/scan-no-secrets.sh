@@ -38,6 +38,8 @@ if command -v rg >/dev/null 2>&1; then
         -g '!**/node_modules/**'
         -g '!**/.cache/**'
         -g '!**/__pycache__/**'
+        -g '!**/opt/go/src/**/testdata/**'
+        -g '!**/opt/go/src/crypto/x509/platform_root_key.pem'
         -g '!*.map'
         -g '!*.so'
         -g '!*.so.*'
@@ -49,6 +51,8 @@ else
         --exclude-dir=node_modules
         --exclude-dir=.cache
         --exclude-dir=__pycache__
+        --exclude-dir=testdata
+        --exclude=platform_root_key.pem
         --exclude='*.map'
         --exclude='*.so'
         --exclude='*.so.*'

@@ -3,21 +3,71 @@ set -Eeuo pipefail
 umask 077
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+local_root="${SECONDBOX_STRESS_LOCAL_ROOT:-$repo_root/.secondbox/stress}"
 cd "$repo_root"
 
-if [[ "${SECONDBOX_REQUIRE_QUALIFIED_STRESS:-}" != "1" ]]; then
+export SECONDBOX_REQUIRE_QUALIFIED_STRESS="${SECONDBOX_REQUIRE_QUALIFIED_STRESS:-1}"
+if [[ "$SECONDBOX_REQUIRE_QUALIFIED_STRESS" != "1" ]]; then
   echo "SECONDBOX_REQUIRE_QUALIFIED_STRESS must be 1" >&2
   exit 1
 fi
-for variable in SECONDBOX_STRESS_CONFIG SECONDBOX_STRESS_OUTPUT; do
-  if [[ -z "${!variable:-}" ]]; then
-    echo "SecondBox stress qualification missing required variable: $variable" >&2
+
+uses_local_preparation=false
+uses_local_public_key=false
+if [[ -z "${SECONDBOX_STRESS_CONFIG:-}" ]]; then
+  export SECONDBOX_STRESS_CONFIG="$local_root/stress.json"
+  uses_local_preparation=true
+fi
+if [[ -z "${SECONDBOX_STRESS_OUTPUT:-}" ]]; then
+  export SECONDBOX_STRESS_OUTPUT="$local_root/results/stress-$(date -u +%Y%m%dT%H%M%SZ)-$$.json"
+  uses_local_preparation=true
+fi
+if [[ -z "${SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR:-}" ]]; then
+  export SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR="$local_root/artifacts"
+  uses_local_preparation=true
+fi
+if [[ -z "${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY:-}" ]]; then
+  export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY="$local_root/trust/manifest-public.pem"
+  uses_local_preparation=true
+  uses_local_public_key=true
+fi
+if [[ -z "${SECONDBOX_RUNNER_WORKSPACE_ROOT:-}" ]]; then
+  export SECONDBOX_RUNNER_WORKSPACE_ROOT="$local_root/workspaces"
+  uses_local_preparation=true
+fi
+
+if [[ "$uses_local_preparation" == "true" ]]; then
+  if [[ "$local_root" != /* || -L "$local_root" || ! -d "$local_root" ||
+        "$(realpath -e "$local_root")" != "$local_root" ]]; then
+    echo "SecondBox local stress state is not prepared; run: just prepare-stress" >&2
     exit 1
   fi
-done
-command -v jq >/dev/null 2>&1 ||
+fi
+
+for command in date jq openssl realpath sha256sum; do
+  command -v "$command" >/dev/null 2>&1 ||
   {
-    echo "SecondBox stress qualification prerequisite missing: jq" >&2
+    echo "SecondBox stress qualification prerequisite missing: $command" >&2
+    exit 1
+  }
+done
+
+if [[ -z "${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256:-}" &&
+      "$uses_local_public_key" == "true" ]]; then
+  fingerprint_file="$local_root/trust/manifest-public.sha256"
+  if [[ ! -f "$fingerprint_file" || -L "$fingerprint_file" ]]; then
+    echo "SecondBox stress trust fingerprint is missing; run: just prepare-stress" >&2
+    exit 1
+  fi
+  export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256
+  SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256="$(<"$fingerprint_file")"
+elif [[ -z "${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256:-}" ]]; then
+  echo "SecondBox stress qualification missing required variable: SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256" >&2
+  exit 1
+fi
+[[ "$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256" =~ ^[0-9a-f]{64}$ ]] ||
+  {
+    echo "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 must be 64 lowercase hex characters" >&2
     exit 1
   }
 
@@ -86,6 +136,10 @@ export SECONDBOX_SCENARIO_MAX_CONCURRENT_PER_SANDBOX
 SECONDBOX_SCENARIO_MAX_CONCURRENT_PER_SANDBOX="$(jq -er '.runner.maxConcurrentPerSandbox' "$SECONDBOX_STRESS_CONFIG")"
 export SECONDBOX_SCENARIO_MAX_CONCURRENT_GLOBAL
 SECONDBOX_SCENARIO_MAX_CONCURRENT_GLOBAL="$(jq -er '.runner.maxConcurrentGlobal' "$SECONDBOX_STRESS_CONFIG")"
+export SECONDBOX_SCENARIO_MAX_CONCURRENT_OPERATIONS_GLOBAL
+SECONDBOX_SCENARIO_MAX_CONCURRENT_OPERATIONS_GLOBAL="$(
+  jq -er '.runner.maxConcurrentOperationsGlobal' "$SECONDBOX_STRESS_CONFIG"
+)"
 export SECONDBOX_SCENARIO_FILE_TRANSFER_MAX_BYTES
 SECONDBOX_SCENARIO_FILE_TRANSFER_MAX_BYTES="$(jq -er '.runner.fileTransferMaxBytes' "$SECONDBOX_STRESS_CONFIG")"
 

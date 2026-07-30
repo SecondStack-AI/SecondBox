@@ -64,8 +64,41 @@ do
 done
 
 (cd "$dir" && sha256sum -c SHA256SUMS)
-"$script_dir/verify-browser-surface.sh" --rootfs "$dir/rootfs.ext4"
-"$script_dir/verify-browser-surface.sh" --shared "$dir/shared.img"
+openssl dgst -sha256 -verify "$pubkey" -signature "$dir/manifest.sig" "$dir/manifest.json" >/dev/null
+
+legacy_v1_contract=false
+if jq -e '.source | has("browserPolicy")' "$dir/rootfs-source-manifest.json" >/dev/null; then
+    browser_policy="$(jq -er '.source.browserPolicy | select(. == "allow" or . == "forbid")' "$dir/rootfs-source-manifest.json")"
+else
+    legacy_v1_policy_sha="46da289e29e1b51bac73d1619a7e2830d256b75a347533cde15bc38d36270e3f"
+    if ! jq -e \
+        --arg policySha "$legacy_v1_policy_sha" \
+        '
+          .schemaVersion == 1 and
+          .source.kind == "oci" and
+          (.source | has("browserPolicy") | not) and
+          (.source | has("ociMode") | not)
+        ' "$dir/rootfs-source-manifest.json" >/dev/null ||
+       ! jq -e \
+        --arg policySha "$legacy_v1_policy_sha" \
+        '
+          ([keys[]] | sort) ==
+            ["contract", "policySha256", "rootfsSha256", "schemaVersion", "state"] and
+          .schemaVersion == 1 and
+          .contract == "secondbox-guest-rootfs" and
+          .state == "verified" and
+          .policySha256 == $policySha
+        ' "$dir/secondbox-rootfs-contract.json" >/dev/null; then
+        echo "unsigned browser policy is permitted only for the known signed v1 OCI contract" >&2
+        exit 1
+    fi
+    legacy_v1_contract=true
+    browser_policy=forbid
+fi
+if [ "$browser_policy" = "forbid" ]; then
+    "$script_dir/verify-browser-surface.sh" --rootfs "$dir/rootfs.ext4"
+    "$script_dir/verify-browser-surface.sh" --shared "$dir/shared.img"
+fi
 
 for field in artifactVersion architecture guestProtocol runtimeBundle toolchainBundle rootfs kernel kernelProvenance rootfsSource rootfsContract shared createdAt; do
     if ! grep -q "\"$field\"" "$dir/manifest.json"; then
@@ -109,6 +142,33 @@ if ! grep -Eq '"state"[[:space:]]*:[[:space:]]*"verified"' "$dir/secondbox-rootf
     echo "SecondBox rootfs contract is not verified" >&2
     exit 1
 fi
+actual_rootfs_sha="$(sha256sum "$dir/rootfs.ext4" | awk '{print $1}')"
+contract_rootfs_sha="$(jq -er '.rootfsSha256 | select(test("^[0-9a-f]{64}$"))' "$dir/secondbox-rootfs-contract.json")"
+if [ "$contract_rootfs_sha" != "$actual_rootfs_sha" ]; then
+    echo "SecondBox rootfs contract digest differs from rootfs.ext4" >&2
+    exit 1
+fi
+if [ "$legacy_v1_contract" != "true" ]; then
+    contract_browser_policy="$(jq -er '.browserPolicy | select(. == "allow" or . == "forbid")' "$dir/secondbox-rootfs-contract.json")"
+    if [ "$contract_browser_policy" != "$browser_policy" ]; then
+        echo "SecondBox rootfs contract browser policy differs from signed source provenance" >&2
+        exit 1
+    fi
+    for policy_binding in \
+        "policySha256|rootfs/verify-secondbox-rootfs.sh" \
+        "secretScanPolicySha256|scan-no-secrets.sh" \
+        "browserSurfacePolicySha256|verify-browser-surface.sh"
+    do
+        field="${policy_binding%%|*}"
+        policy_path="${policy_binding#*|}"
+        expected_policy_sha="$(sha256sum "$script_dir/$policy_path" | awk '{print $1}')"
+        actual_policy_sha="$(jq -er --arg field "$field" '.[$field] | select(test("^[0-9a-f]{64}$"))' "$dir/secondbox-rootfs-contract.json")"
+        if [ "$actual_policy_sha" != "$expected_policy_sha" ]; then
+            echo "SecondBox rootfs contract $field differs from verifier policy" >&2
+            exit 1
+        fi
+    done
+fi
 for provenance_file in \
     rootfs-debian-packages.lock \
     rootfs-python.freeze \
@@ -126,5 +186,3 @@ if ! grep -q "$kernel_sha" "$dir/kernel-provenance.json"; then
     echo "kernel provenance does not describe kernel sha256" >&2
     exit 1
 fi
-
-openssl dgst -sha256 -verify "$pubkey" -signature "$dir/manifest.sig" "$dir/manifest.json" >/dev/null

@@ -45,6 +45,47 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 	server := contractServer(t, handler)
 	t.Cleanup(server.Close)
 
+	metadataUpdate := lifecycleHTTPRequest(
+		t, server.URL, credential, http.MethodPut,
+		"/v1/sandboxes/"+sandbox.ID+"/metadata", "",
+		strconv.FormatInt(sandbox.Revision, 10), "",
+		contracts.UpdateSandboxMetadataRequest{
+			Metadata: map[string]string{"runtime-container-id": "container-bound"},
+		},
+	)
+	if metadataUpdate.StatusCode != http.StatusOK {
+		t.Fatalf(
+			"metadata update status=%d body=%s",
+			metadataUpdate.StatusCode,
+			readResponse(t, metadataUpdate),
+		)
+	}
+	if metadataUpdate.Header.Get("ETag") != `"revision-`+strconv.FormatInt(sandbox.Revision+1, 10)+`"` {
+		t.Fatalf("metadata update ETag=%q", metadataUpdate.Header.Get("ETag"))
+	}
+	var metadataUpdatedSandbox contracts.Sandbox
+	decodeResponseJSON(t, metadataUpdate, &metadataUpdatedSandbox)
+	if metadataUpdatedSandbox.Metadata["runtime-container-id"] != "container-bound" {
+		t.Fatalf("metadata update returned %#v", metadataUpdatedSandbox.Metadata)
+	}
+	if metadataUpdatedSandbox.State != sandbox.State ||
+		metadataUpdatedSandbox.Generation != sandbox.Generation ||
+		metadataUpdatedSandbox.Revision != sandbox.Revision+1 {
+		t.Fatalf(
+			"metadata update changed lifecycle: before=%#v after=%#v",
+			sandbox,
+			metadataUpdatedSandbox,
+		)
+	}
+	staleMetadataUpdate := lifecycleHTTPRequest(
+		t, server.URL, credential, http.MethodPut,
+		"/v1/sandboxes/"+sandbox.ID+"/metadata", "",
+		strconv.FormatInt(sandbox.Revision, 10), "",
+		contracts.UpdateSandboxMetadataRequest{Metadata: map[string]string{}},
+	)
+	assertProblem(t, staleMetadataUpdate, http.StatusPreconditionFailed, "precondition_failed")
+	sandbox = metadataUpdatedSandbox
+
 	missingHeaders := lifecycleHTTPRequest(
 		t, server.URL, credential, http.MethodPost,
 		"/v1/sandboxes/"+sandbox.ID+":start", "", "", "", nil,

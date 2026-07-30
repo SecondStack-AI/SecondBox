@@ -2,13 +2,65 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
+
+func TestBufferedExecEnvironmentAcceptsAgentRuntimeStartupPrompt(t *testing.T) {
+	_, err := validateBufferedExecRequest(contracts.BufferedExecRequest{
+		Command: contracts.ExecCommand{Mode: "shell", Command: "true"},
+		Environment: map[string]string{
+			"SANDBOX_STARTUP_CLAUDE_MD": strings.Repeat("x", 10564),
+		},
+		DeadlineMilliseconds: 1,
+		MaximumOutputBytes:   1,
+	})
+	if err != nil {
+		t.Fatalf("validateBufferedExecRequest rejected Agent Runtime startup prompt: %v", err)
+	}
+}
+
+func TestBufferedExecEnvironmentErrorIdentifiesOnlyVariableShape(t *testing.T) {
+	_, err := validateBufferedExecRequest(contracts.BufferedExecRequest{
+		Command: contracts.ExecCommand{Mode: "shell", Command: "true"},
+		Environment: map[string]string{
+			"AGENT_RUNTIME_BUNDLE": strings.Repeat("x", 131073),
+		},
+		DeadlineMilliseconds: 1,
+		MaximumOutputBytes:   1,
+	})
+	if err == nil {
+		t.Fatal("validateBufferedExecRequest accepted an oversized environment value")
+	}
+	if !strings.Contains(err.Error(), `"AGENT_RUNTIME_BUNDLE"`) ||
+		!strings.Contains(err.Error(), "131073") ||
+		!strings.Contains(err.Error(), "131072") ||
+		strings.Contains(err.Error(), strings.Repeat("x", 16)) {
+		t.Fatalf("environment error = %q, want variable name and byte count without value", err)
+	}
+}
+
+func TestBufferedExecEnvironmentRejectsAggregateAboveOneMiB(t *testing.T) {
+	environment := make(map[string]string, 9)
+	for index := range 9 {
+		environment[fmt.Sprintf("VALUE_%d", index)] = strings.Repeat("x", 131072)
+	}
+	_, err := validateBufferedExecRequest(contracts.BufferedExecRequest{
+		Command:              contracts.ExecCommand{Mode: "shell", Command: "true"},
+		Environment:          environment,
+		DeadlineMilliseconds: 1,
+		MaximumOutputBytes:   1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "total") {
+		t.Fatalf("environment aggregate error = %v, want bounded total", err)
+	}
+}
 
 func TestExecOutcomeRejectsIncompleteTerminalEvidence(t *testing.T) {
 	tests := []runnercontrol.DataPlaneSession{

@@ -40,9 +40,9 @@ export SECONDBOX_RUNNER_CERTIFICATE_LIFETIME_DAYS=825
 deploy/bin/bootstrap-runner-trust.sh /var/lib/secondbox/runner-identity
 ```
 
-Each Runner connection requires TLS 1.3, a CA-signed certificate whose URI identifies the Runner, and `SECONDBOX_RUNNER_CREDENTIAL`. The HTTP API instead requires `SECONDBOX_PLATFORM_TOKEN`; these authorities are never interchangeable. Replacing either deployment-wide credential requires a coordinated restart of its consumers so old authenticated connections do not remain live.
+Each Runner connection requires TLS 1.3, a CA-signed certificate whose URI identifies the Runner, and `SECONDBOX_RUNNER_CREDENTIAL`. The HTTP API instead accepts `SECONDBOX_PLATFORM_TOKEN` for operators and the credentials declared by `SECONDBOX_APPLICATION_AUTHORITIES_JSON` for scoped applications; none of these authorities are interchangeable. Replacing the platform, Runner, or application credentials requires a coordinated restart of its consumers so old authenticated connections do not remain live.
 
-Create RunnerPools through the platform-token HTTP API before starting Runners. The CLI always supplies trusted ownership values:
+Create RunnerPools through the platform-token HTTP API before starting Runners. The CLI always supplies trusted ownership values, either as the explicit flags shown here or from the environment or stored configuration described in [SDK, CLI, and Flue quick starts](sdk-cli-and-flue.md):
 
 ```sh
 secondbox \
@@ -81,7 +81,7 @@ Production inventory is entirely explicit. It includes:
 - TLS-verified external PostgreSQL;
 - an HTTPS S3-compatible Artifact endpoint, existing bucket, and deployment-specific credentials;
 - an HTTPS public base URL behind a reverse proxy that preserves `X-Request-ID`;
-- the platform token, pre-shared Runner credential, Runner CA certificate, and server keypair;
+- the platform token, explicit application-authority JSON, pre-shared Runner credential, Runner CA certificate, and server keypair;
 - explicit bind addresses, ports, timeouts, log path, protocol window, enabled Runner features, object limits, and per-subject quota limits;
 - an operator-supplied signed-asset catalog.
 

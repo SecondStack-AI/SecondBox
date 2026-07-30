@@ -47,6 +47,11 @@ export interface Sandbox {
   readonly [key: string]: JSONValue | Metadata | undefined;
 }
 
+export interface SandboxPage {
+  readonly items: readonly Sandbox[];
+  readonly nextCursor?: string;
+}
+
 export interface Operation {
   readonly id: string;
   readonly sandboxId: string;
@@ -142,6 +147,11 @@ export interface RestoreSnapshotRequest {
   readonly snapshotId: string;
 }
 
+/** Replaces bounded application correlation metadata under a Sandbox revision fence. */
+export interface UpdateSandboxMetadataRequest {
+  readonly metadata: Metadata;
+}
+
 export interface StreamingExecRequest {
   readonly command: JSONValue;
   readonly cwd?: string;
@@ -159,6 +169,33 @@ export interface CreateTerminalRequest {
   readonly columns: number;
   readonly deadlineMilliseconds: number;
   readonly detachable: boolean;
+}
+
+export interface CreatePortSessionRequest {
+  readonly name: string;
+  readonly durationSeconds: number;
+}
+
+export interface PortSession {
+  readonly id: string;
+  readonly sandboxId: string;
+  readonly generation: number;
+  readonly name: string;
+  readonly protocol: "tcp" | "http";
+  readonly endpoint: string;
+  readonly state: "open" | "closing" | "closed" | "expired" | "fenced";
+  readonly createdAt: string;
+  readonly expiresAt: string;
+}
+
+export interface Lease {
+  readonly id: string;
+  readonly sandboxId: string;
+  readonly generation: number;
+  readonly state: "active" | "released" | "expired" | "fenced";
+  readonly expiresAt: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
 }
 
 export interface ExecStreamSession {
@@ -246,30 +283,41 @@ export interface RemovePathRequest {
 }
 
 export type OperationID =
+  | "acquireSandboxLease"
   | "cancelSandboxTerminal"
+  | "closeSandboxPortSession"
   | "createProfile"
   | "createSandbox"
   | "createSandboxDirectory"
   | "createSandboxExecStream"
+  | "createSandboxPortSession"
   | "createSandboxTerminal"
   | "createSandboxSnapshot"
   | "deleteSnapshot"
   | "deleteSandbox"
   | "drainSandbox"
   | "executeSandboxCommand"
+  | "getProfile"
   | "getOperation"
   | "getSandbox"
+  | "getSandboxLease"
+  | "getSandboxPortSession"
   | "getSnapshot"
   | "listSandboxSnapshots"
+  | "listSandboxes"
   | "listSandboxDirectory"
   | "readSandboxFile"
   | "reconnectSandboxTerminal"
+  | "releaseSandboxLease"
   | "removeSandboxPath"
+  | "renewSandboxLease"
   | "restoreSandboxSnapshot"
   | "sandboxFileExists"
   | "startSandbox"
   | "statSandboxFile"
   | "stopSandbox"
+  | "touchSandbox"
+  | "updateSandboxMetadata"
   | "waitForSandbox"
   | "writeSandboxFile";
 
@@ -280,30 +328,41 @@ interface Route {
 }
 
 export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
+  acquireSandboxLease: { method: "POST", path: "/v1/sandboxes/{sandboxId}/leases", contentType: "application/json" },
   cancelSandboxTerminal: { method: "DELETE", path: "/v1/sandboxes/{sandboxId}/terminals/{terminalSessionId}" },
+  closeSandboxPortSession: { method: "DELETE", path: "/v1/sandboxes/{sandboxId}/port-sessions/{portSessionId}" },
   createProfile: { method: "POST", path: "/v1/profiles", contentType: "application/json" },
   createSandbox: { method: "POST", path: "/v1/sandboxes", contentType: "application/json" },
   createSandboxDirectory: { method: "POST", path: "/v1/sandboxes/{sandboxId}/directories", contentType: "application/json" },
   createSandboxExecStream: { method: "POST", path: "/v1/sandboxes/{sandboxId}/exec-streams", contentType: "application/json" },
+  createSandboxPortSession: { method: "POST", path: "/v1/sandboxes/{sandboxId}/port-sessions", contentType: "application/json" },
   createSandboxTerminal: { method: "POST", path: "/v1/sandboxes/{sandboxId}/terminals", contentType: "application/json" },
   createSandboxSnapshot: { method: "POST", path: "/v1/sandboxes/{sandboxId}/snapshots", contentType: "application/json" },
   deleteSnapshot: { method: "DELETE", path: "/v1/snapshots/{snapshotId}" },
   deleteSandbox: { method: "DELETE", path: "/v1/sandboxes/{sandboxId}" },
   drainSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:drain" },
   executeSandboxCommand: { method: "POST", path: "/v1/sandboxes/{sandboxId}/exec", contentType: "application/json" },
+  getProfile: { method: "GET", path: "/v1/profiles/{profileName}" },
   getOperation: { method: "GET", path: "/v1/operations/{operationId}" },
   getSandbox: { method: "GET", path: "/v1/sandboxes/{sandboxId}" },
+  getSandboxLease: { method: "GET", path: "/v1/leases/{leaseId}" },
+  getSandboxPortSession: { method: "GET", path: "/v1/sandboxes/{sandboxId}/port-sessions/{portSessionId}" },
   getSnapshot: { method: "GET", path: "/v1/snapshots/{snapshotId}" },
   listSandboxSnapshots: { method: "GET", path: "/v1/sandboxes/{sandboxId}/snapshots" },
+  listSandboxes: { method: "GET", path: "/v1/sandboxes" },
   listSandboxDirectory: { method: "GET", path: "/v1/sandboxes/{sandboxId}/directories" },
   readSandboxFile: { method: "GET", path: "/v1/sandboxes/{sandboxId}/files" },
   reconnectSandboxTerminal: { method: "GET", path: "/v1/sandboxes/{sandboxId}/terminals/{terminalSessionId}" },
+  releaseSandboxLease: { method: "DELETE", path: "/v1/leases/{leaseId}" },
   removeSandboxPath: { method: "DELETE", path: "/v1/sandboxes/{sandboxId}/directories", contentType: "application/json" },
+  renewSandboxLease: { method: "POST", path: "/v1/leases/{leaseId}:renew", contentType: "application/json" },
   restoreSandboxSnapshot: { method: "POST", path: "/v1/sandboxes/{sandboxId}:restore", contentType: "application/json" },
   sandboxFileExists: { method: "GET", path: "/v1/sandboxes/{sandboxId}/files:exists" },
   startSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:start" },
   statSandboxFile: { method: "GET", path: "/v1/sandboxes/{sandboxId}/files:stat" },
   stopSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:stop" },
+  touchSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:touch" },
+  updateSandboxMetadata: { method: "PUT", path: "/v1/sandboxes/{sandboxId}/metadata", contentType: "application/json" },
   waitForSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:wait", contentType: "application/json" },
   writeSandboxFile: { method: "PUT", path: "/v1/sandboxes/{sandboxId}/files", contentType: "application/octet-stream" },
 };

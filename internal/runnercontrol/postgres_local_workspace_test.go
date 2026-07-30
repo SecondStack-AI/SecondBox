@@ -128,6 +128,7 @@ func allPostgresLocalWorkspaceCommandKinds() []runnerv1.LocalWorkspaceCommandKin
 		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE,
 		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT,
 		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE,
+		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CLONE_FROM_SNAPSHOT,
 	}
 }
 
@@ -501,6 +502,74 @@ func TestReturningRunnerMissingWorkspaceFailsAndExactEvidenceRecoversWithoutRelo
 			"Workspace reconciliation audits failed=%d recovered=%d",
 			failedAudits,
 			recoveredAudits,
+		)
+	}
+}
+
+func TestReturningRunnerConflictExpiresFailedLifecycleCommand(t *testing.T) {
+	store := openRunnerControlDatabase(t)
+	now := time.Date(2026, 7, 29, 18, 47, 0, 0, time.UTC)
+	seedReadyReconciledWorkspace(t, store, now)
+	if _, err := store.pool.Exec(t.Context(), `
+		UPDATE secondbox.workspaces
+		SET mutation_kind='stop',mutation_id='effect-stop-reconcile',
+		    mutation_effect_id='effect-stop-reconcile',
+		    mutation_operation_id='',mutation_expected_generation=3,
+		    mutation_target_generation=4,mutation_state='stopping'
+		WHERE id='workspace-ready-reconcile';
+		INSERT INTO secondbox.lifecycle_effects (
+			id,sandbox_id,generation,kind,state,assignment_id,instance_id,runner_id,
+			command_id,storage_object_id,fencing_token,retry_count,retry_limit,effect_deadline,
+			claim_owner,claim_expires_at,failure_class,failure_message,payload_json,evidence_json,
+			created_at,updated_at
+		) VALUES (
+			'effect-stop-reconcile','sandbox-ready-reconcile',3,'stop','queued',
+			'assignment-stop-reconcile','instance-stop-reconcile','runner-home',
+			'command-stop-reconcile','',$2,0,2,$3,'',$1,'','','{}','{}',$1,$1
+		);
+		INSERT INTO secondbox.runner_commands (
+			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
+			delivery_count,created_at,updated_at,delivered_at
+		) VALUES (
+			'command-stop-reconcile','runner-home','assignment-stop-reconcile',
+			'fence',$4,'pending','',0,$1,$1,NULL
+		)`,
+		pgx.QueryExecModeSimpleProtocol,
+		now,
+		[]byte("01234567890123456789012345678901"),
+		now.Add(time.Hour),
+		[]byte{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	recordReturningRunnerReconciliation(
+		t,
+		store,
+		"connection-conflicting-stop",
+		nil,
+		now.Add(time.Second),
+	)
+	var (
+		effectState, commandState string
+		nextReconcileAt           *time.Time
+	)
+	if err := store.pool.QueryRow(t.Context(), `
+		SELECT effect.state,command.state,sandbox.next_reconcile_at
+		FROM secondbox.lifecycle_effects AS effect
+		JOIN secondbox.runner_commands AS command ON command.id=effect.command_id
+		JOIN secondbox.sandboxes AS sandbox ON sandbox.id=effect.sandbox_id
+		WHERE effect.id='effect-stop-reconcile'`,
+	).Scan(&effectState, &commandState, &nextReconcileAt); err != nil {
+		t.Fatal(err)
+	}
+	if effectState != "runner_failed" ||
+		commandState != "expired" ||
+		nextReconcileAt != nil {
+		t.Fatalf(
+			"failed effect=%q command=%q next=%v",
+			effectState,
+			commandState,
+			nextReconcileAt,
 		)
 	}
 }

@@ -104,7 +104,10 @@ func runSandboxShellCommand(
 	}
 	if strings.TrimSpace(rawURL) == "" || strings.TrimSpace(token) == "" ||
 		strings.TrimSpace(tenantRef) == "" || strings.TrimSpace(subjectRef) == "" {
-		return errors.New("SecondBox CLI sandbox shell requires --url, --token, --tenant-ref, and --subject-ref")
+		return errors.New(
+			"SecondBox CLI sandbox shell requires --url, --token, --tenant-ref, and --subject-ref" +
+				sessionSourceHint,
+		)
 	}
 	if strings.TrimSpace(*sandboxID) == "" || strings.TrimSpace(*generationText) == "" {
 		return errors.New("SecondBox CLI sandbox shell requires --sandbox and --generation")
@@ -321,28 +324,14 @@ func pumpSandboxShellInput(
 	}
 }
 
+// sandboxShellOutcomeError names the remote shell over the single shared
+// interpretation of the terminal outcome union.
 func sandboxShellOutcomeError(outcome secondboxclient.ExecOutcome) error {
-	switch {
-	case outcome.ExecExited != nil && outcome.ExecExited.ExitCode == 0:
+	err := secondboxclient.ExecOutcomeError(outcome)
+	if err == nil {
 		return nil
-	case outcome.ExecExited != nil:
-		return fmt.Errorf("SecondBox remote shell exited with status %d", outcome.ExecExited.ExitCode)
-	case outcome.ExecCancelled != nil:
-		return errors.New("SecondBox remote shell was cancelled")
-	case outcome.ExecDeadlineExceeded != nil:
-		return errors.New("SecondBox remote shell deadline was exceeded")
-	case outcome.ExecOutputExhausted != nil:
-		return errors.New("SecondBox remote shell output limit was exhausted")
-	case outcome.ExecSpawnFailed != nil:
-		return errors.New("SecondBox remote shell failed to start")
-	case outcome.ExecInfrastructureFailed != nil:
-		return fmt.Errorf(
-			"SecondBox remote shell infrastructure failed: %s",
-			outcome.ExecInfrastructureFailed.Message,
-		)
-	default:
-		return errors.New("SecondBox remote shell returned an invalid outcome")
 	}
+	return fmt.Errorf("SecondBox remote shell: %w", err)
 }
 
 func shellResizeEvents(injected <-chan struct{}) (<-chan struct{}, func()) {

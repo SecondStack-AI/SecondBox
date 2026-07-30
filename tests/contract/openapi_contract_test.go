@@ -186,7 +186,7 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 			}
 		}
 		for _, required := range []string{
-			"createProfile", "reviseProfile", "createSandbox", "startSandbox",
+			"createProfile", "reviseProfile", "createSandbox", "updateSandboxMetadata", "startSandbox",
 			"drainSandbox", "stopSandbox", "restoreSandboxSnapshot", "getOperation",
 			"executeSandboxCommand", "createSandboxExecStream", "readSandboxFile",
 			"writeSandboxFile", "uploadSandboxArtifact", "downloadArtifactContent",
@@ -385,11 +385,23 @@ func TestSandboxCreateRejectsInfrastructureAuthorityOverrides(t *testing.T) {
 	document := loadOpenAPIContract(t)
 	createSchema := componentSchema(t, document, "CreateSandboxRequest")
 	properties := object(t, createSchema["properties"], "CreateSandboxRequest.properties")
-	if len(properties) != 2 || properties["profile"] == nil || properties["metadata"] == nil {
-		t.Fatalf("CreateSandboxRequest properties must be exactly profile and metadata, got %v", properties)
+	if len(properties) != 3 ||
+		properties["profile"] == nil ||
+		properties["metadata"] == nil ||
+		properties["sourceSnapshotId"] == nil {
+		t.Fatalf(
+			"CreateSandboxRequest properties must be profile, metadata, and sourceSnapshotId, got %v",
+			properties,
+		)
 	}
 	if err := validateClosedCreateShape(t, createSchema, map[string]any{"profile": "standard", "metadata": map[string]string{}}); err != nil {
 		t.Fatalf("valid profile-based create was rejected: %v", err)
+	}
+	if err := validateClosedCreateShape(t, createSchema, map[string]any{
+		"profile": "standard", "metadata": map[string]string{},
+		"sourceSnapshotId": "snapshot-one",
+	}); err != nil {
+		t.Fatalf("valid Snapshot-seeded create was rejected: %v", err)
 	}
 
 	for _, forbidden := range []string{

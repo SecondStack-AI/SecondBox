@@ -64,6 +64,44 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		}
 		return prefixes, nil
 	}
+	requiredRunnerGateways := func(name string) (map[string]netip.Addr, error) {
+		raw, err := required(name)
+		if err != nil {
+			return nil, err
+		}
+		gateways := make(map[string]netip.Addr)
+		if raw == "none" {
+			return gateways, nil
+		}
+		for _, part := range strings.Split(raw, ",") {
+			domain, addressRaw, found := strings.Cut(strings.TrimSpace(part), "=")
+			domain = strings.TrimSpace(domain)
+			if !found || domain == "" || strings.TrimSpace(addressRaw) == "" {
+				return nil, fmt.Errorf(
+					"SecondBox Firecracker config %s entry %q must be domain=IP",
+					name,
+					part,
+				)
+			}
+			address, parseErr := netip.ParseAddr(strings.TrimSpace(addressRaw))
+			if parseErr != nil {
+				return nil, fmt.Errorf(
+					"SecondBox Firecracker config %s entry %q has an invalid IP",
+					name,
+					part,
+				)
+			}
+			if _, duplicate := gateways[domain]; duplicate {
+				return nil, fmt.Errorf(
+					"SecondBox Firecracker config %s repeats domain %q",
+					name,
+					domain,
+				)
+			}
+			gateways[domain] = address
+		}
+		return gateways, nil
+	}
 
 	firecrackerPath, err := required("SECONDBOX_RUNNER_FIRECRACKER_PATH")
 	if err != nil {
@@ -210,6 +248,12 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	maxOperationsGlobal, err := requiredInt(
+		"SECONDBOX_RUNNER_MAX_CONCURRENT_OPERATIONS_GLOBAL",
+	)
+	if err != nil {
+		return nil, err
+	}
 	memoryBudgetMiB, err := requiredInt("SECONDBOX_RUNNER_SANDBOX_MEMORY_BUDGET_MIB")
 	if err != nil {
 		return nil, err
@@ -247,6 +291,10 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		return nil, err
 	}
 	networkPolicyManagementCIDRs, err := requiredPrefixes("SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS")
+	if err != nil {
+		return nil, err
+	}
+	networkPolicyRunnerGateways, err := requiredRunnerGateways("SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS")
 	if err != nil {
 		return nil, err
 	}
@@ -295,6 +343,7 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		MicroVMTapPrefix:                           tapPrefix,
 		MicroVMMaxConcurrentPerSandbox:             maxPerSandbox,
 		MicroVMMaxConcurrentGlobal:                 maxGlobal,
+		MicroVMMaxConcurrentOperationsGlobal:       maxOperationsGlobal,
 		MicroVMMemoryBudgetMiB:                     memoryBudgetMiB,
 		MicroVMToolVMReuseEnabled:                  false,
 		MicroVMToolVMIdleTTL:                       time.Duration(0),
@@ -304,6 +353,7 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		NetworkPolicyMaximumDNSTTL:                 networkPolicyMaximumDNSTTL,
 		NetworkPolicyRunnerAddresses:               networkPolicyRunnerAddresses,
 		NetworkPolicyManagementCIDRs:               networkPolicyManagementCIDRs,
+		NetworkPolicyRunnerGateways:                networkPolicyRunnerGateways,
 		NetworkPolicyDNSUpstream:                   networkPolicyDNSUpstream,
 	}, nil
 }

@@ -65,10 +65,13 @@ SECONDBOX_RUNNER_SANDBOX_BRIDGE_CIDR
 SECONDBOX_RUNNER_SANDBOX_TAP_PREFIX
 SECONDBOX_RUNNER_MAX_CONCURRENT_PER_SANDBOX
 SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL
+SECONDBOX_RUNNER_MAX_CONCURRENT_OPERATIONS_GLOBAL
 SECONDBOX_RUNNER_FILE_TRANSFER_MAX_BYTES
 ```
 
 Production and qualification hosts set `SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED=false`. The jailer UID and GID identify the unprivileged process inside the jail and must be positive. The runner remains root so it can create jail roots, cgroups, TAP devices, and the required jailed file bindings.
+
+`SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL` bounds Firecracker Instances. `SECONDBOX_RUNNER_MAX_CONCURRENT_OPERATIONS_GLOBAL` independently advertises runner-wide data-plane operation capacity; scheduling reserves each active Sandbox's immutable Profile limit against it.
 
 The guest HTTP bootstrap/control surface and the canonical bidirectional gRPC data plane use distinct, explicitly configured vsock ports. `SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL` is a positive Go duration no greater than 60 seconds. The runner does not report an assignment ready until the canonical stream has negotiated the exact assignment Instance, Sandbox generation, random connection nonce, signed guest build and manifest identities, protocol generation, and mandatory features. `/workspace` and `/runtime-private` are signed image ABI mount points: init mounts the persistent workspace at the former and a RAM-only secret tmpfs at the latter.
 
@@ -133,7 +136,9 @@ The base policy allows established traffic, the runner DNS proxy, and
 assignment-policy-approved connections carrying the runner's private
 connection mark. Only marked IPv4 egress is masqueraded. All other
 guest-to-host input, forwarding, and IPv6 remain denied; no redirect or
-service-port exception is installed.
+service-port exception is installed. Each bridge owns separate firewall
+chains so applying or removing one Runner network cannot alter another
+Runner's baseline on the same host network namespace.
 
 `runner/scripts/microvm-network-namespace-test.sh` exercises the real bridge and firewall script in isolated Linux network namespaces and proves that an unassigned host port remains unreachable.
 

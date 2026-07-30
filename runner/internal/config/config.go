@@ -54,6 +54,7 @@ type Config struct {
 	MicroVMTapPrefix                           string
 	MicroVMMaxConcurrentPerSandbox             int
 	MicroVMMaxConcurrentGlobal                 int
+	MicroVMMaxConcurrentOperationsGlobal       int
 	MicroVMMemoryBudgetMiB                     int
 	MicroVMToolVMReuseEnabled                  bool
 	MicroVMToolVMIdleTTL                       time.Duration
@@ -63,6 +64,7 @@ type Config struct {
 	NetworkPolicyMaximumDNSTTL                 time.Duration
 	NetworkPolicyRunnerAddresses               []netip.Addr
 	NetworkPolicyManagementCIDRs               []netip.Prefix
+	NetworkPolicyRunnerGateways                map[string]netip.Addr
 	NetworkPolicyDNSUpstream                   netip.AddrPort
 }
 

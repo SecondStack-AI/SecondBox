@@ -73,6 +73,16 @@ type CreateSandboxInput struct {
 	WorkspaceEffectID  string
 	WorkspaceCommandID string
 	FencingToken       []byte
+	SourceSnapshotID   string
+}
+
+// UpdateSandboxMetadataInput replaces consumer correlation metadata at one revision.
+type UpdateSandboxMetadataInput struct {
+	Principal        contracts.Principal
+	SandboxID        string
+	Metadata         map[string]string
+	ExpectedRevision int64
+	Now              time.Time
 }
 
 // HomeWorkspace is private durable ownership and local-store reconciliation state.

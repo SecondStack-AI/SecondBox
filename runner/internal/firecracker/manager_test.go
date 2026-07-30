@@ -2352,6 +2352,41 @@ func TestAdmitCompartmentSpawnLocked(t *testing.T) {
 	}
 }
 
+func TestAdmitCompartmentSpawnUsesRequestedProfileMemory(t *testing.T) {
+	m := &Manager{
+		cfg: &config.Config{
+			MicroVMBridgeCIDR:      "10.0.0.1/24",
+			MicroVMMemoryMiB:       8192,
+			MicroVMMemoryBudgetMiB: 16384,
+		},
+		instances: map[string]*instance{
+			"a": {
+				id: "a", sandboxID: "agent-a", compartmentID: "cmp-a",
+				memoryMiB: 2048,
+			},
+			"b": {
+				id: "b", sandboxID: "agent-b", compartmentID: "cmp-b",
+				memoryMiB: 2048,
+			},
+		},
+	}
+	if err := m.admitCompartmentSpawnWithMemoryLocked(
+		runtimeInstanceKey{sandboxID: "agent-c", compartmentID: "cmp-c"},
+		2048,
+	); err != nil {
+		t.Fatalf("profile-sized admission failed: %v", err)
+	}
+	if err := m.admitCompartmentSpawnWithMemoryLocked(
+		runtimeInstanceKey{sandboxID: "agent-c", compartmentID: "cmp-c"},
+		13000,
+	); err == nil || !strings.Contains(
+		err.Error(),
+		"SECONDBOX_RUNNER_SANDBOX_MEMORY_BUDGET_MIB",
+	) {
+		t.Fatalf("oversized admission error = %v", err)
+	}
+}
+
 func TestAdmitCompartmentSpawnLockedCountsPendingReservations(t *testing.T) {
 	m := &Manager{
 		cfg:           &config.Config{MicroVMBridgeCIDR: "10.0.0.1/24", MicroVMMaxConcurrentGlobal: 2, MicroVMMemoryMiB: 1024, MicroVMMemoryBudgetMiB: 2048},

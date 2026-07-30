@@ -1,10 +1,12 @@
 # Security model
 
-SecondBox assumes guest workloads and network peers may be malicious. Its control plane is also a trusted subsystem: callers holding the platform token may assert any tenant and subject reference. SecondBox preserves strict row scoping for those assertions, but it does not claim to authenticate end users or defend one subject from a compromised trusted caller.
+SecondBox assumes guest workloads and network peers may be malicious. Its control plane is also a trusted subsystem: operators holding the platform token may assert any tenant and subject reference. Application authorities are narrower and cannot change their configured ownership, operation scopes, or Profile grants. SecondBox does not authenticate end users or duplicate an upstream identity graph.
 
 ## Principals and authority
 
-The HTTP API accepts one deployment-wide `SECONDBOX_PLATFORM_TOKEN`. Every request also supplies bounded opaque `X-SecondBox-Tenant-Ref` and `X-SecondBox-Subject-Ref` values. PostgreSQL queries scope owned resources, idempotency, quota, and audit records to both values. The upstream platform must authorize those assertions before calling SecondBox.
+The HTTP API accepts the deployment-wide `SECONDBOX_PLATFORM_TOKEN` as its operator authority. Every operator request also supplies bounded opaque `X-SecondBox-Tenant-Ref` and `X-SecondBox-Subject-Ref` values. PostgreSQL queries scope owned resources, idempotency, quota, and audit records to both values.
+
+Explicit application authorities use independent bearer credentials. Each is statically bound to fixed tenant and subject references, exact Sandbox operation scopes, and an allowlist of Profile names. Header mismatch, administrative access, an ungranted Profile, or a missing scope is denied before the route handler. This protects subjects and Profiles from another correctly configured application credential; compromise of the platform token remains deployment-wide compromise.
 
 Runner authority is separate. A Runner establishes an outbound TLS 1.3 connection, presents a CA-signed client identity, and proves the deployment-wide pre-shared Runner credential. The control plane compares the certificate identity, configured Runner identity, and protocol identity. HTTP tokens are never accepted on this channel, and Runner credentials are never accepted by the HTTP API.
 

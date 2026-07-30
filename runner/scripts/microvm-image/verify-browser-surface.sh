@@ -127,12 +127,12 @@ squashfs_path_exists() {
 }
 
 image_format() {
-    description="$(file -b "$1")"
-    case "$description" in
-        *"ext2 filesystem"*|*"ext3 filesystem"*|*"ext4 filesystem"*) echo ext ;;
-        *"EROFS filesystem"*) echo erofs ;;
-        *"Squashfs filesystem"*) echo squashfs ;;
-        *) fail "unsupported filesystem image: $1 ($description)" ;;
+    filesystem_type="$(blkid -p -o value -s TYPE "$1" 2>/dev/null || true)"
+    case "$filesystem_type" in
+        ext2|ext3|ext4) echo ext ;;
+        erofs) echo erofs ;;
+        squashfs) echo squashfs ;;
+        *) fail "unsupported filesystem image: $1 ($filesystem_type)" ;;
     esac
 }
 
@@ -161,7 +161,7 @@ verify_image() {
     kind="$1"
     image="$2"
     [ -f "$image" ] || { usage; exit 2; }
-    command -v file >/dev/null 2>&1 || fail "file is required to identify filesystem images"
+    command -v blkid >/dev/null 2>&1 || fail "blkid is required to identify filesystem images"
     format="$(image_format "$image")"
     require_image_tool "$format"
 

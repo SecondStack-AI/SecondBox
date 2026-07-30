@@ -340,6 +340,88 @@ func (store *Store) Create(
 	})
 }
 
+// CloneFromSnapshot creates generation one as an independent FICLONE of one
+// immutable runner-local Snapshot. The target remains pinned to this Runner.
+func (store *Store) CloneFromSnapshot(
+	ctx context.Context,
+	request CloneWorkspaceRequest,
+) (Receipt, error) {
+	if request.CapacityBytes < minimumExt4Bytes {
+		return Receipt{}, fmt.Errorf(
+			"SecondBox WorkspaceStore logical capacity must be at least %d bytes",
+			minimumExt4Bytes,
+		)
+	}
+	if err := validateID(request.SourceSnapshot); err != nil {
+		return Receipt{}, err
+	}
+	return store.mutate(ctx, request, request.Mutation, ReceiptWorkspaceClone, func() (Receipt, error) {
+		source, err := store.readSnapshotManifest(request.SourceSnapshot)
+		if err != nil {
+			return Receipt{}, err
+		}
+		if source.CapacityBytes != request.CapacityBytes {
+			return Receipt{}, ErrStorageIncompatible
+		}
+		if err := validateExt4Image(
+			store.snapshotImagePath(request.SourceSnapshot),
+			request.CapacityBytes,
+		); err != nil {
+			return Receipt{}, err
+		}
+		if err := store.ensureWorkspaceLayout(request.WorkspaceID); err != nil {
+			return Receipt{}, err
+		}
+		manifest, manifestErr := store.readCurrentManifest(request.WorkspaceID)
+		if manifestErr == nil {
+			if manifest.Generation != 1 || manifest.CapacityBytes != request.CapacityBytes {
+				return Receipt{}, ErrConflictingReplay
+			}
+			if err := store.validateImage(
+				request.WorkspaceID,
+				manifest.Image,
+				request.CapacityBytes,
+			); err != nil {
+				return Receipt{}, err
+			}
+			return Receipt{
+				SnapshotID:    request.SourceSnapshot,
+				Generation:    1,
+				CapacityBytes: request.CapacityBytes,
+			}, nil
+		}
+		if !errors.Is(manifestErr, ErrWorkspaceNotFound) {
+			return Receipt{}, manifestErr
+		}
+
+		imageName := generationImageName(1, "clone")
+		if err := store.cloneImage(
+			store.snapshotImagePath(request.SourceSnapshot),
+			store.versionPath(request.WorkspaceID, imageName),
+			writableImageMode,
+			request.CapacityBytes,
+			request.OperationID,
+		); err != nil {
+			return Receipt{}, err
+		}
+		manifest = currentManifest{
+			FormatVersion: currentManifestFormatVersion,
+			WorkspaceID:   request.WorkspaceID,
+			Generation:    1,
+			Image:         imageName,
+			CapacityBytes: request.CapacityBytes,
+		}
+		if err := store.publishCurrentManifest(request.WorkspaceID, manifest); err != nil {
+			return Receipt{}, err
+		}
+		return Receipt{
+			SnapshotID:    request.SourceSnapshot,
+			Generation:    1,
+			CapacityBytes: request.CapacityBytes,
+		}, nil
+	})
+}
+
 // Open resolves the current manifest and holds the cross-process exclusive
 // writer lock until Attachment.Close.
 func (store *Store) Open(
@@ -1374,6 +1456,7 @@ func validateReceipt(receipt Receipt) error {
 	}
 	switch receipt.Kind {
 	case ReceiptWorkspaceCreate,
+		ReceiptWorkspaceClone,
 		ReceiptGenerationAdvance,
 		ReceiptSnapshotCreate,
 		ReceiptSnapshotDelete,

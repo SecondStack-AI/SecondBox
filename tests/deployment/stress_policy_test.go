@@ -15,6 +15,8 @@ func TestStressQualificationUsesExternalSDKHarnessAndFailsLoudly(t *testing.T) {
 	driver := readRepositoryFile(t, "tests/scenario/stress/api.go") +
 		readRepositoryFile(t, "tests/scenario/stress/workloads.go")
 	justfile := readRepositoryFile(t, "Justfile")
+	prepareScript := readRepositoryFile(t, "scripts/prepare-stress.sh")
+	gitignore := readRepositoryFile(t, ".gitignore")
 
 	for _, required := range []string{
 		"SECONDBOX_REQUIRE_QUALIFIED_STRESS",
@@ -83,16 +85,39 @@ func TestStressQualificationUsesExternalSDKHarnessAndFailsLoudly(t *testing.T) {
 	if !strings.Contains(justfile, "test-stress:\n    scripts/test-stress.sh") {
 		t.Error("Justfile must expose the stress qualification")
 	}
+	if !strings.Contains(justfile, "prepare-stress:\n    scripts/prepare-stress.sh") {
+		t.Error("Justfile must expose persistent local stress preparation")
+	}
+	for _, required := range []string{
+		`local_root="${SECONDBOX_STRESS_LOCAL_ROOT:-$repo_root/.secondbox/stress}"`,
+		"manifest-private.pem",
+		"manifest-public.pem",
+		"openssl genpkey",
+		"build-secondbox-rootfs-source.sh",
+		"microvm-image/build.sh",
+		`"$verify_script" "$staged_artifacts"`,
+		`mv "$staged_artifacts" "$artifacts_dir"`,
+	} {
+		if !strings.Contains(prepareScript, required) {
+			t.Errorf("local stress preparation must contain %q", required)
+		}
+	}
+	if !strings.Contains(gitignore, "/.secondbox/") {
+		t.Error("persistent local stress artifacts and private keys must be ignored")
+	}
 
 	command := exec.Command(filepath.Join(
 		repositoryRootForDeploymentPolicy(t), "scripts", "test-stress.sh",
 	))
-	command.Env = []string{"PATH=" + os.Getenv("PATH")}
+	command.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"SECONDBOX_STRESS_LOCAL_ROOT=" + filepath.Join(t.TempDir(), "not-prepared"),
+	}
 	output, err := command.CombinedOutput()
 	if err == nil {
-		t.Fatal("stress qualification reported success without its opt-in and prerequisites")
+		t.Fatal("stress qualification reported success without prepared local state")
 	}
-	if !strings.Contains(string(output), "SECONDBOX_REQUIRE_QUALIFIED_STRESS") {
-		t.Fatalf("stress prerequisite failure did not name the missing variable:\n%s", output)
+	if !strings.Contains(string(output), "just prepare-stress") {
+		t.Fatalf("stress prerequisite failure did not name the preparation command:\n%s", output)
 	}
 }

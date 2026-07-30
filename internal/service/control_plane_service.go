@@ -57,6 +57,7 @@ type RunnerAdminStore interface {
 // SandboxStore owns public Sandbox and Operation records.
 type SandboxStore interface {
 	CreateSandbox(ctx context.Context, input ports.CreateSandboxInput) (contracts.Sandbox, contracts.Operation, bool, error)
+	UpdateSandboxMetadata(ctx context.Context, input ports.UpdateSandboxMetadataInput) (contracts.Sandbox, error)
 	GetSandbox(ctx context.Context, tenantRef, subjectRef, sandboxID string) (contracts.Sandbox, error)
 	ListSandboxes(ctx context.Context, tenantRef, subjectRef string, limit int, cursor string) (contracts.SandboxPage, error)
 	GetOperation(ctx context.Context, tenantRef, subjectRef, operationID string) (contracts.Operation, error)
@@ -498,6 +499,10 @@ func (service *ControlPlaneService) createSandboxOperation(
 	if err := validateSandboxMetadata(request.Metadata); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
+	if len(request.SourceSnapshotID) > 128 {
+		return contracts.Sandbox{}, contracts.Operation{}, false,
+			errors.New("SecondBox source Snapshot ID exceeds its bound")
+	}
 	if builtIn, ok := service.builtInProfiles[request.Profile]; ok {
 		if _, err := service.store.EnsureBuiltInProfile(ctx, builtIn); err != nil {
 			return contracts.Sandbox{}, contracts.Operation{}, false, err
@@ -536,7 +541,7 @@ func (service *ControlPlaneService) createSandboxOperation(
 		IdempotencyKey: idempotencyKey, RequestHash: hex.EncodeToString(requestHash[:]),
 		IdempotencyEnds:   now.Add(idempotencyRetention),
 		WorkspaceEffectID: workspaceEffectID, WorkspaceCommandID: workspaceCommandID,
-		FencingToken: workspaceFence,
+		FencingToken: workspaceFence, SourceSnapshotID: request.SourceSnapshotID,
 	})
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
@@ -559,6 +564,31 @@ func (service *ControlPlaneService) GetSandbox(
 		return contracts.Sandbox{}, ports.ErrAuthorizationDenied
 	}
 	return service.store.GetSandbox(ctx, principal.TenantRef, principal.SubjectRef, sandboxID)
+}
+
+// UpdateSandboxMetadata replaces bounded consumer correlation metadata without
+// changing lifecycle, workspace, generation, placement, or profile authority.
+func (service *ControlPlaneService) UpdateSandboxMetadata(
+	ctx context.Context,
+	principal contracts.Principal,
+	sandboxID string,
+	expectedRevision int64,
+	request contracts.UpdateSandboxMetadataRequest,
+) (contracts.Sandbox, error) {
+	if principal.TenantRef == "" || principal.SubjectRef == "" {
+		return contracts.Sandbox{}, ports.ErrAuthorizationDenied
+	}
+	if expectedRevision < 1 {
+		return contracts.Sandbox{}, errors.New("SecondBox Sandbox expected revision must be positive")
+	}
+	if err := validateSandboxMetadata(request.Metadata); err != nil {
+		return contracts.Sandbox{}, err
+	}
+	return service.store.UpdateSandboxMetadata(ctx, ports.UpdateSandboxMetadataInput{
+		Principal: principal, SandboxID: sandboxID,
+		Metadata: cloneMetadata(request.Metadata), ExpectedRevision: expectedRevision,
+		Now: service.now().UTC(),
+	})
 }
 
 // ListSandboxes returns only the authenticated Project projection.

@@ -62,9 +62,11 @@ tap_pattern="${tap_prefix}+"
 network_state_dir="$SECONDBOX_RUNNER_SANDBOX_NETWORK_STATE_DIR"
 delete_bridge="$SECONDBOX_RUNNER_SANDBOX_DELETE_BRIDGE"
 state_path="$network_state_dir/host-network.state"
-ipv4_input_chain="SECONDBOX_SANDBOX_INPUT"
-ipv4_forward_chain="SECONDBOX_SANDBOX_FORWARD"
-ipv6_chain="SECONDBOX_SANDBOX_IPV6"
+# Every Runner bridge owns separate baseline chains because multiple Runner
+# containers may share one host network namespace.
+ipv4_input_chain="SBX_INPUT_${bridge}"
+ipv4_forward_chain="SBX_FORWARD_${bridge}"
+ipv6_chain="SBX_IPV6_${bridge}"
 policy_connection_mark="0x53425801/0xffffffff"
 bridge_address="${bridge_cidr%/*}"
 

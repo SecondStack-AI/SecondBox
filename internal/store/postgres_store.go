@@ -455,7 +455,19 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	if err := ensureCompatibleRunnerPool(ctx, tx, profile.CurrentRevision.Spec); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
-	homeRunnerID, err := selectInitialHomeRunner(ctx, tx, profile.CurrentRevision.Spec)
+	homeRunnerID := ""
+	if input.SourceSnapshotID == "" {
+		homeRunnerID, err = selectInitialHomeRunner(ctx, tx, profile.CurrentRevision.Spec)
+	} else {
+		homeRunnerID, err = selectSnapshotCloneHomeRunner(
+			ctx,
+			tx,
+			input.Principal,
+			input.SourceSnapshotID,
+			profile.CurrentRevision.Spec,
+			input.Sandbox.CreatedAt,
+		)
+	}
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
@@ -501,6 +513,15 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	sandbox.State = contracts.SandboxStateCreating
 	input.Operation.State = contracts.OperationStatePending
 	initialLifecycleIntent := "create_workspace"
+	workspaceMutationKind := "create"
+	workspaceEffectKind := "local_workspace_create"
+	workspaceCommandKind := runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE
+	if input.SourceSnapshotID != "" {
+		workspaceMutationKind = "clone"
+		workspaceEffectKind = "local_workspace_clone"
+		workspaceCommandKind =
+			runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CLONE_FROM_SNAPSHOT
+	}
 	metadataJSON, err := json.Marshal(sandbox.Metadata)
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox metadata encoding failed: %w", err)
@@ -519,13 +540,14 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 			created_at,updated_at
 		) VALUES (
 			$1,$2,$3,$4,$5,'creating',$6,$7,
-			'create',$8,$8,$9,$7,$7,'queued','{}',
+			$12,$8,$8,$9,$7,$7,'queued','{}',
 			$10,$11
 		)`,
 		sandbox.Workspace.ID, sandbox.TenantRef, sandbox.SubjectRef,
 		sandbox.ID, homeRunnerID, profile.CurrentRevision.Spec.Resources.WorkspaceBytes,
 		sandbox.Workspace.Generation, input.WorkspaceEffectID, input.Operation.ID,
 		sandbox.Workspace.CreatedAt, sandbox.Workspace.UpdatedAt,
+		workspaceMutationKind,
 	); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Workspace insert failed: %w", err)
 	}
@@ -553,9 +575,10 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	}
 	localCommand := &runnerv1.LocalWorkspaceCommand{
 		CommandVersion: 1,
-		Kind:           runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE,
+		Kind:           workspaceCommandKind,
 		OperationId:    input.Operation.ID, EffectId: input.WorkspaceEffectID,
 		SandboxId: sandbox.ID, WorkspaceId: sandbox.Workspace.ID,
+		SnapshotId:           input.SourceSnapshotID,
 		ExpectedGeneration:   uint64(sandbox.Generation),
 		NextGeneration:       uint64(sandbox.Generation),
 		LogicalCapacityBytes: uint64(profile.CurrentRevision.Spec.Resources.WorkspaceBytes),
@@ -580,12 +603,12 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 			effect_deadline,claim_owner,claim_expires_at,failure_class,failure_message,
 			payload_json,evidence_json,created_at,updated_at
 		) VALUES (
-			$1,$2,$3,'local_workspace_create','queued','','',$4,$5,'',$6,0,8,
+			$1,$2,$3,$9,'queued','','',$4,$5,$10,$6,0,8,
 			$7,'',$8,'','','{}','{}',$8,$8
 		)`,
 		input.WorkspaceEffectID, sandbox.ID, sandbox.Generation, homeRunnerID,
 		input.WorkspaceCommandID, input.FencingToken, input.Operation.CreatedAt.Add(10*time.Minute),
-		input.Operation.CreatedAt,
+		input.Operation.CreatedAt, workspaceEffectKind, input.SourceSnapshotID,
 	); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false,
 			fmt.Errorf("SecondBox Workspace create effect insert failed: %w", err)
@@ -1199,13 +1222,6 @@ func selectInitialHomeRunner(
 		return "", fmt.Errorf("SecondBox initial home Runner candidates failed: %w", err)
 	}
 	defer rows.Close()
-	type capacity struct {
-		CPUMillis   int64
-		MemoryBytes int64
-		DiskBytes   int64
-		Instances   int64
-		Operations  int64
-	}
 	for rows.Next() {
 		var runnerID string
 		var architecturesJSON, capabilitiesJSON, capacityJSON, reservedJSON []byte
@@ -1216,7 +1232,7 @@ func selectInitialHomeRunner(
 		}
 		var architectures []string
 		var capabilities []string
-		var allocatable, reserved capacity
+		var allocatable, reserved runnerCapacity
 		if err := json.Unmarshal(architecturesJSON, &architectures); err != nil {
 			return "", fmt.Errorf("SecondBox initial home Runner architectures decoding failed: %w", err)
 		}
@@ -1245,6 +1261,79 @@ func selectInitialHomeRunner(
 		return "", fmt.Errorf("SecondBox initial home Runner iteration failed: %w", err)
 	}
 	return "", ports.ErrHomeRunnerUnavailable
+}
+
+type runnerCapacity struct {
+	CPUMillis   int64
+	MemoryBytes int64
+	DiskBytes   int64
+	Instances   int64
+	Operations  int64
+}
+
+func selectSnapshotCloneHomeRunner(
+	ctx context.Context,
+	tx pgx.Tx,
+	principal contracts.Principal,
+	snapshotID string,
+	spec contracts.ProfileRevisionSpec,
+	now time.Time,
+) (string, error) {
+	var (
+		homeRunnerID                                       string
+		snapshotState, runnerPool, runnerState, drainPhase string
+		activeConnectionID                                 string
+		snapshotSize                                       int64
+		retainUntil                                        time.Time
+		architecturesJSON, capabilitiesJSON                []byte
+		capacityJSON, reservedJSON                         []byte
+	)
+	if err := tx.QueryRow(ctx, `
+		SELECT snapshot.home_runner_id,snapshot.size_bytes,snapshot.state,snapshot.retain_until,
+		       runner.pool_name,runner.state,runner.drain_phase,runner.active_connection_id,
+		       runner.architectures_json,runner.capabilities_json,
+		       runner.capacity_json,runner.reserved_capacity_json
+		FROM secondbox.snapshots AS snapshot
+		JOIN secondbox.runners AS runner ON runner.id=snapshot.home_runner_id
+		WHERE snapshot.id=$1 AND snapshot.tenant_ref=$2 AND snapshot.subject_ref=$3
+		FOR UPDATE OF snapshot,runner`,
+		snapshotID, principal.TenantRef, principal.SubjectRef,
+	).Scan(
+		&homeRunnerID, &snapshotSize, &snapshotState, &retainUntil,
+		&runnerPool, &runnerState, &drainPhase, &activeConnectionID,
+		&architecturesJSON, &capabilitiesJSON, &capacityJSON, &reservedJSON,
+	); err != nil {
+		return "", mapNotFound(err, ports.ErrSnapshotNotFound)
+	}
+	if snapshotState != "ready" || !retainUntil.After(now.UTC()) ||
+		snapshotSize != spec.Resources.WorkspaceBytes {
+		return "", ports.ErrSnapshotUnavailable
+	}
+	var architectures, capabilities []string
+	var allocatable, reserved runnerCapacity
+	if err := json.Unmarshal(architecturesJSON, &architectures); err != nil {
+		return "", fmt.Errorf("SecondBox Snapshot home Runner architectures decoding failed: %w", err)
+	}
+	if err := json.Unmarshal(capabilitiesJSON, &capabilities); err != nil {
+		return "", fmt.Errorf("SecondBox Snapshot home Runner capabilities decoding failed: %w", err)
+	}
+	if err := json.Unmarshal(capacityJSON, &allocatable); err != nil {
+		return "", fmt.Errorf("SecondBox Snapshot home Runner capacity decoding failed: %w", err)
+	}
+	if err := json.Unmarshal(reservedJSON, &reserved); err != nil {
+		return "", fmt.Errorf("SecondBox Snapshot home Runner reservation decoding failed: %w", err)
+	}
+	if runnerPool != spec.Pool ||
+		runnerState != "ready" ||
+		drainPhase != "active" ||
+		activeConnectionID == "" ||
+		!contains(architectures, spec.Architecture) ||
+		!contains(capabilities, "compute") ||
+		!contains(capabilities, "local-workspace") ||
+		allocatable.DiskBytes-reserved.DiskBytes < spec.Resources.WorkspaceBytes {
+		return "", ports.ErrHomeRunnerUnavailable
+	}
+	return homeRunnerID, nil
 }
 
 type quotaUsage struct {

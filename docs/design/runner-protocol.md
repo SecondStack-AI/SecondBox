@@ -30,7 +30,7 @@ Registration reports:
 - verified immutable image and toolchain cache entries;
 - allocatable and currently reserved vCPU, memory, disk, Instance, and operation capacity.
 
-The runner performs prerequisite and trust validation before advertising schedulable capacity. Missing KVM, required network controls, trust anchors, storage health, or cleanup capability make it unready. The control plane treats claims as evidence for scheduling, not as authority to change a ProfileRevision.
+The runner performs prerequisite and trust validation before advertising schedulable capacity. Instance capacity and concurrent data-plane operation capacity are independent bounds; Profile operation limits reserve the latter while a Sandbox Instance is active. Missing KVM, required network controls, trust anchors, storage health, or cleanup capability make it unready. The control plane treats claims as evidence for scheduling, not as authority to change a ProfileRevision.
 
 Heartbeats carry monotonically increasing sequence numbers, connection identity, capacity, active assignment summaries, and drain state. A heartbeat is runner liveness; it is not Sandbox useful activity.
 

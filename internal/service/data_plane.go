@@ -36,6 +36,13 @@ type terminalDataPlaneRelay interface {
 	ListTerminalServerFrames(context.Context, string, string, string, int64, int) ([]runnercontrol.TerminalServerFrame, error)
 }
 
+const (
+	maximumExecEnvironmentVariables  = 128
+	maximumExecEnvironmentNameBytes  = 256
+	maximumExecEnvironmentValueBytes = 128 * 1024
+	maximumExecEnvironmentTotalBytes = 1024 * 1024
+)
+
 func (service *ControlPlaneService) CreateSandboxExecStream(
 	ctx context.Context,
 	principal contracts.Principal,
@@ -591,7 +598,7 @@ func (service *ControlPlaneService) requireDataPlane(principal contracts.Princip
 }
 
 func validateBufferedExecRequest(request contracts.BufferedExecRequest) ([]byte, error) {
-	if request.Environment == nil || len(request.Environment) > 128 ||
+	if request.Environment == nil || len(request.Environment) > maximumExecEnvironmentVariables ||
 		request.DeadlineMilliseconds < 1 || request.MaximumOutputBytes < 1 {
 		return nil, errors.New("SecondBox buffered Exec bounds are invalid")
 	}
@@ -618,9 +625,30 @@ func validateBufferedExecRequest(request contracts.BufferedExecRequest) ([]byte,
 	default:
 		return nil, errors.New("SecondBox Exec command mode is invalid")
 	}
+	environmentBytes := 0
 	for name, value := range request.Environment {
-		if name == "" || len(name) > 256 || len(value) > 8192 {
-			return nil, errors.New("SecondBox Exec environment exceeds its bound")
+		if name == "" || len(name) > maximumExecEnvironmentNameBytes {
+			return nil, fmt.Errorf(
+				"SecondBox Exec environment variable name has %d bytes; maximum is %d",
+				len(name),
+				maximumExecEnvironmentNameBytes,
+			)
+		}
+		if len(value) > maximumExecEnvironmentValueBytes {
+			return nil, fmt.Errorf(
+				"SecondBox Exec environment variable %q has %d bytes; maximum is %d",
+				name,
+				len(value),
+				maximumExecEnvironmentValueBytes,
+			)
+		}
+		environmentBytes += len(name) + len(value)
+		if environmentBytes > maximumExecEnvironmentTotalBytes {
+			return nil, fmt.Errorf(
+				"SecondBox Exec environment total has %d bytes; maximum is %d",
+				environmentBytes,
+				maximumExecEnvironmentTotalBytes,
+			)
 		}
 	}
 	if request.StdinBase64 != nil && len(*request.StdinBase64) > 1_398_104 {

@@ -46,10 +46,10 @@ func runDiagnosticsBundleCommand(
 		return errors.New("SecondBox diagnostics bundle received unexpected arguments")
 	}
 	if rawURL == "" {
-		return errors.New("SecondBox diagnostics bundle requires --url")
+		return errors.New("SecondBox diagnostics bundle requires --url" + sessionSourceHint)
 	}
 	if token == "" {
-		return errors.New("SecondBox diagnostics bundle requires --token")
+		return errors.New("SecondBox diagnostics bundle requires --token" + sessionSourceHint)
 	}
 	if !filepath.IsAbs(*outputPath) {
 		return errors.New("SecondBox diagnostics bundle --output must be absolute")

@@ -118,6 +118,69 @@ func TestRunnerProtocolServiceReconnectsAndReadvertisesActiveAssignments(t *test
 	}
 }
 
+func TestRunnerProtocolServiceHeartbeatsWhileAssignmentStartIsBlocked(t *testing.T) {
+	backend := &blockingAssignmentBackend{
+		recordingAssignmentBackend: recordingAssignmentBackend{
+			readiness: BackendReadiness{
+				Capacity:     &runnerprotocol.Capacity{},
+				Reserved:     &runnerprotocol.Capacity{},
+				Capabilities: &runnerprotocol.RunnerCapabilities{},
+			},
+		},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	service, err := NewRunnerProtocolService(
+		testRunnerConfig(),
+		backend,
+		staticProtocolConnector{stream: &recordingProtocolStream{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runContext, cancelRun := context.WithCancel(t.Context())
+	stream := &blockingProtocolStream{
+		ctx: runContext,
+		inbound: []*runnerprotocol.ControlPlaneToRunner{{
+			Message: &runnerprotocol.ControlPlaneToRunner_Assignment{
+				Assignment: resolvedAssignmentCommand(),
+			},
+		}},
+		heartbeats: make(chan *runnerprotocol.RunnerHeartbeat, 1),
+	}
+	welcome := runnerWelcomeFrame("connection-heartbeat")
+	welcome.GetWelcome().HeartbeatIntervalMs = 10
+	runResult := make(chan error, 1)
+	go func() {
+		runResult <- service.consumeCommands(
+			runContext,
+			stream,
+			welcome.GetWelcome(),
+			backend.readiness,
+		)
+	}()
+
+	select {
+	case <-backend.started:
+	case <-time.After(time.Second):
+		t.Fatal("assignment start did not block")
+	}
+	select {
+	case heartbeat := <-stream.heartbeats:
+		if heartbeat.ConnectionId != "connection-heartbeat" {
+			t.Fatalf("heartbeat connection = %q", heartbeat.ConnectionId)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("runner heartbeat stopped while assignment start was blocked")
+	}
+
+	close(backend.release)
+	cancelRun()
+	if runErr := <-runResult; !errors.Is(runErr, context.Canceled) {
+		t.Fatalf("consumeCommands cancellation error = %v", runErr)
+	}
+}
+
 func TestRunnerProtocolServiceReturnsLogicalLocalWorkspaceReceipt(t *testing.T) {
 	backend := &recordingLocalWorkspaceBackend{
 		recordingAssignmentBackend: &recordingAssignmentBackend{},
@@ -428,6 +491,7 @@ func allLocalWorkspaceCommandKinds() []runnerprotocol.LocalWorkspaceCommandKind 
 		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE,
 		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT,
 		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CLONE_FROM_SNAPSHOT,
 	}
 }
 
@@ -1144,6 +1208,28 @@ type recordingAssignmentBackend struct {
 	startupP95   time.Duration
 	startCalls   atomic.Uint32
 	fenceCalls   atomic.Uint32
+}
+
+type blockingAssignmentBackend struct {
+	recordingAssignmentBackend
+	started chan struct{}
+	release chan struct{}
+}
+
+func (backend *blockingAssignmentBackend) StartAssignment(
+	ctx context.Context,
+	assignment *runnerprotocol.AssignmentCommand,
+	_ func(runnerprotocol.AssignmentProgressStage) error,
+) (BackendInstance, error) {
+	backend.startCalls.Add(1)
+	backend.recordingAssignmentBackend.started = assignment
+	close(backend.started)
+	select {
+	case <-backend.release:
+		return backend.instance, nil
+	case <-ctx.Done():
+		return BackendInstance{}, ctx.Err()
+	}
 }
 
 func (b *recordingAssignmentBackend) StartupTiming() (uint64, time.Duration) {

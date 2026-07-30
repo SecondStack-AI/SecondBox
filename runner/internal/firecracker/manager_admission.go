@@ -13,13 +13,26 @@ import (
 type RuntimeMetricsSnapshot = runtimemanager.RuntimeMetricsSnapshot
 
 func (m *Manager) admitCompartmentSpawnLocked(key runtimeInstanceKey) error {
+	return m.admitCompartmentSpawnWithMemoryLocked(key, m.defaultMemoryMiB())
+}
+
+func (m *Manager) admitCompartmentSpawnWithMemoryLocked(
+	key runtimeInstanceKey,
+	requestedMemoryMiB int,
+) error {
 	liveForSandbox := 0
 	liveTotal := 0
+	reservedMemoryMiB := 0
 	for _, inst := range m.instances {
 		if inst == nil {
 			continue
 		}
 		liveTotal++
+		instanceMemoryMiB := inst.memoryMiB
+		if instanceMemoryMiB <= 0 {
+			instanceMemoryMiB = m.defaultMemoryMiB()
+		}
+		reservedMemoryMiB += instanceMemoryMiB
 		if strings.TrimSpace(inst.sandboxID) != key.sandboxID {
 			continue
 		}
@@ -37,6 +50,11 @@ func (m *Manager) admitCompartmentSpawnLocked(key runtimeInstanceKey) error {
 			continue
 		}
 		liveTotal += count
+		pendingMemoryMiB := m.pendingMemoryMiB[pendingKey]
+		if pendingMemoryMiB <= 0 {
+			pendingMemoryMiB = count * m.defaultMemoryMiB()
+		}
+		reservedMemoryMiB += pendingMemoryMiB
 		if pendingKey.sandboxID != key.sandboxID {
 			continue
 		}
@@ -58,38 +76,67 @@ func (m *Manager) admitCompartmentSpawnLocked(key runtimeInstanceKey) error {
 	}
 	globalCap := 0
 	memoryBudgetMiB := 0
-	memoryMiB := 0
 	if m.cfg != nil {
 		globalCap = m.cfg.MicroVMMaxConcurrentGlobal
 		memoryBudgetMiB = m.cfg.MicroVMMemoryBudgetMiB
-		memoryMiB = m.cfg.MicroVMMemoryMiB
 	}
 	if globalCap > 0 && liveTotal >= globalCap {
 		return fmt.Errorf("runner has reached SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL=%d", globalCap)
 	}
-	if memoryBudgetMiB > 0 && memoryMiB > 0 && (liveTotal+1)*memoryMiB > memoryBudgetMiB {
+	if memoryBudgetMiB > 0 &&
+		requestedMemoryMiB > 0 &&
+		reservedMemoryMiB+requestedMemoryMiB > memoryBudgetMiB {
 		return fmt.Errorf("projected microVM memory exceeds SECONDBOX_RUNNER_SANDBOX_MEMORY_BUDGET_MIB=%d", memoryBudgetMiB)
 	}
 	return nil
 }
 
-func (m *Manager) reserveCompartmentSpawnLocked(key runtimeInstanceKey) error {
-	if err := m.admitCompartmentSpawnLocked(key); err != nil {
+func (m *Manager) reserveCompartmentSpawnLocked(key runtimeInstanceKey, requested ...int) error {
+	requestedMemoryMiB := m.defaultMemoryMiB()
+	if len(requested) > 0 {
+		requestedMemoryMiB = requested[0]
+	}
+	if err := m.admitCompartmentSpawnWithMemoryLocked(key, requestedMemoryMiB); err != nil {
 		return err
 	}
 	if m.pendingSpawns == nil {
 		m.pendingSpawns = map[runtimeInstanceKey]int{}
 	}
+	if m.pendingMemoryMiB == nil {
+		m.pendingMemoryMiB = map[runtimeInstanceKey]int{}
+	}
 	m.pendingSpawns[key]++
+	m.pendingMemoryMiB[key] += requestedMemoryMiB
 	return nil
 }
 
-func (m *Manager) releaseCompartmentSpawnLocked(key runtimeInstanceKey) {
+func (m *Manager) releaseCompartmentSpawnLocked(key runtimeInstanceKey, requested ...int) {
+	requestedMemoryMiB := m.defaultMemoryMiB()
+	if len(requested) > 0 {
+		requestedMemoryMiB = requested[0]
+	}
 	if m.pendingSpawns[key] <= 1 {
 		delete(m.pendingSpawns, key)
+		delete(m.pendingMemoryMiB, key)
 		return
 	}
 	m.pendingSpawns[key]--
+	m.pendingMemoryMiB[key] -= requestedMemoryMiB
+}
+
+func (m *Manager) defaultMemoryMiB() int {
+	if m == nil || m.cfg == nil {
+		return 0
+	}
+	return m.cfg.MicroVMMemoryMiB
+}
+
+func (m *Manager) requestedMemoryMiB(opts runtimemanager.StartOpts) int {
+	memoryMiB := m.defaultMemoryMiB()
+	if opts.SandboxPolicy != nil && opts.SandboxPolicy.MemoryMiB > 0 {
+		memoryMiB = opts.SandboxPolicy.MemoryMiB
+	}
+	return memoryMiB
 }
 
 func (m *Manager) RuntimeMetricsSnapshot() RuntimeMetricsSnapshot {
@@ -108,6 +155,11 @@ func (m *Manager) RuntimeMetricsSnapshot() RuntimeMetricsSnapshot {
 		}
 		out.ConcurrentVMsBySandbox[inst.sandboxID]++
 		out.ConcurrentVMsTotal++
+		instanceMemoryMiB := inst.memoryMiB
+		if instanceMemoryMiB <= 0 {
+			instanceMemoryMiB = m.defaultMemoryMiB()
+		}
+		out.MemoryReservedMiB += instanceMemoryMiB
 		if inst.warmToolVM {
 			out.WarmToolVMs++
 		}
@@ -118,6 +170,11 @@ func (m *Manager) RuntimeMetricsSnapshot() RuntimeMetricsSnapshot {
 		}
 		out.PendingVMsBySandbox[key.sandboxID] += count
 		out.PendingVMsTotal += count
+		pendingMemoryMiB := m.pendingMemoryMiB[key]
+		if pendingMemoryMiB <= 0 {
+			pendingMemoryMiB = count * m.defaultMemoryMiB()
+		}
+		out.MemoryReservedMiB += pendingMemoryMiB
 	}
 	out.GuestIPsInUse = len(m.guestIPs)
 	if m.cfg != nil {
@@ -125,9 +182,6 @@ func (m *Manager) RuntimeMetricsSnapshot() RuntimeMetricsSnapshot {
 		out.MaxConcurrentPerSandbox = m.cfg.MicroVMMaxConcurrentPerSandbox
 		out.MaxConcurrentGlobal = m.cfg.MicroVMMaxConcurrentGlobal
 		out.MemoryBudgetMiB = m.cfg.MicroVMMemoryBudgetMiB
-		if m.cfg.MicroVMMemoryMiB > 0 {
-			out.MemoryReservedMiB = (out.ConcurrentVMsTotal + out.PendingVMsTotal) * m.cfg.MicroVMMemoryMiB
-		}
 	}
 	out.ColdStartCount = len(m.startDurations)
 	if len(m.startDurations) > 0 {

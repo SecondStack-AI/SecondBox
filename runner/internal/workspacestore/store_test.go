@@ -346,6 +346,73 @@ func TestWorkspaceLifecycleIsIdempotentAndCrashRecoverable(t *testing.T) {
 	}
 }
 
+func TestCloneWorkspaceFromSnapshotCreatesIndependentGenerationOne(t *testing.T) {
+	store, cloner, formatter := newFakeStore(t)
+	const (
+		sourceWorkspaceID = "workspace-clone-source"
+		targetWorkspaceID = "workspace-clone-target"
+		snapshotID        = "snapshot-clone-source"
+		capacity          = int64(minimumExt4Bytes)
+	)
+	if _, err := store.Create(t.Context(), CreateWorkspaceRequest{
+		Mutation:      testMutation("operation-create-source", sourceWorkspaceID),
+		CapacityBytes: capacity,
+	}); err != nil {
+		t.Fatalf("create source Workspace: %v", err)
+	}
+	source, err := store.Open(t.Context(), sourceWorkspaceID, 1)
+	if err != nil {
+		t.Fatalf("open source Workspace: %v", err)
+	}
+	if _, err := source.Image().WriteAt([]byte("portable-workspace"), 4096); err != nil {
+		t.Fatalf("write source Workspace: %v", err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatalf("close source Workspace: %v", err)
+	}
+	if _, err := store.CreateSnapshot(t.Context(), CreateSnapshotRequest{
+		Mutation:           testMutation("operation-snapshot-source", sourceWorkspaceID),
+		SnapshotID:         snapshotID,
+		ExpectedGeneration: 1,
+	}); err != nil {
+		t.Fatalf("create source Snapshot: %v", err)
+	}
+
+	request := CloneWorkspaceRequest{
+		Mutation:       testMutation("operation-clone-target", targetWorkspaceID),
+		SourceSnapshot: snapshotID,
+		CapacityBytes:  capacity,
+	}
+	created, err := store.CloneFromSnapshot(t.Context(), request)
+	if err != nil {
+		t.Fatalf("clone target Workspace: %v", err)
+	}
+	if created.Generation != 1 || created.CapacityBytes != capacity {
+		t.Fatalf("clone receipt = %#v", created)
+	}
+	if replayed, err := store.CloneFromSnapshot(t.Context(), request); err != nil || replayed != created {
+		t.Fatalf("replayed clone = %#v, %v", replayed, err)
+	}
+	target, err := store.Open(t.Context(), targetWorkspaceID, 1)
+	if err != nil {
+		t.Fatalf("open target Workspace: %v", err)
+	}
+	defer target.Close()
+	got := make([]byte, len("portable-workspace"))
+	if _, err := target.Image().ReadAt(got, 4096); err != nil {
+		t.Fatalf("read target Workspace: %v", err)
+	}
+	if string(got) != "portable-workspace" {
+		t.Fatalf("target Workspace content = %q", got)
+	}
+	if len(formatter.uuids) != 1 {
+		t.Fatalf("clone formatted a second filesystem: UUIDs = %#v", formatter.uuids)
+	}
+	if cloner.calls != 3 {
+		t.Fatalf("clone calls after probe, Snapshot, and target clone = %d", cloner.calls)
+	}
+}
+
 func TestRunnerRestartReplaysEveryLocalWorkspaceOperation(t *testing.T) {
 	const (
 		workspaceID = "workspace-restart"

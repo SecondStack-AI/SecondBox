@@ -63,6 +63,7 @@ type stressRunnerConfig struct {
 	MemoryBudgetMiB                int `json:"memoryBudgetMiB"`
 	MaxConcurrentPerSandbox        int `json:"maxConcurrentPerSandbox"`
 	MaxConcurrentGlobal            int `json:"maxConcurrentGlobal"`
+	MaxConcurrentOperationsGlobal  int `json:"maxConcurrentOperationsGlobal"`
 	FileTransferMaxBytes           int `json:"fileTransferMaxBytes"`
 	StoragePressureRecoveryPercent int `json:"storagePressureRecoveryPercent"`
 	StoragePressureWarningPercent  int `json:"storagePressureWarningPercent"`
@@ -246,6 +247,7 @@ func (config stressRunnerConfig) validate() error {
 		"memoryBudgetMiB":                     config.MemoryBudgetMiB,
 		"maxConcurrentPerSandbox":             config.MaxConcurrentPerSandbox,
 		"maxConcurrentGlobal":                 config.MaxConcurrentGlobal,
+		"maxConcurrentOperationsGlobal":       config.MaxConcurrentOperationsGlobal,
 		"fileTransferMaxBytes":                config.FileTransferMaxBytes,
 		"storagePressureRecoveryPercent":      config.StoragePressureRecoveryPercent,
 		"storagePressureWarningPercent":       config.StoragePressureWarningPercent,
@@ -343,8 +345,9 @@ func (config stressConfig) configuredBinding(guestCIDR string) configuredLimit {
 			),
 		},
 		{
-			Name:     "runner Operations capacity",
-			Capacity: config.Runner.MaxConcurrentGlobal / int(config.Profile.ConcurrentOperations),
+			Name: "runner Operations capacity",
+			Capacity: config.Runner.MaxConcurrentOperationsGlobal /
+				int(config.Profile.ConcurrentOperations),
 		},
 		{Name: "guest IP capacity", Capacity: guestIPCapacity(guestCIDR)},
 		subjectBinding,

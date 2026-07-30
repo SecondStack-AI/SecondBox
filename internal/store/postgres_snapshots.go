@@ -234,7 +234,7 @@ func (store *PostgresControlPlaneStore) deleteSnapshot(
 	if snapshot.State != "ready" {
 		return contracts.Operation{}, ports.ErrSnapshotUnavailable
 	}
-	var restoreReference bool
+	var restoreReference, cloneReference bool
 	if err := tx.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM secondbox.workspace_restores
@@ -249,6 +249,22 @@ func (store *PostgresControlPlaneStore) deleteSnapshot(
 		)
 	}
 	if restoreReference {
+		return contracts.Operation{}, ports.ErrWorkspaceMutation
+	}
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM secondbox.lifecycle_effects
+			WHERE storage_object_id=$1 AND kind='local_workspace_clone'
+			  AND state NOT IN ('succeeded','runner_failed','cancelled')
+		)`,
+		input.SnapshotID,
+	).Scan(&cloneReference); err != nil {
+		return contracts.Operation{}, fmt.Errorf(
+			"SecondBox Snapshot clone reference lookup failed: %w",
+			err,
+		)
+	}
+	if cloneReference {
 		return contracts.Operation{}, ports.ErrWorkspaceMutation
 	}
 	snapshot.State = "deleting"

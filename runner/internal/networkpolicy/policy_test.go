@@ -182,6 +182,72 @@ func TestRunnerAndManagementDestinationsRemainForbidden(t *testing.T) {
 	}
 }
 
+func TestRunnerGatewayAllowsOnlyOperatorBoundDomainProtocolAndPort(t *testing.T) {
+	gatewayAddress := netip.MustParseAddr("198.18.43.1")
+	compiled, err := Compile(Policy{
+		Mode: ModeAllowList,
+		Destinations: []Destination{{
+			Protocol: ProtocolHTTP,
+			Domain:   "platform-gateway.internal",
+			Port:     18080,
+		}},
+	}, CompileOptions{
+		MaximumPins:        64,
+		MaximumTTL:         time.Minute,
+		RunnerAddresses:    []netip.Addr{gatewayAddress},
+		ManagementPrefixes: []netip.Prefix{netip.MustParsePrefix("198.18.43.0/24")},
+		RunnerGateways: map[string]netip.Addr{
+			"platform-gateway.internal": gatewayAddress,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateways := compiled.RunnerGatewayDestinations()
+	if len(gateways) != 1 ||
+		gateways[0].Address != gatewayAddress ||
+		gateways[0].Destination.Port != 18080 {
+		t.Fatalf("Runner gateways = %#v", gateways)
+	}
+	now := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+	if decision := compiled.AuthorizePinned(
+		ProtocolHTTP,
+		"platform-gateway.internal",
+		gatewayAddress,
+		18080,
+		now,
+	); !decision.Allowed || decision.Reason != ReasonAllowedRunnerGateway {
+		t.Fatalf("gateway decision = %#v", decision)
+	}
+	for _, test := range []struct {
+		domain   string
+		protocol Protocol
+		port     uint16
+	}{
+		{"other.internal", ProtocolHTTP, 18080},
+		{"platform-gateway.internal", ProtocolHTTPS, 18080},
+		{"platform-gateway.internal", ProtocolHTTP, 18081},
+	} {
+		decision := compiled.AuthorizePinned(
+			test.protocol,
+			test.domain,
+			gatewayAddress,
+			test.port,
+			now,
+		)
+		if decision.Allowed {
+			t.Fatalf("unexpected gateway admission for %#v: %#v", test, decision)
+		}
+	}
+	if decision := compiled.AuthorizeIP(
+		ProtocolHTTP,
+		gatewayAddress,
+		18080,
+	); decision.Allowed || decision.Reason != ReasonProtectedDestination {
+		t.Fatalf("direct IP gateway decision = %#v", decision)
+	}
+}
+
 func TestDNSResolutionPinsPublicAnswersPerSandbox(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	compiled, err := Compile(Policy{

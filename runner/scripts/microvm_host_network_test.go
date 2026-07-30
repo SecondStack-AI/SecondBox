@@ -49,6 +49,12 @@ if [[ "$args" == *" -C "* ]]; then
   grep -Fxq "$key" "$state"
   exit
 fi
+if [[ "$args" == *" -F "* ]]; then
+  chain="$(printf '%s' "$args" | sed -E 's/.* -F ([^ ]+).*/\1/')"
+  grep -Fv " -C $chain " "$state" > "$state.tmp" || true
+  mv "$state.tmp" "$state"
+  exit 0
+fi
 if [[ "$args" == *" -I "* ]]; then
   key="$(printf '%s' "$args" | sed -E 's/ -I ([^ ]+) 1 / -C \1 /' | xargs)"
   grep -Fxq "$key" "$state" || printf '%s\n' "$key" >> "$state"
@@ -95,12 +101,27 @@ exit 0
 	runNetworkScript(t, env, "apply", true)
 	assertFileText(t, sysctlState, "1")
 	assertFileText(t, filepath.Join(runtimeDir, "host-network.state"), expectedState)
-	assertFileContains(t, firewallState+".iptables", "-C SECONDBOX_SANDBOX_INPUT -m comment --comment secondbox-runner-host-input-deny -j DROP")
-	assertFileContains(t, firewallState+".iptables", "-C SECONDBOX_SANDBOX_INPUT -d 172.30.0.1 -p udp --dport 53 -m comment --comment secondbox-runner-dns -j ACCEPT")
-	assertFileContains(t, firewallState+".iptables", "-C SECONDBOX_SANDBOX_FORWARD -m connmark --mark 0x53425801/0xffffffff -m comment --comment secondbox-sandbox-policy-allow -j ACCEPT")
-	assertFileContains(t, firewallState+".iptables", "-C SECONDBOX_SANDBOX_FORWARD -m comment --comment secondbox-sandbox-forward-deny -j DROP")
+	assertFileContains(t, firewallState+".iptables", "-C SBX_INPUT_sbx0 -m comment --comment secondbox-runner-host-input-deny -j DROP")
+	assertFileContains(t, firewallState+".iptables", "-C SBX_INPUT_sbx0 -d 172.30.0.1 -p udp --dport 53 -m comment --comment secondbox-runner-dns -j ACCEPT")
+	assertFileContains(t, firewallState+".iptables", "-C SBX_FORWARD_sbx0 -m connmark --mark 0x53425801/0xffffffff -m comment --comment secondbox-sandbox-policy-allow -j ACCEPT")
+	assertFileContains(t, firewallState+".iptables", "-C SBX_FORWARD_sbx0 -m comment --comment secondbox-sandbox-forward-deny -j DROP")
 	assertFileContains(t, firewallState+".iptables", "-t nat -C POSTROUTING -s 172.30.0.0/24 ! -d 172.30.0.0/24 -m connmark --mark 0x53425801/0xffffffff -m comment --comment secondbox-sandbox-policy-nat -j MASQUERADE")
-	assertFileContains(t, firewallState+".ip6tables", "-C SECONDBOX_SANDBOX_IPV6 -m comment --comment secondbox-sandbox-ipv6-deny -j DROP")
+	assertFileContains(t, firewallState+".ip6tables", "-C SBX_IPV6_sbx0 -m comment --comment secondbox-sandbox-ipv6-deny -j DROP")
+
+	secondRuntimeDir := filepath.Join(dir, "runtime-second")
+	secondEnv := envWith(
+		env,
+		"SECONDBOX_RUNNER_SANDBOX_BRIDGE_NAME=sbx1",
+		"SECONDBOX_RUNNER_SANDBOX_BRIDGE_CIDR=172.31.0.1/24",
+		"SECONDBOX_RUNNER_SANDBOX_GUEST_CIDR=172.31.0.0/24",
+		"SECONDBOX_RUNNER_SANDBOX_TAP_PREFIX=sby",
+		"SECONDBOX_RUNNER_SANDBOX_NETWORK_STATE_DIR="+secondRuntimeDir,
+	)
+	runNetworkScript(t, secondEnv, "apply", true)
+	assertFileContains(t, firewallState+".iptables", "-C SBX_FORWARD_sbx1 -m connmark --mark 0x53425801/0xffffffff -m comment --comment secondbox-sandbox-policy-allow -j ACCEPT")
+	runNetworkScript(t, secondEnv, "remove", true)
+	assertFileContains(t, firewallState+".iptables", "-C SBX_FORWARD_sbx0 -m connmark --mark 0x53425801/0xffffffff -m comment --comment secondbox-sandbox-policy-allow -j ACCEPT")
+	assertFileContains(t, firewallState+".iptables", "-C FORWARD -i sbx0 -m comment --comment secondbox-sandbox-forward-out -j SBX_FORWARD_sbx0")
 
 	if err := os.WriteFile(firewallState+".iptables", nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -109,7 +130,7 @@ exit 0
 		t.Fatal(err)
 	}
 	runNetworkScript(t, env, "apply", true)
-	assertFileContains(t, firewallState+".iptables", "-C INPUT -i sbx0 -m comment --comment secondbox-runner-host-input -j SECONDBOX_SANDBOX_INPUT")
+	assertFileContains(t, firewallState+".iptables", "-C INPUT -i sbx0 -m comment --comment secondbox-runner-host-input -j SBX_INPUT_sbx0")
 
 	logBefore := firewallLogSize(t, firewallLog)
 	changedEnv := envWith(env, "SECONDBOX_RUNNER_SANDBOX_BRIDGE_CIDR=172.31.0.1/24")

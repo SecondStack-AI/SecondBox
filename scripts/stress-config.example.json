@@ -27,6 +27,7 @@
     "memoryBudgetMiB": 4096,
     "maxConcurrentPerSandbox": 4,
     "maxConcurrentGlobal": 16,
+    "maxConcurrentOperationsGlobal": 64,
     "fileTransferMaxBytes": 1073741824,
     "storagePressureRecoveryPercent": 70,
     "storagePressureWarningPercent": 80,

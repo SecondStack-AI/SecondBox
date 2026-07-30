@@ -6,7 +6,7 @@ A `Sandbox` is the durable public resource and its running `Instance` is replace
 
 SecondBox v1 implements Firecracker only. It ships immutable `agent-compartment` and `coding-environment` built-in profiles for its two core use cases. Operators may also create explicit profiles that fix image, toolchain, resource, lifecycle, storage, networking, execution, and runner-pool policy. Every Sandbox pins the resolved immutable profile revision at creation.
 
-The HTTP API has one deployment-wide `SECONDBOX_PLATFORM_TOKEN`. A trusted upstream caller also supplies opaque `X-SecondBox-Tenant-Ref` and `X-SecondBox-Subject-Ref` headers; SecondBox scopes every owned row to both values but does not authenticate or resolve them. Runner connections use a separate pre-shared Runner credential plus a CA-signed mTLS identity.
+The HTTP API accepts the deployment-wide `SECONDBOX_PLATFORM_TOKEN` for operator administration and explicitly configured application authorities for bounded consumer access. Each application token is bound to fixed opaque `X-SecondBox-Tenant-Ref` and `X-SecondBox-Subject-Ref` values, exact Sandbox operation scopes, and explicit Profile grants. SecondBox scopes every owned row to both references. Runner connections use a separate pre-shared Runner credential plus a CA-signed mTLS identity.
 
 ## Repository layout
 

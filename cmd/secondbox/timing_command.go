@@ -27,13 +27,15 @@ func runTimingCommand(
 	httpClient *http.Client,
 ) error {
 	if rawURL == "" {
-		return errors.New("SecondBox timings requires --url")
+		return errors.New("SecondBox timings requires --url" + sessionSourceHint)
 	}
 	if token == "" {
-		return errors.New("SecondBox timings requires --token")
+		return errors.New("SecondBox timings requires --token" + sessionSourceHint)
 	}
 	if tenantRef == "" || subjectRef == "" {
-		return errors.New("SecondBox timings requires --tenant-ref and --subject-ref")
+		return errors.New(
+			"SecondBox timings requires --tenant-ref and --subject-ref" + sessionSourceHint,
+		)
 	}
 	client, err := secondboxclient.NewSecondBoxSubjectClient(
 		rawURL, token, tenantRef, subjectRef, httpClient,

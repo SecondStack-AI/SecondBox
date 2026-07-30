@@ -40,6 +40,7 @@ func TestComposeSeparatesOptionalPrivilegedRunnerFromControlPlane(t *testing.T) 
 		"${SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL:?",
 		"${SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES:?",
 		"${SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS:?",
+		"${SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS:?",
 		"${SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM:?",
 		"${SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT:?",
 		"${SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT:?",
@@ -83,6 +84,26 @@ func TestComposeSeparatesOptionalPrivilegedRunnerFromControlPlane(t *testing.T) 
 	for _, forbidden := range []string{"privileged: true", "/dev/kvm", "/dev/net/tun", "/sys/fs/cgroup"} {
 		if strings.Contains(controlPlane, forbidden) {
 			t.Errorf("control-plane service must not contain %q", forbidden)
+		}
+	}
+}
+
+// A privileged runner container receives the host's /dev. Any console, seat, or
+// login unit left enabled in the runner image binds to the host's VT, seat0, and
+// DRM devices and evicts a compositor owning that host console.
+func TestRunnerImageMasksHostConsoleAndSeatUnits(t *testing.T) {
+	dockerfile := readRepositoryFile(t, "runner/Dockerfile")
+
+	for _, maskedUnit := range []string{
+		"console-getty.service",
+		"getty.target",
+		"getty@.service",
+		"getty-static.service",
+		"serial-getty@.service",
+		"systemd-logind.service",
+	} {
+		if !strings.Contains(dockerfile, "ln -s /dev/null /etc/systemd/system/"+maskedUnit) {
+			t.Errorf("runner/Dockerfile must mask %q so a privileged runner cannot claim the host console or seat", maskedUnit)
 		}
 	}
 }
@@ -183,6 +204,7 @@ func TestDeploymentEnvironmentHasNoBlankOrSharedCredentials(t *testing.T) {
 		"SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL=5m",
 		"SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES=172.30.0.1",
 		"SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS=172.30.0.0/24",
+		"SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS=none",
 		"SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM=1.1.1.1:53",
 		"SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT=70",
 		"SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT=80",

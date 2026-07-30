@@ -39,6 +39,9 @@ test-multirunner:
 test-scenario:
     scripts/test-scenario.sh
 
+prepare-stress:
+    scripts/prepare-stress.sh
+
 test-stress:
     scripts/test-stress.sh
 

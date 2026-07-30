@@ -5,7 +5,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT
 
-for cmd in file mkfs.ext4 openssl sha256sum truncate; do
+for cmd in blkid fakeroot mkfs.ext4 openssl sha256sum truncate; do
 	command -v "$cmd" >/dev/null 2>&1 || { echo "missing required command: $cmd" >&2; exit 2; }
 done
 
@@ -68,17 +68,29 @@ make_image "$clean_root" "$clean_image"
 "$script_dir/verify-browser-surface.sh" --rootfs "$clean_image"
 "$script_dir/verify-browser-surface.sh" --shared "$clean_image"
 
+large_clean_image="$work_dir/large-clean.ext4"
+truncate -s 10240M "$large_clean_image"
+mkfs.ext4 -F -q -d "$clean_root" "$large_clean_image"
+fakeroot -- "$script_dir/verify-browser-surface.sh" --rootfs "$large_clean_image"
+
 make_artifact_dir() {
 	artifact_dir="$1"
 	rootfs_image="$2"
 	shared_image="$3"
+	browser_policy="$4"
 	rm -rf "$artifact_dir"
 	mkdir -p "$artifact_dir"
 	cp "$rootfs_image" "$artifact_dir/rootfs.ext4"
 	cp "$shared_image" "$artifact_dir/shared.img"
 	printf 'kernel\n' > "$artifact_dir/kernel"
-	printf '{"schemaVersion":1}\n' > "$artifact_dir/rootfs-source-manifest.json"
-	printf '{"state":"verified"}\n' > "$artifact_dir/secondbox-rootfs-contract.json"
+	printf '{"schemaVersion":1,"source":{"browserPolicy":"%s"}}\n' "$browser_policy" > "$artifact_dir/rootfs-source-manifest.json"
+	rootfs_sha="$(sha256sum "$artifact_dir/rootfs.ext4" | awk '{print $1}')"
+	rootfs_policy_sha="$(sha256sum "$script_dir/rootfs/verify-secondbox-rootfs.sh" | awk '{print $1}')"
+	secret_scan_policy_sha="$(sha256sum "$script_dir/scan-no-secrets.sh" | awk '{print $1}')"
+	browser_surface_policy_sha="$(sha256sum "$script_dir/verify-browser-surface.sh" | awk '{print $1}')"
+	printf '{"schemaVersion":1,"contract":"secondbox-guest-rootfs","state":"verified","surfaceContract":"standard-tools","browserPolicy":"%s","rootfsSha256":"%s","policySha256":"%s","secretScanPolicySha256":"%s","browserSurfacePolicySha256":"%s"}\n' \
+		"$browser_policy" "$rootfs_sha" "$rootfs_policy_sha" "$secret_scan_policy_sha" "$browser_surface_policy_sha" \
+		> "$artifact_dir/secondbox-rootfs-contract.json"
 	printf 'base-files:all=1\n' > "$artifact_dir/rootfs-debian-packages.lock"
 	printf 'pip==1\n' > "$artifact_dir/rootfs-python.freeze"
 	printf '{"schemaVersion":1,"packages":[]}\n' > "$artifact_dir/rootfs-debian-license-inventory.json"
@@ -132,7 +144,7 @@ EOF
 }
 
 clean_artifacts="$work_dir/clean-artifacts"
-make_artifact_dir "$clean_artifacts" "$clean_image" "$clean_image"
+make_artifact_dir "$clean_artifacts" "$clean_image" "$clean_image" forbid
 "$script_dir/verify.sh" "$clean_artifacts" "$work_dir/public.pem" "$public_key_fingerprint"
 
 unsigned_artifacts="$work_dir/unsigned-artifacts"
@@ -164,11 +176,15 @@ if "$script_dir/verify-browser-surface.sh" --rootfs "$bad_image" >/dev/null 2>&1
 	exit 1
 fi
 bad_artifacts="$work_dir/bad-artifacts"
-make_artifact_dir "$bad_artifacts" "$bad_image" "$clean_image"
+make_artifact_dir "$bad_artifacts" "$bad_image" "$clean_image" forbid
 if "$script_dir/verify.sh" "$bad_artifacts" "$work_dir/public.pem" "$public_key_fingerprint" >/dev/null 2>&1; then
 	echo "expected artifact verification browser launcher rejection" >&2
 	exit 1
 fi
+
+allowed_browser_artifacts="$work_dir/allowed-browser-artifacts"
+make_artifact_dir "$allowed_browser_artifacts" "$bad_image" "$clean_image" allow
+"$script_dir/verify.sh" "$allowed_browser_artifacts" "$work_dir/public.pem" "$public_key_fingerprint"
 
 bad_shared_root="$work_dir/bad-shared-root"
 make_root "$bad_shared_root"

@@ -63,7 +63,7 @@ tarball="$cache_dir/linux-$KERNEL_VERSION.tar.xz"
 if [ ! -f "$tarball" ]; then
     curl -fL "$KERNEL_URL" -o "$tarball"
 fi
-printf '%s  %s\n' "$KERNEL_SHA256" "$tarball" | sha256sum -c -
+printf '%s  %s\n' "$KERNEL_SHA256" "$tarball" | sha256sum -c - >/dev/null
 case "$verify_only" in
     1|true|TRUE|yes|YES)
         echo "$tarball"

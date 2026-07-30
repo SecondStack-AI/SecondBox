@@ -98,7 +98,8 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 	}
 	kind := input.Operation.Kind
 	deleteWaitingForCreate := kind == "delete" &&
-		locked.Workspace.Mutation.Kind == "create" &&
+		(locked.Workspace.Mutation.Kind == "create" ||
+			locked.Workspace.Mutation.Kind == "clone") &&
 		locked.Workspace.Mutation.State != ""
 	if locked.Workspace.Mutation.State != "" && !deleteWaitingForCreate {
 		return contracts.Operation{}, ports.ErrWorkspaceMutation
@@ -258,6 +259,9 @@ func (store *PostgresControlPlaneStore) ClaimLifecycle(
 		) AS stop_effect ON true
 		WHERE sandbox.state<>'deleted' AND sandbox.next_reconcile_at<=$1
 		  AND NOT (
+		    sandbox.state='failed' AND sandbox.lifecycle_failure_class<>''
+		  )
+		  AND NOT (
 		    sandbox.state IN ('stopped','failed')
 		    AND sandbox.desired_state='stopped'
 		  )
@@ -406,6 +410,10 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 	tag, err := tx.Exec(ctx, `
 		UPDATE secondbox.sandboxes
 		SET state=$1,lifecycle_action=CASE WHEN $2='wait' THEN lifecycle_action ELSE $2 END,
+		    desired_state=CASE
+		      WHEN $2='drain' AND $3 IN ('idle_timeout','maximum_duration') THEN 'stopped'
+		      ELSE desired_state
+		    END,
 		    lifecycle_termination_reason=CASE WHEN $3='' THEN lifecycle_termination_reason ELSE $3 END,
 		    lifecycle_failure_class=CASE WHEN $2='fail' THEN 'internal' ELSE lifecycle_failure_class END,
 		    lifecycle_failure_message=CASE WHEN $2='fail' THEN 'unrecognized lifecycle state' ELSE lifecycle_failure_message END,

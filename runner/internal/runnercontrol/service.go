@@ -441,9 +441,15 @@ func (s *RunnerProtocolService) consumeCommands(
 	connectionCtx, cancelConnection := context.WithCancel(ctx)
 	defer cancelConnection()
 	go pumpControlPlaneFrames(connectionCtx, stream.Recv, received)
-	ticker := time.NewTicker(time.Duration(welcome.HeartbeatIntervalMs) * time.Millisecond)
-	defer ticker.Stop()
 	asyncErrors := make(chan error, 1)
+	go s.sendHeartbeats(
+		connectionCtx,
+		stream,
+		welcome.ConnectionId,
+		readiness,
+		time.Duration(welcome.HeartbeatIntervalMs)*time.Millisecond,
+		asyncErrors,
+	)
 	controlState := newControlCommandState()
 	enabled := make(map[runnerprotocol.RunnerFeature]bool, len(welcome.EnabledFeatures))
 	for _, feature := range welcome.EnabledFeatures {
@@ -454,10 +460,6 @@ func (s *RunnerProtocolService) consumeCommands(
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
-			if err := s.sendHeartbeat(stream, welcome.ConnectionId, readiness); err != nil {
-				return err
-			}
 		case frame := <-received:
 			if frame.err != nil {
 				return frame.err
@@ -477,6 +479,32 @@ func (s *RunnerProtocolService) consumeCommands(
 		case terminal := <-s.instanceTerminals:
 			if err := s.sendInstanceTerminal(ctx, stream, terminal); err != nil {
 				return err
+			}
+		}
+	}
+}
+
+func (s *RunnerProtocolService) sendHeartbeats(
+	ctx context.Context,
+	stream RunnerProtocolStream,
+	connectionID string,
+	readiness BackendReadiness,
+	interval time.Duration,
+	asyncErrors chan<- error,
+) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := s.sendHeartbeat(stream, connectionID, readiness); err != nil {
+				select {
+				case asyncErrors <- err:
+				case <-ctx.Done():
+				}
+				return
 			}
 		}
 	}
@@ -604,6 +632,7 @@ func (s *RunnerProtocolService) handleLocalWorkspace(
 	}
 	switch command.Kind {
 	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CLONE_FROM_SNAPSHOT,
 		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_DELETE,
 		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION,
 		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_CREATE,

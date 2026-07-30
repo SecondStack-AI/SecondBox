@@ -118,6 +118,23 @@ func TestReadinessEvidenceHelpers(t *testing.T) {
 	}
 }
 
+func TestRunnerAllocatableCapacityUsesIndependentOperationLimit(t *testing.T) {
+	capacity := runnerAllocatableCapacity(&config.Config{
+		MicroVMVCPUs:                         4,
+		MicroVMMemoryBudgetMiB:               16384,
+		MicroVMWorkspaceSizeMiB:              51200,
+		MicroVMMaxConcurrentGlobal:           16,
+		MicroVMMaxConcurrentOperationsGlobal: 64,
+	})
+	if capacity.VcpuMillis != 64000 ||
+		capacity.MemoryBytes != 16<<30 ||
+		capacity.DiskBytes != 800<<30 ||
+		capacity.Instances != 16 ||
+		capacity.Operations != 64 {
+		t.Fatalf("Runner allocatable capacity = %#v", capacity)
+	}
+}
+
 func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 	t.Helper()
 	artifactDir := filepath.Join(t.TempDir(), "artifact-v1")

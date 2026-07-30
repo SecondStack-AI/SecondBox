@@ -6,6 +6,7 @@ import (
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -56,6 +57,17 @@ func (worker AssignmentWorker) RunOnce(
 		_, err := worker.Store.AdvanceFencedGeneration(
 			ctx, claim.AssignmentID, claim.Revision, now,
 		)
+		if errors.Is(err, ports.ErrWorkspaceMutation) {
+			waitErr := worker.Store.ApplyDecision(
+				ctx,
+				claim,
+				Decision{Action: ActionWait},
+				nil,
+				now.Add(worker.PollInterval),
+				now,
+			)
+			return decision, true, waitErr
+		}
 		return decision, true, err
 	}
 	var fenceCommand *runnerv1.FenceCommand

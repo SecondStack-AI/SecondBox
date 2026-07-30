@@ -26,6 +26,11 @@ RUN apt-get update \
       $(grep -vE '^\s*#|^\s*$' /tmp/secondbox-build/secondbox-apt-packages.txt) \
  && rm -rf /var/lib/apt/lists/*
 
+# Debian's python3-aiohttp documentation ships a demonstration RSA private key.
+# The examples are not part of the runtime contract and must not enter the
+# signed golden image.
+RUN rm -rf /usr/share/doc/python3-aiohttp/examples
+
 # Prefer the Debian Node.js runtime to any inherited /usr/local installation
 # whose CPU assumptions may not match the Firecracker guest.
 RUN rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack

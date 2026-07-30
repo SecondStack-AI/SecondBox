@@ -6,6 +6,7 @@ import (
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
 )
 
 func TestAssignmentWorkerFencesExpiredStartupWithExactAuthority(t *testing.T) {
@@ -79,10 +80,42 @@ func TestAssignmentWorkerSeparatesStartupTimeoutFromRunnerLoss(t *testing.T) {
 	}
 }
 
+func TestAssignmentWorkerDefersGenerationAdvanceWorkspaceContention(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	store := &assignmentWorkerStore{
+		claim: Claim{
+			AssignmentID: "assignment-contention",
+			Revision:     9,
+			State: AssignmentState{
+				State:            "fenced",
+				Generation:       3,
+				FenceProofDigest: "sha256:proof",
+				FailureClass:     FailureFencing,
+			},
+		},
+		found:      true,
+		advanceErr: ports.ErrWorkspaceMutation,
+	}
+	worker := AssignmentWorker{
+		Store: store, WorkerID: "assignment-worker", ClaimDuration: time.Minute,
+		PollInterval: time.Second, CommandDeadline: 30 * time.Second,
+		HeartbeatTimeout: time.Minute, NewCommandID: func(string) string { return "command" },
+	}
+	decision, found, err := worker.RunOnce(t.Context(), now)
+	if err != nil || !found || decision.Action != ActionAdvanceGeneration {
+		t.Fatalf("worker decision = %#v, %t, %v", decision, found, err)
+	}
+	if store.appliedDecision.Action != ActionWait {
+		t.Fatalf("contention deferral decision = %#v", store.appliedDecision)
+	}
+}
+
 type assignmentWorkerStore struct {
-	claim        Claim
-	found        bool
-	fenceCommand *runnerv1.FenceCommand
+	claim           Claim
+	found           bool
+	fenceCommand    *runnerv1.FenceCommand
+	appliedDecision Decision
+	advanceErr      error
 }
 
 func (store *assignmentWorkerStore) MarkExpiredRunners(
@@ -105,11 +138,12 @@ func (store *assignmentWorkerStore) ClaimNext(
 func (store *assignmentWorkerStore) ApplyDecision(
 	_ context.Context,
 	_ Claim,
-	_ Decision,
+	decision Decision,
 	command *runnerv1.FenceCommand,
 	_ time.Time,
 	_ time.Time,
 ) error {
+	store.appliedDecision = decision
 	store.fenceCommand = command
 	return nil
 }
@@ -120,5 +154,5 @@ func (store *assignmentWorkerStore) AdvanceFencedGeneration(
 	int64,
 	time.Time,
 ) (int64, error) {
-	return 0, nil
+	return 0, store.advanceErr
 }

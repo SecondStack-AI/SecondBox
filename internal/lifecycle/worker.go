@@ -76,6 +76,22 @@ func (reconciler Reconciler) RunOnce(ctx context.Context, now time.Time) (Decisi
 		if err := reconciler.Effects.ExecuteLifecycleEffect(
 			ctx, claim, decision, now.UTC(), now.UTC().Add(reconciler.PollInterval),
 		); err != nil {
+			if errors.Is(err, ports.ErrWorkspaceMutation) {
+				if waitErr := reconciler.Store.ApplyLifecycleAction(
+					ctx,
+					claim,
+					string(ActionWait),
+					"",
+					now.UTC(),
+					now.UTC().Add(reconciler.PollInterval),
+				); waitErr != nil {
+					return Decision{}, true, fmt.Errorf(
+						"SecondBox lifecycle effect contention deferral failed: %w",
+						waitErr,
+					)
+				}
+				return decision, true, nil
+			}
 			return Decision{}, true, fmt.Errorf("SecondBox lifecycle effect failed: %w", err)
 		}
 		return decision, true, nil

@@ -43,7 +43,7 @@ func TestLifecycleReconcilerRunsImmediatelyAndStopsWithContext(t *testing.T) {
 	}
 }
 
-func TestLifecycleReconcilerRetriesOnlyRevisionContention(t *testing.T) {
+func TestLifecycleReconcilerRetriesRevisionContention(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	store := &contentionLifecycleStore{cancel: cancel, applyErr: ports.ErrRevisionConflict}
 	err := runLifecycleReconciler(ctx, lifecycle.Reconciler{

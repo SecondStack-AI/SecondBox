@@ -2,11 +2,13 @@
 
 Profiles are server-owned policy. Application clients select an authorized profile name; they do not assemble compute policy in a Sandbox request.
 
-## Trusted-caller model
+## HTTP authorities
 
-Every HTTP request authenticates with the deployment-wide `SECONDBOX_PLATFORM_TOKEN` and carries `X-SecondBox-Tenant-Ref` plus `X-SecondBox-Subject-Ref`. Both references are bounded opaque strings. SecondBox stores and compares them on every owned read and write, but does not verify that the caller is entitled to assert them.
+The deployment-wide `SECONDBOX_PLATFORM_TOKEN` is the operator authority. It may call administrative and application routes while asserting any bounded opaque `X-SecondBox-Tenant-Ref` and `X-SecondBox-Subject-Ref` values. SecondBox stores and compares both references on every owned read and write. Operators keep this credential out of application services.
 
-The upstream platform is therefore the authorization boundary. A bad assertion can cross subjects; SecondBox deliberately accepts that risk to avoid duplicating the upstream identity graph. The Runner channel remains separate and requires the pre-shared Runner credential plus a CA-signed mTLS identity.
+`SECONDBOX_APPLICATION_AUTHORITIES_JSON` explicitly provisions zero or more application authorities. Each entry has a unique ID and token, one fixed tenant reference, one fixed subject reference, one or more exact Sandbox operation scopes, and one or more Profile grants. An application request must present the bound references exactly. It cannot call Profile mutation, Runner administration, or aggregate timing routes; it can read only granted Profiles and can create Sandboxes only from them. Owned resource queries remain restricted to its bound tenant and subject.
+
+Supported application scopes are `sandbox:read`, `sandbox:lifecycle`, `sandbox:exec`, `sandbox:files`, `sandbox:artifacts`, and `sandbox:ports`. Unknown routes and missing scopes fail closed. Tokens must be unique and distinct from the platform token. The Runner channel remains separate and requires the pre-shared Runner credential plus a CA-signed mTLS identity.
 
 ## Profile and revision
 

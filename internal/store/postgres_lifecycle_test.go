@@ -6,7 +6,136 @@ import (
 
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
+	"github.com/jackc/pgx/v5"
 )
+
+func TestPostgresLifecycleClaimRequiresExplicitIntentAfterTerminalFailure(t *testing.T) {
+	controlPlaneStore := openStoreTest(t)
+	now := time.Date(2026, 7, 29, 19, 0, 0, 0, time.UTC)
+	if _, err := controlPlaneStore.pool.Exec(t.Context(), `
+		INSERT INTO secondbox.profile_revisions (
+			id,profile_name,revision_number,spec_json,created_at
+		) VALUES ('revision-terminal-failure','profile-terminal-failure',1,'{}',$1);
+		INSERT INTO secondbox.workspaces (
+			id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,
+			logical_capacity_bytes,generation,mutation_kind,mutation_id,
+			mutation_effect_id,mutation_operation_id,mutation_expected_generation,
+			mutation_target_generation,mutation_state,local_receipt_json,
+			created_at,updated_at
+		) VALUES (
+			'workspace-terminal-failure','tenant','subject','sandbox-terminal-failure',
+			'runner-home','failed',1048576,1,'','','','',NULL,NULL,'','{}',$1,$1
+		);
+		INSERT INTO secondbox.sandboxes (
+			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
+			generation,workspace_id,current_instance_id,metadata_json,
+			compatibility_summary_json,lifecycle_failure_class,lifecycle_failure_message,
+			next_reconcile_at,revision,created_at,updated_at
+		) VALUES (
+			'sandbox-terminal-failure','tenant','subject','profile-terminal-failure',
+			'revision-terminal-failure','failed','running',1,
+			'workspace-terminal-failure','','{}','{}','home_workspace_conflict',
+			'home runner local Workspace evidence conflicts with durable authority',
+			$1,1,$1,$1
+		)`,
+		pgx.QueryExecModeSimpleProtocol,
+		now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := controlPlaneStore.ClaimLifecycle(
+		t.Context(), "worker-terminal-failure", now, time.Minute,
+	); err != nil || found {
+		t.Fatalf("terminal failure claim found=%t error=%v", found, err)
+	}
+	if _, err := controlPlaneStore.pool.Exec(t.Context(), `
+		UPDATE secondbox.sandboxes
+		SET lifecycle_failure_class='',lifecycle_failure_message=''
+		WHERE id='sandbox-terminal-failure'`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	claim, found, err := controlPlaneStore.ClaimLifecycle(
+		t.Context(), "worker-explicit-retry", now, time.Minute,
+	)
+	if err != nil || !found || claim.SandboxID != "sandbox-terminal-failure" {
+		t.Fatalf("explicit retry claim=%#v found=%t error=%v", claim, found, err)
+	}
+}
+
+func TestPostgresAutomaticRetirementStopsDesiredCompute(t *testing.T) {
+	for _, terminationReason := range []string{
+		contracts.TerminationReasonIdleTimeout,
+		contracts.TerminationReasonMaximumDuration,
+	} {
+		t.Run(terminationReason, func(t *testing.T) {
+			controlPlaneStore := openStoreTest(t)
+			now := time.Date(2026, 7, 30, 3, 10, 0, 0, time.UTC)
+			sandboxID := "sandbox-automatic-retirement-" + terminationReason
+			workspaceID := "workspace-automatic-retirement-" + terminationReason
+			if _, err := controlPlaneStore.pool.Exec(t.Context(), `
+				INSERT INTO secondbox.workspaces (
+					id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,
+					logical_capacity_bytes,generation,mutation_kind,mutation_id,
+					mutation_effect_id,mutation_operation_id,mutation_expected_generation,
+					mutation_target_generation,mutation_state,local_receipt_json,
+					created_at,updated_at
+				) VALUES (
+					$2,'tenant','subject',
+					$3,'runner-home','ready',1048576,1,
+					'','','','',NULL,NULL,'','{}',$1,$1
+				);
+				INSERT INTO secondbox.sandboxes (
+					id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
+					generation,workspace_id,current_instance_id,metadata_json,
+					compatibility_summary_json,reconcile_owner,reconcile_claim_expires_at,
+					revision,created_at,updated_at
+				) VALUES (
+					$3,'tenant','subject','profile','revision',
+					'ready','running',1,$2,'instance',
+					'{}','{}','lifecycle-worker',$4,7,$1,$1
+				)`,
+				pgx.QueryExecModeSimpleProtocol,
+				now,
+				workspaceID,
+				sandboxID,
+				now.Add(time.Minute),
+			); err != nil {
+				t.Fatal(err)
+			}
+			claim := ports.LifecycleReconcileClaim{
+				SandboxID:     sandboxID,
+				ObservedState: contracts.SandboxStateReady,
+				DesiredState:  contracts.SandboxDesiredStateRunning,
+				WorkerID:      "lifecycle-worker",
+				Revision:      7,
+			}
+			if err := controlPlaneStore.ApplyLifecycleAction(
+				t.Context(),
+				claim,
+				"drain",
+				terminationReason,
+				now,
+				now.Add(time.Second),
+			); err != nil {
+				t.Fatal(err)
+			}
+			var state, desiredState string
+			if err := controlPlaneStore.pool.QueryRow(t.Context(), `
+				SELECT state,desired_state
+				FROM secondbox.sandboxes
+				WHERE id=$1`,
+				sandboxID,
+			).Scan(&state, &desiredState); err != nil {
+				t.Fatal(err)
+			}
+			if state != contracts.SandboxStateDraining ||
+				desiredState != contracts.SandboxDesiredStateStopped {
+				t.Fatalf("automatic retirement state=%q desired=%q", state, desiredState)
+			}
+		})
+	}
+}
 
 func TestPostgresFinishStopAdvancesGenerationAndFencesActivity(t *testing.T) {
 	controlPlaneStore := openStoreTest(t)

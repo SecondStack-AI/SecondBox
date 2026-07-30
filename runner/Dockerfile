@@ -56,6 +56,21 @@ COPY runner/deploy/secondbox-runner.service /etc/systemd/system/secondbox-runner
 
 RUN ln -s /etc/systemd/system/secondbox-runner.service /etc/systemd/system/multi-user.target.wants/secondbox-runner.service
 
+# The runner boots a full systemd inside a privileged container, and Docker's
+# privileged mode bind-mounts the HOST's /dev. Left enabled, getty@.service
+# satisfies its ConditionPathExists=/dev/tty0 against the host console and starts
+# an agetty on the host's VT 1, stealing the VT and DRM master from whatever
+# compositor owns it; systemd-logind likewise registers the host's seat0 and
+# claims its input and DRM devices. On a workstation host that kills the desktop
+# session every time a runner container starts. A Firecracker runner needs neither
+# console logins nor seat management, so both are masked.
+RUN ln -s /dev/null /etc/systemd/system/console-getty.service \
+    && ln -s /dev/null /etc/systemd/system/getty.target \
+    && ln -s /dev/null /etc/systemd/system/getty@.service \
+    && ln -s /dev/null /etc/systemd/system/getty-static.service \
+    && ln -s /dev/null /etc/systemd/system/serial-getty@.service \
+    && ln -s /dev/null /etc/systemd/system/systemd-logind.service
+
 USER 0:0
 WORKDIR /var/lib/secondbox-runner
 STOPSIGNAL SIGRTMIN+3

@@ -152,6 +152,236 @@ func TestConcurrentSandboxCreationIsIdempotentAndPinsProfileRevision(t *testing.
 	}
 }
 
+func TestSandboxCreationFromSnapshotPinsSourceHomeRunner(t *testing.T) {
+	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
+	admin := fixtureAdmin(t, controlPlane)
+	_, account, credential := createProjectAccountAndCredential(
+		t,
+		controlPlane,
+		admin,
+		"snapshot-clone",
+	)
+	profile := createGrantedProfile(
+		t,
+		controlPlane,
+		databaseStore,
+		admin,
+		account,
+		"snapshot-clone",
+	)
+	principal := authenticateCredential(t, controlPlane, credential)
+	source, _, err := controlPlane.CreateSandbox(
+		t.Context(),
+		principal,
+		"snapshot-clone-source",
+		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	now := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+	if _, err := pool.Exec(t.Context(), `
+		UPDATE secondbox.workspaces
+		SET state='ready',mutation_kind='',mutation_id='',mutation_effect_id='',
+		    mutation_operation_id='',mutation_expected_generation=NULL,
+		    mutation_target_generation=NULL,mutation_state='',updated_at=$2
+		WHERE sandbox_id=$1`,
+		source.ID, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), `
+		UPDATE secondbox.sandboxes
+		SET state='stopped',desired_state='stopped',revision=2,updated_at=$2
+		WHERE id=$1`,
+		source.ID, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	snapshotOperation, _, err := controlPlane.CreateSandboxSnapshot(
+		t.Context(),
+		principal,
+		source.ID,
+		"snapshot-clone-checkpoint",
+		2,
+		contracts.CreateSnapshotRequest{Name: "fork", Metadata: map[string]string{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshotOperation.Snapshot == nil {
+		t.Fatal("Snapshot create operation lacks Snapshot")
+	}
+	snapshotID := snapshotOperation.Snapshot.ID
+	if _, err := pool.Exec(t.Context(), `
+		UPDATE secondbox.snapshots
+		SET state='ready',runner_receipt_json='{"durable":true}',updated_at=$2
+		WHERE id=$1`,
+		snapshotID, now.Add(time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), `
+		UPDATE secondbox.workspaces
+		SET mutation_kind='',mutation_id='',mutation_effect_id='',
+		    mutation_operation_id='',mutation_expected_generation=NULL,
+		    mutation_target_generation=NULL,mutation_state='',updated_at=$1
+		WHERE sandbox_id=$2`,
+		now.Add(time.Second), source.ID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	var sourceRunnerID string
+	if err := pool.QueryRow(t.Context(), `
+		SELECT home_runner_id FROM secondbox.workspaces WHERE sandbox_id=$1`,
+		source.ID,
+	).Scan(&sourceRunnerID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), `
+		UPDATE secondbox.runners
+		SET reserved_capacity_json=jsonb_build_object(
+		      'CPUMillis',(capacity_json->>'CPUMillis')::bigint,
+		      'MemoryBytes',(capacity_json->>'MemoryBytes')::bigint,
+		      'DiskBytes',0,
+		      'Instances',(capacity_json->>'Instances')::bigint,
+		      'Operations',(capacity_json->>'Operations')::bigint
+		    ),
+		    updated_at=$2
+		WHERE id=$1`,
+		sourceRunnerID, now.Add(time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	target, _, err := controlPlane.CreateSandbox(
+		t.Context(),
+		principal,
+		"snapshot-clone-target",
+		contracts.CreateSandboxRequest{
+			Profile:          profile.Name,
+			Metadata:         map[string]string{"fork": "target"},
+			SourceSnapshotID: snapshotID,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var (
+		persistedSourceRunnerID, targetRunnerID, mutationKind string
+		effectKind, storageObjectID                           string
+		commandPayload                                        []byte
+	)
+	if err := pool.QueryRow(t.Context(), `
+		SELECT source_workspace.home_runner_id,target_workspace.home_runner_id,
+		       target_workspace.mutation_kind,effect.kind,effect.storage_object_id,
+		       command.payload
+		FROM secondbox.workspaces AS source_workspace
+		JOIN secondbox.workspaces AS target_workspace ON target_workspace.sandbox_id=$2
+		JOIN secondbox.lifecycle_effects AS effect
+		  ON effect.id=target_workspace.mutation_effect_id
+		JOIN secondbox.runner_commands AS command ON command.id=effect.command_id
+		WHERE source_workspace.sandbox_id=$1`,
+		source.ID, target.ID,
+	).Scan(
+		&persistedSourceRunnerID, &targetRunnerID, &mutationKind,
+		&effectKind, &storageObjectID, &commandPayload,
+	); err != nil {
+		t.Fatal(err)
+	}
+	var envelope runnerv1.ControlPlaneToRunner
+	if err := proto.Unmarshal(commandPayload, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	command := envelope.GetLocalWorkspace()
+	if persistedSourceRunnerID == "" ||
+		persistedSourceRunnerID != sourceRunnerID ||
+		targetRunnerID != persistedSourceRunnerID ||
+		mutationKind != "clone" ||
+		effectKind != "local_workspace_clone" ||
+		storageObjectID != snapshotID ||
+		command == nil ||
+		command.Kind !=
+			runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CLONE_FROM_SNAPSHOT ||
+		command.SnapshotId != snapshotID {
+		t.Fatalf(
+			"Snapshot clone authority = source runner %q target runner %q mutation %q effect %q object %q command %#v",
+			persistedSourceRunnerID,
+			targetRunnerID,
+			mutationKind,
+			effectKind,
+			storageObjectID,
+			command,
+		)
+	}
+	const connectionID = "connection-snapshot-clone"
+	if _, err := pool.Exec(t.Context(), `
+		UPDATE secondbox.runners SET active_connection_id=$2 WHERE id=$1`,
+		targetRunnerID, connectionID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), `
+		INSERT INTO secondbox.runner_connections (
+			id,runner_id,credential_serial,protocol_version,state,last_sequence,
+			last_control_sequence,connected_at,last_seen_at,disconnected_at
+		) VALUES ($2,$1,'fixture',1,'active',0,0,$3,$3,NULL)`,
+		targetRunnerID, connectionID, now.Add(2*time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	stateStore, err := runnercontrol.NewPostgresStateStore(
+		t.Context(),
+		integrationDatabaseURL,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stateStore.Close)
+	result := &runnerv1.LocalWorkspaceResult{
+		MessageId: "workspace-clone-result", Sequence: 1, CommandVersion: 1,
+		Kind:        command.Kind,
+		Terminal:    runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED,
+		OperationId: command.OperationId, EffectId: command.EffectId,
+		SandboxId: target.ID, WorkspaceId: command.WorkspaceId,
+		SnapshotId: snapshotID, Generation: 1,
+		LogicalCapacityBytes:    command.LogicalCapacityBytes,
+		ReceiptRecordedAtUnixMs: uint64(now.Add(2 * time.Second).UnixMilli()),
+		Correlation:             command.Correlation,
+	}
+	duplicate, err := stateStore.RecordEvent(t.Context(), runnercontrol.Event{
+		Kind: runnercontrol.EventLocalWorkspace, RunnerID: targetRunnerID,
+		ConnectionID: connectionID,
+		Message: &runnerv1.RunnerToControlPlane{
+			Message: &runnerv1.RunnerToControlPlane_LocalWorkspaceResult{
+				LocalWorkspaceResult: result,
+			},
+		},
+	}, now.Add(2*time.Second))
+	if err != nil || duplicate {
+		t.Fatalf("record Snapshot clone result duplicate=%t error=%v", duplicate, err)
+	}
+	completed, err := controlPlane.GetOperation(t.Context(), principal, command.OperationId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.State != contracts.OperationStateSucceeded {
+		t.Fatalf("completed Snapshot clone Operation = %#v", completed)
+	}
+	completedTarget, err := controlPlane.GetSandbox(t.Context(), principal, target.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completedTarget.State != contracts.SandboxStateStopped {
+		t.Fatalf("completed Snapshot clone Sandbox = %#v", completedTarget)
+	}
+}
+
 func TestSandboxCreationWaitsForDurableHomeWorkspaceReceipt(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
 	admin := fixtureAdmin(t, controlPlane)

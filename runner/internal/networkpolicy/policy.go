@@ -34,6 +34,7 @@ type Reason string
 const (
 	ReasonAllowedCIDR          Reason = "allowed_cidr"
 	ReasonAllowedDomain        Reason = "allowed_domain"
+	ReasonAllowedRunnerGateway Reason = "allowed_runner_gateway"
 	ReasonAllowedPinnedDNS     Reason = "allowed_pinned_dns"
 	ReasonPolicyDenyAll        Reason = "policy_deny_all"
 	ReasonNoMatchingRule       Reason = "no_matching_rule"
@@ -66,6 +67,7 @@ type CompileOptions struct {
 	MaximumTTL         time.Duration
 	RunnerAddresses    []netip.Addr
 	ManagementPrefixes []netip.Prefix
+	RunnerGateways     map[string]netip.Addr
 }
 
 // Decision is safe fixed-shape admission evidence.
@@ -79,6 +81,12 @@ type DNSPin struct {
 	Domain    string
 	Addresses []netip.Addr
 	ExpiresAt time.Time
+}
+
+// RunnerGatewayDestination is one operator-bound logical gateway tuple.
+type RunnerGatewayDestination struct {
+	Destination Destination
+	Address     netip.Addr
 }
 
 type pinKey struct {
@@ -97,9 +105,29 @@ type CompiledPolicy struct {
 	maximumTTL         time.Duration
 	runnerAddresses    map[netip.Addr]struct{}
 	managementPrefixes []netip.Prefix
+	runnerGateways     map[string]netip.Addr
 
 	mu   sync.Mutex
 	pins map[pinKey]DNSPin
+}
+
+// RunnerGatewayDestinations returns Profile destinations explicitly bound to Runner-local gateways.
+func (policy *CompiledPolicy) RunnerGatewayDestinations() []RunnerGatewayDestination {
+	if policy == nil {
+		return nil
+	}
+	result := make([]RunnerGatewayDestination, 0, len(policy.runnerGateways))
+	for _, destination := range policy.destinations {
+		address, found := policy.runnerGateways[destination.Domain]
+		if !found {
+			continue
+		}
+		result = append(result, RunnerGatewayDestination{
+			Destination: destination,
+			Address:     address,
+		})
+	}
+	return result
 }
 
 // Destinations returns the validated immutable destination rules used by host
@@ -207,6 +235,28 @@ func Compile(policy Policy, options CompileOptions) (*CompiledPolicy, error) {
 		}
 		managementPrefixes = append(managementPrefixes, normalized)
 	}
+	runnerGateways := make(map[string]netip.Addr, len(options.RunnerGateways))
+	for rawDomain, rawAddress := range options.RunnerGateways {
+		domain, err := normalizeDomain(rawDomain)
+		if err != nil {
+			return nil, fmt.Errorf("SecondBox network policy Runner gateway domain: %w", err)
+		}
+		address := normalizeAddress(rawAddress)
+		if !address.IsValid() {
+			return nil, fmt.Errorf("SecondBox network policy Runner gateway %q address is invalid", domain)
+		}
+		if !isProtectedAddress(address, runnerAddresses, managementPrefixes) {
+			return nil, fmt.Errorf(
+				"SecondBox network policy Runner gateway %q address %s is not a protected Runner destination",
+				domain,
+				address,
+			)
+		}
+		if _, duplicate := runnerGateways[domain]; duplicate {
+			return nil, fmt.Errorf("SecondBox network policy Runner gateway domain %q is duplicated", domain)
+		}
+		runnerGateways[domain] = address
+	}
 	return &CompiledPolicy{
 		mode:               policy.Mode,
 		destinations:       destinations,
@@ -214,6 +264,7 @@ func Compile(policy Policy, options CompileOptions) (*CompiledPolicy, error) {
 		maximumTTL:         options.MaximumTTL,
 		runnerAddresses:    runnerAddresses,
 		managementPrefixes: managementPrefixes,
+		runnerGateways:     runnerGateways,
 		pins:               make(map[pinKey]DNSPin),
 	}, nil
 }
@@ -459,6 +510,9 @@ func (policy *CompiledPolicy) AuthorizePinned(
 		return Decision{Reason: ReasonNoMatchingRule}
 	}
 	address = normalizeAddress(address)
+	if policy.isRunnerGateway(protocol, domain, address, port) {
+		return Decision{Allowed: true, Reason: ReasonAllowedRunnerGateway}
+	}
 	if policy.isProtected(address) {
 		return Decision{Reason: ReasonProtectedDestination}
 	}
@@ -481,6 +535,18 @@ func (policy *CompiledPolicy) AuthorizePinned(
 	return Decision{Reason: ReasonDNSRebinding}
 }
 
+func (policy *CompiledPolicy) isRunnerGateway(
+	protocol Protocol,
+	domain string,
+	address netip.Addr,
+	port uint16,
+) bool {
+	gatewayAddress, found := policy.runnerGateways[domain]
+	return found &&
+		gatewayAddress == address &&
+		policy.hasDomainRule(protocol, domain, port)
+}
+
 func (policy *CompiledPolicy) hasDomainRule(protocol Protocol, domain string, port uint16) bool {
 	for _, destination := range policy.destinations {
 		if destination.Domain == domain &&
@@ -493,13 +559,21 @@ func (policy *CompiledPolicy) hasDomainRule(protocol Protocol, domain string, po
 }
 
 func (policy *CompiledPolicy) isProtected(address netip.Addr) bool {
+	return isProtectedAddress(address, policy.runnerAddresses, policy.managementPrefixes)
+}
+
+func isProtectedAddress(
+	address netip.Addr,
+	runnerAddresses map[netip.Addr]struct{},
+	managementPrefixes []netip.Prefix,
+) bool {
 	if !address.IsValid() {
 		return true
 	}
-	if _, found := policy.runnerAddresses[address]; found {
+	if _, found := runnerAddresses[address]; found {
 		return true
 	}
-	for _, prefix := range policy.managementPrefixes {
+	for _, prefix := range managementPrefixes {
 		if prefix.Contains(address) {
 			return true
 		}

@@ -101,6 +101,56 @@ func TestNFTablesNetworkPolicyEnforcerInstallsDefaultDenyAndExplicitAllows(t *te
 	}
 }
 
+func TestNFTablesNetworkPolicyPlacesExactRunnerGatewayBeforeProtectedDrops(t *testing.T) {
+	gatewayAddress := netip.MustParseAddr("198.18.43.1")
+	compiled, err := networkpolicy.Compile(networkpolicy.Policy{
+		Mode: networkpolicy.ModeAllowList,
+		Destinations: []networkpolicy.Destination{{
+			Protocol: networkpolicy.ProtocolHTTP,
+			Domain:   "platform-gateway.internal",
+			Port:     18080,
+		}},
+	}, networkpolicy.CompileOptions{
+		MaximumPins:        4,
+		MaximumTTL:         time.Minute,
+		RunnerAddresses:    []netip.Addr{gatewayAddress},
+		ManagementPrefixes: []netip.Prefix{netip.MustParsePrefix("198.18.43.0/24")},
+		RunnerGateways: map[string]netip.Addr{
+			"platform-gateway.internal": gatewayAddress,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var script string
+	enforcer := &NFTablesNetworkPolicyEnforcer{
+		run: func(_ context.Context, _ string, _ []string, stdin string) ([]byte, error) {
+			script = stdin
+			return nil, nil
+		},
+		nftPath: "/usr/sbin/nft",
+	}
+	if err := enforcer.Install(context.Background(), PolicyNetworkConfig{
+		InstanceID: "gateway-test",
+		TapName:    "sbtap1",
+		GuestIP:    "198.18.43.2",
+		DNSAddress: gatewayAddress,
+		Policy:     compiled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	allow := `ip daddr 198.18.43.1 tcp dport 18080 ct mark set 0x53425801 accept`
+	protectedDrop := `ip daddr 198.18.43.0/24 drop`
+	allowIndex := strings.Index(script, allow)
+	dropIndex := strings.Index(script, protectedDrop)
+	if allowIndex < 0 || dropIndex < 0 || allowIndex >= dropIndex {
+		t.Fatalf("Runner gateway allow must precede protected drop:\n%s", script)
+	}
+	if strings.Count(script, allow) != 1 {
+		t.Fatalf("Runner gateway tuple must be admitted exactly once:\n%s", script)
+	}
+}
+
 func TestNFTablesNetworkPolicyKeepsUnsolicitedInboundClosedWithoutPortSessions(t *testing.T) {
 	compiled, err := networkpolicy.Compile(
 		networkpolicy.Policy{Mode: networkpolicy.ModeDenyAll},

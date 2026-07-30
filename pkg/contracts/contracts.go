@@ -464,9 +464,16 @@ type SandboxPage struct {
 	NextCursor *string   `json:"nextCursor,omitempty"`
 }
 
-// CreateSandboxRequest contains only caller-selected Profile and bounded metadata.
+// CreateSandboxRequest contains a caller-selected Profile, bounded metadata,
+// and an optional retained Snapshot used to seed generation one.
 type CreateSandboxRequest struct {
-	Profile  string            `json:"profile"`
+	Profile          string            `json:"profile"`
+	Metadata         map[string]string `json:"metadata"`
+	SourceSnapshotID string            `json:"sourceSnapshotId,omitempty"`
+}
+
+// UpdateSandboxMetadataRequest replaces bounded application correlation metadata.
+type UpdateSandboxMetadataRequest struct {
 	Metadata map[string]string `json:"metadata"`
 }
 

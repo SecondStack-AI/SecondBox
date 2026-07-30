@@ -419,11 +419,27 @@ func (store *PostgresStateStore) RecordHeartbeat(
 		return duplicate, err
 	}
 	defer tx.Rollback(ctx)
-	durableReserved, err := lockDurableRunnerReservation(
+	if err := lockRunnerReservation(
 		ctx,
 		tx,
 		heartbeat.RunnerId,
 		heartbeat.ConnectionId,
+	); err != nil {
+		return false, err
+	}
+	if err := reconcileRunnerActiveAssignments(
+		ctx,
+		tx,
+		heartbeat.RunnerId,
+		heartbeat.ActiveAssignments,
+		now.UTC(),
+	); err != nil {
+		return false, err
+	}
+	durableReserved, err := durableRunnerReservation(
+		ctx,
+		tx,
+		heartbeat.RunnerId,
 	)
 	if err != nil {
 		return false, err
@@ -466,12 +482,102 @@ func (store *PostgresStateStore) RecordHeartbeat(
 	return false, nil
 }
 
-func lockDurableRunnerReservation(
+func reconcileRunnerActiveAssignments(
+	ctx context.Context,
+	tx pgx.Tx,
+	runnerID string,
+	reported []*runnerv1.ActiveAssignmentSummary,
+	now time.Time,
+) error {
+	reportedByID := make(map[string]*runnerv1.ActiveAssignmentSummary, len(reported))
+	for _, summary := range reported {
+		if summary == nil ||
+			summary.AssignmentId == "" ||
+			summary.SandboxId == "" ||
+			summary.InstanceId == "" ||
+			summary.SandboxGeneration == 0 ||
+			len(summary.FencingToken) == 0 {
+			return errors.New("SecondBox runner Heartbeat active Assignment evidence is incomplete")
+		}
+		if _, duplicate := reportedByID[summary.AssignmentId]; duplicate {
+			return errors.New("SecondBox runner Heartbeat active Assignment evidence is duplicated")
+		}
+		reportedByID[summary.AssignmentId] = summary
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT id,sandbox_id,instance_id,generation,fencing_token
+		FROM secondbox.assignments
+		WHERE runner_id=$1 AND state='ready'
+		ORDER BY id
+		FOR UPDATE`,
+		runnerID,
+	)
+	if err != nil {
+		return fmt.Errorf("SecondBox runner Heartbeat active Assignment lookup: %w", err)
+	}
+	type activeAssignment struct {
+		id           string
+		sandboxID    string
+		instanceID   string
+		generation   int64
+		fencingToken []byte
+	}
+	missing := make([]activeAssignment, 0)
+	for rows.Next() {
+		var assignment activeAssignment
+		if err := rows.Scan(
+			&assignment.id,
+			&assignment.sandboxID,
+			&assignment.instanceID,
+			&assignment.generation,
+			&assignment.fencingToken,
+		); err != nil {
+			rows.Close()
+			return fmt.Errorf("SecondBox runner Heartbeat active Assignment scan: %w", err)
+		}
+		summary, found := reportedByID[assignment.id]
+		if found {
+			if summary.SandboxId != assignment.sandboxID ||
+				summary.InstanceId != assignment.instanceID ||
+				summary.SandboxGeneration != uint64(assignment.generation) ||
+				!bytes.Equal(summary.FencingToken, assignment.fencingToken) {
+				rows.Close()
+				return errors.New("SecondBox runner Heartbeat active Assignment evidence conflicts with durable authority")
+			}
+			continue
+		}
+		missing = append(missing, assignment)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("SecondBox runner Heartbeat active Assignment iteration: %w", err)
+	}
+	for _, assignment := range missing {
+		tag, err := tx.Exec(ctx, `
+			UPDATE secondbox.assignments
+			SET state='uncertain',failure_class='transient',next_reconcile_at=$2,
+			    reconcile_owner='',reconcile_claim_expires_at=$2,
+			    revision=revision+1,updated_at=$2
+			WHERE id=$1 AND state='ready'`,
+			assignment.id,
+			now,
+		)
+		if err != nil {
+			return fmt.Errorf("SecondBox runner Heartbeat missing Assignment transition: %w", err)
+		}
+		if tag.RowsAffected() != 1 {
+			return errors.New("SecondBox runner Heartbeat missing Assignment changed concurrently")
+		}
+	}
+	return nil
+}
+
+func lockRunnerReservation(
 	ctx context.Context,
 	tx pgx.Tx,
 	runnerID string,
 	connectionID string,
-) (runnerCapacity, error) {
+) error {
 	var lockedRunnerID string
 	err := tx.QueryRow(ctx, `
 		SELECT id FROM secondbox.runners
@@ -481,11 +587,19 @@ func lockDurableRunnerReservation(
 		connectionID,
 	).Scan(&lockedRunnerID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return runnerCapacity{}, errors.New("SecondBox runner Heartbeat connection is no longer active")
+		return errors.New("SecondBox runner Heartbeat connection is no longer active")
 	}
 	if err != nil {
-		return runnerCapacity{}, fmt.Errorf("SecondBox runner Heartbeat reservation lock: %w", err)
+		return fmt.Errorf("SecondBox runner Heartbeat reservation lock: %w", err)
 	}
+	return nil
+}
+
+func durableRunnerReservation(
+	ctx context.Context,
+	tx pgx.Tx,
+	runnerID string,
+) (runnerCapacity, error) {
 	var capacity runnerCapacity
 	if err := tx.QueryRow(ctx, `
 		SELECT
@@ -497,6 +611,10 @@ func lockDurableRunnerReservation(
 		FROM secondbox.assignments AS assignment
 		JOIN secondbox.profile_revisions AS revision
 		  ON revision.id=assignment.profile_revision_id
+		JOIN secondbox.sandboxes AS sandbox
+		  ON sandbox.id=assignment.sandbox_id
+		  AND sandbox.current_instance_id=assignment.instance_id
+		  AND sandbox.generation=assignment.generation
 		WHERE assignment.runner_id=$1
 		  AND assignment.state IN ('assigned','accepted','starting','ready','uncertain')`,
 		runnerID,
@@ -651,7 +769,9 @@ func recordLocalWorkspaceResult(
 		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT:
 		return recordLocalRestoreResult(ctx, tx, locked, snapshot, runnerID, result, now)
 	}
-	if result.Kind != runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE {
+	if result.Kind != runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE &&
+		result.Kind !=
+			runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CLONE_FROM_SNAPSHOT {
 		return recordLocalSnapshotResult(ctx, tx, locked, snapshot, runnerID, result, now)
 	}
 	effect, err := lockLocalWorkspaceEffect(ctx, tx, result.EffectId)
@@ -698,7 +818,7 @@ func recordLocalWorkspaceResult(
 			result.WorkspaceId, evidenceJSON, now, keepStartMutation,
 			workspace.Mutation.OperationID, workspace.Generation,
 		); err != nil {
-			return fmt.Errorf("SecondBox runner Workspace create completion: %w", err)
+			return fmt.Errorf("SecondBox runner Workspace create or clone completion: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE secondbox.sandboxes
@@ -1474,6 +1594,8 @@ func workspaceMutationMatchesReceipt(
 	switch receiptKind {
 	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE:
 		return mutationKind == "create"
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CLONE_FROM_SNAPSHOT:
+		return mutationKind == "clone"
 	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_DELETE:
 		return mutationKind == "workspace_delete"
 	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION:
@@ -1534,6 +1656,17 @@ func failReconciledWorkspace(
 	}
 	if locked.Workspace.Mutation.EffectID != "" {
 		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.runner_commands
+			SET state='expired',target_connection_id='',updated_at=$2
+			WHERE id=(
+			  SELECT command_id FROM secondbox.lifecycle_effects WHERE id=$1
+			) AND state IN ('pending','delivering','delivered')`,
+			locked.Workspace.Mutation.EffectID,
+			now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner Workspace reconciliation command expiry: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
 			UPDATE secondbox.lifecycle_effects
 			SET state='runner_failed',failure_class=$2,failure_message=$3,
 			    evidence_json=$4,claim_owner='',claim_expires_at=$5,updated_at=$5
@@ -1551,6 +1684,7 @@ func failReconciledWorkspace(
 		UPDATE secondbox.sandboxes
 		SET state='failed',lifecycle_failure_class=$2,lifecycle_failure_message=$3,
 		    reconcile_owner='',reconcile_claim_expires_at=NULL,
+		    next_reconcile_at=NULL,
 		    revision=revision+1,updated_at=$4
 		WHERE id=$1 AND state<>'deleted'`,
 		locked.SandboxID,

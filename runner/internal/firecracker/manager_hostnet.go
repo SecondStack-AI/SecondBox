@@ -31,7 +31,16 @@ func (m *Manager) networkPolicyCompileOptions() networkpolicy.CompileOptions {
 		MaximumTTL:         m.cfg.NetworkPolicyMaximumDNSTTL,
 		RunnerAddresses:    append([]netip.Addr(nil), m.cfg.NetworkPolicyRunnerAddresses...),
 		ManagementPrefixes: append([]netip.Prefix(nil), m.cfg.NetworkPolicyManagementCIDRs...),
+		RunnerGateways:     cloneRunnerGateways(m.cfg.NetworkPolicyRunnerGateways),
 	}
+}
+
+func cloneRunnerGateways(source map[string]netip.Addr) map[string]netip.Addr {
+	result := make(map[string]netip.Addr, len(source))
+	for domain, address := range source {
+		result[domain] = address
+	}
+	return result
 }
 
 func (m *Manager) networkRequired(opts runtimemanager.StartOpts) bool {

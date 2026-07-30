@@ -65,6 +65,20 @@ func (b *AssignmentBackend) ExecuteLocalWorkspace(
 			Mutation:      mutation,
 			CapacityBytes: int64(command.LogicalCapacityBytes),
 		})
+	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CLONE_FROM_SNAPSHOT:
+		if command.LogicalCapacityBytes > math.MaxInt64 {
+			return runnercontrol.LocalWorkspaceEvidence{}, localWorkspaceFailure(
+				fmt.Errorf("SecondBox Firecracker local-workspace capacity exceeds Runner bounds"),
+			)
+		}
+		receipt, err = b.manager.workspaceStore.CloneFromSnapshot(
+			ctx,
+			workspacestore.CloneWorkspaceRequest{
+				Mutation:       mutation,
+				SourceSnapshot: command.SnapshotId,
+				CapacityBytes:  int64(command.LogicalCapacityBytes),
+			},
+		)
 	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_INSPECT:
 		var inspection workspacestore.WorkspaceInspection
 		inspection, err = b.manager.workspaceStore.Inspect(ctx, command.WorkspaceId)
@@ -212,6 +226,8 @@ func localWorkspaceReceiptKind(
 	switch kind {
 	case workspacestore.ReceiptWorkspaceCreate:
 		return runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE, nil
+	case workspacestore.ReceiptWorkspaceClone:
+		return runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CLONE_FROM_SNAPSHOT, nil
 	case workspacestore.ReceiptWorkspaceDelete:
 		return runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_DELETE, nil
 	case workspacestore.ReceiptGenerationAdvance:

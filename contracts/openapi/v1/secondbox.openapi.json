@@ -432,6 +432,38 @@
         }
       }
     },
+    "/v1/sandboxes/{sandboxId}/metadata": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
+      "put": {
+        "tags": ["Sandboxes"],
+        "operationId": "updateSandboxMetadata",
+        "parameters": [
+          {"$ref": "#/components/parameters/SandboxID"},
+          {"$ref": "#/components/parameters/IfMatch"},
+          {"$ref": "#/components/parameters/RequestID"}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UpdateSandboxMetadataRequest"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "Sandbox with replaced application correlation metadata.",
+            "headers": {
+              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
+              "ETag": {"$ref": "#/components/headers/ETag"}
+            },
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Sandbox"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "412": {"$ref": "#/components/responses/PreconditionFailed"}
+        }
+      }
+    },
     "/v1/sandboxes/{sandboxId}/timings": {
       "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
@@ -1363,7 +1395,8 @@
       "platformBearer": {
         "type": "http",
         "scheme": "bearer",
-        "bearerFormat": "SecondBox platform token"
+        "bearerFormat": "SecondBox bearer token",
+        "description": "Operator platform token or explicitly provisioned scoped application token."
       }
     },
     "headers": {
@@ -1654,7 +1687,7 @@
         "type": "object",
         "maxProperties": 128,
         "propertyNames": {"type": "string", "minLength": 1, "maxLength": 256},
-        "additionalProperties": {"type": "string", "maxLength": 8192}
+        "additionalProperties": {"type": "string", "maxLength": 131072}
       },
       "ProfileState": {"type": "string", "enum": ["enabled", "disabled"]},
       "Profile": {
@@ -1940,6 +1973,15 @@
         "required": ["profile", "metadata"],
         "properties": {
           "profile": {"$ref": "#/components/schemas/ProfileName"},
+          "metadata": {"$ref": "#/components/schemas/Metadata"},
+          "sourceSnapshotId": {"$ref": "#/components/schemas/OpaqueID"}
+        }
+      },
+      "UpdateSandboxMetadataRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["metadata"],
+        "properties": {
           "metadata": {"$ref": "#/components/schemas/Metadata"}
         }
       },

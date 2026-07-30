@@ -154,7 +154,8 @@ func (broker *PostgresEffectBroker) queueWorkspaceDelete(
 	generationText := fmt.Sprintf("%d", locked.Generation)
 	effectID := stableEffectID("workspace-delete-effect", claim.SandboxID, generationText)
 	initialCommandID := stableEffectID("workspace-delete-command", claim.SandboxID, generationText)
-	replaceFailedCreate := workspace.Mutation.Kind == "create" &&
+	replaceFailedCreate := (workspace.Mutation.Kind == "create" ||
+		workspace.Mutation.Kind == "clone") &&
 		workspace.Mutation.State == "failed"
 	if workspace.Mutation.State == "" || replaceFailedCreate {
 		tag, err := tx.Exec(ctx, `
@@ -165,7 +166,7 @@ func (broker *PostgresEffectBroker) queueWorkspaceDelete(
 			    mutation_state='deleting',updated_at=$5
 			WHERE id=$1 AND (
 			  mutation_state='' OR
-			  (mutation_kind='create' AND mutation_state='failed')
+			  (mutation_kind IN ('create','clone') AND mutation_state='failed')
 			)`,
 			workspace.ID, effectID, operationID, locked.Generation, now.UTC(),
 		)
@@ -680,9 +681,7 @@ func (broker *PostgresEffectBroker) queueStop(
 	generationText := fmt.Sprintf("%d", generation)
 	effectID := stableEffectID("stop-effect", claim.SandboxID, generationText)
 	commandID := stableEffectID("stop-command", claim.SandboxID, generationText)
-	if operationID == "" {
-		operationID = effectID
-	}
+	operationID, requestID = stopCorrelation(operationID, requestID, effectID)
 	workspace := locked.Workspace
 	if workspace.State != "ready" || workspace.Generation != generation ||
 		locked.Generation != generation {
@@ -785,6 +784,16 @@ func (broker *PostgresEffectBroker) queueStop(
 		return fmt.Errorf("SecondBox lifecycle stop commit failed: %w", err)
 	}
 	return nil
+}
+
+func stopCorrelation(operationID string, requestID string, effectID string) (string, string) {
+	if operationID == "" {
+		operationID = effectID
+	}
+	if requestID == "" {
+		requestID = "request-" + operationID
+	}
+	return operationID, requestID
 }
 
 func (broker *PostgresEffectBroker) resumeStopEffect(

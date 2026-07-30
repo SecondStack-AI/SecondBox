@@ -19,7 +19,38 @@ go build -o ./dist/secondbox ./cmd/secondbox
   sandboxes list
 ```
 
-Grouped aliases cover Profiles, RunnerPools, Runners, Sandboxes, Operations, Leases, buffered and streaming exec, terminal negotiation, files, Snapshot create/list/get/delete/restore, Artifacts, and ports. Their remaining arguments are thin transport values:
+### Credentials
+
+Every command resolves the endpoint, token, tenant reference, and subject reference from the first source that supplies each value: the explicit flag, then the environment, then stored configuration. A value absent from all three is reported by the command that requires it, naming every source.
+
+| Flag | Environment variable |
+| --- | --- |
+| `--url` | `SECONDBOX_URL` |
+| `--token` | `SECONDBOX_TOKEN` |
+| `--tenant-ref` | `SECONDBOX_TENANT_REF` |
+| `--subject-ref` | `SECONDBOX_SUBJECT_REF` |
+
+`SECONDBOX_TOKEN` is deliberately distinct from the `SECONDBOX_PLATFORM_TOKEN` that `secondboxd` reads. A shell configured to run the control plane does not thereby hand its deployment token to the CLI.
+
+`login` verifies the credentials against the deployment before storing them, so a wrong token fails immediately with the server's problem detail and nothing is written:
+
+```sh
+./dist/secondbox login \
+  --url http://127.0.0.1:8080 \
+  --token "$SECONDBOX_PLATFORM_TOKEN" \
+  --tenant-ref "$TENANT_REF" \
+  --subject-ref "$SUBJECT_REF"
+
+./dist/secondbox sandboxes list
+```
+
+Configuration is stored at `$SECONDBOX_CONFIG` when that variable holds an absolute path, and otherwise at `config.json` under the `secondbox` directory of the user configuration directory, which honors `XDG_CONFIG_HOME`. The directory is created at mode `0700` and the file at mode `0600`, written under a temporary name and renamed into place so a concurrent reader never observes a partial document. Reads reject a symbolic link, a non-regular file, any group or other permission bit, an unknown JSON field, and trailing content.
+
+`login` defaults each unspecified value to what the environment or existing configuration already resolves, so a shell that exports the four variables can persist them with a bare `login`. `whoami` reports the resolved endpoint, tenant reference, subject reference, and the origin of each, and reports only whether a token is present — it never prints the token. `logout` removes the stored configuration and succeeds when none exists.
+
+These three commands are the only ones that do not accept an operation; every other command continues to work with fully explicit flags, and an explicit flag always wins over the environment and stored configuration.
+
+Grouped aliases cover Profiles, RunnerPools, Runners, Sandboxes, Operations, Leases, streaming exec, terminal negotiation, files, Snapshot create/list/get/delete/restore, Artifacts, and ports. Their remaining arguments are thin transport values:
 
 ```sh
 ./dist/secondbox \
@@ -29,20 +60,29 @@ Grouped aliases cover Profiles, RunnerPools, Runners, Sandboxes, Operations, Lea
   --subject-ref "$SUBJECT_REF" \
   sandboxes get \
   --path sandboxId=sbx_123
-
-./dist/secondbox \
-  --url http://127.0.0.1:8080 \
-  --token "$SECONDBOX_PLATFORM_TOKEN" \
-  --tenant-ref "$TENANT_REF" \
-  --subject-ref "$SUBJECT_REF" \
-  exec \
-  --path sandboxId=sbx_123 \
-  --header SecondBox-Generation=4 \
-  --header Idempotency-Key=req_123 \
-  --body ./exec-request.json
 ```
 
-Use `operation <operationId>` to invoke any route in the hand-maintained transport table. `--path`, `--query`, and `--header` accept repeatable `name=value` pairs; `--body` accepts a filename or `-`; `--content-type` selects the declared request media type. File bodies and responses stream between the selected file or standard input/output rather than being buffered by the CLI.
+Use `operation <operationId>` to invoke any route in the hand-maintained transport table, including `executeSandboxCommand`. `--path`, `--query`, and `--header` accept repeatable `name=value` pairs; `--body` accepts a filename or `-`; `--content-type` selects the declared request media type. File bodies and responses stream between the selected file or standard input/output rather than being buffered by the CLI.
+
+### Running one command
+
+`exec` takes the Sandbox before any option and the guest command after `--`:
+
+```sh
+./dist/secondbox exec sbx_123 -- python3 -c 'print("hello from a microVM")'
+```
+
+The Sandbox operand comes first because everything after `--` belongs to the guest, including operands that look like CLI options. `--shell` selects a shell command instead of an argv command and requires exactly one operand:
+
+```sh
+./dist/secondbox exec sbx_123 --shell -- 'printf out; printf err >&2; exit 23'
+```
+
+The command retrieves the Sandbox and applies its current generation itself, and generates its own idempotency key, so neither is supplied by hand. `exec` needs no Lease; `--lease` and `--idempotency-key` remain available when a caller owns them already.
+
+Guest standard output and standard error are decoded and written to the CLI's own two streams without being combined, and the guest's exit status becomes the CLI's exit status. The example above exits 23 and prints nothing of its own, exactly as a local command would. Every outcome that has no exit status — a command that never started, a deadline, an exhausted output bound, or an infrastructure failure — is instead described on standard error and exits 1, after any output the outcome carried has still been written.
+
+`--deadline` defaults to one minute and `--max-output-bytes` to one mebibyte; the pinned Profile's execution policy bounds both. `--cwd` selects a workspace-relative directory and `--env name=value` is repeatable. `--json` writes the raw `ExecOutcome`, retaining base64 output for scripting, and still exits with the guest's status.
 
 Local operators can inspect a bounded tail or follow the configured control-plane JSON log without supplying API credentials:
 

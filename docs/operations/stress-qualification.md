@@ -51,10 +51,37 @@ The artifact verifier runs before Compose. It checks the public-key fingerprint,
 checksums, component manifest digests, architecture, guest-protocol range, rootfs contract, and
 browser surface. A missing or invalid artifact is a failed run, not a skipped test.
 
-## Configuration
+## Prepare a reusable local bundle
 
-Copy [the explicit example](../../scripts/stress-config.example.json) and review every value for the
-host. The parser refuses unknown fields, missing workloads, duplicated workloads, non-increasing
+The normal local workflow separates the expensive image build from repeated stress runs:
+
+```sh
+just prepare-stress
+just test-stress
+```
+
+`just prepare-stress` creates persistent, gitignored state beneath `.secondbox/stress/`. It generates
+one local RSA signing key and separate public trust anchor, prepares the standard guest rootfs,
+builds the pinned kernel, creates and signs the approximately 11 GB bundle, verifies that bundle
+against the saved trust anchor, and installs a copy of the example stress configuration. It also
+creates the result and Workspace parent directories. The private key has mode `0600` and is kept
+outside the artifact bundle.
+
+The one-time local build additionally requires `debootstrap`, `fakeroot`, a working Docker Engine,
+the pinned-kernel build toolchain, and passwordless or interactive `sudo` access for rootfs staging.
+The preparation command checks these before starting the build and names the first missing
+prerequisite. They are not required when it only verifies and reuses an existing saved bundle.
+
+Preparation is idempotent: when a saved artifact directory exists, the command verifies and reuses
+it instead of rebuilding. Change `.secondbox/stress/stress.json` to tune the local sweep. To keep the
+large state elsewhere, set `SECONDBOX_STRESS_LOCAL_ROOT` to a clean absolute path for both commands.
+That path must reside on XFS or Btrfs because it also owns the local Workspace parent.
+
+After preparation, `just test-stress` discovers the bundle, public key, key fingerprint,
+configuration, and Workspace parent automatically. Each run writes a new timestamped result below
+`.secondbox/stress/results/`.
+
+The parser refuses unknown fields, missing workloads, duplicated workloads, non-increasing
 concurrency levels, inconsistent runner/Profile capacity, out-of-range timing windows, and transfer
 sizes above either configured bound. Host-network, Compose, and artifact settings are deliberately
 absent from the stress JSON because the shared scenario harness owns them.
@@ -63,7 +90,9 @@ The example deliberately makes the memory budget the first theoretical binding l
 `4096 MiB / 512 MiB = 8` concurrent Instances. This is an example configuration, not a published
 performance baseline. Change it to the qualified host's intended limits.
 
-Set every required input and run:
+## Explicit qualification and CI inputs
+
+External qualification hosts and CI may bypass the local layout by setting every input explicitly:
 
 ```sh
 export SECONDBOX_REQUIRE_QUALIFIED_STRESS=1
@@ -75,6 +104,10 @@ export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256=0123456789abcdef0123456789abc
 export SECONDBOX_RUNNER_WORKSPACE_ROOT=/absolute/path/reflink-qualification-parent
 just test-stress
 ```
+
+When omitted, `SECONDBOX_REQUIRE_QUALIFIED_STRESS` is set to `1` by the dedicated stress recipe.
+Supplying any other value still fails. Explicit path and fingerprint values override all locally
+prepared values.
 
 `SECONDBOX_STRESS_OUTPUT` must be an absent absolute path whose parent already exists. The harness
 refuses to overwrite it and creates it with mode `0600`. The shared topology's distinct test-only
@@ -99,6 +132,7 @@ The result separately names:
 
 - `configuredFirstBinding`: the minimum of
   `SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL`, runner memory budget divided by per-Sandbox memory,
+  `SECONDBOX_RUNNER_MAX_CONCURRENT_OPERATIONS_GLOBAL` divided by Profile concurrent operations,
   guest addresses available from the shared harness's selected bridge CIDR, and the first applicable subject
   Sandbox, active-Instance, CPU, memory, concurrent-Operation, or Snapshot quota;
 - `problemCounts`: the actual provider-neutral API outcomes, including quota or execution-node

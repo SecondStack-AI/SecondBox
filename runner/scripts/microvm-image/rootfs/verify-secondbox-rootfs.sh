@@ -7,11 +7,27 @@ Usage:
   verify-secondbox-rootfs.sh --live
   verify-secondbox-rootfs.sh --root-dir <prepared-rootfs-dir>
   verify-secondbox-rootfs.sh --rootfs <rootfs.ext4>
+  verify-secondbox-rootfs.sh --prepared-root-dir <prepared-rootfs-dir>
+  verify-secondbox-rootfs.sh --prepared-rootfs <rootfs.ext4>
   verify-secondbox-rootfs.sh --list-paths
 
 Verifies commands and Python imports promised by the SecondBox guest rootfs
 contract. --live executes probes; directory/image modes verify shipped paths.
 USAGE
+}
+
+prepared_tool_paths() {
+    cat <<'EOF'
+/bin/cat
+/bin/grep
+/bin/ln
+/bin/mkdir
+/bin/mount
+/bin/rm
+/bin/sed
+/bin/sh
+/usr/bin/mountpoint
+EOF
 }
 
 fail() {
@@ -205,13 +221,37 @@ verify_root_dir_executable() {
     fail "prepared-rootfs executable symlink depth exceeded: $original"
 }
 
+verify_root_dir_temporary_directory() {
+    local root="$1"
+    local mode owner
+    mode="$(stat -c '%a' "$root/tmp")"
+    owner="$(stat -c '%u:%g' "$root/tmp")"
+    [ "$mode" = "1777" ] ||
+        fail "prepared rootfs /tmp must have mode 1777, found $mode"
+    [ "$owner" = "0:0" ] ||
+        fail "prepared rootfs /tmp must be owned by root:root, found $owner"
+}
+
 verify_root_dir() {
     local root="$1"
     [ -d "$root" ] || { usage; exit 2; }
     while IFS= read -r path; do
         verify_root_dir_executable "$root" "$path"
     done < <(tool_paths)
+    verify_root_dir_temporary_directory "$root"
     echo "SecondBox rootfs verification passed: prepared rootfs"
+}
+
+verify_prepared_root_dir() {
+    local root="$1"
+    [ -d "$root" ] || { usage; exit 2; }
+    while IFS= read -r path; do
+        verify_root_dir_executable "$root" "$path"
+    done < <(prepared_tool_paths)
+    verify_root_dir_temporary_directory "$root"
+    [ -s "$root/var/lib/dpkg/status" ] ||
+        fail "prepared OCI rootfs package inventory is unreadable"
+    echo "SecondBox rootfs verification passed: prepared OCI rootfs"
 }
 
 verify_rootfs_executable() {
@@ -249,6 +289,17 @@ verify_rootfs_executable() {
     fail "rootfs executable symlink depth exceeded: $original"
 }
 
+verify_rootfs_temporary_directory() {
+    local image="$1"
+    local stat_output
+    stat_output="$(debugfs -R "stat /tmp" "$image" 2>&1)" ||
+        fail "debugfs could not inspect rootfs /tmp"
+    printf '%s\n' "$stat_output" | grep -Eq 'Type: directory +Mode: +01777' ||
+        fail "rootfs /tmp must have mode 1777"
+    printf '%s\n' "$stat_output" | grep -Eq '^User: +0 +Group: +0 ' ||
+        fail "rootfs /tmp must be owned by root:root"
+}
+
 verify_rootfs() {
     local image="$1"
     [ -f "$image" ] || { usage; exit 2; }
@@ -256,7 +307,22 @@ verify_rootfs() {
     while IFS= read -r path; do
         verify_rootfs_executable "$image" "$path"
     done < <(tool_paths)
+    verify_rootfs_temporary_directory "$image"
     echo "SecondBox rootfs verification passed: rootfs"
+}
+
+verify_prepared_rootfs() {
+    local image="$1"
+    [ -f "$image" ] || { usage; exit 2; }
+    command -v debugfs >/dev/null 2>&1 || fail "debugfs is required to inspect rootfs"
+    while IFS= read -r path; do
+        verify_rootfs_executable "$image" "$path"
+    done < <(prepared_tool_paths)
+    verify_rootfs_temporary_directory "$image"
+    if ! debugfs -R "stat /var/lib/dpkg/status" "$image" 2>&1 | grep -q '^Inode:'; then
+        fail "prepared OCI rootfs package inventory is unreadable"
+    fi
+    echo "SecondBox rootfs verification passed: prepared OCI image"
 }
 
 case "${1:-}" in
@@ -271,6 +337,14 @@ case "${1:-}" in
     --rootfs)
         [ "$#" -eq 2 ] || { usage; exit 2; }
         verify_rootfs "$2"
+        ;;
+    --prepared-root-dir)
+        [ "$#" -eq 2 ] || { usage; exit 2; }
+        verify_prepared_root_dir "$2"
+        ;;
+    --prepared-rootfs)
+        [ "$#" -eq 2 ] || { usage; exit 2; }
+        verify_prepared_rootfs "$2"
         ;;
     --list-paths)
         [ "$#" -eq 1 ] || { usage; exit 2; }

@@ -41,6 +41,9 @@ type (
 	Snapshot                = contracts.Snapshot
 	SnapshotPage            = contracts.SnapshotPage
 	Operation               = contracts.Operation
+	Lease                   = contracts.Lease
+	AcquireLeaseRequest     = contracts.AcquireLeaseRequest
+	RenewLeaseRequest       = contracts.RenewLeaseRequest
 	DurationPercentiles     = contracts.DurationPercentiles
 	BootStageTiming         = contracts.BootStageTiming
 	BootTiming              = contracts.BootTiming
@@ -75,7 +78,15 @@ const (
 	ServiceAccountScopeSandboxArtifacts = "sandbox:artifacts"
 	ServiceAccountScopeSandboxPorts     = "sandbox:ports"
 
-	ProblemCodeStateConflict = "state_conflict"
+	ProblemCodeStateConflict    = "state_conflict"
+	ProblemCodeGenerationFenced = "generation_fenced"
+	ProblemCodeLeaseFenced      = "lease_fenced"
+	ProblemCodeWaitExpired      = "wait_expired"
+
+	LeaseStateActive   = contracts.LeaseStateActive
+	LeaseStateReleased = contracts.LeaseStateReleased
+	LeaseStateExpired  = contracts.LeaseStateExpired
+	LeaseStateFenced   = contracts.LeaseStateFenced
 
 	SessionStateOpen     SessionState = "open"
 	SessionStateDetached SessionState = "detached"

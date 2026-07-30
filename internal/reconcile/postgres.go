@@ -10,6 +10,7 @@ import (
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -200,22 +201,32 @@ func (store *PostgresStore) ClaimNext(
 	var releaseProofJSON []byte
 	var assignmentCommandPayload []byte
 	err = tx.QueryRow(ctx, `
-		SELECT id,sandbox_id,instance_id,runner_id,fencing_token,state,generation,failure_class,retry_count,
-			retry_limit,operation_deadline,release_proof_json,revision,
+		SELECT assignments.id,assignments.sandbox_id,assignments.instance_id,assignments.runner_id,
+			assignments.fencing_token,assignments.state,assignments.generation,
+			assignments.failure_class,assignments.retry_count,
+			assignments.retry_limit,assignments.operation_deadline,
+			assignments.release_proof_json,assignments.revision,
 			(
 			  SELECT command.payload FROM secondbox.runner_commands AS command
 			  WHERE command.assignment_id=assignments.id AND command.kind='assignment'
 			  ORDER BY command.created_at DESC,command.id DESC LIMIT 1
 			)
 		FROM secondbox.assignments
-		WHERE next_reconcile_at<=$1
-			AND reconcile_claim_expires_at<=$1
+		JOIN secondbox.sandboxes
+		  ON sandboxes.id=assignments.sandbox_id
+		  AND sandboxes.current_instance_id=assignments.instance_id
+		  AND sandboxes.generation=assignments.generation
+		WHERE assignments.next_reconcile_at<=$1
+			AND assignments.reconcile_claim_expires_at<=$1
 			AND (
-			  state IN ('assigned','accepted','starting','uncertain','failed','fencing')
-			  OR (state='fenced' AND failure_class IN ('fencing','startup_timeout'))
+			  assignments.state IN ('assigned','accepted','starting','uncertain','failed','fencing')
+			  OR (
+			    assignments.state='fenced'
+			    AND assignments.failure_class IN ('fencing','startup_timeout')
+			  )
 			)
-		ORDER BY next_reconcile_at,id
-		FOR UPDATE SKIP LOCKED LIMIT 1`, now.UTC(),
+		ORDER BY assignments.next_reconcile_at,assignments.id
+		FOR UPDATE OF assignments SKIP LOCKED LIMIT 1`, now.UTC(),
 	).Scan(
 		&claim.AssignmentID, &claim.SandboxID, &claim.InstanceID, &claim.RunnerID,
 		&claim.FencingToken, &claim.State.State,
@@ -573,14 +584,20 @@ func (store *PostgresStore) AdvanceFencedGeneration(
 			return 0, fmt.Errorf("SecondBox runner-loss Workspace mutation acquisition: %w", err)
 		}
 		if tag.RowsAffected() != 1 {
-			return 0, errors.New("SecondBox runner loss conflicts with an active Workspace mutation")
+			return 0, fmt.Errorf(
+				"%w: runner loss conflicts with an active Workspace mutation",
+				ports.ErrWorkspaceMutation,
+			)
 		}
 	} else if workspace.Mutation.Kind != "stop" ||
 		workspace.Mutation.ID == "" ||
 		workspace.Mutation.EffectID == "" ||
 		workspace.Mutation.ExpectedGeneration != generation ||
 		workspace.Mutation.TargetGeneration != nextGeneration {
-		return 0, errors.New("SecondBox runner loss conflicts with an active Workspace mutation")
+		return 0, fmt.Errorf(
+			"%w: runner loss conflicts with an active Workspace mutation",
+			ports.ErrWorkspaceMutation,
+		)
 	}
 	if queueLocalAdvance {
 		commandID := stopEffectID + "-generation-advance"
@@ -639,7 +656,10 @@ func (store *PostgresStore) AdvanceFencedGeneration(
 			return 0, fmt.Errorf("SecondBox runner-loss existing stop effect lookup: %w", err)
 		}
 		if effectKind != "stop" {
-			return 0, errors.New("SecondBox runner-loss Workspace mutation is not a stop effect")
+			return 0, fmt.Errorf(
+				"%w: runner-loss Workspace mutation is not a stop effect",
+				ports.ErrWorkspaceMutation,
+			)
 		}
 	}
 	if _, err := tx.Exec(ctx, `

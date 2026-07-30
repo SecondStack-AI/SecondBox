@@ -2,7 +2,10 @@
 package config
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,6 +24,7 @@ type Config struct {
 	DatabaseURL                      string
 	LogPath                          string
 	PlatformToken                    string
+	ApplicationAuthorities           []ApplicationAuthority
 	HTTPTimeout                      time.Duration
 	RunnerServerCertificatePath      string
 	RunnerServerPrivateKeyPath       string
@@ -57,6 +61,16 @@ type Config struct {
 	DefaultSubjectQuota              contracts.QuotaLimits
 }
 
+// ApplicationAuthority configures one fixed application identity and its allowed capabilities.
+type ApplicationAuthority struct {
+	ID            string   `json:"id"`
+	Token         string   `json:"token"`
+	TenantRef     string   `json:"tenantRef"`
+	SubjectRef    string   `json:"subjectRef"`
+	Scopes        []string `json:"scopes"`
+	ProfileGrants []string `json:"profileGrants"`
+}
+
 // FromEnvironment fails when any required setting is absent or invalid.
 func FromEnvironment() (Config, error) {
 	listenAddress, err := requiredString("SECONDBOX_LISTEN_ADDR")
@@ -83,6 +97,10 @@ func FromEnvironment() (Config, error) {
 		return Config{}, errorsForEnvironment("SECONDBOX_LOG_PATH must be an absolute path")
 	}
 	platformToken, err := requiredSecret("SECONDBOX_PLATFORM_TOKEN", 24)
+	if err != nil {
+		return Config{}, err
+	}
+	applicationAuthorities, err := requiredApplicationAuthorities()
 	if err != nil {
 		return Config{}, err
 	}
@@ -240,6 +258,7 @@ func FromEnvironment() (Config, error) {
 		ListenAddress: listenAddress, PublicBaseURL: publicBaseURL, RunnerListenAddress: runnerListenAddress,
 		DatabaseURL: databaseURL, LogPath: logPath,
 		PlatformToken:                    platformToken,
+		ApplicationAuthorities:           applicationAuthorities,
 		HTTPTimeout:                      time.Duration(httpSeconds) * time.Second,
 		RunnerServerCertificatePath:      runnerServerCertificatePath,
 		RunnerServerPrivateKeyPath:       runnerServerPrivateKeyPath,
@@ -272,6 +291,34 @@ func FromEnvironment() (Config, error) {
 		RunnerEnabledFeatures: runnerEnabledFeatures,
 		DefaultSubjectQuota:   subjectQuota,
 	}, nil
+}
+
+func requiredApplicationAuthorities() ([]ApplicationAuthority, error) {
+	raw, err := requiredString("SECONDBOX_APPLICATION_AUTHORITIES_JSON")
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewBufferString(raw))
+	decoder.DisallowUnknownFields()
+	var authorities []ApplicationAuthority
+	if err := decoder.Decode(&authorities); err != nil {
+		return nil, fmt.Errorf(
+			"SecondBox environment variable SECONDBOX_APPLICATION_AUTHORITIES_JSON must be a JSON array: %w",
+			err,
+		)
+	}
+	if authorities == nil {
+		return nil, errorsForEnvironment(
+			"SECONDBOX_APPLICATION_AUTHORITIES_JSON must be an explicit JSON array",
+		)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, errorsForEnvironment(
+			"SECONDBOX_APPLICATION_AUTHORITIES_JSON must contain a single JSON array",
+		)
+	}
+	return authorities, nil
 }
 
 func requiredHTTPURL(name string) (string, error) {

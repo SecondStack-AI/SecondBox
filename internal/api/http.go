@@ -41,6 +41,7 @@ type HandlerConfig struct {
 	Service                   *service.ControlPlaneService
 	Logger                    *slog.Logger
 	PlatformToken             string
+	ApplicationAuthorities    []ApplicationAuthority
 	MaximumDataPlaneBodyBytes int64
 }
 
@@ -48,6 +49,7 @@ type handler struct {
 	service                   *service.ControlPlaneService
 	logger                    *slog.Logger
 	platformTokenHash         [sha256.Size]byte
+	applicationAuthorities    []resolvedApplicationAuthority
 	maximumDataPlaneBodyBytes int64
 	timings                   *observability.TimingRecorder
 }
@@ -66,9 +68,18 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	if config.MaximumDataPlaneBodyBytes <= 0 {
 		return nil, errors.New("SecondBox HTTP data-plane body bound is required")
 	}
+	platformTokenHash := sha256.Sum256([]byte(config.PlatformToken))
+	applicationAuthorities, err := resolveApplicationAuthorities(
+		config.ApplicationAuthorities,
+		platformTokenHash,
+	)
+	if err != nil {
+		return nil, err
+	}
 	apiHandler := &handler{
 		service: config.Service, logger: config.Logger,
-		platformTokenHash:         sha256.Sum256([]byte(config.PlatformToken)),
+		platformTokenHash:         platformTokenHash,
+		applicationAuthorities:    applicationAuthorities,
 		maximumDataPlaneBodyBytes: config.MaximumDataPlaneBodyBytes,
 		timings:                   observability.NewTimingRecorder(),
 	}
@@ -90,6 +101,7 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	mux.Handle("GET /v1/sandboxes", apiHandler.authenticate(http.HandlerFunc(apiHandler.listSandboxes)))
 	mux.Handle("POST /v1/sandboxes", apiHandler.authenticate(http.HandlerFunc(apiHandler.createSandbox)))
 	mux.Handle("GET /v1/sandboxes/{sandboxID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getSandbox)))
+	mux.Handle("PUT /v1/sandboxes/{sandboxID}/metadata", apiHandler.authenticate(http.HandlerFunc(apiHandler.updateSandboxMetadata)))
 	mux.Handle("GET /v1/sandboxes/{sandboxID}/timings", apiHandler.authenticate(http.HandlerFunc(apiHandler.getSandboxTiming)))
 	mux.Handle("DELETE /v1/sandboxes/{sandboxID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.deleteSandbox)))
 	mux.Handle("POST /v1/sandboxes/{sandboxAction}", apiHandler.authenticate(http.HandlerFunc(apiHandler.mutateSandbox)))
@@ -711,6 +723,10 @@ func (apiHandler *handler) createSandbox(writer http.ResponseWriter, request *ht
 		apiHandler.writeError(writer, request, err)
 		return
 	}
+	if err := authorizeApplicationProfile(request, body.Profile); err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
 	operation, replayed, err := apiHandler.service.CreateSandboxOperation(
 		request.Context(), requestPrincipal(request), request.Header.Get("Idempotency-Key"), body,
 	)
@@ -981,26 +997,48 @@ func (apiHandler *handler) authenticate(next http.Handler) http.Handler {
 			return
 		}
 		presentedHash := sha256.Sum256([]byte(credential))
-		if subtle.ConstantTimeCompare(presentedHash[:], apiHandler.platformTokenHash[:]) != 1 {
+		if subtle.ConstantTimeCompare(presentedHash[:], apiHandler.platformTokenHash[:]) == 1 {
+			tenantRef := request.Header.Get("X-SecondBox-Tenant-Ref")
+			subjectRef := request.Header.Get("X-SecondBox-Subject-Ref")
+			if !ownershipRefPattern.MatchString(tenantRef) ||
+				!ownershipRefPattern.MatchString(subjectRef) {
+				apiHandler.writeError(
+					writer,
+					request,
+					errors.New("SecondBox tenant and subject references must contain 1 to 128 visible ASCII characters"),
+				)
+				return
+			}
+			principal := contracts.Principal{
+				Kind: "platform", ID: subjectRef,
+				TenantRef: tenantRef, SubjectRef: subjectRef,
+			}
+			next.ServeHTTP(writer, request.WithContext(context.WithValue(request.Context(), principalContextKey{}, principal)))
+			return
+		}
+		authority, ok := authenticateApplicationAuthority(
+			apiHandler.applicationAuthorities,
+			presentedHash,
+		)
+		if !ok {
 			apiHandler.writeError(writer, request, ports.ErrAuthenticationFailed)
 			return
 		}
-		tenantRef := request.Header.Get("X-SecondBox-Tenant-Ref")
-		subjectRef := request.Header.Get("X-SecondBox-Subject-Ref")
-		if !ownershipRefPattern.MatchString(tenantRef) ||
-			!ownershipRefPattern.MatchString(subjectRef) {
-			apiHandler.writeError(
-				writer,
-				request,
-				errors.New("SecondBox tenant and subject references must contain 1 to 128 visible ASCII characters"),
-			)
+		if err := authorizeApplicationRequest(authority, request); err != nil {
+			apiHandler.writeError(writer, request, err)
 			return
 		}
-		principal := contracts.Principal{
-			Kind: "platform", ID: subjectRef,
-			TenantRef: tenantRef, SubjectRef: subjectRef,
-		}
-		next.ServeHTTP(writer, request.WithContext(context.WithValue(request.Context(), principalContextKey{}, principal)))
+		requestContext := context.WithValue(
+			request.Context(),
+			applicationAuthorityContextKey{},
+			authority,
+		)
+		requestContext = context.WithValue(
+			requestContext,
+			principalContextKey{},
+			applicationPrincipal(authority),
+		)
+		next.ServeHTTP(writer, request.WithContext(requestContext))
 	})
 }
 

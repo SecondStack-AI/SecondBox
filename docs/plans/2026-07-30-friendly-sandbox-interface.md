@@ -1,0 +1,160 @@
+---
+title: Friendly Sandbox Interface
+date: 2026-07-30
+status: in-progress
+owner: SecondStack
+provenance: SecondBox client-ergonomics gap analysis against microsandbox, 2026-07-30
+---
+
+# Plan: Friendly Sandbox Interface
+
+## Outcome
+
+Make a one-off command and an interactive PTY each one command away, without changing what SecondBox is.
+
+Every primitive already exists and is tested. The PTY path is complete end to end — `runner/internal/guest/protocol_pty.go` through `internal/runnercontrol/postgres_relay_terminal.go`, `internal/api/terminal_http.go`, the SDK `Terminal` type, and `cmd/secondbox/sandbox_shell_command.go`, which does raw mode, `SIGWINCH` forwarding, credit-window replenishment, detach and reconnect, and terminal-state restore on every exit path. Buffered exec, streaming exec with flow control, files, snapshots, artifacts, leases, and port sessions are all published operations with contract coverage.
+
+Nothing composes them. Today a one-off command is four CLI invocations plus two hand-written JSON request files plus manual base64 decoding, and an interactive shell is four invocations. Four global flags precede every one of them, because `cmd/secondbox` has no environment or configuration fallback at all.
+
+This plan adds the composition layer and the two contract changes it needs. It does not add a second execution path, a local runtime, or a daemonless mode.
+
+## Fixed architecture
+
+- SecondBox stays a networked control plane. Sandboxes run on separately deployed runners, PostgreSQL owns desired state, and clients reach the system only over the published HTTP API. "One command" means one command against a deployment that already exists, not an embedded local VM.
+- Composition lives in `sdk/go/secondboxclient`, not in `cmd/secondbox`. Idempotency-key generation, generation refresh, lease acquisition and renewal, and the create-wait-exec sequence are SDK helpers the CLI consumes. TypeScript and Python parity is a follow-up, not part of this plan.
+- The CLI resolves credentials with a fixed precedence: explicit flags, then `SECONDBOX_*` environment variables, then a configuration file written by `secondbox login`. This softens the AGENTS.md rule that every runtime setting is explicit — for the CLI only. `secondboxd` keeps requiring every variable explicitly with no application-supplied default, and `internal/config` is not touched by Task 1.
+- The CLI's token variable is `SECONDBOX_TOKEN`, deliberately distinct from the `SECONDBOX_PLATFORM_TOKEN` that `internal/config` reads. Sharing one name would silently hand CLI credentials to any shell configured to run `secondboxd`.
+- Sandbox names are metadata, not a new resource field. The CLI writes the reserved key `secondbox.dev/name`, and `listSandboxes` gains a server-side metadata filter so any client on any host resolves the same name. There is no local name cache.
+- Migrations are append-only. `migrations/postgres/migrations.go` verifies each recorded checksum against the embedded file and fails on drift, so the name index is a new `0002_*.sql` and `0001_secondbox.sql` is never edited.
+- List cursors stay scope-bound. `resolvePostgresListCursor` passes a `scope` string into `pagination.DecodeListCursor`, which rejects a mismatch. The metadata filter joins that scope string so a cursor issued for an unfiltered page cannot be replayed against a filtered one.
+- Existing subcommand signatures keep taking resolved strings. Task 1 feeds them from one resolved session rather than rewriting `sandbox_shell_command.go`, `exec_stream_command.go`, `timing_command.go`, `log_command.go`, or `diagnostics_command.go`.
+- Operators still create every RunnerPool and every explicit Profile. Task 6 makes the built-in profiles configurable with real digests; it does not auto-provision the pool they reference.
+
+## Non-goals
+
+- Do not add a daemonless or embeddable execution mode. `microsandbox` boots a microVM as a child process with no control plane; SecondBox deliberately does not, and matching that would mean a different product.
+- Do not add image pulling, an OCI workflow, or a `--image` flag. Sandboxes are pinned to an immutable profile revision resolved at creation.
+- Do not add a name field to `Sandbox`, `CreateSandboxRequest`, or any other public schema. Names are reserved metadata.
+- Do not add PostgreSQL foreign keys or CHECK constraints. The name index in Task 4 is a partial unique index, which is neither.
+- Do not build a local name-to-identifier cache file. Names resolve server-side or not at all.
+- Do not change `internal/config` defaulting behavior for `secondboxd`, and do not give any required control-plane variable an application-supplied default.
+- Do not port the new SDK helpers to TypeScript or Python in this plan.
+- Do not replace the generic `operation <operationId>` escape hatch or any existing alias in `commandAliases`. New commands are additive.
+
+## Dependencies
+
+Tasks 1, 2, and 6 are independent and can land in any order. Task 3 depends on Task 2. Task 5 depends on Tasks 1 through 4.
+
+Task 6 blocks no code, but until it lands there is no bootable built-in profile, so the end-to-end demonstration in Task 5 requires an operator-created explicit Profile and RunnerPool. Task 4 is the only task that changes a published contract and a persisted schema.
+
+## Validation Commands
+
+Run the focused commands listed in each task while implementing it. Before handoff, run all repository-wide gates below from the repository root.
+
+- `just verify-generated`
+- `just test`
+- `just test-contract`
+- `just test-compose`
+- `just test-deployment`
+- `just preship`
+- `git diff --check`
+- `just test-scenario` on a qualified KVM host, required for Task 4 because it changes persistence, and for Task 5 because it changes the lifecycle sequence
+
+### Task 1: Resolve CLI credentials from flags, environment, and configuration
+
+`cmd/secondbox` contains no `os.Getenv` call. Every invocation repeats `--url`, `--token`, `--tenant-ref`, and `--subject-ref`, including the ones documented throughout `docs/operations/sdk-cli-and-flue.md`. This task removes that repetition and changes nothing else.
+
+- [x] Add `cmd/secondbox/session.go` defining a resolved session carrying the four values plus the origin of each, for diagnosis.
+- [x] Resolve with fixed precedence: explicit flag, then `SECONDBOX_URL` / `SECONDBOX_TOKEN` / `SECONDBOX_TENANT_REF` / `SECONDBOX_SUBJECT_REF`, then the configuration file. Resolution never fails for a missing value; each subcommand keeps its own required-value check and its existing error text, extended to name the environment and configuration alternatives.
+- [x] Locate the configuration file at `SECONDBOX_CONFIG` when set and absolute, otherwise `os.UserConfigDir()/secondbox/config.json`, which honors `XDG_CONFIG_HOME`.
+- [x] Read the file defensively, following `openRegularLog` in `cmd/secondbox/log_command.go`: an absent file yields no values and no error; a symbolic link or non-regular file is an error; any group or other permission bit is an error; unknown JSON fields are rejected with `DisallowUnknownFields`. Trailing content after the document is rejected too.
+- [x] Add `secondbox login`, writing the four values to a `0700` directory as a `0600` file, created `O_EXCL` under a temporary name and renamed into place so a concurrent reader never observes a partial file.
+- [x] Verify credentials during `login` by issuing `listSandboxes` with `limit=1`. `Client.Do` at `sdk/go/secondboxclient/transport.go:239` returns a typed `*APIError` for any non-2xx, so a bad token fails immediately with the server's problem detail instead of being written to disk.
+- [x] Add `secondbox logout`, removing the configuration file and succeeding when it is already absent.
+- [x] Add `secondbox whoami`, printing the resolved endpoint, tenant reference, subject reference, and the origin of each. Never print the token, in any form.
+- [x] Route the three commands through `runOperationalCommand` in `cmd/secondbox/main.go` alongside `logs` and `diagnostics`, and add them to `commandSummary`.
+- [x] Feed the resolved session into the existing `runOperationalCommand` and `resolveCommand` paths without changing any subcommand signature.
+- [x] Cover in `cmd/secondbox/session_test.go`: precedence across all three sources, absent file, symbolic-link rejection, permissive-mode rejection, unknown-field rejection, atomic overwrite on repeated `login`, `logout` idempotence, and that `whoami` output contains no token substring.
+- [x] Update the CLI section of `docs/operations/sdk-cli-and-flue.md` and the invocations in `docs/operations/deployment.md` and `docs/operations/observability-and-diagnostics.md`.
+- [x] Run `go build ./...`, `go vet ./...`, `go test ./cmd/secondbox`, and `just test`.
+
+## Known defects found while implementing
+
+### The generic operation path sent a typed-nil request body (fixed)
+
+`parseOperationOptions` in `cmd/secondbox/main.go` declares `var body *os.File` and returns it as `CallOptions.Body`, which is an `io.Reader`. When no `--body` is given, a nil `*os.File` becomes a non-nil interface holding a nil pointer, so `http.NewRequestWithContext` treats the request as having a body and reads from it. `(*os.File)(nil).Read` returns `os.ErrInvalid`, and every affected invocation fails with `invalid argument` before reaching the network.
+
+This makes every operation invoked without `--body` fail — `sandboxes list`, `sandboxes get`, `profiles list`, `runners list`, `files read`, and every other route reached through the alias table or `operation <operationId>`. It is reproducible against a binary built before this plan started, so it predates the plan and is not caused by Task 1.
+
+No test caught it because `cmd/secondbox` covers only alias resolution and the hand-written commands, which build their own requests through SDK helpers. Nothing exercises `parseOperationOptions` through `Client.Request`.
+
+The fix is to leave `CallOptions.Body` nil unless a body was requested, plus a regression test that drives the generic path against an `httptest` server and asserts the request carries no body.
+
+
+### Task 2: Add lifecycle helpers to the Go SDK
+
+`SandboxHandle` already tracks generation and offers `Refresh` and `Wait` at `sdk/go/secondboxclient/sdk.go:143` and `:157`. Callers still hand-supply every idempotency key and thread every generation and lease by hand.
+
+- [x] Generate idempotency keys from `crypto/rand` when a caller supplies none, in `dataPlaneJSON` and `lifecycle`, and in the new `CreateSandbox` and `AcquireLease` helpers. A caller-supplied key is always preserved.
+- [x] **Deviation, deliberate:** do not retry on a generation fence. Instead expose `ProblemCodeOf` so a fence surfaces as the typed `generation_fenced` code, and let `SandboxHandle` continue to carry the generation it observed. See "Rejected: automatic retry on a generation fence" below.
+- [x] Add lease helpers that acquire, renew in the background, and release on close: `AcquireLease`, `RenewLease`, `ReleaseLease`, and `LeaseKeeper` via `KeepLease`.
+- [x] Drive renewal from the expiry the service actually granted rather than the requested duration, so the pinned Profile's `leaseSeconds` bound is respected without a Profile lookup the application authority may not be granted.
+- [x] Add `WaitFor`, which issues repeated bounded waits against the caller's context deadline, because a single `waitForSandbox` request is capped at 60 seconds.
+- [x] Add `Run`: create, wait for `ready`, execute, and return decoded stdout, stderr, and exit status as one call. `Run` never deletes the Sandbox, preserving the existing guarantee that this handle deletes nothing implicitly.
+- [x] Move the outcome mapping into `ExecOutcomeError` and `DecodeExecOutcome`, and make `sandboxShellOutcomeError` at `cmd/secondbox/sandbox_shell_command.go` delegate to it, so exactly one switch interprets the union.
+- [x] Cover in `sdk/go/secondboxclient/lifecycle_test.go` against the existing httptest transport: key generation and preservation, every `ExecOutcome` variant, output decoding on failure, lease acquire, renew, release, background renewal, renewal failure, wait retry after expiry, create, and run.
+- [x] Run `go test ./sdk/go/secondboxclient -race`, `just test`, `just test-contract`, and `just verify-generated`.
+
+#### Rejected: automatic retry on a generation fence
+
+The original plan said to refresh the generation and retry once when a data-plane call is fenced. That is wrong and was not implemented.
+
+A generation fence means the Instance was replaced. The Workspace is durable across generations, but process state is not. Silently retrying an `exec` against generation N+1 would run the caller's command inside a different Instance than the one they targeted, which is precisely what the fence exists to prevent. Turning an explicit rejection into a silent success is the opposite of the fence's purpose.
+
+The ergonomic problem the item was aiming at is real but different: callers should not have to compute the generation by hand. `SandboxHandle` already solves that by tracking generation from create, wait, and refresh, and `GenerationHeaders` applies it. A fence now surfaces as the typed `generation_fenced` code through `ProblemCodeOf`, so callers decide explicitly whether re-running is safe.
+
+### Task 3: Make `secondbox exec` a real command
+
+`"exec"` is a bare alias to `executeSandboxCommand` at `cmd/secondbox/main.go:48`, resolved through the generic `parseOperationOptions` path. Callers write a JSON request file and receive JSON with base64 stdout and stderr.
+
+- [x] Add `cmd/secondbox/exec_command.go`, structured like the existing `cmd/secondbox/exec_stream_command.go`.
+- [x] Accept `secondbox exec <sandbox> -- <argv...>`, building an `ArgvCommand`, with `--shell` selecting a `ShellCommand`. The Sandbox operand precedes every option, because Go's `flag` package stops parsing at the first non-flag argument; `splitLeadingOperand` takes it before the flag set runs and rejects an option in its place.
+- [x] Resolve the Sandbox through `getSandbox` and apply its generation through `SandboxHandle`, so neither the generation nor an idempotency key is supplied by hand. `exec` claims no Lease it was not given.
+- [x] Decode `stdoutBase64` and `stderrBase64` to the process's own stdout and stderr, keeping the two streams separate, and write them before reporting any failure.
+- [x] Map `ExecOutcome` to a process exit status through `commandExitError`, which `main` unwraps. A guest that exits 23 makes the CLI exit 23 and print nothing of its own, because the guest already wrote its diagnosis. An outcome with no exit status is described on standard error and exits 1.
+- [x] Keep the raw outcome available behind `--json`, which retains base64 output and still carries the exit status. `operation executeSandboxCommand` remains the untouched escape hatch; only the shadowed `exec` alias was removed from `commandAliases`.
+- [x] Cover in `cmd/secondbox/exec_command_test.go`: argv and shell construction, guest operands that look like CLI options, automatic generation and key, stream separation, exit-status propagation, every non-exited outcome, truncated output on exhaustion, `--json` fidelity, malformed invocations, and routing.
+- [x] Run `go test ./cmd/secondbox`, `just test`, and `just test-contract`, and verify exit-status propagation with the built binary, since `os.Exit` is unreachable from a unit test.
+
+### Task 4: Resolve Sandboxes by name
+
+`listSandboxes` accepts only `limit` and `cursor`. There is no server-side way to find a Sandbox by anything an operator chose, so a friendly name cannot resolve without paging the entire list.
+
+- [ ] Add a repeatable `metadata` query parameter, encoded `key=value`, to `/v1/sandboxes` in `contracts/openapi/v1/secondbox.openapi.json`.
+- [ ] Add `migrations/postgres/0002_sandbox_name_index.sql` with a partial unique index on `(tenant_ref, subject_ref, (metadata_json->>'secondbox.dev/name'))` where that expression is not null, making the reserved name unique per tenant and subject so resolution is deterministic. Never edit `0001_secondbox.sql`.
+- [ ] Extend `ListSandboxes` in `internal/store/postgres_store.go:687` with a `metadata_json @>` predicate.
+- [ ] Join the filter into the `scope` string passed to `resolvePostgresListCursor` and `encodePostgresListNextCursor`, so a cursor cannot cross filter boundaries.
+- [ ] Thread the filter through all three signatures: the interface at `internal/service/control_plane_service.go:62`, the method at `:595`, and the `listSandboxes` handler at `internal/api/http.go:741`.
+- [ ] Surface the reserved-name conflict as a typed problem rather than a raw unique-violation error.
+- [ ] Cover in `tests/contract/openapi_contract_test.go`, in `tests/integration/list_pagination_http_test.go` for cursor-scope rejection across differing filters, and at store level for the filter and the uniqueness conflict.
+- [ ] Run `just verify-generated`, `just test`, `just test-contract`, and `just test-scenario` on a qualified host.
+
+### Task 5: Add the `run` and `shell` composites
+
+- [ ] Add `secondbox run <profile> [--name X] -- <argv...>`: create, wait for ready, execute, print, and delete unless `--keep` is given.
+- [ ] Add `secondbox shell <name-or-id>`: resolve the name through Task 4, refresh the generation, acquire a lease, then call the existing `runSandboxShellCommand` unchanged.
+- [ ] Keep `--generation`, `--lease`, and `--idempotency-key` as explicit overrides on both commands. They stop being required; they do not stop working.
+- [ ] Write the reserved `secondbox.dev/name` metadata key on create when `--name` is given, and reject a name that collides with an existing Sandbox for the same tenant and subject.
+- [ ] Cover the composites in `cmd/secondbox` tests, and add a scenario asserting that `run` returns the guest's exit status and that `shell` attaches to a real PTY.
+- [ ] Run `go test ./cmd/secondbox`, `just test`, and `just test-scenario` on a qualified host.
+
+### Task 6: Make the built-in profiles bootable
+
+`ControlPlaneService.BuiltInProfiles` at `internal/service/control_plane_service.go:134` is never populated by `internal/config` or `cmd/secondboxd/main.go`, so `resolveBuiltInProfiles` always falls through to `defaultBuiltInProfiles()`. Those specs carry the placeholder digests `sha256:aaaa…` and `sha256:bbbb…` and reference a `default-pool` that nothing creates. Both built-in profiles are therefore present in the API and impossible to boot.
+
+- [ ] Add required environment variables to `internal/config/config.go` for each built-in profile's runtime bundle digest, toolchain bundle digest, and pool name, using the existing `requiredString` helper. Supply no defaults.
+- [ ] Populate `service.Config.BuiltInProfiles` from that configuration in `cmd/secondboxd/main.go`, leaving `defaultBuiltInProfiles()` as the template the configuration fills and keeping `resolveBuiltInProfiles` rejecting incomplete specs.
+- [ ] Add the variables to `deploy/environment.example` and `deploy/bin/validate-environment.sh`.
+- [ ] Document the one-time operator step that creates the referenced RunnerPool in `docs/operations/deployment.md`. Do not auto-provision it; AGENTS.md requires operators to create every pool and profile explicitly.
+- [ ] Cover in `internal/config` unit tests, in `tests/integration/builtin_profiles_postgres_test.go`, and in `tests/deployment/deployment_policy_test.go`.
+- [ ] Run `just test`, `just test-deployment`, and `just test-compose`.

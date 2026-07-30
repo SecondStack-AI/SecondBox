@@ -137,8 +137,17 @@ func (e *NFTablesNetworkPolicyEnforcer) Install(ctx context.Context, cfg PolicyN
 		}
 	}
 	destinations := cfg.Policy.Destinations()
+	runnerGateways := cfg.Policy.RunnerGatewayDestinations()
 	table := nftTableName(instanceID)
-	script := renderNFTPolicy(table, tapName, cfg.DNSAddress, cfg.Policy.ProtectedPrefixes(), destinations, nil)
+	script := renderNFTPolicy(
+		table,
+		tapName,
+		cfg.DNSAddress,
+		cfg.Policy.ProtectedPrefixes(),
+		destinations,
+		runnerGateways,
+		nil,
+	)
 	output, err := e.command(ctx, e.nftPath, []string{"-f", "-"}, script)
 	if err != nil {
 		return fmt.Errorf("install nftables policy for %s: %w: %s", instanceID, err, strings.TrimSpace(string(output)))
@@ -246,6 +255,7 @@ func (e *NFTablesNetworkPolicyEnforcer) ObserveDNSAnswer(
 		instance.cfg.DNSAddress,
 		instance.cfg.Policy.ProtectedPrefixes(),
 		destinations,
+		instance.cfg.Policy.RunnerGatewayDestinations(),
 		instance.pins,
 	))
 	e.mu.Unlock()
@@ -330,7 +340,8 @@ func (e *NFTablesNetworkPolicyEnforcer) expireDNSPin(instanceID, domain string, 
 	}
 	script := fmt.Sprintf("delete table bridge %s\n%s", instance.table, renderNFTPolicy(
 		instance.table, instance.cfg.TapName, instance.cfg.DNSAddress,
-		instance.cfg.Policy.ProtectedPrefixes(), instance.cfg.Policy.Destinations(), instance.pins,
+		instance.cfg.Policy.ProtectedPrefixes(), instance.cfg.Policy.Destinations(),
+		instance.cfg.Policy.RunnerGatewayDestinations(), instance.pins,
 	))
 	e.mu.Unlock()
 	if output, err := e.command(instance.ctx, e.nftPath, []string{"-f", "-"}, script); err != nil {
@@ -420,6 +431,7 @@ func renderNFTPolicy(
 	dnsAddress netip.Addr,
 	protected []netip.Prefix,
 	destinations []networkpolicy.Destination,
+	runnerGateways []networkpolicy.RunnerGatewayDestination,
 	pins map[int][]netip.Addr,
 ) string {
 	var script bytes.Buffer
@@ -460,6 +472,16 @@ func renderNFTPolicy(
 				table, tapName, family, dnsAddress, protocol, allowedConnectionMark,
 			)
 		}
+	}
+	for _, gateway := range runnerGateways {
+		renderNFTAllow(
+			&script,
+			table,
+			tapName,
+			gateway.Address.String(),
+			gateway.Address.Is6(),
+			gateway.Destination,
+		)
 	}
 	for _, prefix := range protected {
 		family := "ip"

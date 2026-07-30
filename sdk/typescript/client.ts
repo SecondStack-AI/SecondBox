@@ -4,6 +4,7 @@ import {
   SecondBoxClient,
   encodeJSONBody,
   type CreateDirectoryRequest,
+  type CreatePortSessionRequest,
   type CreateTerminalRequest,
   type DirectoryListing,
   type ExecOutcome,
@@ -13,18 +14,22 @@ import {
   type FileStat,
   type FileWriteResult,
   type JSONValue,
+  type Lease,
   type Metadata,
   type Operation,
   type OperationID,
+  type PortSession,
   type Problem,
   type RestoreSnapshotRequest,
   type RemovePathRequest,
   type Sandbox,
+  type SandboxPage,
   type SandboxState,
   type StreamingExecRequest,
   type TerminalFrame,
   type TerminalSession,
   type TransportRequestOptions,
+  type UpdateSandboxMetadataRequest,
   type WaitSandboxRequest,
 } from "./transport.ts";
 
@@ -32,17 +37,22 @@ export type {
   CreateAPIKeyResponse,
   ExecStreamFrame,
   FileStat,
+  Lease,
   Metadata,
   Operation,
+  PortSession,
   Profile,
   ProfileRevisionSpec,
   Problem,
   Project,
   Sandbox,
+  SandboxPage,
   SandboxState,
+  Snapshot,
   ServiceAccount,
   ServiceAccountScope,
   TerminalFrame,
+  UpdateSandboxMetadataRequest,
 } from "./transport.ts";
 export { SecondBoxClient, encodeJSONBody } from "./transport.ts";
 
@@ -150,6 +160,45 @@ export class SecondBox {
 
   public sandbox(snapshot: Sandbox, leaseID?: string): SandboxHandle {
     return new SandboxHandle(this, snapshot, leaseID);
+  }
+
+  public getLease(leaseID: string, signal?: AbortSignal): Promise<Lease> {
+    requireNonempty(leaseID, "Lease ID");
+    return this.requestJSON<Lease>("getSandboxLease", {
+      pathParameters: { leaseId: leaseID },
+      signal,
+    });
+  }
+
+  public renewLease(
+    leaseID: string,
+    durationSeconds: number,
+    idempotency: string,
+    signal?: AbortSignal,
+  ): Promise<Lease> {
+    requireNonempty(leaseID, "Lease ID");
+    requireDurationSeconds(durationSeconds, "Lease");
+    requireNonempty(idempotency, "Lease renewal idempotency key");
+    return this.requestJSON<Lease>("renewSandboxLease", {
+      pathParameters: { leaseId: leaseID },
+      headers: { "Idempotency-Key": idempotency },
+      body: encodeJSONBody({ durationSeconds }),
+      signal,
+    });
+  }
+
+  public releaseLease(
+    leaseID: string,
+    idempotency: string,
+    signal?: AbortSignal,
+  ): Promise<Lease> {
+    requireNonempty(leaseID, "Lease ID");
+    requireNonempty(idempotency, "Lease release idempotency key");
+    return this.requestJSON<Lease>("releaseSandboxLease", {
+      pathParameters: { leaseId: leaseID },
+      headers: { "Idempotency-Key": idempotency },
+      signal,
+    });
   }
 }
 
@@ -461,6 +510,77 @@ export class Terminal {
   }
 }
 
+/** An authenticated binary-frame connection supplied by the application runtime. */
+export interface PortTunnelConnection {
+  readonly subprotocol: string;
+  sendBinary(payload: Uint8Array): Promise<void>;
+  receiveBinary(signal?: AbortSignal): Promise<Uint8Array>;
+  close(): Promise<void>;
+}
+
+/** Injects the runtime-specific authenticated Port WebSocket implementation. */
+export interface PortTunnelConnector {
+  connect(
+    descriptor: {
+      readonly websocketURL: string;
+      readonly subprotocols: readonly [
+        "secondbox.port.v1",
+        `secondbox.port.token.${string}`,
+      ];
+      readonly sandboxID: string;
+      readonly generation: number;
+      readonly expiresAt: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<PortTunnelConnection>;
+}
+
+/** Binary stream carried by one generation-fenced authenticated PortSession. */
+export class PortTunnel {
+  readonly #connection: PortTunnelConnection;
+  #writeTail: Promise<void> = Promise.resolve();
+  #readTail: Promise<void> = Promise.resolve();
+
+  public constructor(connection: PortTunnelConnection) {
+    if (connection.subprotocol !== "secondbox.port.v1") {
+      throw new Error("SecondBox Port tunnel subprotocol was not negotiated");
+    }
+    this.#connection = connection;
+  }
+
+  public send(payload: Uint8Array): Promise<void> {
+    if (payload.byteLength === 0) {
+      return Promise.reject(new Error("SecondBox Port tunnel frame is empty"));
+    }
+    const owned = new Uint8Array(payload);
+    const result = this.#writeTail.then(() => this.#connection.sendBinary(owned));
+    this.#writeTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  public receive(signal?: AbortSignal): Promise<Uint8Array> {
+    const result = this.#readTail.then(async () => {
+      const payload = await this.#connection.receiveBinary(signal);
+      if (payload.byteLength === 0) {
+        throw new Error("SecondBox Port tunnel received an empty frame");
+      }
+      return new Uint8Array(payload);
+    });
+    this.#readTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  public close(): Promise<void> {
+    return this.#connection.close();
+  }
+}
+
 /** Filesystem and command surface consumed by the Flue adapter. */
 export interface SandboxFilesystem {
   readFile(path: string, signal?: AbortSignal): Promise<Uint8Array>;
@@ -569,6 +689,25 @@ export class SandboxHandle implements SandboxFilesystem {
       signal: options.signal,
     });
     return decodeExecOutcome(outcome);
+  }
+
+  /** Acquires one explicit generation-bound Lease for active data-plane work. */
+  public acquireLease(
+    durationSeconds: number,
+    idempotency: string,
+    signal?: AbortSignal,
+  ): Promise<Lease> {
+    requireDurationSeconds(durationSeconds, "Lease");
+    requireNonempty(idempotency, "Lease acquisition idempotency key");
+    return this.#api.requestJSON<Lease>("acquireSandboxLease", {
+      pathParameters: { sandboxId: this.#snapshot.id },
+      headers: {
+        "SecondBox-Generation": String(this.#snapshot.generation),
+        "Idempotency-Key": idempotency,
+      },
+      body: encodeJSONBody({ durationSeconds }),
+      signal,
+    });
   }
 
   /** Negotiates a streaming-exec session while leaving WebSocket ownership to the caller. */
@@ -721,6 +860,110 @@ export class SandboxHandle implements SandboxFilesystem {
     return new Terminal(connection, session.nextClientSequence);
   }
 
+  /** Creates one generation- and Lease-fenced authenticated PortSession. */
+  public createPortSession(
+    request: CreatePortSessionRequest,
+    idempotency: string,
+    signal?: AbortSignal,
+  ): Promise<PortSession> {
+    requireNonempty(request.name, "PortSession name");
+    requireDurationSeconds(request.durationSeconds, "PortSession");
+    return this.negotiateDataPlaneSession(
+      "createSandboxPortSession",
+      request as unknown as JSONValue,
+      idempotency,
+      signal,
+    );
+  }
+
+  /** Returns the observable state of one PortSession without consuming its credential. */
+  public getPortSession(
+    portSessionID: string,
+    signal?: AbortSignal,
+  ): Promise<PortSession> {
+    if (portSessionID === "") {
+      return Promise.reject(new Error("SecondBox PortSession ID is required"));
+    }
+    return this.#api.requestJSON<PortSession>("getSandboxPortSession", {
+      pathParameters: {
+        sandboxId: this.#snapshot.id,
+        portSessionId: portSessionID,
+      },
+      signal,
+    });
+  }
+
+  /** Explicitly closes one PortSession. */
+  public async closePortSession(
+    portSessionID: string,
+    idempotency: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (portSessionID === "" || idempotency === "") {
+      throw new Error(
+        "SecondBox PortSession ID and close idempotency are required",
+      );
+    }
+    await this.#api.requestVoid("closeSandboxPortSession", {
+      pathParameters: {
+        sandboxId: this.#snapshot.id,
+        portSessionId: portSessionID,
+      },
+      headers: { "Idempotency-Key": idempotency },
+      signal,
+    });
+  }
+
+  /** Consumes the endpoint credential through an authenticated binary connector. */
+  public async connectPortTunnel(
+    session: PortSession,
+    connector: PortTunnelConnector,
+    signal?: AbortSignal,
+  ): Promise<PortTunnel> {
+    if (
+      session.sandboxId !== this.#snapshot.id ||
+      session.generation !== this.#snapshot.generation ||
+      session.state !== "open"
+    ) {
+      throw new Error("SecondBox PortSession does not match the Sandbox handle");
+    }
+    const endpoint = new URL(session.endpoint);
+    const credential = endpoint.hash.slice(1);
+    if (!Number.isFinite(Date.parse(session.expiresAt))) {
+      throw new Error("SecondBox PortSession expiration is invalid");
+    }
+    if (
+      (endpoint.protocol !== "ws:" && endpoint.protocol !== "wss:") ||
+      endpoint.username !== "" ||
+      endpoint.password !== "" ||
+      endpoint.search !== ""
+    ) {
+      throw new Error("SecondBox PortSession WebSocket URL is invalid");
+    }
+    if (
+      credential === "" ||
+      credential.length > 2048 ||
+      !/^[A-Za-z0-9_.-]+$/.test(credential)
+    ) {
+      throw new Error("SecondBox PortSession endpoint credential is invalid");
+    }
+    endpoint.hash = "";
+    const connection = await connector.connect(
+      {
+        websocketURL: endpoint.toString(),
+        subprotocols: [
+          "secondbox.port.v1",
+          `secondbox.port.token.${credential}`,
+        ],
+        sandboxID: session.sandboxId,
+        generation: session.generation,
+        expiresAt: session.expiresAt,
+      },
+      signal,
+    );
+    return new PortTunnel(connection);
+  }
+
   public async readFile(path: string, signal?: AbortSignal): Promise<Uint8Array> {
     const response = await this.#api.request("readSandboxFile", {
       pathParameters: { sandboxId: this.#snapshot.id },
@@ -852,7 +1095,10 @@ export class SandboxHandle implements SandboxFilesystem {
   }
 
   private negotiateDataPlaneSession<T>(
-    operationID: "createSandboxExecStream" | "createSandboxTerminal",
+    operationID:
+      | "createSandboxExecStream"
+      | "createSandboxTerminal"
+      | "createSandboxPortSession",
     request: JSONValue,
     idempotency: string,
     signal?: AbortSignal,
@@ -1053,6 +1299,19 @@ function idempotencyKey(): string {
 function requirePositiveInteger(value: number, field: string): void {
   if (!Number.isInteger(value) || value <= 0) {
     throw new Error(`SecondBox ${field} must be a positive integer`);
+  }
+}
+
+function requireNonempty(value: string, field: string): void {
+  if (value === "") {
+    throw new Error(`SecondBox ${field} is required`);
+  }
+}
+
+function requireDurationSeconds(value: number, field: string): void {
+  requirePositiveInteger(value, `${field} durationSeconds`);
+  if (value > 86_400) {
+    throw new Error(`SecondBox ${field} durationSeconds must not exceed 86400`);
   }
 }
 

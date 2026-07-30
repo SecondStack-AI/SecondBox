@@ -59,6 +59,7 @@ type Manager struct {
 	instancesByKey       map[runtimeInstanceKey]string
 	provisioning         map[runtimeInstanceKey]chan struct{}
 	pendingSpawns        map[runtimeInstanceKey]int
+	pendingMemoryMiB     map[runtimeInstanceKey]int
 	shuttingDown         bool
 	sweepCancel          context.CancelFunc
 	sweepDone            chan struct{}
@@ -137,6 +138,7 @@ type instance struct {
 	operationID            string
 	leaseID                string
 	assignmentID           string
+	memoryMiB              int
 	ready                  bool
 	explicitStop           bool
 	baselineOOMKills       *uint64
@@ -666,14 +668,15 @@ func (m *Manager) createAndStart(ctx context.Context, sandboxID string, opts run
 	}
 	opts.CompartmentID = compartmentID
 	key := runtimeInstanceKey{sandboxID: sandboxID, compartmentID: compartmentID}
+	memoryMiB := m.requestedMemoryMiB(opts)
 	m.mu.Lock()
-	if err := m.reserveCompartmentSpawnLocked(key); err != nil {
+	if err := m.reserveCompartmentSpawnLocked(key, memoryMiB); err != nil {
 		m.mu.Unlock()
 		return "", err
 	}
 	m.mu.Unlock()
 	releasePendingLocked := sync.OnceFunc(func() {
-		m.releaseCompartmentSpawnLocked(key)
+		m.releaseCompartmentSpawnLocked(key, memoryMiB)
 	})
 	releasePending := func() {
 		m.mu.Lock()
@@ -999,6 +1002,7 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 		operationID:         opts.OperationID,
 		leaseID:             opts.LeaseID,
 		assignmentID:        opts.AssignmentID,
+		memoryMiB:           m.requestedMemoryMiB(opts),
 	}
 	m.registerStartingInstance(inst, onRegisteredLocked)
 	// Start the reaper before any stopInstance call so the process is always

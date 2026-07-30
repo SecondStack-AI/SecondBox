@@ -1,4 +1,5 @@
 /.tmp/
+/.secondbox/
 /dist/
 /sdk/typescript/dist/
 /sdk/typescript/*.tgz

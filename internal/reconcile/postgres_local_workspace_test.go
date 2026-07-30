@@ -19,6 +19,51 @@ import (
 
 var reconcileTestDatabaseSequence atomic.Uint64
 
+func TestClaimNextIgnoresAssignmentWithoutCurrentSandboxAuthority(t *testing.T) {
+	store := openReconcileTestDatabase(t)
+	now := time.Date(2026, 7, 30, 3, 0, 0, 0, time.UTC)
+	if _, err := store.pool.Exec(t.Context(), `
+		INSERT INTO secondbox.sandboxes (
+			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
+			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
+			revision,created_at,updated_at
+		) VALUES (
+			'sandbox-stale','tenant','subject','profile','revision','stopped','stopped',
+			2,'workspace-stale','instance-current','{}','{}',1,$1,$1
+		);
+		INSERT INTO secondbox.assignments (
+			id,sandbox_id,instance_id,runner_id,profile_revision_id,backend_kind,
+			backend_reference,generation,fencing_token,state,capability_snapshot_json,
+			resolved_artifacts_json,release_proof_json,failure_class,retry_count,retry_limit,
+			operation_deadline,claim_expires_at,reconcile_owner,reconcile_claim_expires_at,
+			next_reconcile_at,revision,created_at,updated_at
+		) VALUES (
+			'assignment-stale','sandbox-stale','instance-stale','runner-home','revision',
+			'firecracker','instance-stale',1,$2,'uncertain','{}','{}','{}','transient',
+			0,8,$3,$3,'',$1,$1,1,$1,$1
+		)`,
+		pgx.QueryExecModeSimpleProtocol,
+		now,
+		[]byte("01234567890123456789012345678901"),
+		now.Add(time.Minute),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	_, found, err := store.ClaimNext(
+		t.Context(),
+		"reconcile-worker",
+		now.Add(time.Minute),
+		now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found {
+		t.Fatal("stale Assignment was claimed without current Sandbox authority")
+	}
+}
+
 func TestFencedRunnerLossQueuesHomeLocalAdvanceWithoutRelocation(t *testing.T) {
 	store := openReconcileTestDatabase(t)
 	now := time.Date(2026, 7, 29, 21, 0, 0, 0, time.UTC)

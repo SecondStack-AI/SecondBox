@@ -55,6 +55,29 @@ func TestReconcilerWaitsForStoppedWorkspaceCreationEvidence(t *testing.T) {
 	}
 }
 
+func TestReconcilerDefersWorkspaceEffectContention(t *testing.T) {
+	store := &fakeReconcileStore{claim: ports.LifecycleReconcileClaim{
+		SandboxID: "sbx-1", WorkerID: "worker-1", Revision: 3,
+		ObservedState: contracts.SandboxStateStopped,
+		DesiredState:  contracts.SandboxDesiredStateRunning,
+	}}
+	effects := &fakeEffectExecutor{err: ports.ErrWorkspaceMutation}
+	reconciler := Reconciler{
+		Store: store, Effects: effects, WorkerID: "worker-1",
+		ClaimDuration: time.Minute, PollInterval: time.Second,
+	}
+	decision, found, err := reconciler.RunOnce(
+		t.Context(), time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil || !found || decision.Action != ActionStartInstance ||
+		store.action != string(ActionWait) {
+		t.Fatalf(
+			"contention reconciliation = %#v, %t, %v, database commit %q",
+			decision, found, err, store.action,
+		)
+	}
+}
+
 type fakeReconcileStore struct {
 	claim  ports.LifecycleReconcileClaim
 	action string
@@ -62,6 +85,7 @@ type fakeReconcileStore struct {
 
 type fakeEffectExecutor struct {
 	action Action
+	err    error
 }
 
 func (executor *fakeEffectExecutor) ExecuteLifecycleEffect(
@@ -72,7 +96,7 @@ func (executor *fakeEffectExecutor) ExecuteLifecycleEffect(
 	_ time.Time,
 ) error {
 	executor.action = decision.Action
-	return nil
+	return executor.err
 }
 
 func (store *fakeReconcileStore) ClaimLifecycle(

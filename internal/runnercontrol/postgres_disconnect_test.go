@@ -27,15 +27,34 @@ func TestHeartbeatPreservesAndReleasesDurableAssignmentReservations(t *testing.T
 			'{"resources":{"cpuMillis":1000,"memoryBytes":536870912,"workspaceBytes":1073741824,"concurrentOperations":4}}',
 			$1
 		);
+		INSERT INTO secondbox.sandboxes (
+			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
+			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
+			revision,created_at,updated_at
+		) VALUES
+		(
+			'sandbox','tenant','subject','profile','profile-reservation','starting','running',
+			1,'workspace','instance','{}','{}',1,$1,$1
+		),
+		(
+			'sandbox-stale','tenant','subject-stale','profile','profile-reservation','stopped','stopped',
+			2,'workspace-stale','instance-current','{}','{}',1,$1,$1
+		);
 		INSERT INTO secondbox.assignments (
 			id,sandbox_id,instance_id,runner_id,profile_revision_id,backend_kind,
 			backend_reference,generation,fencing_token,state,capability_snapshot_json,
 			resolved_artifacts_json,release_proof_json,failure_class,retry_count,retry_limit,
 			operation_deadline,claim_expires_at,reconcile_owner,reconcile_claim_expires_at,
 			next_reconcile_at,revision,created_at,updated_at
-		) VALUES (
+		) VALUES
+		(
 			'assignment-reservation','sandbox','instance','runner-home',
 			'profile-reservation','firecracker','',1,$2,'assigned','{}','{}','{}','',
+			0,3,$3,$3,'',$3,$1,1,$1,$1
+		),
+		(
+			'assignment-stale','sandbox-stale','instance-stale','runner-home',
+			'profile-reservation','firecracker','',1,$2,'uncertain','{}','{}','{}','transient',
 			0,3,$3,$3,'',$3,$1,1,$1,$1
 		)`,
 		pgx.QueryExecModeSimpleProtocol,
@@ -94,6 +113,127 @@ func TestHeartbeatPreservesAndReleasesDurableAssignmentReservations(t *testing.T
 	recordHeartbeat(2)
 	if got := readReservation(); got != (runnerCapacity{}) {
 		t.Fatalf("released reservation = %#v", got)
+	}
+}
+
+func TestHeartbeatMakesMissingActiveAssignmentUncertain(t *testing.T) {
+	store := openRunnerControlDatabase(t)
+	now := time.Date(2026, 7, 29, 20, 57, 0, 0, time.UTC)
+	seedRunnerConnectionForDataPlaneDisconnect(
+		t,
+		store,
+		"connection-active-inventory",
+		"connection-active-inventory",
+		now,
+	)
+	if _, err := store.pool.Exec(t.Context(), `
+		INSERT INTO secondbox.profile_revisions (
+			id,profile_name,revision_number,spec_json,created_at
+		) VALUES (
+			'profile-active-inventory','profile',1,
+			'{"resources":{"cpuMillis":1000,"memoryBytes":536870912,"workspaceBytes":1073741824,"concurrentOperations":4}}',
+			$1
+		);
+		INSERT INTO secondbox.assignments (
+			id,sandbox_id,instance_id,runner_id,profile_revision_id,backend_kind,
+			backend_reference,generation,fencing_token,state,capability_snapshot_json,
+			resolved_artifacts_json,release_proof_json,failure_class,retry_count,retry_limit,
+			operation_deadline,claim_expires_at,reconcile_owner,reconcile_claim_expires_at,
+			next_reconcile_at,revision,created_at,updated_at
+		) VALUES
+		(
+			'assignment-retained','sandbox-retained','instance-retained','runner-home',
+			'profile-active-inventory','firecracker','fc-retained',2,$2,'ready',
+			'{}','{}','{}','',0,3,$3,$3,'',$1,$3,1,$1,$1
+		),
+		(
+			'assignment-missing','sandbox-missing','instance-missing','runner-home',
+			'profile-active-inventory','firecracker','fc-missing',4,$4,'ready',
+			'{}','{}','{}','',0,3,$3,$3,'',$1,$3,1,$1,$1
+		),
+		(
+			'assignment-starting','sandbox-starting','instance-starting','runner-home',
+			'profile-active-inventory','firecracker','',5,$5,'starting',
+			'{}','{}','{}','',0,3,$3,$3,'',$1,$3,1,$1,$1
+		)`,
+		pgx.QueryExecModeSimpleProtocol,
+		now,
+		[]byte("retained-fencing-token-000000000"),
+		now.Add(time.Hour),
+		[]byte("missing-fencing-token-0000000000"),
+		[]byte("starting-fencing-token-00000000"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	heartbeatAt := now.Add(time.Second)
+	if _, err := store.RecordHeartbeat(t.Context(), &runnerv1.RunnerHeartbeat{
+		MessageId:        "heartbeat-active-inventory",
+		Sequence:         1,
+		RunnerId:         "runner-home",
+		ConnectionId:     "connection-active-inventory",
+		ObservedAtUnixMs: uint64(heartbeatAt.UnixMilli()),
+		Allocatable: &runnerv1.Capacity{
+			VcpuMillis: 8000, MemoryBytes: 4 << 30, DiskBytes: 8 << 30,
+			Instances: 8, Operations: 32,
+		},
+		Reserved: &runnerv1.Capacity{},
+		ActiveAssignments: []*runnerv1.ActiveAssignmentSummary{{
+			AssignmentId:      "assignment-retained",
+			SandboxId:         "sandbox-retained",
+			InstanceId:        "instance-retained",
+			SandboxGeneration: 2,
+			FencingToken:      []byte("retained-fencing-token-000000000"),
+		}},
+		DrainPhase:    runnerv1.DrainPhase_DRAIN_PHASE_ACTIVE,
+		StartupTiming: &runnerv1.StartupTiming{},
+	}, heartbeatAt); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := store.pool.Query(t.Context(), `
+		SELECT id,state,failure_class,next_reconcile_at
+		FROM secondbox.assignments
+		ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := make(map[string]struct {
+		state        string
+		failureClass string
+		next         time.Time
+	})
+	for rows.Next() {
+		var (
+			id, state, failureClass string
+			next                    time.Time
+		)
+		if err := rows.Scan(&id, &state, &failureClass, &next); err != nil {
+			t.Fatal(err)
+		}
+		got[id] = struct {
+			state        string
+			failureClass string
+			next         time.Time
+		}{state: state, failureClass: failureClass, next: next}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if retained := got["assignment-retained"]; retained.state != "ready" ||
+		retained.failureClass != "" ||
+		!retained.next.Equal(now.Add(time.Hour)) {
+		t.Fatalf("retained assignment = %#v", retained)
+	}
+	if missing := got["assignment-missing"]; missing.state != "uncertain" ||
+		missing.failureClass != "transient" ||
+		!missing.next.Equal(heartbeatAt) {
+		t.Fatalf("missing assignment = %#v", missing)
+	}
+	if starting := got["assignment-starting"]; starting.state != "starting" ||
+		starting.failureClass != "" ||
+		!starting.next.Equal(now.Add(time.Hour)) {
+		t.Fatalf("starting assignment = %#v", starting)
 	}
 }
 

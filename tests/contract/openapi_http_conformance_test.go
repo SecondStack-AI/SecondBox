@@ -44,6 +44,7 @@ var auditedV1HTTPOperations = map[string]auditedHTTPOperation{
 	"listSandboxes":            {"listSandboxes", "200", "SandboxPage", nil, nil},
 	"createSandbox":            {"createSandbox", "202", "Operation", []string{"Idempotency-Key"}, []string{"Idempotency-Replayed"}},
 	"getSandbox":               {"getSandbox", "200", "Sandbox", nil, []string{"ETag"}},
+	"updateSandboxMetadata":    {"updateSandboxMetadata", "200", "Sandbox", []string{"If-Match"}, []string{"ETag"}},
 	"getSandboxTiming":         {"getSandboxTiming", "200", "SandboxTiming", nil, nil},
 	"deleteSandbox":            {"mutateSandboxLifecycle", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},
 	"startSandbox":             {"mutateSandboxLifecycle", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},

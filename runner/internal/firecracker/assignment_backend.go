@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
@@ -255,14 +256,8 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 	}
 	return runnercontrol.BackendReadiness{
 		Architecture: runtime.GOARCH,
-		Capacity: &runnerprotocol.Capacity{
-			VcpuMillis:  uint32(cfg.MicroVMVCPUs * cfg.MicroVMMaxConcurrentGlobal * 1000),
-			MemoryBytes: uint64(cfg.MicroVMMemoryBudgetMiB) << 20,
-			DiskBytes:   uint64(cfg.MicroVMWorkspaceSizeMiB*cfg.MicroVMMaxConcurrentGlobal) << 20,
-			Instances:   uint32(cfg.MicroVMMaxConcurrentGlobal),
-			Operations:  uint32(cfg.MicroVMMaxConcurrentGlobal),
-		},
-		Reserved: &runnerprotocol.Capacity{},
+		Capacity:     runnerAllocatableCapacity(cfg),
+		Reserved:     &runnerprotocol.Capacity{},
 		Capabilities: &runnerprotocol.RunnerCapabilities{
 			Architecture:       runtime.GOARCH,
 			KernelRelease:      strings.TrimSpace(string(kernelRelease)),
@@ -280,6 +275,20 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 		},
 		ArtifactCache: artifactCacheEvidenceForManifest(manifest, time.Now().UTC()),
 	}, nil
+}
+
+func runnerAllocatableCapacity(cfg *config.Config) *runnerprotocol.Capacity {
+	return &runnerprotocol.Capacity{
+		VcpuMillis: uint32(
+			cfg.MicroVMVCPUs * cfg.MicroVMMaxConcurrentGlobal * 1000,
+		),
+		MemoryBytes: uint64(cfg.MicroVMMemoryBudgetMiB) << 20,
+		DiskBytes: uint64(
+			cfg.MicroVMWorkspaceSizeMiB*cfg.MicroVMMaxConcurrentGlobal,
+		) << 20,
+		Instances:  uint32(cfg.MicroVMMaxConcurrentGlobal),
+		Operations: uint32(cfg.MicroVMMaxConcurrentOperationsGlobal),
+	}
 }
 
 func artifactCacheEvidenceForManifest(

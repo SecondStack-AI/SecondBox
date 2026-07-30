@@ -44,6 +44,7 @@ var (
 
 const (
 	ReceiptWorkspaceCreate       = "workspace_create"
+	ReceiptWorkspaceClone        = "workspace_clone"
 	ReceiptGenerationAdvance     = "generation_advance"
 	ReceiptSnapshotCreate        = "snapshot_create"
 	ReceiptSnapshotDelete        = "snapshot_delete"
@@ -166,6 +167,13 @@ type CreateWorkspaceRequest struct {
 	CapacityBytes int64
 }
 
+// CloneWorkspaceRequest creates generation one from one immutable local Snapshot.
+type CloneWorkspaceRequest struct {
+	Mutation
+	SourceSnapshot string
+	CapacityBytes  int64
+}
+
 // AdvanceGenerationRequest durably republishes the current image at exactly the
 // requested next generation.
 type AdvanceGenerationRequest struct {
@@ -251,6 +259,7 @@ type ReconcileReport struct {
 // Every mutating request includes a stable operation ID.
 type WorkspaceStore interface {
 	Create(context.Context, CreateWorkspaceRequest) (Receipt, error)
+	CloneFromSnapshot(context.Context, CloneWorkspaceRequest) (Receipt, error)
 	Open(context.Context, string, uint64) (ComputeAttachment, error)
 	AdvanceGeneration(context.Context, AdvanceGenerationRequest) (Receipt, error)
 	CreateSnapshot(context.Context, CreateSnapshotRequest) (Receipt, error)
