@@ -887,6 +887,28 @@ func TestPostgresRelayDurablySequencesPublicStreamingExecFrames(t *testing.T) {
 	}, now.Add(5*time.Second)); err != nil || !inserted {
 		t.Fatalf("persist stream terminal = %t, %v", inserted, err)
 	}
+	if inserted, err := relay.AppendExecClientFrame(
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID,
+		runnercontrol.ExecClientFrame{Sequence: 3, Credit: 6}, now.Add(6*time.Second),
+	); err != nil || !inserted {
+		t.Fatalf("append in-flight credit after terminal = %t, %v", inserted, err)
+	}
+	terminalSession, err := relay.GetDataPlaneSession(
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if terminalSession.State != "completed" ||
+		terminalSession.NextClientSequence != 4 ||
+		terminalSession.ResponseCreditBytes != 18 {
+		t.Fatalf("terminal session after in-flight credit = %#v", terminalSession)
+	}
+	if unexpected, found, err := relay.ClaimOutboundFrame(
+		t.Context(), seed.RunnerID, seed.ConnectionOne, now.Add(7*time.Second),
+	); err != nil || found {
+		t.Fatalf("terminal in-flight credit reached Runner = %#v, %t, %v", unexpected, found, err)
+	}
 	frames, err := relay.ListExecServerFrames(t.Context(), principal.TenantRef, principal.SubjectRef, session.ID, -1, 16)
 	if err != nil {
 		t.Fatal(err)
