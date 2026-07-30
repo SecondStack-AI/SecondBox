@@ -35,6 +35,7 @@ type (
 	Runner                  = contracts.Runner
 	RunnerPage              = contracts.RunnerPage
 	Sandbox                 = contracts.Sandbox
+	SandboxPage             = contracts.SandboxPage
 	CreateSandboxRequest    = contracts.CreateSandboxRequest
 	RestoreSnapshotRequest  = contracts.RestoreSnapshotRequest
 	CreateSnapshotRequest   = contracts.CreateSnapshotRequest

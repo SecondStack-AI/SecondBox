@@ -287,7 +287,7 @@ func (handle *SandboxHandle) CreateSnapshot(
 	var operation Operation
 	err = handle.client.RequestJSON(ctx, "createSandboxSnapshot", CallOptions{
 		PathParameters: map[string]string{"sandboxId": handle.Snapshot().ID},
-		Headers: headers, Body: bytes.NewReader(body), ContentType: "application/json",
+		Headers:        headers, Body: bytes.NewReader(body), ContentType: "application/json",
 	}, &operation)
 	return operation, err
 }

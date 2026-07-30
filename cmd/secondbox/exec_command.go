@@ -89,7 +89,7 @@ func runExecCommand(
 	if err != nil {
 		return err
 	}
-	handle, err := resolveSandboxHandle(ctx, client, sandboxReference)
+	handle, err := resolveSandboxReference(ctx, client, sandboxReference)
 	if err != nil {
 		return err
 	}
@@ -186,6 +186,9 @@ func resolveSandboxHandle(
 	}, &sandbox)
 	if err != nil {
 		return nil, err
+	}
+	if sandbox.ID == "" {
+		return nil, fmt.Errorf("SecondBox CLI received no Sandbox for %q", reference)
 	}
 	return secondboxclient.NewSandboxHandle(client, sandbox), nil
 }

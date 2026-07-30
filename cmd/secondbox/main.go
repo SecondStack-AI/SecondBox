@@ -175,6 +175,18 @@ func runOperationalCommand(
 			stdout: output, stderr: os.Stderr, httpClient: http.DefaultClient,
 		})
 	}
+	if args[0] == "run" {
+		return true, runRunCommand(ctx, session, args[1:], execCommandEnvironment{
+			stdout: output, stderr: os.Stderr, httpClient: http.DefaultClient,
+		})
+	}
+	if args[0] == "shell" && !isShellSubcommand(args) {
+		return true, runShellCommand(ctx, session, args[1:], sandboxShellEnvironment{
+			input: os.Stdin, output: output,
+			inputFD: int(os.Stdin.Fd()), outputFD: outputFileDescriptor(output),
+			httpClient: http.DefaultClient,
+		}, http.DefaultClient)
+	}
 	if len(args) < 2 {
 		return false, nil
 	}
@@ -214,6 +226,13 @@ func runOperationalCommand(
 // from `exec <sandbox> -- command`.
 func isExecSubcommand(args []string) bool {
 	return len(args) >= 2 && (args[1] == "stream" || args[1] == "cancel")
+}
+
+// isShellSubcommand distinguishes the terminal negotiation aliases from
+// `shell <sandbox>`.
+func isShellSubcommand(args []string) bool {
+	return len(args) >= 2 &&
+		(args[1] == "create" || args[1] == "reconnect" || args[1] == "close")
 }
 
 func outputFileDescriptor(output io.Writer) int {
@@ -345,8 +364,8 @@ func commandSummary() string {
 	keys = append(
 		keys,
 		"diagnostics bundle", "exec", "login", "logout", "logs follow", "logs tail",
-		"sandbox shell", "timings operation", "timings sandbox", "timings summary",
-		"whoami",
+		"run", "sandbox shell", "shell", "timings operation", "timings sandbox",
+		"timings summary", "whoami",
 	)
 	sort.Strings(keys)
 	return strings.Join(keys, ", ")

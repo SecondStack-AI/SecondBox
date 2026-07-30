@@ -47,7 +47,7 @@ func newExecTestServer(t *testing.T, outcomeJSON string) *execTestServer {
 }
 
 const execSandboxJSON = `{
-	"id":"sandbox-1","profile":"coding-environment","profileRevisionId":"profile-revision-1",
+	"id":"sbx_test1","profile":"coding-environment","profileRevisionId":"profile-revision-1",
 	"state":"ready","desiredState":"running","generation":4,
 	"workspace":{"id":"workspace-1","generation":4,"state":"ready","sizeBytes":1024,
 		"createdAt":"2026-07-28T00:00:00Z","updatedAt":"2026-07-28T00:00:00Z"},
@@ -93,7 +93,7 @@ func runExecForTest(
 func TestExecBuildsArgvCommandAndSeparatesStreams(t *testing.T) {
 	recorder := newExecTestServer(t, exitedOutcomeJSON(0, "on stdout\n", "on stderr\n"))
 	stdout, stderr, err := runExecForTest(t, recorder, []string{
-		"sandbox-1", "--", "echo", "hello", "--not-a-cli-flag",
+		"sbx_test1", "--", "echo", "hello", "--not-a-cli-flag",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -118,7 +118,7 @@ func TestExecBuildsArgvCommandAndSeparatesStreams(t *testing.T) {
 func TestExecAppliesObservedGenerationWithoutBeingTold(t *testing.T) {
 	recorder := newExecTestServer(t, exitedOutcomeJSON(0, "", ""))
 	if _, _, err := runExecForTest(t, recorder, []string{
-		"sandbox-1", "--", "true",
+		"sbx_test1", "--", "true",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -131,14 +131,14 @@ func TestExecAppliesObservedGenerationWithoutBeingTold(t *testing.T) {
 	if recorder.headers.Get("SecondBox-Lease-ID") != "" {
 		t.Error("exec must not claim a Lease it was not given")
 	}
-	if recorder.path != "/v1/sandboxes/sandbox-1/exec" {
+	if recorder.path != "/v1/sandboxes/sbx_test1/exec" {
 		t.Errorf("path = %q", recorder.path)
 	}
 }
 
 func TestExecPropagatesGuestExitStatus(t *testing.T) {
 	recorder := newExecTestServer(t, exitedOutcomeJSON(23, "", "boom\n"))
-	_, stderr, err := runExecForTest(t, recorder, []string{"sandbox-1", "--", "false"})
+	_, stderr, err := runExecForTest(t, recorder, []string{"sbx_test1", "--", "false"})
 	var exited *commandExitError
 	if !errors.As(err, &exited) {
 		t.Fatalf("error = %v; want a typed exit status", err)
@@ -154,7 +154,7 @@ func TestExecPropagatesGuestExitStatus(t *testing.T) {
 func TestExecBuildsShellCommand(t *testing.T) {
 	recorder := newExecTestServer(t, exitedOutcomeJSON(0, "", ""))
 	if _, _, err := runExecForTest(t, recorder, []string{
-		"sandbox-1", "--shell", "--", "printf x; exit 0",
+		"sbx_test1", "--shell", "--", "printf x; exit 0",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestExecBuildsShellCommand(t *testing.T) {
 func TestExecShellRequiresExactlyOneOperand(t *testing.T) {
 	recorder := newExecTestServer(t, exitedOutcomeJSON(0, "", ""))
 	_, _, err := runExecForTest(t, recorder, []string{
-		"sandbox-1", "--shell", "--", "printf", "x",
+		"sbx_test1", "--shell", "--", "printf", "x",
 	})
 	if err == nil || !strings.Contains(err.Error(), "exactly one command operand") {
 		t.Fatalf("error = %v; want a single-operand rejection", err)
@@ -180,7 +180,7 @@ func TestExecShellRequiresExactlyOneOperand(t *testing.T) {
 func TestExecSendsOptionsAndEnvironment(t *testing.T) {
 	recorder := newExecTestServer(t, exitedOutcomeJSON(0, "", ""))
 	if _, _, err := runExecForTest(t, recorder, []string{
-		"sandbox-1", "--deadline", "5s", "--max-output-bytes", "4096",
+		"sbx_test1", "--deadline", "5s", "--max-output-bytes", "4096",
 		"--cwd", "project", "--env", "A=1", "--env", "B=2",
 		"--lease", "lease-1", "--idempotency-key", "caller-key",
 		"--", "true",
@@ -207,7 +207,7 @@ func TestExecSendsOptionsAndEnvironment(t *testing.T) {
 
 func TestExecAppliesDefaultBounds(t *testing.T) {
 	recorder := newExecTestServer(t, exitedOutcomeJSON(0, "", ""))
-	if _, _, err := runExecForTest(t, recorder, []string{"sandbox-1", "--", "true"}); err != nil {
+	if _, _, err := runExecForTest(t, recorder, []string{"sbx_test1", "--", "true"}); err != nil {
 		t.Fatal(err)
 	}
 	if recorder.request.DeadlineMilliseconds != defaultExecDeadline.Milliseconds() {
@@ -221,7 +221,7 @@ func TestExecAppliesDefaultBounds(t *testing.T) {
 func TestExecJSONPreservesOutcomeAndStatus(t *testing.T) {
 	recorder := newExecTestServer(t, exitedOutcomeJSON(7, "raw stdout", ""))
 	stdout, stderr, err := runExecForTest(t, recorder, []string{
-		"sandbox-1", "--json", "--", "false",
+		"sbx_test1", "--json", "--", "false",
 	})
 	var exited *commandExitError
 	if !errors.As(err, &exited) || exited.code != 7 {
@@ -271,7 +271,7 @@ func TestExecReportsNonExitedOutcomes(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			recorder := newExecTestServer(t, test.outcome)
-			_, _, err := runExecForTest(t, recorder, []string{"sandbox-1", "--", "true"})
+			_, _, err := runExecForTest(t, recorder, []string{"sbx_test1", "--", "true"})
 			if err == nil || !strings.Contains(err.Error(), test.wantIn) {
 				t.Fatalf("error = %v; want one containing %q", err, test.wantIn)
 			}
@@ -287,7 +287,7 @@ func TestExecWritesTruncatedOutputBeforeReportingExhaustion(t *testing.T) {
 	outcome := `{"kind":"output_exhausted","limitBytes":4,"output":{"stdoutBase64":"` +
 		base64.StdEncoding.EncodeToString([]byte("abcd")) + `","stderrBase64":""}}`
 	recorder := newExecTestServer(t, outcome)
-	stdout, _, err := runExecForTest(t, recorder, []string{"sandbox-1", "--", "true"})
+	stdout, _, err := runExecForTest(t, recorder, []string{"sbx_test1", "--", "true"})
 	if err == nil || !strings.Contains(err.Error(), "4 bytes") {
 		t.Fatalf("error = %v; want an exhaustion report", err)
 	}
@@ -303,21 +303,21 @@ func TestExecRejectsMalformedInvocations(t *testing.T) {
 		wantIn string
 	}{
 		{"no sandbox", nil, "requires a Sandbox"},
-		{"option before sandbox", []string{"--json", "sandbox-1"}, "before any option"},
-		{"no command", []string{"sandbox-1"}, "requires a command after --"},
+		{"option before sandbox", []string{"--json", "sbx_test1"}, "before any option"},
+		{"no command", []string{"sbx_test1"}, "requires a command after --"},
 		{
 			"non-positive deadline",
-			[]string{"sandbox-1", "--deadline", "0s", "--", "true"},
+			[]string{"sbx_test1", "--deadline", "0s", "--", "true"},
 			"--deadline must be at least",
 		},
 		{
 			"non-positive output bound",
-			[]string{"sandbox-1", "--max-output-bytes", "0", "--", "true"},
+			[]string{"sbx_test1", "--max-output-bytes", "0", "--", "true"},
 			"--max-output-bytes must be positive",
 		},
 		{
 			"malformed environment",
-			[]string{"sandbox-1", "--env", "novalue", "--", "true"},
+			[]string{"sbx_test1", "--env", "novalue", "--", "true"},
 			"exec environment",
 		},
 	}
@@ -337,7 +337,7 @@ func TestExecRequiresCredentials(t *testing.T) {
 	err := runExecCommand(
 		context.Background(),
 		cliSession{url: "https://a.example.com"},
-		[]string{"sandbox-1", "--", "true"},
+		[]string{"sbx_test1", "--", "true"},
 		execCommandEnvironment{stdout: &stdout, stderr: &stderr},
 	)
 	if err == nil || !strings.Contains(err.Error(), sessionSourceHint) {
@@ -351,7 +351,7 @@ func TestRunOperationalCommandRoutesExec(t *testing.T) {
 	handled, err := runOperationalCommand(
 		context.Background(),
 		execTestSession(recorder.server.URL),
-		[]string{"exec", "sandbox-1", "--", "true"},
+		[]string{"exec", "sbx_test1", "--", "true"},
 		&output,
 	)
 	if !handled {
