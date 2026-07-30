@@ -974,7 +974,6 @@ func recordLocalGenerationAdvanceResult(
 	}
 	workspace := locked.Workspace
 	if workspace.HomeRunnerID != runnerID ||
-		workspace.State != "ready" ||
 		effect.kind != "stop" ||
 		workspace.Mutation.Kind != "stop" ||
 		workspace.Mutation.ID != result.EffectId ||
@@ -983,15 +982,39 @@ func recordLocalGenerationAdvanceResult(
 		locked.Generation != workspace.Generation {
 		return errors.New("SecondBox runner generation-advance result conflicts with durable authority")
 	}
-	if effect.state == "runner_succeeded" {
-		return nil
-	}
 	succeeded := result.Terminal ==
 		runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED
+	if effect.state == "runner_succeeded" {
+		if succeeded &&
+			workspace.State == "failed" &&
+			workspace.Mutation.State == "failed" &&
+			locked.SandboxState == "failed" {
+			if _, err := tx.Exec(ctx, `
+				UPDATE secondbox.workspaces
+				SET state='ready',mutation_state='runner_succeeded',updated_at=$2
+				WHERE id=$1`,
+				result.WorkspaceId, now,
+			); err != nil {
+				return fmt.Errorf("SecondBox runner generation-advance Workspace recovery: %w", err)
+			}
+			if _, err := tx.Exec(ctx, `
+				UPDATE secondbox.sandboxes
+				SET state='stopping',lifecycle_failure_class='',lifecycle_failure_message='',
+				    next_reconcile_at=$2,reconcile_owner='',reconcile_claim_expires_at=NULL,
+				    revision=revision+1,updated_at=$2
+				WHERE id=$1`,
+				result.SandboxId, now,
+			); err != nil {
+				return fmt.Errorf("SecondBox runner generation-advance Sandbox recovery: %w", err)
+			}
+		}
+		return nil
+	}
 	if effect.state == "runner_failed" && !succeeded {
 		return nil
 	}
 	if (effect.state != "queued" && effect.state != "runner_failed") ||
+		workspace.State != "ready" ||
 		workspace.Mutation.State != "advancing" ||
 		(locked.SandboxState != "stopping" && locked.SandboxState != "failed") {
 		return errors.New("SecondBox runner generation-advance result is reordered")
@@ -1201,7 +1224,12 @@ func recordLocalWorkspaceReconciliation(
 			(activeAssignmentState == "uncertain" ||
 				activeAssignmentState == "fencing") &&
 				!item.ActiveWriter
-		if item.Generation != uint64(locked.Workspace.Generation) ||
+		expectedGeneration := locked.Workspace.Generation
+		if locked.Workspace.Mutation.Kind == "stop" &&
+			locked.Workspace.Mutation.State == "runner_succeeded" {
+			expectedGeneration = locked.Workspace.Mutation.TargetGeneration
+		}
+		if item.Generation != uint64(expectedGeneration) ||
 			item.LogicalCapacityBytes != uint64(locked.Workspace.LogicalCapacityBytes) ||
 			!item.Formatted ||
 			item.RestorePending != restorePending ||

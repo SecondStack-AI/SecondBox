@@ -1153,6 +1153,46 @@ func TestGenerationAdvanceReceiptRetainsStopMutationUntilDatabaseCommit(t *testi
 			workspaceGeneration, mutationState, effectState, commandState,
 		)
 	}
+	if err := store.OpenConnection(
+		t.Context(),
+		RunnerIdentity{
+			RunnerID:         "runner-home",
+			CredentialSerial: "credential-generation-reconcile",
+		},
+		"connection-generation-reconcile",
+		1,
+		now.Add(1500*time.Millisecond),
+	); err != nil {
+		t.Fatal(err)
+	}
+	reconcileID := "workspace-reconcile-connection-generation-reconcile"
+	recordLocalWorkspaceTestResult(t, store, &runnerv1.LocalWorkspaceResult{
+		CommandVersion: 1,
+		Kind:           runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE,
+		Terminal:       runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED,
+		OperationId:    reconcileID,
+		EffectId:       reconcileID,
+		Inventory: []*runnerv1.LocalWorkspaceInventoryItem{{
+			WorkspaceId:          "workspace-stop",
+			Generation:           4,
+			LogicalCapacityBytes: 8 << 30,
+			Formatted:            true,
+		}},
+		Receipts: []*runnerv1.LocalWorkspaceReceiptItem{{
+			Kind:                    runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION,
+			OperationId:             "effect-stop",
+			WorkspaceId:             "workspace-stop",
+			PreviousGeneration:      3,
+			Generation:              4,
+			LogicalCapacityBytes:    8 << 30,
+			ReceiptRecordedAtUnixMs: uint64(now.Add(time.Second).UnixMilli()),
+		}},
+		Correlation: &runnerv1.Correlation{
+			RequestId:   reconcileID,
+			OperationId: reconcileID,
+			RunnerId:    "runner-home",
+		},
+	}, now.Add(2*time.Second))
 	if _, err := store.pool.Exec(t.Context(), `
 		UPDATE secondbox.workspaces SET mutation_state='advancing'
 		WHERE id='workspace-stop';
@@ -1170,7 +1210,7 @@ func TestGenerationAdvanceReceiptRetainsStopMutationUntilDatabaseCommit(t *testi
 	); err != nil {
 		t.Fatal(err)
 	}
-	recordLocalWorkspaceTestResult(t, store, result, now.Add(2*time.Second))
+	recordLocalWorkspaceTestResult(t, store, result, now.Add(3*time.Second))
 	var sandboxState, failureClass, failureMessage string
 	if err := store.pool.QueryRow(t.Context(), `
 		SELECT workspace.mutation_state,effect.state,sandbox.state,
@@ -1194,7 +1234,50 @@ func TestGenerationAdvanceReceiptRetainsStopMutationUntilDatabaseCommit(t *testi
 			mutationState, effectState, sandboxState, failureClass, failureMessage,
 		)
 	}
-	recordLocalWorkspaceTestResult(t, store, result, now.Add(3*time.Second))
+	if _, err := store.pool.Exec(t.Context(), `
+		UPDATE secondbox.workspaces
+		SET state='failed',mutation_state='failed'
+		WHERE id='workspace-stop';
+		UPDATE secondbox.sandboxes
+		SET state='failed',lifecycle_failure_class='home_workspace_conflict',
+		    lifecycle_failure_message='home runner local Workspace evidence conflicts with durable authority',
+		    next_reconcile_at=NULL
+		WHERE id='sandbox-stop'`,
+		pgx.QueryExecModeSimpleProtocol,
+	); err != nil {
+		t.Fatal(err)
+	}
+	recordLocalWorkspaceTestResult(t, store, result, now.Add(4*time.Second))
+	var recoveredWorkspaceState string
+	if err := store.pool.QueryRow(t.Context(), `
+		SELECT workspace.state,workspace.mutation_state,sandbox.state,
+		       sandbox.lifecycle_failure_class,sandbox.lifecycle_failure_message
+		FROM secondbox.workspaces AS workspace
+		JOIN secondbox.sandboxes AS sandbox ON sandbox.workspace_id=workspace.id
+		WHERE workspace.id='workspace-stop'`,
+	).Scan(
+		&recoveredWorkspaceState,
+		&mutationState,
+		&sandboxState,
+		&failureClass,
+		&failureMessage,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if recoveredWorkspaceState != "ready" ||
+		mutationState != "runner_succeeded" ||
+		sandboxState != "stopping" ||
+		failureClass != "" ||
+		failureMessage != "" {
+		t.Fatalf(
+			"recovered generation receipt Workspace=%q/%q Sandbox=%q failure=%q/%q",
+			recoveredWorkspaceState,
+			mutationState,
+			sandboxState,
+			failureClass,
+			failureMessage,
+		)
+	}
 }
 
 func TestWorkspaceCreateReceiptHandsRunningSandboxDirectlyToStartMutation(t *testing.T) {
