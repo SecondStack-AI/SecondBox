@@ -49,6 +49,9 @@ func TestStressQualificationUsesExternalSDKHarnessAndFailsLoudly(t *testing.T) {
 		"SecondBox scenario source commit",
 		"SecondBox scenario Go version",
 		"SecondBox scenario artifact manifest",
+		"SECONDBOX_SCENARIO_DIAGNOSTICS_DIR",
+		`"$diagnostics_dir/runner.jsonl"`,
+		`"$diagnostics_dir/compose.log"`,
 		"--mode prepare",
 		"--mode run",
 	} {

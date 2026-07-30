@@ -135,6 +135,13 @@ Omitting `SECONDBOX_LIFECYCLE_CONFIG` uses `scripts/lifecycle-config.example.jso
 Omitting the artifact, trust, and Workspace variables falls back to the prepared
 `.secondbox/stress` state.
 
+Every lifecycle run also writes a sibling diagnostics directory containing
+`runner.jsonl` and timestamped control-plane/PostgreSQL/object-store Compose
+logs. Set `SECONDBOX_SCENARIO_DIAGNOSTICS_DIR` to an explicit absent absolute
+path to place it elsewhere. The runner log carries command delivery, event
+persistence, local Workspace execution, and format/fsync/publish timing needed
+for before/after optimization comparisons.
+
 The host requires `/dev/kvm`, `/dev/net/tun`, and a Workspace root on XFS or
 Btrfs. These are the same prerequisites as `just test-scenario`.
 

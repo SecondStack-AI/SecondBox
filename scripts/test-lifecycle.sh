@@ -28,6 +28,9 @@ if [[ -z "${SECONDBOX_LIFECYCLE_OUTPUT:-}" ]]; then
   export SECONDBOX_LIFECYCLE_OUTPUT="$local_root/results/lifecycle-$(date -u +%Y%m%dT%H%M%SZ)-$$.json"
   uses_local_preparation=true
 fi
+if [[ -z "${SECONDBOX_SCENARIO_DIAGNOSTICS_DIR:-}" ]]; then
+  export SECONDBOX_SCENARIO_DIAGNOSTICS_DIR="${SECONDBOX_LIFECYCLE_OUTPUT%.json}.diagnostics"
+fi
 if [[ -z "${SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR:-}" ]]; then
   export SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR="$local_root/artifacts"
   uses_local_preparation=true
@@ -93,6 +96,17 @@ fi
 output_parent="$(dirname "$SECONDBOX_LIFECYCLE_OUTPUT")"
 if [[ -L "$output_parent" || ! -d "$output_parent" ]]; then
   echo "SECONDBOX_LIFECYCLE_OUTPUT parent must be an existing non-symbolic-link directory" >&2
+  exit 1
+fi
+if [[ "$SECONDBOX_SCENARIO_DIAGNOSTICS_DIR" != /* ||
+      -e "$SECONDBOX_SCENARIO_DIAGNOSTICS_DIR" ||
+      -L "$SECONDBOX_SCENARIO_DIAGNOSTICS_DIR" ]]; then
+  echo "SECONDBOX_SCENARIO_DIAGNOSTICS_DIR must be an absent absolute path" >&2
+  exit 1
+fi
+diagnostics_parent="$(dirname "$SECONDBOX_SCENARIO_DIAGNOSTICS_DIR")"
+if [[ -L "$diagnostics_parent" || ! -d "$diagnostics_parent" ]]; then
+  echo "SECONDBOX_SCENARIO_DIAGNOSTICS_DIR parent must be an existing non-symbolic-link directory" >&2
   exit 1
 fi
 

@@ -123,6 +123,14 @@ for directory in "$artifacts_dir" "$workspace_root"; do
 done
 [[ "$public_key" = /* && "$(realpath -e "$public_key")" == "$public_key" && ! -L "$public_key" && -f "$public_key" ]] ||
   fail "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY must be an existing clean absolute non-symlink file"
+diagnostics_dir="${SECONDBOX_SCENARIO_DIAGNOSTICS_DIR:-}"
+if [[ -n "$diagnostics_dir" ]]; then
+  diagnostics_parent="$(dirname "$diagnostics_dir")"
+  [[ "$diagnostics_dir" = /* && ! -e "$diagnostics_dir" && ! -L "$diagnostics_dir" ]] ||
+    fail "SECONDBOX_SCENARIO_DIAGNOSTICS_DIR must be an absent absolute path"
+  [[ ! -L "$diagnostics_parent" && -d "$diagnostics_parent" ]] ||
+    fail "SECONDBOX_SCENARIO_DIAGNOSTICS_DIR parent must be an existing non-symlink directory"
+fi
 
 workspace_mount="$(findmnt -T "$workspace_root" -n -o TARGET,SOURCE,FSTYPE,OPTIONS)" ||
   fail "findmnt could not resolve SECONDBOX_RUNNER_WORKSPACE_ROOT"
@@ -354,9 +362,31 @@ remove_propagated_mounts() {
   done
 }
 
+collect_diagnostics() {
+  [[ -n "$diagnostics_dir" ]] || return 0
+  mkdir -m 0700 -- "$diagnostics_dir" ||
+    return 1
+  if ! compose exec --no-TTY secondbox-runner \
+    /bin/sh -c \
+    'test -f /var/lib/secondbox-runner/log/runner.jsonl &&
+     cat /var/lib/secondbox-runner/log/runner.jsonl' \
+    >"$diagnostics_dir/runner.jsonl"; then
+    return 1
+  fi
+  if ! compose logs --no-color --timestamps \
+    control-plane postgres object-store \
+    >"$diagnostics_dir/compose.log"; then
+    return 1
+  fi
+}
+
 cleanup() {
   status="$?"
   trap - EXIT
+  if ! collect_diagnostics; then
+    echo "SecondBox scenario diagnostics collection failed: $diagnostics_dir" >&2
+    status=1
+  fi
   if [[ "$status" -ne 0 ]]; then
     if ! compose ps --all >&2; then
       echo "SecondBox scenario could not collect container state" >&2
