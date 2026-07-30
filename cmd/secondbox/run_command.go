@@ -140,25 +140,42 @@ func runRunCommand(
 
 // deleteRunSandbox disposes of the Sandbox this command created. The SDK never
 // deletes implicitly, so disposal is requested here and only here.
+// runDisposeAttempts bounds the optimistic-concurrency retry below.
+const runDisposeAttempts = 5
+
 func deleteRunSandbox(
 	ctx context.Context,
 	handle *secondboxclient.SandboxHandle,
 ) error {
 	disposeContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 	defer cancel()
-	sandbox, err := handle.Refresh(disposeContext)
-	if err != nil {
-		return fmt.Errorf("SecondBox CLI run refresh before delete: %w", err)
+	var lastErr error
+	for range runDisposeAttempts {
+		sandbox, err := handle.Refresh(disposeContext)
+		if err != nil {
+			return fmt.Errorf("SecondBox CLI run refresh before delete: %w", err)
+		}
+		if !liveSandbox(sandbox) {
+			return nil
+		}
+		_, err = handle.Delete(disposeContext, secondboxclient.LifecycleOptions{
+			IfMatch: secondboxclient.RevisionETag(sandbox.Revision),
+		})
+		if err == nil {
+			return nil
+		}
+		// Reconciliation advances the revision while a Sandbox is managed, so a
+		// validator read a moment earlier can already be stale. That is the one
+		// failure worth re-reading for; everything else is reported as it is.
+		if secondboxclient.ProblemCodeOf(err) != secondboxclient.ProblemCodePreconditionFailed {
+			return fmt.Errorf("SecondBox CLI run delete Sandbox %s: %w", sandbox.ID, err)
+		}
+		lastErr = err
 	}
-	if !liveSandbox(sandbox) {
-		return nil
-	}
-	if _, err := handle.Delete(disposeContext, secondboxclient.LifecycleOptions{
-		IfMatch: secondboxclient.RevisionETag(sandbox.Revision),
-	}); err != nil {
-		return fmt.Errorf("SecondBox CLI run delete Sandbox %s: %w", sandbox.ID, err)
-	}
-	return nil
+	return fmt.Errorf(
+		"SecondBox CLI run delete Sandbox %s after %d attempts: %w",
+		handle.Snapshot().ID, runDisposeAttempts, lastErr,
+	)
 }
 
 func runShellCommand(

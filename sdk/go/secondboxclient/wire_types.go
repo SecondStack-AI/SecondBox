@@ -79,10 +79,11 @@ const (
 	ServiceAccountScopeSandboxArtifacts = "sandbox:artifacts"
 	ServiceAccountScopeSandboxPorts     = "sandbox:ports"
 
-	ProblemCodeStateConflict    = "state_conflict"
-	ProblemCodeGenerationFenced = "generation_fenced"
-	ProblemCodeLeaseFenced      = "lease_fenced"
-	ProblemCodeWaitExpired      = "wait_expired"
+	ProblemCodeStateConflict      = "state_conflict"
+	ProblemCodePreconditionFailed = "precondition_failed"
+	ProblemCodeGenerationFenced   = "generation_fenced"
+	ProblemCodeLeaseFenced        = "lease_fenced"
+	ProblemCodeWaitExpired        = "wait_expired"
 
 	LeaseStateActive   = contracts.LeaseStateActive
 	LeaseStateReleased = contracts.LeaseStateReleased

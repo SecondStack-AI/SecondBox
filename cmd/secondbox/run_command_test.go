@@ -343,3 +343,109 @@ func TestRunRefusesOversizedStdinBeforeCreating(t *testing.T) {
 		t.Errorf("requests = %s; want nothing created", recorder.joinedRequests())
 	}
 }
+
+// TestRunRetriesDeleteWhenTheRevisionMoved reproduces the disposal failure seen
+// against a live deployment: reconciliation advances the Sandbox revision, so
+// the If-Match validator read a moment earlier is already stale.
+func TestRunRetriesDeleteWhenTheRevisionMoved(t *testing.T) {
+	var mutex sync.Mutex
+	revision, deleteAttempts := 5, 0
+	server := httptest.NewServer(http.HandlerFunc(
+		func(writer http.ResponseWriter, request *http.Request) {
+			mutex.Lock()
+			defer mutex.Unlock()
+			writer.Header().Set("Content-Type", "application/json")
+			switch {
+			case request.Method == http.MethodPost && request.URL.Path == "/v1/sandboxes":
+				_, _ = io.WriteString(writer, `{"id":"op_1","sandboxId":"sbx_run1","kind":"create",
+					"state":"pending","requestId":"req_1",
+					"createdAt":"2026-07-28T00:00:00Z","updatedAt":"2026-07-28T00:00:00Z"}`)
+			case strings.HasSuffix(request.URL.Path, "/exec"):
+				_, _ = io.WriteString(writer, exitedOutcomeJSON(0, "", ""))
+			case request.Method == http.MethodDelete:
+				deleteAttempts++
+				// The first two attempts lose the race, as a busy reconciler causes.
+				if deleteAttempts <= 2 {
+					writer.WriteHeader(http.StatusPreconditionFailed)
+					_, _ = io.WriteString(writer,
+						`{"code":"precondition_failed","title":"Resource revision changed"}`)
+					return
+				}
+				_, _ = io.WriteString(writer, `{"id":"op_2","sandboxId":"sbx_run1","kind":"delete",
+					"state":"pending","requestId":"req_2",
+					"createdAt":"2026-07-28T00:00:00Z","updatedAt":"2026-07-28T00:00:00Z"}`)
+			default:
+				// Every read reports a Sandbox whose revision has moved on.
+				revision++
+				_, _ = io.WriteString(writer, strings.Replace(
+					runSandboxJSON("ready"), `"revision":5`,
+					fmt.Sprintf(`"revision":%d`, revision), 1))
+			}
+		}))
+	t.Cleanup(server.Close)
+
+	var stdout, stderr bytes.Buffer
+	err := runRunCommand(
+		context.Background(),
+		execTestSession(server.URL),
+		[]string{"coding-environment", "--", "true"},
+		execCommandEnvironment{
+			stdout: &stdout, stderr: &stderr, httpClient: server.Client(),
+		},
+	)
+	if err != nil {
+		t.Fatalf("a stale validator must be retried, not reported: %v", err)
+	}
+	mutex.Lock()
+	defer mutex.Unlock()
+	if deleteAttempts != 3 {
+		t.Errorf("delete attempts = %d; want the two losses plus one success", deleteAttempts)
+	}
+}
+
+// TestRunReportsADeleteFailureThatIsNotARace proves only the stale-validator
+// case is retried; anything else is surfaced immediately.
+func TestRunReportsADeleteFailureThatIsNotARace(t *testing.T) {
+	var mutex sync.Mutex
+	deleteAttempts := 0
+	server := httptest.NewServer(http.HandlerFunc(
+		func(writer http.ResponseWriter, request *http.Request) {
+			mutex.Lock()
+			defer mutex.Unlock()
+			writer.Header().Set("Content-Type", "application/json")
+			switch {
+			case request.Method == http.MethodPost && request.URL.Path == "/v1/sandboxes":
+				_, _ = io.WriteString(writer, `{"id":"op_1","sandboxId":"sbx_run1","kind":"create",
+					"state":"pending","requestId":"req_1",
+					"createdAt":"2026-07-28T00:00:00Z","updatedAt":"2026-07-28T00:00:00Z"}`)
+			case strings.HasSuffix(request.URL.Path, "/exec"):
+				_, _ = io.WriteString(writer, exitedOutcomeJSON(0, "", ""))
+			case request.Method == http.MethodDelete:
+				deleteAttempts++
+				writer.WriteHeader(http.StatusConflict)
+				_, _ = io.WriteString(writer,
+					`{"code":"state_conflict","title":"Sandbox cannot be deleted"}`)
+			default:
+				_, _ = io.WriteString(writer, runSandboxJSON("ready"))
+			}
+		}))
+	t.Cleanup(server.Close)
+
+	var stdout, stderr bytes.Buffer
+	err := runRunCommand(
+		context.Background(),
+		execTestSession(server.URL),
+		[]string{"coding-environment", "--", "true"},
+		execCommandEnvironment{
+			stdout: &stdout, stderr: &stderr, httpClient: server.Client(),
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "state_conflict") {
+		t.Fatalf("error = %v; want the delete failure surfaced", err)
+	}
+	mutex.Lock()
+	defer mutex.Unlock()
+	if deleteAttempts != 1 {
+		t.Errorf("delete attempts = %d; want no retry for a non-race failure", deleteAttempts)
+	}
+}
