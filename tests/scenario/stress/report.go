@@ -296,9 +296,9 @@ func writeHumanReport(writer io.Writer, report stressReport) error {
 			writer,
 			"Deployment window: %ds; boot p95=%s ms; Exec p95=%s ms; API p95=%s ms\n",
 			report.DeploymentTiming.WindowSeconds,
-			optionalMilliseconds(report.DeploymentTiming.Boot.P95Milliseconds),
-			optionalMilliseconds(report.DeploymentTiming.Exec.P95Milliseconds),
-			optionalMilliseconds(report.DeploymentTiming.API.P95Milliseconds),
+			optionalPreciseMilliseconds(report.DeploymentTiming.Boot.P95Milliseconds),
+			optionalPreciseMilliseconds(report.DeploymentTiming.Exec.P95Milliseconds),
+			optionalPreciseMilliseconds(report.DeploymentTiming.API.P95Milliseconds),
 		); err != nil {
 			return err
 		}
@@ -318,4 +318,11 @@ func optionalMilliseconds(value *int64) string {
 		return "-"
 	}
 	return strconv.FormatInt(*value, 10)
+}
+
+func optionalPreciseMilliseconds(value *float64) string {
+	if value == nil {
+		return "-"
+	}
+	return strconv.FormatFloat(*value, 'f', -1, 64)
 }
