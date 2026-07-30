@@ -86,6 +86,28 @@ export class OperationFailedError extends Error {
   }
 }
 
+/** Returns one unguessable single-use request key. */
+export function newIdempotencyKey(): string {
+  return idempotencyKey();
+}
+
+/** Renders one Sandbox revision as its If-Match validator. */
+export function revisionETag(revision: number): string {
+  requirePositiveInteger(revision, "Sandbox revision");
+  return `"revision-${revision}"`;
+}
+
+/** Returns the typed service problem code carried by the error, or "". */
+export function problemCodeOf(error: unknown): string {
+  return error instanceof SecondBoxProblemError ? error.problem.code : "";
+}
+
+/** The per-request bound the service enforces on waitForSandbox. */
+const MAXIMUM_WAIT_REQUEST_MILLISECONDS = 55_000;
+
+/** Keeps a very short Lease from busy-looping. */
+const DEFAULT_MINIMUM_RENEWAL_DELAY_MILLISECONDS = 1_000;
+
 export interface PollOptions {
   readonly intervalMilliseconds: number;
   readonly signal?: AbortSignal;
@@ -168,6 +190,69 @@ export class SecondBox {
       pathParameters: { leaseId: leaseID },
       signal,
     });
+  }
+
+  /**
+   * Admits one Sandbox and returns a handle to its representation.
+   *
+   * The returned Sandbox is the freshly created resource, which is not yet
+   * ready; callers wait for the states they require.
+   */
+  public async createSandbox(
+    request: CreateSandboxOptions,
+  ): Promise<{ readonly handle: SandboxHandle; readonly operation: Operation }> {
+    requireNonempty(request.profile, "Sandbox Profile name");
+    const operation = await this.requestJSON<Operation>("createSandbox", {
+      headers: { "Idempotency-Key": request.idempotencyKey ?? idempotencyKey() },
+      body: encodeJSONBody({
+        profile: request.profile,
+        metadata: request.metadata ?? {},
+        ...(request.sourceSnapshotId === undefined
+          ? {}
+          : { sourceSnapshotId: request.sourceSnapshotId }),
+      }),
+      signal: request.signal,
+    });
+    if (operation.sandboxId === "") {
+      throw new Error("SecondBox Sandbox create returned no Sandbox reference");
+    }
+    const sandbox = await this.requestJSON<Sandbox>("getSandbox", {
+      pathParameters: { sandboxId: operation.sandboxId },
+      signal: request.signal,
+    });
+    return { handle: new SandboxHandle(this, sandbox), operation };
+  }
+
+  /**
+   * Creates a Sandbox, waits for it to become ready, and executes one command.
+   *
+   * The Sandbox is deliberately left in place: no handle deletes a Sandbox
+   * implicitly. Callers dispose of the returned handle themselves.
+   */
+  public async run(request: RunRequest): Promise<RunOutcome> {
+    requirePositiveInteger(request.deadlineMilliseconds, "run deadlineMilliseconds");
+    requirePositiveInteger(request.maximumOutputBytes, "run maximumOutputBytes");
+    requirePositiveInteger(request.readyTimeoutMilliseconds, "run readyTimeoutMilliseconds");
+    const { handle } = await this.createSandbox({
+      profile: request.profile,
+      ...(request.metadata === undefined ? {} : { metadata: request.metadata }),
+      ...(request.sourceSnapshotId === undefined
+        ? {}
+        : { sourceSnapshotId: request.sourceSnapshotId }),
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
+    });
+    const sandbox = await handle.waitFor(["ready"], {
+      deadlineMilliseconds: request.readyTimeoutMilliseconds,
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
+    });
+    const result = await handle.exec(request.command, {
+      ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
+      environment: request.environment ?? {},
+      deadlineMilliseconds: request.deadlineMilliseconds,
+      maximumOutputBytes: request.maximumOutputBytes,
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
+    });
+    return { handle, sandbox, result };
   }
 
   public renewLease(
@@ -646,6 +731,59 @@ export class SandboxHandle implements SandboxFilesystem {
     return sandbox;
   }
 
+  /**
+   * Blocks until the Sandbox reaches one of the supplied states.
+   *
+   * The service bounds a single wait request, so this issues repeated bounded
+   * waits against the caller's own deadline and reports the last observed state
+   * when that deadline passes.
+   */
+  public async waitFor(
+    states: readonly SandboxState[],
+    options: WaitForOptions,
+  ): Promise<Sandbox> {
+    if (states.length === 0) {
+      throw new Error("SecondBox Sandbox wait requires at least one state");
+    }
+    requirePositiveInteger(options.deadlineMilliseconds, "Sandbox waitFor deadlineMilliseconds");
+    const target = new Set<SandboxState>(states);
+    const expiry = Date.now() + options.deadlineMilliseconds;
+    for (;;) {
+      if (target.has(this.#snapshot.state)) return this.#snapshot;
+      const remaining = expiry - Date.now();
+      if (remaining <= 0) {
+        throw new Error(
+          `SecondBox Sandbox ${this.#snapshot.id} did not reach ${states.join(", ")}: ` +
+            `last state=${this.#snapshot.state} generation=${this.#snapshot.generation}`,
+        );
+      }
+      try {
+        await this.wait(
+          states,
+          Math.min(remaining, MAXIMUM_WAIT_REQUEST_MILLISECONDS),
+          options.signal,
+        );
+      } catch (error) {
+        if (problemCodeOf(error) !== "wait_expired") throw error;
+        await this.refresh(options.signal);
+      }
+    }
+  }
+
+  /**
+   * Acquires a Lease and renews it until the keeper is closed.
+   *
+   * Renewal is driven by the expiry the service actually granted rather than by
+   * the requested duration, because the pinned Profile bounds Lease length.
+   */
+  public async keepLease(
+    durationSeconds: number,
+    minimumDelayMilliseconds: number = DEFAULT_MINIMUM_RENEWAL_DELAY_MILLISECONDS,
+  ): Promise<LeaseKeeper> {
+    const lease = await this.acquireLease(durationSeconds, idempotencyKey());
+    return new LeaseKeeper(this.#api, lease, durationSeconds, minimumDelayMilliseconds);
+  }
+
   public start(options: LifecycleOptions): Promise<Operation> {
     return this.lifecycle("startSandbox", options);
   }
@@ -1118,7 +1256,144 @@ export class SandboxHandle implements SandboxFilesystem {
   }
 }
 
-function decodeExecOutcome(outcome: ExecOutcome): ExecResult {
+export interface CreateSandboxOptions {
+  readonly profile: string;
+  readonly metadata?: Metadata;
+  readonly sourceSnapshotId?: string;
+  readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+}
+
+export interface WaitForOptions {
+  readonly deadlineMilliseconds: number;
+  readonly signal?: AbortSignal;
+}
+
+export interface RunRequest {
+  readonly profile: string;
+  readonly metadata?: Metadata;
+  readonly sourceSnapshotId?: string;
+  readonly command: string;
+  readonly cwd?: string;
+  readonly environment?: Readonly<Record<string, string>>;
+  readonly deadlineMilliseconds: number;
+  readonly maximumOutputBytes: number;
+  readonly readyTimeoutMilliseconds: number;
+  readonly signal?: AbortSignal;
+}
+
+export interface RunOutcome {
+  readonly handle: SandboxHandle;
+  readonly sandbox: Sandbox;
+  readonly result: ExecResult;
+}
+
+/** Holds one Lease active by renewing it before it expires. */
+export class LeaseKeeper {
+  readonly #api: SecondBox;
+  readonly #durationSeconds: number;
+  readonly #minimumDelayMilliseconds: number;
+  readonly #renewal: Promise<void>;
+  #lease: Lease;
+  #failure: Error | undefined;
+  #closed = false;
+  #wake: (() => void) | undefined;
+
+  public constructor(
+    api: SecondBox,
+    lease: Lease,
+    durationSeconds: number,
+    minimumDelayMilliseconds: number = DEFAULT_MINIMUM_RENEWAL_DELAY_MILLISECONDS,
+  ) {
+    this.#api = api;
+    this.#lease = lease;
+    this.#durationSeconds = durationSeconds;
+    this.#minimumDelayMilliseconds = minimumDelayMilliseconds;
+    this.#renewal = this.renew();
+  }
+
+  public get id(): string {
+    return this.#lease.id;
+  }
+
+  public get lease(): Lease {
+    return this.#lease;
+  }
+
+  /** Reports the renewal failure that ended background renewal, if any. */
+  public get failure(): Error | undefined {
+    return this.#failure;
+  }
+
+  private async renew(): Promise<void> {
+    while (!this.#closed) {
+      await this.sleep(this.delayMilliseconds());
+      if (this.#closed) return;
+      try {
+        this.#lease = await this.#api.renewLease(
+          this.#lease.id,
+          this.#durationSeconds,
+          idempotencyKey(),
+        );
+      } catch (error) {
+        this.#failure = error instanceof Error ? error : new Error(String(error));
+        return;
+      }
+    }
+  }
+
+  private sleep(milliseconds: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        this.#wake = undefined;
+        resolve();
+      }, milliseconds);
+      this.#wake = () => {
+        clearTimeout(timer);
+        this.#wake = undefined;
+        resolve();
+      };
+    });
+  }
+
+  /** Renews at half the remaining life, with a floor. */
+  private delayMilliseconds(): number {
+    const remaining = Date.parse(this.#lease.expiresAt) - Date.now();
+    if (!Number.isFinite(remaining) || remaining <= 0) {
+      return this.#minimumDelayMilliseconds;
+    }
+    return Math.max(Math.floor(remaining / 2), this.#minimumDelayMilliseconds);
+  }
+
+  /**
+   * Stops renewal and releases the Lease.
+   *
+   * A renewal that stopped is why the work failed; releasing a Lease the service
+   * has already fenced then fails too, and reporting that consequence instead of
+   * its cause sends the caller looking in the wrong place.
+   */
+  public async close(): Promise<void> {
+    if (!this.#closed) {
+      this.#closed = true;
+      this.#wake?.();
+      await this.#renewal;
+    }
+    let releaseError: unknown;
+    try {
+      await this.#api.releaseLease(this.#lease.id, idempotencyKey());
+    } catch (error) {
+      releaseError = error;
+    }
+    if (this.#failure !== undefined) {
+      throw new Error(`SecondBox Lease renewal stopped: ${this.#failure.message}`, {
+        cause: this.#failure,
+      });
+    }
+    if (releaseError !== undefined) throw releaseError;
+  }
+}
+
+export function decodeExecOutcome(outcome: ExecOutcome): ExecResult {
   switch (outcome.kind) {
     case "exited":
       return {

@@ -2,18 +2,24 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  LeaseKeeper,
   OperationFailedError,
   PortTunnel,
   SandboxHandle,
   SecondBox,
   SecondBoxProblemError,
   type ExecStreamConnection,
+  type Lease,
   type ExecStreamConnector,
   type PortTunnelConnection,
   type PortTunnelConnector,
   type Sandbox,
   type TerminalConnection,
   type TerminalConnector,
+  decodeExecOutcome,
+  newIdempotencyKey,
+  problemCodeOf,
+  revisionETag,
 } from "./client.ts";
 import { SecondBoxClient } from "./transport.ts";
 
@@ -575,6 +581,244 @@ function sandbox(state: Sandbox["state"]): Sandbox {
     },
     metadata: {},
     revision: 1,
+    createdAt: "2026-07-28T00:00:00Z",
+    updatedAt: "2026-07-28T00:00:00Z",
+  };
+}
+
+test("newIdempotencyKey returns distinct keys", () => {
+  const keys = new Set(Array.from({ length: 32 }, () => newIdempotencyKey()));
+  assert.equal(keys.size, 32);
+});
+
+test("revisionETag matches the service validator format", () => {
+  assert.equal(revisionETag(7), '"revision-7"');
+  assert.throws(() => revisionETag(0));
+});
+
+test("problemCodeOf reads typed failures only", () => {
+  const problem = new SecondBoxProblemError(409, {
+    type: "urn:secondbox:problem:conflict",
+    title: "Sandbox generation is fenced",
+    status: 409,
+    code: "generation_fenced",
+    requestId: "request-1",
+    retryable: false,
+  });
+  assert.equal(problemCodeOf(problem), "generation_fenced");
+  assert.equal(problemCodeOf(new Error("plain")), "");
+});
+
+test("decodeExecOutcome decodes output alongside a failing status", () => {
+  const result = decodeExecOutcome({
+    kind: "exited",
+    exitCode: 23,
+    elapsedMilliseconds: 5,
+    output: {
+      stdoutBase64: Buffer.from("out").toString("base64"),
+      stderrBase64: Buffer.from("err").toString("base64"),
+    },
+  });
+  assert.equal(result.kind, "exited");
+  if (result.kind !== "exited") return;
+  assert.equal(result.exitCode, 23);
+  assert.equal(Buffer.from(result.stdout).toString(), "out");
+  assert.equal(Buffer.from(result.stderr).toString(), "err");
+});
+
+test("createSandbox returns a handle for the created resource", async () => {
+  let idempotency = "";
+  const fetcher: typeof fetch = async (input, init) => {
+    if (init?.method === "POST") {
+      idempotency = new Headers(init.headers).get("Idempotency-Key") ?? "";
+      return Response.json({
+        id: "operation-1",
+        sandboxId: "sandbox-1",
+        kind: "create",
+        state: "pending",
+        requestId: "request-1",
+        createdAt: "2026-07-28T00:00:00Z",
+        updatedAt: "2026-07-28T00:00:00Z",
+      });
+    }
+    return Response.json(sandbox("creating"));
+  };
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
+  const { handle, operation } = await api.createSandbox({ profile: "coding-environment" });
+  assert.equal(operation.sandboxId, "sandbox-1");
+  assert.equal(handle.snapshot.id, "sandbox-1");
+  assert.notEqual(idempotency, "");
+});
+
+test("createSandbox rejects an operation without a Sandbox reference", async () => {
+  const fetcher: typeof fetch = async () =>
+    Response.json({
+      id: "operation-1",
+      sandboxId: "",
+      kind: "create",
+      state: "pending",
+      requestId: "request-1",
+      createdAt: "2026-07-28T00:00:00Z",
+      updatedAt: "2026-07-28T00:00:00Z",
+    });
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
+  await assert.rejects(
+    api.createSandbox({ profile: "coding-environment" }),
+    /no Sandbox reference/,
+  );
+});
+
+test("waitFor retries after the service reports the wait expired", async () => {
+  let waits = 0;
+  const fetcher: typeof fetch = async (input) => {
+    if (String(input).endsWith(":wait")) {
+      waits += 1;
+      if (waits === 1) {
+        return Response.json({
+          type: "urn:secondbox:problem:timeout",
+          title: "Sandbox wait deadline expired",
+          status: 408,
+          code: "wait_expired",
+          requestId: "request-1",
+          retryable: true,
+          details: [],
+        }, { status: 408 });
+      }
+      return Response.json(sandbox("ready"));
+    }
+    return Response.json(sandbox("starting"));
+  };
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
+  const handle = new SandboxHandle(api, sandbox("starting"));
+  const result = await handle.waitFor(["ready"], { deadlineMilliseconds: 10_000 });
+  assert.equal(result.state, "ready");
+  assert.ok(waits >= 2);
+});
+
+test("waitFor returns immediately when the state already holds", async () => {
+  const fetcher: typeof fetch = async () => {
+    throw new Error("a satisfied wait must not reach the service");
+  };
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
+  const handle = new SandboxHandle(api, sandbox("ready"));
+  assert.equal((await handle.waitFor(["ready"], { deadlineMilliseconds: 1_000 })).state, "ready");
+});
+
+test("run creates, waits, and executes one command", async () => {
+  const paths: string[] = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    paths.push(`${init?.method ?? "GET"} ${url.pathname}`);
+    if (url.pathname === "/v1/sandboxes" && init?.method === "POST") {
+      return Response.json({
+        id: "operation-1",
+        sandboxId: "sandbox-1",
+        kind: "create",
+        state: "pending",
+        requestId: "request-1",
+        createdAt: "2026-07-28T00:00:00Z",
+        updatedAt: "2026-07-28T00:00:00Z",
+      });
+    }
+    if (url.pathname.endsWith("/exec")) {
+      return Response.json({
+        kind: "exited",
+        exitCode: 0,
+        elapsedMilliseconds: 7,
+        output: {
+          stdoutBase64: Buffer.from("hello\n").toString("base64"),
+          stderrBase64: "",
+        },
+      });
+    }
+    return Response.json(sandbox("ready"));
+  };
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
+  const outcome = await api.run({
+    profile: "coding-environment",
+    command: "echo hello",
+    deadlineMilliseconds: 5_000,
+    maximumOutputBytes: 1_048_576,
+    readyTimeoutMilliseconds: 10_000,
+  });
+  assert.equal(outcome.sandbox.state, "ready");
+  assert.equal(outcome.result.kind, "exited");
+  if (outcome.result.kind !== "exited") return;
+  assert.equal(Buffer.from(outcome.result.stdout).toString(), "hello\n");
+  assert.ok(paths.includes("POST /v1/sandboxes"));
+  assert.ok(paths.includes("POST /v1/sandboxes/sandbox-1/exec"));
+  // run never deletes: disposal stays the caller's decision.
+  assert.ok(!paths.some((entry) => entry.startsWith("DELETE")));
+});
+
+test("LeaseKeeper renews until closed and then releases", async () => {
+  let renewals = 0;
+  let releases = 0;
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (init?.method === "DELETE") {
+      releases += 1;
+      return Response.json(lease(0));
+    }
+    if (url.pathname.endsWith(":renew")) renewals += 1;
+    return Response.json(lease(20));
+  };
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
+  const keeper = new LeaseKeeper(api, lease(20), 60, 5);
+  const deadline = Date.now() + 3_000;
+  while (renewals < 2 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  await keeper.close();
+  assert.ok(renewals >= 2, `renewals = ${renewals}`);
+  assert.equal(releases, 1);
+  assert.equal(keeper.failure, undefined);
+});
+
+test("LeaseKeeper close reports the renewal failure rather than its consequence", async () => {
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith(":renew")) {
+      return Response.json({
+        type: "urn:secondbox:problem:conflict",
+        title: "Lease is fenced",
+        status: 409,
+        code: "lease_fenced",
+        requestId: "request-1",
+        retryable: false,
+        details: [],
+      }, { status: 409 });
+    }
+    if (init?.method === "DELETE") {
+      return Response.json({
+        type: "urn:secondbox:problem:conflict",
+        title: "Lease is inactive",
+        status: 409,
+        code: "lease_fenced",
+        requestId: "request-2",
+        retryable: false,
+        details: [],
+      }, { status: 409 });
+    }
+    return Response.json(lease(0));
+  };
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
+  const keeper = new LeaseKeeper(api, lease(0), 60, 5);
+  const deadline = Date.now() + 3_000;
+  while (keeper.failure === undefined && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  await assert.rejects(keeper.close(), /Lease renewal stopped/);
+  assert.equal(problemCodeOf(keeper.failure), "lease_fenced");
+});
+
+function lease(expiresInMilliseconds: number): Lease {
+  return {
+    id: "lease-1",
+    sandboxId: "sandbox-1",
+    generation: 7,
+    state: "active",
+    expiresAt: new Date(Date.now() + expiresInMilliseconds).toISOString(),
     createdAt: "2026-07-28T00:00:00Z",
     updatedAt: "2026-07-28T00:00:00Z",
   };
