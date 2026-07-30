@@ -188,6 +188,7 @@ for setting in "${required_settings[@]}"; do
   fi
   if [[ "$value" == *GENERATE_WITH_DEPLOY_BOOTSTRAP* ||
         "$value" == *GENERATE_LOCAL_DATABASE_URL* ||
+        "$value" == *GENERATE_DEVELOPMENT_BUNDLE_DIGEST* ||
         "$value" == *REPLACE_WITH_* ]]; then
     echo "SecondBox environment still contains a placeholder for $setting" >&2
     exit 1

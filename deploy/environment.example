@@ -51,17 +51,17 @@ SECONDBOX_RUNNER_GUEST_PROTOCOL_VSOCK_PORT=1025
 SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL=5s
 
 # Built-in Profiles pin one RunnerPool and one verified runtime and toolchain
-# bundle each. The digests below are the synthetic development catalog values
-# that deploy-bootstrap generates, exactly as the development signed-asset
-# catalog is synthetic. A production deployment replaces all four with bundles
-# it has actually verified, and creates the named RunnerPool through the
-# platform-token API before any Sandbox is created against these Profiles.
+# bundle each. deploy-bootstrap fills the digests below only when it also
+# generates the synthetic development signed-asset catalog, so the two can never
+# disagree. A deployment supplying its own catalog keeps the placeholder and must
+# name bundles it has actually verified, and must create the named RunnerPool
+# through the platform-token API before any Sandbox uses these Profiles.
 SECONDBOX_BUILTIN_AGENT_COMPARTMENT_POOL=secondbox-local
-SECONDBOX_BUILTIN_AGENT_COMPARTMENT_RUNTIME_BUNDLE_DIGEST=sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
-SECONDBOX_BUILTIN_AGENT_COMPARTMENT_TOOLCHAIN_BUNDLE_DIGEST=sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+SECONDBOX_BUILTIN_AGENT_COMPARTMENT_RUNTIME_BUNDLE_DIGEST=GENERATE_DEVELOPMENT_BUNDLE_DIGEST
+SECONDBOX_BUILTIN_AGENT_COMPARTMENT_TOOLCHAIN_BUNDLE_DIGEST=GENERATE_DEVELOPMENT_BUNDLE_DIGEST
 SECONDBOX_BUILTIN_CODING_ENVIRONMENT_POOL=secondbox-local
-SECONDBOX_BUILTIN_CODING_ENVIRONMENT_RUNTIME_BUNDLE_DIGEST=sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
-SECONDBOX_BUILTIN_CODING_ENVIRONMENT_TOOLCHAIN_BUNDLE_DIGEST=sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+SECONDBOX_BUILTIN_CODING_ENVIRONMENT_RUNTIME_BUNDLE_DIGEST=GENERATE_DEVELOPMENT_BUNDLE_DIGEST
+SECONDBOX_BUILTIN_CODING_ENVIRONMENT_TOOLCHAIN_BUNDLE_DIGEST=GENERATE_DEVELOPMENT_BUNDLE_DIGEST
 
 # This profile is operator opt-in and does not establish KVM qualification.
 SECONDBOX_SAME_HOST_RUNNER_ENABLED=false

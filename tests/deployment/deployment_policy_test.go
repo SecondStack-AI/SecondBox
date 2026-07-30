@@ -854,6 +854,14 @@ func TestBootstrapGeneratesCertificateForConfiguredRunnerServerName(t *testing.T
 		"SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH="+catalogPath,
 		1,
 	)
+	// Bootstrap fills the built-in Profile digests only when it also generates
+	// the development catalog, so a deployment supplying its own catalog names
+	// the bundle that catalog carries.
+	template = strings.ReplaceAll(
+		template,
+		"GENERATE_DEVELOPMENT_BUNDLE_DIGEST",
+		"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	)
 	environmentPath := filepath.Join(testDirectory, "environment")
 	if err := os.WriteFile(environmentPath, []byte(template), 0o600); err != nil {
 		t.Fatalf("write custom bootstrap environment: %v", err)
