@@ -849,6 +849,16 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 		}
 	}
 	timer.mark("network_ready", "tap", tapName, "networkRequired", m.networkRequired(opts))
+	if opts.StartupProgress != nil {
+		if progressErr := opts.StartupProgress(runtimemanager.StartupStageNetworkReady); progressErr != nil {
+			return "", m.joinInstanceNetworkCleanup(
+				setupCtx,
+				id,
+				tapName,
+				fmt.Errorf("report network-ready startup stage: %w", progressErr),
+			)
+		}
+	}
 	dir := filepath.Join(m.cfg.MicroVMRunDir, id)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", m.joinInstanceNetworkCleanup(ctx, id, tapName, fmt.Errorf("create instance dir: %w", err))
@@ -1009,6 +1019,15 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 	// waited on (no zombie) and cleanup runs exactly once.
 	go m.reap(inst)
 	timer.mark("instance_registered")
+	if opts.StartupProgress != nil {
+		if progressErr := opts.StartupProgress(runtimemanager.StartupStageComputeStarted); progressErr != nil {
+			cleanupErr := m.stopInstance(setupCtx, inst, true)
+			return "", errors.Join(
+				fmt.Errorf("report compute-started startup stage: %w", progressErr),
+				cleanupErr,
+			)
+		}
+	}
 	negotiationCtx, cancelNegotiation := context.WithTimeout(
 		setupCtx,
 		controlPlaneReadyTimeout,
@@ -1024,6 +1043,15 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 		)
 	}
 	timer.mark("guest_protocol_negotiated")
+	if opts.StartupProgress != nil {
+		if progressErr := opts.StartupProgress(runtimemanager.StartupStageGuestNegotiated); progressErr != nil {
+			cleanupErr := m.stopInstance(setupCtx, inst, true)
+			return "", errors.Join(
+				fmt.Errorf("report guest-negotiated startup stage: %w", progressErr),
+				cleanupErr,
+			)
+		}
+	}
 	if err := m.deliverStartupSecrets(setupCtx, inst, sandboxID, opts, timer); err != nil {
 		cleanupErr := m.stopInstance(setupCtx, inst, true)
 		return "", errors.Join(fmt.Errorf("deliver runtime startup secrets: %w", err), cleanupErr)

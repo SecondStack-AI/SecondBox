@@ -117,8 +117,16 @@ func publicDurationPercentiles(
 	}
 	return contracts.DurationPercentiles{
 		Count:           int64(histogram.Count),
-		P50Milliseconds: observability.PercentileMilliseconds(histogram, 0.50),
-		P95Milliseconds: observability.PercentileMilliseconds(histogram, 0.95),
-		P99Milliseconds: observability.PercentileMilliseconds(histogram, 0.99),
+		P50Milliseconds: float64Milliseconds(observability.PercentileMilliseconds(histogram, 0.50)),
+		P95Milliseconds: float64Milliseconds(observability.PercentileMilliseconds(histogram, 0.95)),
+		P99Milliseconds: float64Milliseconds(observability.PercentileMilliseconds(histogram, 0.99)),
 	}, nil
+}
+
+func float64Milliseconds(value *int64) *float64 {
+	if value == nil {
+		return nil
+	}
+	milliseconds := float64(*value)
+	return &milliseconds
 }

@@ -181,6 +181,54 @@ func TestRunnerProtocolServiceHeartbeatsWhileAssignmentStartIsBlocked(t *testing
 	}
 }
 
+func TestRunnerProtocolServiceSeparatesAdmissionFromArtifactProgress(t *testing.T) {
+	backend := &recordingAssignmentBackend{
+		instance: BackendInstance{
+			BackendKind:      "firecracker",
+			BackendReference: "fc-instance-1",
+		},
+	}
+	service, err := NewRunnerProtocolService(
+		testRunnerConfig(),
+		backend,
+		staticProtocolConnector{stream: &recordingProtocolStream{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := &recordingProtocolStream{}
+	if err := service.handleAssignment(t.Context(), stream, resolvedAssignmentCommand()); err != nil {
+		t.Fatalf("handle assignment: %v", err)
+	}
+
+	var progress []*runnerprotocol.AssignmentProgress
+	for _, message := range stream.outbound {
+		if observed := message.GetAssignmentProgress(); observed != nil {
+			progress = append(progress, observed)
+		}
+	}
+	want := []runnerprotocol.AssignmentProgressStage{
+		runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_RUNNER_ADMISSION,
+		runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY,
+		runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_READY,
+	}
+	if len(progress) != len(want) {
+		t.Fatalf("assignment progress count = %d, want %d", len(progress), len(want))
+	}
+	for index, stage := range want {
+		if progress[index].Stage != stage {
+			t.Fatalf("assignment progress[%d] = %s, want %s", index, progress[index].Stage, stage)
+		}
+	}
+	if progress[0].ObservedAtUnixNs > progress[1].ObservedAtUnixNs {
+		t.Fatalf(
+			"runner admission boundary %d followed artifact boundary %d",
+			progress[0].ObservedAtUnixNs,
+			progress[1].ObservedAtUnixNs,
+		)
+	}
+}
+
 func TestRunnerProtocolServiceReturnsLogicalLocalWorkspaceReceipt(t *testing.T) {
 	backend := &recordingLocalWorkspaceBackend{
 		recordingAssignmentBackend: &recordingAssignmentBackend{},

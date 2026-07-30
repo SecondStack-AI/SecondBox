@@ -1157,10 +1157,16 @@ func (apiHandler *handler) writeError(writer http.ResponseWriter, request *http.
 		)
 	}
 	writer.Header().Set("Content-Type", "application/problem+json")
-	apiHandler.writeJSON(writer, request, status, contracts.Problem{
+	problem := contracts.Problem{
 		Type: "https://secondbox.dev/problems/" + code, Title: title, Status: status,
 		Code: code, RequestID: writer.Header().Get("X-Request-ID"), Retryable: retryable,
-	})
+	}
+	if errors.Is(err, ports.ErrHomeRunnerUnavailable) {
+		retryAfterMilliseconds := int64(time.Second / time.Millisecond)
+		problem.RetryAfterMilliseconds = &retryAfterMilliseconds
+		writer.Header().Set("Retry-After", "1")
+	}
+	apiHandler.writeJSON(writer, request, status, problem)
 }
 
 func classifyError(err error) (int, string, string, bool) {

@@ -2,11 +2,17 @@ package api
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
 func TestArtifactDownloadClientDisconnectLogsAndDoesNotPanic(t *testing.T) {
@@ -38,6 +44,37 @@ func TestArtifactDownloadClientDisconnectLogsAndDoesNotPanic(t *testing.T) {
 		if !strings.Contains(logs.String(), fragment) {
 			t.Fatalf("disconnect log %q does not contain %q", logs.String(), fragment)
 		}
+	}
+}
+
+func TestHomeRunnerUnavailableCarriesTypedRetryBackoff(t *testing.T) {
+	apiHandler := &handler{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/sandboxes", nil)
+	writer := httptest.NewRecorder()
+	writer.Header().Set("X-Request-ID", "request-home-runner-backoff")
+
+	apiHandler.writeError(writer, request, ports.ErrHomeRunnerUnavailable)
+
+	response := writer.Result()
+	defer response.Body.Close()
+	var problem contracts.Problem
+	if err := json.NewDecoder(response.Body).Decode(&problem); err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusServiceUnavailable ||
+		response.Header.Get("Retry-After") != "1" ||
+		problem.Code != "home_runner_unavailable" ||
+		!problem.Retryable ||
+		problem.RetryAfterMilliseconds == nil ||
+		*problem.RetryAfterMilliseconds != 1000 {
+		t.Fatalf(
+			"home Runner response status=%d Retry-After=%q problem=%#v",
+			response.StatusCode,
+			response.Header.Get("Retry-After"),
+			problem,
+		)
 	}
 }
 

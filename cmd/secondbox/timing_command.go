@@ -226,8 +226,9 @@ func writeBootTimings(
 	for _, boot := range boots {
 		if _, err := fmt.Fprintf(
 			output,
-			"\nBoot: operation=%s generation=%d total=%dms completed=%t\n",
-			operationID, boot.Generation, boot.DurationMilliseconds, boot.Completed,
+			"\nBoot: operation=%s generation=%d total=%s completed=%t\n",
+			operationID, boot.Generation, formatPreciseMilliseconds(boot.DurationMilliseconds),
+			boot.Completed,
 		); err != nil {
 			return fmt.Errorf("SecondBox timings write boot heading: %w", err)
 		}
@@ -237,8 +238,10 @@ func writeBootTimings(
 		}
 		for _, stage := range boot.Stages {
 			if _, err := fmt.Fprintf(
-				table, "%s\t%dms\t%dms\t%s\t%s\n",
-				stage.Stage, stage.ElapsedMilliseconds, stage.CumulativeMilliseconds,
+				table, "%s\t%s\t%s\t%s\t%s\n",
+				stage.Stage,
+				formatPreciseMilliseconds(stage.ElapsedMilliseconds),
+				formatPreciseMilliseconds(stage.CumulativeMilliseconds),
 				stage.ObservedAt.UTC().Format(time.RFC3339Nano),
 				stage.ReceivedAt.UTC().Format(time.RFC3339Nano),
 			); err != nil {
@@ -285,7 +288,7 @@ func writeDeploymentTiming(
 		if _, err := fmt.Fprintf(
 			output, "Dominant boot stage: %s (p95 %s)\n",
 			summary.DominantBootStage.Stage,
-			formatMilliseconds(summary.DominantBootStage.Duration.P95Milliseconds),
+			formatPreciseMillisecondsPointer(summary.DominantBootStage.Duration.P95Milliseconds),
 		); err != nil {
 			return fmt.Errorf("SecondBox timings write dominant boot stage: %w", err)
 		}
@@ -336,9 +339,9 @@ func writeAggregateSections(
 		if _, err := fmt.Fprintf(
 			table, "%s/%s\t%s\t%s\t%s\t%d\n",
 			operation.Kind, operation.State,
-			formatMilliseconds(operation.Queue.P95Milliseconds),
-			formatMilliseconds(operation.Execution.P95Milliseconds),
-			formatMilliseconds(operation.Total.P95Milliseconds),
+			formatPreciseMillisecondsPointer(operation.Queue.P95Milliseconds),
+			formatPreciseMillisecondsPointer(operation.Execution.P95Milliseconds),
+			formatPreciseMillisecondsPointer(operation.Total.P95Milliseconds),
 			operation.Total.Count,
 		); err != nil {
 			return fmt.Errorf("SecondBox timings write Operation aggregate row: %w", err)
@@ -358,9 +361,9 @@ func writePercentileRow(
 	if _, err := fmt.Fprintf(
 		output, "%s\t%d\t%s\t%s\t%s\n",
 		name, duration.Count,
-		formatMilliseconds(duration.P50Milliseconds),
-		formatMilliseconds(duration.P95Milliseconds),
-		formatMilliseconds(duration.P99Milliseconds),
+		formatPreciseMillisecondsPointer(duration.P50Milliseconds),
+		formatPreciseMillisecondsPointer(duration.P95Milliseconds),
+		formatPreciseMillisecondsPointer(duration.P99Milliseconds),
 	); err != nil {
 		return fmt.Errorf("SecondBox timings write percentile row: %w", err)
 	}
@@ -372,4 +375,15 @@ func formatMilliseconds(value *int64) string {
 		return "-"
 	}
 	return strconv.FormatInt(*value, 10) + "ms"
+}
+
+func formatPreciseMillisecondsPointer(value *float64) string {
+	if value == nil {
+		return "-"
+	}
+	return formatPreciseMilliseconds(*value)
+}
+
+func formatPreciseMilliseconds(value float64) string {
+	return strconv.FormatFloat(value, 'f', -1, 64) + "ms"
 }

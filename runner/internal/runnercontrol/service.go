@@ -756,6 +756,7 @@ func (s *RunnerProtocolService) handleAssignment(
 	stream RunnerProtocolStream,
 	assignment *runnerprotocol.AssignmentCommand,
 ) error {
+	admissionObservedAt := time.Now()
 	if s.drainPhase() != runnerprotocol.DrainPhase_DRAIN_PHASE_ACTIVE {
 		return s.sendAssignmentAck(
 			stream,
@@ -788,20 +789,16 @@ func (s *RunnerProtocolService) handleAssignment(
 	); err != nil {
 		return err
 	}
+	if err := s.sendAssignmentProgress(
+		stream,
+		assignment,
+		runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_RUNNER_ADMISSION,
+		admissionObservedAt,
+	); err != nil {
+		return err
+	}
 	progress := func(stage runnerprotocol.AssignmentProgressStage) error {
-		sequence := s.nextSequence()
-		return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-			Message: &runnerprotocol.RunnerToControlPlane_AssignmentProgress{
-				AssignmentProgress: &runnerprotocol.AssignmentProgress{
-					MessageId:        s.messageID(sequence),
-					Sequence:         sequence,
-					Fence:            assignment.Fence,
-					Stage:            stage,
-					ObservedAtUnixMs: uint64(time.Now().UnixMilli()),
-					Correlation:      s.assignmentCorrelation(assignment),
-				},
-			},
-		})
+		return s.sendAssignmentProgress(stream, assignment, stage, time.Now())
 	}
 	instance, err := s.backend.StartAssignment(ctx, assignment, progress)
 	terminal := runnerprotocol.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY
@@ -854,6 +851,28 @@ func (s *RunnerProtocolService) handleAssignment(
 		}
 	}
 	return nil
+}
+
+func (s *RunnerProtocolService) sendAssignmentProgress(
+	stream RunnerProtocolStream,
+	assignment *runnerprotocol.AssignmentCommand,
+	stage runnerprotocol.AssignmentProgressStage,
+	observedAt time.Time,
+) error {
+	sequence := s.nextSequence()
+	return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
+		Message: &runnerprotocol.RunnerToControlPlane_AssignmentProgress{
+			AssignmentProgress: &runnerprotocol.AssignmentProgress{
+				MessageId:        s.messageID(sequence),
+				Sequence:         sequence,
+				Fence:            assignment.Fence,
+				Stage:            stage,
+				ObservedAtUnixMs: uint64(observedAt.UnixMilli()),
+				Correlation:      s.assignmentCorrelation(assignment),
+				ObservedAtUnixNs: uint64(observedAt.UnixNano()),
+			},
+		},
+	})
 }
 
 func (s *RunnerProtocolService) sendInstanceTerminal(

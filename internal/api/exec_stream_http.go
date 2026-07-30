@@ -203,11 +203,7 @@ func (apiHandler *handler) serveSandboxExecStream(
 					return fmt.Errorf("SecondBox Exec WebSocket outcome write: %w", err)
 				}
 				terminal = true
-				return connection.WriteControl(
-					websocket.CloseMessage,
-					websocket.FormatCloseMessage(websocket.CloseNormalClosure, "terminal outcome delivered"),
-					time.Now().Add(time.Second),
-				)
+				return finishExecWebSocketCloseHandshake(connection, readErrors)
 			default:
 				return errors.New("SecondBox Exec retained WebSocket frame is unsupported")
 			}
@@ -221,6 +217,31 @@ func (apiHandler *handler) serveSandboxExecStream(
 			return request.Context().Err()
 		}
 	}
+}
+
+func finishExecWebSocketCloseHandshake(
+	connection *websocket.Conn,
+	readErrors <-chan error,
+) error {
+	closeDeadline := time.Now().Add(time.Second)
+	if err := connection.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "terminal outcome delivered"),
+		closeDeadline,
+	); err != nil {
+		return fmt.Errorf("SecondBox Exec WebSocket close write: %w", err)
+	}
+	if err := connection.UnderlyingConn().SetReadDeadline(closeDeadline); err != nil {
+		return fmt.Errorf("SecondBox Exec WebSocket close deadline: %w", err)
+	}
+	readErr := <-readErrors
+	var closeErr *websocket.CloseError
+	if errors.As(readErr, &closeErr) &&
+		(closeErr.Code == websocket.CloseNormalClosure ||
+			closeErr.Code == websocket.CloseGoingAway) {
+		return nil
+	}
+	return readErr
 }
 
 func (apiHandler *handler) readSandboxExecFrames(

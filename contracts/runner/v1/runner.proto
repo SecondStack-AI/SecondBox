@@ -258,6 +258,7 @@ enum AssignmentProgressStage {
   ASSIGNMENT_PROGRESS_STAGE_GUEST_NEGOTIATION = 5;
   ASSIGNMENT_PROGRESS_STAGE_READY = 6;
   ASSIGNMENT_PROGRESS_STAGE_TEARDOWN = 7;
+  ASSIGNMENT_PROGRESS_STAGE_RUNNER_ADMISSION = 8;
 }
 
 message AssignmentProgress {
@@ -267,6 +268,7 @@ message AssignmentProgress {
   AssignmentProgressStage stage = 4;
   uint64 observed_at_unix_ms = 5;
   Correlation correlation = 6;
+  uint64 observed_at_unix_ns = 7;
 }
 
 enum AssignmentTerminalKind {

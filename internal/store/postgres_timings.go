@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,7 +17,7 @@ import (
 )
 
 const startupTimingStagesSQL = `
-	'artifact_verify','workspace_attach','network_setup',
+	'runner_admission','artifact_verify','workspace_attach','network_setup',
 	'compute_launch','guest_negotiation','ready'`
 
 // ReadSandboxTiming returns one explicitly bounded subject-owned timing history.
@@ -195,8 +194,8 @@ func (store *PostgresControlPlaneStore) attachBootTimings(
 			previousObserved[key] = assignmentCreatedAt
 		}
 		previous := previousObserved[key]
-		elapsed := max(observedAt.Sub(previous).Milliseconds(), 0)
-		cumulative := max(observedAt.Sub(assignmentCreatedAt).Milliseconds(), 0)
+		elapsed := durationMillisecondsFloat(previous, observedAt)
+		cumulative := durationMillisecondsFloat(assignmentCreatedAt, observedAt)
 		boot := &operations[operationIndex].Boots[bootIndex]
 		boot.Stages = append(boot.Stages, contracts.BootStageTiming{
 			Stage: stage, ObservedAt: observedAt, ReceivedAt: receivedAt,
@@ -212,6 +211,10 @@ func (store *PostgresControlPlaneStore) attachBootTimings(
 		return fmt.Errorf("SecondBox boot timing rows failed: %w", err)
 	}
 	return nil
+}
+
+func durationMillisecondsFloat(start, end time.Time) float64 {
+	return max(float64(end.Sub(start))/float64(time.Millisecond), 0)
 }
 
 func (store *PostgresControlPlaneStore) readSandboxExecTimings(
@@ -540,9 +543,9 @@ func durationPercentiles(
 	if count == 0 {
 		return summary
 	}
-	p50Milliseconds := int64(math.Round(max(p50, 0)))
-	p95Milliseconds := int64(math.Round(max(p95, 0)))
-	p99Milliseconds := int64(math.Round(max(p99, 0)))
+	p50Milliseconds := max(p50, 0)
+	p95Milliseconds := max(p95, 0)
+	p99Milliseconds := max(p99, 0)
 	summary.P50Milliseconds = &p50Milliseconds
 	summary.P95Milliseconds = &p95Milliseconds
 	summary.P99Milliseconds = &p99Milliseconds
@@ -554,11 +557,11 @@ func dominantBootStage(
 ) *contracts.BootStageTimingSummary {
 	candidates := append([]contracts.BootStageTimingSummary(nil), stages...)
 	sort.Slice(candidates, func(left, right int) bool {
-		leftP95 := int64(-1)
+		leftP95 := float64(-1)
 		if candidates[left].Duration.P95Milliseconds != nil {
 			leftP95 = *candidates[left].Duration.P95Milliseconds
 		}
-		rightP95 := int64(-1)
+		rightP95 := float64(-1)
 		if candidates[right].Duration.P95Milliseconds != nil {
 			rightP95 = *candidates[right].Duration.P95Milliseconds
 		}

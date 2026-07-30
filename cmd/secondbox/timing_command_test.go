@@ -91,8 +91,8 @@ func TestDeploymentTimingCommandRequiresAndSendsExplicitWindow(t *testing.T) {
 			WindowSeconds: 300,
 			ObservedAt:    time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
 			Boot: secondboxclient.DurationPercentiles{
-				Count: 4, P50Milliseconds: int64Pointer(80),
-				P95Milliseconds: int64Pointer(120), P99Milliseconds: int64Pointer(120),
+				Count: 4, P50Milliseconds: float64Pointer(80),
+				P95Milliseconds: float64Pointer(120), P99Milliseconds: float64Pointer(120),
 			},
 			Exec: secondboxclient.DurationPercentiles{},
 			API:  secondboxclient.DurationPercentiles{},
@@ -125,5 +125,9 @@ func TestDeploymentTimingCommandRequiresAndSendsExplicitWindow(t *testing.T) {
 }
 
 func int64Pointer(value int64) *int64 {
+	return &value
+}
+
+func float64Pointer(value float64) *float64 {
 	return &value
 }

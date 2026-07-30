@@ -32,6 +32,7 @@ export interface Problem {
   readonly code: string;
   readonly requestId: string;
   readonly retryable: boolean;
+  readonly retryAfterMilliseconds?: number;
 }
 
 export interface Sandbox {

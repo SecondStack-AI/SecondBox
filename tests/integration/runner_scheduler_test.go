@@ -304,14 +304,15 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	}, now); !errors.Is(err, runnercontrol.ErrStaleAssignmentEvidence) {
 		t.Fatalf("stale ready result error = %v, want ErrStaleAssignmentEvidence", err)
 	}
-	timingObservedAt := now.Add(750 * time.Millisecond)
+	timingObservedAt := now.Add(750*time.Millisecond + 123*time.Microsecond)
 	progress := &runnerv1.RunnerToControlPlane{
 		Message: &runnerv1.RunnerToControlPlane_AssignmentProgress{
 			AssignmentProgress: &runnerv1.AssignmentProgress{
 				MessageId: "progress-4", Sequence: 4,
 				Fence:            proto.Clone(delivery.Message.GetAssignment().Fence).(*runnerv1.AssignmentFence),
-				Stage:            runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY,
+				Stage:            runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_RUNNER_ADMISSION,
 				ObservedAtUnixMs: uint64(timingObservedAt.UnixMilli()),
+				ObservedAtUnixNs: uint64(timingObservedAt.UnixNano()),
 				Correlation:      proto.Clone(delivery.Message.GetAssignment().Correlation).(*runnerv1.Correlation),
 			},
 		},
@@ -381,7 +382,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	}
 	if timingOperationID != delivery.Message.GetAssignment().Correlation.OperationId ||
 		timingSandboxID != sandboxID ||
-		timingStage != "artifact_verify" ||
+		timingStage != "runner_admission" ||
 		!observedAt.Equal(timingObservedAt) ||
 		!receivedAt.Equal(now.Add(time.Second)) {
 		t.Fatalf(

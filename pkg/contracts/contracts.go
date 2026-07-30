@@ -791,10 +791,10 @@ type Operation struct {
 
 // DurationPercentiles is one bounded duration distribution.
 type DurationPercentiles struct {
-	Count           int64  `json:"count"`
-	P50Milliseconds *int64 `json:"p50Milliseconds,omitempty"`
-	P95Milliseconds *int64 `json:"p95Milliseconds,omitempty"`
-	P99Milliseconds *int64 `json:"p99Milliseconds,omitempty"`
+	Count           int64    `json:"count"`
+	P50Milliseconds *float64 `json:"p50Milliseconds,omitempty"`
+	P95Milliseconds *float64 `json:"p95Milliseconds,omitempty"`
+	P99Milliseconds *float64 `json:"p99Milliseconds,omitempty"`
 }
 
 // BootStageTiming attributes one provider-neutral Sandbox startup milestone.
@@ -802,14 +802,14 @@ type BootStageTiming struct {
 	Stage                  string    `json:"stage"`
 	ObservedAt             time.Time `json:"observedAt"`
 	ReceivedAt             time.Time `json:"receivedAt"`
-	ElapsedMilliseconds    int64     `json:"elapsedMilliseconds"`
-	CumulativeMilliseconds int64     `json:"cumulativeMilliseconds"`
+	ElapsedMilliseconds    float64   `json:"elapsedMilliseconds"`
+	CumulativeMilliseconds float64   `json:"cumulativeMilliseconds"`
 }
 
 // BootTiming is one Sandbox generation's bounded startup attribution.
 type BootTiming struct {
 	Generation           int64             `json:"generation"`
-	DurationMilliseconds int64             `json:"durationMilliseconds"`
+	DurationMilliseconds float64           `json:"durationMilliseconds"`
 	Completed            bool              `json:"completed"`
 	Stages               []BootStageTiming `json:"stages"`
 }
@@ -891,13 +891,14 @@ type DeploymentTimingSummary struct {
 
 // Problem is the stable typed failure envelope.
 type Problem struct {
-	Type      string          `json:"type"`
-	Title     string          `json:"title"`
-	Status    int             `json:"status"`
-	Code      string          `json:"code"`
-	RequestID string          `json:"requestId"`
-	Retryable bool            `json:"retryable"`
-	Details   []ProblemDetail `json:"details,omitempty"`
+	Type                   string          `json:"type"`
+	Title                  string          `json:"title"`
+	Status                 int             `json:"status"`
+	Code                   string          `json:"code"`
+	RequestID              string          `json:"requestId"`
+	Retryable              bool            `json:"retryable"`
+	RetryAfterMilliseconds *int64          `json:"retryAfterMilliseconds,omitempty"`
+	Details                []ProblemDetail `json:"details,omitempty"`
 }
 
 // ProblemDetail identifies one bounded invalid field.
