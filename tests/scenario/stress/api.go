@@ -1,15 +1,11 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -17,6 +13,7 @@ import (
 	"time"
 
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
+	scenarioharness "github.com/SecondStack-AI/SecondBox/tests/scenario/harness"
 )
 
 type stressDriver struct {
@@ -24,14 +21,15 @@ type stressDriver struct {
 	client          *secondboxclient.Client
 	runtimeDigest   string
 	toolchainDigest string
+	guestCIDR       string
 	bootMu          sync.Mutex
 	bootStages      map[string][]time.Duration
 }
 
 func (driver *stressDriver) prepare(ctx context.Context) error {
-	pool, err := requestJSON[secondboxclient.RunnerPool](
+	pool, err := scenarioharness.RequestJSON[secondboxclient.RunnerPool](
 		ctx, driver.client, "createRunnerPool", secondboxclient.CallOptions{
-			Body: encodeJSON(secondboxclient.CreateRunnerPoolRequest{
+			Body: scenarioharness.JSONBody(secondboxclient.CreateRunnerPoolRequest{
 				Name: driver.config.RunnerPoolName, State: "ready",
 				Architectures: []string{"amd64"},
 				Capabilities: []string{
@@ -49,10 +47,10 @@ func (driver *stressDriver) prepare(ctx context.Context) error {
 	if pool.Name != driver.config.RunnerPoolName || pool.State != "ready" {
 		return fmt.Errorf("SecondBox stress RunnerPool projection is unexpected: %#v", pool)
 	}
-	profile, err := requestJSON[secondboxclient.Profile](
+	profile, err := scenarioharness.RequestJSON[secondboxclient.Profile](
 		ctx, driver.client, "createProfile", secondboxclient.CallOptions{
-			Headers: idempotencyHeaders("stress-prepare-profile"),
-			Body: encodeJSON(secondboxclient.CreateProfileRequest{
+			Headers: scenarioharness.IdempotencyHeaders("stress-prepare-profile"),
+			Body: scenarioharness.JSONBody(secondboxclient.CreateProfileRequest{
 				Name: driver.config.ProfileName,
 				Spec: secondboxclient.ProfileRevisionSpec{
 					Pool: driver.config.RunnerPoolName, Architecture: "amd64",
@@ -109,7 +107,7 @@ func (driver *stressDriver) waitForRunner(ctx context.Context) error {
 	deadline := time.Now().Add(time.Duration(driver.config.OperationTimeoutSeconds) * time.Second)
 	var lastPage secondboxclient.RunnerPage
 	for time.Now().Before(deadline) {
-		page, err := requestJSON[secondboxclient.RunnerPage](
+		page, err := scenarioharness.RequestJSON[secondboxclient.RunnerPage](
 			ctx, driver.client, "listRunners", secondboxclient.CallOptions{
 				QueryParameters: url.Values{
 					"pool":  {driver.config.RunnerPoolName},
@@ -123,7 +121,7 @@ func (driver *stressDriver) waitForRunner(ctx context.Context) error {
 		lastPage = page
 		for _, runner := range page.Items {
 			if runner.State == "ready" {
-				pool, poolErr := requestJSON[secondboxclient.RunnerPool](
+				pool, poolErr := scenarioharness.RequestJSON[secondboxclient.RunnerPool](
 					ctx, driver.client, "getRunnerPool", secondboxclient.CallOptions{
 						PathParameters: map[string]string{"runnerPoolName": driver.config.RunnerPoolName},
 					},
@@ -151,46 +149,15 @@ func (driver *stressDriver) waitForRunner(ctx context.Context) error {
 	)
 }
 
-func requestJSON[T any](
-	ctx context.Context,
-	client *secondboxclient.Client,
-	operationID string,
-	options secondboxclient.CallOptions,
-) (T, error) {
-	var result T
-	if err := client.RequestJSON(ctx, operationID, options, &result); err != nil {
-		return result, err
-	}
-	return result, nil
-}
-
-func encodeJSON(value any) io.Reader {
-	data, err := json.Marshal(value)
-	if err != nil {
-		panic(fmt.Sprintf("SecondBox stress encode static request: %v", err))
-	}
-	return bytes.NewReader(data)
-}
-
-func idempotencyHeaders(value string) http.Header {
-	headers := make(http.Header)
-	headers.Set("Idempotency-Key", value)
-	return headers
-}
-
-func revisionETag(revision int64) string {
-	return `"revision-` + strconv.FormatInt(revision, 10) + `"`
-}
-
 func (driver *stressDriver) createReadySandbox(
 	ctx context.Context,
 	key string,
 ) (*secondboxclient.SandboxHandle, string, time.Duration, error) {
 	startedAt := time.Now()
-	operation, err := requestJSON[secondboxclient.Operation](
+	operation, err := scenarioharness.RequestJSON[secondboxclient.Operation](
 		ctx, driver.client, "createSandbox", secondboxclient.CallOptions{
-			Headers: idempotencyHeaders(key),
-			Body: encodeJSON(secondboxclient.CreateSandboxRequest{
+			Headers: scenarioharness.IdempotencyHeaders(key),
+			Body: scenarioharness.JSONBody(secondboxclient.CreateSandboxRequest{
 				Profile: driver.config.ProfileName,
 				Metadata: secondboxclient.Metadata{
 					"qualification": "stress", "key": key,
@@ -205,7 +172,7 @@ func (driver *stressDriver) createReadySandbox(
 	if operation.Sandbox != nil {
 		sandbox = *operation.Sandbox
 	} else {
-		sandbox, err = requestJSON[secondboxclient.Sandbox](
+		sandbox, err = scenarioharness.RequestJSON[secondboxclient.Sandbox](
 			ctx, driver.client, "getSandbox", secondboxclient.CallOptions{
 				PathParameters: map[string]string{"sandboxId": operation.SandboxID},
 			},
@@ -260,37 +227,16 @@ func (driver *stressDriver) waitSandbox(
 	handle *secondboxclient.SandboxHandle,
 	states []secondboxclient.SandboxState,
 ) (secondboxclient.Sandbox, error) {
-	deadline := time.Now().Add(time.Duration(driver.config.OperationTimeoutSeconds) * time.Second)
-	last := handle.Snapshot()
-	for time.Now().Before(deadline) {
-		remaining := time.Until(deadline)
-		wait := min(remaining, 60*time.Second)
-		if wait < time.Millisecond {
-			break
-		}
-		sandbox, err := handle.Wait(ctx, states, wait)
-		if err == nil {
-			return sandbox, nil
-		}
-		var apiError *secondboxclient.APIError
-		if !errors.As(err, &apiError) || apiError.Problem == nil ||
-			apiError.Problem.Code != "wait_expired" {
-			return last, err
-		}
-		refreshed, refreshErr := handle.Refresh(ctx)
-		if refreshErr != nil {
-			return last, refreshErr
-		}
-		last = refreshed
-	}
-	return last, fmt.Errorf(
-		"SecondBox stress Sandbox wait expired after %d seconds; last state=%s",
-		driver.config.OperationTimeoutSeconds, last.State,
+	waitContext, cancel := context.WithTimeout(
+		ctx,
+		time.Duration(driver.config.OperationTimeoutSeconds)*time.Second,
 	)
+	defer cancel()
+	return scenarioharness.WaitSandbox(waitContext, handle, states, 60*time.Second)
 }
 
 func (driver *stressDriver) collectBootTiming(ctx context.Context, operationID string) error {
-	timing, err := requestJSON[secondboxclient.OperationTiming](
+	timing, err := scenarioharness.RequestJSON[secondboxclient.OperationTiming](
 		ctx, driver.client, "getOperationTiming", secondboxclient.CallOptions{
 			PathParameters: map[string]string{"operationId": operationID},
 		},
@@ -324,7 +270,7 @@ func (driver *stressDriver) deleteSandbox(
 		return nil
 	}
 	operation, err := handle.Delete(ctx, secondboxclient.LifecycleOptions{
-		IdempotencyKey: key, IfMatch: revisionETag(sandbox.Revision),
+		IdempotencyKey: key, IfMatch: scenarioharness.RevisionETag(sandbox.Revision),
 	})
 	if err != nil {
 		return err

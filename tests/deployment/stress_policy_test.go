@@ -10,6 +10,7 @@ import (
 
 func TestStressQualificationUsesExternalSDKHarnessAndFailsLoudly(t *testing.T) {
 	script := readRepositoryFile(t, "scripts/test-stress.sh")
+	scenarioScript := readRepositoryFile(t, "scripts/test-scenario.sh")
 	compose := readRepositoryFile(t, "scripts/scenario-compose.yml")
 	driver := readRepositoryFile(t, "tests/scenario/stress/api.go") +
 		readRepositoryFile(t, "tests/scenario/stress/workloads.go")
@@ -17,19 +18,40 @@ func TestStressQualificationUsesExternalSDKHarnessAndFailsLoudly(t *testing.T) {
 
 	for _, required := range []string{
 		"SECONDBOX_REQUIRE_QUALIFIED_STRESS",
+		"SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1",
+		"SECONDBOX_SCENARIO_MODE=stress",
+		`exec "$repo_root/scripts/test-scenario.sh"`,
+	} {
+		if !strings.Contains(script, required) {
+			t.Errorf("stress adapter must contain %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		"docker compose",
+		"trap cleanup EXIT",
+		"openssl req",
+		"microvm-image/verify.sh",
+	} {
+		if strings.Contains(script, forbidden) {
+			t.Errorf("stress adapter duplicates shared scenario harness logic %q", forbidden)
+		}
+	}
+	for _, required := range []string{
 		"SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR",
 		"SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256",
 		"SECONDBOX_RUNNER_WORKSPACE_ROOT",
 		"trap cleanup EXIT",
-		"compose logs control-plane secondbox-runner postgres object-store",
+		"compose logs --tail 200 control-plane secondbox-runner postgres object-store",
 		"--entrypoint /usr/local/bin/microvm-host-network-setup",
-		"runner/scripts/microvm-image/verify.sh",
-		"SecondBox stress source commit",
-		"SecondBox stress Go version",
-		"SecondBox stress artifact manifest",
+		"sha256sum --check --strict SHA256SUMS",
+		"SecondBox scenario source commit",
+		"SecondBox scenario Go version",
+		"SecondBox scenario artifact manifest",
+		"--mode prepare",
+		"--mode run",
 	} {
-		if !strings.Contains(script, required) {
-			t.Errorf("stress script must contain %q", required)
+		if !strings.Contains(scenarioScript, required) {
+			t.Errorf("shared scenario harness must contain %q", required)
 		}
 	}
 	for _, required := range []string{
@@ -38,13 +60,14 @@ func TestStressQualificationUsesExternalSDKHarnessAndFailsLoudly(t *testing.T) {
 		"privileged: true",
 		"network_mode: host",
 		"cgroup: host",
-		"secondbox-runner\", \"-healthcheck\"",
+		"- -healthcheck",
 	} {
 		if !strings.Contains(compose, required) {
 			t.Errorf("stress Compose topology must contain %q", required)
 		}
 	}
-	if !strings.Contains(driver, "sdk/go/secondboxclient") {
+	if !strings.Contains(driver, "sdk/go/secondboxclient") ||
+		!strings.Contains(driver, "tests/scenario/harness") {
 		t.Error("stress driver must use sdk/go/secondboxclient")
 	}
 	for _, forbidden := range []string{

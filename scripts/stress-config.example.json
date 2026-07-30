@@ -28,16 +28,9 @@
     "maxConcurrentPerSandbox": 4,
     "maxConcurrentGlobal": 16,
     "fileTransferMaxBytes": 1073741824,
-    "bridgeName": "sbxstress0",
-    "bridgeCIDR": "172.31.0.1/24",
-    "guestCIDR": "172.31.0.0/24",
-    "guestIP": "172.31.0.2",
-    "tapPrefix": "sbst",
     "storagePressureRecoveryPercent": 70,
     "storagePressureWarningPercent": 80,
-    "storagePressureAdmissionDenyPercent": 90,
-    "firecrackerCpuTemplate": "T2",
-    "firecrackerKernelArgs": "console=ttyS0 reboot=k panic=1 pci=off"
+    "storagePressureAdmissionDenyPercent": 90
   },
   "profile": {
     "cpuMillis": 1000,

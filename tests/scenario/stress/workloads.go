@@ -14,6 +14,7 @@ import (
 	"time"
 
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
+	scenarioharness "github.com/SecondStack-AI/SecondBox/tests/scenario/harness"
 )
 
 func (driver *stressDriver) run(
@@ -23,7 +24,7 @@ func (driver *stressDriver) run(
 		return nil, secondboxclient.DeploymentTimingSummary{}, err
 	}
 	results := make([]workloadResult, 0, len(driver.config.Workloads)*len(driver.config.ConcurrencyLevels))
-	binding := driver.config.configuredBinding()
+	binding := driver.config.configuredBinding(driver.guestCIDR)
 	for _, workload := range driver.config.Workloads {
 		for _, concurrency := range driver.config.ConcurrencyLevels {
 			fmt.Printf("Running workload=%s concurrency=%d\n", workload, concurrency)
@@ -34,7 +35,7 @@ func (driver *stressDriver) run(
 			results = append(results, samples.report(binding))
 		}
 	}
-	summary, err := requestJSON[secondboxclient.DeploymentTimingSummary](
+	summary, err := scenarioharness.RequestJSON[secondboxclient.DeploymentTimingSummary](
 		ctx, driver.client, "getDeploymentTiming", secondboxclient.CallOptions{
 			QueryParameters: url.Values{
 				"windowSeconds": {strconv.Itoa(driver.config.TimingWindowSeconds)},
@@ -331,7 +332,7 @@ func (driver *stressDriver) runFileTransfer(
 	headers := handle.GenerationHeaders("")
 	headers.Set("Idempotency-Key", key)
 	headers.Set("Digest", digestHeader(content))
-	result, err := requestJSON[secondboxclient.FileWriteResult](
+	result, err := scenarioharness.RequestJSON[secondboxclient.FileWriteResult](
 		ctx, driver.client, "writeSandboxFile", secondboxclient.CallOptions{
 			PathParameters:  map[string]string{"sandboxId": handle.Snapshot().ID},
 			QueryParameters: url.Values{"path": {path}},
@@ -388,7 +389,7 @@ func (driver *stressDriver) runSnapshotRestore(
 	operation, err := handle.CreateSnapshot(
 		ctx,
 		secondboxclient.LifecycleOptions{
-			IdempotencyKey: key + "-snapshot", IfMatch: revisionETag(sandbox.Revision),
+			IdempotencyKey: key + "-snapshot", IfMatch: scenarioharness.RevisionETag(sandbox.Revision),
 		},
 		secondboxclient.CreateSnapshotRequest{
 			Name: key, Metadata: secondboxclient.Metadata{"qualification": "stress"},
@@ -450,7 +451,7 @@ func (driver *stressDriver) transition(
 		return err
 	}
 	options := secondboxclient.LifecycleOptions{
-		IdempotencyKey: key, IfMatch: revisionETag(sandbox.Revision),
+		IdempotencyKey: key, IfMatch: scenarioharness.RevisionETag(sandbox.Revision),
 	}
 	var operation secondboxclient.Operation
 	switch action {
@@ -508,7 +509,7 @@ func (driver *stressDriver) writeFile(
 	headers := handle.GenerationHeaders("")
 	headers.Set("Idempotency-Key", key)
 	headers.Set("Digest", digestHeader(content))
-	_, err := requestJSON[secondboxclient.FileWriteResult](
+	_, err := scenarioharness.RequestJSON[secondboxclient.FileWriteResult](
 		ctx, driver.client, "writeSandboxFile", secondboxclient.CallOptions{
 			PathParameters:  map[string]string{"sandboxId": handle.Snapshot().ID},
 			QueryParameters: url.Values{"path": {path}},

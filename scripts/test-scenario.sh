@@ -5,7 +5,8 @@ umask 077
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 compose_file="$repo_root/scripts/scenario-compose.yml"
 scenario_root="$repo_root/.tmp/scenario"
-project_name="secondbox-scenario-$$"
+scenario_mode="${SECONDBOX_SCENARIO_MODE:-suite}"
+project_name="secondbox-$scenario_mode-$$"
 runner_image="$project_name-runner"
 cd "$repo_root"
 
@@ -13,6 +14,10 @@ fail() {
   echo "SecondBox scenario prerequisite failed: $*" >&2
   exit 1
 }
+
+if [[ "$scenario_mode" != "suite" && "$scenario_mode" != "stress" ]]; then
+  fail "SECONDBOX_SCENARIO_MODE must be suite or stress"
+fi
 
 if [[ "${SECONDBOX_REQUIRE_QUALIFIED_SCENARIO:-}" != "1" ]]; then
   cat >&2 <<'PREREQUISITES'
@@ -26,6 +31,65 @@ Set SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1 and provide:
   SECONDBOX_RUNNER_WORKSPACE_ROOT on XFS or Btrfs
 PREREQUISITES
   exit 1
+fi
+
+if [[ "$scenario_mode" == "suite" ]]; then
+  export SECONDBOX_RUNNER_ID=scenario-runner
+  export SECONDBOX_RUNNER_POOL_ID=scenario-pool
+  export SECONDBOX_SCENARIO_SUBJECT_MAX_ACTIVE_INSTANCES=10
+  export SECONDBOX_SCENARIO_SUBJECT_MAX_ARTIFACTS=100
+  export SECONDBOX_SCENARIO_SUBJECT_MAX_CONCURRENT_OPERATIONS=20
+  export SECONDBOX_SCENARIO_SUBJECT_MAX_CPU_MILLIS=100000
+  export SECONDBOX_SCENARIO_SUBJECT_MAX_MEMORY_BYTES=107374182400
+  export SECONDBOX_SCENARIO_SUBJECT_MAX_PORT_SESSIONS=100
+  export SECONDBOX_SCENARIO_SUBJECT_MAX_ARTIFACT_BYTES=1099511627776
+  export SECONDBOX_SCENARIO_SUBJECT_MAX_SANDBOXES=100
+  export SECONDBOX_SCENARIO_SUBJECT_MAX_SNAPSHOTS=100
+  export SECONDBOX_SCENARIO_HTTP_TIMEOUT_SECONDS=65
+  export SECONDBOX_SCENARIO_ASSIGNMENT_CLAIM_MILLISECONDS=5000
+  export SECONDBOX_SCENARIO_ASSIGNMENT_DEADLINE_MILLISECONDS=30000
+  export SECONDBOX_SCENARIO_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS=5000
+  export SECONDBOX_SCENARIO_STORAGE_RECOVERY_PERCENT=70
+  export SECONDBOX_SCENARIO_STORAGE_WARNING_PERCENT=80
+  export SECONDBOX_SCENARIO_STORAGE_DENY_PERCENT=90
+  export SECONDBOX_SCENARIO_SANDBOX_MAX_VCPUS=2
+  export SECONDBOX_SCENARIO_SANDBOX_MEMORY_MIB=2048
+  export SECONDBOX_SCENARIO_SANDBOX_DISK_MIB=10240
+  export SECONDBOX_SCENARIO_MEMORY_BUDGET_MIB=8192
+  export SECONDBOX_SCENARIO_MAX_CONCURRENT_PER_SANDBOX=2
+  export SECONDBOX_SCENARIO_MAX_CONCURRENT_GLOBAL=8
+  export SECONDBOX_SCENARIO_FILE_TRANSFER_MAX_BYTES=1048576
+else
+  for variable in \
+    SECONDBOX_STRESS_CONFIG \
+    SECONDBOX_STRESS_OUTPUT \
+    SECONDBOX_RUNNER_ID \
+    SECONDBOX_RUNNER_POOL_ID \
+    SECONDBOX_SCENARIO_SUBJECT_MAX_ACTIVE_INSTANCES \
+    SECONDBOX_SCENARIO_SUBJECT_MAX_ARTIFACTS \
+    SECONDBOX_SCENARIO_SUBJECT_MAX_CONCURRENT_OPERATIONS \
+    SECONDBOX_SCENARIO_SUBJECT_MAX_CPU_MILLIS \
+    SECONDBOX_SCENARIO_SUBJECT_MAX_MEMORY_BYTES \
+    SECONDBOX_SCENARIO_SUBJECT_MAX_PORT_SESSIONS \
+    SECONDBOX_SCENARIO_SUBJECT_MAX_ARTIFACT_BYTES \
+    SECONDBOX_SCENARIO_SUBJECT_MAX_SANDBOXES \
+    SECONDBOX_SCENARIO_SUBJECT_MAX_SNAPSHOTS \
+    SECONDBOX_SCENARIO_HTTP_TIMEOUT_SECONDS \
+    SECONDBOX_SCENARIO_ASSIGNMENT_CLAIM_MILLISECONDS \
+    SECONDBOX_SCENARIO_ASSIGNMENT_DEADLINE_MILLISECONDS \
+    SECONDBOX_SCENARIO_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS \
+    SECONDBOX_SCENARIO_STORAGE_RECOVERY_PERCENT \
+    SECONDBOX_SCENARIO_STORAGE_WARNING_PERCENT \
+    SECONDBOX_SCENARIO_STORAGE_DENY_PERCENT \
+    SECONDBOX_SCENARIO_SANDBOX_MAX_VCPUS \
+    SECONDBOX_SCENARIO_SANDBOX_MEMORY_MIB \
+    SECONDBOX_SCENARIO_SANDBOX_DISK_MIB \
+    SECONDBOX_SCENARIO_MEMORY_BUDGET_MIB \
+    SECONDBOX_SCENARIO_MAX_CONCURRENT_PER_SANDBOX \
+    SECONDBOX_SCENARIO_MAX_CONCURRENT_GLOBAL \
+    SECONDBOX_SCENARIO_FILE_TRANSFER_MAX_BYTES; do
+    [[ -n "${!variable:-}" ]] || fail "stress mode requires $variable"
+  done
 fi
 
 for command in curl docker findmnt git go ip jq mountpoint openssl python3 seq sha256sum; do
@@ -168,8 +232,6 @@ openssl x509 -req \
 chmod 0600 "$pki_dir/runner-ca.key" "$pki_dir/server.key"
 chmod 0644 "$pki_dir/runner-ca.crt" "$pki_dir/server.crt"
 
-export SECONDBOX_RUNNER_ID=scenario-runner
-export SECONDBOX_RUNNER_POOL_ID=scenario-pool
 export SECONDBOX_RUNNER_CA_CERTIFICATE="$pki_dir/runner-ca.crt"
 export SECONDBOX_RUNNER_CA_PRIVATE_KEY="$pki_dir/runner-ca.key"
 export SECONDBOX_RUNNER_CERTIFICATE_LIFETIME_DAYS=2
@@ -217,6 +279,9 @@ export SECONDBOX_SCENARIO_ASSET_CATALOG="$asset_catalog"
 export SECONDBOX_SCENARIO_RUNNER_IMAGE="$runner_image"
 export SECONDBOX_SCENARIO_SOURCE_COMMIT
 SECONDBOX_SCENARIO_SOURCE_COMMIT="$(git -C "$repo_root" rev-parse HEAD)"
+export SECONDBOX_SCENARIO_GO_VERSION
+SECONDBOX_SCENARIO_GO_VERSION="$(go version)"
+export SECONDBOX_SCENARIO_ARTIFACT_MANIFEST_DIGEST="$manifest_digest"
 export SECONDBOX_SCENARIO_CGROUP_PARENT="secondbox-scenario-$$"
 export SECONDBOX_SCENARIO_BRIDGE_NAME="sbxq$(( $$ % 100000 ))"
 export SECONDBOX_SCENARIO_TAP_PREFIX="sq$(( $$ % 1000 ))"
@@ -237,9 +302,9 @@ export SECONDBOX_SCENARIO_GUEST_CIDR="$scenario_guest_cidr"
 export SECONDBOX_SCENARIO_BRIDGE_ADDRESS="198.${scenario_network_second_octet}.${scenario_network_third_octet}.1"
 export SECONDBOX_SCENARIO_BRIDGE_CIDR="$SECONDBOX_SCENARIO_BRIDGE_ADDRESS/24"
 export SECONDBOX_SCENARIO_GUEST_IP="198.${scenario_network_second_octet}.${scenario_network_third_octet}.2"
-export SECONDBOX_SCENARIO_RUNNER_CLIENT_CERTIFICATE="${SECONDBOX_SCENARIO_RUNNER_CLIENT_CERTIFICATE:-/opt/secondbox-runner-identity/runner.crt}"
-export SECONDBOX_SCENARIO_RUNNER_CREDENTIAL="${SECONDBOX_SCENARIO_RUNNER_CREDENTIAL:-scenario-runner-credential-000000000000000000000000}"
-export SECONDBOX_SCENARIO_RUNNER_GUEST_HEARTBEAT_INTERVAL="${SECONDBOX_SCENARIO_RUNNER_GUEST_HEARTBEAT_INTERVAL:-1s}"
+export SECONDBOX_SCENARIO_RUNNER_CLIENT_CERTIFICATE=/opt/secondbox-runner-identity/runner.crt
+export SECONDBOX_SCENARIO_RUNNER_CREDENTIAL=scenario-runner-credential-000000000000000000000000
+export SECONDBOX_SCENARIO_RUNNER_GUEST_HEARTBEAT_INTERVAL=1s
 export SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST="$runtime_digest"
 export SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST="$toolchain_digest"
 export SECONDBOX_SCENARIO_COMPOSE_FILE="$compose_file"
@@ -355,17 +420,33 @@ trap cleanup EXIT
 
 echo "SecondBox scenario workspace mount: $workspace_mount"
 echo "SecondBox scenario source commit: $SECONDBOX_SCENARIO_SOURCE_COMMIT"
-echo "SecondBox scenario Go version: $(go version)"
+echo "SecondBox scenario Go version: $SECONDBOX_SCENARIO_GO_VERSION"
 echo "SecondBox scenario artifact manifest: $manifest_digest"
 echo "SecondBox scenario guest network: $SECONDBOX_SCENARIO_GUEST_CIDR"
 
 compose config --quiet
-compose up --detach --wait --wait-timeout 240
+compose up --detach --wait --wait-timeout 240 \
+  postgres object-store object-store-init control-plane
 
-scenario_test_arguments=(-count=1 -tags=scenario_live -timeout=30m -v)
-if [[ -n "${SECONDBOX_SCENARIO_TEST_PATTERN:-}" ]]; then
-  scenario_test_arguments+=(-run "$SECONDBOX_SCENARIO_TEST_PATTERN")
+if [[ "$scenario_mode" == "stress" ]]; then
+  go run ./tests/scenario/stress \
+    --mode prepare \
+    --config "$SECONDBOX_STRESS_CONFIG"
 fi
-go test "${scenario_test_arguments[@]}" ./tests/scenario
 
-echo "SecondBox scenario qualification passed"
+compose up --detach --wait --wait-timeout 300 secondbox-runner
+
+if [[ "$scenario_mode" == "suite" ]]; then
+  scenario_test_arguments=(-count=1 -tags=scenario_live -timeout=30m -v)
+  if [[ -n "${SECONDBOX_SCENARIO_TEST_PATTERN:-}" ]]; then
+    scenario_test_arguments+=(-run "$SECONDBOX_SCENARIO_TEST_PATTERN")
+  fi
+  go test "${scenario_test_arguments[@]}" ./tests/scenario
+else
+  go run ./tests/scenario/stress \
+    --mode run \
+    --config "$SECONDBOX_STRESS_CONFIG" \
+    --output "$SECONDBOX_STRESS_OUTPUT"
+fi
+
+echo "SecondBox $scenario_mode qualification passed"

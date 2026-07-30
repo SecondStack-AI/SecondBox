@@ -5,12 +5,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"strings"
 	"time"
 
-	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
+	scenarioharness "github.com/SecondStack-AI/SecondBox/tests/scenario/harness"
 )
 
 type runtimeInputs struct {
@@ -21,6 +20,7 @@ type runtimeInputs struct {
 	sourceCommit     string
 	goVersion        string
 	artifactManifest string
+	guestCIDR        string
 }
 
 func main() {
@@ -63,19 +63,20 @@ func runMain(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	httpClient := &http.Client{
-		Timeout: time.Duration(config.RequestTimeoutMilliseconds) * time.Millisecond,
-	}
-	client, err := secondboxclient.NewSecondBoxSubjectClient(
-		inputs.baseURL, inputs.platformToken, config.TenantRef, config.SubjectRef, httpClient,
+	clients, err := scenarioharness.NewClients(
+		inputs.baseURL,
+		inputs.platformToken,
+		config.TenantRef,
+		config.SubjectRef,
+		time.Duration(config.RequestTimeoutMilliseconds)*time.Millisecond,
 	)
 	if err != nil {
 		return err
 	}
 	driver := &stressDriver{
-		config: config, client: client,
+		config: config, client: clients.Subject,
 		runtimeDigest: inputs.runtimeDigest, toolchainDigest: inputs.toolchainDigest,
-		bootStages: make(map[string][]time.Duration),
+		guestCIDR: inputs.guestCIDR, bootStages: make(map[string][]time.Duration),
 	}
 	switch *mode {
 	case "prepare":
@@ -107,7 +108,7 @@ func runMain(arguments []string) error {
 				FileTransferBytes:       config.FileTransferBytes,
 				StreamingOutputBytes:    config.StreamingOutputBytes,
 			},
-			ConfiguredBinding: config.configuredBinding(), Results: results,
+			ConfiguredBinding: config.configuredBinding(inputs.guestCIDR), Results: results,
 			BootStages: bootStages, DominantBootStage: dominant,
 			DeploymentTiming: &deploymentTiming,
 		}
@@ -157,23 +158,26 @@ func readRuntimeInputs(mode string) (runtimeInputs, error) {
 	if inputs.baseURL, err = required("SECONDBOX_LIVE_BASE_URL"); err != nil {
 		return runtimeInputs{}, err
 	}
-	if inputs.platformToken, err = required("SECONDBOX_LIVE_PLATFORM_TOKEN"); err != nil {
+	if inputs.platformToken, err = required("SECONDBOX_PLATFORM_TOKEN"); err != nil {
 		return runtimeInputs{}, err
 	}
-	if inputs.runtimeDigest, err = required("SECONDBOX_STRESS_RUNTIME_BUNDLE_DIGEST"); err != nil {
+	if inputs.runtimeDigest, err = required("SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST"); err != nil {
 		return runtimeInputs{}, err
 	}
-	if inputs.toolchainDigest, err = required("SECONDBOX_STRESS_TOOLCHAIN_BUNDLE_DIGEST"); err != nil {
+	if inputs.toolchainDigest, err = required("SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST"); err != nil {
+		return runtimeInputs{}, err
+	}
+	if inputs.guestCIDR, err = required("SECONDBOX_SCENARIO_GUEST_CIDR"); err != nil {
 		return runtimeInputs{}, err
 	}
 	if mode == "run" {
-		if inputs.sourceCommit, err = required("SECONDBOX_STRESS_SOURCE_COMMIT"); err != nil {
+		if inputs.sourceCommit, err = required("SECONDBOX_SCENARIO_SOURCE_COMMIT"); err != nil {
 			return runtimeInputs{}, err
 		}
-		if inputs.goVersion, err = required("SECONDBOX_STRESS_GO_VERSION"); err != nil {
+		if inputs.goVersion, err = required("SECONDBOX_SCENARIO_GO_VERSION"); err != nil {
 			return runtimeInputs{}, err
 		}
-		if inputs.artifactManifest, err = required("SECONDBOX_STRESS_ARTIFACT_MANIFEST_DIGEST"); err != nil {
+		if inputs.artifactManifest, err = required("SECONDBOX_SCENARIO_ARTIFACT_MANIFEST_DIGEST"); err != nil {
 			return runtimeInputs{}, err
 		}
 	}

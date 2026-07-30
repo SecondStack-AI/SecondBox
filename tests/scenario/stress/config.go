@@ -57,23 +57,16 @@ type stressConfig struct {
 }
 
 type stressRunnerConfig struct {
-	SandboxMaxVCPUs                int    `json:"sandboxMaxVcpus"`
-	SandboxMemoryMiB               int    `json:"sandboxMemoryMiB"`
-	SandboxDiskMiB                 int    `json:"sandboxDiskMiB"`
-	MemoryBudgetMiB                int    `json:"memoryBudgetMiB"`
-	MaxConcurrentPerSandbox        int    `json:"maxConcurrentPerSandbox"`
-	MaxConcurrentGlobal            int    `json:"maxConcurrentGlobal"`
-	FileTransferMaxBytes           int    `json:"fileTransferMaxBytes"`
-	BridgeName                     string `json:"bridgeName"`
-	BridgeCIDR                     string `json:"bridgeCIDR"`
-	GuestCIDR                      string `json:"guestCIDR"`
-	GuestIP                        string `json:"guestIP"`
-	TapPrefix                      string `json:"tapPrefix"`
-	StoragePressureRecoveryPercent int    `json:"storagePressureRecoveryPercent"`
-	StoragePressureWarningPercent  int    `json:"storagePressureWarningPercent"`
-	StoragePressureDenyPercent     int    `json:"storagePressureAdmissionDenyPercent"`
-	FirecrackerCPUTemplate         string `json:"firecrackerCpuTemplate"`
-	FirecrackerKernelArgs          string `json:"firecrackerKernelArgs"`
+	SandboxMaxVCPUs                int `json:"sandboxMaxVcpus"`
+	SandboxMemoryMiB               int `json:"sandboxMemoryMiB"`
+	SandboxDiskMiB                 int `json:"sandboxDiskMiB"`
+	MemoryBudgetMiB                int `json:"memoryBudgetMiB"`
+	MaxConcurrentPerSandbox        int `json:"maxConcurrentPerSandbox"`
+	MaxConcurrentGlobal            int `json:"maxConcurrentGlobal"`
+	FileTransferMaxBytes           int `json:"fileTransferMaxBytes"`
+	StoragePressureRecoveryPercent int `json:"storagePressureRecoveryPercent"`
+	StoragePressureWarningPercent  int `json:"storagePressureWarningPercent"`
+	StoragePressureDenyPercent     int `json:"storagePressureAdmissionDenyPercent"`
 }
 
 type stressProfileConfig struct {
@@ -267,27 +260,6 @@ func (config stressRunnerConfig) validate() error {
 		config.StoragePressureDenyPercent < 100) {
 		return errors.New("SecondBox stress runner storage pressure thresholds must be ordered below 100")
 	}
-	for name, value := range map[string]string{
-		"bridgeName":             config.BridgeName,
-		"bridgeCIDR":             config.BridgeCIDR,
-		"guestCIDR":              config.GuestCIDR,
-		"guestIP":                config.GuestIP,
-		"tapPrefix":              config.TapPrefix,
-		"firecrackerCpuTemplate": config.FirecrackerCPUTemplate,
-		"firecrackerKernelArgs":  config.FirecrackerKernelArgs,
-	} {
-		if strings.TrimSpace(value) == "" {
-			return fmt.Errorf("SecondBox stress runner %s is required", name)
-		}
-	}
-	if guestIPCapacity(config.BridgeCIDR) < 1 {
-		return errors.New("SecondBox stress runner bridgeCIDR must provide at least one IPv4 guest address")
-	}
-	guestIP := net.ParseIP(config.GuestIP)
-	_, guestNetwork, err := net.ParseCIDR(config.GuestCIDR)
-	if err != nil || guestIP == nil || !guestNetwork.Contains(guestIP) {
-		return errors.New("SecondBox stress runner guestIP must belong to guestCIDR")
-	}
 	return nil
 }
 
@@ -334,7 +306,7 @@ func guestIPCapacity(rawCIDR string) int {
 	return total - 3
 }
 
-func (config stressConfig) configuredBinding() configuredLimit {
+func (config stressConfig) configuredBinding(guestCIDR string) configuredLimit {
 	subjectBinding := minimumConfiguredLimit([]configuredLimit{
 		{Name: "active instances", Capacity: config.SubjectMaxActiveInstances},
 		{Name: "Sandboxes", Capacity: config.SubjectMaxSandboxes},
@@ -356,7 +328,7 @@ func (config stressConfig) configuredBinding() configuredLimit {
 			Name:     "SECONDBOX_RUNNER_SANDBOX_MEMORY_BUDGET_MIB",
 			Capacity: config.Runner.MemoryBudgetMiB / config.Runner.SandboxMemoryMiB,
 		},
-		{Name: "guest IP capacity", Capacity: guestIPCapacity(config.Runner.BridgeCIDR)},
+		{Name: "guest IP capacity", Capacity: guestIPCapacity(guestCIDR)},
 		subjectBinding,
 	}
 	return minimumConfiguredLimit(limits)

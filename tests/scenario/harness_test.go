@@ -11,13 +11,13 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
+	scenarioharness "github.com/SecondStack-AI/SecondBox/tests/scenario/harness"
 )
 
 const (
@@ -37,27 +37,22 @@ func newScenarioFixture(t *testing.T) scenarioFixture {
 	t.Helper()
 	baseURL := requireScenarioEnvironment(t, "SECONDBOX_LIVE_BASE_URL")
 	platformToken := requireScenarioEnvironment(t, "SECONDBOX_PLATFORM_TOKEN")
-	httpClient := &http.Client{Timeout: 70 * time.Second}
-	admin, err := secondboxclient.NewSecondBoxClient(baseURL, platformToken, httpClient)
-	if err != nil {
-		t.Fatalf("SecondBox scenario administrative client: %v", err)
-	}
-	subject, err := secondboxclient.NewSecondBoxSubjectClient(
+	clients, err := scenarioharness.NewClients(
 		baseURL,
 		platformToken,
 		"scenario-tenant",
 		"scenario-subject",
-		httpClient,
+		70*time.Second,
 	)
 	if err != nil {
-		t.Fatalf("SecondBox scenario application client: %v", err)
+		t.Fatal(err)
 	}
 	return scenarioFixture{
 		baseURL:       baseURL,
 		platformToken: platformToken,
-		admin:         admin,
-		subject:       subject,
-		httpClient:    httpClient,
+		admin:         clients.Admin,
+		subject:       clients.Subject,
+		httpClient:    clients.HTTPClient,
 	}
 }
 
@@ -78,8 +73,8 @@ func scenarioJSON[T any](
 	options secondboxclient.CallOptions,
 ) T {
 	t.Helper()
-	var result T
-	if err := client.RequestJSON(ctx, operationID, options, &result); err != nil {
+	result, err := scenarioharness.RequestJSON[T](ctx, client, operationID, options)
+	if err != nil {
 		t.Fatalf("SecondBox scenario %s: %v", operationID, err)
 	}
 	return result
@@ -87,17 +82,11 @@ func scenarioJSON[T any](
 
 func scenarioBody(t *testing.T, value any) io.Reader {
 	t.Helper()
-	body, err := secondboxclient.EncodeJSONBody(value)
-	if err != nil {
-		t.Fatalf("SecondBox scenario encode request: %v", err)
-	}
-	return body
+	return scenarioharness.JSONBody(value)
 }
 
 func scenarioHeaders(idempotencyKey string) http.Header {
-	headers := make(http.Header)
-	headers.Set("Idempotency-Key", idempotencyKey)
-	return headers
+	return scenarioharness.IdempotencyHeaders(idempotencyKey)
 }
 
 func waitForSandbox(
@@ -110,67 +99,11 @@ func waitForSandbox(
 	if len(states) == 0 {
 		t.Fatal("SecondBox scenario wait requires terminal states")
 	}
-	target := make(map[secondboxclient.SandboxState]struct{}, len(states))
-	for _, state := range states {
-		target[state] = struct{}{}
+	sandbox, err := scenarioharness.WaitSandbox(ctx, handle, states, 55*time.Second)
+	if err != nil {
+		t.Fatal(err)
 	}
-	last := handle.Snapshot()
-	for {
-		if _, found := target[last.State]; found {
-			return last
-		}
-		remaining := time.Until(deadlineFromContext(ctx))
-		if remaining <= 0 {
-			t.Fatalf(
-				"SecondBox scenario Sandbox %s did not reach %v: last state=%s generation=%d",
-				last.ID,
-				states,
-				last.State,
-				last.Generation,
-			)
-		}
-		bounded := min(remaining, 55*time.Second)
-		observed, err := handle.Wait(ctx, states, bounded)
-		if err != nil {
-			var apiError *secondboxclient.APIError
-			if errors.As(err, &apiError) &&
-				apiError.Problem != nil &&
-				apiError.Problem.Code == "wait_expired" {
-				refreshed, refreshErr := handle.Refresh(ctx)
-				if refreshErr != nil {
-					t.Fatalf(
-						"SecondBox scenario Sandbox %s refresh after wait expiry: %v",
-						last.ID,
-						refreshErr,
-					)
-				}
-				last = refreshed
-				continue
-			}
-			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-				t.Fatalf(
-					"SecondBox scenario Sandbox %s wait ended: last state=%s: %v",
-					last.ID,
-					last.State,
-					err,
-				)
-			}
-			t.Fatalf(
-				"SecondBox scenario Sandbox %s wait failed: last state=%s: %v",
-				last.ID,
-				last.State,
-				err,
-			)
-		}
-		last = observed
-	}
-}
-
-func deadlineFromContext(ctx context.Context) time.Time {
-	if deadline, found := ctx.Deadline(); found {
-		return deadline
-	}
-	return time.Now().Add(5 * time.Minute)
+	return sandbox
 }
 
 func decodeScenarioJSON[T any](t *testing.T, response *http.Response) T {
@@ -435,7 +368,7 @@ func cleanupScenarioSandbox(
 }
 
 func sandboxRevisionETag(revision int64) string {
-	return `"revision-` + strconv.FormatInt(revision, 10) + `"`
+	return scenarioharness.RevisionETag(revision)
 }
 
 func waitForScenarioOperation(

@@ -12,7 +12,7 @@ func TestStressConfigRequiresEveryWorkloadAndComputesBinding(t *testing.T) {
 	if err := config.validate(); err != nil {
 		t.Fatal(err)
 	}
-	binding := config.configuredBinding()
+	binding := config.configuredBinding("172.31.0.0/24")
 	if binding.Name != "SECONDBOX_RUNNER_SANDBOX_MEMORY_BUDGET_MIB" || binding.Capacity != 4 {
 		t.Fatalf("binding = %#v", binding)
 	}
@@ -66,12 +66,9 @@ func validStressConfig() stressConfig {
 		Runner: stressRunnerConfig{
 			SandboxMaxVCPUs: 2, SandboxMemoryMiB: 512, SandboxDiskMiB: 1024,
 			MemoryBudgetMiB: 2048, MaxConcurrentPerSandbox: 4, MaxConcurrentGlobal: 16,
-			FileTransferMaxBytes: 1 << 20, BridgeName: "sbxstress0",
-			BridgeCIDR: "172.31.0.1/24", GuestCIDR: "172.31.0.0/24",
-			GuestIP: "172.31.0.2", TapPrefix: "sbst",
+			FileTransferMaxBytes:           1 << 20,
 			StoragePressureRecoveryPercent: 70, StoragePressureWarningPercent: 80,
-			StoragePressureDenyPercent: 90, FirecrackerCPUTemplate: "T2",
-			FirecrackerKernelArgs: "console=ttyS0 reboot=k panic=1 pci=off",
+			StoragePressureDenyPercent: 90,
 		},
 		Profile: stressProfileConfig{
 			CPUMillis: 1000, MemoryBytes: 512 << 20, WorkspaceBytes: 1 << 30,

@@ -1,8 +1,9 @@
 # Local stress qualification
 
-`just test-stress` measures how a real local SecondBox deployment changes as concurrency increases. It
-starts PostgreSQL, object storage, the control plane, and one privileged runner with Compose, then
-drives the deployment exclusively through the published HTTP API with
+`just test-stress` measures how a real local SecondBox deployment changes as concurrency increases.
+It is a thin configuration adapter over the prerequisite checks, signed-artifact verification,
+dynamic host network, Compose topology, and cleanup path used by `just test-scenario`. It then drives
+the deployment exclusively through the published HTTP API with
 `sdk/go/secondboxclient`. The driver does not read PostgreSQL, import a control-plane or runner
 package, or call a runner-internal endpoint.
 
@@ -34,19 +35,17 @@ published API. The runner enrolls through its authenticated outbound control str
 The host must provide:
 
 - readable and writable `/dev/kvm` and `/dev/net/tun`;
-- Docker with Compose v2, Go, `curl`, `findmnt`, Git, `ip`, `jq`, OpenSSL, `sha256sum`, and `ss`;
+- Docker with Compose v2, Go, `curl`, `findmnt`, Git, `ip`, `jq`, OpenSSL, and `sha256sum`;
 - the complete signed microVM artifact directory described by
   [the microVM image pipeline](microvm-image-pipeline.md);
 - the trusted artifact public key and its lowercase DER SHA-256 fingerprint;
 - an existing, non-root, non-symlink XFS or Btrfs directory for per-run Workspace storage;
-- two unused loopback TCP ports;
-- explicit pinned images for PostgreSQL, object storage, the object-store client, and the
-  control-plane base image.
+- two unused loopback TCP ports selected by the shared scenario harness.
 
-The configured bridge name must not already exist. The runner removes the bridge and its exact
-firewall rules during trapped cleanup. The Workspace setting names a qualified parent; the harness
-creates one unique `secondbox-stress.*` run root beneath it and removes that exact root after
-restoring file ownership.
+The shared harness chooses an unused bridge subnet and process-unique bridge and TAP names. The
+runner removes the bridge and its exact firewall rules during trapped cleanup. The Workspace setting
+names a qualified parent; the harness creates one unique per-run Workspace root beneath it and
+removes that exact root after restoring file ownership.
 
 The artifact verifier runs before Compose. It checks the public-key fingerprint, manifest signature,
 checksums, component manifest digests, architecture, guest-protocol range, rootfs contract, and
@@ -57,7 +56,8 @@ browser surface. A missing or invalid artifact is a failed run, not a skipped te
 Copy [the explicit example](../../scripts/stress-config.example.json) and review every value for the
 host. The parser refuses unknown fields, missing workloads, duplicated workloads, non-increasing
 concurrency levels, inconsistent runner/Profile capacity, out-of-range timing windows, and transfer
-sizes above either configured bound.
+sizes above either configured bound. Host-network, Compose, and artifact settings are deliberately
+absent from the stress JSON because the shared scenario harness owns them.
 
 The example deliberately makes the memory budget the first theoretical binding limit:
 `4096 MiB / 512 MiB = 8` concurrent Instances. This is an example configuration, not a published
@@ -69,12 +69,6 @@ Set every required input and run:
 export SECONDBOX_REQUIRE_QUALIFIED_STRESS=1
 export SECONDBOX_STRESS_CONFIG=/absolute/path/stress.json
 export SECONDBOX_STRESS_OUTPUT=/absolute/path/stress-result.json
-export SECONDBOX_STRESS_API_PORT=58080
-export SECONDBOX_STRESS_RUNNER_PORT=59443
-export SECONDBOX_STRESS_POSTGRES_IMAGE=docker.io/library/postgres:18.4-bookworm
-export SECONDBOX_STRESS_OBJECT_STORE_IMAGE=docker.io/rustfs/rustfs:1.0.0-beta.11
-export SECONDBOX_STRESS_OBJECT_STORE_CLIENT_IMAGE=quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
-export SECONDBOX_STRESS_CONTROL_PLANE_BASE_IMAGE=docker.io/library/golang:1.25.12-bookworm
 export SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR=/absolute/path/firecracker-artifacts
 export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY=/absolute/path/manifest-public.pem
 export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
@@ -83,9 +77,9 @@ just test-stress
 ```
 
 `SECONDBOX_STRESS_OUTPUT` must be an absent absolute path whose parent already exists. The harness
-refuses to overwrite it and creates it with mode `0600`. Platform, runner, database, and object-store
-credentials are generated per run, supplied only to their consumers, and never written to the
-result.
+refuses to overwrite it and creates it with mode `0600`. The shared topology's distinct test-only
+platform, runner, database, and object-store credentials are supplied only to their consumers and
+are never written to the result.
 
 The gate prints the source commit, Go version, `findmnt` evidence, and signed artifact-manifest
 digest before starting the sweep. Failure logs come from the control plane, runner, PostgreSQL, and
@@ -105,7 +99,7 @@ The result separately names:
 
 - `configuredFirstBinding`: the minimum of
   `SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL`, runner memory budget divided by per-Sandbox memory,
-  guest addresses available from the configured bridge CIDR, and the first applicable subject
+  guest addresses available from the shared harness's selected bridge CIDR, and the first applicable subject
   Sandbox, active-Instance, CPU, memory, concurrent-Operation, or Snapshot quota;
 - `problemCounts`: the actual provider-neutral API outcomes, including quota or execution-node
   refusal;
