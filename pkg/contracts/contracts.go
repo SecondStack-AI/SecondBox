@@ -884,13 +884,14 @@ type DeploymentTimingSummary struct {
 
 // Problem is the stable typed failure envelope.
 type Problem struct {
-	Type      string          `json:"type"`
-	Title     string          `json:"title"`
-	Status    int             `json:"status"`
-	Code      string          `json:"code"`
-	RequestID string          `json:"requestId"`
-	Retryable bool            `json:"retryable"`
-	Details   []ProblemDetail `json:"details,omitempty"`
+	Type                   string          `json:"type"`
+	Title                  string          `json:"title"`
+	Status                 int             `json:"status"`
+	Code                   string          `json:"code"`
+	RequestID              string          `json:"requestId"`
+	Retryable              bool            `json:"retryable"`
+	RetryAfterMilliseconds *int64          `json:"retryAfterMilliseconds,omitempty"`
+	Details                []ProblemDetail `json:"details,omitempty"`
 }
 
 // ProblemDetail identifies one bounded invalid field.

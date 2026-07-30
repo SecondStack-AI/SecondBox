@@ -141,6 +141,12 @@ func (driver *stressDriver) runCreateWorkers(
 				}
 				if err != nil {
 					addWorkerError(&result, err)
+					if retryDelay, retry := stressAdmissionRetryDelay(
+						err,
+						time.Duration(driver.config.PollIntervalMilliseconds)*time.Millisecond,
+					); retry && !waitForStressRetry(ctx, deadline, retryDelay) {
+						break
+					}
 				}
 			}
 			results <- result
@@ -152,6 +158,44 @@ func (driver *stressDriver) runCreateWorkers(
 		mergeSamples(&samples, result)
 	}
 	return samples
+}
+
+func stressAdmissionRetryDelay(err error, fallback time.Duration) (time.Duration, bool) {
+	var problem *secondboxclient.Problem
+	var apiError *secondboxclient.APIError
+	if errors.As(err, &apiError) {
+		problem = apiError.Problem
+	}
+	var operationFailure *secondboxclient.OperationFailure
+	if problem == nil && errors.As(err, &operationFailure) {
+		problem = operationFailure.Operation.Error
+	}
+	if problem == nil || !problem.Retryable || problem.Code != "home_runner_unavailable" {
+		return 0, false
+	}
+	if problem.RetryAfterMilliseconds != nil && *problem.RetryAfterMilliseconds > 0 {
+		return time.Duration(*problem.RetryAfterMilliseconds) * time.Millisecond, true
+	}
+	return fallback, true
+}
+
+func waitForStressRetry(
+	ctx context.Context,
+	deadline time.Time,
+	delay time.Duration,
+) bool {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return false
+	}
+	timer := time.NewTimer(min(delay, remaining))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return time.Now().Before(deadline)
+	}
 }
 
 func (driver *stressDriver) prepareWorkerSandboxes(

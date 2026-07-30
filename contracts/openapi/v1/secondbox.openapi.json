@@ -379,7 +379,8 @@
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
           "409": {"$ref": "#/components/responses/Conflict"},
-          "429": {"$ref": "#/components/responses/TooManyRequests"}
+          "429": {"$ref": "#/components/responses/TooManyRequests"},
+          "503": {"$ref": "#/components/responses/ServiceUnavailable"}
         }
       }
     },
@@ -1382,6 +1383,10 @@
       "Digest": {
         "description": "SHA-256 content digest.",
         "schema": {"type": "string", "pattern": "^sha-256=:[A-Za-z0-9+/]{43}=:$"}
+      },
+      "RetryAfter": {
+        "description": "Minimum whole seconds before retrying a temporary admission refusal.",
+        "schema": {"type": "integer", "minimum": 1, "maximum": 60}
       }
     },
     "parameters": {
@@ -1590,6 +1595,7 @@
       "PreconditionFailed": {"$ref": "#/components/responses/Problem412"},
       "LimitExceeded": {"$ref": "#/components/responses/Problem413"},
       "TooManyRequests": {"$ref": "#/components/responses/Problem429"},
+      "ServiceUnavailable": {"$ref": "#/components/responses/Problem503"},
       "Problem400": {
         "description": "Invalid request.",
         "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
@@ -1633,6 +1639,14 @@
       "Problem429": {
         "description": "Quota or concurrent-operation limit exceeded.",
         "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+        "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/Problem"}}}
+      },
+      "Problem503": {
+        "description": "Temporary admission capacity is unavailable.",
+        "headers": {
+          "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
+          "Retry-After": {"$ref": "#/components/headers/RetryAfter"}
+        },
         "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/Problem"}}}
       }
     },
@@ -2770,6 +2784,7 @@
           "code": {"$ref": "#/components/schemas/ProblemCode"},
           "requestId": {"$ref": "#/components/schemas/CorrelationID"},
           "retryable": {"type": "boolean"},
+          "retryAfterMilliseconds": {"type": "integer", "format": "int64", "minimum": 1, "maximum": 60000},
           "details": {"type": "array", "maxItems": 32, "items": {"$ref": "#/components/schemas/ProblemDetail"}}
         }
       }
