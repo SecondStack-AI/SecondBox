@@ -3194,7 +3194,7 @@ func recordFenceEvent(
 		).Scan(&failureClass); err != nil {
 			return fmt.Errorf("SecondBox runner-loss Assignment classification lookup: %w", err)
 		}
-		if failureClass != "fencing" {
+		if failureClass != "fencing" && failureClass != "startup_timeout" {
 			return errors.New("SecondBox runner FenceResult lacks a durable stop effect")
 		}
 	}

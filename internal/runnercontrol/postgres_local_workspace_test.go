@@ -1597,6 +1597,94 @@ func TestFailedStartEvidenceRetainsDurableWorkspaceMutationForReconciliation(t *
 	}
 }
 
+func TestStartupTimeoutFenceResultDoesNotRequireStopEffect(t *testing.T) {
+	store := openRunnerControlDatabase(t)
+	now := time.Date(2026, 7, 29, 20, 40, 0, 0, time.UTC)
+	fence := seedStartingAssignment(t, store, "startup-timeout", "fencing", now)
+	correlation := &runnerv1.Correlation{
+		RequestId: "request-startup-timeout", OperationId: "operation-start",
+		SandboxId: fence.SandboxId, InstanceId: fence.InstanceId,
+		SandboxGeneration: fence.SandboxGeneration,
+		AssignmentId:      fence.AssignmentId, RunnerId: "runner-home",
+	}
+	commandID := "fence-command-startup-timeout"
+	payload, err := proto.Marshal(&runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_Fence{
+			Fence: &runnerv1.FenceCommand{
+				MessageId: commandID, Sequence: 1, Fence: fence,
+				Reason:      runnerv1.FenceReason_FENCE_REASON_ASSIGNMENT_REPLACED,
+				Correlation: correlation,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(t.Context(), `
+		UPDATE secondbox.assignments
+		SET failure_class='startup_timeout' WHERE id=$1;
+		UPDATE secondbox.workspaces
+		SET state='failed',mutation_state='failed' WHERE sandbox_id=$2;
+		UPDATE secondbox.sandboxes
+		SET state='failed' WHERE id=$2;
+		INSERT INTO secondbox.runner_commands (
+			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
+			delivery_count,created_at,updated_at,delivered_at
+		) VALUES ($3,'runner-home',$1,'fence',$4,'delivered',
+		          'connection-old',1,$5,$5,$5)`,
+		pgx.QueryExecModeSimpleProtocol,
+		fence.AssignmentId,
+		fence.SandboxId,
+		commandID,
+		payload,
+		now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := store.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(t.Context())
+	result := &runnerv1.FenceResult{
+		Fence:                     fence,
+		Result:                    runnerv1.FenceResultKind_FENCE_RESULT_KIND_STOPPED,
+		TerminationEvidenceDigest: "sha256:startup-timeout",
+		Correlation:               correlation,
+	}
+	if err := recordFenceEvent(
+		t.Context(), tx, "runner-home", result, now.Add(time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var assignmentState, instanceState, terminationReason, commandState string
+	if err := store.pool.QueryRow(t.Context(), `
+		SELECT assignment.state,instance.state,instance.termination_reason,command.state
+		FROM secondbox.assignments AS assignment
+		JOIN secondbox.instances AS instance ON instance.id=assignment.instance_id
+		JOIN secondbox.runner_commands AS command ON command.id=$2
+		WHERE assignment.id=$1`,
+		fence.AssignmentId,
+		commandID,
+	).Scan(
+		&assignmentState, &instanceState, &terminationReason, &commandState,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if assignmentState != "fenced" ||
+		instanceState != "stopped" ||
+		terminationReason != "startup_failed" ||
+		commandState != "acknowledged" {
+		t.Fatalf(
+			"startup-timeout fence assignment=%q instance=%q reason=%q command=%q",
+			assignmentState, instanceState, terminationReason, commandState,
+		)
+	}
+}
+
 func TestReadyAssignmentRecordsInitialGuestHeartbeatEvidence(t *testing.T) {
 	store := openRunnerControlDatabase(t)
 	now := time.Date(2026, 7, 29, 20, 45, 0, 0, time.UTC)
