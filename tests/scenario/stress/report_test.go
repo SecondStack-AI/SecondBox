@@ -62,7 +62,7 @@ func TestHumanReportNamesMeasuredAndConfiguredSaturation(t *testing.T) {
 		ConfiguredBinding: configuredLimit{Name: "guest IP capacity", Capacity: 4},
 		Results: []workloadResult{{
 			Workload: workloadSandboxCreate, Concurrency: 4, Attempts: 3,
-			Successes: 1, AdmissionRefusals: 2, ThroughputPerSecond: 1,
+			Successes: 1, QueuedAdmissions: 1, AdmissionRefusals: 1, ThroughputPerSecond: 1,
 			Latency:                latencyPercentiles{Count: 1, P50Milliseconds: &p50, P95Milliseconds: &p95, P99Milliseconds: &p99},
 			ConfiguredLimitReached: true, LatencyDegraded: true,
 		}},
@@ -77,7 +77,7 @@ func TestHumanReportNamesMeasuredAndConfiguredSaturation(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, required := range []string{
-		"guest IP capacity", "refusal+latency+configured-limit", "Dominant boot stage",
+		"guest IP capacity", "queue+refusal+latency+configured-limit", "Dominant boot stage",
 	} {
 		if !strings.Contains(output.String(), required) {
 			t.Fatalf("output missing %q:\n%s", required, output.String())
@@ -96,6 +96,11 @@ func TestStressResultGateAllowsOnlyAtOrAboveBindingRefusal(t *testing.T) {
 		Workload: workloadSandboxCreate, Concurrency: 2, AdmissionRefusals: 1,
 	}}, binding); err == nil {
 		t.Fatal("refusal below binding passed")
+	}
+	if err := verifyStressResults([]workloadResult{{
+		Workload: workloadSandboxCreate, Concurrency: 2, QueuedAdmissions: 1,
+	}}, binding); err == nil {
+		t.Fatal("queueing below binding passed")
 	}
 	if err := verifyStressResults([]workloadResult{{
 		Workload: workloadBufferedExec, Concurrency: 4, Failures: 1,

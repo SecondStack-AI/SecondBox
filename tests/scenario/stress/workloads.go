@@ -64,13 +64,11 @@ func (driver *stressDriver) runLevel(
 		samples.completedAt = time.Now()
 		return samples, nil
 	}
-	handles, setupSamples := driver.prepareWorkerSandboxes(ctx, workload, concurrency)
+	handles, queuedHandles, setupSamples := driver.prepareWorkerSandboxes(
+		ctx, workload, concurrency,
+	)
 	mergeSamples(&samples, setupSamples)
 	samples.startedAt = time.Now()
-	if len(handles) == 0 {
-		samples.completedAt = time.Now()
-		return samples, nil
-	}
 	deadline := samples.startedAt.Add(time.Duration(driver.config.DurationSeconds) * time.Second)
 	results := make(chan workerSamples, len(handles))
 	var workers sync.WaitGroup
@@ -94,12 +92,20 @@ func (driver *stressDriver) runLevel(
 			addError(&samples, err)
 		}
 	}
+	for index, handle := range queuedHandles {
+		if err := driver.deleteSandbox(
+			ctx, handle, fmt.Sprintf("stress-%s-%d-queued-cleanup", workload, index),
+		); err != nil {
+			addError(&samples, err)
+		}
+	}
 	return samples, nil
 }
 
 type workerSamples struct {
 	durations         []time.Duration
 	admissionRefusals int64
+	queuedAdmissions  int64
 	failures          int64
 	problemCounts     map[string]int64
 }
@@ -152,12 +158,16 @@ func (driver *stressDriver) prepareWorkerSandboxes(
 	ctx context.Context,
 	workload string,
 	concurrency int,
-) ([]*secondboxclient.SandboxHandle, workerSamples) {
+) (
+	[]*secondboxclient.SandboxHandle,
+	[]*secondboxclient.SandboxHandle,
+	workerSamples,
+) {
 	type setupResult struct {
 		handle *secondboxclient.SandboxHandle
 		err    error
 	}
-	runSetupWave := func(start int, count int) []setupResult {
+	runSetupWave := func(waveContext context.Context, start int, count int) []setupResult {
 		results := make(chan setupResult, count)
 		var workers sync.WaitGroup
 		for index := start; index < start+count; index++ {
@@ -165,7 +175,7 @@ func (driver *stressDriver) prepareWorkerSandboxes(
 			go func(workerIndex int) {
 				defer workers.Done()
 				key := fmt.Sprintf("stress-%s-%d-setup", workload, workerIndex)
-				handle, _, _, err := driver.createReadySandbox(ctx, key)
+				handle, _, _, err := driver.createReadySandbox(waveContext, key)
 				results <- setupResult{handle: handle, err: err}
 			}(index)
 		}
@@ -179,31 +189,37 @@ func (driver *stressDriver) prepareWorkerSandboxes(
 	}
 	binding := driver.config.configuredBinding(driver.guestCIDR)
 	saturationWave := min(concurrency, binding.Capacity)
-	results := runSetupWave(0, saturationWave)
+	results := runSetupWave(ctx, 0, saturationWave)
 	if saturationWave < concurrency {
+		probeContext, cancel := context.WithTimeout(
+			ctx, 4*time.Duration(driver.config.PollIntervalMilliseconds)*time.Millisecond,
+		)
+		defer cancel()
 		results = append(
 			results,
-			runSetupWave(saturationWave, concurrency-saturationWave)...,
+			runSetupWave(probeContext, saturationWave, concurrency-saturationWave)...,
 		)
 	}
 	handles := make([]*secondboxclient.SandboxHandle, 0, concurrency)
+	queuedHandles := make([]*secondboxclient.SandboxHandle, 0, concurrency)
 	samples := workerSamples{problemCounts: make(map[string]int64)}
-	failedIndex := 0
 	for _, result := range results {
 		if result.err == nil {
 			handles = append(handles, result.handle)
 			continue
 		}
+		if result.handle != nil && errors.Is(result.err, context.DeadlineExceeded) {
+			queuedHandles = append(queuedHandles, result.handle)
+			samples.queuedAdmissions++
+			samples.problemCounts["queued_at_runner_capacity"]++
+			continue
+		}
 		addWorkerError(&samples, result.err)
 		if result.handle != nil {
-			key := fmt.Sprintf("stress-%s-setup-failed-%d", workload, failedIndex)
-			failedIndex++
-			if err := driver.deleteSandbox(ctx, result.handle, key); err != nil {
-				addWorkerError(&samples, err)
-			}
+			queuedHandles = append(queuedHandles, result.handle)
 		}
 	}
-	return handles, samples
+	return handles, queuedHandles, samples
 }
 
 func (driver *stressDriver) runWorker(
@@ -587,6 +603,7 @@ func addError(samples *resultSamples, err error) {
 func mergeSamples(target *resultSamples, source workerSamples) {
 	target.durations = append(target.durations, source.durations...)
 	target.admissionRefusals += source.admissionRefusals
+	target.queuedAdmissions += source.queuedAdmissions
 	target.failures += source.failures
 	for code, count := range source.problemCounts {
 		target.problemCounts[code] += count

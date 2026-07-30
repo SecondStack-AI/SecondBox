@@ -48,6 +48,7 @@ type workloadResult struct {
 	Attempts               int64              `json:"attempts"`
 	Successes              int64              `json:"successes"`
 	AdmissionRefusals      int64              `json:"admissionRefusals"`
+	QueuedAdmissions       int64              `json:"queuedAdmissions"`
 	Failures               int64              `json:"failures"`
 	ThroughputPerSecond    float64            `json:"throughputPerSecond"`
 	Latency                latencyPercentiles `json:"latency"`
@@ -75,6 +76,7 @@ type resultSamples struct {
 	completedAt       time.Time
 	durations         []time.Duration
 	admissionRefusals int64
+	queuedAdmissions  int64
 	failures          int64
 	problemCounts     map[string]int64
 }
@@ -85,7 +87,7 @@ func (samples resultSamples) report(binding configuredLimit) workloadResult {
 		elapsed = 0
 	}
 	successes := int64(len(samples.durations))
-	attempts := successes + samples.admissionRefusals + samples.failures
+	attempts := successes + samples.admissionRefusals + samples.queuedAdmissions + samples.failures
 	throughput := 0.0
 	if elapsed > 0 {
 		throughput = float64(successes) / elapsed.Seconds()
@@ -94,7 +96,8 @@ func (samples resultSamples) report(binding configuredLimit) workloadResult {
 		Workload: samples.workload, Concurrency: samples.concurrency,
 		ElapsedMilliseconds: elapsed.Milliseconds(), Attempts: attempts,
 		Successes: successes, AdmissionRefusals: samples.admissionRefusals,
-		Failures: samples.failures, ThroughputPerSecond: throughput,
+		QueuedAdmissions: samples.queuedAdmissions,
+		Failures:         samples.failures, ThroughputPerSecond: throughput,
 		Latency:                durationPercentiles(samples.durations),
 		ProblemCounts:          samples.problemCounts,
 		ConfiguredLimitReached: samples.concurrency >= binding.Capacity,
@@ -219,14 +222,21 @@ func writeHumanReport(writer io.Writer, report stressReport) error {
 	table := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)
 	if _, err := fmt.Fprintln(
 		table,
-		"WORKLOAD\tCONCURRENCY\tATTEMPTS\tSUCCESS\tREFUSED\tFAILED\tOPS/S\tP50 MS\tP95 MS\tP99 MS\tSATURATION",
+		"WORKLOAD\tCONCURRENCY\tATTEMPTS\tSUCCESS\tQUEUED\tREFUSED\tFAILED\tOPS/S\tP50 MS\tP95 MS\tP99 MS\tSATURATION",
 	); err != nil {
 		return err
 	}
 	for _, result := range report.Results {
 		saturation := "none"
+		if result.QueuedAdmissions > 0 {
+			saturation = "queue"
+		}
 		if result.AdmissionRefusals > 0 {
-			saturation = "refusal"
+			if saturation == "none" {
+				saturation = "refusal"
+			} else {
+				saturation += "+refusal"
+			}
 		}
 		if result.LatencyDegraded {
 			if saturation == "none" {
@@ -244,9 +254,10 @@ func writeHumanReport(writer io.Writer, report stressReport) error {
 		}
 		if _, err := fmt.Fprintf(
 			table,
-			"%s\t%d\t%d\t%d\t%d\t%d\t%.2f\t%s\t%s\t%s\t%s\n",
+			"%s\t%d\t%d\t%d\t%d\t%d\t%d\t%.2f\t%s\t%s\t%s\t%s\n",
 			result.Workload, result.Concurrency, result.Attempts, result.Successes,
-			result.AdmissionRefusals, result.Failures, result.ThroughputPerSecond,
+			result.QueuedAdmissions, result.AdmissionRefusals,
+			result.Failures, result.ThroughputPerSecond,
 			optionalMilliseconds(result.Latency.P50Milliseconds),
 			optionalMilliseconds(result.Latency.P95Milliseconds),
 			optionalMilliseconds(result.Latency.P99Milliseconds),

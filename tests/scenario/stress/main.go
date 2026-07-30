@@ -141,6 +141,12 @@ func verifyStressResults(results []workloadResult, binding configuredLimit) erro
 				result.Workload, binding.Name, binding.Capacity,
 			)
 		}
+		if result.QueuedAdmissions > 0 && result.Concurrency < binding.Capacity {
+			return fmt.Errorf(
+				"SecondBox stress workload %s queued below configured binding %s=%d",
+				result.Workload, binding.Name, binding.Capacity,
+			)
+		}
 	}
 	return nil
 }
