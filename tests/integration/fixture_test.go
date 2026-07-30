@@ -128,6 +128,7 @@ func newControlPlaneService(
 ) *service.ControlPlaneService {
 	t.Helper()
 	controlPlane, err := service.NewControlPlaneService(service.ControlPlaneConfig{
+		BuiltInProfiles:       integrationBuiltInProfiles(t),
 		Store:                 databaseStore,
 		PlatformToken:         testPlatformToken,
 		DefaultSubjectQuota:   projectQuota,
@@ -139,6 +140,25 @@ func newControlPlaneService(
 		t.Fatal(err)
 	}
 	return controlPlane
+}
+
+// integrationBuiltInProfiles binds the built-in Profiles to the fixture pool and
+// fixture asset digests. SecondBox supplies no default binding, so every caller
+// that constructs a control plane states one.
+func integrationBuiltInProfiles(t *testing.T) []contracts.Profile {
+	t.Helper()
+	binding := service.BuiltInProfileBinding{
+		Pool:                  "default-pool",
+		RuntimeBundleDigest:   "sha256:" + strings.Repeat("a", 64),
+		ToolchainBundleDigest: "sha256:" + strings.Repeat("b", 64),
+	}
+	profiles, err := service.BuildBuiltInProfiles(service.BuiltInProfileBindings{
+		AgentCompartment: binding, CodingEnvironment: binding,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return profiles
 }
 
 func newSubject(t *testing.T) (tenantRef, subjectRef string) {

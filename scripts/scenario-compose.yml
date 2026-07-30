@@ -96,6 +96,12 @@ services:
       SECONDBOX_SCHEDULER_SERIALIZATION_RETRY_LIMIT: "3"
       SECONDBOX_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS: ${SECONDBOX_SCENARIO_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS:?SECONDBOX_SCENARIO_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS is required}
       SECONDBOX_SIGNED_ASSET_CATALOG_PATH: /opt/secondbox/signed-assets.json
+      SECONDBOX_BUILTIN_AGENT_COMPARTMENT_POOL: scenario-pool
+      SECONDBOX_BUILTIN_AGENT_COMPARTMENT_RUNTIME_BUNDLE_DIGEST: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+      SECONDBOX_BUILTIN_AGENT_COMPARTMENT_TOOLCHAIN_BUNDLE_DIGEST: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+      SECONDBOX_BUILTIN_CODING_ENVIRONMENT_POOL: scenario-pool
+      SECONDBOX_BUILTIN_CODING_ENVIRONMENT_RUNTIME_BUNDLE_DIGEST: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+      SECONDBOX_BUILTIN_CODING_ENVIRONMENT_TOOLCHAIN_BUNDLE_DIGEST: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
       SECONDBOX_OBJECT_STORE_ENDPOINT: http://object-store:9000
       SECONDBOX_OBJECT_STORE_REGION: us-east-1
       SECONDBOX_OBJECT_STORE_BUCKET: scenario
@@ -144,8 +150,7 @@ services:
     entrypoint: ["/usr/local/bin/secondbox-scenario-runner-entrypoint"]
     command: []
     restart: unless-stopped
-    stop_signal: SIGTERM
-    stop_grace_period: 15s
+    stop_grace_period: 45s
     depends_on:
       control-plane:
         condition: service_healthy

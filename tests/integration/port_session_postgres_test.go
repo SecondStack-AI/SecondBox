@@ -62,7 +62,8 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 	}
 	t.Cleanup(relay.Close)
 	portService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		Store: databaseStore, PlatformToken: testPlatformToken,
+		BuiltInProfiles: integrationBuiltInProfiles(t),
+		Store:           databaseStore, PlatformToken: testPlatformToken,
 		DefaultSubjectQuota: generousQuota(),
 		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,

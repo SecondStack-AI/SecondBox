@@ -106,9 +106,25 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	builtInProfiles, err := service.BuildBuiltInProfiles(service.BuiltInProfileBindings{
+		AgentCompartment: service.BuiltInProfileBinding{
+			Pool:                  processConfig.AgentCompartmentProfile.Pool,
+			RuntimeBundleDigest:   processConfig.AgentCompartmentProfile.RuntimeBundleDigest,
+			ToolchainBundleDigest: processConfig.AgentCompartmentProfile.ToolchainBundleDigest,
+		},
+		CodingEnvironment: service.BuiltInProfileBinding{
+			Pool:                  processConfig.CodingEnvironmentProfile.Pool,
+			RuntimeBundleDigest:   processConfig.CodingEnvironmentProfile.RuntimeBundleDigest,
+			ToolchainBundleDigest: processConfig.CodingEnvironmentProfile.ToolchainBundleDigest,
+		},
+	})
+	if err != nil {
+		return err
+	}
 	controlPlane, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store:               controlPlaneStore,
 		PlatformToken:       processConfig.PlatformToken,
+		BuiltInProfiles:     builtInProfiles,
 		DefaultSubjectQuota: processConfig.DefaultSubjectQuota,
 		Now:                 service.SystemClock, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,

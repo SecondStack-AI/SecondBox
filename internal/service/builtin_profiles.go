@@ -17,15 +17,43 @@ const (
 
 var builtInProfileCreatedAt = time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
 
-func defaultBuiltInProfiles() []contracts.Profile {
+// BuiltInProfileBinding supplies the deployment-specific RunnerPool and signed
+// execution assets that one built-in Profile pins. Everything else about a
+// built-in Profile is fixed by SecondBox.
+type BuiltInProfileBinding struct {
+	Pool                  string
+	RuntimeBundleDigest   string
+	ToolchainBundleDigest string
+}
+
+// BuiltInProfileBindings names the deployment values both built-in Profiles need.
+type BuiltInProfileBindings struct {
+	AgentCompartment  BuiltInProfileBinding
+	CodingEnvironment BuiltInProfileBinding
+}
+
+// BuildBuiltInProfiles applies deployment bindings to the fixed built-in specs.
+//
+// There is no default binding. A deployment that does not name a RunnerPool and
+// its verified bundle digests has no bootable built-in Profile, and saying so at
+// startup is better than admitting Sandboxes that can never be placed.
+func BuildBuiltInProfiles(bindings BuiltInProfileBindings) ([]contracts.Profile, error) {
+	profiles := builtInProfiles(bindings)
+	if _, err := resolveBuiltInProfiles(profiles); err != nil {
+		return nil, err
+	}
+	return profiles, nil
+}
+
+func builtInProfiles(bindings BuiltInProfileBindings) []contracts.Profile {
 	return []contracts.Profile{
 		newBuiltInProfile(
 			BuiltInProfileAgentCompartment,
 			"prv_builtin_agent_compartment_v1",
 			contracts.ProfileRevisionSpec{
-				Pool: "default-pool", Architecture: "amd64",
-				RuntimeBundleDigest:   "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-				ToolchainBundleDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+				Pool: bindings.AgentCompartment.Pool, Architecture: "amd64",
+				RuntimeBundleDigest:   bindings.AgentCompartment.RuntimeBundleDigest,
+				ToolchainBundleDigest: bindings.AgentCompartment.ToolchainBundleDigest,
 				Resources: contracts.ResourcePolicy{
 					CPUMillis: 1000, MemoryBytes: 1 << 30, WorkspaceBytes: 2 << 30,
 					ProcessLimit: 64, ConcurrentOperations: 4,
@@ -56,9 +84,9 @@ func defaultBuiltInProfiles() []contracts.Profile {
 			BuiltInProfileCodingEnvironment,
 			"prv_builtin_coding_environment_v1",
 			contracts.ProfileRevisionSpec{
-				Pool: "default-pool", Architecture: "amd64",
-				RuntimeBundleDigest:   "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-				ToolchainBundleDigest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+				Pool: bindings.CodingEnvironment.Pool, Architecture: "amd64",
+				RuntimeBundleDigest:   bindings.CodingEnvironment.RuntimeBundleDigest,
+				ToolchainBundleDigest: bindings.CodingEnvironment.ToolchainBundleDigest,
 				Resources: contracts.ResourcePolicy{
 					CPUMillis: 4000, MemoryBytes: 8 << 30, WorkspaceBytes: 50 << 30,
 					ProcessLimit: 512, ConcurrentOperations: 16,
@@ -106,12 +134,11 @@ func newBuiltInProfile(
 }
 
 func resolveBuiltInProfiles(configured []contracts.Profile) (map[string]contracts.Profile, error) {
-	profiles := configured
-	if profiles == nil {
-		profiles = defaultBuiltInProfiles()
+	if len(configured) == 0 {
+		return nil, errors.New("SecondBox built-in Profiles must be configured explicitly")
 	}
-	resolved := make(map[string]contracts.Profile, len(profiles))
-	for _, profile := range profiles {
+	resolved := make(map[string]contracts.Profile, len(configured))
+	for _, profile := range configured {
 		if profile.Name != BuiltInProfileAgentCompartment &&
 			profile.Name != BuiltInProfileCodingEnvironment {
 			return nil, fmt.Errorf("SecondBox built-in Profile name %q is not reserved", profile.Name)

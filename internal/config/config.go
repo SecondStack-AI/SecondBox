@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -59,6 +60,17 @@ type Config struct {
 	RunnerProtocolMaximum            uint32
 	RunnerEnabledFeatures            []string
 	DefaultSubjectQuota              contracts.QuotaLimits
+	AgentCompartmentProfile          BuiltInProfileBinding
+	CodingEnvironmentProfile         BuiltInProfileBinding
+}
+
+// BuiltInProfileBinding is the deployment-specific RunnerPool and signed asset
+// pair that one built-in Profile pins. SecondBox supplies no default for any of
+// these values; a deployment names its own pool and its own verified bundles.
+type BuiltInProfileBinding struct {
+	Pool                  string
+	RuntimeBundleDigest   string
+	ToolchainBundleDigest string
 }
 
 // ApplicationAuthority configures one fixed application identity and its allowed capabilities.
@@ -254,6 +266,14 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	agentCompartmentProfile, err := requiredBuiltInProfileBinding("AGENT_COMPARTMENT")
+	if err != nil {
+		return Config{}, err
+	}
+	codingEnvironmentProfile, err := requiredBuiltInProfileBinding("CODING_ENVIRONMENT")
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
 		ListenAddress: listenAddress, PublicBaseURL: publicBaseURL, RunnerListenAddress: runnerListenAddress,
 		DatabaseURL: databaseURL, LogPath: logPath,
@@ -288,10 +308,50 @@ func FromEnvironment() (Config, error) {
 		ObjectStoreTempDirectory:    objectStoreTempDirectory,
 		ObjectStoreMaxObjectBytes:   objectStoreMaxObjectBytes,
 		RunnerProtocolMinimum:       runnerProtocolMinimum, RunnerProtocolMaximum: runnerProtocolMaximum,
-		RunnerEnabledFeatures: runnerEnabledFeatures,
-		DefaultSubjectQuota:   subjectQuota,
+		RunnerEnabledFeatures:    runnerEnabledFeatures,
+		DefaultSubjectQuota:      subjectQuota,
+		AgentCompartmentProfile:  agentCompartmentProfile,
+		CodingEnvironmentProfile: codingEnvironmentProfile,
 	}, nil
 }
+
+// requiredBuiltInProfileBinding reads the RunnerPool and signed bundle digests
+// one built-in Profile pins. Every value is required and has no default.
+func requiredBuiltInProfileBinding(profile string) (BuiltInProfileBinding, error) {
+	prefix := "SECONDBOX_BUILTIN_" + profile + "_"
+	pool, err := requiredString(prefix + "POOL")
+	if err != nil {
+		return BuiltInProfileBinding{}, err
+	}
+	runtimeDigest, err := requiredDigest(prefix + "RUNTIME_BUNDLE_DIGEST")
+	if err != nil {
+		return BuiltInProfileBinding{}, err
+	}
+	toolchainDigest, err := requiredDigest(prefix + "TOOLCHAIN_BUNDLE_DIGEST")
+	if err != nil {
+		return BuiltInProfileBinding{}, err
+	}
+	return BuiltInProfileBinding{
+		Pool:                  pool,
+		RuntimeBundleDigest:   runtimeDigest,
+		ToolchainBundleDigest: toolchainDigest,
+	}, nil
+}
+
+func requiredDigest(name string) (string, error) {
+	value, err := requiredString(name)
+	if err != nil {
+		return "", err
+	}
+	if !sha256DigestPattern.MatchString(value) {
+		return "", fmt.Errorf(
+			"SecondBox environment variable %s must be a sha256:<64 hex characters> digest", name,
+		)
+	}
+	return value, nil
+}
+
+var sha256DigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 func requiredApplicationAuthorities() ([]ApplicationAuthority, error) {
 	raw, err := requiredString("SECONDBOX_APPLICATION_AUTHORITIES_JSON")
