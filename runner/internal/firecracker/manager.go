@@ -1385,15 +1385,35 @@ func (m *Manager) stopInstance(ctx context.Context, inst *instance, removeFiles 
 	inst.explicitStop = true
 	m.mu.Unlock()
 	var stopErr error
+	// Teardown had no stage attribution, so a slow stop could not be explained
+	// without instrumenting the runner by hand. Record the same shape as the
+	// cold-start timer: each phase, and the cumulative elapsed time.
+	teardownStartedAt := time.Now()
 	// Quiesce the Workspace filesystem before terminating the VMM. A frozen
 	// filesystem has flushed its dirty pages and is consistent on disk, so the
 	// VMM can be terminated immediately. Without this the runner sends SIGTERM
 	// and waits out the escalation grace period on every stop, because the VMM
 	// does not exit on SIGTERM; that grace period dominated stop latency.
 	quiesced := m.quiesceWorkspace(ctx, inst)
+	freezeMs := time.Since(teardownStartedAt).Milliseconds()
+	protocolStartedAt := time.Now()
 	if err := inst.closeGuestProtocol(); err != nil {
 		stopErr = errors.Join(stopErr, fmt.Errorf("close guest protocol: %w", err))
 	}
+	protocolMs := time.Since(protocolStartedAt).Milliseconds()
+	terminateStartedAt := time.Now()
+	defer func() {
+		slog.Info(
+			"microVM teardown timing",
+			"instance", inst.id,
+			"sandbox", inst.sandboxID,
+			"quiesced", quiesced,
+			"freezeMs", freezeMs,
+			"protocolCloseMs", protocolMs,
+			"terminateMs", time.Since(terminateStartedAt).Milliseconds(),
+			"totalMs", time.Since(teardownStartedAt).Milliseconds(),
+		)
+	}()
 	if inst.jailedProcess {
 		signalInstance := signalFirecrackerByID
 		if m.signalInstance != nil {
