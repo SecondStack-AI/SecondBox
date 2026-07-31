@@ -6,20 +6,41 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"sync"
 	"syscall"
 	"testing"
 )
 
 type fakeFormatter struct {
-	uuids []string
-	err   error
+	mu       sync.Mutex
+	uuids    []string
+	setUUIDs []string
+	err      error
+	setErr   error
 }
 
 func (formatter *fakeFormatter) Format(_ context.Context, path string, uuid string) error {
+	formatter.mu.Lock()
+	defer formatter.mu.Unlock()
 	if formatter.err != nil {
 		return formatter.err
 	}
 	formatter.uuids = append(formatter.uuids, uuid)
+	return writeFakeExt4Identity(path, uuid)
+}
+
+func (formatter *fakeFormatter) SetUUID(_ context.Context, path string, uuid string) error {
+	formatter.mu.Lock()
+	defer formatter.mu.Unlock()
+	if formatter.setErr != nil {
+		return formatter.setErr
+	}
+	formatter.setUUIDs = append(formatter.setUUIDs, uuid)
+	return writeFakeExt4Identity(path, uuid)
+}
+
+func writeFakeExt4Identity(path string, uuid string) error {
 	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		return err
@@ -28,10 +49,18 @@ func (formatter *fakeFormatter) Format(_ context.Context, path string, uuid stri
 	if _, err := file.WriteAt([]byte{0x53, 0xef}, ext4MagicOffset); err != nil {
 		return err
 	}
+	decoded, err := decodeUUID(uuid)
+	if err != nil {
+		return err
+	}
+	if _, err := file.WriteAt(decoded, ext4UUIDOffset); err != nil {
+		return err
+	}
 	return file.Sync()
 }
 
 type fakeCloner struct {
+	mu    sync.Mutex
 	calls int
 	err   error
 }
@@ -44,6 +73,8 @@ func testMutation(operationID string, workspaceID string) Mutation {
 }
 
 func (cloner *fakeCloner) Clone(destination *os.File, source *os.File) error {
+	cloner.mu.Lock()
+	defer cloner.mu.Unlock()
 	cloner.calls++
 	if cloner.err != nil {
 		return cloner.err
@@ -69,6 +100,165 @@ func (cloner *fakeCloner) Clone(destination *os.File, source *os.File) error {
 		}
 	}
 	return nil
+}
+
+func TestWorkspaceTemplatePrewarmReusesOneImmutableFilesystem(t *testing.T) {
+	const capacity = int64(minimumExt4Bytes)
+	root := t.TempDir()
+	cloner := &fakeCloner{}
+	formatter := &fakeFormatter{}
+	store, err := newStore(Config{
+		Root:                  root,
+		TemplateCapacityBytes: capacity,
+	}, cloner, formatter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.initialize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	templatePath := store.ext4TemplatePath(capacity)
+	if err := validateExt4Template(
+		templatePath,
+		capacity,
+		deterministicTemplateUUID(capacity),
+	); err != nil {
+		t.Fatalf("validate prewarmed template: %v", err)
+	}
+	if len(formatter.uuids) != 1 || len(formatter.setUUIDs) != 0 {
+		t.Fatalf("prewarm formatter activity = format %#v, rewrite %#v", formatter.uuids, formatter.setUUIDs)
+	}
+
+	for index, workspaceID := range []string{"workspace-template-a", "workspace-template-b"} {
+		if _, err := store.Create(t.Context(), CreateWorkspaceRequest{
+			Mutation:      testMutation("operation-template-"+strconv.Itoa(index), workspaceID),
+			CapacityBytes: capacity,
+		}); err != nil {
+			t.Fatalf("create %s: %v", workspaceID, err)
+		}
+		if err := store.validateImage(
+			workspaceID,
+			generationImageName(1, "create"),
+			capacity,
+		); err != nil {
+			t.Fatalf("validate %s identity: %v", workspaceID, err)
+		}
+	}
+	if len(formatter.uuids) != 1 || len(formatter.setUUIDs) != 2 {
+		t.Fatalf("template reuse formatter activity = format %#v, rewrite %#v", formatter.uuids, formatter.setUUIDs)
+	}
+	if cloner.calls != 3 {
+		t.Fatalf("clone calls after probe and two template children = %d, want 3", cloner.calls)
+	}
+
+	first, err := store.Open(t.Context(), "workspace-template-a", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Image().WriteAt([]byte{0x7f}, capacity-1); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Open(t.Context(), "workspace-template-b", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual := []byte{0xff}
+	if _, err := second.Image().ReadAt(actual, capacity-1); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if actual[0] != 0 {
+		t.Fatalf("template children share mutations: got %#x", actual[0])
+	}
+	if err := validateExt4Template(
+		templatePath,
+		capacity,
+		deterministicTemplateUUID(capacity),
+	); err != nil {
+		t.Fatalf("template changed after child UUID rewrites: %v", err)
+	}
+
+	restarted, err := newStore(Config{
+		Root:                  root,
+		TemplateCapacityBytes: capacity,
+	}, cloner, formatter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.initialize(t.Context()); err != nil {
+		t.Fatalf("reuse template after restart: %v", err)
+	}
+	if len(formatter.uuids) != 1 {
+		t.Fatalf("restart reformatted template: %#v", formatter.uuids)
+	}
+
+	if err := os.Chmod(templatePath, writableImageMode); err != nil {
+		t.Fatal(err)
+	}
+	template, err := os.OpenFile(templatePath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := template.WriteAt(make([]byte, 16), ext4UUIDOffset); err != nil {
+		t.Fatal(err)
+	}
+	if err := template.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := template.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(templatePath, snapshotImageMode); err != nil {
+		t.Fatal(err)
+	}
+	corruptRestart, err := newStore(Config{
+		Root:                  root,
+		TemplateCapacityBytes: capacity,
+	}, cloner, formatter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := corruptRestart.initialize(t.Context()); !errors.Is(err, ErrCorruptState) {
+		t.Fatalf("corrupt template restart error = %v", err)
+	}
+}
+
+func TestConcurrentWorkspaceCreatesCoalesceLazyTemplateGeneration(t *testing.T) {
+	store, cloner, formatter := newFakeStore(t)
+	const createCount = 8
+	var wait sync.WaitGroup
+	errorsByIndex := make([]error, createCount)
+	for index := range createCount {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			workspaceID := "workspace-concurrent-" + strconv.Itoa(index)
+			_, errorsByIndex[index] = store.Create(t.Context(), CreateWorkspaceRequest{
+				Mutation:      testMutation("operation-concurrent-"+strconv.Itoa(index), workspaceID),
+				CapacityBytes: minimumExt4Bytes,
+			})
+		}()
+	}
+	wait.Wait()
+	for index, err := range errorsByIndex {
+		if err != nil {
+			t.Fatalf("concurrent create %d: %v", index, err)
+		}
+	}
+	if len(formatter.uuids) != 1 {
+		t.Fatalf("concurrent creates formatted %d templates, want 1", len(formatter.uuids))
+	}
+	if len(formatter.setUUIDs) != createCount {
+		t.Fatalf("concurrent creates rewrote %d UUIDs, want %d", len(formatter.setUUIDs), createCount)
+	}
+	if cloner.calls != createCount+1 {
+		t.Fatalf("concurrent clone calls = %d, want %d", cloner.calls, createCount+1)
+	}
 }
 
 func newFakeStore(t *testing.T) (*Store, *fakeCloner, *fakeFormatter) {
@@ -103,8 +293,11 @@ func TestWorkspaceLifecycleIsIdempotentAndCrashRecoverable(t *testing.T) {
 	if created.Generation != 1 || created.CapacityBytes != capacity {
 		t.Fatalf("create receipt = %#v", created)
 	}
-	if len(formatter.uuids) != 1 || formatter.uuids[0] != deterministicUUID(workspaceID) {
+	if len(formatter.uuids) != 1 || formatter.uuids[0] != deterministicTemplateUUID(capacity) {
 		t.Fatalf("formatter UUIDs = %#v", formatter.uuids)
+	}
+	if len(formatter.setUUIDs) != 1 || formatter.setUUIDs[0] != deterministicUUID(workspaceID) {
+		t.Fatalf("rewritten UUIDs = %#v", formatter.setUUIDs)
 	}
 	imageInfo, err := os.Stat(store.versionPath(workspaceID, generationImageName(1, "create")))
 	if err != nil {
@@ -206,9 +399,9 @@ func TestWorkspaceLifecycleIsIdempotentAndCrashRecoverable(t *testing.T) {
 	if _, err := store.PrepareRestore(t.Context(), prepare); err != nil {
 		t.Fatalf("prepare restore: %v", err)
 	}
-	if cloner.calls != 3 {
+	if cloner.calls != 4 {
 		t.Fatalf(
-			"WorkspaceStore clone calls after probe, Snapshot, and restore = %d, want 3",
+			"WorkspaceStore clone calls after probe, template, Snapshot, and restore = %d, want 4",
 			cloner.calls,
 		)
 	}
@@ -408,8 +601,12 @@ func TestCloneWorkspaceFromSnapshotCreatesIndependentGenerationOne(t *testing.T)
 	if len(formatter.uuids) != 1 {
 		t.Fatalf("clone formatted a second filesystem: UUIDs = %#v", formatter.uuids)
 	}
-	if cloner.calls != 3 {
-		t.Fatalf("clone calls after probe, Snapshot, and target clone = %d", cloner.calls)
+	if len(formatter.setUUIDs) != 2 ||
+		formatter.setUUIDs[1] != deterministicUUID(targetWorkspaceID) {
+		t.Fatalf("clone UUID rewrites = %#v", formatter.setUUIDs)
+	}
+	if cloner.calls != 4 {
+		t.Fatalf("clone calls after probe, template, Snapshot, and target clone = %d", cloner.calls)
 	}
 }
 
@@ -658,7 +855,7 @@ func TestRunnerRestartReplaysEveryLocalWorkspaceOperation(t *testing.T) {
 }
 
 func TestWorkspaceStoreRejectsPathsUnsupportedCloneAndDiskFull(t *testing.T) {
-	store, cloner, _ := newFakeStore(t)
+	store, cloner, formatter := newFakeStore(t)
 	for _, id := range []string{"", ".", "..", "../escape", "nested/path", "with space"} {
 		if _, err := store.Create(t.Context(), CreateWorkspaceRequest{
 			Mutation:      testMutation("operation", id),
@@ -666,6 +863,24 @@ func TestWorkspaceStoreRejectsPathsUnsupportedCloneAndDiskFull(t *testing.T) {
 		}); !errors.Is(err, ErrInvalidID) {
 			t.Fatalf("Workspace ID %q error = %v", id, err)
 		}
+	}
+	uuidFailure := CreateWorkspaceRequest{
+		Mutation:      testMutation("uuid-failure", "workspace-uuid-failure"),
+		CapacityBytes: minimumExt4Bytes,
+	}
+	formatter.setErr = io.ErrUnexpectedEOF
+	if _, err := store.Create(t.Context(), uuidFailure); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("UUID rewrite error = %v", err)
+	}
+	if _, err := os.Stat(store.versionPath(
+		uuidFailure.WorkspaceID,
+		generationImageName(1, "create"),
+	)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed UUID rewrite published a Workspace image: %v", err)
+	}
+	formatter.setErr = nil
+	if _, err := store.Create(t.Context(), uuidFailure); err != nil {
+		t.Fatalf("retry UUID rewrite: %v", err)
 	}
 	create := CreateWorkspaceRequest{
 		Mutation:      testMutation("create", "workspace"),

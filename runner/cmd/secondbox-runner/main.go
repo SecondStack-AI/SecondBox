@@ -77,7 +77,10 @@ func run(arguments []string) (runErr error) {
 	}
 	workspaceStore, err := workspacestore.New(
 		context.Background(),
-		workspacestore.Config{Root: firecrackerConfig.RunnerWorkspaceRoot},
+		workspacestore.Config{
+			Root:                  firecrackerConfig.RunnerWorkspaceRoot,
+			TemplateCapacityBytes: int64(firecrackerConfig.MicroVMWorkspaceSizeMiB) << 20,
+		},
 	)
 	if err != nil {
 		return fmt.Errorf("initialize SecondBox runner WorkspaceStore: %w", err)

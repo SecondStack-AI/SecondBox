@@ -47,7 +47,10 @@ func TestSmokeBootFirecracker(t *testing.T) {
 	ctx := context.Background()
 	workspaceStore, err := workspacestore.New(
 		ctx,
-		workspacestore.Config{Root: cfg.RunnerWorkspaceRoot},
+		workspacestore.Config{
+			Root:                  cfg.RunnerWorkspaceRoot,
+			TemplateCapacityBytes: int64(cfg.MicroVMWorkspaceSizeMiB) << 20,
+		},
 	)
 	if err != nil {
 		t.Fatalf("new smoke WorkspaceStore: %v", err)
@@ -512,7 +515,10 @@ func TestSmokeRunnerLocalSnapshotRestore(t *testing.T) {
 	ctx := context.Background()
 	workspaceStore, err := workspacestore.New(
 		ctx,
-		workspacestore.Config{Root: filepath.Join(workDir, "durable-workspaces")},
+		workspacestore.Config{
+			Root:                  filepath.Join(workDir, "durable-workspaces"),
+			TemplateCapacityBytes: int64(cfg.MicroVMWorkspaceSizeMiB) << 20,
+		},
 	)
 	if err != nil {
 		t.Fatalf("new qualified WorkspaceStore: %v", err)
@@ -759,7 +765,10 @@ func TestSmokeRunnerLocalLifecycleStopPaths(t *testing.T) {
 	ctx := context.Background()
 	workspaceStore, err := workspacestore.New(
 		ctx,
-		workspacestore.Config{Root: filepath.Join(workDir, "durable-workspaces")},
+		workspacestore.Config{
+			Root:                  filepath.Join(workDir, "durable-workspaces"),
+			TemplateCapacityBytes: int64(cfg.MicroVMWorkspaceSizeMiB) << 20,
+		},
 	)
 	if err != nil {
 		t.Fatalf("new lifecycle qualification WorkspaceStore: %v", err)

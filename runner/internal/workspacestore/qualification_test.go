@@ -29,7 +29,10 @@ func TestQualifiedFilesystemProvidesRealCopyOnWriteIsolation(t *testing.T) {
 			}
 		})
 	}
-	store, err := New(t.Context(), Config{Root: root})
+	store, err := New(t.Context(), Config{
+		Root:                  root,
+		TemplateCapacityBytes: minimumExt4Bytes,
+	})
 	if err != nil {
 		if errors.Is(err, ErrStorageIncompatible) {
 			t.Skipf("qualification filesystem does not support FICLONE: %v", err)
@@ -209,11 +212,17 @@ func TestQualifiedTwoRunnerRootsAreDistinctAndIsolated(t *testing.T) {
 			t.Errorf("remove runner B qualification root: %v", err)
 		}
 	})
-	storeA, err := New(t.Context(), Config{Root: rootA})
+	storeA, err := New(t.Context(), Config{
+		Root:                  rootA,
+		TemplateCapacityBytes: minimumExt4Bytes,
+	})
 	if err != nil {
 		t.Fatalf("initialize runner %q WorkspaceStore: %v", runnerA, err)
 	}
-	storeB, err := New(t.Context(), Config{Root: rootB})
+	storeB, err := New(t.Context(), Config{
+		Root:                  rootB,
+		TemplateCapacityBytes: minimumExt4Bytes,
+	})
 	if err != nil {
 		t.Fatalf("initialize runner %q WorkspaceStore: %v", runnerB, err)
 	}
