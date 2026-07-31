@@ -220,7 +220,8 @@ func (store *PostgresStore) scheduleOnce(
 		CapabilitySnapshot: capabilitySnapshot, ResolvedArtifacts: request.ResolvedArtifacts,
 		ReleaseProof: map[string]string{}, RetryLimit: request.RetryLimit,
 		OperationDeadline: request.OperationDeadline.UTC(), ClaimExpiresAt: request.ClaimExpiresAt.UTC(),
-		Revision: 1, CreatedAt: now, UpdatedAt: now,
+		NextReconcileAt: request.OperationDeadline.UTC(),
+		Revision:        1, CreatedAt: now, UpdatedAt: now,
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.instances (
@@ -239,7 +240,7 @@ func (store *PostgresStore) scheduleOnce(
 			operation_deadline,claim_expires_at,reconcile_owner,reconcile_claim_expires_at,
 			next_reconcile_at,revision,created_at,updated_at
 		) VALUES (
-			$1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,$11,'{}','',0,$12,$13,$14,'',$15,$15,1,$15,$15
+			$1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,$11,'{}','',0,$12,$13,$14,'',$15,$13,1,$15,$15
 		)`,
 		assignment.ID, assignment.SandboxID, assignment.InstanceID, assignment.RunnerID,
 		assignment.ProfileRevisionID, assignment.BackendKind, assignment.Generation,

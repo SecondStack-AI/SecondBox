@@ -564,7 +564,7 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 		sandbox.Profile, sandbox.ProfileRevisionID, sandbox.State,
 		sandbox.DesiredState, sandbox.Generation, sandbox.Workspace.ID, "", metadataJSON,
 		compatibilityJSON, sandbox.LastActivityAt, sandbox.Revision, "", "", "", initialLifecycleIntent,
-		"", nil, sandbox.UpdatedAt, 0, 8, sandbox.CreatedAt, sandbox.UpdatedAt, sandbox.DeletedAt,
+		"", nil, nil, 0, 8, sandbox.CreatedAt, sandbox.UpdatedAt, sandbox.DeletedAt,
 	); err != nil {
 		if isSandboxNameConflict(err) {
 			return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrSandboxNameConflict

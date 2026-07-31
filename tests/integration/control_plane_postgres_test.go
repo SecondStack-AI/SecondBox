@@ -102,17 +102,25 @@ func TestConcurrentSandboxCreationIsIdempotentAndPinsProfileRevision(t *testing.
 	}
 	var homeRunnerID, workspaceState string
 	var logicalCapacity int64
+	var nextReconcileAt *time.Time
 	privatePool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(privatePool.Close)
 	if err := privatePool.QueryRow(t.Context(), `
-		SELECT workspace.home_runner_id,workspace.state,workspace.logical_capacity_bytes
+		SELECT workspace.home_runner_id,workspace.state,workspace.logical_capacity_bytes,
+		       sandbox.next_reconcile_at
 		FROM secondbox.workspaces AS workspace
+		JOIN secondbox.sandboxes AS sandbox ON sandbox.id=workspace.sandbox_id
 		WHERE workspace.sandbox_id=$1`,
 		sandboxID,
-	).Scan(&homeRunnerID, &workspaceState, &logicalCapacity); err != nil {
+	).Scan(
+		&homeRunnerID,
+		&workspaceState,
+		&logicalCapacity,
+		&nextReconcileAt,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if homeRunnerID == "" || workspaceState != "creating" ||
@@ -121,6 +129,9 @@ func TestConcurrentSandboxCreationIsIdempotentAndPinsProfileRevision(t *testing.
 			"private home Workspace = runner %q state %q capacity %d",
 			homeRunnerID, workspaceState, logicalCapacity,
 		)
+	}
+	if nextReconcileAt != nil {
+		t.Fatalf("creating Sandbox next reconcile = %v, want no speculative work", nextReconcileAt)
 	}
 	if _, _, err := controlPlane.CreateSandbox(t.Context(), principal, "same-request", contracts.CreateSandboxRequest{
 		Profile: profile.Name, Metadata: map[string]string{"purpose": "different-payload"},

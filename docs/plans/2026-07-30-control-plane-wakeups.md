@@ -33,6 +33,12 @@ One dedicated PostgreSQL connection per control-plane process listens for those 
 
 Consumers drain until the authoritative query reports no work. Buffered wakeups coalesce safely. A command burst larger than the delivery batch continues immediately until empty rather than waiting for another notification. The existing timers still wake every configured poll interval, so notification loss, listener restart, future `next_reconcile_at` deadlines, and PostgreSQL failover do not strand work.
 
+New Workspace-backed Sandboxes are not due until their local Workspace result
+arrives, and new Assignments are first due at their operation deadline. Their
+inserts therefore do not produce speculative worker work. A committed Workspace
+result, Assignment failure, retry, deadline, or runner-loss transition moves the
+corresponding durable deadline to now and emits the wakeup.
+
 The notification listener is a required process component. Invalid payloads or listener failure stop the control plane explicitly; they are not logged and swallowed.
 
 ## Attribution

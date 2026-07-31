@@ -258,6 +258,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 			result.assignment.ProfileRevisionID != profileRevisionID ||
 			result.assignment.BackendKind != "firecracker" ||
 			result.assignment.Generation != 1 ||
+			!result.assignment.NextReconcileAt.Equal(now.Add(2*time.Minute)) ||
 			len(result.assignment.FencingToken) != 32 {
 			t.Fatalf("replica returned divergent durable Assignment: %#v", result.assignment)
 		}

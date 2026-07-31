@@ -1681,9 +1681,12 @@ func TestFailedStartEvidenceRetainsDurableWorkspaceMutationForReconciliation(t *
 				t.Fatal(err)
 			}
 			var assignmentState, mutationKind, mutationState, commandState string
+			var nextReconcileAt, claimExpiresAt time.Time
+			var reconcileOwner string
 			if err := store.pool.QueryRow(t.Context(), `
 				SELECT assignment.state,workspace.mutation_kind,workspace.mutation_state,
-				       command.state
+				       command.state,assignment.next_reconcile_at,
+				       assignment.reconcile_owner,assignment.reconcile_claim_expires_at
 				FROM secondbox.assignments AS assignment
 				JOIN secondbox.sandboxes AS sandbox ON sandbox.id=assignment.sandbox_id
 				JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
@@ -1696,16 +1699,23 @@ func TestFailedStartEvidenceRetainsDurableWorkspaceMutationForReconciliation(t *
 				&mutationKind,
 				&mutationState,
 				&commandState,
+				&nextReconcileAt,
+				&reconcileOwner,
+				&claimExpiresAt,
 			); err != nil {
 				t.Fatal(err)
 			}
 			if assignmentState != "failed" ||
 				mutationKind != "start" ||
 				mutationState != "assigned" ||
-				commandState != "acknowledged" {
+				commandState != "acknowledged" ||
+				!nextReconcileAt.Equal(now.Add(time.Second)) ||
+				reconcileOwner != "" ||
+				!claimExpiresAt.Equal(now.Add(time.Second)) {
 				t.Fatalf(
-					"failed start assignment=%q mutation=%q/%q command=%q",
+					"failed start assignment=%q mutation=%q/%q command=%q next=%s owner=%q claim=%s",
 					assignmentState, mutationKind, mutationState, commandState,
+					nextReconcileAt, reconcileOwner, claimExpiresAt,
 				)
 			}
 		})

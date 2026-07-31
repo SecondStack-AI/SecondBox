@@ -3247,7 +3247,15 @@ func recordAssignmentEvent(
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE secondbox.assignments
-			SET state=$2,failure_class=$3,revision=revision+1,updated_at=$4 WHERE id=$1`,
+			SET state=$2,failure_class=$3,
+			    next_reconcile_at=CASE WHEN $2='failed' THEN $4 ELSE next_reconcile_at END,
+			    reconcile_owner=CASE WHEN $2='failed' THEN '' ELSE reconcile_owner END,
+			    reconcile_claim_expires_at=CASE
+			      WHEN $2='failed' THEN $4
+			      ELSE reconcile_claim_expires_at
+			    END,
+			    revision=revision+1,updated_at=$4
+			WHERE id=$1`,
 			ack.Fence.AssignmentId, nextState, failureClass, now,
 		); err != nil {
 			return fmt.Errorf("SecondBox runner AssignmentAck update: %w", err)
@@ -3426,7 +3434,10 @@ func recordAssignmentEvent(
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE secondbox.assignments
-			SET state='failed',failure_class=$2,revision=revision+1,updated_at=$3 WHERE id=$1`,
+			SET state='failed',failure_class=$2,next_reconcile_at=$3,
+			    reconcile_owner='',reconcile_claim_expires_at=$3,
+			    revision=revision+1,updated_at=$3
+			WHERE id=$1`,
 			result.Fence.AssignmentId, assignmentTerminalFailureClass(result.Terminal), now,
 		); err != nil {
 			return fmt.Errorf("SecondBox runner failed AssignmentResult update: %w", err)
