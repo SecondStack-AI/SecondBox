@@ -285,6 +285,116 @@ func TestRunnerCommandBatchClaimsAndPersistsOrderedDelivery(t *testing.T) {
 	}
 }
 
+func TestRunnerCommandClaimHoldsAssignmentsBehindWorkspaceCreation(t *testing.T) {
+	store := openRunnerControlDatabase(t)
+	now := time.Date(2026, 7, 29, 18, 38, 0, 0, time.UTC)
+	assignmentPayload, err := proto.Marshal(&runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_Assignment{
+			Assignment: &runnerv1.AssignmentCommand{},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(t.Context(), `
+		INSERT INTO secondbox.workspaces (
+			id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,
+			logical_capacity_bytes,generation,mutation_kind,mutation_id,
+			mutation_effect_id,mutation_operation_id,mutation_expected_generation,
+			mutation_target_generation,mutation_state,local_receipt_json,
+			created_at,updated_at
+		) VALUES (
+			'workspace-command-barrier','tenant','subject','sandbox-command-barrier',
+			'runner-home','creating',8589934592,1,'create','mutation-command-barrier',
+			'effect-command-barrier','operation-command-barrier',1,1,'queued','{}',$1,$1
+		);
+		INSERT INTO secondbox.runner_commands (
+			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
+			delivery_count,created_at,updated_at,delivered_at
+		) VALUES (
+			'assignment-command-barrier','runner-home','assignment-command-barrier',
+			'assignment',$2,'pending','',0,$1,$1,NULL
+		)`,
+		pgx.QueryExecModeSimpleProtocol,
+		now,
+		assignmentPayload,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.OpenConnection(
+		t.Context(),
+		RunnerIdentity{
+			RunnerID:         "runner-home",
+			CredentialSerial: "credential-command-barrier",
+		},
+		"connection-command-barrier",
+		1,
+		now.Add(time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	deliveries, err := store.ClaimCommands(
+		t.Context(),
+		"runner-home",
+		"connection-command-barrier",
+		16,
+		now.Add(2*time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deliveries) != 1 ||
+		deliveries[0].ID != "workspace-reconcile-connection-command-barrier" {
+		t.Fatalf("commands before Workspace readiness = %#v", deliveries)
+	}
+	deliveries[0].DeliveredAt = now.Add(2 * time.Second)
+	if err := store.MarkCommandsDelivered(
+		t.Context(),
+		deliveries,
+		"connection-command-barrier",
+	); err != nil {
+		t.Fatal(err)
+	}
+	deliveries, err = store.ClaimCommands(
+		t.Context(),
+		"runner-home",
+		"connection-command-barrier",
+		16,
+		now.Add(3*time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deliveries) != 0 {
+		t.Fatalf("commands while Workspace is creating = %#v", deliveries)
+	}
+	if _, err := store.pool.Exec(t.Context(), `
+		UPDATE secondbox.workspaces
+		SET state='ready',updated_at=$2
+		WHERE id=$1`,
+		"workspace-command-barrier",
+		now.Add(4*time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	deliveries, err = store.ClaimCommands(
+		t.Context(),
+		"runner-home",
+		"connection-command-barrier",
+		16,
+		now.Add(5*time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deliveries) != 1 ||
+		deliveries[0].ID != "assignment-command-barrier" ||
+		deliveries[0].Message.GetAssignment() == nil ||
+		deliveries[0].Message.GetAssignment().Sequence != 2 {
+		t.Fatalf("commands after Workspace readiness = %#v", deliveries)
+	}
+}
+
 func TestReturningRunnerReplaysDurableWorkspaceCreateReceipt(t *testing.T) {
 	store := openRunnerControlDatabase(t)
 	now := time.Date(2026, 7, 29, 18, 40, 0, 0, time.UTC)

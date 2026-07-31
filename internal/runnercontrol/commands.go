@@ -60,6 +60,15 @@ func (store *PostgresStateStore) ClaimCommands(
 			CROSS JOIN locked_connection
 			WHERE command.runner_id=$1
 			  AND command.state='pending'
+			  AND (
+			    command.kind<>'assignment'
+			    OR NOT EXISTS (
+			      SELECT 1
+			      FROM secondbox.workspaces AS workspace
+			      WHERE workspace.home_runner_id=$1
+			        AND workspace.state='creating'
+			    )
+			  )
 			ORDER BY
 			  (command.id LIKE 'workspace-reconcile-%') DESC,
 			  command.created_at,
