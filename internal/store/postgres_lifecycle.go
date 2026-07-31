@@ -512,23 +512,27 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 	switch action {
 	case "mark_ready":
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO secondbox.operation_stage_timings (
-				operation_id,sandbox_id,stage,observed_at
+			WITH inserted_stage AS (
+				INSERT INTO secondbox.operation_stage_timings (
+					operation_id,sandbox_id,stage,observed_at
+				)
+				SELECT id,sandbox_id,'ready_projected',$2
+				FROM secondbox.operations
+				WHERE sandbox_id=$1 AND kind IN ('create','start')
+				  AND state IN ('pending','running')
+				ON CONFLICT (operation_id,stage) DO NOTHING
+				RETURNING 1
 			)
-			SELECT id,sandbox_id,'ready_projected',$2
-			FROM secondbox.operations
+			UPDATE secondbox.operations
+			SET state=$3,error_code='',error_message='',retryable=false,
+			    started_at=COALESCE(started_at,$2),completed_at=$2,updated_at=$2
 			WHERE sandbox_id=$1 AND kind IN ('create','start')
-			  AND state IN ('pending','running')
-			ON CONFLICT (operation_id,stage) DO NOTHING`,
+			  AND state IN ('pending','running')`,
 			claim.SandboxID,
 			now.UTC(),
+			contracts.OperationStateSucceeded,
 		); err != nil {
-			return fmt.Errorf("SecondBox lifecycle ready-projected timing insert failed: %w", err)
-		}
-		if err := completeOperations(
-			[]string{"create", "start"}, contracts.OperationStateSucceeded, "", "",
-		); err != nil {
-			return err
+			return fmt.Errorf("SecondBox lifecycle ready projection failed: %w", err)
 		}
 	case "finish_stop":
 		if err := completeOperations(

@@ -1196,63 +1196,33 @@ func insertOperation(
 		completedAt = &value
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO secondbox.operations (
-			id,tenant_ref,subject_ref,sandbox_id,snapshot_id,kind,state,request_id,request_metadata_json,error_code,error_message,retryable,
-			created_at,started_at,completed_at,updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+		WITH inserted_operation AS (
+			INSERT INTO secondbox.operations (
+				id,tenant_ref,subject_ref,sandbox_id,snapshot_id,kind,state,request_id,
+				request_metadata_json,error_code,error_message,retryable,created_at,
+				started_at,completed_at,updated_at
+			) VALUES (
+				$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16
+			)
+			RETURNING id,sandbox_id,kind,created_at
+		)
+		INSERT INTO secondbox.operation_stage_timings (
+			operation_id,sandbox_id,stage,observed_at
+		)
+		SELECT id,sandbox_id,'durable_admission',created_at
+		FROM inserted_operation
+		WHERE kind IN ('create','start')
+		UNION ALL
+		SELECT id,sandbox_id,'workspace_ready',created_at
+		FROM inserted_operation
+		WHERE kind='start'
+		ON CONFLICT (operation_id,stage) DO NOTHING`,
 		operation.ID, tenantRef, subjectRef,
 		operation.SandboxID, operationSnapshotID(operation), operation.Kind, operation.State, operation.RequestID,
 		requestMetadataJSON, errorCode, errorMessage, retryable, operation.CreatedAt,
 		operation.StartedAt, completedAt, operation.UpdatedAt,
 	); err != nil {
 		return fmt.Errorf("SecondBox Operation insert failed: %w", err)
-	}
-	if operation.Kind == "create" || operation.Kind == "start" {
-		if err := insertOperationStageTiming(
-			ctx,
-			tx,
-			operation.ID,
-			operation.SandboxID,
-			"durable_admission",
-			operation.CreatedAt,
-		); err != nil {
-			return err
-		}
-	}
-	if operation.Kind == "start" {
-		if err := insertOperationStageTiming(
-			ctx,
-			tx,
-			operation.ID,
-			operation.SandboxID,
-			"workspace_ready",
-			operation.CreatedAt,
-		); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func insertOperationStageTiming(
-	ctx context.Context,
-	tx pgx.Tx,
-	operationID string,
-	sandboxID string,
-	stage string,
-	observedAt time.Time,
-) error {
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO secondbox.operation_stage_timings (
-			operation_id,sandbox_id,stage,observed_at
-		) VALUES ($1,$2,$3,$4)
-		ON CONFLICT (operation_id,stage) DO NOTHING`,
-		operationID,
-		sandboxID,
-		stage,
-		observedAt.UTC(),
-	); err != nil {
-		return fmt.Errorf("SecondBox Operation stage timing insert failed: %w", err)
 	}
 	return nil
 }

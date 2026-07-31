@@ -991,29 +991,29 @@ func recordLocalWorkspaceResult(
 			return fmt.Errorf("SecondBox runner Workspace create or clone completion: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.sandboxes
-			SET state='stopped',lifecycle_intent_kind='',
-			    reconcile_owner='',reconcile_claim_expires_at=NULL,
-			    next_reconcile_at=CASE
-			      WHEN desired_state IN ('running','deleted') THEN $2::timestamptz
-			      ELSE NULL::timestamptz
-			    END,
-			    revision=revision+1,updated_at=$2
-			WHERE id=$1`,
-			result.SandboxId, now,
-		); err != nil {
-			return fmt.Errorf("SecondBox runner Sandbox create completion: %w", err)
-		}
-		if _, err := tx.Exec(ctx, `
+			WITH updated_sandbox AS (
+				UPDATE secondbox.sandboxes
+				SET state='stopped',lifecycle_intent_kind='',
+				    reconcile_owner='',reconcile_claim_expires_at=NULL,
+				    next_reconcile_at=CASE
+				      WHEN desired_state IN ('running','deleted') THEN $2::timestamptz
+				      ELSE NULL::timestamptz
+				    END,
+				    revision=revision+1,updated_at=$2
+				WHERE id=$1
+				RETURNING id
+			)
 			INSERT INTO secondbox.operation_stage_timings (
 				operation_id,sandbox_id,stage,observed_at
-			) VALUES ($1,$2,'workspace_ready',$3)
+			)
+			SELECT $3,id,'workspace_ready',$2
+			FROM updated_sandbox
 			ON CONFLICT (operation_id,stage) DO NOTHING`,
-			workspace.Mutation.OperationID,
 			result.SandboxId,
 			now,
+			workspace.Mutation.OperationID,
 		); err != nil {
-			return fmt.Errorf("SecondBox runner Workspace-ready timing insert: %w", err)
+			return fmt.Errorf("SecondBox runner Sandbox create completion: %w", err)
 		}
 		if !keepStartMutation {
 			if err := finishPendingOperation(

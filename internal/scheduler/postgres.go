@@ -266,27 +266,24 @@ func (store *PostgresStore) scheduleOnce(
 		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Assignment command encoding: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO secondbox.runner_commands (
-			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
-			delivery_count,created_at,updated_at,delivered_at
-		) VALUES ($1,$2,$3,'assignment',$4,'pending','',0,$5,$5,NULL)`,
-		request.AssignmentCommandID, assignment.RunnerID, assignment.ID, commandPayload, now,
-	); err != nil {
-		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Assignment command insert: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
+		WITH inserted_command AS (
+			INSERT INTO secondbox.runner_commands (
+				id,runner_id,assignment_id,kind,payload,state,target_connection_id,
+				delivery_count,created_at,updated_at,delivered_at
+			) VALUES ($1,$2,$3,'assignment',$4,'pending','',0,$5,$5,NULL)
+			RETURNING 1
+		)
 		INSERT INTO secondbox.operation_stage_timings (
 			operation_id,sandbox_id,stage,observed_at
-		) VALUES ($1,$2,'placement_ready',$3)
+		)
+		SELECT $6,$7,'placement_ready',$5
+		FROM inserted_command
 		ON CONFLICT (operation_id,stage) DO NOTHING`,
+		request.AssignmentCommandID, assignment.RunnerID, assignment.ID, commandPayload, now,
 		request.AssignmentCommand.Correlation.OperationId,
 		request.SandboxID,
-		now,
 	); err != nil {
-		return DurableAssignment{}, false, fmt.Errorf(
-			"SecondBox scheduler placement-ready timing insert: %w",
-			err,
-		)
+		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Assignment command insert: %w", err)
 	}
 	reserved := addCapacity(selected.Reserved, request.Requirements.Capacity)
 	reservedJSON, err := encodeCapacity(reserved)
