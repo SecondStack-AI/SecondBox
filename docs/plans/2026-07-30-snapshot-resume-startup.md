@@ -1,7 +1,7 @@
 ---
 title: Snapshot-Resume Sandbox Startup
 date: 2026-07-30
-status: planned
+status: gated
 owner: SecondStack
 provenance: SecondBox timing qualification and repository-owner direction, 2026-07-30
 ---
@@ -12,23 +12,43 @@ provenance: SecondBox timing qualification and repository-owner direction, 2026-
 
 Make an unsaturated Sandbox reach `ready` in 100–200 ms by resuming an identity-neutral, post-boot memory snapshot instead of booting the guest kernel, init, and guest agent for every Instance. The full signed toolset remains in the guest.
 
-The measured runner-local cold path is 2,609 ms p50 and 2,906 ms p95. Host setup is already about 13 ms: network setup is 10–13 ms, trust verification and launch preparation are about 1 ms each, and starting the compute process is 0–1 ms. Guest protocol negotiation consumes 2,592 ms p50 and 2,890 ms p95. Snapshot resume is therefore the correct path to the target; host micro-optimizations and rootfs trimming are not.
+After the orchestration work through `bafa8c9`, a qualified concurrency-1 run measured `create_to_ready` at 854 ms p50 and 975 ms p95. The runner-local boot path is now 455 ms p50 and 496 ms p95, including 351/393 ms of guest negotiation. Snapshot resume remains the intended way to remove guest boot; host micro-optimizations and rootfs trimming are not.
 
-The target is not reachable with the path as currently composed. The previous public `artifact_verify` p50 of 277 ms and p95 of 8,463 ms was assignment delivery/admission time, not verification. After correcting that boundary, an isolated unsaturated concurrency-1 qualification measured `runner_admission` at 98 ms p50 and 118 ms p95. That exceeds the 25 ms gate below before snapshot load is counted. Snapshot load time is also unmeasured. The architecture remains the right way to remove the 2.6-second guest boot, but the implementation must first reduce admission and prove that the pinned Firecracker version can load an immutable file-backed memory snapshot copy-on-write.
+The target is not reachable with the path as currently composed. Unsaturated `runner_admission` is 89 ms p50 and 122 ms p95, which fails the 25 ms stop gate below before snapshot load is counted. `pre_assignment` is another 289/401 ms and `ready_projection` is 66/187 ms. Snapshot load time is deliberately still unmeasured: the plan stops at the first failed feasibility gate rather than adding a restore path whose unaffected orchestration already exceeds the total target.
 
 The provisional no-saturation latency budget is:
 
 | Step | Measurement supporting the estimate | Required budget |
 |---|---|---:|
 | API validation and durable admission | Stress API p95 was 5 ms | 5–10 ms |
-| Scheduling, command delivery, and runner admission | Corrected isolated measurement is 98 ms p50 and 118 ms p95 | 98–118 ms now; 10–25 ms required |
+| Pre-assignment orchestration | Corrected isolated measurement is 289 ms p50 and 401 ms p95 | 289–401 ms now; must fit inside the total target |
+| Command delivery and runner admission | Corrected isolated measurement is 89 ms p50 and 122 ms p95 | 89–122 ms now; 10–25 ms required |
 | Signed-template lookup and Workspace attachment | Current trust and attachment stages are 0–1 ms | 1–3 ms |
 | Guest IP, TAP, and host network policy | Current runner measurement is 10–13 ms | 10–15 ms |
 | Process start and file-backed snapshot load | Process start is 0–1 ms; snapshot load is not measured | 30–70 ms |
 | Post-resume hardening, identity bind, network configuration, and Workspace mount | Not measured; current entropy/secrets steps are about 2 ms after a cold boot | 10–30 ms |
-| Assignment result persistence and `ready` projection | Current ready stage is sub-millisecond at the runner | 2–10 ms |
+| Runner result production | Current runner `ready` stage is 2 ms | 2–10 ms |
 | Contingency | Required for filesystem and scheduler variance | 20 ms |
-| **Total** | **Current admission plus unmeasured snapshot load; target after admission work** | **176–276 ms now; 88–183 ms required** |
+| Ready projection and client visibility | Corrected isolated measurements are 66/187 ms and 24/48 ms | Must fit inside the total target |
+| **Total** | **Current end-to-end is 854 ms p50 and 975 ms p95; snapshot load remains unmeasured** | **100–200 ms required** |
+
+## Feasibility gate result
+
+The snapshot implementation is stopped at Task 1 as required by the plan.
+
+| Qualified workload | `create_to_ready` p50/p95 | `pre_assignment` p50/p95 | `runner_admission` p50/p95 | `runner_boot` p50/p95 | `ready_projection` p50/p95 |
+|---|---:|---:|---:|---:|---:|
+| Unsaturated, concurrency 1, 10 fixed arrivals at 0.25/s | 854/975 ms | 289/401 ms | 89/122 ms | 455/496 ms | 66/187 ms |
+| Burst 32, 16 concurrent Workspace creates | 3,130/3,366 ms | 2,103/2,679 ms | 51/92 ms | 468/579 ms | 490/739 ms |
+
+The concurrency-1 report is `.tmp/lifecycle-snapshot-gate-c1-result.json` at source commit `bafa8c9`. The burst report is `.tmp/lifecycle-workspace-create-c16.json`; it qualified the Workspace-create candidate subsequently committed as `bafa8c9`. Both runs used KVM, Btrfs, the signed qualified bundle, and zero refusals or failures. The burst completed at 9.48 Sandboxes/s.
+
+Snapshot resume can remove only the runner boot portion of these measurements. It cannot remove pre-assignment orchestration, runner admission, ready projection, or client visibility. The next optimization pass must therefore:
+
+1. Split `pre_assignment` into durable create admission, reconciliation pickup, placement, assignment persistence, and runner-command publication.
+2. Split `ready_projection` into result persistence, operation transition, Sandbox projection, and subscriber delivery.
+3. Reduce unsaturated `runner_admission` to at most 25 ms and re-run this gate.
+4. Only after those budgets pass, measure immutable file-backed snapshot load and process I/O before implementing Tasks 2–9.
 
 ## Fixed architecture
 
@@ -80,12 +100,12 @@ Run the focused tests introduced by each task, then run all repository-wide and 
 
 ### Task 1: Freeze the startup contract and measure the two remaining gates
 
-- [ ] Record corrected cold-boot and runner-admission p50/p95/p99 at concurrency 1 and under saturation, using `runner_admission`, `artifact_verify`, `workspace_attach`, `network_setup`, `compute_launch`, `guest_negotiation`, and `ready` as separate boundaries.
+- [x] Record corrected cold-boot and runner-admission p50/p95/p99 at concurrency 1 and under saturation, using `runner_admission`, `artifact_verify`, `workspace_attach`, `network_setup`, `compute_launch`, `guest_negotiation`, and `ready` as separate boundaries.
 - [ ] Add provider-neutral resume milestones for template lookup, snapshot load, post-resume hardening, assignment binding, Workspace readiness, and final readiness. Keep backend and host details in runner-local logs only.
 - [ ] Build a one-off qualified measurement harness around the existing low-level snapshot load API and record process start, API load, first control response, hardening, and total time without connecting it to lifecycle or public startup.
 - [ ] Measure file-backed memory load versus any full-copy behavior with `/proc/<pid>/io`, major faults, and wall time at every supported Profile memory shape.
-- [ ] Stop the plan and report the floor if unsaturated runner admission exceeds 25 ms, snapshot load exceeds 70 ms, or load performs a per-start full memory-image copy that makes the 200 ms ceiling impossible.
-- [ ] Run the runner timing tests and retain the raw qualified evidence with the implementation report.
+- [x] Stop the plan and report the floor if unsaturated runner admission exceeds 25 ms, snapshot load exceeds 70 ms, or load performs a per-start full memory-image copy that makes the 200 ms ceiling impossible.
+- [x] Run the runner timing tests and retain the raw qualified evidence with the implementation report.
 
 ### Task 2: Add the provider-neutral snapshot-resume Profile class
 
