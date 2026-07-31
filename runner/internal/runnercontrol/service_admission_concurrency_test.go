@@ -30,6 +30,23 @@ type concurrentWorkspaceCreateBackend struct {
 	maxTogether atomic.Int32
 }
 
+type overlappingWorkspaceAssignmentBackend struct {
+	concurrentWorkspaceCreateBackend
+	assignmentEntered chan struct{}
+}
+
+func (backend *overlappingWorkspaceAssignmentBackend) StartAssignment(
+	_ context.Context,
+	_ *runnerprotocol.AssignmentCommand,
+	_ func(runnerprotocol.AssignmentProgressStage) error,
+) (BackendInstance, error) {
+	backend.assignmentEntered <- struct{}{}
+	return BackendInstance{
+		BackendKind:      "firecracker",
+		BackendReference: "fc-overlap",
+	}, nil
+}
+
 func (backend *concurrentWorkspaceCreateBackend) ExecuteLocalWorkspace(
 	ctx context.Context,
 	command *runnerprotocol.LocalWorkspaceCommand,
@@ -169,6 +186,76 @@ func TestAssignmentsAreAdmittedConcurrentlyUpToConfiguredStartLimit(t *testing.T
 			got,
 			maximumConcurrentStarts,
 		)
+	}
+	close(backend.release)
+	cancelRun()
+	consumed.Wait()
+}
+
+func TestAssignmentDoesNotWaitForUnrelatedWorkspaceCreates(t *testing.T) {
+	backend := &overlappingWorkspaceAssignmentBackend{
+		concurrentWorkspaceCreateBackend: concurrentWorkspaceCreateBackend{
+			recordingAssignmentBackend: recordingAssignmentBackend{
+				readiness: BackendReadiness{
+					Capacity:     &runnerprotocol.Capacity{Instances: 2},
+					Reserved:     &runnerprotocol.Capacity{},
+					Capabilities: &runnerprotocol.RunnerCapabilities{},
+				},
+			},
+			entered:   make(chan struct{}, 1),
+			release:   make(chan struct{}),
+			inspected: make(chan struct{}, 1),
+		},
+		assignmentEntered: make(chan struct{}, 1),
+	}
+	protocolConfig := testRunnerConfig()
+	protocolConfig.MaximumConcurrentWorkspaceCreates = 1
+	protocolConfig.MandatoryFeatures = append(
+		protocolConfig.MandatoryFeatures,
+		runnerprotocol.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE,
+	)
+	service, err := NewRunnerProtocolService(
+		protocolConfig,
+		backend,
+		staticProtocolConnector{stream: &recordingProtocolStream{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runContext, cancelRun := context.WithCancel(t.Context())
+	defer cancelRun()
+	stream := &blockingProtocolStream{
+		ctx: runContext,
+		inbound: []*runnerprotocol.ControlPlaneToRunner{
+			workspaceFrameAt(
+				1,
+				runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE,
+			),
+			assignmentFrameAt(2),
+		},
+		heartbeats: make(chan *runnerprotocol.RunnerHeartbeat, 8),
+	}
+	var consumed sync.WaitGroup
+	consumed.Add(1)
+	go func() {
+		defer consumed.Done()
+		_ = service.consumeCommands(
+			runContext,
+			stream,
+			localWorkspaceWelcomeFrame("connection-workspace-assignment-overlap").GetWelcome(),
+			backend.readiness,
+		)
+	}()
+
+	select {
+	case <-backend.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Workspace create did not start")
+	}
+	select {
+	case <-backend.assignmentEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Assignment waited for an unrelated Workspace create")
 	}
 	close(backend.release)
 	cancelRun()

@@ -511,9 +511,11 @@ func (s *RunnerProtocolService) consumeCommands(
 				continue
 			}
 			// Sequence acceptance above already ran in receive order, so a
-			// concurrent start cannot reorder the control command stream.
+			// concurrent start cannot reorder the control command stream. The
+			// control plane only creates an Assignment after that Sandbox's
+			// Workspace result is durable, so unrelated Workspace creates do
+			// not form an admission barrier.
 			if assignment := frame.message.GetAssignment(); assignment != nil {
-				workspaceCreatesInFlight.Wait()
 				select {
 				case assignmentSlots <- struct{}{}:
 				case <-connectionCtx.Done():
