@@ -45,51 +45,124 @@ func (store *PostgresStateStore) ClaimCommands(
 	if limit <= 0 {
 		return nil, errors.New("SecondBox runner command batch limit must be positive")
 	}
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("SecondBox runner command claim transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	var storedRunnerID, state string
-	var lastControlSequence int64
-	if err := tx.QueryRow(ctx, `
-		SELECT connection.runner_id,connection.state,connection.last_control_sequence
-		FROM secondbox.runner_connections AS connection
-		WHERE connection.id=$1 FOR UPDATE OF connection`, connectionID,
-	).Scan(&storedRunnerID, &state, &lastControlSequence); err != nil {
-		return nil, fmt.Errorf("SecondBox runner command connection lookup: %w", err)
-	}
-	if storedRunnerID != runnerID || state != "active" {
-		return nil, errors.New("SecondBox runner command connection is inactive")
-	}
-	rows, err := tx.Query(ctx, `
-		SELECT id,kind,created_at,payload FROM secondbox.runner_commands
-		WHERE runner_id=$1 AND state='pending'
-		ORDER BY (id LIKE 'workspace-reconcile-%') DESC,created_at,id
-		FOR UPDATE SKIP LOCKED LIMIT $2`,
+	rows, err := store.pool.Query(ctx, `
+		WITH locked_connection AS MATERIALIZED (
+			SELECT connection.id,connection.last_control_sequence
+			FROM secondbox.runner_connections AS connection
+			WHERE connection.id=$2
+			  AND connection.runner_id=$1
+			  AND connection.state='active'
+			FOR UPDATE OF connection
+		),
+		chosen AS MATERIALIZED (
+			SELECT command.id,command.kind,command.created_at,command.payload
+			FROM secondbox.runner_commands AS command
+			CROSS JOIN locked_connection
+			WHERE command.runner_id=$1
+			  AND command.state='pending'
+			ORDER BY
+			  (command.id LIKE 'workspace-reconcile-%') DESC,
+			  command.created_at,
+			  command.id
+			FOR UPDATE OF command SKIP LOCKED
+			LIMIT $3
+		),
+		pending AS MATERIALIZED (
+			SELECT
+			  chosen.*,
+			  row_number() OVER (
+			    ORDER BY
+			      (chosen.id LIKE 'workspace-reconcile-%') DESC,
+			      chosen.created_at,
+			      chosen.id
+			  )::bigint AS sequence_offset
+			FROM chosen
+		),
+		advanced_connection AS (
+			UPDATE secondbox.runner_connections AS connection
+			SET last_control_sequence=
+			  locked_connection.last_control_sequence +
+			  (SELECT count(*) FROM pending)
+			FROM locked_connection
+			WHERE connection.id=locked_connection.id
+			RETURNING locked_connection.last_control_sequence AS base_sequence
+		),
+		claimed AS (
+			UPDATE secondbox.runner_commands AS command
+			SET state='delivering',
+			    target_connection_id=$2,
+			    delivery_count=command.delivery_count+1,
+			    updated_at=$4
+			FROM pending,advanced_connection
+			WHERE command.id=pending.id
+			  AND command.state='pending'
+			RETURNING
+			  command.id,
+			  command.kind,
+			  command.created_at,
+			  command.payload,
+			  advanced_connection.base_sequence + pending.sequence_offset AS sequence
+		)
+		SELECT
+		  0 AS row_kind,
+		  ''::text AS id,
+		  ''::text AS kind,
+		  $4::timestamptz AS created_at,
+		  ''::bytea AS payload,
+		  0::bigint AS sequence
+		FROM locked_connection
+		UNION ALL
+		SELECT
+		  1,
+		  claimed.id,
+		  claimed.kind,
+		  claimed.created_at,
+		  claimed.payload,
+		  claimed.sequence
+		FROM claimed
+		ORDER BY row_kind,sequence`,
 		runnerID,
+		connectionID,
 		limit,
+		now.UTC(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox runner command batch lookup: %w", err)
 	}
 	deliveries := make([]CommandDelivery, 0, limit)
+	connectionActive := false
 	for rows.Next() {
+		var rowKind int
 		var delivery CommandDelivery
 		var payload []byte
+		var sequence int64
 		if err := rows.Scan(
+			&rowKind,
 			&delivery.ID,
 			&delivery.Kind,
 			&delivery.CreatedAt,
 			&payload,
+			&sequence,
 		); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("SecondBox runner command batch scan: %w", err)
+		}
+		if rowKind == 0 {
+			connectionActive = true
+			continue
 		}
 		delivery.Message = &runnerv1.ControlPlaneToRunner{}
 		if err := proto.Unmarshal(payload, delivery.Message); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("SecondBox runner command payload decoding: %w", err)
+		}
+		if err := setControlCommandEnvelope(
+			delivery.ID,
+			uint64(sequence),
+			delivery.Message,
+		); err != nil {
+			rows.Close()
+			return nil, err
 		}
 		deliveries = append(deliveries, delivery)
 	}
@@ -98,48 +171,8 @@ func (store *PostgresStateStore) ClaimCommands(
 		return nil, fmt.Errorf("SecondBox runner command batch rows: %w", err)
 	}
 	rows.Close()
-	if len(deliveries) == 0 {
-		if err := tx.Commit(ctx); err != nil {
-			return nil, fmt.Errorf("SecondBox empty runner command claim commit: %w", err)
-		}
-		return []CommandDelivery{}, nil
-	}
-	commandIDs := make([]string, len(deliveries))
-	lastSequence := uint64(lastControlSequence + int64(len(deliveries)))
-	for index := range deliveries {
-		commandIDs[index] = deliveries[index].ID
-		sequence := uint64(lastControlSequence + int64(index) + 1)
-		if err := setControlCommandEnvelope(
-			deliveries[index].ID,
-			sequence,
-			deliveries[index].Message,
-		); err != nil {
-			return nil, err
-		}
-	}
-	command, err := tx.Exec(ctx, `
-		UPDATE secondbox.runner_commands
-		SET state='delivering',target_connection_id=$2,delivery_count=delivery_count+1,
-			updated_at=$3
-		WHERE id=ANY($1::text[]) AND state='pending'`,
-		commandIDs,
-		connectionID,
-		now.UTC(),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("SecondBox runner command delivery batch claim: %w", err)
-	}
-	if command.RowsAffected() != int64(len(deliveries)) {
-		return nil, errors.New("SecondBox runner command batch changed while claimed")
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.runner_connections
-		SET last_control_sequence=$2 WHERE id=$1`, connectionID, lastSequence,
-	); err != nil {
-		return nil, fmt.Errorf("SecondBox runner command sequence update: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("SecondBox runner command claim commit: %w", err)
+	if !connectionActive {
+		return nil, errors.New("SecondBox runner command connection is inactive")
 	}
 	return deliveries, nil
 }
