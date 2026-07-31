@@ -18,6 +18,7 @@ func TestLoadRunnerProtocolConfigRequestsOnlyImplementedFeatures(t *testing.T) {
 		"SECONDBOX_RUNNER_CLIENT_KEY":                "/run/identity/runner.key",
 		"SECONDBOX_RUNNER_CONTROL_PLANE_CA":          "/run/identity/runner-ca.crt",
 		"SECONDBOX_RUNNER_CREDENTIAL":                "runner-test-credential-material-0000000000",
+		"SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS":     "8",
 	} {
 		t.Setenv(name, value)
 	}
@@ -36,5 +37,8 @@ func TestLoadRunnerProtocolConfigRequestsOnlyImplementedFeatures(t *testing.T) {
 	}
 	if !slices.Equal(config.MandatoryFeatures, want) {
 		t.Fatalf("Runner requested features = %v, want %v", config.MandatoryFeatures, want)
+	}
+	if config.MaximumConcurrentStarts != 8 {
+		t.Fatalf("maximum concurrent starts = %d, want 8", config.MaximumConcurrentStarts)
 	}
 }

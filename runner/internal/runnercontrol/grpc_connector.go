@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -70,16 +71,27 @@ func LoadRunnerProtocolConfigFromEnv() (RunnerProtocolConfig, GRPCConnectorConfi
 	if err != nil {
 		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, err
 	}
+	maximumConcurrentStartsRaw, err := required("SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS")
+	if err != nil {
+		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, err
+	}
+	maximumConcurrentStarts, err := strconv.Atoi(maximumConcurrentStartsRaw)
+	if err != nil || maximumConcurrentStarts < 1 {
+		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, fmt.Errorf(
+			"SecondBox runner protocol config requires positive integer SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS",
+		)
+	}
 	if len(credential) < 32 {
 		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, fmt.Errorf("SecondBox runner credential must contain at least 32 bytes")
 	}
 
 	return RunnerProtocolConfig{
-			RunnerID:        runnerID,
-			RunnerPoolID:    poolID,
-			SoftwareVersion: softwareVersion,
-			ProtocolMinimum: 1,
-			ProtocolMaximum: 1,
+			RunnerID:                runnerID,
+			RunnerPoolID:            poolID,
+			SoftwareVersion:         softwareVersion,
+			ProtocolMinimum:         1,
+			ProtocolMaximum:         1,
+			MaximumConcurrentStarts: maximumConcurrentStarts,
 			MandatoryFeatures: []runnerprotocol.RunnerFeature{
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING,
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_FILE_STREAMING,

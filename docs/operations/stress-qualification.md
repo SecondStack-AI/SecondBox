@@ -142,6 +142,10 @@ The result separately names:
 - `deploymentTiming`: the Phase 2 aggregate boot, Exec, API, Operation, and stage timing view for the
   explicit window.
 
+The runner configuration also requires `maxConcurrentStarts`. It bounds
+transient startup work rather than resident or operation capacity, so it is not
+part of `configuredFirstBinding`.
+
 The configured first binding is a capacity calculation, not a claim that it caused a measured
 refusal. The refusal counts and problem codes are the observed evidence. A level is marked for
 latency saturation only when its measured p95 crosses the configured ratio. This separation keeps a

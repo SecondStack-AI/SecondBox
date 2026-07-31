@@ -32,12 +32,13 @@ var ErrRunnerProtocolNegotiation = errors.New("SecondBox runner protocol negotia
 
 // RunnerProtocolConfig contains stable runner identity and its supported wire window.
 type RunnerProtocolConfig struct {
-	RunnerID          string
-	RunnerPoolID      string
-	SoftwareVersion   string
-	ProtocolMinimum   uint32
-	ProtocolMaximum   uint32
-	MandatoryFeatures []runnerprotocol.RunnerFeature
+	RunnerID                string
+	RunnerPoolID            string
+	SoftwareVersion         string
+	ProtocolMinimum         uint32
+	ProtocolMaximum         uint32
+	MaximumConcurrentStarts int
+	MandatoryFeatures       []runnerprotocol.RunnerFeature
 }
 
 // BackendReadiness is verified local capability and capacity evidence.
@@ -175,6 +176,9 @@ func NewRunnerProtocolService(
 		config.ProtocolMaximum == 0 ||
 		config.ProtocolMinimum > config.ProtocolMaximum {
 		return nil, fmt.Errorf("SecondBox runner protocol config has an invalid supported-version window")
+	}
+	if config.MaximumConcurrentStarts < 1 {
+		return nil, fmt.Errorf("SecondBox runner protocol config requires a positive maximum concurrent start count")
 	}
 	if backend == nil {
 		return nil, fmt.Errorf("SecondBox runner protocol assignment backend is required")
@@ -454,7 +458,10 @@ func (s *RunnerProtocolService) consumeCommands(
 	defer assignmentsInFlight.Wait()
 	connectionCtx, cancelConnection := context.WithCancel(ctx)
 	defer cancelConnection()
-	assignmentSlots := make(chan struct{}, concurrentAssignmentLimit(readiness))
+	assignmentSlots := make(
+		chan struct{},
+		concurrentAssignmentLimit(s.config.MaximumConcurrentStarts, readiness),
+	)
 	go pumpControlPlaneFrames(connectionCtx, stream.Recv, received)
 	asyncErrors := make(chan error, 1)
 	go s.sendHeartbeats(
@@ -1460,17 +1467,16 @@ func validateResolvedNetworkPolicy(policy *runnerprotocol.NetworkPolicy) error {
 	return nil
 }
 
-// concurrentAssignmentLimit bounds concurrent assignment starts by the instance
-// capacity the runner advertises to the control plane, so the runner never
-// admits more work than it just claimed it could hold.
+// concurrentAssignmentLimit separates the transient start-work cap from
+// resident instance capacity while never exceeding what the runner advertised.
 //
 // A runner that advertises no instance capacity keeps the previous behaviour of
 // starting one assignment at a time rather than assuming a bound it has not
 // established.
-func concurrentAssignmentLimit(readiness BackendReadiness) int {
-	limit := int(readiness.Capacity.GetInstances())
-	if limit < 1 {
+func concurrentAssignmentLimit(configured int, readiness BackendReadiness) int {
+	residentCapacity := int(readiness.Capacity.GetInstances())
+	if residentCapacity < 1 {
 		return 1
 	}
-	return limit
+	return min(configured, residentCapacity)
 }

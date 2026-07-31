@@ -59,6 +59,10 @@ arrival that a fixed interval cannot, and requires an explicit non-zero
 ready for the whole cell. Arrival latency is then measured against that
 backdrop, which answers whether holding M Sandboxes changes start-to-ready for
 the next one. A cell runs once per resident value, so `[0, 4]` doubles the run.
+The runner block also requires `maxConcurrentStarts`; this transient start-work
+limit is measured separately from `maxConcurrentGlobal`, the resident Instance
+capacity. Qualify it with a representative burst: lowering it can reduce
+per-Instance boot contention while still increasing end-to-end drain latency.
 
 ## Reading the output
 

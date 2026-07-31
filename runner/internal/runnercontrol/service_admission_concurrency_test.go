@@ -53,9 +53,10 @@ func assignmentFrameAt(sequence int) *runnerprotocol.ControlPlaneToRunner {
 
 // Handling assignments inline admitted exactly one at a time, so a burst queued
 // behind a full microVM start each. Starts now run off the receive loop, bounded
-// by the instance capacity the runner advertises.
-func TestAssignmentsAreAdmittedConcurrentlyUpToAdvertisedCapacity(t *testing.T) {
+// independently from resident instance capacity.
+func TestAssignmentsAreAdmittedConcurrentlyUpToConfiguredStartLimit(t *testing.T) {
 	const capacity = 4
+	const maximumConcurrentStarts = 2
 	backend := &concurrentAssignmentBackend{
 		recordingAssignmentBackend: recordingAssignmentBackend{
 			readiness: BackendReadiness{
@@ -67,8 +68,10 @@ func TestAssignmentsAreAdmittedConcurrentlyUpToAdvertisedCapacity(t *testing.T) 
 		entered: make(chan struct{}, capacity),
 		release: make(chan struct{}),
 	}
+	protocolConfig := testRunnerConfig()
+	protocolConfig.MaximumConcurrentStarts = maximumConcurrentStarts
 	service, err := NewRunnerProtocolService(
-		testRunnerConfig(), backend, staticProtocolConnector{stream: &recordingProtocolStream{}},
+		protocolConfig, backend, staticProtocolConnector{stream: &recordingProtocolStream{}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -92,37 +95,46 @@ func TestAssignmentsAreAdmittedConcurrentlyUpToAdvertisedCapacity(t *testing.T) 
 		_ = service.consumeCommands(runContext, stream, welcome.GetWelcome(), backend.readiness)
 	}()
 
-	for admitted := 0; admitted < capacity; admitted++ {
+	for admitted := 0; admitted < maximumConcurrentStarts; admitted++ {
 		select {
 		case <-backend.entered:
 		case <-time.After(3 * time.Second):
 			t.Fatalf(
 				"only %d of %d assignments were admitted concurrently; starts are serialised",
-				admitted, capacity,
+				admitted, maximumConcurrentStarts,
 			)
 		}
 	}
-	if got := backend.maxTogether.Load(); got != capacity {
-		t.Fatalf("peak concurrent assignment starts = %d, want %d", got, capacity)
+	if got := backend.maxTogether.Load(); got != maximumConcurrentStarts {
+		t.Fatalf(
+			"peak concurrent assignment starts = %d, want %d",
+			got,
+			maximumConcurrentStarts,
+		)
 	}
 	close(backend.release)
 	cancelRun()
 	consumed.Wait()
 }
 
-func TestConcurrentAssignmentLimitFollowsAdvertisedInstances(t *testing.T) {
-	if got := concurrentAssignmentLimit(BackendReadiness{
+func TestConcurrentAssignmentLimitUsesConfiguredAndResidentBounds(t *testing.T) {
+	if got := concurrentAssignmentLimit(8, BackendReadiness{
 		Capacity: &runnerprotocol.Capacity{Instances: 32},
-	}); got != 32 {
-		t.Fatalf("limit = %d, want the advertised 32", got)
+	}); got != 8 {
+		t.Fatalf("limit = %d, want configured 8", got)
+	}
+	if got := concurrentAssignmentLimit(32, BackendReadiness{
+		Capacity: &runnerprotocol.Capacity{Instances: 8},
+	}); got != 8 {
+		t.Fatalf("limit = %d, want resident capacity 8", got)
 	}
 	// A runner that advertises no instance capacity must not assume one.
-	if got := concurrentAssignmentLimit(BackendReadiness{
+	if got := concurrentAssignmentLimit(8, BackendReadiness{
 		Capacity: &runnerprotocol.Capacity{},
 	}); got != 1 {
 		t.Fatalf("limit without advertised capacity = %d, want 1", got)
 	}
-	if got := concurrentAssignmentLimit(BackendReadiness{}); got != 1 {
+	if got := concurrentAssignmentLimit(8, BackendReadiness{}); got != 1 {
 		t.Fatalf("limit without capacity evidence = %d, want 1", got)
 	}
 }

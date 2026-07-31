@@ -63,6 +63,7 @@ type stressRunnerConfig struct {
 	MemoryBudgetMiB                int `json:"memoryBudgetMiB"`
 	MaxConcurrentPerSandbox        int `json:"maxConcurrentPerSandbox"`
 	MaxConcurrentGlobal            int `json:"maxConcurrentGlobal"`
+	MaxConcurrentStarts            int `json:"maxConcurrentStarts"`
 	MaxConcurrentOperationsGlobal  int `json:"maxConcurrentOperationsGlobal"`
 	FileTransferMaxBytes           int `json:"fileTransferMaxBytes"`
 	StoragePressureRecoveryPercent int `json:"storagePressureRecoveryPercent"`
@@ -247,6 +248,7 @@ func (config stressRunnerConfig) validate() error {
 		"memoryBudgetMiB":                     config.MemoryBudgetMiB,
 		"maxConcurrentPerSandbox":             config.MaxConcurrentPerSandbox,
 		"maxConcurrentGlobal":                 config.MaxConcurrentGlobal,
+		"maxConcurrentStarts":                 config.MaxConcurrentStarts,
 		"maxConcurrentOperationsGlobal":       config.MaxConcurrentOperationsGlobal,
 		"fileTransferMaxBytes":                config.FileTransferMaxBytes,
 		"storagePressureRecoveryPercent":      config.StoragePressureRecoveryPercent,
@@ -261,6 +263,9 @@ func (config stressRunnerConfig) validate() error {
 		config.StoragePressureWarningPercent < config.StoragePressureDenyPercent &&
 		config.StoragePressureDenyPercent < 100) {
 		return errors.New("SecondBox stress runner storage pressure thresholds must be ordered below 100")
+	}
+	if config.MaxConcurrentStarts > config.MaxConcurrentGlobal {
+		return errors.New("SecondBox stress runner maxConcurrentStarts exceeds maxConcurrentGlobal")
 	}
 	return nil
 }
