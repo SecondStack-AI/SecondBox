@@ -394,14 +394,17 @@ func (server *Server) sendNextOutboundFrame(
 	if err != nil {
 		return false, err
 	}
+	claimDuration := time.Since(deliveryStartedAt)
 	if len(deliveries) == 0 {
 		return false, server.sendClaimedRelayFrame(
 			ctx, stream, session, runnerID, connectionID,
 		)
 	}
 	deliveryDurations := make([]time.Duration, len(deliveries))
+	streamSendDurations := make([]time.Duration, len(deliveries))
 	for index := range deliveries {
 		delivery := &deliveries[index]
+		streamSendStartedAt := time.Now()
 		if err := stream.Send(delivery.Message); err != nil {
 			persistErr := server.config.StateStore.MarkCommandsDelivered(
 				ctx,
@@ -414,6 +417,8 @@ func (server *Server) sendNextOutboundFrame(
 					deliveries[:index],
 					claimAt,
 					deliveryDurations[:index],
+					claimDuration,
+					streamSendDurations[:index],
 				)
 			}
 			return false, errors.Join(
@@ -421,6 +426,7 @@ func (server *Server) sendNextOutboundFrame(
 				persistErr,
 			)
 		}
+		streamSendDurations[index] = time.Since(streamSendStartedAt)
 		delivery.DeliveredAt = server.config.Now()
 		deliveryDurations[index] = time.Since(deliveryStartedAt)
 	}
@@ -431,7 +437,10 @@ func (server *Server) sendNextOutboundFrame(
 	); err != nil {
 		return false, err
 	}
-	logCommandDeliveries(runnerID, deliveries, claimAt, deliveryDurations)
+	logCommandDeliveries(
+		runnerID, deliveries, claimAt, deliveryDurations,
+		claimDuration, streamSendDurations,
+	)
 	if int64(len(deliveries)) < server.config.CommandBatchSize {
 		return false, server.sendClaimedRelayFrame(
 			ctx, stream, session, runnerID, connectionID,
@@ -445,6 +454,8 @@ func logCommandDeliveries(
 	deliveries []CommandDelivery,
 	claimedAt time.Time,
 	deliveryDurations []time.Duration,
+	claimDuration time.Duration,
+	streamSendDurations []time.Duration,
 ) {
 	for index, delivery := range deliveries {
 		slog.Info(
@@ -455,6 +466,8 @@ func logCommandDeliveries(
 			"batchSize", len(deliveries),
 			"queueMs", commandQueueDuration(delivery.CreatedAt, claimedAt).Milliseconds(),
 			"deliveryMs", deliveryDurations[index].Milliseconds(),
+			"claimMs", claimDuration.Milliseconds(),
+			"streamSendMs", streamSendDurations[index].Milliseconds(),
 		)
 	}
 }

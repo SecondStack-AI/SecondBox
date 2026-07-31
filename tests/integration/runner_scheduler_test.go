@@ -161,12 +161,22 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	sandboxID := task4ID("sandbox")
 	profileRevisionID := task4ID("profile-revision")
 	workspaceID := task4InsertSchedulableSandbox(t, sandboxID, profileRevisionID, runnerID, now)
-	firstScheduler, err := scheduler.NewPostgresStore(t.Context(), integrationDatabaseURL)
+	firstScheduler, err := scheduler.NewPostgresStore(
+		t.Context(), scheduler.PostgresStoreConfig{
+			DatabaseURL: integrationDatabaseURL,
+			Now:         func() time.Time { return now },
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(firstScheduler.Close)
-	secondScheduler, err := scheduler.NewPostgresStore(t.Context(), integrationDatabaseURL)
+	secondScheduler, err := scheduler.NewPostgresStore(
+		t.Context(), scheduler.PostgresStoreConfig{
+			DatabaseURL: integrationDatabaseURL,
+			Now:         func() time.Time { return now },
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

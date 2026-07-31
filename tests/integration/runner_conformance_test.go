@@ -50,7 +50,12 @@ func newPostgresConformanceBoundary(
 	if err != nil {
 		t.Fatal(err)
 	}
-	schedulerStore, err := scheduler.NewPostgresStore(t.Context(), integrationDatabaseURL)
+	schedulerStore, err := scheduler.NewPostgresStore(
+		t.Context(), scheduler.PostgresStoreConfig{
+			DatabaseURL: integrationDatabaseURL,
+			Now:         func() time.Time { return now },
+		},
+	)
 	if err != nil {
 		stateStore.Close()
 		t.Fatal(err)

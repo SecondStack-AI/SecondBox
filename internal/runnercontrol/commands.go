@@ -7,6 +7,7 @@ import (
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -130,6 +131,7 @@ func (store *PostgresStateStore) ClaimCommands(
 		  claimed.sequence
 		FROM claimed
 		ORDER BY row_kind,sequence`,
+		pgx.QueryExecModeExec,
 		runnerID,
 		connectionID,
 		limit,

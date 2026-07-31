@@ -16,23 +16,23 @@ After the event-driven orchestration and reflinked Workspace-template work throu
 
 A test-only KVM qualification now measures the missing low-level floor. Across 256, 512, and 2048 MiB shapes, Firecracker's immutable file-backed snapshot load was 3–4 ms p50/p95 and process-start-through-post-resume-hardening was 16–18 ms p50/p95. A cache-evicted sample completed in 39–45 ms and read only 84–86 MiB at every shape. Warm samples read at most 2.6 MiB, so no per-start full memory-image copy was observed.
 
-The end-to-end target is still not reachable with the path as currently composed. A later 30-arrival candidate moved guarded ready projection into the fenced runner-result transaction, reducing `ready_projection` from 100/300 ms to 0/5 ms p50/p95. Its unsaturated `runner_admission` was 26/43 ms, `pre_assignment` was 338/503 ms, and client visibility was 17/32 ms. Those unaffected spans still exceed the 200 ms ceiling before a production resume path performs template lookup, assignment bind, Workspace mount, or network identity activation. The plan therefore remains gated at Task 1 even though the low-level snapshot-load sub-gate passes and ready projection no longer blocks it.
+The end-to-end target is still not reachable with the path as currently composed. A later 30-arrival candidate moved guarded ready projection into the fenced runner-result transaction, reducing `ready_projection` from 100/300 ms to 0/5 ms p50/p95. The next dispatch pass corrected Assignment-time attribution, batched the scheduler's durable writes, and removed per-connection claim preparation. Its unsaturated `runner_admission` was 17/31 ms, `pre_assignment` was 320/488 ms, and client visibility was 19/31 ms. Those unaffected spans still exceed the 200 ms ceiling before a production resume path performs template lookup, assignment bind, Workspace mount, or network identity activation. The plan therefore remains gated at Task 1 even though the low-level snapshot-load sub-gate passes and ready projection no longer blocks it.
 
 The provisional no-saturation latency budget is:
 
 | Step | Measurement supporting the estimate | Required budget |
 |---|---|---:|
 | API validation and durable admission | Stress API p95 was 5 ms | 5–10 ms |
-| Pre-assignment orchestration | Latest 30-arrival measurement is 338 ms p50 and 503 ms p95, including 134/201 ms of Workspace provisioning | Must fit inside the total target |
-| Command delivery and runner admission | Latest 30-arrival measurement is 26 ms p50 and 43 ms p95 | 10–25 ms required |
+| Pre-assignment orchestration | Latest 30-arrival measurement is 320 ms p50 and 488 ms p95, including 126/153 ms of Workspace provisioning | Must fit inside the total target |
+| Command delivery and runner admission | Latest 30-arrival measurement is 17 ms p50 and 31 ms p95 | 10–25 ms required |
 | Signed-template lookup and Workspace attachment | Current trust and attachment stages are 0 ms | 1–3 ms |
-| Guest IP, TAP, and host network policy | Current runner measurement is 11–15 ms | 10–15 ms |
+| Guest IP, TAP, and host network policy | Current runner measurement is 12–16 ms | 10–15 ms |
 | Process start and file-backed snapshot load | Qualified test-only floor is 1 ms process start and 3–4 ms warm load p50/p95 | 5–15 ms |
 | First control response and post-resume hardening | Qualified test-only total, including process and load, is 16–18 ms p50/p95 | 10–30 ms before assignment bind and Workspace mount |
 | Runner result production | Current runner `ready` stage is 2 ms | 2–10 ms |
 | Contingency | Required for filesystem and scheduler variance | 20 ms |
-| Ready projection and client visibility | Latest 30-arrival measurements are 0/5 ms and 17/32 ms | Must fit inside the total target |
-| **Total** | **Latest 30-arrival end-to-end is 752 ms p50 and 954 ms p95; low-level warm resume floor is 16–18 ms** | **100–200 ms required** |
+| Ready projection and client visibility | Latest 30-arrival measurements are 0/0 ms and 19/31 ms | Must fit inside the total target |
+| **Total** | **Latest 30-arrival end-to-end is 745 ms p50 and 929 ms p95; low-level warm resume floor is 16–18 ms** | **100–200 ms required** |
 
 ## Feasibility gate result
 
@@ -44,8 +44,10 @@ The production snapshot implementation remains stopped at Task 1 as required by 
 | Burst 32, 16 concurrent Workspace creates | 2,797/3,195 ms | 1,481/2,237 ms | 84/1,020 ms | 699/1,695 ms | 454/587 ms |
 | Ready-projection candidate, 30 fixed arrivals at 0.25/s | 752/954 ms | 338/503 ms | 26/43 ms | 394/443 ms | 0/5 ms |
 | Ready-projection candidate, burst 32 | 2,070/2,639 ms | 1,413/2,169 ms | 63/960 ms | 540/1,497 ms | 0/0 ms |
+| Scheduler-batch and claim-exec candidate, 30 fixed arrivals at 0.25/s | 745/929 ms | 320/488 ms | 17/31 ms | 393/438 ms | 0/0 ms |
+| Scheduler-batch and claim-exec candidate, burst 32 | 2,191/2,733 ms | 1,596/2,291 ms | 62/1,046 ms | 529/1,652 ms | 0/0 ms |
 
-The original concurrency-1 report is `.tmp/lifecycle-workspace-template-c1-result.json`; the original burst report is `.tmp/lifecycle-workspace-template-burst32-result.json`. They qualified the Workspace-template candidate subsequently committed as `8703554`. The ready-projection reports are `.tmp/lifecycle-ready-fastpath-c1-30-result.json` and `.tmp/lifecycle-ready-fastpath-burst32-result.json`; they identify base commit `c1cfcaf` and qualified the dirty implementation candidate. All four runs used KVM, Btrfs, the signed qualified bundle, and zero refusals or failures. Ready projection's burst completed at 11.51 Sandboxes/s.
+The original concurrency-1 report is `.tmp/lifecycle-workspace-template-c1-result.json`; the original burst report is `.tmp/lifecycle-workspace-template-burst32-result.json`. They qualified the Workspace-template candidate subsequently committed as `8703554`. The ready-projection reports are `.tmp/lifecycle-ready-fastpath-c1-30-result.json` and `.tmp/lifecycle-ready-fastpath-burst32-result.json`; they identify base commit `c1cfcaf` and qualified the dirty implementation candidate. The dispatch reports are `.tmp/lifecycle-claim-exec-c1-30-result.json` and `.tmp/lifecycle-scheduler-batch-claim-exec-burst32-result.json`; they identify base commit `de574bf` and qualified the dirty retained candidate. All six runs used KVM, Btrfs, the signed qualified bundle, and zero refusals or failures. The retained burst completed at 11.45 Sandboxes/s.
 
 The standalone snapshot-load evidence is `.tmp/snapshot-resume-feasibility-qualified-20260731.json`. It used Firecracker v1.16.1 on Linux 7.1.4, Btrfs, KVM, one cache-evicted sample, and 20 warm samples per shape. The report truthfully records source commit `8703554` with `sourceTreeDirty: true` because it qualified the uncommitted harness itself.
 
@@ -61,7 +63,7 @@ Snapshot resume can remove only the runner boot portion of these measurements. I
 
 1. Receipt-directory pipelining reduced the qualified unsaturated `workspace_provision` span from 148/192 ms to 129/154 ms p50/p95 over 30 arrivals. The full runner-local mutation is 108/132 ms; the earlier 28/40 ms figure covered only UUID rewrite, not manifest and receipt durability.
 2. Guarded transactional ready projection reduced the qualified unsaturated `ready_projection` span from 100/300 ms to 0/5 ms p50/p95 and burst-32 from 495/621 ms to 0/0 ms. `ready_event_ingest` remains separately attributed at 0/13 ms unsaturated and 10/37 ms under burst.
-3. Reduce unsaturated `runner_admission` p95 from 43 ms to at most 25 ms.
+3. Correct Assignment-time attribution and batch dispatch reduced unsaturated `runner_admission` from 26/43 ms to 17/31 ms p50/p95. The retained one-round-trip claim path measured queue at 6/15 ms and claim at 10/16 ms; stream send was 0/0 ms. Attribute pool acquisition, query execution, and decode next, and reduce p95 to at most 25 ms.
 4. Re-run the end-to-end gate; only after the unaffected spans fit inside the 200 ms budget should production work proceed to Tasks 2–9.
 
 ## Fixed architecture

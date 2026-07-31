@@ -23,6 +23,13 @@ var (
 // PostgresStore coordinates scheduler replicas through durable transactions.
 type PostgresStore struct {
 	pool *pgxpool.Pool
+	now  func() time.Time
+}
+
+// PostgresStoreConfig contains the scheduler's explicit durable dependencies.
+type PostgresStoreConfig struct {
+	DatabaseURL string
+	Now         func() time.Time
 }
 
 // ScheduleRequest contains explicit immutable assignment authority and retry bounds.
@@ -75,8 +82,14 @@ type DurableAssignment struct {
 }
 
 // NewPostgresStore connects the scheduler to PostgreSQL authority.
-func NewPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore, error) {
-	pool, err := pgxpool.New(ctx, databaseURL)
+func NewPostgresStore(
+	ctx context.Context,
+	config PostgresStoreConfig,
+) (*PostgresStore, error) {
+	if config.DatabaseURL == "" || config.Now == nil {
+		return nil, errors.New("SecondBox scheduler PostgreSQL database and clock are required")
+	}
+	pool, err := pgxpool.New(ctx, config.DatabaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox scheduler PostgreSQL pool: %w", err)
 	}
@@ -84,7 +97,7 @@ func NewPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore, 
 		pool.Close()
 		return nil, fmt.Errorf("SecondBox scheduler PostgreSQL readiness: %w", err)
 	}
-	return &PostgresStore{pool: pool}, nil
+	return &PostgresStore{pool: pool, now: config.Now}, nil
 }
 
 func (store *PostgresStore) Close() {
@@ -184,33 +197,30 @@ func (store *PostgresStore) scheduleOnce(
 	if err != nil {
 		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler resolved artifacts encoding: %w", err)
 	}
-	now := request.Now.UTC()
-	if workspace.Mutation.State == "" {
-		if _, err := tx.Exec(ctx, `
-			UPDATE secondbox.workspaces
-			SET mutation_kind='start',mutation_id=$2,mutation_effect_id=$3,
-			    mutation_operation_id=$4,mutation_expected_generation=$5,
-			    mutation_target_generation=$5,mutation_state='assigned',updated_at=$6
-			WHERE id=$1`,
-			request.WorkspaceID, request.StartMutationID, request.AssignmentCommandID,
-			request.AssignmentCommand.Correlation.OperationId, generation, now,
-		); err != nil {
-			return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Workspace start mutation acquisition: %w", err)
-		}
-	} else {
-		result, err := tx.Exec(ctx, `
-			UPDATE secondbox.workspaces
-			SET mutation_effect_id=$2,mutation_state='assigned',updated_at=$3
-			WHERE id=$1 AND mutation_kind='start' AND mutation_id=$4`,
-			request.WorkspaceID, request.AssignmentCommandID, now, request.StartMutationID,
-		)
-		if err != nil {
-			return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Workspace start mutation adoption: %w", err)
-		}
-		if result.RowsAffected() != 1 {
-			return DurableAssignment{}, false,
-				errors.New("SecondBox scheduler Workspace start mutation changed before adoption")
-		}
+	controlMessage := &runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_Assignment{
+			Assignment: proto.Clone(request.AssignmentCommand).(*runnerv1.AssignmentCommand),
+		},
+	}
+	controlMessage.GetAssignment().MessageId = ""
+	controlMessage.GetAssignment().Sequence = 0
+	controlMessage.GetAssignment().Correlation.SandboxId = request.SandboxID
+	controlMessage.GetAssignment().Correlation.InstanceId = request.InstanceID
+	controlMessage.GetAssignment().Correlation.SandboxGeneration = uint64(generation)
+	controlMessage.GetAssignment().Correlation.AssignmentId = request.AssignmentID
+	controlMessage.GetAssignment().Correlation.RunnerId = selected.ID
+	commandPayload, err := proto.Marshal(controlMessage)
+	if err != nil {
+		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Assignment command encoding: %w", err)
+	}
+	reserved := addCapacity(selected.Reserved, request.Requirements.Capacity)
+	reservedJSON, err := encodeCapacity(reserved)
+	if err != nil {
+		return DurableAssignment{}, false, err
+	}
+	placementAt := store.now().UTC()
+	if placementAt.IsZero() {
+		return DurableAssignment{}, false, errors.New("SecondBox scheduler clock returned zero time")
 	}
 	assignment := DurableAssignment{
 		ID: request.AssignmentID, SandboxID: request.SandboxID, InstanceID: request.InstanceID,
@@ -221,18 +231,37 @@ func (store *PostgresStore) scheduleOnce(
 		ReleaseProof: map[string]string{}, RetryLimit: request.RetryLimit,
 		OperationDeadline: request.OperationDeadline.UTC(), ClaimExpiresAt: request.ClaimExpiresAt.UTC(),
 		NextReconcileAt: request.OperationDeadline.UTC(),
-		Revision:        1, CreatedAt: now, UpdatedAt: now,
+		Revision:        1, CreatedAt: placementAt, UpdatedAt: placementAt,
 	}
-	if _, err := tx.Exec(ctx, `
+	orderedWrites := &pgx.Batch{}
+	workspaceMutationError := "SecondBox scheduler Workspace start mutation acquisition"
+	if workspace.Mutation.State == "" {
+		orderedWrites.Queue(`
+			UPDATE secondbox.workspaces
+			SET mutation_kind='start',mutation_id=$2,mutation_effect_id=$3,
+			    mutation_operation_id=$4,mutation_expected_generation=$5,
+			    mutation_target_generation=$5,mutation_state='assigned',updated_at=$6
+			WHERE id=$1`,
+			request.WorkspaceID, request.StartMutationID, request.AssignmentCommandID,
+			request.AssignmentCommand.Correlation.OperationId, generation, placementAt,
+		)
+	} else {
+		workspaceMutationError = "SecondBox scheduler Workspace start mutation adoption"
+		orderedWrites.Queue(`
+			UPDATE secondbox.workspaces
+			SET mutation_effect_id=$2,mutation_state='assigned',updated_at=$3
+			WHERE id=$1 AND mutation_kind='start' AND mutation_id=$4`,
+			request.WorkspaceID, request.AssignmentCommandID, placementAt, request.StartMutationID,
+		)
+	}
+	orderedWrites.Queue(`
 		INSERT INTO secondbox.instances (
 			id,sandbox_id,generation,state,guest_liveness,termination_reason,created_at,updated_at,
 			ready_at,stopped_at
 		) VALUES ($1,$2,$3,'starting','starting','',$4,$4,NULL,NULL)`,
-		assignment.InstanceID, assignment.SandboxID, generation, now,
-	); err != nil {
-		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Instance insert: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
+		assignment.InstanceID, assignment.SandboxID, generation, placementAt,
+	)
+	orderedWrites.Queue(`
 		INSERT INTO secondbox.assignments (
 			id,sandbox_id,instance_id,runner_id,profile_revision_id,backend_kind,
 			backend_reference,generation,fencing_token,state,capability_snapshot_json,
@@ -245,27 +274,9 @@ func (store *PostgresStore) scheduleOnce(
 		assignment.ID, assignment.SandboxID, assignment.InstanceID, assignment.RunnerID,
 		assignment.ProfileRevisionID, assignment.BackendKind, assignment.Generation,
 		assignment.FencingToken, assignment.State, capabilitiesJSON, artifactsJSON,
-		assignment.RetryLimit, assignment.OperationDeadline, assignment.ClaimExpiresAt, now,
-	); err != nil {
-		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Assignment insert: %w", err)
-	}
-	controlMessage := &runnerv1.ControlPlaneToRunner{
-		Message: &runnerv1.ControlPlaneToRunner_Assignment{
-			Assignment: proto.Clone(request.AssignmentCommand).(*runnerv1.AssignmentCommand),
-		},
-	}
-	controlMessage.GetAssignment().MessageId = ""
-	controlMessage.GetAssignment().Sequence = 0
-	controlMessage.GetAssignment().Correlation.SandboxId = assignment.SandboxID
-	controlMessage.GetAssignment().Correlation.InstanceId = assignment.InstanceID
-	controlMessage.GetAssignment().Correlation.SandboxGeneration = uint64(assignment.Generation)
-	controlMessage.GetAssignment().Correlation.AssignmentId = assignment.ID
-	controlMessage.GetAssignment().Correlation.RunnerId = assignment.RunnerID
-	commandPayload, err := proto.Marshal(controlMessage)
-	if err != nil {
-		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Assignment command encoding: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
+		assignment.RetryLimit, assignment.OperationDeadline, assignment.ClaimExpiresAt, placementAt,
+	)
+	orderedWrites.Queue(`
 		WITH inserted_command AS (
 			INSERT INTO secondbox.runner_commands (
 				id,runner_id,assignment_id,kind,payload,state,target_connection_id,
@@ -279,31 +290,48 @@ func (store *PostgresStore) scheduleOnce(
 		SELECT $6,$7,'placement_ready',$5
 		FROM inserted_command
 		ON CONFLICT (operation_id,stage) DO NOTHING`,
-		request.AssignmentCommandID, assignment.RunnerID, assignment.ID, commandPayload, now,
+		request.AssignmentCommandID, assignment.RunnerID, assignment.ID, commandPayload, placementAt,
 		request.AssignmentCommand.Correlation.OperationId,
 		request.SandboxID,
-	); err != nil {
-		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Assignment command insert: %w", err)
-	}
-	reserved := addCapacity(selected.Reserved, request.Requirements.Capacity)
-	reservedJSON, err := encodeCapacity(reserved)
-	if err != nil {
-		return DurableAssignment{}, false, err
-	}
-	if _, err := tx.Exec(ctx, `
+	)
+	orderedWrites.Queue(`
 		UPDATE secondbox.runners
 		SET reserved_capacity_json=$2,revision=revision+1,updated_at=$3 WHERE id=$1`,
-		selected.ID, reservedJSON, now,
-	); err != nil {
-		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Runner reservation update: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
+		selected.ID, reservedJSON, placementAt,
+	)
+	orderedWrites.Queue(`
 		UPDATE secondbox.sandboxes
 		SET state='starting',current_instance_id=$2,revision=revision+1,updated_at=$3
 		WHERE id=$1`,
-		request.SandboxID, request.InstanceID, now,
-	); err != nil {
-		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Sandbox assignment update: %w", err)
+		request.SandboxID, request.InstanceID, placementAt,
+	)
+	results := tx.SendBatch(ctx, orderedWrites)
+	var writeErr error
+	workspaceMutation, err := results.Exec()
+	if err != nil {
+		writeErr = fmt.Errorf("%s: %w", workspaceMutationError, err)
+	} else if workspaceMutation.RowsAffected() != 1 {
+		writeErr = errors.New("SecondBox scheduler Workspace start mutation changed before assignment")
+	}
+	for _, errorPrefix := range []string{
+		"SecondBox scheduler Instance insert",
+		"SecondBox scheduler Assignment insert",
+		"SecondBox scheduler Assignment command insert",
+		"SecondBox scheduler Runner reservation update",
+		"SecondBox scheduler Sandbox assignment update",
+	} {
+		if _, err := results.Exec(); err != nil && writeErr == nil {
+			writeErr = fmt.Errorf("%s: %w", errorPrefix, err)
+		}
+	}
+	if err := results.Close(); err != nil {
+		writeErr = errors.Join(
+			writeErr,
+			fmt.Errorf("SecondBox scheduler ordered assignment writes close: %w", err),
+		)
+	}
+	if writeErr != nil {
+		return DurableAssignment{}, false, writeErr
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler commit: %w", err)

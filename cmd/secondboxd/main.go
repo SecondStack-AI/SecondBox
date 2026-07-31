@@ -155,7 +155,13 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		return err
 	}
 	defer runnerStateStore.Close()
-	assignmentScheduler, err := scheduler.NewPostgresStore(processContext, processConfig.DatabaseURL)
+	assignmentScheduler, err := scheduler.NewPostgresStore(
+		processContext,
+		scheduler.PostgresStoreConfig{
+			DatabaseURL: processConfig.DatabaseURL,
+			Now:         service.SystemClock,
+		},
+	)
 	if err != nil {
 		return err
 	}

@@ -283,8 +283,10 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocate(t *testing.T) {
 	}
 
 	assignmentScheduler, err := scheduler.NewPostgresStore(
-		t.Context(),
-		integrationDatabaseURL,
+		t.Context(), scheduler.PostgresStoreConfig{
+			DatabaseURL: integrationDatabaseURL,
+			Now:         func() time.Time { return now },
+		},
 	)
 	if err != nil {
 		t.Fatal(err)
