@@ -180,6 +180,10 @@ func runOperationalCommand(
 		return true, runRunCommand(ctx, session, args[1:], execCommandEnvironment{
 			stdin: os.Stdin, stdout: output, stderr: os.Stderr,
 			httpClient: http.DefaultClient,
+		}, sandboxShellEnvironment{
+			input: os.Stdin, output: output,
+			inputFD: int(os.Stdin.Fd()), outputFD: outputFileDescriptor(output),
+			httpClient: http.DefaultClient,
 		})
 	}
 	if args[0] == "shell" && !isShellSubcommand(args) {

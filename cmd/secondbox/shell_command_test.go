@@ -25,6 +25,7 @@ type shellTestServer struct {
 	terminalHeaders http.Header
 	leaseAcquired   bool
 	leaseReleased   bool
+	deleted         bool
 	creation        secondboxclient.CreateTerminalRequest
 }
 
@@ -240,5 +241,192 @@ func TestRunOperationalCommandLeavesShellSubcommands(t *testing.T) {
 	operation, _, err := resolveCommand([]string{"shell", "create"})
 	if err != nil || operation != "createSandboxTerminal" {
 		t.Errorf("resolveCommand(shell create) = %q, %v", operation, err)
+	}
+}
+
+// ttyRunServer scripts create, wait, Lease, Terminal, and delete for an
+// ephemeral interactive Sandbox.
+func newTTYRunServer(t *testing.T) *shellTestServer {
+	t.Helper()
+	upgrader := websocket.Upgrader{Subprotocols: []string{"secondbox.terminal.v1"}}
+	recorder := &shellTestServer{}
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(
+		func(response http.ResponseWriter, request *http.Request) {
+			recorder.mutex.Lock()
+			switch {
+			case request.Method == http.MethodPost && request.URL.Path == "/v1/sandboxes":
+				recorder.mutex.Unlock()
+				response.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(response, `{"id":"op_1","sandboxId":"sbx_shell1",
+					"kind":"create","state":"pending","requestId":"r1",
+					"createdAt":"2026-07-28T00:00:00Z","updatedAt":"2026-07-28T00:00:00Z"}`)
+				return
+			case request.Method == http.MethodDelete &&
+				strings.HasPrefix(request.URL.Path, "/v1/sandboxes/"):
+				recorder.deleted = true
+				recorder.mutex.Unlock()
+				response.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(response, `{"id":"op_2","sandboxId":"sbx_shell1",
+					"kind":"delete","state":"pending","requestId":"r2",
+					"createdAt":"2026-07-28T00:00:00Z","updatedAt":"2026-07-28T00:00:00Z"}`)
+				return
+			case strings.HasSuffix(request.URL.Path, "/leases"):
+				recorder.leaseAcquired = true
+				recorder.mutex.Unlock()
+				response.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(response, fmt.Sprintf(
+					`{"id":"lea_shell1","sandboxId":"sbx_shell1","generation":7,"state":"active",
+					  "expiresAt":%q,"createdAt":"2026-07-28T00:00:00Z",
+					  "updatedAt":"2026-07-28T00:00:00Z"}`,
+					time.Now().Add(time.Hour).Format(time.RFC3339Nano)))
+				return
+			case strings.HasPrefix(request.URL.Path, "/v1/leases/") &&
+				request.Method == http.MethodDelete:
+				recorder.leaseReleased = true
+				recorder.mutex.Unlock()
+				response.WriteHeader(http.StatusNoContent)
+				return
+			case strings.HasSuffix(request.URL.Path, "/terminals"):
+				recorder.terminalHeaders = request.Header.Clone()
+				if err := json.NewDecoder(request.Body).Decode(&recorder.creation); err != nil {
+					t.Errorf("decode Terminal creation: %v", err)
+				}
+				recorder.mutex.Unlock()
+				response.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprintf(response, `{
+					"id":"term-1","sandboxId":"sbx_shell1","generation":7,"state":"open",
+					"websocketUrl":"%s/attach","subprotocol":"secondbox.terminal.v1",
+					"nextClientSequence":0,"expiresAt":%q}`,
+					"ws"+server.URL[len("http"):],
+					time.Now().Add(time.Minute).Format(time.RFC3339Nano))
+				return
+			case request.URL.Path == "/attach":
+				recorder.mutex.Unlock()
+				connection, err := upgrader.Upgrade(response, request, nil)
+				if err != nil {
+					t.Errorf("upgrade Terminal: %v", err)
+					return
+				}
+				defer connection.Close()
+				assertCLITerminalCredit(t, connection, 0, defaultShellCreditBytes)
+				if err := connection.WriteJSON(secondboxclient.TerminalFrame{
+					StreamOutcomeFrame: &secondboxclient.StreamOutcomeFrame{
+						Type: "outcome", Sequence: 0,
+						Outcome: secondboxclient.ExecOutcome{
+							ExecExited: &secondboxclient.ExecExited{Kind: "exited", ExitCode: 0},
+						},
+					},
+				}); err != nil {
+					t.Errorf("write Terminal outcome: %v", err)
+				}
+				return
+			default:
+				recorder.mutex.Unlock()
+				response.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(response, shellSandboxJSON("sbx_shell1", 7))
+				return
+			}
+		}))
+	t.Cleanup(server.Close)
+	recorder.server = server
+	return recorder
+}
+
+func invokeTTYRun(t *testing.T, recorder *shellTestServer, args []string) (string, error) {
+	t.Helper()
+	inputReader, inputWriter := io.Pipe()
+	t.Cleanup(func() { _ = inputWriter.Close(); _ = inputReader.Close() })
+	var stdout, stderr bytes.Buffer
+	err := runRunCommand(
+		t.Context(),
+		execTestSession(recorder.server.URL),
+		args,
+		execCommandEnvironment{
+			stdout: &stdout, stderr: &stderr, httpClient: recorder.server.Client(),
+		},
+		sandboxShellEnvironment{
+			input: inputReader, output: &stdout, inputFD: -1, outputFD: -1,
+			terminal: &fakeShellTerminalController{}, httpClient: recorder.server.Client(),
+		},
+	)
+	return stderr.String(), err
+}
+
+// TestRunWithTTYCreatesAttachesAndDisposes proves the ephemeral interactive
+// shape: one command creates a Sandbox, attaches a Terminal, and deletes the
+// Sandbox when the Terminal ends.
+func TestRunWithTTYCreatesAttachesAndDisposes(t *testing.T) {
+	recorder := newTTYRunServer(t)
+	if _, err := invokeTTYRun(t, recorder, []string{"coding-environment", "--tty"}); err != nil {
+		t.Fatal(err)
+	}
+	recorder.mutex.Lock()
+	defer recorder.mutex.Unlock()
+	if !recorder.leaseAcquired || !recorder.leaseReleased {
+		t.Errorf("lease acquired=%t released=%t; want both",
+			recorder.leaseAcquired, recorder.leaseReleased)
+	}
+	if recorder.terminalHeaders.Get("SecondBox-Generation") != "7" {
+		t.Errorf("generation = %q", recorder.terminalHeaders.Get("SecondBox-Generation"))
+	}
+	if !recorder.deleted {
+		t.Error("an ephemeral interactive Sandbox must be deleted when the Terminal ends")
+	}
+}
+
+func TestRunWithTTYKeepsTheSandboxWhenAsked(t *testing.T) {
+	recorder := newTTYRunServer(t)
+	stderr, err := invokeTTYRun(t, recorder, []string{"coding-environment", "--tty", "--keep"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder.mutex.Lock()
+	defer recorder.mutex.Unlock()
+	if recorder.deleted {
+		t.Error("--keep must retain the Sandbox")
+	}
+	if !strings.Contains(stderr, "sbx_shell1") {
+		t.Errorf("stderr = %q; want the retained identifier reported", stderr)
+	}
+}
+
+func TestRunWithTTYUsesTheOperandAsItsCommand(t *testing.T) {
+	recorder := newTTYRunServer(t)
+	if _, err := invokeTTYRun(t, recorder, []string{
+		"coding-environment", "--tty", "--", "/bin/bash",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recorder.mutex.Lock()
+	defer recorder.mutex.Unlock()
+	if recorder.creation.Command.ShellCommand == nil ||
+		recorder.creation.Command.ShellCommand.Command != "/bin/bash" {
+		t.Errorf("terminal command = %+v; want the operand", recorder.creation.Command)
+	}
+}
+
+func TestRunWithTTYRejectsIncompatibleOptions(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+	}{
+		{"stdin", []string{"coding-environment", "--tty", "--stdin"}},
+		{"json", []string{"coding-environment", "--tty", "--json"}},
+		{"shell", []string{"coding-environment", "--tty", "--shell", "--", "echo hi"}},
+		{"two operands", []string{"coding-environment", "--tty", "--", "/bin/bash", "extra"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := newTTYRunServer(t)
+			_, err := invokeTTYRun(t, recorder, test.args)
+			if err == nil {
+				t.Fatal("incompatible --tty options must be rejected")
+			}
+			recorder.mutex.Lock()
+			defer recorder.mutex.Unlock()
+			if recorder.leaseAcquired {
+				t.Error("a rejected invocation must not create anything")
+			}
+		})
 	}
 }

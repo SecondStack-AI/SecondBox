@@ -21,6 +21,7 @@ func runRunCommand(
 	session cliSession,
 	args []string,
 	environment execCommandEnvironment,
+	terminal sandboxShellEnvironment,
 ) (resultErr error) {
 	profile, rest, err := splitLeadingOperand("run", "Profile", args)
 	if err != nil {
@@ -43,6 +44,7 @@ func runRunCommand(
 	readyTimeout := flags.Duration(
 		"ready-timeout", defaultRunReadyTimeout, "time allowed for the Sandbox to become ready",
 	)
+	tty := flags.Bool("tty", false, "attach an interactive Terminal instead of running one command")
 	forwardStdin := flags.Bool("stdin", false, "send standard input to the command")
 	emitJSON := flags.Bool("json", false, "write the raw ExecOutcome JSON instead of the output")
 	if err := flags.Parse(rest); err != nil {
@@ -60,9 +62,24 @@ func runRunCommand(
 	if *readyTimeout < time.Second {
 		return errors.New("SecondBox CLI run --ready-timeout must be at least one second")
 	}
-	command, err := buildExecCommand(*shell, flags.Args())
-	if err != nil {
-		return err
+	if *tty {
+		if *forwardStdin || *emitJSON || *shell {
+			return errors.New(
+				"SecondBox CLI run --tty cannot be combined with --stdin, --json, or --shell",
+			)
+		}
+		if len(flags.Args()) > 1 {
+			return errors.New(
+				"SecondBox CLI run --tty accepts at most one command operand",
+			)
+		}
+	}
+	var command secondboxclient.Command
+	if !*tty {
+		command, err = buildExecCommand(*shell, flags.Args())
+		if err != nil {
+			return err
+		}
 	}
 	values, err := parsePairs(environmentValues)
 	if err != nil {
@@ -89,6 +106,18 @@ func runRunCommand(
 	)
 	if err != nil {
 		return err
+	}
+	if *tty {
+		return runInteractiveSandbox(
+			ctx, session, client, interactiveRequest{
+				profile:      profile,
+				metadata:     metadata,
+				operands:     flags.Args(),
+				cwd:          *cwd,
+				keep:         *keep,
+				readyTimeout: *readyTimeout,
+			}, terminal, environment.stderr,
+		)
 	}
 	request := secondboxclient.RunRequest{
 		Profile:              profile,
@@ -138,6 +167,63 @@ func runRunCommand(
 	return writeExecOutcome(environment, result.Outcome)
 }
 
+// interactiveRequest is one ephemeral interactive Sandbox request.
+type interactiveRequest struct {
+	profile      string
+	metadata     map[string]string
+	operands     []string
+	cwd          string
+	keep         bool
+	readyTimeout time.Duration
+}
+
+// runInteractiveSandbox creates a Sandbox, attaches a Terminal to it, and
+// disposes of it when the Terminal ends.
+//
+// Disposal runs on every exit, including a dropped connection, because the
+// Sandbox exists only to serve this session. --keep opts out and reports the
+// identifier so the session can be resumed with secondbox shell.
+func runInteractiveSandbox(
+	ctx context.Context,
+	session cliSession,
+	client *secondboxclient.Client,
+	request interactiveRequest,
+	terminal sandboxShellEnvironment,
+	report io.Writer,
+) (resultErr error) {
+	handle, _, err := client.CreateSandbox(ctx, secondboxclient.CreateSandboxRequest{
+		Profile: request.profile, Metadata: request.metadata,
+	}, "")
+	if err != nil {
+		return err
+	}
+	if !request.keep {
+		defer func() {
+			resultErr = errors.Join(resultErr, deleteRunSandbox(ctx, handle))
+		}()
+	}
+	readyContext, cancel := context.WithTimeout(ctx, request.readyTimeout)
+	defer cancel()
+	if _, err := handle.WaitFor(readyContext, secondboxclient.SandboxStateReady); err != nil {
+		return err
+	}
+	if request.keep {
+		if _, err := fmt.Fprintf(
+			report, "SecondBox retained Sandbox %s\n", handle.Snapshot().ID,
+		); err != nil {
+			return err
+		}
+	}
+	var rest []string
+	if len(request.operands) == 1 {
+		rest = append(rest, "--command", request.operands[0])
+	}
+	if request.cwd != "" {
+		rest = append(rest, "--cwd", request.cwd)
+	}
+	return attachSandboxTerminal(ctx, session, handle, rest, terminal, terminal.httpClient)
+}
+
 // deleteRunSandbox disposes of the Sandbox this command created. The SDK never
 // deletes implicitly, so disposal is requested here and only here.
 // runDisposeAttempts bounds the optimistic-concurrency retry below.
@@ -184,7 +270,7 @@ func runShellCommand(
 	args []string,
 	environment sandboxShellEnvironment,
 	httpClient *http.Client,
-) (resultErr error) {
+) error {
 	reference, rest, err := splitLeadingOperand("shell", "Sandbox", args)
 	if err != nil {
 		return err
@@ -205,9 +291,22 @@ func runShellCommand(
 	if err != nil {
 		return err
 	}
+	return attachSandboxTerminal(ctx, session, handle, rest, environment, httpClient)
+}
+
+// attachSandboxTerminal supplies the values the terminal command would otherwise
+// demand by hand, then delegates to it unchanged. Injected values precede the
+// caller's own arguments, and the flag package keeps the last occurrence, so
+// every injected value stays overridable.
+func attachSandboxTerminal(
+	ctx context.Context,
+	session cliSession,
+	handle *secondboxclient.SandboxHandle,
+	rest []string,
+	environment sandboxShellEnvironment,
+	httpClient *http.Client,
+) (resultErr error) {
 	sandbox := handle.Snapshot()
-	// Injected values precede the caller's own arguments, and the flag package
-	// keeps the last occurrence, so every injected value stays overridable.
 	injected := []string{
 		"--sandbox", sandbox.ID,
 		"--generation", fmt.Sprintf("%d", sandbox.Generation),

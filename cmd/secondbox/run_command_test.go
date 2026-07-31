@@ -94,6 +94,7 @@ func invokeRun(t *testing.T, recorder *runTestServer, args []string) (string, st
 		execCommandEnvironment{
 			stdout: &stdout, stderr: &stderr, httpClient: recorder.server.Client(),
 		},
+		sandboxShellEnvironment{},
 	)
 	return stdout.String(), stderr.String(), err
 }
@@ -312,6 +313,7 @@ func TestRunForwardsStandardInput(t *testing.T) {
 			stdin:  strings.NewReader("piped\n"),
 			stdout: &stdout, stderr: &stderr, httpClient: recorder.server.Client(),
 		},
+		sandboxShellEnvironment{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -335,6 +337,7 @@ func TestRunRefusesOversizedStdinBeforeCreating(t *testing.T) {
 			stdin:  strings.NewReader(strings.Repeat("x", maximumExecStdinBytes+1)),
 			stdout: &stdout, stderr: &stderr, httpClient: recorder.server.Client(),
 		},
+		sandboxShellEnvironment{},
 	)
 	if err == nil || !strings.Contains(err.Error(), "must not exceed") {
 		t.Fatalf("error = %v; want an oversized-input rejection", err)
@@ -392,6 +395,7 @@ func TestRunRetriesDeleteWhenTheRevisionMoved(t *testing.T) {
 		execCommandEnvironment{
 			stdout: &stdout, stderr: &stderr, httpClient: server.Client(),
 		},
+		sandboxShellEnvironment{},
 	)
 	if err != nil {
 		t.Fatalf("a stale validator must be retried, not reported: %v", err)
@@ -439,6 +443,7 @@ func TestRunReportsADeleteFailureThatIsNotARace(t *testing.T) {
 		execCommandEnvironment{
 			stdout: &stdout, stderr: &stderr, httpClient: server.Client(),
 		},
+		sandboxShellEnvironment{},
 	)
 	if err == nil || !strings.Contains(err.Error(), "state_conflict") {
 		t.Fatalf("error = %v; want the delete failure surfaced", err)
