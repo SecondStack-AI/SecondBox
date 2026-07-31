@@ -12,6 +12,7 @@ import (
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/store/lifecycleprojection"
 	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -3422,8 +3423,14 @@ func recordAssignmentEvent(
 			if command.RowsAffected() != 1 {
 				return errors.New("SecondBox runner ready AssignmentResult lacks the durable Workspace start mutation")
 			}
-			if err := wakeSandboxLifecycle(ctx, tx, result.Fence, now); err != nil {
+			projected, err := projectReadySandbox(ctx, tx, result.Fence, now)
+			if err != nil {
 				return err
+			}
+			if !projected {
+				if err := wakeSandboxLifecycle(ctx, tx, result.Fence, now); err != nil {
+					return err
+				}
 			}
 			return acknowledgeAssignmentCommands(
 				ctx,
@@ -3455,6 +3462,39 @@ func recordAssignmentEvent(
 		return ErrRunnerMessage
 	}
 	return nil
+}
+
+func projectReadySandbox(
+	ctx context.Context,
+	tx pgx.Tx,
+	fence *runnerv1.AssignmentFence,
+	now time.Time,
+) (bool, error) {
+	command, err := tx.Exec(ctx, `
+		UPDATE secondbox.sandboxes
+		SET state='ready',lifecycle_action='mark_ready',
+		    next_reconcile_at=$4,reconcile_owner='',reconcile_claim_expires_at=NULL,
+		    last_activity_at=COALESCE(last_activity_at,$4),
+		    revision=revision+1,updated_at=$4
+		WHERE id=$1 AND generation=$2 AND current_instance_id=$3
+		  AND state='starting' AND desired_state='running'`,
+		fence.SandboxId,
+		fence.SandboxGeneration,
+		fence.InstanceId,
+		now.UTC(),
+	)
+	if err != nil {
+		return false, fmt.Errorf("SecondBox runner ready Sandbox projection: %w", err)
+	}
+	if command.RowsAffected() == 0 {
+		return false, nil
+	}
+	if err := lifecycleprojection.ProjectReadyOperations(
+		ctx, tx, fence.SandboxId, now,
+	); err != nil {
+		return false, fmt.Errorf("SecondBox runner ready Operation projection: %w", err)
+	}
+	return true, nil
 }
 
 func wakeSandboxLifecycle(

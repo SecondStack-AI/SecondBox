@@ -2074,16 +2074,26 @@ func TestReadyAssignmentRecordsInitialGuestHeartbeatEvidence(t *testing.T) {
 	}
 	var (
 		state, liveness, mutationKind, commandState string
-		readyAt, heartbeatAt                        time.Time
+		sandboxState, lifecycleAction               string
+		operationState, reconcileOwner              string
+		readyAt, heartbeatAt, nextReconcileAt       time.Time
+		completedAt, readyProjectedAt               time.Time
 	)
 	if err := store.pool.QueryRow(t.Context(), `
 		SELECT instance.state,instance.guest_liveness,instance.ready_at,
-		       instance.guest_heartbeat_at,workspace.mutation_kind,command.state
+		       instance.guest_heartbeat_at,workspace.mutation_kind,command.state,
+		       sandbox.state,sandbox.lifecycle_action,sandbox.next_reconcile_at,
+		       sandbox.reconcile_owner,operation.state,operation.completed_at,
+		       timing.observed_at
 		FROM secondbox.instances AS instance
 		JOIN secondbox.sandboxes AS sandbox ON sandbox.id=instance.sandbox_id
 		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
 		JOIN secondbox.runner_commands AS command
 		  ON command.assignment_id=$2 AND command.kind='assignment'
+		JOIN secondbox.operations AS operation
+		  ON operation.id='operation-start' AND operation.sandbox_id=sandbox.id
+		JOIN secondbox.operation_stage_timings AS timing
+		  ON timing.operation_id=operation.id AND timing.stage='ready_projected'
 		WHERE instance.id=$1`,
 		fence.InstanceId,
 		fence.AssignmentId,
@@ -2094,6 +2104,13 @@ func TestReadyAssignmentRecordsInitialGuestHeartbeatEvidence(t *testing.T) {
 		&heartbeatAt,
 		&mutationKind,
 		&commandState,
+		&sandboxState,
+		&lifecycleAction,
+		&nextReconcileAt,
+		&reconcileOwner,
+		&operationState,
+		&completedAt,
+		&readyProjectedAt,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -2102,15 +2119,139 @@ func TestReadyAssignmentRecordsInitialGuestHeartbeatEvidence(t *testing.T) {
 		!readyAt.Equal(resultAt) ||
 		!heartbeatAt.Equal(resultAt) ||
 		mutationKind != "" ||
-		commandState != "acknowledged" {
+		commandState != "acknowledged" ||
+		sandboxState != "ready" ||
+		lifecycleAction != "mark_ready" ||
+		!nextReconcileAt.Equal(resultAt) ||
+		reconcileOwner != "" ||
+		operationState != "succeeded" ||
+		!completedAt.Equal(resultAt) ||
+		!readyProjectedAt.Equal(resultAt) {
 		t.Fatalf(
-			"ready evidence state=%q liveness=%q readyAt=%s heartbeatAt=%s mutation=%q command=%q",
+			"ready evidence instance=%q/%q readyAt=%s heartbeatAt=%s mutation=%q command=%q Sandbox=%q action=%q next=%s owner=%q Operation=%q completed=%s projected=%s",
 			state,
 			liveness,
 			readyAt,
 			heartbeatAt,
 			mutationKind,
 			commandState,
+			sandboxState,
+			lifecycleAction,
+			nextReconcileAt,
+			reconcileOwner,
+			operationState,
+			completedAt,
+			readyProjectedAt,
+		)
+	}
+}
+
+func TestReadyAssignmentDefersStopIntentToLifecycleReconciliation(t *testing.T) {
+	store := openRunnerControlDatabase(t)
+	now := time.Date(2026, 7, 29, 20, 50, 0, 0, time.UTC)
+	fence := seedStartingAssignment(t, store, "ready-after-stop", "starting", now)
+	insertDeliveredAssignmentCommand(
+		t,
+		store,
+		fence,
+		"assignment-command-ready-after-stop",
+		now,
+	)
+	if _, err := store.pool.Exec(t.Context(), `
+		UPDATE secondbox.sandboxes
+		SET desired_state='stopped',reconcile_owner='stop-worker',
+		    reconcile_claim_expires_at=$2
+		WHERE id=$1`,
+		fence.SandboxId,
+		now.Add(time.Minute),
+	); err != nil {
+		t.Fatal(err)
+	}
+	resultAt := now.Add(time.Second)
+	tx, err := store.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(t.Context())
+	if err := recordAssignmentEvent(
+		t.Context(),
+		tx,
+		"runner-home",
+		&runnerv1.RunnerToControlPlane{
+			Message: &runnerv1.RunnerToControlPlane_AssignmentResult{
+				AssignmentResult: &runnerv1.AssignmentResult{
+					Fence:            fence,
+					Terminal:         runnerv1.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY,
+					BackendKind:      "firecracker",
+					BackendReference: "fc-ready-after-stop",
+					Correlation: &runnerv1.Correlation{
+						RequestId: "request-start", OperationId: "operation-start",
+						SandboxId: fence.SandboxId, InstanceId: fence.InstanceId,
+						SandboxGeneration: fence.SandboxGeneration,
+						AssignmentId:      fence.AssignmentId, RunnerId: "runner-home",
+					},
+				},
+			},
+		},
+		resultAt,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var (
+		sandboxState, desiredState, instanceState string
+		mutationKind, operationState              string
+		reconcileOwner                            string
+		nextReconcileAt                           time.Time
+		hasReadyProjection                        bool
+	)
+	if err := store.pool.QueryRow(t.Context(), `
+		SELECT sandbox.state,sandbox.desired_state,instance.state,
+		       workspace.mutation_kind,operation.state,sandbox.reconcile_owner,
+		       sandbox.next_reconcile_at,
+		       EXISTS (
+		         SELECT 1 FROM secondbox.operation_stage_timings
+		         WHERE operation_id=operation.id AND stage='ready_projected'
+		       )
+		FROM secondbox.sandboxes AS sandbox
+		JOIN secondbox.instances AS instance ON instance.id=sandbox.current_instance_id
+		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+		JOIN secondbox.operations AS operation
+		  ON operation.id='operation-start' AND operation.sandbox_id=sandbox.id
+		WHERE sandbox.id=$1`,
+		fence.SandboxId,
+	).Scan(
+		&sandboxState,
+		&desiredState,
+		&instanceState,
+		&mutationKind,
+		&operationState,
+		&reconcileOwner,
+		&nextReconcileAt,
+		&hasReadyProjection,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if sandboxState != "starting" ||
+		desiredState != "stopped" ||
+		instanceState != "ready" ||
+		mutationKind != "" ||
+		operationState != "pending" ||
+		reconcileOwner != "" ||
+		!nextReconcileAt.Equal(resultAt) ||
+		hasReadyProjection {
+		t.Fatalf(
+			"stop intent Sandbox=%q/%q Instance=%q mutation=%q Operation=%q owner=%q next=%s projected=%t",
+			sandboxState,
+			desiredState,
+			instanceState,
+			mutationKind,
+			operationState,
+			reconcileOwner,
+			nextReconcileAt,
+			hasReadyProjection,
 		)
 	}
 }
@@ -2181,6 +2322,13 @@ func seedStartingAssignment(
 		) VALUES (
 			$6,$2,$5,'runner-home','revision','firecracker','',3,$7,$8,
 			'{}','{}','{}','',0,8,$9,$9,'',$9,$4,1,$4,$4
+		);
+		INSERT INTO secondbox.operations (
+			id,tenant_ref,subject_ref,sandbox_id,snapshot_id,kind,state,request_id,
+			request_metadata_json,error_code,error_message,retryable,created_at,updated_at
+		) VALUES (
+			'operation-start','tenant','subject',$2,'','start','pending','request-start',
+			'{}','','',false,$4,$4
 		)`,
 		pgx.QueryExecModeSimpleProtocol,
 		"workspace-"+suffix, fence.SandboxId, "assignment-command-"+suffix,

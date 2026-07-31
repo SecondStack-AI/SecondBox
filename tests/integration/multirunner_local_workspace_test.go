@@ -371,7 +371,7 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocate(t *testing.T) {
 		reconciler,
 		sandboxA.ID,
 		routeNow.Add(2*time.Second),
-		lifecycle.ActionMarkReady,
+		lifecycle.ActionWait,
 	)
 	currentA, err = controlPlane.GetSandbox(t.Context(), principal, sandboxA.ID)
 	if err != nil {

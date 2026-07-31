@@ -361,7 +361,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	}
 	if count != 1 || backendReference != "fc-instance-1" ||
 		!json.Valid([]byte(capabilityJSON)) ||
-		sandboxState != "starting" || guestLiveness != "ready" ||
+		sandboxState != "ready" || guestLiveness != "ready" ||
 		sandboxStartSampleCount != 4 || sandboxStartP95Milliseconds != 75 {
 		t.Fatalf(
 			"durable Assignment evidence = count %d, backend %q, capability %q, Sandbox %q, guest %q, starts %d p95 %d",

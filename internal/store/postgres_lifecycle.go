@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/internal/store/lifecycleprojection"
 	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
@@ -511,26 +512,8 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 	}
 	switch action {
 	case "mark_ready":
-		if _, err := tx.Exec(ctx, `
-			WITH inserted_stage AS (
-				INSERT INTO secondbox.operation_stage_timings (
-					operation_id,sandbox_id,stage,observed_at
-				)
-				SELECT id,sandbox_id,'ready_projected',$2
-				FROM secondbox.operations
-				WHERE sandbox_id=$1 AND kind IN ('create','start')
-				  AND state IN ('pending','running')
-				ON CONFLICT (operation_id,stage) DO NOTHING
-				RETURNING 1
-			)
-			UPDATE secondbox.operations
-			SET state=$3,error_code='',error_message='',retryable=false,
-			    started_at=COALESCE(started_at,$2),completed_at=$2,updated_at=$2
-			WHERE sandbox_id=$1 AND kind IN ('create','start')
-			  AND state IN ('pending','running')`,
-			claim.SandboxID,
-			now.UTC(),
-			contracts.OperationStateSucceeded,
+		if err := lifecycleprojection.ProjectReadyOperations(
+			ctx, tx, claim.SandboxID, now,
 		); err != nil {
 			return fmt.Errorf("SecondBox lifecycle ready projection failed: %w", err)
 		}
