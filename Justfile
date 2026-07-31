@@ -33,6 +33,9 @@ build-artifacts:
 test-firecracker:
     scripts/test-firecracker.sh
 
+test-snapshot-resume:
+    scripts/test-snapshot-resume.sh
+
 test-multirunner:
     scripts/test-multirunner.sh
 

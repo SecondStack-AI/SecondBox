@@ -12,43 +12,55 @@ provenance: SecondBox timing qualification and repository-owner direction, 2026-
 
 Make an unsaturated Sandbox reach `ready` in 100–200 ms by resuming an identity-neutral, post-boot memory snapshot instead of booting the guest kernel, init, and guest agent for every Instance. The full signed toolset remains in the guest.
 
-After the orchestration work through `bafa8c9`, a qualified concurrency-1 run measured `create_to_ready` at 854 ms p50 and 975 ms p95. The runner-local boot path is now 455 ms p50 and 496 ms p95, including 351/393 ms of guest negotiation. Snapshot resume remains the intended way to remove guest boot; host micro-optimizations and rootfs trimming are not.
+After the event-driven orchestration and reflinked Workspace-template work through `8703554`, a qualified concurrency-1 run measured `create_to_ready` at 657 ms p50 and 823 ms p95. The runner-local boot path is 381/426 ms, including 337/384 ms of guest negotiation. Snapshot resume remains the intended way to remove guest boot; host micro-optimizations and rootfs trimming are not.
 
-The target is not reachable with the path as currently composed. Unsaturated `runner_admission` is 89 ms p50 and 122 ms p95, which fails the 25 ms stop gate below before snapshot load is counted. `pre_assignment` is another 289/401 ms and `ready_projection` is 66/187 ms. Snapshot load time is deliberately still unmeasured: the plan stops at the first failed feasibility gate rather than adding a restore path whose unaffected orchestration already exceeds the total target.
+A test-only KVM qualification now measures the missing low-level floor. Across 256, 512, and 2048 MiB shapes, Firecracker's immutable file-backed snapshot load was 3–4 ms p50/p95 and process-start-through-post-resume-hardening was 16–18 ms p50/p95. A cache-evicted sample completed in 39–45 ms and read only 84–86 MiB at every shape. Warm samples read at most 2.6 MiB, so no per-start full memory-image copy was observed.
+
+The end-to-end target is still not reachable with the path as currently composed. Unsaturated `runner_admission` is 26/39 ms and still fails the 25 ms p95 stop gate. `pre_assignment` is 190/220 ms, `ready_projection` is 23/133 ms, and client visibility is 21/33 ms. Those unaffected spans already exceed the 200 ms ceiling before a production resume path performs template lookup, assignment bind, Workspace mount, or network identity activation. The plan therefore remains gated at Task 1 even though the low-level snapshot-load sub-gate passes.
 
 The provisional no-saturation latency budget is:
 
 | Step | Measurement supporting the estimate | Required budget |
 |---|---|---:|
 | API validation and durable admission | Stress API p95 was 5 ms | 5–10 ms |
-| Pre-assignment orchestration | Corrected isolated measurement is 289 ms p50 and 401 ms p95 | 289–401 ms now; must fit inside the total target |
-| Command delivery and runner admission | Corrected isolated measurement is 89 ms p50 and 122 ms p95 | 89–122 ms now; 10–25 ms required |
-| Signed-template lookup and Workspace attachment | Current trust and attachment stages are 0–1 ms | 1–3 ms |
-| Guest IP, TAP, and host network policy | Current runner measurement is 10–13 ms | 10–15 ms |
-| Process start and file-backed snapshot load | Process start is 0–1 ms; snapshot load is not measured | 30–70 ms |
-| Post-resume hardening, identity bind, network configuration, and Workspace mount | Not measured; current entropy/secrets steps are about 2 ms after a cold boot | 10–30 ms |
+| Pre-assignment orchestration | Latest isolated measurement is 190 ms p50 and 220 ms p95, including 148/192 ms of Workspace provisioning | Must fit inside the total target |
+| Command delivery and runner admission | Latest isolated measurement is 26 ms p50 and 39 ms p95 | 10–25 ms required |
+| Signed-template lookup and Workspace attachment | Current trust and attachment stages are 0 ms | 1–3 ms |
+| Guest IP, TAP, and host network policy | Current runner measurement is 11–15 ms | 10–15 ms |
+| Process start and file-backed snapshot load | Qualified test-only floor is 1 ms process start and 3–4 ms warm load p50/p95 | 5–15 ms |
+| First control response and post-resume hardening | Qualified test-only total, including process and load, is 16–18 ms p50/p95 | 10–30 ms before assignment bind and Workspace mount |
 | Runner result production | Current runner `ready` stage is 2 ms | 2–10 ms |
 | Contingency | Required for filesystem and scheduler variance | 20 ms |
-| Ready projection and client visibility | Corrected isolated measurements are 66/187 ms and 24/48 ms | Must fit inside the total target |
-| **Total** | **Current end-to-end is 854 ms p50 and 975 ms p95; snapshot load remains unmeasured** | **100–200 ms required** |
+| Ready projection and client visibility | Latest isolated measurements are 23/133 ms and 21/33 ms | Must fit inside the total target |
+| **Total** | **Current end-to-end is 657 ms p50 and 823 ms p95; low-level warm resume floor is 16–18 ms** | **100–200 ms required** |
 
 ## Feasibility gate result
 
-The snapshot implementation is stopped at Task 1 as required by the plan.
+The production snapshot implementation remains stopped at Task 1 as required by the plan. The low-level file-backed load sub-gate passes; the orchestration gate does not.
 
 | Qualified workload | `create_to_ready` p50/p95 | `pre_assignment` p50/p95 | `runner_admission` p50/p95 | `runner_boot` p50/p95 | `ready_projection` p50/p95 |
 |---|---:|---:|---:|---:|---:|
-| Unsaturated, concurrency 1, 10 fixed arrivals at 0.25/s | 854/975 ms | 289/401 ms | 89/122 ms | 455/496 ms | 66/187 ms |
-| Burst 32, 16 concurrent Workspace creates | 3,130/3,366 ms | 2,103/2,679 ms | 51/92 ms | 468/579 ms | 490/739 ms |
+| Unsaturated, concurrency 1, 10 fixed arrivals at 0.25/s | 657/823 ms | 190/220 ms | 26/39 ms | 381/426 ms | 23/133 ms |
+| Burst 32, 16 concurrent Workspace creates | 2,797/3,195 ms | 1,481/2,237 ms | 84/1,020 ms | 699/1,695 ms | 454/587 ms |
 
-The concurrency-1 report is `.tmp/lifecycle-snapshot-gate-c1-result.json` at source commit `bafa8c9`. The burst report is `.tmp/lifecycle-workspace-create-c16.json`; it qualified the Workspace-create candidate subsequently committed as `bafa8c9`. Both runs used KVM, Btrfs, the signed qualified bundle, and zero refusals or failures. The burst completed at 9.48 Sandboxes/s.
+The current concurrency-1 report is `.tmp/lifecycle-workspace-template-c1-result.json`; the burst report is `.tmp/lifecycle-workspace-template-burst32-result.json`. They qualified the Workspace-template candidate subsequently committed as `8703554`. Both runs used KVM, Btrfs, the signed qualified bundle, and zero refusals or failures. The burst completed at 9.79 Sandboxes/s.
+
+The standalone snapshot-load evidence is `.tmp/snapshot-resume-feasibility-qualified-20260731.json`. It used Firecracker v1.16.1 on Linux 7.1.4, Btrfs, KVM, one cache-evicted sample, and 20 warm samples per shape. The report truthfully records source commit `8703554` with `sourceTreeDirty: true` because it qualified the uncommitted harness itself.
+
+| Memory shape | Warm load p50/p95 | Warm total p50/p95 | Cache-evicted load/total | Cache-evicted reads | Full copy observed |
+|---:|---:|---:|---:|---:|---:|
+| 256 MiB | 4/4 ms | 16/17 ms | 5/45 ms | 85.7 MiB | no |
+| 512 MiB | 3/4 ms | 16/18 ms | 5/39 ms | 83.6 MiB | no |
+| 2048 MiB | 3/4 ms | 16/17 ms | 5/39 ms | 83.7 MiB | no |
+
+This is a feasibility floor, not a reusable template. The test snapshots an already assignment-bound guest, keeps its disks and memory coherent by capturing while paused, reloads it with a fresh vsock UDS, proves the first control response, and invokes post-resume hardening. It deliberately does not connect restore to Manager lifecycle, public Profile schemas, runner assignment fencing, networking, or a tenant-neutral template cache. A 64 MiB exploratory source boot was rejected because the signed guest cannot boot at that memory size; the qualified scenario uses 256 MiB of memory and a separate 64 MiB Workspace.
 
 Snapshot resume can remove only the runner boot portion of these measurements. It cannot remove pre-assignment orchestration, runner admission, ready projection, or client visibility. The next optimization pass must therefore:
 
-1. Split `pre_assignment` into durable create admission, reconciliation pickup, placement, assignment persistence, and runner-command publication.
-2. Split `ready_projection` into result persistence, operation transition, Sandbox projection, and subscriber delivery.
-3. Reduce unsaturated `runner_admission` to at most 25 ms and re-run this gate.
-4. Only after those budgets pass, measure immutable file-backed snapshot load and process I/O before implementing Tasks 2–9.
+1. Receipt-directory pipelining reduced the qualified unsaturated `workspace_provision` span from 148/192 ms to 129/154 ms p50/p95 over 30 arrivals. The full runner-local mutation is 108/132 ms; the earlier 28/40 ms figure covered only UUID rewrite, not manifest and receipt durability.
+2. Split and reduce `ready_projection` across result persistence, operation transition, Sandbox projection, and subscriber delivery.
+3. Reduce unsaturated `runner_admission` p95 from 39 ms to at most 25 ms.
+4. Re-run the end-to-end gate; only after the unaffected spans fit inside the 200 ms budget should production work proceed to Tasks 2–9.
 
 ## Fixed architecture
 
@@ -91,9 +103,9 @@ Run the focused tests introduced by each task, then run all repository-wide and 
 - `just test-contract`
 - `just test-compose`
 - `just test-deployment`
+- `just test-snapshot-resume` with the explicit signed bundle, KVM, Btrfs/XFS Workspace root, shapes, iterations, and absent evidence output path
 - `git diff --check`
 - `(cd runner && go test ./internal/firecracker ./internal/guest ./internal/runnercontrol)`
-- `(cd runner && SECONDBOX_RUNNER_QUALIFY_SNAPSHOT=1 go test ./internal/firecracker -run 'TestSmokeGoldenSnapshot' -count=1)` with the signed bundle, pinned Firecracker binary, and qualified KVM host
 - `just test-scenario` with `SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1`
 - `just test-stress` with `SECONDBOX_REQUIRE_QUALIFIED_STRESS=1`
 - Run the new snapshot-resume qualification repeatedly at concurrency 1, 2, 4, 8, and 16; retain machine-readable per-stage evidence, host process I/O counters, cache identity, and failure classifications
@@ -102,8 +114,8 @@ Run the focused tests introduced by each task, then run all repository-wide and 
 
 - [x] Record corrected cold-boot and runner-admission p50/p95/p99 at concurrency 1 and under saturation, using `runner_admission`, `artifact_verify`, `workspace_attach`, `network_setup`, `compute_launch`, `guest_negotiation`, and `ready` as separate boundaries.
 - [ ] Add provider-neutral resume milestones for template lookup, snapshot load, post-resume hardening, assignment binding, Workspace readiness, and final readiness. Keep backend and host details in runner-local logs only.
-- [ ] Build a one-off qualified measurement harness around the existing low-level snapshot load API and record process start, API load, first control response, hardening, and total time without connecting it to lifecycle or public startup.
-- [ ] Measure file-backed memory load versus any full-copy behavior with `/proc/<pid>/io`, major faults, and wall time at every supported Profile memory shape.
+- [x] Build a one-off qualified measurement harness around the existing low-level snapshot load API and record process start, API load, first control response, hardening, and total time without connecting it to lifecycle or public startup.
+- [x] Measure file-backed memory load versus any full-copy behavior with `/proc/<pid>/io`, major faults, and wall time at the currently deployed and qualified 256, 512, and 2048 MiB Profile/runner shapes.
 - [x] Stop the plan and report the floor if unsaturated runner admission exceeds 25 ms, snapshot load exceeds 70 ms, or load performs a per-start full memory-image copy that makes the 200 ms ceiling impossible.
 - [x] Run the runner timing tests and retain the raw qualified evidence with the implementation report.
 
