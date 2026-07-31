@@ -29,8 +29,8 @@ type ProtocolStateStore interface {
 	RecordRegistration(context.Context, *runnerv1.RunnerRegistration, time.Time) (bool, error)
 	RecordHeartbeat(context.Context, *runnerv1.RunnerHeartbeat, time.Time) (bool, error)
 	RecordEvents(context.Context, []EventPersistenceRecord) error
-	ClaimCommand(context.Context, string, string, time.Time) (CommandDelivery, bool, error)
-	MarkCommandDelivered(context.Context, CommandDelivery, string, time.Time) error
+	ClaimCommands(context.Context, string, string, int64, time.Time) ([]CommandDelivery, error)
+	MarkCommandsDelivered(context.Context, []CommandDelivery, string) error
 }
 
 // EventPersistenceRecord keeps the receive timestamp attached to one ordered durable event.
@@ -382,56 +382,81 @@ func (server *Server) sendNextOutboundFrame(
 	runnerID string,
 	connectionID string,
 ) (bool, error) {
-	for delivered := int64(0); delivered < server.config.CommandBatchSize; delivered++ {
-		found, err := server.sendNextControlCommand(
-			ctx, stream, runnerID, connectionID,
-		)
-		if err != nil {
-			return false, err
-		}
-		if !found {
-			return false, server.sendClaimedRelayFrame(
-				ctx, stream, session, runnerID, connectionID,
-			)
-		}
-	}
-	return true, nil
-}
-
-func (server *Server) sendNextControlCommand(
-	ctx context.Context,
-	stream controlPlaneFrameSender,
-	runnerID string,
-	connectionID string,
-) (bool, error) {
 	deliveryStartedAt := time.Now()
 	claimAt := server.config.Now()
-	delivery, found, err := server.config.StateStore.ClaimCommand(
-		ctx, runnerID, connectionID, claimAt,
+	deliveries, err := server.config.StateStore.ClaimCommands(
+		ctx,
+		runnerID,
+		connectionID,
+		server.config.CommandBatchSize,
+		claimAt,
 	)
 	if err != nil {
 		return false, err
 	}
-	if found {
+	if len(deliveries) == 0 {
+		return false, server.sendClaimedRelayFrame(
+			ctx, stream, session, runnerID, connectionID,
+		)
+	}
+	deliveryDurations := make([]time.Duration, len(deliveries))
+	for index := range deliveries {
+		delivery := &deliveries[index]
 		if err := stream.Send(delivery.Message); err != nil {
-			return false, fmt.Errorf("SecondBox runner control command send: %w", err)
+			persistErr := server.config.StateStore.MarkCommandsDelivered(
+				ctx,
+				deliveries[:index],
+				connectionID,
+			)
+			if persistErr == nil {
+				logCommandDeliveries(
+					runnerID,
+					deliveries[:index],
+					claimAt,
+					deliveryDurations[:index],
+				)
+			}
+			return false, errors.Join(
+				fmt.Errorf("SecondBox runner control command send: %w", err),
+				persistErr,
+			)
 		}
-		if err := server.config.StateStore.MarkCommandDelivered(
-			ctx, delivery, connectionID, server.config.Now(),
-		); err != nil {
-			return false, err
-		}
+		delivery.DeliveredAt = server.config.Now()
+		deliveryDurations[index] = time.Since(deliveryStartedAt)
+	}
+	if err := server.config.StateStore.MarkCommandsDelivered(
+		ctx,
+		deliveries,
+		connectionID,
+	); err != nil {
+		return false, err
+	}
+	logCommandDeliveries(runnerID, deliveries, claimAt, deliveryDurations)
+	if int64(len(deliveries)) < server.config.CommandBatchSize {
+		return false, server.sendClaimedRelayFrame(
+			ctx, stream, session, runnerID, connectionID,
+		)
+	}
+	return true, nil
+}
+
+func logCommandDeliveries(
+	runnerID string,
+	deliveries []CommandDelivery,
+	claimedAt time.Time,
+	deliveryDurations []time.Duration,
+) {
+	for index, delivery := range deliveries {
 		slog.Info(
 			"SecondBox runner control command delivered",
 			"runnerId", runnerID,
 			"commandId", delivery.ID,
 			"kind", delivery.Kind,
-			"queueMs", commandQueueDuration(delivery.CreatedAt, claimAt).Milliseconds(),
-			"deliveryMs", time.Since(deliveryStartedAt).Milliseconds(),
+			"batchSize", len(deliveries),
+			"queueMs", commandQueueDuration(delivery.CreatedAt, claimedAt).Milliseconds(),
+			"deliveryMs", deliveryDurations[index].Milliseconds(),
 		)
-		return true, nil
 	}
-	return false, nil
 }
 
 func commandQueueDuration(createdAt, claimedAt time.Time) time.Duration {

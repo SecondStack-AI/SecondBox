@@ -158,8 +158,8 @@ func TestOutboundPumpDrainsOnlyTheConfiguredCommandBatch(t *testing.T) {
 		state.delivered[1] != "fence-2" {
 		t.Fatalf("delivered commands = %#v", state.delivered)
 	}
-	if state.claims != 2 {
-		t.Fatalf("command claims = %d, want 2", state.claims)
+	if state.claims != 1 {
+		t.Fatalf("command batch claims = %d, want 1", state.claims)
 	}
 }
 
@@ -187,8 +187,35 @@ func TestOutboundDrainContinuesAcrossCommandBatches(t *testing.T) {
 			len(state.delivered),
 		)
 	}
-	if state.claims != 4 {
-		t.Fatalf("outbound drain claims = %d, want final empty claim after 3 commands", state.claims)
+	if state.claims != 2 {
+		t.Fatalf("outbound drain batch claims = %d, want 2", state.claims)
+	}
+}
+
+func TestOutboundBatchPersistsSuccessfulPrefixBeforeSendFailure(t *testing.T) {
+	state := &queuedCommandStateStore{
+		deliveries: []CommandDelivery{
+			controlCommandDelivery("fence-1"),
+			controlCommandDelivery("fence-2"),
+			controlCommandDelivery("fence-3"),
+		},
+	}
+	sendErr := errors.New("stream send failed")
+	server := &Server{config: ServerConfig{
+		StateStore: state, CommandBatchSize: 3, Now: time.Now,
+	}}
+	sender := &prefixFailingControlPlaneSender{failAt: 1, err: sendErr}
+	_, err := server.sendNextOutboundFrame(
+		t.Context(), sender, nil, "runner-1", "connection-1",
+	)
+	if !errors.Is(err, sendErr) {
+		t.Fatalf("outbound batch error = %v, want send failure", err)
+	}
+	if len(state.delivered) != 1 || state.delivered[0] != "fence-1" {
+		t.Fatalf("persisted successful prefix = %#v, want fence-1", state.delivered)
+	}
+	if len(state.deliveries) != 2 || state.deliveries[0].ID != "fence-2" {
+		t.Fatalf("undelivered suffix = %#v", state.deliveries)
 	}
 }
 
@@ -357,13 +384,14 @@ type failingCommandStateStore struct {
 	relayStateStore
 }
 
-func (failingCommandStateStore) ClaimCommand(
+func (failingCommandStateStore) ClaimCommands(
 	context.Context,
 	string,
 	string,
+	int64,
 	time.Time,
-) (CommandDelivery, bool, error) {
-	return CommandDelivery{}, false, errCommandClaim
+) ([]CommandDelivery, error) {
+	return nil, errCommandClaim
 }
 
 type recordingFrameRelay struct {
@@ -417,6 +445,21 @@ func (sender *recordingControlPlaneSender) Send(message *runnerv1.ControlPlaneTo
 	return sender.err
 }
 
+type prefixFailingControlPlaneSender struct {
+	calls  int
+	failAt int
+	err    error
+}
+
+func (sender *prefixFailingControlPlaneSender) Send(*runnerv1.ControlPlaneToRunner) error {
+	call := sender.calls
+	sender.calls++
+	if call == sender.failAt {
+		return sender.err
+	}
+	return nil
+}
+
 type relayCredentialVerifier struct{}
 
 func (relayCredentialVerifier) VerifyClientCertificate(
@@ -449,15 +492,20 @@ func (relayStateStore) RecordEvents(context.Context, []EventPersistenceRecord) e
 	return nil
 }
 
-func (relayStateStore) ClaimCommand(context.Context, string, string, time.Time) (CommandDelivery, bool, error) {
-	return CommandDelivery{}, false, nil
+func (relayStateStore) ClaimCommands(
+	context.Context,
+	string,
+	string,
+	int64,
+	time.Time,
+) ([]CommandDelivery, error) {
+	return []CommandDelivery{}, nil
 }
 
-func (relayStateStore) MarkCommandDelivered(
+func (relayStateStore) MarkCommandsDelivered(
 	context.Context,
-	CommandDelivery,
+	[]CommandDelivery,
 	string,
-	time.Time,
 ) error {
 	return nil
 }
@@ -499,12 +547,13 @@ func (store *wakeupCommandStateStore) enqueue(delivery CommandDelivery) {
 	store.delivery = &delivery
 }
 
-func (store *wakeupCommandStateStore) ClaimCommand(
+func (store *wakeupCommandStateStore) ClaimCommands(
 	context.Context,
 	string,
 	string,
+	int64,
 	time.Time,
-) (CommandDelivery, bool, error) {
+) ([]CommandDelivery, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.delivery == nil {
@@ -512,20 +561,21 @@ func (store *wakeupCommandStateStore) ClaimCommand(
 		case store.emptyPass <- struct{}{}:
 		default:
 		}
-		return CommandDelivery{}, false, nil
+		return []CommandDelivery{}, nil
 	}
-	return *store.delivery, true, nil
+	return []CommandDelivery{*store.delivery}, nil
 }
 
-func (store *wakeupCommandStateStore) MarkCommandDelivered(
+func (store *wakeupCommandStateStore) MarkCommandsDelivered(
 	_ context.Context,
-	delivery CommandDelivery,
+	deliveries []CommandDelivery,
 	_ string,
-	_ time.Time,
 ) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if store.delivery == nil || store.delivery.ID != delivery.ID {
+	if len(deliveries) != 1 ||
+		store.delivery == nil ||
+		store.delivery.ID != deliveries[0].ID {
 		return errors.New("unexpected wakeup command delivery")
 	}
 	store.delivery = nil
@@ -536,30 +586,36 @@ func (store *wakeupCommandStateStore) MarkCommandDelivered(
 	return nil
 }
 
-func (store *queuedCommandStateStore) ClaimCommand(
-	context.Context,
-	string,
-	string,
-	time.Time,
-) (CommandDelivery, bool, error) {
+func (store *queuedCommandStateStore) ClaimCommands(
+	_ context.Context,
+	_ string,
+	_ string,
+	limit int64,
+	_ time.Time,
+) ([]CommandDelivery, error) {
 	store.claims++
 	if len(store.deliveries) == 0 {
-		return CommandDelivery{}, false, nil
+		return []CommandDelivery{}, nil
 	}
-	return store.deliveries[0], true, nil
+	count := min(len(store.deliveries), int(limit))
+	return append([]CommandDelivery(nil), store.deliveries[:count]...), nil
 }
 
-func (store *queuedCommandStateStore) MarkCommandDelivered(
+func (store *queuedCommandStateStore) MarkCommandsDelivered(
 	_ context.Context,
-	delivery CommandDelivery,
+	deliveries []CommandDelivery,
 	_ string,
-	_ time.Time,
 ) error {
-	if len(store.deliveries) == 0 || store.deliveries[0].ID != delivery.ID {
-		return errors.New("unexpected queued command delivery")
+	if len(store.deliveries) < len(deliveries) {
+		return errors.New("unexpected queued command delivery count")
 	}
-	store.delivered = append(store.delivered, delivery.ID)
-	store.deliveries = store.deliveries[1:]
+	for index := range deliveries {
+		if store.deliveries[index].ID != deliveries[index].ID {
+			return errors.New("unexpected queued command delivery")
+		}
+		store.delivered = append(store.delivered, deliveries[index].ID)
+	}
+	store.deliveries = store.deliveries[len(deliveries):]
 	return nil
 }
 
@@ -581,22 +637,22 @@ type priorityStateStore struct {
 	delivered bool
 }
 
-func (store *priorityStateStore) ClaimCommand(
+func (store *priorityStateStore) ClaimCommands(
 	context.Context,
 	string,
 	string,
+	int64,
 	time.Time,
-) (CommandDelivery, bool, error) {
-	return store.command, true, nil
+) ([]CommandDelivery, error) {
+	return []CommandDelivery{store.command}, nil
 }
 
-func (store *priorityStateStore) MarkCommandDelivered(
+func (store *priorityStateStore) MarkCommandsDelivered(
 	_ context.Context,
-	delivery CommandDelivery,
+	deliveries []CommandDelivery,
 	_ string,
-	_ time.Time,
 ) error {
-	if delivery.ID != store.command.ID {
+	if len(deliveries) != 1 || deliveries[0].ID != store.command.ID {
 		return errors.New("unexpected command delivery")
 	}
 	store.delivered = true

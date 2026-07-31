@@ -177,6 +177,114 @@ func TestReturningRunnerClaimsReconciliationBeforeOlderCommands(t *testing.T) {
 	}
 }
 
+func TestRunnerCommandBatchClaimsAndPersistsOrderedDelivery(t *testing.T) {
+	store := openRunnerControlDatabase(t)
+	now := time.Date(2026, 7, 29, 18, 37, 0, 0, time.UTC)
+	if err := store.OpenConnection(
+		t.Context(),
+		RunnerIdentity{
+			RunnerID:         "runner-home",
+			CredentialSerial: "credential-batch",
+		},
+		"connection-batch",
+		1,
+		now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	for index, id := range []string{"command-batch-one", "command-batch-two"} {
+		payload, err := proto.Marshal(&runnerv1.ControlPlaneToRunner{
+			Message: &runnerv1.ControlPlaneToRunner_Fence{
+				Fence: &runnerv1.FenceCommand{
+					Fence: &runnerv1.AssignmentFence{
+						AssignmentId:      "assignment-batch",
+						SandboxId:         "sandbox-batch",
+						InstanceId:        "instance-batch",
+						SandboxGeneration: 1,
+						FencingToken:      []byte("01234567890123456789012345678901"),
+					},
+					Reason: runnerv1.FenceReason_FENCE_REASON_OPERATOR_REQUEST,
+				},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.pool.Exec(t.Context(), `
+			INSERT INTO secondbox.runner_commands (
+				id,runner_id,assignment_id,kind,payload,state,target_connection_id,
+				delivery_count,created_at,updated_at,delivered_at
+			) VALUES ($1,'runner-home','assignment-batch','fence',$2,'pending','',0,$3,$3,NULL)`,
+			id,
+			payload,
+			now.Add(time.Duration(index+1)*time.Millisecond),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deliveries, err := store.ClaimCommands(
+		t.Context(),
+		"runner-home",
+		"connection-batch",
+		3,
+		now.Add(time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantIDs := []string{
+		"workspace-reconcile-connection-batch",
+		"command-batch-one",
+		"command-batch-two",
+	}
+	if len(deliveries) != len(wantIDs) {
+		t.Fatalf("claimed command batch = %#v", deliveries)
+	}
+	for index := range deliveries {
+		if deliveries[index].ID != wantIDs[index] {
+			t.Fatalf("claimed command[%d] = %q, want %q", index, deliveries[index].ID, wantIDs[index])
+		}
+		var sequence uint64
+		switch {
+		case deliveries[index].Message.GetLocalWorkspace() != nil:
+			sequence = deliveries[index].Message.GetLocalWorkspace().Sequence
+		case deliveries[index].Message.GetFence() != nil:
+			sequence = deliveries[index].Message.GetFence().Sequence
+		}
+		if sequence != uint64(index+1) {
+			t.Fatalf("claimed command[%d] sequence = %d, want %d", index, sequence, index+1)
+		}
+		deliveries[index].DeliveredAt = now.Add(
+			time.Second + time.Duration(index)*time.Millisecond,
+		)
+	}
+	if err := store.MarkCommandsDelivered(
+		t.Context(),
+		deliveries,
+		"connection-batch",
+	); err != nil {
+		t.Fatal(err)
+	}
+	var deliveredCount, lastSequence int64
+	if err := store.pool.QueryRow(t.Context(), `
+		SELECT
+		  (SELECT count(*) FROM secondbox.runner_commands
+		   WHERE id=ANY($1::text[]) AND state='delivered'),
+		  (SELECT last_control_sequence FROM secondbox.runner_connections
+		   WHERE id='connection-batch')`,
+		wantIDs,
+	).Scan(&deliveredCount, &lastSequence); err != nil {
+		t.Fatal(err)
+	}
+	if deliveredCount != 3 || lastSequence != 3 {
+		t.Fatalf(
+			"persisted batch delivered=%d lastSequence=%d, want 3/3",
+			deliveredCount,
+			lastSequence,
+		)
+	}
+}
+
 func TestReturningRunnerReplaysDurableWorkspaceCreateReceipt(t *testing.T) {
 	store := openRunnerControlDatabase(t)
 	now := time.Date(2026, 7, 29, 18, 40, 0, 0, time.UTC)
