@@ -95,42 +95,47 @@ func (store *PostgresStateStore) MarkCommandDelivered(
 	connectionID string,
 	now time.Time,
 ) error {
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("SecondBox runner command delivered transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	command, err := tx.Exec(ctx, `
-		UPDATE secondbox.runner_commands
-		SET state='delivered',delivered_at=$3,updated_at=$3
-		WHERE id=$1 AND target_connection_id=$2 AND state='delivering'`,
-		delivery.ID, connectionID, now.UTC(),
-	)
-	if err != nil {
-		return fmt.Errorf("SecondBox runner command delivered update: %w", err)
-	}
-	if command.RowsAffected() != 1 {
-		return errors.New("SecondBox runner command delivery claim is no longer current")
-	}
+	var operationID, sandboxID string
 	if delivery.Kind == "assignment" {
 		correlation := delivery.Message.GetAssignment().GetCorrelation()
 		if correlation == nil || correlation.OperationId == "" || correlation.SandboxId == "" {
 			return errors.New("SecondBox delivered Assignment command lacks Operation correlation")
 		}
-		if _, err := tx.Exec(ctx, `
+		operationID = correlation.OperationId
+		sandboxID = correlation.SandboxId
+	}
+	var deliveredCount, stageCount int64
+	if err := store.pool.QueryRow(ctx, `
+		WITH delivered AS (
+			UPDATE secondbox.runner_commands
+			SET state='delivered',delivered_at=$3,updated_at=$3
+			WHERE id=$1 AND target_connection_id=$2 AND state='delivering'
+			RETURNING 1
+		),
+		stage AS (
 			INSERT INTO secondbox.operation_stage_timings (
 				operation_id,sandbox_id,stage,observed_at
-			) VALUES ($1,$2,'startup_dispatched',$3)
-			ON CONFLICT (operation_id,stage) DO NOTHING`,
-			correlation.OperationId,
-			correlation.SandboxId,
-			now.UTC(),
-		); err != nil {
-			return fmt.Errorf("SecondBox runner startup-dispatched timing insert: %w", err)
-		}
+			)
+			SELECT $4,$5,'startup_dispatched',$3
+			FROM delivered
+			WHERE $6='assignment'
+			ON CONFLICT (operation_id,stage) DO NOTHING
+			RETURNING 1
+		)
+		SELECT
+		  (SELECT count(*) FROM delivered),
+		  (SELECT count(*) FROM stage)`,
+		delivery.ID,
+		connectionID,
+		now.UTC(),
+		operationID,
+		sandboxID,
+		delivery.Kind,
+	).Scan(&deliveredCount, &stageCount); err != nil {
+		return fmt.Errorf("SecondBox runner command delivered update: %w", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("SecondBox runner command delivered commit: %w", err)
+	if deliveredCount != 1 {
+		return errors.New("SecondBox runner command delivery claim is no longer current")
 	}
 	return nil
 }
