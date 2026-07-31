@@ -129,6 +129,15 @@ The service rejects a reserved name that could never resolve: one that is blank,
 ./dist/secondbox shell my-box
 ```
 
+For a throwaway session, `run --tty` creates the Sandbox, attaches the terminal, and deletes it when the terminal ends:
+
+```sh
+./dist/secondbox run coding-environment --tty
+./dist/secondbox run coding-environment --tty -- /bin/bash
+```
+
+Disposal runs on every exit, including a dropped connection, because the Sandbox exists only to serve that session; `--keep` opts out and reports the identifier so `secondbox shell` can resume it. `--tty` cannot be combined with `--stdin`, `--json`, or `--shell`, which all describe a buffered command, and it accepts at most one operand, used as the terminal command. Both forms share one implementation, so the Lease, generation, and idempotency handling described below applies to each.
+
 `shell` resolves the name, applies the Sandbox's current generation, acquires and renews a Lease for the session, and releases it on exit. It then opens the same real Terminal as `sandbox shell`: raw mode, local dimensions, `SIGWINCH` forwarding, byte-exact binary input and merged PTY output, and the original terminal mode restored on remote exit, cancellation, or transport failure.
 
 Every value it supplies is an overridable default rather than a fixed choice, because injected arguments precede the caller's own. `--lease` or `--session` suppresses Lease acquisition, and `--command`, `--generation`, `--detachable`, `--rows`, `--columns`, and the rest behave as they do for `sandbox shell`. `sandbox shell` itself is unchanged and remains the fully explicit form.

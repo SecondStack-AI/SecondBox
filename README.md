@@ -101,9 +101,13 @@ Names are the reserved metadata key `secondbox.dev/name`, unique per tenant and 
 ### Interactive shell
 
 ```sh
-secondbox shell my-box
+secondbox run coding-environment --tty              # throwaway shell, deleted on exit
+secondbox run coding-environment --tty -- /bin/bash # choose the shell
+secondbox shell my-box                              # attach to one that already exists
 secondbox shell my-box --command /bin/bash --detachable
 ```
+
+`run --tty` is the `docker run -it --rm` shape: it creates a Sandbox, waits for it, drops you into a terminal, and deletes it when you disconnect — including on a dropped connection, since the Sandbox exists only for that session. Add `--keep` to retain it and reconnect later with `secondbox shell`.
 
 `shell` resolves the name, applies the Sandbox's current generation, acquires and renews a Lease for the session, and releases it on exit. You get a real PTY: raw mode, local dimensions, `SIGWINCH` forwarding, byte-exact binary I/O, and your terminal restored on exit, cancellation, or transport failure.
 
