@@ -932,6 +932,39 @@ func TestWorkspaceStoreRejectsPathsUnsupportedCloneAndDiskFull(t *testing.T) {
 	}
 }
 
+func TestWorkspaceCreateRecoversWhenReceiptDirectoryPreparationFails(t *testing.T) {
+	store, _, _ := newFakeStore(t)
+	request := CreateWorkspaceRequest{
+		Mutation:      testMutation("receipt-directory-failure", "workspace-receipt-directory-failure"),
+		CapacityBytes: minimumExt4Bytes,
+	}
+	workspaceReceiptPath := filepath.Join(store.receiptsRoot(), request.WorkspaceID)
+	if err := os.Mkdir(workspaceReceiptPath, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(t.Context(), request); err == nil {
+		t.Fatal("Workspace create succeeded with an invalid receipt directory")
+	}
+	inspection, err := store.Inspect(t.Context(), request.WorkspaceID)
+	if err != nil || inspection.Generation != 1 {
+		t.Fatalf("durable Workspace after receipt preparation failure = %#v, %v", inspection, err)
+	}
+	if _, err := os.Stat(store.receiptPath(request.Mutation, ReceiptWorkspaceCreate)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed receipt preparation published success evidence: %v", err)
+	}
+	if err := os.Chmod(workspaceReceiptPath, privateDirectoryMode); err != nil {
+		t.Fatal(err)
+	}
+	report, err := store.Reconcile(t.Context())
+	if err != nil || len(report.Workspaces) != 1 || len(report.Receipts) != 0 {
+		t.Fatalf("reconcile non-authoritative receipt directory = %#v, %v", report, err)
+	}
+	receipt, err := store.Create(t.Context(), request)
+	if err != nil || receipt.Generation != 1 {
+		t.Fatalf("recover Workspace create after receipt preparation failure = %#v, %v", receipt, err)
+	}
+}
+
 func TestWorkspaceStoreProbeFailsClosed(t *testing.T) {
 	root := t.TempDir()
 	store, err := newStore(

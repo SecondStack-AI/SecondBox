@@ -298,6 +298,11 @@ type rollbackManifest struct {
 	CapacityBytes      int64  `json:"capacityBytes"`
 }
 
+type receiptDirectoryPreparation struct {
+	elapsed time.Duration
+	err     error
+}
+
 func (store *Store) mutate(
 	ctx context.Context,
 	request any,
@@ -305,6 +310,7 @@ func (store *Store) mutate(
 	kind string,
 	apply func() (Receipt, error),
 ) (Receipt, error) {
+	mutationStartedAt := time.Now()
 	if err := ctx.Err(); err != nil {
 		return Receipt{}, err
 	}
@@ -326,15 +332,56 @@ func (store *Store) mutate(
 	if receipt, found, err := store.loadReceipt(mutation, digest, kind); found || err != nil {
 		return receipt, err
 	}
+	var receiptDirectory <-chan receiptDirectoryPreparation
+	if kind != ReceiptWorkspaceDelete {
+		prepared := make(chan receiptDirectoryPreparation, 1)
+		receiptDirectory = prepared
+		go func() {
+			startedAt := time.Now()
+			err := store.prepareReceiptDirectory(mutation)
+			prepared <- receiptDirectoryPreparation{
+				elapsed: time.Since(startedAt),
+				err:     err,
+			}
+		}()
+	}
+	applyStartedAt := time.Now()
 	receipt, err := apply()
 	if err != nil {
+		if receiptDirectory != nil {
+			preparation := <-receiptDirectory
+			return Receipt{}, errors.Join(err, preparation.err)
+		}
 		return Receipt{}, err
+	}
+	applyElapsed := time.Since(applyStartedAt)
+	preparation := receiptDirectoryPreparation{}
+	if receiptDirectory != nil {
+		preparation = <-receiptDirectory
+		if preparation.err != nil {
+			return Receipt{}, preparation.err
+		}
 	}
 	receipt.Kind = kind
 	receipt.OperationID = mutation.OperationID
 	receipt.WorkspaceID = mutation.WorkspaceID
 	receipt.InputDigest = digest
-	return store.recordReceipt(receipt)
+	receiptStartedAt := time.Now()
+	receipt, err = store.recordReceipt(receipt, receiptDirectory != nil)
+	if err != nil {
+		return Receipt{}, err
+	}
+	slog.Info(
+		"SecondBox WorkspaceStore mutation committed",
+		"kind", kind,
+		"operationId", mutation.OperationID,
+		"workspaceId", mutation.WorkspaceID,
+		"applyMs", applyElapsed.Milliseconds(),
+		"receiptDirectoryMs", preparation.elapsed.Milliseconds(),
+		"receiptMs", time.Since(receiptStartedAt).Milliseconds(),
+		"totalMs", time.Since(mutationStartedAt).Milliseconds(),
+	)
+	return receipt, nil
 }
 
 // Create reflinks an immutable capacity template, assigns the Workspace its
@@ -1446,7 +1493,8 @@ func (store *Store) publishCurrentManifest(workspaceID string, manifest currentM
 	if err := atomicJSON(store.currentManifestPath(workspaceID), manifest); err != nil {
 		return fmt.Errorf("SecondBox WorkspaceStore publish current manifest: %w", err)
 	}
-	return syncDir(store.manifestDir(workspaceID))
+	// atomicJSON fsyncs the renamed file's directory before it returns.
+	return nil
 }
 
 func (store *Store) readCurrentManifest(workspaceID string) (currentManifest, error) {
@@ -1529,7 +1577,24 @@ func (store *Store) readRollback(workspaceID string, operationID string) (rollba
 	return rollback, nil
 }
 
-func (store *Store) recordReceipt(receipt Receipt) (Receipt, error) {
+func (store *Store) prepareReceiptDirectory(mutation Mutation) error {
+	workspaceDirectory := filepath.Join(store.receiptsRoot(), mutation.WorkspaceID)
+	operationDirectory := filepath.Join(workspaceDirectory, mutation.OperationID)
+	if err := os.MkdirAll(operationDirectory, privateDirectoryMode); err != nil {
+		return fmt.Errorf("SecondBox WorkspaceStore create receipt directory: %w", err)
+	}
+	for _, directory := range []string{workspaceDirectory, operationDirectory} {
+		if err := requirePrivateDirectory(directory); err != nil {
+			return err
+		}
+	}
+	if err := syncDir(workspaceDirectory); err != nil {
+		return err
+	}
+	return syncDir(store.receiptsRoot())
+}
+
+func (store *Store) recordReceipt(receipt Receipt, parentsDurable bool) (Receipt, error) {
 	receipt.FormatVersion = receiptFormatVersion
 	receipt.RecordedAt = store.now().UTC()
 	if err := validateReceipt(receipt); err != nil {
@@ -1537,28 +1602,20 @@ func (store *Store) recordReceipt(receipt Receipt) (Receipt, error) {
 	}
 	mutation := Mutation{OperationID: receipt.OperationID, WorkspaceID: receipt.WorkspaceID}
 	path := store.receiptPath(mutation, receipt.Kind)
-	if existing, found, err := store.loadReceipt(
-		mutation,
-		receipt.InputDigest,
-		receipt.Kind,
-	); found || err != nil {
-		return existing, err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), privateDirectoryMode); err != nil {
-		return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore create receipt directory: %w", err)
+	if parentsDurable {
+		if err := requirePrivateDirectory(filepath.Dir(path)); err != nil {
+			return Receipt{}, err
+		}
+	} else {
+		if err := store.prepareReceiptDirectory(mutation); err != nil {
+			return Receipt{}, err
+		}
 	}
 	if err := atomicJSON(path, receipt); err != nil {
 		return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore persist receipt: %w", err)
 	}
-	if err := syncDir(filepath.Dir(path)); err != nil {
-		return Receipt{}, err
-	}
-	if err := syncDir(filepath.Dir(filepath.Dir(path))); err != nil {
-		return Receipt{}, err
-	}
-	if err := syncDir(store.receiptsRoot()); err != nil {
-		return Receipt{}, err
-	}
+	// atomicJSON syncs the operation directory after the receipt rename. Its
+	// parents were made durable before this success evidence became visible.
 	return receipt, nil
 }
 
