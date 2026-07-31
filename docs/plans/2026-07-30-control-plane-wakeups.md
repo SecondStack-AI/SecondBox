@@ -1,9 +1,9 @@
 ---
 title: Event-Driven Control-Plane Wakeups
 date: 2026-07-30
-status: implementing
+status: implemented
 owner: SecondStack
-provenance: Qualified lifecycle evidence through 5d5f8ff
+provenance: Qualified lifecycle evidence at d167010
 ---
 
 # Plan: Event-Driven Control-Plane Wakeups
@@ -77,3 +77,63 @@ Backend references, runner credentials, host paths, PostgreSQL channel names, an
 - qualified concurrency-1 lifecycle gate
 - qualified burst-32 lifecycle comparison
 - `just test-scenario` with real KVM, TUN/TAP, Btrfs Workspaces, and required qualification settings
+
+## Result
+
+The final code candidate is `d167010`. PostgreSQL remains authoritative and
+the configured polling intervals remain recovery bounds. Normal startup work
+now wakes after commit, command claims and durable delivery updates are
+batched, and milestone writes share the SQL statements that establish their
+facts. Assignment delivery also preserves the runner's existing global
+Workspace-create barrier without blocking later Workspace commands on the
+stream.
+
+Qualified concurrency-1 results:
+
+| metric | baseline p50/p95 | final p50/p95 |
+|---|---:|---:|
+| `create_to_ready` | 854/975 ms | 701/1,027 ms |
+| `pre_assignment` | 289/401 ms | 185/383 ms |
+| `runner_admission` | 89/122 ms | 28/55 ms |
+| `ready_projection` | 66/187 ms | 25/161 ms |
+
+The final ten-sample run contained one control-plane tail outlier. The
+immediately preceding candidate, before the burst-only Workspace barrier
+change, measured 640/692 ms `create_to_ready` and 28/49 ms
+`runner_admission`. Across the final candidate family, the uncontended median
+improved materially while the small-sample p95 remained variable.
+
+Qualified burst-32 results:
+
+| metric | baseline | final |
+|---|---:|---:|
+| `create_to_ready` p50 | 3,130 ms | 3,020 ms |
+| `create_to_ready` p95 | 3,366 ms | 3,463 ms |
+| completion rate | 9.48/s | 9.07/s |
+| refusals / failures | 0 / 0 | 0 / 0 |
+
+The burst median improved; p95 and throughput moved by 2.9% and 4.3%
+respectively, within the observed run-to-run host variance. Delivering
+Assignments while unrelated Workspace creates were active was explicitly
+tested and rejected: it regressed the burst to 4,848/5,679 ms and 5.56/s, so
+that change was reverted.
+
+The 25 ms `runner_admission` p95 gate was not met. The remaining 28/55 ms
+final result is no longer poll-quantized: it is the commit notification,
+authoritative command claim, and stream handoff. Snapshot-resume alone cannot
+reach the 100–200 ms Sandbox target while the measured non-guest orchestration
+remains at this level.
+
+Validation passed:
+
+- `just verify-generated`
+- `SECONDBOX_TEST_DATABASE_URL=... just test`
+- `just test-contract`
+- `just test-compose`
+- qualified concurrency-1 and burst-32 lifecycle runs
+- unfiltered `just test-scenario` on KVM and Btrfs in 122.3 seconds
+
+Machine-readable final evidence:
+
+- `.tmp/lifecycle-control-wakeup-c1-v8-result.json`
+- `.tmp/lifecycle-control-wakeup-burst32-v8-result.json`
