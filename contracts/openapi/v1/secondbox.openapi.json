@@ -960,6 +960,7 @@
             "description": "Bounded binary file stream.",
             "headers": {
               "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
+              "Content-Length": {"$ref": "#/components/headers/ContentLength"},
               "Digest": {"$ref": "#/components/headers/Digest"}
             },
             "content": {"application/octet-stream": {"schema": {"type": "string", "contentEncoding": "binary"}}}
@@ -1417,6 +1418,10 @@
       "Digest": {
         "description": "SHA-256 content digest.",
         "schema": {"type": "string", "pattern": "^sha-256=:[A-Za-z0-9+/]{43}=:$"}
+      },
+      "ContentLength": {
+        "description": "Exact response body size in bytes.",
+        "schema": {"type": "integer", "minimum": 0}
       },
       "RetryAfter": {
         "description": "Minimum whole seconds before retrying a temporary admission refusal.",

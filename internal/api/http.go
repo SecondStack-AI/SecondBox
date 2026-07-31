@@ -187,6 +187,7 @@ func (apiHandler *handler) readSandboxFile(writer http.ResponseWriter, request *
 		return
 	}
 	writer.Header().Set("Content-Type", "application/octet-stream")
+	writer.Header().Set("Content-Length", strconv.Itoa(len(content)))
 	writer.Header().Set("Digest", digest)
 	writer.WriteHeader(http.StatusOK)
 	apiHandler.writeResponseBytes(writer, request, "binary File download", content)

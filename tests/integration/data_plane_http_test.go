@@ -18,6 +18,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -122,7 +123,7 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseDurableRelay(t *testing.T) {
 	assertHTTPStatus(t, mkdirResponse, http.StatusNoContent)
 	mkdirResponse.Body.Close()
 
-	content := []byte{0, 2, 0xfe, 'z'}
+	content := bytes.Repeat([]byte{0, 2, 0xfe, 'z'}, 2048)
 	contentHash := sha256.Sum256(content)
 	digest := "sha-256=:" + base64.StdEncoding.EncodeToString(contentHash[:]) + ":"
 	writeRequest, err := http.NewRequest(http.MethodPut, server.URL+"/v1/sandboxes/"+sandbox.ID+"/files?path="+url.QueryEscape("workspace/data.bin"), bytes.NewReader(content))
@@ -142,6 +143,15 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseDurableRelay(t *testing.T) {
 
 	readResponse := dataPlaneGET(t, server.URL+"/v1/sandboxes/"+sandbox.ID+"/files?path="+url.QueryEscape("workspace/data.bin"), key.Credential, sandbox.Generation)
 	assertHTTPStatus(t, readResponse, http.StatusOK)
+	if readResponse.ContentLength != int64(len(content)) ||
+		readResponse.Header.Get("Content-Length") != strconv.Itoa(len(content)) {
+		t.Fatalf(
+			"read Content-Length = %d header=%q, want %d",
+			readResponse.ContentLength,
+			readResponse.Header.Get("Content-Length"),
+			len(content),
+		)
+	}
 	readContent, err := io.ReadAll(readResponse.Body)
 	readResponse.Body.Close()
 	if err != nil || !bytes.Equal(readContent, content) || readResponse.Header.Get("Digest") != digest {

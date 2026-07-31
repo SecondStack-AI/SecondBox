@@ -67,7 +67,7 @@ var auditedV1HTTPOperations = map[string]auditedHTTPOperation{
 	"createSandboxTerminal":    {"createSandboxTerminal", "201", "TerminalSession", []string{"Idempotency-Key", "SecondBox-Generation"}, []string{"Idempotency-Replayed"}},
 	"reconnectSandboxTerminal": {"getOrConnectSandboxTerminal", "200", "TerminalSession", []string{"SecondBox-Generation"}, nil},
 	"cancelSandboxTerminal":    {"cancelSandboxTerminal", "202", "TerminalSession", []string{"Idempotency-Key", "SecondBox-Generation"}, []string{"Idempotency-Replayed"}},
-	"readSandboxFile":          {"readSandboxFile", "200", "string", []string{"SecondBox-Generation"}, []string{"Digest"}},
+	"readSandboxFile":          {"readSandboxFile", "200", "string", []string{"SecondBox-Generation"}, []string{"Content-Length", "Digest"}},
 	"writeSandboxFile":         {"writeSandboxFile", "200", "FileWriteResult", []string{"Digest", "Idempotency-Key", "SecondBox-Generation"}, []string{"Idempotency-Replayed"}},
 	"statSandboxFile":          {"statSandboxFile", "200", "FileStat", []string{"SecondBox-Generation"}, nil},
 	"sandboxFileExists":        {"sandboxFileExists", "200", "FileExistsResult", []string{"SecondBox-Generation"}, nil},
