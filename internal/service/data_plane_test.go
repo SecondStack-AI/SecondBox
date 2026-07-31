@@ -9,6 +9,7 @@ import (
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
+	"github.com/SecondStack-AI/SecondBox/internal/worknotify"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
@@ -167,4 +168,51 @@ func (*deadlineProofRelay) CancelPublicDataPlaneSession(
 	runnercontrol.PublicDataPlaneCancellation,
 ) (runnercontrol.DataPlaneSession, bool, error) {
 	panic("unexpected public streaming session cancellation")
+}
+
+// TestSubscribeDataPlaneSessionFallsBackToPollingWithoutASource proves a
+// deployment that has not enabled notifications keeps working. A nil channel
+// blocks forever in a select, so the caller stays on its poll interval, which is
+// the recovery bound in both cases.
+func TestSubscribeDataPlaneSessionFallsBackToPollingWithoutASource(t *testing.T) {
+	service := &ControlPlaneService{}
+	wakeups, cancel := service.SubscribeDataPlaneSession("dps_1")
+	if wakeups != nil {
+		t.Error("a service without a wakeup source must yield no wakeup channel")
+	}
+	if cancel == nil {
+		t.Fatal("cancellation must always be callable")
+	}
+	cancel()
+	cancel()
+}
+
+// TestSubscribeDataPlaneSessionIsKeyedBySession proves one session's frames
+// never wake another session's loop.
+func TestSubscribeDataPlaneSessionIsKeyedBySession(t *testing.T) {
+	hub := worknotify.NewHub()
+	service := &ControlPlaneService{dataPlaneWakeups: hub}
+	wakeups, cancel := service.SubscribeDataPlaneSession("dps_1")
+	defer cancel()
+	if wakeups == nil {
+		t.Fatal("a configured wakeup source must yield a wakeup channel")
+	}
+	hub.Publish(worknotify.KindDataPlaneSession, "dps_2")
+	select {
+	case <-wakeups:
+		t.Fatal("another session's frame woke this loop")
+	default:
+	}
+	hub.Publish(worknotify.KindDataPlaneSession, "dps_1")
+	select {
+	case <-wakeups:
+	default:
+		t.Fatal("this session's frame did not wake its loop")
+	}
+	// An empty session cannot be subscribed, so it must not consume the source.
+	empty, cancelEmpty := service.SubscribeDataPlaneSession("")
+	defer cancelEmpty()
+	if empty != nil {
+		t.Error("an empty session ID must not produce a subscription")
+	}
 }

@@ -603,6 +603,40 @@ export interface PortTunnelConnection {
   close(): Promise<void>;
 }
 
+/** Raw byte stream to a Runner's caller-facing data-plane listener. */
+export interface DirectPortSocket {
+  write(payload: Uint8Array): Promise<void>;
+  /** Resolves the next available chunk, or an empty array at end of stream. */
+  read(signal?: AbortSignal): Promise<Uint8Array>;
+  close(): Promise<void>;
+}
+
+/**
+ * Injects the runtime-specific TCP dialer for the direct Port transport.
+ *
+ * The dialer supplies transport only. This SDK owns the framed credential
+ * handshake, so a caller cannot admit a connection by dialing alone and the
+ * wire format stays in one place.
+ */
+export interface DirectPortDialer {
+  dial(
+    descriptor: {
+      readonly host: string;
+      readonly port: number;
+      readonly sandboxID: string;
+      readonly generation: number;
+      readonly expiresAt: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<DirectPortSocket>;
+}
+
+/** Transports a caller supports. A PortSession is served by exactly one. */
+export interface PortTunnelTransports {
+  readonly relay?: PortTunnelConnector;
+  readonly direct?: DirectPortDialer;
+}
+
 /** Injects the runtime-specific authenticated Port WebSocket implementation. */
 export interface PortTunnelConnector {
   connect(
@@ -1055,7 +1089,7 @@ export class SandboxHandle implements SandboxFilesystem {
   /** Consumes the endpoint credential through an authenticated binary connector. */
   public async connectPortTunnel(
     session: PortSession,
-    connector: PortTunnelConnector,
+    connector: PortTunnelConnector | PortTunnelTransports,
     signal?: AbortSignal,
   ): Promise<PortTunnel> {
     if (
@@ -1069,6 +1103,13 @@ export class SandboxHandle implements SandboxFilesystem {
     const credential = endpoint.hash.slice(1);
     if (!Number.isFinite(Date.parse(session.expiresAt))) {
       throw new Error("SecondBox PortSession expiration is invalid");
+    }
+    const transports = normalizePortTunnelTransports(connector);
+    if (session.transport === "direct") {
+      return connectDirectPortTunnel(session, endpoint, credential, transports, signal);
+    }
+    if (!transports.relay) {
+      throw new Error("SecondBox PortSession relay transport has no connector");
     }
     if (
       (endpoint.protocol !== "ws:" && endpoint.protocol !== "wss:") ||
@@ -1086,7 +1127,7 @@ export class SandboxHandle implements SandboxFilesystem {
       throw new Error("SecondBox PortSession endpoint credential is invalid");
     }
     endpoint.hash = "";
-    const connection = await connector.connect(
+    const connection = await transports.relay.connect(
       {
         websocketURL: endpoint.toString(),
         subprotocols: [
@@ -1621,4 +1662,152 @@ async function abortableDelay(
     }
     signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+/** Generation one of the direct Port handshake. */
+const DIRECT_PORT_MAGIC = "SBXPORT1";
+const DIRECT_PORT_MAXIMUM_DETAIL_BYTES = 128;
+const DIRECT_PORT_VERDICT_ADMITTED = 0;
+
+function normalizePortTunnelTransports(
+  connector: PortTunnelConnector | PortTunnelTransports,
+): PortTunnelTransports {
+  return "connect" in connector ? { relay: connector } : connector;
+}
+
+/**
+ * Performs the framed credential handshake, then exposes the socket as an
+ * ordinary tunnel connection.
+ *
+ * The Runner may coalesce its verdict with the first payload bytes, so anything
+ * read past the verdict is retained and replayed rather than discarded.
+ */
+async function connectDirectPortTunnel(
+  session: PortSession,
+  endpoint: URL,
+  credential: string,
+  transports: PortTunnelTransports,
+  signal?: AbortSignal,
+): Promise<PortTunnel> {
+  if (!transports.direct) {
+    throw new Error("SecondBox PortSession direct transport has no dialer");
+  }
+  if (
+    endpoint.protocol !== "secondbox+tcp:" ||
+    endpoint.username !== "" ||
+    endpoint.password !== "" ||
+    endpoint.search !== "" ||
+    endpoint.hostname === ""
+  ) {
+    throw new Error("SecondBox PortSession direct endpoint is invalid");
+  }
+  if (credential === "" || credential.length > 2048) {
+    throw new Error("SecondBox PortSession endpoint credential is invalid");
+  }
+  const port = Number(endpoint.port);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    throw new Error("SecondBox PortSession direct endpoint port is invalid");
+  }
+  const socket = await transports.direct.dial(
+    {
+      host: endpoint.hostname,
+      port,
+      sandboxID: session.sandboxId,
+      generation: session.generation,
+      expiresAt: session.expiresAt,
+    },
+    signal,
+  );
+  try {
+    await socket.write(encodeDirectPortCredential(credential));
+    const { detail, admitted, remainder } = await readDirectPortVerdict(socket, signal);
+    if (!admitted) {
+      throw new Error(
+        `SecondBox direct Port connection was denied: ${detail || "no detail"}`,
+      );
+    }
+    return new PortTunnel(new DirectPortTunnelConnection(socket, remainder));
+  } catch (error) {
+    await socket.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+function encodeDirectPortCredential(credential: string): Uint8Array {
+  const encoded = new TextEncoder().encode(credential);
+  const magic = new TextEncoder().encode(DIRECT_PORT_MAGIC);
+  const frame = new Uint8Array(magic.length + 2 + encoded.length);
+  frame.set(magic, 0);
+  new DataView(frame.buffer).setUint16(magic.length, encoded.length, false);
+  frame.set(encoded, magic.length + 2);
+  return frame;
+}
+
+async function readDirectPortVerdict(
+  socket: DirectPortSocket,
+  signal?: AbortSignal,
+): Promise<{ admitted: boolean; detail: string; remainder: Uint8Array }> {
+  const headerLength = DIRECT_PORT_MAGIC.length + 3;
+  let buffered = new Uint8Array(0);
+  const need = async (length: number): Promise<void> => {
+    while (buffered.length < length) {
+      const chunk = await socket.read(signal);
+      if (chunk.length === 0) {
+        throw new Error("SecondBox direct Port handshake ended before its verdict");
+      }
+      const grown = new Uint8Array(buffered.length + chunk.length);
+      grown.set(buffered, 0);
+      grown.set(chunk, buffered.length);
+      buffered = grown;
+    }
+  };
+  await need(headerLength);
+  const decoder = new TextDecoder();
+  if (decoder.decode(buffered.subarray(0, DIRECT_PORT_MAGIC.length)) !== DIRECT_PORT_MAGIC) {
+    throw new Error("SecondBox direct Port handshake is malformed");
+  }
+  const verdict = buffered[DIRECT_PORT_MAGIC.length];
+  const detailLength = new DataView(
+    buffered.buffer,
+    buffered.byteOffset,
+    buffered.byteLength,
+  ).getUint16(DIRECT_PORT_MAGIC.length + 1, false);
+  if (detailLength > DIRECT_PORT_MAXIMUM_DETAIL_BYTES) {
+    throw new Error("SecondBox direct Port handshake is malformed");
+  }
+  await need(headerLength + detailLength);
+  return {
+    admitted: verdict === DIRECT_PORT_VERDICT_ADMITTED,
+    detail: decoder.decode(buffered.subarray(headerLength, headerLength + detailLength)),
+    remainder: buffered.slice(headerLength + detailLength),
+  };
+}
+
+/** Adapts a raw direct socket to the tunnel connection contract. */
+class DirectPortTunnelConnection implements PortTunnelConnection {
+  readonly subprotocol = "secondbox.port.v1";
+  readonly #socket: DirectPortSocket;
+  #pending: Uint8Array;
+
+  public constructor(socket: DirectPortSocket, remainder: Uint8Array) {
+    this.#socket = socket;
+    this.#pending = remainder;
+  }
+
+  public sendBinary(payload: Uint8Array): Promise<void> {
+    return this.#socket.write(payload);
+  }
+
+  public async receiveBinary(signal?: AbortSignal): Promise<Uint8Array> {
+    if (this.#pending.length > 0) {
+      const pending = this.#pending;
+      this.#pending = new Uint8Array(0);
+      return pending;
+    }
+    return this.#socket.read(signal);
+  }
+
+  public close(): Promise<void> {
+    return this.#socket.close();
+  }
 }

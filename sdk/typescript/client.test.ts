@@ -12,6 +12,7 @@ import {
   type Lease,
   type ExecStreamConnector,
   type PortTunnelConnection,
+  type DirectPortDialer,
   type PortTunnelConnector,
   type Sandbox,
   type TerminalConnection,
@@ -326,6 +327,7 @@ test("SandboxHandle attaches a sequenced binary-safe Terminal helper", async () 
       state: "detached",
       websocketUrl: "wss://secondbox.example/v1/sandboxes/sandbox-1/terminals/term-1",
       subprotocol: "secondbox.terminal.v1",
+      streamWindowBytes: 65536,
       nextClientSequence: 4,
       expiresAt: "2026-07-28T00:01:00Z",
     },
@@ -399,6 +401,7 @@ test("SandboxHandle creates, gets, and closes one authenticated PortSession", as
       generation: 7,
       name: "ssh",
       protocol: "tcp",
+      transport: "relay",
       endpoint: "wss://secondbox.example/v1/port-sessions/port-1#credential",
       state: "open",
       createdAt: "2026-07-28T00:00:00Z",
@@ -502,6 +505,7 @@ test("SandboxHandle attaches an authenticated binary Port tunnel", async () => {
       generation: 7,
       name: "ssh",
       protocol: "tcp",
+      transport: "relay",
       endpoint: "wss://secondbox.example/v1/port-sessions/port-1#single-use-token",
       state: "open",
       createdAt: "2026-07-28T00:00:00Z",
@@ -550,6 +554,7 @@ test("SandboxHandle rejects a PortSession without a single-use endpoint credenti
         generation: 7,
         name: "ssh",
         protocol: "tcp",
+        transport: "relay",
         endpoint: "wss://secondbox.example/v1/port-sessions/port-1",
         state: "open",
         createdAt: "2026-07-28T00:00:00Z",
@@ -823,3 +828,145 @@ function lease(expiresInMilliseconds: number): Lease {
     updatedAt: "2026-07-28T00:00:00Z",
   };
 }
+
+test("SandboxHandle admits a direct PortSession through the framed handshake", async () => {
+  const written: Uint8Array[] = [];
+  const inbound: Uint8Array[] = [
+    // The Runner may coalesce its verdict with the first payload bytes, so this
+    // chunk carries both and the tunnel must replay only the payload.
+    new Uint8Array([
+      ...new TextEncoder().encode("SBXPORT1"),
+      0, 0, 0,
+      4, 5, 6,
+    ]),
+  ];
+  let closed = false;
+  let dialed: { host: string; port: number } | undefined;
+  const dialer: DirectPortDialer = {
+    async dial(descriptor) {
+      dialed = { host: descriptor.host, port: descriptor.port };
+      return {
+        async write(payload) {
+          written.push(payload.slice());
+        },
+        async read() {
+          return inbound.shift() ?? new Uint8Array(0);
+        },
+        async close() {
+          closed = true;
+        },
+      };
+    },
+  };
+  const api = new SecondBox(
+    new SecondBoxClient("https://secondbox.example", "token", async () => Response.json({})),
+  );
+  const handle = new SandboxHandle(api, sandbox("ready"), "lease-1");
+  const tunnel = await handle.connectPortTunnel(
+    {
+      id: "port-1",
+      sandboxId: "sandbox-1",
+      generation: 7,
+      name: "ssh",
+      protocol: "tcp",
+      transport: "direct",
+      endpoint: "secondbox+tcp://10.0.0.4:7443/v1/port-sessions/port-1#single-use-token",
+      state: "open",
+      createdAt: "2026-07-28T00:00:00Z",
+      expiresAt: "2026-07-28T00:01:00Z",
+    },
+    { direct: dialer },
+  );
+
+  assert(tunnel instanceof PortTunnel);
+  assert.deepEqual(dialed, { host: "10.0.0.4", port: 7443 });
+  assert.deepEqual(written, [
+    new Uint8Array([
+      ...new TextEncoder().encode("SBXPORT1"),
+      0, 16,
+      ...new TextEncoder().encode("single-use-token"),
+    ]),
+  ]);
+  assert.deepEqual(await tunnel.receive(), new Uint8Array([4, 5, 6]));
+  await tunnel.close();
+  assert.equal(closed, true);
+});
+
+test("SandboxHandle surfaces a denied direct PortSession and closes the socket", async () => {
+  const detail = "credential rejected";
+  let closed = false;
+  const dialer: DirectPortDialer = {
+    async dial() {
+      return {
+        async write() {},
+        async read() {
+          return new Uint8Array([
+            ...new TextEncoder().encode("SBXPORT1"),
+            1,
+            0, detail.length,
+            ...new TextEncoder().encode(detail),
+          ]);
+        },
+        async close() {
+          closed = true;
+        },
+      };
+    },
+  };
+  const api = new SecondBox(
+    new SecondBoxClient("https://secondbox.example", "token", async () => Response.json({})),
+  );
+  const handle = new SandboxHandle(api, sandbox("ready"), "lease-1");
+  await assert.rejects(
+    handle.connectPortTunnel(
+      {
+        id: "port-1",
+        sandboxId: "sandbox-1",
+        generation: 7,
+        name: "ssh",
+        protocol: "tcp",
+        transport: "direct",
+        endpoint: "secondbox+tcp://10.0.0.4:7443/v1/port-sessions/port-1#single-use-token",
+        state: "open",
+        createdAt: "2026-07-28T00:00:00Z",
+        expiresAt: "2026-07-28T00:01:00Z",
+      },
+      { direct: dialer },
+    ),
+    /denied: credential rejected/,
+  );
+  assert.equal(closed, true);
+});
+
+test("SandboxHandle refuses a direct PortSession when only a relay connector is supplied", async () => {
+  let connected = false;
+  const connector: PortTunnelConnector = {
+    async connect() {
+      connected = true;
+      throw new Error("relay connector must not serve a direct session");
+    },
+  };
+  const api = new SecondBox(
+    new SecondBoxClient("https://secondbox.example", "token", async () => Response.json({})),
+  );
+  const handle = new SandboxHandle(api, sandbox("ready"), "lease-1");
+  await assert.rejects(
+    handle.connectPortTunnel(
+      {
+        id: "port-1",
+        sandboxId: "sandbox-1",
+        generation: 7,
+        name: "ssh",
+        protocol: "tcp",
+        transport: "direct",
+        endpoint: "secondbox+tcp://10.0.0.4:7443/v1/port-sessions/port-1#single-use-token",
+        state: "open",
+        createdAt: "2026-07-28T00:00:00Z",
+        expiresAt: "2026-07-28T00:01:00Z",
+      },
+      connector,
+    ),
+    /direct transport has no dialer/,
+  );
+  assert.equal(connected, false);
+});

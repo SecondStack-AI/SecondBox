@@ -2615,7 +2615,7 @@
       "TerminalSession": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "sandboxId", "generation", "state", "websocketUrl", "subprotocol", "nextClientSequence", "expiresAt"],
+        "required": ["id", "sandboxId", "generation", "state", "websocketUrl", "subprotocol", "streamWindowBytes", "nextClientSequence", "expiresAt"],
         "properties": {
           "id": {"$ref": "#/components/schemas/OpaqueID"},
           "sandboxId": {"$ref": "#/components/schemas/OpaqueID"},
@@ -2623,6 +2623,7 @@
           "state": {"$ref": "#/components/schemas/SessionState"},
           "websocketUrl": {"type": "string", "format": "uri", "maxLength": 2048},
           "subprotocol": {"const": "secondbox.terminal.v1"},
+          "streamWindowBytes": {"type": "integer", "format": "int64", "minimum": 4096},
           "nextClientSequence": {"type": "integer", "format": "int64", "minimum": 0},
           "expiresAt": {"$ref": "#/components/schemas/Timestamp"}
         },
@@ -2813,13 +2814,14 @@
       "PortSession": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "sandboxId", "generation", "name", "protocol", "endpoint", "state", "createdAt", "expiresAt"],
+        "required": ["id", "sandboxId", "generation", "name", "protocol", "transport", "endpoint", "state", "createdAt", "expiresAt"],
         "properties": {
           "id": {"$ref": "#/components/schemas/OpaqueID"},
           "sandboxId": {"$ref": "#/components/schemas/OpaqueID"},
           "generation": {"type": "integer", "format": "int64", "minimum": 1},
           "name": {"type": "string", "minLength": 1, "maxLength": 80},
           "protocol": {"type": "string", "enum": ["tcp", "http"]},
+          "transport": {"type": "string", "enum": ["relay", "direct"]},
           "endpoint": {"type": "string", "format": "uri", "maxLength": 2048},
           "state": {"type": "string", "enum": ["open", "closing", "closed", "expired", "fenced"]},
           "createdAt": {"$ref": "#/components/schemas/Timestamp"},

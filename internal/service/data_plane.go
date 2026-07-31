@@ -14,6 +14,7 @@ import (
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
+	"github.com/SecondStack-AI/SecondBox/internal/worknotify"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
@@ -229,6 +230,22 @@ func (service *ControlPlaneService) SandboxExecStreamEndpoint(
 
 func (service *ControlPlaneService) DataPlanePollInterval() time.Duration {
 	return service.dataPlanePollInterval
+}
+
+// SubscribeDataPlaneSession returns a coalesced wakeup for one session's inbound
+// frames and a cancellation function.
+//
+// A deployment without a wakeup source yields a nil channel, which blocks
+// forever in a select and leaves the caller on its poll interval. That interval
+// is the recovery bound in both cases, so a lost or absent notification delays
+// delivery rather than losing it.
+func (service *ControlPlaneService) SubscribeDataPlaneSession(
+	sessionID string,
+) (<-chan struct{}, func()) {
+	if service.dataPlaneWakeups == nil || sessionID == "" {
+		return nil, func() {}
+	}
+	return service.dataPlaneWakeups.Subscribe(worknotify.KindDataPlaneSession, sessionID)
 }
 
 func (service *ControlPlaneService) SandboxExecStreamOutcome(

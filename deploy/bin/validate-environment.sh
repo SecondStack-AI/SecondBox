@@ -153,6 +153,8 @@ required_settings=(
   SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES
   SECONDBOX_RUNNER_MAX_CONCURRENT_OPERATIONS_GLOBAL
   SECONDBOX_RUNNER_FILE_TRANSFER_MAX_BYTES
+  SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS
+  SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS
   SECONDBOX_POSTGRES_BIND_IP
   SECONDBOX_POSTGRES_PUBLISHED_PORT
   SECONDBOX_POSTGRES_DATABASE
@@ -243,6 +245,28 @@ for port_setting in \
     exit 1
   fi
 done
+for data_plane_setting in \
+  SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS \
+  SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS; do
+  data_plane_address="$(value_for "$data_plane_setting")"
+  data_plane_port="${data_plane_address##*:}"
+  if [[ "$data_plane_address" != *:* ]] ||
+     [[ ! "$data_plane_port" =~ ^[0-9]+$ ]] ||
+     (( data_plane_port < 1 || data_plane_port > 65535 )); then
+    echo "$data_plane_setting must be a host:port address with a port from 1 through 65535" >&2
+    exit 1
+  fi
+done
+# The advertised address is dialed by the ingress tier, so a wildcard host is a
+# configuration error even though it is a valid bind host.
+data_plane_advertised_address="$(value_for SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS)"
+data_plane_advertised_host="${data_plane_advertised_address%:*}"
+if [[ -z "$data_plane_advertised_host" ||
+      "$data_plane_advertised_host" == "0.0.0.0" ||
+      "$data_plane_advertised_host" == "[::]" ]]; then
+  echo "SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS must name a reachable host, not a wildcard" >&2
+  exit 1
+fi
 guest_control_vsock_port="$(value_for SECONDBOX_RUNNER_GUEST_CONTROL_VSOCK_PORT)"
 guest_protocol_vsock_port="$(value_for SECONDBOX_RUNNER_GUEST_PROTOCOL_VSOCK_PORT)"
 if [[ "$guest_control_vsock_port" == "$guest_protocol_vsock_port" ]]; then

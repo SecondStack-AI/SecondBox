@@ -96,6 +96,14 @@ func LoadRunnerProtocolConfigFromEnv() (RunnerProtocolConfig, GRPCConnectorConfi
 	if len(credential) < 32 {
 		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, fmt.Errorf("SecondBox runner credential must contain at least 32 bytes")
 	}
+	dataPlaneListenAddress, err := required("SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS")
+	if err != nil {
+		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, err
+	}
+	dataPlaneAdvertisedAddress, err := required("SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS")
+	if err != nil {
+		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, err
+	}
 
 	return RunnerProtocolConfig{
 			RunnerID:                          runnerID,
@@ -105,6 +113,8 @@ func LoadRunnerProtocolConfigFromEnv() (RunnerProtocolConfig, GRPCConnectorConfi
 			ProtocolMaximum:                   1,
 			MaximumConcurrentStarts:           maximumConcurrentStarts,
 			MaximumConcurrentWorkspaceCreates: maximumConcurrentWorkspaceCreates,
+			DataPlaneListenAddress:            dataPlaneListenAddress,
+			DataPlaneAdvertisedAddress:        dataPlaneAdvertisedAddress,
 			MandatoryFeatures: []runnerprotocol.RunnerFeature{
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING,
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_FILE_STREAMING,

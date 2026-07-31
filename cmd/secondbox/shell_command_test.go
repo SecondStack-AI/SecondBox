@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -20,6 +22,13 @@ import (
 // and one immediately-exiting attachment.
 type shellTestServer struct {
 	server *httptest.Server
+	// attached closes once one attachment has granted credit. A test that
+	// interrupts the session waits for it so the cancellation lands on a live
+	// attachment rather than racing setup.
+	attached chan struct{}
+	// holdAttachment keeps the attachment open instead of ending it with an
+	// outcome, so an interrupted session can be observed.
+	holdAttachment bool
 
 	mutex           sync.Mutex
 	terminalHeaders http.Header
@@ -32,7 +41,7 @@ type shellTestServer struct {
 func newShellTestServer(t *testing.T) *shellTestServer {
 	t.Helper()
 	upgrader := websocket.Upgrader{Subprotocols: []string{"secondbox.terminal.v1"}}
-	recorder := &shellTestServer{}
+	recorder := &shellTestServer{attached: make(chan struct{})}
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(
 		func(response http.ResponseWriter, request *http.Request) {
@@ -87,6 +96,12 @@ func newShellTestServer(t *testing.T) *shellTestServer {
 				// Read the client's opening credit grant before answering, so the
 				// outcome is never written into a connection still being set up.
 				assertCLITerminalCredit(t, connection, 0, defaultShellCreditBytes)
+				close(recorder.attached)
+				if recorder.holdAttachment {
+					// Leave the session running so only cancellation can end it.
+					<-request.Context().Done()
+					return
+				}
 				if err := connection.WriteJSON(secondboxclient.TerminalFrame{
 					StreamOutcomeFrame: &secondboxclient.StreamOutcomeFrame{
 						Type: "outcome", Sequence: 0,
@@ -170,6 +185,73 @@ func TestShellResolvesNameAcquiresLeaseAndAttaches(t *testing.T) {
 	}
 }
 
+// TestShellReleasesItsLeaseWhenInterrupted proves an interrupted session does
+// not strand the Lease it acquired. A stranded Lease stayed active until the
+// service expired it and made the next attach fail with a state conflict.
+func TestShellReleasesItsLeaseWhenInterrupted(t *testing.T) {
+	recorder := newShellTestServer(t)
+	recorder.holdAttachment = true
+	ctx, interrupt := context.WithCancel(t.Context())
+	defer interrupt()
+	inputReader, inputWriter := io.Pipe()
+	t.Cleanup(func() {
+		_ = inputWriter.Close()
+		_ = inputReader.Close()
+	})
+	var output bytes.Buffer
+	shellDone := make(chan error, 1)
+	go func() {
+		shellDone <- runShellCommand(
+			ctx,
+			execTestSession(recorder.server.URL),
+			[]string{"my-box"},
+			sandboxShellEnvironment{
+				input: inputReader, output: &output, inputFD: -1, outputFD: -1,
+				terminal: &fakeShellTerminalController{}, httpClient: recorder.server.Client(),
+			},
+			recorder.server.Client(),
+		)
+	}()
+	select {
+	case <-recorder.attached:
+	case err := <-shellDone:
+		t.Fatalf("shell ended before it attached: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("shell never attached")
+	}
+	interrupt()
+	select {
+	case <-shellDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("interrupted shell never returned")
+	}
+	recorder.mutex.Lock()
+	defer recorder.mutex.Unlock()
+	if !recorder.leaseAcquired {
+		t.Fatal("shell must acquire a Lease when the caller supplied none")
+	}
+	if !recorder.leaseReleased {
+		t.Error("an interrupted shell must release the Lease it acquired")
+	}
+}
+
+// TestInterruptibleContextCancelsOnTerminalSignals proves the process-level
+// wiring that makes the release above run for a real interrupt.
+func TestInterruptibleContextCancelsOnTerminalSignals(t *testing.T) {
+	ctx := interruptibleContext()
+	if ctx.Err() != nil {
+		t.Fatalf("context started cancelled: %v", ctx.Err())
+	}
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatalf("raise SIGINT: %v", err)
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("SIGINT did not cancel the CLI context")
+	}
+}
+
 // TestShellLetsCallerValuesOverrideInjectedDefaults proves the injected values
 // precede the caller's own arguments, so the caller always wins.
 func TestShellLetsCallerValuesOverrideInjectedDefaults(t *testing.T) {
@@ -249,7 +331,7 @@ func TestRunOperationalCommandLeavesShellSubcommands(t *testing.T) {
 func newTTYRunServer(t *testing.T) *shellTestServer {
 	t.Helper()
 	upgrader := websocket.Upgrader{Subprotocols: []string{"secondbox.terminal.v1"}}
-	recorder := &shellTestServer{}
+	recorder := &shellTestServer{attached: make(chan struct{})}
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(
 		func(response http.ResponseWriter, request *http.Request) {

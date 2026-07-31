@@ -221,7 +221,11 @@ export SECONDBOX_SCENARIO_API_PORT
 SECONDBOX_SCENARIO_API_PORT="$(reserve_port)"
 export SECONDBOX_SCENARIO_RUNNER_PORT
 SECONDBOX_SCENARIO_RUNNER_PORT="$(reserve_port)"
-[[ "$SECONDBOX_SCENARIO_API_PORT" != "$SECONDBOX_SCENARIO_RUNNER_PORT" ]] ||
+export SECONDBOX_SCENARIO_RUNNER_DATA_PLANE_PORT
+SECONDBOX_SCENARIO_RUNNER_DATA_PLANE_PORT="$(reserve_port)"
+[[ "$SECONDBOX_SCENARIO_API_PORT" != "$SECONDBOX_SCENARIO_RUNNER_PORT" &&
+   "$SECONDBOX_SCENARIO_API_PORT" != "$SECONDBOX_SCENARIO_RUNNER_DATA_PLANE_PORT" &&
+   "$SECONDBOX_SCENARIO_RUNNER_PORT" != "$SECONDBOX_SCENARIO_RUNNER_DATA_PLANE_PORT" ]] ||
   fail "failed to reserve distinct scenario ports"
 
 openssl req -x509 -newkey rsa:3072 -nodes \
@@ -325,7 +329,29 @@ export SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST="$toolchain_digest"
 export SECONDBOX_SCENARIO_COMPOSE_FILE="$compose_file"
 export SECONDBOX_SCENARIO_COMPOSE_PROJECT="$project_name"
 export SECONDBOX_PLATFORM_TOKEN="scenario-platform-token-0000000000000000"
-export SECONDBOX_APPLICATION_AUTHORITIES_JSON="[]"
+# The direct Port transport is granted per application authority, never to the
+# platform token, so qualifying it requires one explicitly provisioned ingress.
+# The deployed interval the direct-transport qualification measures against. An
+# operator can raise it to re-measure how much of a latency figure the relay's
+# poll interval actually governs.
+export SECONDBOX_SCENARIO_DATA_PLANE_POLL_INTERVAL_MILLISECONDS="${SECONDBOX_SCENARIO_DATA_PLANE_POLL_INTERVAL_MILLISECONDS:-250}"
+export SECONDBOX_SCENARIO_DIRECT_PORT_PROFILE="scenario-direct-port"
+export SECONDBOX_SCENARIO_DIRECT_PORT_TOKEN="scenario-direct-port-ingress-token-000000"
+export SECONDBOX_APPLICATION_AUTHORITIES_JSON
+SECONDBOX_APPLICATION_AUTHORITIES_JSON="$(
+  cat <<JSON
+[
+  {
+    "id": "scenario-direct-port-ingress",
+    "token": "$SECONDBOX_SCENARIO_DIRECT_PORT_TOKEN",
+    "tenantRef": "scenario-tenant",
+    "subjectRef": "scenario-subject",
+    "scopes": ["sandbox:read", "sandbox:lifecycle", "sandbox:ports", "sandbox:ports:direct"],
+    "profileGrants": ["$SECONDBOX_SCENARIO_DIRECT_PORT_PROFILE"]
+  }
+]
+JSON
+)"
 export SECONDBOX_LIVE_BASE_URL="http://127.0.0.1:$SECONDBOX_SCENARIO_API_PORT"
 
 compose() {

@@ -1224,6 +1224,8 @@ func testRunnerConfig() RunnerProtocolConfig {
 		ProtocolMaximum:                   1,
 		MaximumConcurrentStarts:           4,
 		MaximumConcurrentWorkspaceCreates: 4,
+		DataPlaneListenAddress:            "127.0.0.1:0",
+		DataPlaneAdvertisedAddress:        "10.0.0.5:7443",
 		MandatoryFeatures: []runnerprotocol.RunnerFeature{
 			runnerprotocol.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
 		},

@@ -20,6 +20,8 @@ func TestLoadRunnerProtocolConfigRequestsOnlyImplementedFeatures(t *testing.T) {
 		"SECONDBOX_RUNNER_CREDENTIAL":                       "runner-test-credential-material-0000000000",
 		"SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS":            "8",
 		"SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES": "4",
+		"SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS":        "0.0.0.0:7443",
+		"SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS":    "10.0.0.5:7443",
 	} {
 		t.Setenv(name, value)
 	}

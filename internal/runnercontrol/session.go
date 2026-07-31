@@ -35,6 +35,7 @@ const (
 	EventPty              EventKind = "pty"
 	EventFile             EventKind = "file"
 	EventPort             EventKind = "port"
+	EventPortDirect       EventKind = "port_direct"
 	EventInstanceTerminal EventKind = "instance_terminal"
 	EventDuplicate        EventKind = "duplicate"
 	EventRejection        EventKind = "rejection"
@@ -344,9 +345,10 @@ func (session *Session) ValidateOutboundRelayFrame(message *runnerv1.ControlPlan
 		if !session.enabledFeatures[runnerv1.RunnerFeature_RUNNER_FEATURE_PORT_PROXY] {
 			return fmt.Errorf("%w: Port proxy feature was not negotiated", ErrRunnerMessage)
 		}
-		if frame.GetOpen() == nil && frame.GetBytes() == nil &&
+		if frame.GetOpen() == nil && frame.GetDirectOpen() == nil &&
+			frame.GetBytes() == nil &&
 			frame.GetCredit() == nil && frame.GetCancel() == nil {
-			return fmt.Errorf("%w: control-plane Port payload is not open, bytes, credit, or cancel", ErrRunnerMessage)
+			return fmt.Errorf("%w: control-plane Port payload is not open, direct open, bytes, credit, or cancel", ErrRunnerMessage)
 		}
 		if err := validateRelayIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
 			return err
@@ -500,6 +502,8 @@ func (session *Session) validateRegistration(registration *runnerv1.RunnerRegist
 		!registration.Capabilities.NetworkPolicyReady ||
 		!registration.Capabilities.StorageReady ||
 		!registration.Capabilities.CleanupReady ||
+		!registration.Capabilities.DataPlaneReady ||
+		strings.TrimSpace(registration.DataPlaneAdvertisedAddress) == "" ||
 		registration.Capabilities.GuestProtocolGenerations == nil ||
 		registration.Capabilities.GuestProtocolGenerations.Minimum == 0 ||
 		registration.Capabilities.GuestProtocolGenerations.Minimum >
@@ -550,6 +554,8 @@ func runnerEnvelope(message *runnerv1.RunnerToControlPlane) (string, uint64, err
 		return validateEnvelope(message.GetLocalWorkspaceResult().MessageId, message.GetLocalWorkspaceResult().Sequence)
 	case message.GetInstanceTerminal() != nil:
 		return validateEnvelope(message.GetInstanceTerminal().MessageId, message.GetInstanceTerminal().Sequence)
+	case message.GetPortDirectConsume() != nil:
+		return validateEnvelope(message.GetPortDirectConsume().MessageId, message.GetPortDirectConsume().Sequence)
 	default:
 		return "", 0, fmt.Errorf("%w: stream frame has no durable message envelope", ErrRunnerMessage)
 	}
@@ -578,6 +584,8 @@ func classifyRunnerMessage(message *runnerv1.RunnerToControlPlane) EventKind {
 		return EventLocalWorkspace
 	case message.GetInstanceTerminal() != nil:
 		return EventInstanceTerminal
+	case message.GetPortDirectConsume() != nil:
+		return EventPortDirect
 	default:
 		return ""
 	}

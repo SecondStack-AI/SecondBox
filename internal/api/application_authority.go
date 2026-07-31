@@ -20,6 +20,10 @@ const (
 	applicationScopeSandboxFiles     = "sandbox:files"
 	applicationScopeSandboxArtifacts = "sandbox:artifacts"
 	applicationScopeSandboxPorts     = "sandbox:ports"
+	// applicationScopeSandboxPortsDirect grants the direct Port transport. It is
+	// never an implied consequence of sandbox:ports: only an authority holding
+	// this exact scope ever learns a Runner data-plane address.
+	applicationScopeSandboxPortsDirect = "sandbox:ports:direct"
 )
 
 var applicationProfileNamePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,79}$`)
@@ -61,8 +65,8 @@ func resolveApplicationAuthorities(
 		if len(authority.Token) < 24 {
 			return nil, errors.New("SecondBox application authority token must contain at least 24 bytes")
 		}
-		if len(authority.Scopes) == 0 || len(authority.Scopes) > 6 {
-			return nil, errors.New("SecondBox application authority requires between 1 and 6 scopes")
+		if len(authority.Scopes) == 0 || len(authority.Scopes) > 7 {
+			return nil, errors.New("SecondBox application authority requires between 1 and 7 scopes")
 		}
 		if len(authority.ProfileGrants) == 0 || len(authority.ProfileGrants) > 32 {
 			return nil, errors.New("SecondBox application authority requires between 1 and 32 Profile grants")
@@ -198,7 +202,23 @@ func isApplicationScope(scope string) bool {
 		scope == applicationScopeSandboxExec ||
 		scope == applicationScopeSandboxFiles ||
 		scope == applicationScopeSandboxArtifacts ||
-		scope == applicationScopeSandboxPorts
+		scope == applicationScopeSandboxPorts ||
+		scope == applicationScopeSandboxPortsDirect
+}
+
+// portTransportForRequest resolves which Port transport this caller may receive.
+// The direct transport is denied by default: a request carrying no application
+// authority, or an authority without the exact scope, receives the durable
+// relay endpoint and never observes a Runner address.
+func portTransportForRequest(request *http.Request) string {
+	authority, ok := request.Context().Value(applicationAuthorityContextKey{}).(resolvedApplicationAuthority)
+	if !ok {
+		return contracts.PortTransportRelay
+	}
+	if !slices.Contains(authority.scopes, applicationScopeSandboxPortsDirect) {
+		return contracts.PortTransportRelay
+	}
+	return contracts.PortTransportDirect
 }
 
 func hasAdjacentDuplicate(values []string) bool {

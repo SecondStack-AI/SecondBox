@@ -17,7 +17,11 @@ type PortSessionAdmission struct {
 	LeaseID        string
 	IdempotencyKey string
 	RequestHash    string
-	Now            time.Time
+	// CredentialDigest binds the single-use credential to this admission so the
+	// home Runner can reject a mismatch locally without ever holding the
+	// credential itself.
+	CredentialDigest []byte
+	Now              time.Time
 }
 
 // PortTunnel is the private assignment-bound projection consumed by the proxy.
@@ -35,6 +39,9 @@ type PortTunnel struct {
 	FencingToken      []byte
 	GuestPort         int64
 	StreamWindowBytes int64
+	// DataPlaneAddress is the home Runner's advertised caller-facing address. It
+	// is returned only to an ingress holding the exact direct-endpoint grant.
+	DataPlaneAddress string
 }
 
 // PortTunnelClose identifies one authenticated or already-consumed tunnel.
@@ -58,12 +65,25 @@ type PortTunnelEvent struct {
 	TerminalDetail string
 }
 
+// DirectPortConsumption is one home-Runner request to spend a single-use
+// credential before it forwards any byte on a live socket.
+type DirectPortConsumption struct {
+	RunnerID         string
+	SessionID        string
+	AssignmentID     string
+	Generation       int64
+	FencingToken     []byte
+	CredentialDigest []byte
+	Now              time.Time
+}
+
 // PortSessionRelay persists port admission, single-use connection state, and bounded bytes.
 type PortSessionRelay interface {
 	AdmitPortSession(context.Context, PortSessionAdmission) (PortTunnel, bool, error)
-	GetPortSession(context.Context, string, string, string, string, time.Time) (contracts.PortSession, error)
+	GetPortTunnel(context.Context, string, string, string, string, time.Time) (PortTunnel, error)
 	ClosePortSession(context.Context, PortTunnelClose) (contracts.PortSession, error)
 	ConsumePortSession(context.Context, string, string, string, time.Time) (PortTunnel, error)
+	ConsumeDirectPortSession(context.Context, DirectPortConsumption) (PortTunnel, error)
 	QueuePortClientBytes(context.Context, string, string, string, []byte, time.Time) error
 	NextPortTunnelEvent(context.Context, string, string, string, int64, time.Time) (PortTunnelEvent, bool, error)
 	AcknowledgePortTunnelEvent(context.Context, string, string, string, int64, time.Time) error

@@ -151,6 +151,10 @@ func (apiHandler *handler) serveSandboxExecStream(
 	}()
 	ticker := time.NewTicker(apiHandler.service.DataPlanePollInterval())
 	defer ticker.Stop()
+	// Subscribing before the first authoritative read closes the race where a
+	// frame commits between that read and the subscription.
+	wakeups, cancelWakeups := apiHandler.service.SubscribeDataPlaneSession(session.ID)
+	defer cancelWakeups()
 	afterSequence := int64(-1)
 	terminal := false
 	defer func() {
@@ -212,6 +216,7 @@ func (apiHandler *handler) serveSandboxExecStream(
 		select {
 		case err := <-readErrors:
 			return err
+		case <-wakeups:
 		case <-ticker.C:
 		case <-request.Context().Done():
 			return request.Context().Err()

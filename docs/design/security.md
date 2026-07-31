@@ -12,6 +12,8 @@ Runner authority is separate. A Runner establishes an outbound TLS 1.3 connectio
 
 Browser-facing PTY and port-tunnel connections do not rely on caller-supplied tenancy. They use single-use, session-bound, expiring HMAC capability tokens carried in the WebSocket subprotocol. Generation, Lease, Assignment, and attachment checks still apply at admission.
 
+One Port operation scope is a capability rather than an operation permission. `sandbox:ports:direct` grants the direct Port transport, whose endpoint names the home Runner's advertised data-plane address. It is denied by default, is never implied by `sandbox:ports`, and is the only way any caller learns a Runner address; every other authority receives the relay WebSocket endpoint. The same single-use capability token authenticates either transport, and on the direct transport the home Runner rejects a mismatch locally in constant time before spending the token against PostgreSQL, which remains the single consumption authority.
+
 ## Control-plane boundary
 
 The control plane has database and object-store authority and can schedule Runners, so compromise is severe. It remains unprivileged and has no KVM, TUN/TAP, host cgroups, host paths, container-engine socket, Runner private keys, or Runner shell access. The Runner CA private key stays outside the control-plane deployment.
@@ -36,6 +38,8 @@ durable operation receipts. The runner protocol never transports image bytes or
 paths. Loss of an unbacked home-Runner filesystem loses its Sandboxes and local
 Snapshots; PostgreSQL or S3 recovery alone is insufficient.
 
-All work is deadline- and size-bounded. Per-subject quotas protect shared control-plane and Runner capacity. Backpressure prevents slow clients from creating unbounded output buffers. Database, object-store, Runner, and guest failures produce explicit state rather than fallback execution or empty-data success.
+All work is deadline- and size-bounded. Per-subject quotas protect shared control-plane and Runner capacity. Backpressure prevents slow clients from creating unbounded output buffers. Database, object-store, Runner, and guest failures produce explicit state rather than fallback execution or empty-data success. On a direct Port connection, backpressure is TCP flow control on the caller leg and the retained guest-protocol credit window on the guest leg, so no unbounded buffer exists on either.
+
+Port evidence granularity is transport dependent. The relay transport retains per-frame durability. The direct transport emits the fixed-shape Runner evidence record at admitted open and at close and retains no per-frame durability; the reduction is deliberate and is stated in the [threat model](threat-model.md). No Port evidence record can contain a payload byte, a credential, a fencing token, or a Runner address.
 
 See [Service boundaries](service-boundaries.md), [Profiles and authorization](profiles-and-authorization.md), [Runner protocol](runner-protocol.md), and [Recovery and reconciliation](recovery-and-reconciliation.md).

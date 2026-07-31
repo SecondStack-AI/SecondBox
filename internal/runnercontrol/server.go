@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
+	"sync"
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
@@ -39,11 +41,18 @@ type EventPersistenceRecord struct {
 	ReceivedAt time.Time
 }
 
+// DirectPortAdmitter spends one single-use Port credential for the home Runner.
+// PostgreSQL stays the single consumption authority for both transports.
+type DirectPortAdmitter interface {
+	ConsumeDirectPortSession(context.Context, DirectPortConsumption) (PortTunnel, error)
+}
+
 // ServerConfig contains explicit protocol compatibility and durable dependencies.
 type ServerConfig struct {
 	CredentialVerifier  CredentialVerifier
 	StateStore          ProtocolStateStore
 	FrameRelay          ProtocolFrameRelay
+	DirectPorts         DirectPortAdmitter
 	SupportedVersions   VersionRange
 	EnabledFeatures     []runnerv1.RunnerFeature
 	HeartbeatInterval   time.Duration
@@ -64,6 +73,20 @@ type Server struct {
 
 type controlPlaneFrameSender interface {
 	Send(*runnerv1.ControlPlaneToRunner) error
+}
+
+// serializedFrameSender lets the receive loop answer a direct Port admission
+// inline while the outbound command pump is running. One gRPC stream tolerates
+// exactly one concurrent sender.
+type serializedFrameSender struct {
+	mu     sync.Mutex
+	stream controlPlaneFrameSender
+}
+
+func (sender *serializedFrameSender) Send(message *runnerv1.ControlPlaneToRunner) error {
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	return sender.stream.Send(message)
 }
 
 type receivedRunnerFrame struct {
@@ -131,7 +154,8 @@ func (server *Server) Connect(stream runnerv1.RunnerControl_ConnectServer) (retu
 	if negotiation.Response == nil {
 		return errors.New("SecondBox runner control negotiation produced no response")
 	}
-	if err := stream.Send(negotiation.Response); err != nil {
+	sender := &serializedFrameSender{stream: stream}
+	if err := sender.Send(negotiation.Response); err != nil {
 		return fmt.Errorf("SecondBox runner control send negotiation: %w", err)
 	}
 	if negotiation.Kind == EventRejection {
@@ -202,6 +226,18 @@ func (server *Server) Connect(stream runnerv1.RunnerControl_ConnectServer) (retu
 			pending = next
 			continue
 		}
+		if accepted.event.Kind == EventPortDirect {
+			if err := server.answerDirectPortConsumption(
+				stream.Context(),
+				sender,
+				identity.RunnerID,
+				accepted.event.Message.GetPortDirectConsume(),
+				accepted.receivedAt,
+			); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := server.persistEvent(
 			stream.Context(),
 			accepted.event,
@@ -214,7 +250,7 @@ func (server *Server) Connect(stream runnerv1.RunnerControl_ConnectServer) (retu
 			outboundFailures = failures
 			go server.pumpOutboundFrames(
 				stream.Context(),
-				stream,
+				sender,
 				session,
 				identity.RunnerID,
 				connectionID,
@@ -522,6 +558,64 @@ func runnerObservedToPersistDuration(
 	}
 	observedAt := time.Unix(0, int64(progress.ObservedAtUnixNs))
 	return max(persistedAt.Sub(observedAt), 0)
+}
+
+// answerDirectPortConsumption spends the single-use credential and answers the
+// verdict on the same authenticated stream. The verdict is deliberately not
+// durable: PostgreSQL already recorded the consumption, and a lost answer
+// simply leaves the caller connection denied.
+func (server *Server) answerDirectPortConsumption(
+	ctx context.Context,
+	sender controlPlaneFrameSender,
+	runnerID string,
+	consume *runnerv1.PortDirectConsume,
+	receivedAt time.Time,
+) error {
+	if consume == nil || consume.Fence == nil ||
+		strings.TrimSpace(consume.OperationId) == "" ||
+		len(consume.CredentialDigest) == 0 {
+		return fmt.Errorf("%w: direct Port consumption identity is incomplete", ErrRunnerMessage)
+	}
+	admission := &runnerv1.PortDirectAdmission{
+		MessageId:   consume.MessageId,
+		Fence:       consume.Fence,
+		OperationId: consume.OperationId,
+		StreamId:    consume.StreamId,
+		Kind:        runnerv1.PortDirectAdmissionKind_PORT_DIRECT_ADMISSION_KIND_ADMITTED,
+	}
+	if server.config.DirectPorts == nil {
+		admission.Kind = runnerv1.PortDirectAdmissionKind_PORT_DIRECT_ADMISSION_KIND_DENIED
+		admission.SafeDetail = "direct port transport is unavailable"
+	} else if _, err := server.config.DirectPorts.ConsumeDirectPortSession(
+		ctx,
+		DirectPortConsumption{
+			RunnerID:         runnerID,
+			SessionID:        consume.OperationId,
+			AssignmentID:     consume.Fence.AssignmentId,
+			Generation:       int64(consume.Fence.SandboxGeneration),
+			FencingToken:     consume.Fence.FencingToken,
+			CredentialDigest: consume.CredentialDigest,
+			Now:              receivedAt,
+		},
+	); err != nil {
+		slog.InfoContext(
+			ctx,
+			"SecondBox direct Port credential consumption denied",
+			"runnerId", runnerID,
+			"portSessionId", consume.OperationId,
+			"error", err,
+		)
+		admission.Kind = runnerv1.PortDirectAdmissionKind_PORT_DIRECT_ADMISSION_KIND_DENIED
+		admission.SafeDetail = "port credential was rejected"
+	}
+	if err := sender.Send(&runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_PortDirectAdmission{
+			PortDirectAdmission: admission,
+		},
+	}); err != nil {
+		return fmt.Errorf("SecondBox runner control send direct Port admission: %w", err)
+	}
+	return nil
 }
 
 func (server *Server) persistEvent(ctx context.Context, event Event, receivedAt time.Time) error {

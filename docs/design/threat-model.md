@@ -25,6 +25,9 @@ The control-plane image has no reason to access KVM, TUN/TAP, host cgroups, host
 | Object-store tampering | Artifact integrity | Content hashes, size evidence, retention, and verified Artifact reads |
 | Home-Runner disk loss | Explicit durability boundary | Reflink-store readiness, immutable home placement, no empty or cross-Runner fallback, and consistent external backup of stable Runner identity plus Workspace root |
 | Resource exhaustion | Shared-service availability | Explicit per-subject quotas, request deadlines, payload/output limits, admission capacity, and backpressure |
+| Unauthenticated peer reaching a Runner data-plane listener | No admission without PostgreSQL | Framed single-use credential before any payload byte, bounded handshake time and message size, constant-time local rejection against assignment-bound session state, and credential consumption through the authenticated control connection |
+| Leaked Runner data-plane address | Confined ingress surface | Exact `sandbox:ports:direct` operation scope denied by default, per-authority grant, no Runner address in any other response or in Port evidence, and an advertised value that carries no Sandbox identity |
+| Direct Port connection outliving its authority | Single generation authority | Generation fence, Lease expiry, session deadline, operator drain, Instance termination, and control-connection loss each close every live socket for the affected session, with bounded proof of closure |
 
 ## Credential lifecycle
 
@@ -34,6 +37,6 @@ Replacing the platform token requires coordinated caller and control-plane rollo
 
 ## Detection and response
 
-Security-sensitive mutations produce audit rows. HTTP responses and asynchronous Operations carry request identifiers. Metrics avoid ownership labels. An incident preserves audit and bounded logs, replaces affected credentials, fences affected Runner assignments, and recovers affected Sandboxes only by restoring the same stable Runner identity and its Workspace root from a trusted consistent backup. Without that backup, those Sandboxes and local Snapshots are lost.
+Security-sensitive mutations produce audit rows. HTTP responses and asynchronous Operations carry request identifiers. Metrics avoid ownership labels. Port forensics are transport dependent: the relay transport retains per-frame durability, while the direct transport retains only admitted-open and close evidence. Reconstructing a direct Port session's bytes after the fact is not possible, and that reduction is accepted deliberately in exchange for usable SSH and VS Code Remote-SSH latency. An incident preserves audit and bounded logs, replaces affected credentials, fences affected Runner assignments, and recovers affected Sandboxes only by restoring the same stable Runner identity and its Workspace root from a trusted consistent backup. Without that backup, those Sandboxes and local Snapshots are lost.
 
 See [security model](security.md), [service boundaries](service-boundaries.md), [profiles and authorization](profiles-and-authorization.md), [networking and ports](networking-and-ports.md), and [deployment operations](../operations/deployment.md).

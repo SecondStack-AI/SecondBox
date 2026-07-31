@@ -20,9 +20,13 @@ import (
 )
 
 const (
-	defaultShellRows        = 24
-	defaultShellColumns     = 80
-	defaultShellCreditBytes = 1024
+	defaultShellRows    = 24
+	defaultShellColumns = 80
+	// defaultShellCreditBytes is the outstanding output credit requested before
+	// the session's own window is known. A full-screen repaint costs several
+	// kilobytes, so a smaller default would stall every repaint behind extra
+	// credit round trips. The session's pinned window always clamps this.
+	defaultShellCreditBytes = 64 << 10
 	shellInputChunkBytes    = 4096
 )
 
@@ -209,7 +213,9 @@ func runSandboxShellCommand(
 	}()
 	shellDone := make(chan struct{})
 	defer close(shellDone)
-	if err := terminalConnection.GrantOutput(*creditBytes); err != nil {
+	if err := terminalConnection.GrantOutput(
+		shellOutputCredit(*creditBytes, session.StreamWindowBytes),
+	); err != nil {
 		return err
 	}
 
@@ -297,6 +303,19 @@ func runSandboxShellCommand(
 			return errors.New("SecondBox CLI received an unsupported Terminal frame")
 		}
 	}
+}
+
+// shellOutputCredit clamps the requested credit to the session's pinned window.
+//
+// The window is immutable ProfileRevision policy and granting past it fails the
+// session, so the client publishes what it can spend rather than guessing. A
+// server that reports no window leaves the requested value untouched, which
+// keeps an older control plane usable.
+func shellOutputCredit(requested int64, streamWindowBytes int64) int64 {
+	if streamWindowBytes > 0 && requested > streamWindowBytes {
+		return streamWindowBytes
+	}
+	return requested
 }
 
 func pumpSandboxShellInput(

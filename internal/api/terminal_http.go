@@ -114,6 +114,7 @@ func (apiHandler *handler) publicTerminalSession(
 	return contracts.TerminalSession{
 		ID: session.ID, SandboxID: session.SandboxID, Generation: session.Generation,
 		State: state, WebsocketURL: endpoint, Subprotocol: terminalSubprotocol,
+		StreamWindowBytes:  session.StreamWindowBytes,
 		NextClientSequence: session.NextClientSequence, ExpiresAt: session.DeadlineAt,
 	}, nil
 }
@@ -187,6 +188,11 @@ func (apiHandler *handler) serveSandboxTerminal(
 	}()
 	ticker := time.NewTicker(apiHandler.service.DataPlanePollInterval())
 	defer ticker.Stop()
+	// Subscribing before the first authoritative read is required, not stylistic:
+	// it closes the race where a frame commits between that read and the
+	// subscription and would otherwise wait for the poll interval.
+	wakeups, cancelWakeups := apiHandler.service.SubscribeDataPlaneSession(session.ID)
+	defer cancelWakeups()
 	afterSequence := int64(-1)
 	for {
 		frames, err := apiHandler.service.ListSandboxTerminalFrames(
@@ -232,6 +238,7 @@ func (apiHandler *handler) serveSandboxTerminal(
 		select {
 		case err := <-readErrors:
 			return false, err
+		case <-wakeups:
 		case <-ticker.C:
 		case <-request.Context().Done():
 			return false, request.Context().Err()

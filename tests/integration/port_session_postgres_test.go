@@ -76,7 +76,7 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 
 	session, replayed, err := portService.CreateSandboxPortSession(
 		t.Context(), principal, "request-port-session", sandbox.ID, sandbox.Generation,
-		lease.ID, "port-session-create", contracts.CreatePortSessionRequest{
+		lease.ID, "port-session-create", contracts.PortTransportRelay, contracts.CreatePortSessionRequest{
 			Name: "web", DurationSeconds: 30,
 		},
 	)
@@ -91,7 +91,7 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 	}
 	replayedSession, replayed, err := portService.CreateSandboxPortSession(
 		t.Context(), principal, "request-port-session", sandbox.ID, sandbox.Generation,
-		lease.ID, "port-session-create", contracts.CreatePortSessionRequest{
+		lease.ID, "port-session-create", contracts.PortTransportRelay, contracts.CreatePortSessionRequest{
 			Name: "web", DurationSeconds: 30,
 		},
 	)
@@ -103,7 +103,7 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 	}
 	if _, _, err := portService.CreateSandboxPortSession(
 		t.Context(), principal, "request-port-session", sandbox.ID, sandbox.Generation,
-		lease.ID, "port-session-create", contracts.CreatePortSessionRequest{
+		lease.ID, "port-session-create", contracts.PortTransportRelay, contracts.CreatePortSessionRequest{
 			Name: "web", DurationSeconds: 31,
 		},
 	); !errors.Is(err, ports.ErrIdempotencyConflict) {
@@ -111,7 +111,7 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 	}
 	if _, _, err := portService.CreateSandboxPortSession(
 		t.Context(), principal, "request-port-disabled", sandbox.ID, sandbox.Generation,
-		lease.ID, "port-disabled", contracts.CreatePortSessionRequest{
+		lease.ID, "port-disabled", contracts.PortTransportRelay, contracts.CreatePortSessionRequest{
 			Name: "admin", DurationSeconds: 30,
 		},
 	); !errors.Is(err, ports.ErrPortPolicyDenied) {
@@ -119,7 +119,7 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 	}
 	if _, _, err := portService.CreateSandboxPortSession(
 		t.Context(), principal, "request-port-stale-generation", sandbox.ID, sandbox.Generation+1,
-		lease.ID, "port-stale-generation", contracts.CreatePortSessionRequest{
+		lease.ID, "port-stale-generation", contracts.PortTransportRelay, contracts.CreatePortSessionRequest{
 			Name: "web", DurationSeconds: 30,
 		},
 	); !errors.Is(err, ports.ErrGenerationFenced) {
@@ -129,7 +129,7 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 	crossProject.TenantRef = "project-outside-port-authority"
 	crossProject.TenantRef = "tenant-outside-port-authority"
 	if _, err := portService.GetSandboxPortSession(
-		t.Context(), crossProject, sandbox.ID, session.ID,
+		t.Context(), crossProject, sandbox.ID, session.ID, contracts.PortTransportRelay,
 	); !errors.Is(err, ports.ErrPortSessionNotFound) {
 		t.Fatalf("cross-Project PortSession lookup error = %v", err)
 	}
@@ -223,7 +223,7 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 	}
 	leaseSwept, _, err := portService.CreateSandboxPortSession(
 		t.Context(), principal, "request-port-lease-sweep", sandbox.ID, sandbox.Generation,
-		leaseSweep.ID, "port-lease-sweep",
+		leaseSweep.ID, "port-lease-sweep", contracts.PortTransportRelay,
 		contracts.CreatePortSessionRequest{Name: "web", DurationSeconds: 30},
 	)
 	if err != nil {
@@ -255,7 +255,7 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 		t.Fatalf("inactive Lease Port cancellation = %#v", portCancellation.GetPort())
 	}
 	leaseSweptState, err := portService.GetSandboxPortSession(
-		t.Context(), principal, sandbox.ID, leaseSwept.ID,
+		t.Context(), principal, sandbox.ID, leaseSwept.ID, contracts.PortTransportRelay,
 	)
 	if err != nil || leaseSweptState.State != contracts.PortSessionStateClosed {
 		t.Fatalf("inactive Lease Port state = %#v, %v", leaseSweptState, err)
@@ -269,7 +269,7 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 	}
 	expiring, _, err := portService.CreateSandboxPortSession(
 		t.Context(), principal, "request-port-expiry", sandbox.ID, sandbox.Generation,
-		lease.ID, "port-expiry", contracts.CreatePortSessionRequest{Name: "web", DurationSeconds: 10},
+		lease.ID, "port-expiry", contracts.PortTransportRelay, contracts.CreatePortSessionRequest{Name: "web", DurationSeconds: 10},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -281,7 +281,7 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 		t.Fatalf("expired Port token error = %v", err)
 	}
 	expired, err := portService.GetSandboxPortSession(
-		t.Context(), principal, sandbox.ID, expiring.ID,
+		t.Context(), principal, sandbox.ID, expiring.ID, contracts.PortTransportRelay,
 	)
 	if err != nil || expired.State != contracts.PortSessionStateExpired {
 		t.Fatalf("expired PortSession = %#v, %v", expired, err)
@@ -290,7 +290,7 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 
 	disconnected, _, err := portService.CreateSandboxPortSession(
 		t.Context(), principal, "request-port-runner-disconnect", sandbox.ID, sandbox.Generation,
-		lease.ID, "port-runner-disconnect",
+		lease.ID, "port-runner-disconnect", contracts.PortTransportRelay,
 		contracts.CreatePortSessionRequest{Name: "web", DurationSeconds: 30},
 	)
 	if err != nil {
@@ -333,7 +333,7 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 	}
 	if _, _, err := portService.CreateSandboxPortSession(
 		t.Context(), principal, "request-port-stale-lease", sandbox.ID, sandbox.Generation,
-		lease.ID, "port-stale-lease",
+		lease.ID, "port-stale-lease", contracts.PortTransportRelay,
 		contracts.CreatePortSessionRequest{Name: "web", DurationSeconds: 10},
 	); !errors.Is(err, ports.ErrLeaseInactive) {
 		t.Fatalf("stale Lease PortSession error = %v", err)

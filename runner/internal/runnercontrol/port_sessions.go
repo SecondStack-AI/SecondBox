@@ -58,6 +58,35 @@ func (s *RunnerProtocolService) handlePortFrame(
 	if err != nil {
 		return fmt.Errorf("SecondBox runner encode Port frame: %w", err)
 	}
+	// A direct PortSession is carried by a caller socket rather than by durable
+	// frames, so its only control-plane frames are the admitting Open and a
+	// Cancel that revokes it.
+	if frame.GetCancel() != nil && s.directPorts.hasSession(frame.OperationId) {
+		reason := frame.GetCancel().GetReason()
+		if reason == "" {
+			reason = "port session cancelled"
+		}
+		s.directPorts.closeSession(frame.OperationId, reason)
+		return nil
+	}
+	if direct := frame.GetDirectOpen(); direct != nil {
+		if frame.Sequence != 1 {
+			return fmt.Errorf("SecondBox runner direct Port stream must begin with sequence one")
+		}
+		if err := s.validateOperationCorrelation(frame.Fence, frame.OperationId, frame.GetCorrelation()); err != nil {
+			return err
+		}
+		if !s.hasActiveFence(frame.Fence) {
+			return s.sendUntrackedPortTerminal(stream, frame, runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_FENCED, "assignment fence is not active")
+		}
+		if s.portBackend == nil {
+			return s.sendUntrackedPortTerminal(stream, frame, runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_GUEST_UNAVAILABLE, "runner Port backend is unavailable")
+		}
+		if !s.dataPlane.ready() {
+			return s.sendUntrackedPortTerminal(stream, frame, runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_FAILED, "runner data-plane listener is unavailable")
+		}
+		return s.registerDirectPortSession(frame, direct)
+	}
 	s.operationMu.Lock()
 	state := s.portOperations[key]
 	if state == nil {

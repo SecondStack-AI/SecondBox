@@ -74,6 +74,7 @@ message RunnerCapabilities {
   bool storage_ready = 8;
   bool cleanup_ready = 9;
   ProtocolVersionRange guest_protocol_generations = 10;
+  bool data_plane_ready = 11;
 }
 
 message ArtifactCacheEvidence {
@@ -96,6 +97,7 @@ enum RunnerReadinessFailure {
   RUNNER_READINESS_FAILURE_STORAGE = 5;
   RUNNER_READINESS_FAILURE_TRUST = 6;
   RUNNER_READINESS_FAILURE_CLEANUP = 7;
+  RUNNER_READINESS_FAILURE_DATA_PLANE = 8;
 }
 
 message RunnerRegistration {
@@ -112,6 +114,10 @@ message RunnerRegistration {
   repeated ArtifactCacheEvidence artifact_cache = 11;
   repeated RunnerReadinessFailure readiness_failures = 12;
   StartupTiming startup_timing = 13;
+  // data_plane_advertised_address is administrative capacity evidence of the
+  // same class as advertised capacity. It carries no Sandbox identity and is
+  // never returned to a caller without the exact direct-endpoint grant.
+  string data_plane_advertised_address = 14;
 }
 
 enum DrainPhase {
@@ -141,6 +147,7 @@ message RunnerHeartbeat {
   repeated ActiveAssignmentSummary active_assignments = 8;
   DrainPhase drain_phase = 9;
   StartupTiming startup_timing = 10;
+  string data_plane_advertised_address = 11;
 }
 
 message Correlation {
@@ -601,6 +608,49 @@ message PortTerminal {
   string safe_detail = 2;
 }
 
+// PortDirectOpen admits one PortSession for the direct transport. It replaces
+// PortOpen for a granted caller: the Runner holds the assignment-bound session
+// state and waits for a caller connection instead of relaying frames. The
+// single-use credential is never carried in plaintext; only its digest is.
+message PortDirectOpen {
+  uint32 guest_port = 1;
+  string protocol = 2;
+  string port_name = 3;
+  uint64 deadline_unix_ms = 4;
+  bytes credential_digest = 5;
+  string lease_id = 6;
+}
+
+// PortDirectConsume asks PostgreSQL to spend the single-use credential exactly
+// once before the Runner forwards any byte.
+message PortDirectConsume {
+  string message_id = 1;
+  uint64 sequence = 2;
+  AssignmentFence fence = 3;
+  string operation_id = 4;
+  string stream_id = 5;
+  Correlation correlation = 6;
+  bytes credential_digest = 7;
+}
+
+enum PortDirectAdmissionKind {
+  PORT_DIRECT_ADMISSION_KIND_UNSPECIFIED = 0;
+  PORT_DIRECT_ADMISSION_KIND_ADMITTED = 1;
+  PORT_DIRECT_ADMISSION_KIND_DENIED = 2;
+}
+
+// PortDirectAdmission is the single consumption verdict for one caller
+// connection. It is answered on the authenticated control stream and is never
+// durable: a replayed or already-consumed credential is denied.
+message PortDirectAdmission {
+  string message_id = 1;
+  AssignmentFence fence = 2;
+  string operation_id = 3;
+  string stream_id = 4;
+  PortDirectAdmissionKind kind = 5;
+  string safe_detail = 6;
+}
+
 message PortFrame {
   AssignmentFence fence = 1;
   string operation_id = 2;
@@ -613,6 +663,7 @@ message PortFrame {
     StreamCredit credit = 12;
     ExecCancel cancel = 13;
     PortTerminal terminal = 14;
+    PortDirectOpen direct_open = 15;
   }
 }
 
@@ -764,6 +815,7 @@ message RunnerToControlPlane {
     Evidence evidence = 13;
     InstanceTerminal instance_terminal = 16;
     LocalWorkspaceResult local_workspace_result = 17;
+    PortDirectConsume port_direct_consume = 18;
   }
 }
 
@@ -780,5 +832,6 @@ message ControlPlaneToRunner {
     PtyFrame pty = 8;
     PortFrame port = 9;
     LocalWorkspaceCommand local_workspace = 13;
+    PortDirectAdmission port_direct_admission = 14;
   }
 }

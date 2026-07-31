@@ -183,6 +183,7 @@ export interface PortSession {
   readonly generation: number;
   readonly name: string;
   readonly protocol: "tcp" | "http";
+  readonly transport: "relay" | "direct";
   readonly endpoint: string;
   readonly state: "open" | "closing" | "closed" | "expired" | "fenced";
   readonly createdAt: string;
@@ -216,6 +217,7 @@ export interface TerminalSession {
   readonly state: "open" | "detached" | "closing" | "closed";
   readonly websocketUrl: string;
   readonly subprotocol: "secondbox.terminal.v1";
+  readonly streamWindowBytes: number;
   readonly nextClientSequence: number;
   readonly expiresAt: string;
 }

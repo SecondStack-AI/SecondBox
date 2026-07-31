@@ -40,6 +40,11 @@ type RunnerProtocolConfig struct {
 	MaximumConcurrentStarts           int
 	MaximumConcurrentWorkspaceCreates int
 	MandatoryFeatures                 []runnerprotocol.RunnerFeature
+	// DataPlaneListenAddress binds the caller-facing direct Port transport.
+	DataPlaneListenAddress string
+	// DataPlaneAdvertisedAddress is administrative capacity evidence returned
+	// only to an ingress holding the exact direct-endpoint grant.
+	DataPlaneAdvertisedAddress string
 }
 
 // BackendReadiness is verified local capability and capacity evidence.
@@ -159,6 +164,9 @@ type RunnerProtocolService struct {
 	portTerminalOrder []string
 	evidence          runnerevidence.Sink
 	correlations      map[string]*runnerprotocol.Correlation
+	dataPlane         *dataPlaneListener
+	dataPlaneFailures chan error
+	directPorts       *directPortRegistry
 }
 
 // NewRunnerProtocolService validates immutable identity before creating the composition root.
@@ -183,6 +191,22 @@ func NewRunnerProtocolService(
 	}
 	if config.MaximumConcurrentWorkspaceCreates < 1 {
 		return nil, fmt.Errorf("SecondBox runner protocol config requires a positive maximum concurrent Workspace create count")
+	}
+	config.DataPlaneListenAddress = strings.TrimSpace(config.DataPlaneListenAddress)
+	config.DataPlaneAdvertisedAddress = strings.TrimSpace(config.DataPlaneAdvertisedAddress)
+	if err := validateDataPlaneAddress(
+		"SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS",
+		config.DataPlaneListenAddress,
+		true,
+	); err != nil {
+		return nil, err
+	}
+	if err := validateDataPlaneAddress(
+		"SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS",
+		config.DataPlaneAdvertisedAddress,
+		false,
+	); err != nil {
+		return nil, err
 	}
 	if backend == nil {
 		return nil, fmt.Errorf("SecondBox runner protocol assignment backend is required")
@@ -227,6 +251,8 @@ func NewRunnerProtocolService(
 		portOperations:   make(map[string]*runnerPortOperation),
 		evidence:         runnerevidence.SlogSink{},
 		correlations:     make(map[string]*runnerprotocol.Correlation),
+		dataPlane:        newDataPlaneListener(),
+		directPorts:      newDirectPortRegistry(),
 	}
 	if implementsTerminal {
 		service.instanceTerminals = terminalBackend.InstanceTerminals()
@@ -253,7 +279,14 @@ func (s *RunnerProtocolService) SetEvidenceSink(sink runnerevidence.Sink) {
 }
 
 // Run preserves Runner-owned Instances while reconnecting transient control-plane sessions.
-func (s *RunnerProtocolService) Run(ctx context.Context) error {
+func (s *RunnerProtocolService) Run(ctx context.Context) (runErr error) {
+	stopDataPlane, err := s.startDataPlaneListener(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		runErr = errors.Join(runErr, stopDataPlane())
+	}()
 	reconnectDelay := runnerReconnectInitialDelay
 	for {
 		if err := ctx.Err(); err != nil {
@@ -324,7 +357,7 @@ func (s *RunnerProtocolService) runProtocolSession(ctx context.Context) (bool, e
 		return false, err
 	}
 
-	readiness, err := s.backend.Readiness(ctx)
+	readiness, err := s.readiness(ctx)
 	if err != nil {
 		return false, fmt.Errorf("SecondBox runner readiness failed: %w", err)
 	}
@@ -408,6 +441,28 @@ func (s *RunnerProtocolService) validateWelcome(welcome *runnerprotocol.RunnerWe
 	return nil
 }
 
+// readiness projects the Runner-owned caller-facing transport onto backend
+// capability evidence. An unavailable listener is a readiness failure, so the
+// control plane refuses registration exactly as it does for an unavailable
+// network-policy listener.
+func (s *RunnerProtocolService) readiness(ctx context.Context) (BackendReadiness, error) {
+	readiness, err := s.backend.Readiness(ctx)
+	if err != nil {
+		return BackendReadiness{}, err
+	}
+	if readiness.Capabilities == nil {
+		readiness.Capabilities = &runnerprotocol.RunnerCapabilities{}
+	}
+	readiness.Capabilities.DataPlaneReady = s.dataPlane.ready()
+	if !readiness.Capabilities.DataPlaneReady {
+		readiness.ReadinessFailures = append(
+			readiness.ReadinessFailures,
+			runnerprotocol.RunnerReadinessFailure_RUNNER_READINESS_FAILURE_DATA_PLANE,
+		)
+	}
+	return readiness, nil
+}
+
 func (s *RunnerProtocolService) sendRegistration(
 	stream RunnerProtocolStream,
 	connectionID string,
@@ -433,6 +488,8 @@ func (s *RunnerProtocolService) sendRegistration(
 						ArtifactCache:     readiness.ArtifactCache,
 						ReadinessFailures: readiness.ReadinessFailures,
 						StartupTiming:     s.startupTiming(),
+
+						DataPlaneAdvertisedAddress: s.config.DataPlaneAdvertisedAddress,
 					},
 				},
 			}
@@ -472,6 +529,13 @@ func (s *RunnerProtocolService) consumeCommands(
 		chan struct{},
 		s.config.MaximumConcurrentWorkspaceCreates,
 	)
+	// A direct Port connection is admitted work owned by this control-plane
+	// session. Losing the session cancels it, matching how the Runner already
+	// treats every other admitted operation.
+	defer s.directPorts.closeAll("control-plane connection lost")
+	s.directPorts.bindStream(stream)
+	defer s.directPorts.bindStream(nil)
+	dataPlaneFailures := s.dataPlaneFailureSource()
 	go pumpControlPlaneFrames(connectionCtx, stream.Recv, received)
 	asyncErrors := make(chan error, 1)
 	go s.sendHeartbeats(
@@ -582,7 +646,13 @@ func (s *RunnerProtocolService) consumeCommands(
 			}
 		case err := <-asyncErrors:
 			return err
+		case err := <-dataPlaneFailures:
+			return err
 		case terminal := <-s.instanceTerminals:
+			s.directPorts.closeAssignment(
+				terminal.Fence.GetAssignmentId(),
+				"instance terminated",
+			)
 			if err := s.sendInstanceTerminal(ctx, stream, terminal); err != nil {
 				return err
 			}
@@ -709,6 +779,8 @@ func (s *RunnerProtocolService) handleCommand(
 		return s.handleFileFrame(ctx, stream, message.GetFile(), enabled, asyncErrors)
 	case message.GetPort() != nil:
 		return s.handlePortFrame(ctx, stream, message.GetPort(), enabled, asyncErrors)
+	case message.GetPortDirectAdmission() != nil:
+		return s.directPorts.deliverAdmission(message.GetPortDirectAdmission())
 	case message.GetLocalWorkspace() != nil:
 		if !enabled[runnerprotocol.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE] ||
 			s.workspaceBackend == nil {
@@ -1125,6 +1197,10 @@ func (s *RunnerProtocolService) handleFence(
 		return err
 	}
 	correlation := cloneRunnerCorrelation(command.Correlation)
+	// The fence revokes assignment authority, so every admitted direct Port
+	// socket for it must be closed before the fence result claims the instance
+	// is stopped.
+	s.directPorts.closeAssignment(command.Fence.GetAssignmentId(), "assignment fenced")
 	evidence, err := s.backend.FenceAssignment(ctx, command)
 	if err != nil {
 		evidence.Result = runnerprotocol.FenceResultKind_FENCE_RESULT_KIND_FAILED
@@ -1167,6 +1243,7 @@ func (s *RunnerProtocolService) handleDrain(
 	stream RunnerProtocolStream,
 	command *runnerprotocol.DrainCommand,
 ) error {
+	s.directPorts.closeAll("runner draining")
 	remaining := s.activeAssignments()
 	phase := runnerprotocol.DrainPhase_DRAIN_PHASE_DRAINING
 	if len(remaining) == 0 {
@@ -1213,6 +1290,8 @@ func (s *RunnerProtocolService) sendHeartbeat(
 						ActiveAssignments: s.activeAssignments(),
 						DrainPhase:        s.drainPhase(),
 						StartupTiming:     s.startupTiming(),
+
+						DataPlaneAdvertisedAddress: s.config.DataPlaneAdvertisedAddress,
 					},
 				},
 			}

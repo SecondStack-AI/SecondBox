@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/url"
 	"path"
 	"strings"
@@ -30,6 +31,10 @@ type portTunnelClaims struct {
 	ExpiresAt  int64  `json:"exp"`
 }
 
+// CreateSandboxPortSession admits one PortSession on the transport the caller's
+// authority grants. Admission itself is identical for both transports: the same
+// transactional binding of tenant, subject, pinned ProfileRevision, Lease,
+// assignment fence, generation, named port, protocol, duration, and limits.
 func (service *ControlPlaneService) CreateSandboxPortSession(
 	ctx context.Context,
 	principal contracts.Principal,
@@ -38,10 +43,14 @@ func (service *ControlPlaneService) CreateSandboxPortSession(
 	generation int64,
 	leaseID string,
 	idempotencyKey string,
+	transport string,
 	request contracts.CreatePortSessionRequest,
 ) (contracts.PortSession, bool, error) {
 	if err := service.requirePortAuthority(principal); err != nil {
 		return contracts.PortSession{}, false, err
+	}
+	if transport != contracts.PortTransportRelay && transport != contracts.PortTransportDirect {
+		return contracts.PortSession{}, false, errors.New("SecondBox PortSession transport is invalid")
 	}
 	if requestID == "" || sandboxID == "" || generation < 1 || leaseID == "" {
 		return contracts.PortSession{}, false, errors.New("SecondBox PortSession authority is incomplete")
@@ -63,21 +72,31 @@ func (service *ControlPlaneService) CreateSandboxPortSession(
 		return contracts.PortSession{}, false, err
 	}
 	now := service.now().UTC()
+	session := contracts.PortSession{
+		ID: service.newID("port"), SandboxID: sandboxID, Generation: generation,
+		Name: request.Name, Transport: transport, State: contracts.PortSessionStateOpen,
+		CreatedAt: now, ExpiresAt: now.Add(time.Duration(request.DurationSeconds) * time.Second),
+	}
+	// The credential is derived before admission so the home Runner can be given
+	// its digest in the same transaction that binds the session. The Runner never
+	// holds the credential itself.
+	credential, err := service.portTunnelCredential(session, principal.TenantRef, principal.SubjectRef)
+	if err != nil {
+		return contracts.PortSession{}, false, err
+	}
+	digest := sha256.Sum256([]byte(credential))
 	tunnel, replayed, err := service.portSessionRelay.AdmitPortSession(ctx, runnercontrol.PortSessionAdmission{
-		Session: contracts.PortSession{
-			ID: service.newID("port"), SandboxID: sandboxID, Generation: generation,
-			Name: request.Name, State: contracts.PortSessionStateOpen,
-			CreatedAt: now, ExpiresAt: now.Add(time.Duration(request.DurationSeconds) * time.Second),
-		},
+		Session:  session,
 		StreamID: service.newID("stream"), TenantRef: principal.TenantRef,
 		SubjectRef: principal.SubjectRef,
 		RequestID:  requestID,
-		LeaseID:    leaseID, IdempotencyKey: idempotencyKey, RequestHash: requestHash, Now: now,
+		LeaseID:    leaseID, IdempotencyKey: idempotencyKey, RequestHash: requestHash,
+		CredentialDigest: digest[:], Now: now,
 	})
 	if err != nil {
 		return contracts.PortSession{}, false, err
 	}
-	tunnel.Session.Endpoint, err = service.portTunnelEndpoint(tunnel)
+	tunnel.Session.Endpoint, err = service.portTunnelEndpoint(tunnel, transport)
 	return tunnel.Session, replayed, err
 }
 
@@ -86,22 +105,23 @@ func (service *ControlPlaneService) GetSandboxPortSession(
 	principal contracts.Principal,
 	sandboxID string,
 	sessionID string,
+	transport string,
 ) (contracts.PortSession, error) {
 	if err := service.requirePortAuthority(principal); err != nil {
 		return contracts.PortSession{}, err
 	}
-	session, err := service.portSessionRelay.GetPortSession(
+	tunnel, err := service.portSessionRelay.GetPortTunnel(
 		ctx, principal.TenantRef, principal.SubjectRef,
 		sandboxID, sessionID, service.now().UTC(),
 	)
 	if err != nil {
 		return contracts.PortSession{}, err
 	}
-	session.Endpoint, err = service.portTunnelEndpoint(runnercontrol.PortTunnel{
-		Session: session, TenantRef: principal.TenantRef,
-		SubjectRef: principal.SubjectRef,
-	})
-	return session, err
+	tunnel.Session.Endpoint, err = service.portTunnelEndpoint(tunnel, transport)
+	if err != nil {
+		return contracts.PortSession{}, err
+	}
+	return tunnel.Session, nil
 }
 
 func (service *ControlPlaneService) CloseSandboxPortSession(
@@ -244,17 +264,19 @@ func validatedPublicBaseURL(raw string) (*url.URL, error) {
 	return parsed, nil
 }
 
-func (service *ControlPlaneService) portTunnelEndpoint(tunnel runnercontrol.PortTunnel) (string, error) {
-	base, err := validatedPublicBaseURL(service.publicBaseURL)
-	if err != nil {
-		return "", err
-	}
-	claims := portTunnelClaims{
-		SessionID: tunnel.Session.ID, TenantRef: tunnel.TenantRef, SubjectRef: tunnel.SubjectRef,
-		SandboxID: tunnel.Session.SandboxID, Generation: tunnel.Session.Generation,
-		ExpiresAt: tunnel.Session.ExpiresAt.UTC().Unix(),
-	}
-	payload, err := json.Marshal(claims)
+// portTunnelCredential seals the single-use credential for one exact session.
+// The same credential authenticates either transport; only the endpoint it is
+// delivered in differs.
+func (service *ControlPlaneService) portTunnelCredential(
+	session contracts.PortSession,
+	tenantRef string,
+	subjectRef string,
+) (string, error) {
+	payload, err := json.Marshal(portTunnelClaims{
+		SessionID: session.ID, TenantRef: tenantRef, SubjectRef: subjectRef,
+		SandboxID: session.SandboxID, Generation: session.Generation,
+		ExpiresAt: session.ExpiresAt.UTC().Unix(),
+	})
 	if err != nil {
 		return "", err
 	}
@@ -262,15 +284,65 @@ func (service *ControlPlaneService) portTunnelEndpoint(tunnel runnercontrol.Port
 	mac := hmac.New(sha256.New, service.credentialSealSecret)
 	_, _ = mac.Write([]byte(portTunnelTokenDomain))
 	_, _ = mac.Write([]byte(payloadPart))
-	token := payloadPart + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return payloadPart + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
+}
+
+// portTunnelEndpoint returns the endpoint for the session's admitted transport.
+//
+// A caller whose authority does not grant the direct transport never receives a
+// Runner address, so a direct session is unaddressable to it rather than
+// downgraded to a relay endpoint that its home Runner would refuse.
+func (service *ControlPlaneService) portTunnelEndpoint(
+	tunnel runnercontrol.PortTunnel,
+	grantedTransport string,
+) (string, error) {
+	credential, err := service.portTunnelCredential(
+		tunnel.Session, tunnel.TenantRef, tunnel.SubjectRef,
+	)
+	if err != nil {
+		return "", err
+	}
+	if tunnel.Session.Transport == contracts.PortTransportDirect {
+		if grantedTransport != contracts.PortTransportDirect {
+			return "", ports.ErrAuthorizationDenied
+		}
+		return service.directPortEndpoint(tunnel, credential)
+	}
+	base, err := validatedPublicBaseURL(service.publicBaseURL)
+	if err != nil {
+		return "", err
+	}
 	if base.Scheme == "https" {
 		base.Scheme = "wss"
 	} else {
 		base.Scheme = "ws"
 	}
 	base.Path = path.Join(base.Path, "/v1/port-tunnels", tunnel.Session.ID)
-	base.Fragment = token
+	base.Fragment = credential
 	return base.String(), nil
+}
+
+// directPortEndpoint addresses the home Runner's advertised caller-facing
+// listener. The scheme names the framed credential handshake that precedes any
+// payload byte so a caller cannot mistake it for a plain TCP forward.
+func (service *ControlPlaneService) directPortEndpoint(
+	tunnel runnercontrol.PortTunnel,
+	credential string,
+) (string, error) {
+	if tunnel.DataPlaneAddress == "" {
+		return "", ports.ErrLifecycleUnavailable
+	}
+	host, port, err := net.SplitHostPort(tunnel.DataPlaneAddress)
+	if err != nil || strings.TrimSpace(host) == "" || strings.TrimSpace(port) == "" {
+		return "", errors.New("SecondBox Runner data-plane address is invalid")
+	}
+	endpoint := url.URL{
+		Scheme:   "secondbox+tcp",
+		Host:     net.JoinHostPort(host, port),
+		Path:     path.Join("/v1/port-sessions", tunnel.Session.ID),
+		Fragment: credential,
+	}
+	return endpoint.String(), nil
 }
 
 func (service *ControlPlaneService) portTunnelTokenFromEndpoint(endpoint string) (string, error) {

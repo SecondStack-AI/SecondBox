@@ -112,6 +112,8 @@ Every `secondboxd` validates and applies the embedded ordered migration lineage 
 
 Migration `0002` makes the reserved Sandbox name key `secondbox.dev/name` unique per tenant and subject among Sandboxes that are not deleted. That key is ordinary caller-writable Metadata, so a database written before this migration may already hold a duplicate. The migration checks first and fails with the conflicting `tenant/subject=name` values rather than a raw unique violation. Because migrations run before listeners open, a deployment carrying such a duplicate will not start: rename or delete the duplicate Sandboxes, then upgrade.
 
+Migration `0005` makes coordinated replacement load-bearing rather than merely advisable. It emits the `data_plane_session` work-notification kind, and a control-plane binary that predates that kind treats an unrecognised notification as a fatal listener error rather than an ignorable hint. An old replica left running alongside the migrated schema therefore stops rather than degrading. Do not run a mixed-version window across this migration.
+
 Use coordinated replacement unless the exact deployment has independently proven mixed-version operation:
 
 1. complete and verify a coordinated PostgreSQL/Artifact backup and quiescent backups of every affected Runner identity plus workspace root;

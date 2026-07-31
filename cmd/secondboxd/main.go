@@ -122,6 +122,9 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// The wakeup hub is shared by the runner control server and the caller-facing
+	// data-plane loops, so it is constructed before its first consumer.
+	workWakeups := worknotify.NewHub()
 	controlPlane, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store:               controlPlaneStore,
 		PlatformToken:       processConfig.PlatformToken,
@@ -131,6 +134,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		ArtifactObjectStore:   artifactObjects,
 		DataPlaneRelay:        dataPlaneRelay, DataPlanePollInterval: processConfig.DataPlanePollInterval,
+		DataPlaneWakeups: workWakeups,
 		PortSessionRelay: dataPlaneRelay, PublicBaseURL: processConfig.PublicBaseURL,
 	})
 	if err != nil {
@@ -212,7 +216,6 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	workWakeups := worknotify.NewHub()
 	runnerControlServer, err := runnercontrol.NewServer(runnercontrol.ServerConfig{
 		CredentialVerifier: runnerCredentialAuthority, StateStore: runnerStateStore,
 		SupportedVersions: runnercontrol.VersionRange{
@@ -227,6 +230,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		EventBatchWait:      processConfig.RunnerEventPersistenceBatchWait,
 		WorkWakeups:         workWakeups,
 		FrameRelay:          dataPlaneRelay,
+		DirectPorts:         dataPlaneRelay,
 		Now:                 service.SystemClock,
 		NewConnectionID:     func() string { return service.NewOpaqueID("rconn") },
 	})

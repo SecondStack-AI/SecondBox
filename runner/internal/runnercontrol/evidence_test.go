@@ -36,6 +36,8 @@ func TestTerminalEvidenceRetainsDistinctOperationCorrelationWithoutPayloads(t *t
 		correlations:   map[string]*runnerprotocol.Correlation{},
 		execOperations: map[string]*runnerExecOperation{},
 		fileOperations: map[string]*runnerFileOperation{},
+		dataPlane:      newDataPlaneListener(),
+		directPorts:    newDirectPortRegistry(),
 	}
 	stream := &recordingProtocolStream{}
 	execState := &runnerExecOperation{
@@ -104,6 +106,8 @@ func TestFenceEvidenceUsesRetainedAssignmentCorrelation(t *testing.T) {
 				LeaseId: "lease-1", RunnerId: "runner-1",
 			},
 		},
+		dataPlane:   newDataPlaneListener(),
+		directPorts: newDirectPortRegistry(),
 	}
 	if err := service.handleFence(context.Background(), &recordingProtocolStream{}, &runnerprotocol.FenceCommand{
 		Fence: cloneRunnerFence(fence),

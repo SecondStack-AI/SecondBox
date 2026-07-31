@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -262,6 +263,7 @@ func (store *PostgresStateStore) RecordRegistration(
 		"network-policy": registration.Capabilities != nil && registration.Capabilities.NetworkPolicyReady,
 		"storage":        registration.Capabilities != nil && registration.Capabilities.StorageReady,
 		"cleanup":        registration.Capabilities != nil && registration.Capabilities.CleanupReady,
+		"data-plane":     registration.Capabilities != nil && registration.Capabilities.DataPlaneReady,
 	}
 	prerequisites["local-workspace"] = prerequisites["storage"] && prerequisites["cleanup"]
 	if registration.Capabilities == nil ||
@@ -272,8 +274,11 @@ func (store *PostgresStateStore) RecordRegistration(
 		!allPrerequisitesReady(prerequisites) {
 		return false, ErrRunnerPrerequisites
 	}
+	if err := validateAdvertisedDataPlaneAddress(registration.DataPlaneAdvertisedAddress); err != nil {
+		return false, err
+	}
 	capabilities := []string{
-		"compute", "network-policy", "storage", "cleanup", "local-workspace",
+		"compute", "network-policy", "storage", "cleanup", "local-workspace", "port-data-plane",
 	}
 	architecturesJSON, err := json.Marshal([]string{registration.Capabilities.Architecture})
 	if err != nil {
@@ -353,6 +358,7 @@ func (store *PostgresStateStore) RecordRegistration(
 			last_sequence=$10,drain_phase='active',reserved_capacity_json=$11,
 			artifact_cache_json=$12,sandbox_start_sample_count=$13,
 			sandbox_start_p95_milliseconds=$14,last_seen_at=$15,
+			data_plane_address=$17,
 			revision=revision+1,updated_at=$15
 		WHERE id=$1 AND pool_name=$2 AND active_connection_id=$16`,
 		registration.RunnerId, registration.RunnerPoolId, architecturesJSON, capabilitiesJSON,
@@ -361,7 +367,7 @@ func (store *PostgresStateStore) RecordRegistration(
 		registration.Capabilities.GuestProtocolGenerations.Maximum,
 		registration.SoftwareVersion, registration.Sequence,
 		reservedJSON, cacheJSON, startCount, startP95Milliseconds,
-		now.UTC(), registration.ConnectionId,
+		now.UTC(), registration.ConnectionId, registration.DataPlaneAdvertisedAddress,
 	)
 	if err != nil {
 		return false, fmt.Errorf("SecondBox runner Registration update: %w", err)
@@ -381,6 +387,24 @@ func (store *PostgresStateStore) RecordRegistration(
 		return false, fmt.Errorf("SecondBox runner Registration commit: %w", err)
 	}
 	return false, nil
+}
+
+// validateAdvertisedDataPlaneAddress keeps administrative capacity evidence to
+// an explicit dialable host:port. It never carries Sandbox identity, so nothing
+// else about it may vary.
+func validateAdvertisedDataPlaneAddress(address string) error {
+	if strings.TrimSpace(address) != address || address == "" || len(address) > 255 {
+		return errors.New("SecondBox runner data-plane advertised address is required")
+	}
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || strings.TrimSpace(host) == "" {
+		return errors.New("SecondBox runner data-plane advertised address must be an explicit host:port")
+	}
+	number, err := strconv.Atoi(port)
+	if err != nil || number < 1 || number > 65535 {
+		return errors.New("SecondBox runner data-plane advertised port must be between 1 and 65535")
+	}
+	return nil
 }
 
 func publicProtocolVersionsJSON(protocolVersion uint32) ([]byte, error) {

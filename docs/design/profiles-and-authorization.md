@@ -8,7 +8,9 @@ The deployment-wide `SECONDBOX_PLATFORM_TOKEN` is the operator authority. It may
 
 `SECONDBOX_APPLICATION_AUTHORITIES_JSON` explicitly provisions zero or more application authorities. Each entry has a unique ID and token, one fixed tenant reference, one fixed subject reference, one or more exact Sandbox operation scopes, and one or more Profile grants. An application request must present the bound references exactly. It cannot call Profile mutation, Runner administration, or aggregate timing routes; it can read only granted Profiles and can create Sandboxes only from them. Owned resource queries remain restricted to its bound tenant and subject.
 
-Supported application scopes are `sandbox:read`, `sandbox:lifecycle`, `sandbox:exec`, `sandbox:files`, `sandbox:artifacts`, and `sandbox:ports`. Unknown routes and missing scopes fail closed. Tokens must be unique and distinct from the platform token. The Runner channel remains separate and requires the pre-shared Runner credential plus a CA-signed mTLS identity.
+Supported application scopes are `sandbox:read`, `sandbox:lifecycle`, `sandbox:exec`, `sandbox:files`, `sandbox:artifacts`, `sandbox:ports`, and `sandbox:ports:direct`. Unknown routes and missing scopes fail closed.
+
+`sandbox:ports:direct` grants no route of its own. It selects the direct Port transport for an authority that already holds `sandbox:ports`, and it is the only grant through which any caller learns a Runner data-plane address. It is denied by default and is never implied by `sandbox:ports`; an authority without it receives the relay WebSocket endpoint unchanged. See [Networking and ports](networking-and-ports.md). Tokens must be unique and distinct from the platform token. The Runner channel remains separate and requires the pre-shared Runner credential plus a CA-signed mTLS identity.
 
 ## Profile and revision
 

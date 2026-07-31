@@ -917,6 +917,7 @@ func task4Registration(
 			Architecture: "amd64", FirecrackerVersion: "1.16.1",
 			KvmReady: true, JailerReady: true, CgroupReady: true,
 			NetworkPolicyReady: true, StorageReady: true, CleanupReady: true,
+			DataPlaneReady:           true,
 			GuestProtocolGenerations: &runnerv1.ProtocolVersionRange{Minimum: 1, Maximum: 1},
 		},
 		Allocatable: &runnerv1.Capacity{
@@ -927,7 +928,8 @@ func task4Registration(
 		ArtifactCache: []*runnerv1.ArtifactCacheEvidence{
 			{ArtifactId: "runtime", ManifestDigest: "sha256:runtime", VerifiedAtUnixMs: 1},
 		},
-		StartupTiming: &runnerv1.StartupTiming{SampleCount: 2, P95Milliseconds: 50},
+		StartupTiming:              &runnerv1.StartupTiming{SampleCount: 2, P95Milliseconds: 50},
+		DataPlaneAdvertisedAddress: "10.0.0.5:7443",
 	}
 }
 

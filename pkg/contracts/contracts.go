@@ -70,6 +70,14 @@ const (
 	PortSessionStateExpired = "expired"
 	PortSessionStateFenced  = "fenced"
 
+	// PortTransportRelay carries Port bytes as durable frames. It is the only
+	// transport an ordinary caller ever receives.
+	PortTransportRelay = "relay"
+	// PortTransportDirect carries Port bytes on a live socket to the home
+	// Runner. Admission stays PostgreSQL-authoritative and fenced; only the
+	// transport between the caller and the Runner differs.
+	PortTransportDirect = "direct"
+
 	ObjectStateStaging         = "staging"
 	ObjectStateVerified        = "verified"
 	ObjectStatePublished       = "published"
@@ -366,6 +374,7 @@ type PortSession struct {
 	Generation int64     `json:"generation"`
 	Name       string    `json:"name"`
 	Protocol   string    `json:"protocol"`
+	Transport  string    `json:"transport"`
 	Endpoint   string    `json:"endpoint"`
 	State      string    `json:"state"`
 	CreatedAt  time.Time `json:"createdAt"`
@@ -619,12 +628,16 @@ type CreateTerminalRequest struct {
 
 // TerminalSession is the durable public terminal negotiation result.
 type TerminalSession struct {
-	ID                 string    `json:"id"`
-	SandboxID          string    `json:"sandboxId"`
-	Generation         int64     `json:"generation"`
-	State              string    `json:"state"`
-	WebsocketURL       string    `json:"websocketUrl"`
-	Subprotocol        string    `json:"subprotocol"`
+	ID           string `json:"id"`
+	SandboxID    string `json:"sandboxId"`
+	Generation   int64  `json:"generation"`
+	State        string `json:"state"`
+	WebsocketURL string `json:"websocketUrl"`
+	Subprotocol  string `json:"subprotocol"`
+	// StreamWindowBytes is the pinned ProfileRevision bound on outstanding
+	// output credit. A client cannot grant more than this, so it is published
+	// rather than left for the client to guess.
+	StreamWindowBytes  int64     `json:"streamWindowBytes"`
 	NextClientSequence int64     `json:"nextClientSequence"`
 	ExpiresAt          time.Time `json:"expiresAt"`
 }

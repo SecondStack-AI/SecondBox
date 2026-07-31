@@ -69,6 +69,8 @@ SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS
 SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES
 SECONDBOX_RUNNER_MAX_CONCURRENT_OPERATIONS_GLOBAL
 SECONDBOX_RUNNER_FILE_TRANSFER_MAX_BYTES
+SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS
+SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS
 ```
 
 Production and qualification hosts set `SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED=false`. The jailer UID and GID identify the unprivileged process inside the jail and must be positive. The runner remains root so it can create jail roots, cgroups, TAP devices, and the required jailed file bindings.
@@ -79,6 +81,18 @@ Production and qualification hosts set `SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAI
 independent generation-one Workspace images. Other Workspace mutations remain
 ordered behind outstanding creates so snapshot, restore, delete, reconciliation,
 and assignment attachment cannot cross a create barrier.
+
+`SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS` binds the caller-facing Port
+transport and is a bind specification, so a wildcard host and an ephemeral port
+are both valid. `SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS` is the
+`host:port` the ingress tier dials and must name a reachable host and a fixed
+port. The deployment decides how the bound socket is reachable; the runner never
+infers one setting from the other. The advertised value is administrative
+capacity evidence of the same class as advertised capacity and carries no
+Sandbox identity. It reaches a caller only through a PortSession created by an
+application authority holding the exact `sandbox:ports:direct` scope. An
+unavailable listener makes the runner unready and fences its active instances,
+matching the network-policy listener rule.
 
 The guest HTTP bootstrap/control surface and the canonical bidirectional gRPC data plane use distinct, explicitly configured vsock ports. `SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL` is a positive Go duration no greater than 60 seconds. The runner does not report an assignment ready until the canonical stream has negotiated the exact assignment Instance, Sandbox generation, random connection nonce, signed guest build and manifest identities, protocol generation, and mandatory features. `/workspace` and `/runtime-private` are signed image ABI mount points: init mounts the persistent workspace at the former and a RAM-only secret tmpfs at the latter.
 

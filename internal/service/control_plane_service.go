@@ -18,6 +18,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/objectstore"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
+	"github.com/SecondStack-AI/SecondBox/internal/worknotify"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
@@ -129,9 +130,12 @@ type ControlPlaneConfig struct {
 	ArtifactObjectStore   objectstore.Store
 	DataPlaneRelay        DataPlaneRelay
 	DataPlanePollInterval time.Duration
-	PortSessionRelay      runnercontrol.PortSessionRelay
-	PublicBaseURL         string
-	BuiltInProfiles       []contracts.Profile
+	// DataPlaneWakeups is optional. Without it the caller-facing loops fall back
+	// to DataPlanePollInterval, which remains their recovery bound either way.
+	DataPlaneWakeups worknotify.Source
+	PortSessionRelay runnercontrol.PortSessionRelay
+	PublicBaseURL    string
+	BuiltInProfiles  []contracts.Profile
 }
 
 // ControlPlaneService owns validation, authentication, and transaction inputs.
@@ -145,6 +149,7 @@ type ControlPlaneService struct {
 	artifactObjectStore   objectstore.Store
 	dataPlaneRelay        DataPlaneRelay
 	dataPlanePollInterval time.Duration
+	dataPlaneWakeups      worknotify.Source
 	portSessionRelay      runnercontrol.PortSessionRelay
 	publicBaseURL         string
 	builtInProfiles       map[string]contracts.Profile
@@ -180,6 +185,7 @@ func NewControlPlaneService(config ControlPlaneConfig) (*ControlPlaneService, er
 		now:                  config.Now, newID: config.NewID, newCredentialMaterial: config.NewCredentialMaterial,
 		artifactObjectStore: config.ArtifactObjectStore,
 		dataPlaneRelay:      config.DataPlaneRelay, dataPlanePollInterval: config.DataPlanePollInterval,
+		dataPlaneWakeups: config.DataPlaneWakeups,
 		portSessionRelay: config.PortSessionRelay, publicBaseURL: config.PublicBaseURL,
 		builtInProfiles: builtInProfiles,
 	}

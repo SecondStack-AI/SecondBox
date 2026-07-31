@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
+	"syscall"
 
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 )
@@ -77,7 +79,7 @@ var commandAliases = map[string]commandAlias{
 }
 
 func main() {
-	err := run(context.Background(), os.Args[1:], os.Stdout)
+	err := run(interruptibleContext(), os.Args[1:], os.Stdout)
 	if err == nil {
 		return
 	}
@@ -89,6 +91,26 @@ func main() {
 	}
 	_, _ = fmt.Fprintln(os.Stderr, err)
 	os.Exit(1)
+}
+
+// interruptibleContext cancels on the signals a terminal actually sends, so the
+// deferred cleanup that releases a Lease and cancels a Terminal still runs.
+//
+// Without this an interrupted `secondbox shell` left its Lease active until the
+// service expired it, and the next attach failed with a state conflict. The
+// second signal restores default handling so an unresponsive cleanup can still
+// be abandoned; cleanup itself releases on a context of its own and so is
+// unaffected by this cancellation.
+func interruptibleContext() context.Context {
+	ctx, stop := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt, syscall.SIGTERM, syscall.SIGHUP,
+	)
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	return ctx
 }
 
 func run(ctx context.Context, args []string, output io.Writer) error {

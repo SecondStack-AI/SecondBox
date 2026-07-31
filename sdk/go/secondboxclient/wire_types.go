@@ -205,6 +205,7 @@ type TerminalSession struct {
 	NextClientSequence int64        `json:"nextClientSequence"`
 	SandboxID          OpaqueID     `json:"sandboxId"`
 	State              SessionState `json:"state"`
+	StreamWindowBytes  int64        `json:"streamWindowBytes"`
 	Subprotocol        string       `json:"subprotocol"`
 	WebsocketURL       string       `json:"websocketUrl"`
 }
