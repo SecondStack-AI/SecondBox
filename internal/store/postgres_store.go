@@ -1207,6 +1207,53 @@ func insertOperation(
 	); err != nil {
 		return fmt.Errorf("SecondBox Operation insert failed: %w", err)
 	}
+	if operation.Kind == "create" || operation.Kind == "start" {
+		if err := insertOperationStageTiming(
+			ctx,
+			tx,
+			operation.ID,
+			operation.SandboxID,
+			"durable_admission",
+			operation.CreatedAt,
+		); err != nil {
+			return err
+		}
+	}
+	if operation.Kind == "start" {
+		if err := insertOperationStageTiming(
+			ctx,
+			tx,
+			operation.ID,
+			operation.SandboxID,
+			"workspace_ready",
+			operation.CreatedAt,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func insertOperationStageTiming(
+	ctx context.Context,
+	tx pgx.Tx,
+	operationID string,
+	sandboxID string,
+	stage string,
+	observedAt time.Time,
+) error {
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.operation_stage_timings (
+			operation_id,sandbox_id,stage,observed_at
+		) VALUES ($1,$2,$3,$4)
+		ON CONFLICT (operation_id,stage) DO NOTHING`,
+		operationID,
+		sandboxID,
+		stage,
+		observedAt.UTC(),
+	); err != nil {
+		return fmt.Errorf("SecondBox Operation stage timing insert failed: %w", err)
+	}
 	return nil
 }
 

@@ -36,6 +36,10 @@ func TestSandboxTimingCommandUsesBoundedPublishedRouteAndRendersBreakdown(t *tes
 				QueueMilliseconds:     int64Pointer(12),
 				ExecutionMilliseconds: int64Pointer(80),
 				TotalMilliseconds:     int64Pointer(92),
+				Orchestration: []secondboxclient.OperationStageTiming{{
+					Stage: "placement_ready", ObservedAt: now,
+					ElapsedMilliseconds: 7.5, CumulativeMilliseconds: 19.5,
+				}},
 				Boots: []secondboxclient.BootTiming{{
 					Generation: 1, DurationMilliseconds: 70, Completed: true,
 					Stages: []secondboxclient.BootStageTiming{{
@@ -66,6 +70,8 @@ func TestSandboxTimingCommandUsesBoundedPublishedRouteAndRendersBreakdown(t *tes
 		"Sandbox: sbox_1",
 		"op_1",
 		"12ms",
+		"Orchestration: operation=op_1",
+		"placement_ready",
 		"Boot: operation=op_1 generation=1 total=70ms completed=true",
 		"compute_launch",
 		"dps_1",

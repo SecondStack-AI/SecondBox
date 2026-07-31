@@ -824,19 +824,28 @@ type BootTiming struct {
 	Stages               []BootStageTiming `json:"stages"`
 }
 
+// OperationStageTiming attributes one provider-neutral orchestration milestone.
+type OperationStageTiming struct {
+	Stage                  string    `json:"stage"`
+	ObservedAt             time.Time `json:"observedAt"`
+	ElapsedMilliseconds    float64   `json:"elapsedMilliseconds"`
+	CumulativeMilliseconds float64   `json:"cumulativeMilliseconds"`
+}
+
 // OperationTiming separates durable queue and execution time.
 type OperationTiming struct {
-	OperationID           string       `json:"operationId"`
-	SandboxID             string       `json:"sandboxId"`
-	Kind                  string       `json:"kind"`
-	State                 string       `json:"state"`
-	CreatedAt             time.Time    `json:"createdAt"`
-	StartedAt             *time.Time   `json:"startedAt,omitempty"`
-	CompletedAt           *time.Time   `json:"completedAt,omitempty"`
-	QueueMilliseconds     *int64       `json:"queueMilliseconds,omitempty"`
-	ExecutionMilliseconds *int64       `json:"executionMilliseconds,omitempty"`
-	TotalMilliseconds     *int64       `json:"totalMilliseconds,omitempty"`
-	Boots                 []BootTiming `json:"boots"`
+	OperationID           string                 `json:"operationId"`
+	SandboxID             string                 `json:"sandboxId"`
+	Kind                  string                 `json:"kind"`
+	State                 string                 `json:"state"`
+	CreatedAt             time.Time              `json:"createdAt"`
+	StartedAt             *time.Time             `json:"startedAt,omitempty"`
+	CompletedAt           *time.Time             `json:"completedAt,omitempty"`
+	QueueMilliseconds     *int64                 `json:"queueMilliseconds,omitempty"`
+	ExecutionMilliseconds *int64                 `json:"executionMilliseconds,omitempty"`
+	TotalMilliseconds     *int64                 `json:"totalMilliseconds,omitempty"`
+	Orchestration         []OperationStageTiming `json:"orchestration"`
+	Boots                 []BootTiming           `json:"boots"`
 }
 
 // ExecTiming reports one completed buffered or streaming execution.

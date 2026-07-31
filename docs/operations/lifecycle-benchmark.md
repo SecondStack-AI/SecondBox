@@ -111,17 +111,23 @@ These spans overlap and must not be added:
 | Span | Boundary |
 |---|---|
 | `operation_total` | Durable Operation creation to completion. |
-| `pre_assignment` | Operation creation to assignment creation, derived from the first runner observation and its assignment-relative cumulative time. This includes Workspace provisioning and scheduling. |
+| `workspace_provision` | Durable admission to the runner's committed Workspace-ready result. |
+| `placement` | Workspace ready to the committed Instance placement and Assignment command. |
+| `startup_dispatch` | Placement ready to successful Assignment stream delivery. |
+| `pre_assignment` | Durable admission to placement ready, derived directly from the persisted orchestration milestones. |
 | `runner_boot` | Assignment creation through the runner's final startup observation. |
 | `runner_event_ingest` | Runner observation to control-plane receipt for every startup stage. |
 | `ready_event_ingest` | Runner `ready` observation to control-plane receipt. |
-| `ready_projection` | Receipt of the `ready` progress event to durable Operation completion. |
+| `ready_projection` | Receipt of the runner's `ready` observation to the committed ready projection. |
 | `client_visibility` | Durable Operation total to the benchmark observing the target state. |
 
-Runner logs additionally record command queue-to-delivery latency, per-event
-persistence latency, local Workspace command execution, and Workspace
-format/fsync/publish time. These runner/operator fields do not enter public
-schemas.
+The Operation timing contract supplies the ordered provider-neutral milestones
+`durable_admission`, `workspace_ready`, `placement_ready`,
+`startup_dispatched`, and `ready_projected`. PostgreSQL notifications only wake
+workers; these durable rows remain the timing and work authority. Runner logs
+additionally record command queue-to-delivery latency, per-event persistence
+latency, local Workspace command execution, and Workspace format/fsync/publish
+time. Runner-private details do not enter public schemas.
 
 ## Running it
 

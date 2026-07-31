@@ -273,6 +273,20 @@ func (store *PostgresStore) scheduleOnce(
 	); err != nil {
 		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Assignment command insert: %w", err)
 	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.operation_stage_timings (
+			operation_id,sandbox_id,stage,observed_at
+		) VALUES ($1,$2,'placement_ready',$3)
+		ON CONFLICT (operation_id,stage) DO NOTHING`,
+		request.AssignmentCommand.Correlation.OperationId,
+		request.SandboxID,
+		now,
+	); err != nil {
+		return DurableAssignment{}, false, fmt.Errorf(
+			"SecondBox scheduler placement-ready timing insert: %w",
+			err,
+		)
+	}
 	reserved := addCapacity(selected.Reserved, request.Requirements.Capacity)
 	reservedJSON, err := encodeCapacity(reserved)
 	if err != nil {

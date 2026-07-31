@@ -353,6 +353,33 @@ func (driver *lifecycleDriver) collectBootTiming(
 		visibility := clientElapsed - time.Duration(*timing.TotalMilliseconds)*time.Millisecond
 		timings.recordStartupSpanLocked("client_visibility", max(visibility, 0))
 	}
+	var readyProjectedAt *time.Time
+	for _, stage := range timing.Orchestration {
+		switch stage.Stage {
+		case "workspace_ready":
+			timings.recordStartupSpanLocked(
+				"workspace_provision",
+				time.Duration(stage.ElapsedMilliseconds*float64(time.Millisecond)),
+			)
+		case "placement_ready":
+			timings.recordStartupSpanLocked(
+				"placement",
+				time.Duration(stage.ElapsedMilliseconds*float64(time.Millisecond)),
+			)
+			timings.recordStartupSpanLocked(
+				"pre_assignment",
+				time.Duration(stage.CumulativeMilliseconds*float64(time.Millisecond)),
+			)
+		case "startup_dispatched":
+			timings.recordStartupSpanLocked(
+				"startup_dispatch",
+				time.Duration(stage.ElapsedMilliseconds*float64(time.Millisecond)),
+			)
+		case "ready_projected":
+			projectedAt := stage.ObservedAt
+			readyProjectedAt = &projectedAt
+		}
+	}
 	for _, boot := range timing.Boots {
 		if len(boot.Stages) == 0 {
 			continue
@@ -361,10 +388,12 @@ func (driver *lifecycleDriver) collectBootTiming(
 		assignmentCreatedAt := first.ObservedAt.Add(
 			-time.Duration(first.CumulativeMilliseconds * float64(time.Millisecond)),
 		)
-		timings.recordStartupSpanLocked(
-			"pre_assignment",
-			max(assignmentCreatedAt.Sub(timing.CreatedAt), 0),
-		)
+		if len(timing.Orchestration) == 0 {
+			timings.recordStartupSpanLocked(
+				"pre_assignment",
+				max(assignmentCreatedAt.Sub(timing.CreatedAt), 0),
+			)
+		}
 		timings.recordStartupSpanLocked(
 			"runner_boot",
 			time.Duration(boot.DurationMilliseconds*float64(time.Millisecond)),
@@ -378,7 +407,12 @@ func (driver *lifecycleDriver) collectBootTiming(
 			timings.recordStartupSpanLocked("runner_event_ingest", ingest)
 			if stage.Stage == "ready" {
 				timings.recordStartupSpanLocked("ready_event_ingest", ingest)
-				if timing.CompletedAt != nil {
+				if readyProjectedAt != nil {
+					timings.recordStartupSpanLocked(
+						"ready_projection",
+						max(readyProjectedAt.Sub(stage.ReceivedAt), 0),
+					)
+				} else if timing.CompletedAt != nil {
 					timings.recordStartupSpanLocked(
 						"ready_projection",
 						max(timing.CompletedAt.Sub(stage.ReceivedAt), 0),

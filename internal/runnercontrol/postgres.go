@@ -1004,6 +1004,17 @@ func recordLocalWorkspaceResult(
 		); err != nil {
 			return fmt.Errorf("SecondBox runner Sandbox create completion: %w", err)
 		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO secondbox.operation_stage_timings (
+				operation_id,sandbox_id,stage,observed_at
+			) VALUES ($1,$2,'workspace_ready',$3)
+			ON CONFLICT (operation_id,stage) DO NOTHING`,
+			workspace.Mutation.OperationID,
+			result.SandboxId,
+			now,
+		); err != nil {
+			return fmt.Errorf("SecondBox runner Workspace-ready timing insert: %w", err)
+		}
 		if !keepStartMutation {
 			if err := finishPendingOperation(
 				ctx, tx, workspace.Mutation.OperationID, "succeeded", "", "", now,
@@ -3242,6 +3253,9 @@ func recordAssignmentEvent(
 			return fmt.Errorf("SecondBox runner AssignmentAck update: %w", err)
 		}
 		if nextState == "failed" {
+			if err := wakeSandboxLifecycle(ctx, tx, ack.Fence, now); err != nil {
+				return err
+			}
 			return acknowledgeAssignmentCommands(
 				ctx,
 				tx,
@@ -3400,6 +3414,9 @@ func recordAssignmentEvent(
 			if command.RowsAffected() != 1 {
 				return errors.New("SecondBox runner ready AssignmentResult lacks the durable Workspace start mutation")
 			}
+			if err := wakeSandboxLifecycle(ctx, tx, result.Fence, now); err != nil {
+				return err
+			}
 			return acknowledgeAssignmentCommands(
 				ctx,
 				tx,
@@ -3414,6 +3431,9 @@ func recordAssignmentEvent(
 		); err != nil {
 			return fmt.Errorf("SecondBox runner failed AssignmentResult update: %w", err)
 		}
+		if err := wakeSandboxLifecycle(ctx, tx, result.Fence, now); err != nil {
+			return err
+		}
 		return acknowledgeAssignmentCommands(
 			ctx,
 			tx,
@@ -3422,6 +3442,31 @@ func recordAssignmentEvent(
 		)
 	default:
 		return ErrRunnerMessage
+	}
+	return nil
+}
+
+func wakeSandboxLifecycle(
+	ctx context.Context,
+	tx pgx.Tx,
+	fence *runnerv1.AssignmentFence,
+	now time.Time,
+) error {
+	command, err := tx.Exec(ctx, `
+		UPDATE secondbox.sandboxes
+		SET next_reconcile_at=$4,reconcile_owner='',
+		    reconcile_claim_expires_at=NULL,revision=revision+1,updated_at=$4
+		WHERE id=$1 AND generation=$2 AND current_instance_id=$3`,
+		fence.SandboxId,
+		fence.SandboxGeneration,
+		fence.InstanceId,
+		now.UTC(),
+	)
+	if err != nil {
+		return fmt.Errorf("SecondBox runner Assignment result lifecycle wakeup: %w", err)
+	}
+	if command.RowsAffected() != 1 {
+		return ErrStaleAssignmentEvidence
 	}
 	return nil
 }

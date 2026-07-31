@@ -361,7 +361,7 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 		}
 		var timingSchemas []any
 		for _, name := range []string{
-			"BootStageTiming", "BootTiming", "OperationTiming", "ExecTiming",
+			"BootStageTiming", "BootTiming", "OperationStageTiming", "OperationTiming", "ExecTiming",
 			"SandboxTiming", "DeploymentTimingSummary",
 		} {
 			timingSchemas = append(timingSchemas, componentSchema(t, document, name))

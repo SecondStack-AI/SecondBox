@@ -52,6 +52,9 @@ func (store *PostgresControlPlaneStore) ReadSandboxTiming(
 	if err := store.attachBootTimings(ctx, operations); err != nil {
 		return contracts.SandboxTiming{}, err
 	}
+	if err := store.attachOperationStageTimings(ctx, operations); err != nil {
+		return contracts.SandboxTiming{}, err
+	}
 	execs, err := store.readSandboxExecTimings(
 		ctx, tenantRef, subjectRef, sandboxID, limit,
 	)
@@ -85,6 +88,9 @@ func (store *PostgresControlPlaneStore) ReadOperationTiming(
 	if err := store.attachBootTimings(ctx, operations); err != nil {
 		return contracts.OperationTiming{}, err
 	}
+	if err := store.attachOperationStageTimings(ctx, operations); err != nil {
+		return contracts.OperationTiming{}, err
+	}
 	return operations[0], nil
 }
 
@@ -110,6 +116,7 @@ func (store *PostgresControlPlaneStore) readOperationTimingRows(
 			return nil, fmt.Errorf("SecondBox Operation timing scan failed: %w", err)
 		}
 		timing.Boots = []contracts.BootTiming{}
+		timing.Orchestration = []contracts.OperationStageTiming{}
 		if timing.StartedAt != nil {
 			timing.QueueMilliseconds = durationMilliseconds(timing.CreatedAt, *timing.StartedAt)
 		}
@@ -127,9 +134,84 @@ func (store *PostgresControlPlaneStore) readOperationTimingRows(
 	return operations, nil
 }
 
+func (store *PostgresControlPlaneStore) attachOperationStageTimings(
+	ctx context.Context,
+	operations []contracts.OperationTiming,
+) error {
+	if len(operations) == 0 {
+		return nil
+	}
+	operationIDs := make([]string, len(operations))
+	operationIndexes := make(map[string]int, len(operations))
+	for index := range operations {
+		operationIDs[index] = operations[index].OperationID
+		operationIndexes[operations[index].OperationID] = index
+	}
+	rows, err := store.pool.Query(ctx, `
+		SELECT operation_id,stage,observed_at
+		FROM secondbox.operation_stage_timings
+		WHERE operation_id=ANY($1::text[])
+		  AND stage IN (
+		    'durable_admission','workspace_ready','placement_ready',
+		    'startup_dispatched','ready_projected'
+		  )
+		ORDER BY operation_id,observed_at,
+		  CASE stage
+		    WHEN 'durable_admission' THEN 1
+		    WHEN 'workspace_ready' THEN 2
+		    WHEN 'placement_ready' THEN 3
+		    WHEN 'startup_dispatched' THEN 4
+		    WHEN 'ready_projected' THEN 5
+		  END`,
+		operationIDs,
+	)
+	if err != nil {
+		return fmt.Errorf("SecondBox Operation stage timing list failed: %w", err)
+	}
+	defer rows.Close()
+	previous := make(map[string]time.Time, len(operations))
+	for rows.Next() {
+		var operationID, stage string
+		var observedAt time.Time
+		if err := rows.Scan(&operationID, &stage, &observedAt); err != nil {
+			return fmt.Errorf("SecondBox Operation stage timing scan failed: %w", err)
+		}
+		operationIndex, exists := operationIndexes[operationID]
+		if !exists {
+			return errors.New("SecondBox Operation stage timing references an unselected Operation")
+		}
+		start := operations[operationIndex].CreatedAt
+		previousAt, hasPrevious := previous[operationID]
+		if hasPrevious {
+			start = previousAt
+		}
+		operations[operationIndex].Orchestration = append(
+			operations[operationIndex].Orchestration,
+			contracts.OperationStageTiming{
+				Stage:               stage,
+				ObservedAt:          observedAt,
+				ElapsedMilliseconds: preciseDurationMilliseconds(start, observedAt),
+				CumulativeMilliseconds: preciseDurationMilliseconds(
+					operations[operationIndex].CreatedAt,
+					observedAt,
+				),
+			},
+		)
+		previous[operationID] = observedAt
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("SecondBox Operation stage timing rows failed: %w", err)
+	}
+	return nil
+}
+
 func durationMilliseconds(start, end time.Time) *int64 {
 	value := max(end.Sub(start).Milliseconds(), 0)
 	return &value
+}
+
+func preciseDurationMilliseconds(start, end time.Time) float64 {
+	return max(float64(end.Sub(start))/float64(time.Millisecond), 0)
 }
 
 func (store *PostgresControlPlaneStore) attachBootTimings(

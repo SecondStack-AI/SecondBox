@@ -48,6 +48,7 @@ type (
 	DurationPercentiles     = contracts.DurationPercentiles
 	BootStageTiming         = contracts.BootStageTiming
 	BootTiming              = contracts.BootTiming
+	OperationStageTiming    = contracts.OperationStageTiming
 	OperationTiming         = contracts.OperationTiming
 	ExecTiming              = contracts.ExecTiming
 	SandboxTiming           = contracts.SandboxTiming

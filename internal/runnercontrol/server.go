@@ -9,6 +9,7 @@ import (
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/worknotify"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
@@ -29,7 +30,7 @@ type ProtocolStateStore interface {
 	RecordHeartbeat(context.Context, *runnerv1.RunnerHeartbeat, time.Time) (bool, error)
 	RecordEvents(context.Context, []EventPersistenceRecord) error
 	ClaimCommand(context.Context, string, string, time.Time) (CommandDelivery, bool, error)
-	MarkCommandDelivered(context.Context, string, string, time.Time) error
+	MarkCommandDelivered(context.Context, CommandDelivery, string, time.Time) error
 }
 
 // EventPersistenceRecord keeps the receive timestamp attached to one ordered durable event.
@@ -50,6 +51,7 @@ type ServerConfig struct {
 	CommandBatchSize    int64
 	EventBatchSize      int
 	EventBatchWait      time.Duration
+	WorkWakeups         worknotify.Source
 	Now                 func() time.Time
 	NewConnectionID     func() string
 }
@@ -85,9 +87,10 @@ func NewServer(config ServerConfig) (*Server, error) {
 		config.CommandBatchSize <= 0 ||
 		config.EventBatchSize <= 0 ||
 		config.EventBatchWait <= 0 ||
+		config.WorkWakeups == nil ||
 		config.Now == nil ||
 		config.NewConnectionID == nil {
-		return nil, errors.New("SecondBox runner control server requires credential, state, protocol, heartbeat, clock, and connection configuration")
+		return nil, errors.New("SecondBox runner control server requires credential, state, protocol, heartbeat, work wakeups, clock, and connection configuration")
 	}
 	for _, feature := range config.EnabledFeatures {
 		if (feature == runnerv1.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING ||
@@ -331,20 +334,43 @@ func (server *Server) pumpOutboundFrames(
 ) {
 	ticker := time.NewTicker(server.config.CommandPollInterval)
 	defer ticker.Stop()
+	wakeups, cancelWakeups := server.config.WorkWakeups.Subscribe(
+		worknotify.KindRunnerCommand,
+		runnerID,
+	)
+	defer cancelWakeups()
 	for {
+		if err := server.drainOutboundFrames(
+			ctx, stream, session, runnerID, connectionID,
+		); err != nil {
+			select {
+			case failures <- err:
+			case <-ctx.Done():
+			}
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := server.sendNextOutboundFrame(
-				ctx, stream, session, runnerID, connectionID,
-			); err != nil {
-				select {
-				case failures <- err:
-				case <-ctx.Done():
-				}
-				return
-			}
+		case <-wakeups:
+		}
+	}
+}
+
+func (server *Server) drainOutboundFrames(
+	ctx context.Context,
+	stream controlPlaneFrameSender,
+	session *Session,
+	runnerID string,
+	connectionID string,
+) error {
+	for {
+		more, err := server.sendNextOutboundFrame(
+			ctx, stream, session, runnerID, connectionID,
+		)
+		if err != nil || !more {
+			return err
 		}
 	}
 }
@@ -355,21 +381,21 @@ func (server *Server) sendNextOutboundFrame(
 	session *Session,
 	runnerID string,
 	connectionID string,
-) error {
+) (bool, error) {
 	for delivered := int64(0); delivered < server.config.CommandBatchSize; delivered++ {
 		found, err := server.sendNextControlCommand(
 			ctx, stream, runnerID, connectionID,
 		)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if !found {
-			return server.sendClaimedRelayFrame(
+			return false, server.sendClaimedRelayFrame(
 				ctx, stream, session, runnerID, connectionID,
 			)
 		}
 	}
-	return nil
+	return true, nil
 }
 
 func (server *Server) sendNextControlCommand(
@@ -391,7 +417,7 @@ func (server *Server) sendNextControlCommand(
 			return false, fmt.Errorf("SecondBox runner control command send: %w", err)
 		}
 		if err := server.config.StateStore.MarkCommandDelivered(
-			ctx, delivery.ID, connectionID, server.config.Now(),
+			ctx, delivery, connectionID, server.config.Now(),
 		); err != nil {
 			return false, err
 		}

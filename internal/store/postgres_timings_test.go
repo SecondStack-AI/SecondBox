@@ -34,6 +34,14 @@ func TestTimingProjectionsJoinLifecycleBootAndExecEvidence(t *testing.T) {
 			'create','succeeded','request-timing','{}','','',false,
 			$1,$2,$3,$3
 		);
+		INSERT INTO secondbox.operation_stage_timings (
+			operation_id,sandbox_id,stage,observed_at
+		) VALUES
+			('op_timing','sbox_timing','durable_admission',$1),
+			('op_timing','sbox_timing','workspace_ready',$16),
+			('op_timing','sbox_timing','placement_ready',$17),
+			('op_timing','sbox_timing','startup_dispatched',$18),
+			('op_timing','sbox_timing','ready_projected',$3);
 		INSERT INTO secondbox.assignments (
 			id,sandbox_id,instance_id,runner_id,profile_revision_id,backend_kind,
 			backend_reference,generation,fencing_token,state,capability_snapshot_json,
@@ -91,6 +99,9 @@ func TestTimingProjectionsJoinLifecycleBootAndExecEvidence(t *testing.T) {
 		base.Add(2635*time.Millisecond+875*time.Microsecond),
 		base.Add(2636*time.Millisecond),
 		base.Add(24*time.Millisecond+750*time.Microsecond),
+		base.Add(12*time.Millisecond),
+		base.Add(19*time.Millisecond+500*time.Microsecond),
+		base.Add(22*time.Millisecond),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -123,6 +134,17 @@ func TestTimingProjectionsJoinLifecycleBootAndExecEvidence(t *testing.T) {
 		operation.Boots[0].Stages[5].Stage != "guest_negotiation" ||
 		math.Abs(operation.Boots[0].Stages[5].ElapsedMilliseconds-2600) > 0.001 {
 		t.Fatalf("boot timing = %#v", operation.Boots)
+	}
+	if len(operation.Orchestration) != 5 ||
+		operation.Orchestration[0].Stage != "durable_admission" ||
+		operation.Orchestration[1].Stage != "workspace_ready" ||
+		math.Abs(operation.Orchestration[1].ElapsedMilliseconds-12) > 0.001 ||
+		operation.Orchestration[2].Stage != "placement_ready" ||
+		math.Abs(operation.Orchestration[2].ElapsedMilliseconds-7.5) > 0.001 ||
+		operation.Orchestration[3].Stage != "startup_dispatched" ||
+		math.Abs(operation.Orchestration[3].CumulativeMilliseconds-22) > 0.001 ||
+		operation.Orchestration[4].Stage != "ready_projected" {
+		t.Fatalf("Operation orchestration timing = %#v", operation.Orchestration)
 	}
 	if exec := sandboxTiming.Execs[0]; exec.Mode != "buffered" ||
 		exec.Outcome != "exited" || exec.ElapsedMilliseconds != 40 {

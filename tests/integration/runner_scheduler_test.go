@@ -278,7 +278,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 		t.Fatalf("claimed Assignment command lacks durable authority: %#v", delivery.Message.GetAssignment())
 	}
 	if err := stateStore.MarkCommandDelivered(
-		t.Context(), delivery.ID, connectionID, now.Add(time.Second),
+		t.Context(), delivery, connectionID, now.Add(time.Second),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +451,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 		t.Fatalf("claimed Fence command lacks durable authority: %#v", fenceDelivery.Message.GetFence())
 	}
 	if err := stateStore.MarkCommandDelivered(
-		t.Context(), fenceDelivery.ID, connectionID, now.Add(2*time.Second),
+		t.Context(), fenceDelivery, connectionID, now.Add(2*time.Second),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -499,7 +499,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 		t.Fatalf("claimed local generation command lacks durable authority: %#v", advanceCommand)
 	}
 	if err := stateStore.MarkCommandDelivered(
-		t.Context(), advanceDelivery.ID, connectionID, now.Add(4*time.Second),
+		t.Context(), advanceDelivery, connectionID, now.Add(4*time.Second),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -640,7 +640,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 		t.Fatalf("claimed Drain command lacks durable authority: %#v", drainDelivery.Message.GetDrain())
 	}
 	if err := stateStore.MarkCommandDelivered(
-		t.Context(), drainDelivery.ID, reconnectedID, now.Add(7*time.Second),
+		t.Context(), drainDelivery, reconnectedID, now.Add(7*time.Second),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -967,7 +967,7 @@ func task4CompleteWorkspaceReconciliation(
 	}
 	if err := stateStore.MarkCommandDelivered(
 		t.Context(),
-		delivery.ID,
+		delivery,
 		connectionID,
 		now,
 	); err != nil {

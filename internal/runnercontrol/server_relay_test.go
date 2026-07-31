@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/worknotify"
 )
 
 func TestNewServerRequiresRelayOnlyForDataPlaneFeatures(t *testing.T) {
@@ -107,10 +109,14 @@ func TestOutboundPumpPrioritizesControlCommandsOverRelayFrames(t *testing.T) {
 		StateStore: state, FrameRelay: relay, CommandBatchSize: 1, Now: time.Now,
 	}}
 	sender := &recordingControlPlaneSender{}
-	if err := server.sendNextOutboundFrame(
+	more, err := server.sendNextOutboundFrame(
 		t.Context(), sender, session, "runner-1", "connection-1",
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !more {
+		t.Fatal("full control-command batch did not report remaining work")
 	}
 	if len(sender.messages) != 1 || sender.messages[0].GetFence() == nil {
 		t.Fatalf("priority outbound messages = %#v", sender.messages)
@@ -135,10 +141,14 @@ func TestOutboundPumpDrainsOnlyTheConfiguredCommandBatch(t *testing.T) {
 		StateStore: state, CommandBatchSize: 2, Now: time.Now,
 	}}
 	sender := &recordingControlPlaneSender{}
-	if err := server.sendNextOutboundFrame(
+	more, err := server.sendNextOutboundFrame(
 		t.Context(), sender, nil, "runner-1", "connection-1",
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !more {
+		t.Fatal("full control-command batch did not report remaining work")
 	}
 	if len(sender.messages) != 2 {
 		t.Fatalf("outbound batch sent %d commands, want 2", len(sender.messages))
@@ -150,6 +160,35 @@ func TestOutboundPumpDrainsOnlyTheConfiguredCommandBatch(t *testing.T) {
 	}
 	if state.claims != 2 {
 		t.Fatalf("command claims = %d, want 2", state.claims)
+	}
+}
+
+func TestOutboundDrainContinuesAcrossCommandBatches(t *testing.T) {
+	state := &queuedCommandStateStore{
+		deliveries: []CommandDelivery{
+			controlCommandDelivery("fence-1"),
+			controlCommandDelivery("fence-2"),
+			controlCommandDelivery("fence-3"),
+		},
+	}
+	server := &Server{config: ServerConfig{
+		StateStore: state, CommandBatchSize: 2, Now: time.Now,
+	}}
+	sender := &recordingControlPlaneSender{}
+	if err := server.drainOutboundFrames(
+		t.Context(), sender, nil, "runner-1", "connection-1",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.messages) != 3 || len(state.delivered) != 3 {
+		t.Fatalf(
+			"outbound drain sent %d and persisted %d commands, want 3",
+			len(sender.messages),
+			len(state.delivered),
+		)
+	}
+	if state.claims != 4 {
+		t.Fatalf("outbound drain claims = %d, want final empty claim after 3 commands", state.claims)
 	}
 }
 
@@ -235,6 +274,7 @@ func TestOutboundPumpReportsCommandDeliveryFailure(t *testing.T) {
 		StateStore:          failingCommandStateStore{},
 		CommandPollInterval: time.Millisecond,
 		CommandBatchSize:    1,
+		WorkWakeups:         worknotify.NewHub(),
 		Now:                 time.Now,
 	}}
 	failures := make(chan error, 1)
@@ -253,6 +293,50 @@ func TestOutboundPumpReportsCommandDeliveryFailure(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("outbound pump did not report command claim failure")
+	}
+}
+
+func TestOutboundPumpDrainsACommittedNotificationBeforeFallbackPoll(t *testing.T) {
+	hub := worknotify.NewHub()
+	state := &wakeupCommandStateStore{
+		emptyPass: make(chan struct{}, 1),
+		delivered: make(chan struct{}, 1),
+	}
+	server := &Server{config: ServerConfig{
+		StateStore:          state,
+		CommandPollInterval: time.Hour,
+		CommandBatchSize:    1,
+		WorkWakeups:         hub,
+		Now:                 time.Now,
+	}}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	failures := make(chan error, 1)
+	go server.pumpOutboundFrames(
+		ctx,
+		&recordingControlPlaneSender{},
+		nil,
+		"runner-1",
+		"connection-1",
+		failures,
+	)
+	select {
+	case <-state.emptyPass:
+	case <-time.After(time.Second):
+		t.Fatal("outbound pump did not perform its immediate drain")
+	}
+	state.enqueue(controlCommandDelivery("fence-wakeup"))
+	startedAt := time.Now()
+	hub.Publish(worknotify.KindRunnerCommand, "runner-1")
+	select {
+	case <-state.delivered:
+		if time.Since(startedAt) > 500*time.Millisecond {
+			t.Fatalf("committed notification delivery took %s", time.Since(startedAt))
+		}
+	case err := <-failures:
+		t.Fatalf("outbound pump failed: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("outbound pump waited for its fallback poll after a notification")
 	}
 }
 
@@ -369,7 +453,12 @@ func (relayStateStore) ClaimCommand(context.Context, string, string, time.Time) 
 	return CommandDelivery{}, false, nil
 }
 
-func (relayStateStore) MarkCommandDelivered(context.Context, string, string, time.Time) error {
+func (relayStateStore) MarkCommandDelivered(
+	context.Context,
+	CommandDelivery,
+	string,
+	time.Time,
+) error {
 	return nil
 }
 
@@ -383,6 +472,7 @@ func validRelayServerConfig() ServerConfig {
 		CommandBatchSize:    1,
 		EventBatchSize:      1,
 		EventBatchWait:      time.Millisecond,
+		WorkWakeups:         worknotify.NewHub(),
 		Now:                 time.Now,
 		NewConnectionID:     func() string { return "connection-1" },
 	}
@@ -393,6 +483,57 @@ type queuedCommandStateStore struct {
 	deliveries []CommandDelivery
 	delivered  []string
 	claims     int
+}
+
+type wakeupCommandStateStore struct {
+	relayStateStore
+	mu        sync.Mutex
+	delivery  *CommandDelivery
+	emptyPass chan struct{}
+	delivered chan struct{}
+}
+
+func (store *wakeupCommandStateStore) enqueue(delivery CommandDelivery) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.delivery = &delivery
+}
+
+func (store *wakeupCommandStateStore) ClaimCommand(
+	context.Context,
+	string,
+	string,
+	time.Time,
+) (CommandDelivery, bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.delivery == nil {
+		select {
+		case store.emptyPass <- struct{}{}:
+		default:
+		}
+		return CommandDelivery{}, false, nil
+	}
+	return *store.delivery, true, nil
+}
+
+func (store *wakeupCommandStateStore) MarkCommandDelivered(
+	_ context.Context,
+	delivery CommandDelivery,
+	_ string,
+	_ time.Time,
+) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.delivery == nil || store.delivery.ID != delivery.ID {
+		return errors.New("unexpected wakeup command delivery")
+	}
+	store.delivery = nil
+	select {
+	case store.delivered <- struct{}{}:
+	default:
+	}
+	return nil
 }
 
 func (store *queuedCommandStateStore) ClaimCommand(
@@ -410,14 +551,14 @@ func (store *queuedCommandStateStore) ClaimCommand(
 
 func (store *queuedCommandStateStore) MarkCommandDelivered(
 	_ context.Context,
-	id string,
+	delivery CommandDelivery,
 	_ string,
 	_ time.Time,
 ) error {
-	if len(store.deliveries) == 0 || store.deliveries[0].ID != id {
+	if len(store.deliveries) == 0 || store.deliveries[0].ID != delivery.ID {
 		return errors.New("unexpected queued command delivery")
 	}
-	store.delivered = append(store.delivered, id)
+	store.delivered = append(store.delivered, delivery.ID)
 	store.deliveries = store.deliveries[1:]
 	return nil
 }
@@ -451,11 +592,11 @@ func (store *priorityStateStore) ClaimCommand(
 
 func (store *priorityStateStore) MarkCommandDelivered(
 	_ context.Context,
-	id string,
+	delivery CommandDelivery,
 	_ string,
 	_ time.Time,
 ) error {
-	if id != store.command.ID {
+	if delivery.ID != store.command.ID {
 		return errors.New("unexpected command delivery")
 	}
 	store.delivered = true

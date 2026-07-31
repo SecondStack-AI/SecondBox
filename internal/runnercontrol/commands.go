@@ -91,21 +91,46 @@ func (store *PostgresStateStore) ClaimCommand(
 // MarkCommandDelivered records successful stream delivery for reconnect reconciliation.
 func (store *PostgresStateStore) MarkCommandDelivered(
 	ctx context.Context,
-	commandID string,
+	delivery CommandDelivery,
 	connectionID string,
 	now time.Time,
 ) error {
-	command, err := store.pool.Exec(ctx, `
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("SecondBox runner command delivered transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	command, err := tx.Exec(ctx, `
 		UPDATE secondbox.runner_commands
 		SET state='delivered',delivered_at=$3,updated_at=$3
 		WHERE id=$1 AND target_connection_id=$2 AND state='delivering'`,
-		commandID, connectionID, now.UTC(),
+		delivery.ID, connectionID, now.UTC(),
 	)
 	if err != nil {
 		return fmt.Errorf("SecondBox runner command delivered update: %w", err)
 	}
 	if command.RowsAffected() != 1 {
 		return errors.New("SecondBox runner command delivery claim is no longer current")
+	}
+	if delivery.Kind == "assignment" {
+		correlation := delivery.Message.GetAssignment().GetCorrelation()
+		if correlation == nil || correlation.OperationId == "" || correlation.SandboxId == "" {
+			return errors.New("SecondBox delivered Assignment command lacks Operation correlation")
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO secondbox.operation_stage_timings (
+				operation_id,sandbox_id,stage,observed_at
+			) VALUES ($1,$2,'startup_dispatched',$3)
+			ON CONFLICT (operation_id,stage) DO NOTHING`,
+			correlation.OperationId,
+			correlation.SandboxId,
+			now.UTC(),
+		); err != nil {
+			return fmt.Errorf("SecondBox runner startup-dispatched timing insert: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("SecondBox runner command delivered commit: %w", err)
 	}
 	return nil
 }

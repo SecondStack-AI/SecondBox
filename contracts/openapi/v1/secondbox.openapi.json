@@ -2122,10 +2122,30 @@
           }
         }
       },
+      "OperationStageTiming": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["stage", "observedAt", "elapsedMilliseconds", "cumulativeMilliseconds"],
+        "properties": {
+          "stage": {
+            "type": "string",
+            "enum": [
+              "durable_admission",
+              "workspace_ready",
+              "placement_ready",
+              "startup_dispatched",
+              "ready_projected"
+            ]
+          },
+          "observedAt": {"$ref": "#/components/schemas/Timestamp"},
+          "elapsedMilliseconds": {"type": "number", "format": "double", "minimum": 0},
+          "cumulativeMilliseconds": {"type": "number", "format": "double", "minimum": 0}
+        }
+      },
       "OperationTiming": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["operationId", "sandboxId", "kind", "state", "createdAt", "boots"],
+        "required": ["operationId", "sandboxId", "kind", "state", "createdAt", "orchestration", "boots"],
         "properties": {
           "operationId": {"$ref": "#/components/schemas/OpaqueID"},
           "sandboxId": {"$ref": "#/components/schemas/OpaqueID"},
@@ -2137,6 +2157,11 @@
           "queueMilliseconds": {"type": "integer", "format": "int64", "minimum": 0},
           "executionMilliseconds": {"type": "integer", "format": "int64", "minimum": 0},
           "totalMilliseconds": {"type": "integer", "format": "int64", "minimum": 0},
+          "orchestration": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {"$ref": "#/components/schemas/OperationStageTiming"}
+          },
           "boots": {
             "type": "array",
             "maxItems": 200,

@@ -28,6 +28,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/scheduler"
 	"github.com/SecondStack-AI/SecondBox/internal/service"
 	"github.com/SecondStack-AI/SecondBox/internal/store"
+	"github.com/SecondStack-AI/SecondBox/internal/worknotify"
 	postgresmigrations "github.com/SecondStack-AI/SecondBox/migrations/postgres"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -205,6 +206,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	workWakeups := worknotify.NewHub()
 	runnerControlServer, err := runnercontrol.NewServer(runnercontrol.ServerConfig{
 		CredentialVerifier: runnerCredentialAuthority, StateStore: runnerStateStore,
 		SupportedVersions: runnercontrol.VersionRange{
@@ -217,6 +219,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		CommandBatchSize:    processConfig.RunnerCommandDeliveryBatchSize,
 		EventBatchSize:      processConfig.RunnerEventPersistenceBatchSize,
 		EventBatchWait:      processConfig.RunnerEventPersistenceBatchWait,
+		WorkWakeups:         workWakeups,
 		FrameRelay:          dataPlaneRelay,
 		Now:                 service.SystemClock,
 		NewConnectionID:     func() string { return service.NewOpaqueID("rconn") },
@@ -240,6 +243,24 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	workListener, err := worknotify.NewPostgresListener(
+		processContext,
+		processConfig.DatabaseURL,
+		workWakeups,
+	)
+	if err != nil {
+		return err
+	}
+	lifecycleWakeups, cancelLifecycleWakeups := workWakeups.Subscribe(
+		worknotify.KindLifecycle,
+		"",
+	)
+	defer cancelLifecycleWakeups()
+	assignmentWakeups, cancelAssignmentWakeups := workWakeups.Subscribe(
+		worknotify.KindAssignment,
+		"",
+	)
+	defer cancelAssignmentWakeups()
 	server := &http.Server{
 		Addr: processConfig.ListenAddress, Handler: httpHandler,
 		ReadHeaderTimeout: processConfig.HTTPTimeout, ReadTimeout: processConfig.HTTPTimeout,
@@ -251,6 +272,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	assignmentErrors := make(chan error, 1)
 	snapshotRetentionErrors := make(chan error, 1)
 	dataPlaneErrors := make(chan error, 1)
+	workListenerErrors := make(chan error, 1)
 	go func() {
 		logger.Info("SecondBox listening", "address", processConfig.ListenAddress)
 		serverErrors <- server.ListenAndServe()
@@ -260,12 +282,16 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		runnerServerErrors <- grpcServer.Serve(runnerListener)
 	}()
 	go func() {
-		lifecycleErrors <- runLifecycleReconciler(processContext, lifecycle.Reconciler{
-			Store: controlPlaneStore, Effects: lifecycleEffects,
-			WorkerID:      service.NewOpaqueID("lifecycle-worker"),
-			ClaimDuration: processConfig.LifecycleReconcileClaimDuration,
-			PollInterval:  processConfig.LifecycleReconcilePollInterval,
-		})
+		lifecycleErrors <- runLifecycleReconciler(
+			processContext,
+			lifecycle.Reconciler{
+				Store: controlPlaneStore, Effects: lifecycleEffects,
+				WorkerID:      service.NewOpaqueID("lifecycle-worker"),
+				ClaimDuration: processConfig.LifecycleReconcileClaimDuration,
+				PollInterval:  processConfig.LifecycleReconcilePollInterval,
+			},
+			lifecycleWakeups,
+		)
 	}()
 	go func() {
 		assignmentErrors <- runAssignmentReconciler(
@@ -279,6 +305,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 				HeartbeatTimeout: processConfig.RunnerHeartbeatTimeout,
 				NewCommandID:     service.NewOpaqueID,
 			},
+			assignmentWakeups,
 		)
 	}()
 	go func() {
@@ -297,11 +324,15 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 			processContext, dataPlaneRelay, processConfig.DataPlanePollInterval,
 		)
 	}()
+	go func() {
+		workListenerErrors <- workListener.Run(processContext)
+	}()
 	var serveErr error
 	lifecycleExited := false
 	assignmentExited := false
 	snapshotRetentionExited := false
 	dataPlaneExited := false
+	workListenerExited := false
 	select {
 	case <-processContext.Done():
 	case httpServeErr := <-serverErrors:
@@ -339,6 +370,13 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 			serveErr = dataPlaneErr
 		} else if processContext.Err() == nil {
 			serveErr = errors.New("SecondBox data-plane sweeper stopped unexpectedly")
+		}
+	case workListenerErr := <-workListenerErrors:
+		workListenerExited = true
+		if workListenerErr != nil {
+			serveErr = workListenerErr
+		} else if processContext.Err() == nil {
+			serveErr = errors.New("SecondBox PostgreSQL work listener stopped unexpectedly")
 		}
 	}
 	cancel()
@@ -383,9 +421,21 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 			dataPlaneShutdownErr = fmt.Errorf("SecondBox data-plane sweeper shutdown: %w", shutdownContext.Err())
 		}
 	}
+	var workListenerShutdownErr error
+	if !workListenerExited {
+		select {
+		case workListenerShutdownErr = <-workListenerErrors:
+		case <-shutdownContext.Done():
+			workListenerShutdownErr = fmt.Errorf(
+				"SecondBox PostgreSQL work listener shutdown: %w",
+				shutdownContext.Err(),
+			)
+		}
+	}
 	if err := errors.Join(
 		serveErr, httpShutdownErr, grpcShutdownErr, lifecycleShutdownErr,
 		assignmentShutdownErr, snapshotRetentionShutdownErr, dataPlaneShutdownErr,
+		workListenerShutdownErr,
 	); err != nil {
 		return fmt.Errorf("SecondBox coordinated server shutdown: %w", err)
 	}
@@ -440,7 +490,11 @@ func newLifecycleFencingToken() ([]byte, error) {
 	return token, nil
 }
 
-func runLifecycleReconciler(ctx context.Context, reconciler lifecycle.Reconciler) error {
+func runLifecycleReconciler(
+	ctx context.Context,
+	reconciler lifecycle.Reconciler,
+	wakeups <-chan struct{},
+) error {
 	for {
 		_, found, err := reconciler.RunOnce(ctx, service.SystemClock())
 		if err != nil {
@@ -455,14 +509,8 @@ func runLifecycleReconciler(ctx context.Context, reconciler lifecycle.Reconciler
 		if found {
 			continue
 		}
-		timer := time.NewTimer(reconciler.PollInterval)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
+		if !waitForWork(ctx, reconciler.PollInterval, wakeups) {
 			return nil
-		case <-timer.C:
 		}
 	}
 }
@@ -470,6 +518,7 @@ func runLifecycleReconciler(ctx context.Context, reconciler lifecycle.Reconciler
 func runAssignmentReconciler(
 	ctx context.Context,
 	worker reconcile.AssignmentWorker,
+	wakeups <-chan struct{},
 ) error {
 	for {
 		_, found, err := worker.RunOnce(ctx, service.SystemClock())
@@ -485,15 +534,26 @@ func runAssignmentReconciler(
 		if found {
 			continue
 		}
-		timer := time.NewTimer(worker.PollInterval)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
+		if !waitForWork(ctx, worker.PollInterval, wakeups) {
 			return nil
-		case <-timer.C:
 		}
+	}
+}
+
+func waitForWork(
+	ctx context.Context,
+	fallbackInterval time.Duration,
+	wakeups <-chan struct{},
+) bool {
+	timer := time.NewTimer(fallbackInterval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	case <-wakeups:
+		return true
 	}
 }
 

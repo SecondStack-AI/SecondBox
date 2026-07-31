@@ -175,6 +175,13 @@ func writeSandboxTiming(output io.Writer, timing secondboxclient.SandboxTiming) 
 		return fmt.Errorf("SecondBox timings flush Operation table: %w", err)
 	}
 	for _, operation := range timing.Operations {
+		if err := writeOperationStageTimings(
+			output,
+			operation.OperationID,
+			operation.Orchestration,
+		); err != nil {
+			return err
+		}
 		if err := writeBootTimings(output, operation.OperationID, operation.Boots); err != nil {
 			return err
 		}
@@ -215,7 +222,47 @@ func writeOperationTiming(output io.Writer, operation secondboxclient.OperationT
 	if err := table.Flush(); err != nil {
 		return fmt.Errorf("SecondBox timings flush Operation table: %w", err)
 	}
+	if err := writeOperationStageTimings(
+		output,
+		operation.OperationID,
+		operation.Orchestration,
+	); err != nil {
+		return err
+	}
 	return writeBootTimings(output, operation.OperationID, operation.Boots)
+}
+
+func writeOperationStageTimings(
+	output io.Writer,
+	operationID string,
+	stages []secondboxclient.OperationStageTiming,
+) error {
+	if len(stages) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintf(output, "\nOrchestration: operation=%s\n", operationID); err != nil {
+		return fmt.Errorf("SecondBox timings write orchestration heading: %w", err)
+	}
+	table := tabwriter.NewWriter(output, 0, 4, 2, ' ', 0)
+	if _, err := fmt.Fprintln(table, "STAGE\tELAPSED\tCUMULATIVE\tOBSERVED"); err != nil {
+		return fmt.Errorf("SecondBox timings write orchestration-stage heading: %w", err)
+	}
+	for _, stage := range stages {
+		if _, err := fmt.Fprintf(
+			table,
+			"%s\t%s\t%s\t%s\n",
+			stage.Stage,
+			formatPreciseMilliseconds(stage.ElapsedMilliseconds),
+			formatPreciseMilliseconds(stage.CumulativeMilliseconds),
+			stage.ObservedAt.UTC().Format(time.RFC3339Nano),
+		); err != nil {
+			return fmt.Errorf("SecondBox timings write orchestration-stage row: %w", err)
+		}
+	}
+	if err := table.Flush(); err != nil {
+		return fmt.Errorf("SecondBox timings flush orchestration-stage table: %w", err)
+	}
+	return nil
 }
 
 func writeBootTimings(

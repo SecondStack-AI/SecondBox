@@ -511,6 +511,20 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 	}
 	switch action {
 	case "mark_ready":
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO secondbox.operation_stage_timings (
+				operation_id,sandbox_id,stage,observed_at
+			)
+			SELECT id,sandbox_id,'ready_projected',$2
+			FROM secondbox.operations
+			WHERE sandbox_id=$1 AND kind IN ('create','start')
+			  AND state IN ('pending','running')
+			ON CONFLICT (operation_id,stage) DO NOTHING`,
+			claim.SandboxID,
+			now.UTC(),
+		); err != nil {
+			return fmt.Errorf("SecondBox lifecycle ready-projected timing insert failed: %w", err)
+		}
 		if err := completeOperations(
 			[]string{"create", "start"}, contracts.OperationStateSucceeded, "", "",
 		); err != nil {
