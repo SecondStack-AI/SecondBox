@@ -9,16 +9,17 @@ import (
 
 func TestLoadRunnerProtocolConfigRequestsOnlyImplementedFeatures(t *testing.T) {
 	for name, value := range map[string]string{
-		"SECONDBOX_RUNNER_ID":                        "runner-1",
-		"SECONDBOX_RUNNER_POOL_ID":                   "pool-1",
-		"SECONDBOX_RUNNER_SOFTWARE_VERSION":          "1.0.0",
-		"SECONDBOX_RUNNER_CONTROL_PLANE_ADDRESS":     "127.0.0.1:9443",
-		"SECONDBOX_RUNNER_CONTROL_PLANE_SERVER_NAME": "control-plane",
-		"SECONDBOX_RUNNER_CLIENT_CERTIFICATE":        "/run/identity/runner.crt",
-		"SECONDBOX_RUNNER_CLIENT_KEY":                "/run/identity/runner.key",
-		"SECONDBOX_RUNNER_CONTROL_PLANE_CA":          "/run/identity/runner-ca.crt",
-		"SECONDBOX_RUNNER_CREDENTIAL":                "runner-test-credential-material-0000000000",
-		"SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS":     "8",
+		"SECONDBOX_RUNNER_ID":                               "runner-1",
+		"SECONDBOX_RUNNER_POOL_ID":                          "pool-1",
+		"SECONDBOX_RUNNER_SOFTWARE_VERSION":                 "1.0.0",
+		"SECONDBOX_RUNNER_CONTROL_PLANE_ADDRESS":            "127.0.0.1:9443",
+		"SECONDBOX_RUNNER_CONTROL_PLANE_SERVER_NAME":        "control-plane",
+		"SECONDBOX_RUNNER_CLIENT_CERTIFICATE":               "/run/identity/runner.crt",
+		"SECONDBOX_RUNNER_CLIENT_KEY":                       "/run/identity/runner.key",
+		"SECONDBOX_RUNNER_CONTROL_PLANE_CA":                 "/run/identity/runner-ca.crt",
+		"SECONDBOX_RUNNER_CREDENTIAL":                       "runner-test-credential-material-0000000000",
+		"SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS":            "8",
+		"SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES": "4",
 	} {
 		t.Setenv(name, value)
 	}
@@ -40,5 +41,11 @@ func TestLoadRunnerProtocolConfigRequestsOnlyImplementedFeatures(t *testing.T) {
 	}
 	if config.MaximumConcurrentStarts != 8 {
 		t.Fatalf("maximum concurrent starts = %d, want 8", config.MaximumConcurrentStarts)
+	}
+	if config.MaximumConcurrentWorkspaceCreates != 4 {
+		t.Fatalf(
+			"maximum concurrent Workspace creates = %d, want 4",
+			config.MaximumConcurrentWorkspaceCreates,
+		)
 	}
 }

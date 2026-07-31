@@ -91,6 +91,7 @@
     "maxConcurrentPerSandbox": 4,
     "maxConcurrentGlobal": 16,
     "maxConcurrentStarts": 8,
+    "maxConcurrentWorkspaceCreates": 8,
     "maxConcurrentOperationsGlobal": 64,
     "fileTransferMaxBytes": 1073741824,
     "storagePressureRecoveryPercent": 70,

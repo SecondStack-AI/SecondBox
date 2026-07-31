@@ -1217,12 +1217,13 @@ func resolvedAssignmentCommand() *runnerprotocol.AssignmentCommand {
 
 func testRunnerConfig() RunnerProtocolConfig {
 	return RunnerProtocolConfig{
-		RunnerID:                "runner-1",
-		RunnerPoolID:            "pool-1",
-		SoftwareVersion:         "1.0.0",
-		ProtocolMinimum:         1,
-		ProtocolMaximum:         1,
-		MaximumConcurrentStarts: 4,
+		RunnerID:                          "runner-1",
+		RunnerPoolID:                      "pool-1",
+		SoftwareVersion:                   "1.0.0",
+		ProtocolMinimum:                   1,
+		ProtocolMaximum:                   1,
+		MaximumConcurrentStarts:           4,
+		MaximumConcurrentWorkspaceCreates: 4,
 		MandatoryFeatures: []runnerprotocol.RunnerFeature{
 			runnerprotocol.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
 		},

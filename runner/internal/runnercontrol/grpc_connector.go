@@ -81,17 +81,30 @@ func LoadRunnerProtocolConfigFromEnv() (RunnerProtocolConfig, GRPCConnectorConfi
 			"SecondBox runner protocol config requires positive integer SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS",
 		)
 	}
+	maximumConcurrentWorkspaceCreatesRaw, err := required(
+		"SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES",
+	)
+	if err != nil {
+		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, err
+	}
+	maximumConcurrentWorkspaceCreates, err := strconv.Atoi(maximumConcurrentWorkspaceCreatesRaw)
+	if err != nil || maximumConcurrentWorkspaceCreates < 1 {
+		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, fmt.Errorf(
+			"SecondBox runner protocol config requires positive integer SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES",
+		)
+	}
 	if len(credential) < 32 {
 		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, fmt.Errorf("SecondBox runner credential must contain at least 32 bytes")
 	}
 
 	return RunnerProtocolConfig{
-			RunnerID:                runnerID,
-			RunnerPoolID:            poolID,
-			SoftwareVersion:         softwareVersion,
-			ProtocolMinimum:         1,
-			ProtocolMaximum:         1,
-			MaximumConcurrentStarts: maximumConcurrentStarts,
+			RunnerID:                          runnerID,
+			RunnerPoolID:                      poolID,
+			SoftwareVersion:                   softwareVersion,
+			ProtocolMinimum:                   1,
+			ProtocolMaximum:                   1,
+			MaximumConcurrentStarts:           maximumConcurrentStarts,
+			MaximumConcurrentWorkspaceCreates: maximumConcurrentWorkspaceCreates,
 			MandatoryFeatures: []runnerprotocol.RunnerFeature{
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING,
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_FILE_STREAMING,

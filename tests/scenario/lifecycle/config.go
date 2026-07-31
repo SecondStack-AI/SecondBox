@@ -55,6 +55,7 @@ type runnerLimits struct {
 	MaxConcurrentPerSandbox             int   `json:"maxConcurrentPerSandbox"`
 	MaxConcurrentGlobal                 int   `json:"maxConcurrentGlobal"`
 	MaxConcurrentStarts                 int   `json:"maxConcurrentStarts"`
+	MaxConcurrentWorkspaceCreates       int   `json:"maxConcurrentWorkspaceCreates"`
 	MaxConcurrentOperationsGlobal       int   `json:"maxConcurrentOperationsGlobal"`
 	FileTransferMaxBytes                int64 `json:"fileTransferMaxBytes"`
 	StoragePressureRecoveryPercent      int   `json:"storagePressureRecoveryPercent"`
@@ -212,6 +213,9 @@ func validateLifecycleConfig(config lifecycleConfig) error {
 	if config.Runner.MaxConcurrentStarts < 1 ||
 		config.Runner.MaxConcurrentStarts > config.Runner.MaxConcurrentGlobal {
 		return errors.New("SecondBox lifecycle runner.maxConcurrentStarts must be positive and no greater than runner.maxConcurrentGlobal")
+	}
+	if config.Runner.MaxConcurrentWorkspaceCreates < 1 {
+		return errors.New("SecondBox lifecycle configuration requires a positive runner.maxConcurrentWorkspaceCreates")
 	}
 	if config.Profile.MemoryBytes < 1 {
 		return errors.New("SecondBox lifecycle configuration requires a positive profile.memoryBytes")

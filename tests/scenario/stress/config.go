@@ -64,6 +64,7 @@ type stressRunnerConfig struct {
 	MaxConcurrentPerSandbox        int `json:"maxConcurrentPerSandbox"`
 	MaxConcurrentGlobal            int `json:"maxConcurrentGlobal"`
 	MaxConcurrentStarts            int `json:"maxConcurrentStarts"`
+	MaxConcurrentWorkspaceCreates  int `json:"maxConcurrentWorkspaceCreates"`
 	MaxConcurrentOperationsGlobal  int `json:"maxConcurrentOperationsGlobal"`
 	FileTransferMaxBytes           int `json:"fileTransferMaxBytes"`
 	StoragePressureRecoveryPercent int `json:"storagePressureRecoveryPercent"`
@@ -249,6 +250,7 @@ func (config stressRunnerConfig) validate() error {
 		"maxConcurrentPerSandbox":             config.MaxConcurrentPerSandbox,
 		"maxConcurrentGlobal":                 config.MaxConcurrentGlobal,
 		"maxConcurrentStarts":                 config.MaxConcurrentStarts,
+		"maxConcurrentWorkspaceCreates":       config.MaxConcurrentWorkspaceCreates,
 		"maxConcurrentOperationsGlobal":       config.MaxConcurrentOperationsGlobal,
 		"fileTransferMaxBytes":                config.FileTransferMaxBytes,
 		"storagePressureRecoveryPercent":      config.StoragePressureRecoveryPercent,

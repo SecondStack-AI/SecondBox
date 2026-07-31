@@ -32,13 +32,14 @@ var ErrRunnerProtocolNegotiation = errors.New("SecondBox runner protocol negotia
 
 // RunnerProtocolConfig contains stable runner identity and its supported wire window.
 type RunnerProtocolConfig struct {
-	RunnerID                string
-	RunnerPoolID            string
-	SoftwareVersion         string
-	ProtocolMinimum         uint32
-	ProtocolMaximum         uint32
-	MaximumConcurrentStarts int
-	MandatoryFeatures       []runnerprotocol.RunnerFeature
+	RunnerID                          string
+	RunnerPoolID                      string
+	SoftwareVersion                   string
+	ProtocolMinimum                   uint32
+	ProtocolMaximum                   uint32
+	MaximumConcurrentStarts           int
+	MaximumConcurrentWorkspaceCreates int
+	MandatoryFeatures                 []runnerprotocol.RunnerFeature
 }
 
 // BackendReadiness is verified local capability and capacity evidence.
@@ -179,6 +180,9 @@ func NewRunnerProtocolService(
 	}
 	if config.MaximumConcurrentStarts < 1 {
 		return nil, fmt.Errorf("SecondBox runner protocol config requires a positive maximum concurrent start count")
+	}
+	if config.MaximumConcurrentWorkspaceCreates < 1 {
+		return nil, fmt.Errorf("SecondBox runner protocol config requires a positive maximum concurrent Workspace create count")
 	}
 	if backend == nil {
 		return nil, fmt.Errorf("SecondBox runner protocol assignment backend is required")
@@ -456,11 +460,17 @@ func (s *RunnerProtocolService) consumeCommands(
 	// connection first and only then waits for in-flight starts to observe it.
 	var assignmentsInFlight sync.WaitGroup
 	defer assignmentsInFlight.Wait()
+	var workspaceCreatesInFlight sync.WaitGroup
+	defer workspaceCreatesInFlight.Wait()
 	connectionCtx, cancelConnection := context.WithCancel(ctx)
 	defer cancelConnection()
 	assignmentSlots := make(
 		chan struct{},
 		concurrentAssignmentLimit(s.config.MaximumConcurrentStarts, readiness),
+	)
+	workspaceCreateSlots := make(
+		chan struct{},
+		s.config.MaximumConcurrentWorkspaceCreates,
 	)
 	go pumpControlPlaneFrames(connectionCtx, stream.Recv, received)
 	asyncErrors := make(chan error, 1)
@@ -484,6 +494,13 @@ func (s *RunnerProtocolService) consumeCommands(
 			return ctx.Err()
 		case frame := <-received:
 			if frame.err != nil {
+				assignmentsInFlight.Wait()
+				workspaceCreatesInFlight.Wait()
+				select {
+				case asyncErr := <-asyncErrors:
+					return errors.Join(frame.err, asyncErr)
+				default:
+				}
 				return frame.err
 			}
 			duplicate, err := controlState.accept(frame.message)
@@ -496,6 +513,7 @@ func (s *RunnerProtocolService) consumeCommands(
 			// Sequence acceptance above already ran in receive order, so a
 			// concurrent start cannot reorder the control command stream.
 			if assignment := frame.message.GetAssignment(); assignment != nil {
+				workspaceCreatesInFlight.Wait()
 				select {
 				case assignmentSlots <- struct{}{}:
 				case <-connectionCtx.Done():
@@ -514,10 +532,50 @@ func (s *RunnerProtocolService) consumeCommands(
 				}()
 				continue
 			}
+			if workspace := frame.message.GetLocalWorkspace(); workspace != nil {
+				if !enabled[runnerprotocol.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE] ||
+					s.workspaceBackend == nil {
+					return fmt.Errorf("SecondBox runner local-workspace feature was not negotiated")
+				}
+				if workspace.Kind ==
+					runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE {
+					select {
+					case workspaceCreateSlots <- struct{}{}:
+					case <-connectionCtx.Done():
+						return connectionCtx.Err()
+					}
+					workspaceCreatesInFlight.Add(1)
+					go func() {
+						defer workspaceCreatesInFlight.Done()
+						defer func() { <-workspaceCreateSlots }()
+						if err := s.handleLocalWorkspace(
+							connectionCtx,
+							stream,
+							workspace,
+						); err != nil {
+							select {
+							case asyncErrors <- err:
+							default:
+							}
+						}
+					}()
+					continue
+				}
+				workspaceCreatesInFlight.Wait()
+				if err := s.handleLocalWorkspace(
+					connectionCtx,
+					stream,
+					workspace,
+				); err != nil {
+					return err
+				}
+				continue
+			}
 			// Fence and drain decide whether compute may keep running, so they
-			// stay ordered behind any assignment start already in flight.
+			// stay ordered behind assignment starts and Workspace creates.
 			if frame.message.GetFence() != nil || frame.message.GetDrain() != nil {
 				assignmentsInFlight.Wait()
+				workspaceCreatesInFlight.Wait()
 			}
 			if err := s.handleCommand(connectionCtx, stream, frame.message, enabled, asyncErrors); err != nil {
 				return err

@@ -69,6 +69,7 @@ func validStressConfig() stressConfig {
 			SandboxMaxVCPUs: 2, SandboxMemoryMiB: 512, SandboxDiskMiB: 1024,
 			MemoryBudgetMiB: 2048, MaxConcurrentPerSandbox: 4, MaxConcurrentGlobal: 16,
 			MaxConcurrentStarts:            8,
+			MaxConcurrentWorkspaceCreates:  4,
 			MaxConcurrentOperationsGlobal:  16,
 			FileTransferMaxBytes:           1 << 20,
 			StoragePressureRecoveryPercent: 70, StoragePressureWarningPercent: 80,

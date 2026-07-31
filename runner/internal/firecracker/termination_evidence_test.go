@@ -209,7 +209,8 @@ func TestNaturalReapFlowsFromReadyManagerThroughBackendToProtocolFrame(t *testin
 				runnercontrol.RunnerProtocolConfig{
 					RunnerID: "runner-terminal", RunnerPoolID: "pool-terminal",
 					SoftwareVersion: "1.0.0", ProtocolMinimum: 1, ProtocolMaximum: 1,
-					MaximumConcurrentStarts: 1,
+					MaximumConcurrentStarts:           1,
+					MaximumConcurrentWorkspaceCreates: 1,
 					MandatoryFeatures: []runnerprotocol.RunnerFeature{
 						runnerprotocol.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
 					},

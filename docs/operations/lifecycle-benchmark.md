@@ -63,6 +63,9 @@ The runner block also requires `maxConcurrentStarts`; this transient start-work
 limit is measured separately from `maxConcurrentGlobal`, the resident Instance
 capacity. Qualify it with a representative burst: lowering it can reduce
 per-Instance boot contention while still increasing end-to-end drain latency.
+`maxConcurrentWorkspaceCreates` independently bounds generation-one Workspace
+formatting; the create-to-ready benchmark exposes whether this pool is too
+small or creates storage contention.
 
 ## Reading the output
 

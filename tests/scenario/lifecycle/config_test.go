@@ -23,8 +23,9 @@ func validLifecycleConfig() lifecycleConfig {
 		OperationTimeoutSeconds:     180,
 		PollIntervalMilliseconds:    250,
 		Runner: runnerLimits{
-			MaxConcurrentGlobal: 16,
-			MaxConcurrentStarts: 8,
+			MaxConcurrentGlobal:           16,
+			MaxConcurrentStarts:           8,
+			MaxConcurrentWorkspaceCreates: 4,
 		},
 		Profile:                   profileLimits{MemoryBytes: 536870912},
 		SubjectMaxActiveInstances: 12,
@@ -51,7 +52,10 @@ func TestAbsentRequiredSettingsAreRejected(t *testing.T) {
 		"operationTimeoutSeconds":     func(c *lifecycleConfig) { c.OperationTimeoutSeconds = 0 },
 		"runner.maxConcurrentGlobal":  func(c *lifecycleConfig) { c.Runner.MaxConcurrentGlobal = 0 },
 		"runner.maxConcurrentStarts":  func(c *lifecycleConfig) { c.Runner.MaxConcurrentStarts = 0 },
-		"subjectMaxActiveInstances":   func(c *lifecycleConfig) { c.SubjectMaxActiveInstances = 0 },
+		"runner.maxConcurrentWorkspaceCreates": func(c *lifecycleConfig) {
+			c.Runner.MaxConcurrentWorkspaceCreates = 0
+		},
+		"subjectMaxActiveInstances": func(c *lifecycleConfig) { c.SubjectMaxActiveInstances = 0 },
 	} {
 		config := validLifecycleConfig()
 		mutate(&config)

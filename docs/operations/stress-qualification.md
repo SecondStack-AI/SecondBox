@@ -144,7 +144,8 @@ The result separately names:
 
 The runner configuration also requires `maxConcurrentStarts`. It bounds
 transient startup work rather than resident or operation capacity, so it is not
-part of `configuredFirstBinding`.
+part of `configuredFirstBinding`. `maxConcurrentWorkspaceCreates` separately
+bounds generation-one Workspace formatting.
 
 The configured first binding is a capacity calculation, not a claim that it caused a measured
 refusal. The refusal counts and problem codes are the observed evidence. A level is marked for
