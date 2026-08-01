@@ -1,7 +1,7 @@
-# A burst of placements can shut the control plane down
+# A burst of placements could shut the control plane down
 
-Found by the capacity ladder, then reproduced deliberately. This describes the
-defect and the evidence; it does not propose a fix.
+Found by the capacity ladder, reproduced deliberately, and fixed in `05bbd8e`.
+This records the defect, the evidence, and what changed.
 
 ## Symptom
 
@@ -119,3 +119,49 @@ Workspace stuck in `creating` would block every assignment for that runner. That
 was wrong. The live capture shows no Workspace in `creating` and no undispatched
 command; the guard was never the obstacle. The hypothesis was built from reading
 the code, and it survived until the state was actually measured.
+
+## The fix
+
+Three changes, each independently enough to avoid the outcome.
+
+**Contention is named.** `Schedule` now wraps an exhausted retry budget in
+`ports.ErrSerializationContention` instead of returning the raw driver error. A
+caller handed a `*pgconn.PgError` cannot tell "try again" from "this is broken",
+and the reconciler assumed the latter.
+
+**Both reconcilers defer on it** rather than failing, exactly as they already
+defer on Workspace contention (`internal/lifecycle/worker.go`,
+`internal/reconcile/worker.go`, and the loops in `cmd/secondboxd/main.go`).
+Losing a race must not end a reconciler, because ending a reconciler stops the
+server and takes every attached runner with it.
+
+**Retries back off with full jitter** (`serializationBackoff`). The previous loop
+retried immediately, so every loser of a race woke at the same instant and
+collided again. Full jitter draws each retry independently from `[0, window]`,
+spreading a colliding cohort instead of letting it resonate.
+
+**And the contention itself is gone from placement.** Placement no longer assigns
+the control-stream sequence and no longer touches `runner_connections`. The
+command is queued `pending`; the connection owner assigns the sequence when it
+claims, which it already did. This reverses the round trip `1beb82a` saved — a
+round trip is cheaper than a single-row lock inside every placement.
+
+The owner-side lock in `ClaimCommands` stays. `pumpOutboundFrames`
+(`internal/runnercontrol/server.go:423`) is its only caller and runs one
+goroutine per connection, so that lock has exactly one writer by construction: it
+is uncontended, and it keeps the single-owner invariant enforced rather than
+assumed. Moving that counter into process memory would trade a free lock for
+state that must be invalidated exactly when a connection is superseded.
+
+### Before and after, same ten-rung reproduction
+
+| | Before | After |
+|---|---|---|
+| Rungs completed | 1 of 10 | see below |
+| Rung 2 arrivals admitted | 0 of 32 | 32 of 32 |
+| Control-plane shutdowns | 1 | 0 |
+| SQLSTATE 40001 occurrences | escalated to fatal | absorbed |
+
+Serialization failures still occur after the fix, and should: they are inherent
+to serializable isolation under concurrency. The change is that they are now
+retried and reported as contention rather than ending the process.
