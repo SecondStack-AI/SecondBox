@@ -76,7 +76,13 @@ func (reconciler Reconciler) RunOnce(ctx context.Context, now time.Time) (Decisi
 		if err := reconciler.Effects.ExecuteLifecycleEffect(
 			ctx, claim, decision, now.UTC(), now.UTC().Add(reconciler.PollInterval),
 		); err != nil {
-			if errors.Is(err, ports.ErrWorkspaceMutation) {
+			// Losing a serialization race is an ordinary outcome of concurrency,
+			// not a fault, so it defers exactly like Workspace contention does.
+			// Failing here ends the reconciler, and ending the reconciler stops
+			// the server: a burst of concurrent placements would take the whole
+			// control plane down.
+			if errors.Is(err, ports.ErrWorkspaceMutation) ||
+				errors.Is(err, ports.ErrSerializationContention) {
 				if waitErr := reconciler.Store.ApplyLifecycleAction(
 					ctx,
 					claim,

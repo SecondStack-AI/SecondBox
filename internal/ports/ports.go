@@ -25,6 +25,11 @@ var (
 	ErrLifecycleUnavailable    = errors.New("SecondBox lifecycle unavailable without a runner assignment")
 	ErrHomeRunnerUnavailable   = errors.New("SecondBox Sandbox home runner is unavailable")
 	ErrWorkspaceMutation       = errors.New("SecondBox Workspace has a conflicting local mutation")
+	// ErrSerializationContention reports that a transaction lost a serialization
+	// race and the caller should try again later. It is an ordinary outcome of
+	// serializable isolation under concurrency, not a fault: a caller that treats
+	// it as one will fail whenever load rises.
+	ErrSerializationContention = errors.New("SecondBox transaction lost a serialization race")
 	ErrWorkspaceHomeConflict   = errors.New("SecondBox Workspace home runner is immutable")
 	ErrGenerationFenced        = errors.New("SecondBox Sandbox generation is fenced")
 	ErrLeaseNotFound           = errors.New("SecondBox Lease not found")

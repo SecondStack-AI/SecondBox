@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -74,6 +75,38 @@ func TestReconcilerDefersWorkspaceEffectContention(t *testing.T) {
 		t.Fatalf(
 			"contention reconciliation = %#v, %t, %v, database commit %q",
 			decision, found, err, store.action,
+		)
+	}
+}
+
+// Losing a serialization race is an ordinary outcome of concurrency under
+// serializable isolation, not a fault. Failing here ends the reconciler, and
+// ending the reconciler shuts the server down: a burst of concurrent placements
+// would take the whole control plane with it.
+func TestReconcilerDefersSerializationContentionInsteadOfFailing(t *testing.T) {
+	store := &fakeReconcileStore{claim: ports.LifecycleReconcileClaim{
+		SandboxID: "sbx-1", WorkerID: "worker-1", Revision: 3,
+		ObservedState: contracts.SandboxStateStopped,
+		DesiredState:  contracts.SandboxDesiredStateRunning,
+	}}
+	effects := &fakeEffectExecutor{
+		err: fmt.Errorf("placement: %w", ports.ErrSerializationContention),
+	}
+	reconciler := Reconciler{
+		Store: store, Effects: effects, WorkerID: "worker-1",
+		ClaimDuration: time.Minute, PollInterval: time.Second,
+	}
+	decision, found, err := reconciler.RunOnce(
+		t.Context(), time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("serialization contention ended reconciliation: %v", err)
+	}
+	if !found || decision.Action != ActionStartInstance ||
+		store.action != string(ActionWait) {
+		t.Fatalf(
+			"contention reconciliation = %#v, %t, database commit %q",
+			decision, found, store.action,
 		)
 	}
 }

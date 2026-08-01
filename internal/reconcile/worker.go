@@ -57,7 +57,8 @@ func (worker AssignmentWorker) RunOnce(
 		_, err := worker.Store.AdvanceFencedGeneration(
 			ctx, claim.AssignmentID, claim.Revision, now,
 		)
-		if errors.Is(err, ports.ErrWorkspaceMutation) {
+		if errors.Is(err, ports.ErrWorkspaceMutation) ||
+			errors.Is(err, ports.ErrSerializationContention) {
 			waitErr := worker.Store.ApplyDecision(
 				ctx,
 				claim,

@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -18,6 +20,14 @@ import (
 
 var (
 	ErrProfileRevisionMismatch = errors.New("SecondBox scheduler ProfileRevision mismatch")
+)
+
+// Serialization backoff bounds. The ceiling keeps a retry well inside a
+// placement's deadline while still spreading a burst that all collided at once.
+const (
+	serializationBackoffBase     = 2 * time.Millisecond
+	serializationBackoffCeiling  = 250 * time.Millisecond
+	serializationBackoffShiftCap = 10
 )
 
 // PostgresStore coordinates scheduler replicas through durable transactions.
@@ -114,9 +124,50 @@ func (store *PostgresStore) Schedule(
 	}
 	for attempt := 0; ; attempt++ {
 		assignment, created, err := store.scheduleOnce(ctx, request)
-		if !isSerializationFailure(err) || attempt >= request.SerializationRetryLimit {
+		if !isSerializationFailure(err) {
 			return assignment, created, err
 		}
+		if attempt >= request.SerializationRetryLimit {
+			// Report contention as contention. A caller that receives the raw
+			// PostgreSQL error cannot distinguish "try again" from "this is
+			// broken", and the reconciler treated it as the latter.
+			return assignment, created, fmt.Errorf(
+				"%w after %d attempts: %v",
+				ports.ErrSerializationContention, attempt+1, err,
+			)
+		}
+		// Retrying immediately makes contention worse: every loser wakes at the
+		// same instant and collides again. Back off with full jitter so a burst
+		// spreads out instead of resonating.
+		if !sleepWithContext(ctx, serializationBackoff(attempt)) {
+			return assignment, created, ctx.Err()
+		}
+	}
+}
+
+// serializationBackoff returns a full-jitter delay: a uniform draw from
+// [0, base*2^attempt] capped at serializationBackoffCeiling. Full jitter spreads
+// a colliding cohort more effectively than a fixed or purely exponential delay,
+// because two losers of the same race draw independently.
+func serializationBackoff(attempt int) time.Duration {
+	window := serializationBackoffBase << min(attempt, serializationBackoffShiftCap)
+	if window > serializationBackoffCeiling {
+		window = serializationBackoffCeiling
+	}
+	return time.Duration(rand.Int64N(int64(window) + 1))
+}
+
+func sleepWithContext(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 
@@ -188,10 +239,6 @@ func (store *PostgresStore) scheduleOnce(
 	if err != nil {
 		return DurableAssignment{}, false, err
 	}
-	dispatch, err := lockEagerAssignmentDispatch(ctx, tx, selected.ID)
-	if err != nil {
-		return DurableAssignment{}, false, err
-	}
 	capabilitySnapshot := capabilitySnapshot(selected)
 	capabilitiesJSON, err := json.Marshal(capabilitySnapshot)
 	if err != nil {
@@ -213,10 +260,6 @@ func (store *PostgresStore) scheduleOnce(
 	controlMessage.GetAssignment().Correlation.SandboxGeneration = uint64(generation)
 	controlMessage.GetAssignment().Correlation.AssignmentId = request.AssignmentID
 	controlMessage.GetAssignment().Correlation.RunnerId = selected.ID
-	if dispatch.ConnectionID != "" {
-		controlMessage.GetAssignment().MessageId = request.AssignmentCommandID
-		controlMessage.GetAssignment().Sequence = uint64(dispatch.ControlSequence)
-	}
 	commandPayload, err := proto.Marshal(controlMessage)
 	if err != nil {
 		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Assignment command encoding: %w", err)
@@ -284,28 +327,15 @@ func (store *PostgresStore) scheduleOnce(
 		assignment.FencingToken, assignment.State, capabilitiesJSON, artifactsJSON,
 		assignment.RetryLimit, assignment.OperationDeadline, assignment.ClaimExpiresAt, placementAt,
 	)
-	if dispatch.ConnectionID != "" {
-		orderedWrites.Queue(`
-			UPDATE secondbox.runner_connections
-			SET last_control_sequence=$2
-			WHERE id=$1
-			  AND runner_id=$3
-			  AND state='active'
-			  AND last_control_sequence=$4`,
-			dispatch.ConnectionID,
-			dispatch.ControlSequence,
-			assignment.RunnerID,
-			dispatch.ControlSequence-1,
-		)
-	}
-	commandState := "pending"
-	targetConnectionID := ""
-	deliveryCount := int64(0)
-	if dispatch.ConnectionID != "" {
-		commandState = "delivering"
-		targetConnectionID = dispatch.ConnectionID
-		deliveryCount = 1
-	}
+	// The command is always queued pending. Assigning its stream sequence here
+	// meant locking the runner's single runner_connections row inside every
+	// placement transaction, so concurrent placements for one runner serialised
+	// on one row under serializable isolation and lost the race. The connection
+	// owner assigns the sequence when it claims the command; it is the only
+	// writer of that counter, so it needs no lock at all.
+	const commandState = "pending"
+	const targetConnectionID = ""
+	const deliveryCount = int64(0)
 	orderedWrites.Queue(`
 		WITH inserted_command AS (
 			INSERT INTO secondbox.runner_commands (
@@ -352,14 +382,6 @@ func (store *PostgresStore) scheduleOnce(
 			writeErr = fmt.Errorf("%s: %w", errorPrefix, err)
 		}
 	}
-	if dispatch.ConnectionID != "" {
-		connectionUpdate, err := results.Exec()
-		if err != nil && writeErr == nil {
-			writeErr = fmt.Errorf("SecondBox scheduler eager Assignment dispatch: %w", err)
-		} else if err == nil && connectionUpdate.RowsAffected() != 1 && writeErr == nil {
-			writeErr = errors.New("SecondBox scheduler eager Assignment connection changed")
-		}
-	}
 	for _, errorPrefix := range []string{
 		"SecondBox scheduler Assignment command insert",
 		"SecondBox scheduler Runner reservation update",
@@ -382,56 +404,6 @@ func (store *PostgresStore) scheduleOnce(
 		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler commit: %w", err)
 	}
 	return assignment, true, nil
-}
-
-type eagerAssignmentDispatch struct {
-	ConnectionID    string
-	ControlSequence int64
-}
-
-func lockEagerAssignmentDispatch(
-	ctx context.Context,
-	tx pgx.Tx,
-	runnerID string,
-) (eagerAssignmentDispatch, error) {
-	var dispatch eagerAssignmentDispatch
-	err := tx.QueryRow(ctx, `
-		SELECT connection.id,connection.last_control_sequence+1
-		FROM secondbox.runner_connections AS connection
-		WHERE connection.runner_id=$1
-		  AND connection.state='active'
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM secondbox.runner_commands AS command
-		    WHERE command.runner_id=$1
-		      AND command.state IN ('pending','delivering')
-		  )
-		  AND NOT EXISTS (
-		    SELECT 1
-		    FROM secondbox.workspaces AS workspace
-		    WHERE workspace.home_runner_id=$1
-		      AND workspace.state='creating'
-		  )
-		ORDER BY connection.id
-		FOR UPDATE OF connection
-		LIMIT 1`,
-		runnerID,
-	).Scan(&dispatch.ConnectionID, &dispatch.ControlSequence)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return eagerAssignmentDispatch{}, nil
-	}
-	if err != nil {
-		return eagerAssignmentDispatch{}, fmt.Errorf(
-			"SecondBox scheduler eager Assignment connection lock: %w",
-			err,
-		)
-	}
-	if dispatch.ControlSequence <= 0 {
-		return eagerAssignmentDispatch{}, errors.New(
-			"SecondBox scheduler eager Assignment control sequence is exhausted",
-		)
-	}
-	return dispatch, nil
 }
 
 func validateScheduleRequest(request ScheduleRequest) error {

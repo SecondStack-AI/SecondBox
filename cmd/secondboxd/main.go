@@ -511,7 +511,11 @@ func runLifecycleReconciler(
 			if ctx.Err() != nil {
 				return nil
 			}
-			if errors.Is(err, ports.ErrRevisionConflict) {
+			// Contention is retryable by definition. Treating it as fatal here
+			// shuts down the whole server, taking every attached runner with it,
+			// because two placements raced for the same row.
+			if errors.Is(err, ports.ErrRevisionConflict) ||
+				errors.Is(err, ports.ErrSerializationContention) {
 				continue
 			}
 			return fmt.Errorf("SecondBox lifecycle reconciliation failed: %w", err)
@@ -536,7 +540,8 @@ func runAssignmentReconciler(
 			if ctx.Err() != nil {
 				return nil
 			}
-			if errors.Is(err, reconcile.ErrClaimLost) {
+			if errors.Is(err, reconcile.ErrClaimLost) ||
+				errors.Is(err, ports.ErrSerializationContention) {
 				continue
 			}
 			return fmt.Errorf("SecondBox Assignment reconciliation failed: %w", err)

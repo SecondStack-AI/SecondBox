@@ -299,12 +299,17 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	); err != nil {
 		t.Fatal(err)
 	}
-	if commandState != "delivering" ||
-		targetConnectionID != connectionID ||
-		deliveryCount != 1 ||
-		lastControlSequence != 2 {
+	// Placement queues the command and nothing more. Assigning the stream
+	// sequence here required locking the runner's single runner_connections row
+	// inside every placement transaction, which made concurrent placements for
+	// one runner serialise on one row and lose the race under serializable
+	// isolation. The connection owner assigns the sequence when it claims.
+	if commandState != "pending" ||
+		targetConnectionID != "" ||
+		deliveryCount != 0 ||
+		lastControlSequence != 1 {
 		t.Fatalf(
-			"eager Assignment dispatch = state %q target %q count %d sequence %d",
+			"queued Assignment dispatch = state %q target %q count %d sequence %d",
 			commandState,
 			targetConnectionID,
 			deliveryCount,
