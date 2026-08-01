@@ -202,6 +202,34 @@ for setting in "${required_settings[@]}"; do
   fi
 done
 
+# Firecracker exposes no PS/2 controller, but Linux otherwise waits for the
+# legacy i8042 probes during every boot. Console verbosity also sends every
+# kernel line through Firecracker's emulated UART. These arguments are part of
+# the qualified v1 boot contract: accepting a deployment without them silently
+# adds hundreds of milliseconds to every Sandbox start.
+kernel_arguments="$(value_for SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS)"
+required_kernel_arguments=(
+  console=ttyS0
+  reboot=k
+  panic=1
+  pci=off
+  root=/dev/vda
+  rw
+  quiet
+  loglevel=1
+  i8042.noaux
+  i8042.nomux
+  i8042.nopnp
+  i8042.dumbkbd
+  init=/init
+)
+for required_kernel_argument in "${required_kernel_arguments[@]}"; do
+  if [[ " $kernel_arguments " != *" $required_kernel_argument "* ]]; then
+    echo "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS must include $required_kernel_argument" >&2
+    exit 1
+  fi
+done
+
 platform_token="$(value_for SECONDBOX_PLATFORM_TOKEN)"
 postgres_password="$(value_for SECONDBOX_POSTGRES_PASSWORD)"
 object_store_password="$(value_for SECONDBOX_OBJECT_STORE_ROOT_PASSWORD)"

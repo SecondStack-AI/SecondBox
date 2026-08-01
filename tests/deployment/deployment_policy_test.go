@@ -230,6 +230,7 @@ func TestDeploymentEnvironmentHasNoBlankOrSharedCredentials(t *testing.T) {
 		"SECONDBOX_RUNNER_GUEST_CONTROL_VSOCK_PORT=1024",
 		"SECONDBOX_RUNNER_GUEST_PROTOCOL_VSOCK_PORT=1025",
 		"SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL=5s",
+		"SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS=console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw quiet loglevel=1 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd init=/init",
 		"SECONDBOX_RUNNER_ENABLED_FEATURES=exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy",
 		"SECONDBOX_RUNNER_NETWORK_POLICY_NFT_PATH=/usr/sbin/nft",
 		"SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS=256",
@@ -387,6 +388,12 @@ func TestDeploymentValidatorRejectsInvalidRunnerRuntimeSettings(t *testing.T) {
 			oldSetting:  "SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL=5s",
 			newSetting:  "SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL=61s",
 			errorMarker: "SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL",
+		},
+		{
+			name:        "latency kernel argument omitted",
+			oldSetting:  "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS=console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw quiet loglevel=1 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd init=/init",
+			newSetting:  "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS=console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw quiet loglevel=1 i8042.noaux i8042.nomux i8042.nopnp init=/init",
+			errorMarker: "i8042.dumbkbd",
 		},
 		{
 			name:        "zero DNS pin capacity",

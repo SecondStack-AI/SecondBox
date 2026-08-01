@@ -75,6 +75,13 @@ SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS
 
 Production and qualification hosts set `SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED=false`. The jailer UID and GID identify the unprivileged process inside the jail and must be positive. The runner remains root so it can create jail roots, cgroups, TAP devices, and the required jailed file bindings.
 
+The qualified kernel arguments include `quiet loglevel=1` and
+`i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd`. Firecracker has no PS/2
+controller, so omitting the i8042 arguments makes Linux wait for legacy device
+probes during every Sandbox boot. Verbose kernel output also serializes boot
+messages through Firecracker's emulated UART. The deployment validator rejects
+kernel arguments that omit these latency-critical flags.
+
 `SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL` bounds resident Firecracker Instances. `SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS` independently bounds transient assignment-start work and must not exceed the resident limit. `SECONDBOX_RUNNER_MAX_CONCURRENT_OPERATIONS_GLOBAL` advertises runner-wide data-plane operation capacity; scheduling reserves each active Sandbox's immutable Profile limit against it.
 
 `SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES` bounds formatting of

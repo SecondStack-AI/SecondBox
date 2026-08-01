@@ -59,7 +59,7 @@ Configure the runner to consume the verified materialized bundle with:
 SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH=/absolute/path/to/kernel
 SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH=/absolute/path/to/rootfs.ext4
 SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH=/absolute/path/to/shared.img
-SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS="console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/init"
+SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS="console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw quiet loglevel=1 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd init=/init"
 SECONDBOX_RUNNER_GUEST_CONTROL_VSOCK_PORT=1024
 SECONDBOX_RUNNER_GUEST_PROTOCOL_VSOCK_PORT=1025
 SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL=5s
