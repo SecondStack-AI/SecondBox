@@ -98,6 +98,7 @@ type lifecycleConfig struct {
 	HostRails                   *hostRailConfig  `json:"hostRails"`
 	Gate                        *gateConfig      `json:"gate"`
 	LatencyKneeRatio            float64          `json:"latencyKneeRatio"`
+	SandboxWaitDeadlineSeconds  int64            `json:"sandboxWaitDeadlineSeconds"`
 	RunnerPoolName              string           `json:"runnerPoolName"`
 	ProfileName                 string           `json:"profileName"`
 	TenantRef                   string           `json:"tenantRef"`
@@ -281,6 +282,7 @@ func validateLifecycleConfig(config lifecycleConfig) error {
 		"requestTimeoutMilliseconds":  config.RequestTimeoutMilliseconds,
 		"operationTimeoutSeconds":     config.OperationTimeoutSeconds,
 		"pollIntervalMilliseconds":    config.PollIntervalMilliseconds,
+		"sandboxWaitDeadlineSeconds":  config.SandboxWaitDeadlineSeconds,
 	} {
 		if value < 1 {
 			return fmt.Errorf("SecondBox lifecycle configuration requires a positive %s", name)

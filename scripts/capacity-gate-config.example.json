@@ -11,6 +11,7 @@
     "declaredCeiling": 48
   },
   "latencyKneeRatio": 1.5,
+  "sandboxWaitDeadlineSeconds": 300,
   "runnerPoolName": "capacity-gate-local",
   "profileName": "capacity-gate-local",
   "tenantRef": "capacity-qualification",

@@ -11,6 +11,7 @@
     "declaredCeiling": 0
   },
   "latencyKneeRatio": 1.5,
+  "sandboxWaitDeadlineSeconds": 60,
   "runnerPoolName": "lifecycle-local",
   "profileName": "lifecycle-local",
   "tenantRef": "lifecycle-qualification",

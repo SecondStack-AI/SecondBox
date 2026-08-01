@@ -330,10 +330,15 @@ func (driver *lifecycleDriver) wait(
 ) (secondboxclient.Sandbox, error) {
 	waitContext, cancel := driver.operationContext(ctx)
 	defer cancel()
+	// Configured rather than fixed. A capacity ladder deliberately drives the
+	// deployment past the point where a Sandbox becomes ready quickly, and a
+	// constant here turns "slower than the constant" into a wall: every arrival
+	// beyond it reports a failure of the same size, so the ladder can measure
+	// that a rung was slow but never how slow.
 	return scenarioharness.WaitSandbox(
 		waitContext, handle,
 		[]secondboxclient.SandboxState{target, secondboxclient.SandboxStateFailed},
-		60*time.Second,
+		time.Duration(driver.config.SandboxWaitDeadlineSeconds)*time.Second,
 	)
 }
 

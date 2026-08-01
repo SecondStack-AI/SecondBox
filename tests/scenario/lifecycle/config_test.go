@@ -11,7 +11,7 @@ func validLifecycleConfig() lifecycleConfig {
 		TenantRef: "lifecycle-qualification", SubjectRef: "lifecycle-qualification",
 		HostRails:        &hostRailConfig{Enabled: false},
 		Gate:             &gateConfig{Mode: gateObserve},
-		LatencyKneeRatio: 1.5,
+		LatencyKneeRatio: 1.5, SandboxWaitDeadlineSeconds: 60,
 		Measurements: []string{
 			measurementCreateReady, measurementStartReady,
 			measurementStopStopped, measurementDeleteGone,
@@ -128,5 +128,40 @@ func TestNegativeResidentPopulationIsRejected(t *testing.T) {
 func TestRelativeConfigurationPathIsRejected(t *testing.T) {
 	if _, err := readLifecycleConfig("relative/config.json"); err == nil {
 		t.Fatal("relative configuration path was accepted")
+	}
+}
+
+// The Sandbox wait deadline is configuration, not a constant. A capacity ladder
+// drives the deployment past the point where a Sandbox becomes ready quickly, so
+// a fixed deadline turns "slower than the constant" into a wall: every arrival
+// beyond it fails identically and the ladder can see that a rung was slow but
+// never how slow.
+func TestSandboxWaitDeadlineIsRequiredConfiguration(t *testing.T) {
+	config := validLifecycleConfig()
+	config.SandboxWaitDeadlineSeconds = 0
+	err := validateLifecycleConfig(config)
+	if err == nil {
+		t.Fatal("an absent sandboxWaitDeadlineSeconds was accepted")
+	}
+	if !strings.Contains(err.Error(), "sandboxWaitDeadlineSeconds") {
+		t.Fatalf("error does not name the setting: %v", err)
+	}
+}
+
+// The capacity ladders must allow a Sandbox longer than the 60 seconds the
+// driver used to hard-code, or a saturated rung reports a wall instead of a
+// measurement.
+func TestCapacityConfigsAllowASandboxLongerThanTheOldConstant(t *testing.T) {
+	for _, name := range []string{
+		"capacity-config.example.json",
+		"capacity-gate-config.example.json",
+	} {
+		config := loadExample(t, name)
+		if config.SandboxWaitDeadlineSeconds <= 60 {
+			t.Fatalf(
+				"%s waits %ds, which cannot measure past the old 60s wall",
+				name, config.SandboxWaitDeadlineSeconds,
+			)
+		}
 	}
 }
