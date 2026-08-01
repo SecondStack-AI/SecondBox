@@ -157,10 +157,23 @@ state that must be invalidated exactly when a connection is superseded.
 
 | | Before | After |
 |---|---|---|
-| Rungs completed | 1 of 10 | see below |
+| Rungs completed | 1 of 10 | **10 of 10** |
+| Arrivals admitted | 32 of 320 | **320 of 320** |
 | Rung 2 arrivals admitted | 0 of 32 | 32 of 32 |
-| Control-plane shutdowns | 1 | 0 |
-| SQLSTATE 40001 occurrences | escalated to fatal | absorbed |
+| Control-plane shutdowns | 1 | **0** |
+| SQLSTATE 40001 occurrences | escalated to fatal | **24, all absorbed** |
+| Run outcome | rail-aborted | `SecondBox lifecycle qualification passed` |
+
+Per-rung after the fix, `create_to_ready`, 32 concurrent each:
+
+| Rung | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| p50 ms | 6064 | 5556 | 3695 | 3670 | 3764 | 3578 | 3785 | 4302 | 3560 | 3914 |
+| p95 ms | 8058 | 7243 | 4713 | 4761 | 4911 | 4701 | 4871 | 5632 | 4770 | 5016 |
+
+Latency settles after the first two rungs rather than degrading, which is what a
+deployment absorbing repeated bursts should look like. Nothing was refused,
+nothing failed, nothing was shed, and the gate reported no violations.
 
 Serialization failures still occur after the fix, and should: they are inherent
 to serializable isolation under concurrency. The change is that they are now
