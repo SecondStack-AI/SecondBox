@@ -1,0 +1,276 @@
+{
+  "Problem": {
+    "required": [
+      "code",
+      "requestId",
+      "retryable",
+      "status",
+      "title",
+      "type"
+    ],
+    "optional": [
+      "retryAfterMilliseconds"
+    ]
+  },
+  "Sandbox": {
+    "required": [
+      "desiredState",
+      "generation",
+      "id",
+      "metadata",
+      "profile",
+      "profileRevisionId",
+      "revision",
+      "state"
+    ],
+    "optional": []
+  },
+  "SandboxPage": {
+    "required": [
+      "items"
+    ],
+    "optional": [
+      "nextCursor"
+    ]
+  },
+  "Operation": {
+    "required": [
+      "id",
+      "kind",
+      "requestId",
+      "sandboxId",
+      "state"
+    ],
+    "optional": [
+      "error",
+      "sandbox",
+      "snapshot"
+    ]
+  },
+  "Snapshot": {
+    "required": [
+      "createdAt",
+      "generation",
+      "id",
+      "metadata",
+      "name",
+      "sandboxId",
+      "sizeBytes",
+      "state"
+    ],
+    "optional": [
+      "expiresAt"
+    ]
+  },
+  "Project": {
+    "required": [
+      "id",
+      "name"
+    ],
+    "optional": []
+  },
+  "Profile": {
+    "required": [
+      "currentRevision",
+      "name"
+    ],
+    "optional": []
+  },
+  "ServiceAccount": {
+    "required": [
+      "id",
+      "projectId"
+    ],
+    "optional": []
+  },
+  "CreateAPIKeyResponse": {
+    "required": [
+      "apiKey",
+      "credential"
+    ],
+    "optional": []
+  },
+  "ProfileRevisionSpec": {
+    "required": [
+      "architecture",
+      "execution",
+      "lifecycle",
+      "network",
+      "pool",
+      "ports",
+      "resources",
+      "retention",
+      "runtimeBundleDigest",
+      "toolchainBundleDigest"
+    ],
+    "optional": []
+  },
+  "WaitSandboxRequest": {
+    "required": [
+      "deadlineMilliseconds",
+      "states"
+    ],
+    "optional": []
+  },
+  "RestoreSnapshotRequest": {
+    "required": [
+      "snapshotId"
+    ],
+    "optional": []
+  },
+  "UpdateSandboxMetadataRequest": {
+    "required": [
+      "metadata"
+    ],
+    "optional": []
+  },
+  "StreamingExecRequest": {
+    "required": [
+      "command",
+      "deadlineMilliseconds",
+      "environment",
+      "maximumOutputBytes",
+      "windowBytes"
+    ],
+    "optional": [
+      "cwd"
+    ]
+  },
+  "CreateTerminalRequest": {
+    "required": [
+      "columns",
+      "command",
+      "deadlineMilliseconds",
+      "detachable",
+      "environment",
+      "rows"
+    ],
+    "optional": [
+      "cwd"
+    ]
+  },
+  "CreatePortSessionRequest": {
+    "required": [
+      "durationSeconds",
+      "name"
+    ],
+    "optional": []
+  },
+  "PortSession": {
+    "required": [
+      "createdAt",
+      "endpoint",
+      "expiresAt",
+      "generation",
+      "id",
+      "name",
+      "protocol",
+      "sandboxId",
+      "state",
+      "transport"
+    ],
+    "optional": []
+  },
+  "Lease": {
+    "required": [
+      "createdAt",
+      "expiresAt",
+      "generation",
+      "id",
+      "sandboxId",
+      "state",
+      "updatedAt"
+    ],
+    "optional": []
+  },
+  "ExecStreamSession": {
+    "required": [
+      "expiresAt",
+      "generation",
+      "id",
+      "sandboxId",
+      "state",
+      "subprotocol",
+      "websocketUrl"
+    ],
+    "optional": []
+  },
+  "TerminalSession": {
+    "required": [
+      "expiresAt",
+      "generation",
+      "id",
+      "nextClientSequence",
+      "sandboxId",
+      "state",
+      "streamWindowBytes",
+      "subprotocol",
+      "websocketUrl"
+    ],
+    "optional": []
+  },
+  "ExecOutput": {
+    "required": [
+      "stderrBase64",
+      "stdoutBase64"
+    ],
+    "optional": []
+  },
+  "FileStat": {
+    "required": [
+      "kind",
+      "modifiedAt",
+      "path",
+      "sizeBytes"
+    ],
+    "optional": []
+  },
+  "DirectoryListing": {
+    "required": [
+      "entries",
+      "path"
+    ],
+    "optional": []
+  },
+  "FileExistsResult": {
+    "required": [
+      "exists",
+      "path"
+    ],
+    "optional": []
+  },
+  "FileWriteResult": {
+    "required": [
+      "path",
+      "sha256",
+      "sizeBytes"
+    ],
+    "optional": []
+  },
+  "CreateDirectoryRequest": {
+    "required": [
+      "path",
+      "recursive"
+    ],
+    "optional": []
+  },
+  "RemovePathRequest": {
+    "required": [
+      "force",
+      "path",
+      "recursive"
+    ],
+    "optional": []
+  },
+  "TransportRequestOptions": {
+    "required": [],
+    "optional": [
+      "body",
+      "contentType",
+      "headers",
+      "pathParameters",
+      "queryParameters",
+      "signal"
+    ]
+  }
+}

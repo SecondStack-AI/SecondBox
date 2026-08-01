@@ -570,7 +570,6 @@ test("SandboxHandle rejects a PortSession without a single-use endpoint credenti
 function sandbox(state: Sandbox["state"]): Sandbox {
   return {
     id: "sandbox-1",
-    projectId: "project-1",
     profile: "default",
     profileRevisionId: "profile-revision-1",
     state,

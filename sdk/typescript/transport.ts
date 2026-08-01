@@ -37,7 +37,6 @@ export interface Problem {
 
 export interface Sandbox {
   readonly id: string;
-  readonly projectId: string;
   readonly profile: string;
   readonly profileRevisionId: string;
   readonly state: SandboxState;
