@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
@@ -291,7 +294,7 @@ func (driver *lifecycleDriver) deleteSandbox(
 	wasReady := false
 	var operation secondboxclient.Operation
 	for attempt := 0; attempt < 3; attempt++ {
-		sandbox, err := handle.Refresh(ctx)
+		sandbox, err := refreshWithRetry(ctx, handle, driver.pollInterval())
 		if err != nil {
 			return time.Since(startedAt), err
 		}
@@ -323,6 +326,48 @@ func (driver *lifecycleDriver) deleteSandbox(
 	return elapsed, err
 }
 
+// isTransientTransportError reports whether an error is a connection-level fault
+// rather than an answer from the deployment. A server that times out a long poll
+// closes the connection, so a pooled keep-alive connection reused straight after
+// is reset. That is exactly the moment a capacity run is under strain, and it
+// must not be the moment cleanup gives up: a Sandbox that cannot be deleted is
+// leaked, and leaked Sandboxes count against the subject quota for the rest of
+// the ladder.
+func isTransientTransportError(err error) bool {
+	if err == nil || secondboxclient.ProblemCodeOf(err) != "" {
+		return false
+	}
+	if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr)
+}
+
+// refreshWithRetry re-reads a Sandbox, retrying connection-level faults. A
+// typed answer from the deployment, including a refusal, is returned unchanged.
+func refreshWithRetry(
+	ctx context.Context,
+	handle *secondboxclient.SandboxHandle,
+	backoff time.Duration,
+) (secondboxclient.Sandbox, error) {
+	var sandbox secondboxclient.Sandbox
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		sandbox, err = handle.Refresh(ctx)
+		if err == nil || !isTransientTransportError(err) {
+			return sandbox, err
+		}
+		select {
+		case <-ctx.Done():
+			return sandbox, ctx.Err()
+		case <-time.After(backoff * time.Duration(attempt+1)):
+		}
+	}
+	return sandbox, err
+}
+
 func (driver *lifecycleDriver) wait(
 	ctx context.Context,
 	handle *secondboxclient.SandboxHandle,
@@ -330,11 +375,12 @@ func (driver *lifecycleDriver) wait(
 ) (secondboxclient.Sandbox, error) {
 	waitContext, cancel := driver.operationContext(ctx)
 	defer cancel()
-	// Configured rather than fixed. A capacity ladder deliberately drives the
-	// deployment past the point where a Sandbox becomes ready quickly, and a
-	// constant here turns "slower than the constant" into a wall: every arrival
-	// beyond it reports a failure of the same size, so the ladder can measure
-	// that a rung was slow but never how slow.
+	// This bounds one long-poll request, not the total wait. WaitSandbox reissues
+	// requests until the operation context expires, treating each wait_expired as
+	// "ask again", so how long the driver is willing to wait for a Sandbox is
+	// operationTimeoutSeconds. The API rejects a single request above 60 seconds
+	// (control_plane_service.go:1006), which is why this is bounded rather than
+	// free.
 	return scenarioharness.WaitSandbox(
 		waitContext, handle,
 		[]secondboxclient.SandboxState{target, secondboxclient.SandboxStateFailed},

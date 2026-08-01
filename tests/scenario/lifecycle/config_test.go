@@ -148,20 +148,36 @@ func TestSandboxWaitDeadlineIsRequiredConfiguration(t *testing.T) {
 	}
 }
 
-// The capacity ladders must allow a Sandbox longer than the 60 seconds the
-// driver used to hard-code, or a saturated rung reports a wall instead of a
-// measurement.
-func TestCapacityConfigsAllowASandboxLongerThanTheOldConstant(t *testing.T) {
+// One wait request, not the total wait. The API rejects a single Sandbox wait
+// above 60 seconds, so a larger value fails every arrival immediately. How long
+// the driver waits for a Sandbox is operationTimeoutSeconds, which reissues
+// requests until it expires.
+func TestSandboxWaitDeadlineIsBoundedByTheAPIMaximum(t *testing.T) {
+	config := validLifecycleConfig()
+	config.SandboxWaitDeadlineSeconds = 180
+	err := validateLifecycleConfig(config)
+	if err == nil {
+		t.Fatal("a wait deadline above the API maximum was accepted")
+	}
+	if !strings.Contains(err.Error(), "60") {
+		t.Fatalf("error does not name the API maximum: %v", err)
+	}
+}
+
+func TestCapacityConfigsWaitWithinTheAPIMaximum(t *testing.T) {
 	for _, name := range []string{
 		"capacity-config.example.json",
 		"capacity-gate-config.example.json",
 	} {
 		config := loadExample(t, name)
-		if config.SandboxWaitDeadlineSeconds <= 60 {
-			t.Fatalf(
-				"%s waits %ds, which cannot measure past the old 60s wall",
-				name, config.SandboxWaitDeadlineSeconds,
-			)
+		if config.SandboxWaitDeadlineSeconds > 60 {
+			t.Fatalf("%s requests a %ds wait, which the API rejects",
+				name, config.SandboxWaitDeadlineSeconds)
+		}
+		// The total wait must still be long enough to outlast a slow rung.
+		if config.OperationTimeoutSeconds <= 60 {
+			t.Fatalf("%s waits only %ds in total, so a slow rung reports a wall",
+				name, config.OperationTimeoutSeconds)
 		}
 	}
 }

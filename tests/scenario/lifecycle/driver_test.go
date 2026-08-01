@@ -1,6 +1,10 @@
 package main
 
 import (
+	"errors"
+	"fmt"
+	"io"
+	"syscall"
 	"testing"
 
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
@@ -36,5 +40,39 @@ func TestCellResourcesSkipsAbsentHandles(t *testing.T) {
 	))
 	if len(resources.snapshot()) != 1 {
 		t.Fatalf("cell resources = %d handles, want 1", len(resources.snapshot()))
+	}
+}
+
+// Cleanup must survive the connection churn a saturated deployment produces.
+// When the server times out a long poll it closes the connection, so the next
+// request on a pooled keep-alive connection is reset -- precisely when a
+// capacity run is under strain. Giving up there leaks the Sandbox, and leaked
+// Sandboxes count against the subject quota for the rest of the ladder.
+func TestTransientTransportErrorsAreDistinguishedFromAnswers(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		err       error
+		transient bool
+	}{
+		{name: "connection reset", err: syscall.ECONNRESET, transient: true},
+		{name: "broken pipe", err: syscall.EPIPE, transient: true},
+		{name: "unexpected eof", err: io.ErrUnexpectedEOF, transient: true},
+		{
+			name:      "wrapped reset",
+			err:       fmt.Errorf("send getSandbox request: %w", syscall.ECONNRESET),
+			transient: true,
+		},
+		{name: "no error", err: nil, transient: false},
+		{
+			name:      "a plain answer is not transient",
+			err:       errors.New("SecondBox lifecycle Sandbox reached failed instead of ready"),
+			transient: false,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := isTransientTransportError(testCase.err); got != testCase.transient {
+				t.Fatalf("transient = %v, want %v for %v", got, testCase.transient, testCase.err)
+			}
+		})
 	}
 }

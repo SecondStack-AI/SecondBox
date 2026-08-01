@@ -461,3 +461,33 @@ deliberate — at 8 the run measures a queue rather than a boot storm.
   necessary beyond what a list of bursts gives.
 - Adding a dimension to `ErrQuotaExceeded` (`internal/ports/ports.go:23`) so a refusal names the
   quota it hit without needing client-side arithmetic.
+
+## Post-implementation findings
+
+Recorded after the first real runs, 2026-08-01.
+
+**The ladder worked: it found a defect on its first run.** `burst-32` stalls the
+whole deployment for ~57 seconds with every Workspace published and the runner
+idle. Assignment dispatch is gated per runner on no Workspace being in state
+`creating`, with no timeout, so one Workspace row left in that state blocks every
+assignment for that runner. Written up in
+[assignment-dispatch-stall.md](../../operations/assignment-dispatch-stall.md).
+
+**A correction to this plan's own reasoning.** The plan treated the driver's
+hard-coded 60-second `WaitSandbox` bound as a wall to be lifted, and Task 9
+raised `operationTimeoutSeconds` for the same reason. That was a misreading:
+60 000 ms is the API's maximum for a *single* wait request
+(`internal/service/control_plane_service.go:1006`), and `WaitSandbox` already
+reissues a request after each expiry until the operation context ends. Making it
+configurable was still worth doing, but the setting is now validated at or below
+60 and the total wait is `operationTimeoutSeconds`, as it always was. A run with
+the value raised to 180 failed every arrival immediately, which is how the
+misreading was caught — after a test had been written that asserted the wrong
+thing and passed.
+
+**Cleanup needed hardening the plan did not anticipate.** A saturated deployment
+closes connections when a long poll expires, so the next request on a pooled
+connection is reset. `deleteSandbox` gave up on the first such error, leaking
+Sandboxes exactly when a capacity run is under strain — and leaked Sandboxes
+count against `subjectMaxSandboxes` for the rest of the ladder. Refresh now
+retries connection-level faults while still returning typed answers unchanged.

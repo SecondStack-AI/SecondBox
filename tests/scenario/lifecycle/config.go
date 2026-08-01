@@ -196,6 +196,18 @@ func validateLifecycleConfig(config lifecycleConfig) error {
 			"SecondBox lifecycle gate.declaredCeiling must be positive when enforcing",
 		)
 	}
+	// One wait request, not the total wait. The API rejects a single Sandbox wait
+	// above 60 seconds, and the driver reissues requests until
+	// operationTimeoutSeconds expires, so that is the setting that decides how
+	// long the driver will wait for a Sandbox to become ready.
+	if config.SandboxWaitDeadlineSeconds > 60 {
+		return fmt.Errorf(
+			"SecondBox lifecycle sandboxWaitDeadlineSeconds must not exceed 60, got %d; "+
+				"the API rejects a longer single wait, and operationTimeoutSeconds bounds "+
+				"the total wait",
+			config.SandboxWaitDeadlineSeconds,
+		)
+	}
 	// The latency knee is reported in every run, not only when the gate is
 	// enforced, so its ratio is a top-level setting rather than a gate one.
 	if config.LatencyKneeRatio <= 1 {
