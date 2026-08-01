@@ -288,3 +288,12 @@ which the /24 guest network caps at 253.
 Note that wall-clock is dominated by teardown, not measurement: each rung deletes
 its Sandboxes one at a time with a full Operation wait, so the six rungs above
 took roughly 25 minutes of which the measured windows were a small fraction.
+
+### Reproducing the placement shutdown
+
+`scripts/stall-repro-config.example.json` runs ten identical 32-arrival bursts
+rather than a rising ladder, because the defect it targets is a race on one
+database row and repetition finds it faster than depth. It reproduced on the
+second rung where a six-rung ladder to 32 had passed cleanly.
+
+See [assignment-dispatch-stall.md](assignment-dispatch-stall.md).

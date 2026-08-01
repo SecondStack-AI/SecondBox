@@ -1,130 +1,121 @@
-# Assignment dispatch stalls behind a Workspace stuck in `creating`
+# A burst of placements can shut the control plane down
 
-Found by the first capacity ladder run against a local qualified deployment
-(`.secondbox/stress/results/lifecycle-20260801T172946Z-683951`). This describes
-the defect and the evidence; it does not propose a fix.
+Found by the capacity ladder, then reproduced deliberately. This describes the
+defect and the evidence; it does not propose a fix.
 
 ## Symptom
 
-A burst of 32 concurrent `create_to_ready` arrivals stalls. The deployment stops
-making progress entirely — no control-plane request completes, no runner control
-event is persisted, no runner event is logged — until the clients abandon their
-waits. Bursts of 8 and 16 against the same deployment complete normally.
+A burst of concurrent `create_to_ready` arrivals stops the deployment dead. No
+control-plane request completes, no runner control event is persisted, no runner
+event is logged. Clients hang until their deadlines. Nothing recovers.
 
-## It is intermittent, not a concurrency threshold
+It looks like saturation and is not: every microVM that started booted normally,
+the runner was idle, host memory never fell below 41 GB, and no limit was
+reached. The deployment did not slow down — it stopped.
 
-**A second run did not reproduce it.** A six-rung ladder of 8, 16, 20, 24, 28 and
-32 completed cleanly against the same deployment on the same host: 128 microVMs
-started, every rung fully admitted, no refusal, no failure, no rail trip. Latency
-grew smoothly with batch size, which is what a healthy deployment under rising
-load looks like.
+## Root cause
 
-So concurrency is not sufficient to trigger this, and 32 is not a ceiling. The
-first run's stall was a race that happened to land, which makes it harder to
-catch and more important to fix: the failure mode is a permanent stall of one
-runner, and nothing recovers from it.
+The control plane **shuts itself down**. From the reproduction run's
+control-plane log:
 
-Anything below that reads as a threshold — including the section headings here —
-should be read as describing the one run in which it occurred.
-
-## The gate
-
-Two independent paths refuse to dispatch an `assignment` command while any
-Workspace on the target runner is in state `creating`.
-
-`internal/runnercontrol/commands.go:97-106`, in the claim query:
-
-```sql
-WHERE command.runner_id=$1
-  AND command.state='pending'
-  ...
-  AND (
-    command.kind<>'assignment'
-    OR NOT EXISTS (
-      SELECT 1 FROM secondbox.workspaces AS workspace
-      WHERE workspace.home_runner_id=$1 AND workspace.state='creating'
-    )
-  )
+```
+SecondBox coordinated server shutdown:
+  SecondBox lifecycle reconciliation failed:
+    SecondBox lifecycle effect failed:
+      SecondBox scheduler eager Assignment connection lock:
+        ERROR: could not serialize access due to concurrent update (SQLSTATE 40001)
 ```
 
-`internal/scheduler/postgres.go:409-414`, in `lockEagerAssignmentDispatch`, has
-the same condition.
+The chain:
 
-The predicate is per **runner**, not per Sandbox. One Workspace row left in
-`creating` therefore blocks every assignment for that runner. There is no
-timeout, no claim expiry, and no other escape: the condition is re-evaluated on
-every claim attempt and simply keeps failing.
+1. `lockEagerAssignmentDispatch` (`internal/scheduler/postgres.go:394-435`,
+   added by `1beb82a`) takes `FOR UPDATE OF connection` on the runner's row in
+   `secondbox.runner_connections`, inside the placement transaction.
+2. A runner has **one** connection row, so every concurrent placement for that
+   runner contends on the same row. Placement transactions run at
+   `pgx.Serializable` (`internal/scheduler/postgres.go:127`).
+3. Contention produces SQLSTATE 40001. That is expected and retryable, and
+   `scheduleOnce` is wrapped in a retry loop (`postgres.go:117`) bounded by
+   `SECONDBOX_SCHEDULER_SERIALIZATION_RETRY_LIMIT`, which the scenario and
+   deployment compose files set to **3**.
+4. A burst of 32 placements exceeds three retries. The loop gives up and returns
+   the error.
+5. The error is not treated as a routine, expected condition. It propagates
+   through the lifecycle effect and the reconciler, and reaching the reconciler
+   triggers a **coordinated shutdown of the whole server**.
 
-## Evidence that the gate never reopened
+So a retryable database condition, arriving more often than a fixed retry budget
+allows, takes down the control plane.
 
-From the run's diagnostics, all timestamps UTC:
+## Evidence
 
-| Observation | Value |
+**Live state captured during the stall**, before teardown:
+
+| Query | Result |
 |---|---|
-| Workspace reflinks published by the runner | **56 of 56** (8 + 16 + 32) |
-| Last reflink published | 17:31:14.115 |
-| Last Workspace mutation committed | 17:31:14.227 |
-| Last microVM started | 17:31:15.071 — the **39th** of 56 |
-| Log lines from any service, 17:31:15.3 → 17:32:12 | **0** |
-| Sandbox wait expiries | 17:32:12, 17 × HTTP 408 at 60 000 ms |
+| `runner_connections` | `state = disconnected` |
+| `workspaces` | `ready=32`, `deleted=32` — **none** in `creating` |
+| `runner_commands` | every row `acknowledged` — none pending or delivering |
+| `sandboxes` | `stopped=19` (desired `running`), `ready=13`, `deleted=32` |
+| stopped sandboxes' `next_reconcile_at` | set, and **overdue by ~85 s** |
 
-The 408s are the API's per-request wait maximum (`control_plane_service.go:1006`
-bounds one wait at 60 000 ms), not the driver giving up: `WaitSandbox` reissues
-a wait after each expiry. The run ended because the refresh that follows an
-expiry hit a connection reset, which was fatal at the time.
+Nineteen Sandboxes were due for reconciliation and overdue, with no assignment
+and nothing claiming them, because the process that would claim them had exited.
 
-The runner published every Workspace it was asked for and then went idle. 17
-assignment commands were never dispatched. The runner command poll interval in
-this deployment is 100 ms (`scripts/scenario-compose.yml:120`), so the claim
-query ran roughly 570 times during the silence and selected nothing each time.
+**Timeline, reproduction run:**
 
-This rules out a missed wakeup: the relay was scanning throughout. It also rules
-out saturation, which degrades rather than stops — every boot stage of the
-microVMs that did start was normal at both rung sizes:
+| Time | Event |
+|---|---|
+| 22:02:09.7 | last runner control event persisted |
+| ~22:02:10 | reconciliation fails; coordinated shutdown begins |
+| 22:02:10 → 22:03:25 | total silence from every service |
+| 22:03:25.6 | `"SecondBox stopped"` logged, after four subsystems time out their graceful shutdown with `context deadline exceeded` |
 
-| Stage | ≤16 concurrent, median/max ms | burst-32, median/max ms |
-|---|---|---|
-| `guest_protocol_negotiated` | 490 / 566 | 558 / 618 |
-| `network_ready` | 12 / 29 | 22 / 35 |
-| all others | ~0 | ~0 |
-
-Runner-side admission phases were ~0 ms and local Workspace commands completed
-in a median of 273 ms. Host memory never fell below 45 GB available.
-
-The remaining explanation is that at least one `secondbox.workspaces` row stayed
-in `creating` after the runner had published it, leaving the gate permanently
-shut for that runner.
-
-## Why concurrency changes the outcome
-
-At 8 and 16 arrivals, Workspace creation and command insertion interleave, so the
-gate is open at moments when commands are claimable. At 32 the runner is
-configured to create up to 32 Workspaces at once
-(`maxConcurrentWorkspaceCreates`), so the whole batch is in `creating`
-simultaneously and every assignment inserted during that window is blocked. The
-stall then persists past the batch because the durable state never caught up with
-the runner.
-
-## What to check next
-
-- Whether any `secondbox.workspaces` row remains in `creating` after the runner
-  reports the Workspace published — the transition from `creating` is the thing
-  to trace.
-- The three recent commits that changed this area: `1beb82a` (folds assignment
-  claims into placement and adds the eager-dispatch path), `91e3d09`, `e947eb7`.
-  `1beb82a` introduced the eager path that inserts a command directly in state
-  `delivering`; a command left in `delivering` is also never re-notified, since
-  `migrations/postgres/0006_eager_assignment_dispatch.sql` only notifies on
-  transitions **to** `pending`.
-- Whether the per-runner predicate should be per-Sandbox or per-Workspace
-  instead, which would confine the blast radius of one slow Workspace.
+**The first occurrence had the same cause.** The original ladder run's PostgreSQL
+log carries the same errors at 17:31:14.48, 17:31:14.50 and 17:31:14.53 —
+`could not serialize access due to concurrent update` — one second before its
+last runner event at 17:31:15.07. Its control-plane log simply ends, because
+diagnostics were collected before the shutdown finished.
 
 ## Reproducing
 
+Ten identical 32-arrival bursts reproduce it on the **second** rung:
+
 ```sh
-SECONDBOX_LIFECYCLE_CONFIG=$PWD/scripts/capacity-config.example.json \
-  just test-lifecycle
+# ten rungs of burst-32, operationTimeoutSeconds 240
+SECONDBOX_LIFECYCLE_CONFIG=/abs/path/stall-repro.json just test-lifecycle
 ```
 
-The ladder's `burst-32` rung reproduces it. Reports are written even when a run
-ends early, so the partial record and the diagnostics directory both survive.
+| Rung | Offered | Completed | p95 |
+|---|---|---|---|
+| burst-32-01 | 32 | 32 | 4 985 ms |
+| burst-32-02 | 32 | **0** | — |
+
+Repetition matters more than depth: a six-rung ladder rising 8 → 32 completed
+cleanly, while ten identical 32-bursts failed on the second. The trigger is
+concurrent contention on one row, which is a race, not a threshold.
+
+To catch it live, watch for the runner going quiet while the driver still runs,
+then query `runner_connections.state` and the `sandboxes` reconcile columns
+before the harness tears the deployment down.
+
+## What to look at
+
+- **The retry budget is a fixed count against unbounded contention.** Three
+  retries cannot absorb 32 concurrent placements contending on one row, and the
+  limit is a constant regardless of burst size.
+- **Whether a serialization failure should reach the reconciler at all.** It is a
+  routine outcome of `Serializable`, not a fault, and today it ends the process.
+- **Whether the eager dispatch path needs that lock.** `1beb82a` folded assignment
+  claims into placement to save a round trip; the cost is a single-row lock in
+  the hot path of every placement for a given runner.
+- Related commits: `91e3d09`, `e947eb7`.
+
+## Corrections to an earlier version of this document
+
+An earlier draft blamed the `NOT EXISTS (workspace ... state='creating')` guard
+shared by `commands.go:105` and `scheduler/postgres.go:413`, reasoning that one
+Workspace stuck in `creating` would block every assignment for that runner. That
+was wrong. The live capture shows no Workspace in `creating` and no undispatched
+command; the guard was never the obstacle. The hypothesis was built from reading
+the code, and it survived until the state was actually measured.
