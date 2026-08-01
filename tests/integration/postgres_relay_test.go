@@ -304,6 +304,43 @@ func TestPostgresRelayDurablyFencesSequencesAndReconnectDelivery(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(relay.Close)
+	connectionPool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(connectionPool.Close)
+	var tupleVersionBefore, tupleLockBefore string
+	if err := connectionPool.QueryRow(t.Context(), `
+		SELECT xmin::text,xmax::text
+		FROM secondbox.runner_connections
+		WHERE id=$1`,
+		seed.ConnectionTwo,
+	).Scan(&tupleVersionBefore, &tupleLockBefore); err != nil {
+		t.Fatal(err)
+	}
+	if empty, found, err := relay.ClaimOutboundFrame(
+		t.Context(), seed.RunnerID, seed.ConnectionTwo, now,
+	); err != nil || found {
+		t.Fatalf("empty claim = %#v, found=%t, error=%v", empty, found, err)
+	}
+	var tupleVersionAfter, tupleLockAfter string
+	if err := connectionPool.QueryRow(t.Context(), `
+		SELECT xmin::text,xmax::text
+		FROM secondbox.runner_connections
+		WHERE id=$1`,
+		seed.ConnectionTwo,
+	).Scan(&tupleVersionAfter, &tupleLockAfter); err != nil {
+		t.Fatal(err)
+	}
+	if tupleVersionAfter != tupleVersionBefore || tupleLockAfter != tupleLockBefore {
+		t.Fatalf(
+			"empty relay claim changed connection tuple from %s/%s to %s/%s",
+			tupleVersionBefore,
+			tupleLockBefore,
+			tupleVersionAfter,
+			tupleLockAfter,
+		)
+	}
 	session, replayed, err := relay.AdmitDataPlane(t.Context(), runnercontrol.DataPlaneAdmission{
 		ID: "dps_postgres_relay", StreamID: "stream_postgres_relay",
 		TenantRef: principal.TenantRef, SandboxID: sandbox.ID,

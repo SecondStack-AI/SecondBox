@@ -131,12 +131,34 @@ an admission improvement nor invalidate the earlier quiet-host baseline. The
 change is retained for the exact write-amplification reduction, not as closure
 of the latency gate.
 
-The next candidate should attribute and remove the empty relay transaction that
-currently follows every empty command claim and can delay a newly committed
-command wakeup. Do not optimize stream sending: it remains 0 ms. Re-run at
-least 30 unsaturated arrivals on a quiet qualified host, and require measured
-p95 at or below 25 ms before marking runner admission complete in the
-snapshot-resume plan.
+The retained relay follow-up collapses outbound claim validation, frame
+selection, connection fencing, and frame mutation into one atomic PostgreSQL
+statement. An empty poll no longer opens a transaction or takes a shared lock
+on the active connection row; a real claim still locks that row before it
+updates the selected frame. On the live development stack, the prior empty
+poll changed the connection tuple's `xmax` 22 times in two idle seconds. The
+retained query changed neither `xmin`, `xmax`, nor `last_control_sequence` in
+the same interval. A PostgreSQL-backed regression test preserves this
+invariant.
+
+Five exact `secondbox run coding-environment -- python3 -c 'print("hello")'`
+checks against the deployed candidate all succeeded in 1.264–1.535 seconds,
+with a 1.276-second median. This loaded-host smoke test proves the consolidated
+claim still carries real data-plane traffic; it is not a qualified replacement
+for the admission baseline.
+
+The qualified KVM/Btrfs scenario passed relay and direct Port transport,
+buffered and streaming exec, cancellation, concurrent execution, ordinary
+lifecycle, control-plane restart, runner-loss recovery, generation fencing,
+network policy, expiry, admission, real compute boot, and Snapshot retention.
+Its only failure is the existing Snapshot-restore assertion that expects
+`409 state_conflict` for a stale revision even though the API correctly returns
+`412 precondition_failed`; the relay candidate does not touch that contract.
+
+Do not optimize stream sending: it remains 0 ms. Re-run at least 30
+unsaturated arrivals on a quiet qualified host, and require measured p95 at or
+below 25 ms before marking runner admission complete in the snapshot-resume
+plan.
 
 Additional machine-readable evidence:
 

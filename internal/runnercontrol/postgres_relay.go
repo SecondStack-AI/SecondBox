@@ -445,64 +445,86 @@ func (relay *PostgresFrameRelay) ClaimOutboundFrame(
 	connectionID string,
 	now time.Time,
 ) (RelayDelivery, bool, error) {
-	tx, err := relay.pool.Begin(ctx)
-	if err != nil {
-		return RelayDelivery{}, false, fmt.Errorf("SecondBox relay claim transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	liveCredential, err := lockLiveRelayConnectionCredential(
-		ctx, tx, runnerID, connectionID,
-	)
-	if err != nil {
-		return RelayDelivery{}, false, err
-	}
-	if !liveCredential {
-		if err := tx.Commit(ctx); err != nil {
-			return RelayDelivery{}, false, fmt.Errorf("SecondBox inactive relay claim commit: %w", err)
-		}
-		return RelayDelivery{}, false, nil
-	}
 	var id string
 	var payload []byte
-	var deliveryCount int64
-	err = tx.QueryRow(ctx, `
-		SELECT frame.id,frame.payload,frame.delivery_count
-		FROM secondbox.data_plane_frames AS frame
-		JOIN secondbox.data_plane_sessions AS session ON session.id=frame.session_id
-		WHERE frame.direction='outbound'
-		  AND frame.state IN ('pending','claimed')
-		  AND (frame.state='pending' OR frame.claim_expires_at<=$2)
-		  AND session.runner_id=$1
-		  AND session.state IN ('pending','running','cancelling')
-		  AND NOT EXISTS (
-		    SELECT 1 FROM secondbox.data_plane_frames AS prior
-		    WHERE prior.session_id=frame.session_id AND prior.direction='outbound'
-		      AND prior.sequence<frame.sequence AND prior.state<>'delivered'
-		  )
-		ORDER BY frame.priority,frame.created_at,frame.id
-		FOR UPDATE OF frame SKIP LOCKED
-		LIMIT 1`,
-		runnerID, now.UTC(),
-	).Scan(&id, &payload, &deliveryCount)
+	var claimAttempt int64
+	err := relay.pool.QueryRow(ctx, `
+		WITH active_connection AS MATERIALIZED (
+			SELECT connection.id
+			FROM secondbox.runner_connections AS connection
+			WHERE connection.id=$2
+			  AND connection.runner_id=$1
+			  AND connection.state='active'
+		),
+		candidate_frame AS MATERIALIZED (
+			SELECT frame.id
+			FROM secondbox.data_plane_frames AS frame
+			JOIN secondbox.data_plane_sessions AS session ON session.id=frame.session_id
+			CROSS JOIN active_connection
+			WHERE frame.direction='outbound'
+			  AND frame.state IN ('pending','claimed')
+			  AND (frame.state='pending' OR frame.claim_expires_at<=$3)
+			  AND session.runner_id=$1
+			  AND session.state IN ('pending','running','cancelling')
+			  AND NOT EXISTS (
+			    SELECT 1 FROM secondbox.data_plane_frames AS prior
+			    WHERE prior.session_id=frame.session_id AND prior.direction='outbound'
+			      AND prior.sequence<frame.sequence AND prior.state<>'delivered'
+			  )
+			ORDER BY frame.priority,frame.created_at,frame.id
+			LIMIT 1
+		),
+		locked_connection AS MATERIALIZED (
+			SELECT connection.id
+			FROM secondbox.runner_connections AS connection
+			CROSS JOIN candidate_frame
+			WHERE connection.id=$2
+			  AND connection.runner_id=$1
+			  AND connection.state='active'
+			FOR SHARE OF connection
+		),
+		chosen AS MATERIALIZED (
+			SELECT frame.id,frame.payload
+			FROM secondbox.data_plane_frames AS frame
+			JOIN secondbox.data_plane_sessions AS session ON session.id=frame.session_id
+			CROSS JOIN locked_connection
+			WHERE frame.direction='outbound'
+			  AND frame.state IN ('pending','claimed')
+			  AND (frame.state='pending' OR frame.claim_expires_at<=$3)
+			  AND session.runner_id=$1
+			  AND session.state IN ('pending','running','cancelling')
+			  AND NOT EXISTS (
+			    SELECT 1 FROM secondbox.data_plane_frames AS prior
+			    WHERE prior.session_id=frame.session_id AND prior.direction='outbound'
+			      AND prior.sequence<frame.sequence AND prior.state<>'delivered'
+			  )
+			ORDER BY frame.priority,frame.created_at,frame.id
+			FOR UPDATE OF frame SKIP LOCKED
+			LIMIT 1
+		),
+		claimed AS (
+			UPDATE secondbox.data_plane_frames AS frame
+			SET state='claimed',
+			    claim_owner=$2 || chr(31) || (frame.delivery_count+1)::text,
+			    claim_expires_at=$4,
+			    delivery_count=frame.delivery_count+1,
+			    updated_at=$3
+			FROM chosen
+			WHERE frame.id=chosen.id
+			RETURNING frame.id,chosen.payload,frame.delivery_count
+		)
+		SELECT id,payload,delivery_count
+		FROM claimed`,
+		runnerID,
+		connectionID,
+		now.UTC(),
+		now.UTC().Add(relay.claimDuration),
+	).Scan(&id, &payload, &claimAttempt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RelayDelivery{}, false, nil
 	}
 	if err != nil {
 		return RelayDelivery{}, false, fmt.Errorf("SecondBox outbound relay claim lookup: %w", err)
-	}
-	claimAttempt := deliveryCount + 1
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.data_plane_frames
-		SET state='claimed',claim_owner=$2,claim_expires_at=$3,
-		    delivery_count=delivery_count+1,updated_at=$4
-		WHERE id=$1`,
-		id, relayClaimOwner(connectionID, claimAttempt),
-		now.UTC().Add(relay.claimDuration), now.UTC(),
-	); err != nil {
-		return RelayDelivery{}, false, fmt.Errorf("SecondBox outbound relay claim update: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return RelayDelivery{}, false, fmt.Errorf("SecondBox outbound relay claim commit: %w", err)
 	}
 	message := &runnerv1.ControlPlaneToRunner{}
 	if err := proto.Unmarshal(payload, message); err != nil {
