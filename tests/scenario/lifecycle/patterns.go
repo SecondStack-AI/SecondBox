@@ -33,6 +33,23 @@ func (schedule arrivalSchedule) window() time.Duration {
 	return schedule.offsets[len(schedule.offsets)-1]
 }
 
+// peakSimultaneousArrivals is the largest number of arrivals the schedule offers
+// at one instant. A burst offers all of them at once and a sawtooth offers one
+// burst per repeat, while steady and ramp spread their arrivals and peak at one.
+// This, not the total, is what the driver's in-flight cap has to accommodate:
+// arrivals that never coincide cannot shed each other.
+func (schedule arrivalSchedule) peakSimultaneousArrivals() int {
+	counts := make(map[time.Duration]int, len(schedule.offsets))
+	peak := 0
+	for _, offset := range schedule.offsets {
+		counts[offset]++
+		if counts[offset] > peak {
+			peak = counts[offset]
+		}
+	}
+	return peak
+}
+
 // offeredRatePerSecond is defined only for patterns with an explicit rate
 // window. A burst is instantaneous and a sawtooth is a sequence of bursts, so
 // reporting either as arrivals/second would manufacture a rate from drain time.

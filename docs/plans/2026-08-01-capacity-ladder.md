@@ -166,16 +166,21 @@ is never reached, so one failed cleanup delete (`run.go:405-408`) discards the e
 - Modify: `tests/scenario/lifecycle/report.go`
 - Create: `tests/scenario/lifecycle/main_partial_test.go`
 
-- [ ] restructure the cell loop to accumulate `cellResult`s and record a per-cell error rather
-      than returning immediately
-- [ ] write the report before returning any run error, so completed cells always survive
-- [ ] add `IncompleteReason string` to `lifecycleReport`, empty on a clean run
-- [ ] return a descriptive error after the report is written, naming the cell that ended the run
-- [ ] make `runCell`'s own cancel path (`run.go:169-177`) return the partial `cellResult` instead
-      of `cellResult{}`
-- [ ] write tests: error in cell 3 of 5 still writes cells 1-2 and populates `IncompleteReason`
-- [ ] write tests: clean run leaves `IncompleteReason` empty and is otherwise unchanged
-- [ ] run `just test` — must pass before Task 2
+- [x] restructure the cell loop to accumulate `cellResult`s and record a per-cell error rather
+      than returning immediately — extracted `collectCells` with a `cellRunner` seam so the
+      ordering and accumulation are testable without a deployment
+- [x] write the report before returning any run error, so completed cells always survive
+- [x] add `IncompleteReason string` to `lifecycleReport`, empty on a clean run (`omitempty`, so a
+      clean run's machine report is byte-identical to today)
+- [x] return a descriptive error after the report is written, naming the cell that ended the run
+- [x] make `runCell`'s own cancel path (`run.go:169-177`) return the partial `cellResult` instead
+      of `cellResult{}` — both exits now go through a shared `finish` closure
+- [x] write tests: error in cell 3 of 5 still writes cells 1-2 and populates `IncompleteReason`
+- [x] write tests: clean run leaves `IncompleteReason` empty and is otherwise unchanged
+- [ ] ⚠️ run `just test` — **blocked**: `scripts/test-go.sh:4` requires `SECONDBOX_TEST_DATABASE_URL`
+      and no disposable PostgreSQL is reachable on the host. Verified instead:
+      `go build ./...`, `go vet ./...` (clean), and `go test ./tests/scenario/... -count=1` (pass).
+      The DB-backed portion of the suite is unverified for this task.
 
 ### Task 2: Per-cell shed accounting and `maximumInFlight` validation
 
@@ -188,17 +193,26 @@ Turns the single most dangerous trap from prose advice into a startup error and 
 - Modify: `tests/scenario/lifecycle/run_test.go`
 - Modify: `tests/scenario/lifecycle/config_test.go`
 
-- [ ] add a per-cell shed counter alongside the run-global `driver.shedArrivals`
-- [ ] add `ShedArrivals int64` to `cellResult` and populate it in `buildCellResult`
-- [ ] convert `buildCellResult`'s parameter list (already 10 positional args at `run.go:415-426`)
-      to a struct before adding more fields
-- [ ] extend `validateLifecycleConfig` to reject a config whose `maximumInFlight` is below the
-      largest pattern's `offeredCount()`; `buildArrivalSchedule` already runs in validate mode
-      (`main.go:52-61`) so the schedule is available
-- [ ] update `run_test.go:28-38` and `run_test.go:64-73` for the `buildCellResult` signature change
-- [ ] write tests for per-cell shed attribution across two cells
-- [ ] write tests for the validation (accepts equal, rejects below, unaffected by non-burst patterns)
-- [ ] run `just test` — must pass before Task 3
+- [x] add a per-cell shed counter alongside the run-global `driver.shedArrivals`
+- [x] add `ShedArrivals int64` to `cellResult` and populate it in `buildCellResult`
+- [x] convert `buildCellResult`'s parameter list (already 10 positional args) to a
+      `cellObservation` struct before adding more fields
+- [x] ➕ **deviation**: the validation compares `maximumInFlight` against **peak simultaneous
+      arrivals**, not `offeredCount()` as the plan originally said. Running the original rule
+      against the shipped `scripts/lifecycle-config.example.json` rejected it: `crawl-fixed`
+      offers 10 arrivals spread over 40 s at 0.25/s, so its total exceeds `maximumInFlight: 8`
+      while only ~1 is ever in flight. Added `arrivalSchedule.peakSimultaneousArrivals()`, which
+      returns the largest group of identical offsets — 16 for a burst-16, 4 for a sawtooth of 4×3,
+      1 for steady and ramp. Arrivals that accumulate because the deployment drains slowly are
+      genuine saturation and stay observable.
+- [x] `config_test.go` needed no change: the existing `validLifecycleConfig()` fixture satisfies
+      the corrected rule
+- [x] update `run_test.go` for the `buildCellResult` signature change
+- [x] write tests for per-cell shed attribution
+- [x] write tests for the validation (accepts equal, rejects below, unaffected by spread patterns)
+- [ ] ⚠️ run `just test` — **blocked** on `SECONDBOX_TEST_DATABASE_URL`, as in Task 1. Verified
+      instead: `go build ./...`, `go vet ./...` (clean), `go test ./tests/scenario/... -count=1`
+      (pass), and `--mode validate` against the shipped example config (accepted).
 
 ### Task 3: Port `configuredBinding` so the binding resource can be named
 

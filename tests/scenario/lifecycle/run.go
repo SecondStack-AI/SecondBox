@@ -163,16 +163,37 @@ func (driver *lifecycleDriver) runCell(
 	completed := int64(0)
 	var completedMu sync.Mutex
 	var peakOutstanding atomic.Int64
+	// Shedding is attributed to the cell as well as the run. A run-global total
+	// cannot say which step shed, so it cannot distinguish saturation of the
+	// deployment from saturation of maximumInFlight.
+	var shed atomic.Int64
+
+	// finish drains the cell and builds its result. Both the normal exit and the
+	// cancelled exit go through it so a cell that stopped early still reports the
+	// arrivals it did measure.
+	finish := func() cellResult {
+		arrivals.Wait()
+		elapsed := time.Since(startedAt)
+		cancelWindow()
+		sampler.Wait()
+		occupancyMu.Lock()
+		collected := append([]occupancySample(nil), occupancy...)
+		occupancyMu.Unlock()
+		return buildCellResult(cellObservation{
+			measurement: measurement, pattern: pattern, resident: resident,
+			schedule: schedule, samples: samples, timings: timings,
+			occupancy: collected, completed: completed, shed: shed.Load(),
+			peakOutstanding: peakOutstanding.Load(), elapsed: elapsed,
+		})
+	}
+
 	for index, offset := range schedule.offsets {
 		if wait := time.Until(startedAt.Add(offset)); wait > 0 {
 			timer := time.NewTimer(wait)
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				arrivals.Wait()
-				cancelWindow()
-				sampler.Wait()
-				return cellResult{}, ctx.Err()
+				return finish(), ctx.Err()
 			case <-timer.C:
 			}
 		}
@@ -180,6 +201,7 @@ func (driver *lifecycleDriver) runCell(
 			// Shedding is itself a saturation observation. It is counted
 			// separately so it can never be mistaken for latency.
 			driver.shedArrivals.Add(1)
+			shed.Add(1)
 			continue
 		}
 		var handle *secondboxclient.SandboxHandle
@@ -188,6 +210,7 @@ func (driver *lifecycleDriver) runCell(
 			case handle = <-available:
 			default:
 				driver.shedArrivals.Add(1)
+				shed.Add(1)
 				continue
 			}
 		}
@@ -205,19 +228,7 @@ func (driver *lifecycleDriver) runCell(
 			}
 		}(index, handle)
 	}
-	arrivals.Wait()
-	elapsed := time.Since(startedAt)
-	cancelWindow()
-	sampler.Wait()
-
-	occupancyMu.Lock()
-	collected := append([]occupancySample(nil), occupancy...)
-	occupancyMu.Unlock()
-
-	return buildCellResult(
-		measurement, pattern, resident, schedule, samples, timings, collected,
-		completed, peakOutstanding.Load(), elapsed,
-	), nil
+	return finish(), nil
 }
 
 func recordPeak(peak *atomic.Int64, candidate int64) {
@@ -412,18 +423,31 @@ func (driver *lifecycleDriver) releaseCellResources(
 	return errors.Join(cleanupErrors...)
 }
 
-func buildCellResult(
-	measurement string,
-	pattern arrivalPattern,
-	resident int,
-	schedule arrivalSchedule,
-	samples *transitionSamples,
-	timings *startupTimingSamples,
-	occupancy []occupancySample,
-	completed int64,
-	peakOutstanding int64,
-	elapsed time.Duration,
-) cellResult {
+// cellObservation is everything one cell measured. It is a struct rather than a
+// parameter list because the list had already reached ten positional arguments,
+// where a transposed pair is a silent defect rather than a compile error.
+type cellObservation struct {
+	measurement     string
+	pattern         arrivalPattern
+	resident        int
+	schedule        arrivalSchedule
+	samples         *transitionSamples
+	timings         *startupTimingSamples
+	occupancy       []occupancySample
+	completed       int64
+	shed            int64
+	peakOutstanding int64
+	elapsed         time.Duration
+}
+
+func buildCellResult(observation cellObservation) cellResult {
+	measurement := observation.measurement
+	pattern := observation.pattern
+	schedule := observation.schedule
+	samples := observation.samples
+	timings := observation.timings
+	completed := observation.completed
+	elapsed := observation.elapsed
 	samples.mu.Lock()
 	defer samples.mu.Unlock()
 	transitions := make(map[string]transitionSummary, len(samples.byName))
@@ -469,20 +493,21 @@ func buildCellResult(
 		Measurement:               measurement,
 		Pattern:                   pattern.Name,
 		PatternKind:               pattern.Kind,
-		ResidentPopulation:        resident,
+		ResidentPopulation:        observation.resident,
 		OfferedArrivals:           schedule.offeredCount(),
 		CompletedArrivals:         completed,
+		ShedArrivals:              observation.shed,
 		OfferedRatePerSecond:      schedule.offeredRatePerSecond(),
 		CompletionRatePerSecond:   completedRate,
 		ArrivalWindowMilliseconds: schedule.rateWindow.Milliseconds(),
 		ElapsedMilliseconds:       elapsed.Milliseconds(),
-		PeakOutstandingArrivals:   peakOutstanding,
+		PeakOutstandingArrivals:   observation.peakOutstanding,
 		Latency:                   latency,
 		BootStages:                bootStages,
 		DominantBootStage:         dominantBootStage,
 		StartupSpans:              summarizeStartupSpans(spans),
 		Refusals:                  refusals,
 		Failures:                  failures,
-		Occupancy:                 occupancy,
+		Occupancy:                 observation.occupancy,
 	}
 }

@@ -107,21 +107,7 @@ func (driver *lifecycleDriver) runBenchmark(
 		return err
 	}
 	startedAt := time.Now().UTC()
-	var results []cellResult
-	for _, measurement := range driver.config.Measurements {
-		for _, pattern := range driver.config.Patterns {
-			for _, resident := range driver.config.ResidentPopulations {
-				result, err := driver.runCell(ctx, measurement, pattern, resident)
-				if err != nil {
-					return fmt.Errorf(
-						"SecondBox lifecycle cell measurement=%s pattern=%s resident=%d failed: %w",
-						measurement, pattern.Name, resident, err,
-					)
-				}
-				results = append(results, result)
-			}
-		}
-	}
+	results, runErr := driver.runCells(ctx)
 	report := lifecycleReport{
 		SchemaVersion: 2, StartedAt: startedAt, CompletedAt: time.Now().UTC(),
 		SourceCommit: inputs.sourceCommit, GoVersion: inputs.goVersion,
@@ -129,14 +115,66 @@ func (driver *lifecycleDriver) runBenchmark(
 		ShedArrivals:     driver.shedArrivals.Load(),
 		Results:          results,
 	}
+	if runErr != nil {
+		report.IncompleteReason = runErr.Error()
+	}
 	if err := writeLifecycleReport(outputPath, report); err != nil {
-		return err
+		return errors.Join(runErr, err)
 	}
 	if err := writeHumanReport(os.Stdout, report); err != nil {
-		return fmt.Errorf("SecondBox lifecycle human report failed: %w", err)
+		return errors.Join(
+			runErr, fmt.Errorf("SecondBox lifecycle human report failed: %w", err),
+		)
 	}
 	fmt.Printf("\nMachine-readable lifecycle report: %s\n", outputPath)
-	return nil
+	return runErr
+}
+
+// cellRunner offers one cell. The driver supplies runCell; tests supply a
+// function over prepared results so the ordering and accumulation can be
+// exercised without a deployment.
+type cellRunner func(
+	ctx context.Context,
+	measurement string,
+	pattern arrivalPattern,
+	resident int,
+) (cellResult, error)
+
+func (driver *lifecycleDriver) runCells(ctx context.Context) ([]cellResult, error) {
+	return collectCells(ctx, driver.config, driver.runCell)
+}
+
+// collectCells offers every configured cell and stops at the first one that
+// fails. The cells already measured are returned alongside the error so the
+// caller can report them: a run that ends at step five still holds four valid
+// measurements, and the partial cell itself carries whatever it observed before
+// stopping.
+func collectCells(
+	ctx context.Context,
+	config lifecycleConfig,
+	run cellRunner,
+) ([]cellResult, error) {
+	var results []cellResult
+	for _, measurement := range config.Measurements {
+		for _, pattern := range config.Patterns {
+			for _, resident := range config.ResidentPopulations {
+				result, err := run(ctx, measurement, pattern, resident)
+				// A cell that never reached its measurement window reports an
+				// empty Measurement. Recording it would add a zero-valued row
+				// that no reader can distinguish from a cell of pure zeroes.
+				if result.Measurement != "" {
+					results = append(results, result)
+				}
+				if err != nil {
+					return results, fmt.Errorf(
+						"SecondBox lifecycle cell measurement=%s pattern=%s resident=%d failed: %w",
+						measurement, pattern.Name, resident, err,
+					)
+				}
+			}
+		}
+	}
+	return results, nil
 }
 
 func readRuntimeInputs(mode string) (runtimeInputs, error) {

@@ -24,6 +24,7 @@ type cellResult struct {
 	ResidentPopulation        int                  `json:"residentPopulation"`
 	OfferedArrivals           int                  `json:"offeredArrivals"`
 	CompletedArrivals         int64                `json:"completedArrivals"`
+	ShedArrivals              int64                `json:"shedArrivals"`
 	OfferedRatePerSecond      *float64             `json:"offeredRatePerSecond"`
 	CompletionRatePerSecond   float64              `json:"completionRatePerSecond"`
 	ArrivalWindowMilliseconds int64                `json:"arrivalWindowMilliseconds"`
@@ -54,6 +55,10 @@ type startupSpanSummary struct {
 	P99Milliseconds int64  `json:"p99Milliseconds"`
 }
 
+// IncompleteReason names the cell that ended the run early. A run that stops
+// partway is still worth reporting: the cells that completed are valid
+// measurements, and discarding them would make a safety abort destroy the data
+// it exists to protect. The field is absent from a clean run's report.
 type lifecycleReport struct {
 	SchemaVersion    int          `json:"schemaVersion"`
 	StartedAt        time.Time    `json:"startedAt"`
@@ -62,6 +67,7 @@ type lifecycleReport struct {
 	GoVersion        string       `json:"goVersion"`
 	ArtifactManifest string       `json:"artifactManifestDigest"`
 	ShedArrivals     int64        `json:"shedArrivals"`
+	IncompleteReason string       `json:"incompleteReason,omitempty"`
 	Results          []cellResult `json:"results"`
 }
 
@@ -130,6 +136,15 @@ func writeLifecycleReport(path string, report lifecycleReport) error {
 func writeHumanReport(writer io.Writer, report lifecycleReport) error {
 	if _, err := fmt.Fprintf(writer, "\nSecondBox Sandbox lifecycle benchmark\n"); err != nil {
 		return err
+	}
+	if report.IncompleteReason != "" {
+		if _, err := fmt.Fprintf(
+			writer,
+			"INCOMPLETE: the run ended early and the cells below are a partial record\n  %s\n",
+			report.IncompleteReason,
+		); err != nil {
+			return err
+		}
 	}
 	for _, measurement := range []string{
 		measurementStartReady,

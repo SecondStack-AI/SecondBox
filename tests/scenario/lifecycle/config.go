@@ -197,6 +197,27 @@ func validateLifecycleConfig(config lifecycleConfig) error {
 	if config.MaximumInFlight < 1 {
 		return errors.New("SecondBox lifecycle configuration requires a positive maximumInFlight")
 	}
+	// maximumInFlight is the driver's own shedding cap, not a safety limit. When a
+	// pattern offers more arrivals at once than the cap allows, the driver
+	// discards the surplus before the deployment ever sees it and the run reports
+	// saturation it inflicted on itself. Reject that at startup rather than
+	// measuring the limiter. Arrivals that are spread over time are unaffected:
+	// accumulating in flight because the deployment drains slowly is genuine
+	// saturation and must stay observable.
+	for _, pattern := range config.Patterns {
+		schedule, err := buildArrivalSchedule(pattern)
+		if err != nil {
+			return err
+		}
+		if peak := schedule.peakSimultaneousArrivals(); peak > config.MaximumInFlight {
+			return fmt.Errorf(
+				"SecondBox lifecycle pattern %q offers %d simultaneous arrivals above "+
+					"maximumInFlight %d, which would shed the surplus and report the "+
+					"driver's own limit as saturation",
+				pattern.Name, peak, config.MaximumInFlight,
+			)
+		}
+	}
 	for name, value := range map[string]int64{
 		"occupancySampleMilliseconds": config.OccupancySampleMilliseconds,
 		"requestTimeoutMilliseconds":  config.RequestTimeoutMilliseconds,

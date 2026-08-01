@@ -23,18 +23,18 @@ func TestBurstResultReportsUndefinedOfferedRateAndSeparateDrainRate(t *testing.T
 	} {
 		samples.record(measurementStartReady, elapsed)
 	}
-	result := buildCellResult(
-		measurementStartReady,
-		arrivalPattern{Name: "burst-4", Kind: patternBurst, Count: 4},
-		0,
-		schedule,
-		samples,
-		newStartupTimingSamples(),
-		[]occupancySample{{OutstandingArrivals: 4}},
-		4,
-		4,
-		2*time.Second,
-	)
+	result := buildCellResult(cellObservation{
+		measurement:     measurementStartReady,
+		pattern:         arrivalPattern{Name: "burst-4", Kind: patternBurst, Count: 4},
+		resident:        0,
+		schedule:        schedule,
+		samples:         samples,
+		timings:         newStartupTimingSamples(),
+		occupancy:       []occupancySample{{OutstandingArrivals: 4}},
+		completed:       4,
+		peakOutstanding: 4,
+		elapsed:         2 * time.Second,
+	})
 	if result.OfferedRatePerSecond != nil {
 		t.Fatalf("burst offered rate = %f, want undefined", *result.OfferedRatePerSecond)
 	}
@@ -65,18 +65,15 @@ func TestCellWithoutSuccessReportsNoLatencyPercentiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := buildCellResult(
-		measurementStartReady,
-		arrivalPattern{Name: "burst-1", Kind: patternBurst, Count: 1},
-		0,
-		schedule,
-		newTransitionSamples(),
-		newStartupTimingSamples(),
-		nil,
-		0,
-		0,
-		time.Second,
-	)
+	result := buildCellResult(cellObservation{
+		measurement: measurementStartReady,
+		pattern:     arrivalPattern{Name: "burst-1", Kind: patternBurst, Count: 1},
+		resident:    0,
+		schedule:    schedule,
+		samples:     newTransitionSamples(),
+		timings:     newStartupTimingSamples(),
+		elapsed:     time.Second,
+	})
 	if result.Latency != nil {
 		t.Fatalf("failed cell latency = %+v, want nil", result.Latency)
 	}
