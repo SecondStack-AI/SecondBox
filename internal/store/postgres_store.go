@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -1128,18 +1127,6 @@ func getSandboxWithQuerier(
 	return sandbox, nil
 }
 
-func encodeAuthorityLists(scopes []string, grants []string) ([]byte, []byte, error) {
-	scopesJSON, err := json.Marshal(scopes)
-	if err != nil {
-		return nil, nil, fmt.Errorf("SecondBox scopes encoding failed: %w", err)
-	}
-	grantsJSON, err := json.Marshal(grants)
-	if err != nil {
-		return nil, nil, fmt.Errorf("SecondBox profile grants encoding failed: %w", err)
-	}
-	return scopesJSON, grantsJSON, nil
-}
-
 func insertAuditEvent(ctx context.Context, tx pgx.Tx, event contracts.AuditEvent) error {
 	if event.TenantRef == "" {
 		event.TenantRef = "secondbox"
@@ -1530,15 +1517,4 @@ func isScopeSubset(subset []string, superset []string) bool {
 		}
 	}
 	return true
-}
-
-func intersectScopes(first []string, second []string) []string {
-	result := make([]string, 0)
-	for _, scope := range first {
-		if contains(second, scope) {
-			result = append(result, scope)
-		}
-	}
-	sort.Strings(result)
-	return result
 }

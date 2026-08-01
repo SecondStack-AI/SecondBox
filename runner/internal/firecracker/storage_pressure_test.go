@@ -271,14 +271,3 @@ func equalStrings(left, right []string) bool {
 	}
 	return true
 }
-
-func joinCommandArgs(args []string) string {
-	var joined string
-	for index, arg := range args {
-		if index > 0 {
-			joined += " "
-		}
-		joined += arg
-	}
-	return joined
-}

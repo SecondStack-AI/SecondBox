@@ -174,13 +174,6 @@ func bridgeAddress(cidr string) netip.Addr {
 	return prefix.Addr()
 }
 
-func (m *Manager) joinTapCleanup(ctx context.Context, tapName string, cause error) error {
-	if err := m.cleanupNetworkChecked(ctx, "", tapName); err != nil {
-		return errors.Join(cause, fmt.Errorf("remove microVM network after launch failure: %w", err))
-	}
-	return cause
-}
-
 func (m *Manager) joinInstanceNetworkCleanup(ctx context.Context, instanceID, tapName string, cause error) error {
 	if err := m.cleanupNetworkChecked(ctx, instanceID, tapName); err != nil {
 		return errors.Join(cause, fmt.Errorf("remove microVM network after launch failure: %w", err))

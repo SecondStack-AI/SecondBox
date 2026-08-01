@@ -1085,16 +1085,6 @@ func cloneRunnerCorrelation(correlation *runnerprotocol.Correlation) *runnerprot
 	return proto.Clone(correlation).(*runnerprotocol.Correlation)
 }
 
-func sameRunnerFence(left, right *runnerprotocol.AssignmentFence) bool {
-	return left != nil &&
-		right != nil &&
-		left.AssignmentId == right.AssignmentId &&
-		left.SandboxId == right.SandboxId &&
-		left.InstanceId == right.InstanceId &&
-		left.SandboxGeneration == right.SandboxGeneration &&
-		bytes.Equal(left.FencingToken, right.FencingToken)
-}
-
 func reportRunnerAsyncError(target chan<- error, err error) {
 	select {
 	case target <- err:

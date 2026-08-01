@@ -669,11 +669,6 @@ func fenceTerminationEvidenceDigest(fence *runnerprotocol.AssignmentFence) strin
 	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
-func (b *AssignmentBackend) verifyAssignmentAsset(assignment *runnerprotocol.AssignmentCommand) error {
-	_, err := b.assignmentGuestProtocolStart(assignment)
-	return err
-}
-
 type assignmentGuestProtocolStart struct {
 	GuestBuildID            string
 	ImageManifestDigest     string

@@ -294,20 +294,6 @@ func (service *ControlPlaneService) ReviseProfile(
 	return profile, err
 }
 
-// ReviseProfileAtRevision applies HTTP If-Match fencing before appending policy.
-func (service *ControlPlaneService) ReviseProfileAtRevision(
-	ctx context.Context,
-	principal contracts.Principal,
-	name string,
-	request contracts.ReviseProfileRequest,
-	expectedRevision int64,
-) (contracts.Profile, error) {
-	profile, _, err := service.reviseProfileAtRevision(
-		ctx, principal, name, "", request, expectedRevision,
-	)
-	return profile, err
-}
-
 // ReviseProfileAtRevisionIdempotent appends or replays one exact immutable Profile revision.
 func (service *ControlPlaneService) ReviseProfileAtRevisionIdempotent(
 	ctx context.Context,
@@ -374,19 +360,6 @@ func (service *ControlPlaneService) DisableProfile(
 	name string,
 ) (contracts.Profile, error) {
 	profile, _, err := service.disableProfileAtRevision(ctx, principal, name, "", 0)
-	return profile, err
-}
-
-// DisableProfileAtRevision applies HTTP If-Match fencing before disabling creation.
-func (service *ControlPlaneService) DisableProfileAtRevision(
-	ctx context.Context,
-	principal contracts.Principal,
-	name string,
-	expectedRevision int64,
-) (contracts.Profile, error) {
-	profile, _, err := service.disableProfileAtRevision(
-		ctx, principal, name, "", expectedRevision,
-	)
 	return profile, err
 }
 
@@ -665,20 +638,6 @@ func (service *ControlPlaneService) StartSandbox(
 ) (contracts.Operation, error) {
 	return service.setSandboxDesiredState(
 		ctx, principal, sandboxID, "start", contracts.SandboxDesiredStateRunning,
-		idempotencyKey, expectedRevision, nil, nil,
-	)
-}
-
-// DrainSandbox rejects new work and converges the Sandbox to stopped.
-func (service *ControlPlaneService) DrainSandbox(
-	ctx context.Context,
-	principal contracts.Principal,
-	sandboxID string,
-	idempotencyKey string,
-	expectedRevision int64,
-) (contracts.Operation, error) {
-	return service.setSandboxDesiredState(
-		ctx, principal, sandboxID, "drain", contracts.SandboxDesiredStateStopped,
 		idempotencyKey, expectedRevision, nil, nil,
 	)
 }
@@ -1192,18 +1151,6 @@ func (service *ControlPlaneService) newAudit(
 		ResourceID: resourceID, Outcome: "accepted", RequestID: service.requestID(ctx),
 		Details: map[string]string{}, CreatedAt: now,
 	}
-}
-
-func validateApplicationScopes(scopes []string) error {
-	if len(scopes) == 0 || len(scopes) > 32 {
-		return errors.New("SecondBox application scopes must contain between 1 and 32 entries")
-	}
-	for _, scope := range scopes {
-		if strings.TrimSpace(scope) == "" || len(scope) > 128 {
-			return errors.New("SecondBox application scope is invalid")
-		}
-	}
-	return nil
 }
 
 func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
