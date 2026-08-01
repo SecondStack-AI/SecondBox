@@ -7,8 +7,11 @@ import (
 
 func validLifecycleConfig() lifecycleConfig {
 	return lifecycleConfig{
-		Version: 2, RunnerPoolName: "lifecycle-local", ProfileName: "lifecycle-local",
+		Version: 3, RunnerPoolName: "lifecycle-local", ProfileName: "lifecycle-local",
 		TenantRef: "lifecycle-qualification", SubjectRef: "lifecycle-qualification",
+		HostRails:        &hostRailConfig{Enabled: false},
+		Gate:             &gateConfig{Mode: gateObserve},
+		LatencyKneeRatio: 1.5,
 		Measurements: []string{
 			measurementCreateReady, measurementStartReady,
 			measurementStopStopped, measurementDeleteGone,

@@ -127,7 +127,7 @@ func TestCollectCellsReturnsEveryCellOnACleanRun(t *testing.T) {
 }
 
 func TestCleanReportOmitsIncompleteReason(t *testing.T) {
-	encoded, err := json.Marshal(lifecycleReport{SchemaVersion: 2})
+	encoded, err := json.Marshal(lifecycleReport{SchemaVersion: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestCleanReportOmitsIncompleteReason(t *testing.T) {
 
 func TestIncompleteReportNamesTheReasonInBothRenderings(t *testing.T) {
 	report := lifecycleReport{
-		SchemaVersion:    2,
+		SchemaVersion:    3,
 		IncompleteReason: "host memory floor reached",
 	}
 	encoded, err := json.Marshal(report)

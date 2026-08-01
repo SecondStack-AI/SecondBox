@@ -83,8 +83,21 @@ type profileLimits struct {
 	TerminalDetachSeconds       int64 `json:"terminalDetachSeconds"`
 }
 
+// hostRailConfig bounds what a run may do to the machine it runs on. The block
+// is required and its disabling is explicit: an omitted block is a configuration
+// error, never a substituted default.
+type hostRailConfig struct {
+	Enabled                 bool  `json:"enabled"`
+	AvailableMemoryFloorMiB int64 `json:"availableMemoryFloorMiB"`
+	StepFailureCeiling      int64 `json:"stepFailureCeiling"`
+	MaximumWallClockSeconds int64 `json:"maximumWallClockSeconds"`
+}
+
 type lifecycleConfig struct {
 	Version                     int              `json:"version"`
+	HostRails                   *hostRailConfig  `json:"hostRails"`
+	Gate                        *gateConfig      `json:"gate"`
+	LatencyKneeRatio            float64          `json:"latencyKneeRatio"`
 	RunnerPoolName              string           `json:"runnerPoolName"`
 	ProfileName                 string           `json:"profileName"`
 	TenantRef                   string           `json:"tenantRef"`
@@ -141,8 +154,53 @@ func readLifecycleConfig(path string) (lifecycleConfig, error) {
 // repository forbids implicit runtime defaults, so an omitted value is an error
 // rather than a substituted constant.
 func validateLifecycleConfig(config lifecycleConfig) error {
-	if config.Version != 2 {
-		return fmt.Errorf("SecondBox lifecycle configuration version must be 2, got %d", config.Version)
+	if config.Version != 3 {
+		return fmt.Errorf("SecondBox lifecycle configuration version must be 3, got %d", config.Version)
+	}
+	if config.HostRails == nil {
+		return errors.New(
+			"SecondBox lifecycle configuration requires a hostRails block; " +
+				"set enabled false to run without rails",
+		)
+	}
+	if config.HostRails.Enabled {
+		for name, value := range map[string]int64{
+			"hostRails.availableMemoryFloorMiB": config.HostRails.AvailableMemoryFloorMiB,
+			"hostRails.maximumWallClockSeconds": config.HostRails.MaximumWallClockSeconds,
+		} {
+			if value < 1 {
+				return fmt.Errorf("SecondBox lifecycle configuration requires a positive %s", name)
+			}
+		}
+		if config.HostRails.StepFailureCeiling < 0 {
+			return errors.New(
+				"SecondBox lifecycle hostRails.stepFailureCeiling must not be negative",
+			)
+		}
+	}
+	if config.Gate == nil {
+		return errors.New(
+			"SecondBox lifecycle configuration requires a gate block; " +
+				"set mode observe to measure without asserting",
+		)
+	}
+	if config.Gate.Mode != gateObserve && config.Gate.Mode != gateEnforce {
+		return fmt.Errorf(
+			"SecondBox lifecycle gate.mode must be %s or %s, got %q",
+			gateObserve, gateEnforce, config.Gate.Mode,
+		)
+	}
+	if config.Gate.Mode == gateEnforce && config.Gate.DeclaredCeiling < 1 {
+		return errors.New(
+			"SecondBox lifecycle gate.declaredCeiling must be positive when enforcing",
+		)
+	}
+	// The latency knee is reported in every run, not only when the gate is
+	// enforced, so its ratio is a top-level setting rather than a gate one.
+	if config.LatencyKneeRatio <= 1 {
+		return errors.New(
+			"SecondBox lifecycle configuration requires a latencyKneeRatio greater than 1",
+		)
 	}
 	for name, value := range map[string]string{
 		"runnerPoolName": config.RunnerPoolName,

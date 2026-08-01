@@ -17,6 +17,7 @@ type runtimeInputs struct {
 	platformToken    string
 	runtimeDigest    string
 	toolchainDigest  string
+	guestCIDR        string
 	sourceCommit     string
 	goVersion        string
 	artifactManifest string
@@ -109,14 +110,36 @@ func (driver *lifecycleDriver) runBenchmark(
 	startedAt := time.Now().UTC()
 	results, runErr := driver.runCells(ctx)
 	report := lifecycleReport{
-		SchemaVersion: 2, StartedAt: startedAt, CompletedAt: time.Now().UTC(),
+		// Schema 3 adds per-cell shed accounting, which is present on every cell
+		// because zero is a positive statement that nothing was shed, plus the
+		// optional capacity, rail and incompleteness fields.
+		SchemaVersion: 3, StartedAt: startedAt, CompletedAt: time.Now().UTC(),
 		SourceCommit: inputs.sourceCommit, GoVersion: inputs.goVersion,
 		ArtifactManifest: inputs.artifactManifest,
 		ShedArrivals:     driver.shedArrivals.Load(),
 		Results:          results,
 	}
+	report.Capacity = identifyLadders(
+		results,
+		driver.config.LatencyKneeRatio,
+		driver.config.configuredBinding(inputs.guestCIDR),
+	)
 	if runErr != nil {
 		report.IncompleteReason = runErr.Error()
+		for _, result := range results {
+			if result.AbortedAtRail != "" {
+				report.AbortedAtRail = result.AbortedAtRail
+				break
+			}
+		}
+		if report.AbortedAtRail == "" {
+			for _, rail := range []string{railAvailableMemory, railStepFailures, railWallClock} {
+				if strings.Contains(runErr.Error(), rail) {
+					report.AbortedAtRail = rail
+					break
+				}
+			}
+		}
 	}
 	if err := writeLifecycleReport(outputPath, report); err != nil {
 		return errors.Join(runErr, err)
@@ -127,7 +150,44 @@ func (driver *lifecycleDriver) runBenchmark(
 		)
 	}
 	fmt.Printf("\nMachine-readable lifecycle report: %s\n", outputPath)
-	return runErr
+	return errors.Join(runErr, driver.applyGate(ctx, results))
+}
+
+// applyGate evaluates the gate after the report has been written, so an
+// enforcing run that fails still leaves the measurements that condemn it.
+func (driver *lifecycleDriver) applyGate(ctx context.Context, results []cellResult) error {
+	gate := driver.config.Gate
+	if gate == nil {
+		return nil
+	}
+	violations := evaluateGate(*gate, results)
+	remaining, err := driver.countRemainingSandboxes(ctx)
+	if err != nil {
+		violations = append(violations, gateViolation{
+			Check: "no-orphans", Cell: "run", Message: err.Error(),
+		})
+	} else if remaining > 0 {
+		violations = append(violations, gateViolation{
+			Check: "no-orphans", Cell: "run",
+			Message: fmt.Sprintf(
+				"%d Sandboxes remain after cleanup; a finished run must own none", remaining,
+			),
+		})
+	}
+	if len(violations) == 0 {
+		fmt.Printf("Gate (%s): no violations\n", gate.Mode)
+		return nil
+	}
+	for _, violation := range violations {
+		fmt.Printf("Gate (%s) violation: %s\n", gate.Mode, violation)
+	}
+	if gate.Mode != gateEnforce {
+		return nil
+	}
+	return fmt.Errorf(
+		"SecondBox lifecycle gate found %d violations, first: %s",
+		len(violations), violations[0],
+	)
 }
 
 // cellRunner offers one cell. The driver supplies runCell; tests supply a
@@ -155,9 +215,23 @@ func collectCells(
 	run cellRunner,
 ) ([]cellResult, error) {
 	var results []cellResult
+	startedAt := time.Now()
 	for _, measurement := range config.Measurements {
 		for _, pattern := range config.Patterns {
 			for _, resident := range config.ResidentPopulations {
+				// The wall-clock rail is evaluated here rather than on the
+				// occupancy tick because that sampler covers only a cell's
+				// arrival window, while the serial cleanup between cells is what
+				// actually dominates a long run.
+				rails := config.rails()
+				if rails.Enabled && time.Since(startedAt) >=
+					time.Duration(rails.MaximumWallClockSeconds)*time.Second {
+					return results, fmt.Errorf(
+						"SecondBox lifecycle host rail %s stopped the run before "+
+							"measurement=%s pattern=%s resident=%d",
+						railWallClock, measurement, pattern.Name, resident,
+					)
+				}
 				result, err := run(ctx, measurement, pattern, resident)
 				// A cell that never reached its measurement window reports an
 				// empty Measurement. Recording it would add a zero-valued row
@@ -197,6 +271,9 @@ func readRuntimeInputs(mode string) (runtimeInputs, error) {
 		return runtimeInputs{}, err
 	}
 	if inputs.toolchainDigest, err = required("SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST"); err != nil {
+		return runtimeInputs{}, err
+	}
+	if inputs.guestCIDR, err = required("SECONDBOX_SCENARIO_GUEST_CIDR"); err != nil {
 		return runtimeInputs{}, err
 	}
 	if mode == "run" {

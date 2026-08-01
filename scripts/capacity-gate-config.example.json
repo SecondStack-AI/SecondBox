@@ -1,25 +1,22 @@
 {
   "version": 3,
   "hostRails": {
-    "enabled": false,
-    "availableMemoryFloorMiB": 0,
+    "enabled": true,
+    "availableMemoryFloorMiB": 8192,
     "stepFailureCeiling": 0,
-    "maximumWallClockSeconds": 0
+    "maximumWallClockSeconds": 7200
   },
   "gate": {
-    "mode": "observe",
-    "declaredCeiling": 0
+    "mode": "enforce",
+    "declaredCeiling": 48
   },
   "latencyKneeRatio": 1.5,
-  "runnerPoolName": "lifecycle-local",
-  "profileName": "lifecycle-local",
-  "tenantRef": "lifecycle-qualification",
-  "subjectRef": "lifecycle-qualification",
+  "runnerPoolName": "capacity-gate-local",
+  "profileName": "capacity-gate-local",
+  "tenantRef": "capacity-qualification",
+  "subjectRef": "capacity-qualification",
   "measurements": [
-    "start_to_ready",
-    "create_to_ready",
-    "stop_to_stopped",
-    "delete_to_deleted"
+    "create_to_ready"
   ],
   "patterns": [
     {
@@ -36,77 +33,89 @@
       "repeats": 0
     },
     {
-      "name": "crawl-fixed",
-      "kind": "steady",
-      "count": 0,
-      "arrivalsPerSecond": 0.25,
-      "startArrivalsPerSecond": 0,
-      "endArrivalsPerSecond": 0,
-      "durationSeconds": 40,
-      "distribution": "fixed",
-      "poissonSeed": 0,
-      "quietSeconds": 0,
-      "repeats": 0
-    },
-    {
-      "name": "crawl-poisson",
-      "kind": "steady",
-      "count": 0,
-      "arrivalsPerSecond": 0.5,
-      "startArrivalsPerSecond": 0,
-      "endArrivalsPerSecond": 0,
-      "durationSeconds": 40,
-      "distribution": "poisson",
-      "poissonSeed": 20260730,
-      "quietSeconds": 0,
-      "repeats": 0
-    },
-    {
-      "name": "ramp-to-knee",
-      "kind": "ramp",
-      "count": 0,
-      "arrivalsPerSecond": 0,
-      "startArrivalsPerSecond": 0.25,
-      "endArrivalsPerSecond": 3.0,
-      "durationSeconds": 90,
-      "distribution": "",
-      "poissonSeed": 0,
-      "quietSeconds": 0,
-      "repeats": 0
-    },
-    {
-      "name": "sawtooth-4",
-      "kind": "sawtooth",
-      "count": 4,
+      "name": "burst-16",
+      "kind": "burst",
+      "count": 16,
       "arrivalsPerSecond": 0,
       "startArrivalsPerSecond": 0,
       "endArrivalsPerSecond": 0,
       "durationSeconds": 0,
       "distribution": "",
       "poissonSeed": 0,
-      "quietSeconds": 20,
-      "repeats": 3
+      "quietSeconds": 0,
+      "repeats": 0
+    },
+    {
+      "name": "burst-32",
+      "kind": "burst",
+      "count": 32,
+      "arrivalsPerSecond": 0,
+      "startArrivalsPerSecond": 0,
+      "endArrivalsPerSecond": 0,
+      "durationSeconds": 0,
+      "distribution": "",
+      "poissonSeed": 0,
+      "quietSeconds": 0,
+      "repeats": 0
+    },
+    {
+      "name": "burst-64",
+      "kind": "burst",
+      "count": 64,
+      "arrivalsPerSecond": 0,
+      "startArrivalsPerSecond": 0,
+      "endArrivalsPerSecond": 0,
+      "durationSeconds": 0,
+      "distribution": "",
+      "poissonSeed": 0,
+      "quietSeconds": 0,
+      "repeats": 0
+    },
+    {
+      "name": "burst-96",
+      "kind": "burst",
+      "count": 96,
+      "arrivalsPerSecond": 0,
+      "startArrivalsPerSecond": 0,
+      "endArrivalsPerSecond": 0,
+      "durationSeconds": 0,
+      "distribution": "",
+      "poissonSeed": 0,
+      "quietSeconds": 0,
+      "repeats": 0
+    },
+    {
+      "name": "burst-128",
+      "kind": "burst",
+      "count": 128,
+      "arrivalsPerSecond": 0,
+      "startArrivalsPerSecond": 0,
+      "endArrivalsPerSecond": 0,
+      "durationSeconds": 0,
+      "distribution": "",
+      "poissonSeed": 0,
+      "quietSeconds": 0,
+      "repeats": 0
     }
   ],
   "residentPopulations": [
-    0,
-    4
+    0
   ],
-  "maximumInFlight": 8,
+  "maximumInFlight": 160,
   "occupancySampleMilliseconds": 500,
   "requestTimeoutMilliseconds": 70000,
-  "operationTimeoutSeconds": 180,
+  "operationTimeoutSeconds": 900,
   "pollIntervalMilliseconds": 250,
   "runner": {
     "sandboxMaxVcpus": 2,
     "sandboxMemoryMiB": 512,
     "sandboxDiskMiB": 1024,
-    "memoryBudgetMiB": 8192,
+    "memoryBudgetMiB": 81920,
     "maxConcurrentPerSandbox": 4,
-    "maxConcurrentGlobal": 16,
-    "maxConcurrentStarts": 8,
-    "maxConcurrentWorkspaceCreates": 8,
-    "maxConcurrentOperationsGlobal": 64,
+    "maxConcurrentGlobal": 160,
+    "maxConcurrentStarts": 32,
+    "maxConcurrentWorkspaceCreates": 32,
+    "maxConcurrentOperationsGlobal": 640,
     "fileTransferMaxBytes": 1073741824,
     "storagePressureRecoveryPercent": 70,
     "storagePressureWarningPercent": 80,
@@ -131,13 +140,13 @@
     "maximumTransferBytes": 1048576,
     "terminalDetachSeconds": 30
   },
-  "subjectMaxSandboxes": 200,
-  "subjectMaxActiveInstances": 24,
-  "subjectMaxConcurrentOperations": 100,
-  "subjectMaxSnapshots": 100,
+  "subjectMaxSandboxes": 400,
+  "subjectMaxActiveInstances": 48,
+  "subjectMaxConcurrentOperations": 640,
+  "subjectMaxSnapshots": 400,
   "subjectMaxArtifactBytes": 10737418240,
   "subjectMaxArtifacts": 100,
   "subjectMaxPortSessions": 100,
-  "subjectMaxCpuMillis": 100000,
-  "subjectMaxMemoryBytes": 68719476736
+  "subjectMaxCpuMillis": 160000,
+  "subjectMaxMemoryBytes": 85899345920
 }

@@ -21,7 +21,7 @@ backlog visible directly.
 
 ## Measurements
 
-Configuration version 2 accepts four measurements. Every prerequisite is
+Configuration version 3 accepts four measurements. Every prerequisite is
 established before the arrival window and every cleanup runs after it, so a
 startup result never includes teardown and a teardown result never includes
 startup.
@@ -170,3 +170,91 @@ cells and validates the whole path quickly. Add measurements, patterns, and
 resident values once the numbers look sane. Choose rate-bearing patterns that
 straddle the knee: far below it every cell looks healthy, and far above it every
 cell is shed.
+
+## Capacity ladders
+
+A ladder answers a different question from the rest of the benchmark: **how many
+Sandboxes can this deployment absorb at once, and what stops it?**
+
+It needs no new arrival pattern. `patterns` is a list and each entry becomes its
+own cell with its own pool, report row and cleanup, so rising `burst` counts are
+the ladder:
+
+```sh
+SECONDBOX_LIFECYCLE_CONFIG=/abs/path/capacity.json just test-lifecycle
+```
+
+Two configurations ship, because discovery and gating want opposite ones.
+
+| | `capacity-config.example.json` | `capacity-gate-config.example.json` |
+|---|---|---|
+| Binding | The host | One configured limit |
+| Every configured limit | Above the ladder | `subjectMaxActiveInstances` inside it |
+| Expected signal | Distress knee | Refusal knee |
+| `gate.mode` | `observe` | `enforce` |
+
+The reason they cannot be one file: the clean refusal paths *are* the configured
+limits. `quota_exceeded` and `home_runner_unavailable` are raised by the subject
+and runner settings, so raising those above the ladder means the host binds
+first and the deployment produces `startup_failed`, which is a failure rather
+than a refusal. A host-bound run therefore cannot assert clean shedding, and a
+run that can assert it is not measuring the host.
+
+### Reading the result
+
+The report names three knees, because they do not fire in a fixed order:
+
+- **refusal knee** — the first rung refused, and the dominant refusal code
+- **latency knee** — the first rung whose p95 reached `latencyKneeRatio` times
+  the first rung's p95
+- **distress knee** — the first rung that failed or tripped a rail
+
+`configuredBinding` accompanies them. A refusal code names the *class* of
+refusal, not the resource: `ErrQuotaExceeded` is one sentinel covering
+Sandboxes, active instances, memory, CPU, Snapshots and concurrent Operations
+alike, so naming the resource takes arithmetic over the configuration.
+
+### `maximumInFlight` is not a safety limit
+
+It is the driver's own shedding cap. An arrival offered past it is discarded
+before the deployment ever sees it and counted as a saturation observation, so a
+ladder whose rungs exceed it reports the driver's limit as though it were the
+deployment's. Configuration now rejects that outright, comparing against peak
+*simultaneous* arrivals — arrivals spread over time never coincide, so a steady
+pattern offering more than the cap over a long window is legitimate.
+
+Every cell reports its own `shedArrivals`; a capacity run should show zero.
+
+### Host rails
+
+Rails are a safety trip, never feedback. Tripping one ends the run; it never
+reduces the load being offered, because modulating offered load in response to
+strain is exactly what makes a benchmark closed loop.
+
+| Rail | Trips when |
+|---|---|
+| `availableMemoryFloorMiB` | `MemAvailable` falls below the floor |
+| `stepFailureCeiling` | genuine failures exceed the ceiling; refusals are excluded |
+| `maximumWallClockSeconds` | the run exceeds its budget |
+
+`abortedAtRail` names the rail in both the cell and the report, and
+`incompleteReason` explains a run that ended early. **A rail never discards the
+cells already measured** — a safety abort that destroyed its own record would
+defeat its purpose.
+
+Two limits shape what a ladder can ask for:
+
+- **Rails act between cells.** A burst schedule sets every arrival offset to
+  zero, so a 128-rung dispatches in microseconds against a sampler ticking in
+  hundreds of milliseconds. A rail cannot shrink the cell it fires in.
+- **Guest addresses cap a run at 253.** The scenario harness allocates one `/24`
+  per run and three addresses are unavailable, so no ladder can exceed 253
+  concurrent Sandboxes however much memory the host has.
+- **Only `create_to_ready` ladders.** Every other measurement pre-creates one
+  Sandbox per arrival *serially*, so a deep rung would spend the run
+  provisioning rather than measuring.
+
+Cleanup is serial too, one delete per Sandbox with a full operation wait, so a
+six-rung ladder to 128 spends far longer tearing down than offering. Budget for
+it, and note that `maximumWallClockSeconds` is evaluated between cells precisely
+because the occupancy sampler covers only the arrival window.

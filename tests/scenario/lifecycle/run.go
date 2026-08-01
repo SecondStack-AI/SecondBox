@@ -33,6 +33,19 @@ func (samples *transitionSamples) record(transition string, elapsed time.Duratio
 	samples.byName[transition] = append(samples.byName[transition], elapsed)
 }
 
+// failureTotal counts genuine failures only. Refusals are excluded: a deployment
+// declining to admit an arrival is the measurement, not a fault, and a rail that
+// counted refusals would abort exactly when the run got interesting.
+func (samples *transitionSamples) failureTotal() int64 {
+	samples.mu.Lock()
+	defer samples.mu.Unlock()
+	total := int64(0)
+	for _, count := range samples.failures {
+		total += count
+	}
+	return total
+}
+
 func (samples *transitionSamples) recordError(err error) {
 	refusal, code := classifyLifecycleError(err)
 	samples.mu.Lock()
@@ -135,6 +148,12 @@ func (driver *lifecycleDriver) runCell(
 	var sampler sync.WaitGroup
 	sampler.Add(1)
 	startedAt := time.Now()
+	// Rails stop the run; they never cancel ctx. The arrival goroutines parent
+	// their operations on ctx, and classifyLifecycleError reads context.Canceled
+	// as a client error, so cancelling would manufacture the very failures the
+	// distress knee is meant to detect.
+	var railTripped atomic.Value
+	memoryLowWater := int64(-1)
 	go func() {
 		defer sampler.Done()
 		ticker := time.NewTicker(
@@ -155,6 +174,22 @@ func (driver *lifecycleDriver) runCell(
 					OfferedRatePerSecond: offeredRateAt(pattern, offset),
 				})
 				occupancyMu.Unlock()
+				memory, err := readHostMemory()
+				if err != nil {
+					continue
+				}
+				occupancyMu.Lock()
+				if memoryLowWater < 0 || memory.AvailableMiB < memoryLowWater {
+					memoryLowWater = memory.AvailableMiB
+				}
+				occupancyMu.Unlock()
+				if rail := driver.config.rails().evaluate(railObservation{
+					availableMiB: memory.AvailableMiB,
+					failures:     samples.failureTotal(),
+					elapsed:      offset,
+				}); rail != "" {
+					railTripped.CompareAndSwap(nil, rail)
+				}
 			}
 		}
 	}()
@@ -178,16 +213,28 @@ func (driver *lifecycleDriver) runCell(
 		sampler.Wait()
 		occupancyMu.Lock()
 		collected := append([]occupancySample(nil), occupancy...)
+		lowWater := memoryLowWater
 		occupancyMu.Unlock()
+		rail, _ := railTripped.Load().(string)
 		return buildCellResult(cellObservation{
 			measurement: measurement, pattern: pattern, resident: resident,
 			schedule: schedule, samples: samples, timings: timings,
 			occupancy: collected, completed: completed, shed: shed.Load(),
 			peakOutstanding: peakOutstanding.Load(), elapsed: elapsed,
+			memoryLowWaterMiB: lowWater, abortedAtRail: rail,
 		})
 	}
 
 	for index, offset := range schedule.offsets {
+		// A burst schedule sets every offset to zero, so this loop dispatches in
+		// microseconds against a sampler ticking in hundreds of milliseconds.
+		// The check cannot shrink the cell it fires in — rails act between cells.
+		// It is here for schedules that do span time.
+		if rail, tripped := railTripped.Load().(string); tripped && rail != "" {
+			return finish(), fmt.Errorf(
+				"SecondBox lifecycle host rail %s stopped the run", rail,
+			)
+		}
 		if wait := time.Until(startedAt.Add(offset)); wait > 0 {
 			timer := time.NewTimer(wait)
 			select {
@@ -228,7 +275,13 @@ func (driver *lifecycleDriver) runCell(
 			}
 		}(index, handle)
 	}
-	return finish(), nil
+	result = finish()
+	if result.AbortedAtRail != "" {
+		return result, fmt.Errorf(
+			"SecondBox lifecycle host rail %s stopped the run", result.AbortedAtRail,
+		)
+	}
+	return result, nil
 }
 
 func recordPeak(peak *atomic.Int64, candidate int64) {
@@ -433,11 +486,13 @@ type cellObservation struct {
 	schedule        arrivalSchedule
 	samples         *transitionSamples
 	timings         *startupTimingSamples
-	occupancy       []occupancySample
-	completed       int64
-	shed            int64
-	peakOutstanding int64
-	elapsed         time.Duration
+	occupancy         []occupancySample
+	completed         int64
+	shed              int64
+	peakOutstanding   int64
+	elapsed           time.Duration
+	memoryLowWaterMiB int64
+	abortedAtRail     string
 }
 
 func buildCellResult(observation cellObservation) cellResult {
@@ -508,6 +563,8 @@ func buildCellResult(observation cellObservation) cellResult {
 		StartupSpans:              summarizeStartupSpans(spans),
 		Refusals:                  refusals,
 		Failures:                  failures,
+		MemAvailableLowWaterMiB:   observation.memoryLowWaterMiB,
+		AbortedAtRail:             observation.abortedAtRail,
 		Occupancy:                 observation.occupancy,
 	}
 }

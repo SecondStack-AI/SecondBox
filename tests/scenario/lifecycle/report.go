@@ -36,6 +36,8 @@ type cellResult struct {
 	StartupSpans              []startupSpanSummary `json:"startupSpans"`
 	Refusals                  map[string]int64     `json:"refusals"`
 	Failures                  map[string]int64     `json:"failures"`
+	MemAvailableLowWaterMiB   int64                `json:"memAvailableLowWaterMiB,omitempty"`
+	AbortedAtRail             string               `json:"abortedAtRail,omitempty"`
 	Occupancy                 []occupancySample    `json:"occupancy"`
 }
 
@@ -68,7 +70,11 @@ type lifecycleReport struct {
 	ArtifactManifest string       `json:"artifactManifestDigest"`
 	ShedArrivals     int64        `json:"shedArrivals"`
 	IncompleteReason string       `json:"incompleteReason,omitempty"`
-	Results          []cellResult `json:"results"`
+	AbortedAtRail    string       `json:"abortedAtRail,omitempty"`
+
+	Capacity []capacitySummary `json:"capacity,omitempty"`
+
+	Results []cellResult `json:"results"`
 }
 
 func summarizeBootStages(stages map[string][]time.Duration) ([]bootStageSummary, string) {
@@ -133,6 +139,46 @@ func writeLifecycleReport(path string, report lifecycleReport) error {
 
 // writeHumanReport leads with start-to-ready, the ephemeral hot path the
 // benchmark exists to measure.
+func writeCapacitySection(writer io.Writer, summaries []capacitySummary) error {
+	if len(summaries) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintf(writer, "\ncapacity\n"); err != nil {
+		return err
+	}
+	for _, summary := range summaries {
+		if _, err := fmt.Fprintf(
+			writer,
+			"  %s (%s, resident=%d): %d rungs, largest fully admitted %d\n"+
+				"    configured ceiling %d (%s)\n"+
+				"    refusal knee  %s\n"+
+				"    latency knee  %s\n"+
+				"    distress knee %s\n",
+			summary.Measurement, summary.PatternKind, summary.ResidentPopulation,
+			summary.Steps, summary.LargestFullyAdmitted,
+			summary.ConfiguredBinding.Capacity, summary.ConfiguredBinding.Name,
+			formatKnee(summary.RefusalKnee),
+			formatKnee(summary.LatencyKnee),
+			formatKnee(summary.DistressKnee),
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func formatKnee(knee *kneePoint) string {
+	if knee == nil {
+		return "none"
+	}
+	if knee.Detail == "" {
+		return fmt.Sprintf("%s at %d offered", knee.Pattern, knee.OfferedArrivals)
+	}
+	return fmt.Sprintf(
+		"%s at %d offered (%s)", knee.Pattern, knee.OfferedArrivals, knee.Detail,
+	)
+}
+
 func writeHumanReport(writer io.Writer, report lifecycleReport) error {
 	if _, err := fmt.Fprintf(writer, "\nSecondBox Sandbox lifecycle benchmark\n"); err != nil {
 		return err
@@ -145,6 +191,9 @@ func writeHumanReport(writer io.Writer, report lifecycleReport) error {
 		); err != nil {
 			return err
 		}
+	}
+	if err := writeCapacitySection(writer, report.Capacity); err != nil {
+		return err
 	}
 	for _, measurement := range []string{
 		measurementStartReady,

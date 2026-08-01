@@ -181,7 +181,18 @@ func (driver *lifecycleDriver) createSandbox(
 			},
 		)
 		if err != nil {
-			return nil, time.Since(startedAt), err
+			// The Sandbox exists — the create Operation named it — so returning
+			// no handle would strand it: cell cleanup can only delete what it
+			// was handed, and a leaked Sandbox still counts against the subject
+			// quota, which would eventually manufacture a refusal that looks
+			// like saturation. A handle addressed by ID is enough, because
+			// deleteSandbox refreshes through it before acting.
+			if operation.SandboxID == "" {
+				return nil, time.Since(startedAt), err
+			}
+			return secondboxclient.NewSandboxHandle(
+				driver.client, secondboxclient.Sandbox{ID: operation.SandboxID},
+			), time.Since(startedAt), err
 		}
 	}
 	handle := secondboxclient.NewSandboxHandle(driver.client, sandbox)
