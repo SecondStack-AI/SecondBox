@@ -188,6 +188,10 @@ func (store *PostgresStore) scheduleOnce(
 	if err != nil {
 		return DurableAssignment{}, false, err
 	}
+	dispatch, err := lockEagerAssignmentDispatch(ctx, tx, selected.ID)
+	if err != nil {
+		return DurableAssignment{}, false, err
+	}
 	capabilitySnapshot := capabilitySnapshot(selected)
 	capabilitiesJSON, err := json.Marshal(capabilitySnapshot)
 	if err != nil {
@@ -209,6 +213,10 @@ func (store *PostgresStore) scheduleOnce(
 	controlMessage.GetAssignment().Correlation.SandboxGeneration = uint64(generation)
 	controlMessage.GetAssignment().Correlation.AssignmentId = request.AssignmentID
 	controlMessage.GetAssignment().Correlation.RunnerId = selected.ID
+	if dispatch.ConnectionID != "" {
+		controlMessage.GetAssignment().MessageId = request.AssignmentCommandID
+		controlMessage.GetAssignment().Sequence = uint64(dispatch.ControlSequence)
+	}
 	commandPayload, err := proto.Marshal(controlMessage)
 	if err != nil {
 		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Assignment command encoding: %w", err)
@@ -276,21 +284,44 @@ func (store *PostgresStore) scheduleOnce(
 		assignment.FencingToken, assignment.State, capabilitiesJSON, artifactsJSON,
 		assignment.RetryLimit, assignment.OperationDeadline, assignment.ClaimExpiresAt, placementAt,
 	)
+	if dispatch.ConnectionID != "" {
+		orderedWrites.Queue(`
+			UPDATE secondbox.runner_connections
+			SET last_control_sequence=$2
+			WHERE id=$1
+			  AND runner_id=$3
+			  AND state='active'
+			  AND last_control_sequence=$4`,
+			dispatch.ConnectionID,
+			dispatch.ControlSequence,
+			assignment.RunnerID,
+			dispatch.ControlSequence-1,
+		)
+	}
+	commandState := "pending"
+	targetConnectionID := ""
+	deliveryCount := int64(0)
+	if dispatch.ConnectionID != "" {
+		commandState = "delivering"
+		targetConnectionID = dispatch.ConnectionID
+		deliveryCount = 1
+	}
 	orderedWrites.Queue(`
 		WITH inserted_command AS (
 			INSERT INTO secondbox.runner_commands (
 				id,runner_id,assignment_id,kind,payload,state,target_connection_id,
 				delivery_count,created_at,updated_at,delivered_at
-			) VALUES ($1,$2,$3,'assignment',$4,'pending','',0,$5,$5,NULL)
+			) VALUES ($1,$2,$3,'assignment',$4,$5,$6,$7,$8,$8,NULL)
 			RETURNING 1
 		)
 		INSERT INTO secondbox.operation_stage_timings (
 			operation_id,sandbox_id,stage,observed_at
 		)
-		SELECT $6,$7,'placement_ready',$5
+		SELECT $9,$10,'placement_ready',$8
 		FROM inserted_command
 		ON CONFLICT (operation_id,stage) DO NOTHING`,
-		request.AssignmentCommandID, assignment.RunnerID, assignment.ID, commandPayload, placementAt,
+		request.AssignmentCommandID, assignment.RunnerID, assignment.ID, commandPayload,
+		commandState, targetConnectionID, deliveryCount, placementAt,
 		request.AssignmentCommand.Correlation.OperationId,
 		request.SandboxID,
 	)
@@ -316,6 +347,20 @@ func (store *PostgresStore) scheduleOnce(
 	for _, errorPrefix := range []string{
 		"SecondBox scheduler Instance insert",
 		"SecondBox scheduler Assignment insert",
+	} {
+		if _, err := results.Exec(); err != nil && writeErr == nil {
+			writeErr = fmt.Errorf("%s: %w", errorPrefix, err)
+		}
+	}
+	if dispatch.ConnectionID != "" {
+		connectionUpdate, err := results.Exec()
+		if err != nil && writeErr == nil {
+			writeErr = fmt.Errorf("SecondBox scheduler eager Assignment dispatch: %w", err)
+		} else if err == nil && connectionUpdate.RowsAffected() != 1 && writeErr == nil {
+			writeErr = errors.New("SecondBox scheduler eager Assignment connection changed")
+		}
+	}
+	for _, errorPrefix := range []string{
 		"SecondBox scheduler Assignment command insert",
 		"SecondBox scheduler Runner reservation update",
 		"SecondBox scheduler Sandbox assignment update",
@@ -337,6 +382,56 @@ func (store *PostgresStore) scheduleOnce(
 		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler commit: %w", err)
 	}
 	return assignment, true, nil
+}
+
+type eagerAssignmentDispatch struct {
+	ConnectionID    string
+	ControlSequence int64
+}
+
+func lockEagerAssignmentDispatch(
+	ctx context.Context,
+	tx pgx.Tx,
+	runnerID string,
+) (eagerAssignmentDispatch, error) {
+	var dispatch eagerAssignmentDispatch
+	err := tx.QueryRow(ctx, `
+		SELECT connection.id,connection.last_control_sequence+1
+		FROM secondbox.runner_connections AS connection
+		WHERE connection.runner_id=$1
+		  AND connection.state='active'
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM secondbox.runner_commands AS command
+		    WHERE command.runner_id=$1
+		      AND command.state IN ('pending','delivering')
+		  )
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM secondbox.workspaces AS workspace
+		    WHERE workspace.home_runner_id=$1
+		      AND workspace.state='creating'
+		  )
+		ORDER BY connection.id
+		FOR UPDATE OF connection
+		LIMIT 1`,
+		runnerID,
+	).Scan(&dispatch.ConnectionID, &dispatch.ControlSequence)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return eagerAssignmentDispatch{}, nil
+	}
+	if err != nil {
+		return eagerAssignmentDispatch{}, fmt.Errorf(
+			"SecondBox scheduler eager Assignment connection lock: %w",
+			err,
+		)
+	}
+	if dispatch.ControlSequence <= 0 {
+		return eagerAssignmentDispatch{}, errors.New(
+			"SecondBox scheduler eager Assignment control sequence is exhausted",
+		)
+	}
+	return dispatch, nil
 }
 
 func validateScheduleRequest(request ScheduleRequest) error {

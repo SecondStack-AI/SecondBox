@@ -30,9 +30,10 @@ type CommandClaimTiming struct {
 }
 
 type rawCommandDelivery struct {
-	delivery CommandDelivery
-	payload  []byte
-	sequence int64
+	delivery           CommandDelivery
+	payload            []byte
+	sequence           int64
+	preclaimedEnvelope bool
 }
 
 // ClaimCommand binds one pending command to the active connection and assigns its sequence.
@@ -75,12 +76,26 @@ func (store *PostgresStateStore) ClaimCommands(
 			  AND connection.runner_id=$1
 			  AND connection.state='active'
 		),
+		preclaimed_commands AS MATERIALIZED (
+			SELECT command.id,command.kind,command.created_at,command.payload
+			FROM secondbox.runner_commands AS command
+			CROSS JOIN active_connection
+			WHERE command.runner_id=$1
+			  AND command.state='delivering'
+			  AND command.target_connection_id=$2
+			ORDER BY
+			  (command.id LIKE 'workspace-reconcile-%') DESC,
+			  command.created_at,
+			  command.id
+			LIMIT $3
+		),
 		candidate_commands AS MATERIALIZED (
 			SELECT command.id
 			FROM secondbox.runner_commands AS command
 			CROSS JOIN active_connection
 			WHERE command.runner_id=$1
 			  AND command.state='pending'
+			  AND NOT EXISTS (SELECT 1 FROM preclaimed_commands)
 			  AND (
 			    command.kind<>'assignment'
 			    OR NOT EXISTS (
@@ -165,6 +180,15 @@ func (store *PostgresStateStore) ClaimCommands(
 		UNION ALL
 		SELECT
 		  1,
+		  preclaimed.id,
+		  preclaimed.kind,
+		  preclaimed.created_at,
+		  preclaimed.payload,
+		  -1::bigint
+		FROM preclaimed_commands AS preclaimed
+		UNION ALL
+		SELECT
+		  2,
 		  claimed.id,
 		  claimed.kind,
 		  claimed.created_at,
@@ -203,6 +227,7 @@ func (store *PostgresStateStore) ClaimCommands(
 			connectionActive = true
 			continue
 		}
+		raw.preclaimedEnvelope = rowKind == 1
 		rawDeliveries = append(rawDeliveries, raw)
 	}
 	if err := rows.Err(); err != nil {
@@ -223,12 +248,21 @@ func (store *PostgresStateStore) ClaimCommands(
 		if err := proto.Unmarshal(raw.payload, raw.delivery.Message); err != nil {
 			return nil, fmt.Errorf("SecondBox runner command payload decoding: %w", err)
 		}
-		if err := setControlCommandEnvelope(
-			raw.delivery.ID,
-			uint64(raw.sequence),
-			raw.delivery.Message,
-		); err != nil {
-			return nil, err
+		if raw.preclaimedEnvelope {
+			if err := validateControlCommandEnvelope(
+				raw.delivery.ID,
+				raw.delivery.Message,
+			); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := setControlCommandEnvelope(
+				raw.delivery.ID,
+				uint64(raw.sequence),
+				raw.delivery.Message,
+			); err != nil {
+				return nil, err
+			}
 		}
 		deliveries = append(deliveries, raw.delivery)
 	}
@@ -372,6 +406,34 @@ func setControlCommandEnvelope(
 		message.GetLocalWorkspace().Sequence = sequence
 	default:
 		return errors.New("SecondBox runner command queue accepts assignment, fence, drain, or local-workspace commands")
+	}
+	return nil
+}
+
+func validateControlCommandEnvelope(
+	messageID string,
+	message *runnerv1.ControlPlaneToRunner,
+) error {
+	var actualMessageID string
+	var sequence uint64
+	switch {
+	case message.GetAssignment() != nil:
+		actualMessageID = message.GetAssignment().MessageId
+		sequence = message.GetAssignment().Sequence
+	case message.GetFence() != nil:
+		actualMessageID = message.GetFence().MessageId
+		sequence = message.GetFence().Sequence
+	case message.GetDrain() != nil:
+		actualMessageID = message.GetDrain().MessageId
+		sequence = message.GetDrain().Sequence
+	case message.GetLocalWorkspace() != nil:
+		actualMessageID = message.GetLocalWorkspace().MessageId
+		sequence = message.GetLocalWorkspace().Sequence
+	default:
+		return errors.New("SecondBox preclaimed runner command has an invalid payload")
+	}
+	if actualMessageID != messageID || sequence == 0 {
+		return errors.New("SecondBox preclaimed runner command envelope does not match its claim")
 	}
 	return nil
 }

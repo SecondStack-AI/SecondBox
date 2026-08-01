@@ -10,12 +10,22 @@ import (
 )
 
 func TestControlPlaneWakeupIsDeliveredOnlyAfterCommit(t *testing.T) {
+	for _, state := range []string{"pending", "delivering"} {
+		t.Run(state, func(t *testing.T) {
+			testControlPlaneWakeupIsDeliveredOnlyAfterCommit(t, state)
+		})
+	}
+}
+
+func testControlPlaneWakeupIsDeliveredOnlyAfterCommit(t *testing.T, state string) {
 	writer := newGuardDatabase(t)
-	if _, err := writer.Exec(
-		t.Context(),
-		migrationSQL(t, "0003_control_plane_wakeups.sql"),
-	); err != nil {
-		t.Fatal(err)
+	for _, migration := range []string{
+		"0003_control_plane_wakeups.sql",
+		"0006_eager_assignment_dispatch.sql",
+	} {
+		if _, err := writer.Exec(t.Context(), migrationSQL(t, migration)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	listener, err := pgx.Connect(t.Context(), writer.Config().ConnString())
 	if err != nil {
@@ -39,9 +49,10 @@ func TestControlPlaneWakeupIsDeliveredOnlyAfterCommit(t *testing.T) {
 			delivery_count,created_at,updated_at,delivered_at
 		) VALUES (
 			'command-notify','runner-notify','','local-workspace',$1,
-			'pending','',0,$2,$2,NULL
+			$2,'connection-notify',0,$3,$3,NULL
 		)`,
 		[]byte{},
+		state,
 		now,
 	); err != nil {
 		t.Fatal(err)

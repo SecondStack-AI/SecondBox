@@ -276,6 +276,41 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	if createdCount != 1 {
 		t.Fatalf("replica race created %d Assignments, want exactly 1", createdCount)
 	}
+	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	var commandState, targetConnectionID string
+	var deliveryCount, lastControlSequence int64
+	if err := pool.QueryRow(t.Context(), `
+		SELECT command.state,command.target_connection_id,command.delivery_count,
+		       connection.last_control_sequence
+		FROM secondbox.runner_commands AS command
+		JOIN secondbox.runner_connections AS connection ON connection.id=$2
+		WHERE command.assignment_id=$1`,
+		durableAssignment.ID,
+		connectionID,
+	).Scan(
+		&commandState,
+		&targetConnectionID,
+		&deliveryCount,
+		&lastControlSequence,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if commandState != "delivering" ||
+		targetConnectionID != connectionID ||
+		deliveryCount != 1 ||
+		lastControlSequence != 2 {
+		t.Fatalf(
+			"eager Assignment dispatch = state %q target %q count %d sequence %d",
+			commandState,
+			targetConnectionID,
+			deliveryCount,
+			lastControlSequence,
+		)
+	}
 	delivery, found, err := stateStore.ClaimCommand(
 		t.Context(), runnerID, connectionID, now.Add(time.Second),
 	)
@@ -346,11 +381,6 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 		t.Fatal(err)
 	}
 
-	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
 	var count int
 	var backendReference, capabilityJSON, sandboxState, guestLiveness string
 	var sandboxStartSampleCount, sandboxStartP95Milliseconds int64

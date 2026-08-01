@@ -3,7 +3,7 @@ title: Runner Admission Attribution and Dispatch Batching
 date: 2026-07-31
 status: implemented-with-open-gate
 owner: SecondStack
-provenance: Qualified lifecycle evidence on the dirty candidate based on de574bf
+provenance: Qualified lifecycle evidence on retained candidates through e947eb7
 ---
 
 # Plan: Runner Admission Attribution and Dispatch Batching
@@ -11,10 +11,11 @@ provenance: Qualified lifecycle evidence on the dirty candidate based on de574bf
 ## Outcome
 
 Make the assignment-to-runner boundary truthful, remove avoidable scheduler
-round trips, and isolate the remaining admission latency. The retained candidate
+round trips, and isolate the remaining admission latency. The retained work
 does all three, but it does not pass the snapshot plan's unsaturated
-`runner_admission` p95 target of 25 ms: the final 30-arrival run measured
-17/31 ms p50/p95.
+`runner_admission` p95 target of 25 ms. The quiet baseline measured 17/31 ms
+p50/p95; the latest eager-dispatch candidate measured 11/34 ms on a more
+heavily loaded host.
 
 The scheduler previously reused the lifecycle worker's `Now`, captured before
 the Sandbox claim and start-plan load, as the Assignment creation and
@@ -37,6 +38,15 @@ before the durable assignment writes.
   one-round-trip extended execution mode. This avoids first-use statement
   preparation on each pooled connection while preserving the same connection
   lock, command lock, sequence allocation, and delivery state transition.
+- When the selected runner has one active connection, no pending or delivering
+  command, and no creating Workspace, reserve the next control sequence and
+  bind the Assignment command to that connection inside the scheduler's
+  existing serializable placement transaction. The regular pending claim path
+  remains authoritative whenever any fast-path prerequisite is absent.
+- Deliver an already-bound Assignment with a read-only query after validating
+  its durable message ID and control sequence. Runner reconnect still requeues
+  every unacknowledged `delivering` command, whose envelope is assigned a new
+  connection-local sequence by the regular claim path.
 - Log claim and stream-send duration separately from queue and total delivery
   duration. Every qualified assignment stream send rounded to 0 ms; the
   remaining serial work is notification/queueing plus the database claim.
@@ -48,8 +58,9 @@ before the durable assignment writes.
   or Workspace mutation can become visible independently.
 - The Workspace mutation update must affect exactly one locked row. Batch
   execution and close errors remain explicit, domain-prefixed failures.
-- The claim remains the only authority that binds a pending command to the
-  active runner connection and allocates its control sequence.
+- Exactly one durable transaction binds a command to the active runner
+  connection and allocates its control sequence: the scheduler placement
+  transaction for an eligible eager Assignment, otherwise `ClaimCommands`.
 - PostgreSQL commit notification and bounded polling remain the durable,
   replica-safe wake paths. A tested same-process post-commit hint was removed
   because it did not improve the tail and added a second delivery coupling.
@@ -155,6 +166,25 @@ Its only failure is the existing Snapshot-restore assertion that expects
 `409 state_conflict` for a stale revision even though the API correctly returns
 `412 precondition_failed`; the relay candidate does not touch that contract.
 
+The next candidate folded Assignment connection binding and control-sequence
+allocation into the scheduler's existing placement commit when the runner was
+idle. Its immediately preceding loaded-host control and its qualified result
+used the same 30-arrival fixed-rate workload:
+
+| Loaded-host 30 arrivals | `runner_admission` p50/p95 | queue p50/p95 | claim query p50/p95 | `workspace_provision` p50/p95 |
+|---|---:|---:|---:|---:|
+| Empty-poll optimizations only | 51/90 ms | 15/31 ms | 33/65 ms | 299/364 ms |
+| Eager Assignment dispatch | **11/34 ms** | **10/33 ms** | **0/1 ms** | 262/324 ms |
+
+All 30 eager-dispatch arrivals completed without refusal or failure. The
+directly attributable claim reduction is retained; the 34 ms admission p95 is
+not rounded down to a gate pass. Five exact live CLI runs completed in
+0.996–1.319 seconds with a 0.999-second median, and their Assignment claim
+queries were 0–1 ms. The complete qualified KVM/Btrfs scenario then passed,
+including control-plane restart, runner-loss recovery, real relay and direct
+Port traffic, buffered and streaming exec, fencing, network policy, real
+compute boot, Snapshot restore, and retention.
+
 Do not optimize stream sending: it remains 0 ms. Re-run at least 30
 unsaturated arrivals on a quiet qualified host, and require measured p95 at or
 below 25 ms before marking runner admission complete in the snapshot-resume
@@ -165,6 +195,8 @@ Additional machine-readable evidence:
 - `.tmp/lifecycle-claim-prepared-c1-30-result.json`
 - `.tmp/lifecycle-claim-attributed-exec-c1-30-result.json`
 - `.tmp/lifecycle-claim-idle-read-c1-30-result.json`
+- `.tmp/lifecycle-relay-claim-c1-30-result.json`
+- `.tmp/lifecycle-eager-assignment-c1-30-result.json`
 
 ## Validation
 
