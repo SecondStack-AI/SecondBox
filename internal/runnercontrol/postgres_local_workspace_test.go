@@ -295,6 +295,42 @@ func TestRunnerCommandBatchClaimsAndPersistsOrderedDelivery(t *testing.T) {
 			lastSequence,
 		)
 	}
+	var tupleVersionBefore string
+	if err := store.pool.QueryRow(t.Context(), `
+		SELECT xmin::text
+		FROM secondbox.runner_connections
+		WHERE id='connection-batch'`,
+	).Scan(&tupleVersionBefore); err != nil {
+		t.Fatal(err)
+	}
+	empty, err := store.ClaimCommands(
+		t.Context(),
+		"runner-home",
+		"connection-batch",
+		3,
+		now.Add(2*time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("claimed empty command batch = %#v", empty)
+	}
+	var tupleVersionAfter string
+	if err := store.pool.QueryRow(t.Context(), `
+		SELECT xmin::text
+		FROM secondbox.runner_connections
+		WHERE id='connection-batch'`,
+	).Scan(&tupleVersionAfter); err != nil {
+		t.Fatal(err)
+	}
+	if tupleVersionAfter != tupleVersionBefore {
+		t.Fatalf(
+			"empty claim changed connection tuple version from %s to %s",
+			tupleVersionBefore,
+			tupleVersionAfter,
+		)
+	}
 }
 
 func TestRunnerCommandClaimHoldsAssignmentsBehindWorkspaceCreation(t *testing.T) {

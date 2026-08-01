@@ -68,18 +68,17 @@ func (store *PostgresStateStore) ClaimCommands(
 	}
 	acquiredAt := time.Now()
 	rows, err := connection.Query(ctx, `
-		WITH locked_connection AS MATERIALIZED (
-			SELECT connection.id,connection.last_control_sequence
+		WITH active_connection AS MATERIALIZED (
+			SELECT connection.id
 			FROM secondbox.runner_connections AS connection
 			WHERE connection.id=$2
 			  AND connection.runner_id=$1
 			  AND connection.state='active'
-			FOR UPDATE OF connection
 		),
-		chosen AS MATERIALIZED (
-			SELECT command.id,command.kind,command.created_at,command.payload
+		candidate_commands AS MATERIALIZED (
+			SELECT command.id
 			FROM secondbox.runner_commands AS command
-			CROSS JOIN locked_connection
+			CROSS JOIN active_connection
 			WHERE command.runner_id=$1
 			  AND command.state='pending'
 			  AND (
@@ -95,8 +94,28 @@ func (store *PostgresStateStore) ClaimCommands(
 			  (command.id LIKE 'workspace-reconcile-%') DESC,
 			  command.created_at,
 			  command.id
-			FOR UPDATE OF command SKIP LOCKED
 			LIMIT $3
+		),
+		locked_connection AS MATERIALIZED (
+			SELECT connection.id,connection.last_control_sequence
+			FROM secondbox.runner_connections AS connection
+			CROSS JOIN (SELECT 1 FROM candidate_commands LIMIT 1) AS pending_work
+			WHERE connection.id=$2
+			  AND connection.runner_id=$1
+			  AND connection.state='active'
+			FOR UPDATE OF connection
+		),
+		chosen AS MATERIALIZED (
+			SELECT command.id,command.kind,command.created_at,command.payload
+			FROM secondbox.runner_commands AS command
+			JOIN candidate_commands AS candidate ON candidate.id=command.id
+			CROSS JOIN locked_connection
+			WHERE command.state='pending'
+			ORDER BY
+			  (command.id LIKE 'workspace-reconcile-%') DESC,
+			  command.created_at,
+			  command.id
+			FOR UPDATE OF command SKIP LOCKED
 		),
 		pending AS MATERIALIZED (
 			SELECT
@@ -116,6 +135,7 @@ func (store *PostgresStateStore) ClaimCommands(
 			  (SELECT count(*) FROM pending)
 			FROM locked_connection
 			WHERE connection.id=locked_connection.id
+			  AND EXISTS (SELECT 1 FROM pending)
 			RETURNING locked_connection.last_control_sequence AS base_sequence
 		),
 		claimed AS (
@@ -141,7 +161,7 @@ func (store *PostgresStateStore) ClaimCommands(
 		  $4::timestamptz AS created_at,
 		  ''::bytea AS payload,
 		  0::bigint AS sequence
-		FROM locked_connection
+		FROM active_connection
 		UNION ALL
 		SELECT
 		  1,

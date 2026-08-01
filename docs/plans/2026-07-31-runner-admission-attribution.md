@@ -116,16 +116,33 @@ waiting and protobuf decoding are not optimization targets: PostgreSQL query
 execution accounts for the entire measured claim duration at millisecond
 resolution.
 
-The next candidate should remove row locking and tuple updates from empty
-polls while retaining the transactionally sequenced command claim when work is
-present. Do not optimize stream sending: it remains 0 ms. Re-run at least 30
-unsaturated arrivals, and require measured p95 at or below 25 ms before marking
-runner admission complete in the snapshot-resume plan.
+The retained follow-up removes row locking and tuple updates from empty command
+polls while preserving the transactionally sequenced claim when work is
+present. On the live development stack, the prior query changed the active
+connection tuple 11 times in two idle seconds; the retained query changed it 0
+times in the same interval, with `last_control_sequence` unchanged. A
+PostgreSQL-backed regression test verifies the same tuple-version invariant.
+
+The follow-up qualification passed all 30 arrivals but ran while the host was
+under heavier system-wide PostgreSQL and filesystem load. It measured query at
+33/62 ms, queue at 15/32 ms, `runner_admission` at 58/93 ms, and
+`workspace_provision` at 348/407 ms p50/p95. Those numbers neither demonstrate
+an admission improvement nor invalidate the earlier quiet-host baseline. The
+change is retained for the exact write-amplification reduction, not as closure
+of the latency gate.
+
+The next candidate should attribute and remove the empty relay transaction that
+currently follows every empty command claim and can delay a newly committed
+command wakeup. Do not optimize stream sending: it remains 0 ms. Re-run at
+least 30 unsaturated arrivals on a quiet qualified host, and require measured
+p95 at or below 25 ms before marking runner admission complete in the
+snapshot-resume plan.
 
 Additional machine-readable evidence:
 
 - `.tmp/lifecycle-claim-prepared-c1-30-result.json`
 - `.tmp/lifecycle-claim-attributed-exec-c1-30-result.json`
+- `.tmp/lifecycle-claim-idle-read-c1-30-result.json`
 
 ## Validation
 
