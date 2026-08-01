@@ -240,9 +240,21 @@ func TestRunnerCommandBatchClaimsAndPersistsOrderedDelivery(t *testing.T) {
 	if len(deliveries) != len(wantIDs) {
 		t.Fatalf("claimed command batch = %#v", deliveries)
 	}
+	claimTiming := deliveries[0].ClaimTiming
+	if claimTiming.Query <= 0 || claimTiming.Decode <= 0 {
+		t.Fatalf("claimed command timing = %#v", claimTiming)
+	}
 	for index := range deliveries {
 		if deliveries[index].ID != wantIDs[index] {
 			t.Fatalf("claimed command[%d] = %q, want %q", index, deliveries[index].ID, wantIDs[index])
+		}
+		if deliveries[index].ClaimTiming != claimTiming {
+			t.Fatalf(
+				"claimed command[%d] timing = %#v, want %#v",
+				index,
+				deliveries[index].ClaimTiming,
+				claimTiming,
+			)
 		}
 		var sequence uint64
 		switch {

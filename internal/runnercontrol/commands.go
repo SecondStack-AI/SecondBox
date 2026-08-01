@@ -18,6 +18,21 @@ type CommandDelivery struct {
 	CreatedAt   time.Time
 	DeliveredAt time.Time
 	Message     *runnerv1.ControlPlaneToRunner
+	ClaimTiming CommandClaimTiming
+}
+
+// CommandClaimTiming attributes the pooled PostgreSQL claim without exposing
+// database details outside the private runner-control boundary.
+type CommandClaimTiming struct {
+	PoolAcquire time.Duration
+	Query       time.Duration
+	Decode      time.Duration
+}
+
+type rawCommandDelivery struct {
+	delivery CommandDelivery
+	payload  []byte
+	sequence int64
 }
 
 // ClaimCommand binds one pending command to the active connection and assigns its sequence.
@@ -46,7 +61,13 @@ func (store *PostgresStateStore) ClaimCommands(
 	if limit <= 0 {
 		return nil, errors.New("SecondBox runner command batch limit must be positive")
 	}
-	rows, err := store.pool.Query(ctx, `
+	claimStartedAt := time.Now()
+	connection, err := store.pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox runner command batch connection acquisition: %w", err)
+	}
+	acquiredAt := time.Now()
+	rows, err := connection.Query(ctx, `
 		WITH locked_connection AS MATERIALIZED (
 			SELECT connection.id,connection.last_control_sequence
 			FROM secondbox.runner_connections AS connection
@@ -138,52 +159,67 @@ func (store *PostgresStateStore) ClaimCommands(
 		now.UTC(),
 	)
 	if err != nil {
+		connection.Release()
 		return nil, fmt.Errorf("SecondBox runner command batch lookup: %w", err)
 	}
-	deliveries := make([]CommandDelivery, 0, limit)
+	rawDeliveries := make([]rawCommandDelivery, 0, limit)
 	connectionActive := false
 	for rows.Next() {
 		var rowKind int
-		var delivery CommandDelivery
-		var payload []byte
-		var sequence int64
+		var raw rawCommandDelivery
 		if err := rows.Scan(
 			&rowKind,
-			&delivery.ID,
-			&delivery.Kind,
-			&delivery.CreatedAt,
-			&payload,
-			&sequence,
+			&raw.delivery.ID,
+			&raw.delivery.Kind,
+			&raw.delivery.CreatedAt,
+			&raw.payload,
+			&raw.sequence,
 		); err != nil {
 			rows.Close()
+			connection.Release()
 			return nil, fmt.Errorf("SecondBox runner command batch scan: %w", err)
 		}
 		if rowKind == 0 {
 			connectionActive = true
 			continue
 		}
-		delivery.Message = &runnerv1.ControlPlaneToRunner{}
-		if err := proto.Unmarshal(payload, delivery.Message); err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("SecondBox runner command payload decoding: %w", err)
-		}
-		if err := setControlCommandEnvelope(
-			delivery.ID,
-			uint64(sequence),
-			delivery.Message,
-		); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		deliveries = append(deliveries, delivery)
+		rawDeliveries = append(rawDeliveries, raw)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
+		connection.Release()
 		return nil, fmt.Errorf("SecondBox runner command batch rows: %w", err)
 	}
 	rows.Close()
+	connection.Release()
+	queryCompletedAt := time.Now()
 	if !connectionActive {
 		return nil, errors.New("SecondBox runner command connection is inactive")
+	}
+	deliveries := make([]CommandDelivery, 0, len(rawDeliveries))
+	for index := range rawDeliveries {
+		raw := &rawDeliveries[index]
+		raw.delivery.Message = &runnerv1.ControlPlaneToRunner{}
+		if err := proto.Unmarshal(raw.payload, raw.delivery.Message); err != nil {
+			return nil, fmt.Errorf("SecondBox runner command payload decoding: %w", err)
+		}
+		if err := setControlCommandEnvelope(
+			raw.delivery.ID,
+			uint64(raw.sequence),
+			raw.delivery.Message,
+		); err != nil {
+			return nil, err
+		}
+		deliveries = append(deliveries, raw.delivery)
+	}
+	decodedAt := time.Now()
+	claimTiming := CommandClaimTiming{
+		PoolAcquire: acquiredAt.Sub(claimStartedAt),
+		Query:       queryCompletedAt.Sub(acquiredAt),
+		Decode:      decodedAt.Sub(queryCompletedAt),
+	}
+	for index := range deliveries {
+		deliveries[index].ClaimTiming = claimTiming
 	}
 	return deliveries, nil
 }

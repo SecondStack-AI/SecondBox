@@ -503,6 +503,9 @@ func logCommandDeliveries(
 			"queueMs", commandQueueDuration(delivery.CreatedAt, claimedAt).Milliseconds(),
 			"deliveryMs", deliveryDurations[index].Milliseconds(),
 			"claimMs", claimDuration.Milliseconds(),
+			"claimPoolAcquireMs", delivery.ClaimTiming.PoolAcquire.Milliseconds(),
+			"claimQueryMs", delivery.ClaimTiming.Query.Milliseconds(),
+			"claimDecodeMs", delivery.ClaimTiming.Decode.Milliseconds(),
 			"streamSendMs", streamSendDurations[index].Milliseconds(),
 		)
 	}

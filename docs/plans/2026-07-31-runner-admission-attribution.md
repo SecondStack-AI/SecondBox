@@ -98,12 +98,34 @@ from this optimization pass.
 
 ## Next gate
 
-Attribute pool acquisition, PostgreSQL execution, and row decoding inside
-`ClaimCommands` independently, then test whether a pre-established outbound
-claim connection or pre-prepared claim statement removes the remaining tail.
-Do not optimize stream sending: it was 0 ms in every qualified sample. Re-run
-at least 30 unsaturated arrivals, and require measured p95 at or below 25 ms
-before marking runner admission complete in the snapshot-resume plan.
+`ClaimCommands` now attributes pool acquisition, PostgreSQL execution, and row
+decoding independently. Two consecutive qualified 30-arrival runs compared a
+pre-prepared claim statement with the retained one-round-trip extended
+execution mode on the same host:
+
+| Claim mode | pool acquire p50/p95 | query p50/p95 | decode p50/p95 | `runner_admission` p50/p95 |
+|---|---:|---:|---:|---:|
+| Pre-prepared statement | 0/0 ms | 28/59 ms | 0/0 ms | 45/91 ms |
+| One-round-trip execution | 0/0 ms | **25/48 ms** | 0/0 ms | **41/83 ms** |
+
+The host was slower throughout both runs than in the retained qualification:
+the one-round-trip control measured `workspace_provision` at 311/377 ms versus
+126/153 ms previously. The A/B result therefore rejects statement preparation
+but does not replace the earlier absolute baseline. It does establish that pool
+waiting and protobuf decoding are not optimization targets: PostgreSQL query
+execution accounts for the entire measured claim duration at millisecond
+resolution.
+
+The next candidate should remove row locking and tuple updates from empty
+polls while retaining the transactionally sequenced command claim when work is
+present. Do not optimize stream sending: it remains 0 ms. Re-run at least 30
+unsaturated arrivals, and require measured p95 at or below 25 ms before marking
+runner admission complete in the snapshot-resume plan.
+
+Additional machine-readable evidence:
+
+- `.tmp/lifecycle-claim-prepared-c1-30-result.json`
+- `.tmp/lifecycle-claim-attributed-exec-c1-30-result.json`
 
 ## Validation
 
