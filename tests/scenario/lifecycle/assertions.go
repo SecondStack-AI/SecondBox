@@ -50,8 +50,16 @@ func cellName(cell cellResult) string {
 // first, so one run names every way it fell short.
 func evaluateGate(gate gateConfig, results []cellResult) []gateViolation {
 	var violations []gateViolation
+	// A discovery run declares no ceiling, because finding one is the point. The
+	// ceiling-relative checks are meaningless then: with a declared ceiling of
+	// zero every rung counts as overload and every rung is reported for failing
+	// to refuse, which buries the checks that do apply.
+	ceilingDeclared := gate.DeclaredCeiling > 0
 	for _, cell := range results {
 		below := cell.OfferedArrivals <= gate.DeclaredCeiling
+		if !ceilingDeclared {
+			below = true
+		}
 
 		// (a) Below the declared ceiling the deployment must simply cope.
 		if below {

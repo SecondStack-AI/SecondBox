@@ -258,3 +258,33 @@ Cleanup is serial too, one delete per Sandbox with a full operation wait, so a
 six-rung ladder to 128 spends far longer tearing down than offering. Budget for
 it, and note that `maximumWallClockSeconds` is evaluated between cells precisely
 because the occupancy sampler covers only the arrival window.
+
+### A measured baseline
+
+One clean six-rung ladder, `create_to_ready`, no resident population, on a
+32-thread AMD Ryzen AI MAX+ 395 with 125 GB RAM and a Btrfs Workspace root.
+Every rung was fully admitted: no refusal, no failure, nothing shed, no rail
+tripped.
+
+| Concurrent creates | p50 ms | p95 ms | Host MiB available at low water |
+|---|---|---|---|
+| 8 | 1 514 | 1 988 | 45 330 |
+| 16 | 3 016 | 3 959 | 44 761 |
+| 20 | 3 821 | 4 701 | 44 114 |
+| 24 | 4 131 | 5 224 | 43 828 |
+| 28 | 4 634 | 5 772 | 43 889 |
+| 32 | 5 827 | 7 490 | 42 196 |
+
+Latency rises smoothly and roughly linearly — about 150 ms of p50 per additional
+concurrent create beyond the first eight — with no knee in the usual sense. The
+run reports a latency knee at 16 only because p95 doubles from the 8 baseline,
+which the 1.5 ratio flags; that is the cost of concurrency, not a ceiling.
+
+Nothing here bounded the deployment. The configured ceiling was 160 and memory
+never dropped below 41 GB free, so this ladder measures how a healthy deployment
+scales rather than where it stops. Finding the actual ceiling needs deeper rungs,
+which the /24 guest network caps at 253.
+
+Note that wall-clock is dominated by teardown, not measurement: each rung deletes
+its Sandboxes one at a time with a full Operation wait, so the six rungs above
+took roughly 25 minutes of which the measured windows were a small fraction.

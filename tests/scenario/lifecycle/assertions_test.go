@@ -156,3 +156,26 @@ func TestGateModeIsRequiredAndExplicit(t *testing.T) {
 		}
 	})
 }
+
+// A discovery run declares no ceiling, because finding one is the point. With a
+// declared ceiling of zero every rung would otherwise count as overload and be
+// reported for failing to refuse, burying the checks that do apply.
+func TestGateWithoutADeclaredCeilingSkipsCeilingChecks(t *testing.T) {
+	observe := gateConfig{Mode: gateObserve, DeclaredCeiling: 0}
+	violations := evaluateGate(observe, []cellResult{rung(8), rung(16), rung(32)})
+	if len(violations) != 0 {
+		t.Fatalf("a run with no declared ceiling reported %v", checkNames(violations))
+	}
+}
+
+// The checks that do not depend on a ceiling still apply without one.
+func TestGateWithoutACeilingStillCatchesDriverShedding(t *testing.T) {
+	shedCell := rung(32)
+	shedCell.ShedArrivals = 4
+	violations := evaluateGate(
+		gateConfig{Mode: gateObserve, DeclaredCeiling: 0}, []cellResult{shedCell},
+	)
+	if len(violations) != 1 || violations[0].Check != "measured-the-deployment" {
+		t.Fatalf("violations = %v", checkNames(violations))
+	}
+}

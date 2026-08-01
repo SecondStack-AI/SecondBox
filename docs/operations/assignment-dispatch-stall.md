@@ -11,6 +11,22 @@ making progress entirely — no control-plane request completes, no runner contr
 event is persisted, no runner event is logged — until the clients abandon their
 waits. Bursts of 8 and 16 against the same deployment complete normally.
 
+## It is intermittent, not a concurrency threshold
+
+**A second run did not reproduce it.** A six-rung ladder of 8, 16, 20, 24, 28 and
+32 completed cleanly against the same deployment on the same host: 128 microVMs
+started, every rung fully admitted, no refusal, no failure, no rail trip. Latency
+grew smoothly with batch size, which is what a healthy deployment under rising
+load looks like.
+
+So concurrency is not sufficient to trigger this, and 32 is not a ceiling. The
+first run's stall was a race that happened to land, which makes it harder to
+catch and more important to fix: the failure mode is a permanent stall of one
+runner, and nothing recovers from it.
+
+Anything below that reads as a threshold — including the section headings here —
+should be read as describing the one run in which it occurred.
+
 ## The gate
 
 Two independent paths refuse to dispatch an `assignment` command while any
