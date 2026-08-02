@@ -602,6 +602,31 @@ func validateRunner(prefix string, r Runner) error {
 				return manifestError(prefix+"."+name+" must be absolute", nil)
 			}
 		}
+		if r.IdentityDirectory != "/run/secondbox-runner-identity" {
+			return manifestError(prefix+".identity_directory must be /run/secondbox-runner-identity for same-host Compose placement", nil)
+		}
+		for name, value := range map[string]string{
+			"firecracker_kernel_path":       r.FirecrackerKernelPath,
+			"firecracker_rootfs_path":       r.FirecrackerRootFSPath,
+			"firecracker_shared_image_path": r.FirecrackerSharedImagePath,
+			"artifact_public_key":           r.ArtifactPublicKey,
+		} {
+			if !pathWithin("/opt/secondbox-artifacts", value) {
+				return manifestError(prefix+"."+name+" must be within /opt/secondbox-artifacts for same-host Compose placement", nil)
+			}
+		}
+		for name, value := range map[string]string{
+			"log_path":                        r.LogPath,
+			"log_directory":                   r.LogDirectory,
+			"firecracker_jail_root":           r.FirecrackerJailRoot,
+			"firecracker_run_directory":       r.FirecrackerRunDirectory,
+			"firecracker_log_directory":       r.FirecrackerLogDirectory,
+			"sandbox_network_state_directory": r.SandboxNetworkStateDir,
+		} {
+			if !pathWithin("/var/lib/secondbox-runner", value) {
+				return manifestError(prefix+"."+name+" must be within /var/lib/secondbox-runner for same-host Compose placement", nil)
+			}
+		}
 	}
 	for name, value := range map[string]*int64{"firecracker_jailer_uid": r.FirecrackerJailerUID, "firecracker_jailer_gid": r.FirecrackerJailerGID, "firecracker_cgroup_version": r.FirecrackerCgroupVersion, "storage_pressure_recovery_percent": r.StorageRecoveryPercent, "storage_pressure_warning_percent": r.StorageWarningPercent, "storage_pressure_admission_deny_percent": r.StorageAdmissionDenyPercent, "sandbox_max_vcpus": r.SandboxMaxVCPUs, "sandbox_max_memory_mib": r.SandboxMaxMemoryMiB, "sandbox_max_disk_mib": r.SandboxMaxDiskMiB, "sandbox_memory_budget_mib": r.SandboxMemoryBudgetMiB, "network_policy_max_dns_pins": r.NetworkPolicyMaxDNSPins, "max_concurrent_per_sandbox": r.MaxConcurrentPerSandbox, "max_concurrent_global": r.MaxConcurrentGlobal, "max_concurrent_starts": r.MaxConcurrentStarts, "max_concurrent_workspace_creates": r.MaxConcurrentWorkspaceCreates, "max_concurrent_operations_global": r.MaxConcurrentOperationsGlobal, "file_transfer_max_bytes": r.FileTransferMaxBytes, "guest_control_vsock_port": r.GuestControlVSockPort, "guest_protocol_vsock_port": r.GuestProtocolVSockPort} {
 		if value == nil || *value < 1 {
@@ -617,6 +642,11 @@ func validateRunner(prefix string, r Runner) error {
 		return manifestError(prefix+" storage pressure thresholds must be increasing", nil)
 	}
 	return nil
+}
+
+func pathWithin(root, path string) bool {
+	relative, err := filepath.Rel(root, path)
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func addPolicyEnvironment(environment map[string]string, p Policy) {
