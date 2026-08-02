@@ -2,7 +2,9 @@ package deployconfig
 
 import (
 	"bytes"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -423,6 +425,48 @@ func TestSecretAndPrivateKeyReferencesRejectPermissiveModes(t *testing.T) {
 				t.Fatalf("permissive private file error = %v", err)
 			}
 		})
+	}
+}
+
+func TestRunnerInitAcceptsTheValidatedPKCS8CAKeyFormat(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	manifest, err := ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caKeyPath := filepath.Join(filepath.Dir(manifestPath), manifest.RunnerTrust.CAPrivateKeyFile)
+	content, err := os.ReadFile(caKeyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, remainder := pem.Decode(content)
+	if block == nil || len(remainder) != 0 {
+		t.Fatal("generated CA key is not one PEM block")
+	}
+	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkcs8, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(caKeyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest.Runners = []Runner{validTestRunner("runner-pkcs8", "remote")}
+	encoded, err := encodeManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Resolve(manifestPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunnerInit(manifestPath, "runner-pkcs8", filepath.Join(t.TempDir(), "runner-pkcs8")); err != nil {
+		t.Fatal(err)
 	}
 }
 
