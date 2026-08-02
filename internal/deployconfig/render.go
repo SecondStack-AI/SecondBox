@@ -48,10 +48,20 @@ func Render(manifestPath, environmentPath string) (ResolvedDeployment, error) {
 }
 
 func removeStaleRunnerArtifacts(directory string, desired map[string]map[string]string) error {
-	entries, err := os.ReadDir(directory)
+	directoryInfo, err := os.Lstat(directory)
 	if os.IsNotExist(err) {
 		return nil
 	}
+	if err != nil {
+		return err
+	}
+	if !directoryInfo.IsDir() || directoryInfo.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s must be a non-symbolic-link directory", directory)
+	}
+	if directoryInfo.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("%s must not grant group or other access", directory)
+	}
+	entries, err := os.ReadDir(directory)
 	if err != nil {
 		return err
 	}
@@ -159,9 +169,15 @@ func Inspect(manifestPath string) ([]byte, error) {
 		"SECONDBOX_OBJECT_STORE_ROOT_PASSWORD": true, "SECONDBOX_RUNNER_CA_PRIVATE_KEY": true,
 		"SECONDBOX_RUNNER_SERVER_PRIVATE_KEY": true,
 	}
+	secretPathNames := map[string]bool{
+		"SECONDBOX_RUNNER_PKI_HOST_DIR":      true,
+		"SECONDBOX_RUNNER_IDENTITY_HOST_DIR": true,
+	}
 	for name, value := range resolved.Environment {
 		if secretNames[name] {
 			redacted[name] = "<redacted:" + SecretFingerprint(value) + ">"
+		} else if secretPathNames[name] {
+			redacted[name] = "<redacted-path>"
 		} else {
 			redacted[name] = value
 		}
