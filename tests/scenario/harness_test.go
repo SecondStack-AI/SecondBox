@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +25,8 @@ const (
 	scenarioRunnerPool = "scenario-pool"
 	scenarioRunnerID   = "scenario-runner"
 )
+
+var scenarioKeySequence atomic.Uint64
 
 type scenarioFixture struct {
 	baseURL       string
@@ -156,7 +159,7 @@ func TestScenarioDeploymentHealth(t *testing.T) {
 func uniqueScenarioKey(t *testing.T, suffix string) string {
 	t.Helper()
 	name := strings.ToLower(strings.NewReplacer("/", "-", "_", "-").Replace(t.Name()))
-	return fmt.Sprintf("%s-%s-%d", name, suffix, time.Now().UnixNano())
+	return fmt.Sprintf("%s-%s-%d", name, suffix, scenarioKeySequence.Add(1))
 }
 
 func ensureScenarioRunnerPool(t *testing.T, fixture scenarioFixture) contracts.RunnerPool {
