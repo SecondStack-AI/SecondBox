@@ -189,6 +189,22 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 	}
 }
 
+func TestManifestValidationUsesTheRuntimeAssetCatalogSchema(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	manifest, err := ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogPath := filepath.Join(filepath.Dir(manifestPath), manifest.Deployment.SignedAssetCatalog)
+	incomplete := `{"assets":[{"manifestDigest":"` + developmentBundleDigest + `","signatureKeyId":"review-key"}]}`
+	if err := os.WriteFile(catalogPath, []byte(incomplete), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Resolve(manifestPath); err == nil || !strings.Contains(err.Error(), "incomplete trust evidence") {
+		t.Fatalf("runtime catalog schema error = %v", err)
+	}
+}
+
 func TestBundledDatabaseURLPreservesUserInfoBytes(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
 	manifest, err := ReadManifest(manifestPath)
