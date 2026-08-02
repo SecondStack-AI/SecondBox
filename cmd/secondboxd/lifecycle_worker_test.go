@@ -24,7 +24,7 @@ func TestLifecycleReconcilerRunsImmediatelyAndStopsWithContext(t *testing.T) {
 	go func() {
 		completed <- runLifecycleReconciler(ctx, lifecycle.Reconciler{
 			Store: store, WorkerID: "worker-process",
-			ClaimDuration: time.Minute, PollInterval: time.Hour,
+			ClaimDuration: time.Minute, PollInterval: time.Hour, BatchSize: 1,
 		}, nil)
 	}()
 	select {
@@ -48,7 +48,7 @@ func TestLifecycleReconcilerRetriesRevisionContention(t *testing.T) {
 	store := &contentionLifecycleStore{cancel: cancel, applyErr: ports.ErrRevisionConflict}
 	err := runLifecycleReconciler(ctx, lifecycle.Reconciler{
 		Store: store, WorkerID: "worker-contention",
-		ClaimDuration: time.Minute, PollInterval: time.Hour,
+		ClaimDuration: time.Minute, PollInterval: time.Hour, BatchSize: 1,
 	}, nil)
 	if err != nil || store.applyCalls != 1 || store.claimCalls != 2 {
 		t.Fatalf(
@@ -84,7 +84,7 @@ func TestReconcileWorkersSurfaceUnexpectedErrors(t *testing.T) {
 	}
 	lifecycleErr := runLifecycleReconciler(t.Context(), lifecycle.Reconciler{
 		Store: lifecycleStore, WorkerID: "worker-unexpected",
-		ClaimDuration: time.Minute, PollInterval: time.Hour,
+		ClaimDuration: time.Minute, PollInterval: time.Hour, BatchSize: 1,
 	}, nil)
 	if !errors.Is(lifecycleErr, unexpected) {
 		t.Fatalf("unexpected lifecycle error = %v", lifecycleErr)

@@ -142,6 +142,15 @@ latency, per-event persistence latency, local Workspace command execution, and
 Workspace format/fsync/publish time. Runner-private details do not enter public
 schemas.
 
+The lifecycle worker claims an explicitly configured bounded cohort of
+oldest-due Sandboxes atomically, then processes its effects sequentially. This
+amortizes claim cleanup and selection without multiplying concurrent
+serializable scheduler transactions. `placement_pickup` includes time an item
+waits behind earlier effects in its claimed cohort; `placement_reconcile`
+starts when that specific item begins processing. Claim acquisition changes
+only the private owner and expiry fence, so it does not create a public Sandbox
+revision or activity update.
+
 ## Running it
 
 The benchmark reuses the qualified artifact bundle, trust anchor, and Workspace
@@ -156,6 +165,11 @@ export SECONDBOX_LIFECYCLE_OUTPUT=/absolute/path/to/result.json
 export SECONDBOX_RUNNER_WORKSPACE_ROOT=/absolute/mode-0700/dir/on/xfs/or/btrfs
 just test-lifecycle
 ```
+
+The deployment also requires
+`SECONDBOX_LIFECYCLE_RECONCILE_BATCH_SIZE`. The qualified scenario uses `8`;
+it is a bounded claim size, not a worker-concurrency setting. Treat changes as
+performance candidates and requalify both unsaturated and repeated-burst runs.
 
 Omitting `SECONDBOX_LIFECYCLE_CONFIG` uses `scripts/lifecycle-config.example.json`.
 Omitting the artifact, trust, and Workspace variables falls back to the prepared

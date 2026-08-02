@@ -41,6 +41,7 @@ type Config struct {
 	DataPlaneRetention               time.Duration
 	DataPlaneMaximumFrameBytes       int64
 	DataPlaneMaximumSessionBytes     int64
+	LifecycleReconcileBatchSize      int
 	LifecycleReconcilePollInterval   time.Duration
 	LifecycleReconcileClaimDuration  time.Duration
 	AssignmentClaimDuration          time.Duration
@@ -186,6 +187,14 @@ func FromEnvironment() (Config, error) {
 	if dataPlaneMaximumSessionBytes < dataPlaneMaximumFrameBytes {
 		return Config{}, errorsForEnvironment("data-plane session byte bound is smaller than frame byte bound")
 	}
+	lifecycleReconcileBatchSize, err := requiredPositiveInt64("SECONDBOX_LIFECYCLE_RECONCILE_BATCH_SIZE")
+	if err != nil {
+		return Config{}, err
+	}
+	lifecycleReconcileBatchSizeInt := int(lifecycleReconcileBatchSize)
+	if int64(lifecycleReconcileBatchSizeInt) != lifecycleReconcileBatchSize {
+		return Config{}, errorsForEnvironment("lifecycle reconcile batch size exceeds process integer range")
+	}
 	lifecycleReconcilePollMilliseconds, err := requiredPositiveInt64("SECONDBOX_LIFECYCLE_RECONCILE_POLL_INTERVAL_MILLISECONDS")
 	if err != nil {
 		return Config{}, err
@@ -313,6 +322,7 @@ func FromEnvironment() (Config, error) {
 		DataPlaneRetention:               time.Duration(dataPlaneRetentionSeconds) * time.Second,
 		DataPlaneMaximumFrameBytes:       dataPlaneMaximumFrameBytes,
 		DataPlaneMaximumSessionBytes:     dataPlaneMaximumSessionBytes,
+		LifecycleReconcileBatchSize:      lifecycleReconcileBatchSizeInt,
 		LifecycleReconcilePollInterval:   time.Duration(lifecycleReconcilePollMilliseconds) * time.Millisecond,
 		LifecycleReconcileClaimDuration:  time.Duration(lifecycleReconcileClaimMilliseconds) * time.Millisecond,
 		AssignmentClaimDuration:          time.Duration(assignmentClaimMilliseconds) * time.Millisecond,

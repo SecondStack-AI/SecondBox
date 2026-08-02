@@ -63,6 +63,114 @@ func TestPostgresLifecycleClaimRequiresExplicitIntentAfterTerminalFailure(t *tes
 	}
 }
 
+func TestPostgresLifecycleBatchClaimsOrderedCohortAndClosesExpiredActivity(t *testing.T) {
+	controlPlaneStore := openStoreTest(t)
+	now := time.Date(2025, 1, 2, 12, 0, 0, 0, time.UTC)
+	if _, err := controlPlaneStore.pool.Exec(t.Context(), `
+		INSERT INTO secondbox.profile_revisions (
+			id,profile_name,revision_number,spec_json,created_at
+		) VALUES ('revision-batch','profile-batch',1,'{}',$1);
+		INSERT INTO secondbox.workspaces (
+			id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,
+			logical_capacity_bytes,generation,mutation_kind,mutation_id,
+			mutation_effect_id,mutation_operation_id,mutation_expected_generation,
+			mutation_target_generation,mutation_state,local_receipt_json,
+			created_at,updated_at
+		) VALUES
+			('workspace-batch-a','tenant','subject','sandbox-batch-a','runner-home',
+			 'ready',1048576,1,'','','','',NULL,NULL,'','{}',$1,$1),
+			('workspace-batch-b','tenant','subject','sandbox-batch-b','runner-home',
+			 'ready',1048576,1,'','','','',NULL,NULL,'','{}',$1,$1);
+		INSERT INTO secondbox.sandboxes (
+			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
+			generation,workspace_id,current_instance_id,metadata_json,
+			compatibility_summary_json,next_reconcile_at,revision,created_at,updated_at
+		) VALUES
+			('sandbox-batch-a','tenant','subject','profile-batch','revision-batch','creating','stopped',
+			 1,'workspace-batch-a','','{}','{}',$1,1,$1,$1),
+			('sandbox-batch-b','tenant','subject','profile-batch','revision-batch','creating','stopped',
+			 1,'workspace-batch-b','','{}','{}',$1,1,$1,$1);
+		INSERT INTO secondbox.leases (
+			id,tenant_ref,subject_ref,sandbox_id,generation,state,
+			expires_at,revision,created_at,updated_at
+		) VALUES (
+			'lease-batch-expired','tenant','subject','sandbox-batch-a',1,'active',
+			$2,1,$2,$2
+		);
+		INSERT INTO secondbox.activity_sessions (
+			id,tenant_ref,subject_ref,sandbox_id,generation,kind,state,lease_id,
+			last_activity_at,created_at,updated_at
+		) VALUES (
+			'activity-batch-expired','tenant','subject','sandbox-batch-a',1,
+			'terminal','active','lease-batch-expired',$2,$2,$2
+		)`,
+		pgx.QueryExecModeSimpleProtocol,
+		now,
+		now.Add(-time.Minute),
+	); err != nil {
+		t.Fatal(err)
+	}
+	var due int
+	if err := controlPlaneStore.pool.QueryRow(t.Context(), `
+		SELECT count(*)
+		FROM secondbox.sandboxes AS sandbox
+		JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
+		WHERE sandbox.id IN ('sandbox-batch-a','sandbox-batch-b')
+		  AND sandbox.state<>'deleted' AND sandbox.next_reconcile_at<=$1
+		  AND NOT (sandbox.state='failed' AND sandbox.lifecycle_failure_class<>'')
+		  AND NOT (
+		    sandbox.state IN ('stopped','failed') AND sandbox.desired_state='stopped'
+		  )
+		  AND (
+		    sandbox.reconcile_claim_expires_at IS NULL
+		    OR sandbox.reconcile_claim_expires_at<=$1
+		    OR sandbox.reconcile_owner=$2
+		  )`,
+		now, "worker-batch",
+	).Scan(&due); err != nil || due != 2 {
+		t.Fatalf("due batch Sandboxes = %d, %v", due, err)
+	}
+	claimAt := now.Add(2 * time.Minute)
+	claims, err := controlPlaneStore.ClaimLifecycleBatch(
+		t.Context(), "worker-batch", claimAt, time.Minute, 2,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claims) != 2 ||
+		claims[0].SandboxID != "sandbox-batch-a" ||
+		claims[1].SandboxID != "sandbox-batch-b" ||
+		claims[0].Revision != 1 || claims[1].Revision != 1 ||
+		claims[0].WorkerID != "worker-batch" || claims[1].WorkerID != "worker-batch" ||
+		claims[0].ActiveSessions != 0 {
+		t.Fatalf("batch claims = %#v", claims)
+	}
+	var leaseState, sessionState string
+	var sandboxRevision int64
+	var sandboxUpdatedAt time.Time
+	if err := controlPlaneStore.pool.QueryRow(t.Context(), `
+		SELECT lease.state,session.state,sandbox.revision,sandbox.updated_at
+		FROM secondbox.leases AS lease
+		JOIN secondbox.activity_sessions AS session ON session.lease_id=lease.id
+		JOIN secondbox.sandboxes AS sandbox ON sandbox.id=lease.sandbox_id
+		WHERE lease.id='lease-batch-expired'`,
+	).Scan(&leaseState, &sessionState, &sandboxRevision, &sandboxUpdatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if leaseState != contracts.LeaseStateExpired || sessionState != "closed" ||
+		sandboxRevision != 1 || !sandboxUpdatedAt.Equal(now) {
+		t.Fatalf(
+			"claim side effects = lease/session %q/%q Sandbox revision/updated %d/%s",
+			leaseState, sessionState, sandboxRevision, sandboxUpdatedAt,
+		)
+	}
+	if later, err := controlPlaneStore.ClaimLifecycleBatch(
+		t.Context(), "worker-batch-other", claimAt, time.Minute, 2,
+	); err != nil || len(later) != 0 {
+		t.Fatalf("claimed fenced cohort = %#v, %v", later, err)
+	}
+}
+
 func TestPostgresAutomaticRetirementStopsDesiredCompute(t *testing.T) {
 	for _, terminationReason := range []string{
 		contracts.TerminationReasonIdleTimeout,

@@ -247,9 +247,22 @@ A third ten-rung burst-32 qualification admitted 320/320 arrivals with no
 failure, refusal, shed, or shutdown while absorbing 21 serialization failures.
 Its end-to-end p50 ranged from 3,300 to 4,355 ms and p95 from 4,262 to
 5,859 ms. The remaining burst placement pickup was 1.5–2.1 seconds p50 because
-one lifecycle worker still consumes each simultaneously due cohort serially.
+one lifecycle worker still consumed each simultaneously due cohort serially.
 
-Any worker-concurrency or batched-claim candidate must keep
-`runner_connections` out of placement, preserve SKIP LOCKED claims and the
-Sandbox/Workspace lock order, and pass the unsaturated 30-arrival qualification,
-the repeated burst ladder, and the full KVM/Btrfs scenario.
+Independent-worker experiments were rejected: two workers raised burst p50 to
+4.4–5.6 seconds with 134 serialization failures, while eight raised it to
+5.6–6.7 seconds with 1,434. The serializable scheduler transaction became the
+contention point.
+
+The retained configuration atomically claims at most eight oldest-due
+Sandboxes with `FOR UPDATE SKIP LOCKED`, then runs their effects sequentially.
+The private claim fence does not mutate the public revision or `updated_at`.
+The 30-arrival workload improved to 635/710 ms end to end and 192/223 ms
+pre-assignment. A ten-rung burst-32 qualification completed 320/320 with no
+failure, refusal, shed, or shutdown; mean pickup improved from 1,738/1,933 ms
+to 1,156/1,342 ms p50/p95 and serialization failures fell from 21 to 14.
+
+Keep `runner_connections` out of placement and preserve the owner-side command
+claim, Sandbox/Workspace lock order, generation fence, and bounded sequential
+effects. The next investigation belongs in runner-local Workspace provisioning
+and guest negotiation, not additional control-plane worker concurrency.

@@ -70,6 +70,7 @@ func TestComposeSeparatesOptionalPrivilegedRunnerFromControlPlane(t *testing.T) 
 		"${SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES:?",
 		"${SECONDBOX_LIFECYCLE_RECONCILE_POLL_INTERVAL_MILLISECONDS:?",
 		"${SECONDBOX_LIFECYCLE_RECONCILE_CLAIM_DURATION_MILLISECONDS:?",
+		"${SECONDBOX_LIFECYCLE_RECONCILE_BATCH_SIZE:?",
 		"${SECONDBOX_OBJECT_STORE_IMAGE:?",
 		"${SECONDBOX_POSTGRES_IMAGE:?",
 		"${SECONDBOX_RUNNER_PKI_HOST_DIR:?",
@@ -257,6 +258,7 @@ func TestDeploymentEnvironmentHasNoBlankOrSharedCredentials(t *testing.T) {
 		"SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES=67108864",
 		"SECONDBOX_LIFECYCLE_RECONCILE_POLL_INTERVAL_MILLISECONDS=250",
 		"SECONDBOX_LIFECYCLE_RECONCILE_CLAIM_DURATION_MILLISECONDS=30000",
+		"SECONDBOX_LIFECYCLE_RECONCILE_BATCH_SIZE=8",
 	} {
 		if !strings.Contains(example, runnerSetting) {
 			t.Errorf("deploy/environment.example must contain %q", runnerSetting)
@@ -412,6 +414,12 @@ func TestDeploymentValidatorRejectsInvalidRunnerRuntimeSettings(t *testing.T) {
 			oldSetting:  "SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES=67108864",
 			newSetting:  "SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES=1048575",
 			errorMarker: "must be at least SECONDBOX_DATA_PLANE_MAXIMUM_FRAME_BYTES",
+		},
+		{
+			name:        "zero lifecycle reconcile batch size",
+			oldSetting:  "SECONDBOX_LIFECYCLE_RECONCILE_BATCH_SIZE=8",
+			newSetting:  "SECONDBOX_LIFECYCLE_RECONCILE_BATCH_SIZE=0",
+			errorMarker: "SECONDBOX_LIFECYCLE_RECONCILE_BATCH_SIZE",
 		},
 		{
 			name:        "storage recovery reaches warning",
