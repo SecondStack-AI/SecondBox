@@ -3,7 +3,7 @@ title: Runner Admission Attribution and Dispatch Batching
 date: 2026-07-31
 status: implemented-with-open-gate
 owner: SecondStack
-provenance: Qualified lifecycle evidence on retained candidates through e947eb7
+provenance: Qualified lifecycle evidence through 89afa63 and repeated-burst race evidence at 05bbd8e
 ---
 
 # Plan: Runner Admission Attribution and Dispatch Batching
@@ -11,11 +11,15 @@ provenance: Qualified lifecycle evidence on retained candidates through e947eb7
 ## Outcome
 
 Make the assignment-to-runner boundary truthful, remove avoidable scheduler
-round trips, and isolate the remaining admission latency. The retained work
-does all three, but it does not pass the snapshot plan's unsaturated
-`runner_admission` p95 target of 25 ms. The quiet baseline measured 17/31 ms
-p50/p95; the latest eager-dispatch candidate measured 11/34 ms on a more
-heavily loaded host.
+round trips where they do not compromise placement concurrency, and isolate
+the remaining admission latency. The retained work does all three, but it does
+not pass the snapshot plan's unsaturated `runner_admission` p95 target of
+25 ms. The earlier quiet baseline measured 17/31 ms p50/p95. A later eager
+dispatch candidate measured 11/34 ms, but it was rejected after repeated
+bursts proved that locking the runner's single connection row inside every
+placement could exhaust serialization retries and shut down the control plane.
+The race-safe owner-claim design currently measures 39/66 ms on the same
+30-arrival unsaturated workload.
 
 The scheduler previously reused the lifecycle worker's `Now`, captured before
 the Sandbox claim and start-plan load, as the Assignment creation and
@@ -38,15 +42,16 @@ before the durable assignment writes.
   one-round-trip extended execution mode. This avoids first-use statement
   preparation on each pooled connection while preserving the same connection
   lock, command lock, sequence allocation, and delivery state transition.
-- When the selected runner has one active connection, no pending or delivering
-  command, and no creating Workspace, reserve the next control sequence and
-  bind the Assignment command to that connection inside the scheduler's
-  existing serializable placement transaction. The regular pending claim path
-  remains authoritative whenever any fast-path prerequisite is absent.
-- Deliver an already-bound Assignment with a read-only query after validating
-  its durable message ID and control sequence. Runner reconnect still requeues
-  every unacknowledged `delivering` command, whose envelope is assigned a new
-  connection-local sequence by the regular claim path.
+- Queue every Assignment command as `pending`. The connection owner's
+  `ClaimCommands` call binds it to the active connection and allocates its
+  connection-local control sequence. Placement never locks or updates
+  `runner_connections`.
+- Keep runner reconnect recovery unchanged: it requeues every unacknowledged
+  `delivering` command, and the current connection owner assigns a fresh local
+  sequence through the same claim path.
+- Classify exhausted serializable retries as expected contention, defer both
+  reconcilers rather than terminating the process, and use full-jitter retry
+  backoff so a colliding cohort does not retry in lockstep.
 - Log claim and stream-send duration separately from queue and total delivery
   duration. Every qualified assignment stream send rounded to 0 ms; the
   remaining serial work is notification/queueing plus the database claim.
@@ -59,8 +64,11 @@ before the durable assignment writes.
 - The Workspace mutation update must affect exactly one locked row. Batch
   execution and close errors remain explicit, domain-prefixed failures.
 - Exactly one durable transaction binds a command to the active runner
-  connection and allocates its control sequence: the scheduler placement
-  transaction for an eligible eager Assignment, otherwise `ClaimCommands`.
+  connection and allocates its control sequence: the connection owner's
+  `ClaimCommands` transaction.
+- A runner's single connection row must not enter the concurrent placement
+  transaction. The owner-side claim has one writer by construction; placement
+  has as many writers as concurrent Sandbox starts.
 - PostgreSQL commit notification and bounded polling remain the durable,
   replica-safe wake paths. A tested same-process post-commit hint was removed
   because it did not improve the tail and added a second delivery coupling.
@@ -169,7 +177,8 @@ Its only failure is the existing Snapshot-restore assertion that expects
 The next candidate folded Assignment connection binding and control-sequence
 allocation into the scheduler's existing placement commit when the runner was
 idle. Its immediately preceding loaded-host control and its qualified result
-used the same 30-arrival fixed-rate workload:
+used the same 30-arrival fixed-rate workload. This is historical evidence for
+a rejected candidate, not the retained design:
 
 | Loaded-host 30 arrivals | `runner_admission` p50/p95 | queue p50/p95 | claim query p50/p95 | `workspace_provision` p50/p95 |
 |---|---:|---:|---:|---:|
@@ -177,18 +186,56 @@ used the same 30-arrival fixed-rate workload:
 | Eager Assignment dispatch | **11/34 ms** | **10/33 ms** | **0/1 ms** | 262/324 ms |
 
 All 30 eager-dispatch arrivals completed without refusal or failure. The
-directly attributable claim reduction is retained; the 34 ms admission p95 is
-not rounded down to a gate pass. Five exact live CLI runs completed in
+directly attributable claim reduction was real, but the implementation was not
+safe to retain; the 34 ms admission p95 is also not rounded down to a gate
+pass. Five exact live CLI runs completed in
 0.996–1.319 seconds with a 0.999-second median, and their Assignment claim
 queries were 0–1 ms. The complete qualified KVM/Btrfs scenario then passed,
 including control-plane restart, runner-loss recovery, real relay and direct
 Port traffic, buffered and streaming exec, fencing, network policy, real
 compute boot, Snapshot restore, and retention.
 
-Do not optimize stream sending: it remains 0 ms. Re-run at least 30
-unsaturated arrivals on a quiet qualified host, and require measured p95 at or
-below 25 ms before marking runner admission complete in the snapshot-resume
-plan.
+The later repeated burst-32 capacity ladder exposed the missing concurrency
+case. Every placement for one runner took `FOR UPDATE` on that runner's single
+connection row under serializable isolation. The second rung could exhaust the
+three-retry budget and terminate the reconciler, which initiated coordinated
+server shutdown. Commit `05bbd8e` removed that lock from placement, restored
+owner-side claims, made exhausted contention explicitly retryable, and added
+full-jitter backoff. Two independent ten-rung qualifications then admitted
+640/640 arrivals with no shutdown; 24 and 26 serialization failures were
+absorbed. See `docs/operations/assignment-dispatch-stall.md`.
+
+The race-safe current `main` was rebaselined with 30 fixed arrivals at 0.25/s,
+maximum in-flight 1, KVM, Btrfs Workspaces, and the same signed bundle. All 30
+completed with no refusal or failure:
+
+| Current race-safe dispatch | p50 | p95 | p99 |
+|---|---:|---:|---:|
+| `create_to_ready` | 1,144 ms | 1,695 ms | 1,698 ms |
+| `pre_assignment` | 662 ms | 1,152 ms | 1,178 ms |
+| `placement` | 415 ms | 843 ms | 859 ms |
+| `workspace_provision` | 235 ms | 307 ms | 391 ms |
+| `runner_admission` | 39 ms | 66 ms | 74 ms |
+| Assignment queue | 12 ms | 32 ms | 34 ms |
+| Assignment claim query | 25 ms | 48 ms | 52 ms |
+| `runner_boot` | 433 ms | 479 ms | 488 ms |
+| `client_visibility` | 33 ms | 57 ms | 62 ms |
+
+Pool acquisition, decode, and stream send remained 0 ms. Five exact live
+`secondbox run coding-environment -- python3 -c 'print("hello")'` checks on a
+control plane rebuilt from `89afa63` completed in 1.234–1.391 seconds, with a
+1.363-second median. The full current KVM/Btrfs scenario also passed every
+group, including Snapshot restore and retention.
+
+Do not optimize stream sending, pool acquisition, or decoding: they remain
+0 ms. Do not recover the claim-query savings by moving the connection row back
+into placement. The next pass should split `placement` into lifecycle pickup,
+start-plan lookup, runner selection/locks, ordered writes, commit, and
+serialization retry time. Its current 415/843 ms is much larger than the
+25/48 ms owner claim and is the first safe optimization target. Re-run at least
+30 unsaturated arrivals and the repeated burst ladder after each retained
+candidate, and require `runner_admission` p95 at or below 25 ms before marking
+the admission gate complete.
 
 Additional machine-readable evidence:
 
@@ -197,6 +244,7 @@ Additional machine-readable evidence:
 - `.tmp/lifecycle-claim-idle-read-c1-30-result.json`
 - `.tmp/lifecycle-relay-claim-c1-30-result.json`
 - `.tmp/lifecycle-eager-assignment-c1-30-result.json`
+- `.tmp/lifecycle-post-race-fix-c1-30-result.json`
 
 ## Validation
 
@@ -210,4 +258,5 @@ Additional machine-readable evidence:
 - `just test-compose`
 - focused scheduler, runner-control, and integration race tests
 - `just test-scenario` on the qualified KVM/Btrfs host
+- two independent ten-rung burst-32 race qualifications
 - `git diff --check`

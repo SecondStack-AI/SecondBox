@@ -194,3 +194,32 @@ longer pays for contention that the rest of the run had to absorb.
 Serialization failures still occur after the fix, and should: they are inherent
 to serializable isolation under concurrency. The change is that they are now
 retried and reported as contention rather than ending the process.
+
+## Latency consequence and next target
+
+Removing the connection-row lock restores the owner-side Assignment claim, so
+the eager candidate's 0–1 ms read-only claim no longer describes the retained
+system. A fresh qualified run on clean source commit `89afa63` used 30 fixed
+arrivals at 0.25/s and maximum in-flight 1. All 30 completed without refusal or
+failure:
+
+| Span | p50 | p95 | p99 |
+|---|---:|---:|---:|
+| `create_to_ready` | 1,144 ms | 1,695 ms | 1,698 ms |
+| `pre_assignment` | 662 ms | 1,152 ms | 1,178 ms |
+| `placement` | 415 ms | 843 ms | 859 ms |
+| `workspace_provision` | 235 ms | 307 ms | 391 ms |
+| `runner_admission` | 39 ms | 66 ms | 74 ms |
+| Assignment claim query | 25 ms | 48 ms | 52 ms |
+| `runner_boot` | 433 ms | 479 ms | 488 ms |
+
+Pool acquisition, command decoding, and stream send remained 0 ms. Five live
+`secondbox run coding-environment -- python3 -c 'print("hello")'` executions on
+a control plane rebuilt from that commit completed in 1.234–1.391 seconds,
+with a 1.363-second median.
+
+The next safe target is not the owner-side claim. Partition the 415/843 ms
+`placement` span into worker pickup, start-plan lookup, runner selection and
+locks, ordered writes, commit, and serialization retry time first. Any new
+candidate must keep `runner_connections` out of placement and pass both the
+unsaturated 30-arrival qualification and the repeated burst ladder.
