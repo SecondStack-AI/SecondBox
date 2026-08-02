@@ -197,7 +197,7 @@ func resolveManifest(manifest ManifestV1, base string) (ResolvedDeployment, erro
 	if err != nil {
 		return ResolvedDeployment{}, manifestError("runner_trust.ca_certificate_file", err)
 	}
-	caKey, err := resolveRegularReference(base, trust.CAPrivateKeyFile)
+	caKey, err := resolvePrivateReference(base, trust.CAPrivateKeyFile)
 	if err != nil {
 		return ResolvedDeployment{}, manifestError("runner_trust.ca_private_key_file", err)
 	}
@@ -205,7 +205,7 @@ func resolveManifest(manifest ManifestV1, base string) (ResolvedDeployment, erro
 	if err != nil {
 		return ResolvedDeployment{}, manifestError("runner_trust.server_certificate_file", err)
 	}
-	serverKey, err := resolveRegularReference(base, trust.ServerPrivateKeyFile)
+	serverKey, err := resolvePrivateReference(base, trust.ServerPrivateKeyFile)
 	if err != nil {
 		return ResolvedDeployment{}, manifestError("runner_trust.server_private_key_file", err)
 	}
@@ -813,6 +813,9 @@ func readSecretReference(base, reference string) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
+	if err := validatePrivateFileMode(path); err != nil {
+		return "", "", err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", "", err
@@ -830,6 +833,28 @@ func readSecretReference(base, reference string) (string, string, error) {
 		return "", "", fmt.Errorf("secret is empty")
 	}
 	return string(data), path, nil
+}
+
+func resolvePrivateReference(base, reference string) (string, error) {
+	path, err := resolveRegularReference(base, reference)
+	if err != nil {
+		return "", err
+	}
+	if err := validatePrivateFileMode(path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func validatePrivateFileMode(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("private file permissions must not grant group or other access")
+	}
+	return nil
 }
 
 func validateRunnerTrustMaterial(caCertificatePath, caPrivateKeyPath, serverCertificatePath, serverPrivateKeyPath, serverName string) error {

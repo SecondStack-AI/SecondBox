@@ -411,6 +411,21 @@ func TestSecretResolutionRejectsSymlinksAdditionalLinesAndCarriageReturns(t *tes
 	_ = manifest
 }
 
+func TestSecretAndPrivateKeyReferencesRejectPermissiveModes(t *testing.T) {
+	for _, reference := range []string{"secrets/platform-token", "secrets/runner-pki/runner-ca.key", "secrets/runner-pki/server.key"} {
+		t.Run(filepath.Base(reference), func(t *testing.T) {
+			manifestPath := initializedDevelopment(t)
+			path := filepath.Join(filepath.Dir(manifestPath), reference)
+			if err := os.Chmod(path, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Resolve(manifestPath); err == nil || !strings.Contains(err.Error(), "private file permissions") {
+				t.Fatalf("permissive private file error = %v", err)
+			}
+		})
+	}
+}
+
 func TestInspectRedactsSecretValuesAndPathsAndShowsAllDefaults(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
 	resolved, err := Resolve(manifestPath)
