@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/SecondStack-AI/SecondBox/internal/deployconfig"
 )
 
 func TestComposeUpArgumentsRemoveOrphanedTopology(t *testing.T) {
@@ -40,5 +42,36 @@ func TestDockerComposeReceivesOperatorClientConfiguration(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(output)); got != "/operator/docker-config\n/operator/ssh-agent.sock" {
 		t.Fatalf("Docker client environment = %q", got)
+	}
+}
+
+func TestComposeUsesEmbeddedAssetsOutsideTheRepository(t *testing.T) {
+	directory := t.TempDir()
+	script := `#!/bin/sh
+expect_file=false
+for argument in "$@"; do
+  if [ "$expect_file" = true ]; then
+    case "$argument" in
+      /*) ;;
+      *) exit 11 ;;
+    esac
+    test -f "$argument" || exit 12
+    expect_file=false
+  elif [ "$argument" = "--file" ]; then
+    expect_file=true
+  fi
+done
+`
+	if err := os.WriteFile(filepath.Join(directory, "docker"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory)
+	manifestPath, err := deployconfig.InitDevelopment(filepath.Join(t.TempDir(), "deployment"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+	if err := runCompose(manifestPath, "config"); err != nil {
+		t.Fatal(err)
 	}
 }

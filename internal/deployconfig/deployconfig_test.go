@@ -84,6 +84,18 @@ func TestDevelopmentInitializationAndRenderAreCompleteAndReproducible(t *testing
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("environment mode = %o", info.Mode().Perm())
 	}
+	resolved, err = Render(manifestPath, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, composePath := range resolved.ComposeFiles {
+		if !filepath.IsAbs(composePath) {
+			t.Errorf("rendered Compose path is relative: %s", composePath)
+		}
+		if info, err := os.Stat(composePath); err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+			t.Errorf("rendered Compose asset %s = %v, %v", composePath, info, err)
+		}
+	}
 }
 
 func TestExampleManifestIsGeneratedFromTheRegistry(t *testing.T) {
@@ -242,6 +254,21 @@ func TestBundledDatabaseURLPreservesUserInfoBytes(t *testing.T) {
 	gotPassword, ok := parsed.User.Password()
 	if parsed.User.Username() != manifest.Database.User || !ok || gotPassword != password {
 		t.Fatalf("database userinfo = %q/%q/%t", parsed.User.Username(), gotPassword, ok)
+	}
+}
+
+func TestBundledDatabasePasswordRequiresLegacyMinimumStrength(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	manifest, err := ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	passwordPath := filepath.Join(filepath.Dir(manifestPath), manifest.Database.PasswordFile)
+	if err := os.WriteFile(passwordPath, []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Resolve(manifestPath); err == nil || !strings.Contains(err.Error(), "database.password_file must contain at least 24 bytes") {
+		t.Fatalf("short bundled database password error = %v", err)
 	}
 }
 
