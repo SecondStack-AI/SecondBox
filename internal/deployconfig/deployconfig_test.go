@@ -140,6 +140,11 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 		{name: "object store port exceeds TCP range", want: "object_store.published_port", mutate: func(manifest *ManifestV1) { manifest.ObjectStore.PublishedPort = integer(70000) }},
 		{name: "object store console port exceeds TCP range", want: "object_store.console_published_port", mutate: func(manifest *ManifestV1) { manifest.ObjectStore.ConsolePublishedPort = integer(70000) }},
 		{name: "Runner ID escapes artifact directory", want: "valid opaque Runner ID", mutate: func(manifest *ManifestV1) { manifest.Runners = []Runner{validTestRunner("../escaped", "remote")} }},
+		{name: "remote Runner path is relative", want: "identity_directory must be an absolute Runner-host path", mutate: func(manifest *ManifestV1) {
+			runner := validTestRunner("runner-a", "remote")
+			runner.IdentityDirectory = "relative/identity"
+			manifest.Runners = []Runner{runner}
+		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -460,6 +465,8 @@ func TestMultipleRemoteRunnerArtifactsAreIsolatedAndHostPathsStayOpaque(t *testi
 		t.Fatal(err)
 	}
 	manifest.Runners = []Runner{validTestRunner("runner-a", "remote"), validTestRunner("runner-b", "remote")}
+	manifest.Runners[0].IdentityDirectory = "/remote-a/identity"
+	manifest.Runners[1].IdentityDirectory = "/remote-b/identity"
 	manifest.Runners[0].WorkspaceRoot = "/remote-a/workspaces"
 	manifest.Runners[1].WorkspaceRoot = "/remote-b/workspaces"
 	encoded, err := encodeManifest(manifest)
@@ -478,6 +485,9 @@ func TestMultipleRemoteRunnerArtifactsAreIsolatedAndHostPathsStayOpaque(t *testi
 	}
 	if resolved.RemoteRunnerEnvironment["runner-a"]["SECONDBOX_RUNNER_WORKSPACE_ROOT"] == resolved.RemoteRunnerEnvironment["runner-b"]["SECONDBOX_RUNNER_WORKSPACE_ROOT"] {
 		t.Fatal("runner artifacts leaked across immutable runner IDs")
+	}
+	if got := resolved.RemoteRunnerEnvironment["runner-a"]["SECONDBOX_RUNNER_CLIENT_CERTIFICATE"]; got != "/remote-a/identity/runner.crt" {
+		t.Fatalf("remote Runner identity path was not preserved: %q", got)
 	}
 	renderedPath := filepath.Join(filepath.Dir(manifestPath), "generated.env")
 	if _, err := Render(manifestPath, renderedPath); err != nil {

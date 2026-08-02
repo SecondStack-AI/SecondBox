@@ -134,7 +134,7 @@ func RunnerInit(manifestPath, runnerID, target string) error {
 	}
 	environment := resolved.RemoteRunnerEnvironment[runnerID]
 	if declared.Placement == "same-host" {
-		environment = resolveRunnerEnvironment(*declared, resolved.Environment["SECONDBOX_RUNNER_CREDENTIAL"], base)
+		environment = resolveRunnerEnvironment(*declared, resolved.Environment["SECONDBOX_RUNNER_CREDENTIAL"])
 	}
 	if environment == nil {
 		return fmt.Errorf("SecondBox deployment manifest: runner-init could not resolve runner %s", runnerID)
