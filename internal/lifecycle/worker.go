@@ -16,6 +16,11 @@ type ReconcileStore interface {
 	ApplyLifecycleAction(ctx context.Context, claim ports.LifecycleReconcileClaim, action, terminationReason string, now, nextReconcileAt time.Time) error
 }
 
+// BatchReconcileStore claims an ordered cohort under the same worker fence.
+type BatchReconcileStore interface {
+	ClaimLifecycleBatch(ctx context.Context, workerID string, now time.Time, claimDuration time.Duration, batchSize int) ([]ports.LifecycleReconcileClaim, error)
+}
+
 // EffectExecutor performs one durable runner or object-store effect.
 type EffectExecutor interface {
 	ExecuteLifecycleEffect(
@@ -34,6 +39,7 @@ type Reconciler struct {
 	WorkerID      string
 	ClaimDuration time.Duration
 	PollInterval  time.Duration
+	BatchSize     int
 }
 
 // RunOnce claims and commits at most one due Sandbox transition.
@@ -48,6 +54,51 @@ func (reconciler Reconciler) RunOnce(ctx context.Context, now time.Time) (Decisi
 	if err != nil || !found {
 		return Decision{}, found, err
 	}
+	decision, err := reconciler.reconcileClaim(ctx, claim, now.UTC())
+	return decision, true, err
+}
+
+// RunBatch claims a bounded cohort and executes its effects sequentially.
+func (reconciler Reconciler) RunBatch(
+	ctx context.Context,
+	clock func() time.Time,
+) (bool, error) {
+	if reconciler.Store == nil || reconciler.WorkerID == "" ||
+		reconciler.ClaimDuration <= 0 || reconciler.PollInterval <= 0 ||
+		reconciler.BatchSize <= 0 || clock == nil {
+		return false, errors.New("SecondBox lifecycle batch reconciler dependencies and bounds are required")
+	}
+	if reconciler.BatchSize == 1 {
+		_, found, err := reconciler.RunOnce(ctx, clock())
+		return found, err
+	}
+	store, ok := reconciler.Store.(BatchReconcileStore)
+	if !ok {
+		return false, errors.New("SecondBox lifecycle batch claim store is required")
+	}
+	claims, err := store.ClaimLifecycleBatch(
+		ctx, reconciler.WorkerID, clock().UTC(), reconciler.ClaimDuration,
+		reconciler.BatchSize,
+	)
+	if err != nil || len(claims) == 0 {
+		return false, err
+	}
+	if len(claims) > reconciler.BatchSize {
+		return false, errors.New("SecondBox lifecycle batch claim exceeded its bound")
+	}
+	for _, claim := range claims {
+		if _, err := reconciler.reconcileClaim(ctx, claim, clock().UTC()); err != nil {
+			return true, err
+		}
+	}
+	return true, nil
+}
+
+func (reconciler Reconciler) reconcileClaim(
+	ctx context.Context,
+	claim ports.LifecycleReconcileClaim,
+	now time.Time,
+) (Decision, error) {
 	view := View{
 		Observed: claim.ObservedState, Desired: claim.DesiredState,
 		StopEffectState:           claim.StopEffectState,
@@ -74,7 +125,7 @@ func (reconciler Reconciler) RunOnce(ctx context.Context, now time.Time) (Decisi
 	nextReconcileAt := nextLifecycleReconcileAt(view, decision, now, reconciler.PollInterval)
 	if actionRequiresEffect(decision.Action) {
 		if reconciler.Effects == nil {
-			return Decision{}, true, errors.New("SecondBox lifecycle runner effect executor is required")
+			return Decision{}, errors.New("SecondBox lifecycle runner effect executor is required")
 		}
 		if err := reconciler.Effects.ExecuteLifecycleEffect(
 			ctx, claim, decision, now, now.Add(reconciler.PollInterval),
@@ -94,24 +145,24 @@ func (reconciler Reconciler) RunOnce(ctx context.Context, now time.Time) (Decisi
 					now,
 					now.Add(reconciler.PollInterval),
 				); waitErr != nil {
-					return Decision{}, true, fmt.Errorf(
+					return Decision{}, fmt.Errorf(
 						"SecondBox lifecycle effect contention deferral failed: %w",
 						waitErr,
 					)
 				}
-				return decision, true, nil
+				return decision, nil
 			}
-			return Decision{}, true, fmt.Errorf("SecondBox lifecycle effect failed: %w", err)
+			return Decision{}, fmt.Errorf("SecondBox lifecycle effect failed: %w", err)
 		}
-		return decision, true, nil
+		return decision, nil
 	}
 	if err := reconciler.Store.ApplyLifecycleAction(
 		ctx, claim, string(decision.Action), decision.TerminationReason,
 		now, nextReconcileAt,
 	); err != nil {
-		return Decision{}, true, fmt.Errorf("SecondBox lifecycle decision commit failed: %w", err)
+		return Decision{}, fmt.Errorf("SecondBox lifecycle decision commit failed: %w", err)
 	}
-	return decision, true, nil
+	return decision, nil
 }
 
 // nextLifecycleReconcileAt keeps transitional Sandboxes on the bounded poll

@@ -197,42 +197,47 @@ func (store *PostgresControlPlaneStore) ClaimLifecycle(
 	now time.Time,
 	claimDuration time.Duration,
 ) (ports.LifecycleReconcileClaim, bool, error) {
-	if workerID == "" || claimDuration <= 0 {
-		return ports.LifecycleReconcileClaim{}, false,
-			errors.New("SecondBox lifecycle claim worker and duration are required")
+	claims, err := store.ClaimLifecycleBatch(ctx, workerID, now, claimDuration, 1)
+	if err != nil {
+		return ports.LifecycleReconcileClaim{}, false, err
 	}
+	if len(claims) == 0 {
+		return ports.LifecycleReconcileClaim{}, false, nil
+	}
+	return claims[0], true, nil
+}
+
+// ClaimLifecycleBatch atomically claims a bounded ordered cohort. The caller
+// still processes effects sequentially, so batching removes claim round trips
+// without introducing concurrent serializable scheduler transactions.
+func (store *PostgresControlPlaneStore) ClaimLifecycleBatch(
+	ctx context.Context,
+	workerID string,
+	now time.Time,
+	claimDuration time.Duration,
+	batchSize int,
+) ([]ports.LifecycleReconcileClaim, error) {
+	if workerID == "" || claimDuration <= 0 || batchSize <= 0 {
+		return nil, errors.New("SecondBox lifecycle claim worker, duration, and batch size are required")
+	}
+	now = now.UTC()
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
-		return ports.LifecycleReconcileClaim{}, false, fmt.Errorf("SecondBox lifecycle claim transaction failed: %w", err)
+		return nil, fmt.Errorf("SecondBox lifecycle claim transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `
+	batch := &pgx.Batch{}
+	batch.Queue(`
 		UPDATE secondbox.leases
 		SET state='expired',revision=revision+1,updated_at=$1
-		WHERE state='active' AND expires_at<=$1`,
-		now.UTC(),
-	); err != nil {
-		return ports.LifecycleReconcileClaim{}, false,
-			fmt.Errorf("SecondBox lifecycle expired Lease cleanup failed: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
+		WHERE state='active' AND expires_at<=$1`, now)
+	batch.Queue(`
 		UPDATE secondbox.activity_sessions AS session
 		SET state='closed',closed_at=$1,updated_at=$1
 		FROM secondbox.leases AS lease
 		WHERE session.state='active' AND session.lease_id=lease.id
-		  AND lease.state<>'active'`,
-		now.UTC(),
-	); err != nil {
-		return ports.LifecycleReconcileClaim{}, false,
-			fmt.Errorf("SecondBox lifecycle inactive Lease session cleanup failed: %w", err)
-	}
-	var (
-		claim                                   ports.LifecycleReconcileClaim
-		specJSON                                []byte
-		intentKind                              sql.NullString
-		readyAt, lastActivityAt, drainStartedAt sql.NullTime
-	)
-	err = tx.QueryRow(ctx, `
+		  AND lease.state<>'active'`, now)
+	batch.Queue(`
 		SELECT sandbox.id,sandbox.state,sandbox.desired_state,sandbox.revision,
 		       revision.spec_json,sandbox.lifecycle_intent_kind,
 		       COALESCE(sandbox.lifecycle_termination_reason,''),
@@ -273,58 +278,94 @@ func (store *PostgresControlPlaneStore) ClaimLifecycle(
 		  )
 		ORDER BY sandbox.next_reconcile_at,sandbox.id
 		FOR UPDATE OF sandbox SKIP LOCKED
-		LIMIT 1`,
-		now.UTC(), workerID,
-	).Scan(
-		&claim.SandboxID, &claim.ObservedState, &claim.DesiredState, &claim.Revision,
-		&specJSON, &intentKind, &claim.IntentTerminationReason,
-		&readyAt, &lastActivityAt, &drainStartedAt,
-		&claim.HasInstance,
-		&claim.GuestLiveness, &claim.InstanceTerminationReason,
-		&claim.StopEffectState, &claim.ActiveSessions,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ports.LifecycleReconcileClaim{}, false, nil
+		LIMIT $3`, now, workerID, batchSize)
+	results := tx.SendBatch(ctx, batch)
+	var batchErr error
+	if _, resultErr := results.Exec(); resultErr != nil {
+		batchErr = fmt.Errorf("SecondBox lifecycle expired Lease cleanup failed: %w", resultErr)
 	}
-	if err != nil {
-		return ports.LifecycleReconcileClaim{}, false, fmt.Errorf("SecondBox lifecycle claim lookup failed: %w", err)
+	if _, resultErr := results.Exec(); resultErr != nil && batchErr == nil {
+		batchErr = fmt.Errorf("SecondBox lifecycle inactive Lease session cleanup failed: %w", resultErr)
 	}
-	var spec contracts.ProfileRevisionSpec
-	if err := json.Unmarshal(specJSON, &spec); err != nil {
-		return ports.LifecycleReconcileClaim{}, false, fmt.Errorf("SecondBox lifecycle claim policy decoding failed: %w", err)
+	rows, rowsErr := results.Query()
+	if rowsErr != nil && batchErr == nil {
+		batchErr = fmt.Errorf("SecondBox lifecycle claim lookup failed: %w", rowsErr)
 	}
-	claim.WorkerID = workerID
-	claim.IntentKind = intentKind.String
-	claim.DrainGraceSeconds = spec.Lifecycle.DrainGraceSeconds
-	claim.IdleSeconds = spec.Lifecycle.IdleSeconds
-	claim.MaximumDurationSeconds = spec.Lifecycle.MaximumDurationSeconds
-	if readyAt.Valid {
-		claim.ReadyAt = &readyAt.Time
+	claims := make([]ports.LifecycleReconcileClaim, 0, batchSize)
+	for batchErr == nil && rows.Next() {
+		var (
+			claim                                   ports.LifecycleReconcileClaim
+			specJSON                                []byte
+			intentKind                              sql.NullString
+			readyAt, lastActivityAt, drainStartedAt sql.NullTime
+		)
+		if err := rows.Scan(
+			&claim.SandboxID, &claim.ObservedState, &claim.DesiredState, &claim.Revision,
+			&specJSON, &intentKind, &claim.IntentTerminationReason,
+			&readyAt, &lastActivityAt, &drainStartedAt,
+			&claim.HasInstance,
+			&claim.GuestLiveness, &claim.InstanceTerminationReason,
+			&claim.StopEffectState, &claim.ActiveSessions,
+		); err != nil {
+			batchErr = fmt.Errorf("SecondBox lifecycle claim scan failed: %w", err)
+			break
+		}
+		var spec contracts.ProfileRevisionSpec
+		if err := json.Unmarshal(specJSON, &spec); err != nil {
+			batchErr = fmt.Errorf("SecondBox lifecycle claim policy decoding failed: %w", err)
+			break
+		}
+		claim.WorkerID = workerID
+		claim.IntentKind = intentKind.String
+		claim.DrainGraceSeconds = spec.Lifecycle.DrainGraceSeconds
+		claim.IdleSeconds = spec.Lifecycle.IdleSeconds
+		claim.MaximumDurationSeconds = spec.Lifecycle.MaximumDurationSeconds
+		if readyAt.Valid {
+			claim.ReadyAt = &readyAt.Time
+		}
+		if lastActivityAt.Valid {
+			claim.LastActivityAt = &lastActivityAt.Time
+		}
+		if drainStartedAt.Valid {
+			claim.DrainStartedAt = &drainStartedAt.Time
+		}
+		claims = append(claims, claim)
 	}
-	if lastActivityAt.Valid {
-		claim.LastActivityAt = &lastActivityAt.Time
+	if rows != nil {
+		if rowsErr := rows.Err(); rowsErr != nil && batchErr == nil {
+			batchErr = fmt.Errorf("SecondBox lifecycle claim rows failed: %w", rowsErr)
+		}
+		rows.Close()
 	}
-	if drainStartedAt.Valid {
-		claim.DrainStartedAt = &drainStartedAt.Time
+	if closeErr := results.Close(); closeErr != nil && batchErr == nil {
+		batchErr = fmt.Errorf("SecondBox lifecycle claim batch close failed: %w", closeErr)
 	}
-	claim.Revision++
+	if batchErr != nil {
+		return nil, batchErr
+	}
+	if len(claims) == 0 {
+		return nil, nil
+	}
+	claimedSandboxIDs := make([]string, 0, len(claims))
+	for index := range claims {
+		claimedSandboxIDs = append(claimedSandboxIDs, claims[index].SandboxID)
+	}
 	tag, err := tx.Exec(ctx, `
 		UPDATE secondbox.sandboxes
-		SET reconcile_owner=$2,reconcile_claim_expires_at=$3,revision=$4,updated_at=$1
-		WHERE id=$5 AND revision=$6`,
-		now.UTC(), workerID, now.UTC().Add(claimDuration), claim.Revision,
-		claim.SandboxID, claim.Revision-1,
+		SET reconcile_owner=$1,reconcile_claim_expires_at=$2
+		WHERE id=ANY($3::text[])`,
+		workerID, now.Add(claimDuration), claimedSandboxIDs,
 	)
 	if err != nil {
-		return ports.LifecycleReconcileClaim{}, false, fmt.Errorf("SecondBox lifecycle claim update failed: %w", err)
+		return nil, fmt.Errorf("SecondBox lifecycle claim update failed: %w", err)
 	}
-	if tag.RowsAffected() != 1 {
-		return ports.LifecycleReconcileClaim{}, false, ports.ErrRevisionConflict
+	if tag.RowsAffected() != int64(len(claims)) {
+		return nil, ports.ErrRevisionConflict
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return ports.LifecycleReconcileClaim{}, false, fmt.Errorf("SecondBox lifecycle claim commit failed: %w", err)
+		return nil, fmt.Errorf("SecondBox lifecycle claim commit failed: %w", err)
 	}
-	return claim, true, nil
+	return claims, nil
 }
 
 // ApplyLifecycleAction commits one claimed transition only while owner and revision remain current.

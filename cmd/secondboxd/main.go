@@ -300,6 +300,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 				WorkerID:      service.NewOpaqueID("lifecycle-worker"),
 				ClaimDuration: processConfig.LifecycleReconcileClaimDuration,
 				PollInterval:  processConfig.LifecycleReconcilePollInterval,
+				BatchSize:     processConfig.LifecycleReconcileBatchSize,
 			},
 			lifecycleWakeups,
 		)
@@ -507,7 +508,7 @@ func runLifecycleReconciler(
 	wakeups <-chan struct{},
 ) error {
 	for {
-		_, found, err := reconciler.RunOnce(ctx, service.SystemClock())
+		found, err := reconciler.RunBatch(ctx, service.SystemClock)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil

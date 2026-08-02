@@ -3,7 +3,7 @@ title: Runner Admission Attribution and Dispatch Batching
 date: 2026-07-31
 status: implemented-with-open-gate
 owner: SecondStack
-provenance: Qualified lifecycle evidence through the 2026-08-02 ready-deadline candidate and repeated-burst race evidence at 05bbd8e
+provenance: Qualified lifecycle evidence through the 2026-08-02 bounded-claim candidate and repeated-burst race evidence at 05bbd8e
 ---
 
 # Plan: Runner Admission Attribution and Dispatch Batching
@@ -19,8 +19,9 @@ dispatch candidate measured 11/34 ms, but it was rejected after repeated
 bursts proved that locking the runner's single connection row inside every
 placement could exhaust serialization retries and shut down the control plane.
 The race-safe owner-claim design measured 39/66 ms on the same 30-arrival
-unsaturated workload. The retained ready-deadline follow-up measures 34/58 ms;
-the 25 ms admission p95 gate remains open.
+unsaturated workload. Ready-deadline scheduling reduced that to 34/58 ms, and
+the retained bounded-claim follow-up measures 26/50 ms; the 25 ms admission
+p95 gate remains open.
 
 The scheduler previously reused the lifecycle worker's `Now`, captured before
 the Sandbox claim and start-plan load, as the Assignment creation and
@@ -43,6 +44,11 @@ before the durable assignment writes.
   one-round-trip extended execution mode. This avoids first-use statement
   preparation on each pooled connection while preserving the same connection
   lock, command lock, sequence allocation, and delivery state transition.
+- Atomically claim an explicitly bounded, oldest-due lifecycle cohort with
+  `FOR UPDATE SKIP LOCKED`, then execute its effects sequentially. A claim sets
+  only the private owner and expiry fence: it does not change the Sandbox's
+  public revision or `updated_at`. This removes per-Sandbox claim round trips
+  without adding concurrent serializable scheduler transactions.
 - Queue every Assignment command as `pending`. The connection owner's
   `ClaimCommands` call binds it to the active connection and allocates its
   connection-local control sequence. Placement never locks or updates
@@ -270,23 +276,48 @@ or failure:
 Against the attribution observer run, end-to-end p50/p95 fell from
 1,153/1,704 ms and placement pickup fell from 327/839 ms. A ten-rung burst-32
 qualification completed 320/320 arrivals with no refusal, failure, shed, or
-shutdown while absorbing 21 PostgreSQL serialization failures. The complete
-qualified KVM/Btrfs suite also passed, including useful-activity deadline
-extension, restart, runner loss, generation fencing, Snapshot restore, and
-retention.
+shutdown while absorbing 21 PostgreSQL serialization failures.
+
+Independent lifecycle-worker concurrency was rejected. Two workers raised
+burst p50 to 4.4–5.6 seconds and produced 134 serialization failures; eight
+workers raised it to 5.6–6.7 seconds and produced 1,434. Both variants turned
+the serializable scheduler transaction into the contention point.
+
+The retained batch-size-8 candidate keeps one worker and processes effects
+sequentially. On the same 30-arrival fixed workload it measured:
+
+| Bounded-claim candidate | p50 | p95 | p99 |
+|---|---:|---:|---:|
+| `create_to_ready` | **635 ms** | **710 ms** | 720 ms |
+| `pre_assignment` | **192 ms** | **223 ms** | 255 ms |
+| `placement` | **28 ms** | **39 ms** | 44 ms |
+| `placement_pickup` | **26 ms** | **37 ms** | 43 ms |
+| `placement_reconcile` | 0 ms | 0 ms | 0 ms |
+| `workspace_provision` | 160 ms | 197 ms | 225 ms |
+| `runner_admission` | 26 ms | 50 ms | 53 ms |
+| `runner_boot` | 407 ms | 448 ms | 453 ms |
+| `client_visibility` | 20 ms | 39 ms | 48 ms |
+
+The repeated burst qualification again completed 320/320 arrivals with no
+refusal, failure, shed, or shutdown. Across ten burst-32 rungs, mean
+end-to-end p50/p95 improved from 3,833/5,010 ms to 3,773/4,387 ms, mean pickup
+from 1,738/1,933 ms to 1,156/1,342 ms, and mean pre-assignment from
+3,197/4,479 ms to 2,603/3,850 ms. Observed serialization failures fell from 21
+to 14. The complete qualified KVM/Btrfs suite also passed, including
+useful-activity deadline extension, restart, runner loss, concurrent Exec,
+generation fencing, Snapshot restore, and retention.
 
 Do not optimize stream sending, pool acquisition, decoding, start-plan lookup,
 or the scheduler's unsaturated row work: they remain 0–1 ms. Do not recover
-claim-query savings by moving the connection row back into placement. The next
-safe target is burst pickup: one lifecycle worker serially consumes a cohort of
-32 simultaneously due Sandboxes, leaving `placement_pickup` at 1.5–2.1 seconds
-p50 across the ten rungs even though the per-placement reconciliation is only
-24–45 ms p50. Any worker-concurrency or batched-claim candidate must preserve
-SKIP LOCKED claims, Sandbox/Workspace lock order, generation fencing, and the
-race-safe owner-side Assignment claim. Re-run at least 30 unsaturated arrivals,
-the repeated burst ladder, and the full scenario after each retained candidate,
-and require `runner_admission` p95 at or below 25 ms before marking the admission
-gate complete.
+claim-query savings by moving the connection row back into placement, and do
+not add lifecycle workers without removing the scheduler's serializable
+contention first. The next safe target is the remaining runner-local startup
+path: Workspace provisioning is 160/197 ms and guest negotiation is 359/390 ms
+even without saturation. Under burst, split runner queue time from actual
+Workspace mutation and guest negotiation before choosing a concurrency change.
+Re-run at least 30 unsaturated arrivals, the repeated burst ladder, and the full
+scenario after each retained candidate, and require `runner_admission` p95 at
+or below 25 ms before marking the admission gate complete.
 
 Additional machine-readable evidence:
 
@@ -299,6 +330,8 @@ Additional machine-readable evidence:
 - `.tmp/lifecycle-placement-attribution-c1-30-result.json`
 - `.tmp/lifecycle-ready-deadline-c1-30-result.json`
 - `.tmp/lifecycle-ready-deadline-burst32x10-result.json`
+- `.tmp/lifecycle-claim-batch8-c1-30-result.json`
+- `.tmp/lifecycle-claim-batch8-burst32x10-result.json`
 
 ## Validation
 
@@ -314,6 +347,10 @@ Additional machine-readable evidence:
 - `just test-scenario` on the qualified KVM/Btrfs host
 - two independent ten-rung burst-32 race qualifications
 - one ten-rung burst-32 ready-deadline qualification
+- rejected two-worker and eight-worker burst-32 comparisons
+- one ten-rung burst-32 bounded-claim qualification
 - ready deadline, active-session polling, transitional polling, and terminal
   guest-liveness wakeup tests
+- bounded atomic claim ordering, limit, fencing, cleanup, and public-revision
+  stability tests
 - `git diff --check`

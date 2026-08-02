@@ -215,10 +215,45 @@ func TestReconcilerKeepsTransitionalWaitOnPollInterval(t *testing.T) {
 	}
 }
 
+func TestReconcilerProcessesClaimBatchSequentially(t *testing.T) {
+	store := &fakeReconcileStore{batchClaims: []ports.LifecycleReconcileClaim{
+		{
+			SandboxID: "sbx-batch-1", WorkerID: "worker-batch", Revision: 2,
+			ObservedState: contracts.SandboxStateCreating,
+			DesiredState:  contracts.SandboxDesiredStateStopped,
+		},
+		{
+			SandboxID: "sbx-batch-2", WorkerID: "worker-batch", Revision: 4,
+			ObservedState: contracts.SandboxStateCreating,
+			DesiredState:  contracts.SandboxDesiredStateStopped,
+		},
+	}}
+	reconciler := Reconciler{
+		Store: store, WorkerID: "worker-batch", ClaimDuration: time.Minute,
+		PollInterval: time.Second, BatchSize: 2,
+	}
+	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	found, err := reconciler.RunBatch(t.Context(), func() time.Time { return now })
+	if err != nil || !found {
+		t.Fatalf("batch reconciliation found=%t error=%v", found, err)
+	}
+	if store.batchSize != 2 || len(store.appliedSandboxIDs) != 2 ||
+		store.appliedSandboxIDs[0] != "sbx-batch-1" ||
+		store.appliedSandboxIDs[1] != "sbx-batch-2" {
+		t.Fatalf(
+			"batch size=%d applied=%v",
+			store.batchSize, store.appliedSandboxIDs,
+		)
+	}
+}
+
 type fakeReconcileStore struct {
-	claim           ports.LifecycleReconcileClaim
-	action          string
-	nextReconcileAt time.Time
+	claim             ports.LifecycleReconcileClaim
+	batchClaims       []ports.LifecycleReconcileClaim
+	batchSize         int
+	action            string
+	appliedSandboxIDs []string
+	nextReconcileAt   time.Time
 }
 
 type fakeEffectExecutor struct {
@@ -246,15 +281,27 @@ func (store *fakeReconcileStore) ClaimLifecycle(
 	return store.claim, true, nil
 }
 
+func (store *fakeReconcileStore) ClaimLifecycleBatch(
+	_ context.Context,
+	_ string,
+	_ time.Time,
+	_ time.Duration,
+	batchSize int,
+) ([]ports.LifecycleReconcileClaim, error) {
+	store.batchSize = batchSize
+	return append([]ports.LifecycleReconcileClaim(nil), store.batchClaims...), nil
+}
+
 func (store *fakeReconcileStore) ApplyLifecycleAction(
 	_ context.Context,
-	_ ports.LifecycleReconcileClaim,
+	claim ports.LifecycleReconcileClaim,
 	action string,
 	_ string,
 	_ time.Time,
 	nextReconcileAt time.Time,
 ) error {
 	store.action = action
+	store.appliedSandboxIDs = append(store.appliedSandboxIDs, claim.SandboxID)
 	store.nextReconcileAt = nextReconcileAt
 	return nil
 }
