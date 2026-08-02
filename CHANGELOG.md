@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Replaced the editable 146-variable deployment environment with a strict versioned `secondbox.toml`, create-only initialization and Runner enrollment, redacted inspection, one-shot legacy migration, and atomically generated Compose and systemd environment artifacts.
+- Split the deployment into explicit base, bundled-development, and privileged same-host Runner Compose overlays, with ambient configuration isolation and a one-command ready development control plane.
+- Reduced the control-plane environment contract from 59 required variables to 38: 19 tuning settings are optional validated overrides with compiled reviewed values, and the Runner protocol window is now a verified compiled fact in both binaries.
 - Added the standalone SecondBox control plane with PostgreSQL-backed projects, service accounts, API keys, immutable profiles, durable Sandboxes, quotas, lifecycle intent, bounded Assignment and stop reconciliation, runner scheduling, and end-to-end request correlation.
 - Added home-Runner-pinned durable Workspaces with reflink-only local Snapshots, crash-safe in-place restore, durable generation receipts, exact-home scheduling, bounded drain cancellation, and Lease-aware activity reclamation.
 - Added the outbound mTLS Runner protocol, Firecracker runner, independently versioned guest protocol, signed image pipeline, generation fencing, descriptor-pinned guest operations, fully correlated payload-free Runner operation evidence, and fenced natural-shutdown and cgroup OOM termination reporting.

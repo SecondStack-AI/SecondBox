@@ -12,7 +12,7 @@
 - Operators create every profile explicitly. A Sandbox is pinned to the immutable profile revision resolved at creation.
 - Public contracts use provider-neutral SecondBox domain language. Firecracker, KVM, runner credentials, host paths, storage keys, fencing tokens, and backend references do not enter public schemas.
 - Cross-resource references are logical strings. Do not add PostgreSQL foreign keys or CHECK constraints.
-- Every runtime setting is explicit. Application code and deployment templates must not provide defaults for required environment variables.
+- Deployment identity, authority, integration selection, paths, pinned assets, tenancy limits, and operator-owned retention are always explicit. Application code and static deployment templates must not default them. Code-owned tuning constants may expose optional, validated environment overrides. `secondbox-deploy init` may generate secrets and materialize the reviewed development topology, or values explicitly supplied by a production operator; generated authority is written to the manifest or referenced secret files and is never a silent runtime default.
 - Do not catch, log, and swallow errors. Implement one intended path and fail explicitly when its prerequisites are absent.
 - Keep exported names and error prefixes greppable and domain-specific. Remove replaced code instead of retaining compatibility paths.
 - Run `just verify-generated`, `just test`, and the relevant contract, Compose, runner, or Firecracker suite before handoff. Run `just test-scenario` on a qualified host when a change touches the runner protocol, lifecycle reconciliation, or workspace durability.

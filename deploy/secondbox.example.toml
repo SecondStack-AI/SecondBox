@@ -1,0 +1,102 @@
+schema_version = 1
+runners = []
+
+[deployment]
+mode = 'development'
+public_base_url = 'http://127.0.0.1:8080'
+tls_termination = 'development-loopback'
+control_plane_image = 'secondbox-control-plane:development'
+runner_image = 'secondbox-runner:development'
+postgres_image = 'docker.io/library/postgres:18.4-bookworm'
+object_store_image = 'docker.io/rustfs/rustfs:1.0.0-beta.11'
+object_store_client_image = 'quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z'
+api_bind_ip = '127.0.0.1'
+api_published_port = 8080
+listen_address = '0.0.0.0:8080'
+runner_bind_ip = '127.0.0.1'
+runner_published_port = 9443
+runner_listen_address = '0.0.0.0:9443'
+log_path = '/var/log/secondbox/control-plane.jsonl'
+signed_asset_catalog = 'secrets/development-signed-assets.json'
+signed_asset_catalog_path = '/etc/secondbox/signed-assets.json'
+development_prepare_wait_timeout_seconds = 180
+
+[database]
+mode = 'bundled'
+url_file = ''
+bind_ip = '127.0.0.1'
+published_port = 5432
+name = 'secondbox'
+user = 'secondbox'
+password_file = 'secrets/postgres-password'
+
+[object_store]
+mode = 'bundled'
+endpoint = 'http://object-store:9000'
+bucket = 'secondbox-development'
+region = 'us-east-1'
+use_path_style = true
+temp_directory = '/tmp'
+access_key_file = 'secrets/object-store-access-key'
+secret_key_file = 'secrets/object-store-secret-key'
+bind_ip = '127.0.0.1'
+published_port = 9000
+console_published_port = 9001
+
+[runner_trust]
+enrollment_credential_file = 'secrets/runner-enrollment-credential'
+ca_certificate_file = 'secrets/runner-pki/runner-ca.crt'
+ca_private_key_file = 'secrets/runner-pki/runner-ca.key'
+server_certificate_file = 'secrets/runner-pki/server.crt'
+server_private_key_file = 'secrets/runner-pki/server.key'
+server_name = 'control-plane'
+certificate_lifetime_days = 825
+
+[applications]
+platform_token_file = 'secrets/platform-token'
+application_authorities_file = 'secrets/application-authorities.json'
+
+[policy]
+data_plane_retention_seconds = 86400
+data_plane_poll_interval_milliseconds = 250
+runner_command_poll_interval_milliseconds = 250
+runner_enabled_features = 'exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy'
+default_subject_max_sandboxes = 100
+default_subject_max_active_instances = 20
+default_subject_max_cpu_millis = 80000
+default_subject_max_memory_bytes = 171798691840
+default_subject_max_artifact_bytes = 1099511627776
+default_subject_max_snapshots = 500
+default_subject_max_artifacts = 5000
+default_subject_max_port_sessions = 100
+default_subject_max_concurrent_operations = 20
+agent_compartment_pool = 'secondbox-local'
+agent_compartment_runtime_bundle_digest = 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+agent_compartment_toolchain_bundle_digest = 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+coding_environment_pool = 'secondbox-local'
+coding_environment_runtime_bundle_digest = 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+coding_environment_toolchain_bundle_digest = 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+
+[overrides]
+
+# Optional tuning overrides. Uncomment only an intentional override.
+# [overrides]
+# http_timeout_seconds = 30 # default; HTTP request timeout.
+# runner_heartbeat_interval_milliseconds = 5000 # default; Runner heartbeat cadence.
+# runner_heartbeat_timeout_milliseconds = 30000 # default; Runner liveness timeout.
+# runner_command_delivery_batch_size = 16 # default; Commands delivered per claim.
+# runner_event_persistence_batch_size = 16 # default; Runner events persisted per batch.
+# runner_event_persistence_batch_wait_milliseconds = 2 # default; Maximum runner-event batch wait.
+# data_plane_claim_duration_milliseconds = 30000 # default; Relay frame delivery claim duration.
+# data_plane_maximum_frame_bytes = 1048576 # default; Maximum relay frame payload.
+# data_plane_maximum_session_bytes = 67108864 # default; Maximum relay session payload.
+# lifecycle_reconcile_batch_size = 8 # default; Lifecycle rows reconciled per batch.
+# lifecycle_reconcile_poll_interval_milliseconds = 250 # default; Lifecycle fallback polling cadence.
+# lifecycle_reconcile_claim_duration_milliseconds = 30000 # default; Lifecycle work claim duration.
+# assignment_claim_duration_milliseconds = 30000 # default; Assignment dispatch claim duration.
+# assignment_deadline_milliseconds = 120000 # default; Assignment readiness deadline.
+# assignment_retry_limit = 2 # default; Assignment retry count.
+# scheduler_serialization_retry_limit = 3 # default; Serializable scheduling retry count.
+# object_store_retry_max_attempts = 3 # default; Object-store operation attempts.
+# object_store_http_timeout_milliseconds = 30000 # default; Object-store HTTP timeout.
+# object_store_max_object_bytes = 10737418240 # default; Maximum object size accepted by the adapter.

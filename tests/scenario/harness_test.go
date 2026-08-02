@@ -280,21 +280,40 @@ func createScenarioSandbox(
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	operation := scenarioJSON[contracts.Operation](
-		t,
-		ctx,
-		fixture.subject,
-		"createSandbox",
-		secondboxclient.CallOptions{
-			Headers: scenarioHeaders(uniqueScenarioKey(t, "create-"+suffix)),
-			Body: scenarioBody(t, contracts.CreateSandboxRequest{
-				Profile: profile.Name,
-				Metadata: map[string]string{
-					"scenario": suffix,
-				},
-			}),
+	key := uniqueScenarioKey(t, "create-"+suffix)
+	request := contracts.CreateSandboxRequest{
+		Profile: profile.Name,
+		Metadata: map[string]string{
+			"scenario": suffix,
 		},
-	)
+	}
+	var operation contracts.Operation
+	for {
+		var err error
+		operation, err = scenarioharness.RequestJSON[contracts.Operation](
+			ctx,
+			fixture.subject,
+			"createSandbox",
+			secondboxclient.CallOptions{
+				Headers: scenarioHeaders(key),
+				Body:    scenarioBody(t, request),
+			},
+		)
+		if err == nil {
+			break
+		}
+		var apiError *secondboxclient.APIError
+		if !errors.As(err, &apiError) ||
+			apiError.Problem == nil ||
+			apiError.Problem.Code != "execution_node_unavailable" {
+			t.Fatalf("SecondBox scenario createSandbox: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("SecondBox scenario createSandbox remained capacity-blocked: %v", err)
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
 	if operation.ID == "" || operation.SandboxID == "" {
 		t.Fatalf("SecondBox scenario create operation = %#v", operation)
 	}

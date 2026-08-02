@@ -17,6 +17,30 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
+// Code-owned tuning defaults. Each corresponding environment variable is an
+// optional, validated override; these literals are the reviewed deployed values.
+const (
+	DefaultHTTPTimeoutSeconds                          int64 = 30
+	DefaultRunnerHeartbeatIntervalMilliseconds         int64 = 5000
+	DefaultRunnerHeartbeatTimeoutMilliseconds          int64 = 30000
+	DefaultRunnerCommandDeliveryBatchSize              int64 = 16
+	DefaultRunnerEventPersistenceBatchSize             int64 = 16
+	DefaultRunnerEventPersistenceBatchWaitMilliseconds int64 = 2
+	DefaultDataPlaneClaimDurationMilliseconds          int64 = 30000
+	DefaultDataPlaneMaximumFrameBytes                  int64 = 1048576
+	DefaultDataPlaneMaximumSessionBytes                int64 = 67108864
+	DefaultLifecycleReconcileBatchSize                 int64 = 8
+	DefaultLifecycleReconcilePollIntervalMilliseconds  int64 = 250
+	DefaultLifecycleReconcileClaimDurationMilliseconds int64 = 30000
+	DefaultAssignmentClaimDurationMilliseconds         int64 = 30000
+	DefaultAssignmentDeadlineMilliseconds              int64 = 120000
+	DefaultAssignmentRetryLimit                        int64 = 2
+	DefaultSchedulerSerializationRetryLimit            int64 = 3
+	DefaultObjectStoreRetryMaxAttempts                 int64 = 3
+	DefaultObjectStoreHTTPTimeoutMilliseconds          int64 = 30000
+	DefaultObjectStoreMaxObjectBytes                   int64 = 10737418240
+)
+
 // Config contains only explicitly configured control-plane settings.
 type Config struct {
 	ListenAddress                    string
@@ -60,8 +84,6 @@ type Config struct {
 	ObjectStoreHTTPTimeout           time.Duration
 	ObjectStoreTempDirectory         string
 	ObjectStoreMaxObjectBytes        int64
-	RunnerProtocolMinimum            uint32
-	RunnerProtocolMaximum            uint32
 	RunnerEnabledFeatures            []string
 	DefaultSubjectQuota              contracts.QuotaLimits
 	AgentCompartmentProfile          BuiltInProfileBinding
@@ -136,11 +158,11 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	httpSeconds, err := requiredPositiveInt64("SECONDBOX_HTTP_TIMEOUT_SECONDS")
+	httpSeconds, err := optionalPositiveInt64("SECONDBOX_HTTP_TIMEOUT_SECONDS", DefaultHTTPTimeoutSeconds)
 	if err != nil {
 		return Config{}, err
 	}
-	runnerHeartbeatMilliseconds, err := requiredPositiveInt64("SECONDBOX_RUNNER_HEARTBEAT_INTERVAL_MILLISECONDS")
+	runnerHeartbeatMilliseconds, err := optionalPositiveInt64("SECONDBOX_RUNNER_HEARTBEAT_INTERVAL_MILLISECONDS", DefaultRunnerHeartbeatIntervalMilliseconds)
 	if err != nil {
 		return Config{}, err
 	}
@@ -148,11 +170,11 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	runnerCommandDeliveryBatchSize, err := requiredPositiveInt64("SECONDBOX_RUNNER_COMMAND_DELIVERY_BATCH_SIZE")
+	runnerCommandDeliveryBatchSize, err := optionalPositiveInt64("SECONDBOX_RUNNER_COMMAND_DELIVERY_BATCH_SIZE", DefaultRunnerCommandDeliveryBatchSize)
 	if err != nil {
 		return Config{}, err
 	}
-	runnerEventPersistenceBatchSize, err := requiredPositiveInt64("SECONDBOX_RUNNER_EVENT_PERSISTENCE_BATCH_SIZE")
+	runnerEventPersistenceBatchSize, err := optionalPositiveInt64("SECONDBOX_RUNNER_EVENT_PERSISTENCE_BATCH_SIZE", DefaultRunnerEventPersistenceBatchSize)
 	if err != nil {
 		return Config{}, err
 	}
@@ -160,7 +182,7 @@ func FromEnvironment() (Config, error) {
 	if int64(runnerEventPersistenceBatchSizeInt) != runnerEventPersistenceBatchSize {
 		return Config{}, errorsForEnvironment("runner event persistence batch size exceeds process integer range")
 	}
-	runnerEventPersistenceBatchWaitMilliseconds, err := requiredPositiveInt64("SECONDBOX_RUNNER_EVENT_PERSISTENCE_BATCH_WAIT_MILLISECONDS")
+	runnerEventPersistenceBatchWaitMilliseconds, err := optionalPositiveInt64("SECONDBOX_RUNNER_EVENT_PERSISTENCE_BATCH_WAIT_MILLISECONDS", DefaultRunnerEventPersistenceBatchWaitMilliseconds)
 	if err != nil {
 		return Config{}, err
 	}
@@ -168,7 +190,7 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	dataPlaneClaimMilliseconds, err := requiredPositiveInt64("SECONDBOX_DATA_PLANE_CLAIM_DURATION_MILLISECONDS")
+	dataPlaneClaimMilliseconds, err := optionalPositiveInt64("SECONDBOX_DATA_PLANE_CLAIM_DURATION_MILLISECONDS", DefaultDataPlaneClaimDurationMilliseconds)
 	if err != nil {
 		return Config{}, err
 	}
@@ -176,18 +198,18 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	dataPlaneMaximumFrameBytes, err := requiredPositiveInt64("SECONDBOX_DATA_PLANE_MAXIMUM_FRAME_BYTES")
+	dataPlaneMaximumFrameBytes, err := optionalPositiveInt64("SECONDBOX_DATA_PLANE_MAXIMUM_FRAME_BYTES", DefaultDataPlaneMaximumFrameBytes)
 	if err != nil {
 		return Config{}, err
 	}
-	dataPlaneMaximumSessionBytes, err := requiredPositiveInt64("SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES")
+	dataPlaneMaximumSessionBytes, err := optionalPositiveInt64("SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES", DefaultDataPlaneMaximumSessionBytes)
 	if err != nil {
 		return Config{}, err
 	}
 	if dataPlaneMaximumSessionBytes < dataPlaneMaximumFrameBytes {
 		return Config{}, errorsForEnvironment("data-plane session byte bound is smaller than frame byte bound")
 	}
-	lifecycleReconcileBatchSize, err := requiredPositiveInt64("SECONDBOX_LIFECYCLE_RECONCILE_BATCH_SIZE")
+	lifecycleReconcileBatchSize, err := optionalPositiveInt64("SECONDBOX_LIFECYCLE_RECONCILE_BATCH_SIZE", DefaultLifecycleReconcileBatchSize)
 	if err != nil {
 		return Config{}, err
 	}
@@ -195,31 +217,31 @@ func FromEnvironment() (Config, error) {
 	if int64(lifecycleReconcileBatchSizeInt) != lifecycleReconcileBatchSize {
 		return Config{}, errorsForEnvironment("lifecycle reconcile batch size exceeds process integer range")
 	}
-	lifecycleReconcilePollMilliseconds, err := requiredPositiveInt64("SECONDBOX_LIFECYCLE_RECONCILE_POLL_INTERVAL_MILLISECONDS")
+	lifecycleReconcilePollMilliseconds, err := optionalPositiveInt64("SECONDBOX_LIFECYCLE_RECONCILE_POLL_INTERVAL_MILLISECONDS", DefaultLifecycleReconcilePollIntervalMilliseconds)
 	if err != nil {
 		return Config{}, err
 	}
-	lifecycleReconcileClaimMilliseconds, err := requiredPositiveInt64("SECONDBOX_LIFECYCLE_RECONCILE_CLAIM_DURATION_MILLISECONDS")
+	lifecycleReconcileClaimMilliseconds, err := optionalPositiveInt64("SECONDBOX_LIFECYCLE_RECONCILE_CLAIM_DURATION_MILLISECONDS", DefaultLifecycleReconcileClaimDurationMilliseconds)
 	if err != nil {
 		return Config{}, err
 	}
-	assignmentClaimMilliseconds, err := requiredPositiveInt64("SECONDBOX_ASSIGNMENT_CLAIM_DURATION_MILLISECONDS")
+	assignmentClaimMilliseconds, err := optionalPositiveInt64("SECONDBOX_ASSIGNMENT_CLAIM_DURATION_MILLISECONDS", DefaultAssignmentClaimDurationMilliseconds)
 	if err != nil {
 		return Config{}, err
 	}
-	assignmentDeadlineMilliseconds, err := requiredPositiveInt64("SECONDBOX_ASSIGNMENT_DEADLINE_MILLISECONDS")
+	assignmentDeadlineMilliseconds, err := optionalPositiveInt64("SECONDBOX_ASSIGNMENT_DEADLINE_MILLISECONDS", DefaultAssignmentDeadlineMilliseconds)
 	if err != nil {
 		return Config{}, err
 	}
-	runnerHeartbeatTimeoutMilliseconds, err := requiredPositiveInt64("SECONDBOX_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS")
+	runnerHeartbeatTimeoutMilliseconds, err := optionalPositiveInt64("SECONDBOX_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS", DefaultRunnerHeartbeatTimeoutMilliseconds)
 	if err != nil {
 		return Config{}, err
 	}
-	assignmentRetryLimit, err := requiredNonNegativeInt64("SECONDBOX_ASSIGNMENT_RETRY_LIMIT")
+	assignmentRetryLimit, err := optionalNonNegativeInt64("SECONDBOX_ASSIGNMENT_RETRY_LIMIT", DefaultAssignmentRetryLimit)
 	if err != nil {
 		return Config{}, err
 	}
-	schedulerSerializationRetryLimit, err := requiredNonNegativeInt64("SECONDBOX_SCHEDULER_SERIALIZATION_RETRY_LIMIT")
+	schedulerSerializationRetryLimit, err := optionalNonNegativeInt64("SECONDBOX_SCHEDULER_SERIALIZATION_RETRY_LIMIT", DefaultSchedulerSerializationRetryLimit)
 	if err != nil {
 		return Config{}, err
 	}
@@ -255,7 +277,7 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	objectStoreRetryMaxAttempts, err := requiredPositiveInt64("SECONDBOX_OBJECT_STORE_RETRY_MAX_ATTEMPTS")
+	objectStoreRetryMaxAttempts, err := optionalPositiveInt64("SECONDBOX_OBJECT_STORE_RETRY_MAX_ATTEMPTS", DefaultObjectStoreRetryMaxAttempts)
 	if err != nil {
 		return Config{}, err
 	}
@@ -263,7 +285,7 @@ func FromEnvironment() (Config, error) {
 	if int64(objectStoreRetryMaxAttemptsInt) != objectStoreRetryMaxAttempts {
 		return Config{}, errorsForEnvironment("object store retry attempts exceed process integer range")
 	}
-	objectStoreHTTPTimeoutMilliseconds, err := requiredPositiveInt64("SECONDBOX_OBJECT_STORE_HTTP_TIMEOUT_MILLISECONDS")
+	objectStoreHTTPTimeoutMilliseconds, err := optionalPositiveInt64("SECONDBOX_OBJECT_STORE_HTTP_TIMEOUT_MILLISECONDS", DefaultObjectStoreHTTPTimeoutMilliseconds)
 	if err != nil {
 		return Config{}, err
 	}
@@ -271,20 +293,9 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	objectStoreMaxObjectBytes, err := requiredPositiveInt64("SECONDBOX_OBJECT_STORE_MAX_OBJECT_BYTES")
+	objectStoreMaxObjectBytes, err := optionalPositiveInt64("SECONDBOX_OBJECT_STORE_MAX_OBJECT_BYTES", DefaultObjectStoreMaxObjectBytes)
 	if err != nil {
 		return Config{}, err
-	}
-	runnerProtocolMinimum, err := requiredUint32("SECONDBOX_RUNNER_PROTOCOL_MINIMUM")
-	if err != nil {
-		return Config{}, err
-	}
-	runnerProtocolMaximum, err := requiredUint32("SECONDBOX_RUNNER_PROTOCOL_MAXIMUM")
-	if err != nil {
-		return Config{}, err
-	}
-	if runnerProtocolMinimum > runnerProtocolMaximum {
-		return Config{}, errorsForEnvironment("runner protocol minimum exceeds maximum")
 	}
 	runnerEnabledFeatures, err := requiredCSV("SECONDBOX_RUNNER_ENABLED_FEATURES")
 	if err != nil {
@@ -339,11 +350,10 @@ func FromEnvironment() (Config, error) {
 		ObjectStoreHTTPTimeout:      time.Duration(objectStoreHTTPTimeoutMilliseconds) * time.Millisecond,
 		ObjectStoreTempDirectory:    objectStoreTempDirectory,
 		ObjectStoreMaxObjectBytes:   objectStoreMaxObjectBytes,
-		RunnerProtocolMinimum:       runnerProtocolMinimum, RunnerProtocolMaximum: runnerProtocolMaximum,
-		RunnerEnabledFeatures:    runnerEnabledFeatures,
-		DefaultSubjectQuota:      subjectQuota,
-		AgentCompartmentProfile:  agentCompartmentProfile,
-		CodingEnvironmentProfile: codingEnvironmentProfile,
+		RunnerEnabledFeatures:       runnerEnabledFeatures,
+		DefaultSubjectQuota:         subjectQuota,
+		AgentCompartmentProfile:     agentCompartmentProfile,
+		CodingEnvironmentProfile:    codingEnvironmentProfile,
 	}, nil
 }
 
@@ -435,18 +445,6 @@ func requiredAbsolutePath(name string) (string, error) {
 		return "", errorsForEnvironment(name + " must be an absolute path")
 	}
 	return path, nil
-}
-
-func requiredUint32(name string) (uint32, error) {
-	raw, err := requiredString(name)
-	if err != nil {
-		return 0, err
-	}
-	value, err := strconv.ParseUint(raw, 10, 32)
-	if err != nil || value == 0 {
-		return 0, fmt.Errorf("SecondBox environment variable %s must be a positive 32-bit integer", name)
-	}
-	return uint32(value), nil
 }
 
 func requiredCSV(name string) ([]string, error) {
@@ -542,6 +540,20 @@ func requiredPositiveInt64(name string) (int64, error) {
 		return 0, fmt.Errorf("SecondBox environment variable %s must be a positive integer", name)
 	}
 	return value, nil
+}
+
+func optionalPositiveInt64(name string, fallback int64) (int64, error) {
+	if _, exists := os.LookupEnv(name); !exists {
+		return fallback, nil
+	}
+	return requiredPositiveInt64(name)
+}
+
+func optionalNonNegativeInt64(name string, fallback int64) (int64, error) {
+	if _, exists := os.LookupEnv(name); !exists {
+		return fallback, nil
+	}
+	return requiredNonNegativeInt64(name)
 }
 
 func errorsForEnvironment(message string) error {

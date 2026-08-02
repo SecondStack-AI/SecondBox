@@ -1,0 +1,27 @@
+services:
+  control-plane:
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: ${SECONDBOX_POSTGRES_IMAGE:?set SECONDBOX_POSTGRES_IMAGE}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${SECONDBOX_POSTGRES_DATABASE:?set SECONDBOX_POSTGRES_DATABASE}
+      POSTGRES_USER: ${SECONDBOX_POSTGRES_USER:?set SECONDBOX_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${SECONDBOX_POSTGRES_PASSWORD:?set SECONDBOX_POSTGRES_PASSWORD}
+    ports:
+      - "${SECONDBOX_POSTGRES_BIND_IP:?set SECONDBOX_POSTGRES_BIND_IP}:${SECONDBOX_POSTGRES_PUBLISHED_PORT:?set SECONDBOX_POSTGRES_PUBLISHED_PORT}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    networks: [secondbox-backend]
+
+volumes:
+  postgres-data:

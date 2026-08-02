@@ -9,6 +9,7 @@ require (
 	github.com/aws/smithy-go v1.27.3
 	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/pelletier/go-toml/v2 v2.4.2
 	golang.org/x/term v0.45.0
 )
 
