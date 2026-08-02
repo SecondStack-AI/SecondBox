@@ -26,6 +26,7 @@ import (
 
 	"github.com/SecondStack-AI/SecondBox/internal/assetcatalog"
 	controlconfig "github.com/SecondStack-AI/SecondBox/internal/config"
+	"github.com/SecondStack-AI/SecondBox/internal/runnerfeatures"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -563,6 +564,19 @@ func validatePolicy(p Policy) error {
 		if strings.Contains(name, "digest") && !digestPattern.MatchString(value) {
 			return manifestError("policy."+name+" must be a canonical sha256 digest", nil)
 		}
+	}
+	featureNames := make([]string, 0)
+	seenFeatures := make(map[string]bool)
+	for _, entry := range strings.Split(p.RunnerEnabledFeatures, ",") {
+		name := strings.TrimSpace(entry)
+		if name == "" || seenFeatures[name] {
+			return manifestError("policy.runner_enabled_features must contain unique non-empty comma-separated values", nil)
+		}
+		seenFeatures[name] = true
+		featureNames = append(featureNames, name)
+	}
+	if _, err := runnerfeatures.Parse(featureNames); err != nil {
+		return manifestError("policy.runner_enabled_features", err)
 	}
 	return nil
 }

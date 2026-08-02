@@ -75,10 +75,30 @@ services:
       SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS: ${SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS:?set SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS}
     devices: [/dev/kvm:/dev/kvm, /dev/net/tun:/dev/net/tun]
     volumes:
-      - "${SECONDBOX_RUNNER_IDENTITY_HOST_DIR:?set SECONDBOX_RUNNER_IDENTITY_HOST_DIR}:/run/secondbox-runner-identity:ro"
-      - "${SECONDBOX_RUNNER_ARTIFACT_HOST_DIR:?set SECONDBOX_RUNNER_ARTIFACT_HOST_DIR}:/opt/secondbox-artifacts:ro"
-      - "${SECONDBOX_RUNNER_STATE_HOST_DIR:?set SECONDBOX_RUNNER_STATE_HOST_DIR}:/var/lib/secondbox-runner:rshared"
-      - "${SECONDBOX_RUNNER_WORKSPACE_HOST_DIR:?set SECONDBOX_RUNNER_WORKSPACE_HOST_DIR}:${SECONDBOX_RUNNER_WORKSPACE_ROOT:?set SECONDBOX_RUNNER_WORKSPACE_ROOT}:rshared"
+      - type: bind
+        source: ${SECONDBOX_RUNNER_IDENTITY_HOST_DIR:?set SECONDBOX_RUNNER_IDENTITY_HOST_DIR}
+        target: /run/secondbox-runner-identity
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SECONDBOX_RUNNER_ARTIFACT_HOST_DIR:?set SECONDBOX_RUNNER_ARTIFACT_HOST_DIR}
+        target: /opt/secondbox-artifacts
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SECONDBOX_RUNNER_STATE_HOST_DIR:?set SECONDBOX_RUNNER_STATE_HOST_DIR}
+        target: /var/lib/secondbox-runner
+        bind:
+          create_host_path: false
+          propagation: rshared
+      - type: bind
+        source: ${SECONDBOX_RUNNER_WORKSPACE_HOST_DIR:?set SECONDBOX_RUNNER_WORKSPACE_HOST_DIR}
+        target: ${SECONDBOX_RUNNER_WORKSPACE_ROOT:?set SECONDBOX_RUNNER_WORKSPACE_ROOT}
+        bind:
+          create_host_path: false
+          propagation: rshared
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
     healthcheck:
       test: ["CMD", "/usr/local/bin/secondbox-runner", "-healthcheck", "-healthcheck-timeout", "5s"]
