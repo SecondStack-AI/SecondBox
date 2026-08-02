@@ -195,6 +195,15 @@ func initProduction(directory string, writeSkeleton func(string, []byte) error) 
 	if err != nil {
 		return "", err
 	}
+	if _, err := os.Lstat(absolute); err == nil {
+		return "", manifestError("production initialization target already exists", nil)
+	} else if !os.IsNotExist(err) {
+		return "", manifestError("inspect production initialization target", err)
+	}
+	parentInfo, err := os.Lstat(filepath.Dir(absolute))
+	if err != nil || !parentInfo.IsDir() || parentInfo.Mode()&os.ModeSymlink != 0 {
+		return "", manifestError("production initialization parent must be an existing non-symbolic-link directory", err)
+	}
 	if err := os.Mkdir(absolute, 0o700); err != nil {
 		return "", manifestError("create production initialization directory", err)
 	}

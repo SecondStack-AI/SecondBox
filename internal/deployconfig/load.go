@@ -184,6 +184,12 @@ func resolveManifest(manifest ManifestV1, base string) (ResolvedDeployment, erro
 	put("SECONDBOX_OBJECT_STORE_ROOT_USER", access)
 	put("SECONDBOX_OBJECT_STORE_ROOT_PASSWORD", secret)
 	if objectStore.Mode == "bundled" {
+		clientEndpoint, err := url.Parse(objectStore.Endpoint)
+		if err != nil {
+			return ResolvedDeployment{}, manifestError("object_store.endpoint", err)
+		}
+		clientEndpoint.User = url.UserPassword(access, secret)
+		put("SECONDBOX_OBJECT_STORE_MC_HOST", clientEndpoint.String())
 		put("SECONDBOX_OBJECT_STORE_IMAGE", deployment.ObjectStoreImage)
 		put("SECONDBOX_OBJECT_STORE_CLIENT_IMAGE", deployment.ObjectStoreClientImage)
 		put("SECONDBOX_OBJECT_STORE_BIND_IP", objectStore.BindIP)

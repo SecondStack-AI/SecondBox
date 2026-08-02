@@ -145,7 +145,7 @@ func runCompose(manifestPath, action string) error {
 	case "up":
 		arguments = composeUpArguments(arguments, "--detach")
 	case "down":
-		arguments = append(arguments, "down")
+		arguments = composeDownArguments(arguments)
 	}
 	return runDockerCompose(arguments)
 }
@@ -153,6 +153,10 @@ func runCompose(manifestPath, action string) error {
 func composeUpArguments(arguments []string, options ...string) []string {
 	result := append(slices.Clone(arguments), "up", "--remove-orphans")
 	return append(result, options...)
+}
+
+func composeDownArguments(arguments []string) []string {
+	return append(slices.Clone(arguments), "down", "--remove-orphans")
 }
 
 func runDockerCompose(arguments []string) error {
