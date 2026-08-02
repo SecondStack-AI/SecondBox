@@ -258,7 +258,7 @@ func resolveManifest(manifest ManifestV1, base string) (ResolvedDeployment, erro
 		}
 	}
 	for _, runner := range manifest.Runners {
-		runnerEnvironment := resolveRunnerEnvironment(runner, credential, base)
+		runnerEnvironment := resolveRunnerEnvironment(runner, credential)
 		if runner.Placement == "same-host" {
 			for name, value := range runnerEnvironment {
 				environment[name] = value
@@ -532,6 +532,37 @@ func validateRunner(prefix string, r Runner) error {
 			return manifestError(prefix+"."+name+" is required", nil)
 		}
 	}
+	for name, value := range map[string]string{
+		"identity_directory":              r.IdentityDirectory,
+		"log_path":                        r.LogPath,
+		"log_directory":                   r.LogDirectory,
+		"firecracker_path":                r.FirecrackerPath,
+		"firecracker_jailer_path":         r.FirecrackerJailerPath,
+		"firecracker_jail_root":           r.FirecrackerJailRoot,
+		"firecracker_kernel_path":         r.FirecrackerKernelPath,
+		"firecracker_rootfs_path":         r.FirecrackerRootFSPath,
+		"firecracker_shared_image_path":   r.FirecrackerSharedImagePath,
+		"firecracker_run_directory":       r.FirecrackerRunDirectory,
+		"firecracker_log_directory":       r.FirecrackerLogDirectory,
+		"artifact_public_key":             r.ArtifactPublicKey,
+		"workspace_root":                  r.WorkspaceRoot,
+		"sandbox_network_state_directory": r.SandboxNetworkStateDir,
+		"network_policy_nft_path":         r.NetworkPolicyNFTPath,
+	} {
+		if !filepath.IsAbs(value) {
+			return manifestError(prefix+"."+name+" must be an absolute Runner-host path", nil)
+		}
+	}
+	for name, value := range map[string]string{
+		"identity_host_directory":  r.IdentityHostDirectory,
+		"artifact_host_directory":  r.ArtifactHostDirectory,
+		"state_host_directory":     r.StateHostDirectory,
+		"workspace_host_directory": r.WorkspaceHostDirectory,
+	} {
+		if value != "" && !filepath.IsAbs(value) {
+			return manifestError(prefix+"."+name+" must be an absolute Runner-host path", nil)
+		}
+	}
 	if r.Placement == "same-host" {
 		for name, value := range map[string]string{"identity_host_directory": r.IdentityHostDirectory, "artifact_host_directory": r.ArtifactHostDirectory, "state_host_directory": r.StateHostDirectory, "workspace_host_directory": r.WorkspaceHostDirectory, "log_directory": r.LogDirectory} {
 			if !filepath.IsAbs(value) {
@@ -664,16 +695,12 @@ func validateRunnerTrustMaterial(caCertificatePath, caPrivateKeyPath, serverCert
 	return nil
 }
 
-func resolveRunnerEnvironment(r Runner, credential, base string) map[string]string {
+func resolveRunnerEnvironment(r Runner, credential string) map[string]string {
 	env := map[string]string{"SECONDBOX_RUNNER_ID": r.RunnerID, "SECONDBOX_RUNNER_POOL_ID": r.PoolID, "SECONDBOX_RUNNER_SOFTWARE_VERSION": r.SoftwareVersion, "SECONDBOX_RUNNER_CONTROL_PLANE_ADDRESS": r.ControlPlaneAddress, "SECONDBOX_RUNNER_CONTROL_PLANE_SERVER_NAME": r.ControlPlaneServerName, "SECONDBOX_RUNNER_CREDENTIAL": credential, "SECONDBOX_RUNNER_LOG_PATH": r.LogPath, "SECONDBOX_RUNNER_FIRECRACKER_PATH": r.FirecrackerPath, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_PATH": r.FirecrackerJailerPath, "SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT": r.FirecrackerJailRoot, "SECONDBOX_RUNNER_FIRECRACKER_CGROUP_PARENT": r.FirecrackerCgroupParent, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH": r.FirecrackerKernelPath, "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH": r.FirecrackerRootFSPath, "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH": r.FirecrackerSharedImagePath, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS": r.FirecrackerKernelArgs, "SECONDBOX_RUNNER_FIRECRACKER_CPU_TEMPLATE": r.FirecrackerCPUTemplate, "SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR": r.FirecrackerRunDirectory, "SECONDBOX_RUNNER_FIRECRACKER_LOG_DIR": r.FirecrackerLogDirectory, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY": r.ArtifactPublicKey, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256": r.ArtifactPublicKeySHA256, "SECONDBOX_RUNNER_WORKSPACE_ROOT": r.WorkspaceRoot, "SECONDBOX_RUNNER_SANDBOX_GUEST_IP": r.SandboxGuestIP, "SECONDBOX_RUNNER_SANDBOX_BRIDGE_NAME": r.SandboxBridgeName, "SECONDBOX_RUNNER_SANDBOX_BRIDGE_CIDR": r.SandboxBridgeCIDR, "SECONDBOX_RUNNER_SANDBOX_GUEST_CIDR": r.SandboxGuestCIDR, "SECONDBOX_RUNNER_SANDBOX_TAP_PREFIX": r.SandboxTapPrefix, "SECONDBOX_RUNNER_SANDBOX_NETWORK_STATE_DIR": r.SandboxNetworkStateDir, "SECONDBOX_RUNNER_NETWORK_POLICY_NFT_PATH": r.NetworkPolicyNFTPath, "SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL": r.NetworkPolicyMaxDNSTTL, "SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES": r.NetworkPolicyRunnerAddresses, "SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS": r.NetworkPolicyManagementCIDRs, "SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS": r.NetworkPolicyRunnerGateways, "SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM": r.NetworkPolicyDNSUpstream, "SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL": r.GuestHeartbeatInterval, "SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS": r.DataPlaneListenAddress, "SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS": r.DataPlaneAdvertisedAddress}
 	env["SECONDBOX_RUNNER_LOG_DIR"] = r.LogDirectory
-	identity := r.IdentityDirectory
-	if !filepath.IsAbs(identity) {
-		identity = filepath.Join(base, identity)
-	}
-	env["SECONDBOX_RUNNER_CLIENT_CERTIFICATE"] = filepath.Join(identity, "runner.crt")
-	env["SECONDBOX_RUNNER_CLIENT_KEY"] = filepath.Join(identity, "runner.key")
-	env["SECONDBOX_RUNNER_CONTROL_PLANE_CA"] = filepath.Join(identity, "runner-ca.crt")
+	env["SECONDBOX_RUNNER_CLIENT_CERTIFICATE"] = filepath.Join(r.IdentityDirectory, "runner.crt")
+	env["SECONDBOX_RUNNER_CLIENT_KEY"] = filepath.Join(r.IdentityDirectory, "runner.key")
+	env["SECONDBOX_RUNNER_CONTROL_PLANE_CA"] = filepath.Join(r.IdentityDirectory, "runner-ca.crt")
 	ints := map[string]*int64{"SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID": r.FirecrackerJailerUID, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_GID": r.FirecrackerJailerGID, "SECONDBOX_RUNNER_FIRECRACKER_CGROUP_VERSION": r.FirecrackerCgroupVersion, "SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT": r.StorageRecoveryPercent, "SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT": r.StorageWarningPercent, "SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT": r.StorageAdmissionDenyPercent, "SECONDBOX_RUNNER_SANDBOX_MAX_VCPUS": r.SandboxMaxVCPUs, "SECONDBOX_RUNNER_SANDBOX_MAX_MEMORY_MIB": r.SandboxMaxMemoryMiB, "SECONDBOX_RUNNER_SANDBOX_MAX_DISK_MIB": r.SandboxMaxDiskMiB, "SECONDBOX_RUNNER_SANDBOX_MEMORY_BUDGET_MIB": r.SandboxMemoryBudgetMiB, "SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS": r.NetworkPolicyMaxDNSPins, "SECONDBOX_RUNNER_MAX_CONCURRENT_PER_SANDBOX": r.MaxConcurrentPerSandbox, "SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL": r.MaxConcurrentGlobal, "SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS": r.MaxConcurrentStarts, "SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES": r.MaxConcurrentWorkspaceCreates, "SECONDBOX_RUNNER_MAX_CONCURRENT_OPERATIONS_GLOBAL": r.MaxConcurrentOperationsGlobal, "SECONDBOX_RUNNER_FILE_TRANSFER_MAX_BYTES": r.FileTransferMaxBytes, "SECONDBOX_RUNNER_GUEST_CONTROL_VSOCK_PORT": r.GuestControlVSockPort, "SECONDBOX_RUNNER_GUEST_PROTOCOL_VSOCK_PORT": r.GuestProtocolVSockPort}
 	for name, value := range ints {
 		env[name] = strconv.FormatInt(*value, 10)
