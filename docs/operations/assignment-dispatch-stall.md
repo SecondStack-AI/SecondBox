@@ -175,6 +175,22 @@ Latency settles after the first two rungs rather than degrading, which is what a
 deployment absorbing repeated bursts should look like. Nothing was refused,
 nothing failed, nothing was shed, and the gate reported no violations.
 
+### Confirmed by a second independent run
+
+The defect was intermittent, so one clean run is weaker evidence than it looks.
+A second run of the same ten rungs also completed: 320 of 320 arrivals admitted,
+zero shutdowns, 26 serialization failures absorbed, `qualification passed`.
+
+| Rung | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| p50 ms | 3859 | 3531 | 3644 | 3632 | 3743 | 3491 | 3867 | 4057 | 3551 | 4094 |
+| p95 ms | 4871 | 4621 | 4794 | 4549 | 4558 | 4702 | 4949 | 5126 | 4555 | 5284 |
+
+Twenty consecutive 32-arrival bursts across two runs, 640 arrivals, no stall.
+Latency is also flatter than the first run, which began at 6064/8058 ms before
+settling: with the connection-row lock gone from placement, the first rung no
+longer pays for contention that the rest of the run had to absorb.
+
 Serialization failures still occur after the fix, and should: they are inherent
 to serializable isolation under concurrency. The change is that they are now
 retried and reported as contention rather than ending the process.
