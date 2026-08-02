@@ -238,6 +238,29 @@ func TestBundledDatabaseURLPreservesUserInfoBytes(t *testing.T) {
 	}
 }
 
+func TestProductionExternalDatabaseURLRequiresEffectiveVerifiedTLS(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		valid bool
+	}{
+		{name: "verified TLS", value: "postgresql://secondbox:secret@database.example/secondbox?sslmode=verify-full", valid: true},
+		{name: "userinfo decoy", value: "postgresql://secondbox:sslmode=verify-full@database.example/secondbox?sslmode=disable"},
+		{name: "path decoy", value: "postgresql://database.example/sslmode=verify-full?sslmode=disable"},
+		{name: "duplicate override", value: "postgresql://database.example/secondbox?sslmode=verify-full&sslmode=disable"},
+		{name: "absent mode", value: "postgresql://database.example/secondbox"},
+		{name: "not a PostgreSQL URL", value: "sslmode=verify-full"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateExternalDatabaseURL(test.value, true)
+			if (err == nil) != test.valid {
+				t.Fatalf("error = %v, valid = %t", err, test.valid)
+			}
+		})
+	}
+}
+
 func TestCredentialsRemainSeparateAcrossTrustBoundaries(t *testing.T) {
 	for name, writeCollision := range map[string]func(string, ManifestV1, []byte) error{
 		"platform token": func(base string, manifest ManifestV1, runnerCredential []byte) error {
