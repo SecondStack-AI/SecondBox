@@ -100,6 +100,25 @@ func resolveManifest(manifest ManifestV1, base string) (ResolvedDeployment, erro
 	if err != nil {
 		return ResolvedDeployment{}, manifestError("deployment.signed_asset_catalog", err)
 	}
+	if deployment.Mode == "production" {
+		catalogContent, err := os.ReadFile(catalog)
+		if err != nil {
+			return ResolvedDeployment{}, manifestError("read production deployment.signed_asset_catalog", err)
+		}
+		var catalogDocument struct {
+			Assets []struct {
+				SignatureKeyID string `json:"signatureKeyId"`
+			} `json:"assets"`
+		}
+		if err := json.Unmarshal(catalogContent, &catalogDocument); err != nil {
+			return ResolvedDeployment{}, manifestError("production deployment.signed_asset_catalog must be valid JSON", err)
+		}
+		for _, asset := range catalogDocument.Assets {
+			if asset.SignatureKeyID == "secondbox-development-local-trust" {
+				return ResolvedDeployment{}, manifestError("production requires an operator-supplied signed asset catalog", nil)
+			}
+		}
+	}
 	put("SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH", catalog)
 	put("SECONDBOX_SIGNED_ASSET_CATALOG_PATH", deployment.SignedAssetCatalogPath)
 
@@ -322,6 +341,9 @@ func validateManifestShape(manifest ManifestV1) error {
 	}
 	if d.RunnerListenAddress != "0.0.0.0:9443" {
 		return manifestError("deployment.runner_listen_address must be 0.0.0.0:9443 for the packaged container mapping", nil)
+	}
+	if d.SignedAssetCatalogPath != "/etc/secondbox/signed-assets.json" {
+		return manifestError("deployment.signed_asset_catalog_path must be /etc/secondbox/signed-assets.json for the packaged container mapping", nil)
 	}
 	if d.DevelopmentWaitSeconds != nil {
 		if err := requireInt("deployment.development_prepare_wait_timeout_seconds", d.DevelopmentWaitSeconds, false); err != nil {

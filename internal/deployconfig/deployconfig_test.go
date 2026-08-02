@@ -134,6 +134,9 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 		{name: "object store published beyond loopback", want: "bind every published port to 127.0.0.1", mutate: func(manifest *ManifestV1) { manifest.ObjectStore.BindIP = "0.0.0.0" }},
 		{name: "control plane listener mismatches container", want: "listen_address must be 0.0.0.0:8080", mutate: func(manifest *ManifestV1) { manifest.Deployment.ListenAddress = "0.0.0.0:9999" }},
 		{name: "Runner listener mismatches container", want: "runner_listen_address must be 0.0.0.0:9443", mutate: func(manifest *ManifestV1) { manifest.Deployment.RunnerListenAddress = "0.0.0.0:9999" }},
+		{name: "asset catalog path mismatches container", want: "signed_asset_catalog_path must be /etc/secondbox/signed-assets.json", mutate: func(manifest *ManifestV1) {
+			manifest.Deployment.SignedAssetCatalogPath = "/different/signed-assets.json"
+		}},
 		{name: "control plane port exceeds TCP range", want: "deployment.api_published_port", mutate: func(manifest *ManifestV1) { manifest.Deployment.APIPublishedPort = integer(70000) }},
 		{name: "Runner port exceeds TCP range", want: "deployment.runner_published_port", mutate: func(manifest *ManifestV1) { manifest.Deployment.RunnerPublishedPort = integer(70000) }},
 		{name: "database port exceeds TCP range", want: "database.published_port", mutate: func(manifest *ManifestV1) { manifest.Database.PublishedPort = integer(70000) }},
@@ -425,6 +428,15 @@ func TestProductionQualifiesBundledAndExternalDatabaseAndObjectStoreCombinations
 					manifest.ObjectStore.BindIP = ""
 					manifest.ObjectStore.PublishedPort = nil
 					manifest.ObjectStore.ConsolePublishedPort = nil
+				}
+				if databaseMode == "bundled" && objectMode == "bundled" {
+					if _, err := resolveManifest(manifest, filepath.Dir(manifestPath)); err == nil || !strings.Contains(err.Error(), "operator-supplied signed asset catalog") {
+						t.Fatalf("development catalog in production error = %v", err)
+					}
+				}
+				productionCatalog := `{"assets":[{"artifactId":"secondbox-production-test","manifestDigest":"` + assetDigest + `","signatureKeyId":"operator-production-trust","architecture":"amd64","guestProtocolGeneration":1,"mandatoryGuestFeatures":[]}]}` + "\n"
+				if err := os.WriteFile(filepath.Join(filepath.Dir(manifestPath), manifest.Deployment.SignedAssetCatalog), []byte(productionCatalog), 0o600); err != nil {
+					t.Fatal(err)
 				}
 				encoded, err := encodeManifest(manifest)
 				if err != nil {
