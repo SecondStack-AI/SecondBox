@@ -139,6 +139,9 @@ func resolveManifest(manifest ManifestV1, base string) (ResolvedDeployment, erro
 		if err != nil {
 			return ResolvedDeployment{}, manifestError("database.password_file", err)
 		}
+		if len(password) < 24 {
+			return ResolvedDeployment{}, manifestError("database.password_file must contain at least 24 bytes", nil)
+		}
 		secretPaths["database.password_file"] = path
 		databasePassword = password
 		put("SECONDBOX_POSTGRES_PASSWORD", password)
