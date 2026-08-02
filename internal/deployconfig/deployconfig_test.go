@@ -656,6 +656,42 @@ func validSameHostTestRunner(id string) Runner {
 	return runner
 }
 
+func TestRunnerValidationMatchesRuntimeInvariants(t *testing.T) {
+	tests := []struct {
+		name   string
+		want   string
+		mutate func(*Runner)
+	}{
+		{name: "storage threshold at 100", want: "admission deny < 100", mutate: func(r *Runner) {
+			r.StorageRecoveryPercent, r.StorageWarningPercent, r.StorageAdmissionDenyPercent = integer(80), integer(90), integer(100)
+		}},
+		{name: "starts exceed global", want: "max_concurrent_starts", mutate: func(r *Runner) { r.MaxConcurrentStarts, r.MaxConcurrentGlobal = integer(17), integer(16) }},
+		{name: "duplicate vsock port", want: "vsock ports", mutate: func(r *Runner) { r.GuestProtocolVSockPort = r.GuestControlVSockPort }},
+		{name: "oversized vsock port", want: "vsock ports", mutate: func(r *Runner) { r.GuestProtocolVSockPort = integer(65536) }},
+		{name: "unjailed", want: "must be false", mutate: func(r *Runner) { r.FirecrackerAllowUnjailed = boolean(true) }},
+		{name: "placeholder artifact fingerprint", want: "provisioned signed artifact key", mutate: func(r *Runner) { r.ArtifactPublicKeySHA256 = strings.Repeat("0", 64) }},
+		{name: "missing kernel argument", want: "i8042.noaux", mutate: func(r *Runner) {
+			r.FirecrackerKernelArgs = strings.ReplaceAll(r.FirecrackerKernelArgs, " i8042.noaux", "")
+		}},
+		{name: "invalid heartbeat", want: "supported duration range", mutate: func(r *Runner) { r.GuestHeartbeatInterval = "0s" }},
+		{name: "invalid DNS TTL", want: "supported duration range", mutate: func(r *Runner) { r.NetworkPolicyMaxDNSTTL = "invalid" }},
+		{name: "invalid Runner address", want: "invalid network value", mutate: func(r *Runner) { r.NetworkPolicyRunnerAddresses = "not-an-ip" }},
+		{name: "invalid management CIDR", want: "invalid network value", mutate: func(r *Runner) { r.NetworkPolicyManagementCIDRs = "127.0.0.1" }},
+		{name: "invalid gateway", want: "domain=IP", mutate: func(r *Runner) { r.NetworkPolicyRunnerGateways = "invalid" }},
+		{name: "invalid DNS upstream", want: "must be an IP:port", mutate: func(r *Runner) { r.NetworkPolicyDNSUpstream = "localhost:53" }},
+		{name: "invalid advertised address", want: "explicit reachable host", mutate: func(r *Runner) { r.DataPlaneAdvertisedAddress = "0.0.0.0:7443" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runner := validTestRunner("runner-a", "remote")
+			test.mutate(&runner)
+			if err := validateRunner("runners[0]", runner); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want substring %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestLegacyMigrationIsOneShotStrictAndPreservesTheSource(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
 	resolved, err := Resolve(manifestPath)
