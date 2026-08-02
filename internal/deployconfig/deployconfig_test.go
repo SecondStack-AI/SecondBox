@@ -3,6 +3,7 @@ package deployconfig
 import (
 	"bytes"
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -115,6 +116,116 @@ func TestStrictDecodeRejectsUnknownDuplicateAndUnsupportedSchema(t *testing.T) {
 			}
 			if _, err := Resolve(path); err == nil || !strings.Contains(err.Error(), "SecondBox deployment manifest") {
 				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
+	tests := []struct {
+		name   string
+		want   string
+		mutate func(*ManifestV1)
+	}{
+		{name: "missing development wait timeout", want: "development_prepare_wait_timeout_seconds is required", mutate: func(manifest *ManifestV1) { manifest.Deployment.DevelopmentWaitSeconds = nil }},
+		{name: "control plane published beyond loopback", want: "bind every published port to 127.0.0.1", mutate: func(manifest *ManifestV1) { manifest.Deployment.APIBindIP = "0.0.0.0" }},
+		{name: "Runner endpoint published beyond loopback", want: "bind every published port to 127.0.0.1", mutate: func(manifest *ManifestV1) { manifest.Deployment.RunnerBindIP = "0.0.0.0" }},
+		{name: "database published beyond loopback", want: "bind every published port to 127.0.0.1", mutate: func(manifest *ManifestV1) { manifest.Database.BindIP = "0.0.0.0" }},
+		{name: "object store published beyond loopback", want: "bind every published port to 127.0.0.1", mutate: func(manifest *ManifestV1) { manifest.ObjectStore.BindIP = "0.0.0.0" }},
+		{name: "control plane listener mismatches container", want: "listen_address must be 0.0.0.0:8080", mutate: func(manifest *ManifestV1) { manifest.Deployment.ListenAddress = "0.0.0.0:9999" }},
+		{name: "Runner listener mismatches container", want: "runner_listen_address must be 0.0.0.0:9443", mutate: func(manifest *ManifestV1) { manifest.Deployment.RunnerListenAddress = "0.0.0.0:9999" }},
+		{name: "control plane port exceeds TCP range", want: "deployment.api_published_port", mutate: func(manifest *ManifestV1) { manifest.Deployment.APIPublishedPort = integer(70000) }},
+		{name: "Runner port exceeds TCP range", want: "deployment.runner_published_port", mutate: func(manifest *ManifestV1) { manifest.Deployment.RunnerPublishedPort = integer(70000) }},
+		{name: "database port exceeds TCP range", want: "database.published_port", mutate: func(manifest *ManifestV1) { manifest.Database.PublishedPort = integer(70000) }},
+		{name: "object store port exceeds TCP range", want: "object_store.published_port", mutate: func(manifest *ManifestV1) { manifest.ObjectStore.PublishedPort = integer(70000) }},
+		{name: "object store console port exceeds TCP range", want: "object_store.console_published_port", mutate: func(manifest *ManifestV1) { manifest.ObjectStore.ConsolePublishedPort = integer(70000) }},
+		{name: "Runner ID escapes artifact directory", want: "valid opaque Runner ID", mutate: func(manifest *ManifestV1) { manifest.Runners = []Runner{validTestRunner("../escaped", "remote")} }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manifestPath := initializedDevelopment(t)
+			manifest, err := ReadManifest(manifestPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&manifest)
+			encoded, err := encodeManifest(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Resolve(manifestPath); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want substring %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestBundledDatabaseURLPreservesUserInfoBytes(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	manifest, err := ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	password := "a long password+with/slash?and#fragment"
+	passwordPath := filepath.Join(filepath.Dir(manifestPath), manifest.Database.PasswordFile)
+	if err := os.WriteFile(passwordPath, []byte(password+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest.Database.User = "second box"
+	encoded, err := encodeManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := Resolve(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(resolved.Environment["SECONDBOX_DATABASE_URL"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotPassword, ok := parsed.User.Password()
+	if parsed.User.Username() != manifest.Database.User || !ok || gotPassword != password {
+		t.Fatalf("database userinfo = %q/%q/%t", parsed.User.Username(), gotPassword, ok)
+	}
+}
+
+func TestCredentialsRemainSeparateAcrossTrustBoundaries(t *testing.T) {
+	for name, writeCollision := range map[string]func(string, ManifestV1, []byte) error{
+		"platform token": func(base string, manifest ManifestV1, runnerCredential []byte) error {
+			return os.WriteFile(filepath.Join(base, manifest.Applications.PlatformTokenFile), runnerCredential, 0o600)
+		},
+		"application authority token": func(base string, manifest ManifestV1, runnerCredential []byte) error {
+			authorities := []map[string]any{{"id": "review", "token": strings.TrimSpace(string(runnerCredential)), "tenantRef": "tenant", "subjectRef": "subject", "scopes": []string{"sandbox:read"}, "profileGrants": []string{"agent-compartment"}}}
+			content, err := json.Marshal(authorities)
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(filepath.Join(base, manifest.Applications.ApplicationAuthoritiesFile), append(content, '\n'), 0o600)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			manifestPath := initializedDevelopment(t)
+			manifest, err := ReadManifest(manifestPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			base := filepath.Dir(manifestPath)
+			runnerCredential, err := os.ReadFile(filepath.Join(base, manifest.RunnerTrust.EnrollmentCredentialFile))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := writeCollision(base, manifest, runnerCredential); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Resolve(manifestPath); err == nil || !strings.Contains(err.Error(), "distinct credentials for separate trust boundaries") {
+				t.Fatalf("credential separation error = %v", err)
 			}
 		})
 	}
