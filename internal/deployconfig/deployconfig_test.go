@@ -161,6 +161,15 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 			manifest.Policy.RunnerEnabledFeatures = "local-workspace,unsupported-feature"
 		}},
 		{name: "Runner features omit local workspace", want: "runner features require local-workspace", mutate: func(manifest *ManifestV1) { manifest.Policy.RunnerEnabledFeatures = "evidence" }},
+		{name: "Compose environment contains newline", want: "forbidden byte", mutate: func(manifest *ManifestV1) { manifest.Deployment.ControlPlaneImage = "image\npoison" }},
+		{name: "remote Runner environment contains newline", want: "invalid generated systemd environment", mutate: func(manifest *ManifestV1) {
+			runner := validTestRunner("runner-a", "remote")
+			runner.LogPath = "/var/log/runner\npoison"
+			manifest.Runners = []Runner{runner}
+		}},
+		{name: "object store endpoint contains userinfo", want: "must not contain userinfo", mutate: func(manifest *ManifestV1) {
+			manifest.ObjectStore.Endpoint = "http://user:password@object-store:9000"
+		}},
 		{name: "Runner ID escapes artifact directory", want: "valid opaque Runner ID", mutate: func(manifest *ManifestV1) { manifest.Runners = []Runner{validTestRunner("../escaped", "remote")} }},
 		{name: "built-in Profile digest absent from catalog", want: "must exist in deployment.signed_asset_catalog", mutate: func(manifest *ManifestV1) {
 			manifest.Policy.CodingEnvironmentRuntimeBundleDigest = "sha256:" + strings.Repeat("b", 64)
@@ -554,18 +563,7 @@ func TestRunnerInitValidatesTheManifestBeforeIssuingIdentity(t *testing.T) {
 
 func TestInspectRedactsSecretValuesAndPathsAndShowsAllDefaults(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
-	manifest, err := ReadManifest(manifestPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifest.Runners = []Runner{validSameHostTestRunner("runner-local")}
-	encoded, err := encodeManifest(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
-		t.Fatal(err)
-	}
+	provisionSameHostTestRunner(t, manifestPath, "runner-local")
 	resolved, err := Resolve(manifestPath)
 	if err != nil {
 		t.Fatal(err)
@@ -795,16 +793,9 @@ func TestMultipleRemoteRunnerArtifactsAreIsolatedAndHostPathsStayOpaque(t *testi
 
 func TestSameHostRunnerSelectsOnlyItsOverlayAndRejectsAmbiguousIdentity(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
+	provisionSameHostTestRunner(t, manifestPath, "runner-local")
 	manifest, err := ReadManifest(manifestPath)
 	if err != nil {
-		t.Fatal(err)
-	}
-	manifest.Runners = []Runner{validSameHostTestRunner("runner-local")}
-	encoded, err := encodeManifest(manifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
 		t.Fatal(err)
 	}
 	resolved, err := Resolve(manifestPath)
@@ -818,7 +809,7 @@ func TestSameHostRunnerSelectsOnlyItsOverlayAndRejectsAmbiguousIdentity(t *testi
 		t.Fatalf("Compose files = %#v", resolved.ComposeFiles)
 	}
 	manifest.Runners = append(manifest.Runners, validSameHostTestRunner("runner-local-2"))
-	encoded, _ = encodeManifest(manifest)
+	encoded, _ := encodeManifest(manifest)
 	if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
 		t.Fatal(err)
 	}
@@ -833,6 +824,63 @@ func TestSameHostRunnerSelectsOnlyItsOverlayAndRejectsAmbiguousIdentity(t *testi
 	if _, err := Resolve(manifestPath); err == nil || !strings.Contains(err.Error(), "duplicate runner_id") {
 		t.Fatalf("duplicate ID error = %v", err)
 	}
+}
+
+func TestSameHostRunnerPreflightRejectsUnsafeHostState(t *testing.T) {
+	t.Run("missing bind source", func(t *testing.T) {
+		manifestPath := initializedDevelopment(t)
+		runner := provisionSameHostTestRunner(t, manifestPath, "runner-local")
+		if err := os.Remove(runner.ArtifactHostDirectory); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Resolve(manifestPath); err == nil || !strings.Contains(err.Error(), "artifact_host_directory must be an existing") {
+			t.Fatalf("missing same-host bind source error = %v", err)
+		}
+	})
+
+	t.Run("workspace uses host root filesystem", func(t *testing.T) {
+		manifestPath := initializedDevelopment(t)
+		provisionSameHostTestRunner(t, manifestPath, "runner-local")
+		manifest, err := ReadManifest(manifestPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rootBackedWorkspace, err := os.MkdirTemp("/var/tmp", "secondbox-root-workspace-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(rootBackedWorkspace) })
+		manifest.Runners[0].WorkspaceHostDirectory = rootBackedWorkspace
+		encoded, err := encodeManifest(manifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Resolve(manifestPath); err == nil || !strings.Contains(err.Error(), "dedicated non-root filesystem") {
+			t.Fatalf("root-backed workspace error = %v", err)
+		}
+	})
+
+	t.Run("identity trusts a different CA", func(t *testing.T) {
+		manifestPath := initializedDevelopment(t)
+		runner := provisionSameHostTestRunner(t, manifestPath, "runner-local")
+		manifest, err := ReadManifest(manifestPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		serverCertificate, err := os.ReadFile(filepath.Join(filepath.Dir(manifestPath), manifest.RunnerTrust.ServerCertificateFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(runner.IdentityHostDirectory, "runner-ca.crt"), serverCertificate, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Resolve(manifestPath); err == nil || !strings.Contains(err.Error(), "must trust the configured") {
+			t.Fatalf("mismatched Runner CA error = %v", err)
+		}
+	})
 }
 
 func validTestRunner(id, placement string) Runner {
@@ -853,6 +901,42 @@ func validSameHostTestRunner(id string) Runner {
 	runner.ArtifactPublicKey = "/opt/secondbox-artifacts/manifest-public.pem"
 	runner.WorkspaceRoot = "/var/lib/secondbox-runner/workspaces"
 	runner.SandboxNetworkStateDir = "/var/lib/secondbox-runner/network"
+	return runner
+}
+
+func provisionSameHostTestRunner(t *testing.T, manifestPath, id string) Runner {
+	t.Helper()
+	hostRoot := t.TempDir()
+	workspaceDirectory, err := os.MkdirTemp("/dev/shm", "secondbox-workspace-")
+	if err != nil {
+		t.Skipf("dedicated tmpfs unavailable: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(workspaceDirectory) })
+	runner := validSameHostTestRunner(id)
+	runner.IdentityHostDirectory = filepath.Join(hostRoot, "identity")
+	runner.ArtifactHostDirectory = filepath.Join(hostRoot, "artifacts")
+	runner.StateHostDirectory = filepath.Join(hostRoot, "state")
+	runner.WorkspaceHostDirectory = workspaceDirectory
+	for _, directory := range []string{runner.ArtifactHostDirectory, runner.StateHostDirectory} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manifest, err := ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.Runners = []Runner{runner}
+	encoded, err := encodeManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunnerInit(manifestPath, runner.RunnerID, runner.IdentityHostDirectory); err != nil {
+		t.Fatal(err)
+	}
 	return runner
 }
 

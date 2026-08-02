@@ -20,7 +20,7 @@ func RunnerInit(manifestPath, runnerID, target string) error {
 	}
 	absoluteManifest, _ := filepath.Abs(manifestPath)
 	base := filepath.Dir(absoluteManifest)
-	resolved, err := resolveManifest(manifest, base)
+	resolved, err := resolveManifestWithOptions(manifest, base, false)
 	if err != nil {
 		return err
 	}

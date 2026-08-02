@@ -78,6 +78,10 @@ func Resolve(path string) (ResolvedDeployment, error) {
 }
 
 func resolveManifest(manifest ManifestV1, base string) (ResolvedDeployment, error) {
+	return resolveManifestWithOptions(manifest, base, true)
+}
+
+func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHost bool) (ResolvedDeployment, error) {
 	if err := validateManifestShape(manifest); err != nil {
 		return ResolvedDeployment{}, err
 	}
@@ -224,6 +228,15 @@ func resolveManifest(manifest ManifestV1, base string) (ResolvedDeployment, erro
 	if err := validateRunnerTrustMaterial(caCert, caKey, serverCert, serverKey, trust.ServerName); err != nil {
 		return ResolvedDeployment{}, manifestError("runner_trust cryptographic material", err)
 	}
+	if validateSameHost {
+		for index, runner := range manifest.Runners {
+			if runner.Placement == "same-host" {
+				if err := validateSameHostRunnerHost(runner, caCert); err != nil {
+					return ResolvedDeployment{}, manifestError(fmt.Sprintf("runners[%d] same-host preflight", index), err)
+				}
+			}
+		}
+	}
 	if filepath.Dir(caCert) != filepath.Dir(caKey) || filepath.Dir(caCert) != filepath.Dir(serverCert) || filepath.Dir(caCert) != filepath.Dir(serverKey) || filepath.Base(caCert) != "runner-ca.crt" || filepath.Base(caKey) != "runner-ca.key" || filepath.Base(serverCert) != "server.crt" || filepath.Base(serverKey) != "server.key" {
 		return ResolvedDeployment{}, manifestError("runner_trust files must use the canonical names in one protected directory", nil)
 	}
@@ -306,6 +319,19 @@ func resolveManifest(manifest ManifestV1, base string) (ResolvedDeployment, erro
 	resolved := ResolvedDeployment{Manifest: manifest, Environment: environment, RemoteRunnerEnvironment: remote, ComposeFiles: composeFiles, SecretPaths: secretPaths}
 	if err := validateControlPlaneEnvironment(environment); err != nil {
 		return ResolvedDeployment{}, manifestError("rendered control-plane environment failed production loader validation", err)
+	}
+	if _, err := EncodeComposeEnvironment(environment); err != nil {
+		return ResolvedDeployment{}, err
+	}
+	remoteRunnerIDs := make([]string, 0, len(remote))
+	for runnerID := range remote {
+		remoteRunnerIDs = append(remoteRunnerIDs, runnerID)
+	}
+	sort.Strings(remoteRunnerIDs)
+	for _, runnerID := range remoteRunnerIDs {
+		if _, err := EncodeSystemdEnvironment(remote[runnerID]); err != nil {
+			return ResolvedDeployment{}, manifestError("remote runner environment for "+runnerID, err)
+		}
 	}
 	return resolved, nil
 }
@@ -452,6 +478,9 @@ func validateManifestShape(manifest ManifestV1) error {
 	endpoint, err := url.Parse(osConfig.Endpoint)
 	if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
 		return manifestError("object_store.endpoint must be an absolute HTTP URL", err)
+	}
+	if endpoint.User != nil {
+		return manifestError("object_store.endpoint must not contain userinfo; use the credential files", nil)
 	}
 	if osConfig.Mode == "external" && d.Mode == "production" && endpoint.Scheme != "https" {
 		return manifestError("production external object_store.endpoint must use HTTPS", nil)
