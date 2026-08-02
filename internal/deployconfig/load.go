@@ -100,23 +100,34 @@ func resolveManifest(manifest ManifestV1, base string) (ResolvedDeployment, erro
 	if err != nil {
 		return ResolvedDeployment{}, manifestError("deployment.signed_asset_catalog", err)
 	}
-	if deployment.Mode == "production" {
-		catalogContent, err := os.ReadFile(catalog)
-		if err != nil {
-			return ResolvedDeployment{}, manifestError("read production deployment.signed_asset_catalog", err)
+	catalogContent, err := os.ReadFile(catalog)
+	if err != nil {
+		return ResolvedDeployment{}, manifestError("read deployment.signed_asset_catalog", err)
+	}
+	var catalogDocument struct {
+		Assets []struct {
+			ManifestDigest string `json:"manifestDigest"`
+			SignatureKeyID string `json:"signatureKeyId"`
+		} `json:"assets"`
+	}
+	if err := json.Unmarshal(catalogContent, &catalogDocument); err != nil {
+		return ResolvedDeployment{}, manifestError("deployment.signed_asset_catalog must be valid JSON", err)
+	}
+	catalogDigests := make(map[string]bool, len(catalogDocument.Assets))
+	for _, asset := range catalogDocument.Assets {
+		catalogDigests[asset.ManifestDigest] = true
+		if deployment.Mode == "production" && asset.SignatureKeyID == "secondbox-development-local-trust" {
+			return ResolvedDeployment{}, manifestError("production requires an operator-supplied signed asset catalog", nil)
 		}
-		var catalogDocument struct {
-			Assets []struct {
-				SignatureKeyID string `json:"signatureKeyId"`
-			} `json:"assets"`
-		}
-		if err := json.Unmarshal(catalogContent, &catalogDocument); err != nil {
-			return ResolvedDeployment{}, manifestError("production deployment.signed_asset_catalog must be valid JSON", err)
-		}
-		for _, asset := range catalogDocument.Assets {
-			if asset.SignatureKeyID == "secondbox-development-local-trust" {
-				return ResolvedDeployment{}, manifestError("production requires an operator-supplied signed asset catalog", nil)
-			}
+	}
+	for path, digest := range map[string]string{
+		"policy.agent_compartment_runtime_bundle_digest":    manifest.Policy.AgentCompartmentRuntimeBundleDigest,
+		"policy.agent_compartment_toolchain_bundle_digest":  manifest.Policy.AgentCompartmentToolchainBundleDigest,
+		"policy.coding_environment_runtime_bundle_digest":   manifest.Policy.CodingEnvironmentRuntimeBundleDigest,
+		"policy.coding_environment_toolchain_bundle_digest": manifest.Policy.CodingEnvironmentToolchainBundleDigest,
+	} {
+		if !catalogDigests[digest] {
+			return ResolvedDeployment{}, manifestError(path+" must exist in deployment.signed_asset_catalog", nil)
 		}
 	}
 	put("SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH", catalog)
