@@ -19,34 +19,53 @@ type (
 	ServiceAccountScope = string
 	ProblemCode         = string
 
-	Profile                  = contracts.Profile
-	ProfileRevisionSpec      = contracts.ProfileRevisionSpec
-	ResourcePolicy           = contracts.ResourcePolicy
-	LifecyclePolicy          = contracts.LifecyclePolicy
-	CheckpointPolicy         = contracts.CheckpointPolicy
-	ExecutionPolicy          = contracts.ExecutionPolicy
-	NetworkPolicy            = contracts.NetworkPolicy
-	NetworkDestination       = contracts.NetworkDestination
-	PortPolicy               = contracts.PortPolicy
-	CreateProfileRequest     = contracts.CreateProfileRequest
-	Sandbox                  = contracts.Sandbox
-	CreateSandboxRequest     = contracts.CreateSandboxRequest
-	CheckpointSandboxRequest = contracts.CheckpointSandboxRequest
-	Operation                = contracts.Operation
-	Problem                  = contracts.Problem
+	Profile                 = contracts.Profile
+	ProfileRevisionSpec     = contracts.ProfileRevisionSpec
+	ResourcePolicy          = contracts.ResourcePolicy
+	LifecyclePolicy         = contracts.LifecyclePolicy
+	RetentionPolicy         = contracts.RetentionPolicy
+	ExecutionPolicy         = contracts.ExecutionPolicy
+	NetworkPolicy           = contracts.NetworkPolicy
+	NetworkDestination      = contracts.NetworkDestination
+	PortPolicy              = contracts.PortPolicy
+	CreateProfileRequest    = contracts.CreateProfileRequest
+	RunnerPool              = contracts.RunnerPool
+	RunnerPoolPage          = contracts.RunnerPoolPage
+	CreateRunnerPoolRequest = contracts.CreateRunnerPoolRequest
+	Runner                  = contracts.Runner
+	RunnerPage              = contracts.RunnerPage
+	Sandbox                 = contracts.Sandbox
+	SandboxPage             = contracts.SandboxPage
+	CreateSandboxRequest    = contracts.CreateSandboxRequest
+	RestoreSnapshotRequest  = contracts.RestoreSnapshotRequest
+	CreateSnapshotRequest   = contracts.CreateSnapshotRequest
+	Snapshot                = contracts.Snapshot
+	SnapshotPage            = contracts.SnapshotPage
+	Operation               = contracts.Operation
+	Lease                   = contracts.Lease
+	AcquireLeaseRequest     = contracts.AcquireLeaseRequest
+	RenewLeaseRequest       = contracts.RenewLeaseRequest
+	DurationPercentiles     = contracts.DurationPercentiles
+	BootStageTiming         = contracts.BootStageTiming
+	BootTiming              = contracts.BootTiming
+	OperationStageTiming    = contracts.OperationStageTiming
+	OperationTiming         = contracts.OperationTiming
+	ExecTiming              = contracts.ExecTiming
+	SandboxTiming           = contracts.SandboxTiming
+	DeploymentTimingSummary = contracts.DeploymentTimingSummary
+	Problem                 = contracts.Problem
 )
 
 const (
-	SandboxStateCreating      = contracts.SandboxStateCreating
-	SandboxStateStopped       = contracts.SandboxStateStopped
-	SandboxStateStarting      = contracts.SandboxStateStarting
-	SandboxStateReady         = contracts.SandboxStateReady
-	SandboxStateDraining      = contracts.SandboxStateDraining
-	SandboxStateStopping      = contracts.SandboxStateStopping
-	SandboxStateCheckpointing = contracts.SandboxStateCheckpointing
-	SandboxStateFailed        = contracts.SandboxStateFailed
-	SandboxStateDeleting      = contracts.SandboxStateDeleting
-	SandboxStateDeleted       = contracts.SandboxStateDeleted
+	SandboxStateCreating = contracts.SandboxStateCreating
+	SandboxStateStopped  = contracts.SandboxStateStopped
+	SandboxStateStarting = contracts.SandboxStateStarting
+	SandboxStateReady    = contracts.SandboxStateReady
+	SandboxStateDraining = contracts.SandboxStateDraining
+	SandboxStateStopping = contracts.SandboxStateStopping
+	SandboxStateFailed   = contracts.SandboxStateFailed
+	SandboxStateDeleting = contracts.SandboxStateDeleting
+	SandboxStateDeleted  = contracts.SandboxStateDeleted
 
 	OperationStatePending   = contracts.OperationStatePending
 	OperationStateRunning   = contracts.OperationStateRunning
@@ -61,7 +80,16 @@ const (
 	ServiceAccountScopeSandboxArtifacts = "sandbox:artifacts"
 	ServiceAccountScopeSandboxPorts     = "sandbox:ports"
 
-	ProblemCodeStateConflict = "state_conflict"
+	ProblemCodeStateConflict      = "state_conflict"
+	ProblemCodePreconditionFailed = "precondition_failed"
+	ProblemCodeGenerationFenced   = "generation_fenced"
+	ProblemCodeLeaseFenced        = "lease_fenced"
+	ProblemCodeWaitExpired        = "wait_expired"
+
+	LeaseStateActive   = contracts.LeaseStateActive
+	LeaseStateReleased = contracts.LeaseStateReleased
+	LeaseStateExpired  = contracts.LeaseStateExpired
+	LeaseStateFenced   = contracts.LeaseStateFenced
 
 	SessionStateOpen     SessionState = "open"
 	SessionStateDetached SessionState = "detached"
@@ -177,6 +205,7 @@ type TerminalSession struct {
 	NextClientSequence int64        `json:"nextClientSequence"`
 	SandboxID          OpaqueID     `json:"sandboxId"`
 	State              SessionState `json:"state"`
+	StreamWindowBytes  int64        `json:"streamWindowBytes"`
 	Subprotocol        string       `json:"subprotocol"`
 	WebsocketURL       string       `json:"websocketUrl"`
 }
@@ -187,10 +216,11 @@ type ExecOutput struct {
 }
 
 type ExecExited struct {
-	ExitCode int        `json:"exitCode"`
-	Kind     string     `json:"kind"`
-	Output   ExecOutput `json:"output"`
-	Signal   *int       `json:"signal,omitempty"`
+	ElapsedMilliseconds int64      `json:"elapsedMilliseconds"`
+	ExitCode            int        `json:"exitCode"`
+	Kind                string     `json:"kind"`
+	Output              ExecOutput `json:"output"`
+	Signal              *int       `json:"signal,omitempty"`
 }
 
 type ExecSpawnFailed struct {

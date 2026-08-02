@@ -764,12 +764,6 @@ func (c *protocolConnection) sendExec(state *protocolExecState, frame *guestv1.E
 	})
 }
 
-func (c *protocolConnection) removeExec(key string) {
-	c.mu.Lock()
-	delete(c.execs, key)
-	c.mu.Unlock()
-}
-
 func (c *protocolConnection) completeExec(key string, state *protocolExecState) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

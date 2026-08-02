@@ -73,6 +73,36 @@ func TestSessionRejectsRegistrationWithFailedPrerequisitesAndVersionSkew(t *test
 	}
 }
 
+func TestSessionRejectsPortableCheckpointOnlyRunner(t *testing.T) {
+	session := NewSession(SessionConfig{
+		AuthenticatedRunnerID: "runner-old",
+		SupportedVersions:     VersionRange{Minimum: 1, Maximum: 1},
+		EnabledFeatures: []runnerv1.RunnerFeature{
+			runnerv1.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
+			runnerv1.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE,
+		},
+		HeartbeatInterval: 10 * time.Second,
+		ConnectionID:      "connection-old",
+	})
+	oldRunner := helloFrame("runner-old", 1, 1)
+	oldRunner.GetHello().MandatoryFeatures = []runnerv1.RunnerFeature{
+		runnerv1.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
+		runnerv1.RunnerFeature(6), // reserved former portable-checkpoint feature
+	}
+	response, err := session.Accept(oldRunner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GetRejection().GetKind() !=
+		runnerv1.ProtocolRejectionKind_PROTOCOL_REJECTION_KIND_FEATURE_UNSUPPORTED {
+		t.Fatalf("portable-checkpoint runner rejection = %#v", response.GetRejection())
+	}
+	if response.GetRejection().GetSafeDetail() !=
+		"runner does not implement the mandatory local-workspace protocol" {
+		t.Fatalf("portable-checkpoint runner detail = %q", response.GetRejection().GetSafeDetail())
+	}
+}
+
 func TestSessionValidatesRunnerRelayFeatureFenceSequenceAndDuplicates(t *testing.T) {
 	session := negotiatedRelaySession(t)
 	if _, err := session.Accept(registrationFrame("runner-1", "connection-1", 1)); err != nil {
@@ -122,6 +152,95 @@ func TestSessionRejectsRelayFramesWithoutNegotiatedFeature(t *testing.T) {
 	}
 	if _, err := session.Accept(runnerFileFrame(relayTestFence(), "operation-1", "stream-1", 1)); !errors.Is(err, ErrRunnerMessage) {
 		t.Fatalf("unnegotiated File frame error = %v, want ErrRunnerMessage", err)
+	}
+}
+
+func TestSessionAcceptsOrderedOutboundExecInput(t *testing.T) {
+	session := negotiatedRelaySession(t)
+	if _, err := session.Accept(registrationFrame("runner-1", "connection-1", 1)); err != nil {
+		t.Fatal(err)
+	}
+	fence := relayTestFence()
+	for _, frame := range []*runnerv1.ExecFrame{
+		{
+			Fence: fence, OperationId: "operation-1", StreamId: "stream-1", Sequence: 1,
+			Payload: &runnerv1.ExecFrame_Open{Open: &runnerv1.ExecOpen{
+				Command: &runnerv1.ExecOpen_Shell{Shell: "cat"},
+			}},
+		},
+		{
+			Fence: fence, OperationId: "operation-1", StreamId: "stream-1", Sequence: 2,
+			Payload: &runnerv1.ExecFrame_Input{Input: &runnerv1.ExecInput{
+				Data: []byte("payload\n"),
+			}},
+		},
+	} {
+		if err := session.ValidateOutboundRelayFrame(&runnerv1.ControlPlaneToRunner{
+			Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: frame},
+		}); err != nil {
+			t.Fatalf("outbound Exec sequence %d: %v", frame.Sequence, err)
+		}
+	}
+}
+
+func TestSessionAcceptsOrderedTerminalFramesAcrossExecAndPtyEnvelopes(t *testing.T) {
+	session := negotiatedRelaySession(t)
+	if _, err := session.Accept(registrationFrame("runner-1", "connection-1", 1)); err != nil {
+		t.Fatal(err)
+	}
+	fence := relayTestFence()
+	frames := []*runnerv1.ControlPlaneToRunner{
+		{
+			Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: &runnerv1.ExecFrame{
+				Fence: fence, OperationId: "terminal-1", StreamId: "stream-1", Sequence: 1,
+				Payload: &runnerv1.ExecFrame_Open{Open: &runnerv1.ExecOpen{
+					Command: &runnerv1.ExecOpen_Shell{Shell: "sh"}, AllocatePty: true,
+				}},
+			}},
+		},
+		{
+			Message: &runnerv1.ControlPlaneToRunner_Pty{Pty: &runnerv1.PtyFrame{
+				Fence: fence, OperationId: "terminal-1", StreamId: "stream-1", Sequence: 2,
+				Payload: &runnerv1.PtyFrame_Credit{
+					Credit: &runnerv1.StreamCredit{ByteCount: 1024},
+				},
+			}},
+		},
+		{
+			Message: &runnerv1.ControlPlaneToRunner_Pty{Pty: &runnerv1.PtyFrame{
+				Fence: fence, OperationId: "terminal-1", StreamId: "stream-1", Sequence: 3,
+				Payload: &runnerv1.PtyFrame_Input{
+					Input: &runnerv1.PtyInput{Data: []byte("echo ready\n")},
+				},
+			}},
+		},
+		{
+			Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: &runnerv1.ExecFrame{
+				Fence: fence, OperationId: "terminal-1", StreamId: "stream-1", Sequence: 4,
+				Payload: &runnerv1.ExecFrame_Cancel{
+					Cancel: &runnerv1.ExecCancel{Reason: "test cancellation"},
+				},
+			}},
+		},
+	}
+	for index, frame := range frames {
+		if err := session.ValidateOutboundRelayFrame(frame); err != nil {
+			t.Fatalf("outbound Terminal frame %d: %v", index+1, err)
+		}
+	}
+
+	output := &runnerv1.RunnerToControlPlane{
+		Message: &runnerv1.RunnerToControlPlane_Pty{Pty: &runnerv1.PtyFrame{
+			Fence: fence, OperationId: "terminal-1", StreamId: "stream-1", Sequence: 1,
+			Payload: &runnerv1.PtyFrame_Output{Output: &runnerv1.ExecOutput{
+				Channel: runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT,
+				Data:    []byte("ready\r\n"),
+			}},
+		}},
+	}
+	event, err := session.Accept(output)
+	if err != nil || event.Kind != EventPty {
+		t.Fatalf("inbound Terminal event = %#v, %v", event, err)
 	}
 }
 
@@ -176,6 +295,7 @@ func negotiatedRelaySession(t *testing.T) *Session {
 		EnabledFeatures: []runnerv1.RunnerFeature{
 			runnerv1.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
 			runnerv1.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING,
+			runnerv1.RunnerFeature_RUNNER_FEATURE_PTY,
 			runnerv1.RunnerFeature_RUNNER_FEATURE_FILE_STREAMING,
 		},
 		HeartbeatInterval: 10 * time.Second,
@@ -220,10 +340,13 @@ func registrationFrame(runnerID, connectionID string, sequence uint64) *runnerv1
 					Architecture: "amd64", FirecrackerVersion: "1.16.1",
 					KvmReady: true, JailerReady: true, CgroupReady: true,
 					NetworkPolicyReady: true, StorageReady: true, CleanupReady: true,
+					DataPlaneReady:           true,
 					GuestProtocolGenerations: &runnerv1.ProtocolVersionRange{Minimum: 1, Maximum: 1},
 				},
-				Allocatable: &runnerv1.Capacity{VcpuMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30, Instances: 8},
-				Reserved:    &runnerv1.Capacity{},
+				Allocatable:                &runnerv1.Capacity{VcpuMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30, Instances: 8},
+				Reserved:                   &runnerv1.Capacity{},
+				StartupTiming:              &runnerv1.StartupTiming{},
+				DataPlaneAdvertisedAddress: "10.0.0.5:7443",
 			},
 		},
 	}
@@ -237,6 +360,8 @@ func heartbeatFrame(runnerID, connectionID, messageID string, sequence uint64) *
 				ConnectionId: connectionID, ObservedAtUnixMs: 1,
 				Allocatable: &runnerv1.Capacity{VcpuMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30, Instances: 8},
 				Reserved:    &runnerv1.Capacity{}, DrainPhase: runnerv1.DrainPhase_DRAIN_PHASE_ACTIVE,
+				StartupTiming:              &runnerv1.StartupTiming{},
+				DataPlaneAdvertisedAddress: "10.0.0.5:7443",
 			},
 		},
 	}

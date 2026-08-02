@@ -10,7 +10,7 @@ func TestSelectRunnerFiltersCompatibilityCapacityHealthAndDrain(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	requirements := Requirements{
 		PoolName: "general", BackendKind: "firecracker", Architecture: "amd64",
-		RequiredCapabilities:     []string{"checkpoint", "network-policy"},
+		RequiredCapabilities:     []string{"local-workspace", "network-policy"},
 		GuestProtocolGeneration:  1,
 		Capacity:                 Capacity{CPUMillis: 2000, MemoryBytes: 4 << 30, DiskBytes: 20 << 30, Instances: 1},
 		PreferredArtifactDigests: []string{"sha256:runtime", "sha256:toolchain"},
@@ -52,14 +52,13 @@ func TestSelectRunnerFiltersCompatibilityCapacityHealthAndDrain(t *testing.T) {
 	}
 }
 
-func TestSelectRunnerPrefersWorkspaceAndArtifactLocalityThenStableID(t *testing.T) {
+func TestSelectRunnerPrefersArtifactLocalityThenStableID(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	requirements := Requirements{
 		PoolName: "general", BackendKind: "firecracker", Architecture: "amd64",
-		RequiredCapabilities:     []string{"checkpoint"},
+		RequiredCapabilities:     []string{"local-workspace"},
 		GuestProtocolGeneration:  1,
 		Capacity:                 Capacity{CPUMillis: 1000, MemoryBytes: 1 << 30, DiskBytes: 10 << 30, Instances: 1},
-		WorkspaceCheckpointID:    "checkpoint-current",
 		PreferredArtifactDigests: []string{"sha256:runtime", "sha256:toolchain"},
 	}
 	base := RunnerSnapshot{
@@ -68,17 +67,17 @@ func TestSelectRunnerPrefersWorkspaceAndArtifactLocalityThenStableID(t *testing.
 		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1,
 	}
 	candidates := []RunnerSnapshot{
-		withRunnerEvidence(base, "runner-z", nil, []string{"sha256:runtime", "sha256:toolchain"}),
-		withRunnerEvidence(base, "runner-b", []string{"checkpoint-current"}, []string{"sha256:runtime"}),
-		withRunnerEvidence(base, "runner-a", []string{"checkpoint-current"}, []string{"sha256:runtime"}),
+		withRunnerEvidence(base, "runner-z", []string{"sha256:runtime", "sha256:toolchain"}),
+		withRunnerEvidence(base, "runner-b", []string{"sha256:runtime"}),
+		withRunnerEvidence(base, "runner-a", []string{"sha256:runtime"}),
 	}
 
 	selected, err := SelectRunner(requirements, candidates, now, 30*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if selected.ID != "runner-a" {
-		t.Fatalf("selected runner = %q, want stable runner-a locality tie-break", selected.ID)
+	if selected.ID != "runner-z" {
+		t.Fatalf("selected runner = %q, want runner-z artifact locality", selected.ID)
 	}
 }
 
@@ -97,10 +96,63 @@ func TestSelectRunnerRejectsUnavailablePool(t *testing.T) {
 	}
 }
 
+func TestSelectHomeRunnerNeverFallsBackToCompatibleReplacement(t *testing.T) {
+	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	requirements := Requirements{
+		PoolName: "general", BackendKind: "firecracker", Architecture: "amd64",
+		RequiredCapabilities:    []string{"local-workspace"},
+		GuestProtocolGeneration: 1,
+		Capacity: Capacity{
+			CPUMillis: 1000, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
+			Instances: 1, Operations: 1,
+		},
+	}
+	replacement := RunnerSnapshot{
+		ID: "runner-replacement", PoolName: "general", Architecture: "amd64",
+		Capabilities: readyCapabilities(), Allocatable: abundantCapacity(),
+		DrainPhase: DrainPhaseActive, LastHeartbeatAt: now,
+		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1,
+	}
+	if _, err := SelectHomeRunner(
+		"runner-home", requirements, []RunnerSnapshot{replacement},
+		now, 30*time.Second,
+	); !errors.Is(err, ErrHomeRunnerUnavailable) {
+		t.Fatalf("absent home selection error = %v, want ErrHomeRunnerUnavailable", err)
+	}
+}
+
+func TestSelectHomeRunnerRejectsDrainingHomeWithoutRelocation(t *testing.T) {
+	now := time.Date(2026, 7, 29, 12, 30, 0, 0, time.UTC)
+	requirements := Requirements{
+		PoolName: "general", BackendKind: "firecracker", Architecture: "amd64",
+		RequiredCapabilities:    []string{"local-workspace"},
+		GuestProtocolGeneration: 1,
+		Capacity: Capacity{
+			CPUMillis: 1000, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
+			Instances: 1, Operations: 1,
+		},
+	}
+	home := RunnerSnapshot{
+		ID: "runner-home", PoolName: "general", Architecture: "amd64",
+		Capabilities: readyCapabilities(), Allocatable: abundantCapacity(),
+		DrainPhase: DrainPhaseDraining, LastHeartbeatAt: now,
+		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1,
+	}
+	replacement := home
+	replacement.ID = "runner-replacement"
+	replacement.DrainPhase = DrainPhaseActive
+	if _, err := SelectHomeRunner(
+		home.ID, requirements, []RunnerSnapshot{home, replacement},
+		now, 30*time.Second,
+	); !errors.Is(err, ErrHomeRunnerUnavailable) {
+		t.Fatalf("draining home selection error = %v, want ErrHomeRunnerUnavailable", err)
+	}
+}
+
 func readyCapabilities() map[string]bool {
 	return map[string]bool{
-		"firecracker": true, "kvm": true, "jailer": true, "cgroup": true,
-		"network-policy": true, "storage": true, "cleanup": true, "checkpoint": true,
+		"compute":        true,
+		"network-policy": true, "storage": true, "cleanup": true, "local-workspace": true,
 	}
 }
 
@@ -111,11 +163,9 @@ func abundantCapacity() Capacity {
 func withRunnerEvidence(
 	runner RunnerSnapshot,
 	id string,
-	checkpoints []string,
 	artifacts []string,
 ) RunnerSnapshot {
 	runner.ID = id
-	runner.WorkspaceCheckpoints = checkpoints
 	runner.ArtifactDigests = artifacts
 	return runner
 }

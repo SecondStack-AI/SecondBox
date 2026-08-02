@@ -17,7 +17,6 @@ profile = client.request_json(
     body={
         "name": profile_name,
         "spec": {
-            "backend": "firecracker",
             "pool": "compose-live-pool",
             "architecture": "amd64",
             "runtimeBundleDigest": "sha256:" + "a" * 64,
@@ -36,10 +35,9 @@ profile = client.request_json(
                 "maximumDurationSeconds": 3600,
                 "leaseSeconds": 60,
             },
-            "checkpoint": {
-                "onStop": False,
-                "retentionSeconds": 86400,
+            "retention": {
                 "snapshotLimit": 8,
+                "snapshotRetentionSeconds": 86400,
                 "artifactRetentionSeconds": 86400,
             },
             "execution": {

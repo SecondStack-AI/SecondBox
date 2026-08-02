@@ -213,6 +213,11 @@ func TestCanonicalSchemasExposeRequiredProtocolSurfaces(t *testing.T) {
 		"message FileFrame",
 		"message PtyFrame",
 		"message PortFrame",
+		"RUNNER_FEATURE_LOCAL_WORKSPACE",
+		"message LocalWorkspaceCommand",
+		"message LocalWorkspaceResult",
+		"LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE",
+		"LOCAL_WORKSPACE_TERMINAL_KIND_CONFLICTING_REPLAY",
 		"uint64 sequence",
 	})
 	testSchema(t, "contracts/guest/v1/guest.proto", []string{
@@ -235,6 +240,41 @@ func TestCanonicalSchemasExposeRequiredProtocolSurfaces(t *testing.T) {
 		"EXEC_TERMINAL_KIND_OUTPUT_EXHAUSTED",
 		"uint64 sequence",
 	})
+}
+
+func TestLocalWorkspaceProtocolCannotCarryPathsOrImageBytes(t *testing.T) {
+	schema := string(readRepoFile(t, "contracts/runner/v1/runner.proto"))
+	start := strings.Index(schema, "message LocalWorkspaceCommand {")
+	end := strings.Index(schema, "// Evidence is deliberately")
+	if start == -1 || end == -1 || end <= start {
+		t.Fatal("local Workspace protocol section is missing")
+	}
+	section := schema[start:end]
+	for _, forbidden := range []string{
+		"bytes data",
+		"host_path",
+		"local_path",
+		"storage_object",
+		"sha256",
+		"checkpoint",
+	} {
+		if strings.Contains(section, forbidden) {
+			t.Fatalf("local Workspace protocol contains forbidden %q", forbidden)
+		}
+	}
+	for _, required := range []string{
+		"string sandbox_id",
+		"string workspace_id",
+		"string snapshot_id",
+		"string effect_id",
+		"uint64 expected_generation",
+		"uint64 logical_capacity_bytes",
+		"bytes fencing_token",
+	} {
+		if !strings.Contains(section, required) {
+			t.Fatalf("local Workspace protocol lacks %q", required)
+		}
+	}
 }
 
 func TestFrozenDescriptors(t *testing.T) {

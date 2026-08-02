@@ -111,60 +111,12 @@ trap cleanup EXIT
 
 database_state_sql="$(cat <<'SQL'
 WITH
-reachable_checkpoint_ids AS (
-    SELECT workspace.current_checkpoint_id AS id
-    FROM secondbox.workspaces AS workspace
-    JOIN secondbox.sandboxes AS sandbox ON sandbox.id=workspace.sandbox_id
-    WHERE sandbox.deleted_at IS NULL
-      AND sandbox.state<>'deleted'
-      AND workspace.current_checkpoint_id<>''
-    UNION
-    SELECT snapshot.checkpoint_id
-    FROM secondbox.snapshots AS snapshot
-    WHERE snapshot.state='published'
-      AND snapshot.retention_ended_at IS NULL
-      AND snapshot.retain_until>
-          current_setting('secondbox.backup_recovery_time')::timestamptz
-),
 reachable_objects AS (
-    SELECT 'checkpoint'::text AS kind,checkpoint.id,
-           checkpoint.storage_key AS storage_object_id,
-           checkpoint.sha256,checkpoint.size_bytes
-    FROM secondbox.workspace_checkpoints AS checkpoint
-    JOIN reachable_checkpoint_ids AS reachable ON reachable.id=checkpoint.id
-    WHERE checkpoint.state='published'
-      AND checkpoint.garbage_collected_at IS NULL
-    UNION ALL
-    SELECT 'artifact'::text,artifact.id,artifact.storage_key,
+    SELECT 'artifact'::text AS kind,artifact.id,artifact.storage_key AS storage_object_id,
            artifact.sha256,artifact.size_bytes
     FROM secondbox.artifacts AS artifact
     WHERE artifact.state='published'
       AND artifact.garbage_collected_at IS NULL
-),
-dangling_checkpoint_references AS (
-    SELECT workspace.current_checkpoint_id AS id
-    FROM secondbox.workspaces AS workspace
-    JOIN secondbox.sandboxes AS sandbox ON sandbox.id=workspace.sandbox_id
-    LEFT JOIN secondbox.workspace_checkpoints AS checkpoint
-      ON checkpoint.id=workspace.current_checkpoint_id
-      AND checkpoint.state='published'
-      AND checkpoint.garbage_collected_at IS NULL
-    WHERE sandbox.deleted_at IS NULL
-      AND sandbox.state<>'deleted'
-      AND workspace.current_checkpoint_id<>''
-      AND checkpoint.id IS NULL
-    UNION ALL
-    SELECT snapshot.checkpoint_id
-    FROM secondbox.snapshots AS snapshot
-    LEFT JOIN secondbox.workspace_checkpoints AS checkpoint
-      ON checkpoint.id=snapshot.checkpoint_id
-      AND checkpoint.state='published'
-      AND checkpoint.garbage_collected_at IS NULL
-    WHERE snapshot.state='published'
-      AND snapshot.retention_ended_at IS NULL
-      AND snapshot.retain_until>
-          current_setting('secondbox.backup_recovery_time')::timestamptz
-      AND checkpoint.id IS NULL
 ),
 object_manifest AS (
     SELECT COALESCE(
@@ -183,7 +135,7 @@ object_manifest AS (
     FROM reachable_objects
 )
 SELECT jsonb_build_object(
-    'contractVersion','secondbox-backup-database-state/v1',
+    'contractVersion','secondbox-backup-database-state/v2',
     'databaseRecoveryPosition',pg_current_wal_lsn()::text,
     'quiescence',jsonb_build_object(
         'activeSandboxes',(
@@ -203,11 +155,8 @@ SELECT jsonb_build_object(
             WHERE state NOT IN ('runner_succeeded','runner_failed')
         ),
         'activeObjectPublications',(
-            (SELECT count(*) FROM secondbox.workspace_checkpoints
-             WHERE state IN ('staging','verified'))
-            +
-            (SELECT count(*) FROM secondbox.artifacts
-             WHERE state='staging')
+            SELECT count(*) FROM secondbox.artifacts
+            WHERE state='staging'
         ),
         'activeDataPlaneSessions',(
             SELECT count(*) FROM secondbox.data_plane_sessions
@@ -224,9 +173,6 @@ SELECT jsonb_build_object(
             WHERE state NOT IN ('released','failed','stopped','fenced','expired','superseded')
         )
     ),
-    'danglingCheckpointReferences',(
-        SELECT count(*) FROM dangling_checkpoint_references
-    ),
     'objects',object_manifest.objects
 )
 FROM object_manifest
@@ -241,7 +187,7 @@ read_database_state() {
     --tuples-only --no-align \
     --command "SET secondbox.backup_recovery_time='$created_at'; $database_state_sql" >"$output"
   jq -e '
-    .contractVersion == "secondbox-backup-database-state/v1" and
+    .contractVersion == "secondbox-backup-database-state/v2" and
     (.databaseRecoveryPosition | type == "string" and length > 0) and
     (.objects | type == "array")
   ' "$output" >/dev/null
@@ -326,11 +272,6 @@ if ! jq -e '
   echo "SecondBox database contains unfenced Runner work" >&2
   exit 1
 fi
-if ! jq -e '.danglingCheckpointReferences == 0' "$stage/database-state.json" >/dev/null; then
-  echo "SecondBox database contains dangling retained checkpoint references" >&2
-  exit 1
-fi
-
 jq -n \
   --arg recoveryPointId "$SECONDBOX_BACKUP_RECOVERY_POINT_ID" \
   --arg position "$(jq -r '.databaseRecoveryPosition' "$stage/database-state.json")" \
@@ -352,14 +293,14 @@ jq -n \
 jq \
   --arg recoveryPointId "$SECONDBOX_BACKUP_RECOVERY_POINT_ID" \
   '{
-    contractVersion: "secondbox-checkpoint-reachability/v1",
+    contractVersion: "secondbox-artifact-reachability/v1",
     recoveryPointId: $recoveryPointId,
     state: "verified",
     databaseRecoveryPosition: .databaseRecoveryPosition,
     objects: .objects
-  }' "$stage/database-state.json" >"$stage/checkpoint-reachability.json"
+  }' "$stage/database-state.json" >"$stage/artifact-reachability.json"
 
-python3 - "$SECONDBOX_BACKUP_OBJECT_EXPORT" "$stage/checkpoint-reachability.json" <<'PY'
+python3 - "$SECONDBOX_BACKUP_OBJECT_EXPORT" "$stage/artifact-reachability.json" <<'PY'
 import hashlib
 import json
 import os
@@ -375,7 +316,7 @@ with open(sys.argv[2], encoding="utf-8") as stream:
 expected = {}
 for item in document["objects"]:
     if (
-        item.get("kind") not in {"checkpoint", "artifact"}
+        item.get("kind") != "artifact"
         or not isinstance(item.get("id"), str)
         or not item["id"]
         or not isinstance(item.get("storageObjectId"), str)
@@ -444,10 +385,10 @@ release_backup_publication_fence
   cd "$stage"
   sha256sum \
     secondbox.dump object-state.tar database-state.json quiescence.json fencing.json \
-    publication-fence.json checkpoint-reachability.json >checksums.sha256
+    publication-fence.json artifact-reachability.json >checksums.sha256
 )
 jq -n \
-  --arg contractVersion "secondbox-backup/v2" \
+  --arg contractVersion "secondbox-backup/v3" \
   --arg createdAt "$created_at" \
   --arg recoveryPointId "$SECONDBOX_BACKUP_RECOVERY_POINT_ID" \
   --arg recoveryPosition "$(jq -r '.databaseRecoveryPosition' "$stage/database-state.json")" \
@@ -468,17 +409,16 @@ jq -n \
     },
     quiescence: {file: "quiescence.json", state: "database-verified"},
     fencing: {file: "fencing.json", state: "database-verified"},
-    checkpointReachability: {
-      file: "checkpoint-reachability.json",
+    artifactReachability: {
+      file: "artifact-reachability.json",
       state: "database-verified"
-    },
-    freshRunnerVerification: {state: "required-after-restore"}
+    }
   }' >"$stage/manifest.json"
 
 bundle="$SECONDBOX_BACKUP_DIR/secondbox-backup-${timestamp}-${SECONDBOX_BACKUP_RECOVERY_POINT_ID}.tar"
 tar --create --numeric-owner --file="$bundle.tmp" --directory="$stage" \
   manifest.json checksums.sha256 secondbox.dump object-state.tar database-state.json \
-  publication-fence.json quiescence.json fencing.json checkpoint-reachability.json
+  publication-fence.json quiescence.json fencing.json artifact-reachability.json
 mv "$bundle.tmp" "$bundle"
 (
   cd "$(dirname "$bundle")"
@@ -493,11 +433,10 @@ tar --extract --file="$bundle" --directory="$verify_stage"
 )
 jq -e \
   --arg recoveryPointId "$SECONDBOX_BACKUP_RECOVERY_POINT_ID" \
-  '.contractVersion == "secondbox-backup/v2" and
+  '.contractVersion == "secondbox-backup/v3" and
    .recoveryPointId == $recoveryPointId and
    .publicationFence.state == "database-share-lock-held" and
-   .checkpointReachability.state == "database-verified" and
-   .freshRunnerVerification.state == "required-after-restore"' \
+   .artifactReachability.state == "database-verified"' \
   "$verify_stage/manifest.json" >/dev/null
 
 echo "Verified SecondBox recovery bundle: $bundle"

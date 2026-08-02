@@ -20,7 +20,7 @@ func (store *PostgresControlPlaneStore) AcquireLease(
 	}
 	defer tx.Rollback(ctx)
 	lockKey := input.TenantRef + "\x1f" + input.SubjectRef +
-		"\x1flease.acquire\x1f" + input.SandboxID + "\x1f" + input.IdempotencyKey
+		"\x1flease.acquire\x1f" + input.SandboxID
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey); err != nil {
 		return contracts.Lease{}, fmt.Errorf("SecondBox Lease acquire idempotency lock failed: %w", err)
 	}
@@ -51,6 +51,20 @@ func (store *PostgresControlPlaneStore) AcquireLease(
 		input.TenantRef, input.SubjectRef, input.SandboxID, input.Now.UTC(),
 	); err != nil {
 		return contracts.Lease{}, fmt.Errorf("SecondBox expired Lease update failed: %w", err)
+	}
+	var activeLeaseExists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM secondbox.leases
+			WHERE tenant_ref=$1 AND subject_ref=$2 AND sandbox_id=$3
+			  AND state='active' AND expires_at>$4
+		)`,
+		input.TenantRef, input.SubjectRef, input.SandboxID, input.Now.UTC(),
+	).Scan(&activeLeaseExists); err != nil {
+		return contracts.Lease{}, fmt.Errorf("SecondBox active Lease lookup failed: %w", err)
+	}
+	if activeLeaseExists {
+		return contracts.Lease{}, ports.ErrLeaseAlreadyActive
 	}
 	lease := input.Lease
 	lease.TenantRef, lease.SubjectRef = input.TenantRef, input.SubjectRef

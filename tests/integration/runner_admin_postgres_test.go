@@ -27,7 +27,7 @@ func TestRunnerPoolAdministrationIsAuditedAndRevisionGuarded(t *testing.T) {
 			Name:          "qualified-amd64",
 			State:         contracts.RunnerPoolStateReady,
 			Architectures: []string{"amd64"},
-			Capabilities:  []string{"checkpoint", "firecracker"},
+			Capabilities:  []string{"compute", "local-workspace"},
 			CapacityPolicy: map[string]int64{
 				"maximumInstances": 32,
 			},
@@ -134,7 +134,7 @@ func TestRunnerAdministrationProjectsIdentityWithoutCredentialMaterial(t *testin
 		INSERT INTO secondbox.runner_pools (
 			name,state,architectures_json,capabilities_json,capacity_policy_json,
 			ready_runner_count,revision,created_at,updated_at
-		) VALUES ('runner-admin-pool','ready','["amd64"]','["firecracker"]',
+		) VALUES ('runner-admin-pool','ready','["amd64"]','["compute"]',
 		          '{"maxInstances":4}',1,1,$1,$1)`,
 		now,
 	); err != nil {
@@ -145,12 +145,13 @@ func TestRunnerAdministrationProjectsIdentityWithoutCredentialMaterial(t *testin
 			id,pool_name,name,state,architectures_json,capabilities_json,capacity_json,
 			protocol_versions_json,guest_protocol_minimum,guest_protocol_maximum,
 			software_version,active_connection_id,last_sequence,drain_phase,
-			reserved_capacity_json,artifact_cache_json,last_seen_at,revision,
+			reserved_capacity_json,artifact_cache_json,sandbox_start_sample_count,
+			sandbox_start_p95_milliseconds,last_seen_at,revision,
 			created_at,updated_at
 		) VALUES (
 			'runner-admin-1','runner-admin-pool','qualified-runner','ready',
-			'["amd64"]','["firecracker"]','{"instances":4}','["1"]',
-			1,1,'1.0.0','connection-admin',7,'active','{}','[]',$1,3,$1,$1
+			'["amd64"]','["compute"]','{"instances":4}','["1"]',
+			1,1,'1.0.0','connection-admin',7,'active','{}','[]',9,125,$1,3,$1,$1
 		)`,
 		now,
 	); err != nil {
@@ -161,7 +162,8 @@ func TestRunnerAdministrationProjectsIdentityWithoutCredentialMaterial(t *testin
 		t.Fatal(err)
 	}
 	if runner.CredentialState != "pre_shared" || runner.PoolName != "runner-admin-pool" ||
-		runner.Capacity["instances"] != 4 {
+		runner.Capacity["instances"] != 4 || runner.SandboxStartSampleCount != 9 ||
+		runner.SandboxStartP95Milliseconds != 125 {
 		t.Fatalf("Runner administrative projection = %#v", runner)
 	}
 	runners, err := controlPlane.ListRunners(t.Context(), admin, "runner-admin-pool", 100, "")
@@ -197,7 +199,7 @@ func TestRunnerPoolAdministrationIsAvailableThroughPublicHTTPContract(t *testing
 			Name:           "http-runner-pool",
 			State:          contracts.RunnerPoolStateReady,
 			Architectures:  []string{"amd64"},
-			Capabilities:   []string{"firecracker"},
+			Capabilities:   []string{"compute"},
 			CapacityPolicy: map[string]int64{"maxInstances": 4},
 		},
 	)

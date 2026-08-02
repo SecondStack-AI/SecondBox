@@ -313,6 +313,27 @@
         }
       }
     },
+    "/v1/timings": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
+      "get": {
+        "tags": ["Observability"],
+        "operationId": "getDeploymentTiming",
+        "parameters": [
+          {"$ref": "#/components/parameters/TimingWindowSeconds"},
+          {"$ref": "#/components/parameters/RequestID"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded current-deployment timing percentiles without resource identifiers.",
+            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DeploymentTimingSummary"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"}
+        }
+      }
+    },
     "/v1/sandboxes": {
       "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
@@ -321,6 +342,7 @@
         "parameters": [
           {"$ref": "#/components/parameters/PageLimit"},
           {"$ref": "#/components/parameters/PageCursor"},
+          {"$ref": "#/components/parameters/SandboxMetadataFilter"},
           {"$ref": "#/components/parameters/RequestID"}
         ],
         "responses": {
@@ -358,7 +380,8 @@
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
           "409": {"$ref": "#/components/responses/Conflict"},
-          "429": {"$ref": "#/components/responses/TooManyRequests"}
+          "429": {"$ref": "#/components/responses/TooManyRequests"},
+          "503": {"$ref": "#/components/responses/ServiceUnavailable"}
         }
       }
     },
@@ -408,6 +431,61 @@
           "404": {"$ref": "#/components/responses/NotFound"},
           "409": {"$ref": "#/components/responses/Conflict"},
           "412": {"$ref": "#/components/responses/PreconditionFailed"}
+        }
+      }
+    },
+    "/v1/sandboxes/{sandboxId}/metadata": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
+      "put": {
+        "tags": ["Sandboxes"],
+        "operationId": "updateSandboxMetadata",
+        "parameters": [
+          {"$ref": "#/components/parameters/SandboxID"},
+          {"$ref": "#/components/parameters/IfMatch"},
+          {"$ref": "#/components/parameters/RequestID"}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UpdateSandboxMetadataRequest"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "Sandbox with replaced application correlation metadata.",
+            "headers": {
+              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
+              "ETag": {"$ref": "#/components/headers/ETag"}
+            },
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Sandbox"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "412": {"$ref": "#/components/responses/PreconditionFailed"}
+        }
+      }
+    },
+    "/v1/sandboxes/{sandboxId}/timings": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
+      "get": {
+        "tags": ["Observability"],
+        "operationId": "getSandboxTiming",
+        "parameters": [
+          {"$ref": "#/components/parameters/SandboxID"},
+          {"$ref": "#/components/parameters/TimingLimit"},
+          {"$ref": "#/components/parameters/RequestID"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded Project-scoped Sandbox lifecycle, boot-stage, and Exec timing history.",
+            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SandboxTiming"}}}
+          },
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"}
         }
       }
     },
@@ -487,7 +565,33 @@
     },
     "/v1/sandboxes/{sandboxId}:drain": {"$ref": "#/components/pathItems/DrainSandbox"},
     "/v1/sandboxes/{sandboxId}:stop": {"$ref": "#/components/pathItems/StopSandbox"},
-    "/v1/sandboxes/{sandboxId}:checkpoint": {"$ref": "#/components/pathItems/CheckpointSandbox"},
+    "/v1/sandboxes/{sandboxId}:restore": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
+      "post": {
+        "tags": ["Snapshots"],
+        "operationId": "restoreSandboxSnapshot",
+        "description": "Asynchronously replaces a stopped Sandbox workspace with a writable copy of one of that Sandbox's ready Snapshots.",
+        "parameters": [
+          {"$ref": "#/components/parameters/SandboxID"},
+          {"$ref": "#/components/parameters/IfMatch"},
+          {"$ref": "#/components/parameters/IdempotencyKey"},
+          {"$ref": "#/components/parameters/RequestID"}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RestoreSnapshotRequest"}}}
+        },
+        "responses": {
+          "202": {"$ref": "#/components/responses/AcceptedOperation"},
+          "400": {"$ref": "#/components/responses/BadRequest"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"},
+          "409": {"$ref": "#/components/responses/Conflict"},
+          "412": {"$ref": "#/components/responses/PreconditionFailed"}
+        }
+      }
+    },
     "/v1/sandboxes/{sandboxId}:wait": {
       "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "post": {
@@ -533,6 +637,27 @@
             "description": "Project-scoped asynchronous Operation.",
             "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
             "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Operation"}}}
+          },
+          "401": {"$ref": "#/components/responses/Unauthorized"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "404": {"$ref": "#/components/responses/NotFound"}
+        }
+      }
+    },
+    "/v1/operations/{operationId}/timings": {
+      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
+      "get": {
+        "tags": ["Observability"],
+        "operationId": "getOperationTiming",
+        "parameters": [
+          {"$ref": "#/components/parameters/OperationID"},
+          {"$ref": "#/components/parameters/RequestID"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Project-scoped Operation queue, execution, and boot-stage timing.",
+            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/OperationTiming"}}}
           },
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
@@ -835,6 +960,7 @@
             "description": "Bounded binary file stream.",
             "headers": {
               "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
+              "Content-Length": {"$ref": "#/components/headers/ContentLength"},
               "Digest": {"$ref": "#/components/headers/Digest"}
             },
             "content": {"application/octet-stream": {"schema": {"type": "string", "contentEncoding": "binary"}}}
@@ -1143,11 +1269,7 @@
           "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateSnapshotRequest"}}}
         },
         "responses": {
-          "201": {
-            "description": "Immutable projection of the current published stopped-state checkpoint.",
-            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Snapshot"}}}
-          },
+          "202": {"$ref": "#/components/responses/AcceptedOperation"},
           "400": {"$ref": "#/components/responses/BadRequest"},
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
@@ -1187,10 +1309,7 @@
           {"$ref": "#/components/parameters/RequestID"}
         ],
         "responses": {
-          "204": {
-            "description": "Snapshot retention ended.",
-            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}
-          },
+          "202": {"$ref": "#/components/responses/AcceptedOperation"},
           "401": {"$ref": "#/components/responses/Unauthorized"},
           "403": {"$ref": "#/components/responses/Forbidden"},
           "404": {"$ref": "#/components/responses/NotFound"},
@@ -1279,7 +1398,8 @@
       "platformBearer": {
         "type": "http",
         "scheme": "bearer",
-        "bearerFormat": "SecondBox platform token"
+        "bearerFormat": "SecondBox bearer token",
+        "description": "Operator platform token or explicitly provisioned scoped application token."
       }
     },
     "headers": {
@@ -1298,6 +1418,14 @@
       "Digest": {
         "description": "SHA-256 content digest.",
         "schema": {"type": "string", "pattern": "^sha-256=:[A-Za-z0-9+/]{43}=:$"}
+      },
+      "ContentLength": {
+        "description": "Exact response body size in bytes.",
+        "schema": {"type": "integer", "minimum": 0}
+      },
+      "RetryAfter": {
+        "description": "Minimum whole seconds before retrying a temporary admission refusal.",
+        "schema": {"type": "integer", "minimum": 1, "maximum": 60}
       }
     },
     "parameters": {
@@ -1355,12 +1483,39 @@
         "required": false,
         "schema": {"type": "integer", "minimum": 1, "maximum": 200}
       },
+      "TimingLimit": {
+        "name": "limit",
+        "in": "query",
+        "required": true,
+        "description": "Maximum number of recent Operations and recent Execs returned independently.",
+        "schema": {"type": "integer", "minimum": 1, "maximum": 200}
+      },
+      "TimingWindowSeconds": {
+        "name": "windowSeconds",
+        "in": "query",
+        "required": true,
+        "description": "Current-deployment aggregation window. API timing uses fixed one-minute buckets.",
+        "schema": {"type": "integer", "format": "int64", "minimum": 60, "maximum": 3600}
+      },
       "PageCursor": {
         "name": "cursor",
         "in": "query",
         "required": false,
         "description": "Opaque continuation token returned as nextCursor by the same endpoint and exact filter scope.",
         "schema": {"type": "string", "minLength": 1, "maxLength": 512}
+      },
+      "SandboxMetadataFilter": {
+        "name": "metadata",
+        "in": "query",
+        "required": false,
+        "description": "Repeatable name=value Metadata containment filter; a Sandbox matches only when it carries every supplied pair. Only the first '=' separates, so a value may contain one. The reserved name key is secondbox.dev/name, unique per tenant and subject among Sandboxes that are not deleted. A nextCursor is bound to the exact filter that produced it and is rejected against any other filter.",
+        "style": "form",
+        "explode": true,
+        "schema": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {"type": "string", "minLength": 2, "maxLength": 1153, "pattern": "^[A-Za-z0-9._/-]{1,128}=[\\s\\S]{0,1024}$"}
+        }
       },
       "ProfileName": {"name": "profileName", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/ProfileName"}},
       "RunnerPoolName": {"name": "runnerPoolName", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/ProfileName"}},
@@ -1447,32 +1602,6 @@
           }
         }
       },
-      "CheckpointSandbox": {
-        "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
-        "post": {
-          "tags": ["Sandboxes"],
-          "operationId": "checkpointSandbox",
-          "parameters": [
-            {"$ref": "#/components/parameters/SandboxID"},
-            {"$ref": "#/components/parameters/IfMatch"},
-            {"$ref": "#/components/parameters/IdempotencyKey"},
-            {"$ref": "#/components/parameters/RequestID"}
-          ],
-          "requestBody": {
-            "required": true,
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CheckpointSandboxRequest"}}}
-          },
-          "responses": {
-            "202": {"$ref": "#/components/responses/AcceptedOperation"},
-            "400": {"$ref": "#/components/responses/BadRequest"},
-            "401": {"$ref": "#/components/responses/Unauthorized"},
-            "403": {"$ref": "#/components/responses/Forbidden"},
-            "404": {"$ref": "#/components/responses/NotFound"},
-            "409": {"$ref": "#/components/responses/Conflict"},
-            "412": {"$ref": "#/components/responses/PreconditionFailed"}
-          }
-        }
-      },
       "StatSandboxFile": {
         "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
         "get": {
@@ -1518,6 +1647,7 @@
       "PreconditionFailed": {"$ref": "#/components/responses/Problem412"},
       "LimitExceeded": {"$ref": "#/components/responses/Problem413"},
       "TooManyRequests": {"$ref": "#/components/responses/Problem429"},
+      "ServiceUnavailable": {"$ref": "#/components/responses/Problem503"},
       "Problem400": {
         "description": "Invalid request.",
         "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
@@ -1562,6 +1692,14 @@
         "description": "Quota or concurrent-operation limit exceeded.",
         "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
         "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/Problem"}}}
+      },
+      "Problem503": {
+        "description": "Temporary admission capacity is unavailable.",
+        "headers": {
+          "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
+          "Retry-After": {"$ref": "#/components/headers/RetryAfter"}
+        },
+        "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/Problem"}}}
       }
     },
     "schemas": {
@@ -1582,7 +1720,7 @@
         "type": "object",
         "maxProperties": 128,
         "propertyNames": {"type": "string", "minLength": 1, "maxLength": 256},
-        "additionalProperties": {"type": "string", "maxLength": 8192}
+        "additionalProperties": {"type": "string", "maxLength": 131072}
       },
       "ProfileState": {"type": "string", "enum": ["enabled", "disabled"]},
       "Profile": {
@@ -1612,16 +1750,15 @@
       "ProfileRevisionSpec": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["backend", "pool", "architecture", "runtimeBundleDigest", "toolchainBundleDigest", "resources", "lifecycle", "checkpoint", "execution", "network", "ports"],
+        "required": ["pool", "architecture", "runtimeBundleDigest", "toolchainBundleDigest", "resources", "lifecycle", "retention", "execution", "network", "ports"],
         "properties": {
-          "backend": {"type": "string", "enum": ["firecracker"]},
           "pool": {"type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-z][a-z0-9-]*$"},
           "architecture": {"type": "string", "enum": ["amd64", "arm64"]},
           "runtimeBundleDigest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
           "toolchainBundleDigest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
           "resources": {"$ref": "#/components/schemas/ResourcePolicy"},
           "lifecycle": {"$ref": "#/components/schemas/LifecyclePolicy"},
-          "checkpoint": {"$ref": "#/components/schemas/CheckpointPolicy"},
+          "retention": {"$ref": "#/components/schemas/RetentionPolicy"},
           "execution": {"$ref": "#/components/schemas/ExecutionPolicy"},
           "network": {"$ref": "#/components/schemas/NetworkPolicy"},
           "ports": {"type": "array", "maxItems": 32, "items": {"$ref": "#/components/schemas/PortPolicy"}}
@@ -1651,14 +1788,13 @@
           "leaseSeconds": {"type": "integer", "minimum": 1}
         }
       },
-      "CheckpointPolicy": {
+      "RetentionPolicy": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["onStop", "retentionSeconds", "snapshotLimit", "artifactRetentionSeconds"],
+        "required": ["snapshotLimit", "snapshotRetentionSeconds", "artifactRetentionSeconds"],
         "properties": {
-          "onStop": {"type": "boolean"},
-          "retentionSeconds": {"type": "integer", "minimum": 1},
           "snapshotLimit": {"type": "integer", "minimum": 0},
+          "snapshotRetentionSeconds": {"type": "integer", "minimum": 1},
           "artifactRetentionSeconds": {"type": "integer", "minimum": 1}
         }
       },
@@ -1747,7 +1883,10 @@
         "minItems": 1,
         "maxItems": 64,
         "uniqueItems": true,
-        "items": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}
+        "items": {
+          "type": "string",
+          "enum": ["compute", "network-policy", "storage", "cleanup", "local-workspace", "exec-streaming", "file-streaming", "pty", "port-proxy", "evidence"]
+        }
       },
       "RunnerCapacityPolicy": {
         "type": "object",
@@ -1807,7 +1946,7 @@
       "Runner": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "poolName", "name", "state", "credentialState", "architectures", "capabilities", "capacity", "protocolVersions", "revision", "createdAt", "updatedAt"],
+        "required": ["id", "poolName", "name", "state", "credentialState", "architectures", "capabilities", "capacity", "protocolVersions", "sandboxStartSampleCount", "sandboxStartP95Milliseconds", "revision", "createdAt", "updatedAt"],
         "properties": {
           "id": {"$ref": "#/components/schemas/RunnerID"},
           "poolName": {"$ref": "#/components/schemas/ProfileName"},
@@ -1815,9 +1954,11 @@
           "state": {"type": "string", "enum": ["enrolling", "enrolled", "connected", "ready", "draining", "drained", "offline"]},
           "credentialState": {"type": "string", "enum": ["pre_shared"]},
           "architectures": {"type": "array", "maxItems": 8, "uniqueItems": true, "items": {"type": "string", "enum": ["amd64", "arm64"]}},
-          "capabilities": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}},
+          "capabilities": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "enum": ["compute", "network-policy", "storage", "cleanup", "local-workspace", "exec-streaming", "file-streaming", "pty", "port-proxy", "evidence"]}},
           "capacity": {"type": "object", "maxProperties": 32, "additionalProperties": {"type": "integer", "format": "int64", "minimum": 0}},
           "protocolVersions": {"type": "array", "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 32}},
+          "sandboxStartSampleCount": {"type": "integer", "format": "int64", "minimum": 0},
+          "sandboxStartP95Milliseconds": {"type": "integer", "format": "int64", "minimum": 0},
           "lastSeenAt": {"$ref": "#/components/schemas/Timestamp"},
           "revision": {"type": "integer", "format": "int64", "minimum": 1},
           "createdAt": {"$ref": "#/components/schemas/Timestamp"},
@@ -1835,7 +1976,7 @@
       },
       "SandboxState": {
         "type": "string",
-        "enum": ["creating", "stopped", "starting", "ready", "draining", "stopping", "checkpointing", "failed", "deleting", "deleted"]
+        "enum": ["creating", "stopped", "starting", "ready", "draining", "stopping", "failed", "deleting", "deleted"]
       },
       "SandboxDesiredState": {"type": "string", "enum": ["running", "stopped", "deleted"]},
       "Sandbox": {
@@ -1865,6 +2006,15 @@
         "required": ["profile", "metadata"],
         "properties": {
           "profile": {"$ref": "#/components/schemas/ProfileName"},
+          "metadata": {"$ref": "#/components/schemas/Metadata"},
+          "sourceSnapshotId": {"$ref": "#/components/schemas/OpaqueID"}
+        }
+      },
+      "UpdateSandboxMetadataRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["metadata"],
+        "properties": {
           "metadata": {"$ref": "#/components/schemas/Metadata"}
         }
       },
@@ -1880,15 +2030,12 @@
       "Workspace": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "generation", "retainedBytes", "retentionState", "createdAt", "updatedAt"],
+        "required": ["id", "generation", "state", "sizeBytes", "createdAt", "updatedAt"],
         "properties": {
           "id": {"$ref": "#/components/schemas/OpaqueID"},
           "generation": {"type": "integer", "format": "int64", "minimum": 1},
-          "retainedBytes": {"type": "integer", "format": "int64", "minimum": 0},
-          "currentCheckpointId": {"$ref": "#/components/schemas/OpaqueID"},
-          "currentCheckpointHash": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
-          "currentCheckpointSize": {"type": "integer", "format": "int64", "minimum": 0},
-          "retentionState": {"type": "string"},
+          "state": {"type": "string", "enum": ["creating", "ready", "deleting", "deleted", "failed"]},
+          "sizeBytes": {"type": "integer", "format": "int64", "minimum": 1048576},
           "createdAt": {"$ref": "#/components/schemas/Timestamp"},
           "updatedAt": {"$ref": "#/components/schemas/Timestamp"}
         }
@@ -1917,7 +2064,7 @@
           "updatedAt": {"$ref": "#/components/schemas/Timestamp"}
         }
       },
-      "OperationKind": {"type": "string", "enum": ["create", "start", "drain", "stop", "checkpoint", "delete", "cancel_exec", "cancel_terminal"]},
+      "OperationKind": {"type": "string", "enum": ["create", "start", "drain", "stop", "delete", "snapshot_create", "snapshot_delete", "snapshot_restore", "cancel_exec", "cancel_terminal"]},
       "OperationState": {"type": "string", "enum": ["pending", "running", "succeeded", "failed", "cancelled"]},
       "Operation": {
         "type": "object",
@@ -1930,11 +2077,206 @@
           "state": {"$ref": "#/components/schemas/OperationState"},
           "requestId": {"$ref": "#/components/schemas/CorrelationID"},
           "sandbox": {"$ref": "#/components/schemas/Sandbox"},
+          "snapshot": {"$ref": "#/components/schemas/Snapshot"},
           "error": {"$ref": "#/components/schemas/Problem"},
           "createdAt": {"$ref": "#/components/schemas/Timestamp"},
           "startedAt": {"$ref": "#/components/schemas/Timestamp"},
           "completedAt": {"$ref": "#/components/schemas/Timestamp"},
           "updatedAt": {"$ref": "#/components/schemas/Timestamp"}
+        }
+      },
+      "DurationPercentiles": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["count"],
+        "properties": {
+          "count": {"type": "integer", "format": "int64", "minimum": 0},
+          "p50Milliseconds": {"type": "number", "format": "double", "minimum": 0},
+          "p95Milliseconds": {"type": "number", "format": "double", "minimum": 0},
+          "p99Milliseconds": {"type": "number", "format": "double", "minimum": 0}
+        }
+      },
+      "BootStage": {
+        "type": "string",
+        "enum": ["runner_admission", "artifact_verify", "workspace_attach", "network_setup", "compute_launch", "guest_negotiation", "ready"]
+      },
+      "BootStageTiming": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["stage", "observedAt", "receivedAt", "elapsedMilliseconds", "cumulativeMilliseconds"],
+        "properties": {
+          "stage": {"$ref": "#/components/schemas/BootStage"},
+          "observedAt": {"$ref": "#/components/schemas/Timestamp"},
+          "receivedAt": {"$ref": "#/components/schemas/Timestamp"},
+          "elapsedMilliseconds": {"type": "number", "format": "double", "minimum": 0},
+          "cumulativeMilliseconds": {"type": "number", "format": "double", "minimum": 0}
+        }
+      },
+      "BootTiming": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["generation", "durationMilliseconds", "completed", "stages"],
+        "properties": {
+          "generation": {"type": "integer", "format": "int64", "minimum": 1},
+          "durationMilliseconds": {"type": "number", "format": "double", "minimum": 0},
+          "completed": {"type": "boolean"},
+          "stages": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {"$ref": "#/components/schemas/BootStageTiming"}
+          }
+        }
+      },
+      "OperationStageTiming": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["stage", "observedAt", "elapsedMilliseconds", "cumulativeMilliseconds"],
+        "properties": {
+          "stage": {
+            "type": "string",
+            "enum": [
+              "durable_admission",
+              "workspace_ready",
+              "placement_ready",
+              "startup_dispatched",
+              "ready_projected"
+            ]
+          },
+          "observedAt": {"$ref": "#/components/schemas/Timestamp"},
+          "elapsedMilliseconds": {"type": "number", "format": "double", "minimum": 0},
+          "cumulativeMilliseconds": {"type": "number", "format": "double", "minimum": 0}
+        }
+      },
+      "OperationTiming": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operationId", "sandboxId", "kind", "state", "createdAt", "orchestration", "boots"],
+        "properties": {
+          "operationId": {"$ref": "#/components/schemas/OpaqueID"},
+          "sandboxId": {"$ref": "#/components/schemas/OpaqueID"},
+          "kind": {"$ref": "#/components/schemas/OperationKind"},
+          "state": {"$ref": "#/components/schemas/OperationState"},
+          "createdAt": {"$ref": "#/components/schemas/Timestamp"},
+          "startedAt": {"$ref": "#/components/schemas/Timestamp"},
+          "completedAt": {"$ref": "#/components/schemas/Timestamp"},
+          "queueMilliseconds": {"type": "integer", "format": "int64", "minimum": 0},
+          "executionMilliseconds": {"type": "integer", "format": "int64", "minimum": 0},
+          "totalMilliseconds": {"type": "integer", "format": "int64", "minimum": 0},
+          "orchestration": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {"$ref": "#/components/schemas/OperationStageTiming"}
+          },
+          "boots": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {"$ref": "#/components/schemas/BootTiming"}
+          }
+        }
+      },
+      "ExecTiming": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sessionId", "mode", "outcome", "elapsedMilliseconds", "createdAt", "completedAt"],
+        "properties": {
+          "sessionId": {"$ref": "#/components/schemas/OpaqueID"},
+          "mode": {"type": "string", "enum": ["buffered", "streaming"]},
+          "outcome": {"type": "string", "enum": ["exited", "deadline_exceeded"]},
+          "elapsedMilliseconds": {"type": "integer", "format": "int64", "minimum": 0},
+          "createdAt": {"$ref": "#/components/schemas/Timestamp"},
+          "completedAt": {"$ref": "#/components/schemas/Timestamp"}
+        }
+      },
+      "SandboxTiming": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sandboxId", "operations", "execs"],
+        "properties": {
+          "sandboxId": {"$ref": "#/components/schemas/OpaqueID"},
+          "operations": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {"$ref": "#/components/schemas/OperationTiming"}
+          },
+          "execs": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {"$ref": "#/components/schemas/ExecTiming"}
+          }
+        }
+      },
+      "BootStageTimingSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["stage", "duration"],
+        "properties": {
+          "stage": {"$ref": "#/components/schemas/BootStage"},
+          "duration": {"$ref": "#/components/schemas/DurationPercentiles"}
+        }
+      },
+      "ExecTimingSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mode", "outcome", "duration"],
+        "properties": {
+          "mode": {"type": "string", "enum": ["buffered", "streaming"]},
+          "outcome": {"type": "string", "enum": ["exited", "deadline_exceeded"]},
+          "duration": {"$ref": "#/components/schemas/DurationPercentiles"}
+        }
+      },
+      "OperationTimingSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "state", "queue", "execution", "total"],
+        "properties": {
+          "kind": {"$ref": "#/components/schemas/OperationKind"},
+          "state": {"$ref": "#/components/schemas/OperationState"},
+          "queue": {"$ref": "#/components/schemas/DurationPercentiles"},
+          "execution": {"$ref": "#/components/schemas/DurationPercentiles"},
+          "total": {"$ref": "#/components/schemas/DurationPercentiles"}
+        }
+      },
+      "HTTPRouteTimingSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["route", "statusClass", "duration"],
+        "properties": {
+          "route": {"type": "string", "minLength": 1, "maxLength": 256},
+          "statusClass": {"type": "string", "enum": ["1xx", "2xx", "3xx", "4xx", "5xx", "other"]},
+          "duration": {"$ref": "#/components/schemas/DurationPercentiles"}
+        }
+      },
+      "DeploymentTimingSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["windowSeconds", "observedAt", "boot", "bootStages", "exec", "execSeries", "api", "apiSeries", "operations"],
+        "properties": {
+          "windowSeconds": {"type": "integer", "format": "int64", "minimum": 60, "maximum": 3600},
+          "observedAt": {"$ref": "#/components/schemas/Timestamp"},
+          "boot": {"$ref": "#/components/schemas/DurationPercentiles"},
+          "bootStages": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {"$ref": "#/components/schemas/BootStageTimingSummary"}
+          },
+          "dominantBootStage": {"$ref": "#/components/schemas/BootStageTimingSummary"},
+          "exec": {"$ref": "#/components/schemas/DurationPercentiles"},
+          "execSeries": {
+            "type": "array",
+            "maxItems": 4,
+            "items": {"$ref": "#/components/schemas/ExecTimingSummary"}
+          },
+          "api": {"$ref": "#/components/schemas/DurationPercentiles"},
+          "apiSeries": {
+            "type": "array",
+            "maxItems": 512,
+            "items": {"$ref": "#/components/schemas/HTTPRouteTimingSummary"}
+          },
+          "operations": {
+            "type": "array",
+            "maxItems": 30,
+            "items": {"$ref": "#/components/schemas/OperationTimingSummary"}
+          }
         }
       },
       "WaitSandboxRequest": {
@@ -1946,11 +2288,11 @@
           "deadlineMilliseconds": {"type": "integer", "minimum": 1, "maximum": 60000}
         }
       },
-      "CheckpointSandboxRequest": {
+      "RestoreSnapshotRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["metadata"],
-        "properties": {"metadata": {"$ref": "#/components/schemas/Metadata"}}
+        "required": ["snapshotId"],
+        "properties": {"snapshotId": {"$ref": "#/components/schemas/OpaqueID"}}
       },
       "SandboxInspection": {
         "type": "object",
@@ -2076,11 +2418,12 @@
       "ExecExited": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["kind", "exitCode", "output"],
+        "required": ["kind", "exitCode", "elapsedMilliseconds", "output"],
         "properties": {
           "kind": {"const": "exited"},
           "exitCode": {"type": "integer", "minimum": 0, "maximum": 255},
           "signal": {"type": "integer", "minimum": 1, "maximum": 64},
+          "elapsedMilliseconds": {"type": "integer", "format": "int64", "minimum": 0},
           "output": {"$ref": "#/components/schemas/ExecOutput"}
         }
       },
@@ -2272,7 +2615,7 @@
       "TerminalSession": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "sandboxId", "generation", "state", "websocketUrl", "subprotocol", "nextClientSequence", "expiresAt"],
+        "required": ["id", "sandboxId", "generation", "state", "websocketUrl", "subprotocol", "streamWindowBytes", "nextClientSequence", "expiresAt"],
         "properties": {
           "id": {"$ref": "#/components/schemas/OpaqueID"},
           "sandboxId": {"$ref": "#/components/schemas/OpaqueID"},
@@ -2280,6 +2623,7 @@
           "state": {"$ref": "#/components/schemas/SessionState"},
           "websocketUrl": {"type": "string", "format": "uri", "maxLength": 2048},
           "subprotocol": {"const": "secondbox.terminal.v1"},
+          "streamWindowBytes": {"type": "integer", "format": "int64", "minimum": 4096},
           "nextClientSequence": {"type": "integer", "format": "int64", "minimum": 0},
           "expiresAt": {"$ref": "#/components/schemas/Timestamp"}
         },
@@ -2427,15 +2771,15 @@
       "Snapshot": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "sandboxId", "generation", "name", "sizeBytes", "sha256", "metadata", "expiresAt", "createdAt"],
+        "required": ["id", "sandboxId", "generation", "name", "sizeBytes", "metadata", "state", "createdAt"],
         "properties": {
           "id": {"$ref": "#/components/schemas/OpaqueID"},
           "sandboxId": {"$ref": "#/components/schemas/OpaqueID"},
           "generation": {"type": "integer", "format": "int64", "minimum": 1},
           "name": {"type": "string", "minLength": 1, "maxLength": 255},
           "sizeBytes": {"type": "integer", "format": "int64", "minimum": 0},
-          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
           "metadata": {"$ref": "#/components/schemas/Metadata"},
+          "state": {"type": "string", "enum": ["creating", "ready", "deleting", "failed"]},
           "expiresAt": {"$ref": "#/components/schemas/Timestamp"},
           "createdAt": {"$ref": "#/components/schemas/Timestamp"}
         }
@@ -2470,13 +2814,14 @@
       "PortSession": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "sandboxId", "generation", "name", "protocol", "endpoint", "state", "createdAt", "expiresAt"],
+        "required": ["id", "sandboxId", "generation", "name", "protocol", "transport", "endpoint", "state", "createdAt", "expiresAt"],
         "properties": {
           "id": {"$ref": "#/components/schemas/OpaqueID"},
           "sandboxId": {"$ref": "#/components/schemas/OpaqueID"},
           "generation": {"type": "integer", "format": "int64", "minimum": 1},
           "name": {"type": "string", "minLength": 1, "maxLength": 80},
           "protocol": {"type": "string", "enum": ["tcp", "http"]},
+          "transport": {"type": "string", "enum": ["relay", "direct"]},
           "endpoint": {"type": "string", "format": "uri", "maxLength": 2048},
           "state": {"type": "string", "enum": ["open", "closing", "closed", "expired", "fenced"]},
           "createdAt": {"$ref": "#/components/schemas/Timestamp"},
@@ -2493,9 +2838,11 @@
           "idempotency_conflict",
           "precondition_failed",
           "state_conflict",
+          "workspace_mutation_conflict",
           "generation_fenced",
           "lease_fenced",
           "profile_unavailable",
+          "home_runner_unavailable",
           "quota_exceeded",
           "limit_exceeded",
           "guest_unavailable",
@@ -2525,6 +2872,7 @@
           "code": {"$ref": "#/components/schemas/ProblemCode"},
           "requestId": {"$ref": "#/components/schemas/CorrelationID"},
           "retryable": {"type": "boolean"},
+          "retryAfterMilliseconds": {"type": "integer", "format": "int64", "minimum": 1, "maximum": 60000},
           "details": {"type": "array", "maxItems": 32, "items": {"$ref": "#/components/schemas/ProblemDetail"}}
         }
       }

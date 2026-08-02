@@ -1,6 +1,6 @@
 # Deployment and runtime operations
 
-SecondBox deploys an unprivileged `secondboxd` control plane backed by PostgreSQL and an S3-compatible immutable-object store. Privileged Firecracker Runners are separate processes on qualified Linux hosts and establish outbound mTLS connections to the control plane.
+SecondBox deploys an unprivileged `secondboxd` control plane backed by PostgreSQL and an S3-compatible Artifact store. Privileged Firecracker Runners are separate processes on qualified Linux hosts, establish outbound mTLS connections to the control plane, and own their durable local Workspace filesystems.
 
 ## Release flow
 
@@ -40,9 +40,9 @@ export SECONDBOX_RUNNER_CERTIFICATE_LIFETIME_DAYS=825
 deploy/bin/bootstrap-runner-trust.sh /var/lib/secondbox/runner-identity
 ```
 
-Each Runner connection requires TLS 1.3, a CA-signed certificate whose URI identifies the Runner, and `SECONDBOX_RUNNER_CREDENTIAL`. The HTTP API instead requires `SECONDBOX_PLATFORM_TOKEN`; these authorities are never interchangeable. Replacing either deployment-wide credential requires a coordinated restart of its consumers so old authenticated connections do not remain live.
+Each Runner connection requires TLS 1.3, a CA-signed certificate whose URI identifies the Runner, and `SECONDBOX_RUNNER_CREDENTIAL`. The HTTP API instead accepts `SECONDBOX_PLATFORM_TOKEN` for operators and the credentials declared by `SECONDBOX_APPLICATION_AUTHORITIES_JSON` for scoped applications; none of these authorities are interchangeable. Replacing the platform, Runner, or application credentials requires a coordinated restart of its consumers so old authenticated connections do not remain live.
 
-Create RunnerPools through the platform-token HTTP API before starting Runners. The CLI always supplies trusted ownership values:
+Create RunnerPools through the platform-token HTTP API before starting Runners. The CLI always supplies trusted ownership values, either as the explicit flags shown here or from the environment or stored configuration described in [SDK, CLI, and Flue quick starts](sdk-cli-and-flue.md):
 
 ```sh
 secondbox \
@@ -53,6 +53,23 @@ secondbox \
   runner-pools create \
   --body /secure/runner-pool.json
 ```
+
+## Built-in Profiles
+
+SecondBox ships the immutable `agent-compartment` and `coding-environment` Profiles. Their resource, lifecycle, retention, execution, network, and port policy is fixed; the RunnerPool and the signed runtime and toolchain bundles they pin are deployment-specific and have no default:
+
+```
+SECONDBOX_BUILTIN_AGENT_COMPARTMENT_POOL
+SECONDBOX_BUILTIN_AGENT_COMPARTMENT_RUNTIME_BUNDLE_DIGEST
+SECONDBOX_BUILTIN_AGENT_COMPARTMENT_TOOLCHAIN_BUNDLE_DIGEST
+SECONDBOX_BUILTIN_CODING_ENVIRONMENT_POOL
+SECONDBOX_BUILTIN_CODING_ENVIRONMENT_RUNTIME_BUNDLE_DIGEST
+SECONDBOX_BUILTIN_CODING_ENVIRONMENT_TOOLCHAIN_BUNDLE_DIGEST
+```
+
+Each digest must be `sha256:` followed by 64 lowercase hexadecimal characters and must name a bundle this deployment has verified; `secondboxd` refuses to start otherwise. The digests in `deploy/environment.example` are synthetic development values, exactly as the generated development signed-asset catalog is synthetic, and a production deployment replaces all four.
+
+Creating the referenced RunnerPool remains an explicit operator action, as it is for every other Profile. Create it with `runner-pools create` before any Sandbox is created against a built-in Profile; a Profile that names an absent pool admits Sandboxes that can never be placed.
 
 ## Development Compose
 
@@ -71,7 +88,7 @@ Preparation validates the complete inventory, starts the development dependencie
 
 The control-plane container runs as UID/GID 65532, drops Linux capabilities, sets `no-new-privileges`, uses a read-only root filesystem and bounded `/tmp`, and has no KVM, TUN/TAP, host-cgroup, host-path, or container-engine access. Its only writable persistent mount is the JSON log volume.
 
-The opt-in `same-host-runner` profile is privileged and mounts `/dev/kvm`, `/dev/net/tun`, host cgroups, issued identity, signed assets, and one dedicated state root. It is packaging for a Linux/amd64 Runner, not evidence that the host passed Firecracker validation.
+The opt-in `same-host-runner` profile is privileged and mounts `/dev/kvm`, `/dev/net/tun`, host cgroups, issued identity, signed assets, and one dedicated state root. The container executes `secondbox-runner` directly as PID 1, sends it `SIGTERM`, and allows 45 seconds for Runner-managed Firecracker teardown before forced removal. It is packaging for a Linux/amd64 Runner, not evidence that the host passed Firecracker validation.
 
 ## Production boundary
 
@@ -79,28 +96,32 @@ Production inventory is entirely explicit. It includes:
 
 - a digest-pinned control-plane image and any explicitly deployed dependency images;
 - TLS-verified external PostgreSQL;
-- an HTTPS S3-compatible endpoint, existing bucket, and deployment-specific credentials;
+- an HTTPS S3-compatible Artifact endpoint, existing bucket, and deployment-specific credentials;
 - an HTTPS public base URL behind a reverse proxy that preserves `X-Request-ID`;
-- the platform token, pre-shared Runner credential, Runner CA certificate, and server keypair;
+- the platform token, explicit application-authority JSON, pre-shared Runner credential, Runner CA certificate, and server keypair;
 - explicit bind addresses, ports, timeouts, log path, protocol window, enabled Runner features, object limits, and per-subject quota limits;
 - an operator-supplied signed-asset catalog.
 
 `deploy/bin/validate-environment.sh` rejects missing values, duplicate keys, placeholders, weak file permissions, mutable production image references, plaintext production object-store URLs, disabled PostgreSQL TLS, reused cross-boundary credentials, invalid certificates, and invalid protocol ranges.
 
-PostgreSQL owns desired state, ownership refs, assignments, generations, Leases, profile revisions, audit, and reconciliation. The S3-compatible store owns portable checkpoints, snapshots, Artifacts, and immutable execution assets. Runner-local workspace state is a replaceable cache of the last committed checkpoint.
+PostgreSQL owns desired state, ownership refs, immutable home assignments, generations, Leases, profile revisions, audit, and reconciliation. The S3-compatible store owns application Artifacts and immutable execution assets only. Each home Runner's `SECONDBOX_RUNNER_WORKSPACE_ROOT` owns its durable Workspace images, local Snapshots, manifests, and receipts; it is not a cache and cannot be reconstructed by the control plane.
 
 ## Migrations and replacement
 
 Every `secondboxd` validates and applies the embedded ordered migration lineage under a PostgreSQL advisory lock before opening listeners. Missing, reordered, altered, duplicate, or ahead migration records fail startup. Cross-resource references remain logical strings; the schema deliberately contains no foreign keys or CHECK constraints.
 
+Migration `0002` makes the reserved Sandbox name key `secondbox.dev/name` unique per tenant and subject among Sandboxes that are not deleted. That key is ordinary caller-writable Metadata, so a database written before this migration may already hold a duplicate. The migration checks first and fails with the conflicting `tenant/subject=name` values rather than a raw unique violation. Because migrations run before listeners open, a deployment carrying such a duplicate will not start: rename or delete the duplicate Sandboxes, then upgrade.
+
+Migration `0005` makes coordinated replacement load-bearing rather than merely advisable. It emits the `data_plane_session` work-notification kind, and a control-plane binary that predates that kind treats an unrecognised notification as a fatal listener error rather than an ignorable hint. An old replica left running alongside the migrated schema therefore stops rather than degrading. Do not run a mixed-version window across this migration.
+
 Use coordinated replacement unless the exact deployment has independently proven mixed-version operation:
 
-1. complete and verify a coordinated PostgreSQL/object-store backup;
+1. complete and verify a coordinated PostgreSQL/Artifact backup and quiescent backups of every affected Runner identity plus workspace root;
 2. stop admission and old control-plane replicas;
 3. start the new replicas and require readiness;
 4. reopen traffic.
 
-The backup and restore scripts preserve a shared database publication fence, immutable-object evidence, and fresh-Runner verification. They do not replace provider durability or real Firecracker recovery testing.
+`scripts/backup.sh` preserves a shared database publication fence and verifies reachable Artifact objects. SecondBox provides no managed restore script for Runner-local Workspaces. Operators must recover each stable Runner identity and its workspace root as one consistent unit; see [backup and recovery](backup-and-restore.md).
 
 ## Startup checks
 

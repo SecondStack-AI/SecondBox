@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -16,9 +15,42 @@ import (
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/jailersupervisor"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
+
+type managerTestComputeAttachment struct {
+	workspaceID string
+	generation  uint64
+	image       *os.File
+}
+
+func (*managerTestComputeAttachment) Handle() workspacestore.WorkspaceHandle {
+	return workspacestore.WorkspaceHandle{}
+}
+
+func (attachment *managerTestComputeAttachment) WorkspaceID() string {
+	return attachment.workspaceID
+}
+
+func (attachment *managerTestComputeAttachment) Generation() uint64 {
+	return attachment.generation
+}
+
+func (attachment *managerTestComputeAttachment) Image() *os.File {
+	return attachment.image
+}
+
+func (attachment *managerTestComputeAttachment) Close() error {
+	if attachment.image == nil {
+		return nil
+	}
+	err := attachment.image.Close()
+	attachment.image = nil
+	return err
+}
 
 type recordingHostNetworkConfigurer struct {
 	tap TapConfig
@@ -98,6 +130,23 @@ func TestNewInstanceIDIncludesCompartmentSegment(t *testing.T) {
 	}
 	if !strings.HasPrefix(emptyID, "fc-agent-1-compartment-") {
 		t.Fatalf("empty-compartment instance id %q does not include fallback segment", emptyID)
+	}
+	publicID, err := newInstanceID("sbx_public-id", "instance_public-id")
+	if err != nil {
+		t.Fatalf("new public-domain instance id: %v", err)
+	}
+	for index, character := range publicID {
+		if (character < 'a' || character > 'z') &&
+			(character < 'A' || character > 'Z') &&
+			(character < '0' || character > '9') &&
+			character != '-' {
+			t.Fatalf(
+				"instance id %q contains jailer-invalid character %q at %d",
+				publicID,
+				character,
+				index,
+			)
+		}
 	}
 
 	productionID, err := newInstanceID(
@@ -295,13 +344,11 @@ func newWarmToolTestManager(t *testing.T) *Manager {
 		}
 	}
 	cfg := &config.Config{
-		DataDir:                        dir,
 		MicroVMRootfsPath:              rootfs,
 		MicroVMSharedImagePath:         shared,
 		MicroVMToolVMReuseEnabled:      true,
 		MicroVMToolVMIdleTTL:           time.Minute,
 		MicroVMBridgeCIDR:              "172.30.0.1/24",
-		MicroVMWorkspaceDir:            filepath.Join(dir, "workspaces"),
 		MicroVMRunDir:                  filepath.Join(dir, "run"),
 		MicroVMLogDir:                  filepath.Join(dir, "logs"),
 		MicroVMWorkspaceSizeMiB:        8,
@@ -1346,7 +1393,7 @@ func TestShutdownReturnsTeardownFailure(t *testing.T) {
 	}
 }
 
-func TestStopJailedInstanceRetriesProcessScanErrors(t *testing.T) {
+func TestStopJailedInstanceWaitsForSupervisorReaper(t *testing.T) {
 	m := newWarmToolTestManager(t)
 	inst := &instance{
 		id: "fc-agent-cmp-a-stop", sandboxID: "agent", sandboxGeneration: 1,
@@ -1354,25 +1401,17 @@ func TestStopJailedInstanceRetriesProcessScanErrors(t *testing.T) {
 		leaseID: "lease-test", assignmentID: "assignment-test",
 		jailedProcess: true, done: make(chan struct{}),
 	}
-	orig := firecrackerProcessRunningFunc
-	var calls atomic.Int32
-	firecrackerProcessRunningFunc = func(string) (bool, error) {
-		if calls.Add(1) == 1 {
-			return false, errors.New("temporary proc scan failure")
-		}
-		return false, nil
-	}
-	t.Cleanup(func() { firecrackerProcessRunningFunc = orig })
 
 	done := make(chan error, 1)
 	go func() {
 		done <- m.stopInstance(context.Background(), inst, false)
 	}()
 	select {
-	case <-inst.done:
-		t.Fatal("done closed on transient process scan error")
+	case err := <-done:
+		t.Fatalf("stopInstance returned before the supervisor reaped Firecracker: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
+	close(inst.done)
 	select {
 	case err := <-done:
 		if err != nil {
@@ -1543,7 +1582,6 @@ func TestStartupFingerprintIncludesRuntimeClassAndSelectedImage(t *testing.T) {
 	agentRootfs := write("agent-rootfs.ext4", "agent-rootfs")
 	toolRootfs := write("tool-rootfs.ext4", "tool-rootfs")
 	m := &Manager{cfg: &config.Config{
-		DataDir:               dir,
 		MicroVMRootfsPath:     agentRootfs,
 		MicroVMToolRootfsPath: toolRootfs,
 	}}
@@ -1580,7 +1618,6 @@ func TestStartupFingerprintIncludesToolExecutorContractAndCapabilities(t *testin
 	}
 	toolRootfs := write("tool-rootfs.ext4", "tool-rootfs")
 	m := &Manager{cfg: &config.Config{
-		DataDir:               dir,
 		MicroVMRootfsPath:     toolRootfs,
 		MicroVMToolRootfsPath: toolRootfs,
 	}}
@@ -1630,7 +1667,6 @@ func TestStartupFingerprintUsesEffectiveProfileHash(t *testing.T) {
 	toolRootfs := write("tool-rootfs.ext4", "tool-rootfs")
 	shared := write("shared.img", "shared")
 	m := &Manager{cfg: &config.Config{
-		DataDir:                    dir,
 		MicroVMRootfsPath:          toolRootfs,
 		MicroVMToolRootfsPath:      toolRootfs,
 		MicroVMSharedImagePath:     shared,
@@ -1766,14 +1802,27 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare launch: %v", err)
 	}
-	if launch.executable != m.cfg.JailerPath {
+	if launch.executable != "/proc/self/exe" {
 		t.Fatalf("executable = %q", launch.executable)
 	}
-	args := strings.Join(launch.args, " ")
-	for _, want := range []string{"--id fc-agent-123", "--exec-file " + m.cfg.FirecrackerPath, "--chroot-base-dir " + m.cfg.MicroVMJailerChrootBaseDir, "--new-pid-ns", "--cgroup memory.max=805306368", "-- --api-sock firecracker.sock --config-file firecracker.json"} {
+	if len(launch.args) != 1 || launch.args[0] != jailersupervisor.InvocationArgument {
+		t.Fatalf("supervisor args = %q", launch.args)
+	}
+	args := strings.Join(launch.environment, " ")
+	for _, want := range []string{
+		`"--id","fc-agent-123"`,
+		`"--exec-file","` + m.cfg.FirecrackerPath + `"`,
+		`"--chroot-base-dir","` + m.cfg.MicroVMJailerChrootBaseDir + `"`,
+		`"--new-pid-ns"`,
+		`"--cgroup","memory.max=805306368"`,
+		`"--","--api-sock","firecracker.sock","--config-file","firecracker.json"`,
+	} {
 		if !strings.Contains(args, want) {
-			t.Fatalf("args %q missing %q", args, want)
+			t.Fatalf("supervisor environment %q missing %q", args, want)
 		}
+	}
+	if strings.Contains(strings.Join(launch.args, " "), "--id") {
+		t.Fatalf("supervisor argv exposes Firecracker identity: %q", launch.args)
 	}
 	if launch.config.BootSource.KernelImagePath != kernelName {
 		t.Fatalf("kernel path = %q", launch.config.BootSource.KernelImagePath)
@@ -1913,7 +1962,7 @@ func TestStageWorkspaceJailFileRejectsCrossDeviceCopyFallback(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected EXDEV error")
 	}
-	if !strings.Contains(err.Error(), "jailer chroot base dir must be on the same filesystem as SECONDBOX_RUNNER_SANDBOX_WORKSPACE_DIR") {
+	if !strings.Contains(err.Error(), "jailer chroot base dir must be on the same filesystem as SECONDBOX_RUNNER_WORKSPACE_ROOT") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, statErr := os.Stat(dst); !os.IsNotExist(statErr) {
@@ -1981,172 +2030,11 @@ func TestCopyFilePreservesContentAndMode(t *testing.T) {
 	}
 }
 
-func TestEnsureWorkspaceImageCreatesExt4Image(t *testing.T) {
-	if _, err := os.Stat("/usr/bin/mkfs.ext4"); err != nil {
-		t.Skip("mkfs.ext4 unavailable")
-	}
-	path := filepath.Join(t.TempDir(), "workspace.ext4")
-	if err := ensureWorkspaceImage(context.Background(), path, 8, ""); err != nil {
-		t.Fatalf("ensure workspace image: %v", err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat workspace image: %v", err)
-	}
-	if info.Size() != 8*1024*1024 {
-		t.Fatalf("image size = %d", info.Size())
-	}
-	if err := ensureWorkspaceImage(context.Background(), path, 8, ""); err != nil {
-		t.Fatalf("ensure existing workspace image: %v", err)
-	}
-}
-
-func TestEnsureWorkspaceImageSeedsFromExistingWorkspace(t *testing.T) {
-	if _, err := os.Stat("/usr/bin/mkfs.ext4"); err != nil {
-		t.Skip("mkfs.ext4 unavailable")
-	}
-	if _, err := exec.LookPath("debugfs"); err != nil {
-		t.Skip("debugfs unavailable")
-	}
-	dir := t.TempDir()
-	seed := filepath.Join(dir, "seed")
-	if err := os.MkdirAll(filepath.Join(seed, "artifacts", "images"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(seed, "artifacts", "images", "seed.txt"), []byte("artifact"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "workspace.ext4")
-	if err := ensureWorkspaceImage(context.Background(), path, 8, seed); err != nil {
-		t.Fatalf("ensure seeded workspace image: %v", err)
-	}
-	out, err := exec.Command("debugfs", "-R", "cat /artifacts/images/seed.txt", path).CombinedOutput()
-	if err != nil {
-		t.Fatalf("read seeded artifact: %v: %s", err, out)
-	}
-	if got := strings.TrimSpace(string(out)); !strings.Contains(got, "artifact") {
-		t.Fatalf("seeded artifact = %q", got)
-	}
-}
-
-func TestPrepareWorkspaceFromPreparedCompartmentHasNoGeneratedConfig(t *testing.T) {
-	if _, err := os.Stat("/usr/bin/mkfs.ext4"); err != nil {
-		t.Skip("mkfs.ext4 unavailable")
-	}
-	if _, err := exec.LookPath("debugfs"); err != nil {
-		t.Skip("debugfs unavailable")
-	}
-	dir := t.TempDir()
-	m := &Manager{cfg: &config.Config{
-		DataDir:                 dir,
-		MicroVMWorkspaceDir:     filepath.Join(dir, "workspaces"),
-		MicroVMWorkspaceSizeMiB: 8,
-	}}
-	seed := filepath.Join(m.cfg.SandboxesDir(), "agent-1", "compartments", "cmp_a", "workspace")
-	if err := os.MkdirAll(filepath.Join(seed, "artifacts"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(seed, "artifacts", "note.txt"), []byte("hello"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	workspacePath, err := m.prepareWorkspace(context.Background(), "agent-1", "cmp_a")
-	if err != nil {
-		t.Fatalf("prepare workspace: %v", err)
-	}
-	if _, ok, err := debugfsReadFile(context.Background(), workspacePath, "/config/runtime.json"); err != nil {
-		t.Fatalf("read runtime config: %v", err)
-	} else if ok {
-		t.Fatal("fresh prepared workspace image contains generated runtime config")
-	}
-	if _, ok, err := debugfsReadFile(context.Background(), workspacePath, "/config/auth.json"); err != nil {
-		t.Fatalf("read auth config: %v", err)
-	} else if ok {
-		t.Fatal("fresh prepared workspace image contains generated auth config")
-	}
-}
-
-func TestEnsureWorkspaceImageLeavesExistingImageUntouched(t *testing.T) {
-	if _, err := os.Stat("/usr/bin/mkfs.ext4"); err != nil {
-		t.Skip("mkfs.ext4 unavailable")
-	}
-	if _, err := exec.LookPath("debugfs"); err != nil {
-		t.Skip("debugfs unavailable")
-	}
-	dir := t.TempDir()
-	path := filepath.Join(dir, "workspace.ext4")
-	if err := ensureWorkspaceImage(context.Background(), path, 8, ""); err != nil {
-		t.Fatalf("ensure blank workspace image: %v", err)
-	}
-	seed := filepath.Join(dir, "seed")
-	if err := os.MkdirAll(filepath.Join(seed, "config"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(seed, "config", "runtime.json"), []byte(`{"model":"openai:test"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := ensureWorkspaceImage(context.Background(), path, 8, seed); err != nil {
-		t.Fatalf("ensure existing workspace image: %v", err)
-	}
-	if _, ok, err := debugfsReadFile(context.Background(), path, "/config/runtime.json"); err != nil {
-		t.Fatalf("read runtime config: %v", err)
-	} else if ok {
-		t.Fatal("existing workspace image was mutated with seed config")
-	}
-}
-
-func TestEnsureWorkspaceImageDoesNotSyncConfigIntoExistingWorkspace(t *testing.T) {
-	if _, err := os.Stat("/usr/bin/mkfs.ext4"); err != nil {
-		t.Skip("mkfs.ext4 unavailable")
-	}
-	if _, err := exec.LookPath("debugfs"); err != nil {
-		t.Skip("debugfs unavailable")
-	}
-	dir := t.TempDir()
-	seed := filepath.Join(dir, "seed")
-	if err := os.MkdirAll(filepath.Join(seed, "config"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(seed, "config", "runtime.json"), []byte(`{"model":"openai:old"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(seed, "artifacts", "images"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(seed, "artifacts", "images", "kept.txt"), []byte("artifact"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "workspace.ext4")
-	if err := ensureWorkspaceImage(context.Background(), path, 8, seed); err != nil {
-		t.Fatalf("ensure seeded workspace image: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(seed, "config", "runtime.json"), []byte(`{"model":"openai:new"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := ensureWorkspaceImage(context.Background(), path, 8, seed); err != nil {
-		t.Fatalf("ensure existing workspace image: %v", err)
-	}
-	out, err := exec.Command("debugfs", "-R", "cat /config/runtime.json", path).CombinedOutput()
-	if err != nil {
-		t.Fatalf("read original runtime.json: %v: %s", err, out)
-	}
-	if got := strings.TrimSpace(string(out)); !strings.Contains(got, `{"model":"openai:old"}`) {
-		t.Fatalf("runtime.json was unexpectedly synced from seed = %q", got)
-	}
-	out, err = exec.Command("debugfs", "-R", "cat /artifacts/images/kept.txt", path).CombinedOutput()
-	if err != nil {
-		t.Fatalf("read preserved artifact: %v: %s", err, out)
-	}
-	if got := strings.TrimSpace(string(out)); !strings.Contains(got, "artifact") {
-		t.Fatalf("preserved artifact = %q", got)
-	}
-}
-
 func TestNewFailsClosedWhenFirecrackerMissing(t *testing.T) {
 	_, err := New(&config.Config{
 		FirecrackerPath:         filepath.Join(t.TempDir(), "missing-firecracker"),
 		MicroVMKernelPath:       "/missing/kernel",
 		MicroVMRootfsPath:       "/missing/rootfs",
-		MicroVMWorkspaceDir:     t.TempDir(),
 		MicroVMRunDir:           t.TempDir(),
 		MicroVMLogDir:           t.TempDir(),
 		MicroVMAllowUnjailed:    true,
@@ -2358,89 +2246,6 @@ func TestReserveGuestIPAllocatesDistinctAddressesForCompartments(t *testing.T) {
 	}
 }
 
-func TestPrepareWorkspaceUsesPerCompartmentImages(t *testing.T) {
-	root := t.TempDir()
-	m := &Manager{cfg: &config.Config{
-		DataDir:                 root,
-		MicroVMWorkspaceDir:     filepath.Join(root, "workspaces"),
-		MicroVMWorkspaceSizeMiB: 8,
-		MicroVMWorkspaceBackend: "ext4",
-	}}
-	if err := os.MkdirAll(filepath.Join(m.cfg.SandboxesDir(), "agent-1", "workspace"), 0o700); err != nil {
-		t.Fatalf("create seed workspace: %v", err)
-	}
-	a, err := m.prepareWorkspace(context.Background(), "agent-1", "cmp_a")
-	if err != nil {
-		t.Fatalf("prepare cmp_a workspace: %v", err)
-	}
-	b, err := m.prepareWorkspace(context.Background(), "agent-1", "cmp_b")
-	if err != nil {
-		t.Fatalf("prepare cmp_b workspace: %v", err)
-	}
-	if a == b {
-		t.Fatalf("compartments share workspace image %q", a)
-	}
-	if !strings.Contains(a, filepath.Join("agent-1", "cmp_a."+workspaceName)) || !strings.Contains(b, filepath.Join("agent-1", "cmp_b."+workspaceName)) {
-		t.Fatalf("workspace paths are not compartment-scoped: a=%q b=%q", a, b)
-	}
-}
-
-func TestPrepareWorkspaceUsesCompartmentImagePath(t *testing.T) {
-	root := t.TempDir()
-	m := &Manager{cfg: &config.Config{
-		DataDir:                 root,
-		MicroVMWorkspaceDir:     filepath.Join(root, "workspaces"),
-		MicroVMWorkspaceSizeMiB: 8,
-		MicroVMWorkspaceBackend: "ext4",
-	}}
-	if err := os.MkdirAll(filepath.Join(m.cfg.SandboxesDir(), "agent-1", "workspace"), 0o700); err != nil {
-		t.Fatalf("create seed workspace: %v", err)
-	}
-	path, err := m.prepareWorkspace(context.Background(), "agent-1", "cmp_a")
-	if err != nil {
-		t.Fatalf("prepare compartment workspace: %v", err)
-	}
-	want := filepath.Join(m.cfg.MicroVMWorkspaceDir, "agent-1", "cmp_a."+workspaceName)
-	if path != want {
-		t.Fatalf("compartment workspace path = %q, want %q", path, want)
-	}
-}
-
-func TestPrepareWorkspaceBindsSandboxGenerationToAttachmentPath(t *testing.T) {
-	root := t.TempDir()
-	m := &Manager{cfg: &config.Config{
-		DataDir:                 root,
-		MicroVMWorkspaceDir:     filepath.Join(root, "workspaces"),
-		MicroVMWorkspaceSizeMiB: 8,
-		MicroVMWorkspaceBackend: "ext4",
-	}}
-	first, err := m.prepareWorkspaceSizedForAttachment(
-		context.Background(),
-		"sandbox-1",
-		"instance-1",
-		"instance-1-generation-7",
-		8,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := m.prepareWorkspaceSizedForAttachment(
-		context.Background(),
-		"sandbox-1",
-		"instance-1",
-		"instance-1-generation-8",
-		8,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first == second ||
-		!strings.Contains(first, "instance-1-generation-7."+workspaceName) ||
-		!strings.Contains(second, "instance-1-generation-8."+workspaceName) {
-		t.Fatalf("generation-bound workspace paths: first=%q second=%q", first, second)
-	}
-}
-
 func TestReserveGuestIPExhaustionReturnsCleanError(t *testing.T) {
 	m := &Manager{cfg: &config.Config{MicroVMBridgeCIDR: "10.0.0.1/30"}, guestIPs: map[string]string{}}
 	if _, err := m.reserveGuestIP("fc-a"); err != nil {
@@ -2550,6 +2355,41 @@ func TestAdmitCompartmentSpawnLocked(t *testing.T) {
 				t.Fatalf("admit error = %v, want %s", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestAdmitCompartmentSpawnUsesRequestedProfileMemory(t *testing.T) {
+	m := &Manager{
+		cfg: &config.Config{
+			MicroVMBridgeCIDR:      "10.0.0.1/24",
+			MicroVMMemoryMiB:       8192,
+			MicroVMMemoryBudgetMiB: 16384,
+		},
+		instances: map[string]*instance{
+			"a": {
+				id: "a", sandboxID: "agent-a", compartmentID: "cmp-a",
+				memoryMiB: 2048,
+			},
+			"b": {
+				id: "b", sandboxID: "agent-b", compartmentID: "cmp-b",
+				memoryMiB: 2048,
+			},
+		},
+	}
+	if err := m.admitCompartmentSpawnWithMemoryLocked(
+		runtimeInstanceKey{sandboxID: "agent-c", compartmentID: "cmp-c"},
+		2048,
+	); err != nil {
+		t.Fatalf("profile-sized admission failed: %v", err)
+	}
+	if err := m.admitCompartmentSpawnWithMemoryLocked(
+		runtimeInstanceKey{sandboxID: "agent-c", compartmentID: "cmp-c"},
+		13000,
+	); err == nil || !strings.Contains(
+		err.Error(),
+		"SECONDBOX_RUNNER_SANDBOX_MEMORY_BUDGET_MIB",
+	) {
+		t.Fatalf("oversized admission error = %v", err)
 	}
 }
 
@@ -2768,6 +2608,19 @@ func TestBuildStartupSecretBundleCarriesScopedToolEnv(t *testing.T) {
 	}
 }
 
+func TestCreateAndStartColdRequiresWorkspaceAttachment(t *testing.T) {
+	_, err := (&Manager{}).createAndStartCold(
+		context.Background(),
+		"sandbox-required-attachment",
+		"instance-required-attachment",
+		runtimemanager.StartOpts{},
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "Workspace attachment is required") {
+		t.Fatalf("missing Workspace attachment error = %v", err)
+	}
+}
+
 func TestCreateAndStartColdCleansInstanceDirOnFailure(t *testing.T) {
 	root := t.TempDir()
 	runDir := filepath.Join(root, "run")
@@ -2780,12 +2633,11 @@ func TestCreateAndStartColdCleansInstanceDirOnFailure(t *testing.T) {
 	}
 	m := &Manager{
 		cfg: &config.Config{
-			MicroVMRunDir:       runDir,
-			MicroVMLogDir:       logDir,
-			MicroVMWorkspaceDir: wsDir,
-			MicroVMRootfsPath:   filepath.Join(root, "missing-rootfs.ext4"),
-			MicroVMBridgeName:   "agbr0",
-			MicroVMBridgeCIDR:   "10.0.0.1/24",
+			MicroVMRunDir:     runDir,
+			MicroVMLogDir:     logDir,
+			MicroVMRootfsPath: filepath.Join(root, "missing-rootfs.ext4"),
+			MicroVMBridgeName: "agbr0",
+			MicroVMBridgeCIDR: "10.0.0.1/24",
 		},
 		instances: map[string]*instance{},
 		guestIPs:  map[string]string{},
@@ -2802,10 +2654,22 @@ func TestCreateAndStartColdCleansInstanceDirOnFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.defaultNetworkPolicy = compiledPolicy
+	workspaceImage, err := os.CreateTemp(root, "workspace-*.raw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workspaceImage.Close()
 
 	// The rootfs source does not exist, so the cold start fails at "prepare
 	// rootfs" — after the per-instance dir and the guest IP have been allocated.
-	_, err = m.createAndStartCold(context.Background(), "agent-1", "cmp_a", runtimemanager.StartOpts{}, nil)
+	_, err = m.createAndStartCold(context.Background(), "agent-1", "cmp_a", runtimemanager.StartOpts{
+		SandboxGeneration: 1,
+		WorkspaceAttachment: &managerTestComputeAttachment{
+			workspaceID: "workspace-cleanup-test",
+			generation:  1,
+			image:       workspaceImage,
+		},
+	}, nil)
 	if err == nil {
 		t.Fatal("expected createAndStartCold to fail on missing rootfs")
 	}
@@ -2836,50 +2700,6 @@ func TestCreateAndStartColdCleansInstanceDirOnFailure(t *testing.T) {
 			policyEnforcer.removed,
 			policyEnforcer.installed,
 		)
-	}
-}
-
-func TestWatchJailedExitReclaimsOnNaturalExit(t *testing.T) {
-	prev := jailedExitPollInterval
-	jailedExitPollInterval = 10 * time.Millisecond
-	defer func() { jailedExitPollInterval = prev }()
-
-	// No real process runs with this --id, so firecrackerProcessRunning reports
-	// it as gone on the first poll, exercising the natural-exit path.
-	const id = "fc-agent-watch-000000000000"
-	inst := &instance{id: id, sandboxID: "agent-watch", jailedProcess: true, done: make(chan struct{})}
-	m := &Manager{
-		cfg:       &config.Config{},
-		instances: map[string]*instance{id: inst},
-		guestIPs:  map[string]string{id: "172.30.0.20"},
-	}
-
-	returned := make(chan struct{})
-	go func() {
-		m.watchJailedExit(inst)
-		close(returned)
-	}()
-
-	select {
-	case <-returned:
-	case <-time.After(2 * time.Second):
-		t.Fatal("watchJailedExit did not return after the jailed process was absent")
-	}
-
-	m.mu.Lock()
-	_, tracked := m.instances[id]
-	_, ipHeld := m.guestIPs[id]
-	m.mu.Unlock()
-	if tracked {
-		t.Fatal("instance still tracked after natural exit")
-	}
-	if ipHeld {
-		t.Fatal("guest IP not released after natural exit")
-	}
-	select {
-	case <-inst.done:
-	default:
-		t.Fatal("done channel not closed after natural exit")
 	}
 }
 
@@ -2977,39 +2797,5 @@ func TestFinishInstanceRetainsGuestIdentityWhenTapCleanupFails(t *testing.T) {
 	}
 	if network.removeCalls < 2 {
 		t.Fatalf("expected bounded retry of tap removal, got %d call(s)", network.removeCalls)
-	}
-}
-
-func TestWatchJailedExitDefersToExplicitStop(t *testing.T) {
-	prev := jailedExitPollInterval
-	jailedExitPollInterval = time.Hour // never fires; only the closed done cancels
-	defer func() { jailedExitPollInterval = prev }()
-
-	const id = "fc-agent-cancel-000000000000"
-	inst := &instance{id: id, sandboxID: "agent-cancel", jailedProcess: true, done: make(chan struct{})}
-	m := &Manager{
-		cfg:       &config.Config{},
-		instances: map[string]*instance{id: inst},
-		guestIPs:  map[string]string{id: "172.30.0.21"},
-	}
-	close(inst.done) // an explicit stopInstance has already reclaimed this instance
-
-	returned := make(chan struct{})
-	go func() {
-		m.watchJailedExit(inst)
-		close(returned)
-	}()
-	select {
-	case <-returned:
-	case <-time.After(time.Second):
-		t.Fatal("watchJailedExit did not return when done was closed")
-	}
-
-	// The watcher must not re-run reclamation; that is stopInstance's job.
-	m.mu.Lock()
-	_, ipHeld := m.guestIPs[id]
-	m.mu.Unlock()
-	if !ipHeld {
-		t.Fatal("watcher reclaimed on the cancel path; should defer to stopInstance")
 	}
 }

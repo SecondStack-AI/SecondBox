@@ -62,9 +62,13 @@ tap_pattern="${tap_prefix}+"
 network_state_dir="$SECONDBOX_RUNNER_SANDBOX_NETWORK_STATE_DIR"
 delete_bridge="$SECONDBOX_RUNNER_SANDBOX_DELETE_BRIDGE"
 state_path="$network_state_dir/host-network.state"
-ipv4_input_chain="SECONDBOX_SANDBOX_INPUT"
-ipv4_forward_chain="SECONDBOX_SANDBOX_FORWARD"
-ipv6_chain="SECONDBOX_SANDBOX_IPV6"
+# Every Runner bridge owns separate baseline chains because multiple Runner
+# containers may share one host network namespace.
+ipv4_input_chain="SBX_INPUT_${bridge}"
+ipv4_forward_chain="SBX_FORWARD_${bridge}"
+ipv6_chain="SBX_IPV6_${bridge}"
+policy_connection_mark="0x53425801/0xffffffff"
+bridge_address="${bridge_cidr%/*}"
 
 if [[ ! "$bridge" =~ ^[A-Za-z0-9_.-]{1,15}$ ]]; then
   echo "SECONDBOX_RUNNER_SANDBOX_BRIDGE_NAME must be a Linux interface name" >&2
@@ -105,6 +109,21 @@ iptables_delete() {
   shift
   while iptables -t filter -C "$chain" "$@" >/dev/null 2>&1; do
     iptables -t filter -D "$chain" "$@"
+  done
+}
+
+iptables_nat_add() {
+  local chain="$1"
+  shift
+  iptables -t nat -C "$chain" "$@" >/dev/null 2>&1 ||
+    iptables -t nat -A "$chain" "$@"
+}
+
+iptables_nat_delete() {
+  local chain="$1"
+  shift
+  while iptables -t nat -C "$chain" "$@" >/dev/null 2>&1; do
+    iptables -t nat -D "$chain" "$@"
   done
 }
 
@@ -168,6 +187,10 @@ install_firewall() {
   iptables -N "$ipv4_input_chain" >/dev/null 2>&1 || true
   iptables -F "$ipv4_input_chain"
   iptables_add "$ipv4_input_chain" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  for protocol in udp tcp; do
+    iptables_add "$ipv4_input_chain" -d "$bridge_address" -p "$protocol" --dport 53 \
+      -m comment --comment secondbox-runner-dns -j ACCEPT
+  done
   iptables_add "$ipv4_input_chain" -m comment --comment secondbox-runner-host-input-deny -j DROP
   for interface_name in "$bridge" "$tap_pattern"; do
     iptables_insert INPUT -i "$interface_name" -m comment --comment secondbox-runner-host-input -j "$ipv4_input_chain"
@@ -176,11 +199,16 @@ install_firewall() {
   iptables -N "$ipv4_forward_chain" >/dev/null 2>&1 || true
   iptables -F "$ipv4_forward_chain"
   iptables_add "$ipv4_forward_chain" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  iptables_add "$ipv4_forward_chain" -m connmark --mark "$policy_connection_mark" \
+    -m comment --comment secondbox-sandbox-policy-allow -j ACCEPT
   iptables_add "$ipv4_forward_chain" -m comment --comment secondbox-sandbox-forward-deny -j DROP
   for interface_name in "$bridge" "$tap_pattern"; do
     iptables_insert FORWARD -i "$interface_name" -m comment --comment secondbox-sandbox-forward-out -j "$ipv4_forward_chain"
     iptables_insert FORWARD -o "$interface_name" -m comment --comment secondbox-sandbox-forward-in -j "$ipv4_forward_chain"
   done
+  iptables_nat_add POSTROUTING -s "$guest_cidr" ! -d "$guest_cidr" \
+    -m connmark --mark "$policy_connection_mark" \
+    -m comment --comment secondbox-sandbox-policy-nat -j MASQUERADE
 
   ip6tables -N "$ipv6_chain" >/dev/null 2>&1 || true
   ip6tables -F "$ipv6_chain"
@@ -193,6 +221,9 @@ install_firewall() {
 }
 
 remove_firewall() {
+  iptables_nat_delete POSTROUTING -s "$guest_cidr" ! -d "$guest_cidr" \
+    -m connmark --mark "$policy_connection_mark" \
+    -m comment --comment secondbox-sandbox-policy-nat -j MASQUERADE
   for interface_name in "$bridge" "$tap_pattern"; do
     iptables_delete INPUT -i "$interface_name" -m comment --comment secondbox-runner-host-input -j "$ipv4_input_chain"
     iptables_delete FORWARD -i "$interface_name" -m comment --comment secondbox-sandbox-forward-out -j "$ipv4_forward_chain"

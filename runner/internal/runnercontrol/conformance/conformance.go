@@ -11,8 +11,9 @@ import (
 )
 
 type Fixture struct {
-	Backend    runnercontrol.AssignmentBackend
-	Assignment *runnerprotocol.AssignmentCommand
+	Backend          runnercontrol.AssignmentBackend
+	Assignment       *runnerprotocol.AssignmentCommand
+	AdvanceWorkspace func(context.Context, string, uint64, uint64) error
 }
 
 func Run(t *testing.T, newFixture func(*testing.T) Fixture) {
@@ -21,6 +22,14 @@ func Run(t *testing.T, newFixture func(*testing.T) Fixture) {
 		fixture := newFixture(t)
 		if err := fixture.Backend.ValidateAssignment(context.Background(), nil); err == nil {
 			t.Fatal("backend accepted an incomplete assignment")
+		}
+		withoutWorkspace := proto.Clone(fixture.Assignment).(*runnerprotocol.AssignmentCommand)
+		withoutWorkspace.WorkspaceId = ""
+		if err := fixture.Backend.ValidateAssignment(
+			context.Background(),
+			withoutWorkspace,
+		); err == nil {
+			t.Fatal("backend accepted an assignment without a resolved Workspace")
 		}
 	})
 	t.Run("idempotent start and exact fencing", func(t *testing.T) {
@@ -42,7 +51,7 @@ func Run(t *testing.T, newFixture func(*testing.T) Fixture) {
 		}
 		wantStages := []runnerprotocol.AssignmentProgressStage{
 			runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY,
-			runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_MATERIALIZE,
+			runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_ATTACH,
 			runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_NETWORK_SETUP,
 			runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_FIRECRACKER_LAUNCH,
 			runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_GUEST_NEGOTIATION,
@@ -59,6 +68,14 @@ func Run(t *testing.T, newFixture func(*testing.T) Fixture) {
 		if err != nil || second != first {
 			t.Fatalf("idempotent start = %+v, %v; want %+v", second, err, first)
 		}
+		expiredReplay := proto.Clone(fixture.Assignment).(*runnerprotocol.AssignmentCommand)
+		expiredReplay.DeadlineUnixMs = 1
+		if err := fixture.Backend.ValidateAssignment(
+			context.Background(),
+			expiredReplay,
+		); err != nil {
+			t.Fatalf("active assignment replay after original deadline: %v", err)
+		}
 		mismatched := proto.Clone(fixture.Assignment).(*runnerprotocol.AssignmentCommand)
 		mismatched.Fence.FencingToken = []byte("different-token")
 		if _, err := fixture.Backend.StartAssignment(
@@ -73,6 +90,17 @@ func Run(t *testing.T, newFixture func(*testing.T) Fixture) {
 		}); err == nil {
 			t.Fatal("backend accepted mismatched fence")
 		}
+		concurrent := proto.Clone(fixture.Assignment).(*runnerprotocol.AssignmentCommand)
+		concurrent.Fence.AssignmentId += "-concurrent"
+		concurrent.Fence.InstanceId += "-concurrent"
+		concurrent.Fence.FencingToken = []byte("concurrent-fencing-token")
+		if _, err := fixture.Backend.StartAssignment(
+			context.Background(),
+			concurrent,
+			func(runnerprotocol.AssignmentProgressStage) error { return nil },
+		); err == nil {
+			t.Fatal("backend accepted a second writer for the same Sandbox")
+		}
 		evidence, err := fixture.Backend.FenceAssignment(context.Background(), &runnerprotocol.FenceCommand{
 			Fence: fixture.Assignment.Fence,
 		})
@@ -84,8 +112,43 @@ func Run(t *testing.T, newFixture func(*testing.T) Fixture) {
 		evidence, err = fixture.Backend.FenceAssignment(context.Background(), &runnerprotocol.FenceCommand{
 			Fence: fixture.Assignment.Fence,
 		})
-		if err != nil || evidence.Result != runnerprotocol.FenceResultKind_FENCE_RESULT_KIND_ALREADY_STOPPED {
+		if err != nil ||
+			evidence.Result != runnerprotocol.FenceResultKind_FENCE_RESULT_KIND_ALREADY_STOPPED ||
+			evidence.TerminationEvidenceDigest == "" {
 			t.Fatalf("repeated fence evidence = %+v, %v", evidence, err)
+		}
+		if fixture.AdvanceWorkspace == nil {
+			t.Fatal("compute conformance fixture lacks Workspace generation advancement")
+		}
+		nextGeneration := fixture.Assignment.Fence.SandboxGeneration + 1
+		if err := fixture.AdvanceWorkspace(
+			context.Background(),
+			fixture.Assignment.WorkspaceId,
+			fixture.Assignment.Fence.SandboxGeneration,
+			nextGeneration,
+		); err != nil {
+			t.Fatalf("advance conformance Workspace: %v", err)
+		}
+		restarted := proto.Clone(fixture.Assignment).(*runnerprotocol.AssignmentCommand)
+		restarted.Fence.AssignmentId += "-restart"
+		restarted.Fence.InstanceId += "-restart"
+		restarted.Fence.SandboxGeneration = nextGeneration
+		restarted.Fence.FencingToken = []byte("restart-fencing-token")
+		restarted.Correlation.AssignmentId = restarted.Fence.AssignmentId
+		restarted.Correlation.InstanceId = restarted.Fence.InstanceId
+		restarted.Correlation.SandboxGeneration = nextGeneration
+		if _, err := fixture.Backend.StartAssignment(
+			context.Background(),
+			restarted,
+			func(runnerprotocol.AssignmentProgressStage) error { return nil },
+		); err != nil {
+			t.Fatalf("restart on advanced Workspace: %v", err)
+		}
+		if _, err := fixture.Backend.FenceAssignment(
+			context.Background(),
+			&runnerprotocol.FenceCommand{Fence: restarted.Fence},
+		); err != nil {
+			t.Fatalf("fence restarted assignment: %v", err)
 		}
 	})
 }

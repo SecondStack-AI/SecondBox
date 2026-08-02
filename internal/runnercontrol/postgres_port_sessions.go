@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -28,8 +29,13 @@ func (relay *PostgresFrameRelay) AdmitPortSession(
 		input.RequestID == "" || input.LeaseID == "" || input.IdempotencyKey == "" ||
 		input.RequestHash == "" || input.Session.Generation < 1 ||
 		input.Session.Name == "" || input.Session.ExpiresAt.IsZero() ||
-		!input.Now.Before(input.Session.ExpiresAt) {
+		!input.Now.Before(input.Session.ExpiresAt) ||
+		len(input.CredentialDigest) != sha256.Size {
 		return PortTunnel{}, false, errors.New("SecondBox PortSession admission is incomplete")
+	}
+	if input.Session.Transport != contracts.PortTransportRelay &&
+		input.Session.Transport != contracts.PortTransportDirect {
+		return PortTunnel{}, false, errors.New("SecondBox PortSession transport is invalid")
 	}
 	tx, err := relay.pool.Begin(ctx)
 	if err != nil {
@@ -107,10 +113,12 @@ func (relay *PostgresFrameRelay) AdmitPortSession(
 		MaximumRequestBytes: maximumPayloadBytes, StreamWindowBytes: tunnel.StreamWindowBytes,
 		CreatedAt: input.Now.UTC(), UpdatedAt: input.Now.UTC(),
 	}
-	openMessage := portRelayMessage(session, 1, &runnerv1.PortFrame_Open{Open: &runnerv1.PortOpen{
-		GuestPort: uint32(policy.Port), Protocol: policy.Protocol,
-		IdleTimeoutMs: uint64(input.Session.ExpiresAt.Sub(input.Now).Milliseconds()),
-	}})
+	// The direct transport hands the caller a Runner address, so a Runner that
+	// has advertised none cannot serve it.
+	if tunnel.Session.Transport == contracts.PortTransportDirect && tunnel.DataPlaneAddress == "" {
+		return PortTunnel{}, false, ports.ErrLifecycleUnavailable
+	}
+	openMessage := portRelayMessage(session, 1, portAdmissionPayload(input, policy))
 	openPayload, err := proto.MarshalOptions{Deterministic: true}.Marshal(openMessage)
 	if err != nil {
 		return PortTunnel{}, false, fmt.Errorf("SecondBox Port Open encoding: %w", err)
@@ -148,11 +156,11 @@ func (relay *PostgresFrameRelay) AdmitPortSession(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.port_sessions (
-			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,data_plane_session_id,lease_id,generation,name,guest_port,protocol,stream_window_bytes,client_credit_bytes,client_bytes,runner_bytes,state,idempotency_key,request_hash,expires_at,created_at,updated_at,connected_at,closed_at
+			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,data_plane_session_id,lease_id,generation,name,guest_port,protocol,transport,credential_digest,stream_window_bytes,client_credit_bytes,client_bytes,runner_bytes,state,idempotency_key,request_hash,expires_at,created_at,updated_at,connected_at,closed_at
 		) VALUES (
-			$1,$2,$3,$4,$5,$1,$6,$7,$8,$9,$10,$11,0,0,0,'open',$12,$13,$14,$15,$15,NULL,NULL
+			$1,$2,$3,$4,$5,$1,$6,$7,$8,$9,$10,$16,$17,$11,0,0,0,'open',$12,$13,$14,$15,$15,NULL,NULL
 		)`,
-		input.Session.ID, tunnel.TenantRef, tunnel.SubjectRef, input.Session.SandboxID, tunnel.ProfileRevisionID, input.LeaseID, input.Session.Generation, input.Session.Name, policy.Port, policy.Protocol, tunnel.StreamWindowBytes, input.IdempotencyKey, input.RequestHash, input.Session.ExpiresAt.UTC(), input.Now.UTC(),
+		input.Session.ID, tunnel.TenantRef, tunnel.SubjectRef, input.Session.SandboxID, tunnel.ProfileRevisionID, input.LeaseID, input.Session.Generation, input.Session.Name, policy.Port, policy.Protocol, tunnel.StreamWindowBytes, input.IdempotencyKey, input.RequestHash, input.Session.ExpiresAt.UTC(), input.Now.UTC(), tunnel.Session.Transport, input.CredentialDigest,
 	); err != nil {
 		return PortTunnel{}, false, fmt.Errorf("SecondBox PortSession insert: %w", err)
 	}
@@ -162,21 +170,44 @@ func (relay *PostgresFrameRelay) AdmitPortSession(
 	return tunnel, false, nil
 }
 
-func (relay *PostgresFrameRelay) GetPortSession(
+// portAdmissionPayload selects the transport the Runner will use for this
+// session. A relay session receives today's PortOpen unchanged; a direct
+// session receives the assignment-bound state the Runner needs to admit one
+// caller connection locally.
+func portAdmissionPayload(input PortSessionAdmission, policy contracts.PortPolicy) any {
+	idleTimeout := uint64(input.Session.ExpiresAt.Sub(input.Now).Milliseconds())
+	if input.Session.Transport != contracts.PortTransportDirect {
+		return &runnerv1.PortFrame_Open{Open: &runnerv1.PortOpen{
+			GuestPort: uint32(policy.Port), Protocol: policy.Protocol,
+			IdleTimeoutMs: idleTimeout,
+		}}
+	}
+	return &runnerv1.PortFrame_DirectOpen{DirectOpen: &runnerv1.PortDirectOpen{
+		GuestPort: uint32(policy.Port), Protocol: policy.Protocol,
+		PortName:         input.Session.Name,
+		DeadlineUnixMs:   uint64(input.Session.ExpiresAt.UTC().UnixMilli()),
+		CredentialDigest: bytes.Clone(input.CredentialDigest),
+		LeaseId:          input.LeaseID,
+	}}
+}
+
+// GetPortTunnel returns the assignment-bound projection so the caller-facing
+// endpoint can be rebuilt for whichever transport admitted the session.
+func (relay *PostgresFrameRelay) GetPortTunnel(
 	ctx context.Context,
 	tenantRef string,
 	subjectRef string,
 	sandboxID string,
 	sessionID string,
 	now time.Time,
-) (contracts.PortSession, error) {
+) (PortTunnel, error) {
 	tunnel, err := scanPortTunnel(relay.pool.QueryRow(ctx, portTunnelSelect+`
 		WHERE port.tenant_ref=$1 AND port.subject_ref=$2
 		  AND port.sandbox_id=$3 AND port.id=$4`,
 		tenantRef, subjectRef, sandboxID, sessionID,
 	))
 	if err != nil {
-		return contracts.PortSession{}, err
+		return PortTunnel{}, err
 	}
 	if tunnel.Session.State == contracts.PortSessionStateOpen &&
 		!now.UTC().Before(tunnel.Session.ExpiresAt) {
@@ -185,11 +216,11 @@ func (relay *PostgresFrameRelay) GetPortSession(
 			runnerv1.PortTerminalKind_PORT_TERMINAL_KIND_CANCELLED,
 			"port session expired", true, now.UTC(),
 		); err != nil {
-			return contracts.PortSession{}, err
+			return PortTunnel{}, err
 		}
 		tunnel.Session.State = contracts.PortSessionStateExpired
 	}
-	return tunnel.Session, err
+	return tunnel, nil
 }
 
 func (relay *PostgresFrameRelay) ConsumePortSession(
@@ -207,6 +238,11 @@ func (relay *PostgresFrameRelay) ConsumePortSession(
 	tunnel, err := lockPortTunnel(ctx, tx, tenantRef, subjectRef, "", sessionID)
 	if err != nil {
 		return PortTunnel{}, err
+	}
+	// A direct session's credential is spent by its home Runner, never by the
+	// relay WebSocket, so the relay transport refuses it outright.
+	if tunnel.Session.Transport != contracts.PortTransportRelay {
+		return PortTunnel{}, ports.ErrPortTokenInvalid
 	}
 	var connectedAt *time.Time
 	if err := tx.QueryRow(ctx, `SELECT connected_at FROM secondbox.port_sessions WHERE id=$1`, sessionID).Scan(&connectedAt); err != nil {
@@ -246,6 +282,125 @@ func (relay *PostgresFrameRelay) ConsumePortSession(
 		return PortTunnel{}, fmt.Errorf("SecondBox Port tunnel consume commit: %w", err)
 	}
 	return tunnel, nil
+}
+
+// ConsumeDirectPortSession spends one single-use credential for the direct
+// transport. PostgreSQL remains the single consumption authority: the Runner's
+// local checks reduce work, they never replace this write.
+func (relay *PostgresFrameRelay) ConsumeDirectPortSession(
+	ctx context.Context,
+	input DirectPortConsumption,
+) (PortTunnel, error) {
+	if input.RunnerID == "" || input.SessionID == "" || input.AssignmentID == "" ||
+		input.Generation < 1 || len(input.FencingToken) == 0 ||
+		len(input.CredentialDigest) != sha256.Size {
+		return PortTunnel{}, errors.New("SecondBox direct PortSession consumption authority is incomplete")
+	}
+	now := input.Now.UTC()
+	tx, err := relay.pool.Begin(ctx)
+	if err != nil {
+		return PortTunnel{}, fmt.Errorf("SecondBox direct Port consume transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	tunnel, err := lockDirectPortTunnel(ctx, tx, input.RunnerID, input.SessionID)
+	if err != nil {
+		return PortTunnel{}, err
+	}
+	if tunnel.Session.Transport != contracts.PortTransportDirect ||
+		tunnel.AssignmentID != input.AssignmentID ||
+		tunnel.Session.Generation != input.Generation ||
+		!bytes.Equal(tunnel.FencingToken, input.FencingToken) {
+		return PortTunnel{}, ports.ErrPortTokenInvalid
+	}
+	var storedDigest []byte
+	var connectedAt *time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT credential_digest,connected_at FROM secondbox.port_sessions WHERE id=$1`,
+		input.SessionID,
+	).Scan(&storedDigest, &connectedAt); err != nil {
+		return PortTunnel{}, fmt.Errorf("SecondBox direct Port consumption lookup: %w", err)
+	}
+	if subtle.ConstantTimeCompare(storedDigest, input.CredentialDigest) != 1 {
+		return PortTunnel{}, ports.ErrPortTokenInvalid
+	}
+	if connectedAt != nil {
+		return PortTunnel{}, ports.ErrPortTokenConsumed
+	}
+	if tunnel.Session.State != contracts.PortSessionStateOpen ||
+		!now.Before(tunnel.Session.ExpiresAt) {
+		return PortTunnel{}, ports.ErrPortTokenInvalid
+	}
+	if err := validateLivePortAuthority(ctx, tx, tunnel, now); err != nil {
+		return PortTunnel{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.port_sessions SET connected_at=$2,updated_at=$2 WHERE id=$1`,
+		input.SessionID, now,
+	); err != nil {
+		return PortTunnel{}, fmt.Errorf("SecondBox direct Port consumption update: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.data_plane_sessions SET state='running',updated_at=$2 WHERE id=$1`,
+		input.SessionID, now,
+	); err != nil {
+		return PortTunnel{}, fmt.Errorf("SecondBox direct Port data-plane update: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.activity_sessions (
+			id,tenant_ref,subject_ref,sandbox_id,generation,kind,state,lease_id,last_activity_at,
+			created_at,updated_at,closed_at
+		) VALUES ($1,$2,$3,$4,$5,'port','active',$6,$7,$7,$7,NULL)
+		ON CONFLICT (id) DO NOTHING`,
+		tunnel.Session.ID, tunnel.TenantRef, tunnel.SubjectRef,
+		tunnel.Session.SandboxID, tunnel.Session.Generation, tunnel.LeaseID, now,
+	); err != nil {
+		return PortTunnel{}, fmt.Errorf("SecondBox direct Port activity insert: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.sandboxes
+		SET last_activity_at=$1,revision=revision+1,updated_at=$1
+		WHERE id=$2 AND generation=$3`,
+		now, tunnel.Session.SandboxID, tunnel.Session.Generation,
+	); err != nil {
+		return PortTunnel{}, fmt.Errorf("SecondBox direct Port Sandbox activity update: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return PortTunnel{}, fmt.Errorf("SecondBox direct Port consume commit: %w", err)
+	}
+	return tunnel, nil
+}
+
+// lockDirectPortTunnel locks one PortSession by its home Runner rather than by a
+// caller's ownership refs, because the authenticated Runner is the requester.
+func lockDirectPortTunnel(
+	ctx context.Context,
+	tx pgx.Tx,
+	runnerID string,
+	sessionID string,
+) (PortTunnel, error) {
+	var lockedSessionID string
+	err := tx.QueryRow(ctx, `
+		SELECT session.id
+		FROM secondbox.data_plane_sessions AS session
+		JOIN secondbox.port_sessions AS port ON port.data_plane_session_id=session.id
+		WHERE port.id=$1 AND session.runner_id=$2
+		FOR UPDATE OF session`,
+		sessionID, runnerID,
+	).Scan(&lockedSessionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PortTunnel{}, ports.ErrPortSessionNotFound
+	}
+	if err != nil {
+		return PortTunnel{}, fmt.Errorf("SecondBox direct PortSession data-plane lock: %w", err)
+	}
+	// The data-plane session is locked; the PortSession is still addressed by its
+	// own identifier rather than by the locked session identifier, which happens
+	// to equal it today only because admission derives one from the other.
+	return scanPortTunnel(tx.QueryRow(ctx, portTunnelSelect+`
+		WHERE port.id=$1 AND session.runner_id=$2
+		FOR UPDATE OF port`,
+		sessionID, runnerID,
+	))
 }
 
 func (relay *PostgresFrameRelay) ClosePortSession(
@@ -551,13 +706,15 @@ func lockPortAdmissionAuthority(
 		SELECT sandbox.tenant_ref,sandbox.subject_ref,
 		       sandbox.profile_revision_id,sandbox.generation,sandbox.state,
 		       assignment.id,assignment.instance_id,assignment.runner_id,
-		       assignment.fencing_token,assignment.state,revision.spec_json
+		       assignment.fencing_token,assignment.state,revision.spec_json,
+		       COALESCE(runner.data_plane_address,'')
 		FROM secondbox.sandboxes AS sandbox
 		JOIN secondbox.assignments AS assignment
 		  ON assignment.instance_id=sandbox.current_instance_id
 		  AND assignment.sandbox_id=sandbox.id
 		  AND assignment.generation=sandbox.generation
 		JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
+		LEFT JOIN secondbox.runners AS runner ON runner.id=assignment.runner_id
 		WHERE sandbox.tenant_ref=$1 AND sandbox.subject_ref=$2 AND sandbox.id=$3
 		FOR UPDATE OF sandbox,assignment`,
 		input.TenantRef, input.SubjectRef, input.Session.SandboxID,
@@ -565,7 +722,7 @@ func lockPortAdmissionAuthority(
 		&tunnel.TenantRef, &tunnel.SubjectRef,
 		&tunnel.ProfileRevisionID, &tunnel.Session.Generation, &sandboxState,
 		&tunnel.AssignmentID, &tunnel.InstanceID, &tunnel.RunnerID,
-		&tunnel.FencingToken, &assignmentState, &specJSON,
+		&tunnel.FencingToken, &assignmentState, &specJSON, &tunnel.DataPlaneAddress,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PortTunnel{}, contracts.ProfileRevisionSpec{}, contracts.PortPolicy{}, ports.ErrSandboxNotFound
@@ -823,6 +980,8 @@ func portRelayMessage(
 		frame.Payload = value
 	case *runnerv1.PortFrame_Cancel:
 		frame.Payload = value
+	case *runnerv1.PortFrame_DirectOpen:
+		frame.Payload = value
 	}
 	return &runnerv1.ControlPlaneToRunner{
 		Message: &runnerv1.ControlPlaneToRunner_Port{Port: frame},
@@ -831,15 +990,16 @@ func portRelayMessage(
 
 const portTunnelSelect = `
 	SELECT
-	  port.id,port.sandbox_id,port.generation,port.name,port.protocol,port.state,
+	  port.id,port.sandbox_id,port.generation,port.name,port.protocol,port.transport,port.state,
 	  port.created_at,port.expires_at,port.lease_id,
 	  port.profile_revision_id,session.assignment_id,session.instance_id,session.runner_id,
 	  session.request_id,
 	  session.stream_id,session.fencing_token,port.guest_port,port.stream_window_bytes,
-	  sandbox.tenant_ref,sandbox.subject_ref
+	  sandbox.tenant_ref,sandbox.subject_ref,COALESCE(runner.data_plane_address,'')
 	FROM secondbox.port_sessions AS port
 	JOIN secondbox.data_plane_sessions AS session ON session.id=port.data_plane_session_id
-	JOIN secondbox.sandboxes AS sandbox ON sandbox.id=port.sandbox_id`
+	JOIN secondbox.sandboxes AS sandbox ON sandbox.id=port.sandbox_id
+	LEFT JOIN secondbox.runners AS runner ON runner.id=session.runner_id`
 
 // lockPortTunnel follows the inbound relay's session-then-port lock order.
 func lockPortTunnel(
@@ -878,12 +1038,13 @@ func scanPortTunnel(row relayRow) (PortTunnel, error) {
 	var tunnel PortTunnel
 	err := row.Scan(
 		&tunnel.Session.ID, &tunnel.Session.SandboxID, &tunnel.Session.Generation,
-		&tunnel.Session.Name, &tunnel.Session.Protocol, &tunnel.Session.State,
+		&tunnel.Session.Name, &tunnel.Session.Protocol, &tunnel.Session.Transport,
+		&tunnel.Session.State,
 		&tunnel.Session.CreatedAt, &tunnel.Session.ExpiresAt,
 		&tunnel.LeaseID, &tunnel.ProfileRevisionID,
 		&tunnel.AssignmentID, &tunnel.InstanceID, &tunnel.RunnerID, &tunnel.RequestID, &tunnel.StreamID,
 		&tunnel.FencingToken, &tunnel.GuestPort, &tunnel.StreamWindowBytes,
-		&tunnel.TenantRef, &tunnel.SubjectRef,
+		&tunnel.TenantRef, &tunnel.SubjectRef, &tunnel.DataPlaneAddress,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PortTunnel{}, ports.ErrPortSessionNotFound

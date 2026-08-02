@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
+	"syscall"
 
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 )
@@ -21,63 +23,94 @@ type commandAlias struct {
 }
 
 var commandAliases = map[string]commandAlias{
-	"profiles list":        {operation: "listProfiles"},
-	"profiles create":      {operation: "createProfile"},
-	"profiles get":         {operation: "getProfile"},
-	"profiles revise":      {operation: "reviseProfile"},
-	"profiles disable":     {operation: "disableProfile"},
-	"runner-pools list":    {operation: "listRunnerPools"},
-	"runner-pools create":  {operation: "createRunnerPool"},
-	"runner-pools get":     {operation: "getRunnerPool"},
-	"runner-pools update":  {operation: "updateRunnerPool"},
-	"runners list":         {operation: "listRunners"},
-	"runners get":          {operation: "getRunner"},
-	"sandboxes list":       {operation: "listSandboxes"},
-	"sandboxes create":     {operation: "createSandbox"},
-	"sandboxes get":        {operation: "getSandbox"},
-	"sandboxes start":      {operation: "startSandbox"},
-	"sandboxes drain":      {operation: "drainSandbox"},
-	"sandboxes stop":       {operation: "stopSandbox"},
-	"sandboxes checkpoint": {operation: "checkpointSandbox"},
-	"sandboxes delete":     {operation: "deleteSandbox"},
-	"sandboxes inspect":    {operation: "inspectSandbox"},
-	"sandboxes ping":       {operation: "pingSandbox"},
-	"sandboxes touch":      {operation: "touchSandbox"},
-	"sandboxes wait":       {operation: "waitForSandbox"},
-	"operations get":       {operation: "getOperation"},
-	"exec":                 {operation: "executeSandboxCommand"},
-	"exec stream":          {operation: "createSandboxExecStream"},
-	"exec cancel":          {operation: "cancelSandboxExecStream"},
-	"shell create":         {operation: "createSandboxTerminal"},
-	"shell reconnect":      {operation: "reconnectSandboxTerminal"},
-	"shell close":          {operation: "cancelSandboxTerminal"},
-	"files read":           {operation: "readSandboxFile"},
-	"files write":          {operation: "writeSandboxFile"},
-	"files stat":           {operation: "statSandboxFile"},
-	"files exists":         {operation: "sandboxFileExists"},
-	"files list":           {operation: "listSandboxDirectory"},
-	"files mkdir":          {operation: "createSandboxDirectory"},
-	"files rm":             {operation: "removeSandboxPath"},
-	"checkpoints create":   {operation: "checkpointSandbox"},
-	"artifacts list":       {operation: "listSandboxArtifacts"},
-	"artifacts upload":     {operation: "uploadSandboxArtifact"},
-	"artifacts get":        {operation: "getArtifact"},
-	"artifacts download":   {operation: "downloadArtifactContent"},
-	"artifacts delete":     {operation: "deleteArtifact"},
-	"leases acquire":       {operation: "acquireSandboxLease"},
-	"leases get":           {operation: "getSandboxLease"},
-	"leases renew":         {operation: "renewSandboxLease"},
-	"leases release":       {operation: "releaseSandboxLease"},
-	"ports create":         {operation: "createSandboxPortSession"},
-	"ports get":            {operation: "getSandboxPortSession"},
-	"ports close":          {operation: "closeSandboxPortSession"},
+	"profiles list":       {operation: "listProfiles"},
+	"profiles create":     {operation: "createProfile"},
+	"profiles get":        {operation: "getProfile"},
+	"profiles revise":     {operation: "reviseProfile"},
+	"profiles disable":    {operation: "disableProfile"},
+	"runner-pools list":   {operation: "listRunnerPools"},
+	"runner-pools create": {operation: "createRunnerPool"},
+	"runner-pools get":    {operation: "getRunnerPool"},
+	"runner-pools update": {operation: "updateRunnerPool"},
+	"runners list":        {operation: "listRunners"},
+	"runners get":         {operation: "getRunner"},
+	"sandboxes list":      {operation: "listSandboxes"},
+	"sandboxes create":    {operation: "createSandbox"},
+	"sandboxes get":       {operation: "getSandbox"},
+	"sandboxes start":     {operation: "startSandbox"},
+	"sandboxes drain":     {operation: "drainSandbox"},
+	"sandboxes stop":      {operation: "stopSandbox"},
+	"sandboxes restore":   {operation: "restoreSandboxSnapshot"},
+	"sandboxes delete":    {operation: "deleteSandbox"},
+	"sandboxes inspect":   {operation: "inspectSandbox"},
+	"sandboxes ping":      {operation: "pingSandbox"},
+	"sandboxes touch":     {operation: "touchSandbox"},
+	"sandboxes wait":      {operation: "waitForSandbox"},
+	"operations get":      {operation: "getOperation"},
+	"exec stream":         {operation: "createSandboxExecStream"},
+	"exec cancel":         {operation: "cancelSandboxExecStream"},
+	"shell create":        {operation: "createSandboxTerminal"},
+	"shell reconnect":     {operation: "reconnectSandboxTerminal"},
+	"shell close":         {operation: "cancelSandboxTerminal"},
+	"files read":          {operation: "readSandboxFile"},
+	"files write":         {operation: "writeSandboxFile"},
+	"files stat":          {operation: "statSandboxFile"},
+	"files exists":        {operation: "sandboxFileExists"},
+	"files list":          {operation: "listSandboxDirectory"},
+	"files mkdir":         {operation: "createSandboxDirectory"},
+	"files rm":            {operation: "removeSandboxPath"},
+	"snapshots create":    {operation: "createSandboxSnapshot"},
+	"snapshots list":      {operation: "listSandboxSnapshots"},
+	"snapshots get":       {operation: "getSnapshot"},
+	"snapshots delete":    {operation: "deleteSnapshot"},
+	"snapshots restore":   {operation: "restoreSandboxSnapshot"},
+	"artifacts list":      {operation: "listSandboxArtifacts"},
+	"artifacts upload":    {operation: "uploadSandboxArtifact"},
+	"artifacts get":       {operation: "getArtifact"},
+	"artifacts download":  {operation: "downloadArtifactContent"},
+	"artifacts delete":    {operation: "deleteArtifact"},
+	"leases acquire":      {operation: "acquireSandboxLease"},
+	"leases get":          {operation: "getSandboxLease"},
+	"leases renew":        {operation: "renewSandboxLease"},
+	"leases release":      {operation: "releaseSandboxLease"},
+	"ports create":        {operation: "createSandboxPortSession"},
+	"ports get":           {operation: "getSandboxPortSession"},
+	"ports close":         {operation: "closeSandboxPortSession"},
 }
 
 func main() {
-	if err := run(context.Background(), os.Args[1:], os.Stdout); err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+	err := run(interruptibleContext(), os.Args[1:], os.Stdout)
+	if err == nil {
+		return
 	}
+	// A guest command that exited non-zero already wrote its own diagnosis to
+	// standard error; the CLI reports it as an exit status and adds nothing.
+	var exited *commandExitError
+	if errors.As(err, &exited) {
+		os.Exit(exited.code)
+	}
+	_, _ = fmt.Fprintln(os.Stderr, err)
+	os.Exit(1)
+}
+
+// interruptibleContext cancels on the signals a terminal actually sends, so the
+// deferred cleanup that releases a Lease and cancels a Terminal still runs.
+//
+// Without this an interrupted `secondbox shell` left its Lease active until the
+// service expired it, and the next attach failed with a state conflict. The
+// second signal restores default handling so an unresponsive cleanup can still
+// be abandoned; cleanup itself releases on a context of its own and so is
+// unaffected by this cancellation.
+func interruptibleContext() context.Context {
+	ctx, stop := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt, syscall.SIGTERM, syscall.SIGHUP,
+	)
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	return ctx
 }
 
 func run(ctx context.Context, args []string, output io.Writer) error {
@@ -90,20 +123,24 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	if err := global.Parse(args); err != nil {
 		return fmt.Errorf("SecondBox CLI parse global options: %w", err)
 	}
-	handled, err := runOperationalCommand(
-		ctx, *rawURL, *token, *tenantRef, *subjectRef, global.Args(), output,
-	)
+	session, err := resolveSession(cliSession{
+		url: *rawURL, token: *token, tenantRef: *tenantRef, subjectRef: *subjectRef,
+	})
+	if err != nil {
+		return err
+	}
+	handled, err := runOperationalCommand(ctx, session, global.Args(), output)
 	if handled {
 		return err
 	}
-	if *rawURL == "" {
-		return errors.New("SecondBox CLI requires --url")
+	if session.url == "" {
+		return errors.New("SecondBox CLI requires --url" + sessionSourceHint)
 	}
-	if *token == "" {
-		return errors.New("SecondBox CLI requires --token")
+	if session.token == "" {
+		return errors.New("SecondBox CLI requires --token" + sessionSourceHint)
 	}
-	if *tenantRef == "" || *subjectRef == "" {
-		return errors.New("SecondBox CLI requires --tenant-ref and --subject-ref")
+	if session.tenantRef == "" || session.subjectRef == "" {
+		return errors.New("SecondBox CLI requires --tenant-ref and --subject-ref" + sessionSourceHint)
 	}
 	operationID, operationArgs, err := resolveCommand(global.Args())
 	if err != nil {
@@ -111,7 +148,7 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	}
 
 	client, err := secondboxclient.NewSecondBoxSubjectClient(
-		*rawURL, *token, *tenantRef, *subjectRef, http.DefaultClient,
+		session.url, session.token, session.tenantRef, session.subjectRef, http.DefaultClient,
 	)
 	if err != nil {
 		return err
@@ -140,20 +177,51 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 
 func runOperationalCommand(
 	ctx context.Context,
-	rawURL string,
-	token string,
-	tenantRef string,
-	subjectRef string,
+	session cliSession,
 	args []string,
 	output io.Writer,
 ) (bool, error) {
+	if len(args) == 0 {
+		return false, nil
+	}
+	switch args[0] {
+	case "login":
+		return true, runLoginCommand(ctx, session, args[1:], output, http.DefaultClient)
+	case "logout":
+		return true, runLogoutCommand(session, args[1:], output)
+	case "whoami":
+		return true, runWhoamiCommand(session, args[1:], output)
+	}
+	if args[0] == "exec" && !isExecSubcommand(args) {
+		return true, runExecCommand(ctx, session, args[1:], execCommandEnvironment{
+			stdin: os.Stdin, stdout: output, stderr: os.Stderr,
+			httpClient: http.DefaultClient,
+		})
+	}
+	if args[0] == "run" {
+		return true, runRunCommand(ctx, session, args[1:], execCommandEnvironment{
+			stdin: os.Stdin, stdout: output, stderr: os.Stderr,
+			httpClient: http.DefaultClient,
+		}, sandboxShellEnvironment{
+			input: os.Stdin, output: output,
+			inputFD: int(os.Stdin.Fd()), outputFD: outputFileDescriptor(output),
+			httpClient: http.DefaultClient,
+		})
+	}
+	if args[0] == "shell" && !isShellSubcommand(args) {
+		return true, runShellCommand(ctx, session, args[1:], sandboxShellEnvironment{
+			input: os.Stdin, output: output,
+			inputFD: int(os.Stdin.Fd()), outputFD: outputFileDescriptor(output),
+			httpClient: http.DefaultClient,
+		}, http.DefaultClient)
+	}
 	if len(args) < 2 {
 		return false, nil
 	}
 	switch {
 	case args[0] == "sandbox" && args[1] == "shell":
 		return true, runSandboxShellCommand(
-			ctx, rawURL, token, tenantRef, subjectRef, args[2:],
+			ctx, session.url, session.token, session.tenantRef, session.subjectRef, args[2:],
 			sandboxShellEnvironment{
 				input: os.Stdin, output: output,
 				inputFD: int(os.Stdin.Fd()), outputFD: outputFileDescriptor(output),
@@ -162,12 +230,37 @@ func runOperationalCommand(
 		)
 	case args[0] == "exec" && args[1] == "stream":
 		return true, runExecStreamCommand(
-			ctx, rawURL, token, tenantRef, subjectRef,
+			ctx, session.url, session.token, session.tenantRef, session.subjectRef,
 			args[2:], os.Stdin, output, http.DefaultClient, nil,
 		)
+	case args[0] == "timings" &&
+		(args[1] == "sandbox" || args[1] == "operation" || args[1] == "summary"):
+		return true, runTimingCommand(
+			ctx, session.url, session.token, session.tenantRef, session.subjectRef,
+			args[1], args[2:], output, http.DefaultClient,
+		)
+	case args[0] == "diagnostics" && args[1] == "bundle":
+		return true, runDiagnosticsBundleCommand(
+			ctx, session.url, session.token, args[2:], output, http.DefaultClient,
+		)
+	case args[0] == "logs" && (args[1] == "tail" || args[1] == "follow"):
+		return true, runLogsCommand(ctx, args[1], args[2:], output)
 	default:
 		return false, nil
 	}
+}
+
+// isExecSubcommand distinguishes the streaming and cancellation subcommands
+// from `exec <sandbox> -- command`.
+func isExecSubcommand(args []string) bool {
+	return len(args) >= 2 && (args[1] == "stream" || args[1] == "cancel")
+}
+
+// isShellSubcommand distinguishes the terminal negotiation aliases from
+// `shell <sandbox>`.
+func isShellSubcommand(args []string) bool {
+	return len(args) >= 2 &&
+		(args[1] == "create" || args[1] == "reconnect" || args[1] == "close")
 }
 
 func outputFileDescriptor(output io.Writer) int {
@@ -264,13 +357,19 @@ func parseOperationOptions(operationID string, args []string) (secondboxclient.C
 			return secondboxclient.CallOptions{}, nil, fmt.Errorf("SecondBox CLI open %s body %q: %w", operationID, *bodyPath, err)
 		}
 	}
-	return secondboxclient.CallOptions{
+	options := secondboxclient.CallOptions{
 		PathParameters:  pathParameters,
 		QueryParameters: query,
 		Headers:         requestHeaders,
-		Body:            body,
 		ContentType:     *contentType,
-	}, body, nil
+	}
+	// CallOptions.Body is an interface. Assigning a nil *os.File unconditionally
+	// would produce a non-nil interface holding a nil pointer, which the HTTP
+	// client then reads and fails with os.ErrInvalid before reaching the network.
+	if body != nil {
+		options.Body = body
+	}
+	return options, body, nil
 }
 
 func parsePairs(values []string) (map[string]string, error) {
@@ -290,7 +389,12 @@ func commandSummary() string {
 	for key := range commandAliases {
 		keys = append(keys, key)
 	}
-	keys = append(keys, "diagnostics bundle", "logs follow", "logs tail", "sandbox shell")
+	keys = append(
+		keys,
+		"diagnostics bundle", "exec", "login", "logout", "logs follow", "logs tail",
+		"run", "sandbox shell", "shell", "timings operation", "timings sandbox",
+		"timings summary", "whoami",
+	)
 	sort.Strings(keys)
 	return strings.Join(keys, ", ")
 }

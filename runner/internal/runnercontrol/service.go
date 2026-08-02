@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
@@ -33,12 +32,19 @@ var ErrRunnerProtocolNegotiation = errors.New("SecondBox runner protocol negotia
 
 // RunnerProtocolConfig contains stable runner identity and its supported wire window.
 type RunnerProtocolConfig struct {
-	RunnerID          string
-	RunnerPoolID      string
-	SoftwareVersion   string
-	ProtocolMinimum   uint32
-	ProtocolMaximum   uint32
-	MandatoryFeatures []runnerprotocol.RunnerFeature
+	RunnerID                          string
+	RunnerPoolID                      string
+	SoftwareVersion                   string
+	ProtocolMinimum                   uint32
+	ProtocolMaximum                   uint32
+	MaximumConcurrentStarts           int
+	MaximumConcurrentWorkspaceCreates int
+	MandatoryFeatures                 []runnerprotocol.RunnerFeature
+	// DataPlaneListenAddress binds the caller-facing direct Port transport.
+	DataPlaneListenAddress string
+	// DataPlaneAdvertisedAddress is administrative capacity evidence returned
+	// only to an ingress holding the exact direct-endpoint grant.
+	DataPlaneAdvertisedAddress string
 }
 
 // BackendReadiness is verified local capability and capacity evidence.
@@ -58,7 +64,7 @@ type BackendInstance struct {
 }
 
 // BackendInstanceTerminal is bounded post-ready runtime evidence. It cannot
-// release assignment authority or workspace materialization.
+// release assignment authority or the runner-local Workspace attachment.
 type BackendInstanceTerminal struct {
 	Fence          *runnerprotocol.AssignmentFence
 	Correlation    *runnerprotocol.Correlation
@@ -73,27 +79,23 @@ type FenceEvidence struct {
 	TerminationEvidenceDigest string
 }
 
-// CheckpointEvidence is runner-produced immutable workspace metadata.
-type CheckpointEvidence struct {
-	SHA256                    string
-	SizeBytes                 uint64
-	Compatibility             map[string]string
-	TerminationEvidenceDigest string
+// LocalWorkspaceEvidence is bounded logical receipt or inventory evidence. It
+// cannot carry a host path or workspace image bytes.
+type LocalWorkspaceEvidence struct {
+	PreviousGeneration uint64
+	Generation         uint64
+	LogicalCapacity    uint64
+	ReceiptRecordedAt  time.Time
+	Inventory          []*runnerprotocol.LocalWorkspaceInventoryItem
+	Receipts           []*runnerprotocol.LocalWorkspaceReceiptItem
 }
 
-// CheckpointBackend freezes and streams one exactly fenced workspace.
-type CheckpointBackend interface {
-	CreateCheckpoint(
+// LocalWorkspaceBackend executes versioned runner-local storage commands.
+type LocalWorkspaceBackend interface {
+	ExecuteLocalWorkspace(
 		context.Context,
-		*runnerprotocol.CheckpointCommand,
-		func([]byte) error,
-	) (CheckpointEvidence, error)
-}
-
-// RestoreBackend ingests verified provider-neutral checkpoint bytes before assignment.
-type RestoreBackend interface {
-	BeginRestore(context.Context, *runnerprotocol.RestoreBegin) error
-	WriteRestoreChunk(context.Context, *runnerprotocol.RestoreChunk) error
+		*runnerprotocol.LocalWorkspaceCommand,
+	) (LocalWorkspaceEvidence, error)
 }
 
 // AssignmentBackend accepts only immutable, profile-resolved assignments.
@@ -106,6 +108,10 @@ type AssignmentBackend interface {
 		func(runnerprotocol.AssignmentProgressStage) error,
 	) (BackendInstance, error)
 	FenceAssignment(context.Context, *runnerprotocol.FenceCommand) (FenceEvidence, error)
+}
+
+type startupTimingBackend interface {
+	StartupTiming() (uint64, time.Duration)
 }
 
 type evidenceAwareBackend interface {
@@ -128,15 +134,6 @@ type receivedControlPlaneFrame struct {
 	err     error
 }
 
-type runnerRestoreOperation struct {
-	fence           *runnerprotocol.AssignmentFence
-	correlation     *runnerprotocol.Correlation
-	checkpointID    string
-	storageObjectID string
-	terminal        bool
-	terminalFrame   []byte
-}
-
 // RunnerProtocolConnector establishes one mutually authenticated outbound stream.
 type RunnerProtocolConnector interface {
 	Connect(context.Context) (RunnerProtocolStream, error)
@@ -149,12 +146,11 @@ type RunnerProtocolService struct {
 	backend           AssignmentBackend
 	dataPlaneBackend  DataPlaneBackend
 	portBackend       PortBackend
-	checkpointBackend CheckpointBackend
-	restoreBackend    RestoreBackend
+	workspaceBackend  LocalWorkspaceBackend
 	terminalBackend   instanceTerminalBackend
 	instanceTerminals <-chan BackendInstanceTerminal
 	connector         RunnerProtocolConnector
-	sequence          atomic.Uint64
+	sequence          uint64
 	sendMu            sync.Mutex
 	stateMu           sync.Mutex
 	drain             runnerprotocol.DrainPhase
@@ -166,9 +162,11 @@ type RunnerProtocolService struct {
 	execTerminalOrder []string
 	fileTerminalOrder []string
 	portTerminalOrder []string
-	restoreOperations map[string]*runnerRestoreOperation
 	evidence          runnerevidence.Sink
 	correlations      map[string]*runnerprotocol.Correlation
+	dataPlane         *dataPlaneListener
+	dataPlaneFailures chan error
+	directPorts       *directPortRegistry
 }
 
 // NewRunnerProtocolService validates immutable identity before creating the composition root.
@@ -188,6 +186,28 @@ func NewRunnerProtocolService(
 		config.ProtocolMinimum > config.ProtocolMaximum {
 		return nil, fmt.Errorf("SecondBox runner protocol config has an invalid supported-version window")
 	}
+	if config.MaximumConcurrentStarts < 1 {
+		return nil, fmt.Errorf("SecondBox runner protocol config requires a positive maximum concurrent start count")
+	}
+	if config.MaximumConcurrentWorkspaceCreates < 1 {
+		return nil, fmt.Errorf("SecondBox runner protocol config requires a positive maximum concurrent Workspace create count")
+	}
+	config.DataPlaneListenAddress = strings.TrimSpace(config.DataPlaneListenAddress)
+	config.DataPlaneAdvertisedAddress = strings.TrimSpace(config.DataPlaneAdvertisedAddress)
+	if err := validateDataPlaneAddress(
+		"SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS",
+		config.DataPlaneListenAddress,
+		true,
+	); err != nil {
+		return nil, err
+	}
+	if err := validateDataPlaneAddress(
+		"SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS",
+		config.DataPlaneAdvertisedAddress,
+		false,
+	); err != nil {
+		return nil, err
+	}
 	if backend == nil {
 		return nil, fmt.Errorf("SecondBox runner protocol assignment backend is required")
 	}
@@ -197,8 +217,7 @@ func NewRunnerProtocolService(
 	dataPlaneBackend, implementsDataPlane := backend.(DataPlaneBackend)
 	_, implementsPTY := backend.(PTYDataPlaneBackend)
 	portBackend, implementsPort := backend.(PortBackend)
-	checkpointBackend, implementsCheckpoint := backend.(CheckpointBackend)
-	restoreBackend, implementsRestore := backend.(RestoreBackend)
+	workspaceBackend, implementsWorkspace := backend.(LocalWorkspaceBackend)
 	terminalBackend, implementsTerminal := backend.(instanceTerminalBackend)
 	for _, feature := range config.MandatoryFeatures {
 		if (feature == runnerprotocol.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING ||
@@ -212,28 +231,28 @@ func NewRunnerProtocolService(
 		if feature == runnerprotocol.RunnerFeature_RUNNER_FEATURE_PORT_PROXY && !implementsPort {
 			return nil, fmt.Errorf("SecondBox runner Port proxy feature requires a Port backend")
 		}
-		if feature == runnerprotocol.RunnerFeature_RUNNER_FEATURE_CHECKPOINT &&
-			(!implementsCheckpoint || !implementsRestore) {
-			return nil, fmt.Errorf("SecondBox runner checkpoint feature requires checkpoint create and restore backends")
+		if feature == runnerprotocol.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE &&
+			!implementsWorkspace {
+			return nil, fmt.Errorf("SecondBox runner local-workspace feature requires a WorkspaceStore backend")
 		}
 	}
 	service := &RunnerProtocolService{
-		config:            config,
-		backend:           backend,
-		dataPlaneBackend:  dataPlaneBackend,
-		portBackend:       portBackend,
-		checkpointBackend: checkpointBackend,
-		restoreBackend:    restoreBackend,
-		terminalBackend:   terminalBackend,
-		connector:         connector,
-		drain:             runnerprotocol.DrainPhase_DRAIN_PHASE_ACTIVE,
-		active:            make(map[string]*runnerprotocol.ActiveAssignmentSummary),
-		execOperations:    make(map[string]*runnerExecOperation),
-		fileOperations:    make(map[string]*runnerFileOperation),
-		portOperations:    make(map[string]*runnerPortOperation),
-		restoreOperations: make(map[string]*runnerRestoreOperation),
-		evidence:          runnerevidence.SlogSink{},
-		correlations:      make(map[string]*runnerprotocol.Correlation),
+		config:           config,
+		backend:          backend,
+		dataPlaneBackend: dataPlaneBackend,
+		portBackend:      portBackend,
+		workspaceBackend: workspaceBackend,
+		terminalBackend:  terminalBackend,
+		connector:        connector,
+		drain:            runnerprotocol.DrainPhase_DRAIN_PHASE_ACTIVE,
+		active:           make(map[string]*runnerprotocol.ActiveAssignmentSummary),
+		execOperations:   make(map[string]*runnerExecOperation),
+		fileOperations:   make(map[string]*runnerFileOperation),
+		portOperations:   make(map[string]*runnerPortOperation),
+		evidence:         runnerevidence.SlogSink{},
+		correlations:     make(map[string]*runnerprotocol.Correlation),
+		dataPlane:        newDataPlaneListener(),
+		directPorts:      newDirectPortRegistry(),
 	}
 	if implementsTerminal {
 		service.instanceTerminals = terminalBackend.InstanceTerminals()
@@ -260,7 +279,14 @@ func (s *RunnerProtocolService) SetEvidenceSink(sink runnerevidence.Sink) {
 }
 
 // Run preserves Runner-owned Instances while reconnecting transient control-plane sessions.
-func (s *RunnerProtocolService) Run(ctx context.Context) error {
+func (s *RunnerProtocolService) Run(ctx context.Context) (runErr error) {
+	stopDataPlane, err := s.startDataPlaneListener(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		runErr = errors.Join(runErr, stopDataPlane())
+	}()
 	reconnectDelay := runnerReconnectInitialDelay
 	for {
 		if err := ctx.Err(); err != nil {
@@ -331,7 +357,7 @@ func (s *RunnerProtocolService) runProtocolSession(ctx context.Context) (bool, e
 		return false, err
 	}
 
-	readiness, err := s.backend.Readiness(ctx)
+	readiness, err := s.readiness(ctx)
 	if err != nil {
 		return false, fmt.Errorf("SecondBox runner readiness failed: %w", err)
 	}
@@ -415,30 +441,60 @@ func (s *RunnerProtocolService) validateWelcome(welcome *runnerprotocol.RunnerWe
 	return nil
 }
 
+// readiness projects the Runner-owned caller-facing transport onto backend
+// capability evidence. An unavailable listener is a readiness failure, so the
+// control plane refuses registration exactly as it does for an unavailable
+// network-policy listener.
+func (s *RunnerProtocolService) readiness(ctx context.Context) (BackendReadiness, error) {
+	readiness, err := s.backend.Readiness(ctx)
+	if err != nil {
+		return BackendReadiness{}, err
+	}
+	if readiness.Capabilities == nil {
+		readiness.Capabilities = &runnerprotocol.RunnerCapabilities{}
+	}
+	readiness.Capabilities.DataPlaneReady = s.dataPlane.ready()
+	if !readiness.Capabilities.DataPlaneReady {
+		readiness.ReadinessFailures = append(
+			readiness.ReadinessFailures,
+			runnerprotocol.RunnerReadinessFailure_RUNNER_READINESS_FAILURE_DATA_PLANE,
+		)
+	}
+	return readiness, nil
+}
+
 func (s *RunnerProtocolService) sendRegistration(
 	stream RunnerProtocolStream,
 	connectionID string,
 	selectedProtocolVersion uint32,
 	readiness BackendReadiness,
 ) error {
-	sequence := s.nextSequence()
-	registration := &runnerprotocol.RunnerRegistration{
-		MessageId:         s.messageID(sequence),
-		Sequence:          sequence,
-		RunnerId:          s.config.RunnerID,
-		ConnectionId:      connectionID,
-		RunnerPoolId:      s.config.RunnerPoolID,
-		SoftwareVersion:   s.config.SoftwareVersion,
-		ProtocolVersion:   selectedProtocolVersion,
-		Capabilities:      readiness.Capabilities,
-		Allocatable:       readiness.Capacity,
-		Reserved:          readiness.Reserved,
-		ArtifactCache:     readiness.ArtifactCache,
-		ReadinessFailures: readiness.ReadinessFailures,
-	}
-	if err := s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-		Message: &runnerprotocol.RunnerToControlPlane_Registration{Registration: registration},
-	}); err != nil {
+	if err := s.sendSequencedRunnerFrame(
+		stream,
+		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
+			return &runnerprotocol.RunnerToControlPlane{
+				Message: &runnerprotocol.RunnerToControlPlane_Registration{
+					Registration: &runnerprotocol.RunnerRegistration{
+						MessageId:         s.messageID(sequence),
+						Sequence:          sequence,
+						RunnerId:          s.config.RunnerID,
+						ConnectionId:      connectionID,
+						RunnerPoolId:      s.config.RunnerPoolID,
+						SoftwareVersion:   s.config.SoftwareVersion,
+						ProtocolVersion:   selectedProtocolVersion,
+						Capabilities:      readiness.Capabilities,
+						Allocatable:       readiness.Capacity,
+						Reserved:          readiness.Reserved,
+						ArtifactCache:     readiness.ArtifactCache,
+						ReadinessFailures: readiness.ReadinessFailures,
+						StartupTiming:     s.startupTiming(),
+
+						DataPlaneAdvertisedAddress: s.config.DataPlaneAdvertisedAddress,
+					},
+				},
+			}
+		},
+	); err != nil {
 		return fmt.Errorf("SecondBox runner protocol send registration: %w", err)
 	}
 	return nil
@@ -451,12 +507,45 @@ func (s *RunnerProtocolService) consumeCommands(
 	readiness BackendReadiness,
 ) error {
 	received := make(chan receivedControlPlaneFrame, 1)
+	// Assignment starts run off the receive loop, so the runner admits as many
+	// concurrent assignments as it advertises capacity for. Handling them inline
+	// admitted exactly one at a time: thirty-two concurrent assignments entered
+	// the backend 298-437 ms apart, one full microVM start each, and the
+	// reported admission stage measured that queue wait rather than any work.
+	//
+	// The wait is registered before the cancel so teardown cancels the
+	// connection first and only then waits for in-flight starts to observe it.
+	var assignmentsInFlight sync.WaitGroup
+	defer assignmentsInFlight.Wait()
+	var workspaceCreatesInFlight sync.WaitGroup
+	defer workspaceCreatesInFlight.Wait()
 	connectionCtx, cancelConnection := context.WithCancel(ctx)
 	defer cancelConnection()
+	assignmentSlots := make(
+		chan struct{},
+		concurrentAssignmentLimit(s.config.MaximumConcurrentStarts, readiness),
+	)
+	workspaceCreateSlots := make(
+		chan struct{},
+		s.config.MaximumConcurrentWorkspaceCreates,
+	)
+	// A direct Port connection is admitted work owned by this control-plane
+	// session. Losing the session cancels it, matching how the Runner already
+	// treats every other admitted operation.
+	defer s.directPorts.closeAll("control-plane connection lost")
+	s.directPorts.bindStream(stream)
+	defer s.directPorts.bindStream(nil)
+	dataPlaneFailures := s.dataPlaneFailureSource()
 	go pumpControlPlaneFrames(connectionCtx, stream.Recv, received)
-	ticker := time.NewTicker(time.Duration(welcome.HeartbeatIntervalMs) * time.Millisecond)
-	defer ticker.Stop()
 	asyncErrors := make(chan error, 1)
+	go s.sendHeartbeats(
+		connectionCtx,
+		stream,
+		welcome.ConnectionId,
+		readiness,
+		time.Duration(welcome.HeartbeatIntervalMs)*time.Millisecond,
+		asyncErrors,
+	)
 	controlState := newControlCommandState()
 	enabled := make(map[runnerprotocol.RunnerFeature]bool, len(welcome.EnabledFeatures))
 	for _, feature := range welcome.EnabledFeatures {
@@ -467,12 +556,15 @@ func (s *RunnerProtocolService) consumeCommands(
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
-			if err := s.sendHeartbeat(stream, welcome.ConnectionId, readiness); err != nil {
-				return err
-			}
 		case frame := <-received:
 			if frame.err != nil {
+				assignmentsInFlight.Wait()
+				workspaceCreatesInFlight.Wait()
+				select {
+				case asyncErr := <-asyncErrors:
+					return errors.Join(frame.err, asyncErr)
+				default:
+				}
 				return frame.err
 			}
 			duplicate, err := controlState.accept(frame.message)
@@ -482,14 +574,113 @@ func (s *RunnerProtocolService) consumeCommands(
 			if duplicate {
 				continue
 			}
+			// Sequence acceptance above already ran in receive order, so a
+			// concurrent start cannot reorder the control command stream.
+			if assignment := frame.message.GetAssignment(); assignment != nil {
+				workspaceCreatesInFlight.Wait()
+				select {
+				case assignmentSlots <- struct{}{}:
+				case <-connectionCtx.Done():
+					return connectionCtx.Err()
+				}
+				assignmentsInFlight.Add(1)
+				go func() {
+					defer assignmentsInFlight.Done()
+					defer func() { <-assignmentSlots }()
+					if err := s.handleAssignment(connectionCtx, stream, assignment); err != nil {
+						select {
+						case asyncErrors <- err:
+						default:
+						}
+					}
+				}()
+				continue
+			}
+			if workspace := frame.message.GetLocalWorkspace(); workspace != nil {
+				if !enabled[runnerprotocol.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE] ||
+					s.workspaceBackend == nil {
+					return fmt.Errorf("SecondBox runner local-workspace feature was not negotiated")
+				}
+				if workspace.Kind ==
+					runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE {
+					select {
+					case workspaceCreateSlots <- struct{}{}:
+					case <-connectionCtx.Done():
+						return connectionCtx.Err()
+					}
+					workspaceCreatesInFlight.Add(1)
+					go func() {
+						defer workspaceCreatesInFlight.Done()
+						defer func() { <-workspaceCreateSlots }()
+						if err := s.handleLocalWorkspace(
+							connectionCtx,
+							stream,
+							workspace,
+						); err != nil {
+							select {
+							case asyncErrors <- err:
+							default:
+							}
+						}
+					}()
+					continue
+				}
+				workspaceCreatesInFlight.Wait()
+				if err := s.handleLocalWorkspace(
+					connectionCtx,
+					stream,
+					workspace,
+				); err != nil {
+					return err
+				}
+				continue
+			}
+			// Fence and drain decide whether compute may keep running, so they
+			// stay ordered behind assignment starts and Workspace creates.
+			if frame.message.GetFence() != nil || frame.message.GetDrain() != nil {
+				assignmentsInFlight.Wait()
+				workspaceCreatesInFlight.Wait()
+			}
 			if err := s.handleCommand(connectionCtx, stream, frame.message, enabled, asyncErrors); err != nil {
 				return err
 			}
 		case err := <-asyncErrors:
 			return err
+		case err := <-dataPlaneFailures:
+			return err
 		case terminal := <-s.instanceTerminals:
+			s.directPorts.closeAssignment(
+				terminal.Fence.GetAssignmentId(),
+				"instance terminated",
+			)
 			if err := s.sendInstanceTerminal(ctx, stream, terminal); err != nil {
 				return err
+			}
+		}
+	}
+}
+
+func (s *RunnerProtocolService) sendHeartbeats(
+	ctx context.Context,
+	stream RunnerProtocolStream,
+	connectionID string,
+	readiness BackendReadiness,
+	interval time.Duration,
+	asyncErrors chan<- error,
+) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := s.sendHeartbeat(stream, connectionID, readiness); err != nil {
+				select {
+				case asyncErrors <- err:
+				case <-ctx.Done():
+				}
+				return
 			}
 		}
 	}
@@ -539,9 +730,9 @@ func (state *controlCommandState) accept(
 	case message.GetDrain() != nil:
 		messageID = message.GetDrain().MessageId
 		sequence = message.GetDrain().Sequence
-	case message.GetCheckpoint() != nil:
-		messageID = message.GetCheckpoint().MessageId
-		sequence = message.GetCheckpoint().Sequence
+	case message.GetLocalWorkspace() != nil:
+		messageID = message.GetLocalWorkspace().MessageId
+		sequence = message.GetLocalWorkspace().Sequence
 	default:
 		return false, nil
 	}
@@ -588,270 +779,168 @@ func (s *RunnerProtocolService) handleCommand(
 		return s.handleFileFrame(ctx, stream, message.GetFile(), enabled, asyncErrors)
 	case message.GetPort() != nil:
 		return s.handlePortFrame(ctx, stream, message.GetPort(), enabled, asyncErrors)
-	case message.GetCheckpoint() != nil:
-		if !enabled[runnerprotocol.RunnerFeature_RUNNER_FEATURE_CHECKPOINT] ||
-			s.checkpointBackend == nil {
-			return fmt.Errorf("SecondBox runner checkpoint feature was not negotiated")
+	case message.GetPortDirectAdmission() != nil:
+		return s.directPorts.deliverAdmission(message.GetPortDirectAdmission())
+	case message.GetLocalWorkspace() != nil:
+		if !enabled[runnerprotocol.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE] ||
+			s.workspaceBackend == nil {
+			return fmt.Errorf("SecondBox runner local-workspace feature was not negotiated")
 		}
-		return s.handleCheckpoint(ctx, stream, message.GetCheckpoint())
-	case message.GetRestoreBegin() != nil:
-		if !enabled[runnerprotocol.RunnerFeature_RUNNER_FEATURE_CHECKPOINT] ||
-			s.restoreBackend == nil {
-			return fmt.Errorf("SecondBox runner checkpoint restore feature was not negotiated")
-		}
-		return s.handleRestoreBegin(ctx, message.GetRestoreBegin())
-	case message.GetRestoreChunk() != nil:
-		if !enabled[runnerprotocol.RunnerFeature_RUNNER_FEATURE_CHECKPOINT] ||
-			s.restoreBackend == nil {
-			return fmt.Errorf("SecondBox runner checkpoint restore feature was not negotiated")
-		}
-		return s.handleRestoreChunk(ctx, message.GetRestoreChunk())
+		return s.handleLocalWorkspace(ctx, stream, message.GetLocalWorkspace())
 	default:
 		return fmt.Errorf("SecondBox runner protocol received unsupported control-plane frame")
 	}
 }
 
-func (s *RunnerProtocolService) handleCheckpoint(
+func (s *RunnerProtocolService) handleLocalWorkspace(
 	ctx context.Context,
 	stream RunnerProtocolStream,
-	command *runnerprotocol.CheckpointCommand,
+	command *runnerprotocol.LocalWorkspaceCommand,
 ) error {
-	if command == nil || command.Fence == nil || command.CheckpointId == "" ||
-		command.StorageObjectId == "" || command.MaximumSizeBytes == 0 ||
-		command.DeadlineUnixMs == 0 || !s.hasActiveFence(command.Fence) {
-		return fmt.Errorf("SecondBox runner Checkpoint command authority is incomplete or stale")
+	if command == nil ||
+		command.CommandVersion != 1 ||
+		command.Kind == runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_UNSPECIFIED ||
+		strings.TrimSpace(command.EffectId) == "" {
+		return fmt.Errorf("SecondBox runner local-workspace command is incomplete")
 	}
-	if err := s.validateOperationCorrelation(
-		command.Fence,
-		command.GetCorrelation().GetOperationId(),
-		command.Correlation,
-	); err != nil {
-		return err
+	if command.Kind != runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE &&
+		(strings.TrimSpace(command.SandboxId) == "" ||
+			strings.TrimSpace(command.WorkspaceId) == "") {
+		return fmt.Errorf("SecondBox runner local-workspace identity is incomplete")
 	}
-	deadline := time.UnixMilli(int64(command.DeadlineUnixMs))
-	if !deadline.After(time.Now()) {
-		return s.sendCheckpointResult(
-			stream, command, CheckpointEvidence{},
-			runnerprotocol.CheckpointTerminalKind_CHECKPOINT_TERMINAL_KIND_DEADLINE_EXCEEDED,
-			"checkpoint deadline expired",
+	switch command.Kind {
+	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CLONE_FROM_SNAPSHOT,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_DELETE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_CREATE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_DELETE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_PREPARE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_SWAP,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT:
+		if len(command.FencingToken) == 0 {
+			return fmt.Errorf("SecondBox runner local-workspace fencing token is required")
+		}
+	}
+	var (
+		evidence     LocalWorkspaceEvidence
+		executionErr error
+	)
+	executionStartedAt := time.Now()
+	if command.Correlation == nil || command.Correlation.RunnerId != s.config.RunnerID {
+		executionErr = localWorkspaceCommandError{
+			terminal: runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_WRONG_HOME_RUNNER,
+		}
+	} else {
+		evidence, executionErr = s.workspaceBackend.ExecuteLocalWorkspace(ctx, command)
+	}
+	terminal := localWorkspaceTerminal(executionErr)
+	slog.Info(
+		"SecondBox runner local Workspace command completed",
+		"kind", command.Kind.String(),
+		"operationId", command.OperationId,
+		"sandboxId", command.SandboxId,
+		"workspaceId", command.WorkspaceId,
+		"terminal", terminal.String(),
+		"executionMs", time.Since(executionStartedAt).Milliseconds(),
+	)
+	result := &runnerprotocol.LocalWorkspaceResult{
+		CommandVersion:       command.CommandVersion,
+		Kind:                 command.Kind,
+		Terminal:             terminal,
+		OperationId:          command.OperationId,
+		EffectId:             command.EffectId,
+		SandboxId:            command.SandboxId,
+		WorkspaceId:          command.WorkspaceId,
+		SnapshotId:           command.SnapshotId,
+		PreviousGeneration:   evidence.PreviousGeneration,
+		Generation:           evidence.Generation,
+		LogicalCapacityBytes: evidence.LogicalCapacity,
+		Inventory:            evidence.Inventory,
+		Receipts:             evidence.Receipts,
+		Correlation:          cloneRunnerCorrelation(command.Correlation),
+	}
+	if !evidence.ReceiptRecordedAt.IsZero() {
+		result.ReceiptRecordedAtUnixMs = uint64(evidence.ReceiptRecordedAt.UTC().UnixMilli())
+	}
+	if executionErr != nil {
+		slog.Warn(
+			"SecondBox runner local-workspace command failed",
+			"kind", command.Kind.String(),
+			"terminal", terminal.String(),
+			"error", executionErr,
 		)
+		result.SafeDetail = localWorkspaceSafeDetail(terminal)
 	}
-	checkpointContext, cancel := context.WithDeadline(ctx, deadline)
-	defer cancel()
-	var offset uint64
-	emit := func(data []byte) error {
-		if len(data) == 0 {
-			return nil
-		}
-		if uint64(len(data)) > command.MaximumSizeBytes-offset {
-			return fmt.Errorf("SecondBox runner checkpoint exceeds command size bound")
-		}
-		sequence := s.nextSequence()
-		if err := s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-			Message: &runnerprotocol.RunnerToControlPlane_CheckpointChunk{
-				CheckpointChunk: &runnerprotocol.CheckpointChunk{
-					MessageId: s.messageID(sequence), Sequence: sequence, Fence: command.Fence,
-					CheckpointId: command.CheckpointId, StorageObjectId: command.StorageObjectId,
-					Offset: offset, Data: append([]byte(nil), data...),
+	return s.sendSequencedRunnerFrame(
+		stream,
+		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
+			result.MessageId = s.messageID(sequence)
+			result.Sequence = sequence
+			return &runnerprotocol.RunnerToControlPlane{
+				Message: &runnerprotocol.RunnerToControlPlane_LocalWorkspaceResult{
+					LocalWorkspaceResult: result,
 				},
-			},
-		}); err != nil {
-			return err
-		}
-		offset += uint64(len(data))
-		return nil
-	}
-	evidence, err := s.checkpointBackend.CreateCheckpoint(checkpointContext, command, emit)
-	if err != nil {
-		terminal := runnerprotocol.CheckpointTerminalKind_CHECKPOINT_TERMINAL_KIND_RUNNER_FAILED
-		if errors.Is(checkpointContext.Err(), context.DeadlineExceeded) {
-			terminal = runnerprotocol.CheckpointTerminalKind_CHECKPOINT_TERMINAL_KIND_DEADLINE_EXCEEDED
-		}
-		return s.sendCheckpointResult(stream, command, evidence, terminal, "runner checkpoint failed")
-	}
-	if evidence.SizeBytes != offset || evidence.SizeBytes > command.MaximumSizeBytes ||
-		evidence.SHA256 == "" || len(evidence.Compatibility) == 0 {
-		return s.sendCheckpointResult(
-			stream, command, evidence,
-			runnerprotocol.CheckpointTerminalKind_CHECKPOINT_TERMINAL_KIND_INTEGRITY_FAILED,
-			"checkpoint evidence does not match streamed bytes",
-		)
-	}
-	sequence := s.nextSequence()
-	if err := s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-		Message: &runnerprotocol.RunnerToControlPlane_CheckpointChunk{
-			CheckpointChunk: &runnerprotocol.CheckpointChunk{
-				MessageId: s.messageID(sequence), Sequence: sequence, Fence: command.Fence,
-				CheckpointId: command.CheckpointId, StorageObjectId: command.StorageObjectId,
-				Offset: offset, EndOfObject: true,
-			},
+			}
 		},
-	}); err != nil {
-		return err
-	}
-	return s.sendCheckpointResult(
-		stream, command, evidence,
-		runnerprotocol.CheckpointTerminalKind_CHECKPOINT_TERMINAL_KIND_CREATED, "",
 	)
 }
 
-func (s *RunnerProtocolService) sendCheckpointResult(
-	stream RunnerProtocolStream,
-	command *runnerprotocol.CheckpointCommand,
-	evidence CheckpointEvidence,
-	terminal runnerprotocol.CheckpointTerminalKind,
-	safeDetail string,
-) error {
-	if err := s.emitEvidence(
-		context.Background(),
-		runnerevidence.EventCheckpointTerminal,
-		command.Fence,
-		command.Correlation,
-		command.GetCorrelation().GetOperationId(),
-		terminal.String(),
-		terminalOutcome(terminal.String()),
-	); err != nil {
-		return err
+func localWorkspaceSafeDetail(terminal runnerprotocol.LocalWorkspaceTerminalKind) string {
+	switch terminal {
+	case runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_LOCAL_DATA_ABSENT:
+		return "local workspace data is absent"
+	case runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_ACTIVE_WRITER:
+		return "workspace has an active writer"
+	case runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STALE_GENERATION:
+		return "workspace generation is stale"
+	case runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STALE_FENCE:
+		return "workspace fencing authority is stale"
+	case runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STORAGE_INCOMPATIBLE:
+		return "local workspace storage is incompatible"
+	case runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_INSUFFICIENT_SPACE:
+		return "local workspace storage has insufficient space"
+	case runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_CORRUPT_RECEIPT:
+		return "local workspace receipt is corrupt"
+	case runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_CONFLICTING_REPLAY:
+		return "local workspace operation conflicts with its durable receipt"
+	case runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_WRONG_HOME_RUNNER:
+		return "workspace is not owned by this runner"
+	case runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SNAPSHOT_IN_USE:
+		return "snapshot is in use"
+	case runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_RESTORE_PENDING:
+		return "workspace restore is pending"
+	default:
+		return "local workspace operation failed"
 	}
-	sequence := s.nextSequence()
-	return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-		Message: &runnerprotocol.RunnerToControlPlane_CheckpointResult{
-			CheckpointResult: &runnerprotocol.CheckpointResult{
-				MessageId: s.messageID(sequence), Sequence: sequence, Fence: command.Fence,
-				CheckpointId: command.CheckpointId, StorageObjectId: command.StorageObjectId,
-				Terminal: terminal, Sha256: evidence.SHA256, SizeBytes: evidence.SizeBytes,
-				Compatibility:             evidence.Compatibility,
-				TerminationEvidenceDigest: evidence.TerminationEvidenceDigest,
-				SafeDetail:                safeDetail, Correlation: command.Correlation,
-			},
-		},
-	})
 }
 
-func (s *RunnerProtocolService) handleRestoreBegin(
-	ctx context.Context,
-	begin *runnerprotocol.RestoreBegin,
-) error {
-	if begin == nil || begin.Fence == nil || begin.CheckpointId == "" ||
-		begin.StorageObjectId == "" || begin.Sha256 == "" || begin.SizeBytes == 0 ||
-		begin.DeadlineUnixMs == 0 {
-		return fmt.Errorf("SecondBox runner Restore begin authority is incomplete")
-	}
-	operationID := begin.GetCorrelation().GetOperationId()
-	if err := s.validateOperationCorrelation(begin.Fence, operationID, begin.Correlation); err != nil {
-		return err
-	}
-	key := runnerRestoreOperationKey(begin.Fence, begin.CheckpointId)
-	s.operationMu.Lock()
-	existing := s.restoreOperations[key]
-	if existing != nil {
-		matches := sameRunnerFence(existing.fence, begin.Fence) &&
-			existing.storageObjectID == begin.StorageObjectId &&
-			proto.Equal(existing.correlation, begin.Correlation)
-		s.operationMu.Unlock()
-		if !matches {
-			return fmt.Errorf("SecondBox runner Restore begin conflicts with retained operation state")
-		}
-		return nil
-	}
-	s.operationMu.Unlock()
-	if err := s.restoreBackend.BeginRestore(ctx, begin); err != nil {
-		evidenceErr := s.emitEvidence(
-			context.Background(),
-			runnerevidence.EventRestoreTerminal,
-			begin.Fence,
-			begin.Correlation,
-			operationID,
-			"begin_failed",
-			"failed",
-		)
-		return errors.Join(err, evidenceErr)
-	}
-	s.operationMu.Lock()
-	s.restoreOperations[key] = &runnerRestoreOperation{
-		fence: cloneRunnerFence(begin.Fence), correlation: cloneRunnerCorrelation(begin.Correlation),
-		checkpointID: begin.CheckpointId, storageObjectID: begin.StorageObjectId,
-	}
-	s.operationMu.Unlock()
-	return nil
+type localWorkspaceTerminalError interface {
+	LocalWorkspaceTerminal() runnerprotocol.LocalWorkspaceTerminalKind
 }
 
-func (s *RunnerProtocolService) handleRestoreChunk(
-	ctx context.Context,
-	chunk *runnerprotocol.RestoreChunk,
-) error {
-	if chunk == nil || chunk.Fence == nil || chunk.CheckpointId == "" ||
-		chunk.StorageObjectId == "" {
-		return fmt.Errorf("SecondBox runner Restore chunk authority is incomplete")
-	}
-	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(chunk)
-	if err != nil {
-		return fmt.Errorf("SecondBox runner Restore chunk encoding: %w", err)
-	}
-	key := runnerRestoreOperationKey(chunk.Fence, chunk.CheckpointId)
-	s.operationMu.Lock()
-	state := s.restoreOperations[key]
-	if state == nil ||
-		!sameRunnerFence(state.fence, chunk.Fence) ||
-		state.storageObjectID != chunk.StorageObjectId {
-		s.operationMu.Unlock()
-		return fmt.Errorf("SecondBox runner Restore chunk correlation is missing or stale")
-	}
-	if state.terminal {
-		duplicate := bytes.Equal(state.terminalFrame, encoded)
-		s.operationMu.Unlock()
-		if duplicate {
-			return nil
-		}
-		return fmt.Errorf("SecondBox runner Restore chunk follows terminal state")
-	}
-	s.operationMu.Unlock()
-	if err := s.restoreBackend.WriteRestoreChunk(ctx, chunk); err != nil {
-		evidenceErr := s.emitEvidence(
-			context.Background(),
-			runnerevidence.EventRestoreTerminal,
-			state.fence,
-			state.correlation,
-			state.correlation.OperationId,
-			"restore_failed",
-			"failed",
-		)
-		s.operationMu.Lock()
-		state.terminal = true
-		state.terminalFrame = bytes.Clone(encoded)
-		s.operationMu.Unlock()
-		return errors.Join(err, evidenceErr)
-	}
-	if !chunk.EndOfObject {
-		return nil
-	}
-	if err := s.emitEvidence(
-		context.Background(),
-		runnerevidence.EventRestoreTerminal,
-		state.fence,
-		state.correlation,
-		state.correlation.OperationId,
-		"restored",
-		"completed",
-	); err != nil {
-		return err
-	}
-	s.operationMu.Lock()
-	state.terminal = true
-	state.terminalFrame = bytes.Clone(encoded)
-	s.operationMu.Unlock()
-	return nil
+type localWorkspaceCommandError struct {
+	terminal runnerprotocol.LocalWorkspaceTerminalKind
 }
 
-func runnerRestoreOperationKey(
-	fence *runnerprotocol.AssignmentFence,
-	checkpointID string,
-) string {
-	return strings.Join([]string{
-		fence.AssignmentId,
-		fmt.Sprintf("%d", fence.SandboxGeneration),
-		checkpointID,
-	}, "\x00")
+func (failure localWorkspaceCommandError) Error() string {
+	return localWorkspaceSafeDetail(failure.terminal)
+}
+
+func (failure localWorkspaceCommandError) LocalWorkspaceTerminal() runnerprotocol.LocalWorkspaceTerminalKind {
+	return failure.terminal
+}
+
+func localWorkspaceTerminal(err error) runnerprotocol.LocalWorkspaceTerminalKind {
+	if err == nil {
+		return runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED
+	}
+	var typed localWorkspaceTerminalError
+	if errors.As(err, &typed) {
+		return typed.LocalWorkspaceTerminal()
+	}
+	return runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_RUNNER_FAILED
 }
 
 func (s *RunnerProtocolService) handleAssignment(
@@ -859,6 +948,7 @@ func (s *RunnerProtocolService) handleAssignment(
 	stream RunnerProtocolStream,
 	assignment *runnerprotocol.AssignmentCommand,
 ) error {
+	admissionObservedAt := time.Now()
 	if s.drainPhase() != runnerprotocol.DrainPhase_DRAIN_PHASE_ACTIVE {
 		return s.sendAssignmentAck(
 			stream,
@@ -891,27 +981,29 @@ func (s *RunnerProtocolService) handleAssignment(
 	); err != nil {
 		return err
 	}
+	if err := s.sendAssignmentProgress(
+		stream,
+		assignment,
+		runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_RUNNER_ADMISSION,
+		admissionObservedAt,
+	); err != nil {
+		return err
+	}
 	progress := func(stage runnerprotocol.AssignmentProgressStage) error {
-		sequence := s.nextSequence()
-		return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-			Message: &runnerprotocol.RunnerToControlPlane_AssignmentProgress{
-				AssignmentProgress: &runnerprotocol.AssignmentProgress{
-					MessageId:        s.messageID(sequence),
-					Sequence:         sequence,
-					Fence:            assignment.Fence,
-					Stage:            stage,
-					ObservedAtUnixMs: uint64(time.Now().UnixMilli()),
-					Correlation:      s.assignmentCorrelation(assignment),
-				},
-			},
-		})
+		return s.sendAssignmentProgress(stream, assignment, stage, time.Now())
 	}
 	instance, err := s.backend.StartAssignment(ctx, assignment, progress)
 	terminal := runnerprotocol.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY
 	safeDetail := ""
 	if err != nil {
+		slog.Warn(
+			"SecondBox runner assignment start failed",
+			"assignmentId", assignment.Fence.AssignmentId,
+			"sandboxId", assignment.Fence.SandboxId,
+			"error", err,
+		)
 		terminal = runnerprotocol.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_RUNNER_FAILED
-		safeDetail = err.Error()
+		safeDetail = "runner failed to start assignment"
 	} else {
 		s.recordActiveAssignment(assignment.Fence, instance.BackendReference)
 		s.recordAssignmentCorrelation(assignment)
@@ -927,21 +1019,25 @@ func (s *RunnerProtocolService) handleAssignment(
 	); evidenceErr != nil {
 		return evidenceErr
 	}
-	sequence := s.nextSequence()
-	if err := s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-		Message: &runnerprotocol.RunnerToControlPlane_AssignmentResult{
-			AssignmentResult: &runnerprotocol.AssignmentResult{
-				MessageId:        s.messageID(sequence),
-				Sequence:         sequence,
-				Fence:            assignment.Fence,
-				Terminal:         terminal,
-				BackendKind:      instance.BackendKind,
-				BackendReference: instance.BackendReference,
-				SafeDetail:       safeDetail,
-				Correlation:      s.assignmentCorrelation(assignment),
-			},
+	if err := s.sendSequencedRunnerFrame(
+		stream,
+		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
+			return &runnerprotocol.RunnerToControlPlane{
+				Message: &runnerprotocol.RunnerToControlPlane_AssignmentResult{
+					AssignmentResult: &runnerprotocol.AssignmentResult{
+						MessageId:        s.messageID(sequence),
+						Sequence:         sequence,
+						Fence:            assignment.Fence,
+						Terminal:         terminal,
+						BackendKind:      instance.BackendKind,
+						BackendReference: instance.BackendReference,
+						SafeDetail:       safeDetail,
+						Correlation:      s.assignmentCorrelation(assignment),
+					},
+				},
+			}
 		},
-	}); err != nil {
+	); err != nil {
 		return err
 	}
 	if terminal == runnerprotocol.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_READY &&
@@ -951,6 +1047,32 @@ func (s *RunnerProtocolService) handleAssignment(
 		}
 	}
 	return nil
+}
+
+func (s *RunnerProtocolService) sendAssignmentProgress(
+	stream RunnerProtocolStream,
+	assignment *runnerprotocol.AssignmentCommand,
+	stage runnerprotocol.AssignmentProgressStage,
+	observedAt time.Time,
+) error {
+	return s.sendSequencedRunnerFrame(
+		stream,
+		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
+			return &runnerprotocol.RunnerToControlPlane{
+				Message: &runnerprotocol.RunnerToControlPlane_AssignmentProgress{
+					AssignmentProgress: &runnerprotocol.AssignmentProgress{
+						MessageId:        s.messageID(sequence),
+						Sequence:         sequence,
+						Fence:            assignment.Fence,
+						Stage:            stage,
+						ObservedAtUnixMs: uint64(observedAt.UnixMilli()),
+						Correlation:      s.assignmentCorrelation(assignment),
+						ObservedAtUnixNs: uint64(observedAt.UnixNano()),
+					},
+				},
+			}
+		},
+	)
 }
 
 func (s *RunnerProtocolService) sendInstanceTerminal(
@@ -987,20 +1109,24 @@ func (s *RunnerProtocolService) sendInstanceTerminal(
 	); err != nil {
 		return err
 	}
-	sequence := s.nextSequence()
-	return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-		Message: &runnerprotocol.RunnerToControlPlane_InstanceTerminal{
-			InstanceTerminal: &runnerprotocol.InstanceTerminal{
-				MessageId:                 s.messageID(sequence),
-				Sequence:                  sequence,
-				Fence:                     terminal.Fence,
-				Reason:                    terminal.Reason,
-				ObservedAtUnixMs:          uint64(terminal.ObservedAt.UTC().UnixMilli()),
-				TerminationEvidenceDigest: terminal.EvidenceDigest,
-				Correlation:               terminal.Correlation,
-			},
+	return s.sendSequencedRunnerFrame(
+		stream,
+		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
+			return &runnerprotocol.RunnerToControlPlane{
+				Message: &runnerprotocol.RunnerToControlPlane_InstanceTerminal{
+					InstanceTerminal: &runnerprotocol.InstanceTerminal{
+						MessageId:                 s.messageID(sequence),
+						Sequence:                  sequence,
+						Fence:                     terminal.Fence,
+						Reason:                    terminal.Reason,
+						ObservedAtUnixMs:          uint64(terminal.ObservedAt.UTC().UnixMilli()),
+						TerminationEvidenceDigest: terminal.EvidenceDigest,
+						Correlation:               terminal.Correlation,
+					},
+				},
+			}
 		},
-	})
+	)
 }
 
 func validObservedTerminationReason(
@@ -1023,6 +1149,11 @@ func (s *RunnerProtocolService) sendAssignmentAck(
 	safeDetail string,
 ) error {
 	if decision != runnerprotocol.AssignmentDecision_ASSIGNMENT_DECISION_ACCEPTED {
+		slog.Warn(
+			"SecondBox runner assignment rejected",
+			"decision", decision.String(),
+			"safeDetail", safeDetail,
+		)
 		if err := s.emitEvidence(
 			context.Background(),
 			runnerevidence.EventAssignmentTerminal,
@@ -1035,18 +1166,22 @@ func (s *RunnerProtocolService) sendAssignmentAck(
 			return err
 		}
 	}
-	sequence := s.nextSequence()
-	return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-		Message: &runnerprotocol.RunnerToControlPlane_AssignmentAck{
-			AssignmentAck: &runnerprotocol.AssignmentAck{
-				MessageId:  s.messageID(sequence),
-				Sequence:   sequence,
-				Fence:      assignment.GetFence(),
-				Decision:   decision,
-				SafeDetail: safeDetail,
-			},
+	return s.sendSequencedRunnerFrame(
+		stream,
+		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
+			return &runnerprotocol.RunnerToControlPlane{
+				Message: &runnerprotocol.RunnerToControlPlane_AssignmentAck{
+					AssignmentAck: &runnerprotocol.AssignmentAck{
+						MessageId:  s.messageID(sequence),
+						Sequence:   sequence,
+						Fence:      assignment.GetFence(),
+						Decision:   decision,
+						SafeDetail: safeDetail,
+					},
+				},
+			}
 		},
-	})
+	)
 }
 
 func (s *RunnerProtocolService) handleFence(
@@ -1062,16 +1197,17 @@ func (s *RunnerProtocolService) handleFence(
 		return err
 	}
 	correlation := cloneRunnerCorrelation(command.Correlation)
+	// The fence revokes assignment authority, so every admitted direct Port
+	// socket for it must be closed before the fence result claims the instance
+	// is stopped.
+	s.directPorts.closeAssignment(command.Fence.GetAssignmentId(), "assignment fenced")
 	evidence, err := s.backend.FenceAssignment(ctx, command)
 	if err != nil {
 		evidence.Result = runnerprotocol.FenceResultKind_FENCE_RESULT_KIND_FAILED
 	} else if command != nil && command.Fence != nil {
 		s.removeActiveAssignment(command.Fence.AssignmentId)
 	}
-	sequence := s.nextSequence()
 	result := &runnerprotocol.FenceResult{
-		MessageId:                 s.messageID(sequence),
-		Sequence:                  sequence,
 		Fence:                     command.GetFence(),
 		Result:                    evidence.Result,
 		TerminationEvidenceDigest: evidence.TerminationEvidenceDigest,
@@ -1091,15 +1227,23 @@ func (s *RunnerProtocolService) handleFence(
 	); evidenceErr != nil {
 		return evidenceErr
 	}
-	return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-		Message: &runnerprotocol.RunnerToControlPlane_FenceResult{FenceResult: result},
-	})
+	return s.sendSequencedRunnerFrame(
+		stream,
+		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
+			result.MessageId = s.messageID(sequence)
+			result.Sequence = sequence
+			return &runnerprotocol.RunnerToControlPlane{
+				Message: &runnerprotocol.RunnerToControlPlane_FenceResult{FenceResult: result},
+			}
+		},
+	)
 }
 
 func (s *RunnerProtocolService) handleDrain(
 	stream RunnerProtocolStream,
 	command *runnerprotocol.DrainCommand,
 ) error {
+	s.directPorts.closeAll("runner draining")
 	remaining := s.activeAssignments()
 	phase := runnerprotocol.DrainPhase_DRAIN_PHASE_DRAINING
 	if len(remaining) == 0 {
@@ -1108,17 +1252,21 @@ func (s *RunnerProtocolService) handleDrain(
 	s.stateMu.Lock()
 	s.drain = phase
 	s.stateMu.Unlock()
-	sequence := s.nextSequence()
-	return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-		Message: &runnerprotocol.RunnerToControlPlane_DrainState{
-			DrainState: &runnerprotocol.DrainState{
-				MessageId:            s.messageID(sequence),
-				Sequence:             sequence,
-				Phase:                phase,
-				RemainingAssignments: remaining,
-			},
+	return s.sendSequencedRunnerFrame(
+		stream,
+		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
+			return &runnerprotocol.RunnerToControlPlane{
+				Message: &runnerprotocol.RunnerToControlPlane_DrainState{
+					DrainState: &runnerprotocol.DrainState{
+						MessageId:            s.messageID(sequence),
+						Sequence:             sequence,
+						Phase:                phase,
+						RemainingAssignments: remaining,
+					},
+				},
+			}
 		},
-	})
+	)
 }
 
 func (s *RunnerProtocolService) sendHeartbeat(
@@ -1126,22 +1274,43 @@ func (s *RunnerProtocolService) sendHeartbeat(
 	connectionID string,
 	readiness BackendReadiness,
 ) error {
-	sequence := s.nextSequence()
-	return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-		Message: &runnerprotocol.RunnerToControlPlane_Heartbeat{
-			Heartbeat: &runnerprotocol.RunnerHeartbeat{
-				MessageId:         s.messageID(sequence),
-				Sequence:          sequence,
-				RunnerId:          s.config.RunnerID,
-				ConnectionId:      connectionID,
-				ObservedAtUnixMs:  uint64(time.Now().UnixMilli()),
-				Allocatable:       readiness.Capacity,
-				Reserved:          readiness.Reserved,
-				ActiveAssignments: s.activeAssignments(),
-				DrainPhase:        s.drainPhase(),
-			},
+	return s.sendSequencedRunnerFrame(
+		stream,
+		func(sequence uint64) *runnerprotocol.RunnerToControlPlane {
+			return &runnerprotocol.RunnerToControlPlane{
+				Message: &runnerprotocol.RunnerToControlPlane_Heartbeat{
+					Heartbeat: &runnerprotocol.RunnerHeartbeat{
+						MessageId:         s.messageID(sequence),
+						Sequence:          sequence,
+						RunnerId:          s.config.RunnerID,
+						ConnectionId:      connectionID,
+						ObservedAtUnixMs:  uint64(time.Now().UnixMilli()),
+						Allocatable:       readiness.Capacity,
+						Reserved:          readiness.Reserved,
+						ActiveAssignments: s.activeAssignments(),
+						DrainPhase:        s.drainPhase(),
+						StartupTiming:     s.startupTiming(),
+
+						DataPlaneAdvertisedAddress: s.config.DataPlaneAdvertisedAddress,
+					},
+				},
+			}
 		},
-	})
+	)
+}
+
+func (s *RunnerProtocolService) startupTiming() *runnerprotocol.StartupTiming {
+	backend, ok := s.backend.(startupTimingBackend)
+	if !ok {
+		return &runnerprotocol.StartupTiming{}
+	}
+	count, p95 := backend.StartupTiming()
+	if p95 < 0 {
+		p95 = 0
+	}
+	return &runnerprotocol.StartupTiming{
+		SampleCount: count, P95Milliseconds: uint64(p95.Milliseconds()),
+	}
 }
 
 func (s *RunnerProtocolService) recordActiveAssignment(
@@ -1329,12 +1498,18 @@ func terminalOutcome(terminal string) string {
 	return "failed"
 }
 
-func (s *RunnerProtocolService) nextSequence() uint64 {
-	return s.sequence.Add(1)
-}
-
 func (s *RunnerProtocolService) messageID(sequence uint64) string {
 	return fmt.Sprintf("%s-%d", s.config.RunnerID, sequence)
+}
+
+func (s *RunnerProtocolService) sendSequencedRunnerFrame(
+	stream RunnerProtocolStream,
+	build func(uint64) *runnerprotocol.RunnerToControlPlane,
+) error {
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
+	s.sequence++
+	return stream.Send(build(s.sequence))
 }
 
 func (s *RunnerProtocolService) sendRunnerFrame(
@@ -1427,4 +1602,18 @@ func validateResolvedNetworkPolicy(policy *runnerprotocol.NetworkPolicy) error {
 		return fmt.Errorf("SecondBox runner assignment selects an unknown network policy mode")
 	}
 	return nil
+}
+
+// concurrentAssignmentLimit separates the transient start-work cap from
+// resident instance capacity while never exceeding what the runner advertised.
+//
+// A runner that advertises no instance capacity keeps the previous behaviour of
+// starting one assignment at a time rather than assuming a bound it has not
+// established.
+func concurrentAssignmentLimit(configured int, readiness BackendReadiness) int {
+	residentCapacity := int(readiness.Capacity.GetInstances())
+	if residentCapacity < 1 {
+		return 1
+	}
+	return min(configured, residentCapacity)
 }

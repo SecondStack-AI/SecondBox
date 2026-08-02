@@ -86,7 +86,8 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 	server := httptest.NewUnstartedServer(nil)
 	publicBaseURL := "http://" + server.Listener.Addr().String()
 	dataPlaneService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		Store: databaseStore, PlatformToken: testPlatformToken,
+		BuiltInProfiles: integrationBuiltInProfiles(t),
+		Store:           databaseStore, PlatformToken: testPlatformToken,
 		DefaultSubjectQuota: generousQuota(),
 		Now:                 func() time.Time { return time.Now().UTC() }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
@@ -119,6 +120,12 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 	if session.Subprotocol != "secondbox.terminal.v1" || session.State != "open" ||
 		session.NextClientSequence != 0 {
 		t.Fatalf("created Terminal = %#v", session)
+	}
+	// The pinned ProfileRevision window is published so a client grants what it
+	// can spend instead of guessing a bound that fails the session.
+	if session.StreamWindowBytes != 65536 {
+		t.Fatalf("created Terminal stream window = %d, want the pinned Profile window 65536",
+			session.StreamWindowBytes)
 	}
 	replayed := createTerminalSessionResponse(
 		t, server.URL, key.Credential, sandbox, lease.ID,

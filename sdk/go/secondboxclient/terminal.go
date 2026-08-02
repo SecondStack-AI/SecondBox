@@ -100,6 +100,8 @@ func (handle *SandboxHandle) ConnectTerminal(
 	}
 	headers := make(http.Header)
 	headers.Set("Authorization", "Bearer "+handle.client.token)
+	headers.Set("X-SecondBox-Tenant-Ref", handle.client.tenantRef)
+	headers.Set("X-SecondBox-Subject-Ref", handle.client.subjectRef)
 	headers.Set("SecondBox-Generation", strconv.FormatInt(session.Generation, 10))
 	selectedCopy := *selected
 	selectedCopy.Subprotocols = []string{terminalSubprotocol}

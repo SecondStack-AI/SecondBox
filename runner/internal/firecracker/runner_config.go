@@ -64,11 +64,45 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		}
 		return prefixes, nil
 	}
-
-	dataDir, err := required("SECONDBOX_RUNNER_STATE_DIR")
-	if err != nil {
-		return nil, err
+	requiredRunnerGateways := func(name string) (map[string]netip.Addr, error) {
+		raw, err := required(name)
+		if err != nil {
+			return nil, err
+		}
+		gateways := make(map[string]netip.Addr)
+		if raw == "none" {
+			return gateways, nil
+		}
+		for _, part := range strings.Split(raw, ",") {
+			domain, addressRaw, found := strings.Cut(strings.TrimSpace(part), "=")
+			domain = strings.TrimSpace(domain)
+			if !found || domain == "" || strings.TrimSpace(addressRaw) == "" {
+				return nil, fmt.Errorf(
+					"SecondBox Firecracker config %s entry %q must be domain=IP",
+					name,
+					part,
+				)
+			}
+			address, parseErr := netip.ParseAddr(strings.TrimSpace(addressRaw))
+			if parseErr != nil {
+				return nil, fmt.Errorf(
+					"SecondBox Firecracker config %s entry %q has an invalid IP",
+					name,
+					part,
+				)
+			}
+			if _, duplicate := gateways[domain]; duplicate {
+				return nil, fmt.Errorf(
+					"SecondBox Firecracker config %s repeats domain %q",
+					name,
+					domain,
+				)
+			}
+			gateways[domain] = address
+		}
+		return gateways, nil
 	}
+
 	firecrackerPath, err := required("SECONDBOX_RUNNER_FIRECRACKER_PATH")
 	if err != nil {
 		return nil, err
@@ -117,11 +151,7 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	workspaceDir, err := required("SECONDBOX_RUNNER_SANDBOX_WORKSPACE_DIR")
-	if err != nil {
-		return nil, err
-	}
-	checkpointRestoreSpoolDir, err := required("SECONDBOX_RUNNER_CHECKPOINT_RESTORE_SPOOL_DIR")
+	runnerWorkspaceRoot, err := required("SECONDBOX_RUNNER_WORKSPACE_ROOT")
 	if err != nil {
 		return nil, err
 	}
@@ -175,10 +205,6 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	workspaceBackend, err := required("SECONDBOX_RUNNER_SANDBOX_STORAGE_BACKEND")
-	if err != nil {
-		return nil, err
-	}
 	storagePressureRecoveryPercent, err := requiredInt("SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT")
 	if err != nil {
 		return nil, err
@@ -197,17 +223,6 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		AdmissionDenyPercent: storagePressureAdmissionDenyPercent,
 	}).Validate(); err != nil {
 		return nil, fmt.Errorf("SecondBox Firecracker config: %w", err)
-	}
-	thinPoolDevice := ""
-	switch workspaceBackend {
-	case "ext4":
-	case "dm-thin":
-		thinPoolDevice, err = required("SECONDBOX_RUNNER_SANDBOX_THIN_POOL_DEVICE")
-		if err != nil {
-			return nil, err
-		}
-	default:
-		return nil, fmt.Errorf("SecondBox Firecracker config requires SECONDBOX_RUNNER_SANDBOX_STORAGE_BACKEND to be ext4 or dm-thin")
 	}
 	guestIP, err := required("SECONDBOX_RUNNER_SANDBOX_GUEST_IP")
 	if err != nil {
@@ -230,6 +245,12 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		return nil, err
 	}
 	maxGlobal, err := requiredInt("SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL")
+	if err != nil {
+		return nil, err
+	}
+	maxOperationsGlobal, err := requiredInt(
+		"SECONDBOX_RUNNER_MAX_CONCURRENT_OPERATIONS_GLOBAL",
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -273,6 +294,10 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	networkPolicyRunnerGateways, err := requiredRunnerGateways("SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS")
+	if err != nil {
+		return nil, err
+	}
 	networkPolicyDNSUpstreamRaw, err := required("SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM")
 	if err != nil {
 		return nil, err
@@ -283,7 +308,6 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 	}
 
 	return &config.Config{
-		DataDir:                                    dataDir,
 		FirecrackerPath:                            firecrackerPath,
 		JailerPath:                                 jailerPath,
 		MicroVMJailerChrootBaseDir:                 jailRoot,
@@ -298,8 +322,7 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		MicroVMToolSharedImagePath:                 sharedImagePath,
 		MicroVMPublicKeyPath:                       publicKeyPath,
 		MicroVMPublicKeySHA256:                     publicKeySHA256,
-		MicroVMWorkspaceDir:                        workspaceDir,
-		MicroVMCheckpointRestoreSpoolDir:           checkpointRestoreSpoolDir,
+		RunnerWorkspaceRoot:                        runnerWorkspaceRoot,
 		MicroVMRunDir:                              runDir,
 		MicroVMLogDir:                              logDir,
 		MicroVMKernelArgs:                          kernelArgs,
@@ -310,8 +333,6 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		MicroVMVCPUs:                               vcpus,
 		MicroVMCPUTemplate:                         cpuTemplate,
 		MicroVMWorkspaceSizeMiB:                    workspaceSizeMiB,
-		MicroVMWorkspaceBackend:                    workspaceBackend,
-		MicroVMThinPoolDevice:                      thinPoolDevice,
 		MicroVMStoragePressureRecoveryPercent:      storagePressureRecoveryPercent,
 		MicroVMStoragePressureWarningPercent:       storagePressureWarningPercent,
 		MicroVMStoragePressureAdmissionDenyPercent: storagePressureAdmissionDenyPercent,
@@ -322,6 +343,7 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		MicroVMTapPrefix:                           tapPrefix,
 		MicroVMMaxConcurrentPerSandbox:             maxPerSandbox,
 		MicroVMMaxConcurrentGlobal:                 maxGlobal,
+		MicroVMMaxConcurrentOperationsGlobal:       maxOperationsGlobal,
 		MicroVMMemoryBudgetMiB:                     memoryBudgetMiB,
 		MicroVMToolVMReuseEnabled:                  false,
 		MicroVMToolVMIdleTTL:                       time.Duration(0),
@@ -331,6 +353,7 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		NetworkPolicyMaximumDNSTTL:                 networkPolicyMaximumDNSTTL,
 		NetworkPolicyRunnerAddresses:               networkPolicyRunnerAddresses,
 		NetworkPolicyManagementCIDRs:               networkPolicyManagementCIDRs,
+		NetworkPolicyRunnerGateways:                networkPolicyRunnerGateways,
 		NetworkPolicyDNSUpstream:                   networkPolicyDNSUpstream,
 	}, nil
 }

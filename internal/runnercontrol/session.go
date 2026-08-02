@@ -30,10 +30,12 @@ const (
 	EventFence            EventKind = "fence"
 	EventDrain            EventKind = "drain"
 	EventEvidence         EventKind = "evidence"
-	EventCheckpoint       EventKind = "checkpoint"
+	EventLocalWorkspace   EventKind = "local_workspace"
 	EventExec             EventKind = "exec"
+	EventPty              EventKind = "pty"
 	EventFile             EventKind = "file"
 	EventPort             EventKind = "port"
+	EventPortDirect       EventKind = "port_direct"
 	EventInstanceTerminal EventKind = "instance_terminal"
 	EventDuplicate        EventKind = "duplicate"
 	EventRejection        EventKind = "rejection"
@@ -123,7 +125,8 @@ func (session *Session) Accept(message *runnerv1.RunnerToControlPlane) (Event, e
 	if message.GetHello() != nil {
 		return Event{}, fmt.Errorf("%w: Hello may appear only once", ErrRunnerMessage)
 	}
-	if message.GetExec() != nil || message.GetFile() != nil || message.GetPort() != nil {
+	if message.GetExec() != nil || message.GetPty() != nil ||
+		message.GetFile() != nil || message.GetPort() != nil {
 		if !session.registered {
 			return Event{}, ErrRegistrationRequired
 		}
@@ -166,6 +169,7 @@ func (session *Session) Accept(message *runnerv1.RunnerToControlPlane) (Event, e
 			heartbeat.ConnectionId != session.config.ConnectionID ||
 			heartbeat.Allocatable == nil ||
 			heartbeat.Reserved == nil ||
+			heartbeat.StartupTiming == nil ||
 			heartbeat.DrainPhase == runnerv1.DrainPhase_DRAIN_PHASE_UNSPECIFIED {
 			return Event{}, fmt.Errorf("%w: Heartbeat identity, capacity, or drain evidence is incomplete", ErrRunnerMessage)
 		}
@@ -226,6 +230,21 @@ func (session *Session) acceptRunnerRelayFrame(
 		key = relayStreamKey("file", frame.Fence, frame.OperationId, frame.StreamId)
 		sequence = frame.Sequence
 		payload = frame
+	case message.GetPty() != nil:
+		frame := message.GetPty()
+		if !session.enabledFeatures[runnerv1.RunnerFeature_RUNNER_FEATURE_PTY] {
+			return Event{}, fmt.Errorf("%w: PTY feature was not negotiated", ErrRunnerMessage)
+		}
+		if frame.GetOutput() == nil && frame.GetTerminal() == nil {
+			return Event{}, fmt.Errorf("%w: runner PTY payload is not an output or terminal frame", ErrRunnerMessage)
+		}
+		if err := validateRelayIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
+			return Event{}, err
+		}
+		kind = EventPty
+		key = relayStreamKey("pty", frame.Fence, frame.OperationId, frame.StreamId)
+		sequence = frame.Sequence
+		payload = frame
 	case message.GetPort() != nil:
 		frame := message.GetPort()
 		if !session.enabledFeatures[runnerv1.RunnerFeature_RUNNER_FEATURE_PORT_PROXY] {
@@ -279,8 +298,9 @@ func (session *Session) ValidateOutboundRelayFrame(message *runnerv1.ControlPlan
 		if !session.enabledFeatures[runnerv1.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING] {
 			return fmt.Errorf("%w: Exec streaming feature was not negotiated", ErrRunnerMessage)
 		}
-		if frame.GetOpen() == nil && frame.GetCredit() == nil && frame.GetCancel() == nil {
-			return fmt.Errorf("%w: control-plane Exec payload is not an open, credit, or cancel frame", ErrRunnerMessage)
+		if frame.GetOpen() == nil && frame.GetInput() == nil &&
+			frame.GetCredit() == nil && frame.GetCancel() == nil {
+			return fmt.Errorf("%w: control-plane Exec payload is not open, input, credit, or cancel", ErrRunnerMessage)
 		}
 		if err := validateRelayIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
 			return err
@@ -302,14 +322,33 @@ func (session *Session) ValidateOutboundRelayFrame(message *runnerv1.ControlPlan
 		key = relayStreamKey("file", frame.Fence, frame.OperationId, frame.StreamId)
 		sequence = frame.Sequence
 		payload = frame
+	case message.GetPty() != nil:
+		frame := message.GetPty()
+		if !session.enabledFeatures[runnerv1.RunnerFeature_RUNNER_FEATURE_PTY] {
+			return fmt.Errorf("%w: PTY feature was not negotiated", ErrRunnerMessage)
+		}
+		if frame.GetInput() == nil && frame.GetResize() == nil &&
+			frame.GetAttach() == nil && frame.GetDetach() == nil &&
+			frame.GetCredit() == nil {
+			return fmt.Errorf("%w: control-plane PTY payload is not input, resize, attach, detach, or credit", ErrRunnerMessage)
+		}
+		if err := validateRelayIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
+			return err
+		}
+		// A Terminal begins with an ExecOpen and continues with PTY frames; both
+		// use one operation sequence and therefore one connection-local key.
+		key = relayStreamKey("exec", frame.Fence, frame.OperationId, frame.StreamId)
+		sequence = frame.Sequence
+		payload = frame
 	case message.GetPort() != nil:
 		frame := message.GetPort()
 		if !session.enabledFeatures[runnerv1.RunnerFeature_RUNNER_FEATURE_PORT_PROXY] {
 			return fmt.Errorf("%w: Port proxy feature was not negotiated", ErrRunnerMessage)
 		}
-		if frame.GetOpen() == nil && frame.GetBytes() == nil &&
+		if frame.GetOpen() == nil && frame.GetDirectOpen() == nil &&
+			frame.GetBytes() == nil &&
 			frame.GetCredit() == nil && frame.GetCancel() == nil {
-			return fmt.Errorf("%w: control-plane Port payload is not open, bytes, credit, or cancel", ErrRunnerMessage)
+			return fmt.Errorf("%w: control-plane Port payload is not open, direct open, bytes, credit, or cancel", ErrRunnerMessage)
 		}
 		if err := validateRelayIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
 			return err
@@ -412,8 +451,16 @@ func (session *Session) acceptHello(hello *runnerv1.RunnerHello) (Event, error) 
 		), nil
 	}
 	enabled := featureSet(session.config.EnabledFeatures)
-	for _, mandatory := range hello.MandatoryFeatures {
-		if !enabled[mandatory] {
+	mandatory := featureSet(hello.MandatoryFeatures)
+	if enabled[runnerv1.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE] &&
+		!mandatory[runnerv1.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE] {
+		return session.rejection(
+			runnerv1.ProtocolRejectionKind_PROTOCOL_REJECTION_KIND_FEATURE_UNSUPPORTED,
+			"runner does not implement the mandatory local-workspace protocol",
+		), nil
+	}
+	for _, feature := range hello.MandatoryFeatures {
+		if !enabled[feature] {
 			return session.rejection(
 				runnerv1.ProtocolRejectionKind_PROTOCOL_REJECTION_KIND_FEATURE_UNSUPPORTED,
 				"runner mandatory feature is unsupported",
@@ -444,7 +491,8 @@ func (session *Session) validateRegistration(registration *runnerv1.RunnerRegist
 		registration.ProtocolVersion != session.selectedVersion ||
 		registration.Capabilities == nil ||
 		registration.Allocatable == nil ||
-		registration.Reserved == nil {
+		registration.Reserved == nil ||
+		registration.StartupTiming == nil {
 		return fmt.Errorf("%w: Registration identity, version, or capacity evidence is incomplete", ErrRunnerMessage)
 	}
 	if len(registration.ReadinessFailures) != 0 ||
@@ -454,6 +502,8 @@ func (session *Session) validateRegistration(registration *runnerv1.RunnerRegist
 		!registration.Capabilities.NetworkPolicyReady ||
 		!registration.Capabilities.StorageReady ||
 		!registration.Capabilities.CleanupReady ||
+		!registration.Capabilities.DataPlaneReady ||
+		strings.TrimSpace(registration.DataPlaneAdvertisedAddress) == "" ||
 		registration.Capabilities.GuestProtocolGenerations == nil ||
 		registration.Capabilities.GuestProtocolGenerations.Minimum == 0 ||
 		registration.Capabilities.GuestProtocolGenerations.Minimum >
@@ -500,12 +550,12 @@ func runnerEnvelope(message *runnerv1.RunnerToControlPlane) (string, uint64, err
 		return validateEnvelope(message.GetDrainState().MessageId, message.GetDrainState().Sequence)
 	case message.GetEvidence() != nil:
 		return validateEnvelope(message.GetEvidence().MessageId, message.GetEvidence().Sequence)
-	case message.GetCheckpointChunk() != nil:
-		return validateEnvelope(message.GetCheckpointChunk().MessageId, message.GetCheckpointChunk().Sequence)
-	case message.GetCheckpointResult() != nil:
-		return validateEnvelope(message.GetCheckpointResult().MessageId, message.GetCheckpointResult().Sequence)
+	case message.GetLocalWorkspaceResult() != nil:
+		return validateEnvelope(message.GetLocalWorkspaceResult().MessageId, message.GetLocalWorkspaceResult().Sequence)
 	case message.GetInstanceTerminal() != nil:
 		return validateEnvelope(message.GetInstanceTerminal().MessageId, message.GetInstanceTerminal().Sequence)
+	case message.GetPortDirectConsume() != nil:
+		return validateEnvelope(message.GetPortDirectConsume().MessageId, message.GetPortDirectConsume().Sequence)
 	default:
 		return "", 0, fmt.Errorf("%w: stream frame has no durable message envelope", ErrRunnerMessage)
 	}
@@ -530,10 +580,12 @@ func classifyRunnerMessage(message *runnerv1.RunnerToControlPlane) EventKind {
 		return EventDrain
 	case message.GetEvidence() != nil:
 		return EventEvidence
-	case message.GetCheckpointChunk() != nil, message.GetCheckpointResult() != nil:
-		return EventCheckpoint
+	case message.GetLocalWorkspaceResult() != nil:
+		return EventLocalWorkspace
 	case message.GetInstanceTerminal() != nil:
 		return EventInstanceTerminal
+	case message.GetPortDirectConsume() != nil:
+		return EventPortDirect
 	default:
 		return ""
 	}

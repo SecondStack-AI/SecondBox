@@ -2,6 +2,7 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -13,13 +14,16 @@ import (
 	"io"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/SecondStack-AI/SecondBox/internal/observability"
 	"github.com/SecondStack-AI/SecondBox/internal/pagination"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
@@ -37,6 +41,7 @@ type HandlerConfig struct {
 	Service                   *service.ControlPlaneService
 	Logger                    *slog.Logger
 	PlatformToken             string
+	ApplicationAuthorities    []ApplicationAuthority
 	MaximumDataPlaneBodyBytes int64
 }
 
@@ -44,7 +49,9 @@ type handler struct {
 	service                   *service.ControlPlaneService
 	logger                    *slog.Logger
 	platformTokenHash         [sha256.Size]byte
+	applicationAuthorities    []resolvedApplicationAuthority
 	maximumDataPlaneBodyBytes int64
+	timings                   *observability.TimingRecorder
 }
 
 // NewHandler constructs the public and administrative SecondBox HTTP surface.
@@ -61,10 +68,20 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	if config.MaximumDataPlaneBodyBytes <= 0 {
 		return nil, errors.New("SecondBox HTTP data-plane body bound is required")
 	}
+	platformTokenHash := sha256.Sum256([]byte(config.PlatformToken))
+	applicationAuthorities, err := resolveApplicationAuthorities(
+		config.ApplicationAuthorities,
+		platformTokenHash,
+	)
+	if err != nil {
+		return nil, err
+	}
 	apiHandler := &handler{
 		service: config.Service, logger: config.Logger,
-		platformTokenHash:         sha256.Sum256([]byte(config.PlatformToken)),
+		platformTokenHash:         platformTokenHash,
+		applicationAuthorities:    applicationAuthorities,
 		maximumDataPlaneBodyBytes: config.MaximumDataPlaneBodyBytes,
+		timings:                   observability.NewTimingRecorder(),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", apiHandler.health)
@@ -80,9 +97,12 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	mux.Handle("PATCH /v1/runner-pools/{runnerPoolName}", apiHandler.authenticate(http.HandlerFunc(apiHandler.updateRunnerPool)))
 	mux.Handle("GET /v1/runners", apiHandler.authenticate(http.HandlerFunc(apiHandler.listRunners)))
 	mux.Handle("GET /v1/runners/{runnerID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getRunner)))
+	mux.Handle("GET /v1/timings", apiHandler.authenticate(http.HandlerFunc(apiHandler.getDeploymentTiming)))
 	mux.Handle("GET /v1/sandboxes", apiHandler.authenticate(http.HandlerFunc(apiHandler.listSandboxes)))
 	mux.Handle("POST /v1/sandboxes", apiHandler.authenticate(http.HandlerFunc(apiHandler.createSandbox)))
 	mux.Handle("GET /v1/sandboxes/{sandboxID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getSandbox)))
+	mux.Handle("PUT /v1/sandboxes/{sandboxID}/metadata", apiHandler.authenticate(http.HandlerFunc(apiHandler.updateSandboxMetadata)))
+	mux.Handle("GET /v1/sandboxes/{sandboxID}/timings", apiHandler.authenticate(http.HandlerFunc(apiHandler.getSandboxTiming)))
 	mux.Handle("DELETE /v1/sandboxes/{sandboxID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.deleteSandbox)))
 	mux.Handle("POST /v1/sandboxes/{sandboxAction}", apiHandler.authenticate(http.HandlerFunc(apiHandler.mutateSandbox)))
 	mux.Handle("POST /v1/sandboxes/{sandboxID}/leases", apiHandler.authenticate(http.HandlerFunc(apiHandler.acquireLease)))
@@ -117,6 +137,7 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	mux.Handle("DELETE /v1/leases/{leaseID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.releaseLease)))
 	mux.Handle("POST /v1/leases/{leaseAction}", apiHandler.authenticate(http.HandlerFunc(apiHandler.renewLease)))
 	mux.Handle("GET /v1/operations/{operationID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getOperation)))
+	mux.Handle("GET /v1/operations/{operationID}/timings", apiHandler.authenticate(http.HandlerFunc(apiHandler.getOperationTiming)))
 	return apiHandler.withRequestID(mux), nil
 }
 
@@ -166,6 +187,7 @@ func (apiHandler *handler) readSandboxFile(writer http.ResponseWriter, request *
 		return
 	}
 	writer.Header().Set("Content-Type", "application/octet-stream")
+	writer.Header().Set("Content-Length", strconv.Itoa(len(content)))
 	writer.Header().Set("Digest", digest)
 	writer.WriteHeader(http.StatusOK)
 	apiHandler.writeResponseBytes(writer, request, "binary File download", content)
@@ -587,6 +609,18 @@ func (apiHandler *handler) metrics(writer http.ResponseWriter, request *http.Req
 			return
 		}
 	}
+	if err := writeHTTPDurationMetrics(writer, apiHandler.timings.HTTPSnapshot()); err != nil {
+		apiHandler.logResponseAbort(request, "HTTP duration metrics response", err)
+		return
+	}
+	if err := writeOperationDurationMetrics(writer, snapshot.OperationDurations); err != nil {
+		apiHandler.logResponseAbort(request, "Operation duration metrics response", err)
+		return
+	}
+	if err := writeDatabaseTimingMetrics(writer, snapshot); err != nil {
+		apiHandler.logResponseAbort(request, "database timing metrics response", err)
+		return
+	}
 }
 
 func (apiHandler *handler) createProfile(writer http.ResponseWriter, request *http.Request) {
@@ -690,6 +724,10 @@ func (apiHandler *handler) createSandbox(writer http.ResponseWriter, request *ht
 		apiHandler.writeError(writer, request, err)
 		return
 	}
+	if err := authorizeApplicationProfile(request, body.Profile); err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
 	operation, replayed, err := apiHandler.service.CreateSandboxOperation(
 		request.Context(), requestPrincipal(request), request.Header.Get("Idempotency-Key"), body,
 	)
@@ -707,8 +745,14 @@ func (apiHandler *handler) listSandboxes(writer http.ResponseWriter, request *ht
 		apiHandler.writeError(writer, request, err)
 		return
 	}
+	metadata, err := queryMetadataFilter(request)
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
 	page, err := apiHandler.service.ListSandboxes(
-		request.Context(), requestPrincipal(request), limit, request.URL.Query().Get("cursor"),
+		request.Context(), requestPrincipal(request), limit,
+		request.URL.Query().Get("cursor"), metadata,
 	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
@@ -740,13 +784,27 @@ func (apiHandler *handler) mutateSandbox(writer http.ResponseWriter, request *ht
 			return
 		}
 		apiHandler.mutateSandboxLifecycle(writer, request, sandboxID, action, nil)
-	case "checkpoint":
-		var body contracts.CheckpointSandboxRequest
+	case "restore":
+		var body contracts.RestoreSnapshotRequest
 		if err := decodeStrictJSON(request, &body); err != nil {
 			apiHandler.writeError(writer, request, err)
 			return
 		}
-		apiHandler.mutateSandboxLifecycle(writer, request, sandboxID, action, body.Metadata)
+		expectedRevision, err := parseIfMatch(request)
+		if err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		operation, replayed, err := apiHandler.service.RestoreSandboxSnapshot(
+			request.Context(), requestPrincipal(request), sandboxID,
+			request.Header.Get("Idempotency-Key"), expectedRevision, body,
+		)
+		if err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
+		apiHandler.writeJSON(writer, request, http.StatusAccepted, operation)
 	case "wait":
 		var body contracts.WaitSandboxRequest
 		if err := decodeStrictJSON(request, &body); err != nil {
@@ -946,47 +1004,152 @@ func (apiHandler *handler) authenticate(next http.Handler) http.Handler {
 			return
 		}
 		presentedHash := sha256.Sum256([]byte(credential))
-		if subtle.ConstantTimeCompare(presentedHash[:], apiHandler.platformTokenHash[:]) != 1 {
+		if subtle.ConstantTimeCompare(presentedHash[:], apiHandler.platformTokenHash[:]) == 1 {
+			tenantRef := request.Header.Get("X-SecondBox-Tenant-Ref")
+			subjectRef := request.Header.Get("X-SecondBox-Subject-Ref")
+			if !ownershipRefPattern.MatchString(tenantRef) ||
+				!ownershipRefPattern.MatchString(subjectRef) {
+				apiHandler.writeError(
+					writer,
+					request,
+					errors.New("SecondBox tenant and subject references must contain 1 to 128 visible ASCII characters"),
+				)
+				return
+			}
+			principal := contracts.Principal{
+				Kind: "platform", ID: subjectRef,
+				TenantRef: tenantRef, SubjectRef: subjectRef,
+			}
+			next.ServeHTTP(writer, request.WithContext(context.WithValue(request.Context(), principalContextKey{}, principal)))
+			return
+		}
+		authority, ok := authenticateApplicationAuthority(
+			apiHandler.applicationAuthorities,
+			presentedHash,
+		)
+		if !ok {
 			apiHandler.writeError(writer, request, ports.ErrAuthenticationFailed)
 			return
 		}
-		tenantRef := request.Header.Get("X-SecondBox-Tenant-Ref")
-		subjectRef := request.Header.Get("X-SecondBox-Subject-Ref")
-		if !ownershipRefPattern.MatchString(tenantRef) ||
-			!ownershipRefPattern.MatchString(subjectRef) {
-			apiHandler.writeError(
-				writer,
-				request,
-				errors.New("SecondBox tenant and subject references must contain 1 to 128 visible ASCII characters"),
-			)
+		if err := authorizeApplicationRequest(authority, request); err != nil {
+			apiHandler.writeError(writer, request, err)
 			return
 		}
-		principal := contracts.Principal{
-			Kind: "platform", ID: subjectRef,
-			TenantRef: tenantRef, SubjectRef: subjectRef,
-		}
-		next.ServeHTTP(writer, request.WithContext(context.WithValue(request.Context(), principalContextKey{}, principal)))
+		requestContext := context.WithValue(
+			request.Context(),
+			applicationAuthorityContextKey{},
+			authority,
+		)
+		requestContext = context.WithValue(
+			requestContext,
+			principalContextKey{},
+			applicationPrincipal(authority),
+		)
+		next.ServeHTTP(writer, request.WithContext(requestContext))
 	})
 }
 
 func (apiHandler *handler) withRequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		startedAt := time.Now()
 		requestID := request.Header.Get("X-Request-ID")
 		if !correlationIDPattern.MatchString(requestID) {
 			requestID = service.NewOpaqueID("req")
 		}
-		writer.Header().Set("X-Request-ID", requestID)
+		statusWriter := &statusResponseWriter{ResponseWriter: writer}
+		statusWriter.Header().Set("X-Request-ID", requestID)
 		request.Header.Set("X-Request-ID", requestID)
 		request = request.WithContext(service.ContextWithRequestID(request.Context(), requestID))
-		next.ServeHTTP(writer, request)
+		next.ServeHTTP(statusWriter, request)
+		status := statusWriter.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		completedAt := time.Now()
+		duration := completedAt.Sub(startedAt)
+		apiHandler.timings.ObserveHTTPAt(
+			request.Pattern, httpStatusClass(status), duration, completedAt,
+		)
 		apiHandler.logger.InfoContext(
 			request.Context(),
 			"SecondBox HTTP request completed",
 			"request_id", requestID,
 			"method", request.Method,
 			"route", request.Pattern,
+			"status", status,
+			"duration_ms", duration.Milliseconds(),
 		)
 	})
+}
+
+type statusResponseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (writer *statusResponseWriter) WriteHeader(status int) {
+	if writer.status != 0 {
+		return
+	}
+	writer.status = status
+	writer.ResponseWriter.WriteHeader(status)
+}
+
+func (writer *statusResponseWriter) Write(content []byte) (int, error) {
+	if writer.status == 0 {
+		writer.status = http.StatusOK
+	}
+	return writer.ResponseWriter.Write(content)
+}
+
+func (writer *statusResponseWriter) Flush() {
+	if writer.status == 0 {
+		writer.status = http.StatusOK
+	}
+	if flusher, ok := writer.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (writer *statusResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := writer.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("SecondBox HTTP response does not support connection hijacking")
+	}
+	connection, buffer, err := hijacker.Hijack()
+	if err == nil && writer.status == 0 {
+		writer.status = http.StatusSwitchingProtocols
+	}
+	return connection, buffer, err
+}
+
+func (writer *statusResponseWriter) Push(target string, options *http.PushOptions) error {
+	pusher, ok := writer.ResponseWriter.(http.Pusher)
+	if !ok {
+		return http.ErrNotSupported
+	}
+	return pusher.Push(target, options)
+}
+
+func (writer *statusResponseWriter) Unwrap() http.ResponseWriter {
+	return writer.ResponseWriter
+}
+
+func httpStatusClass(status int) string {
+	switch status / 100 {
+	case 1:
+		return "1xx"
+	case 2:
+		return "2xx"
+	case 3:
+		return "3xx"
+	case 4:
+		return "4xx"
+	case 5:
+		return "5xx"
+	default:
+		return "other"
+	}
 }
 
 func (apiHandler *handler) writeError(writer http.ResponseWriter, request *http.Request, err error) {
@@ -1001,10 +1164,16 @@ func (apiHandler *handler) writeError(writer http.ResponseWriter, request *http.
 		)
 	}
 	writer.Header().Set("Content-Type", "application/problem+json")
-	apiHandler.writeJSON(writer, request, status, contracts.Problem{
+	problem := contracts.Problem{
 		Type: "https://secondbox.dev/problems/" + code, Title: title, Status: status,
 		Code: code, RequestID: writer.Header().Get("X-Request-ID"), Retryable: retryable,
-	})
+	}
+	if errors.Is(err, ports.ErrHomeRunnerUnavailable) {
+		retryAfterMilliseconds := int64(time.Second / time.Millisecond)
+		problem.RetryAfterMilliseconds = &retryAfterMilliseconds
+		writer.Header().Set("Retry-After", "1")
+	}
+	apiHandler.writeJSON(writer, request, status, problem)
 }
 
 func classifyError(err error) (int, string, string, bool) {
@@ -1024,7 +1193,7 @@ func classifyError(err error) (int, string, string, bool) {
 	case errors.Is(err, ports.ErrProfileNotFound),
 		errors.Is(err, ports.ErrRunnerPoolNotFound), errors.Is(err, ports.ErrRunnerNotFound),
 		errors.Is(err, ports.ErrSandboxNotFound), errors.Is(err, ports.ErrLeaseNotFound),
-		errors.Is(err, ports.ErrArtifactNotFound), errors.Is(err, ports.ErrCheckpointNotFound),
+		errors.Is(err, ports.ErrArtifactNotFound),
 		errors.Is(err, ports.ErrSnapshotNotFound), errors.Is(err, ports.ErrPortSessionNotFound),
 		errors.Is(err, runnercontrol.ErrDataPlaneNotFound):
 		return http.StatusNotFound, "not_found", "Resource not found", false
@@ -1032,10 +1201,16 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusConflict, "profile_unavailable", "Profile is unavailable", false
 	case errors.Is(err, ports.ErrSnapshotUnavailable):
 		return http.StatusConflict, "state_conflict", "Snapshot requires stopped committed disk state", false
+	case errors.Is(err, ports.ErrWorkspaceMutation):
+		return http.StatusConflict, "workspace_mutation_conflict", "Workspace has a conflicting mutation", false
+	case errors.Is(err, ports.ErrHomeRunnerUnavailable):
+		return http.StatusServiceUnavailable, "home_runner_unavailable", "Sandbox home runner is unavailable", true
 	case errors.Is(err, ports.ErrRunnerPoolUnavailable):
 		return http.StatusConflict, "execution_node_unavailable", "Compatible execution node unavailable", true
 	case errors.Is(err, ports.ErrRunnerPoolExists):
 		return http.StatusConflict, "state_conflict", "RunnerPool already exists", false
+	case errors.Is(err, ports.ErrSandboxNameConflict):
+		return http.StatusConflict, "state_conflict", "Sandbox name is already in use", false
 	case errors.Is(err, ports.ErrIdempotencyConflict):
 		return http.StatusConflict, "idempotency_conflict", "Idempotency key payload conflict", false
 	case errors.Is(err, ports.ErrArtifactIntegrity):
@@ -1058,6 +1233,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusPreconditionFailed, "precondition_failed", "Resource revision changed", false
 	case errors.Is(err, ports.ErrGenerationFenced):
 		return http.StatusConflict, "generation_fenced", "Sandbox generation is fenced", false
+	case errors.Is(err, ports.ErrLeaseAlreadyActive):
+		return http.StatusConflict, "state_conflict", "Sandbox already has an active Lease", false
 	case errors.Is(err, ports.ErrLeaseInactive):
 		return http.StatusConflict, "lease_fenced", "Lease is inactive or missing", false
 	case errors.Is(err, runnercontrol.ErrTerminalAttached):
@@ -1158,6 +1335,160 @@ func writeMetricFamily(writer io.Writer, name string, values map[string]int64) e
 	return nil
 }
 
+func writeHTTPDurationMetrics(
+	writer io.Writer,
+	series []observability.HTTPDuration,
+) error {
+	if _, err := fmt.Fprintln(writer, "# TYPE secondbox_http_request_duration_seconds histogram"); err != nil {
+		return fmt.Errorf("SecondBox HTTP duration metric type write failed: %w", err)
+	}
+	for _, metric := range series {
+		labels := fmt.Sprintf(
+			"route=%q,status_class=%q",
+			metric.Route, metric.StatusClass,
+		)
+		if err := writeDurationHistogram(
+			writer, "secondbox_http_request_duration_seconds", labels, metric.Histogram,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeOperationDurationMetrics(
+	writer io.Writer,
+	series []contracts.OperationDurationMetric,
+) error {
+	if _, err := fmt.Fprintln(writer, "# TYPE secondbox_operation_duration_seconds histogram"); err != nil {
+		return fmt.Errorf("SecondBox Operation duration metric type write failed: %w", err)
+	}
+	for _, metric := range series {
+		labels := fmt.Sprintf(
+			"kind=%q,terminal_state=%q",
+			metric.Kind, metric.TerminalState,
+		)
+		histogram := observability.DurationHistogram{
+			Count: metric.Histogram.Count, SumSeconds: metric.Histogram.SumSeconds,
+			BucketCounts: metric.Histogram.BucketCounts,
+		}
+		if err := writeDurationHistogram(
+			writer, "secondbox_operation_duration_seconds", labels, histogram,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeDatabaseTimingMetrics(
+	writer io.Writer,
+	snapshot contracts.MetricsSnapshot,
+) error {
+	if _, err := fmt.Fprintln(
+		writer, "# TYPE secondbox_sandbox_start_duration_seconds histogram",
+	); err != nil {
+		return fmt.Errorf("SecondBox Sandbox start duration metric type write failed: %w", err)
+	}
+	if err := writeDurationHistogram(
+		writer,
+		"secondbox_sandbox_start_duration_seconds",
+		"",
+		publicMetricHistogram(snapshot.BootDuration),
+	); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(
+		writer, "# TYPE secondbox_sandbox_start_stage_duration_seconds histogram",
+	); err != nil {
+		return fmt.Errorf("SecondBox Sandbox start stage duration metric type write failed: %w", err)
+	}
+	for _, metric := range snapshot.BootStageDurations {
+		if err := writeDurationHistogram(
+			writer,
+			"secondbox_sandbox_start_stage_duration_seconds",
+			fmt.Sprintf("stage=%q", metric.Stage),
+			publicMetricHistogram(metric.Histogram),
+		); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintln(
+		writer, "# TYPE secondbox_exec_duration_seconds histogram",
+	); err != nil {
+		return fmt.Errorf("SecondBox Exec duration metric type write failed: %w", err)
+	}
+	for _, metric := range snapshot.ExecDurations {
+		if err := writeDurationHistogram(
+			writer,
+			"secondbox_exec_duration_seconds",
+			fmt.Sprintf("mode=%q,outcome=%q", metric.Mode, metric.Outcome),
+			publicMetricHistogram(metric.Histogram),
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func publicMetricHistogram(
+	histogram contracts.MetricDurationHistogram,
+) observability.DurationHistogram {
+	return observability.DurationHistogram{
+		Count: histogram.Count, SumSeconds: histogram.SumSeconds,
+		BucketCounts: histogram.BucketCounts,
+	}
+}
+
+func writeDurationHistogram(
+	writer io.Writer,
+	name string,
+	labels string,
+	histogram observability.DurationHistogram,
+) error {
+	if len(histogram.BucketCounts) != len(observability.DurationBucketsSeconds) {
+		return errors.New("SecondBox metrics duration histogram has invalid bucket count")
+	}
+	for index, upperBound := range observability.DurationBucketsSeconds {
+		bucketLabels := fmt.Sprintf("le=%q", strconv.FormatFloat(upperBound, 'g', -1, 64))
+		if labels != "" {
+			bucketLabels = labels + "," + bucketLabels
+		}
+		if _, err := fmt.Fprintf(
+			writer, "%s_bucket{%s} %d\n",
+			name, bucketLabels,
+			histogram.BucketCounts[index],
+		); err != nil {
+			return fmt.Errorf("SecondBox metrics duration bucket write failed: %w", err)
+		}
+	}
+	infiniteLabels := `le="+Inf"`
+	if labels != "" {
+		infiniteLabels = labels + "," + infiniteLabels
+	}
+	if _, err := fmt.Fprintf(
+		writer, "%s_bucket{%s} %d\n", name, infiniteLabels, histogram.Count,
+	); err != nil {
+		return fmt.Errorf("SecondBox metrics duration infinite bucket write failed: %w", err)
+	}
+	metricLabels := ""
+	if labels != "" {
+		metricLabels = "{" + labels + "}"
+	}
+	if _, err := fmt.Fprintf(
+		writer, "%s_sum%s %s\n", name, metricLabels,
+		strconv.FormatFloat(histogram.SumSeconds, 'g', -1, 64),
+	); err != nil {
+		return fmt.Errorf("SecondBox metrics duration sum write failed: %w", err)
+	}
+	if _, err := fmt.Fprintf(
+		writer, "%s_count%s %d\n", name, metricLabels, histogram.Count,
+	); err != nil {
+		return fmt.Errorf("SecondBox metrics duration count write failed: %w", err)
+	}
+	return nil
+}
+
 func (apiHandler *handler) logResponseAbort(
 	request *http.Request,
 	responseKind string,
@@ -1203,6 +1534,38 @@ func queryLimit(request *http.Request) (int, error) {
 		return 0, errors.New("SecondBox list limit must be an integer between 1 and 200")
 	}
 	return value, nil
+}
+
+// maximumMetadataFilterEntries bounds one containment filter.
+const maximumMetadataFilterEntries = 8
+
+// queryMetadataFilter parses the repeatable metadata=name=value containment
+// filter. A value may itself contain '=', so only the first one separates.
+func queryMetadataFilter(request *http.Request) (map[string]string, error) {
+	values := request.URL.Query()["metadata"]
+	if len(values) == 0 {
+		return nil, nil
+	}
+	if len(values) > maximumMetadataFilterEntries {
+		return nil, fmt.Errorf(
+			"SecondBox list metadata filter must not exceed %d entries",
+			maximumMetadataFilterEntries,
+		)
+	}
+	filter := make(map[string]string, len(values))
+	for _, entry := range values {
+		name, value, found := strings.Cut(entry, "=")
+		if !found || strings.TrimSpace(name) == "" || len(name) > 128 || len(value) > 1024 {
+			return nil, errors.New(
+				"SecondBox list metadata filter must be name=value within the Metadata bounds",
+			)
+		}
+		if _, duplicate := filter[name]; duplicate {
+			return nil, errors.New("SecondBox list metadata filter must not repeat a name")
+		}
+		filter[name] = value
+	}
+	return filter, nil
 }
 
 func setRevisionETag(writer http.ResponseWriter, revision int64) {

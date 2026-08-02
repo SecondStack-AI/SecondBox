@@ -11,16 +11,16 @@ func TestRunnerLossRequiresFenceProofBeforeReplacement(t *testing.T) {
 		State: "uncertain", Generation: 7, FenceProofDigest: "",
 		RetryCount: 0, Deadline: now.Add(time.Minute),
 	}, now)
-	if decision.Action != ActionFence || decision.MayReassign {
-		t.Fatalf("loss decision = %#v, want fence without reassignment", decision)
+	if decision.Action != ActionFence {
+		t.Fatalf("loss decision = %#v, want fence", decision)
 	}
 
 	decision = DecideRunnerLoss(AssignmentState{
 		State: "fenced", Generation: 7, FenceProofDigest: "sha256:proof",
 		RetryCount: 0, Deadline: now.Add(time.Minute),
 	}, now)
-	if decision.Action != ActionAdvanceGeneration || !decision.MayReassign || decision.NextGeneration != 8 {
-		t.Fatalf("proved fence decision = %#v, want generation 8 reassignment", decision)
+	if decision.Action != ActionAdvanceGeneration || decision.NextGeneration != 8 {
+		t.Fatalf("proved fence decision = %#v, want home-local generation 8 advance", decision)
 	}
 }
 
@@ -45,6 +45,11 @@ func TestRetryClassificationIsBoundedAndDeadlineAware(t *testing.T) {
 			name:  "deadline elapsed",
 			state: AssignmentState{State: "starting", FailureClass: FailureTransient, RetryCount: 0, RetryLimit: 3, Deadline: now.Add(-time.Millisecond)},
 			want:  ActionFence,
+		},
+		{
+			name:  "ready ignores elapsed startup deadline",
+			state: AssignmentState{State: "ready", RetryCount: 0, RetryLimit: 3, Deadline: now.Add(-time.Millisecond)},
+			want:  ActionWait,
 		},
 		{
 			name:  "fencing waits before deadline",

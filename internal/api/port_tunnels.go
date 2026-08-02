@@ -34,7 +34,7 @@ func (apiHandler *handler) createSandboxPortSession(writer http.ResponseWriter, 
 	session, replayed, err := apiHandler.service.CreateSandboxPortSession(
 		request.Context(), requestPrincipal(request), request.Header.Get("X-Request-ID"),
 		request.PathValue("sandboxID"), generation, request.Header.Get("SecondBox-Lease-ID"),
-		request.Header.Get("Idempotency-Key"), body,
+		request.Header.Get("Idempotency-Key"), portTransportForRequest(request), body,
 	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
@@ -47,7 +47,7 @@ func (apiHandler *handler) createSandboxPortSession(writer http.ResponseWriter, 
 func (apiHandler *handler) getSandboxPortSession(writer http.ResponseWriter, request *http.Request) {
 	session, err := apiHandler.service.GetSandboxPortSession(
 		request.Context(), requestPrincipal(request), request.PathValue("sandboxID"),
-		request.PathValue("portSessionID"),
+		request.PathValue("portSessionID"), portTransportForRequest(request),
 	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
@@ -137,6 +137,10 @@ func (apiHandler *handler) servePortTunnel(
 	}()
 	ticker := time.NewTicker(apiHandler.service.DataPlanePollInterval())
 	defer ticker.Stop()
+	// Subscribing before the first authoritative read closes the race where a
+	// frame commits between that read and the subscription.
+	wakeups, cancelWakeups := apiHandler.service.SubscribeDataPlaneSession(tunnel.Session.ID)
+	defer cancelWakeups()
 	afterSequence := int64(-1)
 	for {
 		event, found, err := apiHandler.service.NextPortTunnelEvent(
@@ -183,6 +187,7 @@ func (apiHandler *handler) servePortTunnel(
 		select {
 		case err := <-readErrors:
 			return err
+		case <-wakeups:
 		case <-ticker.C:
 		case <-tunnelContext.Done():
 			return tunnelContext.Err()

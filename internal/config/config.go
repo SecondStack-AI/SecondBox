@@ -2,10 +2,14 @@
 package config
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +25,7 @@ type Config struct {
 	DatabaseURL                      string
 	LogPath                          string
 	PlatformToken                    string
+	ApplicationAuthorities           []ApplicationAuthority
 	HTTPTimeout                      time.Duration
 	RunnerServerCertificatePath      string
 	RunnerServerPrivateKeyPath       string
@@ -28,6 +33,9 @@ type Config struct {
 	RunnerCredential                 string
 	RunnerHeartbeatInterval          time.Duration
 	RunnerCommandPollInterval        time.Duration
+	RunnerCommandDeliveryBatchSize   int64
+	RunnerEventPersistenceBatchSize  int
+	RunnerEventPersistenceBatchWait  time.Duration
 	DataPlanePollInterval            time.Duration
 	DataPlaneClaimDuration           time.Duration
 	DataPlaneRetention               time.Duration
@@ -51,11 +59,31 @@ type Config struct {
 	ObjectStoreHTTPTimeout           time.Duration
 	ObjectStoreTempDirectory         string
 	ObjectStoreMaxObjectBytes        int64
-	CheckpointSpoolDirectory         string
 	RunnerProtocolMinimum            uint32
 	RunnerProtocolMaximum            uint32
 	RunnerEnabledFeatures            []string
 	DefaultSubjectQuota              contracts.QuotaLimits
+	AgentCompartmentProfile          BuiltInProfileBinding
+	CodingEnvironmentProfile         BuiltInProfileBinding
+}
+
+// BuiltInProfileBinding is the deployment-specific RunnerPool and signed asset
+// pair that one built-in Profile pins. SecondBox supplies no default for any of
+// these values; a deployment names its own pool and its own verified bundles.
+type BuiltInProfileBinding struct {
+	Pool                  string
+	RuntimeBundleDigest   string
+	ToolchainBundleDigest string
+}
+
+// ApplicationAuthority configures one fixed application identity and its allowed capabilities.
+type ApplicationAuthority struct {
+	ID            string   `json:"id"`
+	Token         string   `json:"token"`
+	TenantRef     string   `json:"tenantRef"`
+	SubjectRef    string   `json:"subjectRef"`
+	Scopes        []string `json:"scopes"`
+	ProfileGrants []string `json:"profileGrants"`
 }
 
 // FromEnvironment fails when any required setting is absent or invalid.
@@ -87,6 +115,10 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	applicationAuthorities, err := requiredApplicationAuthorities()
+	if err != nil {
+		return Config{}, err
+	}
 	runnerCredential, err := requiredSecret("SECONDBOX_RUNNER_CREDENTIAL", 32)
 	if err != nil {
 		return Config{}, err
@@ -112,6 +144,22 @@ func FromEnvironment() (Config, error) {
 		return Config{}, err
 	}
 	runnerCommandPollMilliseconds, err := requiredPositiveInt64("SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS")
+	if err != nil {
+		return Config{}, err
+	}
+	runnerCommandDeliveryBatchSize, err := requiredPositiveInt64("SECONDBOX_RUNNER_COMMAND_DELIVERY_BATCH_SIZE")
+	if err != nil {
+		return Config{}, err
+	}
+	runnerEventPersistenceBatchSize, err := requiredPositiveInt64("SECONDBOX_RUNNER_EVENT_PERSISTENCE_BATCH_SIZE")
+	if err != nil {
+		return Config{}, err
+	}
+	runnerEventPersistenceBatchSizeInt := int(runnerEventPersistenceBatchSize)
+	if int64(runnerEventPersistenceBatchSizeInt) != runnerEventPersistenceBatchSize {
+		return Config{}, errorsForEnvironment("runner event persistence batch size exceeds process integer range")
+	}
+	runnerEventPersistenceBatchWaitMilliseconds, err := requiredPositiveInt64("SECONDBOX_RUNNER_EVENT_PERSISTENCE_BATCH_WAIT_MILLISECONDS")
 	if err != nil {
 		return Config{}, err
 	}
@@ -218,10 +266,6 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	checkpointSpoolDirectory, err := requiredAbsolutePath("SECONDBOX_CHECKPOINT_SPOOL_DIRECTORY")
-	if err != nil {
-		return Config{}, err
-	}
 	runnerProtocolMinimum, err := requiredUint32("SECONDBOX_RUNNER_PROTOCOL_MINIMUM")
 	if err != nil {
 		return Config{}, err
@@ -241,10 +285,19 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	agentCompartmentProfile, err := requiredBuiltInProfileBinding("AGENT_COMPARTMENT")
+	if err != nil {
+		return Config{}, err
+	}
+	codingEnvironmentProfile, err := requiredBuiltInProfileBinding("CODING_ENVIRONMENT")
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
 		ListenAddress: listenAddress, PublicBaseURL: publicBaseURL, RunnerListenAddress: runnerListenAddress,
 		DatabaseURL: databaseURL, LogPath: logPath,
 		PlatformToken:                    platformToken,
+		ApplicationAuthorities:           applicationAuthorities,
 		HTTPTimeout:                      time.Duration(httpSeconds) * time.Second,
 		RunnerServerCertificatePath:      runnerServerCertificatePath,
 		RunnerServerPrivateKeyPath:       runnerServerPrivateKeyPath,
@@ -252,6 +305,9 @@ func FromEnvironment() (Config, error) {
 		RunnerCredential:                 runnerCredential,
 		RunnerHeartbeatInterval:          time.Duration(runnerHeartbeatMilliseconds) * time.Millisecond,
 		RunnerCommandPollInterval:        time.Duration(runnerCommandPollMilliseconds) * time.Millisecond,
+		RunnerCommandDeliveryBatchSize:   runnerCommandDeliveryBatchSize,
+		RunnerEventPersistenceBatchSize:  runnerEventPersistenceBatchSizeInt,
+		RunnerEventPersistenceBatchWait:  time.Duration(runnerEventPersistenceBatchWaitMilliseconds) * time.Millisecond,
 		DataPlanePollInterval:            time.Duration(dataPlanePollMilliseconds) * time.Millisecond,
 		DataPlaneClaimDuration:           time.Duration(dataPlaneClaimMilliseconds) * time.Millisecond,
 		DataPlaneRetention:               time.Duration(dataPlaneRetentionSeconds) * time.Second,
@@ -273,11 +329,78 @@ func FromEnvironment() (Config, error) {
 		ObjectStoreHTTPTimeout:      time.Duration(objectStoreHTTPTimeoutMilliseconds) * time.Millisecond,
 		ObjectStoreTempDirectory:    objectStoreTempDirectory,
 		ObjectStoreMaxObjectBytes:   objectStoreMaxObjectBytes,
-		CheckpointSpoolDirectory:    checkpointSpoolDirectory,
 		RunnerProtocolMinimum:       runnerProtocolMinimum, RunnerProtocolMaximum: runnerProtocolMaximum,
-		RunnerEnabledFeatures: runnerEnabledFeatures,
-		DefaultSubjectQuota:   subjectQuota,
+		RunnerEnabledFeatures:    runnerEnabledFeatures,
+		DefaultSubjectQuota:      subjectQuota,
+		AgentCompartmentProfile:  agentCompartmentProfile,
+		CodingEnvironmentProfile: codingEnvironmentProfile,
 	}, nil
+}
+
+// requiredBuiltInProfileBinding reads the RunnerPool and signed bundle digests
+// one built-in Profile pins. Every value is required and has no default.
+func requiredBuiltInProfileBinding(profile string) (BuiltInProfileBinding, error) {
+	prefix := "SECONDBOX_BUILTIN_" + profile + "_"
+	pool, err := requiredString(prefix + "POOL")
+	if err != nil {
+		return BuiltInProfileBinding{}, err
+	}
+	runtimeDigest, err := requiredDigest(prefix + "RUNTIME_BUNDLE_DIGEST")
+	if err != nil {
+		return BuiltInProfileBinding{}, err
+	}
+	toolchainDigest, err := requiredDigest(prefix + "TOOLCHAIN_BUNDLE_DIGEST")
+	if err != nil {
+		return BuiltInProfileBinding{}, err
+	}
+	return BuiltInProfileBinding{
+		Pool:                  pool,
+		RuntimeBundleDigest:   runtimeDigest,
+		ToolchainBundleDigest: toolchainDigest,
+	}, nil
+}
+
+func requiredDigest(name string) (string, error) {
+	value, err := requiredString(name)
+	if err != nil {
+		return "", err
+	}
+	if !sha256DigestPattern.MatchString(value) {
+		return "", fmt.Errorf(
+			"SecondBox environment variable %s must be a sha256:<64 hex characters> digest", name,
+		)
+	}
+	return value, nil
+}
+
+var sha256DigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+func requiredApplicationAuthorities() ([]ApplicationAuthority, error) {
+	raw, err := requiredString("SECONDBOX_APPLICATION_AUTHORITIES_JSON")
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewBufferString(raw))
+	decoder.DisallowUnknownFields()
+	var authorities []ApplicationAuthority
+	if err := decoder.Decode(&authorities); err != nil {
+		return nil, fmt.Errorf(
+			"SecondBox environment variable SECONDBOX_APPLICATION_AUTHORITIES_JSON must be a JSON array: %w",
+			err,
+		)
+	}
+	if authorities == nil {
+		return nil, errorsForEnvironment(
+			"SECONDBOX_APPLICATION_AUTHORITIES_JSON must be an explicit JSON array",
+		)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, errorsForEnvironment(
+			"SECONDBOX_APPLICATION_AUTHORITIES_JSON must contain a single JSON array",
+		)
+	}
+	return authorities, nil
 }
 
 func requiredHTTPURL(name string) (string, error) {
@@ -350,7 +473,7 @@ func requiredBool(name string) (bool, error) {
 func requiredQuota(prefix string) (contracts.QuotaLimits, error) {
 	names := []string{
 		"MAX_SANDBOXES", "MAX_ACTIVE_INSTANCES", "MAX_CPU_MILLIS", "MAX_MEMORY_BYTES",
-		"MAX_RETAINED_BYTES", "MAX_SNAPSHOTS", "MAX_ARTIFACTS", "MAX_PORT_SESSIONS",
+		"MAX_ARTIFACT_BYTES", "MAX_SNAPSHOTS", "MAX_ARTIFACTS", "MAX_PORT_SESSIONS",
 		"MAX_CONCURRENT_OPERATIONS",
 	}
 	values := make([]int64, len(names))
@@ -363,7 +486,7 @@ func requiredQuota(prefix string) (contracts.QuotaLimits, error) {
 	}
 	return contracts.QuotaLimits{
 		MaxSandboxes: values[0], MaxActiveInstances: values[1], MaxCPUMillis: values[2],
-		MaxMemoryBytes: values[3], MaxRetainedBytes: values[4], MaxSnapshots: values[5],
+		MaxMemoryBytes: values[3], MaxArtifactBytes: values[4], MaxSnapshots: values[5],
 		MaxArtifacts: values[6], MaxPortSessions: values[7], MaxConcurrentOperations: values[8],
 	}, nil
 }

@@ -1,14 +1,18 @@
 # Security model
 
-SecondBox assumes guest workloads and network peers may be malicious. Its control plane is also a trusted subsystem: callers holding the platform token may assert any tenant and subject reference. SecondBox preserves strict row scoping for those assertions, but it does not claim to authenticate end users or defend one subject from a compromised trusted caller.
+SecondBox assumes guest workloads and network peers may be malicious. Its control plane is also a trusted subsystem: operators holding the platform token may assert any tenant and subject reference. Application authorities are narrower and cannot change their configured ownership, operation scopes, or Profile grants. SecondBox does not authenticate end users or duplicate an upstream identity graph.
 
 ## Principals and authority
 
-The HTTP API accepts one deployment-wide `SECONDBOX_PLATFORM_TOKEN`. Every request also supplies bounded opaque `X-SecondBox-Tenant-Ref` and `X-SecondBox-Subject-Ref` values. PostgreSQL queries scope owned resources, idempotency, quota, and audit records to both values. The upstream platform must authorize those assertions before calling SecondBox.
+The HTTP API accepts the deployment-wide `SECONDBOX_PLATFORM_TOKEN` as its operator authority. Every operator request also supplies bounded opaque `X-SecondBox-Tenant-Ref` and `X-SecondBox-Subject-Ref` values. PostgreSQL queries scope owned resources, idempotency, quota, and audit records to both values.
+
+Explicit application authorities use independent bearer credentials. Each is statically bound to fixed tenant and subject references, exact Sandbox operation scopes, and an allowlist of Profile names. Header mismatch, administrative access, an ungranted Profile, or a missing scope is denied before the route handler. This protects subjects and Profiles from another correctly configured application credential; compromise of the platform token remains deployment-wide compromise.
 
 Runner authority is separate. A Runner establishes an outbound TLS 1.3 connection, presents a CA-signed client identity, and proves the deployment-wide pre-shared Runner credential. The control plane compares the certificate identity, configured Runner identity, and protocol identity. HTTP tokens are never accepted on this channel, and Runner credentials are never accepted by the HTTP API.
 
 Browser-facing PTY and port-tunnel connections do not rely on caller-supplied tenancy. They use single-use, session-bound, expiring HMAC capability tokens carried in the WebSocket subprotocol. Generation, Lease, Assignment, and attachment checks still apply at admission.
+
+One Port operation scope is a capability rather than an operation permission. `sandbox:ports:direct` grants the direct Port transport, whose endpoint names the home Runner's advertised data-plane address. It is denied by default, is never implied by `sandbox:ports`, and is the only way any caller learns a Runner address; every other authority receives the relay WebSocket endpoint. The same single-use capability token authenticates either transport, and on the direct transport the home Runner rejects a mismatch locally in constant time before spending the token against PostgreSQL, which remains the single consumption authority.
 
 ## Control-plane boundary
 
@@ -18,16 +22,24 @@ Idempotency, subject quota reservation, generation checks, ownership checks, and
 
 ## Runner and guest boundary
 
-A Runner is privileged on its host and can observe active guest memory and its local workspace cache. Runner pools are explicit trust and placement boundaries. A Runner receives only fully resolved assignments for its pool. It does not receive the platform token, PostgreSQL credentials, or global object-store credentials.
+A Runner is privileged on its host and can observe active guest memory and every Workspace homed there. Runner pools are explicit trust and placement boundaries. A Runner receives only fully resolved assignments and logical local-workspace commands for its stable identity. It does not receive the platform token, PostgreSQL credentials, or global object-store credentials.
 
 Firecracker, jailer, cgroups, namespaces, minimal devices, signed images, and a narrow guest protocol provide defense in depth. Guest paths resolve beneath descriptor-pinned workspace roots. Resource, deadline, payload, transfer, and output bounds apply at admission and execution. Guest output, filenames, log text, and protocol errors are untrusted and bounded.
 
-Control-plane fencing prevents a stale Runner from committing authoritative state for a newer generation. It cannot remediate a compromised host: operators replace the shared Runner credential, remove the host, fence its assignments, and restore affected Sandboxes from the last verified checkpoint on fresh hosts.
+Control-plane fencing prevents a stale Runner from committing authoritative state for a newer generation. It cannot remediate a compromised or lost home Runner. Recovery requires a trusted consistent backup of that Runner's stable identity and Workspace root; the control plane never relocates or reconstructs its Sandboxes on a fresh Runner.
 
 ## Durable bytes and recovery
 
-Checkpoint and Artifact publication uses immutable keys, declared size and SHA-256 evidence, verified object reads, atomic metadata publication, retention, and two-phase garbage collection. Uploads spool and hash before durable admission; downloads are fully integrity-verified before response bytes are exposed. Missing or corrupt reachable bytes fail explicitly.
+Artifact publication uses immutable keys, declared size and SHA-256 evidence, verified object reads, atomic metadata publication, retention, and two-phase garbage collection. Uploads spool and hash before durable admission; downloads are fully integrity-verified before response bytes are exposed. Missing or corrupt reachable bytes fail explicitly.
 
-All work is deadline- and size-bounded. Per-subject quotas protect shared control-plane and Runner capacity. Backpressure prevents slow clients from creating unbounded output buffers. Database, object-store, Runner, and guest failures produce explicit state rather than fallback execution or empty-data success.
+Workspace durability is local to one immutable home Runner. The WorkspaceStore
+uses reflink-only cloning, atomic manifests, fsync, exclusive writer locks, and
+durable operation receipts. The runner protocol never transports image bytes or
+paths. Loss of an unbacked home-Runner filesystem loses its Sandboxes and local
+Snapshots; PostgreSQL or S3 recovery alone is insufficient.
+
+All work is deadline- and size-bounded. Per-subject quotas protect shared control-plane and Runner capacity. Backpressure prevents slow clients from creating unbounded output buffers. Database, object-store, Runner, and guest failures produce explicit state rather than fallback execution or empty-data success. On a direct Port connection, backpressure is TCP flow control on the caller leg and the retained guest-protocol credit window on the guest leg, so no unbounded buffer exists on either.
+
+Port evidence granularity is transport dependent. The relay transport retains per-frame durability. The direct transport emits the fixed-shape Runner evidence record at admitted open and at close and retains no per-frame durability; the reduction is deliberate and is stated in the [threat model](threat-model.md). No Port evidence record can contain a payload byte, a credential, a fencing token, or a Runner address.
 
 See [Service boundaries](service-boundaries.md), [Profiles and authorization](profiles-and-authorization.md), [Runner protocol](runner-protocol.md), and [Recovery and reconciliation](recovery-and-reconciliation.md).

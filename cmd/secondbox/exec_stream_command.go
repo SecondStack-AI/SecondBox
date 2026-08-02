@@ -53,7 +53,10 @@ func runExecStreamCommand(
 	}
 	if strings.TrimSpace(rawURL) == "" || strings.TrimSpace(token) == "" ||
 		strings.TrimSpace(tenantRef) == "" || strings.TrimSpace(subjectRef) == "" {
-		return errors.New("SecondBox CLI exec stream requires --url, --token, --tenant-ref, and --subject-ref")
+		return errors.New(
+			"SecondBox CLI exec stream requires --url, --token, --tenant-ref, and --subject-ref" +
+				sessionSourceHint,
+		)
 	}
 	if strings.TrimSpace(*sandboxID) == "" ||
 		strings.TrimSpace(*generationText) == "" ||

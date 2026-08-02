@@ -2,7 +2,13 @@ package api
 
 import (
 	"bytes"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 func TestDecodePublicExecClientFrameRequiresExplicitOrderedInputClosure(t *testing.T) {
@@ -66,5 +72,68 @@ func TestDecodePublicExecClientFrameRequiresExplicitOrderedInputClosure(t *testi
 				t.Fatalf("decoded frame = %#v", frame)
 			}
 		})
+	}
+}
+
+func TestExecTerminalDeliveryCompletesWebSocketCloseHandshake(t *testing.T) {
+	handshakeResult := make(chan error, 1)
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		connection, err := upgrader.Upgrade(writer, request, nil)
+		if err != nil {
+			handshakeResult <- err
+			return
+		}
+		defer connection.Close()
+		readErrors := make(chan error, 1)
+		go func() {
+			_, _, readErr := connection.ReadMessage()
+			readErrors <- readErr
+		}()
+		if err := connection.WriteJSON(map[string]string{"type": "outcome"}); err != nil {
+			handshakeResult <- err
+			return
+		}
+		handshakeResult <- finishExecWebSocketCloseHandshake(connection, readErrors)
+	}))
+	defer server.Close()
+
+	connection, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http"),
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	var outcome map[string]string
+	if err := connection.ReadJSON(&outcome); err != nil {
+		t.Fatalf("terminal outcome read: %v", err)
+	}
+	if outcome["type"] != "outcome" {
+		t.Fatalf("terminal outcome = %#v", outcome)
+	}
+	select {
+	case err := <-handshakeResult:
+		t.Fatalf("server closed before peer close response: %v", err)
+	default:
+	}
+	if err := connection.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "outcome received"),
+		time.Now().Add(time.Second),
+	); err != nil {
+		t.Fatalf("peer close response: %v", err)
+	}
+	select {
+	case err := <-handshakeResult:
+		if err != nil {
+			t.Fatalf("close handshake: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not complete the WebSocket close handshake")
 	}
 }

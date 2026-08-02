@@ -10,34 +10,26 @@ import (
 type Action string
 
 const (
-	ActionWait                Action = "wait"
-	ActionFinishCreateStopped Action = "finish_create_stopped"
-	ActionMaterialize         Action = "materialize"
-	ActionStartInstance       Action = "start_instance"
-	ActionMarkReady           Action = "mark_ready"
-	ActionDrain               Action = "drain"
-	ActionCheckpoint          Action = "checkpoint"
-	ActionStopInstance        Action = "stop_instance"
-	ActionFinishStop          Action = "finish_stop"
-	ActionDelete              Action = "delete"
-	ActionFinishDelete        Action = "finish_delete"
-	ActionFail                Action = "fail"
+	ActionWait          Action = "wait"
+	ActionStartInstance Action = "start_instance"
+	ActionMarkReady     Action = "mark_ready"
+	ActionDrain         Action = "drain"
+	ActionStopInstance  Action = "stop_instance"
+	ActionFinishStop    Action = "finish_stop"
+	ActionDelete        Action = "delete"
+	ActionFail          Action = "fail"
 )
 
 // View contains only durable inputs needed for one idempotent decision.
 type View struct {
 	Observed                  string
 	Desired                   string
-	MaterializationState      string
-	CheckpointState           string
 	StopEffectState           string
 	GuestLiveness             string
 	InstanceTerminationReason string
 	IntentTerminationReason   string
 	HasInstance               bool
 	ActiveSessions            int64
-	CheckpointOnStop          bool
-	ForceCheckpoint           bool
 	ReadyAt                   time.Time
 	LastUsefulActivityAt      time.Time
 	DrainStartedAt            time.Time
@@ -61,7 +53,7 @@ func Decide(view View, now time.Time) Decision {
 		case contracts.SandboxStateStopped, contracts.SandboxStateFailed:
 			return Decision{Action: ActionDelete}
 		case contracts.SandboxStateDeleting:
-			return Decision{Action: ActionFinishDelete}
+			return Decision{Action: ActionDelete}
 		case contracts.SandboxStateCreating:
 			if !view.HasInstance {
 				return Decision{Action: ActionDelete}
@@ -73,32 +65,9 @@ func Decide(view View, now time.Time) Decision {
 			if drainBarrierActive(view, now) {
 				return Decision{Action: ActionWait}
 			}
-			if checkpointRequestedAndRunnable(view) {
-				return Decision{Action: ActionCheckpoint}
-			}
 			return Decision{Action: ActionStopInstance}
-		case contracts.SandboxStateCheckpointing:
-			if view.CheckpointState == contracts.ObjectStateIntegrityFailed {
-				if view.HasInstance {
-					return Decision{Action: ActionStopInstance}
-				}
-				return Decision{Action: ActionDelete}
-			}
-			if view.CheckpointState == contracts.ObjectStatePublished {
-				if view.HasInstance {
-					return Decision{Action: ActionStopInstance}
-				}
-				return Decision{Action: ActionDelete}
-			}
-			return Decision{Action: ActionCheckpoint}
 		case contracts.SandboxStateStopping:
-			if view.StopEffectState == "runner_failed" {
-				return Decision{Action: ActionFail, TerminationReason: contracts.TerminationReasonInternalFailure}
-			}
-			if view.GuestLiveness == contracts.GuestLivenessStopped || !view.HasInstance {
-				return Decision{Action: ActionDelete}
-			}
-			return Decision{Action: ActionStopInstance}
+			return decideStopping(view)
 		}
 	}
 	if view.Desired == contracts.SandboxDesiredStateStopped {
@@ -106,52 +75,32 @@ func Decide(view View, now time.Time) Decision {
 		case contracts.SandboxStateStopped, contracts.SandboxStateFailed:
 			return Decision{Action: ActionWait}
 		case contracts.SandboxStateCreating:
-			return Decision{Action: ActionFinishCreateStopped}
+			return Decision{Action: ActionWait}
 		case contracts.SandboxStateReady, contracts.SandboxStateStarting:
 			return Decision{Action: ActionDrain, TerminationReason: requestedTerminationReason(view)}
 		case contracts.SandboxStateDraining:
 			if drainBarrierActive(view, now) {
 				return Decision{Action: ActionWait}
 			}
-			if checkpointRequestedAndRunnable(view) {
-				return Decision{Action: ActionCheckpoint}
-			}
 			return Decision{Action: ActionStopInstance}
-		case contracts.SandboxStateCheckpointing:
-			if view.CheckpointState == contracts.ObjectStateIntegrityFailed {
-				return Decision{Action: ActionFail, TerminationReason: contracts.TerminationReasonInternalFailure}
-			}
-			if view.CheckpointState == contracts.ObjectStatePublished {
-				if view.HasInstance {
-					return Decision{Action: ActionStopInstance}
-				}
-				return Decision{Action: ActionFinishStop}
-			}
-			return Decision{Action: ActionCheckpoint}
 		case contracts.SandboxStateStopping:
-			if view.StopEffectState == "runner_failed" {
-				return Decision{Action: ActionFail, TerminationReason: contracts.TerminationReasonInternalFailure}
-			}
-			if view.GuestLiveness == contracts.GuestLivenessStopped || !view.HasInstance {
-				return Decision{Action: ActionFinishStop}
-			}
-			return Decision{Action: ActionStopInstance}
+			return decideStopping(view)
 		}
 	}
 	if view.Desired == contracts.SandboxDesiredStateRunning {
 		switch view.Observed {
-		case contracts.SandboxStateCreating, contracts.SandboxStateStopped:
-			return Decision{Action: ActionMaterialize}
+		case contracts.SandboxStateCreating:
+			return Decision{Action: ActionWait}
+		case contracts.SandboxStateStopped:
+			return Decision{Action: ActionStartInstance}
 		case contracts.SandboxStateStarting:
-			if view.MaterializationState == contracts.MaterializationStateReady &&
-				view.GuestLiveness == contracts.GuestLivenessReady {
+			if view.GuestLiveness == contracts.GuestLivenessReady {
 				return Decision{Action: ActionMarkReady}
 			}
-			if view.MaterializationState == contracts.MaterializationStatePreparing ||
-				view.MaterializationState == contracts.MaterializationStateReady {
+			if view.HasInstance {
 				return Decision{Action: ActionWait}
 			}
-			return Decision{Action: ActionMaterialize}
+			return Decision{Action: ActionStartInstance}
 		case contracts.SandboxStateReady:
 			if view.GuestLiveness == contracts.GuestLivenessStopped {
 				reason := view.InstanceTerminationReason
@@ -175,34 +124,30 @@ func Decide(view View, now time.Time) Decision {
 			if drainBarrierActive(view, now) {
 				return Decision{Action: ActionWait}
 			}
-			if checkpointRequestedAndRunnable(view) {
-				return Decision{Action: ActionCheckpoint}
-			}
 			return Decision{Action: ActionStopInstance}
-		case contracts.SandboxStateCheckpointing:
-			if view.CheckpointState == contracts.ObjectStateIntegrityFailed {
-				return Decision{Action: ActionFail, TerminationReason: contracts.TerminationReasonInternalFailure}
-			}
-			if view.CheckpointState == contracts.ObjectStatePublished {
-				if view.HasInstance {
-					return Decision{Action: ActionStopInstance}
-				}
-				return Decision{Action: ActionFinishStop}
-			}
-			return Decision{Action: ActionCheckpoint}
 		case contracts.SandboxStateStopping:
-			if view.StopEffectState == "runner_failed" {
-				return Decision{Action: ActionFail, TerminationReason: contracts.TerminationReasonInternalFailure}
-			}
-			if view.GuestLiveness == contracts.GuestLivenessStopped || !view.HasInstance {
-				return Decision{Action: ActionFinishStop}
-			}
-			return Decision{Action: ActionStopInstance}
+			return decideStopping(view)
 		case contracts.SandboxStateFailed:
-			return Decision{Action: ActionMaterialize}
+			return Decision{Action: ActionStartInstance}
 		}
 	}
 	return Decision{Action: ActionFail, TerminationReason: contracts.TerminationReasonInternalFailure}
+}
+
+func decideStopping(view View) Decision {
+	if view.StopEffectState == "runner_failed" {
+		return Decision{Action: ActionFail, TerminationReason: contracts.TerminationReasonInternalFailure}
+	}
+	computeIsTerminal := !view.HasInstance ||
+		view.GuestLiveness == contracts.GuestLivenessStopped ||
+		view.GuestLiveness == contracts.GuestLivenessLost
+	if !computeIsTerminal {
+		return Decision{Action: ActionStopInstance}
+	}
+	if view.StopEffectState == "runner_succeeded" {
+		return Decision{Action: ActionFinishStop}
+	}
+	return Decision{Action: ActionWait}
 }
 
 func requestedTerminationReason(view View) string {
@@ -218,11 +163,6 @@ func drainBarrierActive(view View, now time.Time) bool {
 	}
 	return view.DrainStartedAt.IsZero() || view.DrainGrace <= 0 ||
 		now.Before(view.DrainStartedAt.Add(view.DrainGrace))
-}
-
-func checkpointRequestedAndRunnable(view View) bool {
-	return (view.CheckpointOnStop || view.ForceCheckpoint) &&
-		view.HasInstance && view.GuestLiveness == contracts.GuestLivenessReady
 }
 
 // ValidTerminationReason recognizes the complete stable v1 reason vocabulary.

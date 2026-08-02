@@ -1,6 +1,25 @@
 # SDK, CLI, and Flue quick starts
 
-The versioned OpenAPI contract is canonical, while the Go, TypeScript, and Python clients are small hand-maintained transports for actual repository use cases. The Go and TypeScript layers add structured errors, explicit operation polling, caller-owned Sandbox handles, and data-plane helpers. The Go helpers own authenticated `secondbox.exec.v1` and `secondbox.terminal.v1` WebSocket attachments. The TypeScript helpers apply the same sequencing and terminal rules over injected connectors. Python provides a focused trusted-caller lifecycle transport.
+The versioned OpenAPI contract is canonical, while the Go, TypeScript, and Python clients are small hand-maintained transports for actual repository use cases. The Go and TypeScript layers add structured errors, explicit operation polling, caller-owned Sandbox handles, and data-plane helpers. The Go helpers own authenticated `secondbox.exec.v1` and `secondbox.terminal.v1` WebSocket attachments. The TypeScript helpers apply the same sequencing and terminal rules over injected connectors. Python carries the same composition layer over a dependency-free synchronous transport, and does not attach WebSocket sessions.
+
+## Composition helpers
+
+All three clients share one composition layer, so a caller states intent rather than sequencing requests:
+
+| Concern | Go | TypeScript | Python |
+| --- | --- | --- | --- |
+| Generate a request key | `NewIdempotencyKey` | `newIdempotencyKey` | `new_idempotency_key` |
+| Render an If-Match validator | `RevisionETag` | `revisionETag` | `revision_etag` |
+| Read a typed problem code | `ProblemCodeOf` | `problemCodeOf` | `problem_code_of` |
+| Decode a terminal outcome | `DecodeExecOutcome` | `decodeExecOutcome` | `decode_exec_outcome` |
+| Wait past the per-request bound | `SandboxHandle.WaitFor` | `SandboxHandle.waitFor` | `SandboxHandle.wait_for` |
+| Create and hold a Sandbox | `CreateSandbox` | `createSandbox` | `create_sandbox_handle` |
+| Hold a Lease active | `KeepLease`, `LeaseKeeper` | `keepLease`, `LeaseKeeper` | `keep_lease`, `LeaseKeeper` |
+| Create, wait, and execute | `Run` | `run` | `run` |
+
+An idempotency key is generated whenever a caller supplies none, and a supplied key is always preserved. `waitFor` issues repeated bounded waits because one `waitForSandbox` request is capped at 60 seconds, and refreshes when the service reports `wait_expired`. A `LeaseKeeper` renews against the expiry the service actually granted rather than the duration requested, since the pinned Profile bounds Lease length; closing one reports a renewal failure in preference to the release error that failure causes. Decoding an outcome yields the output even when the command failed, because a failing command usually explains itself on standard error.
+
+`Run` never deletes the Sandbox it created in any of the three clients. Disposal stays the caller's decision, matching the rule that a handle performs no lifecycle action implicitly.
 
 The Go package import path is `github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient`. The TypeScript publication name is `@secondstack-ai/secondbox`; its repository manifest remains at the non-release version `0.0.0-development`. `npm run pack:sdk-typescript` performs a clean declaration/runtime build and dry-packs the exact public files without publishing.
 
@@ -19,7 +38,38 @@ go build -o ./dist/secondbox ./cmd/secondbox
   sandboxes list
 ```
 
-Grouped aliases cover Profiles, RunnerPools, Runners, Sandboxes, Operations, Leases, buffered and streaming exec, terminal negotiation, files, checkpoints, snapshots, artifacts, and ports. Their remaining arguments are thin transport values:
+### Credentials
+
+Every command resolves the endpoint, token, tenant reference, and subject reference from the first source that supplies each value: the explicit flag, then the environment, then stored configuration. A value absent from all three is reported by the command that requires it, naming every source.
+
+| Flag | Environment variable |
+| --- | --- |
+| `--url` | `SECONDBOX_URL` |
+| `--token` | `SECONDBOX_TOKEN` |
+| `--tenant-ref` | `SECONDBOX_TENANT_REF` |
+| `--subject-ref` | `SECONDBOX_SUBJECT_REF` |
+
+`SECONDBOX_TOKEN` is deliberately distinct from the `SECONDBOX_PLATFORM_TOKEN` that `secondboxd` reads. A shell configured to run the control plane does not thereby hand its deployment token to the CLI.
+
+`login` verifies the credentials against the deployment before storing them, so a wrong token fails immediately with the server's problem detail and nothing is written:
+
+```sh
+./dist/secondbox login \
+  --url http://127.0.0.1:8080 \
+  --token "$SECONDBOX_PLATFORM_TOKEN" \
+  --tenant-ref "$TENANT_REF" \
+  --subject-ref "$SUBJECT_REF"
+
+./dist/secondbox sandboxes list
+```
+
+Configuration is stored at `$SECONDBOX_CONFIG` when that variable holds an absolute path, and otherwise at `config.json` under the `secondbox` directory of the user configuration directory, which honors `XDG_CONFIG_HOME`. The directory is created at mode `0700` and the file at mode `0600`, written under a temporary name and renamed into place so a concurrent reader never observes a partial document. Reads reject a symbolic link, a non-regular file, any group or other permission bit, an unknown JSON field, and trailing content.
+
+`login` defaults each unspecified value to what the environment or existing configuration already resolves, so a shell that exports the four variables can persist them with a bare `login`. `whoami` reports the resolved endpoint, tenant reference, subject reference, and the origin of each, and reports only whether a token is present — it never prints the token. `logout` removes the stored configuration and succeeds when none exists.
+
+These three commands are the only ones that do not accept an operation; every other command continues to work with fully explicit flags, and an explicit flag always wins over the environment and stored configuration.
+
+Grouped aliases cover Profiles, RunnerPools, Runners, Sandboxes, Operations, Leases, streaming exec, terminal negotiation, files, Snapshot create/list/get/delete/restore, Artifacts, and ports. Their remaining arguments are thin transport values:
 
 ```sh
 ./dist/secondbox \
@@ -29,20 +79,68 @@ Grouped aliases cover Profiles, RunnerPools, Runners, Sandboxes, Operations, Lea
   --subject-ref "$SUBJECT_REF" \
   sandboxes get \
   --path sandboxId=sbx_123
-
-./dist/secondbox \
-  --url http://127.0.0.1:8080 \
-  --token "$SECONDBOX_PLATFORM_TOKEN" \
-  --tenant-ref "$TENANT_REF" \
-  --subject-ref "$SUBJECT_REF" \
-  exec \
-  --path sandboxId=sbx_123 \
-  --header SecondBox-Generation=4 \
-  --header Idempotency-Key=req_123 \
-  --body ./exec-request.json
 ```
 
-Use `operation <operationId>` to invoke any route in the hand-maintained transport table. `--path`, `--query`, and `--header` accept repeatable `name=value` pairs; `--body` accepts a filename or `-`; `--content-type` selects the declared request media type. File bodies and responses stream between the selected file or standard input/output rather than being buffered by the CLI.
+Use `operation <operationId>` to invoke any route in the hand-maintained transport table, including `executeSandboxCommand`. `--path`, `--query`, and `--header` accept repeatable `name=value` pairs; `--body` accepts a filename or `-`; `--content-type` selects the declared request media type. File bodies and responses stream between the selected file or standard input/output rather than being buffered by the CLI.
+
+### Running one command
+
+`exec` takes the Sandbox before any option and the guest command after `--`:
+
+```sh
+./dist/secondbox exec sbx_123 -- python3 -c 'print("hello from a microVM")'
+```
+
+The Sandbox operand comes first because everything after `--` belongs to the guest, including operands that look like CLI options. `--shell` selects a shell command instead of an argv command and requires exactly one operand:
+
+```sh
+./dist/secondbox exec sbx_123 --shell -- 'printf out; printf err >&2; exit 23'
+```
+
+The command retrieves the Sandbox and applies its current generation itself, and generates its own idempotency key, so neither is supplied by hand. `exec` needs no Lease; `--lease` and `--idempotency-key` remain available when a caller owns them already.
+
+Guest standard output and standard error are decoded and written to the CLI's own two streams without being combined, and the guest's exit status becomes the CLI's exit status. The example above exits 23 and prints nothing of its own, exactly as a local command would. Every outcome that has no exit status — a command that never started, a deadline, an exhausted output bound, or an infrastructure failure — is instead described on standard error and exits 1, after any output the outcome carried has still been written.
+
+`--deadline` defaults to one minute and `--max-output-bytes` to one mebibyte; the pinned Profile's execution policy bounds both. `--cwd` selects a workspace-relative directory and `--env name=value` is repeatable. `--json` writes the raw `ExecOutcome`, retaining base64 output for scripting, and still exits with the guest's status.
+
+`--stdin` sends standard input to the command. The buffered route bounds it at one mebibyte, which is exactly what its base64 field admits, and an input that does not fit is refused rather than truncated; `exec stream` carries unbounded input.
+
+### Naming a Sandbox
+
+Every command that takes a Sandbox accepts either its opaque identifier or a name. Identifiers carry a fixed `sbx_` prefix, so the two are told apart without a speculative request.
+
+A name is the reserved Metadata key `secondbox.dev/name`, which is unique per tenant and subject among Sandboxes that are not deleted. `listSandboxes` filters on it server-side, so a name resolves identically from any host and any SDK; nothing is cached locally. A deleted Sandbox releases its name, and because deleted Sandboxes keep their Metadata and remain listable, resolution skips them.
+
+The service rejects a reserved name that could never resolve: one that is blank, one surrounded by whitespace, and one beginning with `sbx_`, which would shadow an identifier. Uniqueness itself is enforced by the database, and a collision is reported as a `state_conflict`. These rules apply to the Metadata key wherever it is written, through `createSandbox` and `updateSandboxMetadata` alike, not only through the CLI's `--name`.
+
+### Running a one-off command
+
+`run` creates a Sandbox from a Profile, waits for it to become ready, runs one command, and deletes the Sandbox:
+
+```sh
+./dist/secondbox run coding-environment -- python3 -c 'print("hello")'
+```
+
+`--name` reserves a name for later reference and `--keep` retains the Sandbox, reporting its identifier on standard error. `--metadata name=value` is repeatable and cannot restate the reserved name key. `--ready-timeout` bounds the wait for readiness and defaults to five minutes. Output handling, `--stdin`, and exit status match `exec` exactly, and the Sandbox is disposed of even when the command fails. Standard input is read before anything is created, so an oversized input leaves no Sandbox behind.
+
+### Opening an interactive shell
+
+```sh
+./dist/secondbox shell my-box
+```
+
+For a throwaway session, `run --tty` creates the Sandbox, attaches the terminal, and deletes it when the terminal ends:
+
+```sh
+./dist/secondbox run coding-environment --tty
+./dist/secondbox run coding-environment --tty -- /bin/bash
+```
+
+Disposal runs on every exit, including a dropped connection, because the Sandbox exists only to serve that session; `--keep` opts out and reports the identifier so `secondbox shell` can resume it. `--tty` cannot be combined with `--stdin`, `--json`, or `--shell`, which all describe a buffered command, and it accepts at most one operand, used as the terminal command. Both forms share one implementation, so the Lease, generation, and idempotency handling described below applies to each.
+
+`shell` resolves the name, applies the Sandbox's current generation, acquires and renews a Lease for the session, and releases it on exit. It then opens the same real Terminal as `sandbox shell`: raw mode, local dimensions, `SIGWINCH` forwarding, byte-exact binary input and merged PTY output, and the original terminal mode restored on remote exit, cancellation, or transport failure.
+
+Every value it supplies is an overridable default rather than a fixed choice, because injected arguments precede the caller's own. `--lease` or `--session` suppresses Lease acquisition, and `--command`, `--generation`, `--detachable`, `--rows`, `--columns`, and the rest behave as they do for `sandbox shell`. `sandbox shell` itself is unchanged and remains the fully explicit form.
 
 Local operators can inspect a bounded tail or follow the configured control-plane JSON log without supplying API credentials:
 
@@ -66,14 +164,19 @@ The CLI also creates the same secret-avoiding support bundle as the deployment c
 ```sh
 ./dist/secondbox \
   --url http://127.0.0.1:8080 \
+  --token "$SECONDBOX_PLATFORM_TOKEN" \
   diagnostics bundle \
   --output /secure/path/secondbox-support.tar.gz \
   --control-plane-log /var/log/secondbox/control-plane.jsonl \
   --max-log-bytes 1048576 \
-  --http-timeout 5s
+  --max-probe-bytes 1048576 \
+  --http-timeout 5s \
+  --timing-window 15m
 ```
 
-The bundle refuses to overwrite an existing path, is created with mode `0600`, and contains checksummed results only for `healthz`, `readyz`, `metrics`, and the bounded log tail. Probe bodies are individually capped at 1 MiB. Diagnostic probes are intentionally unauthenticated and the CLI never sends `--token` to them.
+The bundle refuses to overwrite an existing path, is created with mode `0600`, and contains checksummed results for `healthz`, `readyz`, `metrics`, the aggregate timing summary, and the bounded log tail. Every HTTP and log bound is explicit. The CLI does not send the token to the three unauthenticated probes; it sends it only to the aggregate timing route and never writes it to the archive.
+
+Use `timings sandbox --sandbox-id ... --limit ...`, `timings operation --operation-id ...`, and `timings summary --window ...` for human-readable lifecycle, boot-stage, Exec, and deployment percentiles. Each timing command requires the global URL, token, tenant, and subject options. See [Observability and diagnostics](observability-and-diagnostics.md) for the bounds and interpretation.
 
 `exec stream` creates and attaches to a streaming session. It reads JSON objects from standard input, assigns their monotonically increasing client sequence, and writes the server's sequenced output and terminal frames as JSON Lines without combining stdout and stderr:
 

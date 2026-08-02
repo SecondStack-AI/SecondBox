@@ -2,7 +2,8 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "$script_dir/../.." && pwd)"
+runner_root="$(cd "$script_dir/../.." && pwd)"
+repo_root="$(cd "$runner_root/.." && pwd)"
 
 usage() {
     cat >&2 <<'USAGE'
@@ -82,6 +83,31 @@ if [ -z "$rootfs_source_dir" ] || [ ! -d "$rootfs_source_dir" ]; then
     echo "SECONDBOX_RUNNER_MICROVM_ROOTFS_SOURCE_DIR must point to a prepared guest rootfs directory" >&2
     exit 2
 fi
+rootfs_source_fakeroot_state="${rootfs_source_dir}.fakeroot-state"
+if [ ! -f "$rootfs_source_fakeroot_state" ]; then
+    echo "prepared rootfs is missing fakeroot ownership metadata" >&2
+    exit 2
+fi
+if [ "${SECONDBOX_RUNNER_MICROVM_FAKEROOT_ACTIVE-}" != "true" ]; then
+    command -v fakeroot >/dev/null 2>&1 || {
+        echo "missing required command: fakeroot" >&2
+        exit 2
+    }
+    exec fakeroot -i "$rootfs_source_fakeroot_state" -- \
+        env SECONDBOX_RUNNER_MICROVM_FAKEROOT_ACTIVE=true "$0" "$@"
+fi
+rootfs_source_manifest="$rootfs_source_dir/usr/share/secondbox/image-provenance/rootfs-source-manifest.json"
+if [ ! -f "$rootfs_source_manifest" ]; then
+    echo "prepared rootfs is missing rootfs-source-manifest.json" >&2
+    exit 2
+fi
+browser_policy="$(jq -er '.source.browserPolicy | select(. == "allow" or . == "forbid")' "$rootfs_source_manifest")"
+oci_mode="$(jq -er '.source.ociMode // "" | select(. == "" or . == "extend" or . == "prepared")' "$rootfs_source_manifest")"
+if [ "$oci_mode" = "prepared" ]; then
+    rootfs_surface_contract="prepared-oci"
+else
+    rootfs_surface_contract="standard-tools"
+fi
 if [ -z "$signing_key" ] || [ ! -f "$signing_key" ]; then
     echo "SECONDBOX_RUNNER_MICROVM_SIGNING_KEY must point to an existing private key" >&2
     exit 2
@@ -95,7 +121,7 @@ if ! [[ "$trusted_public_key_sha" =~ ^[0-9a-f]{64}$ ]]; then
     exit 2
 fi
 
-for cmd in debugfs file go sha256sum openssl mkfs.ext4 tar; do
+for cmd in blkid debugfs go sha256sum openssl mkfs.ext4 tar; do
     command -v "$cmd" >/dev/null 2>&1 || { echo "missing required command: $cmd" >&2; exit 2; }
 done
 
@@ -123,16 +149,30 @@ tar -C "$rootfs_source_dir" --one-file-system \
     --exclude='./runtime-private/*' \
     -cf - . | tar --no-same-owner -xf - -C "$root_dir"
 
-install -d -m 0755 "$root_dir/dev" "$root_dir/proc" "$root_dir/sys" "$root_dir/tmp" "$root_dir/workspace" "$root_dir/runtime-private" "$root_dir/shared"
+install -d -o 0 -g 0 -m 0755 \
+    "$root_dir/dev" \
+    "$root_dir/proc" \
+    "$root_dir/sys" \
+    "$root_dir/workspace" \
+    "$root_dir/runtime-private" \
+    "$root_dir/shared"
+install -d -o 0 -g 0 -m 1777 "$root_dir/tmp"
 install -m 0755 "$script_dir/init" "$root_dir/init"
 
 echo "Building guest supervisor" >&2
 install -d -m 0755 "$root_dir/usr/local/bin"
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$root_dir/usr/local/bin/secondbox-guest-agent" "$repo_root/cmd/secondbox-guest-agent"
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go -C "$runner_root" build \
+        -o "$root_dir/usr/local/bin/secondbox-guest-agent" \
+        ./cmd/secondbox-guest-agent
 # Tool-executor microVMs run the tool-exec server only.
 install -m 0755 "$script_dir/tool-entrypoint.sh" "$root_dir/usr/local/bin/secondbox-runner-guest-entrypoint"
 
-"$script_dir/rootfs/verify-secondbox-rootfs.sh" --root-dir "$root_dir"
+if [ "$rootfs_surface_contract" = "prepared-oci" ]; then
+    "$script_dir/rootfs/verify-secondbox-rootfs.sh" --prepared-root-dir "$root_dir"
+else
+    "$script_dir/rootfs/verify-secondbox-rootfs.sh" --root-dir "$root_dir"
+fi
 
 if [ -d "$root_dir/builtin-skills" ]; then
     mkdir -p "$shared_dir"
@@ -145,7 +185,9 @@ printf '%s\n' "$artifact_version" > "$shared_dir/secondbox-runner-guest-artifact
 rootfs="$out_dir/rootfs.ext4"
 truncate -s "${rootfs_size_mib}M" "$rootfs"
 mkfs.ext4 -F -q -U "$rootfs_uuid" -d "$root_dir" "$rootfs"
-"$script_dir/verify-browser-surface.sh" --rootfs "$rootfs"
+if [ "$browser_policy" = "forbid" ]; then
+    "$script_dir/verify-browser-surface.sh" --rootfs "$rootfs"
+fi
 
 shared="$out_dir/shared.img"
 case "$shared_format" in
@@ -172,9 +214,15 @@ else
     truncate -s "${shared_size_mib}M" "$shared"
     mkfs.ext4 -F -q -d "$shared_dir" "$shared"
 fi
-"$script_dir/verify-browser-surface.sh" --shared "$shared"
+if [ "$browser_policy" = "forbid" ]; then
+    "$script_dir/verify-browser-surface.sh" --shared "$shared"
+fi
 
-"$script_dir/rootfs/verify-secondbox-rootfs.sh" --rootfs "$rootfs"
+if [ "$rootfs_surface_contract" = "prepared-oci" ]; then
+    "$script_dir/rootfs/verify-secondbox-rootfs.sh" --prepared-rootfs "$rootfs"
+else
+    "$script_dir/rootfs/verify-secondbox-rootfs.sh" --rootfs "$rootfs"
+fi
 
 cp "$kernel_path" "$out_dir/kernel"
 created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -226,13 +274,19 @@ fi
 provenance_sha="$(sha256sum "$out_dir/kernel-provenance.json" | awk '{print $1}')"
 rootfs_source_sha="$(sha256sum "$out_dir/rootfs-source-manifest.json" | awk '{print $1}')"
 rootfs_policy_sha="$(sha256sum "$script_dir/rootfs/verify-secondbox-rootfs.sh" | awk '{print $1}')"
+secret_scan_policy_sha="$(sha256sum "$script_dir/scan-no-secrets.sh" | awk '{print $1}')"
+browser_surface_policy_sha="$(sha256sum "$script_dir/verify-browser-surface.sh" | awk '{print $1}')"
 cat > "$out_dir/secondbox-rootfs-contract.json" <<EOF
 {
   "schemaVersion": 1,
   "contract": "secondbox-guest-rootfs",
   "state": "verified",
+  "surfaceContract": "$rootfs_surface_contract",
+  "browserPolicy": "$browser_policy",
   "rootfsSha256": "$rootfs_sha",
-  "policySha256": "$rootfs_policy_sha"
+  "policySha256": "$rootfs_policy_sha",
+  "secretScanPolicySha256": "$secret_scan_policy_sha",
+  "browserSurfacePolicySha256": "$browser_surface_policy_sha"
 }
 EOF
 rootfs_contract_sha="$(sha256sum "$out_dir/secondbox-rootfs-contract.json" | awk '{print $1}')"
@@ -309,5 +363,6 @@ openssl dgst -sha256 -verify "$out_dir/signing.pub" -signature "$out_dir/manifes
 
 "$script_dir/verify.sh" "$out_dir" "$trusted_public_key" "$trusted_public_key_sha"
 out_dir_abs="$(cd "$out_dir" && pwd)"
-ln -sfn "$out_dir_abs" "$repo_root/releases/microvm/latest"
+mkdir -p "$runner_root/releases/microvm"
+ln -sfn "$out_dir_abs" "$runner_root/releases/microvm/latest"
 echo "$out_dir"

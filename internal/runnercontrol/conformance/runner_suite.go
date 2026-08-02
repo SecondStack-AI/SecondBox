@@ -109,6 +109,7 @@ func (runner *FakeRunner) Registration() *runnerv1.RunnerToControlPlane {
 					FirecrackerVersion: "1.16.1",
 					KvmReady:           true, JailerReady: true, CgroupReady: true,
 					NetworkPolicyReady: true, StorageReady: true, CleanupReady: true,
+					DataPlaneReady: true,
 					GuestProtocolGenerations: &runnerv1.ProtocolVersionRange{
 						Minimum: 1, Maximum: 1,
 					},
@@ -125,6 +126,8 @@ func (runner *FakeRunner) Registration() *runnerv1.RunnerToControlPlane {
 						VerifiedAtUnixMs: 1,
 					},
 				},
+				StartupTiming:              &runnerv1.StartupTiming{},
+				DataPlaneAdvertisedAddress: "10.0.0.5:7443",
 			},
 		},
 	})
@@ -143,6 +146,8 @@ func (runner *FakeRunner) Heartbeat(phase runnerv1.DrainPhase) *runnerv1.RunnerT
 					Instances: 8, Operations: 32,
 				},
 				Reserved: &runnerv1.Capacity{}, DrainPhase: phase,
+				StartupTiming:              &runnerv1.StartupTiming{},
+				DataPlaneAdvertisedAddress: "10.0.0.5:7443",
 			},
 		},
 	})

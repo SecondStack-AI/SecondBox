@@ -14,6 +14,7 @@ import (
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
+	"github.com/SecondStack-AI/SecondBox/internal/worknotify"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
@@ -35,6 +36,13 @@ type terminalDataPlaneRelay interface {
 	AppendTerminalClientFrame(context.Context, string, string, string, string, runnercontrol.TerminalClientFrame, time.Time) (bool, error)
 	ListTerminalServerFrames(context.Context, string, string, string, int64, int) ([]runnercontrol.TerminalServerFrame, error)
 }
+
+const (
+	maximumExecEnvironmentVariables  = 128
+	maximumExecEnvironmentNameBytes  = 256
+	maximumExecEnvironmentValueBytes = 128 * 1024
+	maximumExecEnvironmentTotalBytes = 1024 * 1024
+)
 
 func (service *ControlPlaneService) CreateSandboxExecStream(
 	ctx context.Context,
@@ -222,6 +230,22 @@ func (service *ControlPlaneService) SandboxExecStreamEndpoint(
 
 func (service *ControlPlaneService) DataPlanePollInterval() time.Duration {
 	return service.dataPlanePollInterval
+}
+
+// SubscribeDataPlaneSession returns a coalesced wakeup for one session's inbound
+// frames and a cancellation function.
+//
+// A deployment without a wakeup source yields a nil channel, which blocks
+// forever in a select and leaves the caller on its poll interval. That interval
+// is the recovery bound in both cases, so a lost or absent notification delays
+// delivery rather than losing it.
+func (service *ControlPlaneService) SubscribeDataPlaneSession(
+	sessionID string,
+) (<-chan struct{}, func()) {
+	if service.dataPlaneWakeups == nil || sessionID == "" {
+		return nil, func() {}
+	}
+	return service.dataPlaneWakeups.Subscribe(worknotify.KindDataPlaneSession, sessionID)
 }
 
 func (service *ControlPlaneService) SandboxExecStreamOutcome(
@@ -591,7 +615,7 @@ func (service *ControlPlaneService) requireDataPlane(principal contracts.Princip
 }
 
 func validateBufferedExecRequest(request contracts.BufferedExecRequest) ([]byte, error) {
-	if request.Environment == nil || len(request.Environment) > 128 ||
+	if request.Environment == nil || len(request.Environment) > maximumExecEnvironmentVariables ||
 		request.DeadlineMilliseconds < 1 || request.MaximumOutputBytes < 1 {
 		return nil, errors.New("SecondBox buffered Exec bounds are invalid")
 	}
@@ -618,9 +642,30 @@ func validateBufferedExecRequest(request contracts.BufferedExecRequest) ([]byte,
 	default:
 		return nil, errors.New("SecondBox Exec command mode is invalid")
 	}
+	environmentBytes := 0
 	for name, value := range request.Environment {
-		if name == "" || len(name) > 256 || len(value) > 8192 {
-			return nil, errors.New("SecondBox Exec environment exceeds its bound")
+		if name == "" || len(name) > maximumExecEnvironmentNameBytes {
+			return nil, fmt.Errorf(
+				"SecondBox Exec environment variable name has %d bytes; maximum is %d",
+				len(name),
+				maximumExecEnvironmentNameBytes,
+			)
+		}
+		if len(value) > maximumExecEnvironmentValueBytes {
+			return nil, fmt.Errorf(
+				"SecondBox Exec environment variable %q has %d bytes; maximum is %d",
+				name,
+				len(value),
+				maximumExecEnvironmentValueBytes,
+			)
+		}
+		environmentBytes += len(name) + len(value)
+		if environmentBytes > maximumExecEnvironmentTotalBytes {
+			return nil, fmt.Errorf(
+				"SecondBox Exec environment total has %d bytes; maximum is %d",
+				environmentBytes,
+				maximumExecEnvironmentTotalBytes,
+			)
 		}
 	}
 	if request.StdinBase64 != nil && len(*request.StdinBase64) > 1_398_104 {
@@ -681,7 +726,8 @@ func execOutcome(session runnercontrol.DataPlaneSession) (any, error) {
 	}
 	switch session.TerminalKind {
 	case runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED.String():
-		if session.ExitCode < 0 || session.ExitCode > 255 || session.Signal < 0 || session.Signal > 64 {
+		if session.ExitCode < 0 || session.ExitCode > 255 || session.Signal < 0 ||
+			session.Signal > 64 || session.ElapsedMilliseconds < 0 {
 			return nil, errors.New("SecondBox Exec terminal outcome is incomplete")
 		}
 		var signal *int32
@@ -689,7 +735,10 @@ func execOutcome(session runnercontrol.DataPlaneSession) (any, error) {
 			value := session.Signal
 			signal = &value
 		}
-		return contracts.ExecExited{Kind: "exited", ExitCode: session.ExitCode, Signal: signal, Output: output}, nil
+		return contracts.ExecExited{
+			Kind: "exited", ExitCode: session.ExitCode, Signal: signal,
+			ElapsedMilliseconds: session.ElapsedMilliseconds, Output: output,
+		}, nil
 	case runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_SPAWN_FAILED.String():
 		reason, err := publicSpawnFailureReason(session.SpawnFailureReason)
 		if err != nil || len(session.TerminalMessage) < 1 || len(session.TerminalMessage) > 2048 {

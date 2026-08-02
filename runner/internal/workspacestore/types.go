@@ -1,0 +1,274 @@
+// Package workspacestore owns runner-local durable Sandbox workspace images.
+//
+// The package deliberately exposes opaque handles instead of image paths. Only
+// compute adapters in the privileged Runner process may resolve a handle to an
+// open image file.
+package workspacestore
+
+import (
+	"context"
+	"errors"
+	"os"
+	"time"
+)
+
+var (
+	// ErrInvalidID rejects logical identifiers that cannot be mapped to an exact
+	// traversal-safe local path.
+	ErrInvalidID = errors.New("SecondBox WorkspaceStore logical ID is invalid")
+	// ErrWorkspaceNotFound reports absent authoritative local Workspace state.
+	ErrWorkspaceNotFound = errors.New("SecondBox WorkspaceStore Workspace is absent")
+	// ErrSnapshotNotFound reports absent authoritative local Snapshot state.
+	ErrSnapshotNotFound = errors.New("SecondBox WorkspaceStore Snapshot is absent")
+	// ErrActiveWriter reports that compute still owns the Workspace attachment.
+	ErrActiveWriter = errors.New("SecondBox WorkspaceStore Workspace has an active writer")
+	// ErrStaleGeneration reports a manifest generation different from the
+	// command's expected generation.
+	ErrStaleGeneration = errors.New("SecondBox WorkspaceStore generation is stale")
+	// ErrStaleFence reports replay of an operation under different fencing authority.
+	ErrStaleFence = errors.New("SecondBox WorkspaceStore fencing authority is stale")
+	// ErrConflictingReplay reports reuse of an operation ID with different
+	// immutable command inputs.
+	ErrConflictingReplay = errors.New("SecondBox WorkspaceStore operation replay conflicts")
+	// ErrRestorePending reports staged or swapped restore state that must be
+	// finalized or aborted before another destructive mutation.
+	ErrRestorePending = errors.New("SecondBox WorkspaceStore restore is pending")
+	// ErrSnapshotInUse reports a Snapshot referenced by staged restore state.
+	ErrSnapshotInUse = errors.New("SecondBox WorkspaceStore Snapshot is in use")
+	// ErrStorageIncompatible reports a root that cannot provide the mandatory
+	// same-filesystem FICLONE semantics.
+	ErrStorageIncompatible = errors.New("SecondBox WorkspaceStore storage is incompatible")
+	// ErrCorruptState reports malformed manifests, receipts, or image evidence.
+	ErrCorruptState = errors.New("SecondBox WorkspaceStore local state is corrupt")
+)
+
+const (
+	ReceiptWorkspaceCreate       = "workspace_create"
+	ReceiptWorkspaceClone        = "workspace_clone"
+	ReceiptGenerationAdvance     = "generation_advance"
+	ReceiptSnapshotCreate        = "snapshot_create"
+	ReceiptSnapshotDelete        = "snapshot_delete"
+	ReceiptRestorePrepare        = "restore_prepare"
+	ReceiptRestoreSwap           = "restore_swap"
+	ReceiptRestoreFinalize       = "restore_finalize"
+	ReceiptRestoreAbort          = "restore_abort"
+	ReceiptWorkspaceDelete       = "workspace_delete"
+	workspaceFilesystemLabel     = "secondbox-workspace"
+	currentManifestFormatVersion = 1
+	receiptFormatVersion         = 1
+)
+
+// WorkspaceHandle is provider-neutral attachment authority. Its local image
+// identity is intentionally private to this package.
+type WorkspaceHandle struct {
+	workspaceID string
+	image       string
+	generation  uint64
+	nonce       string
+}
+
+// WorkspaceID returns the logical Workspace identity.
+func (handle WorkspaceHandle) WorkspaceID() string {
+	return handle.workspaceID
+}
+
+// Generation returns the manifest generation resolved for this handle.
+func (handle WorkspaceHandle) Generation() uint64 {
+	return handle.generation
+}
+
+// Attachment holds the exclusive runner-local writer lock and an open image
+// descriptor. Callers must close it only after compute and every host-side user
+// have stopped.
+type Attachment struct {
+	handle WorkspaceHandle
+	file   *os.File
+	lock   *os.File
+}
+
+// ComputeAttachment is the only runner-private value a compute backend may
+// consume. It exposes an already-open image descriptor without exposing a
+// reusable host path to lifecycle or protocol code.
+type ComputeAttachment interface {
+	Handle() WorkspaceHandle
+	WorkspaceID() string
+	Generation() uint64
+	Image() *os.File
+	Close() error
+}
+
+// Handle returns the opaque compute attachment value.
+func (attachment *Attachment) Handle() WorkspaceHandle {
+	if attachment == nil {
+		return WorkspaceHandle{}
+	}
+	return attachment.handle
+}
+
+// WorkspaceID returns the logical Workspace bound to this attachment.
+func (attachment *Attachment) WorkspaceID() string {
+	return attachment.Handle().WorkspaceID()
+}
+
+// Generation returns the manifest generation held by the writer lock.
+func (attachment *Attachment) Generation() uint64 {
+	return attachment.Handle().Generation()
+}
+
+// Image returns an already-open descriptor for a privileged compute adapter.
+// Lifecycle and protocol code should retain only Handle.
+func (attachment *Attachment) Image() *os.File {
+	if attachment == nil {
+		return nil
+	}
+	return attachment.file
+}
+
+// Close releases the image descriptor and exclusive Workspace writer lock.
+func (attachment *Attachment) Close() error {
+	if attachment == nil {
+		return nil
+	}
+	var first error
+	if attachment.file != nil {
+		if err := attachment.file.Sync(); err != nil {
+			first = err
+		}
+		if err := attachment.file.Close(); err != nil {
+			if first == nil {
+				first = err
+			}
+		}
+		attachment.file = nil
+	}
+	if attachment.lock != nil {
+		if err := unlockFile(attachment.lock); err != nil && first == nil {
+			first = err
+		}
+		if err := attachment.lock.Close(); err != nil && first == nil {
+			first = err
+		}
+		attachment.lock = nil
+	}
+	return first
+}
+
+// Mutation identifies one idempotent runner-local command.
+type Mutation struct {
+	OperationID  string
+	WorkspaceID  string
+	FencingToken []byte
+}
+
+// CreateWorkspaceRequest creates generation one at an explicit logical
+// capacity. Capacity is never inferred from a Runner default.
+type CreateWorkspaceRequest struct {
+	Mutation
+	CapacityBytes int64
+}
+
+// CloneWorkspaceRequest creates generation one from one immutable local Snapshot.
+type CloneWorkspaceRequest struct {
+	Mutation
+	SourceSnapshot string
+	CapacityBytes  int64
+}
+
+// AdvanceGenerationRequest durably republishes the current image at exactly the
+// requested next generation.
+type AdvanceGenerationRequest struct {
+	Mutation
+	ExpectedGeneration uint64
+	NextGeneration     uint64
+}
+
+// CreateSnapshotRequest reflinks the current stopped Workspace image.
+type CreateSnapshotRequest struct {
+	Mutation
+	SnapshotID         string
+	ExpectedGeneration uint64
+}
+
+// DeleteSnapshotRequest removes one unattached immutable local Snapshot.
+type DeleteSnapshotRequest struct {
+	Mutation
+	SnapshotID string
+}
+
+// PrepareRestoreRequest stages a writable reflink child without changing the
+// authoritative current-image manifest.
+type PrepareRestoreRequest struct {
+	Mutation
+	SnapshotID         string
+	ExpectedGeneration uint64
+	NextGeneration     uint64
+}
+
+// SwapRestoreRequest atomically selects a previously staged restore.
+type SwapRestoreRequest struct {
+	Mutation
+	SnapshotID         string
+	ExpectedGeneration uint64
+	NextGeneration     uint64
+}
+
+// RestoreMutation identifies finalize or abort cleanup for one restore.
+type RestoreMutation struct {
+	Mutation
+}
+
+// DeleteWorkspaceRequest removes one stopped Workspace after its local
+// Snapshots and restore state have been removed.
+type DeleteWorkspaceRequest struct {
+	Mutation
+	ExpectedGeneration uint64
+}
+
+// Receipt is immutable replay evidence persisted before acknowledging a local
+// mutation result.
+type Receipt struct {
+	FormatVersion      int       `json:"formatVersion"`
+	Kind               string    `json:"kind"`
+	OperationID        string    `json:"operationId"`
+	WorkspaceID        string    `json:"workspaceId"`
+	SnapshotID         string    `json:"snapshotId,omitempty"`
+	InputDigest        string    `json:"inputDigest"`
+	Generation         uint64    `json:"generation,omitempty"`
+	PreviousGeneration uint64    `json:"previousGeneration,omitempty"`
+	CapacityBytes      int64     `json:"capacityBytes,omitempty"`
+	RecordedAt         time.Time `json:"recordedAt"`
+}
+
+// WorkspaceInspection is bounded logical local-storage evidence.
+type WorkspaceInspection struct {
+	WorkspaceID    string
+	Generation     uint64
+	CapacityBytes  int64
+	Formatted      bool
+	RestorePending bool
+	ActiveWriter   bool
+}
+
+// ReconcileReport contains bounded logical evidence used after Runner restart.
+type ReconcileReport struct {
+	Workspaces []WorkspaceInspection
+	Receipts   []Receipt
+}
+
+// WorkspaceStore is the provider-neutral runner-owned local workspace port.
+// Every mutating request includes a stable operation ID.
+type WorkspaceStore interface {
+	Create(context.Context, CreateWorkspaceRequest) (Receipt, error)
+	CloneFromSnapshot(context.Context, CloneWorkspaceRequest) (Receipt, error)
+	Open(context.Context, string, uint64) (ComputeAttachment, error)
+	AdvanceGeneration(context.Context, AdvanceGenerationRequest) (Receipt, error)
+	CreateSnapshot(context.Context, CreateSnapshotRequest) (Receipt, error)
+	DeleteSnapshot(context.Context, DeleteSnapshotRequest) (Receipt, error)
+	PrepareRestore(context.Context, PrepareRestoreRequest) (Receipt, error)
+	SwapRestore(context.Context, SwapRestoreRequest) (Receipt, error)
+	FinalizeRestore(context.Context, RestoreMutation) (Receipt, error)
+	AbortRestore(context.Context, RestoreMutation) (Receipt, error)
+	DeleteWorkspace(context.Context, DeleteWorkspaceRequest) (Receipt, error)
+	Inspect(context.Context, string) (WorkspaceInspection, error)
+	Reconcile(context.Context) (ReconcileReport, error)
+}

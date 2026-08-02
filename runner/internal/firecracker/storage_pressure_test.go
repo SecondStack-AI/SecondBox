@@ -3,11 +3,8 @@ package firecracker
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"testing"
 	"time"
 
@@ -78,7 +75,7 @@ func TestStoragePressureControllerWarnsDeniesAndRecoversWithHysteresis(t *testin
 
 func TestStoragePressureReservationsAreAtomicAndReleasedForRecovery(t *testing.T) {
 	probe := &mutableStoragePressureProbe{sample: storagePressureSample{
-		Backend: "dm-thin", TotalBytes: 1000, UsedBytes: 600,
+		Backend: "local-workspace", TotalBytes: 1000, UsedBytes: 600,
 	}}
 	var terminalKinds []string
 	controller, err := newStoragePressureController(
@@ -194,178 +191,6 @@ func TestAssignmentStoragePressureDeniesBeforeAllocationOrProgress(t *testing.T)
 	}
 }
 
-func TestRestoreSpoolPressureDeniesBeforeAllocation(t *testing.T) {
-	fixture := newFirecrackerConformanceFixture(t)
-	backend := fixture.Backend.(*AssignmentBackend)
-	spoolDir := backend.manager.cfg.MicroVMCheckpointRestoreSpoolDir
-	backend.restoreSpoolPressure, _ = newStoragePressureController(
-		storagePressurePolicy{RecoveryPercent: 70, WarningPercent: 80, AdmissionDenyPercent: 90},
-		&mutableStoragePressureProbe{sample: storagePressureSample{
-			Backend: "restore-spool", TotalBytes: 100, UsedBytes: 90,
-		}},
-		func(context.Context, string) error { return nil },
-	)
-	begin := &runnerprotocol.RestoreBegin{
-		Fence: fixture.Assignment.Fence, CheckpointId: "pressure-restore",
-		StorageObjectId: "restore/object", Sha256: strings.Repeat("a", 64), SizeBytes: 1,
-		Compatibility: map[string]string{
-			"architecture": runtime.GOARCH, "backend": "firecracker", "workspaceFormat": "ext4",
-		},
-		DeadlineUnixMs: uint64(time.Now().Add(time.Minute).UnixMilli()),
-	}
-	if err := backend.BeginRestore(t.Context(), begin); !errors.Is(err, ErrStoragePressureAdmissionDenied) {
-		t.Fatalf("restore pressure error = %v", err)
-	}
-	entries, err := os.ReadDir(spoolDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 0 || backend.restoreSpoolPressure.ReservedBytes() != 0 {
-		t.Fatalf("denied restore allocated spool state: entries=%d reserved=%d", len(entries), backend.restoreSpoolPressure.ReservedBytes())
-	}
-}
-
-func TestExpiredRestoreCleanupReleasesReservationAndRecovers(t *testing.T) {
-	fixture := newFirecrackerConformanceFixture(t)
-	backend := fixture.Backend.(*AssignmentBackend)
-	probe := &mutableStoragePressureProbe{sample: storagePressureSample{
-		Backend: "restore-spool", TotalBytes: 100, UsedBytes: 75,
-	}}
-	var evidence []string
-	backend.restoreSpoolPressure, _ = newStoragePressureController(
-		storagePressurePolicy{RecoveryPercent: 70, WarningPercent: 80, AdmissionDenyPercent: 90},
-		probe,
-		func(_ context.Context, kind string) error {
-			evidence = append(evidence, kind)
-			return nil
-		},
-	)
-	begin := &runnerprotocol.RestoreBegin{
-		Fence: fixture.Assignment.Fence, CheckpointId: "expired-restore",
-		StorageObjectId: "restore/object", Sha256: strings.Repeat("a", 64), SizeBytes: 10,
-		Compatibility: map[string]string{
-			"architecture": runtime.GOARCH, "backend": "firecracker", "workspaceFormat": "ext4",
-		},
-		DeadlineUnixMs: uint64(time.Now().Add(time.Minute).UnixMilli()),
-	}
-	if err := backend.BeginRestore(t.Context(), begin); err != nil {
-		t.Fatal(err)
-	}
-	if err := backend.WriteRestoreChunk(t.Context(), &runnerprotocol.RestoreChunk{
-		Fence: begin.Fence, CheckpointId: begin.CheckpointId, StorageObjectId: begin.StorageObjectId,
-		Data: []byte("abc"),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	backend.restores[begin.CheckpointId].deadlineUnixMs = uint64(time.Now().Add(-time.Second).UnixMilli())
-	probe.sample.UsedBytes = 60
-	if err := backend.cleanupExpiredRestores(t.Context(), uint64(time.Now().UnixMilli())); err != nil {
-		t.Fatal(err)
-	}
-	if backend.restoreSpoolPressure.ReservedBytes() != 0 || backend.restores[begin.CheckpointId] != nil {
-		t.Fatal("expired restore retained state")
-	}
-	if got := evidence[len(evidence)-1]; got != "storage_pressure_recovered" {
-		t.Fatalf("expired cleanup evidence = %v", evidence)
-	}
-}
-
-func TestPressureCleanupPreservesActiveAndReplacementWorkspacesAndRecovers(t *testing.T) {
-	fixture := newFirecrackerConformanceFixture(t)
-	backend := fixture.Backend.(*AssignmentBackend)
-	probe := &mutableStoragePressureProbe{sample: storagePressureSample{
-		Backend: "ext4", TotalBytes: 100, UsedBytes: 90,
-	}}
-	var evidence []string
-	backend.storagePressure, _ = newStoragePressureController(
-		storagePressurePolicy{RecoveryPercent: 70, WarningPercent: 80, AdmissionDenyPercent: 95},
-		probe,
-		func(_ context.Context, kind string) error {
-			evidence = append(evidence, kind)
-			return nil
-		},
-	)
-	backend.assignments["active"] = activeRunnerAssignment{
-		fence:                 &runnerprotocol.AssignmentFence{AssignmentId: "active", SandboxId: "sandbox"},
-		workspaceAttachmentID: "replacement-generation-2",
-	}
-	backend.releasedWorkspaces["released"] = releasedWorkspaceCleanup{
-		sandboxID: "sandbox", attachmentID: "released-generation-1",
-	}
-	var removed []string
-	backend.removeReleasedWorkspace = func(_ context.Context, _, attachmentID string) error {
-		removed = append(removed, attachmentID)
-		probe.sample.UsedBytes = 60
-		return nil
-	}
-	if err := backend.checkWorkspaceAdmission(t.Context(), 10); err != nil {
-		t.Fatalf("admission after bounded cleanup: %v", err)
-	}
-	if got, want := removed, []string{"released-generation-1"}; !equalStrings(got, want) {
-		t.Fatalf("removed workspaces = %v, want %v", got, want)
-	}
-	if backend.assignments["active"].workspaceAttachmentID != "replacement-generation-2" {
-		t.Fatal("active replacement workspace changed during cleanup")
-	}
-	if len(backend.releasedWorkspaces) != 0 || evidence[len(evidence)-1] != "storage_pressure_recovered" {
-		t.Fatalf("cleanup recovery state: candidates=%v evidence=%v", backend.releasedWorkspaces, evidence)
-	}
-}
-
-func TestPressureCleanupFailureIsExplicitAndRetainsCandidate(t *testing.T) {
-	fixture := newFirecrackerConformanceFixture(t)
-	backend := fixture.Backend.(*AssignmentBackend)
-	sink := &recordingManagerEvidenceSink{}
-	backend.manager.evidence = sink
-	probe := &mutableStoragePressureProbe{sample: storagePressureSample{
-		Backend: "ext4", TotalBytes: 100, UsedBytes: 95,
-	}}
-	backend.storagePressure, _ = newStoragePressureController(
-		storagePressurePolicy{RecoveryPercent: 70, WarningPercent: 80, AdmissionDenyPercent: 90},
-		probe,
-		func(context.Context, string) error { return nil },
-	)
-	backend.releasedWorkspaces["released"] = releasedWorkspaceCleanup{
-		sandboxID: "sandbox", attachmentID: "released-generation-1",
-	}
-	backend.removeReleasedWorkspace = func(context.Context, string, string) error {
-		return errors.New("simulated cleanup failure")
-	}
-	err := backend.checkWorkspaceAdmission(t.Context(), 1)
-	if err == nil || !strings.Contains(err.Error(), "simulated cleanup failure") {
-		t.Fatalf("cleanup failure = %v", err)
-	}
-	if _, exists := backend.releasedWorkspaces["released"]; !exists {
-		t.Fatal("failed cleanup discarded retry candidate")
-	}
-	records := sink.snapshot()
-	if len(records) != 1 || records[0].TerminalKind != "storage_pressure_cleanup_failed" {
-		t.Fatalf("cleanup failure evidence = %+v", records)
-	}
-}
-
-func TestPressureCleanupBatchIsBounded(t *testing.T) {
-	fixture := newFirecrackerConformanceFixture(t)
-	backend := fixture.Backend.(*AssignmentBackend)
-	for index := 0; index < maxStoragePressureCleanupBatch+1; index++ {
-		assignmentID := fmt.Sprintf("released-%d", index)
-		backend.releasedWorkspaces[assignmentID] = releasedWorkspaceCleanup{
-			sandboxID: "sandbox", attachmentID: assignmentID,
-		}
-	}
-	removed := 0
-	backend.removeReleasedWorkspace = func(context.Context, string, string) error {
-		removed++
-		return nil
-	}
-	if err := backend.cleanupReleasedWorkspaces(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if removed != maxStoragePressureCleanupBatch || len(backend.releasedWorkspaces) != 1 {
-		t.Fatalf("bounded cleanup removed=%d remaining=%d", removed, len(backend.releasedWorkspaces))
-	}
-}
-
 func TestExt4StoragePressureRejectsHostRootFilesystem(t *testing.T) {
 	probe := &ext4StoragePressureProbe{workspaceDir: "/"}
 	_, err := probe.Sample(t.Context())
@@ -374,85 +199,24 @@ func TestExt4StoragePressureRejectsHostRootFilesystem(t *testing.T) {
 	}
 }
 
-func TestDMThinStoragePressureUsesOnlyConfiguredPool(t *testing.T) {
-	var commands []string
-	probe := &dmThinStoragePressureProbe{
-		poolDevice:        "/dev/mapper/secondbox-pool",
-		workspaceDir:      "/dedicated/workspaces",
-		validateWorkspace: func(string) error { return nil },
-		run: func(_ context.Context, name string, args ...string) ([]byte, error) {
-			commands = append(commands, name+" "+joinCommandArgs(args))
-			switch args[0] {
-			case "status":
-				return []byte("0 20971520 thin-pool 7 25/100 75/1000 - rw no_discard_passdown queue_if_no_space -"), nil
-			case "table":
-				return []byte("0 20971520 thin-pool 253:0 253:1 128 32768 1 skip_block_zeroing"), nil
-			default:
-				return nil, errors.New("unexpected command")
-			}
-		},
-	}
-	sample, err := probe.Sample(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sample.Backend != "dm-thin" ||
-		sample.TotalBytes != 1000*128*512 ||
-		sample.UsedBytes != 75*128*512 ||
-		sample.MetadataUsedBasisPoints != 2500 {
-		t.Fatalf("dm-thin sample = %+v", sample)
-	}
-	if got, want := commands, []string{
-		"dmsetup status /dev/mapper/secondbox-pool --target thin-pool",
-		"dmsetup table /dev/mapper/secondbox-pool --target thin-pool",
-	}; !equalStrings(got, want) {
-		t.Fatalf("dm-thin commands = %v, want %v", got, want)
-	}
-
-	probe.run = func(context.Context, string, ...string) ([]byte, error) {
-		return nil, os.ErrPermission
-	}
-	if _, err := probe.Sample(t.Context()); !errors.Is(err, ErrStoragePressureProbe) {
-		t.Fatalf("dm-thin command failure = %v", err)
-	}
-}
-
-func TestDMThinStoragePressureRejectsHostRootSpoolBeforePoolProbe(t *testing.T) {
-	commandCalled := false
-	probe := &dmThinStoragePressureProbe{
-		poolDevice:   "/dev/mapper/secondbox-pool",
-		workspaceDir: "/",
-		run: func(context.Context, string, ...string) ([]byte, error) {
-			commandCalled = true
-			return nil, nil
-		},
-	}
-	if _, err := probe.Sample(t.Context()); !errors.Is(err, ErrStoragePressureDedicatedStorage) {
-		t.Fatalf("dm-thin host-root spool error = %v", err)
-	}
-	if commandCalled {
-		t.Fatal("dm-thin pool was probed after detecting a host-root restore spool")
-	}
-}
-
-func TestRestoreSpoolPressureRejectsRootAndSymlink(t *testing.T) {
-	for name, spoolDir := range map[string]string{
+func TestWorkspacePressureRejectsRootAndSymlink(t *testing.T) {
+	for name, workspaceRoot := range map[string]string{
 		"root":    "/",
-		"symlink": filepath.Join(t.TempDir(), "spool-link"),
+		"symlink": filepath.Join(t.TempDir(), "workspace-link"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if name == "symlink" {
 				target := t.TempDir()
-				if err := os.Symlink(target, spoolDir); err != nil {
+				if err := os.Symlink(target, workspaceRoot); err != nil {
 					t.Fatal(err)
 				}
 			}
 			probe := &ext4StoragePressureProbe{
-				workspaceDir: spoolDir,
-				backend:      "restore-spool",
+				workspaceDir: workspaceRoot,
+				backend:      "local-workspace",
 			}
 			if _, err := probe.Sample(t.Context()); !errors.Is(err, ErrStoragePressureDedicatedStorage) {
-				t.Fatalf("unsafe restore spool error = %v", err)
+				t.Fatalf("unsafe workspace root error = %v", err)
 			}
 		})
 	}
@@ -476,37 +240,23 @@ func TestStoragePressurePolicyRequiresOrderedExplicitThresholds(t *testing.T) {
 	}
 }
 
-func TestStoragePressureConfigurationSelectsOneBackendWithoutFallback(t *testing.T) {
-	base := &config.Config{
-		MicroVMWorkspaceDir:                        "/dedicated/workspaces",
-		MicroVMThinPoolDevice:                      "/dev/mapper/secondbox-pool",
+func TestStoragePressureConfigurationUsesReflinkWorkspaceRoot(t *testing.T) {
+	cfg := &config.Config{
+		RunnerWorkspaceRoot:                        "/dedicated/workspaces",
 		MicroVMStoragePressureRecoveryPercent:      70,
 		MicroVMStoragePressureWarningPercent:       80,
 		MicroVMStoragePressureAdmissionDenyPercent: 90,
 	}
-	for _, testCase := range []struct {
-		backend string
-		want    string
-	}{
-		{backend: "ext4", want: "ext4"},
-		{backend: "dm-thin", want: "dm-thin"},
-	} {
-		cfg := *base
-		cfg.MicroVMWorkspaceBackend = testCase.backend
-		controller, err := newConfiguredStoragePressureController(
-			&cfg,
-			func(context.Context, string) error { return nil },
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if controller.probe.Backend() != testCase.want {
-			t.Fatalf("%s selected %q probe", testCase.backend, controller.probe.Backend())
-		}
+	controller, err := newConfiguredStoragePressureController(
+		cfg,
+		func(context.Context, string) error { return nil },
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
-	base.MicroVMWorkspaceBackend = "unknown"
-	if _, err := newConfiguredStoragePressureController(base, func(context.Context, string) error { return nil }); err == nil {
-		t.Fatal("unknown storage backend selected a fallback")
+	probe, ok := controller.probe.(*ext4StoragePressureProbe)
+	if !ok || probe.workspaceDir != cfg.RunnerWorkspaceRoot {
+		t.Fatalf("configured probe = %#v", controller.probe)
 	}
 }
 
@@ -520,15 +270,4 @@ func equalStrings(left, right []string) bool {
 		}
 	}
 	return true
-}
-
-func joinCommandArgs(args []string) string {
-	var joined string
-	for index, arg := range args {
-		if index > 0 {
-			joined += " "
-		}
-		joined += arg
-	}
-	return joined
 }

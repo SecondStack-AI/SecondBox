@@ -184,7 +184,7 @@ func TestGuestProtocolFrozenDescriptorAndFixtureHashes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const frozenFixtureSHA256 = "5d3055bb9769aa96d52c83f95bb871c2e8a45b47f36cb40201ff135304a90388"
+	const frozenFixtureSHA256 = "ca2a7848c8427c2390624027f66234ced66062218d005ee9df6cfed6e27c9271"
 	if got := fmt.Sprintf("%x", sha256.Sum256(fixture)); got != frozenFixtureSHA256 {
 		t.Fatalf("frozen fixture digest = %s, want %s", got, frozenFixtureSHA256)
 	}
@@ -240,8 +240,8 @@ func TestProtocolServiceRejectsUnsupportedMandatoryFeature(t *testing.T) {
 		Message: &guestv1.RunnerToGuest_Hello{Hello: &guestv1.Hello{
 			Binding:                         protocolTestBinding(),
 			SupportedGenerations:            &guestv1.ProtocolGenerationRange{Minimum: 1, Maximum: 1},
-			RequestedFeatures:               []guestv1.GuestFeature{guestv1.GuestFeature_GUEST_FEATURE_CHECKPOINT_FREEZE},
-			MandatoryFeatures:               []guestv1.GuestFeature{guestv1.GuestFeature_GUEST_FEATURE_CHECKPOINT_FREEZE},
+			RequestedFeatures:               []guestv1.GuestFeature{guestv1.GuestFeature(5)},
+			MandatoryFeatures:               []guestv1.GuestFeature{guestv1.GuestFeature(5)},
 			ExpectedImageManifestDigest:     "sha256:image",
 			ExpectedToolchainManifestDigest: "sha256:toolchain",
 		}},
@@ -937,9 +937,9 @@ func TestProtocolServiceDescriptorPinnedBinaryFileRoundTrip(t *testing.T) {
 	readBinding.Sequence = 2
 	if err := stream.Send(&guestv1.RunnerToGuest{Message: &guestv1.RunnerToGuest_File{File: &guestv1.FileFrame{
 		Binding: readBinding,
-		Payload: &guestv1.FileFrame_Credit{Credit: &guestv1.ByteCredit{ByteCount: 1024}},
+		Payload: &guestv1.FileFrame_Credit{Credit: &guestv1.ByteCredit{ByteCount: uint64(len(content))}},
 	}}}); err != nil {
-		t.Fatalf("send file credit: %v", err)
+		t.Fatalf("send exact file credit: %v", err)
 	}
 	var got bytes.Buffer
 	for {
@@ -1240,8 +1240,10 @@ func protocolTestFeature(t *testing.T, name string) guestv1.GuestFeature {
 		return guestv1.GuestFeature_GUEST_FEATURE_DESCRIPTOR_PINNED_FILESYSTEM
 	case "activity_events":
 		return guestv1.GuestFeature_GUEST_FEATURE_ACTIVITY_EVENTS
-	case "checkpoint_freeze":
-		return guestv1.GuestFeature_GUEST_FEATURE_CHECKPOINT_FREEZE
+	case "port_proxy":
+		return guestv1.GuestFeature_GUEST_FEATURE_PORT_PROXY
+	case "unsupported_reserved_5":
+		return guestv1.GuestFeature(5)
 	default:
 		t.Fatalf("unknown fixture feature %q", name)
 		return guestv1.GuestFeature_GUEST_FEATURE_UNSPECIFIED

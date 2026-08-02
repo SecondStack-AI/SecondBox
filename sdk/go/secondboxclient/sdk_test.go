@@ -190,6 +190,8 @@ func TestSandboxHandleConnectsAndSequencesExecStream(t *testing.T) {
 	upgrader := websocket.Upgrader{Subprotocols: []string{execStreamSubprotocol}}
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("Authorization") != "Bearer token" ||
+			request.Header.Get("X-SecondBox-Tenant-Ref") != "secondbox" ||
+			request.Header.Get("X-SecondBox-Subject-Ref") != "secondbox-admin" ||
 			request.Header.Get("SecondBox-Generation") != "3" {
 			t.Errorf("stream headers = %#v", request.Header)
 		}
@@ -303,6 +305,8 @@ func TestSandboxHandleConnectsAndSequencesTerminal(t *testing.T) {
 	upgrader := websocket.Upgrader{Subprotocols: []string{terminalSubprotocol}}
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("Authorization") != "Bearer token" ||
+			request.Header.Get("X-SecondBox-Tenant-Ref") != "secondbox" ||
+			request.Header.Get("X-SecondBox-Subject-Ref") != "secondbox-admin" ||
 			request.Header.Get("SecondBox-Generation") != "3" {
 			t.Errorf("Terminal headers = %#v", request.Header)
 		}
@@ -469,7 +473,7 @@ func sandboxJSON(id, state string) string {
 		"id": id, "projectId": "project-1", "profile": "default", "profileRevisionId": "profile-revision-1",
 		"state": state, "desiredState": "running", "generation": 1,
 		"workspace": map[string]any{
-			"id": "workspace-1", "generation": 1, "retainedBytes": 0,
+			"id": "workspace-1", "generation": 1, "state": "ready", "sizeBytes": 1073741824,
 			"createdAt": "2026-07-28T00:00:00Z", "updatedAt": "2026-07-28T00:00:00Z",
 		},
 		"metadata": map[string]string{}, "revision": 1,

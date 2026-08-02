@@ -208,6 +208,7 @@ func (backend *portRelayAssignmentBackend) OpenPort(
 	*runnerprotocol.AssignmentFence,
 	*runnerprotocol.PortOpen,
 ) (PortConnection, error) {
+	backend.connection.markOpened()
 	return backend.connection, nil
 }
 
@@ -220,6 +221,7 @@ type testPortConnection struct {
 	mu      sync.Mutex
 	written []byte
 	closed  bool
+	wasOpen bool
 	reads   chan testPortRead
 }
 
@@ -267,6 +269,18 @@ func (connection *testPortConnection) isClosed() bool {
 	connection.mu.Lock()
 	defer connection.mu.Unlock()
 	return connection.closed
+}
+
+func (connection *testPortConnection) markOpened() {
+	connection.mu.Lock()
+	connection.wasOpen = true
+	connection.mu.Unlock()
+}
+
+func (connection *testPortConnection) opened() bool {
+	connection.mu.Lock()
+	defer connection.mu.Unlock()
+	return connection.wasOpen
 }
 
 func relayPortOpen(

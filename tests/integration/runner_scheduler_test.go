@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net/url"
 	"sync"
@@ -147,16 +148,35 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	if _, err := stateStore.RecordHeartbeat(t.Context(), reordered, now); !errors.Is(err, runnercontrol.ErrSequenceReordered) {
 		t.Fatalf("reordered Heartbeat error = %v, want ErrSequenceReordered", err)
 	}
+	task4CompleteWorkspaceReconciliation(
+		t,
+		stateStore,
+		runnerID,
+		connectionID,
+		3,
+		nil,
+		now,
+	)
 
 	sandboxID := task4ID("sandbox")
 	profileRevisionID := task4ID("profile-revision")
-	workspaceID := task4InsertSchedulableSandbox(t, sandboxID, profileRevisionID, now)
-	firstScheduler, err := scheduler.NewPostgresStore(t.Context(), integrationDatabaseURL)
+	workspaceID := task4InsertSchedulableSandbox(t, sandboxID, profileRevisionID, runnerID, now)
+	firstScheduler, err := scheduler.NewPostgresStore(
+		t.Context(), scheduler.PostgresStoreConfig{
+			DatabaseURL: integrationDatabaseURL,
+			Now:         func() time.Time { return now },
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(firstScheduler.Close)
-	secondScheduler, err := scheduler.NewPostgresStore(t.Context(), integrationDatabaseURL)
+	secondScheduler, err := scheduler.NewPostgresStore(
+		t.Context(), scheduler.PostgresStoreConfig{
+			DatabaseURL: integrationDatabaseURL,
+			Now:         func() time.Time { return now },
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,10 +202,10 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 			assignment, created, err := schedulerStore.Schedule(t.Context(), scheduler.ScheduleRequest{
 				AssignmentID: assignmentID, AssignmentCommandID: task4IDForIndex("assignment-command", index),
 				InstanceID: instanceID, SandboxID: sandboxID, ProfileRevisionID: profileRevisionID,
-				WorkspaceID: workspaceID, MaterializationID: task4IDForIndex("materialization", index),
+				WorkspaceID: workspaceID, StartMutationID: task4IDForIndex("workspace-start", index),
 				Requirements: scheduler.Requirements{
 					PoolName: poolName, BackendKind: "firecracker", Architecture: "amd64",
-					RequiredCapabilities:    []string{"checkpoint", "network-policy"},
+					RequiredCapabilities:    []string{"local-workspace", "network-policy"},
 					GuestProtocolGeneration: 1,
 					Capacity: scheduler.Capacity{
 						CPUMillis: 2000, MemoryBytes: 4 << 30, DiskBytes: 20 << 30,
@@ -194,6 +214,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 					PreferredArtifactDigests: []string{runtimeDigest},
 				},
 				AssignmentCommand: &runnerv1.AssignmentCommand{
+					WorkspaceId: workspaceID,
 					Fence: &runnerv1.AssignmentFence{
 						AssignmentId: assignmentID, SandboxId: sandboxID, InstanceId: instanceID,
 						SandboxGeneration: 1, FencingToken: fencingToken,
@@ -201,7 +222,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 					ProfileRevisionId: profileRevisionID,
 					Requirements: &runnerv1.ProfileRequirements{
 						VcpuCount: 2, MemoryBytes: 4 << 30, DiskBytes: 20 << 30,
-						Architecture: "amd64", RequiredCapabilities: []string{"checkpoint", "network-policy"},
+						Architecture: "amd64", RequiredCapabilities: []string{"local-workspace", "network-policy"},
 						MaximumOperationMs: 60_000, MaximumOutputBytes: 1 << 20,
 					},
 					Assets: []*runnerv1.SignedAssetReference{
@@ -247,12 +268,53 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 			result.assignment.ProfileRevisionID != profileRevisionID ||
 			result.assignment.BackendKind != "firecracker" ||
 			result.assignment.Generation != 1 ||
+			!result.assignment.NextReconcileAt.Equal(now.Add(2*time.Minute)) ||
 			len(result.assignment.FencingToken) != 32 {
 			t.Fatalf("replica returned divergent durable Assignment: %#v", result.assignment)
 		}
 	}
 	if createdCount != 1 {
 		t.Fatalf("replica race created %d Assignments, want exactly 1", createdCount)
+	}
+	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	var commandState, targetConnectionID string
+	var deliveryCount, lastControlSequence int64
+	if err := pool.QueryRow(t.Context(), `
+		SELECT command.state,command.target_connection_id,command.delivery_count,
+		       connection.last_control_sequence
+		FROM secondbox.runner_commands AS command
+		JOIN secondbox.runner_connections AS connection ON connection.id=$2
+		WHERE command.assignment_id=$1`,
+		durableAssignment.ID,
+		connectionID,
+	).Scan(
+		&commandState,
+		&targetConnectionID,
+		&deliveryCount,
+		&lastControlSequence,
+	); err != nil {
+		t.Fatal(err)
+	}
+	// Placement queues the command and nothing more. Assigning the stream
+	// sequence here required locking the runner's single runner_connections row
+	// inside every placement transaction, which made concurrent placements for
+	// one runner serialise on one row and lose the race under serializable
+	// isolation. The connection owner assigns the sequence when it claims.
+	if commandState != "pending" ||
+		targetConnectionID != "" ||
+		deliveryCount != 0 ||
+		lastControlSequence != 1 {
+		t.Fatalf(
+			"queued Assignment dispatch = state %q target %q count %d sequence %d",
+			commandState,
+			targetConnectionID,
+			deliveryCount,
+			lastControlSequence,
+		)
 	}
 	delivery, found, err := stateStore.ClaimCommand(
 		t.Context(), runnerID, connectionID, now.Add(time.Second),
@@ -262,19 +324,19 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	}
 	if delivery.Message.GetAssignment() == nil ||
 		delivery.Message.GetAssignment().Fence.AssignmentId != durableAssignment.ID ||
-		delivery.Message.GetAssignment().Sequence != 1 ||
+		delivery.Message.GetAssignment().Sequence != 2 ||
 		delivery.Message.GetAssignment().MessageId != delivery.ID {
 		t.Fatalf("claimed Assignment command lacks durable authority: %#v", delivery.Message.GetAssignment())
 	}
 	if err := stateStore.MarkCommandDelivered(
-		t.Context(), delivery.ID, connectionID, now.Add(time.Second),
+		t.Context(), delivery, connectionID, now.Add(time.Second),
 	); err != nil {
 		t.Fatal(err)
 	}
 	staleReady := &runnerv1.RunnerToControlPlane{
 		Message: &runnerv1.RunnerToControlPlane_AssignmentResult{
 			AssignmentResult: &runnerv1.AssignmentResult{
-				MessageId: "ready-stale-3", Sequence: 3,
+				MessageId: "ready-stale-4", Sequence: 4,
 				Fence: &runnerv1.AssignmentFence{
 					AssignmentId: durableAssignment.ID, SandboxId: sandboxID,
 					InstanceId:        durableAssignment.InstanceID,
@@ -293,8 +355,28 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	}, now); !errors.Is(err, runnercontrol.ErrStaleAssignmentEvidence) {
 		t.Fatalf("stale ready result error = %v, want ErrStaleAssignmentEvidence", err)
 	}
+	timingObservedAt := now.Add(750*time.Millisecond + 123*time.Microsecond)
+	progress := &runnerv1.RunnerToControlPlane{
+		Message: &runnerv1.RunnerToControlPlane_AssignmentProgress{
+			AssignmentProgress: &runnerv1.AssignmentProgress{
+				MessageId: "progress-4", Sequence: 4,
+				Fence:            proto.Clone(delivery.Message.GetAssignment().Fence).(*runnerv1.AssignmentFence),
+				Stage:            runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_RUNNER_ADMISSION,
+				ObservedAtUnixMs: uint64(timingObservedAt.UnixMilli()),
+				ObservedAtUnixNs: uint64(timingObservedAt.UnixNano()),
+				Correlation:      proto.Clone(delivery.Message.GetAssignment().Correlation).(*runnerv1.Correlation),
+			},
+		},
+	}
+	if duplicate, err := stateStore.RecordEvent(t.Context(), runnercontrol.Event{
+		Kind: runnercontrol.EventAssignment, RunnerID: runnerID, ConnectionID: connectionID,
+		Message: progress,
+	}, now.Add(time.Second)); err != nil || duplicate {
+		t.Fatalf("AssignmentProgress duplicate, error = %t, %v", duplicate, err)
+	}
 	ready := proto.Clone(staleReady).(*runnerv1.RunnerToControlPlane)
-	ready.GetAssignmentResult().MessageId = "ready-3"
+	ready.GetAssignmentResult().MessageId = "ready-5"
+	ready.GetAssignmentResult().Sequence = 5
 	ready.GetAssignmentResult().Fence.FencingToken = durableAssignment.FencingToken
 	ready.GetAssignmentResult().BackendReference = "fc-instance-1"
 	if _, err := stateStore.RecordEvent(t.Context(), runnercontrol.Event{
@@ -304,35 +386,61 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 		t.Fatal(err)
 	}
 
-	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
 	var count int
-	var backendReference, capabilityJSON, sandboxState, guestLiveness, materializationState string
+	var backendReference, capabilityJSON, sandboxState, guestLiveness string
+	var sandboxStartSampleCount, sandboxStartP95Milliseconds int64
 	if err := pool.QueryRow(t.Context(), `
 		SELECT count(*),max(assignment.backend_reference),max(assignment.capability_snapshot_json::text),
-		       max(sandbox.state),max(instance.guest_liveness),max(materialization.state)
+		       max(sandbox.state),max(instance.guest_liveness),
+		       max(runner.sandbox_start_sample_count),max(runner.sandbox_start_p95_milliseconds)
 		FROM secondbox.assignments AS assignment
 		JOIN secondbox.sandboxes AS sandbox ON sandbox.id=assignment.sandbox_id
 		JOIN secondbox.instances AS instance ON instance.id=assignment.instance_id
-		JOIN secondbox.workspace_materializations AS materialization
-		  ON materialization.assignment_id=assignment.id
+		JOIN secondbox.runners AS runner ON runner.id=assignment.runner_id
 		WHERE assignment.sandbox_id=$1`, sandboxID,
 	).Scan(
 		&count, &backendReference, &capabilityJSON, &sandboxState,
-		&guestLiveness, &materializationState,
+		&guestLiveness, &sandboxStartSampleCount, &sandboxStartP95Milliseconds,
 	); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 || backendReference != "fc-instance-1" ||
 		!json.Valid([]byte(capabilityJSON)) ||
-		sandboxState != "starting" || guestLiveness != "ready" || materializationState != "ready" {
+		sandboxState != "ready" || guestLiveness != "ready" ||
+		sandboxStartSampleCount != 4 || sandboxStartP95Milliseconds != 75 {
 		t.Fatalf(
-			"durable Assignment evidence = count %d, backend %q, capability %q, Sandbox %q, guest %q, materialization %q",
-			count, backendReference, capabilityJSON, sandboxState, guestLiveness, materializationState,
+			"durable Assignment evidence = count %d, backend %q, capability %q, Sandbox %q, guest %q, starts %d p95 %d",
+			count, backendReference, capabilityJSON, sandboxState, guestLiveness,
+			sandboxStartSampleCount, sandboxStartP95Milliseconds,
 		)
+	}
+	var timingOperationID, timingSandboxID, timingStage string
+	var observedAt, receivedAt time.Time
+	if err := pool.QueryRow(t.Context(), `
+		SELECT operation_id,sandbox_id,stage,observed_at,received_at
+		FROM secondbox.assignment_stage_timings
+		WHERE assignment_id=$1`,
+		durableAssignment.ID,
+	).Scan(
+		&timingOperationID, &timingSandboxID, &timingStage, &observedAt, &receivedAt,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if timingOperationID != delivery.Message.GetAssignment().Correlation.OperationId ||
+		timingSandboxID != sandboxID ||
+		timingStage != "runner_admission" ||
+		!observedAt.Equal(timingObservedAt) ||
+		!receivedAt.Equal(now.Add(time.Second)) {
+		t.Fatalf(
+			"AssignmentProgress timing = operation %q Sandbox %q stage %q observed %s received %s",
+			timingOperationID, timingSandboxID, timingStage, observedAt, receivedAt,
+		)
+	}
+	if _, err := pool.Exec(t.Context(), `
+		UPDATE secondbox.runners SET state='offline' WHERE id=$1`,
+		runnerID,
+	); err != nil {
+		t.Fatal(err)
 	}
 
 	reconcileStore, err := reconcile.NewPostgresStore(t.Context(), integrationDatabaseURL)
@@ -356,7 +464,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 		t.Fatalf("reconciliation claim found, error = %t, %v", found, err)
 	}
 	lossDecision := reconcile.DecideRunnerLoss(claim.State, now.Add(2*time.Second))
-	if lossDecision.Action != reconcile.ActionFence || lossDecision.MayReassign {
+	if lossDecision.Action != reconcile.ActionFence {
 		t.Fatalf("unproved Runner loss decision = %#v", lossDecision)
 	}
 	fenceCommand := &runnerv1.FenceCommand{
@@ -385,16 +493,16 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	}
 	if fenceDelivery.Message.GetFence() == nil ||
 		fenceDelivery.Message.GetFence().Fence.AssignmentId != durableAssignment.ID ||
-		fenceDelivery.Message.GetFence().Sequence != 2 {
+		fenceDelivery.Message.GetFence().Sequence != 3 {
 		t.Fatalf("claimed Fence command lacks durable authority: %#v", fenceDelivery.Message.GetFence())
 	}
 	if err := stateStore.MarkCommandDelivered(
-		t.Context(), fenceDelivery.ID, connectionID, now.Add(2*time.Second),
+		t.Context(), fenceDelivery, connectionID, now.Add(2*time.Second),
 	); err != nil {
 		t.Fatal(err)
 	}
 	fenceResult := &runnerv1.FenceResult{
-		MessageId: "fence-result-4", Sequence: 4,
+		MessageId: "fence-result-6", Sequence: 6,
 		Fence: &runnerv1.AssignmentFence{
 			AssignmentId: durableAssignment.ID, SandboxId: sandboxID,
 			InstanceId:        durableAssignment.InstanceID,
@@ -420,11 +528,100 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 		t.Fatal(err)
 	}
 	if nextGeneration != 2 {
-		t.Fatalf("replacement generation = %d, want 2", nextGeneration)
+		t.Fatalf("queued local generation = %d, want 2", nextGeneration)
+	}
+	advanceDelivery, found, err := stateStore.ClaimCommand(
+		t.Context(), runnerID, connectionID, now.Add(4*time.Second),
+	)
+	if err != nil || !found {
+		t.Fatalf("local generation command delivery found, error = %t, %v", found, err)
+	}
+	advanceCommand := advanceDelivery.Message.GetLocalWorkspace()
+	if advanceCommand == nil ||
+		advanceCommand.Kind != runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION ||
+		advanceCommand.WorkspaceId != workspaceID ||
+		advanceCommand.ExpectedGeneration != 1 ||
+		advanceCommand.NextGeneration != 2 {
+		t.Fatalf("claimed local generation command lacks durable authority: %#v", advanceCommand)
+	}
+	if err := stateStore.MarkCommandDelivered(
+		t.Context(), advanceDelivery, connectionID, now.Add(4*time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if duplicate, err := stateStore.RecordEvent(t.Context(), runnercontrol.Event{
+		Kind: runnercontrol.EventLocalWorkspace, RunnerID: runnerID, ConnectionID: connectionID,
+		Message: &runnerv1.RunnerToControlPlane{
+			Message: &runnerv1.RunnerToControlPlane_LocalWorkspaceResult{
+				LocalWorkspaceResult: &runnerv1.LocalWorkspaceResult{
+					MessageId: "local-generation-result-7", Sequence: 7, CommandVersion: 1,
+					Kind:        runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION,
+					Terminal:    runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED,
+					OperationId: advanceCommand.OperationId, EffectId: advanceCommand.EffectId,
+					SandboxId: sandboxID, WorkspaceId: workspaceID,
+					PreviousGeneration: 1, Generation: 2, LogicalCapacityBytes: 1 << 30,
+					ReceiptRecordedAtUnixMs: uint64(now.Add(5 * time.Second).UnixMilli()),
+					Correlation:             proto.Clone(advanceCommand.Correlation).(*runnerv1.Correlation),
+				},
+			},
+		},
+	}, now.Add(5*time.Second)); err != nil || duplicate {
+		t.Fatalf("local generation result duplicate, error = %t, %v", duplicate, err)
+	}
+	redundantFencePayload, err := proto.Marshal(&runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_Fence{
+			Fence: proto.Clone(fenceDelivery.Message.GetFence()).(*runnerv1.FenceCommand),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	redundantFenceCommandID := task4ID("redundant-fence")
+	if _, err := pool.Exec(t.Context(), `
+		INSERT INTO secondbox.runner_commands (
+			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
+			delivery_count,created_at,updated_at,delivered_at
+		) VALUES ($1,$2,$3,'fence',$4,'delivered',$5,1,$6,$6,$6)`,
+		redundantFenceCommandID,
+		runnerID,
+		durableAssignment.ID,
+		redundantFencePayload,
+		connectionID,
+		now.Add(5*time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	redundantFenceResult := proto.Clone(fenceResult).(*runnerv1.FenceResult)
+	redundantFenceResult.MessageId = "redundant-fence-result-8"
+	redundantFenceResult.Sequence = 8
+	redundantFenceResult.Result =
+		runnerv1.FenceResultKind_FENCE_RESULT_KIND_ALREADY_STOPPED
+	if duplicate, err := stateStore.RecordEvent(t.Context(), runnercontrol.Event{
+		Kind: runnercontrol.EventFence, RunnerID: runnerID, ConnectionID: connectionID,
+		Message: &runnerv1.RunnerToControlPlane{
+			Message: &runnerv1.RunnerToControlPlane_FenceResult{
+				FenceResult: redundantFenceResult,
+			},
+		},
+	}, now.Add(5*time.Second)); err != nil || duplicate {
+		t.Fatalf("redundant FenceResult duplicate, error = %t, %v", duplicate, err)
+	}
+	var redundantFenceState string
+	if err := pool.QueryRow(t.Context(), `
+		SELECT state FROM secondbox.runner_commands WHERE id=$1`,
+		redundantFenceCommandID,
+	).Scan(&redundantFenceState); err != nil {
+		t.Fatal(err)
+	}
+	if redundantFenceState != "acknowledged" {
+		t.Fatalf(
+			"redundant Fence command state = %q, want acknowledged",
+			redundantFenceState,
+		)
 	}
 	staleAfterFence := proto.Clone(ready).(*runnerv1.RunnerToControlPlane)
-	staleAfterFence.GetAssignmentResult().MessageId = "ready-after-fence-5"
-	staleAfterFence.GetAssignmentResult().Sequence = 5
+	staleAfterFence.GetAssignmentResult().MessageId = "ready-after-fence-9"
+	staleAfterFence.GetAssignmentResult().Sequence = 9
 	staleAfterFence.GetAssignmentResult().BackendReference = "fc-stale-after-fence"
 	if _, err := stateStore.RecordEvent(t.Context(), runnercontrol.Event{
 		Kind: runnercontrol.EventAssignment, RunnerID: runnerID, ConnectionID: connectionID,
@@ -446,6 +643,20 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 	); err != nil || duplicate {
 		t.Fatalf("reconnected Registration duplicate, error = %t, %v", duplicate, err)
 	}
+	task4CompleteWorkspaceReconciliation(
+		t,
+		stateStore,
+		runnerID,
+		reconnectedID,
+		2,
+		[]*runnerv1.LocalWorkspaceInventoryItem{{
+			WorkspaceId:          workspaceID,
+			Generation:           2,
+			LogicalCapacityBytes: 1 << 30,
+			Formatted:            true,
+		}},
+		now.Add(6*time.Second),
+	)
 	if _, err := stateStore.RecordHeartbeat(
 		t.Context(),
 		task4Heartbeat(runnerID, connectionID, "stale-old-connection", 4, runnerv1.DrainPhase_DRAIN_PHASE_ACTIVE),
@@ -470,18 +681,18 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 		t.Fatalf("Drain command delivery found, error = %t, %v", found, err)
 	}
 	if drainDelivery.Message.GetDrain() == nil ||
-		drainDelivery.Message.GetDrain().Sequence != 1 ||
+		drainDelivery.Message.GetDrain().Sequence != 2 ||
 		drainDelivery.Message.GetDrain().Mode != runnerv1.DrainMode_DRAIN_MODE_BOUNDED {
 		t.Fatalf("claimed Drain command lacks durable authority: %#v", drainDelivery.Message.GetDrain())
 	}
 	if err := stateStore.MarkCommandDelivered(
-		t.Context(), drainDelivery.ID, reconnectedID, now.Add(7*time.Second),
+		t.Context(), drainDelivery, reconnectedID, now.Add(7*time.Second),
 	); err != nil {
 		t.Fatal(err)
 	}
 	if duplicate, err := stateStore.RecordHeartbeat(
 		t.Context(),
-		task4Heartbeat(runnerID, reconnectedID, "draining-heartbeat-2", 2, runnerv1.DrainPhase_DRAIN_PHASE_DRAINING),
+		task4Heartbeat(runnerID, reconnectedID, "draining-heartbeat-3", 3, runnerv1.DrainPhase_DRAIN_PHASE_DRAINING),
 		now.Add(8*time.Second),
 	); err != nil || duplicate {
 		t.Fatalf("draining Heartbeat duplicate, error = %t, %v", duplicate, err)
@@ -678,7 +889,7 @@ func task4InsertRunnerPool(t *testing.T, poolName string, now time.Time) {
 		INSERT INTO secondbox.runner_pools (
 			name,state,architectures_json,capabilities_json,capacity_policy_json,
 			ready_runner_count,revision,created_at,updated_at
-		) VALUES ($1,'ready','["amd64"]','["firecracker","checkpoint","network-policy"]','{}',1,1,$2,$2)`,
+		) VALUES ($1,'ready','["amd64"]','["compute","local-workspace","network-policy"]','{}',1,1,$2,$2)`,
 		poolName, now,
 	); err != nil {
 		t.Fatal(err)
@@ -689,6 +900,7 @@ func task4InsertSchedulableSandbox(
 	t *testing.T,
 	sandboxID string,
 	profileRevisionID string,
+	homeRunnerID string,
 	now time.Time,
 ) string {
 	t.Helper()
@@ -700,10 +912,15 @@ func task4InsertSchedulableSandbox(
 	workspaceID := task4ID("workspace")
 	if _, err := pool.Exec(t.Context(), `
 		INSERT INTO secondbox.workspaces (
-			id,tenant_ref,subject_ref,sandbox_id,generation,retained_bytes,current_checkpoint_id,
+			id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,logical_capacity_bytes,
+			generation,mutation_kind,mutation_id,mutation_effect_id,mutation_operation_id,
+			mutation_expected_generation,mutation_target_generation,mutation_state,local_receipt_json,
 			created_at,updated_at
-		) VALUES ($1,'task4-project','task4-subject',$2,1,0,'checkpoint-current',$3,$3)`,
-		workspaceID, sandboxID, now,
+		) VALUES (
+			$1,'task4-project','task4-subject',$2,$3,'ready',1073741824,
+			1,'','','','',NULL,NULL,'','{}',$4,$4
+		)`,
+		workspaceID, sandboxID, homeRunnerID, now,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -735,6 +952,7 @@ func task4Registration(
 			Architecture: "amd64", FirecrackerVersion: "1.16.1",
 			KvmReady: true, JailerReady: true, CgroupReady: true,
 			NetworkPolicyReady: true, StorageReady: true, CleanupReady: true,
+			DataPlaneReady:           true,
 			GuestProtocolGenerations: &runnerv1.ProtocolVersionRange{Minimum: 1, Maximum: 1},
 		},
 		Allocatable: &runnerv1.Capacity{
@@ -745,6 +963,8 @@ func task4Registration(
 		ArtifactCache: []*runnerv1.ArtifactCacheEvidence{
 			{ArtifactId: "runtime", ManifestDigest: "sha256:runtime", VerifiedAtUnixMs: 1},
 		},
+		StartupTiming:              &runnerv1.StartupTiming{SampleCount: 2, P95Milliseconds: 50},
+		DataPlaneAdvertisedAddress: "10.0.0.5:7443",
 	}
 }
 
@@ -763,6 +983,70 @@ func task4Heartbeat(
 			Instances: 8, Operations: 32,
 		},
 		Reserved: &runnerv1.Capacity{}, DrainPhase: phase,
+		StartupTiming: &runnerv1.StartupTiming{SampleCount: 4, P95Milliseconds: 75},
+	}
+}
+
+func task4CompleteWorkspaceReconciliation(
+	t *testing.T,
+	stateStore *runnercontrol.PostgresStateStore,
+	runnerID string,
+	connectionID string,
+	sequence uint64,
+	inventory []*runnerv1.LocalWorkspaceInventoryItem,
+	now time.Time,
+) {
+	t.Helper()
+	delivery, found, err := stateStore.ClaimCommand(
+		t.Context(),
+		runnerID,
+		connectionID,
+		now,
+	)
+	if err != nil || !found {
+		t.Fatalf("Workspace reconciliation delivery found=%t error=%v", found, err)
+	}
+	command := delivery.Message.GetLocalWorkspace()
+	if command == nil ||
+		command.Kind != runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE ||
+		command.OperationId != delivery.ID ||
+		command.EffectId != delivery.ID {
+		t.Fatalf("returning-runner reconciliation command = %#v", delivery.Message)
+	}
+	if err := stateStore.MarkCommandDelivered(
+		t.Context(),
+		delivery,
+		connectionID,
+		now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	duplicate, err := stateStore.RecordEvent(
+		t.Context(),
+		runnercontrol.Event{
+			Kind:         runnercontrol.EventLocalWorkspace,
+			RunnerID:     runnerID,
+			ConnectionID: connectionID,
+			Message: &runnerv1.RunnerToControlPlane{
+				Message: &runnerv1.RunnerToControlPlane_LocalWorkspaceResult{
+					LocalWorkspaceResult: &runnerv1.LocalWorkspaceResult{
+						MessageId:      fmt.Sprintf("workspace-reconcile-result-%d", sequence),
+						Sequence:       sequence,
+						CommandVersion: 1,
+						Kind:           command.Kind,
+						Terminal:       runnerv1.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_SUCCEEDED,
+						OperationId:    command.OperationId,
+						EffectId:       command.EffectId,
+						Inventory:      inventory,
+						Correlation:    proto.Clone(command.Correlation).(*runnerv1.Correlation),
+					},
+				},
+			},
+		},
+		now,
+	)
+	if err != nil || duplicate {
+		t.Fatalf("Workspace reconciliation result duplicate=%t error=%v", duplicate, err)
 	}
 }
 

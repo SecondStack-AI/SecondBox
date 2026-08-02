@@ -6,18 +6,18 @@ import (
 	"testing"
 )
 
-func TestRunnerEntrypointCreatesOnlyStandaloneRuntimeDirectories(t *testing.T) {
+func TestRunnerEntrypointCreatesRuntimeDirectoriesAndExecutesRunner(t *testing.T) {
 	source, err := os.ReadFile("container/secondbox-runner-entrypoint.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
 	entrypoint := string(source)
 	for _, required := range []string{
-		"SECONDBOX_RUNNER_SANDBOX_WORKSPACE_DIR",
+		"SECONDBOX_RUNNER_WORKSPACE_ROOT",
 		"SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR",
 		"SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT",
-		"SECONDBOX_RUNNER_STATE_DIR",
-		`if [[ "$variable" == SECONDBOX_RUNNER_* ]]`,
+		`"$1" != "/usr/local/bin/secondbox-runner"`,
+		`exec "$@"`,
 	} {
 		if !strings.Contains(entrypoint, required) {
 			t.Errorf("SecondBox runner entrypoint is missing %q", required)
@@ -28,6 +28,9 @@ func TestRunnerEntrypointCreatesOnlyStandaloneRuntimeDirectories(t *testing.T) {
 		"INTEGRATION_SERVICE_",
 		"HAR" + "NESS",
 		"SP" + "OOL",
+		"runner.env",
+		"compgen -e",
+		"/lib/systemd/systemd",
 	} {
 		if strings.Contains(entrypoint, forbidden) {
 			t.Errorf("SecondBox runner entrypoint retains inherited input %q", forbidden)

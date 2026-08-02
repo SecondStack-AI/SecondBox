@@ -18,17 +18,24 @@ var (
 	ErrRunnerNotFound          = errors.New("SecondBox Runner not found")
 	ErrRunnerPoolUnavailable   = errors.New("SecondBox compatible runner pool unavailable")
 	ErrSandboxNotFound         = errors.New("SecondBox Sandbox not found")
+	ErrSandboxNameConflict     = errors.New("SecondBox Sandbox name is already in use")
 	ErrIdempotencyConflict     = errors.New("SecondBox idempotency key payload conflict")
 	ErrQuotaExceeded           = errors.New("SecondBox quota exceeded")
 	ErrRevisionConflict        = errors.New("SecondBox resource revision conflict")
 	ErrLifecycleUnavailable    = errors.New("SecondBox lifecycle unavailable without a runner assignment")
+	ErrHomeRunnerUnavailable   = errors.New("SecondBox Sandbox home runner is unavailable")
+	ErrWorkspaceMutation       = errors.New("SecondBox Workspace has a conflicting local mutation")
+	// ErrSerializationContention reports that a transaction lost a serialization
+	// race and the caller should try again later. It is an ordinary outcome of
+	// serializable isolation under concurrency, not a fault: a caller that treats
+	// it as one will fail whenever load rises.
+	ErrSerializationContention = errors.New("SecondBox transaction lost a serialization race")
+	ErrWorkspaceHomeConflict   = errors.New("SecondBox Workspace home runner is immutable")
 	ErrGenerationFenced        = errors.New("SecondBox Sandbox generation is fenced")
 	ErrLeaseNotFound           = errors.New("SecondBox Lease not found")
+	ErrLeaseAlreadyActive      = errors.New("SecondBox Sandbox already has an active Lease")
 	ErrLeaseInactive           = errors.New("SecondBox Lease is not active")
 	ErrActivitySessionNotFound = errors.New("SecondBox activity session not found")
-	ErrMaterializationConflict = errors.New("SecondBox Workspace already has an active materialization")
-	ErrCheckpointIntegrity     = errors.New("SecondBox Workspace checkpoint integrity failed")
-	ErrCheckpointNotFound      = errors.New("SecondBox Workspace checkpoint not found")
 	ErrSnapshotNotFound        = errors.New("SecondBox Snapshot not found")
 	ErrSnapshotUnavailable     = errors.New("SecondBox Snapshot requires stopped committed disk state")
 	ErrArtifactIntegrity       = errors.New("SecondBox Artifact integrity failed")
@@ -61,14 +68,79 @@ type AdminIdempotencyResult struct {
 
 // CreateSandboxInput contains server-resolved identity and transaction evidence.
 type CreateSandboxInput struct {
-	Principal       contracts.Principal
-	SubjectQuota    contracts.QuotaLimits
-	Sandbox         contracts.Sandbox
-	Workspace       contracts.Workspace
-	Operation       contracts.Operation
-	IdempotencyKey  string
-	RequestHash     string
-	IdempotencyEnds time.Time
+	Principal          contracts.Principal
+	SubjectQuota       contracts.QuotaLimits
+	Sandbox            contracts.Sandbox
+	Workspace          contracts.Workspace
+	Operation          contracts.Operation
+	IdempotencyKey     string
+	RequestHash        string
+	IdempotencyEnds    time.Time
+	WorkspaceEffectID  string
+	WorkspaceCommandID string
+	FencingToken       []byte
+	SourceSnapshotID   string
+}
+
+// UpdateSandboxMetadataInput replaces consumer correlation metadata at one revision.
+type UpdateSandboxMetadataInput struct {
+	Principal        contracts.Principal
+	SandboxID        string
+	Metadata         map[string]string
+	ExpectedRevision int64
+	Now              time.Time
+}
+
+// HomeWorkspace is private durable ownership and local-store reconciliation state.
+// It must never be projected into a public Sandbox or Workspace representation.
+type HomeWorkspace struct {
+	ID                   string
+	SandboxID            string
+	HomeRunnerID         string
+	State                string
+	LogicalCapacityBytes int64
+	Generation           int64
+	Mutation             WorkspaceMutation
+	LocalReceipt         map[string]any
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+}
+
+// WorkspaceMutation is the single durable local-storage mutation barrier.
+type WorkspaceMutation struct {
+	Kind               string
+	ID                 string
+	EffectID           string
+	OperationID        string
+	ExpectedGeneration int64
+	TargetGeneration   int64
+	State              string
+}
+
+// WorkspaceMutationInput acquires or replays the one Workspace mutation slot.
+type WorkspaceMutationInput struct {
+	TenantRef          string
+	SubjectRef         string
+	SandboxID          string
+	WorkspaceID        string
+	SnapshotID         string
+	HomeRunnerID       string
+	Kind               string
+	MutationID         string
+	EffectID           string
+	OperationID        string
+	ExpectedGeneration int64
+	TargetGeneration   int64
+	Now                time.Time
+}
+
+// WorkspaceMutationCompletion atomically records durable runner evidence and
+// releases the matching mutation barrier.
+type WorkspaceMutationCompletion struct {
+	WorkspaceMutationInput
+	WorkspaceState      string
+	CommittedGeneration int64
+	LocalReceipt        map[string]any
 }
 
 // LifecycleIntentInput records desired state and one durable asynchronous operation.
@@ -116,37 +188,68 @@ type ActivityInput struct {
 	RequestHash    string
 }
 
-// MaterializationInput creates exclusive runner-local writer authority.
-type MaterializationInput struct {
-	Materialization             contracts.WorkspaceMaterialization
-	ExpectedWorkspaceGeneration int64
-}
-
-// CheckpointPublicationInput atomically publishes verified immutable bytes.
-type CheckpointPublicationInput struct {
-	Checkpoint                  contracts.WorkspaceCheckpoint
-	StorageKey                  string
-	ExpectedWorkspaceGeneration int64
-}
-
-// SnapshotCreationInput retains the current published checkpoint under immutable metadata.
+// SnapshotCreationInput admits one asynchronous runner-local Snapshot clone.
 type SnapshotCreationInput struct {
 	Snapshot         contracts.Snapshot
+	Operation        contracts.Operation
+	EffectID         string
+	CommandID        string
+	FencingToken     []byte
 	IdempotencyKey   string
 	RequestHash      string
 	IdempotencyEnds  time.Time
 	ExpectedRevision int64
 }
 
-// SnapshotRetentionInput ends one immutable metadata root idempotently.
-type SnapshotRetentionInput struct {
+// SnapshotDeletionInput admits one asynchronous runner-local Snapshot deletion.
+type SnapshotDeletionInput struct {
 	TenantRef       string
 	SubjectRef      string
 	SnapshotID      string
+	Operation       contracts.Operation
+	EffectID        string
+	CommandID       string
+	FencingToken    []byte
 	IdempotencyKey  string
 	RequestHash     string
 	IdempotencyEnds time.Time
 	Now             time.Time
+}
+
+// SnapshotRetentionInput identifies one internally generated expiration
+// deletion attempt. The store selects the due Snapshot while preserving the
+// ordinary asynchronous delete transaction and lock order.
+type SnapshotRetentionInput struct {
+	OperationID  string
+	EffectID     string
+	CommandID    string
+	RequestID    string
+	FencingToken []byte
+	Now          time.Time
+}
+
+// SnapshotRestoreInput admits one stopped-Sandbox in-place restore.
+type SnapshotRestoreInput struct {
+	TenantRef         string
+	SubjectRef        string
+	SandboxID         string
+	SnapshotID        string
+	Operation         contracts.Operation
+	RestoreID         string
+	PrepareEffectID   string
+	SwapEffectID      string
+	FinalizeEffectID  string
+	AbortEffectID     string
+	PrepareCommandID  string
+	SwapCommandID     string
+	FinalizeCommandID string
+	AbortCommandID    string
+	FencingToken      []byte
+	IdempotencyKey    string
+	RequestHash       string
+	IdempotencyEnds   time.Time
+	ExpectedRevision  int64
+	Now               time.Time
 }
 
 // ArtifactPublicationInput publishes immutable application exchange evidence.
@@ -195,15 +298,11 @@ type LifecycleReconcileClaim struct {
 	DesiredState              string
 	IntentKind                string
 	IntentTerminationReason   string
-	MaterializationState      string
-	CheckpointState           string
 	StopEffectState           string
 	GuestLiveness             string
 	InstanceTerminationReason string
 	HasInstance               bool
 	ActiveSessions            int64
-	CheckpointOnStop          bool
-	ForceCheckpoint           bool
 	DrainStartedAt            *time.Time
 	ReadyAt                   *time.Time
 	LastActivityAt            *time.Time

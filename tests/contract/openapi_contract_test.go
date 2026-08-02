@@ -186,11 +186,12 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 			}
 		}
 		for _, required := range []string{
-			"createProfile", "reviseProfile", "createSandbox", "startSandbox",
-			"drainSandbox", "stopSandbox", "checkpointSandbox", "getOperation",
+			"createProfile", "reviseProfile", "createSandbox", "updateSandboxMetadata", "startSandbox",
+			"drainSandbox", "stopSandbox", "restoreSandboxSnapshot", "getOperation",
 			"executeSandboxCommand", "createSandboxExecStream", "readSandboxFile",
 			"writeSandboxFile", "uploadSandboxArtifact", "downloadArtifactContent",
 			"createSandboxPortSession",
+			"getSandboxTiming", "getOperationTiming", "getDeploymentTiming",
 		} {
 			if !operationIDs[required] {
 				t.Errorf("canonical contract is missing operationId %q", required)
@@ -331,14 +332,51 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 				t.Errorf("%s must not encode failure as a synthetic exit code", name)
 			}
 		}
+		exited := componentSchema(t, document, "ExecExited")
+		exitedRequired := map[string]bool{}
+		for _, value := range array(t, exited["required"], "ExecExited.required") {
+			exitedRequired[value.(string)] = true
+		}
+		if !exitedRequired["elapsedMilliseconds"] {
+			t.Error("ExecExited must expose successful command elapsed time")
+		}
 	})
 
-	t.Run("admin profile pins the fixed virtualization backend", func(t *testing.T) {
+	t.Run("public profile omits virtualization backend selection", func(t *testing.T) {
 		spec := componentSchema(t, document, "ProfileRevisionSpec")
-		backend := object(t, object(t, spec["properties"], "ProfileRevisionSpec.properties")["backend"], "ProfileRevisionSpec.backend")
-		values := array(t, backend["enum"], "ProfileRevisionSpec.backend.enum")
-		if len(values) != 1 || values[0] != "firecracker" {
-			t.Fatalf("ProfileRevisionSpec backend must be exactly firecracker, got %v", values)
+		properties := object(t, spec["properties"], "ProfileRevisionSpec.properties")
+		if _, exists := properties["backend"]; exists {
+			t.Fatal("ProfileRevisionSpec exposes backend selection")
+		}
+	})
+
+	t.Run("timing projections are bounded and provider neutral", func(t *testing.T) {
+		components := object(t, document["components"], "components")
+		parameters := object(t, components["parameters"], "components.parameters")
+		for _, name := range []string{"TimingLimit", "TimingWindowSeconds"} {
+			parameter := object(t, parameters[name], "components.parameters."+name)
+			if parameter["required"] != true {
+				t.Errorf("%s must be required", name)
+			}
+		}
+		var timingSchemas []any
+		for _, name := range []string{
+			"BootStageTiming", "BootTiming", "OperationStageTiming", "OperationTiming", "ExecTiming",
+			"SandboxTiming", "DeploymentTimingSummary",
+		} {
+			timingSchemas = append(timingSchemas, componentSchema(t, document, name))
+		}
+		encoded, err := json.Marshal(timingSchemas)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, forbidden := range []string{
+			"firecracker", "kvm", "runnerId", "hostPath", "storageKey",
+			"fencingToken", "backendReference",
+		} {
+			if strings.Contains(string(encoded), forbidden) {
+				t.Errorf("public timing schemas contain internal vocabulary %q", forbidden)
+			}
 		}
 	})
 }
@@ -347,11 +385,23 @@ func TestSandboxCreateRejectsInfrastructureAuthorityOverrides(t *testing.T) {
 	document := loadOpenAPIContract(t)
 	createSchema := componentSchema(t, document, "CreateSandboxRequest")
 	properties := object(t, createSchema["properties"], "CreateSandboxRequest.properties")
-	if len(properties) != 2 || properties["profile"] == nil || properties["metadata"] == nil {
-		t.Fatalf("CreateSandboxRequest properties must be exactly profile and metadata, got %v", properties)
+	if len(properties) != 3 ||
+		properties["profile"] == nil ||
+		properties["metadata"] == nil ||
+		properties["sourceSnapshotId"] == nil {
+		t.Fatalf(
+			"CreateSandboxRequest properties must be profile, metadata, and sourceSnapshotId, got %v",
+			properties,
+		)
 	}
 	if err := validateClosedCreateShape(t, createSchema, map[string]any{"profile": "standard", "metadata": map[string]string{}}); err != nil {
 		t.Fatalf("valid profile-based create was rejected: %v", err)
+	}
+	if err := validateClosedCreateShape(t, createSchema, map[string]any{
+		"profile": "standard", "metadata": map[string]string{},
+		"sourceSnapshotId": "snapshot-one",
+	}); err != nil {
+		t.Fatalf("valid Snapshot-seeded create was rejected: %v", err)
 	}
 
 	for _, forbidden := range []string{
@@ -473,5 +523,111 @@ func TestDataPlaneSchemasHideProviderRunnerAndUpstreamAuthority(t *testing.T) {
 	sort.Strings(exposed)
 	if len(exposed) != 0 {
 		t.Fatalf("data-plane request/response schemas expose infrastructure authority: %v", exposed)
+	}
+}
+
+func TestPublicResourcesAndGeneratedSDKsContainNoPrivateWorkspaceAuthority(
+	t *testing.T,
+) {
+	document := loadOpenAPIContract(t)
+	for _, name := range []string{
+		"Sandbox",
+		"Workspace",
+		"Snapshot",
+		"Operation",
+		"Profile",
+		"ProfileRevision",
+		"ProfileRevisionSpec",
+		"Runner",
+		"RunnerPool",
+	} {
+		encoded, err := json.Marshal(componentSchema(t, document, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		lower := strings.ToLower(string(encoded))
+		for _, forbidden := range []string{
+			"homerunner",
+			"home_runner",
+			"hostpath",
+			"host_path",
+			"storageref",
+			"storage_ref",
+			"storagekey",
+			"storage_key",
+			"workspaceimagesha",
+			"workspace_image_sha",
+			`"backend"`,
+			"firecracker",
+			`"kvm"`,
+			"reflink",
+			`"ext4"`,
+			"smolvm",
+			"dm-thin",
+		} {
+			if strings.Contains(lower, forbidden) {
+				t.Errorf("public %s schema exposes %q: %s", name, forbidden, encoded)
+			}
+		}
+	}
+	runnerProperties := object(
+		t,
+		componentSchema(t, document, "Runner")["properties"],
+		"Runner.properties",
+	)
+	if _, exists := runnerProperties["id"]; !exists {
+		t.Fatal("administrative Runner schema lost its logical Runner ID")
+	}
+	artifactProperties := object(
+		t,
+		componentSchema(t, document, "Artifact")["properties"],
+		"Artifact.properties",
+	)
+	if _, exists := artifactProperties["sha256"]; !exists {
+		t.Fatal("Artifact schema lost its content SHA")
+	}
+
+	_, sourceFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate SecondBox contract test source")
+	}
+	repositoryRoot := filepath.Clean(
+		filepath.Join(filepath.Dir(sourceFile), "..", ".."),
+	)
+	for _, relativePath := range []string{
+		"pkg/contracts/contracts.go",
+		"sdk/go/secondboxclient/wire_types.go",
+		"sdk/typescript/transport.ts",
+		"sdk/python/secondbox_client.py",
+	} {
+		contents, err := os.ReadFile(filepath.Join(repositoryRoot, relativePath))
+		if err != nil {
+			t.Fatalf("read generated representation %s: %v", relativePath, err)
+		}
+		lower := strings.ToLower(string(contents))
+		for _, forbidden := range []string{
+			"homerunner",
+			"home_runner",
+			"hostpath",
+			"host_path",
+			"storageref",
+			"storage_ref",
+			"storagekey",
+			"storage_key",
+			"workspaceimagesha",
+			"workspace_image_sha",
+			"firecracker",
+			"reflink",
+			"smolvm",
+			"dm-thin",
+		} {
+			if strings.Contains(lower, forbidden) {
+				t.Errorf(
+					"generated representation %s exposes %q",
+					relativePath,
+					forbidden,
+				)
+			}
+		}
 	}
 }

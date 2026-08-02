@@ -2,13 +2,66 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
+	"github.com/SecondStack-AI/SecondBox/internal/worknotify"
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
+
+func TestBufferedExecEnvironmentAcceptsAgentRuntimeStartupPrompt(t *testing.T) {
+	_, err := validateBufferedExecRequest(contracts.BufferedExecRequest{
+		Command: contracts.ExecCommand{Mode: "shell", Command: "true"},
+		Environment: map[string]string{
+			"SANDBOX_STARTUP_CLAUDE_MD": strings.Repeat("x", 10564),
+		},
+		DeadlineMilliseconds: 1,
+		MaximumOutputBytes:   1,
+	})
+	if err != nil {
+		t.Fatalf("validateBufferedExecRequest rejected Agent Runtime startup prompt: %v", err)
+	}
+}
+
+func TestBufferedExecEnvironmentErrorIdentifiesOnlyVariableShape(t *testing.T) {
+	_, err := validateBufferedExecRequest(contracts.BufferedExecRequest{
+		Command: contracts.ExecCommand{Mode: "shell", Command: "true"},
+		Environment: map[string]string{
+			"AGENT_RUNTIME_BUNDLE": strings.Repeat("x", 131073),
+		},
+		DeadlineMilliseconds: 1,
+		MaximumOutputBytes:   1,
+	})
+	if err == nil {
+		t.Fatal("validateBufferedExecRequest accepted an oversized environment value")
+	}
+	if !strings.Contains(err.Error(), `"AGENT_RUNTIME_BUNDLE"`) ||
+		!strings.Contains(err.Error(), "131073") ||
+		!strings.Contains(err.Error(), "131072") ||
+		strings.Contains(err.Error(), strings.Repeat("x", 16)) {
+		t.Fatalf("environment error = %q, want variable name and byte count without value", err)
+	}
+}
+
+func TestBufferedExecEnvironmentRejectsAggregateAboveOneMiB(t *testing.T) {
+	environment := make(map[string]string, 9)
+	for index := range 9 {
+		environment[fmt.Sprintf("VALUE_%d", index)] = strings.Repeat("x", 131072)
+	}
+	_, err := validateBufferedExecRequest(contracts.BufferedExecRequest{
+		Command:              contracts.ExecCommand{Mode: "shell", Command: "true"},
+		Environment:          environment,
+		DeadlineMilliseconds: 1,
+		MaximumOutputBytes:   1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "total") {
+		t.Fatalf("environment aggregate error = %v, want bounded total", err)
+	}
+}
 
 func TestExecOutcomeRejectsIncompleteTerminalEvidence(t *testing.T) {
 	tests := []runnercontrol.DataPlaneSession{
@@ -115,4 +168,51 @@ func (*deadlineProofRelay) CancelPublicDataPlaneSession(
 	runnercontrol.PublicDataPlaneCancellation,
 ) (runnercontrol.DataPlaneSession, bool, error) {
 	panic("unexpected public streaming session cancellation")
+}
+
+// TestSubscribeDataPlaneSessionFallsBackToPollingWithoutASource proves a
+// deployment that has not enabled notifications keeps working. A nil channel
+// blocks forever in a select, so the caller stays on its poll interval, which is
+// the recovery bound in both cases.
+func TestSubscribeDataPlaneSessionFallsBackToPollingWithoutASource(t *testing.T) {
+	service := &ControlPlaneService{}
+	wakeups, cancel := service.SubscribeDataPlaneSession("dps_1")
+	if wakeups != nil {
+		t.Error("a service without a wakeup source must yield no wakeup channel")
+	}
+	if cancel == nil {
+		t.Fatal("cancellation must always be callable")
+	}
+	cancel()
+	cancel()
+}
+
+// TestSubscribeDataPlaneSessionIsKeyedBySession proves one session's frames
+// never wake another session's loop.
+func TestSubscribeDataPlaneSessionIsKeyedBySession(t *testing.T) {
+	hub := worknotify.NewHub()
+	service := &ControlPlaneService{dataPlaneWakeups: hub}
+	wakeups, cancel := service.SubscribeDataPlaneSession("dps_1")
+	defer cancel()
+	if wakeups == nil {
+		t.Fatal("a configured wakeup source must yield a wakeup channel")
+	}
+	hub.Publish(worknotify.KindDataPlaneSession, "dps_2")
+	select {
+	case <-wakeups:
+		t.Fatal("another session's frame woke this loop")
+	default:
+	}
+	hub.Publish(worknotify.KindDataPlaneSession, "dps_1")
+	select {
+	case <-wakeups:
+	default:
+		t.Fatal("this session's frame did not wake its loop")
+	}
+	// An empty session cannot be subscribed, so it must not consume the source.
+	empty, cancelEmpty := service.SubscribeDataPlaneSession("")
+	defer cancelEmpty()
+	if empty != nil {
+		t.Error("an empty session ID must not produce a subscription")
+	}
 }

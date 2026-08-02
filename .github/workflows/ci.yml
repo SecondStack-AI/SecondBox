@@ -181,3 +181,23 @@ jobs:
           name: secondbox-linux-${{ runner.arch }}
           path: dist/
           if-no-files-found: error
+
+  scenario-qualification:
+    runs-on: [self-hosted, linux, x64, secondbox-kvm]
+    timeout-minutes: 45
+    env:
+      SECONDBOX_REQUIRE_QUALIFIED_SCENARIO: "1"
+      SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR: ${{ vars.SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR }}
+      SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY: ${{ vars.SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY }}
+      SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256: ${{ vars.SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 }}
+      SECONDBOX_RUNNER_WORKSPACE_ROOT: ${{ vars.SECONDBOX_RUNNER_WORKSPACE_ROOT }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            runner/go.sum
+      - name: Run the qualified external scenario suite
+        run: just test-scenario

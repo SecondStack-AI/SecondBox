@@ -208,6 +208,11 @@ func TestPostgresTerminalRelayOwnsAttachmentDetachReplayAndFenceAuthority(t *tes
 	if activityState != contracts.ActivitySessionStateClosed {
 		t.Fatalf("Terminal activity remained open after terminal acknowledgement: %q", activityState)
 	}
+	if _, err := controlPlane.ReleaseSandboxLease(
+		t.Context(), principal, lease.ID, "terminal-relay-initial-lease-release",
+	); err != nil {
+		t.Fatal(err)
+	}
 
 	admitTerminal := func(id string, leaseID string, detachable bool) runnercontrol.DataPlaneSession {
 		t.Helper()

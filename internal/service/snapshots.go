@@ -11,7 +11,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
-// CreateSandboxSnapshot retains the current published checkpoint without claiming process state.
+// CreateSandboxSnapshot admits an asynchronous runner-local clone.
 func (service *ControlPlaneService) CreateSandboxSnapshot(
 	ctx context.Context,
 	principal contracts.Principal,
@@ -19,51 +19,62 @@ func (service *ControlPlaneService) CreateSandboxSnapshot(
 	idempotencyKey string,
 	expectedRevision int64,
 	request contracts.CreateSnapshotRequest,
-) (contracts.Snapshot, error) {
+) (contracts.Operation, bool, error) {
 	if err := requireSnapshotLifecycle(principal); err != nil {
-		return contracts.Snapshot{}, err
+		return contracts.Operation{}, false, err
 	}
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
-		return contracts.Snapshot{}, err
+		return contracts.Operation{}, false, err
 	}
 	if expectedRevision < 1 {
-		return contracts.Snapshot{}, errors.New("SecondBox Snapshot expected revision must be positive")
+		return contracts.Operation{}, false, errors.New("SecondBox Snapshot expected revision must be positive")
 	}
 	if err := validateSnapshotRequest(request); err != nil {
-		return contracts.Snapshot{}, err
+		return contracts.Operation{}, false, err
 	}
-	_, checkpointPolicy, err := service.store.GetSandboxLifecyclePolicy(
+	_, retentionPolicy, err := service.store.GetSandboxLifecyclePolicy(
 		ctx, principal.TenantRef, principal.SubjectRef, sandboxID,
 	)
 	if err != nil {
-		return contracts.Snapshot{}, err
+		return contracts.Operation{}, false, err
 	}
 	requestHash, err := hashCanonicalRequest(request)
 	if err != nil {
-		return contracts.Snapshot{}, err
+		return contracts.Operation{}, false, err
 	}
 	now := service.now().UTC()
+	retainUntil := now.Add(time.Duration(retentionPolicy.SnapshotRetentionSeconds) * time.Second)
 	snapshot := contracts.Snapshot{
 		ID: service.newID("snp"), TenantRef: principal.TenantRef,
 		SubjectRef: principal.SubjectRef, SandboxID: sandboxID,
 		Name: request.Name, Metadata: cloneMetadata(request.Metadata),
-		RetainUntil: now.Add(time.Duration(checkpointPolicy.RetentionSeconds) * time.Second),
+		RetainUntil: &retainUntil,
 		CreatedAt:   now,
+	}
+	operation := contracts.Operation{
+		ID: service.newID("op"), SandboxID: sandboxID, Kind: "snapshot_create",
+		State: contracts.OperationStatePending, RequestID: service.requestID(ctx),
+		CreatedAt: now, UpdatedAt: now,
 	}
 	audit := service.newAudit(
 		ctx, principal, "snapshot.created", "snapshot", snapshot.ID, principal.TenantRef, now,
 	)
 	created, err := service.store.CreateSnapshot(ctx, ports.SnapshotCreationInput{
-		Snapshot: snapshot, IdempotencyKey: idempotencyKey, RequestHash: requestHash,
+		Snapshot: snapshot, Operation: operation, EffectID: service.newID("effect"),
+		CommandID: service.newID("command"), FencingToken: []byte(service.newCredentialMaterial()),
+		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
 		IdempotencyEnds: now.Add(idempotencyRetention), ExpectedRevision: expectedRevision,
 	})
 	if err != nil {
-		return contracts.Snapshot{}, err
+		return contracts.Operation{}, false, err
 	}
-	if err := service.store.AppendAuditEvent(ctx, audit); err != nil {
-		return contracts.Snapshot{}, err
+	replayed := created.ID != operation.ID
+	if !replayed {
+		if err := service.store.AppendAuditEvent(ctx, audit); err != nil {
+			return contracts.Operation{}, false, err
+		}
 	}
-	return created, nil
+	return created, replayed, nil
 }
 
 // ListSandboxSnapshots returns one retained Snapshot page inside the authenticated Project.
@@ -100,39 +111,108 @@ func (service *ControlPlaneService) GetSnapshot(
 	)
 }
 
-// DeleteSnapshot ends one checkpoint retention root idempotently.
+// DeleteSnapshot admits an asynchronous runner-local deletion.
 func (service *ControlPlaneService) DeleteSnapshot(
 	ctx context.Context,
 	principal contracts.Principal,
 	snapshotID string,
 	idempotencyKey string,
-) error {
+) (contracts.Operation, bool, error) {
 	if err := requireSnapshotLifecycle(principal); err != nil {
-		return err
+		return contracts.Operation{}, false, err
 	}
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
-		return err
+		return contracts.Operation{}, false, err
 	}
 	requestHash, err := hashCanonicalRequest(struct {
 		SnapshotID string `json:"snapshotId"`
 	}{SnapshotID: snapshotID})
 	if err != nil {
-		return err
+		return contracts.Operation{}, false, err
 	}
 	now := service.now().UTC()
 	audit := service.newAudit(
 		ctx, principal, "snapshot.retention_ended", "snapshot",
 		snapshotID, principal.TenantRef, now,
 	)
-	if err := service.store.EndSnapshotRetention(ctx, ports.SnapshotRetentionInput{
+	operation := contracts.Operation{
+		ID: service.newID("op"), Kind: "snapshot_delete", State: contracts.OperationStatePending,
+		RequestID: service.requestID(ctx), CreatedAt: now, UpdatedAt: now,
+	}
+	stored, err := service.store.DeleteSnapshot(ctx, ports.SnapshotDeletionInput{
 		TenantRef:  principal.TenantRef,
 		SubjectRef: principal.SubjectRef, SnapshotID: snapshotID,
+		Operation: operation, EffectID: service.newID("effect"), CommandID: service.newID("command"),
+		FencingToken:   []byte(service.newCredentialMaterial()),
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
 		IdempotencyEnds: now.Add(idempotencyRetention), Now: now,
-	}); err != nil {
-		return err
+	})
+	if err != nil {
+		return contracts.Operation{}, false, err
 	}
-	return service.store.AppendAuditEvent(ctx, audit)
+	replayed := stored.ID != operation.ID
+	if !replayed {
+		if err := service.store.AppendAuditEvent(ctx, audit); err != nil {
+			return contracts.Operation{}, false, err
+		}
+	}
+	return stored, replayed, nil
+}
+
+// RestoreSandboxSnapshot admits a stopped-only in-place restore.
+func (service *ControlPlaneService) RestoreSandboxSnapshot(
+	ctx context.Context,
+	principal contracts.Principal,
+	sandboxID string,
+	idempotencyKey string,
+	expectedRevision int64,
+	request contracts.RestoreSnapshotRequest,
+) (contracts.Operation, bool, error) {
+	if err := requireSnapshotLifecycle(principal); err != nil {
+		return contracts.Operation{}, false, err
+	}
+	if err := validateIdempotencyKey(idempotencyKey); err != nil {
+		return contracts.Operation{}, false, err
+	}
+	if expectedRevision < 1 || strings.TrimSpace(request.SnapshotID) == "" {
+		return contracts.Operation{}, false, errors.New("SecondBox Snapshot restore revision and Snapshot ID are required")
+	}
+	requestHash, err := hashCanonicalRequest(request)
+	if err != nil {
+		return contracts.Operation{}, false, err
+	}
+	now := service.now().UTC()
+	operation := contracts.Operation{
+		ID: service.newID("op"), SandboxID: sandboxID, Kind: "snapshot_restore",
+		State: contracts.OperationStatePending, RequestID: service.requestID(ctx),
+		CreatedAt: now, UpdatedAt: now,
+	}
+	stored, err := service.store.RestoreSnapshot(ctx, ports.SnapshotRestoreInput{
+		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
+		SandboxID: sandboxID, SnapshotID: request.SnapshotID, Operation: operation,
+		RestoreID: service.newID("restore"), PrepareEffectID: service.newID("effect"),
+		SwapEffectID: service.newID("effect"), FinalizeEffectID: service.newID("effect"),
+		AbortEffectID: service.newID("effect"), PrepareCommandID: service.newID("command"),
+		SwapCommandID: service.newID("command"), FinalizeCommandID: service.newID("command"),
+		AbortCommandID: service.newID("command"),
+		FencingToken:   []byte(service.newCredentialMaterial()),
+		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
+		IdempotencyEnds: now.Add(idempotencyRetention), ExpectedRevision: expectedRevision, Now: now,
+	})
+	if err != nil {
+		return contracts.Operation{}, false, err
+	}
+	replayed := stored.ID != operation.ID
+	if !replayed {
+		audit := service.newAudit(
+			ctx, principal, "snapshot.restore_requested", "snapshot",
+			request.SnapshotID, principal.TenantRef, now,
+		)
+		if err := service.store.AppendAuditEvent(ctx, audit); err != nil {
+			return contracts.Operation{}, false, err
+		}
+	}
+	return stored, replayed, nil
 }
 
 func requireSnapshotLifecycle(principal contracts.Principal) error {

@@ -17,7 +17,7 @@ func TestRelocateRunDirForUnixSockets(t *testing.T) {
 		}
 	})
 
-	// The real-world failing path (deep DataDir) must relocate to something that
+	// A deeply nested configured run path must relocate to something that
 	// fits without using XDG_RUNTIME_DIR, which is too small for rootfs copies.
 	t.Run("deep path relocates under cache dir", func(t *testing.T) {
 		t.Setenv("XDG_CACHE_HOME", "/c")

@@ -239,7 +239,6 @@ func (store *PostgresControlPlaneStore) CloseActivitySession(
 	return session, nil
 }
 
-// AcquireMaterialization creates exclusive generation-bound runner-local writer evidence.
 func lockCurrentSubjectGeneration(
 	ctx context.Context,
 	tx pgx.Tx,

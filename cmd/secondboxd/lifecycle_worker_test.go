@@ -25,7 +25,7 @@ func TestLifecycleReconcilerRunsImmediatelyAndStopsWithContext(t *testing.T) {
 		completed <- runLifecycleReconciler(ctx, lifecycle.Reconciler{
 			Store: store, WorkerID: "worker-process",
 			ClaimDuration: time.Minute, PollInterval: time.Hour,
-		})
+		}, nil)
 	}()
 	select {
 	case <-store.applied:
@@ -43,13 +43,13 @@ func TestLifecycleReconcilerRunsImmediatelyAndStopsWithContext(t *testing.T) {
 	}
 }
 
-func TestLifecycleReconcilerRetriesOnlyRevisionContention(t *testing.T) {
+func TestLifecycleReconcilerRetriesRevisionContention(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	store := &contentionLifecycleStore{cancel: cancel, applyErr: ports.ErrRevisionConflict}
 	err := runLifecycleReconciler(ctx, lifecycle.Reconciler{
 		Store: store, WorkerID: "worker-contention",
 		ClaimDuration: time.Minute, PollInterval: time.Hour,
-	})
+	}, nil)
 	if err != nil || store.applyCalls != 1 || store.claimCalls != 2 {
 		t.Fatalf(
 			"lifecycle contention result = error %v, claims %d, applies %d",
@@ -68,7 +68,7 @@ func TestAssignmentReconcilerRetriesOnlyLostClaims(t *testing.T) {
 		NewCommandID: func(string) string {
 			return "unused-command"
 		},
-	})
+	}, nil)
 	if err != nil || store.applyCalls != 1 || store.claimCalls != 2 {
 		t.Fatalf(
 			"Assignment contention result = error %v, claims %d, applies %d",
@@ -85,7 +85,7 @@ func TestReconcileWorkersSurfaceUnexpectedErrors(t *testing.T) {
 	lifecycleErr := runLifecycleReconciler(t.Context(), lifecycle.Reconciler{
 		Store: lifecycleStore, WorkerID: "worker-unexpected",
 		ClaimDuration: time.Minute, PollInterval: time.Hour,
-	})
+	}, nil)
 	if !errors.Is(lifecycleErr, unexpected) {
 		t.Fatalf("unexpected lifecycle error = %v", lifecycleErr)
 	}
@@ -99,9 +99,29 @@ func TestReconcileWorkersSurfaceUnexpectedErrors(t *testing.T) {
 		NewCommandID: func(string) string {
 			return "unused-command"
 		},
-	})
+	}, nil)
 	if !errors.Is(assignmentErr, unexpected) {
 		t.Fatalf("unexpected Assignment error = %v", assignmentErr)
+	}
+}
+
+func TestWorkerWaitReturnsOnWakeupAndFallback(t *testing.T) {
+	wakeups := make(chan struct{}, 1)
+	wakeups <- struct{}{}
+	startedAt := time.Now()
+	if !waitForWork(t.Context(), time.Hour, wakeups) {
+		t.Fatal("worker wait stopped while its context was active")
+	}
+	if time.Since(startedAt) > 500*time.Millisecond {
+		t.Fatalf("worker wakeup took %s", time.Since(startedAt))
+	}
+
+	startedAt = time.Now()
+	if !waitForWork(t.Context(), time.Millisecond, nil) {
+		t.Fatal("worker fallback stopped while its context was active")
+	}
+	if time.Since(startedAt) < time.Millisecond {
+		t.Fatal("worker fallback returned before its poll interval")
 	}
 }
 
@@ -128,8 +148,8 @@ func (store *contentionLifecycleStore) ClaimLifecycle(
 	if store.claimCalls == 1 {
 		return ports.LifecycleReconcileClaim{
 			SandboxID: "sbx-contention", WorkerID: workerID, Revision: 2,
-			ObservedState: contracts.SandboxStateStopped,
-			DesiredState:  contracts.SandboxDesiredStateDeleted,
+			ObservedState: contracts.SandboxStateCreating,
+			DesiredState:  contracts.SandboxDesiredStateStopped,
 		}, true, nil
 	}
 	store.cancel()

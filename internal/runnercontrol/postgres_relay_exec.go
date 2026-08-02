@@ -107,9 +107,6 @@ func (relay *PostgresFrameRelay) AppendExecClientFrame(
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return false, fmt.Errorf("SecondBox public Exec sequence lookup: %w", err)
 	}
-	if session.State != "pending" && session.State != "running" {
-		return false, ErrRelaySequence
-	}
 	if isInput && session.RequestStreamClosed {
 		return false, ErrRelaySequence
 	}
@@ -135,6 +132,44 @@ func (relay *PostgresFrameRelay) AppendExecClientFrame(
 	}
 	if runnerSequence != nextSequence {
 		return false, ErrRelaySequence
+	}
+	if session.State != "pending" && session.State != "running" {
+		switch session.State {
+		case "completed", "failed", "cancelled", "expired":
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO secondbox.data_plane_frames (
+					id,session_id,direction,sequence,payload_hash,payload,payload_bytes,
+					priority,state,claim_owner,claim_expires_at,delivery_count,
+					created_at,updated_at,delivered_at
+				) VALUES ($1,$2,'outbound',$3,$4,$5,$6,0,'discarded','',NULL,0,$7,$7,NULL)`,
+				fmt.Sprintf("%s_client_%d", session.ID, frame.Sequence), session.ID,
+				runnerSequence, payloadHash, payload, len(payload), now.UTC(),
+			); err != nil {
+				return false, fmt.Errorf("SecondBox terminal public Exec frame insert: %w", err)
+			}
+			requestBytes := int64(0)
+			if isInput {
+				requestBytes = int64(len(frame.Input))
+			}
+			if _, err := tx.Exec(ctx, `
+				UPDATE secondbox.data_plane_sessions
+				SET request_stream_bytes=request_stream_bytes+$2,
+				    request_stream_closed=request_stream_closed OR $3,
+				    outbound_bytes=outbound_bytes+$4,
+				    response_credit_bytes=response_credit_bytes+$5,
+				    updated_at=$6
+				WHERE id=$1`,
+				session.ID, requestBytes, frame.EndInput, len(payload), frame.Credit, now.UTC(),
+			); err != nil {
+				return false, fmt.Errorf("SecondBox terminal public Exec session update: %w", err)
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return false, fmt.Errorf("SecondBox terminal public Exec frame commit: %w", err)
+			}
+			return true, nil
+		default:
+			return false, ErrRelaySequence
+		}
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.data_plane_frames (

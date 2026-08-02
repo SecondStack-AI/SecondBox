@@ -39,7 +39,7 @@
       "guest_minimum": 1,
       "guest_maximum": 1,
       "mandatory_features": [
-        "checkpoint_freeze"
+        "unsupported_reserved_5"
       ],
       "guest_features": [
         "streaming_exec"

@@ -21,7 +21,8 @@ const runnerAdminSelect = `
 	SELECT runner.id,runner.pool_name,runner.name,runner.state,
 	       'pre_shared' AS credential_state,
 	       runner.architectures_json,runner.capabilities_json,runner.capacity_json,
-	       runner.protocol_versions_json,runner.last_seen_at,runner.revision,
+	       runner.protocol_versions_json,runner.sandbox_start_sample_count,
+	       runner.sandbox_start_p95_milliseconds,runner.last_seen_at,runner.revision,
 	       runner.created_at,runner.updated_at
 	FROM secondbox.runners AS runner`
 
@@ -300,7 +301,8 @@ func scanRunnerAdmin(row runnerPoolRow) (contracts.Runner, error) {
 	if err := row.Scan(
 		&runner.ID, &runner.PoolName, &runner.Name, &runner.State,
 		&runner.CredentialState, &architecturesJSON, &capabilitiesJSON,
-		&capacityJSON, &protocolVersionsJSON, &runner.LastSeenAt,
+		&capacityJSON, &protocolVersionsJSON, &runner.SandboxStartSampleCount,
+		&runner.SandboxStartP95Milliseconds, &runner.LastSeenAt,
 		&runner.Revision, &runner.CreatedAt, &runner.UpdatedAt,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

@@ -20,9 +20,13 @@ import (
 )
 
 const (
-	defaultShellRows        = 24
-	defaultShellColumns     = 80
-	defaultShellCreditBytes = 1024
+	defaultShellRows    = 24
+	defaultShellColumns = 80
+	// defaultShellCreditBytes is the outstanding output credit requested before
+	// the session's own window is known. A full-screen repaint costs several
+	// kilobytes, so a smaller default would stall every repaint behind extra
+	// credit round trips. The session's pinned window always clamps this.
+	defaultShellCreditBytes = 64 << 10
 	shellInputChunkBytes    = 4096
 )
 
@@ -104,7 +108,10 @@ func runSandboxShellCommand(
 	}
 	if strings.TrimSpace(rawURL) == "" || strings.TrimSpace(token) == "" ||
 		strings.TrimSpace(tenantRef) == "" || strings.TrimSpace(subjectRef) == "" {
-		return errors.New("SecondBox CLI sandbox shell requires --url, --token, --tenant-ref, and --subject-ref")
+		return errors.New(
+			"SecondBox CLI sandbox shell requires --url, --token, --tenant-ref, and --subject-ref" +
+				sessionSourceHint,
+		)
 	}
 	if strings.TrimSpace(*sandboxID) == "" || strings.TrimSpace(*generationText) == "" {
 		return errors.New("SecondBox CLI sandbox shell requires --sandbox and --generation")
@@ -206,7 +213,9 @@ func runSandboxShellCommand(
 	}()
 	shellDone := make(chan struct{})
 	defer close(shellDone)
-	if err := terminalConnection.GrantOutput(*creditBytes); err != nil {
+	if err := terminalConnection.GrantOutput(
+		shellOutputCredit(*creditBytes, session.StreamWindowBytes),
+	); err != nil {
 		return err
 	}
 
@@ -296,6 +305,19 @@ func runSandboxShellCommand(
 	}
 }
 
+// shellOutputCredit clamps the requested credit to the session's pinned window.
+//
+// The window is immutable ProfileRevision policy and granting past it fails the
+// session, so the client publishes what it can spend rather than guessing. A
+// server that reports no window leaves the requested value untouched, which
+// keeps an older control plane usable.
+func shellOutputCredit(requested int64, streamWindowBytes int64) int64 {
+	if streamWindowBytes > 0 && requested > streamWindowBytes {
+		return streamWindowBytes
+	}
+	return requested
+}
+
 func pumpSandboxShellInput(
 	input io.Reader,
 	terminalConnection *secondboxclient.Terminal,
@@ -321,28 +343,14 @@ func pumpSandboxShellInput(
 	}
 }
 
+// sandboxShellOutcomeError names the remote shell over the single shared
+// interpretation of the terminal outcome union.
 func sandboxShellOutcomeError(outcome secondboxclient.ExecOutcome) error {
-	switch {
-	case outcome.ExecExited != nil && outcome.ExecExited.ExitCode == 0:
+	err := secondboxclient.ExecOutcomeError(outcome)
+	if err == nil {
 		return nil
-	case outcome.ExecExited != nil:
-		return fmt.Errorf("SecondBox remote shell exited with status %d", outcome.ExecExited.ExitCode)
-	case outcome.ExecCancelled != nil:
-		return errors.New("SecondBox remote shell was cancelled")
-	case outcome.ExecDeadlineExceeded != nil:
-		return errors.New("SecondBox remote shell deadline was exceeded")
-	case outcome.ExecOutputExhausted != nil:
-		return errors.New("SecondBox remote shell output limit was exhausted")
-	case outcome.ExecSpawnFailed != nil:
-		return errors.New("SecondBox remote shell failed to start")
-	case outcome.ExecInfrastructureFailed != nil:
-		return fmt.Errorf(
-			"SecondBox remote shell infrastructure failed: %s",
-			outcome.ExecInfrastructureFailed.Message,
-		)
-	default:
-		return errors.New("SecondBox remote shell returned an invalid outcome")
 	}
+	return fmt.Errorf("SecondBox remote shell: %w", err)
 }
 
 func shellResizeEvents(injected <-chan struct{}) (<-chan struct{}, func()) {

@@ -16,16 +16,15 @@ const (
 	RunnerPoolStateDraining = "draining"
 	RunnerPoolStateOffline  = "offline"
 
-	SandboxStateCreating      = "creating"
-	SandboxStateStopped       = "stopped"
-	SandboxStateStarting      = "starting"
-	SandboxStateReady         = "ready"
-	SandboxStateDraining      = "draining"
-	SandboxStateStopping      = "stopping"
-	SandboxStateCheckpointing = "checkpointing"
-	SandboxStateFailed        = "failed"
-	SandboxStateDeleting      = "deleting"
-	SandboxStateDeleted       = "deleted"
+	SandboxStateCreating = "creating"
+	SandboxStateStopped  = "stopped"
+	SandboxStateStarting = "starting"
+	SandboxStateReady    = "ready"
+	SandboxStateDraining = "draining"
+	SandboxStateStopping = "stopping"
+	SandboxStateFailed   = "failed"
+	SandboxStateDeleting = "deleting"
+	SandboxStateDeleted  = "deleted"
 
 	SandboxDesiredStateRunning = "running"
 	SandboxDesiredStateStopped = "stopped"
@@ -41,6 +40,16 @@ const (
 	LeaseStateReleased = "released"
 	LeaseStateExpired  = "expired"
 	LeaseStateFenced   = "fenced"
+
+	// SandboxNameMetadataKey is the reserved Metadata key that names a Sandbox.
+	// It is unique per tenant and subject among Sandboxes that are not deleted,
+	// so a name resolves to exactly one Sandbox.
+	SandboxNameMetadataKey = "secondbox.dev/name"
+
+	// SandboxIDPrefix is the fixed prefix every minted Sandbox identifier
+	// carries. Clients tell an identifier from a name by it, so a reserved name
+	// may not begin with it.
+	SandboxIDPrefix = "sbx_"
 
 	GuestLivenessUnknown  = "unknown"
 	GuestLivenessStarting = "starting"
@@ -61,10 +70,13 @@ const (
 	PortSessionStateExpired = "expired"
 	PortSessionStateFenced  = "fenced"
 
-	MaterializationStatePreparing = "preparing"
-	MaterializationStateReady     = "ready"
-	MaterializationStateReleased  = "released"
-	MaterializationStateLost      = "lost"
+	// PortTransportRelay carries Port bytes as durable frames. It is the only
+	// transport an ordinary caller ever receives.
+	PortTransportRelay = "relay"
+	// PortTransportDirect carries Port bytes on a live socket to the home
+	// Runner. Admission stays PostgreSQL-authoritative and fenced; only the
+	// transport between the caller and the Runner differs.
+	PortTransportDirect = "direct"
 
 	ObjectStateStaging         = "staging"
 	ObjectStateVerified        = "verified"
@@ -122,17 +134,16 @@ type ProfileRevision struct {
 
 // ProfileRevisionSpec resolves every execution, durability, and placement bound.
 type ProfileRevisionSpec struct {
-	Backend               string           `json:"backend"`
-	Pool                  string           `json:"pool"`
-	Architecture          string           `json:"architecture"`
-	RuntimeBundleDigest   string           `json:"runtimeBundleDigest"`
-	ToolchainBundleDigest string           `json:"toolchainBundleDigest"`
-	Resources             ResourcePolicy   `json:"resources"`
-	Lifecycle             LifecyclePolicy  `json:"lifecycle"`
-	Checkpoint            CheckpointPolicy `json:"checkpoint"`
-	Execution             ExecutionPolicy  `json:"execution"`
-	Network               NetworkPolicy    `json:"network"`
-	Ports                 []PortPolicy     `json:"ports"`
+	Pool                  string          `json:"pool"`
+	Architecture          string          `json:"architecture"`
+	RuntimeBundleDigest   string          `json:"runtimeBundleDigest"`
+	ToolchainBundleDigest string          `json:"toolchainBundleDigest"`
+	Resources             ResourcePolicy  `json:"resources"`
+	Lifecycle             LifecyclePolicy `json:"lifecycle"`
+	Retention             RetentionPolicy `json:"retention"`
+	Execution             ExecutionPolicy `json:"execution"`
+	Network               NetworkPolicy   `json:"network"`
+	Ports                 []PortPolicy    `json:"ports"`
 }
 
 // ResourcePolicy contains per-Sandbox enforceable compute and workspace limits.
@@ -153,11 +164,10 @@ type LifecyclePolicy struct {
 	LeaseSeconds           int64  `json:"leaseSeconds"`
 }
 
-// CheckpointPolicy bounds durable workspace and artifact retention.
-type CheckpointPolicy struct {
-	OnStop                   bool  `json:"onStop"`
-	RetentionSeconds         int64 `json:"retentionSeconds"`
+// RetentionPolicy bounds local Snapshot count/lifetime and Artifact retention.
+type RetentionPolicy struct {
 	SnapshotLimit            int64 `json:"snapshotLimit"`
+	SnapshotRetentionSeconds int64 `json:"snapshotRetentionSeconds"`
 	ArtifactRetentionSeconds int64 `json:"artifactRetentionSeconds"`
 }
 
@@ -242,19 +252,21 @@ type UpdateRunnerPoolRequest struct {
 
 // Runner is enrolled execution identity and fixed-capacity evidence.
 type Runner struct {
-	ID               string           `json:"id"`
-	PoolName         string           `json:"poolName"`
-	Name             string           `json:"name"`
-	State            string           `json:"state"`
-	CredentialState  string           `json:"credentialState"`
-	Architectures    []string         `json:"architectures"`
-	Capabilities     []string         `json:"capabilities"`
-	Capacity         map[string]int64 `json:"capacity"`
-	ProtocolVersions []string         `json:"protocolVersions"`
-	LastSeenAt       *time.Time       `json:"lastSeenAt,omitempty"`
-	Revision         int64            `json:"revision"`
-	CreatedAt        time.Time        `json:"createdAt"`
-	UpdatedAt        time.Time        `json:"updatedAt"`
+	ID                          string           `json:"id"`
+	PoolName                    string           `json:"poolName"`
+	Name                        string           `json:"name"`
+	State                       string           `json:"state"`
+	CredentialState             string           `json:"credentialState"`
+	Architectures               []string         `json:"architectures"`
+	Capabilities                []string         `json:"capabilities"`
+	Capacity                    map[string]int64 `json:"capacity"`
+	ProtocolVersions            []string         `json:"protocolVersions"`
+	SandboxStartSampleCount     int64            `json:"sandboxStartSampleCount"`
+	SandboxStartP95Milliseconds int64            `json:"sandboxStartP95Milliseconds"`
+	LastSeenAt                  *time.Time       `json:"lastSeenAt,omitempty"`
+	Revision                    int64            `json:"revision"`
+	CreatedAt                   time.Time        `json:"createdAt"`
+	UpdatedAt                   time.Time        `json:"updatedAt"`
 }
 
 // RunnerPage is one bounded stable administrative Runner traversal page.
@@ -294,22 +306,19 @@ type Lease struct {
 	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
-// Snapshot is one immutable retained projection of a committed workspace checkpoint.
+// Snapshot is one immutable runner-local projection of a committed Workspace.
 type Snapshot struct {
 	ID                 string            `json:"id"`
 	TenantRef          string            `json:"-"`
 	SubjectRef         string            `json:"-"`
 	SandboxID          string            `json:"sandboxId"`
 	WorkspaceID        string            `json:"-"`
-	CheckpointID       string            `json:"-"`
 	SourceGeneration   int64             `json:"generation"`
 	Name               string            `json:"name"`
 	SizeBytes          int64             `json:"sizeBytes"`
-	SHA256             string            `json:"sha256"`
-	State              string            `json:"-"`
+	State              string            `json:"state"`
 	Metadata           map[string]string `json:"metadata"`
-	Compatibility      map[string]string `json:"-"`
-	RetainUntil        time.Time         `json:"expiresAt"`
+	RetainUntil        *time.Time        `json:"expiresAt,omitempty"`
 	CreatedAt          time.Time         `json:"createdAt"`
 	RetentionEndedAt   *time.Time        `json:"-"`
 	GarbageCollectedAt *time.Time        `json:"-"`
@@ -365,6 +374,7 @@ type PortSession struct {
 	Generation int64     `json:"generation"`
 	Name       string    `json:"name"`
 	Protocol   string    `json:"protocol"`
+	Transport  string    `json:"transport"`
 	Endpoint   string    `json:"endpoint"`
 	State      string    `json:"state"`
 	CreatedAt  time.Time `json:"createdAt"`
@@ -377,7 +387,7 @@ type QuotaLimits struct {
 	MaxActiveInstances      int64 `json:"maxActiveInstances"`
 	MaxCPUMillis            int64 `json:"maxCpuMillis"`
 	MaxMemoryBytes          int64 `json:"maxMemoryBytes"`
-	MaxRetainedBytes        int64 `json:"maxRetainedBytes"`
+	MaxArtifactBytes        int64 `json:"maxArtifactBytes"`
 	MaxSnapshots            int64 `json:"maxSnapshots"`
 	MaxArtifacts            int64 `json:"maxArtifacts"`
 	MaxPortSessions         int64 `json:"maxPortSessions"`
@@ -390,7 +400,7 @@ type QuotaUsage struct {
 	ActiveInstances      int64 `json:"activeInstances"`
 	CPUMillis            int64 `json:"cpuMillis"`
 	MemoryBytes          int64 `json:"memoryBytes"`
-	RetainedBytes        int64 `json:"retainedBytes"`
+	ArtifactBytes        int64 `json:"artifactBytes"`
 	Snapshots            int64 `json:"snapshots"`
 	Artifacts            int64 `json:"artifacts"`
 	PortSessions         int64 `json:"portSessions"`
@@ -407,17 +417,14 @@ type SubjectUsage struct {
 
 // Workspace is public retained-workspace evidence without a provider location.
 type Workspace struct {
-	ID                    string    `json:"id"`
-	TenantRef             string    `json:"-"`
-	SubjectRef            string    `json:"-"`
-	Generation            int64     `json:"generation"`
-	RetainedBytes         int64     `json:"retainedBytes"`
-	CurrentCheckpointID   string    `json:"currentCheckpointId,omitempty"`
-	CurrentCheckpointHash string    `json:"currentCheckpointHash,omitempty"`
-	CurrentCheckpointSize int64     `json:"currentCheckpointSize,omitempty"`
-	RetentionState        string    `json:"retentionState"`
-	CreatedAt             time.Time `json:"createdAt"`
-	UpdatedAt             time.Time `json:"updatedAt"`
+	ID         string    `json:"id"`
+	TenantRef  string    `json:"-"`
+	SubjectRef string    `json:"-"`
+	Generation int64     `json:"generation"`
+	State      string    `json:"state"`
+	SizeBytes  int64     `json:"sizeBytes"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
 // Instance is replaceable compute evidence without runner or backend authority.
@@ -450,40 +457,6 @@ type ActivitySession struct {
 	ClosedAt       *time.Time `json:"closedAt,omitempty"`
 }
 
-// WorkspaceMaterialization is exclusive runner-local writer evidence.
-type WorkspaceMaterialization struct {
-	ID                 string            `json:"id"`
-	WorkspaceID        string            `json:"workspaceId"`
-	SandboxID          string            `json:"sandboxId"`
-	AssignmentID       string            `json:"assignmentId"`
-	RunnerID           string            `json:"runnerId"`
-	Generation         int64             `json:"generation"`
-	SourceCheckpointID string            `json:"sourceCheckpointId,omitempty"`
-	State              string            `json:"state"`
-	ReleaseProof       map[string]string `json:"releaseProof,omitempty"`
-	Revision           int64             `json:"revision"`
-	CreatedAt          time.Time         `json:"createdAt"`
-	UpdatedAt          time.Time         `json:"updatedAt"`
-}
-
-// WorkspaceCheckpoint is immutable portable workspace publication evidence.
-type WorkspaceCheckpoint struct {
-	ID                 string            `json:"id"`
-	TenantRef          string            `json:"tenantRef"`
-	SubjectRef         string            `json:"subjectRef"`
-	SandboxID          string            `json:"sandboxId"`
-	WorkspaceID        string            `json:"workspaceId"`
-	SourceGeneration   int64             `json:"sourceGeneration"`
-	State              string            `json:"state"`
-	SHA256             string            `json:"sha256"`
-	SizeBytes          int64             `json:"sizeBytes"`
-	Compatibility      map[string]string `json:"compatibility"`
-	RetainUntil        time.Time         `json:"retainUntil"`
-	CreatedAt          time.Time         `json:"createdAt"`
-	PublishedAt        *time.Time        `json:"publishedAt,omitempty"`
-	GarbageCollectedAt *time.Time        `json:"garbageCollectedAt,omitempty"`
-}
-
 // Sandbox is durable Project intent pinned to one immutable ProfileRevision.
 type Sandbox struct {
 	ID                string            `json:"id"`
@@ -510,15 +483,22 @@ type SandboxPage struct {
 	NextCursor *string   `json:"nextCursor,omitempty"`
 }
 
-// CreateSandboxRequest contains only caller-selected Profile and bounded metadata.
+// CreateSandboxRequest contains a caller-selected Profile, bounded metadata,
+// and an optional retained Snapshot used to seed generation one.
 type CreateSandboxRequest struct {
-	Profile  string            `json:"profile"`
+	Profile          string            `json:"profile"`
+	Metadata         map[string]string `json:"metadata"`
+	SourceSnapshotID string            `json:"sourceSnapshotId,omitempty"`
+}
+
+// UpdateSandboxMetadataRequest replaces bounded application correlation metadata.
+type UpdateSandboxMetadataRequest struct {
 	Metadata map[string]string `json:"metadata"`
 }
 
-// CheckpointSandboxRequest retains bounded metadata with an explicit checkpoint intent.
-type CheckpointSandboxRequest struct {
-	Metadata map[string]string `json:"metadata"`
+// RestoreSnapshotRequest selects one Snapshot owned by the stopped Sandbox.
+type RestoreSnapshotRequest struct {
+	SnapshotID string `json:"snapshotId"`
 }
 
 // WaitSandboxRequest bounds lifecycle observation without renewing activity.
@@ -648,12 +628,16 @@ type CreateTerminalRequest struct {
 
 // TerminalSession is the durable public terminal negotiation result.
 type TerminalSession struct {
-	ID                 string    `json:"id"`
-	SandboxID          string    `json:"sandboxId"`
-	Generation         int64     `json:"generation"`
-	State              string    `json:"state"`
-	WebsocketURL       string    `json:"websocketUrl"`
-	Subprotocol        string    `json:"subprotocol"`
+	ID           string `json:"id"`
+	SandboxID    string `json:"sandboxId"`
+	Generation   int64  `json:"generation"`
+	State        string `json:"state"`
+	WebsocketURL string `json:"websocketUrl"`
+	Subprotocol  string `json:"subprotocol"`
+	// StreamWindowBytes is the pinned ProfileRevision bound on outstanding
+	// output credit. A client cannot grant more than this, so it is published
+	// rather than left for the client to guess.
+	StreamWindowBytes  int64     `json:"streamWindowBytes"`
 	NextClientSequence int64     `json:"nextClientSequence"`
 	ExpiresAt          time.Time `json:"expiresAt"`
 }
@@ -714,10 +698,11 @@ type ExecOutput struct {
 }
 
 type ExecExited struct {
-	Kind     string     `json:"kind"`
-	ExitCode int32      `json:"exitCode"`
-	Signal   *int32     `json:"signal,omitempty"`
-	Output   ExecOutput `json:"output"`
+	Kind                string     `json:"kind"`
+	ExitCode            int32      `json:"exitCode"`
+	Signal              *int32     `json:"signal,omitempty"`
+	ElapsedMilliseconds int64      `json:"elapsedMilliseconds"`
+	Output              ExecOutput `json:"output"`
 }
 
 type ExecSpawnFailed struct {
@@ -819,6 +804,7 @@ type Operation struct {
 	RequestID       string            `json:"requestId"`
 	RequestMetadata map[string]string `json:"-"`
 	Sandbox         *Sandbox          `json:"sandbox,omitempty"`
+	Snapshot        *Snapshot         `json:"snapshot,omitempty"`
 	Error           *Problem          `json:"error,omitempty"`
 	CreatedAt       time.Time         `json:"createdAt"`
 	StartedAt       *time.Time        `json:"startedAt,omitempty"`
@@ -826,15 +812,125 @@ type Operation struct {
 	UpdatedAt       time.Time         `json:"updatedAt"`
 }
 
+// DurationPercentiles is one bounded duration distribution.
+type DurationPercentiles struct {
+	Count           int64    `json:"count"`
+	P50Milliseconds *float64 `json:"p50Milliseconds,omitempty"`
+	P95Milliseconds *float64 `json:"p95Milliseconds,omitempty"`
+	P99Milliseconds *float64 `json:"p99Milliseconds,omitempty"`
+}
+
+// BootStageTiming attributes one provider-neutral Sandbox startup milestone.
+type BootStageTiming struct {
+	Stage                  string    `json:"stage"`
+	ObservedAt             time.Time `json:"observedAt"`
+	ReceivedAt             time.Time `json:"receivedAt"`
+	ElapsedMilliseconds    float64   `json:"elapsedMilliseconds"`
+	CumulativeMilliseconds float64   `json:"cumulativeMilliseconds"`
+}
+
+// BootTiming is one Sandbox generation's bounded startup attribution.
+type BootTiming struct {
+	Generation           int64             `json:"generation"`
+	DurationMilliseconds float64           `json:"durationMilliseconds"`
+	Completed            bool              `json:"completed"`
+	Stages               []BootStageTiming `json:"stages"`
+}
+
+// OperationStageTiming attributes one provider-neutral orchestration milestone.
+type OperationStageTiming struct {
+	Stage                  string    `json:"stage"`
+	ObservedAt             time.Time `json:"observedAt"`
+	ElapsedMilliseconds    float64   `json:"elapsedMilliseconds"`
+	CumulativeMilliseconds float64   `json:"cumulativeMilliseconds"`
+}
+
+// OperationTiming separates durable queue and execution time.
+type OperationTiming struct {
+	OperationID           string                 `json:"operationId"`
+	SandboxID             string                 `json:"sandboxId"`
+	Kind                  string                 `json:"kind"`
+	State                 string                 `json:"state"`
+	CreatedAt             time.Time              `json:"createdAt"`
+	StartedAt             *time.Time             `json:"startedAt,omitempty"`
+	CompletedAt           *time.Time             `json:"completedAt,omitempty"`
+	QueueMilliseconds     *int64                 `json:"queueMilliseconds,omitempty"`
+	ExecutionMilliseconds *int64                 `json:"executionMilliseconds,omitempty"`
+	TotalMilliseconds     *int64                 `json:"totalMilliseconds,omitempty"`
+	Orchestration         []OperationStageTiming `json:"orchestration"`
+	Boots                 []BootTiming           `json:"boots"`
+}
+
+// ExecTiming reports one completed buffered or streaming execution.
+type ExecTiming struct {
+	SessionID           string    `json:"sessionId"`
+	Mode                string    `json:"mode"`
+	Outcome             string    `json:"outcome"`
+	ElapsedMilliseconds int64     `json:"elapsedMilliseconds"`
+	CreatedAt           time.Time `json:"createdAt"`
+	CompletedAt         time.Time `json:"completedAt"`
+}
+
+// SandboxTiming is a bounded per-Sandbox timing history.
+type SandboxTiming struct {
+	SandboxID  string            `json:"sandboxId"`
+	Operations []OperationTiming `json:"operations"`
+	Execs      []ExecTiming      `json:"execs"`
+}
+
+// BootStageTimingSummary aggregates one provider-neutral startup stage.
+type BootStageTimingSummary struct {
+	Stage    string              `json:"stage"`
+	Duration DurationPercentiles `json:"duration"`
+}
+
+// ExecTimingSummary aggregates one fixed Exec mode and outcome.
+type ExecTimingSummary struct {
+	Mode     string              `json:"mode"`
+	Outcome  string              `json:"outcome"`
+	Duration DurationPercentiles `json:"duration"`
+}
+
+// OperationTimingSummary aggregates one fixed Operation kind and terminal state.
+type OperationTimingSummary struct {
+	Kind      string              `json:"kind"`
+	State     string              `json:"state"`
+	Queue     DurationPercentiles `json:"queue"`
+	Execution DurationPercentiles `json:"execution"`
+	Total     DurationPercentiles `json:"total"`
+}
+
+// HTTPRouteTimingSummary aggregates one fixed route-template and status-class series.
+type HTTPRouteTimingSummary struct {
+	Route       string              `json:"route"`
+	StatusClass string              `json:"statusClass"`
+	Duration    DurationPercentiles `json:"duration"`
+}
+
+// DeploymentTimingSummary is one bounded current-deployment timing projection.
+type DeploymentTimingSummary struct {
+	WindowSeconds     int64                    `json:"windowSeconds"`
+	ObservedAt        time.Time                `json:"observedAt"`
+	Boot              DurationPercentiles      `json:"boot"`
+	BootStages        []BootStageTimingSummary `json:"bootStages"`
+	DominantBootStage *BootStageTimingSummary  `json:"dominantBootStage,omitempty"`
+	Exec              DurationPercentiles      `json:"exec"`
+	ExecSeries        []ExecTimingSummary      `json:"execSeries"`
+	API               DurationPercentiles      `json:"api"`
+	APISeries         []HTTPRouteTimingSummary `json:"apiSeries"`
+	Operations        []OperationTimingSummary `json:"operations"`
+}
+
 // Problem is the stable typed failure envelope.
 type Problem struct {
-	Type      string          `json:"type"`
-	Title     string          `json:"title"`
-	Status    int             `json:"status"`
-	Code      string          `json:"code"`
-	RequestID string          `json:"requestId"`
-	Retryable bool            `json:"retryable"`
-	Details   []ProblemDetail `json:"details,omitempty"`
+	Type                   string          `json:"type"`
+	Title                  string          `json:"title"`
+	Status                 int             `json:"status"`
+	Code                   string          `json:"code"`
+	RequestID              string          `json:"requestId"`
+	Retryable              bool            `json:"retryable"`
+	RetryAfterMilliseconds *int64          `json:"retryAfterMilliseconds,omitempty"`
+	Details                []ProblemDetail `json:"details,omitempty"`
 }
 
 // ProblemDetail identifies one bounded invalid field.
@@ -859,8 +955,39 @@ type AuditEvent struct {
 	CreatedAt    time.Time         `json:"createdAt"`
 }
 
-// MetricsSnapshot contains only fixed-cardinality state and outcome counts.
+// MetricDurationHistogram is one cumulative duration histogram.
+type MetricDurationHistogram struct {
+	Count        uint64
+	SumSeconds   float64
+	BucketCounts []uint64
+}
+
+// OperationDurationMetric is one bounded Operation kind and terminal-state series.
+type OperationDurationMetric struct {
+	Kind          string
+	TerminalState string
+	Histogram     MetricDurationHistogram
+}
+
+// BootStageDurationMetric is one bounded startup-stage series.
+type BootStageDurationMetric struct {
+	Stage     string
+	Histogram MetricDurationHistogram
+}
+
+// ExecDurationMetric is one bounded Exec mode and outcome series.
+type ExecDurationMetric struct {
+	Mode      string
+	Outcome   string
+	Histogram MetricDurationHistogram
+}
+
+// MetricsSnapshot contains only fixed-cardinality state, outcome, and timing signals.
 type MetricsSnapshot struct {
-	SandboxStates   map[string]int64
-	OperationStates map[string]int64
+	SandboxStates      map[string]int64
+	OperationStates    map[string]int64
+	OperationDurations []OperationDurationMetric
+	BootDuration       MetricDurationHistogram
+	BootStageDurations []BootStageDurationMetric
+	ExecDurations      []ExecDurationMetric
 }

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/internal/store/lifecycleprojection"
+	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
 )
@@ -19,7 +21,7 @@ func (store *PostgresControlPlaneStore) GetSandboxLifecyclePolicy(
 	tenantRef string,
 	subjectRef string,
 	sandboxID string,
-) (contracts.LifecyclePolicy, contracts.CheckpointPolicy, error) {
+) (contracts.LifecyclePolicy, contracts.RetentionPolicy, error) {
 	var specJSON []byte
 	if err := store.pool.QueryRow(ctx, `
 		SELECT revision.spec_json
@@ -28,14 +30,14 @@ func (store *PostgresControlPlaneStore) GetSandboxLifecyclePolicy(
 		WHERE sandbox.tenant_ref=$1 AND sandbox.subject_ref=$2 AND sandbox.id=$3`,
 		tenantRef, subjectRef, sandboxID,
 	).Scan(&specJSON); err != nil {
-		return contracts.LifecyclePolicy{}, contracts.CheckpointPolicy{}, mapNotFound(err, ports.ErrSandboxNotFound)
+		return contracts.LifecyclePolicy{}, contracts.RetentionPolicy{}, mapNotFound(err, ports.ErrSandboxNotFound)
 	}
 	var spec contracts.ProfileRevisionSpec
 	if err := json.Unmarshal(specJSON, &spec); err != nil {
-		return contracts.LifecyclePolicy{}, contracts.CheckpointPolicy{},
+		return contracts.LifecyclePolicy{}, contracts.RetentionPolicy{},
 			fmt.Errorf("SecondBox pinned lifecycle policy decoding failed: %w", err)
 	}
-	return spec.Lifecycle, spec.Checkpoint, nil
+	return spec.Lifecycle, spec.Retention, nil
 }
 
 // SetSandboxDesiredState records intent without claiming runner-side completion.
@@ -79,15 +81,16 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 	if !errors.Is(idempotencyErr, pgx.ErrNoRows) {
 		return contracts.Operation{}, fmt.Errorf("SecondBox lifecycle idempotency lookup failed: %w", idempotencyErr)
 	}
-	var observed, desired string
-	var generation, revision int64
-	if err := tx.QueryRow(ctx, `
-		SELECT state,desired_state,generation,revision FROM secondbox.sandboxes
-		WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3 FOR UPDATE`,
-		input.Principal.TenantRef, input.Principal.SubjectRef, input.SandboxID,
-	).Scan(&observed, &desired, &generation, &revision); err != nil {
-		return contracts.Operation{}, mapNotFound(err, ports.ErrSandboxNotFound)
+	locked, err := lockSandboxWorkspace(
+		ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, input.SandboxID,
+	)
+	if err != nil {
+		return contracts.Operation{}, err
 	}
+	observed := locked.SandboxState
+	desired := locked.DesiredState
+	generation := locked.Generation
+	revision := locked.Revision
 	if revision != input.ExpectedRevision {
 		return contracts.Operation{}, ports.ErrRevisionConflict
 	}
@@ -95,8 +98,34 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 		return contracts.Operation{}, ports.ErrGenerationFenced
 	}
 	kind := input.Operation.Kind
-	if kind == "checkpoint" && observed == contracts.SandboxStateStopped {
-		return contracts.Operation{}, ports.ErrLifecycleUnavailable
+	deleteWaitingForCreate := kind == "delete" &&
+		(locked.Workspace.Mutation.Kind == "create" ||
+			locked.Workspace.Mutation.Kind == "clone") &&
+		locked.Workspace.Mutation.State != ""
+	if locked.Workspace.Mutation.State != "" && !deleteWaitingForCreate {
+		return contracts.Operation{}, ports.ErrWorkspaceMutation
+	}
+	if locked.Workspace.Generation != generation {
+		return contracts.Operation{}, ports.ErrGenerationFenced
+	}
+	if locked.Workspace.State != "ready" &&
+		!(kind == "delete" &&
+			(locked.Workspace.State == "creating" || locked.Workspace.State == "failed")) {
+		return contracts.Operation{}, ports.ErrGenerationFenced
+	}
+	if kind == "start" {
+		if observed != contracts.SandboxStateStopped && observed != contracts.SandboxStateFailed {
+			return contracts.Operation{}, ports.ErrWorkspaceMutation
+		}
+		if err := requireHomeRunnerReady(ctx, tx, locked.Workspace.HomeRunnerID); err != nil {
+			return contracts.Operation{}, err
+		}
+		if err := setWorkspaceMutation(
+			ctx, tx, locked.WorkspaceID, "start", input.Operation.ID,
+			input.Operation.ID, input.Operation.ID, generation, generation, input.Now,
+		); err != nil {
+			return contracts.Operation{}, err
+		}
 	}
 	databaseSatisfied := observed == contracts.SandboxStateStopped && (kind == "drain" || kind == "stop")
 	nextState := observed
@@ -114,7 +143,7 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 	terminationReason := ""
 	if kind == "drain" {
 		terminationReason = contracts.TerminationReasonRequestedDrain
-	} else if kind == "stop" || kind == "checkpoint" || kind == "delete" {
+	} else if kind == "stop" || kind == "delete" {
 		terminationReason = contracts.TerminationReasonRequestedStop
 	}
 	if _, err := tx.Exec(ctx, `
@@ -211,11 +240,6 @@ func (store *PostgresControlPlaneStore) ClaimLifecycle(
 		       instance.id IS NOT NULL,
 		       COALESCE(instance.guest_liveness,''),
 		       COALESCE(instance.termination_reason,''),
-		       COALESCE(materialization.state,''),
-		       COALESCE(
-		         checkpoint.state,
-		         CASE WHEN checkpoint_effect.state='runner_failed' THEN 'integrity_failed' ELSE '' END
-		       ),
 		       COALESCE(stop_effect.state,''),
 		       (
 		         SELECT count(*) FROM secondbox.activity_sessions AS session
@@ -227,19 +251,6 @@ func (store *PostgresControlPlaneStore) ClaimLifecycle(
 		FROM secondbox.sandboxes AS sandbox
 		JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
 		LEFT JOIN secondbox.instances AS instance ON instance.id=sandbox.current_instance_id
-		LEFT JOIN secondbox.workspace_materializations AS materialization
-		  ON materialization.workspace_id=sandbox.workspace_id
-		  AND materialization.generation=sandbox.generation
-		  AND materialization.state IN ('preparing','ready')
-		LEFT JOIN LATERAL (
-		  SELECT effect.checkpoint_id,effect.state
-		  FROM secondbox.lifecycle_effects AS effect
-		  WHERE effect.sandbox_id=sandbox.id AND effect.generation=sandbox.generation
-		    AND effect.kind='checkpoint'
-		  ORDER BY effect.created_at DESC,effect.id DESC LIMIT 1
-		) AS checkpoint_effect ON true
-		LEFT JOIN secondbox.workspace_checkpoints AS checkpoint
-		  ON checkpoint.id=checkpoint_effect.checkpoint_id
 		LEFT JOIN LATERAL (
 		  SELECT effect.state
 		  FROM secondbox.lifecycle_effects AS effect
@@ -248,6 +259,9 @@ func (store *PostgresControlPlaneStore) ClaimLifecycle(
 		  ORDER BY effect.created_at DESC,effect.id DESC LIMIT 1
 		) AS stop_effect ON true
 		WHERE sandbox.state<>'deleted' AND sandbox.next_reconcile_at<=$1
+		  AND NOT (
+		    sandbox.state='failed' AND sandbox.lifecycle_failure_class<>''
+		  )
 		  AND NOT (
 		    sandbox.state IN ('stopped','failed')
 		    AND sandbox.desired_state='stopped'
@@ -267,7 +281,6 @@ func (store *PostgresControlPlaneStore) ClaimLifecycle(
 		&readyAt, &lastActivityAt, &drainStartedAt,
 		&claim.HasInstance,
 		&claim.GuestLiveness, &claim.InstanceTerminationReason,
-		&claim.MaterializationState, &claim.CheckpointState,
 		&claim.StopEffectState, &claim.ActiveSessions,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -282,8 +295,6 @@ func (store *PostgresControlPlaneStore) ClaimLifecycle(
 	}
 	claim.WorkerID = workerID
 	claim.IntentKind = intentKind.String
-	claim.CheckpointOnStop = spec.Checkpoint.OnStop
-	claim.ForceCheckpoint = intentKind.String == "checkpoint"
 	claim.DrainGraceSeconds = spec.Lifecycle.DrainGraceSeconds
 	claim.IdleSeconds = spec.Lifecycle.IdleSeconds
 	claim.MaximumDurationSeconds = spec.Lifecycle.MaximumDurationSeconds
@@ -326,27 +337,18 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 	nextReconcileAt time.Time,
 ) error {
 	nextState := claim.ObservedState
-	deletedAt := (*time.Time)(nil)
 	switch action {
 	case "wait":
-	case "finish_create_stopped", "finish_stop":
+	case "finish_stop":
 		nextState = contracts.SandboxStateStopped
-	case "materialize", "start_instance":
+	case "start_instance":
 		nextState = contracts.SandboxStateStarting
 	case "mark_ready":
 		nextState = contracts.SandboxStateReady
 	case "drain":
 		nextState = contracts.SandboxStateDraining
-	case "checkpoint":
-		nextState = contracts.SandboxStateCheckpointing
 	case "stop_instance":
 		nextState = contracts.SandboxStateStopping
-	case "delete":
-		nextState = contracts.SandboxStateDeleting
-	case "finish_delete":
-		nextState = contracts.SandboxStateDeleted
-		value := now.UTC()
-		deletedAt = &value
 	case "fail":
 		nextState = contracts.SandboxStateFailed
 	default:
@@ -357,39 +359,50 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 		return fmt.Errorf("SecondBox lifecycle action transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	locked, err := rowlock.SandboxWorkspaceByID(ctx, tx, claim.SandboxID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ports.ErrRevisionConflict
+	}
+	if err != nil {
+		return fmt.Errorf("SecondBox lifecycle action Sandbox/Workspace lock failed: %w", err)
+	}
+	if locked.Revision != claim.Revision || locked.ReconcileOwner != claim.WorkerID {
+		return ports.ErrRevisionConflict
+	}
+	if action == "delete" && locked.Workspace.Mutation.State != "" {
+		return ports.ErrWorkspaceMutation
+	}
 	var finishStopWorkspaceID string
 	var finishStopGeneration int64
 	var finishStopTerminationReason string
 	if action == "finish_stop" {
-		err := tx.QueryRow(ctx, `
-			SELECT sandbox.workspace_id,sandbox.generation,
-			       COALESCE(sandbox.lifecycle_termination_reason,'')
-			FROM secondbox.sandboxes AS sandbox
-			WHERE sandbox.id=$1 AND sandbox.reconcile_owner=$2 AND sandbox.revision=$3
-			FOR UPDATE OF sandbox`,
-			claim.SandboxID, claim.WorkerID, claim.Revision,
-		).Scan(
-			&finishStopWorkspaceID, &finishStopGeneration,
-			&finishStopTerminationReason,
-		)
+		finishStopWorkspaceID = locked.WorkspaceID
+		finishStopGeneration = locked.Generation
+		if err := tx.QueryRow(ctx, `
+			SELECT COALESCE(lifecycle_termination_reason,'')
+			FROM secondbox.sandboxes WHERE id=$1`,
+			claim.SandboxID,
+		).Scan(&finishStopTerminationReason); err != nil {
+			return fmt.Errorf("SecondBox finish-stop termination reason lookup failed: %w", err)
+		}
+		var effectState string
+		err = tx.QueryRow(ctx, `
+			SELECT state FROM secondbox.lifecycle_effects WHERE id=$1 FOR UPDATE`,
+			locked.Workspace.Mutation.EffectID,
+		).Scan(&effectState)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ports.ErrRevisionConflict
 		}
 		if err != nil {
 			return fmt.Errorf("SecondBox finish-stop generation lookup failed: %w", err)
 		}
-		var activeMaterializations int64
-		if err := tx.QueryRow(ctx, `
-			SELECT count(*)
-			FROM secondbox.workspace_materializations
-			WHERE workspace_id=$1 AND generation=$2
-			  AND state IN ('preparing','ready')`,
-			finishStopWorkspaceID, finishStopGeneration,
-		).Scan(&activeMaterializations); err != nil {
-			return fmt.Errorf("SecondBox finish-stop materialization lookup failed: %w", err)
-		}
-		if activeMaterializations != 0 {
-			return ports.ErrMaterializationConflict
+		if locked.Workspace.Mutation.Kind != "stop" ||
+			locked.Workspace.Mutation.ID == "" ||
+			locked.Workspace.Mutation.State != "runner_succeeded" ||
+			effectState != "runner_succeeded" ||
+			locked.Workspace.Mutation.ExpectedGeneration != finishStopGeneration ||
+			locked.Workspace.Mutation.TargetGeneration != finishStopGeneration+1 {
+			return ports.ErrWorkspaceMutation
 		}
 		if terminationReason == "" {
 			terminationReason = finishStopTerminationReason
@@ -398,22 +411,26 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 	tag, err := tx.Exec(ctx, `
 		UPDATE secondbox.sandboxes
 		SET state=$1,lifecycle_action=CASE WHEN $2='wait' THEN lifecycle_action ELSE $2 END,
+		    desired_state=CASE
+		      WHEN $2='drain' AND $3 IN ('idle_timeout','maximum_duration') THEN 'stopped'
+		      ELSE desired_state
+		    END,
 		    lifecycle_termination_reason=CASE WHEN $3='' THEN lifecycle_termination_reason ELSE $3 END,
 		    lifecycle_failure_class=CASE WHEN $2='fail' THEN 'internal' ELSE lifecycle_failure_class END,
 		    lifecycle_failure_message=CASE WHEN $2='fail' THEN 'unrecognized lifecycle state' ELSE lifecycle_failure_message END,
 		    next_reconcile_at=CASE WHEN $2='fail' THEN NULL::timestamptz ELSE $4::timestamptz END,
 		    reconcile_owner='',reconcile_claim_expires_at=NULL,
 		    drain_started_at=CASE
-		      WHEN $2='drain' THEN COALESCE(drain_started_at,$6)
+		      WHEN $2='drain' THEN COALESCE(drain_started_at,$5)
 		      WHEN $1<>'draining' THEN NULL
 		      ELSE drain_started_at
 		    END,
-		    current_instance_id=CASE WHEN $2 IN ('finish_stop','finish_delete') THEN '' ELSE current_instance_id END,
+		    current_instance_id=CASE WHEN $2='finish_stop' THEN '' ELSE current_instance_id END,
 		    generation=CASE WHEN $2='finish_stop' THEN generation+1 ELSE generation END,
-		    last_activity_at=CASE WHEN $2='mark_ready' THEN COALESCE(last_activity_at,$6) ELSE last_activity_at END,
-		    deleted_at=COALESCE($5,deleted_at),revision=revision+1,updated_at=$6
-		WHERE id=$7 AND reconcile_owner=$8 AND revision=$9`,
-		nextState, action, terminationReason, nextReconcileAt.UTC(), deletedAt,
+		    last_activity_at=CASE WHEN $2='mark_ready' THEN COALESCE(last_activity_at,$5) ELSE last_activity_at END,
+		    revision=revision+1,updated_at=$5
+		WHERE id=$6 AND reconcile_owner=$7 AND revision=$8`,
+		nextState, action, terminationReason, nextReconcileAt.UTC(),
 		now.UTC(), claim.SandboxID, claim.WorkerID, claim.Revision,
 	)
 	if err != nil {
@@ -426,8 +443,11 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 		nextGeneration := finishStopGeneration + 1
 		workspaceTag, err := tx.Exec(ctx, `
 			UPDATE secondbox.workspaces
-			SET generation=$2,updated_at=$3
-			WHERE id=$1 AND generation=$4`,
+			SET generation=$2,mutation_kind='',mutation_id='',mutation_effect_id='',
+			    mutation_operation_id='',mutation_expected_generation=NULL,
+			    mutation_target_generation=NULL,mutation_state='',updated_at=$3
+			WHERE id=$1 AND generation=$4 AND mutation_kind='stop'
+			  AND mutation_state='runner_succeeded'`,
 			finishStopWorkspaceID, nextGeneration, now.UTC(), finishStopGeneration,
 		)
 		if err != nil {
@@ -491,21 +511,15 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 		return nil
 	}
 	switch action {
-	case "finish_create_stopped":
-		if err := completeOperations(
-			[]string{"create"}, contracts.OperationStateSucceeded, "", "",
-		); err != nil {
-			return err
-		}
 	case "mark_ready":
-		if err := completeOperations(
-			[]string{"create", "start"}, contracts.OperationStateSucceeded, "", "",
+		if err := lifecycleprojection.ProjectReadyOperations(
+			ctx, tx, claim.SandboxID, now,
 		); err != nil {
-			return err
+			return fmt.Errorf("SecondBox lifecycle ready projection failed: %w", err)
 		}
 	case "finish_stop":
 		if err := completeOperations(
-			[]string{"drain", "stop", "checkpoint"}, contracts.OperationStateSucceeded, "", "",
+			[]string{"drain", "stop"}, contracts.OperationStateSucceeded, "", "",
 		); err != nil {
 			return err
 		}
@@ -517,22 +531,9 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 				return err
 			}
 		}
-	case "finish_delete":
-		if err := completeOperations(
-			[]string{"delete"}, contracts.OperationStateSucceeded, "", "",
-		); err != nil {
-			return err
-		}
-		if err := completeOperations(
-			[]string{"create", "start", "drain", "stop", "checkpoint"},
-			contracts.OperationStateFailed, "state_conflict",
-			"Sandbox deletion superseded the lifecycle operation",
-		); err != nil {
-			return err
-		}
 	case "fail":
 		if err := completeOperations(
-			[]string{"create", "start", "drain", "stop", "checkpoint", "delete"},
+			[]string{"create", "start", "drain", "stop", "delete"},
 			contracts.OperationStateFailed, "internal_error", "Lifecycle reconciliation failed",
 		); err != nil {
 			return err

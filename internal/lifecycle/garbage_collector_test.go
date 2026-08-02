@@ -13,7 +13,7 @@ import (
 
 func TestGarbageCollectorDeletesBeforeRecordingCompletion(t *testing.T) {
 	catalog := &fakeGarbageCatalog{objects: []ports.GarbageObject{{
-		Kind: "checkpoint", ID: "chk-expired", StorageKey: "checkpoints/chk-expired",
+		Kind: "artifact", ID: "art-expired", StorageKey: "artifacts/art-expired",
 		SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SizeBytes: 4,
 	}}}
 	objects := &fakeObjectStore{}

@@ -34,29 +34,42 @@ done
 patterns='(^[[:space:]]*-{5}BEGIN [A-Z ]*PRIVATE KEY-{5}|xox[baprs]-[A-Za-z0-9-]{10,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,})'
 scan_out="/tmp/secondbox-runner-guest-secret-scan.$$"
 if command -v rg >/dev/null 2>&1; then
-    scan_cmd=(rg -n --hidden --no-ignore
-        -g '!**/node_modules/**'
-        -g '!**/.cache/**'
-        -g '!**/__pycache__/**'
-        -g '!*.map'
-        -g '!*.so'
-        -g '!*.so.*'
-        -g '!*.a'
-        -g '!*.o'
-        "$patterns" "$root")
+    rg -n --hidden --no-ignore \
+        -g '!**/node_modules/**' \
+        -g '!**/.cache/**' \
+        -g '!**/__pycache__/**' \
+        -g '!**/opt/go/src/**/testdata/**' \
+        -g '!**/opt/go/src/crypto/x509/platform_root_key.pem' \
+        -g '!*.map' \
+        -g '!*.so' \
+        -g '!*.so.*' \
+        -g '!*.a' \
+        -g '!*.o' \
+        "$patterns" "$root" >"$scan_out" 2>/dev/null || scan_status=$?
+    if [ "${scan_status:-1}" -gt 1 ]; then
+        rm -f "$scan_out"
+        echo "secret scan failed while reading the rootfs" >&2
+        exit 1
+    fi
 else
-    scan_cmd=(grep -IREn
-        --exclude-dir=node_modules
-        --exclude-dir=.cache
-        --exclude-dir=__pycache__
-        --exclude='*.map'
-        --exclude='*.so'
-        --exclude='*.so.*'
-        --exclude='*.a'
-        --exclude='*.o'
-        "$patterns" "$root")
+    while IFS= read -r -d '' candidate; do
+        grep_status=0
+        grep -IHEn "$patterns" "$candidate" >>"$scan_out" 2>/dev/null || grep_status=$?
+        if [ "$grep_status" -gt 1 ]; then
+            rm -f "$scan_out"
+            echo "secret scan failed while reading ${candidate#$root/}" >&2
+            exit 1
+        fi
+    done < <(
+        find "$root" \
+            \( -type d \( -name node_modules -o -name .cache -o -name __pycache__ \) \) -prune -o \
+            \( -type d -path "$root/opt/go/src/*/testdata" \) -prune -o \
+            \( -type f -path "$root/opt/go/src/crypto/x509/platform_root_key.pem" \) -prune -o \
+            \( -type f \( -name '*.map' -o -name '*.so' -o -name '*.so.*' -o -name '*.a' -o -name '*.o' \) \) -prune -o \
+            -type f -print0
+    )
 fi
-if "${scan_cmd[@]}" >"$scan_out" 2>/dev/null; then
+if [ -s "$scan_out" ]; then
     cat "$scan_out" >&2
     rm -f "$scan_out"
     exit 1

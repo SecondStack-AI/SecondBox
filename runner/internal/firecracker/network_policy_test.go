@@ -38,7 +38,10 @@ func TestNFTablesNetworkPolicyEnforcerInstallsDefaultDenyAndExplicitAllows(t *te
 	var scripts []string
 	enforcer := &NFTablesNetworkPolicyEnforcer{
 		run: func(_ context.Context, name string, args []string, stdin string) ([]byte, error) {
-			if name != "/usr/sbin/nft" || len(args) != 1 || args[0] != "-f" {
+			if name != "/usr/sbin/nft" ||
+				len(args) != 2 ||
+				args[0] != "-f" ||
+				args[1] != "-" {
 				t.Fatalf("unexpected command: %s %v", name, args)
 			}
 			scripts = append(scripts, stdin)
@@ -66,9 +69,11 @@ func TestNFTablesNetworkPolicyEnforcerInstallsDefaultDenyAndExplicitAllows(t *te
 	}
 	script := scripts[0]
 	for _, required := range []string{
-		"table inet secondbox_fc_test_1",
-		`iifname "sbtap1" ip daddr 8.8.8.0/24 tcp dport 443 accept`,
-		`iifname "sbtap1" ip daddr 10.20.0.1 udp dport 53 accept`,
+		"table bridge secondbox_fc_test_1",
+		`iifname "sbtap1" arp daddr ip 10.20.0.1 accept`,
+		`oifname "sbtap1" arp saddr ip 10.20.0.1 accept`,
+		`iifname "sbtap1" ip daddr 8.8.8.0/24 tcp dport 443 ct mark set 0x53425801 accept`,
+		`iifname "sbtap1" ip daddr 10.20.0.1 udp dport 53 ct mark set 0x53425801 accept`,
 		`iifname "sbtap1" drop`,
 		`oifname "sbtap1" drop`,
 	} {
@@ -88,8 +93,61 @@ func TestNFTablesNetworkPolicyEnforcerInstallsDefaultDenyAndExplicitAllows(t *te
 	); err != nil {
 		t.Fatalf("observe DNS answer: %v", err)
 	}
-	if !strings.Contains(scripts[len(scripts)-1], `ip daddr 93.184.216.34 tcp dport 8443 accept`) {
+	if !strings.Contains(
+		scripts[len(scripts)-1],
+		`ip daddr 93.184.216.34 tcp dport 8443 ct mark set 0x53425801 accept`,
+	) {
 		t.Fatalf("observed DNS pin was not installed:\n%s", scripts[len(scripts)-1])
+	}
+}
+
+func TestNFTablesNetworkPolicyPlacesExactRunnerGatewayBeforeProtectedDrops(t *testing.T) {
+	gatewayAddress := netip.MustParseAddr("198.18.43.1")
+	compiled, err := networkpolicy.Compile(networkpolicy.Policy{
+		Mode: networkpolicy.ModeAllowList,
+		Destinations: []networkpolicy.Destination{{
+			Protocol: networkpolicy.ProtocolHTTP,
+			Domain:   "platform-gateway.internal",
+			Port:     18080,
+		}},
+	}, networkpolicy.CompileOptions{
+		MaximumPins:        4,
+		MaximumTTL:         time.Minute,
+		RunnerAddresses:    []netip.Addr{gatewayAddress},
+		ManagementPrefixes: []netip.Prefix{netip.MustParsePrefix("198.18.43.0/24")},
+		RunnerGateways: map[string]netip.Addr{
+			"platform-gateway.internal": gatewayAddress,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var script string
+	enforcer := &NFTablesNetworkPolicyEnforcer{
+		run: func(_ context.Context, _ string, _ []string, stdin string) ([]byte, error) {
+			script = stdin
+			return nil, nil
+		},
+		nftPath: "/usr/sbin/nft",
+	}
+	if err := enforcer.Install(context.Background(), PolicyNetworkConfig{
+		InstanceID: "gateway-test",
+		TapName:    "sbtap1",
+		GuestIP:    "198.18.43.2",
+		DNSAddress: gatewayAddress,
+		Policy:     compiled,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	allow := `ip daddr 198.18.43.1 tcp dport 18080 ct mark set 0x53425801 accept`
+	protectedDrop := `ip daddr 198.18.43.0/24 drop`
+	allowIndex := strings.Index(script, allow)
+	dropIndex := strings.Index(script, protectedDrop)
+	if allowIndex < 0 || dropIndex < 0 || allowIndex >= dropIndex {
+		t.Fatalf("Runner gateway allow must precede protected drop:\n%s", script)
+	}
+	if strings.Count(script, allow) != 1 {
+		t.Fatalf("Runner gateway tuple must be admitted exactly once:\n%s", script)
 	}
 }
 

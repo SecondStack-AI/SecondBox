@@ -10,6 +10,8 @@ import (
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/protobuf/proto"
@@ -75,9 +77,20 @@ func (store *PostgresStore) MarkExpiredRunners(
 	}
 	defer tx.Rollback(ctx)
 	rows, err := tx.Query(ctx, `
-		UPDATE secondbox.runners
+		UPDATE secondbox.runners AS runner
 		SET state='offline',revision=revision+1,updated_at=$2
-		WHERE last_seen_at<$1 AND state IN ('ready','draining','connected')
+		WHERE runner.last_seen_at<$1
+		  AND (
+		    runner.state IN ('ready','draining','connected')
+		    OR (
+		      runner.state='offline'
+		      AND EXISTS (
+		        SELECT 1 FROM secondbox.assignments AS assignment
+		        WHERE assignment.runner_id=runner.id
+		          AND assignment.state IN ('assigned','accepted','starting','ready')
+		      )
+		    )
+		  )
 		RETURNING id`, heartbeatCutoff.UTC(), now.UTC(),
 	)
 	if err != nil {
@@ -188,22 +201,32 @@ func (store *PostgresStore) ClaimNext(
 	var releaseProofJSON []byte
 	var assignmentCommandPayload []byte
 	err = tx.QueryRow(ctx, `
-		SELECT id,sandbox_id,instance_id,runner_id,fencing_token,state,generation,failure_class,retry_count,
-			retry_limit,operation_deadline,release_proof_json,revision,
+		SELECT assignments.id,assignments.sandbox_id,assignments.instance_id,assignments.runner_id,
+			assignments.fencing_token,assignments.state,assignments.generation,
+			assignments.failure_class,assignments.retry_count,
+			assignments.retry_limit,assignments.operation_deadline,
+			assignments.release_proof_json,assignments.revision,
 			(
 			  SELECT command.payload FROM secondbox.runner_commands AS command
 			  WHERE command.assignment_id=assignments.id AND command.kind='assignment'
 			  ORDER BY command.created_at DESC,command.id DESC LIMIT 1
 			)
 		FROM secondbox.assignments
-		WHERE next_reconcile_at<=$1
-			AND reconcile_claim_expires_at<=$1
+		JOIN secondbox.sandboxes
+		  ON sandboxes.id=assignments.sandbox_id
+		  AND sandboxes.current_instance_id=assignments.instance_id
+		  AND sandboxes.generation=assignments.generation
+		WHERE assignments.next_reconcile_at<=$1
+			AND assignments.reconcile_claim_expires_at<=$1
 			AND (
-			  state IN ('assigned','accepted','starting','uncertain','failed','fencing')
-			  OR (state='fenced' AND failure_class IN ('fencing','startup_timeout'))
+			  assignments.state IN ('assigned','accepted','starting','uncertain','failed','fencing')
+			  OR (
+			    assignments.state='fenced'
+			    AND assignments.failure_class IN ('fencing','startup_timeout')
+			  )
 			)
-		ORDER BY next_reconcile_at,id
-		FOR UPDATE SKIP LOCKED LIMIT 1`, now.UTC(),
+		ORDER BY assignments.next_reconcile_at,assignments.id
+		FOR UPDATE OF assignments SKIP LOCKED LIMIT 1`, now.UTC(),
 	).Scan(
 		&claim.AssignmentID, &claim.SandboxID, &claim.InstanceID, &claim.RunnerID,
 		&claim.FencingToken, &claim.State.State,
@@ -317,6 +340,14 @@ func (store *PostgresStore) ApplyDecision(
 		return fmt.Errorf("SecondBox reconciliation decision transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	locked, err := rowlock.SandboxWorkspaceByID(ctx, tx, claim.SandboxID)
+	if err != nil {
+		return fmt.Errorf("SecondBox reconciliation Sandbox/Workspace lock: %w", err)
+	}
+	if locked.Generation != claim.State.Generation ||
+		locked.CurrentInstanceID != claim.InstanceID {
+		return ErrClaimLost
+	}
 	command, err := tx.Exec(ctx, `
 		UPDATE secondbox.assignments
 		SET state=$4,failure_class=$5,retry_count=$6,operation_deadline=$7,next_reconcile_at=$8,
@@ -393,6 +424,27 @@ func (store *PostgresStore) ApplyDecision(
 		}
 	}
 	if decision.Action == ActionFailTerminal {
+		if locked.Workspace.Mutation.State != "" {
+			if locked.Workspace.Mutation.Kind != "start" ||
+				locked.Workspace.Mutation.ExpectedGeneration != claim.State.Generation {
+				return errors.New("SecondBox terminal startup failure conflicts with the durable Workspace mutation")
+			}
+			mutationTag, err := tx.Exec(ctx, `
+				UPDATE secondbox.workspaces
+				SET mutation_kind='',mutation_id='',mutation_effect_id='',
+				    mutation_operation_id='',mutation_expected_generation=NULL,
+				    mutation_target_generation=NULL,mutation_state='',updated_at=$2
+				WHERE id=$1 AND mutation_kind='start'
+				  AND mutation_expected_generation=$3`,
+				locked.WorkspaceID, now.UTC(), claim.State.Generation,
+			)
+			if err != nil {
+				return fmt.Errorf("SecondBox reconciliation terminal start mutation release: %w", err)
+			}
+			if mutationTag.RowsAffected() != 1 {
+				return ErrClaimLost
+			}
+		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE secondbox.runner_commands
 			SET state='failed',target_connection_id='',updated_at=$2
@@ -448,7 +500,9 @@ func (store *PostgresStore) ApplyDecision(
 	return nil
 }
 
-// AdvanceFencedGeneration projects proven Runner loss across every old-generation authority.
+// AdvanceFencedGeneration converts proven Runner loss into the same runner-local
+// generation-advance boundary used by an ordinary stop. It never relocates the
+// Sandbox or advances PostgreSQL ahead of the home runner's durable receipt.
 func (store *PostgresStore) AdvanceFencedGeneration(
 	ctx context.Context,
 	assignmentID string,
@@ -476,26 +530,20 @@ func (store *PostgresStore) AdvanceFencedGeneration(
 		return 0, fmt.Errorf("SecondBox fenced Sandbox lock: %w", err)
 	}
 
-	var tenantRef, subjectRef, workspaceID, currentInstanceID string
-	var sandboxGeneration int64
-	if err := tx.QueryRow(ctx, `
-		SELECT tenant_ref,subject_ref,workspace_id,current_instance_id,generation
-		FROM secondbox.sandboxes WHERE id=$1 FOR UPDATE`, sandboxID,
-	).Scan(
-		&tenantRef, &subjectRef,
-		&workspaceID, &currentInstanceID, &sandboxGeneration,
-	); err != nil {
-		return 0, fmt.Errorf("SecondBox fenced Sandbox lookup: %w", err)
+	locked, err := rowlock.SandboxWorkspaceByID(ctx, tx, sandboxID)
+	if err != nil {
+		return 0, fmt.Errorf("SecondBox fenced Sandbox/Workspace lookup: %w", err)
 	}
-	var lockedSandboxID, instanceID, state string
+	var lockedSandboxID, instanceID, runnerID, state string
 	var lockedGeneration, revision int64
-	var releaseProofJSON []byte
+	var releaseProofJSON, fencingToken []byte
 	if err := tx.QueryRow(ctx, `
-		SELECT sandbox_id,instance_id,state,generation,release_proof_json,revision
+		SELECT sandbox_id,instance_id,runner_id,state,generation,
+		       fencing_token,release_proof_json,revision
 		FROM secondbox.assignments WHERE id=$1 FOR UPDATE`, assignmentID,
 	).Scan(
-		&lockedSandboxID, &instanceID, &state, &lockedGeneration,
-		&releaseProofJSON, &revision,
+		&lockedSandboxID, &instanceID, &runnerID, &state, &lockedGeneration,
+		&fencingToken, &releaseProofJSON, &revision,
 	); err != nil {
 		return 0, fmt.Errorf("SecondBox fenced Assignment lookup: %w", err)
 	}
@@ -504,7 +552,7 @@ func (store *PostgresStore) AdvanceFencedGeneration(
 		return 0, fmt.Errorf("SecondBox fenced Assignment proof decoding: %w", err)
 	}
 	if lockedSandboxID != sandboxID || lockedGeneration != generation ||
-		sandboxGeneration != generation || currentInstanceID != instanceID {
+		locked.Generation != generation || locked.CurrentInstanceID != instanceID {
 		return 0, ErrClaimLost
 	}
 	if state != "fenced" || proof["terminationEvidenceDigest"] == "" {
@@ -516,6 +564,104 @@ func (store *PostgresStore) AdvanceFencedGeneration(
 
 	now = now.UTC()
 	nextGeneration := generation + 1
+	workspace := locked.Workspace
+	if workspace.HomeRunnerID != runnerID || workspace.State != "ready" ||
+		workspace.Generation != generation {
+		return 0, ErrClaimLost
+	}
+	stopEffectID := "runner-loss-stop-" + assignmentID
+	queueLocalAdvance := workspace.Mutation.State == ""
+	if queueLocalAdvance {
+		tag, err := tx.Exec(ctx, `
+			UPDATE secondbox.workspaces
+			SET mutation_kind='stop',mutation_id=$2,mutation_effect_id=$2,
+			    mutation_operation_id=$2,mutation_expected_generation=$3,
+			    mutation_target_generation=$4,mutation_state='advancing',updated_at=$5
+			WHERE id=$1 AND mutation_state=''`,
+			workspace.ID, stopEffectID, generation, nextGeneration, now,
+		)
+		if err != nil {
+			return 0, fmt.Errorf("SecondBox runner-loss Workspace mutation acquisition: %w", err)
+		}
+		if tag.RowsAffected() != 1 {
+			return 0, fmt.Errorf(
+				"%w: runner loss conflicts with an active Workspace mutation",
+				ports.ErrWorkspaceMutation,
+			)
+		}
+	} else if workspace.Mutation.Kind != "stop" ||
+		workspace.Mutation.ID == "" ||
+		workspace.Mutation.EffectID == "" ||
+		workspace.Mutation.ExpectedGeneration != generation ||
+		workspace.Mutation.TargetGeneration != nextGeneration {
+		return 0, fmt.Errorf(
+			"%w: runner loss conflicts with an active Workspace mutation",
+			ports.ErrWorkspaceMutation,
+		)
+	}
+	if queueLocalAdvance {
+		commandID := stopEffectID + "-generation-advance"
+		command := &runnerv1.LocalWorkspaceCommand{
+			MessageId: commandID, CommandVersion: 1,
+			Kind:        runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION,
+			OperationId: stopEffectID, EffectId: stopEffectID,
+			SandboxId: sandboxID, WorkspaceId: workspace.ID,
+			ExpectedGeneration: uint64(generation), NextGeneration: uint64(nextGeneration),
+			LogicalCapacityBytes: uint64(workspace.LogicalCapacityBytes),
+			FencingToken:         append([]byte(nil), fencingToken...),
+			Correlation: &runnerv1.Correlation{
+				RequestId: "request-" + stopEffectID, OperationId: stopEffectID,
+				SandboxId: sandboxID, SandboxGeneration: uint64(generation),
+				RunnerId: runnerID,
+			},
+		}
+		payload, err := proto.Marshal(&runnerv1.ControlPlaneToRunner{
+			Message: &runnerv1.ControlPlaneToRunner_LocalWorkspace{
+				LocalWorkspace: command,
+			},
+		})
+		if err != nil {
+			return 0, fmt.Errorf("SecondBox runner-loss generation-advance command encoding: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO secondbox.lifecycle_effects (
+				id,sandbox_id,generation,kind,state,assignment_id,instance_id,runner_id,
+				command_id,storage_object_id,fencing_token,retry_count,retry_limit,
+				effect_deadline,claim_owner,claim_expires_at,failure_class,failure_message,
+				payload_json,evidence_json,created_at,updated_at
+			) VALUES (
+				$1,$2,$3,'stop','queued',$4,$5,$6,$7,'',$8,0,8,$9,'',$10,
+				'','','{}',$11,$10,$10
+			)`,
+			stopEffectID, sandboxID, generation, assignmentID, instanceID, runnerID,
+			commandID, fencingToken, now.Add(10*time.Minute), now, releaseProofJSON,
+		); err != nil {
+			return 0, fmt.Errorf("SecondBox runner-loss stop effect insert: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO secondbox.runner_commands (
+				id,runner_id,assignment_id,kind,payload,state,target_connection_id,
+				delivery_count,created_at,updated_at,delivered_at
+			) VALUES ($1,$2,$3,'local-workspace',$4,'pending','',0,$5,$5,NULL)`,
+			commandID, runnerID, stopEffectID, payload, now,
+		); err != nil {
+			return 0, fmt.Errorf("SecondBox runner-loss generation-advance command insert: %w", err)
+		}
+	} else {
+		var effectKind string
+		if err := tx.QueryRow(ctx, `
+			SELECT kind FROM secondbox.lifecycle_effects WHERE id=$1 FOR UPDATE`,
+			workspace.Mutation.EffectID,
+		).Scan(&effectKind); err != nil {
+			return 0, fmt.Errorf("SecondBox runner-loss existing stop effect lookup: %w", err)
+		}
+		if effectKind != "stop" {
+			return 0, fmt.Errorf(
+				"%w: runner-loss Workspace mutation is not a stop effect",
+				ports.ErrWorkspaceMutation,
+			)
+		}
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.assignments
 		SET state='released',reconcile_owner='',reconcile_claim_expires_at=$2,
@@ -587,28 +733,9 @@ func (store *PostgresStore) AdvanceFencedGeneration(
 	); err != nil {
 		return 0, fmt.Errorf("SecondBox fenced activity update: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.workspace_materializations
-		SET state='lost',release_proof_json=$3,revision=revision+1,
-		    updated_at=$4,released_at=$4
-		WHERE workspace_id=$1 AND generation=$2 AND state IN ('preparing','ready')`,
-		workspaceID, generation, releaseProofJSON, now,
-	); err != nil {
-		return 0, fmt.Errorf("SecondBox lost materialization update: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO secondbox.operations (
-			id,tenant_ref,subject_ref,sandbox_id,kind,state,request_id,request_metadata_json,
-			error_code,error_message,retryable,created_at,started_at,completed_at,updated_at
-		) VALUES ($1,$2,$3,$4,'start','pending',$5,'{}','','',false,$6,NULL,NULL,$6)`,
-		"operation-runner-loss-"+assignmentID, tenantRef, subjectRef, sandboxID,
-		"request-runner-loss-"+assignmentID, now,
-	); err != nil {
-		return 0, fmt.Errorf("SecondBox Runner-loss replacement Operation insert: %w", err)
-	}
 	command, err := tx.Exec(ctx, `
 		UPDATE secondbox.sandboxes
-		SET generation=$2,state='stopped',current_instance_id='',
+		SET state='stopping',
 		    lifecycle_termination_reason=CASE
 		      WHEN COALESCE(lifecycle_termination_reason,'')='' THEN 'runner_lost'
 		      ELSE lifecycle_termination_reason
@@ -616,29 +743,17 @@ func (store *PostgresStore) AdvanceFencedGeneration(
 		    lifecycle_failure_class='',lifecycle_failure_message='',
 		    reconcile_owner='',reconcile_claim_expires_at=$3,next_reconcile_at=$3,
 		    revision=revision+1,updated_at=$3
-		WHERE id=$1 AND generation=$4`,
-		sandboxID, nextGeneration, now, generation,
+		WHERE id=$1 AND generation=$2`,
+		sandboxID, generation, now,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("SecondBox fenced Sandbox generation update: %w", err)
-	}
-	if command.RowsAffected() != 1 {
-		return 0, ErrClaimLost
-	}
-	command, err = tx.Exec(ctx, `
-		UPDATE secondbox.workspaces
-		SET generation=$2,updated_at=$3
-		WHERE id=$1 AND sandbox_id=$4 AND generation=$5`,
-		workspaceID, nextGeneration, now, sandboxID, generation,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("SecondBox fenced Workspace generation update: %w", err)
+		return 0, fmt.Errorf("SecondBox runner-loss Sandbox stop transition: %w", err)
 	}
 	if command.RowsAffected() != 1 {
 		return 0, ErrClaimLost
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("SecondBox fenced generation commit: %w", err)
+		return 0, fmt.Errorf("SecondBox runner-loss local generation queue commit: %w", err)
 	}
 	return nextGeneration, nil
 }

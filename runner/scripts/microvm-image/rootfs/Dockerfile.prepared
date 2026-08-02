@@ -1,0 +1,15 @@
+# syntax=docker/dockerfile:1
+
+# BASE_IMAGE is deliberately unset. Prepared mode preserves the complete
+# content-addressed filesystem and adds only signed dependency provenance.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+COPY collect-secondbox-rootfs-provenance.py /tmp/secondbox-provenance/collect-secondbox-rootfs-provenance.py
+RUN install -d -m 0755 /usr/share/secondbox/image-provenance \
+ && rm -f /etc/ssh/ssh_host_* \
+ && python3 /tmp/secondbox-provenance/collect-secondbox-rootfs-provenance.py \
+      --output-dir /usr/share/secondbox/image-provenance \
+ && python3 -m pip freeze --all \
+      > /usr/share/secondbox/image-provenance/rootfs-python.freeze \
+ && rm -rf /tmp/secondbox-provenance

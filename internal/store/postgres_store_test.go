@@ -66,6 +66,61 @@ func openStoreTest(t *testing.T) *PostgresControlPlaneStore {
 	return controlPlaneStore
 }
 
+func TestReadMetricsSnapshotAggregatesOperationDurations(t *testing.T) {
+	controlPlaneStore := openStoreTest(t)
+	if _, err := controlPlaneStore.pool.Exec(t.Context(), `DELETE FROM secondbox.operations`); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 7, 29, 20, 0, 0, 0, time.UTC)
+	for index, fixture := range []struct {
+		kind     string
+		state    string
+		duration time.Duration
+	}{
+		{kind: "create", state: contracts.OperationStateSucceeded, duration: 250 * time.Millisecond},
+		{kind: "create", state: contracts.OperationStateSucceeded, duration: time.Second},
+		{kind: "start", state: contracts.OperationStateFailed, duration: 10 * time.Millisecond},
+	} {
+		completedAt := base.Add(fixture.duration)
+		if _, err := controlPlaneStore.pool.Exec(t.Context(), `
+			INSERT INTO secondbox.operations (
+				id,tenant_ref,subject_ref,sandbox_id,snapshot_id,kind,state,
+				request_id,request_metadata_json,error_code,error_message,retryable,
+				created_at,started_at,completed_at,updated_at
+			) VALUES ($1,'metrics-tenant','metrics-subject',$2,'',$3,$4,
+				'metrics-request','{}','','',false,$5,$5,$6,$6)`,
+			fmt.Sprintf("op_metrics_%d", index),
+			fmt.Sprintf("sbx_metrics_%d", index),
+			fixture.kind, fixture.state, base, completedAt,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	snapshot, err := controlPlaneStore.ReadMetricsSnapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.OperationDurations) != 2 {
+		t.Fatalf("Operation duration series = %#v, want 2", snapshot.OperationDurations)
+	}
+	create := snapshot.OperationDurations[0]
+	if create.Kind != "create" ||
+		create.TerminalState != contracts.OperationStateSucceeded ||
+		create.Histogram.Count != 2 ||
+		create.Histogram.BucketCounts[5] != 1 ||
+		create.Histogram.BucketCounts[7] != 2 {
+		t.Fatalf("create duration histogram = %#v", create)
+	}
+	start := snapshot.OperationDurations[1]
+	if start.Kind != "start" ||
+		start.TerminalState != contracts.OperationStateFailed ||
+		start.Histogram.Count != 1 ||
+		start.Histogram.BucketCounts[1] != 1 {
+		t.Fatalf("start duration histogram = %#v", start)
+	}
+}
+
 func TestPostgresStoreRevisionConflictAndIdempotencyReplay(t *testing.T) {
 	controlPlaneStore := openStoreTest(t)
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)

@@ -18,6 +18,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/objectstore"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
+	"github.com/SecondStack-AI/SecondBox/internal/worknotify"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
@@ -57,15 +58,16 @@ type RunnerAdminStore interface {
 // SandboxStore owns public Sandbox and Operation records.
 type SandboxStore interface {
 	CreateSandbox(ctx context.Context, input ports.CreateSandboxInput) (contracts.Sandbox, contracts.Operation, bool, error)
+	UpdateSandboxMetadata(ctx context.Context, input ports.UpdateSandboxMetadataInput) (contracts.Sandbox, error)
 	GetSandbox(ctx context.Context, tenantRef, subjectRef, sandboxID string) (contracts.Sandbox, error)
-	ListSandboxes(ctx context.Context, tenantRef, subjectRef string, limit int, cursor string) (contracts.SandboxPage, error)
+	ListSandboxes(ctx context.Context, tenantRef, subjectRef string, limit int, cursor string, metadata map[string]string) (contracts.SandboxPage, error)
 	GetOperation(ctx context.Context, tenantRef, subjectRef, operationID string) (contracts.Operation, error)
 	GetSubjectUsage(ctx context.Context, tenantRef, subjectRef string) (contracts.SubjectUsage, error)
 }
 
 // ActivityStore owns lifecycle intent, leases, and useful-activity evidence.
 type ActivityStore interface {
-	GetSandboxLifecyclePolicy(ctx context.Context, tenantRef, subjectRef, sandboxID string) (contracts.LifecyclePolicy, contracts.CheckpointPolicy, error)
+	GetSandboxLifecyclePolicy(ctx context.Context, tenantRef, subjectRef, sandboxID string) (contracts.LifecyclePolicy, contracts.RetentionPolicy, error)
 	SetSandboxDesiredState(ctx context.Context, input ports.LifecycleIntentInput) (contracts.Operation, error)
 	AcquireLease(ctx context.Context, input ports.LeaseInput) (contracts.Lease, error)
 	GetLeaseByID(ctx context.Context, tenantRef, subjectRef, leaseID string) (contracts.Lease, error)
@@ -80,10 +82,11 @@ type ActivityStore interface {
 
 // SnapshotStore owns durable user snapshots.
 type SnapshotStore interface {
-	CreateSnapshot(ctx context.Context, input ports.SnapshotCreationInput) (contracts.Snapshot, error)
+	CreateSnapshot(ctx context.Context, input ports.SnapshotCreationInput) (contracts.Operation, error)
+	DeleteSnapshot(ctx context.Context, input ports.SnapshotDeletionInput) (contracts.Operation, error)
+	RestoreSnapshot(ctx context.Context, input ports.SnapshotRestoreInput) (contracts.Operation, error)
 	ListSnapshots(ctx context.Context, tenantRef, subjectRef, sandboxID string, limit int, cursor string, now time.Time) (contracts.SnapshotPage, error)
 	GetSnapshot(ctx context.Context, tenantRef, subjectRef, snapshotID string, now time.Time) (contracts.Snapshot, error)
-	EndSnapshotRetention(ctx context.Context, input ports.SnapshotRetentionInput) error
 }
 
 // ArtifactStore owns immutable artifact publication and retention.
@@ -99,6 +102,9 @@ type ArtifactStore interface {
 type ObservabilityStore interface {
 	AppendAuditEvent(ctx context.Context, event contracts.AuditEvent) error
 	ReadMetricsSnapshot(ctx context.Context) (contracts.MetricsSnapshot, error)
+	ReadSandboxTiming(ctx context.Context, tenantRef, subjectRef, sandboxID string, limit int) (contracts.SandboxTiming, error)
+	ReadOperationTiming(ctx context.Context, tenantRef, subjectRef, operationID string) (contracts.OperationTiming, error)
+	ReadDeploymentTiming(ctx context.Context, since, until time.Time) (contracts.DeploymentTimingSummary, error)
 }
 
 // ControlPlaneStore is the service's composite consumer-side store contract.
@@ -121,12 +127,15 @@ type ControlPlaneConfig struct {
 	Now                   func() time.Time
 	NewID                 func(string) string
 	NewCredentialMaterial func() string
-	ObjectStore           objectstore.Store
+	ArtifactObjectStore   objectstore.Store
 	DataPlaneRelay        DataPlaneRelay
 	DataPlanePollInterval time.Duration
-	PortSessionRelay      runnercontrol.PortSessionRelay
-	PublicBaseURL         string
-	BuiltInProfiles       []contracts.Profile
+	// DataPlaneWakeups is optional. Without it the caller-facing loops fall back
+	// to DataPlanePollInterval, which remains their recovery bound either way.
+	DataPlaneWakeups worknotify.Source
+	PortSessionRelay runnercontrol.PortSessionRelay
+	PublicBaseURL    string
+	BuiltInProfiles  []contracts.Profile
 }
 
 // ControlPlaneService owns validation, authentication, and transaction inputs.
@@ -137,9 +146,10 @@ type ControlPlaneService struct {
 	now                   func() time.Time
 	newID                 func(string) string
 	newCredentialMaterial func() string
-	objectStore           objectstore.Store
+	artifactObjectStore   objectstore.Store
 	dataPlaneRelay        DataPlaneRelay
 	dataPlanePollInterval time.Duration
+	dataPlaneWakeups      worknotify.Source
 	portSessionRelay      runnercontrol.PortSessionRelay
 	publicBaseURL         string
 	builtInProfiles       map[string]contracts.Profile
@@ -173,8 +183,9 @@ func NewControlPlaneService(config ControlPlaneConfig) (*ControlPlaneService, er
 		credentialSealSecret: []byte(config.PlatformToken),
 		defaultSubjectQuota:  config.DefaultSubjectQuota,
 		now:                  config.Now, newID: config.NewID, newCredentialMaterial: config.NewCredentialMaterial,
-		objectStore:    config.ObjectStore,
-		dataPlaneRelay: config.DataPlaneRelay, dataPlanePollInterval: config.DataPlanePollInterval,
+		artifactObjectStore: config.ArtifactObjectStore,
+		dataPlaneRelay:      config.DataPlaneRelay, dataPlanePollInterval: config.DataPlanePollInterval,
+		dataPlaneWakeups: config.DataPlaneWakeups,
 		portSessionRelay: config.PortSessionRelay, publicBaseURL: config.PublicBaseURL,
 		builtInProfiles: builtInProfiles,
 	}
@@ -283,20 +294,6 @@ func (service *ControlPlaneService) ReviseProfile(
 	return profile, err
 }
 
-// ReviseProfileAtRevision applies HTTP If-Match fencing before appending policy.
-func (service *ControlPlaneService) ReviseProfileAtRevision(
-	ctx context.Context,
-	principal contracts.Principal,
-	name string,
-	request contracts.ReviseProfileRequest,
-	expectedRevision int64,
-) (contracts.Profile, error) {
-	profile, _, err := service.reviseProfileAtRevision(
-		ctx, principal, name, "", request, expectedRevision,
-	)
-	return profile, err
-}
-
 // ReviseProfileAtRevisionIdempotent appends or replays one exact immutable Profile revision.
 func (service *ControlPlaneService) ReviseProfileAtRevisionIdempotent(
 	ctx context.Context,
@@ -363,19 +360,6 @@ func (service *ControlPlaneService) DisableProfile(
 	name string,
 ) (contracts.Profile, error) {
 	profile, _, err := service.disableProfileAtRevision(ctx, principal, name, "", 0)
-	return profile, err
-}
-
-// DisableProfileAtRevision applies HTTP If-Match fencing before disabling creation.
-func (service *ControlPlaneService) DisableProfileAtRevision(
-	ctx context.Context,
-	principal contracts.Principal,
-	name string,
-	expectedRevision int64,
-) (contracts.Profile, error) {
-	profile, _, err := service.disableProfileAtRevision(
-		ctx, principal, name, "", expectedRevision,
-	)
 	return profile, err
 }
 
@@ -494,6 +478,10 @@ func (service *ControlPlaneService) createSandboxOperation(
 	if err := validateSandboxMetadata(request.Metadata); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
+	if len(request.SourceSnapshotID) > 128 {
+		return contracts.Sandbox{}, contracts.Operation{}, false,
+			errors.New("SecondBox source Snapshot ID exceeds its bound")
+	}
 	if builtIn, ok := service.builtInProfiles[request.Profile]; ok {
 		if _, err := service.store.EnsureBuiltInProfile(ctx, builtIn); err != nil {
 			return contracts.Sandbox{}, contracts.Operation{}, false, err
@@ -508,12 +496,16 @@ func (service *ControlPlaneService) createSandboxOperation(
 	sandboxID := service.newID("sbx")
 	workspaceID := service.newID("wsp")
 	operationID := service.newID("op")
+	workspaceEffectID := service.newID("effect")
+	workspaceCommandID := service.newID("command")
+	workspaceFence := []byte(service.newCredentialMaterial())
 	requestID := service.requestID(ctx)
 	sandbox := contracts.Sandbox{
 		ID: sandboxID, Profile: request.Profile, State: contracts.SandboxStateCreating,
 		DesiredState: contracts.SandboxDesiredStateStopped, Generation: 1,
 		Workspace: contracts.Workspace{
-			ID: workspaceID, Generation: 1, RetainedBytes: 0, CreatedAt: now, UpdatedAt: now,
+			ID: workspaceID, Generation: 1, State: "creating",
+			CreatedAt: now, UpdatedAt: now,
 		},
 		Metadata: cloneMetadata(request.Metadata), Revision: 1, CreatedAt: now, UpdatedAt: now,
 	}
@@ -526,7 +518,9 @@ func (service *ControlPlaneService) createSandboxOperation(
 		Principal: principal, SubjectQuota: service.defaultSubjectQuota,
 		Sandbox: sandbox, Workspace: sandbox.Workspace, Operation: operation,
 		IdempotencyKey: idempotencyKey, RequestHash: hex.EncodeToString(requestHash[:]),
-		IdempotencyEnds: now.Add(idempotencyRetention),
+		IdempotencyEnds:   now.Add(idempotencyRetention),
+		WorkspaceEffectID: workspaceEffectID, WorkspaceCommandID: workspaceCommandID,
+		FencingToken: workspaceFence, SourceSnapshotID: request.SourceSnapshotID,
 	})
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
@@ -551,18 +545,61 @@ func (service *ControlPlaneService) GetSandbox(
 	return service.store.GetSandbox(ctx, principal.TenantRef, principal.SubjectRef, sandboxID)
 }
 
+// UpdateSandboxMetadata replaces bounded consumer correlation metadata without
+// changing lifecycle, workspace, generation, placement, or profile authority.
+func (service *ControlPlaneService) UpdateSandboxMetadata(
+	ctx context.Context,
+	principal contracts.Principal,
+	sandboxID string,
+	expectedRevision int64,
+	request contracts.UpdateSandboxMetadataRequest,
+) (contracts.Sandbox, error) {
+	if principal.TenantRef == "" || principal.SubjectRef == "" {
+		return contracts.Sandbox{}, ports.ErrAuthorizationDenied
+	}
+	if expectedRevision < 1 {
+		return contracts.Sandbox{}, errors.New("SecondBox Sandbox expected revision must be positive")
+	}
+	if err := validateSandboxMetadata(request.Metadata); err != nil {
+		return contracts.Sandbox{}, err
+	}
+	now := service.now().UTC()
+	sandbox, err := service.store.UpdateSandboxMetadata(ctx, ports.UpdateSandboxMetadataInput{
+		Principal: principal, SandboxID: sandboxID,
+		Metadata: cloneMetadata(request.Metadata), ExpectedRevision: expectedRevision,
+		Now: now,
+	})
+	if err != nil {
+		return contracts.Sandbox{}, err
+	}
+	audit := service.newAudit(
+		ctx,
+		principal,
+		"sandbox.metadata.updated",
+		"sandbox",
+		sandboxID,
+		principal.TenantRef,
+		now,
+	)
+	if err := service.store.AppendAuditEvent(ctx, audit); err != nil {
+		return contracts.Sandbox{}, err
+	}
+	return sandbox, nil
+}
+
 // ListSandboxes returns only the authenticated Project projection.
 func (service *ControlPlaneService) ListSandboxes(
 	ctx context.Context,
 	principal contracts.Principal,
 	limit int,
 	cursor string,
+	metadata map[string]string,
 ) (contracts.SandboxPage, error) {
 	if principal.TenantRef == "" || principal.SubjectRef == "" {
 		return contracts.SandboxPage{}, ports.ErrAuthorizationDenied
 	}
 	return service.store.ListSandboxes(
-		ctx, principal.TenantRef, principal.SubjectRef, boundedLimit(limit), cursor,
+		ctx, principal.TenantRef, principal.SubjectRef, boundedLimit(limit), cursor, metadata,
 	)
 }
 
@@ -605,21 +642,7 @@ func (service *ControlPlaneService) StartSandbox(
 	)
 }
 
-// DrainSandbox rejects new work and converges the Sandbox to stopped.
-func (service *ControlPlaneService) DrainSandbox(
-	ctx context.Context,
-	principal contracts.Principal,
-	sandboxID string,
-	idempotencyKey string,
-	expectedRevision int64,
-) (contracts.Operation, error) {
-	return service.setSandboxDesiredState(
-		ctx, principal, sandboxID, "drain", contracts.SandboxDesiredStateStopped,
-		idempotencyKey, expectedRevision, nil, nil,
-	)
-}
-
-// StopSandbox converges the Sandbox to stopped under its pinned checkpoint policy.
+// StopSandbox converges the Sandbox to stopped after durable local generation advance.
 func (service *ControlPlaneService) StopSandbox(
 	ctx context.Context,
 	principal contracts.Principal,
@@ -630,24 +653,6 @@ func (service *ControlPlaneService) StopSandbox(
 	return service.setSandboxDesiredState(
 		ctx, principal, sandboxID, "stop", contracts.SandboxDesiredStateStopped,
 		idempotencyKey, expectedRevision, nil, nil,
-	)
-}
-
-// CheckpointSandbox drains before publishing an immutable stopped-state checkpoint.
-func (service *ControlPlaneService) CheckpointSandbox(
-	ctx context.Context,
-	principal contracts.Principal,
-	sandboxID string,
-	idempotencyKey string,
-	expectedRevision int64,
-	metadata map[string]string,
-) (contracts.Operation, error) {
-	if err := validateSandboxMetadata(metadata); err != nil {
-		return contracts.Operation{}, err
-	}
-	return service.setSandboxDesiredState(
-		ctx, principal, sandboxID, "checkpoint", contracts.SandboxDesiredStateStopped,
-		idempotencyKey, expectedRevision, metadata, nil,
 	)
 }
 
@@ -735,10 +740,6 @@ func (service *ControlPlaneService) MutateSandbox(
 	case "start":
 		desiredState = contracts.SandboxDesiredStateRunning
 	case "drain", "stop":
-	case "checkpoint":
-		if err := validateSandboxMetadata(metadata); err != nil {
-			return contracts.Operation{}, false, err
-		}
 	case "delete":
 		desiredState = contracts.SandboxDesiredStateDeleted
 	default:
@@ -1152,22 +1153,7 @@ func (service *ControlPlaneService) newAudit(
 	}
 }
 
-func validateApplicationScopes(scopes []string) error {
-	if len(scopes) == 0 || len(scopes) > 32 {
-		return errors.New("SecondBox application scopes must contain between 1 and 32 entries")
-	}
-	for _, scope := range scopes {
-		if strings.TrimSpace(scope) == "" || len(scope) > 128 {
-			return errors.New("SecondBox application scope is invalid")
-		}
-	}
-	return nil
-}
-
 func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
-	if spec.Backend != "firecracker" {
-		return errors.New("SecondBox Profile backend must be firecracker")
-	}
 	if !profileNamePattern.MatchString(spec.Pool) {
 		return errors.New("SecondBox Profile runner pool selector is invalid")
 	}
@@ -1189,9 +1175,9 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 		spec.Lifecycle.MaximumDurationSeconds < 1 || spec.Lifecycle.LeaseSeconds < 1 {
 		return errors.New("SecondBox Profile lifecycle limits must be positive")
 	}
-	if spec.Checkpoint.RetentionSeconds < 1 ||
-		spec.Checkpoint.SnapshotLimit < 0 || spec.Checkpoint.ArtifactRetentionSeconds < 1 {
-		return errors.New("SecondBox Profile checkpoint limits are invalid")
+	if spec.Retention.SnapshotRetentionSeconds < 1 ||
+		spec.Retention.SnapshotLimit < 0 || spec.Retention.ArtifactRetentionSeconds < 1 {
+		return errors.New("SecondBox Profile retention limits are invalid")
 	}
 	if spec.Execution.MaximumDeadlineMilliseconds < 1 || spec.Execution.MaximumBufferedOutputBytes < 1 ||
 		spec.Execution.StreamWindowBytes < 4096 || spec.Execution.MaximumTransferBytes < 1 ||
@@ -1229,6 +1215,29 @@ func validateSandboxMetadata(metadata map[string]string) error {
 			return errors.New("SecondBox Sandbox metadata key or value exceeds its bound")
 		}
 	}
+	return validateReservedSandboxName(metadata)
+}
+
+// validateReservedSandboxName bounds the reserved name so that it identifies one
+// Sandbox unambiguously. Uniqueness is the database's to enforce; this rejects
+// the names that could never resolve in the first place.
+func validateReservedSandboxName(metadata map[string]string) error {
+	name, present := metadata[contracts.SandboxNameMetadataKey]
+	if !present {
+		return nil
+	}
+	if name != strings.TrimSpace(name) || name == "" {
+		return fmt.Errorf(
+			"SecondBox Sandbox metadata %s must not be blank or surrounded by whitespace",
+			contracts.SandboxNameMetadataKey,
+		)
+	}
+	if strings.HasPrefix(name, contracts.SandboxIDPrefix) {
+		return fmt.Errorf(
+			"SecondBox Sandbox metadata %s must not begin with %q, which identifies a Sandbox",
+			contracts.SandboxNameMetadataKey, contracts.SandboxIDPrefix,
+		)
+	}
 	return nil
 }
 
@@ -1256,7 +1265,6 @@ func validSandboxState(state string) bool {
 		contracts.SandboxStateReady,
 		contracts.SandboxStateDraining,
 		contracts.SandboxStateStopping,
-		contracts.SandboxStateCheckpointing,
 		contracts.SandboxStateFailed,
 		contracts.SandboxStateDeleting,
 		contracts.SandboxStateDeleted:
@@ -1272,7 +1280,7 @@ func validateQuotaLimits(name string, quota contracts.QuotaLimits) error {
 	}
 	values := []int64{
 		quota.MaxActiveInstances, quota.MaxCPUMillis,
-		quota.MaxMemoryBytes, quota.MaxRetainedBytes, quota.MaxSnapshots,
+		quota.MaxMemoryBytes, quota.MaxArtifactBytes, quota.MaxSnapshots,
 		quota.MaxArtifacts, quota.MaxPortSessions, quota.MaxConcurrentOperations,
 	}
 	for _, value := range values {

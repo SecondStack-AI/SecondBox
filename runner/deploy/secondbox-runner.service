@@ -6,8 +6,9 @@ After=local-fs.target network.target
 Type=simple
 ExecStart=/usr/local/bin/secondbox-runner
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-# This required file forwards the explicit guest control/protocol vsock ports
-# and guest heartbeat duration without service-unit defaults.
+# This required file supplies every Runner setting without service-unit
+# defaults, including SECONDBOX_RUNNER_WORKSPACE_ROOT on a dedicated
+# reflink-capable filesystem and the explicit guest vsock settings.
 EnvironmentFile=/run/secondbox-runner/runner.env
 Restart=on-failure
 RestartSec=2s

@@ -117,8 +117,12 @@ func makeSandboxIdleAndDue(
 	t.Helper()
 	if _, err := pool.Exec(t.Context(), `
 		UPDATE secondbox.sandboxes
-		SET last_activity_at=$2,next_reconcile_at=$3,updated_at=$3
-		WHERE id=$1`,
+		SET next_reconcile_at=CASE
+		      WHEN id=$1 THEN $3::timestamptz
+		      ELSE $3::timestamptz + interval '1 hour'
+		    END,
+		    last_activity_at=CASE WHEN id=$1 THEN $2 ELSE last_activity_at END,
+		    updated_at=CASE WHEN id=$1 THEN $3 ELSE updated_at END`,
 		sandboxID, now.Add(-301*time.Second), now,
 	); err != nil {
 		t.Fatal(err)

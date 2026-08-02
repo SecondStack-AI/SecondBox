@@ -3,8 +3,8 @@ import {
   SecondBoxAPIError,
   SecondBoxClient,
   encodeJSONBody,
-  type CheckpointSandboxRequest,
   type CreateDirectoryRequest,
+  type CreatePortSessionRequest,
   type CreateTerminalRequest,
   type DirectoryListing,
   type ExecOutcome,
@@ -14,17 +14,22 @@ import {
   type FileStat,
   type FileWriteResult,
   type JSONValue,
+  type Lease,
   type Metadata,
   type Operation,
   type OperationID,
+  type PortSession,
   type Problem,
+  type RestoreSnapshotRequest,
   type RemovePathRequest,
   type Sandbox,
+  type SandboxPage,
   type SandboxState,
   type StreamingExecRequest,
   type TerminalFrame,
   type TerminalSession,
   type TransportRequestOptions,
+  type UpdateSandboxMetadataRequest,
   type WaitSandboxRequest,
 } from "./transport.ts";
 
@@ -32,17 +37,22 @@ export type {
   CreateAPIKeyResponse,
   ExecStreamFrame,
   FileStat,
+  Lease,
   Metadata,
   Operation,
+  PortSession,
   Profile,
   ProfileRevisionSpec,
   Problem,
   Project,
   Sandbox,
+  SandboxPage,
   SandboxState,
+  Snapshot,
   ServiceAccount,
   ServiceAccountScope,
   TerminalFrame,
+  UpdateSandboxMetadataRequest,
 } from "./transport.ts";
 export { SecondBoxClient, encodeJSONBody } from "./transport.ts";
 
@@ -75,6 +85,28 @@ export class OperationFailedError extends Error {
     this.operation = operation;
   }
 }
+
+/** Returns one unguessable single-use request key. */
+export function newIdempotencyKey(): string {
+  return idempotencyKey();
+}
+
+/** Renders one Sandbox revision as its If-Match validator. */
+export function revisionETag(revision: number): string {
+  requirePositiveInteger(revision, "Sandbox revision");
+  return `"revision-${revision}"`;
+}
+
+/** Returns the typed service problem code carried by the error, or "". */
+export function problemCodeOf(error: unknown): string {
+  return error instanceof SecondBoxProblemError ? error.problem.code : "";
+}
+
+/** The per-request bound the service enforces on waitForSandbox. */
+const MAXIMUM_WAIT_REQUEST_MILLISECONDS = 55_000;
+
+/** Keeps a very short Lease from busy-looping. */
+const DEFAULT_MINIMUM_RENEWAL_DELAY_MILLISECONDS = 1_000;
 
 export interface PollOptions {
   readonly intervalMilliseconds: number;
@@ -151,6 +183,108 @@ export class SecondBox {
   public sandbox(snapshot: Sandbox, leaseID?: string): SandboxHandle {
     return new SandboxHandle(this, snapshot, leaseID);
   }
+
+  public getLease(leaseID: string, signal?: AbortSignal): Promise<Lease> {
+    requireNonempty(leaseID, "Lease ID");
+    return this.requestJSON<Lease>("getSandboxLease", {
+      pathParameters: { leaseId: leaseID },
+      signal,
+    });
+  }
+
+  /**
+   * Admits one Sandbox and returns a handle to its representation.
+   *
+   * The returned Sandbox is the freshly created resource, which is not yet
+   * ready; callers wait for the states they require.
+   */
+  public async createSandbox(
+    request: CreateSandboxOptions,
+  ): Promise<{ readonly handle: SandboxHandle; readonly operation: Operation }> {
+    requireNonempty(request.profile, "Sandbox Profile name");
+    const operation = await this.requestJSON<Operation>("createSandbox", {
+      headers: { "Idempotency-Key": request.idempotencyKey ?? idempotencyKey() },
+      body: encodeJSONBody({
+        profile: request.profile,
+        metadata: request.metadata ?? {},
+        ...(request.sourceSnapshotId === undefined
+          ? {}
+          : { sourceSnapshotId: request.sourceSnapshotId }),
+      }),
+      signal: request.signal,
+    });
+    if (operation.sandboxId === "") {
+      throw new Error("SecondBox Sandbox create returned no Sandbox reference");
+    }
+    const sandbox = await this.requestJSON<Sandbox>("getSandbox", {
+      pathParameters: { sandboxId: operation.sandboxId },
+      signal: request.signal,
+    });
+    return { handle: new SandboxHandle(this, sandbox), operation };
+  }
+
+  /**
+   * Creates a Sandbox, waits for it to become ready, and executes one command.
+   *
+   * The Sandbox is deliberately left in place: no handle deletes a Sandbox
+   * implicitly. Callers dispose of the returned handle themselves.
+   */
+  public async run(request: RunRequest): Promise<RunOutcome> {
+    requirePositiveInteger(request.deadlineMilliseconds, "run deadlineMilliseconds");
+    requirePositiveInteger(request.maximumOutputBytes, "run maximumOutputBytes");
+    requirePositiveInteger(request.readyTimeoutMilliseconds, "run readyTimeoutMilliseconds");
+    const { handle } = await this.createSandbox({
+      profile: request.profile,
+      ...(request.metadata === undefined ? {} : { metadata: request.metadata }),
+      ...(request.sourceSnapshotId === undefined
+        ? {}
+        : { sourceSnapshotId: request.sourceSnapshotId }),
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
+    });
+    const sandbox = await handle.waitFor(["ready"], {
+      deadlineMilliseconds: request.readyTimeoutMilliseconds,
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
+    });
+    const result = await handle.exec(request.command, {
+      ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
+      environment: request.environment ?? {},
+      deadlineMilliseconds: request.deadlineMilliseconds,
+      maximumOutputBytes: request.maximumOutputBytes,
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
+    });
+    return { handle, sandbox, result };
+  }
+
+  public renewLease(
+    leaseID: string,
+    durationSeconds: number,
+    idempotency: string,
+    signal?: AbortSignal,
+  ): Promise<Lease> {
+    requireNonempty(leaseID, "Lease ID");
+    requireDurationSeconds(durationSeconds, "Lease");
+    requireNonempty(idempotency, "Lease renewal idempotency key");
+    return this.requestJSON<Lease>("renewSandboxLease", {
+      pathParameters: { leaseId: leaseID },
+      headers: { "Idempotency-Key": idempotency },
+      body: encodeJSONBody({ durationSeconds }),
+      signal,
+    });
+  }
+
+  public releaseLease(
+    leaseID: string,
+    idempotency: string,
+    signal?: AbortSignal,
+  ): Promise<Lease> {
+    requireNonempty(leaseID, "Lease ID");
+    requireNonempty(idempotency, "Lease release idempotency key");
+    return this.requestJSON<Lease>("releaseSandboxLease", {
+      pathParameters: { leaseId: leaseID },
+      headers: { "Idempotency-Key": idempotency },
+      signal,
+    });
+  }
 }
 
 export interface ExecOptions {
@@ -166,6 +300,7 @@ export type ExecResult =
       readonly kind: "exited";
       readonly exitCode: number;
       readonly signal?: number;
+      readonly elapsedMilliseconds: number;
       readonly stdout: Uint8Array;
       readonly stderr: Uint8Array;
     }
@@ -460,6 +595,111 @@ export class Terminal {
   }
 }
 
+/** An authenticated binary-frame connection supplied by the application runtime. */
+export interface PortTunnelConnection {
+  readonly subprotocol: string;
+  sendBinary(payload: Uint8Array): Promise<void>;
+  receiveBinary(signal?: AbortSignal): Promise<Uint8Array>;
+  close(): Promise<void>;
+}
+
+/** Raw byte stream to a Runner's caller-facing data-plane listener. */
+export interface DirectPortSocket {
+  write(payload: Uint8Array): Promise<void>;
+  /** Resolves the next available chunk, or an empty array at end of stream. */
+  read(signal?: AbortSignal): Promise<Uint8Array>;
+  close(): Promise<void>;
+}
+
+/**
+ * Injects the runtime-specific TCP dialer for the direct Port transport.
+ *
+ * The dialer supplies transport only. This SDK owns the framed credential
+ * handshake, so a caller cannot admit a connection by dialing alone and the
+ * wire format stays in one place.
+ */
+export interface DirectPortDialer {
+  dial(
+    descriptor: {
+      readonly host: string;
+      readonly port: number;
+      readonly sandboxID: string;
+      readonly generation: number;
+      readonly expiresAt: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<DirectPortSocket>;
+}
+
+/** Transports a caller supports. A PortSession is served by exactly one. */
+export interface PortTunnelTransports {
+  readonly relay?: PortTunnelConnector;
+  readonly direct?: DirectPortDialer;
+}
+
+/** Injects the runtime-specific authenticated Port WebSocket implementation. */
+export interface PortTunnelConnector {
+  connect(
+    descriptor: {
+      readonly websocketURL: string;
+      readonly subprotocols: readonly [
+        "secondbox.port.v1",
+        `secondbox.port.token.${string}`,
+      ];
+      readonly sandboxID: string;
+      readonly generation: number;
+      readonly expiresAt: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<PortTunnelConnection>;
+}
+
+/** Binary stream carried by one generation-fenced authenticated PortSession. */
+export class PortTunnel {
+  readonly #connection: PortTunnelConnection;
+  #writeTail: Promise<void> = Promise.resolve();
+  #readTail: Promise<void> = Promise.resolve();
+
+  public constructor(connection: PortTunnelConnection) {
+    if (connection.subprotocol !== "secondbox.port.v1") {
+      throw new Error("SecondBox Port tunnel subprotocol was not negotiated");
+    }
+    this.#connection = connection;
+  }
+
+  public send(payload: Uint8Array): Promise<void> {
+    if (payload.byteLength === 0) {
+      return Promise.reject(new Error("SecondBox Port tunnel frame is empty"));
+    }
+    const owned = new Uint8Array(payload);
+    const result = this.#writeTail.then(() => this.#connection.sendBinary(owned));
+    this.#writeTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  public receive(signal?: AbortSignal): Promise<Uint8Array> {
+    const result = this.#readTail.then(async () => {
+      const payload = await this.#connection.receiveBinary(signal);
+      if (payload.byteLength === 0) {
+        throw new Error("SecondBox Port tunnel received an empty frame");
+      }
+      return new Uint8Array(payload);
+    });
+    this.#readTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  public close(): Promise<void> {
+    return this.#connection.close();
+  }
+}
+
 /** Filesystem and command surface consumed by the Flue adapter. */
 export interface SandboxFilesystem {
   readFile(path: string, signal?: AbortSignal): Promise<Uint8Array>;
@@ -525,6 +765,59 @@ export class SandboxHandle implements SandboxFilesystem {
     return sandbox;
   }
 
+  /**
+   * Blocks until the Sandbox reaches one of the supplied states.
+   *
+   * The service bounds a single wait request, so this issues repeated bounded
+   * waits against the caller's own deadline and reports the last observed state
+   * when that deadline passes.
+   */
+  public async waitFor(
+    states: readonly SandboxState[],
+    options: WaitForOptions,
+  ): Promise<Sandbox> {
+    if (states.length === 0) {
+      throw new Error("SecondBox Sandbox wait requires at least one state");
+    }
+    requirePositiveInteger(options.deadlineMilliseconds, "Sandbox waitFor deadlineMilliseconds");
+    const target = new Set<SandboxState>(states);
+    const expiry = Date.now() + options.deadlineMilliseconds;
+    for (;;) {
+      if (target.has(this.#snapshot.state)) return this.#snapshot;
+      const remaining = expiry - Date.now();
+      if (remaining <= 0) {
+        throw new Error(
+          `SecondBox Sandbox ${this.#snapshot.id} did not reach ${states.join(", ")}: ` +
+            `last state=${this.#snapshot.state} generation=${this.#snapshot.generation}`,
+        );
+      }
+      try {
+        await this.wait(
+          states,
+          Math.min(remaining, MAXIMUM_WAIT_REQUEST_MILLISECONDS),
+          options.signal,
+        );
+      } catch (error) {
+        if (problemCodeOf(error) !== "wait_expired") throw error;
+        await this.refresh(options.signal);
+      }
+    }
+  }
+
+  /**
+   * Acquires a Lease and renews it until the keeper is closed.
+   *
+   * Renewal is driven by the expiry the service actually granted rather than by
+   * the requested duration, because the pinned Profile bounds Lease length.
+   */
+  public async keepLease(
+    durationSeconds: number,
+    minimumDelayMilliseconds: number = DEFAULT_MINIMUM_RENEWAL_DELAY_MILLISECONDS,
+  ): Promise<LeaseKeeper> {
+    const lease = await this.acquireLease(durationSeconds, idempotencyKey());
+    return new LeaseKeeper(this.#api, lease, durationSeconds, minimumDelayMilliseconds);
+  }
+
   public start(options: LifecycleOptions): Promise<Operation> {
     return this.lifecycle("startSandbox", options);
   }
@@ -537,12 +830,12 @@ export class SandboxHandle implements SandboxFilesystem {
     return this.lifecycle("stopSandbox", options);
   }
 
-  public checkpoint(
-    metadata: Metadata,
+  public restore(
+    snapshotId: string,
     options: LifecycleOptions,
   ): Promise<Operation> {
-    const body: CheckpointSandboxRequest = { metadata };
-    return this.lifecycle("checkpointSandbox", options, body as unknown as JSONValue);
+    const body: RestoreSnapshotRequest = { snapshotId };
+    return this.lifecycle("restoreSandboxSnapshot", options, body as unknown as JSONValue);
   }
 
   public delete(options: LifecycleOptions): Promise<Operation> {
@@ -568,6 +861,25 @@ export class SandboxHandle implements SandboxFilesystem {
       signal: options.signal,
     });
     return decodeExecOutcome(outcome);
+  }
+
+  /** Acquires one explicit generation-bound Lease for active data-plane work. */
+  public acquireLease(
+    durationSeconds: number,
+    idempotency: string,
+    signal?: AbortSignal,
+  ): Promise<Lease> {
+    requireDurationSeconds(durationSeconds, "Lease");
+    requireNonempty(idempotency, "Lease acquisition idempotency key");
+    return this.#api.requestJSON<Lease>("acquireSandboxLease", {
+      pathParameters: { sandboxId: this.#snapshot.id },
+      headers: {
+        "SecondBox-Generation": String(this.#snapshot.generation),
+        "Idempotency-Key": idempotency,
+      },
+      body: encodeJSONBody({ durationSeconds }),
+      signal,
+    });
   }
 
   /** Negotiates a streaming-exec session while leaving WebSocket ownership to the caller. */
@@ -720,6 +1032,117 @@ export class SandboxHandle implements SandboxFilesystem {
     return new Terminal(connection, session.nextClientSequence);
   }
 
+  /** Creates one generation- and Lease-fenced authenticated PortSession. */
+  public createPortSession(
+    request: CreatePortSessionRequest,
+    idempotency: string,
+    signal?: AbortSignal,
+  ): Promise<PortSession> {
+    requireNonempty(request.name, "PortSession name");
+    requireDurationSeconds(request.durationSeconds, "PortSession");
+    return this.negotiateDataPlaneSession(
+      "createSandboxPortSession",
+      request as unknown as JSONValue,
+      idempotency,
+      signal,
+    );
+  }
+
+  /** Returns the observable state of one PortSession without consuming its credential. */
+  public getPortSession(
+    portSessionID: string,
+    signal?: AbortSignal,
+  ): Promise<PortSession> {
+    if (portSessionID === "") {
+      return Promise.reject(new Error("SecondBox PortSession ID is required"));
+    }
+    return this.#api.requestJSON<PortSession>("getSandboxPortSession", {
+      pathParameters: {
+        sandboxId: this.#snapshot.id,
+        portSessionId: portSessionID,
+      },
+      signal,
+    });
+  }
+
+  /** Explicitly closes one PortSession. */
+  public async closePortSession(
+    portSessionID: string,
+    idempotency: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (portSessionID === "" || idempotency === "") {
+      throw new Error(
+        "SecondBox PortSession ID and close idempotency are required",
+      );
+    }
+    await this.#api.requestVoid("closeSandboxPortSession", {
+      pathParameters: {
+        sandboxId: this.#snapshot.id,
+        portSessionId: portSessionID,
+      },
+      headers: { "Idempotency-Key": idempotency },
+      signal,
+    });
+  }
+
+  /** Consumes the endpoint credential through an authenticated binary connector. */
+  public async connectPortTunnel(
+    session: PortSession,
+    connector: PortTunnelConnector | PortTunnelTransports,
+    signal?: AbortSignal,
+  ): Promise<PortTunnel> {
+    if (
+      session.sandboxId !== this.#snapshot.id ||
+      session.generation !== this.#snapshot.generation ||
+      session.state !== "open"
+    ) {
+      throw new Error("SecondBox PortSession does not match the Sandbox handle");
+    }
+    const endpoint = new URL(session.endpoint);
+    const credential = endpoint.hash.slice(1);
+    if (!Number.isFinite(Date.parse(session.expiresAt))) {
+      throw new Error("SecondBox PortSession expiration is invalid");
+    }
+    const transports = normalizePortTunnelTransports(connector);
+    if (session.transport === "direct") {
+      return connectDirectPortTunnel(session, endpoint, credential, transports, signal);
+    }
+    if (!transports.relay) {
+      throw new Error("SecondBox PortSession relay transport has no connector");
+    }
+    if (
+      (endpoint.protocol !== "ws:" && endpoint.protocol !== "wss:") ||
+      endpoint.username !== "" ||
+      endpoint.password !== "" ||
+      endpoint.search !== ""
+    ) {
+      throw new Error("SecondBox PortSession WebSocket URL is invalid");
+    }
+    if (
+      credential === "" ||
+      credential.length > 2048 ||
+      !/^[A-Za-z0-9_.-]+$/.test(credential)
+    ) {
+      throw new Error("SecondBox PortSession endpoint credential is invalid");
+    }
+    endpoint.hash = "";
+    const connection = await transports.relay.connect(
+      {
+        websocketURL: endpoint.toString(),
+        subprotocols: [
+          "secondbox.port.v1",
+          `secondbox.port.token.${credential}`,
+        ],
+        sandboxID: session.sandboxId,
+        generation: session.generation,
+        expiresAt: session.expiresAt,
+      },
+      signal,
+    );
+    return new PortTunnel(connection);
+  }
+
   public async readFile(path: string, signal?: AbortSignal): Promise<Uint8Array> {
     const response = await this.#api.request("readSandboxFile", {
       pathParameters: { sandboxId: this.#snapshot.id },
@@ -819,7 +1242,7 @@ export class SandboxHandle implements SandboxFilesystem {
       | "startSandbox"
       | "drainSandbox"
       | "stopSandbox"
-      | "checkpointSandbox"
+      | "restoreSandboxSnapshot"
       | "deleteSandbox",
     options: LifecycleOptions,
     body?: JSONValue,
@@ -851,7 +1274,10 @@ export class SandboxHandle implements SandboxFilesystem {
   }
 
   private negotiateDataPlaneSession<T>(
-    operationID: "createSandboxExecStream" | "createSandboxTerminal",
+    operationID:
+      | "createSandboxExecStream"
+      | "createSandboxTerminal"
+      | "createSandboxPortSession",
     request: JSONValue,
     idempotency: string,
     signal?: AbortSignal,
@@ -871,13 +1297,151 @@ export class SandboxHandle implements SandboxFilesystem {
   }
 }
 
-function decodeExecOutcome(outcome: ExecOutcome): ExecResult {
+export interface CreateSandboxOptions {
+  readonly profile: string;
+  readonly metadata?: Metadata;
+  readonly sourceSnapshotId?: string;
+  readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+}
+
+export interface WaitForOptions {
+  readonly deadlineMilliseconds: number;
+  readonly signal?: AbortSignal;
+}
+
+export interface RunRequest {
+  readonly profile: string;
+  readonly metadata?: Metadata;
+  readonly sourceSnapshotId?: string;
+  readonly command: string;
+  readonly cwd?: string;
+  readonly environment?: Readonly<Record<string, string>>;
+  readonly deadlineMilliseconds: number;
+  readonly maximumOutputBytes: number;
+  readonly readyTimeoutMilliseconds: number;
+  readonly signal?: AbortSignal;
+}
+
+export interface RunOutcome {
+  readonly handle: SandboxHandle;
+  readonly sandbox: Sandbox;
+  readonly result: ExecResult;
+}
+
+/** Holds one Lease active by renewing it before it expires. */
+export class LeaseKeeper {
+  readonly #api: SecondBox;
+  readonly #durationSeconds: number;
+  readonly #minimumDelayMilliseconds: number;
+  readonly #renewal: Promise<void>;
+  #lease: Lease;
+  #failure: Error | undefined;
+  #closed = false;
+  #wake: (() => void) | undefined;
+
+  public constructor(
+    api: SecondBox,
+    lease: Lease,
+    durationSeconds: number,
+    minimumDelayMilliseconds: number = DEFAULT_MINIMUM_RENEWAL_DELAY_MILLISECONDS,
+  ) {
+    this.#api = api;
+    this.#lease = lease;
+    this.#durationSeconds = durationSeconds;
+    this.#minimumDelayMilliseconds = minimumDelayMilliseconds;
+    this.#renewal = this.renew();
+  }
+
+  public get id(): string {
+    return this.#lease.id;
+  }
+
+  public get lease(): Lease {
+    return this.#lease;
+  }
+
+  /** Reports the renewal failure that ended background renewal, if any. */
+  public get failure(): Error | undefined {
+    return this.#failure;
+  }
+
+  private async renew(): Promise<void> {
+    while (!this.#closed) {
+      await this.sleep(this.delayMilliseconds());
+      if (this.#closed) return;
+      try {
+        this.#lease = await this.#api.renewLease(
+          this.#lease.id,
+          this.#durationSeconds,
+          idempotencyKey(),
+        );
+      } catch (error) {
+        this.#failure = error instanceof Error ? error : new Error(String(error));
+        return;
+      }
+    }
+  }
+
+  private sleep(milliseconds: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        this.#wake = undefined;
+        resolve();
+      }, milliseconds);
+      this.#wake = () => {
+        clearTimeout(timer);
+        this.#wake = undefined;
+        resolve();
+      };
+    });
+  }
+
+  /** Renews at half the remaining life, with a floor. */
+  private delayMilliseconds(): number {
+    const remaining = Date.parse(this.#lease.expiresAt) - Date.now();
+    if (!Number.isFinite(remaining) || remaining <= 0) {
+      return this.#minimumDelayMilliseconds;
+    }
+    return Math.max(Math.floor(remaining / 2), this.#minimumDelayMilliseconds);
+  }
+
+  /**
+   * Stops renewal and releases the Lease.
+   *
+   * A renewal that stopped is why the work failed; releasing a Lease the service
+   * has already fenced then fails too, and reporting that consequence instead of
+   * its cause sends the caller looking in the wrong place.
+   */
+  public async close(): Promise<void> {
+    if (!this.#closed) {
+      this.#closed = true;
+      this.#wake?.();
+      await this.#renewal;
+    }
+    let releaseError: unknown;
+    try {
+      await this.#api.releaseLease(this.#lease.id, idempotencyKey());
+    } catch (error) {
+      releaseError = error;
+    }
+    if (this.#failure !== undefined) {
+      throw new Error(`SecondBox Lease renewal stopped: ${this.#failure.message}`, {
+        cause: this.#failure,
+      });
+    }
+    if (releaseError !== undefined) throw releaseError;
+  }
+}
+
+export function decodeExecOutcome(outcome: ExecOutcome): ExecResult {
   switch (outcome.kind) {
     case "exited":
       return {
         kind: outcome.kind,
         exitCode: outcome.exitCode,
         ...(outcome.signal === undefined ? {} : { signal: outcome.signal }),
+        elapsedMilliseconds: outcome.elapsedMilliseconds,
         ...decodeOutput(outcome.output),
       };
     case "deadline_exceeded":
@@ -1054,6 +1618,19 @@ function requirePositiveInteger(value: number, field: string): void {
   }
 }
 
+function requireNonempty(value: string, field: string): void {
+  if (value === "") {
+    throw new Error(`SecondBox ${field} is required`);
+  }
+}
+
+function requireDurationSeconds(value: number, field: string): void {
+  requirePositiveInteger(value, `${field} durationSeconds`);
+  if (value > 86_400) {
+    throw new Error(`SecondBox ${field} durationSeconds must not exceed 86400`);
+  }
+}
+
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted !== true) return;
   const reason =
@@ -1085,4 +1662,152 @@ async function abortableDelay(
     }
     signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+/** Generation one of the direct Port handshake. */
+const DIRECT_PORT_MAGIC = "SBXPORT1";
+const DIRECT_PORT_MAXIMUM_DETAIL_BYTES = 128;
+const DIRECT_PORT_VERDICT_ADMITTED = 0;
+
+function normalizePortTunnelTransports(
+  connector: PortTunnelConnector | PortTunnelTransports,
+): PortTunnelTransports {
+  return "connect" in connector ? { relay: connector } : connector;
+}
+
+/**
+ * Performs the framed credential handshake, then exposes the socket as an
+ * ordinary tunnel connection.
+ *
+ * The Runner may coalesce its verdict with the first payload bytes, so anything
+ * read past the verdict is retained and replayed rather than discarded.
+ */
+async function connectDirectPortTunnel(
+  session: PortSession,
+  endpoint: URL,
+  credential: string,
+  transports: PortTunnelTransports,
+  signal?: AbortSignal,
+): Promise<PortTunnel> {
+  if (!transports.direct) {
+    throw new Error("SecondBox PortSession direct transport has no dialer");
+  }
+  if (
+    endpoint.protocol !== "secondbox+tcp:" ||
+    endpoint.username !== "" ||
+    endpoint.password !== "" ||
+    endpoint.search !== "" ||
+    endpoint.hostname === ""
+  ) {
+    throw new Error("SecondBox PortSession direct endpoint is invalid");
+  }
+  if (credential === "" || credential.length > 2048) {
+    throw new Error("SecondBox PortSession endpoint credential is invalid");
+  }
+  const port = Number(endpoint.port);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    throw new Error("SecondBox PortSession direct endpoint port is invalid");
+  }
+  const socket = await transports.direct.dial(
+    {
+      host: endpoint.hostname,
+      port,
+      sandboxID: session.sandboxId,
+      generation: session.generation,
+      expiresAt: session.expiresAt,
+    },
+    signal,
+  );
+  try {
+    await socket.write(encodeDirectPortCredential(credential));
+    const { detail, admitted, remainder } = await readDirectPortVerdict(socket, signal);
+    if (!admitted) {
+      throw new Error(
+        `SecondBox direct Port connection was denied: ${detail || "no detail"}`,
+      );
+    }
+    return new PortTunnel(new DirectPortTunnelConnection(socket, remainder));
+  } catch (error) {
+    await socket.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+function encodeDirectPortCredential(credential: string): Uint8Array {
+  const encoded = new TextEncoder().encode(credential);
+  const magic = new TextEncoder().encode(DIRECT_PORT_MAGIC);
+  const frame = new Uint8Array(magic.length + 2 + encoded.length);
+  frame.set(magic, 0);
+  new DataView(frame.buffer).setUint16(magic.length, encoded.length, false);
+  frame.set(encoded, magic.length + 2);
+  return frame;
+}
+
+async function readDirectPortVerdict(
+  socket: DirectPortSocket,
+  signal?: AbortSignal,
+): Promise<{ admitted: boolean; detail: string; remainder: Uint8Array }> {
+  const headerLength = DIRECT_PORT_MAGIC.length + 3;
+  let buffered = new Uint8Array(0);
+  const need = async (length: number): Promise<void> => {
+    while (buffered.length < length) {
+      const chunk = await socket.read(signal);
+      if (chunk.length === 0) {
+        throw new Error("SecondBox direct Port handshake ended before its verdict");
+      }
+      const grown = new Uint8Array(buffered.length + chunk.length);
+      grown.set(buffered, 0);
+      grown.set(chunk, buffered.length);
+      buffered = grown;
+    }
+  };
+  await need(headerLength);
+  const decoder = new TextDecoder();
+  if (decoder.decode(buffered.subarray(0, DIRECT_PORT_MAGIC.length)) !== DIRECT_PORT_MAGIC) {
+    throw new Error("SecondBox direct Port handshake is malformed");
+  }
+  const verdict = buffered[DIRECT_PORT_MAGIC.length];
+  const detailLength = new DataView(
+    buffered.buffer,
+    buffered.byteOffset,
+    buffered.byteLength,
+  ).getUint16(DIRECT_PORT_MAGIC.length + 1, false);
+  if (detailLength > DIRECT_PORT_MAXIMUM_DETAIL_BYTES) {
+    throw new Error("SecondBox direct Port handshake is malformed");
+  }
+  await need(headerLength + detailLength);
+  return {
+    admitted: verdict === DIRECT_PORT_VERDICT_ADMITTED,
+    detail: decoder.decode(buffered.subarray(headerLength, headerLength + detailLength)),
+    remainder: buffered.slice(headerLength + detailLength),
+  };
+}
+
+/** Adapts a raw direct socket to the tunnel connection contract. */
+class DirectPortTunnelConnection implements PortTunnelConnection {
+  readonly subprotocol = "secondbox.port.v1";
+  readonly #socket: DirectPortSocket;
+  #pending: Uint8Array;
+
+  public constructor(socket: DirectPortSocket, remainder: Uint8Array) {
+    this.#socket = socket;
+    this.#pending = remainder;
+  }
+
+  public sendBinary(payload: Uint8Array): Promise<void> {
+    return this.#socket.write(payload);
+  }
+
+  public async receiveBinary(signal?: AbortSignal): Promise<Uint8Array> {
+    if (this.#pending.length > 0) {
+      const pending = this.#pending;
+      this.#pending = new Uint8Array(0);
+      return pending;
+    }
+    return this.#socket.read(signal);
+  }
+
+  public close(): Promise<void> {
+    return this.#socket.close();
+  }
 }

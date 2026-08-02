@@ -4,9 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha256"
 	_ "embed"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +23,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
 
 const (
@@ -60,6 +59,7 @@ type Manager struct {
 	instancesByKey       map[runtimeInstanceKey]string
 	provisioning         map[runtimeInstanceKey]chan struct{}
 	pendingSpawns        map[runtimeInstanceKey]int
+	pendingMemoryMiB     map[runtimeInstanceKey]int
 	shuttingDown         bool
 	sweepCancel          context.CancelFunc
 	sweepDone            chan struct{}
@@ -75,11 +75,25 @@ type Manager struct {
 	signalInstance       func(string, syscall.Signal) error
 	startDurations       []time.Duration
 	mountLocks           map[runtimeInstanceKey]*sync.Mutex
-	thinDeviceIDs        *thinDeviceIDAllocator
-	thinDeviceIDOnce     sync.Once
 	cleanupFailure       error
 	evidence             runnerevidence.Sink
 	runnerID             string
+	workspaceStore       workspacestore.WorkspaceStore
+}
+
+// SetWorkspaceStore binds the provider-neutral local workspace authority before
+// the Runner starts accepting assignments.
+func (m *Manager) SetWorkspaceStore(store workspacestore.WorkspaceStore) error {
+	if m == nil || store == nil {
+		return fmt.Errorf("SecondBox Firecracker WorkspaceStore is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.instances) != 0 || len(m.provisioning) != 0 || m.sweepCancel != nil {
+		return fmt.Errorf("SecondBox Firecracker WorkspaceStore must be bound before startup")
+	}
+	m.workspaceStore = store
+	return nil
 }
 
 type runtimeInstanceKey struct {
@@ -106,7 +120,7 @@ type instance struct {
 	rootfsPath             string
 	rootfsImagePath        string
 	workspacePath          string
-	workspaceAttachmentID  string
+	workspaceAttachment    workspacestore.ComputeAttachment
 	sharedImagePath        string
 	guestIP                string
 	startupFingerprint     string
@@ -124,25 +138,26 @@ type instance struct {
 	operationID            string
 	leaseID                string
 	assignmentID           string
+	memoryMiB              int
 	ready                  bool
 	explicitStop           bool
 	baselineOOMKills       *uint64
 	terminationEvidenceErr error
 	terminalObserver       func(context.Context, InstanceTerminalObservation) error
-	// jailedProcess is true for jailed launches where cmd is the short-lived
-	// jailer parent. The real Firecracker process continues as an orphaned
-	// child, identified by --id.
+	// jailedProcess is true when cmd is the runner-owned jailer supervisor.
+	// The supervisor adopts and reaps the jailer's orphaned Firecracker child.
 	jailedProcess bool
 }
 
 type firecrackerLaunch struct {
-	executable string
-	args       []string
-	config     firecrackerConfig
-	configPath string
-	socketPath string
-	vsockUDS   string
-	jailRoot   string
+	executable  string
+	args        []string
+	environment []string
+	config      firecrackerConfig
+	configPath  string
+	socketPath  string
+	vsockUDS    string
+	jailRoot    string
 }
 
 type microVMImageSelection struct {
@@ -273,12 +288,7 @@ func New(cfg *config.Config) (*Manager, error) {
 			cfg.MicroVMRunDir = relocated
 		}
 	}
-	for _, dir := range []string{
-		cfg.MicroVMWorkspaceDir,
-		cfg.MicroVMCheckpointRestoreSpoolDir,
-		cfg.MicroVMRunDir,
-		cfg.MicroVMLogDir,
-	} {
+	for _, dir := range []string{cfg.MicroVMRunDir, cfg.MicroVMLogDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("create microVM dir %q: %w", dir, err)
 		}
@@ -658,14 +668,15 @@ func (m *Manager) createAndStart(ctx context.Context, sandboxID string, opts run
 	}
 	opts.CompartmentID = compartmentID
 	key := runtimeInstanceKey{sandboxID: sandboxID, compartmentID: compartmentID}
+	memoryMiB := m.requestedMemoryMiB(opts)
 	m.mu.Lock()
-	if err := m.reserveCompartmentSpawnLocked(key); err != nil {
+	if err := m.reserveCompartmentSpawnLocked(key, memoryMiB); err != nil {
 		m.mu.Unlock()
 		return "", err
 	}
 	m.mu.Unlock()
 	releasePendingLocked := sync.OnceFunc(func() {
-		m.releaseCompartmentSpawnLocked(key)
+		m.releaseCompartmentSpawnLocked(key, memoryMiB)
 	})
 	releasePending := func() {
 		m.mu.Lock()
@@ -754,6 +765,9 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if opts.WorkspaceAttachment == nil {
+		return "", fmt.Errorf("SecondBox Firecracker Workspace attachment is required")
+	}
 	compartmentID = normalizeRuntimeCompartmentID(compartmentID)
 	if err := validateRuntimeCompartmentID(compartmentID); err != nil {
 		return "", err
@@ -835,6 +849,16 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 		}
 	}
 	timer.mark("network_ready", "tap", tapName, "networkRequired", m.networkRequired(opts))
+	if opts.StartupProgress != nil {
+		if progressErr := opts.StartupProgress(runtimemanager.StartupStageNetworkReady); progressErr != nil {
+			return "", m.joinInstanceNetworkCleanup(
+				setupCtx,
+				id,
+				tapName,
+				fmt.Errorf("report network-ready startup stage: %w", progressErr),
+			)
+		}
+	}
 	dir := filepath.Join(m.cfg.MicroVMRunDir, id)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", m.joinInstanceNetworkCleanup(ctx, id, tapName, fmt.Errorf("create instance dir: %w", err))
@@ -880,29 +904,37 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 			sharedImagePath = ""
 		}
 	}
-	workspacePath, err := m.prepareWorkspaceSizedForAttachment(
-		setupCtx,
-		sandboxID,
-		compartmentID,
-		opts.WorkspaceAttachmentID,
-		workspaceSizeMiB,
-	)
-	if err != nil {
-		return "", m.joinInstanceNetworkCleanup(setupCtx, id, tapName, fmt.Errorf("prepare workspace: %w", err))
+	workspaceImage := opts.WorkspaceAttachment.Image()
+	if workspaceImage == nil || opts.WorkspaceAttachment.Generation() != opts.SandboxGeneration {
+		return "", m.joinInstanceNetworkCleanup(
+			setupCtx,
+			id,
+			tapName,
+			fmt.Errorf("resolved Workspace attachment generation is stale"),
+		)
 	}
-	if opts.WorkspaceCheckpointPath != "" {
-		if err := restoreWorkspaceImage(
-			opts.WorkspaceCheckpointPath,
-			workspacePath,
-			int64(workspaceSizeMiB)*1024*1024,
-		); err != nil {
-			return "", m.joinInstanceNetworkCleanup(setupCtx, id, tapName, err)
-		}
+	info, statErr := workspaceImage.Stat()
+	if statErr != nil {
+		return "", m.joinInstanceNetworkCleanup(
+			setupCtx,
+			id,
+			tapName,
+			fmt.Errorf("inspect resolved Workspace attachment: %w", statErr),
+		)
 	}
+	if !info.Mode().IsRegular() || info.Size() != int64(workspaceSizeMiB)*1024*1024 {
+		return "", m.joinInstanceNetworkCleanup(
+			setupCtx,
+			id,
+			tapName,
+			fmt.Errorf("resolved Workspace attachment capacity is invalid"),
+		)
+	}
+	workspacePath := workspaceImage.Name()
 	timer.mark("workspace_ready", "workspace", workspacePath)
-	// workspacePath is the compartment's persistent VM-local disk, seeded once
-	// from the sandbox workspace. It is deliberately never removed on the error
-	// paths below so a restart does not destroy saved compartment-local work.
+	// WorkspaceStore owns the image and its lifetime. Launch teardown removes
+	// only the jail hard link and closes the opaque attachment after Firecracker
+	// and every host-side user have stopped.
 
 	if err := m.writeIdentityFile(dir, id, sandboxID, opts); err != nil {
 		return "", m.joinInstanceNetworkCleanup(setupCtx, id, tapName, err)
@@ -943,6 +975,9 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 	cmd.Dir = dir
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+	if len(launch.environment) != 0 {
+		cmd.Env = append(os.Environ(), launch.environment...)
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if startErr := cmd.Start(); startErr != nil {
 		m.cleanupLaunch(launch)
@@ -953,44 +988,73 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 	timer.mark("firecracker_process_started", "pid", cmd.Process.Pid)
 
 	inst := &instance{
-		id:                    id,
-		sandboxID:             sandboxID,
-		sandboxGeneration:     opts.SandboxGeneration,
-		compartmentID:         compartmentID,
-		dir:                   dir,
-		logPath:               logPath,
-		socket:                socketPath,
-		vsockUDS:              vsockPath,
-		guestControlPort:      m.cfg.MicroVMGuestControlVsockPort,
-		guestProtocolPort:     m.cfg.MicroVMGuestProtocolVsockPort,
-		tapName:               tapName,
-		jailRoot:              jailRoot,
-		rootfsPath:            launchImage.RootfsPath,
-		rootfsImagePath:       image.RootfsPath,
-		workspacePath:         workspacePath,
-		workspaceAttachmentID: firstNonEmpty(strings.TrimSpace(opts.WorkspaceAttachmentID), compartmentID),
-		sharedImagePath:       launchImage.SharedImagePath,
-		guestIP:               guestIP,
-		startupFingerprint:    startupFingerprint,
-		cmd:                   cmd,
-		startedAt:             time.Now().UTC(),
-		done:                  make(chan struct{}),
-		jailedProcess:         jailedProcess,
-		requestID:             opts.RequestID,
-		operationID:           opts.OperationID,
-		leaseID:               opts.LeaseID,
-		assignmentID:          opts.AssignmentID,
+		id:                  id,
+		sandboxID:           sandboxID,
+		sandboxGeneration:   opts.SandboxGeneration,
+		compartmentID:       compartmentID,
+		dir:                 dir,
+		logPath:             logPath,
+		socket:              socketPath,
+		vsockUDS:            vsockPath,
+		guestControlPort:    m.cfg.MicroVMGuestControlVsockPort,
+		guestProtocolPort:   m.cfg.MicroVMGuestProtocolVsockPort,
+		tapName:             tapName,
+		jailRoot:            jailRoot,
+		rootfsPath:          launchImage.RootfsPath,
+		rootfsImagePath:     image.RootfsPath,
+		workspacePath:       workspacePath,
+		workspaceAttachment: opts.WorkspaceAttachment,
+		sharedImagePath:     launchImage.SharedImagePath,
+		guestIP:             guestIP,
+		startupFingerprint:  startupFingerprint,
+		cmd:                 cmd,
+		startedAt:           time.Now().UTC(),
+		done:                make(chan struct{}),
+		jailedProcess:       jailedProcess,
+		requestID:           opts.RequestID,
+		operationID:         opts.OperationID,
+		leaseID:             opts.LeaseID,
+		assignmentID:        opts.AssignmentID,
+		memoryMiB:           m.requestedMemoryMiB(opts),
 	}
 	m.registerStartingInstance(inst, onRegisteredLocked)
 	// Start the reaper before any stopInstance call so the process is always
 	// waited on (no zombie) and cleanup runs exactly once.
 	go m.reap(inst)
 	timer.mark("instance_registered")
-	if err := m.negotiateInstanceGuest(setupCtx, inst, opts); err != nil {
+	if opts.StartupProgress != nil {
+		if progressErr := opts.StartupProgress(runtimemanager.StartupStageComputeStarted); progressErr != nil {
+			cleanupErr := m.stopInstance(setupCtx, inst, true)
+			return "", errors.Join(
+				fmt.Errorf("report compute-started startup stage: %w", progressErr),
+				cleanupErr,
+			)
+		}
+	}
+	negotiationCtx, cancelNegotiation := context.WithTimeout(
+		setupCtx,
+		controlPlaneReadyTimeout,
+	)
+	err = m.negotiateInstanceGuest(negotiationCtx, inst, opts)
+	cancelNegotiation()
+	if err != nil {
+		diagnostics := inst.logTailDiagnostics(120)
 		cleanupErr := m.stopInstance(setupCtx, inst, true)
-		return "", errors.Join(fmt.Errorf("negotiate guest protocol: %w", err), cleanupErr)
+		return "", errors.Join(
+			fmt.Errorf("negotiate guest protocol: %w%s", err, diagnostics),
+			cleanupErr,
+		)
 	}
 	timer.mark("guest_protocol_negotiated")
+	if opts.StartupProgress != nil {
+		if progressErr := opts.StartupProgress(runtimemanager.StartupStageGuestNegotiated); progressErr != nil {
+			cleanupErr := m.stopInstance(setupCtx, inst, true)
+			return "", errors.Join(
+				fmt.Errorf("report guest-negotiated startup stage: %w", progressErr),
+				cleanupErr,
+			)
+		}
+	}
 	if err := m.deliverStartupSecrets(setupCtx, inst, sandboxID, opts, timer); err != nil {
 		cleanupErr := m.stopInstance(setupCtx, inst, true)
 		return "", errors.Join(fmt.Errorf("deliver runtime startup secrets: %w", err), cleanupErr)
@@ -1035,49 +1099,12 @@ func (m *Manager) reap(inst *instance) {
 	}
 	if err != nil {
 		if inst.jailedProcess {
-			slog.Warn("firecracker jailer parent exited with error", "sandbox", inst.sandboxID, "instance", inst.id, "error", err)
+			slog.Warn("firecracker jailer supervisor exited with error", "sandbox", inst.sandboxID, "instance", inst.id, "error", err)
 		} else {
 			slog.Warn("firecracker microVM exited", "sandbox", inst.sandboxID, "instance", inst.id, "error", err)
 		}
 	}
-	if inst.jailedProcess {
-		// cmd was only the short-lived jailer parent; the real Firecracker
-		// process keeps running as an orphaned child (identified by --id). Watch
-		// for its exit so the guest IP and TAP are reclaimed
-		// when the VM stops on its own, not only via an explicit stopInstance.
-		m.watchJailedExit(inst)
-		return
-	}
 	m.finishInstance(inst)
-}
-
-// jailedExitPollInterval controls how often watchJailedExit polls for the real
-// (orphaned) Firecracker process to exit. It is a var so tests can shorten it.
-var jailedExitPollInterval = 2 * time.Second
-
-// watchJailedExit blocks until the jailed Firecracker process for inst exits, or
-// an explicit stop closes inst.done, then runs finishInstance (made idempotent
-// by doneOnce). Unlike the active stop path, a transient failure to scan /proc
-// is retried rather than treated as an exit, so a live VM is never torn down by
-// mistake.
-func (m *Manager) watchJailedExit(inst *instance) {
-	ticker := time.NewTicker(jailedExitPollInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-inst.done:
-			return
-		case <-ticker.C:
-			running, err := firecrackerProcessRunningFunc(inst.id)
-			if err != nil {
-				continue
-			}
-			if !running {
-				m.finishInstance(inst)
-				return
-			}
-		}
-	}
 }
 
 func (m *Manager) finishInstance(inst *instance) {
@@ -1092,6 +1119,16 @@ func (m *Manager) finishInstance(inst *instance) {
 		if err := inst.closeGuestProtocol(); err != nil {
 			inst.cleanupErr = errors.Join(inst.cleanupErr, fmt.Errorf("close guest protocol: %w", err))
 			m.recordCleanupFailure(inst.cleanupErr)
+		}
+		if inst.workspaceAttachment != nil {
+			if err := inst.workspaceAttachment.Close(); err != nil {
+				inst.cleanupErr = errors.Join(
+					inst.cleanupErr,
+					fmt.Errorf("close Workspace attachment: %w", err),
+				)
+				m.recordCleanupFailure(inst.cleanupErr)
+			}
+			inst.workspaceAttachment = nil
 		}
 		m.mu.Lock()
 		m.removeInstanceLocked(inst)
@@ -1299,6 +1336,47 @@ func (m *Manager) Remove(ctx context.Context, instanceID string) error {
 	return m.stopInstance(ctx, inst, true)
 }
 
+// quiesceUnavailableGrace bounds termination when the Workspace could not be
+// frozen. The guest may still hold dirty pages, so the VMM is asked to exit
+// first and only escalated afterwards.
+const quiesceUnavailableGrace = 5 * time.Second
+
+// quiescedGrace is a backstop only. A frozen Workspace is already consistent on
+// disk and the VMM receives SIGKILL directly, so this timer should never fire.
+const quiescedGrace = 500 * time.Millisecond
+
+// quiesceWorkspace freezes the guest Workspace filesystem so the VMM can be
+// terminated without waiting for a graceful guest shutdown. It reports whether
+// the filesystem is known to be consistent on disk. A guest that cannot be
+// reached is not an error here: the caller falls back to the slower signal
+// escalation that does not assume a quiesced filesystem.
+func (m *Manager) quiesceWorkspace(ctx context.Context, inst *instance) bool {
+	if m == nil || inst == nil {
+		return false
+	}
+	freeze := m.FreezeWorkspace
+	if m.freezeWorkspace != nil {
+		freeze = m.freezeWorkspace
+	}
+	freezeCtx, cancel := context.WithTimeout(ctx, quiescedGrace)
+	defer cancel()
+	if _, err := freeze(freezeCtx, inst.id); err != nil {
+		slog.Warn(
+			"microVM workspace freeze before termination failed",
+			"instance", inst.id, "error", err,
+		)
+		return false
+	}
+	return true
+}
+
+func (m *Manager) terminationGrace(quiesced bool) time.Duration {
+	if quiesced {
+		return quiescedGrace
+	}
+	return quiesceUnavailableGrace
+}
+
 func (m *Manager) stopInstance(ctx context.Context, inst *instance, removeFiles bool) error {
 	if inst == nil {
 		return nil
@@ -1307,41 +1385,72 @@ func (m *Manager) stopInstance(ctx context.Context, inst *instance, removeFiles 
 	inst.explicitStop = true
 	m.mu.Unlock()
 	var stopErr error
+	// Teardown had no stage attribution, so a slow stop could not be explained
+	// without instrumenting the runner by hand. Record the same shape as the
+	// cold-start timer: each phase, and the cumulative elapsed time.
+	teardownStartedAt := time.Now()
+	// Quiesce the Workspace filesystem before terminating the VMM. A frozen
+	// filesystem has flushed its dirty pages and is consistent on disk, so the
+	// VMM can be terminated immediately. Without this the runner sends SIGTERM
+	// and waits out the escalation grace period on every stop, because the VMM
+	// does not exit on SIGTERM; that grace period dominated stop latency.
+	quiesced := m.quiesceWorkspace(ctx, inst)
+	freezeMs := time.Since(teardownStartedAt).Milliseconds()
+	protocolStartedAt := time.Now()
 	if err := inst.closeGuestProtocol(); err != nil {
 		stopErr = errors.Join(stopErr, fmt.Errorf("close guest protocol: %w", err))
 	}
+	protocolMs := time.Since(protocolStartedAt).Milliseconds()
+	terminateStartedAt := time.Now()
+	defer func() {
+		slog.Info(
+			"microVM teardown timing",
+			"instance", inst.id,
+			"sandbox", inst.sandboxID,
+			"quiesced", quiesced,
+			"freezeMs", freezeMs,
+			"protocolCloseMs", protocolMs,
+			"terminateMs", time.Since(terminateStartedAt).Milliseconds(),
+			"totalMs", time.Since(teardownStartedAt).Milliseconds(),
+		)
+	}()
 	if inst.jailedProcess {
-		if err := signalFirecrackerByID(inst.id, syscall.SIGTERM); err != nil {
+		signalInstance := signalFirecrackerByID
+		if m.signalInstance != nil {
+			signalInstance = m.signalInstance
+		}
+		terminate := syscall.SIGTERM
+		if quiesced {
+			terminate = syscall.SIGKILL
+		}
+		if err := signalInstance(inst.id, terminate); err != nil {
 			stopErr = errors.Join(stopErr, fmt.Errorf("signal jailed Firecracker %q: %w", inst.id, err))
 		}
-		kill := time.AfterFunc(5*time.Second, func() {
-			_ = signalFirecrackerByID(inst.id, syscall.SIGKILL)
+		kill := time.AfterFunc(m.terminationGrace(quiesced), func() {
+			_ = signalInstance(inst.id, syscall.SIGKILL)
 		})
-		ticker := time.NewTicker(100 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			running, err := firecrackerProcessRunningFunc(inst.id)
-			if err == nil && !running {
-				kill.Stop()
-				m.finishInstance(inst)
-				break
-			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-ticker.C:
-			}
+		select {
+		case <-inst.done:
+			kill.Stop()
+		case <-ctx.Done():
+			// Leave the kill timer to escalate. The jailer supervisor remains
+			// responsible for reaping Firecracker when it exits.
+			return ctx.Err()
 		}
 	} else {
 		if inst.cmd == nil || inst.cmd.Process == nil {
 			m.finishInstance(inst)
 		} else {
-			if err := syscall.Kill(-inst.cmd.Process.Pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+			terminate := syscall.SIGTERM
+			if quiesced {
+				terminate = syscall.SIGKILL
+			}
+			if err := syscall.Kill(-inst.cmd.Process.Pid, terminate); err != nil && !errors.Is(err, syscall.ESRCH) {
 				stopErr = errors.Join(stopErr, fmt.Errorf("signal Firecracker process group %q: %w", inst.id, err))
 			}
 			// Escalate to SIGKILL after a grace period. The reaper (started at create)
 			// observes exit, runs cleanup exactly once, and signals via inst.done.
-			kill := time.AfterFunc(5*time.Second, func() {
+			kill := time.AfterFunc(m.terminationGrace(quiesced), func() {
 				_ = syscall.Kill(-inst.cmd.Process.Pid, syscall.SIGKILL)
 			})
 			select {
@@ -1524,6 +1633,14 @@ func (m *Manager) Resume(ctx context.Context, instanceID string) error {
 	return inst.apiClient(5 * time.Second).Resume(ctx)
 }
 
+func (m *Manager) requestGuestShutdown(ctx context.Context, instanceID string) error {
+	inst := m.lookup(instanceID)
+	if inst == nil {
+		return fmt.Errorf("unknown microVM instance %q", instanceID)
+	}
+	return inst.apiClient(5 * time.Second).SendCtrlAltDel(ctx)
+}
+
 func (m *Manager) CreateFullSnapshot(ctx context.Context, instanceID, snapshotPath, memFilePath string) error {
 	inst := m.lookup(instanceID)
 	if inst == nil {
@@ -1619,64 +1736,6 @@ func (m *Manager) ThawWorkspace(ctx context.Context, instanceID string) (BackupR
 		return BackupResponse{}, fmt.Errorf("unknown microVM instance %q", instanceID)
 	}
 	return inst.controlClient(10 * time.Second).ThawWorkspace(ctx)
-}
-
-// StreamWorkspaceCheckpoint freezes guest writes and streams the exact workspace image.
-func (m *Manager) StreamWorkspaceCheckpoint(
-	ctx context.Context,
-	instanceID string,
-	maximumBytes uint64,
-	emit func([]byte) error,
-) (sha256Hex string, sizeBytes uint64, resultErr error) {
-	if maximumBytes == 0 || emit == nil {
-		return "", 0, fmt.Errorf("workspace checkpoint size bound and emitter are required")
-	}
-	inst := m.lookup(instanceID)
-	if inst == nil {
-		return "", 0, fmt.Errorf("unknown microVM instance %q", instanceID)
-	}
-	if _, err := m.FreezeWorkspace(ctx, instanceID); err != nil {
-		return "", 0, fmt.Errorf("freeze workspace checkpoint: %w", err)
-	}
-	defer func() {
-		_, thawErr := m.ThawWorkspace(context.WithoutCancel(ctx), instanceID)
-		if thawErr != nil {
-			thawErr = fmt.Errorf("thaw workspace checkpoint: %w", thawErr)
-		}
-		resultErr = errors.Join(resultErr, thawErr)
-	}()
-	workspace, err := os.Open(inst.workspacePath)
-	if err != nil {
-		return "", 0, fmt.Errorf("open workspace checkpoint: %w", err)
-	}
-	defer func() {
-		resultErr = errors.Join(resultErr, workspace.Close())
-	}()
-	hasher := sha256.New()
-	buffer := make([]byte, 256*1024)
-	for {
-		count, readErr := workspace.Read(buffer)
-		if count != 0 {
-			if uint64(count) > maximumBytes-sizeBytes {
-				return "", 0, fmt.Errorf("workspace checkpoint exceeds command size bound")
-			}
-			chunk := buffer[:count]
-			if _, err := hasher.Write(chunk); err != nil {
-				return "", 0, fmt.Errorf("hash workspace checkpoint: %w", err)
-			}
-			if err := emit(chunk); err != nil {
-				return "", 0, err
-			}
-			sizeBytes += uint64(count)
-		}
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-		if readErr != nil {
-			return "", 0, fmt.Errorf("read workspace checkpoint: %w", readErr)
-		}
-	}
-	return hex.EncodeToString(hasher.Sum(nil)), sizeBytes, nil
 }
 
 func (m *Manager) ApplySecrets(ctx context.Context, instanceID string, bundle SecretBundle) error {

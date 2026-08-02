@@ -384,7 +384,7 @@ func TestPublicArtifactsEnforceAuthorityIntegrityBoundsQuotaAndExpiry(t *testing
 
 	t.Run("retained byte quota", func(t *testing.T) {
 		quota := generousQuota()
-		quota.MaxRetainedBytes = 4
+		quota.MaxArtifactBytes = 4
 		fixture := newArtifactHTTPFixture(t, "artifact-byte-quota", quota, 1<<20)
 		first := uploadArtifact(
 			t, fixture.server.URL, fixture.key.Credential, fixture.sandbox, fixture.lease.ID,
@@ -526,7 +526,8 @@ func newArtifactControlPlane(
 ) *service.ControlPlaneService {
 	t.Helper()
 	controlPlane, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		Store: databaseStore, ObjectStore: immutableObjects,
+		BuiltInProfiles: integrationBuiltInProfiles(t),
+		Store:           databaseStore, ArtifactObjectStore: immutableObjects,
 		PlatformToken:       testPlatformToken,
 		DefaultSubjectQuota: projectQuota,
 		Now:                 now,

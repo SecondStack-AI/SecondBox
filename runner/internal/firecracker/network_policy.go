@@ -59,6 +59,8 @@ type nftPolicyInstance struct {
 	ctx    context.Context
 }
 
+const allowedConnectionMark = "0x53425801"
+
 func (e *NFTablesNetworkPolicyEnforcer) Ready(ctx context.Context) error {
 	if strings.TrimSpace(e.nftPath) == "" || !e.dnsListen.IsValid() || !e.dnsUpstream.IsValid() {
 		return fmt.Errorf("SecondBox nftables and runner DNS settings are incomplete")
@@ -135,9 +137,18 @@ func (e *NFTablesNetworkPolicyEnforcer) Install(ctx context.Context, cfg PolicyN
 		}
 	}
 	destinations := cfg.Policy.Destinations()
+	runnerGateways := cfg.Policy.RunnerGatewayDestinations()
 	table := nftTableName(instanceID)
-	script := renderNFTPolicy(table, tapName, cfg.DNSAddress, cfg.Policy.ProtectedPrefixes(), destinations, nil)
-	output, err := e.command(ctx, e.nftPath, []string{"-f"}, script)
+	script := renderNFTPolicy(
+		table,
+		tapName,
+		cfg.DNSAddress,
+		cfg.Policy.ProtectedPrefixes(),
+		destinations,
+		runnerGateways,
+		nil,
+	)
+	output, err := e.command(ctx, e.nftPath, []string{"-f", "-"}, script)
 	if err != nil {
 		return fmt.Errorf("install nftables policy for %s: %w: %s", instanceID, err, strings.TrimSpace(string(output)))
 	}
@@ -238,18 +249,19 @@ func (e *NFTablesNetworkPolicyEnforcer) ObserveDNSAnswer(
 		e.mu.Unlock()
 		return fmt.Errorf("SecondBox DNS query domain %q is not allowed", domain)
 	}
-	script := fmt.Sprintf("delete table inet %s\n%s", instance.table, renderNFTPolicy(
+	script := fmt.Sprintf("delete table bridge %s\n%s", instance.table, renderNFTPolicy(
 		instance.table,
 		instance.cfg.TapName,
 		instance.cfg.DNSAddress,
 		instance.cfg.Policy.ProtectedPrefixes(),
 		destinations,
+		instance.cfg.Policy.RunnerGatewayDestinations(),
 		instance.pins,
 	))
 	e.mu.Unlock()
 	updateContext, cancelUpdate := context.WithTimeout(instance.ctx, 5*time.Second)
 	defer cancelUpdate()
-	output, err := e.command(updateContext, e.nftPath, []string{"-f"}, script)
+	output, err := e.command(updateContext, e.nftPath, []string{"-f", "-"}, script)
 	if err != nil {
 		if instance.ctx.Err() != nil {
 			return fmt.Errorf("update observed DNS pin for %s: policy removed", instanceID)
@@ -326,12 +338,13 @@ func (e *NFTablesNetworkPolicyEnforcer) expireDNSPin(instanceID, domain string, 
 			delete(instance.expiry, index)
 		}
 	}
-	script := fmt.Sprintf("delete table inet %s\n%s", instance.table, renderNFTPolicy(
+	script := fmt.Sprintf("delete table bridge %s\n%s", instance.table, renderNFTPolicy(
 		instance.table, instance.cfg.TapName, instance.cfg.DNSAddress,
-		instance.cfg.Policy.ProtectedPrefixes(), instance.cfg.Policy.Destinations(), instance.pins,
+		instance.cfg.Policy.ProtectedPrefixes(), instance.cfg.Policy.Destinations(),
+		instance.cfg.Policy.RunnerGatewayDestinations(), instance.pins,
 	))
 	e.mu.Unlock()
-	if output, err := e.command(instance.ctx, e.nftPath, []string{"-f"}, script); err != nil {
+	if output, err := e.command(instance.ctx, e.nftPath, []string{"-f", "-"}, script); err != nil {
 		if instance.ctx.Err() != nil {
 			return
 		}
@@ -366,8 +379,8 @@ func (e *NFTablesNetworkPolicyEnforcer) Remove(ctx context.Context, instanceID s
 	if instance.cancel != nil {
 		instance.cancel()
 	}
-	script := fmt.Sprintf("delete table inet %s\n", table)
-	output, err := e.command(ctx, e.nftPath, []string{"-f"}, script)
+	script := fmt.Sprintf("delete table bridge %s\n", table)
+	output, err := e.command(ctx, e.nftPath, []string{"-f", "-"}, script)
 	if err != nil {
 		if strings.Contains(string(output), "No such file or directory") {
 			return nil
@@ -418,17 +431,35 @@ func renderNFTPolicy(
 	dnsAddress netip.Addr,
 	protected []netip.Prefix,
 	destinations []networkpolicy.Destination,
+	runnerGateways []networkpolicy.RunnerGatewayDestination,
 	pins map[int][]netip.Addr,
 ) string {
 	var script bytes.Buffer
-	fmt.Fprintf(&script, "add table inet %s\n", table)
-	fmt.Fprintf(&script, "add chain inet %s forward { type filter hook forward priority -10; policy accept; }\n", table)
+	fmt.Fprintf(&script, "add table bridge %s\n", table)
+	fmt.Fprintf(&script, "add chain bridge %s ingress { type filter hook prerouting priority -10; policy accept; }\n", table)
+	fmt.Fprintf(&script, "add chain bridge %s egress { type filter hook postrouting priority -10; policy accept; }\n", table)
 	fmt.Fprintf(
 		&script,
-		"add rule inet %s forward oifname %q ct state established,related accept\n",
+		"add rule bridge %s egress oifname %q ct state established,related accept\n",
 		table,
 		tapName,
 	)
+	if dnsAddress.Is4() {
+		fmt.Fprintf(
+			&script,
+			"add rule bridge %s ingress iifname %q arp daddr ip %s accept\n",
+			table,
+			tapName,
+			dnsAddress,
+		)
+		fmt.Fprintf(
+			&script,
+			"add rule bridge %s egress oifname %q arp saddr ip %s accept\n",
+			table,
+			tapName,
+			dnsAddress,
+		)
+	}
 	if dnsAddress.IsValid() {
 		family := "ip"
 		if dnsAddress.Is6() {
@@ -437,10 +468,20 @@ func renderNFTPolicy(
 		for _, protocol := range []string{"udp", "tcp"} {
 			fmt.Fprintf(
 				&script,
-				"add rule inet %s forward iifname %q %s daddr %s %s dport 53 accept\n",
-				table, tapName, family, dnsAddress, protocol,
+				"add rule bridge %s ingress iifname %q %s daddr %s %s dport 53 ct mark set %s accept\n",
+				table, tapName, family, dnsAddress, protocol, allowedConnectionMark,
 			)
 		}
+	}
+	for _, gateway := range runnerGateways {
+		renderNFTAllow(
+			&script,
+			table,
+			tapName,
+			gateway.Address.String(),
+			gateway.Address.Is6(),
+			gateway.Destination,
+		)
 	}
 	for _, prefix := range protected {
 		family := "ip"
@@ -449,7 +490,7 @@ func renderNFTPolicy(
 		}
 		fmt.Fprintf(
 			&script,
-			"add rule inet %s forward iifname %q %s daddr %s drop\n",
+			"add rule bridge %s ingress iifname %q %s daddr %s drop\n",
 			table,
 			tapName,
 			family,
@@ -469,8 +510,8 @@ func renderNFTPolicy(
 			renderNFTAllow(&script, table, tapName, address.String(), address.Is6(), destination)
 		}
 	}
-	fmt.Fprintf(&script, "add rule inet %s forward iifname %q drop\n", table, tapName)
-	fmt.Fprintf(&script, "add rule inet %s forward oifname %q drop\n", table, tapName)
+	fmt.Fprintf(&script, "add rule bridge %s ingress iifname %q drop\n", table, tapName)
+	fmt.Fprintf(&script, "add rule bridge %s egress oifname %q drop\n", table, tapName)
 	return script.String()
 }
 
@@ -488,11 +529,12 @@ func renderNFTAllow(
 	}
 	fmt.Fprintf(
 		script,
-		"add rule inet %s forward iifname %q %s daddr %s tcp dport %d accept\n",
+		"add rule bridge %s ingress iifname %q %s daddr %s tcp dport %d ct mark set %s accept\n",
 		table,
 		tapName,
 		family,
 		target,
 		destination.Port,
+		allowedConnectionMark,
 	)
 }

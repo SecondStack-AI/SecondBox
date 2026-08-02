@@ -12,11 +12,11 @@ The runner opens one authenticated transport connection to the guest agent for a
 
 The guest answers `Welcome` with the selected protocol generation, guest build identity, execution asset identity, supported features, and echoed binding. The negotiated generation and feature set are immutable for that connection. Renegotiation requires closing it and creating a new connection. A mismatched Instance, generation, image identity, unsupported range, or missing mandatory feature fails readiness before workspace mutation or command admission.
 
-The runner supports the current guest protocol generation and the two immediately preceding released generations. A release may remove the oldest generation only after its compatibility gate proves that checkpoints referring to it are rejected before materialization or migrated by an explicit offline procedure. Signed image metadata declares its guest generation and mandatory features.
+The runner supports the current guest protocol generation and the two immediately preceding released generations. A release may remove the oldest generation only after compatibility gates prove existing signed execution assets and pinned ProfileRevisions are handled explicitly. Signed image metadata declares its guest generation and mandatory features.
 
 ## Feature gating
 
-Features are named protocol capabilities such as streaming exec, PTY resize, descriptor-pinned filesystem access, activity events, checkpoint freeze, and port proxying. The sender checks the negotiated feature set before sending a feature-specific frame. Unknown protobuf fields are tolerated according to protobuf rules, but an unknown feature is never treated as supported.
+Features are named protocol capabilities such as streaming exec, PTY resize, descriptor-pinned filesystem access, activity events, and port proxying. The sender checks the negotiated feature set before sending a feature-specific frame. Unknown protobuf fields are tolerated according to protobuf rules, but an unknown feature is never treated as supported.
 
 A mandatory ProfileRevision capability that the guest lacks makes the Instance startup fail with `guest_feature_unsupported`. The runner does not emulate the operation with a shell fallback.
 
@@ -30,13 +30,16 @@ Generation 1 executes shell requests through `/bin/sh -c` and argv requests dire
 
 PTY requests allocate a real pseudoterminal with the requested initial dimensions and merged stdout/stderr. Binary input, byte credit, and resize controls share the operation's ordered sequence. Cancellation, deadline, output exhaustion, and connection loss kill the PTY process group and wait for process exit before emitting the terminal acknowledgement; a disconnected host stream never silently abandons the guest process. Public detach and reconnect state remains a control-plane concern and does not create a second guest process or guest-side session authority.
 
-## Filesystem and checkpoint messages
+## Filesystem messages
 
 All paths are workspace-relative protocol strings. The guest opens and pins the workspace root for each operation, then resolves each component relative to pinned descriptors with no symlink traversal. Operations cover read, write, stat, direct-child list, exists, mkdir, remove, and bounded streaming transfer. Mkdir and remove apply the caller's exact recursive and force flags. Stat and direct-child list results carry path kind, byte size, and modification timestamp for every returned entry. Writes use a temporary sibling, checksum, fsync, and atomic commit where the filesystem supports it.
 
 Binary reads and writes remain bytes throughout the protocol. Read chunks consume runner byte credit; writes require declared size, ordered offsets, an exact SHA-256 checksum, a bounded create mode, and an atomic commit. Filesystem cancellation does not convert partial bytes into a completed write.
 
-Checkpoint preparation is a stateful freeze operation. The guest rejects new mutation, drains admitted filesystem and exec work within the profile grace, flushes the workspace, and reports a freeze token. The runner checkpoints only while that token is current. Thaw or Instance termination consumes it.
+Public Snapshot operations run only while the Sandbox is stopped, after the VM
+and all host-side Workspace users have detached. They are runner-local
+WorkspaceStore operations and require no guest-protocol message or freeze
+feature.
 
 ## Health and useful activity
 

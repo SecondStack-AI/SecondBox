@@ -19,7 +19,7 @@ import (
 func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
 	admin := fixtureAdmin(t, controlPlane)
-	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "lifecycle-http")
+	project, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "lifecycle-http")
 	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-lifecycle-http")
 	_, _, otherCredential := createProjectAccountAndCredential(t, controlPlane, admin, "lifecycle-http-other")
 	principal := authenticateCredential(t, controlPlane, credential)
@@ -27,6 +27,11 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 		t.Context(), principal, "lifecycle-http-create",
 		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeFixtureSandboxCreation(t, sandbox.ID)
+	sandbox, err = controlPlane.GetSandbox(t.Context(), principal, sandbox.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,6 +44,64 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 	}
 	server := contractServer(t, handler)
 	t.Cleanup(server.Close)
+
+	metadataUpdate := lifecycleHTTPRequest(
+		t, server.URL, credential, http.MethodPut,
+		"/v1/sandboxes/"+sandbox.ID+"/metadata", "",
+		strconv.FormatInt(sandbox.Revision, 10), "",
+		contracts.UpdateSandboxMetadataRequest{
+			Metadata: map[string]string{"runtime-container-id": "container-bound"},
+		},
+	)
+	if metadataUpdate.StatusCode != http.StatusOK {
+		t.Fatalf(
+			"metadata update status=%d body=%s",
+			metadataUpdate.StatusCode,
+			readResponse(t, metadataUpdate),
+		)
+	}
+	if metadataUpdate.Header.Get("ETag") != `"revision-`+strconv.FormatInt(sandbox.Revision+1, 10)+`"` {
+		t.Fatalf("metadata update ETag=%q", metadataUpdate.Header.Get("ETag"))
+	}
+	var metadataUpdatedSandbox contracts.Sandbox
+	decodeResponseJSON(t, metadataUpdate, &metadataUpdatedSandbox)
+	if metadataUpdatedSandbox.Metadata["runtime-container-id"] != "container-bound" {
+		t.Fatalf("metadata update returned %#v", metadataUpdatedSandbox.Metadata)
+	}
+	if metadataUpdatedSandbox.State != sandbox.State ||
+		metadataUpdatedSandbox.Generation != sandbox.Generation ||
+		metadataUpdatedSandbox.Revision != sandbox.Revision+1 {
+		t.Fatalf(
+			"metadata update changed lifecycle: before=%#v after=%#v",
+			sandbox,
+			metadataUpdatedSandbox,
+		)
+	}
+	auditEvents, err := databaseStore.ListAuditEvents(t.Context(), project.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadataAuditFound := false
+	for _, event := range auditEvents {
+		if event.Action == "sandbox.metadata.updated" &&
+			event.ResourceKind == "sandbox" &&
+			event.ResourceID == sandbox.ID &&
+			event.ActorID == principal.ID {
+			metadataAuditFound = true
+			break
+		}
+	}
+	if !metadataAuditFound {
+		t.Fatalf("Sandbox metadata update audit is absent: %#v", auditEvents)
+	}
+	staleMetadataUpdate := lifecycleHTTPRequest(
+		t, server.URL, credential, http.MethodPut,
+		"/v1/sandboxes/"+sandbox.ID+"/metadata", "",
+		strconv.FormatInt(sandbox.Revision, 10), "",
+		contracts.UpdateSandboxMetadataRequest{Metadata: map[string]string{}},
+	)
+	assertProblem(t, staleMetadataUpdate, http.StatusPreconditionFailed, "precondition_failed")
+	sandbox = metadataUpdatedSandbox
 
 	missingHeaders := lifecycleHTTPRequest(
 		t, server.URL, credential, http.MethodPost,
@@ -100,42 +163,38 @@ func TestLifecycleHTTPContractAndProjectIsolation(t *testing.T) {
 			"/v1/sandboxes/"+sandbox.ID+":"+mutation.action, mutation.key,
 			strconv.FormatInt(reloaded.Revision, 10), "", mutation.body,
 		)
-		if response.StatusCode != http.StatusAccepted || response.Header.Get("Idempotency-Replayed") != "false" {
-			t.Fatalf("%s status=%d replay=%q body=%s", mutation.action, response.StatusCode, response.Header.Get("Idempotency-Replayed"), readResponse(t, response))
-		}
-		var operation contracts.Operation
-		decodeResponseJSON(t, response, &operation)
-		if operation.State != contracts.OperationStateSucceeded {
-			t.Fatalf("%s already-stopped Operation state=%q", mutation.action, operation.State)
-		}
-		reloaded = getHTTPSandbox(t, server.URL, credential, sandbox.ID)
+		assertProblem(
+			t,
+			response,
+			http.StatusConflict,
+			"workspace_mutation_conflict",
+		)
 	}
-	stoppedCheckpoint := lifecycleHTTPRequest(
-		t, server.URL, credential, http.MethodPost,
-		"/v1/sandboxes/"+sandbox.ID+":checkpoint", "lifecycle-http-checkpoint",
-		strconv.FormatInt(reloaded.Revision, 10), "",
-		map[string]any{"metadata": map[string]string{"label": "api"}},
+	deleteSandbox, _, err := controlPlane.CreateSandbox(
+		t.Context(), principal, "lifecycle-http-delete-create",
+		contracts.CreateSandboxRequest{
+			Profile: profile.Name, Metadata: map[string]string{},
+		},
 	)
-	assertProblem(t, stoppedCheckpoint, http.StatusConflict, "execution_node_unavailable")
-	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(pool.Close)
-	var pendingCheckpointCount int
-	if err := pool.QueryRow(t.Context(), `
-		SELECT count(*) FROM secondbox.operations
-		WHERE sandbox_id=$1 AND kind='checkpoint' AND state IN ('pending','running')`,
-		sandbox.ID,
-	).Scan(&pendingCheckpointCount); err != nil {
+	completeFixtureSandboxCreation(t, deleteSandbox.ID)
+	deleteSandbox, err = controlPlane.GetSandbox(
+		t.Context(),
+		principal,
+		deleteSandbox.ID,
+	)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if pendingCheckpointCount != 0 {
-		t.Fatalf("stopped checkpoint left %d pending Operations", pendingCheckpointCount)
-	}
 	deleteResponse := lifecycleHTTPRequest(
-		t, server.URL, credential, http.MethodDelete, "/v1/sandboxes/"+sandbox.ID,
-		"lifecycle-http-delete", strconv.FormatInt(reloaded.Revision, 10), "", nil,
+		t, server.URL, credential, http.MethodDelete,
+		"/v1/sandboxes/"+deleteSandbox.ID,
+		"lifecycle-http-delete",
+		strconv.FormatInt(deleteSandbox.Revision, 10),
+		"",
+		nil,
 	)
 	if deleteResponse.StatusCode != http.StatusAccepted {
 		t.Fatalf("delete status=%d body=%s", deleteResponse.StatusCode, readResponse(t, deleteResponse))
@@ -153,6 +212,11 @@ func TestHTTPRequestIDCorrelatesOperationAuditAndStructuredLog(t *testing.T) {
 		t.Context(), principal, "request-correlation-create",
 		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completeFixtureSandboxCreation(t, sandbox.ID)
+	sandbox, err = controlPlane.GetSandbox(t.Context(), principal, sandbox.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,6 +285,8 @@ func TestHTTPRequestIDCorrelatesOperationAuditAndStructuredLog(t *testing.T) {
 		[]byte(`"request_id":"` + requestID + `"`),
 		[]byte(`"method":"POST"`),
 		[]byte(`"route":"POST /v1/sandboxes/{sandboxAction}"`),
+		[]byte(`"status":202`),
+		[]byte(`"duration_ms":`),
 	} {
 		if !bytes.Contains(logBytes, required) {
 			t.Fatalf("structured request log lacks %s: %s", required, logBytes)
@@ -408,21 +474,6 @@ func TestWaitInspectLeasePingAndTouchHTTPContract(t *testing.T) {
 		t.Fatalf("lease release status=%d body=%s", release.StatusCode, readResponse(t, release))
 	}
 	release.Body.Close()
-	running := getHTTPSandbox(t, server.URL, credential, sandbox.ID)
-	checkpoint := lifecycleHTTPRequest(
-		t, server.URL, credential, http.MethodPost,
-		"/v1/sandboxes/"+sandbox.ID+":checkpoint", "activity-http-checkpoint",
-		strconv.FormatInt(running.Revision, 10), "",
-		map[string]any{"metadata": map[string]string{"label": "running"}},
-	)
-	if checkpoint.StatusCode != http.StatusAccepted ||
-		checkpoint.Header.Get("Idempotency-Replayed") != "false" {
-		t.Fatalf(
-			"running checkpoint status=%d replay=%q body=%s",
-			checkpoint.StatusCode, checkpoint.Header.Get("Idempotency-Replayed"), readResponse(t, checkpoint),
-		)
-	}
-	checkpoint.Body.Close()
 }
 
 func lifecycleHTTPRequest(

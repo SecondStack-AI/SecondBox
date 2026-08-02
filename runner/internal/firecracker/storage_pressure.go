@@ -7,7 +7,6 @@ import (
 	"math"
 	"math/bits"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -103,48 +102,8 @@ func newConfiguredStoragePressureController(
 		WarningPercent:       cfg.MicroVMStoragePressureWarningPercent,
 		AdmissionDenyPercent: cfg.MicroVMStoragePressureAdmissionDenyPercent,
 	}
-	var probe storagePressureProbe
-	switch cfg.MicroVMWorkspaceBackend {
-	case "ext4":
-		probe = &ext4StoragePressureProbe{workspaceDir: cfg.MicroVMWorkspaceDir}
-	case "dm-thin":
-		if strings.TrimSpace(cfg.MicroVMThinPoolDevice) == "" {
-			return nil, fmt.Errorf("storage pressure dm-thin pool device is required")
-		}
-		probe = &dmThinStoragePressureProbe{
-			poolDevice:   cfg.MicroVMThinPoolDevice,
-			workspaceDir: cfg.MicroVMWorkspaceDir,
-			run:          runHostCommand,
-		}
-	default:
-		return nil, fmt.Errorf(
-			"storage pressure backend %q must be ext4 or dm-thin",
-			cfg.MicroVMWorkspaceBackend,
-		)
-	}
+	probe := &ext4StoragePressureProbe{workspaceDir: cfg.RunnerWorkspaceRoot}
 	return newStoragePressureController(policy, probe, emit)
-}
-
-func newConfiguredRestoreSpoolPressureController(
-	cfg *config.Config,
-	emit func(context.Context, string) error,
-) (*storagePressureController, error) {
-	if cfg == nil || strings.TrimSpace(cfg.MicroVMCheckpointRestoreSpoolDir) == "" {
-		return nil, fmt.Errorf("restore spool pressure configuration is required")
-	}
-	return newStoragePressureController(
-		storagePressurePolicy{
-			RecoveryPercent:      cfg.MicroVMStoragePressureRecoveryPercent,
-			WarningPercent:       cfg.MicroVMStoragePressureWarningPercent,
-			AdmissionDenyPercent: cfg.MicroVMStoragePressureAdmissionDenyPercent,
-		},
-		&ext4StoragePressureProbe{
-			workspaceDir:  cfg.MicroVMCheckpointRestoreSpoolDir,
-			backend:       "restore-spool",
-			forbiddenDirs: []string{cfg.MicroVMWorkspaceDir},
-		},
-		emit,
-	)
 }
 
 func (c *storagePressureController) Observe(ctx context.Context) (storagePressureState, error) {
@@ -429,129 +388,4 @@ func validateDedicatedStorageFilesystem(workspaceDir string, forbiddenDirs ...st
 		}
 	}
 	return nil
-}
-
-type dmThinStoragePressureProbe struct {
-	poolDevice        string
-	workspaceDir      string
-	validateWorkspace func(string) error
-	run               hostCommandRunner
-}
-
-func (*dmThinStoragePressureProbe) Backend() string {
-	return "dm-thin"
-}
-
-func (p *dmThinStoragePressureProbe) Sample(ctx context.Context) (storagePressureSample, error) {
-	validateWorkspace := p.validateWorkspace
-	if validateWorkspace == nil {
-		validateWorkspace = func(path string) error {
-			return validateDedicatedStorageFilesystem(path)
-		}
-	}
-	if err := validateWorkspace(p.workspaceDir); err != nil {
-		return storagePressureSample{}, err
-	}
-	statusOutput, err := p.run(
-		ctx,
-		"dmsetup",
-		"status",
-		p.poolDevice,
-		"--target",
-		"thin-pool",
-	)
-	if err != nil {
-		return storagePressureSample{}, fmt.Errorf(
-			"%w: dmsetup status %q: %v",
-			ErrStoragePressureProbe,
-			p.poolDevice,
-			err,
-		)
-	}
-	tableOutput, err := p.run(
-		ctx,
-		"dmsetup",
-		"table",
-		p.poolDevice,
-		"--target",
-		"thin-pool",
-	)
-	if err != nil {
-		return storagePressureSample{}, fmt.Errorf(
-			"%w: dmsetup table %q: %v",
-			ErrStoragePressureProbe,
-			p.poolDevice,
-			err,
-		)
-	}
-	metadataUsed, metadataTotal, dataUsed, dataTotal, err := parseDMThinStatus(string(statusOutput))
-	if err != nil {
-		return storagePressureSample{}, fmt.Errorf("%w: %v", ErrStoragePressureProbe, err)
-	}
-	dataBlockSectors, err := parseDMThinDataBlockSectors(string(tableOutput))
-	if err != nil {
-		return storagePressureSample{}, fmt.Errorf("%w: %v", ErrStoragePressureProbe, err)
-	}
-	bytesPerBlock := dataBlockSectors * 512
-	if dataTotal > math.MaxUint64/bytesPerBlock || dataUsed > math.MaxUint64/bytesPerBlock {
-		return storagePressureSample{}, fmt.Errorf("%w: dm-thin capacity overflows bytes", ErrStoragePressureProbe)
-	}
-	return storagePressureSample{
-		Backend:                 "dm-thin",
-		TotalBytes:              dataTotal * bytesPerBlock,
-		UsedBytes:               dataUsed * bytesPerBlock,
-		MetadataUsedBasisPoints: percentBasisPoints(metadataUsed, metadataTotal),
-	}, nil
-}
-
-func parseDMThinStatus(output string) (uint64, uint64, uint64, uint64, error) {
-	fields := strings.Fields(output)
-	targetIndex := indexString(fields, "thin-pool")
-	if targetIndex < 0 || len(fields) <= targetIndex+3 {
-		return 0, 0, 0, 0, fmt.Errorf("dm-thin status lacks thin-pool usage")
-	}
-	metadataUsed, metadataTotal, err := parseDMThinFraction(fields[targetIndex+2])
-	if err != nil {
-		return 0, 0, 0, 0, fmt.Errorf("dm-thin metadata usage: %w", err)
-	}
-	dataUsed, dataTotal, err := parseDMThinFraction(fields[targetIndex+3])
-	if err != nil {
-		return 0, 0, 0, 0, fmt.Errorf("dm-thin data usage: %w", err)
-	}
-	return metadataUsed, metadataTotal, dataUsed, dataTotal, nil
-}
-
-func parseDMThinDataBlockSectors(output string) (uint64, error) {
-	fields := strings.Fields(output)
-	targetIndex := indexString(fields, "thin-pool")
-	if targetIndex < 0 || len(fields) <= targetIndex+3 {
-		return 0, fmt.Errorf("dm-thin table lacks data block size")
-	}
-	sectors, err := strconv.ParseUint(fields[targetIndex+3], 10, 64)
-	if err != nil || sectors == 0 {
-		return 0, fmt.Errorf("dm-thin table data block size is invalid")
-	}
-	return sectors, nil
-}
-
-func parseDMThinFraction(value string) (uint64, uint64, error) {
-	parts := strings.Split(value, "/")
-	if len(parts) != 2 {
-		return 0, 0, fmt.Errorf("invalid usage fraction %q", value)
-	}
-	used, usedErr := strconv.ParseUint(parts[0], 10, 64)
-	total, totalErr := strconv.ParseUint(parts[1], 10, 64)
-	if usedErr != nil || totalErr != nil || total == 0 || used > total {
-		return 0, 0, fmt.Errorf("invalid usage fraction %q", value)
-	}
-	return used, total, nil
-}
-
-func indexString(values []string, expected string) int {
-	for index, value := range values {
-		if value == expected {
-			return index
-		}
-	}
-	return -1
 }

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/scheduler"
 	"github.com/SecondStack-AI/SecondBox/internal/service"
 	"github.com/SecondStack-AI/SecondBox/internal/store"
+	"github.com/SecondStack-AI/SecondBox/internal/worknotify"
 	postgresmigrations "github.com/SecondStack-AI/SecondBox/migrations/postgres"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -92,7 +94,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		return err
 	}
 	defer dataPlaneRelay.Close()
-	immutableObjects, err := objectstore.NewS3Store(processContext, objectstore.S3Config{
+	artifactObjects, err := objectstore.NewS3Store(processContext, objectstore.S3Config{
 		Endpoint: processConfig.ObjectStoreEndpoint, Region: processConfig.ObjectStoreRegion,
 		Bucket: processConfig.ObjectStoreBucket, AccessKeyID: processConfig.ObjectStoreAccessKeyID,
 		SecretAccessKey:  processConfig.ObjectStoreSecretAccessKey,
@@ -105,14 +107,34 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	builtInProfiles, err := service.BuildBuiltInProfiles(service.BuiltInProfileBindings{
+		AgentCompartment: service.BuiltInProfileBinding{
+			Pool:                  processConfig.AgentCompartmentProfile.Pool,
+			RuntimeBundleDigest:   processConfig.AgentCompartmentProfile.RuntimeBundleDigest,
+			ToolchainBundleDigest: processConfig.AgentCompartmentProfile.ToolchainBundleDigest,
+		},
+		CodingEnvironment: service.BuiltInProfileBinding{
+			Pool:                  processConfig.CodingEnvironmentProfile.Pool,
+			RuntimeBundleDigest:   processConfig.CodingEnvironmentProfile.RuntimeBundleDigest,
+			ToolchainBundleDigest: processConfig.CodingEnvironmentProfile.ToolchainBundleDigest,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	// The wakeup hub is shared by the runner control server and the caller-facing
+	// data-plane loops, so it is constructed before its first consumer.
+	workWakeups := worknotify.NewHub()
 	controlPlane, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store:               controlPlaneStore,
 		PlatformToken:       processConfig.PlatformToken,
+		BuiltInProfiles:     builtInProfiles,
 		DefaultSubjectQuota: processConfig.DefaultSubjectQuota,
 		Now:                 service.SystemClock, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
-		ObjectStore:           immutableObjects,
+		ArtifactObjectStore:   artifactObjects,
 		DataPlaneRelay:        dataPlaneRelay, DataPlanePollInterval: processConfig.DataPlanePollInterval,
+		DataPlaneWakeups: workWakeups,
 		PortSessionRelay: dataPlaneRelay, PublicBaseURL: processConfig.PublicBaseURL,
 	})
 	if err != nil {
@@ -137,7 +159,13 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		return err
 	}
 	defer runnerStateStore.Close()
-	assignmentScheduler, err := scheduler.NewPostgresStore(processContext, processConfig.DatabaseURL)
+	assignmentScheduler, err := scheduler.NewPostgresStore(
+		processContext,
+		scheduler.PostgresStoreConfig{
+			DatabaseURL: processConfig.DatabaseURL,
+			Now:         service.SystemClock,
+		},
+	)
 	if err != nil {
 		return err
 	}
@@ -173,28 +201,6 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		return err
 	}
 	defer lifecycleEffects.Close()
-	checkpointReceiver, err := lifecycle.NewCheckpointReceiver(
-		processContext,
-		lifecycle.CheckpointReceiverConfig{
-			DatabaseURL:    processConfig.DatabaseURL,
-			SpoolDirectory: processConfig.CheckpointSpoolDirectory,
-			ObjectStore:    immutableObjects, LifecycleStore: controlPlaneStore,
-		},
-	)
-	if err != nil {
-		return err
-	}
-	defer checkpointReceiver.Close()
-	checkpointRestore, err := lifecycle.NewCheckpointRestoreSender(
-		processContext,
-		lifecycle.CheckpointRestoreSenderConfig{
-			DatabaseURL: processConfig.DatabaseURL, ObjectStore: immutableObjects,
-		},
-	)
-	if err != nil {
-		return err
-	}
-	defer checkpointRestore.Close()
 	runnerServerCertificate, err := tls.LoadX509KeyPair(
 		processConfig.RunnerServerCertificatePath,
 		processConfig.RunnerServerPrivateKeyPath,
@@ -212,8 +218,6 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	}
 	runnerControlServer, err := runnercontrol.NewServer(runnercontrol.ServerConfig{
 		CredentialVerifier: runnerCredentialAuthority, StateStore: runnerStateStore,
-		CheckpointReceiver: checkpointReceiver,
-		CheckpointRestore:  checkpointRestore,
 		SupportedVersions: runnercontrol.VersionRange{
 			Minimum: processConfig.RunnerProtocolMinimum,
 			Maximum: processConfig.RunnerProtocolMaximum,
@@ -221,7 +225,12 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		EnabledFeatures:     runnerFeatures,
 		HeartbeatInterval:   processConfig.RunnerHeartbeatInterval,
 		CommandPollInterval: processConfig.RunnerCommandPollInterval,
+		CommandBatchSize:    processConfig.RunnerCommandDeliveryBatchSize,
+		EventBatchSize:      processConfig.RunnerEventPersistenceBatchSize,
+		EventBatchWait:      processConfig.RunnerEventPersistenceBatchWait,
+		WorkWakeups:         workWakeups,
 		FrameRelay:          dataPlaneRelay,
+		DirectPorts:         dataPlaneRelay,
 		Now:                 service.SystemClock,
 		NewConnectionID:     func() string { return service.NewOpaqueID("rconn") },
 	})
@@ -238,11 +247,30 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	httpHandler, err := api.NewHandler(api.HandlerConfig{
 		Service: controlPlane, Logger: logger,
 		PlatformToken:             processConfig.PlatformToken,
+		ApplicationAuthorities:    applicationAuthorities(processConfig.ApplicationAuthorities),
 		MaximumDataPlaneBodyBytes: processConfig.DataPlaneMaximumSessionBytes,
 	})
 	if err != nil {
 		return err
 	}
+	workListener, err := worknotify.NewPostgresListener(
+		processContext,
+		processConfig.DatabaseURL,
+		workWakeups,
+	)
+	if err != nil {
+		return err
+	}
+	lifecycleWakeups, cancelLifecycleWakeups := workWakeups.Subscribe(
+		worknotify.KindLifecycle,
+		"",
+	)
+	defer cancelLifecycleWakeups()
+	assignmentWakeups, cancelAssignmentWakeups := workWakeups.Subscribe(
+		worknotify.KindAssignment,
+		"",
+	)
+	defer cancelAssignmentWakeups()
 	server := &http.Server{
 		Addr: processConfig.ListenAddress, Handler: httpHandler,
 		ReadHeaderTimeout: processConfig.HTTPTimeout, ReadTimeout: processConfig.HTTPTimeout,
@@ -252,7 +280,9 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	runnerServerErrors := make(chan error, 1)
 	lifecycleErrors := make(chan error, 1)
 	assignmentErrors := make(chan error, 1)
+	snapshotRetentionErrors := make(chan error, 1)
 	dataPlaneErrors := make(chan error, 1)
+	workListenerErrors := make(chan error, 1)
 	go func() {
 		logger.Info("SecondBox listening", "address", processConfig.ListenAddress)
 		serverErrors <- server.ListenAndServe()
@@ -262,12 +292,16 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		runnerServerErrors <- grpcServer.Serve(runnerListener)
 	}()
 	go func() {
-		lifecycleErrors <- runLifecycleReconciler(processContext, lifecycle.Reconciler{
-			Store: controlPlaneStore, Effects: lifecycleEffects,
-			WorkerID:      service.NewOpaqueID("lifecycle-worker"),
-			ClaimDuration: processConfig.LifecycleReconcileClaimDuration,
-			PollInterval:  processConfig.LifecycleReconcilePollInterval,
-		})
+		lifecycleErrors <- runLifecycleReconciler(
+			processContext,
+			lifecycle.Reconciler{
+				Store: controlPlaneStore, Effects: lifecycleEffects,
+				WorkerID:      service.NewOpaqueID("lifecycle-worker"),
+				ClaimDuration: processConfig.LifecycleReconcileClaimDuration,
+				PollInterval:  processConfig.LifecycleReconcilePollInterval,
+			},
+			lifecycleWakeups,
+		)
 	}()
 	go func() {
 		assignmentErrors <- runAssignmentReconciler(
@@ -281,6 +315,18 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 				HeartbeatTimeout: processConfig.RunnerHeartbeatTimeout,
 				NewCommandID:     service.NewOpaqueID,
 			},
+			assignmentWakeups,
+		)
+	}()
+	go func() {
+		snapshotRetentionErrors <- runSnapshotRetentionWorker(
+			processContext,
+			lifecycle.SnapshotRetentionWorker{
+				Store:           controlPlaneStore,
+				PollInterval:    processConfig.LifecycleReconcilePollInterval,
+				NewID:           service.NewOpaqueID,
+				NewFencingToken: newLifecycleFencingToken,
+			},
 		)
 	}()
 	go func() {
@@ -288,10 +334,15 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 			processContext, dataPlaneRelay, processConfig.DataPlanePollInterval,
 		)
 	}()
+	go func() {
+		workListenerErrors <- workListener.Run(processContext)
+	}()
 	var serveErr error
 	lifecycleExited := false
 	assignmentExited := false
+	snapshotRetentionExited := false
 	dataPlaneExited := false
+	workListenerExited := false
 	select {
 	case <-processContext.Done():
 	case httpServeErr := <-serverErrors:
@@ -316,12 +367,26 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		} else if processContext.Err() == nil {
 			serveErr = errors.New("SecondBox Assignment reconciler stopped unexpectedly")
 		}
+	case snapshotRetentionErr := <-snapshotRetentionErrors:
+		snapshotRetentionExited = true
+		if snapshotRetentionErr != nil {
+			serveErr = snapshotRetentionErr
+		} else if processContext.Err() == nil {
+			serveErr = errors.New("SecondBox Snapshot retention worker stopped unexpectedly")
+		}
 	case dataPlaneErr := <-dataPlaneErrors:
 		dataPlaneExited = true
 		if dataPlaneErr != nil {
 			serveErr = dataPlaneErr
 		} else if processContext.Err() == nil {
 			serveErr = errors.New("SecondBox data-plane sweeper stopped unexpectedly")
+		}
+	case workListenerErr := <-workListenerErrors:
+		workListenerExited = true
+		if workListenerErr != nil {
+			serveErr = workListenerErr
+		} else if processContext.Err() == nil {
+			serveErr = errors.New("SecondBox PostgreSQL work listener stopped unexpectedly")
 		}
 	}
 	cancel()
@@ -348,6 +413,17 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		}
 	}
 	var dataPlaneShutdownErr error
+	var snapshotRetentionShutdownErr error
+	if !snapshotRetentionExited {
+		select {
+		case snapshotRetentionShutdownErr = <-snapshotRetentionErrors:
+		case <-shutdownContext.Done():
+			snapshotRetentionShutdownErr = fmt.Errorf(
+				"SecondBox Snapshot retention worker shutdown: %w",
+				shutdownContext.Err(),
+			)
+		}
+	}
 	if !dataPlaneExited {
 		select {
 		case dataPlaneShutdownErr = <-dataPlaneErrors:
@@ -355,13 +431,37 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 			dataPlaneShutdownErr = fmt.Errorf("SecondBox data-plane sweeper shutdown: %w", shutdownContext.Err())
 		}
 	}
+	var workListenerShutdownErr error
+	if !workListenerExited {
+		select {
+		case workListenerShutdownErr = <-workListenerErrors:
+		case <-shutdownContext.Done():
+			workListenerShutdownErr = fmt.Errorf(
+				"SecondBox PostgreSQL work listener shutdown: %w",
+				shutdownContext.Err(),
+			)
+		}
+	}
 	if err := errors.Join(
 		serveErr, httpShutdownErr, grpcShutdownErr, lifecycleShutdownErr,
-		assignmentShutdownErr, dataPlaneShutdownErr,
+		assignmentShutdownErr, snapshotRetentionShutdownErr, dataPlaneShutdownErr,
+		workListenerShutdownErr,
 	); err != nil {
 		return fmt.Errorf("SecondBox coordinated server shutdown: %w", err)
 	}
 	return nil
+}
+
+func applicationAuthorities(configured []config.ApplicationAuthority) []api.ApplicationAuthority {
+	authorities := make([]api.ApplicationAuthority, 0, len(configured))
+	for _, authority := range configured {
+		authorities = append(authorities, api.ApplicationAuthority{
+			ID: authority.ID, Token: authority.Token,
+			TenantRef: authority.TenantRef, SubjectRef: authority.SubjectRef,
+			Scopes: authority.Scopes, ProfileGrants: authority.ProfileGrants,
+		})
+	}
+	return authorities
 }
 
 func runDataPlaneSweeper(
@@ -400,14 +500,22 @@ func newLifecycleFencingToken() ([]byte, error) {
 	return token, nil
 }
 
-func runLifecycleReconciler(ctx context.Context, reconciler lifecycle.Reconciler) error {
+func runLifecycleReconciler(
+	ctx context.Context,
+	reconciler lifecycle.Reconciler,
+	wakeups <-chan struct{},
+) error {
 	for {
 		_, found, err := reconciler.RunOnce(ctx, service.SystemClock())
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
-			if errors.Is(err, ports.ErrRevisionConflict) {
+			// Contention is retryable by definition. Treating it as fatal here
+			// shuts down the whole server, taking every attached runner with it,
+			// because two placements raced for the same row.
+			if errors.Is(err, ports.ErrRevisionConflict) ||
+				errors.Is(err, ports.ErrSerializationContention) {
 				continue
 			}
 			return fmt.Errorf("SecondBox lifecycle reconciliation failed: %w", err)
@@ -415,14 +523,8 @@ func runLifecycleReconciler(ctx context.Context, reconciler lifecycle.Reconciler
 		if found {
 			continue
 		}
-		timer := time.NewTimer(reconciler.PollInterval)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
+		if !waitForWork(ctx, reconciler.PollInterval, wakeups) {
 			return nil
-		case <-timer.C:
 		}
 	}
 }
@@ -430,6 +532,7 @@ func runLifecycleReconciler(ctx context.Context, reconciler lifecycle.Reconciler
 func runAssignmentReconciler(
 	ctx context.Context,
 	worker reconcile.AssignmentWorker,
+	wakeups <-chan struct{},
 ) error {
 	for {
 		_, found, err := worker.RunOnce(ctx, service.SystemClock())
@@ -437,12 +540,51 @@ func runAssignmentReconciler(
 			if ctx.Err() != nil {
 				return nil
 			}
-			if errors.Is(err, reconcile.ErrClaimLost) {
+			if errors.Is(err, reconcile.ErrClaimLost) ||
+				errors.Is(err, ports.ErrSerializationContention) {
 				continue
 			}
 			return fmt.Errorf("SecondBox Assignment reconciliation failed: %w", err)
 		}
 		if found {
+			continue
+		}
+		if !waitForWork(ctx, worker.PollInterval, wakeups) {
+			return nil
+		}
+	}
+}
+
+func waitForWork(
+	ctx context.Context,
+	fallbackInterval time.Duration,
+	wakeups <-chan struct{},
+) bool {
+	timer := time.NewTimer(fallbackInterval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	case <-wakeups:
+		return true
+	}
+}
+
+func runSnapshotRetentionWorker(
+	ctx context.Context,
+	worker lifecycle.SnapshotRetentionWorker,
+) error {
+	for {
+		queued, err := worker.RunOnce(ctx, service.SystemClock())
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("SecondBox Snapshot retention failed: %w", err)
+		}
+		if queued {
 			continue
 		}
 		timer := time.NewTimer(worker.PollInterval)
@@ -475,12 +617,12 @@ func stopGRPCServer(ctx context.Context, server *grpc.Server) error {
 
 func configuredRunnerFeatures(names []string) ([]runnerv1.RunnerFeature, error) {
 	known := map[string]runnerv1.RunnerFeature{
-		"exec-streaming": runnerv1.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING,
-		"file-streaming": runnerv1.RunnerFeature_RUNNER_FEATURE_FILE_STREAMING,
-		"pty":            runnerv1.RunnerFeature_RUNNER_FEATURE_PTY,
-		"port-proxy":     runnerv1.RunnerFeature_RUNNER_FEATURE_PORT_PROXY,
-		"evidence":       runnerv1.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
-		"checkpoint":     runnerv1.RunnerFeature_RUNNER_FEATURE_CHECKPOINT,
+		"exec-streaming":  runnerv1.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING,
+		"file-streaming":  runnerv1.RunnerFeature_RUNNER_FEATURE_FILE_STREAMING,
+		"pty":             runnerv1.RunnerFeature_RUNNER_FEATURE_PTY,
+		"port-proxy":      runnerv1.RunnerFeature_RUNNER_FEATURE_PORT_PROXY,
+		"evidence":        runnerv1.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
+		"local-workspace": runnerv1.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE,
 	}
 	features := make([]runnerv1.RunnerFeature, 0, len(names))
 	for _, name := range names {
@@ -489,6 +631,12 @@ func configuredRunnerFeatures(names []string) ([]runnerv1.RunnerFeature, error) 
 			return nil, fmt.Errorf("SecondBox runner feature %q is unsupported", name)
 		}
 		features = append(features, feature)
+	}
+	if !slices.Contains(
+		features,
+		runnerv1.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE,
+	) {
+		return nil, errors.New("SecondBox runner features require local-workspace")
 	}
 	return features, nil
 }

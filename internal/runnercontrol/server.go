@@ -5,9 +5,13 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/worknotify"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
@@ -23,25 +27,24 @@ type CredentialVerifier interface {
 // ProtocolStateStore persists connection and runner evidence across replicas.
 type ProtocolStateStore interface {
 	OpenConnection(context.Context, RunnerIdentity, string, uint32, time.Time) error
+	CloseConnection(context.Context, string, string, time.Time) error
 	RecordRegistration(context.Context, *runnerv1.RunnerRegistration, time.Time) (bool, error)
 	RecordHeartbeat(context.Context, *runnerv1.RunnerHeartbeat, time.Time) (bool, error)
-	RecordEvent(context.Context, Event, time.Time) (bool, error)
-	ClaimCommand(context.Context, string, string, time.Time) (CommandDelivery, bool, error)
-	MarkCommandDelivered(context.Context, string, string, time.Time) error
+	RecordEvents(context.Context, []EventPersistenceRecord) error
+	ClaimCommands(context.Context, string, string, int64, time.Time) ([]CommandDelivery, error)
+	MarkCommandsDelivered(context.Context, []CommandDelivery, string) error
 }
 
-// CheckpointReceiver durably ingests provider-neutral checkpoint frames.
-type CheckpointReceiver interface {
-	ReceiveCheckpoint(context.Context, Event, time.Time) error
+// EventPersistenceRecord keeps the receive timestamp attached to one ordered durable event.
+type EventPersistenceRecord struct {
+	Event      Event
+	ReceivedAt time.Time
 }
 
-// CheckpointRestoreSender streams verified checkpoint bytes before an assignment is delivered.
-type CheckpointRestoreSender interface {
-	StreamRestore(
-		context.Context,
-		*runnerv1.AssignmentCommand,
-		func(*runnerv1.ControlPlaneToRunner) error,
-	) error
+// DirectPortAdmitter spends one single-use Port credential for the home Runner.
+// PostgreSQL stays the single consumption authority for both transports.
+type DirectPortAdmitter interface {
+	ConsumeDirectPortSession(context.Context, DirectPortConsumption) (PortTunnel, error)
 }
 
 // ServerConfig contains explicit protocol compatibility and durable dependencies.
@@ -49,12 +52,15 @@ type ServerConfig struct {
 	CredentialVerifier  CredentialVerifier
 	StateStore          ProtocolStateStore
 	FrameRelay          ProtocolFrameRelay
-	CheckpointReceiver  CheckpointReceiver
-	CheckpointRestore   CheckpointRestoreSender
+	DirectPorts         DirectPortAdmitter
 	SupportedVersions   VersionRange
 	EnabledFeatures     []runnerv1.RunnerFeature
 	HeartbeatInterval   time.Duration
 	CommandPollInterval time.Duration
+	CommandBatchSize    int64
+	EventBatchSize      int
+	EventBatchWait      time.Duration
+	WorkWakeups         worknotify.Source
 	Now                 func() time.Time
 	NewConnectionID     func() string
 }
@@ -69,9 +75,28 @@ type controlPlaneFrameSender interface {
 	Send(*runnerv1.ControlPlaneToRunner) error
 }
 
+// serializedFrameSender lets the receive loop answer a direct Port admission
+// inline while the outbound command pump is running. One gRPC stream tolerates
+// exactly one concurrent sender.
+type serializedFrameSender struct {
+	mu     sync.Mutex
+	stream controlPlaneFrameSender
+}
+
+func (sender *serializedFrameSender) Send(message *runnerv1.ControlPlaneToRunner) error {
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	return sender.stream.Send(message)
+}
+
 type receivedRunnerFrame struct {
 	message *runnerv1.RunnerToControlPlane
 	err     error
+}
+
+type acceptedRunnerEvent struct {
+	event      Event
+	receivedAt time.Time
 }
 
 // NewServer validates the control-plane runner protocol composition.
@@ -82,9 +107,13 @@ func NewServer(config ServerConfig) (*Server, error) {
 		config.SupportedVersions.Minimum > config.SupportedVersions.Maximum ||
 		config.HeartbeatInterval <= 0 ||
 		config.CommandPollInterval <= 0 ||
+		config.CommandBatchSize <= 0 ||
+		config.EventBatchSize <= 0 ||
+		config.EventBatchWait <= 0 ||
+		config.WorkWakeups == nil ||
 		config.Now == nil ||
 		config.NewConnectionID == nil {
-		return nil, errors.New("SecondBox runner control server requires credential, state, protocol, heartbeat, clock, and connection configuration")
+		return nil, errors.New("SecondBox runner control server requires credential, state, protocol, heartbeat, work wakeups, clock, and connection configuration")
 	}
 	for _, feature := range config.EnabledFeatures {
 		if (feature == runnerv1.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING ||
@@ -93,16 +122,12 @@ func NewServer(config ServerConfig) (*Server, error) {
 			config.FrameRelay == nil {
 			return nil, errors.New("SecondBox runner control data-plane features require a durable frame relay")
 		}
-		if feature == runnerv1.RunnerFeature_RUNNER_FEATURE_CHECKPOINT &&
-			(config.CheckpointReceiver == nil || config.CheckpointRestore == nil) {
-			return nil, errors.New("SecondBox runner checkpoint feature requires durable checkpoint receive and restore")
-		}
 	}
 	return &Server{config: config}, nil
 }
 
 // Connect negotiates one mTLS-authenticated outbound runner connection.
-func (server *Server) Connect(stream runnerv1.RunnerControl_ConnectServer) error {
+func (server *Server) Connect(stream runnerv1.RunnerControl_ConnectServer) (returnError error) {
 	identity, err := server.peerIdentity(stream.Context())
 	if err != nil {
 		return err
@@ -129,7 +154,8 @@ func (server *Server) Connect(stream runnerv1.RunnerControl_ConnectServer) error
 	if negotiation.Response == nil {
 		return errors.New("SecondBox runner control negotiation produced no response")
 	}
-	if err := stream.Send(negotiation.Response); err != nil {
+	sender := &serializedFrameSender{stream: stream}
+	if err := sender.Send(negotiation.Response); err != nil {
 		return fmt.Errorf("SecondBox runner control send negotiation: %w", err)
 	}
 	if negotiation.Kind == EventRejection {
@@ -141,40 +167,179 @@ func (server *Server) Connect(stream runnerv1.RunnerControl_ConnectServer) error
 	); err != nil {
 		return err
 	}
+	defer func() {
+		closeContext, cancel := context.WithTimeout(
+			context.WithoutCancel(stream.Context()),
+			5*time.Second,
+		)
+		defer cancel()
+		returnError = errors.Join(returnError, server.config.StateStore.CloseConnection(
+			closeContext,
+			identity.RunnerID,
+			connectionID,
+			server.config.Now(),
+		))
+	}()
 	received := make(chan receivedRunnerFrame, 1)
 	go pumpRunnerFrames(stream.Context(), stream.Recv, received)
-	commandTicker := time.NewTicker(server.config.CommandPollInterval)
-	defer commandTicker.Stop()
-	registered := false
+	var outboundFailures <-chan error
+	var pending *acceptedRunnerEvent
 	for {
-		select {
-		case <-stream.Context().Done():
-			return stream.Context().Err()
-		case frame := <-received:
-			if frame.err != nil {
-				return fmt.Errorf("SecondBox runner control receive: %w", frame.err)
-			}
-			event, err := session.Accept(frame.message)
-			if err != nil {
-				return err
-			}
-			if err := server.persistEvent(stream.Context(), event); err != nil {
-				return err
-			}
-			if event.Kind == EventRegistration {
-				registered = true
-			}
-		case <-commandTicker.C:
-			if !registered {
-				continue
-			}
-			if err := server.sendNextOutboundFrame(
-				stream.Context(), stream, session, identity.RunnerID, connectionID,
-			); err != nil {
+		var accepted acceptedRunnerEvent
+		if pending != nil {
+			accepted = *pending
+			pending = nil
+		} else {
+			select {
+			case <-stream.Context().Done():
+				return stream.Context().Err()
+			case frame := <-received:
+				accepted, err = server.acceptRunnerFrame(session, frame)
+				if err != nil {
+					return err
+				}
+			case err := <-outboundFailures:
 				return err
 			}
 		}
+		if durableRunnerEvent(accepted.event.Kind) {
+			batch, next, terminalErr := server.collectDurableEventBatch(
+				stream.Context(),
+				session,
+				accepted,
+				received,
+				outboundFailures,
+			)
+			persistContext := stream.Context()
+			cancelPersistence := func() {}
+			if terminalErr != nil {
+				persistContext, cancelPersistence = context.WithTimeout(
+					context.WithoutCancel(stream.Context()),
+					5*time.Second,
+				)
+			}
+			persistErr := server.persistDurableEventBatch(persistContext, batch)
+			cancelPersistence()
+			if persistErr != nil || terminalErr != nil {
+				return errors.Join(persistErr, terminalErr)
+			}
+			pending = next
+			continue
+		}
+		if accepted.event.Kind == EventPortDirect {
+			if err := server.answerDirectPortConsumption(
+				stream.Context(),
+				sender,
+				identity.RunnerID,
+				accepted.event.Message.GetPortDirectConsume(),
+				accepted.receivedAt,
+			); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := server.persistEvent(
+			stream.Context(),
+			accepted.event,
+			accepted.receivedAt,
+		); err != nil {
+			return err
+		}
+		if accepted.event.Kind == EventRegistration {
+			failures := make(chan error, 1)
+			outboundFailures = failures
+			go server.pumpOutboundFrames(
+				stream.Context(),
+				sender,
+				session,
+				identity.RunnerID,
+				connectionID,
+				failures,
+			)
+		}
 	}
+}
+
+func (server *Server) acceptRunnerFrame(
+	session *Session,
+	frame receivedRunnerFrame,
+) (acceptedRunnerEvent, error) {
+	if frame.err != nil {
+		return acceptedRunnerEvent{}, fmt.Errorf("SecondBox runner control receive: %w", frame.err)
+	}
+	event, err := session.Accept(frame.message)
+	if err != nil {
+		return acceptedRunnerEvent{}, err
+	}
+	return acceptedRunnerEvent{event: event, receivedAt: server.config.Now()}, nil
+}
+
+func (server *Server) collectDurableEventBatch(
+	ctx context.Context,
+	session *Session,
+	first acceptedRunnerEvent,
+	received <-chan receivedRunnerFrame,
+	outboundFailures <-chan error,
+) ([]EventPersistenceRecord, *acceptedRunnerEvent, error) {
+	records := []EventPersistenceRecord{{
+		Event: first.event, ReceivedAt: first.receivedAt,
+	}}
+	if server.config.EventBatchSize == 1 {
+		return records, nil, nil
+	}
+	timer := time.NewTimer(server.config.EventBatchWait)
+	defer timer.Stop()
+	for len(records) < server.config.EventBatchSize {
+		select {
+		case <-ctx.Done():
+			return records, nil, ctx.Err()
+		case frame := <-received:
+			accepted, err := server.acceptRunnerFrame(session, frame)
+			if err != nil {
+				return records, nil, err
+			}
+			if !durableRunnerEvent(accepted.event.Kind) {
+				return records, &accepted, nil
+			}
+			records = append(records, EventPersistenceRecord{
+				Event: accepted.event, ReceivedAt: accepted.receivedAt,
+			})
+		case err := <-outboundFailures:
+			return records, nil, err
+		case <-timer.C:
+			return records, nil, nil
+		}
+	}
+	return records, nil, nil
+}
+
+func (server *Server) persistDurableEventBatch(
+	ctx context.Context,
+	records []EventPersistenceRecord,
+) error {
+	persistStartedAt := time.Now()
+	if err := server.config.StateStore.RecordEvents(ctx, records); err != nil {
+		return err
+	}
+	persistedAt := server.config.Now()
+	persistenceDuration := time.Since(persistStartedAt)
+	for _, record := range records {
+		_, sequence, err := runnerEnvelope(record.Event.Message)
+		if err != nil {
+			return err
+		}
+		slog.Info(
+			"SecondBox runner control event persisted",
+			"runnerId", record.Event.RunnerID,
+			"kind", runnerEventSubtype(record.Event.Message),
+			"sequence", sequence,
+			"batchSize", len(records),
+			"persistenceMs", persistenceDuration.Milliseconds(),
+			"observedToPersistMs",
+			runnerObservedToPersistDuration(record.Event.Message, persistedAt).Milliseconds(),
+		)
+	}
+	return nil
 }
 
 func pumpRunnerFrames(
@@ -195,74 +360,281 @@ func pumpRunnerFrames(
 	}
 }
 
-func (server *Server) sendNextOutboundFrame(
+func (server *Server) pumpOutboundFrames(
+	ctx context.Context,
+	stream controlPlaneFrameSender,
+	session *Session,
+	runnerID string,
+	connectionID string,
+	failures chan<- error,
+) {
+	ticker := time.NewTicker(server.config.CommandPollInterval)
+	defer ticker.Stop()
+	wakeups, cancelWakeups := server.config.WorkWakeups.Subscribe(
+		worknotify.KindRunnerCommand,
+		runnerID,
+	)
+	defer cancelWakeups()
+	for {
+		if err := server.drainOutboundFrames(
+			ctx, stream, session, runnerID, connectionID,
+		); err != nil {
+			select {
+			case failures <- err:
+			case <-ctx.Done():
+			}
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		case <-wakeups:
+		}
+	}
+}
+
+func (server *Server) drainOutboundFrames(
 	ctx context.Context,
 	stream controlPlaneFrameSender,
 	session *Session,
 	runnerID string,
 	connectionID string,
 ) error {
-	delivery, found, err := server.config.StateStore.ClaimCommand(
-		ctx, runnerID, connectionID, server.config.Now(),
-	)
-	if err != nil {
-		return err
-	}
-	if found {
-		if assignment := delivery.Message.GetAssignment(); assignment != nil &&
-			assignment.SourceCheckpointId != "" {
-			if server.config.CheckpointRestore == nil {
-				return errors.New("SecondBox runner checkpoint restore sender is not configured")
-			}
-			if err := server.config.CheckpointRestore.StreamRestore(
-				ctx, assignment, stream.Send,
-			); err != nil {
-				return fmt.Errorf("SecondBox runner checkpoint restore stream: %w", err)
-			}
-		}
-		if err := stream.Send(delivery.Message); err != nil {
-			return fmt.Errorf("SecondBox runner control command send: %w", err)
-		}
-		if err := server.config.StateStore.MarkCommandDelivered(
-			ctx, delivery.ID, connectionID, server.config.Now(),
-		); err != nil {
+	for {
+		more, err := server.sendNextOutboundFrame(
+			ctx, stream, session, runnerID, connectionID,
+		)
+		if err != nil || !more {
 			return err
 		}
-		return nil
 	}
-	return server.sendClaimedRelayFrame(ctx, stream, session, runnerID, connectionID)
 }
 
-func (server *Server) persistEvent(ctx context.Context, event Event) error {
+func (server *Server) sendNextOutboundFrame(
+	ctx context.Context,
+	stream controlPlaneFrameSender,
+	session *Session,
+	runnerID string,
+	connectionID string,
+) (bool, error) {
+	deliveryStartedAt := time.Now()
+	claimAt := server.config.Now()
+	deliveries, err := server.config.StateStore.ClaimCommands(
+		ctx,
+		runnerID,
+		connectionID,
+		server.config.CommandBatchSize,
+		claimAt,
+	)
+	if err != nil {
+		return false, err
+	}
+	claimDuration := time.Since(deliveryStartedAt)
+	if len(deliveries) == 0 {
+		return false, server.sendClaimedRelayFrame(
+			ctx, stream, session, runnerID, connectionID,
+		)
+	}
+	deliveryDurations := make([]time.Duration, len(deliveries))
+	streamSendDurations := make([]time.Duration, len(deliveries))
+	for index := range deliveries {
+		delivery := &deliveries[index]
+		streamSendStartedAt := time.Now()
+		if err := stream.Send(delivery.Message); err != nil {
+			persistErr := server.config.StateStore.MarkCommandsDelivered(
+				ctx,
+				deliveries[:index],
+				connectionID,
+			)
+			if persistErr == nil {
+				logCommandDeliveries(
+					runnerID,
+					deliveries[:index],
+					claimAt,
+					deliveryDurations[:index],
+					claimDuration,
+					streamSendDurations[:index],
+				)
+			}
+			return false, errors.Join(
+				fmt.Errorf("SecondBox runner control command send: %w", err),
+				persistErr,
+			)
+		}
+		streamSendDurations[index] = time.Since(streamSendStartedAt)
+		delivery.DeliveredAt = server.config.Now()
+		deliveryDurations[index] = time.Since(deliveryStartedAt)
+	}
+	if err := server.config.StateStore.MarkCommandsDelivered(
+		ctx,
+		deliveries,
+		connectionID,
+	); err != nil {
+		return false, err
+	}
+	logCommandDeliveries(
+		runnerID, deliveries, claimAt, deliveryDurations,
+		claimDuration, streamSendDurations,
+	)
+	if int64(len(deliveries)) < server.config.CommandBatchSize {
+		return false, server.sendClaimedRelayFrame(
+			ctx, stream, session, runnerID, connectionID,
+		)
+	}
+	return true, nil
+}
+
+func logCommandDeliveries(
+	runnerID string,
+	deliveries []CommandDelivery,
+	claimedAt time.Time,
+	deliveryDurations []time.Duration,
+	claimDuration time.Duration,
+	streamSendDurations []time.Duration,
+) {
+	for index, delivery := range deliveries {
+		slog.Info(
+			"SecondBox runner control command delivered",
+			"runnerId", runnerID,
+			"commandId", delivery.ID,
+			"kind", delivery.Kind,
+			"batchSize", len(deliveries),
+			"queueMs", commandQueueDuration(delivery.CreatedAt, claimedAt).Milliseconds(),
+			"deliveryMs", deliveryDurations[index].Milliseconds(),
+			"claimMs", claimDuration.Milliseconds(),
+			"claimPoolAcquireMs", delivery.ClaimTiming.PoolAcquire.Milliseconds(),
+			"claimQueryMs", delivery.ClaimTiming.Query.Milliseconds(),
+			"claimDecodeMs", delivery.ClaimTiming.Decode.Milliseconds(),
+			"streamSendMs", streamSendDurations[index].Milliseconds(),
+		)
+	}
+}
+
+func commandQueueDuration(createdAt, claimedAt time.Time) time.Duration {
+	if createdAt.IsZero() {
+		return 0
+	}
+	return max(claimedAt.Sub(createdAt), 0)
+}
+
+func durableRunnerEvent(kind EventKind) bool {
+	switch kind {
+	case EventAssignment, EventFence, EventDrain, EventEvidence,
+		EventInstanceTerminal, EventLocalWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
+func runnerEventSubtype(message *runnerv1.RunnerToControlPlane) string {
+	switch {
+	case message.GetAssignmentAck() != nil:
+		return "assignment_ack"
+	case message.GetAssignmentProgress() != nil:
+		return "assignment_progress"
+	case message.GetAssignmentResult() != nil:
+		return "assignment_result"
+	case message.GetFenceResult() != nil:
+		return "fence_result"
+	case message.GetDrainState() != nil:
+		return "drain_state"
+	case message.GetEvidence() != nil:
+		return "evidence"
+	case message.GetInstanceTerminal() != nil:
+		return "instance_terminal"
+	case message.GetLocalWorkspaceResult() != nil:
+		return "local_workspace_result"
+	default:
+		return "unknown"
+	}
+}
+
+func runnerObservedToPersistDuration(
+	message *runnerv1.RunnerToControlPlane,
+	persistedAt time.Time,
+) time.Duration {
+	progress := message.GetAssignmentProgress()
+	if progress == nil || progress.ObservedAtUnixNs == 0 {
+		return 0
+	}
+	observedAt := time.Unix(0, int64(progress.ObservedAtUnixNs))
+	return max(persistedAt.Sub(observedAt), 0)
+}
+
+// answerDirectPortConsumption spends the single-use credential and answers the
+// verdict on the same authenticated stream. The verdict is deliberately not
+// durable: PostgreSQL already recorded the consumption, and a lost answer
+// simply leaves the caller connection denied.
+func (server *Server) answerDirectPortConsumption(
+	ctx context.Context,
+	sender controlPlaneFrameSender,
+	runnerID string,
+	consume *runnerv1.PortDirectConsume,
+	receivedAt time.Time,
+) error {
+	if consume == nil || consume.Fence == nil ||
+		strings.TrimSpace(consume.OperationId) == "" ||
+		len(consume.CredentialDigest) == 0 {
+		return fmt.Errorf("%w: direct Port consumption identity is incomplete", ErrRunnerMessage)
+	}
+	admission := &runnerv1.PortDirectAdmission{
+		MessageId:   consume.MessageId,
+		Fence:       consume.Fence,
+		OperationId: consume.OperationId,
+		StreamId:    consume.StreamId,
+		Kind:        runnerv1.PortDirectAdmissionKind_PORT_DIRECT_ADMISSION_KIND_ADMITTED,
+	}
+	if server.config.DirectPorts == nil {
+		admission.Kind = runnerv1.PortDirectAdmissionKind_PORT_DIRECT_ADMISSION_KIND_DENIED
+		admission.SafeDetail = "direct port transport is unavailable"
+	} else if _, err := server.config.DirectPorts.ConsumeDirectPortSession(
+		ctx,
+		DirectPortConsumption{
+			RunnerID:         runnerID,
+			SessionID:        consume.OperationId,
+			AssignmentID:     consume.Fence.AssignmentId,
+			Generation:       int64(consume.Fence.SandboxGeneration),
+			FencingToken:     consume.Fence.FencingToken,
+			CredentialDigest: consume.CredentialDigest,
+			Now:              receivedAt,
+		},
+	); err != nil {
+		slog.InfoContext(
+			ctx,
+			"SecondBox direct Port credential consumption denied",
+			"runnerId", runnerID,
+			"portSessionId", consume.OperationId,
+			"error", err,
+		)
+		admission.Kind = runnerv1.PortDirectAdmissionKind_PORT_DIRECT_ADMISSION_KIND_DENIED
+		admission.SafeDetail = "port credential was rejected"
+	}
+	if err := sender.Send(&runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_PortDirectAdmission{
+			PortDirectAdmission: admission,
+		},
+	}); err != nil {
+		return fmt.Errorf("SecondBox runner control send direct Port admission: %w", err)
+	}
+	return nil
+}
+
+func (server *Server) persistEvent(ctx context.Context, event Event, receivedAt time.Time) error {
 	switch event.Kind {
 	case EventDuplicate:
 		return nil
 	case EventRegistration:
-		_, err := server.config.StateStore.RecordRegistration(ctx, event.Registration, server.config.Now())
+		_, err := server.config.StateStore.RecordRegistration(ctx, event.Registration, receivedAt)
 		return err
 	case EventHeartbeat:
-		_, err := server.config.StateStore.RecordHeartbeat(ctx, event.Heartbeat, server.config.Now())
+		_, err := server.config.StateStore.RecordHeartbeat(ctx, event.Heartbeat, receivedAt)
 		return err
-	case EventCheckpoint:
-		if server.config.CheckpointReceiver == nil {
-			return errors.New("SecondBox runner checkpoint receiver is not configured")
-		}
-		now := server.config.Now()
-		if _, err := server.config.StateStore.RecordEvent(
-			ctx, event, now,
-		); err != nil {
-			return err
-		}
-		if err := server.config.CheckpointReceiver.ReceiveCheckpoint(
-			ctx, event, now,
-		); err != nil {
-			return err
-		}
-		return nil
-	case EventAssignment, EventFence, EventDrain, EventEvidence, EventInstanceTerminal:
-		_, err := server.config.StateStore.RecordEvent(ctx, event, server.config.Now())
-		return err
-	case EventExec, EventFile, EventPort:
+	case EventAssignment, EventFence, EventDrain, EventEvidence, EventInstanceTerminal,
+		EventLocalWorkspace:
+		return errors.New("SecondBox runner durable event bypassed the persistence batch")
+	case EventExec, EventPty, EventFile, EventPort:
 		if server.config.FrameRelay == nil {
 			return errors.New("SecondBox runner control data-plane relay is not configured")
 		}
@@ -270,7 +642,7 @@ func (server *Server) persistEvent(ctx context.Context, event Event) error {
 			RunnerID:     event.RunnerID,
 			ConnectionID: event.ConnectionID,
 			Message:      event.Message,
-		}, server.config.Now())
+		}, receivedAt)
 		return err
 	default:
 		return fmt.Errorf("SecondBox runner control received unexpected event %q", event.Kind)

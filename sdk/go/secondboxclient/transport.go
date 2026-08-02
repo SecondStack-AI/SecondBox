@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -39,7 +40,6 @@ var operations = map[string]OperationMetadata{
 	"acquireSandboxLease":      operation("acquireSandboxLease", "POST", "/v1/sandboxes/{sandboxId}/leases", "application/json"),
 	"cancelSandboxExecStream":  operation("cancelSandboxExecStream", "POST", "/v1/sandboxes/{sandboxId}/exec-streams/{execSessionId}:cancel", ""),
 	"cancelSandboxTerminal":    operation("cancelSandboxTerminal", "DELETE", "/v1/sandboxes/{sandboxId}/terminals/{terminalSessionId}", ""),
-	"checkpointSandbox":        operation("checkpointSandbox", "POST", "/v1/sandboxes/{sandboxId}:checkpoint", "application/json"),
 	"closeSandboxPortSession":  operation("closeSandboxPortSession", "DELETE", "/v1/sandboxes/{sandboxId}/port-sessions/{portSessionId}", ""),
 	"createProfile":            operation("createProfile", "POST", "/v1/profiles", "application/json"),
 	"createRunnerPool":         operation("createRunnerPool", "POST", "/v1/runner-pools", "application/json"),
@@ -57,11 +57,14 @@ var operations = map[string]OperationMetadata{
 	"drainSandbox":             operation("drainSandbox", "POST", "/v1/sandboxes/{sandboxId}:drain", ""),
 	"executeSandboxCommand":    operation("executeSandboxCommand", "POST", "/v1/sandboxes/{sandboxId}/exec", "application/json"),
 	"getArtifact":              operation("getArtifact", "GET", "/v1/artifacts/{artifactId}", ""),
+	"getDeploymentTiming":      operation("getDeploymentTiming", "GET", "/v1/timings", ""),
 	"getOperation":             operation("getOperation", "GET", "/v1/operations/{operationId}", ""),
+	"getOperationTiming":       operation("getOperationTiming", "GET", "/v1/operations/{operationId}/timings", ""),
 	"getProfile":               operation("getProfile", "GET", "/v1/profiles/{profileName}", ""),
 	"getRunner":                operation("getRunner", "GET", "/v1/runners/{runnerId}", ""),
 	"getRunnerPool":            operation("getRunnerPool", "GET", "/v1/runner-pools/{runnerPoolName}", ""),
 	"getSandbox":               operation("getSandbox", "GET", "/v1/sandboxes/{sandboxId}", ""),
+	"getSandboxTiming":         operation("getSandboxTiming", "GET", "/v1/sandboxes/{sandboxId}/timings", ""),
 	"getSandboxLease":          operation("getSandboxLease", "GET", "/v1/leases/{leaseId}", ""),
 	"getSandboxPortSession":    operation("getSandboxPortSession", "GET", "/v1/sandboxes/{sandboxId}/port-sessions/{portSessionId}", ""),
 	"getSnapshot":              operation("getSnapshot", "GET", "/v1/snapshots/{snapshotId}", ""),
@@ -78,6 +81,7 @@ var operations = map[string]OperationMetadata{
 	"reconnectSandboxTerminal": operation("reconnectSandboxTerminal", "GET", "/v1/sandboxes/{sandboxId}/terminals/{terminalSessionId}", ""),
 	"releaseSandboxLease":      operation("releaseSandboxLease", "DELETE", "/v1/leases/{leaseId}", ""),
 	"removeSandboxPath":        operation("removeSandboxPath", "DELETE", "/v1/sandboxes/{sandboxId}/directories", "application/json"),
+	"restoreSandboxSnapshot":   operation("restoreSandboxSnapshot", "POST", "/v1/sandboxes/{sandboxId}:restore", "application/json"),
 	"renewSandboxLease":        operation("renewSandboxLease", "POST", "/v1/leases/{leaseId}:renew", "application/json"),
 	"reviseProfile":            operation("reviseProfile", "POST", "/v1/profiles/{profileName}:revise", "application/json"),
 	"sandboxFileExists":        operation("sandboxFileExists", "GET", "/v1/sandboxes/{sandboxId}/files:exists", ""),
@@ -207,8 +211,7 @@ func (client *Client) Do(
 	if options.Body != nil && metadata.RequestBodyRequired && contentType == "" {
 		return nil, fmt.Errorf("SecondBox client content type is required for %s", metadata.OperationID)
 	}
-	if contentType != "" &&
-		(len(metadata.RequestBody) != 1 || metadata.RequestBody[0].ContentType != contentType) {
+	if contentType != "" && !declaresContentType(metadata, contentType) {
 		return nil, fmt.Errorf(
 			"SecondBox client content type %q is not declared for %s",
 			contentType, metadata.OperationID,
@@ -255,6 +258,18 @@ func (client *Client) Do(
 		failure.Problem = &problem
 	}
 	return nil, failure
+}
+
+func declaresContentType(metadata OperationMetadata, contentType string) bool {
+	if len(metadata.RequestBody) != 1 {
+		return false
+	}
+	actual, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return false
+	}
+	declared, _, err := mime.ParseMediaType(metadata.RequestBody[0].ContentType)
+	return err == nil && actual == declared
 }
 
 // EncodeJSONBody encodes one request without buffering a second copy.

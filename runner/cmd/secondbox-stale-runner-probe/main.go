@@ -163,7 +163,8 @@ func staleProbeRegistration(
 				Allocatable: &runnerprotocol.Capacity{
 					VcpuMillis: 1, MemoryBytes: 1, DiskBytes: 1, Instances: 1, Operations: 1,
 				},
-				Reserved: &runnerprotocol.Capacity{},
+				Reserved:      &runnerprotocol.Capacity{},
+				StartupTiming: &runnerprotocol.StartupTiming{},
 			},
 		},
 	}
@@ -182,6 +183,7 @@ func staleProbeDrainedHeartbeat(
 				Allocatable:      &runnerprotocol.Capacity{},
 				Reserved:         &runnerprotocol.Capacity{},
 				DrainPhase:       runnerprotocol.DrainPhase_DRAIN_PHASE_DRAINED,
+				StartupTiming:    &runnerprotocol.StartupTiming{},
 			},
 		},
 	}

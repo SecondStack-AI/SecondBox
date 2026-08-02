@@ -256,6 +256,95 @@ func TestSandboxShellReconnectsStableSessionAtRetainedSequence(t *testing.T) {
 	}
 }
 
+func TestSandboxShellClampsOutputCreditToTheSessionWindow(t *testing.T) {
+	// A grant past the pinned ProfileRevision window fails the session, so the
+	// published window has to bound the request rather than the default winning.
+	const sessionWindowBytes = 8192
+	if sessionWindowBytes >= defaultShellCreditBytes {
+		t.Fatalf("test window %d must be below the default %d to prove clamping",
+			sessionWindowBytes, defaultShellCreditBytes)
+	}
+	upgrader := websocket.Upgrader{Subprotocols: []string{"secondbox.terminal.v1"}}
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodGet &&
+			request.URL.Path == "/v1/sandboxes/sandbox-1/terminals/term-4":
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(response, `{
+				"id":"term-4","sandboxId":"sandbox-1","generation":3,"state":"detached",
+				"websocketUrl":"%s/attach","subprotocol":"secondbox.terminal.v1",
+				"streamWindowBytes":%d,
+				"nextClientSequence":0,
+				"expiresAt":"%s"
+			}`,
+				"ws"+server.URL[len("http"):],
+				sessionWindowBytes,
+				time.Now().Add(time.Minute).Format(time.RFC3339Nano),
+			)
+		case request.Method == http.MethodGet && request.URL.Path == "/attach":
+			connection, err := upgrader.Upgrade(response, request, nil)
+			if err != nil {
+				t.Errorf("upgrade clamped Terminal: %v", err)
+				return
+			}
+			defer connection.Close()
+			assertCLITerminalCredit(t, connection, 0, sessionWindowBytes)
+			assertCLITerminalInput(t, connection, 1, []byte{0x04})
+			if err := connection.WriteJSON(secondboxclient.TerminalFrame{
+				StreamOutcomeFrame: &secondboxclient.StreamOutcomeFrame{
+					Type: "outcome", Sequence: 0,
+					Outcome: secondboxclient.ExecOutcome{ExecExited: &secondboxclient.ExecExited{
+						Kind: "exited", ExitCode: 0,
+					}},
+				},
+			}); err != nil {
+				t.Errorf("write clamped Terminal outcome: %v", err)
+			}
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+
+	err := runSandboxShellCommand(
+		t.Context(), server.URL, "token", "tenant", "subject",
+		[]string{
+			"--sandbox", "sandbox-1", "--generation", "3",
+			"--session", "term-4",
+		},
+		sandboxShellEnvironment{
+			input: strings.NewReader(""), output: io.Discard, inputFD: -1, outputFD: -1,
+			terminal: &fakeShellTerminalController{}, httpClient: server.Client(),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestShellOutputCreditClampsOnlyWhenTheWindowIsPublished(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		requested int64
+		window    int64
+		want      int64
+	}{
+		{name: "clamped to a smaller window", requested: 64 << 10, window: 8192, want: 8192},
+		{name: "unchanged below the window", requested: 4096, window: 64 << 10, want: 4096},
+		{name: "unchanged at the window", requested: 8192, window: 8192, want: 8192},
+		// A control plane that publishes no window must stay usable.
+		{name: "unchanged without a window", requested: 64 << 10, window: 0, want: 64 << 10},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := shellOutputCredit(testCase.requested, testCase.window); got != testCase.want {
+				t.Errorf("shellOutputCredit(%d, %d) = %d, want %d",
+					testCase.requested, testCase.window, got, testCase.want)
+			}
+		})
+	}
+}
+
 type fakeShellTerminalController struct {
 	mu           sync.Mutex
 	terminal     bool

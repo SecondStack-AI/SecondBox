@@ -23,7 +23,7 @@ if [[ ! -e "$environment_path" ]]; then
   install -m 600 "$template_path" "$environment_path"
 fi
 
-if ! grep -Eq 'GENERATE_WITH_DEPLOY_BOOTSTRAP|GENERATE_LOCAL_DATABASE_URL|GENERATE_RUNNER_PKI|GENERATE_RUNNER_CA_PRIVATE_KEY|GENERATE_DEVELOPMENT_ASSET_CATALOG' "$environment_path"; then
+if ! grep -Eq 'GENERATE_WITH_DEPLOY_BOOTSTRAP|GENERATE_LOCAL_DATABASE_URL|GENERATE_RUNNER_PKI|GENERATE_RUNNER_CA_PRIVATE_KEY|GENERATE_DEVELOPMENT_ASSET_CATALOG|GENERATE_DEVELOPMENT_BUNDLE_DIGEST' "$environment_path"; then
   chmod 600 "$environment_path"
   echo "Environment already bootstrapped: $environment_path"
   exit 0
@@ -121,6 +121,10 @@ environment_directory="$(cd "$(dirname "$environment_path")" && pwd)"
 environment_basename="$(basename "$environment_path")"
 runner_pki_directory="$environment_directory/${environment_basename}.secrets/runner-pki"
 development_asset_catalog_path="$environment_directory/${environment_basename}.secrets/development-signed-assets.json"
+# The synthetic digest the development catalog is signed with. Built-in Profiles
+# pin the same value, so it is defined once and written to both.
+development_bundle_digest="sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+development_builtin_digest=""
 temporary_path=""
 runner_pki_created=false
 development_asset_catalog_created=false
@@ -208,7 +212,7 @@ if [[ "$signed_asset_catalog_host_path" == "GENERATE_DEVELOPMENT_ASSET_CATALOG" 
     '  "assets": [' \
     '    {' \
     '      "artifactId": "secondbox-development-bootstrap",' \
-    '      "manifestDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",' \
+    '      "manifestDigest": "'"$development_bundle_digest"'",' \
     '      "signatureKeyId": "secondbox-development-local-trust",' \
     '      "architecture": "amd64",' \
     '      "guestProtocolGeneration": 1,' \
@@ -218,6 +222,10 @@ if [[ "$signed_asset_catalog_host_path" == "GENERATE_DEVELOPMENT_ASSET_CATALOG" 
     '}' >"$development_asset_catalog_path"
   chmod 644 "$development_asset_catalog_path"
   signed_asset_catalog_host_path="$development_asset_catalog_path"
+  # Only a generated development catalog can satisfy the built-in Profile
+  # digests. An operator-supplied catalog leaves the placeholder in place, so
+  # validation refuses until real verified digests are named.
+  development_builtin_digest="$development_bundle_digest"
 fi
 
 temporary_path="$(mktemp "${environment_path}.tmp.XXXXXX")"
@@ -229,7 +237,8 @@ awk \
   -v platform_token="$platform_token" \
   -v runner_credential="$runner_credential" \
   -v runner_pki_directory="$runner_pki_directory" \
-  -v signed_asset_catalog_host_path="$signed_asset_catalog_host_path" '
+  -v signed_asset_catalog_host_path="$signed_asset_catalog_host_path" \
+  -v development_builtin_digest="$development_builtin_digest" '
   /^SECONDBOX_POSTGRES_PASSWORD=/ {
     print "SECONDBOX_POSTGRES_PASSWORD=" postgres_password
     next
@@ -265,6 +274,13 @@ awk \
   /^SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH=/ {
     print "SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH=" signed_asset_catalog_host_path
     next
+  }
+  /^SECONDBOX_BUILTIN_[A-Z_]+_BUNDLE_DIGEST=/ {
+    if (development_builtin_digest != "") {
+      sub(/=.*$/, "=" development_builtin_digest)
+      print
+      next
+    }
   }
   { print }
   ' "$environment_path" >"$temporary_path"

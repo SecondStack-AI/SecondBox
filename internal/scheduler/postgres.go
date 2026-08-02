@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,9 +22,24 @@ var (
 	ErrProfileRevisionMismatch = errors.New("SecondBox scheduler ProfileRevision mismatch")
 )
 
+// Serialization backoff bounds. The ceiling keeps a retry well inside a
+// placement's deadline while still spreading a burst that all collided at once.
+const (
+	serializationBackoffBase     = 2 * time.Millisecond
+	serializationBackoffCeiling  = 250 * time.Millisecond
+	serializationBackoffShiftCap = 10
+)
+
 // PostgresStore coordinates scheduler replicas through durable transactions.
 type PostgresStore struct {
 	pool *pgxpool.Pool
+	now  func() time.Time
+}
+
+// PostgresStoreConfig contains the scheduler's explicit durable dependencies.
+type PostgresStoreConfig struct {
+	DatabaseURL string
+	Now         func() time.Time
 }
 
 // ScheduleRequest contains explicit immutable assignment authority and retry bounds.
@@ -31,8 +49,7 @@ type ScheduleRequest struct {
 	InstanceID              string
 	SandboxID               string
 	WorkspaceID             string
-	MaterializationID       string
-	SourceCheckpointID      string
+	StartMutationID         string
 	ProfileRevisionID       string
 	Requirements            Requirements
 	AssignmentCommand       *runnerv1.AssignmentCommand
@@ -75,8 +92,14 @@ type DurableAssignment struct {
 }
 
 // NewPostgresStore connects the scheduler to PostgreSQL authority.
-func NewPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore, error) {
-	pool, err := pgxpool.New(ctx, databaseURL)
+func NewPostgresStore(
+	ctx context.Context,
+	config PostgresStoreConfig,
+) (*PostgresStore, error) {
+	if config.DatabaseURL == "" || config.Now == nil {
+		return nil, errors.New("SecondBox scheduler PostgreSQL database and clock are required")
+	}
+	pool, err := pgxpool.New(ctx, config.DatabaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox scheduler PostgreSQL pool: %w", err)
 	}
@@ -84,7 +107,7 @@ func NewPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore, 
 		pool.Close()
 		return nil, fmt.Errorf("SecondBox scheduler PostgreSQL readiness: %w", err)
 	}
-	return &PostgresStore{pool: pool}, nil
+	return &PostgresStore{pool: pool, now: config.Now}, nil
 }
 
 func (store *PostgresStore) Close() {
@@ -101,9 +124,50 @@ func (store *PostgresStore) Schedule(
 	}
 	for attempt := 0; ; attempt++ {
 		assignment, created, err := store.scheduleOnce(ctx, request)
-		if !isSerializationFailure(err) || attempt >= request.SerializationRetryLimit {
+		if !isSerializationFailure(err) {
 			return assignment, created, err
 		}
+		if attempt >= request.SerializationRetryLimit {
+			// Report contention as contention. A caller that receives the raw
+			// PostgreSQL error cannot distinguish "try again" from "this is
+			// broken", and the reconciler treated it as the latter.
+			return assignment, created, fmt.Errorf(
+				"%w after %d attempts: %v",
+				ports.ErrSerializationContention, attempt+1, err,
+			)
+		}
+		// Retrying immediately makes contention worse: every loser wakes at the
+		// same instant and collides again. Back off with full jitter so a burst
+		// spreads out instead of resonating.
+		if !sleepWithContext(ctx, serializationBackoff(attempt)) {
+			return assignment, created, ctx.Err()
+		}
+	}
+}
+
+// serializationBackoff returns a full-jitter delay: a uniform draw from
+// [0, base*2^attempt] capped at serializationBackoffCeiling. Full jitter spreads
+// a colliding cohort more effectively than a fixed or purely exponential delay,
+// because two losers of the same race draw independently.
+func serializationBackoff(attempt int) time.Duration {
+	window := serializationBackoffBase << min(attempt, serializationBackoffShiftCap)
+	if window > serializationBackoffCeiling {
+		window = serializationBackoffCeiling
+	}
+	return time.Duration(rand.Int64N(int64(window) + 1))
+}
+
+func sleepWithContext(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 
@@ -122,13 +186,24 @@ func (store *PostgresStore) scheduleOnce(
 	); err != nil {
 		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Sandbox lock: %w", err)
 	}
-	var generation int64
-	var pinnedProfileRevisionID, currentInstanceID string
-	if err := tx.QueryRow(ctx, `
-		SELECT generation,profile_revision_id,current_instance_id
-		FROM secondbox.sandboxes WHERE id=$1 FOR UPDATE`, request.SandboxID,
-	).Scan(&generation, &pinnedProfileRevisionID, &currentInstanceID); err != nil {
-		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Sandbox lookup: %w", err)
+	locked, err := rowlock.SandboxWorkspaceByID(ctx, tx, request.SandboxID)
+	if err != nil {
+		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Sandbox/Workspace lookup: %w", err)
+	}
+	if locked.WorkspaceID != request.WorkspaceID {
+		return DurableAssignment{}, false, ErrProfileRevisionMismatch
+	}
+	generation := locked.Generation
+	pinnedProfileRevisionID := locked.ProfileRevisionID
+	currentInstanceID := locked.CurrentInstanceID
+	workspace := locked.Workspace
+	homeRunnerID := workspace.HomeRunnerID
+	if homeRunnerID == "" {
+		return DurableAssignment{}, false, ErrHomeRunnerUnavailable
+	}
+	if workspace.Generation != generation ||
+		(workspace.State != "creating" && workspace.State != "ready") {
+		return DurableAssignment{}, false, ErrProfileRevisionMismatch
 	}
 	if pinnedProfileRevisionID != request.ProfileRevisionID {
 		return DurableAssignment{}, false, ErrProfileRevisionMismatch
@@ -146,6 +221,10 @@ func (store *PostgresStore) scheduleOnce(
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return DurableAssignment{}, false, err
 	}
+	if workspace.Mutation.State != "" &&
+		(workspace.Mutation.ID != request.StartMutationID || workspace.Mutation.Kind != "start") {
+		return DurableAssignment{}, false, errors.New("SecondBox scheduler Workspace has a conflicting local mutation")
+	}
 	if currentInstanceID != "" {
 		return DurableAssignment{}, false, errors.New("SecondBox scheduler Sandbox has an Instance without durable assignment")
 	}
@@ -153,8 +232,9 @@ func (store *PostgresStore) scheduleOnce(
 	if err != nil {
 		return DurableAssignment{}, false, err
 	}
-	selected, err := SelectRunner(
-		request.Requirements, runners, request.Now.UTC(), request.HeartbeatTimeout,
+	selected, err := SelectHomeRunner(
+		homeRunnerID, request.Requirements, runners,
+		request.Now.UTC(), request.HeartbeatTimeout,
 	)
 	if err != nil {
 		return DurableAssignment{}, false, err
@@ -168,7 +248,31 @@ func (store *PostgresStore) scheduleOnce(
 	if err != nil {
 		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler resolved artifacts encoding: %w", err)
 	}
-	now := request.Now.UTC()
+	controlMessage := &runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_Assignment{
+			Assignment: proto.Clone(request.AssignmentCommand).(*runnerv1.AssignmentCommand),
+		},
+	}
+	controlMessage.GetAssignment().MessageId = ""
+	controlMessage.GetAssignment().Sequence = 0
+	controlMessage.GetAssignment().Correlation.SandboxId = request.SandboxID
+	controlMessage.GetAssignment().Correlation.InstanceId = request.InstanceID
+	controlMessage.GetAssignment().Correlation.SandboxGeneration = uint64(generation)
+	controlMessage.GetAssignment().Correlation.AssignmentId = request.AssignmentID
+	controlMessage.GetAssignment().Correlation.RunnerId = selected.ID
+	commandPayload, err := proto.Marshal(controlMessage)
+	if err != nil {
+		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Assignment command encoding: %w", err)
+	}
+	reserved := addCapacity(selected.Reserved, request.Requirements.Capacity)
+	reservedJSON, err := encodeCapacity(reserved)
+	if err != nil {
+		return DurableAssignment{}, false, err
+	}
+	placementAt := store.now().UTC()
+	if placementAt.IsZero() {
+		return DurableAssignment{}, false, errors.New("SecondBox scheduler clock returned zero time")
+	}
 	assignment := DurableAssignment{
 		ID: request.AssignmentID, SandboxID: request.SandboxID, InstanceID: request.InstanceID,
 		RunnerID: selected.ID, ProfileRevisionID: request.ProfileRevisionID,
@@ -177,18 +281,38 @@ func (store *PostgresStore) scheduleOnce(
 		CapabilitySnapshot: capabilitySnapshot, ResolvedArtifacts: request.ResolvedArtifacts,
 		ReleaseProof: map[string]string{}, RetryLimit: request.RetryLimit,
 		OperationDeadline: request.OperationDeadline.UTC(), ClaimExpiresAt: request.ClaimExpiresAt.UTC(),
-		Revision: 1, CreatedAt: now, UpdatedAt: now,
+		NextReconcileAt: request.OperationDeadline.UTC(),
+		Revision:        1, CreatedAt: placementAt, UpdatedAt: placementAt,
 	}
-	if _, err := tx.Exec(ctx, `
+	orderedWrites := &pgx.Batch{}
+	workspaceMutationError := "SecondBox scheduler Workspace start mutation acquisition"
+	if workspace.Mutation.State == "" {
+		orderedWrites.Queue(`
+			UPDATE secondbox.workspaces
+			SET mutation_kind='start',mutation_id=$2,mutation_effect_id=$3,
+			    mutation_operation_id=$4,mutation_expected_generation=$5,
+			    mutation_target_generation=$5,mutation_state='assigned',updated_at=$6
+			WHERE id=$1`,
+			request.WorkspaceID, request.StartMutationID, request.AssignmentCommandID,
+			request.AssignmentCommand.Correlation.OperationId, generation, placementAt,
+		)
+	} else {
+		workspaceMutationError = "SecondBox scheduler Workspace start mutation adoption"
+		orderedWrites.Queue(`
+			UPDATE secondbox.workspaces
+			SET mutation_effect_id=$2,mutation_state='assigned',updated_at=$3
+			WHERE id=$1 AND mutation_kind='start' AND mutation_id=$4`,
+			request.WorkspaceID, request.AssignmentCommandID, placementAt, request.StartMutationID,
+		)
+	}
+	orderedWrites.Queue(`
 		INSERT INTO secondbox.instances (
 			id,sandbox_id,generation,state,guest_liveness,termination_reason,created_at,updated_at,
 			ready_at,stopped_at
 		) VALUES ($1,$2,$3,'starting','starting','',$4,$4,NULL,NULL)`,
-		assignment.InstanceID, assignment.SandboxID, generation, now,
-	); err != nil {
-		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Instance insert: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
+		assignment.InstanceID, assignment.SandboxID, generation, placementAt,
+	)
+	orderedWrites.Queue(`
 		INSERT INTO secondbox.assignments (
 			id,sandbox_id,instance_id,runner_id,profile_revision_id,backend_kind,
 			backend_reference,generation,fencing_token,state,capability_snapshot_json,
@@ -196,69 +320,85 @@ func (store *PostgresStore) scheduleOnce(
 			operation_deadline,claim_expires_at,reconcile_owner,reconcile_claim_expires_at,
 			next_reconcile_at,revision,created_at,updated_at
 		) VALUES (
-			$1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,$11,'{}','',0,$12,$13,$14,'',$15,$15,1,$15,$15
+			$1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,$11,'{}','',0,$12,$13,$14,'',$15,$13,1,$15,$15
 		)`,
 		assignment.ID, assignment.SandboxID, assignment.InstanceID, assignment.RunnerID,
 		assignment.ProfileRevisionID, assignment.BackendKind, assignment.Generation,
 		assignment.FencingToken, assignment.State, capabilitiesJSON, artifactsJSON,
-		assignment.RetryLimit, assignment.OperationDeadline, assignment.ClaimExpiresAt, now,
-	); err != nil {
-		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Assignment insert: %w", err)
-	}
-	controlMessage := &runnerv1.ControlPlaneToRunner{
-		Message: &runnerv1.ControlPlaneToRunner_Assignment{
-			Assignment: proto.Clone(request.AssignmentCommand).(*runnerv1.AssignmentCommand),
-		},
-	}
-	controlMessage.GetAssignment().MessageId = ""
-	controlMessage.GetAssignment().Sequence = 0
-	controlMessage.GetAssignment().Correlation.SandboxId = assignment.SandboxID
-	controlMessage.GetAssignment().Correlation.InstanceId = assignment.InstanceID
-	controlMessage.GetAssignment().Correlation.SandboxGeneration = uint64(assignment.Generation)
-	controlMessage.GetAssignment().Correlation.AssignmentId = assignment.ID
-	controlMessage.GetAssignment().Correlation.RunnerId = assignment.RunnerID
-	commandPayload, err := proto.Marshal(controlMessage)
-	if err != nil {
-		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Assignment command encoding: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO secondbox.workspace_materializations (
-			id,workspace_id,sandbox_id,assignment_id,runner_id,generation,
-			source_checkpoint_id,state,release_proof_json,revision,created_at,updated_at,released_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,'preparing','{}',1,$8,$8,NULL)`,
-		request.MaterializationID, request.WorkspaceID, assignment.SandboxID,
-		assignment.ID, assignment.RunnerID, generation, request.SourceCheckpointID, now,
-	); err != nil {
-		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Workspace materialization insert: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO secondbox.runner_commands (
-			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
-			delivery_count,created_at,updated_at,delivered_at
-		) VALUES ($1,$2,$3,'assignment',$4,'pending','',0,$5,$5,NULL)`,
-		request.AssignmentCommandID, assignment.RunnerID, assignment.ID, commandPayload, now,
-	); err != nil {
-		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Assignment command insert: %w", err)
-	}
-	reserved := addCapacity(selected.Reserved, request.Requirements.Capacity)
-	reservedJSON, err := encodeCapacity(reserved)
-	if err != nil {
-		return DurableAssignment{}, false, err
-	}
-	if _, err := tx.Exec(ctx, `
+		assignment.RetryLimit, assignment.OperationDeadline, assignment.ClaimExpiresAt, placementAt,
+	)
+	// The command is always queued pending. Assigning its stream sequence here
+	// meant locking the runner's single runner_connections row inside every
+	// placement transaction, so concurrent placements for one runner serialised
+	// on one row under serializable isolation and lost the race. The connection
+	// owner assigns the sequence when it claims the command; it is the only
+	// writer of that counter, so it needs no lock at all.
+	const commandState = "pending"
+	const targetConnectionID = ""
+	const deliveryCount = int64(0)
+	orderedWrites.Queue(`
+		WITH inserted_command AS (
+			INSERT INTO secondbox.runner_commands (
+				id,runner_id,assignment_id,kind,payload,state,target_connection_id,
+				delivery_count,created_at,updated_at,delivered_at
+			) VALUES ($1,$2,$3,'assignment',$4,$5,$6,$7,$8,$8,NULL)
+			RETURNING 1
+		)
+		INSERT INTO secondbox.operation_stage_timings (
+			operation_id,sandbox_id,stage,observed_at
+		)
+		SELECT $9,$10,'placement_ready',$8
+		FROM inserted_command
+		ON CONFLICT (operation_id,stage) DO NOTHING`,
+		request.AssignmentCommandID, assignment.RunnerID, assignment.ID, commandPayload,
+		commandState, targetConnectionID, deliveryCount, placementAt,
+		request.AssignmentCommand.Correlation.OperationId,
+		request.SandboxID,
+	)
+	orderedWrites.Queue(`
 		UPDATE secondbox.runners
 		SET reserved_capacity_json=$2,revision=revision+1,updated_at=$3 WHERE id=$1`,
-		selected.ID, reservedJSON, now,
-	); err != nil {
-		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Runner reservation update: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
+		selected.ID, reservedJSON, placementAt,
+	)
+	orderedWrites.Queue(`
 		UPDATE secondbox.sandboxes
 		SET state='starting',current_instance_id=$2,revision=revision+1,updated_at=$3
 		WHERE id=$1`,
-		request.SandboxID, request.InstanceID, now,
-	); err != nil {
-		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Sandbox assignment update: %w", err)
+		request.SandboxID, request.InstanceID, placementAt,
+	)
+	results := tx.SendBatch(ctx, orderedWrites)
+	var writeErr error
+	workspaceMutation, err := results.Exec()
+	if err != nil {
+		writeErr = fmt.Errorf("%s: %w", workspaceMutationError, err)
+	} else if workspaceMutation.RowsAffected() != 1 {
+		writeErr = errors.New("SecondBox scheduler Workspace start mutation changed before assignment")
+	}
+	for _, errorPrefix := range []string{
+		"SecondBox scheduler Instance insert",
+		"SecondBox scheduler Assignment insert",
+	} {
+		if _, err := results.Exec(); err != nil && writeErr == nil {
+			writeErr = fmt.Errorf("%s: %w", errorPrefix, err)
+		}
+	}
+	for _, errorPrefix := range []string{
+		"SecondBox scheduler Assignment command insert",
+		"SecondBox scheduler Runner reservation update",
+		"SecondBox scheduler Sandbox assignment update",
+	} {
+		if _, err := results.Exec(); err != nil && writeErr == nil {
+			writeErr = fmt.Errorf("%s: %w", errorPrefix, err)
+		}
+	}
+	if err := results.Close(); err != nil {
+		writeErr = errors.Join(
+			writeErr,
+			fmt.Errorf("SecondBox scheduler ordered assignment writes close: %w", err),
+		)
+	}
+	if writeErr != nil {
+		return DurableAssignment{}, false, writeErr
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler commit: %w", err)
@@ -269,7 +409,7 @@ func (store *PostgresStore) scheduleOnce(
 func validateScheduleRequest(request ScheduleRequest) error {
 	if request.AssignmentID == "" || request.AssignmentCommandID == "" ||
 		request.InstanceID == "" || request.SandboxID == "" ||
-		request.WorkspaceID == "" || request.MaterializationID == "" ||
+		request.WorkspaceID == "" || request.StartMutationID == "" ||
 		request.ProfileRevisionID == "" || request.Requirements.PoolName == "" ||
 		request.Requirements.BackendKind == "" || request.Requirements.Architecture == "" ||
 		request.Requirements.GuestProtocolGeneration == 0 ||
@@ -286,7 +426,7 @@ func validateScheduleRequest(request ScheduleRequest) error {
 		command.Fence.SandboxGeneration == 0 ||
 		!bytes.Equal(command.Fence.FencingToken, request.FencingToken) ||
 		command.ProfileRevisionId != request.ProfileRevisionID ||
-		command.SourceCheckpointId != request.SourceCheckpointID ||
+		command.WorkspaceId != request.WorkspaceID ||
 		command.Requirements == nil ||
 		command.Correlation == nil ||
 		command.Correlation.RequestId == "" ||
@@ -337,8 +477,13 @@ func lockRunnerCandidates(
 			return nil, fmt.Errorf("SecondBox scheduler Runner architecture evidence is invalid")
 		}
 		runner.Architecture = architectures[0]
-		if err := json.Unmarshal(capabilitiesJSON, &runner.Capabilities); err != nil {
+		var capabilities []string
+		if err := json.Unmarshal(capabilitiesJSON, &capabilities); err != nil {
 			return nil, fmt.Errorf("SecondBox scheduler Runner capabilities decoding: %w", err)
+		}
+		runner.Capabilities = make(map[string]bool, len(capabilities))
+		for _, capability := range capabilities {
+			runner.Capabilities[capability] = true
 		}
 		if err := json.Unmarshal(allocatableJSON, &runner.Allocatable); err != nil {
 			return nil, fmt.Errorf("SecondBox scheduler Runner capacity decoding: %w", err)
@@ -347,14 +492,12 @@ func lockRunnerCandidates(
 			return nil, fmt.Errorf("SecondBox scheduler Runner reservation decoding: %w", err)
 		}
 		var cacheEvidence struct {
-			ArtifactDigests      []string `json:"artifactDigests"`
-			WorkspaceCheckpoints []string `json:"workspaceCheckpoints"`
+			ArtifactDigests []string `json:"artifactDigests"`
 		}
 		if err := json.Unmarshal(cacheJSON, &cacheEvidence); err != nil {
 			return nil, fmt.Errorf("SecondBox scheduler Runner cache decoding: %w", err)
 		}
 		runner.ArtifactDigests = cacheEvidence.ArtifactDigests
-		runner.WorkspaceCheckpoints = cacheEvidence.WorkspaceCheckpoints
 		runners = append(runners, runner)
 	}
 	if err := rows.Err(); err != nil {

@@ -5,6 +5,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 scripts/verify-runner-protocol-generated.sh
 scripts/verify-guest-protocol-generated.sh
+scripts/verify-portdirect-mirrored.sh
 go test ./sdk/go/secondboxclient
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=sdk/python python3 -m unittest discover -s sdk/python -p 'test_*.py'
 

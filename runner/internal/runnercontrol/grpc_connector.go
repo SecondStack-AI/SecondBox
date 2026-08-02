@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -70,22 +71,56 @@ func LoadRunnerProtocolConfigFromEnv() (RunnerProtocolConfig, GRPCConnectorConfi
 	if err != nil {
 		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, err
 	}
+	maximumConcurrentStartsRaw, err := required("SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS")
+	if err != nil {
+		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, err
+	}
+	maximumConcurrentStarts, err := strconv.Atoi(maximumConcurrentStartsRaw)
+	if err != nil || maximumConcurrentStarts < 1 {
+		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, fmt.Errorf(
+			"SecondBox runner protocol config requires positive integer SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS",
+		)
+	}
+	maximumConcurrentWorkspaceCreatesRaw, err := required(
+		"SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES",
+	)
+	if err != nil {
+		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, err
+	}
+	maximumConcurrentWorkspaceCreates, err := strconv.Atoi(maximumConcurrentWorkspaceCreatesRaw)
+	if err != nil || maximumConcurrentWorkspaceCreates < 1 {
+		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, fmt.Errorf(
+			"SecondBox runner protocol config requires positive integer SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES",
+		)
+	}
 	if len(credential) < 32 {
 		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, fmt.Errorf("SecondBox runner credential must contain at least 32 bytes")
 	}
+	dataPlaneListenAddress, err := required("SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS")
+	if err != nil {
+		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, err
+	}
+	dataPlaneAdvertisedAddress, err := required("SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS")
+	if err != nil {
+		return RunnerProtocolConfig{}, GRPCConnectorConfig{}, err
+	}
 
 	return RunnerProtocolConfig{
-			RunnerID:        runnerID,
-			RunnerPoolID:    poolID,
-			SoftwareVersion: softwareVersion,
-			ProtocolMinimum: 1,
-			ProtocolMaximum: 1,
+			RunnerID:                          runnerID,
+			RunnerPoolID:                      poolID,
+			SoftwareVersion:                   softwareVersion,
+			ProtocolMinimum:                   1,
+			ProtocolMaximum:                   1,
+			MaximumConcurrentStarts:           maximumConcurrentStarts,
+			MaximumConcurrentWorkspaceCreates: maximumConcurrentWorkspaceCreates,
+			DataPlaneListenAddress:            dataPlaneListenAddress,
+			DataPlaneAdvertisedAddress:        dataPlaneAdvertisedAddress,
 			MandatoryFeatures: []runnerprotocol.RunnerFeature{
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING,
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_FILE_STREAMING,
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_PTY,
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
-				runnerprotocol.RunnerFeature_RUNNER_FEATURE_CHECKPOINT,
+				runnerprotocol.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE,
 				runnerprotocol.RunnerFeature_RUNNER_FEATURE_PORT_PROXY,
 			},
 		}, GRPCConnectorConfig{

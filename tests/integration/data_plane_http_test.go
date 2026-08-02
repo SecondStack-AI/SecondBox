@@ -18,6 +18,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -73,7 +74,8 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseDurableRelay(t *testing.T) {
 	}
 	t.Cleanup(relay.Close)
 	dataPlaneService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		Store: databaseStore, PlatformToken: testPlatformToken,
+		BuiltInProfiles: integrationBuiltInProfiles(t),
+		Store:           databaseStore, PlatformToken: testPlatformToken,
 		DefaultSubjectQuota: generousQuota(),
 		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
@@ -106,7 +108,8 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseDurableRelay(t *testing.T) {
 	assertHTTPStatus(t, execResponse, http.StatusOK)
 	var exited contracts.ExecExited
 	decodeHTTPJSON(t, execResponse, &exited)
-	if exited.Kind != "exited" || exited.ExitCode != 0 {
+	if exited.Kind != "exited" || exited.ExitCode != 0 ||
+		exited.ElapsedMilliseconds != 42 {
 		t.Fatalf("Exec outcome = %#v", exited)
 	}
 	stdout, err := base64.StdEncoding.DecodeString(exited.Output.StdoutBase64)
@@ -120,7 +123,7 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseDurableRelay(t *testing.T) {
 	assertHTTPStatus(t, mkdirResponse, http.StatusNoContent)
 	mkdirResponse.Body.Close()
 
-	content := []byte{0, 2, 0xfe, 'z'}
+	content := bytes.Repeat([]byte{0, 2, 0xfe, 'z'}, 2048)
 	contentHash := sha256.Sum256(content)
 	digest := "sha-256=:" + base64.StdEncoding.EncodeToString(contentHash[:]) + ":"
 	writeRequest, err := http.NewRequest(http.MethodPut, server.URL+"/v1/sandboxes/"+sandbox.ID+"/files?path="+url.QueryEscape("workspace/data.bin"), bytes.NewReader(content))
@@ -140,6 +143,15 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseDurableRelay(t *testing.T) {
 
 	readResponse := dataPlaneGET(t, server.URL+"/v1/sandboxes/"+sandbox.ID+"/files?path="+url.QueryEscape("workspace/data.bin"), key.Credential, sandbox.Generation)
 	assertHTTPStatus(t, readResponse, http.StatusOK)
+	if readResponse.ContentLength != int64(len(content)) ||
+		readResponse.Header.Get("Content-Length") != strconv.Itoa(len(content)) {
+		t.Fatalf(
+			"read Content-Length = %d header=%q, want %d",
+			readResponse.ContentLength,
+			readResponse.Header.Get("Content-Length"),
+			len(content),
+		)
+	}
 	readContent, err := io.ReadAll(readResponse.Body)
 	readResponse.Body.Close()
 	if err != nil || !bytes.Equal(readContent, content) || readResponse.Header.Get("Digest") != digest {
@@ -233,7 +245,8 @@ func TestFlueAdapterCompleteSubsetAgainstRealServiceContract(t *testing.T) {
 	}
 	t.Cleanup(relay.Close)
 	dataPlaneService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		Store: databaseStore, PlatformToken: testPlatformToken,
+		BuiltInProfiles: integrationBuiltInProfiles(t),
+		Store:           databaseStore, PlatformToken: testPlatformToken,
 		DefaultSubjectQuota: generousQuota(),
 		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
@@ -365,7 +378,8 @@ func TestIndependentProjectsCannotObserveOrMutateAnotherSandbox(t *testing.T) {
 	}
 	t.Cleanup(relay.Close)
 	isolationService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		Store: databaseStore, PlatformToken: testPlatformToken,
+		BuiltInProfiles: integrationBuiltInProfiles(t),
+		Store:           databaseStore, PlatformToken: testPlatformToken,
 		DefaultSubjectQuota: generousQuota(),
 		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
@@ -526,6 +540,7 @@ type relayFakeRunner struct {
 	mkdirRecursive  *bool
 	removeRecursive *bool
 	removeForce     *bool
+	readMaximumSize uint64
 	execOpen        *runnerv1.ExecOpen
 	workspaceFiles  map[string][]byte
 	directories     map[string]bool
@@ -633,6 +648,7 @@ func (fake *relayFakeRunner) handle(ctx context.Context, message *runnerv1.Contr
 					StreamId: frame.StreamId, Sequence: sequence,
 					Payload: &runnerv1.ExecFrame_Terminal{Terminal: &runnerv1.ExecTerminal{
 						Kind: runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED, ExitCode: exitCode,
+						ElapsedMilliseconds: 42,
 					}},
 				}},
 			}, now)
@@ -646,7 +662,12 @@ func (fake *relayFakeRunner) handle(ctx context.Context, message *runnerv1.Contr
 	if open := frame.GetOpen(); open != nil {
 		fake.files[frame.OperationId] = &fakeFileOperation{frame: frame, open: open}
 		switch open.Operation {
-		case runnerv1.FileOperation_FILE_OPERATION_WRITE, runnerv1.FileOperation_FILE_OPERATION_READ:
+		case runnerv1.FileOperation_FILE_OPERATION_WRITE:
+			return nil
+		case runnerv1.FileOperation_FILE_OPERATION_READ:
+			fake.mu.Lock()
+			fake.readMaximumSize = open.ExpectedSize
+			fake.mu.Unlock()
 			return nil
 		case runnerv1.FileOperation_FILE_OPERATION_MKDIR:
 			fake.mu.Lock()
@@ -854,6 +875,9 @@ func (fake *relayFakeRunner) assertObserved() error {
 	if fake.removeRecursive == nil || *fake.removeRecursive ||
 		fake.removeForce == nil || *fake.removeForce {
 		return fmt.Errorf("fake runner remove options = %v/%v", fake.removeRecursive, fake.removeForce)
+	}
+	if fake.readMaximumSize != 1<<30 {
+		return fmt.Errorf("fake runner read maximum size = %d", fake.readMaximumSize)
 	}
 	return nil
 }

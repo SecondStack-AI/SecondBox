@@ -67,6 +67,9 @@ required_settings=(
   SECONDBOX_RUNNER_CERTIFICATE_LIFETIME_DAYS
   SECONDBOX_RUNNER_HEARTBEAT_INTERVAL_MILLISECONDS
   SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS
+  SECONDBOX_RUNNER_COMMAND_DELIVERY_BATCH_SIZE
+  SECONDBOX_RUNNER_EVENT_PERSISTENCE_BATCH_SIZE
+  SECONDBOX_RUNNER_EVENT_PERSISTENCE_BATCH_WAIT_MILLISECONDS
   SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS
   SECONDBOX_DATA_PLANE_CLAIM_DURATION_MILLISECONDS
   SECONDBOX_DATA_PLANE_RETENTION_SECONDS
@@ -81,6 +84,12 @@ required_settings=(
   SECONDBOX_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS
   SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH
   SECONDBOX_SIGNED_ASSET_CATALOG_PATH
+  SECONDBOX_BUILTIN_AGENT_COMPARTMENT_POOL
+  SECONDBOX_BUILTIN_AGENT_COMPARTMENT_RUNTIME_BUNDLE_DIGEST
+  SECONDBOX_BUILTIN_AGENT_COMPARTMENT_TOOLCHAIN_BUNDLE_DIGEST
+  SECONDBOX_BUILTIN_CODING_ENVIRONMENT_POOL
+  SECONDBOX_BUILTIN_CODING_ENVIRONMENT_RUNTIME_BUNDLE_DIGEST
+  SECONDBOX_BUILTIN_CODING_ENVIRONMENT_TOOLCHAIN_BUNDLE_DIGEST
   SECONDBOX_RUNNER_PROTOCOL_MINIMUM
   SECONDBOX_RUNNER_PROTOCOL_MAXIMUM
   SECONDBOX_RUNNER_ENABLED_FEATURES
@@ -97,8 +106,6 @@ required_settings=(
   SECONDBOX_RUNNER_ARTIFACT_HOST_DIR
   SECONDBOX_RUNNER_STATE_HOST_DIR
   SECONDBOX_RUNNER_WORKSPACE_HOST_DIR
-  SECONDBOX_RUNNER_CHECKPOINT_RESTORE_SPOOL_HOST_DIR
-  SECONDBOX_RUNNER_STATE_DIR
   SECONDBOX_RUNNER_LOG_PATH
   SECONDBOX_RUNNER_LOG_DIR
   SECONDBOX_RUNNER_FIRECRACKER_PATH
@@ -118,10 +125,7 @@ required_settings=(
   SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED
   SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY
   SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256
-  SECONDBOX_RUNNER_SANDBOX_WORKSPACE_DIR
-  SECONDBOX_RUNNER_CHECKPOINT_RESTORE_SPOOL_DIR
-  SECONDBOX_RUNNER_SANDBOX_STORAGE_BACKEND
-  SECONDBOX_RUNNER_SANDBOX_THIN_POOL_DEVICE
+  SECONDBOX_RUNNER_WORKSPACE_ROOT
   SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT
   SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT
   SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT
@@ -141,10 +145,16 @@ required_settings=(
   SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL
   SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_ADDRESSES
   SECONDBOX_RUNNER_NETWORK_POLICY_MANAGEMENT_CIDRS
+  SECONDBOX_RUNNER_NETWORK_POLICY_RUNNER_GATEWAYS
   SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM
   SECONDBOX_RUNNER_MAX_CONCURRENT_PER_SANDBOX
   SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL
+  SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS
+  SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES
+  SECONDBOX_RUNNER_MAX_CONCURRENT_OPERATIONS_GLOBAL
   SECONDBOX_RUNNER_FILE_TRANSFER_MAX_BYTES
+  SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS
+  SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS
   SECONDBOX_POSTGRES_BIND_IP
   SECONDBOX_POSTGRES_PUBLISHED_PORT
   SECONDBOX_POSTGRES_DATABASE
@@ -165,13 +175,13 @@ required_settings=(
   SECONDBOX_DEVELOPMENT_PREPARE_WAIT_TIMEOUT_SECONDS
   SECONDBOX_OBJECT_STORE_TEMP_DIRECTORY
   SECONDBOX_OBJECT_STORE_MAX_OBJECT_BYTES
-  SECONDBOX_CHECKPOINT_SPOOL_DIRECTORY
   SECONDBOX_PLATFORM_TOKEN
+  SECONDBOX_APPLICATION_AUTHORITIES_JSON
   SECONDBOX_DEFAULT_SUBJECT_MAX_SANDBOXES
   SECONDBOX_DEFAULT_SUBJECT_MAX_ACTIVE_INSTANCES
   SECONDBOX_DEFAULT_SUBJECT_MAX_CPU_MILLIS
   SECONDBOX_DEFAULT_SUBJECT_MAX_MEMORY_BYTES
-  SECONDBOX_DEFAULT_SUBJECT_MAX_RETAINED_BYTES
+  SECONDBOX_DEFAULT_SUBJECT_MAX_ARTIFACT_BYTES
   SECONDBOX_DEFAULT_SUBJECT_MAX_SNAPSHOTS
   SECONDBOX_DEFAULT_SUBJECT_MAX_ARTIFACTS
   SECONDBOX_DEFAULT_SUBJECT_MAX_PORT_SESSIONS
@@ -185,8 +195,37 @@ for setting in "${required_settings[@]}"; do
   fi
   if [[ "$value" == *GENERATE_WITH_DEPLOY_BOOTSTRAP* ||
         "$value" == *GENERATE_LOCAL_DATABASE_URL* ||
+        "$value" == *GENERATE_DEVELOPMENT_BUNDLE_DIGEST* ||
         "$value" == *REPLACE_WITH_* ]]; then
     echo "SecondBox environment still contains a placeholder for $setting" >&2
+    exit 1
+  fi
+done
+
+# Firecracker exposes no PS/2 controller, but Linux otherwise waits for the
+# legacy i8042 probes during every boot. Console verbosity also sends every
+# kernel line through Firecracker's emulated UART. These arguments are part of
+# the qualified v1 boot contract: accepting a deployment without them silently
+# adds hundreds of milliseconds to every Sandbox start.
+kernel_arguments="$(value_for SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS)"
+required_kernel_arguments=(
+  console=ttyS0
+  reboot=k
+  panic=1
+  pci=off
+  root=/dev/vda
+  rw
+  quiet
+  loglevel=1
+  i8042.noaux
+  i8042.nomux
+  i8042.nopnp
+  i8042.dumbkbd
+  init=/init
+)
+for required_kernel_argument in "${required_kernel_arguments[@]}"; do
+  if [[ " $kernel_arguments " != *" $required_kernel_argument "* ]]; then
+    echo "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS must include $required_kernel_argument" >&2
     exit 1
   fi
 done
@@ -234,6 +273,28 @@ for port_setting in \
     exit 1
   fi
 done
+for data_plane_setting in \
+  SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS \
+  SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS; do
+  data_plane_address="$(value_for "$data_plane_setting")"
+  data_plane_port="${data_plane_address##*:}"
+  if [[ "$data_plane_address" != *:* ]] ||
+     [[ ! "$data_plane_port" =~ ^[0-9]+$ ]] ||
+     (( data_plane_port < 1 || data_plane_port > 65535 )); then
+    echo "$data_plane_setting must be a host:port address with a port from 1 through 65535" >&2
+    exit 1
+  fi
+done
+# The advertised address is dialed by the ingress tier, so a wildcard host is a
+# configuration error even though it is a valid bind host.
+data_plane_advertised_address="$(value_for SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS)"
+data_plane_advertised_host="${data_plane_advertised_address%:*}"
+if [[ -z "$data_plane_advertised_host" ||
+      "$data_plane_advertised_host" == "0.0.0.0" ||
+      "$data_plane_advertised_host" == "[::]" ]]; then
+  echo "SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS must name a reachable host, not a wildcard" >&2
+  exit 1
+fi
 guest_control_vsock_port="$(value_for SECONDBOX_RUNNER_GUEST_CONTROL_VSOCK_PORT)"
 guest_protocol_vsock_port="$(value_for SECONDBOX_RUNNER_GUEST_PROTOCOL_VSOCK_PORT)"
 if [[ "$guest_control_vsock_port" == "$guest_protocol_vsock_port" ]]; then
@@ -309,6 +370,9 @@ for positive_setting in \
   SECONDBOX_RUNNER_CERTIFICATE_LIFETIME_DAYS \
   SECONDBOX_RUNNER_HEARTBEAT_INTERVAL_MILLISECONDS \
   SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS \
+  SECONDBOX_RUNNER_COMMAND_DELIVERY_BATCH_SIZE \
+  SECONDBOX_RUNNER_EVENT_PERSISTENCE_BATCH_SIZE \
+  SECONDBOX_RUNNER_EVENT_PERSISTENCE_BATCH_WAIT_MILLISECONDS \
   SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS \
   SECONDBOX_DATA_PLANE_CLAIM_DURATION_MILLISECONDS \
   SECONDBOX_DATA_PLANE_RETENTION_SECONDS \
@@ -343,8 +407,7 @@ if [[ "$(value_for SECONDBOX_OBJECT_STORE_USE_PATH_STYLE)" != "true" &&
   exit 1
 fi
 for absolute_directory_setting in \
-  SECONDBOX_OBJECT_STORE_TEMP_DIRECTORY \
-  SECONDBOX_CHECKPOINT_SPOOL_DIRECTORY; do
+  SECONDBOX_OBJECT_STORE_TEMP_DIRECTORY; do
   absolute_directory="$(value_for "$absolute_directory_setting")"
   if [[ "$absolute_directory" != /* ]]; then
     echo "$absolute_directory_setting must be absolute" >&2
@@ -362,6 +425,14 @@ for retry_setting in \
 done
 if (( $(value_for SECONDBOX_RUNNER_PROTOCOL_MINIMUM) > $(value_for SECONDBOX_RUNNER_PROTOCOL_MAXIMUM) )); then
   echo "SECONDBOX_RUNNER_PROTOCOL_MINIMUM must not exceed SECONDBOX_RUNNER_PROTOCOL_MAXIMUM" >&2
+  exit 1
+fi
+
+runner_pki_directory="$(value_for SECONDBOX_RUNNER_PKI_HOST_DIR)"
+if [[ "$runner_pki_directory" != /* ||
+      -L "$runner_pki_directory" ||
+      ! -d "$runner_pki_directory" ]]; then
+  echo "SECONDBOX_RUNNER_PKI_HOST_DIR must be an absolute non-symbolic-link directory" >&2
   exit 1
 fi
 
@@ -388,6 +459,9 @@ for runner_positive_setting in \
   SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS \
   SECONDBOX_RUNNER_MAX_CONCURRENT_PER_SANDBOX \
   SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL \
+  SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS \
+  SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES \
+  SECONDBOX_RUNNER_MAX_CONCURRENT_OPERATIONS_GLOBAL \
   SECONDBOX_RUNNER_FILE_TRANSFER_MAX_BYTES; do
   runner_positive_value="$(value_for "$runner_positive_setting")"
   if [[ ! "$runner_positive_value" =~ ^[0-9]+$ ]] || (( runner_positive_value < 1 )); then
@@ -395,6 +469,12 @@ for runner_positive_setting in \
     exit 1
   fi
 done
+runner_max_concurrent_starts="$(value_for SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS)"
+runner_max_concurrent_global="$(value_for SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL)"
+if (( runner_max_concurrent_starts > runner_max_concurrent_global )); then
+  echo "SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS must not exceed SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL" >&2
+  exit 1
+fi
 runner_storage_recovery="$(value_for SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT)"
 runner_storage_warning="$(value_for SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT)"
 runner_storage_deny="$(value_for SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT)"
@@ -409,8 +489,7 @@ if [[ "$same_host_runner_enabled" == "true" ]]; then
     SECONDBOX_RUNNER_IDENTITY_HOST_DIR \
     SECONDBOX_RUNNER_ARTIFACT_HOST_DIR \
     SECONDBOX_RUNNER_STATE_HOST_DIR \
-    SECONDBOX_RUNNER_WORKSPACE_HOST_DIR \
-    SECONDBOX_RUNNER_CHECKPOINT_RESTORE_SPOOL_HOST_DIR; do
+    SECONDBOX_RUNNER_WORKSPACE_HOST_DIR; do
     runner_host_directory="$(value_for "$runner_host_directory_setting")"
     if [[ "$runner_host_directory" != /* || -L "$runner_host_directory" || ! -d "$runner_host_directory" ]]; then
       echo "$runner_host_directory_setting must be an existing absolute non-symbolic-link directory" >&2
@@ -419,11 +498,8 @@ if [[ "$same_host_runner_enabled" == "true" ]]; then
   done
   runner_root_device="$(stat -c '%d' /)"
   runner_workspace_device="$(stat -c '%d' "$(value_for SECONDBOX_RUNNER_WORKSPACE_HOST_DIR)")"
-  runner_restore_spool_device="$(stat -c '%d' "$(value_for SECONDBOX_RUNNER_CHECKPOINT_RESTORE_SPOOL_HOST_DIR)")"
-  if [[ "$runner_workspace_device" == "$runner_root_device" ||
-        "$runner_restore_spool_device" == "$runner_root_device" ||
-        "$runner_workspace_device" == "$runner_restore_spool_device" ]]; then
-    echo "Runner workspace and restore spool must use distinct dedicated non-root filesystems" >&2
+  if [[ "$runner_workspace_device" == "$runner_root_device" ]]; then
+    echo "Runner workspace root must use a dedicated non-root filesystem" >&2
     exit 1
   fi
   for runner_identity_file in runner.crt runner.key runner-ca.crt; do
@@ -479,13 +555,6 @@ if [[ "$signed_asset_catalog_path" != /* ]]; then
   exit 1
 fi
 
-runner_pki_directory="$(value_for SECONDBOX_RUNNER_PKI_HOST_DIR)"
-if [[ "$runner_pki_directory" != /* ||
-      -L "$runner_pki_directory" ||
-      ! -d "$runner_pki_directory" ]]; then
-  echo "SECONDBOX_RUNNER_PKI_HOST_DIR must be an absolute non-symbolic-link directory" >&2
-  exit 1
-fi
 for private_key in runner-ca.key server.key; do
   private_key_path="$runner_pki_directory/$private_key"
   if [[ -L "$private_key_path" || ! -f "$private_key_path" ]]; then

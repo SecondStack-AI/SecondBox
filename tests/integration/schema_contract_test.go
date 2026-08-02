@@ -27,8 +27,8 @@ func TestSecondBoxBaselineOwnsCleanLogicalSchemaWithoutPhysicalCrossTableConstra
 	for _, table := range []string{
 		"profiles", "profile_revisions",
 		"runner_pools", "runners", "sandboxes", "workspaces", "instances",
-		"assignments", "leases", "activity_sessions", "activity_touches",
-		"workspace_checkpoints", "snapshots", "artifacts",
+		"assignments", "assignment_stage_timings", "leases", "activity_sessions", "activity_touches",
+		"snapshots", "workspace_restores", "artifacts",
 		"port_sessions", "data_plane_sessions", "data_plane_frames",
 		"operations", "idempotency_records", "audit_events",
 	} {
@@ -39,9 +39,27 @@ func TestSecondBoxBaselineOwnsCleanLogicalSchemaWithoutPhysicalCrossTableConstra
 	for _, forbidden := range []string{
 		"foreign key", " references ", " check ",
 		"resource_classes", "lifecycle_policies", "agent_service",
+		"host_path", "image_path", "workspace_path",
 	} {
 		if strings.Contains(sql, forbidden) {
 			t.Errorf("SecondBox baseline contains removed or forbidden schema fragment %q", forbidden)
+		}
+	}
+	for _, fragment := range []string{
+		"home_runner_id text not null",
+		"logical_capacity_bytes bigint not null",
+		"mutation_effect_id text not null",
+		"create index workspaces_home_state_idx",
+		"create table secondbox.workspace_restores",
+		"create index workspace_restores_home_state_idx",
+		"create table secondbox.assignment_stage_timings",
+		"primary key (assignment_id, stage)",
+		"create index assignment_stage_timings_ready_idx",
+		"create index data_plane_sessions_sandbox_timing_idx",
+		"create index operations_sandbox_created_idx",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("SecondBox baseline is missing local Workspace authority %q", fragment)
 		}
 	}
 }
@@ -96,8 +114,8 @@ func TestOwnershipColumnsAndSubjectQuotaArePresentAfterFreshMigration(t *testing
 		"leases",
 		"activity_sessions",
 		"activity_touches",
-		"workspace_checkpoints",
 		"snapshots",
+		"workspace_restores",
 		"artifacts",
 		"port_sessions",
 		"data_plane_sessions",
@@ -120,8 +138,8 @@ func TestOwnershipColumnsAndSubjectQuotaArePresentAfterFreshMigration(t *testing
 			}
 			migrated := table == "sandboxes" || table == "workspaces" ||
 				table == "leases" || table == "activity_sessions" ||
-				table == "activity_touches" || table == "workspace_checkpoints" ||
-				table == "snapshots" || table == "artifacts" ||
+				table == "activity_touches" || table == "snapshots" ||
+				table == "workspace_restores" || table == "artifacts" ||
 				table == "port_sessions" || table == "data_plane_sessions" ||
 				table == "operations" || table == "idempotency_records" ||
 				table == "audit_events"
