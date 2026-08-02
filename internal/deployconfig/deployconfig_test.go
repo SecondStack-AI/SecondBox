@@ -144,6 +144,10 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 		{name: "database port exceeds TCP range", want: "database.published_port", mutate: func(manifest *ManifestV1) { manifest.Database.PublishedPort = integer(70000) }},
 		{name: "object store port exceeds TCP range", want: "object_store.published_port", mutate: func(manifest *ManifestV1) { manifest.ObjectStore.PublishedPort = integer(70000) }},
 		{name: "object store console port exceeds TCP range", want: "object_store.console_published_port", mutate: func(manifest *ManifestV1) { manifest.ObjectStore.ConsolePublishedPort = integer(70000) }},
+		{name: "unsupported Runner feature", want: "runner feature \"unsupported-feature\" is unsupported", mutate: func(manifest *ManifestV1) {
+			manifest.Policy.RunnerEnabledFeatures = "local-workspace,unsupported-feature"
+		}},
+		{name: "Runner features omit local workspace", want: "runner features require local-workspace", mutate: func(manifest *ManifestV1) { manifest.Policy.RunnerEnabledFeatures = "evidence" }},
 		{name: "Runner ID escapes artifact directory", want: "valid opaque Runner ID", mutate: func(manifest *ManifestV1) { manifest.Runners = []Runner{validTestRunner("../escaped", "remote")} }},
 		{name: "built-in Profile digest absent from catalog", want: "must exist in deployment.signed_asset_catalog", mutate: func(manifest *ManifestV1) {
 			manifest.Policy.CodingEnvironmentRuntimeBundleDigest = "sha256:" + strings.Repeat("b", 64)
@@ -467,6 +471,27 @@ func TestRunnerInitAcceptsTheValidatedPKCS8CAKeyFormat(t *testing.T) {
 	}
 	if err := RunnerInit(manifestPath, "runner-pkcs8", filepath.Join(t.TempDir(), "runner-pkcs8")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRunnerInitValidatesTheManifestBeforeIssuingIdentity(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	manifest, err := ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.Runners = []Runner{validTestRunner("runner-invalid-manifest", "remote")}
+	manifest.RunnerTrust.CertificateLifetimeDays = nil
+	encoded, err := encodeManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
+		t.Fatal(err)
+	}
+	err = RunnerInit(manifestPath, "runner-invalid-manifest", filepath.Join(t.TempDir(), "identity"))
+	if err == nil || !strings.Contains(err.Error(), "runner_trust.certificate_lifetime_days must be positive") {
+		t.Fatalf("runner-init invalid manifest error = %v", err)
 	}
 }
 

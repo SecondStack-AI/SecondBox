@@ -20,6 +20,10 @@ func RunnerInit(manifestPath, runnerID, target string) error {
 	}
 	absoluteManifest, _ := filepath.Abs(manifestPath)
 	base := filepath.Dir(absoluteManifest)
+	resolved, err := resolveManifest(manifest, base)
+	if err != nil {
+		return err
+	}
 	var declared *Runner
 	for index := range manifest.Runners {
 		if manifest.Runners[index].RunnerID == runnerID {
@@ -127,10 +131,6 @@ func RunnerInit(manifestPath, runnerID, target string) error {
 		if err := writeAtomic(filepath.Join(staging, name), file.data, file.mode, false); err != nil {
 			return err
 		}
-	}
-	resolved, err := resolveManifest(manifest, base)
-	if err != nil {
-		return err
 	}
 	environment := resolved.RemoteRunnerEnvironment[runnerID]
 	if declared.Placement == "same-host" {

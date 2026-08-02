@@ -134,20 +134,25 @@ func runCompose(manifestPath, action string) error {
 			return fmt.Errorf("SecondBox deployment manifest: compose prepare requires development mode")
 		}
 		waitSeconds := strconv.FormatInt(*resolved.Manifest.Deployment.DevelopmentWaitSeconds, 10)
-		if err := runDockerCompose(append(
-			slices.Clone(arguments),
-			"up", "--detach", "--wait", "--wait-timeout", waitSeconds,
+		if err := runDockerCompose(composeUpArguments(
+			arguments,
+			"--detach", "--wait", "--wait-timeout", waitSeconds,
 			"postgres", "object-store",
 		)); err != nil {
 			return err
 		}
-		return runDockerCompose(append(slices.Clone(arguments), "up", "--no-deps", "object-store-init"))
+		return runDockerCompose(composeUpArguments(arguments, "--no-deps", "object-store-init"))
 	case "up":
-		arguments = append(arguments, "up", "--detach")
+		arguments = composeUpArguments(arguments, "--detach")
 	case "down":
 		arguments = append(arguments, "down")
 	}
 	return runDockerCompose(arguments)
+}
+
+func composeUpArguments(arguments []string, options ...string) []string {
+	result := append(slices.Clone(arguments), "up", "--remove-orphans")
+	return append(result, options...)
 }
 
 func runDockerCompose(arguments []string) error {
