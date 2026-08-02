@@ -185,6 +185,12 @@ func randomSerial() (*big.Int, error) {
 // InitProduction writes an annotated, intentionally incomplete shape and
 // reports all unresolved decision groups in one error.
 func InitProduction(directory string) (string, error) {
+	return initProduction(directory, func(path string, content []byte) error {
+		return writeAtomic(path, content, 0o600, false)
+	})
+}
+
+func initProduction(directory string, writeSkeleton func(string, []byte) error) (string, error) {
 	absolute, err := filepath.Abs(directory)
 	if err != nil {
 		return "", err
@@ -192,11 +198,18 @@ func InitProduction(directory string) (string, error) {
 	if err := os.Mkdir(absolute, 0o700); err != nil {
 		return "", manifestError("create production initialization directory", err)
 	}
+	created := true
+	defer func() {
+		if created {
+			_ = os.RemoveAll(absolute)
+		}
+	}()
 	skeleton := []byte("schema_version = 1\n\n# Production initialization is incomplete. Supply all eight decision groups:\n# deployment, database, object_store, runners, execution_asset_trust,\n# applications, tenancy_policy, lifecycle_policy.\n")
 	path := filepath.Join(absolute, "secondbox.toml")
-	if err := writeAtomic(path, skeleton, 0o600, false); err != nil {
+	if err := writeSkeleton(path, skeleton); err != nil {
 		return "", err
 	}
+	created = false
 	return path, manifestError("production initialization unresolved decision groups: deployment, database, object store, Runner topology, execution-asset trust, application authorities, tenancy policy, lifecycle policy", nil)
 }
 

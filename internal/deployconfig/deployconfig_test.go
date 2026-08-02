@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -497,6 +498,18 @@ func TestRunnerInitValidatesTheManifestBeforeIssuingIdentity(t *testing.T) {
 
 func TestInspectRedactsSecretValuesAndPathsAndShowsAllDefaults(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
+	manifest, err := ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.Runners = []Runner{validSameHostTestRunner("runner-local")}
+	encoded, err := encodeManifest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
+		t.Fatal(err)
+	}
 	resolved, err := Resolve(manifestPath)
 	if err != nil {
 		t.Fatal(err)
@@ -506,13 +519,32 @@ func TestInspectRedactsSecretValuesAndPathsAndShowsAllDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(output)
-	for _, secret := range []string{resolved.Environment["SECONDBOX_PLATFORM_TOKEN"], resolved.Environment["SECONDBOX_RUNNER_CREDENTIAL"], resolved.SecretPaths["applications.platform_token_file"]} {
+	for _, secret := range []string{resolved.Environment["SECONDBOX_PLATFORM_TOKEN"], resolved.Environment["SECONDBOX_RUNNER_CREDENTIAL"], resolved.SecretPaths["applications.platform_token_file"], resolved.Environment["SECONDBOX_RUNNER_PKI_HOST_DIR"], resolved.Environment["SECONDBOX_RUNNER_IDENTITY_HOST_DIR"]} {
 		if strings.Contains(text, secret) {
 			t.Errorf("inspect exposed secret material %q", secret)
 		}
 	}
 	if strings.Count(text, "codeDefault") != 19 {
 		t.Fatalf("inspect defaults = %d, want 19", strings.Count(text, "codeDefault"))
+	}
+}
+
+func TestRenderRefusesSymlinkedRunnerArtifactDirectory(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	environmentPath := filepath.Join(t.TempDir(), "generated.env")
+	victimDirectory := t.TempDir()
+	victimPath := filepath.Join(victimDirectory, "keep.env")
+	if err := os.WriteFile(victimPath, []byte(generatedEnvironmentHeader+"KEEP='true'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victimDirectory, environmentPath+".runners"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Render(manifestPath, environmentPath); err == nil || !strings.Contains(err.Error(), "non-symbolic-link directory") {
+		t.Fatalf("render symlinked runner directory error = %v", err)
+	}
+	if _, err := os.Stat(victimPath); err != nil {
+		t.Fatalf("render removed file through symlink: %v", err)
 	}
 }
 
@@ -529,6 +561,20 @@ func TestProductionInitializationReportsEveryUnresolvedDecisionGroup(t *testing.
 	}
 	if info, statErr := os.Stat(path); statErr != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("production skeleton = %v, %v", info, statErr)
+	}
+}
+
+func TestProductionInitializationCleansUpFailedSkeletonWrite(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "production")
+	wantErr := errors.New("injected skeleton write failure")
+	if _, err := initProduction(directory, func(string, []byte) error { return wantErr }); !errors.Is(err, wantErr) {
+		t.Fatalf("production write error = %v", err)
+	}
+	if _, err := os.Lstat(directory); !os.IsNotExist(err) {
+		t.Fatalf("failed production target was retained: %v", err)
+	}
+	if path, err := InitProduction(directory); path == "" || err == nil {
+		t.Fatalf("production retry path, error = %q, %v", path, err)
 	}
 }
 
@@ -797,6 +843,7 @@ func TestLegacyMigrationIsOneShotStrictAndPreservesTheSource(t *testing.T) {
 	values["SECONDBOX_SAME_HOST_RUNNER_ENABLED"] = "false"
 	values["SECONDBOX_RUNNER_PROTOCOL_MINIMUM"] = "1"
 	values["SECONDBOX_RUNNER_PROTOCOL_MAXIMUM"] = "1"
+	values["SECONDBOX_APPLICATION_AUTHORITIES_JSON"] = `[{"id":"large-authority","token":"` + strings.Repeat("x", 70<<10) + `","tenantRef":"tenant","subjectRef":"subject","scopes":[],"profileGrants":[]}]`
 	legacyPath := filepath.Join(t.TempDir(), "legacy.env")
 	keys := sortedKeys(values)
 	var source strings.Builder

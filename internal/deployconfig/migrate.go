@@ -3,6 +3,7 @@ package deployconfig
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -23,37 +24,44 @@ func MigrateLegacyEnvironment(sourcePath, targetDirectory string) (string, error
 	if err != nil {
 		return "", err
 	}
-	scanner := bufio.NewScanner(file)
+	reader := bufio.NewReader(file)
 	lineNumber := 0
-	for scanner.Scan() {
+	for {
+		line, readErr := reader.ReadString('\n')
+		if readErr != nil && readErr != io.EOF {
+			file.Close()
+			return "", readErr
+		}
+		if len(line) == 0 && readErr == io.EOF {
+			break
+		}
 		lineNumber++
-		line := scanner.Text()
-		if strings.TrimSpace(line) == "" || strings.HasPrefix(strings.TrimSpace(line), "#") {
-			continue
+		line = strings.TrimSuffix(line, "\n")
+		if strings.TrimSpace(line) != "" && !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			name, value, ok := strings.Cut(line, "=")
+			if !ok || name == "" || strings.TrimSpace(name) != name {
+				file.Close()
+				return "", manifestError(fmt.Sprintf("legacy line %d is invalid", lineNumber), nil)
+			}
+			if !known[name] {
+				file.Close()
+				return "", manifestError("legacy environment contains unknown name "+name, nil)
+			}
+			if _, exists := values[name]; exists {
+				file.Close()
+				return "", manifestError("legacy environment contains duplicate name "+name, nil)
+			}
+			if value == "" || strings.Contains(value, "REPLACE_WITH_") || strings.Contains(value, "GENERATE_") || strings.ContainsAny(value, "\x00\r") {
+				file.Close()
+				return "", manifestError("legacy environment contains an empty, placeholder, or invalid value for "+name, nil)
+			}
+			values[name] = value
 		}
-		name, value, ok := strings.Cut(line, "=")
-		if !ok || name == "" || strings.TrimSpace(name) != name {
-			file.Close()
-			return "", manifestError(fmt.Sprintf("legacy line %d is invalid", lineNumber), nil)
+		if readErr == io.EOF {
+			break
 		}
-		if !known[name] {
-			file.Close()
-			return "", manifestError("legacy environment contains unknown name "+name, nil)
-		}
-		if _, exists := values[name]; exists {
-			file.Close()
-			return "", manifestError("legacy environment contains duplicate name "+name, nil)
-		}
-		if value == "" || strings.Contains(value, "REPLACE_WITH_") || strings.Contains(value, "GENERATE_") || strings.ContainsAny(value, "\x00\r") {
-			file.Close()
-			return "", manifestError("legacy environment contains an empty, placeholder, or invalid value for "+name, nil)
-		}
-		values[name] = value
 	}
 	closeErr := file.Close()
-	if err := scanner.Err(); err != nil {
-		return "", err
-	}
 	if closeErr != nil {
 		return "", closeErr
 	}
