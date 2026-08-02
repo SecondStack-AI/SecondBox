@@ -25,8 +25,9 @@ import (
 )
 
 var (
-	digestPattern      = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-	configValidationMu sync.Mutex
+	digestPattern         = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	opaqueRunnerIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	configValidationMu    sync.Mutex
 )
 
 func ReadManifest(path string) (ManifestV1, error) {
@@ -103,6 +104,7 @@ func resolveManifest(manifest ManifestV1, base string) (ResolvedDeployment, erro
 	put("SECONDBOX_SIGNED_ASSET_CATALOG_PATH", deployment.SignedAssetCatalogPath)
 
 	database := manifest.Database
+	databasePassword := ""
 	if database.Mode == "bundled" {
 		put("SECONDBOX_POSTGRES_IMAGE", deployment.PostgresImage)
 		put("SECONDBOX_POSTGRES_BIND_IP", database.BindIP)
@@ -114,8 +116,16 @@ func resolveManifest(manifest ManifestV1, base string) (ResolvedDeployment, erro
 			return ResolvedDeployment{}, manifestError("database.password_file", err)
 		}
 		secretPaths["database.password_file"] = path
+		databasePassword = password
 		put("SECONDBOX_POSTGRES_PASSWORD", password)
-		put("SECONDBOX_DATABASE_URL", "postgres://"+url.QueryEscape(database.User)+":"+url.QueryEscape(password)+"@postgres:5432/"+url.PathEscape(database.Name)+"?sslmode=disable")
+		databaseURL := url.URL{
+			Scheme:   "postgres",
+			User:     url.UserPassword(database.User, password),
+			Host:     "postgres:5432",
+			Path:     "/" + database.Name,
+			RawQuery: "sslmode=disable",
+		}
+		put("SECONDBOX_DATABASE_URL", databaseURL.String())
 	} else {
 		databaseURL, path, err := readSecretReference(base, database.URLFile)
 		if err != nil {
@@ -203,9 +213,24 @@ func resolveManifest(manifest ManifestV1, base string) (ResolvedDeployment, erro
 	if err != nil {
 		return ResolvedDeployment{}, manifestError("applications.application_authorities_file", err)
 	}
-	var authorityValue []map[string]any
+	var authorityValue []controlconfig.ApplicationAuthority
 	if err := json.Unmarshal([]byte(authorities), &authorityValue); err != nil {
 		return ResolvedDeployment{}, manifestError("applications.application_authorities_file must contain a JSON array", err)
+	}
+	credentials := map[string]string{
+		"applications.platform_token_file":        platformToken,
+		"runner_trust.enrollment_credential_file": credential,
+		"object_store.access_key_file":            access,
+		"object_store.secret_key_file":            secret,
+	}
+	if databasePassword != "" {
+		credentials["database.password_file"] = databasePassword
+	}
+	for i, authority := range authorityValue {
+		credentials[fmt.Sprintf("applications.application_authorities_file[%d].token", i)] = authority.Token
+	}
+	if err := validateDistinctCredentials(credentials); err != nil {
+		return ResolvedDeployment{}, err
 	}
 	secretPaths["applications.application_authorities_file"] = authoritiesPath
 	put("SECONDBOX_PLATFORM_TOKEN", platformToken)
@@ -265,6 +290,12 @@ func validateManifestShape(manifest ManifestV1) error {
 		}
 		return nil
 	}
+	requirePort := func(path string, value *int64) error {
+		if value == nil || *value < 1 || *value > 65535 {
+			return manifestError(path+" must be an integer from 1 through 65535", nil)
+		}
+		return nil
+	}
 	if manifest.SchemaVersion != 1 {
 		return manifestError("schema_version must be 1", nil)
 	}
@@ -280,11 +311,27 @@ func validateManifestShape(manifest ManifestV1) error {
 	if d.Mode == "development" && (manifest.Database.Mode != "bundled" || manifest.ObjectStore.Mode != "bundled") {
 		return manifestError("development mode requires the reviewed bundled database and object_store topology", nil)
 	}
-	if err := requireInt("deployment.api_published_port", d.APIPublishedPort, false); err != nil {
+	if err := requirePort("deployment.api_published_port", d.APIPublishedPort); err != nil {
 		return err
 	}
-	if err := requireInt("deployment.runner_published_port", d.RunnerPublishedPort, false); err != nil {
+	if err := requirePort("deployment.runner_published_port", d.RunnerPublishedPort); err != nil {
 		return err
+	}
+	if d.ListenAddress != "0.0.0.0:8080" {
+		return manifestError("deployment.listen_address must be 0.0.0.0:8080 for the packaged container mapping", nil)
+	}
+	if d.RunnerListenAddress != "0.0.0.0:9443" {
+		return manifestError("deployment.runner_listen_address must be 0.0.0.0:9443 for the packaged container mapping", nil)
+	}
+	if d.DevelopmentWaitSeconds != nil {
+		if err := requireInt("deployment.development_prepare_wait_timeout_seconds", d.DevelopmentWaitSeconds, false); err != nil {
+			return err
+		}
+	} else if d.Mode == "development" {
+		return manifestError("deployment.development_prepare_wait_timeout_seconds is required in development mode", nil)
+	}
+	if d.Mode == "development" && (d.APIBindIP != "127.0.0.1" || d.RunnerBindIP != "127.0.0.1" || manifest.Database.BindIP != "127.0.0.1" || manifest.ObjectStore.BindIP != "127.0.0.1") {
+		return manifestError("development mode must bind every published port to 127.0.0.1", nil)
 	}
 	if !filepath.IsAbs(d.LogPath) || !filepath.IsAbs(d.SignedAssetCatalogPath) {
 		return manifestError("deployment process paths must be absolute", nil)
@@ -337,7 +384,7 @@ func validateManifestShape(manifest ManifestV1) error {
 				return err
 			}
 		}
-		if err := requireInt("database.published_port", db.PublishedPort, false); err != nil {
+		if err := requirePort("database.published_port", db.PublishedPort); err != nil {
 			return err
 		}
 		if err := require("deployment.postgres_image", d.PostgresImage); err != nil {
@@ -383,7 +430,7 @@ func validateManifestShape(manifest ManifestV1) error {
 			}
 		}
 		for p, v := range map[string]*int64{"object_store.published_port": osConfig.PublishedPort, "object_store.console_published_port": osConfig.ConsolePublishedPort} {
-			if err := requireInt(p, v, false); err != nil {
+			if err := requirePort(p, v); err != nil {
 				return err
 			}
 		}
@@ -415,6 +462,9 @@ func validateManifestShape(manifest ManifestV1) error {
 		if err := require(prefix+".runner_id", r.RunnerID); err != nil {
 			return err
 		}
+		if !opaqueRunnerIDPattern.MatchString(r.RunnerID) {
+			return manifestError(prefix+".runner_id must be a valid opaque Runner ID", nil)
+		}
 		if seen[r.RunnerID] {
 			return manifestError("duplicate runner_id "+r.RunnerID, nil)
 		}
@@ -431,6 +481,21 @@ func validateManifestShape(manifest ManifestV1) error {
 		if err := validateRunner(prefix, r); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateDistinctCredentials(credentials map[string]string) error {
+	pathsByValue := make(map[string]string, len(credentials))
+	for _, path := range sortedKeys(credentials) {
+		value := credentials[path]
+		if value == "" {
+			continue
+		}
+		if other, exists := pathsByValue[value]; exists {
+			return manifestError(path+" and "+other+" must use distinct credentials for separate trust boundaries", nil)
+		}
+		pathsByValue[value] = path
 	}
 	return nil
 }
