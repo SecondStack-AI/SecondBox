@@ -152,16 +152,30 @@ func (store *PostgresControlPlaneStore) attachOperationStageTimings(
 		FROM secondbox.operation_stage_timings
 		WHERE operation_id=ANY($1::text[])
 		  AND stage IN (
-		    'durable_admission','workspace_ready','placement_ready',
+		    'durable_admission','workspace_ready',
+		    'placement_reconcile_started','placement_effect_started',
+		    'placement_plan_ready','placement_schedule_started',
+		    'placement_attempt_started','placement_sandbox_locked',
+		    'placement_assignment_checked','placement_candidates_locked',
+		    'placement_candidate_selected','placement_ready',
 		    'startup_dispatched','ready_projected'
 		  )
 		ORDER BY operation_id,observed_at,
 		  CASE stage
 		    WHEN 'durable_admission' THEN 1
 		    WHEN 'workspace_ready' THEN 2
-		    WHEN 'placement_ready' THEN 3
-		    WHEN 'startup_dispatched' THEN 4
-		    WHEN 'ready_projected' THEN 5
+		    WHEN 'placement_reconcile_started' THEN 3
+		    WHEN 'placement_effect_started' THEN 4
+		    WHEN 'placement_plan_ready' THEN 5
+		    WHEN 'placement_schedule_started' THEN 6
+		    WHEN 'placement_attempt_started' THEN 7
+		    WHEN 'placement_sandbox_locked' THEN 8
+		    WHEN 'placement_assignment_checked' THEN 9
+		    WHEN 'placement_candidates_locked' THEN 10
+		    WHEN 'placement_candidate_selected' THEN 11
+		    WHEN 'placement_ready' THEN 12
+		    WHEN 'startup_dispatched' THEN 13
+		    WHEN 'ready_projected' THEN 14
 		  END`,
 		operationIDs,
 	)

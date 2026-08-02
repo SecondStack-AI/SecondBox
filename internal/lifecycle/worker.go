@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
 // ReconcileStore owns durable claims and compare-and-swap transition commits.
@@ -68,13 +69,15 @@ func (reconciler Reconciler) RunOnce(ctx context.Context, now time.Time) (Decisi
 	if claim.DrainStartedAt != nil {
 		view.DrainStartedAt = claim.DrainStartedAt.UTC()
 	}
-	decision := Decide(view, now.UTC())
+	now = now.UTC()
+	decision := Decide(view, now)
+	nextReconcileAt := nextLifecycleReconcileAt(view, decision, now, reconciler.PollInterval)
 	if actionRequiresEffect(decision.Action) {
 		if reconciler.Effects == nil {
 			return Decision{}, true, errors.New("SecondBox lifecycle runner effect executor is required")
 		}
 		if err := reconciler.Effects.ExecuteLifecycleEffect(
-			ctx, claim, decision, now.UTC(), now.UTC().Add(reconciler.PollInterval),
+			ctx, claim, decision, now, now.Add(reconciler.PollInterval),
 		); err != nil {
 			// Losing a serialization race is an ordinary outcome of concurrency,
 			// not a fault, so it defers exactly like Workspace contention does.
@@ -88,8 +91,8 @@ func (reconciler Reconciler) RunOnce(ctx context.Context, now time.Time) (Decisi
 					claim,
 					string(ActionWait),
 					"",
-					now.UTC(),
-					now.UTC().Add(reconciler.PollInterval),
+					now,
+					now.Add(reconciler.PollInterval),
 				); waitErr != nil {
 					return Decision{}, true, fmt.Errorf(
 						"SecondBox lifecycle effect contention deferral failed: %w",
@@ -104,11 +107,61 @@ func (reconciler Reconciler) RunOnce(ctx context.Context, now time.Time) (Decisi
 	}
 	if err := reconciler.Store.ApplyLifecycleAction(
 		ctx, claim, string(decision.Action), decision.TerminationReason,
-		now.UTC(), now.UTC().Add(reconciler.PollInterval),
+		now, nextReconcileAt,
 	); err != nil {
 		return Decision{}, true, fmt.Errorf("SecondBox lifecycle decision commit failed: %w", err)
 	}
 	return decision, true, nil
+}
+
+// nextLifecycleReconcileAt keeps transitional Sandboxes on the bounded poll
+// interval, but lets a healthy ready Sandbox sleep until durable policy can
+// actually change its decision. Runner terminal evidence and desired-state
+// writes explicitly wake the Sandbox by moving next_reconcile_at to now.
+func nextLifecycleReconcileAt(
+	view View,
+	decision Decision,
+	now time.Time,
+	pollInterval time.Duration,
+) time.Time {
+	fallback := now.Add(pollInterval)
+	if decision.Action != ActionWait ||
+		view.Observed != contracts.SandboxStateReady ||
+		view.Desired != contracts.SandboxDesiredStateRunning ||
+		view.GuestLiveness != contracts.GuestLivenessReady {
+		return fallback
+	}
+
+	var maximumDeadline time.Time
+	if view.MaximumDuration > 0 && !view.ReadyAt.IsZero() {
+		maximumDeadline = view.ReadyAt.Add(view.MaximumDuration)
+	}
+	if view.ActiveSessions > 0 {
+		return earlierFutureDeadline(fallback, maximumDeadline, now)
+	}
+
+	var idleDeadline time.Time
+	if view.IdleTimeout > 0 && !view.LastUsefulActivityAt.IsZero() {
+		idleDeadline = view.LastUsefulActivityAt.Add(view.IdleTimeout)
+	}
+	deadline := earlierFutureDeadline(idleDeadline, maximumDeadline, now)
+	if deadline.IsZero() {
+		return fallback
+	}
+	return deadline
+}
+
+func earlierFutureDeadline(left, right, now time.Time) time.Time {
+	if !left.After(now) {
+		left = time.Time{}
+	}
+	if !right.After(now) {
+		right = time.Time{}
+	}
+	if left.IsZero() || (!right.IsZero() && right.Before(left)) {
+		return right
+	}
+	return left
 }
 
 func actionRequiresEffect(action Action) bool {

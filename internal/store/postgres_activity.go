@@ -23,15 +23,29 @@ func (store *PostgresControlPlaneStore) PingGuest(
 	}
 	var instance contracts.Instance
 	err := store.pool.QueryRow(ctx, `
-		UPDATE secondbox.instances AS instance
-		SET guest_liveness=$5,guest_heartbeat_at=$6,updated_at=$6
-		FROM secondbox.sandboxes AS sandbox
-		WHERE sandbox.tenant_ref=$1 AND sandbox.subject_ref=$2
-		  AND sandbox.id=$3 AND sandbox.generation=$4
-		  AND instance.id=sandbox.current_instance_id AND instance.generation=$4
-		RETURNING instance.id,instance.sandbox_id,instance.generation,instance.state,
-		          instance.guest_liveness,instance.termination_reason,instance.created_at,
-		          instance.updated_at,instance.ready_at,instance.guest_heartbeat_at,instance.stopped_at`,
+		WITH updated_instance AS (
+		  UPDATE secondbox.instances AS instance
+		  SET guest_liveness=$5,guest_heartbeat_at=$6,updated_at=$6
+		  FROM secondbox.sandboxes AS sandbox
+		  WHERE sandbox.tenant_ref=$1 AND sandbox.subject_ref=$2
+		    AND sandbox.id=$3 AND sandbox.generation=$4
+		    AND instance.id=sandbox.current_instance_id AND instance.generation=$4
+		  RETURNING instance.id,instance.sandbox_id,instance.generation,instance.state,
+		            instance.guest_liveness,instance.termination_reason,instance.created_at,
+		            instance.updated_at,instance.ready_at,instance.guest_heartbeat_at,instance.stopped_at
+		), lifecycle_wakeup AS (
+		  UPDATE secondbox.sandboxes AS sandbox
+		  SET next_reconcile_at=$6,reconcile_owner='',reconcile_claim_expires_at=NULL,
+		      revision=revision+1,updated_at=$6
+		  FROM updated_instance AS instance
+		  WHERE $5 IN ('lost','stopped')
+		    AND sandbox.id=instance.sandbox_id
+		    AND sandbox.generation=instance.generation
+		    AND sandbox.current_instance_id=instance.id
+		)
+		SELECT id,sandbox_id,generation,state,guest_liveness,termination_reason,created_at,
+		       updated_at,ready_at,guest_heartbeat_at,stopped_at
+		FROM updated_instance`,
 		input.TenantRef, input.SubjectRef, input.SandboxID, input.Generation,
 		liveness, input.Now.UTC(),
 	).Scan(

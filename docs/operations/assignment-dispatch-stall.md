@@ -218,8 +218,38 @@ Pool acquisition, command decoding, and stream send remained 0 ms. Five live
 a control plane rebuilt from that commit completed in 1.234–1.391 seconds,
 with a 1.363-second median.
 
-The next safe target is not the owner-side claim. Partition the 415/843 ms
-`placement` span into worker pickup, start-plan lookup, runner selection and
-locks, ordered writes, commit, and serialization retry time first. Any new
-candidate must keep `runner_connections` out of placement and pass both the
-unsaturated 30-arrival qualification and the repeated burst ladder.
+The next safe target was not the owner-side claim. Provider-neutral milestones
+partitioned placement without adding a database round trip. A 30-arrival
+observer run measured `placement` at 337/859 ms p50/p95 and lifecycle worker
+pickup at 327/839 ms; start-plan lookup, runner selection, and ordered scheduler
+writes were 0–1 ms.
+
+Every healthy ready Sandbox had remained due and was reclaimed every 250 ms,
+so the lifecycle queue grew permanently with the completed population. The
+retained correction schedules a ready Sandbox at its actual idle or
+maximum-duration deadline. Transitional states and active sessions keep the
+bounded poll, while desired-state changes and terminal runner or guest evidence
+move the Sandbox due immediately.
+
+The same unsaturated workload then measured:
+
+| Span | p50 | p95 | p99 |
+|---|---:|---:|---:|
+| `create_to_ready` | **692 ms** | **800 ms** | 821 ms |
+| `pre_assignment` | **225 ms** | **315 ms** | 346 ms |
+| `placement` | **27 ms** | **54 ms** | 62 ms |
+| `placement_pickup` | **12 ms** | **29 ms** | 30 ms |
+| `workspace_provision` | 204 ms | 264 ms | 310 ms |
+| `runner_admission` | 34 ms | 58 ms | 71 ms |
+| `runner_boot` | 416 ms | 445 ms | 447 ms |
+
+A third ten-rung burst-32 qualification admitted 320/320 arrivals with no
+failure, refusal, shed, or shutdown while absorbing 21 serialization failures.
+Its end-to-end p50 ranged from 3,300 to 4,355 ms and p95 from 4,262 to
+5,859 ms. The remaining burst placement pickup was 1.5–2.1 seconds p50 because
+one lifecycle worker still consumes each simultaneously due cohort serially.
+
+Any worker-concurrency or batched-claim candidate must keep
+`runner_connections` out of placement, preserve SKIP LOCKED claims and the
+Sandbox/Workspace lock order, and pass the unsaturated 30-arrival qualification,
+the repeated burst ladder, and the full KVM/Btrfs scenario.

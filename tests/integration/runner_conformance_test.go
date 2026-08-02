@@ -210,6 +210,7 @@ func (boundary *postgresConformanceBoundary) SeedAssignment(
 		ClaimExpiresAt:    now.Add(time.Minute), OperationDeadline: now.Add(time.Minute),
 		RetryLimit: 2, SerializationRetryLimit: 2,
 		HeartbeatTimeout: 30 * time.Second, Now: now,
+		EffectStartedAt: now, PlanReadyAt: now,
 	})
 	if err != nil {
 		return err

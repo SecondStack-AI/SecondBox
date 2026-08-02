@@ -312,6 +312,7 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocate(t *testing.T) {
 			NewFencingToken: func() ([]byte, error) {
 				return []byte("01234567890123456789012345678901"), nil
 			},
+			Now: func() time.Time { return now },
 		},
 	)
 	if err != nil {
