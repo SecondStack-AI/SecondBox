@@ -878,18 +878,9 @@ func validateRunnerTrustMaterial(caCertificatePath, caPrivateKeyPath, serverCert
 	if keyBlock == nil || len(remainder) != 0 {
 		return fmt.Errorf("CA private key must contain exactly one PEM key")
 	}
-	var caKey *rsa.PrivateKey
-	caKey, err = x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
+	caKey, err := parseRSAPrivateKey(keyBlock.Bytes)
 	if err != nil {
-		parsed, parseErr := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
-		if parseErr != nil {
-			return fmt.Errorf("CA private key is invalid")
-		}
-		var ok bool
-		caKey, ok = parsed.(*rsa.PrivateKey)
-		if !ok {
-			return fmt.Errorf("CA private key must be RSA")
-		}
+		return fmt.Errorf("CA private key: %w", err)
 	}
 	if !caKey.PublicKey.Equal(caCertificate.PublicKey) {
 		return fmt.Errorf("CA certificate and private key do not match")
@@ -908,6 +899,21 @@ func validateRunnerTrustMaterial(caCertificatePath, caPrivateKeyPath, serverCert
 		return fmt.Errorf("server certificate verification: %w", err)
 	}
 	return nil
+}
+
+func parseRSAPrivateKey(der []byte) (*rsa.PrivateKey, error) {
+	if key, err := x509.ParsePKCS1PrivateKey(der); err == nil {
+		return key, nil
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(der)
+	if err != nil {
+		return nil, fmt.Errorf("is not valid PKCS#1 or PKCS#8 key material")
+	}
+	key, ok := parsed.(*rsa.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("must be RSA")
+	}
+	return key, nil
 }
 
 func resolveRunnerEnvironment(r Runner, credential string) map[string]string {

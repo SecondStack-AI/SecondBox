@@ -70,7 +70,7 @@ func RunnerInit(manifestPath, runnerID, target string) error {
 	if err != nil {
 		return manifestError("runner-init CA certificate", err)
 	}
-	caKeyPath, err := resolveRegularReference(base, manifest.RunnerTrust.CAPrivateKeyFile)
+	caKeyPath, err := resolvePrivateReference(base, manifest.RunnerTrust.CAPrivateKeyFile)
 	if err != nil {
 		return manifestError("runner-init CA private key", err)
 	}
@@ -94,7 +94,7 @@ func RunnerInit(manifestPath, runnerID, target string) error {
 	if keyBlock == nil || len(remainder) != 0 {
 		return manifestError("runner-init CA key must contain exactly one PEM key", nil)
 	}
-	caKey, err := x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
+	caKey, err := parseRSAPrivateKey(keyBlock.Bytes)
 	if err != nil {
 		return manifestError("runner-init CA key", err)
 	}
