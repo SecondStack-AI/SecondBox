@@ -150,8 +150,8 @@ func resolveManifest(manifest ManifestV1, base string) (ResolvedDeployment, erro
 			return ResolvedDeployment{}, manifestError("database.url_file", err)
 		}
 		secretPaths["database.url_file"] = path
-		if deployment.Mode == "production" && !strings.Contains(databaseURL, "sslmode=verify-full") {
-			return ResolvedDeployment{}, manifestError("production database.url_file must select sslmode=verify-full", nil)
+		if err := validateExternalDatabaseURL(databaseURL, deployment.Mode == "production"); err != nil {
+			return ResolvedDeployment{}, manifestError("database.url_file", err)
 		}
 		put("SECONDBOX_DATABASE_URL", databaseURL)
 	}
@@ -517,6 +517,23 @@ func validateDistinctCredentials(credentials map[string]string) error {
 			return manifestError(path+" and "+other+" must use distinct credentials for separate trust boundaries", nil)
 		}
 		pathsByValue[value] = path
+	}
+	return nil
+}
+
+func validateExternalDatabaseURL(value string, requireVerifiedTLS bool) error {
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return fmt.Errorf("must be an absolute PostgreSQL URL: %w", err)
+	}
+	if parsed.Host == "" || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") {
+		return fmt.Errorf("must be an absolute PostgreSQL URL")
+	}
+	if requireVerifiedTLS {
+		modes := parsed.Query()["sslmode"]
+		if len(modes) != 1 || modes[0] != "verify-full" {
+			return fmt.Errorf("production must select exactly one sslmode=verify-full query option")
+		}
 	}
 	return nil
 }
