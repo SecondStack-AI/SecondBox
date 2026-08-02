@@ -11,14 +11,18 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/SecondStack-AI/SecondBox/internal/assetcatalog"
 	controlconfig "github.com/SecondStack-AI/SecondBox/internal/config"
@@ -27,6 +31,7 @@ import (
 
 var (
 	digestPattern         = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	artifactKeyPattern    = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	opaqueRunnerIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 	configValidationMu    sync.Mutex
 )
@@ -644,7 +649,62 @@ func validateRunner(prefix string, r Runner) error {
 		}
 	}
 	if r.StorageRecoveryPercent != nil && r.StorageWarningPercent != nil && r.StorageAdmissionDenyPercent != nil && !(*r.StorageRecoveryPercent < *r.StorageWarningPercent && *r.StorageWarningPercent < *r.StorageAdmissionDenyPercent) {
-		return manifestError(prefix+" storage pressure thresholds must be increasing", nil)
+		return manifestError(prefix+" storage pressure thresholds must satisfy 0 < recovery < warning < admission deny < 100", nil)
+	}
+	if r.StorageAdmissionDenyPercent != nil && *r.StorageAdmissionDenyPercent >= 100 {
+		return manifestError(prefix+" storage pressure thresholds must satisfy 0 < recovery < warning < admission deny < 100", nil)
+	}
+	if r.MaxConcurrentStarts != nil && r.MaxConcurrentGlobal != nil && *r.MaxConcurrentStarts > *r.MaxConcurrentGlobal {
+		return manifestError(prefix+".max_concurrent_starts must not exceed max_concurrent_global", nil)
+	}
+	if r.GuestControlVSockPort != nil && r.GuestProtocolVSockPort != nil {
+		if *r.GuestControlVSockPort > 65535 || *r.GuestProtocolVSockPort > 65535 || *r.GuestControlVSockPort == *r.GuestProtocolVSockPort {
+			return manifestError(prefix+" guest control and protocol vsock ports must be distinct integers from 1 through 65535", nil)
+		}
+	}
+	if r.FirecrackerAllowUnjailed != nil && *r.FirecrackerAllowUnjailed {
+		return manifestError(prefix+".firecracker_allow_unjailed must be false for the packaged Runner", nil)
+	}
+	if !artifactKeyPattern.MatchString(r.ArtifactPublicKeySHA256) || r.ArtifactPublicKeySHA256 == strings.Repeat("0", 64) {
+		return manifestError(prefix+".artifact_public_key_sha256 must identify a provisioned signed artifact key", nil)
+	}
+	for _, argument := range []string{"console=ttyS0", "reboot=k", "panic=1", "pci=off", "root=/dev/vda", "rw", "quiet", "loglevel=1", "i8042.noaux", "i8042.nomux", "i8042.nopnp", "i8042.dumbkbd", "init=/init"} {
+		if !slices.Contains(strings.Fields(r.FirecrackerKernelArgs), argument) {
+			return manifestError(prefix+".firecracker_kernel_args must include "+argument, nil)
+		}
+	}
+	if err := validateRunnerDuration(prefix+".guest_heartbeat_interval", r.GuestHeartbeatInterval, time.Millisecond, time.Minute); err != nil {
+		return err
+	}
+	if err := validateRunnerDuration(prefix+".network_policy_max_dns_ttl", r.NetworkPolicyMaxDNSTTL, time.Nanosecond, 0); err != nil {
+		return err
+	}
+	if _, err := netip.ParseAddr(r.SandboxGuestIP); err != nil {
+		return manifestError(prefix+".sandbox_guest_ip must be an IP address", err)
+	}
+	if _, err := netip.ParsePrefix(r.SandboxBridgeCIDR); err != nil {
+		return manifestError(prefix+".sandbox_bridge_cidr must be a CIDR", err)
+	}
+	if _, err := netip.ParsePrefix(r.SandboxGuestCIDR); err != nil {
+		return manifestError(prefix+".sandbox_guest_cidr must be a CIDR", err)
+	}
+	if err := validateAddressList(prefix+".network_policy_runner_addresses", r.NetworkPolicyRunnerAddresses, false); err != nil {
+		return err
+	}
+	if err := validateAddressList(prefix+".network_policy_management_cidrs", r.NetworkPolicyManagementCIDRs, true); err != nil {
+		return err
+	}
+	if err := validateRunnerGateways(prefix+".network_policy_runner_gateways", r.NetworkPolicyRunnerGateways); err != nil {
+		return err
+	}
+	if upstream, err := netip.ParseAddrPort(r.NetworkPolicyDNSUpstream); err != nil || upstream.Port() == 0 {
+		return manifestError(prefix+".network_policy_dns_upstream must be an IP:port", err)
+	}
+	if err := validateDataPlaneAddress(prefix+".data_plane_listen_address", r.DataPlaneListenAddress, true); err != nil {
+		return err
+	}
+	if err := validateDataPlaneAddress(prefix+".data_plane_advertised_address", r.DataPlaneAdvertisedAddress, false); err != nil {
+		return err
 	}
 	return nil
 }
@@ -652,6 +712,68 @@ func validateRunner(prefix string, r Runner) error {
 func pathWithin(root, path string) bool {
 	relative, err := filepath.Rel(root, path)
 	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func validateRunnerDuration(path, value string, minimum, maximum time.Duration) error {
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration < minimum || (maximum != 0 && duration > maximum) {
+		return manifestError(path+" is outside the supported duration range", err)
+	}
+	return nil
+}
+
+func validateAddressList(path, value string, prefixes bool) error {
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(part)
+		var err error
+		if prefixes {
+			_, err = netip.ParsePrefix(part)
+		} else {
+			_, err = netip.ParseAddr(part)
+		}
+		if err != nil {
+			return manifestError(path+" contains an invalid network value", err)
+		}
+	}
+	return nil
+}
+
+func validateRunnerGateways(path, value string) error {
+	if value == "none" {
+		return nil
+	}
+	seen := make(map[string]bool)
+	for _, part := range strings.Split(value, ",") {
+		domain, address, found := strings.Cut(strings.TrimSpace(part), "=")
+		domain = strings.TrimSpace(domain)
+		if !found || domain == "" || seen[domain] {
+			return manifestError(path+" entries must be unique domain=IP pairs or none", nil)
+		}
+		seen[domain] = true
+		if _, err := netip.ParseAddr(strings.TrimSpace(address)); err != nil {
+			return manifestError(path+" contains an invalid gateway IP", err)
+		}
+	}
+	return nil
+}
+
+func validateDataPlaneAddress(path, value string, listen bool) error {
+	host, port, err := net.SplitHostPort(value)
+	if err != nil {
+		return manifestError(path+" must be a host:port address", err)
+	}
+	number, err := strconv.Atoi(port)
+	minimum := 1
+	if listen {
+		minimum = 0
+	}
+	if err != nil || number < minimum || number > 65535 {
+		return manifestError(path+" must name a valid port", err)
+	}
+	if !listen && (strings.TrimSpace(host) == "" || host == "0.0.0.0" || host == "::") {
+		return manifestError(path+" must name an explicit reachable host", nil)
+	}
+	return nil
 }
 
 func addPolicyEnvironment(environment map[string]string, p Policy) {
