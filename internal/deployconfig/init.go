@@ -31,7 +31,7 @@ func InitDevelopment(directory string) (string, error) {
 		return "", manifestError("resolve initialization directory", err)
 	}
 	if _, err := os.Lstat(absolute); err == nil {
-		return "", manifestError("initialization target already exists", nil)
+		return "", manifestError("initialization target must not exist; secondbox-deploy creates the deployment directory itself", nil)
 	} else if !os.IsNotExist(err) {
 		return "", manifestError("inspect initialization target", err)
 	}
@@ -196,7 +196,7 @@ func initProduction(directory string, writeSkeleton func(string, []byte) error) 
 		return "", err
 	}
 	if _, err := os.Lstat(absolute); err == nil {
-		return "", manifestError("production initialization target already exists", nil)
+		return "", manifestError("production initialization target must not exist; secondbox-deploy creates the deployment directory itself", nil)
 	} else if !os.IsNotExist(err) {
 		return "", manifestError("inspect production initialization target", err)
 	}
@@ -259,7 +259,7 @@ func InitProductionFromManifest(sourcePath, directory string) (string, error) {
 		return "", err
 	}
 	if _, err := os.Lstat(absolute); err == nil {
-		return "", manifestError("production initialization target already exists", nil)
+		return "", manifestError("production initialization target must not exist; secondbox-deploy creates the deployment directory itself", nil)
 	} else if !os.IsNotExist(err) {
 		return "", err
 	}

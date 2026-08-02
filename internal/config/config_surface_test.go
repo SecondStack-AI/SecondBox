@@ -136,6 +136,30 @@ func TestFromEnvironmentUsesLiteralTuningDefaultsAndValidatedOverrides(t *testin
 	}
 }
 
+// An unusable override must fail closed and name itself. Falling back to the
+// compiled constant would silently run a deployment on a value it did not
+// choose, which is the failure mode the tuning defaults exist to avoid.
+func TestFromEnvironmentRejectsEveryUnusableTuningOverride(t *testing.T) {
+	if len(TuningDefaults()) != 19 {
+		t.Fatalf("tuning surface = %d, want 19", len(TuningDefaults()))
+	}
+	for _, tuning := range TuningDefaults() {
+		for _, unusable := range []string{"invalid", "-1", ""} {
+			t.Run(tuning.Environment+"/"+unusable, func(t *testing.T) {
+				setRequiredControlPlaneEnvironment(t)
+				t.Setenv(tuning.Environment, unusable)
+				if _, err := FromEnvironment(); err != nil {
+					if !strings.Contains(err.Error(), tuning.Environment) {
+						t.Fatalf("error = %v, want it to name %s", err, tuning.Environment)
+					}
+					return
+				}
+				t.Fatalf("accepted %q for %s instead of failing closed", unusable, tuning.Environment)
+			})
+		}
+	}
+}
+
 func TestFromEnvironmentDoesNotReadProtocolVersionDeclarations(t *testing.T) {
 	setRequiredControlPlaneEnvironment(t)
 	t.Setenv("SECONDBOX_RUNNER_PROTOCOL_MINIMUM", "999")
