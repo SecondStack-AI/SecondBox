@@ -143,6 +143,9 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 		{name: "object store port exceeds TCP range", want: "object_store.published_port", mutate: func(manifest *ManifestV1) { manifest.ObjectStore.PublishedPort = integer(70000) }},
 		{name: "object store console port exceeds TCP range", want: "object_store.console_published_port", mutate: func(manifest *ManifestV1) { manifest.ObjectStore.ConsolePublishedPort = integer(70000) }},
 		{name: "Runner ID escapes artifact directory", want: "valid opaque Runner ID", mutate: func(manifest *ManifestV1) { manifest.Runners = []Runner{validTestRunner("../escaped", "remote")} }},
+		{name: "built-in Profile digest absent from catalog", want: "must exist in deployment.signed_asset_catalog", mutate: func(manifest *ManifestV1) {
+			manifest.Policy.CodingEnvironmentRuntimeBundleDigest = "sha256:" + strings.Repeat("b", 64)
+		}},
 		{name: "remote Runner path is relative", want: "identity_directory must be an absolute Runner-host path", mutate: func(manifest *ManifestV1) {
 			runner := validTestRunner("runner-a", "remote")
 			runner.IdentityDirectory = "relative/identity"
