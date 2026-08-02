@@ -37,7 +37,7 @@ services:
     command: ["mb", "--ignore-existing", "secondbox/${SECONDBOX_OBJECT_STORE_BUCKET:?set SECONDBOX_OBJECT_STORE_BUCKET}"]
     environment:
       MC_CONFIG_DIR: /tmp/mc
-      MC_HOST_secondbox: http://${SECONDBOX_OBJECT_STORE_ROOT_USER:?set SECONDBOX_OBJECT_STORE_ROOT_USER}:${SECONDBOX_OBJECT_STORE_ROOT_PASSWORD:?set SECONDBOX_OBJECT_STORE_ROOT_PASSWORD}@object-store:9000
+      MC_HOST_secondbox: ${SECONDBOX_OBJECT_STORE_MC_HOST:?set SECONDBOX_OBJECT_STORE_MC_HOST}
     read_only: true
     tmpfs: ["/tmp:size=8m,mode=1777"]
     cap_drop: [ALL]

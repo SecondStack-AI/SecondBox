@@ -272,6 +272,35 @@ func TestBundledDatabasePasswordRequiresLegacyMinimumStrength(t *testing.T) {
 	}
 }
 
+func TestBundledObjectStoreClientURLPreservesCredentialBytes(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	manifest, err := ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	access := "operator/name@example"
+	secret := "a/secret?with#url%bytes+and=padding"
+	base := filepath.Dir(manifestPath)
+	if err := os.WriteFile(filepath.Join(base, manifest.ObjectStore.AccessKeyFile), []byte(access+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, manifest.ObjectStore.SecretKeyFile), []byte(secret+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := Resolve(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientURL, err := url.Parse(resolved.Environment["SECONDBOX_OBJECT_STORE_MC_HOST"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotSecret, ok := clientURL.User.Password()
+	if clientURL.User.Username() != access || !ok || gotSecret != secret || clientURL.Host != "object-store:9000" {
+		t.Fatalf("object-store client URL = %#v, password = %q/%t", clientURL, gotSecret, ok)
+	}
+}
+
 func TestProductionExternalDatabaseURLRequiresEffectiveVerifiedTLS(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -605,6 +634,20 @@ func TestProductionInitializationCleansUpFailedSkeletonWrite(t *testing.T) {
 	}
 }
 
+func TestProductionInitializationRefusesSymlinkedParent(t *testing.T) {
+	realParent := t.TempDir()
+	symlinkParent := filepath.Join(t.TempDir(), "linked-parent")
+	if err := os.Symlink(realParent, symlinkParent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InitProduction(filepath.Join(symlinkParent, "production")); err == nil || !strings.Contains(err.Error(), "non-symbolic-link directory") {
+		t.Fatalf("symlinked production parent error = %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(realParent, "production")); !os.IsNotExist(err) {
+		t.Fatalf("production skeleton was written through symlink: %v", err)
+	}
+}
+
 func TestProductionQualifiesBundledAndExternalDatabaseAndObjectStoreCombinations(t *testing.T) {
 	for _, databaseMode := range []string{"bundled", "external"} {
 		for _, objectMode := range []string{"bundled", "external"} {
@@ -856,13 +899,14 @@ func TestLegacyMigrationIsOneShotStrictAndPreservesTheSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	values := make(map[string]string)
+	legacyNames := legacyEnvironmentNames()
 	for name, value := range resolved.Environment {
 		values[name] = value
 	}
 	for _, definition := range OverrideRegistry() {
 		values[definition.Environment] = definition.Default
 	}
-	for name := range legacyEnvironmentNames() {
+	for name := range legacyNames {
 		if values[name] == "" {
 			values[name] = "1"
 		}
@@ -871,6 +915,11 @@ func TestLegacyMigrationIsOneShotStrictAndPreservesTheSource(t *testing.T) {
 	values["SECONDBOX_RUNNER_PROTOCOL_MINIMUM"] = "1"
 	values["SECONDBOX_RUNNER_PROTOCOL_MAXIMUM"] = "1"
 	values["SECONDBOX_APPLICATION_AUTHORITIES_JSON"] = `[{"id":"large-authority","token":"` + strings.Repeat("x", 70<<10) + `","tenantRef":"tenant","subjectRef":"subject","scopes":[],"profileGrants":[]}]`
+	for name := range values {
+		if !legacyNames[name] {
+			delete(values, name)
+		}
+	}
 	legacyPath := filepath.Join(t.TempDir(), "legacy.env")
 	keys := sortedKeys(values)
 	var source strings.Builder
@@ -902,8 +951,8 @@ func TestLegacyMigrationIsOneShotStrictAndPreservesTheSource(t *testing.T) {
 	if _, err := MigrateLegacyEnvironment(legacyPath, target); err == nil {
 		t.Fatal("migration replaced an existing target")
 	}
-	if len(legacyEnvironmentNames()) != 146 {
-		t.Fatalf("legacy mapping count = %d, want 146", len(legacyEnvironmentNames()))
+	if len(legacyNames) != 146 {
+		t.Fatalf("legacy mapping count = %d, want 146", len(legacyNames))
 	}
 	for name, extra := range map[string]string{"unknown": "SECONDBOX_UNKNOWN=value\n", "duplicate": "SECONDBOX_DEPLOYMENT_MODE=development\n", "placeholder": ""} {
 		t.Run(name, func(t *testing.T) {

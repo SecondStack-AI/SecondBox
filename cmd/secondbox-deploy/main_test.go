@@ -23,6 +23,18 @@ func TestComposeUpArgumentsRemoveOrphanedTopology(t *testing.T) {
 	}
 }
 
+func TestComposeDownArgumentsRemoveOrphanedTopology(t *testing.T) {
+	base := []string{"compose", "--project-name", "secondbox"}
+	got := composeDownArguments(base)
+	want := []string{"compose", "--project-name", "secondbox", "down", "--remove-orphans"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Compose down arguments = %#v", got)
+	}
+	if !reflect.DeepEqual(base, []string{"compose", "--project-name", "secondbox"}) {
+		t.Fatalf("Compose base arguments mutated = %#v", base)
+	}
+}
+
 func TestDockerComposeReceivesOperatorClientConfiguration(t *testing.T) {
 	directory := t.TempDir()
 	outputPath := filepath.Join(directory, "environment")
