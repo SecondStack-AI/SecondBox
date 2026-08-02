@@ -103,7 +103,7 @@ func (runner *FakeRunner) Registration() *runnerv1.RunnerToControlPlane {
 				MessageId: runner.messageID("registration", sequence), Sequence: sequence,
 				RunnerId: runner.RunnerID, ConnectionId: runner.ConnectionID,
 				RunnerPoolId: runner.PoolName, SoftwareVersion: "1.0.0",
-				ProtocolVersion: 1,
+				ProtocolVersion: runnerv1.SupportedProtocolMaximum,
 				Capabilities: &runnerv1.RunnerCapabilities{
 					Architecture: "amd64", KernelRelease: "6.12.0",
 					FirecrackerVersion: "1.16.1",

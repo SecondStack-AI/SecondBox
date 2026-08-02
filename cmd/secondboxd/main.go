@@ -220,8 +220,8 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	runnerControlServer, err := runnercontrol.NewServer(runnercontrol.ServerConfig{
 		CredentialVerifier: runnerCredentialAuthority, StateStore: runnerStateStore,
 		SupportedVersions: runnercontrol.VersionRange{
-			Minimum: processConfig.RunnerProtocolMinimum,
-			Maximum: processConfig.RunnerProtocolMaximum,
+			Minimum: runnerv1.SupportedProtocolMinimum,
+			Maximum: runnerv1.SupportedProtocolMaximum,
 		},
 		EnabledFeatures:     runnerFeatures,
 		HeartbeatInterval:   processConfig.RunnerHeartbeatInterval,

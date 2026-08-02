@@ -28,17 +28,10 @@ A **Sandbox** is the durable public resource; the **Instance** running it is rep
 ### 1. Deploy a control plane
 
 ```sh
-install -d -m 700 .tmp/secondbox-deploy
-just deploy-bootstrap  .tmp/secondbox-deploy/environment
-just deploy-validate   .tmp/secondbox-deploy/environment
-
-docker build --tag secondbox-control-plane:development .
-just deploy-development-prepare .tmp/secondbox-deploy/environment
-docker compose --env-file .tmp/secondbox-deploy/environment \
-  --file deploy/compose.yml up -d control-plane
+just deploy-development-up .tmp/secondbox-development
 ```
 
-Bootstrap generates unique secrets into a private environment file — no shared credential is ever committed. The `development` profile adds loopback-only PostgreSQL and RustFS. Read [deployment and runtime operations](docs/operations/deployment.md) before exposing the API or using external PostgreSQL.
+This creates one private, versioned `secondbox.toml`, generates unique referenced secrets, compiles a protected environment transport, and starts the reviewed loopback PostgreSQL, object-store, and control-plane topology. The generated environment is never operator input. Read [deployment and runtime operations](docs/operations/deployment.md) before exposing the API, configuring production, or enrolling a Runner.
 
 ### 2. Give it somewhere to run
 

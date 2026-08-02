@@ -39,6 +39,17 @@ for name in runner.pb.go runner_grpc.pb.go; do
     }
 done
 
+cmp gen/runner/v1/version.go runner/internal/runnerprotocol/version.go >/dev/null || {
+    # Package declarations and comments intentionally differ, so compare the
+    # authoritative declarations rather than requiring byte-identical files.
+    root_window="$(grep -E 'SupportedProtocol(Minimum|Maximum).*=' gen/runner/v1/version.go)"
+    runner_window="$(grep -E 'SupportedProtocol(Minimum|Maximum).*=' runner/internal/runnerprotocol/version.go)"
+    [[ "$root_window" == "$runner_window" ]] || {
+        echo "runner protocol version constants drifted between modules" >&2
+        exit 1
+    }
+}
+
 cmp "$work_dir/runner.descriptor.pb" contracts/runner/v1/runner.descriptor.pb || {
     echo "frozen runner protocol descriptor is stale" >&2
     exit 1

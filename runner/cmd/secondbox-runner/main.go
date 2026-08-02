@@ -17,6 +17,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/runner/internal/firecracker"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/jailersupervisor"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/runtimeconfig"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
 
@@ -47,14 +48,11 @@ func run(arguments []string) (runErr error) {
 		return err
 	}
 
-	protocolConfig, connectorConfig, err := runnercontrol.LoadRunnerProtocolConfigFromEnv()
+	composition, err := runtimeconfig.LoadFromEnvironment(*healthcheck)
 	if err != nil {
-		return fmt.Errorf("load SecondBox runner protocol config: %w", err)
+		return err
 	}
-	connector, err := runnercontrol.NewGRPCConnector(connectorConfig)
-	if err != nil {
-		return fmt.Errorf("load SecondBox runner mTLS credentials: %w", err)
-	}
+	protocolConfig, connector := composition.Protocol, composition.Connector
 	if *healthcheck {
 		ctx, cancel := context.WithTimeout(context.Background(), *healthcheckTimeout)
 		defer cancel()
@@ -64,17 +62,14 @@ func run(arguments []string) (runErr error) {
 		return connector.Close()
 	}
 
-	closeLog, err := configureRunnerLogging(os.Getenv("SECONDBOX_RUNNER_LOG_PATH"))
+	closeLog, err := configureRunnerLogging(composition.RunnerLogPath)
 	if err != nil {
 		return fmt.Errorf("initialize SecondBox runner logging: %w", err)
 	}
 	defer func() {
 		runErr = errors.Join(runErr, closeLog())
 	}()
-	firecrackerConfig, err := firecracker.LoadRunnerFirecrackerConfigFromEnv()
-	if err != nil {
-		return fmt.Errorf("load SecondBox Firecracker config: %w", err)
-	}
+	firecrackerConfig := composition.Firecracker
 	workspaceStore, err := workspacestore.New(
 		context.Background(),
 		workspacestore.Config{

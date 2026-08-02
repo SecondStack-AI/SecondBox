@@ -51,17 +51,46 @@ test-stress:
 test-lifecycle:
     scripts/test-lifecycle.sh
 
-deploy-bootstrap environment:
-    deploy/bin/bootstrap-environment.sh "{{environment}}"
+deploy-init-development directory:
+    go run ./cmd/secondbox-deploy init --mode development "{{directory}}"
 
-deploy-development-prepare environment:
-    deploy/bin/prepare-development-inventory.sh "{{environment}}"
+deploy-init-production directory:
+    go run ./cmd/secondbox-deploy init --mode production "{{directory}}"
 
-deploy-validate environment:
-    deploy/bin/validate-environment.sh "{{environment}}"
+deploy-validate manifest:
+    go run ./cmd/secondbox-deploy validate "{{manifest}}"
 
-deploy-config environment:
-    deploy/bin/validate-environment.sh "{{environment}}"
-    docker compose --env-file "{{environment}}" --file deploy/compose.yml config --quiet
+deploy-config manifest:
+    go run ./cmd/secondbox-deploy compose "{{manifest}}" config
+
+deploy-development-prepare manifest:
+    go run ./cmd/secondbox-deploy compose "{{manifest}}" prepare
+
+deploy-up manifest:
+    go run ./cmd/secondbox-deploy compose "{{manifest}}" up
+
+deploy-down manifest:
+    go run ./cmd/secondbox-deploy compose "{{manifest}}" down
+
+deploy-development-up directory:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    manifest="{{directory}}/secondbox.toml"
+    if [[ ! -e "$manifest" ]]; then
+      if [[ -e "{{directory}}" ]]; then
+        echo "SecondBox deployment directory exists without secondbox.toml; refusing to replace it" >&2
+        exit 1
+      fi
+      go run ./cmd/secondbox-deploy init --mode development "{{directory}}"
+    fi
+    docker build --tag secondbox-control-plane:development .
+    go run ./cmd/secondbox-deploy compose "$manifest" config
+    go run ./cmd/secondbox-deploy compose "$manifest" prepare
+    go run ./cmd/secondbox-deploy compose "$manifest" up
+    inspection="$(go run ./cmd/secondbox-deploy inspect "$manifest")"
+    public_base_url="$(jq -er '.environment.SECONDBOX_PUBLIC_BASE_URL' <<<"$inspection")"
+    wait_seconds="$(jq -er '.developmentWaitSeconds' <<<"$inspection")"
+    curl --fail --silent --show-error --retry "$wait_seconds" --retry-all-errors --retry-delay 1 "${public_base_url%/}/readyz" >/dev/null
+    echo "SecondBox development control plane is ready at $public_base_url"
 
 preship: test-non-kvm

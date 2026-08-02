@@ -254,7 +254,7 @@ chmod 0644 "$pki_dir/runner-ca.crt" "$pki_dir/server.crt"
 export SECONDBOX_RUNNER_CA_CERTIFICATE="$pki_dir/runner-ca.crt"
 export SECONDBOX_RUNNER_CA_PRIVATE_KEY="$pki_dir/runner-ca.key"
 export SECONDBOX_RUNNER_CERTIFICATE_LIFETIME_DAYS=2
-"$repo_root/deploy/bin/bootstrap-runner-trust.sh" "$identity_dir" >/dev/null
+"$repo_root/scripts/issue-scenario-runner-identity.sh" "$identity_dir" >/dev/null
 
 jq -n \
   --arg architecture "$architecture" \

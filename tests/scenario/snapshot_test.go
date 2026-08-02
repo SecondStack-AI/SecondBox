@@ -64,18 +64,7 @@ func TestScenarioSnapshotDurabilityAndInPlaceRestore(t *testing.T) {
 	}
 
 	started = startScenarioSandbox(t, ctx, fixture, handle, "durability-start-after-snapshot")
-	assertScenarioAPIError(
-		t,
-		restoreScenarioSnapshot(
-			ctx,
-			handle,
-			snapshot.ID,
-			uniqueScenarioKey(t, "running-restore"),
-			sandboxRevisionETag(started.Revision),
-		),
-		http.StatusConflict,
-		"state_conflict",
-	)
+	assertScenarioRunningRestoreRejected(t, ctx, handle, snapshot.ID, started)
 
 	otherProfile := createScenarioProfile(
 		t,
@@ -301,18 +290,18 @@ func TestScenarioSnapshotLimitAndRetention(t *testing.T) {
 				Metadata: map[string]string{"scenario": "retention"},
 			},
 		)
-			if err == nil {
-				break
-			}
-			var apiError *secondboxclient.APIError
-			if !errors.As(err, &apiError) ||
-				apiError.Problem == nil ||
-				!((apiError.StatusCode == http.StatusTooManyRequests &&
-					apiError.Problem.Code == "quota_exceeded") ||
-					(apiError.StatusCode == http.StatusConflict &&
-						apiError.Problem.Code == "workspace_mutation_conflict")) {
-				t.Fatalf("SecondBox scenario create Snapshot after retention: %v", err)
-			}
+		if err == nil {
+			break
+		}
+		var apiError *secondboxclient.APIError
+		if !errors.As(err, &apiError) ||
+			apiError.Problem == nil ||
+			!((apiError.StatusCode == http.StatusTooManyRequests &&
+				apiError.Problem.Code == "quota_exceeded") ||
+				(apiError.StatusCode == http.StatusConflict &&
+					apiError.Problem.Code == "workspace_mutation_conflict")) {
+			t.Fatalf("SecondBox scenario create Snapshot after retention: %v", err)
+		}
 		if time.Now().After(retentionDeadline) {
 			t.Fatal("SecondBox scenario Snapshot retention did not release the configured limit")
 		}
@@ -384,6 +373,37 @@ func restoreScenarioSnapshot(
 		IfMatch:        ifMatch,
 	}, snapshotID)
 	return err
+}
+
+func assertScenarioRunningRestoreRejected(
+	t *testing.T,
+	ctx context.Context,
+	handle *secondboxclient.SandboxHandle,
+	snapshotID string,
+	current secondboxclient.Sandbox,
+) {
+	t.Helper()
+	for attempt := 0; attempt < 5; attempt++ {
+		err := restoreScenarioSnapshot(
+			ctx,
+			handle,
+			snapshotID,
+			uniqueScenarioKey(t, "running-restore"),
+			sandboxRevisionETag(current.Revision),
+		)
+		var apiError *secondboxclient.APIError
+		if !errors.As(err, &apiError) ||
+			apiError.StatusCode != http.StatusPreconditionFailed {
+			assertScenarioAPIError(t, err, http.StatusConflict, "state_conflict")
+			return
+		}
+		refreshed, refreshErr := handle.Refresh(ctx)
+		if refreshErr != nil {
+			t.Fatalf("SecondBox scenario refresh after running restore revision conflict: %v", refreshErr)
+		}
+		current = refreshed
+	}
+	t.Fatal("SecondBox scenario running restore remained revision-conflicted")
 }
 
 func restoreScenarioSnapshotWithReplay(

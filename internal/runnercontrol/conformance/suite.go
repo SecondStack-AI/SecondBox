@@ -48,7 +48,9 @@ func RunSessionSuite(
 	})
 	t.Run("unsupported_version", func(t *testing.T) {
 		session := factory("connection-version")
-		rejection, err := session.Accept(hello("runner-1", 2, 3))
+		rejection, err := session.Accept(hello(
+			"runner-1", runnerv1.SupportedProtocolMaximum+1, runnerv1.SupportedProtocolMaximum+2,
+		))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -62,7 +64,9 @@ func RunSessionSuite(
 func DefaultSessionFactory(connectionID string) *runnercontrol.Session {
 	return runnercontrol.NewSession(runnercontrol.SessionConfig{
 		AuthenticatedRunnerID: "runner-1",
-		SupportedVersions:     runnercontrol.VersionRange{Minimum: 1, Maximum: 1},
+		SupportedVersions: runnercontrol.VersionRange{
+			Minimum: runnerv1.SupportedProtocolMinimum, Maximum: runnerv1.SupportedProtocolMaximum,
+		},
 		EnabledFeatures: []runnerv1.RunnerFeature{
 			runnerv1.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
 		},
@@ -96,7 +100,7 @@ func registered(
 			Registration: &runnerv1.RunnerRegistration{
 				MessageId: messageID, Sequence: sequence, RunnerId: runnerID,
 				ConnectionId: connectionID, RunnerPoolId: "general",
-				SoftwareVersion: "1.0.0", ProtocolVersion: 1,
+				SoftwareVersion: "1.0.0", ProtocolVersion: runnerv1.SupportedProtocolMaximum,
 				Capabilities: &runnerv1.RunnerCapabilities{
 					Architecture: "amd64", FirecrackerVersion: "1.16.1",
 					KvmReady: true, JailerReady: true, CgroupReady: true,

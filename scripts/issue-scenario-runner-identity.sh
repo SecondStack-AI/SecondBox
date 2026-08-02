@@ -3,7 +3,7 @@ set -euo pipefail
 umask 077
 
 if [[ "$#" -ne 1 ]]; then
-  echo "Usage: deploy/bin/bootstrap-runner-trust.sh IDENTITY_DIRECTORY" >&2
+  echo "Usage: scripts/issue-scenario-runner-identity.sh IDENTITY_DIRECTORY" >&2
   exit 2
 fi
 

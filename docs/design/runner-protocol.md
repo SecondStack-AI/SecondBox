@@ -8,7 +8,9 @@ The runner protocol is the authenticated control-plane-to-runner boundary. Its c
 
 A runner presents the deployment's pre-shared Runner credential over a mutually authenticated TLS 1.3 connection. Its CA-signed client certificate carries the stable Runner identity; a message cannot claim a different Runner. The HTTP platform token is never accepted on this channel.
 
-The shared credential is configured explicitly on the control plane and every trusted Runner; PostgreSQL stores neither the credential nor a credential lifecycle. The client certificate is issued out of band by `deploy/bin/bootstrap-runner-trust.sh` and carries `spiffe://secondbox/runner/<runner-id>`. The RunnerPool is reported during registration and must already exist in a registration-accepting state. The control-plane server certificate is configured separately.
+The shared credential is configured explicitly on the control plane and every trusted Runner; PostgreSQL stores neither the credential nor a credential lifecycle. `secondbox-deploy runner-init` issues one create-only client identity for an immutable manifest-declared Runner ID, and its certificate carries `spiffe://secondbox/runner/<runner-id>`. The RunnerPool is reported during registration and must already exist in a registration-accepting state. The control-plane server certificate is configured separately.
+
+The supported Runner protocol window is a compiled fact, not deployment configuration. Identical constants live beside both independently built generated protocol packages, the generation verifier rejects drift, and both implementations use those constants for negotiation. Supported peers select that window; adjacent versions are rejected as unsupported.
 
 Unknown, empty, or mismatched shared credentials are rejected before protocol negotiation. CA verification and the certificate identity are also mandatory. Rotating the deployment-wide credential or Runner CA is an operator-coordinated replacement of the affected control-plane and Runner secret material; no database-backed enrollment, rotation, or revocation workflow exists.
 

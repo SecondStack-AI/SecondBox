@@ -1,139 +1,164 @@
 # Deployment and runtime operations
 
-SecondBox deploys an unprivileged `secondboxd` control plane backed by PostgreSQL and an S3-compatible Artifact store. Privileged Firecracker Runners are separate processes on qualified Linux hosts, establish outbound mTLS connections to the control plane, and own their durable local Workspace filesystems.
+SecondBox deploys one unprivileged control plane and separately managed privileged Firecracker Runners. Operators describe the deployment in one strict, versioned `secondbox.toml`; `secondbox-deploy` compiles that manifest into the process environments consumed by Compose, `secondboxd`, and remote Runner service managers. The generated environment is transport, not operator input.
 
-## Release flow
+## One-command development control plane
 
-A SecondBox release is a Git tag on a reviewed commit whose CI run passed. The portable gate is:
-
-```sh
-just test-non-kvm
-```
-
-The repository does not maintain a separate release-candidate, qualification-record, evidence-assembly, or publication controller. Firecracker validation remains a distinct qualified-host action:
+From a clean checkout:
 
 ```sh
-just test-firecracker
+just deploy-development-up .tmp/secondbox-development
 ```
 
-`just build-artifacts` builds the control-plane and Runner binaries and checksums. Runtime microVM assets remain immutable, signed inputs verified by Runners; a passing source release does not claim that an arbitrary production host or asset bundle passed KVM validation.
+The command creates the directory only when it is absent, writes a mode-`0600` manifest and mode-`0700` secret directory, generates independent local authorities and Runner PKI, builds the control-plane image, renders and validates the environment, starts loopback-only PostgreSQL and object storage, creates the configured bucket, starts the control plane, and requires `/readyz`. It refuses an existing directory without `secondbox.toml` and never rewrites an existing manifest, secret, identity, workspace, or execution asset.
 
-## Bootstrap
-
-Generate a deployment-specific private environment file:
+Development initialization alone is available as:
 
 ```sh
-install -d -m 700 .tmp/secondbox-deploy
-just deploy-bootstrap .tmp/secondbox-deploy/environment
-just deploy-validate .tmp/secondbox-deploy/environment
+just deploy-init-development .tmp/secondbox-development
+just deploy-config .tmp/secondbox-development/secondbox.toml
 ```
 
-Bootstrap copies `deploy/environment.example` only when the target is absent. It generates independent PostgreSQL, RustFS, HTTP platform-token, and pre-shared Runner credentials, plus a deployment-local Runner CA and server certificate. Secret files use mode `0600`; the PKI directory uses `0700`; no secret value is printed. A symbolic link, non-regular target, or partial pre-existing PKI directory fails explicitly.
+The reviewed development topology intentionally starts no privileged Runner. Runner enrollment and host qualification remain separate operations on a qualified Linux host.
 
-The control plane receives the Runner CA certificate, not its private key. Operators retain the CA private key and issue Runner certificates out of band:
+## The deployment manifest
+
+[`deploy/secondbox.example.toml`](../../deploy/secondbox.example.toml) documents `schema_version = 1` and every accepted field. The manifest has eight decision groups:
+
+1. `deployment`: mode, public ingress, TLS termination, process bind addresses, and image references;
+2. `database`: bundled or external PostgreSQL and the authority required by that choice;
+3. `object_store`: bundled or external S3-compatible storage, addressing, bucket, region, temporary path, and credentials;
+4. `[[runners]]`: immutable Runner IDs, same-host or remote placement, pool, capacity, host integration, networking, and execution assets;
+5. `runner_trust`: enrollment credential, CA, server identity, and certificate policy;
+6. `applications`: platform and application authorities;
+7. `policy`: the nine subject quota limits and relay retention;
+8. `policy` and `overrides`: contested recovery/rollout settings and intentionally selected tuning overrides.
+
+Unknown keys, duplicate keys, unsupported schema versions, ambiguous bundled/external fields, incomplete authority, mutable production images, invalid cross-field relationships, and invalid cryptographic trust material fail with a `SecondBox deployment manifest` error. The decoder does not interpolate `${ENV}`, include files, or merge ambient environment variables.
+
+Validate and inspect without rendering:
 
 ```sh
-export SECONDBOX_RUNNER_ID=secondbox-runner-1
-export SECONDBOX_RUNNER_CA_CERTIFICATE=/secure/deployment/runner-pki/runner-ca.crt
-export SECONDBOX_RUNNER_CA_PRIVATE_KEY=/secure/deployment/runner-pki/runner-ca.key
-export SECONDBOX_RUNNER_CERTIFICATE_LIFETIME_DAYS=825
-deploy/bin/bootstrap-runner-trust.sh /var/lib/secondbox/runner-identity
+go run ./cmd/secondbox-deploy validate /secure/secondbox/secondbox.toml
+go run ./cmd/secondbox-deploy inspect /secure/secondbox/secondbox.toml
 ```
 
-Each Runner connection requires TLS 1.3, a CA-signed certificate whose URI identifies the Runner, and `SECONDBOX_RUNNER_CREDENTIAL`. The HTTP API instead accepts `SECONDBOX_PLATFORM_TOKEN` for operators and the credentials declared by `SECONDBOX_APPLICATION_AUTHORITIES_JSON` for scoped applications; none of these authorities are interchangeable. Replacing the platform, Runner, or application credentials requires a coordinated restart of its consumers so old authenticated connections do not remain live.
+`inspect` prints all resolved non-secret values and all 19 available tuning overrides with their compiled defaults. Secret values and secret-revealing paths are redacted.
 
-Create RunnerPools through the platform-token HTTP API before starting Runners. The CLI always supplies trusted ownership values, either as the explicit flags shown here or from the environment or stored configuration described in [SDK, CLI, and Flue quick starts](sdk-cli-and-flue.md):
+### Secret references
+
+Secret-bearing manifest fields name files instead of containing secret material. Relative references resolve from the manifest directory, never the caller's working directory. References must name exact regular non-symbolic-link files. A secret file contains one value: resolution removes at most one terminal LF and rejects CR, NUL, or any additional line break without trimming other bytes.
+
+Runner host paths are different: they are typed absolute values interpreted on the declared Runner host. Rendering a remote Runner handoff never opens or validates those paths on the control-plane host.
+
+### Authority, policy, tuning, and compiled facts
+
+Required deployment authority has no default. This includes identities, credentials, endpoints, process and storage paths, signed-asset catalog and bundle digests, object-store addressing mode, the nine subject quota limits, and relay retention.
+
+The manifest also requires three contested rollout/recovery decisions: relay poll interval, Runner command poll interval, and enabled Runner features. They remain operator policy until a separate decision reclassifies them.
+
+The `[overrides]` table contains code-owned tuning. Every field is optional. When absent, `secondboxd` uses the reviewed value shown by `inspect`; when present, the exact value is rendered and passes the same validation and cross-field checks as before. Invalid overrides fail rather than falling back. Compose uses value-less pass-through mappings so an absent override remains unset instead of becoming an empty string.
+
+Runner protocol minimum and maximum are not configuration. Both binaries compile the one supported protocol window, and generated-protocol verification rejects drift between the two modules.
+
+## Production initialization
+
+Create the protected skeleton:
 
 ```sh
-secondbox \
-  --url http://127.0.0.1:8080 \
-  --token "$SECONDBOX_PLATFORM_TOKEN" \
-  --tenant-ref secondbox \
-  --subject-ref secondbox-admin \
-  runner-pools create \
-  --body /secure/runner-pool.json
+just deploy-init-production /secure/secondbox-deployment
 ```
 
-## Built-in Profiles
+An incomplete production initialization is intentionally unusable and reports every unresolved decision group in one error. Before validation, production operators must supply:
 
-SecondBox ships the immutable `agent-compartment` and `coding-environment` Profiles. Their resource, lifecycle, retention, execution, network, and port policy is fixed; the RunnerPool and the signed runtime and toolchain bundles they pin are deployment-specific and have no default:
+- digest-pinned control-plane and Runner images, public HTTPS ingress, and external TLS termination;
+- bundled or external database authority, with `sslmode=verify-full` for an external database;
+- bundled object storage at its explicit private Compose endpoint, or external object-store authority at an HTTPS endpoint;
+- zero or more explicit immutable Runner declarations and their placement;
+- an operator-supplied signed-asset catalog, verified bundle digests, Runner CA, and server keypair;
+- independent platform, application, and Runner enrollment authorities;
+- all nine subject quota limits;
+- retention, contested recovery/rollout policy, and any intentional tuning overrides.
 
-```
-SECONDBOX_BUILTIN_AGENT_COMPARTMENT_POOL
-SECONDBOX_BUILTIN_AGENT_COMPARTMENT_RUNTIME_BUNDLE_DIGEST
-SECONDBOX_BUILTIN_AGENT_COMPARTMENT_TOOLCHAIN_BUNDLE_DIGEST
-SECONDBOX_BUILTIN_CODING_ENVIRONMENT_POOL
-SECONDBOX_BUILTIN_CODING_ENVIRONMENT_RUNTIME_BUNDLE_DIGEST
-SECONDBOX_BUILTIN_CODING_ENVIRONMENT_TOOLCHAIN_BUNDLE_DIGEST
-```
-
-Each digest must be `sha256:` followed by 64 lowercase hexadecimal characters and must name a bundle this deployment has verified; `secondboxd` refuses to start otherwise. The digests in `deploy/environment.example` are synthetic development values, exactly as the generated development signed-asset catalog is synthetic, and a production deployment replaces all four.
-
-Creating the referenced RunnerPool remains an explicit operator action, as it is for every other Profile. Create it with `runner-pools create` before any Sandbox is created against a built-in Profile; a Profile that names an absent pool admits Sandboxes that can never be placed.
-
-## Development Compose
-
-Build and start the unprivileged control plane with loopback-only PostgreSQL and RustFS:
+Automation can materialize a complete create-only target non-interactively after generating and reviewing the same typed input:
 
 ```sh
-docker build --tag secondbox-control-plane:development .
-just deploy-development-prepare .tmp/secondbox-deploy/environment
-docker compose \
-  --env-file .tmp/secondbox-deploy/environment \
-  --file deploy/compose.yml \
-  up -d control-plane
+go run ./cmd/secondbox-deploy init --mode production \
+  --input /automation/complete-production.toml \
+  /secure/secondbox-deployment
 ```
 
-Preparation validates the complete inventory, starts the development dependencies, and creates the explicitly configured bucket. It is safe to repeat and does not start the control plane.
+No generated development authority is accepted as a production default. Any dependency image selected in production is immutable by digest.
 
-The control-plane container runs as UID/GID 65532, drops Linux capabilities, sets `no-new-privileges`, uses a read-only root filesystem and bounded `/tmp`, and has no KVM, TUN/TAP, host-cgroup, host-path, or container-engine access. Its only writable persistent mount is the JSON log volume.
+## Rendering and Compose
 
-The opt-in `same-host-runner` profile is privileged and mounts `/dev/kvm`, `/dev/net/tun`, host cgroups, issued identity, signed assets, and one dedicated state root. The container executes `secondbox-runner` directly as PID 1, sends it `SIGTERM`, and allows 45 seconds for Runner-managed Firecracker teardown before forced removal. It is packaging for a Linux/amd64 Runner, not evidence that the host passed Firecracker validation.
-
-## Production boundary
-
-Production inventory is entirely explicit. It includes:
-
-- a digest-pinned control-plane image and any explicitly deployed dependency images;
-- TLS-verified external PostgreSQL;
-- an HTTPS S3-compatible Artifact endpoint, existing bucket, and deployment-specific credentials;
-- an HTTPS public base URL behind a reverse proxy that preserves `X-Request-ID`;
-- the platform token, explicit application-authority JSON, pre-shared Runner credential, Runner CA certificate, and server keypair;
-- explicit bind addresses, ports, timeouts, log path, protocol window, enabled Runner features, object limits, and per-subject quota limits;
-- an operator-supplied signed-asset catalog.
-
-`deploy/bin/validate-environment.sh` rejects missing values, duplicate keys, placeholders, weak file permissions, mutable production image references, plaintext production object-store URLs, disabled PostgreSQL TLS, reused cross-boundary credentials, invalid certificates, and invalid protocol ranges.
-
-PostgreSQL owns desired state, ownership refs, immutable home assignments, generations, Leases, profile revisions, audit, and reconciliation. The S3-compatible store owns application Artifacts and immutable execution assets only. Each home Runner's `SECONDBOX_RUNNER_WORKSPACE_ROOT` owns its durable Workspace images, local Snapshots, manifests, and receipts; it is not a cache and cannot be reconstructed by the control plane.
-
-## Migrations and replacement
-
-Every `secondboxd` validates and applies the embedded ordered migration lineage under a PostgreSQL advisory lock before opening listeners. Missing, reordered, altered, duplicate, or ahead migration records fail startup. Cross-resource references remain logical strings; the schema deliberately contains no foreign keys or CHECK constraints.
-
-Migration `0002` makes the reserved Sandbox name key `secondbox.dev/name` unique per tenant and subject among Sandboxes that are not deleted. That key is ordinary caller-writable Metadata, so a database written before this migration may already hold a duplicate. The migration checks first and fails with the conflicting `tenant/subject=name` values rather than a raw unique violation. Because migrations run before listeners open, a deployment carrying such a duplicate will not start: rename or delete the duplicate Sandboxes, then upgrade.
-
-Migration `0005` makes coordinated replacement load-bearing rather than merely advisable. It emits the `data_plane_session` work-notification kind, and a control-plane binary that predates that kind treats an unrecognised notification as a fatal listener error rather than an ignorable hint. An old replica left running alongside the migrated schema therefore stops rather than degrading. Do not run a mixed-version window across this migration.
-
-Use coordinated replacement unless the exact deployment has independently proven mixed-version operation:
-
-1. complete and verify a coordinated PostgreSQL/Artifact backup and quiescent backups of every affected Runner identity plus workspace root;
-2. stop admission and old control-plane replicas;
-3. start the new replicas and require readiness;
-4. reopen traffic.
-
-`scripts/backup.sh` preserves a shared database publication fence and verifies reachable Artifact objects. SecondBox provides no managed restore script for Runner-local Workspaces. Operators must recover each stable Runner identity and its workspace root as one consistent unit; see [backup and recovery](backup-and-restore.md).
-
-## Startup checks
-
-Before every start:
+Render explicitly when handing the environment to another tool:
 
 ```sh
-just deploy-config .tmp/secondbox-deploy/environment
+go run ./cmd/secondbox-deploy render \
+  --output /secure/secondbox-deployment/.secondbox.generated.env \
+  /secure/secondbox-deployment/secondbox.toml
+```
+
+Rendering strictly resolves the manifest, invokes the production `secondboxd` environment loader as a postcondition, and atomically replaces the target with a mode-`0600` file carrying a do-not-edit header. Manual changes are overwritten on the next deployment command. Remote Runner declarations also produce isolated systemd `EnvironmentFile` handoffs beside the generated environment.
+
+Supported Compose workflows always take the manifest:
+
+```sh
+just deploy-config /secure/secondbox-deployment/secondbox.toml
+just deploy-up /secure/secondbox-deployment/secondbox.toml
+just deploy-down /secure/secondbox-deployment/secondbox.toml
+```
+
+The deployment command supplies the project name, env file, and exact overlay list explicitly. It removes ambient `SECONDBOX_*` and `COMPOSE_*` variables and retains only Docker client connectivity variables. The base [`deploy/compose.yml`](../../deploy/compose.yml) contains the control plane and shared resources; `compose.development.yml` adds the reviewed local database and object-store pair; production selects independent bundled-database and bundled-object-store overlays only when requested; `compose.same-host-runner.yml` adds only the privileged Runner. Inactive services are never hidden behind profiles that still interpolate missing values.
+
+The control-plane container runs as UID/GID 65532 with a read-only root, dropped capabilities, `no-new-privileges`, and no KVM, TUN/TAP, host-cgroup, workspace, or container-engine access. A selected same-host Runner overlay is privileged and receives host devices and cgroups, but executes `secondbox-runner` directly as PID 1 and starts no private init system, login manager, or console process.
+
+## Runner enrollment and handoff
+
+Every `[[runners]]` entry is keyed by immutable `runner_id`. At most one may use `placement = "same-host"`; any number may use `placement = "remote"`.
+
+Issue one declared identity and protected environment handoff:
+
+```sh
+go run ./cmd/secondbox-deploy runner-init \
+  /secure/secondbox-deployment/secondbox.toml \
+  runner-east-1 \
+  /secure/handoffs/runner-east-1
+```
+
+The command signs a client certificate carrying `spiffe://secondbox/runner/<runner-id>`, writes the matching key, CA certificate, and canonical systemd environment, then atomically installs the directory. It refuses an undeclared ID, an existing target, a same-host target that differs from the declared identity directory, or mismatched CA evidence. Copying and activating a remote handoff on its Runner host is an explicit operator action.
+
+Create RunnerPools through the platform API before starting their Runners. A Profile that names an absent pool admits Sandboxes that cannot be placed. Built-in Profile bundle fields must be canonical `sha256:` digests found in the deployment's verified signed-asset catalog.
+
+## One-shot migration from the legacy environment
+
+The former editable environment interface is intentionally replaced. Migrate one already validated legacy environment without modifying it:
+
+```sh
+go run ./cmd/secondbox-deploy migrate \
+  /secure/legacy/secondbox.env \
+  /secure/secondbox-deployment
+```
+
+Migration requires a mode-`0600` regular source with exactly the historical 146 names. It rejects unknown, duplicate, missing, placeholder, or invalid values; extracts inline secrets into protected referenced files; writes the manifest once; pins the legacy tuning values as explicit overrides; and removes the obsolete protocol declarations. It refuses an existing target and cleans up only artifacts it created after a failure. Migration is not a runtime compatibility path: all later validation, rendering, inspection, and Compose commands consume only the manifest.
+
+## Recovery and replacement
+
+PostgreSQL owns desired state, immutable home assignments, generations, Leases, profiles, audit, and reconciliation. S3-compatible storage owns Artifacts and immutable execution assets. Each home Runner's reflink-capable workspace root owns its Workspaces and local Snapshots. A Sandbox never relocates, and neither PostgreSQL nor object storage can reconstruct a lost unbacked Runner workspace filesystem.
+
+Before replacement, take and verify a coordinated PostgreSQL/Artifact backup and quiescent backups of every affected Runner identity plus workspace root. Restore each stable Runner identity and workspace root as one consistent unit. The generated environment can be reproduced from `secondbox.toml` and its referenced secret material; it is not backup authority.
+
+Every `secondboxd` applies the embedded ordered migration lineage under a PostgreSQL advisory lock before opening listeners. Use coordinated replacement unless the exact deployment has independently proven mixed-version operation.
+
+## Runtime checks
+
+```sh
 curl --fail --silent --show-error http://127.0.0.1:8080/healthz
 curl --fail --silent --show-error http://127.0.0.1:8080/readyz
 curl --fail --silent --show-error http://127.0.0.1:8080/metrics
 ```
 
-`/healthz` proves the process answers, `/readyz` proves PostgreSQL connectivity, and `/metrics` exports fixed-cardinality Sandbox and Operation state counts without tenant or resource identifiers.
+`/healthz` proves the process answers, `/readyz` proves PostgreSQL connectivity, and `/metrics` exports fixed-cardinality state counts without tenant or resource identifiers.
 
-See [observability and diagnostics](observability-and-diagnostics.md), [backup and restore](backup-and-restore.md), [Kubernetes boundary](kubernetes-boundary.md), and [Firecracker runtime](firecracker-runtime.md).
+See [backup and restore](backup-and-restore.md), [Firecracker runtime](firecracker-runtime.md), [multirunner qualification](multirunner-qualification.md), and [observability and diagnostics](observability-and-diagnostics.md).
