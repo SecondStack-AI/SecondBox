@@ -111,9 +111,114 @@ func TestReconcilerDefersSerializationContentionInsteadOfFailing(t *testing.T) {
 	}
 }
 
+func TestReconcilerSchedulesHealthyReadySandboxAtIdleDeadline(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	readyAt := now.Add(-10 * time.Minute)
+	lastActivityAt := now.Add(-2 * time.Minute)
+	store := &fakeReconcileStore{claim: ports.LifecycleReconcileClaim{
+		SandboxID: "sbx-1", WorkerID: "worker-1", Revision: 3,
+		ObservedState:          contracts.SandboxStateReady,
+		DesiredState:           contracts.SandboxDesiredStateRunning,
+		GuestLiveness:          contracts.GuestLivenessReady,
+		ReadyAt:                &readyAt,
+		LastActivityAt:         &lastActivityAt,
+		IdleSeconds:            600,
+		MaximumDurationSeconds: 3600,
+	}}
+	reconciler := Reconciler{
+		Store: store, WorkerID: "worker-1", ClaimDuration: time.Minute, PollInterval: time.Second,
+	}
+	decision, found, err := reconciler.RunOnce(t.Context(), now)
+	if err != nil || !found || decision.Action != ActionWait {
+		t.Fatalf("reconciliation = %#v, %t, %v", decision, found, err)
+	}
+	want := lastActivityAt.Add(10 * time.Minute)
+	if !store.nextReconcileAt.Equal(want) {
+		t.Fatalf("next reconciliation = %s, want idle deadline %s", store.nextReconcileAt, want)
+	}
+}
+
+func TestReconcilerSchedulesHealthyReadySandboxAtMaximumDeadline(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	readyAt := now.Add(-50 * time.Minute)
+	lastActivityAt := now
+	store := &fakeReconcileStore{claim: ports.LifecycleReconcileClaim{
+		SandboxID: "sbx-1", WorkerID: "worker-1", Revision: 3,
+		ObservedState:          contracts.SandboxStateReady,
+		DesiredState:           contracts.SandboxDesiredStateRunning,
+		GuestLiveness:          contracts.GuestLivenessReady,
+		ReadyAt:                &readyAt,
+		LastActivityAt:         &lastActivityAt,
+		IdleSeconds:            3600,
+		MaximumDurationSeconds: 3600,
+	}}
+	reconciler := Reconciler{
+		Store: store, WorkerID: "worker-1", ClaimDuration: time.Minute, PollInterval: time.Second,
+	}
+	decision, found, err := reconciler.RunOnce(t.Context(), now)
+	if err != nil || !found || decision.Action != ActionWait {
+		t.Fatalf("reconciliation = %#v, %t, %v", decision, found, err)
+	}
+	want := readyAt.Add(time.Hour)
+	if !store.nextReconcileAt.Equal(want) {
+		t.Fatalf("next reconciliation = %s, want maximum deadline %s", store.nextReconcileAt, want)
+	}
+}
+
+func TestReconcilerPollsHealthyReadySandboxWhileSessionIsActive(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	readyAt := now.Add(-10 * time.Minute)
+	lastActivityAt := now.Add(-2 * time.Minute)
+	store := &fakeReconcileStore{claim: ports.LifecycleReconcileClaim{
+		SandboxID: "sbx-1", WorkerID: "worker-1", Revision: 3,
+		ObservedState:          contracts.SandboxStateReady,
+		DesiredState:           contracts.SandboxDesiredStateRunning,
+		GuestLiveness:          contracts.GuestLivenessReady,
+		ReadyAt:                &readyAt,
+		LastActivityAt:         &lastActivityAt,
+		ActiveSessions:         1,
+		IdleSeconds:            60,
+		MaximumDurationSeconds: 3600,
+	}}
+	reconciler := Reconciler{
+		Store: store, WorkerID: "worker-1", ClaimDuration: time.Minute, PollInterval: time.Second,
+	}
+	decision, found, err := reconciler.RunOnce(t.Context(), now)
+	if err != nil || !found || decision.Action != ActionWait {
+		t.Fatalf("reconciliation = %#v, %t, %v", decision, found, err)
+	}
+	want := now.Add(time.Second)
+	if !store.nextReconcileAt.Equal(want) {
+		t.Fatalf("next reconciliation = %s, want poll deadline %s", store.nextReconcileAt, want)
+	}
+}
+
+func TestReconcilerKeepsTransitionalWaitOnPollInterval(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	store := &fakeReconcileStore{claim: ports.LifecycleReconcileClaim{
+		SandboxID: "sbx-1", WorkerID: "worker-1", Revision: 3,
+		ObservedState: contracts.SandboxStateStarting,
+		DesiredState:  contracts.SandboxDesiredStateRunning,
+		GuestLiveness: contracts.GuestLivenessStarting,
+		HasInstance:   true,
+	}}
+	reconciler := Reconciler{
+		Store: store, WorkerID: "worker-1", ClaimDuration: time.Minute, PollInterval: time.Second,
+	}
+	decision, found, err := reconciler.RunOnce(t.Context(), now)
+	if err != nil || !found || decision.Action != ActionWait {
+		t.Fatalf("reconciliation = %#v, %t, %v", decision, found, err)
+	}
+	want := now.Add(time.Second)
+	if !store.nextReconcileAt.Equal(want) {
+		t.Fatalf("next reconciliation = %s, want poll deadline %s", store.nextReconcileAt, want)
+	}
+}
+
 type fakeReconcileStore struct {
-	claim  ports.LifecycleReconcileClaim
-	action string
+	claim           ports.LifecycleReconcileClaim
+	action          string
+	nextReconcileAt time.Time
 }
 
 type fakeEffectExecutor struct {
@@ -147,8 +252,9 @@ func (store *fakeReconcileStore) ApplyLifecycleAction(
 	action string,
 	_ string,
 	_ time.Time,
-	_ time.Time,
+	nextReconcileAt time.Time,
 ) error {
 	store.action = action
+	store.nextReconcileAt = nextReconcileAt
 	return nil
 }

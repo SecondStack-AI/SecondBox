@@ -39,6 +39,15 @@ func TestTimingProjectionsJoinLifecycleBootAndExecEvidence(t *testing.T) {
 		) VALUES
 			('op_timing','sbox_timing','durable_admission',$1),
 			('op_timing','sbox_timing','workspace_ready',$16),
+			('op_timing','sbox_timing','placement_reconcile_started',$19),
+			('op_timing','sbox_timing','placement_effect_started',$20),
+			('op_timing','sbox_timing','placement_plan_ready',$21),
+			('op_timing','sbox_timing','placement_schedule_started',$22),
+			('op_timing','sbox_timing','placement_attempt_started',$23),
+			('op_timing','sbox_timing','placement_sandbox_locked',$24),
+			('op_timing','sbox_timing','placement_assignment_checked',$25),
+			('op_timing','sbox_timing','placement_candidates_locked',$26),
+			('op_timing','sbox_timing','placement_candidate_selected',$27),
 			('op_timing','sbox_timing','placement_ready',$17),
 			('op_timing','sbox_timing','startup_dispatched',$18),
 			('op_timing','sbox_timing','ready_projected',$3);
@@ -102,6 +111,15 @@ func TestTimingProjectionsJoinLifecycleBootAndExecEvidence(t *testing.T) {
 		base.Add(12*time.Millisecond),
 		base.Add(19*time.Millisecond+500*time.Microsecond),
 		base.Add(22*time.Millisecond),
+		base.Add(13*time.Millisecond),
+		base.Add(14*time.Millisecond),
+		base.Add(15*time.Millisecond),
+		base.Add(15*time.Millisecond+250*time.Microsecond),
+		base.Add(15*time.Millisecond+500*time.Microsecond),
+		base.Add(16*time.Millisecond),
+		base.Add(16*time.Millisecond+500*time.Microsecond),
+		base.Add(18*time.Millisecond),
+		base.Add(18*time.Millisecond+250*time.Microsecond),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -135,15 +153,21 @@ func TestTimingProjectionsJoinLifecycleBootAndExecEvidence(t *testing.T) {
 		math.Abs(operation.Boots[0].Stages[5].ElapsedMilliseconds-2600) > 0.001 {
 		t.Fatalf("boot timing = %#v", operation.Boots)
 	}
-	if len(operation.Orchestration) != 5 ||
+	if len(operation.Orchestration) != 14 ||
 		operation.Orchestration[0].Stage != "durable_admission" ||
 		operation.Orchestration[1].Stage != "workspace_ready" ||
 		math.Abs(operation.Orchestration[1].ElapsedMilliseconds-12) > 0.001 ||
-		operation.Orchestration[2].Stage != "placement_ready" ||
-		math.Abs(operation.Orchestration[2].ElapsedMilliseconds-7.5) > 0.001 ||
-		operation.Orchestration[3].Stage != "startup_dispatched" ||
-		math.Abs(operation.Orchestration[3].CumulativeMilliseconds-22) > 0.001 ||
-		operation.Orchestration[4].Stage != "ready_projected" {
+		operation.Orchestration[2].Stage != "placement_reconcile_started" ||
+		math.Abs(operation.Orchestration[2].ElapsedMilliseconds-1) > 0.001 ||
+		operation.Orchestration[4].Stage != "placement_plan_ready" ||
+		math.Abs(operation.Orchestration[4].CumulativeMilliseconds-15) > 0.001 ||
+		operation.Orchestration[9].Stage != "placement_candidates_locked" ||
+		math.Abs(operation.Orchestration[9].ElapsedMilliseconds-1.5) > 0.001 ||
+		operation.Orchestration[11].Stage != "placement_ready" ||
+		math.Abs(operation.Orchestration[11].ElapsedMilliseconds-1.25) > 0.001 ||
+		operation.Orchestration[12].Stage != "startup_dispatched" ||
+		math.Abs(operation.Orchestration[12].CumulativeMilliseconds-22) > 0.001 ||
+		operation.Orchestration[13].Stage != "ready_projected" {
 		t.Fatalf("Operation orchestration timing = %#v", operation.Orchestration)
 	}
 	if exec := sandboxTiming.Execs[0]; exec.Mode != "buffered" ||

@@ -113,6 +113,16 @@ These spans overlap and must not be added:
 | `operation_total` | Durable Operation creation to completion. |
 | `workspace_provision` | Durable admission to the runner's committed Workspace-ready result. |
 | `placement` | Workspace ready to the committed Instance placement and Assignment command. |
+| `placement_pickup` | Workspace ready to the lifecycle worker beginning the placement reconciliation. |
+| `placement_reconcile` | Lifecycle reconciliation start to effect execution. |
+| `placement_plan` | Effect execution to the complete provider-neutral start plan. |
+| `placement_handoff` | Complete start plan to scheduler entry. |
+| `placement_retry` | Scheduler entry to the successful serializable attempt; includes failed attempts and retry backoff. |
+| `placement_sandbox_lock` | Successful attempt start through the ordered Sandbox and Workspace lock. |
+| `placement_assignment_check` | Sandbox and Workspace lock through the existing-Assignment and mutation checks. |
+| `placement_candidate_lock` | Assignment checks through locking the eligible runner candidates. |
+| `placement_candidate_select` | Locked candidates through provider-neutral runner selection. |
+| `placement_prepare` | Selected runner through the committed ordered placement writes. |
 | `startup_dispatch` | Placement ready to successful Assignment stream delivery. |
 | `pre_assignment` | Durable admission to placement ready, derived directly from the persisted orchestration milestones. |
 | `runner_boot` | Assignment creation through the runner's final startup observation. |
@@ -121,13 +131,16 @@ These spans overlap and must not be added:
 | `ready_projection` | Receipt of the runner's `ready` observation to the committed ready projection. |
 | `client_visibility` | Durable Operation total to the benchmark observing the target state. |
 
-The Operation timing contract supplies the ordered provider-neutral milestones
-`durable_admission`, `workspace_ready`, `placement_ready`,
-`startup_dispatched`, and `ready_projected`. PostgreSQL notifications only wake
-workers; these durable rows remain the timing and work authority. Runner logs
-additionally record command queue-to-delivery latency, per-event persistence
-latency, local Workspace command execution, and Workspace format/fsync/publish
-time. Runner-private details do not enter public schemas.
+The Operation timing contract supplies ordered provider-neutral milestones from
+`durable_admission` through Workspace provisioning, lifecycle pickup, start-plan
+construction, placement locks and writes, dispatch, and ready projection. The
+placement milestones are persisted with the Assignment command's existing
+ordered write batch, so measuring them adds no database round trip to startup.
+PostgreSQL notifications only wake workers; these durable rows remain the timing
+and work authority. Runner logs additionally record command queue-to-delivery
+latency, per-event persistence latency, local Workspace command execution, and
+Workspace format/fsync/publish time. Runner-private details do not enter public
+schemas.
 
 ## Running it
 

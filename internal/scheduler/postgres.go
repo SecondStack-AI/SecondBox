@@ -61,6 +61,21 @@ type ScheduleRequest struct {
 	SerializationRetryLimit int
 	HeartbeatTimeout        time.Duration
 	Now                     time.Time
+	EffectStartedAt         time.Time
+	PlanReadyAt             time.Time
+}
+
+// placementTiming records provider-neutral milestones for the successful
+// placement attempt. Failed serializable attempts are represented by the gap
+// between scheduleStartedAt and attemptStartedAt, so attribution adds no
+// database round trips to the path being measured.
+type placementTiming struct {
+	scheduleStartedAt   time.Time
+	attemptStartedAt    time.Time
+	sandboxLockedAt     time.Time
+	assignmentCheckedAt time.Time
+	candidatesLockedAt  time.Time
+	candidateSelectedAt time.Time
 }
 
 // DurableAssignment contains every private runner and backend authority field.
@@ -122,8 +137,20 @@ func (store *PostgresStore) Schedule(
 	if err := validateScheduleRequest(request); err != nil {
 		return DurableAssignment{}, false, err
 	}
+	scheduleStartedAt, err := store.observeAtOrAfter(request.PlanReadyAt)
+	if err != nil {
+		return DurableAssignment{}, false, err
+	}
 	for attempt := 0; ; attempt++ {
-		assignment, created, err := store.scheduleOnce(ctx, request)
+		attemptStartedAt, err := store.observeAtOrAfter(scheduleStartedAt)
+		if err != nil {
+			return DurableAssignment{}, false, err
+		}
+		timing := placementTiming{
+			scheduleStartedAt: scheduleStartedAt,
+			attemptStartedAt:  attemptStartedAt,
+		}
+		assignment, created, err := store.scheduleOnce(ctx, request, timing)
 		if !isSerializationFailure(err) {
 			return assignment, created, err
 		}
@@ -174,6 +201,7 @@ func sleepWithContext(ctx context.Context, delay time.Duration) bool {
 func (store *PostgresStore) scheduleOnce(
 	ctx context.Context,
 	request ScheduleRequest,
+	timing placementTiming,
 ) (DurableAssignment, bool, error) {
 	tx, err := store.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
@@ -189,6 +217,10 @@ func (store *PostgresStore) scheduleOnce(
 	locked, err := rowlock.SandboxWorkspaceByID(ctx, tx, request.SandboxID)
 	if err != nil {
 		return DurableAssignment{}, false, fmt.Errorf("SecondBox scheduler Sandbox/Workspace lookup: %w", err)
+	}
+	timing.sandboxLockedAt, err = store.observeAtOrAfter(timing.attemptStartedAt)
+	if err != nil {
+		return DurableAssignment{}, false, err
 	}
 	if locked.WorkspaceID != request.WorkspaceID {
 		return DurableAssignment{}, false, ErrProfileRevisionMismatch
@@ -228,7 +260,15 @@ func (store *PostgresStore) scheduleOnce(
 	if currentInstanceID != "" {
 		return DurableAssignment{}, false, errors.New("SecondBox scheduler Sandbox has an Instance without durable assignment")
 	}
+	timing.assignmentCheckedAt, err = store.observeAtOrAfter(timing.sandboxLockedAt)
+	if err != nil {
+		return DurableAssignment{}, false, err
+	}
 	runners, err := lockRunnerCandidates(ctx, tx, request.Requirements.PoolName)
+	if err != nil {
+		return DurableAssignment{}, false, err
+	}
+	timing.candidatesLockedAt, err = store.observeAtOrAfter(timing.assignmentCheckedAt)
 	if err != nil {
 		return DurableAssignment{}, false, err
 	}
@@ -236,6 +276,10 @@ func (store *PostgresStore) scheduleOnce(
 		homeRunnerID, request.Requirements, runners,
 		request.Now.UTC(), request.HeartbeatTimeout,
 	)
+	if err != nil {
+		return DurableAssignment{}, false, err
+	}
+	timing.candidateSelectedAt, err = store.observeAtOrAfter(timing.candidatesLockedAt)
 	if err != nil {
 		return DurableAssignment{}, false, err
 	}
@@ -269,9 +313,9 @@ func (store *PostgresStore) scheduleOnce(
 	if err != nil {
 		return DurableAssignment{}, false, err
 	}
-	placementAt := store.now().UTC()
-	if placementAt.IsZero() {
-		return DurableAssignment{}, false, errors.New("SecondBox scheduler clock returned zero time")
+	placementAt, err := store.observeAtOrAfter(timing.candidateSelectedAt)
+	if err != nil {
+		return DurableAssignment{}, false, err
 	}
 	assignment := DurableAssignment{
 		ID: request.AssignmentID, SandboxID: request.SandboxID, InstanceID: request.InstanceID,
@@ -347,13 +391,28 @@ func (store *PostgresStore) scheduleOnce(
 		INSERT INTO secondbox.operation_stage_timings (
 			operation_id,sandbox_id,stage,observed_at
 		)
-		SELECT $9,$10,'placement_ready',$8
+		SELECT $9,$10,timing.stage,timing.observed_at
 		FROM inserted_command
+		CROSS JOIN (VALUES
+			('placement_reconcile_started',$11::timestamptz),
+			('placement_effect_started',$12::timestamptz),
+			('placement_plan_ready',$13::timestamptz),
+			('placement_schedule_started',$14::timestamptz),
+			('placement_attempt_started',$15::timestamptz),
+			('placement_sandbox_locked',$16::timestamptz),
+			('placement_assignment_checked',$17::timestamptz),
+			('placement_candidates_locked',$18::timestamptz),
+			('placement_candidate_selected',$19::timestamptz),
+			('placement_ready',$8::timestamptz)
+		) AS timing(stage,observed_at)
 		ON CONFLICT (operation_id,stage) DO NOTHING`,
 		request.AssignmentCommandID, assignment.RunnerID, assignment.ID, commandPayload,
 		commandState, targetConnectionID, deliveryCount, placementAt,
 		request.AssignmentCommand.Correlation.OperationId,
 		request.SandboxID,
+		request.Now.UTC(), request.EffectStartedAt.UTC(), request.PlanReadyAt.UTC(),
+		timing.scheduleStartedAt, timing.attemptStartedAt, timing.sandboxLockedAt,
+		timing.assignmentCheckedAt, timing.candidatesLockedAt, timing.candidateSelectedAt,
 	)
 	orderedWrites.Queue(`
 		UPDATE secondbox.runners
@@ -418,6 +477,11 @@ func validateScheduleRequest(request ScheduleRequest) error {
 		request.RetryLimit < 0 || request.SerializationRetryLimit < 0 || request.Now.IsZero() {
 		return errors.New("SecondBox scheduler request requires complete identity, profile, fence, deadline, and retry bounds")
 	}
+	if request.EffectStartedAt.IsZero() || request.PlanReadyAt.IsZero() ||
+		request.EffectStartedAt.Before(request.Now) ||
+		request.PlanReadyAt.Before(request.EffectStartedAt) {
+		return errors.New("SecondBox scheduler request requires ordered placement timing authority")
+	}
 	command := request.AssignmentCommand
 	if command == nil || command.Fence == nil ||
 		command.Fence.AssignmentId != request.AssignmentID ||
@@ -437,6 +501,17 @@ func validateScheduleRequest(request ScheduleRequest) error {
 		return errors.New("SecondBox scheduler Assignment command does not match durable assignment authority")
 	}
 	return nil
+}
+
+func (store *PostgresStore) observeAtOrAfter(previous time.Time) (time.Time, error) {
+	observedAt := store.now().UTC()
+	if observedAt.IsZero() {
+		return time.Time{}, errors.New("SecondBox scheduler clock returned zero time")
+	}
+	if observedAt.Before(previous) {
+		return previous.UTC(), nil
+	}
+	return observedAt, nil
 }
 
 func isSerializationFailure(err error) bool {

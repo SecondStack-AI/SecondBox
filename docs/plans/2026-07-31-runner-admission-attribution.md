@@ -3,7 +3,7 @@ title: Runner Admission Attribution and Dispatch Batching
 date: 2026-07-31
 status: implemented-with-open-gate
 owner: SecondStack
-provenance: Qualified lifecycle evidence through 89afa63 and repeated-burst race evidence at 05bbd8e
+provenance: Qualified lifecycle evidence through the 2026-08-02 ready-deadline candidate and repeated-burst race evidence at 05bbd8e
 ---
 
 # Plan: Runner Admission Attribution and Dispatch Batching
@@ -18,8 +18,9 @@ not pass the snapshot plan's unsaturated `runner_admission` p95 target of
 dispatch candidate measured 11/34 ms, but it was rejected after repeated
 bursts proved that locking the runner's single connection row inside every
 placement could exhaust serialization retries and shut down the control plane.
-The race-safe owner-claim design currently measures 39/66 ms on the same
-30-arrival unsaturated workload.
+The race-safe owner-claim design measured 39/66 ms on the same 30-arrival
+unsaturated workload. The retained ready-deadline follow-up measures 34/58 ms;
+the 25 ms admission p95 gate remains open.
 
 The scheduler previously reused the lifecycle worker's `Now`, captured before
 the Sandbox claim and start-plan load, as the Assignment creation and
@@ -52,6 +53,14 @@ before the durable assignment writes.
 - Classify exhausted serializable retries as expected contention, defer both
   reconcilers rather than terminating the process, and use full-jitter retry
   backoff so a colliding cohort does not retry in lockstep.
+- Persist provider-neutral lifecycle pickup, start-plan, scheduler lock,
+  selection, retry, and ordered-write milestones in the Assignment command's
+  existing batch. Attribution adds no database round trip to placement.
+- Schedule a healthy ready Sandbox's next lifecycle reconciliation at its
+  earliest idle or maximum-duration deadline instead of reclaiming it every
+  poll interval. Transitional states and ready Sandboxes with active sessions
+  retain bounded polling; desired-state, runner-terminal, and guest-terminal
+  evidence explicitly wake sleeping Sandboxes.
 - Log claim and stream-send duration separately from queue and total delivery
   duration. Every qualified assignment stream send rounded to 0 ms; the
   remaining serial work is notification/queueing plus the database claim.
@@ -227,15 +236,57 @@ control plane rebuilt from `89afa63` completed in 1.234–1.391 seconds, with a
 1.363-second median. The full current KVM/Btrfs scenario also passed every
 group, including Snapshot restore and retention.
 
-Do not optimize stream sending, pool acquisition, or decoding: they remain
-0 ms. Do not recover the claim-query savings by moving the connection row back
-into placement. The next pass should split `placement` into lifecycle pickup,
-start-plan lookup, runner selection/locks, ordered writes, commit, and
-serialization retry time. Its current 415/843 ms is much larger than the
-25/48 ms owner claim and is the first safe optimization target. Re-run at least
-30 unsaturated arrivals and the repeated burst ladder after each retained
-candidate, and require `runner_admission` p95 at or below 25 ms before marking
-the admission gate complete.
+The provider-neutral split then showed that scheduler work was not the
+unsaturated bottleneck. In a 30-arrival observer run, `placement` was 337/859 ms
+p50/p95 and `placement_pickup` alone was 327/839 ms. Start-plan construction,
+runner selection, and every ordered-write subphase rounded to 0–1 ms. The delay
+grew with the number of completed Sandboxes because every healthy ready
+Sandbox remained due and was reclaimed every 250 ms forever.
+
+The retained correction schedules healthy ready Sandboxes at the earliest
+durable idle or maximum-duration deadline. A useful-activity touch that moves
+the idle deadline later may cause one harmless early wake at the old deadline;
+the worker then reads the new durable activity time and reschedules it. A ready
+Sandbox with an active session polls so session closure is still discovered,
+and terminal guest liveness now moves `next_reconcile_at` to the observation
+time in the same database statement. Runner terminal evidence and public
+desired-state writes already perform the same wakeup.
+
+On the same 30-arrival fixed workload, all arrivals completed with no refusal
+or failure:
+
+| Ready-deadline candidate | p50 | p95 | p99 |
+|---|---:|---:|---:|
+| `create_to_ready` | **692 ms** | **800 ms** | 821 ms |
+| `pre_assignment` | **225 ms** | **315 ms** | 346 ms |
+| `placement` | **27 ms** | **54 ms** | 62 ms |
+| `placement_pickup` | **12 ms** | **29 ms** | 30 ms |
+| `placement_reconcile` | 8 ms | 34 ms | 36 ms |
+| `workspace_provision` | 204 ms | 264 ms | 310 ms |
+| `runner_admission` | 34 ms | 58 ms | 71 ms |
+| `runner_boot` | 416 ms | 445 ms | 447 ms |
+| `client_visibility` | 21 ms | 44 ms | 54 ms |
+
+Against the attribution observer run, end-to-end p50/p95 fell from
+1,153/1,704 ms and placement pickup fell from 327/839 ms. A ten-rung burst-32
+qualification completed 320/320 arrivals with no refusal, failure, shed, or
+shutdown while absorbing 21 PostgreSQL serialization failures. The complete
+qualified KVM/Btrfs suite also passed, including useful-activity deadline
+extension, restart, runner loss, generation fencing, Snapshot restore, and
+retention.
+
+Do not optimize stream sending, pool acquisition, decoding, start-plan lookup,
+or the scheduler's unsaturated row work: they remain 0–1 ms. Do not recover
+claim-query savings by moving the connection row back into placement. The next
+safe target is burst pickup: one lifecycle worker serially consumes a cohort of
+32 simultaneously due Sandboxes, leaving `placement_pickup` at 1.5–2.1 seconds
+p50 across the ten rungs even though the per-placement reconciliation is only
+24–45 ms p50. Any worker-concurrency or batched-claim candidate must preserve
+SKIP LOCKED claims, Sandbox/Workspace lock order, generation fencing, and the
+race-safe owner-side Assignment claim. Re-run at least 30 unsaturated arrivals,
+the repeated burst ladder, and the full scenario after each retained candidate,
+and require `runner_admission` p95 at or below 25 ms before marking the admission
+gate complete.
 
 Additional machine-readable evidence:
 
@@ -245,6 +296,9 @@ Additional machine-readable evidence:
 - `.tmp/lifecycle-relay-claim-c1-30-result.json`
 - `.tmp/lifecycle-eager-assignment-c1-30-result.json`
 - `.tmp/lifecycle-post-race-fix-c1-30-result.json`
+- `.tmp/lifecycle-placement-attribution-c1-30-result.json`
+- `.tmp/lifecycle-ready-deadline-c1-30-result.json`
+- `.tmp/lifecycle-ready-deadline-burst32x10-result.json`
 
 ## Validation
 
@@ -259,4 +313,7 @@ Additional machine-readable evidence:
 - focused scheduler, runner-control, and integration race tests
 - `just test-scenario` on the qualified KVM/Btrfs host
 - two independent ten-rung burst-32 race qualifications
+- one ten-rung burst-32 ready-deadline qualification
+- ready deadline, active-session polling, transitional polling, and terminal
+  guest-liveness wakeup tests
 - `git diff --check`

@@ -120,6 +120,7 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 			NewFencingToken: func() ([]byte, error) {
 				return []byte("01234567890123456789012345678901"), nil
 			},
+			Now: func() time.Time { return now },
 		},
 	)
 	if err != nil {
@@ -145,7 +146,9 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 		command.Correlation == nil ||
 		!strings.HasPrefix(command.Correlation.OperationId, "automatic-start-") ||
 		command.Correlation.RequestId != "request-"+command.Correlation.OperationId ||
-		recordingScheduler.request.StartMutationID == "" {
+		recordingScheduler.request.StartMutationID == "" ||
+		!recordingScheduler.request.EffectStartedAt.Equal(now) ||
+		!recordingScheduler.request.PlanReadyAt.Equal(now) {
 		t.Fatalf(
 			"automatic restart authority command=%#v mutation=%q",
 			command,
@@ -215,6 +218,7 @@ func TestOrdinaryStopAndSnapshotDeleteSerializeAcrossControlPlaneReplicas(t *tes
 			NewFencingToken: func() ([]byte, error) {
 				return []byte("01234567890123456789012345678901"), nil
 			},
+			Now: time.Now,
 		},
 	)
 	if err != nil {
@@ -368,6 +372,7 @@ func TestSandboxDeleteQueuesHomeWorkspaceRemovalWhileRunnerIsOffline(t *testing.
 			NewFencingToken: func() ([]byte, error) {
 				return []byte("01234567890123456789012345678901"), nil
 			},
+			Now: time.Now,
 		},
 	)
 	if err != nil {

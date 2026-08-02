@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/url"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -244,6 +245,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 				ClaimExpiresAt:    now.Add(time.Minute), OperationDeadline: now.Add(2 * time.Minute),
 				RetryLimit: 2, SerializationRetryLimit: 3,
 				HeartbeatTimeout: 30 * time.Second, Now: now,
+				EffectStartedAt: now, PlanReadyAt: now,
 			})
 			results <- result{assignment: assignment, created: created, err: err}
 		}(index, schedulerStore)
@@ -314,6 +316,35 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 			targetConnectionID,
 			deliveryCount,
 			lastControlSequence,
+		)
+	}
+	var placementStages []string
+	var firstPlacementStage, lastPlacementStage time.Time
+	if err := pool.QueryRow(t.Context(), `
+		SELECT array_agg(stage ORDER BY stage),min(observed_at),max(observed_at)
+		FROM secondbox.operation_stage_timings
+		WHERE sandbox_id=$1 AND stage LIKE 'placement_%'`,
+		sandboxID,
+	).Scan(&placementStages, &firstPlacementStage, &lastPlacementStage); err != nil {
+		t.Fatal(err)
+	}
+	wantPlacementStages := []string{
+		"placement_assignment_checked",
+		"placement_attempt_started",
+		"placement_candidate_selected",
+		"placement_candidates_locked",
+		"placement_effect_started",
+		"placement_plan_ready",
+		"placement_ready",
+		"placement_reconcile_started",
+		"placement_sandbox_locked",
+		"placement_schedule_started",
+	}
+	if !slices.Equal(placementStages, wantPlacementStages) ||
+		!firstPlacementStage.Equal(now) || !lastPlacementStage.Equal(now) {
+		t.Fatalf(
+			"placement timing stages=%v first=%s last=%s",
+			placementStages, firstPlacementStage, lastPlacementStage,
 		)
 	}
 	delivery, found, err := stateStore.ClaimCommand(

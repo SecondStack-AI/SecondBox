@@ -416,16 +416,72 @@ func (driver *lifecycleDriver) collectBootTiming(
 		timings.recordStartupSpanLocked("client_visibility", max(visibility, 0))
 	}
 	var readyProjectedAt *time.Time
+	var workspaceReadyAt *time.Time
 	for _, stage := range timing.Orchestration {
 		switch stage.Stage {
 		case "workspace_ready":
+			observedAt := stage.ObservedAt
+			workspaceReadyAt = &observedAt
 			timings.recordStartupSpanLocked(
 				"workspace_provision",
 				time.Duration(stage.ElapsedMilliseconds*float64(time.Millisecond)),
 			)
+		case "placement_reconcile_started":
+			timings.recordStartupSpanLocked(
+				"placement_pickup",
+				time.Duration(stage.ElapsedMilliseconds*float64(time.Millisecond)),
+			)
+		case "placement_effect_started":
+			timings.recordStartupSpanLocked(
+				"placement_reconcile",
+				time.Duration(stage.ElapsedMilliseconds*float64(time.Millisecond)),
+			)
+		case "placement_plan_ready":
+			timings.recordStartupSpanLocked(
+				"placement_plan",
+				time.Duration(stage.ElapsedMilliseconds*float64(time.Millisecond)),
+			)
+		case "placement_schedule_started":
+			timings.recordStartupSpanLocked(
+				"placement_handoff",
+				time.Duration(stage.ElapsedMilliseconds*float64(time.Millisecond)),
+			)
+		case "placement_attempt_started":
+			timings.recordStartupSpanLocked(
+				"placement_retry",
+				time.Duration(stage.ElapsedMilliseconds*float64(time.Millisecond)),
+			)
+		case "placement_sandbox_locked":
+			timings.recordStartupSpanLocked(
+				"placement_sandbox_lock",
+				time.Duration(stage.ElapsedMilliseconds*float64(time.Millisecond)),
+			)
+		case "placement_assignment_checked":
+			timings.recordStartupSpanLocked(
+				"placement_assignment_check",
+				time.Duration(stage.ElapsedMilliseconds*float64(time.Millisecond)),
+			)
+		case "placement_candidates_locked":
+			timings.recordStartupSpanLocked(
+				"placement_candidate_lock",
+				time.Duration(stage.ElapsedMilliseconds*float64(time.Millisecond)),
+			)
+		case "placement_candidate_selected":
+			timings.recordStartupSpanLocked(
+				"placement_candidate_select",
+				time.Duration(stage.ElapsedMilliseconds*float64(time.Millisecond)),
+			)
 		case "placement_ready":
+			placement := time.Duration(stage.ElapsedMilliseconds * float64(time.Millisecond))
+			if workspaceReadyAt != nil {
+				placement = max(stage.ObservedAt.Sub(*workspaceReadyAt), 0)
+			}
 			timings.recordStartupSpanLocked(
 				"placement",
+				placement,
+			)
+			timings.recordStartupSpanLocked(
+				"placement_prepare",
 				time.Duration(stage.ElapsedMilliseconds*float64(time.Millisecond)),
 			)
 			timings.recordStartupSpanLocked(

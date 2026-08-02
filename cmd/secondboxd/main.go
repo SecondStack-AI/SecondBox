@@ -195,6 +195,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 			SessionCanceller:        dataPlaneRelay,
 			NewID:                   service.NewOpaqueID,
 			NewFencingToken:         newLifecycleFencingToken,
+			Now:                     service.SystemClock,
 		},
 	)
 	if err != nil {

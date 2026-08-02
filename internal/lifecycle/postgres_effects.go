@@ -40,6 +40,7 @@ type EffectBrokerConfig struct {
 	SessionCanceller        ActiveSessionCanceller
 	NewID                   func(string) string
 	NewFencingToken         func() ([]byte, error)
+	Now                     func() time.Time
 }
 
 // PostgresEffectBroker turns lifecycle decisions into durable scheduler and runner commands.
@@ -60,7 +61,8 @@ func NewPostgresEffectBroker(
 		config.AssignmentClaimDuration <= 0 || config.AssignmentDeadline <= 0 ||
 		config.HeartbeatTimeout <= 0 || config.RetryLimit < 0 ||
 		config.SerializationRetryLimit < 0 || config.AssetCatalog == nil ||
-		config.SessionCanceller == nil || config.NewID == nil || config.NewFencingToken == nil {
+		config.SessionCanceller == nil || config.NewID == nil || config.NewFencingToken == nil ||
+		config.Now == nil {
 		return nil, errors.New("SecondBox lifecycle effect broker requires database, scheduler, trust, identity, and retry bounds")
 	}
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -398,6 +400,10 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 	now time.Time,
 	nextReconcileAt time.Time,
 ) error {
+	effectStartedAt, err := broker.observeAtOrAfter(now)
+	if err != nil {
+		return err
+	}
 	plan, err := broker.loadStartPlan(ctx, claim)
 	if err != nil {
 		return err
@@ -454,6 +460,10 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		},
 		NetworkPolicy: networkPolicy,
 	}
+	planReadyAt, err := broker.observeAtOrAfter(effectStartedAt)
+	if err != nil {
+		return err
+	}
 	assignment, _, err := broker.scheduler.Schedule(ctx, scheduler.ScheduleRequest{
 		AssignmentID: assignmentID, AssignmentCommandID: commandID,
 		InstanceID: instanceID, SandboxID: claim.SandboxID,
@@ -481,6 +491,7 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		OperationDeadline: deadline, RetryLimit: broker.config.RetryLimit,
 		SerializationRetryLimit: broker.config.SerializationRetryLimit,
 		HeartbeatTimeout:        broker.config.HeartbeatTimeout, Now: now.UTC(),
+		EffectStartedAt: effectStartedAt, PlanReadyAt: planReadyAt,
 	})
 	if err != nil {
 		if errors.Is(err, scheduler.ErrProfileRevisionMismatch) {
@@ -518,6 +529,17 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		}
 	}
 	return nil
+}
+
+func (broker *PostgresEffectBroker) observeAtOrAfter(previous time.Time) (time.Time, error) {
+	observedAt := broker.config.Now().UTC()
+	if observedAt.IsZero() {
+		return time.Time{}, errors.New("SecondBox lifecycle effect clock returned zero time")
+	}
+	if observedAt.Before(previous) {
+		return previous.UTC(), nil
+	}
+	return observedAt, nil
 }
 
 func (broker *PostgresEffectBroker) deferUnavailableHomeRunnerStart(
