@@ -42,7 +42,7 @@ The relay's scaling failure is PostgreSQL byte storage, not the existence of a c
 
 The PostgreSQL frame relay is deleted after both replacements are complete. A Profile selects the default transport. A deployment may forbid either surviving transport.
 
-Open decision: if direct is the only supported transport and universal runner reachability is acceptable, phase 2 omits the proxied path. That choice deletes a transport; it does not alter the wire protocol or admission model.
+Both transports are supported. The constraint being satisfied is that no data-plane payload is ever stored in PostgreSQL; a control-plane byte path that forwards in memory and persists nothing meets it. Runner reachability is therefore an optimization a deployment may choose, not a requirement the product imposes.
 
 ## Wire protocol
 
