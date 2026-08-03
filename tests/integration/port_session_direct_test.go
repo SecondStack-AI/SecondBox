@@ -3,6 +3,7 @@ package integration_test
 import (
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 	"testing"
@@ -18,6 +19,7 @@ import (
 )
 
 const directPortRunnerAddress = "10.9.8.7:7443"
+const directPortCertificateSPKISHA256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 // TestPostgresDirectPortTransportAdmissionAndCredentialConsumption proves that the
 // direct transport changes only the endpoint and the byte path: admission stays
@@ -46,7 +48,8 @@ func TestPostgresDirectPortTransportAdmissionAndCredentialConsumption(t *testing
 		t.Fatal(err)
 	}
 	if endpoint.Scheme != "secondbox+tcp" || endpoint.Host != directPortRunnerAddress ||
-		endpoint.Path != "/v1/port-sessions/"+direct.ID || endpoint.Fragment == "" {
+		endpoint.Path != "/v1/port-sessions/"+direct.ID || endpoint.Fragment == "" ||
+		direct.CertificateSPKISHA256 != directPortCertificateSPKISHA256 {
 		t.Fatalf("direct PortSession endpoint = %q", direct.Endpoint)
 	}
 	credential := endpoint.Fragment
@@ -280,11 +283,26 @@ func TestPostgresPortTransportGrantGovernsRunnerAddressExposure(t *testing.T) {
 	}
 }
 
-func TestPostgresDirectPortRequiresAnAdvertisedRunnerAddress(t *testing.T) {
+func TestPostgresDirectPortRequiresAnAdvertisedRunnerAddressAndCertificatePin(t *testing.T) {
 	// The fixture control plane and this PortSession service share one clock so
 	// the session always sits inside the Lease that admitted it.
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	fixture := newDirectPortFixture(t, directPortFixtureName(t), &now)
+	if _, err := fixture.pool.Exec(t.Context(), `
+		UPDATE secondbox.runners SET data_plane_address=$2 WHERE id=$1`,
+		fixture.runnerID,
+		directPortRunnerAddress,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fixture.portService.CreateSandboxPortSession(
+		t.Context(), fixture.principal, "request-direct-unpinned", fixture.sandboxID,
+		fixture.generation, fixture.leaseID, "direct-port-unpinned",
+		contracts.PortTransportDirect,
+		contracts.CreatePortSessionRequest{Name: "web", DurationSeconds: 60},
+	); !errors.Is(err, ports.ErrLifecycleUnavailable) {
+		t.Fatalf("direct PortSession without a certificate pin error = %v", err)
+	}
 	if _, err := fixture.pool.Exec(t.Context(), `
 		UPDATE secondbox.runners SET data_plane_address='' WHERE id=$1`,
 		fixture.runnerID,
@@ -438,7 +456,11 @@ func seedAdvertisedDataPlaneRunner(
 			'["1"]',1,1,'1.0.0','connection_direct',0,'active','{}','[]',0,0,$2,$3,1,$3,$3
 		)
 		ON CONFLICT (id) DO UPDATE SET data_plane_address=EXCLUDED.data_plane_address`,
-		runnerID, directPortRunnerAddress, now,
+		runnerID, fmt.Sprintf(
+			`{"address":%q,"certificateSpkiSha256":%q}`,
+			directPortRunnerAddress,
+			directPortCertificateSPKISHA256,
+		), now,
 	); err != nil {
 		t.Fatal(err)
 	}

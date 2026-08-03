@@ -5,6 +5,7 @@ package scenario_test
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"io"
 	"net"
@@ -131,7 +132,7 @@ func assertScenarioRunnerAddressNeedsTheGrant(
 		t.Fatalf("ungranted PortSession = %#v", platform)
 	}
 	granted := createScenarioDirectPortSession(t, ctx, ingress, handle, leaseID, "granted-direct")
-	if granted.Transport != contracts.PortTransportDirect {
+	if granted.Transport != contracts.PortTransportDirect || granted.CertificateSPKISHA256 == "" {
 		t.Fatalf("granted PortSession = %#v", granted)
 	}
 	endpoint, err := url.Parse(granted.Endpoint)
@@ -224,7 +225,7 @@ func measureScenarioDirectPort(
 	t.Helper()
 	session := createScenarioDirectPortSession(t, ctx, ingress, handle, leaseID, "direct-measure")
 	startedAt := time.Now()
-	connection := dialScenarioDirectPort(t, ctx, session.Endpoint)
+	connection := dialScenarioDirectPort(t, ctx, session)
 	defer connection.Close()
 	measurement := scenarioPortMeasurement{connect: time.Since(startedAt)}
 	if err := connection.SetDeadline(time.Now().Add(time.Minute)); err != nil {
@@ -250,13 +251,21 @@ func measureScenarioDirectPort(
 
 // dialScenarioDirectPort performs the bounded credential handshake an ingress
 // tier performs before any payload byte.
-func dialScenarioDirectPort(t *testing.T, ctx context.Context, endpoint string) net.Conn {
+func dialScenarioDirectPort(
+	t *testing.T,
+	ctx context.Context,
+	session contracts.PortSession,
+) net.Conn {
 	t.Helper()
-	parsed, err := url.Parse(endpoint)
+	parsed, err := url.Parse(session.Endpoint)
 	if err != nil || parsed.Scheme != "secondbox+tcp" || parsed.Fragment == "" {
-		t.Fatalf("direct PortSession endpoint = %q, error = %v", endpoint, err)
+		t.Fatalf("direct PortSession endpoint = %q, error = %v", session.Endpoint, err)
 	}
-	dialer := net.Dialer{}
+	tlsConfig, err := portdirect.TLSConfigForSPKIPin(session.CertificateSPKISHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialer := tls.Dialer{NetDialer: &net.Dialer{}, Config: tlsConfig}
 	connection, err := dialer.DialContext(ctx, "tcp", parsed.Host)
 	if err != nil {
 		t.Fatalf("dial Runner data plane %q: %v", parsed.Host, err)
@@ -264,7 +273,7 @@ func dialScenarioDirectPort(t *testing.T, ctx context.Context, endpoint string) 
 	if err := connection.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	if err := portdirect.WriteCredential(connection, parsed.Fragment); err != nil {
+	if err := portdirect.WriteCredential(connection, portdirect.SessionKindPort, parsed.Fragment); err != nil {
 		connection.Close()
 		t.Fatal(err)
 	}

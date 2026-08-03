@@ -3,6 +3,7 @@ package conformance
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,9 +113,10 @@ func registered(
 					VcpuMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30,
 					Instances: 8, Operations: 32,
 				},
-				Reserved:                   &runnerv1.Capacity{},
-				StartupTiming:              &runnerv1.StartupTiming{},
-				DataPlaneAdvertisedAddress: "10.0.0.5:7443",
+				Reserved:                       &runnerv1.Capacity{},
+				StartupTiming:                  &runnerv1.StartupTiming{},
+				DataPlaneAdvertisedAddress:     "10.0.0.5:7443",
+				DataPlaneCertificateSpkiSha256: strings.Repeat("a", 64),
 			},
 		},
 	}

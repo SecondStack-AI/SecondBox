@@ -2,6 +2,8 @@ package runnercontrol
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
@@ -45,6 +47,44 @@ type PortTunnel struct {
 	// DataPlaneAddress is the home Runner's advertised caller-facing address. It
 	// is returned only to an ingress holding the exact direct-endpoint grant.
 	DataPlaneAddress string
+	// DataPlaneCertificateSPKISHA256 is the admitted caller-facing certificate
+	// public key. It is returned only with DataPlaneAddress.
+	DataPlaneCertificateSPKISHA256 string
+}
+
+type dataPlaneEndpoint struct {
+	Address               string `json:"address"`
+	CertificateSPKISHA256 string `json:"certificateSpkiSha256"`
+}
+
+func encodeDataPlaneEndpoint(address string, certificateSPKISHA256 string) (string, error) {
+	if err := validateAdvertisedDataPlaneAddress(address); err != nil {
+		return "", err
+	}
+	if err := validateCertificateSPKISHA256(certificateSPKISHA256); err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(dataPlaneEndpoint{
+		Address: address, CertificateSPKISHA256: certificateSPKISHA256,
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func decodeDataPlaneEndpoint(encoded string) (dataPlaneEndpoint, error) {
+	var endpoint dataPlaneEndpoint
+	if err := json.Unmarshal([]byte(encoded), &endpoint); err != nil {
+		return dataPlaneEndpoint{}, errors.New("SecondBox runner data-plane endpoint evidence is invalid")
+	}
+	if err := validateAdvertisedDataPlaneAddress(endpoint.Address); err != nil {
+		return dataPlaneEndpoint{}, err
+	}
+	if err := validateCertificateSPKISHA256(endpoint.CertificateSPKISHA256); err != nil {
+		return dataPlaneEndpoint{}, err
+	}
+	return endpoint, nil
 }
 
 // PortTunnelClose identifies one authenticated or already-consumed tunnel.

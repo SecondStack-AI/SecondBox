@@ -5,6 +5,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -40,11 +44,14 @@ type RunnerProtocolConfig struct {
 	MaximumConcurrentStarts           int
 	MaximumConcurrentWorkspaceCreates int
 	MandatoryFeatures                 []runnerprotocol.RunnerFeature
-	// DataPlaneListenAddress binds the caller-facing direct Port transport.
+	// DataPlaneListenAddress binds the caller-facing direct data-plane transport.
 	DataPlaneListenAddress string
 	// DataPlaneAdvertisedAddress is administrative capacity evidence returned
 	// only to an ingress holding the exact direct-endpoint grant.
 	DataPlaneAdvertisedAddress string
+	// DataPlaneCertificate is the runner identity used by the caller-facing
+	// direct data-plane TLS listener.
+	DataPlaneCertificate tls.Certificate
 }
 
 // BackendReadiness is verified local capability and capacity evidence.
@@ -166,6 +173,7 @@ type RunnerProtocolService struct {
 	correlations      map[string]*runnerprotocol.Correlation
 	dataPlane         *dataPlaneListener
 	dataPlaneFailures chan error
+	dataPlaneSPKIPin  string
 	directPorts       *directPortRegistry
 }
 
@@ -201,6 +209,14 @@ func NewRunnerProtocolService(
 	); err != nil {
 		return nil, err
 	}
+	dataPlaneCertificate, dataPlaneSPKIPin, err := validateDataPlaneCertificate(
+		config.RunnerID,
+		config.DataPlaneCertificate,
+	)
+	if err != nil {
+		return nil, err
+	}
+	config.DataPlaneCertificate.Leaf = dataPlaneCertificate
 	if err := validateDataPlaneAddress(
 		"SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS",
 		config.DataPlaneAdvertisedAddress,
@@ -252,6 +268,7 @@ func NewRunnerProtocolService(
 		evidence:         runnerevidence.SlogSink{},
 		correlations:     make(map[string]*runnerprotocol.Correlation),
 		dataPlane:        newDataPlaneListener(),
+		dataPlaneSPKIPin: dataPlaneSPKIPin,
 		directPorts:      newDirectPortRegistry(),
 	}
 	if implementsTerminal {
@@ -264,6 +281,32 @@ func NewRunnerProtocolService(
 		evidenceBackend.SetRunnerEvidenceSink(service.evidence, config.RunnerID)
 	}
 	return service, nil
+}
+
+func validateDataPlaneCertificate(
+	runnerID string,
+	certificate tls.Certificate,
+) (*x509.Certificate, string, error) {
+	if len(certificate.Certificate) == 0 || certificate.PrivateKey == nil {
+		return nil, "", fmt.Errorf("SecondBox runner data-plane TLS certificate is required")
+	}
+	leaf, err := x509.ParseCertificate(certificate.Certificate[0])
+	if err != nil {
+		return nil, "", fmt.Errorf("SecondBox runner data-plane TLS certificate: %w", err)
+	}
+	wantIdentity := "spiffe://secondbox/runner/" + runnerID
+	identityFound := false
+	for _, identity := range leaf.URIs {
+		if identity.String() == wantIdentity {
+			identityFound = true
+			break
+		}
+	}
+	if !identityFound {
+		return nil, "", fmt.Errorf("SecondBox runner data-plane TLS certificate identity does not match runner")
+	}
+	digest := sha256.Sum256(leaf.RawSubjectPublicKeyInfo)
+	return leaf, hex.EncodeToString(digest[:]), nil
 }
 
 // SetEvidenceSink replaces the fixed-shape evidence destination for tests and
@@ -489,7 +532,8 @@ func (s *RunnerProtocolService) sendRegistration(
 						ReadinessFailures: readiness.ReadinessFailures,
 						StartupTiming:     s.startupTiming(),
 
-						DataPlaneAdvertisedAddress: s.config.DataPlaneAdvertisedAddress,
+						DataPlaneAdvertisedAddress:     s.config.DataPlaneAdvertisedAddress,
+						DataPlaneCertificateSpkiSha256: s.dataPlaneSPKIPin,
 					},
 				},
 			}

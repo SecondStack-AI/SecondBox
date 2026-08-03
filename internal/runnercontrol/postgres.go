@@ -3,6 +3,7 @@ package runnercontrol
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -301,6 +302,13 @@ func (store *PostgresStateStore) RecordRegistration(
 	if err := validateAdvertisedDataPlaneAddress(registration.DataPlaneAdvertisedAddress); err != nil {
 		return false, err
 	}
+	dataPlaneEndpoint, err := encodeDataPlaneEndpoint(
+		registration.DataPlaneAdvertisedAddress,
+		registration.DataPlaneCertificateSpkiSha256,
+	)
+	if err != nil {
+		return false, err
+	}
 	capabilities := []string{
 		"compute", "network-policy", "storage", "cleanup", "local-workspace", "port-data-plane",
 	}
@@ -391,7 +399,7 @@ func (store *PostgresStateStore) RecordRegistration(
 		registration.Capabilities.GuestProtocolGenerations.Maximum,
 		registration.SoftwareVersion, registration.Sequence,
 		reservedJSON, cacheJSON, startCount, startP95Milliseconds,
-		now.UTC(), registration.ConnectionId, registration.DataPlaneAdvertisedAddress,
+		now.UTC(), registration.ConnectionId, dataPlaneEndpoint,
 	)
 	if err != nil {
 		return false, fmt.Errorf("SecondBox runner Registration update: %w", err)
@@ -427,6 +435,14 @@ func validateAdvertisedDataPlaneAddress(address string) error {
 	number, err := strconv.Atoi(port)
 	if err != nil || number < 1 || number > 65535 {
 		return errors.New("SecondBox runner data-plane advertised port must be between 1 and 65535")
+	}
+	return nil
+}
+
+func validateCertificateSPKISHA256(value string) error {
+	decoded, err := hex.DecodeString(value)
+	if err != nil || len(decoded) != sha256.Size || value != hex.EncodeToString(decoded) {
+		return errors.New("SecondBox runner data-plane certificate SPKI SHA-256 is invalid")
 	}
 	return nil
 }

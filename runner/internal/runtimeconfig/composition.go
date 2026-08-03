@@ -31,6 +31,7 @@ func LoadFromEnvironment(healthcheck bool) (Composition, error) {
 	if err != nil {
 		return Composition{}, fmt.Errorf("load SecondBox runner mTLS credentials: %w", err)
 	}
+	protocol.DataPlaneCertificate = connector.RunnerCertificate()
 	composition := Composition{Protocol: protocol, Connector: connector}
 	if healthcheck {
 		return composition, nil

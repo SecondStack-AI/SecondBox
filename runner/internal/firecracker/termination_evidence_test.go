@@ -2,7 +2,13 @@ package firecracker
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"math/big"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -14,6 +20,29 @@ import (
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 )
+
+func terminalPathRunnerCertificate(t *testing.T, runnerID string) tls.Certificate {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := url.Parse("spiffe://secondbox/runner/" + runnerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1), NotBefore: now.Add(-time.Minute),
+		NotAfter: now.Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature,
+		URIs: []*url.URL{identity},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, publicKey, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: privateKey}
+}
 
 func TestParseOOMKillCounterRequiresExactKernelKey(t *testing.T) {
 	tests := []struct {
@@ -213,6 +242,7 @@ func TestNaturalReapFlowsFromReadyManagerThroughBackendToProtocolFrame(t *testin
 					MaximumConcurrentWorkspaceCreates: 1,
 					DataPlaneListenAddress:            "127.0.0.1:0",
 					DataPlaneAdvertisedAddress:        "10.0.0.5:7443",
+					DataPlaneCertificate:              terminalPathRunnerCertificate(t, "runner-terminal"),
 					MandatoryFeatures: []runnerprotocol.RunnerFeature{
 						runnerprotocol.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
 					},

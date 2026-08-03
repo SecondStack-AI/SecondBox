@@ -441,7 +441,9 @@
       "state",
       "transport"
     ],
-    "optional": []
+    "optional": [
+      "certificateSpkiSha256"
+    ]
   },
   "Problem": {
     "required": [

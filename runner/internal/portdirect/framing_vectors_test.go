@@ -15,8 +15,9 @@ const vectorsRelativePath = "../../../contracts/portdirect/v1/vectors.json"
 type framingVectors struct {
 	Magic            string `json:"magic"`
 	CredentialFrames []struct {
-		Credential string `json:"credential"`
-		EncodedHex string `json:"encodedHex"`
+		SessionKind byte   `json:"sessionKind"`
+		Credential  string `json:"credential"`
+		EncodedHex  string `json:"encodedHex"`
 	} `json:"credentialFrames"`
 	VerdictFrames []struct {
 		Verdict    byte   `json:"verdict"`
@@ -57,7 +58,7 @@ func TestFramingMatchesSharedVectors(t *testing.T) {
 			t.Fatal(err)
 		}
 		var encoded bytes.Buffer
-		if err := WriteCredential(&encoded, vector.Credential); err != nil {
+		if err := WriteCredential(&encoded, SessionKind(vector.SessionKind), vector.Credential); err != nil {
 			t.Fatalf("WriteCredential(%d bytes): %v", len(vector.Credential), err)
 		}
 		if !bytes.Equal(encoded.Bytes(), expected) {
@@ -68,8 +69,9 @@ func TestFramingMatchesSharedVectors(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadCredential: %v", err)
 		}
-		if decoded != vector.Credential {
-			t.Errorf("decoded credential = %d bytes, want %d", len(decoded), len(vector.Credential))
+		if decoded.SessionKind != SessionKind(vector.SessionKind) || decoded.Value != vector.Credential {
+			t.Errorf("decoded credential = %s/%d bytes, want %s/%d",
+				decoded.SessionKind, len(decoded.Value), SessionKind(vector.SessionKind), len(vector.Credential))
 		}
 	}
 

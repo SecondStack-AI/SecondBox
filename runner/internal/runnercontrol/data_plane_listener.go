@@ -2,6 +2,7 @@ package runnercontrol
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -58,23 +59,27 @@ func validateDataPlaneAddress(name string, value string, listen bool) error {
 	return nil
 }
 
-// dataPlaneListener owns the caller-facing Port socket and its readiness.
+// dataPlaneListener owns the caller-facing data-plane socket and its readiness.
 //
 // Readiness is a Runner-local fact rather than backend evidence: the listener
 // belongs to the protocol service, not to the compute backend, so the service
 // projects it onto the registration and heartbeat capability report.
 type dataPlaneListener struct {
-	mu       sync.Mutex
-	listener net.Listener
-	failed   bool
-	live     int
+	mu        sync.Mutex
+	listener  net.Listener
+	tlsConfig *tls.Config
+	failed    bool
+	live      int
 }
 
 func newDataPlaneListener() *dataPlaneListener {
 	return &dataPlaneListener{}
 }
 
-func (d *dataPlaneListener) bind(address string) error {
+func (d *dataPlaneListener) bind(address string, certificate tls.Certificate) error {
+	if len(certificate.Certificate) == 0 || certificate.PrivateKey == nil {
+		return fmt.Errorf("SecondBox runner data-plane TLS certificate is required")
+	}
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		d.mu.Lock()
@@ -83,7 +88,10 @@ func (d *dataPlaneListener) bind(address string) error {
 		return fmt.Errorf("SecondBox runner data-plane listener bind %q: %w", address, err)
 	}
 	d.mu.Lock()
-	d.listener, d.failed = listener, false
+	d.listener, d.tlsConfig, d.failed = listener, &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		Certificates: []tls.Certificate{certificate},
+	}, false
 	d.mu.Unlock()
 	return nil
 }
@@ -92,6 +100,7 @@ func (d *dataPlaneListener) close() error {
 	d.mu.Lock()
 	listener := d.listener
 	d.listener = nil
+	d.tlsConfig = nil
 	d.mu.Unlock()
 	if listener == nil {
 		return nil
@@ -142,7 +151,10 @@ func (d *dataPlaneListener) releaseConnection() {
 // startDataPlaneListener binds the caller-facing transport before the first
 // registration so an unavailable listener never advertises capacity.
 func (s *RunnerProtocolService) startDataPlaneListener(ctx context.Context) (func() error, error) {
-	if err := s.dataPlane.bind(s.config.DataPlaneListenAddress); err != nil {
+	if err := s.dataPlane.bind(
+		s.config.DataPlaneListenAddress,
+		s.config.DataPlaneCertificate,
+	); err != nil {
 		return nil, err
 	}
 	slog.Info(
@@ -174,8 +186,9 @@ func (s *RunnerProtocolService) acceptDataPlaneConnections(
 	for {
 		s.dataPlane.mu.Lock()
 		listener := s.dataPlane.listener
+		tlsConfig := s.dataPlane.tlsConfig
 		s.dataPlane.mu.Unlock()
-		if listener == nil {
+		if listener == nil || tlsConfig == nil {
 			return
 		}
 		connection, err := listener.Accept()
@@ -197,6 +210,7 @@ func (s *RunnerProtocolService) acceptDataPlaneConnections(
 			_ = connection.Close()
 			continue
 		}
+		connection = tls.Server(connection, tlsConfig.Clone())
 		serving.Add(1)
 		go func() {
 			defer serving.Done()

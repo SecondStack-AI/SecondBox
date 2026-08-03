@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"errors"
 	"io"
 	"net"
@@ -18,6 +19,95 @@ import (
 )
 
 const directPortTestCredential = "direct-port-single-use-credential-000000"
+
+func TestRunnerDataPlaneListenerRequiresPinnedTLSAndRejectsUnwiredKinds(t *testing.T) {
+	service, stream, _ := newDirectPortTestService(t)
+	stopListener, err := service.startDataPlaneListener(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := stopListener(); err != nil {
+			t.Errorf("stop data-plane listener: %v", err)
+		}
+	})
+
+	plaintext, err := net.Dial("tcp", service.dataPlane.address())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plaintext.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := portdirect.WriteCredential(
+		plaintext,
+		portdirect.SessionKindPort,
+		directPortTestCredential,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := portdirect.ReadVerdict(plaintext); err == nil {
+		t.Fatal("plaintext data-plane connection received a protocol verdict")
+	}
+	if err := plaintext.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wrongPin := strings.Repeat("0", sha256.Size*2)
+	if wrongPin == service.dataPlaneSPKIPin {
+		wrongPin = strings.Repeat("1", sha256.Size*2)
+	}
+	wrongTLSConfig, err := portdirect.TLSConfigForSPKIPin(wrongPin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connection, err := tls.Dial("tcp", service.dataPlane.address(), wrongTLSConfig); err == nil {
+		connection.Close()
+		t.Fatal("data-plane TLS accepted the wrong certificate SPKI pin")
+	}
+
+	tlsConfig, err := portdirect.TLSConfigForSPKIPin(service.dataPlaneSPKIPin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, testCase := range []struct {
+		kind   portdirect.SessionKind
+		detail string
+	}{
+		{portdirect.SessionKindExec, "exec session kind is not implemented"},
+		{portdirect.SessionKindPTY, "pty session kind is not implemented"},
+		{portdirect.SessionKindFile, "file session kind is not implemented"},
+	} {
+		connection, err := tls.Dial("tcp", service.dataPlane.address(), tlsConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if connection.ConnectionState().Version != tls.VersionTLS13 {
+			t.Fatalf("data-plane TLS version = %x, want TLS 1.3", connection.ConnectionState().Version)
+		}
+		if err := portdirect.WriteCredential(
+			connection,
+			testCase.kind,
+			directPortTestCredential,
+		); err != nil {
+			t.Fatal(err)
+		}
+		verdict, detail, err := portdirect.ReadVerdict(connection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := connection.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if verdict != portdirect.VerdictSessionKindUnsupported || detail != testCase.detail {
+			t.Fatalf("unwired kind %s verdict = %d/%q", testCase.kind, verdict, detail)
+		}
+	}
+	for _, message := range stream.messages() {
+		if message.GetPortDirectConsume() != nil {
+			t.Fatal("unwired session kind forced control-plane consumption")
+		}
+	}
+}
 
 func TestRunnerDataPlaneListenerGatesReadinessAndAdvertisesOnlyItsAddress(t *testing.T) {
 	service, _, _ := newDirectPortTestService(t)
@@ -63,6 +153,9 @@ func TestRunnerDataPlaneListenerGatesReadinessAndAdvertisesOnlyItsAddress(t *tes
 	if advertised != service.config.DataPlaneAdvertisedAddress {
 		t.Fatalf("advertised data-plane address = %q", advertised)
 	}
+	if got := registration.messages()[0].GetRegistration().GetDataPlaneCertificateSpkiSha256(); got != service.dataPlaneSPKIPin {
+		t.Fatalf("advertised data-plane certificate SPKI SHA-256 = %q", got)
+	}
 	// The advertised value is administrative capacity evidence: a dialable
 	// host:port and nothing that identifies a Sandbox, Instance, or Assignment.
 	if _, _, err := net.SplitHostPort(advertised); err != nil {
@@ -88,7 +181,7 @@ func TestRunnerDataPlaneListenerGatesReadinessAndAdvertisesOnlyItsAddress(t *tes
 
 func TestRunnerDataPlaneAcceptFailureReportsUnreadyAndFencesTheSession(t *testing.T) {
 	service, _, _ := newDirectPortTestService(t)
-	if err := service.dataPlane.bind(service.config.DataPlaneListenAddress); err != nil {
+	if err := service.dataPlane.bind(service.config.DataPlaneListenAddress, service.config.DataPlaneCertificate); err != nil {
 		t.Fatal(err)
 	}
 	failures := make(chan error, 1)
@@ -174,7 +267,7 @@ func TestDirectPortAdmissionSpendsTheCredentialExactlyOnceAndBridgesBytes(t *tes
 	defer stopAdmitting()
 
 	caller, served := dialDirectPort(t, service)
-	if err := portdirect.WriteCredential(caller, directPortTestCredential); err != nil {
+	if err := portdirect.WriteCredential(caller, portdirect.SessionKindPort, directPortTestCredential); err != nil {
 		t.Fatal(err)
 	}
 	verdict, detail, err := portdirect.ReadVerdict(caller)
@@ -226,7 +319,7 @@ func TestDirectPortConnectionDoesNotSurviveAFence(t *testing.T) {
 	defer stopAdmitting()
 
 	caller, served := dialDirectPort(t, service)
-	if err := portdirect.WriteCredential(caller, directPortTestCredential); err != nil {
+	if err := portdirect.WriteCredential(caller, portdirect.SessionKindPort, directPortTestCredential); err != nil {
 		t.Fatal(err)
 	}
 	if verdict, _, err := portdirect.ReadVerdict(caller); err != nil ||
@@ -266,7 +359,7 @@ func TestDirectPortHandshakeIsBoundedInTimeAndSize(t *testing.T) {
 	// without consuming a payload byte.
 	written := make(chan error, 1)
 	go func() {
-		_, err := caller.Write([]byte("NOTSBX01\x00\x04"))
+		_, err := caller.Write([]byte("NOTDP1\x00\x00\x04"))
 		written <- err
 	}()
 	verdict, _, err := portdirect.ReadVerdict(caller)
@@ -291,11 +384,11 @@ func TestDirectPortHandshakeIsBoundedInTimeAndSize(t *testing.T) {
 	}
 
 	oversized := strings.Repeat("c", portdirect.MaximumCredentialBytes+1)
-	if err := portdirect.WriteCredential(io.Discard, oversized); err == nil {
+	if err := portdirect.WriteCredential(io.Discard, portdirect.SessionKindPort, oversized); err == nil {
 		t.Fatal("oversized direct Port credential was framed")
 	}
 	if _, err := portdirect.ReadCredential(bytes.NewReader(
-		append([]byte(portdirect.Magic), 0xff, 0xff),
+		append([]byte(portdirect.Magic), byte(portdirect.SessionKindPort), 0xff, 0xff),
 	)); !errors.Is(err, portdirect.ErrHandshakeMalformed) {
 		t.Fatal("unbounded direct Port credential length was accepted")
 	}
@@ -305,7 +398,7 @@ func TestDirectPortHandshakeIsBoundedInTimeAndSize(t *testing.T) {
 // before the admitting frame reaches the Runner is admitted rather than denied.
 func TestDirectPortAdmissionWaitsForItsAdmittingFrame(t *testing.T) {
 	service, stream, _ := newDirectPortTestService(t)
-	if err := service.dataPlane.bind(service.config.DataPlaneListenAddress); err != nil {
+	if err := service.dataPlane.bind(service.config.DataPlaneListenAddress, service.config.DataPlaneCertificate); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -321,7 +414,7 @@ func TestDirectPortAdmissionWaitsForItsAdmittingFrame(t *testing.T) {
 	defer stopAdmitting()
 
 	caller, served := dialDirectPort(t, service)
-	if err := portdirect.WriteCredential(caller, directPortTestCredential); err != nil {
+	if err := portdirect.WriteCredential(caller, portdirect.SessionKindPort, directPortTestCredential); err != nil {
 		t.Fatal(err)
 	}
 	// The admitting frame arrives only after the caller has already presented
@@ -387,7 +480,7 @@ func admitDirectPortSession(
 	// The Runner refuses to hold a direct session it could never serve, so the
 	// caller-facing listener must be bound before admission.
 	if !service.dataPlane.ready() {
-		if err := service.dataPlane.bind(service.config.DataPlaneListenAddress); err != nil {
+		if err := service.dataPlane.bind(service.config.DataPlaneListenAddress, service.config.DataPlaneCertificate); err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() {
@@ -480,7 +573,7 @@ func directPortHandshake(
 ) (portdirect.Verdict, string) {
 	t.Helper()
 	caller, served := dialDirectPort(t, service)
-	if err := portdirect.WriteCredential(caller, credential); err != nil {
+	if err := portdirect.WriteCredential(caller, portdirect.SessionKindPort, credential); err != nil {
 		t.Fatal(err)
 	}
 	verdict, detail, err := portdirect.ReadVerdict(caller)

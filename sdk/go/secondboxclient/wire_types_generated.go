@@ -470,16 +470,17 @@ type PortPolicy struct {
 }
 
 type PortSession struct {
-	CreatedAt  Timestamp `json:"createdAt"`
-	Endpoint   string    `json:"endpoint"`
-	ExpiresAt  Timestamp `json:"expiresAt"`
-	Generation int64     `json:"generation"`
-	ID         OpaqueID  `json:"id"`
-	Name       string    `json:"name"`
-	Protocol   string    `json:"protocol"`
-	SandboxID  OpaqueID  `json:"sandboxId"`
-	State      string    `json:"state"`
-	Transport  string    `json:"transport"`
+	CertificateSpkiSha256 *string   `json:"certificateSpkiSha256,omitempty"`
+	CreatedAt             Timestamp `json:"createdAt"`
+	Endpoint              string    `json:"endpoint"`
+	ExpiresAt             Timestamp `json:"expiresAt"`
+	Generation            int64     `json:"generation"`
+	ID                    OpaqueID  `json:"id"`
+	Name                  string    `json:"name"`
+	Protocol              string    `json:"protocol"`
+	SandboxID             OpaqueID  `json:"sandboxId"`
+	State                 string    `json:"state"`
+	Transport             string    `json:"transport"`
 }
 
 type Problem struct {
