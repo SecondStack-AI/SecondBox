@@ -1,0 +1,165 @@
+{
+  "schemaVersion": 1,
+  "startedAt": "2026-08-03T01:34:03.639045344Z",
+  "completedAt": "2026-08-03T01:34:30.307509105Z",
+  "postgresVersion": "PostgreSQL 18.4 (Debian 18.4-1.pgdg12+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit",
+  "separateFrameRetention": true,
+  "parameters": {
+    "ptyInputBytes": 512,
+    "ptyOutputBytes": 4096,
+    "fileBytes": 1048576,
+    "portFrameBytes": 16384,
+    "portTotalBytes": 1048576,
+    "cycles": 3
+  },
+  "cycles": [
+    {
+      "number": 1,
+      "sessionIds": [
+        "term_wtkiIiPBPdwbV455t3HGJjB2",
+        "dps_FYBryYi5_4MdLVAtpdeSr-M-",
+        "dps_wDKgE0i3U_GbbcDA01QdEUZy",
+        "port_CH2bV9deuuRchSAl0-GM-PUt"
+      ],
+      "framesAfterWorkload": [
+        {
+          "kind": "port",
+          "direction": "inbound",
+          "rows": 130,
+          "payloadBytes": 1104823
+        },
+        {
+          "kind": "port",
+          "direction": "outbound",
+          "rows": 130,
+          "payloadBytes": 1104809
+        }
+      ],
+      "framesAfterSweep": [],
+      "beforeWorkload": {
+        "heapBytes": 0,
+        "indexBytes": {
+          "data_plane_frames_delivery_idx": 8192,
+          "data_plane_frames_pkey": 8192,
+          "data_plane_frames_sequence_idx": 8192
+        }
+      },
+      "afterWorkload": {
+        "heapBytes": 294912,
+        "indexBytes": {
+          "data_plane_frames_delivery_idx": 57344,
+          "data_plane_frames_pkey": 40960,
+          "data_plane_frames_sequence_idx": 40960
+        }
+      },
+      "afterVacuumFull": {
+        "heapBytes": 0,
+        "indexBytes": {
+          "data_plane_frames_delivery_idx": 8192,
+          "data_plane_frames_pkey": 8192,
+          "data_plane_frames_sequence_idx": 8192
+        }
+      }
+    },
+    {
+      "number": 2,
+      "sessionIds": [
+        "term_Rg8HrOvDZc2O0cY-k3loxwwO",
+        "dps_PWbInhTubt7_bPFI0oXACVSA",
+        "dps_tS6KgEKGi4Jqvbkd7--zEKbV",
+        "port_AMTuilVRXFEAkHzd0Z2VPIuU"
+      ],
+      "framesAfterWorkload": [
+        {
+          "kind": "port",
+          "direction": "inbound",
+          "rows": 130,
+          "payloadBytes": 1104823
+        },
+        {
+          "kind": "port",
+          "direction": "outbound",
+          "rows": 130,
+          "payloadBytes": 1104809
+        }
+      ],
+      "framesAfterSweep": [],
+      "beforeWorkload": {
+        "heapBytes": 0,
+        "indexBytes": {
+          "data_plane_frames_delivery_idx": 8192,
+          "data_plane_frames_pkey": 8192,
+          "data_plane_frames_sequence_idx": 8192
+        }
+      },
+      "afterWorkload": {
+        "heapBytes": 311296,
+        "indexBytes": {
+          "data_plane_frames_delivery_idx": 90112,
+          "data_plane_frames_pkey": 40960,
+          "data_plane_frames_sequence_idx": 40960
+        }
+      },
+      "afterVacuumFull": {
+        "heapBytes": 0,
+        "indexBytes": {
+          "data_plane_frames_delivery_idx": 8192,
+          "data_plane_frames_pkey": 8192,
+          "data_plane_frames_sequence_idx": 8192
+        }
+      }
+    },
+    {
+      "number": 3,
+      "sessionIds": [
+        "term_giVzsOhtGz9AUx_aiEGGUEbt",
+        "dps_SnD6mv67pvBbCkSd3rilSUZ_",
+        "dps_9i88wR4Vt4RyJGLo9tcLy3GC",
+        "port_xP5OFv0_t1xNs148KZe8YMBl"
+      ],
+      "framesAfterWorkload": [
+        {
+          "kind": "port",
+          "direction": "inbound",
+          "rows": 130,
+          "payloadBytes": 1104823
+        },
+        {
+          "kind": "port",
+          "direction": "outbound",
+          "rows": 130,
+          "payloadBytes": 1104809
+        }
+      ],
+      "framesAfterSweep": [],
+      "beforeWorkload": {
+        "heapBytes": 0,
+        "indexBytes": {
+          "data_plane_frames_delivery_idx": 8192,
+          "data_plane_frames_pkey": 8192,
+          "data_plane_frames_sequence_idx": 8192
+        }
+      },
+      "afterWorkload": {
+        "heapBytes": 245760,
+        "indexBytes": {
+          "data_plane_frames_delivery_idx": 65536,
+          "data_plane_frames_pkey": 40960,
+          "data_plane_frames_sequence_idx": 40960
+        }
+      },
+      "afterVacuumFull": {
+        "heapBytes": 0,
+        "indexBytes": {
+          "data_plane_frames_delivery_idx": 8192,
+          "data_plane_frames_pkey": 8192,
+          "data_plane_frames_sequence_idx": 8192
+        }
+      }
+    }
+  ],
+  "notifications": {
+    "inboundDataPlaneSession": 456,
+    "outboundRunnerCommand": 210
+  }
+}

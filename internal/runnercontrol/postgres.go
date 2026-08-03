@@ -191,31 +191,29 @@ func failDisconnectedRunnerDataPlaneSessions(
 	runnerID string,
 	now time.Time,
 ) error {
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.activity_sessions AS activity
-		SET state='closed',closed_at=$2,last_activity_at=$2,updated_at=$2
-		FROM secondbox.data_plane_sessions AS session
-		WHERE activity.id=session.id
-		  AND session.runner_id=$1
-		  AND session.state IN ('pending','running','cancelling')
-		  AND activity.state='active'`,
-		runnerID,
-		now,
-	); err != nil {
-		return fmt.Errorf("SecondBox disconnected runner activity closure: %w", err)
+	rows, err := tx.Query(ctx, `
+		SELECT id FROM secondbox.data_plane_sessions
+		WHERE runner_id=$1 AND state IN ('pending','running','cancelling')
+		ORDER BY id FOR UPDATE`, runnerID)
+	if err != nil {
+		return fmt.Errorf("SecondBox disconnected runner data-plane lock: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.port_sessions AS port
-		SET state='closed',closed_at=$2,updated_at=$2
-		FROM secondbox.data_plane_sessions AS session
-		WHERE port.data_plane_session_id=session.id
-		  AND session.runner_id=$1
-		  AND session.state IN ('pending','running','cancelling')
-		  AND port.state IN ('open','closing')`,
-		runnerID,
-		now,
-	); err != nil {
-		return fmt.Errorf("SecondBox disconnected runner PortSession closure: %w", err)
+	var sessionIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return fmt.Errorf("SecondBox disconnected runner data-plane scan: %w", err)
+		}
+		sessionIDs = append(sessionIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("SecondBox disconnected runner data-plane rows: %w", err)
+	}
+	rows.Close()
+	if len(sessionIDs) == 0 {
+		return nil
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.data_plane_sessions
@@ -229,9 +227,17 @@ func failDisconnectedRunnerDataPlaneSessions(
 		    infrastructure_failure_reason=$5,
 		    retryable=true,
 		    terminal_message='Execution node connection was lost',
-		    completed_at=$6,updated_at=$6,retain_until=GREATEST(retain_until,$6)
-		WHERE runner_id=$1 AND state IN ('pending','running','cancelling')`,
-		runnerID,
+		    completed_at=$6,updated_at=$6,retain_until=GREATEST(retain_until,$6),
+		    frames_retain_until=CASE
+		      WHEN operation='exec' OR kind='file' OR (kind='terminal' AND attachment_id='')
+		        OR (kind='port' AND EXISTS (
+		          SELECT 1 FROM secondbox.port_sessions AS port
+		          WHERE port.data_plane_session_id=data_plane_sessions.id AND port.transport='direct'
+		        )) THEN $6
+		      ELSE GREATEST(frames_retain_until,$6)
+		    END
+		WHERE id=ANY($1)`,
+		sessionIDs,
 		runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_INFRASTRUCTURE_FAILED.String(),
 		runnerv1.PortTerminalKind_PORT_TERMINAL_KIND_GUEST_UNAVAILABLE.String(),
 		runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_FAILED.String(),
@@ -239,6 +245,24 @@ func failDisconnectedRunnerDataPlaneSessions(
 		now,
 	); err != nil {
 		return fmt.Errorf("SecondBox disconnected runner data-plane failure: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.port_sessions AS port
+		SET state='closed',closed_at=$2,updated_at=$2
+		WHERE port.data_plane_session_id=ANY($1)
+		  AND port.state IN ('open','closing')`,
+		sessionIDs,
+		now,
+	); err != nil {
+		return fmt.Errorf("SecondBox disconnected runner PortSession closure: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.activity_sessions
+		SET state='closed',closed_at=$2,last_activity_at=$2,updated_at=$2
+		WHERE id=ANY($1) AND state='active'`,
+		sessionIDs, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox disconnected runner activity closure: %w", err)
 	}
 	return nil
 }
@@ -2792,7 +2816,15 @@ func fenceGenerationAuthority(
 		    terminal_detail='Sandbox generation was fenced',
 		    infrastructure_failure_reason='INFRASTRUCTURE_FAILURE_REASON_GENERATION_FENCED',
 		    retryable=false,terminal_message='Sandbox generation was fenced',
-		    completed_at=$3,updated_at=$3,retain_until=GREATEST(retain_until,$3)
+		    completed_at=$3,updated_at=$3,retain_until=GREATEST(retain_until,$3),
+		    frames_retain_until=CASE
+		      WHEN operation='exec' OR kind='file' OR (kind='terminal' AND attachment_id='')
+		        OR (kind='port' AND EXISTS (
+		          SELECT 1 FROM secondbox.port_sessions AS port
+		          WHERE port.data_plane_session_id=data_plane_sessions.id AND port.transport='direct'
+		        )) THEN $3
+		      ELSE GREATEST(frames_retain_until,$3)
+		    END
 		WHERE sandbox_id=$1 AND generation=$2
 		  AND state IN ('pending','running','cancelling')`,
 		sandboxID, generation, now,

@@ -26,19 +26,22 @@ type PortSessionAdmission struct {
 
 // PortTunnel is the private assignment-bound projection consumed by the proxy.
 type PortTunnel struct {
-	Session           contracts.PortSession
-	TenantRef         string
-	SubjectRef        string
-	RequestID         string
-	LeaseID           string
-	ProfileRevisionID string
-	AssignmentID      string
-	InstanceID        string
-	RunnerID          string
-	StreamID          string
-	FencingToken      []byte
-	GuestPort         int64
-	StreamWindowBytes int64
+	Session                     contracts.PortSession
+	TenantRef                   string
+	SubjectRef                  string
+	RequestID                   string
+	LeaseID                     string
+	ProfileRevisionID           string
+	AssignmentID                string
+	InstanceID                  string
+	RunnerID                    string
+	StreamID                    string
+	FencingToken                []byte
+	GuestPort                   int64
+	StreamWindowBytes           int64
+	NextOutboundSequence        int64
+	RetainUntil                 time.Time
+	AcknowledgedInboundSequence int64
 	// DataPlaneAddress is the home Runner's advertised caller-facing address. It
 	// is returned only to an ingress holding the exact direct-endpoint grant.
 	DataPlaneAddress string

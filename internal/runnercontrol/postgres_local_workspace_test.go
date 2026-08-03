@@ -2595,26 +2595,26 @@ func seedStaleRestoreGenerationAuthority(
 			exit_code,signal,spawn_failure_reason,elapsed_milliseconds,limit_bytes,
 			infrastructure_failure_reason,retryable,terminal_message,stdout_bytes,
 			stderr_bytes,content_bytes,metadata_json,request_json,created_at,updated_at,
-			completed_at,retain_until
+				completed_at,retain_until,frames_retain_until,next_outbound_sequence
 		) VALUES (
 			'session-stale-generation','tenant','subject','sandbox-restore','revision',
 			'assignment-stale-generation','instance-stale-generation','runner-home',3,$3,
 			'request-session-stale','lease-stale-generation','exec','exec',
 			'stream-stale','running',0,'idempotency-session-stale','hash-session-stale',$2,
 			1024,1024,1024,0,0,false,false,30,'',NULL,NULL,NULL,0,0,1,'','',0,0,'',
-			0,0,'',false,'',$4,$4,$4,'{}','{}',$1,$1,NULL,$2
+				0,0,'',false,'',$4,$4,$4,'{}','{}',$1,$1,NULL,$2,$2,1
 		);
 		INSERT INTO secondbox.port_sessions (
 			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,
 			data_plane_session_id,lease_id,generation,name,guest_port,protocol,
 			stream_window_bytes,client_credit_bytes,client_bytes,runner_bytes,state,
 			idempotency_key,request_hash,expires_at,created_at,updated_at,
-			connected_at,closed_at
+				connected_at,closed_at,acknowledged_inbound_sequence
 		) VALUES (
 			'port-stale-generation','tenant','subject','sandbox-restore','revision',
 			'session-stale-generation','lease-stale-generation',3,'web',8080,'tcp',
 			1024,1024,0,0,'open','idempotency-port-stale','hash-port-stale',
-			$2,$1,$1,$1,NULL
+				$2,$1,$1,$1,NULL,0
 		)`,
 		pgx.QueryExecModeSimpleProtocol,
 		now,

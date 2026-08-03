@@ -1073,3 +1073,130 @@ func relayExecOutput(
 		}},
 	}
 }
+
+func TestPostgresRelayPrunesBufferedFramesWithoutPruningReplay(t *testing.T) {
+	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
+	admin := fixtureAdmin(t, controlPlane)
+	_, account, credential := createProjectAccountAndCredential(
+		t, controlPlane, admin, "relay-frame-retention",
+	)
+	profile := createGrantedProfile(
+		t, controlPlane, databaseStore, admin, account, "profile-relay-frame-retention",
+	)
+	principal := authenticateCredential(t, controlPlane, credential)
+	sandbox, _, err := controlPlane.CreateSandbox(
+		t.Context(), principal, "relay-frame-retention-create",
+		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	seed := seedRelayReadyAssignment(t, sandbox, now)
+	relay, err := runnercontrol.NewPostgresFrameRelay(
+		t.Context(), runnercontrol.PostgresFrameRelayConfig{
+			DatabaseURL: integrationDatabaseURL, ClaimDuration: time.Second,
+			Retention: time.Hour, MaximumFrameBytes: 1 << 20, MaximumSessionBytes: 4 << 20,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(relay.Close)
+	admission := runnercontrol.DataPlaneAdmission{
+		ID: "dps_relay_frame_retention", StreamID: "stream_relay_frame_retention",
+		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
+		SandboxID: sandbox.ID, Generation: sandbox.Generation,
+		RequestID: "request-relay-frame-retention", Kind: "exec", Operation: "exec",
+		IdempotencyKey: "relay-frame-retention", RequestHash: "relay-frame-retention-hash",
+		DeadlineAt: now.Add(time.Minute), MaximumResponseBytes: 1024,
+		ExecOpen: &runnerv1.ExecOpen{
+			Command:        &runnerv1.ExecOpen_Shell{Shell: "printf retained"},
+			DeadlineUnixMs: uint64(now.Add(time.Minute).UnixMilli()), OutputLimitBytes: 1024,
+		},
+		Request: map[string]any{"command": "printf retained"}, Now: now,
+	}
+	session, replayed, err := relay.AdmitDataPlane(t.Context(), admission)
+	if err != nil || replayed {
+		t.Fatalf("admission = %#v replayed=%t error=%v", session, replayed, err)
+	}
+	for {
+		delivery, found, err := relay.ClaimOutboundFrame(
+			t.Context(), seed.RunnerID, seed.ConnectionOne, now,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !found {
+			break
+		}
+		if err := relay.MarkOutboundFrameDelivered(
+			t.Context(), delivery.ID, seed.ConnectionOne, delivery.ClaimAttempt, now,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if inserted, err := relay.PersistInboundFrame(t.Context(), runnercontrol.InboundRelayFrame{
+		RunnerID: seed.RunnerID, ConnectionID: seed.ConnectionOne,
+		Message: relayExecOutput(seed.Fence, session.ID, session.StreamID, 1, []byte("retained")),
+	}, now.Add(time.Second)); err != nil || !inserted {
+		t.Fatalf("output persistence = %t, %v", inserted, err)
+	}
+	terminal := &runnerv1.RunnerToControlPlane{
+		Message: &runnerv1.RunnerToControlPlane_Exec{Exec: &runnerv1.ExecFrame{
+			Fence: seed.Fence, OperationId: session.ID, StreamId: session.StreamID, Sequence: 2,
+			Payload: &runnerv1.ExecFrame_Terminal{Terminal: &runnerv1.ExecTerminal{
+				Kind: runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED,
+			}},
+		}},
+	}
+	completedAt := now.Add(2 * time.Second)
+	if inserted, err := relay.PersistInboundFrame(t.Context(), runnercontrol.InboundRelayFrame{
+		RunnerID: seed.RunnerID, ConnectionID: seed.ConnectionOne, Message: terminal,
+	}, completedAt); err != nil || !inserted {
+		t.Fatalf("terminal persistence = %t, %v", inserted, err)
+	}
+	if changed, err := relay.SweepDataPlane(t.Context(), completedAt, 100); err != nil || !changed {
+		t.Fatalf("frame cleanup = %t, %v", changed, err)
+	}
+	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	var frames int
+	var cleanupCompleted *time.Time
+	if err := pool.QueryRow(t.Context(), `
+		SELECT count(frame.id),max(session.frame_cleanup_completed_at)
+		FROM secondbox.data_plane_sessions AS session
+		LEFT JOIN secondbox.data_plane_frames AS frame ON frame.session_id=session.id
+		WHERE session.id=$1`, session.ID).Scan(&frames, &cleanupCompleted); err != nil {
+		t.Fatal(err)
+	}
+	if frames != 0 || cleanupCompleted == nil {
+		t.Fatalf("post-cleanup rows=%d cleanup=%v", frames, cleanupCompleted)
+	}
+	current, err := relay.GetDataPlaneSession(
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID,
+	)
+	if err != nil || string(current.Stdout) != "retained" || current.NextClientSequence != 1 {
+		t.Fatalf("materialised result after cleanup = %#v error=%v", current, err)
+	}
+	replayedSession, replayed, err := relay.AdmitDataPlane(t.Context(), admission)
+	if err != nil || !replayed || string(replayedSession.Stdout) != "retained" ||
+		replayedSession.NextClientSequence != current.NextClientSequence {
+		t.Fatalf("admission replay after cleanup = %#v replayed=%t error=%v", replayedSession, replayed, err)
+	}
+	if inserted, err := relay.PersistInboundFrame(t.Context(), runnercontrol.InboundRelayFrame{
+		RunnerID: seed.RunnerID, ConnectionID: seed.ConnectionOne, Message: terminal,
+	}, completedAt.Add(time.Second)); err != nil || inserted {
+		t.Fatalf("exact terminal retransmission = %t, %v", inserted, err)
+	}
+	changedTerminal := proto.Clone(terminal).(*runnerv1.RunnerToControlPlane)
+	changedTerminal.GetExec().GetTerminal().SafeDetail = "changed"
+	if _, err := relay.PersistInboundFrame(t.Context(), runnercontrol.InboundRelayFrame{
+		RunnerID: seed.RunnerID, ConnectionID: seed.ConnectionOne, Message: changedTerminal,
+	}, completedAt.Add(time.Second)); !errors.Is(err, runnercontrol.ErrRelaySequence) {
+		t.Fatalf("changed terminal retransmission error = %v", err)
+	}
+}

@@ -13,6 +13,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// dataPlaneFrameSweepByteBudget bounds payload touched by one cleanup
+// transaction independently from operator-owned session and frame limits.
+const dataPlaneFrameSweepByteBudget int64 = 16 << 20
+
 func (relay *PostgresFrameRelay) CancelDataPlaneSession(
 	ctx context.Context,
 	tenantRef string,
@@ -140,48 +144,171 @@ func (relay *PostgresFrameRelay) SweepDataPlane(
 			}
 		}
 	}
-	tx, err := relay.pool.Begin(ctx)
-	if err != nil {
-		return false, fmt.Errorf("SecondBox retained data-plane cleanup transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	retainedRows, err := tx.Query(ctx, `
-		SELECT id FROM secondbox.data_plane_sessions
-		WHERE state IN ('completed','failed','cancelled','expired') AND retain_until<=$1
-		ORDER BY retain_until,id
-		FOR UPDATE SKIP LOCKED
-		LIMIT $2`,
-		now.UTC(), limit,
+	framesChanged, err := relay.sweepDataPlaneFrames(
+		ctx, now.UTC(), limit, dataPlaneFrameSweepByteBudget,
 	)
 	if err != nil {
-		return false, fmt.Errorf("SecondBox retained data-plane lookup: %w", err)
+		return false, err
 	}
-	retainedIDs := make([]string, 0, limit)
-	for retainedRows.Next() {
+	sessionsChanged, err := relay.sweepDataPlaneSessions(ctx, now.UTC(), limit)
+	if err != nil {
+		return false, err
+	}
+	return len(due) > 0 || framesChanged || sessionsChanged, nil
+}
+
+func (relay *PostgresFrameRelay) sweepDataPlaneFrames(
+	ctx context.Context,
+	now time.Time,
+	limit int,
+	byteBudget int64,
+) (bool, error) {
+	if byteBudget < 1 {
+		return false, errors.New("SecondBox data-plane frame sweep byte budget is invalid")
+	}
+	tx, err := relay.pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("SecondBox retained frame cleanup transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `
+		SELECT id FROM secondbox.data_plane_sessions
+		WHERE state IN ('completed','failed','cancelled','expired')
+		  AND frames_retain_until<=$1 AND frame_cleanup_completed_at IS NULL
+		ORDER BY frames_retain_until,id
+		FOR UPDATE SKIP LOCKED
+		LIMIT $2`, now, limit)
+	if err != nil {
+		return false, fmt.Errorf("SecondBox retained frame session lookup: %w", err)
+	}
+	candidateIDs := make([]string, 0, limit)
+	for rows.Next() {
 		var id string
-		if err := retainedRows.Scan(&id); err != nil {
-			retainedRows.Close()
-			return false, fmt.Errorf("SecondBox retained data-plane scan: %w", err)
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return false, fmt.Errorf("SecondBox retained frame session scan: %w", err)
 		}
-		retainedIDs = append(retainedIDs, id)
+		candidateIDs = append(candidateIDs, id)
 	}
-	if err := retainedRows.Err(); err != nil {
-		retainedRows.Close()
-		return false, fmt.Errorf("SecondBox retained data-plane rows: %w", err)
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return false, fmt.Errorf("SecondBox retained frame session rows: %w", err)
 	}
-	retainedRows.Close()
-	if len(retainedIDs) > 0 {
-		if _, err := tx.Exec(ctx, `DELETE FROM secondbox.data_plane_frames WHERE session_id=ANY($1)`, retainedIDs); err != nil {
+	rows.Close()
+	frameIDs := make([]string, 0, limit)
+	if len(candidateIDs) > 0 {
+		frameRows, err := tx.Query(ctx, `
+			SELECT frame.id,frame.payload_bytes
+			FROM secondbox.data_plane_frames AS frame
+			JOIN secondbox.data_plane_sessions AS session ON session.id=frame.session_id
+			WHERE frame.session_id=ANY($1)
+			  AND (frame.state<>'claimed' OR frame.claim_expires_at<=$2)
+			ORDER BY session.frames_retain_until,frame.session_id,
+			         frame.direction,frame.sequence,frame.id
+			FOR UPDATE OF frame
+			LIMIT $3`, candidateIDs, now, limit)
+		if err != nil {
+			return false, fmt.Errorf("SecondBox retained relay frame lookup: %w", err)
+		}
+		var payloadBytes int64
+		for frameRows.Next() {
+			var id string
+			var size int64
+			if err := frameRows.Scan(&id, &size); err != nil {
+				frameRows.Close()
+				return false, fmt.Errorf("SecondBox retained relay frame scan: %w", err)
+			}
+			if len(frameIDs) > 0 && payloadBytes+size > byteBudget {
+				break
+			}
+			frameIDs = append(frameIDs, id)
+			payloadBytes += size
+		}
+		if err := frameRows.Err(); err != nil {
+			frameRows.Close()
+			return false, fmt.Errorf("SecondBox retained relay frame rows: %w", err)
+		}
+		frameRows.Close()
+	}
+	if len(frameIDs) > 0 {
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM secondbox.data_plane_frames WHERE id=ANY($1)`, frameIDs,
+		); err != nil {
 			return false, fmt.Errorf("SecondBox retained relay frame cleanup: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `DELETE FROM secondbox.data_plane_sessions WHERE id=ANY($1)`, retainedIDs); err != nil {
-			return false, fmt.Errorf("SecondBox retained relay session cleanup: %w", err)
+	}
+	var finalized int64
+	if len(candidateIDs) > 0 {
+		tag, err := tx.Exec(ctx, `
+			UPDATE secondbox.data_plane_sessions AS session
+			SET frame_cleanup_completed_at=$2
+			WHERE session.id=ANY($1)
+			  AND session.frame_cleanup_completed_at IS NULL
+			  AND NOT EXISTS (
+			    SELECT 1 FROM secondbox.data_plane_frames AS frame
+			    WHERE frame.session_id=session.id
+			  )`, candidateIDs, now)
+		if err != nil {
+			return false, fmt.Errorf("SecondBox retained frame completion update: %w", err)
+		}
+		finalized = tag.RowsAffected()
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("SecondBox retained frame cleanup commit: %w", err)
+	}
+	return len(frameIDs) > 0 || finalized > 0, nil
+}
+
+func (relay *PostgresFrameRelay) sweepDataPlaneSessions(
+	ctx context.Context,
+	now time.Time,
+	limit int,
+) (bool, error) {
+	tx, err := relay.pool.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("SecondBox retained session cleanup transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `
+		SELECT session.id FROM secondbox.data_plane_sessions AS session
+		WHERE session.state IN ('completed','failed','cancelled','expired')
+		  AND session.retain_until<=$1
+		  AND session.frame_cleanup_completed_at IS NOT NULL
+		  AND NOT EXISTS (
+		    SELECT 1 FROM secondbox.data_plane_frames AS frame
+		    WHERE frame.session_id=session.id
+		  )
+		ORDER BY session.retain_until,session.id
+		FOR UPDATE OF session SKIP LOCKED
+		LIMIT $2`, now, limit)
+	if err != nil {
+		return false, fmt.Errorf("SecondBox retained session lookup: %w", err)
+	}
+	ids := make([]string, 0, limit)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return false, fmt.Errorf("SecondBox retained session scan: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return false, fmt.Errorf("SecondBox retained session rows: %w", err)
+	}
+	rows.Close()
+	if len(ids) > 0 {
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM secondbox.data_plane_sessions WHERE id=ANY($1)`, ids,
+		); err != nil {
+			return false, fmt.Errorf("SecondBox retained session cleanup: %w", err)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("SecondBox retained data-plane cleanup commit: %w", err)
+		return false, fmt.Errorf("SecondBox retained session cleanup commit: %w", err)
 	}
-	return len(due) > 0 || len(retainedIDs) > 0, nil
+	return len(ids) > 0, nil
 }
 
 // ExpireDataPlaneSession requests deadline cancellation without declaring guest work stopped.
@@ -332,13 +459,7 @@ func (relay *PostgresFrameRelay) enqueueCancellation(
 	detail string,
 	now time.Time,
 ) error {
-	var sequence int64
-	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(max(sequence),0)+1 FROM secondbox.data_plane_frames
-		WHERE session_id=$1 AND direction='outbound'`, session.ID,
-	).Scan(&sequence); err != nil {
-		return fmt.Errorf("SecondBox cancellation sequence lookup: %w", err)
-	}
+	sequence := session.NextOutboundSequence
 	message := cancellationMessage(session, uint64(sequence), detail)
 	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(message)
 	if err != nil {
@@ -364,7 +485,10 @@ func (relay *PostgresFrameRelay) enqueueCancellation(
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.data_plane_sessions
 		SET state='cancelling',terminal_kind=$2,terminal_detail=$3,
-		    elapsed_milliseconds=$4,limit_bytes=$5,updated_at=$6
+		    elapsed_milliseconds=$4,limit_bytes=$5,
+		    next_outbound_sequence=next_outbound_sequence+1,
+		    frames_retain_until=retain_until,frame_cleanup_completed_at=NULL,
+		    updated_at=$6
 		WHERE id=$1`,
 		session.ID, terminalKind, detail, elapsedMilliseconds, limitBytes, now.UTC(),
 	); err != nil {

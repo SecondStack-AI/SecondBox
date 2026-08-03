@@ -22,7 +22,7 @@ The public API uses provider-neutral terms. Responses never contain Firecracker 
 
 - A trusted upstream system asserts an opaque tenant and subject for each request. SecondBox does not resolve those values or enforce the upstream relationship between them.
 - The asserted `(tenant_ref, subject_ref)` owns Sandboxes, workspaces, snapshots, artifacts, leases, operations, idempotency records, audit events, and quota usage.
-- An operator owns platform-token distribution, profiles, profile revisions, runner pools, Runner certificates, and platform-wide retention and trust configuration.
+- An operator owns platform-token distribution, profiles, profile revisions, runner pools, Runner certificates, and platform-wide retention and trust configuration. Data-plane retention supplies transition-specific session/result/idempotency deadlines and the maximum fallback for replayable relay frames; frames with no remaining delivery or replay consumer may be removed earlier.
 - The control plane owns desired state and assignment authority.
 - A Sandbox's immutable home runner owns its durable Workspace, local Snapshots, receipts, and current fenced compute process.
 - Object storage owns application Artifacts and immutable execution assets, never Workspace persistence.

@@ -259,14 +259,14 @@ func TestCloseCurrentConnectionFailsActiveDataPlaneSessionsWithoutPrematureFenci
 			exit_code,signal,spawn_failure_reason,elapsed_milliseconds,limit_bytes,
 			infrastructure_failure_reason,retryable,terminal_message,stdout_bytes,
 			stderr_bytes,content_bytes,metadata_json,request_json,created_at,updated_at,
-			completed_at,retain_until
+				completed_at,retain_until,frames_retain_until,next_outbound_sequence
 		)
 		SELECT
 			'session-'||kind,'tenant','subject','sandbox','profile-revision',
 			'assignment','instance','runner-home',1,$1,'request','',''||kind,kind,
 			'stream-'||kind,'running',0,'','',$2,1024,1024,1024,1024,0,false,
 			false,0,'',NULL,NULL,NULL,0,0,1,'','',0,0,'',0,0,'',false,'',
-			''::bytea,''::bytea,''::bytea,'{}','{}',$3,$3,NULL,$2
+				''::bytea,''::bytea,''::bytea,'{}','{}',$3,$3,NULL,$2,$2,1
 		FROM unnest(ARRAY['exec','terminal','file','port']) AS kind;
 
 		INSERT INTO secondbox.assignments (
@@ -295,11 +295,11 @@ func TestCloseCurrentConnectionFailsActiveDataPlaneSessionsWithoutPrematureFenci
 			data_plane_session_id,lease_id,generation,name,guest_port,protocol,
 			stream_window_bytes,client_credit_bytes,client_bytes,runner_bytes,state,
 			idempotency_key,request_hash,expires_at,created_at,updated_at,
-			connected_at,closed_at
+				connected_at,closed_at,acknowledged_inbound_sequence
 		) VALUES (
 			'port-session','tenant','subject','sandbox','profile-revision',
 			'session-port','',1,'http',8080,'tcp',1024,0,0,0,'open','','',
-			$2,$3,$3,$3,NULL
+				$2,$3,$3,$3,NULL,0
 		)`,
 		pgx.QueryExecModeSimpleProtocol,
 		[]byte("01234567890123456789012345678901"),
@@ -453,13 +453,13 @@ func TestCloseSupersededConnectionDoesNotFailCurrentDataPlaneSessions(t *testing
 			exit_code,signal,spawn_failure_reason,elapsed_milliseconds,limit_bytes,
 			infrastructure_failure_reason,retryable,terminal_message,stdout_bytes,
 			stderr_bytes,content_bytes,metadata_json,request_json,created_at,updated_at,
-			completed_at,retain_until
+				completed_at,retain_until,frames_retain_until,next_outbound_sequence
 		) VALUES (
 			'session-current','tenant','subject','sandbox','profile-revision',
 			'assignment','instance','runner-home',1,$2,'request','','exec','exec',
 			'stream','running',0,'','',$3,1024,1024,1024,1024,0,false,false,0,'',
 			NULL,NULL,NULL,0,0,1,'','',0,0,'',0,0,'',false,'',''::bytea,
-			''::bytea,''::bytea,'{}','{}',$1,$1,NULL,$3
+				''::bytea,''::bytea,'{}','{}',$1,$1,NULL,$3,$3,1
 		)`,
 		pgx.QueryExecModeSimpleProtocol,
 		now,

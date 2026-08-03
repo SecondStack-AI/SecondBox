@@ -243,9 +243,11 @@ change, not merely a transfer of ownership. Its code default is the currently
 deployed value, and the existing session-greater-than-or-equal-to-frame check
 still applies when either bound is overridden.
 
-The scope of `SECONDBOX_DATA_PLANE_RETENTION_SECONDS` remains the separate
-concern of [Relay Frame Retention Scoped to Replay](2026-08-01-relay-retention-scope.md).
-This plan leaves both its value and its required operator ownership unchanged.
+`SECONDBOX_DATA_PLANE_RETENTION_SECONDS` remains required operator policy. It
+participates in transition-specific session/result/idempotency deadlines and is
+the maximum safety fallback for replayable relay frames; frames with no live
+delivery or replay consumer may be removed earlier. The value and ownership are
+unchanged by [Relay Frame Retention Scoped to Replay](2026-08-01-relay-retention-scope.md).
 
 ### Category D — contested. Stays required pending an explicit decision. (3)
 
