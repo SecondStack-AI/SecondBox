@@ -9,12 +9,181 @@ import (
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/lifecycle"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
+	"github.com/SecondStack-AI/SecondBox/internal/scheduler"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestLifecycleStopCancelsInFlightGenerationSession(t *testing.T) {
+	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
+	admin := fixtureAdmin(t, controlPlane)
+	_, account, credential := createProjectAccountAndCredential(
+		t, controlPlane, admin, "lifecycle-stop-cancel",
+	)
+	profile := createGrantedProfile(
+		t, controlPlane, databaseStore, admin, account, "profile-lifecycle-stop-cancel",
+	)
+	principal := authenticateCredential(t, controlPlane, credential)
+	sandbox, _, err := controlPlane.CreateSandbox(
+		t.Context(), principal, "lifecycle-stop-cancel-create",
+		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	seedRelayReadyAssignment(t, sandbox, now)
+	lease, err := controlPlane.AcquireSandboxLease(
+		t.Context(), principal, sandbox.ID, sandbox.Generation,
+		"lifecycle-stop-cancel-lease", 60,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay, err := runnercontrol.NewPostgresFrameRelay(
+		t.Context(), runnercontrol.PostgresFrameRelayConfig{
+			DatabaseURL: integrationDatabaseURL, ClaimDuration: time.Second,
+			Retention: time.Hour, MaximumFrameBytes: 1 << 20, MaximumSessionBytes: 4 << 20,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(relay.Close)
+	session, _, err := relay.AdmitDataPlane(t.Context(), runnercontrol.DataPlaneAdmission{
+		ID: "dps_lifecycle_stop_cancel", StreamID: "stream_lifecycle_stop_cancel",
+		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
+		SandboxID: sandbox.ID, LeaseID: lease.ID, Generation: sandbox.Generation,
+		RequestID: "request-lifecycle-stop-cancel", Kind: "exec", Operation: "exec",
+		IdempotencyKey: "lifecycle-stop-cancel", RequestHash: "lifecycle-stop-cancel-hash",
+		DeadlineAt: now.Add(time.Minute), MaximumResponseBytes: 1024,
+		ExecOpen: &runnerv1.ExecOpen{
+			Command:        &runnerv1.ExecOpen_Shell{Shell: "sleep 60"},
+			DeadlineUnixMs: uint64(now.Add(time.Minute).UnixMilli()), OutputLimitBytes: 1024,
+		},
+		Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	var initialFrameCount int64
+	if err := pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM secondbox.data_plane_frames WHERE session_id=$1`,
+		session.ID,
+	).Scan(&initialFrameCount); err != nil {
+		t.Fatal(err)
+	}
+	var revision int64
+	if err := pool.QueryRow(t.Context(), `
+		WITH ready_workspace AS (
+			UPDATE secondbox.workspaces
+			SET state='ready',generation=$2,mutation_kind='',mutation_id='',
+			    mutation_effect_id='',mutation_operation_id='',
+			    mutation_expected_generation=NULL,mutation_target_generation=NULL,
+			    mutation_state='',updated_at=$3
+			WHERE sandbox_id=$1
+		)
+		UPDATE secondbox.sandboxes
+		SET state='draining',desired_state='stopped',
+		    lifecycle_termination_reason='requested_stop',
+		    reconcile_owner='lifecycle-stop-cancel-worker',
+		    reconcile_claim_expires_at=$4,revision=revision+1,updated_at=$3
+		WHERE id=$1
+		RETURNING revision`,
+		sandbox.ID, sandbox.Generation, now.Add(time.Second), now.Add(time.Minute),
+	).Scan(&revision); err != nil {
+		t.Fatal(err)
+	}
+	assignmentScheduler, err := scheduler.NewPostgresStore(
+		t.Context(), scheduler.PostgresStoreConfig{
+			DatabaseURL: integrationDatabaseURL, Now: func() time.Time { return now },
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(assignmentScheduler.Close)
+	broker, err := lifecycle.NewPostgresEffectBroker(
+		t.Context(), integrationDatabaseURL, assignmentScheduler,
+		lifecycle.EffectBrokerConfig{
+			AssignmentClaimDuration: time.Minute, AssignmentDeadline: time.Minute,
+			HeartbeatTimeout: time.Minute, RetryLimit: 2, SerializationRetryLimit: 2,
+			AssetCatalog: multirunnerAssetCatalog{}, SessionCanceller: relay,
+			NewID: func(prefix string) string { return prefix + "-lifecycle-stop-cancel" },
+			NewFencingToken: func() ([]byte, error) {
+				return []byte("01234567890123456789012345678901"), nil
+			},
+			Now: func() time.Time { return now },
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(broker.Close)
+	if err := broker.ExecuteLifecycleEffect(
+		t.Context(),
+		ports.LifecycleReconcileClaim{
+			SandboxID: sandbox.ID, WorkerID: "lifecycle-stop-cancel-worker", Revision: revision,
+		},
+		lifecycle.Decision{Action: lifecycle.ActionStopInstance},
+		now.Add(2*time.Second), now.Add(3*time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := relay.GetDataPlaneSession(
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID,
+	)
+	if err != nil || cancelled.State != "cancelling" ||
+		cancelled.TerminalDetail != "Sandbox drain grace expired" {
+		t.Fatalf("stopping session = %#v, %v", cancelled, err)
+	}
+	var sandboxState string
+	if err := pool.QueryRow(t.Context(), `
+		UPDATE secondbox.sandboxes
+		SET reconcile_owner='lifecycle-stop-cancel-replay',
+		    reconcile_claim_expires_at=$2,revision=revision+1
+		WHERE id=$1
+		RETURNING state,revision`,
+		sandbox.ID, now.Add(time.Minute),
+	).Scan(&sandboxState, &revision); err != nil {
+		t.Fatal(err)
+	}
+	if sandboxState != contracts.SandboxStateStopping {
+		t.Fatalf("Sandbox state after cancellation = %q", sandboxState)
+	}
+	if err := broker.ExecuteLifecycleEffect(
+		t.Context(),
+		ports.LifecycleReconcileClaim{
+			SandboxID: sandbox.ID, WorkerID: "lifecycle-stop-cancel-replay", Revision: revision,
+		},
+		lifecycle.Decision{Action: lifecycle.ActionStopInstance},
+		now.Add(3*time.Second), now.Add(4*time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	var frameCount int64
+	if err := pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM secondbox.data_plane_frames WHERE session_id=$1`,
+		session.ID,
+	).Scan(&frameCount); err != nil {
+		t.Fatal(err)
+	}
+	if frameCount != initialFrameCount+1 {
+		t.Fatalf(
+			"session frame count after stop replay = %d, want %d initial and one cancellation",
+			frameCount, initialFrameCount,
+		)
+	}
+}
 
 func TestPostgresRelayPublicCancellationIsAtomicAndKeyScoped(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())

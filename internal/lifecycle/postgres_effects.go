@@ -759,7 +759,10 @@ func (broker *PostgresEffectBroker) queueStop(
 		return err
 	}
 	if handled {
-		return tx.Commit(ctx)
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		return broker.cancelStopSessions(ctx, claim.SandboxID, generation, now)
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.lifecycle_effects (
@@ -804,6 +807,20 @@ func (broker *PostgresEffectBroker) queueStop(
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("SecondBox lifecycle stop commit failed: %w", err)
+	}
+	return broker.cancelStopSessions(ctx, claim.SandboxID, generation, now)
+}
+
+func (broker *PostgresEffectBroker) cancelStopSessions(
+	ctx context.Context,
+	sandboxID string,
+	generation int64,
+	now time.Time,
+) error {
+	if _, err := broker.config.SessionCanceller.CancelSandboxSessions(
+		ctx, sandboxID, generation, "Sandbox drain grace expired", now.UTC(),
+	); err != nil {
+		return fmt.Errorf("SecondBox lifecycle forced session cancellation failed: %w", err)
 	}
 	return nil
 }

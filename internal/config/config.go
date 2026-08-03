@@ -32,6 +32,7 @@ const (
 	DefaultLifecycleReconcileBatchSize                 int64 = 8
 	DefaultLifecycleReconcilePollIntervalMilliseconds  int64 = 250
 	DefaultLifecycleReconcileClaimDurationMilliseconds int64 = 30000
+	DefaultGarbageCollectionPollIntervalMilliseconds   int64 = 60000
 	DefaultAssignmentClaimDurationMilliseconds         int64 = 30000
 	DefaultAssignmentDeadlineMilliseconds              int64 = 120000
 	DefaultAssignmentRetryLimit                        int64 = 2
@@ -68,6 +69,7 @@ type Config struct {
 	LifecycleReconcileBatchSize      int
 	LifecycleReconcilePollInterval   time.Duration
 	LifecycleReconcileClaimDuration  time.Duration
+	GarbageCollectionPollInterval    time.Duration
 	AssignmentClaimDuration          time.Duration
 	AssignmentDeadline               time.Duration
 	RunnerHeartbeatTimeout           time.Duration
@@ -225,6 +227,10 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	garbageCollectionPollMilliseconds, err := optionalPositiveInt64("SECONDBOX_GARBAGE_COLLECTION_POLL_INTERVAL_MILLISECONDS", DefaultGarbageCollectionPollIntervalMilliseconds)
+	if err != nil {
+		return Config{}, err
+	}
 	assignmentClaimMilliseconds, err := optionalPositiveInt64("SECONDBOX_ASSIGNMENT_CLAIM_DURATION_MILLISECONDS", DefaultAssignmentClaimDurationMilliseconds)
 	if err != nil {
 		return Config{}, err
@@ -336,6 +342,7 @@ func FromEnvironment() (Config, error) {
 		LifecycleReconcileBatchSize:      lifecycleReconcileBatchSizeInt,
 		LifecycleReconcilePollInterval:   time.Duration(lifecycleReconcilePollMilliseconds) * time.Millisecond,
 		LifecycleReconcileClaimDuration:  time.Duration(lifecycleReconcileClaimMilliseconds) * time.Millisecond,
+		GarbageCollectionPollInterval:    time.Duration(garbageCollectionPollMilliseconds) * time.Millisecond,
 		AssignmentClaimDuration:          time.Duration(assignmentClaimMilliseconds) * time.Millisecond,
 		AssignmentDeadline:               time.Duration(assignmentDeadlineMilliseconds) * time.Millisecond,
 		RunnerHeartbeatTimeout:           time.Duration(runnerHeartbeatTimeoutMilliseconds) * time.Millisecond,

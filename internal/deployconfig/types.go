@@ -111,6 +111,7 @@ type TuningOverrides struct {
 	LifecycleReconcileBatchSize                 *int64 `toml:"lifecycle_reconcile_batch_size"`
 	LifecycleReconcilePollIntervalMilliseconds  *int64 `toml:"lifecycle_reconcile_poll_interval_milliseconds"`
 	LifecycleReconcileClaimDurationMilliseconds *int64 `toml:"lifecycle_reconcile_claim_duration_milliseconds"`
+	GarbageCollectionPollIntervalMilliseconds   *int64 `toml:"garbage_collection_poll_interval_milliseconds"`
 	AssignmentClaimDurationMilliseconds         *int64 `toml:"assignment_claim_duration_milliseconds"`
 	AssignmentDeadlineMilliseconds              *int64 `toml:"assignment_deadline_milliseconds"`
 	AssignmentRetryLimit                        *int64 `toml:"assignment_retry_limit"`
