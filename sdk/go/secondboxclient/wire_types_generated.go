@@ -6,6 +6,7 @@ import "time"
 
 type AcquireLeaseRequest struct {
 	DurationSeconds int64 `json:"durationSeconds"`
+	ReplaceActive   *bool `json:"replaceActive,omitempty"`
 }
 
 type ArgvCommand struct {

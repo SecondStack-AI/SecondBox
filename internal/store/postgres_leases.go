@@ -64,7 +64,18 @@ func (store *PostgresControlPlaneStore) AcquireLease(
 		return contracts.Lease{}, fmt.Errorf("SecondBox active Lease lookup failed: %w", err)
 	}
 	if activeLeaseExists {
-		return contracts.Lease{}, ports.ErrLeaseAlreadyActive
+		if !input.ReplaceActive {
+			return contracts.Lease{}, ports.ErrLeaseAlreadyActive
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.leases
+			SET state='fenced',revision=revision+1,updated_at=$4
+			WHERE tenant_ref=$1 AND subject_ref=$2 AND sandbox_id=$3
+			  AND state='active' AND expires_at>$4`,
+			input.TenantRef, input.SubjectRef, input.SandboxID, input.Now.UTC(),
+		); err != nil {
+			return contracts.Lease{}, fmt.Errorf("SecondBox active Lease takeover fence failed: %w", err)
+		}
 	}
 	lease := input.Lease
 	lease.TenantRef, lease.SubjectRef = input.TenantRef, input.SubjectRef

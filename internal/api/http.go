@@ -949,6 +949,7 @@ func (apiHandler *handler) acquireLease(writer http.ResponseWriter, request *htt
 	lease, err := apiHandler.service.AcquireSandboxLease(
 		request.Context(), requestPrincipal(request), request.PathValue("sandboxID"),
 		generation, request.Header.Get("Idempotency-Key"), body.DurationSeconds,
+		body.ReplaceActive,
 	)
 	if err != nil {
 		apiHandler.writeError(writer, request, err)
