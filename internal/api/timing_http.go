@@ -96,13 +96,13 @@ func requiredBoundedTimingQuery(
 ) (int64, error) {
 	values, exists := request.URL.Query()[name]
 	if !exists || len(values) != 1 || values[0] == "" {
-		return 0, errors.New("SecondBox timing query parameter is required: " + name)
+		return 0, requestValidationError(errors.New("SecondBox timing query parameter is required: " + name))
 	}
 	value, err := strconv.ParseInt(values[0], 10, 64)
 	if err != nil || value < minimum || value > maximum {
-		return 0, errors.New(
+		return 0, requestValidationError(errors.New(
 			"SecondBox timing query parameter is outside its explicit bound: " + name,
-		)
+		))
 	}
 	return value, nil
 }

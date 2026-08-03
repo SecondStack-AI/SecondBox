@@ -239,7 +239,7 @@ func (apiHandler *handler) writeSandboxFile(writer http.ResponseWriter, request 
 func requireBinaryContentType(request *http.Request) error {
 	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/octet-stream" {
-		return errors.New("SecondBox File upload Content-Type must be application/octet-stream")
+		return requestValidationError(errors.New("SecondBox File upload Content-Type must be application/octet-stream"))
 	}
 	return nil
 }
@@ -453,7 +453,7 @@ func decodeArtifactUpload(
 	request.Body = http.MaxBytesReader(writer, request.Body, maximumBodyBytes)
 	reader, err := request.MultipartReader()
 	if err != nil {
-		return service.ArtifactUpload{}, errors.New("SecondBox Artifact upload must be multipart/form-data")
+		return service.ArtifactUpload{}, requestValidationError(errors.New("SecondBox Artifact upload must be multipart/form-data"))
 	}
 	fields := map[string][]byte{}
 	var contentFile *os.File
@@ -476,28 +476,28 @@ func decodeArtifactUpload(
 			return service.ArtifactUpload{}, runnercontrol.ErrRelaySessionLimit
 		}
 		if err != nil {
-			return service.ArtifactUpload{}, fmt.Errorf("SecondBox Artifact multipart read failed: %w", err)
+			return service.ArtifactUpload{}, requestValidationError(fmt.Errorf("SecondBox Artifact multipart read failed: %w", err))
 		}
 		name := part.FormName()
 		if name == "" {
-			return service.ArtifactUpload{}, errors.Join(
+			return service.ArtifactUpload{}, requestValidationError(errors.Join(
 				errors.New("SecondBox Artifact multipart field name is required"),
 				part.Close(),
-			)
+			))
 		}
 		if _, exists := fields[name]; exists {
-			return service.ArtifactUpload{}, errors.Join(
+			return service.ArtifactUpload{}, requestValidationError(errors.Join(
 				errors.New("SecondBox Artifact multipart fields must be unique"),
 				part.Close(),
-			)
+			))
 		}
 		switch name {
 		case "name", "mediaType", "sha256", "metadata", "content":
 		default:
-			return service.ArtifactUpload{}, errors.Join(
+			return service.ArtifactUpload{}, requestValidationError(errors.Join(
 				errors.New("SecondBox Artifact multipart field is unknown"),
 				part.Close(),
-			)
+			))
 		}
 		if name == "metadata" || name == "content" {
 			mediaType, _, mediaTypeErr := mime.ParseMediaType(part.Header.Get("Content-Type"))
@@ -506,10 +506,10 @@ func decodeArtifactUpload(
 				expectedMediaType = "application/octet-stream"
 			}
 			if mediaTypeErr != nil || mediaType != expectedMediaType {
-				return service.ArtifactUpload{}, errors.Join(
+				return service.ArtifactUpload{}, requestValidationError(errors.Join(
 					errors.New("SecondBox Artifact multipart field Content-Type is invalid: "+name),
 					part.Close(),
-				)
+				))
 			}
 		}
 		if name == "content" {
@@ -542,23 +542,23 @@ func decodeArtifactUpload(
 			if errors.As(readErr, &maximumBytesError) {
 				return service.ArtifactUpload{}, runnercontrol.ErrRelaySessionLimit
 			}
-			return service.ArtifactUpload{}, fmt.Errorf(
+			return service.ArtifactUpload{}, requestValidationError(fmt.Errorf(
 				"SecondBox Artifact multipart field read failed: read=%v close=%v",
 				readErr, closeErr,
-			)
+			))
 		}
 		fields[name] = value
 	}
 	for _, required := range []string{"name", "mediaType", "sha256", "metadata", "content"} {
 		if _, exists := fields[required]; !exists {
-			return service.ArtifactUpload{}, errors.New(
+			return service.ArtifactUpload{}, requestValidationError(errors.New(
 				"SecondBox Artifact multipart field is required: " + required,
-			)
+			))
 		}
 	}
 	var metadata map[string]string
 	if err := json.Unmarshal(fields["metadata"], &metadata); err != nil || metadata == nil {
-		return service.ArtifactUpload{}, errors.New("SecondBox Artifact metadata must be a JSON string map")
+		return service.ArtifactUpload{}, requestValidationError(errors.New("SecondBox Artifact metadata must be a JSON string map"))
 	}
 	cleanupContent = false
 	return service.ArtifactUpload{
@@ -1012,7 +1012,7 @@ func (apiHandler *handler) authenticate(next http.Handler) http.Handler {
 				apiHandler.writeError(
 					writer,
 					request,
-					errors.New("SecondBox tenant and subject references must contain 1 to 128 visible ASCII characters"),
+					requestValidationError(errors.New("SecondBox tenant and subject references must contain 1 to 128 visible ASCII characters")),
 				)
 				return
 			}
@@ -1184,6 +1184,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusUnauthorized, "authentication_failed", "Port tunnel token is invalid", false
 	case errors.Is(err, ports.ErrAuthorizationDenied):
 		return http.StatusForbidden, "authorization_failed", "Authorization failed", false
+	case errors.Is(err, ports.ErrInvalidRequest):
+		return http.StatusBadRequest, "invalid_request", "Request is invalid", false
 	case errors.Is(err, pagination.ErrInvalidListCursor):
 		return http.StatusBadRequest, "invalid_request", "List page cursor is invalid", false
 	case errors.Is(err, ports.ErrPortPolicyDenied):
@@ -1246,22 +1248,23 @@ func classifyError(err error) (int, string, string, bool) {
 	case errors.Is(err, ports.ErrLifecycleUnavailable):
 		return http.StatusConflict, "execution_node_unavailable", "Execution node lifecycle unavailable", true
 	default:
-		if strings.HasPrefix(err.Error(), "SecondBox ") {
-			return http.StatusBadRequest, "invalid_request", err.Error(), false
-		}
 		return http.StatusInternalServerError, "internal_error", "SecondBox request failed", true
 	}
+}
+
+func requestValidationError(err error) error {
+	return errors.Join(ports.ErrInvalidRequest, err)
 }
 
 func parseHTTPDigest(value string) (string, error) {
 	const prefix = "sha-256=:"
 	if !strings.HasPrefix(value, prefix) || !strings.HasSuffix(value, ":") {
-		return "", errors.New("SecondBox Digest must contain a SHA-256 content digest")
+		return "", requestValidationError(errors.New("SecondBox Digest must contain a SHA-256 content digest"))
 	}
 	encoded := strings.TrimSuffix(strings.TrimPrefix(value, prefix), ":")
 	decoded, err := base64.StdEncoding.Strict().DecodeString(encoded)
 	if err != nil || len(decoded) != sha256.Size || base64.StdEncoding.EncodeToString(decoded) != encoded {
-		return "", errors.New("SecondBox Digest must contain canonical SHA-256 base64")
+		return "", requestValidationError(errors.New("SecondBox Digest must contain canonical SHA-256 base64"))
 	}
 	return hex.EncodeToString(decoded), nil
 }
@@ -1280,16 +1283,16 @@ func protocolChecksumToHTTPDigest(checksum string) (string, error) {
 
 func decodeStrictJSON(request *http.Request, destination any) error {
 	if request.Body == nil {
-		return errors.New("SecondBox JSON request body is required")
+		return requestValidationError(errors.New("SecondBox JSON request body is required"))
 	}
 	decoder := json.NewDecoder(io.LimitReader(request.Body, (1<<20)+1))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
-		return fmt.Errorf("SecondBox JSON request decoding failed: %w", err)
+		return requestValidationError(fmt.Errorf("SecondBox JSON request decoding failed: %w", err))
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return errors.New("SecondBox JSON request must contain exactly one object")
+		return requestValidationError(errors.New("SecondBox JSON request must contain exactly one object"))
 	}
 	return nil
 }
@@ -1303,7 +1306,7 @@ func requireEmptyBody(request *http.Request) error {
 	if errors.Is(decoder.Decode(&value), io.EOF) {
 		return nil
 	}
-	return errors.New("SecondBox request body must be empty")
+	return requestValidationError(errors.New("SecondBox request body must be empty"))
 }
 
 func (apiHandler *handler) writeJSON(
@@ -1531,7 +1534,7 @@ func queryLimit(request *http.Request) (int, error) {
 	}
 	value, err := strconv.Atoi(raw)
 	if err != nil || value < 1 || value > 200 {
-		return 0, errors.New("SecondBox list limit must be an integer between 1 and 200")
+		return 0, requestValidationError(errors.New("SecondBox list limit must be an integer between 1 and 200"))
 	}
 	return value, nil
 }
@@ -1547,21 +1550,21 @@ func queryMetadataFilter(request *http.Request) (map[string]string, error) {
 		return nil, nil
 	}
 	if len(values) > maximumMetadataFilterEntries {
-		return nil, fmt.Errorf(
+		return nil, requestValidationError(fmt.Errorf(
 			"SecondBox list metadata filter must not exceed %d entries",
 			maximumMetadataFilterEntries,
-		)
+		))
 	}
 	filter := make(map[string]string, len(values))
 	for _, entry := range values {
 		name, value, found := strings.Cut(entry, "=")
 		if !found || strings.TrimSpace(name) == "" || len(name) > 128 || len(value) > 1024 {
-			return nil, errors.New(
+			return nil, requestValidationError(errors.New(
 				"SecondBox list metadata filter must be name=value within the Metadata bounds",
-			)
+			))
 		}
 		if _, duplicate := filter[name]; duplicate {
-			return nil, errors.New("SecondBox list metadata filter must not repeat a name")
+			return nil, requestValidationError(errors.New("SecondBox list metadata filter must not repeat a name"))
 		}
 		filter[name] = value
 	}
@@ -1577,7 +1580,7 @@ func parseIfMatch(request *http.Request) (int64, error) {
 	value = strings.TrimPrefix(value, "revision-")
 	revision, err := strconv.ParseInt(value, 10, 64)
 	if err != nil || revision < 1 {
-		return 0, errors.New("SecondBox If-Match must contain a positive revision ETag")
+		return 0, requestValidationError(errors.New("SecondBox If-Match must contain a positive revision ETag"))
 	}
 	return revision, nil
 }
@@ -1585,7 +1588,7 @@ func parseIfMatch(request *http.Request) (int64, error) {
 func parseGeneration(request *http.Request) (int64, error) {
 	generation, err := strconv.ParseInt(request.Header.Get("SecondBox-Generation"), 10, 64)
 	if err != nil || generation < 1 {
-		return 0, errors.New("SecondBox-Generation must contain a positive integer")
+		return 0, requestValidationError(errors.New("SecondBox-Generation must contain a positive integer"))
 	}
 	return generation, nil
 }

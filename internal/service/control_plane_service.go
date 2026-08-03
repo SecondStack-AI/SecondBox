@@ -248,10 +248,10 @@ func (service *ControlPlaneService) createProfile(
 	request contracts.CreateProfileRequest,
 ) (contracts.Profile, bool, error) {
 	if !profileNamePattern.MatchString(request.Name) {
-		return contracts.Profile{}, false, errors.New("SecondBox Profile name must match ^[a-z][a-z0-9-]{0,79}$")
+		return contracts.Profile{}, false, invalidRequest(errors.New("SecondBox Profile name must match ^[a-z][a-z0-9-]{0,79}$"))
 	}
 	if service.isBuiltInProfile(request.Name) {
-		return contracts.Profile{}, false, errors.New("SecondBox built-in Profile cannot be created or mutated")
+		return contracts.Profile{}, false, invalidRequest(errors.New("SecondBox built-in Profile cannot be created or mutated"))
 	}
 	if err := validateProfileRevisionSpec(request.Spec); err != nil {
 		return contracts.Profile{}, false, err
@@ -320,7 +320,7 @@ func (service *ControlPlaneService) reviseProfileAtRevision(
 	expectedRevision int64,
 ) (contracts.Profile, bool, error) {
 	if service.isBuiltInProfile(name) {
-		return contracts.Profile{}, false, errors.New("SecondBox built-in Profile cannot be created or mutated")
+		return contracts.Profile{}, false, invalidRequest(errors.New("SecondBox built-in Profile cannot be created or mutated"))
 	}
 	if err := validateProfileRevisionSpec(request.Spec); err != nil {
 		return contracts.Profile{}, false, err
@@ -387,7 +387,7 @@ func (service *ControlPlaneService) disableProfileAtRevision(
 	expectedRevision int64,
 ) (contracts.Profile, bool, error) {
 	if service.isBuiltInProfile(name) {
-		return contracts.Profile{}, false, errors.New("SecondBox built-in Profile cannot be created or mutated")
+		return contracts.Profile{}, false, invalidRequest(errors.New("SecondBox built-in Profile cannot be created or mutated"))
 	}
 	now := service.now().UTC()
 	idempotency, err := service.adminIdempotency(
@@ -473,14 +473,14 @@ func (service *ControlPlaneService) createSandboxOperation(
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
 	if !profileNamePattern.MatchString(request.Profile) {
-		return contracts.Sandbox{}, contracts.Operation{}, false, errors.New("SecondBox Sandbox profile name is invalid")
+		return contracts.Sandbox{}, contracts.Operation{}, false, invalidRequest(errors.New("SecondBox Sandbox profile name is invalid"))
 	}
 	if err := validateSandboxMetadata(request.Metadata); err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
 	if len(request.SourceSnapshotID) > 128 {
 		return contracts.Sandbox{}, contracts.Operation{}, false,
-			errors.New("SecondBox source Snapshot ID exceeds its bound")
+			invalidRequest(errors.New("SecondBox source Snapshot ID exceeds its bound"))
 	}
 	if builtIn, ok := service.builtInProfiles[request.Profile]; ok {
 		if _, err := service.store.EnsureBuiltInProfile(ctx, builtIn); err != nil {
@@ -558,7 +558,7 @@ func (service *ControlPlaneService) UpdateSandboxMetadata(
 		return contracts.Sandbox{}, ports.ErrAuthorizationDenied
 	}
 	if expectedRevision < 1 {
-		return contracts.Sandbox{}, errors.New("SecondBox Sandbox expected revision must be positive")
+		return contracts.Sandbox{}, invalidRequest(errors.New("SecondBox Sandbox expected revision must be positive"))
 	}
 	if err := validateSandboxMetadata(request.Metadata); err != nil {
 		return contracts.Sandbox{}, err
@@ -688,7 +688,7 @@ func (service *ControlPlaneService) setSandboxDesiredState(
 		return contracts.Operation{}, err
 	}
 	if expectedRevision < 1 {
-		return contracts.Operation{}, errors.New("SecondBox lifecycle If-Match revision must be positive")
+		return contracts.Operation{}, invalidRequest(errors.New("SecondBox lifecycle If-Match revision must be positive"))
 	}
 	canonicalRequest, err := json.Marshal(struct {
 		Kind     string            `json:"kind"`
@@ -766,7 +766,7 @@ func (service *ControlPlaneService) AcquireSandboxLease(
 		return contracts.Lease{}, ports.ErrAuthorizationDenied
 	}
 	if generation < 1 {
-		return contracts.Lease{}, errors.New("SecondBox Lease generation must be positive")
+		return contracts.Lease{}, invalidRequest(errors.New("SecondBox Lease generation must be positive"))
 	}
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
 		return contracts.Lease{}, err
@@ -778,7 +778,7 @@ func (service *ControlPlaneService) AcquireSandboxLease(
 		return contracts.Lease{}, err
 	}
 	if durationSeconds < 1 || durationSeconds > 86400 || durationSeconds > policy.LeaseSeconds {
-		return contracts.Lease{}, errors.New("SecondBox Lease duration exceeds the pinned lifecycle policy")
+		return contracts.Lease{}, invalidRequest(errors.New("SecondBox Lease duration exceeds the pinned lifecycle policy"))
 	}
 	requestHash, err := hashCanonicalRequest(struct {
 		DurationSeconds int64 `json:"durationSeconds"`
@@ -839,7 +839,7 @@ func (service *ControlPlaneService) RenewSandboxLease(
 		return contracts.Lease{}, err
 	}
 	if durationSeconds < 1 || durationSeconds > 86400 || durationSeconds > policy.LeaseSeconds {
-		return contracts.Lease{}, errors.New("SecondBox Lease duration exceeds the pinned lifecycle policy")
+		return contracts.Lease{}, invalidRequest(errors.New("SecondBox Lease duration exceeds the pinned lifecycle policy"))
 	}
 	requestHash, err := hashCanonicalRequest(struct {
 		DurationSeconds int64 `json:"durationSeconds"`
@@ -925,7 +925,7 @@ func (service *ControlPlaneService) InspectSandbox(
 		return contracts.SandboxInspection{}, ports.ErrAuthorizationDenied
 	}
 	if generation < 1 {
-		return contracts.SandboxInspection{}, errors.New("SecondBox inspection generation must be positive")
+		return contracts.SandboxInspection{}, invalidRequest(errors.New("SecondBox inspection generation must be positive"))
 	}
 	return service.store.ReadSandboxInspection(ctx, ports.GenerationInput{
 		TenantRef: principal.TenantRef, SandboxID: sandboxID,
@@ -964,7 +964,7 @@ func (service *ControlPlaneService) TouchSandbox(
 		return contracts.TouchResult{}, ports.ErrAuthorizationDenied
 	}
 	if generation < 1 {
-		return contracts.TouchResult{}, errors.New("SecondBox touch generation must be positive")
+		return contracts.TouchResult{}, invalidRequest(errors.New("SecondBox touch generation must be positive"))
 	}
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
 		return contracts.TouchResult{}, err
@@ -1004,18 +1004,18 @@ func (service *ControlPlaneService) WaitSandbox(
 		return contracts.Sandbox{}, ports.ErrAuthorizationDenied
 	}
 	if request.DeadlineMilliseconds < 1 || request.DeadlineMilliseconds > 60000 {
-		return contracts.Sandbox{}, errors.New("SecondBox wait deadlineMilliseconds must be between 1 and 60000")
+		return contracts.Sandbox{}, invalidRequest(errors.New("SecondBox wait deadlineMilliseconds must be between 1 and 60000"))
 	}
 	if len(request.States) < 1 || len(request.States) > 10 {
-		return contracts.Sandbox{}, errors.New("SecondBox wait states must contain between 1 and 10 values")
+		return contracts.Sandbox{}, invalidRequest(errors.New("SecondBox wait states must contain between 1 and 10 values"))
 	}
 	requested := make(map[string]struct{}, len(request.States))
 	for _, state := range request.States {
 		if !validSandboxState(state) {
-			return contracts.Sandbox{}, errors.New("SecondBox wait state is invalid")
+			return contracts.Sandbox{}, invalidRequest(errors.New("SecondBox wait state is invalid"))
 		}
 		if _, duplicate := requested[state]; duplicate {
-			return contracts.Sandbox{}, errors.New("SecondBox wait states must be unique")
+			return contracts.Sandbox{}, invalidRequest(errors.New("SecondBox wait states must be unique"))
 		}
 		requested[state] = struct{}{}
 	}
@@ -1153,51 +1153,55 @@ func (service *ControlPlaneService) newAudit(
 	}
 }
 
+func invalidRequest(err error) error {
+	return errors.Join(ports.ErrInvalidRequest, err)
+}
+
 func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 	if !profileNamePattern.MatchString(spec.Pool) {
-		return errors.New("SecondBox Profile runner pool selector is invalid")
+		return invalidRequest(errors.New("SecondBox Profile runner pool selector is invalid"))
 	}
 	if spec.Architecture != "amd64" && spec.Architecture != "arm64" {
-		return errors.New("SecondBox Profile architecture must be amd64 or arm64")
+		return invalidRequest(errors.New("SecondBox Profile architecture must be amd64 or arm64"))
 	}
 	if !digestPattern.MatchString(spec.RuntimeBundleDigest) || !digestPattern.MatchString(spec.ToolchainBundleDigest) {
-		return errors.New("SecondBox Profile immutable artifact references must be sha256 digests")
+		return invalidRequest(errors.New("SecondBox Profile immutable artifact references must be sha256 digests"))
 	}
 	if spec.Resources.CPUMillis < 1 || spec.Resources.MemoryBytes < 1 || spec.Resources.WorkspaceBytes < 1 ||
 		spec.Resources.ProcessLimit < 1 || spec.Resources.ConcurrentOperations < 1 {
-		return errors.New("SecondBox Profile resource limits must be positive")
+		return invalidRequest(errors.New("SecondBox Profile resource limits must be positive"))
 	}
 	if spec.Lifecycle.InitialState != contracts.SandboxDesiredStateStopped &&
 		spec.Lifecycle.InitialState != contracts.SandboxDesiredStateRunning {
-		return errors.New("SecondBox Profile initial state must be stopped or running")
+		return invalidRequest(errors.New("SecondBox Profile initial state must be stopped or running"))
 	}
 	if spec.Lifecycle.DrainGraceSeconds < 1 || spec.Lifecycle.IdleSeconds < 1 ||
 		spec.Lifecycle.MaximumDurationSeconds < 1 || spec.Lifecycle.LeaseSeconds < 1 {
-		return errors.New("SecondBox Profile lifecycle limits must be positive")
+		return invalidRequest(errors.New("SecondBox Profile lifecycle limits must be positive"))
 	}
 	if spec.Retention.SnapshotRetentionSeconds < 1 ||
 		spec.Retention.SnapshotLimit < 0 || spec.Retention.ArtifactRetentionSeconds < 1 {
-		return errors.New("SecondBox Profile retention limits are invalid")
+		return invalidRequest(errors.New("SecondBox Profile retention limits are invalid"))
 	}
 	if spec.Execution.MaximumDeadlineMilliseconds < 1 || spec.Execution.MaximumBufferedOutputBytes < 1 ||
 		spec.Execution.StreamWindowBytes < 4096 || spec.Execution.MaximumTransferBytes < 1 ||
 		spec.Execution.TerminalDetachSeconds < 0 {
-		return errors.New("SecondBox Profile execution limits are invalid")
+		return invalidRequest(errors.New("SecondBox Profile execution limits are invalid"))
 	}
 	if spec.Network.Mode != "deny_all" && spec.Network.Mode != "allow_list" {
-		return errors.New("SecondBox Profile network mode must be deny_all or allow_list")
+		return invalidRequest(errors.New("SecondBox Profile network mode must be deny_all or allow_list"))
 	}
 	if spec.Network.Mode == "deny_all" && len(spec.Network.Destinations) != 0 {
-		return errors.New("SecondBox Profile deny_all network policy cannot contain destinations")
+		return invalidRequest(errors.New("SecondBox Profile deny_all network policy cannot contain destinations"))
 	}
 	if len(spec.Network.Destinations) > 128 || len(spec.Ports) > 32 {
-		return errors.New("SecondBox Profile network or port policy exceeds its bounded size")
+		return invalidRequest(errors.New("SecondBox Profile network or port policy exceeds its bounded size"))
 	}
 	for _, port := range spec.Ports {
 		if port.Name == "" || port.Port < 1 || port.Port > 65535 ||
 			(port.Protocol != "tcp" && port.Protocol != "http") ||
 			port.MaximumSessions < 1 || port.MaximumSessionSeconds < 1 {
-			return errors.New("SecondBox Profile exposed-port policy is invalid")
+			return invalidRequest(errors.New("SecondBox Profile exposed-port policy is invalid"))
 		}
 	}
 	return nil
@@ -1205,14 +1209,14 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 
 func validateSandboxMetadata(metadata map[string]string) error {
 	if metadata == nil {
-		return errors.New("SecondBox Sandbox metadata object is required")
+		return invalidRequest(errors.New("SecondBox Sandbox metadata object is required"))
 	}
 	if len(metadata) > 32 {
-		return errors.New("SecondBox Sandbox metadata must not exceed 32 entries")
+		return invalidRequest(errors.New("SecondBox Sandbox metadata must not exceed 32 entries"))
 	}
 	for key, value := range metadata {
 		if strings.TrimSpace(key) == "" || len(key) > 128 || len(value) > 1024 {
-			return errors.New("SecondBox Sandbox metadata key or value exceeds its bound")
+			return invalidRequest(errors.New("SecondBox Sandbox metadata key or value exceeds its bound"))
 		}
 	}
 	return validateReservedSandboxName(metadata)
@@ -1227,23 +1231,23 @@ func validateReservedSandboxName(metadata map[string]string) error {
 		return nil
 	}
 	if name != strings.TrimSpace(name) || name == "" {
-		return fmt.Errorf(
+		return invalidRequest(fmt.Errorf(
 			"SecondBox Sandbox metadata %s must not be blank or surrounded by whitespace",
 			contracts.SandboxNameMetadataKey,
-		)
+		))
 	}
 	if strings.HasPrefix(name, contracts.SandboxIDPrefix) {
-		return fmt.Errorf(
+		return invalidRequest(fmt.Errorf(
 			"SecondBox Sandbox metadata %s must not begin with %q, which identifies a Sandbox",
 			contracts.SandboxNameMetadataKey, contracts.SandboxIDPrefix,
-		)
+		))
 	}
 	return nil
 }
 
 func validateIdempotencyKey(key string) error {
 	if len(key) < 8 || len(key) > 200 || !idempotencyKeyPattern.MatchString(key) {
-		return errors.New("SecondBox Idempotency-Key must contain 8 to 200 permitted ASCII characters")
+		return invalidRequest(errors.New("SecondBox Idempotency-Key must contain 8 to 200 permitted ASCII characters"))
 	}
 	return nil
 }

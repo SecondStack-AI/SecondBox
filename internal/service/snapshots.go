@@ -27,7 +27,7 @@ func (service *ControlPlaneService) CreateSandboxSnapshot(
 		return contracts.Operation{}, false, err
 	}
 	if expectedRevision < 1 {
-		return contracts.Operation{}, false, errors.New("SecondBox Snapshot expected revision must be positive")
+		return contracts.Operation{}, false, invalidRequest(errors.New("SecondBox Snapshot expected revision must be positive"))
 	}
 	if err := validateSnapshotRequest(request); err != nil {
 		return contracts.Operation{}, false, err
@@ -89,7 +89,7 @@ func (service *ControlPlaneService) ListSandboxSnapshots(
 		return contracts.SnapshotPage{}, err
 	}
 	if len(cursor) > 512 {
-		return contracts.SnapshotPage{}, errors.New("SecondBox Snapshot page cursor exceeds its bound")
+		return contracts.SnapshotPage{}, invalidRequest(errors.New("SecondBox Snapshot page cursor exceeds its bound"))
 	}
 	return service.store.ListSnapshots(
 		ctx, principal.TenantRef, principal.SubjectRef, sandboxID,
@@ -175,7 +175,7 @@ func (service *ControlPlaneService) RestoreSandboxSnapshot(
 		return contracts.Operation{}, false, err
 	}
 	if expectedRevision < 1 || strings.TrimSpace(request.SnapshotID) == "" {
-		return contracts.Operation{}, false, errors.New("SecondBox Snapshot restore revision and Snapshot ID are required")
+		return contracts.Operation{}, false, invalidRequest(errors.New("SecondBox Snapshot restore revision and Snapshot ID are required"))
 	}
 	requestHash, err := hashCanonicalRequest(request)
 	if err != nil {
@@ -232,7 +232,7 @@ func requireSnapshotRead(principal contracts.Principal) error {
 func validateSnapshotRequest(request contracts.CreateSnapshotRequest) error {
 	if !utf8.ValidString(request.Name) || strings.TrimSpace(request.Name) == "" ||
 		len(request.Name) > 255 {
-		return errors.New("SecondBox Snapshot name is invalid")
+		return invalidRequest(errors.New("SecondBox Snapshot name is invalid"))
 	}
 	return validateSandboxMetadata(request.Metadata)
 }

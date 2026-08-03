@@ -53,7 +53,7 @@ func (service *ControlPlaneService) CreateSandboxPortSession(
 		return contracts.PortSession{}, false, errors.New("SecondBox PortSession transport is invalid")
 	}
 	if requestID == "" || sandboxID == "" || generation < 1 || leaseID == "" {
-		return contracts.PortSession{}, false, errors.New("SecondBox PortSession authority is incomplete")
+		return contracts.PortSession{}, false, invalidRequest(errors.New("SecondBox PortSession authority is incomplete"))
 	}
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
 		return contracts.PortSession{}, false, err
@@ -61,7 +61,7 @@ func (service *ControlPlaneService) CreateSandboxPortSession(
 	if !utf8.ValidString(request.Name) || strings.TrimSpace(request.Name) != request.Name ||
 		request.Name == "" || utf8.RuneCountInString(request.Name) > 80 ||
 		request.DurationSeconds < 1 || request.DurationSeconds > 86400 {
-		return contracts.PortSession{}, false, errors.New("SecondBox PortSession request is invalid")
+		return contracts.PortSession{}, false, invalidRequest(errors.New("SecondBox PortSession request is invalid"))
 	}
 	requestHash, err := hashCanonicalRequest(struct {
 		Request    contracts.CreatePortSessionRequest `json:"request"`

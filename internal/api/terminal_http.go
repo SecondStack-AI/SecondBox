@@ -121,7 +121,7 @@ func (apiHandler *handler) publicTerminalSession(
 
 func (apiHandler *handler) connectSandboxTerminal(writer http.ResponseWriter, request *http.Request) {
 	if !containsString(websocket.Subprotocols(request), terminalSubprotocol) {
-		apiHandler.writeError(writer, request, errors.New("SecondBox Terminal WebSocket subprotocol is required"))
+		apiHandler.writeError(writer, request, requestValidationError(errors.New("SecondBox Terminal WebSocket subprotocol is required")))
 		return
 	}
 	generation, err := parseGeneration(request)

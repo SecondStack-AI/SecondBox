@@ -62,14 +62,14 @@ func (service *ControlPlaneService) UpdateRunnerPool(
 	expectedRevision int64,
 ) (contracts.RunnerPool, error) {
 	if !profileNamePattern.MatchString(name) {
-		return contracts.RunnerPool{}, errors.New("SecondBox RunnerPool name is invalid")
+		return contracts.RunnerPool{}, invalidRequest(errors.New("SecondBox RunnerPool name is invalid"))
 	}
 	if expectedRevision < 1 {
-		return contracts.RunnerPool{}, errors.New("SecondBox RunnerPool update requires a positive revision")
+		return contracts.RunnerPool{}, invalidRequest(errors.New("SecondBox RunnerPool update requires a positive revision"))
 	}
 	if request.State == nil && request.Architectures == nil &&
 		request.Capabilities == nil && request.CapacityPolicy == nil {
-		return contracts.RunnerPool{}, errors.New("SecondBox RunnerPool update requires at least one field")
+		return contracts.RunnerPool{}, invalidRequest(errors.New("SecondBox RunnerPool update requires at least one field"))
 	}
 	current, err := service.store.GetRunnerPool(ctx, name)
 	if err != nil {
@@ -119,7 +119,7 @@ func (service *ControlPlaneService) GetRunnerPool(
 	name string,
 ) (contracts.RunnerPool, error) {
 	if !profileNamePattern.MatchString(name) {
-		return contracts.RunnerPool{}, errors.New("SecondBox RunnerPool name is invalid")
+		return contracts.RunnerPool{}, invalidRequest(errors.New("SecondBox RunnerPool name is invalid"))
 	}
 	return service.store.GetRunnerPool(ctx, name)
 }
@@ -141,7 +141,7 @@ func (service *ControlPlaneService) GetRunner(
 	runnerID string,
 ) (contracts.Runner, error) {
 	if !opaqueRunnerIDPattern.MatchString(runnerID) {
-		return contracts.Runner{}, errors.New("SecondBox Runner ID is invalid")
+		return contracts.Runner{}, invalidRequest(errors.New("SecondBox Runner ID is invalid"))
 	}
 	return service.store.GetRunner(ctx, runnerID)
 }
@@ -155,7 +155,7 @@ func (service *ControlPlaneService) ListRunners(
 	cursor string,
 ) (contracts.RunnerPage, error) {
 	if poolName != "" && !profileNamePattern.MatchString(poolName) {
-		return contracts.RunnerPage{}, errors.New("SecondBox Runner pool filter is invalid")
+		return contracts.RunnerPage{}, invalidRequest(errors.New("SecondBox Runner pool filter is invalid"))
 	}
 	return service.store.ListRunners(ctx, poolName, boundedLimit(limit), cursor)
 }
@@ -168,39 +168,39 @@ func validateRunnerPoolPolicy(
 	capacityPolicy map[string]int64,
 ) error {
 	if !profileNamePattern.MatchString(name) {
-		return errors.New("SecondBox RunnerPool name is invalid")
+		return invalidRequest(errors.New("SecondBox RunnerPool name is invalid"))
 	}
 	switch state {
 	case contracts.RunnerPoolStateReady,
 		contracts.RunnerPoolStateDraining,
 		contracts.RunnerPoolStateOffline:
 	default:
-		return errors.New("SecondBox RunnerPool state is invalid")
+		return invalidRequest(errors.New("SecondBox RunnerPool state is invalid"))
 	}
 	architectures = sortedUnique(architectures)
 	if len(architectures) < 1 || len(architectures) > 8 {
-		return errors.New("SecondBox RunnerPool architectures must contain between 1 and 8 values")
+		return invalidRequest(errors.New("SecondBox RunnerPool architectures must contain between 1 and 8 values"))
 	}
 	for _, architecture := range architectures {
 		if architecture != "amd64" && architecture != "arm64" {
-			return fmt.Errorf("SecondBox RunnerPool architecture is unsupported: %s", architecture)
+			return invalidRequest(fmt.Errorf("SecondBox RunnerPool architecture is unsupported: %s", architecture))
 		}
 	}
 	capabilities = sortedUnique(capabilities)
 	if len(capabilities) < 1 || len(capabilities) > 64 {
-		return errors.New("SecondBox RunnerPool capabilities must contain between 1 and 64 values")
+		return invalidRequest(errors.New("SecondBox RunnerPool capabilities must contain between 1 and 64 values"))
 	}
 	for _, capability := range capabilities {
 		if !runnerCapabilityPattern.MatchString(capability) {
-			return errors.New("SecondBox RunnerPool capability is invalid")
+			return invalidRequest(errors.New("SecondBox RunnerPool capability is invalid"))
 		}
 	}
 	if len(capacityPolicy) < 1 || len(capacityPolicy) > 32 {
-		return errors.New("SecondBox RunnerPool capacity policy must contain between 1 and 32 values")
+		return invalidRequest(errors.New("SecondBox RunnerPool capacity policy must contain between 1 and 32 values"))
 	}
 	for key, value := range capacityPolicy {
 		if !runnerCapacityNamePattern.MatchString(key) || value < 1 {
-			return errors.New("SecondBox RunnerPool capacity policy entries must have valid names and positive values")
+			return invalidRequest(errors.New("SecondBox RunnerPool capacity policy entries must have valid names and positive values"))
 		}
 	}
 	return nil
