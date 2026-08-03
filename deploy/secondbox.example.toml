@@ -94,6 +94,7 @@ coding_environment_toolchain_bundle_digest = 'sha256:ddddddddddddddddddddddddddd
 # lifecycle_reconcile_batch_size = 8 # default; Lifecycle rows reconciled per batch.
 # lifecycle_reconcile_poll_interval_milliseconds = 250 # default; Lifecycle fallback polling cadence.
 # lifecycle_reconcile_claim_duration_milliseconds = 30000 # default; Lifecycle work claim duration.
+# garbage_collection_poll_interval_milliseconds = 60000 # default; Artifact garbage-collection polling cadence.
 # assignment_claim_duration_milliseconds = 30000 # default; Assignment dispatch claim duration.
 # assignment_deadline_milliseconds = 120000 # default; Assignment readiness deadline.
 # assignment_retry_limit = 2 # default; Assignment retry count.

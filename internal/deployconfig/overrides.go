@@ -36,6 +36,7 @@ func OverrideRegistry() []OverrideDefinition {
 		{"lifecycle_reconcile_batch_size", "SECONDBOX_LIFECYCLE_RECONCILE_BATCH_SIZE", "", "Lifecycle rows reconciled per batch.", false, "LifecycleReconcileBatchSize"},
 		{"lifecycle_reconcile_poll_interval_milliseconds", "SECONDBOX_LIFECYCLE_RECONCILE_POLL_INTERVAL_MILLISECONDS", "", "Lifecycle fallback polling cadence.", false, "LifecycleReconcilePollIntervalMilliseconds"},
 		{"lifecycle_reconcile_claim_duration_milliseconds", "SECONDBOX_LIFECYCLE_RECONCILE_CLAIM_DURATION_MILLISECONDS", "", "Lifecycle work claim duration.", false, "LifecycleReconcileClaimDurationMilliseconds"},
+		{"garbage_collection_poll_interval_milliseconds", "SECONDBOX_GARBAGE_COLLECTION_POLL_INTERVAL_MILLISECONDS", "", "Artifact garbage-collection polling cadence.", false, "GarbageCollectionPollIntervalMilliseconds"},
 		{"assignment_claim_duration_milliseconds", "SECONDBOX_ASSIGNMENT_CLAIM_DURATION_MILLISECONDS", "", "Assignment dispatch claim duration.", false, "AssignmentClaimDurationMilliseconds"},
 		{"assignment_deadline_milliseconds", "SECONDBOX_ASSIGNMENT_DEADLINE_MILLISECONDS", "", "Assignment readiness deadline.", false, "AssignmentDeadlineMilliseconds"},
 		{"assignment_retry_limit", "SECONDBOX_ASSIGNMENT_RETRY_LIMIT", "", "Assignment retry count.", true, "AssignmentRetryLimit"},

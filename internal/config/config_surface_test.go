@@ -80,7 +80,7 @@ func TestFromEnvironmentRequiresExactlyDeploymentAuthorityAndContestedSettings(t
 	}
 }
 
-func TestHistoricalFiftyNineNameSurfaceHasAnExplicitFinalCategory(t *testing.T) {
+func TestEnvironmentSurfaceHasAnExplicitFinalCategory(t *testing.T) {
 	categoryB := []string{
 		"SECONDBOX_RUNNER_PROTOCOL_MINIMUM", "SECONDBOX_RUNNER_PROTOCOL_MAXIMUM",
 	}
@@ -100,8 +100,8 @@ func TestHistoricalFiftyNineNameSurfaceHasAnExplicitFinalCategory(t *testing.T) 
 		}
 		seen[name] = "removed compiled fact"
 	}
-	if got := len(seen); got != 59 {
-		t.Fatalf("classified historical surface = %d names, want 59", got)
+	if got := len(seen); got != 60 {
+		t.Fatalf("classified environment surface = %d names, want 60", got)
 	}
 }
 
@@ -118,6 +118,7 @@ func TestFromEnvironmentUsesLiteralTuningDefaultsAndValidatedOverrides(t *testin
 		got.DataPlaneMaximumSessionBytes != 67108864 || got.LifecycleReconcileBatchSize != 8 ||
 		got.LifecycleReconcilePollInterval != 250*time.Millisecond ||
 		got.LifecycleReconcileClaimDuration != 30000*time.Millisecond ||
+		got.GarbageCollectionPollInterval != 60000*time.Millisecond ||
 		got.AssignmentClaimDuration != 30000*time.Millisecond || got.AssignmentDeadline != 120000*time.Millisecond ||
 		got.AssignmentRetryLimit != 2 || got.SchedulerSerializationRetryLimit != 3 ||
 		got.ObjectStoreRetryMaxAttempts != 3 || got.ObjectStoreHTTPTimeout != 30000*time.Millisecond ||
@@ -140,8 +141,8 @@ func TestFromEnvironmentUsesLiteralTuningDefaultsAndValidatedOverrides(t *testin
 // compiled constant would silently run a deployment on a value it did not
 // choose, which is the failure mode the tuning defaults exist to avoid.
 func TestFromEnvironmentRejectsEveryUnusableTuningOverride(t *testing.T) {
-	if len(TuningDefaults()) != 19 {
-		t.Fatalf("tuning surface = %d, want 19", len(TuningDefaults()))
+	if len(TuningDefaults()) != 20 {
+		t.Fatalf("tuning surface = %d, want 20", len(TuningDefaults()))
 	}
 	for _, tuning := range TuningDefaults() {
 		for _, unusable := range []string{"invalid", "-1", ""} {

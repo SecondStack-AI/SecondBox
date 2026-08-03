@@ -282,6 +282,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	lifecycleErrors := make(chan error, 1)
 	assignmentErrors := make(chan error, 1)
 	snapshotRetentionErrors := make(chan error, 1)
+	garbageCollectionErrors := make(chan error, 1)
 	dataPlaneErrors := make(chan error, 1)
 	workListenerErrors := make(chan error, 1)
 	go func() {
@@ -332,6 +333,16 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		)
 	}()
 	go func() {
+		garbageCollectionErrors <- runGarbageCollector(
+			processContext,
+			lifecycle.GarbageCollector{
+				Catalog: controlPlaneStore, Objects: artifactObjects,
+				Grace: time.Minute, BatchSize: 100,
+			},
+			processConfig.GarbageCollectionPollInterval,
+		)
+	}()
+	go func() {
 		dataPlaneErrors <- runDataPlaneSweeper(
 			processContext, dataPlaneRelay, processConfig.DataPlanePollInterval,
 		)
@@ -343,6 +354,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	lifecycleExited := false
 	assignmentExited := false
 	snapshotRetentionExited := false
+	garbageCollectionExited := false
 	dataPlaneExited := false
 	workListenerExited := false
 	select {
@@ -375,6 +387,13 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 			serveErr = snapshotRetentionErr
 		} else if processContext.Err() == nil {
 			serveErr = errors.New("SecondBox Snapshot retention worker stopped unexpectedly")
+		}
+	case garbageCollectionErr := <-garbageCollectionErrors:
+		garbageCollectionExited = true
+		if garbageCollectionErr != nil {
+			serveErr = garbageCollectionErr
+		} else if processContext.Err() == nil {
+			serveErr = errors.New("SecondBox garbage collector stopped unexpectedly")
 		}
 	case dataPlaneErr := <-dataPlaneErrors:
 		dataPlaneExited = true
@@ -426,6 +445,17 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 			)
 		}
 	}
+	var garbageCollectionShutdownErr error
+	if !garbageCollectionExited {
+		select {
+		case garbageCollectionShutdownErr = <-garbageCollectionErrors:
+		case <-shutdownContext.Done():
+			garbageCollectionShutdownErr = fmt.Errorf(
+				"SecondBox garbage collector shutdown: %w",
+				shutdownContext.Err(),
+			)
+		}
+	}
 	if !dataPlaneExited {
 		select {
 		case dataPlaneShutdownErr = <-dataPlaneErrors:
@@ -446,8 +476,8 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	}
 	if err := errors.Join(
 		serveErr, httpShutdownErr, grpcShutdownErr, lifecycleShutdownErr,
-		assignmentShutdownErr, snapshotRetentionShutdownErr, dataPlaneShutdownErr,
-		workListenerShutdownErr,
+		assignmentShutdownErr, snapshotRetentionShutdownErr, garbageCollectionShutdownErr,
+		dataPlaneShutdownErr, workListenerShutdownErr,
 	); err != nil {
 		return fmt.Errorf("SecondBox coordinated server shutdown: %w", err)
 	}
@@ -590,6 +620,34 @@ func runSnapshotRetentionWorker(
 			continue
 		}
 		timer := time.NewTimer(worker.PollInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil
+		case <-timer.C:
+		}
+	}
+}
+
+func runGarbageCollector(
+	ctx context.Context,
+	collector lifecycle.GarbageCollector,
+	pollInterval time.Duration,
+) error {
+	for {
+		completed, err := collector.Sweep(ctx, service.SystemClock())
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("SecondBox garbage collection failed: %w", err)
+		}
+		if completed > 0 {
+			continue
+		}
+		timer := time.NewTimer(pollInterval)
 		select {
 		case <-ctx.Done():
 			if !timer.Stop() {

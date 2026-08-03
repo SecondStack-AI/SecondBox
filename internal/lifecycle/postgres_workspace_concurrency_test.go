@@ -113,7 +113,7 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 			RetryLimit:              2,
 			SerializationRetryLimit: 2,
 			AssetCatalog:            catalog,
-			SessionCanceller:        unusedSessionCanceller{},
+			SessionCanceller:        noOpSessionCanceller{},
 			NewID: func(prefix string) string {
 				return prefix + "-automatic"
 			},
@@ -211,7 +211,7 @@ func TestOrdinaryStopAndSnapshotDeleteSerializeAcrossControlPlaneReplicas(t *tes
 			RetryLimit:              8,
 			SerializationRetryLimit: 3,
 			AssetCatalog:            unusedAssetCatalog{},
-			SessionCanceller:        unusedSessionCanceller{},
+			SessionCanceller:        noOpSessionCanceller{},
 			NewID: func(prefix string) string {
 				return prefix + "-unused"
 			},
@@ -365,7 +365,7 @@ func TestSandboxDeleteQueuesHomeWorkspaceRemovalWhileRunnerIsOffline(t *testing.
 			RetryLimit:              8,
 			SerializationRetryLimit: 3,
 			AssetCatalog:            unusedAssetCatalog{},
-			SessionCanceller:        unusedSessionCanceller{},
+			SessionCanceller:        noOpSessionCanceller{},
 			NewID: func(prefix string) string {
 				return prefix + "-unused"
 			},
@@ -567,9 +567,9 @@ func (unusedAssetCatalog) Resolve(string) (lifecycle.SignedAsset, error) {
 	return lifecycle.SignedAsset{}, errors.New("unused asset catalog")
 }
 
-type unusedSessionCanceller struct{}
+type noOpSessionCanceller struct{}
 
-func (unusedSessionCanceller) CancelSandboxSessions(
+func (noOpSessionCanceller) CancelSandboxSessions(
 	context.Context,
 	string,
 	int64,
