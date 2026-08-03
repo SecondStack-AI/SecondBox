@@ -105,7 +105,7 @@ func (apiHandler *handler) publicExecStreamSession(
 
 func (apiHandler *handler) connectSandboxExecStream(writer http.ResponseWriter, request *http.Request) {
 	if !containsString(websocket.Subprotocols(request), execStreamSubprotocol) {
-		apiHandler.writeError(writer, request, errors.New("SecondBox Exec WebSocket subprotocol is required"))
+		apiHandler.writeError(writer, request, requestValidationError(errors.New("SecondBox Exec WebSocket subprotocol is required")))
 		return
 	}
 	generation, err := parseGeneration(request)

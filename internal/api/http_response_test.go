@@ -59,8 +59,12 @@ func TestHomeRunnerUnavailableCarriesTypedRetryBackoff(t *testing.T) {
 
 	response := writer.Result()
 	defer response.Body.Close()
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var problem contracts.Problem
-	if err := json.NewDecoder(response.Body).Decode(&problem); err != nil {
+	if err := json.Unmarshal(responseBody, &problem); err != nil {
 		t.Fatal(err)
 	}
 	if response.StatusCode != http.StatusServiceUnavailable ||
@@ -75,6 +79,86 @@ func TestHomeRunnerUnavailableCarriesTypedRetryBackoff(t *testing.T) {
 			response.Header.Get("Retry-After"),
 			problem,
 		)
+	}
+}
+
+func TestPrefixedInternalErrorIsGenericRetryableAndCorrelated(t *testing.T) {
+	var logs bytes.Buffer
+	apiHandler := &handler{
+		logger: slog.New(slog.NewTextHandler(&logs, nil)),
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/sandboxes", nil)
+	writer := httptest.NewRecorder()
+	writer.Header().Set("X-Request-ID", "request-internal-error")
+	internalText := "SecondBox data-plane admission transaction: private database failure"
+
+	apiHandler.writeError(writer, request, errors.New(internalText))
+
+	response := writer.Result()
+	defer response.Body.Close()
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var problem contracts.Problem
+	if err := json.Unmarshal(responseBody, &problem); err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusInternalServerError ||
+		problem.Code != "internal_error" ||
+		problem.Title != "SecondBox request failed" ||
+		problem.RequestID != "request-internal-error" ||
+		!problem.Retryable {
+		t.Fatalf("internal error response status=%d problem=%#v", response.StatusCode, problem)
+	}
+	if strings.Contains(string(responseBody), internalText) {
+		t.Fatalf("internal error response disclosed %q", internalText)
+	}
+	for _, fragment := range []string{"SecondBox HTTP request failed", "request-internal-error", internalText} {
+		if !strings.Contains(logs.String(), fragment) {
+			t.Fatalf("internal error log %q does not contain %q", logs.String(), fragment)
+		}
+	}
+}
+
+func TestInvalidRequestErrorUsesStaticTitleAndCorrelation(t *testing.T) {
+	var logs bytes.Buffer
+	apiHandler := &handler{
+		logger: slog.New(slog.NewTextHandler(&logs, nil)),
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/sandboxes", nil)
+	writer := httptest.NewRecorder()
+	writer.Header().Set("X-Request-ID", "request-invalid-input")
+	validationText := "SecondBox JSON request decoding failed: private decoder detail"
+
+	apiHandler.writeError(
+		writer,
+		request,
+		requestValidationError(errors.New(validationText)),
+	)
+
+	response := writer.Result()
+	defer response.Body.Close()
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var problem contracts.Problem
+	if err := json.Unmarshal(responseBody, &problem); err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusBadRequest ||
+		problem.Code != "invalid_request" ||
+		problem.Title != "Request is invalid" ||
+		problem.RequestID != "request-invalid-input" ||
+		problem.Retryable {
+		t.Fatalf("invalid request response status=%d problem=%#v", response.StatusCode, problem)
+	}
+	if strings.Contains(string(responseBody), validationText) {
+		t.Fatalf("invalid request response disclosed %q", validationText)
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("invalid request unexpectedly logged an error: %q", logs.String())
 	}
 }
 

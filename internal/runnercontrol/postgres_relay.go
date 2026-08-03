@@ -247,7 +247,10 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 		session.Detachable = input.Detachable
 		session.TerminalDetachSeconds = policy.TerminalDetachSeconds
 		if input.Detachable && policy.TerminalDetachSeconds == 0 {
-			return DataPlaneSession{}, false, errors.New("SecondBox pinned Profile does not permit detached Terminal sessions")
+			return DataPlaneSession{}, false, errors.Join(
+				ports.ErrInvalidRequest,
+				errors.New("SecondBox pinned Profile does not permit detached Terminal sessions"),
+			)
 		}
 	}
 	if input.Kind == "file" && input.FileOpen != nil &&
@@ -261,7 +264,10 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 	if input.DeadlineAt.After(input.Now.Add(
 		time.Duration(policy.MaximumDeadlineMilliseconds) * time.Millisecond,
 	)) {
-		return DataPlaneSession{}, false, errors.New("SecondBox data-plane deadline exceeds the pinned Profile")
+		return DataPlaneSession{}, false, errors.Join(
+			ports.ErrInvalidRequest,
+			errors.New("SecondBox data-plane deadline exceeds the pinned Profile"),
+		)
 	}
 	if input.DeferResponseCredit && input.StreamWindowBytes > policy.StreamWindowBytes {
 		return DataPlaneSession{}, false, ports.ErrQuotaExceeded

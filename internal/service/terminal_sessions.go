@@ -40,7 +40,7 @@ func (service *ControlPlaneService) CreateSandboxTerminal(
 	if leaseID == "" ||
 		request.Rows < 1 || request.Rows > 1000 ||
 		request.Columns < 1 || request.Columns > 1000 {
-		return runnercontrol.DataPlaneSession{}, false, errors.New("SecondBox Terminal Lease or dimensions are invalid")
+		return runnercontrol.DataPlaneSession{}, false, invalidRequest(errors.New("SecondBox Terminal Lease or dimensions are invalid"))
 	}
 	if _, err := validateBufferedExecRequest(contracts.BufferedExecRequest{
 		Command: request.Command, Cwd: request.Cwd, Environment: request.Environment,

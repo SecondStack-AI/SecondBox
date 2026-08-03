@@ -61,7 +61,7 @@ func (service *ControlPlaneService) CreateSandboxExecStream(
 		return runnercontrol.DataPlaneSession{}, false, err
 	}
 	if request.WindowBytes < 4096 {
-		return runnercontrol.DataPlaneSession{}, false, errors.New("SecondBox streaming Exec window is invalid")
+		return runnercontrol.DataPlaneSession{}, false, invalidRequest(errors.New("SecondBox streaming Exec window is invalid"))
 	}
 	if _, err := validateBufferedExecRequest(contracts.BufferedExecRequest{
 		Command: request.Command, Cwd: request.Cwd, Environment: request.Environment,
@@ -471,7 +471,7 @@ func (service *ControlPlaneService) CreateSandboxDirectory(
 	request contracts.CreateDirectoryRequest,
 ) (bool, error) {
 	if request.Recursive == nil {
-		return false, errors.New("SecondBox recursive directory option is required")
+		return false, invalidRequest(errors.New("SecondBox recursive directory option is required"))
 	}
 	session, replayed, err := service.runFileOperation(
 		ctx, principal, requestID, sandboxID, generation, leaseID, idempotencyKey, "mkdir",
@@ -489,7 +489,7 @@ func (service *ControlPlaneService) RemoveSandboxPath(
 	request contracts.RemovePathRequest,
 ) (bool, error) {
 	if request.Recursive == nil || request.Force == nil {
-		return false, errors.New("SecondBox recursive and force remove options are required")
+		return false, invalidRequest(errors.New("SecondBox recursive and force remove options are required"))
 	}
 	session, replayed, err := service.runFileOperation(
 		ctx, principal, requestID, sandboxID, generation, leaseID, idempotencyKey, "remove",
@@ -617,7 +617,7 @@ func (service *ControlPlaneService) requireDataPlane(principal contracts.Princip
 func validateBufferedExecRequest(request contracts.BufferedExecRequest) ([]byte, error) {
 	if request.Environment == nil || len(request.Environment) > maximumExecEnvironmentVariables ||
 		request.DeadlineMilliseconds < 1 || request.MaximumOutputBytes < 1 {
-		return nil, errors.New("SecondBox buffered Exec bounds are invalid")
+		return nil, invalidRequest(errors.New("SecondBox buffered Exec bounds are invalid"))
 	}
 	if request.Cwd != nil {
 		if err := validateWorkspacePath(*request.Cwd); err != nil {
@@ -627,56 +627,56 @@ func validateBufferedExecRequest(request contracts.BufferedExecRequest) ([]byte,
 	switch request.Command.Mode {
 	case "shell":
 		if request.Command.Command == "" || len(request.Command.Command) > 1<<20 {
-			return nil, errors.New("SecondBox shell command is invalid")
+			return nil, invalidRequest(errors.New("SecondBox shell command is invalid"))
 		}
 	case "argv":
 		if request.Command.Executable == "" || len(request.Command.Executable) > 4096 ||
 			request.Command.Arguments == nil || len(request.Command.Arguments) > 4096 {
-			return nil, errors.New("SecondBox argv command is invalid")
+			return nil, invalidRequest(errors.New("SecondBox argv command is invalid"))
 		}
 		for _, argument := range request.Command.Arguments {
 			if len(argument) > 131072 {
-				return nil, errors.New("SecondBox argv argument exceeds its bound")
+				return nil, invalidRequest(errors.New("SecondBox argv argument exceeds its bound"))
 			}
 		}
 	default:
-		return nil, errors.New("SecondBox Exec command mode is invalid")
+		return nil, invalidRequest(errors.New("SecondBox Exec command mode is invalid"))
 	}
 	environmentBytes := 0
 	for name, value := range request.Environment {
 		if name == "" || len(name) > maximumExecEnvironmentNameBytes {
-			return nil, fmt.Errorf(
+			return nil, invalidRequest(fmt.Errorf(
 				"SecondBox Exec environment variable name has %d bytes; maximum is %d",
 				len(name),
 				maximumExecEnvironmentNameBytes,
-			)
+			))
 		}
 		if len(value) > maximumExecEnvironmentValueBytes {
-			return nil, fmt.Errorf(
+			return nil, invalidRequest(fmt.Errorf(
 				"SecondBox Exec environment variable %q has %d bytes; maximum is %d",
 				name,
 				len(value),
 				maximumExecEnvironmentValueBytes,
-			)
+			))
 		}
 		environmentBytes += len(name) + len(value)
 		if environmentBytes > maximumExecEnvironmentTotalBytes {
-			return nil, fmt.Errorf(
+			return nil, invalidRequest(fmt.Errorf(
 				"SecondBox Exec environment total has %d bytes; maximum is %d",
 				environmentBytes,
 				maximumExecEnvironmentTotalBytes,
-			)
+			))
 		}
 	}
 	if request.StdinBase64 != nil && len(*request.StdinBase64) > 1_398_104 {
-		return nil, errors.New("SecondBox buffered stdin exceeds its encoded bound")
+		return nil, invalidRequest(errors.New("SecondBox buffered stdin exceeds its encoded bound"))
 	}
 	if request.StdinBase64 == nil {
 		return nil, nil
 	}
 	stdin, err := base64.StdEncoding.Strict().DecodeString(*request.StdinBase64)
 	if err != nil {
-		return nil, errors.New("SecondBox stdinBase64 is not canonical base64")
+		return nil, invalidRequest(errors.New("SecondBox stdinBase64 is not canonical base64"))
 	}
 	return stdin, nil
 }
@@ -684,11 +684,11 @@ func validateBufferedExecRequest(request contracts.BufferedExecRequest) ([]byte,
 func validateWorkspacePath(path string) error {
 	if len(path) < 1 || len(path) > 4096 || strings.ContainsRune(path, 0) ||
 		strings.HasPrefix(path, "/") {
-		return errors.New("SecondBox workspace path is invalid")
+		return invalidRequest(errors.New("SecondBox workspace path is invalid"))
 	}
 	for _, segment := range strings.Split(path, "/") {
 		if segment == ".." {
-			return errors.New("SecondBox workspace path contains a parent segment")
+			return invalidRequest(errors.New("SecondBox workspace path contains a parent segment"))
 		}
 	}
 	return nil

@@ -49,7 +49,7 @@ func (service *ControlPlaneService) UploadSandboxArtifact(
 		return contracts.Artifact{}, err
 	}
 	if generation < 1 {
-		return contracts.Artifact{}, errors.New("SecondBox Artifact generation must be positive")
+		return contracts.Artifact{}, invalidRequest(errors.New("SecondBox Artifact generation must be positive"))
 	}
 	if err := validateIdempotencyKey(idempotencyKey); err != nil {
 		return contracts.Artifact{}, err
@@ -141,7 +141,7 @@ func (service *ControlPlaneService) ListSandboxArtifacts(
 		return contracts.ArtifactPage{}, err
 	}
 	if len(cursor) > 512 {
-		return contracts.ArtifactPage{}, errors.New("SecondBox Artifact page cursor exceeds its bound")
+		return contracts.ArtifactPage{}, invalidRequest(errors.New("SecondBox Artifact page cursor exceeds its bound"))
 	}
 	return service.store.ListArtifacts(
 		ctx, principal.TenantRef, principal.SubjectRef, sandboxID,
@@ -244,11 +244,11 @@ func validateArtifactUpload(upload ArtifactUpload) error {
 		!utf8.ValidString(upload.MediaType) || len(upload.MediaType) < 1 ||
 		len(upload.MediaType) > 255 ||
 		!artifactSHA256Pattern.MatchString(upload.SHA256) {
-		return errors.New("SecondBox Artifact name, media type, or SHA-256 is invalid")
+		return invalidRequest(errors.New("SecondBox Artifact name, media type, or SHA-256 is invalid"))
 	}
 	mediaType, parameters, err := mime.ParseMediaType(upload.MediaType)
 	if err != nil || mediaType == "" || len(parameters) > 16 {
-		return errors.New("SecondBox Artifact media type is invalid")
+		return invalidRequest(errors.New("SecondBox Artifact media type is invalid"))
 	}
 	if err := validateSandboxMetadata(upload.Metadata); err != nil {
 		return err
