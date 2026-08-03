@@ -404,8 +404,14 @@ func setControlCommandEnvelope(
 	case message.GetLocalWorkspace() != nil:
 		message.GetLocalWorkspace().MessageId = messageID
 		message.GetLocalWorkspace().Sequence = sequence
+	case message.GetDataPlaneDirectOpen() != nil:
+		message.GetDataPlaneDirectOpen().MessageId = messageID
+		message.GetDataPlaneDirectOpen().Sequence = sequence
+	case message.GetDataPlaneCancel() != nil:
+		message.GetDataPlaneCancel().MessageId = messageID
+		message.GetDataPlaneCancel().Sequence = sequence
 	default:
-		return errors.New("SecondBox runner command queue accepts assignment, fence, drain, or local-workspace commands")
+		return errors.New("SecondBox runner command queue accepts assignment, fence, drain, local-workspace, or direct data-plane commands")
 	}
 	return nil
 }
@@ -429,6 +435,12 @@ func validateControlCommandEnvelope(
 	case message.GetLocalWorkspace() != nil:
 		actualMessageID = message.GetLocalWorkspace().MessageId
 		sequence = message.GetLocalWorkspace().Sequence
+	case message.GetDataPlaneDirectOpen() != nil:
+		actualMessageID = message.GetDataPlaneDirectOpen().MessageId
+		sequence = message.GetDataPlaneDirectOpen().Sequence
+	case message.GetDataPlaneCancel() != nil:
+		actualMessageID = message.GetDataPlaneCancel().MessageId
+		sequence = message.GetDataPlaneCancel().Sequence
 	default:
 		return errors.New("SecondBox preclaimed runner command has an invalid payload")
 	}

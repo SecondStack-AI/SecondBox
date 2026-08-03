@@ -78,6 +78,9 @@ const (
 	// transport between the caller and the Runner differs.
 	PortTransportDirect = "direct"
 
+	DataPlaneTransportProxied = "proxied"
+	DataPlaneTransportDirect  = "direct"
+
 	ObjectStateStaging         = "staging"
 	ObjectStateVerified        = "verified"
 	ObjectStatePublished       = "published"
@@ -173,11 +176,12 @@ type RetentionPolicy struct {
 
 // ExecutionPolicy bounds exec, transfer, terminal, and port-session resources.
 type ExecutionPolicy struct {
-	MaximumDeadlineMilliseconds int64 `json:"maximumDeadlineMilliseconds"`
-	MaximumBufferedOutputBytes  int64 `json:"maximumBufferedOutputBytes"`
-	StreamWindowBytes           int64 `json:"streamWindowBytes"`
-	MaximumTransferBytes        int64 `json:"maximumTransferBytes"`
-	TerminalDetachSeconds       int64 `json:"terminalDetachSeconds"`
+	MaximumDeadlineMilliseconds int64  `json:"maximumDeadlineMilliseconds"`
+	MaximumBufferedOutputBytes  int64  `json:"maximumBufferedOutputBytes"`
+	StreamWindowBytes           int64  `json:"streamWindowBytes"`
+	MaximumTransferBytes        int64  `json:"maximumTransferBytes"`
+	TerminalDetachSeconds       int64  `json:"terminalDetachSeconds"`
+	DataPlaneTransport          string `json:"dataPlaneTransport"`
 }
 
 // NetworkPolicy is an explicit deny-all or destination allow-list.

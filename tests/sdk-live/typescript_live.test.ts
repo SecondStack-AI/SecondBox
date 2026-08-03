@@ -126,6 +126,7 @@ function liveProfileRevisionSpec(): ProfileRevisionSpec {
       streamWindowBytes: 65536,
       maximumTransferBytes: 2 ** 30,
       terminalDetachSeconds: 30,
+      dataPlaneTransport: "proxied",
     },
     network: {
       mode: "deny_all",

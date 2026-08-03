@@ -16,6 +16,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+const runnerControlMaximumMessageBytes = 65 << 20
+
 // GRPCConnectorConfig contains the mutually authenticated control-plane endpoint.
 type GRPCConnectorConfig struct {
 	Address           string
@@ -200,6 +202,10 @@ func (c *GRPCConnector) Connect(ctx context.Context) (RunnerProtocolStream, erro
 	connection, err := grpc.NewClient(
 		c.address,
 		grpc.WithTransportCredentials(credentials.NewTLS(c.tlsConfig.Clone())),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(runnerControlMaximumMessageBytes),
+			grpc.MaxCallSendMsgSize(runnerControlMaximumMessageBytes),
+		),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox runner gRPC client: %w", err)

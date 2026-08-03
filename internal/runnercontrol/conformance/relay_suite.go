@@ -66,7 +66,7 @@ func RunRelayConformanceSuite(t *testing.T, factory RelayBoundaryFactory) {
 		if err := boundary.SeedOperation(t.Context(), fence); err != nil {
 			t.Fatal(err)
 		}
-		first := relayConformanceOutput(fence, 1, []byte{0, 1, 0xff})
+		first := relayConformanceTerminalOutput(fence, 1, []byte{0, 1, 0xff})
 		inserted, err := boundary.PersistInboundFrame(t.Context(), "runner-1", "connection-1", first, now)
 		if err != nil || !inserted {
 			t.Fatalf("first persist = %t, %v", inserted, err)
@@ -77,7 +77,7 @@ func RunRelayConformanceSuite(t *testing.T, factory RelayBoundaryFactory) {
 		}
 		if _, err := boundary.PersistInboundFrame(
 			t.Context(), "runner-1", "connection-2",
-			relayConformanceOutput(fence, 3, []byte("gap")), now,
+			relayConformanceTerminalOutput(fence, 3, []byte("gap")), now,
 		); !errors.Is(err, ErrRelayReordered) {
 			t.Fatalf("sequence gap error = %v", err)
 		}
@@ -85,22 +85,22 @@ func RunRelayConformanceSuite(t *testing.T, factory RelayBoundaryFactory) {
 		stale.SandboxGeneration++
 		if _, err := boundary.PersistInboundFrame(
 			t.Context(), "runner-1", "connection-2",
-			relayConformanceOutput(stale, 2, []byte("stale")), now,
+			relayConformanceTerminalOutput(stale, 2, []byte("stale")), now,
 		); !errors.Is(err, ErrRelayStaleFence) {
 			t.Fatalf("stale fence error = %v", err)
 		}
 	})
 }
 
-func relayConformanceOutput(
+func relayConformanceTerminalOutput(
 	fence *runnerv1.AssignmentFence,
 	sequence uint64,
 	content []byte,
 ) *runnerv1.RunnerToControlPlane {
 	return &runnerv1.RunnerToControlPlane{
-		Message: &runnerv1.RunnerToControlPlane_Exec{Exec: &runnerv1.ExecFrame{
+		Message: &runnerv1.RunnerToControlPlane_Pty{Pty: &runnerv1.PtyFrame{
 			Fence: fence, OperationId: "operation-1", StreamId: "stream-1", Sequence: sequence,
-			Payload: &runnerv1.ExecFrame_Output{Output: &runnerv1.ExecOutput{
+			Payload: &runnerv1.PtyFrame_Output{Output: &runnerv1.ExecOutput{
 				Channel: runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT,
 				Data:    content,
 			}},

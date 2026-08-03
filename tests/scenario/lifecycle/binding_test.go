@@ -19,6 +19,7 @@ func bindingConfig() lifecycleConfig {
 			MemoryBytes:          512 << 20,
 			WorkspaceBytes:       1 << 30,
 			ConcurrentOperations: 4,
+			DataPlaneTransport:   "proxied",
 		},
 		SubjectMaxActiveInstances:      1000,
 		SubjectMaxSandboxes:            1000,

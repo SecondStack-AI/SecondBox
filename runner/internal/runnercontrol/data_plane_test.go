@@ -750,6 +750,7 @@ func relayExecOpen(
 		Payload: &runnerprotocol.ExecFrame_Open{Open: &runnerprotocol.ExecOpen{
 			Command:          &runnerprotocol.ExecOpen_Shell{Shell: shell},
 			OutputLimitBytes: 1024,
+			Streaming:        true,
 		}},
 	}
 }

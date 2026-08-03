@@ -33,7 +33,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestPublicBufferedExecAndOrdinaryFilesystemUseDurableRelay(t *testing.T) {
+func TestPublicBufferedExecAndOrdinaryFilesystemUseProxiedDataPlane(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
 	admin := fixtureAdmin(t, controlPlane)
 	project, account, _ := createProjectAccountAndCredential(t, controlPlane, admin, "data-plane-http")
@@ -63,7 +63,7 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseDurableRelay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 7, 28, 21, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	seed := seedRelayReadyAssignment(t, sandbox, now)
 	relay, err := runnercontrol.NewPostgresFrameRelay(t.Context(), runnercontrol.PostgresFrameRelayConfig{
 		DatabaseURL: integrationDatabaseURL, ClaimDuration: 50 * time.Millisecond,
@@ -73,13 +73,15 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseDurableRelay(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(relay.Close)
+	liveDataPlane := runnercontrol.NewLiveDataPlaneBroker()
 	dataPlaneService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		BuiltInProfiles: integrationBuiltInProfiles(t),
 		Store:           databaseStore, PlatformToken: testPlatformToken,
 		DefaultSubjectQuota: generousQuota(),
-		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
+		Now:                 time.Now, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
-		DataPlaneRelay:        relay, DataPlanePollInterval: time.Millisecond,
+		DataPlaneRelay:        relay, LiveDataPlane: liveDataPlane,
+		DataPlanePollInterval: time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +95,8 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseDurableRelay(t *testing.T) {
 	}
 	server := contractServer(t, handler)
 	t.Cleanup(server.Close)
-	fake := newRelayFakeRunner(relay, seed.RunnerID, seed.ConnectionTwo)
+	fake, detachFake := newRelayFakeRunner(t, liveDataPlane, seed.RunnerID, seed.ConnectionTwo)
+	defer detachFake()
 	fakeContext, stopFake := context.WithCancel(t.Context())
 	defer stopFake()
 	fakeErrors := make(chan error, 1)
@@ -234,7 +237,7 @@ func TestFlueAdapterCompleteSubsetAgainstRealServiceContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 7, 28, 21, 30, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	seed := seedRelayReadyAssignment(t, sandbox, now)
 	relay, err := runnercontrol.NewPostgresFrameRelay(t.Context(), runnercontrol.PostgresFrameRelayConfig{
 		DatabaseURL: integrationDatabaseURL, ClaimDuration: 50 * time.Millisecond,
@@ -244,13 +247,15 @@ func TestFlueAdapterCompleteSubsetAgainstRealServiceContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(relay.Close)
+	liveDataPlane := runnercontrol.NewLiveDataPlaneBroker()
 	dataPlaneService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		BuiltInProfiles: integrationBuiltInProfiles(t),
 		Store:           databaseStore, PlatformToken: testPlatformToken,
 		DefaultSubjectQuota: generousQuota(),
-		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
+		Now:                 time.Now, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
-		DataPlaneRelay:        relay, DataPlanePollInterval: time.Millisecond,
+		DataPlaneRelay:        relay, LiveDataPlane: liveDataPlane,
+		DataPlanePollInterval: time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -264,7 +269,8 @@ func TestFlueAdapterCompleteSubsetAgainstRealServiceContract(t *testing.T) {
 	}
 	server := contractServer(t, handler)
 	t.Cleanup(server.Close)
-	fake := newRelayFakeRunner(relay, seed.RunnerID, seed.ConnectionTwo)
+	fake, detachFake := newRelayFakeRunner(t, liveDataPlane, seed.RunnerID, seed.ConnectionTwo)
+	defer detachFake()
 	fakeContext, stopFake := context.WithCancel(t.Context())
 	defer stopFake()
 	fakeErrors := make(chan error, 1)
@@ -291,7 +297,7 @@ func TestFlueAdapterCompleteSubsetAgainstRealServiceContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("real-service Flue contract failed: %v\n%s", err, output)
 	}
-	if err := fake.assertFlueObserved(now); err != nil {
+	if err := fake.assertFlueObserved(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -532,9 +538,11 @@ func TestIndependentProjectsCannotObserveOrMutateAnotherSandbox(t *testing.T) {
 }
 
 type relayFakeRunner struct {
-	relay           *runnercontrol.PostgresFrameRelay
+	broker          *runnercontrol.LiveDataPlaneBroker
+	session         *runnercontrol.Session
 	runnerID        string
 	connectionID    string
+	incoming        chan *runnerv1.ControlPlaneToRunner
 	mu              sync.Mutex
 	execStdin       []byte
 	mkdirRecursive  *bool
@@ -542,6 +550,7 @@ type relayFakeRunner struct {
 	removeForce     *bool
 	readMaximumSize uint64
 	execOpen        *runnerv1.ExecOpen
+	execObservedAt  time.Time
 	workspaceFiles  map[string][]byte
 	directories     map[string]bool
 	modifiedAt      map[string]time.Time
@@ -557,16 +566,69 @@ type fakeFileOperation struct {
 }
 
 func newRelayFakeRunner(
-	relay *runnercontrol.PostgresFrameRelay,
+	t *testing.T,
+	broker *runnercontrol.LiveDataPlaneBroker,
 	runnerID string,
 	connectionID string,
-) *relayFakeRunner {
-	return &relayFakeRunner{
-		relay: relay, runnerID: runnerID, connectionID: connectionID,
-		exec: map[string]*runnerv1.ExecFrame{}, files: map[string]*fakeFileOperation{},
+) (*relayFakeRunner, func()) {
+	t.Helper()
+	features := []runnerv1.RunnerFeature{
+		runnerv1.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
+		runnerv1.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING,
+		runnerv1.RunnerFeature_RUNNER_FEATURE_FILE_STREAMING,
+	}
+	session := runnercontrol.NewSession(runnercontrol.SessionConfig{
+		AuthenticatedRunnerID: runnerID,
+		SupportedVersions:     runnercontrol.VersionRange{Minimum: 1, Maximum: 1},
+		EnabledFeatures:       features, HeartbeatInterval: 10 * time.Second,
+		ConnectionID: connectionID,
+	})
+	if response, err := session.Accept(&runnerv1.RunnerToControlPlane{
+		Message: &runnerv1.RunnerToControlPlane_Hello{Hello: &runnerv1.RunnerHello{
+			RunnerId: runnerID, ConnectionNonce: bytes.Repeat([]byte{0x43}, 32),
+			SupportedVersions: &runnerv1.ProtocolVersionRange{Minimum: 1, Maximum: 1},
+			MandatoryFeatures: features,
+		}},
+	}); err != nil || response.GetWelcome() == nil {
+		t.Fatalf("fake Runner Hello = %#v, %v", response, err)
+	}
+	if _, err := session.Accept(&runnerv1.RunnerToControlPlane{
+		Message: &runnerv1.RunnerToControlPlane_Registration{Registration: &runnerv1.RunnerRegistration{
+			MessageId: "registration", Sequence: 1, RunnerId: runnerID,
+			ConnectionId: connectionID, RunnerPoolId: "default-pool",
+			SoftwareVersion: "integration", ProtocolVersion: 1,
+			Capabilities: &runnerv1.RunnerCapabilities{
+				Architecture: "amd64", FirecrackerVersion: "integration",
+				KvmReady: true, JailerReady: true, CgroupReady: true,
+				NetworkPolicyReady: true, StorageReady: true, CleanupReady: true,
+				DataPlaneReady:           true,
+				GuestProtocolGenerations: &runnerv1.ProtocolVersionRange{Minimum: 1, Maximum: 1},
+			},
+			Allocatable: &runnerv1.Capacity{VcpuMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30, Instances: 8},
+			Reserved:    &runnerv1.Capacity{}, StartupTiming: &runnerv1.StartupTiming{},
+			DataPlaneAdvertisedAddress:     "10.0.0.5:7443",
+			DataPlaneCertificateSpkiSha256: strings.Repeat("a", 64),
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fake := &relayFakeRunner{
+		broker: broker, session: session, runnerID: runnerID, connectionID: connectionID,
+		incoming: make(chan *runnerv1.ControlPlaneToRunner, 32),
+		exec:     map[string]*runnerv1.ExecFrame{}, files: map[string]*fakeFileOperation{},
 		workspaceFiles: map[string][]byte{}, directories: map[string]bool{".": true},
 		modifiedAt: map[string]time.Time{}, writeAttempts: map[string]int{},
 	}
+	detach, err := broker.AttachConnection(runnerID, connectionID, fake, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fake, detach
+}
+
+func (fake *relayFakeRunner) Send(message *runnerv1.ControlPlaneToRunner) error {
+	fake.incoming <- message
+	return nil
 }
 
 func (fake *relayFakeRunner) run(ctx context.Context) error {
@@ -574,27 +636,10 @@ func (fake *relayFakeRunner) run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		default:
-		}
-		now := time.Now().UTC()
-		delivery, found, err := fake.relay.ClaimOutboundFrame(ctx, fake.runnerID, fake.connectionID, now)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
+		case message := <-fake.incoming:
+			if err := fake.handle(ctx, message, time.Now().UTC()); err != nil {
+				return err
 			}
-			return err
-		}
-		if !found {
-			time.Sleep(time.Millisecond)
-			continue
-		}
-		if err := fake.relay.MarkOutboundFrameDelivered(
-			ctx, delivery.ID, fake.connectionID, delivery.ClaimAttempt, now,
-		); err != nil {
-			return err
-		}
-		if err := fake.handle(ctx, delivery.Message, now); err != nil {
-			return err
 		}
 	}
 }
@@ -606,7 +651,27 @@ func (fake *relayFakeRunner) handle(ctx context.Context, message *runnerv1.Contr
 			fake.mu.Lock()
 			fake.execStdin = bytes.Clone(open.Stdin)
 			fake.execOpen = open
+			fake.execObservedAt = now
 			fake.mu.Unlock()
+			if !open.Streaming {
+				stdout, stderr, exitCode := open.Stdin, []byte(nil), int32(0)
+				if open.GetShell() == "printf flue" {
+					stdout, stderr, exitCode = []byte("flue-out"), []byte("flue-err"), 17
+				}
+				return fake.persist(ctx, &runnerv1.RunnerToControlPlane{
+					Message: &runnerv1.RunnerToControlPlane_Exec{Exec: &runnerv1.ExecFrame{
+						Fence: frame.Fence, OperationId: frame.OperationId,
+						StreamId: frame.StreamId, Sequence: 1,
+						Payload: &runnerv1.ExecFrame_BufferedResult{BufferedResult: &runnerv1.ExecBufferedResult{
+							Stdout: stdout, Stderr: stderr,
+							Terminal: &runnerv1.ExecTerminal{
+								Kind:     runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED,
+								ExitCode: exitCode, ElapsedMilliseconds: 42,
+							},
+						}},
+					}},
+				}, now)
+			}
 			return nil
 		}
 		if frame.GetCredit() != nil {
@@ -857,10 +922,11 @@ func (fake *relayFakeRunner) fileTerminalKind(
 }
 
 func (fake *relayFakeRunner) persist(ctx context.Context, message *runnerv1.RunnerToControlPlane, now time.Time) error {
-	_, err := fake.relay.PersistInboundFrame(ctx, runnercontrol.InboundRelayFrame{
-		RunnerID: fake.runnerID, ConnectionID: fake.connectionID, Message: message,
-	}, now)
-	return err
+	event, err := fake.session.Accept(message)
+	if err != nil {
+		return err
+	}
+	return fake.broker.Deliver(ctx, event)
 }
 
 func (fake *relayFakeRunner) assertObserved() error {
@@ -882,7 +948,7 @@ func (fake *relayFakeRunner) assertObserved() error {
 	return nil
 }
 
-func (fake *relayFakeRunner) assertFlueObserved(now time.Time) error {
+func (fake *relayFakeRunner) assertFlueObserved() error {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	if fake.writeAttempts["nested/text.txt"] != 2 ||
@@ -900,7 +966,8 @@ func (fake *relayFakeRunner) assertFlueObserved(now time.Time) error {
 		fake.execOpen.GetShell() != "printf flue" ||
 		fake.execOpen.Cwd != "nested" ||
 		fake.execOpen.OutputLimitBytes != 4096 ||
-		fake.execOpen.DeadlineUnixMs != uint64(now.Add(321*time.Millisecond).UnixMilli()) {
+		fake.execOpen.DeadlineUnixMs <= uint64(fake.execObservedAt.UnixMilli()) ||
+		fake.execOpen.DeadlineUnixMs > uint64(fake.execObservedAt.Add(321*time.Millisecond).UnixMilli()) {
 		return fmt.Errorf("Flue Exec Open = %#v", fake.execOpen)
 	}
 	if len(fake.execOpen.Environment) != 1 ||

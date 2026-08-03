@@ -295,7 +295,7 @@ func TestRelayPortByteAcknowledgementAndRunnerDisconnectBothSerializations(t *te
 	}
 }
 
-func TestTerminalExecAppendAfterCleanupUsesProjectionAndReopensCleanup(t *testing.T) {
+func TestExecFrameCannotReopenRelayCleanup(t *testing.T) {
 	store := openRunnerControlDatabase(t)
 	now := time.Date(2026, 8, 2, 18, 0, 0, 0, time.UTC)
 	retainUntil := now.Add(time.Hour)
@@ -307,37 +307,24 @@ func TestTerminalExecAppendAfterCleanupUsesProjectionAndReopensCleanup(t *testin
 		t.Fatal(err)
 	}
 	relay := &PostgresFrameRelay{pool: store.pool, maximumFrameBytes: 1 << 20}
-	inserted, err := relay.AppendExecClientFrame(
-		t.Context(), "tenant", "subject", "retention-late-exec",
-		ExecClientFrame{Sequence: 0, Input: []byte("late")}, now.Add(time.Second),
-	)
-	if err != nil || !inserted {
-		t.Fatalf("late terminal Exec append = %t, %v", inserted, err)
+	inserted, err := relay.PersistInboundFrame(t.Context(), InboundRelayFrame{
+		RunnerID: "runner", ConnectionID: "connection",
+		Message: &runnerv1.RunnerToControlPlane{
+			Message: &runnerv1.RunnerToControlPlane_Exec{Exec: &runnerv1.ExecFrame{}},
+		},
+	}, now.Add(time.Second))
+	if err == nil || inserted {
+		t.Fatalf("late Exec relay frame = %t, %v", inserted, err)
 	}
-	var nextSequence int64
-	var frameHorizon time.Time
-	var cleanupCompleted *time.Time
-	var frameState string
+	var frameCount int64
 	if err := store.pool.QueryRow(t.Context(), `
-		SELECT session.next_outbound_sequence,session.frames_retain_until,
-		       session.frame_cleanup_completed_at,frame.state
-		FROM secondbox.data_plane_sessions AS session
-		JOIN secondbox.data_plane_frames AS frame ON frame.session_id=session.id
-		WHERE session.id=$1 AND frame.direction='outbound' AND frame.sequence=2`,
+		SELECT count(*) FROM secondbox.data_plane_frames WHERE session_id=$1`,
 		"retention-late-exec",
-	).Scan(&nextSequence, &frameHorizon, &cleanupCompleted, &frameState); err != nil {
+	).Scan(&frameCount); err != nil {
 		t.Fatal(err)
 	}
-	if nextSequence != 3 || !frameHorizon.Equal(retainUntil) ||
-		cleanupCompleted != nil || frameState != "discarded" {
-		t.Fatalf("late terminal Exec projection = next %d horizon %v cleanup %v frame %q",
-			nextSequence, frameHorizon, cleanupCompleted, frameState)
-	}
-	if changed, err := relay.sweepDataPlaneFrames(t.Context(), now, 10, 1024); err != nil || changed {
-		t.Fatalf("late frame cleanup before fallback = %t, %v", changed, err)
-	}
-	if changed, err := relay.sweepDataPlaneFrames(t.Context(), retainUntil, 10, 1024); err != nil || !changed {
-		t.Fatalf("late frame cleanup at fallback = %t, %v", changed, err)
+	if frameCount != 0 {
+		t.Fatalf("late Exec relay frame count = %d, want zero", frameCount)
 	}
 }
 

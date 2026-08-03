@@ -403,6 +403,15 @@ message ExecOutput {
   bytes data = 2;
 }
 
+// ExecBufferedResult carries one bounded non-streaming completion. The Runner
+// sends stdout, stderr, and the typed terminal together so the control plane
+// never has to persist intermediate output frames.
+message ExecBufferedResult {
+  bytes stdout = 1;
+  bytes stderr = 2;
+  ExecTerminal terminal = 3;
+}
+
 message ExecCancel {
   string reason = 1;
 }
@@ -465,6 +474,7 @@ message ExecFrame {
     StreamCredit credit = 13;
     ExecCancel cancel = 14;
     ExecTerminal terminal = 15;
+    ExecBufferedResult buffered_result = 16;
   }
 }
 
@@ -654,6 +664,66 @@ message PortDirectAdmission {
   string safe_detail = 6;
 }
 
+enum DataPlaneSessionKind {
+  DATA_PLANE_SESSION_KIND_UNSPECIFIED = 0;
+  DATA_PLANE_SESSION_KIND_EXEC = 1;
+  DATA_PLANE_SESSION_KIND_FILE = 2;
+}
+
+// DataPlaneDirectOpen admits one payload-free direct Exec or File session.
+// The operation request follows only after the caller spends the credential on
+// the SBXDP1 connection.
+message DataPlaneDirectOpen {
+  string message_id = 1;
+  uint64 sequence = 2;
+  AssignmentFence fence = 3;
+  string operation_id = 4;
+  string stream_id = 5;
+  Correlation correlation = 6;
+  DataPlaneSessionKind kind = 7;
+  uint64 deadline_unix_ms = 8;
+  bytes credential_digest = 9;
+}
+
+message DataPlaneDirectConsume {
+  string message_id = 1;
+  uint64 sequence = 2;
+  AssignmentFence fence = 3;
+  string operation_id = 4;
+  string stream_id = 5;
+  Correlation correlation = 6;
+  DataPlaneSessionKind kind = 7;
+  bytes credential_digest = 8;
+}
+
+enum DataPlaneDirectAdmissionKind {
+  DATA_PLANE_DIRECT_ADMISSION_KIND_UNSPECIFIED = 0;
+  DATA_PLANE_DIRECT_ADMISSION_KIND_ADMITTED = 1;
+  DATA_PLANE_DIRECT_ADMISSION_KIND_DENIED = 2;
+}
+
+message DataPlaneDirectAdmission {
+  string message_id = 1;
+  AssignmentFence fence = 2;
+  string operation_id = 3;
+  string stream_id = 4;
+  DataPlaneSessionKind kind = 5;
+  DataPlaneDirectAdmissionKind admission = 6;
+  string safe_detail = 7;
+}
+
+// DataPlaneCancelCommand is durable control only. It carries no stdin, output,
+// or File content and may therefore survive a Runner reconnect in PostgreSQL.
+message DataPlaneCancelCommand {
+  string message_id = 1;
+  uint64 sequence = 2;
+  AssignmentFence fence = 3;
+  string operation_id = 4;
+  string stream_id = 5;
+  DataPlaneSessionKind kind = 6;
+  string reason = 7;
+}
+
 message PortFrame {
   AssignmentFence fence = 1;
   string operation_id = 2;
@@ -819,6 +889,7 @@ message RunnerToControlPlane {
     InstanceTerminal instance_terminal = 16;
     LocalWorkspaceResult local_workspace_result = 17;
     PortDirectConsume port_direct_consume = 18;
+    DataPlaneDirectConsume data_plane_direct_consume = 19;
   }
 }
 
@@ -836,5 +907,8 @@ message ControlPlaneToRunner {
     PortFrame port = 9;
     LocalWorkspaceCommand local_workspace = 13;
     PortDirectAdmission port_direct_admission = 14;
+    DataPlaneDirectOpen data_plane_direct_open = 15;
+    DataPlaneDirectAdmission data_plane_direct_admission = 16;
+    DataPlaneCancelCommand data_plane_cancel = 17;
   }
 }

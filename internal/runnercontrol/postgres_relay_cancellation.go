@@ -445,10 +445,50 @@ func (relay *PostgresFrameRelay) cancelDataPlaneSession(
 	if err := relay.enqueueCancellation(ctx, tx, session, terminalKind, reason, now.UTC()); err != nil {
 		return false, err
 	}
+	if session.State == "pending" && (session.Kind == "exec" || session.Kind == "file") {
+		if err := relay.completeUnstartedCancellation(
+			ctx, tx, session, terminalKind, reason, now.UTC(),
+		); err != nil {
+			return false, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, fmt.Errorf("SecondBox data-plane cancellation commit: %w", err)
 	}
 	return true, nil
+}
+
+func (relay *PostgresFrameRelay) completeUnstartedCancellation(
+	ctx context.Context,
+	tx pgx.Tx,
+	session DataPlaneSession,
+	terminalKind string,
+	detail string,
+	now time.Time,
+) error {
+	identity := inboundIdentity{sequence: 1}
+	if session.Kind == "exec" {
+		value, ok := runnerv1.ExecTerminalKind_value[terminalKind]
+		if !ok {
+			return errors.New("SecondBox unstarted Exec cancellation terminal kind is invalid")
+		}
+		identity.execTerm = &runnerv1.ExecTerminal{
+			Kind:       runnerv1.ExecTerminalKind(value),
+			SafeDetail: detail,
+		}
+	} else if session.Kind == "file" {
+		value, ok := runnerv1.FileTerminalKind_value[terminalKind]
+		if !ok {
+			return errors.New("SecondBox unstarted File cancellation terminal kind is invalid")
+		}
+		identity.fileTerm = &runnerv1.FileTerminal{
+			Kind:       runnerv1.FileTerminalKind(value),
+			SafeDetail: detail,
+		}
+	} else {
+		return errors.New("SecondBox unstarted data-plane cancellation kind is invalid")
+	}
+	return applyInboundPayload(ctx, tx, session, identity, 0, "", relay.retention, now)
 }
 
 func (relay *PostgresFrameRelay) enqueueCancellation(
@@ -459,6 +499,51 @@ func (relay *PostgresFrameRelay) enqueueCancellation(
 	detail string,
 	now time.Time,
 ) error {
+	if session.Kind == "exec" || session.Kind == "file" {
+		kind := runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC
+		if session.Kind == "file" {
+			kind = runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE
+		}
+		message := &runnerv1.ControlPlaneToRunner{
+			Message: &runnerv1.ControlPlaneToRunner_DataPlaneCancel{DataPlaneCancel: &runnerv1.DataPlaneCancelCommand{
+				Fence: &runnerv1.AssignmentFence{
+					AssignmentId: session.AssignmentID, SandboxId: session.SandboxID,
+					InstanceId: session.InstanceID, SandboxGeneration: uint64(session.Generation),
+					FencingToken: append([]byte(nil), session.FencingToken...),
+				},
+				OperationId: session.ID, StreamId: session.StreamID, Kind: kind, Reason: detail,
+			}},
+		}
+		payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(message)
+		if err != nil {
+			return fmt.Errorf("SecondBox data-plane cancellation command encoding: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO secondbox.runner_commands (
+				id,runner_id,assignment_id,kind,payload,state,target_connection_id,
+				delivery_count,created_at,updated_at,delivered_at
+			) VALUES ($1,$2,$3,'data-plane-cancel',$4,'pending','',0,$5,$5,NULL)
+			ON CONFLICT (id) DO NOTHING`,
+			session.ID+"_cancel", session.RunnerID, session.AssignmentID, payload, now.UTC(),
+		); err != nil {
+			return fmt.Errorf("SecondBox data-plane cancellation command insert: %w", err)
+		}
+		elapsedMilliseconds := max(0, now.UTC().Sub(session.CreatedAt).Milliseconds())
+		limitBytes := int64(0)
+		if terminalKind == runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_OUTPUT_EXHAUSTED.String() {
+			limitBytes = session.MaximumResponseBytes
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.data_plane_sessions
+			SET state='cancelling',terminal_kind=$2,terminal_detail=$3,
+			    elapsed_milliseconds=$4,limit_bytes=$5,updated_at=$6
+			WHERE id=$1`,
+			session.ID, terminalKind, detail, elapsedMilliseconds, limitBytes, now.UTC(),
+		); err != nil {
+			return fmt.Errorf("SecondBox data-plane cancellation update: %w", err)
+		}
+		return nil
+	}
 	sequence := session.NextOutboundSequence
 	message := cancellationMessage(session, uint64(sequence), detail)
 	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(message)

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -117,6 +118,50 @@ func TestWaitForFileDeadlineRequiresGuestTerminalProof(t *testing.T) {
 	}
 }
 
+func TestStreamingExecCancellationPersistsWhenLiveRouteIsUnavailable(t *testing.T) {
+	relay := &cancellationProofRelay{}
+	stream := &SandboxExecStream{
+		service: &ControlPlaneService{
+			dataPlaneRelay: relay, now: func() time.Time { return time.Unix(100, 0).UTC() },
+		},
+		session: runnercontrol.DataPlaneSession{
+			ID: "session", StreamID: "stream", TenantRef: "tenant", SubjectRef: "subject",
+		},
+		stream: unavailableDataPlaneStream{},
+	}
+	err := stream.Cancel(t.Context(), "connection replaced")
+	if !errors.Is(err, runnercontrol.ErrLiveDataPlaneUnavailable) {
+		t.Fatalf("stream cancellation error = %v", err)
+	}
+	if !relay.cancelled {
+		t.Fatal("stream cancellation was not persisted after live route loss")
+	}
+}
+
+type unavailableDataPlaneStream struct{}
+
+func (unavailableDataPlaneStream) Send(*runnerv1.ControlPlaneToRunner) error {
+	return runnercontrol.ErrLiveDataPlaneUnavailable
+}
+
+func (unavailableDataPlaneStream) Receive(context.Context) (*runnerv1.RunnerToControlPlane, error) {
+	return nil, runnercontrol.ErrLiveDataPlaneUnavailable
+}
+
+func (unavailableDataPlaneStream) Close() error { return nil }
+
+type cancellationProofRelay struct {
+	deadlineProofRelay
+	cancelled bool
+}
+
+func (relay *cancellationProofRelay) CancelDataPlaneSession(
+	context.Context, string, string, string, string, time.Time,
+) (bool, error) {
+	relay.cancelled = true
+	return true, nil
+}
+
 type deadlineProofRelay struct {
 	expired  bool
 	getCalls int
@@ -137,6 +182,12 @@ func (relay *deadlineProofRelay) GetDataPlaneSession(context.Context, string, st
 	}, nil
 }
 
+func (*deadlineProofRelay) StartDataPlaneSession(
+	context.Context, string, string, string, time.Time,
+) (runnercontrol.DataPlaneSession, error) {
+	panic("unexpected live data-plane start")
+}
+
 func (relay *deadlineProofRelay) ExpireDataPlaneSession(context.Context, string, string, string, time.Time) (runnercontrol.DataPlaneSession, error) {
 	relay.expired = true
 	return runnercontrol.DataPlaneSession{
@@ -145,16 +196,16 @@ func (relay *deadlineProofRelay) ExpireDataPlaneSession(context.Context, string,
 	}, nil
 }
 
-func (*deadlineProofRelay) AppendExecClientFrame(
-	context.Context, string, string, string, runnercontrol.ExecClientFrame, time.Time,
-) (bool, error) {
-	panic("unexpected streaming Exec frame")
+func (*deadlineProofRelay) CompleteDataPlaneSession(
+	context.Context, runnercontrol.DataPlaneCompletion,
+) (runnercontrol.DataPlaneSession, error) {
+	panic("unexpected live data-plane completion")
 }
 
-func (*deadlineProofRelay) ListExecServerFrames(
-	context.Context, string, string, string, int64, int,
-) ([]runnercontrol.ExecServerFrame, error) {
-	panic("unexpected streaming Exec frame lookup")
+func (*deadlineProofRelay) ConsumeDirectDataPlaneSession(
+	context.Context, runnercontrol.DirectDataPlaneConsumption,
+) error {
+	panic("unexpected direct data-plane consumption")
 }
 
 func (*deadlineProofRelay) CancelDataPlaneSession(

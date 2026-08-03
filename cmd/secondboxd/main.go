@@ -125,6 +125,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	// The wakeup hub is shared by the runner control server and the caller-facing
 	// data-plane loops, so it is constructed before its first consumer.
 	workWakeups := worknotify.NewHub()
+	liveDataPlane := runnercontrol.NewLiveDataPlaneBroker()
 	controlPlane, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store:               controlPlaneStore,
 		PlatformToken:       processConfig.PlatformToken,
@@ -134,7 +135,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		ArtifactObjectStore:   artifactObjects,
 		DataPlaneRelay:        dataPlaneRelay, DataPlanePollInterval: processConfig.DataPlanePollInterval,
-		DataPlaneWakeups: workWakeups,
+		DataPlaneWakeups: workWakeups, LiveDataPlane: liveDataPlane,
 		PortSessionRelay: dataPlaneRelay, PublicBaseURL: processConfig.PublicBaseURL,
 	})
 	if err != nil {
@@ -231,7 +232,9 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		EventBatchWait:      processConfig.RunnerEventPersistenceBatchWait,
 		WorkWakeups:         workWakeups,
 		FrameRelay:          dataPlaneRelay,
+		LiveDataPlane:       liveDataPlane,
 		DirectPorts:         dataPlaneRelay,
+		DirectDataPlane:     controlPlane,
 		Now:                 service.SystemClock,
 		NewConnectionID:     func() string { return service.NewOpaqueID("rconn") },
 	})
@@ -243,7 +246,11 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		return fmt.Errorf("SecondBox runner control listener: %w", err)
 	}
 	defer runnerListener.Close()
-	grpcServer := grpc.NewServer(grpc.Creds(credentials.NewTLS(runnerTLSConfig)))
+	grpcServer := grpc.NewServer(
+		grpc.Creds(credentials.NewTLS(runnerTLSConfig)),
+		grpc.MaxRecvMsgSize(int(runnercontrol.MaximumBufferedExecBytes)+(1<<20)),
+		grpc.MaxSendMsgSize(int(runnercontrol.MaximumBufferedExecBytes)+(1<<20)),
+	)
 	runnerv1.RegisterRunnerControlServer(grpcServer, runnerControlServer)
 	httpHandler, err := api.NewHandler(api.HandlerConfig{
 		Service: controlPlane, Logger: logger,

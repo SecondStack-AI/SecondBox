@@ -35,6 +35,11 @@ type FileOperationResult struct {
 
 // DataPlaneBackend executes only assignment-bound operations on a retained guest session.
 type DataPlaneBackend interface {
+	ExecuteBuffered(
+		context.Context,
+		*runnerprotocol.AssignmentFence,
+		*runnerprotocol.ExecOpen,
+	) (BufferedExecResult, error)
 	ExecuteStreaming(
 		context.Context,
 		*runnerprotocol.AssignmentFence,
@@ -249,7 +254,11 @@ func (s *RunnerProtocolService) handleExecFrame(
 			return nil
 		}
 		s.setActiveOperation(frame.Fence.AssignmentId, frame.OperationId, true)
-		go s.executeStreamingOperation(execCtx, stream, state, frame.GetOpen(), asyncErrors)
+		if frame.GetOpen().Streaming {
+			go s.executeStreamingOperation(execCtx, stream, state, frame.GetOpen(), asyncErrors)
+		} else {
+			go s.executeBufferedOperation(execCtx, stream, state, frame.GetOpen(), asyncErrors)
+		}
 		return nil
 	}
 	if frame.GetCorrelation() != nil && !proto.Equal(frame.GetCorrelation(), state.correlation) {
@@ -565,6 +574,82 @@ func (s *RunnerProtocolService) executeStreamingOperation(
 	if err := s.sendExecTerminal(stream, state, terminal); err != nil {
 		reportRunnerAsyncError(asyncErrors, err)
 	}
+}
+
+func (s *RunnerProtocolService) executeBufferedOperation(
+	ctx context.Context,
+	stream RunnerProtocolStream,
+	state *runnerExecOperation,
+	open *runnerprotocol.ExecOpen,
+	asyncErrors chan<- error,
+) {
+	defer s.setActiveOperation(state.fence.AssignmentId, state.operationID, false)
+	result, err := s.dataPlaneBackend.ExecuteBuffered(
+		ctx, cloneRunnerFence(state.fence), proto.Clone(open).(*runnerprotocol.ExecOpen),
+	)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(context.Cause(ctx), context.Canceled) {
+			result.Terminal = &runnerprotocol.ExecTerminal{
+				Kind:     runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED,
+				ExitCode: -1, SafeDetail: "command cancelled",
+			}
+		} else {
+			result.Terminal = runnerInfrastructureTerminal(
+				runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_RUNNER_FAILED,
+				runnerprotocol.InfrastructureFailureReason_INFRASTRUCTURE_FAILURE_REASON_GUEST_AGENT,
+				true, "runner buffered execution failed",
+			)
+		}
+	}
+	if result.Terminal == nil {
+		result.Terminal = runnerInfrastructureTerminal(
+			runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_RUNNER_FAILED,
+			runnerprotocol.InfrastructureFailureReason_INFRASTRUCTURE_FAILURE_REASON_GUEST_AGENT,
+			true, "runner buffered execution returned no terminal outcome",
+		)
+	}
+	if err := s.sendExecBufferedResult(stream, state, result); err != nil {
+		reportRunnerAsyncError(asyncErrors, err)
+	}
+}
+
+func (s *RunnerProtocolService) sendExecBufferedResult(
+	stream RunnerProtocolStream,
+	state *runnerExecOperation,
+	result BufferedExecResult,
+) error {
+	s.operationMu.Lock()
+	if state.terminal {
+		frame := proto.Clone(state.terminalFrame).(*runnerprotocol.ExecFrame)
+		s.operationMu.Unlock()
+		return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
+			Message: &runnerprotocol.RunnerToControlPlane_Exec{Exec: frame},
+		})
+	}
+	frame := &runnerprotocol.ExecFrame{
+		Fence: cloneRunnerFence(state.fence), OperationId: state.operationID,
+		StreamId: state.streamID, Sequence: state.nextOutgoing,
+		Correlation: cloneRunnerCorrelation(state.correlation),
+		Payload: &runnerprotocol.ExecFrame_BufferedResult{BufferedResult: &runnerprotocol.ExecBufferedResult{
+			Stdout: bytes.Clone(result.Stdout), Stderr: bytes.Clone(result.Stderr),
+			Terminal: proto.Clone(result.Terminal).(*runnerprotocol.ExecTerminal),
+		}},
+	}
+	state.nextOutgoing++
+	state.terminal = true
+	state.terminalFrame = proto.Clone(frame).(*runnerprotocol.ExecFrame)
+	s.retainExecTerminalLocked(state.key)
+	s.operationMu.Unlock()
+	if err := s.emitEvidence(
+		context.Background(), runnerevidence.EventExecTerminal,
+		state.fence, state.correlation, state.operationID,
+		result.Terminal.Kind.String(), terminalOutcome(result.Terminal.Kind.String()),
+	); err != nil {
+		return err
+	}
+	return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
+		Message: &runnerprotocol.RunnerToControlPlane_Exec{Exec: frame},
+	})
 }
 
 func runnerInfrastructureTerminal(

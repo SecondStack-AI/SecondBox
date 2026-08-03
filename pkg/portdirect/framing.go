@@ -33,7 +33,53 @@ const (
 	MaximumCredentialBytes = 2048
 	// MaximumDetailBytes bounds the safe detail returned with a verdict.
 	MaximumDetailBytes = 128
+	// MaximumTypedMessageBytes bounds one length-prefixed Exec or File message.
+	MaximumTypedMessageBytes = 2 << 20
 )
+
+// WriteTypedMessage writes one bounded length-prefixed Exec or File message.
+func WriteTypedMessage(writer io.Writer, payload []byte) error {
+	if len(payload) == 0 || len(payload) > MaximumTypedMessageBytes {
+		return fmt.Errorf("SecondBox direct data-plane typed message length is invalid")
+	}
+	header := make([]byte, 4)
+	binary.BigEndian.PutUint32(header, uint32(len(payload)))
+	if err := writeAll(writer, header); err != nil {
+		return err
+	}
+	return writeAll(writer, payload)
+}
+
+// ReadTypedMessage reads one bounded length-prefixed Exec or File message.
+func ReadTypedMessage(reader io.Reader) ([]byte, error) {
+	header := make([]byte, 4)
+	if _, err := io.ReadFull(reader, header); err != nil {
+		return nil, err
+	}
+	length := binary.BigEndian.Uint32(header)
+	if length == 0 || length > MaximumTypedMessageBytes {
+		return nil, fmt.Errorf("SecondBox direct data-plane typed message length is invalid")
+	}
+	payload := make([]byte, int(length))
+	if _, err := io.ReadFull(reader, payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func writeAll(writer io.Writer, payload []byte) error {
+	for len(payload) > 0 {
+		written, err := writer.Write(payload)
+		if err != nil {
+			return err
+		}
+		if written == 0 {
+			return io.ErrShortWrite
+		}
+		payload = payload[written:]
+	}
+	return nil
+}
 
 // SessionKind identifies the admitted data-plane operation.
 type SessionKind byte

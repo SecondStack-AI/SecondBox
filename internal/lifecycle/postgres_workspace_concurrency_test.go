@@ -48,6 +48,7 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 		Execution: contracts.ExecutionPolicy{
 			MaximumDeadlineMilliseconds: 60000,
 			MaximumBufferedOutputBytes:  1 << 20,
+			DataPlaneTransport:          contracts.DataPlaneTransportProxied,
 		},
 		Network: contracts.NetworkPolicy{
 			Mode:         "deny_all",

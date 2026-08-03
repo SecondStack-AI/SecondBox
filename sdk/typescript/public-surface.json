@@ -258,6 +258,7 @@
   },
   "ExecutionPolicy": {
     "required": [
+      "dataPlaneTransport",
       "maximumBufferedOutputBytes",
       "maximumDeadlineMilliseconds",
       "maximumTransferBytes",

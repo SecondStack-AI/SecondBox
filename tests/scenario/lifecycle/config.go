@@ -64,23 +64,24 @@ type runnerLimits struct {
 }
 
 type profileLimits struct {
-	CPUMillis                   int64 `json:"cpuMillis"`
-	MemoryBytes                 int64 `json:"memoryBytes"`
-	WorkspaceBytes              int64 `json:"workspaceBytes"`
-	ProcessLimit                int64 `json:"processLimit"`
-	ConcurrentOperations        int64 `json:"concurrentOperations"`
-	DrainGraceSeconds           int64 `json:"drainGraceSeconds"`
-	IdleSeconds                 int64 `json:"idleSeconds"`
-	MaximumDurationSeconds      int64 `json:"maximumDurationSeconds"`
-	LeaseSeconds                int64 `json:"leaseSeconds"`
-	SnapshotLimit               int64 `json:"snapshotLimit"`
-	SnapshotRetentionSeconds    int64 `json:"snapshotRetentionSeconds"`
-	ArtifactRetentionSeconds    int64 `json:"artifactRetentionSeconds"`
-	MaximumDeadlineMilliseconds int64 `json:"maximumDeadlineMilliseconds"`
-	MaximumBufferedOutputBytes  int64 `json:"maximumBufferedOutputBytes"`
-	StreamWindowBytes           int64 `json:"streamWindowBytes"`
-	MaximumTransferBytes        int64 `json:"maximumTransferBytes"`
-	TerminalDetachSeconds       int64 `json:"terminalDetachSeconds"`
+	CPUMillis                   int64  `json:"cpuMillis"`
+	MemoryBytes                 int64  `json:"memoryBytes"`
+	WorkspaceBytes              int64  `json:"workspaceBytes"`
+	ProcessLimit                int64  `json:"processLimit"`
+	ConcurrentOperations        int64  `json:"concurrentOperations"`
+	DrainGraceSeconds           int64  `json:"drainGraceSeconds"`
+	IdleSeconds                 int64  `json:"idleSeconds"`
+	MaximumDurationSeconds      int64  `json:"maximumDurationSeconds"`
+	LeaseSeconds                int64  `json:"leaseSeconds"`
+	SnapshotLimit               int64  `json:"snapshotLimit"`
+	SnapshotRetentionSeconds    int64  `json:"snapshotRetentionSeconds"`
+	ArtifactRetentionSeconds    int64  `json:"artifactRetentionSeconds"`
+	MaximumDeadlineMilliseconds int64  `json:"maximumDeadlineMilliseconds"`
+	MaximumBufferedOutputBytes  int64  `json:"maximumBufferedOutputBytes"`
+	StreamWindowBytes           int64  `json:"streamWindowBytes"`
+	MaximumTransferBytes        int64  `json:"maximumTransferBytes"`
+	TerminalDetachSeconds       int64  `json:"terminalDetachSeconds"`
+	DataPlaneTransport          string `json:"dataPlaneTransport"`
 }
 
 // hostRailConfig bounds what a run may do to the machine it runs on. The block
@@ -312,6 +313,10 @@ func validateLifecycleConfig(config lifecycleConfig) error {
 	}
 	if config.Profile.MemoryBytes < 1 {
 		return errors.New("SecondBox lifecycle configuration requires a positive profile.memoryBytes")
+	}
+	if config.Profile.DataPlaneTransport != "proxied" &&
+		config.Profile.DataPlaneTransport != "direct" {
+		return errors.New("SecondBox lifecycle profile.dataPlaneTransport must be proxied or direct")
 	}
 	if config.SubjectMaxActiveInstances < 1 {
 		return errors.New("SecondBox lifecycle configuration requires a positive subjectMaxActiveInstances")
