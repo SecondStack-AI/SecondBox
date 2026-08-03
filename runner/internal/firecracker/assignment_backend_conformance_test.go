@@ -87,6 +87,10 @@ func TestAssignmentBackendRejectsImmutableAssetSubstitution(t *testing.T) {
 }
 
 func TestReadinessEvidenceHelpers(t *testing.T) {
+	if !firecrackerJailerReady(&config.Config{}) ||
+		firecrackerJailerReady(&config.Config{MicroVMAllowUnjailed: true}) {
+		t.Fatal("Jailer readiness does not reflect unjailed mode")
+	}
 	if !containsSpaceSeparated("cpu io memory pids", "memory") ||
 		containsSpaceSeparated("cpu memory", "mem") {
 		t.Fatal("cgroup controller matching is not token-exact")

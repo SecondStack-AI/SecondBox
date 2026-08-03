@@ -1,10 +1,12 @@
 package firecracker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -2044,6 +2046,30 @@ func TestNewFailsClosedWhenFirecrackerMissing(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "firecracker") {
 		t.Fatalf("expected missing firecracker error, got %v", err)
+	}
+}
+
+func TestUnjailedModeEmitsExplicitSecurityWarning(t *testing.T) {
+	previousLogger := slog.Default()
+	var output bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&output, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	warnIfFirecrackerUnjailed(false)
+	if output.Len() != 0 {
+		t.Fatalf("jailed mode warning output = %q", output.String())
+	}
+	warnIfFirecrackerUnjailed(true)
+	warning := output.String()
+	for _, required := range []string{
+		"level=WARN",
+		"SECURITY WARNING: Firecracker unjailed mode is enabled",
+		"SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED=true",
+		"chroot,pid-namespace,cgroup,uid-drop",
+	} {
+		if !strings.Contains(warning, required) {
+			t.Fatalf("unjailed warning missing %q: %s", required, warning)
+		}
 	}
 }
 
