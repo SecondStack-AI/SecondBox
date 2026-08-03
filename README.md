@@ -232,7 +232,7 @@ The external scenario gate joins the HTTP API, PostgreSQL, object storage, the r
 SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1 just test-scenario
 ```
 
-See [scenario qualification](docs/operations/scenario-qualification.md) for setup, evidence, and timing budgets. A release is a Git tag on a commit whose CI run passed.
+See [scenario qualification](docs/operations/scenario-qualification.md) for setup, evidence, and timing budgets. Every commit admitted to `main` must pass the GitHub-hosted CI workflow. A release is a Git tag on a commit that also passed the separate scenario qualification workflow on a qualified host.
 
 ## Security
 
