@@ -70,6 +70,22 @@ just test-scenario
 
 For CI, configure the four path and fingerprint values as repository or organization variables and attach the labels `self-hosted`, `linux`, `x64`, and `secondbox-kvm` only to hosts satisfying this document. The workflow sets `SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1`.
 
+## Register the qualification runner
+
+The qualified suite runs from the dedicated `scenario-qualification` workflow on its nightly schedule or by manual dispatch. It requires a repository-level self-hosted runner registered to `SecondStack-AI/SecondBox` with the labels `self-hosted`, `linux`, `x64`, and `secondbox-kvm`.
+
+An administrator can obtain a short-lived registration token with `gh` and configure an installed GitHub Actions runner from its installation directory:
+
+```sh
+registration_token="$(gh api --method POST repos/SecondStack-AI/SecondBox/actions/runners/registration-token --jq .token)"
+./config.sh \
+  --url https://github.com/SecondStack-AI/SecondBox \
+  --token "$registration_token" \
+  --labels secondbox-kvm
+```
+
+The equivalent settings path is **SecondStack-AI/SecondBox → Settings → Actions → Runners → New self-hosted runner**. GitHub adds the default `self-hosted`, `Linux`, and `X64` labels; label matching is case-insensitive. Runners registered to other repositories, including repositories in the same organization, are not visible to or usable by SecondBox.
+
 ## Evidence and timing budgets
 
 Preserve the beginning and end of the command output. A qualified run prints:

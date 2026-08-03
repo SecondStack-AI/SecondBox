@@ -96,12 +96,12 @@ func TestDockerBuildContextExcludesLocalSecondBoxState(t *testing.T) {
 	}
 }
 
-func TestScenarioQualificationCIRequiresSelfHostedKVM(t *testing.T) {
-	workflow := readRepositoryFile(t, ".github/workflows/ci.yml")
+func TestScenarioQualificationWorkflowRequiresSelfHostedKVM(t *testing.T) {
+	workflow := readRepositoryFile(t, ".github/workflows/scenario-qualification.yml")
 	const jobMarker = "  scenario-qualification:\n"
 	jobStart := strings.Index(workflow, jobMarker)
 	if jobStart == -1 {
-		t.Fatal("CI workflow must define the scenario-qualification job")
+		t.Fatal("scenario qualification workflow must define the scenario-qualification job")
 	}
 	scenarioJob := workflow[jobStart:]
 	for _, required := range []string{
@@ -126,8 +126,20 @@ func TestScenarioQualificationCIRequiresSelfHostedKVM(t *testing.T) {
 			t.Errorf("scenario qualification CI job must not contain %q", forbidden)
 		}
 	}
-	if !strings.Contains(workflow, "run: just test-non-kvm") ||
-		!strings.Contains(workflow, "runs-on: ubuntu-latest") {
+	for _, forbidden := range []string{
+		"\n  pull_request:",
+		"\n  push:",
+	} {
+		if strings.Contains(workflow, forbidden) {
+			t.Errorf("scenario qualification workflow must not contain trigger %q", strings.TrimSpace(forbidden))
+		}
+	}
+	ciWorkflow := readRepositoryFile(t, ".github/workflows/ci.yml")
+	if strings.Contains(ciWorkflow, jobMarker) {
+		t.Fatal("CI workflow must not define the scenario-qualification job")
+	}
+	if !strings.Contains(ciWorkflow, "run: just test-non-kvm") ||
+		!strings.Contains(ciWorkflow, "runs-on: ubuntu-latest") {
 		t.Fatal("portable non-KVM CI gate must remain on a GitHub-hosted runner")
 	}
 }
