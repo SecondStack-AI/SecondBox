@@ -8,6 +8,7 @@ mkdir -p "$output_dir"
 
 cd "$repo_root"
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o "$output_dir/secondbox" ./cmd/secondbox
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o "$output_dir/secondbox-deploy" ./cmd/secondbox-deploy
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o "$output_dir/secondboxd" ./cmd/secondboxd
 
 cd "$repo_root/runner"
@@ -20,6 +21,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -o "$ou
   sha256sum \
     secondbox \
     secondbox-artifact-evidence \
+    secondbox-deploy \
     secondbox-guest-agent \
     secondbox-runner \
     secondboxd > SHA256SUMS

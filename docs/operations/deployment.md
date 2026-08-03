@@ -2,6 +2,8 @@
 
 SecondBox deploys one unprivileged control plane and separately managed privileged Firecracker Runners. Operators describe the deployment in one strict, versioned `secondbox.toml`; `secondbox-deploy` compiles that manifest into the process environments consumed by Compose, `secondboxd`, and remote Runner service managers. The generated environment is transport, not operator input.
 
+The standalone binary distribution includes `secondbox-deploy`; the commands below assume it is on `PATH`. The `Justfile` continues to use `go run ./cmd/secondbox-deploy` as a source-checkout developer path.
+
 ## One-command development control plane
 
 From a clean checkout:
@@ -39,8 +41,8 @@ Unknown keys, duplicate keys, unsupported schema versions, ambiguous bundled/ext
 Validate and inspect without rendering:
 
 ```sh
-go run ./cmd/secondbox-deploy validate /secure/secondbox/secondbox.toml
-go run ./cmd/secondbox-deploy inspect /secure/secondbox/secondbox.toml
+secondbox-deploy validate /secure/secondbox/secondbox.toml
+secondbox-deploy inspect /secure/secondbox/secondbox.toml
 ```
 
 `inspect` prints all resolved non-secret values, positive help for the relay-retention policy, and all 19 available tuning overrides with their compiled defaults. Secret values and secret-revealing paths are redacted.
@@ -85,7 +87,7 @@ An incomplete production initialization is intentionally unusable and reports ev
 Automation can materialize a complete create-only target non-interactively after generating and reviewing the same typed input:
 
 ```sh
-go run ./cmd/secondbox-deploy init --mode production \
+secondbox-deploy init --mode production \
   --input /automation/complete-production.toml \
   /secure/secondbox-deployment
 ```
@@ -97,7 +99,7 @@ No generated development authority is accepted as a production default. Any depe
 Render explicitly when handing the environment to another tool:
 
 ```sh
-go run ./cmd/secondbox-deploy render \
+secondbox-deploy render \
   --output /secure/secondbox-deployment/.secondbox.generated.env \
   /secure/secondbox-deployment/secondbox.toml
 ```
@@ -123,7 +125,7 @@ Every `[[runners]]` entry is keyed by immutable `runner_id`. At most one may use
 Issue one declared identity and protected environment handoff:
 
 ```sh
-go run ./cmd/secondbox-deploy runner-init \
+secondbox-deploy runner-init \
   /secure/secondbox-deployment/secondbox.toml \
   runner-east-1 \
   /secure/handoffs/runner-east-1
@@ -138,7 +140,7 @@ Create RunnerPools through the platform API before starting their Runners. A Pro
 The former editable environment interface is intentionally replaced. Migrate one already validated legacy environment without modifying it:
 
 ```sh
-go run ./cmd/secondbox-deploy migrate \
+secondbox-deploy migrate \
   /secure/legacy/secondbox.env \
   /secure/secondbox-deployment
 ```

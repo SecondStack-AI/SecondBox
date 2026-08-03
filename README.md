@@ -25,25 +25,78 @@ A **Sandbox** is the durable public resource; the **Instance** running it is rep
 
 ## Getting started
 
-### 1. Deploy a control plane
+### Prerequisites
+
+Executing a Sandbox requires:
+
+- a Linux Runner host with KVM and TUN;
+- cgroup v2;
+- a workspace root on an XFS or Btrfs filesystem with reflink support; ext4 and ZFS do not work;
+- a signed microVM bundle built, verified, and materialized as described by the [microVM image pipeline](docs/operations/microvm-image-pipeline.md);
+- an enrolled Runner and a Profile that pins that bundle's runtime and toolchain digests.
+
+These requirements are inherent to running hardware-isolated Firecracker microVMs. The development topology starts the control plane, PostgreSQL, and object storage. It does not start a Runner, so `secondbox run` will not succeed until a Runner is enrolled in a ready RunnerPool.
+
+### Shortest same-host path
+
+On a qualified host, the shortest existing deployment path uses [`deploy/compose.same-host-runner.yml`](deploy/compose.same-host-runner.yml). `secondbox-deploy` selects that overlay when the manifest contains one Runner with `placement = "same-host"` and preflights its host directories, dedicated workspace filesystem, and enrolled identity before Compose starts it.
+
+1. Obtain and independently verify the signed microVM bundle. Materialize its files and trusted public key in the Runner artifact host directory, construct the verified signed-asset catalog, and record the runtime and toolchain component digests.
+2. Initialize the development deployment:
+
+   ```sh
+   just deploy-init-development .tmp/secondbox-development
+   ```
+
+   Replace the development bootstrap catalog and built-in Profile digest pins in `secondbox.toml` with the verified catalog and component digests. Keep `runners = []` for the first start.
+3. Start the control plane, PostgreSQL, and object storage:
+
+   ```sh
+   just deploy-development-up .tmp/secondbox-development
+   ```
+
+4. Install the CLI, log in with the generated platform authority, and create a ready RunnerPool through the platform API. Its name must match both the built-in Profile pool and the Runner's `pool_id`; its architecture and capabilities must admit `amd64`, `compute`, and `local-workspace`.
+5. Add one explicit `[[runners]]` entry with `placement = "same-host"` to `secondbox.toml`. Supply every identity, artifact, state, workspace, Firecracker, network, capacity, and data-plane value; create the declared artifact, state, and workspace host directories, but leave the identity target absent. The workspace host directory must be on the dedicated XFS or Btrfs filesystem.
+6. Build the declared Runner image and issue the declared Runner identity:
+
+   ```sh
+   docker build --file runner/Dockerfile --tag secondbox-runner:development .
+   secondbox-deploy runner-init \
+     .tmp/secondbox-development/secondbox.toml \
+     <runner-id> \
+     <identity-host-directory>
+   ```
+
+7. Validate and apply the expanded topology. This selects the privileged same-host overlay and starts the Runner only after the host preflight passes:
+
+   ```sh
+   secondbox-deploy validate .tmp/secondbox-development/secondbox.toml
+   just deploy-up .tmp/secondbox-development/secondbox.toml
+   ```
+
+8. Confirm the Runner is ready with `secondbox runners get --path runnerId=<runner-id>`, then run the pinned built-in Profile:
+
+   ```sh
+   secondbox run coding-environment -- python3 -c 'print("hello from a microVM")'
+   ```
+
+The repository does not currently provide a complete same-host `[[runners]]` example or a command that converts a signed microVM bundle into the deployment signed-asset catalog and built-in Profile pins. Those explicit operator inputs remain an undocumented setup gap; do not use the generated development bootstrap digests as execution assets. See [deployment and runtime operations](docs/operations/deployment.md), [the deployment manifest](deploy/secondbox.example.toml), and [the Firecracker runtime](docs/operations/firecracker-runtime.md) for the validated fields and runtime invariants.
+
+### Control-plane-only start
 
 ```sh
 just deploy-development-up .tmp/secondbox-development
 ```
 
-This creates one private, versioned `secondbox.toml`, generates unique referenced secrets, compiles a protected environment transport, and starts the reviewed loopback PostgreSQL, object-store, and control-plane topology. The generated environment is never operator input. Read [deployment and runtime operations](docs/operations/deployment.md) before exposing the API, configuring production, or enrolling a Runner.
+This creates one private, versioned `secondbox.toml`, generates unique referenced secrets, compiles a protected environment transport, and starts the reviewed loopback PostgreSQL, object-store, and control-plane topology. The generated environment is never operator input. This topology is useful for control-plane development and API work, but it cannot execute a Sandbox. Read [deployment and runtime operations](docs/operations/deployment.md) before exposing the API, configuring production, or enrolling a Runner.
 
-### 2. Give it somewhere to run
-
-A control plane with no runner admits Sandboxes that can never be placed. You need a RunnerPool, an enrolled Runner, and a Profile that pins verified execution assets. SecondBox ships two built-in Profiles, `agent-compartment` and `coding-environment`, whose pool and bundle digests you supply explicitly — see [built-in Profiles](docs/operations/deployment.md#built-in-profiles) and [the Firecracker runtime](docs/operations/firecracker-runtime.md).
-
-### 3. Install the CLI
+### Install the CLI
 
 ```sh
 go build -o ./dist/secondbox ./cmd/secondbox
 ```
 
-### 4. Log in once
+### Log in once
 
 ```sh
 secondbox login \
@@ -55,7 +108,7 @@ secondbox login \
 
 Credentials are verified against the deployment before anything is written, then stored at mode `0600`. Every later command resolves them from the first source that has them: an explicit flag, then `SECONDBOX_URL` / `SECONDBOX_TOKEN` / `SECONDBOX_TENANT_REF` / `SECONDBOX_SUBJECT_REF`, then that file. `secondbox whoami` shows what resolved and from where; it never prints the token.
 
-### 5. Run something
+### Run something
 
 ```sh
 secondbox run coding-environment -- python3 -c 'print("hello from a microVM")'
