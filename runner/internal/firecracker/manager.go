@@ -1633,14 +1633,6 @@ func (m *Manager) Resume(ctx context.Context, instanceID string) error {
 	return inst.apiClient(5 * time.Second).Resume(ctx)
 }
 
-func (m *Manager) requestGuestShutdown(ctx context.Context, instanceID string) error {
-	inst := m.lookup(instanceID)
-	if inst == nil {
-		return fmt.Errorf("unknown microVM instance %q", instanceID)
-	}
-	return inst.apiClient(5 * time.Second).SendCtrlAltDel(ctx)
-}
-
 func (m *Manager) CreateFullSnapshot(ctx context.Context, instanceID, snapshotPath, memFilePath string) error {
 	inst := m.lookup(instanceID)
 	if inst == nil {

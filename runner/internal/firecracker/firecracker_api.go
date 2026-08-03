@@ -69,15 +69,6 @@ func (c FirecrackerAPIClient) Resume(ctx context.Context) error {
 	return c.patchJSON(ctx, "/vm", vmStateRequest{State: "Resumed"}, nil)
 }
 
-func (c FirecrackerAPIClient) SendCtrlAltDel(ctx context.Context) error {
-	return c.putJSON(
-		ctx,
-		"/actions",
-		instanceActionRequest{ActionType: "SendCtrlAltDel"},
-		nil,
-	)
-}
-
 func (c FirecrackerAPIClient) CreateFullSnapshot(ctx context.Context, snapshotPath, memFilePath string) error {
 	req := snapshotCreateRequest{
 		SnapshotType: "Full",
