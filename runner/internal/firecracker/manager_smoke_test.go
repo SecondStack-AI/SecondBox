@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -894,7 +895,7 @@ func TestSmokeRunnerLocalLifecycleStopPaths(t *testing.T) {
 			)
 		}
 		if cause == "guest-shutdown" {
-			if err := manager.requestGuestShutdown(ctx, instanceID); err != nil {
+			if err := requestGuestShutdown(ctx, manager, instanceID); err != nil {
 				t.Fatalf(
 					"request guest shutdown: %v\n%s",
 					err,
@@ -955,6 +956,41 @@ func TestSmokeRunnerLocalLifecycleStopPaths(t *testing.T) {
 	for _, cause := range causes {
 		readMarker(instanceID, logPath, cause)
 	}
+}
+
+// requestGuestShutdown makes the guest disappear the way a real guest-initiated
+// stop does, so the runner observes an exit it did not request.
+//
+// Firecracker's SendCtrlAltDel cannot do this against the SecondBox guest. The
+// guest init is a shell running as PID 1 and installs no Ctrl+Alt+Del handler,
+// and the kernel's boot default is LINUX_REBOOT_CMD_CAD_OFF, so the action only
+// delivers SIGINT to PID 1 — which PID 1 ignores when it has no handler
+// installed. The microVM stays up and the caller waits for a stop that never
+// arrives. Resetting through sysrq bypasses PID 1 entirely and is deterministic.
+//
+// The write is explicitly enabled first because /proc/sys/kernel/sysrq may ship
+// a restrictive mask that silently drops the reboot request, and it is detached
+// behind a short delay so this tool call can return its response before the
+// guest goes away.
+func requestGuestShutdown(ctx context.Context, manager *Manager, instanceID string) error {
+	inst := manager.lookup(instanceID)
+	if inst == nil {
+		return fmt.Errorf("unknown microVM instance %q", instanceID)
+	}
+	response, err := inst.controlClient(5*time.Second).ExecuteTool(ctx, ToolExecRequest{
+		Operation: ToolOpExec,
+		Command:   "setsid",
+		Args: []string{"-f", "sh", "-c",
+			"exec >/dev/null 2>&1; echo 1 > /proc/sys/kernel/sysrq; sleep 1; echo b > /proc/sysrq-trigger"},
+		TimeoutMillis: 5_000,
+	})
+	if err != nil {
+		return fmt.Errorf("request guest shutdown: %w", err)
+	}
+	if response.ExitCode != 0 {
+		return fmt.Errorf("request guest shutdown exited with status %d: %s", response.ExitCode, strings.TrimSpace(response.Stderr))
+	}
+	return nil
 }
 
 func smokeProcessIO(t *testing.T) (uint64, uint64) {

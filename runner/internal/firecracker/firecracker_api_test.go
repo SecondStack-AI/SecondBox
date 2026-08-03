@@ -35,11 +35,8 @@ func TestFirecrackerAPIClientSnapshotAndMMDS(t *testing.T) {
 	if err := client.Resume(ctx); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
-	if err := client.SendCtrlAltDel(ctx); err != nil {
-		t.Fatalf("send ctrl-alt-del: %v", err)
-	}
 
-	calls := drainAPICalls(seen, 6)
+	calls := drainAPICalls(seen, 5)
 	if calls[0].Path != "/vm" || calls[0].Method != http.MethodPatch || calls[0].Body["state"] != "Paused" {
 		t.Fatalf("pause call = %#v", calls[0])
 	}
@@ -54,11 +51,6 @@ func TestFirecrackerAPIClientSnapshotAndMMDS(t *testing.T) {
 	}
 	if calls[4].Path != "/vm" || calls[4].Method != http.MethodPatch || calls[4].Body["state"] != "Resumed" {
 		t.Fatalf("resume call = %#v", calls[4])
-	}
-	if calls[5].Path != "/actions" ||
-		calls[5].Method != http.MethodPut ||
-		calls[5].Body["action_type"] != "SendCtrlAltDel" {
-		t.Fatalf("send ctrl-alt-del call = %#v", calls[5])
 	}
 }
 
