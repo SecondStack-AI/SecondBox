@@ -10,6 +10,7 @@ export type JSONValue =
 
 export interface AcquireLeaseRequest {
   readonly durationSeconds: number;
+  readonly replaceActive?: boolean;
 }
 
 export interface ArgvCommand {

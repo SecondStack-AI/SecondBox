@@ -2388,7 +2388,10 @@
         "type": "object",
         "additionalProperties": false,
         "required": ["durationSeconds"],
-        "properties": {"durationSeconds": {"type": "integer", "minimum": 1, "maximum": 86400}}
+        "properties": {
+          "durationSeconds": {"type": "integer", "minimum": 1, "maximum": 86400},
+          "replaceActive": {"type": "boolean"}
+        }
       },
       "RenewLeaseRequest": {
         "type": "object",
