@@ -6,9 +6,9 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 scripts/verify-runner-protocol-generated.sh
 scripts/verify-guest-protocol-generated.sh
 scripts/verify-portdirect-mirrored.sh
+scripts/verify-sdk-generated.sh
 go test ./internal/deployconfig -run TestExampleManifestIsGeneratedFromTheRegistry -count=1
 go test ./sdk/go/secondboxclient
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=sdk/python python3 -m unittest discover -s sdk/python -p 'test_*.py'
 
 if [[ ! -x node_modules/.bin/tsc ]]; then
   echo "SecondBox TypeScript validation requires npm ci --ignore-scripts" >&2

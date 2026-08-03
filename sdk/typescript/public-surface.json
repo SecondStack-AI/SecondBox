@@ -1,31 +1,34 @@
 {
-  "Problem": {
+  "AcquireLeaseRequest": {
     "required": [
-      "code",
-      "requestId",
-      "retryable",
-      "status",
-      "title",
-      "type"
-    ],
-    "optional": [
-      "retryAfterMilliseconds"
-    ]
-  },
-  "Sandbox": {
-    "required": [
-      "desiredState",
-      "generation",
-      "id",
-      "metadata",
-      "profile",
-      "profileRevisionId",
-      "revision",
-      "state"
+      "durationSeconds"
     ],
     "optional": []
   },
-  "SandboxPage": {
+  "ArgvCommand": {
+    "required": [
+      "arguments",
+      "executable",
+      "mode"
+    ],
+    "optional": []
+  },
+  "Artifact": {
+    "required": [
+      "createdAt",
+      "expiresAt",
+      "generation",
+      "id",
+      "mediaType",
+      "metadata",
+      "name",
+      "sandboxId",
+      "sha256",
+      "sizeBytes"
+    ],
+    "optional": []
+  },
+  "ArtifactPage": {
     "required": [
       "items"
     ],
@@ -33,108 +36,90 @@
       "nextCursor"
     ]
   },
-  "Operation": {
+  "BootStageTiming": {
     "required": [
-      "id",
-      "kind",
-      "requestId",
-      "sandboxId",
-      "state"
+      "cumulativeMilliseconds",
+      "elapsedMilliseconds",
+      "observedAt",
+      "receivedAt",
+      "stage"
     ],
-    "optional": [
-      "error",
-      "sandbox",
-      "snapshot"
-    ]
+    "optional": []
   },
-  "Snapshot": {
+  "BootStageTimingSummary": {
     "required": [
-      "createdAt",
+      "duration",
+      "stage"
+    ],
+    "optional": []
+  },
+  "BootTiming": {
+    "required": [
+      "completed",
+      "durationMilliseconds",
       "generation",
-      "id",
-      "metadata",
-      "name",
-      "sandboxId",
-      "sizeBytes",
-      "state"
-    ],
-    "optional": [
-      "expiresAt"
-    ]
-  },
-  "Project": {
-    "required": [
-      "id",
-      "name"
+      "stages"
     ],
     "optional": []
   },
-  "Profile": {
-    "required": [
-      "currentRevision",
-      "name"
-    ],
-    "optional": []
-  },
-  "ServiceAccount": {
-    "required": [
-      "id",
-      "projectId"
-    ],
-    "optional": []
-  },
-  "CreateAPIKeyResponse": {
-    "required": [
-      "apiKey",
-      "credential"
-    ],
-    "optional": []
-  },
-  "ProfileRevisionSpec": {
-    "required": [
-      "architecture",
-      "execution",
-      "lifecycle",
-      "network",
-      "pool",
-      "ports",
-      "resources",
-      "retention",
-      "runtimeBundleDigest",
-      "toolchainBundleDigest"
-    ],
-    "optional": []
-  },
-  "WaitSandboxRequest": {
-    "required": [
-      "deadlineMilliseconds",
-      "states"
-    ],
-    "optional": []
-  },
-  "RestoreSnapshotRequest": {
-    "required": [
-      "snapshotId"
-    ],
-    "optional": []
-  },
-  "UpdateSandboxMetadataRequest": {
-    "required": [
-      "metadata"
-    ],
-    "optional": []
-  },
-  "StreamingExecRequest": {
+  "BufferedExecRequest": {
     "required": [
       "command",
       "deadlineMilliseconds",
       "environment",
-      "maximumOutputBytes",
-      "windowBytes"
+      "maximumOutputBytes"
     ],
     "optional": [
-      "cwd"
+      "cwd",
+      "stdinBase64"
     ]
+  },
+  "CreateDirectoryRequest": {
+    "required": [
+      "path",
+      "recursive"
+    ],
+    "optional": []
+  },
+  "CreatePortSessionRequest": {
+    "required": [
+      "durationSeconds",
+      "name"
+    ],
+    "optional": []
+  },
+  "CreateProfileRequest": {
+    "required": [
+      "name",
+      "spec"
+    ],
+    "optional": []
+  },
+  "CreateRunnerPoolRequest": {
+    "required": [
+      "architectures",
+      "capabilities",
+      "capacityPolicy",
+      "name",
+      "state"
+    ],
+    "optional": []
+  },
+  "CreateSandboxRequest": {
+    "required": [
+      "metadata",
+      "profile"
+    ],
+    "optional": [
+      "sourceSnapshotId"
+    ]
+  },
+  "CreateSnapshotRequest": {
+    "required": [
+      "metadata",
+      "name"
+    ],
+    "optional": []
   },
   "CreateTerminalRequest": {
     "required": [
@@ -149,10 +134,297 @@
       "cwd"
     ]
   },
-  "CreatePortSessionRequest": {
+  "DeploymentTimingSummary": {
     "required": [
-      "durationSeconds",
-      "name"
+      "api",
+      "apiSeries",
+      "boot",
+      "bootStages",
+      "exec",
+      "execSeries",
+      "observedAt",
+      "operations",
+      "windowSeconds"
+    ],
+    "optional": [
+      "dominantBootStage"
+    ]
+  },
+  "DirectoryListing": {
+    "required": [
+      "entries",
+      "path"
+    ],
+    "optional": []
+  },
+  "DurationPercentiles": {
+    "required": [
+      "count"
+    ],
+    "optional": [
+      "p50Milliseconds",
+      "p95Milliseconds",
+      "p99Milliseconds"
+    ]
+  },
+  "ExecCancelled": {
+    "required": [
+      "kind",
+      "output"
+    ],
+    "optional": []
+  },
+  "ExecDeadlineExceeded": {
+    "required": [
+      "elapsedMilliseconds",
+      "kind",
+      "output"
+    ],
+    "optional": []
+  },
+  "ExecExited": {
+    "required": [
+      "elapsedMilliseconds",
+      "exitCode",
+      "kind",
+      "output"
+    ],
+    "optional": [
+      "signal"
+    ]
+  },
+  "ExecInfrastructureFailed": {
+    "required": [
+      "kind",
+      "message",
+      "reason",
+      "retryable"
+    ],
+    "optional": []
+  },
+  "ExecOutput": {
+    "required": [
+      "stderrBase64",
+      "stdoutBase64"
+    ],
+    "optional": []
+  },
+  "ExecOutputExhausted": {
+    "required": [
+      "kind",
+      "limitBytes",
+      "output"
+    ],
+    "optional": []
+  },
+  "ExecSpawnFailed": {
+    "required": [
+      "kind",
+      "message",
+      "reason"
+    ],
+    "optional": []
+  },
+  "ExecStreamSession": {
+    "required": [
+      "expiresAt",
+      "generation",
+      "id",
+      "sandboxId",
+      "state",
+      "subprotocol",
+      "websocketUrl"
+    ],
+    "optional": []
+  },
+  "ExecTiming": {
+    "required": [
+      "completedAt",
+      "createdAt",
+      "elapsedMilliseconds",
+      "mode",
+      "outcome",
+      "sessionId"
+    ],
+    "optional": []
+  },
+  "ExecTimingSummary": {
+    "required": [
+      "duration",
+      "mode",
+      "outcome"
+    ],
+    "optional": []
+  },
+  "ExecutionPolicy": {
+    "required": [
+      "maximumBufferedOutputBytes",
+      "maximumDeadlineMilliseconds",
+      "maximumTransferBytes",
+      "streamWindowBytes",
+      "terminalDetachSeconds"
+    ],
+    "optional": []
+  },
+  "FileExistsResult": {
+    "required": [
+      "exists",
+      "path"
+    ],
+    "optional": []
+  },
+  "FileStat": {
+    "required": [
+      "kind",
+      "modifiedAt",
+      "path",
+      "sizeBytes"
+    ],
+    "optional": []
+  },
+  "FileWriteResult": {
+    "required": [
+      "path",
+      "sha256",
+      "sizeBytes"
+    ],
+    "optional": []
+  },
+  "HTTPRouteTimingSummary": {
+    "required": [
+      "duration",
+      "route",
+      "statusClass"
+    ],
+    "optional": []
+  },
+  "Instance": {
+    "required": [
+      "createdAt",
+      "generation",
+      "guestLiveness",
+      "id",
+      "sandboxId",
+      "state",
+      "updatedAt"
+    ],
+    "optional": [
+      "guestHeartbeatAt",
+      "readyAt",
+      "stoppedAt",
+      "terminationReason"
+    ]
+  },
+  "Lease": {
+    "required": [
+      "createdAt",
+      "expiresAt",
+      "generation",
+      "id",
+      "sandboxId",
+      "state",
+      "updatedAt"
+    ],
+    "optional": []
+  },
+  "LifecyclePolicy": {
+    "required": [
+      "drainGraceSeconds",
+      "idleSeconds",
+      "initialState",
+      "leaseSeconds",
+      "maximumDurationSeconds"
+    ],
+    "optional": []
+  },
+  "NetworkDestination": {
+    "required": [
+      "port",
+      "protocol"
+    ],
+    "optional": [
+      "cidr",
+      "domain"
+    ]
+  },
+  "NetworkPolicy": {
+    "required": [
+      "destinations",
+      "mode"
+    ],
+    "optional": []
+  },
+  "Operation": {
+    "required": [
+      "createdAt",
+      "id",
+      "kind",
+      "requestId",
+      "sandboxId",
+      "state",
+      "updatedAt"
+    ],
+    "optional": [
+      "completedAt",
+      "error",
+      "sandbox",
+      "snapshot",
+      "startedAt"
+    ]
+  },
+  "OperationStageTiming": {
+    "required": [
+      "cumulativeMilliseconds",
+      "elapsedMilliseconds",
+      "observedAt",
+      "stage"
+    ],
+    "optional": []
+  },
+  "OperationTiming": {
+    "required": [
+      "boots",
+      "createdAt",
+      "kind",
+      "operationId",
+      "orchestration",
+      "sandboxId",
+      "state"
+    ],
+    "optional": [
+      "completedAt",
+      "executionMilliseconds",
+      "queueMilliseconds",
+      "startedAt",
+      "totalMilliseconds"
+    ]
+  },
+  "OperationTimingSummary": {
+    "required": [
+      "execution",
+      "kind",
+      "queue",
+      "state",
+      "total"
+    ],
+    "optional": []
+  },
+  "PingResult": {
+    "required": [
+      "generation",
+      "healthy",
+      "observedAt",
+      "sandboxId"
+    ],
+    "optional": []
+  },
+  "PortPolicy": {
+    "required": [
+      "maximumSessionSeconds",
+      "maximumSessions",
+      "name",
+      "port",
+      "protocol"
     ],
     "optional": []
   },
@@ -171,27 +443,324 @@
     ],
     "optional": []
   },
-  "Lease": {
+  "Problem": {
+    "required": [
+      "code",
+      "requestId",
+      "retryable",
+      "status",
+      "title",
+      "type"
+    ],
+    "optional": [
+      "details",
+      "retryAfterMilliseconds"
+    ]
+  },
+  "ProblemDetail": {
+    "required": [
+      "field",
+      "reason"
+    ],
+    "optional": []
+  },
+  "Profile": {
     "required": [
       "createdAt",
-      "expiresAt",
-      "generation",
-      "id",
-      "sandboxId",
+      "currentRevision",
+      "name",
+      "revision",
       "state",
       "updatedAt"
     ],
     "optional": []
   },
-  "ExecStreamSession": {
+  "ProfilePage": {
     "required": [
-      "expiresAt",
+      "items"
+    ],
+    "optional": [
+      "nextCursor"
+    ]
+  },
+  "ProfileRevision": {
+    "required": [
+      "createdAt",
+      "id",
+      "number",
+      "spec"
+    ],
+    "optional": []
+  },
+  "ProfileRevisionSpec": {
+    "required": [
+      "architecture",
+      "execution",
+      "lifecycle",
+      "network",
+      "pool",
+      "ports",
+      "resources",
+      "retention",
+      "runtimeBundleDigest",
+      "toolchainBundleDigest"
+    ],
+    "optional": []
+  },
+  "RemovePathRequest": {
+    "required": [
+      "force",
+      "path",
+      "recursive"
+    ],
+    "optional": []
+  },
+  "RenewLeaseRequest": {
+    "required": [
+      "durationSeconds"
+    ],
+    "optional": []
+  },
+  "ResourcePolicy": {
+    "required": [
+      "concurrentOperations",
+      "cpuMillis",
+      "memoryBytes",
+      "processLimit",
+      "workspaceBytes"
+    ],
+    "optional": []
+  },
+  "RestoreSnapshotRequest": {
+    "required": [
+      "snapshotId"
+    ],
+    "optional": []
+  },
+  "RetentionPolicy": {
+    "required": [
+      "artifactRetentionSeconds",
+      "snapshotLimit",
+      "snapshotRetentionSeconds"
+    ],
+    "optional": []
+  },
+  "ReviseProfileRequest": {
+    "required": [
+      "spec"
+    ],
+    "optional": []
+  },
+  "Runner": {
+    "required": [
+      "architectures",
+      "capabilities",
+      "capacity",
+      "createdAt",
+      "credentialState",
+      "id",
+      "name",
+      "poolName",
+      "protocolVersions",
+      "revision",
+      "sandboxStartP95Milliseconds",
+      "sandboxStartSampleCount",
+      "state",
+      "updatedAt"
+    ],
+    "optional": [
+      "lastSeenAt"
+    ]
+  },
+  "RunnerPage": {
+    "required": [
+      "items"
+    ],
+    "optional": [
+      "nextCursor"
+    ]
+  },
+  "RunnerPool": {
+    "required": [
+      "architectures",
+      "capabilities",
+      "capacityPolicy",
+      "createdAt",
+      "name",
+      "readyRunnerCount",
+      "revision",
+      "state",
+      "updatedAt"
+    ],
+    "optional": []
+  },
+  "RunnerPoolPage": {
+    "required": [
+      "items"
+    ],
+    "optional": [
+      "nextCursor"
+    ]
+  },
+  "Sandbox": {
+    "required": [
+      "createdAt",
+      "desiredState",
       "generation",
       "id",
-      "sandboxId",
+      "metadata",
+      "profile",
+      "profileRevisionId",
+      "revision",
       "state",
-      "subprotocol",
-      "websocketUrl"
+      "updatedAt",
+      "workspace"
+    ],
+    "optional": [
+      "deletedAt",
+      "instance",
+      "lastActivityAt"
+    ]
+  },
+  "SandboxInspection": {
+    "required": [
+      "activeSessions",
+      "generation",
+      "guestHealthy",
+      "observedAt",
+      "sandboxId"
+    ],
+    "optional": []
+  },
+  "SandboxPage": {
+    "required": [
+      "items"
+    ],
+    "optional": [
+      "nextCursor"
+    ]
+  },
+  "SandboxTiming": {
+    "required": [
+      "execs",
+      "operations",
+      "sandboxId"
+    ],
+    "optional": []
+  },
+  "ShellCommand": {
+    "required": [
+      "command",
+      "mode"
+    ],
+    "optional": []
+  },
+  "Snapshot": {
+    "required": [
+      "createdAt",
+      "generation",
+      "id",
+      "metadata",
+      "name",
+      "sandboxId",
+      "sizeBytes",
+      "state"
+    ],
+    "optional": [
+      "expiresAt"
+    ]
+  },
+  "SnapshotPage": {
+    "required": [
+      "items"
+    ],
+    "optional": [
+      "nextCursor"
+    ]
+  },
+  "StreamCancelFrame": {
+    "required": [
+      "sequence",
+      "type"
+    ],
+    "optional": []
+  },
+  "StreamCreditFrame": {
+    "required": [
+      "bytes",
+      "sequence",
+      "type"
+    ],
+    "optional": []
+  },
+  "StreamInputFrame": {
+    "required": [
+      "dataBase64",
+      "endOfInput",
+      "sequence",
+      "type"
+    ],
+    "optional": []
+  },
+  "StreamOutcomeFrame": {
+    "required": [
+      "outcome",
+      "sequence",
+      "type"
+    ],
+    "optional": []
+  },
+  "StreamOutputFrame": {
+    "required": [
+      "dataBase64",
+      "sequence",
+      "stream",
+      "type"
+    ],
+    "optional": []
+  },
+  "StreamSignalFrame": {
+    "required": [
+      "sequence",
+      "signal",
+      "type"
+    ],
+    "optional": []
+  },
+  "StreamingExecRequest": {
+    "required": [
+      "command",
+      "deadlineMilliseconds",
+      "environment",
+      "maximumOutputBytes",
+      "windowBytes"
+    ],
+    "optional": [
+      "cwd"
+    ]
+  },
+  "TerminalInputFrame": {
+    "required": [
+      "dataBase64",
+      "sequence",
+      "type"
+    ],
+    "optional": []
+  },
+  "TerminalOutputFrame": {
+    "required": [
+      "dataBase64",
+      "sequence",
+      "type"
+    ],
+    "optional": []
+  },
+  "TerminalResizeFrame": {
+    "required": [
+      "columns",
+      "rows",
+      "sequence",
+      "type"
     ],
     "optional": []
   },
@@ -209,56 +778,11 @@
     ],
     "optional": []
   },
-  "ExecOutput": {
+  "TouchResult": {
     "required": [
-      "stderrBase64",
-      "stdoutBase64"
-    ],
-    "optional": []
-  },
-  "FileStat": {
-    "required": [
-      "kind",
-      "modifiedAt",
-      "path",
-      "sizeBytes"
-    ],
-    "optional": []
-  },
-  "DirectoryListing": {
-    "required": [
-      "entries",
-      "path"
-    ],
-    "optional": []
-  },
-  "FileExistsResult": {
-    "required": [
-      "exists",
-      "path"
-    ],
-    "optional": []
-  },
-  "FileWriteResult": {
-    "required": [
-      "path",
-      "sha256",
-      "sizeBytes"
-    ],
-    "optional": []
-  },
-  "CreateDirectoryRequest": {
-    "required": [
-      "path",
-      "recursive"
-    ],
-    "optional": []
-  },
-  "RemovePathRequest": {
-    "required": [
-      "force",
-      "path",
-      "recursive"
+      "generation",
+      "lastActivityAt",
+      "sandboxId"
     ],
     "optional": []
   },
@@ -272,5 +796,48 @@
       "queryParameters",
       "signal"
     ]
+  },
+  "UpdateRunnerPoolRequest": {
+    "required": [],
+    "optional": [
+      "architectures",
+      "capabilities",
+      "capacityPolicy",
+      "state"
+    ]
+  },
+  "UpdateSandboxMetadataRequest": {
+    "required": [
+      "metadata"
+    ],
+    "optional": []
+  },
+  "UploadArtifactRequest": {
+    "required": [
+      "content",
+      "mediaType",
+      "metadata",
+      "name",
+      "sha256"
+    ],
+    "optional": []
+  },
+  "WaitSandboxRequest": {
+    "required": [
+      "deadlineMilliseconds",
+      "states"
+    ],
+    "optional": []
+  },
+  "Workspace": {
+    "required": [
+      "createdAt",
+      "generation",
+      "id",
+      "sizeBytes",
+      "state",
+      "updatedAt"
+    ],
+    "optional": []
   }
 }

@@ -1,6 +1,6 @@
 # Public API conventions
 
-`contracts/openapi/v1/secondbox.openapi.json` is the canonical OpenAPI 3.1 contract for administrative and application HTTP surfaces. Generated Go, TypeScript, and Python transports derive from that file. Handwritten SDK helpers add polling, streaming, and lifecycle ergonomics without redefining wire types.
+`contracts/openapi/v1/secondbox.openapi.json` is the canonical OpenAPI 3.1 contract for administrative and application HTTP surfaces. The Go and TypeScript operation tables and wire types are generated from that file. Handwritten HTTP mechanics and SDK composition helpers add polling, streaming, and lifecycle ergonomics without redefining wire types.
 
 ## Common HTTP rules
 

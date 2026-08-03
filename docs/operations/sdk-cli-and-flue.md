@@ -1,25 +1,25 @@
 # SDK, CLI, and Flue quick starts
 
-The versioned OpenAPI contract is canonical, while the Go, TypeScript, and Python clients are small hand-maintained transports for actual repository use cases. The Go and TypeScript layers add structured errors, explicit operation polling, caller-owned Sandbox handles, and data-plane helpers. The Go helpers own authenticated `secondbox.exec.v1` and `secondbox.terminal.v1` WebSocket attachments. The TypeScript helpers apply the same sequencing and terminal rules over injected connectors. Python carries the same composition layer over a dependency-free synchronous transport, and does not attach WebSocket sessions.
+The versioned OpenAPI contract is canonical. Go and TypeScript operation tables and wire types are generated from it, while their HTTP mechanics and composition helpers remain handwritten. Both layers add structured errors, explicit operation polling, caller-owned Sandbox handles, and data-plane helpers. The Go helpers own authenticated `secondbox.exec.v1` and `secondbox.terminal.v1` WebSocket attachments. The TypeScript helpers apply the same sequencing and terminal rules over injected connectors.
 
 ## Composition helpers
 
-All three clients share one composition layer, so a caller states intent rather than sequencing requests:
+Both clients align their handwritten composition layers, so a caller states intent rather than sequencing requests:
 
-| Concern | Go | TypeScript | Python |
-| --- | --- | --- | --- |
-| Generate a request key | `NewIdempotencyKey` | `newIdempotencyKey` | `new_idempotency_key` |
-| Render an If-Match validator | `RevisionETag` | `revisionETag` | `revision_etag` |
-| Read a typed problem code | `ProblemCodeOf` | `problemCodeOf` | `problem_code_of` |
-| Decode a terminal outcome | `DecodeExecOutcome` | `decodeExecOutcome` | `decode_exec_outcome` |
-| Wait past the per-request bound | `SandboxHandle.WaitFor` | `SandboxHandle.waitFor` | `SandboxHandle.wait_for` |
-| Create and hold a Sandbox | `CreateSandbox` | `createSandbox` | `create_sandbox_handle` |
-| Hold a Lease active | `KeepLease`, `LeaseKeeper` | `keepLease`, `LeaseKeeper` | `keep_lease`, `LeaseKeeper` |
-| Create, wait, and execute | `Run` | `run` | `run` |
+| Concern | Go | TypeScript |
+| --- | --- | --- |
+| Generate a request key | `NewIdempotencyKey` | `newIdempotencyKey` |
+| Render an If-Match validator | `RevisionETag` | `revisionETag` |
+| Read a typed problem code | `ProblemCodeOf` | `problemCodeOf` |
+| Decode a terminal outcome | `DecodeExecOutcome` | `decodeExecOutcome` |
+| Wait past the per-request bound | `SandboxHandle.WaitFor` | `SandboxHandle.waitFor` |
+| Create and hold a Sandbox | `CreateSandbox` | `createSandbox` |
+| Hold a Lease active | `KeepLease`, `LeaseKeeper` | `keepLease`, `LeaseKeeper` |
+| Create, wait, and execute | `Run` | `run` |
 
 An idempotency key is generated whenever a caller supplies none, and a supplied key is always preserved. `waitFor` issues repeated bounded waits because one `waitForSandbox` request is capped at 60 seconds, and refreshes when the service reports `wait_expired`. A `LeaseKeeper` renews against the expiry the service actually granted rather than the duration requested, since the pinned Profile bounds Lease length; closing one reports a renewal failure in preference to the release error that failure causes. Decoding an outcome yields the output even when the command failed, because a failing command usually explains itself on standard error.
 
-`Run` never deletes the Sandbox it created in any of the three clients. Disposal stays the caller's decision, matching the rule that a handle performs no lifecycle action implicitly.
+`Run` never deletes the Sandbox it created in either client. Disposal stays the caller's decision, matching the rule that a handle performs no lifecycle action implicitly.
 
 The Go package import path is `github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient`. The TypeScript publication name is `@secondstack-ai/secondbox`; its repository manifest remains at the non-release version `0.0.0-development`. `npm run pack:sdk-typescript` performs a clean declaration/runtime build and dry-packs the exact public files without publishing.
 
@@ -81,7 +81,7 @@ Grouped aliases cover Profiles, RunnerPools, Runners, Sandboxes, Operations, Lea
   --path sandboxId=sbx_123
 ```
 
-Use `operation <operationId>` to invoke any route in the hand-maintained transport table, including `executeSandboxCommand`. `--path`, `--query`, and `--header` accept repeatable `name=value` pairs; `--body` accepts a filename or `-`; `--content-type` selects the declared request media type. File bodies and responses stream between the selected file or standard input/output rather than being buffered by the CLI.
+Use `operation <operationId>` to invoke any route in the generated transport table, including `executeSandboxCommand`. `--path`, `--query`, and `--header` accept repeatable `name=value` pairs; `--body` accepts a filename or `-`; `--content-type` selects the declared request media type. File bodies and responses stream between the selected file or standard input/output rather than being buffered by the CLI.
 
 ### Running one command
 

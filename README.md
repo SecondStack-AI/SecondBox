@@ -132,7 +132,7 @@ Full reference: [SDK, CLI, and Flue quick starts](docs/operations/sdk-cli-and-fl
 
 ## SDKs
 
-Go, TypeScript, and Python share one composition layer: generated idempotency keys, bounded-wait looping, lease keepers that renew in the background, outcome decoding, and `run`.
+Go and TypeScript share one handwritten composition layer over generated transports and wire types: idempotency keys, bounded-wait looping, lease keepers that renew in the background, outcome decoding, and `run`.
 
 ```go
 client, _ := secondboxclient.NewSecondBoxSubjectClient(
@@ -176,26 +176,7 @@ if (result.kind === "exited") process.stdout.write(result.stdout);
 
 </details>
 
-<details>
-<summary><b>Python</b></summary>
-
-```python
-from secondbox_client import SecondBoxClient
-
-client = SecondBoxClient("https://secondbox.example.com", token, "acme", "alice")
-
-handle, result = client.run(
-    "coding-environment",
-    "python3 -c 'print(\"hello\")'",
-    deadline_milliseconds=30_000,
-    maximum_output_bytes=1_048_576,
-)
-print(result.stdout.decode())
-```
-
-</details>
-
-`Run` never deletes the Sandbox it created, in any of the three clients — disposal stays your decision.
+`Run` never deletes the Sandbox it created in either client — disposal stays your decision.
 
 ## Repository layout
 
@@ -207,7 +188,7 @@ print(result.stdout.decode())
 | `contracts` | canonical public, runner, and guest-agent protocols |
 | `internal` | domain, API, scheduling, reconciliation, persistence |
 | `migrations/postgres` | database migration lineage |
-| `sdk` | Go, TypeScript, and Python clients |
+| `sdk` | Go and TypeScript clients |
 | `deploy` | Compose, systemd, and deployment examples |
 | `docs/design` | architecture and compatibility contracts |
 | `docs/operations` | installation, backup, diagnostics |

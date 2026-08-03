@@ -41,8 +41,8 @@ func (handle *SandboxHandle) ConnectExecStream(
 		session.Generation != current.Generation {
 		return nil, errors.New("SecondBox Exec stream session does not match the Sandbox handle")
 	}
-	expiresAt, err := time.Parse(time.RFC3339Nano, string(session.ExpiresAt))
-	if err != nil {
+	expiresAt := session.ExpiresAt
+	if expiresAt.IsZero() {
 		return nil, errors.New("SecondBox Exec stream expiration is invalid")
 	}
 	endpoint, err := url.Parse(session.WebsocketURL)

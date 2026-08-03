@@ -18,7 +18,7 @@ type OperationMediaType struct {
 	Schema      string
 }
 
-// OperationMetadata is the compact hand-maintained route description used by the thin client.
+// OperationMetadata is the compact generated route description used by the thin client.
 type OperationMetadata struct {
 	OperationID         string
 	Method              string
@@ -27,78 +27,7 @@ type OperationMetadata struct {
 	RequestBodyRequired bool
 }
 
-func operation(id, method, path, contentType string) OperationMetadata {
-	metadata := OperationMetadata{OperationID: id, Method: method, PathTemplate: path}
-	if contentType != "" {
-		metadata.RequestBody = []OperationMediaType{{ContentType: contentType}}
-		metadata.RequestBodyRequired = true
-	}
-	return metadata
-}
-
-var operations = map[string]OperationMetadata{
-	"acquireSandboxLease":      operation("acquireSandboxLease", "POST", "/v1/sandboxes/{sandboxId}/leases", "application/json"),
-	"cancelSandboxExecStream":  operation("cancelSandboxExecStream", "POST", "/v1/sandboxes/{sandboxId}/exec-streams/{execSessionId}:cancel", ""),
-	"cancelSandboxTerminal":    operation("cancelSandboxTerminal", "DELETE", "/v1/sandboxes/{sandboxId}/terminals/{terminalSessionId}", ""),
-	"closeSandboxPortSession":  operation("closeSandboxPortSession", "DELETE", "/v1/sandboxes/{sandboxId}/port-sessions/{portSessionId}", ""),
-	"createProfile":            operation("createProfile", "POST", "/v1/profiles", "application/json"),
-	"createRunnerPool":         operation("createRunnerPool", "POST", "/v1/runner-pools", "application/json"),
-	"createSandbox":            operation("createSandbox", "POST", "/v1/sandboxes", "application/json"),
-	"createSandboxDirectory":   operation("createSandboxDirectory", "POST", "/v1/sandboxes/{sandboxId}/directories", "application/json"),
-	"createSandboxExecStream":  operation("createSandboxExecStream", "POST", "/v1/sandboxes/{sandboxId}/exec-streams", "application/json"),
-	"createSandboxPortSession": operation("createSandboxPortSession", "POST", "/v1/sandboxes/{sandboxId}/port-sessions", "application/json"),
-	"createSandboxSnapshot":    operation("createSandboxSnapshot", "POST", "/v1/sandboxes/{sandboxId}/snapshots", "application/json"),
-	"createSandboxTerminal":    operation("createSandboxTerminal", "POST", "/v1/sandboxes/{sandboxId}/terminals", "application/json"),
-	"deleteArtifact":           operation("deleteArtifact", "DELETE", "/v1/artifacts/{artifactId}", ""),
-	"deleteSandbox":            operation("deleteSandbox", "DELETE", "/v1/sandboxes/{sandboxId}", ""),
-	"deleteSnapshot":           operation("deleteSnapshot", "DELETE", "/v1/snapshots/{snapshotId}", ""),
-	"disableProfile":           operation("disableProfile", "POST", "/v1/profiles/{profileName}:disable", ""),
-	"downloadArtifactContent":  operation("downloadArtifactContent", "GET", "/v1/artifacts/{artifactId}/content", ""),
-	"drainSandbox":             operation("drainSandbox", "POST", "/v1/sandboxes/{sandboxId}:drain", ""),
-	"executeSandboxCommand":    operation("executeSandboxCommand", "POST", "/v1/sandboxes/{sandboxId}/exec", "application/json"),
-	"getArtifact":              operation("getArtifact", "GET", "/v1/artifacts/{artifactId}", ""),
-	"getDeploymentTiming":      operation("getDeploymentTiming", "GET", "/v1/timings", ""),
-	"getOperation":             operation("getOperation", "GET", "/v1/operations/{operationId}", ""),
-	"getOperationTiming":       operation("getOperationTiming", "GET", "/v1/operations/{operationId}/timings", ""),
-	"getProfile":               operation("getProfile", "GET", "/v1/profiles/{profileName}", ""),
-	"getRunner":                operation("getRunner", "GET", "/v1/runners/{runnerId}", ""),
-	"getRunnerPool":            operation("getRunnerPool", "GET", "/v1/runner-pools/{runnerPoolName}", ""),
-	"getSandbox":               operation("getSandbox", "GET", "/v1/sandboxes/{sandboxId}", ""),
-	"getSandboxTiming":         operation("getSandboxTiming", "GET", "/v1/sandboxes/{sandboxId}/timings", ""),
-	"getSandboxLease":          operation("getSandboxLease", "GET", "/v1/leases/{leaseId}", ""),
-	"getSandboxPortSession":    operation("getSandboxPortSession", "GET", "/v1/sandboxes/{sandboxId}/port-sessions/{portSessionId}", ""),
-	"getSnapshot":              operation("getSnapshot", "GET", "/v1/snapshots/{snapshotId}", ""),
-	"inspectSandbox":           operation("inspectSandbox", "POST", "/v1/sandboxes/{sandboxId}:inspect", ""),
-	"listProfiles":             operation("listProfiles", "GET", "/v1/profiles", ""),
-	"listRunnerPools":          operation("listRunnerPools", "GET", "/v1/runner-pools", ""),
-	"listRunners":              operation("listRunners", "GET", "/v1/runners", ""),
-	"listSandboxArtifacts":     operation("listSandboxArtifacts", "GET", "/v1/sandboxes/{sandboxId}/artifacts", ""),
-	"listSandboxDirectory":     operation("listSandboxDirectory", "GET", "/v1/sandboxes/{sandboxId}/directories", ""),
-	"listSandboxes":            operation("listSandboxes", "GET", "/v1/sandboxes", ""),
-	"listSandboxSnapshots":     operation("listSandboxSnapshots", "GET", "/v1/sandboxes/{sandboxId}/snapshots", ""),
-	"pingSandbox":              operation("pingSandbox", "POST", "/v1/sandboxes/{sandboxId}:ping", ""),
-	"readSandboxFile":          operation("readSandboxFile", "GET", "/v1/sandboxes/{sandboxId}/files", ""),
-	"reconnectSandboxTerminal": operation("reconnectSandboxTerminal", "GET", "/v1/sandboxes/{sandboxId}/terminals/{terminalSessionId}", ""),
-	"releaseSandboxLease":      operation("releaseSandboxLease", "DELETE", "/v1/leases/{leaseId}", ""),
-	"removeSandboxPath":        operation("removeSandboxPath", "DELETE", "/v1/sandboxes/{sandboxId}/directories", "application/json"),
-	"restoreSandboxSnapshot":   operation("restoreSandboxSnapshot", "POST", "/v1/sandboxes/{sandboxId}:restore", "application/json"),
-	"renewSandboxLease":        operation("renewSandboxLease", "POST", "/v1/leases/{leaseId}:renew", "application/json"),
-	"reviseProfile":            operation("reviseProfile", "POST", "/v1/profiles/{profileName}:revise", "application/json"),
-	"sandboxFileExists":        operation("sandboxFileExists", "GET", "/v1/sandboxes/{sandboxId}/files:exists", ""),
-	"startSandbox":             operation("startSandbox", "POST", "/v1/sandboxes/{sandboxId}:start", ""),
-	"statSandboxFile":          operation("statSandboxFile", "GET", "/v1/sandboxes/{sandboxId}/files:stat", ""),
-	"stopSandbox":              operation("stopSandbox", "POST", "/v1/sandboxes/{sandboxId}:stop", ""),
-	"touchSandbox":             operation("touchSandbox", "POST", "/v1/sandboxes/{sandboxId}:touch", ""),
-	"updateRunnerPool":         operation("updateRunnerPool", "PATCH", "/v1/runner-pools/{runnerPoolName}", "application/json"),
-	"uploadSandboxArtifact":    operation("uploadSandboxArtifact", "POST", "/v1/sandboxes/{sandboxId}/artifacts", "multipart/form-data"),
-	"waitForSandbox":           operation("waitForSandbox", "POST", "/v1/sandboxes/{sandboxId}:wait", "application/json"),
-	"writeSandboxFile":         operation("writeSandboxFile", "PUT", "/v1/sandboxes/{sandboxId}/files", "application/octet-stream"),
-}
-
-// GetSandboxOperation is retained for callers that use the lower-level Do method.
-var GetSandboxOperation = operations["getSandbox"]
-
-// LookupOperation resolves one supported hand-maintained operation.
+// LookupOperation resolves one supported generated operation.
 func LookupOperation(operationID string) (OperationMetadata, bool) {
 	metadata, ok := operations[operationID]
 	return metadata, ok

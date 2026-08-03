@@ -13,11 +13,9 @@ import (
 // schemaBackedTypes maps each canonical OpenAPI schema to the Go type that
 // serializes it.
 //
-// These types are hand-maintained rather than generated, so nothing otherwise
-// prevents a property from being added to the document and never reaching a
-// serializer, or the reverse. Publishing streamWindowBytes required editing the
-// contract, the document, and two SDKs by hand; this test is what makes a
-// forgotten edit fail rather than ship.
+// Generation verification covers the complete SDK wire surface. This focused
+// contract test independently proves that the principal Go serializers retain
+// exactly the canonical public properties.
 var schemaBackedTypes = map[string]any{
 	"Sandbox":           contracts.Sandbox{},
 	"Operation":         contracts.Operation{},
@@ -31,8 +29,8 @@ var schemaBackedTypes = map[string]any{
 	"Problem":           contracts.Problem{},
 }
 
-// duplicatedSDKTypes are Go SDK structs that restate a contracts type instead of
-// aliasing it. An alias cannot drift; these can, so they are compared directly.
+// duplicatedSDKTypes are generated Go SDK structs that serialize the same wire
+// representation as a contracts type, so they are compared directly.
 var duplicatedSDKTypes = map[string][2]any{
 	"TerminalSession":   {secondboxclient.TerminalSession{}, contracts.TerminalSession{}},
 	"ExecStreamSession": {secondboxclient.ExecStreamSession{}, contracts.ExecStreamSession{}},
@@ -92,8 +90,8 @@ func TestSerializedTypesMirrorCanonicalSchemas(t *testing.T) {
 	}
 }
 
-// TestDuplicatedSDKTypesMatchTheirContract pins the SDK structs that restate a
-// contracts type rather than aliasing it.
+// TestDuplicatedSDKTypesMatchTheirContract pins representative generated SDK
+// structs against the corresponding service contract type.
 func TestDuplicatedSDKTypesMatchTheirContract(t *testing.T) {
 	for name, pair := range duplicatedSDKTypes {
 		t.Run(name, func(t *testing.T) {
