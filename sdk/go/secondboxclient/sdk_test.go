@@ -261,7 +261,7 @@ func TestSandboxHandleConnectsAndSequencesExecStream(t *testing.T) {
 		ID: "exec-1", SandboxID: "sandbox-1", Generation: 3,
 		State: SessionStateOpen, Subprotocol: execStreamSubprotocol,
 		WebsocketURL: "ws" + strings.TrimPrefix(server.URL, "http"),
-		ExpiresAt:    Timestamp(time.Now().Add(time.Minute).Format(time.RFC3339Nano)),
+		ExpiresAt:    time.Now().Add(time.Minute),
 	}
 	stream, err := handle.ConnectExecStream(t.Context(), session, nil)
 	if err != nil {
@@ -387,7 +387,7 @@ func TestSandboxHandleConnectsAndSequencesTerminal(t *testing.T) {
 		State: SessionStateOpen, Subprotocol: terminalSubprotocol,
 		NextClientSequence: 4,
 		WebsocketURL:       "ws" + strings.TrimPrefix(server.URL, "http"),
-		ExpiresAt:          Timestamp(time.Now().Add(time.Minute).Format(time.RFC3339Nano)),
+		ExpiresAt:          time.Now().Add(time.Minute),
 	}
 	terminal, err := handle.ConnectTerminal(t.Context(), session, nil)
 	if err != nil {

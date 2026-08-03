@@ -21,7 +21,7 @@ This plan adds the composition layer and the two contract changes it needs. It d
 ## Fixed architecture
 
 - SecondBox stays a networked control plane. Sandboxes run on separately deployed runners, PostgreSQL owns desired state, and clients reach the system only over the published HTTP API. "One command" means one command against a deployment that already exists, not an embedded local VM.
-- Composition lives in `sdk/go/secondboxclient`, not in `cmd/secondbox`. Idempotency-key generation, generation refresh, lease acquisition and renewal, and the create-wait-exec sequence are SDK helpers the CLI consumes. TypeScript and Python parity is a follow-up, not part of this plan.
+- Composition lives in `sdk/go/secondboxclient`, not in `cmd/secondbox`. Idempotency-key generation, generation refresh, lease acquisition and renewal, and the create-wait-exec sequence are SDK helpers the CLI consumes. TypeScript parity is a follow-up, not part of this plan.
 - The CLI resolves credentials with a fixed precedence: explicit flags, then `SECONDBOX_*` environment variables, then a configuration file written by `secondbox login`. This softens the AGENTS.md rule that every runtime setting is explicit — for the CLI only. `secondboxd` keeps requiring every variable explicitly with no application-supplied default, and `internal/config` is not touched by Task 1.
 - The CLI's token variable is `SECONDBOX_TOKEN`, deliberately distinct from the `SECONDBOX_PLATFORM_TOKEN` that `internal/config` reads. Sharing one name would silently hand CLI credentials to any shell configured to run `secondboxd`.
 - Sandbox names are metadata, not a new resource field. The CLI writes the reserved key `secondbox.dev/name`, and `listSandboxes` gains a server-side metadata filter so any client on any host resolves the same name. There is no local name cache.
@@ -38,7 +38,7 @@ This plan adds the composition layer and the two contract changes it needs. It d
 - Do not add PostgreSQL foreign keys or CHECK constraints. The name index in Task 4 is a partial unique index, which is neither.
 - Do not build a local name-to-identifier cache file. Names resolve server-side or not at all.
 - Do not change `internal/config` defaulting behavior for `secondboxd`, and do not give any required control-plane variable an application-supplied default.
-- Do not port the new SDK helpers to TypeScript or Python in this plan.
+- Do not port the new SDK helpers to TypeScript in this plan.
 - Do not replace the generic `operation <operationId>` escape hatch or any existing alias in `commandAliases`. New commands are additive.
 
 ## Dependencies
@@ -94,7 +94,7 @@ Nothing stopped `--name sbx_anything`. Clients tell an identifier from a name by
 
 ### Lease renewal failure was reported by its consequence (fixed)
 
-`LeaseKeeper.Close` returned the release error. When renewal had already stopped, releasing the fenced Lease failed too, so the caller saw the consequence rather than the cause. Close now reports the renewal failure in preference, in all three clients.
+`LeaseKeeper.Close` returned the release error. When renewal had already stopped, releasing the fenced Lease failed too, so the caller saw the consequence rather than the cause. Close now reports the renewal failure in preference in both clients.
 
 ### exec and run could not carry standard input (fixed)
 
@@ -104,13 +104,13 @@ Nothing stopped `--name sbx_anything`. Clients tell an identifier from a name by
 
 `deploy/environment.example` hardcoded the digest that `bootstrap-environment.sh` writes into the generated development catalog, with nothing enforcing the match. Bootstrap now defines that digest once and fills both the catalog and the built-in Profile settings from it. A deployment supplying its own catalog keeps a placeholder the validator refuses, so the convenience cannot leak into production.
 
-### TypeScript and Python lacked the composition layer (fixed)
+### TypeScript lacked the composition layer (fixed)
 
-The Go SDK gained helpers the other two did not have. All three now share `newIdempotencyKey`, `revisionETag`, `problemCodeOf`, `decodeExecOutcome`, `waitFor`, `createSandbox`, the lease helpers with a `LeaseKeeper`, and `run`; Python gained a `SandboxHandle` to carry them. `run` deletes nothing in any client.
+The Go SDK gained helpers TypeScript did not have. Both now share `newIdempotencyKey`, `revisionETag`, `problemCodeOf`, `decodeExecOutcome`, `waitFor`, `createSandbox`, the lease helpers with a `LeaseKeeper`, and `run`. `run` deletes nothing in either client.
 
 ### The Go lease routes omitted a required header (fixed)
 
-Adding Python parity surfaced that `renewSandboxLease` and `releaseSandboxLease` both require `Idempotency-Key`, and the Go SDK sent neither. Every `LeaseKeeper` renewal and release would have failed against a real service. The stub servers in the Go tests answered every request regardless of headers, so nothing caught it; TypeScript had always passed the key. Both Go routes now take an idempotency key and generate one when it is absent, and the tests assert the header rather than only the response.
+Parity work surfaced that `renewSandboxLease` and `releaseSandboxLease` both require `Idempotency-Key`, and the Go SDK sent neither. Every `LeaseKeeper` renewal and release would have failed against a real service. The stub servers in the Go tests answered every request regardless of headers, so nothing caught it; TypeScript had always passed the key. Both Go routes now take an idempotency key and generate one when it is absent, and the tests assert the header rather than only the response.
 
 ## Known defects found while implementing
 

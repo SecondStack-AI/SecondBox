@@ -24,7 +24,7 @@ import {
 } from "./client.ts";
 import { SecondBoxClient } from "./transport.ts";
 
-test("requestJSON uses hand-maintained operation metadata", async () => {
+test("requestJSON uses generated operation metadata", async () => {
   let requested = "";
   const fetcher: typeof fetch = async (input) => {
     requested = String(input);
@@ -697,6 +697,19 @@ test("waitFor retries after the service reports the wait expired", async () => {
   const result = await handle.waitFor(["ready"], { deadlineMilliseconds: 10_000 });
   assert.equal(result.state, "ready");
   assert.ok(waits >= 2);
+});
+
+test("waitFor keeps each service request below the default HTTP timeout", async () => {
+  let requestDeadline = 0;
+  const fetcher: typeof fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body)) as { deadlineMilliseconds: number };
+    requestDeadline = body.deadlineMilliseconds;
+    return Response.json(sandbox("ready"));
+  };
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
+  const handle = new SandboxHandle(api, sandbox("starting"));
+  await handle.waitFor(["ready"], { deadlineMilliseconds: 45_000 });
+  assert.equal(requestDeadline, 20_000);
 });
 
 test("waitFor returns immediately when the state already holds", async () => {

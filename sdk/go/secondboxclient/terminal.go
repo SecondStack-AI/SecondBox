@@ -85,8 +85,8 @@ func (handle *SandboxHandle) ConnectTerminal(
 		(session.State != SessionStateOpen && session.State != SessionStateDetached) {
 		return nil, errors.New("SecondBox Terminal session does not match the Sandbox handle")
 	}
-	expiresAt, err := time.Parse(time.RFC3339Nano, string(session.ExpiresAt))
-	if err != nil {
+	expiresAt := session.ExpiresAt
+	if expiresAt.IsZero() {
 		return nil, errors.New("SecondBox Terminal expiration is invalid")
 	}
 	endpoint, err := url.Parse(session.WebsocketURL)
