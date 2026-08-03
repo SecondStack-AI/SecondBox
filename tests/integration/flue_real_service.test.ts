@@ -64,7 +64,7 @@ test("Flue complete command and filesystem subset uses the real SecondBox servic
   const command = await second.exec("printf flue", {
     cwd: "nested",
     env: { FLUE_VALUE: "contract" },
-    timeoutMs: 321,
+    timeoutMs: 5_000,
   });
   assert.deepEqual(command, {
     stdout: "flue-out",

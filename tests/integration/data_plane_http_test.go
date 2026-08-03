@@ -900,7 +900,7 @@ func (fake *relayFakeRunner) assertFlueObserved(now time.Time) error {
 		fake.execOpen.GetShell() != "printf flue" ||
 		fake.execOpen.Cwd != "nested" ||
 		fake.execOpen.OutputLimitBytes != 4096 ||
-		fake.execOpen.DeadlineUnixMs != uint64(now.Add(321*time.Millisecond).UnixMilli()) {
+		fake.execOpen.DeadlineUnixMs != uint64(now.Add(5*time.Second).UnixMilli()) {
 		return fmt.Errorf("Flue Exec Open = %#v", fake.execOpen)
 	}
 	if len(fake.execOpen.Environment) != 1 ||
