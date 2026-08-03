@@ -2823,6 +2823,7 @@
           "protocol": {"type": "string", "enum": ["tcp", "http"]},
           "transport": {"type": "string", "enum": ["relay", "direct"]},
           "endpoint": {"type": "string", "format": "uri", "maxLength": 2048},
+          "certificateSpkiSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
           "state": {"type": "string", "enum": ["open", "closing", "closed", "expired", "fenced"]},
           "createdAt": {"$ref": "#/components/schemas/Timestamp"},
           "expiresAt": {"$ref": "#/components/schemas/Timestamp"}

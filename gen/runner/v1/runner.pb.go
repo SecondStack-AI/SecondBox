@@ -2044,8 +2044,11 @@ type RunnerRegistration struct {
 	// same class as advertised capacity. It carries no Sandbox identity and is
 	// never returned to a caller without the exact direct-endpoint grant.
 	DataPlaneAdvertisedAddress string `protobuf:"bytes,14,opt,name=data_plane_advertised_address,json=dataPlaneAdvertisedAddress,proto3" json:"data_plane_advertised_address,omitempty"`
-	unknownFields              protoimpl.UnknownFields
-	sizeCache                  protoimpl.SizeCache
+	// data_plane_certificate_spki_sha256 pins the runner identity certificate
+	// used by the caller-facing listener.
+	DataPlaneCertificateSpkiSha256 string `protobuf:"bytes,15,opt,name=data_plane_certificate_spki_sha256,json=dataPlaneCertificateSpkiSha256,proto3" json:"data_plane_certificate_spki_sha256,omitempty"`
+	unknownFields                  protoimpl.UnknownFields
+	sizeCache                      protoimpl.SizeCache
 }
 
 func (x *RunnerRegistration) Reset() {
@@ -2172,6 +2175,13 @@ func (x *RunnerRegistration) GetStartupTiming() *StartupTiming {
 func (x *RunnerRegistration) GetDataPlaneAdvertisedAddress() string {
 	if x != nil {
 		return x.DataPlaneAdvertisedAddress
+	}
+	return ""
+}
+
+func (x *RunnerRegistration) GetDataPlaneCertificateSpkiSha256() string {
+	if x != nil {
+		return x.DataPlaneCertificateSpkiSha256
 	}
 	return ""
 }
@@ -7213,7 +7223,7 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\x13verified_at_unix_ms\x18\x03 \x01(\x04R\x10verifiedAtUnixMs\"]\n" +
 	"\rStartupTiming\x12!\n" +
 	"\fsample_count\x18\x01 \x01(\x04R\vsampleCount\x12)\n" +
-	"\x10p95_milliseconds\x18\x02 \x01(\x04R\x0fp95Milliseconds\"\x93\x06\n" +
+	"\x10p95_milliseconds\x18\x02 \x01(\x04R\x0fp95Milliseconds\"\xdf\x06\n" +
 	"\x12RunnerRegistration\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1a\n" +
@@ -7230,7 +7240,8 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\x0eartifact_cache\x18\v \x03(\v2*.secondbox.runner.v1.ArtifactCacheEvidenceR\rartifactCache\x12Z\n" +
 	"\x12readiness_failures\x18\f \x03(\x0e2+.secondbox.runner.v1.RunnerReadinessFailureR\x11readinessFailures\x12I\n" +
 	"\x0estartup_timing\x18\r \x01(\v2\".secondbox.runner.v1.StartupTimingR\rstartupTiming\x12A\n" +
-	"\x1ddata_plane_advertised_address\x18\x0e \x01(\tR\x1adataPlaneAdvertisedAddress\"\x84\x02\n" +
+	"\x1ddata_plane_advertised_address\x18\x0e \x01(\tR\x1adataPlaneAdvertisedAddress\x12J\n" +
+	"\"data_plane_certificate_spki_sha256\x18\x0f \x01(\tR\x1edataPlaneCertificateSpkiSha256\"\x84\x02\n" +
 	"\x17ActiveAssignmentSummary\x12#\n" +
 	"\rassignment_id\x18\x01 \x01(\tR\fassignmentId\x12\x1d\n" +
 	"\n" +

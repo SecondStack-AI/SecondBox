@@ -2,6 +2,7 @@ package runnercontrol
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -343,10 +344,11 @@ func registrationFrame(runnerID, connectionID string, sequence uint64) *runnerv1
 					DataPlaneReady:           true,
 					GuestProtocolGenerations: &runnerv1.ProtocolVersionRange{Minimum: 1, Maximum: 1},
 				},
-				Allocatable:                &runnerv1.Capacity{VcpuMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30, Instances: 8},
-				Reserved:                   &runnerv1.Capacity{},
-				StartupTiming:              &runnerv1.StartupTiming{},
-				DataPlaneAdvertisedAddress: "10.0.0.5:7443",
+				Allocatable:                    &runnerv1.Capacity{VcpuMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30, Instances: 8},
+				Reserved:                       &runnerv1.Capacity{},
+				StartupTiming:                  &runnerv1.StartupTiming{},
+				DataPlaneAdvertisedAddress:     "10.0.0.5:7443",
+				DataPlaneCertificateSpkiSha256: strings.Repeat("a", 64),
 			},
 		},
 	}

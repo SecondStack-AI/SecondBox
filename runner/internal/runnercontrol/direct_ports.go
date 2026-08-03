@@ -338,7 +338,15 @@ func (s *RunnerProtocolService) serveDirectPortConnection(
 		_ = portdirect.WriteVerdict(connection, portdirect.VerdictDenied, "handshake rejected")
 		return
 	}
-	digest := sha256.Sum256([]byte(credential))
+	if credential.SessionKind != portdirect.SessionKindPort {
+		_ = portdirect.WriteVerdict(
+			connection,
+			portdirect.VerdictSessionKindUnsupported,
+			credential.SessionKind.String()+" session kind is not implemented",
+		)
+		return
+	}
+	digest := sha256.Sum256([]byte(credential.Value))
 	session := s.directPorts.awaitSession(ctx, digest, directPortAdmittingFrameWait)
 	if session == nil {
 		_ = portdirect.WriteVerdict(connection, portdirect.VerdictDenied, "credential rejected")

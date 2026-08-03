@@ -118,6 +118,9 @@ message RunnerRegistration {
   // same class as advertised capacity. It carries no Sandbox identity and is
   // never returned to a caller without the exact direct-endpoint grant.
   string data_plane_advertised_address = 14;
+  // data_plane_certificate_spki_sha256 pins the runner identity certificate
+  // used by the caller-facing listener.
+  string data_plane_certificate_spki_sha256 = 15;
 }
 
 enum DrainPhase {

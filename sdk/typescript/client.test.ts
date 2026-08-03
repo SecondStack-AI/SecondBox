@@ -842,21 +842,26 @@ function lease(expiresInMilliseconds: number): Lease {
 }
 
 test("SandboxHandle admits a direct PortSession through the framed handshake", async () => {
+  const certificateSPKISHA256 = "a".repeat(64);
   const written: Uint8Array[] = [];
   const inbound: Uint8Array[] = [
     // The Runner may coalesce its verdict with the first payload bytes, so this
     // chunk carries both and the tunnel must replay only the payload.
     new Uint8Array([
-      ...new TextEncoder().encode("SBXPORT1"),
+      ...new TextEncoder().encode("SBXDP1"),
       0, 0, 0,
       4, 5, 6,
     ]),
   ];
   let closed = false;
-  let dialed: { host: string; port: number } | undefined;
+  let dialed: { host: string; port: number; certificateSPKISHA256: string } | undefined;
   const dialer: DirectPortDialer = {
     async dial(descriptor) {
-      dialed = { host: descriptor.host, port: descriptor.port };
+      dialed = {
+        host: descriptor.host,
+        port: descriptor.port,
+        certificateSPKISHA256: descriptor.certificateSPKISHA256,
+      };
       return {
         async write(payload) {
           written.push(payload.slice());
@@ -883,6 +888,7 @@ test("SandboxHandle admits a direct PortSession through the framed handshake", a
       protocol: "tcp",
       transport: "direct",
       endpoint: "secondbox+tcp://10.0.0.4:7443/v1/port-sessions/port-1#single-use-token",
+      certificateSpkiSha256: certificateSPKISHA256,
       state: "open",
       createdAt: "2026-07-28T00:00:00Z",
       expiresAt: "2026-07-28T00:01:00Z",
@@ -891,11 +897,15 @@ test("SandboxHandle admits a direct PortSession through the framed handshake", a
   );
 
   assert(tunnel instanceof PortTunnel);
-  assert.deepEqual(dialed, { host: "10.0.0.4", port: 7443 });
+  assert.deepEqual(dialed, {
+    host: "10.0.0.4",
+    port: 7443,
+    certificateSPKISHA256,
+  });
   assert.deepEqual(written, [
     new Uint8Array([
-      ...new TextEncoder().encode("SBXPORT1"),
-      0, 16,
+      ...new TextEncoder().encode("SBXDP1"),
+      0, 0, 16,
       ...new TextEncoder().encode("single-use-token"),
     ]),
   ]);
@@ -913,7 +923,7 @@ test("SandboxHandle surfaces a denied direct PortSession and closes the socket",
         async write() {},
         async read() {
           return new Uint8Array([
-            ...new TextEncoder().encode("SBXPORT1"),
+            ...new TextEncoder().encode("SBXDP1"),
             1,
             0, detail.length,
             ...new TextEncoder().encode(detail),
@@ -939,6 +949,7 @@ test("SandboxHandle surfaces a denied direct PortSession and closes the socket",
         protocol: "tcp",
         transport: "direct",
         endpoint: "secondbox+tcp://10.0.0.4:7443/v1/port-sessions/port-1#single-use-token",
+        certificateSpkiSha256: "a".repeat(64),
         state: "open",
         createdAt: "2026-07-28T00:00:00Z",
         expiresAt: "2026-07-28T00:01:00Z",
@@ -972,6 +983,7 @@ test("SandboxHandle refuses a direct PortSession when only a relay connector is 
         protocol: "tcp",
         transport: "direct",
         endpoint: "secondbox+tcp://10.0.0.4:7443/v1/port-sessions/port-1#single-use-token",
+        certificateSpkiSha256: "a".repeat(64),
         state: "open",
         createdAt: "2026-07-28T00:00:00Z",
         expiresAt: "2026-07-28T00:01:00Z",

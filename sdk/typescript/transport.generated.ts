@@ -371,6 +371,7 @@ export interface PortPolicy {
 }
 
 export interface PortSession {
+  readonly certificateSpkiSha256?: string;
   readonly createdAt: Timestamp;
   readonly endpoint: string;
   readonly expiresAt: Timestamp;

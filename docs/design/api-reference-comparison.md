@@ -35,7 +35,7 @@ SecondBox exposes the subset required for ordinary SDKs and Flue: binary and UTF
 
 Gondolin provides PTY attach/resize and host-local ingress. Microsandbox provides streaming PTY control and network/port APIs. Kilntainers has no independent PTY or exposed-port resource in its single-tool contract.
 
-SecondBox gives PTYs stable server session IDs, bounded detach and authenticated reconnect, explicit cancellation, and generation fencing. Exposed ports are authenticated expiring proxy sessions for profile-approved guest ports. They never reveal or wildcard-bind a Runner address.
+SecondBox gives PTYs stable server session IDs, bounded detach and authenticated reconnect, explicit cancellation, and generation fencing. Exposed ports are authenticated expiring sessions for profile-approved guest ports. The control plane never discloses a runner address except to an authority holding the direct data-plane scope, for one admitted session, with the expected certificate SPKI SHA-256 pin.
 
 ## Flue adapter
 

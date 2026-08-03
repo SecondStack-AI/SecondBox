@@ -66,6 +66,6 @@ Filesystem operations are binary-safe read/write, UTF-8 convenience read/write, 
 
 Artifacts use separate upload, list, metadata, download, and delete resources. Their retention and authorization do not depend on a mutable workspace path.
 
-An exposed-port session names only a profile-approved guest port and protocol and requires the current generation and Lease. It returns an expiring control-plane WebSocket endpoint, never a runner address or raw host port. The endpoint fragment is a one-time credential that the client passes as a WebSocket protocol alongside `secondbox.port.v1`; public frames are binary bytes, and disconnect closes the session.
+An exposed-port session names only a profile-approved guest port and protocol and requires the current generation and Lease. The control plane never discloses a runner address except to an authority holding the direct data-plane scope, for one admitted session, with the expected certificate SPKI SHA-256 pin. Relay sessions return an expiring control-plane WebSocket endpoint. Both transports use a one-time endpoint credential; public payloads are binary bytes, and disconnect closes the session.
 
 See [Domain and lifecycle](domain-lifecycle.md), [Networking and ports](networking-and-ports.md), and [API reference comparison](api-reference-comparison.md).

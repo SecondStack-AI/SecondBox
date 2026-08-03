@@ -115,7 +115,8 @@ func (relay *PostgresFrameRelay) AdmitPortSession(
 	}
 	// The direct transport hands the caller a Runner address, so a Runner that
 	// has advertised none cannot serve it.
-	if tunnel.Session.Transport == contracts.PortTransportDirect && tunnel.DataPlaneAddress == "" {
+	if tunnel.Session.Transport == contracts.PortTransportDirect &&
+		(tunnel.DataPlaneAddress == "" || tunnel.DataPlaneCertificateSPKISHA256 == "") {
 		return PortTunnel{}, false, ports.ErrLifecycleUnavailable
 	}
 	openMessage := portRelayMessage(session, 1, portAdmissionPayload(input, policy))
@@ -721,6 +722,7 @@ func lockPortAdmissionAuthority(
 	input PortSessionAdmission,
 ) (PortTunnel, contracts.ProfileRevisionSpec, contracts.PortPolicy, error) {
 	var tunnel PortTunnel
+	var encodedDataPlaneEndpoint string
 	var sandboxState, assignmentState string
 	var specJSON []byte
 	err := tx.QueryRow(ctx, `
@@ -743,13 +745,21 @@ func lockPortAdmissionAuthority(
 		&tunnel.TenantRef, &tunnel.SubjectRef,
 		&tunnel.ProfileRevisionID, &tunnel.Session.Generation, &sandboxState,
 		&tunnel.AssignmentID, &tunnel.InstanceID, &tunnel.RunnerID,
-		&tunnel.FencingToken, &assignmentState, &specJSON, &tunnel.DataPlaneAddress,
+		&tunnel.FencingToken, &assignmentState, &specJSON, &encodedDataPlaneEndpoint,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PortTunnel{}, contracts.ProfileRevisionSpec{}, contracts.PortPolicy{}, ports.ErrSandboxNotFound
 	}
 	if err != nil {
 		return PortTunnel{}, contracts.ProfileRevisionSpec{}, contracts.PortPolicy{}, fmt.Errorf("SecondBox Port authority lookup: %w", err)
+	}
+	if input.Session.Transport == contracts.PortTransportDirect {
+		endpoint, err := decodeDataPlaneEndpoint(encodedDataPlaneEndpoint)
+		if err != nil {
+			return PortTunnel{}, contracts.ProfileRevisionSpec{}, contracts.PortPolicy{}, ports.ErrLifecycleUnavailable
+		}
+		tunnel.DataPlaneAddress = endpoint.Address
+		tunnel.DataPlaneCertificateSPKISHA256 = endpoint.CertificateSPKISHA256
 	}
 	if tunnel.Session.Generation != input.Session.Generation {
 		return PortTunnel{}, contracts.ProfileRevisionSpec{}, contracts.PortPolicy{}, ports.ErrGenerationFenced
@@ -1069,6 +1079,7 @@ func lockPortTunnel(
 
 func scanPortTunnel(row relayRow) (PortTunnel, error) {
 	var tunnel PortTunnel
+	var encodedDataPlaneEndpoint string
 	err := row.Scan(
 		&tunnel.Session.ID, &tunnel.Session.SandboxID, &tunnel.Session.Generation,
 		&tunnel.Session.Name, &tunnel.Session.Protocol, &tunnel.Session.Transport,
@@ -1077,7 +1088,7 @@ func scanPortTunnel(row relayRow) (PortTunnel, error) {
 		&tunnel.LeaseID, &tunnel.ProfileRevisionID,
 		&tunnel.AssignmentID, &tunnel.InstanceID, &tunnel.RunnerID, &tunnel.RequestID, &tunnel.StreamID,
 		&tunnel.FencingToken, &tunnel.GuestPort, &tunnel.StreamWindowBytes,
-		&tunnel.TenantRef, &tunnel.SubjectRef, &tunnel.DataPlaneAddress,
+		&tunnel.TenantRef, &tunnel.SubjectRef, &encodedDataPlaneEndpoint,
 		&tunnel.NextOutboundSequence, &tunnel.RetainUntil,
 		&tunnel.AcknowledgedInboundSequence,
 	)
@@ -1086,6 +1097,14 @@ func scanPortTunnel(row relayRow) (PortTunnel, error) {
 	}
 	if err != nil {
 		return PortTunnel{}, fmt.Errorf("SecondBox PortSession lookup: %w", err)
+	}
+	if tunnel.Session.Transport == contracts.PortTransportDirect {
+		endpoint, err := decodeDataPlaneEndpoint(encodedDataPlaneEndpoint)
+		if err != nil {
+			return PortTunnel{}, ports.ErrLifecycleUnavailable
+		}
+		tunnel.DataPlaneAddress = endpoint.Address
+		tunnel.DataPlaneCertificateSPKISHA256 = endpoint.CertificateSPKISHA256
 	}
 	return tunnel, nil
 }

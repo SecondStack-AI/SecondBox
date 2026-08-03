@@ -606,7 +606,7 @@ export interface PortTunnelConnection {
   close(): Promise<void>;
 }
 
-/** Raw byte stream to a Runner's caller-facing data-plane listener. */
+/** TLS 1.3 byte stream authenticated with an admitted certificate SPKI pin. */
 export interface DirectPortSocket {
   write(payload: Uint8Array): Promise<void>;
   /** Resolves the next available chunk, or an empty array at end of stream. */
@@ -615,17 +615,18 @@ export interface DirectPortSocket {
 }
 
 /**
- * Injects the runtime-specific TCP dialer for the direct Port transport.
+ * Injects the runtime-specific pinned TLS dialer for the direct Port transport.
  *
- * The dialer supplies transport only. This SDK owns the framed credential
- * handshake, so a caller cannot admit a connection by dialing alone and the
- * wire format stays in one place.
+ * The dialer completes TLS 1.3 and validates certificateSPKISHA256 before it
+ * resolves. This SDK then owns the framed credential handshake, so no
+ * credential byte is written before the authenticated transport exists.
  */
 export interface DirectPortDialer {
   dial(
     descriptor: {
       readonly host: string;
       readonly port: number;
+      readonly certificateSPKISHA256: string;
       readonly sandboxID: string;
       readonly generation: number;
       readonly expiresAt: string;
@@ -1667,8 +1668,9 @@ async function abortableDelay(
   });
 }
 
-/** Generation one of the direct Port handshake. */
-const DIRECT_PORT_MAGIC = "SBXPORT1";
+/** Generation one of the direct data-plane handshake. */
+const DIRECT_PORT_MAGIC = "SBXDP1";
+const DIRECT_PORT_SESSION_KIND_PORT = 0;
 const DIRECT_PORT_MAXIMUM_DETAIL_BYTES = 128;
 const DIRECT_PORT_VERDICT_ADMITTED = 0;
 
@@ -1707,6 +1709,10 @@ async function connectDirectPortTunnel(
   if (credential === "" || credential.length > 2048) {
     throw new Error("SecondBox PortSession endpoint credential is invalid");
   }
+  const certificateSPKISHA256 = session.certificateSpkiSha256 ?? "";
+  if (!/^[0-9a-f]{64}$/.test(certificateSPKISHA256)) {
+    throw new Error("SecondBox PortSession direct certificate SPKI SHA-256 is invalid");
+  }
   const port = Number(endpoint.port);
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
     throw new Error("SecondBox PortSession direct endpoint port is invalid");
@@ -1715,6 +1721,7 @@ async function connectDirectPortTunnel(
     {
       host: endpoint.hostname,
       port,
+      certificateSPKISHA256,
       sandboxID: session.sandboxId,
       generation: session.generation,
       expiresAt: session.expiresAt,
@@ -1739,10 +1746,11 @@ async function connectDirectPortTunnel(
 function encodeDirectPortCredential(credential: string): Uint8Array {
   const encoded = new TextEncoder().encode(credential);
   const magic = new TextEncoder().encode(DIRECT_PORT_MAGIC);
-  const frame = new Uint8Array(magic.length + 2 + encoded.length);
+  const frame = new Uint8Array(magic.length + 3 + encoded.length);
   frame.set(magic, 0);
-  new DataView(frame.buffer).setUint16(magic.length, encoded.length, false);
-  frame.set(encoded, magic.length + 2);
+  frame[magic.length] = DIRECT_PORT_SESSION_KIND_PORT;
+  new DataView(frame.buffer).setUint16(magic.length + 1, encoded.length, false);
+  frame.set(encoded, magic.length + 3);
   return frame;
 }
 

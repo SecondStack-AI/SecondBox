@@ -369,16 +369,17 @@ type CreatePortSessionRequest struct {
 
 // PortSession is an authenticated, expiring control-plane tunnel.
 type PortSession struct {
-	ID         string    `json:"id"`
-	SandboxID  string    `json:"sandboxId"`
-	Generation int64     `json:"generation"`
-	Name       string    `json:"name"`
-	Protocol   string    `json:"protocol"`
-	Transport  string    `json:"transport"`
-	Endpoint   string    `json:"endpoint"`
-	State      string    `json:"state"`
-	CreatedAt  time.Time `json:"createdAt"`
-	ExpiresAt  time.Time `json:"expiresAt"`
+	ID                    string    `json:"id"`
+	SandboxID             string    `json:"sandboxId"`
+	Generation            int64     `json:"generation"`
+	Name                  string    `json:"name"`
+	Protocol              string    `json:"protocol"`
+	Transport             string    `json:"transport"`
+	Endpoint              string    `json:"endpoint"`
+	CertificateSPKISHA256 string    `json:"certificateSpkiSha256,omitempty"`
+	State                 string    `json:"state"`
+	CreatedAt             time.Time `json:"createdAt"`
+	ExpiresAt             time.Time `json:"expiresAt"`
 }
 
 // QuotaLimits bounds one subject's aggregate reservations.

@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -96,6 +97,9 @@ func (service *ControlPlaneService) CreateSandboxPortSession(
 	if err != nil {
 		return contracts.PortSession{}, false, err
 	}
+	if tunnel.Session.Transport == contracts.PortTransportDirect {
+		tunnel.Session.CertificateSPKISHA256 = tunnel.DataPlaneCertificateSPKISHA256
+	}
 	tunnel.Session.Endpoint, err = service.portTunnelEndpoint(tunnel, transport)
 	return tunnel.Session, replayed, err
 }
@@ -116,6 +120,9 @@ func (service *ControlPlaneService) GetSandboxPortSession(
 	)
 	if err != nil {
 		return contracts.PortSession{}, err
+	}
+	if tunnel.Session.Transport == contracts.PortTransportDirect {
+		tunnel.Session.CertificateSPKISHA256 = tunnel.DataPlaneCertificateSPKISHA256
 	}
 	tunnel.Session.Endpoint, err = service.portTunnelEndpoint(tunnel, transport)
 	if err != nil {
@@ -330,6 +337,11 @@ func (service *ControlPlaneService) directPortEndpoint(
 	credential string,
 ) (string, error) {
 	if tunnel.DataPlaneAddress == "" {
+		return "", ports.ErrLifecycleUnavailable
+	}
+	certificatePin, err := hex.DecodeString(tunnel.DataPlaneCertificateSPKISHA256)
+	if err != nil || len(certificatePin) != sha256.Size ||
+		tunnel.DataPlaneCertificateSPKISHA256 != hex.EncodeToString(certificatePin) {
 		return "", ports.ErrLifecycleUnavailable
 	}
 	host, port, err := net.SplitHostPort(tunnel.DataPlaneAddress)

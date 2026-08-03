@@ -135,11 +135,12 @@ func LoadRunnerProtocolConfigFromEnv() (RunnerProtocolConfig, GRPCConnectorConfi
 
 // GRPCConnector creates one outbound runner stream over mutually authenticated TLS.
 type GRPCConnector struct {
-	address    string
-	credential string
-	tlsConfig  *tls.Config
-	mu         sync.Mutex
-	connection *grpc.ClientConn
+	address     string
+	credential  string
+	certificate tls.Certificate
+	tlsConfig   *tls.Config
+	mu          sync.Mutex
+	connection  *grpc.ClientConn
 }
 
 // NewGRPCConnector validates runner credentials before any network operation.
@@ -172,8 +173,9 @@ func NewGRPCConnector(config GRPCConnectorConfig) (*GRPCConnector, error) {
 		return nil, fmt.Errorf("SecondBox runner mTLS control-plane CA has no certificates")
 	}
 	return &GRPCConnector{
-		address:    strings.TrimSpace(config.Address),
-		credential: config.Credential,
+		address:     strings.TrimSpace(config.Address),
+		credential:  config.Credential,
+		certificate: certificate,
 		tlsConfig: &tls.Config{
 			MinVersion:   tls.VersionTLS13,
 			ServerName:   strings.TrimSpace(config.ServerName),
@@ -181,6 +183,13 @@ func NewGRPCConnector(config GRPCConnectorConfig) (*GRPCConnector, error) {
 			RootCAs:      rootCAs,
 		},
 	}, nil
+}
+
+// RunnerCertificate returns the identity certificate already loaded for the
+// outbound control connection so the caller-facing listener cannot select a
+// separate identity.
+func (c *GRPCConnector) RunnerCertificate() tls.Certificate {
+	return c.certificate
 }
 
 // Connect opens the generated RunnerControl stream through the configured mTLS channel.

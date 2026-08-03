@@ -3,8 +3,14 @@ package runnercontrol
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
+	"math/big"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -954,6 +960,25 @@ func TestRunnerProtocolServiceRequiresBackendForAdvertisedDataPlane(t *testing.T
 	}
 }
 
+func TestRunnerProtocolServiceRequiresItsIdentityCertificateForDataPlaneTLS(t *testing.T) {
+	for name, certificate := range map[string]tls.Certificate{
+		"missing":          {},
+		"foreign_identity": testRunnerCertificate("runner-foreign"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			config := testRunnerConfig()
+			config.DataPlaneCertificate = certificate
+			if _, err := NewRunnerProtocolService(
+				config,
+				&recordingAssignmentBackend{},
+				staticProtocolConnector{stream: &recordingProtocolStream{}},
+			); err == nil {
+				t.Fatal("runner service accepted invalid data-plane TLS identity")
+			}
+		})
+	}
+}
+
 func TestRunnerControlCommandStateDeduplicatesAndRejectsReordering(t *testing.T) {
 	state := newControlCommandState()
 	assignment := &runnerprotocol.ControlPlaneToRunner{
@@ -1226,10 +1251,33 @@ func testRunnerConfig() RunnerProtocolConfig {
 		MaximumConcurrentWorkspaceCreates: 4,
 		DataPlaneListenAddress:            "127.0.0.1:0",
 		DataPlaneAdvertisedAddress:        "10.0.0.5:7443",
+		DataPlaneCertificate:              testRunnerCertificate("runner-1"),
 		MandatoryFeatures: []runnerprotocol.RunnerFeature{
 			runnerprotocol.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
 		},
 	}
+}
+
+func testRunnerCertificate(runnerID string) tls.Certificate {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	identity, err := url.Parse("spiffe://secondbox/runner/" + runnerID)
+	if err != nil {
+		panic(err)
+	}
+	now := time.Now()
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1), NotBefore: now.Add(-time.Minute),
+		NotAfter: now.Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature,
+		URIs: []*url.URL{identity},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, publicKey, privateKey)
+	if err != nil {
+		panic(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: privateKey}
 }
 
 type recordingProtocolStream struct {

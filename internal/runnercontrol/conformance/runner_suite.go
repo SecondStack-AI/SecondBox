@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -126,8 +127,9 @@ func (runner *FakeRunner) Registration() *runnerv1.RunnerToControlPlane {
 						VerifiedAtUnixMs: 1,
 					},
 				},
-				StartupTiming:              &runnerv1.StartupTiming{},
-				DataPlaneAdvertisedAddress: "10.0.0.5:7443",
+				StartupTiming:                  &runnerv1.StartupTiming{},
+				DataPlaneAdvertisedAddress:     "10.0.0.5:7443",
+				DataPlaneCertificateSpkiSha256: strings.Repeat("a", 64),
 			},
 		},
 	})

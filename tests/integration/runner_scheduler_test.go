@@ -14,6 +14,7 @@ import (
 	"math/big"
 	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -994,8 +995,9 @@ func task4Registration(
 		ArtifactCache: []*runnerv1.ArtifactCacheEvidence{
 			{ArtifactId: "runtime", ManifestDigest: "sha256:runtime", VerifiedAtUnixMs: 1},
 		},
-		StartupTiming:              &runnerv1.StartupTiming{SampleCount: 2, P95Milliseconds: 50},
-		DataPlaneAdvertisedAddress: "10.0.0.5:7443",
+		StartupTiming:                  &runnerv1.StartupTiming{SampleCount: 2, P95Milliseconds: 50},
+		DataPlaneAdvertisedAddress:     "10.0.0.5:7443",
+		DataPlaneCertificateSpkiSha256: strings.Repeat("a", 64),
 	}
 }
 

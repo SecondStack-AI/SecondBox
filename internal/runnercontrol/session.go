@@ -504,6 +504,7 @@ func (session *Session) validateRegistration(registration *runnerv1.RunnerRegist
 		!registration.Capabilities.CleanupReady ||
 		!registration.Capabilities.DataPlaneReady ||
 		strings.TrimSpace(registration.DataPlaneAdvertisedAddress) == "" ||
+		len(registration.DataPlaneCertificateSpkiSha256) != 64 ||
 		registration.Capabilities.GuestProtocolGenerations == nil ||
 		registration.Capabilities.GuestProtocolGenerations.Minimum == 0 ||
 		registration.Capabilities.GuestProtocolGenerations.Minimum >

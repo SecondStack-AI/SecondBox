@@ -14,9 +14,9 @@ The guest agent runs inside each released Firecracker image. It performs bounded
 
 The control plane runs without KVM, TUN, host cgroups, host paths, container-engine access, or added Linux capabilities. It may run in Compose, Kubernetes, or another ordinary container platform. Kubernetes deployment manifests and Kubernetes-native sandbox backends are outside the v1 supported surface.
 
-Runners dial the control plane; the control plane does not require inbound access to runner hosts. Runner identity comes from the CA-signed client certificate and matching deployment-wide Runner credential, not from a claimed message field. The HTTP platform token and Runner credential are separate authorities and are never interchangeable.
+Runners dial the control plane. Direct data-plane clients also require reachability to the admitted runner listener; relay clients do not. Runner identity comes from the CA-signed client certificate and matching deployment-wide Runner credential, not from a claimed message field. The HTTP platform token and Runner credential are separate authorities and are never interchangeable.
 
-The public API uses provider-neutral terms. Responses never contain Firecracker configuration, KVM state, runner addresses or identities, host paths, backend references, fencing tokens, database row shapes, or object-store keys. Runner administration uses the same trusted platform-token boundary as every other HTTP route.
+The public API uses provider-neutral terms. Responses never contain Firecracker configuration, KVM state, runner identities, host paths, backend references, fencing tokens, database row shapes, or object-store keys. The control plane never discloses a runner address except to an authority holding the direct data-plane scope, for one admitted session, with the expected certificate SPKI SHA-256 pin. Runner administration uses the same trusted platform-token boundary as every other HTTP route.
 
 ## Ownership
 
