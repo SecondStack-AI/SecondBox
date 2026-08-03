@@ -511,6 +511,7 @@ type WaitSandboxRequest struct {
 // AcquireLeaseRequest selects a duration within the pinned Profile policy.
 type AcquireLeaseRequest struct {
 	DurationSeconds int64 `json:"durationSeconds"`
+	ReplaceActive   bool  `json:"replaceActive,omitempty"`
 }
 
 // RenewLeaseRequest selects a new bounded duration for active Lease authority.

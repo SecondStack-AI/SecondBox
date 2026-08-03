@@ -169,6 +169,7 @@ type LeaseInput struct {
 	IdempotencyKey  string
 	RequestHash     string
 	IdempotencyEnds time.Time
+	ReplaceActive   bool
 }
 
 // GenerationInput fences a lifecycle report to current Sandbox authority.

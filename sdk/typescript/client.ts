@@ -886,6 +886,25 @@ export class SandboxHandle implements SandboxFilesystem {
     });
   }
 
+  /** Atomically fences prior Lease authority and acquires its replacement. */
+  public takeoverLease(
+    durationSeconds: number,
+    idempotency: string,
+    signal?: AbortSignal,
+  ): Promise<Lease> {
+    requireDurationSeconds(durationSeconds, "Lease");
+    requireNonempty(idempotency, "Lease takeover idempotency key");
+    return this.#api.requestJSON<Lease>("acquireSandboxLease", {
+      pathParameters: { sandboxId: this.#snapshot.id },
+      headers: {
+        "SecondBox-Generation": String(this.#snapshot.generation),
+        "Idempotency-Key": idempotency,
+      },
+      body: encodeJSONBody({ durationSeconds, replaceActive: true }),
+      signal,
+    });
+  }
+
   /** Negotiates a streaming-exec session while leaving WebSocket ownership to the caller. */
   public createExecStream(
     request: StreamingExecRequest,

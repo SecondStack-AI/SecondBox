@@ -62,3 +62,43 @@ func TestLeaseAcquireRefusesSecondActiveAuthorityAndAllowsAfterRelease(t *testin
 		t.Fatalf("second Lease after release = %#v, %v", second, err)
 	}
 }
+
+func TestLeaseAcquireTakeoverAtomicallyFencesPriorAuthority(t *testing.T) {
+	store := openStoreTest(t)
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	_, sandboxID := seedLocalWorkspace(t, store, "lease-takeover", now)
+	if _, err := store.pool.Exec(t.Context(), `
+		UPDATE secondbox.sandboxes SET state='ready',desired_state='running' WHERE id=$1`,
+		sandboxID,
+	); err != nil {
+		t.Fatal(err)
+	}
+	firstInput := ports.LeaseInput{
+		Lease: contracts.Lease{ID: "lease-takeover-first"}, TenantRef: "tenant-local",
+		SubjectRef: "subject-local", SandboxID: sandboxID, Generation: 3,
+		ExpiresAt: now.Add(time.Minute), Now: now,
+		IdempotencyKey: "lease-takeover-first", RequestHash: "first",
+		IdempotencyEnds: now.Add(time.Hour),
+	}
+	if _, err := store.AcquireLease(t.Context(), firstInput); err != nil {
+		t.Fatal(err)
+	}
+	secondInput := firstInput
+	secondInput.Lease.ID = "lease-takeover-second"
+	secondInput.IdempotencyKey = "lease-takeover-second"
+	secondInput.RequestHash = "second"
+	secondInput.ReplaceActive = true
+	secondInput.Now = now.Add(time.Second)
+	secondInput.ExpiresAt = secondInput.Now.Add(time.Minute)
+	second, err := store.AcquireLease(t.Context(), secondInput)
+	if err != nil || second.State != contracts.LeaseStateActive {
+		t.Fatalf("takeover Lease = %#v, %v", second, err)
+	}
+	first, err := store.GetLease(
+		t.Context(), firstInput.TenantRef, firstInput.SubjectRef, sandboxID,
+		firstInput.Lease.ID,
+	)
+	if err != nil || first.State != contracts.LeaseStateFenced {
+		t.Fatalf("prior Lease after takeover = %#v, %v", first, err)
+	}
+}

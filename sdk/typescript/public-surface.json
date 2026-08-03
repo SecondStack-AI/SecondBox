@@ -3,7 +3,9 @@
     "required": [
       "durationSeconds"
     ],
-    "optional": []
+    "optional": [
+      "replaceActive"
+    ]
   },
   "ArgvCommand": {
     "required": [

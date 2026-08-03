@@ -761,7 +761,12 @@ func (service *ControlPlaneService) AcquireSandboxLease(
 	generation int64,
 	idempotencyKey string,
 	durationSeconds int64,
+	replaceActive ...bool,
 ) (contracts.Lease, error) {
+	if len(replaceActive) > 1 {
+		return contracts.Lease{}, errors.New("SecondBox Lease replace-active option is ambiguous")
+	}
+	takeover := len(replaceActive) == 1 && replaceActive[0]
 	if principal.TenantRef == "" || principal.SubjectRef == "" {
 		return contracts.Lease{}, ports.ErrAuthorizationDenied
 	}
@@ -782,7 +787,8 @@ func (service *ControlPlaneService) AcquireSandboxLease(
 	}
 	requestHash, err := hashCanonicalRequest(struct {
 		DurationSeconds int64 `json:"durationSeconds"`
-	}{DurationSeconds: durationSeconds})
+		ReplaceActive   bool  `json:"replaceActive,omitempty"`
+	}{DurationSeconds: durationSeconds, ReplaceActive: takeover})
 	if err != nil {
 		return contracts.Lease{}, err
 	}
@@ -794,6 +800,7 @@ func (service *ControlPlaneService) AcquireSandboxLease(
 		ExpiresAt:  now.Add(time.Duration(durationSeconds) * time.Second), Now: now,
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
 		IdempotencyEnds: now.Add(idempotencyRetention),
+		ReplaceActive:   takeover,
 	})
 }
 
