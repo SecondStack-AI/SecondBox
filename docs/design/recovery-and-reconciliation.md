@@ -22,14 +22,14 @@ admission, compatibility, fencing, local-integrity, and authorization failures
 are terminal until an operator or desired-state change addresses them.
 
 One durable Workspace mutation slot serializes start, stop, Snapshot create and
-delete, restore, and Sandbox deletion. Transactions lock Sandbox, Workspace,
+delete, restore, relocation, and Sandbox deletion. Transactions lock Sandbox, Workspace,
 then Snapshot when present. A pending start retains the slot until ready or
 terminal failure. Every stop-producing path adopts a stable stop effect ID and
 retains the slot through compute detach, local generation advance, and the
 matching PostgreSQL generation commit.
 
 Runner-facing mutations pass through durable effects. Each local-storage command
-has a stable effect ID, expected generation, and immutable home Runner. The
+has a stable effect ID, expected generation, and current authoritative home Runner. The
 Runner persists a receipt before acknowledging the result. A control-plane crash
 before database commit therefore replays the same command and converges on the
 same receipt instead of repeating or guessing the filesystem mutation.
@@ -65,6 +65,10 @@ replayed receipt drives recovery:
   phases. A swapped receipt commits the new generation before rollback cleanup.
 - Workspace deletion remains pending until the home Runner proves all local
   images, Snapshots, staging, rollback, and receipt state has been removed.
+- Workspace relocation restarts export while the original source remains sealed
+  until a checksum-verified target receipt commits the home change. Before that
+  commit, terminal transfer failure queues source unseal; after it, reconnect
+  recovery replays source deletion.
 
 Start stays blocked whenever PostgreSQL and the current-image manifest disagree
 about generation.
@@ -79,15 +83,16 @@ released before local generation advance and `finish_stop`.
 A reconnecting Runner reports its stable identity, new connection ID, active
 Assignments, current Workspace inventory, generation manifests, and
 unacknowledged local-operation receipts. The control plane accepts only evidence
-matching the Workspace's immutable home and current database authority. Stale
+matching the Workspace's current home and database authority. Stale
 compute receives fence-and-cleanup commands. Missing or conflicting local data
 becomes an explicit operator-visible failure; it never triggers empty Workspace
 creation.
 
 Heartbeat expiry marks the Runner unavailable and makes its Sandboxes
 unavailable. It does not prove compute stopped, advance a generation, or
-authorize another Runner. No scheduler path relocates the Workspace or restores
-it from object storage.
+authorize another Runner. No scheduler or automatic recovery path relocates the
+Workspace or restores it from object storage. Explicit relocation still
+requires the source Runner to be connected and its local image intact.
 
 Recovery requires the same trusted Runner identity and WorkspaceStore to return.
 Machine-level recovery must restore the stable Runner identity and

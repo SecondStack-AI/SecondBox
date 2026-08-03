@@ -9,29 +9,32 @@ import (
 )
 
 var (
-	ErrAuthenticationFailed  = errors.New("SecondBox credential authentication failed")
-	ErrAuthorizationDenied   = errors.New("SecondBox authorization denied")
-	ErrInvalidRequest        = errors.New("SecondBox request is invalid")
-	ErrProfileNotFound       = errors.New("SecondBox Profile not found")
-	ErrProfileDisabled       = errors.New("SecondBox Profile is disabled")
-	ErrRunnerPoolNotFound    = errors.New("SecondBox RunnerPool not found")
-	ErrRunnerPoolExists      = errors.New("SecondBox RunnerPool already exists")
-	ErrRunnerNotFound        = errors.New("SecondBox Runner not found")
-	ErrRunnerPoolUnavailable = errors.New("SecondBox compatible runner pool unavailable")
-	ErrSandboxNotFound       = errors.New("SecondBox Sandbox not found")
-	ErrSandboxNameConflict   = errors.New("SecondBox Sandbox name is already in use")
-	ErrIdempotencyConflict   = errors.New("SecondBox idempotency key payload conflict")
-	ErrQuotaExceeded         = errors.New("SecondBox quota exceeded")
-	ErrRevisionConflict      = errors.New("SecondBox resource revision conflict")
-	ErrLifecycleUnavailable  = errors.New("SecondBox lifecycle unavailable without a runner assignment")
-	ErrHomeRunnerUnavailable = errors.New("SecondBox Sandbox home runner is unavailable")
-	ErrWorkspaceMutation     = errors.New("SecondBox Workspace has a conflicting local mutation")
+	ErrAuthenticationFailed        = errors.New("SecondBox credential authentication failed")
+	ErrAuthorizationDenied         = errors.New("SecondBox authorization denied")
+	ErrInvalidRequest              = errors.New("SecondBox request is invalid")
+	ErrProfileNotFound             = errors.New("SecondBox Profile not found")
+	ErrProfileDisabled             = errors.New("SecondBox Profile is disabled")
+	ErrRunnerPoolNotFound          = errors.New("SecondBox RunnerPool not found")
+	ErrRunnerPoolExists            = errors.New("SecondBox RunnerPool already exists")
+	ErrRunnerNotFound              = errors.New("SecondBox Runner not found")
+	ErrRunnerPoolUnavailable       = errors.New("SecondBox compatible runner pool unavailable")
+	ErrSandboxNotFound             = errors.New("SecondBox Sandbox not found")
+	ErrSandboxNameConflict         = errors.New("SecondBox Sandbox name is already in use")
+	ErrIdempotencyConflict         = errors.New("SecondBox idempotency key payload conflict")
+	ErrQuotaExceeded               = errors.New("SecondBox quota exceeded")
+	ErrRevisionConflict            = errors.New("SecondBox resource revision conflict")
+	ErrLifecycleUnavailable        = errors.New("SecondBox lifecycle unavailable without a runner assignment")
+	ErrHomeRunnerUnavailable       = errors.New("SecondBox Sandbox home runner is unavailable")
+	ErrWorkspaceMutation           = errors.New("SecondBox Workspace has a conflicting local mutation")
+	ErrSandboxNotStopped           = errors.New("SecondBox Workspace relocation requires a stopped Sandbox")
+	ErrRelocationTargetUnavailable = errors.New("SecondBox Workspace relocation target is unavailable or incompatible")
+	ErrRelocationSnapshotsPresent  = errors.New("SecondBox Workspace relocation requires all Snapshots to be deleted")
 	// ErrSerializationContention reports that a transaction lost a serialization
 	// race and the caller should try again later. It is an ordinary outcome of
 	// serializable isolation under concurrency, not a fault: a caller that treats
 	// it as one will fail whenever load rises.
 	ErrSerializationContention = errors.New("SecondBox transaction lost a serialization race")
-	ErrWorkspaceHomeConflict   = errors.New("SecondBox Workspace home runner is immutable")
+	ErrWorkspaceHomeConflict   = errors.New("SecondBox Workspace home runner differs from assigned authority")
 	ErrGenerationFenced        = errors.New("SecondBox Sandbox generation is fenced")
 	ErrLeaseNotFound           = errors.New("SecondBox Lease not found")
 	ErrLeaseAlreadyActive      = errors.New("SecondBox Sandbox already has an active Lease")
@@ -150,6 +153,23 @@ type LifecycleIntentInput struct {
 	SandboxID        string
 	DesiredState     string
 	Operation        contracts.Operation
+	Now              time.Time
+	IdempotencyKey   string
+	RequestHash      string
+	IdempotencyEnds  time.Time
+	ExpectedRevision int64
+}
+
+// WorkspaceRelocationInput admits one stopped-Sandbox home transfer.
+type WorkspaceRelocationInput struct {
+	Principal        contracts.Principal
+	SandboxID        string
+	TargetRunnerID   string
+	RunnerPool       string
+	Operation        contracts.Operation
+	RelocationID     string
+	ExportCommandID  string
+	FencingToken     []byte
 	Now              time.Time
 	IdempotencyKey   string
 	RequestHash      string

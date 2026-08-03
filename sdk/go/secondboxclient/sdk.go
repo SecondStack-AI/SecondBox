@@ -205,6 +205,15 @@ func (handle *SandboxHandle) Stop(ctx context.Context, options LifecycleOptions)
 	return handle.lifecycle(ctx, "stopSandbox", options, nil)
 }
 
+// Relocate moves one stopped Snapshot-free Sandbox Workspace to a compatible Runner.
+func (handle *SandboxHandle) Relocate(
+	ctx context.Context,
+	options LifecycleOptions,
+	request RelocateSandboxRequest,
+) (Operation, error) {
+	return handle.lifecycle(ctx, "relocateSandbox", options, request)
+}
+
 // Restore replaces the stopped Sandbox workspace with a writable Snapshot copy.
 func (handle *SandboxHandle) Restore(
 	ctx context.Context,

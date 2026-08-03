@@ -26,15 +26,15 @@ A Runner is privileged on its host and can observe active guest memory and every
 
 Firecracker, jailer, cgroups, namespaces, minimal devices, signed images, and a narrow guest protocol provide defense in depth. Guest paths resolve beneath descriptor-pinned workspace roots. Resource, deadline, payload, transfer, and output bounds apply at admission and execution. Guest output, filenames, log text, and protocol errors are untrusted and bounded.
 
-Control-plane fencing prevents a stale Runner from committing authoritative state for a newer generation. It cannot remediate a compromised or lost home Runner. Recovery requires a trusted consistent backup of that Runner's stable identity and Workspace root; the control plane never relocates or reconstructs its Sandboxes on a fresh Runner.
+Control-plane fencing prevents a stale Runner from committing authoritative state for a newer generation. It cannot remediate a compromised or lost home Runner. Recovery requires a trusted consistent backup of that Runner's stable identity and Workspace root; the control plane never automatically relocates or reconstructs its Sandboxes on a fresh Runner. Operator relocation requires the intact source Runner to seal and stream the stopped Workspace.
 
 ## Durable bytes and recovery
 
 Artifact publication uses immutable keys, declared size and SHA-256 evidence, verified object reads, atomic metadata publication, retention, and two-phase garbage collection. Uploads spool and hash before durable admission; downloads are fully integrity-verified before response bytes are exposed. Missing or corrupt reachable bytes fail explicitly.
 
-Workspace durability is local to one immutable home Runner. The WorkspaceStore
+Workspace durability is local to one authoritative home Runner at a time. The WorkspaceStore
 uses reflink-only cloning, atomic manifests, fsync, exclusive writer locks, and
-durable operation receipts. The runner protocol never transports image bytes or
+durable operation receipts. Except for the bounded operator-initiated stopped-Sandbox relocation stream, the runner protocol never transports image bytes or
 paths. Loss of an unbacked home-Runner filesystem loses its Sandboxes and local
 Snapshots; PostgreSQL or S3 recovery alone is insufficient.
 

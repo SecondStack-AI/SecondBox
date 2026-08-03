@@ -1,14 +1,14 @@
 {
-  "schema_generation": 1,
+  "schema_generation": 2,
   "server_window": {
     "minimum": 1,
-    "maximum": 1
+    "maximum": 2
   },
   "negotiation_cases": [
     {
       "name": "current_generation",
       "client_minimum": 1,
-      "client_maximum": 1,
+      "client_maximum": 2,
       "mandatory_features": [
         "exec_streaming",
         "evidence",
@@ -20,13 +20,13 @@
         "file_streaming",
         "local_workspace"
       ],
-      "selected_generation": 1,
+      "selected_generation": 2,
       "rejection": ""
     },
     {
       "name": "future_only",
-      "client_minimum": 2,
-      "client_maximum": 3,
+      "client_minimum": 3,
+      "client_maximum": 4,
       "mandatory_features": [],
       "server_features": [
         "exec_streaming"

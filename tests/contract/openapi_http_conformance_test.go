@@ -53,6 +53,7 @@ var auditedV1HTTPOperations = map[string]auditedHTTPOperation{
 	"touchSandbox":             {"mutateSandbox", "200", "TouchResult", []string{"Idempotency-Key", "SecondBox-Generation"}, nil},
 	"drainSandbox":             {"mutateSandboxLifecycle", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},
 	"stopSandbox":              {"mutateSandboxLifecycle", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},
+	"relocateSandbox":          {"mutateSandbox", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},
 	"restoreSandboxSnapshot":   {"mutateSandbox", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},
 	"waitForSandbox":           {"mutateSandbox", "200", "Sandbox", nil, []string{"ETag"}},
 	"getOperation":             {"getOperation", "200", "Operation", nil, nil},

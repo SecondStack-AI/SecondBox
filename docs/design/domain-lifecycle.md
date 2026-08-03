@@ -14,7 +14,7 @@ All identifiers are server-generated opaque strings. Timestamps are UTC RFC 3339
 | `Instance` | Belongs to one Sandbox generation. It records state, Assignment, start/ready/stop timestamps, and one stable termination reason. It contains no public backend or host location. |
 | `Assignment` | Internal authority joining one Sandbox generation to one Runner. It contains the fencing token, capability snapshot, resolved artifacts, state, and proof of release. |
 | `Lease` | Subject-scoped, bounded authority for useful activity against one Sandbox generation. It expires, is released, or is fenced; it never outlives its generation. |
-| `Workspace` | Belongs to one Sandbox and has one immutable home Runner. It records logical capacity, current generation, readiness/deletion state, one durable mutation slot, and opaque local receipt evidence without a host path. |
+| `Workspace` | Belongs to one Sandbox and has one authoritative home Runner. It records logical capacity, current generation, readiness/deletion state, one durable mutation slot, and opaque local receipt evidence without a host path. Its home changes only through an operator-initiated stopped-Sandbox relocation. |
 | `Snapshot` | Subject-owned immutable local reflink of one stopped Sandbox Workspace. It records logical size, lifecycle state, creation time, optional expiration, and bounded metadata without an image digest or storage reference. |
 | `Artifact` | Subject-owned immutable application exchange object with name, media type, size, checksum, source generation, and retention timestamps. It is separate from a workspace path. |
 | `RunnerPool` | Operator-owned placement and trust boundary. It declares allowed architectures, capabilities, capacity policy, and enrolled Runners. |
@@ -28,7 +28,17 @@ The durable observed states are `creating`, `stopped`, `starting`, `ready`, `dra
 
 Lifecycle mutations require an `Idempotency-Key`; revision-sensitive Sandbox mutations also require `If-Match`. Snapshot delete deliberately has no independent revision because Snapshot has no ETag. PostgreSQL serializes equal keys, replays the original Operation for an equal canonical request, rejects changed payloads, and rejects stale revisions.
 
-Creation resolves and pins the ProfileRevision, selects one compatible healthy home Runner, persists that immutable home, and remains asynchronous until the Runner returns a durable Workspace-create receipt. A profile determines whether creation also requests a running Instance. Starting always targets that exact home, resolves the current local image at the expected generation, and makes the Instance ready only after Runner and guest negotiation succeed.
+Creation resolves and pins the ProfileRevision, selects one compatible healthy home Runner, persists that home, and remains asynchronous until the Runner returns a durable Workspace-create receipt. A profile determines whether creation also requests a running Instance. Starting always targets the current exact home, resolves the current local image at the expected generation, and makes the Instance ready only after Runner and guest negotiation succeed.
+
+`POST /v1/sandboxes/{sandboxId}:relocate` is an asynchronous, revision-sensitive
+operator mutation. It refuses a running Sandbox and a Workspace with any
+non-deleted Snapshot. The caller names a target Runner or requests compatible
+selection within the pinned ProfileRevision's pool. Admission validates the
+same pool, architecture, capability, health, drain, storage, and capacity
+requirements as initial placement before the source image is sealed or any byte
+moves. Source seal, bounded transfer, checksum-verified target import, atomic
+home change, and source deletion are separate receipt-backed phases under the
+one Workspace mutation slot.
 
 Drain rejects new exec, filesystem transfer, PTY, port, and Lease admission. Already admitted operations receive the profile's bounded drain grace. Stop flushes and detaches compute, durably advances the local Workspace generation, then commits that exact generation in PostgreSQL. It does not create a Snapshot, hash an image, or contact object storage. Delete drains and stops, asks the home Runner to delete all local Workspace and Snapshot state, and only then tombstones the Sandbox. Deletion is never implied by a client disconnect or Flue harness close.
 
@@ -38,9 +48,9 @@ An active Sandbox has exactly one current generation and at most one writer Assi
 
 A completed stop is the terminal boundary for its Instance generation. After Runner release evidence proves compute detached, the Runner atomically advances the current-image manifest and persists a replayable receipt. The `finish_stop` transaction advances the Sandbox and Workspace generations to that exact value, fences remaining Leases and activity sessions from the old generation, and clears the current Instance. Replaying either side cannot advance the generation again.
 
-Runner loss uses the Assignment reconciler rather than normal stop. Heartbeat expiry makes the Assignment uncertain without changing generation or scheduling a replacement. The Sandbox reports its home Runner unavailable and remains pinned. When the same stable Runner returns, exact inventory, receipt, Assignment, and fencing evidence determines whether reconciliation may resume or must surface missing/conflicting local data.
+Runner loss uses the Assignment reconciler rather than normal stop. Heartbeat expiry makes the Assignment uncertain without changing generation or scheduling a replacement. The Sandbox reports its home Runner unavailable and remains on that home. When the same stable Runner returns, exact inventory, receipt, Assignment, and fencing evidence determines whether reconciliation may resume or must surface missing/conflicting local data. Runner loss never initiates relocation automatically.
 
-A stale control-plane replica may observe old state but cannot commit a mutation without the current database revision and Workspace mutation slot. A stale Runner or guest may send old evidence but cannot mutate a newer generation. No recovery path relocates a Sandbox or creates an empty replacement.
+A stale control-plane replica may observe old state but cannot commit a mutation without the current database revision and Workspace mutation slot. A stale Runner or guest may send old evidence but cannot mutate a newer generation. No automatic recovery path relocates a Sandbox or creates an empty replacement.
 
 ## Activity and termination
 
@@ -50,6 +60,6 @@ Guest liveness and idleness are separate inputs. An Instance terminates with exa
 
 After readiness, a Runner may report natural guest shutdown, cgroup-proved resource exhaustion, or an unclassified runtime disappearance. The event must match the current Assignment fence and full durable correlation. PostgreSQL stores one immutable event and applies its reason only when the Instance has no earlier reason. FenceResult preserves an existing Instance cause, otherwise propagates the Sandbox lifecycle cause, and uses `fenced` only when neither exists. `finish_stop` applies the same first-writer rule to the old generation before advancing it. A terminal observation stops the Instance and wakes lifecycle reconciliation, but it does not release the Assignment or Workspace attachment, change the generation, or authorize replacement. The ordinary stop path still requires exact release proof and a local generation receipt.
 
-The lifecycle worker claims due Sandboxes with `FOR UPDATE SKIP LOCKED`, an owner, expiry, and revision. It loads the pinned ProfileRevision, current Instance, immutable home Workspace, mutation state, and active useful-session count, computes one action, and commits it only while the claim is current. Runner-facing Workspace create, start, stop, Snapshot, restore, and delete actions remain durable instructions until matching generation-bound receipts advance the next transition.
+The lifecycle worker claims due Sandboxes with `FOR UPDATE SKIP LOCKED`, an owner, expiry, and revision. It loads the pinned ProfileRevision, current Instance, authoritative home Workspace, mutation state, and active useful-session count, computes one action, and commits it only while the claim is current. Runner-facing Workspace create, start, stop, Snapshot, restore, relocation, and delete actions remain durable instructions until matching generation-bound receipts advance the next transition.
 
 See [API conventions](api-conventions.md), [Workspace durability](workspace-durability.md), and [Recovery and reconciliation](recovery-and-reconciliation.md).

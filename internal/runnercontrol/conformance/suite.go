@@ -101,7 +101,7 @@ func registered(
 			Registration: &runnerv1.RunnerRegistration{
 				MessageId: messageID, Sequence: sequence, RunnerId: runnerID,
 				ConnectionId: connectionID, RunnerPoolId: "general",
-				SoftwareVersion: "1.0.0", ProtocolVersion: runnerv1.SupportedProtocolMaximum,
+				SoftwareVersion: "1.0.0", ProtocolVersion: 1,
 				Capabilities: &runnerv1.RunnerCapabilities{
 					Architecture: "amd64", FirecrackerVersion: "1.16.1",
 					KvmReady: true, JailerReady: true, CgroupReady: true,

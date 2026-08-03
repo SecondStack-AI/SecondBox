@@ -27,20 +27,20 @@ The suite closes that gap and nothing else. It reuses `sdk/go/secondboxclient` s
 - Waiting is the harness's job. `waitForSandbox` caps `deadlineMilliseconds` at 60000 and `SandboxHandle.Wait` rejects anything longer at `sdk/go/secondboxclient/sdk.go:168`. Every scenario uses one shared helper that issues repeated bounded waits against an outer deadline and fails with the last observed state, not a bare timeout.
 - Scenarios are independent and self-cleaning. Each creates its own Sandbox, tears it down in `t.Cleanup`, and asserts on states and payloads rather than on wall-clock timing. A scenario must not depend on another scenario's residue.
 - Snapshot semantics follow the runner-local copy-on-write model: restore is in-place, stopped-only, and confined to the Snapshot's own Sandbox. It advances the generation and invalidates stale authority. Restoring into a different Sandbox is not a scenario because it is not a supported operation.
-- Home-runner pinning is load-bearing. When the runner is lost, the correct observable outcome is the typed unavailable state and recovery when the same runner returns — never relocation, never an empty replacement workspace.
+- Home-runner authority is load-bearing. When the runner is lost, the correct observable outcome is the typed unavailable state and recovery when the same runner returns — never automatic relocation, never an empty replacement workspace. Explicit relocation requires an intact connected source.
 
 ## Non-goals
 
 - Do not replace or fold in `just test-compose`, `just test-firecracker`, or `just test-multirunner`. Each keeps its distinct cost and prerequisite profile; this suite is the gate that requires a full KVM host and the 11 GB signed bundle.
 - Do not run this suite on GitHub-hosted runners. They provide neither KVM nor the artifact bundle. It is a self-hosted or manually invoked gate, exactly as `just test-firecracker` is gated on `SECONDBOX_RUNNER_QUALIFY_FIRECRACKER=1` today.
-- Do not add a second runner, cross-runner placement, or relocation scenarios. Multi-runner behavior belongs to `just test-multirunner`.
+- Do not add a second runner, cross-runner placement, or explicit relocation scenarios to this suite. Multi-runner behavior belongs to `just test-multirunner`.
 - Do not introduce fakes, stubs, recorded fixtures, or a degraded mode that runs without KVM. A host that cannot boot a microVM cannot run this suite.
 - Do not assert on host paths, storage references, runner identity, or backend vocabulary through public schemas. Public-schema leak assertions belong to the contract suite.
 - Do not build the microVM image bundle as part of the suite. The bundle is an input, materialized and verified separately.
 
 ## Dependencies
 
-This plan assumes the runner-local copy-on-write workspace migration in `docs/plans/2026-07-29-runner-local-cow-workspaces.md` has landed: checkpoints removed, Snapshot create/delete/restore as asynchronous Operations, and each Sandbox pinned to one immutable home runner. Tasks 6 and 8 assert that model directly. Tasks 1 through 5 do not depend on it and can proceed in parallel.
+This plan assumes the runner-local copy-on-write workspace migration in `docs/plans/2026-07-29-runner-local-cow-workspaces.md` has landed: checkpoints removed, Snapshot create/delete/restore as asynchronous Operations, and each Sandbox assigned to one authoritative home runner at a time. Tasks 6 and 8 assert that model directly. Tasks 1 through 5 do not depend on it and can proceed in parallel.
 
 ## Validation Commands
 
@@ -149,7 +149,7 @@ Prove the reconciler converges against real compute, including the failure mode 
 - [x] Prove every ordinary transition through the public API: create, drain, stop, start, and delete, waiting on the published state at each step and asserting terminal states.
 - [x] Prove `deleteSandbox` releases the runner's workspace, network, and capacity, verified through `getRunner` capacity returning to its pre-Sandbox value.
 - [x] Prove control-plane restart mid-lifecycle converges: restart the container while a Sandbox is starting and assert it reaches a correct terminal state without operator action.
-- [x] Prove runner loss produces the typed unavailable state rather than relocation or an empty replacement workspace, by stopping the runner container while a Sandbox is `ready`.
+- [x] Prove runner loss produces the typed unavailable state rather than automatic relocation or an empty replacement workspace, by stopping the runner container while a Sandbox is `ready`.
 - [x] Prove the same runner returning restores service and that the Sandbox's workspace contents survived, which is the observable guarantee home-runner pinning exists to provide.
 - [x] Prove a runner killed mid-execution does not leave the Sandbox permanently wedged: the in-flight operation reaches a terminal state and the Sandbox is recoverable or explicitly failed.
 - [x] Run `just test-scenario`.

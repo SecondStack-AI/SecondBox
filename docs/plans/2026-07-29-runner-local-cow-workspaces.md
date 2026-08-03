@@ -10,7 +10,7 @@ provenance: SecondBox runner-independence simplification design, 2026-07-29
 
 ## Outcome
 
-Replace portable, S3-backed workspace checkpoints with a simpler model in which each Sandbox has one immutable home runner and that runner's local copy-on-write filesystem is the authoritative durable workspace store. SecondBox continues to support multiple runner machines and keeps the control plane separate and unprivileged, but a Sandbox cannot move between runners. If its home runner is offline, the Sandbox is unavailable rather than restored elsewhere.
+Replace portable, S3-backed workspace checkpoints with a simpler model in which each Sandbox has one authoritative home runner and that runner's local copy-on-write filesystem is the authoritative durable workspace store. SecondBox continues to support multiple runner machines and keeps the control plane separate and unprivileged. Ordinary lifecycle and automatic recovery cannot move a Sandbox between runners; the later operator relocation Operation requires a stopped Sandbox and intact source. If its home runner is offline, the Sandbox is unavailable rather than restored elsewhere.
 
 Keep the public Snapshot resource while changing its implementation to runner-local reflink snapshots. Snapshot create, delete, and in-place restore are asynchronous durable operations. Remove full-image hashing, full-image upload/download, cross-runner materialization, and workspace retained-byte accounting. S3-compatible storage remains for Artifacts and other immutable assets; external backup of runner-local workspace storage is an operator responsibility outside this implementation.
 
@@ -19,7 +19,7 @@ The runner-local workspace format is a raw ext4 image stored on a reflink-capabl
 ## Fixed architecture
 
 - `Sandbox` remains the durable public resource. `Instance` remains replaceable compute fenced to one Sandbox generation.
-- Every Sandbox receives exactly one `home_runner_id` during creation. That value is internal, immutable, and never appears in public schemas.
+- Every Sandbox receives one `home_runner_id` during creation. That value is internal, never appears in public schemas, and changes only through the explicit stopped-Sandbox relocation Operation.
 - The home runner's local workspace is the only authoritative durable workspace copy known to SecondBox. PostgreSQL stores desired state, the home-runner decision, generations, assignments, operation state, and snapshot metadata, but never a host path.
 - A stopped Sandbox may restart only on its home runner. Runner draining prevents new Sandbox homes from being placed there. Runner loss does not trigger relocation, an empty workspace, or checkpoint recovery.
 - Active workspace versions and snapshots are raw ext4 image files on one reflink-capable filesystem. An atomically replaced, fsynced local manifest selects the current writable version; Snapshots are read-only-by-policy reflink clones.
@@ -29,12 +29,12 @@ The runner-local workspace format is a raw ext4 image stored on a reflink-capabl
 - Every workspace mutation transaction acquires rows in the global order Sandbox, then Workspace, then Snapshot when present. No endpoint or reconciler may introduce a different lock order.
 - Every ordinary stop durably advances the runner-local workspace generation before PostgreSQL's existing `finish_stop` transition advances the Sandbox and Workspace rows. Replayed stop completion converges on the same generation.
 - Public Snapshot metadata has no SHA-256. `sizeBytes` means logical image capacity, not physical blocks uniquely attributable to the Snapshot.
-- The control plane never mounts a workspace, calls `FICLONE`, or receives workspace image bytes. Only the runner accesses local workspace paths and privileged compute facilities.
+- The control plane never mounts a workspace or calls `FICLONE`. It forwards Workspace image bytes only in memory for the explicit stopped-Sandbox relocation Operation. Only the runner accesses local workspace paths and privileged compute facilities.
 - Firecracker remains the only implemented backend. This work preserves a provider-neutral local-workspace port and compute-backend conformance suite but adds no smolvm implementation, placeholder, feature flag, or fallback.
 
 ## Non-goals
 
-- Do not implement live migration, stopped-Sandbox relocation, cross-runner copy, cross-Sandbox cloning, Snapshot export/import, or control-plane workspace streaming.
+- Do not implement live migration, automatic relocation, general cross-runner copy, cross-Sandbox cloning, or Snapshot export/import. The explicit stopped-Sandbox relocation Operation is the sole control-plane Workspace streaming path.
 - Do not implement a SecondBox-managed backup transport, backup catalog, or automatic runner replacement. Operators back up and restore the runner filesystem and runner identity through separate infrastructure.
 - Do not merge the control plane and runner, grant the control plane host-storage access, or change the outbound authenticated runner connection model.
 - Do not expose a Sandbox's home-runner linkage, host paths, local storage references, filesystem type, reflink details, Firecracker, or a future backend name through Sandbox, Workspace, Snapshot, or Operation schemas. Preserve the separate administrative Runner API.
@@ -78,10 +78,10 @@ Change the public contract first so the implementation has one intended lifecycl
 
 Make PostgreSQL describe durable ownership and operation intent without pretending to contain or locate workspace bytes. Replace the canonical pre-release baseline instead of carrying obsolete checkpoint and materialization tables through compatibility migrations. Cross-resource IDs remain logical strings without foreign keys or CHECK constraints.
 
-- [x] Update `migrations/postgres/0001_secondbox.sql` and its schema fixtures to add immutable internal `home_runner_id` ownership to `workspaces`, including explicit creation/readiness/deletion state and logical image capacity. Derive a Sandbox's home through its logical Workspace ID rather than duplicating the field on `sandboxes`.
+- [x] Update `migrations/postgres/0001_secondbox.sql` and its schema fixtures to add authoritative internal `home_runner_id` ownership to `workspaces`, including explicit creation/readiness/deletion state and logical image capacity. Derive a Sandbox's home through its logical Workspace ID rather than duplicating the field on `sandboxes`.
 - [x] Select field names that distinguish a runner's stable logical ID from private storage evidence; never persist a host path. Use a private opaque local reference only if the runner protocol cannot address storage deterministically by Workspace or Snapshot ID.
 - [x] Remove `workspace_checkpoints`, `workspace_materializations`, current-checkpoint hash/size fields, checkpoint compatibility fields, retained workspace bytes, checkpoint garbage-collection state, and cross-runner source-checkpoint state.
-- [x] Replace Snapshot persistence with local lifecycle metadata: Sandbox/Workspace identity, immutable home runner, logical size, state, retention deadline, operation/effect correlation, timestamps, and optional private runner receipt/reference. Do not store a full-image digest.
+- [x] Replace Snapshot persistence with local lifecycle metadata: Sandbox/Workspace identity, authoritative home runner, logical size, state, retention deadline, operation/effect correlation, timestamps, and optional private runner receipt/reference. Do not store a full-image digest.
 - [x] Model Snapshot states needed for crash-safe asynchronous create/delete/restore, and make repository methods idempotent under duplicate API requests, duplicate effects, reordered runner results, and control-plane restart.
 - [x] Add durable restore bookkeeping sufficient to distinguish requested, staged, runner-swapped, database-committed, finalized, and failed work without storing an image path.
 - [x] Add one durable Workspace mutation slot containing kind, stable mutation/effect ID, optional public Operation ID, expected/current generation, and state. Acquire it while locking rows in the invariant order Sandbox → Workspace → Snapshot when present; make conflicting start, stop, Snapshot, restore, and delete transitions fail or wait deterministically. A pending start owns the slot from admission until ready or terminal failure so later reconciliation cannot race a Snapshot/restore admitted from stale stopped state.
@@ -89,7 +89,7 @@ Make PostgreSQL describe durable ownership and operation intent without pretendi
 - [x] Delete checkpoint and materialization store interfaces and implementations in `internal/store`; introduce narrow home-workspace and local-Snapshot repository methods used by lifecycle code.
 - [x] Update quota transactions so Snapshot count and Artifact bytes remain enforceable while workspace/Snapshot filesystem allocation is not charged as uniquely retained bytes.
 - [x] Preserve assignment, generation, fencing, lease, audit, and Operation records. Add indexes for home-runner reconciliation and pending local-storage effects without adding physical foreign keys or CHECK constraints.
-- [x] Add store conformance tests for immutable home assignment, concurrent initial placement, Snapshot state transitions, restore recovery points, deletion retries, retention selection, and artifact-only quota accounting.
+- [x] Add store conformance tests for ordinary-lifecycle home assignment, concurrent initial placement, Snapshot state transitions, restore recovery points, deletion retries, retention selection, and artifact-only quota accounting.
 - [x] Run the PostgreSQL store tests and `just test-contract`.
 
 ### Task 3: Implement the runner-local reflink workspace store
@@ -115,7 +115,7 @@ Introduce a provider-neutral runner-owned `WorkspaceStore` below lifecycle and b
 
 The control plane should coordinate local storage state, not carry disk bytes. Replace chunked checkpoint upload/download with small idempotent commands and durable results that refer only to logical resource IDs, generations, and operation/effect IDs.
 
-- [x] Remove `RUNNER_FEATURE_CHECKPOINT`, `source_checkpoint_id`, checkpoint chunk/result messages, restore begin/chunk messages, and every protocol field used to stream workspace bytes.
+- [x] Remove `RUNNER_FEATURE_CHECKPOINT`, `source_checkpoint_id`, checkpoint chunk/result messages, restore begin/chunk messages, and every protocol field used to stream portable checkpoint bytes. Protocol generation 2 relocation messages remain the sole stopped-Sandbox exception.
 - [x] Add a provider-neutral local-workspace capability and versioned commands/results for workspace create/inspect/delete, generation advance, Snapshot create/delete, restore prepare/swap/finalize, and reconciliation.
 - [x] Keep protocol payloads logical: Sandbox ID, Workspace ID, Snapshot ID, expected generation, fencing token, operation/effect ID, logical capacity, and result evidence. Do not transmit host paths or make the control plane understand runner-local handles.
 - [x] Require every command to carry the home runner identity implicitly through its authenticated session and reject it if the target workspace is not locally owned by that runner.
@@ -123,7 +123,7 @@ The control plane should coordinate local storage state, not carry disk bytes. R
 - [x] Update runner session reconnect logic so unacknowledged local-storage results are replayed until the control plane durably records them.
 - [x] Update capability negotiation and frozen protobuf fixtures; explicitly reject old runners that only implement portable checkpoints rather than retaining a mixed-mode compatibility path.
 - [x] Delete checkpoint sender/receiver composition and streaming backpressure code from `internal/lifecycle`, `internal/runnercontrol`, and `runner/internal/runnercontrol`.
-- [x] Add protocol tests for duplicate/reordered commands, disconnect before/after receipt, reconnect replay, stale fencing, wrong home runner, protocol skew, and payload checks proving no image bytes or local paths cross the connection.
+- [x] Add protocol tests for duplicate/reordered commands, disconnect before/after receipt, reconnect replay, stale fencing, wrong home runner, protocol skew, and payload checks proving no image bytes or local paths cross ordinary lifecycle messages.
 - [x] Run protobuf generation verification and the runner-control conformance suite.
 
 ### Task 5: Pin each Sandbox to one home runner during creation
@@ -137,13 +137,13 @@ Change placement from per-Instance scheduling with portable materialization to o
 - [x] Constrain every Instance assignment to the home runner while preserving assignment IDs, generations, fencing tokens, capacity admission, and exactly-one-writer rules.
 - [x] Make lifecycle admission lock and inspect the Workspace mutation slot. Acquire it for start before changing desired state and retain it through assignment/ready or terminal startup failure; a pending local mutation must prevent a conflicting start, stop, Snapshot, restore, or Sandbox delete from being accepted under the same stopped revision.
 - [x] Before the reconciler dispatches any compute stop, transactionally acquire or adopt the Workspace mutation slot under a stable stop effect ID. Cover explicit stop and drain Operations plus idle timeout, maximum duration, guest shutdown, guest-agent/liveness loss, runner recovery, deletion, and every other decision that can lead to `finish_stop` without a public Operation.
-- [x] Define drain semantics: a draining runner receives no new Sandbox homes and no new Instances; its existing stopped Sandboxes remain pinned and unavailable for start until the runner is undrained.
+- [x] Define drain semantics: a draining runner receives no new Sandbox homes and no new Instances; its existing stopped Sandboxes remain unavailable for start until the runner is undrained or an operator explicitly relocates an eligible Workspace.
 - [x] Define offline semantics: retain the Sandbox and workspace metadata, report a stable home-runner-unavailable state/error, and do not advance to an empty workspace or another runner.
 - [x] Reconcile returning runners by comparing authenticated runner identity, local Workspace inventory/receipts, current assignment, and generation. Treat missing or conflicting local data as an explicit operator-visible failure, not a recreation request.
 - [x] Make Sandbox deletion wait for the home runner to stop compute and durably delete its Snapshots, active image, staged/rollback files, and receipts before finalizing the public tombstone. Keep deletion pending while the home runner is unavailable.
 - [x] Document the operator recovery boundary: machine restoration must preserve or deliberately restore both stable runner identity and its workspace root; automatic rebind to a new runner ID is out of scope.
 - [x] Remove locality scoring, portable materialization scheduling, and cross-runner recovery branches made unreachable by exact-home assignment.
-- [x] Add lifecycle tests with two fake runners for deterministic initial placement, immutable pinning, drain, offline/online recovery, missing local data, no relocation, concurrent create/start, and multiple control-plane replicas.
+- [x] Add lifecycle tests with two fake runners for deterministic initial placement, ordinary-lifecycle pinning, drain, offline/online recovery, missing local data, no automatic relocation, concurrent create/start, and multiple control-plane replicas.
 - [x] Run scheduler, lifecycle, and runner-control integration tests.
 
 ### Task 6: Attach the local raw ext4 workspace through the compute port
@@ -205,11 +205,11 @@ Delete the old path completely after local lifecycle tests pass. Preserve S3-com
 - [x] Refactor object-store composition and configuration so S3 remains explicitly required only by features that still use it, especially Artifacts; do not remove or weaken Artifact hashing, retention, authorization, or garbage collection.
 - [x] Replace workspace retained-byte metrics and quota labels with meaningful Artifact and runner-storage signals. Keep metric cardinality fixed and do not label host paths, Sandbox IDs, or Snapshot IDs.
 - [x] Update runner disk-pressure reporting to use filesystem-wide capacity/reservation evidence for the local workspace root. Admission may reject new homes or Snapshot operations, but must not claim exact per-Snapshot physical ownership.
-- [x] Remove `just test-backup-restore` and the fresh-runner checkpoint restoration test. Add a deployment test proving a control plane with S3 available cannot relocate or reconstruct a Sandbox whose home runner is absent.
+- [x] Remove `just test-backup-restore` and the fresh-runner checkpoint restoration test. Add a deployment test proving a control plane with S3 available cannot automatically relocate or reconstruct a Sandbox whose home runner is absent.
 - [x] Update Compose, systemd, environment validation, examples, support bundles, and operations documentation to require the reflink workspace root and remove dm-thin/checkpoint settings.
 - [x] Document external backup requirements without implementing them: stop or otherwise quiesce affected Sandboxes, back up the home runner's workspace filesystem and stable identity consistently, and validate restoration through the operator's chosen system.
 - [x] Update threat, recovery, and durability documentation to state plainly that loss of an unbacked home-runner filesystem loses those Sandboxes, while control-plane or S3 recovery alone is insufficient.
-- [x] Update SDK, CLI, quick-start, profile, lifecycle, runner, storage, backup, and failure-mode documentation. Remove every claim of portable checkpoints, stopped-Sandbox relocation, or fresh-runner recovery.
+- [x] Update SDK, CLI, quick-start, profile, lifecycle, runner, storage, backup, and failure-mode documentation. Remove every claim of portable checkpoints or fresh-runner recovery and identify the explicit stopped-Sandbox relocation Operation as the only cross-Runner exception.
 - [x] Use `rg` checks to remove obsolete exported names, environment variables, protocol messages, schema fields, and error prefixes rather than retaining compatibility shims.
 - [x] Run `just verify-generated`, `just test`, `just test-contract`, `just test-compose`, and `just test-deployment`.
 
@@ -218,8 +218,8 @@ Delete the old path completely after local lifecycle tests pass. Preserve S3-com
 Close the migration only after both correctness and the intended simplification are demonstrated. Qualification must prove that multiple independent runner machines still work, that each Sandbox remains pinned, and that local COW operations never degrade into full-image copies or hidden portability.
 
 - [x] Add `just test-multirunner` and a documented two-runner fixture with distinct stable identities and distinct reflink workspace roots.
-- [x] Prove initial placement can distribute different Sandboxes across runners, while every start, stop, Snapshot, restore, and delete for each Sandbox is sent only to its immutable home.
-- [x] Prove runner drain and loss never relocate a Sandbox, create an empty replacement, or read a workspace image from S3; verify the API reports the typed unavailable state and recovers when the same runner returns.
+- [x] Prove initial placement can distribute different Sandboxes across runners, while every start, stop, Snapshot, restore, and delete for each Sandbox is sent only to its current home.
+- [x] Prove runner drain and loss never automatically relocate a Sandbox, create an empty replacement, or read a workspace image from S3; verify the API reports the typed unavailable state and recovers when the same runner returns.
 - [x] Prove control-plane restart, PostgreSQL restart, runner restart, duplicate delivery, and network partition at every local-storage operation converge through durable state and receipts.
 - [x] Prove Snapshot create and restore are reflink operations by combining syscall instrumentation with allocation/mutation checks; assert there is no fallback code path that performs image-sized reads or writes.
 - [x] Prove one active writer under concurrent API replicas, stale runner sessions, stale assignments, stale generations, and delayed results.

@@ -20,6 +20,7 @@ import {
   type OperationID,
   type PortSession,
   type Problem,
+  type RelocateSandboxRequest,
   type RestoreSnapshotRequest,
   type RemovePathRequest,
   type Sandbox,
@@ -43,6 +44,7 @@ export type {
   Profile,
   ProfileRevisionSpec,
   Problem,
+  RelocateSandboxRequest,
   Sandbox,
   SandboxPage,
   SandboxState,
@@ -834,6 +836,13 @@ export class SandboxHandle implements SandboxFilesystem {
     return this.lifecycle("stopSandbox", options);
   }
 
+  public relocate(
+    request: RelocateSandboxRequest,
+    options: LifecycleOptions,
+  ): Promise<Operation> {
+    return this.lifecycle("relocateSandbox", options, request as unknown as JSONValue);
+  }
+
   public restore(
     snapshotId: string,
     options: LifecycleOptions,
@@ -1246,6 +1255,7 @@ export class SandboxHandle implements SandboxFilesystem {
       | "startSandbox"
       | "drainSandbox"
       | "stopSandbox"
+      | "relocateSandbox"
       | "restoreSandboxSnapshot"
       | "deleteSandbox",
     options: LifecycleOptions,

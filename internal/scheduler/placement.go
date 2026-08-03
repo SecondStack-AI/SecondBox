@@ -95,8 +95,8 @@ func SelectRunner(
 	return ranked[0].runner, nil
 }
 
-// SelectHomeRunner admits only the immutable home Runner. Compatible
-// non-home Runners are deliberately invisible after initial placement.
+// SelectHomeRunner admits only the current authoritative home Runner. Compatible
+// non-home Runners are deliberately invisible to ordinary lifecycle placement.
 func SelectHomeRunner(
 	homeRunnerID string,
 	requirements Requirements,

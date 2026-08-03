@@ -46,7 +46,7 @@ fi
 
 cd "$repo_root"
 go test ./tests/integration \
-  -run '^TestTwoFakeRunnersPinHomesAndNeverRelocate$' \
+  -run '^TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically$' \
   -count=1
 
 cd "$repo_root/runner"

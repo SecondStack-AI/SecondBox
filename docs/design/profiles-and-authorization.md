@@ -34,7 +34,7 @@ SecondBox ships two versioned built-in Profiles:
 
 Built-ins are materialized as ordinary immutable ProfileRevisions with deterministic version IDs when first resolved. Their names are reserved: operators cannot create, revise, or disable them. A later SecondBox release may advance a built-in head, but existing Sandboxes retain the exact earlier revision they pinned. Operator-defined Profiles remain fully supported and follow the same immutable pinning rules. There is no missing-profile fallback and no other profile name triggers application-specific behavior.
 
-Ordinary stop always flushes and detaches compute, advances the local Workspace manifest generation, and preserves every committed Workspace write without creating a Snapshot or contacting object storage. A later start resolves that same current image on the immutable home Runner; it never adopts a newer Profile head.
+Ordinary stop always flushes and detaches compute, advances the local Workspace manifest generation, and preserves every committed Workspace write without creating a Snapshot or contacting object storage. A later start resolves that same current image on the current home Runner; it never adopts a newer Profile head. Operator relocation preserves the pinned ProfileRevision and validates its compatibility requirements against the target.
 
 ## Creation and compatibility
 

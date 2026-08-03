@@ -57,9 +57,21 @@ Every runner message that can mutate compute state includes assignment ID, Sandb
 
 Local-workspace commands are logical, versioned, and idempotent. They cover Workspace create, inspect, generation advance, and delete; Snapshot create and delete; restore prepare, swap, and finalize; and inventory reconciliation. Every mutation carries Sandbox, Workspace, optional Snapshot, expected generation, fencing identity where applicable, and a stable effect/operation ID. The authenticated session supplies the home Runner identity. A Runner rejects a command for data it does not own.
 
-Local-workspace results contain bounded typed status and opaque receipt evidence only. The control plane binds create and clone results to the durable Workspace mutation, effect kind, and exact source Snapshot before accepting the receipt. No protocol message carries Workspace image bytes, host paths, object-store credentials, storage keys, or provider-specific attachment details. A Runner persists the receipt before acknowledgement and replays an unacknowledged result after reconnect until the control plane records it durably.
+Local-workspace results contain bounded typed status and opaque receipt evidence only. The control plane binds create and clone results to the durable Workspace mutation, effect kind, and exact source Snapshot before accepting the receipt. No ordinary lifecycle protocol message carries Workspace image bytes, host paths, object-store credentials, storage keys, or provider-specific attachment details. Protocol generation 2 adds the sole exception: an operator-authorized stopped-Sandbox relocation forwards bounded image chunks between its authenticated source and target Runner streams. The control plane applies a 64 KiB chunk bound and one MiB credit window and never persists those bytes. A Runner persists each seal, import, abort, or deletion receipt before acknowledgement and replays an unacknowledged result after reconnect until the control plane records it durably.
 
-Initial Sandbox creation applies hard immutable ProfileRevision requirements, compatible RunnerPool, architecture, guest-protocol generation, provider-neutral capabilities, health, drain barrier, storage readiness, and free CPU, memory, disk, Instance, and operation capacity, then uses stable deterministic tie-breaking. A snapshot-seeded Sandbox applies the same capacity envelope to the Snapshot's immutable home Runner because the target Workspace cannot relocate later. The selected stable Runner ID becomes the Workspace's immutable home before Workspace creation is dispatched. Every later Instance assignment targets that exact home; artifact-cache locality may inform only the initial choice and never permits relocation. Assignment creation locks the Sandbox generation and home-runner capacity in one serializable PostgreSQL transaction. The durable Assignment records Runner, ProfileRevision, generation, fencing token, deadlines, and retry bounds without exposing backend or host-storage details publicly.
+Initial Sandbox creation applies hard immutable ProfileRevision requirements, compatible RunnerPool, architecture, guest-protocol generation, provider-neutral capabilities, health, drain barrier, storage readiness, and free CPU, memory, disk, Instance, and operation capacity, then uses stable deterministic tie-breaking. A snapshot-seeded Sandbox applies the same capacity envelope to the Snapshot's home Runner because relocation refuses retained Snapshots. The selected stable Runner ID becomes the Workspace's authoritative home before Workspace creation is dispatched. Every later Instance assignment targets the current exact home; artifact-cache locality may inform only the initial choice and never permits automatic relocation. Assignment creation locks the Sandbox generation and home-runner capacity in one serializable PostgreSQL transaction. The durable Assignment records Runner, ProfileRevision, generation, fencing token, deadlines, and retry bounds without exposing backend or host-storage details publicly.
+
+Relocation locks Sandbox then Workspace, verifies stopped state and an empty
+retained-Snapshot set, reserves the Workspace mutation slot, and validates the
+target before dispatch. The source export command atomically seals the current
+manifest and persists a receipt before its stream opens. The target writes into
+operation-scoped staging, honors sequential offsets and credit, validates size,
+SHA-256, ext4 identity, and capacity, fsyncs, atomically publishes, and persists
+an import receipt before returning success. Only that success permits the
+PostgreSQL transaction that changes the single home assignment and queues
+source deletion. A disconnect before the home transaction restarts export from
+the sealed source or queues source unseal; a disconnect after it replays source
+deletion. At no point do both Runners hold assignment authority for the image.
 
 ## Operations and streams
 
@@ -91,7 +103,7 @@ Completed operation state is retained only in a bounded 256-entry tombstone wind
 
 ## Draining and loss
 
-Operator drain prevents new Sandbox homes, new Instance assignments, and new operation admission. Existing assignments follow their profile drain bounds. Stopped Sandboxes already pinned to that Runner remain pinned and unavailable for start until the same Runner is returned to active service; the scheduler never relocates them. A drained Runner remains connected until it has released or explicitly failed every assignment.
+Operator drain prevents new Sandbox homes, new Instance assignments, and new operation admission. Existing assignments follow their profile drain bounds. Ordinary scheduling leaves stopped Sandboxes on the drained Runner and unavailable for start. An operator may explicitly relocate a stopped, Snapshot-free Sandbox from a connected drained source to a healthy, non-draining compatible target. A drained Runner remains connected until it has released or explicitly failed every assignment and completed requested Workspace relocations.
 
 Heartbeat expiry marks the Runner unavailable and makes its Sandboxes unavailable. It never authorizes Workspace reassignment. Recovery requires the same stable Runner identity and local WorkspaceStore to return; see [Recovery and reconciliation](recovery-and-reconciliation.md).
 

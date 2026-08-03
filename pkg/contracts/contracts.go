@@ -334,6 +334,12 @@ type CreateSnapshotRequest struct {
 	Metadata map[string]string `json:"metadata"`
 }
 
+// RelocateSandboxRequest selects one compatible target Runner explicitly or by pool.
+type RelocateSandboxRequest struct {
+	TargetRunnerID string `json:"targetRunnerId,omitempty"`
+	RunnerPool     string `json:"runnerPool,omitempty"`
+}
+
 // SnapshotPage is one bounded, newest-first retained Snapshot page.
 type SnapshotPage struct {
 	Items      []Snapshot `json:"items"`

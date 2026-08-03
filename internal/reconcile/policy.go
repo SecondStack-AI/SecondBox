@@ -38,7 +38,7 @@ type AssignmentState struct {
 }
 
 // Decision is one idempotent action. Runner loss can advance authority only
-// through the pinned home runner's durable local Workspace receipt.
+// through the current home runner's durable local Workspace receipt.
 type Decision struct {
 	Action         Action
 	NextGeneration int64

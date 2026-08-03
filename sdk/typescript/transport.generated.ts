@@ -320,7 +320,7 @@ export interface Operation {
   readonly updatedAt: Timestamp;
 }
 
-export type OperationKind = "create" | "start" | "drain" | "stop" | "delete" | "snapshot_create" | "snapshot_delete" | "snapshot_restore" | "cancel_exec" | "cancel_terminal";
+export type OperationKind = "create" | "start" | "drain" | "stop" | "delete" | "relocate" | "snapshot_create" | "snapshot_delete" | "snapshot_restore" | "cancel_exec" | "cancel_terminal";
 
 export interface OperationStageTiming {
   readonly cumulativeMilliseconds: number;
@@ -396,7 +396,7 @@ export interface Problem {
   readonly type: string;
 }
 
-export type ProblemCode = "invalid_request" | "authentication_failed" | "authorization_failed" | "not_found" | "idempotency_conflict" | "precondition_failed" | "state_conflict" | "workspace_mutation_conflict" | "generation_fenced" | "lease_fenced" | "profile_unavailable" | "home_runner_unavailable" | "quota_exceeded" | "limit_exceeded" | "guest_unavailable" | "execution_node_unavailable" | "dependency_unavailable" | "internal_error" | "wait_expired";
+export type ProblemCode = "invalid_request" | "authentication_failed" | "authorization_failed" | "not_found" | "idempotency_conflict" | "precondition_failed" | "state_conflict" | "workspace_mutation_conflict" | "generation_fenced" | "lease_fenced" | "profile_unavailable" | "home_runner_unavailable" | "sandbox_not_stopped" | "workspace_relocation_snapshots_present" | "workspace_relocation_target_unavailable" | "quota_exceeded" | "limit_exceeded" | "guest_unavailable" | "execution_node_unavailable" | "dependency_unavailable" | "internal_error" | "wait_expired";
 
 export interface ProblemDetail {
   readonly field: string;
@@ -440,6 +440,11 @@ export interface ProfileRevisionSpec {
 }
 
 export type ProfileState = "enabled" | "disabled";
+
+export interface RelocateSandboxRequest {
+  readonly runnerPool?: ProfileName;
+  readonly targetRunnerId?: RunnerID;
+}
 
 export interface RemovePathRequest {
   readonly force: boolean;
@@ -493,7 +498,7 @@ export interface Runner {
 
 export type RunnerArchitectureList = readonly ("amd64" | "arm64")[];
 
-export type RunnerCapabilityList = readonly ("compute" | "network-policy" | "storage" | "cleanup" | "local-workspace" | "exec-streaming" | "file-streaming" | "pty" | "port-proxy" | "evidence")[];
+export type RunnerCapabilityList = readonly ("compute" | "network-policy" | "storage" | "cleanup" | "local-workspace" | "workspace-relocation" | "exec-streaming" | "file-streaming" | "pty" | "port-proxy" | "evidence")[];
 
 export type RunnerCapacityPolicy = Readonly<Record<string, number>>;
 
@@ -757,6 +762,7 @@ export type OperationID =
   | "readSandboxFile"
   | "reconnectSandboxTerminal"
   | "releaseSandboxLease"
+  | "relocateSandbox"
   | "removeSandboxPath"
   | "renewSandboxLease"
   | "restoreSandboxSnapshot"
@@ -822,6 +828,7 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   readSandboxFile: { method: "GET", path: "/v1/sandboxes/{sandboxId}/files" },
   reconnectSandboxTerminal: { method: "GET", path: "/v1/sandboxes/{sandboxId}/terminals/{terminalSessionId}" },
   releaseSandboxLease: { method: "DELETE", path: "/v1/leases/{leaseId}" },
+  relocateSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:relocate", contentType: "application/json" },
   removeSandboxPath: { method: "DELETE", path: "/v1/sandboxes/{sandboxId}/directories", contentType: "application/json" },
   renewSandboxLease: { method: "POST", path: "/v1/leases/{leaseId}:renew", contentType: "application/json" },
   restoreSandboxSnapshot: { method: "POST", path: "/v1/sandboxes/{sandboxId}:restore", contentType: "application/json" },

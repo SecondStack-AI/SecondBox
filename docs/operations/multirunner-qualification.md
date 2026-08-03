@@ -2,7 +2,7 @@
 
 `just test-multirunner` has two deliberate layers:
 
-1. A PostgreSQL-backed two-fake-runner integration test proves deterministic initial placement, capacity-aware distribution, durable workspace-create receipts, immutable home assignment, and typed unavailability without relocation during drain or runner loss.
+1. A PostgreSQL-backed two-fake-runner integration test proves deterministic initial placement, capacity-aware distribution, durable workspace-create receipts, stable ordinary-lifecycle home assignment, and typed unavailability without automatic relocation during drain or runner loss.
 2. An opt-in filesystem qualification test initializes two independent `WorkspaceStore` roots, executes each store's real `FICLONE` readiness probe, creates one ext4 Workspace per root, and proves reconciliation never observes the other runner's local data.
 
 The ordinary command requires only the disposable PostgreSQL test database used by the rest of the Go suite:

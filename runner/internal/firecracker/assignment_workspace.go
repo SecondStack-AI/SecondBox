@@ -92,6 +92,7 @@ func (b *AssignmentBackend) ExecuteLocalWorkspace(
 					LogicalCapacityBytes: uint64(inspection.CapacityBytes),
 					Formatted:            inspection.Formatted,
 					RestorePending:       inspection.RestorePending,
+					RelocationSealed:     inspection.RelocationSealed,
 				}},
 			}, nil
 		}
@@ -101,6 +102,20 @@ func (b *AssignmentBackend) ExecuteLocalWorkspace(
 			workspacestore.DeleteWorkspaceRequest{
 				Mutation:           mutation,
 				ExpectedGeneration: command.ExpectedGeneration,
+			},
+		)
+	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_DELETE_SOURCE:
+		receipt, err = b.manager.workspaceStore.DeleteWorkspace(
+			ctx,
+			workspacestore.DeleteWorkspaceRequest{
+				Mutation: mutation, ExpectedGeneration: command.ExpectedGeneration,
+			},
+		)
+	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_ABORT_SOURCE:
+		receipt, err = b.manager.workspaceStore.AbortRelocation(
+			ctx,
+			workspacestore.RelocationExportRequest{
+				Mutation: mutation, ExpectedGeneration: command.ExpectedGeneration,
 			},
 		)
 	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_ADVANCE_GENERATION:
@@ -183,6 +198,7 @@ func (b *AssignmentBackend) ExecuteLocalWorkspace(
 					Formatted:            workspace.Formatted,
 					RestorePending:       workspace.RestorePending,
 					ActiveWriter:         workspace.ActiveWriter,
+					RelocationSealed:     workspace.RelocationSealed,
 				})
 			}
 			for _, receipt := range report.Receipts {
@@ -220,6 +236,104 @@ func (b *AssignmentBackend) ExecuteLocalWorkspace(
 	}, nil
 }
 
+type workspaceRelocationExport struct {
+	workspacestore.RelocationExport
+}
+
+func (export workspaceRelocationExport) Evidence() runnercontrol.LocalWorkspaceEvidence {
+	receipt := export.Receipt()
+	return runnercontrol.LocalWorkspaceEvidence{
+		Generation:        receipt.Generation,
+		LogicalCapacity:   uint64(receipt.CapacityBytes),
+		ReceiptRecordedAt: receipt.RecordedAt,
+	}
+}
+
+type workspaceRelocationImport struct {
+	workspacestore.RelocationImport
+}
+
+func (relocation workspaceRelocationImport) Complete(
+	size uint64,
+	checksum string,
+) (runnercontrol.LocalWorkspaceEvidence, error) {
+	receipt, err := relocation.RelocationImport.Complete(size, checksum)
+	return relocationReceiptEvidence(receipt), err
+}
+
+func (relocation workspaceRelocationImport) CompletedEvidence() (
+	runnercontrol.LocalWorkspaceEvidence,
+	bool,
+) {
+	receipt, completed := relocation.CompletedReceipt()
+	return relocationReceiptEvidence(receipt), completed
+}
+
+func relocationReceiptEvidence(receipt workspacestore.Receipt) runnercontrol.LocalWorkspaceEvidence {
+	return runnercontrol.LocalWorkspaceEvidence{
+		Generation:        receipt.Generation,
+		LogicalCapacity:   uint64(receipt.CapacityBytes),
+		ReceiptRecordedAt: receipt.RecordedAt,
+		Checksum:          receipt.Checksum,
+	}
+}
+
+// OpenWorkspaceRelocationExport adapts the sealed WorkspaceStore reader.
+func (b *AssignmentBackend) OpenWorkspaceRelocationExport(
+	ctx context.Context,
+	command *runnerprotocol.LocalWorkspaceCommand,
+) (runnercontrol.WorkspaceRelocationExport, error) {
+	if b == nil || b.manager == nil || b.manager.workspaceStore == nil || command == nil {
+		return nil, localWorkspaceFailure(
+			fmt.Errorf("SecondBox Firecracker WorkspaceStore relocation export is unavailable"),
+		)
+	}
+	export, err := b.manager.workspaceStore.OpenRelocationExport(
+		ctx,
+		workspacestore.RelocationExportRequest{
+			Mutation: workspacestore.Mutation{
+				OperationID:  command.OperationId,
+				WorkspaceID:  command.WorkspaceId,
+				FencingToken: append([]byte(nil), command.FencingToken...),
+			},
+			ExpectedGeneration: command.ExpectedGeneration,
+		},
+	)
+	if err != nil {
+		return nil, localWorkspaceFailure(err)
+	}
+	return workspaceRelocationExport{RelocationExport: export}, nil
+}
+
+// BeginWorkspaceRelocationImport adapts one control-plane-forwarded target stream.
+func (b *AssignmentBackend) BeginWorkspaceRelocationImport(
+	ctx context.Context,
+	frame *runnerprotocol.WorkspaceTransferFrame,
+) (runnercontrol.WorkspaceRelocationImport, error) {
+	if b == nil || b.manager == nil || b.manager.workspaceStore == nil ||
+		frame == nil || frame.GetOpen() == nil || frame.GetOpen().LogicalCapacityBytes > math.MaxInt64 {
+		return nil, localWorkspaceFailure(
+			fmt.Errorf("SecondBox Firecracker WorkspaceStore relocation import is unavailable"),
+		)
+	}
+	importer, err := b.manager.workspaceStore.BeginRelocationImport(
+		ctx,
+		workspacestore.RelocationImportRequest{
+			Mutation: workspacestore.Mutation{
+				OperationID:  frame.OperationId,
+				WorkspaceID:  frame.WorkspaceId,
+				FencingToken: append([]byte(nil), frame.GetOpen().FencingToken...),
+			},
+			Generation:    frame.Generation,
+			CapacityBytes: int64(frame.GetOpen().LogicalCapacityBytes),
+		},
+	)
+	if err != nil {
+		return nil, localWorkspaceFailure(err)
+	}
+	return workspaceRelocationImport{RelocationImport: importer}, nil
+}
+
 func localWorkspaceReceiptKind(
 	kind string,
 ) (runnerprotocol.LocalWorkspaceCommandKind, error) {
@@ -244,6 +358,12 @@ func localWorkspaceReceiptKind(
 		return runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE, nil
 	case workspacestore.ReceiptRestoreAbort:
 		return runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT, nil
+	case workspacestore.ReceiptRelocationExport:
+		return runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_EXPORT, nil
+	case workspacestore.ReceiptRelocationImport:
+		return runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_IMPORT, nil
+	case workspacestore.ReceiptRelocationAbort:
+		return runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_ABORT_SOURCE, nil
 	default:
 		return runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_UNSPECIFIED,
 			fmt.Errorf("SecondBox Firecracker WorkspaceStore receipt kind %q is unsupported", kind)
@@ -256,7 +376,8 @@ func localWorkspaceFailure(err error) error {
 	case errors.Is(err, workspacestore.ErrWorkspaceNotFound),
 		errors.Is(err, workspacestore.ErrSnapshotNotFound):
 		terminal = runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_LOCAL_DATA_ABSENT
-	case errors.Is(err, workspacestore.ErrActiveWriter):
+	case errors.Is(err, workspacestore.ErrActiveWriter),
+		errors.Is(err, workspacestore.ErrRelocationSealed):
 		terminal = runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_ACTIVE_WRITER
 	case errors.Is(err, workspacestore.ErrStaleGeneration):
 		terminal = runnerprotocol.LocalWorkspaceTerminalKind_LOCAL_WORKSPACE_TERMINAL_KIND_STALE_GENERATION

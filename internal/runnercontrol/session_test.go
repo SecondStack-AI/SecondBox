@@ -146,6 +146,50 @@ func TestSessionValidatesRunnerRelayFeatureFenceSequenceAndDuplicates(t *testing
 	}
 }
 
+func TestSessionRequiresProtocolTwoAndBoundedWorkspaceTransferFrames(t *testing.T) {
+	session := NewSession(SessionConfig{
+		AuthenticatedRunnerID: "runner-1",
+		SupportedVersions:     VersionRange{Minimum: 1, Maximum: 2},
+		EnabledFeatures:       []runnerv1.RunnerFeature{runnerv1.RunnerFeature_RUNNER_FEATURE_EVIDENCE},
+		HeartbeatInterval:     10 * time.Second,
+		ConnectionID:          "connection-1",
+	})
+	if response, err := session.Accept(helloFrame("runner-1", 2, 2)); err != nil || response.GetWelcome() == nil {
+		t.Fatalf("Hello response = %#v, %v", response, err)
+	}
+	registration := registrationFrame("runner-1", "connection-1", 1)
+	registration.GetRegistration().ProtocolVersion = 2
+	if _, err := session.Accept(registration); err != nil {
+		t.Fatal(err)
+	}
+	open := &runnerv1.RunnerToControlPlane{
+		Message: &runnerv1.RunnerToControlPlane_WorkspaceTransfer{
+			WorkspaceTransfer: &runnerv1.WorkspaceTransferFrame{
+				OperationId: "operation-relocation", SandboxId: "sandbox-1",
+				WorkspaceId: "workspace-1", Generation: 3, Sequence: 1,
+				Payload: &runnerv1.WorkspaceTransferFrame_Open{
+					Open: &runnerv1.WorkspaceTransferOpen{
+						LogicalCapacityBytes: 8 << 30,
+						FencingToken:         []byte("01234567890123456789012345678901"),
+					},
+				},
+			},
+		},
+	}
+	event, err := session.Accept(open)
+	if err != nil || event.Kind != EventWorkspaceTransfer {
+		t.Fatalf("Workspace transfer open event = %#v, %v", event, err)
+	}
+	oversized := proto.Clone(open).(*runnerv1.RunnerToControlPlane)
+	oversized.GetWorkspaceTransfer().Sequence = 2
+	oversized.GetWorkspaceTransfer().Payload = &runnerv1.WorkspaceTransferFrame_Chunk{
+		Chunk: &runnerv1.WorkspaceTransferChunk{Data: make([]byte, (64<<10)+1)},
+	}
+	if _, err := session.Accept(oversized); !errors.Is(err, ErrRunnerMessage) {
+		t.Fatalf("oversized Workspace transfer chunk error = %v", err)
+	}
+}
+
 func TestSessionRejectsRelayFramesWithoutNegotiatedFeature(t *testing.T) {
 	session := negotiatedSession(t)
 	if _, err := session.Accept(registrationFrame("runner-1", "connection-1", 1)); err != nil {
