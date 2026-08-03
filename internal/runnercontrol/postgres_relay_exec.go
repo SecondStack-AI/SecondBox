@@ -123,14 +123,7 @@ func (relay *PostgresFrameRelay) AppendExecClientFrame(
 			return false, ErrRelayFrameLimit
 		}
 	}
-	var nextSequence int64
-	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(max(sequence),0)+1 FROM secondbox.data_plane_frames
-		WHERE session_id=$1 AND direction='outbound'`, session.ID,
-	).Scan(&nextSequence); err != nil {
-		return false, fmt.Errorf("SecondBox public Exec next sequence lookup: %w", err)
-	}
-	if runnerSequence != nextSequence {
+	if runnerSequence != session.NextOutboundSequence {
 		return false, ErrRelaySequence
 	}
 	if session.State != "pending" && session.State != "running" {
@@ -155,9 +148,11 @@ func (relay *PostgresFrameRelay) AppendExecClientFrame(
 				UPDATE secondbox.data_plane_sessions
 				SET request_stream_bytes=request_stream_bytes+$2,
 				    request_stream_closed=request_stream_closed OR $3,
-				    outbound_bytes=outbound_bytes+$4,
-				    response_credit_bytes=response_credit_bytes+$5,
-				    updated_at=$6
+					outbound_bytes=outbound_bytes+$4,
+					response_credit_bytes=response_credit_bytes+$5,
+					next_outbound_sequence=next_outbound_sequence+1,
+					frames_retain_until=retain_until,frame_cleanup_completed_at=NULL,
+					updated_at=$6
 				WHERE id=$1`,
 				session.ID, requestBytes, frame.EndInput, len(payload), frame.Credit, now.UTC(),
 			); err != nil {
@@ -192,6 +187,8 @@ func (relay *PostgresFrameRelay) AppendExecClientFrame(
 		    request_stream_closed=request_stream_closed OR $8,
 		    outbound_bytes=outbound_bytes+$3,
 		    response_credit_bytes=response_credit_bytes+$7,
+		    next_outbound_sequence=next_outbound_sequence+1,
+		    frames_retain_until=retain_until,frame_cleanup_completed_at=NULL,
 		    state=CASE WHEN $4 THEN 'cancelling' ELSE state END,
 		    terminal_kind=CASE WHEN $4 THEN $5 ELSE terminal_kind END,
 		    terminal_detail=CASE WHEN $4 THEN 'public streaming client cancellation' ELSE terminal_detail END,

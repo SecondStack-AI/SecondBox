@@ -43,7 +43,7 @@ go run ./cmd/secondbox-deploy validate /secure/secondbox/secondbox.toml
 go run ./cmd/secondbox-deploy inspect /secure/secondbox/secondbox.toml
 ```
 
-`inspect` prints all resolved non-secret values and all 19 available tuning overrides with their compiled defaults. Secret values and secret-revealing paths are redacted.
+`inspect` prints all resolved non-secret values, positive help for the relay-retention policy, and all 19 available tuning overrides with their compiled defaults. Secret values and secret-revealing paths are redacted.
 
 ### Secret references
 
@@ -54,6 +54,8 @@ Runner host paths are different: they are typed absolute values interpreted on t
 ### Authority, policy, tuning, and compiled facts
 
 Required deployment authority has no default. This includes identities, credentials, endpoints, process and storage paths, signed-asset catalog and bundle digests, object-store addressing mode, the nine subject quota limits, and relay retention.
+
+`policy.data_plane_retention_seconds` participates in each relay session's transition-specific session/result/idempotency deadline. That stored deadline also bounds replayable relay frames as a maximum safety fallback. Frames are delivery and replay state, not the materialised result: after no live delivery or replay consumer remains, they may be removed before the session deadline while buffered results, terminal outcome, admission replay, and compact sequence/hash evidence remain available. Raising this value lengthens the fallback; it does not require every non-replayable payload frame to remain for that whole interval.
 
 The manifest also requires three contested rollout/recovery decisions: relay poll interval, Runner command poll interval, and enabled Runner features. They remain operator policy until a separate decision reclassifies them.
 

@@ -136,9 +136,9 @@ func (relay *PostgresFrameRelay) AdmitPortSession(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.data_plane_sessions (
-			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,assignment_id,instance_id,runner_id,generation,fencing_token,request_id,lease_id,kind,operation,stream_id,state,priority,idempotency_key,request_hash,deadline_at,maximum_response_bytes,maximum_request_bytes,stream_window_bytes,response_credit_bytes,request_stream_bytes,request_stream_closed,detachable,terminal_detach_seconds,attachment_id,attached_at,detached_at,detach_expires_at,outbound_bytes,inbound_bytes,next_inbound_sequence,terminal_kind,terminal_detail,exit_code,signal,spawn_failure_reason,elapsed_milliseconds,limit_bytes,infrastructure_failure_reason,retryable,terminal_message,stdout_bytes,stderr_bytes,content_bytes,metadata_json,request_json,created_at,updated_at,completed_at,retain_until
+			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,assignment_id,instance_id,runner_id,generation,fencing_token,request_id,lease_id,kind,operation,stream_id,state,priority,idempotency_key,request_hash,deadline_at,maximum_response_bytes,maximum_request_bytes,stream_window_bytes,response_credit_bytes,request_stream_bytes,request_stream_closed,detachable,terminal_detach_seconds,attachment_id,attached_at,detached_at,detach_expires_at,outbound_bytes,inbound_bytes,next_inbound_sequence,terminal_kind,terminal_detail,exit_code,signal,spawn_failure_reason,elapsed_milliseconds,limit_bytes,infrastructure_failure_reason,retryable,terminal_message,stdout_bytes,stderr_bytes,content_bytes,metadata_json,request_json,created_at,updated_at,completed_at,retain_until,frames_retain_until,next_outbound_sequence
 		) VALUES (
-			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'port',$13,$14,'pending',0,$15,$16,$17,$18,$18,$19,0,0,false,false,0,'',NULL,NULL,NULL,$20,0,1,'','',0,0,'',0,0,'',false,'',$21,$21,$21,'{}',$22,$23,$23,NULL,$24
+			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'port',$13,$14,'pending',0,$15,$16,$17,$18,$18,$19,0,0,false,false,0,'',NULL,NULL,NULL,$20,0,1,'','',0,0,'',0,0,'',false,'',$21,$21,$21,'{}',$22,$23,$23,NULL,$24,$24,2
 		)`,
 		session.ID, session.TenantRef, session.SubjectRef, session.SandboxID, session.ProfileRevisionID, session.AssignmentID, session.InstanceID, session.RunnerID, session.Generation, session.FencingToken, input.RequestID, input.LeaseID, session.Operation, session.StreamID, input.IdempotencyKey, input.RequestHash, session.DeadlineAt, maximumPayloadBytes, tunnel.StreamWindowBytes, len(openPayload), []byte{}, requestJSON, input.Now.UTC(), input.Now.UTC().Add(relay.retention),
 	); err != nil {
@@ -156,9 +156,9 @@ func (relay *PostgresFrameRelay) AdmitPortSession(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.port_sessions (
-			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,data_plane_session_id,lease_id,generation,name,guest_port,protocol,transport,credential_digest,stream_window_bytes,client_credit_bytes,client_bytes,runner_bytes,state,idempotency_key,request_hash,expires_at,created_at,updated_at,connected_at,closed_at
+			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,data_plane_session_id,lease_id,generation,name,guest_port,protocol,transport,credential_digest,stream_window_bytes,client_credit_bytes,client_bytes,runner_bytes,state,idempotency_key,request_hash,expires_at,created_at,updated_at,connected_at,closed_at,acknowledged_inbound_sequence
 		) VALUES (
-			$1,$2,$3,$4,$5,$1,$6,$7,$8,$9,$10,$16,$17,$11,0,0,0,'open',$12,$13,$14,$15,$15,NULL,NULL
+			$1,$2,$3,$4,$5,$1,$6,$7,$8,$9,$10,$16,$17,$11,0,0,0,'open',$12,$13,$14,$15,$15,NULL,NULL,0
 		)`,
 		input.Session.ID, tunnel.TenantRef, tunnel.SubjectRef, input.Session.SandboxID, tunnel.ProfileRevisionID, input.LeaseID, input.Session.Generation, input.Session.Name, policy.Port, policy.Protocol, tunnel.StreamWindowBytes, input.IdempotencyKey, input.RequestHash, input.Session.ExpiresAt.UTC(), input.Now.UTC(), tunnel.Session.Transport, input.CredentialDigest,
 	); err != nil {
@@ -661,6 +661,9 @@ func (relay *PostgresFrameRelay) AcknowledgePortTunnelEvent(
 	if err != nil {
 		return err
 	}
+	if sequence <= tunnel.AcknowledgedInboundSequence {
+		return tx.Commit(ctx)
+	}
 	var payload []byte
 	var consumedAt *time.Time
 	if err := tx.QueryRow(ctx, `
@@ -677,7 +680,8 @@ func (relay *PostgresFrameRelay) AcknowledgePortTunnelEvent(
 	if err := proto.Unmarshal(payload, message); err != nil || message.GetPort() == nil {
 		return ErrRelaySequence
 	}
-	if frameBytes := message.GetPort().GetBytes(); frameBytes != nil && len(frameBytes.Data) > 0 {
+	portFrame := message.GetPort()
+	if frameBytes := portFrame.GetBytes(); frameBytes != nil && len(frameBytes.Data) > 0 {
 		if err := relay.enqueuePortFrame(ctx, tx, tunnel, &runnerv1.PortFrame_Credit{
 			Credit: &runnerv1.StreamCredit{ByteCount: uint64(len(frameBytes.Data))},
 		}, 0, now.UTC()); err != nil {
@@ -690,6 +694,23 @@ func (relay *PostgresFrameRelay) AcknowledgePortTunnelEvent(
 		sessionID, sequence, now.UTC(),
 	); err != nil {
 		return fmt.Errorf("SecondBox Port event acknowledgement update: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.port_sessions
+		SET acknowledged_inbound_sequence=GREATEST(acknowledged_inbound_sequence,$2),
+		    updated_at=$3
+		WHERE id=$1`, sessionID, sequence, now.UTC(),
+	); err != nil {
+		return fmt.Errorf("SecondBox Port acknowledgement projection update: %w", err)
+	}
+	if portFrame.GetTerminal() != nil {
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.data_plane_sessions
+			SET frames_retain_until=LEAST(frames_retain_until,$2),updated_at=$2
+			WHERE id=$1`, sessionID, now.UTC(),
+		); err != nil {
+			return fmt.Errorf("SecondBox Port terminal frame retention update: %w", err)
+		}
 	}
 	return tx.Commit(ctx)
 }
@@ -886,19 +907,22 @@ func (relay *PostgresFrameRelay) terminatePortSession(
 		}
 	}
 	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.data_plane_sessions
+		SET state=$2,terminal_kind=$3,terminal_detail=$4,
+		    completed_at=COALESCE(completed_at,$5),
+		    frames_retain_until=CASE WHEN $6 THEN $5 ELSE frames_retain_until END,
+		    updated_at=$5 WHERE id=$1`,
+		tunnel.Session.ID, dataPlaneState, terminalKind.String(), reason, now.UTC(),
+		tunnel.Session.Transport == contracts.PortTransportDirect || !now.UTC().Before(tunnel.Session.ExpiresAt),
+	); err != nil {
+		return fmt.Errorf("SecondBox Port terminal data-plane update: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.port_sessions
 		SET state=$2,closed_at=COALESCE(closed_at,$3),updated_at=$3 WHERE id=$1`,
 		tunnel.Session.ID, portState, now.UTC(),
 	); err != nil {
 		return fmt.Errorf("SecondBox Port terminal projection update: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.data_plane_sessions
-		SET state=$2,terminal_kind=$3,terminal_detail=$4,
-		    completed_at=COALESCE(completed_at,$5),updated_at=$5 WHERE id=$1`,
-		tunnel.Session.ID, dataPlaneState, terminalKind.String(), reason, now.UTC(),
-	); err != nil {
-		return fmt.Errorf("SecondBox Port terminal data-plane update: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.activity_sessions
@@ -921,14 +945,7 @@ func (relay *PostgresFrameRelay) enqueuePortFrame(
 	priority int64,
 	now time.Time,
 ) error {
-	var sequence int64
-	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(max(sequence),0)+1 FROM secondbox.data_plane_frames
-		WHERE session_id=$1 AND direction='outbound'`,
-		tunnel.Session.ID,
-	).Scan(&sequence); err != nil {
-		return fmt.Errorf("SecondBox Port outbound sequence lookup: %w", err)
-	}
+	sequence := tunnel.NextOutboundSequence
 	session := DataPlaneSession{
 		ID: tunnel.Session.ID, StreamID: tunnel.StreamID, SandboxID: tunnel.Session.SandboxID,
 		AssignmentID: tunnel.AssignmentID, InstanceID: tunnel.InstanceID,
@@ -953,6 +970,21 @@ func (relay *PostgresFrameRelay) enqueuePortFrame(
 		sequence, hex.EncodeToString(hash[:]), encoded, len(encoded), priority, now.UTC(),
 	); err != nil {
 		return fmt.Errorf("SecondBox Port frame insert: %w", err)
+	}
+	frameHorizon := tunnel.RetainUntil
+	if tunnel.Session.Transport == contracts.PortTransportDirect ||
+		tunnel.Session.State != contracts.PortSessionStateOpen {
+		frameHorizon = now.UTC()
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.data_plane_sessions
+		SET next_outbound_sequence=next_outbound_sequence+1,
+		    frames_retain_until=LEAST(retain_until,$2),
+		    frame_cleanup_completed_at=NULL,updated_at=$3
+		WHERE id=$1`,
+		tunnel.Session.ID, frameHorizon.UTC(), now.UTC(),
+	); err != nil {
+		return fmt.Errorf("SecondBox Port frame sequence update: %w", err)
 	}
 	return nil
 }
@@ -995,7 +1027,8 @@ const portTunnelSelect = `
 	  port.profile_revision_id,session.assignment_id,session.instance_id,session.runner_id,
 	  session.request_id,
 	  session.stream_id,session.fencing_token,port.guest_port,port.stream_window_bytes,
-	  sandbox.tenant_ref,sandbox.subject_ref,COALESCE(runner.data_plane_address,'')
+	  sandbox.tenant_ref,sandbox.subject_ref,COALESCE(runner.data_plane_address,''),
+	  session.next_outbound_sequence,session.retain_until,port.acknowledged_inbound_sequence
 	FROM secondbox.port_sessions AS port
 	JOIN secondbox.data_plane_sessions AS session ON session.id=port.data_plane_session_id
 	JOIN secondbox.sandboxes AS sandbox ON sandbox.id=port.sandbox_id
@@ -1045,6 +1078,8 @@ func scanPortTunnel(row relayRow) (PortTunnel, error) {
 		&tunnel.AssignmentID, &tunnel.InstanceID, &tunnel.RunnerID, &tunnel.RequestID, &tunnel.StreamID,
 		&tunnel.FencingToken, &tunnel.GuestPort, &tunnel.StreamWindowBytes,
 		&tunnel.TenantRef, &tunnel.SubjectRef, &tunnel.DataPlaneAddress,
+		&tunnel.NextOutboundSequence, &tunnel.RetainUntil,
+		&tunnel.AcknowledgedInboundSequence,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return PortTunnel{}, ports.ErrPortSessionNotFound
@@ -1115,7 +1150,11 @@ func (relay *PostgresFrameRelay) persistInboundPortFrame(
 			WHERE session_id=$1 AND direction='inbound' AND sequence=$2`,
 			session.ID, identity.sequence,
 		).Scan(&priorHash)
-		if err == nil && priorHash == payloadHash {
+		if (err == nil && priorHash == payloadHash) ||
+			(errors.Is(err, pgx.ErrNoRows) &&
+				session.TerminalInboundSequence != nil &&
+				*session.TerminalInboundSequence == identity.sequence &&
+				session.TerminalInboundPayloadHash == payloadHash) {
 			if err := tx.Commit(ctx); err != nil {
 				return false, fmt.Errorf("SecondBox inbound Port duplicate commit: %w", err)
 			}
@@ -1131,6 +1170,7 @@ func (relay *PostgresFrameRelay) persistInboundPortFrame(
 		return false, ErrRelaySessionLimit
 	}
 	var credit, clientCredit, runnerBytes int64
+	var transport string
 	if value := frame.GetCredit(); value != nil {
 		if value.ByteCount == 0 || value.ByteCount > uint64(session.StreamWindowBytes) {
 			return false, ErrRelayFrameLimit
@@ -1138,10 +1178,10 @@ func (relay *PostgresFrameRelay) persistInboundPortFrame(
 		credit = int64(value.ByteCount)
 	}
 	if err := tx.QueryRow(ctx, `
-		SELECT client_credit_bytes,runner_bytes FROM secondbox.port_sessions
+		SELECT client_credit_bytes,runner_bytes,transport FROM secondbox.port_sessions
 		WHERE id=$1 FOR UPDATE`,
 		session.ID,
-	).Scan(&clientCredit, &runnerBytes); err != nil {
+	).Scan(&clientCredit, &runnerBytes, &transport); err != nil {
 		return false, fmt.Errorf("SecondBox inbound Port usage lookup: %w", err)
 	}
 	if credit > 0 && clientCredit+credit > session.StreamWindowBytes {
@@ -1182,15 +1222,23 @@ func (relay *PostgresFrameRelay) persistInboundPortFrame(
 	if value := frame.GetBytes(); value != nil {
 		frameDataBytes = int64(len(value.Data))
 	}
+	frameRetainUntil := session.FramesRetainUntil
+	if completedAt != nil && transport == contracts.PortTransportDirect {
+		frameRetainUntil = now.UTC()
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.data_plane_sessions
 		SET state=$2,next_inbound_sequence=$3,inbound_bytes=inbound_bytes+$4,
 		    terminal_kind=CASE WHEN $5='' THEN terminal_kind ELSE $5 END,
 		    terminal_detail=CASE WHEN $5='' THEN terminal_detail ELSE $6 END,
-		    updated_at=$7,completed_at=COALESCE($8,completed_at)
+		    updated_at=$7,completed_at=COALESCE($8,completed_at),
+		    frames_retain_until=$9,frame_cleanup_completed_at=NULL,
+		    terminal_inbound_sequence=CASE WHEN $8 IS NULL THEN terminal_inbound_sequence ELSE $10 END,
+		    terminal_inbound_payload_hash=CASE WHEN $8 IS NULL THEN terminal_inbound_payload_hash ELSE $11 END
 		WHERE id=$1`,
 		session.ID, state, identity.sequence+1, len(encoded),
 		terminalKind, terminalDetail, now.UTC(), completedAt,
+		frameRetainUntil, identity.sequence, payloadHash,
 	); err != nil {
 		return false, fmt.Errorf("SecondBox inbound Port session update: %w", err)
 	}

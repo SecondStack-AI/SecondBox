@@ -200,7 +200,8 @@ func (relay *PostgresFrameRelay) DetachTerminalAttachment(
 	if session.State != "pending" && session.State != "running" {
 		if _, err := tx.Exec(ctx, `
 			UPDATE secondbox.data_plane_sessions
-			SET attachment_id='',updated_at=$2 WHERE id=$1`,
+			SET attachment_id='',frames_retain_until=LEAST(frames_retain_until,$2),
+			    updated_at=$2 WHERE id=$1`,
 			session.ID, now.UTC(),
 		); err != nil {
 			return false, fmt.Errorf("SecondBox terminal attachment cleanup: %w", err)
@@ -211,6 +212,14 @@ func (relay *PostgresFrameRelay) DetachTerminalAttachment(
 		return true, nil
 	}
 	if !session.Detachable || session.TerminalDetachSeconds == 0 {
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.data_plane_sessions
+			SET attachment_id='',detached_at=$2,updated_at=$2 WHERE id=$1`,
+			session.ID, now.UTC(),
+		); err != nil {
+			return false, fmt.Errorf("SecondBox non-detachable Terminal cleanup: %w", err)
+		}
+		session.AttachmentID = ""
 		if err := relay.enqueueCancellation(
 			ctx, tx, session,
 			runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED.String(),
@@ -365,14 +374,7 @@ func (relay *PostgresFrameRelay) AppendTerminalClientFrame(
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return false, fmt.Errorf("SecondBox public Terminal sequence lookup: %w", err)
 	}
-	var nextSequence int64
-	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(max(sequence),0)+1 FROM secondbox.data_plane_frames
-		WHERE session_id=$1 AND direction='outbound'`, session.ID,
-	).Scan(&nextSequence); err != nil {
-		return false, fmt.Errorf("SecondBox public Terminal next sequence lookup: %w", err)
-	}
-	if runnerSequence != nextSequence {
+	if runnerSequence != session.NextOutboundSequence {
 		return false, ErrRelaySequence
 	}
 	if _, err := tx.Exec(ctx, `
@@ -392,6 +394,8 @@ func (relay *PostgresFrameRelay) AppendTerminalClientFrame(
 		SET request_stream_bytes=request_stream_bytes+$2,
 		    outbound_bytes=outbound_bytes+$3,
 		    response_credit_bytes=response_credit_bytes+$4,
+		    next_outbound_sequence=next_outbound_sequence+1,
+		    frames_retain_until=retain_until,frame_cleanup_completed_at=NULL,
 		    state=CASE WHEN $5 THEN 'cancelling' ELSE state END,
 		    terminal_kind=CASE WHEN $5 THEN $6 ELSE terminal_kind END,
 		    terminal_detail=CASE WHEN $5 THEN 'public Terminal client cancellation' ELSE terminal_detail END,

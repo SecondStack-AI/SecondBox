@@ -40,7 +40,9 @@ The host must provide:
   [the microVM image pipeline](microvm-image-pipeline.md);
 - the trusted artifact public key and its lowercase DER SHA-256 fingerprint;
 - an existing, non-root, non-symlink XFS or Btrfs directory for per-run Workspace storage;
-- two unused loopback TCP ports selected by the shared scenario harness.
+- four unused loopback TCP ports selected by the shared scenario harness for
+  the public API, measurement-only PostgreSQL access, Runner control, and the
+  Runner data plane.
 
 The shared harness chooses an unused bridge subnet and process-unique bridge and TAP names. The
 runner removes the bridge and its exact firewall rules during trapped cleanup. The Workspace setting

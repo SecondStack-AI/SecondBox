@@ -265,8 +265,10 @@ benchmark's treatment and is not claimed here.
 
 ### Not measured
 
-Notification volume under a large File transfer and a saturated relay Port
-session was reasoned about and pinned by the migration scope tests, but not
-observed against a live workload. The outbound burst collapse bounds the File
-upload case structurally; the inbound per-frame case remains proportional to
-frames by design.
+This gap is now closed by the qualified live workload in
+[Relay Frame Retention Scoped to Replay](2026-08-01-relay-retention-scope.md#result).
+Across three fixed PTY, 1 MiB File upload/download, and saturated 1 MiB relay
+Port cycles, both the baseline and changed runs observed 456 inbound
+notifications. Outbound notifications were 207 and 210 respectively; the small
+variation is allowed by concurrent idle-to-pending inserts. The raw reports are
+linked from that plan's Result section.

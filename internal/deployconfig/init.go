@@ -1,6 +1,7 @@
 package deployconfig
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -120,6 +121,12 @@ func encodeManifest(manifest ManifestV1) ([]byte, error) {
 	if err != nil {
 		return nil, manifestError("encode", err)
 	}
+	const policyHeader = "[policy]\ndata_plane_retention_seconds = "
+	const documentedPolicyHeader = "[policy]\n# " + dataPlaneRetentionHelp + "\ndata_plane_retention_seconds = "
+	if !bytes.Contains(encoded, []byte(policyHeader)) {
+		return nil, manifestError("encode retention policy help", nil)
+	}
+	encoded = bytes.Replace(encoded, []byte(policyHeader), []byte(documentedPolicyHeader), 1)
 	var help strings.Builder
 	help.WriteString("\n# Optional tuning overrides. Uncomment only an intentional override.\n# [overrides]\n")
 	for _, definition := range OverrideRegistry() {

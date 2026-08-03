@@ -5,6 +5,8 @@ services:
       POSTGRES_DB: secondbox_scenario
       POSTGRES_PASSWORD: secondbox-scenario-password
       POSTGRES_USER: secondbox
+    ports:
+      - "127.0.0.1:${SECONDBOX_SCENARIO_DATABASE_PORT:?SECONDBOX_SCENARIO_DATABASE_PORT is required}:5432"
     healthcheck:
       test:
         - CMD-SHELL

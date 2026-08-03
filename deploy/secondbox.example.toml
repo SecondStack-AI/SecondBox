@@ -57,6 +57,7 @@ platform_token_file = 'secrets/platform-token'
 application_authorities_file = 'secrets/application-authorities.json'
 
 [policy]
+# Transition-specific session/result/idempotency retention deadline and maximum fallback for replayable relay frames; frames without a live delivery or replay consumer may be removed earlier.
 data_plane_retention_seconds = 86400
 data_plane_poll_interval_milliseconds = 250
 runner_command_poll_interval_milliseconds = 250

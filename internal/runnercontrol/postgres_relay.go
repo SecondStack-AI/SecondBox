@@ -101,53 +101,59 @@ type PublicDataPlaneCancellation struct {
 
 // DataPlaneSession is the durable public-operation projection.
 type DataPlaneSession struct {
-	ID                    string
-	StreamID              string
-	TenantRef             string
-	SubjectRef            string
-	SandboxID             string
-	ProfileRevisionID     string
-	AssignmentID          string
-	InstanceID            string
-	RunnerID              string
-	Generation            int64
-	FencingToken          []byte
-	RequestID             string
-	LeaseID               string
-	Kind                  string
-	Operation             string
-	State                 string
-	DeadlineAt            time.Time
-	MaximumResponseBytes  int64
-	MaximumRequestBytes   int64
-	StreamWindowBytes     int64
-	ResponseCreditBytes   int64
-	RequestStreamBytes    int64
-	RequestStreamClosed   bool
-	Detachable            bool
-	TerminalDetachSeconds int64
-	AttachmentID          string
-	AttachedAt            *time.Time
-	DetachedAt            *time.Time
-	DetachExpiresAt       *time.Time
-	NextClientSequence    int64
-	TerminalKind          string
-	TerminalDetail        string
-	ExitCode              int32
-	Signal                int32
-	SpawnFailureReason    string
-	ElapsedMilliseconds   int64
-	LimitBytes            int64
-	InfrastructureReason  string
-	Retryable             bool
-	TerminalMessage       string
-	Stdout                []byte
-	Stderr                []byte
-	Content               []byte
-	Metadata              *runnerv1.FileMetadata
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
-	CompletedAt           *time.Time
+	ID                         string
+	StreamID                   string
+	TenantRef                  string
+	SubjectRef                 string
+	SandboxID                  string
+	ProfileRevisionID          string
+	AssignmentID               string
+	InstanceID                 string
+	RunnerID                   string
+	Generation                 int64
+	FencingToken               []byte
+	RequestID                  string
+	LeaseID                    string
+	Kind                       string
+	Operation                  string
+	State                      string
+	DeadlineAt                 time.Time
+	MaximumResponseBytes       int64
+	MaximumRequestBytes        int64
+	StreamWindowBytes          int64
+	ResponseCreditBytes        int64
+	RequestStreamBytes         int64
+	RequestStreamClosed        bool
+	Detachable                 bool
+	TerminalDetachSeconds      int64
+	AttachmentID               string
+	AttachedAt                 *time.Time
+	DetachedAt                 *time.Time
+	DetachExpiresAt            *time.Time
+	NextClientSequence         int64
+	NextOutboundSequence       int64
+	TerminalInboundSequence    *int64
+	TerminalInboundPayloadHash string
+	TerminalKind               string
+	TerminalDetail             string
+	ExitCode                   int32
+	Signal                     int32
+	SpawnFailureReason         string
+	ElapsedMilliseconds        int64
+	LimitBytes                 int64
+	InfrastructureReason       string
+	Retryable                  bool
+	TerminalMessage            string
+	Stdout                     []byte
+	Stderr                     []byte
+	Content                    []byte
+	Metadata                   *runnerv1.FileMetadata
+	CreatedAt                  time.Time
+	UpdatedAt                  time.Time
+	CompletedAt                *time.Time
+	RetainUntil                time.Time
+	FramesRetainUntil          time.Time
+	FrameCleanupCompletedAt    *time.Time
 }
 
 // NewPostgresFrameRelay opens the durable relay authority.
@@ -294,11 +300,11 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.data_plane_sessions (
-			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,assignment_id,instance_id,runner_id,generation,fencing_token,request_id,lease_id,kind,operation,stream_id,state,priority,idempotency_key,request_hash,deadline_at,maximum_response_bytes,maximum_request_bytes,stream_window_bytes,response_credit_bytes,request_stream_bytes,request_stream_closed,detachable,terminal_detach_seconds,attachment_id,attached_at,detached_at,detach_expires_at,outbound_bytes,inbound_bytes,next_inbound_sequence,terminal_kind,terminal_detail,exit_code,signal,spawn_failure_reason,elapsed_milliseconds,limit_bytes,infrastructure_failure_reason,retryable,terminal_message,stdout_bytes,stderr_bytes,content_bytes,metadata_json,request_json,created_at,updated_at,completed_at,retain_until
+			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,assignment_id,instance_id,runner_id,generation,fencing_token,request_id,lease_id,kind,operation,stream_id,state,priority,idempotency_key,request_hash,deadline_at,maximum_response_bytes,maximum_request_bytes,stream_window_bytes,response_credit_bytes,request_stream_bytes,request_stream_closed,detachable,terminal_detach_seconds,attachment_id,attached_at,detached_at,detach_expires_at,outbound_bytes,inbound_bytes,next_inbound_sequence,terminal_kind,terminal_detail,exit_code,signal,spawn_failure_reason,elapsed_milliseconds,limit_bytes,infrastructure_failure_reason,retryable,terminal_message,stdout_bytes,stderr_bytes,content_bytes,metadata_json,request_json,created_at,updated_at,completed_at,retain_until,frames_retain_until,next_outbound_sequence
 		) VALUES (
-			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'pending',$16,$17,$18,$19,$20,$21,$22,0,0,false,$23,$24,'',NULL,NULL,NULL,$25,0,1,'','',0,0,'',0,0,'',false,'',$26,$26,$26,'{}',$27,$28,$28,NULL,$29
+			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'pending',$16,$17,$18,$19,$20,$21,$22,0,0,false,$23,$24,'',NULL,NULL,NULL,$25,0,1,'','',0,0,'',0,0,'',false,'',$26,$26,$26,'{}',$27,$28,$28,NULL,$29,$29,$30
 		)`,
-		session.ID, session.TenantRef, session.SubjectRef, session.SandboxID, session.ProfileRevisionID, session.AssignmentID, session.InstanceID, session.RunnerID, session.Generation, session.FencingToken, session.RequestID, session.LeaseID, session.Kind, session.Operation, session.StreamID, input.Priority, input.IdempotencyKey, input.RequestHash, session.DeadlineAt, session.MaximumResponseBytes, session.MaximumRequestBytes, session.StreamWindowBytes, session.Detachable, session.TerminalDetachSeconds, outboundBytes, []byte{}, requestJSON, session.CreatedAt, session.CreatedAt.Add(relay.retention),
+		session.ID, session.TenantRef, session.SubjectRef, session.SandboxID, session.ProfileRevisionID, session.AssignmentID, session.InstanceID, session.RunnerID, session.Generation, session.FencingToken, session.RequestID, session.LeaseID, session.Kind, session.Operation, session.StreamID, input.Priority, input.IdempotencyKey, input.RequestHash, session.DeadlineAt, session.MaximumResponseBytes, session.MaximumRequestBytes, session.StreamWindowBytes, session.Detachable, session.TerminalDetachSeconds, outboundBytes, []byte{}, requestJSON, session.CreatedAt, session.CreatedAt.Add(relay.retention), len(frames)+1,
 	); err != nil {
 		return DataPlaneSession{}, false, fmt.Errorf("SecondBox data-plane session insert: %w", err)
 	}
@@ -558,6 +564,25 @@ func (relay *PostgresFrameRelay) MarkOutboundFrameDelivered(
 	if !liveCredential {
 		return ErrRelayDeliveryClaim
 	}
+	var sessionID string
+	if err := tx.QueryRow(ctx, `
+		SELECT session_id FROM secondbox.data_plane_frames WHERE id=$1`,
+		deliveryID,
+	).Scan(&sessionID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrRelayDeliveryClaim
+		}
+		return fmt.Errorf("SecondBox outbound relay delivery session lookup: %w", err)
+	}
+	if err := tx.QueryRow(ctx, `
+		SELECT id FROM secondbox.data_plane_sessions WHERE id=$1 FOR UPDATE`,
+		sessionID,
+	).Scan(&sessionID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrRelayDeliveryClaim
+		}
+		return fmt.Errorf("SecondBox outbound relay delivery session lock: %w", err)
+	}
 	tag, err := tx.Exec(ctx, `
 		UPDATE secondbox.data_plane_frames
 		SET state='delivered',delivered_at=$3,updated_at=$3
@@ -571,11 +596,10 @@ func (relay *PostgresFrameRelay) MarkOutboundFrameDelivered(
 		return ErrRelayDeliveryClaim
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.data_plane_sessions AS session
-		SET state=CASE WHEN session.state='pending' THEN 'running' ELSE session.state END,updated_at=$2
-		FROM secondbox.data_plane_frames AS frame
-		WHERE frame.id=$1 AND session.id=frame.session_id`,
-		deliveryID, now.UTC(),
+		UPDATE secondbox.data_plane_sessions
+		SET state=CASE WHEN state='pending' THEN 'running' ELSE state END,updated_at=$2
+		WHERE id=$1`,
+		sessionID, now.UTC(),
 	); err != nil {
 		return fmt.Errorf("SecondBox data-plane running state update: %w", err)
 	}
@@ -638,7 +662,11 @@ func (relay *PostgresFrameRelay) PersistInboundFrame(
 			WHERE session_id=$1 AND direction='inbound' AND sequence=$2`,
 			session.ID, identity.sequence,
 		).Scan(&priorHash)
-		if err == nil && priorHash == payloadHash {
+		if (err == nil && priorHash == payloadHash) ||
+			(errors.Is(err, pgx.ErrNoRows) &&
+				session.TerminalInboundSequence != nil &&
+				*session.TerminalInboundSequence == identity.sequence &&
+				session.TerminalInboundPayloadHash == payloadHash) {
 			if err := tx.Commit(ctx); err != nil {
 				return false, fmt.Errorf("SecondBox inbound duplicate commit: %w", err)
 			}
@@ -685,7 +713,9 @@ func (relay *PostgresFrameRelay) PersistInboundFrame(
 	); err != nil {
 		return false, fmt.Errorf("SecondBox inbound relay frame insert: %w", err)
 	}
-	if err := applyInboundPayload(ctx, tx, session, identity, int64(len(payload)), relay.retention, now.UTC()); err != nil {
+	if err := applyInboundPayload(
+		ctx, tx, session, identity, int64(len(payload)), payloadHash, relay.retention, now.UTC(),
+	); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -993,17 +1023,15 @@ const dataPlaneSessionSelect = `
 	       deadline_at,maximum_response_bytes,maximum_request_bytes,stream_window_bytes,
 	       response_credit_bytes,request_stream_bytes,request_stream_closed,detachable,
 	       terminal_detach_seconds,attachment_id,attached_at,detached_at,detach_expires_at,
-	       GREATEST((
-	           SELECT COALESCE(max(frame.sequence),1)-1
-	           FROM secondbox.data_plane_frames AS frame
-	           WHERE frame.session_id=secondbox.data_plane_sessions.id
-	             AND frame.direction='outbound'
-	       ),0) AS next_client_sequence,
+	       GREATEST(next_outbound_sequence-2,0) AS next_client_sequence,
+	       next_outbound_sequence,terminal_inbound_sequence,
+	       COALESCE(terminal_inbound_payload_hash,''),
 	       terminal_kind,
 	       terminal_detail,exit_code,signal,spawn_failure_reason,elapsed_milliseconds,
 	       limit_bytes,infrastructure_failure_reason,retryable,terminal_message,
 	       stdout_bytes,stderr_bytes,content_bytes,metadata_json,
-	       created_at,updated_at,completed_at
+	       created_at,updated_at,completed_at,retain_until,frames_retain_until,
+	       frame_cleanup_completed_at
 	FROM secondbox.data_plane_sessions`
 
 type relayRow interface {
@@ -1025,12 +1053,15 @@ func scanDataPlaneSession(row relayRow) (DataPlaneSession, error) {
 		&session.Detachable, &session.TerminalDetachSeconds, &session.AttachmentID,
 		&session.AttachedAt, &session.DetachedAt, &session.DetachExpiresAt,
 		&session.NextClientSequence,
+		&session.NextOutboundSequence, &session.TerminalInboundSequence,
+		&session.TerminalInboundPayloadHash,
 		&session.TerminalKind, &session.TerminalDetail, &session.ExitCode,
 		&session.Signal, &session.SpawnFailureReason, &session.ElapsedMilliseconds,
 		&session.LimitBytes, &session.InfrastructureReason, &session.Retryable,
 		&session.TerminalMessage, &session.Stdout, &session.Stderr,
 		&session.Content, &metadataJSON, &session.CreatedAt, &session.UpdatedAt,
-		&session.CompletedAt,
+		&session.CompletedAt, &session.RetainUntil, &session.FramesRetainUntil,
+		&session.FrameCleanupCompletedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DataPlaneSession{}, ErrDataPlaneNotFound
@@ -1106,6 +1137,7 @@ func applyInboundPayload(
 	session DataPlaneSession,
 	identity inboundIdentity,
 	frameBytes int64,
+	payloadHash string,
 	retention time.Duration,
 	now time.Time,
 ) error {
@@ -1196,6 +1228,14 @@ func applyInboundPayload(
 		value := now.UTC()
 		completedAt = &value
 	}
+	frameRetainUntil := session.FramesRetainUntil
+	if terminal {
+		frameRetainUntil = now.UTC().Add(retention)
+		if session.Operation == "exec" || session.Kind == "file" ||
+			(session.Kind == "terminal" && session.AttachmentID == "") {
+			frameRetainUntil = now.UTC()
+		}
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.data_plane_sessions
 		SET next_inbound_sequence=next_inbound_sequence+1,
@@ -1214,12 +1254,16 @@ func applyInboundPayload(
 		    retryable=$16,
 		    terminal_message=CASE WHEN $17='' THEN terminal_message ELSE $17 END,
 		    completed_at=COALESCE($18,completed_at),updated_at=$19,
-		    retain_until=CASE WHEN $18 IS NULL THEN retain_until ELSE $20 END
+		    retain_until=CASE WHEN $18 IS NULL THEN retain_until ELSE $20 END,
+		    frames_retain_until=$21,frame_cleanup_completed_at=NULL,
+		    terminal_inbound_sequence=CASE WHEN $18 IS NULL THEN terminal_inbound_sequence ELSE $22 END,
+		    terminal_inbound_payload_hash=CASE WHEN $18 IS NULL THEN terminal_inbound_payload_hash ELSE $23 END
 		WHERE id=$1`,
 		session.ID, frameBytes, stdout, stderr, content, metadataJSON, state,
 		terminalKind, terminalDetail, exitCode, signal, spawnFailureReason,
 		elapsedMilliseconds, limitBytes, infrastructureReason, retryable,
 		terminalMessage, completedAt, now.UTC(), now.UTC().Add(retention),
+		frameRetainUntil, identity.sequence, payloadHash,
 	); err != nil {
 		return fmt.Errorf("SecondBox inbound session update: %w", err)
 	}

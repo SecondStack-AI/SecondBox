@@ -581,6 +581,9 @@ func TestInspectRedactsSecretValuesAndPathsAndShowsAllDefaults(t *testing.T) {
 	if strings.Count(text, "codeDefault") != 19 {
 		t.Fatalf("inspect defaults = %d, want 19", strings.Count(text, "codeDefault"))
 	}
+	if !strings.Contains(text, `"name": "data_plane_retention_seconds"`) || !strings.Contains(text, dataPlaneRetentionHelp) {
+		t.Fatalf("inspect omitted retention policy help: %s", text)
+	}
 }
 
 func TestRenderRefusesSymlinkedRunnerArtifactDirectory(t *testing.T) {
