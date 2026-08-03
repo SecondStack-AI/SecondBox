@@ -406,6 +406,7 @@ const (
 	OperationKindDrain           OperationKind = "drain"
 	OperationKindStop            OperationKind = "stop"
 	OperationKindDelete          OperationKind = "delete"
+	OperationKindRelocate        OperationKind = "relocate"
 	OperationKindSnapshotCreate  OperationKind = "snapshot_create"
 	OperationKindSnapshotDelete  OperationKind = "snapshot_delete"
 	OperationKindSnapshotRestore OperationKind = "snapshot_restore"
@@ -498,25 +499,28 @@ type Problem struct {
 type ProblemCode = string
 
 const (
-	ProblemCodeInvalidRequest            ProblemCode = "invalid_request"
-	ProblemCodeAuthenticationFailed      ProblemCode = "authentication_failed"
-	ProblemCodeAuthorizationFailed       ProblemCode = "authorization_failed"
-	ProblemCodeNotFound                  ProblemCode = "not_found"
-	ProblemCodeIdempotencyConflict       ProblemCode = "idempotency_conflict"
-	ProblemCodePreconditionFailed        ProblemCode = "precondition_failed"
-	ProblemCodeStateConflict             ProblemCode = "state_conflict"
-	ProblemCodeWorkspaceMutationConflict ProblemCode = "workspace_mutation_conflict"
-	ProblemCodeGenerationFenced          ProblemCode = "generation_fenced"
-	ProblemCodeLeaseFenced               ProblemCode = "lease_fenced"
-	ProblemCodeProfileUnavailable        ProblemCode = "profile_unavailable"
-	ProblemCodeHomeRunnerUnavailable     ProblemCode = "home_runner_unavailable"
-	ProblemCodeQuotaExceeded             ProblemCode = "quota_exceeded"
-	ProblemCodeLimitExceeded             ProblemCode = "limit_exceeded"
-	ProblemCodeGuestUnavailable          ProblemCode = "guest_unavailable"
-	ProblemCodeExecutionNodeUnavailable  ProblemCode = "execution_node_unavailable"
-	ProblemCodeDependencyUnavailable     ProblemCode = "dependency_unavailable"
-	ProblemCodeInternalError             ProblemCode = "internal_error"
-	ProblemCodeWaitExpired               ProblemCode = "wait_expired"
+	ProblemCodeInvalidRequest                       ProblemCode = "invalid_request"
+	ProblemCodeAuthenticationFailed                 ProblemCode = "authentication_failed"
+	ProblemCodeAuthorizationFailed                  ProblemCode = "authorization_failed"
+	ProblemCodeNotFound                             ProblemCode = "not_found"
+	ProblemCodeIdempotencyConflict                  ProblemCode = "idempotency_conflict"
+	ProblemCodePreconditionFailed                   ProblemCode = "precondition_failed"
+	ProblemCodeStateConflict                        ProblemCode = "state_conflict"
+	ProblemCodeWorkspaceMutationConflict            ProblemCode = "workspace_mutation_conflict"
+	ProblemCodeGenerationFenced                     ProblemCode = "generation_fenced"
+	ProblemCodeLeaseFenced                          ProblemCode = "lease_fenced"
+	ProblemCodeProfileUnavailable                   ProblemCode = "profile_unavailable"
+	ProblemCodeHomeRunnerUnavailable                ProblemCode = "home_runner_unavailable"
+	ProblemCodeSandboxNotStopped                    ProblemCode = "sandbox_not_stopped"
+	ProblemCodeWorkspaceRelocationSnapshotsPresent  ProblemCode = "workspace_relocation_snapshots_present"
+	ProblemCodeWorkspaceRelocationTargetUnavailable ProblemCode = "workspace_relocation_target_unavailable"
+	ProblemCodeQuotaExceeded                        ProblemCode = "quota_exceeded"
+	ProblemCodeLimitExceeded                        ProblemCode = "limit_exceeded"
+	ProblemCodeGuestUnavailable                     ProblemCode = "guest_unavailable"
+	ProblemCodeExecutionNodeUnavailable             ProblemCode = "execution_node_unavailable"
+	ProblemCodeDependencyUnavailable                ProblemCode = "dependency_unavailable"
+	ProblemCodeInternalError                        ProblemCode = "internal_error"
+	ProblemCodeWaitExpired                          ProblemCode = "wait_expired"
 )
 
 type ProblemDetail struct {
@@ -566,6 +570,11 @@ const (
 	ProfileStateEnabled  ProfileState = "enabled"
 	ProfileStateDisabled ProfileState = "disabled"
 )
+
+type RelocateSandboxRequest struct {
+	RunnerPool     *ProfileName `json:"runnerPool,omitempty"`
+	TargetRunnerID *RunnerID    `json:"targetRunnerId,omitempty"`
+}
 
 type RemovePathRequest struct {
 	Force     bool          `json:"force"`

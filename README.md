@@ -19,9 +19,9 @@ SecondBox runs untrusted workloads — AI agents, user code, plugins, CI jobs, l
 
 ## How it works
 
-A **Sandbox** is the durable public resource; the **Instance** running it is replaceable compute fenced to one Sandbox generation. Each Sandbox is pinned at creation to one home **Runner**, whose reflink-capable filesystem owns that Sandbox's **Workspace** and local **Snapshots**. A Sandbox never relocates.
+A **Sandbox** is the durable public resource; the **Instance** running it is replaceable compute fenced to one Sandbox generation. Each Sandbox is placed at creation on one home **Runner**, whose reflink-capable filesystem owns that Sandbox's **Workspace** and local **Snapshots**. Ordinary lifecycle and automatic recovery never relocate it. An operator may relocate a stopped Sandbox with no retained Snapshots through the explicit asynchronous relocation operation.
 
-`secondboxd` stores desired state in PostgreSQL and immutable **Artifacts** in S3-compatible storage. It never transports workspace bytes — those stay on the runner that owns them.
+`secondboxd` stores desired state in PostgreSQL and immutable **Artifacts** in S3-compatible storage. Workspace bytes stay on the owning Runner except while `secondboxd` forwards a bounded, in-memory stream for an explicit stopped-Sandbox relocation; it never persists those bytes.
 
 ## Getting started
 

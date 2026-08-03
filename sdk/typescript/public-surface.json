@@ -510,6 +510,13 @@
     ],
     "optional": []
   },
+  "RelocateSandboxRequest": {
+    "required": [],
+    "optional": [
+      "runnerPool",
+      "targetRunnerId"
+    ]
+  },
   "RemovePathRequest": {
     "required": [
       "force",

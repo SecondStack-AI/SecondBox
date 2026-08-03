@@ -149,7 +149,7 @@ Migration requires a mode-`0600` regular source with exactly the historical 146 
 
 ## Recovery and replacement
 
-PostgreSQL owns desired state, immutable home assignments, generations, Leases, profiles, audit, and reconciliation. S3-compatible storage owns Artifacts and immutable execution assets. Each home Runner's reflink-capable workspace root owns its Workspaces and local Snapshots. A Sandbox never relocates, and neither PostgreSQL nor object storage can reconstruct a lost unbacked Runner workspace filesystem.
+PostgreSQL owns desired state, authoritative home assignments, generations, Leases, profiles, audit, and reconciliation. S3-compatible storage owns Artifacts and immutable execution assets. Each home Runner's reflink-capable workspace root owns its Workspaces and local Snapshots. Ordinary lifecycle and recovery never relocate a Sandbox; only the operator-initiated stopped-Sandbox relocation Operation may change its home. Neither PostgreSQL nor object storage can reconstruct a lost unbacked Runner workspace filesystem.
 
 Before replacement, take and verify a coordinated PostgreSQL/Artifact backup and quiescent backups of every affected Runner identity plus workspace root. Restore each stable Runner identity and workspace root as one consistent unit. The generated environment can be reproduced from `secondbox.toml` and its referenced secret material; it is not backup authority.
 

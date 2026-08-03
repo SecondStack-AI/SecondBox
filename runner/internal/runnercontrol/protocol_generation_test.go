@@ -1,11 +1,31 @@
 package runnercontrol
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 )
+
+type protocolGenerationBackend struct {
+	recordingAssignmentBackend
+}
+
+func (*protocolGenerationBackend) OpenWorkspaceRelocationExport(
+	context.Context,
+	*runnerprotocol.LocalWorkspaceCommand,
+) (WorkspaceRelocationExport, error) {
+	return nil, errors.New("unused Workspace relocation export")
+}
+
+func (*protocolGenerationBackend) BeginWorkspaceRelocationImport(
+	context.Context,
+	*runnerprotocol.WorkspaceTransferFrame,
+) (WorkspaceRelocationImport, error) {
+	return nil, errors.New("unused Workspace relocation import")
+}
 
 func TestRunnerRejectsNegotiatedProtocolGenerationOutsideSupportedWindow(t *testing.T) {
 	stream := &recordingProtocolStream{
@@ -24,7 +44,7 @@ func TestRunnerRejectsNegotiatedProtocolGenerationOutsideSupportedWindow(t *test
 	config.ProtocolMaximum = 2
 	service, err := NewRunnerProtocolService(
 		config,
-		&recordingAssignmentBackend{},
+		&protocolGenerationBackend{},
 		staticProtocolConnector{stream: stream},
 	)
 	if err != nil {

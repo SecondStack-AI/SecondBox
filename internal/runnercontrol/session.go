@@ -27,23 +27,24 @@ var (
 type EventKind string
 
 const (
-	EventWelcome          EventKind = "welcome"
-	EventRegistration     EventKind = "registration"
-	EventHeartbeat        EventKind = "heartbeat"
-	EventAssignment       EventKind = "assignment"
-	EventFence            EventKind = "fence"
-	EventDrain            EventKind = "drain"
-	EventEvidence         EventKind = "evidence"
-	EventLocalWorkspace   EventKind = "local_workspace"
-	EventExec             EventKind = "exec"
-	EventPty              EventKind = "pty"
-	EventFile             EventKind = "file"
-	EventPort             EventKind = "port"
-	EventPortDirect       EventKind = "port_direct"
-	EventDataPlaneDirect  EventKind = "data_plane_direct"
-	EventInstanceTerminal EventKind = "instance_terminal"
-	EventDuplicate        EventKind = "duplicate"
-	EventRejection        EventKind = "rejection"
+	EventWelcome           EventKind = "welcome"
+	EventRegistration      EventKind = "registration"
+	EventHeartbeat         EventKind = "heartbeat"
+	EventAssignment        EventKind = "assignment"
+	EventFence             EventKind = "fence"
+	EventDrain             EventKind = "drain"
+	EventEvidence          EventKind = "evidence"
+	EventLocalWorkspace    EventKind = "local_workspace"
+	EventExec              EventKind = "exec"
+	EventPty               EventKind = "pty"
+	EventFile              EventKind = "file"
+	EventPort              EventKind = "port"
+	EventPortDirect        EventKind = "port_direct"
+	EventDataPlaneDirect   EventKind = "data_plane_direct"
+	EventWorkspaceTransfer EventKind = "workspace_transfer"
+	EventInstanceTerminal  EventKind = "instance_terminal"
+	EventDuplicate         EventKind = "duplicate"
+	EventRejection         EventKind = "rejection"
 )
 
 // VersionRange is the control plane's supported runner protocol window.
@@ -131,7 +132,8 @@ func (session *Session) Accept(message *runnerv1.RunnerToControlPlane) (Event, e
 		return Event{}, fmt.Errorf("%w: Hello may appear only once", ErrRunnerMessage)
 	}
 	if message.GetExec() != nil || message.GetPty() != nil ||
-		message.GetFile() != nil || message.GetPort() != nil {
+		message.GetFile() != nil || message.GetPort() != nil ||
+		message.GetWorkspaceTransfer() != nil {
 		if !session.registered {
 			return Event{}, ErrRegistrationRequired
 		}
@@ -263,6 +265,52 @@ func (session *Session) acceptRunnerRelayFrame(
 		}
 		kind = EventPort
 		key = relayStreamKey("port", frame.Fence, frame.OperationId, frame.StreamId)
+		sequence = frame.Sequence
+		payload = frame
+	case message.GetWorkspaceTransfer() != nil:
+		frame := message.GetWorkspaceTransfer()
+		if session.selectedVersion < 2 {
+			return Event{}, fmt.Errorf("%w: Workspace relocation requires protocol generation 2", ErrRunnerMessage)
+		}
+		if strings.TrimSpace(frame.OperationId) == "" ||
+			strings.TrimSpace(frame.SandboxId) == "" ||
+			strings.TrimSpace(frame.WorkspaceId) == "" ||
+			frame.Generation == 0 || frame.Sequence == 0 {
+			return Event{}, fmt.Errorf("%w: Workspace transfer identity is incomplete", ErrRunnerMessage)
+		}
+		switch {
+		case frame.GetOpen() != nil:
+			if frame.GetOpen().LogicalCapacityBytes == 0 || len(frame.GetOpen().FencingToken) == 0 {
+				return Event{}, fmt.Errorf("%w: Workspace transfer open authority is incomplete", ErrRunnerMessage)
+			}
+		case frame.GetChunk() != nil:
+			if len(frame.GetChunk().Data) == 0 || len(frame.GetChunk().Data) > 64<<10 {
+				return Event{}, fmt.Errorf("%w: Workspace transfer chunk exceeds its bound", ErrRunnerMessage)
+			}
+		case frame.GetCredit() != nil:
+			if frame.GetCredit().ByteCount == 0 || frame.GetCredit().ByteCount > 1<<20 {
+				return Event{}, fmt.Errorf("%w: Workspace transfer credit exceeds its bound", ErrRunnerMessage)
+			}
+		case frame.GetCommit() != nil:
+			if frame.GetCommit().SizeBytes == 0 || !strings.HasPrefix(frame.GetCommit().Sha256, "sha256:") {
+				return Event{}, fmt.Errorf("%w: Workspace transfer commit is incomplete", ErrRunnerMessage)
+			}
+		case frame.GetResult() != nil:
+			if frame.GetResult().Terminal == runnerv1.WorkspaceTransferTerminalKind_WORKSPACE_TRANSFER_TERMINAL_KIND_UNSPECIFIED {
+				return Event{}, fmt.Errorf("%w: Workspace transfer result is incomplete", ErrRunnerMessage)
+			}
+		case frame.GetCancel() != nil:
+			if strings.TrimSpace(frame.GetCancel().SafeDetail) == "" {
+				return Event{}, fmt.Errorf("%w: Workspace transfer cancellation is incomplete", ErrRunnerMessage)
+			}
+		default:
+			return Event{}, fmt.Errorf("%w: Workspace transfer payload is absent", ErrRunnerMessage)
+		}
+		kind = EventWorkspaceTransfer
+		key = strings.Join([]string{
+			"workspace-transfer", frame.OperationId, frame.SandboxId,
+			frame.WorkspaceId, fmt.Sprintf("%d", frame.Generation),
+		}, "\x00")
 		sequence = frame.Sequence
 		payload = frame
 	}

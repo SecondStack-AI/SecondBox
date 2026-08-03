@@ -172,6 +172,13 @@ var operations = map[string]OperationMetadata{
 	"releaseSandboxLease": {
 		OperationID: "releaseSandboxLease", Method: "DELETE", PathTemplate: "/v1/leases/{leaseId}",
 	},
+	"relocateSandbox": {
+		OperationID: "relocateSandbox", Method: "POST", PathTemplate: "/v1/sandboxes/{sandboxId}:relocate",
+		RequestBody: []OperationMediaType{
+			{ContentType: "application/json", Schema: "RelocateSandboxRequest"},
+		},
+		RequestBodyRequired: true,
+	},
 	"removeSandboxPath": {
 		OperationID: "removeSandboxPath", Method: "DELETE", PathTemplate: "/v1/sandboxes/{sandboxId}/directories",
 		RequestBody: []OperationMediaType{

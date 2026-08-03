@@ -126,6 +126,11 @@ func (store *PostgresStateStore) OpenConnection(
 	); err != nil {
 		return fmt.Errorf("SecondBox runner Workspace reconciliation command insert: %w", err)
 	}
+	if err := queueWorkspaceRelocationRestarts(
+		ctx, tx, identity.RunnerID, connectionID, now,
+	); err != nil {
+		return err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("SecondBox runner connection commit: %w", err)
 	}
@@ -311,6 +316,9 @@ func (store *PostgresStateStore) RecordRegistration(
 	}
 	capabilities := []string{
 		"compute", "network-policy", "storage", "cleanup", "local-workspace", "port-data-plane",
+	}
+	if registration.ProtocolVersion >= 2 {
+		capabilities = append(capabilities, "workspace-relocation")
 	}
 	architecturesJSON, err := json.Marshal([]string{registration.Capabilities.Architecture})
 	if err != nil {
@@ -963,6 +971,12 @@ func recordLocalWorkspaceResult(
 	}
 	if locked.WorkspaceID != result.WorkspaceId {
 		return errors.New("SecondBox runner local-workspace result targets the wrong Workspace")
+	}
+	switch result.Kind {
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_EXPORT,
+		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_DELETE_SOURCE,
+		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_ABORT_SOURCE:
+		return recordLocalWorkspaceRelocationResult(ctx, tx, locked, runnerID, result, now)
 	}
 	var snapshot rowlock.Snapshot
 	switch result.Kind {
@@ -1657,10 +1671,14 @@ func recordLocalWorkspaceReconciliation(
 			locked.Workspace.Mutation.State == "runner_succeeded" {
 			expectedGeneration = locked.Workspace.Mutation.TargetGeneration
 		}
+		expectedRelocationSealed := locked.Workspace.Mutation.Kind == "relocate" &&
+			(locked.Workspace.Mutation.State == "source_sealed" ||
+				locked.Workspace.Mutation.State == "aborting_source_sealed")
 		if item.Generation != uint64(expectedGeneration) ||
 			item.LogicalCapacityBytes != uint64(locked.Workspace.LogicalCapacityBytes) ||
 			!item.Formatted ||
 			item.RestorePending != restorePending ||
+			item.RelocationSealed != expectedRelocationSealed ||
 			!writerMatches {
 			if err := failReconciledWorkspace(
 				ctx,
@@ -1850,6 +1868,9 @@ func workspaceMutationMatchesReceipt(
 		return mutationKind == "snapshot_create"
 	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_SNAPSHOT_DELETE:
 		return mutationKind == "snapshot_delete"
+	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_EXPORT,
+		runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_ABORT_SOURCE:
+		return mutationKind == "relocate"
 	default:
 		return false
 	}

@@ -24,7 +24,7 @@ The public API uses provider-neutral terms. Responses never contain Firecracker 
 - The asserted `(tenant_ref, subject_ref)` owns Sandboxes, workspaces, snapshots, artifacts, leases, operations, idempotency records, audit events, and quota usage.
 - An operator owns platform-token distribution, profiles, profile revisions, runner pools, Runner certificates, and platform-wide retention and trust configuration. Data-plane retention supplies transition-specific session/result/idempotency deadlines and the maximum fallback for replayable relay frames; frames with no remaining delivery or replay consumer may be removed earlier.
 - The control plane owns desired state and assignment authority.
-- A Sandbox's immutable home runner owns its durable Workspace, local Snapshots, receipts, and current fenced compute process.
+- A Sandbox's current authoritative home runner owns its durable Workspace, local Snapshots, receipts, and current fenced compute process. Only the stopped-Sandbox relocation Operation may change that home.
 - Object storage owns application Artifacts and immutable execution assets, never Workspace persistence.
 - Application code owns Sandbox creation, reuse, stop, and deletion. Framework adapters do not own provider lifetime.
 

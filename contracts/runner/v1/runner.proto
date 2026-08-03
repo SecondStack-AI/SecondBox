@@ -742,7 +742,7 @@ message PortFrame {
 
 // LocalWorkspaceCommand coordinates durable runner-local storage using only
 // logical SecondBox identities. The authenticated stream supplies the home
-// Runner identity; paths and image bytes are never protocol values.
+// Runner identity; paths and image bytes are never command values.
 enum LocalWorkspaceCommandKind {
   LOCAL_WORKSPACE_COMMAND_KIND_UNSPECIFIED = 0;
   LOCAL_WORKSPACE_COMMAND_KIND_CREATE = 1;
@@ -757,6 +757,10 @@ enum LocalWorkspaceCommandKind {
   LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT = 10;
   LOCAL_WORKSPACE_COMMAND_KIND_RECONCILE = 11;
   LOCAL_WORKSPACE_COMMAND_KIND_CLONE_FROM_SNAPSHOT = 12;
+  LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_EXPORT = 13;
+  LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_IMPORT = 14;
+  LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_DELETE_SOURCE = 15;
+  LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_ABORT_SOURCE = 16;
 }
 
 message LocalWorkspaceCommand {
@@ -800,6 +804,7 @@ message LocalWorkspaceInventoryItem {
   bool formatted = 4;
   bool restore_pending = 5;
   bool active_writer = 6;
+  bool relocation_sealed = 7;
 }
 
 message LocalWorkspaceReceiptItem {
@@ -846,6 +851,62 @@ message Evidence {
   Correlation correlation = 7;
 }
 
+// WorkspaceTransferFrame is the bounded in-memory exception to runner-local
+// image transport. The control plane forwards these frames only between the
+// source and target of one operator-authorized stopped-Sandbox relocation and
+// never persists them.
+message WorkspaceTransferOpen {
+  uint64 logical_capacity_bytes = 1;
+  bytes fencing_token = 2;
+}
+
+message WorkspaceTransferChunk {
+  uint64 offset = 1;
+  bytes data = 2;
+}
+
+message WorkspaceTransferCommit {
+  uint64 size_bytes = 1;
+  string sha256 = 2;
+}
+
+enum WorkspaceTransferTerminalKind {
+  WORKSPACE_TRANSFER_TERMINAL_KIND_UNSPECIFIED = 0;
+  WORKSPACE_TRANSFER_TERMINAL_KIND_SUCCEEDED = 1;
+  WORKSPACE_TRANSFER_TERMINAL_KIND_CHECKSUM_MISMATCH = 2;
+  WORKSPACE_TRANSFER_TERMINAL_KIND_STORAGE_INCOMPATIBLE = 3;
+  WORKSPACE_TRANSFER_TERMINAL_KIND_INSUFFICIENT_SPACE = 4;
+  WORKSPACE_TRANSFER_TERMINAL_KIND_RESTART_REQUIRED = 5;
+  WORKSPACE_TRANSFER_TERMINAL_KIND_RUNNER_FAILED = 6;
+}
+
+message WorkspaceTransferResult {
+  WorkspaceTransferTerminalKind terminal = 1;
+  uint64 size_bytes = 2;
+  string sha256 = 3;
+  string safe_detail = 4;
+}
+
+message WorkspaceTransferCancel {
+  string safe_detail = 1;
+}
+
+message WorkspaceTransferFrame {
+  string operation_id = 1;
+  string sandbox_id = 2;
+  string workspace_id = 3;
+  uint64 generation = 4;
+  uint64 sequence = 5;
+  oneof payload {
+    WorkspaceTransferOpen open = 10;
+    WorkspaceTransferChunk chunk = 11;
+    StreamCredit credit = 12;
+    WorkspaceTransferCommit commit = 13;
+    WorkspaceTransferResult result = 14;
+    WorkspaceTransferCancel cancel = 15;
+  }
+}
+
 // InstanceObservedTerminationReason is limited to post-ready process exit
 // classifications the Runner can prove from owned Firecracker and cgroup
 // evidence. Policy, operator, fencing, and Runner-loss reasons remain
@@ -890,6 +951,7 @@ message RunnerToControlPlane {
     LocalWorkspaceResult local_workspace_result = 17;
     PortDirectConsume port_direct_consume = 18;
     DataPlaneDirectConsume data_plane_direct_consume = 19;
+    WorkspaceTransferFrame workspace_transfer = 20;
   }
 }
 
@@ -910,5 +972,6 @@ message ControlPlaneToRunner {
     DataPlaneDirectOpen data_plane_direct_open = 15;
     DataPlaneDirectAdmission data_plane_direct_admission = 16;
     DataPlaneCancelCommand data_plane_cancel = 17;
+    WorkspaceTransferFrame workspace_transfer = 18;
   }
 }

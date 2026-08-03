@@ -176,6 +176,7 @@ func (store *Store) initialize(ctx context.Context) error {
 		store.receiptsRoot(),
 		store.templatesRoot(),
 		store.ext4TemplatesRoot(),
+		store.relocationsRoot(),
 	} {
 		if err := os.MkdirAll(path, privateDirectoryMode); err != nil {
 			return fmt.Errorf("SecondBox WorkspaceStore create directory %q: %w", path, err)
@@ -260,11 +261,12 @@ func (store *Store) probeReflink(ctx context.Context) error {
 }
 
 type currentManifest struct {
-	FormatVersion int    `json:"formatVersion"`
-	WorkspaceID   string `json:"workspaceId"`
-	Generation    uint64 `json:"generation"`
-	Image         string `json:"image"`
-	CapacityBytes int64  `json:"capacityBytes"`
+	FormatVersion    int    `json:"formatVersion"`
+	WorkspaceID      string `json:"workspaceId"`
+	Generation       uint64 `json:"generation"`
+	Image            string `json:"image"`
+	CapacityBytes    int64  `json:"capacityBytes"`
+	RelocationSealed bool   `json:"relocationSealed,omitempty"`
 }
 
 type snapshotManifest struct {
@@ -554,6 +556,10 @@ func (store *Store) Open(
 	if manifest.Generation != expectedGeneration {
 		closeLockedFile(lock)
 		return nil, ErrStaleGeneration
+	}
+	if manifest.RelocationSealed {
+		closeLockedFile(lock)
+		return nil, ErrRelocationSealed
 	}
 	if pending, err := store.stagedRestorePending(workspaceID); err != nil {
 		closeLockedFile(lock)
@@ -1159,7 +1165,7 @@ func (store *Store) inspectLocked(workspaceID string) (WorkspaceInspection, erro
 	return WorkspaceInspection{
 		WorkspaceID: workspaceID, Generation: manifest.Generation,
 		CapacityBytes: manifest.CapacityBytes, Formatted: formatted,
-		RestorePending: pending,
+		RestorePending: pending, RelocationSealed: manifest.RelocationSealed,
 	}, nil
 }
 
@@ -1683,12 +1689,18 @@ func validateReceipt(receipt Receipt) error {
 		ReceiptRestoreSwap,
 		ReceiptRestoreFinalize,
 		ReceiptRestoreAbort,
-		ReceiptWorkspaceDelete:
+		ReceiptWorkspaceDelete,
+		ReceiptRelocationExport,
+		ReceiptRelocationImport,
+		ReceiptRelocationAbort:
 	default:
 		return fmt.Errorf("%w: unknown receipt kind", ErrCorruptState)
 	}
 	if receipt.SnapshotID != "" && validateID(receipt.SnapshotID) != nil {
 		return fmt.Errorf("%w: invalid receipt Snapshot ID", ErrCorruptState)
+	}
+	if receipt.Checksum != "" && !strings.HasPrefix(receipt.Checksum, "sha256:") {
+		return fmt.Errorf("%w: invalid receipt checksum", ErrCorruptState)
 	}
 	return nil
 }
@@ -2226,6 +2238,18 @@ func (store *Store) templatesRoot() string {
 
 func (store *Store) ext4TemplatesRoot() string {
 	return filepath.Join(store.templatesRoot(), "ext4")
+}
+
+func (store *Store) relocationsRoot() string {
+	return filepath.Join(store.root, "relocations")
+}
+
+func (store *Store) relocationDir(workspaceID string, operationID string) string {
+	return filepath.Join(store.relocationsRoot(), workspaceID, operationID)
+}
+
+func (store *Store) relocationImagePath(workspaceID string, operationID string) string {
+	return filepath.Join(store.relocationDir(workspaceID, operationID), "image.ext4")
 }
 
 func (store *Store) ext4TemplatePath(capacityBytes int64) string {

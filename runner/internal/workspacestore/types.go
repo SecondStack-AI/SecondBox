@@ -8,6 +8,7 @@ package workspacestore
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"time"
 )
@@ -40,6 +41,9 @@ var (
 	ErrStorageIncompatible = errors.New("SecondBox WorkspaceStore storage is incompatible")
 	// ErrCorruptState reports malformed manifests, receipts, or image evidence.
 	ErrCorruptState = errors.New("SecondBox WorkspaceStore local state is corrupt")
+	// ErrRelocationSealed reports a Workspace that is read-only while an
+	// operator-authorized relocation owns its mutation slot.
+	ErrRelocationSealed = errors.New("SecondBox WorkspaceStore Workspace is sealed for relocation")
 )
 
 const (
@@ -53,6 +57,9 @@ const (
 	ReceiptRestoreFinalize       = "restore_finalize"
 	ReceiptRestoreAbort          = "restore_abort"
 	ReceiptWorkspaceDelete       = "workspace_delete"
+	ReceiptRelocationExport      = "relocation_export"
+	ReceiptRelocationImport      = "relocation_import"
+	ReceiptRelocationAbort       = "relocation_abort"
 	workspaceFilesystemLabel     = "secondbox-workspace"
 	currentManifestFormatVersion = 1
 	receiptFormatVersion         = 1
@@ -224,6 +231,34 @@ type DeleteWorkspaceRequest struct {
 	ExpectedGeneration uint64
 }
 
+// RelocationExportRequest seals and opens one stopped current Workspace image.
+type RelocationExportRequest struct {
+	Mutation
+	ExpectedGeneration uint64
+}
+
+// RelocationImportRequest creates one target image at the source generation.
+type RelocationImportRequest struct {
+	Mutation
+	Generation    uint64
+	CapacityBytes int64
+}
+
+// RelocationExport holds the source reader lock after the seal receipt is durable.
+type RelocationExport interface {
+	io.ReadCloser
+	SizeBytes() int64
+	Receipt() Receipt
+}
+
+// RelocationImport accepts sequential credit-bounded chunks into target staging.
+type RelocationImport interface {
+	WriteChunk(uint64, []byte) error
+	Complete(uint64, string) (Receipt, error)
+	Abort() error
+	CompletedReceipt() (Receipt, bool)
+}
+
 // Receipt is immutable replay evidence persisted before acknowledging a local
 // mutation result.
 type Receipt struct {
@@ -236,17 +271,19 @@ type Receipt struct {
 	Generation         uint64    `json:"generation,omitempty"`
 	PreviousGeneration uint64    `json:"previousGeneration,omitempty"`
 	CapacityBytes      int64     `json:"capacityBytes,omitempty"`
+	Checksum           string    `json:"checksum,omitempty"`
 	RecordedAt         time.Time `json:"recordedAt"`
 }
 
 // WorkspaceInspection is bounded logical local-storage evidence.
 type WorkspaceInspection struct {
-	WorkspaceID    string
-	Generation     uint64
-	CapacityBytes  int64
-	Formatted      bool
-	RestorePending bool
-	ActiveWriter   bool
+	WorkspaceID      string
+	Generation       uint64
+	CapacityBytes    int64
+	Formatted        bool
+	RestorePending   bool
+	ActiveWriter     bool
+	RelocationSealed bool
 }
 
 // ReconcileReport contains bounded logical evidence used after Runner restart.
@@ -269,6 +306,9 @@ type WorkspaceStore interface {
 	FinalizeRestore(context.Context, RestoreMutation) (Receipt, error)
 	AbortRestore(context.Context, RestoreMutation) (Receipt, error)
 	DeleteWorkspace(context.Context, DeleteWorkspaceRequest) (Receipt, error)
+	OpenRelocationExport(context.Context, RelocationExportRequest) (RelocationExport, error)
+	BeginRelocationImport(context.Context, RelocationImportRequest) (RelocationImport, error)
+	AbortRelocation(context.Context, RelocationExportRequest) (Receipt, error)
 	Inspect(context.Context, string) (WorkspaceInspection, error)
 	Reconcile(context.Context) (ReconcileReport, error)
 }

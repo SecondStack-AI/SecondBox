@@ -218,6 +218,10 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	workspaceTransfers, err := runnercontrol.NewWorkspaceTransferHub(runnerStateStore)
+	if err != nil {
+		return err
+	}
 	runnerControlServer, err := runnercontrol.NewServer(runnercontrol.ServerConfig{
 		CredentialVerifier: runnerCredentialAuthority, StateStore: runnerStateStore,
 		SupportedVersions: runnercontrol.VersionRange{
@@ -235,6 +239,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		LiveDataPlane:       liveDataPlane,
 		DirectPorts:         dataPlaneRelay,
 		DirectDataPlane:     controlPlane,
+		WorkspaceTransfers:  workspaceTransfers,
 		Now:                 service.SystemClock,
 		NewConnectionID:     func() string { return service.NewOpaqueID("rconn") },
 	})

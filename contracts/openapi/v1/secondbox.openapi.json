@@ -490,6 +490,7 @@
       }
     },
     "/v1/sandboxes/{sandboxId}:start": {"$ref": "#/components/pathItems/StartSandbox"},
+    "/v1/sandboxes/{sandboxId}:relocate": {"$ref": "#/components/pathItems/RelocateSandbox"},
     "/v1/sandboxes/{sandboxId}:inspect": {
       "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "post": {
@@ -1560,6 +1561,34 @@
           }
         }
       },
+      "RelocateSandbox": {
+        "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
+        "post": {
+          "tags": ["Sandboxes"],
+          "operationId": "relocateSandbox",
+          "parameters": [
+            {"$ref": "#/components/parameters/SandboxID"},
+            {"$ref": "#/components/parameters/IfMatch"},
+            {"$ref": "#/components/parameters/IdempotencyKey"},
+            {"$ref": "#/components/parameters/RequestID"}
+          ],
+          "requestBody": {
+            "required": true,
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/RelocateSandboxRequest"}}}
+          },
+          "responses": {
+            "202": {"$ref": "#/components/responses/AcceptedOperation"},
+            "400": {"$ref": "#/components/responses/BadRequest"},
+            "401": {"$ref": "#/components/responses/Unauthorized"},
+            "403": {"$ref": "#/components/responses/Forbidden"},
+            "404": {"$ref": "#/components/responses/NotFound"},
+            "409": {"$ref": "#/components/responses/Conflict"},
+            "412": {"$ref": "#/components/responses/PreconditionFailed"},
+            "429": {"$ref": "#/components/responses/TooManyRequests"},
+            "503": {"$ref": "#/components/responses/ServiceUnavailable"}
+          }
+        }
+      },
       "DrainSandbox": {
         "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
         "post": {
@@ -1886,7 +1915,7 @@
         "uniqueItems": true,
         "items": {
           "type": "string",
-          "enum": ["compute", "network-policy", "storage", "cleanup", "local-workspace", "exec-streaming", "file-streaming", "pty", "port-proxy", "evidence"]
+          "enum": ["compute", "network-policy", "storage", "cleanup", "local-workspace", "workspace-relocation", "exec-streaming", "file-streaming", "pty", "port-proxy", "evidence"]
         }
       },
       "RunnerCapacityPolicy": {
@@ -2011,6 +2040,18 @@
           "sourceSnapshotId": {"$ref": "#/components/schemas/OpaqueID"}
         }
       },
+      "RelocateSandboxRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "targetRunnerId": {"$ref": "#/components/schemas/RunnerID"},
+          "runnerPool": {"$ref": "#/components/schemas/ProfileName"}
+        },
+        "oneOf": [
+          {"required": ["targetRunnerId"]},
+          {"required": ["runnerPool"]}
+        ]
+      },
       "UpdateSandboxMetadataRequest": {
         "type": "object",
         "additionalProperties": false,
@@ -2065,7 +2106,7 @@
           "updatedAt": {"$ref": "#/components/schemas/Timestamp"}
         }
       },
-      "OperationKind": {"type": "string", "enum": ["create", "start", "drain", "stop", "delete", "snapshot_create", "snapshot_delete", "snapshot_restore", "cancel_exec", "cancel_terminal"]},
+      "OperationKind": {"type": "string", "enum": ["create", "start", "drain", "stop", "delete", "relocate", "snapshot_create", "snapshot_delete", "snapshot_restore", "cancel_exec", "cancel_terminal"]},
       "OperationState": {"type": "string", "enum": ["pending", "running", "succeeded", "failed", "cancelled"]},
       "Operation": {
         "type": "object",
@@ -2845,6 +2886,9 @@
           "lease_fenced",
           "profile_unavailable",
           "home_runner_unavailable",
+          "sandbox_not_stopped",
+          "workspace_relocation_snapshots_present",
+          "workspace_relocation_target_unavailable",
           "quota_exceeded",
           "limit_exceeded",
           "guest_unavailable",

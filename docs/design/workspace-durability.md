@@ -1,8 +1,8 @@
 # Workspace durability
 
-Each Sandbox owns one durable Workspace and one immutable `home_runner_id`. The
-home runner's configured `SECONDBOX_RUNNER_WORKSPACE_ROOT` is the only
-authoritative copy of that Workspace known to SecondBox. PostgreSQL records the
+Each Sandbox owns one durable Workspace and one authoritative `home_runner_id`.
+The assigned runner's configured `SECONDBOX_RUNNER_WORKSPACE_ROOT` is the only
+writable authoritative copy of that Workspace known to SecondBox. PostgreSQL records the
 logical owner, generation, desired state, local mutation state, and durable
 runner receipts; it never records a host path. S3-compatible storage is not a
 Workspace persistence layer.
@@ -36,9 +36,29 @@ swap receipt, fences all old-generation authority, and then dispatches
 idempotent finalize cleanup.
 
 One PostgreSQL Workspace mutation slot serializes start, stop, Snapshot, restore,
-and deletion. Runner-side locking independently enforces one writer.
+relocation, and deletion. Runner-side locking independently enforces one writer.
+
+An operator may relocate only a stopped Sandbox with no retained Snapshots. The
+source Runner first seals the current generation and persists its receipt, so
+the source image cannot be opened for a writer. The control plane then forwards
+64 KiB chunks through a one MiB credit window directly from the source stream to
+the target stream without storing them in PostgreSQL, object storage, or a file.
+The target verifies the exact logical size, ext4 identity, and SHA-256 checksum,
+fsyncs the imported image, publishes its manifest, and persists a receipt before
+acknowledgement. PostgreSQL changes `home_runner_id` only after that receipt and
+queues source deletion in the same transaction. Before that transaction the
+source remains home and sealed; after it the target is home and the source
+remains sealed until deletion.
+
+Relocation refuses retained Snapshots rather than moving them. Snapshots are
+reflink children whose locality and retention receipts are part of the source
+WorkspaceStore, while relocation deliberately transfers only one sealed current
+image. Requiring operators to delete them keeps the transfer single-image and
+preserves the existing Snapshot lock and durability model.
 
 If the home runner is unavailable, the Sandbox is unavailable. Scheduling never
-selects another runner, creates an empty replacement, or reconstructs a
-Workspace from object storage. Operators must preserve the stable runner
-identity and workspace filesystem together through their own backup system.
+automatically selects another runner, creates an empty replacement, or
+reconstructs a Workspace from object storage. Relocation requires the source
+Runner and its intact WorkspaceStore to be online. Operators must preserve the
+stable runner identity and workspace filesystem together through their own
+backup system.

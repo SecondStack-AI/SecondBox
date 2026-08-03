@@ -93,6 +93,7 @@ type LocalWorkspaceEvidence struct {
 	Generation         uint64
 	LogicalCapacity    uint64
 	ReceiptRecordedAt  time.Time
+	Checksum           string
 	Inventory          []*runnerprotocol.LocalWorkspaceInventoryItem
 	Receipts           []*runnerprotocol.LocalWorkspaceReceiptItem
 }
@@ -103,6 +104,35 @@ type LocalWorkspaceBackend interface {
 		context.Context,
 		*runnerprotocol.LocalWorkspaceCommand,
 	) (LocalWorkspaceEvidence, error)
+}
+
+// WorkspaceRelocationExport is a sealed source reader with durable receipt evidence.
+type WorkspaceRelocationExport interface {
+	Read([]byte) (int, error)
+	Close() error
+	SizeBytes() int64
+	Evidence() LocalWorkspaceEvidence
+}
+
+// WorkspaceRelocationImport is target staging that becomes authoritative only
+// after a checksum-verified durable receipt.
+type WorkspaceRelocationImport interface {
+	WriteChunk(uint64, []byte) error
+	Complete(uint64, string) (LocalWorkspaceEvidence, error)
+	Abort() error
+	CompletedEvidence() (LocalWorkspaceEvidence, bool)
+}
+
+// WorkspaceRelocationBackend executes the only cross-Runner Workspace byte path.
+type WorkspaceRelocationBackend interface {
+	OpenWorkspaceRelocationExport(
+		context.Context,
+		*runnerprotocol.LocalWorkspaceCommand,
+	) (WorkspaceRelocationExport, error)
+	BeginWorkspaceRelocationImport(
+		context.Context,
+		*runnerprotocol.WorkspaceTransferFrame,
+	) (WorkspaceRelocationImport, error)
 }
 
 // AssignmentBackend accepts only immutable, profile-resolved assignments.
@@ -149,33 +179,37 @@ type RunnerProtocolConnector interface {
 
 // RunnerProtocolService binds the versioned stream to one compute backend.
 type RunnerProtocolService struct {
-	config            RunnerProtocolConfig
-	backend           AssignmentBackend
-	dataPlaneBackend  DataPlaneBackend
-	portBackend       PortBackend
-	workspaceBackend  LocalWorkspaceBackend
-	terminalBackend   instanceTerminalBackend
-	instanceTerminals <-chan BackendInstanceTerminal
-	connector         RunnerProtocolConnector
-	sequence          uint64
-	sendMu            sync.Mutex
-	stateMu           sync.Mutex
-	drain             runnerprotocol.DrainPhase
-	active            map[string]*runnerprotocol.ActiveAssignmentSummary
-	operationMu       sync.Mutex
-	execOperations    map[string]*runnerExecOperation
-	fileOperations    map[string]*runnerFileOperation
-	portOperations    map[string]*runnerPortOperation
-	execTerminalOrder []string
-	fileTerminalOrder []string
-	portTerminalOrder []string
-	evidence          runnerevidence.Sink
-	correlations      map[string]*runnerprotocol.Correlation
-	dataPlane         *dataPlaneListener
-	dataPlaneFailures chan error
-	dataPlaneSPKIPin  string
-	directPorts       *directPortRegistry
-	directDataPlane   *directDataPlaneRegistry
+	config                     RunnerProtocolConfig
+	backend                    AssignmentBackend
+	dataPlaneBackend           DataPlaneBackend
+	portBackend                PortBackend
+	workspaceBackend           LocalWorkspaceBackend
+	relocationBackend          WorkspaceRelocationBackend
+	terminalBackend            instanceTerminalBackend
+	instanceTerminals          <-chan BackendInstanceTerminal
+	connector                  RunnerProtocolConnector
+	sequence                   uint64
+	sendMu                     sync.Mutex
+	stateMu                    sync.Mutex
+	drain                      runnerprotocol.DrainPhase
+	active                     map[string]*runnerprotocol.ActiveAssignmentSummary
+	operationMu                sync.Mutex
+	execOperations             map[string]*runnerExecOperation
+	fileOperations             map[string]*runnerFileOperation
+	portOperations             map[string]*runnerPortOperation
+	execTerminalOrder          []string
+	fileTerminalOrder          []string
+	portTerminalOrder          []string
+	evidence                   runnerevidence.Sink
+	correlations               map[string]*runnerprotocol.Correlation
+	dataPlane                  *dataPlaneListener
+	dataPlaneFailures          chan error
+	dataPlaneSPKIPin           string
+	directPorts                *directPortRegistry
+	directDataPlane            *directDataPlaneRegistry
+	workspaceRelocationMu      sync.Mutex
+	workspaceRelocationSources map[string]*workspaceRelocationSource
+	workspaceRelocationTargets map[string]*workspaceRelocationTarget
 }
 
 // NewRunnerProtocolService validates immutable identity before creating the composition root.
@@ -235,6 +269,7 @@ func NewRunnerProtocolService(
 	_, implementsPTY := backend.(PTYDataPlaneBackend)
 	portBackend, implementsPort := backend.(PortBackend)
 	workspaceBackend, implementsWorkspace := backend.(LocalWorkspaceBackend)
+	relocationBackend, implementsRelocation := backend.(WorkspaceRelocationBackend)
 	terminalBackend, implementsTerminal := backend.(instanceTerminalBackend)
 	for _, feature := range config.MandatoryFeatures {
 		if (feature == runnerprotocol.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING ||
@@ -253,25 +288,31 @@ func NewRunnerProtocolService(
 			return nil, fmt.Errorf("SecondBox runner local-workspace feature requires a WorkspaceStore backend")
 		}
 	}
+	if config.ProtocolMaximum >= 2 && !implementsRelocation {
+		return nil, fmt.Errorf("SecondBox runner protocol generation 2 requires a Workspace relocation backend")
+	}
 	service := &RunnerProtocolService{
-		config:           config,
-		backend:          backend,
-		dataPlaneBackend: dataPlaneBackend,
-		portBackend:      portBackend,
-		workspaceBackend: workspaceBackend,
-		terminalBackend:  terminalBackend,
-		connector:        connector,
-		drain:            runnerprotocol.DrainPhase_DRAIN_PHASE_ACTIVE,
-		active:           make(map[string]*runnerprotocol.ActiveAssignmentSummary),
-		execOperations:   make(map[string]*runnerExecOperation),
-		fileOperations:   make(map[string]*runnerFileOperation),
-		portOperations:   make(map[string]*runnerPortOperation),
-		evidence:         runnerevidence.SlogSink{},
-		correlations:     make(map[string]*runnerprotocol.Correlation),
-		dataPlane:        newDataPlaneListener(),
-		dataPlaneSPKIPin: dataPlaneSPKIPin,
-		directPorts:      newDirectPortRegistry(),
-		directDataPlane:  newDirectDataPlaneRegistry(),
+		config:                     config,
+		backend:                    backend,
+		dataPlaneBackend:           dataPlaneBackend,
+		portBackend:                portBackend,
+		workspaceBackend:           workspaceBackend,
+		relocationBackend:          relocationBackend,
+		terminalBackend:            terminalBackend,
+		connector:                  connector,
+		drain:                      runnerprotocol.DrainPhase_DRAIN_PHASE_ACTIVE,
+		active:                     make(map[string]*runnerprotocol.ActiveAssignmentSummary),
+		execOperations:             make(map[string]*runnerExecOperation),
+		fileOperations:             make(map[string]*runnerFileOperation),
+		portOperations:             make(map[string]*runnerPortOperation),
+		evidence:                   runnerevidence.SlogSink{},
+		correlations:               make(map[string]*runnerprotocol.Correlation),
+		dataPlane:                  newDataPlaneListener(),
+		dataPlaneSPKIPin:           dataPlaneSPKIPin,
+		directPorts:                newDirectPortRegistry(),
+		directDataPlane:            newDirectDataPlaneRegistry(),
+		workspaceRelocationSources: make(map[string]*workspaceRelocationSource),
+		workspaceRelocationTargets: make(map[string]*workspaceRelocationTarget),
 	}
 	if implementsTerminal {
 		service.instanceTerminals = terminalBackend.InstanceTerminals()
@@ -338,7 +379,7 @@ func (s *RunnerProtocolService) Run(ctx context.Context) (runErr error) {
 			return err
 		}
 		sessionEstablished, sessionErr := s.runProtocolSession(ctx)
-		sessionErr = errors.Join(sessionErr, s.connector.Close())
+		sessionErr = errors.Join(sessionErr, s.abortWorkspaceRelocations(), s.connector.Close())
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -623,6 +664,12 @@ func (s *RunnerProtocolService) consumeCommands(
 			if duplicate {
 				continue
 			}
+			if transfer := frame.message.GetWorkspaceTransfer(); transfer != nil {
+				if err := s.handleWorkspaceTransferFrame(connectionCtx, stream, transfer); err != nil {
+					return err
+				}
+				continue
+			}
 			// Sequence acceptance above already ran in receive order, so a
 			// concurrent start cannot reorder the control command stream.
 			if assignment := frame.message.GetAssignment(); assignment != nil {
@@ -651,7 +698,9 @@ func (s *RunnerProtocolService) consumeCommands(
 					return fmt.Errorf("SecondBox runner local-workspace feature was not negotiated")
 				}
 				if workspace.Kind ==
-					runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE {
+					runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE ||
+					workspace.Kind ==
+						runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_EXPORT {
 					select {
 					case workspaceCreateSlots <- struct{}{}:
 					case <-connectionCtx.Done():
@@ -873,6 +922,10 @@ func (s *RunnerProtocolService) handleLocalWorkspace(
 			strings.TrimSpace(command.WorkspaceId) == "") {
 		return fmt.Errorf("SecondBox runner local-workspace identity is incomplete")
 	}
+	if command.Kind ==
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_EXPORT {
+		return s.handleWorkspaceRelocationExport(ctx, stream, command)
+	}
 	switch command.Kind {
 	case runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE,
 		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CLONE_FROM_SNAPSHOT,
@@ -883,7 +936,9 @@ func (s *RunnerProtocolService) handleLocalWorkspace(
 		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_PREPARE,
 		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_SWAP,
 		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE,
-		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT:
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_ABORT,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_DELETE_SOURCE,
+		runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_RELOCATION_ABORT_SOURCE:
 		if len(command.FencingToken) == 0 {
 			return fmt.Errorf("SecondBox runner local-workspace fencing token is required")
 		}

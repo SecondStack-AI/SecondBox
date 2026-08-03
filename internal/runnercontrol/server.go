@@ -51,6 +51,14 @@ type DirectDataPlaneAdmitter interface {
 	ConsumeDirectDataPlane(context.Context, DirectDataPlaneConsumption) error
 }
 
+// WorkspaceTransferBroker forwards bounded relocation frames between the two
+// authenticated Runner streams without retaining image bytes.
+type WorkspaceTransferBroker interface {
+	Register(string, string, controlPlaneFrameSender)
+	Unregister(string, string)
+	Handle(context.Context, string, *runnerv1.WorkspaceTransferFrame, time.Time) error
+}
+
 // ServerConfig contains explicit protocol compatibility and durable dependencies.
 type ServerConfig struct {
 	CredentialVerifier  CredentialVerifier
@@ -59,6 +67,7 @@ type ServerConfig struct {
 	LiveDataPlane       *LiveDataPlaneBroker
 	DirectPorts         DirectPortAdmitter
 	DirectDataPlane     DirectDataPlaneAdmitter
+	WorkspaceTransfers  WorkspaceTransferBroker
 	SupportedVersions   VersionRange
 	EnabledFeatures     []runnerv1.RunnerFeature
 	HeartbeatInterval   time.Duration
@@ -261,6 +270,20 @@ func (server *Server) Connect(stream runnerv1.RunnerControl_ConnectServer) (retu
 			}
 			continue
 		}
+		if accepted.event.Kind == EventWorkspaceTransfer {
+			if server.config.WorkspaceTransfers == nil {
+				return errors.New("SecondBox runner Workspace transfer broker is unavailable")
+			}
+			if err := server.config.WorkspaceTransfers.Handle(
+				stream.Context(),
+				identity.RunnerID,
+				accepted.event.Message.GetWorkspaceTransfer(),
+				accepted.receivedAt,
+			); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := server.persistEvent(
 			stream.Context(),
 			accepted.event,
@@ -277,6 +300,10 @@ func (server *Server) Connect(stream runnerv1.RunnerControl_ConnectServer) (retu
 					return err
 				}
 				defer detach()
+			}
+			if server.config.WorkspaceTransfers != nil {
+				server.config.WorkspaceTransfers.Register(identity.RunnerID, connectionID, sender)
+				defer server.config.WorkspaceTransfers.Unregister(identity.RunnerID, connectionID)
 			}
 			failures := make(chan error, 1)
 			outboundFailures = failures

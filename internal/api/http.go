@@ -784,6 +784,27 @@ func (apiHandler *handler) mutateSandbox(writer http.ResponseWriter, request *ht
 			return
 		}
 		apiHandler.mutateSandboxLifecycle(writer, request, sandboxID, action, nil)
+	case "relocate":
+		var body contracts.RelocateSandboxRequest
+		if err := decodeStrictJSON(request, &body); err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		expectedRevision, err := parseIfMatch(request)
+		if err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		operation, replayed, err := apiHandler.service.RelocateSandbox(
+			request.Context(), requestPrincipal(request), sandboxID,
+			request.Header.Get("Idempotency-Key"), expectedRevision, body,
+		)
+		if err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
+		apiHandler.writeJSON(writer, request, http.StatusAccepted, operation)
 	case "restore":
 		var body contracts.RestoreSnapshotRequest
 		if err := decodeStrictJSON(request, &body); err != nil {
@@ -1205,6 +1226,12 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusConflict, "state_conflict", "Snapshot requires stopped committed disk state", false
 	case errors.Is(err, ports.ErrWorkspaceMutation):
 		return http.StatusConflict, "workspace_mutation_conflict", "Workspace has a conflicting mutation", false
+	case errors.Is(err, ports.ErrSandboxNotStopped):
+		return http.StatusConflict, "sandbox_not_stopped", "Workspace relocation requires a stopped Sandbox", false
+	case errors.Is(err, ports.ErrRelocationSnapshotsPresent):
+		return http.StatusConflict, "workspace_relocation_snapshots_present", "Workspace relocation requires all Snapshots to be deleted", false
+	case errors.Is(err, ports.ErrRelocationTargetUnavailable):
+		return http.StatusConflict, "workspace_relocation_target_unavailable", "Workspace relocation target is unavailable or incompatible", true
 	case errors.Is(err, ports.ErrHomeRunnerUnavailable):
 		return http.StatusServiceUnavailable, "home_runner_unavailable", "Sandbox home runner is unavailable", true
 	case errors.Is(err, ports.ErrRunnerPoolUnavailable):

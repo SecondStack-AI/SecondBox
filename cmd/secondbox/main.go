@@ -40,6 +40,7 @@ var commandAliases = map[string]commandAlias{
 	"sandboxes start":     {operation: "startSandbox"},
 	"sandboxes drain":     {operation: "drainSandbox"},
 	"sandboxes stop":      {operation: "stopSandbox"},
+	"sandboxes relocate":  {operation: "relocateSandbox"},
 	"sandboxes restore":   {operation: "restoreSandboxSnapshot"},
 	"sandboxes delete":    {operation: "deleteSandbox"},
 	"sandboxes inspect":   {operation: "inspectSandbox"},

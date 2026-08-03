@@ -4,5 +4,5 @@ package runnerv1
 // facts shared by every control-plane protocol consumer.
 const (
 	SupportedProtocolMinimum uint32 = 1
-	SupportedProtocolMaximum uint32 = 1
+	SupportedProtocolMaximum uint32 = 2
 )

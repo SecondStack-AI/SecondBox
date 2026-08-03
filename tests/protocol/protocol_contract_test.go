@@ -91,8 +91,8 @@ type guestCases struct {
 func TestRunnerProtocolCompatibilityWindow(t *testing.T) {
 	cases := readFixture[runnerCases](t, "contracts/runner/v1/fixtures/protocol_cases.json")
 
-	if cases.SchemaGeneration != 1 {
-		t.Fatalf("runner fixture must remain frozen at generation 1, got %d", cases.SchemaGeneration)
+	if cases.SchemaGeneration != 2 {
+		t.Fatalf("runner fixture must remain frozen at generation 2, got %d", cases.SchemaGeneration)
 	}
 	if width := cases.ServerWindow.Maximum - cases.ServerWindow.Minimum + 1; width > 2 {
 		t.Fatalf("runner compatibility window retains at most current and previous generation, got width %d", width)
@@ -216,6 +216,7 @@ func TestCanonicalSchemasExposeRequiredProtocolSurfaces(t *testing.T) {
 		"RUNNER_FEATURE_LOCAL_WORKSPACE",
 		"message LocalWorkspaceCommand",
 		"message LocalWorkspaceResult",
+		"message WorkspaceTransferFrame",
 		"LOCAL_WORKSPACE_COMMAND_KIND_RESTORE_FINALIZE",
 		"LOCAL_WORKSPACE_TERMINAL_KIND_CONFLICTING_REPLAY",
 		"uint64 sequence",
@@ -240,6 +241,31 @@ func TestCanonicalSchemasExposeRequiredProtocolSurfaces(t *testing.T) {
 		"EXEC_TERMINAL_KIND_OUTPUT_EXHAUSTED",
 		"uint64 sequence",
 	})
+}
+
+func TestWorkspaceRelocationTransferIsTheOnlyWorkspaceImageByteProtocol(t *testing.T) {
+	schema := string(readRepoFile(t, "contracts/runner/v1/runner.proto"))
+	start := strings.Index(schema, "message WorkspaceTransferOpen {")
+	end := strings.Index(schema, "// InstanceObservedTerminationReason")
+	if start == -1 || end == -1 || end <= start {
+		t.Fatal("Workspace relocation transfer protocol section is missing")
+	}
+	section := schema[start:end]
+	for _, required := range []string{
+		"bytes data",
+		"StreamCredit credit",
+		"string sha256",
+		"bytes fencing_token",
+	} {
+		if !strings.Contains(section, required) {
+			t.Fatalf("Workspace relocation transfer protocol lacks %q", required)
+		}
+	}
+	for _, forbidden := range []string{"host_path", "local_path", "storage_object"} {
+		if strings.Contains(section, forbidden) {
+			t.Fatalf("Workspace relocation transfer protocol contains forbidden %q", forbidden)
+		}
+	}
 }
 
 func TestLocalWorkspaceProtocolCannotCarryPathsOrImageBytes(t *testing.T) {

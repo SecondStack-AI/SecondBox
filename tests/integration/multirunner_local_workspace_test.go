@@ -17,7 +17,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func TestTwoFakeRunnersPinHomesAndNeverRelocate(t *testing.T) {
+func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
 	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(
@@ -787,7 +787,7 @@ func multirunnerAssertHomeCommand(
 		t.Fatal(err)
 	}
 	if runnerID != homeRunnerID {
-		t.Fatalf("%s command Runner = %q, want immutable home %q", kind, runnerID, homeRunnerID)
+		t.Fatalf("%s command Runner = %q, want current home %q", kind, runnerID, homeRunnerID)
 	}
 	var wrongRunnerCommands int64
 	if err := pool.QueryRow(t.Context(), `

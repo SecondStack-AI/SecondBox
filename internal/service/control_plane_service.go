@@ -63,6 +63,7 @@ type SandboxStore interface {
 	ListSandboxes(ctx context.Context, tenantRef, subjectRef string, limit int, cursor string, metadata map[string]string) (contracts.SandboxPage, error)
 	GetOperation(ctx context.Context, tenantRef, subjectRef, operationID string) (contracts.Operation, error)
 	GetSubjectUsage(ctx context.Context, tenantRef, subjectRef string) (contracts.SubjectUsage, error)
+	RelocateSandbox(ctx context.Context, input ports.WorkspaceRelocationInput) (contracts.Operation, error)
 }
 
 // ActivityStore owns lifecycle intent, leases, and useful-activity evidence.
@@ -671,6 +672,65 @@ func (service *ControlPlaneService) DeleteSandbox(
 		ctx, principal, sandboxID, "delete", contracts.SandboxDesiredStateDeleted,
 		idempotencyKey, expectedRevision, nil, nil,
 	)
+}
+
+// RelocateSandbox starts one operator-initiated stopped Workspace transfer.
+func (service *ControlPlaneService) RelocateSandbox(
+	ctx context.Context,
+	principal contracts.Principal,
+	sandboxID string,
+	idempotencyKey string,
+	expectedRevision int64,
+	request contracts.RelocateSandboxRequest,
+) (contracts.Operation, bool, error) {
+	if principal.TenantRef == "" || principal.SubjectRef == "" {
+		return contracts.Operation{}, false, ports.ErrAuthorizationDenied
+	}
+	if err := validateIdempotencyKey(idempotencyKey); err != nil {
+		return contracts.Operation{}, false, err
+	}
+	if expectedRevision < 1 {
+		return contracts.Operation{}, false,
+			invalidRequest(errors.New("SecondBox Workspace relocation If-Match revision must be positive"))
+	}
+	request.TargetRunnerID = strings.TrimSpace(request.TargetRunnerID)
+	request.RunnerPool = strings.TrimSpace(request.RunnerPool)
+	if (request.TargetRunnerID == "") == (request.RunnerPool == "") ||
+		len(request.TargetRunnerID) > 128 ||
+		(request.RunnerPool != "" && !profileNamePattern.MatchString(request.RunnerPool)) {
+		return contracts.Operation{}, false,
+			invalidRequest(errors.New("SecondBox Workspace relocation requires exactly one valid target Runner or RunnerPool"))
+	}
+	canonicalRequest, err := json.Marshal(request)
+	if err != nil {
+		return contracts.Operation{}, false,
+			fmt.Errorf("SecondBox Workspace relocation request canonicalization failed: %w", err)
+	}
+	requestHash := sha256.Sum256(canonicalRequest)
+	now := service.now().UTC()
+	operation := contracts.Operation{
+		ID: service.newID("op"), SandboxID: sandboxID, Kind: "relocate",
+		State: contracts.OperationStatePending, RequestID: service.requestID(ctx),
+		CreatedAt: now, UpdatedAt: now,
+	}
+	stored, err := service.store.RelocateSandbox(ctx, ports.WorkspaceRelocationInput{
+		Principal: principal, SandboxID: sandboxID,
+		TargetRunnerID: request.TargetRunnerID, RunnerPool: request.RunnerPool,
+		Operation: operation, RelocationID: service.newID("relocation"),
+		ExportCommandID: service.newID("command"),
+		FencingToken:    []byte(service.newCredentialMaterial()), Now: now,
+		IdempotencyKey: idempotencyKey, RequestHash: hex.EncodeToString(requestHash[:]),
+		IdempotencyEnds: now.Add(idempotencyRetention), ExpectedRevision: expectedRevision,
+	})
+	if err != nil {
+		return contracts.Operation{}, false, err
+	}
+	if err := service.store.AppendAuditEvent(ctx, service.newAudit(
+		ctx, principal, "sandbox.relocate", "sandbox", sandboxID, principal.TenantRef, now,
+	)); err != nil {
+		return contracts.Operation{}, false, err
+	}
+	return stored, stored.ID != operation.ID, nil
 }
 
 func (service *ControlPlaneService) setSandboxDesiredState(
