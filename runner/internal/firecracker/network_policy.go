@@ -111,6 +111,11 @@ func (e *NFTablesNetworkPolicyEnforcer) Install(ctx context.Context, cfg PolicyN
 	if instanceID == "" || tapName == "" || cfg.Policy == nil {
 		return fmt.Errorf("SecondBox host network policy requires instance, TAP, and compiled policy")
 	}
+	guestIP, err := netip.ParseAddr(strings.TrimSpace(cfg.GuestIP))
+	if err != nil || !guestIP.Is4() {
+		return fmt.Errorf("SecondBox host network policy requires an IPv4 guest address")
+	}
+	cfg.GuestIP = guestIP.String()
 	if strings.TrimSpace(e.nftPath) == "" {
 		return fmt.Errorf("SecondBox host network policy nft executable is unavailable")
 	}
@@ -142,6 +147,7 @@ func (e *NFTablesNetworkPolicyEnforcer) Install(ctx context.Context, cfg PolicyN
 	script := renderNFTPolicy(
 		table,
 		tapName,
+		cfg.GuestIP,
 		cfg.DNSAddress,
 		cfg.Policy.ProtectedPrefixes(),
 		destinations,
@@ -234,14 +240,10 @@ func (e *NFTablesNetworkPolicyEnforcer) ObserveDNSAnswer(
 		)
 		if !decision.Allowed {
 			e.mu.Unlock()
-			policyErr := fmt.Errorf("pin observed domain %q: %s", destination.Domain, decision.Reason)
-			e.reportFailure(instance.cfg, policyErr)
-			return policyErr
+			return fmt.Errorf("pin observed domain %q: %s", destination.Domain, decision.Reason)
 		}
 		instance.pins[index] = mergePolicyAddresses(instance.pins[index], pin.Addresses)
-		if current := instance.expiry[index]; current.IsZero() || pin.ExpiresAt.Before(current) {
-			instance.expiry[index] = pin.ExpiresAt
-		}
+		instance.expiry[index] = pin.ExpiresAt
 		expiresAt = pin.ExpiresAt
 		matched = true
 	}
@@ -252,6 +254,7 @@ func (e *NFTablesNetworkPolicyEnforcer) ObserveDNSAnswer(
 	script := fmt.Sprintf("delete table bridge %s\n%s", instance.table, renderNFTPolicy(
 		instance.table,
 		instance.cfg.TapName,
+		instance.cfg.GuestIP,
 		instance.cfg.DNSAddress,
 		instance.cfg.Policy.ProtectedPrefixes(),
 		destinations,
@@ -339,7 +342,7 @@ func (e *NFTablesNetworkPolicyEnforcer) expireDNSPin(instanceID, domain string, 
 		}
 	}
 	script := fmt.Sprintf("delete table bridge %s\n%s", instance.table, renderNFTPolicy(
-		instance.table, instance.cfg.TapName, instance.cfg.DNSAddress,
+		instance.table, instance.cfg.TapName, instance.cfg.GuestIP, instance.cfg.DNSAddress,
 		instance.cfg.Policy.ProtectedPrefixes(), instance.cfg.Policy.Destinations(),
 		instance.cfg.Policy.RunnerGatewayDestinations(), instance.pins,
 	))
@@ -428,6 +431,7 @@ func nftTableName(instanceID string) string {
 func renderNFTPolicy(
 	table string,
 	tapName string,
+	guestIP string,
 	dnsAddress netip.Addr,
 	protected []netip.Prefix,
 	destinations []networkpolicy.Destination,
@@ -438,6 +442,13 @@ func renderNFTPolicy(
 	fmt.Fprintf(&script, "add table bridge %s\n", table)
 	fmt.Fprintf(&script, "add chain bridge %s ingress { type filter hook prerouting priority -10; policy accept; }\n", table)
 	fmt.Fprintf(&script, "add chain bridge %s egress { type filter hook postrouting priority -10; policy accept; }\n", table)
+	fmt.Fprintf(
+		&script,
+		"add rule bridge %s ingress iifname %q ip saddr != %s drop\n",
+		table,
+		tapName,
+		guestIP,
+	)
 	fmt.Fprintf(
 		&script,
 		"add rule bridge %s egress oifname %q ct state established,related accept\n",

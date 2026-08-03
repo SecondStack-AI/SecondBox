@@ -295,7 +295,7 @@ func TestDNSResolutionPinsPublicAnswersPerSandbox(t *testing.T) {
 	}
 }
 
-func TestDNSResolutionRejectsMetadataSSRFAndRebinding(t *testing.T) {
+func TestDNSResolutionRejectsMetadataSSRFAndUnlistedDomains(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	compiled, err := Compile(Policy{
 		Mode: ModeAllowList,
@@ -334,15 +334,29 @@ func TestDNSResolutionRejectsMetadataSSRFAndRebinding(t *testing.T) {
 	); !decision.Allowed {
 		t.Fatalf("first public answer decision = %#v", decision)
 	}
-	if _, decision := compiled.PinDNS(
+	rotated, decision := compiled.PinDNS(
 		ProtocolHTTPS,
 		"example.com",
 		443,
 		[]netip.Addr{netip.MustParseAddr("93.184.216.35")},
 		30*time.Second,
 		now.Add(time.Second),
-	); decision.Allowed || decision.Reason != ReasonDNSRebinding {
-		t.Fatalf("rebind decision = %#v", decision)
+	)
+	if !decision.Allowed ||
+		len(rotated.Addresses) != 2 ||
+		rotated.Addresses[0] != netip.MustParseAddr("93.184.216.34") ||
+		rotated.Addresses[1] != netip.MustParseAddr("93.184.216.35") ||
+		!rotated.ExpiresAt.Equal(now.Add(31*time.Second)) {
+		t.Fatalf("rotated answer = %#v decision = %#v", rotated, decision)
+	}
+	if decision := compiled.AuthorizePinned(
+		ProtocolHTTPS,
+		"example.com",
+		netip.MustParseAddr("93.184.216.34"),
+		443,
+		now.Add(30*time.Second+500*time.Millisecond),
+	); !decision.Allowed {
+		t.Fatalf("refreshed pin decision = %#v", decision)
 	}
 	if _, decision := compiled.PinDNS(
 		ProtocolHTTPS,
@@ -353,6 +367,64 @@ func TestDNSResolutionRejectsMetadataSSRFAndRebinding(t *testing.T) {
 		now,
 	); decision.Allowed || decision.Reason != ReasonNoMatchingRule {
 		t.Fatalf("unlisted domain decision = %#v", decision)
+	}
+}
+
+func TestDNSPinAddressUnionIsBoundedWithoutTruncation(t *testing.T) {
+	compiled, err := Compile(Policy{
+		Mode: ModeAllowList,
+		Destinations: []Destination{{
+			Protocol: ProtocolHTTPS,
+			Domain:   "example.com",
+			Port:     443,
+		}},
+	}, CompileOptions{MaximumPins: 1, MaximumTTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	addresses := make([]netip.Addr, 0, maximumPinAddresses)
+	for index := 1; index <= maximumPinAddresses; index++ {
+		addresses = append(addresses, netip.AddrFrom4([4]byte{8, 0, 0, byte(index)}))
+	}
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	if pin, decision := compiled.PinDNS(
+		ProtocolHTTPS,
+		"example.com",
+		443,
+		addresses,
+		time.Minute,
+		now,
+	); !decision.Allowed || len(pin.Addresses) != maximumPinAddresses {
+		t.Fatalf("maximum-size pin = %#v decision = %#v", pin, decision)
+	}
+	overflowAddress := netip.MustParseAddr("8.0.0.65")
+	if _, decision := compiled.PinDNS(
+		ProtocolHTTPS,
+		"example.com",
+		443,
+		[]netip.Addr{overflowAddress},
+		time.Minute,
+		now.Add(time.Second),
+	); decision.Allowed || decision.Reason != ReasonPinCapacityExhausted {
+		t.Fatalf("overflow decision = %#v", decision)
+	}
+	if decision := compiled.AuthorizePinned(
+		ProtocolHTTPS,
+		"example.com",
+		overflowAddress,
+		443,
+		now.Add(2*time.Second),
+	); decision.Allowed || decision.Reason != ReasonDNSRebinding {
+		t.Fatalf("truncated overflow address decision = %#v", decision)
+	}
+	if decision := compiled.AuthorizePinned(
+		ProtocolHTTPS,
+		"example.com",
+		addresses[0],
+		443,
+		now.Add(2*time.Second),
+	); !decision.Allowed {
+		t.Fatalf("existing pin changed after overflow: %#v", decision)
 	}
 }
 

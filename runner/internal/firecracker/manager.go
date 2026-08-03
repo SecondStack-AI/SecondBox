@@ -231,6 +231,7 @@ func New(cfg *config.Config) (*Manager, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is required")
 	}
+	warnIfFirecrackerUnjailed(cfg.MicroVMAllowUnjailed)
 	if err := requireExecutable("firecracker", cfg.FirecrackerPath); err != nil {
 		return nil, err
 	}
@@ -320,6 +321,19 @@ func New(cfg *config.Config) (*Manager, error) {
 		}
 	}
 	return m, nil
+}
+
+func warnIfFirecrackerUnjailed(allowUnjailed bool) {
+	if !allowUnjailed {
+		return
+	}
+	slog.Warn(
+		"SECURITY WARNING: Firecracker unjailed mode is enabled; microVMs run without jailer isolation",
+		"setting",
+		"SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED=true",
+		"disabledIsolation",
+		"chroot,pid-namespace,cgroup,uid-drop",
+	)
 }
 
 func (m *Manager) Start(ctx context.Context) error {

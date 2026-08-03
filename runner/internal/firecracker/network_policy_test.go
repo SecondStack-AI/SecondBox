@@ -36,6 +36,7 @@ func TestNFTablesNetworkPolicyEnforcerInstallsDefaultDenyAndExplicitAllows(t *te
 	}
 
 	var scripts []string
+	observedAt := time.Now().UTC()
 	enforcer := &NFTablesNetworkPolicyEnforcer{
 		run: func(_ context.Context, name string, args []string, stdin string) ([]byte, error) {
 			if name != "/usr/sbin/nft" ||
@@ -48,7 +49,7 @@ func TestNFTablesNetworkPolicyEnforcerInstallsDefaultDenyAndExplicitAllows(t *te
 			return nil, nil
 		},
 		nftPath: "/usr/sbin/nft",
-		now:     time.Now,
+		now:     func() time.Time { return observedAt },
 	}
 	err = enforcer.Install(context.Background(), PolicyNetworkConfig{
 		InstanceID: "fc-test-1",
@@ -70,6 +71,7 @@ func TestNFTablesNetworkPolicyEnforcerInstallsDefaultDenyAndExplicitAllows(t *te
 	script := scripts[0]
 	for _, required := range []string{
 		"table bridge secondbox_fc_test_1",
+		`iifname "sbtap1" ip saddr != 10.20.0.2 drop`,
 		`iifname "sbtap1" arp daddr ip 10.20.0.1 accept`,
 		`oifname "sbtap1" arp saddr ip 10.20.0.1 accept`,
 		`iifname "sbtap1" ip daddr 8.8.8.0/24 tcp dport 443 ct mark set 0x53425801 accept`,
@@ -80,6 +82,12 @@ func TestNFTablesNetworkPolicyEnforcerInstallsDefaultDenyAndExplicitAllows(t *te
 		if !strings.Contains(script, required) {
 			t.Fatalf("nft script missing %q:\n%s", required, script)
 		}
+	}
+	antiSpoof := `iifname "sbtap1" ip saddr != 10.20.0.2 drop`
+	antiSpoofIndex := strings.Index(script, antiSpoof)
+	firstAcceptIndex := strings.Index(script, " accept\n")
+	if antiSpoofIndex < 0 || firstAcceptIndex < 0 || antiSpoofIndex >= firstAcceptIndex {
+		t.Fatalf("source anti-spoof rule must precede every accept rule:\n%s", script)
 	}
 	if strings.Contains(script, "93.184.216.34") {
 		t.Fatalf("unobserved domain was pre-authorized:\n%s", script)
@@ -98,6 +106,25 @@ func TestNFTablesNetworkPolicyEnforcerInstallsDefaultDenyAndExplicitAllows(t *te
 		`ip daddr 93.184.216.34 tcp dport 8443 ct mark set 0x53425801 accept`,
 	) {
 		t.Fatalf("observed DNS pin was not installed:\n%s", scripts[len(scripts)-1])
+	}
+	observedAt = observedAt.Add(10 * time.Second)
+	if err := enforcer.ObserveDNSAnswer(
+		context.Background(),
+		"10.20.0.2",
+		"api.example.com",
+		[]netip.Addr{netip.MustParseAddr("93.184.216.35")},
+		time.Minute,
+	); err != nil {
+		t.Fatalf("observe rotated DNS answer: %v", err)
+	}
+	rotatedScript := scripts[len(scripts)-1]
+	for _, address := range []string{"93.184.216.34", "93.184.216.35"} {
+		if !strings.Contains(rotatedScript, `ip daddr `+address+` tcp dport 8443`) {
+			t.Fatalf("rotated DNS pin lacks %s:\n%s", address, rotatedScript)
+		}
+	}
+	if expiry := enforcer.instances["fc-test-1"].expiry[1]; !expiry.Equal(observedAt.Add(time.Minute)) {
+		t.Fatalf("rotated DNS pin expiry = %s, want %s", expiry, observedAt.Add(time.Minute))
 	}
 }
 
@@ -207,10 +234,11 @@ func TestNFTablesNetworkPolicyEnforcerRejectsProtectedDNSAnswerBeforeMutation(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	called := false
+	calls := 0
+	failures := 0
 	enforcer := &NFTablesNetworkPolicyEnforcer{
 		run: func(context.Context, string, []string, string) ([]byte, error) {
-			called = true
+			calls++
 			return nil, nil
 		},
 		nftPath: "/usr/sbin/nft",
@@ -221,6 +249,9 @@ func TestNFTablesNetworkPolicyEnforcerRejectsProtectedDNSAnswerBeforeMutation(t 
 		TapName:    "sbtap2",
 		GuestIP:    "10.20.0.3",
 		Policy:     compiled,
+		OnFailure: func(error) {
+			failures++
+		},
 	})
 	if err != nil {
 		t.Fatalf("install policy: %v", err)
@@ -235,8 +266,11 @@ func TestNFTablesNetworkPolicyEnforcerRejectsProtectedDNSAnswerBeforeMutation(t 
 	if err == nil || !strings.Contains(err.Error(), string(networkpolicy.ReasonProtectedDNSAnswer)) {
 		t.Fatalf("install error = %v, want protected DNS answer", err)
 	}
-	if !called {
-		t.Fatal("initial default-deny policy was not installed")
+	if calls != 1 {
+		t.Fatalf("nft apply calls = %d, want only the initial default-deny install", calls)
+	}
+	if failures != 0 {
+		t.Fatalf("policy denial reported %d enforcement failures", failures)
 	}
 }
 

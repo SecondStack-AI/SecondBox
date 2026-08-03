@@ -263,7 +263,7 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 			KernelRelease:      strings.TrimSpace(string(kernelRelease)),
 			FirecrackerVersion: expectedFirecrackerVersionString(),
 			KvmReady:           true,
-			JailerReady:        true,
+			JailerReady:        firecrackerJailerReady(cfg),
 			CgroupReady:        true,
 			NetworkPolicyReady: true,
 			StorageReady:       true,
@@ -275,6 +275,10 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 		},
 		ArtifactCache: artifactCacheEvidenceForManifest(manifest, time.Now().UTC()),
 	}, nil
+}
+
+func firecrackerJailerReady(cfg *config.Config) bool {
+	return !cfg.MicroVMAllowUnjailed
 }
 
 func runnerAllocatableCapacity(cfg *config.Config) *runnerprotocol.Capacity {

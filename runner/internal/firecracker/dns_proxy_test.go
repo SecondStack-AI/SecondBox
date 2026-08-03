@@ -138,6 +138,86 @@ func TestRunnerDNSProxyListenerFailureBecomesUnhealthy(t *testing.T) {
 	}
 }
 
+func TestRunnerDNSProxyReturnsRefusedWhenObservationIsDenied(t *testing.T) {
+	query, validated := testDNSQuery(t, 45, "api.example.com.", dnsmessage.TypeA)
+	upstreamResponse := testDNSResponse(t, 45, validated.question, func(builder *dnsmessage.Builder) {
+		testAddA(t, builder, "api.example.com.", [4]byte{93, 184, 216, 34}, 30)
+	})
+	upstream, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upstream.Close()
+	upstreamAddress, err := netip.ParseAddrPort(upstream.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstreamDone := make(chan error, 1)
+	go func() {
+		connection, acceptErr := upstream.Accept()
+		if acceptErr != nil {
+			upstreamDone <- acceptErr
+			return
+		}
+		defer connection.Close()
+		if _, readErr := readDNSFrame(connection); readErr != nil {
+			upstreamDone <- readErr
+			return
+		}
+		upstreamDone <- writeDNSFrame(connection, upstreamResponse)
+	}()
+
+	downstream, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer downstream.Close()
+	proxy := &runnerDNSProxy{
+		upstream: upstreamAddress,
+		observe: func(context.Context, string, string, []netip.Addr, time.Duration) error {
+			return errors.New("DNS policy denied the observed answer")
+		},
+	}
+	proxyDone := make(chan error, 1)
+	go func() {
+		connection, acceptErr := downstream.Accept()
+		if acceptErr != nil {
+			proxyDone <- acceptErr
+			return
+		}
+		proxyDone <- proxy.handleTCP(connection)
+	}()
+	client, err := net.DialTimeout("tcp", downstream.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeDNSFrame(client, query); err != nil {
+		t.Fatal(err)
+	}
+	response, err := readDNSFrame(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parser dnsmessage.Parser
+	header, err := parser.Start(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !header.Response || header.RCode != dnsmessage.RCodeRefused {
+		t.Fatalf("policy denial DNS header = %#v", header)
+	}
+	if err := <-upstreamDone; err != nil {
+		t.Fatalf("upstream exchange: %v", err)
+	}
+	if err := <-proxyDone; err != nil {
+		t.Fatalf("proxy request: %v", err)
+	}
+}
+
 func testDNSQuery(t *testing.T, id uint16, name string, recordType dnsmessage.Type) ([]byte, dnsValidatedQuestion) {
 	t.Helper()
 	question := dnsmessage.Question{

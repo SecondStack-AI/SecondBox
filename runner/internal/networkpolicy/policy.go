@@ -19,6 +19,11 @@ const (
 	ModeAllowList Mode = "allow_list"
 )
 
+// maximumPinAddresses accommodates normal CDN answer rotation while bounding
+// per-domain host firewall growth; 64 is ample for a 4 KiB DNS response without
+// allowing repeated observations to grow the rules indefinitely.
+const maximumPinAddresses = 64
+
 // Protocol is the provider-neutral destination protocol.
 type Protocol string
 
@@ -395,8 +400,8 @@ func (policy *CompiledPolicy) AuthorizeIP(
 	return Decision{Reason: ReasonNoMatchingRule}
 }
 
-// PinDNS validates an answer from the runner-controlled resolver. Changing an
-// unexpired answer set is rejected as rebinding.
+// PinDNS validates an answer from the runner-controlled resolver and retains a
+// bounded union of addresses observed before the pin expires.
 func (policy *CompiledPolicy) PinDNS(
 	protocol Protocol,
 	rawDomain string,
@@ -478,10 +483,11 @@ func (policy *CompiledPolicy) pinDNS(
 	defer policy.mu.Unlock()
 	policy.removeExpiredPinsLocked(now)
 	if existing, found := policy.pins[key]; found {
-		if !equalAddresses(existing.Addresses, normalized) {
-			return DNSPin{}, Decision{Reason: ReasonDNSRebinding}
-		}
+		normalized = mergeAddresses(existing.Addresses, normalized)
 	} else if len(policy.pins) >= policy.maximumPins {
+		return DNSPin{}, Decision{Reason: ReasonPinCapacityExhausted}
+	}
+	if len(normalized) > maximumPinAddresses {
 		return DNSPin{}, Decision{Reason: ReasonPinCapacityExhausted}
 	}
 	pin := DNSPin{
@@ -594,16 +600,22 @@ func (policy *CompiledPolicy) removeExpiredPinsLocked(now time.Time) {
 	}
 }
 
-func equalAddresses(left, right []netip.Addr) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
+func mergeAddresses(left, right []netip.Addr) []netip.Addr {
+	seen := make(map[netip.Addr]struct{}, len(left)+len(right))
+	merged := make([]netip.Addr, 0, len(left)+len(right))
+	for _, addresses := range [][]netip.Addr{left, right} {
+		for _, address := range addresses {
+			if _, found := seen[address]; found {
+				continue
+			}
+			seen[address] = struct{}{}
+			merged = append(merged, address)
 		}
 	}
-	return true
+	sort.Slice(merged, func(left, right int) bool {
+		return merged[left].Compare(merged[right]) < 0
+	})
+	return merged
 }
 
 func clonePin(pin DNSPin) DNSPin {
