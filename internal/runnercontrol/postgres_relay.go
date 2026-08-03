@@ -80,6 +80,7 @@ type DataPlaneAdmission struct {
 	FileOpen                *runnerv1.FileOpen
 	FileContent             []byte
 	Request                 any
+	CredentialDigest        []byte
 	Now                     time.Time
 }
 
@@ -154,6 +155,37 @@ type DataPlaneSession struct {
 	RetainUntil                time.Time
 	FramesRetainUntil          time.Time
 	FrameCleanupCompletedAt    *time.Time
+	RequestJSON                []byte `json:"-"`
+	Transport                  string
+	DataPlaneAddress           string
+	DataPlaneCertificateSPKI   string
+}
+
+// DataPlaneCompletion is one bounded Exec or File completion persisted without
+// retaining any intermediate transport frame.
+type DataPlaneCompletion struct {
+	TenantRef  string
+	SubjectRef string
+	SessionID  string
+	Exec       *runnerv1.ExecBufferedResult
+	File       *FileCompletion
+	Now        time.Time
+}
+
+type FileCompletion struct {
+	Metadata *runnerv1.FileMetadata
+	Content  []byte
+	Terminal *runnerv1.FileTerminal
+}
+
+// DirectDataPlaneConsumption atomically spends one admitted direct credential.
+type DirectDataPlaneConsumption struct {
+	SessionID        string
+	AssignmentID     string
+	Generation       int64
+	FencingToken     []byte
+	CredentialDigest []byte
+	Now              time.Time
 }
 
 // NewPostgresFrameRelay opens the durable relay authority.
@@ -243,6 +275,7 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 		input.StreamWindowBytes = policy.StreamWindowBytes
 	}
 	if input.Kind == "terminal" {
+		session.Transport = contracts.PortTransportRelay
 		input.ExecOpen.OutputLimitBytes = uint64(input.MaximumResponseBytes)
 		session.Detachable = input.Detachable
 		session.TerminalDetachSeconds = policy.TerminalDetachSeconds
@@ -252,6 +285,15 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 				errors.New("SecondBox pinned Profile does not permit detached Terminal sessions"),
 			)
 		}
+	}
+	if input.Kind != "terminal" &&
+		session.Transport != contracts.DataPlaneTransportProxied &&
+		session.Transport != contracts.DataPlaneTransportDirect {
+		return DataPlaneSession{}, false, errors.New("SecondBox pinned Profile data-plane transport is invalid")
+	}
+	if input.Kind != "terminal" && session.Transport == contracts.DataPlaneTransportDirect &&
+		len(input.CredentialDigest) != sha256.Size {
+		return DataPlaneSession{}, false, errors.New("SecondBox direct data-plane credential digest is invalid")
 	}
 	if input.Kind == "file" && input.FileOpen != nil &&
 		input.FileOpen.Operation == runnerv1.FileOperation_FILE_OPERATION_READ {
@@ -290,9 +332,13 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 	session.MaximumRequestBytes = input.MaximumRequestBytes
 	session.StreamWindowBytes = input.StreamWindowBytes
 	session.CreatedAt, session.UpdatedAt = input.Now.UTC(), input.Now.UTC()
-	frames, outboundBytes, err := relay.buildOutboundFrames(session, input)
-	if err != nil {
-		return DataPlaneSession{}, false, err
+	var frames []encodedRelayFrame
+	var outboundBytes int64
+	if input.Kind == "terminal" {
+		frames, outboundBytes, err = relay.buildOutboundFrames(session, input)
+		if err != nil {
+			return DataPlaneSession{}, false, err
+		}
 	}
 	if outboundBytes+input.MaximumResponseBytes > relay.maximumSessionBytes {
 		return DataPlaneSession{}, false, ErrRelaySessionLimit
@@ -327,6 +373,23 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 			return DataPlaneSession{}, false, fmt.Errorf("SecondBox outbound relay frame insert: %w", err)
 		}
 	}
+	if session.Kind != "terminal" && session.Transport == contracts.DataPlaneTransportDirect {
+		message := directDataPlaneOpenMessage(session, input.CredentialDigest)
+		payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(message)
+		if err != nil {
+			return DataPlaneSession{}, false, fmt.Errorf("SecondBox direct data-plane Open encoding: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO secondbox.runner_commands (
+				id,runner_id,assignment_id,kind,payload,state,target_connection_id,
+				delivery_count,created_at,updated_at,delivered_at
+			) VALUES ($1,$2,$3,'data-plane-direct',$4,'pending','',0,$5,$5,NULL)`,
+			session.ID+"_direct_open", session.RunnerID, session.AssignmentID,
+			payload, session.CreatedAt,
+		); err != nil {
+			return DataPlaneSession{}, false, fmt.Errorf("SecondBox direct data-plane Open insert: %w", err)
+		}
+	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.activity_sessions (
 			id,tenant_ref,subject_ref,sandbox_id,generation,kind,state,lease_id,last_activity_at,
@@ -341,6 +404,32 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 		return DataPlaneSession{}, false, fmt.Errorf("SecondBox data-plane admission commit: %w", err)
 	}
 	return session, false, nil
+}
+
+func directDataPlaneOpenMessage(
+	session DataPlaneSession,
+	credentialDigest []byte,
+) *runnerv1.ControlPlaneToRunner {
+	kind := runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC
+	if session.Kind == "file" {
+		kind = runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE
+	}
+	return &runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_DataPlaneDirectOpen{
+			DataPlaneDirectOpen: &runnerv1.DataPlaneDirectOpen{
+				Fence: &runnerv1.AssignmentFence{
+					AssignmentId: session.AssignmentID, SandboxId: session.SandboxID,
+					InstanceId: session.InstanceID, SandboxGeneration: uint64(session.Generation),
+					FencingToken: bytes.Clone(session.FencingToken),
+				},
+				OperationId: session.ID, StreamId: session.StreamID,
+				Correlation:      dataPlaneCorrelation(session),
+				Kind:             kind,
+				DeadlineUnixMs:   uint64(session.DeadlineAt.UnixMilli()),
+				CredentialDigest: bytes.Clone(credentialDigest),
+			},
+		},
+	}
 }
 
 type encodedRelayFrame struct {
@@ -362,63 +451,23 @@ func (relay *PostgresFrameRelay) buildOutboundFrames(
 	}
 	correlation := dataPlaneCorrelation(session)
 	messages := make([]*runnerv1.ControlPlaneToRunner, 0, 4)
-	if input.Kind == "exec" || input.Kind == "terminal" {
+	messages = append(messages, &runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: &runnerv1.ExecFrame{
+			Fence: fence, OperationId: session.ID, StreamId: session.StreamID, Sequence: 1,
+			Correlation: proto.Clone(correlation).(*runnerv1.Correlation),
+			Payload:     &runnerv1.ExecFrame_Open{Open: proto.Clone(input.ExecOpen).(*runnerv1.ExecOpen)},
+		}},
+	})
+	if !input.DeferResponseCredit {
 		messages = append(messages, &runnerv1.ControlPlaneToRunner{
 			Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: &runnerv1.ExecFrame{
-				Fence: fence, OperationId: session.ID, StreamId: session.StreamID, Sequence: 1,
+				Fence: fence, OperationId: session.ID, StreamId: session.StreamID, Sequence: 2,
 				Correlation: proto.Clone(correlation).(*runnerv1.Correlation),
-				Payload:     &runnerv1.ExecFrame_Open{Open: proto.Clone(input.ExecOpen).(*runnerv1.ExecOpen)},
+				Payload: &runnerv1.ExecFrame_Credit{Credit: &runnerv1.StreamCredit{
+					ByteCount: uint64(input.MaximumResponseBytes),
+				}},
 			}},
 		})
-		if !input.DeferResponseCredit {
-			messages = append(messages, &runnerv1.ControlPlaneToRunner{
-				Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: &runnerv1.ExecFrame{
-					Fence: fence, OperationId: session.ID, StreamId: session.StreamID, Sequence: 2,
-					Correlation: proto.Clone(correlation).(*runnerv1.Correlation),
-					Payload: &runnerv1.ExecFrame_Credit{Credit: &runnerv1.StreamCredit{
-						ByteCount: uint64(input.MaximumResponseBytes),
-					}},
-				}},
-			})
-		}
-	} else {
-		sequence := uint64(1)
-		messages = append(messages, &runnerv1.ControlPlaneToRunner{
-			Message: &runnerv1.ControlPlaneToRunner_File{File: &runnerv1.FileFrame{
-				Fence: fence, OperationId: session.ID, StreamId: session.StreamID, Sequence: sequence,
-				Correlation: proto.Clone(correlation).(*runnerv1.Correlation),
-				Payload:     &runnerv1.FileFrame_Open{Open: proto.Clone(input.FileOpen).(*runnerv1.FileOpen)},
-			}},
-		})
-		sequence++
-		for offset := 0; offset < len(input.FileContent); {
-			size := int(relay.maximumFrameBytes / 2)
-			if remaining := len(input.FileContent) - offset; size > remaining {
-				size = remaining
-			}
-			messages = append(messages, &runnerv1.ControlPlaneToRunner{
-				Message: &runnerv1.ControlPlaneToRunner_File{File: &runnerv1.FileFrame{
-					Fence: fence, OperationId: session.ID, StreamId: session.StreamID, Sequence: sequence,
-					Correlation: proto.Clone(correlation).(*runnerv1.Correlation),
-					Payload: &runnerv1.FileFrame_Chunk{Chunk: &runnerv1.FileChunk{
-						Offset: uint64(offset), Data: bytes.Clone(input.FileContent[offset : offset+size]),
-					}},
-				}},
-			})
-			offset += size
-			sequence++
-		}
-		if input.FileOpen.Operation == runnerv1.FileOperation_FILE_OPERATION_READ {
-			messages = append(messages, &runnerv1.ControlPlaneToRunner{
-				Message: &runnerv1.ControlPlaneToRunner_File{File: &runnerv1.FileFrame{
-					Fence: fence, OperationId: session.ID, StreamId: session.StreamID, Sequence: sequence,
-					Correlation: proto.Clone(correlation).(*runnerv1.Correlation),
-					Payload: &runnerv1.FileFrame_Credit{Credit: &runnerv1.StreamCredit{
-						ByteCount: uint64(input.MaximumResponseBytes),
-					}},
-				}},
-			})
-		}
 	}
 	frames := make([]encodedRelayFrame, 0, len(messages))
 	var total int64
@@ -477,6 +526,7 @@ func (relay *PostgresFrameRelay) ClaimOutboundFrame(
 			  AND frame.state IN ('pending','claimed')
 			  AND (frame.state='pending' OR frame.claim_expires_at<=$3)
 			  AND session.runner_id=$1
+			  AND session.kind IN ('terminal','port')
 			  AND session.state IN ('pending','running','cancelling')
 			  AND NOT EXISTS (
 			    SELECT 1 FROM secondbox.data_plane_frames AS prior
@@ -504,6 +554,7 @@ func (relay *PostgresFrameRelay) ClaimOutboundFrame(
 			  AND frame.state IN ('pending','claimed')
 			  AND (frame.state='pending' OR frame.claim_expires_at<=$3)
 			  AND session.runner_id=$1
+			  AND session.kind IN ('terminal','port')
 			  AND session.state IN ('pending','running','cancelling')
 			  AND NOT EXISTS (
 			    SELECT 1 FROM secondbox.data_plane_frames AS prior
@@ -627,6 +678,9 @@ func (relay *PostgresFrameRelay) PersistInboundFrame(
 ) (bool, error) {
 	if input.Message != nil && input.Message.GetPort() != nil {
 		return relay.persistInboundPortFrame(ctx, input, now.UTC())
+	}
+	if input.Message == nil || input.Message.GetPty() == nil {
+		return false, errors.New("SecondBox inbound relay frame is not Terminal or Port")
 	}
 	identity, err := inboundFrameIdentity(input.Message)
 	if err != nil {
@@ -761,6 +815,7 @@ type inboundIdentity struct {
 	sequence   int64
 	execOutput *runnerv1.ExecOutput
 	execTerm   *runnerv1.ExecTerminal
+	execResult *runnerv1.ExecBufferedResult
 	ptyOutput  *runnerv1.ExecOutput
 	ptyTerm    *runnerv1.ExecTerminal
 	fileChunk  *runnerv1.FileChunk
@@ -772,15 +827,6 @@ func inboundFrameIdentity(message *runnerv1.RunnerToControlPlane) (inboundIdenti
 	if message == nil {
 		return inboundIdentity{}, errors.New("SecondBox inbound relay message is required")
 	}
-	if frame := message.GetExec(); frame != nil {
-		if frame.Sequence == 0 || frame.Fence == nil || (frame.GetOutput() == nil && frame.GetTerminal() == nil) {
-			return inboundIdentity{}, errors.New("SecondBox inbound Exec frame is incomplete")
-		}
-		return inboundIdentity{
-			fence: frame.Fence, operation: frame.OperationId, stream: frame.StreamId,
-			sequence: int64(frame.Sequence), execOutput: frame.GetOutput(), execTerm: frame.GetTerminal(),
-		}, nil
-	}
 	if frame := message.GetPty(); frame != nil {
 		if frame.Sequence == 0 || frame.Fence == nil ||
 			(frame.GetOutput() == nil && frame.GetTerminal() == nil) {
@@ -791,18 +837,7 @@ func inboundFrameIdentity(message *runnerv1.RunnerToControlPlane) (inboundIdenti
 			sequence: int64(frame.Sequence), ptyOutput: frame.GetOutput(), ptyTerm: frame.GetTerminal(),
 		}, nil
 	}
-	if frame := message.GetFile(); frame != nil {
-		if frame.Sequence == 0 || frame.Fence == nil ||
-			(frame.GetChunk() == nil && frame.GetMetadata() == nil && frame.GetTerminal() == nil) {
-			return inboundIdentity{}, errors.New("SecondBox inbound File frame is incomplete")
-		}
-		return inboundIdentity{
-			fence: frame.Fence, operation: frame.OperationId, stream: frame.StreamId,
-			sequence: int64(frame.Sequence), fileChunk: frame.GetChunk(),
-			fileMeta: frame.GetMetadata(), fileTerm: frame.GetTerminal(),
-		}, nil
-	}
-	return inboundIdentity{}, errors.New("SecondBox inbound relay frame is not Exec, Terminal, or File")
+	return inboundIdentity{}, errors.New("SecondBox inbound relay frame is not Terminal")
 }
 
 func (relay *PostgresFrameRelay) GetDataPlaneSession(
@@ -811,12 +846,19 @@ func (relay *PostgresFrameRelay) GetDataPlaneSession(
 	subjectRef string,
 	sessionID string,
 ) (DataPlaneSession, error) {
-	return scanDataPlaneSession(relay.pool.QueryRow(ctx, dataPlaneSessionSelect+`
+	session, err := scanDataPlaneSession(relay.pool.QueryRow(ctx, dataPlaneSessionSelect+`
 		WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3`,
 		tenantRef, subjectRef, sessionID))
+	if err != nil {
+		return DataPlaneSession{}, err
+	}
+	if err := hydrateDataPlaneTransport(ctx, relay.pool, &session); err != nil {
+		return DataPlaneSession{}, err
+	}
+	return session, nil
 }
 
-// ExecClientFrame is one ordered public WebSocket control translated into the Runner stream.
+// relayDeadlineTerminal projects a transport deadline without synthesizing an exit code.
 func relayDeadlineTerminal(session DataPlaneSession) string {
 	if session.Kind == "exec" || session.Kind == "terminal" {
 		return runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_DEADLINE_EXCEEDED.String()
@@ -921,6 +963,9 @@ func lookupDataPlaneReplay(
 	session, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
 		WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3`,
 		tenantRef, subjectRef, sessionID))
+	if err == nil {
+		err = hydrateDataPlaneTransport(ctx, tx, &session)
+	}
 	return session, true, err
 }
 
@@ -932,12 +977,14 @@ func lockDataPlaneAuthority(
 	var session DataPlaneSession
 	var sandboxState, assignmentState string
 	var runnerConnected bool
+	var encodedDataPlaneEndpoint string
 	var specJSON []byte
 	err := tx.QueryRow(ctx, `
 		SELECT sandbox.tenant_ref,sandbox.subject_ref,
 		       sandbox.profile_revision_id,sandbox.generation,sandbox.state,
 		       assignment.id,assignment.instance_id,assignment.runner_id,
 		       assignment.fencing_token,assignment.state,revision.spec_json,
+		       COALESCE(runner.data_plane_address,''),
 		       EXISTS (
 		         SELECT 1
 		         FROM secondbox.runner_connections AS connection
@@ -950,6 +997,7 @@ func lockDataPlaneAuthority(
 		  AND assignment.sandbox_id=sandbox.id
 		  AND assignment.generation=sandbox.generation
 		JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
+		LEFT JOIN secondbox.runners AS runner ON runner.id=assignment.runner_id
 		WHERE sandbox.tenant_ref=$1 AND sandbox.subject_ref=$2 AND sandbox.id=$3
 		FOR UPDATE OF sandbox,assignment`,
 		input.TenantRef, input.SubjectRef, input.SandboxID,
@@ -957,7 +1005,8 @@ func lockDataPlaneAuthority(
 		&session.TenantRef, &session.SubjectRef,
 		&session.ProfileRevisionID, &session.Generation, &sandboxState,
 		&session.AssignmentID, &session.InstanceID, &session.RunnerID,
-		&session.FencingToken, &assignmentState, &specJSON, &runnerConnected,
+		&session.FencingToken, &assignmentState, &specJSON, &encodedDataPlaneEndpoint,
+		&runnerConnected,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrSandboxNotFound
@@ -996,6 +1045,15 @@ func lockDataPlaneAuthority(
 	var spec contracts.ProfileRevisionSpec
 	if err := json.Unmarshal(specJSON, &spec); err != nil {
 		return DataPlaneSession{}, contracts.ExecutionPolicy{}, fmt.Errorf("SecondBox data-plane Profile policy decoding: %w", err)
+	}
+	session.Transport = dataPlaneTransport(spec.Execution.DataPlaneTransport, input.Kind, input.Operation)
+	if session.Transport == contracts.DataPlaneTransportDirect {
+		endpoint, err := decodeDataPlaneEndpoint(encodedDataPlaneEndpoint)
+		if err != nil {
+			return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrLifecycleUnavailable
+		}
+		session.DataPlaneAddress = endpoint.Address
+		session.DataPlaneCertificateSPKI = endpoint.CertificateSPKISHA256
 	}
 	var sandboxActive, subjectActive, subjectMaximum int64
 	if err := tx.QueryRow(ctx, `
@@ -1036,6 +1094,7 @@ const dataPlaneSessionSelect = `
 	       terminal_detail,exit_code,signal,spawn_failure_reason,elapsed_milliseconds,
 	       limit_bytes,infrastructure_failure_reason,retryable,terminal_message,
 	       stdout_bytes,stderr_bytes,content_bytes,metadata_json,
+	       request_json,
 	       created_at,updated_at,completed_at,retain_until,frames_retain_until,
 	       frame_cleanup_completed_at
 	FROM secondbox.data_plane_sessions`
@@ -1065,7 +1124,8 @@ func scanDataPlaneSession(row relayRow) (DataPlaneSession, error) {
 		&session.Signal, &session.SpawnFailureReason, &session.ElapsedMilliseconds,
 		&session.LimitBytes, &session.InfrastructureReason, &session.Retryable,
 		&session.TerminalMessage, &session.Stdout, &session.Stderr,
-		&session.Content, &metadataJSON, &session.CreatedAt, &session.UpdatedAt,
+		&session.Content, &metadataJSON, &session.RequestJSON,
+		&session.CreatedAt, &session.UpdatedAt,
 		&session.CompletedAt, &session.RetainUntil, &session.FramesRetainUntil,
 		&session.FrameCleanupCompletedAt,
 	)
@@ -1082,6 +1142,53 @@ func scanDataPlaneSession(row relayRow) (DataPlaneSession, error) {
 		}
 	}
 	return session, nil
+}
+
+type dataPlaneQueryer interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func hydrateDataPlaneTransport(
+	ctx context.Context,
+	queryer dataPlaneQueryer,
+	session *DataPlaneSession,
+) error {
+	var specJSON []byte
+	var encodedDataPlaneEndpoint string
+	if err := queryer.QueryRow(ctx, `
+		SELECT revision.spec_json,COALESCE(runner.data_plane_address,'')
+		FROM secondbox.profile_revisions AS revision
+		LEFT JOIN secondbox.runners AS runner ON runner.id=$2
+		WHERE revision.id=$1`,
+		session.ProfileRevisionID, session.RunnerID,
+	).Scan(&specJSON, &encodedDataPlaneEndpoint); err != nil {
+		return fmt.Errorf("SecondBox data-plane transport lookup: %w", err)
+	}
+	var spec contracts.ProfileRevisionSpec
+	if err := json.Unmarshal(specJSON, &spec); err != nil {
+		return fmt.Errorf("SecondBox data-plane transport Profile decoding: %w", err)
+	}
+	session.Transport = dataPlaneTransport(
+		spec.Execution.DataPlaneTransport, session.Kind, session.Operation,
+	)
+	if session.Transport == contracts.DataPlaneTransportDirect {
+		endpoint, err := decodeDataPlaneEndpoint(encodedDataPlaneEndpoint)
+		if err != nil {
+			return ports.ErrLifecycleUnavailable
+		}
+		session.DataPlaneAddress = endpoint.Address
+		session.DataPlaneCertificateSPKI = endpoint.CertificateSPKISHA256
+	}
+	return nil
+}
+
+// Buffered Exec returns its single bounded completion on the Runner control
+// connection; Profile transport selection applies to streaming sessions.
+func dataPlaneTransport(profileTransport string, kind string, operation string) string {
+	if kind == "exec" && operation == "exec" {
+		return contracts.DataPlaneTransportProxied
+	}
+	return profileTransport
 }
 
 func lockInboundSession(
@@ -1161,6 +1268,10 @@ func applyInboundPayload(
 			return errors.New("SecondBox Exec output channel is invalid")
 		}
 	}
+	if identity.execResult != nil {
+		stdout = identity.execResult.Stdout
+		stderr = identity.execResult.Stderr
+	}
 	if identity.fileChunk != nil {
 		content = identity.fileChunk.Data
 		if identity.fileChunk.Offset != uint64(len(session.Content)) {
@@ -1185,6 +1296,9 @@ func applyInboundPayload(
 	terminal := false
 	state := session.State
 	execTerminal := identity.execTerm
+	if identity.execResult != nil {
+		execTerminal = identity.execResult.Terminal
+	}
 	if identity.ptyTerm != nil {
 		execTerminal = identity.ptyTerm
 	}

@@ -480,5 +480,3 @@ func (relay *PostgresFrameRelay) ListTerminalServerFrames(
 	}
 	return result, nil
 }
-
-// AppendExecClientFrame durably appends one exactly ordered public stream frame.

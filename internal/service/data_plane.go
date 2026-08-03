@@ -18,13 +18,15 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
-// DataPlaneRelay is the durable runner relay used by synchronous public operations.
+// DataPlaneRelay owns durable admission and terminal projections. Exec and File
+// payload frames use a live transport and never enter this interface.
 type DataPlaneRelay interface {
 	AdmitDataPlane(context.Context, runnercontrol.DataPlaneAdmission) (runnercontrol.DataPlaneSession, bool, error)
 	GetDataPlaneSession(context.Context, string, string, string) (runnercontrol.DataPlaneSession, error)
+	StartDataPlaneSession(context.Context, string, string, string, time.Time) (runnercontrol.DataPlaneSession, error)
 	ExpireDataPlaneSession(context.Context, string, string, string, time.Time) (runnercontrol.DataPlaneSession, error)
-	AppendExecClientFrame(context.Context, string, string, string, runnercontrol.ExecClientFrame, time.Time) (bool, error)
-	ListExecServerFrames(context.Context, string, string, string, int64, int) ([]runnercontrol.ExecServerFrame, error)
+	CompleteDataPlaneSession(context.Context, runnercontrol.DataPlaneCompletion) (runnercontrol.DataPlaneSession, error)
+	ConsumeDirectDataPlaneSession(context.Context, runnercontrol.DirectDataPlaneConsumption) error
 	CancelDataPlaneSession(context.Context, string, string, string, string, time.Time) (bool, error)
 	CancelPublicDataPlaneSession(context.Context, runnercontrol.PublicDataPlaneCancellation) (runnercontrol.DataPlaneSession, bool, error)
 }
@@ -75,6 +77,7 @@ func (service *ControlPlaneService) CreateSandboxExecStream(
 		return runnercontrol.DataPlaneSession{}, false, err
 	}
 	now := service.now().UTC()
+	sessionID := service.newID("dps")
 	open := publicExecOpen(
 		request.Command, request.Cwd, request.Environment,
 		now.Add(time.Duration(request.DeadlineMilliseconds)*time.Millisecond),
@@ -82,7 +85,7 @@ func (service *ControlPlaneService) CreateSandboxExecStream(
 	)
 	open.Streaming = true
 	return service.dataPlaneRelay.AdmitDataPlane(ctx, runnercontrol.DataPlaneAdmission{
-		ID: service.newID("dps"), StreamID: service.newID("stream"),
+		ID: sessionID, StreamID: service.newID("stream"),
 		TenantRef: principal.TenantRef, SandboxID: sandboxID,
 		SubjectRef: principal.SubjectRef,
 		LeaseID:    leaseID,
@@ -92,7 +95,8 @@ func (service *ControlPlaneService) CreateSandboxExecStream(
 		DeadlineAt:           now.Add(time.Duration(request.DeadlineMilliseconds) * time.Millisecond),
 		MaximumResponseBytes: request.MaximumOutputBytes,
 		StreamWindowBytes:    request.WindowBytes, UseProfileRequestLimit: true,
-		DeferResponseCredit: true, ExecOpen: open, Request: request, Now: now,
+		DeferResponseCredit: true, ExecOpen: open, Request: request,
+		CredentialDigest: service.dataPlaneCredentialDigest(sessionID), Now: now,
 	})
 }
 
@@ -120,34 +124,6 @@ func (service *ControlPlaneService) GetSandboxExecStream(
 		return runnercontrol.DataPlaneSession{}, ports.ErrGenerationFenced
 	}
 	return session, nil
-}
-
-func (service *ControlPlaneService) AppendSandboxExecStreamFrame(
-	ctx context.Context,
-	principal contracts.Principal,
-	sessionID string,
-	frame runnercontrol.ExecClientFrame,
-) (bool, error) {
-	if err := service.requireDataPlane(principal); err != nil {
-		return false, err
-	}
-	return service.dataPlaneRelay.AppendExecClientFrame(
-		ctx, principal.TenantRef, principal.SubjectRef, sessionID, frame, service.now().UTC(),
-	)
-}
-
-func (service *ControlPlaneService) ListSandboxExecStreamFrames(
-	ctx context.Context,
-	principal contracts.Principal,
-	sessionID string,
-	afterSequence int64,
-) ([]runnercontrol.ExecServerFrame, error) {
-	if err := service.requireDataPlane(principal); err != nil {
-		return nil, err
-	}
-	return service.dataPlaneRelay.ListExecServerFrames(
-		ctx, principal.TenantRef, principal.SubjectRef, sessionID, afterSequence, 64,
-	)
 }
 
 func (service *ControlPlaneService) CancelSandboxExecStream(
@@ -290,13 +266,14 @@ func (service *ControlPlaneService) ExecuteSandboxCommand(
 		return nil, false, err
 	}
 	now := service.now().UTC()
+	sessionID := service.newID("dps")
 	deadline := now.Add(time.Duration(request.DeadlineMilliseconds) * time.Millisecond)
 	open := publicExecOpen(
 		request.Command, request.Cwd, request.Environment, deadline,
 		request.MaximumOutputBytes, stdin,
 	)
 	session, replayed, err := service.dataPlaneRelay.AdmitDataPlane(ctx, runnercontrol.DataPlaneAdmission{
-		ID: service.newID("dps"), StreamID: service.newID("stream"),
+		ID: sessionID, StreamID: service.newID("stream"),
 		TenantRef: principal.TenantRef, SandboxID: sandboxID,
 		SubjectRef: principal.SubjectRef,
 		LeaseID:    leaseID,
@@ -305,16 +282,33 @@ func (service *ControlPlaneService) ExecuteSandboxCommand(
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
 		DeadlineAt:           deadline,
 		MaximumResponseBytes: request.MaximumOutputBytes, MaximumRequestBytes: int64(len(stdin)),
-		ExecOpen: open, Request: request, Now: now,
+		ExecOpen: open,
+		Request: struct {
+			Command              contracts.ExecCommand `json:"command"`
+			Cwd                  *string               `json:"cwd,omitempty"`
+			Environment          map[string]string     `json:"environment"`
+			DeadlineMilliseconds int64                 `json:"deadlineMilliseconds"`
+			MaximumOutputBytes   int64                 `json:"maximumOutputBytes"`
+		}{request.Command, request.Cwd, request.Environment, request.DeadlineMilliseconds, request.MaximumOutputBytes},
+		CredentialDigest: service.dataPlaneCredentialDigest(sessionID), Now: now,
 	})
 	if err != nil {
 		return nil, false, err
 	}
-	session, err = service.waitForDataPlane(
-		ctx, principal.TenantRef, principal.SubjectRef, session, request.DeadlineMilliseconds,
-	)
-	if err != nil {
-		return nil, replayed, err
+	if replayed && session.State != "completed" && session.State != "failed" {
+		session, err = service.waitForDataPlane(
+			ctx, principal.TenantRef, principal.SubjectRef,
+			session, request.DeadlineMilliseconds,
+		)
+		if err != nil {
+			return nil, true, err
+		}
+	}
+	if session.State != "completed" && session.State != "failed" {
+		session, err = service.executeBufferedDataPlane(ctx, session, open)
+		if err != nil {
+			return nil, replayed, err
+		}
 	}
 	outcome, err := execOutcome(session)
 	return outcome, replayed, err
@@ -535,8 +529,9 @@ func (service *ControlPlaneService) runFileOperation(
 	}
 	now := service.now().UTC()
 	const fileDeadlineMilliseconds int64 = 30_000
+	sessionID := service.newID("dps")
 	session, replayed, err := service.dataPlaneRelay.AdmitDataPlane(ctx, runnercontrol.DataPlaneAdmission{
-		ID: service.newID("dps"), StreamID: service.newID("stream"),
+		ID: sessionID, StreamID: service.newID("stream"),
 		TenantRef: principal.TenantRef, SandboxID: sandboxID,
 		SubjectRef: principal.SubjectRef,
 		LeaseID:    leaseID,
@@ -551,14 +546,22 @@ func (service *ControlPlaneService) runFileOperation(
 			ExpectedSize: uint64(expectedSize), ExpectedChecksum: checksum,
 			Recursive: recursive, Force: force,
 		},
-		FileContent: content, Request: request, Now: now,
+		FileContent: content, Request: request,
+		CredentialDigest: service.dataPlaneCredentialDigest(sessionID), Now: now,
 	})
 	if err != nil {
 		return runnercontrol.DataPlaneSession{}, false, err
 	}
-	session, err = service.waitForDataPlane(
-		ctx, principal.TenantRef, principal.SubjectRef, session, fileDeadlineMilliseconds,
-	)
+	if replayed && session.State != "completed" && session.State != "failed" {
+		session, err = service.waitForDataPlane(
+			ctx, principal.TenantRef, principal.SubjectRef,
+			session, fileDeadlineMilliseconds,
+		)
+		return session, true, err
+	}
+	if session.State != "completed" && session.State != "failed" {
+		session, err = service.executeFileDataPlane(ctx, session, inputFileOpen(session, fileOperation, path, recursive, force, expectedSize, checksum), content)
+	}
 	return session, replayed, err
 }
 

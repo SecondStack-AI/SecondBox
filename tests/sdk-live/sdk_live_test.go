@@ -175,7 +175,7 @@ func liveProfileRevisionSpec() secondboxclient.ProfileRevisionSpec {
 		Execution: secondboxclient.ExecutionPolicy{
 			MaximumDeadlineMilliseconds: 60000, MaximumBufferedOutputBytes: 1 << 20,
 			StreamWindowBytes: 65536, MaximumTransferBytes: 1 << 30,
-			TerminalDetachSeconds: 30,
+			TerminalDetachSeconds: 30, DataPlaneTransport: "proxied",
 		},
 		Network: secondboxclient.NetworkPolicy{
 			Mode: "deny_all", Destinations: []secondboxclient.NetworkDestination{},

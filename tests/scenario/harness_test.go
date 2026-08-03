@@ -238,6 +238,7 @@ func scenarioProfileSpec(t *testing.T, initialState string) contracts.ProfileRev
 			StreamWindowBytes:           65536,
 			MaximumTransferBytes:        1 << 20,
 			TerminalDetachSeconds:       30,
+			DataPlaneTransport:          contracts.DataPlaneTransportProxied,
 		},
 		Network: contracts.NetworkPolicy{
 			Mode:         "deny_all",

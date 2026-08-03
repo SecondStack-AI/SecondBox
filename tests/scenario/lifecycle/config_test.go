@@ -30,7 +30,9 @@ func validLifecycleConfig() lifecycleConfig {
 			MaxConcurrentStarts:           8,
 			MaxConcurrentWorkspaceCreates: 4,
 		},
-		Profile:                   profileLimits{MemoryBytes: 536870912},
+		Profile: profileLimits{
+			MemoryBytes: 536870912, DataPlaneTransport: "proxied",
+		},
 		SubjectMaxActiveInstances: 12,
 	}
 }
@@ -51,6 +53,7 @@ func TestAbsentRequiredSettingsAreRejected(t *testing.T) {
 		"patterns":                    func(c *lifecycleConfig) { c.Patterns = nil },
 		"residentPopulations":         func(c *lifecycleConfig) { c.ResidentPopulations = nil },
 		"maximumInFlight":             func(c *lifecycleConfig) { c.MaximumInFlight = 0 },
+		"dataPlaneTransport":          func(c *lifecycleConfig) { c.Profile.DataPlaneTransport = "" },
 		"occupancySampleMilliseconds": func(c *lifecycleConfig) { c.OccupancySampleMilliseconds = 0 },
 		"operationTimeoutSeconds":     func(c *lifecycleConfig) { c.OperationTimeoutSeconds = 0 },
 		"runner.maxConcurrentGlobal":  func(c *lifecycleConfig) { c.Runner.MaxConcurrentGlobal = 0 },

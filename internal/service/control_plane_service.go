@@ -129,6 +129,7 @@ type ControlPlaneConfig struct {
 	NewCredentialMaterial func() string
 	ArtifactObjectStore   objectstore.Store
 	DataPlaneRelay        DataPlaneRelay
+	LiveDataPlane         *runnercontrol.LiveDataPlaneBroker
 	DataPlanePollInterval time.Duration
 	// DataPlaneWakeups is optional. Without it the caller-facing loops fall back
 	// to DataPlanePollInterval, which remains their recovery bound either way.
@@ -148,6 +149,7 @@ type ControlPlaneService struct {
 	newCredentialMaterial func() string
 	artifactObjectStore   objectstore.Store
 	dataPlaneRelay        DataPlaneRelay
+	liveDataPlane         *runnercontrol.LiveDataPlaneBroker
 	dataPlanePollInterval time.Duration
 	dataPlaneWakeups      worknotify.Source
 	portSessionRelay      runnercontrol.PortSessionRelay
@@ -185,6 +187,7 @@ func NewControlPlaneService(config ControlPlaneConfig) (*ControlPlaneService, er
 		now:                  config.Now, newID: config.NewID, newCredentialMaterial: config.NewCredentialMaterial,
 		artifactObjectStore: config.ArtifactObjectStore,
 		dataPlaneRelay:      config.DataPlaneRelay, dataPlanePollInterval: config.DataPlanePollInterval,
+		liveDataPlane:    config.LiveDataPlane,
 		dataPlaneWakeups: config.DataPlaneWakeups,
 		portSessionRelay: config.PortSessionRelay, publicBaseURL: config.PublicBaseURL,
 		builtInProfiles: builtInProfiles,
@@ -1184,9 +1187,14 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 		return invalidRequest(errors.New("SecondBox Profile retention limits are invalid"))
 	}
 	if spec.Execution.MaximumDeadlineMilliseconds < 1 || spec.Execution.MaximumBufferedOutputBytes < 1 ||
+		spec.Execution.MaximumBufferedOutputBytes > runnercontrol.MaximumBufferedExecBytes ||
 		spec.Execution.StreamWindowBytes < 4096 || spec.Execution.MaximumTransferBytes < 1 ||
 		spec.Execution.TerminalDetachSeconds < 0 {
 		return invalidRequest(errors.New("SecondBox Profile execution limits are invalid"))
+	}
+	if spec.Execution.DataPlaneTransport != contracts.DataPlaneTransportProxied &&
+		spec.Execution.DataPlaneTransport != contracts.DataPlaneTransportDirect {
+		return invalidRequest(errors.New("SecondBox Profile data-plane transport must be proxied or direct"))
 	}
 	if spec.Network.Mode != "deny_all" && spec.Network.Mode != "allow_list" {
 		return invalidRequest(errors.New("SecondBox Profile network mode must be deny_all or allow_list"))

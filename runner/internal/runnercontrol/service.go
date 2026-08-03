@@ -175,6 +175,7 @@ type RunnerProtocolService struct {
 	dataPlaneFailures chan error
 	dataPlaneSPKIPin  string
 	directPorts       *directPortRegistry
+	directDataPlane   *directDataPlaneRegistry
 }
 
 // NewRunnerProtocolService validates immutable identity before creating the composition root.
@@ -270,6 +271,7 @@ func NewRunnerProtocolService(
 		dataPlane:        newDataPlaneListener(),
 		dataPlaneSPKIPin: dataPlaneSPKIPin,
 		directPorts:      newDirectPortRegistry(),
+		directDataPlane:  newDirectDataPlaneRegistry(),
 	}
 	if implementsTerminal {
 		service.instanceTerminals = terminalBackend.InstanceTerminals()
@@ -579,6 +581,9 @@ func (s *RunnerProtocolService) consumeCommands(
 	defer s.directPorts.closeAll("control-plane connection lost")
 	s.directPorts.bindStream(stream)
 	defer s.directPorts.bindStream(nil)
+	defer s.directDataPlane.closeAll("control-plane connection lost")
+	s.directDataPlane.bindStream(stream)
+	defer s.directDataPlane.bindStream(nil)
 	dataPlaneFailures := s.dataPlaneFailureSource()
 	go pumpControlPlaneFrames(connectionCtx, stream.Recv, received)
 	asyncErrors := make(chan error, 1)
@@ -697,6 +702,10 @@ func (s *RunnerProtocolService) consumeCommands(
 				terminal.Fence.GetAssignmentId(),
 				"instance terminated",
 			)
+			s.directDataPlane.closeAssignment(
+				terminal.Fence.GetAssignmentId(),
+				"instance terminated",
+			)
 			if err := s.sendInstanceTerminal(ctx, stream, terminal); err != nil {
 				return err
 			}
@@ -777,6 +786,12 @@ func (state *controlCommandState) accept(
 	case message.GetLocalWorkspace() != nil:
 		messageID = message.GetLocalWorkspace().MessageId
 		sequence = message.GetLocalWorkspace().Sequence
+	case message.GetDataPlaneDirectOpen() != nil:
+		messageID = message.GetDataPlaneDirectOpen().MessageId
+		sequence = message.GetDataPlaneDirectOpen().Sequence
+	case message.GetDataPlaneCancel() != nil:
+		messageID = message.GetDataPlaneCancel().MessageId
+		sequence = message.GetDataPlaneCancel().Sequence
 	default:
 		return false, nil
 	}
@@ -825,6 +840,12 @@ func (s *RunnerProtocolService) handleCommand(
 		return s.handlePortFrame(ctx, stream, message.GetPort(), enabled, asyncErrors)
 	case message.GetPortDirectAdmission() != nil:
 		return s.directPorts.deliverAdmission(message.GetPortDirectAdmission())
+	case message.GetDataPlaneDirectOpen() != nil:
+		return s.registerDirectDataPlaneSession(message.GetDataPlaneDirectOpen())
+	case message.GetDataPlaneDirectAdmission() != nil:
+		return s.directDataPlane.deliverAdmission(message.GetDataPlaneDirectAdmission())
+	case message.GetDataPlaneCancel() != nil:
+		return s.handleDataPlaneCancel(message.GetDataPlaneCancel())
 	case message.GetLocalWorkspace() != nil:
 		if !enabled[runnerprotocol.RunnerFeature_RUNNER_FEATURE_LOCAL_WORKSPACE] ||
 			s.workspaceBackend == nil {
@@ -1245,6 +1266,7 @@ func (s *RunnerProtocolService) handleFence(
 	// socket for it must be closed before the fence result claims the instance
 	// is stopped.
 	s.directPorts.closeAssignment(command.Fence.GetAssignmentId(), "assignment fenced")
+	s.directDataPlane.closeAssignment(command.Fence.GetAssignmentId(), "assignment fenced")
 	evidence, err := s.backend.FenceAssignment(ctx, command)
 	if err != nil {
 		evidence.Result = runnerprotocol.FenceResultKind_FENCE_RESULT_KIND_FAILED
@@ -1288,6 +1310,7 @@ func (s *RunnerProtocolService) handleDrain(
 	command *runnerprotocol.DrainCommand,
 ) error {
 	s.directPorts.closeAll("runner draining")
+	s.directDataPlane.closeAll("runner draining")
 	remaining := s.activeAssignments()
 	phase := runnerprotocol.DrainPhase_DRAIN_PHASE_DRAINING
 	if len(remaining) == 0 {

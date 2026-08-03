@@ -95,7 +95,7 @@ func (relay *memoryRelayBoundary) PersistInboundFrame(
 ) (bool, error) {
 	relay.mu.Lock()
 	defer relay.mu.Unlock()
-	frame := message.GetExec()
+	frame := message.GetPty()
 	if frame == nil || !sameConformanceFence(relay.fence, frame.Fence) {
 		return false, ErrRelayStaleFence
 	}

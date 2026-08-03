@@ -73,23 +73,24 @@ type stressRunnerConfig struct {
 }
 
 type stressProfileConfig struct {
-	CPUMillis                   int64 `json:"cpuMillis"`
-	MemoryBytes                 int64 `json:"memoryBytes"`
-	WorkspaceBytes              int64 `json:"workspaceBytes"`
-	ProcessLimit                int64 `json:"processLimit"`
-	ConcurrentOperations        int64 `json:"concurrentOperations"`
-	DrainGraceSeconds           int64 `json:"drainGraceSeconds"`
-	IdleSeconds                 int64 `json:"idleSeconds"`
-	MaximumDurationSeconds      int64 `json:"maximumDurationSeconds"`
-	LeaseSeconds                int64 `json:"leaseSeconds"`
-	SnapshotLimit               int64 `json:"snapshotLimit"`
-	SnapshotRetentionSeconds    int64 `json:"snapshotRetentionSeconds"`
-	ArtifactRetentionSeconds    int64 `json:"artifactRetentionSeconds"`
-	MaximumDeadlineMilliseconds int64 `json:"maximumDeadlineMilliseconds"`
-	MaximumBufferedOutputBytes  int64 `json:"maximumBufferedOutputBytes"`
-	StreamWindowBytes           int64 `json:"streamWindowBytes"`
-	MaximumTransferBytes        int64 `json:"maximumTransferBytes"`
-	TerminalDetachSeconds       int64 `json:"terminalDetachSeconds"`
+	CPUMillis                   int64  `json:"cpuMillis"`
+	MemoryBytes                 int64  `json:"memoryBytes"`
+	WorkspaceBytes              int64  `json:"workspaceBytes"`
+	ProcessLimit                int64  `json:"processLimit"`
+	ConcurrentOperations        int64  `json:"concurrentOperations"`
+	DrainGraceSeconds           int64  `json:"drainGraceSeconds"`
+	IdleSeconds                 int64  `json:"idleSeconds"`
+	MaximumDurationSeconds      int64  `json:"maximumDurationSeconds"`
+	LeaseSeconds                int64  `json:"leaseSeconds"`
+	SnapshotLimit               int64  `json:"snapshotLimit"`
+	SnapshotRetentionSeconds    int64  `json:"snapshotRetentionSeconds"`
+	ArtifactRetentionSeconds    int64  `json:"artifactRetentionSeconds"`
+	MaximumDeadlineMilliseconds int64  `json:"maximumDeadlineMilliseconds"`
+	MaximumBufferedOutputBytes  int64  `json:"maximumBufferedOutputBytes"`
+	StreamWindowBytes           int64  `json:"streamWindowBytes"`
+	MaximumTransferBytes        int64  `json:"maximumTransferBytes"`
+	TerminalDetachSeconds       int64  `json:"terminalDetachSeconds"`
+	DataPlaneTransport          string `json:"dataPlaneTransport"`
 }
 
 func readStressConfig(path string) (stressConfig, error) {
@@ -295,6 +296,9 @@ func (config stressProfileConfig) validate() error {
 		if value < 1 {
 			return fmt.Errorf("SecondBox stress Profile %s must be positive", name)
 		}
+	}
+	if config.DataPlaneTransport != "proxied" && config.DataPlaneTransport != "direct" {
+		return errors.New("SecondBox stress Profile dataPlaneTransport must be proxied or direct")
 	}
 	return nil
 }

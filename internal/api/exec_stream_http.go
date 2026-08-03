@@ -145,17 +145,17 @@ func (apiHandler *handler) serveSandboxExecStream(
 	principal := requestPrincipal(request)
 	streamContext, stopStream := context.WithCancel(request.Context())
 	defer stopStream()
+	stream, err := apiHandler.service.OpenSandboxExecStream(streamContext, session)
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
 	readErrors := make(chan error, 1)
 	go func() {
-		readErrors <- apiHandler.readSandboxExecFrames(streamContext, principal, connection, session.ID)
+		readError := apiHandler.readSandboxExecFrames(streamContext, connection, stream)
+		readErrors <- readError
+		stopStream()
 	}()
-	ticker := time.NewTicker(apiHandler.service.DataPlanePollInterval())
-	defer ticker.Stop()
-	// Subscribing before the first authoritative read closes the race where a
-	// frame commits between that read and the subscription.
-	wakeups, cancelWakeups := apiHandler.service.SubscribeDataPlaneSession(session.ID)
-	defer cancelWakeups()
-	afterSequence := int64(-1)
 	terminal := false
 	defer func() {
 		if !terminal {
@@ -164,62 +164,63 @@ func (apiHandler *handler) serveSandboxExecStream(
 				5*time.Second,
 			)
 			defer stopCancel()
-			if _, err := apiHandler.service.CancelSandboxExecStream(
-				cancelContext, principal, session.ID, "public streaming client disconnected",
-			); err != nil {
+			if err := stream.Cancel(cancelContext, "public streaming client disconnected"); err != nil {
 				apiHandler.logger.ErrorContext(cancelContext, "SecondBox Exec disconnect cancellation failed", "error", err, "session_id", session.ID)
+				return
+			}
+			for {
+				frame, _, err := stream.Receive(cancelContext)
+				if err != nil {
+					apiHandler.logger.ErrorContext(cancelContext, "SecondBox Exec disconnect terminal drain failed", "error", err, "session_id", session.ID)
+					return
+				}
+				if frame.Terminal != nil {
+					return
+				}
 			}
 		}
 	}()
 	for {
-		frames, err := apiHandler.service.ListSandboxExecStreamFrames(
-			request.Context(), principal, session.ID, afterSequence,
-		)
+		frame, _, err := stream.Receive(streamContext)
 		if err != nil {
-			return err
-		}
-		for _, frame := range frames {
-			if err := connection.SetWriteDeadline(session.DeadlineAt); err != nil {
-				return fmt.Errorf("SecondBox Exec WebSocket write deadline: %w", err)
-			}
-			switch {
-			case frame.Output != nil:
-				channel, err := publicExecOutputChannel(frame.Output.Channel)
-				if err != nil {
-					return err
-				}
-				if err := connection.WriteJSON(contracts.StreamOutputFrame{
-					Type: "output", Sequence: frame.Sequence, Stream: channel,
-					DataBase64: base64.StdEncoding.EncodeToString(frame.Output.Data),
-				}); err != nil {
-					return fmt.Errorf("SecondBox Exec WebSocket output write: %w", err)
-				}
-			case frame.Terminal != nil:
-				outcome, err := apiHandler.service.SandboxExecStreamOutcome(
-					request.Context(), principal, session.ID,
-				)
-				if err != nil {
-					return err
-				}
-				if err := connection.WriteJSON(contracts.StreamOutcomeFrame{
-					Type: "outcome", Sequence: frame.Sequence, Outcome: outcome,
-				}); err != nil {
-					return fmt.Errorf("SecondBox Exec WebSocket outcome write: %w", err)
-				}
-				terminal = true
-				return finishExecWebSocketCloseHandshake(connection, readErrors)
+			select {
+			case readErr := <-readErrors:
+				return readErr
 			default:
-				return errors.New("SecondBox Exec retained WebSocket frame is unsupported")
+				return err
 			}
-			afterSequence = frame.Sequence
 		}
-		select {
-		case err := <-readErrors:
-			return err
-		case <-wakeups:
-		case <-ticker.C:
-		case <-request.Context().Done():
-			return request.Context().Err()
+		if err := connection.SetWriteDeadline(session.DeadlineAt); err != nil {
+			return fmt.Errorf("SecondBox Exec WebSocket write deadline: %w", err)
+		}
+		switch {
+		case frame.Output != nil:
+			channel, err := publicExecOutputChannel(frame.Output.Channel)
+			if err != nil {
+				return err
+			}
+			if err := connection.WriteJSON(contracts.StreamOutputFrame{
+				Type: "output", Sequence: frame.Sequence, Stream: channel,
+				DataBase64: base64.StdEncoding.EncodeToString(frame.Output.Data),
+			}); err != nil {
+				return fmt.Errorf("SecondBox Exec WebSocket output write: %w", err)
+			}
+		case frame.Terminal != nil:
+			outcome, err := apiHandler.service.SandboxExecStreamOutcome(
+				request.Context(), principal, session.ID,
+			)
+			if err != nil {
+				return err
+			}
+			if err := connection.WriteJSON(contracts.StreamOutcomeFrame{
+				Type: "outcome", Sequence: frame.Sequence, Outcome: outcome,
+			}); err != nil {
+				return fmt.Errorf("SecondBox Exec WebSocket outcome write: %w", err)
+			}
+			terminal = true
+			return finishExecWebSocketCloseHandshake(connection, readErrors)
+		default:
+			return errors.New("SecondBox Exec live WebSocket frame is unsupported")
 		}
 	}
 }
@@ -251,9 +252,10 @@ func finishExecWebSocketCloseHandshake(
 
 func (apiHandler *handler) readSandboxExecFrames(
 	ctx context.Context,
-	principal contracts.Principal,
 	connection *websocket.Conn,
-	sessionID string,
+	stream interface {
+		Send(context.Context, runnercontrol.ExecClientFrame) error
+	},
 ) error {
 	for {
 		messageType, payload, err := connection.ReadMessage()
@@ -267,9 +269,7 @@ func (apiHandler *handler) readSandboxExecFrames(
 		if err != nil {
 			return err
 		}
-		if _, err := apiHandler.service.AppendSandboxExecStreamFrame(
-			ctx, principal, sessionID, frame,
-		); err != nil {
+		if err := stream.Send(ctx, frame); err != nil {
 			return err
 		}
 	}

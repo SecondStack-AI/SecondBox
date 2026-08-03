@@ -24,7 +24,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func TestPublicStreamingExecIsDurableBackpressuredAndCancellable(t *testing.T) {
+func TestPublicStreamingExecIsLiveBackpressuredAndCancellable(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
 	admin := fixtureAdmin(t, controlPlane)
 	project, account, _ := createProjectAccountAndCredential(t, controlPlane, admin, "streaming-exec-http")
@@ -76,6 +76,7 @@ func TestPublicStreamingExecIsDurableBackpressuredAndCancellable(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(relay.Close)
+	liveDataPlane := runnercontrol.NewLiveDataPlaneBroker()
 	server := httptest.NewUnstartedServer(nil)
 	publicBaseURL := "http://" + server.Listener.Addr().String()
 	dataPlaneService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
@@ -85,6 +86,7 @@ func TestPublicStreamingExecIsDurableBackpressuredAndCancellable(t *testing.T) {
 		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		DataPlaneRelay:        relay, DataPlanePollInterval: time.Millisecond,
+		LiveDataPlane: liveDataPlane,
 		PublicBaseURL: publicBaseURL,
 	})
 	if err != nil {
@@ -100,7 +102,10 @@ func TestPublicStreamingExecIsDurableBackpressuredAndCancellable(t *testing.T) {
 	server.Config.Handler = handler
 	server.Start()
 	t.Cleanup(server.Close)
-	fake := newStreamingExecFakeRunner(relay, seed.RunnerID, seed.ConnectionTwo)
+	fake, detachFake := newStreamingExecFakeRunner(
+		t, liveDataPlane, seed.RunnerID, seed.ConnectionTwo,
+	)
+	defer detachFake()
 	fakeContext, stopFake := context.WithCancel(t.Context())
 	defer stopFake()
 	fakeErrors := make(chan error, 1)
@@ -146,16 +151,6 @@ func TestPublicStreamingExecIsDurableBackpressuredAndCancellable(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitStreamingRunnerEvent(t, fake.events, "eof:stream-order")
-	frames, err := relay.ListExecServerFrames(
-		t.Context(), principal.TenantRef, principal.SubjectRef,
-		string(ordered.ID), -1, 10,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(frames) != 0 {
-		t.Fatalf("output existed before credit: %#v", frames)
-	}
 	if err := orderedConnection.WriteJSON(map[string]any{
 		"type": "credit", "sequence": 2, "bytes": 16,
 	}); err != nil {
@@ -221,10 +216,9 @@ func TestPublicStreamingExecIsDurableBackpressuredAndCancellable(t *testing.T) {
 	}
 	var cancellingSession contracts.ExecStreamSession
 	decodeHTTPJSON(t, cancelResponse, &cancellingSession)
-	if cancellingSession.ID != httpCancelled.ID || cancellingSession.State != "closing" {
+	if cancellingSession.ID != httpCancelled.ID || cancellingSession.State != "closed" {
 		t.Fatalf("HTTP-cancelled Exec session = %#v", cancellingSession)
 	}
-	waitStreamingRunnerEvent(t, fake.events, "cancel:wait-http-cancel")
 	waitDataPlaneSessionState(
 		t, relay, principal.TenantRef, principal.SubjectRef,
 		string(httpCancelled.ID), "completed",
@@ -311,12 +305,10 @@ func TestPublicStreamingExecIsDurableBackpressuredAndCancellable(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitStreamingRunnerEvent(t, fake.events, "cancel:disconnect")
-	reconnected := dialStreamingExec(t, detached, key.Credential, sandbox.Generation)
-	detachedOutcome := readStreamingOutcome(t, reconnected, 0)
-	if detachedOutcome.Kind != "cancelled" {
-		t.Fatalf("detached outcome = %#v", detachedOutcome)
-	}
-	reconnected.Close()
+	waitDataPlaneSessionState(
+		t, relay, principal.TenantRef, principal.SubjectRef,
+		string(detached.ID), "completed",
+	)
 	sandboxResponse := dataPlaneGET(
 		t, server.URL+"/v1/sandboxes/"+sandbox.ID, key.Credential, sandbox.Generation,
 	)
@@ -335,9 +327,11 @@ func TestPublicStreamingExecIsDurableBackpressuredAndCancellable(t *testing.T) {
 }
 
 type streamingExecFakeRunner struct {
-	relay        *runnercontrol.PostgresFrameRelay
+	broker       *runnercontrol.LiveDataPlaneBroker
+	session      *runnercontrol.Session
 	runnerID     string
 	connectionID string
+	incoming     chan *runnerv1.ControlPlaneToRunner
 	events       chan string
 	mu           sync.Mutex
 	operations   map[string]*streamingFakeOperation
@@ -351,14 +345,67 @@ type streamingFakeOperation struct {
 }
 
 func newStreamingExecFakeRunner(
-	relay *runnercontrol.PostgresFrameRelay,
+	t *testing.T,
+	broker *runnercontrol.LiveDataPlaneBroker,
 	runnerID string,
 	connectionID string,
-) *streamingExecFakeRunner {
-	return &streamingExecFakeRunner{
-		relay: relay, runnerID: runnerID, connectionID: connectionID,
-		events: make(chan string, 32), operations: map[string]*streamingFakeOperation{},
+) (*streamingExecFakeRunner, func()) {
+	t.Helper()
+	features := []runnerv1.RunnerFeature{
+		runnerv1.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
+		runnerv1.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING,
+		runnerv1.RunnerFeature_RUNNER_FEATURE_FILE_STREAMING,
 	}
+	session := runnercontrol.NewSession(runnercontrol.SessionConfig{
+		AuthenticatedRunnerID: runnerID,
+		SupportedVersions:     runnercontrol.VersionRange{Minimum: 1, Maximum: 1},
+		EnabledFeatures:       features, HeartbeatInterval: 10 * time.Second,
+		ConnectionID: connectionID,
+	})
+	if response, err := session.Accept(&runnerv1.RunnerToControlPlane{
+		Message: &runnerv1.RunnerToControlPlane_Hello{Hello: &runnerv1.RunnerHello{
+			RunnerId: runnerID, ConnectionNonce: bytes.Repeat([]byte{0x42}, 32),
+			SupportedVersions: &runnerv1.ProtocolVersionRange{Minimum: 1, Maximum: 1},
+			MandatoryFeatures: features,
+		}},
+	}); err != nil || response.GetWelcome() == nil {
+		t.Fatalf("fake Runner Hello = %#v, %v", response, err)
+	}
+	if _, err := session.Accept(&runnerv1.RunnerToControlPlane{
+		Message: &runnerv1.RunnerToControlPlane_Registration{Registration: &runnerv1.RunnerRegistration{
+			MessageId: "registration", Sequence: 1, RunnerId: runnerID,
+			ConnectionId: connectionID, RunnerPoolId: "default-pool",
+			SoftwareVersion: "integration", ProtocolVersion: 1,
+			Capabilities: &runnerv1.RunnerCapabilities{
+				Architecture: "amd64", FirecrackerVersion: "integration",
+				KvmReady: true, JailerReady: true, CgroupReady: true,
+				NetworkPolicyReady: true, StorageReady: true, CleanupReady: true,
+				DataPlaneReady:           true,
+				GuestProtocolGenerations: &runnerv1.ProtocolVersionRange{Minimum: 1, Maximum: 1},
+			},
+			Allocatable: &runnerv1.Capacity{VcpuMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30, Instances: 8},
+			Reserved:    &runnerv1.Capacity{}, StartupTiming: &runnerv1.StartupTiming{},
+			DataPlaneAdvertisedAddress:     "10.0.0.5:7443",
+			DataPlaneCertificateSpkiSha256: strings.Repeat("a", 64),
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fake := &streamingExecFakeRunner{
+		broker: broker, session: session, runnerID: runnerID, connectionID: connectionID,
+		incoming: make(chan *runnerv1.ControlPlaneToRunner, 32),
+		events:   make(chan string, 32), operations: map[string]*streamingFakeOperation{},
+	}
+	detach, err := broker.AttachConnection(runnerID, connectionID, fake, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fake, detach
+}
+
+func (fake *streamingExecFakeRunner) Send(message *runnerv1.ControlPlaneToRunner) error {
+	fake.incoming <- message
+	return nil
 }
 
 func (fake *streamingExecFakeRunner) run(ctx context.Context) error {
@@ -366,29 +413,10 @@ func (fake *streamingExecFakeRunner) run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		default:
-		}
-		now := time.Now().UTC()
-		delivery, found, err := fake.relay.ClaimOutboundFrame(
-			ctx, fake.runnerID, fake.connectionID, now,
-		)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
+		case message := <-fake.incoming:
+			if err := fake.handle(ctx, message); err != nil {
+				return err
 			}
-			return err
-		}
-		if !found {
-			time.Sleep(time.Millisecond)
-			continue
-		}
-		if err := fake.relay.MarkOutboundFrameDelivered(
-			ctx, delivery.ID, fake.connectionID, delivery.ClaimAttempt, now,
-		); err != nil {
-			return err
-		}
-		if err := fake.handle(ctx, delivery.Message, now); err != nil {
-			return err
 		}
 	}
 }
@@ -396,7 +424,6 @@ func (fake *streamingExecFakeRunner) run(ctx context.Context) error {
 func (fake *streamingExecFakeRunner) handle(
 	ctx context.Context,
 	message *runnerv1.ControlPlaneToRunner,
-	now time.Time,
 ) error {
 	frame := message.GetExec()
 	if frame == nil {
@@ -428,22 +455,22 @@ func (fake *streamingExecFakeRunner) handle(
 			if !operation.inputClosed {
 				return fmt.Errorf("streaming fake runner received credit before stdin EOF")
 			}
-			if err := fake.output(ctx, operation, runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT, []byte("stdout:one"), now); err != nil {
+			if err := fake.output(ctx, operation, runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT, []byte("stdout:one")); err != nil {
 				return err
 			}
-			if err := fake.output(ctx, operation, runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDERR, []byte("!"), now); err != nil {
+			if err := fake.output(ctx, operation, runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDERR, []byte("!")); err != nil {
 				return err
 			}
-			return fake.terminal(ctx, operation, runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED, now)
+			return fake.terminal(ctx, operation, runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED)
 		case "output-exhausted":
-			if err := fake.output(ctx, operation, runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT, []byte("part"), now); err != nil {
+			if err := fake.output(ctx, operation, runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT, []byte("part")); err != nil {
 				return err
 			}
-			return fake.terminal(ctx, operation, runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_OUTPUT_EXHAUSTED, now)
+			return fake.terminal(ctx, operation, runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_OUTPUT_EXHAUSTED)
 		}
 	case frame.GetCancel() != nil:
 		fake.events <- "cancel:" + operation.command
-		return fake.terminal(ctx, operation, runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED, now)
+		return fake.terminal(ctx, operation, runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED)
 	}
 	return nil
 }
@@ -453,31 +480,25 @@ func (fake *streamingExecFakeRunner) output(
 	operation *streamingFakeOperation,
 	channel runnerv1.ExecOutputChannel,
 	data []byte,
-	now time.Time,
 ) error {
 	frame := operation.open
 	sequence := operation.nextSequence
 	operation.nextSequence++
-	_, err := fake.relay.PersistInboundFrame(ctx, runnercontrol.InboundRelayFrame{
-		RunnerID: fake.runnerID, ConnectionID: fake.connectionID,
-		Message: &runnerv1.RunnerToControlPlane{
-			Message: &runnerv1.RunnerToControlPlane_Exec{Exec: &runnerv1.ExecFrame{
-				Fence: frame.Fence, OperationId: frame.OperationId, StreamId: frame.StreamId,
-				Sequence: sequence,
-				Payload: &runnerv1.ExecFrame_Output{Output: &runnerv1.ExecOutput{
-					Channel: channel, Data: bytes.Clone(data),
-				}},
+	return fake.deliver(ctx, &runnerv1.RunnerToControlPlane{
+		Message: &runnerv1.RunnerToControlPlane_Exec{Exec: &runnerv1.ExecFrame{
+			Fence: frame.Fence, OperationId: frame.OperationId, StreamId: frame.StreamId,
+			Sequence: sequence, Correlation: frame.Correlation,
+			Payload: &runnerv1.ExecFrame_Output{Output: &runnerv1.ExecOutput{
+				Channel: channel, Data: bytes.Clone(data),
 			}},
-		},
-	}, now)
-	return err
+		}},
+	})
 }
 
 func (fake *streamingExecFakeRunner) terminal(
 	ctx context.Context,
 	operation *streamingFakeOperation,
 	kind runnerv1.ExecTerminalKind,
-	now time.Time,
 ) error {
 	frame := operation.open
 	sequence := operation.nextSequence
@@ -489,17 +510,24 @@ func (fake *streamingExecFakeRunner) terminal(
 	if kind == runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_OUTPUT_EXHAUSTED {
 		terminal.LimitBytes = frame.GetOpen().OutputLimitBytes
 	}
-	_, err := fake.relay.PersistInboundFrame(ctx, runnercontrol.InboundRelayFrame{
-		RunnerID: fake.runnerID, ConnectionID: fake.connectionID,
-		Message: &runnerv1.RunnerToControlPlane{
-			Message: &runnerv1.RunnerToControlPlane_Exec{Exec: &runnerv1.ExecFrame{
-				Fence: frame.Fence, OperationId: frame.OperationId, StreamId: frame.StreamId,
-				Sequence: sequence,
-				Payload:  &runnerv1.ExecFrame_Terminal{Terminal: terminal},
-			}},
-		},
-	}, now)
-	return err
+	return fake.deliver(ctx, &runnerv1.RunnerToControlPlane{
+		Message: &runnerv1.RunnerToControlPlane_Exec{Exec: &runnerv1.ExecFrame{
+			Fence: frame.Fence, OperationId: frame.OperationId, StreamId: frame.StreamId,
+			Sequence: sequence, Correlation: frame.Correlation,
+			Payload: &runnerv1.ExecFrame_Terminal{Terminal: terminal},
+		}},
+	})
+}
+
+func (fake *streamingExecFakeRunner) deliver(
+	ctx context.Context,
+	message *runnerv1.RunnerToControlPlane,
+) error {
+	event, err := fake.session.Accept(message)
+	if err != nil {
+		return err
+	}
+	return fake.broker.Deliver(ctx, event)
 }
 
 func createStreamingExecSession(

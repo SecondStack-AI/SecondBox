@@ -81,6 +81,7 @@ func (driver *stressDriver) prepare(ctx context.Context) error {
 						StreamWindowBytes:           driver.config.Profile.StreamWindowBytes,
 						MaximumTransferBytes:        driver.config.Profile.MaximumTransferBytes,
 						TerminalDetachSeconds:       driver.config.Profile.TerminalDetachSeconds,
+						DataPlaneTransport:          driver.config.Profile.DataPlaneTransport,
 					},
 					Network: secondboxclient.NetworkPolicy{
 						Mode: "deny_all", Destinations: []secondboxclient.NetworkDestination{},

@@ -70,12 +70,13 @@ func TestRunnerDataPlaneListenerRequiresPinnedTLSAndRejectsUnwiredKinds(t *testi
 		t.Fatal(err)
 	}
 	for _, testCase := range []struct {
-		kind   portdirect.SessionKind
-		detail string
+		kind    portdirect.SessionKind
+		verdict portdirect.Verdict
+		detail  string
 	}{
-		{portdirect.SessionKindExec, "exec session kind is not implemented"},
-		{portdirect.SessionKindPTY, "pty session kind is not implemented"},
-		{portdirect.SessionKindFile, "file session kind is not implemented"},
+		{portdirect.SessionKindExec, portdirect.VerdictDenied, "credential rejected"},
+		{portdirect.SessionKindPTY, portdirect.VerdictSessionKindUnsupported, "pty session kind is not implemented"},
+		{portdirect.SessionKindFile, portdirect.VerdictDenied, "credential rejected"},
 	} {
 		connection, err := tls.Dial("tcp", service.dataPlane.address(), tlsConfig)
 		if err != nil {
@@ -98,7 +99,7 @@ func TestRunnerDataPlaneListenerRequiresPinnedTLSAndRejectsUnwiredKinds(t *testi
 		if err := connection.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if verdict != portdirect.VerdictSessionKindUnsupported || detail != testCase.detail {
+		if verdict != testCase.verdict || detail != testCase.detail {
 			t.Fatalf("unwired kind %s verdict = %d/%q", testCase.kind, verdict, detail)
 		}
 	}

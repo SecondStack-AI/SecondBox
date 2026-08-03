@@ -73,6 +73,7 @@ func builtInProfiles(bindings BuiltInProfileBindings) []contracts.Profile {
 					StreamWindowBytes:           64 << 10,
 					MaximumTransferBytes:        256 << 20,
 					TerminalDetachSeconds:       0,
+					DataPlaneTransport:          contracts.DataPlaneTransportProxied,
 				},
 				Network: contracts.NetworkPolicy{
 					Mode: "deny_all", Destinations: []contracts.NetworkDestination{},
@@ -106,6 +107,7 @@ func builtInProfiles(bindings BuiltInProfileBindings) []contracts.Profile {
 					StreamWindowBytes:           1 << 20,
 					MaximumTransferBytes:        10 << 30,
 					TerminalDetachSeconds:       86400,
+					DataPlaneTransport:          contracts.DataPlaneTransportProxied,
 				},
 				Network: contracts.NetworkPolicy{
 					Mode: "deny_all", Destinations: []contracts.NetworkDestination{},

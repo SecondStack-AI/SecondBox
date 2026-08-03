@@ -13,7 +13,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/worknotify"
 )
 
-func TestNewServerRequiresRelayOnlyForDataPlaneFeatures(t *testing.T) {
+func TestNewServerRequiresEachConfiguredDataPlaneTransport(t *testing.T) {
 	config := validRelayServerConfig()
 	config.EnabledFeatures = []runnerv1.RunnerFeature{
 		runnerv1.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
@@ -28,9 +28,53 @@ func TestNewServerRequiresRelayOnlyForDataPlaneFeatures(t *testing.T) {
 	if _, err := NewServer(config); err == nil {
 		t.Fatal("data-plane server accepted a nil durable relay")
 	}
+	config.LiveDataPlane = NewLiveDataPlaneBroker()
+	if _, err := NewServer(config); err != nil {
+		t.Fatalf("Exec server with live data plane: %v", err)
+	}
+	config.EnabledFeatures = append(
+		config.EnabledFeatures,
+		runnerv1.RunnerFeature_RUNNER_FEATURE_PTY,
+	)
+	if _, err := NewServer(config); err == nil {
+		t.Fatal("PTY server accepted a nil durable relay")
+	}
 	config.FrameRelay = &recordingFrameRelay{}
 	if _, err := NewServer(config); err != nil {
-		t.Fatalf("data-plane server with relay: %v", err)
+		t.Fatalf("PTY server with relay: %v", err)
+	}
+}
+
+func TestLiveDataPlaneConnectionReplacementClosesPriorRoutes(t *testing.T) {
+	broker := NewLiveDataPlaneBroker()
+	first := &recordingControlPlaneSender{}
+	firstSession := NewSession(SessionConfig{
+		AuthenticatedRunnerID: "runner-1", SupportedVersions: VersionRange{Minimum: 1, Maximum: 1},
+		ConnectionID: "connection-1",
+	})
+	if _, err := broker.AttachConnection("runner-1", "connection-1", first, firstSession); err != nil {
+		t.Fatal(err)
+	}
+	stream, err := broker.Open("runner-1", "exec", "operation-1", "stream-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := &recordingControlPlaneSender{}
+	secondSession := NewSession(SessionConfig{
+		AuthenticatedRunnerID: "runner-1", SupportedVersions: VersionRange{Minimum: 1, Maximum: 1},
+		ConnectionID: "connection-2",
+	})
+	if _, err := broker.AttachConnection("runner-1", "connection-2", second, secondSession); err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Send(&runnerv1.ControlPlaneToRunner{}); !errors.Is(err, ErrLiveDataPlaneUnavailable) {
+		t.Fatalf("send on replaced live route error = %v", err)
+	}
+	if _, err := stream.Receive(t.Context()); !errors.Is(err, ErrLiveDataPlaneUnavailable) {
+		t.Fatalf("receive on replaced live route error = %v", err)
+	}
+	if len(first.messages) != 0 || len(second.messages) != 0 {
+		t.Fatalf("replaced route sent frames = %d/%d", len(first.messages), len(second.messages))
 	}
 }
 

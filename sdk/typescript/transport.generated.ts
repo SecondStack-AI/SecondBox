@@ -213,6 +213,7 @@ export interface ExecTimingSummary {
 }
 
 export interface ExecutionPolicy {
+  readonly dataPlaneTransport: "proxied" | "direct";
   readonly maximumBufferedOutputBytes: number;
   readonly maximumDeadlineMilliseconds: number;
   readonly maximumTransferBytes: number;

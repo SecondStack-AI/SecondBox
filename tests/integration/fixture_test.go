@@ -247,6 +247,21 @@ func createGrantedProfile(
 	account fixtureServiceAccount,
 	name string,
 ) contracts.Profile {
+	return createGrantedProfileWithDataPlaneTransport(
+		t, controlPlane, databaseStore, admin, account, name,
+		contracts.DataPlaneTransportProxied,
+	)
+}
+
+func createGrantedProfileWithDataPlaneTransport(
+	t *testing.T,
+	controlPlane *service.ControlPlaneService,
+	databaseStore *store.PostgresControlPlaneStore,
+	admin contracts.Principal,
+	account fixtureServiceAccount,
+	name string,
+	transport string,
+) contracts.Profile {
 	t.Helper()
 	if err := databaseStore.RegisterRunnerPool(t.Context(), contracts.RunnerPool{
 		Name: "default-pool", State: contracts.RunnerPoolStateReady,
@@ -258,10 +273,12 @@ func createGrantedProfile(
 		t.Fatal(err)
 	}
 	seedFixtureHomeRunner(t, "default-pool", "runner-fixture-"+name)
+	spec := testProfileSpec(1000)
+	spec.Execution.DataPlaneTransport = transport
 	profile, err := controlPlane.CreateProfile(
 		t.Context(),
 		admin,
-		contracts.CreateProfileRequest{Name: name, Spec: testProfileSpec(1000)},
+		contracts.CreateProfileRequest{Name: name, Spec: spec},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -393,7 +410,7 @@ func testProfileSpec(cpuMillis int64) contracts.ProfileRevisionSpec {
 		Execution: contracts.ExecutionPolicy{
 			MaximumDeadlineMilliseconds: 60000, MaximumBufferedOutputBytes: 1 << 20,
 			StreamWindowBytes: 65536, MaximumTransferBytes: 1 << 30,
-			TerminalDetachSeconds: 30,
+			TerminalDetachSeconds: 30, DataPlaneTransport: contracts.DataPlaneTransportProxied,
 		},
 		Network: contracts.NetworkPolicy{
 			Mode:         "deny_all",

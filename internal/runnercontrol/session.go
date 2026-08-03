@@ -12,6 +12,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// MaximumBufferedExecBytes bounds the single Exec completion carried by the
+// Runner control connection independently from streamed File messages.
+const MaximumBufferedExecBytes int64 = 64 << 20
+
 var (
 	ErrHelloRequired        = errors.New("SecondBox runner control Hello is required")
 	ErrRegistrationRequired = errors.New("SecondBox runner control Registration is required")
@@ -36,6 +40,7 @@ const (
 	EventFile             EventKind = "file"
 	EventPort             EventKind = "port"
 	EventPortDirect       EventKind = "port_direct"
+	EventDataPlaneDirect  EventKind = "data_plane_direct"
 	EventInstanceTerminal EventKind = "instance_terminal"
 	EventDuplicate        EventKind = "duplicate"
 	EventRejection        EventKind = "rejection"
@@ -205,8 +210,8 @@ func (session *Session) acceptRunnerRelayFrame(
 		if !session.enabledFeatures[runnerv1.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING] {
 			return Event{}, fmt.Errorf("%w: Exec streaming feature was not negotiated", ErrRunnerMessage)
 		}
-		if frame.GetOutput() == nil && frame.GetTerminal() == nil {
-			return Event{}, fmt.Errorf("%w: runner Exec payload is not an output or terminal frame", ErrRunnerMessage)
+		if frame.GetOutput() == nil && frame.GetTerminal() == nil && frame.GetBufferedResult() == nil {
+			return Event{}, fmt.Errorf("%w: runner Exec payload is not output or a terminal result", ErrRunnerMessage)
 		}
 		if err := validateRelayIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
 			return Event{}, err
@@ -557,6 +562,8 @@ func runnerEnvelope(message *runnerv1.RunnerToControlPlane) (string, uint64, err
 		return validateEnvelope(message.GetInstanceTerminal().MessageId, message.GetInstanceTerminal().Sequence)
 	case message.GetPortDirectConsume() != nil:
 		return validateEnvelope(message.GetPortDirectConsume().MessageId, message.GetPortDirectConsume().Sequence)
+	case message.GetDataPlaneDirectConsume() != nil:
+		return validateEnvelope(message.GetDataPlaneDirectConsume().MessageId, message.GetDataPlaneDirectConsume().Sequence)
 	default:
 		return "", 0, fmt.Errorf("%w: stream frame has no durable message envelope", ErrRunnerMessage)
 	}
@@ -587,6 +594,8 @@ func classifyRunnerMessage(message *runnerv1.RunnerToControlPlane) EventKind {
 		return EventInstanceTerminal
 	case message.GetPortDirectConsume() != nil:
 		return EventPortDirect
+	case message.GetDataPlaneDirectConsume() != nil:
+		return EventDataPlaneDirect
 	default:
 		return ""
 	}

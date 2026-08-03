@@ -71,6 +71,15 @@ func (relay *PostgresFrameRelay) CancelPublicDataPlaneSession(
 		); err != nil {
 			return DataPlaneSession{}, false, err
 		}
+		if session.State == "pending" && session.Kind == "exec" {
+			if err := relay.completeUnstartedCancellation(
+				ctx, tx, session,
+				runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED.String(),
+				input.Reason, input.Now.UTC(),
+			); err != nil {
+				return DataPlaneSession{}, false, err
+			}
+		}
 	}
 	session, err = scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
 		WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3`,

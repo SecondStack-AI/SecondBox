@@ -338,6 +338,11 @@ func (s *RunnerProtocolService) serveDirectPortConnection(
 		_ = portdirect.WriteVerdict(connection, portdirect.VerdictDenied, "handshake rejected")
 		return
 	}
+	if credential.SessionKind == portdirect.SessionKindExec ||
+		credential.SessionKind == portdirect.SessionKindFile {
+		_ = s.serveDirectTypedConnection(ctx, connection, credential)
+		return
+	}
 	if credential.SessionKind != portdirect.SessionKindPort {
 		_ = portdirect.WriteVerdict(
 			connection,

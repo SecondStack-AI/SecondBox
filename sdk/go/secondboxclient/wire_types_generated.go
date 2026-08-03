@@ -236,11 +236,12 @@ type ExecTimingSummary struct {
 }
 
 type ExecutionPolicy struct {
-	MaximumBufferedOutputBytes  int64 `json:"maximumBufferedOutputBytes"`
-	MaximumDeadlineMilliseconds int64 `json:"maximumDeadlineMilliseconds"`
-	MaximumTransferBytes        int64 `json:"maximumTransferBytes"`
-	StreamWindowBytes           int64 `json:"streamWindowBytes"`
-	TerminalDetachSeconds       int64 `json:"terminalDetachSeconds"`
+	DataPlaneTransport          string `json:"dataPlaneTransport"`
+	MaximumBufferedOutputBytes  int64  `json:"maximumBufferedOutputBytes"`
+	MaximumDeadlineMilliseconds int64  `json:"maximumDeadlineMilliseconds"`
+	MaximumTransferBytes        int64  `json:"maximumTransferBytes"`
+	StreamWindowBytes           int64  `json:"streamWindowBytes"`
+	TerminalDetachSeconds       int64  `json:"terminalDetachSeconds"`
 }
 
 type FileExistsResult struct {

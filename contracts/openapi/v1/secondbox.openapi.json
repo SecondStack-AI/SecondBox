@@ -1801,13 +1801,14 @@
       "ExecutionPolicy": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["maximumDeadlineMilliseconds", "maximumBufferedOutputBytes", "streamWindowBytes", "maximumTransferBytes", "terminalDetachSeconds"],
+        "required": ["maximumDeadlineMilliseconds", "maximumBufferedOutputBytes", "streamWindowBytes", "maximumTransferBytes", "terminalDetachSeconds", "dataPlaneTransport"],
         "properties": {
           "maximumDeadlineMilliseconds": {"type": "integer", "format": "int64", "minimum": 1},
           "maximumBufferedOutputBytes": {"type": "integer", "format": "int64", "minimum": 1},
           "streamWindowBytes": {"type": "integer", "format": "int64", "minimum": 4096},
           "maximumTransferBytes": {"type": "integer", "format": "int64", "minimum": 1},
-          "terminalDetachSeconds": {"type": "integer", "minimum": 0}
+          "terminalDetachSeconds": {"type": "integer", "minimum": 0},
+          "dataPlaneTransport": {"type": "string", "enum": ["proxied", "direct"]}
         }
       },
       "NetworkPolicy": {

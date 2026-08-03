@@ -47,12 +47,18 @@ type DirectPortAdmitter interface {
 	ConsumeDirectPortSession(context.Context, DirectPortConsumption) (PortTunnel, error)
 }
 
+type DirectDataPlaneAdmitter interface {
+	ConsumeDirectDataPlane(context.Context, DirectDataPlaneConsumption) error
+}
+
 // ServerConfig contains explicit protocol compatibility and durable dependencies.
 type ServerConfig struct {
 	CredentialVerifier  CredentialVerifier
 	StateStore          ProtocolStateStore
 	FrameRelay          ProtocolFrameRelay
+	LiveDataPlane       *LiveDataPlaneBroker
 	DirectPorts         DirectPortAdmitter
+	DirectDataPlane     DirectDataPlaneAdmitter
 	SupportedVersions   VersionRange
 	EnabledFeatures     []runnerv1.RunnerFeature
 	HeartbeatInterval   time.Duration
@@ -71,9 +77,12 @@ type Server struct {
 	config ServerConfig
 }
 
-type controlPlaneFrameSender interface {
+// LiveDataPlaneSender sends one control-plane frame on an authenticated Runner connection.
+type LiveDataPlaneSender interface {
 	Send(*runnerv1.ControlPlaneToRunner) error
 }
+
+type controlPlaneFrameSender = LiveDataPlaneSender
 
 // serializedFrameSender lets the receive loop answer a direct Port admission
 // inline while the outbound command pump is running. One gRPC stream tolerates
@@ -117,10 +126,14 @@ func NewServer(config ServerConfig) (*Server, error) {
 	}
 	for _, feature := range config.EnabledFeatures {
 		if (feature == runnerv1.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING ||
-			feature == runnerv1.RunnerFeature_RUNNER_FEATURE_FILE_STREAMING ||
+			feature == runnerv1.RunnerFeature_RUNNER_FEATURE_FILE_STREAMING) &&
+			config.LiveDataPlane == nil {
+			return nil, errors.New("SecondBox runner control Exec and File features require the live data-plane broker")
+		}
+		if (feature == runnerv1.RunnerFeature_RUNNER_FEATURE_PTY ||
 			feature == runnerv1.RunnerFeature_RUNNER_FEATURE_PORT_PROXY) &&
 			config.FrameRelay == nil {
-			return nil, errors.New("SecondBox runner control data-plane features require a durable frame relay")
+			return nil, errors.New("SecondBox runner control PTY and Port features require the durable frame relay")
 		}
 	}
 	return &Server{config: config}, nil
@@ -238,6 +251,16 @@ func (server *Server) Connect(stream runnerv1.RunnerControl_ConnectServer) (retu
 			}
 			continue
 		}
+		if accepted.event.Kind == EventDataPlaneDirect {
+			if err := server.answerDirectDataPlaneConsumption(
+				stream.Context(), sender,
+				accepted.event.Message.GetDataPlaneDirectConsume(),
+				accepted.receivedAt,
+			); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := server.persistEvent(
 			stream.Context(),
 			accepted.event,
@@ -246,6 +269,15 @@ func (server *Server) Connect(stream runnerv1.RunnerControl_ConnectServer) (retu
 			return err
 		}
 		if accepted.event.Kind == EventRegistration {
+			if server.config.LiveDataPlane != nil {
+				detach, err := server.config.LiveDataPlane.AttachConnection(
+					identity.RunnerID, connectionID, sender, session,
+				)
+				if err != nil {
+					return err
+				}
+				defer detach()
+			}
 			failures := make(chan error, 1)
 			outboundFailures = failures
 			go server.pumpOutboundFrames(
@@ -621,6 +653,49 @@ func (server *Server) answerDirectPortConsumption(
 	return nil
 }
 
+func (server *Server) answerDirectDataPlaneConsumption(
+	ctx context.Context,
+	sender controlPlaneFrameSender,
+	consume *runnerv1.DataPlaneDirectConsume,
+	receivedAt time.Time,
+) error {
+	if consume == nil || consume.Fence == nil || consume.OperationId == "" ||
+		consume.StreamId == "" || len(consume.CredentialDigest) == 0 ||
+		(consume.Kind != runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC &&
+			consume.Kind != runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE) {
+		return fmt.Errorf("%w: direct data-plane consumption identity is incomplete", ErrRunnerMessage)
+	}
+	admission := &runnerv1.DataPlaneDirectAdmission{
+		MessageId: consume.MessageId, Fence: consume.Fence,
+		OperationId: consume.OperationId, StreamId: consume.StreamId, Kind: consume.Kind,
+		Admission: runnerv1.DataPlaneDirectAdmissionKind_DATA_PLANE_DIRECT_ADMISSION_KIND_ADMITTED,
+	}
+	if server.config.DirectDataPlane == nil {
+		admission.Admission = runnerv1.DataPlaneDirectAdmissionKind_DATA_PLANE_DIRECT_ADMISSION_KIND_DENIED
+		admission.SafeDetail = "direct data-plane transport is unavailable"
+	} else if err := server.config.DirectDataPlane.ConsumeDirectDataPlane(
+		ctx,
+		DirectDataPlaneConsumption{
+			SessionID: consume.OperationId, AssignmentID: consume.Fence.AssignmentId,
+			Generation:       int64(consume.Fence.SandboxGeneration),
+			FencingToken:     consume.Fence.FencingToken,
+			CredentialDigest: consume.CredentialDigest, Now: receivedAt,
+		},
+	); err != nil {
+		slog.InfoContext(ctx, "SecondBox direct data-plane credential consumption denied", "sessionId", consume.OperationId, "error", err)
+		admission.Admission = runnerv1.DataPlaneDirectAdmissionKind_DATA_PLANE_DIRECT_ADMISSION_KIND_DENIED
+		admission.SafeDetail = "data-plane credential was rejected"
+	}
+	if err := sender.Send(&runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_DataPlaneDirectAdmission{
+			DataPlaneDirectAdmission: admission,
+		},
+	}); err != nil {
+		return fmt.Errorf("SecondBox runner control send direct data-plane admission: %w", err)
+	}
+	return nil
+}
+
 func (server *Server) persistEvent(ctx context.Context, event Event, receivedAt time.Time) error {
 	switch event.Kind {
 	case EventDuplicate:
@@ -634,7 +709,12 @@ func (server *Server) persistEvent(ctx context.Context, event Event, receivedAt 
 	case EventAssignment, EventFence, EventDrain, EventEvidence, EventInstanceTerminal,
 		EventLocalWorkspace:
 		return errors.New("SecondBox runner durable event bypassed the persistence batch")
-	case EventExec, EventPty, EventFile, EventPort:
+	case EventExec, EventFile:
+		if server.config.LiveDataPlane == nil {
+			return ErrLiveDataPlaneUnavailable
+		}
+		return server.config.LiveDataPlane.Deliver(ctx, event)
+	case EventPty, EventPort:
 		if server.config.FrameRelay == nil {
 			return errors.New("SecondBox runner control data-plane relay is not configured")
 		}

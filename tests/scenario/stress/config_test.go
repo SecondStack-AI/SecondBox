@@ -83,6 +83,7 @@ func validStressConfig() stressConfig {
 			ArtifactRetentionSeconds: 86400, MaximumDeadlineMilliseconds: 60000,
 			MaximumBufferedOutputBytes: 1 << 20, StreamWindowBytes: 65536,
 			MaximumTransferBytes: 1 << 20, TerminalDetachSeconds: 30,
+			DataPlaneTransport: "proxied",
 		},
 		SubjectMaxSandboxes: 100, SubjectMaxActiveInstances: 20,
 		SubjectMaxConcurrentOps: 100, SubjectMaxSnapshots: 100,
