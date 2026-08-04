@@ -235,7 +235,7 @@ func TestManifestValidationUsesTheRuntimeAssetCatalogSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalogPath := filepath.Join(filepath.Dir(manifestPath), manifest.Deployment.SignedAssetCatalog)
-	incomplete := `{"assets":[{"manifestDigest":"` + developmentBundleDigest + `","signatureKeyId":"review-key"}]}`
+	incomplete := `{"assets":[{"manifestDigest":"` + developmentRuntimeDigest + `","signatureKeyId":"review-key"}]}`
 	if err := os.WriteFile(catalogPath, []byte(incomplete), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -670,7 +670,6 @@ func TestProductionQualifiesBundledAndExternalDatabaseAndObjectStoreCombinations
 				manifest.Deployment.ObjectStoreImage = digestRef
 				manifest.Deployment.ObjectStoreClientImage = digestRef
 				manifest.ObjectStore.Endpoint = "http://object-store:9000"
-				assetDigest := developmentBundleDigest
 				if databaseMode == "external" {
 					urlPath := filepath.Join(filepath.Dir(manifestPath), "secrets", "database-url-production")
 					if err := os.WriteFile(urlPath, []byte("postgres://secondbox:secret@database.example/secondbox?sslmode=verify-full\n"), 0o600); err != nil {
@@ -690,7 +689,7 @@ func TestProductionQualifiesBundledAndExternalDatabaseAndObjectStoreCombinations
 						t.Fatalf("development catalog in production error = %v", err)
 					}
 				}
-				productionCatalog := `{"assets":[{"artifactId":"secondbox-production-test","manifestDigest":"` + assetDigest + `","signatureKeyId":"operator-production-trust","architecture":"amd64","guestProtocolGeneration":1,"mandatoryGuestFeatures":[]}]}` + "\n"
+				productionCatalog := `{"assets":[{"artifactId":"secondbox-development-runtime","manifestDigest":"` + developmentRuntimeDigest + `","signatureKeyId":"` + strings.Repeat("d", 64) + `","architecture":"amd64","guestProtocolGeneration":1,"mandatoryGuestFeatures":[]},{"artifactId":"secondbox-development-toolchain","manifestDigest":"` + developmentToolchainDigest + `","signatureKeyId":"` + strings.Repeat("d", 64) + `","architecture":"amd64","guestProtocolGeneration":1,"mandatoryGuestFeatures":[]}]}` + "\n"
 				if err := os.WriteFile(filepath.Join(filepath.Dir(manifestPath), manifest.Deployment.SignedAssetCatalog), []byte(productionCatalog), 0o600); err != nil {
 					t.Fatal(err)
 				}

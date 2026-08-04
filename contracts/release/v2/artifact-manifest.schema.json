@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://secondbox.dev/contracts/release/v2/artifact-manifest.schema.json",
+  "title": "SecondBox coordinated release artifact manifest v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "version", "tag", "sourceCommit", "openapi", "runnerProtocol", "guestProtocol", "platforms", "goSdk", "typeScriptSdk", "controlPlane", "runner", "microvm", "binaries", "sboms", "artifactAttestations", "sourceFreeSuite", "standardBundles"],
+  "properties": {
+    "schemaVersion": {"const": "secondbox.release/artifact-manifest/v2"},
+    "version": {"$ref": "../v1/common.schema.json#/$defs/identity/properties/version"},
+    "tag": {"$ref": "../v1/common.schema.json#/$defs/identity/properties/tag"},
+    "sourceCommit": {"$ref": "../v1/common.schema.json#/$defs/identity/properties/sourceCommit"},
+    "openapi": {"$ref": "#/$defs/openapi"},
+    "runnerProtocol": {"$ref": "../v1/common.schema.json#/$defs/protocolWindow"},
+    "guestProtocol": {"$ref": "../v1/common.schema.json#/$defs/protocolWindow"},
+    "platforms": {"$ref": "#/$defs/platforms"},
+    "goSdk": {"$ref": "#/$defs/sdk"},
+    "typeScriptSdk": {"$ref": "#/$defs/sdk"},
+    "controlPlane": {"$ref": "#/$defs/oci"},
+    "runner": {"$ref": "#/$defs/oci"},
+    "microvm": {"$ref": "#/$defs/microvm"},
+    "binaries": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/binary"}},
+    "sboms": {"type": "array", "minItems": 1, "items": {"$ref": "../v1/common.schema.json#/$defs/reference"}},
+    "artifactAttestations": {"type": "array", "minItems": 1, "items": {"$ref": "../v1/common.schema.json#/$defs/reference"}},
+    "sourceFreeSuite": {"$ref": "../v1/common.schema.json#/$defs/reference"},
+    "standardBundles": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"$ref": "#/$defs/bundle"}}
+  },
+  "$defs": {
+    "identified": {
+      "type": "object",
+      "required": ["identity"],
+      "properties": {"identity": {"$ref": "../v1/common.schema.json#/$defs/identity"}}
+    },
+    "openapi": {
+      "allOf": [
+        {"$ref": "#/$defs/identified"},
+        {"type": "object", "additionalProperties": false, "required": ["identity", "location", "digest"], "properties": {"identity": {"$ref": "../v1/common.schema.json#/$defs/identity"}, "location": {"$ref": "../v1/common.schema.json#/$defs/reference/properties/location"}, "digest": {"$ref": "../v1/common.schema.json#/$defs/reference/properties/digest"}}}
+      ]
+    },
+    "platforms": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hostBinaries", "controlPlane", "runner", "guest", "qualifiedRunnerGuest"],
+      "properties": {
+        "hostBinaries": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "../v1/common.schema.json#/$defs/platform"}},
+        "controlPlane": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "../v1/common.schema.json#/$defs/platform"}},
+        "runner": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "../v1/common.schema.json#/$defs/platform"}},
+        "guest": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "../v1/common.schema.json#/$defs/platform"}},
+        "qualifiedRunnerGuest": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "../v1/common.schema.json#/$defs/platform"}}
+      }
+    },
+    "sdk": {
+      "type": "object", "additionalProperties": false, "required": ["identity", "coordinate", "package"],
+      "properties": {"identity": {"$ref": "../v1/common.schema.json#/$defs/identity"}, "coordinate": {"type": "string", "minLength": 1}, "package": {"$ref": "../v1/common.schema.json#/$defs/reference"}}
+    },
+    "oci": {
+      "type": "object", "additionalProperties": false, "required": ["identity", "reference"],
+      "properties": {"identity": {"$ref": "../v1/common.schema.json#/$defs/identity"}, "reference": {"type": "string", "pattern": "^ghcr\\.io/secondstack-ai/secondbox/[a-z-]+@sha256:[0-9a-f]{64}$"}}
+    },
+    "signedComponent": {
+      "type": "object", "additionalProperties": false, "required": ["artifactId", "manifestDigest", "mandatoryGuestFeatures"],
+      "properties": {
+        "artifactId": {"type": "string", "minLength": 1},
+        "manifestDigest": {"$ref": "../v1/common.schema.json#/$defs/reference/properties/digest"},
+        "mandatoryGuestFeatures": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "microvm": {
+      "type": "object", "additionalProperties": false, "required": ["identity", "imageReference", "signedManifestDigest", "signingKeyFingerprint", "runtimeBundle", "toolchainBundle"],
+      "properties": {
+        "identity": {"$ref": "../v1/common.schema.json#/$defs/identity"},
+        "imageReference": {"type": "string"},
+        "signedManifestDigest": {"$ref": "../v1/common.schema.json#/$defs/reference/properties/digest"},
+        "signingKeyFingerprint": {"type": "string", "pattern": "^SHA256:[0-9A-F]{64}$"},
+        "runtimeBundle": {"$ref": "#/$defs/signedComponent"},
+        "toolchainBundle": {"$ref": "#/$defs/signedComponent"}
+      }
+    },
+    "binary": {
+      "type": "object", "additionalProperties": false, "required": ["identity", "name", "platform", "location", "sha256"],
+      "properties": {"identity": {"$ref": "../v1/common.schema.json#/$defs/identity"}, "name": {"enum": ["secondbox", "secondbox-deploy"]}, "platform": {"$ref": "../v1/common.schema.json#/$defs/platform"}, "location": {"type": "string", "format": "uri", "pattern": "^https://"}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+    },
+    "profileIdentity": {
+      "type": "object", "additionalProperties": false, "required": ["name", "revision", "specDigest"],
+      "properties": {"name": {"type": "string"}, "revision": {"type": "integer", "minimum": 1}, "specDigest": {"$ref": "../v1/common.schema.json#/$defs/reference/properties/digest"}}
+    },
+    "bundle": {
+      "type": "object", "additionalProperties": false, "required": ["identity", "name", "document", "profiles"],
+      "properties": {"identity": {"$ref": "../v1/common.schema.json#/$defs/identity"}, "name": {"enum": ["agent-compartment", "durable-coding"]}, "document": {"$ref": "../v1/common.schema.json#/$defs/reference"}, "profiles": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/profileIdentity"}}}
+    }
+  }
+}

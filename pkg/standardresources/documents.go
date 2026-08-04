@@ -10,28 +10,30 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/resourceapply"
 )
 
-const BundleSchemaVersion = "secondbox.standard-bundle/v1"
+const BundleSchemaVersion = "secondbox.standard-bundle/v2"
 
 type BundleDocument struct {
-	SchemaVersion        string                `json:"schemaVersion"`
-	Name                 string                `json:"name"`
-	Architecture         string                `json:"architecture"`
-	RunnerPoolSelector   string                `json:"runnerPoolSelector"`
-	LogicalGateway       string                `json:"logicalGateway"`
-	SignedManifestDigest string                `json:"signedManifestDigest"`
-	Profile              resourceapply.Profile `json:"profile"`
-	ParameterSchema      json.RawMessage       `json:"parameterSchema"`
+	SchemaVersion         string                `json:"schemaVersion"`
+	Name                  string                `json:"name"`
+	Architecture          string                `json:"architecture"`
+	RunnerPoolSelector    string                `json:"runnerPoolSelector"`
+	LogicalGateway        string                `json:"logicalGateway"`
+	SignedManifestDigest  string                `json:"signedManifestDigest"`
+	RuntimeBundleDigest   string                `json:"runtimeBundleDigest"`
+	ToolchainBundleDigest string                `json:"toolchainBundleDigest"`
+	Profile               resourceapply.Profile `json:"profile"`
+	ParameterSchema       json.RawMessage       `json:"parameterSchema"`
 }
 
-func Documents(assetDigest string) ([]BundleDocument, error) {
+func Documents(signedManifestDigest, runtimeBundleDigest, toolchainBundleDigest string) ([]BundleDocument, error) {
 	result := make([]BundleDocument, 0, 2)
 	for _, name := range []string{AgentCompartment, DurableCoding} {
-		profile, err := ProfileLineage(name, assetDigest)
+		profile, err := ProfileLineage(name, runtimeBundleDigest, toolchainBundleDigest)
 		if err != nil {
 			return nil, err
 		}
 		gateway := map[string]string{AgentCompartment: AgentGateway, DurableCoding: PlatformGateway}[name]
-		document := BundleDocument{SchemaVersion: BundleSchemaVersion, Name: name, Architecture: ArchitectureAMD64, RunnerPoolSelector: PoolAMD64, LogicalGateway: gateway, SignedManifestDigest: assetDigest, Profile: profile, ParameterSchema: poolParameterSchema()}
+		document := BundleDocument{SchemaVersion: BundleSchemaVersion, Name: name, Architecture: ArchitectureAMD64, RunnerPoolSelector: PoolAMD64, LogicalGateway: gateway, SignedManifestDigest: signedManifestDigest, RuntimeBundleDigest: runtimeBundleDigest, ToolchainBundleDigest: toolchainBundleDigest, Profile: profile, ParameterSchema: poolParameterSchema()}
 		if err := document.Validate(); err != nil {
 			return nil, err
 		}
@@ -64,7 +66,10 @@ func (document BundleDocument) Validate() error {
 	if document.LogicalGateway != wantGateway {
 		return fmt.Errorf("SecondBox standard bundle %q logical gateway differs from release policy", document.Name)
 	}
-	want, err := ProfileLineage(document.Name, document.SignedManifestDigest)
+	if document.SignedManifestDigest == document.RuntimeBundleDigest || document.SignedManifestDigest == document.ToolchainBundleDigest || document.RuntimeBundleDigest == document.ToolchainBundleDigest {
+		return fmt.Errorf("SecondBox standard bundle %q signed manifest and component digests must be distinct", document.Name)
+	}
+	want, err := ProfileLineage(document.Name, document.RuntimeBundleDigest, document.ToolchainBundleDigest)
 	if err != nil {
 		return err
 	}

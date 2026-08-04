@@ -28,7 +28,7 @@ The v1 public coordinates are:
 | Qualification | `secondbox-VERSION-qualification-attestation.json` |
 | Final index | `secondbox-VERSION-release-index.json` |
 
-The release JSON schemas live in [`contracts/release/v1`](../../contracts/release/v1).
+The final-index and qualification schemas live in [`contracts/release/v1`](../../contracts/release/v1); the artifact manifest uses [`contracts/release/v2`](../../contracts/release/v2) so it carries the distinct signed runtime and toolchain component identities required by Runner admission.
 The reusable strict decoder and cross-document verifier live in
 `pkg/releasecontract`. Unknown JSON fields and trailing values are rejected.
 
@@ -51,7 +51,8 @@ Publication deliberately forms an acyclic chain:
 
 1. The artifact manifest identifies all immutable release objects, the public
    OpenAPI digest, protocol windows, platform matrix, standard bundle lineage,
-   signed guest identity, and exact source-free qualification-suite bytes. It
+   signed guest identity, its distinct runtime and toolchain component records,
+   and exact source-free qualification-suite bytes. It
    contains no source-free qualification claim.
 2. The qualification attestation identifies the exact artifact-manifest URL and
    digest and records the source-free suite, selected protocols, signed guest,
@@ -114,7 +115,7 @@ secondbox-deploy verify release-index https://github.com/SecondStack-AI/SecondBo
 secondbox-deploy init --mode production --input operator.toml --release-index URL /srv/secondbox/deployment
 ```
 
-The verifier downloads the exact manifest and qualification bytes, checks their digests and coordinated identity, checks protocol and signed-guest compatibility, verifies every referenced release asset, and validates each standard-bundle document against its recorded Profile lineage. Initialization copies the verified artifact manifest and replaces only release-owned software facts: digest-pinned control-plane and Runner images, Runner software version, and the standard-resource artifact-manifest reference. Database, object storage, authorities, secret files, trust anchors, Runner placement, host paths, gateways, capacity, and retention remain exactly as supplied by the operator manifest.
+The verifier downloads the exact manifest and qualification bytes, checks their digests and coordinated identity, checks protocol and signed-guest compatibility, verifies every referenced release asset, and validates each standard-bundle document against its recorded Profile lineage. Each standard Profile names the distinct runtime and toolchain component-manifest digests bound by the signed top-level microVM manifest. Initialization copies the verified artifact manifest and replaces only release-owned software facts: digest-pinned control-plane and Runner images, Runner software version, and the standard-resource artifact-manifest reference. Database, object storage, authorities, secret files, trust anchors, Runner placement, host paths, gateways, capacity, and retention remain exactly as supplied by the operator manifest.
 
 Before finalization, only the dedicated qualification job may use the explicit candidate form:
 

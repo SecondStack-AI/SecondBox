@@ -22,7 +22,11 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-const developmentBundleDigest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+const (
+	developmentBundleDigest    = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	developmentRuntimeDigest   = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	developmentToolchainDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
 
 func integer(value int64) *int64 { return &value }
 func boolean(value bool) *bool   { return &value }
@@ -98,7 +102,7 @@ func InitDevelopment(directory string) (string, error) {
 	if err := generateRunnerPKI(pkiDirectory, "control-plane", 825); err != nil {
 		return "", err
 	}
-	asset := `{"assets":[{"artifactId":"secondbox-development-bootstrap","manifestDigest":"` + developmentBundleDigest + `","signatureKeyId":"secondbox-development-local-trust","architecture":"amd64","guestProtocolGeneration":1,"mandatoryGuestFeatures":[]}]}` + "\n"
+	asset := `{"assets":[{"artifactId":"secondbox-development-runtime","manifestDigest":"` + developmentRuntimeDigest + `","signatureKeyId":"secondbox-development-local-trust","architecture":"amd64","guestProtocolGeneration":1,"mandatoryGuestFeatures":[]},{"artifactId":"secondbox-development-toolchain","manifestDigest":"` + developmentToolchainDigest + `","signatureKeyId":"secondbox-development-local-trust","architecture":"amd64","guestProtocolGeneration":1,"mandatoryGuestFeatures":[]}]}` + "\n"
 	if err := writeAtomic(filepath.Join(secrets, "development-signed-assets.json"), []byte(asset), 0o600, false); err != nil {
 		return "", err
 	}
@@ -145,13 +149,13 @@ func developmentReleaseManifest() (releasecontract.ArtifactManifest, error) {
 	}
 	bundles := []releasecontract.StandardBundleArtifact{}
 	for _, name := range []string{standardresources.AgentCompartment, standardresources.DurableCoding} {
-		profile, err := standardresources.ProfileLineage(name, developmentBundleDigest)
+		profile, err := standardresources.ProfileLineage(name, developmentRuntimeDigest, developmentToolchainDigest)
 		if err != nil {
 			return releasecontract.ArtifactManifest{}, err
 		}
 		bundles = append(bundles, releasecontract.StandardBundleArtifact{Identity: identity, Name: name, Document: reference(name + ".json"), Profiles: []releasecontract.StandardProfileIdentity{{Name: name, Revision: 1, SpecDigest: profile.Revisions[0].SpecDigest}}})
 	}
-	return releasecontract.ArtifactManifest{SchemaVersion: releasecontract.ArtifactManifestSchema, Identity: identity, OpenAPI: releasecontract.OpenAPIArtifact{Identity: identity, Reference: reference("openapi.json")}, RunnerProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, GuestProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, Platforms: releasecontract.PlatformMatrix{HostBinaries: []string{platform}, ControlPlane: []string{platform}, Runner: []string{platform}, Guest: []string{platform}, QualifiedRunnerGuest: []string{platform}}, GoSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.GoModule + "@" + identity.Tag, Package: reference("go-sdk")}, TypeScriptSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.TypeScriptPackage + "@" + identity.Version, Package: reference("typescript-sdk")}, ControlPlane: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.ControlPlaneImage + "@" + developmentBundleDigest}, Runner: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.RunnerImage + "@" + developmentBundleDigest}, MicroVM: releasecontract.MicroVMArtifact{Identity: identity, ImageReference: releasecontract.MicroVMImage + "@" + developmentBundleDigest, SignedManifestDigest: developmentBundleDigest, SigningKeyFingerprint: "SHA256:" + strings.Repeat("D", 64)}, Binaries: binaries, SBOMs: []releasecontract.Reference{reference("sbom.json")}, ArtifactAttestations: []releasecontract.Reference{reference("attestation.json")}, SourceFreeSuite: releasecontract.Reference{Location: releasecontract.SourceFreeSuiteLocation(identity.Version), Digest: developmentBundleDigest}, StandardBundles: bundles}, nil
+	return releasecontract.ArtifactManifest{SchemaVersion: releasecontract.ArtifactManifestSchema, Identity: identity, OpenAPI: releasecontract.OpenAPIArtifact{Identity: identity, Reference: reference("openapi.json")}, RunnerProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, GuestProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, Platforms: releasecontract.PlatformMatrix{HostBinaries: []string{platform}, ControlPlane: []string{platform}, Runner: []string{platform}, Guest: []string{platform}, QualifiedRunnerGuest: []string{platform}}, GoSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.GoModule + "@" + identity.Tag, Package: reference("go-sdk")}, TypeScriptSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.TypeScriptPackage + "@" + identity.Version, Package: reference("typescript-sdk")}, ControlPlane: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.ControlPlaneImage + "@" + developmentBundleDigest}, Runner: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.RunnerImage + "@" + developmentBundleDigest}, MicroVM: releasecontract.MicroVMArtifact{Identity: identity, ImageReference: releasecontract.MicroVMImage + "@" + developmentBundleDigest, SignedManifestDigest: developmentBundleDigest, SigningKeyFingerprint: "SHA256:" + strings.Repeat("D", 64), RuntimeBundle: releasecontract.SignedComponent{ArtifactID: "secondbox-development-runtime", ManifestDigest: developmentRuntimeDigest, MandatoryGuestFeatures: []string{}}, ToolchainBundle: releasecontract.SignedComponent{ArtifactID: "secondbox-development-toolchain", ManifestDigest: developmentToolchainDigest, MandatoryGuestFeatures: []string{}}}, Binaries: binaries, SBOMs: []releasecontract.Reference{reference("sbom.json")}, ArtifactAttestations: []releasecontract.Reference{reference("attestation.json")}, SourceFreeSuite: releasecontract.Reference{Location: releasecontract.SourceFreeSuiteLocation(identity.Version), Digest: developmentBundleDigest}, StandardBundles: bundles}, nil
 }
 
 func encodeManifest(manifest ManifestV1) ([]byte, error) {

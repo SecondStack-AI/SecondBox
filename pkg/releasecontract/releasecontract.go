@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	ArtifactManifestSchema         = "secondbox.release/artifact-manifest/v1"
+	ArtifactManifestSchema         = "secondbox.release/artifact-manifest/v2"
 	QualificationAttestationSchema = "secondbox.release/qualification-attestation/v1"
 	ReleaseIndexSchema             = "secondbox.release/release-index/v1"
 
@@ -100,11 +100,21 @@ type StandardBundleArtifact struct {
 	Profiles []StandardProfileIdentity `json:"profiles"`
 }
 
+// SignedComponent is one independently selected component bound by the signed
+// top-level microVM manifest.
+type SignedComponent struct {
+	ArtifactID             string   `json:"artifactId"`
+	ManifestDigest         string   `json:"manifestDigest"`
+	MandatoryGuestFeatures []string `json:"mandatoryGuestFeatures"`
+}
+
 type MicroVMArtifact struct {
-	Identity              Identity `json:"identity"`
-	ImageReference        string   `json:"imageReference"`
-	SignedManifestDigest  string   `json:"signedManifestDigest"`
-	SigningKeyFingerprint string   `json:"signingKeyFingerprint"`
+	Identity              Identity        `json:"identity"`
+	ImageReference        string          `json:"imageReference"`
+	SignedManifestDigest  string          `json:"signedManifestDigest"`
+	SigningKeyFingerprint string          `json:"signingKeyFingerprint"`
+	RuntimeBundle         SignedComponent `json:"runtimeBundle"`
+	ToolchainBundle       SignedComponent `json:"toolchainBundle"`
 }
 
 // ArtifactManifest contains immutable artifact identity only. Qualification is
@@ -292,6 +302,20 @@ func (manifest ArtifactManifest) Validate() error {
 	if !keyPattern.MatchString(manifest.MicroVM.SigningKeyFingerprint) {
 		return contractError("microVM signing key fingerprint must be SHA256 followed by 64 uppercase hexadecimal characters")
 	}
+	if err := validateSignedComponent("microVM runtime bundle", manifest.MicroVM.RuntimeBundle); err != nil {
+		return err
+	}
+	if err := validateSignedComponent("microVM toolchain bundle", manifest.MicroVM.ToolchainBundle); err != nil {
+		return err
+	}
+	if manifest.MicroVM.RuntimeBundle.ArtifactID == manifest.MicroVM.ToolchainBundle.ArtifactID ||
+		manifest.MicroVM.RuntimeBundle.ManifestDigest == manifest.MicroVM.ToolchainBundle.ManifestDigest {
+		return contractError("microVM runtime and toolchain components must have distinct identities")
+	}
+	if manifest.MicroVM.SignedManifestDigest == manifest.MicroVM.RuntimeBundle.ManifestDigest ||
+		manifest.MicroVM.SignedManifestDigest == manifest.MicroVM.ToolchainBundle.ManifestDigest {
+		return contractError("microVM signed manifest and component digests must be distinct")
+	}
 	if err := validateBinaries(manifest); err != nil {
 		return err
 	}
@@ -311,6 +335,23 @@ func (manifest ArtifactManifest) Validate() error {
 	}
 	if err := validateBundles(manifest.StandardBundles); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateSignedComponent(name string, component SignedComponent) error {
+	if strings.TrimSpace(component.ArtifactID) == "" {
+		return contractError("%s artifact ID is required", name)
+	}
+	if !digestPattern.MatchString(component.ManifestDigest) {
+		return contractError("%s manifest digest must be canonical sha256", name)
+	}
+	seen := make(map[string]bool, len(component.MandatoryGuestFeatures))
+	for _, feature := range component.MandatoryGuestFeatures {
+		if strings.TrimSpace(feature) == "" || seen[feature] {
+			return contractError("%s mandatory guest features must be unique non-empty values", name)
+		}
+		seen[feature] = true
 	}
 	return nil
 }

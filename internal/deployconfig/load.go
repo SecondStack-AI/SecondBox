@@ -893,8 +893,28 @@ func resolveStandardResources(base string, manifest ManifestV1, catalog assetcat
 	if err != nil {
 		return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
 	}
-	if _, err := catalog.Resolve(releaseManifest.MicroVM.SignedManifestDigest); err != nil {
-		return resourceapply.Document{}, manifestError("standard_resources artifact manifest microVM identity must exist in deployment.signed_asset_catalog", err)
+	expectedKeyID := strings.ToLower(strings.TrimPrefix(releaseManifest.MicroVM.SigningKeyFingerprint, "SHA256:"))
+	components := []releasecontract.SignedComponent{releaseManifest.MicroVM.RuntimeBundle, releaseManifest.MicroVM.ToolchainBundle}
+	for _, component := range components {
+		asset, err := catalog.Resolve(component.ManifestDigest)
+		if err != nil {
+			return resourceapply.Document{}, manifestError("standard_resources artifact manifest component identity must exist in deployment.signed_asset_catalog", err)
+		}
+		if asset.ArtifactID != component.ArtifactID || asset.ManifestDigest != component.ManifestDigest ||
+			asset.Architecture != standardresources.ArchitectureAMD64 || asset.GuestProtocolGeneration != releaseManifest.GuestProtocol.Maximum ||
+			!slices.Equal(asset.MandatoryGuestFeatures, component.MandatoryGuestFeatures) {
+			return resourceapply.Document{}, manifestError("standard_resources artifact manifest component identity differs from deployment.signed_asset_catalog", nil)
+		}
+		if manifest.Deployment.Mode == "production" && asset.SignatureKeyID != expectedKeyID {
+			return resourceapply.Document{}, manifestError("standard_resources artifact manifest signing identity differs from deployment.signed_asset_catalog", nil)
+		}
+	}
+	if manifest.Deployment.Mode == "production" {
+		for index, runner := range manifest.Runners {
+			if runner.PoolID == standardresources.PoolAMD64 && runner.ArtifactPublicKeySHA256 != expectedKeyID {
+				return resourceapply.Document{}, manifestError(fmt.Sprintf("runners[%d].artifact_public_key_sha256 differs from standard_resources artifact manifest signing identity", index), nil)
+			}
+		}
 	}
 	pools := make(map[string]standardresources.PoolBinding, len(manifest.StandardResources.RunnerPools))
 	for _, configured := range manifest.StandardResources.RunnerPools {

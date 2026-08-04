@@ -16,13 +16,15 @@ import (
 )
 
 type candidateInput struct {
-	Version                      string `json:"version"`
-	SourceCommit                 string `json:"sourceCommit"`
-	ControlPlaneDigest           string `json:"controlPlaneDigest"`
-	RunnerDigest                 string `json:"runnerDigest"`
-	MicroVMImageDigest           string `json:"microvmImageDigest"`
-	MicroVMManifestDigest        string `json:"microvmManifestDigest"`
-	MicroVMSigningKeyFingerprint string `json:"microvmSigningKeyFingerprint"`
+	Version                      string                          `json:"version"`
+	SourceCommit                 string                          `json:"sourceCommit"`
+	ControlPlaneDigest           string                          `json:"controlPlaneDigest"`
+	RunnerDigest                 string                          `json:"runnerDigest"`
+	MicroVMImageDigest           string                          `json:"microvmImageDigest"`
+	MicroVMManifestDigest        string                          `json:"microvmManifestDigest"`
+	MicroVMSigningKeyFingerprint string                          `json:"microvmSigningKeyFingerprint"`
+	MicroVMRuntimeBundle         releasecontract.SignedComponent `json:"microvmRuntimeBundle"`
+	MicroVMToolchainBundle       releasecontract.SignedComponent `json:"microvmToolchainBundle"`
 }
 
 func main() {
@@ -33,8 +35,8 @@ func main() {
 }
 
 func run(args []string) error {
-	if len(args) == 3 && args[0] == "standard-documents" {
-		return writeStandardDocuments(args[1], args[2])
+	if len(args) == 5 && args[0] == "standard-documents" {
+		return writeStandardDocuments(args[1], args[2], args[3], args[4])
 	}
 	if len(args) == 3 && args[0] == "manifest" {
 		return writeManifest(args[1], args[2])
@@ -57,7 +59,7 @@ func run(args []string) error {
 	if len(args) == 4 && args[0] == "verify-publication-sources" {
 		return verifyPublicationSources(args[1], args[2], args[3])
 	}
-	return errors.New("usage: secondbox-release-tool {standard-documents ASSET_DIGEST OUTPUT_DIR|manifest INPUT_JSON OUTPUT_DIR|verify STAGING_DIR|verify-candidate-evidence ARTIFACT_MANIFEST EVIDENCE|candidate-evidence ARTIFACT_MANIFEST RUNNER_ENVIRONMENT_DIGEST OUTPUT|publication-input STAGING_DIR EVIDENCE OUTPUT|verify-publication-input INPUT_DIR|verify-publication-sources STAGING_DIR EVIDENCE INPUT}")
+	return errors.New("usage: secondbox-release-tool {standard-documents SIGNED_MANIFEST_DIGEST RUNTIME_BUNDLE_DIGEST TOOLCHAIN_BUNDLE_DIGEST OUTPUT_DIR|manifest INPUT_JSON OUTPUT_DIR|verify STAGING_DIR|verify-candidate-evidence ARTIFACT_MANIFEST EVIDENCE|candidate-evidence ARTIFACT_MANIFEST RUNNER_ENVIRONMENT_DIGEST OUTPUT|publication-input STAGING_DIR EVIDENCE OUTPUT|verify-publication-input INPUT_DIR|verify-publication-sources STAGING_DIR EVIDENCE INPUT}")
 }
 
 func writeCandidateEvidence(manifestPath, runnerEnvironment, outputPath string) error {
@@ -155,8 +157,8 @@ func verifyCandidateEvidence(manifestPath, evidencePath string) error {
 	return releasepublish.ValidateEvidence(evidence, manifest, releasecontract.Digest(manifestData))
 }
 
-func writeStandardDocuments(assetDigest, outputDirectory string) error {
-	documents, err := standardresources.Documents(assetDigest)
+func writeStandardDocuments(signedManifestDigest, runtimeBundleDigest, toolchainBundleDigest, outputDirectory string) error {
+	documents, err := standardresources.Documents(signedManifestDigest, runtimeBundleDigest, toolchainBundleDigest)
 	if err != nil {
 		return err
 	}
@@ -254,7 +256,7 @@ func writeManifest(inputPath, outputDirectory string) error {
 		}
 		bundles = append(bundles, releasecontract.StandardBundleArtifact{Identity: identity, Name: name, Document: bundleRef, Profiles: profiles})
 	}
-	manifest := releasecontract.ArtifactManifest{SchemaVersion: releasecontract.ArtifactManifestSchema, Identity: identity, OpenAPI: releasecontract.OpenAPIArtifact{Identity: identity, Reference: openapi}, RunnerProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, GuestProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, Platforms: releasecontract.PlatformMatrix{HostBinaries: []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"}, ControlPlane: []string{"linux/amd64", "linux/arm64"}, Runner: []string{"linux/amd64"}, Guest: []string{"linux/amd64"}, QualifiedRunnerGuest: []string{"linux/amd64"}}, GoSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.GoModule + "@" + tag, Package: goPackage}, TypeScriptSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.TypeScriptPackage + "@" + input.Version, Package: tsPackage}, ControlPlane: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.ControlPlaneImage + "@" + input.ControlPlaneDigest}, Runner: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.RunnerImage + "@" + input.RunnerDigest}, MicroVM: releasecontract.MicroVMArtifact{Identity: identity, ImageReference: releasecontract.MicroVMImage + "@" + input.MicroVMImageDigest, SignedManifestDigest: input.MicroVMManifestDigest, SigningKeyFingerprint: "SHA256:" + strings.ToUpper(input.MicroVMSigningKeyFingerprint)}, Binaries: binaries, SBOMs: []releasecontract.Reference{sbom}, ArtifactAttestations: []releasecontract.Reference{attestation}, SourceFreeSuite: sourceFreeSuite, StandardBundles: bundles}
+	manifest := releasecontract.ArtifactManifest{SchemaVersion: releasecontract.ArtifactManifestSchema, Identity: identity, OpenAPI: releasecontract.OpenAPIArtifact{Identity: identity, Reference: openapi}, RunnerProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, GuestProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, Platforms: releasecontract.PlatformMatrix{HostBinaries: []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"}, ControlPlane: []string{"linux/amd64", "linux/arm64"}, Runner: []string{"linux/amd64"}, Guest: []string{"linux/amd64"}, QualifiedRunnerGuest: []string{"linux/amd64"}}, GoSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.GoModule + "@" + tag, Package: goPackage}, TypeScriptSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.TypeScriptPackage + "@" + input.Version, Package: tsPackage}, ControlPlane: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.ControlPlaneImage + "@" + input.ControlPlaneDigest}, Runner: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.RunnerImage + "@" + input.RunnerDigest}, MicroVM: releasecontract.MicroVMArtifact{Identity: identity, ImageReference: releasecontract.MicroVMImage + "@" + input.MicroVMImageDigest, SignedManifestDigest: input.MicroVMManifestDigest, SigningKeyFingerprint: "SHA256:" + strings.ToUpper(input.MicroVMSigningKeyFingerprint), RuntimeBundle: input.MicroVMRuntimeBundle, ToolchainBundle: input.MicroVMToolchainBundle}, Binaries: binaries, SBOMs: []releasecontract.Reference{sbom}, ArtifactAttestations: []releasecontract.Reference{attestation}, SourceFreeSuite: sourceFreeSuite, StandardBundles: bundles}
 	if err := manifest.Validate(); err != nil {
 		return err
 	}

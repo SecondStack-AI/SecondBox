@@ -72,12 +72,13 @@ func TestStandardResourcesFreshUpgradeAndReplayConvergeThroughLiveControlPlane(t
 
 func liveStandardDocument(t *testing.T) resourceapply.Document {
 	t.Helper()
-	digest := "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-	agent, err := standardresources.ProfileLineage(standardresources.AgentCompartment, digest)
+	runtimeDigest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	toolchainDigest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	agent, err := standardresources.ProfileLineage(standardresources.AgentCompartment, runtimeDigest, toolchainDigest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	coding, err := standardresources.ProfileLineage(standardresources.DurableCoding, digest)
+	coding, err := standardresources.ProfileLineage(standardresources.DurableCoding, runtimeDigest, toolchainDigest)
 	if err != nil {
 		t.Fatal(err)
 	}

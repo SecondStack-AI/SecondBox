@@ -60,7 +60,7 @@ func Build(manifest releasecontract.ArtifactManifest, selection Selection) (reso
 			return resourceapply.Document{}, err
 		}
 		document.RunnerPools = updatedPools
-		profile, err := ProfileLineage(name, manifest.MicroVM.SignedManifestDigest)
+		profile, err := ProfileLineage(name, manifest.MicroVM.RuntimeBundle.ManifestDigest, manifest.MicroVM.ToolchainBundle.ManifestDigest)
 		if err != nil {
 			return resourceapply.Document{}, err
 		}
@@ -76,13 +76,13 @@ func Build(manifest releasecontract.ArtifactManifest, selection Selection) (reso
 }
 
 // ProfileLineage returns the complete ordered lineage for one architecture-qualified standard Profile.
-func ProfileLineage(name, assetDigest string) (resourceapply.Profile, error) {
+func ProfileLineage(name, runtimeDigest, toolchainDigest string) (resourceapply.Profile, error) {
 	var spec secondboxclient.ProfileRevisionSpec
 	switch name {
 	case AgentCompartment:
-		spec = agentSpec(PoolAMD64, assetDigest)
+		spec = agentSpec(PoolAMD64, runtimeDigest, toolchainDigest)
 	case DurableCoding:
-		spec = codingSpec(PoolAMD64, assetDigest)
+		spec = codingSpec(PoolAMD64, runtimeDigest, toolchainDigest)
 	default:
 		return resourceapply.Profile{}, fmt.Errorf("SecondBox standard bundle %q is unknown", name)
 	}
@@ -124,9 +124,9 @@ func appendOrValidatePool(pools []resourceapply.RunnerPool, binding PoolBinding)
 	return append(pools, resourceapply.RunnerPool{Name: binding.Name, Architectures: binding.Architectures, Capabilities: binding.Capabilities, CapacityPolicy: binding.CapacityPolicy, State: binding.State, MutableFields: []string{"capacityPolicy", "state"}}), nil
 }
 
-func agentSpec(pool, digest string) secondboxclient.ProfileRevisionSpec {
+func agentSpec(pool, runtimeDigest, toolchainDigest string) secondboxclient.ProfileRevisionSpec {
 	return secondboxclient.ProfileRevisionSpec{
-		Pool: pool, Architecture: ArchitectureAMD64, RuntimeBundleDigest: digest, ToolchainBundleDigest: digest,
+		Pool: pool, Architecture: ArchitectureAMD64, RuntimeBundleDigest: runtimeDigest, ToolchainBundleDigest: toolchainDigest,
 		Resources: secondboxclient.ResourcePolicy{CPUMillis: 1000, MemoryBytes: 1 << 30, WorkspaceBytes: 2 << 30, ProcessLimit: 64, ConcurrentOperations: 4},
 		Lifecycle: secondboxclient.LifecyclePolicy{InitialState: secondboxclient.SandboxDesiredStateRunning, DrainGraceSeconds: 10, IdleSeconds: 60, MaximumDurationSeconds: 900, LeaseSeconds: 60},
 		Retention: secondboxclient.RetentionPolicy{SnapshotLimit: 0, SnapshotRetentionSeconds: 3600, ArtifactRetentionSeconds: 86400},
@@ -136,9 +136,9 @@ func agentSpec(pool, digest string) secondboxclient.ProfileRevisionSpec {
 	}
 }
 
-func codingSpec(pool, digest string) secondboxclient.ProfileRevisionSpec {
+func codingSpec(pool, runtimeDigest, toolchainDigest string) secondboxclient.ProfileRevisionSpec {
 	return secondboxclient.ProfileRevisionSpec{
-		Pool: pool, Architecture: ArchitectureAMD64, RuntimeBundleDigest: digest, ToolchainBundleDigest: digest,
+		Pool: pool, Architecture: ArchitectureAMD64, RuntimeBundleDigest: runtimeDigest, ToolchainBundleDigest: toolchainDigest,
 		Resources: secondboxclient.ResourcePolicy{CPUMillis: 4000, MemoryBytes: 8 << 30, WorkspaceBytes: 50 << 30, ProcessLimit: 512, ConcurrentOperations: 16},
 		Lifecycle: secondboxclient.LifecyclePolicy{InitialState: secondboxclient.SandboxDesiredStateRunning, DrainGraceSeconds: 120, IdleSeconds: 28800, MaximumDurationSeconds: 604800, LeaseSeconds: 300},
 		Retention: secondboxclient.RetentionPolicy{SnapshotLimit: 64, SnapshotRetentionSeconds: 2592000, ArtifactRetentionSeconds: 2592000},

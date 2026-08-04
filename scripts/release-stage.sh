@@ -141,6 +141,14 @@ else
   "$repo_root/runner/scripts/microvm-image/verify.sh" "$microvm_source" "$microvm_key" "$microvm_fingerprint"
 fi
 microvm_manifest_digest="sha256:$(sha256sum "$microvm_source/manifest.json" | awk '{print $1}')"
+microvm_runtime_bundle="$(jq -ce '.runtimeBundle | {artifactId,manifestDigest,mandatoryGuestFeatures}' "$microvm_source/manifest.json")"
+microvm_toolchain_bundle="$(jq -ce '.toolchainBundle | {artifactId,manifestDigest,mandatoryGuestFeatures}' "$microvm_source/manifest.json")"
+microvm_runtime_digest="$(jq -er '.manifestDigest' <<<"$microvm_runtime_bundle")"
+microvm_toolchain_digest="$(jq -er '.manifestDigest' <<<"$microvm_toolchain_bundle")"
+[[ "$microvm_runtime_digest" != "$microvm_toolchain_digest" && "$microvm_runtime_digest" != "$microvm_manifest_digest" && "$microvm_toolchain_digest" != "$microvm_manifest_digest" ]] || {
+  echo "microVM signed manifest must bind distinct runtime and toolchain component digests" >&2
+  exit 1
+}
 
 public_contract_digest="sha256:$(sha256sum "$output_dir/$openapi_name" | awk '{print $1}')"
 if $test_mode; then
@@ -159,12 +167,12 @@ else
   microvm_image_digest="$(jq -er '."containerimage.digest"' "$output_dir/microvm-artifacts.oci.json")"
 fi
 
-go -C "$repo_root" run ./cmd/secondbox-release-tool standard-documents "$microvm_manifest_digest" "$output_dir"
+go -C "$repo_root" run ./cmd/secondbox-release-tool standard-documents "$microvm_manifest_digest" "$microvm_runtime_digest" "$microvm_toolchain_digest" "$output_dir"
 
 jq -n --arg version "$version" --arg commit "$source_commit" --arg ts "$typescript_name" --arg go "secondbox-${version}-go-module.tar.gz" '{schemaVersion:1,version:$version,sourceCommit:$commit,typeScriptPackage:$ts,goModuleArchive:$go}' >"$output_dir/secondbox-${version}-package-metadata.json"
 jq -n --arg version "$version" --arg commit "$source_commit" '{spdxVersion:"SPDX-2.3",dataLicense:"CC0-1.0",SPDXID:"SPDXRef-DOCUMENT",name:("SecondBox-"+$version),documentNamespace:("https://github.com/SecondStack-AI/SecondBox/releases/tag/v"+$version),creationInfo:{creators:["Organization: SecondStack AI"],comment:("deterministic source commit "+$commit)},packages:[{name:"SecondBox",SPDXID:"SPDXRef-Package-SecondBox",versionInfo:$version,downloadLocation:("git+https://github.com/SecondStack-AI/SecondBox.git@"+$commit),filesAnalyzed:false}]}' >"$output_dir/secondbox-${version}.spdx.json"
 jq -n --arg version "$version" --arg commit "$source_commit" --arg contract "$public_contract_digest" --arg guest "$microvm_manifest_digest" '{_type:"https://in-toto.io/Statement/v1",subject:[],predicateType:"https://slsa.dev/provenance/v1",predicate:{buildDefinition:{buildType:"https://github.com/SecondStack-AI/SecondBox/release-stage/v1",externalParameters:{version:$version,sourceCommit:$commit,publicContractDigest:$contract,signedGuestManifestDigest:$guest}},runDetails:{builder:{id:"https://github.com/SecondStack-AI/SecondBox"}}}}' >"$output_dir/secondbox-${version}-provenance.json"
-jq -n --arg version "$version" --arg commit "$source_commit" --arg control "$control_plane_digest" --arg runner "$runner_digest" --arg microImage "$microvm_image_digest" --arg microManifest "$microvm_manifest_digest" --arg fingerprint "$microvm_fingerprint" '{version:$version,sourceCommit:$commit,controlPlaneDigest:$control,runnerDigest:$runner,microvmImageDigest:$microImage,microvmManifestDigest:$microManifest,microvmSigningKeyFingerprint:$fingerprint}' >"$temporary/candidate-input.json"
+jq -n --arg version "$version" --arg commit "$source_commit" --arg control "$control_plane_digest" --arg runner "$runner_digest" --arg microImage "$microvm_image_digest" --arg microManifest "$microvm_manifest_digest" --arg fingerprint "$microvm_fingerprint" --argjson runtime "$microvm_runtime_bundle" --argjson toolchain "$microvm_toolchain_bundle" '{version:$version,sourceCommit:$commit,controlPlaneDigest:$control,runnerDigest:$runner,microvmImageDigest:$microImage,microvmManifestDigest:$microManifest,microvmSigningKeyFingerprint:$fingerprint,microvmRuntimeBundle:$runtime,microvmToolchainBundle:$toolchain}' >"$temporary/candidate-input.json"
 go -C "$repo_root" run ./cmd/secondbox-release-tool manifest "$temporary/candidate-input.json" "$output_dir"
 
 (

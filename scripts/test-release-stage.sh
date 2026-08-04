@@ -13,7 +13,9 @@ openssl pkey -in "$work_dir/private.pem" -pubout -out "$work_dir/public.pem" >/d
 for name in kernel kernel-provenance.json rootfs-debian-license-inventory.json rootfs-debian-packages.lock rootfs-python-license-inventory.json rootfs-python.freeze rootfs-source-manifest.json rootfs.ext4 runtime-manifest.json secondbox-rootfs-contract.json shared.img toolchain-manifest.json; do
   printf 'synthetic release-stage fixture: %s\n' "$name" >"$artifact_dir/$name"
 done
-printf '{"schemaVersion":1,"architecture":"amd64","fixture":true}\n' >"$artifact_dir/manifest.json"
+runtime_digest="sha256:$(sha256sum "$artifact_dir/runtime-manifest.json" | awk '{print $1}')"
+toolchain_digest="sha256:$(sha256sum "$artifact_dir/toolchain-manifest.json" | awk '{print $1}')"
+jq -n --arg runtime "$runtime_digest" --arg toolchain "$toolchain_digest" '{artifactVersion:"synthetic-release-stage",architecture:"amd64",guestProtocol:{minimum:1,maximum:1},runtimeBundle:{artifactId:"synthetic-runtime",path:"runtime-manifest.json",manifestDigest:$runtime,mandatoryGuestFeatures:[]},toolchainBundle:{artifactId:"synthetic-toolchain",path:"toolchain-manifest.json",manifestDigest:$toolchain,mandatoryGuestFeatures:[]}}' >"$artifact_dir/manifest.json"
 cp "$work_dir/public.pem" "$artifact_dir/signing.pub"
 (
   cd "$artifact_dir"
@@ -32,6 +34,8 @@ export SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256="$fingerprint"
 
 for stage in "$stage_one" "$stage_two"; do
   go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$stage"
+  jq -e --arg runtime "$runtime_digest" --arg toolchain "$toolchain_digest" '.schemaVersion == "secondbox.release/artifact-manifest/v2" and .microvm.runtimeBundle.manifestDigest == $runtime and .microvm.toolchainBundle.manifestDigest == $toolchain' "$stage/secondbox-0.1.0-artifact-manifest.json" >/dev/null
+  jq -e --arg runtime "$runtime_digest" --arg toolchain "$toolchain_digest" '.schemaVersion == "secondbox.standard-bundle/v2" and .profile.revisions[0].spec.runtimeBundleDigest == $runtime and .profile.revisions[0].spec.toolchainBundleDigest == $toolchain and (.profile.revisions[0].spec.runtimeBundleDigest != .profile.revisions[0].spec.toolchainBundleDigest)' "$stage/durable-coding.standard-bundle.json" >/dev/null
   [[ ! -e "$stage/qualification-attestation.json" && ! -e "$stage/release-index.json" ]] || { echo "local staging manufactured qualification/finalization evidence" >&2; exit 1; }
 done
 
