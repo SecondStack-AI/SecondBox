@@ -29,10 +29,10 @@ if ! $test_mode; then
   source_commit="$(git -C "$repo_root" rev-parse HEAD)"
   [[ "$tag_commit" == "$source_commit" ]] || { echo "local release tag $tag does not identify HEAD $source_commit" >&2; exit 1; }
   : "${SECONDBOX_TEST_DATABASE_URL:?local release preparation requires SECONDBOX_TEST_DATABASE_URL}"
-  just -d "$repo_root" test-non-kvm
-  just -d "$repo_root" test-release-stage
-  just -d "$repo_root" test-release-workflow
-  just -d "$repo_root" test-scenario
+  just --justfile "$repo_root/Justfile" --working-directory "$repo_root" test-non-kvm
+  just --justfile "$repo_root/Justfile" --working-directory "$repo_root" test-release-stage
+  just --justfile "$repo_root/Justfile" --working-directory "$repo_root" test-release-workflow
+  just --justfile "$repo_root/Justfile" --working-directory "$repo_root" test-scenario
 fi
 
 mkdir -p "$output_root"

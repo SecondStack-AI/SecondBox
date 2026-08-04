@@ -102,7 +102,7 @@ func TestScenarioQualificationRemainsLocalToQualifiedHost(t *testing.T) {
 		t.Fatal("scenario qualification must not require a configured GitHub self-hosted runner")
 	}
 	preparation := readRepositoryFile(t, "scripts/release-local-prepare.sh")
-	for _, required := range []string{"just -d \"$repo_root\" test-scenario", "/dev/kvm"} {
+	for _, required := range []string{"just --justfile \"$repo_root/Justfile\" --working-directory \"$repo_root\" test-scenario", "/dev/kvm"} {
 		if !strings.Contains(preparation, required) {
 			t.Errorf("local release preparation must contain %q", required)
 		}
