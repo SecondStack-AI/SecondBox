@@ -20,6 +20,12 @@ fi
 rg -q 'releases/download' "$qualifier"
 rg -q 'must be outside the source checkout' "$qualifier"
 rg -q 'release-index --manifest' "$finalizer"
+rg -q 'execution_node_unavailable' "$suite"
+rg -q 'SecondBoxProblemError' "$suite"
+rg -q 'errors.As' "$suite"
+test "$(rg -c 'handle\.refresh|handle\.Refresh' "$suite")" -eq 2
+test "$(rg -c 'SandboxStateStopped|\["stopped"\]' "$suite")" -eq 2
+rg -Fq 'SecondBox/sdk/go/secondboxclient@v${version}' "$suite"
 qualification_line="$(rg -n 'publish_exact "\$qualification"' "$finalizer" | cut -d: -f1)"
 index_line="$(rg -n 'publish_exact "\$index"' "$finalizer" | cut -d: -f1)"
 [[ "$qualification_line" -lt "$index_line" ]] || {

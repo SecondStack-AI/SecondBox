@@ -64,14 +64,26 @@ mkdir "$node_project"
   npm init --yes >/dev/null
   npm install --ignore-scripts --no-audit --no-fund "@secondstack-ai/secondbox@${version}" >/dev/null
   cat >lifecycle.mjs <<'EOF'
-import {SecondBox, SecondBoxClient} from "@secondstack-ai/secondbox";
+import {SecondBox, SecondBoxClient, SecondBoxProblemError} from "@secondstack-ai/secondbox";
 const api = new SecondBox(new SecondBoxClient(process.env.SECONDBOX_URL, process.env.SECONDBOX_TOKEN, fetch, process.env.SECONDBOX_TENANT_REF, process.env.SECONDBOX_SUBJECT_REF));
 await api.validateProfile("durable-coding");
-const {handle} = await api.createSandbox({profile:"durable-coding",metadata:{qualification:"typescript"}});
+const createDeadline = Date.now() + 300000;
+let handle;
+for (;;) {
+  try {
+    ({handle} = await api.createSandbox({profile:"durable-coding",metadata:{qualification:"typescript"}}));
+    break;
+  } catch (error) {
+    if (!(error instanceof SecondBoxProblemError) || error.problem.code !== "execution_node_unavailable" || error.problem.retryable !== true || Date.now() >= createDeadline) throw error;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+}
 await handle.waitFor(["ready"], {deadlineMilliseconds:600000});
 const result = await handle.exec("printf source-free-typescript", {environment:{},deadlineMilliseconds:30000,maximumOutputBytes:1048576});
 if (result.kind !== "exited" || new TextDecoder().decode(result.stdout) !== "source-free-typescript") throw new Error("TypeScript lifecycle output mismatch");
+await handle.refresh();
 await handle.stop({});
+await handle.waitFor(["stopped"], {deadlineMilliseconds:600000});
 EOF
   node lifecycle.mjs
 )
@@ -81,11 +93,71 @@ mkdir "$go_project"
 (
   cd "$go_project"
   go mod init secondbox-source-free-qualification >/dev/null
-  GONOSUMDB= GOPRIVATE= GOPROXY=https://proxy.golang.org go get "github.com/SecondStack-AI/SecondBox@v${version}"
+  GONOSUMDB= GOPRIVATE= GOPROXY=https://proxy.golang.org go get "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient@v${version}"
   cat >main.go <<'EOF'
 package main
-import("context";"fmt";"net/http";"os";"time"; secondbox "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient")
-func main(){c,e:=secondbox.NewSecondBoxSubjectClient(os.Getenv("SECONDBOX_URL"),os.Getenv("SECONDBOX_TOKEN"),os.Getenv("SECONDBOX_TENANT_REF"),os.Getenv("SECONDBOX_SUBJECT_REF"),http.DefaultClient);if e!=nil{panic(e)};ctx,cancel:=context.WithTimeout(context.Background(),10*time.Minute);defer cancel();if _,e=c.ValidateProfile(ctx,"durable-coding");e!=nil{panic(e)};h,_,e:=c.CreateSandbox(ctx,secondbox.CreateSandboxRequest{Profile:"durable-coding",Metadata:secondbox.Metadata{"qualification":"go"}},"");if e!=nil{panic(e)};if _,e=h.WaitFor(ctx,secondbox.SandboxStateReady);e!=nil{panic(e)};o,e:=h.Execute(ctx,secondbox.BufferedExecRequest{Command:secondbox.Command{ShellCommand:&secondbox.ShellCommand{Mode:"shell",Command:"printf source-free-go"}},Environment:secondbox.StringMap{},DeadlineMilliseconds:30000,MaximumOutputBytes:1048576},"","");if e!=nil{panic(e)};r,e:=secondbox.DecodeExecOutcome(o);if e!=nil{panic(e)};if string(r.Stdout)!="source-free-go"{panic(fmt.Sprintf("output %q",r.Stdout))};if _,e=h.Stop(ctx,secondbox.LifecycleOptions{});e!=nil{panic(e)}}
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"time"
+
+	secondbox "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
+)
+
+func main() {
+	client, err := secondbox.NewSecondBoxSubjectClient(os.Getenv("SECONDBOX_URL"), os.Getenv("SECONDBOX_TOKEN"), os.Getenv("SECONDBOX_TENANT_REF"), os.Getenv("SECONDBOX_SUBJECT_REF"), http.DefaultClient)
+	if err != nil {
+		panic(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	if _, err = client.ValidateProfile(ctx, "durable-coding"); err != nil {
+		panic(err)
+	}
+	var handle *secondbox.SandboxHandle
+	for {
+		handle, _, err = client.CreateSandbox(ctx, secondbox.CreateSandboxRequest{Profile: "durable-coding", Metadata: secondbox.Metadata{"qualification": "go"}}, "")
+		if err == nil {
+			break
+		}
+		var failure *secondbox.APIError
+		if !errors.As(err, &failure) || failure.Problem == nil || failure.Problem.Code != "execution_node_unavailable" || !failure.Problem.Retryable {
+			panic(err)
+		}
+		select {
+		case <-ctx.Done():
+			panic(ctx.Err())
+		case <-time.After(time.Second):
+		}
+	}
+	if _, err = handle.WaitFor(ctx, secondbox.SandboxStateReady); err != nil {
+		panic(err)
+	}
+	operation, err := handle.Execute(ctx, secondbox.BufferedExecRequest{Command: secondbox.Command{ShellCommand: &secondbox.ShellCommand{Mode: "shell", Command: "printf source-free-go"}}, Environment: secondbox.StringMap{}, DeadlineMilliseconds: 30000, MaximumOutputBytes: 1048576}, "", "")
+	if err != nil {
+		panic(err)
+	}
+	result, err := secondbox.DecodeExecOutcome(operation)
+	if err != nil {
+		panic(err)
+	}
+	if string(result.Stdout) != "source-free-go" {
+		panic(fmt.Sprintf("output %q", result.Stdout))
+	}
+	if _, err = handle.Refresh(ctx); err != nil {
+		panic(err)
+	}
+	if _, err = handle.Stop(ctx, secondbox.LifecycleOptions{}); err != nil {
+		panic(err)
+	}
+	if _, err = handle.WaitFor(ctx, secondbox.SandboxStateStopped); err != nil {
+		panic(err)
+	}
+}
 EOF
   go run .
 )

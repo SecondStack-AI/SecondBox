@@ -222,7 +222,7 @@ func convergePool(ctx context.Context, client Client, desired RunnerPool, apply 
 	if err != nil {
 		return Result{}, fmt.Errorf("SecondBox resource RunnerPool %q lookup failed: %w", desired.Name, err)
 	}
-	if !reflect.DeepEqual(current.Architectures, desired.Architectures) || !reflect.DeepEqual(current.Capabilities, desired.Capabilities) {
+	if !equalStrings(current.Architectures, desired.Architectures) || !equalStrings(current.Capabilities, desired.Capabilities) {
 		return Result{}, fmt.Errorf("SecondBox RunnerPool %q has incompatible architecture or capability drift", desired.Name)
 	}
 	update := secondboxclient.UpdateRunnerPoolRequest{}
@@ -249,6 +249,14 @@ func convergePool(ctx context.Context, client Client, desired RunnerPool, apply 
 		_, err = client.UpdateRunnerPool(ctx, desired.Name, current.Revision, update)
 	}
 	return result, err
+}
+
+func equalStrings[Slice ~[]string](left Slice, right Slice) bool {
+	leftCanonical := slices.Clone(left)
+	rightCanonical := slices.Clone(right)
+	slices.Sort(leftCanonical)
+	slices.Sort(rightCanonical)
+	return slices.Equal(leftCanonical, rightCanonical)
 }
 
 func convergeProfile(ctx context.Context, client Client, desired Profile, apply bool, documentDigest string) ([]Result, error) {
