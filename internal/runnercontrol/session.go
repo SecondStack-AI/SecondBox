@@ -89,29 +89,29 @@ func (event Event) GetRejection() *runnerv1.ProtocolRejection {
 
 // Session enforces negotiation, registration, identity, connection, and ordering.
 type Session struct {
-	config          SessionConfig
-	helloAccepted   bool
-	registered      bool
-	selectedVersion uint32
-	lastSequence    uint64
-	messageIDs      map[string]struct{}
-	enabledFeatures map[runnerv1.RunnerFeature]bool
-	relayStreams    map[string]relayStreamState
-	outboundStreams map[string]relayStreamState
+	config                  SessionConfig
+	helloAccepted           bool
+	registered              bool
+	selectedVersion         uint32
+	lastSequence            uint64
+	messageIDs              map[string]struct{}
+	enabledFeatures         map[runnerv1.RunnerFeature]bool
+	inboundDataPlaneStreams map[string]dataPlaneStreamState
+	outboundStreams         map[string]dataPlaneStreamState
 }
 
 // NewSession constructs the state machine after mTLS client verification.
 func NewSession(config SessionConfig) *Session {
 	return &Session{
-		config:          config,
-		messageIDs:      make(map[string]struct{}),
-		enabledFeatures: featureSet(config.EnabledFeatures),
-		relayStreams:    make(map[string]relayStreamState),
-		outboundStreams: make(map[string]relayStreamState),
+		config:                  config,
+		messageIDs:              make(map[string]struct{}),
+		enabledFeatures:         featureSet(config.EnabledFeatures),
+		inboundDataPlaneStreams: make(map[string]dataPlaneStreamState),
+		outboundStreams:         make(map[string]dataPlaneStreamState),
 	}
 }
 
-type relayStreamState struct {
+type dataPlaneStreamState struct {
 	sequence uint64
 	payload  []byte
 }
@@ -137,7 +137,7 @@ func (session *Session) Accept(message *runnerv1.RunnerToControlPlane) (Event, e
 		if !session.registered {
 			return Event{}, ErrRegistrationRequired
 		}
-		return session.acceptRunnerRelayFrame(message)
+		return session.acceptRunnerDataPlaneFrame(message)
 	}
 	messageID, sequence, err := runnerEnvelope(message)
 	if err != nil {
@@ -197,7 +197,7 @@ func (session *Session) Accept(message *runnerv1.RunnerToControlPlane) (Event, e
 	}, nil
 }
 
-func (session *Session) acceptRunnerRelayFrame(
+func (session *Session) acceptRunnerDataPlaneFrame(
 	message *runnerv1.RunnerToControlPlane,
 ) (Event, error) {
 	var (
@@ -215,11 +215,11 @@ func (session *Session) acceptRunnerRelayFrame(
 		if frame.GetOutput() == nil && frame.GetTerminal() == nil && frame.GetBufferedResult() == nil {
 			return Event{}, fmt.Errorf("%w: runner Exec payload is not output or a terminal result", ErrRunnerMessage)
 		}
-		if err := validateRelayIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
+		if err := validateDataPlaneFrameIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
 			return Event{}, err
 		}
 		kind = EventExec
-		key = relayStreamKey("exec", frame.Fence, frame.OperationId, frame.StreamId)
+		key = dataPlaneStreamKey("exec", frame.Fence, frame.OperationId, frame.StreamId)
 		sequence = frame.Sequence
 		payload = frame
 	case message.GetFile() != nil:
@@ -230,11 +230,11 @@ func (session *Session) acceptRunnerRelayFrame(
 		if frame.GetChunk() == nil && frame.GetMetadata() == nil && frame.GetTerminal() == nil {
 			return Event{}, fmt.Errorf("%w: runner File payload is not a chunk, metadata, or terminal frame", ErrRunnerMessage)
 		}
-		if err := validateRelayIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
+		if err := validateDataPlaneFrameIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
 			return Event{}, err
 		}
 		kind = EventFile
-		key = relayStreamKey("file", frame.Fence, frame.OperationId, frame.StreamId)
+		key = dataPlaneStreamKey("file", frame.Fence, frame.OperationId, frame.StreamId)
 		sequence = frame.Sequence
 		payload = frame
 	case message.GetPty() != nil:
@@ -245,7 +245,7 @@ func (session *Session) acceptRunnerRelayFrame(
 		if frame.GetOutput() == nil && frame.GetTerminal() == nil && frame.GetAttachResult() == nil {
 			return Event{}, fmt.Errorf("%w: runner PTY payload is not output, attach result, or terminal", ErrRunnerMessage)
 		}
-		if err := validateRelayIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
+		if err := validateDataPlaneFrameIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
 			return Event{}, err
 		}
 		if frame.GetAttachResult() != nil {
@@ -254,9 +254,9 @@ func (session *Session) acceptRunnerRelayFrame(
 				return Event{}, fmt.Errorf("%w: runner PTY attach result is incomplete", ErrRunnerMessage)
 			}
 			if frame.GetAttachResult().Kind == runnerv1.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ATTACHED {
-				session.relayStreams[relayStreamKey(
+				session.inboundDataPlaneStreams[dataPlaneStreamKey(
 					"pty", frame.Fence, frame.OperationId, frame.StreamId,
-				)] = relayStreamState{sequence: uint64(frame.GetAttachResult().AfterSequence + 1)}
+				)] = dataPlaneStreamState{sequence: uint64(frame.GetAttachResult().AfterSequence + 1)}
 			}
 			return Event{
 				Kind: EventPty, RunnerID: session.config.AuthenticatedRunnerID,
@@ -264,7 +264,7 @@ func (session *Session) acceptRunnerRelayFrame(
 			}, nil
 		}
 		kind = EventPty
-		key = relayStreamKey("pty", frame.Fence, frame.OperationId, frame.StreamId)
+		key = dataPlaneStreamKey("pty", frame.Fence, frame.OperationId, frame.StreamId)
 		sequence = frame.Sequence
 		payload = frame
 	case message.GetPort() != nil:
@@ -275,11 +275,11 @@ func (session *Session) acceptRunnerRelayFrame(
 		if frame.GetBytes() == nil && frame.GetCredit() == nil && frame.GetTerminal() == nil {
 			return Event{}, fmt.Errorf("%w: runner Port payload is not bytes, credit, or terminal", ErrRunnerMessage)
 		}
-		if err := validateRelayIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
+		if err := validateDataPlaneFrameIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
 			return Event{}, err
 		}
 		kind = EventPort
-		key = relayStreamKey("port", frame.Fence, frame.OperationId, frame.StreamId)
+		key = dataPlaneStreamKey("port", frame.Fence, frame.OperationId, frame.StreamId)
 		sequence = frame.Sequence
 		payload = frame
 	case message.GetWorkspaceTransfer() != nil:
@@ -331,9 +331,9 @@ func (session *Session) acceptRunnerRelayFrame(
 	}
 	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(payload)
 	if err != nil {
-		return Event{}, fmt.Errorf("%w: encode relay frame: %v", ErrRunnerMessage, err)
+		return Event{}, fmt.Errorf("%w: encode data-plane frame: %v", ErrRunnerMessage, err)
 	}
-	duplicate, err := acceptRelaySequence(session.relayStreams, key, sequence, encoded)
+	duplicate, err := acceptDataPlaneSequence(session.inboundDataPlaneStreams, key, sequence, encoded)
 	if err != nil {
 		return Event{}, err
 	}
@@ -349,9 +349,9 @@ func (session *Session) acceptRunnerRelayFrame(
 	}, nil
 }
 
-// ValidateOutboundRelayFrame gates a claimed durable frame against negotiated
+// ValidateOutboundDataPlaneFrame gates an outbound data-plane frame against negotiated
 // features and connection-local stream ordering before transport mutation.
-func (session *Session) ValidateOutboundRelayFrame(message *runnerv1.ControlPlaneToRunner) error {
+func (session *Session) ValidateOutboundDataPlaneFrame(message *runnerv1.ControlPlaneToRunner) error {
 	if !session.helloAccepted || !session.registered || message == nil {
 		return ErrRegistrationRequired
 	}
@@ -370,10 +370,10 @@ func (session *Session) ValidateOutboundRelayFrame(message *runnerv1.ControlPlan
 			frame.GetCredit() == nil && frame.GetCancel() == nil {
 			return fmt.Errorf("%w: control-plane Exec payload is not open, input, credit, or cancel", ErrRunnerMessage)
 		}
-		if err := validateRelayIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
+		if err := validateDataPlaneFrameIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
 			return err
 		}
-		key = relayStreamKey("exec", frame.Fence, frame.OperationId, frame.StreamId)
+		key = dataPlaneStreamKey("exec", frame.Fence, frame.OperationId, frame.StreamId)
 		sequence = frame.Sequence
 		payload = frame
 	case message.GetFile() != nil:
@@ -384,10 +384,10 @@ func (session *Session) ValidateOutboundRelayFrame(message *runnerv1.ControlPlan
 		if frame.GetOpen() == nil && frame.GetChunk() == nil && frame.GetCredit() == nil && frame.GetCancel() == nil {
 			return fmt.Errorf("%w: control-plane File payload is not an open, chunk, credit, or cancel frame", ErrRunnerMessage)
 		}
-		if err := validateRelayIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
+		if err := validateDataPlaneFrameIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
 			return err
 		}
-		key = relayStreamKey("file", frame.Fence, frame.OperationId, frame.StreamId)
+		key = dataPlaneStreamKey("file", frame.Fence, frame.OperationId, frame.StreamId)
 		sequence = frame.Sequence
 		payload = frame
 	case message.GetPty() != nil:
@@ -400,7 +400,7 @@ func (session *Session) ValidateOutboundRelayFrame(message *runnerv1.ControlPlan
 			frame.GetCredit() == nil {
 			return fmt.Errorf("%w: control-plane PTY payload is not input, resize, attach, detach, or credit", ErrRunnerMessage)
 		}
-		if err := validateRelayIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
+		if err := validateDataPlaneFrameIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
 			return err
 		}
 		if frame.GetAttach() != nil || frame.GetDetach() != nil {
@@ -408,7 +408,7 @@ func (session *Session) ValidateOutboundRelayFrame(message *runnerv1.ControlPlan
 		}
 		// A Terminal begins with an ExecOpen and continues with PTY frames; both
 		// use one operation sequence and therefore one connection-local key.
-		key = relayStreamKey("exec", frame.Fence, frame.OperationId, frame.StreamId)
+		key = dataPlaneStreamKey("exec", frame.Fence, frame.OperationId, frame.StreamId)
 		sequence = frame.Sequence
 		payload = frame
 	case message.GetPort() != nil:
@@ -421,25 +421,25 @@ func (session *Session) ValidateOutboundRelayFrame(message *runnerv1.ControlPlan
 			frame.GetCredit() == nil && frame.GetCancel() == nil {
 			return fmt.Errorf("%w: control-plane Port payload is not open, direct open, bytes, credit, or cancel", ErrRunnerMessage)
 		}
-		if err := validateRelayIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
+		if err := validateDataPlaneFrameIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
 			return err
 		}
-		key = relayStreamKey("port", frame.Fence, frame.OperationId, frame.StreamId)
+		key = dataPlaneStreamKey("port", frame.Fence, frame.OperationId, frame.StreamId)
 		sequence = frame.Sequence
 		payload = frame
 	default:
-		return fmt.Errorf("%w: outbound relay frame is not Exec, File, or Port", ErrRunnerMessage)
+		return fmt.Errorf("%w: outbound data-plane frame is not Exec, File, or Port", ErrRunnerMessage)
 	}
 	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("%w: encode outbound relay frame: %v", ErrRunnerMessage, err)
+		return fmt.Errorf("%w: encode outbound data-plane frame: %v", ErrRunnerMessage, err)
 	}
-	_, err = acceptRelaySequence(session.outboundStreams, key, sequence, encoded)
+	_, err = acceptDataPlaneSequence(session.outboundStreams, key, sequence, encoded)
 	return err
 }
 
-func acceptRelaySequence(
-	streams map[string]relayStreamState,
+func acceptDataPlaneSequence(
+	streams map[string]dataPlaneStreamState,
 	key string,
 	sequence uint64,
 	encoded []byte,
@@ -453,14 +453,14 @@ func acceptRelaySequence(
 	if previous.sequence != 0 && sequence != previous.sequence+1 {
 		return false, ErrSequenceReordered
 	}
-	streams[key] = relayStreamState{
+	streams[key] = dataPlaneStreamState{
 		sequence: sequence,
 		payload:  bytes.Clone(encoded),
 	}
 	return false, nil
 }
 
-func validateRelayIdentity(
+func validateDataPlaneFrameIdentity(
 	fence *runnerv1.AssignmentFence,
 	operationID string,
 	streamID string,
@@ -475,12 +475,12 @@ func validateRelayIdentity(
 		strings.TrimSpace(operationID) == "" ||
 		strings.TrimSpace(streamID) == "" ||
 		sequence == 0 {
-		return fmt.Errorf("%w: relay frame fencing, operation, stream, or sequence identity is incomplete", ErrRunnerMessage)
+		return fmt.Errorf("%w: data-plane frame fencing, operation, stream, or sequence identity is incomplete", ErrRunnerMessage)
 	}
 	return nil
 }
 
-func relayStreamKey(
+func dataPlaneStreamKey(
 	kind string,
 	fence *runnerv1.AssignmentFence,
 	operationID string,

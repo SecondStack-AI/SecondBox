@@ -57,7 +57,7 @@ platform_token_file = 'secrets/platform-token'
 application_authorities_file = 'secrets/application-authorities.json'
 
 [policy]
-# Transition-specific session/result/idempotency retention deadline and maximum fallback for replayable relay frames; frames without a live delivery or replay consumer may be removed earlier.
+# Data-plane session, result, and idempotency retention deadline.
 data_plane_retention_seconds = 86400
 data_plane_poll_interval_milliseconds = 250
 runner_command_poll_interval_milliseconds = 250
@@ -88,9 +88,7 @@ coding_environment_toolchain_bundle_digest = 'sha256:ddddddddddddddddddddddddddd
 # runner_command_delivery_batch_size = 16 # default; Commands delivered per claim.
 # runner_event_persistence_batch_size = 16 # default; Runner events persisted per batch.
 # runner_event_persistence_batch_wait_milliseconds = 2 # default; Maximum runner-event batch wait.
-# data_plane_claim_duration_milliseconds = 30000 # default; Relay frame delivery claim duration.
-# data_plane_maximum_frame_bytes = 1048576 # default; Maximum relay frame payload.
-# data_plane_maximum_session_bytes = 67108864 # default; Maximum relay session payload.
+# data_plane_maximum_session_bytes = 67108864 # default; Maximum data-plane session payload.
 # lifecycle_reconcile_batch_size = 8 # default; Lifecycle rows reconciled per batch.
 # lifecycle_reconcile_poll_interval_milliseconds = 250 # default; Lifecycle fallback polling cadence.
 # lifecycle_reconcile_claim_duration_milliseconds = 30000 # default; Lifecycle work claim duration.

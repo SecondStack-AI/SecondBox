@@ -15,7 +15,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func (relay *PostgresFrameRelay) StartDataPlaneSession(
+func (store *PostgresDataPlaneStore) StartDataPlaneSession(
 	ctx context.Context,
 	tenantRef string,
 	subjectRef string,
@@ -25,7 +25,7 @@ func (relay *PostgresFrameRelay) StartDataPlaneSession(
 	if tenantRef == "" || subjectRef == "" || sessionID == "" || now.IsZero() {
 		return DataPlaneSession{}, errors.New("SecondBox proxied data-plane start is incomplete")
 	}
-	tx, err := relay.pool.Begin(ctx)
+	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return DataPlaneSession{}, fmt.Errorf("SecondBox proxied data-plane start transaction: %w", err)
 	}
@@ -60,7 +60,7 @@ func (relay *PostgresFrameRelay) StartDataPlaneSession(
 	return session, nil
 }
 
-func (relay *PostgresFrameRelay) CompleteDataPlaneSession(
+func (store *PostgresDataPlaneStore) CompleteDataPlaneSession(
 	ctx context.Context,
 	input DataPlaneCompletion,
 ) (DataPlaneSession, error) {
@@ -68,7 +68,7 @@ func (relay *PostgresFrameRelay) CompleteDataPlaneSession(
 		input.Now.IsZero() || (input.Exec == nil) == (input.File == nil) {
 		return DataPlaneSession{}, errors.New("SecondBox live data-plane completion is incomplete")
 	}
-	tx, err := relay.pool.Begin(ctx)
+	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return DataPlaneSession{}, fmt.Errorf("SecondBox live data-plane completion transaction: %w", err)
 	}
@@ -87,11 +87,11 @@ func (relay *PostgresFrameRelay) CompleteDataPlaneSession(
 		}
 		return session, nil
 	}
-	identity := inboundIdentity{sequence: 1}
+	identity := dataPlaneProjection{}
 	if input.Exec != nil {
 		if session.Kind != "exec" || input.Exec.Terminal == nil ||
 			int64(len(input.Exec.Stdout)+len(input.Exec.Stderr)) > session.MaximumResponseBytes {
-			return DataPlaneSession{}, ErrRelaySessionLimit
+			return DataPlaneSession{}, ErrDataPlaneSessionLimit
 		}
 		identity.execResult = proto.Clone(input.Exec).(*runnerv1.ExecBufferedResult)
 		if identity.execResult.Stdout == nil {
@@ -103,7 +103,7 @@ func (relay *PostgresFrameRelay) CompleteDataPlaneSession(
 	} else {
 		if session.Kind != "file" || input.File.Terminal == nil ||
 			int64(len(input.File.Content)) > session.MaximumResponseBytes {
-			return DataPlaneSession{}, ErrRelaySessionLimit
+			return DataPlaneSession{}, ErrDataPlaneSessionLimit
 		}
 		content := bytes.Clone(input.File.Content)
 		if content == nil {
@@ -113,8 +113,8 @@ func (relay *PostgresFrameRelay) CompleteDataPlaneSession(
 		identity.fileMeta = input.File.Metadata
 		identity.fileTerm = input.File.Terminal
 	}
-	if err := applyInboundPayload(
-		ctx, tx, session, identity, 0, "", relay.retention, input.Now.UTC(),
+	if err := applyDataPlaneProjection(
+		ctx, tx, session, identity, 0, store.retention, input.Now.UTC(),
 	); err != nil {
 		return DataPlaneSession{}, err
 	}
@@ -129,7 +129,7 @@ func (relay *PostgresFrameRelay) CompleteDataPlaneSession(
 	return completed, nil
 }
 
-func (relay *PostgresFrameRelay) ConsumeDirectDataPlaneSession(
+func (store *PostgresDataPlaneStore) ConsumeDirectDataPlaneSession(
 	ctx context.Context,
 	input DirectDataPlaneConsumption,
 ) error {
@@ -137,7 +137,7 @@ func (relay *PostgresFrameRelay) ConsumeDirectDataPlaneSession(
 		len(input.FencingToken) == 0 || len(input.CredentialDigest) != sha256.Size || input.Now.IsZero() {
 		return errors.New("SecondBox direct data-plane consumption is incomplete")
 	}
-	tx, err := relay.pool.Begin(ctx)
+	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("SecondBox direct data-plane consumption transaction: %w", err)
 	}

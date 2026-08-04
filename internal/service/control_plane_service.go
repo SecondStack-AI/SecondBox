@@ -18,7 +18,6 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/objectstore"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
-	"github.com/SecondStack-AI/SecondBox/internal/worknotify"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
@@ -129,15 +128,12 @@ type ControlPlaneConfig struct {
 	NewID                 func(string) string
 	NewCredentialMaterial func() string
 	ArtifactObjectStore   objectstore.Store
-	DataPlaneRelay        DataPlaneRelay
+	DataPlaneStore        DataPlaneStore
 	LiveDataPlane         *runnercontrol.LiveDataPlaneBroker
 	DataPlanePollInterval time.Duration
-	// DataPlaneWakeups is optional. Without it the caller-facing loops fall back
-	// to DataPlanePollInterval, which remains their recovery bound either way.
-	DataPlaneWakeups worknotify.Source
-	PortSessionRelay runnercontrol.PortSessionRelay
-	PublicBaseURL    string
-	BuiltInProfiles  []contracts.Profile
+	PortSessionStore      runnercontrol.PortSessionStore
+	PublicBaseURL         string
+	BuiltInProfiles       []contracts.Profile
 }
 
 // ControlPlaneService owns validation, authentication, and transaction inputs.
@@ -149,11 +145,10 @@ type ControlPlaneService struct {
 	newID                 func(string) string
 	newCredentialMaterial func() string
 	artifactObjectStore   objectstore.Store
-	dataPlaneRelay        DataPlaneRelay
+	dataPlaneStore        DataPlaneStore
 	liveDataPlane         *runnercontrol.LiveDataPlaneBroker
 	dataPlanePollInterval time.Duration
-	dataPlaneWakeups      worknotify.Source
-	portSessionRelay      runnercontrol.PortSessionRelay
+	portSessionStore      runnercontrol.PortSessionStore
 	publicBaseURL         string
 	builtInProfiles       map[string]contracts.Profile
 }
@@ -187,16 +182,15 @@ func NewControlPlaneService(config ControlPlaneConfig) (*ControlPlaneService, er
 		defaultSubjectQuota:  config.DefaultSubjectQuota,
 		now:                  config.Now, newID: config.NewID, newCredentialMaterial: config.NewCredentialMaterial,
 		artifactObjectStore: config.ArtifactObjectStore,
-		dataPlaneRelay:      config.DataPlaneRelay, dataPlanePollInterval: config.DataPlanePollInterval,
+		dataPlaneStore:      config.DataPlaneStore, dataPlanePollInterval: config.DataPlanePollInterval,
 		liveDataPlane:    config.LiveDataPlane,
-		dataPlaneWakeups: config.DataPlaneWakeups,
-		portSessionRelay: config.PortSessionRelay, publicBaseURL: config.PublicBaseURL,
+		portSessionStore: config.PortSessionStore, publicBaseURL: config.PublicBaseURL,
 		builtInProfiles: builtInProfiles,
 	}
-	if config.DataPlaneRelay != nil && config.DataPlanePollInterval <= 0 {
-		return nil, errors.New("SecondBox data-plane poll interval is required with the relay")
+	if config.DataPlaneStore != nil && config.DataPlanePollInterval <= 0 {
+		return nil, errors.New("SecondBox data-plane poll interval is required with the store")
 	}
-	if config.PortSessionRelay != nil {
+	if config.PortSessionStore != nil {
 		if _, err := validatedPublicBaseURL(config.PublicBaseURL); err != nil {
 			return nil, err
 		}

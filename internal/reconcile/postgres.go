@@ -710,15 +710,7 @@ func (store *PostgresStore) AdvanceFencedGeneration(
 		    terminal_detail='Sandbox generation was fenced',
 		    infrastructure_failure_reason='INFRASTRUCTURE_FAILURE_REASON_GENERATION_FENCED',
 		    retryable=false,terminal_message='Sandbox generation was fenced',
-		    completed_at=$3,updated_at=$3,retain_until=GREATEST(retain_until,$3),
-		    frames_retain_until=CASE
-		      WHEN operation='exec' OR kind='file' OR (kind='terminal' AND attachment_id='')
-		        OR (kind='port' AND EXISTS (
-		          SELECT 1 FROM secondbox.port_sessions AS port
-		          WHERE port.data_plane_session_id=data_plane_sessions.id AND port.transport='direct'
-		        )) THEN $3
-		      ELSE GREATEST(frames_retain_until,$3)
-		    END
+		    completed_at=$3,updated_at=$3,retain_until=GREATEST(retain_until,$3)
 		WHERE sandbox_id=$1 AND generation=$2
 		  AND state IN ('pending','running','cancelling')`,
 		sandboxID, generation, now,

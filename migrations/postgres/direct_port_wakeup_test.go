@@ -11,9 +11,7 @@ import (
 
 // TestDirectPortAdmissionWakeupIsScopedToTheDirectTransport pins the notify
 // scope. NOTIFY has no server-side filtering, so every payload reaches every
-// listening replica; a wakeup on each relay frame would broadcast once per Port
-// message, per Exec and PTY stdin chunk, and per File chunk. This plan moves
-// only the Port byte path, so exactly one notification per direct PortSession
+// listening replica, so exactly one notification per direct PortSession
 // admission is the whole contract.
 func TestDirectPortAdmissionWakeupIsScopedToTheDirectTransport(t *testing.T) {
 	writer := newGuardDatabase(t)
@@ -36,17 +34,6 @@ func TestDirectPortAdmissionWakeupIsScopedToTheDirectTransport(t *testing.T) {
 
 	for _, transport := range []string{"relay", "direct"} {
 		insertWakeupPortSession(t, writer, transport)
-	}
-	// Every frame kind the relay still carries, on both a relay Port session and
-	// the direct one, must emit nothing.
-	for _, session := range []string{"relay", "direct"} {
-		for sequence := 1; sequence <= 3; sequence++ {
-			insertWakeupOutboundFrame(t, writer, session, sequence)
-		}
-	}
-	insertWakeupExecSession(t, writer)
-	for sequence := 1; sequence <= 3; sequence++ {
-		insertWakeupOutboundFrame(t, writer, "exec", sequence)
 	}
 
 	payloads := drainWakeupNotifications(t, listener)
@@ -149,19 +136,6 @@ func insertWakeupPortSessionTx(t *testing.T, tx pgx.Tx, transport string) {
 	}
 }
 
-func insertWakeupExecSession(t *testing.T, connection *pgx.Conn) {
-	t.Helper()
-	tx, err := connection.Begin(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback(t.Context())
-	insertWakeupDataPlaneSession(t, tx, "exec", "exec")
-	if err := tx.Commit(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func insertWakeupDataPlaneSession(t *testing.T, tx pgx.Tx, id string, kind string) {
 	t.Helper()
 	now := time.Now().UTC()
@@ -185,21 +159,6 @@ func insertWakeupDataPlaneSession(t *testing.T, tx pgx.Tx, id string, kind strin
 			'','',0,0,'',0,0,'',false,'',''::bytea,''::bytea,''::bytea,'{}','{}',$5,$5,NULL,$4
 		)`,
 		id, "runner-"+id, kind, now.Add(time.Hour), now,
-	); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func insertWakeupOutboundFrame(t *testing.T, connection *pgx.Conn, sessionID string, sequence int) {
-	t.Helper()
-	now := time.Now().UTC()
-	if _, err := connection.Exec(t.Context(), `
-		INSERT INTO secondbox.data_plane_frames (
-			id,session_id,direction,sequence,payload_hash,payload,payload_bytes,
-			priority,state,claim_owner,claim_expires_at,delivery_count,
-			created_at,updated_at,delivered_at
-		) VALUES ($1,$2,'outbound',$3,'hash',''::bytea,0,0,'pending','',NULL,0,$4,$4,NULL)`,
-		sessionID+"-out-"+time.Now().Format("150405.000000000"), sessionID, sequence, now,
 	); err != nil {
 		t.Fatal(err)
 	}

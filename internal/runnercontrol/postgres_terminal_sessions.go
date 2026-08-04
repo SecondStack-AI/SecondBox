@@ -3,8 +3,6 @@ package runnercontrol
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -13,7 +11,6 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
-	"google.golang.org/protobuf/proto"
 )
 
 type ExecClientFrame struct {
@@ -49,7 +46,7 @@ type TerminalServerFrame struct {
 }
 
 // AcquireTerminalAttachment atomically grants the only active public attachment.
-func (relay *PostgresFrameRelay) AcquireTerminalAttachment(
+func (store *PostgresDataPlaneStore) AcquireTerminalAttachment(
 	ctx context.Context,
 	tenantRef string,
 	subjectRef string,
@@ -63,7 +60,7 @@ func (relay *PostgresFrameRelay) AcquireTerminalAttachment(
 		sessionID == "" || generation < 1 || attachmentID == "" {
 		return DataPlaneSession{}, errors.New("SecondBox Terminal attachment authority is incomplete")
 	}
-	tx, err := relay.pool.Begin(ctx)
+	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return DataPlaneSession{}, fmt.Errorf("SecondBox Terminal attachment transaction: %w", err)
 	}
@@ -91,7 +88,7 @@ func (relay *PostgresFrameRelay) AcquireTerminalAttachment(
 		return DataPlaneSession{}, ErrTerminalAttached
 	}
 	if session.DetachExpiresAt != nil && !now.UTC().Before(*session.DetachExpiresAt) {
-		if err := relay.enqueueCancellation(
+		if err := store.enqueueCancellation(
 			ctx, tx, session,
 			runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED.String(),
 			"Terminal detach interval expired", now.UTC(),
@@ -175,7 +172,7 @@ func (relay *PostgresFrameRelay) AcquireTerminalAttachment(
 }
 
 // DetachTerminalAttachment releases one active attachment or requests cancellation.
-func (relay *PostgresFrameRelay) DetachTerminalAttachment(
+func (store *PostgresDataPlaneStore) DetachTerminalAttachment(
 	ctx context.Context,
 	tenantRef string,
 	subjectRef string,
@@ -183,7 +180,7 @@ func (relay *PostgresFrameRelay) DetachTerminalAttachment(
 	attachmentID string,
 	now time.Time,
 ) (bool, error) {
-	tx, err := relay.pool.Begin(ctx)
+	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return false, fmt.Errorf("SecondBox Terminal detach transaction: %w", err)
 	}
@@ -203,8 +200,7 @@ func (relay *PostgresFrameRelay) DetachTerminalAttachment(
 	if session.State != "pending" && session.State != "running" {
 		if _, err := tx.Exec(ctx, `
 			UPDATE secondbox.data_plane_sessions
-			SET attachment_id='',frames_retain_until=LEAST(frames_retain_until,$2),
-			    updated_at=$2 WHERE id=$1`,
+			SET attachment_id='',updated_at=$2 WHERE id=$1`,
 			session.ID, now.UTC(),
 		); err != nil {
 			return false, fmt.Errorf("SecondBox terminal attachment cleanup: %w", err)
@@ -223,7 +219,7 @@ func (relay *PostgresFrameRelay) DetachTerminalAttachment(
 			return false, fmt.Errorf("SecondBox non-detachable Terminal cleanup: %w", err)
 		}
 		session.AttachmentID = ""
-		if err := relay.enqueueCancellation(
+		if err := store.enqueueCancellation(
 			ctx, tx, session,
 			runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED.String(),
 			"public Terminal client disconnected", now.UTC(),
@@ -249,7 +245,7 @@ func (relay *PostgresFrameRelay) DetachTerminalAttachment(
 
 // RecordTerminalClientFrame advances the compact ordered Terminal projection
 // without retaining the input, resize, credit, or cancellation payload.
-func (relay *PostgresFrameRelay) RecordTerminalClientFrame(
+func (store *PostgresDataPlaneStore) RecordTerminalClientFrame(
 	ctx context.Context,
 	tenantRef string,
 	subjectRef string,
@@ -281,7 +277,7 @@ func (relay *PostgresFrameRelay) RecordTerminalClientFrame(
 		frame.ResizeRows > 1000 || frame.ResizeColumns > 1000 {
 		return false, errors.New("SecondBox live Terminal frame requires exactly one valid payload")
 	}
-	tx, err := relay.pool.Begin(ctx)
+	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return false, fmt.Errorf("SecondBox live Terminal frame transaction: %w", err)
 	}
@@ -299,18 +295,18 @@ func (relay *PostgresFrameRelay) RecordTerminalClientFrame(
 		return false, ErrTerminalDetached
 	}
 	if session.State != "pending" && session.State != "running" {
-		return false, ErrRelaySequence
+		return false, ErrDataPlaneSequence
 	}
 	if frame.Sequence != session.NextClientSequence {
-		return false, ErrRelaySequence
+		return false, ErrDataPlaneSequence
 	}
 	if session.RequestStreamBytes+int64(len(frame.Input)) > session.MaximumRequestBytes {
-		return false, ErrRelaySessionLimit
+		return false, ErrDataPlaneSessionLimit
 	}
 	if frame.Credit > 0 &&
 		session.ResponseCreditBytes-sessionInboundPayloadBytes(session)+frame.Credit >
 			session.StreamWindowBytes {
-		return false, ErrRelayFrameLimit
+		return false, ErrDataPlaneFrameLimit
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.data_plane_sessions
@@ -339,7 +335,7 @@ func (relay *PostgresFrameRelay) RecordTerminalClientFrame(
 
 // RecordTerminalServerFrame advances Terminal output and terminal evidence
 // without retaining a replayable payload in PostgreSQL.
-func (relay *PostgresFrameRelay) RecordTerminalServerFrame(
+func (store *PostgresDataPlaneStore) RecordTerminalServerFrame(
 	ctx context.Context,
 	tenantRef string,
 	subjectRef string,
@@ -351,7 +347,7 @@ func (relay *PostgresFrameRelay) RecordTerminalServerFrame(
 		frame.Sequence < 0 || now.IsZero() || (frame.Output == nil) == (frame.Terminal == nil) {
 		return DataPlaneSession{}, errors.New("SecondBox live Terminal response is incomplete")
 	}
-	tx, err := relay.pool.Begin(ctx)
+	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return DataPlaneSession{}, fmt.Errorf("SecondBox live Terminal response transaction: %w", err)
 	}
@@ -382,28 +378,17 @@ func (relay *PostgresFrameRelay) RecordTerminalServerFrame(
 	if runnerSequence != nextInbound ||
 		sessionInboundPayloadBytes(session)+int64(len(frame.Output)) > session.MaximumResponseBytes ||
 		sessionInboundPayloadBytes(session)+int64(len(frame.Output)) > session.ResponseCreditBytes {
-		return DataPlaneSession{}, ErrRelaySequence
+		return DataPlaneSession{}, ErrDataPlaneSequence
 	}
-	identity := inboundIdentity{
-		sequence: runnerSequence,
+	identity := dataPlaneProjection{
 		ptyOutput: &runnerv1.ExecOutput{
 			Channel: runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT,
 			Data:    bytes.Clone(frame.Output),
 		},
 		ptyTerm: frame.Terminal,
 	}
-	payloadHash := ""
-	if frame.Terminal != nil {
-		payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(frame.Terminal)
-		if err != nil {
-			return DataPlaneSession{}, fmt.Errorf("SecondBox live Terminal outcome encoding: %w", err)
-		}
-		hash := sha256.Sum256(payload)
-		payloadHash = hex.EncodeToString(hash[:])
-	}
-	if err := applyInboundPayload(
-		ctx, tx, session, identity, int64(len(frame.Output)), payloadHash,
-		relay.retention, now.UTC(),
+	if err := applyDataPlaneProjection(
+		ctx, tx, session, identity, int64(len(frame.Output)), store.retention, now.UTC(),
 	); err != nil {
 		return DataPlaneSession{}, err
 	}

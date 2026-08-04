@@ -80,20 +80,18 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		return err
 	}
 	defer controlPlaneStore.Close()
-	dataPlaneRelay, err := runnercontrol.NewPostgresFrameRelay(
+	dataPlaneStore, err := runnercontrol.NewPostgresDataPlaneStore(
 		processContext,
-		runnercontrol.PostgresFrameRelayConfig{
+		runnercontrol.PostgresDataPlaneStoreConfig{
 			DatabaseURL:         processConfig.DatabaseURL,
-			ClaimDuration:       processConfig.DataPlaneClaimDuration,
 			Retention:           processConfig.DataPlaneRetention,
-			MaximumFrameBytes:   processConfig.DataPlaneMaximumFrameBytes,
 			MaximumSessionBytes: processConfig.DataPlaneMaximumSessionBytes,
 		},
 	)
 	if err != nil {
 		return err
 	}
-	defer dataPlaneRelay.Close()
+	defer dataPlaneStore.Close()
 	artifactObjects, err := objectstore.NewS3Store(processContext, objectstore.S3Config{
 		Endpoint: processConfig.ObjectStoreEndpoint, Region: processConfig.ObjectStoreRegion,
 		Bucket: processConfig.ObjectStoreBucket, AccessKeyID: processConfig.ObjectStoreAccessKeyID,
@@ -134,9 +132,9 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		Now:                 service.SystemClock, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		ArtifactObjectStore:   artifactObjects,
-		DataPlaneRelay:        dataPlaneRelay, DataPlanePollInterval: processConfig.DataPlanePollInterval,
-		DataPlaneWakeups: workWakeups, LiveDataPlane: liveDataPlane,
-		PortSessionRelay: dataPlaneRelay, PublicBaseURL: processConfig.PublicBaseURL,
+		DataPlaneStore:        dataPlaneStore, DataPlanePollInterval: processConfig.DataPlanePollInterval,
+		LiveDataPlane:    liveDataPlane,
+		PortSessionStore: dataPlaneStore, PublicBaseURL: processConfig.PublicBaseURL,
 	})
 	if err != nil {
 		return err
@@ -193,7 +191,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 			RetryLimit:              processConfig.AssignmentRetryLimit,
 			SerializationRetryLimit: processConfig.SchedulerSerializationRetryLimit,
 			AssetCatalog:            signedAssetCatalog,
-			SessionCanceller:        dataPlaneRelay,
+			SessionCanceller:        dataPlaneStore,
 			NewID:                   service.NewOpaqueID,
 			NewFencingToken:         newLifecycleFencingToken,
 			Now:                     service.SystemClock,
@@ -236,8 +234,8 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		EventBatchWait:      processConfig.RunnerEventPersistenceBatchWait,
 		WorkWakeups:         workWakeups,
 		LiveDataPlane:       liveDataPlane,
-		DirectPorts:         dataPlaneRelay,
-		PortSessions:        dataPlaneRelay,
+		DirectPorts:         dataPlaneStore,
+		PortSessions:        dataPlaneStore,
 		DirectDataPlane:     controlPlane,
 		WorkspaceTransfers:  workspaceTransfers,
 		Now:                 service.SystemClock,
@@ -356,7 +354,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	}()
 	go func() {
 		dataPlaneErrors <- runDataPlaneSweeper(
-			processContext, dataPlaneRelay, processConfig.DataPlanePollInterval,
+			processContext, dataPlaneStore, processConfig.DataPlanePollInterval,
 		)
 	}()
 	go func() {
@@ -510,11 +508,11 @@ func applicationAuthorities(configured []config.ApplicationAuthority) []api.Appl
 
 func runDataPlaneSweeper(
 	ctx context.Context,
-	relay *runnercontrol.PostgresFrameRelay,
+	store *runnercontrol.PostgresDataPlaneStore,
 	pollInterval time.Duration,
 ) error {
 	for {
-		found, err := relay.SweepDataPlane(ctx, service.SystemClock(), 100)
+		found, err := store.SweepDataPlane(ctx, service.SystemClock(), 100)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil

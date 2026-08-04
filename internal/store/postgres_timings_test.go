@@ -81,16 +81,16 @@ func TestTimingProjectionsJoinLifecycleBootAndExecEvidence(t *testing.T) {
 			terminal_detach_seconds,attachment_id,attached_at,detached_at,detach_expires_at,
 			outbound_bytes,inbound_bytes,next_inbound_sequence,terminal_kind,terminal_detail,
 			exit_code,signal,spawn_failure_reason,elapsed_milliseconds,limit_bytes,
-			infrastructure_failure_reason,retryable,terminal_message,stdout_bytes,
-			stderr_bytes,content_bytes,metadata_json,request_json,created_at,updated_at,
-				completed_at,retain_until,frames_retain_until,next_outbound_sequence
+			infrastructure_failure_reason,retryable,terminal_message,result_json,
+			metadata_json,request_json,created_at,updated_at,completed_at,retain_until,
+			next_outbound_sequence
 		) VALUES (
 			'dps_timing','tenant-timing','subject-timing','sbox_timing','profile-revision',
 			'assignment-timing','instance-timing','runner-timing',1,$4,
 			'request-exec-timing','','exec','exec','stream-timing','completed',0,
 			'exec-timing-key','exec-timing-hash',$5,1024,1024,1024,0,0,true,false,30,
 			'',NULL,NULL,NULL,0,0,1,'exited','',0,0,'',40,0,'',false,'',
-				$9,$9,$9,'{}','{}',$10,$11,$11,$5,$5,1
+				$9,'{}','{}',$10,$11,$11,$5,1
 		)`,
 		pgx.QueryExecModeSimpleProtocol,
 		base,
@@ -101,7 +101,7 @@ func TestTimingProjectionsJoinLifecycleBootAndExecEvidence(t *testing.T) {
 		base.Add(25*time.Millisecond),
 		base.Add(25*time.Millisecond+125*time.Microsecond),
 		base.Add(35*time.Millisecond+625*time.Microsecond),
-		[]byte{},
+		`{"stdout":"","stderr":"","content":""}`,
 		base.Add(time.Minute),
 		base.Add(time.Minute+40*time.Millisecond),
 		base.Add(35*time.Millisecond+875*time.Microsecond),

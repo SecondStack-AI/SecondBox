@@ -74,7 +74,7 @@ func TestAuthorizeApplicationRequestRequiresExactScope(t *testing.T) {
 
 // TestDirectPortTransportRequiresTheExactGrant proves the direct transport is
 // denied by default: it is never implied by sandbox:ports, and a request without
-// an application authority keeps the durable relay.
+// an application authority keeps the live data-plane broker.
 func TestDirectPortTransportRequiresTheExactGrant(t *testing.T) {
 	for name, testCase := range map[string]struct {
 		scopes []string

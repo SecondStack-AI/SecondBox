@@ -14,7 +14,7 @@ import (
 )
 
 func TestNewServerRequiresEachConfiguredDataPlaneTransport(t *testing.T) {
-	config := validRelayServerConfig()
+	config := validServerConfig()
 	config.EnabledFeatures = []runnerv1.RunnerFeature{
 		runnerv1.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
 	}
@@ -26,7 +26,7 @@ func TestNewServerRequiresEachConfiguredDataPlaneTransport(t *testing.T) {
 		runnerv1.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING,
 	)
 	if _, err := NewServer(config); err == nil {
-		t.Fatal("data-plane server accepted a nil durable relay")
+		t.Fatal("data-plane server accepted a nil live data-plane broker")
 	}
 	config.LiveDataPlane = NewLiveDataPlaneBroker()
 	if _, err := NewServer(config); err != nil {
@@ -46,7 +46,7 @@ func TestNewServerRequiresEachConfiguredDataPlaneTransport(t *testing.T) {
 	if _, err := NewServer(config); err == nil {
 		t.Fatal("Port proxy server accepted a nil Port session recorder")
 	}
-	config.PortSessions = &recordingFrameRelay{}
+	config.PortSessions = &recordingPortSessionStore{}
 	if _, err := NewServer(config); err != nil {
 		t.Fatalf("Port proxy server with live recorder: %v", err)
 	}
@@ -85,101 +85,6 @@ func TestLiveDataPlaneConnectionReplacementClosesPriorRoutes(t *testing.T) {
 	}
 }
 
-func TestClaimedRelayFrameAcknowledgesOnlySuccessfulSend(t *testing.T) {
-	for _, test := range []struct {
-		name      string
-		sendError error
-		delivered bool
-	}{
-		{name: "success", delivered: true},
-		{name: "transport_failure", sendError: errors.New("transport failed")},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			session := negotiatedRelaySession(t)
-			if _, err := session.Accept(registrationFrame("runner-1", "connection-1", 1)); err != nil {
-				t.Fatal(err)
-			}
-			relay := &recordingFrameRelay{
-				delivery: RelayDelivery{
-					ID: "relay-1",
-					Message: &runnerv1.ControlPlaneToRunner{
-						Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: &runnerv1.ExecFrame{
-							Fence: relayTestFence(), OperationId: "operation-1", StreamId: "stream-1", Sequence: 1,
-							Payload: &runnerv1.ExecFrame_Open{Open: &runnerv1.ExecOpen{
-								Command: &runnerv1.ExecOpen_Shell{Shell: "true"}, OutputLimitBytes: 1024,
-							}},
-						}},
-					},
-				},
-			}
-			server := &Server{config: ServerConfig{FrameRelay: relay, Now: time.Now}}
-			sender := &recordingControlPlaneSender{err: test.sendError}
-			err := server.sendClaimedRelayFrame(
-				t.Context(), sender, session, "runner-1", "connection-1",
-			)
-			if test.sendError != nil && err == nil {
-				t.Fatal("failed relay send returned nil")
-			}
-			if relay.delivered != test.delivered {
-				t.Fatalf("relay delivered = %t, want %t", relay.delivered, test.delivered)
-			}
-		})
-	}
-}
-
-func TestOutboundPumpPrioritizesControlCommandsOverRelayFrames(t *testing.T) {
-	session := negotiatedRelaySession(t)
-	if _, err := session.Accept(registrationFrame("runner-1", "connection-1", 1)); err != nil {
-		t.Fatal(err)
-	}
-	relay := &recordingFrameRelay{
-		delivery: RelayDelivery{
-			ID: "relay-1",
-			Message: &runnerv1.ControlPlaneToRunner{
-				Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: &runnerv1.ExecFrame{
-					Fence: relayTestFence(), OperationId: "operation-1", StreamId: "stream-1", Sequence: 1,
-					Payload: &runnerv1.ExecFrame_Cancel{
-						Cancel: &runnerv1.ExecCancel{Reason: "cancel"},
-					},
-				}},
-			},
-		},
-	}
-	state := &priorityStateStore{
-		command: CommandDelivery{
-			ID: "fence-1",
-			Message: &runnerv1.ControlPlaneToRunner{
-				Message: &runnerv1.ControlPlaneToRunner_Fence{Fence: &runnerv1.FenceCommand{
-					MessageId: "fence-1", Sequence: 1, Fence: relayTestFence(),
-					Reason: runnerv1.FenceReason_FENCE_REASON_OPERATOR_REQUEST,
-				}},
-			},
-		},
-	}
-	server := &Server{config: ServerConfig{
-		StateStore: state, FrameRelay: relay, CommandBatchSize: 1, Now: time.Now,
-	}}
-	sender := &recordingControlPlaneSender{}
-	more, err := server.sendNextOutboundFrame(
-		t.Context(), sender, session, "runner-1", "connection-1",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !more {
-		t.Fatal("full control-command batch did not report remaining work")
-	}
-	if len(sender.messages) != 1 || sender.messages[0].GetFence() == nil {
-		t.Fatalf("priority outbound messages = %#v", sender.messages)
-	}
-	if relay.claims != 0 {
-		t.Fatalf("relay claims = %d, want zero while control command pending", relay.claims)
-	}
-	if !state.delivered {
-		t.Fatal("control command was not marked delivered")
-	}
-}
-
 func TestOutboundPumpDrainsOnlyTheConfiguredCommandBatch(t *testing.T) {
 	state := &queuedCommandStateStore{
 		deliveries: []CommandDelivery{
@@ -193,7 +98,7 @@ func TestOutboundPumpDrainsOnlyTheConfiguredCommandBatch(t *testing.T) {
 	}}
 	sender := &recordingControlPlaneSender{}
 	more, err := server.sendNextOutboundFrame(
-		t.Context(), sender, nil, "runner-1", "connection-1",
+		t.Context(), sender, "runner-1", "connection-1",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -227,7 +132,7 @@ func TestOutboundDrainContinuesAcrossCommandBatches(t *testing.T) {
 	}}
 	sender := &recordingControlPlaneSender{}
 	if err := server.drainOutboundFrames(
-		t.Context(), sender, nil, "runner-1", "connection-1",
+		t.Context(), sender, "runner-1", "connection-1",
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +162,7 @@ func TestOutboundBatchPersistsSuccessfulPrefixBeforeSendFailure(t *testing.T) {
 	}}
 	sender := &prefixFailingControlPlaneSender{failAt: 1, err: sendErr}
 	_, err := server.sendNextOutboundFrame(
-		t.Context(), sender, nil, "runner-1", "connection-1",
+		t.Context(), sender, "runner-1", "connection-1",
 	)
 	if !errors.Is(err, sendErr) {
 		t.Fatalf("outbound batch error = %v, want send failure", err)
@@ -359,7 +264,6 @@ func TestOutboundPumpReportsCommandDeliveryFailure(t *testing.T) {
 	go server.pumpOutboundFrames(
 		t.Context(),
 		&recordingControlPlaneSender{},
-		nil,
 		"runner-1",
 		"connection-1",
 		failures,
@@ -393,7 +297,6 @@ func TestOutboundPumpDrainsACommittedNotificationBeforeFallbackPoll(t *testing.T
 	go server.pumpOutboundFrames(
 		ctx,
 		&recordingControlPlaneSender{},
-		nil,
 		"runner-1",
 		"connection-1",
 		failures,
@@ -432,7 +335,7 @@ func evidenceFrame(sequence uint64) *runnerv1.RunnerToControlPlane {
 var errCommandClaim = errors.New("command claim failed")
 
 type failingCommandStateStore struct {
-	relayStateStore
+	serverStateStore
 }
 
 func (failingCommandStateStore) ClaimCommands(
@@ -445,50 +348,11 @@ func (failingCommandStateStore) ClaimCommands(
 	return nil, errCommandClaim
 }
 
-type recordingFrameRelay struct {
-	delivery  RelayDelivery
-	delivered bool
-	claims    int
-}
+type recordingPortSessionStore struct{}
 
-func (relay *recordingFrameRelay) ClaimOutboundFrame(
+func (*recordingPortSessionStore) RecordPortSessionFrame(
 	context.Context,
-	string,
-	string,
-	time.Time,
-) (RelayDelivery, bool, error) {
-	relay.claims++
-	if relay.delivery.Message == nil || relay.delivered {
-		return RelayDelivery{}, false, nil
-	}
-	return relay.delivery, true, nil
-}
-
-func (relay *recordingFrameRelay) MarkOutboundFrameDelivered(
-	_ context.Context,
-	id string,
-	_ string,
-	_ int64,
-	_ time.Time,
-) error {
-	if id != relay.delivery.ID {
-		return errors.New("unexpected delivery")
-	}
-	relay.delivered = true
-	return nil
-}
-
-func (*recordingFrameRelay) PersistInboundFrame(
-	context.Context,
-	InboundRelayFrame,
-	time.Time,
-) (bool, error) {
-	return true, nil
-}
-
-func (*recordingFrameRelay) RecordPortSessionFrame(
-	context.Context,
-	InboundRelayFrame,
+	RunnerDataPlaneFrame,
 	time.Time,
 ) (bool, error) {
 	return true, nil
@@ -519,9 +383,9 @@ func (sender *prefixFailingControlPlaneSender) Send(*runnerv1.ControlPlaneToRunn
 	return nil
 }
 
-type relayCredentialVerifier struct{}
+type serverCredentialVerifier struct{}
 
-func (relayCredentialVerifier) VerifyClientCertificate(
+func (serverCredentialVerifier) VerifyClientCertificate(
 	context.Context,
 	*x509.Certificate,
 	string,
@@ -529,29 +393,29 @@ func (relayCredentialVerifier) VerifyClientCertificate(
 	return RunnerIdentity{}, nil
 }
 
-type relayStateStore struct{}
+type serverStateStore struct{}
 
-func (relayStateStore) OpenConnection(context.Context, RunnerIdentity, string, uint32, time.Time) error {
+func (serverStateStore) OpenConnection(context.Context, RunnerIdentity, string, uint32, time.Time) error {
 	return nil
 }
 
-func (relayStateStore) CloseConnection(context.Context, string, string, time.Time) error {
+func (serverStateStore) CloseConnection(context.Context, string, string, time.Time) error {
 	return nil
 }
 
-func (relayStateStore) RecordRegistration(context.Context, *runnerv1.RunnerRegistration, time.Time) (bool, error) {
+func (serverStateStore) RecordRegistration(context.Context, *runnerv1.RunnerRegistration, time.Time) (bool, error) {
 	return true, nil
 }
 
-func (relayStateStore) RecordHeartbeat(context.Context, *runnerv1.RunnerHeartbeat, time.Time) (bool, error) {
+func (serverStateStore) RecordHeartbeat(context.Context, *runnerv1.RunnerHeartbeat, time.Time) (bool, error) {
 	return true, nil
 }
 
-func (relayStateStore) RecordEvents(context.Context, []EventPersistenceRecord) error {
+func (serverStateStore) RecordEvents(context.Context, []EventPersistenceRecord) error {
 	return nil
 }
 
-func (relayStateStore) ClaimCommands(
+func (serverStateStore) ClaimCommands(
 	context.Context,
 	string,
 	string,
@@ -561,7 +425,7 @@ func (relayStateStore) ClaimCommands(
 	return []CommandDelivery{}, nil
 }
 
-func (relayStateStore) MarkCommandsDelivered(
+func (serverStateStore) MarkCommandsDelivered(
 	context.Context,
 	[]CommandDelivery,
 	string,
@@ -569,10 +433,10 @@ func (relayStateStore) MarkCommandsDelivered(
 	return nil
 }
 
-func validRelayServerConfig() ServerConfig {
+func validServerConfig() ServerConfig {
 	return ServerConfig{
-		CredentialVerifier:  relayCredentialVerifier{},
-		StateStore:          relayStateStore{},
+		CredentialVerifier:  serverCredentialVerifier{},
+		StateStore:          serverStateStore{},
 		SupportedVersions:   VersionRange{Minimum: 1, Maximum: 1},
 		HeartbeatInterval:   time.Second,
 		CommandPollInterval: time.Millisecond,
@@ -586,14 +450,14 @@ func validRelayServerConfig() ServerConfig {
 }
 
 type queuedCommandStateStore struct {
-	relayStateStore
+	serverStateStore
 	deliveries []CommandDelivery
 	delivered  []string
 	claims     int
 }
 
 type wakeupCommandStateStore struct {
-	relayStateStore
+	serverStateStore
 	mu        sync.Mutex
 	delivery  *CommandDelivery
 	emptyPass chan struct{}
@@ -683,7 +547,7 @@ func controlCommandDelivery(id string) CommandDelivery {
 		ID: id,
 		Message: &runnerv1.ControlPlaneToRunner{
 			Message: &runnerv1.ControlPlaneToRunner_Fence{Fence: &runnerv1.FenceCommand{
-				MessageId: id, Sequence: 1, Fence: relayTestFence(),
+				MessageId: id, Sequence: 1, Fence: dataPlaneTestFence(),
 				Reason: runnerv1.FenceReason_FENCE_REASON_OPERATOR_REQUEST,
 			}},
 		},
@@ -691,7 +555,7 @@ func controlCommandDelivery(id string) CommandDelivery {
 }
 
 type priorityStateStore struct {
-	relayStateStore
+	serverStateStore
 	command   CommandDelivery
 	delivered bool
 }

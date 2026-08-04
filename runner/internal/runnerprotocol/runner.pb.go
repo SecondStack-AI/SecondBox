@@ -5884,7 +5884,7 @@ func (x *PortTerminal) GetSafeDetail() string {
 
 // PortDirectOpen admits one PortSession for the direct transport. It replaces
 // PortOpen for a granted caller: the Runner holds the assignment-bound session
-// state and waits for a caller connection instead of relaying frames. The
+// state and waits for a caller connection instead of proxying frames. The
 // single-use credential is never carried in plaintext; only its digest is.
 type PortDirectOpen struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`

@@ -37,17 +37,17 @@ A ProfileRevision lists approved guest ports, protocols, session duration, and c
 
 Admission is identical for both Port transports. The single-use credential exists for both and is consumed exactly once against PostgreSQL for both. Only the endpoint the control plane returns and the leg that carries bytes differ.
 
-### Relay transport
+### Proxied transport
 
-The default transport returns an expiring WebSocket endpoint whose single-use signed credential is carried in the URI fragment. Clients remove the fragment from the request URL and pass it as the `secondbox.port.token.<credential>` WebSocket protocol alongside `secondbox.port.v1`; this keeps the credential out of the HTTP path, query, and request log. The control plane atomically consumes the credential before upgrading, then proxies binary WebSocket messages through durable, fenced Runner Port frames. Credit in each direction bounds retained bytes and is returned only after the downstream write succeeds. Frames remain while the tunnel is open and through terminal delivery; after the terminal event is acknowledged, the session expires, or its unchanged session-retention fallback arrives, they are eligible for bounded cleanup.
+The default transport returns an expiring WebSocket endpoint whose single-use signed credential is carried in the URI fragment. Clients remove the fragment from the request URL and pass it as the `secondbox.port.token.<credential>` WebSocket protocol alongside `secondbox.port.v1`; this keeps the credential out of the HTTP path, query, and request log. The public transport discriminator remains `relay`, but the implementation is an in-memory proxy. The control plane atomically consumes the credential before upgrading, then forwards binary WebSocket messages over the Runner's authenticated outbound connection without persisting payload bytes. Credit in each direction bounds live buffered bytes and is returned only after the downstream write succeeds.
 
-The Runner forwards a relayed Port stream over the existing outbound authenticated control connection.
+The Runner forwards the proxied Port stream to the approved guest-loopback port.
 
 ### Direct transport
 
-Port sessions carry SSH and VS Code Remote-SSH traffic, whose handshake round trips and sustained throughput the durable frame relay cannot serve: the configured data-plane poll interval applies twice per round trip, so connection setup alone costs seconds. The direct transport removes PostgreSQL from the Port byte path without weakening Port admission authority.
+The direct transport removes the control plane from the Port byte path after admission without weakening Port admission authority. It is useful for sustained and latency-sensitive traffic such as SSH and VS Code Remote-SSH.
 
-A caller receives a direct endpoint only when its application authority holds the exact `sandbox:ports:direct` operation scope. The scope is denied by default and is never implied by `sandbox:ports`. Callers without it receive the relay endpoint unchanged and never learn a Runner address, so rollout is a per-authority grant rather than a deployment-wide switch.
+A caller receives a direct endpoint only when its application authority holds the exact `sandbox:ports:direct` operation scope. The scope is denied by default and is never implied by `sandbox:ports`. Callers without it receive the proxied endpoint and never learn a Runner address, so rollout is a per-authority grant rather than a deployment-wide switch.
 
 The Runner binds one caller-facing data-plane listener at the explicitly configured `SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS` and advertises `SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS` at registration and heartbeat. The advertised value is administrative capacity evidence of the same class as advertised capacity: it carries no Sandbox identity. An unavailable listener makes the Runner unready and fences active instances, matching the existing network-policy listener rule.
 
@@ -56,9 +56,9 @@ Connection admission proceeds in one order:
 1. the caller connects and presents the single-use credential as the first framed message, before any payload byte;
 2. the Runner rejects locally, in constant time, on any mismatch against the assignment-bound session state it already holds — session, generation, fencing token, Lease, named port, and deadline — so an unauthenticated peer cannot force control-plane work;
 3. the Runner consumes the credential through its existing outbound control connection before forwarding any byte, which costs one control-plane round trip per TCP connection and none per byte;
-4. on success the Runner opens the guest-protocol port stream exactly as the relay transport does and copies bytes bidirectionally with no persistence.
+4. on success the Runner opens the same guest-protocol port stream as the proxied transport and copies bytes bidirectionally with no persistence.
 
-TCP flow control governs the caller-to-Runner leg. The existing guest-protocol credit window is retained on the Runner-to-guest leg, where backpressure must still reach the guest process. The relay credit protocol does not apply to a direct connection.
+TCP flow control governs the caller-to-Runner leg. The existing guest-protocol credit window is retained on the Runner-to-guest leg, where backpressure must still reach the guest process. The proxy credit protocol does not apply to a direct connection.
 
 ### Common properties
 
@@ -74,6 +74,6 @@ UDP, port ranges, public unauthenticated sharing, and ungranted direct access ar
 
 Network decisions emit fixed-shape audit evidence containing request, Sandbox, generation, policy revision, normalized destination class, decision, and reason. Logs do not record credentials, full request bodies, DNS payload contents beyond bounded destination evidence, or workspace data.
 
-Port evidence granularity differs by transport and does so deliberately. The relay transport persists frames for live delivery and terminal replay, not as a session-lifetime transcript. Its session row retains terminal state, correlation, durable sequence/hash projections, acknowledgement state, and admission replay after acknowledged or expired frames are pruned. The direct transport emits the same fixed-shape Runner evidence record at admitted open and at close and retains no per-frame durability. Neither transport promises payload reconstruction after its frame-retention boundary, and no evidence record can contain a payload byte, a credential, a fencing token, or a Runner address.
+Both transports retain the same payload-free session accounting and fixed-shape Runner evidence at admitted open and close. Neither transport persists Port payloads or promises payload reconstruction, and no evidence record can contain a payload byte, a credential, a fencing token, or a Runner address.
 
 See [Profiles and authorization](profiles-and-authorization.md), [API conventions](api-conventions.md), [Security](security.md), and [Recovery and reconciliation](recovery-and-reconciliation.md).

@@ -70,8 +70,8 @@ const (
 	PortSessionStateExpired = "expired"
 	PortSessionStateFenced  = "fenced"
 
-	// PortTransportRelay carries Port bytes as durable frames. It is the only
-	// transport an ordinary caller ever receives.
+	// PortTransportRelay proxies Port bytes through the control plane without
+	// persisting payloads. It is the only transport an ordinary caller receives.
 	PortTransportRelay = "relay"
 	// PortTransportDirect carries Port bytes on a live socket to the home
 	// Runner. Admission stays PostgreSQL-authoritative and fenced; only the

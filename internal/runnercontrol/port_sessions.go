@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
@@ -43,8 +44,6 @@ type PortTunnel struct {
 	StreamWindowBytes           int64
 	MaximumRequestBytes         int64
 	MaximumResponseBytes        int64
-	NextOutboundSequence        int64
-	RetainUntil                 time.Time
 	AcknowledgedInboundSequence int64
 	// DataPlaneAddress is the home Runner's advertised caller-facing address. It
 	// is returned only to an ingress holding the exact direct-endpoint grant.
@@ -122,9 +121,17 @@ type DirectPortConsumption struct {
 	Now              time.Time
 }
 
-// PortSessionRelay persists Port admission, single-use connection state, and
+// RunnerDataPlaneFrame binds one payload-free Runner projection to the
+// authenticated connection that delivered it.
+type RunnerDataPlaneFrame struct {
+	RunnerID     string
+	ConnectionID string
+	Message      *runnerv1.RunnerToControlPlane
+}
+
+// PortSessionStore persists Port admission, single-use connection state, and
 // bounded accounting without retaining proxied payload bytes.
-type PortSessionRelay interface {
+type PortSessionStore interface {
 	AdmitPortSession(context.Context, PortSessionAdmission) (PortTunnel, bool, error)
 	GetPortTunnel(context.Context, string, string, string, string, time.Time) (PortTunnel, error)
 	ClosePortSession(context.Context, PortTunnelClose) (contracts.PortSession, error)
@@ -137,5 +144,5 @@ type PortSessionRelay interface {
 // PortSessionFrameRecorder projects payload-free Port frame accounting received
 // on the authenticated Runner connection.
 type PortSessionFrameRecorder interface {
-	RecordPortSessionFrame(context.Context, InboundRelayFrame, time.Time) (bool, error)
+	RecordPortSessionFrame(context.Context, RunnerDataPlaneFrame, time.Time) (bool, error)
 }

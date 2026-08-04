@@ -2593,16 +2593,16 @@ func seedStaleRestoreGenerationAuthority(
 			terminal_detach_seconds,attachment_id,attached_at,detached_at,detach_expires_at,
 			outbound_bytes,inbound_bytes,next_inbound_sequence,terminal_kind,terminal_detail,
 			exit_code,signal,spawn_failure_reason,elapsed_milliseconds,limit_bytes,
-			infrastructure_failure_reason,retryable,terminal_message,stdout_bytes,
-			stderr_bytes,content_bytes,metadata_json,request_json,created_at,updated_at,
-				completed_at,retain_until,frames_retain_until,next_outbound_sequence
+			infrastructure_failure_reason,retryable,terminal_message,result_json,
+			metadata_json,request_json,created_at,updated_at,completed_at,retain_until,
+			next_outbound_sequence
 		) VALUES (
 			'session-stale-generation','tenant','subject','sandbox-restore','revision',
 			'assignment-stale-generation','instance-stale-generation','runner-home',3,$3,
 			'request-session-stale','lease-stale-generation','exec','exec',
 			'stream-stale','running',0,'idempotency-session-stale','hash-session-stale',$2,
 			1024,1024,1024,0,0,false,false,30,'',NULL,NULL,NULL,0,0,1,'','',0,0,'',
-				0,0,'',false,'',$4,$4,$4,'{}','{}',$1,$1,NULL,$2,$2,1
+				0,0,'',false,'','{"stdout":"","stderr":"","content":""}','{}','{}',$1,$1,NULL,$2,1
 		);
 		INSERT INTO secondbox.port_sessions (
 			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,

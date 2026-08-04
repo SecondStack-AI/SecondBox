@@ -26,16 +26,16 @@ func TestPostgresTerminalProjectionOwnsAttachmentDetachAndFenceAuthority(t *test
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	seedRelayReadyAssignment(t, sandbox, now)
+	seedDataPlaneReadyAssignment(t, sandbox, now)
 	lease, err := controlPlane.AcquireSandboxLease(
 		t.Context(), principal, sandbox.ID, sandbox.Generation, "terminal-relay-lease", 60,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	relay, err := runnercontrol.NewPostgresFrameRelay(t.Context(), runnercontrol.PostgresFrameRelayConfig{
-		DatabaseURL: integrationDatabaseURL, ClaimDuration: time.Second,
-		Retention: time.Hour, MaximumFrameBytes: 1 << 20, MaximumSessionBytes: 4 << 20,
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{
+		DatabaseURL: integrationDatabaseURL,
+		Retention:   time.Hour, MaximumSessionBytes: 4 << 20,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -165,15 +165,6 @@ func TestPostgresTerminalProjectionOwnsAttachmentDetachAndFenceAuthority(t *test
 		}
 	}
 	assertTerminalCancellation(session.ID, "Terminal detach interval expired")
-	var frameRows int
-	if err := pool.QueryRow(t.Context(), `
-		SELECT count(*) FROM secondbox.data_plane_frames WHERE session_id=$1`, session.ID,
-	).Scan(&frameRows); err != nil {
-		t.Fatal(err)
-	}
-	if frameRows != 0 {
-		t.Fatalf("Terminal data-plane frame rows = %d, want 0", frameRows)
-	}
 	var activityState string
 	if err := pool.QueryRow(t.Context(), `
 		SELECT state FROM secondbox.activity_sessions WHERE id=$1`, session.ID,

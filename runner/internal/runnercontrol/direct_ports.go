@@ -296,7 +296,7 @@ func (registry *directPortRegistry) deliverAdmission(
 }
 
 // registerDirectPortSession records one admitted PortSession that will be
-// carried by a caller connection rather than by durable relay frames.
+// carried by a caller connection rather than by durable data-plane frames.
 func (s *RunnerProtocolService) registerDirectPortSession(
 	frame *runnerprotocol.PortFrame,
 	open *runnerprotocol.PortDirectOpen,

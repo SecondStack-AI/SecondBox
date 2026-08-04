@@ -63,13 +63,4 @@ func TestDecodePostgresPayloadRejectsInvalidAuthority(t *testing.T) {
 	if payload.Kind != KindRunnerCommand || payload.Key != "runner-one" {
 		t.Fatalf("payload = %#v", payload)
 	}
-	// A replica that cannot decode a kind stops rather than dropping a hint, so
-	// accepting this kind has to ship before anything emits it.
-	session, err := decodePostgresPayload(`{"kind":"data_plane_session","key":"dps_1"}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if session.Kind != KindDataPlaneSession || session.Key != "dps_1" {
-		t.Fatalf("data-plane payload = %#v", session)
-	}
 }

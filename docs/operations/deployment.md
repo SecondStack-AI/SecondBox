@@ -33,7 +33,7 @@ The reviewed development topology intentionally starts no privileged Runner. Run
 4. `[[runners]]`: immutable Runner IDs, same-host or remote placement, pool, capacity, host integration, networking, and execution assets;
 5. `runner_trust`: enrollment credential, CA, server identity, and certificate policy;
 6. `applications`: platform and application authorities;
-7. `policy`: the nine subject quota limits and relay retention;
+7. `policy`: the nine subject quota limits and data-plane retention;
 8. `policy` and `overrides`: contested recovery/rollout settings and intentionally selected tuning overrides.
 
 Unknown keys, duplicate keys, unsupported schema versions, ambiguous bundled/external fields, incomplete authority, mutable production images, invalid cross-field relationships, and invalid cryptographic trust material fail with a `SecondBox deployment manifest` error. The decoder does not interpolate `${ENV}`, include files, or merge ambient environment variables.
@@ -45,7 +45,7 @@ secondbox-deploy validate /secure/secondbox/secondbox.toml
 secondbox-deploy inspect /secure/secondbox/secondbox.toml
 ```
 
-`inspect` prints all resolved non-secret values, positive help for the relay-retention policy, and all 19 available tuning overrides with their compiled defaults. Secret values and secret-revealing paths are redacted.
+`inspect` prints all resolved non-secret values, positive help for the data-plane retention policy, and all 18 available tuning overrides with their compiled defaults. Secret values and secret-revealing paths are redacted.
 
 ### Secret references
 
@@ -55,11 +55,11 @@ Runner host paths are different: they are typed absolute values interpreted on t
 
 ### Authority, policy, tuning, and compiled facts
 
-Required deployment authority has no default. This includes identities, credentials, endpoints, process and storage paths, signed-asset catalog and bundle digests, object-store addressing mode, the nine subject quota limits, and relay retention.
+Required deployment authority has no default. This includes identities, credentials, endpoints, process and storage paths, signed-asset catalog and bundle digests, object-store addressing mode, the nine subject quota limits, and data-plane retention.
 
-`policy.data_plane_retention_seconds` participates in each relay session's transition-specific session/result/idempotency deadline. That stored deadline also bounds replayable relay frames as a maximum safety fallback. Frames are delivery and replay state, not the materialised result: after no live delivery or replay consumer remains, they may be removed before the session deadline while buffered results, terminal outcome, admission replay, and compact sequence/hash evidence remain available. Raising this value lengthens the fallback; it does not require every non-replayable payload frame to remain for that whole interval.
+`policy.data_plane_retention_seconds` participates in each data-plane session's result and idempotency deadline. The retained session row contains bounded one-shot results, terminal outcome, admission replay, and accounting, but no streaming payload bytes.
 
-The manifest also requires three contested rollout/recovery decisions: relay poll interval, Runner command poll interval, and enabled Runner features. They remain operator policy until a separate decision reclassifies them.
+The manifest also requires three contested rollout/recovery decisions: data-plane session sweep interval, Runner command poll interval, and enabled Runner features. They remain operator policy until a separate decision reclassifies them.
 
 The `[overrides]` table contains code-owned tuning. Every field is optional. When absent, `secondboxd` uses the reviewed value shown by `inspect`; when present, the exact value is rendered and passes the same validation and cross-field checks as before. Invalid overrides fail rather than falling back. Compose uses value-less pass-through mappings so an absent override remains unset instead of becoming an empty string.
 

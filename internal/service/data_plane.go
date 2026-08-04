@@ -14,13 +14,11 @@ import (
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
-	"github.com/SecondStack-AI/SecondBox/internal/worknotify"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
-// DataPlaneRelay owns durable admission and terminal projections. Exec and File
-// payload frames use a live transport and never enter this interface.
-type DataPlaneRelay interface {
+// DataPlaneStore owns durable admission, lifecycle, and terminal projections.
+type DataPlaneStore interface {
 	AdmitDataPlane(context.Context, runnercontrol.DataPlaneAdmission) (runnercontrol.DataPlaneSession, bool, error)
 	GetDataPlaneSession(context.Context, string, string, string) (runnercontrol.DataPlaneSession, error)
 	StartDataPlaneSession(context.Context, string, string, string, time.Time) (runnercontrol.DataPlaneSession, error)
@@ -31,8 +29,8 @@ type DataPlaneRelay interface {
 	CancelPublicDataPlaneSession(context.Context, runnercontrol.PublicDataPlaneCancellation) (runnercontrol.DataPlaneSession, bool, error)
 }
 
-type terminalDataPlaneRelay interface {
-	DataPlaneRelay
+type terminalDataPlaneStore interface {
+	DataPlaneStore
 	AcquireTerminalAttachment(context.Context, string, string, string, string, int64, string, time.Time) (runnercontrol.DataPlaneSession, error)
 	DetachTerminalAttachment(context.Context, string, string, string, string, time.Time) (bool, error)
 	RecordTerminalClientFrame(context.Context, string, string, string, string, runnercontrol.TerminalClientFrame, time.Time) (bool, error)
@@ -84,7 +82,7 @@ func (service *ControlPlaneService) CreateSandboxExecStream(
 		request.MaximumOutputBytes, nil,
 	)
 	open.Streaming = true
-	return service.dataPlaneRelay.AdmitDataPlane(ctx, runnercontrol.DataPlaneAdmission{
+	return service.dataPlaneStore.AdmitDataPlane(ctx, runnercontrol.DataPlaneAdmission{
 		ID: sessionID, StreamID: service.newID("stream"),
 		TenantRef: principal.TenantRef, SandboxID: sandboxID,
 		SubjectRef: principal.SubjectRef,
@@ -110,7 +108,7 @@ func (service *ControlPlaneService) GetSandboxExecStream(
 	if err := service.requireDataPlane(principal); err != nil {
 		return runnercontrol.DataPlaneSession{}, err
 	}
-	session, err := service.dataPlaneRelay.GetDataPlaneSession(
+	session, err := service.dataPlaneStore.GetDataPlaneSession(
 		ctx, principal.TenantRef, principal.SubjectRef, sessionID,
 	)
 	if err != nil {
@@ -135,7 +133,7 @@ func (service *ControlPlaneService) CancelSandboxExecStream(
 	if err := service.requireDataPlane(principal); err != nil {
 		return false, err
 	}
-	return service.dataPlaneRelay.CancelDataPlaneSession(
+	return service.dataPlaneStore.CancelDataPlaneSession(
 		ctx, principal.TenantRef, principal.SubjectRef, sessionID, reason, service.now().UTC(),
 	)
 }
@@ -160,7 +158,7 @@ func (service *ControlPlaneService) CancelSandboxExecStreamAtGeneration(
 		return runnercontrol.DataPlaneSession{}, false, err
 	}
 	now := service.now().UTC()
-	return service.dataPlaneRelay.CancelPublicDataPlaneSession(
+	return service.dataPlaneStore.CancelPublicDataPlaneSession(
 		ctx,
 		runnercontrol.PublicDataPlaneCancellation{
 			TenantRef: principal.TenantRef, SandboxID: sandboxID, SessionID: sessionID,
@@ -208,28 +206,12 @@ func (service *ControlPlaneService) DataPlanePollInterval() time.Duration {
 	return service.dataPlanePollInterval
 }
 
-// SubscribeDataPlaneSession returns a coalesced wakeup for one session's inbound
-// frames and a cancellation function.
-//
-// A deployment without a wakeup source yields a nil channel, which blocks
-// forever in a select and leaves the caller on its poll interval. That interval
-// is the recovery bound in both cases, so a lost or absent notification delays
-// delivery rather than losing it.
-func (service *ControlPlaneService) SubscribeDataPlaneSession(
-	sessionID string,
-) (<-chan struct{}, func()) {
-	if service.dataPlaneWakeups == nil || sessionID == "" {
-		return nil, func() {}
-	}
-	return service.dataPlaneWakeups.Subscribe(worknotify.KindDataPlaneSession, sessionID)
-}
-
 func (service *ControlPlaneService) SandboxExecStreamOutcome(
 	ctx context.Context,
 	principal contracts.Principal,
 	sessionID string,
 ) (any, error) {
-	session, err := service.dataPlaneRelay.GetDataPlaneSession(
+	session, err := service.dataPlaneStore.GetDataPlaneSession(
 		ctx, principal.TenantRef, principal.SubjectRef, sessionID,
 	)
 	if err != nil {
@@ -272,7 +254,7 @@ func (service *ControlPlaneService) ExecuteSandboxCommand(
 		request.Command, request.Cwd, request.Environment, deadline,
 		request.MaximumOutputBytes, stdin,
 	)
-	session, replayed, err := service.dataPlaneRelay.AdmitDataPlane(ctx, runnercontrol.DataPlaneAdmission{
+	session, replayed, err := service.dataPlaneStore.AdmitDataPlane(ctx, runnercontrol.DataPlaneAdmission{
 		ID: sessionID, StreamID: service.newID("stream"),
 		TenantRef: principal.TenantRef, SandboxID: sandboxID,
 		SubjectRef: principal.SubjectRef,
@@ -443,7 +425,7 @@ func (service *ControlPlaneService) ListSandboxDirectory(
 		return contracts.DirectoryListing{}, err
 	}
 	if session.Metadata == nil || len(session.Metadata.DirectChildEntries) > 10_000 {
-		return contracts.DirectoryListing{}, runnercontrol.ErrRelaySessionLimit
+		return contracts.DirectoryListing{}, runnercontrol.ErrDataPlaneSessionLimit
 	}
 	result := contracts.DirectoryListing{Path: path, Entries: make([]contracts.FileStat, 0, len(session.Metadata.DirectChildEntries))}
 	for _, entry := range session.Metadata.DirectChildEntries {
@@ -530,7 +512,7 @@ func (service *ControlPlaneService) runFileOperation(
 	now := service.now().UTC()
 	const fileDeadlineMilliseconds int64 = 30_000
 	sessionID := service.newID("dps")
-	session, replayed, err := service.dataPlaneRelay.AdmitDataPlane(ctx, runnercontrol.DataPlaneAdmission{
+	session, replayed, err := service.dataPlaneStore.AdmitDataPlane(ctx, runnercontrol.DataPlaneAdmission{
 		ID: sessionID, StreamID: service.newID("stream"),
 		TenantRef: principal.TenantRef, SandboxID: sandboxID,
 		SubjectRef: principal.SubjectRef,
@@ -583,7 +565,7 @@ func (service *ControlPlaneService) waitForDataPlane(
 		case <-ctx.Done():
 			return runnercontrol.DataPlaneSession{}, ctx.Err()
 		case <-timerChannel:
-			expired, err := service.dataPlaneRelay.ExpireDataPlaneSession(
+			expired, err := service.dataPlaneStore.ExpireDataPlaneSession(
 				ctx, tenantRef, subjectRef, session.ID, service.now().UTC(),
 			)
 			if err != nil {
@@ -594,7 +576,7 @@ func (service *ControlPlaneService) waitForDataPlane(
 			}
 			timerChannel = nil
 		case <-ticker.C:
-			current, err := service.dataPlaneRelay.GetDataPlaneSession(
+			current, err := service.dataPlaneStore.GetDataPlaneSession(
 				ctx, tenantRef, subjectRef, session.ID,
 			)
 			if err != nil {
@@ -608,7 +590,7 @@ func (service *ControlPlaneService) waitForDataPlane(
 }
 
 func (service *ControlPlaneService) requireDataPlane(principal contracts.Principal) error {
-	if service.dataPlaneRelay == nil {
+	if service.dataPlaneStore == nil {
 		return ports.ErrLifecycleUnavailable
 	}
 	if principal.TenantRef == "" || principal.SubjectRef == "" {
@@ -827,7 +809,7 @@ func fileTerminalError(session runnercontrol.DataPlaneSession) error {
 	case runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_FENCED.String():
 		return ports.ErrGenerationFenced
 	case runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_LIMIT_EXCEEDED.String():
-		return runnercontrol.ErrRelaySessionLimit
+		return runnercontrol.ErrDataPlaneSessionLimit
 	case runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_PERMISSION_DENIED.String():
 		return runnercontrol.ErrFilePermission
 	case runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_CHECKSUM_MISMATCH.String():

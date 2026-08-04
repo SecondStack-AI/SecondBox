@@ -76,7 +76,7 @@ func TestPublicArtifactsPublishListDownloadAndEndRetention(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seedRelayReadyAssignment(t, sandbox, time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC))
+	seedDataPlaneReadyAssignment(t, sandbox, time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC))
 	lease, err := controlPlane.AcquireSandboxLease(
 		t.Context(), principal, sandbox.ID, sandbox.Generation, "artifact-http-lease", 60,
 	)
@@ -494,7 +494,7 @@ func newArtifactHTTPFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
-	seedRelayReadyAssignment(t, sandbox, now)
+	seedDataPlaneReadyAssignment(t, sandbox, now)
 	lease, err := controlPlane.AcquireSandboxLease(
 		t.Context(), principal, sandbox.ID, sandbox.Generation, suffix+"-lease", 60,
 	)

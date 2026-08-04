@@ -164,7 +164,7 @@ func (stream *LiveDataPlaneStream) Send(message *runnerv1.ControlPlaneToRunner) 
 	}
 	connection.mu.Lock()
 	defer connection.mu.Unlock()
-	if err := connection.session.ValidateOutboundRelayFrame(message); err != nil {
+	if err := connection.session.ValidateOutboundDataPlaneFrame(message); err != nil {
 		return err
 	}
 	if err := connection.sender.Send(message); err != nil {

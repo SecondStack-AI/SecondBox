@@ -1,18 +1,12 @@
 # Direct data plane
 
-Status: proposed. This design supersedes the relay transport in [Runner protocol](runner-protocol.md) and the frame storage introduced by migrations `0001`, `0005`, and `0007`.
+Status: complete. This design defines the data-plane transport described by [Runner protocol](runner-protocol.md).
 
 ## Problem
 
-Every relayed data-plane byte is a PostgreSQL row. `applyInboundPayload` in `internal/runnercontrol/postgres_relay.go` appends with:
+The former PostgreSQL frame transport stored every data-plane message and repeatedly rewrote accumulated output bytes. For `N` frames of size `S`, accumulation required approximately `N²S/2` I/O in addition to the duplicate frame payload. Per-frame polling and notifications added latency and broadcast work across control-plane replicas. A session byte limit bounded the final size but did not change the quadratic path.
 
-```sql
-stdout_bytes=stdout_bytes||$3::bytea,
-```
-
-PostgreSQL cannot append in place. Each frame rewrites the accumulated value, its TOAST data, and a dead tuple. `dataPlaneSessionSelect` also selects the accumulated columns, so `lockInboundSession` reads the entire value before each append. For `N` frames of size `S`, the I/O is approximately `N²S/2`. Ten thousand 4 KiB frames require roughly 200 GiB of I/O to accumulate 40 MiB, in addition to the copy in `data_plane_frames.payload`.
-
-Three other limits compound this cost: outbound delivery drains one frame per polling interval, inbound `pg_notify` broadcasts per frame to every replica, and the delivery index is not keyed by runner. `DataPlaneMaximumSessionBytes` limits the final damage but does not change the quadratic path.
+The finished transport removes payload bytes from PostgreSQL. PostgreSQL retains admission authority, bounded one-shot results, session lifecycle, accounting, idempotency, and terminal outcomes.
 
 ## Invariants
 
@@ -35,12 +29,12 @@ This is a transport change. It does not move an authority decision.
 
 Direct-only transport requires every API client to reach every runner data-plane listener. Existing direct Ports accept that requirement behind the separate direct data-plane scope. Applying the same requirement to Exec, PTY, and File would change deployments where runners are private and only establish outbound control connections.
 
-The relay's scaling failure is PostgreSQL byte storage, not the existence of a control-plane byte path. Two transports replace it:
+Two transports carry data-plane bytes:
 
 1. **Direct.** The caller connects to the runner data-plane listener. The control plane is absent from the byte path after admission.
 2. **Proxied.** The caller connects to the control plane, which forwards bytes in memory over the runner control connection. The proxy persists no payload and applies the same credit windows.
 
-The PostgreSQL frame relay is deleted after both replacements are complete. A Profile selects the default transport. A deployment may forbid either surviving transport.
+A Profile selects the default transport. A deployment may forbid either transport.
 
 Both transports are supported. The constraint being satisfied is that no data-plane payload is ever stored in PostgreSQL; a control-plane byte path that forwards in memory and persists nothing meets it. Runner reachability is therefore an optimization a deployment may choose, not a requirement the product imposes.
 
@@ -79,19 +73,11 @@ Sequence numbering, gap rejection, and credit windows remain unchanged. The ring
 
 The runner buffers output within `maximumOutputBytes` and sends one completion message over the control connection. The control plane persists one outcome row. It does not persist per-frame output for this path.
 
-## Phases
+## Finished system
 
-Each phase is independently shippable and leaves all admitted transports working.
+The `SBXDP1` handshake, TLS 1.3 listener, SPKI pinning, and session-kind discriminator apply to Port, Exec, PTY, and File sessions. Exec and File support direct and in-memory proxied streaming, while one-shot operations persist one bounded completion result. PTY uses the same transports with a Runner-owned replay ring for detach and reattach. Port callers use either the in-memory proxy or the separately authorized direct listener. Admission and cancellation commands contain no payload bytes.
 
-| Phase | Change | Relay state |
-| --- | --- | --- |
-| 1 — security and generalization | TLS 1.3 and SPKI pinning; `SBXDP1`; session-kind discriminator; Ports remain end to end | Unchanged |
-| 2 — Exec and File | Direct and proxied streaming; one-shot Exec uses one bounded completion message | Retained for PTY and Ports |
-| 3 — PTY | Direct and proxied terminal sessions; runner replay ring; detach and reattach parity | Retained for Ports |
-| 4 — Ports | Relayed callers use the proxied transport; direct admission and cancellation use payload-free commands | Present but unused by admitted transports |
-| 5 — removal | Delete relay implementation and service paths; drop frame tables and accumulated payload columns; remove relay conformance | Deleted |
-
-Phase 5 also updates `runner-protocol.md`, `networking-and-ports.md`, and the repository transport rules.
+The PostgreSQL frame implementation, its wakeups and retention sweep, its configuration bounds, and its conformance harness are absent. The schema retains no per-frame table or accumulated payload columns.
 
 ## What must not change
 

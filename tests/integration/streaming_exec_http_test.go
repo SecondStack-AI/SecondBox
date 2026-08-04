@@ -56,7 +56,7 @@ func TestPublicStreamingExecIsLiveBackpressuredAndCancellable(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	seed := seedRelayReadyAssignment(t, sandbox, now)
+	seed := seedDataPlaneReadyAssignment(t, sandbox, now)
 	staleLease, err := controlPlane.AcquireSandboxLease(
 		t.Context(), principal, sandbox.ID, sandbox.Generation, "streaming-stale-lease-acquire", 60,
 	)
@@ -68,9 +68,9 @@ func TestPublicStreamingExecIsLiveBackpressuredAndCancellable(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	relay, err := runnercontrol.NewPostgresFrameRelay(t.Context(), runnercontrol.PostgresFrameRelayConfig{
-		DatabaseURL: integrationDatabaseURL, ClaimDuration: 50 * time.Millisecond,
-		Retention: time.Hour, MaximumFrameBytes: 1 << 20, MaximumSessionBytes: 2 << 30,
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{
+		DatabaseURL: integrationDatabaseURL,
+		Retention:   time.Hour, MaximumSessionBytes: 2 << 30,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +85,7 @@ func TestPublicStreamingExecIsLiveBackpressuredAndCancellable(t *testing.T) {
 		DefaultSubjectQuota: generousQuota(),
 		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
-		DataPlaneRelay:        relay, DataPlanePollInterval: time.Millisecond,
+		DataPlaneStore:        relay, DataPlanePollInterval: time.Millisecond,
 		LiveDataPlane: liveDataPlane,
 		PublicBaseURL: publicBaseURL,
 	})
@@ -685,7 +685,7 @@ func waitStreamingRunnerEvent(t *testing.T, events <-chan string, expected strin
 
 func waitDataPlaneSessionState(
 	t *testing.T,
-	relay *runnercontrol.PostgresFrameRelay,
+	relay *runnercontrol.PostgresDataPlaneStore,
 	tenantRef string,
 	subjectRef string,
 	sessionID string,

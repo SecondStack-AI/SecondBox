@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	runnerRelayChunkBytes            = 64 << 10
-	maxRunnerRelayOperationStates    = 1024
-	maxRunnerRelayTerminalTombstones = 256
+	runnerDataPlaneChunkBytes            = 64 << 10
+	maxRunnerDataPlaneOperationStates    = 1024
+	maxRunnerDataPlaneTerminalTombstones = 256
 )
 
 // BufferedExecResult is one bounded guest execution translated to runner wire types.
@@ -182,10 +182,10 @@ func (s *RunnerProtocolService) handleExecFrame(
 	if !enabled[runnerprotocol.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING] {
 		return fmt.Errorf("SecondBox runner Exec feature was not negotiated")
 	}
-	if err := validateRunnerRelayFrameIdentity(frame.GetFence(), frame.GetOperationId(), frame.GetStreamId(), frame.GetSequence()); err != nil {
+	if err := validateRunnerDataPlaneFrameIdentity(frame.GetFence(), frame.GetOperationId(), frame.GetStreamId(), frame.GetSequence()); err != nil {
 		return err
 	}
-	key := runnerRelayOperationKey(frame.Fence, frame.OperationId, frame.StreamId)
+	key := runnerDataPlaneOperationKey(frame.Fence, frame.OperationId, frame.StreamId)
 	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(frame)
 	if err != nil {
 		return fmt.Errorf("SecondBox runner encode Exec frame: %w", err)
@@ -233,7 +233,7 @@ func (s *RunnerProtocolService) handleExecFrame(
 		}
 		state.cancel = cancel
 		state.lastIncoming = bytes.Clone(encoded)
-		if len(s.execOperations) >= maxRunnerRelayOperationStates {
+		if len(s.execOperations) >= maxRunnerDataPlaneOperationStates {
 			s.operationMu.Unlock()
 			return s.sendRunnerExecOperationTerminal(stream, state, runnerInfrastructureTerminal(
 				runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_RUNNER_FAILED,
@@ -289,7 +289,7 @@ func (s *RunnerProtocolService) handleExecFrame(
 		s.operationMu.Unlock()
 		return fmt.Errorf("SecondBox runner Exec correlation changed within the operation")
 	}
-	duplicate, err := acceptRunnerRelayInput(state.nextIncoming, state.lastIncoming, frame.Sequence, encoded)
+	duplicate, err := acceptRunnerDataPlaneInput(state.nextIncoming, state.lastIncoming, frame.Sequence, encoded)
 	if duplicate {
 		terminal := state.terminalFrame
 		ptyTerminal := state.ptyTerminalFrame
@@ -359,12 +359,12 @@ func (s *RunnerProtocolService) handlePTYFrame(
 	if !enabled[runnerprotocol.RunnerFeature_RUNNER_FEATURE_PTY] {
 		return fmt.Errorf("SecondBox runner PTY feature was not negotiated")
 	}
-	if err := validateRunnerRelayFrameIdentity(
+	if err := validateRunnerDataPlaneFrameIdentity(
 		frame.GetFence(), frame.GetOperationId(), frame.GetStreamId(), frame.GetSequence(),
 	); err != nil {
 		return err
 	}
-	key := runnerRelayOperationKey(frame.Fence, frame.OperationId, frame.StreamId)
+	key := runnerDataPlaneOperationKey(frame.Fence, frame.OperationId, frame.StreamId)
 	if frame.GetAttach() != nil {
 		return s.attachPTYStream(stream, key, frame)
 	}
@@ -385,7 +385,7 @@ func (s *RunnerProtocolService) handlePTYFrame(
 		s.operationMu.Unlock()
 		return fmt.Errorf("SecondBox runner PTY correlation changed within the operation")
 	}
-	duplicate, err := acceptRunnerRelayInput(
+	duplicate, err := acceptRunnerDataPlaneInput(
 		state.nextIncoming, state.lastIncoming, frame.Sequence, encoded,
 	)
 	if duplicate {
@@ -644,7 +644,7 @@ func (s *RunnerProtocolService) sendRunnerPTYBytes(
 		if windowBytes == 0 {
 			return fmt.Errorf("SecondBox runner PTY replay window is unavailable")
 		}
-		size := min(len(content), runnerRelayChunkBytes, int(windowBytes))
+		size := min(len(content), runnerDataPlaneChunkBytes, int(windowBytes))
 		frame := &runnerprotocol.PtyFrame{
 			Fence: cloneRunnerFence(state.fence), OperationId: state.operationID,
 			StreamId: state.streamID, Sequence: state.nextOutgoing,
@@ -847,14 +847,14 @@ func (s *RunnerProtocolService) sendRunnerExecBytes(
 	for len(content) > 0 {
 		if credit == 0 {
 			var err error
-			credit, err = state.credit.take(ctx, uint64(min(len(content), runnerRelayChunkBytes)))
+			credit, err = state.credit.take(ctx, uint64(min(len(content), runnerDataPlaneChunkBytes)))
 			if err != nil {
 				return err
 			}
 		}
 		size := len(content)
-		if size > runnerRelayChunkBytes {
-			size = runnerRelayChunkBytes
+		if size > runnerDataPlaneChunkBytes {
+			size = runnerDataPlaneChunkBytes
 		}
 		if uint64(size) > credit {
 			size = int(credit)
@@ -934,10 +934,10 @@ func (s *RunnerProtocolService) handleFileFrame(
 	if !enabled[runnerprotocol.RunnerFeature_RUNNER_FEATURE_FILE_STREAMING] {
 		return fmt.Errorf("SecondBox runner File feature was not negotiated")
 	}
-	if err := validateRunnerRelayFrameIdentity(frame.GetFence(), frame.GetOperationId(), frame.GetStreamId(), frame.GetSequence()); err != nil {
+	if err := validateRunnerDataPlaneFrameIdentity(frame.GetFence(), frame.GetOperationId(), frame.GetStreamId(), frame.GetSequence()); err != nil {
 		return err
 	}
-	key := runnerRelayOperationKey(frame.Fence, frame.OperationId, frame.StreamId)
+	key := runnerDataPlaneOperationKey(frame.Fence, frame.OperationId, frame.StreamId)
 	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(frame)
 	if err != nil {
 		return fmt.Errorf("SecondBox runner encode File frame: %w", err)
@@ -984,7 +984,7 @@ func (s *RunnerProtocolService) handleFileFrame(
 			ctx:          fileCtx,
 			cancel:       cancel,
 		}
-		if len(s.fileOperations) >= maxRunnerRelayOperationStates {
+		if len(s.fileOperations) >= maxRunnerDataPlaneOperationStates {
 			s.operationMu.Unlock()
 			return s.sendFileTerminal(stream, state, &runnerprotocol.FileTerminal{
 				Kind:       runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_FAILED,
@@ -1017,7 +1017,7 @@ func (s *RunnerProtocolService) handleFileFrame(
 		s.operationMu.Unlock()
 		return fmt.Errorf("SecondBox runner File correlation changed within the operation")
 	}
-	duplicate, err := acceptRunnerRelayInput(state.nextIncoming, state.lastIncoming, frame.Sequence, encoded)
+	duplicate, err := acceptRunnerDataPlaneInput(state.nextIncoming, state.lastIncoming, frame.Sequence, encoded)
 	if duplicate {
 		terminal := state.terminalFrame
 		s.operationMu.Unlock()
@@ -1148,14 +1148,14 @@ func (s *RunnerProtocolService) sendRunnerFileBytes(
 	for len(content) > 0 {
 		if credit == 0 {
 			var err error
-			credit, err = state.credit.take(ctx, uint64(min(len(content), runnerRelayChunkBytes)))
+			credit, err = state.credit.take(ctx, uint64(min(len(content), runnerDataPlaneChunkBytes)))
 			if err != nil {
 				return err
 			}
 		}
 		size := len(content)
-		if size > runnerRelayChunkBytes {
-			size = runnerRelayChunkBytes
+		if size > runnerDataPlaneChunkBytes {
+			size = runnerDataPlaneChunkBytes
 		}
 		if uint64(size) > credit {
 			size = int(credit)
@@ -1233,7 +1233,7 @@ func (s *RunnerProtocolService) retainExecTerminalLocked(key string) {
 		return
 	}
 	s.execTerminalOrder = append(s.execTerminalOrder, key)
-	for len(s.execTerminalOrder) > maxRunnerRelayTerminalTombstones {
+	for len(s.execTerminalOrder) > maxRunnerDataPlaneTerminalTombstones {
 		oldest := s.execTerminalOrder[0]
 		s.execTerminalOrder = s.execTerminalOrder[1:]
 		if state := s.execOperations[oldest]; state != nil && state.terminal {
@@ -1248,7 +1248,7 @@ func (s *RunnerProtocolService) retainFileTerminalLocked(key string) {
 		return
 	}
 	s.fileTerminalOrder = append(s.fileTerminalOrder, key)
-	for len(s.fileTerminalOrder) > maxRunnerRelayTerminalTombstones {
+	for len(s.fileTerminalOrder) > maxRunnerDataPlaneTerminalTombstones {
 		oldest := s.fileTerminalOrder[0]
 		s.fileTerminalOrder = s.fileTerminalOrder[1:]
 		if state := s.fileOperations[oldest]; state != nil && state.terminal {
@@ -1257,7 +1257,7 @@ func (s *RunnerProtocolService) retainFileTerminalLocked(key string) {
 	}
 }
 
-func validateRunnerRelayFrameIdentity(
+func validateRunnerDataPlaneFrameIdentity(
 	fence *runnerprotocol.AssignmentFence,
 	operationID string,
 	streamID string,
@@ -1272,7 +1272,7 @@ func validateRunnerRelayFrameIdentity(
 		strings.TrimSpace(operationID) == "" ||
 		strings.TrimSpace(streamID) == "" ||
 		sequence == 0 {
-		return fmt.Errorf("SecondBox runner relay frame identity is incomplete")
+		return fmt.Errorf("SecondBox runner data-plane frame identity is incomplete")
 	}
 	return nil
 }
@@ -1295,7 +1295,7 @@ func (s *RunnerProtocolService) validateOperationCorrelation(
 	return nil
 }
 
-func runnerRelayOperationKey(
+func runnerDataPlaneOperationKey(
 	fence *runnerprotocol.AssignmentFence,
 	operationID string,
 	streamID string,
@@ -1308,7 +1308,7 @@ func runnerRelayOperationKey(
 	}, "\x00")
 }
 
-func acceptRunnerRelayInput(
+func acceptRunnerDataPlaneInput(
 	next uint64,
 	previous []byte,
 	sequence uint64,
@@ -1318,7 +1318,7 @@ func acceptRunnerRelayInput(
 		return true, nil
 	}
 	if sequence != next {
-		return false, fmt.Errorf("SecondBox runner relay frame sequence is reordered")
+		return false, fmt.Errorf("SecondBox runner data-plane frame sequence is reordered")
 	}
 	return false, nil
 }

@@ -263,9 +263,9 @@ func TestCloseCurrentConnectionDetachesProxiedTerminalAndFailsOtherDataPlaneSess
 			terminal_detach_seconds,attachment_id,attached_at,detached_at,detach_expires_at,
 			outbound_bytes,inbound_bytes,next_inbound_sequence,terminal_kind,terminal_detail,
 			exit_code,signal,spawn_failure_reason,elapsed_milliseconds,limit_bytes,
-			infrastructure_failure_reason,retryable,terminal_message,stdout_bytes,
-			stderr_bytes,content_bytes,metadata_json,request_json,created_at,updated_at,
-				completed_at,retain_until,frames_retain_until,next_outbound_sequence
+			infrastructure_failure_reason,retryable,terminal_message,result_json,
+			metadata_json,request_json,created_at,updated_at,completed_at,retain_until,
+			next_outbound_sequence
 		)
 		SELECT
 			'session-'||kind,'tenant','subject','sandbox','profile-revision',
@@ -274,7 +274,7 @@ func TestCloseCurrentConnectionDetachesProxiedTerminalAndFailsOtherDataPlaneSess
 			kind='terminal',CASE WHEN kind='terminal' THEN 30 ELSE 0 END,
 			CASE WHEN kind='terminal' THEN 'attachment-terminal' ELSE '' END,
 			CASE WHEN kind='terminal' THEN $3::timestamptz ELSE NULL END,NULL,NULL,0,0,1,'','',0,0,'',0,0,'',false,'',
-				''::bytea,''::bytea,''::bytea,'{}','{}',$3,$3,NULL,$2,$2,1
+				'{"stdout":"","stderr":"","content":""}','{}','{}',$3,$3,NULL,$2,1
 		FROM unnest(ARRAY['exec','terminal','file','port']) AS kind;
 
 		INSERT INTO secondbox.assignments (
@@ -484,15 +484,15 @@ func TestCloseSupersededConnectionDoesNotFailCurrentDataPlaneSessions(t *testing
 			terminal_detach_seconds,attachment_id,attached_at,detached_at,detach_expires_at,
 			outbound_bytes,inbound_bytes,next_inbound_sequence,terminal_kind,terminal_detail,
 			exit_code,signal,spawn_failure_reason,elapsed_milliseconds,limit_bytes,
-			infrastructure_failure_reason,retryable,terminal_message,stdout_bytes,
-			stderr_bytes,content_bytes,metadata_json,request_json,created_at,updated_at,
-				completed_at,retain_until,frames_retain_until,next_outbound_sequence
+			infrastructure_failure_reason,retryable,terminal_message,result_json,
+			metadata_json,request_json,created_at,updated_at,completed_at,retain_until,
+			next_outbound_sequence
 		) VALUES (
 			'session-current','tenant','subject','sandbox','profile-revision',
 			'assignment','instance','runner-home',1,$2,'request','','exec','exec',
 			'stream','running',0,'','',$3,1024,1024,1024,1024,0,false,false,0,'',
-			NULL,NULL,NULL,0,0,1,'','',0,0,'',0,0,'',false,'',''::bytea,
-				''::bytea,''::bytea,'{}','{}',$1,$1,NULL,$3,$3,1
+			NULL,NULL,NULL,0,0,1,'','',0,0,'',0,0,'',false,'',
+				'{"stdout":"","stderr":"","content":""}','{}','{}',$1,$1,NULL,$3,1
 		)`,
 		pgx.QueryExecModeSimpleProtocol,
 		now,
