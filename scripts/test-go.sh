@@ -8,6 +8,8 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 go test ./... -count=1
 go vet ./...
+go vet -tags "scenario_live sdk_live" ./...
+GOOS=darwin CGO_ENABLED=0 go vet ./internal/deployconfig
 
 cd "$repo_root/runner"
 scripts/ci_paths_test.sh

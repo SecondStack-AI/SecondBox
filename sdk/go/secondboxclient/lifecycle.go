@@ -525,14 +525,10 @@ func (client *Client) Run(
 	if metadata == nil {
 		metadata = Metadata{}
 	}
-	var sourceSnapshotID *OpaqueID
-	if request.SourceSnapshotID != "" {
-		sourceSnapshotID = &request.SourceSnapshotID
-	}
 	handle, _, err := client.CreateSandbox(ctx, CreateSandboxRequest{
 		Profile:          request.Profile,
 		Metadata:         metadata,
-		SourceSnapshotID: sourceSnapshotID,
+		SourceSnapshotID: request.SourceSnapshotID,
 	}, "")
 	if err != nil {
 		return nil, RunResult{}, err

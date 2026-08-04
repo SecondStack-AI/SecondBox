@@ -2,12 +2,13 @@
 
 package secondboxclient
 
-import "time"
+import (
+	"time"
 
-type AcquireLeaseRequest struct {
-	DurationSeconds int64 `json:"durationSeconds"`
-	ReplaceActive   *bool `json:"replaceActive,omitempty"`
-}
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
+)
+
+type AcquireLeaseRequest = contracts.AcquireLeaseRequest
 
 type ArgvCommand struct {
 	Arguments  []string `json:"arguments"`
@@ -45,25 +46,14 @@ const (
 	BootStageReady            BootStage = "ready"
 )
 
-type BootStageTiming struct {
-	CumulativeMilliseconds float64   `json:"cumulativeMilliseconds"`
-	ElapsedMilliseconds    float64   `json:"elapsedMilliseconds"`
-	ObservedAt             Timestamp `json:"observedAt"`
-	ReceivedAt             Timestamp `json:"receivedAt"`
-	Stage                  BootStage `json:"stage"`
-}
+type BootStageTiming = contracts.BootStageTiming
 
 type BootStageTimingSummary struct {
 	Duration DurationPercentiles `json:"duration"`
 	Stage    BootStage           `json:"stage"`
 }
 
-type BootTiming struct {
-	Completed            bool              `json:"completed"`
-	DurationMilliseconds float64           `json:"durationMilliseconds"`
-	Generation           int64             `json:"generation"`
-	Stages               []BootStageTiming `json:"stages"`
-}
+type BootTiming = contracts.BootTiming
 
 type BufferedExecRequest struct {
 	Command              Command        `json:"command"`
@@ -91,29 +81,13 @@ type CreatePortSessionRequest struct {
 	Name            string `json:"name"`
 }
 
-type CreateProfileRequest struct {
-	Name ProfileName         `json:"name"`
-	Spec ProfileRevisionSpec `json:"spec"`
-}
+type CreateProfileRequest = contracts.CreateProfileRequest
 
-type CreateRunnerPoolRequest struct {
-	Architectures  RunnerArchitectureList `json:"architectures"`
-	Capabilities   RunnerCapabilityList   `json:"capabilities"`
-	CapacityPolicy RunnerCapacityPolicy   `json:"capacityPolicy"`
-	Name           ProfileName            `json:"name"`
-	State          RunnerPoolState        `json:"state"`
-}
+type CreateRunnerPoolRequest = contracts.CreateRunnerPoolRequest
 
-type CreateSandboxRequest struct {
-	Metadata         Metadata    `json:"metadata"`
-	Profile          ProfileName `json:"profile"`
-	SourceSnapshotID *OpaqueID   `json:"sourceSnapshotId,omitempty"`
-}
+type CreateSandboxRequest = contracts.CreateSandboxRequest
 
-type CreateSnapshotRequest struct {
-	Metadata Metadata `json:"metadata"`
-	Name     string   `json:"name"`
-}
+type CreateSnapshotRequest = contracts.CreateSnapshotRequest
 
 type CreateTerminalRequest struct {
 	Columns              int            `json:"columns"`
@@ -125,30 +99,14 @@ type CreateTerminalRequest struct {
 	Rows                 int            `json:"rows"`
 }
 
-type DeploymentTimingSummary struct {
-	API               DurationPercentiles      `json:"api"`
-	APISeries         []HTTPRouteTimingSummary `json:"apiSeries"`
-	Boot              DurationPercentiles      `json:"boot"`
-	BootStages        []BootStageTimingSummary `json:"bootStages"`
-	DominantBootStage *BootStageTimingSummary  `json:"dominantBootStage,omitempty"`
-	Exec              DurationPercentiles      `json:"exec"`
-	ExecSeries        []ExecTimingSummary      `json:"execSeries"`
-	ObservedAt        Timestamp                `json:"observedAt"`
-	Operations        []OperationTimingSummary `json:"operations"`
-	WindowSeconds     int64                    `json:"windowSeconds"`
-}
+type DeploymentTimingSummary = contracts.DeploymentTimingSummary
 
 type DirectoryListing struct {
 	Entries []FileStat    `json:"entries"`
 	Path    WorkspacePath `json:"path"`
 }
 
-type DurationPercentiles struct {
-	Count           int64    `json:"count"`
-	P50Milliseconds *float64 `json:"p50Milliseconds,omitempty"`
-	P95Milliseconds *float64 `json:"p95Milliseconds,omitempty"`
-	P99Milliseconds *float64 `json:"p99Milliseconds,omitempty"`
-}
+type DurationPercentiles = contracts.DurationPercentiles
 
 type ExecCancelled struct {
 	Kind   string     `json:"kind"`
@@ -221,14 +179,7 @@ type ExecStreamSession struct {
 	WebsocketURL string       `json:"websocketUrl"`
 }
 
-type ExecTiming struct {
-	CompletedAt         Timestamp `json:"completedAt"`
-	CreatedAt           Timestamp `json:"createdAt"`
-	ElapsedMilliseconds int64     `json:"elapsedMilliseconds"`
-	Mode                string    `json:"mode"`
-	Outcome             string    `json:"outcome"`
-	SessionID           OpaqueID  `json:"sessionId"`
-}
+type ExecTiming = contracts.ExecTiming
 
 type ExecTimingSummary struct {
 	Duration DurationPercentiles `json:"duration"`
@@ -236,14 +187,7 @@ type ExecTimingSummary struct {
 	Outcome  string              `json:"outcome"`
 }
 
-type ExecutionPolicy struct {
-	DataPlaneTransport          string `json:"dataPlaneTransport"`
-	MaximumBufferedOutputBytes  int64  `json:"maximumBufferedOutputBytes"`
-	MaximumDeadlineMilliseconds int64  `json:"maximumDeadlineMilliseconds"`
-	MaximumTransferBytes        int64  `json:"maximumTransferBytes"`
-	StreamWindowBytes           int64  `json:"streamWindowBytes"`
-	TerminalDetachSeconds       int64  `json:"terminalDetachSeconds"`
-}
+type ExecutionPolicy = contracts.ExecutionPolicy
 
 type FileExistsResult struct {
 	Exists bool          `json:"exists"`
@@ -341,15 +285,7 @@ const (
 	InstanceTerminationReasonInternalFailure    InstanceTerminationReason = "internal_failure"
 )
 
-type Lease struct {
-	CreatedAt  Timestamp  `json:"createdAt"`
-	ExpiresAt  Timestamp  `json:"expiresAt"`
-	Generation int64      `json:"generation"`
-	ID         OpaqueID   `json:"id"`
-	SandboxID  OpaqueID   `json:"sandboxId"`
-	State      LeaseState `json:"state"`
-	UpdatedAt  Timestamp  `json:"updatedAt"`
-}
+type Lease = contracts.Lease
 
 type LeaseState = string
 
@@ -360,44 +296,17 @@ const (
 	LeaseStateFenced   LeaseState = "fenced"
 )
 
-type LifecyclePolicy struct {
-	DrainGraceSeconds      int64  `json:"drainGraceSeconds"`
-	IdleSeconds            int64  `json:"idleSeconds"`
-	InitialState           string `json:"initialState"`
-	LeaseSeconds           int64  `json:"leaseSeconds"`
-	MaximumDurationSeconds int64  `json:"maximumDurationSeconds"`
-}
+type LifecyclePolicy = contracts.LifecyclePolicy
 
 type Metadata = map[string]string
 
-type NetworkDestination struct {
-	CIDR     *string `json:"cidr,omitempty"`
-	Domain   *string `json:"domain,omitempty"`
-	Port     int64   `json:"port"`
-	Protocol string  `json:"protocol"`
-}
+type NetworkDestination = contracts.NetworkDestination
 
-type NetworkPolicy struct {
-	Destinations []NetworkDestination `json:"destinations"`
-	Mode         string               `json:"mode"`
-}
+type NetworkPolicy = contracts.NetworkPolicy
 
 type OpaqueID = string
 
-type Operation struct {
-	CompletedAt *Timestamp     `json:"completedAt,omitempty"`
-	CreatedAt   Timestamp      `json:"createdAt"`
-	Error       *Problem       `json:"error,omitempty"`
-	ID          OpaqueID       `json:"id"`
-	Kind        OperationKind  `json:"kind"`
-	RequestID   CorrelationID  `json:"requestId"`
-	Sandbox     *Sandbox       `json:"sandbox,omitempty"`
-	SandboxID   OpaqueID       `json:"sandboxId"`
-	Snapshot    *Snapshot      `json:"snapshot,omitempty"`
-	StartedAt   *Timestamp     `json:"startedAt,omitempty"`
-	State       OperationState `json:"state"`
-	UpdatedAt   Timestamp      `json:"updatedAt"`
-}
+type Operation = contracts.Operation
 
 type OperationKind = string
 
@@ -415,12 +324,7 @@ const (
 	OperationKindCancelTerminal  OperationKind = "cancel_terminal"
 )
 
-type OperationStageTiming struct {
-	CumulativeMilliseconds float64   `json:"cumulativeMilliseconds"`
-	ElapsedMilliseconds    float64   `json:"elapsedMilliseconds"`
-	ObservedAt             Timestamp `json:"observedAt"`
-	Stage                  string    `json:"stage"`
-}
+type OperationStageTiming = contracts.OperationStageTiming
 
 type OperationState = string
 
@@ -432,20 +336,7 @@ const (
 	OperationStateCancelled OperationState = "cancelled"
 )
 
-type OperationTiming struct {
-	Boots                 []BootTiming           `json:"boots"`
-	CompletedAt           *Timestamp             `json:"completedAt,omitempty"`
-	CreatedAt             Timestamp              `json:"createdAt"`
-	ExecutionMilliseconds *int64                 `json:"executionMilliseconds,omitempty"`
-	Kind                  OperationKind          `json:"kind"`
-	OperationID           OpaqueID               `json:"operationId"`
-	Orchestration         []OperationStageTiming `json:"orchestration"`
-	QueueMilliseconds     *int64                 `json:"queueMilliseconds,omitempty"`
-	SandboxID             OpaqueID               `json:"sandboxId"`
-	StartedAt             *Timestamp             `json:"startedAt,omitempty"`
-	State                 OperationState         `json:"state"`
-	TotalMilliseconds     *int64                 `json:"totalMilliseconds,omitempty"`
-}
+type OperationTiming = contracts.OperationTiming
 
 type OperationTimingSummary struct {
 	Execution DurationPercentiles `json:"execution"`
@@ -464,13 +355,7 @@ type PingResult struct {
 	SandboxID  OpaqueID  `json:"sandboxId"`
 }
 
-type PortPolicy struct {
-	MaximumSessionSeconds int64  `json:"maximumSessionSeconds"`
-	MaximumSessions       int64  `json:"maximumSessions"`
-	Name                  string `json:"name"`
-	Port                  int64  `json:"port"`
-	Protocol              string `json:"protocol"`
-}
+type PortPolicy = contracts.PortPolicy
 
 type PortSession struct {
 	CertificateSpkiSha256 *string   `json:"certificateSpkiSha256,omitempty"`
@@ -486,16 +371,7 @@ type PortSession struct {
 	Transport             string    `json:"transport"`
 }
 
-type Problem struct {
-	Code                   ProblemCode     `json:"code"`
-	Details                []ProblemDetail `json:"details,omitempty"`
-	RequestID              CorrelationID   `json:"requestId"`
-	RetryAfterMilliseconds *int64          `json:"retryAfterMilliseconds,omitempty"`
-	Retryable              bool            `json:"retryable"`
-	Status                 int             `json:"status"`
-	Title                  string          `json:"title"`
-	Type                   string          `json:"type"`
-}
+type Problem = contracts.Problem
 
 type ProblemCode = string
 
@@ -530,14 +406,7 @@ type ProblemDetail struct {
 	Reason string `json:"reason"`
 }
 
-type Profile struct {
-	CreatedAt       Timestamp       `json:"createdAt"`
-	CurrentRevision ProfileRevision `json:"currentRevision"`
-	Name            ProfileName     `json:"name"`
-	Revision        int64           `json:"revision"`
-	State           ProfileState    `json:"state"`
-	UpdatedAt       Timestamp       `json:"updatedAt"`
-}
+type Profile = contracts.Profile
 
 type ProfileName = string
 
@@ -553,18 +422,7 @@ type ProfileRevision struct {
 	Spec      ProfileRevisionSpec `json:"spec"`
 }
 
-type ProfileRevisionSpec struct {
-	Architecture          string          `json:"architecture"`
-	Execution             ExecutionPolicy `json:"execution"`
-	Lifecycle             LifecyclePolicy `json:"lifecycle"`
-	Network               NetworkPolicy   `json:"network"`
-	Pool                  string          `json:"pool"`
-	Ports                 []PortPolicy    `json:"ports"`
-	Resources             ResourcePolicy  `json:"resources"`
-	Retention             RetentionPolicy `json:"retention"`
-	RuntimeBundleDigest   string          `json:"runtimeBundleDigest"`
-	ToolchainBundleDigest string          `json:"toolchainBundleDigest"`
-}
+type ProfileRevisionSpec = contracts.ProfileRevisionSpec
 
 type ProfileState = string
 
@@ -584,49 +442,19 @@ type RemovePathRequest struct {
 	Recursive bool          `json:"recursive"`
 }
 
-type RenewLeaseRequest struct {
-	DurationSeconds int64 `json:"durationSeconds"`
-}
+type RenewLeaseRequest = contracts.RenewLeaseRequest
 
-type ResourcePolicy struct {
-	ConcurrentOperations int64 `json:"concurrentOperations"`
-	CPUMillis            int64 `json:"cpuMillis"`
-	MemoryBytes          int64 `json:"memoryBytes"`
-	ProcessLimit         int64 `json:"processLimit"`
-	WorkspaceBytes       int64 `json:"workspaceBytes"`
-}
+type ResourcePolicy = contracts.ResourcePolicy
 
-type RestoreSnapshotRequest struct {
-	SnapshotID OpaqueID `json:"snapshotId"`
-}
+type RestoreSnapshotRequest = contracts.RestoreSnapshotRequest
 
-type RetentionPolicy struct {
-	ArtifactRetentionSeconds int64 `json:"artifactRetentionSeconds"`
-	SnapshotLimit            int64 `json:"snapshotLimit"`
-	SnapshotRetentionSeconds int64 `json:"snapshotRetentionSeconds"`
-}
+type RetentionPolicy = contracts.RetentionPolicy
 
 type ReviseProfileRequest struct {
 	Spec ProfileRevisionSpec `json:"spec"`
 }
 
-type Runner struct {
-	Architectures               []string         `json:"architectures"`
-	Capabilities                []string         `json:"capabilities"`
-	Capacity                    map[string]int64 `json:"capacity"`
-	CreatedAt                   Timestamp        `json:"createdAt"`
-	CredentialState             string           `json:"credentialState"`
-	ID                          RunnerID         `json:"id"`
-	LastSeenAt                  *Timestamp       `json:"lastSeenAt,omitempty"`
-	Name                        string           `json:"name"`
-	PoolName                    ProfileName      `json:"poolName"`
-	ProtocolVersions            []string         `json:"protocolVersions"`
-	Revision                    int64            `json:"revision"`
-	SandboxStartP95Milliseconds int64            `json:"sandboxStartP95Milliseconds"`
-	SandboxStartSampleCount     int64            `json:"sandboxStartSampleCount"`
-	State                       string           `json:"state"`
-	UpdatedAt                   Timestamp        `json:"updatedAt"`
-}
+type Runner = contracts.Runner
 
 type RunnerArchitectureList = []string
 
@@ -636,27 +464,11 @@ type RunnerCapacityPolicy = map[string]int64
 
 type RunnerID = string
 
-type RunnerPage struct {
-	Items      []Runner `json:"items"`
-	NextCursor *string  `json:"nextCursor,omitempty"`
-}
+type RunnerPage = contracts.RunnerPage
 
-type RunnerPool struct {
-	Architectures    RunnerArchitectureList `json:"architectures"`
-	Capabilities     RunnerCapabilityList   `json:"capabilities"`
-	CapacityPolicy   RunnerCapacityPolicy   `json:"capacityPolicy"`
-	CreatedAt        Timestamp              `json:"createdAt"`
-	Name             ProfileName            `json:"name"`
-	ReadyRunnerCount int64                  `json:"readyRunnerCount"`
-	Revision         int64                  `json:"revision"`
-	State            RunnerPoolState        `json:"state"`
-	UpdatedAt        Timestamp              `json:"updatedAt"`
-}
+type RunnerPool = contracts.RunnerPool
 
-type RunnerPoolPage struct {
-	Items      []RunnerPool `json:"items"`
-	NextCursor *string      `json:"nextCursor,omitempty"`
-}
+type RunnerPoolPage = contracts.RunnerPoolPage
 
 type RunnerPoolState = string
 
@@ -666,22 +478,7 @@ const (
 	RunnerPoolStateOffline  RunnerPoolState = "offline"
 )
 
-type Sandbox struct {
-	CreatedAt         Timestamp           `json:"createdAt"`
-	DeletedAt         *Timestamp          `json:"deletedAt,omitempty"`
-	DesiredState      SandboxDesiredState `json:"desiredState"`
-	Generation        int64               `json:"generation"`
-	ID                OpaqueID            `json:"id"`
-	Instance          *Instance           `json:"instance,omitempty"`
-	LastActivityAt    *Timestamp          `json:"lastActivityAt,omitempty"`
-	Metadata          Metadata            `json:"metadata"`
-	Profile           ProfileName         `json:"profile"`
-	ProfileRevisionID OpaqueID            `json:"profileRevisionId"`
-	Revision          int64               `json:"revision"`
-	State             SandboxState        `json:"state"`
-	UpdatedAt         Timestamp           `json:"updatedAt"`
-	Workspace         Workspace           `json:"workspace"`
-}
+type Sandbox = contracts.Sandbox
 
 type SandboxDesiredState = string
 
@@ -699,10 +496,7 @@ type SandboxInspection struct {
 	SandboxID      OpaqueID  `json:"sandboxId"`
 }
 
-type SandboxPage struct {
-	Items      []Sandbox `json:"items"`
-	NextCursor *string   `json:"nextCursor,omitempty"`
-}
+type SandboxPage = contracts.SandboxPage
 
 type SandboxState = string
 
@@ -718,11 +512,7 @@ const (
 	SandboxStateDeleted  SandboxState = "deleted"
 )
 
-type SandboxTiming struct {
-	Execs      []ExecTiming      `json:"execs"`
-	Operations []OperationTiming `json:"operations"`
-	SandboxID  OpaqueID          `json:"sandboxId"`
-}
+type SandboxTiming = contracts.SandboxTiming
 
 type SessionState = string
 
@@ -738,22 +528,9 @@ type ShellCommand struct {
 	Mode    string `json:"mode"`
 }
 
-type Snapshot struct {
-	CreatedAt  Timestamp  `json:"createdAt"`
-	ExpiresAt  *Timestamp `json:"expiresAt,omitempty"`
-	Generation int64      `json:"generation"`
-	ID         OpaqueID   `json:"id"`
-	Metadata   Metadata   `json:"metadata"`
-	Name       string     `json:"name"`
-	SandboxID  OpaqueID   `json:"sandboxId"`
-	SizeBytes  int64      `json:"sizeBytes"`
-	State      string     `json:"state"`
-}
+type Snapshot = contracts.Snapshot
 
-type SnapshotPage struct {
-	Items      []Snapshot `json:"items"`
-	NextCursor *string    `json:"nextCursor,omitempty"`
-}
+type SnapshotPage = contracts.SnapshotPage
 
 type SpawnFailureKind = string
 
