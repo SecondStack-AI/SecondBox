@@ -480,11 +480,11 @@ cleanup() {
     echo "SecondBox scenario runner image cleanup failed: $runner_image" >&2
     status=1
   fi
-  if [[ -d "$scenario_workspace_dir" ]] && ! rm -r -- "$scenario_workspace_dir"; then
+  if [[ -d "$scenario_workspace_dir" ]] && ! rm -rf -- "$scenario_workspace_dir"; then
     echo "SecondBox scenario Workspace cleanup failed: $scenario_workspace_dir" >&2
     status=1
   fi
-  if [[ -d "$run_dir" ]] && ! rm -r -- "$run_dir"; then
+  if [[ -d "$run_dir" ]] && ! rm -rf -- "$run_dir"; then
     echo "SecondBox scenario run-directory cleanup failed: $run_dir" >&2
     status=1
   fi

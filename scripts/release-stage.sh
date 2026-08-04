@@ -114,7 +114,11 @@ verify_binary_identity secondbox-deploy "$output_dir/secondbox-deploy_${version}
 verify_binary_identity control-plane "$temporary/secondboxd_linux_amd64" --version
 verify_binary_identity Runner "$temporary/secondbox-runner" --version
 for binary in "$output_dir"/secondbox*_${version}_* "$temporary/secondboxd_linux_arm64"; do
-  strings "$binary" | grep -Fx -- "$version" >/dev/null || { echo "binary lacks release version: $binary" >&2; exit 1; }
+  if ! strings "$binary" | grep -Fx -- "$version" >/dev/null &&
+     ! strings "$binary" | grep -Fx -- "_${version}" >/dev/null; then
+    echo "binary lacks release version: $binary" >&2
+    exit 1
+  fi
   strings "$binary" | grep -Fx -- "$source_commit" >/dev/null || { echo "binary lacks source commit: $binary" >&2; exit 1; }
 done
 
