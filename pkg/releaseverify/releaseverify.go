@@ -137,7 +137,10 @@ func verifyManifestObjects(ctx context.Context, manifest releasecontract.Artifac
 		if err != nil {
 			return fmt.Errorf("SecondBox release verification: standard bundle %s: %w", bundle.Name, err)
 		}
-		if document.Name != bundle.Name || document.Profile.Name != bundle.Name || len(document.Profile.Revisions) != len(bundle.Profiles) {
+		if document.Name != bundle.Name || document.Profile.Name != bundle.Name || len(document.Profile.Revisions) != len(bundle.Profiles) ||
+			document.SignedManifestDigest != manifest.MicroVM.SignedManifestDigest ||
+			document.RuntimeBundleDigest != manifest.MicroVM.RuntimeBundle.ManifestDigest ||
+			document.ToolchainBundleDigest != manifest.MicroVM.ToolchainBundle.ManifestDigest {
 			return fmt.Errorf("SecondBox release verification: standard bundle %s identity mismatch", bundle.Name)
 		}
 		for _, profile := range bundle.Profiles {

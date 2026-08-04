@@ -7,9 +7,11 @@ import (
 )
 
 const (
-	testCommit = "0123456789abcdef0123456789abcdef01234567"
-	testDigest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	testKey    = "SHA256:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+	testCommit          = "0123456789abcdef0123456789abcdef01234567"
+	testDigest          = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	testRuntimeDigest   = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	testToolchainDigest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	testKey             = "SHA256:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
 )
 
 func TestParseTag(t *testing.T) {
@@ -40,6 +42,10 @@ func TestArtifactManifestValidationRejectsInvalidReleaseContent(t *testing.T) {
 		{name: "unsupported platform", mutate: func(value *ArtifactManifest) { value.Platforms.Runner = append(value.Platforms.Runner, "linux/arm64") }, want: "lacks required qualification"},
 		{name: "incompatible protocol window", mutate: func(value *ArtifactManifest) { value.RunnerProtocol = ProtocolWindow{Minimum: 3, Maximum: 2} }, want: "window is invalid"},
 		{name: "malformed signing identity", mutate: func(value *ArtifactManifest) { value.MicroVM.SigningKeyFingerprint = "SHA256:no" }, want: "fingerprint"},
+		{name: "missing runtime component", mutate: func(value *ArtifactManifest) { value.MicroVM.RuntimeBundle = SignedComponent{} }, want: "runtime bundle artifact ID"},
+		{name: "aliased components", mutate: func(value *ArtifactManifest) {
+			value.MicroVM.ToolchainBundle.ManifestDigest = value.MicroVM.RuntimeBundle.ManifestDigest
+		}, want: "distinct identities"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -176,7 +182,7 @@ func validManifest() ArtifactManifest {
 		TypeScriptSDK:        SDKArtifact{Identity: identity, Coordinate: TypeScriptPackage + "@" + identity.Version, Package: ref("secondbox.tgz")},
 		ControlPlane:         OCIArtifact{Identity: identity, Reference: ControlPlaneImage + "@" + testDigest},
 		Runner:               OCIArtifact{Identity: identity, Reference: RunnerImage + "@" + testDigest},
-		MicroVM:              MicroVMArtifact{Identity: identity, ImageReference: MicroVMImage + "@" + testDigest, SignedManifestDigest: testDigest, SigningKeyFingerprint: testKey},
+		MicroVM:              MicroVMArtifact{Identity: identity, ImageReference: MicroVMImage + "@" + testDigest, SignedManifestDigest: testDigest, SigningKeyFingerprint: testKey, RuntimeBundle: SignedComponent{ArtifactID: "test-runtime", ManifestDigest: testRuntimeDigest, MandatoryGuestFeatures: []string{}}, ToolchainBundle: SignedComponent{ArtifactID: "test-toolchain", ManifestDigest: testToolchainDigest, MandatoryGuestFeatures: []string{}}},
 		Binaries:             binaries,
 		SBOMs:                []Reference{ref("sbom.spdx.json")},
 		ArtifactAttestations: []Reference{ref("provenance.intoto.jsonl")},
