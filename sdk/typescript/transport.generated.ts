@@ -397,7 +397,7 @@ export interface Problem {
   readonly type: string;
 }
 
-export type ProblemCode = "invalid_request" | "authentication_failed" | "authorization_failed" | "not_found" | "idempotency_conflict" | "precondition_failed" | "state_conflict" | "workspace_mutation_conflict" | "generation_fenced" | "lease_fenced" | "profile_unavailable" | "home_runner_unavailable" | "sandbox_not_stopped" | "workspace_relocation_snapshots_present" | "workspace_relocation_target_unavailable" | "quota_exceeded" | "limit_exceeded" | "guest_unavailable" | "execution_node_unavailable" | "dependency_unavailable" | "internal_error" | "wait_expired";
+export type ProblemCode = "invalid_request" | "authentication_failed" | "authorization_failed" | "not_found" | "idempotency_conflict" | "precondition_failed" | "state_conflict" | "workspace_mutation_conflict" | "generation_fenced" | "lease_fenced" | "profile_unavailable" | "home_runner_unavailable" | "sandbox_not_stopped" | "workspace_relocation_snapshots_present" | "workspace_relocation_target_unavailable" | "quota_exceeded" | "limit_exceeded" | "guest_unavailable" | "execution_node_unavailable" | "dependency_unavailable" | "internal_error" | "terminal_replay_evicted" | "wait_expired";
 
 export interface ProblemDetail {
   readonly field: string;

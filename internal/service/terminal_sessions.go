@@ -59,8 +59,9 @@ func (service *ControlPlaneService) CreateSandboxTerminal(
 	open.PtyRows = uint32(request.Rows)
 	open.PtyColumns = uint32(request.Columns)
 	open.Streaming = true
+	sessionID := service.newID("term")
 	return service.dataPlaneRelay.AdmitDataPlane(ctx, runnercontrol.DataPlaneAdmission{
-		ID: service.newID("term"), StreamID: service.newID("stream"),
+		ID: sessionID, StreamID: service.newID("stream"),
 		TenantRef: principal.TenantRef, SandboxID: sandboxID,
 		SubjectRef: principal.SubjectRef,
 		LeaseID:    leaseID,
@@ -70,6 +71,7 @@ func (service *ControlPlaneService) CreateSandboxTerminal(
 		UseProfileResponseLimit: true, UseProfileRequestLimit: true,
 		UseProfileStreamWindow: true, DeferResponseCredit: true,
 		Detachable: request.Detachable, ExecOpen: open, Request: request, Now: now,
+		CredentialDigest: service.dataPlaneCredentialDigest(sessionID),
 	})
 }
 
@@ -139,44 +141,6 @@ func (service *ControlPlaneService) DetachSandboxTerminalAttachment(
 	return relay.DetachTerminalAttachment(
 		ctx, principal.TenantRef, principal.SubjectRef,
 		sessionID, attachmentID, service.now().UTC(),
-	)
-}
-
-func (service *ControlPlaneService) AppendSandboxTerminalFrame(
-	ctx context.Context,
-	principal contracts.Principal,
-	sessionID string,
-	attachmentID string,
-	frame runnercontrol.TerminalClientFrame,
-) (bool, error) {
-	if err := service.requireDataPlane(principal); err != nil {
-		return false, err
-	}
-	relay, err := service.terminalRelay()
-	if err != nil {
-		return false, err
-	}
-	return relay.AppendTerminalClientFrame(
-		ctx, principal.TenantRef, principal.SubjectRef,
-		sessionID, attachmentID, frame, service.now().UTC(),
-	)
-}
-
-func (service *ControlPlaneService) ListSandboxTerminalFrames(
-	ctx context.Context,
-	principal contracts.Principal,
-	sessionID string,
-	afterSequence int64,
-) ([]runnercontrol.TerminalServerFrame, error) {
-	if err := service.requireDataPlane(principal); err != nil {
-		return nil, err
-	}
-	relay, err := service.terminalRelay()
-	if err != nil {
-		return nil, err
-	}
-	return relay.ListTerminalServerFrames(
-		ctx, principal.TenantRef, principal.SubjectRef, sessionID, afterSequence, 64,
 	)
 }
 

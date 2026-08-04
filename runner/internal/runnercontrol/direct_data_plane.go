@@ -24,12 +24,15 @@ type directDataPlaneSession struct {
 	streamID         string
 	kind             runnerprotocol.DataPlaneSessionKind
 	deadline         time.Time
+	streamWindow     uint64
 	credentialDigest [sha256.Size]byte
 
-	mu      sync.Mutex
-	claimed bool
-	closed  bool
-	cancel  context.CancelCauseFunc
+	mu       sync.Mutex
+	claimed  bool
+	consumed bool
+	opened   bool
+	closed   bool
+	cancel   context.CancelCauseFunc
 }
 
 func (session *directDataPlaneSession) claim() bool {
@@ -123,6 +126,16 @@ func (registry *directDataPlaneRegistry) remove(session *directDataPlaneSession)
 	registry.mu.Unlock()
 }
 
+func (registry *directDataPlaneRegistry) complete(operationID string) {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	for key, session := range registry.sessions {
+		if session.operationID == operationID {
+			delete(registry.sessions, key)
+		}
+	}
+}
+
 func (registry *directDataPlaneRegistry) closeAssignment(assignmentID string, reason string) {
 	registry.closeMatching(reason, func(session *directDataPlaneSession) bool {
 		return session.fence.GetAssignmentId() == assignmentID
@@ -137,6 +150,12 @@ func (registry *directDataPlaneRegistry) closeSession(operationID string, reason
 
 func (registry *directDataPlaneRegistry) closeAll(reason string) {
 	registry.closeMatching(reason, func(*directDataPlaneSession) bool { return true })
+}
+
+func (registry *directDataPlaneRegistry) closeNonPTY(reason string) {
+	registry.closeMatching(reason, func(session *directDataPlaneSession) bool {
+		return session.kind != runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY
+	})
 }
 
 func (registry *directDataPlaneRegistry) closeMatching(
@@ -210,9 +229,14 @@ func (s *RunnerProtocolService) registerDirectDataPlaneSession(
 ) error {
 	if open == nil || open.Fence == nil || open.OperationId == "" || open.StreamId == "" ||
 		(open.Kind != runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC &&
-			open.Kind != runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE) ||
+			open.Kind != runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE &&
+			open.Kind != runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY) ||
 		open.DeadlineUnixMs == 0 || len(open.CredentialDigest) != sha256.Size {
 		return errors.New("SecondBox runner direct data-plane Open is incomplete")
+	}
+	if open.Kind == runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY &&
+		open.StreamWindowBytes == 0 {
+		return errors.New("SecondBox runner direct PTY replay window is incomplete")
 	}
 	if !time.Now().UTC().Before(time.UnixMilli(int64(open.DeadlineUnixMs)).UTC()) ||
 		!s.hasActiveFence(open.Fence) {
@@ -224,7 +248,8 @@ func (s *RunnerProtocolService) registerDirectDataPlaneSession(
 	session := &directDataPlaneSession{
 		fence: cloneRunnerFence(open.Fence), correlation: cloneRunnerCorrelation(open.Correlation),
 		operationID: open.OperationId, streamID: open.StreamId, kind: open.Kind,
-		deadline: time.UnixMilli(int64(open.DeadlineUnixMs)).UTC(),
+		deadline:     time.UnixMilli(int64(open.DeadlineUnixMs)).UTC(),
+		streamWindow: open.StreamWindowBytes,
 	}
 	copy(session.credentialDigest[:], open.CredentialDigest)
 	s.directDataPlane.add(session)
@@ -237,13 +262,15 @@ func (s *RunnerProtocolService) handleDataPlaneCancel(
 	if command == nil || command.Fence == nil || command.OperationId == "" ||
 		command.StreamId == "" || command.Reason == "" ||
 		(command.Kind != runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC &&
-			command.Kind != runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE) {
+			command.Kind != runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE &&
+			command.Kind != runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY) {
 		return errors.New("SecondBox runner data-plane cancellation command is incomplete")
 	}
 	s.directDataPlane.closeSession(command.OperationId, command.Reason)
 	key := runnerRelayOperationKey(command.Fence, command.OperationId, command.StreamId)
 	s.operationMu.Lock()
-	if command.Kind == runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC {
+	if command.Kind == runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC ||
+		command.Kind == runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY {
 		state := s.execOperations[key]
 		if state != nil && !state.terminal {
 			state.cancel(context.Canceled)
@@ -270,8 +297,11 @@ func (s *RunnerProtocolService) serveDirectTypedConnection(
 		return errors.New("SecondBox runner direct data-plane credential was rejected")
 	}
 	wantKind := runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC
-	if credential.SessionKind == portdirect.SessionKindFile {
+	switch credential.SessionKind {
+	case portdirect.SessionKindFile:
 		wantKind = runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE
+	case portdirect.SessionKindPTY:
+		wantKind = runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY
 	}
 	if session.kind != wantKind || !time.Now().UTC().Before(session.deadline) ||
 		!s.hasActiveFence(session.fence) ||
@@ -283,16 +313,28 @@ func (s *RunnerProtocolService) serveDirectTypedConnection(
 		session.release()
 		return err
 	}
-	admitted, detail, err := s.consumeDirectDataPlaneCredential(ctx, session)
-	if err != nil || !admitted {
-		session.release()
-		if detail == "" {
-			detail = "credential rejected"
+	session.mu.Lock()
+	consumed := session.consumed
+	session.mu.Unlock()
+	if !consumed {
+		admitted, detail, err := s.consumeDirectDataPlaneCredential(ctx, session)
+		if err != nil || !admitted {
+			session.release()
+			if detail == "" {
+				detail = "credential rejected"
+			}
+			_ = portdirect.WriteVerdict(connection, portdirect.VerdictDenied, detail)
+			return err
 		}
-		_ = portdirect.WriteVerdict(connection, portdirect.VerdictDenied, detail)
-		return err
+		session.mu.Lock()
+		session.consumed = true
+		session.mu.Unlock()
 	}
-	defer s.directDataPlane.remove(session)
+	if session.kind != runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY {
+		defer s.directDataPlane.remove(session)
+	} else {
+		defer session.release()
+	}
 	operationCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	session.mu.Lock()
@@ -308,9 +350,11 @@ func (s *RunnerProtocolService) serveDirectTypedConnection(
 		return err
 	}
 	stream := &directTypedStream{connection: connection}
+	defer s.detachPTYAttachmentsForStream(stream)
 	enabled := map[runnerprotocol.RunnerFeature]bool{
 		runnerprotocol.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING: true,
 		runnerprotocol.RunnerFeature_RUNNER_FEATURE_FILE_STREAMING: true,
+		runnerprotocol.RunnerFeature_RUNNER_FEATURE_PTY:            true,
 	}
 	asyncErrors := make(chan error, 1)
 	first := true
@@ -357,6 +401,23 @@ func validateDirectFirstMessage(
 			return errors.New("SecondBox runner direct Exec stream must begin with Open")
 		}
 		fence, operationID, streamID, sequence = frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence
+	} else if session.kind == runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY {
+		session.mu.Lock()
+		opened := session.opened
+		session.mu.Unlock()
+		if opened {
+			frame := message.GetPty()
+			if frame == nil || frame.GetAttach() == nil {
+				return errors.New("SecondBox runner direct PTY reconnect must begin with Attach")
+			}
+			fence, operationID, streamID, sequence = frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence
+		} else {
+			frame := message.GetExec()
+			if frame == nil || frame.GetOpen() == nil || !frame.GetOpen().GetAllocatePty() {
+				return errors.New("SecondBox runner direct PTY stream must begin with Open")
+			}
+			fence, operationID, streamID, sequence = frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence
+		}
 	} else {
 		frame := message.GetFile()
 		if frame == nil || frame.GetOpen() == nil {
@@ -364,9 +425,18 @@ func validateDirectFirstMessage(
 		}
 		fence, operationID, streamID, sequence = frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence
 	}
-	if operationID != session.operationID || streamID != session.streamID || sequence != 1 ||
+	if operationID != session.operationID || streamID != session.streamID || sequence == 0 ||
 		!proto.Equal(fence, session.fence) {
 		return errors.New("SecondBox runner direct data-plane message identity mismatch")
+	}
+	if session.kind != runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY ||
+		message.GetExec() != nil {
+		if sequence != 1 {
+			return errors.New("SecondBox runner direct data-plane Open sequence is invalid")
+		}
+		session.mu.Lock()
+		session.opened = true
+		session.mu.Unlock()
 	}
 	return nil
 }
@@ -426,7 +496,8 @@ func (stream *directTypedStream) Send(message *runnerprotocol.RunnerToControlPla
 	stream.mu.Lock()
 	err = portdirect.WriteTypedMessage(stream.connection, payload)
 	terminal := message.GetExec().GetTerminal() != nil ||
-		message.GetExec().GetBufferedResult() != nil || message.GetFile().GetTerminal() != nil
+		message.GetExec().GetBufferedResult() != nil || message.GetPty().GetTerminal() != nil ||
+		message.GetFile().GetTerminal() != nil
 	if terminal || err != nil {
 		err = errors.Join(err, stream.connection.Close())
 	}

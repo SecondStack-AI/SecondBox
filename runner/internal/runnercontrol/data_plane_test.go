@@ -231,6 +231,15 @@ func TestRunnerDataPlanePTYRoutesBinaryControlOutputAndTypedTerminal(t *testing.
 	if err := service.handleExecFrame(t.Context(), stream, open, enabled, asyncErrors); err != nil {
 		t.Fatal(err)
 	}
+	if err := service.handlePTYFrame(t.Context(), stream, &runnerprotocol.PtyFrame{
+		Fence: cloneRunnerFence(fence), OperationId: "terminal-1", StreamId: "terminal-stream-1", Sequence: 2,
+		Payload: &runnerprotocol.PtyFrame_Attach{Attach: &runnerprotocol.PtyAttach{
+			ReconnectId: "attachment-1", AfterSequence: -1,
+			StreamWindowBytes: uint64(len(output)),
+		}},
+	}, enabled); err != nil {
+		t.Fatal(err)
+	}
 	frames := []*runnerprotocol.PtyFrame{
 		{
 			Fence: cloneRunnerFence(fence), OperationId: "terminal-1", StreamId: "terminal-stream-1", Sequence: 2,
@@ -261,20 +270,21 @@ func TestRunnerDataPlanePTYRoutesBinaryControlOutputAndTypedTerminal(t *testing.
 		t.Fatalf("PTY input = %x", gotControls[2].Input)
 	}
 
-	waitRunnerMessages(t, stream, 3)
+	waitRunnerMessages(t, stream, 4)
 	messages := stream.messages()
-	if len(messages[0].GetPty().GetOutput().GetData()) != runnerRelayChunkBytes ||
-		!bytes.Equal(messages[1].GetPty().GetOutput().GetData(), []byte{0xaa, 0xbb}) {
-		t.Fatalf("PTY chunked output = %#v", messages[:2])
+	if messages[0].GetPty().GetAttachResult().GetKind() != runnerprotocol.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ATTACHED ||
+		len(messages[1].GetPty().GetOutput().GetData()) != runnerRelayChunkBytes ||
+		!bytes.Equal(messages[2].GetPty().GetOutput().GetData(), []byte{0xaa, 0xbb}) {
+		t.Fatalf("PTY attachment and chunked output = %#v", messages[:3])
 	}
-	if got := messages[2].GetPty().GetTerminal().GetKind(); got != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED {
+	if got := messages[3].GetPty().GetTerminal().GetKind(); got != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED {
 		t.Fatalf("PTY terminal = %v", got)
 	}
 	if err := service.handlePTYFrame(t.Context(), stream, frames[2], enabled); err != nil {
 		t.Fatalf("exact duplicate PTY input: %v", err)
 	}
-	waitRunnerMessages(t, stream, 4)
-	if stream.messages()[3].GetPty().GetTerminal() == nil {
+	waitRunnerMessages(t, stream, 5)
+	if stream.messages()[4].GetPty().GetTerminal() == nil {
 		t.Fatal("terminal PTY duplicate did not replay its typed terminal")
 	}
 
@@ -287,8 +297,16 @@ func TestRunnerDataPlanePTYRoutesBinaryControlOutputAndTypedTerminal(t *testing.
 	if err := service.handleExecFrame(t.Context(), stream, staleOpen, enabled, asyncErrors); err != nil {
 		t.Fatal(err)
 	}
-	waitRunnerMessages(t, stream, 5)
-	if got := stream.messages()[4].GetPty().GetTerminal().GetKind(); got != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_FENCED {
+	if err := service.handlePTYFrame(t.Context(), stream, &runnerprotocol.PtyFrame{
+		Fence: cloneRunnerFence(stale), OperationId: "terminal-stale", StreamId: "terminal-stale-stream", Sequence: 2,
+		Payload: &runnerprotocol.PtyFrame_Attach{Attach: &runnerprotocol.PtyAttach{
+			ReconnectId: "attachment-stale", AfterSequence: -1, StreamWindowBytes: 4096,
+		}},
+	}, enabled); err != nil {
+		t.Fatal(err)
+	}
+	waitRunnerMessages(t, stream, 7)
+	if got := stream.messages()[6].GetPty().GetTerminal().GetKind(); got != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_FENCED {
 		t.Fatalf("stale PTY terminal = %v", got)
 	}
 
@@ -299,6 +317,14 @@ func TestRunnerDataPlanePTYRoutesBinaryControlOutputAndTypedTerminal(t *testing.
 	if err := service.handleExecFrame(t.Context(), stream, cancelOpen, enabled, asyncErrors); err != nil {
 		t.Fatal(err)
 	}
+	if err := service.handlePTYFrame(t.Context(), stream, &runnerprotocol.PtyFrame{
+		Fence: cloneRunnerFence(fence), OperationId: "terminal-cancel", StreamId: "terminal-cancel-stream", Sequence: 2,
+		Payload: &runnerprotocol.PtyFrame_Attach{Attach: &runnerprotocol.PtyAttach{
+			ReconnectId: "attachment-cancel", AfterSequence: -1, StreamWindowBytes: 4096,
+		}},
+	}, enabled); err != nil {
+		t.Fatal(err)
+	}
 	cancel := &runnerprotocol.ExecFrame{
 		Fence: cloneRunnerFence(fence), OperationId: "terminal-cancel", StreamId: "terminal-cancel-stream", Sequence: 2,
 		Payload: &runnerprotocol.ExecFrame_Cancel{Cancel: &runnerprotocol.ExecCancel{Reason: "test cancellation"}},
@@ -306,9 +332,156 @@ func TestRunnerDataPlanePTYRoutesBinaryControlOutputAndTypedTerminal(t *testing.
 	if err := service.handleExecFrame(t.Context(), stream, cancel, enabled, asyncErrors); err != nil {
 		t.Fatal(err)
 	}
-	waitRunnerMessages(t, stream, 6)
-	if got := stream.messages()[5].GetPty().GetTerminal().GetKind(); got != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED {
+	waitRunnerMessages(t, stream, 9)
+	if got := stream.messages()[8].GetPty().GetTerminal().GetKind(); got != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED {
 		t.Fatalf("cancelled PTY terminal = %v", got)
+	}
+}
+
+func TestRunnerDataPlanePTYReplayRingDetachEvictionAndExclusiveAttachment(t *testing.T) {
+	emitters := make(chan func([]byte) error, 1)
+	backend := &relayAssignmentBackend{
+		pty: func(
+			ctx context.Context,
+			_ *runnerprotocol.AssignmentFence,
+			_ *runnerprotocol.ExecOpen,
+			_ <-chan PTYControl,
+			emit func([]byte) error,
+		) (*runnerprotocol.ExecTerminal, error) {
+			emitters <- emit
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	service := newRelayRunnerService(t, backend)
+	fence := relayRunnerFence()
+	service.recordActiveAssignment(fence, "fc-instance-1")
+	enabled := map[runnerprotocol.RunnerFeature]bool{
+		runnerprotocol.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING: true,
+		runnerprotocol.RunnerFeature_RUNNER_FEATURE_PTY:            true,
+	}
+	asyncErrors := make(chan error, 1)
+	first := &threadSafeRunnerStream{}
+	open := relayExecOpen(fence, "terminal-replay", "terminal-replay-stream", "interactive")
+	open.GetOpen().AllocatePty = true
+	open.GetOpen().PtyRows = 24
+	open.GetOpen().PtyColumns = 80
+	if err := service.handleExecFrame(t.Context(), first, open, enabled, asyncErrors); err != nil {
+		t.Fatal(err)
+	}
+	emit := <-emitters
+	attach := func(stream RunnerProtocolStream, reconnectID string, afterSequence int64) error {
+		return service.handlePTYFrame(t.Context(), stream, &runnerprotocol.PtyFrame{
+			Fence: cloneRunnerFence(fence), OperationId: "terminal-replay",
+			StreamId: "terminal-replay-stream", Sequence: 2,
+			Payload: &runnerprotocol.PtyFrame_Attach{Attach: &runnerprotocol.PtyAttach{
+				ReconnectId: reconnectID, AfterSequence: afterSequence, StreamWindowBytes: 6,
+			}},
+		}, enabled)
+	}
+	detach := func(stream RunnerProtocolStream, reconnectID string) error {
+		return service.handlePTYFrame(t.Context(), stream, &runnerprotocol.PtyFrame{
+			Fence: cloneRunnerFence(fence), OperationId: "terminal-replay",
+			StreamId: "terminal-replay-stream", Sequence: 2,
+			Payload: &runnerprotocol.PtyFrame_Detach{Detach: &runnerprotocol.PtyDetach{
+				ReconnectId: reconnectID,
+			}},
+		}, enabled)
+	}
+	if err := attach(first, "attachment-first", -1); err != nil {
+		t.Fatal(err)
+	}
+	if err := emit([]byte("aa")); err != nil {
+		t.Fatal(err)
+	}
+	service.detachPTYAttachmentsForStream(first)
+	if err := emit([]byte("bb")); err != nil {
+		t.Fatal(err)
+	}
+	if err := emit([]byte("cc")); err != nil {
+		t.Fatal(err)
+	}
+
+	second := &threadSafeRunnerStream{}
+	if err := attach(second, "attachment-second", 0); err != nil {
+		t.Fatal(err)
+	}
+	secondMessages := second.messages()
+	if len(secondMessages) != 3 ||
+		secondMessages[0].GetPty().GetAttachResult().GetKind() != runnerprotocol.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ATTACHED ||
+		secondMessages[1].GetPty().GetSequence() != 2 || string(secondMessages[1].GetPty().GetOutput().GetData()) != "bb" ||
+		secondMessages[2].GetPty().GetSequence() != 3 || string(secondMessages[2].GetPty().GetOutput().GetData()) != "cc" {
+		t.Fatalf("reattached PTY replay = %#v", secondMessages)
+	}
+	parallel := &threadSafeRunnerStream{}
+	if err := attach(parallel, "attachment-parallel", 2); err != nil {
+		t.Fatal(err)
+	}
+	if got := parallel.messages()[0].GetPty().GetAttachResult().GetKind(); got != runnerprotocol.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ALREADY_ATTACHED {
+		t.Fatalf("parallel PTY attachment result = %s", got)
+	}
+	if err := detach(second, "attachment-second"); err != nil {
+		t.Fatal(err)
+	}
+	if err := emit([]byte("dddd")); err != nil {
+		t.Fatal(err)
+	}
+	evicted := &threadSafeRunnerStream{}
+	if err := attach(evicted, "attachment-evicted", 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := evicted.messages()[0].GetPty().GetAttachResult().GetKind(); got != runnerprotocol.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_REPLAY_EVICTED {
+		t.Fatalf("evicted PTY attachment result = %s", got)
+	}
+	service.operationMu.Lock()
+	service.execOperations[runnerRelayOperationKey(
+		fence, "terminal-replay", "terminal-replay-stream",
+	)].cancel(context.Canceled)
+	service.operationMu.Unlock()
+}
+
+func TestRunnerDataPlanePTYDeadlineProducesTypedTerminal(t *testing.T) {
+	backend := &relayAssignmentBackend{
+		pty: func(
+			ctx context.Context,
+			_ *runnerprotocol.AssignmentFence,
+			_ *runnerprotocol.ExecOpen,
+			_ <-chan PTYControl,
+			_ func([]byte) error,
+		) (*runnerprotocol.ExecTerminal, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	service := newRelayRunnerService(t, backend)
+	fence := relayRunnerFence()
+	service.recordActiveAssignment(fence, "fc-instance-1")
+	enabled := map[runnerprotocol.RunnerFeature]bool{
+		runnerprotocol.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING: true,
+		runnerprotocol.RunnerFeature_RUNNER_FEATURE_PTY:            true,
+	}
+	stream := &threadSafeRunnerStream{}
+	open := relayExecOpen(fence, "terminal-deadline", "terminal-deadline-stream", "sleep")
+	open.GetOpen().AllocatePty = true
+	open.GetOpen().PtyRows = 24
+	open.GetOpen().PtyColumns = 80
+	open.GetOpen().DeadlineUnixMs = uint64(time.Now().Add(20 * time.Millisecond).UnixMilli())
+	asyncErrors := make(chan error, 1)
+	if err := service.handleExecFrame(t.Context(), stream, open, enabled, asyncErrors); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.handlePTYFrame(t.Context(), stream, &runnerprotocol.PtyFrame{
+		Fence: cloneRunnerFence(fence), OperationId: "terminal-deadline",
+		StreamId: "terminal-deadline-stream", Sequence: 2,
+		Payload: &runnerprotocol.PtyFrame_Attach{Attach: &runnerprotocol.PtyAttach{
+			ReconnectId: "attachment-deadline", AfterSequence: -1, StreamWindowBytes: 64,
+		}},
+	}, enabled); err != nil {
+		t.Fatal(err)
+	}
+	waitRunnerMessages(t, stream, 2)
+	if got := stream.messages()[1].GetPty().GetTerminal().GetKind(); got != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_DEADLINE_EXCEEDED {
+		t.Fatalf("deadline PTY terminal = %v", got)
 	}
 }
 

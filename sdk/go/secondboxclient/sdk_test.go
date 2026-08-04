@@ -468,6 +468,38 @@ func TestSandboxHandleGetsAndCancelsStableTerminal(t *testing.T) {
 	}
 }
 
+func TestSandboxHandleTerminalReplayEvictionIsTyped(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("SecondBox-Terminal-After-Sequence") != "7" {
+			t.Errorf("Terminal replay cursor = %q", request.Header.Get("SecondBox-Terminal-After-Sequence"))
+		}
+		response.Header().Set("Content-Type", "application/problem+json")
+		response.WriteHeader(http.StatusConflict)
+		if err := json.NewEncoder(response).Encode(Problem{
+			Code: ProblemCodeTerminalReplayEvicted, Status: http.StatusConflict,
+			Title: "Terminal replay sequence is no longer available",
+		}); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewSecondBoxClient(server.URL, "token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle := NewSandboxHandle(client, Sandbox{ID: "sandbox-1", Generation: 3})
+	_, err = handle.ConnectTerminalAfter(t.Context(), TerminalSession{
+		ID: "term-1", SandboxID: "sandbox-1", Generation: 3,
+		State: SessionStateDetached, Subprotocol: terminalSubprotocol,
+		WebsocketURL: "ws" + strings.TrimPrefix(server.URL, "http"),
+		ExpiresAt:    time.Now().Add(time.Minute),
+	}, 7, nil)
+	if ProblemCodeOf(err) != ProblemCodeTerminalReplayEvicted {
+		t.Fatalf("Terminal replay eviction error = %v", err)
+	}
+}
+
 func sandboxJSON(id, state string) string {
 	value := map[string]any{
 		"id": id, "projectId": "project-1", "profile": "default", "profileRevisionId": "profile-revision-1",

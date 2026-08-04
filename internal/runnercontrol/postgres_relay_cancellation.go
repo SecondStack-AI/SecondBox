@@ -445,7 +445,8 @@ func (relay *PostgresFrameRelay) cancelDataPlaneSession(
 	if err := relay.enqueueCancellation(ctx, tx, session, terminalKind, reason, now.UTC()); err != nil {
 		return false, err
 	}
-	if session.State == "pending" && (session.Kind == "exec" || session.Kind == "file") {
+	if session.State == "pending" &&
+		(session.Kind == "exec" || session.Kind == "terminal" || session.Kind == "file") {
 		if err := relay.completeUnstartedCancellation(
 			ctx, tx, session, terminalKind, reason, now.UTC(),
 		); err != nil {
@@ -467,7 +468,7 @@ func (relay *PostgresFrameRelay) completeUnstartedCancellation(
 	now time.Time,
 ) error {
 	identity := inboundIdentity{sequence: 1}
-	if session.Kind == "exec" {
+	if session.Kind == "exec" || session.Kind == "terminal" {
 		value, ok := runnerv1.ExecTerminalKind_value[terminalKind]
 		if !ok {
 			return errors.New("SecondBox unstarted Exec cancellation terminal kind is invalid")
@@ -499,10 +500,13 @@ func (relay *PostgresFrameRelay) enqueueCancellation(
 	detail string,
 	now time.Time,
 ) error {
-	if session.Kind == "exec" || session.Kind == "file" {
+	if session.Kind == "exec" || session.Kind == "terminal" || session.Kind == "file" {
 		kind := runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC
-		if session.Kind == "file" {
+		switch session.Kind {
+		case "file":
 			kind = runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE
+		case "terminal":
+			kind = runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY
 		}
 		message := &runnerv1.ControlPlaneToRunner{
 			Message: &runnerv1.ControlPlaneToRunner_DataPlaneCancel{DataPlaneCancel: &runnerv1.DataPlaneCancelCommand{

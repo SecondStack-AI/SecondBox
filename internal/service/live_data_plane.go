@@ -47,11 +47,13 @@ func (service *ControlPlaneService) openDataPlaneStream(
 		if err != nil {
 			return nil, err
 		}
-		if _, err := service.dataPlaneRelay.StartDataPlaneSession(
-			ctx, session.TenantRef, session.SubjectRef, session.ID, service.now().UTC(),
-		); err != nil {
-			stream.Close()
-			return nil, err
+		if session.State == "pending" {
+			if _, err := service.dataPlaneRelay.StartDataPlaneSession(
+				ctx, session.TenantRef, session.SubjectRef, session.ID, service.now().UTC(),
+			); err != nil {
+				stream.Close()
+				return nil, err
+			}
 		}
 		return &proxiedDataPlaneStream{stream: stream}, nil
 	case contracts.DataPlaneTransportDirect:
@@ -106,8 +108,11 @@ func (service *ControlPlaneService) openDirectDataPlaneStream(
 		return nil, err
 	}
 	kind := portdirect.SessionKindExec
-	if session.Kind == "file" {
+	switch session.Kind {
+	case "file":
 		kind = portdirect.SessionKindFile
+	case "terminal":
+		kind = portdirect.SessionKindPTY
 	}
 	if err := portdirect.WriteCredential(connection, kind, service.dataPlaneCredential(session.ID)); err != nil {
 		_ = connection.Close()
@@ -480,6 +485,281 @@ func (stream *SandboxExecStream) Receive(
 
 func (stream *SandboxExecStream) Close() error {
 	return stream.stream.Close()
+}
+
+// SandboxTerminalStream forwards one exclusive Terminal attachment while the
+// Runner owns bounded replay across attachment transports.
+type SandboxTerminalStream struct {
+	service         *ControlPlaneService
+	session         runnercontrol.DataPlaneSession
+	attachmentID    string
+	stream          dataPlaneStream
+	mu              sync.Mutex
+	nextSend        int64
+	nextRecv        int64
+	request         int64
+	credit          int64
+	emitted         int64
+	recordedThrough int64
+	terminal        bool
+	closed          bool
+	detached        bool
+}
+
+func (service *ControlPlaneService) OpenSandboxTerminalStream(
+	ctx context.Context,
+	session runnercontrol.DataPlaneSession,
+	attachmentID string,
+	afterSequence int64,
+) (*SandboxTerminalStream, error) {
+	if session.Kind != "terminal" || session.Operation != "terminal" ||
+		(session.State != "pending" && session.State != "running") ||
+		attachmentID == "" || afterSequence < -1 {
+		return nil, runnercontrol.ErrDataPlaneNotFound
+	}
+	var request contracts.CreateTerminalRequest
+	if err := json.Unmarshal(session.RequestJSON, &request); err != nil {
+		return nil, fmt.Errorf("SecondBox Terminal request decoding: %w", err)
+	}
+	stream, err := service.openDataPlaneStream(ctx, session)
+	if err != nil {
+		return nil, err
+	}
+	result := &SandboxTerminalStream{
+		service: service, session: session, attachmentID: attachmentID, stream: stream,
+		nextSend: session.NextClientSequence, nextRecv: afterSequence + 1,
+		request: session.RequestStreamBytes, credit: session.ResponseCreditBytes,
+		emitted:         session.InboundBytes,
+		recordedThrough: session.NextInboundSequence - 2,
+	}
+	if session.State == "pending" {
+		open := publicExecOpen(
+			request.Command, request.Cwd, request.Environment, session.DeadlineAt,
+			session.MaximumResponseBytes, nil,
+		)
+		open.AllocatePty = true
+		open.PtyRows = uint32(request.Rows)
+		open.PtyColumns = uint32(request.Columns)
+		open.Streaming = true
+		if err := stream.Send(&runnerv1.ControlPlaneToRunner{
+			Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: &runnerv1.ExecFrame{
+				Fence: dataPlaneFence(session), OperationId: session.ID, StreamId: session.StreamID,
+				Sequence: 1, Correlation: dataPlaneCorrelation(session),
+				Payload: &runnerv1.ExecFrame_Open{Open: open},
+			}},
+		}); err != nil {
+			_ = stream.Close()
+			return nil, err
+		}
+	}
+	if err := stream.Send(&runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_Pty{Pty: &runnerv1.PtyFrame{
+			Fence: dataPlaneFence(session), OperationId: session.ID, StreamId: session.StreamID,
+			Sequence: uint64(result.nextSend + 2), Correlation: dataPlaneCorrelation(session),
+			Payload: &runnerv1.PtyFrame_Attach{Attach: &runnerv1.PtyAttach{
+				ReconnectId: attachmentID, AfterSequence: afterSequence,
+				StreamWindowBytes: uint64(session.StreamWindowBytes),
+			}},
+		}},
+	}); err != nil {
+		_ = stream.Close()
+		return nil, err
+	}
+	message, err := stream.Receive(ctx)
+	if err != nil {
+		_ = stream.Close()
+		return nil, err
+	}
+	frame := message.GetPty()
+	if frame == nil || frame.OperationId != session.ID || frame.StreamId != session.StreamID ||
+		!proto.Equal(frame.Fence, dataPlaneFence(session)) ||
+		!proto.Equal(frame.Correlation, dataPlaneCorrelation(session)) || frame.GetAttachResult() == nil {
+		_ = stream.Close()
+		return nil, errors.New("SecondBox Terminal attachment result is invalid")
+	}
+	switch frame.GetAttachResult().Kind {
+	case runnerv1.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ATTACHED:
+		return result, nil
+	case runnerv1.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_REPLAY_EVICTED:
+		_ = stream.Close()
+		return nil, runnercontrol.ErrTerminalReplayEvicted
+	case runnerv1.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ALREADY_ATTACHED:
+		_ = stream.Close()
+		return nil, runnercontrol.ErrTerminalAttached
+	default:
+		_ = stream.Close()
+		return nil, errors.New("SecondBox Terminal attachment was rejected")
+	}
+}
+
+func (stream *SandboxTerminalStream) Send(
+	ctx context.Context,
+	frame runnercontrol.TerminalClientFrame,
+) error {
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if stream.closed || stream.terminal || frame.Sequence != stream.nextSend {
+		return runnercontrol.ErrRelaySequence
+	}
+	kinds := 0
+	if frame.Input != nil {
+		kinds++
+	}
+	if frame.ResizeRows != 0 || frame.ResizeColumns != 0 {
+		kinds++
+	}
+	if frame.Credit != 0 {
+		kinds++
+	}
+	if frame.Cancel {
+		kinds++
+	}
+	if kinds != 1 || frame.Credit < 0 || frame.Input != nil && len(frame.Input) == 0 ||
+		(frame.ResizeRows == 0) != (frame.ResizeColumns == 0) ||
+		frame.ResizeRows > 1000 || frame.ResizeColumns > 1000 {
+		return errors.New("SecondBox live Terminal frame requires exactly one valid payload")
+	}
+	if stream.request+int64(len(frame.Input)) > stream.session.MaximumRequestBytes {
+		return runnercontrol.ErrRelaySessionLimit
+	}
+	if frame.Credit > 0 && stream.credit-stream.emitted+frame.Credit > stream.session.StreamWindowBytes {
+		return runnercontrol.ErrRelayFrameLimit
+	}
+	sequence := uint64(frame.Sequence + 2)
+	var message *runnerv1.ControlPlaneToRunner
+	if frame.Cancel {
+		message = &runnerv1.ControlPlaneToRunner{
+			Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: &runnerv1.ExecFrame{
+				Fence: dataPlaneFence(stream.session), OperationId: stream.session.ID,
+				StreamId: stream.session.StreamID, Sequence: sequence,
+				Correlation: dataPlaneCorrelation(stream.session),
+				Payload: &runnerv1.ExecFrame_Cancel{Cancel: &runnerv1.ExecCancel{
+					Reason: "public Terminal client cancellation",
+				}},
+			}},
+		}
+	} else {
+		pty := &runnerv1.PtyFrame{
+			Fence: dataPlaneFence(stream.session), OperationId: stream.session.ID,
+			StreamId: stream.session.StreamID, Sequence: sequence,
+			Correlation: dataPlaneCorrelation(stream.session),
+		}
+		switch {
+		case frame.Input != nil:
+			pty.Payload = &runnerv1.PtyFrame_Input{Input: &runnerv1.PtyInput{Data: bytes.Clone(frame.Input)}}
+		case frame.Credit > 0:
+			pty.Payload = &runnerv1.PtyFrame_Credit{Credit: &runnerv1.StreamCredit{ByteCount: uint64(frame.Credit)}}
+		default:
+			pty.Payload = &runnerv1.PtyFrame_Resize{Resize: &runnerv1.PtyResize{
+				Rows: frame.ResizeRows, Columns: frame.ResizeColumns,
+			}}
+		}
+		message = &runnerv1.ControlPlaneToRunner{
+			Message: &runnerv1.ControlPlaneToRunner_Pty{Pty: pty},
+		}
+	}
+	if err := stream.stream.Send(message); err != nil {
+		return err
+	}
+	relay, err := stream.service.terminalRelay()
+	if err != nil {
+		return err
+	}
+	if _, err := relay.RecordTerminalClientFrame(
+		context.WithoutCancel(ctx), stream.session.TenantRef, stream.session.SubjectRef,
+		stream.session.ID, stream.attachmentID, frame, stream.service.now().UTC(),
+	); err != nil {
+		return err
+	}
+	stream.nextSend++
+	stream.request += int64(len(frame.Input))
+	stream.credit += frame.Credit
+	if frame.Cancel {
+		stream.closed = true
+	}
+	return nil
+}
+
+func (stream *SandboxTerminalStream) Receive(
+	ctx context.Context,
+) (runnercontrol.TerminalServerFrame, runnercontrol.DataPlaneSession, error) {
+	message, err := stream.stream.Receive(ctx)
+	if err != nil {
+		return runnercontrol.TerminalServerFrame{}, runnercontrol.DataPlaneSession{}, err
+	}
+	frame := message.GetPty()
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if frame == nil || frame.OperationId != stream.session.ID ||
+		frame.StreamId != stream.session.StreamID ||
+		!proto.Equal(frame.Fence, dataPlaneFence(stream.session)) ||
+		!proto.Equal(frame.Correlation, dataPlaneCorrelation(stream.session)) || frame.Sequence == 0 ||
+		int64(frame.Sequence)-1 != stream.nextRecv || stream.terminal {
+		return runnercontrol.TerminalServerFrame{}, runnercontrol.DataPlaneSession{}, fmt.Errorf(
+			"SecondBox live Terminal response ordering: %w", runnercontrol.ErrRelaySequence,
+		)
+	}
+	result := runnercontrol.TerminalServerFrame{Sequence: stream.nextRecv}
+	switch {
+	case frame.GetOutput() != nil:
+		replayed := stream.nextRecv <= stream.recordedThrough
+		if frame.GetOutput().Channel != runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT ||
+			len(frame.GetOutput().Data) == 0 ||
+			!replayed && (stream.emitted+int64(len(frame.GetOutput().Data)) > stream.credit ||
+				stream.emitted+int64(len(frame.GetOutput().Data)) > stream.session.MaximumResponseBytes) {
+			return runnercontrol.TerminalServerFrame{}, runnercontrol.DataPlaneSession{}, fmt.Errorf(
+				"SecondBox live Terminal response credit: %w", runnercontrol.ErrRelaySequence,
+			)
+		}
+		result.Output = bytes.Clone(frame.GetOutput().Data)
+	case frame.GetTerminal() != nil:
+		result.Terminal = proto.Clone(frame.GetTerminal()).(*runnerv1.ExecTerminal)
+		stream.terminal = true
+	default:
+		return runnercontrol.TerminalServerFrame{}, runnercontrol.DataPlaneSession{}, errors.New("SecondBox Terminal response payload is invalid")
+	}
+	relay, err := stream.service.terminalRelay()
+	if err != nil {
+		return runnercontrol.TerminalServerFrame{}, runnercontrol.DataPlaneSession{}, err
+	}
+	session, err := relay.RecordTerminalServerFrame(
+		context.WithoutCancel(ctx), stream.session.TenantRef, stream.session.SubjectRef,
+		stream.session.ID, result, stream.service.now().UTC(),
+	)
+	if err != nil {
+		return runnercontrol.TerminalServerFrame{}, runnercontrol.DataPlaneSession{}, fmt.Errorf(
+			"SecondBox live Terminal response recording: %w", err,
+		)
+	}
+	stream.nextRecv++
+	stream.emitted = session.InboundBytes
+	stream.recordedThrough = session.NextInboundSequence - 2
+	return result, session, nil
+}
+
+func (stream *SandboxTerminalStream) Close() error {
+	if stream == nil || stream.stream == nil {
+		return nil
+	}
+	stream.mu.Lock()
+	if stream.detached {
+		stream.mu.Unlock()
+		return stream.stream.Close()
+	}
+	stream.closed = true
+	stream.detached = true
+	detachErr := stream.stream.Send(&runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_Pty{Pty: &runnerv1.PtyFrame{
+			Fence: dataPlaneFence(stream.session), OperationId: stream.session.ID,
+			StreamId: stream.session.StreamID, Sequence: uint64(stream.nextSend + 2),
+			Correlation: dataPlaneCorrelation(stream.session),
+			Payload: &runnerv1.PtyFrame_Detach{Detach: &runnerv1.PtyDetach{
+				ReconnectId: stream.attachmentID,
+			}},
+		}},
+	})
+	stream.mu.Unlock()
+	return errors.Join(detachErr, stream.stream.Close())
 }
 
 func inputFileOpen(

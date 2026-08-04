@@ -242,11 +242,26 @@ func (session *Session) acceptRunnerRelayFrame(
 		if !session.enabledFeatures[runnerv1.RunnerFeature_RUNNER_FEATURE_PTY] {
 			return Event{}, fmt.Errorf("%w: PTY feature was not negotiated", ErrRunnerMessage)
 		}
-		if frame.GetOutput() == nil && frame.GetTerminal() == nil {
-			return Event{}, fmt.Errorf("%w: runner PTY payload is not an output or terminal frame", ErrRunnerMessage)
+		if frame.GetOutput() == nil && frame.GetTerminal() == nil && frame.GetAttachResult() == nil {
+			return Event{}, fmt.Errorf("%w: runner PTY payload is not output, attach result, or terminal", ErrRunnerMessage)
 		}
 		if err := validateRelayIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
 			return Event{}, err
+		}
+		if frame.GetAttachResult() != nil {
+			if frame.GetAttachResult().Kind == runnerv1.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_UNSPECIFIED ||
+				frame.GetAttachResult().AfterSequence < -1 {
+				return Event{}, fmt.Errorf("%w: runner PTY attach result is incomplete", ErrRunnerMessage)
+			}
+			if frame.GetAttachResult().Kind == runnerv1.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ATTACHED {
+				session.relayStreams[relayStreamKey(
+					"pty", frame.Fence, frame.OperationId, frame.StreamId,
+				)] = relayStreamState{sequence: uint64(frame.GetAttachResult().AfterSequence + 1)}
+			}
+			return Event{
+				Kind: EventPty, RunnerID: session.config.AuthenticatedRunnerID,
+				ConnectionID: session.config.ConnectionID, Message: message,
+			}, nil
 		}
 		kind = EventPty
 		key = relayStreamKey("pty", frame.Fence, frame.OperationId, frame.StreamId)
@@ -387,6 +402,9 @@ func (session *Session) ValidateOutboundRelayFrame(message *runnerv1.ControlPlan
 		}
 		if err := validateRelayIdentity(frame.Fence, frame.OperationId, frame.StreamId, frame.Sequence); err != nil {
 			return err
+		}
+		if frame.GetAttach() != nil || frame.GetDetach() != nil {
+			return nil
 		}
 		// A Terminal begins with an ExecOpen and continues with PTY frames; both
 		// use one operation sequence and therefore one connection-local key.

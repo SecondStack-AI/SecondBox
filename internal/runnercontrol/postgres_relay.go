@@ -20,18 +20,19 @@ import (
 )
 
 var (
-	ErrRelayFence          = errors.New("SecondBox data-plane relay fence is stale")
-	ErrRelaySequence       = errors.New("SecondBox data-plane relay sequence is invalid")
-	ErrRelayFrameLimit     = errors.New("SecondBox data-plane relay frame limit exceeded")
-	ErrRelaySessionLimit   = errors.New("SecondBox data-plane relay session limit exceeded")
-	ErrRelayDeliveryClaim  = errors.New("SecondBox data-plane relay delivery claim is inactive")
-	ErrDataPlaneNotFound   = errors.New("SecondBox data-plane session not found")
-	ErrDataPlaneIncomplete = errors.New("SecondBox data-plane session is not terminal")
-	ErrDataPlaneDeadline   = errors.New("SecondBox data-plane operation deadline exceeded")
-	ErrTerminalAttached    = errors.New("SecondBox Terminal session already has an active attachment")
-	ErrTerminalDetached    = errors.New("SecondBox Terminal attachment is inactive")
-	ErrFilePermission      = errors.New("SecondBox File operation permission denied")
-	ErrFileChecksum        = errors.New("SecondBox File checksum mismatch")
+	ErrRelayFence            = errors.New("SecondBox data-plane relay fence is stale")
+	ErrRelaySequence         = errors.New("SecondBox data-plane relay sequence is invalid")
+	ErrRelayFrameLimit       = errors.New("SecondBox data-plane relay frame limit exceeded")
+	ErrRelaySessionLimit     = errors.New("SecondBox data-plane relay session limit exceeded")
+	ErrRelayDeliveryClaim    = errors.New("SecondBox data-plane relay delivery claim is inactive")
+	ErrDataPlaneNotFound     = errors.New("SecondBox data-plane session not found")
+	ErrDataPlaneIncomplete   = errors.New("SecondBox data-plane session is not terminal")
+	ErrDataPlaneDeadline     = errors.New("SecondBox data-plane operation deadline exceeded")
+	ErrTerminalAttached      = errors.New("SecondBox Terminal session already has an active attachment")
+	ErrTerminalDetached      = errors.New("SecondBox Terminal attachment is inactive")
+	ErrTerminalReplayEvicted = errors.New("SecondBox Terminal replay sequence was evicted")
+	ErrFilePermission        = errors.New("SecondBox File operation permission denied")
+	ErrFileChecksum          = errors.New("SecondBox File checksum mismatch")
 )
 
 // PostgresFrameRelayConfig contains explicit durability and memory bounds.
@@ -131,7 +132,10 @@ type DataPlaneSession struct {
 	AttachedAt                 *time.Time
 	DetachedAt                 *time.Time
 	DetachExpiresAt            *time.Time
+	OutboundBytes              int64
+	InboundBytes               int64
 	NextClientSequence         int64
+	NextInboundSequence        int64
 	NextOutboundSequence       int64
 	TerminalInboundSequence    *int64
 	TerminalInboundPayloadHash string
@@ -275,7 +279,6 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 		input.StreamWindowBytes = policy.StreamWindowBytes
 	}
 	if input.Kind == "terminal" {
-		session.Transport = contracts.PortTransportRelay
 		input.ExecOpen.OutputLimitBytes = uint64(input.MaximumResponseBytes)
 		session.Detachable = input.Detachable
 		session.TerminalDetachSeconds = policy.TerminalDetachSeconds
@@ -286,12 +289,11 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 			)
 		}
 	}
-	if input.Kind != "terminal" &&
-		session.Transport != contracts.DataPlaneTransportProxied &&
+	if session.Transport != contracts.DataPlaneTransportProxied &&
 		session.Transport != contracts.DataPlaneTransportDirect {
 		return DataPlaneSession{}, false, errors.New("SecondBox pinned Profile data-plane transport is invalid")
 	}
-	if input.Kind != "terminal" && session.Transport == contracts.DataPlaneTransportDirect &&
+	if session.Transport == contracts.DataPlaneTransportDirect &&
 		len(input.CredentialDigest) != sha256.Size {
 		return DataPlaneSession{}, false, errors.New("SecondBox direct data-plane credential digest is invalid")
 	}
@@ -334,12 +336,6 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 	session.CreatedAt, session.UpdatedAt = input.Now.UTC(), input.Now.UTC()
 	var frames []encodedRelayFrame
 	var outboundBytes int64
-	if input.Kind == "terminal" {
-		frames, outboundBytes, err = relay.buildOutboundFrames(session, input)
-		if err != nil {
-			return DataPlaneSession{}, false, err
-		}
-	}
 	if outboundBytes+input.MaximumResponseBytes > relay.maximumSessionBytes {
 		return DataPlaneSession{}, false, ErrRelaySessionLimit
 	}
@@ -350,13 +346,17 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 	if len(requestJSON) == 0 {
 		requestJSON = []byte("{}")
 	}
+	nextOutboundSequence := len(frames) + 1
+	if session.Kind == "terminal" {
+		nextOutboundSequence = 2
+	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.data_plane_sessions (
 			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,assignment_id,instance_id,runner_id,generation,fencing_token,request_id,lease_id,kind,operation,stream_id,state,priority,idempotency_key,request_hash,deadline_at,maximum_response_bytes,maximum_request_bytes,stream_window_bytes,response_credit_bytes,request_stream_bytes,request_stream_closed,detachable,terminal_detach_seconds,attachment_id,attached_at,detached_at,detach_expires_at,outbound_bytes,inbound_bytes,next_inbound_sequence,terminal_kind,terminal_detail,exit_code,signal,spawn_failure_reason,elapsed_milliseconds,limit_bytes,infrastructure_failure_reason,retryable,terminal_message,stdout_bytes,stderr_bytes,content_bytes,metadata_json,request_json,created_at,updated_at,completed_at,retain_until,frames_retain_until,next_outbound_sequence
 		) VALUES (
 			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'pending',$16,$17,$18,$19,$20,$21,$22,0,0,false,$23,$24,'',NULL,NULL,NULL,$25,0,1,'','',0,0,'',0,0,'',false,'',$26,$26,$26,'{}',$27,$28,$28,NULL,$29,$29,$30
 		)`,
-		session.ID, session.TenantRef, session.SubjectRef, session.SandboxID, session.ProfileRevisionID, session.AssignmentID, session.InstanceID, session.RunnerID, session.Generation, session.FencingToken, session.RequestID, session.LeaseID, session.Kind, session.Operation, session.StreamID, input.Priority, input.IdempotencyKey, input.RequestHash, session.DeadlineAt, session.MaximumResponseBytes, session.MaximumRequestBytes, session.StreamWindowBytes, session.Detachable, session.TerminalDetachSeconds, outboundBytes, []byte{}, requestJSON, session.CreatedAt, session.CreatedAt.Add(relay.retention), len(frames)+1,
+		session.ID, session.TenantRef, session.SubjectRef, session.SandboxID, session.ProfileRevisionID, session.AssignmentID, session.InstanceID, session.RunnerID, session.Generation, session.FencingToken, session.RequestID, session.LeaseID, session.Kind, session.Operation, session.StreamID, input.Priority, input.IdempotencyKey, input.RequestHash, session.DeadlineAt, session.MaximumResponseBytes, session.MaximumRequestBytes, session.StreamWindowBytes, session.Detachable, session.TerminalDetachSeconds, outboundBytes, []byte{}, requestJSON, session.CreatedAt, session.CreatedAt.Add(relay.retention), nextOutboundSequence,
 	); err != nil {
 		return DataPlaneSession{}, false, fmt.Errorf("SecondBox data-plane session insert: %w", err)
 	}
@@ -373,7 +373,7 @@ func (relay *PostgresFrameRelay) AdmitDataPlane(
 			return DataPlaneSession{}, false, fmt.Errorf("SecondBox outbound relay frame insert: %w", err)
 		}
 	}
-	if session.Kind != "terminal" && session.Transport == contracts.DataPlaneTransportDirect {
+	if session.Transport == contracts.DataPlaneTransportDirect {
 		message := directDataPlaneOpenMessage(session, input.CredentialDigest)
 		payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(message)
 		if err != nil {
@@ -411,8 +411,11 @@ func directDataPlaneOpenMessage(
 	credentialDigest []byte,
 ) *runnerv1.ControlPlaneToRunner {
 	kind := runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC
-	if session.Kind == "file" {
+	switch session.Kind {
+	case "file":
 		kind = runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE
+	case "terminal":
+		kind = runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY
 	}
 	return &runnerv1.ControlPlaneToRunner{
 		Message: &runnerv1.ControlPlaneToRunner_DataPlaneDirectOpen{
@@ -423,10 +426,11 @@ func directDataPlaneOpenMessage(
 					FencingToken: bytes.Clone(session.FencingToken),
 				},
 				OperationId: session.ID, StreamId: session.StreamID,
-				Correlation:      dataPlaneCorrelation(session),
-				Kind:             kind,
-				DeadlineUnixMs:   uint64(session.DeadlineAt.UnixMilli()),
-				CredentialDigest: bytes.Clone(credentialDigest),
+				Correlation:       dataPlaneCorrelation(session),
+				Kind:              kind,
+				DeadlineUnixMs:    uint64(session.DeadlineAt.UnixMilli()),
+				CredentialDigest:  bytes.Clone(credentialDigest),
+				StreamWindowBytes: uint64(session.StreamWindowBytes),
 			},
 		},
 	}
@@ -1087,8 +1091,9 @@ const dataPlaneSessionSelect = `
 	       deadline_at,maximum_response_bytes,maximum_request_bytes,stream_window_bytes,
 	       response_credit_bytes,request_stream_bytes,request_stream_closed,detachable,
 	       terminal_detach_seconds,attachment_id,attached_at,detached_at,detach_expires_at,
+	       outbound_bytes,inbound_bytes,
 	       GREATEST(next_outbound_sequence-2,0) AS next_client_sequence,
-	       next_outbound_sequence,terminal_inbound_sequence,
+	       next_inbound_sequence,next_outbound_sequence,terminal_inbound_sequence,
 	       COALESCE(terminal_inbound_payload_hash,''),
 	       terminal_kind,
 	       terminal_detail,exit_code,signal,spawn_failure_reason,elapsed_milliseconds,
@@ -1117,7 +1122,9 @@ func scanDataPlaneSession(row relayRow) (DataPlaneSession, error) {
 		&session.ResponseCreditBytes, &session.RequestStreamBytes, &session.RequestStreamClosed,
 		&session.Detachable, &session.TerminalDetachSeconds, &session.AttachmentID,
 		&session.AttachedAt, &session.DetachedAt, &session.DetachExpiresAt,
+		&session.OutboundBytes, &session.InboundBytes,
 		&session.NextClientSequence,
+		&session.NextInboundSequence,
 		&session.NextOutboundSequence, &session.TerminalInboundSequence,
 		&session.TerminalInboundPayloadHash,
 		&session.TerminalKind, &session.TerminalDetail, &session.ExitCode,
@@ -1259,7 +1266,7 @@ func applyInboundPayload(
 	if identity.ptyOutput != nil {
 		streamOutput = identity.ptyOutput
 	}
-	if streamOutput != nil {
+	if streamOutput != nil && session.Kind != "terminal" {
 		if streamOutput.Channel == runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT {
 			stdout = streamOutput.Data
 		} else if streamOutput.Channel == runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDERR {

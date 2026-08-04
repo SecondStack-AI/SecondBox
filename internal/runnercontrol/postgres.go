@@ -197,9 +197,26 @@ func failDisconnectedRunnerDataPlaneSessions(
 	runnerID string,
 	now time.Time,
 ) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.data_plane_sessions AS session
+		SET attachment_id='',detached_at=$2,
+		    detach_expires_at=$2::timestamptz+
+		      (session.terminal_detach_seconds::bigint * interval '1 second'),
+		    updated_at=$2
+		FROM secondbox.profile_revisions AS revision
+		WHERE session.profile_revision_id=revision.id
+		  AND session.runner_id=$1 AND session.kind='terminal'
+		  AND session.state IN ('pending','running','cancelling')
+		  AND session.attachment_id<>''
+		  AND revision.spec_json->'execution'->>'dataPlaneTransport'='proxied'`,
+		runnerID, now,
+	); err != nil {
+		return fmt.Errorf("SecondBox disconnected Runner Terminal detach: %w", err)
+	}
 	rows, err := tx.Query(ctx, `
 		SELECT id FROM secondbox.data_plane_sessions
-		WHERE runner_id=$1 AND state IN ('pending','running','cancelling')
+		WHERE runner_id=$1 AND kind<>'terminal'
+		  AND state IN ('pending','running','cancelling')
 		ORDER BY id FOR UPDATE`, runnerID)
 	if err != nil {
 		return fmt.Errorf("SecondBox disconnected runner data-plane lock: %w", err)

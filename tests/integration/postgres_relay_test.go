@@ -531,7 +531,7 @@ func TestPostgresLiveDataPlanePersistsOneBufferedExecOutcomeAndNoFrames(t *testi
 	}
 }
 
-func TestPostgresDirectFileAdmissionIsDurableAndPayloadFree(t *testing.T) {
+func TestPostgresDirectFileAndTerminalAdmissionsAreDurableAndPayloadFree(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
 	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "direct-file")
@@ -611,6 +611,57 @@ func TestPostgresDirectFileAdmissionIsDurableAndPayloadFree(t *testing.T) {
 	}
 	if frameRows != 0 {
 		t.Fatalf("direct File frame rows = %d, want zero", frameRows)
+	}
+
+	lease, err := controlPlane.AcquireSandboxLease(
+		t.Context(), principal, sandbox.ID, sandbox.Generation, "direct-terminal-lease", 60,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminalSession, replayed, err := relay.AdmitDataPlane(t.Context(), runnercontrol.DataPlaneAdmission{
+		ID: "dps_direct_terminal_" + sandbox.ID, StreamID: "stream_direct_terminal_" + sandbox.ID,
+		TenantRef: principal.TenantRef, SandboxID: sandbox.ID,
+		SubjectRef: principal.SubjectRef, RequestID: "request-direct-terminal", LeaseID: lease.ID,
+		Generation: sandbox.Generation, Kind: "terminal", Operation: "terminal",
+		IdempotencyKey: "direct-terminal", RequestHash: "direct-terminal-hash",
+		DeadlineAt: now.Add(30 * time.Second), MaximumResponseBytes: 1024,
+		MaximumRequestBytes: 1024, StreamWindowBytes: 64,
+		DeferResponseCredit: true, Detachable: true,
+		ExecOpen: &runnerv1.ExecOpen{
+			Command:          &runnerv1.ExecOpen_Shell{Shell: "cat"},
+			DeadlineUnixMs:   uint64(now.Add(30 * time.Second).UnixMilli()),
+			OutputLimitBytes: 1024, AllocatePty: true, PtyRows: 24, PtyColumns: 80, Streaming: true,
+		},
+		CredentialDigest: bytes.Repeat([]byte{0x43}, 32),
+		Request:          map[string]any{"command": "cat", "detachable": true}, Now: now,
+	})
+	if err != nil || replayed || terminalSession.Transport != contracts.DataPlaneTransportDirect {
+		t.Fatalf("direct Terminal admission = %#v, replayed=%t, error=%v", terminalSession, replayed, err)
+	}
+	if err := pool.QueryRow(t.Context(), `
+		SELECT payload FROM secondbox.runner_commands WHERE id=$1`, terminalSession.ID+"_direct_open",
+	).Scan(&commandPayload); err != nil {
+		t.Fatal(err)
+	}
+	command.Reset()
+	if err := proto.Unmarshal(commandPayload, &command); err != nil {
+		t.Fatal(err)
+	}
+	terminalOpen := command.GetDataPlaneDirectOpen()
+	if terminalOpen == nil ||
+		terminalOpen.Kind != runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY ||
+		terminalOpen.StreamWindowBytes != 64 ||
+		!bytes.Equal(terminalOpen.CredentialDigest, bytes.Repeat([]byte{0x43}, 32)) {
+		t.Fatalf("direct Terminal command = %#v", terminalOpen)
+	}
+	if err := pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM secondbox.data_plane_frames WHERE session_id=$1`, terminalSession.ID,
+	).Scan(&frameRows); err != nil {
+		t.Fatal(err)
+	}
+	if frameRows != 0 {
+		t.Fatalf("direct Terminal frame rows = %d, want zero", frameRows)
 	}
 }
 

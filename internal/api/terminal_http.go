@@ -7,14 +7,17 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
+	"github.com/SecondStack-AI/SecondBox/internal/service"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/gorilla/websocket"
 )
 
 const terminalSubprotocol = "secondbox.terminal.v1"
+const terminalAfterSequenceHeader = "SecondBox-Terminal-After-Sequence"
 
 func (apiHandler *handler) createSandboxTerminal(writer http.ResponseWriter, request *http.Request) {
 	var body contracts.CreateTerminalRequest
@@ -129,6 +132,16 @@ func (apiHandler *handler) connectSandboxTerminal(writer http.ResponseWriter, re
 		apiHandler.writeError(writer, request, err)
 		return
 	}
+	afterSequence := int64(-1)
+	if value := request.Header.Get(terminalAfterSequenceHeader); value != "" {
+		afterSequence, err = strconv.ParseInt(value, 10, 64)
+		if err != nil || afterSequence < -1 {
+			apiHandler.writeError(writer, request, requestValidationError(
+				errors.New("SecondBox Terminal replay sequence is invalid"),
+			))
+			return
+		}
+	}
 	session, attachmentID, err := apiHandler.service.AcquireSandboxTerminalAttachment(
 		request.Context(), requestPrincipal(request), request.PathValue("sandboxID"),
 		request.PathValue("terminalSessionID"), generation,
@@ -151,6 +164,14 @@ func (apiHandler *handler) connectSandboxTerminal(writer http.ResponseWriter, re
 			)
 		}
 	}()
+	stream, err := apiHandler.service.OpenSandboxTerminalStream(
+		request.Context(), session, attachmentID, afterSequence,
+	)
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	defer stream.Close()
 	upgrader := websocket.Upgrader{
 		Subprotocols: []string{terminalSubprotocol},
 		CheckOrigin:  sameWebSocketOrigin,
@@ -162,7 +183,7 @@ func (apiHandler *handler) connectSandboxTerminal(writer http.ResponseWriter, re
 	}
 	defer connection.Close()
 	connection.SetReadLimit(apiHandler.maximumDataPlaneBodyBytes)
-	_, err = apiHandler.serveSandboxTerminal(request, connection, session, attachmentID)
+	_, err = apiHandler.serveSandboxTerminal(request, connection, session, stream)
 	if err != nil {
 		apiHandler.logger.InfoContext(
 			request.Context(), "SecondBox Terminal WebSocket closed",
@@ -175,7 +196,7 @@ func (apiHandler *handler) serveSandboxTerminal(
 	request *http.Request,
 	connection *websocket.Conn,
 	session runnercontrol.DataPlaneSession,
-	attachmentID string,
+	stream *service.SandboxTerminalStream,
 ) (bool, error) {
 	principal := requestPrincipal(request)
 	streamContext, stopStream := context.WithCancel(request.Context())
@@ -183,75 +204,77 @@ func (apiHandler *handler) serveSandboxTerminal(
 	readErrors := make(chan error, 1)
 	go func() {
 		readErrors <- apiHandler.readSandboxTerminalFrames(
-			streamContext, principal, connection, session.ID, attachmentID,
+			streamContext, connection, stream,
 		)
 	}()
-	ticker := time.NewTicker(apiHandler.service.DataPlanePollInterval())
-	defer ticker.Stop()
-	// Subscribing before the first authoritative read is required, not stylistic:
-	// it closes the race where a frame commits between that read and the
-	// subscription and would otherwise wait for the poll interval.
-	wakeups, cancelWakeups := apiHandler.service.SubscribeDataPlaneSession(session.ID)
-	defer cancelWakeups()
-	afterSequence := int64(-1)
+	type receiveResult struct {
+		frame   runnercontrol.TerminalServerFrame
+		session runnercontrol.DataPlaneSession
+		err     error
+	}
+	receiveResults := make(chan receiveResult, 1)
+	go func() {
+		for {
+			frame, terminalSession, err := stream.Receive(streamContext)
+			select {
+			case receiveResults <- receiveResult{frame: frame, session: terminalSession, err: err}:
+			case <-streamContext.Done():
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
 	for {
-		frames, err := apiHandler.service.ListSandboxTerminalFrames(
-			request.Context(), principal, session.ID, afterSequence,
-		)
-		if err != nil {
-			return false, err
-		}
-		for _, frame := range frames {
-			if err := connection.SetWriteDeadline(session.DeadlineAt); err != nil {
-				return false, fmt.Errorf("SecondBox Terminal WebSocket write deadline: %w", err)
-			}
-			switch {
-			case frame.Output != nil:
-				if err := connection.WriteJSON(contracts.TerminalOutputFrame{
-					Type: "terminal_output", Sequence: frame.Sequence,
-					DataBase64: base64.StdEncoding.EncodeToString(frame.Output),
-				}); err != nil {
-					return false, fmt.Errorf("SecondBox Terminal WebSocket output write: %w", err)
-				}
-			case frame.Terminal != nil:
-				outcome, err := apiHandler.service.SandboxTerminalOutcome(
-					request.Context(), principal, session.ID,
-				)
-				if err != nil {
-					return false, err
-				}
-				if err := connection.WriteJSON(contracts.StreamOutcomeFrame{
-					Type: "outcome", Sequence: frame.Sequence, Outcome: outcome,
-				}); err != nil {
-					return false, fmt.Errorf("SecondBox Terminal WebSocket outcome write: %w", err)
-				}
-				return true, connection.WriteControl(
-					websocket.CloseMessage,
-					websocket.FormatCloseMessage(websocket.CloseNormalClosure, "terminal outcome delivered"),
-					time.Now().Add(time.Second),
-				)
-			default:
-				return false, errors.New("SecondBox Terminal retained WebSocket frame is unsupported")
-			}
-			afterSequence = frame.Sequence
-		}
+		var result receiveResult
 		select {
 		case err := <-readErrors:
 			return false, err
-		case <-wakeups:
-		case <-ticker.C:
-		case <-request.Context().Done():
-			return false, request.Context().Err()
+		case result = <-receiveResults:
+		}
+		frame, terminalSession, err := result.frame, result.session, result.err
+		if err != nil {
+			return false, err
+		}
+		if err := connection.SetWriteDeadline(session.DeadlineAt); err != nil {
+			return false, fmt.Errorf("SecondBox Terminal WebSocket write deadline: %w", err)
+		}
+		switch {
+		case frame.Output != nil:
+			if err := connection.WriteJSON(contracts.TerminalOutputFrame{
+				Type: "terminal_output", Sequence: frame.Sequence,
+				DataBase64: base64.StdEncoding.EncodeToString(frame.Output),
+			}); err != nil {
+				return false, fmt.Errorf("SecondBox Terminal WebSocket output write: %w", err)
+			}
+		case frame.Terminal != nil:
+			outcome, err := apiHandler.service.SandboxTerminalOutcome(
+				request.Context(), principal, terminalSession.ID,
+			)
+			if err != nil {
+				return false, err
+			}
+			if err := connection.WriteJSON(contracts.StreamOutcomeFrame{
+				Type: "outcome", Sequence: frame.Sequence, Outcome: outcome,
+			}); err != nil {
+				return false, fmt.Errorf("SecondBox Terminal WebSocket outcome write: %w", err)
+			}
+			return true, connection.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseNormalClosure, "terminal outcome delivered"),
+				time.Now().Add(time.Second),
+			)
+		default:
+			return false, errors.New("SecondBox Terminal response frame is unsupported")
 		}
 	}
 }
 
 func (apiHandler *handler) readSandboxTerminalFrames(
 	ctx context.Context,
-	principal contracts.Principal,
 	connection *websocket.Conn,
-	sessionID string,
-	attachmentID string,
+	stream *service.SandboxTerminalStream,
 ) error {
 	for {
 		messageType, payload, err := connection.ReadMessage()
@@ -265,9 +288,7 @@ func (apiHandler *handler) readSandboxTerminalFrames(
 		if err != nil {
 			return err
 		}
-		if _, err := apiHandler.service.AppendSandboxTerminalFrame(
-			ctx, principal, sessionID, attachmentID, frame,
-		); err != nil {
+		if err := stream.Send(ctx, frame); err != nil {
 			return err
 		}
 	}

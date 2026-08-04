@@ -3,8 +3,10 @@ package secondboxclient
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -78,6 +80,17 @@ func (handle *SandboxHandle) ConnectTerminal(
 	session TerminalSession,
 	dialer *websocket.Dialer,
 ) (*Terminal, error) {
+	return handle.ConnectTerminalAfter(ctx, session, -1, dialer)
+}
+
+// ConnectTerminalAfter attaches and replays output after the last sequence the
+// caller received successfully. Pass -1 when no output has been received.
+func (handle *SandboxHandle) ConnectTerminalAfter(
+	ctx context.Context,
+	session TerminalSession,
+	afterSequence int64,
+	dialer *websocket.Dialer,
+) (*Terminal, error) {
 	current := handle.Snapshot()
 	if session.Subprotocol != terminalSubprotocol ||
 		session.SandboxID != current.ID ||
@@ -103,13 +116,29 @@ func (handle *SandboxHandle) ConnectTerminal(
 	headers.Set("X-SecondBox-Tenant-Ref", handle.client.tenantRef)
 	headers.Set("X-SecondBox-Subject-Ref", handle.client.subjectRef)
 	headers.Set("SecondBox-Generation", strconv.FormatInt(session.Generation, 10))
+	if afterSequence < -1 {
+		return nil, errors.New("SecondBox Terminal replay sequence is invalid")
+	}
+	headers.Set("SecondBox-Terminal-After-Sequence", strconv.FormatInt(afterSequence, 10))
 	selectedCopy := *selected
 	selectedCopy.Subprotocols = []string{terminalSubprotocol}
 	connection, response, err := selectedCopy.DialContext(ctx, endpoint.String(), headers)
 	if err != nil {
 		if response != nil {
-			_ = response.Body.Close()
-			return nil, fmt.Errorf("SecondBox Terminal attach failed: status=%d: %w", response.StatusCode, err)
+			defer response.Body.Close()
+			body, readErr := io.ReadAll(io.LimitReader(response.Body, (4<<20)+1))
+			if readErr != nil {
+				return nil, fmt.Errorf("SecondBox Terminal attach error response: %w", readErr)
+			}
+			if len(body) > 4<<20 {
+				return nil, errors.New("SecondBox Terminal attach error response exceeds 4194304 bytes")
+			}
+			failure := &APIError{StatusCode: response.StatusCode, Body: body}
+			var problem Problem
+			if json.Unmarshal(body, &problem) == nil {
+				failure.Problem = &problem
+			}
+			return nil, failure
 		}
 		return nil, fmt.Errorf("SecondBox Terminal attach failed: %w", err)
 	}
@@ -119,6 +148,7 @@ func (handle *SandboxHandle) ConnectTerminal(
 	}
 	return &Terminal{
 		connection: connection, nextInput: session.NextClientSequence,
+		nextOutput:    afterSequence + 1,
 		writeDeadline: expiresAt,
 	}, nil
 }

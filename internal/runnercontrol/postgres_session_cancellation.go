@@ -71,7 +71,8 @@ func (relay *PostgresFrameRelay) CancelPublicDataPlaneSession(
 		); err != nil {
 			return DataPlaneSession{}, false, err
 		}
-		if session.State == "pending" && session.Kind == "exec" {
+		if session.State == "pending" &&
+			(session.Kind == "exec" || session.Kind == "terminal") {
 			if err := relay.completeUnstartedCancellation(
 				ctx, tx, session,
 				runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED.String(),
