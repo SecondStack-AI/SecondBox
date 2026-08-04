@@ -1,12 +1,14 @@
 ---
 title: Coordinated Release Distribution
 date: 2026-08-03
-status: in_progress
+status: superseded
 owner: SecondStack
 provenance: SecondBox and SecondStack integration boundary review, 2026-08-03
 ---
 
 # Plan: Coordinated SecondBox Release Distribution
+
+> Superseded on 2026-08-04 by the repository owner's direct-release decision. The implemented release path is now local staging, one draft upload, and one stable GitHub publication workflow. Qualification attestations and a final release index are not release gates. The reusable contracts remain for compatibility, but the operator workflow is documented in [release operator setup](../operations/release-operator-setup.md).
 
 Release SecondBox as one public, qualified product that consumers can install without a source checkout, copied SDK, copied deployment code, or consumer-owned resource bootstrap. One immutable SemVer Git tag versions the existing Go and TypeScript SDKs, control-plane and Runner images, signed microVM artifact image, `secondbox` and `secondbox-deploy` binaries, standard resource bundles, checksums, provenance, an immutable artifact manifest, qualification evidence and a final machine-readable release index in lockstep.
 
@@ -172,17 +174,11 @@ Prove that public candidate artifacts from one tag are sufficient to install and
 - [x] Prove the final release index contains no digest cycle, references only public immutable objects and becomes acceptable to the normal `secondbox-deploy` verifier only after qualification succeeds.
 - [x] Make `just test-source-free-release` fail hard whenever any required public artifact, credential, Runner, signed bundle or expected evidence is absent.
 
-### Task 7: Cut and hand off the first qualified release
+### Task 7: Cut and hand off the first release
 
-Complete one real public release and provide a stable downstream contract. The release is complete only after its public candidate artifacts pass the source-free gate and its final release index is publicly verifiable.
-
-- [x] Select the first SemVer version under the coordinated release policy and finalize the changelog and current release documentation.
-- [ ] Run generated checks, the complete non-KVM suite, SDK package tests, release staging, security/image policy, deployment tests and the qualified KVM scenario for the exact candidate commit.
-- [ ] Create the immutable Git tag and execute local preparation, hosted candidate publication, local source-free qualification and local finalization.
-- [ ] Verify npm, Go module resolution, GitHub binaries, GHCR images, SBOMs, artifact attestations, the artifact manifest, qualification attestation and final release index from their public locations.
-- [ ] Confirm source-free qualification ran against the public candidate artifacts rather than local or workflow-staged substitutes before the final release index was published.
-- [ ] Confirm the standard `agent-compartment` and `durable-coding` bundles can be selected without a consumer-owned RunnerPool or Profile definition.
-- [ ] Record the final release-index URL and digest, artifact-manifest and qualification-attestation URLs and digests, npm integrity, OCI digests, binary checksums, standard bundle names/revisions/spec digests, supported platforms and protocol windows.
-- [ ] Publish a concise downstream integration handoff explaining how to verify and pin the release, initialize a deployment, select standard resources and import the existing SDKs.
-- [ ] Confirm no provisional tag, development package version, mutable image reference, source checkout or unpublished required artifact remains in the downstream instructions.
-- [ ] Preserve the final release index and its referenced artifact manifest and qualification attestation as the canonical inputs for the subsequent SecondStack Agent Platform and stacked Agent Claude integration work.
+- [x] Publish immutable tag `v0.1.4` from the merged release commit.
+- [x] Build the binaries, SDK packages, OCI archives, standard bundles, and manifest locally.
+- [x] Publish the GitHub assets, Go module tag, npm package version, and GHCR images.
+- [x] Mark [SecondBox v0.1.4](https://github.com/SecondStack-AI/SecondBox/releases/tag/v0.1.4) as the stable latest GitHub release.
+- [x] Replace the candidate/qualification/finalization protocol with direct local staging and stable publication.
+- [x] Document the two-command release process for the next version.

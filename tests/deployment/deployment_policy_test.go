@@ -96,15 +96,15 @@ func TestDockerBuildContextExcludesLocalSecondBoxState(t *testing.T) {
 	}
 }
 
-func TestScenarioQualificationRemainsLocalToQualifiedHost(t *testing.T) {
+func TestReleaseDoesNotRequireScenarioQualification(t *testing.T) {
 	repositoryRoot := repositoryRootForDeploymentPolicy(t)
 	if _, err := os.Stat(filepath.Join(repositoryRoot, ".github/workflows/scenario-qualification.yml")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("scenario qualification must not require a configured GitHub self-hosted runner")
 	}
-	preparation := readRepositoryFile(t, "scripts/release-local-prepare.sh")
-	for _, required := range []string{"just --justfile \"$repo_root/Justfile\" --working-directory \"$repo_root\" test-scenario", "/dev/kvm"} {
-		if !strings.Contains(preparation, required) {
-			t.Errorf("local release preparation must contain %q", required)
+	for _, path := range []string{"scripts/release-upload.sh", "scripts/release-publish.sh", ".github/workflows/release.yml"} {
+		releaseFlow := readRepositoryFile(t, path)
+		if strings.Contains(releaseFlow, "test-scenario") || strings.Contains(releaseFlow, "/dev/kvm") || strings.Contains(releaseFlow, "qualification") {
+			t.Errorf("%s must not gate a release on scenario qualification", path)
 		}
 	}
 	const jobMarker = "  scenario-qualification:\n"
