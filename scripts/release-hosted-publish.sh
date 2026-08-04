@@ -10,6 +10,11 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 publication_input="$input/secondbox-${version}-publication-input.json"
 
 [[ "$mode" == "publish" || "$mode" == "expose" ]] || { echo "unknown hosted publication mode $mode" >&2; exit 2; }
+release_policy="$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' 'repos/SecondStack-AI/SecondBox/immutable-releases')"
+jq -e '.enabled == false' <<<"$release_policy" >/dev/null || {
+  echo "SecondBox staged release finalization requires GitHub native release immutability to be disabled" >&2
+  exit 1
+}
 source_commit="$(jq -er '.sourceCommit' "$publication_input")"
 test "$(git -C "$repo_root" rev-parse HEAD)" = "$source_commit"
 test "$(git -C "$repo_root" rev-parse "refs/tags/${tag}^{commit}")" = "$source_commit"

@@ -63,15 +63,32 @@ publish_image microvm-artifacts ghcr.io/secondstack-ai/secondbox/microvm-artifac
 
 typescript="$stage/secondstack-ai-secondbox-${version}.tgz"
 local_integrity="sha512-$(openssl dgst -sha512 -binary "$typescript" | openssl base64 -A)"
-published_integrity="$(npm view "@secondstack-ai/secondbox@${version}" dist.integrity --json 2>/dev/null | jq -r 'select(type == "string")' || true)"
+read_published_integrity() {
+  npm view "@secondstack-ai/secondbox@${version}" dist.integrity --json 2>/dev/null | jq -r 'select(type == "string")' || true
+}
+published_integrity="$(read_published_integrity)"
 if [[ -n "$published_integrity" && "$published_integrity" != "$local_integrity" ]]; then
   echo "immutable npm version already contains different content" >&2
   exit 1
 fi
 if [[ -z "$published_integrity" ]]; then
   npm publish "$typescript" --access public --tag candidate --provenance
+  for attempt in {1..12}; do
+    published_integrity="$(read_published_integrity)"
+    [[ -z "$published_integrity" || "$published_integrity" == "$local_integrity" ]] || {
+      echo "immutable npm version contains different content after publication" >&2
+      exit 1
+    }
+    [[ -z "$published_integrity" ]] || break
+    if (( attempt < 12 )); then
+      sleep 5
+    fi
+  done
 fi
-test "$(npm view "@secondstack-ai/secondbox@${version}" dist.integrity --json | jq -r .)" = "$local_integrity"
+[[ "$published_integrity" == "$local_integrity" ]] || {
+  echo "published npm version did not become readable before the propagation deadline" >&2
+  exit 1
+}
 
 if ! gh release view "$tag" --json isDraft,isPrerelease >/dev/null 2>&1; then
   gh release create "$tag" --draft --verify-tag --title "SecondBox ${tag}" --notes "Incomplete public release candidate. It is not release authority until the final release index is published."
