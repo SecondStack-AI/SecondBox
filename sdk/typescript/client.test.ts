@@ -648,7 +648,7 @@ test("createSandbox returns a handle for the created resource", async () => {
     return Response.json(sandbox("creating"));
   };
   const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
-  const { handle, operation } = await api.createSandbox({ profile: "coding-environment" });
+  const { handle, operation } = await api.createSandbox({ profile: "durable-coding" });
   assert.equal(operation.sandboxId, "sandbox-1");
   assert.equal(handle.snapshot.id, "sandbox-1");
   assert.notEqual(idempotency, "");
@@ -667,7 +667,7 @@ test("createSandbox rejects an operation without a Sandbox reference", async () 
     });
   const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
   await assert.rejects(
-    api.createSandbox({ profile: "coding-environment" }),
+    api.createSandbox({ profile: "durable-coding" }),
     /no Sandbox reference/,
   );
 });
@@ -752,7 +752,7 @@ test("run creates, waits, and executes one command", async () => {
   };
   const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
   const outcome = await api.run({
-    profile: "coding-environment",
+    profile: "durable-coding",
     command: "echo hello",
     deadlineMilliseconds: 5_000,
     maximumOutputBytes: 1_048_576,
@@ -993,4 +993,61 @@ test("SandboxHandle refuses a direct PortSession when only a relay connector is 
     /direct transport has no dialer/,
   );
   assert.equal(connected, false);
+});
+
+test("high-level listing and adoption hide polling decoders and metadata query mechanics", async () => {
+  let listedURL = "";
+  const fetcher: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/v1/sandboxes") {
+      listedURL = url.toString();
+      return Response.json({ items: [] });
+    }
+    return Response.json(sandbox("ready"));
+  };
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
+  await api.listSandboxes({
+    limit: 12,
+    metadata: { z: "last", a: "first" },
+  });
+  const query = new URL(listedURL).searchParams;
+  assert.equal(query.get("limit"), "12");
+  assert.deepEqual(query.getAll("metadata"), ["a=first", "z=last"]);
+  const handle = await api.adoptSandbox("sandbox-1");
+  assert.equal(handle.snapshot.id, "sandbox-1");
+});
+
+test("high-level lifecycle and Metadata mutation use the observed revision fence", async () => {
+  const ifMatches: string[] = [];
+  const idempotencies: string[] = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    ifMatches.push(new Headers(init?.headers).get("If-Match") ?? "");
+    idempotencies.push(new Headers(init?.headers).get("Idempotency-Key") ?? "");
+    if (new URL(String(input)).pathname.endsWith("/metadata")) {
+      return Response.json({ ...sandbox("ready"), revision: 2, metadata: { owner: "application" } });
+    }
+    return Response.json({
+      id: "operation-1", sandboxId: "sandbox-1", kind: "stop", state: "pending",
+      requestId: "request-1", createdAt: "2026-08-03T00:00:00Z", updatedAt: "2026-08-03T00:00:00Z",
+    });
+  };
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
+  const handle = new SandboxHandle(api, sandbox("ready"));
+  await handle.stop({});
+  await handle.updateMetadata({ owner: "application" });
+  assert.deepEqual(ifMatches, ['"revision-1"', '"revision-1"']);
+  assert.notEqual(idempotencies[0], "");
+  assert.equal(handle.snapshot.revision, 2);
+});
+
+test("high-level Artifact download requires its bound and Digest", async () => {
+  const content = new TextEncoder().encode("artifact");
+  const digest = await crypto.subtle.digest("SHA-256", content);
+  const header = `sha-256=:${Buffer.from(digest).toString("base64")}:`;
+  const fetcher: typeof fetch = async () => new Response(content, {
+    headers: { Digest: header, "Content-Length": String(content.byteLength) },
+  });
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
+  assert.deepEqual(await api.downloadArtifact("artifact-1", content.byteLength), content);
+  await assert.rejects(api.downloadArtifact("artifact-1", content.byteLength - 1), /exceeds/);
 });

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/SecondStack-AI/SecondBox/pkg/buildinfo"
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 )
 
@@ -186,6 +187,11 @@ func runOperationalCommand(
 		return false, nil
 	}
 	switch args[0] {
+	case "version":
+		if len(args) != 1 {
+			return true, errors.New("SecondBox version accepts no arguments")
+		}
+		return true, buildinfo.Write(output)
 	case "login":
 		return true, runLoginCommand(ctx, session, args[1:], output, http.DefaultClient)
 	case "logout":
@@ -220,6 +226,8 @@ func runOperationalCommand(
 		return false, nil
 	}
 	switch {
+	case args[0] == "resources" && (args[1] == "check" || args[1] == "apply"):
+		return true, runResourcesCommand(ctx, session, args[1], args[2:], output, http.DefaultClient)
 	case args[0] == "sandbox" && args[1] == "shell":
 		return true, runSandboxShellCommand(
 			ctx, session.url, session.token, session.tenantRef, session.subjectRef, args[2:],

@@ -27,8 +27,26 @@ test-non-kvm:
 test-deployment:
     go test ./tests/deployment -count=1
 
+test-sdk-packages:
+    scripts/test-sdk-packages.sh
+
+test-standard-resources:
+    scripts/test-standard-resources.sh
+
 build-artifacts:
     scripts/build-artifacts.sh
+
+release-stage version output_dir:
+    scripts/release-stage.sh "{{version}}" "{{output_dir}}"
+
+test-release-stage:
+    scripts/test-release-stage.sh
+
+test-release-workflow:
+    scripts/test-release-workflow.sh
+
+test-source-free-release:
+    scripts/test-source-free-release.sh
 
 test-firecracker:
     scripts/test-firecracker.sh

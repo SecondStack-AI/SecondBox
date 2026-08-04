@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Replaced silent built-in Profile reconciliation with explicit, release-owned `agent-compartment` and `durable-coding` standard bundles, a shared idempotent resource apply engine, and strict deployment-owned RunnerPool inventory and gateway bindings.
+- Added a coordinated `v0.1.0` release path for the existing Go and TypeScript SDKs, host binaries, digest-pinned OCI images, independently signed microVM artifacts, standard resources, SBOMs, provenance, qualification evidence, and an acyclic final release index.
+- Expanded the Go and TypeScript SDKs with equivalent high-level lifecycle, execution, filesystem, Snapshot, Artifact, Lease, Port, and terminal operations; added Node transport helpers; and replaced the obsolete Flue beta.9 compatibility layer with the exact Flue 2 public contract.
+- Added `secondbox-deploy` verification and release-aware production initialization, plus immutable candidate publication and no-checkout KVM qualification workflows that publish the final release index last.
 - Replaced the editable 146-variable deployment environment with a strict versioned `secondbox.toml`, create-only initialization and Runner enrollment, redacted inspection, one-shot legacy migration, and atomically generated Compose and systemd environment artifacts.
 - Split the deployment into explicit base, bundled-development, and privileged same-host Runner Compose overlays, with ambient configuration isolation and a one-command ready development control plane.
 - Reduced the control-plane environment contract from 59 required variables to 38: 18 tuning settings are optional validated overrides with compiled reviewed values, and the Runner protocol window is now a verified compiled fact in both binaries.

@@ -409,6 +409,7 @@ export interface Profile {
   readonly currentRevision: ProfileRevision;
   readonly name: ProfileName;
   readonly revision: number;
+  readonly revisions: readonly ProfileRevision[];
   readonly state: ProfileState;
   readonly updatedAt: Timestamp;
 }

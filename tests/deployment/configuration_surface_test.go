@@ -11,7 +11,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/deployconfig"
 )
 
-func TestDevelopmentManifestBindsBuiltInDigestsToGeneratedCatalog(t *testing.T) {
+func TestDevelopmentManifestBindsStandardResourceAssetsToGeneratedCatalog(t *testing.T) {
 	manifestPath, err := deployconfig.InitDevelopment(filepath.Join(t.TempDir(), "deployment"))
 	if err != nil {
 		t.Fatal(err)
@@ -24,10 +24,13 @@ func TestDevelopmentManifestBindsBuiltInDigestsToGeneratedCatalog(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"SECONDBOX_BUILTIN_AGENT_COMPARTMENT_RUNTIME_BUNDLE_DIGEST", "SECONDBOX_BUILTIN_AGENT_COMPARTMENT_TOOLCHAIN_BUNDLE_DIGEST", "SECONDBOX_BUILTIN_CODING_ENVIRONMENT_RUNTIME_BUNDLE_DIGEST", "SECONDBOX_BUILTIN_CODING_ENVIRONMENT_TOOLCHAIN_BUNDLE_DIGEST"} {
-		digest := resolved.Environment[name]
-		if !strings.Contains(string(catalog), digest) {
-			t.Errorf("catalog does not bind %s=%s", name, digest)
+	for _, profile := range resolved.ResourceDocument.Profiles {
+		for _, revision := range profile.Revisions {
+			for _, digest := range []string{revision.Spec.RuntimeBundleDigest, revision.Spec.ToolchainBundleDigest} {
+				if !strings.Contains(string(catalog), digest) {
+					t.Errorf("catalog does not bind standard Profile %s digest %s", profile.Name, digest)
+				}
+			}
 		}
 	}
 }

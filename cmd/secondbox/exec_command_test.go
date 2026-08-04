@@ -47,7 +47,7 @@ func newExecTestServer(t *testing.T, outcomeJSON string) *execTestServer {
 }
 
 const execSandboxJSON = `{
-	"id":"sbx_test1","profile":"coding-environment","profileRevisionId":"profile-revision-1",
+	"id":"sbx_test1","profile":"durable-coding","profileRevisionId":"profile-revision-1",
 	"state":"ready","desiredState":"running","generation":4,
 	"workspace":{"id":"workspace-1","generation":4,"state":"ready","sizeBytes":1024,
 		"createdAt":"2026-07-28T00:00:00Z","updatedAt":"2026-07-28T00:00:00Z"},

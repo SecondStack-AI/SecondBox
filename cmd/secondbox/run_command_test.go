@@ -70,7 +70,7 @@ func newRunTestServer(t *testing.T, outcomeJSON string) *runTestServer {
 
 func runSandboxJSON(state string) string {
 	return fmt.Sprintf(`{
-		"id":"sbx_run1","profile":"coding-environment","profileRevisionId":"prv_1",
+		"id":"sbx_run1","profile":"durable-coding","profileRevisionId":"prv_1",
 		"state":%q,"desiredState":"running","generation":3,
 		"workspace":{"id":"wsp_1","generation":3,"state":"ready","sizeBytes":1024,
 			"createdAt":"2026-07-28T00:00:00Z","updatedAt":"2026-07-28T00:00:00Z"},
@@ -102,7 +102,7 @@ func invokeRun(t *testing.T, recorder *runTestServer, args []string) (string, st
 func TestRunCreatesWaitsExecutesAndDisposes(t *testing.T) {
 	recorder := newRunTestServer(t, exitedOutcomeJSON(0, "hello\n", ""))
 	stdout, _, err := invokeRun(t, recorder, []string{
-		"coding-environment", "--", "echo", "hello",
+		"durable-coding", "--", "echo", "hello",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +110,7 @@ func TestRunCreatesWaitsExecutesAndDisposes(t *testing.T) {
 	if stdout != "hello\n" {
 		t.Errorf("stdout = %q", stdout)
 	}
-	if recorder.create.Profile != "coding-environment" {
+	if recorder.create.Profile != "durable-coding" {
 		t.Errorf("create request = %+v", recorder.create)
 	}
 	argv := recorder.exec.Command.ArgvCommand
@@ -131,7 +131,7 @@ func TestRunCreatesWaitsExecutesAndDisposes(t *testing.T) {
 func TestRunWritesTheReservedNameMetadata(t *testing.T) {
 	recorder := newRunTestServer(t, exitedOutcomeJSON(0, "", ""))
 	if _, _, err := invokeRun(t, recorder, []string{
-		"coding-environment", "--name", "my-box", "--metadata", "tier=gold", "--", "true",
+		"durable-coding", "--name", "my-box", "--metadata", "tier=gold", "--", "true",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestRunWritesTheReservedNameMetadata(t *testing.T) {
 func TestRunRejectsNameColludingWithExplicitMetadata(t *testing.T) {
 	recorder := newRunTestServer(t, exitedOutcomeJSON(0, "", ""))
 	_, _, err := invokeRun(t, recorder, []string{
-		"coding-environment", "--name", "my-box",
+		"durable-coding", "--name", "my-box",
 		"--metadata", contracts.SandboxNameMetadataKey + "=other", "--", "true",
 	})
 	if err == nil || !strings.Contains(err.Error(), "cannot combine --name") {
@@ -157,7 +157,7 @@ func TestRunRejectsNameColludingWithExplicitMetadata(t *testing.T) {
 func TestRunKeepsTheSandboxWhenAsked(t *testing.T) {
 	recorder := newRunTestServer(t, exitedOutcomeJSON(0, "", ""))
 	_, stderr, err := invokeRun(t, recorder, []string{
-		"coding-environment", "--keep", "--", "true",
+		"durable-coding", "--keep", "--", "true",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +174,7 @@ func TestRunKeepsTheSandboxWhenAsked(t *testing.T) {
 // guest command fails, which is exactly when a leak would be easiest to miss.
 func TestRunDisposesAfterAFailingCommand(t *testing.T) {
 	recorder := newRunTestServer(t, exitedOutcomeJSON(23, "", "boom\n"))
-	_, stderr, err := invokeRun(t, recorder, []string{"coding-environment", "--", "false"})
+	_, stderr, err := invokeRun(t, recorder, []string{"durable-coding", "--", "false"})
 	var exited *commandExitError
 	if !errors.As(err, &exited) || exited.code != 23 {
 		t.Fatalf("error = %v; want the guest's exit status", err)
@@ -192,7 +192,7 @@ func TestRunSkipsDeletionOfAnAlreadyDeletedSandbox(t *testing.T) {
 	recorder.mutex.Lock()
 	recorder.state = "ready"
 	recorder.mutex.Unlock()
-	if _, _, err := invokeRun(t, recorder, []string{"coding-environment", "--", "true"}); err != nil {
+	if _, _, err := invokeRun(t, recorder, []string{"durable-coding", "--", "true"}); err != nil {
 		t.Fatal(err)
 	}
 	// Now prove the reverse: a Sandbox already reported deleted is left alone.
@@ -219,7 +219,7 @@ func TestRunSkipsDeletionOfAnAlreadyDeletedSandbox(t *testing.T) {
 			}
 		})
 	if _, _, err := invokeRun(t, deletedRecorder, []string{
-		"coding-environment", "--", "true",
+		"durable-coding", "--", "true",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -238,15 +238,15 @@ func TestRunRejectsMalformedInvocations(t *testing.T) {
 	}{
 		{"no profile", nil, "requires a Profile"},
 		{"option before profile", []string{"--keep", "p"}, "before any option"},
-		{"no command", []string{"coding-environment"}, "requires a command after --"},
+		{"no command", []string{"durable-coding"}, "requires a command after --"},
 		{
 			"non-positive ready timeout",
-			[]string{"coding-environment", "--ready-timeout", "0s", "--", "true"},
+			[]string{"durable-coding", "--ready-timeout", "0s", "--", "true"},
 			"--ready-timeout must be at least",
 		},
 		{
 			"malformed metadata",
-			[]string{"coding-environment", "--metadata", "novalue", "--", "true"},
+			[]string{"durable-coding", "--metadata", "novalue", "--", "true"},
 			"run metadata",
 		},
 	}
@@ -267,7 +267,7 @@ func TestRunOperationalCommandRoutesRun(t *testing.T) {
 	handled, err := runOperationalCommand(
 		context.Background(),
 		execTestSession(recorder.server.URL),
-		[]string{"run", "coding-environment", "--", "true"},
+		[]string{"run", "durable-coding", "--", "true"},
 		&output,
 	)
 	if !handled {
@@ -308,7 +308,7 @@ func TestRunForwardsStandardInput(t *testing.T) {
 	err := runRunCommand(
 		context.Background(),
 		execTestSession(recorder.server.URL),
-		[]string{"coding-environment", "--stdin", "--", "cat"},
+		[]string{"durable-coding", "--stdin", "--", "cat"},
 		execCommandEnvironment{
 			stdin:  strings.NewReader("piped\n"),
 			stdout: &stdout, stderr: &stderr, httpClient: recorder.server.Client(),
@@ -332,7 +332,7 @@ func TestRunRefusesOversizedStdinBeforeCreating(t *testing.T) {
 	err := runRunCommand(
 		context.Background(),
 		execTestSession(recorder.server.URL),
-		[]string{"coding-environment", "--stdin", "--", "cat"},
+		[]string{"durable-coding", "--stdin", "--", "cat"},
 		execCommandEnvironment{
 			stdin:  strings.NewReader(strings.Repeat("x", maximumExecStdinBytes+1)),
 			stdout: &stdout, stderr: &stderr, httpClient: recorder.server.Client(),
@@ -391,7 +391,7 @@ func TestRunRetriesDeleteWhenTheRevisionMoved(t *testing.T) {
 	err := runRunCommand(
 		context.Background(),
 		execTestSession(server.URL),
-		[]string{"coding-environment", "--", "true"},
+		[]string{"durable-coding", "--", "true"},
 		execCommandEnvironment{
 			stdout: &stdout, stderr: &stderr, httpClient: server.Client(),
 		},
@@ -439,7 +439,7 @@ func TestRunReportsADeleteFailureThatIsNotARace(t *testing.T) {
 	err := runRunCommand(
 		context.Background(),
 		execTestSession(server.URL),
-		[]string{"coding-environment", "--", "true"},
+		[]string{"durable-coding", "--", "true"},
 		execCommandEnvironment{
 			stdout: &stdout, stderr: &stderr, httpClient: server.Client(),
 		},

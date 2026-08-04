@@ -30,11 +30,19 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/store"
 	"github.com/SecondStack-AI/SecondBox/internal/worknotify"
 	postgresmigrations "github.com/SecondStack-AI/SecondBox/migrations/postgres"
+	"github.com/SecondStack-AI/SecondBox/pkg/buildinfo"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		if err := buildinfo.Write(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	processConfig, err := config.FromEnvironment()
 	if err != nil {
 		slog.New(slog.NewJSONHandler(os.Stdout, nil)).Error("SecondBox configuration failed", "error", err)
@@ -105,21 +113,6 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	builtInProfiles, err := service.BuildBuiltInProfiles(service.BuiltInProfileBindings{
-		AgentCompartment: service.BuiltInProfileBinding{
-			Pool:                  processConfig.AgentCompartmentProfile.Pool,
-			RuntimeBundleDigest:   processConfig.AgentCompartmentProfile.RuntimeBundleDigest,
-			ToolchainBundleDigest: processConfig.AgentCompartmentProfile.ToolchainBundleDigest,
-		},
-		CodingEnvironment: service.BuiltInProfileBinding{
-			Pool:                  processConfig.CodingEnvironmentProfile.Pool,
-			RuntimeBundleDigest:   processConfig.CodingEnvironmentProfile.RuntimeBundleDigest,
-			ToolchainBundleDigest: processConfig.CodingEnvironmentProfile.ToolchainBundleDigest,
-		},
-	})
-	if err != nil {
-		return err
-	}
 	// The wakeup hub is shared by the runner control server and the caller-facing
 	// data-plane loops, so it is constructed before its first consumer.
 	workWakeups := worknotify.NewHub()
@@ -127,7 +120,6 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	controlPlane, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store:               controlPlaneStore,
 		PlatformToken:       processConfig.PlatformToken,
-		BuiltInProfiles:     builtInProfiles,
 		DefaultSubjectQuota: processConfig.DefaultSubjectQuota,
 		Now:                 service.SystemClock, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,

@@ -2,17 +2,40 @@
 // manifest into explicit process environment artifacts.
 package deployconfig
 
+import "github.com/SecondStack-AI/SecondBox/pkg/resourceapply"
+
 // ManifestV1 is the strict schema_version=1 deployment source.
 type ManifestV1 struct {
-	SchemaVersion int             `toml:"schema_version"`
-	Deployment    Deployment      `toml:"deployment"`
-	Database      Database        `toml:"database"`
-	ObjectStore   ObjectStore     `toml:"object_store"`
-	RunnerTrust   RunnerTrust     `toml:"runner_trust"`
-	Runners       []Runner        `toml:"runners"`
-	Applications  Applications    `toml:"applications"`
-	Policy        Policy          `toml:"policy"`
-	Overrides     TuningOverrides `toml:"overrides"`
+	SchemaVersion     int               `toml:"schema_version"`
+	Deployment        Deployment        `toml:"deployment"`
+	Database          Database          `toml:"database"`
+	ObjectStore       ObjectStore       `toml:"object_store"`
+	RunnerTrust       RunnerTrust       `toml:"runner_trust"`
+	Runners           []Runner          `toml:"runners"`
+	Applications      Applications      `toml:"applications"`
+	Policy            Policy            `toml:"policy"`
+	StandardResources StandardResources `toml:"standard_resources"`
+	Overrides         TuningOverrides   `toml:"overrides"`
+}
+
+// StandardResources is an explicit release-bundle selection. It contains no authority.
+type StandardResources struct {
+	ArtifactManifest string               `toml:"artifact_manifest"`
+	Bundles          []string             `toml:"bundles"`
+	RunnerPools      []StandardRunnerPool `toml:"runner_pools"`
+	ApplyWaitSeconds *int64               `toml:"apply_wait_seconds"`
+}
+
+// StandardRunnerPool binds one standard bundle's fixed selector to deployment inventory.
+type StandardRunnerPool struct {
+	Bundle         string   `toml:"bundle"`
+	Name           string   `toml:"name"`
+	Architectures  []string `toml:"architectures"`
+	Capabilities   []string `toml:"capabilities"`
+	State          string   `toml:"state"`
+	MaxSandboxes   *int64   `toml:"max_sandboxes"`
+	MaxCPUMillis   *int64   `toml:"max_cpu_millis"`
+	MaxMemoryBytes *int64   `toml:"max_memory_bytes"`
 }
 
 type Deployment struct {
@@ -76,25 +99,19 @@ type Applications struct {
 }
 
 type Policy struct {
-	DataPlaneRetentionSeconds              *int64 `toml:"data_plane_retention_seconds"`
-	DataPlanePollIntervalMilliseconds      *int64 `toml:"data_plane_poll_interval_milliseconds"`
-	RunnerCommandPollIntervalMilliseconds  *int64 `toml:"runner_command_poll_interval_milliseconds"`
-	RunnerEnabledFeatures                  string `toml:"runner_enabled_features"`
-	DefaultSubjectMaxSandboxes             *int64 `toml:"default_subject_max_sandboxes"`
-	DefaultSubjectMaxActiveInstances       *int64 `toml:"default_subject_max_active_instances"`
-	DefaultSubjectMaxCPUMillis             *int64 `toml:"default_subject_max_cpu_millis"`
-	DefaultSubjectMaxMemoryBytes           *int64 `toml:"default_subject_max_memory_bytes"`
-	DefaultSubjectMaxArtifactBytes         *int64 `toml:"default_subject_max_artifact_bytes"`
-	DefaultSubjectMaxSnapshots             *int64 `toml:"default_subject_max_snapshots"`
-	DefaultSubjectMaxArtifacts             *int64 `toml:"default_subject_max_artifacts"`
-	DefaultSubjectMaxPortSessions          *int64 `toml:"default_subject_max_port_sessions"`
-	DefaultSubjectMaxConcurrentOperations  *int64 `toml:"default_subject_max_concurrent_operations"`
-	AgentCompartmentPool                   string `toml:"agent_compartment_pool"`
-	AgentCompartmentRuntimeBundleDigest    string `toml:"agent_compartment_runtime_bundle_digest"`
-	AgentCompartmentToolchainBundleDigest  string `toml:"agent_compartment_toolchain_bundle_digest"`
-	CodingEnvironmentPool                  string `toml:"coding_environment_pool"`
-	CodingEnvironmentRuntimeBundleDigest   string `toml:"coding_environment_runtime_bundle_digest"`
-	CodingEnvironmentToolchainBundleDigest string `toml:"coding_environment_toolchain_bundle_digest"`
+	DataPlaneRetentionSeconds             *int64 `toml:"data_plane_retention_seconds"`
+	DataPlanePollIntervalMilliseconds     *int64 `toml:"data_plane_poll_interval_milliseconds"`
+	RunnerCommandPollIntervalMilliseconds *int64 `toml:"runner_command_poll_interval_milliseconds"`
+	RunnerEnabledFeatures                 string `toml:"runner_enabled_features"`
+	DefaultSubjectMaxSandboxes            *int64 `toml:"default_subject_max_sandboxes"`
+	DefaultSubjectMaxActiveInstances      *int64 `toml:"default_subject_max_active_instances"`
+	DefaultSubjectMaxCPUMillis            *int64 `toml:"default_subject_max_cpu_millis"`
+	DefaultSubjectMaxMemoryBytes          *int64 `toml:"default_subject_max_memory_bytes"`
+	DefaultSubjectMaxArtifactBytes        *int64 `toml:"default_subject_max_artifact_bytes"`
+	DefaultSubjectMaxSnapshots            *int64 `toml:"default_subject_max_snapshots"`
+	DefaultSubjectMaxArtifacts            *int64 `toml:"default_subject_max_artifacts"`
+	DefaultSubjectMaxPortSessions         *int64 `toml:"default_subject_max_port_sessions"`
+	DefaultSubjectMaxConcurrentOperations *int64 `toml:"default_subject_max_concurrent_operations"`
 }
 
 // TuningOverrides owns the public TOML names for all Category C overrides.
@@ -195,4 +212,5 @@ type ResolvedDeployment struct {
 	RemoteRunnerEnvironment map[string]map[string]string
 	ComposeFiles            []string
 	SecretPaths             map[string]string
+	ResourceDocument        resourceapply.Document
 }

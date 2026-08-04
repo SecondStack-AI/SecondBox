@@ -16,7 +16,7 @@ import (
 
 func referenceSandboxJSON(id, state string, deletedAt string) string {
 	value := map[string]any{
-		"id": id, "profile": "coding-environment", "profileRevisionId": "prv_1",
+		"id": id, "profile": "durable-coding", "profileRevisionId": "prv_1",
 		"state": state, "desiredState": "running", "generation": 2,
 		"workspace": map[string]any{
 			"id": "wsp_" + id, "generation": 2, "state": "ready", "sizeBytes": 1024,

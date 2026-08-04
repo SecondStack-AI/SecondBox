@@ -75,8 +75,7 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseProxiedDataPlane(t *testing.T
 	t.Cleanup(relay.Close)
 	liveDataPlane := runnercontrol.NewLiveDataPlaneBroker()
 	dataPlaneService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		BuiltInProfiles: integrationBuiltInProfiles(t),
-		Store:           databaseStore, PlatformToken: testPlatformToken,
+		Store: databaseStore, PlatformToken: testPlatformToken,
 		DefaultSubjectQuota: generousQuota(),
 		Now:                 time.Now, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
@@ -301,8 +300,7 @@ func TestFlueAdapterCompleteSubsetAgainstRealServiceContract(t *testing.T) {
 	t.Cleanup(relay.Close)
 	liveDataPlane := runnercontrol.NewLiveDataPlaneBroker()
 	dataPlaneService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		BuiltInProfiles: integrationBuiltInProfiles(t),
-		Store:           databaseStore, PlatformToken: testPlatformToken,
+		Store: databaseStore, PlatformToken: testPlatformToken,
 		DefaultSubjectQuota: generousQuota(),
 		Now:                 time.Now, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
@@ -436,8 +434,7 @@ func TestIndependentProjectsCannotObserveOrMutateAnotherSandbox(t *testing.T) {
 	}
 	t.Cleanup(relay.Close)
 	isolationService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		BuiltInProfiles: integrationBuiltInProfiles(t),
-		Store:           databaseStore, PlatformToken: testPlatformToken,
+		Store: databaseStore, PlatformToken: testPlatformToken,
 		DefaultSubjectQuota: generousQuota(),
 		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,

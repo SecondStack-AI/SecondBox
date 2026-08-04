@@ -84,17 +84,6 @@ type Config struct {
 	ObjectStoreMaxObjectBytes        int64
 	RunnerEnabledFeatures            []string
 	DefaultSubjectQuota              contracts.QuotaLimits
-	AgentCompartmentProfile          BuiltInProfileBinding
-	CodingEnvironmentProfile         BuiltInProfileBinding
-}
-
-// BuiltInProfileBinding is the deployment-specific RunnerPool and signed asset
-// pair that one built-in Profile pins. SecondBox supplies no default for any of
-// these values; a deployment names its own pool and its own verified bundles.
-type BuiltInProfileBinding struct {
-	Pool                  string
-	RuntimeBundleDigest   string
-	ToolchainBundleDigest string
 }
 
 // ApplicationAuthority configures one fixed application identity and its allowed capabilities.
@@ -296,14 +285,6 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	agentCompartmentProfile, err := requiredBuiltInProfileBinding("AGENT_COMPARTMENT")
-	if err != nil {
-		return Config{}, err
-	}
-	codingEnvironmentProfile, err := requiredBuiltInProfileBinding("CODING_ENVIRONMENT")
-	if err != nil {
-		return Config{}, err
-	}
 	return Config{
 		ListenAddress: listenAddress, PublicBaseURL: publicBaseURL, RunnerListenAddress: runnerListenAddress,
 		DatabaseURL: databaseURL, LogPath: logPath,
@@ -342,31 +323,6 @@ func FromEnvironment() (Config, error) {
 		ObjectStoreMaxObjectBytes:   objectStoreMaxObjectBytes,
 		RunnerEnabledFeatures:       runnerEnabledFeatures,
 		DefaultSubjectQuota:         subjectQuota,
-		AgentCompartmentProfile:     agentCompartmentProfile,
-		CodingEnvironmentProfile:    codingEnvironmentProfile,
-	}, nil
-}
-
-// requiredBuiltInProfileBinding reads the RunnerPool and signed bundle digests
-// one built-in Profile pins. Every value is required and has no default.
-func requiredBuiltInProfileBinding(profile string) (BuiltInProfileBinding, error) {
-	prefix := "SECONDBOX_BUILTIN_" + profile + "_"
-	pool, err := requiredString(prefix + "POOL")
-	if err != nil {
-		return BuiltInProfileBinding{}, err
-	}
-	runtimeDigest, err := requiredDigest(prefix + "RUNTIME_BUNDLE_DIGEST")
-	if err != nil {
-		return BuiltInProfileBinding{}, err
-	}
-	toolchainDigest, err := requiredDigest(prefix + "TOOLCHAIN_BUNDLE_DIGEST")
-	if err != nil {
-		return BuiltInProfileBinding{}, err
-	}
-	return BuiltInProfileBinding{
-		Pool:                  pool,
-		RuntimeBundleDigest:   runtimeDigest,
-		ToolchainBundleDigest: toolchainDigest,
 	}, nil
 }
 

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://secondbox.dev/contracts/release/v1/qualification-attestation.schema.json",
+  "title": "SecondBox source-free qualification attestation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "version", "tag", "sourceCommit", "artifactManifest", "suite", "suiteDigest", "architecture", "runnerProtocolVersion", "guestProtocolGeneration", "guest", "runnerEnvironment", "result", "completedAt"],
+  "properties": {
+    "schemaVersion": {"const": "secondbox.release/qualification-attestation/v1"},
+    "version": {"$ref": "common.schema.json#/$defs/identity/properties/version"},
+    "tag": {"$ref": "common.schema.json#/$defs/identity/properties/tag"},
+    "sourceCommit": {"$ref": "common.schema.json#/$defs/identity/properties/sourceCommit"},
+    "artifactManifest": {"$ref": "common.schema.json#/$defs/reference"},
+    "suite": {"type": "string", "minLength": 1},
+    "suiteDigest": {"$ref": "common.schema.json#/$defs/reference/properties/digest"},
+    "architecture": {"$ref": "common.schema.json#/$defs/platform"},
+    "runnerProtocolVersion": {"type": "integer", "minimum": 1},
+    "guestProtocolGeneration": {"type": "integer", "minimum": 1},
+    "guest": {
+      "type": "object", "additionalProperties": false, "required": ["manifestDigest", "signingKeyFingerprint"],
+      "properties": {"manifestDigest": {"$ref": "common.schema.json#/$defs/reference/properties/digest"}, "signingKeyFingerprint": {"type": "string", "pattern": "^SHA256:[0-9A-F]{64}$"}}
+    },
+    "runnerEnvironment": {
+      "type": "object", "additionalProperties": false, "required": ["runnerImageReference", "operatingSystem", "kernel", "firecrackerVersion", "cpuModel"],
+      "properties": {"runnerImageReference": {"type": "string", "pattern": "^ghcr\\.io/secondstack-ai/secondbox/runner@sha256:[0-9a-f]{64}$"}, "operatingSystem": {"type": "string", "minLength": 1}, "kernel": {"type": "string", "minLength": 1}, "firecrackerVersion": {"type": "string", "minLength": 1}, "cpuModel": {"type": "string", "minLength": 1}}
+    },
+    "result": {"const": "passed"},
+    "completedAt": {"type": "string", "format": "date-time"}
+  }
+}

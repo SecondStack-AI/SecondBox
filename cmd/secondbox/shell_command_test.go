@@ -127,7 +127,7 @@ func newShellTestServer(t *testing.T) *shellTestServer {
 
 func shellSandboxJSON(id string, generation int) string {
 	return fmt.Sprintf(`{
-		"id":%q,"profile":"coding-environment","profileRevisionId":"prv_1",
+		"id":%q,"profile":"durable-coding","profileRevisionId":"prv_1",
 		"state":"ready","desiredState":"running","generation":%d,
 		"workspace":{"id":"wsp_1","generation":%d,"state":"ready","sizeBytes":1024,
 			"createdAt":"2026-07-28T00:00:00Z","updatedAt":"2026-07-28T00:00:00Z"},
@@ -440,7 +440,7 @@ func invokeTTYRun(t *testing.T, recorder *shellTestServer, args []string) (strin
 // Sandbox when the Terminal ends.
 func TestRunWithTTYCreatesAttachesAndDisposes(t *testing.T) {
 	recorder := newTTYRunServer(t)
-	if _, err := invokeTTYRun(t, recorder, []string{"coding-environment", "--tty"}); err != nil {
+	if _, err := invokeTTYRun(t, recorder, []string{"durable-coding", "--tty"}); err != nil {
 		t.Fatal(err)
 	}
 	recorder.mutex.Lock()
@@ -459,7 +459,7 @@ func TestRunWithTTYCreatesAttachesAndDisposes(t *testing.T) {
 
 func TestRunWithTTYKeepsTheSandboxWhenAsked(t *testing.T) {
 	recorder := newTTYRunServer(t)
-	stderr, err := invokeTTYRun(t, recorder, []string{"coding-environment", "--tty", "--keep"})
+	stderr, err := invokeTTYRun(t, recorder, []string{"durable-coding", "--tty", "--keep"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,7 +476,7 @@ func TestRunWithTTYKeepsTheSandboxWhenAsked(t *testing.T) {
 func TestRunWithTTYUsesTheOperandAsItsCommand(t *testing.T) {
 	recorder := newTTYRunServer(t)
 	if _, err := invokeTTYRun(t, recorder, []string{
-		"coding-environment", "--tty", "--", "/bin/bash",
+		"durable-coding", "--tty", "--", "/bin/bash",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -493,10 +493,10 @@ func TestRunWithTTYRejectsIncompatibleOptions(t *testing.T) {
 		name string
 		args []string
 	}{
-		{"stdin", []string{"coding-environment", "--tty", "--stdin"}},
-		{"json", []string{"coding-environment", "--tty", "--json"}},
-		{"shell", []string{"coding-environment", "--tty", "--shell", "--", "echo hi"}},
-		{"two operands", []string{"coding-environment", "--tty", "--", "/bin/bash", "extra"}},
+		{"stdin", []string{"durable-coding", "--tty", "--stdin"}},
+		{"json", []string{"durable-coding", "--tty", "--json"}},
+		{"shell", []string{"durable-coding", "--tty", "--shell", "--", "echo hi"}},
+		{"two operands", []string{"durable-coding", "--tty", "--", "/bin/bash", "extra"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			recorder := newTTYRunServer(t)

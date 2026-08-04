@@ -161,6 +161,20 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 			manifest.Policy.RunnerEnabledFeatures = "local-workspace,unsupported-feature"
 		}},
 		{name: "Runner features omit local workspace", want: "runner features require local-workspace", mutate: func(manifest *ManifestV1) { manifest.Policy.RunnerEnabledFeatures = "evidence" }},
+		{name: "standard resources absent", want: "standard_resources.artifact_manifest is required", mutate: func(manifest *ManifestV1) { manifest.StandardResources = StandardResources{} }},
+		{name: "standard bundle duplicate", want: "unique agent-compartment or durable-coding", mutate: func(manifest *ManifestV1) {
+			manifest.StandardResources.Bundles = []string{"agent-compartment", "agent-compartment"}
+		}},
+		{name: "standard bundle has no pool", want: "must bind selected bundle durable-coding", mutate: func(manifest *ManifestV1) {
+			manifest.StandardResources.RunnerPools = manifest.StandardResources.RunnerPools[:1]
+		}},
+		{name: "standard pool capacity absent", want: "max_sandboxes must be positive", mutate: func(manifest *ManifestV1) { manifest.StandardResources.RunnerPools[0].MaxSandboxes = nil }},
+		{name: "standard gateway unresolved", want: "must resolve agent-gateway.secondbox.internal", mutate: func(manifest *ManifestV1) {
+			runner := validTestRunner("runner-a", "remote")
+			runner.PoolID = "standard-amd64"
+			runner.NetworkPolicyRunnerGateways = "platform-gateway.secondbox.internal=172.30.0.1"
+			manifest.Runners = []Runner{runner}
+		}},
 		{name: "Compose environment contains newline", want: "forbidden byte", mutate: func(manifest *ManifestV1) { manifest.Deployment.ControlPlaneImage = "image\npoison" }},
 		{name: "remote Runner environment contains newline", want: "invalid generated systemd environment", mutate: func(manifest *ManifestV1) {
 			runner := validTestRunner("runner-a", "remote")
@@ -171,9 +185,6 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 			manifest.ObjectStore.Endpoint = "http://user:password@object-store:9000"
 		}},
 		{name: "Runner ID escapes artifact directory", want: "valid opaque Runner ID", mutate: func(manifest *ManifestV1) { manifest.Runners = []Runner{validTestRunner("../escaped", "remote")} }},
-		{name: "built-in Profile digest absent from catalog", want: "must exist in deployment.signed_asset_catalog", mutate: func(manifest *ManifestV1) {
-			manifest.Policy.CodingEnvironmentRuntimeBundleDigest = "sha256:" + strings.Repeat("b", 64)
-		}},
 		{name: "remote Runner path is relative", want: "identity_directory must be an absolute Runner-host path", mutate: func(manifest *ManifestV1) {
 			runner := validTestRunner("runner-a", "remote")
 			runner.IdentityDirectory = "relative/identity"
@@ -659,11 +670,7 @@ func TestProductionQualifiesBundledAndExternalDatabaseAndObjectStoreCombinations
 				manifest.Deployment.ObjectStoreImage = digestRef
 				manifest.Deployment.ObjectStoreClientImage = digestRef
 				manifest.ObjectStore.Endpoint = "http://object-store:9000"
-				assetDigest := "sha256:" + strings.Repeat("a", 64)
-				manifest.Policy.AgentCompartmentRuntimeBundleDigest = assetDigest
-				manifest.Policy.AgentCompartmentToolchainBundleDigest = assetDigest
-				manifest.Policy.CodingEnvironmentRuntimeBundleDigest = assetDigest
-				manifest.Policy.CodingEnvironmentToolchainBundleDigest = assetDigest
+				assetDigest := developmentBundleDigest
 				if databaseMode == "external" {
 					urlPath := filepath.Join(filepath.Dir(manifestPath), "secrets", "database-url-production")
 					if err := os.WriteFile(urlPath, []byte("postgres://secondbox:secret@database.example/secondbox?sslmode=verify-full\n"), 0o600); err != nil {
@@ -713,6 +720,25 @@ func TestProductionQualifiesBundledAndExternalDatabaseAndObjectStoreCombinations
 				}
 				if _, err := Resolve(automated); err != nil {
 					t.Fatal(err)
+				}
+				release, err := developmentReleaseManifest()
+				if err != nil {
+					t.Fatal(err)
+				}
+				releaseBytes, err := json.Marshal(release)
+				if err != nil {
+					t.Fatal(err)
+				}
+				fromRelease, err := InitProductionFromRelease(manifestPath, filepath.Join(t.TempDir(), "release-production"), release, releaseBytes)
+				if err != nil {
+					t.Fatal(err)
+				}
+				materialized, err := ReadManifest(fromRelease)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if materialized.Deployment.ControlPlaneImage != release.ControlPlane.Reference || materialized.Deployment.RunnerImage != release.Runner.Reference || materialized.StandardResources.ArtifactManifest != "release-artifact-manifest.json" {
+					t.Fatalf("release software facts were not materialized: %#v", materialized.Deployment)
 				}
 			})
 		}
@@ -878,7 +904,7 @@ func TestSameHostRunnerPreflightRejectsUnsafeHostState(t *testing.T) {
 }
 
 func validTestRunner(id, placement string) Runner {
-	return Runner{RunnerID: id, Placement: placement, PoolID: "secondbox-local", SoftwareVersion: "development", ControlPlaneAddress: "control-plane.example:9443", ControlPlaneServerName: "control-plane", IdentityDirectory: "/etc/secondbox/identity", IdentityHostDirectory: "/var/lib/secondbox/identity", ArtifactHostDirectory: "/var/lib/secondbox/artifacts", StateHostDirectory: "/var/lib/secondbox/state", WorkspaceHostDirectory: "/var/lib/secondbox/workspace", LogPath: "/var/log/secondbox-runner.jsonl", LogDirectory: "/var/lib/secondbox/log", FirecrackerPath: "/usr/local/bin/firecracker", FirecrackerJailerPath: "/usr/local/bin/jailer", FirecrackerJailRoot: "/var/lib/secondbox/jailer", FirecrackerJailerUID: integer(10001), FirecrackerJailerGID: integer(10001), FirecrackerCgroupVersion: integer(2), FirecrackerCgroupParent: "secondbox-runner", FirecrackerKernelPath: "/opt/secondbox/kernel", FirecrackerRootFSPath: "/opt/secondbox/rootfs.ext4", FirecrackerSharedImagePath: "/opt/secondbox/shared.img", FirecrackerKernelArgs: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw quiet loglevel=1 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd init=/init", FirecrackerCPUTemplate: "T2", FirecrackerRunDirectory: "/var/lib/secondbox/run", FirecrackerLogDirectory: "/var/lib/secondbox/firecracker-log", FirecrackerAllowUnjailed: boolean(false), ArtifactPublicKey: "/opt/secondbox/manifest-public.pem", ArtifactPublicKeySHA256: strings.Repeat("a", 64), WorkspaceRoot: "/var/lib/secondbox/workspaces", StorageRecoveryPercent: integer(70), StorageWarningPercent: integer(80), StorageAdmissionDenyPercent: integer(90), SandboxMaxVCPUs: integer(2), SandboxMaxMemoryMiB: integer(2048), SandboxMaxDiskMiB: integer(10240), SandboxMemoryBudgetMiB: integer(8192), SandboxGuestIP: "172.30.0.2", SandboxBridgeName: "sbx0", SandboxBridgeCIDR: "172.30.0.1/24", SandboxGuestCIDR: "172.30.0.0/24", SandboxTapPrefix: "sbx", SandboxNetworkStateDir: "/var/lib/secondbox/network", SandboxDeleteBridge: boolean(true), NetworkPolicyNFTPath: "/usr/sbin/nft", NetworkPolicyMaxDNSPins: integer(256), NetworkPolicyMaxDNSTTL: "5m", NetworkPolicyRunnerAddresses: "172.30.0.1", NetworkPolicyManagementCIDRs: "172.30.0.0/24", NetworkPolicyRunnerGateways: "none", NetworkPolicyDNSUpstream: "1.1.1.1:53", MaxConcurrentPerSandbox: integer(4), MaxConcurrentGlobal: integer(16), MaxConcurrentStarts: integer(8), MaxConcurrentWorkspaceCreates: integer(8), MaxConcurrentOperationsGlobal: integer(64), FileTransferMaxBytes: integer(1073741824), GuestControlVSockPort: integer(1024), GuestProtocolVSockPort: integer(1025), GuestHeartbeatInterval: "5s", DataPlaneListenAddress: "127.0.0.1:7443", DataPlaneAdvertisedAddress: "127.0.0.1:7443"}
+	return Runner{RunnerID: id, Placement: placement, PoolID: "secondbox-local", SoftwareVersion: "development", ControlPlaneAddress: "control-plane.example:9443", ControlPlaneServerName: "control-plane", IdentityDirectory: "/etc/secondbox/identity", IdentityHostDirectory: "/var/lib/secondbox/identity", ArtifactHostDirectory: "/var/lib/secondbox/artifacts", StateHostDirectory: "/var/lib/secondbox/state", WorkspaceHostDirectory: "/var/lib/secondbox/workspace", LogPath: "/var/log/secondbox-runner.jsonl", LogDirectory: "/var/lib/secondbox/log", FirecrackerPath: "/usr/local/bin/firecracker", FirecrackerJailerPath: "/usr/local/bin/jailer", FirecrackerJailRoot: "/var/lib/secondbox/jailer", FirecrackerJailerUID: integer(10001), FirecrackerJailerGID: integer(10001), FirecrackerCgroupVersion: integer(2), FirecrackerCgroupParent: "secondbox-runner", FirecrackerKernelPath: "/opt/secondbox/kernel", FirecrackerRootFSPath: "/opt/secondbox/rootfs.ext4", FirecrackerSharedImagePath: "/opt/secondbox/shared.img", FirecrackerKernelArgs: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw quiet loglevel=1 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd init=/init", FirecrackerCPUTemplate: "T2", FirecrackerRunDirectory: "/var/lib/secondbox/run", FirecrackerLogDirectory: "/var/lib/secondbox/firecracker-log", FirecrackerAllowUnjailed: boolean(false), ArtifactPublicKey: "/opt/secondbox/manifest-public.pem", ArtifactPublicKeySHA256: strings.Repeat("a", 64), WorkspaceRoot: "/var/lib/secondbox/workspaces", StorageRecoveryPercent: integer(70), StorageWarningPercent: integer(80), StorageAdmissionDenyPercent: integer(90), SandboxMaxVCPUs: integer(2), SandboxMaxMemoryMiB: integer(2048), SandboxMaxDiskMiB: integer(10240), SandboxMemoryBudgetMiB: integer(8192), SandboxGuestIP: "172.30.0.2", SandboxBridgeName: "sbx0", SandboxBridgeCIDR: "172.30.0.1/24", SandboxGuestCIDR: "172.30.0.0/24", SandboxTapPrefix: "sbx", SandboxNetworkStateDir: "/var/lib/secondbox/network", SandboxDeleteBridge: boolean(true), NetworkPolicyNFTPath: "/usr/sbin/nft", NetworkPolicyMaxDNSPins: integer(256), NetworkPolicyMaxDNSTTL: "5m", NetworkPolicyRunnerAddresses: "172.30.0.1", NetworkPolicyManagementCIDRs: "172.30.0.0/24", NetworkPolicyRunnerGateways: "agent-gateway.secondbox.internal=172.30.0.1,platform-gateway.secondbox.internal=172.30.0.1", NetworkPolicyDNSUpstream: "1.1.1.1:53", MaxConcurrentPerSandbox: integer(4), MaxConcurrentGlobal: integer(16), MaxConcurrentStarts: integer(8), MaxConcurrentWorkspaceCreates: integer(8), MaxConcurrentOperationsGlobal: integer(64), FileTransferMaxBytes: integer(1073741824), GuestControlVSockPort: integer(1024), GuestProtocolVSockPort: integer(1025), GuestHeartbeatInterval: "5s", DataPlaneListenAddress: "127.0.0.1:7443", DataPlaneAdvertisedAddress: "127.0.0.1:7443"}
 }
 
 func validSameHostTestRunner(id string) Runner {
@@ -1029,8 +1055,8 @@ func TestLegacyMigrationIsOneShotStrictAndPreservesTheSource(t *testing.T) {
 	if _, err := MigrateLegacyEnvironment(legacyPath, target); err == nil {
 		t.Fatal("migration replaced an existing target")
 	}
-	if len(legacyNames) != 145 {
-		t.Fatalf("legacy mapping count = %d, want 145", len(legacyNames))
+	if len(legacyNames) != 139 {
+		t.Fatalf("legacy mapping count = %d, want 139", len(legacyNames))
 	}
 	for name, extra := range map[string]string{"unknown": "SECONDBOX_UNKNOWN=value\n", "duplicate": "SECONDBOX_DEPLOYMENT_MODE=development\n", "placeholder": ""} {
 		t.Run(name, func(t *testing.T) {

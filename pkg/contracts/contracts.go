@@ -113,12 +113,13 @@ type Principal struct {
 
 // Profile is the stable name and mutable head for immutable policy revisions.
 type Profile struct {
-	Name            string          `json:"name"`
-	State           string          `json:"state"`
-	CurrentRevision ProfileRevision `json:"currentRevision"`
-	Revision        int64           `json:"revision"`
-	CreatedAt       time.Time       `json:"createdAt"`
-	UpdatedAt       time.Time       `json:"updatedAt"`
+	Name            string            `json:"name"`
+	State           string            `json:"state"`
+	CurrentRevision ProfileRevision   `json:"currentRevision"`
+	Revisions       []ProfileRevision `json:"revisions"`
+	Revision        int64             `json:"revision"`
+	CreatedAt       time.Time         `json:"createdAt"`
+	UpdatedAt       time.Time         `json:"updatedAt"`
 }
 
 // ProfilePage is one bounded stable Profile traversal page.

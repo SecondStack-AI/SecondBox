@@ -51,12 +51,6 @@ services:
       SECONDBOX_SCHEDULER_SERIALIZATION_RETRY_LIMIT: "3"
       SECONDBOX_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS: "5000"
       SECONDBOX_SIGNED_ASSET_CATALOG_PATH: /opt/secondbox/signed-assets.json
-      SECONDBOX_BUILTIN_AGENT_COMPARTMENT_POOL: compose-live-pool
-      SECONDBOX_BUILTIN_AGENT_COMPARTMENT_RUNTIME_BUNDLE_DIGEST: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
-      SECONDBOX_BUILTIN_AGENT_COMPARTMENT_TOOLCHAIN_BUNDLE_DIGEST: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
-      SECONDBOX_BUILTIN_CODING_ENVIRONMENT_POOL: compose-live-pool
-      SECONDBOX_BUILTIN_CODING_ENVIRONMENT_RUNTIME_BUNDLE_DIGEST: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
-      SECONDBOX_BUILTIN_CODING_ENVIRONMENT_TOOLCHAIN_BUNDLE_DIGEST: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
       SECONDBOX_OBJECT_STORE_ENDPOINT: http://127.0.0.1:9000
       SECONDBOX_OBJECT_STORE_REGION: us-east-1
       SECONDBOX_OBJECT_STORE_BUCKET: compose-test

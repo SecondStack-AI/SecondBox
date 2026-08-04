@@ -3,7 +3,7 @@ import {
   type FileStat as FlueFileStat,
   type SandboxApi,
   type SandboxFactory,
-} from "./flue-runtime-beta9-compat.ts";
+} from "@flue/runtime";
 
 import type {
   ExecResult,

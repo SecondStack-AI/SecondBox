@@ -2,10 +2,11 @@ import type { Route } from "./transport.generated.ts";
 
 export interface TransportRequestOptions {
   readonly pathParameters?: Readonly<Record<string, string>>;
-  readonly queryParameters?: Readonly<Record<string, string>>;
+  readonly queryParameters?: Readonly<Record<string, string | readonly string[]>>;
   readonly headers?: Readonly<Record<string, string>>;
   readonly body?: BodyInit;
-  readonly contentType?: string;
+  /** null lets fetch supply a multipart boundary for FormData. */
+  readonly contentType?: string | null;
   readonly signal?: AbortSignal;
 }
 
@@ -60,13 +61,17 @@ export class SecondBoxClient {
     }
     const endpoint = new URL(path, this.#baseURL);
     for (const [name, value] of Object.entries(options.queryParameters ?? {})) {
-      endpoint.searchParams.append(name, value);
+      for (const item of typeof value === "string" ? [value] : value) {
+        endpoint.searchParams.append(name, item);
+      }
     }
     const headers = new Headers(options.headers);
     headers.set("Authorization", `Bearer ${this.#token}`);
     headers.set("X-SecondBox-Tenant-Ref", this.#tenantRef);
     headers.set("X-SecondBox-Subject-Ref", this.#subjectRef);
-    const contentType = options.contentType ?? (options.body === undefined ? undefined : route.contentType);
+    const contentType = options.contentType === null
+      ? undefined
+      : options.contentType ?? (options.body === undefined ? undefined : route.contentType);
     if (contentType !== undefined) headers.set("Content-Type", contentType);
     const response = await this.#fetch(endpoint, {
       method: route.method,

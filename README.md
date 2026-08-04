@@ -48,14 +48,14 @@ On a qualified host, the shortest existing deployment path uses [`deploy/compose
    just deploy-init-development .tmp/secondbox-development
    ```
 
-   Replace the development bootstrap catalog and built-in Profile digest pins in `secondbox.toml` with the verified catalog and component digests. Keep `runners = []` for the first start.
+   Replace the development bootstrap catalog and artifact manifest in `secondbox.toml` with verified release artifacts. Review the explicit `[standard_resources]` bundle and typed RunnerPool selections. Keep `runners = []` for the first start.
 3. Start the control plane, PostgreSQL, and object storage:
 
    ```sh
    just deploy-development-up .tmp/secondbox-development
    ```
 
-4. Install the CLI, log in with the generated platform authority, and create a ready RunnerPool through the platform API. Its name must match both the built-in Profile pool and the Runner's `pool_id`; its architecture and capabilities must admit `amd64`, `compute`, and `local-workspace`.
+4. Install the CLI and log in with the generated platform authority. `secondbox-deploy ... up` creates the selected RunnerPool and standard Profile lineages idempotently. Its name must match the Runner's `pool_id`; its architecture and capabilities must admit the selected amd64 bundles.
 5. Add one explicit `[[runners]]` entry with `placement = "same-host"` to `secondbox.toml`. Supply every identity, artifact, state, workspace, Firecracker, network, capacity, and data-plane value; create the declared artifact, state, and workspace host directories, but leave the identity target absent. The workspace host directory must be on the dedicated XFS or Btrfs filesystem.
 6. Build the declared Runner image and issue the declared Runner identity:
 
@@ -74,13 +74,13 @@ On a qualified host, the shortest existing deployment path uses [`deploy/compose
    just deploy-up .tmp/secondbox-development/secondbox.toml
    ```
 
-8. Confirm the Runner is ready with `secondbox runners get --path runnerId=<runner-id>`, then run the pinned built-in Profile:
+8. Confirm the Runner is ready with `secondbox runners get --path runnerId=<runner-id>`, then run the pinned standard Profile:
 
    ```sh
-   secondbox run coding-environment -- python3 -c 'print("hello from a microVM")'
+   secondbox run durable-coding -- python3 -c 'print("hello from a microVM")'
    ```
 
-The repository does not currently provide a complete same-host `[[runners]]` example or a command that converts a signed microVM bundle into the deployment signed-asset catalog and built-in Profile pins. Those explicit operator inputs remain an undocumented setup gap; do not use the generated development bootstrap digests as execution assets. See [deployment and runtime operations](docs/operations/deployment.md), [the deployment manifest](deploy/secondbox.example.toml), and [the Firecracker runtime](docs/operations/firecracker-runtime.md) for the validated fields and runtime invariants.
+The generated development artifact identity is synthetic and must not be used as an execution asset. Production selects a verified release artifact manifest, signed-asset catalog, standard bundles, RunnerPool inventory, and Runner gateway mappings explicitly. See [deployment and runtime operations](docs/operations/deployment.md), [declarative resources](docs/operations/declarative-resources.md), and [the Firecracker runtime](docs/operations/firecracker-runtime.md).
 
 ### Control-plane-only start
 
@@ -111,7 +111,7 @@ Credentials are verified against the deployment before anything is written, then
 ### Run something
 
 ```sh
-secondbox run coding-environment -- python3 -c 'print("hello from a microVM")'
+secondbox run durable-coding -- python3 -c 'print("hello from a microVM")'
 ```
 
 ## Using the CLI
@@ -121,9 +121,9 @@ secondbox run coding-environment -- python3 -c 'print("hello from a microVM")'
 `run` creates a Sandbox, waits for it, runs one command, and deletes it:
 
 ```sh
-secondbox run coding-environment -- python3 -c 'print("hello")'
-secondbox run coding-environment --shell -- 'ls -la /workspace && whoami'
-echo 'piped in' | secondbox run coding-environment --stdin -- cat
+secondbox run durable-coding -- python3 -c 'print("hello")'
+secondbox run durable-coding --shell -- 'ls -la /workspace && whoami'
+echo 'piped in' | secondbox run durable-coding --stdin -- cat
 ```
 
 The guest's stdout and stderr land on your two streams, unmerged, and **its exit status becomes the CLI's exit status** — so `secondbox run … -- false` exits 1 and prints nothing of its own, exactly like a local command.
@@ -132,7 +132,7 @@ The guest's stdout and stderr land on your two streams, unmerged, and **its exit
 
 ```sh
 # Create one and keep it
-secondbox run coding-environment --name my-box --keep -- true
+secondbox run durable-coding --name my-box --keep -- true
 
 # Address it by name from any machine
 secondbox exec my-box -- go test ./...
@@ -147,8 +147,8 @@ Names are the reserved metadata key `secondbox.dev/name`, unique per tenant and 
 ### Interactive shell
 
 ```sh
-secondbox run coding-environment --tty              # throwaway shell, deleted on exit
-secondbox run coding-environment --tty -- /bin/bash # choose the shell
+secondbox run durable-coding --tty              # throwaway shell, deleted on exit
+secondbox run durable-coding --tty -- /bin/bash # choose the shell
 secondbox shell my-box                              # attach to one that already exists
 secondbox shell my-box --command /bin/bash --detachable
 ```
@@ -195,7 +195,7 @@ ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 defer cancel()
 
 handle, outcome, err := client.Run(ctx, secondboxclient.RunRequest{
-    Profile: "coding-environment",
+    Profile: "durable-coding",
     Command: secondboxclient.Command{ArgvCommand: &secondboxclient.ArgvCommand{
         Mode: "argv", Executable: "python3", Arguments: []string{"-c", "print('hello')"},
     }},
@@ -217,7 +217,7 @@ const api = new SecondBox(
 );
 
 const { handle, result } = await api.run({
-  profile: "coding-environment",
+  profile: "durable-coding",
   command: "python3 -c 'print(\"hello\")'",
   deadlineMilliseconds: 30_000,
   maximumOutputBytes: 1_048_576,

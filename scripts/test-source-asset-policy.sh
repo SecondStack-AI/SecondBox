@@ -7,14 +7,23 @@ cd "$repo_root"
 for required_file in \
     LICENSE \
     THIRD_PARTY_NOTICES.md \
-    sdk/typescript/flue-runtime-beta9-LICENSE.txt \
-    sdk/typescript/flue-runtime-beta9-source.json \
     runner/internal/firecracker/firecracker.lock \
     runner/scripts/microvm-image/kernel.lock \
     runner/scripts/microvm-image/rootfs/secondbox-debian-image-definition.json \
     runner/scripts/microvm-image/rootfs/secondbox-python-requirements.txt; do
     [[ -f "$required_file" ]] || {
         echo "SecondBox source asset policy missing $required_file" >&2
+        exit 1
+    }
+done
+
+for removed_file in \
+    sdk/typescript/flue-runtime-beta9-LICENSE.txt \
+    sdk/typescript/flue-runtime-beta9-compat.test.ts \
+    sdk/typescript/flue-runtime-beta9-compat.ts \
+    sdk/typescript/flue-runtime-beta9-source.json; do
+    [[ ! -e "$removed_file" ]] || {
+        echo "SecondBox source asset policy forbids removed file $removed_file" >&2
         exit 1
     }
 done

@@ -1,5 +1,15 @@
 FROM scratch
 
+ARG RELEASE_VERSION
+ARG SOURCE_COMMIT
+ARG SIGNED_MANIFEST_DIGEST
+
+LABEL org.opencontainers.image.source="https://github.com/SecondStack-AI/SecondBox" \
+      org.opencontainers.image.title="SecondBox signed microVM artifacts" \
+      org.opencontainers.image.version="${RELEASE_VERSION}" \
+      org.opencontainers.image.revision="${SOURCE_COMMIT}" \
+      ai.secondstack.secondbox.signed-manifest-digest="${SIGNED_MANIFEST_DIGEST}"
+
 # This image is a release transport for the independently signed host bundle.
 # Keep the allowlist explicit so build-context files can never enter the image.
 COPY kernel /secondbox-runner-microvm/kernel

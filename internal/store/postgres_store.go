@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -102,102 +101,6 @@ func (store *PostgresControlPlaneStore) CreateProfile(
 	return profile, idempotencyResult, nil
 }
 
-// EnsureBuiltInProfile persists or advances one code-owned immutable Profile revision.
-func (store *PostgresControlPlaneStore) EnsureBuiltInProfile(
-	ctx context.Context,
-	desired contracts.Profile,
-) (contracts.Profile, error) {
-	specJSON, err := json.Marshal(desired.CurrentRevision.Spec)
-	if err != nil {
-		return contracts.Profile{}, fmt.Errorf("SecondBox built-in ProfileRevision spec encoding failed: %w", err)
-	}
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return contracts.Profile{}, fmt.Errorf("SecondBox built-in Profile transaction failed: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(
-		ctx,
-		`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`,
-		"secondbox-built-in-profile:"+desired.Name,
-	); err != nil {
-		return contracts.Profile{}, fmt.Errorf("SecondBox built-in Profile lock failed: %w", err)
-	}
-	current, err := scanProfile(tx.QueryRow(
-		ctx, profileSelect+` WHERE profile.name=$1 FOR UPDATE OF profile`, desired.Name,
-	))
-	if errors.Is(err, pgx.ErrNoRows) {
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO secondbox.profiles (
-				name,state,current_revision_id,revision,created_at,updated_at
-			) VALUES ($1,$2,$3,$4,$5,$6)`,
-			desired.Name, desired.State, desired.CurrentRevision.ID,
-			desired.Revision, desired.CreatedAt, desired.UpdatedAt,
-		); err != nil {
-			return contracts.Profile{}, fmt.Errorf("SecondBox built-in Profile insert failed: %w", err)
-		}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO secondbox.profile_revisions (
-				id,profile_name,revision_number,spec_json,created_at
-			) VALUES ($1,$2,$3,$4,$5)`,
-			desired.CurrentRevision.ID, desired.Name, desired.CurrentRevision.Number,
-			specJSON, desired.CurrentRevision.CreatedAt,
-		); err != nil {
-			return contracts.Profile{}, fmt.Errorf("SecondBox built-in ProfileRevision insert failed: %w", err)
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return contracts.Profile{}, fmt.Errorf("SecondBox built-in Profile commit failed: %w", err)
-		}
-		return desired, nil
-	}
-	if err != nil {
-		return contracts.Profile{}, fmt.Errorf("SecondBox built-in Profile lookup failed: %w", err)
-	}
-	if current.State != contracts.ProfileStateEnabled {
-		return contracts.Profile{}, errors.New("SecondBox built-in Profile durable state is disabled")
-	}
-	switch {
-	case current.CurrentRevision.Number > desired.CurrentRevision.Number:
-		if err := tx.Commit(ctx); err != nil {
-			return contracts.Profile{}, fmt.Errorf("SecondBox built-in Profile forward-version commit failed: %w", err)
-		}
-		return current, nil
-	case current.CurrentRevision.Number == desired.CurrentRevision.Number:
-		if current.CurrentRevision.ID != desired.CurrentRevision.ID ||
-			!reflect.DeepEqual(current.CurrentRevision.Spec, desired.CurrentRevision.Spec) {
-			return contracts.Profile{}, errors.New("SecondBox built-in Profile revision drift detected")
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return contracts.Profile{}, fmt.Errorf("SecondBox built-in Profile verification commit failed: %w", err)
-		}
-		return current, nil
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO secondbox.profile_revisions (
-			id,profile_name,revision_number,spec_json,created_at
-		) VALUES ($1,$2,$3,$4,$5)`,
-		desired.CurrentRevision.ID, desired.Name, desired.CurrentRevision.Number,
-		specJSON, desired.CurrentRevision.CreatedAt,
-	); err != nil {
-		return contracts.Profile{}, fmt.Errorf("SecondBox built-in ProfileRevision append failed: %w", err)
-	}
-	current.CurrentRevision = desired.CurrentRevision
-	current.Revision++
-	current.UpdatedAt = desired.UpdatedAt.UTC()
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.profiles
-		SET current_revision_id=$2,revision=$3,updated_at=$4
-		WHERE name=$1`,
-		current.Name, current.CurrentRevision.ID, current.Revision, current.UpdatedAt,
-	); err != nil {
-		return contracts.Profile{}, fmt.Errorf("SecondBox built-in Profile head update failed: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return contracts.Profile{}, fmt.Errorf("SecondBox built-in Profile revision commit failed: %w", err)
-	}
-	return current, nil
-}
-
 func (store *PostgresControlPlaneStore) ReviseProfile(
 	ctx context.Context,
 	name string,
@@ -241,6 +144,7 @@ func (store *PostgresControlPlaneStore) ReviseProfile(
 		return contracts.Profile{}, ports.AdminIdempotencyResult{}, fmt.Errorf("SecondBox ProfileRevision append failed: %w", err)
 	}
 	profile.CurrentRevision = revision
+	profile.Revisions = append(profile.Revisions, revision)
 	profile.Revision++
 	profile.UpdatedAt = now.UTC()
 	if _, err := tx.Exec(ctx, `
@@ -1031,22 +935,32 @@ type queryRower interface {
 
 const profileSelect = `
 	SELECT profile.name,profile.state,profile.revision,profile.created_at,profile.updated_at,
-	       revision.id,revision.revision_number,revision.spec_json,revision.created_at
+	       revision.id,revision.revision_number,revision.spec_json,revision.created_at,
+	       (SELECT jsonb_agg(jsonb_build_object(
+	           'id',history.id,'number',history.revision_number,
+	           'spec',history.spec_json,'createdAt',history.created_at
+	       ) ORDER BY history.revision_number)
+	        FROM secondbox.profile_revisions AS history
+	        WHERE history.profile_name=profile.name)
 	FROM secondbox.profiles AS profile
 	JOIN secondbox.profile_revisions AS revision ON revision.id=profile.current_revision_id`
 
 func scanProfile(row rowScanner) (contracts.Profile, error) {
 	var profile contracts.Profile
 	var specJSON []byte
+	var revisionsJSON []byte
 	if err := row.Scan(
 		&profile.Name, &profile.State, &profile.Revision, &profile.CreatedAt, &profile.UpdatedAt,
 		&profile.CurrentRevision.ID, &profile.CurrentRevision.Number, &specJSON,
-		&profile.CurrentRevision.CreatedAt,
+		&profile.CurrentRevision.CreatedAt, &revisionsJSON,
 	); err != nil {
 		return contracts.Profile{}, err
 	}
 	if err := json.Unmarshal(specJSON, &profile.CurrentRevision.Spec); err != nil {
 		return contracts.Profile{}, fmt.Errorf("SecondBox ProfileRevision spec decoding failed: %w", err)
+	}
+	if err := json.Unmarshal(revisionsJSON, &profile.Revisions); err != nil {
+		return contracts.Profile{}, fmt.Errorf("SecondBox ProfileRevision lineage decoding failed: %w", err)
 	}
 	return profile, nil
 }

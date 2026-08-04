@@ -17,9 +17,7 @@
   "files": [
     "dist",
     "LICENSE",
-    "README.md",
-    "flue-runtime-beta9-LICENSE.txt",
-    "flue-runtime-beta9-source.json"
+    "README.md"
   ],
   "exports": {
     ".": {
@@ -29,7 +27,17 @@
     "./flue": {
       "types": "./dist/flue.d.ts",
       "import": "./dist/flue.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.js"
     }
+  },
+  "dependencies": {
+    "ws": "^8.21.2"
+  },
+  "peerDependencies": {
+    "@flue/runtime": "^2.0.0"
   },
   "scripts": {
     "build": "node ./prepare-package.mjs",

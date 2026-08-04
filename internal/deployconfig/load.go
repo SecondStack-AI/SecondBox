@@ -27,11 +27,13 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/assetcatalog"
 	controlconfig "github.com/SecondStack-AI/SecondBox/internal/config"
 	"github.com/SecondStack-AI/SecondBox/internal/runnerfeatures"
+	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
+	"github.com/SecondStack-AI/SecondBox/pkg/resourceapply"
+	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
 	"github.com/pelletier/go-toml/v2"
 )
 
 var (
-	digestPattern         = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	artifactKeyPattern    = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	opaqueRunnerIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 	configValidationMu    sync.Mutex
@@ -117,16 +119,6 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 	}
 	if deployment.Mode == "production" && verifiedCatalog.UsesSignatureKeyID("secondbox-development-local-trust") {
 		return ResolvedDeployment{}, manifestError("production requires an operator-supplied signed asset catalog", nil)
-	}
-	for _, binding := range []struct{ path, digest string }{
-		{"policy.agent_compartment_runtime_bundle_digest", manifest.Policy.AgentCompartmentRuntimeBundleDigest},
-		{"policy.agent_compartment_toolchain_bundle_digest", manifest.Policy.AgentCompartmentToolchainBundleDigest},
-		{"policy.coding_environment_runtime_bundle_digest", manifest.Policy.CodingEnvironmentRuntimeBundleDigest},
-		{"policy.coding_environment_toolchain_bundle_digest", manifest.Policy.CodingEnvironmentToolchainBundleDigest},
-	} {
-		if _, err := verifiedCatalog.Resolve(binding.digest); err != nil {
-			return ResolvedDeployment{}, manifestError(binding.path+" must exist in deployment.signed_asset_catalog", err)
-		}
 	}
 	put("SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH", catalog)
 	put("SECONDBOX_SIGNED_ASSET_CATALOG_PATH", deployment.SignedAssetCatalogPath)
@@ -316,7 +308,11 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 		}
 	}
 
-	resolved := ResolvedDeployment{Manifest: manifest, Environment: environment, RemoteRunnerEnvironment: remote, ComposeFiles: composeFiles, SecretPaths: secretPaths}
+	resources, err := resolveStandardResources(base, manifest, verifiedCatalog)
+	if err != nil {
+		return ResolvedDeployment{}, err
+	}
+	resolved := ResolvedDeployment{Manifest: manifest, Environment: environment, RemoteRunnerEnvironment: remote, ComposeFiles: composeFiles, SecretPaths: secretPaths, ResourceDocument: resources}
 	if err := validateControlPlaneEnvironment(environment); err != nil {
 		return ResolvedDeployment{}, manifestError("rendered control-plane environment failed production loader validation", err)
 	}
@@ -421,16 +417,6 @@ func validateManifestShape(manifest ManifestV1) error {
 				}
 			}
 		}
-		for name, digest := range map[string]string{
-			"agent_compartment_runtime_bundle_digest":    manifest.Policy.AgentCompartmentRuntimeBundleDigest,
-			"agent_compartment_toolchain_bundle_digest":  manifest.Policy.AgentCompartmentToolchainBundleDigest,
-			"coding_environment_runtime_bundle_digest":   manifest.Policy.CodingEnvironmentRuntimeBundleDigest,
-			"coding_environment_toolchain_bundle_digest": manifest.Policy.CodingEnvironmentToolchainBundleDigest,
-		} {
-			if digest == developmentBundleDigest {
-				return manifestError("production policy."+name+" must not use the synthetic development bundle", nil)
-			}
-		}
 	}
 
 	db := manifest.Database
@@ -520,6 +506,9 @@ func validateManifestShape(manifest ManifestV1) error {
 	if err := validatePolicy(manifest.Policy); err != nil {
 		return err
 	}
+	if err := validateStandardResources(manifest.StandardResources, manifest.Runners); err != nil {
+		return err
+	}
 	seen := make(map[string]bool)
 	sameHost := false
 	for i, r := range manifest.Runners {
@@ -595,12 +584,9 @@ func validatePolicy(p Policy) error {
 			return manifestError("policy."+name+" must be non-negative", nil)
 		}
 	}
-	for name, value := range map[string]string{"runner_enabled_features": p.RunnerEnabledFeatures, "agent_compartment_pool": p.AgentCompartmentPool, "agent_compartment_runtime_bundle_digest": p.AgentCompartmentRuntimeBundleDigest, "agent_compartment_toolchain_bundle_digest": p.AgentCompartmentToolchainBundleDigest, "coding_environment_pool": p.CodingEnvironmentPool, "coding_environment_runtime_bundle_digest": p.CodingEnvironmentRuntimeBundleDigest, "coding_environment_toolchain_bundle_digest": p.CodingEnvironmentToolchainBundleDigest} {
+	for name, value := range map[string]string{"runner_enabled_features": p.RunnerEnabledFeatures} {
 		if strings.TrimSpace(value) == "" {
 			return manifestError("policy."+name+" is required", nil)
-		}
-		if strings.Contains(name, "digest") && !digestPattern.MatchString(value) {
-			return manifestError("policy."+name+" must be a canonical sha256 digest", nil)
 		}
 	}
 	featureNames := make([]string, 0)
@@ -617,6 +603,64 @@ func validatePolicy(p Policy) error {
 		return manifestError("policy.runner_enabled_features", err)
 	}
 	return nil
+}
+
+func validateStandardResources(resources StandardResources, runners []Runner) error {
+	if strings.TrimSpace(resources.ArtifactManifest) == "" {
+		return manifestError("standard_resources.artifact_manifest is required", nil)
+	}
+	if len(resources.Bundles) == 0 {
+		return manifestError("standard_resources.bundles must explicitly select at least one bundle", nil)
+	}
+	if resources.ApplyWaitSeconds == nil || *resources.ApplyWaitSeconds < 1 {
+		return manifestError("standard_resources.apply_wait_seconds must be positive", nil)
+	}
+	selected := map[string]bool{}
+	for _, bundle := range resources.Bundles {
+		if (bundle != standardresources.AgentCompartment && bundle != standardresources.DurableCoding) || selected[bundle] {
+			return manifestError("standard_resources.bundles must contain unique agent-compartment or durable-coding names", nil)
+		}
+		selected[bundle] = true
+	}
+	bindings := map[string]StandardRunnerPool{}
+	for index, pool := range resources.RunnerPools {
+		prefix := fmt.Sprintf("standard_resources.runner_pools[%d]", index)
+		if !selected[pool.Bundle] || bindings[pool.Bundle].Bundle != "" {
+			return manifestError(prefix+" must bind one selected bundle exactly once", nil)
+		}
+		if pool.Name != standardresources.PoolAMD64 || pool.State == "" || len(pool.Architectures) == 0 || !slices.Contains(pool.Architectures, "amd64") || len(pool.Capabilities) == 0 {
+			return manifestError(prefix+" requires name, ready state, capabilities and amd64 architecture inventory", nil)
+		}
+		for name, value := range map[string]*int64{"max_sandboxes": pool.MaxSandboxes, "max_cpu_millis": pool.MaxCPUMillis, "max_memory_bytes": pool.MaxMemoryBytes} {
+			if value == nil || *value < 1 {
+				return manifestError(prefix+"."+name+" must be positive", nil)
+			}
+		}
+		gateway := map[string]string{standardresources.AgentCompartment: standardresources.AgentGateway, standardresources.DurableCoding: standardresources.PlatformGateway}[pool.Bundle]
+		for runnerIndex, runner := range runners {
+			if runner.PoolID == pool.Name && !runnerGatewayNames(runner.NetworkPolicyRunnerGateways)[gateway] {
+				return manifestError(fmt.Sprintf("runners[%d].network_policy_runner_gateways must resolve %s for selected bundle %s", runnerIndex, gateway, pool.Bundle), nil)
+			}
+		}
+		bindings[pool.Bundle] = pool
+	}
+	for bundle := range selected {
+		if bindings[bundle].Bundle == "" {
+			return manifestError("standard_resources.runner_pools must bind selected bundle "+bundle, nil)
+		}
+	}
+	return nil
+}
+
+func runnerGatewayNames(value string) map[string]bool {
+	result := map[string]bool{}
+	for _, entry := range strings.Split(value, ",") {
+		name, _, found := strings.Cut(strings.TrimSpace(entry), "=")
+		if found {
+			result[strings.TrimSpace(name)] = true
+		}
+	}
+	return result
 }
 
 func validateRunner(prefix string, r Runner) error {
@@ -834,12 +878,33 @@ func addPolicyEnvironment(environment map[string]string, p Policy) {
 		environment[name] = strconv.FormatInt(*value, 10)
 	}
 	environment["SECONDBOX_RUNNER_ENABLED_FEATURES"] = p.RunnerEnabledFeatures
-	environment["SECONDBOX_BUILTIN_AGENT_COMPARTMENT_POOL"] = p.AgentCompartmentPool
-	environment["SECONDBOX_BUILTIN_AGENT_COMPARTMENT_RUNTIME_BUNDLE_DIGEST"] = p.AgentCompartmentRuntimeBundleDigest
-	environment["SECONDBOX_BUILTIN_AGENT_COMPARTMENT_TOOLCHAIN_BUNDLE_DIGEST"] = p.AgentCompartmentToolchainBundleDigest
-	environment["SECONDBOX_BUILTIN_CODING_ENVIRONMENT_POOL"] = p.CodingEnvironmentPool
-	environment["SECONDBOX_BUILTIN_CODING_ENVIRONMENT_RUNTIME_BUNDLE_DIGEST"] = p.CodingEnvironmentRuntimeBundleDigest
-	environment["SECONDBOX_BUILTIN_CODING_ENVIRONMENT_TOOLCHAIN_BUNDLE_DIGEST"] = p.CodingEnvironmentToolchainBundleDigest
+}
+
+func resolveStandardResources(base string, manifest ManifestV1, catalog assetcatalog.SignedAssetCatalog) (resourceapply.Document, error) {
+	path, err := resolveRegularReference(base, manifest.StandardResources.ArtifactManifest)
+	if err != nil {
+		return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
+	}
+	releaseManifest, err := releasecontract.DecodeArtifactManifest(data)
+	if err != nil {
+		return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
+	}
+	if _, err := catalog.Resolve(releaseManifest.MicroVM.SignedManifestDigest); err != nil {
+		return resourceapply.Document{}, manifestError("standard_resources artifact manifest microVM identity must exist in deployment.signed_asset_catalog", err)
+	}
+	pools := make(map[string]standardresources.PoolBinding, len(manifest.StandardResources.RunnerPools))
+	for _, configured := range manifest.StandardResources.RunnerPools {
+		pools[configured.Bundle] = standardresources.PoolBinding{Name: configured.Name, Architectures: configured.Architectures, Capabilities: configured.Capabilities, State: configured.State, CapacityPolicy: map[string]int64{"maxSandboxes": *configured.MaxSandboxes, "maxCpuMillis": *configured.MaxCPUMillis, "maxMemoryBytes": *configured.MaxMemoryBytes}}
+	}
+	document, err := standardresources.Build(releaseManifest, standardresources.Selection{Bundles: manifest.StandardResources.Bundles, Pools: pools})
+	if err != nil {
+		return resourceapply.Document{}, manifestError("standard_resources", err)
+	}
+	return document, nil
 }
 
 func resolveRegularReference(base, reference string) (string, error) {

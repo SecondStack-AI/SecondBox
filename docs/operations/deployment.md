@@ -12,7 +12,7 @@ From a clean checkout:
 just deploy-development-up .tmp/secondbox-development
 ```
 
-The command creates the directory only when it is absent, writes a mode-`0600` manifest and mode-`0700` secret directory, generates independent local authorities and Runner PKI, builds the control-plane image, renders and validates the environment, starts loopback-only PostgreSQL and object storage, creates the configured bucket, starts the control plane, and requires `/readyz`. It refuses an existing directory without `secondbox.toml` and never rewrites an existing manifest, secret, identity, workspace, or execution asset.
+The command creates the directory only when it is absent, writes a mode-`0600` manifest and mode-`0700` secret directory, generates independent local authorities and Runner PKI, explicitly selects both reviewed development standard bundles, builds the control-plane image, renders and validates the environment, starts loopback-only PostgreSQL and object storage, creates the configured bucket, starts the control plane, requires `/readyz`, and applies the selected resources. It refuses an existing directory without `secondbox.toml` and never rewrites an existing manifest, secret, identity, workspace, or execution asset.
 
 Development initialization alone is available as:
 
@@ -33,8 +33,8 @@ The reviewed development topology intentionally starts no privileged Runner. Run
 4. `[[runners]]`: immutable Runner IDs, same-host or remote placement, pool, capacity, host integration, networking, and execution assets;
 5. `runner_trust`: enrollment credential, CA, server identity, and certificate policy;
 6. `applications`: platform and application authorities;
-7. `policy`: the nine subject quota limits and data-plane retention;
-8. `policy` and `overrides`: contested recovery/rollout settings and intentionally selected tuning overrides.
+7. `standard_resources`: verified release manifest, explicit standard bundles, typed RunnerPool inventory, and apply readiness bound;
+8. `policy` and `overrides`: subject quota limits, data-plane retention, contested recovery/rollout settings, and intentionally selected tuning overrides.
 
 Unknown keys, duplicate keys, unsupported schema versions, ambiguous bundled/external fields, incomplete authority, mutable production images, invalid cross-field relationships, and invalid cryptographic trust material fail with a `SecondBox deployment manifest` error. The decoder does not interpolate `${ENV}`, include files, or merge ambient environment variables.
 
@@ -55,7 +55,7 @@ Runner host paths are different: they are typed absolute values interpreted on t
 
 ### Authority, policy, tuning, and compiled facts
 
-Required deployment authority has no default. This includes identities, credentials, endpoints, process and storage paths, signed-asset catalog and bundle digests, object-store addressing mode, the nine subject quota limits, and data-plane retention.
+Required deployment authority has no default. This includes identities, credentials, endpoints, process and storage paths, signed-asset catalog, verified artifact manifest, explicit standard-bundle selection, typed RunnerPool inventory, object-store addressing mode, the nine subject quota limits, and data-plane retention. Runtime and toolchain digests are resolved from the verified artifact manifest rather than copied into policy fields.
 
 `policy.data_plane_retention_seconds` participates in each data-plane session's result and idempotency deadline. The retained session row contains bounded one-shot results, terminal outcome, admission replay, and accounting, but no streaming payload bytes.
 
@@ -79,7 +79,7 @@ An incomplete production initialization is intentionally unusable and reports ev
 - bundled or external database authority, with `sslmode=verify-full` for an external database;
 - bundled object storage at its explicit private Compose endpoint, or external object-store authority at an HTTPS endpoint;
 - zero or more explicit immutable Runner declarations and their placement;
-- an operator-supplied signed-asset catalog, verified bundle digests, Runner CA, and server keypair;
+- an operator-supplied signed-asset catalog, verified release artifact manifest, explicit standard-bundle and RunnerPool inventory selection, Runner CA, and server keypair;
 - independent platform, application, and Runner enrollment authorities;
 - all nine subject quota limits;
 - retention, contested recovery/rollout policy, and any intentional tuning overrides.
@@ -133,7 +133,7 @@ secondbox-deploy runner-init \
 
 The command signs a client certificate carrying `spiffe://secondbox/runner/<runner-id>`, writes the matching key, CA certificate, and canonical systemd environment, then atomically installs the directory. It refuses an undeclared ID, an existing target, a same-host target that differs from the declared identity directory, or mismatched CA evidence. Copying and activating a remote handoff on its Runner host is an explicit operator action.
 
-Create RunnerPools through the platform API before starting their Runners. A Profile that names an absent pool admits Sandboxes that cannot be placed. Built-in Profile bundle fields must be canonical `sha256:` digests found in the deployment's verified signed-asset catalog.
+Selected RunnerPools and standard Profile lineages are checked and applied after the control plane becomes ready. A repeated deployment is a no-op; an interrupted application resumes from the verified installed prefix. Each Runner in a selected pool maps the standard Profile's logical gateway in `network_policy_runner_gateways`. See [declarative resources](declarative-resources.md).
 
 ## One-shot migration from the legacy environment
 
@@ -166,3 +166,5 @@ curl --fail --silent --show-error http://127.0.0.1:8080/metrics
 `/healthz` proves the process answers, `/readyz` proves PostgreSQL connectivity, and `/metrics` exports fixed-cardinality state counts without tenant or resource identifiers.
 
 See [backup and restore](backup-and-restore.md), [Firecracker runtime](firecracker-runtime.md), [multirunner qualification](multirunner-qualification.md), and [observability and diagnostics](observability-and-diagnostics.md).
+
+For coordinated public releases, verify and initialize from the final release index with `secondbox-deploy verify release-index URL` and `secondbox-deploy init --mode production --input COMPLETE_MANIFEST --release-index URL DIRECTORY`. The release index supplies immutable software facts only; all deployment identity, credentials, storage, topology, host paths, gateways, capacity, and retention remain explicit in `COMPLETE_MANIFEST`. The `--qualification-artifact-manifest` form is restricted to the pre-finalization source-free release gate. See [coordinated release distribution](release-distribution.md).
