@@ -3,9 +3,12 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 suite="$repo_root/scripts/test-source-free-release.sh"
-workflow="$repo_root/.github/workflows/release-finalize.yml"
+qualifier="$repo_root/scripts/release-local-qualify.sh"
+finalizer="$repo_root/scripts/release-local-finalize.sh"
 
 bash -n "$suite"
+bash -n "$qualifier"
+bash -n "$finalizer"
 if env -i PATH="$PATH" "$suite" >/dev/null 2>&1; then
   echo "source-free gate skipped absent required public inputs" >&2
   exit 1
@@ -14,12 +17,17 @@ if rg -n 'git (clone|checkout)|go build|docker build|go run ./|\.git/' "$suite";
   echo "source-free suite contains a checkout or local build dependency" >&2
   exit 1
 fi
-rg -q 'Download the public qualification suite only' "$workflow"
-rg -q 'needs: source-free-qualification' "$workflow"
-rg -q 'release-index --manifest' "$workflow"
-rg -q 'Publish qualification, then release index last' "$workflow"
-if rg -n '^\s*(-\s+)?uses:\s*[^ ]+@(main|master|v[0-9]+([.]?[0-9]+)*)\s*$' "$workflow"; then
-  echo "finalization workflow contains an unpinned external action" >&2
+rg -q 'releases/download' "$qualifier"
+rg -q 'must be outside the source checkout' "$qualifier"
+rg -q 'release-index --manifest' "$finalizer"
+qualification_line="$(rg -n 'publish_exact "\$qualification"' "$finalizer" | cut -d: -f1)"
+index_line="$(rg -n 'publish_exact "\$index"' "$finalizer" | cut -d: -f1)"
+[[ "$qualification_line" -lt "$index_line" ]] || {
+  echo "local finalization does not publish qualification before the release index" >&2
+  exit 1
+}
+if rg -n 'git (clone|checkout)|go build|docker build|go run ./|\.git/' "$qualifier" "$suite"; then
+  echo "local source-free qualification contains a checkout or local build dependency" >&2
   exit 1
 fi
 

@@ -96,44 +96,18 @@ func TestDockerBuildContextExcludesLocalSecondBoxState(t *testing.T) {
 	}
 }
 
-func TestScenarioQualificationWorkflowRequiresSelfHostedKVM(t *testing.T) {
-	workflow := readRepositoryFile(t, ".github/workflows/scenario-qualification.yml")
+func TestScenarioQualificationRemainsLocalToQualifiedHost(t *testing.T) {
+	repositoryRoot := repositoryRootForDeploymentPolicy(t)
+	if _, err := os.Stat(filepath.Join(repositoryRoot, ".github/workflows/scenario-qualification.yml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("scenario qualification must not require a configured GitHub self-hosted runner")
+	}
+	preparation := readRepositoryFile(t, "scripts/release-local-prepare.sh")
+	for _, required := range []string{"just -d \"$repo_root\" test-scenario", "/dev/kvm"} {
+		if !strings.Contains(preparation, required) {
+			t.Errorf("local release preparation must contain %q", required)
+		}
+	}
 	const jobMarker = "  scenario-qualification:\n"
-	jobStart := strings.Index(workflow, jobMarker)
-	if jobStart == -1 {
-		t.Fatal("scenario qualification workflow must define the scenario-qualification job")
-	}
-	scenarioJob := workflow[jobStart:]
-	for _, required := range []string{
-		"runs-on: [self-hosted, linux, x64, secondbox-kvm]",
-		"timeout-minutes: 45",
-		`SECONDBOX_REQUIRE_QUALIFIED_SCENARIO: "1"`,
-		"SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR:",
-		"SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY:",
-		"SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256:",
-		"SECONDBOX_RUNNER_WORKSPACE_ROOT:",
-		"run: just test-scenario",
-	} {
-		if !strings.Contains(scenarioJob, required) {
-			t.Errorf("scenario qualification CI job must contain %q", required)
-		}
-	}
-	for _, forbidden := range []string{
-		"runs-on: ubuntu-latest",
-		"runs-on: ubuntu-",
-	} {
-		if strings.Contains(scenarioJob, forbidden) {
-			t.Errorf("scenario qualification CI job must not contain %q", forbidden)
-		}
-	}
-	for _, forbidden := range []string{
-		"\n  pull_request:",
-		"\n  push:",
-	} {
-		if strings.Contains(workflow, forbidden) {
-			t.Errorf("scenario qualification workflow must not contain trigger %q", strings.TrimSpace(forbidden))
-		}
-	}
 	ciWorkflow := readRepositoryFile(t, ".github/workflows/ci.yml")
 	if strings.Contains(ciWorkflow, jobMarker) {
 		t.Fatal("CI workflow must not define the scenario-qualification job")

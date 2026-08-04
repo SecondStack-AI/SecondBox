@@ -114,7 +114,7 @@ Provide one generic, idempotent resource engine so consumers do not implement Ru
 
 ### Task 4: Build a complete release candidate locally
 
-Create one deterministic staging path that assembles and verifies a prospective release without registry credentials or publication. A locally staged candidate must contain every byte and identity needed by the tag workflow.
+Create one deterministic staging path that assembles and verifies a prospective release without registry credentials or publication. A locally staged candidate must contain every byte and identity needed by the hosted publish-only workflow.
 
 - [x] Add a stable staging command such as `just release-stage VERSION OUTPUT_DIR` and a non-publishing `just test-release-stage` gate.
 - [x] Require a clean repository, a valid SemVer version and an exact prospective tag/source-commit relationship. Permit an explicit test mode for synthetic versions without weakening the real gate.
@@ -133,13 +133,13 @@ Create one deterministic staging path that assembles and verifies a prospective 
 
 ### Task 5: Publish an immutable public release candidate
 
-Implement one tag workflow that publishes the staged candidate to public registries without yet creating a complete release. Publication is a gated promotion of already tested content, not a second build design; the public candidate exists so source-free qualification can prove anonymous consumption before finalization.
+Implement a local qualified-build path and one hosted publish-only workflow that promotes the exact supplied candidate to public registries without yet creating a complete release. Publication is not a second build design; the public candidate exists so source-free qualification can prove anonymous consumption before finalization.
 
-- [x] Add a workflow triggered only by immutable SemVer tags and pin every external workflow action to a reviewed full commit.
+- [x] Add a manually dispatched hosted publisher that checks out an immutable SemVer tag, consumes only its verified private draft transport and pins every external workflow action to a reviewed full commit.
 - [x] Bind the workflow to the exact tag commit and require normal CI plus generated-contract verification for that commit.
-- [x] Extend the dedicated KVM workflow so a release candidate qualifies the exact tag commit and emits machine-readable evidence bound to the signed guest manifest, architecture and Runner environment.
+- [x] Extend local release preparation so a release candidate qualifies the exact tag commit on a KVM host and emits machine-readable evidence bound to the signed guest manifest, architecture and Runner environment.
 - [x] Require pre-publication KVM candidate evidence for the exact tag commit before publishing a candidate; a scheduled or unrelated-commit scenario pass is insufficient and cannot become the final source-free qualification attestation.
-- [x] Re-run deterministic staging in the release workflow and compare it with qualification inputs.
+- [x] Bind every locally staged file and the candidate evidence into a strict private publication-input manifest; make the hosted publisher verify and publish those supplied bytes without rebuilding.
 - [x] Publish the existing TypeScript SDK as the public `@secondstack-ai/secondbox` npm package with npm provenance.
 - [x] Use the same Git tag as the Go SDK/module version and verify public module resolution before finalization.
 - [x] Publish digest-addressable control-plane, Runner and microVM artifact images to public GHCR with the canonical release coordinates.
@@ -151,7 +151,7 @@ Implement one tag workflow that publishes the staged candidate to public registr
 - [x] Make partial candidate publication non-consumable and retry-safe. Refuse a retry if any immutable coordinate contains different content.
 - [x] Never overwrite a released artifact, move a release tag, reuse an npm version or make a floating tag part of the consumer contract.
 - [x] Add dry-run and isolated-coordinate tests for tag/version mismatch, absent qualification, partial publication, digest mismatch, registry replay and attempted mutation.
-- [x] Add an operator setup runbook for npm trusted publishing, GHCR permissions, GitHub Release permissions, KVM runner variables and the independently held guest signing trust anchor.
+- [x] Add an operator setup runbook for npm trusted publishing, GHCR permissions, GitHub Release permissions, explicit local KVM inputs and the independently held guest signing trust anchor.
 
 ### Task 6: Qualify source-free consumption and finalize the release
 
@@ -178,7 +178,7 @@ Complete one real public release and provide a stable downstream contract. The r
 
 - [x] Select the first SemVer version under the coordinated release policy and finalize the changelog and current release documentation.
 - [ ] Run generated checks, the complete non-KVM suite, SDK package tests, release staging, security/image policy, deployment tests and the qualified KVM scenario for the exact candidate commit.
-- [ ] Create the immutable Git tag and execute the public candidate, source-free qualification and finalization workflow.
+- [ ] Create the immutable Git tag and execute local preparation, hosted candidate publication, local source-free qualification and local finalization.
 - [ ] Verify npm, Go module resolution, GitHub binaries, GHCR images, SBOMs, artifact attestations, the artifact manifest, qualification attestation and final release index from their public locations.
 - [ ] Confirm source-free qualification ran against the public candidate artifacts rather than local or workflow-staged substitutes before the final release index was published.
 - [ ] Confirm the standard `agent-compartment` and `durable-coding` bundles can be selected without a consumer-owned RunnerPool or Profile definition.

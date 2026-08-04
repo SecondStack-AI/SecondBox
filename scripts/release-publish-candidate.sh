@@ -2,11 +2,15 @@
 set -euo pipefail
 
 dry_run=false
+defer_release=false
 if [[ "${1:-}" == "--dry-run" ]]; then
   dry_run=true
   shift
+elif [[ "${1:-}" == "--defer-release" ]]; then
+  defer_release=true
+  shift
 fi
-[[ "$#" -eq 3 ]] || { echo "usage: scripts/release-publish-candidate.sh [--dry-run] VERSION STAGING_DIR CANDIDATE_EVIDENCE" >&2; exit 2; }
+[[ "$#" -eq 3 ]] || { echo "usage: scripts/release-publish-candidate.sh [--dry-run|--defer-release] VERSION STAGING_DIR CANDIDATE_EVIDENCE" >&2; exit 2; }
 version="$1"
 stage="$2"
 evidence="$3"
@@ -87,29 +91,15 @@ for asset in "$stage"/*; do
     gh release upload "$tag" "$asset"
   fi
 done
-gh release edit "$tag" --draft=false --prerelease
 
-resolved=false
-for _ in 1 2 3 4 5; do
-  if GONOSUMDB= GOPRIVATE= GOPROXY=https://proxy.golang.org go list -m "github.com/SecondStack-AI/SecondBox@${tag}" >/dev/null 2>&1; then
-    resolved=true
-    break
-  fi
-  sleep 5
-done
-$resolved || { echo "public Go module did not resolve at ${tag}" >&2; exit 1; }
-curl --fail --location --silent --show-error "https://registry.npmjs.org/@secondstack-ai%2fsecondbox/${version}" >/dev/null
+if $defer_release; then
+  skopeo logout ghcr.io >/dev/null
+  echo "Candidate $tag registries and draft assets are published; public exposure is deferred."
+  exit 0
+fi
+
+gh release edit "$tag" --draft=false --prerelease
 skopeo logout ghcr.io >/dev/null
-test "$(skopeo inspect --format '{{.Digest}}' "docker://ghcr.io/secondstack-ai/secondbox/control-plane:${tag}")" = "$(jq -er '.controlPlane.reference | split("@")[-1]' "$manifest")"
-test "$(skopeo inspect --format '{{.Digest}}' "docker://ghcr.io/secondstack-ai/secondbox/runner:${tag}")" = "$(jq -er '.runner.reference | split("@")[-1]' "$manifest")"
-test "$(skopeo inspect --format '{{.Digest}}' "docker://ghcr.io/secondstack-ai/secondbox/microvm-artifacts:${tag}")" = "$(jq -er '.microvm.imageReference | split("@")[-1]' "$manifest")"
-for asset in "$stage"/*; do
-  [[ "$asset" == *.oci.tar || "${asset##*/}" == candidate-allowlist.json ]] && continue
-  name="${asset##*/}"
-  curl --fail --location --silent --show-error "https://github.com/SecondStack-AI/SecondBox/releases/download/${tag}/${name}" | cmp --silent - "$asset" || {
-    echo "anonymous GitHub asset verification failed for $name" >&2
-    exit 1
-  }
-done
+"$repo_root/scripts/release-verify-public-candidate.sh" "$version" "$stage"
 
 echo "Public candidate ${tag} is readable but intentionally incomplete."

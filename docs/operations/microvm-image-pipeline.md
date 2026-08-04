@@ -30,7 +30,7 @@ The verifier never trusts the artifact's bundled `signing.pub`. The trusted key 
 
 ## Release distribution and host materialization
 
-The signed bundle is approximately 11 GB and is not embedded in the source-less GitHub release zip. A tagged release reads an independently signed bundle from the absolute runner path configured by `SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR`, verifies it against the repository-variable fingerprint `SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256`, and publishes the exact ten-file allowlist as the dedicated `secondbox-runner-microvm-artifacts:<release-tag>` scratch image. The image labels bind the verified public-key fingerprint and `manifest.json` digest. The release workflow copies both identities into the staged `.env.template`.
+The signed bundle is approximately 11 GB and is not embedded in the source-less GitHub release zip. Local release preparation reads an independently signed bundle from the absolute path configured by `SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR`, verifies it against `SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256`, and builds the exact allowlist as the dedicated `microvm-artifacts` OCI archive. The hosted publisher pushes that supplied archive without rebuilding it. Image labels and the artifact manifest bind the verified public-key fingerprint and `manifest.json` digest.
 
 Initialization accepts exactly one explicit source mode:
 
