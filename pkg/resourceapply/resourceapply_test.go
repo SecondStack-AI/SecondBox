@@ -158,6 +158,33 @@ func TestCheckReportsWithoutMutationAndApplyUpdatesOnlyDeclaredPoolFields(t *tes
 	}
 }
 
+func TestApplyTreatsRunnerPoolArchitecturesAndCapabilitiesAsSets(t *testing.T) {
+	fake := newFakeClient()
+	document := desiredDocument(t, 1)
+	document.RunnerPools[0].Architectures = []string{"amd64", "arm64"}
+	document.RunnerPools[0].Capabilities = []string{"local-workspace", "exec-streaming"}
+	if _, err := Apply(t.Context(), fake, document); err != nil {
+		t.Fatal(err)
+	}
+	pool := fake.pools["pool"]
+	pool.Architectures = []string{"arm64", "amd64"}
+	pool.Capabilities = []string{"exec-streaming", "local-workspace"}
+	fake.pools["pool"] = pool
+	fake.events = nil
+	replayed, err := Apply(t.Context(), fake, document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.events) != 0 || replayed.Results[0].Action != ActionNoop {
+		t.Fatalf("replay = %#v events=%#v", replayed, fake.events)
+	}
+	pool.Capabilities = []string{"exec-streaming"}
+	fake.pools["pool"] = pool
+	if _, err := Apply(t.Context(), fake, document); err == nil {
+		t.Fatal("expected capability drift failure")
+	}
+}
+
 func TestApplyRejectsHistoricalDriftFutureHeadsGapsAndRevisionRaces(t *testing.T) {
 	document := desiredDocument(t, 2)
 	for _, test := range []struct {

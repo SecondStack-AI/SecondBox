@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -100,6 +101,11 @@ func TestDevelopmentInitializationAndRenderAreCompleteAndReproducible(t *testing
 
 func TestExampleManifestIsGeneratedFromTheRegistry(t *testing.T) {
 	manifest := developmentManifest("secrets/postgres-password", "secrets/object-store-access-key", "secrets/object-store-secret-key", "secrets/platform-token", "secrets/runner-enrollment-credential")
+	for _, pool := range manifest.StandardResources.RunnerPools {
+		if !slices.Contains(pool.Capabilities, "compute") {
+			t.Fatalf("development RunnerPool %q cannot admit compute", pool.Name)
+		}
+	}
 	want, err := encodeManifest(manifest)
 	if err != nil {
 		t.Fatal(err)
