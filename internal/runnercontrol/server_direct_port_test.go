@@ -38,7 +38,8 @@ func TestDirectPortConsumptionIsAnsweredInlineOnTheAuthenticatedStream(t *testin
 	} {
 		t.Run(name, func(t *testing.T) {
 			config := validRelayServerConfig()
-			config.FrameRelay = &recordingFrameRelay{}
+			config.LiveDataPlane = NewLiveDataPlaneBroker()
+			config.PortSessions = &recordingFrameRelay{}
 			config.EnabledFeatures = []runnerv1.RunnerFeature{
 				runnerv1.RunnerFeature_RUNNER_FEATURE_PORT_PROXY,
 			}
@@ -98,7 +99,8 @@ func TestDirectPortConsumptionIsAnsweredInlineOnTheAuthenticatedStream(t *testin
 
 func TestDirectPortConsumptionRejectsIncompleteIdentity(t *testing.T) {
 	config := validRelayServerConfig()
-	config.FrameRelay = &recordingFrameRelay{}
+	config.LiveDataPlane = NewLiveDataPlaneBroker()
+	config.PortSessions = &recordingFrameRelay{}
 	config.DirectPorts = &recordingDirectPortAdmitter{}
 	config.EnabledFeatures = []runnerv1.RunnerFeature{
 		runnerv1.RunnerFeature_RUNNER_FEATURE_PORT_PROXY,

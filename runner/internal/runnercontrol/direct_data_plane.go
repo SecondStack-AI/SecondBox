@@ -1,6 +1,7 @@
 package runnercontrol
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -230,7 +231,8 @@ func (s *RunnerProtocolService) registerDirectDataPlaneSession(
 	if open == nil || open.Fence == nil || open.OperationId == "" || open.StreamId == "" ||
 		(open.Kind != runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC &&
 			open.Kind != runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE &&
-			open.Kind != runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY) ||
+			open.Kind != runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY &&
+			open.Kind != runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PORT) ||
 		open.DeadlineUnixMs == 0 || len(open.CredentialDigest) != sha256.Size {
 		return errors.New("SecondBox runner direct data-plane Open is incomplete")
 	}
@@ -244,6 +246,18 @@ func (s *RunnerProtocolService) registerDirectDataPlaneSession(
 	}
 	if err := s.validateOperationCorrelation(open.Fence, open.OperationId, open.Correlation); err != nil {
 		return err
+	}
+	if open.Kind == runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PORT {
+		port := open.GetPort()
+		if port == nil || port.DeadlineUnixMs != open.DeadlineUnixMs ||
+			!bytes.Equal(port.CredentialDigest, open.CredentialDigest) {
+			return errors.New("SecondBox runner direct Port command is incomplete")
+		}
+		return s.registerDirectPortSession(&runnerprotocol.PortFrame{
+			Fence: cloneRunnerFence(open.Fence), OperationId: open.OperationId,
+			StreamId: open.StreamId, Sequence: 1,
+			Correlation: cloneRunnerCorrelation(open.Correlation),
+		}, port)
 	}
 	session := &directDataPlaneSession{
 		fence: cloneRunnerFence(open.Fence), correlation: cloneRunnerCorrelation(open.Correlation),
@@ -263,8 +277,20 @@ func (s *RunnerProtocolService) handleDataPlaneCancel(
 		command.StreamId == "" || command.Reason == "" ||
 		(command.Kind != runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC &&
 			command.Kind != runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE &&
-			command.Kind != runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY) {
+			command.Kind != runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY &&
+			command.Kind != runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PORT) {
 		return errors.New("SecondBox runner data-plane cancellation command is incomplete")
+	}
+	if command.Kind == runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PORT {
+		s.directPorts.closeSession(command.OperationId, command.Reason)
+		key := runnerRelayOperationKey(command.Fence, command.OperationId, command.StreamId)
+		s.operationMu.Lock()
+		state := s.portOperations[key]
+		if state != nil && !state.terminal {
+			state.cancel(context.Canceled)
+		}
+		s.operationMu.Unlock()
+		return nil
 	}
 	s.directDataPlane.closeSession(command.OperationId, command.Reason)
 	key := runnerRelayOperationKey(command.Fence, command.OperationId, command.StreamId)

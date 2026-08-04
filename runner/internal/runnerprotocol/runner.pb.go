@@ -1304,6 +1304,7 @@ const (
 	DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC        DataPlaneSessionKind = 1
 	DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE        DataPlaneSessionKind = 2
 	DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY         DataPlaneSessionKind = 3
+	DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PORT        DataPlaneSessionKind = 4
 )
 
 // Enum value maps for DataPlaneSessionKind.
@@ -1313,12 +1314,14 @@ var (
 		1: "DATA_PLANE_SESSION_KIND_EXEC",
 		2: "DATA_PLANE_SESSION_KIND_FILE",
 		3: "DATA_PLANE_SESSION_KIND_PTY",
+		4: "DATA_PLANE_SESSION_KIND_PORT",
 	}
 	DataPlaneSessionKind_value = map[string]int32{
 		"DATA_PLANE_SESSION_KIND_UNSPECIFIED": 0,
 		"DATA_PLANE_SESSION_KIND_EXEC":        1,
 		"DATA_PLANE_SESSION_KIND_FILE":        2,
 		"DATA_PLANE_SESSION_KIND_PTY":         3,
+		"DATA_PLANE_SESSION_KIND_PORT":        4,
 	}
 )
 
@@ -6148,7 +6151,7 @@ func (x *PortDirectAdmission) GetSafeDetail() string {
 	return ""
 }
 
-// DataPlaneDirectOpen admits one payload-free direct Exec, PTY, or File session.
+// DataPlaneDirectOpen admits one payload-free direct Exec, PTY, File, or Port session.
 // The operation request follows only after the caller spends the credential on
 // the SBXDP1 connection.
 type DataPlaneDirectOpen struct {
@@ -6163,6 +6166,7 @@ type DataPlaneDirectOpen struct {
 	DeadlineUnixMs    uint64                 `protobuf:"varint,8,opt,name=deadline_unix_ms,json=deadlineUnixMs,proto3" json:"deadline_unix_ms,omitempty"`
 	CredentialDigest  []byte                 `protobuf:"bytes,9,opt,name=credential_digest,json=credentialDigest,proto3" json:"credential_digest,omitempty"`
 	StreamWindowBytes uint64                 `protobuf:"varint,10,opt,name=stream_window_bytes,json=streamWindowBytes,proto3" json:"stream_window_bytes,omitempty"`
+	Port              *PortDirectOpen        `protobuf:"bytes,11,opt,name=port,proto3" json:"port,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -6265,6 +6269,13 @@ func (x *DataPlaneDirectOpen) GetStreamWindowBytes() uint64 {
 		return x.StreamWindowBytes
 	}
 	return 0
+}
+
+func (x *DataPlaneDirectOpen) GetPort() *PortDirectOpen {
+	if x != nil {
+		return x.Port
+	}
+	return nil
 }
 
 type DataPlaneDirectConsume struct {
@@ -6460,7 +6471,8 @@ func (x *DataPlaneDirectAdmission) GetSafeDetail() string {
 }
 
 // DataPlaneCancelCommand is durable control only. It carries no stdin, output,
-// or File content and may therefore survive a Runner reconnect in PostgreSQL.
+// File content, or Port bytes and may therefore survive a Runner reconnect in
+// PostgreSQL.
 type DataPlaneCancelCommand struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	MessageId     string                 `protobuf:"bytes,1,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
@@ -8930,7 +8942,7 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\tstream_id\x18\x04 \x01(\tR\bstreamId\x12@\n" +
 	"\x04kind\x18\x05 \x01(\x0e2,.secondbox.runner.v1.PortDirectAdmissionKindR\x04kind\x12\x1f\n" +
 	"\vsafe_detail\x18\x06 \x01(\tR\n" +
-	"safeDetail\"\xd6\x03\n" +
+	"safeDetail\"\x8f\x04\n" +
 	"\x13DataPlaneDirectOpen\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1a\n" +
@@ -8943,7 +8955,8 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\x10deadline_unix_ms\x18\b \x01(\x04R\x0edeadlineUnixMs\x12+\n" +
 	"\x11credential_digest\x18\t \x01(\fR\x10credentialDigest\x12.\n" +
 	"\x13stream_window_bytes\x18\n" +
-	" \x01(\x04R\x11streamWindowBytes\"\xff\x02\n" +
+	" \x01(\x04R\x11streamWindowBytes\x127\n" +
+	"\x04port\x18\v \x01(\v2#.secondbox.runner.v1.PortDirectOpenR\x04port\"\xff\x02\n" +
 	"\x16DataPlaneDirectConsume\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12\x1a\n" +
@@ -9307,12 +9320,13 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\x17PortDirectAdmissionKind\x12*\n" +
 	"&PORT_DIRECT_ADMISSION_KIND_UNSPECIFIED\x10\x00\x12'\n" +
 	"#PORT_DIRECT_ADMISSION_KIND_ADMITTED\x10\x01\x12%\n" +
-	"!PORT_DIRECT_ADMISSION_KIND_DENIED\x10\x02*\xa4\x01\n" +
+	"!PORT_DIRECT_ADMISSION_KIND_DENIED\x10\x02*\xc6\x01\n" +
 	"\x14DataPlaneSessionKind\x12'\n" +
 	"#DATA_PLANE_SESSION_KIND_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cDATA_PLANE_SESSION_KIND_EXEC\x10\x01\x12 \n" +
 	"\x1cDATA_PLANE_SESSION_KIND_FILE\x10\x02\x12\x1f\n" +
-	"\x1bDATA_PLANE_SESSION_KIND_PTY\x10\x03*\xac\x01\n" +
+	"\x1bDATA_PLANE_SESSION_KIND_PTY\x10\x03\x12 \n" +
+	"\x1cDATA_PLANE_SESSION_KIND_PORT\x10\x04*\xac\x01\n" +
 	"\x1cDataPlaneDirectAdmissionKind\x120\n" +
 	",DATA_PLANE_DIRECT_ADMISSION_KIND_UNSPECIFIED\x10\x00\x12-\n" +
 	")DATA_PLANE_DIRECT_ADMISSION_KIND_ADMITTED\x10\x01\x12+\n" +
@@ -9578,81 +9592,82 @@ var file_contracts_runner_v1_runner_proto_depIdxs = []int32{
 	40,  // 89: secondbox.runner.v1.DataPlaneDirectOpen.fence:type_name -> secondbox.runner.v1.AssignmentFence
 	39,  // 90: secondbox.runner.v1.DataPlaneDirectOpen.correlation:type_name -> secondbox.runner.v1.Correlation
 	22,  // 91: secondbox.runner.v1.DataPlaneDirectOpen.kind:type_name -> secondbox.runner.v1.DataPlaneSessionKind
-	40,  // 92: secondbox.runner.v1.DataPlaneDirectConsume.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	39,  // 93: secondbox.runner.v1.DataPlaneDirectConsume.correlation:type_name -> secondbox.runner.v1.Correlation
-	22,  // 94: secondbox.runner.v1.DataPlaneDirectConsume.kind:type_name -> secondbox.runner.v1.DataPlaneSessionKind
-	40,  // 95: secondbox.runner.v1.DataPlaneDirectAdmission.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	22,  // 96: secondbox.runner.v1.DataPlaneDirectAdmission.kind:type_name -> secondbox.runner.v1.DataPlaneSessionKind
-	23,  // 97: secondbox.runner.v1.DataPlaneDirectAdmission.admission:type_name -> secondbox.runner.v1.DataPlaneDirectAdmissionKind
-	40,  // 98: secondbox.runner.v1.DataPlaneCancelCommand.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	22,  // 99: secondbox.runner.v1.DataPlaneCancelCommand.kind:type_name -> secondbox.runner.v1.DataPlaneSessionKind
-	40,  // 100: secondbox.runner.v1.PortFrame.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	39,  // 101: secondbox.runner.v1.PortFrame.correlation:type_name -> secondbox.runner.v1.Correlation
-	76,  // 102: secondbox.runner.v1.PortFrame.open:type_name -> secondbox.runner.v1.PortOpen
-	77,  // 103: secondbox.runner.v1.PortFrame.bytes:type_name -> secondbox.runner.v1.PortBytes
-	54,  // 104: secondbox.runner.v1.PortFrame.credit:type_name -> secondbox.runner.v1.StreamCredit
-	61,  // 105: secondbox.runner.v1.PortFrame.cancel:type_name -> secondbox.runner.v1.ExecCancel
-	78,  // 106: secondbox.runner.v1.PortFrame.terminal:type_name -> secondbox.runner.v1.PortTerminal
-	79,  // 107: secondbox.runner.v1.PortFrame.direct_open:type_name -> secondbox.runner.v1.PortDirectOpen
-	24,  // 108: secondbox.runner.v1.LocalWorkspaceCommand.kind:type_name -> secondbox.runner.v1.LocalWorkspaceCommandKind
-	39,  // 109: secondbox.runner.v1.LocalWorkspaceCommand.correlation:type_name -> secondbox.runner.v1.Correlation
-	24,  // 110: secondbox.runner.v1.LocalWorkspaceReceiptItem.kind:type_name -> secondbox.runner.v1.LocalWorkspaceCommandKind
-	24,  // 111: secondbox.runner.v1.LocalWorkspaceResult.kind:type_name -> secondbox.runner.v1.LocalWorkspaceCommandKind
-	25,  // 112: secondbox.runner.v1.LocalWorkspaceResult.terminal:type_name -> secondbox.runner.v1.LocalWorkspaceTerminalKind
-	88,  // 113: secondbox.runner.v1.LocalWorkspaceResult.inventory:type_name -> secondbox.runner.v1.LocalWorkspaceInventoryItem
-	39,  // 114: secondbox.runner.v1.LocalWorkspaceResult.correlation:type_name -> secondbox.runner.v1.Correlation
-	89,  // 115: secondbox.runner.v1.LocalWorkspaceResult.receipts:type_name -> secondbox.runner.v1.LocalWorkspaceReceiptItem
-	39,  // 116: secondbox.runner.v1.Evidence.correlation:type_name -> secondbox.runner.v1.Correlation
-	26,  // 117: secondbox.runner.v1.WorkspaceTransferResult.terminal:type_name -> secondbox.runner.v1.WorkspaceTransferTerminalKind
-	92,  // 118: secondbox.runner.v1.WorkspaceTransferFrame.open:type_name -> secondbox.runner.v1.WorkspaceTransferOpen
-	93,  // 119: secondbox.runner.v1.WorkspaceTransferFrame.chunk:type_name -> secondbox.runner.v1.WorkspaceTransferChunk
-	54,  // 120: secondbox.runner.v1.WorkspaceTransferFrame.credit:type_name -> secondbox.runner.v1.StreamCredit
-	94,  // 121: secondbox.runner.v1.WorkspaceTransferFrame.commit:type_name -> secondbox.runner.v1.WorkspaceTransferCommit
-	95,  // 122: secondbox.runner.v1.WorkspaceTransferFrame.result:type_name -> secondbox.runner.v1.WorkspaceTransferResult
-	96,  // 123: secondbox.runner.v1.WorkspaceTransferFrame.cancel:type_name -> secondbox.runner.v1.WorkspaceTransferCancel
-	40,  // 124: secondbox.runner.v1.InstanceTerminal.fence:type_name -> secondbox.runner.v1.AssignmentFence
-	27,  // 125: secondbox.runner.v1.InstanceTerminal.reason:type_name -> secondbox.runner.v1.InstanceObservedTerminationReason
-	39,  // 126: secondbox.runner.v1.InstanceTerminal.correlation:type_name -> secondbox.runner.v1.Correlation
-	29,  // 127: secondbox.runner.v1.RunnerToControlPlane.hello:type_name -> secondbox.runner.v1.RunnerHello
-	36,  // 128: secondbox.runner.v1.RunnerToControlPlane.registration:type_name -> secondbox.runner.v1.RunnerRegistration
-	38,  // 129: secondbox.runner.v1.RunnerToControlPlane.heartbeat:type_name -> secondbox.runner.v1.RunnerHeartbeat
-	47,  // 130: secondbox.runner.v1.RunnerToControlPlane.assignment_ack:type_name -> secondbox.runner.v1.AssignmentAck
-	48,  // 131: secondbox.runner.v1.RunnerToControlPlane.assignment_progress:type_name -> secondbox.runner.v1.AssignmentProgress
-	49,  // 132: secondbox.runner.v1.RunnerToControlPlane.assignment_result:type_name -> secondbox.runner.v1.AssignmentResult
-	51,  // 133: secondbox.runner.v1.RunnerToControlPlane.fence_result:type_name -> secondbox.runner.v1.FenceResult
-	53,  // 134: secondbox.runner.v1.RunnerToControlPlane.drain_state:type_name -> secondbox.runner.v1.DrainState
-	63,  // 135: secondbox.runner.v1.RunnerToControlPlane.exec:type_name -> secondbox.runner.v1.ExecFrame
-	69,  // 136: secondbox.runner.v1.RunnerToControlPlane.file:type_name -> secondbox.runner.v1.FileFrame
-	75,  // 137: secondbox.runner.v1.RunnerToControlPlane.pty:type_name -> secondbox.runner.v1.PtyFrame
-	86,  // 138: secondbox.runner.v1.RunnerToControlPlane.port:type_name -> secondbox.runner.v1.PortFrame
-	91,  // 139: secondbox.runner.v1.RunnerToControlPlane.evidence:type_name -> secondbox.runner.v1.Evidence
-	98,  // 140: secondbox.runner.v1.RunnerToControlPlane.instance_terminal:type_name -> secondbox.runner.v1.InstanceTerminal
-	90,  // 141: secondbox.runner.v1.RunnerToControlPlane.local_workspace_result:type_name -> secondbox.runner.v1.LocalWorkspaceResult
-	80,  // 142: secondbox.runner.v1.RunnerToControlPlane.port_direct_consume:type_name -> secondbox.runner.v1.PortDirectConsume
-	83,  // 143: secondbox.runner.v1.RunnerToControlPlane.data_plane_direct_consume:type_name -> secondbox.runner.v1.DataPlaneDirectConsume
-	97,  // 144: secondbox.runner.v1.RunnerToControlPlane.workspace_transfer:type_name -> secondbox.runner.v1.WorkspaceTransferFrame
-	30,  // 145: secondbox.runner.v1.ControlPlaneToRunner.welcome:type_name -> secondbox.runner.v1.RunnerWelcome
-	31,  // 146: secondbox.runner.v1.ControlPlaneToRunner.rejection:type_name -> secondbox.runner.v1.ProtocolRejection
-	46,  // 147: secondbox.runner.v1.ControlPlaneToRunner.assignment:type_name -> secondbox.runner.v1.AssignmentCommand
-	50,  // 148: secondbox.runner.v1.ControlPlaneToRunner.fence:type_name -> secondbox.runner.v1.FenceCommand
-	52,  // 149: secondbox.runner.v1.ControlPlaneToRunner.drain:type_name -> secondbox.runner.v1.DrainCommand
-	63,  // 150: secondbox.runner.v1.ControlPlaneToRunner.exec:type_name -> secondbox.runner.v1.ExecFrame
-	69,  // 151: secondbox.runner.v1.ControlPlaneToRunner.file:type_name -> secondbox.runner.v1.FileFrame
-	75,  // 152: secondbox.runner.v1.ControlPlaneToRunner.pty:type_name -> secondbox.runner.v1.PtyFrame
-	86,  // 153: secondbox.runner.v1.ControlPlaneToRunner.port:type_name -> secondbox.runner.v1.PortFrame
-	87,  // 154: secondbox.runner.v1.ControlPlaneToRunner.local_workspace:type_name -> secondbox.runner.v1.LocalWorkspaceCommand
-	81,  // 155: secondbox.runner.v1.ControlPlaneToRunner.port_direct_admission:type_name -> secondbox.runner.v1.PortDirectAdmission
-	82,  // 156: secondbox.runner.v1.ControlPlaneToRunner.data_plane_direct_open:type_name -> secondbox.runner.v1.DataPlaneDirectOpen
-	84,  // 157: secondbox.runner.v1.ControlPlaneToRunner.data_plane_direct_admission:type_name -> secondbox.runner.v1.DataPlaneDirectAdmission
-	85,  // 158: secondbox.runner.v1.ControlPlaneToRunner.data_plane_cancel:type_name -> secondbox.runner.v1.DataPlaneCancelCommand
-	97,  // 159: secondbox.runner.v1.ControlPlaneToRunner.workspace_transfer:type_name -> secondbox.runner.v1.WorkspaceTransferFrame
-	99,  // 160: secondbox.runner.v1.RunnerControl.Connect:input_type -> secondbox.runner.v1.RunnerToControlPlane
-	100, // 161: secondbox.runner.v1.RunnerControl.Connect:output_type -> secondbox.runner.v1.ControlPlaneToRunner
-	161, // [161:162] is the sub-list for method output_type
-	160, // [160:161] is the sub-list for method input_type
-	160, // [160:160] is the sub-list for extension type_name
-	160, // [160:160] is the sub-list for extension extendee
-	0,   // [0:160] is the sub-list for field type_name
+	79,  // 92: secondbox.runner.v1.DataPlaneDirectOpen.port:type_name -> secondbox.runner.v1.PortDirectOpen
+	40,  // 93: secondbox.runner.v1.DataPlaneDirectConsume.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	39,  // 94: secondbox.runner.v1.DataPlaneDirectConsume.correlation:type_name -> secondbox.runner.v1.Correlation
+	22,  // 95: secondbox.runner.v1.DataPlaneDirectConsume.kind:type_name -> secondbox.runner.v1.DataPlaneSessionKind
+	40,  // 96: secondbox.runner.v1.DataPlaneDirectAdmission.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	22,  // 97: secondbox.runner.v1.DataPlaneDirectAdmission.kind:type_name -> secondbox.runner.v1.DataPlaneSessionKind
+	23,  // 98: secondbox.runner.v1.DataPlaneDirectAdmission.admission:type_name -> secondbox.runner.v1.DataPlaneDirectAdmissionKind
+	40,  // 99: secondbox.runner.v1.DataPlaneCancelCommand.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	22,  // 100: secondbox.runner.v1.DataPlaneCancelCommand.kind:type_name -> secondbox.runner.v1.DataPlaneSessionKind
+	40,  // 101: secondbox.runner.v1.PortFrame.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	39,  // 102: secondbox.runner.v1.PortFrame.correlation:type_name -> secondbox.runner.v1.Correlation
+	76,  // 103: secondbox.runner.v1.PortFrame.open:type_name -> secondbox.runner.v1.PortOpen
+	77,  // 104: secondbox.runner.v1.PortFrame.bytes:type_name -> secondbox.runner.v1.PortBytes
+	54,  // 105: secondbox.runner.v1.PortFrame.credit:type_name -> secondbox.runner.v1.StreamCredit
+	61,  // 106: secondbox.runner.v1.PortFrame.cancel:type_name -> secondbox.runner.v1.ExecCancel
+	78,  // 107: secondbox.runner.v1.PortFrame.terminal:type_name -> secondbox.runner.v1.PortTerminal
+	79,  // 108: secondbox.runner.v1.PortFrame.direct_open:type_name -> secondbox.runner.v1.PortDirectOpen
+	24,  // 109: secondbox.runner.v1.LocalWorkspaceCommand.kind:type_name -> secondbox.runner.v1.LocalWorkspaceCommandKind
+	39,  // 110: secondbox.runner.v1.LocalWorkspaceCommand.correlation:type_name -> secondbox.runner.v1.Correlation
+	24,  // 111: secondbox.runner.v1.LocalWorkspaceReceiptItem.kind:type_name -> secondbox.runner.v1.LocalWorkspaceCommandKind
+	24,  // 112: secondbox.runner.v1.LocalWorkspaceResult.kind:type_name -> secondbox.runner.v1.LocalWorkspaceCommandKind
+	25,  // 113: secondbox.runner.v1.LocalWorkspaceResult.terminal:type_name -> secondbox.runner.v1.LocalWorkspaceTerminalKind
+	88,  // 114: secondbox.runner.v1.LocalWorkspaceResult.inventory:type_name -> secondbox.runner.v1.LocalWorkspaceInventoryItem
+	39,  // 115: secondbox.runner.v1.LocalWorkspaceResult.correlation:type_name -> secondbox.runner.v1.Correlation
+	89,  // 116: secondbox.runner.v1.LocalWorkspaceResult.receipts:type_name -> secondbox.runner.v1.LocalWorkspaceReceiptItem
+	39,  // 117: secondbox.runner.v1.Evidence.correlation:type_name -> secondbox.runner.v1.Correlation
+	26,  // 118: secondbox.runner.v1.WorkspaceTransferResult.terminal:type_name -> secondbox.runner.v1.WorkspaceTransferTerminalKind
+	92,  // 119: secondbox.runner.v1.WorkspaceTransferFrame.open:type_name -> secondbox.runner.v1.WorkspaceTransferOpen
+	93,  // 120: secondbox.runner.v1.WorkspaceTransferFrame.chunk:type_name -> secondbox.runner.v1.WorkspaceTransferChunk
+	54,  // 121: secondbox.runner.v1.WorkspaceTransferFrame.credit:type_name -> secondbox.runner.v1.StreamCredit
+	94,  // 122: secondbox.runner.v1.WorkspaceTransferFrame.commit:type_name -> secondbox.runner.v1.WorkspaceTransferCommit
+	95,  // 123: secondbox.runner.v1.WorkspaceTransferFrame.result:type_name -> secondbox.runner.v1.WorkspaceTransferResult
+	96,  // 124: secondbox.runner.v1.WorkspaceTransferFrame.cancel:type_name -> secondbox.runner.v1.WorkspaceTransferCancel
+	40,  // 125: secondbox.runner.v1.InstanceTerminal.fence:type_name -> secondbox.runner.v1.AssignmentFence
+	27,  // 126: secondbox.runner.v1.InstanceTerminal.reason:type_name -> secondbox.runner.v1.InstanceObservedTerminationReason
+	39,  // 127: secondbox.runner.v1.InstanceTerminal.correlation:type_name -> secondbox.runner.v1.Correlation
+	29,  // 128: secondbox.runner.v1.RunnerToControlPlane.hello:type_name -> secondbox.runner.v1.RunnerHello
+	36,  // 129: secondbox.runner.v1.RunnerToControlPlane.registration:type_name -> secondbox.runner.v1.RunnerRegistration
+	38,  // 130: secondbox.runner.v1.RunnerToControlPlane.heartbeat:type_name -> secondbox.runner.v1.RunnerHeartbeat
+	47,  // 131: secondbox.runner.v1.RunnerToControlPlane.assignment_ack:type_name -> secondbox.runner.v1.AssignmentAck
+	48,  // 132: secondbox.runner.v1.RunnerToControlPlane.assignment_progress:type_name -> secondbox.runner.v1.AssignmentProgress
+	49,  // 133: secondbox.runner.v1.RunnerToControlPlane.assignment_result:type_name -> secondbox.runner.v1.AssignmentResult
+	51,  // 134: secondbox.runner.v1.RunnerToControlPlane.fence_result:type_name -> secondbox.runner.v1.FenceResult
+	53,  // 135: secondbox.runner.v1.RunnerToControlPlane.drain_state:type_name -> secondbox.runner.v1.DrainState
+	63,  // 136: secondbox.runner.v1.RunnerToControlPlane.exec:type_name -> secondbox.runner.v1.ExecFrame
+	69,  // 137: secondbox.runner.v1.RunnerToControlPlane.file:type_name -> secondbox.runner.v1.FileFrame
+	75,  // 138: secondbox.runner.v1.RunnerToControlPlane.pty:type_name -> secondbox.runner.v1.PtyFrame
+	86,  // 139: secondbox.runner.v1.RunnerToControlPlane.port:type_name -> secondbox.runner.v1.PortFrame
+	91,  // 140: secondbox.runner.v1.RunnerToControlPlane.evidence:type_name -> secondbox.runner.v1.Evidence
+	98,  // 141: secondbox.runner.v1.RunnerToControlPlane.instance_terminal:type_name -> secondbox.runner.v1.InstanceTerminal
+	90,  // 142: secondbox.runner.v1.RunnerToControlPlane.local_workspace_result:type_name -> secondbox.runner.v1.LocalWorkspaceResult
+	80,  // 143: secondbox.runner.v1.RunnerToControlPlane.port_direct_consume:type_name -> secondbox.runner.v1.PortDirectConsume
+	83,  // 144: secondbox.runner.v1.RunnerToControlPlane.data_plane_direct_consume:type_name -> secondbox.runner.v1.DataPlaneDirectConsume
+	97,  // 145: secondbox.runner.v1.RunnerToControlPlane.workspace_transfer:type_name -> secondbox.runner.v1.WorkspaceTransferFrame
+	30,  // 146: secondbox.runner.v1.ControlPlaneToRunner.welcome:type_name -> secondbox.runner.v1.RunnerWelcome
+	31,  // 147: secondbox.runner.v1.ControlPlaneToRunner.rejection:type_name -> secondbox.runner.v1.ProtocolRejection
+	46,  // 148: secondbox.runner.v1.ControlPlaneToRunner.assignment:type_name -> secondbox.runner.v1.AssignmentCommand
+	50,  // 149: secondbox.runner.v1.ControlPlaneToRunner.fence:type_name -> secondbox.runner.v1.FenceCommand
+	52,  // 150: secondbox.runner.v1.ControlPlaneToRunner.drain:type_name -> secondbox.runner.v1.DrainCommand
+	63,  // 151: secondbox.runner.v1.ControlPlaneToRunner.exec:type_name -> secondbox.runner.v1.ExecFrame
+	69,  // 152: secondbox.runner.v1.ControlPlaneToRunner.file:type_name -> secondbox.runner.v1.FileFrame
+	75,  // 153: secondbox.runner.v1.ControlPlaneToRunner.pty:type_name -> secondbox.runner.v1.PtyFrame
+	86,  // 154: secondbox.runner.v1.ControlPlaneToRunner.port:type_name -> secondbox.runner.v1.PortFrame
+	87,  // 155: secondbox.runner.v1.ControlPlaneToRunner.local_workspace:type_name -> secondbox.runner.v1.LocalWorkspaceCommand
+	81,  // 156: secondbox.runner.v1.ControlPlaneToRunner.port_direct_admission:type_name -> secondbox.runner.v1.PortDirectAdmission
+	82,  // 157: secondbox.runner.v1.ControlPlaneToRunner.data_plane_direct_open:type_name -> secondbox.runner.v1.DataPlaneDirectOpen
+	84,  // 158: secondbox.runner.v1.ControlPlaneToRunner.data_plane_direct_admission:type_name -> secondbox.runner.v1.DataPlaneDirectAdmission
+	85,  // 159: secondbox.runner.v1.ControlPlaneToRunner.data_plane_cancel:type_name -> secondbox.runner.v1.DataPlaneCancelCommand
+	97,  // 160: secondbox.runner.v1.ControlPlaneToRunner.workspace_transfer:type_name -> secondbox.runner.v1.WorkspaceTransferFrame
+	99,  // 161: secondbox.runner.v1.RunnerControl.Connect:input_type -> secondbox.runner.v1.RunnerToControlPlane
+	100, // 162: secondbox.runner.v1.RunnerControl.Connect:output_type -> secondbox.runner.v1.ControlPlaneToRunner
+	162, // [162:163] is the sub-list for method output_type
+	161, // [161:162] is the sub-list for method input_type
+	161, // [161:161] is the sub-list for extension type_name
+	161, // [161:161] is the sub-list for extension extendee
+	0,   // [0:161] is the sub-list for field type_name
 }
 
 func init() { file_contracts_runner_v1_runner_proto_init() }

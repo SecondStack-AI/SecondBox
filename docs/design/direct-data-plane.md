@@ -86,11 +86,12 @@ Each phase is independently shippable and leaves all admitted transports working
 | Phase | Change | Relay state |
 | --- | --- | --- |
 | 1 — security and generalization | TLS 1.3 and SPKI pinning; `SBXDP1`; session-kind discriminator; Ports remain end to end | Unchanged |
-| 2 — Exec and File | Direct and proxied streaming; one-shot Exec uses one bounded completion message | Retained for PTY |
-| 3 — PTY | Direct and proxied terminal sessions; runner replay ring; detach and reattach parity | Present until parity is proven |
-| 4 — removal | Delete relay implementation and service paths; drop frame tables and accumulated payload columns; remove relay conformance | Deleted |
+| 2 — Exec and File | Direct and proxied streaming; one-shot Exec uses one bounded completion message | Retained for PTY and Ports |
+| 3 — PTY | Direct and proxied terminal sessions; runner replay ring; detach and reattach parity | Retained for Ports |
+| 4 — Ports | Relayed callers use the proxied transport; direct admission and cancellation use payload-free commands | Present but unused by admitted transports |
+| 5 — removal | Delete relay implementation and service paths; drop frame tables and accumulated payload columns; remove relay conformance | Deleted |
 
-Phase 4 also updates `runner-protocol.md`, `networking-and-ports.md`, and the repository transport rules.
+Phase 5 also updates `runner-protocol.md`, `networking-and-ports.md`, and the repository transport rules.
 
 ## What must not change
 

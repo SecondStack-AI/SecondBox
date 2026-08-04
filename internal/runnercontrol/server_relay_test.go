@@ -44,11 +44,11 @@ func TestNewServerRequiresEachConfiguredDataPlaneTransport(t *testing.T) {
 		runnerv1.RunnerFeature_RUNNER_FEATURE_PORT_PROXY,
 	)
 	if _, err := NewServer(config); err == nil {
-		t.Fatal("Port proxy server accepted a nil durable relay")
+		t.Fatal("Port proxy server accepted a nil Port session recorder")
 	}
-	config.FrameRelay = &recordingFrameRelay{}
+	config.PortSessions = &recordingFrameRelay{}
 	if _, err := NewServer(config); err != nil {
-		t.Fatalf("Port proxy server with relay: %v", err)
+		t.Fatalf("Port proxy server with live recorder: %v", err)
 	}
 }
 
@@ -479,6 +479,14 @@ func (relay *recordingFrameRelay) MarkOutboundFrameDelivered(
 }
 
 func (*recordingFrameRelay) PersistInboundFrame(
+	context.Context,
+	InboundRelayFrame,
+	time.Time,
+) (bool, error) {
+	return true, nil
+}
+
+func (*recordingFrameRelay) RecordPortSessionFrame(
 	context.Context,
 	InboundRelayFrame,
 	time.Time,

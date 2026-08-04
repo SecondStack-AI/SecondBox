@@ -57,7 +57,7 @@ func TestPostgresDirectPortTransportAdmissionAndCredentialConsumption(t *testing
 
 	// The home Runner is admitted with the assignment-bound session state and the
 	// credential digest, never the credential itself.
-	open := directPortOpenFrame(t, fixture.pool, direct.ID)
+	open := directPortOpenCommand(t, fixture.pool, direct.ID)
 	if open.GetGuestPort() != 8080 || open.GetProtocol() != "tcp" ||
 		open.GetPortName() != "web" || open.GetLeaseId() != fixture.leaseID ||
 		open.GetDeadlineUnixMs() != uint64(direct.ExpiresAt.UTC().UnixMilli()) ||
@@ -148,15 +148,14 @@ func TestPostgresDirectPortTransportAdmissionAndCredentialConsumption(t *testing
 		t.Fatalf("replayed direct credential error = %v", err)
 	}
 
-	// No Port payload byte is persisted for a direct session: the only durable
-	// frame is the admitting Open.
+	// Direct admission is payload-free control, so the frame relay remains empty.
 	var frameCount int64
 	if err := fixture.pool.QueryRow(t.Context(), `
 		SELECT count(*) FROM secondbox.data_plane_frames WHERE session_id=$1`, direct.ID,
 	).Scan(&frameCount); err != nil {
 		t.Fatal(err)
 	}
-	if frameCount != 1 {
+	if frameCount != 0 {
 		t.Fatalf("direct PortSession durable frame count = %d", frameCount)
 	}
 }
@@ -466,7 +465,7 @@ func seedAdvertisedDataPlaneRunner(
 	}
 }
 
-func directPortOpenFrame(
+func directPortOpenCommand(
 	t *testing.T,
 	pool *pgxpool.Pool,
 	sessionID string,
@@ -474,9 +473,8 @@ func directPortOpenFrame(
 	t.Helper()
 	var payload []byte
 	if err := pool.QueryRow(t.Context(), `
-		SELECT payload FROM secondbox.data_plane_frames
-		WHERE session_id=$1 AND direction='outbound' AND sequence=1`,
-		sessionID,
+		SELECT payload FROM secondbox.runner_commands WHERE id=$1`,
+		sessionID+"_direct_open",
 	).Scan(&payload); err != nil {
 		t.Fatal(err)
 	}
@@ -484,9 +482,13 @@ func directPortOpenFrame(
 	if err := proto.Unmarshal(payload, &message); err != nil {
 		t.Fatal(err)
 	}
-	open := message.GetPort().GetDirectOpen()
+	command := message.GetDataPlaneDirectOpen()
+	if command == nil || command.Kind != runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PORT {
+		t.Fatalf("direct PortSession admitting command = %#v", &message)
+	}
+	open := command.GetPort()
 	if open == nil {
-		t.Fatalf("direct PortSession admitting frame = %#v", message.GetPort())
+		t.Fatalf("direct PortSession admitting command = %#v", command)
 	}
 	return open
 }

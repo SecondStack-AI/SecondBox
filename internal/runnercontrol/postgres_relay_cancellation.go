@@ -441,6 +441,8 @@ func (relay *PostgresFrameRelay) cancelDataPlaneSession(
 	terminalKind := runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_CANCELLED.String()
 	if session.Kind == "exec" || session.Kind == "terminal" {
 		terminalKind = runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED.String()
+	} else if session.Kind == "port" {
+		terminalKind = runnerv1.PortTerminalKind_PORT_TERMINAL_KIND_CANCELLED.String()
 	}
 	if err := relay.enqueueCancellation(ctx, tx, session, terminalKind, reason, now.UTC()); err != nil {
 		return false, err
@@ -500,13 +502,15 @@ func (relay *PostgresFrameRelay) enqueueCancellation(
 	detail string,
 	now time.Time,
 ) error {
-	if session.Kind == "exec" || session.Kind == "terminal" || session.Kind == "file" {
+	if session.Kind == "exec" || session.Kind == "terminal" || session.Kind == "file" || session.Kind == "port" {
 		kind := runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC
 		switch session.Kind {
 		case "file":
 			kind = runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE
 		case "terminal":
 			kind = runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY
+		case "port":
+			kind = runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PORT
 		}
 		message := &runnerv1.ControlPlaneToRunner{
 			Message: &runnerv1.ControlPlaneToRunner_DataPlaneCancel{DataPlaneCancel: &runnerv1.DataPlaneCancelCommand{
@@ -522,13 +526,17 @@ func (relay *PostgresFrameRelay) enqueueCancellation(
 		if err != nil {
 			return fmt.Errorf("SecondBox data-plane cancellation command encoding: %w", err)
 		}
+		commandID := session.ID + "_cancel"
+		if session.Kind == "port" {
+			commandID = session.ID + "_port_cancel"
+		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO secondbox.runner_commands (
 				id,runner_id,assignment_id,kind,payload,state,target_connection_id,
 				delivery_count,created_at,updated_at,delivered_at
 			) VALUES ($1,$2,$3,'data-plane-cancel',$4,'pending','',0,$5,$5,NULL)
 			ON CONFLICT (id) DO NOTHING`,
-			session.ID+"_cancel", session.RunnerID, session.AssignmentID, payload, now.UTC(),
+			commandID, session.RunnerID, session.AssignmentID, payload, now.UTC(),
 		); err != nil {
 			return fmt.Errorf("SecondBox data-plane cancellation command insert: %w", err)
 		}

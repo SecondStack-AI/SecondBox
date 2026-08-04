@@ -324,6 +324,46 @@ func TestDirectDataPlaneCarriesTypedExecFileAndPTYMessages(t *testing.T) {
 	}
 }
 
+func TestDirectPortAdmissionAndCancellationUseDataPlaneCommands(t *testing.T) {
+	service, err := NewRunnerProtocolService(
+		testRunnerConfig(), &relayAssignmentBackend{}, staticProtocolConnector{stream: &threadSafeRunnerStream{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fence := relayRunnerFence()
+	service.recordActiveAssignment(fence, "fc-instance-1")
+	credential := "direct-port-command-credential"
+	digest := sha256.Sum256([]byte(credential))
+	deadline := time.Now().Add(time.Minute).UTC()
+	if err := service.registerDirectDataPlaneSession(&runnerprotocol.DataPlaneDirectOpen{
+		Fence: cloneRunnerFence(fence), OperationId: "direct-port", StreamId: "direct-port-stream",
+		Correlation:    relayOperationCorrelation(fence, "direct-port", "request-direct-port", "lease-direct-port"),
+		Kind:           runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PORT,
+		DeadlineUnixMs: uint64(deadline.UnixMilli()), CredentialDigest: digest[:], StreamWindowBytes: 64,
+		Port: &runnerprotocol.PortDirectOpen{
+			GuestPort: 8080, Protocol: "tcp", PortName: "web",
+			DeadlineUnixMs: uint64(deadline.UnixMilli()), CredentialDigest: digest[:],
+			LeaseId: "lease-direct-port",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !service.directPorts.hasSession("direct-port") {
+		t.Fatal("direct Port command did not register the session")
+	}
+	if err := service.handleDataPlaneCancel(&runnerprotocol.DataPlaneCancelCommand{
+		Fence: cloneRunnerFence(fence), OperationId: "direct-port", StreamId: "direct-port-stream",
+		Kind:   runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PORT,
+		Reason: "test Port cancellation",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if service.directPorts.hasSession("direct-port") {
+		t.Fatal("direct Port command cancellation retained the session")
+	}
+}
+
 func registerDirectDataPlaneTestSession(
 	t *testing.T,
 	service *RunnerProtocolService,

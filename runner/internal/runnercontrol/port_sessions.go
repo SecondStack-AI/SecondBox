@@ -58,8 +58,8 @@ func (s *RunnerProtocolService) handlePortFrame(
 	if err != nil {
 		return fmt.Errorf("SecondBox runner encode Port frame: %w", err)
 	}
-	// A direct PortSession is carried by a caller socket rather than by durable
-	// frames, so its only control-plane frames are the admitting Open and a
+	// A direct PortSession is carried by a caller socket rather than by proxied
+	// frames, so its only control-plane messages are the admitting Open and a
 	// Cancel that revokes it.
 	if frame.GetCancel() != nil && s.directPorts.hasSession(frame.OperationId) {
 		reason := frame.GetCancel().GetReason()

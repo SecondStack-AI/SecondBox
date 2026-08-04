@@ -685,9 +685,10 @@ enum DataPlaneSessionKind {
   DATA_PLANE_SESSION_KIND_EXEC = 1;
   DATA_PLANE_SESSION_KIND_FILE = 2;
   DATA_PLANE_SESSION_KIND_PTY = 3;
+  DATA_PLANE_SESSION_KIND_PORT = 4;
 }
 
-// DataPlaneDirectOpen admits one payload-free direct Exec, PTY, or File session.
+// DataPlaneDirectOpen admits one payload-free direct Exec, PTY, File, or Port session.
 // The operation request follows only after the caller spends the credential on
 // the SBXDP1 connection.
 message DataPlaneDirectOpen {
@@ -701,6 +702,7 @@ message DataPlaneDirectOpen {
   uint64 deadline_unix_ms = 8;
   bytes credential_digest = 9;
   uint64 stream_window_bytes = 10;
+  PortDirectOpen port = 11;
 }
 
 message DataPlaneDirectConsume {
@@ -731,7 +733,8 @@ message DataPlaneDirectAdmission {
 }
 
 // DataPlaneCancelCommand is durable control only. It carries no stdin, output,
-// or File content and may therefore survive a Runner reconnect in PostgreSQL.
+// File content, or Port bytes and may therefore survive a Runner reconnect in
+// PostgreSQL.
 message DataPlaneCancelCommand {
   string message_id = 1;
   uint64 sequence = 2;

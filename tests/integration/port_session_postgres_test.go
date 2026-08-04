@@ -46,7 +46,7 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seedRelayReadyAssignment(t, sandbox, now)
+	seed := seedRelayReadyAssignment(t, sandbox, now)
 	lease, err := controlPlane.AcquireSandboxLease(
 		t.Context(), principal, sandbox.ID, sandbox.Generation, "port-session-lease", 60,
 	)
@@ -239,10 +239,8 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 	}
 	var portCancellationPayload []byte
 	if err := pool.QueryRow(t.Context(), `
-		SELECT payload FROM secondbox.data_plane_frames
-		WHERE session_id=$1 AND direction='outbound'
-		ORDER BY sequence DESC LIMIT 1`,
-		leaseSwept.ID,
+		SELECT payload FROM secondbox.runner_commands WHERE id=$1`,
+		leaseSwept.ID+"_port_cancel",
 	).Scan(&portCancellationPayload); err != nil {
 		t.Fatal(err)
 	}
@@ -250,9 +248,10 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 	if err := proto.Unmarshal(portCancellationPayload, &portCancellation); err != nil {
 		t.Fatal(err)
 	}
-	if cancel := portCancellation.GetPort().GetCancel(); cancel == nil ||
+	if cancel := portCancellation.GetDataPlaneCancel(); cancel == nil ||
+		cancel.Kind != runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PORT ||
 		cancel.Reason != "operation Lease is inactive" {
-		t.Fatalf("inactive Lease Port cancellation = %#v", portCancellation.GetPort())
+		t.Fatalf("inactive Lease Port cancellation = %#v", portCancellation.GetDataPlaneCancel())
 	}
 	leaseSweptState, err := portService.GetSandboxPortSession(
 		t.Context(), principal, sandbox.ID, leaseSwept.ID, contracts.PortTransportRelay,
@@ -300,18 +299,22 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	seedAdvertisedDataPlaneRunner(t, pool, seed.RunnerID, now)
 	if _, err := pool.Exec(t.Context(), `
-		UPDATE secondbox.runner_connections
-		SET state='closed',disconnected_at=$2
-		WHERE runner_id=$1 AND state='active'`,
-		disconnectedTunnel.RunnerID, now,
+		UPDATE secondbox.runners SET active_connection_id=$2 WHERE id=$1`,
+		seed.RunnerID, seed.ConnectionOne,
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := portService.NextPortTunnelEvent(
-		t.Context(), disconnectedTunnel, -1,
-	); !errors.Is(err, ports.ErrLifecycleUnavailable) {
-		t.Fatalf("runner disconnect Port error = %v", err)
+	stateStore, err := runnercontrol.NewPostgresStateStore(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stateStore.Close)
+	if err := stateStore.CloseConnection(
+		t.Context(), disconnectedTunnel.RunnerID, seed.ConnectionOne, now,
+	); err != nil {
+		t.Fatal(err)
 	}
 	var disconnectedState, disconnectedActivity string
 	if err := pool.QueryRow(t.Context(), `
@@ -322,7 +325,7 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 	).Scan(&disconnectedState, &disconnectedActivity); err != nil {
 		t.Fatal(err)
 	}
-	if disconnectedState != contracts.PortSessionStateFenced || disconnectedActivity != "closed" {
+	if disconnectedState != contracts.PortSessionStateClosed || disconnectedActivity != "closed" {
 		t.Fatalf("runner disconnect state=%q activity=%q", disconnectedState, disconnectedActivity)
 	}
 

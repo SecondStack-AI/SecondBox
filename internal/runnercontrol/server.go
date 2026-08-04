@@ -66,6 +66,7 @@ type ServerConfig struct {
 	FrameRelay          ProtocolFrameRelay
 	LiveDataPlane       *LiveDataPlaneBroker
 	DirectPorts         DirectPortAdmitter
+	PortSessions        PortSessionFrameRecorder
 	DirectDataPlane     DirectDataPlaneAdmitter
 	WorkspaceTransfers  WorkspaceTransferBroker
 	SupportedVersions   VersionRange
@@ -141,8 +142,8 @@ func NewServer(config ServerConfig) (*Server, error) {
 			return nil, errors.New("SecondBox runner control Exec, PTY, and File features require the live data-plane broker")
 		}
 		if feature == runnerv1.RunnerFeature_RUNNER_FEATURE_PORT_PROXY &&
-			config.FrameRelay == nil {
-			return nil, errors.New("SecondBox runner control Port feature requires the durable frame relay")
+			(config.LiveDataPlane == nil || config.PortSessions == nil) {
+			return nil, errors.New("SecondBox runner control Port feature requires the live data-plane broker and Port session recorder")
 		}
 	}
 	return &Server{config: config}, nil
@@ -743,15 +744,21 @@ func (server *Server) persistEvent(ctx context.Context, event Event, receivedAt 
 		}
 		return server.config.LiveDataPlane.Deliver(ctx, event)
 	case EventPort:
-		if server.config.FrameRelay == nil {
-			return errors.New("SecondBox runner control data-plane relay is not configured")
+		if server.config.PortSessions == nil {
+			return errors.New("SecondBox runner control Port session recorder is not configured")
 		}
-		_, err := server.config.FrameRelay.PersistInboundFrame(ctx, InboundRelayFrame{
+		deliver, err := server.config.PortSessions.RecordPortSessionFrame(ctx, InboundRelayFrame{
 			RunnerID:     event.RunnerID,
 			ConnectionID: event.ConnectionID,
 			Message:      event.Message,
 		}, receivedAt)
-		return err
+		if err != nil || !deliver {
+			return err
+		}
+		if server.config.LiveDataPlane == nil {
+			return ErrLiveDataPlaneUnavailable
+		}
+		return server.config.LiveDataPlane.Deliver(ctx, event)
 	default:
 		return fmt.Errorf("SecondBox runner control received unexpected event %q", event.Kind)
 	}
