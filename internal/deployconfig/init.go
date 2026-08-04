@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -16,6 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
+	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -99,6 +102,17 @@ func InitDevelopment(directory string) (string, error) {
 	if err := writeAtomic(filepath.Join(secrets, "development-signed-assets.json"), []byte(asset), 0o600, false); err != nil {
 		return "", err
 	}
+	developmentRelease, err := developmentReleaseManifest()
+	if err != nil {
+		return "", err
+	}
+	releaseManifest, err := json.MarshalIndent(developmentRelease, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := writeAtomic(filepath.Join(absolute, "development-artifact-manifest.json"), append(releaseManifest, '\n'), 0o644, false); err != nil {
+		return "", err
+	}
 	manifest := developmentManifest(postgresPassword, objectAccess, objectSecret, platformToken, runnerCredential)
 	encoded, err := encodeManifest(manifest)
 	if err != nil {
@@ -113,7 +127,31 @@ func InitDevelopment(directory string) (string, error) {
 }
 
 func developmentManifest(postgresPassword, objectAccess, objectSecret, platformToken, runnerCredential string) ManifestV1 {
-	return ManifestV1{SchemaVersion: 1, Deployment: Deployment{Mode: "development", PublicBaseURL: "http://127.0.0.1:8080", TLSTermination: "development-loopback", ControlPlaneImage: "secondbox-control-plane:development", RunnerImage: "secondbox-runner:development", PostgresImage: "docker.io/library/postgres:18.4-bookworm", ObjectStoreImage: "docker.io/rustfs/rustfs:1.0.0-beta.11", ObjectStoreClientImage: "quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z", APIBindIP: "127.0.0.1", APIPublishedPort: integer(8080), ListenAddress: "0.0.0.0:8080", RunnerBindIP: "127.0.0.1", RunnerPublishedPort: integer(9443), RunnerListenAddress: "0.0.0.0:9443", LogPath: "/var/log/secondbox/control-plane.jsonl", SignedAssetCatalog: "secrets/development-signed-assets.json", SignedAssetCatalogPath: "/etc/secondbox/signed-assets.json", DevelopmentWaitSeconds: integer(180)}, Database: Database{Mode: "bundled", BindIP: "127.0.0.1", PublishedPort: integer(5432), Name: "secondbox", User: "secondbox", PasswordFile: postgresPassword}, ObjectStore: ObjectStore{Mode: "bundled", Endpoint: "http://object-store:9000", Bucket: "secondbox-development", Region: "us-east-1", UsePathStyle: boolean(true), TempDirectory: "/tmp", AccessKeyFile: objectAccess, SecretKeyFile: objectSecret, BindIP: "127.0.0.1", PublishedPort: integer(9000), ConsolePublishedPort: integer(9001)}, RunnerTrust: RunnerTrust{EnrollmentCredentialFile: runnerCredential, CACertificateFile: "secrets/runner-pki/runner-ca.crt", CAPrivateKeyFile: "secrets/runner-pki/runner-ca.key", ServerCertificateFile: "secrets/runner-pki/server.crt", ServerPrivateKeyFile: "secrets/runner-pki/server.key", ServerName: "control-plane", CertificateLifetimeDays: integer(825)}, Applications: Applications{PlatformTokenFile: platformToken, ApplicationAuthoritiesFile: "secrets/application-authorities.json"}, Policy: Policy{DataPlaneRetentionSeconds: integer(86400), DataPlanePollIntervalMilliseconds: integer(250), RunnerCommandPollIntervalMilliseconds: integer(250), RunnerEnabledFeatures: "exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy", DefaultSubjectMaxSandboxes: integer(100), DefaultSubjectMaxActiveInstances: integer(20), DefaultSubjectMaxCPUMillis: integer(80000), DefaultSubjectMaxMemoryBytes: integer(171798691840), DefaultSubjectMaxArtifactBytes: integer(1099511627776), DefaultSubjectMaxSnapshots: integer(500), DefaultSubjectMaxArtifacts: integer(5000), DefaultSubjectMaxPortSessions: integer(100), DefaultSubjectMaxConcurrentOperations: integer(20), AgentCompartmentPool: "secondbox-local", AgentCompartmentRuntimeBundleDigest: developmentBundleDigest, AgentCompartmentToolchainBundleDigest: developmentBundleDigest, CodingEnvironmentPool: "secondbox-local", CodingEnvironmentRuntimeBundleDigest: developmentBundleDigest, CodingEnvironmentToolchainBundleDigest: developmentBundleDigest}}
+	pool := StandardRunnerPool{Bundle: standardresources.AgentCompartment, Name: standardresources.PoolAMD64, Architectures: []string{"amd64"}, Capabilities: []string{"exec-streaming", "file-streaming", "pty", "evidence", "local-workspace", "port-proxy"}, State: "ready", MaxSandboxes: integer(20), MaxCPUMillis: integer(80000), MaxMemoryBytes: integer(171798691840)}
+	codingPool := pool
+	codingPool.Bundle = standardresources.DurableCoding
+	return ManifestV1{SchemaVersion: 1, Deployment: Deployment{Mode: "development", PublicBaseURL: "http://127.0.0.1:8080", TLSTermination: "development-loopback", ControlPlaneImage: "secondbox-control-plane:development", RunnerImage: "secondbox-runner:development", PostgresImage: "docker.io/library/postgres:18.4-bookworm", ObjectStoreImage: "docker.io/rustfs/rustfs:1.0.0-beta.11", ObjectStoreClientImage: "quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z", APIBindIP: "127.0.0.1", APIPublishedPort: integer(8080), ListenAddress: "0.0.0.0:8080", RunnerBindIP: "127.0.0.1", RunnerPublishedPort: integer(9443), RunnerListenAddress: "0.0.0.0:9443", LogPath: "/var/log/secondbox/control-plane.jsonl", SignedAssetCatalog: "secrets/development-signed-assets.json", SignedAssetCatalogPath: "/etc/secondbox/signed-assets.json", DevelopmentWaitSeconds: integer(180)}, Database: Database{Mode: "bundled", BindIP: "127.0.0.1", PublishedPort: integer(5432), Name: "secondbox", User: "secondbox", PasswordFile: postgresPassword}, ObjectStore: ObjectStore{Mode: "bundled", Endpoint: "http://object-store:9000", Bucket: "secondbox-development", Region: "us-east-1", UsePathStyle: boolean(true), TempDirectory: "/tmp", AccessKeyFile: objectAccess, SecretKeyFile: objectSecret, BindIP: "127.0.0.1", PublishedPort: integer(9000), ConsolePublishedPort: integer(9001)}, RunnerTrust: RunnerTrust{EnrollmentCredentialFile: runnerCredential, CACertificateFile: "secrets/runner-pki/runner-ca.crt", CAPrivateKeyFile: "secrets/runner-pki/runner-ca.key", ServerCertificateFile: "secrets/runner-pki/server.crt", ServerPrivateKeyFile: "secrets/runner-pki/server.key", ServerName: "control-plane", CertificateLifetimeDays: integer(825)}, Applications: Applications{PlatformTokenFile: platformToken, ApplicationAuthoritiesFile: "secrets/application-authorities.json"}, StandardResources: StandardResources{ArtifactManifest: "development-artifact-manifest.json", Bundles: []string{standardresources.AgentCompartment, standardresources.DurableCoding}, RunnerPools: []StandardRunnerPool{pool, codingPool}, ApplyWaitSeconds: integer(180)}, Policy: Policy{DataPlaneRetentionSeconds: integer(86400), DataPlanePollIntervalMilliseconds: integer(250), RunnerCommandPollIntervalMilliseconds: integer(250), RunnerEnabledFeatures: "exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy", DefaultSubjectMaxSandboxes: integer(100), DefaultSubjectMaxActiveInstances: integer(20), DefaultSubjectMaxCPUMillis: integer(80000), DefaultSubjectMaxMemoryBytes: integer(171798691840), DefaultSubjectMaxArtifactBytes: integer(1099511627776), DefaultSubjectMaxSnapshots: integer(500), DefaultSubjectMaxArtifacts: integer(5000), DefaultSubjectMaxPortSessions: integer(100), DefaultSubjectMaxConcurrentOperations: integer(20)}}
+}
+
+func developmentReleaseManifest() (releasecontract.ArtifactManifest, error) {
+	identity := releasecontract.Identity{Version: "0.0.0-development", Tag: "v0.0.0-development", SourceCommit: strings.Repeat("d", 40)}
+	reference := func(name string) releasecontract.Reference {
+		return releasecontract.Reference{Location: "https://example.invalid/secondbox-development/" + name, Digest: developmentBundleDigest}
+	}
+	platform := "linux/amd64"
+	binaries := []releasecontract.BinaryArtifact{}
+	for _, name := range []string{"secondbox", "secondbox-deploy"} {
+		binaries = append(binaries, releasecontract.BinaryArtifact{Identity: identity, Name: name, Platform: platform, Location: releasecontract.BinaryLocation(identity.Version, name, platform), SHA256: strings.Repeat("d", 64)})
+	}
+	bundles := []releasecontract.StandardBundleArtifact{}
+	for _, name := range []string{standardresources.AgentCompartment, standardresources.DurableCoding} {
+		profile, err := standardresources.ProfileLineage(name, developmentBundleDigest)
+		if err != nil {
+			return releasecontract.ArtifactManifest{}, err
+		}
+		bundles = append(bundles, releasecontract.StandardBundleArtifact{Identity: identity, Name: name, Document: reference(name + ".json"), Profiles: []releasecontract.StandardProfileIdentity{{Name: name, Revision: 1, SpecDigest: profile.Revisions[0].SpecDigest}}})
+	}
+	return releasecontract.ArtifactManifest{SchemaVersion: releasecontract.ArtifactManifestSchema, Identity: identity, OpenAPI: releasecontract.OpenAPIArtifact{Identity: identity, Reference: reference("openapi.json")}, RunnerProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, GuestProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, Platforms: releasecontract.PlatformMatrix{HostBinaries: []string{platform}, ControlPlane: []string{platform}, Runner: []string{platform}, Guest: []string{platform}, QualifiedRunnerGuest: []string{platform}}, GoSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.GoModule + "@" + identity.Tag, Package: reference("go-sdk")}, TypeScriptSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.TypeScriptPackage + "@" + identity.Version, Package: reference("typescript-sdk")}, ControlPlane: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.ControlPlaneImage + "@" + developmentBundleDigest}, Runner: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.RunnerImage + "@" + developmentBundleDigest}, MicroVM: releasecontract.MicroVMArtifact{Identity: identity, ImageReference: releasecontract.MicroVMImage + "@" + developmentBundleDigest, SignedManifestDigest: developmentBundleDigest, SigningKeyFingerprint: "SHA256:" + strings.Repeat("D", 64)}, Binaries: binaries, SBOMs: []releasecontract.Reference{reference("sbom.json")}, ArtifactAttestations: []releasecontract.Reference{reference("attestation.json")}, SourceFreeSuite: releasecontract.Reference{Location: releasecontract.SourceFreeSuiteLocation(identity.Version), Digest: developmentBundleDigest}, StandardBundles: bundles}, nil
 }
 
 func encodeManifest(manifest ManifestV1) ([]byte, error) {
@@ -238,6 +276,25 @@ func InitProductionFromManifest(sourcePath, directory string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return materializeProduction(manifest, sourcePath, directory, nil)
+}
+
+// InitProductionFromRelease binds immutable software facts from a verified
+// release while preserving every operator-owned authority and placement input.
+func InitProductionFromRelease(sourcePath, directory string, release releasecontract.ArtifactManifest, releaseBytes []byte) (string, error) {
+	manifest, err := ReadManifest(sourcePath)
+	if err != nil {
+		return "", err
+	}
+	manifest.Deployment.ControlPlaneImage = release.ControlPlane.Reference
+	manifest.Deployment.RunnerImage = release.Runner.Reference
+	for index := range manifest.Runners {
+		manifest.Runners[index].SoftwareVersion = release.Version
+	}
+	return materializeProduction(manifest, sourcePath, directory, releaseBytes)
+}
+
+func materializeProduction(manifest ManifestV1, sourcePath, directory string, releaseBytes []byte) (string, error) {
 	if manifest.Deployment.Mode != "production" {
 		return "", manifestError("production automation input must select production mode", nil)
 	}
@@ -250,6 +307,11 @@ func InitProductionFromManifest(sourcePath, directory string) (string, error) {
 		return filepath.Clean(filepath.Join(sourceBase, reference))
 	}
 	manifest.Deployment.SignedAssetCatalog = absoluteReference(manifest.Deployment.SignedAssetCatalog)
+	if releaseBytes == nil {
+		manifest.StandardResources.ArtifactManifest = absoluteReference(manifest.StandardResources.ArtifactManifest)
+	} else {
+		manifest.StandardResources.ArtifactManifest = "release-artifact-manifest.json"
+	}
 	manifest.Database.URLFile = absoluteReference(manifest.Database.URLFile)
 	manifest.Database.PasswordFile = absoluteReference(manifest.Database.PasswordFile)
 	manifest.ObjectStore.AccessKeyFile = absoluteReference(manifest.ObjectStore.AccessKeyFile)
@@ -283,6 +345,11 @@ func InitProductionFromManifest(sourcePath, directory string) (string, error) {
 			_ = os.RemoveAll(absolute)
 		}
 	}()
+	if releaseBytes != nil {
+		if err := writeAtomic(filepath.Join(absolute, manifest.StandardResources.ArtifactManifest), releaseBytes, 0o644, false); err != nil {
+			return "", err
+		}
+	}
 	encoded, err := encodeManifest(manifest)
 	if err != nil {
 		return "", err

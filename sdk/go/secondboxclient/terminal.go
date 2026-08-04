@@ -58,7 +58,11 @@ func (handle *SandboxHandle) CancelTerminal(
 		return TerminalSession{}, errors.New("SecondBox Terminal session ID is required")
 	}
 	if idempotencyKey == "" {
-		return TerminalSession{}, errors.New("SecondBox Terminal cancellation idempotency key is required")
+		generated, err := NewIdempotencyKey()
+		if err != nil {
+			return TerminalSession{}, err
+		}
+		idempotencyKey = generated
 	}
 	current := handle.Snapshot()
 	headers := handle.GenerationHeaders("")

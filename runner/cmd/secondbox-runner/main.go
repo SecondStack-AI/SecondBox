@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -21,7 +22,19 @@ import (
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
 
+var (
+	releaseVersion = "0.0.0-development"
+	sourceCommit   = "development"
+)
+
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		if err := json.NewEncoder(os.Stdout).Encode(map[string]string{"version": releaseVersion, "sourceCommit": sourceCommit}); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if handled, err := jailersupervisor.RunInvocation(os.Args[1:]); handled {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "SecondBox jailer supervisor failed: %v\n", err)

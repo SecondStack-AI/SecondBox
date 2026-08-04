@@ -5,7 +5,6 @@ package sdklive_test
 import (
 	"context"
 	"errors"
-	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -22,38 +21,28 @@ func TestGoSDKLiveControlPlaneContract(t *testing.T) {
 	applicationClient := fixture.applicationClient
 	profile := fixture.profile
 
-	operation := requestLiveJSON[secondboxclient.Operation](
-		t,
-		applicationClient,
-		"createSandbox",
-		secondboxclient.CallOptions{
-			Headers: liveIdempotencyHeaders("go-create-sandbox"),
-			Body: encodeLiveJSON(t, secondboxclient.CreateSandboxRequest{
-				Profile: profile.Name,
-				Metadata: secondboxclient.Metadata{
-					"sdk":     "go",
-					"purpose": "live-contract",
-				},
-			}),
-		},
-	)
+	handle, operation, err := applicationClient.CreateSandbox(t.Context(), secondboxclient.CreateSandboxRequest{
+		Profile:  profile.Name,
+		Metadata: secondboxclient.Metadata{"sdk": "go", "purpose": "live-contract"},
+	}, "go-create-sandbox")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if operation.ID == "" || operation.SandboxID == "" {
 		t.Fatalf("Go SDK live Sandbox operation = %#v", operation)
 	}
 
-	sandbox := requestLiveJSON[secondboxclient.Sandbox](
-		t,
-		applicationClient,
-		"getSandbox",
-		secondboxclient.CallOptions{
-			PathParameters: map[string]string{"sandboxId": string(operation.SandboxID)},
-		},
-	)
+	sandbox := handle.Snapshot()
 	if sandbox.Metadata["sdk"] != "go" || sandbox.ProfileRevisionID != profile.CurrentRevision.ID {
 		t.Fatalf("Go SDK live Sandbox metadata or pinned profile revision = %#v", sandbox)
 	}
 
-	handle := secondboxclient.NewSandboxHandle(applicationClient, sandbox)
+	page, err := applicationClient.ListSandboxes(t.Context(), secondboxclient.SandboxListOptions{
+		Metadata: secondboxclient.Metadata{"sdk": "go", "purpose": "live-contract"},
+	})
+	if err != nil || len(page.Items) != 1 || page.Items[0].ID != sandbox.ID {
+		t.Fatalf("Go SDK high-level Sandbox list = %#v, %v", page, err)
+	}
 	refreshed, err := handle.Refresh(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -94,18 +83,12 @@ func newGoLiveSubjectFixture(t *testing.T) goLiveSubjectFixture {
 		t.Fatal(err)
 	}
 	profileName := secondboxclient.ProfileName("go-sdk-live")
-	profile := requestLiveJSON[secondboxclient.Profile](
-		t,
-		applicationClient,
-		"createProfile",
-		secondboxclient.CallOptions{
-			Headers: liveIdempotencyHeaders("go-create-profile"),
-			Body: encodeLiveJSON(t, secondboxclient.CreateProfileRequest{
-				Name: profileName,
-				Spec: liveProfileRevisionSpec(),
-			}),
-		},
-	)
+	profile, err := applicationClient.CreateProfile(t.Context(), secondboxclient.CreateProfileRequest{
+		Name: profileName, Spec: liveProfileRevisionSpec(),
+	}, "go-create-profile")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if profile.CurrentRevision.ID == "" || profile.Name != profileName {
 		t.Fatalf("Go SDK live Profile = %#v", profile)
 	}
@@ -123,35 +106,6 @@ func requireLiveTestEnvironment(t *testing.T, name string) string {
 		t.Fatalf("SecondBox live SDK test requires %s", name)
 	}
 	return value
-}
-
-func requestLiveJSON[T any](
-	t *testing.T,
-	client *secondboxclient.Client,
-	operationID string,
-	options secondboxclient.CallOptions,
-) T {
-	t.Helper()
-	var result T
-	if err := client.RequestJSON(context.Background(), operationID, options, &result); err != nil {
-		t.Fatalf("SecondBox Go SDK live %s failed: %v", operationID, err)
-	}
-	return result
-}
-
-func encodeLiveJSON(t *testing.T, value any) io.Reader {
-	t.Helper()
-	body, err := secondboxclient.EncodeJSONBody(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return body
-}
-
-func liveIdempotencyHeaders(value string) http.Header {
-	headers := make(http.Header)
-	headers.Set("Idempotency-Key", value)
-	return headers
 }
 
 func liveProfileRevisionSpec() secondboxclient.ProfileRevisionSpec {

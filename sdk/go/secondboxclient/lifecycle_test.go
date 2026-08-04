@@ -268,14 +268,21 @@ func TestLifecycleGeneratesIdempotencyKeyWhenAbsent(t *testing.T) {
 	}
 }
 
-func TestLifecycleStillRequiresIfMatch(t *testing.T) {
-	client := newLifecycleClient(t, func(http.ResponseWriter, *http.Request) {
-		t.Error("a request without If-Match must not reach the service")
+func TestLifecycleUsesObservedRevisionWhenIfMatchIsOmitted(t *testing.T) {
+	var observedIfMatch string
+	client := newLifecycleClient(t, func(writer http.ResponseWriter, request *http.Request) {
+		observedIfMatch = request.Header.Get("If-Match")
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"id":"operation-1","sandboxId":"sandbox-1","kind":"stop",
+			"state":"pending","requestId":"request-1",
+			"createdAt":"2026-07-28T00:00:00Z","updatedAt":"2026-07-28T00:00:00Z"}`)
 	})
 	handle := readySandbox(t, client)
-	_, err := handle.Stop(context.Background(), LifecycleOptions{})
-	if err == nil || !strings.Contains(err.Error(), "If-Match") {
-		t.Fatalf("error = %v; want an If-Match rejection", err)
+	if _, err := handle.Stop(context.Background(), LifecycleOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if observedIfMatch != `"revision-1"` {
+		t.Fatalf("If-Match = %q; want the handle's observed revision", observedIfMatch)
 	}
 }
 
@@ -586,7 +593,7 @@ func TestCreateSandboxReturnsHandleForTheCreatedResource(t *testing.T) {
 		_, _ = io.WriteString(writer, sandboxJSON("sandbox-1", "creating"))
 	})
 	handle, operation, err := client.CreateSandbox(context.Background(), CreateSandboxRequest{
-		Profile: "coding-environment", Metadata: Metadata{},
+		Profile: "durable-coding", Metadata: Metadata{},
 	}, "")
 	if err != nil {
 		t.Fatal(err)
@@ -607,7 +614,7 @@ func TestCreateSandboxRejectsOperationWithoutSandboxReference(t *testing.T) {
 			"createdAt":"2026-07-28T00:00:00Z","updatedAt":"2026-07-28T00:00:00Z"}`)
 	})
 	_, _, err := client.CreateSandbox(context.Background(), CreateSandboxRequest{
-		Profile: "coding-environment", Metadata: Metadata{},
+		Profile: "durable-coding", Metadata: Metadata{},
 	}, "")
 	if err == nil || !strings.Contains(err.Error(), "no Sandbox reference") {
 		t.Fatalf("error = %v; want a missing-reference rejection", err)
@@ -639,7 +646,7 @@ func TestRunCreatesWaitsAndExecutes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	handle, result, err := client.Run(ctx, RunRequest{
-		Profile: "coding-environment",
+		Profile: "durable-coding",
 		Command: Command{ArgvCommand: &ArgvCommand{
 			Mode: "argv", Executable: "echo", Arguments: []string{"hello"},
 		}},
@@ -688,7 +695,7 @@ func TestRunReportsCommandFailureWithOutput(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_, result, err := client.Run(ctx, RunRequest{
-		Profile:              "coding-environment",
+		Profile:              "durable-coding",
 		Command:              Command{ShellCommand: &ShellCommand{Mode: "shell", Command: "exit 23"}},
 		DeadlineMilliseconds: 5000,
 		MaximumOutputBytes:   1 << 20,

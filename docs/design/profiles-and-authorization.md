@@ -27,12 +27,12 @@ Every ProfileRevision contains:
 - outbound network and DNS policy;
 - approved exposed ports, protocols, and session limits.
 
-SecondBox ships two versioned built-in Profiles:
+SecondBox releases two explicitly selected standard Profile bundles:
 
 - `agent-compartment` is bounded ephemeral compute for Flue-style agent turns. It starts immediately, has short idle and maximum-duration bounds, and exposes no ports.
-- `coding-environment` is a long-running coding workspace with larger inline CPU, memory, disk, process, operation, transfer, PTY-detach, Snapshot, and development-port bounds.
+- `durable-coding` is a long-running coding workspace with larger inline CPU, memory, disk, process, operation, transfer, PTY-detach, Snapshot, and development-port bounds.
 
-Built-ins are materialized as ordinary immutable ProfileRevisions with deterministic version IDs when first resolved. Their names are reserved: operators cannot create, revise, or disable them. A later SecondBox release may advance a built-in head, but existing Sandboxes retain the exact earlier revision they pinned. Operator-defined Profiles remain fully supported and follow the same immutable pinning rules. There is no missing-profile fallback and no other profile name triggers application-specific behavior.
+The declarative resource engine materializes standard bundles as ordinary immutable ProfileRevisions. Selection is explicit in `[standard_resources]`; the control plane has no built-in defaults, reserved-name behavior, or request-time reconciler. Each release declares the complete ordered lineage and canonical spec digest, validates an installed prefix, and appends only missing revisions. Existing Sandboxes retain the exact earlier revision they pinned. Operator-defined Profiles remain fully supported and follow the same immutable pinning rules.
 
 Ordinary stop always flushes and detaches compute, advances the local Workspace manifest generation, and preserves every committed Workspace write without creating a Snapshot or contacting object storage. A later start resolves that same current image on the current home Runner; it never adopts a newer Profile head. Operator relocation preserves the pinned ProfileRevision and validates its compatibility requirements against the target.
 
@@ -46,7 +46,7 @@ Profiles may be disabled to stop future creation. Disablement does not mutate pi
 
 ## Quotas
 
-`subject_quotas` is the only persisted quota set. It covers total Sandboxes, active Instances, vCPU, memory, Artifact bytes, Snapshots, Artifacts, exposed-port sessions, and concurrent data-plane operations for the asserted tenant and subject. Workspace and Snapshot filesystem allocation is governed by Runner storage-pressure admission rather than charged as uniquely retained bytes. Profile resource limits, including the built-ins' limits, remain inline immutable execution policy rather than a second quota table. Admission and quota reservation are transactional. A concurrent race either commits one authorized reservation or returns a typed quota error; it never overcommits and repairs later.
+`subject_quotas` is the only persisted quota set. It covers total Sandboxes, active Instances, vCPU, memory, Artifact bytes, Snapshots, Artifacts, exposed-port sessions, and concurrent data-plane operations for the asserted tenant and subject. Workspace and Snapshot filesystem allocation is governed by Runner storage-pressure admission rather than charged as uniquely retained bytes. Profile resource limits, including standard Profile limits, remain inline immutable execution policy rather than a second quota table. Admission and quota reservation are transactional. A concurrent race either commits one authorized reservation or returns a typed quota error; it never overcommits and repairs later.
 
 Metrics use fixed-cardinality labels. Tenant refs, subject refs, Sandbox IDs, profile names, workspace paths, and artifact names are audit fields rather than metric dimensions.
 

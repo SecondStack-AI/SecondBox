@@ -71,12 +71,31 @@ default_subject_max_snapshots = 500
 default_subject_max_artifacts = 5000
 default_subject_max_port_sessions = 100
 default_subject_max_concurrent_operations = 20
-agent_compartment_pool = 'secondbox-local'
-agent_compartment_runtime_bundle_digest = 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
-agent_compartment_toolchain_bundle_digest = 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
-coding_environment_pool = 'secondbox-local'
-coding_environment_runtime_bundle_digest = 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
-coding_environment_toolchain_bundle_digest = 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+
+[standard_resources]
+artifact_manifest = 'development-artifact-manifest.json'
+bundles = ['agent-compartment', 'durable-coding']
+apply_wait_seconds = 180
+
+[[standard_resources.runner_pools]]
+bundle = 'agent-compartment'
+name = 'standard-amd64'
+architectures = ['amd64']
+capabilities = ['exec-streaming', 'file-streaming', 'pty', 'evidence', 'local-workspace', 'port-proxy']
+state = 'ready'
+max_sandboxes = 20
+max_cpu_millis = 80000
+max_memory_bytes = 171798691840
+
+[[standard_resources.runner_pools]]
+bundle = 'durable-coding'
+name = 'standard-amd64'
+architectures = ['amd64']
+capabilities = ['exec-streaming', 'file-streaming', 'pty', 'evidence', 'local-workspace', 'port-proxy']
+state = 'ready'
+max_sandboxes = 20
+max_cpu_millis = 80000
+max_memory_bytes = 171798691840
 
 [overrides]
 

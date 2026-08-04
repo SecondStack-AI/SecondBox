@@ -475,6 +475,7 @@
       "currentRevision",
       "name",
       "revision",
+      "revisions",
       "state",
       "updatedAt"
     ],

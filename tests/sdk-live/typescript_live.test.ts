@@ -7,8 +7,6 @@ import {
 } from "../../sdk/typescript/client.ts";
 import {
   SecondBoxClient,
-  encodeJSONBody,
-  type Operation,
   type Profile,
   type ProfileRevisionSpec,
   type Sandbox,
@@ -19,26 +17,23 @@ const composeRunnerPoolName = "compose-live-pool";
 test("TypeScript SDK live control-plane contract", async () => {
   const { application, profile } = await newTypeScriptLiveSubjectFixture();
 
-  const operation = await application.requestJSON<Operation>("createSandbox", {
-    headers: liveIdempotencyHeaders("typescript-create-sandbox"),
-    body: encodeJSONBody({
-      profile: profile.name,
-      metadata: {
-        sdk: "typescript",
-        purpose: "live-contract",
-      },
-    }),
+  const { handle, operation } = await application.createSandbox({
+    profile: profile.name,
+    metadata: { sdk: "typescript", purpose: "live-contract" },
+    idempotencyKey: "typescript-create-sandbox",
   });
   assert.notEqual(operation.id, "");
   assert.notEqual(operation.sandboxId, "");
 
-  const sandbox = await application.requestJSON<Sandbox>("getSandbox", {
-    pathParameters: { sandboxId: operation.sandboxId },
-  });
+  const sandbox = handle.snapshot;
   assert.equal(sandbox.metadata.sdk, "typescript");
   assert.equal(sandbox.profileRevisionId, profile.currentRevision.id);
 
-  const handle = application.sandbox(sandbox);
+  const page = await application.listSandboxes({
+    metadata: { sdk: "typescript", purpose: "live-contract" },
+  });
+  assert.equal(page.items.length, 1);
+  assert.equal(page.items[0]?.id, sandbox.id);
   const refreshed = await handle.refresh();
   assert.equal(refreshed.id, sandbox.id);
   assert.equal(handle.snapshot.metadata.purpose, "live-contract");
@@ -70,12 +65,11 @@ async function newTypeScriptLiveSubjectFixture(): Promise<{
   ));
 
   const profileName = "typescript-sdk-live";
-  const profile = await application.requestJSON<Profile>("createProfile", {
-    headers: liveIdempotencyHeaders("typescript-create-profile"),
-    body: encodeJSONBody({
-      name: profileName,
-      spec: liveProfileRevisionSpec(),
-    }),
+  const profile = await application.createProfile({
+    name: profileName,
+    spec: liveProfileRevisionSpec(),
+  }, {
+    idempotencyKey: "typescript-create-profile",
   });
   assert.notEqual(profile.currentRevision.id, "");
   assert.equal(profile.name, profileName);
@@ -89,10 +83,6 @@ function requireLiveEnvironment(name: string): string {
     throw new Error(`SecondBox TypeScript live SDK test requires ${name}`);
   }
   return value;
-}
-
-function liveIdempotencyHeaders(value: string): Readonly<Record<string, string>> {
-  return { "Idempotency-Key": value };
 }
 
 function liveProfileRevisionSpec(): ProfileRevisionSpec {

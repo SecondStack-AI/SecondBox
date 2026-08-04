@@ -1755,11 +1755,12 @@
       "Profile": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "state", "currentRevision", "revision", "createdAt", "updatedAt"],
+        "required": ["name", "state", "currentRevision", "revisions", "revision", "createdAt", "updatedAt"],
         "properties": {
           "name": {"$ref": "#/components/schemas/ProfileName"},
           "state": {"$ref": "#/components/schemas/ProfileState"},
           "currentRevision": {"$ref": "#/components/schemas/ProfileRevision"},
+          "revisions": {"type": "array", "minItems": 1, "items": {"$ref": "#/components/schemas/ProfileRevision"}},
           "revision": {"type": "integer", "format": "int64", "minimum": 1},
           "createdAt": {"$ref": "#/components/schemas/Timestamp"},
           "updatedAt": {"$ref": "#/components/schemas/Timestamp"}

@@ -118,7 +118,7 @@ The service rejects a reserved name that could never resolve: one that is blank,
 `run` creates a Sandbox from a Profile, waits for it to become ready, runs one command, and deletes the Sandbox:
 
 ```sh
-./dist/secondbox run coding-environment -- python3 -c 'print("hello")'
+./dist/secondbox run durable-coding -- python3 -c 'print("hello")'
 ```
 
 `--name` reserves a name for later reference and `--keep` retains the Sandbox, reporting its identifier on standard error. `--metadata name=value` is repeatable and cannot restate the reserved name key. `--ready-timeout` bounds the wait for readiness and defaults to five minutes. Output handling, `--stdin`, and exit status match `exec` exactly, and the Sandbox is disposed of even when the command fails. Standard input is read before anything is created, so an oversized input leaves no Sandbox behind.
@@ -132,8 +132,8 @@ The service rejects a reserved name that could never resolve: one that is blank,
 For a throwaway session, `run --tty` creates the Sandbox, attaches the terminal, and deletes it when the terminal ends:
 
 ```sh
-./dist/secondbox run coding-environment --tty
-./dist/secondbox run coding-environment --tty -- /bin/bash
+./dist/secondbox run durable-coding --tty
+./dist/secondbox run durable-coding --tty -- /bin/bash
 ```
 
 Disposal runs on every exit, including a dropped connection, because the Sandbox exists only to serve that session; `--keep` opts out and reports the identifier so `secondbox shell` can resume it. `--tty` cannot be combined with `--stdin`, `--json`, or `--shell`, which all describe a buffered command, and it accepts at most one operand, used as the terminal command. Both forms share one implementation, so the Lease, generation, and idempotency handling described below applies to each.
@@ -243,54 +243,37 @@ Application code creates, retains, and eventually deletes the durable Sandbox. A
 
 ```ts
 import {
-  SandboxHandle,
   SecondBox,
-} from "./sdk/typescript/client.ts";
-import {
   SecondBoxClient,
-  type Operation,
-  type Sandbox,
-} from "./sdk/typescript/client.ts";
+} from "@secondstack-ai/secondbox";
 
 const api = new SecondBox(
   new SecondBoxClient(endpoint, platformToken, fetch, tenantRef, subjectRef),
 );
 
-const created = await api.requestJSON<Sandbox | Operation>("createSandbox", {
-  headers: { "Idempotency-Key": createRequestID },
-  body: JSON.stringify({
-    profile: profileName,
-    metadata: {},
-  }),
+await api.validateProfile("durable-coding", signal);
+const { handle } = await api.createSandbox({
+  profile: "durable-coding",
+  metadata: {},
+  signal,
 });
-
-const sandbox =
-  "state" in created && created.state === "pending"
-    ? (await api.waitOperation(created.id, {
-        intervalMilliseconds: 250,
-        signal,
-      })).sandbox!
-    : created as Sandbox;
-
-const handle = new SandboxHandle(api, sandbox);
+await handle.waitFor(["ready"], { deadlineMilliseconds: 300_000, signal });
 
 // Reuse this handle across application requests and Flue initializations.
 
 await handle.delete({
-  idempotencyKey: deleteRequestID,
-  ifMatch: currentETag,
   signal,
 });
 ```
 
-Lifecycle methods require caller-provided idempotency and `If-Match` values. Data-plane helpers bind the handle’s observed generation and optional lease ID. Poll intervals, deadlines, and output limits are explicit.
+Lifecycle methods generate one request key when absent and fence the handle's observed revision. A caller may supply a durable idempotency key or an explicit expected revision, but the SDK never refreshes and replays after a fence. Data-plane helpers bind the handle’s observed generation and optional Lease ID. Poll intervals, deadlines, and output limits remain explicit. The full operation matrix is in [Consumer operation matrix](../design/consumer-operation-matrix.md).
 
 ## Flue adapter
 
-The adapter targets the public structural contract from [`@flue/runtime` 1.0.0-beta.9](https://www.npmjs.com/package/@flue/runtime/v/1.0.0-beta.9), package integrity `sha512-ksh0ZkTVyqQnGvU3OnbVX6luAJwe6tt8q7O0vn99b7Cx6XcPTXzY/YEkXrOtCHzV6ZwfSdO9ZfaWbhTD1tdQuQ==`, and Flue’s official [Sandbox Adapter API](https://flueframework.com/docs/api/sandbox-api/). SecondBox does not install the full runtime. Its Apache-2.0 compatibility module freezes only `SandboxApi`, `FileStat`, `SessionEnv`, the `SandboxFactory.createSessionEnv` shape, and the required wrapper behavior. [`flue-runtime-beta9-source.json`](../../sdk/typescript/flue-runtime-beta9-source.json) binds the module to the exact upstream tag, commit, source hashes, package integrity, and local adaptation hash.
+The adapter targets the exact public contract from [`@flue/runtime` 2.0.1](https://www.npmjs.com/package/@flue/runtime/v/2.0.1), upstream tag [`v2.0.1`](https://github.com/withastro/flue/tree/v2.0.1) at commit `a67f00955ac48c14d4b97ffb71962d24e39af84d`, package integrity `sha512-as+rrm8oHLuaLfpSReExwsuzOb1gC0sxQWgz3o+RvJUwHyGcQAcfBcn/R6j8logAq1j+ryfH1WsXf4J7Th9puQ==`, and Flue's [Sandbox Adapter API](https://flueframework.com/docs/reference/sandbox-api/). The package declares Flue 2.x as a peer and imports its real `createSandboxSessionEnv`, `SandboxApi`, `FileStat`, and `SandboxFactory`; there is no copied runtime or compatibility fallback.
 
 ```ts
-import { createSecondBoxFlueAdapter } from "./sdk/typescript/flue.ts";
+import { createSecondBoxFlueAdapter } from "@secondstack-ai/secondbox/flue";
 
 const flueSandbox = createSecondBoxFlueAdapter(handle, {
   defaultDeadlineMilliseconds: 60_000,
@@ -305,4 +288,4 @@ const agent = await init({
 
 Every Flue initialization receives a new in-memory session environment over the same application-owned handle. Files therefore remain in the durable SecondBox Workspace across separate harness initializations. Closing either harness does not stop or delete the Sandbox.
 
-Compatibility tests preserve beta.9 path normalization, cwd/environment/timeout forwarding, pre/post abort behavior, missing-parent creation and single retry, filesystem option forwarding, and structural factory assignability. Updating the targeted Flue version requires a deliberate source review and refreshed hash evidence; there is no fallback runtime mode.
+Compatibility tests run against Flue 2.0 itself and cover path normalization, cwd/environment/timeout forwarding, abort behavior, missing-parent creation and retry, filesystem option forwarding, and structural factory assignability. Updating the targeted Flue major requires a deliberate contract review; there is no fallback runtime mode.

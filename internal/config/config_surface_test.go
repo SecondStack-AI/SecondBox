@@ -8,44 +8,38 @@ import (
 )
 
 var requiredControlPlaneEnvironment = map[string]string{
-	"SECONDBOX_LISTEN_ADDR":                                        "127.0.0.1:8080",
-	"SECONDBOX_PUBLIC_BASE_URL":                                    "http://127.0.0.1:8080",
-	"SECONDBOX_RUNNER_LISTEN_ADDR":                                 "127.0.0.1:9443",
-	"SECONDBOX_DATABASE_URL":                                       "postgres://secondbox@example/secondbox",
-	"SECONDBOX_LOG_PATH":                                           "/tmp/secondbox.log",
-	"SECONDBOX_PLATFORM_TOKEN":                                     "platform-token-0000000000000000",
-	"SECONDBOX_RUNNER_CREDENTIAL":                                  "runner-credential-00000000000000000000",
-	"SECONDBOX_APPLICATION_AUTHORITIES_JSON":                       "[]",
-	"SECONDBOX_RUNNER_SERVER_CERTIFICATE":                          "/tmp/server.crt",
-	"SECONDBOX_RUNNER_SERVER_PRIVATE_KEY":                          "/tmp/server.key",
-	"SECONDBOX_RUNNER_CA_CERTIFICATE":                              "/tmp/ca.crt",
-	"SECONDBOX_SIGNED_ASSET_CATALOG_PATH":                          "/tmp/assets.json",
-	"SECONDBOX_OBJECT_STORE_ENDPOINT":                              "http://object-store:9000",
-	"SECONDBOX_OBJECT_STORE_REGION":                                "us-east-1",
-	"SECONDBOX_OBJECT_STORE_BUCKET":                                "secondbox",
-	"SECONDBOX_OBJECT_STORE_ROOT_USER":                             "secondbox",
-	"SECONDBOX_OBJECT_STORE_ROOT_PASSWORD":                         "object-password-000000000000",
-	"SECONDBOX_OBJECT_STORE_USE_PATH_STYLE":                        "true",
-	"SECONDBOX_OBJECT_STORE_TEMP_DIRECTORY":                        "/tmp",
-	"SECONDBOX_DATA_PLANE_RETENTION_SECONDS":                       "86400",
-	"SECONDBOX_BUILTIN_AGENT_COMPARTMENT_POOL":                     "pool",
-	"SECONDBOX_BUILTIN_AGENT_COMPARTMENT_RUNTIME_BUNDLE_DIGEST":    testBundleDigest,
-	"SECONDBOX_BUILTIN_AGENT_COMPARTMENT_TOOLCHAIN_BUNDLE_DIGEST":  testBundleDigest,
-	"SECONDBOX_BUILTIN_CODING_ENVIRONMENT_POOL":                    "pool",
-	"SECONDBOX_BUILTIN_CODING_ENVIRONMENT_RUNTIME_BUNDLE_DIGEST":   testBundleDigest,
-	"SECONDBOX_BUILTIN_CODING_ENVIRONMENT_TOOLCHAIN_BUNDLE_DIGEST": testBundleDigest,
-	"SECONDBOX_DEFAULT_SUBJECT_MAX_SANDBOXES":                      "100",
-	"SECONDBOX_DEFAULT_SUBJECT_MAX_ACTIVE_INSTANCES":               "20",
-	"SECONDBOX_DEFAULT_SUBJECT_MAX_CPU_MILLIS":                     "80000",
-	"SECONDBOX_DEFAULT_SUBJECT_MAX_MEMORY_BYTES":                   "171798691840",
-	"SECONDBOX_DEFAULT_SUBJECT_MAX_ARTIFACT_BYTES":                 "1099511627776",
-	"SECONDBOX_DEFAULT_SUBJECT_MAX_SNAPSHOTS":                      "500",
-	"SECONDBOX_DEFAULT_SUBJECT_MAX_ARTIFACTS":                      "5000",
-	"SECONDBOX_DEFAULT_SUBJECT_MAX_PORT_SESSIONS":                  "100",
-	"SECONDBOX_DEFAULT_SUBJECT_MAX_CONCURRENT_OPERATIONS":          "20",
-	"SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS":              "250",
-	"SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS":          "250",
-	"SECONDBOX_RUNNER_ENABLED_FEATURES":                            "exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy",
+	"SECONDBOX_LISTEN_ADDR":                               "127.0.0.1:8080",
+	"SECONDBOX_PUBLIC_BASE_URL":                           "http://127.0.0.1:8080",
+	"SECONDBOX_RUNNER_LISTEN_ADDR":                        "127.0.0.1:9443",
+	"SECONDBOX_DATABASE_URL":                              "postgres://secondbox@example/secondbox",
+	"SECONDBOX_LOG_PATH":                                  "/tmp/secondbox.log",
+	"SECONDBOX_PLATFORM_TOKEN":                            "platform-token-0000000000000000",
+	"SECONDBOX_RUNNER_CREDENTIAL":                         "runner-credential-00000000000000000000",
+	"SECONDBOX_APPLICATION_AUTHORITIES_JSON":              "[]",
+	"SECONDBOX_RUNNER_SERVER_CERTIFICATE":                 "/tmp/server.crt",
+	"SECONDBOX_RUNNER_SERVER_PRIVATE_KEY":                 "/tmp/server.key",
+	"SECONDBOX_RUNNER_CA_CERTIFICATE":                     "/tmp/ca.crt",
+	"SECONDBOX_SIGNED_ASSET_CATALOG_PATH":                 "/tmp/assets.json",
+	"SECONDBOX_OBJECT_STORE_ENDPOINT":                     "http://object-store:9000",
+	"SECONDBOX_OBJECT_STORE_REGION":                       "us-east-1",
+	"SECONDBOX_OBJECT_STORE_BUCKET":                       "secondbox",
+	"SECONDBOX_OBJECT_STORE_ROOT_USER":                    "secondbox",
+	"SECONDBOX_OBJECT_STORE_ROOT_PASSWORD":                "object-password-000000000000",
+	"SECONDBOX_OBJECT_STORE_USE_PATH_STYLE":               "true",
+	"SECONDBOX_OBJECT_STORE_TEMP_DIRECTORY":               "/tmp",
+	"SECONDBOX_DATA_PLANE_RETENTION_SECONDS":              "86400",
+	"SECONDBOX_DEFAULT_SUBJECT_MAX_SANDBOXES":             "100",
+	"SECONDBOX_DEFAULT_SUBJECT_MAX_ACTIVE_INSTANCES":      "20",
+	"SECONDBOX_DEFAULT_SUBJECT_MAX_CPU_MILLIS":            "80000",
+	"SECONDBOX_DEFAULT_SUBJECT_MAX_MEMORY_BYTES":          "171798691840",
+	"SECONDBOX_DEFAULT_SUBJECT_MAX_ARTIFACT_BYTES":        "1099511627776",
+	"SECONDBOX_DEFAULT_SUBJECT_MAX_SNAPSHOTS":             "500",
+	"SECONDBOX_DEFAULT_SUBJECT_MAX_ARTIFACTS":             "5000",
+	"SECONDBOX_DEFAULT_SUBJECT_MAX_PORT_SESSIONS":         "100",
+	"SECONDBOX_DEFAULT_SUBJECT_MAX_CONCURRENT_OPERATIONS": "20",
+	"SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS":     "250",
+	"SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS": "250",
+	"SECONDBOX_RUNNER_ENABLED_FEATURES":                   "exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy",
 }
 
 func setRequiredControlPlaneEnvironment(t *testing.T) {
@@ -63,8 +57,8 @@ func setRequiredControlPlaneEnvironment(t *testing.T) {
 }
 
 func TestFromEnvironmentRequiresExactlyDeploymentAuthorityAndContestedSettings(t *testing.T) {
-	if got := len(requiredControlPlaneEnvironment); got != 38 {
-		t.Fatalf("required environment count = %d, want 38", got)
+	if got := len(requiredControlPlaneEnvironment); got != 32 {
+		t.Fatalf("required environment count = %d, want 32", got)
 	}
 	for absent := range requiredControlPlaneEnvironment {
 		t.Run(absent, func(t *testing.T) {
@@ -100,8 +94,8 @@ func TestEnvironmentSurfaceHasAnExplicitFinalCategory(t *testing.T) {
 		}
 		seen[name] = "removed compiled fact"
 	}
-	if got := len(seen); got != 58 {
-		t.Fatalf("classified environment surface = %d names, want 58", got)
+	if got := len(seen); got != 52 {
+		t.Fatalf("classified environment surface = %d names, want 52", got)
 	}
 }
 

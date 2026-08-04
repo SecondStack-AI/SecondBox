@@ -1,0 +1,152 @@
+name: SecondBox coordinated release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+concurrency:
+  group: secondbox-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release-ci:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres@sha256:1961f96e6029a02c3812d7cb329a3b03a3ac2bb067058dec17b0f5596aca9296
+        env:
+          POSTGRES_DB: secondbox_release_ci
+          POSTGRES_PASSWORD: secondbox-release-ci-password
+          POSTGRES_USER: secondbox
+        options: >-
+          --health-cmd "pg_isready -U secondbox -d secondbox_release_ci"
+          --health-interval 1s
+          --health-timeout 5s
+          --health-retries 30
+        ports:
+          - 5432:5432
+    env:
+      SECONDBOX_TEST_DATABASE_URL: postgresql://secondbox:secondbox-release-ci-password@127.0.0.1:5432/secondbox_release_ci?sslmode=disable
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+      - name: Install release CI prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ripgrep just
+          scripts/install-protoc.sh .tmp/protoc
+          echo "$GITHUB_WORKSPACE/.tmp/protoc/bin" >>"$GITHUB_PATH"
+          sudo scripts/install-postgresql-client.sh
+          echo "/usr/lib/postgresql/18/bin" >>"$GITHUB_PATH"
+      - name: Validate exact tag and run normal CI
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+          test "$(git rev-parse "refs/tags/${GITHUB_REF_NAME}^{commit}")" = "$GITHUB_SHA"
+          just test-non-kvm
+
+  stage-qualification-input:
+    needs: release-ci
+    runs-on: [self-hosted, linux, x64, secondbox-kvm]
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR: ${{ vars.SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR }}
+      SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY: ${{ vars.SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY }}
+      SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256: ${{ vars.SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+      - name: Validate immutable tag and run required CI
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]
+          test "$(git rev-parse "refs/tags/${GITHUB_REF_NAME}^{commit}")" = "$GITHUB_SHA"
+          npm ci --ignore-scripts
+          scripts/install-protoc.sh .tmp/protoc
+          echo "$GITHUB_WORKSPACE/.tmp/protoc/bin" >>"$GITHUB_PATH"
+          export PATH="$GITHUB_WORKSPACE/.tmp/protoc/bin:$PATH"
+          just verify-generated
+      - name: Stage qualification inputs
+        run: just release-stage "${GITHUB_REF_NAME#v}" ".tmp/release-qualification-input"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: secondbox-${{ github.ref_name }}-qualification-input
+          path: .tmp/release-qualification-input/secondbox-*-artifact-manifest.json
+          if-no-files-found: error
+          retention-days: 7
+
+  prepublication-kvm:
+    needs: stage-qualification-input
+    uses: ./.github/workflows/scenario-qualification.yml
+    with:
+      release_version: ${{ github.ref_name }}
+      candidate_artifact_name: secondbox-${{ github.ref_name }}-qualification-input
+
+  publish-public-candidate:
+    needs: prepublication-kvm
+    runs-on: [self-hosted, linux, x64, secondbox-kvm]
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR: ${{ vars.SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR }}
+      SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY: ${{ vars.SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY }}
+      SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256: ${{ vars.SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: secondbox-${{ github.ref_name }}-candidate-kvm-evidence
+          path: .tmp/candidate-evidence
+      - name: Re-stage and compare exact qualification input
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          just release-stage "$version" .tmp/release-publication
+          go run ./cmd/secondbox-release-tool verify-candidate-evidence \
+            ".tmp/release-publication/secondbox-${version}-artifact-manifest.json" \
+            ".tmp/candidate-evidence/secondbox-${version}-candidate-kvm-evidence.json"
+      - name: Publish immutable public candidate
+        run: scripts/release-publish-candidate.sh "${GITHUB_REF_NAME#v}" .tmp/release-publication ".tmp/candidate-evidence/secondbox-${GITHUB_REF_NAME#v}-candidate-kvm-evidence.json"
+      - name: Attest public candidate assets
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: .tmp/release-publication/secondbox-*-artifact-manifest.json

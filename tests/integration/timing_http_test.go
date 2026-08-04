@@ -25,7 +25,6 @@ func TestTimingHTTPReadsPersistedStageEvidenceAndCurrentAPILatency(t *testing.T)
 	}
 	t.Cleanup(databaseStore.Close)
 	controlPlane, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		BuiltInProfiles:       integrationBuiltInProfiles(t),
 		Store:                 databaseStore,
 		PlatformToken:         testPlatformToken,
 		DefaultSubjectQuota:   generousQuota(),

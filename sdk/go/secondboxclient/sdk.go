@@ -117,7 +117,9 @@ func (client *Client) WaitOperation(ctx context.Context, operationID string, int
 // LifecycleOptions carries required idempotency and optimistic-concurrency values.
 type LifecycleOptions struct {
 	IdempotencyKey string
-	IfMatch        string
+	// IfMatch overrides the handle's observed revision validator. Most callers
+	// leave it empty and rely on the still-explicit observed revision fence.
+	IfMatch string
 }
 
 // SandboxHandle retains a caller-owned Sandbox identity and its latest observed representation.
@@ -247,7 +249,7 @@ func (handle *SandboxHandle) lifecycle(
 		options.IdempotencyKey = generated
 	}
 	if options.IfMatch == "" {
-		return Operation{}, fmt.Errorf("SecondBox %s If-Match value is required", operationID)
+		options.IfMatch = RevisionETag(handle.Snapshot().Revision)
 	}
 	headers := make(http.Header)
 	headers.Set("Idempotency-Key", options.IdempotencyKey)
@@ -286,6 +288,16 @@ func (handle *SandboxHandle) CreateSnapshot(
 	options LifecycleOptions,
 	request CreateSnapshotRequest,
 ) (Operation, error) {
+	if options.IdempotencyKey == "" {
+		generated, err := NewIdempotencyKey()
+		if err != nil {
+			return Operation{}, err
+		}
+		options.IdempotencyKey = generated
+	}
+	if options.IfMatch == "" {
+		options.IfMatch = RevisionETag(handle.Snapshot().Revision)
+	}
 	body, err := json.Marshal(request)
 	if err != nil {
 		return Operation{}, fmt.Errorf("SecondBox Snapshot encode request: %w", err)
@@ -307,10 +319,18 @@ func (client *Client) DeleteSnapshot(
 	snapshotID string,
 	idempotencyKey string,
 ) (Operation, error) {
+	if snapshotID == "" {
+		return Operation{}, errors.New("SecondBox Snapshot deletion ID is required")
+	}
+	var err error
+	idempotencyKey, err = resolveIdempotencyKey(idempotencyKey)
+	if err != nil {
+		return Operation{}, err
+	}
 	headers := make(http.Header)
 	headers.Set("Idempotency-Key", idempotencyKey)
 	var operation Operation
-	err := client.RequestJSON(ctx, "deleteSnapshot", CallOptions{
+	err = client.RequestJSON(ctx, "deleteSnapshot", CallOptions{
 		PathParameters: map[string]string{"snapshotId": snapshotID}, Headers: headers,
 	}, &operation)
 	return operation, err

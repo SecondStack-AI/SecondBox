@@ -24,18 +24,9 @@ SecondBox includes source code that depends on third-party Go modules and builds
 - `typescript` and its platform packages — Apache-2.0
 - `@types/node` — MIT
 - `ajv` — MIT
-
-## Frozen compatibility source
-
-- `sdk/typescript/flue-runtime-beta9-compat.ts` is an Apache-2.0-licensed
-  adaptation of the narrow sandbox contract and `createSandboxSessionEnv`
-  behavior from `@flue/runtime` 1.0.0-beta.9. The exact upstream tag, commit,
-  npm integrity, source hashes, adaptation hash, and publication time are in
-  `sdk/typescript/flue-runtime-beta9-source.json`; the upstream license is
-  preserved in `sdk/typescript/flue-runtime-beta9-LICENSE.txt`.
-
-The `@flue/runtime` package is not installed, bundled, or a dependency of this
-repository. The frozen structural factory remains consumable by that runtime.
+- `@flue/runtime` — Apache-2.0 (peer dependency of the TypeScript `/flue` export)
+- `ws` — MIT (runtime dependency of the TypeScript `/node` export)
+- `@types/ws` — MIT
 
 ## Execution assets
 

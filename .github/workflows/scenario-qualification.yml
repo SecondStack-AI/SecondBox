@@ -1,7 +1,24 @@
 name: SecondBox scenario qualification
 
 on:
+  workflow_call:
+    inputs:
+      release_version:
+        required: false
+        type: string
+      candidate_artifact_name:
+        required: false
+        type: string
   workflow_dispatch:
+    inputs:
+      release_version:
+        description: Optional candidate version without v
+        required: false
+        type: string
+      candidate_artifact_name:
+        description: Artifact containing the candidate manifest
+        required: false
+        type: string
   schedule:
     - cron: "17 3 * * *"
 
@@ -32,3 +49,37 @@ jobs:
             runner/go.sum
       - name: Run the qualified external scenario suite
         run: just test-scenario
+      - name: Download candidate manifest
+        if: inputs.release_version != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ inputs.candidate_artifact_name }}
+          path: .tmp/release-candidate-input
+      - name: Emit exact-commit pre-publication KVM evidence
+        if: inputs.release_version != ''
+        env:
+          RELEASE_REF_NAME: ${{ inputs.release_version }}
+        run: |
+          set -euo pipefail
+          RELEASE_VERSION="${RELEASE_REF_NAME#v}"
+          manifest=".tmp/release-candidate-input/secondbox-${RELEASE_VERSION}-artifact-manifest.json"
+          test "$(jq -er '.tag' "$manifest")" = "v${RELEASE_VERSION}"
+          test "$(jq -er '.sourceCommit' "$manifest")" = "$GITHUB_SHA"
+          runner_environment="$(jq -cn --arg kernel "$(uname -srmo)" --arg runner "$RUNNER_NAME" --arg arch "$(uname -m)" '{kernel:$kernel,runner:$runner,architecture:$arch}' | sha256sum | awk '{print $1}')"
+          jq -n \
+            --arg version "$RELEASE_VERSION" \
+            --arg tag "v${RELEASE_VERSION}" \
+            --arg commit "$GITHUB_SHA" \
+            --arg artifact "sha256:$(sha256sum "$manifest" | awk '{print $1}')" \
+            --arg guest "$(jq -er '.microvm.signedManifestDigest' "$manifest")" \
+            --arg environment "$runner_environment" \
+            '{schemaVersion:1,version:$version,tag:$tag,sourceCommit:$commit,artifactManifestDigest:$artifact,signedGuestManifestDigest:$guest,architecture:"linux/amd64",runnerEnvironment:$environment,result:"passed"}' \
+            >"secondbox-${RELEASE_VERSION}-candidate-kvm-evidence.json"
+      - name: Upload pre-publication KVM evidence
+        if: inputs.release_version != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: secondbox-${{ inputs.release_version }}-candidate-kvm-evidence
+          path: secondbox-*-candidate-kvm-evidence.json
+          if-no-files-found: error
+          retention-days: 7

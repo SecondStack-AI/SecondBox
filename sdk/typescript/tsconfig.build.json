@@ -11,8 +11,8 @@
   },
   "include": [
     "./client.ts",
-    "./flue-runtime-beta9-compat.ts",
     "./flue.ts",
+    "./node.ts",
     "./transport.ts"
   ]
 }

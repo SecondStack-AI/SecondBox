@@ -37,7 +37,6 @@ type HealthStore interface {
 // ProfileStore owns immutable Profile revisions.
 type ProfileStore interface {
 	CreateProfile(ctx context.Context, profile contracts.Profile, idempotency ports.AdminIdempotencyInput) (contracts.Profile, ports.AdminIdempotencyResult, error)
-	EnsureBuiltInProfile(ctx context.Context, profile contracts.Profile) (contracts.Profile, error)
 	ReviseProfile(ctx context.Context, name string, revision contracts.ProfileRevision, expectedRevision int64, now time.Time, idempotency ports.AdminIdempotencyInput) (contracts.Profile, ports.AdminIdempotencyResult, error)
 	DisableProfile(ctx context.Context, name string, expectedRevision int64, now time.Time, idempotency ports.AdminIdempotencyInput) (contracts.Profile, ports.AdminIdempotencyResult, error)
 	GetProfile(ctx context.Context, name string) (contracts.Profile, error)
@@ -133,7 +132,6 @@ type ControlPlaneConfig struct {
 	DataPlanePollInterval time.Duration
 	PortSessionStore      runnercontrol.PortSessionStore
 	PublicBaseURL         string
-	BuiltInProfiles       []contracts.Profile
 }
 
 // ControlPlaneService owns validation, authentication, and transaction inputs.
@@ -150,7 +148,6 @@ type ControlPlaneService struct {
 	dataPlanePollInterval time.Duration
 	portSessionStore      runnercontrol.PortSessionStore
 	publicBaseURL         string
-	builtInProfiles       map[string]contracts.Profile
 }
 
 // SystemClock returns the current time for production control-plane wiring.
@@ -172,10 +169,6 @@ func NewControlPlaneService(config ControlPlaneConfig) (*ControlPlaneService, er
 	if config.Now == nil || config.NewID == nil || config.NewCredentialMaterial == nil {
 		return nil, errors.New("SecondBox clock, identifier, and credential generators are required")
 	}
-	builtInProfiles, err := resolveBuiltInProfiles(config.BuiltInProfiles)
-	if err != nil {
-		return nil, err
-	}
 	controlPlane := &ControlPlaneService{
 		store:                config.Store,
 		credentialSealSecret: []byte(config.PlatformToken),
@@ -185,7 +178,6 @@ func NewControlPlaneService(config ControlPlaneConfig) (*ControlPlaneService, er
 		dataPlaneStore:      config.DataPlaneStore, dataPlanePollInterval: config.DataPlanePollInterval,
 		liveDataPlane:    config.LiveDataPlane,
 		portSessionStore: config.PortSessionStore, publicBaseURL: config.PublicBaseURL,
-		builtInProfiles: builtInProfiles,
 	}
 	if config.DataPlaneStore != nil && config.DataPlanePollInterval <= 0 {
 		return nil, errors.New("SecondBox data-plane poll interval is required with the store")
@@ -248,9 +240,6 @@ func (service *ControlPlaneService) createProfile(
 	if !profileNamePattern.MatchString(request.Name) {
 		return contracts.Profile{}, false, invalidRequest(errors.New("SecondBox Profile name must match ^[a-z][a-z0-9-]{0,79}$"))
 	}
-	if service.isBuiltInProfile(request.Name) {
-		return contracts.Profile{}, false, invalidRequest(errors.New("SecondBox built-in Profile cannot be created or mutated"))
-	}
 	if err := validateProfileRevisionSpec(request.Spec); err != nil {
 		return contracts.Profile{}, false, err
 	}
@@ -268,6 +257,7 @@ func (service *ControlPlaneService) createProfile(
 			ID: service.newID("prv"), Number: 1, Spec: request.Spec, CreatedAt: now,
 		},
 	}
+	profile.Revisions = []contracts.ProfileRevision{profile.CurrentRevision}
 	audit := service.newAudit(ctx, principal, "profile.created", "profile", profile.Name, "", now)
 	profile, result, err := service.store.CreateProfile(
 		ctx, profile, idempotency,
@@ -317,9 +307,6 @@ func (service *ControlPlaneService) reviseProfileAtRevision(
 	request contracts.ReviseProfileRequest,
 	expectedRevision int64,
 ) (contracts.Profile, bool, error) {
-	if service.isBuiltInProfile(name) {
-		return contracts.Profile{}, false, invalidRequest(errors.New("SecondBox built-in Profile cannot be created or mutated"))
-	}
 	if err := validateProfileRevisionSpec(request.Spec); err != nil {
 		return contracts.Profile{}, false, err
 	}
@@ -384,9 +371,6 @@ func (service *ControlPlaneService) disableProfileAtRevision(
 	idempotencyKey string,
 	expectedRevision int64,
 ) (contracts.Profile, bool, error) {
-	if service.isBuiltInProfile(name) {
-		return contracts.Profile{}, false, invalidRequest(errors.New("SecondBox built-in Profile cannot be created or mutated"))
-	}
 	now := service.now().UTC()
 	idempotency, err := service.adminIdempotency(
 		principal, "profile.disable", name, idempotencyKey,
@@ -417,9 +401,6 @@ func (service *ControlPlaneService) GetProfile(
 	principal contracts.Principal,
 	name string,
 ) (contracts.Profile, error) {
-	if builtIn, ok := service.builtInProfiles[name]; ok {
-		return service.store.EnsureBuiltInProfile(ctx, builtIn)
-	}
 	return service.store.GetProfile(ctx, name)
 }
 
@@ -430,9 +411,6 @@ func (service *ControlPlaneService) ListProfiles(
 	limit int,
 	cursor string,
 ) (contracts.ProfilePage, error) {
-	if err := service.ensureAllBuiltInProfiles(ctx); err != nil {
-		return contracts.ProfilePage{}, err
-	}
 	return service.store.ListProfiles(ctx, boundedLimit(limit), cursor)
 }
 
@@ -479,11 +457,6 @@ func (service *ControlPlaneService) createSandboxOperation(
 	if len(request.SourceSnapshotID) > 128 {
 		return contracts.Sandbox{}, contracts.Operation{}, false,
 			invalidRequest(errors.New("SecondBox source Snapshot ID exceeds its bound"))
-	}
-	if builtIn, ok := service.builtInProfiles[request.Profile]; ok {
-		if _, err := service.store.EnsureBuiltInProfile(ctx, builtIn); err != nil {
-			return contracts.Sandbox{}, contracts.Operation{}, false, err
-		}
 	}
 	canonicalRequest, err := json.Marshal(request)
 	if err != nil {

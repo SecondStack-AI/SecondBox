@@ -393,8 +393,7 @@ func newDirectPortFixture(t *testing.T, name string, now *time.Time) directPortF
 	}
 	t.Cleanup(relay.Close)
 	portService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		BuiltInProfiles: integrationBuiltInProfiles(t),
-		Store:           databaseStore, PlatformToken: testPlatformToken,
+		Store: databaseStore, PlatformToken: testPlatformToken,
 		DefaultSubjectQuota: generousQuota(),
 		Now:                 func() time.Time { return *now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,

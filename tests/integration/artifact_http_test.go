@@ -526,8 +526,7 @@ func newArtifactControlPlane(
 ) *service.ControlPlaneService {
 	t.Helper()
 	controlPlane, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		BuiltInProfiles: integrationBuiltInProfiles(t),
-		Store:           databaseStore, ArtifactObjectStore: immutableObjects,
+		Store: databaseStore, ArtifactObjectStore: immutableObjects,
 		PlatformToken:       testPlatformToken,
 		DefaultSubjectQuota: projectQuota,
 		Now:                 now,

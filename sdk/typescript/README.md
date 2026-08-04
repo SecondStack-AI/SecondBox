@@ -22,8 +22,10 @@ const transport = new SecondBoxClient(
 const secondbox = new SecondBox(transport);
 ```
 
-Import the public wire types from `@secondstack-ai/secondbox` and the Flue adapter from `@secondstack-ai/secondbox/flue`.
+Import the public wire types from `@secondstack-ai/secondbox`, the Flue 2.x adapter from `@secondstack-ai/secondbox/flue`, and Node's authenticated WebSocket plus SPKI-pinned direct-port transports from `@secondstack-ai/secondbox/node`.
 
 `SandboxHandle.connectExecStream` accepts an application-supplied authenticated connector. The returned helper validates the Sandbox generation and WebSocket subprotocol, sequences stdin, explicit EOF, credit, and cancellation frames, and rejects input after EOF or any operation after the terminal outcome. The connector owns runtime-specific credential attachment because browser and server WebSocket implementations expose different authentication surfaces.
 
-The canonical API contract and deployment guidance live in the [SecondBox repository](https://github.com/SecondStack-AI/SecondBox).
+High-level methods cover Profiles, RunnerPools, Sandbox creation/adoption/listing, Metadata, lifecycle and waiting, buffered/streaming execution, files, Snapshots, Artifacts, Leases, Ports, and terminals. They generate request keys when absent and translate observed resource revisions into optimistic-concurrency headers without refreshing and replaying fenced work.
+
+The canonical API contract, runnable examples, and deployment guidance live in the [SecondBox repository](https://github.com/SecondStack-AI/SecondBox).

@@ -8,6 +8,7 @@ npm ci --ignore-scripts
 scripts/verify-generated.sh
 scripts/test-go.sh
 scripts/test-contract.sh
+scripts/test-sdk-packages.sh
 scripts/test-compose.sh
 scripts/test-image-policy.sh
 scripts/build-artifacts.sh

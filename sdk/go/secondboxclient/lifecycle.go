@@ -263,6 +263,24 @@ func (handle *SandboxHandle) AcquireLease(
 	duration time.Duration,
 	idempotencyKey string,
 ) (Lease, error) {
+	return handle.acquireLease(ctx, duration, idempotencyKey, false)
+}
+
+// TakeoverLease atomically fences prior Lease authority and acquires its replacement.
+func (handle *SandboxHandle) TakeoverLease(
+	ctx context.Context,
+	duration time.Duration,
+	idempotencyKey string,
+) (Lease, error) {
+	return handle.acquireLease(ctx, duration, idempotencyKey, true)
+}
+
+func (handle *SandboxHandle) acquireLease(
+	ctx context.Context,
+	duration time.Duration,
+	idempotencyKey string,
+	replaceActive bool,
+) (Lease, error) {
 	seconds := int64(duration / time.Second)
 	if seconds < 1 || seconds > 86400 {
 		return Lease{}, errors.New("SecondBox Lease duration must be from 1 second through 24 hours")
@@ -274,7 +292,7 @@ func (handle *SandboxHandle) AcquireLease(
 		}
 		idempotencyKey = generated
 	}
-	body, err := json.Marshal(AcquireLeaseRequest{DurationSeconds: seconds})
+	body, err := json.Marshal(AcquireLeaseRequest{DurationSeconds: seconds, ReplaceActive: replaceActive})
 	if err != nil {
 		return Lease{}, fmt.Errorf("SecondBox Lease encode acquire request: %w", err)
 	}

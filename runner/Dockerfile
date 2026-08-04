@@ -1,15 +1,23 @@
-FROM docker.io/library/golang:1.25.12-bookworm AS runner-builder
+ARG RELEASE_VERSION
+ARG SOURCE_COMMIT
+ARG PUBLIC_CONTRACT_DIGEST
+
+FROM docker.io/library/golang:1.25.12-bookworm@sha256:ea341baa9bd5ba6784f6d7161ace70544349a6242d54d34a0fbfd2c4d51c9d58 AS runner-builder
+
+ARG RELEASE_VERSION
+ARG SOURCE_COMMIT
 
 WORKDIR /src/runner
 COPY runner/go.mod runner/go.sum ./
 RUN go mod download && go mod verify
 COPY runner/ ./
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false \
+      -ldflags="-X main.releaseVersion=${RELEASE_VERSION} -X main.sourceCommit=${SOURCE_COMMIT}" \
       -o /out/secondbox-runner ./cmd/secondbox-runner \
     && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false \
       -o /out/secondbox-guest-agent ./cmd/secondbox-guest-agent
 
-FROM docker.io/library/debian:12.12-slim AS firecracker-release
+FROM docker.io/library/debian:12.12-slim@sha256:d5d3f9c23164ea16f31852f95bd5959aad1c5e854332fe00f7b3a20fcc9f635c AS firecracker-release
 
 ARG FIRECRACKER_VERSION=1.16.1
 ARG FIRECRACKER_ARCHIVE_SHA256=382a02a869e4d6d5cb14c40577f9545e8458021ea8b0b2d3fc10ec14d9c242e6
@@ -29,7 +37,11 @@ RUN apt-get update \
     && install -m 0644 /tmp/firecracker/NOTICE /out-NOTICE \
     && install -m 0644 /tmp/firecracker/THIRD-PARTY /out-THIRD-PARTY
 
-FROM docker.io/library/debian:12.12-slim
+FROM docker.io/library/debian:12.12-slim@sha256:d5d3f9c23164ea16f31852f95bd5959aad1c5e854332fe00f7b3a20fcc9f635c
+
+ARG RELEASE_VERSION
+ARG SOURCE_COMMIT
+ARG PUBLIC_CONTRACT_DIGEST
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -40,7 +52,10 @@ RUN apt-get update \
     && install -d -m 0700 /var/lib/secondbox-runner
 
 LABEL org.opencontainers.image.source="https://github.com/SecondStack-AI/SecondBox" \
-      org.opencontainers.image.title="SecondBox Firecracker runner"
+      org.opencontainers.image.title="SecondBox Firecracker runner" \
+      org.opencontainers.image.version="${RELEASE_VERSION}" \
+      org.opencontainers.image.revision="${SOURCE_COMMIT}" \
+      ai.secondstack.secondbox.public-contract-digest="${PUBLIC_CONTRACT_DIGEST}"
 
 COPY --from=runner-builder /out/secondbox-runner /usr/local/bin/secondbox-runner
 COPY --from=runner-builder /out/secondbox-guest-agent /usr/local/bin/secondbox-guest-agent

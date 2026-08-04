@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -171,14 +172,22 @@ func EncodeSystemdEnvironment(environment map[string]string) ([]byte, error) {
 }
 
 type Inspection struct {
-	SchemaVersion          int                 `json:"schemaVersion"`
-	Mode                   string              `json:"mode"`
-	DevelopmentWaitSeconds int64               `json:"developmentWaitSeconds,omitempty"`
-	ComposeFiles           []string            `json:"composeFiles"`
-	Environment            map[string]string   `json:"environment"`
-	Policy                 []InspectedPolicy   `json:"policy"`
-	Overrides              []InspectedOverride `json:"overrides"`
-	RemoteRunners          []string            `json:"remoteRunners"`
+	SchemaVersion          int                        `json:"schemaVersion"`
+	Mode                   string                     `json:"mode"`
+	DevelopmentWaitSeconds int64                      `json:"developmentWaitSeconds,omitempty"`
+	ComposeFiles           []string                   `json:"composeFiles"`
+	Environment            map[string]string          `json:"environment"`
+	Policy                 []InspectedPolicy          `json:"policy"`
+	Overrides              []InspectedOverride        `json:"overrides"`
+	RemoteRunners          []string                   `json:"remoteRunners"`
+	StandardBundles        []string                   `json:"standardBundles"`
+	StandardProfiles       []InspectedStandardProfile `json:"standardProfiles"`
+}
+
+type InspectedStandardProfile struct {
+	Name       string `json:"name"`
+	Revision   int64  `json:"revision"`
+	SpecDigest string `json:"specDigest"`
 }
 
 type InspectedPolicy struct {
@@ -247,7 +256,12 @@ func Inspect(manifestPath string) ([]byte, error) {
 		Value:       resolved.Environment["SECONDBOX_DATA_PLANE_RETENTION_SECONDS"],
 		Help:        dataPlaneRetentionHelp,
 	}}
-	return json.MarshalIndent(Inspection{SchemaVersion: 1, Mode: resolved.Manifest.Deployment.Mode, DevelopmentWaitSeconds: waitSeconds, ComposeFiles: resolved.ComposeFiles, Environment: redacted, Policy: policy, Overrides: overrides, RemoteRunners: remote}, "", "  ")
+	profiles := make([]InspectedStandardProfile, 0, len(resolved.ResourceDocument.Profiles))
+	for _, profile := range resolved.ResourceDocument.Profiles {
+		head := profile.Revisions[len(profile.Revisions)-1]
+		profiles = append(profiles, InspectedStandardProfile{Name: profile.Name, Revision: head.Number, SpecDigest: head.SpecDigest})
+	}
+	return json.MarshalIndent(Inspection{SchemaVersion: 1, Mode: resolved.Manifest.Deployment.Mode, DevelopmentWaitSeconds: waitSeconds, ComposeFiles: resolved.ComposeFiles, Environment: redacted, Policy: policy, Overrides: overrides, RemoteRunners: remote, StandardBundles: slices.Clone(resolved.Manifest.StandardResources.Bundles), StandardProfiles: profiles}, "", "  ")
 }
 
 func ensurePrivateDirectory(path string) error {

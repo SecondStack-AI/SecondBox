@@ -5,6 +5,9 @@ import {
   encodeJSONBody,
   type CreateDirectoryRequest,
   type CreatePortSessionRequest,
+  type CreateProfileRequest,
+  type CreateRunnerPoolRequest,
+  type CreateSnapshotRequest,
   type CreateTerminalRequest,
   type DirectoryListing,
   type ExecOutcome,
@@ -13,28 +16,40 @@ import {
   type FileExistsResult,
   type FileStat,
   type FileWriteResult,
+  type Artifact,
+  type ArtifactPage,
   type JSONValue,
   type Lease,
   type Metadata,
   type Operation,
   type OperationID,
   type PortSession,
+  type Profile,
+  type ProfilePage,
   type Problem,
   type RelocateSandboxRequest,
+  type ReviseProfileRequest,
   type RestoreSnapshotRequest,
   type RemovePathRequest,
   type Sandbox,
   type SandboxPage,
   type SandboxState,
+  type Snapshot,
+  type SnapshotPage,
   type StreamingExecRequest,
   type TerminalFrame,
   type TerminalSession,
   type TransportRequestOptions,
   type UpdateSandboxMetadataRequest,
+  type UpdateRunnerPoolRequest,
+  type RunnerPool,
+  type RunnerPoolPage,
   type WaitSandboxRequest,
 } from "./transport.ts";
 
 export type {
+  Artifact,
+  ArtifactPage,
   ExecStreamFrame,
   FileStat,
   Lease,
@@ -42,6 +57,7 @@ export type {
   Operation,
   PortSession,
   Profile,
+  ProfilePage,
   ProfileRevisionSpec,
   Problem,
   RelocateSandboxRequest,
@@ -49,6 +65,9 @@ export type {
   SandboxPage,
   SandboxState,
   Snapshot,
+  SnapshotPage,
+  RunnerPool,
+  RunnerPoolPage,
   TerminalFrame,
   UpdateSandboxMetadataRequest,
 } from "./transport.ts";
@@ -115,6 +134,16 @@ const DEFAULT_MINIMUM_RENEWAL_DELAY_MILLISECONDS = 1_000;
 
 export interface PollOptions {
   readonly intervalMilliseconds: number;
+  readonly signal?: AbortSignal;
+}
+
+export interface PageOptions {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+export interface SandboxListOptions extends PageOptions {
+  readonly metadata?: Metadata;
   readonly signal?: AbortSignal;
 }
 
@@ -187,6 +216,193 @@ export class SecondBox {
 
   public sandbox(snapshot: Sandbox, leaseID?: string): SandboxHandle {
     return new SandboxHandle(this, snapshot, leaseID);
+  }
+
+  public listProfiles(options: PageOptions = {}, signal?: AbortSignal): Promise<ProfilePage> {
+    return this.requestJSON<ProfilePage>("listProfiles", {
+      queryParameters: pageQuery(options), signal,
+    });
+  }
+
+  public getProfile(name: string, signal?: AbortSignal): Promise<Profile> {
+    requireNonempty(name, "Profile name");
+    return this.requestJSON<Profile>("getProfile", {
+      pathParameters: { profileName: name }, signal,
+    });
+  }
+
+  public async validateProfile(name: string, signal?: AbortSignal): Promise<Profile> {
+    const profile = await this.getProfile(name, signal);
+    if (profile.state !== "enabled") {
+      throw new Error(`SecondBox Profile ${name} is ${profile.state}`);
+    }
+    return profile;
+  }
+
+  public createProfile(
+    request: CreateProfileRequest,
+    options: { readonly idempotencyKey?: string; readonly signal?: AbortSignal } = {},
+  ): Promise<Profile> {
+    requireNonempty(request.name, "Profile name");
+    return this.requestJSON<Profile>("createProfile", {
+      headers: { "Idempotency-Key": options.idempotencyKey ?? idempotencyKey() },
+      body: encodeJSONBody(request), signal: options.signal,
+    });
+  }
+
+  public reviseProfile(
+    name: string,
+    expectedRevision: number,
+    request: ReviseProfileRequest,
+    options: { readonly idempotencyKey?: string; readonly signal?: AbortSignal } = {},
+  ): Promise<Profile> {
+    requireNonempty(name, "Profile name");
+    requirePositiveInteger(expectedRevision, "Profile expected revision");
+    return this.requestJSON<Profile>("reviseProfile", {
+      pathParameters: { profileName: name },
+      headers: {
+        "If-Match": revisionETag(expectedRevision),
+        "Idempotency-Key": options.idempotencyKey ?? idempotencyKey(),
+      },
+      body: encodeJSONBody(request), signal: options.signal,
+    });
+  }
+
+  public disableProfile(
+    name: string,
+    expectedRevision: number,
+    options: { readonly idempotencyKey?: string; readonly signal?: AbortSignal } = {},
+  ): Promise<Profile> {
+    requireNonempty(name, "Profile name");
+    requirePositiveInteger(expectedRevision, "Profile expected revision");
+    return this.requestJSON<Profile>("disableProfile", {
+      pathParameters: { profileName: name },
+      headers: {
+        "If-Match": revisionETag(expectedRevision),
+        "Idempotency-Key": options.idempotencyKey ?? idempotencyKey(),
+      },
+      signal: options.signal,
+    });
+  }
+
+  public listRunnerPools(options: PageOptions = {}, signal?: AbortSignal): Promise<RunnerPoolPage> {
+    return this.requestJSON<RunnerPoolPage>("listRunnerPools", {
+      queryParameters: pageQuery(options), signal,
+    });
+  }
+
+  public getRunnerPool(name: string, signal?: AbortSignal): Promise<RunnerPool> {
+    requireNonempty(name, "RunnerPool name");
+    return this.requestJSON<RunnerPool>("getRunnerPool", {
+      pathParameters: { runnerPoolName: name }, signal,
+    });
+  }
+
+  public createRunnerPool(request: CreateRunnerPoolRequest, signal?: AbortSignal): Promise<RunnerPool> {
+    requireNonempty(request.name, "RunnerPool name");
+    return this.requestJSON<RunnerPool>("createRunnerPool", {
+      body: encodeJSONBody(request), signal,
+    });
+  }
+
+  public updateRunnerPool(
+    name: string,
+    expectedRevision: number,
+    request: UpdateRunnerPoolRequest,
+    signal?: AbortSignal,
+  ): Promise<RunnerPool> {
+    requireNonempty(name, "RunnerPool name");
+    requirePositiveInteger(expectedRevision, "RunnerPool expected revision");
+    return this.requestJSON<RunnerPool>("updateRunnerPool", {
+      pathParameters: { runnerPoolName: name },
+      headers: { "If-Match": revisionETag(expectedRevision) },
+      body: encodeJSONBody(request), signal,
+    });
+  }
+
+  public listSandboxes(options: SandboxListOptions = {}): Promise<SandboxPage> {
+    const metadata = Object.entries(options.metadata ?? {})
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([name, value]) => `${name}=${value}`);
+    if (metadata.length > 8) {
+      throw new Error("SecondBox Sandbox metadata filter must not exceed 8 entries");
+    }
+    return this.requestJSON<SandboxPage>("listSandboxes", {
+      queryParameters: { ...pageQuery(options), ...(metadata.length === 0 ? {} : { metadata }) },
+      signal: options.signal,
+    });
+  }
+
+  /** Attaches a handle without taking ownership of the durable Sandbox. */
+  public async adoptSandbox(sandboxID: string, signal?: AbortSignal): Promise<SandboxHandle> {
+    requireNonempty(sandboxID, "Sandbox ID");
+    const sandbox = await this.requestJSON<Sandbox>("getSandbox", {
+      pathParameters: { sandboxId: sandboxID }, signal,
+    });
+    return new SandboxHandle(this, sandbox);
+  }
+
+  public getSnapshot(snapshotID: string, signal?: AbortSignal): Promise<Snapshot> {
+    requireNonempty(snapshotID, "Snapshot ID");
+    return this.requestJSON<Snapshot>("getSnapshot", {
+      pathParameters: { snapshotId: snapshotID }, signal,
+    });
+  }
+
+  public deleteSnapshot(
+    snapshotID: string,
+    options: { readonly idempotencyKey?: string; readonly signal?: AbortSignal } = {},
+  ): Promise<Operation> {
+    requireNonempty(snapshotID, "Snapshot ID");
+    return this.requestJSON<Operation>("deleteSnapshot", {
+      pathParameters: { snapshotId: snapshotID },
+      headers: { "Idempotency-Key": options.idempotencyKey ?? idempotencyKey() },
+      signal: options.signal,
+    });
+  }
+
+  public getArtifact(artifactID: string, signal?: AbortSignal): Promise<Artifact> {
+    requireNonempty(artifactID, "Artifact ID");
+    return this.requestJSON<Artifact>("getArtifact", {
+      pathParameters: { artifactId: artifactID }, signal,
+    });
+  }
+
+  public async downloadArtifact(
+    artifactID: string,
+    maximumBytes: number,
+    signal?: AbortSignal,
+  ): Promise<Uint8Array> {
+    requireNonempty(artifactID, "Artifact ID");
+    requirePositiveInteger(maximumBytes, "Artifact download maximumBytes");
+    const response = await this.request("downloadArtifactContent", {
+      pathParameters: { artifactId: artifactID }, signal,
+    });
+    const declaredLength = Number(response.headers.get("Content-Length"));
+    if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) {
+      await response.body?.cancel();
+      throw new Error(`SecondBox Artifact download exceeds ${String(maximumBytes)} bytes`);
+    }
+    const content = new Uint8Array(await response.arrayBuffer());
+    if (content.byteLength > maximumBytes) {
+      throw new Error(`SecondBox Artifact download exceeds ${String(maximumBytes)} bytes`);
+    }
+    if (response.headers.get("Digest") !== await sha256Digest(content)) {
+      throw new Error("SecondBox Artifact download Digest header does not match content");
+    }
+    return content;
+  }
+
+  public async deleteArtifact(
+    artifactID: string,
+    options: { readonly idempotencyKey?: string; readonly signal?: AbortSignal } = {},
+  ): Promise<void> {
+    requireNonempty(artifactID, "Artifact ID");
+    await this.requestVoid("deleteArtifact", {
+      pathParameters: { artifactId: artifactID },
+      headers: { "Idempotency-Key": options.idempotencyKey ?? idempotencyKey() },
+      signal: options.signal,
+    });
   }
 
   public getLease(leaseID: string, signal?: AbortSignal): Promise<Lease> {
@@ -719,8 +935,10 @@ export interface SandboxFilesystem {
 }
 
 export interface LifecycleOptions {
-  readonly idempotencyKey: string;
-  readonly ifMatch: string;
+  readonly idempotencyKey?: string;
+  readonly expectedRevision?: number;
+  /** Raw transport escape hatch; prefer expectedRevision or the observed handle revision. */
+  readonly ifMatch?: string;
   readonly signal?: AbortSignal;
 }
 
@@ -747,6 +965,77 @@ export class SandboxHandle implements SandboxFilesystem {
     });
     this.#snapshot = sandbox;
     return sandbox;
+  }
+
+  /** Replaces Metadata against the observed revision without refresh/replay. */
+  public async updateMetadata(metadata: Metadata, signal?: AbortSignal): Promise<Sandbox> {
+    const sandbox = await this.#api.requestJSON<Sandbox>("updateSandboxMetadata", {
+      pathParameters: { sandboxId: this.#snapshot.id },
+      headers: { "If-Match": revisionETag(this.#snapshot.revision) },
+      body: encodeJSONBody({ metadata } satisfies UpdateSandboxMetadataRequest),
+      signal,
+    });
+    this.#snapshot = sandbox;
+    return sandbox;
+  }
+
+  public listSnapshots(options: PageOptions = {}, signal?: AbortSignal): Promise<SnapshotPage> {
+    return this.#api.requestJSON<SnapshotPage>("listSandboxSnapshots", {
+      pathParameters: { sandboxId: this.#snapshot.id },
+      queryParameters: pageQuery(options), signal,
+    });
+  }
+
+  public createSnapshot(
+    request: CreateSnapshotRequest,
+    options: LifecycleOptions = {},
+  ): Promise<Operation> {
+    requireNonempty(request.name, "Snapshot name");
+    return this.#api.requestJSON<Operation>("createSandboxSnapshot", {
+      pathParameters: { sandboxId: this.#snapshot.id },
+      headers: {
+        "If-Match": lifecycleETag(options, this.#snapshot.revision, "createSandboxSnapshot"),
+        "Idempotency-Key": options.idempotencyKey ?? idempotencyKey(),
+      },
+      body: encodeJSONBody(request), signal: options.signal,
+    });
+  }
+
+  public listArtifacts(options: PageOptions = {}, signal?: AbortSignal): Promise<ArtifactPage> {
+    return this.#api.requestJSON<ArtifactPage>("listSandboxArtifacts", {
+      pathParameters: { sandboxId: this.#snapshot.id },
+      queryParameters: pageQuery(options), signal,
+    });
+  }
+
+  public async uploadArtifact(
+    request: {
+      readonly name: string;
+      readonly mediaType: string;
+      readonly metadata: Metadata;
+      readonly content: Uint8Array;
+      readonly idempotencyKey?: string;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<Artifact> {
+    requireNonempty(request.name, "Artifact name");
+    requireNonempty(request.mediaType, "Artifact media type");
+    const form = new FormData();
+    form.set("name", request.name);
+    form.set("mediaType", request.mediaType);
+    form.set("sha256", await sha256Hex(request.content));
+    form.set("metadata", new Blob([JSON.stringify(request.metadata)], { type: "application/json" }));
+    form.set("content", new Blob([ownedArrayBuffer(request.content)], { type: "application/octet-stream" }), "content");
+    return this.#api.requestJSON<Artifact>("uploadSandboxArtifact", {
+      pathParameters: { sandboxId: this.#snapshot.id },
+      headers: {
+        ...this.dataPlaneHeaders(),
+        "Idempotency-Key": request.idempotencyKey ?? idempotencyKey(),
+      },
+      body: form,
+      contentType: null,
+      signal: request.signal,
+    });
   }
 
   public async wait(
@@ -1289,8 +1578,8 @@ export class SandboxHandle implements SandboxFilesystem {
     const operation = await this.#api.requestJSON<Operation>(operationID, {
       pathParameters: { sandboxId: this.#snapshot.id },
       headers: {
-        "Idempotency-Key": options.idempotencyKey,
-        "If-Match": options.ifMatch,
+        "Idempotency-Key": options.idempotencyKey ?? idempotencyKey(),
+        "If-Match": lifecycleETag(options, this.#snapshot.revision, operationID),
       },
       ...(body === undefined ? {} : { body: encodeJSONBody(body) }),
       signal: options.signal,
@@ -1630,6 +1919,42 @@ async function sha256Digest(content: Uint8Array): Promise<string> {
   let binary = "";
   for (const byte of digest) binary += String.fromCharCode(byte);
   return `sha-256=:${btoa(binary)}:`;
+}
+
+async function sha256Hex(content: Uint8Array): Promise<string> {
+  if (globalThis.crypto?.subtle === undefined) {
+    throw new Error("SecondBox Web Crypto SHA-256 support is required for Artifact upload");
+  }
+  const digest = new Uint8Array(
+    await globalThis.crypto.subtle.digest("SHA-256", ownedArrayBuffer(content)),
+  );
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function pageQuery(options: PageOptions): Readonly<Record<string, string>> {
+  if (options.limit !== undefined &&
+      (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 200)) {
+    throw new Error("SecondBox page limit must be an integer from 1 through 200");
+  }
+  if (options.cursor !== undefined && options.cursor === "") {
+    throw new Error("SecondBox page cursor must be nonempty when supplied");
+  }
+  return {
+    ...(options.limit === undefined ? {} : { limit: String(options.limit) }),
+    ...(options.cursor === undefined ? {} : { cursor: options.cursor }),
+  };
+}
+
+function lifecycleETag(
+  options: LifecycleOptions,
+  observedRevision: number,
+  operationID: string,
+): string {
+  if (options.ifMatch !== undefined && options.expectedRevision !== undefined) {
+    throw new Error(`SecondBox ${operationID} cannot combine ifMatch and expectedRevision`);
+  }
+  if (options.ifMatch !== undefined) return options.ifMatch;
+  return revisionETag(options.expectedRevision ?? observedRevision);
 }
 
 function ownedArrayBuffer(content: Uint8Array): ArrayBuffer {

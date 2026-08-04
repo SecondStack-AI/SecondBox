@@ -80,8 +80,7 @@ func TestPublicStreamingExecIsLiveBackpressuredAndCancellable(t *testing.T) {
 	server := httptest.NewUnstartedServer(nil)
 	publicBaseURL := "http://" + server.Listener.Addr().String()
 	dataPlaneService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
-		BuiltInProfiles: integrationBuiltInProfiles(t),
-		Store:           databaseStore, PlatformToken: testPlatformToken,
+		Store: databaseStore, PlatformToken: testPlatformToken,
 		DefaultSubjectQuota: generousQuota(),
 		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,

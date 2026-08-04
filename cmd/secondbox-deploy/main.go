@@ -1,15 +1,23 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/SecondStack-AI/SecondBox/internal/deployconfig"
+	"github.com/SecondStack-AI/SecondBox/pkg/buildinfo"
+	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
+	"github.com/SecondStack-AI/SecondBox/pkg/releasefinalize"
+	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
 )
 
 func main() {
@@ -24,6 +32,11 @@ func run(arguments []string) error {
 		return usage()
 	}
 	switch arguments[0] {
+	case "version":
+		if len(arguments) != 1 {
+			return usage()
+		}
+		return buildinfo.Write(os.Stdout)
 	case "init":
 		if len(arguments) < 4 || arguments[1] != "--mode" {
 			return usage()
@@ -39,6 +52,17 @@ func run(arguments []string) error {
 			}
 			return err
 		case "production":
+			if len(arguments) == 8 && arguments[3] == "--input" && (arguments[5] == "--release-index" || arguments[5] == "--qualification-artifact-manifest") {
+				verified, err := verifyReleaseLocation(arguments[5], arguments[6])
+				if err != nil {
+					return err
+				}
+				path, err := deployconfig.InitProductionFromRelease(arguments[4], arguments[7], verified.Manifest, verified.ManifestBytes)
+				if err == nil {
+					fmt.Println(path)
+				}
+				return err
+			}
 			if len(arguments) == 6 && arguments[3] == "--input" {
 				path, err := deployconfig.InitProductionFromManifest(arguments[4], arguments[5])
 				if err == nil {
@@ -66,6 +90,25 @@ func run(arguments []string) error {
 			fmt.Printf("SecondBox deployment manifest valid: %s (%d Runner declarations)\n", arguments[1], len(resolved.Manifest.Runners))
 		}
 		return err
+	case "verify":
+		if len(arguments) != 3 || (arguments[1] != "artifact-manifest" && arguments[1] != "release-index") {
+			return usage()
+		}
+		verified, err := verifyReleaseLocation("--"+arguments[1], arguments[2])
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{"version": verified.Manifest.Version, "tag": verified.Manifest.Tag, "sourceCommit": verified.Manifest.SourceCommit, "artifactManifestDigest": releaseDigest(verified.ManifestBytes), "qualified": verified.Qualification != nil})
+	case "qualification-attestation":
+		if len(arguments) != 7 || arguments[1] != "--manifest" || arguments[3] != "--input" || arguments[5] != "--output" {
+			return usage()
+		}
+		return writeQualificationAttestation(arguments[2], arguments[4], arguments[6])
+	case "release-index":
+		if len(arguments) != 7 || arguments[1] != "--manifest" || arguments[3] != "--qualification" || arguments[5] != "--output" {
+			return usage()
+		}
+		return writeReleaseIndex(arguments[2], arguments[4], arguments[6])
 	case "render":
 		if len(arguments) != 4 || arguments[1] != "--output" {
 			return usage()
@@ -109,6 +152,86 @@ func run(arguments []string) error {
 	}
 }
 
+func writeQualificationAttestation(manifestPath, inputPath, outputPath string) error {
+	manifestBytes, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return err
+	}
+	manifest, err := releasecontract.DecodeArtifactManifest(manifestBytes)
+	if err != nil {
+		return err
+	}
+	inputBytes, err := os.ReadFile(inputPath)
+	if err != nil {
+		return err
+	}
+	var input releasefinalize.QualificationInput
+	decoder := json.NewDecoder(strings.NewReader(string(inputBytes)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		return err
+	}
+	attestation, err := releasefinalize.Qualification(manifest, manifestBytes, input)
+	if err != nil {
+		return err
+	}
+	return writeJSONCreateOnly(outputPath, attestation)
+}
+
+func writeReleaseIndex(manifestPath, qualificationPath, outputPath string) error {
+	manifestBytes, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return err
+	}
+	manifest, err := releasecontract.DecodeArtifactManifest(manifestBytes)
+	if err != nil {
+		return err
+	}
+	qualificationBytes, err := os.ReadFile(qualificationPath)
+	if err != nil {
+		return err
+	}
+	index, err := releasefinalize.Index(manifest, manifestBytes, qualificationBytes)
+	if err != nil {
+		return err
+	}
+	return writeJSONCreateOnly(outputPath, index)
+}
+
+func writeJSONCreateOnly(path string, value any) error {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(append(data, '\n')); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
+}
+
+func verifyReleaseLocation(kind, location string) (releaseverify.VerifiedRelease, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	client := &http.Client{Timeout: 2 * time.Minute}
+	switch kind {
+	case "--release-index":
+		return releaseverify.FinalRelease(ctx, location, releaseverify.HTTPFetcher(client))
+	case "--qualification-artifact-manifest", "--artifact-manifest":
+		return releaseverify.ArtifactManifest(ctx, location, releaseverify.HTTPFetcher(client))
+	default:
+		return releaseverify.VerifiedRelease{}, fmt.Errorf("SecondBox deployment release verification mode is invalid")
+	}
+}
+
+func releaseDigest(data []byte) string {
+	return releasecontract.Digest(data)
+}
+
 func runCompose(manifestPath, action string) error {
 	if action != "config" && action != "prepare" && action != "up" && action != "down" {
 		return fmt.Errorf("SecondBox deployment manifest: compose action must be config, prepare, up, or down")
@@ -147,7 +270,14 @@ func runCompose(manifestPath, action string) error {
 	case "down":
 		arguments = composeDownArguments(arguments)
 	}
-	return runDockerCompose(arguments)
+	if err := runDockerCompose(arguments); err != nil {
+		return err
+	}
+	if action == "up" {
+		_, err := deployconfig.ApplyStandardResources(context.Background(), resolved, http.DefaultClient)
+		return err
+	}
+	return nil
 }
 
 func composeUpArguments(arguments []string, options ...string) []string {
@@ -175,5 +305,5 @@ func runDockerCompose(arguments []string) error {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: secondbox-deploy {init --mode development DIRECTORY|init --mode production [--input COMPLETE_MANIFEST] DIRECTORY|validate MANIFEST|render --output ENV MANIFEST|runner-init MANIFEST RUNNER_ID TARGET|inspect MANIFEST|migrate LEGACY_ENV TARGET|compose MANIFEST config|prepare|up|down}")
+	return fmt.Errorf("usage: secondbox-deploy {init --mode development DIRECTORY|init --mode production [--input COMPLETE_MANIFEST [--release-index URL|--qualification-artifact-manifest URL]] DIRECTORY|verify artifact-manifest URL|verify release-index URL|qualification-attestation --manifest FILE --input FILE --output FILE|release-index --manifest FILE --qualification FILE --output FILE|validate MANIFEST|render --output ENV MANIFEST|runner-init MANIFEST RUNNER_ID TARGET|inspect MANIFEST|migrate LEGACY_ENV TARGET|compose MANIFEST config|prepare|up|down}")
 }

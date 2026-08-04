@@ -214,7 +214,7 @@ failure:
 | `runner_boot` | 433 ms | 479 ms | 488 ms |
 
 Pool acquisition, command decoding, and stream send remained 0 ms. Five live
-`secondbox run coding-environment -- python3 -c 'print("hello")'` executions on
+`secondbox run durable-coding -- python3 -c 'print("hello")'` executions on
 a control plane rebuilt from that commit completed in 1.234–1.391 seconds,
 with a 1.363-second median.
 
