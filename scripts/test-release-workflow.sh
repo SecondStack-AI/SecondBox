@@ -31,7 +31,12 @@ rg -q -- '--tag candidate --provenance' "$repo_root/scripts/release-publish-cand
 rg -q 'published npm version did not become readable before the propagation deadline' "$repo_root/scripts/release-publish-candidate.sh"
 rg -q -- '--defer-release' "$repo_root/scripts/release-hosted-publish.sh"
 rg -q -- '--draft=false --prerelease' "$repo_root/scripts/release-hosted-publish.sh"
-rg -q 'GitHub native release immutability to be disabled' "$repo_root/scripts/release-hosted-publish.sh"
+rg -q 'repos/SecondStack-AI/SecondBox/immutable-releases' "$repo_root/scripts/release-local-upload.sh"
+rg -q 'GitHub native release immutability to be disabled' "$repo_root/scripts/release-local-upload.sh"
+if rg -q 'immutable-releases' "$repo_root/scripts/release-hosted-publish.sh"; then
+  echo "hosted publisher requires repository-administration permission unavailable to GITHUB_TOKEN" >&2
+  exit 1
+fi
 test ! -e "$repo_root/.github/workflows/scenario-qualification.yml"
 test ! -e "$repo_root/.github/workflows/release-finalize.yml"
 
