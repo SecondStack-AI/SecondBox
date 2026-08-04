@@ -27,8 +27,8 @@ stage_two="$work_dir/stage-two"
 export SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR="$artifact_dir"
 export SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY="$work_dir/public.pem"
 export SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256="$fingerprint"
-"$repo_root/scripts/release-stage.sh" --test-mode 0.0.0-test.1 "$stage_one" >/dev/null
-"$repo_root/scripts/release-stage.sh" --test-mode 0.0.0-test.1 "$stage_two" >/dev/null
+"$repo_root/scripts/release-stage.sh" --test-mode 0.1.0 "$stage_one" >/dev/null
+"$repo_root/scripts/release-stage.sh" --test-mode 0.1.0 "$stage_two" >/dev/null
 
 for stage in "$stage_one" "$stage_two"; do
   go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$stage"
