@@ -51,6 +51,8 @@ gh run watch --exit-status
 
 The workflow checks the immutable tag and required CI results, verifies the complete draft transport, publishes the supplied OCI archives and npm tarball without rebuilding, uploads the public assets, records GitHub provenance, removes transport-only assets, and exposes an incomplete public prerelease. Verify that npm has only the `candidate` tag, every GHCR digest matches the artifact manifest, and no qualification attestation or final release index exists.
 
+GitHub native release immutability must be disabled for this repository. The coordinated release protocol intentionally publishes an incomplete prerelease, removes private transport assets, and later adds source-free qualification plus the final release index. GitHub's native setting freezes the prerelease at the first public transition and prevents those required later phases. SecondBox instead enforces immutability through the exact Git tag, write-once npm version, digest-addressed OCI objects, staged checksums, byte-identical retry checks, and the final release index.
+
 ## Qualify and finalize locally
 
 Keep the reviewed production operator manifest outside the checkout. Export the live application coordinates used by the SDK probes:

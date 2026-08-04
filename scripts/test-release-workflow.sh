@@ -28,8 +28,10 @@ if rg -q 'self-hosted|secondbox-kvm|release-stage|docker build|go build|npm pack
   exit 1
 fi
 rg -q -- '--tag candidate --provenance' "$repo_root/scripts/release-publish-candidate.sh"
+rg -q 'published npm version did not become readable before the propagation deadline' "$repo_root/scripts/release-publish-candidate.sh"
 rg -q -- '--defer-release' "$repo_root/scripts/release-hosted-publish.sh"
 rg -q -- '--draft=false --prerelease' "$repo_root/scripts/release-hosted-publish.sh"
+rg -q 'GitHub native release immutability to be disabled' "$repo_root/scripts/release-hosted-publish.sh"
 test ! -e "$repo_root/.github/workflows/scenario-qualification.yml"
 test ! -e "$repo_root/.github/workflows/release-finalize.yml"
 
