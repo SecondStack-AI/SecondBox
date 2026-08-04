@@ -38,7 +38,7 @@ scripts/release-local-upload.sh --dry-run 0.1.0 /protected/releases/secondbox-0.
 just release-local-upload 0.1.0 /protected/releases/secondbox-0.1.0
 ```
 
-Preparation runs the full non-KVM suite, release staging tests, release workflow tests, and the qualified scenario before staging the real candidate. The output contains `candidate/`, exact-commit KVM evidence, and a publication-input manifest binding every filename, role, size, and SHA-256 digest. Upload creates or reuses only a private draft Release and accepts existing assets only when byte-identical. The publication-input manifest is uploaded last.
+Preparation runs the full non-KVM suite, release staging tests, release workflow tests, and the qualified scenario before staging the real candidate. The output contains `candidate/`, exact-commit KVM evidence, and a publication-input manifest binding every filename, role, size, and SHA-256 digest. Before mutating the draft, upload uses the operator's authenticated repository-administration access to confirm that GitHub native release immutability is disabled. The hosted workflow's `GITHUB_TOKEN` cannot read that administration endpoint. Upload creates or reuses only a private draft Release and accepts existing assets only when byte-identical. The publication-input manifest is uploaded last.
 
 ## Publish the incomplete candidate
 

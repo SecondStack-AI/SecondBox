@@ -31,6 +31,11 @@ fi
 
 gh auth status >/dev/null
 [[ "$(gh repo view --json nameWithOwner --jq .nameWithOwner)" == "SecondStack-AI/SecondBox" ]] || { echo "local release upload is authenticated against the wrong repository" >&2; exit 1; }
+release_policy="$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' 'repos/SecondStack-AI/SecondBox/immutable-releases')"
+jq -e '.enabled == false' <<<"$release_policy" >/dev/null || {
+  echo "SecondBox staged release finalization requires GitHub native release immutability to be disabled" >&2
+  exit 1
+}
 if gh release view "$tag" --json isDraft,isPrerelease >/dev/null 2>&1; then
   state="$(gh release view "$tag" --json isDraft,isPrerelease)"
   jq -e '.isDraft == true and .isPrerelease == false' <<<"$state" >/dev/null || { echo "local release upload refuses a non-draft release" >&2; exit 1; }
