@@ -45,20 +45,8 @@ test-release-stage:
 test-release-workflow:
     scripts/test-release-workflow.sh
 
-release-local-prepare version output_dir:
-    scripts/release-local-prepare.sh "{{version}}" "{{output_dir}}"
-
-release-local-upload version prepared_dir:
-    scripts/release-local-upload.sh "{{version}}" "{{prepared_dir}}"
-
-release-local-qualify version operator_manifest work_dir:
-    scripts/release-local-qualify.sh "{{version}}" "{{operator_manifest}}" "{{work_dir}}"
-
-release-local-finalize version qualification_file:
-    scripts/release-local-finalize.sh "{{version}}" "{{qualification_file}}"
-
-test-source-free-release:
-    scripts/test-source-free-release.sh
+release-upload version output_dir:
+    scripts/release-upload.sh "{{version}}" "{{output_dir}}"
 
 test-firecracker:
     scripts/test-firecracker.sh

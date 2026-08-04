@@ -104,7 +104,10 @@ func FinalRelease(ctx context.Context, location string, fetch FetchFunc) (Verifi
 }
 
 func verifyManifestObjects(ctx context.Context, manifest releasecontract.ArtifactManifest, fetch FetchFunc) error {
-	references := []releasecontract.Reference{manifest.OpenAPI.Reference, manifest.GoSDK.Package, manifest.TypeScriptSDK.Package, manifest.SourceFreeSuite}
+	references := []releasecontract.Reference{manifest.OpenAPI.Reference, manifest.GoSDK.Package, manifest.TypeScriptSDK.Package}
+	if manifest.SourceFreeSuite != (releasecontract.Reference{}) {
+		references = append(references, manifest.SourceFreeSuite)
+	}
 	references = append(references, manifest.SBOMs...)
 	references = append(references, manifest.ArtifactAttestations...)
 	for _, bundle := range manifest.StandardBundles {

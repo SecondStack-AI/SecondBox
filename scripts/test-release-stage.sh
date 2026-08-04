@@ -67,23 +67,7 @@ if "$repo_root/scripts/release-stage.sh" 1.2.3 "$work_dir/dirty-real-stage" >/de
   exit 1
 fi
 
-local_release="$work_dir/local-release"
-"$repo_root/scripts/release-local-prepare.sh" --test-mode 0.0.0-test.1 "$local_release" >/dev/null
-if "$repo_root/scripts/release-local-upload.sh" --dry-run 0.0.0-test.1 "$local_release" >/dev/null 2>&1; then
-  echo "local release upload accepted synthetic test-mode output" >&2
-  exit 1
-fi
-go -C "$repo_root" run ./cmd/secondbox-release-tool verify-publication-sources \
-  "$local_release/candidate" \
-  "$local_release/secondbox-0.0.0-test.1-candidate-kvm-evidence.json" \
-  "$local_release/secondbox-0.0.0-test.1-publication-input.json"
-jq -e '.files | any(.role == "candidate-evidence") and any(.name == "candidate-allowlist.json")' \
-  "$local_release/secondbox-0.0.0-test.1-publication-input.json" >/dev/null
-printf 'tampered transport\n' >>"$local_release/candidate/secondbox-0.0.0-test.1-openapi.json"
-if go -C "$repo_root" run ./cmd/secondbox-release-tool verify-publication-sources \
-  "$local_release/candidate" \
-  "$local_release/secondbox-0.0.0-test.1-candidate-kvm-evidence.json" \
-  "$local_release/secondbox-0.0.0-test.1-publication-input.json" >/dev/null 2>&1; then
-  echo "local publication input accepted transport checksum drift" >&2
+if "$repo_root/scripts/release-upload.sh" >/dev/null 2>&1; then
+  echo "release upload accepted missing arguments" >&2
   exit 1
 fi

@@ -133,8 +133,8 @@ type ArtifactManifest struct {
 	MicroVM              MicroVMArtifact          `json:"microvm"`
 	Binaries             []BinaryArtifact         `json:"binaries"`
 	SBOMs                []Reference              `json:"sboms"`
-	ArtifactAttestations []Reference              `json:"artifactAttestations"`
-	SourceFreeSuite      Reference                `json:"sourceFreeSuite"`
+	ArtifactAttestations []Reference              `json:"artifactAttestations,omitempty"`
+	SourceFreeSuite      Reference                `json:"sourceFreeSuite,omitempty"`
 	StandardBundles      []StandardBundleArtifact `json:"standardBundles"`
 }
 
@@ -319,19 +319,21 @@ func (manifest ArtifactManifest) Validate() error {
 	if err := validateBinaries(manifest); err != nil {
 		return err
 	}
-	if len(manifest.SBOMs) == 0 || len(manifest.ArtifactAttestations) == 0 {
-		return contractError("artifact manifest requires SBOM and artifact-attestation references")
+	if len(manifest.SBOMs) == 0 {
+		return contractError("artifact manifest requires an SBOM reference")
 	}
 	for index, ref := range append(slices.Clone(manifest.SBOMs), manifest.ArtifactAttestations...) {
 		if err := validateReference(fmt.Sprintf("evidence reference %d", index), ref); err != nil {
 			return err
 		}
 	}
-	if err := validateReference("source-free qualification suite", manifest.SourceFreeSuite); err != nil {
-		return err
-	}
-	if manifest.SourceFreeSuite.Location != SourceFreeSuiteLocation(manifest.Version) {
-		return contractError("source-free qualification suite location is not canonical for %s", manifest.Tag)
+	if manifest.SourceFreeSuite != (Reference{}) {
+		if err := validateReference("source-free qualification suite", manifest.SourceFreeSuite); err != nil {
+			return err
+		}
+		if manifest.SourceFreeSuite.Location != SourceFreeSuiteLocation(manifest.Version) {
+			return contractError("source-free qualification suite location is not canonical for %s", manifest.Tag)
+		}
 	}
 	if err := validateBundles(manifest.StandardBundles); err != nil {
 		return err

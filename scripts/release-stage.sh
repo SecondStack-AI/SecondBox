@@ -58,8 +58,6 @@ fi
 
 openapi_name="secondbox-${version}-openapi.json"
 cp "$repo_root/contracts/openapi/v1/secondbox.openapi.json" "$output_dir/$openapi_name"
-cp "$repo_root/scripts/test-source-free-release.sh" "$output_dir/secondbox-${version}-source-free-qualify"
-chmod 0755 "$output_dir/secondbox-${version}-source-free-qualify"
 
 if $test_mode; then
   while IFS= read -r file; do [[ -f "$repo_root/$file" ]] && printf '%s\n' "$file"; done < <(git -C "$repo_root" ls-files --cached --others --exclude-standard | sort) | tar -C "$repo_root" --create --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner --files-from=- | gzip -n >"$output_dir/secondbox-${version}-go-module.tar.gz"
@@ -171,7 +169,6 @@ go -C "$repo_root" run ./cmd/secondbox-release-tool standard-documents "$microvm
 
 jq -n --arg version "$version" --arg commit "$source_commit" --arg ts "$typescript_name" --arg go "secondbox-${version}-go-module.tar.gz" '{schemaVersion:1,version:$version,sourceCommit:$commit,typeScriptPackage:$ts,goModuleArchive:$go}' >"$output_dir/secondbox-${version}-package-metadata.json"
 jq -n --arg version "$version" --arg commit "$source_commit" '{spdxVersion:"SPDX-2.3",dataLicense:"CC0-1.0",SPDXID:"SPDXRef-DOCUMENT",name:("SecondBox-"+$version),documentNamespace:("https://github.com/SecondStack-AI/SecondBox/releases/tag/v"+$version),creationInfo:{creators:["Organization: SecondStack AI"],comment:("deterministic source commit "+$commit)},packages:[{name:"SecondBox",SPDXID:"SPDXRef-Package-SecondBox",versionInfo:$version,downloadLocation:("git+https://github.com/SecondStack-AI/SecondBox.git@"+$commit),filesAnalyzed:false}]}' >"$output_dir/secondbox-${version}.spdx.json"
-jq -n --arg version "$version" --arg commit "$source_commit" --arg contract "$public_contract_digest" --arg guest "$microvm_manifest_digest" '{_type:"https://in-toto.io/Statement/v1",subject:[],predicateType:"https://slsa.dev/provenance/v1",predicate:{buildDefinition:{buildType:"https://github.com/SecondStack-AI/SecondBox/release-stage/v1",externalParameters:{version:$version,sourceCommit:$commit,publicContractDigest:$contract,signedGuestManifestDigest:$guest}},runDetails:{builder:{id:"https://github.com/SecondStack-AI/SecondBox"}}}}' >"$output_dir/secondbox-${version}-provenance.json"
 jq -n --arg version "$version" --arg commit "$source_commit" --arg control "$control_plane_digest" --arg runner "$runner_digest" --arg microImage "$microvm_image_digest" --arg microManifest "$microvm_manifest_digest" --arg fingerprint "$microvm_fingerprint" --argjson runtime "$microvm_runtime_bundle" --argjson toolchain "$microvm_toolchain_bundle" '{version:$version,sourceCommit:$commit,controlPlaneDigest:$control,runnerDigest:$runner,microvmImageDigest:$microImage,microvmManifestDigest:$microManifest,microvmSigningKeyFingerprint:$fingerprint,microvmRuntimeBundle:$runtime,microvmToolchainBundle:$toolchain}' >"$temporary/candidate-input.json"
 go -C "$repo_root" run ./cmd/secondbox-release-tool manifest "$temporary/candidate-input.json" "$output_dir"
 
