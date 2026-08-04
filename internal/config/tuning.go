@@ -22,8 +22,6 @@ func TuningDefaults() []TuningDefault {
 		integer("SECONDBOX_RUNNER_COMMAND_DELIVERY_BATCH_SIZE", DefaultRunnerCommandDeliveryBatchSize),
 		integer("SECONDBOX_RUNNER_EVENT_PERSISTENCE_BATCH_SIZE", DefaultRunnerEventPersistenceBatchSize),
 		integer("SECONDBOX_RUNNER_EVENT_PERSISTENCE_BATCH_WAIT_MILLISECONDS", DefaultRunnerEventPersistenceBatchWaitMilliseconds),
-		integer("SECONDBOX_DATA_PLANE_CLAIM_DURATION_MILLISECONDS", DefaultDataPlaneClaimDurationMilliseconds),
-		integer("SECONDBOX_DATA_PLANE_MAXIMUM_FRAME_BYTES", DefaultDataPlaneMaximumFrameBytes),
 		integer("SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES", DefaultDataPlaneMaximumSessionBytes),
 		integer("SECONDBOX_LIFECYCLE_RECONCILE_BATCH_SIZE", DefaultLifecycleReconcileBatchSize),
 		integer("SECONDBOX_LIFECYCLE_RECONCILE_POLL_INTERVAL_MILLISECONDS", DefaultLifecycleReconcilePollIntervalMilliseconds),

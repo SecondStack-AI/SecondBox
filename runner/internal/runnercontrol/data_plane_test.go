@@ -182,7 +182,7 @@ func TestRunnerDataPlaneExecCreditFenceOrderingAndCancellation(t *testing.T) {
 
 func TestRunnerDataPlanePTYRoutesBinaryControlOutputAndTypedTerminal(t *testing.T) {
 	observedControls := make(chan PTYControl, 4)
-	output := append(bytes.Repeat([]byte{0x00, 0x01, 0xfe, 0xff}, runnerRelayChunkBytes/4), 0xaa, 0xbb)
+	output := append(bytes.Repeat([]byte{0x00, 0x01, 0xfe, 0xff}, runnerDataPlaneChunkBytes/4), 0xaa, 0xbb)
 	backend := &relayAssignmentBackend{
 		pty: func(
 			ctx context.Context,
@@ -273,7 +273,7 @@ func TestRunnerDataPlanePTYRoutesBinaryControlOutputAndTypedTerminal(t *testing.
 	waitRunnerMessages(t, stream, 4)
 	messages := stream.messages()
 	if messages[0].GetPty().GetAttachResult().GetKind() != runnerprotocol.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ATTACHED ||
-		len(messages[1].GetPty().GetOutput().GetData()) != runnerRelayChunkBytes ||
+		len(messages[1].GetPty().GetOutput().GetData()) != runnerDataPlaneChunkBytes ||
 		!bytes.Equal(messages[2].GetPty().GetOutput().GetData(), []byte{0xaa, 0xbb}) {
 		t.Fatalf("PTY attachment and chunked output = %#v", messages[:3])
 	}
@@ -434,7 +434,7 @@ func TestRunnerDataPlanePTYReplayRingDetachEvictionAndExclusiveAttachment(t *tes
 		t.Fatalf("evicted PTY attachment result = %s", got)
 	}
 	service.operationMu.Lock()
-	service.execOperations[runnerRelayOperationKey(
+	service.execOperations[runnerDataPlaneOperationKey(
 		fence, "terminal-replay", "terminal-replay-stream",
 	)].cancel(context.Canceled)
 	service.operationMu.Unlock()
@@ -605,7 +605,7 @@ func TestRunnerDataPlaneTerminalTombstonesAreBoundedAndReplayDuplicates(t *testi
 	asyncErrors := make(chan error, 1)
 	stale := relayRunnerFence()
 	var last *runnerprotocol.ExecFrame
-	for index := 0; index < maxRunnerRelayTerminalTombstones+32; index++ {
+	for index := 0; index < maxRunnerDataPlaneTerminalTombstones+32; index++ {
 		last = relayExecOpen(
 			stale,
 			fmt.Sprintf("stale-%d", index),
@@ -619,8 +619,8 @@ func TestRunnerDataPlaneTerminalTombstonesAreBoundedAndReplayDuplicates(t *testi
 	service.operationMu.Lock()
 	retained := len(service.execOperations)
 	service.operationMu.Unlock()
-	if retained > maxRunnerRelayTerminalTombstones {
-		t.Fatalf("retained Exec tombstones = %d, maximum %d", retained, maxRunnerRelayTerminalTombstones)
+	if retained > maxRunnerDataPlaneTerminalTombstones {
+		t.Fatalf("retained Exec tombstones = %d, maximum %d", retained, maxRunnerDataPlaneTerminalTombstones)
 	}
 	beforeReplay := len(stream.messages())
 	if err := service.handleExecFrame(t.Context(), stream, last, enabled, asyncErrors); err != nil {

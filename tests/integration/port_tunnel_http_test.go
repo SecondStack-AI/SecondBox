@@ -56,7 +56,7 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	seed := seedRelayReadyAssignment(t, sandbox, now)
+	seed := seedDataPlaneReadyAssignment(t, sandbox, now)
 	lease, err := controlPlane.AcquireSandboxLease(
 		t.Context(), principal, sandbox.ID, sandbox.Generation, "port-tunnel-http-lease", 60,
 	)
@@ -74,9 +74,9 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 	); err != nil {
 		t.Fatal(err)
 	}
-	relay, err := runnercontrol.NewPostgresFrameRelay(t.Context(), runnercontrol.PostgresFrameRelayConfig{
-		DatabaseURL: integrationDatabaseURL, ClaimDuration: 50 * time.Millisecond,
-		Retention: time.Hour, MaximumFrameBytes: 1 << 20, MaximumSessionBytes: 2 << 20,
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{
+		DatabaseURL: integrationDatabaseURL,
+		Retention:   time.Hour, MaximumSessionBytes: 2 << 20,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -90,9 +90,9 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 		DefaultSubjectQuota: generousQuota(),
 		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
-		DataPlaneRelay:        relay, DataPlanePollInterval: time.Millisecond,
+		DataPlaneStore:        relay, DataPlanePollInterval: time.Millisecond,
 		LiveDataPlane:    liveDataPlane,
-		PortSessionRelay: relay, PublicBaseURL: "http://" + server.Listener.Addr().String(),
+		PortSessionStore: relay, PublicBaseURL: "http://" + server.Listener.Addr().String(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -181,15 +181,6 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 	if returnedCredit.frame.GetCredit().GetByteCount() != uint64(len(runnerPayload)) ||
 		returnedCredit.frame.Sequence != 4 {
 		t.Fatalf("post-delivery Port credit = %#v", returnedCredit.frame)
-	}
-	var frameRows int64
-	if err := pool.QueryRow(t.Context(), `
-		SELECT count(*) FROM secondbox.data_plane_frames WHERE session_id=$1`, session.ID,
-	).Scan(&frameRows); err != nil {
-		t.Fatal(err)
-	}
-	if frameRows != 0 {
-		t.Fatalf("relayed Port frame rows = %d, want zero", frameRows)
 	}
 
 	if err := connection.Close(); err != nil {
@@ -286,7 +277,7 @@ type portFakeEvent struct {
 
 type portTunnelFakeRunner struct {
 	broker            *runnercontrol.LiveDataPlaneBroker
-	relay             *runnercontrol.PostgresFrameRelay
+	relay             *runnercontrol.PostgresDataPlaneStore
 	session           *runnercontrol.Session
 	runnerID          string
 	connectionID      string
@@ -301,7 +292,7 @@ type portTunnelFakeRunner struct {
 func newPortTunnelFakeRunner(
 	t *testing.T,
 	broker *runnercontrol.LiveDataPlaneBroker,
-	relay *runnercontrol.PostgresFrameRelay,
+	relay *runnercontrol.PostgresDataPlaneStore,
 	runnerID string,
 	connectionID string,
 ) (*portTunnelFakeRunner, func()) {
@@ -428,7 +419,7 @@ func (fake *portTunnelFakeRunner) deliver(ctx context.Context, payload any) erro
 	if err != nil {
 		return err
 	}
-	deliver, err := fake.relay.RecordPortSessionFrame(ctx, runnercontrol.InboundRelayFrame{
+	deliver, err := fake.relay.RecordPortSessionFrame(ctx, runnercontrol.RunnerDataPlaneFrame{
 		RunnerID: fake.runnerID, ConnectionID: fake.connectionID, Message: message,
 	}, time.Now().UTC())
 	if err != nil || !deliver {

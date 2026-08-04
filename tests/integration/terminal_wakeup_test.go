@@ -47,7 +47,7 @@ func TestPublicTerminalDeliversOverLiveDataPlaneRatherThanPollInterval(t *testin
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	seed := seedRelayReadyAssignment(t, sandbox, now)
+	seed := seedDataPlaneReadyAssignment(t, sandbox, now)
 	lease, err := controlPlane.AcquireSandboxLease(
 		t.Context(), principal, sandbox.ID, sandbox.Generation, "terminal-wakeup-lease", 60,
 	)
@@ -66,9 +66,9 @@ func TestPublicTerminalDeliversOverLiveDataPlaneRatherThanPollInterval(t *testin
 	); err != nil {
 		t.Fatal(err)
 	}
-	relay, err := runnercontrol.NewPostgresFrameRelay(t.Context(), runnercontrol.PostgresFrameRelayConfig{
-		DatabaseURL: integrationDatabaseURL, ClaimDuration: 50 * time.Millisecond,
-		Retention: time.Hour, MaximumFrameBytes: 1 << 20, MaximumSessionBytes: 4 << 20,
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{
+		DatabaseURL: integrationDatabaseURL,
+		Retention:   time.Hour, MaximumSessionBytes: 4 << 20,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestPublicTerminalDeliversOverLiveDataPlaneRatherThanPollInterval(t *testin
 		DefaultSubjectQuota: generousQuota(),
 		Now:                 func() time.Time { return time.Now().UTC() }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
-		DataPlaneRelay:        relay, DataPlanePollInterval: wakeupTerminalPollInterval,
+		DataPlaneStore:        relay, DataPlanePollInterval: wakeupTerminalPollInterval,
 		LiveDataPlane: liveDataPlane,
 		PublicBaseURL: publicBaseURL,
 	})

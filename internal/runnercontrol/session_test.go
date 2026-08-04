@@ -104,12 +104,12 @@ func TestSessionRejectsPortableCheckpointOnlyRunner(t *testing.T) {
 	}
 }
 
-func TestSessionValidatesRunnerRelayFeatureFenceSequenceAndDuplicates(t *testing.T) {
-	session := negotiatedRelaySession(t)
+func TestSessionValidatesRunnerDataPlaneFeatureFenceSequenceAndDuplicates(t *testing.T) {
+	session := negotiatedDataPlaneSession(t)
 	if _, err := session.Accept(registrationFrame("runner-1", "connection-1", 1)); err != nil {
 		t.Fatal(err)
 	}
-	fence := relayTestFence()
+	fence := dataPlaneTestFence()
 	first := runnerExecFrame(fence, "operation-1", "stream-1", 1, &runnerv1.ExecFrame_Output{
 		Output: &runnerv1.ExecOutput{
 			Channel: runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT,
@@ -190,22 +190,22 @@ func TestSessionRequiresProtocolTwoAndBoundedWorkspaceTransferFrames(t *testing.
 	}
 }
 
-func TestSessionRejectsRelayFramesWithoutNegotiatedFeature(t *testing.T) {
+func TestSessionRejectsDataPlaneFramesWithoutNegotiatedFeature(t *testing.T) {
 	session := negotiatedSession(t)
 	if _, err := session.Accept(registrationFrame("runner-1", "connection-1", 1)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.Accept(runnerFileFrame(relayTestFence(), "operation-1", "stream-1", 1)); !errors.Is(err, ErrRunnerMessage) {
+	if _, err := session.Accept(runnerFileFrame(dataPlaneTestFence(), "operation-1", "stream-1", 1)); !errors.Is(err, ErrRunnerMessage) {
 		t.Fatalf("unnegotiated File frame error = %v, want ErrRunnerMessage", err)
 	}
 }
 
 func TestSessionAcceptsOrderedOutboundExecInput(t *testing.T) {
-	session := negotiatedRelaySession(t)
+	session := negotiatedDataPlaneSession(t)
 	if _, err := session.Accept(registrationFrame("runner-1", "connection-1", 1)); err != nil {
 		t.Fatal(err)
 	}
-	fence := relayTestFence()
+	fence := dataPlaneTestFence()
 	for _, frame := range []*runnerv1.ExecFrame{
 		{
 			Fence: fence, OperationId: "operation-1", StreamId: "stream-1", Sequence: 1,
@@ -220,7 +220,7 @@ func TestSessionAcceptsOrderedOutboundExecInput(t *testing.T) {
 			}},
 		},
 	} {
-		if err := session.ValidateOutboundRelayFrame(&runnerv1.ControlPlaneToRunner{
+		if err := session.ValidateOutboundDataPlaneFrame(&runnerv1.ControlPlaneToRunner{
 			Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: frame},
 		}); err != nil {
 			t.Fatalf("outbound Exec sequence %d: %v", frame.Sequence, err)
@@ -229,11 +229,11 @@ func TestSessionAcceptsOrderedOutboundExecInput(t *testing.T) {
 }
 
 func TestSessionAcceptsOrderedTerminalFramesAcrossExecAndPtyEnvelopes(t *testing.T) {
-	session := negotiatedRelaySession(t)
+	session := negotiatedDataPlaneSession(t)
 	if _, err := session.Accept(registrationFrame("runner-1", "connection-1", 1)); err != nil {
 		t.Fatal(err)
 	}
-	fence := relayTestFence()
+	fence := dataPlaneTestFence()
 	frames := []*runnerv1.ControlPlaneToRunner{
 		{
 			Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: &runnerv1.ExecFrame{
@@ -269,7 +269,7 @@ func TestSessionAcceptsOrderedTerminalFramesAcrossExecAndPtyEnvelopes(t *testing
 		},
 	}
 	for index, frame := range frames {
-		if err := session.ValidateOutboundRelayFrame(frame); err != nil {
+		if err := session.ValidateOutboundDataPlaneFrame(frame); err != nil {
 			t.Fatalf("outbound Terminal frame %d: %v", index+1, err)
 		}
 	}
@@ -299,7 +299,7 @@ func TestSessionClassifiesDurableInstanceTerminalEnvelope(t *testing.T) {
 			InstanceTerminal: &runnerv1.InstanceTerminal{
 				MessageId:                 "terminal-2",
 				Sequence:                  2,
-				Fence:                     relayTestFence(),
+				Fence:                     dataPlaneTestFence(),
 				Reason:                    runnerv1.InstanceObservedTerminationReason_INSTANCE_OBSERVED_TERMINATION_REASON_GUEST_SHUTDOWN,
 				ObservedAtUnixMs:          1,
 				TerminationEvidenceDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -332,7 +332,7 @@ func negotiatedSession(t *testing.T) *Session {
 	return session
 }
 
-func negotiatedRelaySession(t *testing.T) *Session {
+func negotiatedDataPlaneSession(t *testing.T) *Session {
 	t.Helper()
 	session := NewSession(SessionConfig{
 		AuthenticatedRunnerID: "runner-1",
@@ -346,7 +346,7 @@ func negotiatedRelaySession(t *testing.T) *Session {
 		HeartbeatInterval: 10 * time.Second,
 		ConnectionID:      "connection-1",
 	})
-	if response, err := session.Accept(helloRelayFrame("runner-1")); err != nil || response.GetWelcome() == nil {
+	if response, err := session.Accept(helloDataPlaneFrame("runner-1")); err != nil || response.GetWelcome() == nil {
 		t.Fatalf("Hello response = %#v, %v", response, err)
 	}
 	return session
@@ -364,7 +364,7 @@ func helloFrame(runnerID string, minimum, maximum uint32) *runnerv1.RunnerToCont
 	}
 }
 
-func helloRelayFrame(runnerID string) *runnerv1.RunnerToControlPlane {
+func helloDataPlaneFrame(runnerID string) *runnerv1.RunnerToControlPlane {
 	frame := helloFrame(runnerID, 1, 1)
 	frame.GetHello().MandatoryFeatures = []runnerv1.RunnerFeature{
 		runnerv1.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
@@ -413,7 +413,7 @@ func heartbeatFrame(runnerID, connectionID, messageID string, sequence uint64) *
 	}
 }
 
-func relayTestFence() *runnerv1.AssignmentFence {
+func dataPlaneTestFence() *runnerv1.AssignmentFence {
 	return &runnerv1.AssignmentFence{
 		AssignmentId:      "assignment-1",
 		SandboxId:         "sandbox-1",

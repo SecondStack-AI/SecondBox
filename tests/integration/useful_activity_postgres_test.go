@@ -31,7 +31,7 @@ func TestEveryUsefulSessionKindSuppressesIdleReclamationWhileGuestHeartbeatDoesN
 	}
 
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	seedRelayReadyAssignment(t, sandbox, now)
+	seedDataPlaneReadyAssignment(t, sandbox, now)
 	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +128,7 @@ func TestTerminalGuestLivenessWakesDeadlineScheduledSandbox(t *testing.T) {
 	}
 
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	seedRelayReadyAssignment(t, sandbox, now)
+	seedDataPlaneReadyAssignment(t, sandbox, now)
 	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
 	if err != nil {
 		t.Fatal(err)

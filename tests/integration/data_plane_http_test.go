@@ -64,10 +64,10 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseProxiedDataPlane(t *testing.T
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	seed := seedRelayReadyAssignment(t, sandbox, now)
-	relay, err := runnercontrol.NewPostgresFrameRelay(t.Context(), runnercontrol.PostgresFrameRelayConfig{
-		DatabaseURL: integrationDatabaseURL, ClaimDuration: 50 * time.Millisecond,
-		Retention: time.Hour, MaximumFrameBytes: 1 << 20, MaximumSessionBytes: 2 << 30,
+	seed := seedDataPlaneReadyAssignment(t, sandbox, now)
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{
+		DatabaseURL: integrationDatabaseURL,
+		Retention:   time.Hour, MaximumSessionBytes: 2 << 30,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +80,7 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseProxiedDataPlane(t *testing.T
 		DefaultSubjectQuota: generousQuota(),
 		Now:                 time.Now, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
-		DataPlaneRelay:        relay, LiveDataPlane: liveDataPlane,
+		DataPlaneStore:        relay, LiveDataPlane: liveDataPlane,
 		DataPlanePollInterval: time.Millisecond,
 	})
 	if err != nil {
@@ -238,10 +238,10 @@ func TestFlueAdapterCompleteSubsetAgainstRealServiceContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	seed := seedRelayReadyAssignment(t, sandbox, now)
-	relay, err := runnercontrol.NewPostgresFrameRelay(t.Context(), runnercontrol.PostgresFrameRelayConfig{
-		DatabaseURL: integrationDatabaseURL, ClaimDuration: 50 * time.Millisecond,
-		Retention: time.Hour, MaximumFrameBytes: 1 << 20, MaximumSessionBytes: 2 << 30,
+	seed := seedDataPlaneReadyAssignment(t, sandbox, now)
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{
+		DatabaseURL: integrationDatabaseURL,
+		Retention:   time.Hour, MaximumSessionBytes: 2 << 30,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -254,7 +254,7 @@ func TestFlueAdapterCompleteSubsetAgainstRealServiceContract(t *testing.T) {
 		DefaultSubjectQuota: generousQuota(),
 		Now:                 time.Now, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
-		DataPlaneRelay:        relay, LiveDataPlane: liveDataPlane,
+		DataPlaneStore:        relay, LiveDataPlane: liveDataPlane,
 		DataPlanePollInterval: time.Millisecond,
 	})
 	if err != nil {
@@ -368,16 +368,16 @@ func TestIndependentProjectsCannotObserveOrMutateAnotherSandbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	seedRelayReadyAssignment(t, sandbox, now)
+	seedDataPlaneReadyAssignment(t, sandbox, now)
 	lease, err := controlPlane.AcquireSandboxLease(
 		t.Context(), owner, sandbox.ID, sandbox.Generation, "isolation-owner-lease", 60,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	relay, err := runnercontrol.NewPostgresFrameRelay(t.Context(), runnercontrol.PostgresFrameRelayConfig{
-		DatabaseURL: integrationDatabaseURL, ClaimDuration: 50 * time.Millisecond,
-		Retention: time.Hour, MaximumFrameBytes: 1 << 20, MaximumSessionBytes: 2 << 30,
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{
+		DatabaseURL: integrationDatabaseURL,
+		Retention:   time.Hour, MaximumSessionBytes: 2 << 30,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -389,7 +389,7 @@ func TestIndependentProjectsCannotObserveOrMutateAnotherSandbox(t *testing.T) {
 		DefaultSubjectQuota: generousQuota(),
 		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
-		DataPlaneRelay:        relay, DataPlanePollInterval: time.Millisecond,
+		DataPlaneStore:        relay, DataPlanePollInterval: time.Millisecond,
 		PublicBaseURL: "http://secondbox.invalid",
 	})
 	if err != nil {

@@ -63,7 +63,6 @@ type WorkspaceTransferBroker interface {
 type ServerConfig struct {
 	CredentialVerifier  CredentialVerifier
 	StateStore          ProtocolStateStore
-	FrameRelay          ProtocolFrameRelay
 	LiveDataPlane       *LiveDataPlaneBroker
 	DirectPorts         DirectPortAdmitter
 	PortSessions        PortSessionFrameRecorder
@@ -311,7 +310,6 @@ func (server *Server) Connect(stream runnerv1.RunnerControl_ConnectServer) (retu
 			go server.pumpOutboundFrames(
 				stream.Context(),
 				sender,
-				session,
 				identity.RunnerID,
 				connectionID,
 				failures,
@@ -423,7 +421,6 @@ func pumpRunnerFrames(
 func (server *Server) pumpOutboundFrames(
 	ctx context.Context,
 	stream controlPlaneFrameSender,
-	session *Session,
 	runnerID string,
 	connectionID string,
 	failures chan<- error,
@@ -437,7 +434,7 @@ func (server *Server) pumpOutboundFrames(
 	defer cancelWakeups()
 	for {
 		if err := server.drainOutboundFrames(
-			ctx, stream, session, runnerID, connectionID,
+			ctx, stream, runnerID, connectionID,
 		); err != nil {
 			select {
 			case failures <- err:
@@ -457,13 +454,12 @@ func (server *Server) pumpOutboundFrames(
 func (server *Server) drainOutboundFrames(
 	ctx context.Context,
 	stream controlPlaneFrameSender,
-	session *Session,
 	runnerID string,
 	connectionID string,
 ) error {
 	for {
 		more, err := server.sendNextOutboundFrame(
-			ctx, stream, session, runnerID, connectionID,
+			ctx, stream, runnerID, connectionID,
 		)
 		if err != nil || !more {
 			return err
@@ -474,7 +470,6 @@ func (server *Server) drainOutboundFrames(
 func (server *Server) sendNextOutboundFrame(
 	ctx context.Context,
 	stream controlPlaneFrameSender,
-	session *Session,
 	runnerID string,
 	connectionID string,
 ) (bool, error) {
@@ -492,9 +487,7 @@ func (server *Server) sendNextOutboundFrame(
 	}
 	claimDuration := time.Since(deliveryStartedAt)
 	if len(deliveries) == 0 {
-		return false, server.sendClaimedRelayFrame(
-			ctx, stream, session, runnerID, connectionID,
-		)
+		return false, nil
 	}
 	deliveryDurations := make([]time.Duration, len(deliveries))
 	streamSendDurations := make([]time.Duration, len(deliveries))
@@ -538,9 +531,7 @@ func (server *Server) sendNextOutboundFrame(
 		claimDuration, streamSendDurations,
 	)
 	if int64(len(deliveries)) < server.config.CommandBatchSize {
-		return false, server.sendClaimedRelayFrame(
-			ctx, stream, session, runnerID, connectionID,
-		)
+		return false, nil
 	}
 	return true, nil
 }
@@ -747,7 +738,7 @@ func (server *Server) persistEvent(ctx context.Context, event Event, receivedAt 
 		if server.config.PortSessions == nil {
 			return errors.New("SecondBox runner control Port session recorder is not configured")
 		}
-		deliver, err := server.config.PortSessions.RecordPortSessionFrame(ctx, InboundRelayFrame{
+		deliver, err := server.config.PortSessions.RecordPortSessionFrame(ctx, RunnerDataPlaneFrame{
 			RunnerID:     event.RunnerID,
 			ConnectionID: event.ConnectionID,
 			Message:      event.Message,
@@ -762,42 +753,6 @@ func (server *Server) persistEvent(ctx context.Context, event Event, receivedAt 
 	default:
 		return fmt.Errorf("SecondBox runner control received unexpected event %q", event.Kind)
 	}
-}
-
-func (server *Server) sendClaimedRelayFrame(
-	ctx context.Context,
-	stream controlPlaneFrameSender,
-	session *Session,
-	runnerID string,
-	connectionID string,
-) error {
-	if server.config.FrameRelay == nil {
-		return nil
-	}
-	delivery, found, err := server.config.FrameRelay.ClaimOutboundFrame(
-		ctx, runnerID, connectionID, server.config.Now(),
-	)
-	if err != nil {
-		return err
-	}
-	if !found {
-		return nil
-	}
-	if delivery.ID == "" || delivery.Message == nil {
-		return errors.New("SecondBox runner relay returned an incomplete outbound delivery")
-	}
-	if err := session.ValidateOutboundRelayFrame(delivery.Message); err != nil {
-		return fmt.Errorf("SecondBox runner relay outbound frame %q: %w", delivery.ID, err)
-	}
-	if err := stream.Send(delivery.Message); err != nil {
-		return fmt.Errorf("SecondBox runner relay send frame %q: %w", delivery.ID, err)
-	}
-	if err := server.config.FrameRelay.MarkOutboundFrameDelivered(
-		ctx, delivery.ID, connectionID, delivery.ClaimAttempt, server.config.Now(),
-	); err != nil {
-		return fmt.Errorf("SecondBox runner relay mark frame %q delivered: %w", delivery.ID, err)
-	}
-	return nil
 }
 
 func (server *Server) peerIdentity(ctx context.Context) (RunnerIdentity, error) {

@@ -630,7 +630,7 @@ func TestSandboxReadsAreScopedToTenantAndSubject(t *testing.T) {
 		t.Fatalf("cross-subject idempotency Sandbox ownership = %#v", otherSandbox)
 	}
 
-	seedRelayReadyAssignment(
+	seedDataPlaneReadyAssignment(
 		t, sandbox, time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
 	)
 	sandbox, err = controlPlane.GetSandbox(t.Context(), owner, sandbox.ID)

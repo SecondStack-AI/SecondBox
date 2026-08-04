@@ -111,7 +111,7 @@ func TestExampleManifestIsGeneratedFromTheRegistry(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Fatal("deploy/secondbox.example.toml drifted from the typed schema or override registry")
 	}
-	if len(OverrideRegistry()) != 20 {
+	if len(OverrideRegistry()) != 18 {
 		t.Fatalf("override count = %d", len(OverrideRegistry()))
 	}
 }
@@ -368,7 +368,7 @@ func TestCredentialsRemainSeparateAcrossTrustBoundaries(t *testing.T) {
 	}
 }
 
-func TestOverridesPreserveAbsenceExactValuesAndCrossFieldValidation(t *testing.T) {
+func TestOverridesPreserveAbsenceAndExactValues(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
 	manifest, err := ReadManifest(manifestPath)
 	if err != nil {
@@ -389,15 +389,6 @@ func TestOverridesPreserveAbsenceExactValuesAndCrossFieldValidation(t *testing.T
 	}
 	if resolved.Environment["SECONDBOX_HTTP_TIMEOUT_SECONDS"] != "41" || resolved.Environment["SECONDBOX_ASSIGNMENT_RETRY_LIMIT"] != "0" {
 		t.Fatalf("overrides = %#v", resolved.Environment)
-	}
-	manifest.Overrides.DataPlaneMaximumFrameBytes = integer(100)
-	manifest.Overrides.DataPlaneMaximumSessionBytes = integer(99)
-	encoded, _ = encodeManifest(manifest)
-	if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Resolve(manifestPath); err == nil || !strings.Contains(err.Error(), "session byte bound") {
-		t.Fatalf("cross-field error = %v", err)
 	}
 }
 
@@ -578,8 +569,8 @@ func TestInspectRedactsSecretValuesAndPathsAndShowsAllDefaults(t *testing.T) {
 			t.Errorf("inspect exposed secret material %q", secret)
 		}
 	}
-	if strings.Count(text, "codeDefault") != 20 {
-		t.Fatalf("inspect defaults = %d, want 20", strings.Count(text, "codeDefault"))
+	if strings.Count(text, "codeDefault") != 18 {
+		t.Fatalf("inspect defaults = %d, want 18", strings.Count(text, "codeDefault"))
 	}
 	if !strings.Contains(text, `"name": "data_plane_retention_seconds"`) || !strings.Contains(text, dataPlaneRetentionHelp) {
 		t.Fatalf("inspect omitted retention policy help: %s", text)
@@ -1038,8 +1029,8 @@ func TestLegacyMigrationIsOneShotStrictAndPreservesTheSource(t *testing.T) {
 	if _, err := MigrateLegacyEnvironment(legacyPath, target); err == nil {
 		t.Fatal("migration replaced an existing target")
 	}
-	if len(legacyNames) != 147 {
-		t.Fatalf("legacy mapping count = %d, want 147", len(legacyNames))
+	if len(legacyNames) != 145 {
+		t.Fatalf("legacy mapping count = %d, want 145", len(legacyNames))
 	}
 	for name, extra := range map[string]string{"unknown": "SECONDBOX_UNKNOWN=value\n", "duplicate": "SECONDBOX_DEPLOYMENT_MODE=development\n", "placeholder": ""} {
 		t.Run(name, func(t *testing.T) {

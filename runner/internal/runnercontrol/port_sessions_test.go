@@ -40,7 +40,7 @@ func TestRunnerPortProxyIsFencedBackpressuredAndCancelled(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitRunnerMessages(t, stream, 1)
-	if credit := stream.messages()[0].GetPort().GetCredit(); credit == nil || credit.ByteCount != runnerRelayChunkBytes {
+	if credit := stream.messages()[0].GetPort().GetCredit(); credit == nil || credit.ByteCount != runnerDataPlaneChunkBytes {
 		t.Fatalf("initial Port credit = %#v", credit)
 	}
 

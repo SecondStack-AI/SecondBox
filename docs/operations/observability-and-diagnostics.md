@@ -27,7 +27,7 @@ The credentialed commands below show fully explicit flags. Each of `--url`, `--t
 - Administrative Runner projections include the retained Sandbox startup sample count and p95 reported on the authenticated runner channel. The sample count is bounded by the runner's 256-sample window; it is not a process-lifetime counter.
 - Successful buffered and streaming Exec outcomes include `elapsedMilliseconds`, using the Runner-measured guest execution duration.
 - Every HTTP response carries `X-Request-ID`. Clients should supply one when it is at most 128 bytes and record the returned value.
-- The validated request identifier is bound to the request context and retained by asynchronous Operations, transactional audit rows, data-plane relay frames, Runner operation evidence, problem responses, and the structured HTTP completion log. The completion log records response status and elapsed milliseconds with only the method and matched route template, never the bearer credential, raw URL, query string, or workspace path.
+- The validated request identifier is bound to the request context and retained by asynchronous Operations, transactional audit rows, data-plane sessions, Runner operation evidence, problem responses, and the structured HTTP completion log. The completion log records response status and elapsed milliseconds with only the method and matched route template, never the bearer credential, raw URL, query string, or workspace path.
 
 Scrape and probe endpoints only from a trusted monitoring network. Although they contain no credentials or resource identifiers by design, readiness and state counts reveal service condition.
 

@@ -10,7 +10,7 @@ The deployment-wide `SECONDBOX_PLATFORM_TOKEN` is the operator authority. It may
 
 Supported application scopes are `sandbox:read`, `sandbox:lifecycle`, `sandbox:exec`, `sandbox:files`, `sandbox:artifacts`, `sandbox:ports`, and `sandbox:ports:direct`. Unknown routes and missing scopes fail closed.
 
-`sandbox:ports:direct` grants no route of its own. It selects the direct Port transport for an authority that already holds `sandbox:ports`, and it is the only grant through which any caller learns a Runner data-plane address. It is denied by default and is never implied by `sandbox:ports`; an authority without it receives the relay WebSocket endpoint unchanged. See [Networking and ports](networking-and-ports.md). Tokens must be unique and distinct from the platform token. The Runner channel remains separate and requires the pre-shared Runner credential plus a CA-signed mTLS identity.
+`sandbox:ports:direct` grants no route of its own. It selects the direct Port transport for an authority that already holds `sandbox:ports`, and it is the only grant through which any caller learns a Runner data-plane address. It is denied by default and is never implied by `sandbox:ports`; an authority without it receives the proxied WebSocket endpoint. See [Networking and ports](networking-and-ports.md). Tokens must be unique and distinct from the platform token. The Runner channel remains separate and requires the pre-shared Runner credential plus a CA-signed mTLS identity.
 
 ## Profile and revision
 

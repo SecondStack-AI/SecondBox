@@ -14,7 +14,7 @@ The guest agent runs inside each released Firecracker image. It performs bounded
 
 The control plane runs without KVM, TUN, host cgroups, host paths, container-engine access, or added Linux capabilities. It may run in Compose, Kubernetes, or another ordinary container platform. Kubernetes deployment manifests and Kubernetes-native sandbox backends are outside the v1 supported surface.
 
-Runners dial the control plane. Direct data-plane clients also require reachability to the admitted runner listener; relay clients do not. Runner identity comes from the CA-signed client certificate and matching deployment-wide Runner credential, not from a claimed message field. The HTTP platform token and Runner credential are separate authorities and are never interchangeable.
+Runners dial the control plane. Direct data-plane clients also require reachability to the admitted runner listener; proxied clients do not. Runner identity comes from the CA-signed client certificate and matching deployment-wide Runner credential, not from a claimed message field. The HTTP platform token and Runner credential are separate authorities and are never interchangeable.
 
 The public API uses provider-neutral terms. Responses never contain Firecracker configuration, KVM state, runner identities, host paths, backend references, fencing tokens, database row shapes, or object-store keys. The control plane never discloses a runner address except to an authority holding the direct data-plane scope, for one admitted session, with the expected certificate SPKI SHA-256 pin. Runner administration uses the same trusted platform-token boundary as every other HTTP route.
 
@@ -22,7 +22,7 @@ The public API uses provider-neutral terms. Responses never contain Firecracker 
 
 - A trusted upstream system asserts an opaque tenant and subject for each request. SecondBox does not resolve those values or enforce the upstream relationship between them.
 - The asserted `(tenant_ref, subject_ref)` owns Sandboxes, workspaces, snapshots, artifacts, leases, operations, idempotency records, audit events, and quota usage.
-- An operator owns platform-token distribution, profiles, profile revisions, runner pools, Runner certificates, and platform-wide retention and trust configuration. Data-plane retention supplies transition-specific session/result/idempotency deadlines and the maximum fallback for replayable relay frames; frames with no remaining delivery or replay consumer may be removed earlier.
+- An operator owns platform-token distribution, profiles, profile revisions, runner pools, Runner certificates, and platform-wide retention and trust configuration. Data-plane retention supplies session, result, and idempotency deadlines.
 - The control plane owns desired state and assignment authority.
 - A Sandbox's current authoritative home runner owns its durable Workspace, local Snapshots, receipts, and current fenced compute process. Only the stopped-Sandbox relocation Operation may change that home.
 - Object storage owns application Artifacts and immutable execution assets, never Workspace persistence.

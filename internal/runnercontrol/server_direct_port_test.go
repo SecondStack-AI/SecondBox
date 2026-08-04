@@ -11,7 +11,7 @@ import (
 )
 
 // TestDirectPortConsumptionIsAnsweredInlineOnTheAuthenticatedStream proves the
-// verdict is a stream answer rather than a durable frame, and that a home
+// verdict is a stream answer rather than a queued frame, and that a home
 // Runner's claim is spent through PostgreSQL rather than trusted.
 func TestDirectPortConsumptionIsAnsweredInlineOnTheAuthenticatedStream(t *testing.T) {
 	for name, testCase := range map[string]struct {
@@ -37,9 +37,9 @@ func TestDirectPortConsumptionIsAnsweredInlineOnTheAuthenticatedStream(t *testin
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			config := validRelayServerConfig()
+			config := validServerConfig()
 			config.LiveDataPlane = NewLiveDataPlaneBroker()
-			config.PortSessions = &recordingFrameRelay{}
+			config.PortSessions = &recordingPortSessionStore{}
 			config.EnabledFeatures = []runnerv1.RunnerFeature{
 				runnerv1.RunnerFeature_RUNNER_FEATURE_PORT_PROXY,
 			}
@@ -53,7 +53,7 @@ func TestDirectPortConsumptionIsAnsweredInlineOnTheAuthenticatedStream(t *testin
 			sender := &recordingControlPlaneSender{}
 			consume := &runnerv1.PortDirectConsume{
 				MessageId: "port-direct-1", Sequence: 4,
-				Fence:       relayTestFence(),
+				Fence:       dataPlaneTestFence(),
 				OperationId: "port-1", StreamId: "port-stream-1",
 				CredentialDigest: []byte("credential-digest-value-000000000"),
 			}
@@ -89,18 +89,15 @@ func TestDirectPortConsumptionIsAnsweredInlineOnTheAuthenticatedStream(t *testin
 					t.Fatalf("credential consumption authority = %#v", spent)
 				}
 			}
-			// A verdict is never enqueued as a durable frame.
-			if relay, ok := config.FrameRelay.(*recordingFrameRelay); ok && relay.claims > 0 {
-				t.Fatal("direct Port admission reached the durable relay")
-			}
+			// A verdict is never enqueued as a queued frame.
 		})
 	}
 }
 
 func TestDirectPortConsumptionRejectsIncompleteIdentity(t *testing.T) {
-	config := validRelayServerConfig()
+	config := validServerConfig()
 	config.LiveDataPlane = NewLiveDataPlaneBroker()
-	config.PortSessions = &recordingFrameRelay{}
+	config.PortSessions = &recordingPortSessionStore{}
 	config.DirectPorts = &recordingDirectPortAdmitter{}
 	config.EnabledFeatures = []runnerv1.RunnerFeature{
 		runnerv1.RunnerFeature_RUNNER_FEATURE_PORT_PROXY,
@@ -112,8 +109,8 @@ func TestDirectPortConsumptionRejectsIncompleteIdentity(t *testing.T) {
 	for name, consume := range map[string]*runnerv1.PortDirectConsume{
 		"absent":        nil,
 		"no_fence":      {MessageId: "m", OperationId: "port-1", CredentialDigest: []byte("d")},
-		"no_operation":  {MessageId: "m", Fence: relayTestFence(), CredentialDigest: []byte("d")},
-		"no_credential": {MessageId: "m", Fence: relayTestFence(), OperationId: "port-1"},
+		"no_operation":  {MessageId: "m", Fence: dataPlaneTestFence(), CredentialDigest: []byte("d")},
+		"no_credential": {MessageId: "m", Fence: dataPlaneTestFence(), OperationId: "port-1"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := server.answerDirectPortConsumption(
@@ -126,7 +123,7 @@ func TestDirectPortConsumptionRejectsIncompleteIdentity(t *testing.T) {
 }
 
 func TestSessionClassifiesDirectPortConsumptionWithADurableEnvelope(t *testing.T) {
-	session := negotiatedRelaySession(t)
+	session := negotiatedDataPlaneSession(t)
 	if _, err := session.Accept(registrationFrame("runner-1", "connection-1", 1)); err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +131,7 @@ func TestSessionClassifiesDirectPortConsumptionWithADurableEnvelope(t *testing.T
 		Message: &runnerv1.RunnerToControlPlane_PortDirectConsume{
 			PortDirectConsume: &runnerv1.PortDirectConsume{
 				MessageId: "port-direct-1", Sequence: 2,
-				Fence: relayTestFence(), OperationId: "port-1", StreamId: "port-stream-1",
+				Fence: dataPlaneTestFence(), OperationId: "port-1", StreamId: "port-stream-1",
 				CredentialDigest: []byte("credential-digest"),
 			},
 		},
@@ -148,7 +145,7 @@ func TestSessionClassifiesDirectPortConsumptionWithADurableEnvelope(t *testing.T
 	if _, err := session.Accept(&runnerv1.RunnerToControlPlane{
 		Message: &runnerv1.RunnerToControlPlane_PortDirectConsume{
 			PortDirectConsume: &runnerv1.PortDirectConsume{
-				Fence: relayTestFence(), OperationId: "port-1", StreamId: "port-stream-1",
+				Fence: dataPlaneTestFence(), OperationId: "port-1", StreamId: "port-stream-1",
 				CredentialDigest: []byte("credential-digest"),
 			},
 		},

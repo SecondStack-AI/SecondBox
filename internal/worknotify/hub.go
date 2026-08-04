@@ -13,10 +13,6 @@ const (
 	KindLifecycle     Kind = "lifecycle"
 	KindAssignment    Kind = "assignment"
 	KindRunnerCommand Kind = "runner_command"
-	// KindDataPlaneSession wakes the caller-facing loop serving one data-plane
-	// session. It is keyed by session ID because only the replica holding that
-	// session's client connection can act on it.
-	KindDataPlaneSession Kind = "data_plane_session"
 )
 
 type subscriptionKey struct {

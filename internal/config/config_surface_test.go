@@ -100,8 +100,8 @@ func TestEnvironmentSurfaceHasAnExplicitFinalCategory(t *testing.T) {
 		}
 		seen[name] = "removed compiled fact"
 	}
-	if got := len(seen); got != 60 {
-		t.Fatalf("classified environment surface = %d names, want 60", got)
+	if got := len(seen); got != 58 {
+		t.Fatalf("classified environment surface = %d names, want 58", got)
 	}
 }
 
@@ -114,7 +114,6 @@ func TestFromEnvironmentUsesLiteralTuningDefaultsAndValidatedOverrides(t *testin
 	if got.HTTPTimeout != 30*time.Second || got.RunnerHeartbeatInterval != 5000*time.Millisecond ||
 		got.RunnerHeartbeatTimeout != 30000*time.Millisecond || got.RunnerCommandDeliveryBatchSize != 16 ||
 		got.RunnerEventPersistenceBatchSize != 16 || got.RunnerEventPersistenceBatchWait != 2*time.Millisecond ||
-		got.DataPlaneClaimDuration != 30000*time.Millisecond || got.DataPlaneMaximumFrameBytes != 1048576 ||
 		got.DataPlaneMaximumSessionBytes != 67108864 || got.LifecycleReconcileBatchSize != 8 ||
 		got.LifecycleReconcilePollInterval != 250*time.Millisecond ||
 		got.LifecycleReconcileClaimDuration != 30000*time.Millisecond ||
@@ -141,8 +140,8 @@ func TestFromEnvironmentUsesLiteralTuningDefaultsAndValidatedOverrides(t *testin
 // compiled constant would silently run a deployment on a value it did not
 // choose, which is the failure mode the tuning defaults exist to avoid.
 func TestFromEnvironmentRejectsEveryUnusableTuningOverride(t *testing.T) {
-	if len(TuningDefaults()) != 20 {
-		t.Fatalf("tuning surface = %d, want 20", len(TuningDefaults()))
+	if len(TuningDefaults()) != 18 {
+		t.Fatalf("tuning surface = %d, want 18", len(TuningDefaults()))
 	}
 	for _, tuning := range TuningDefaults() {
 		for _, unusable := range []string{"invalid", "-1", ""} {

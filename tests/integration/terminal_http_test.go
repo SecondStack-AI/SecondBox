@@ -57,7 +57,7 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	seed := seedRelayReadyAssignment(t, sandbox, now)
+	seed := seedDataPlaneReadyAssignment(t, sandbox, now)
 	lease, err := controlPlane.AcquireSandboxLease(
 		t.Context(), principal, sandbox.ID, sandbox.Generation, "terminal-http-lease", 60,
 	)
@@ -76,9 +76,9 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 	); err != nil {
 		t.Fatal(err)
 	}
-	relay, err := runnercontrol.NewPostgresFrameRelay(t.Context(), runnercontrol.PostgresFrameRelayConfig{
-		DatabaseURL: integrationDatabaseURL, ClaimDuration: 50 * time.Millisecond,
-		Retention: time.Hour, MaximumFrameBytes: 1 << 20, MaximumSessionBytes: 4 << 20,
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{
+		DatabaseURL: integrationDatabaseURL,
+		Retention:   time.Hour, MaximumSessionBytes: 4 << 20,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +93,7 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 		DefaultSubjectQuota: generousQuota(),
 		Now:                 func() time.Time { return time.Now().UTC() }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
-		DataPlaneRelay:        relay, DataPlanePollInterval: time.Millisecond,
+		DataPlaneStore:        relay, DataPlanePollInterval: time.Millisecond,
 		LiveDataPlane: liveDataPlane,
 		PublicBaseURL: publicBaseURL,
 	})
@@ -206,13 +206,6 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 		t.Fatalf("Terminal outcome = %#v", outcome)
 	}
 	acknowledged.Close()
-	var terminalFrameRows int64
-	if err := leasePool.QueryRow(t.Context(), `
-		SELECT count(*) FROM secondbox.data_plane_frames WHERE session_id=$1`,
-		session.ID,
-	).Scan(&terminalFrameRows); err != nil || terminalFrameRows != 0 {
-		t.Fatalf("Terminal frame rows = %d, error=%v", terminalFrameRows, err)
-	}
 
 	cancelled := createTerminalSession(
 		t, server.URL, key.Credential, sandbox, lease.ID, "terminal-http-cancel", "wait-cancel", true,

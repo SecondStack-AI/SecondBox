@@ -214,7 +214,7 @@ func (apiHandler *handler) writeSandboxFile(writer http.ResponseWriter, request 
 		return
 	}
 	if int64(len(content)) > apiHandler.maximumDataPlaneBodyBytes {
-		apiHandler.writeError(writer, request, runnercontrol.ErrRelaySessionLimit)
+		apiHandler.writeError(writer, request, runnercontrol.ErrDataPlaneSessionLimit)
 		return
 	}
 	actual := sha256.Sum256(content)
@@ -473,7 +473,7 @@ func decodeArtifactUpload(
 		}
 		var maximumBytesError *http.MaxBytesError
 		if errors.As(err, &maximumBytesError) {
-			return service.ArtifactUpload{}, runnercontrol.ErrRelaySessionLimit
+			return service.ArtifactUpload{}, runnercontrol.ErrDataPlaneSessionLimit
 		}
 		if err != nil {
 			return service.ArtifactUpload{}, requestValidationError(fmt.Errorf("SecondBox Artifact multipart read failed: %w", err))
@@ -525,7 +525,7 @@ func decodeArtifactUpload(
 			closeErr := part.Close()
 			if err != nil || closeErr != nil {
 				if errors.As(err, &maximumBytesError) {
-					return service.ArtifactUpload{}, runnercontrol.ErrRelaySessionLimit
+					return service.ArtifactUpload{}, runnercontrol.ErrDataPlaneSessionLimit
 				}
 				return service.ArtifactUpload{}, errors.Join(
 					fmt.Errorf("SecondBox Artifact content staging failed: %w", err),
@@ -540,7 +540,7 @@ func decodeArtifactUpload(
 		closeErr := part.Close()
 		if readErr != nil || closeErr != nil {
 			if errors.As(readErr, &maximumBytesError) {
-				return service.ArtifactUpload{}, runnercontrol.ErrRelaySessionLimit
+				return service.ArtifactUpload{}, runnercontrol.ErrDataPlaneSessionLimit
 			}
 			return service.ArtifactUpload{}, requestValidationError(fmt.Errorf(
 				"SecondBox Artifact multipart field read failed: read=%v close=%v",
@@ -1253,7 +1253,7 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusConflict, "checksum_mismatch", "Content checksum mismatch", false
 	case errors.Is(err, runnercontrol.ErrDataPlaneDeadline):
 		return http.StatusConflict, "operation_deadline_exceeded", "Operation deadline exceeded", false
-	case errors.Is(err, runnercontrol.ErrRelaySessionLimit), errors.Is(err, runnercontrol.ErrRelayFrameLimit):
+	case errors.Is(err, runnercontrol.ErrDataPlaneSessionLimit), errors.Is(err, runnercontrol.ErrDataPlaneFrameLimit):
 		return http.StatusRequestEntityTooLarge, "limit_exceeded", "Configured byte limit exceeded", false
 	case errors.Is(err, ports.ErrQuotaExceeded):
 		return http.StatusTooManyRequests, "quota_exceeded", "Quota exceeded", false

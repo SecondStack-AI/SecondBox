@@ -13,14 +13,14 @@ import (
 )
 
 // CancelPublicDataPlaneSession atomically records a key-scoped response and requests cancellation.
-func (relay *PostgresFrameRelay) CancelPublicDataPlaneSession(
+func (store *PostgresDataPlaneStore) CancelPublicDataPlaneSession(
 	ctx context.Context,
 	input PublicDataPlaneCancellation,
 ) (DataPlaneSession, bool, error) {
 	if err := validatePublicDataPlaneCancellation(input); err != nil {
 		return DataPlaneSession{}, false, err
 	}
-	tx, err := relay.pool.Begin(ctx)
+	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return DataPlaneSession{}, false, fmt.Errorf("SecondBox public session cancellation transaction: %w", err)
 	}
@@ -64,7 +64,7 @@ func (relay *PostgresFrameRelay) CancelPublicDataPlaneSession(
 		return DataPlaneSession{}, false, ports.ErrGenerationFenced
 	}
 	if session.State == "pending" || session.State == "running" {
-		if err := relay.enqueueCancellation(
+		if err := store.enqueueCancellation(
 			ctx, tx, session,
 			runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED.String(),
 			input.Reason, input.Now.UTC(),
@@ -73,7 +73,7 @@ func (relay *PostgresFrameRelay) CancelPublicDataPlaneSession(
 		}
 		if session.State == "pending" &&
 			(session.Kind == "exec" || session.Kind == "terminal") {
-			if err := relay.completeUnstartedCancellation(
+			if err := store.completeUnstartedCancellation(
 				ctx, tx, session,
 				runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED.String(),
 				input.Reason, input.Now.UTC(),

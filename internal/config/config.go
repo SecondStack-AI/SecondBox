@@ -26,8 +26,6 @@ const (
 	DefaultRunnerCommandDeliveryBatchSize              int64 = 16
 	DefaultRunnerEventPersistenceBatchSize             int64 = 16
 	DefaultRunnerEventPersistenceBatchWaitMilliseconds int64 = 2
-	DefaultDataPlaneClaimDurationMilliseconds          int64 = 30000
-	DefaultDataPlaneMaximumFrameBytes                  int64 = 1048576
 	DefaultDataPlaneMaximumSessionBytes                int64 = 67108864
 	DefaultLifecycleReconcileBatchSize                 int64 = 8
 	DefaultLifecycleReconcilePollIntervalMilliseconds  int64 = 250
@@ -62,9 +60,7 @@ type Config struct {
 	RunnerEventPersistenceBatchSize  int
 	RunnerEventPersistenceBatchWait  time.Duration
 	DataPlanePollInterval            time.Duration
-	DataPlaneClaimDuration           time.Duration
 	DataPlaneRetention               time.Duration
-	DataPlaneMaximumFrameBytes       int64
 	DataPlaneMaximumSessionBytes     int64
 	LifecycleReconcileBatchSize      int
 	LifecycleReconcilePollInterval   time.Duration
@@ -192,24 +188,13 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	dataPlaneClaimMilliseconds, err := optionalPositiveInt64("SECONDBOX_DATA_PLANE_CLAIM_DURATION_MILLISECONDS", DefaultDataPlaneClaimDurationMilliseconds)
-	if err != nil {
-		return Config{}, err
-	}
 	dataPlaneRetentionSeconds, err := requiredPositiveInt64("SECONDBOX_DATA_PLANE_RETENTION_SECONDS")
-	if err != nil {
-		return Config{}, err
-	}
-	dataPlaneMaximumFrameBytes, err := optionalPositiveInt64("SECONDBOX_DATA_PLANE_MAXIMUM_FRAME_BYTES", DefaultDataPlaneMaximumFrameBytes)
 	if err != nil {
 		return Config{}, err
 	}
 	dataPlaneMaximumSessionBytes, err := optionalPositiveInt64("SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES", DefaultDataPlaneMaximumSessionBytes)
 	if err != nil {
 		return Config{}, err
-	}
-	if dataPlaneMaximumSessionBytes < dataPlaneMaximumFrameBytes {
-		return Config{}, errorsForEnvironment("data-plane session byte bound is smaller than frame byte bound")
 	}
 	lifecycleReconcileBatchSize, err := optionalPositiveInt64("SECONDBOX_LIFECYCLE_RECONCILE_BATCH_SIZE", DefaultLifecycleReconcileBatchSize)
 	if err != nil {
@@ -335,9 +320,7 @@ func FromEnvironment() (Config, error) {
 		RunnerEventPersistenceBatchSize:  runnerEventPersistenceBatchSizeInt,
 		RunnerEventPersistenceBatchWait:  time.Duration(runnerEventPersistenceBatchWaitMilliseconds) * time.Millisecond,
 		DataPlanePollInterval:            time.Duration(dataPlanePollMilliseconds) * time.Millisecond,
-		DataPlaneClaimDuration:           time.Duration(dataPlaneClaimMilliseconds) * time.Millisecond,
 		DataPlaneRetention:               time.Duration(dataPlaneRetentionSeconds) * time.Second,
-		DataPlaneMaximumFrameBytes:       dataPlaneMaximumFrameBytes,
 		DataPlaneMaximumSessionBytes:     dataPlaneMaximumSessionBytes,
 		LifecycleReconcileBatchSize:      lifecycleReconcileBatchSizeInt,
 		LifecycleReconcilePollInterval:   time.Duration(lifecycleReconcilePollMilliseconds) * time.Millisecond,

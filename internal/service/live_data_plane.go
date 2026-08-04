@@ -48,7 +48,7 @@ func (service *ControlPlaneService) openDataPlaneStream(
 			return nil, err
 		}
 		if session.State == "pending" {
-			if _, err := service.dataPlaneRelay.StartDataPlaneSession(
+			if _, err := service.dataPlaneStore.StartDataPlaneSession(
 				ctx, session.TenantRef, session.SubjectRef, session.ID, service.now().UTC(),
 			); err != nil {
 				stream.Close()
@@ -185,7 +185,7 @@ func (service *ControlPlaneService) ConsumeDirectDataPlane(
 	if subtle.ConstantTimeCompare(expected, input.CredentialDigest) != 1 {
 		return errors.New("SecondBox direct data-plane credential is invalid")
 	}
-	return service.dataPlaneRelay.ConsumeDirectDataPlaneSession(ctx, input)
+	return service.dataPlaneStore.ConsumeDirectDataPlaneSession(ctx, input)
 }
 
 func dataPlaneFence(session runnercontrol.DataPlaneSession) *runnerv1.AssignmentFence {
@@ -236,7 +236,7 @@ func (service *ControlPlaneService) executeBufferedDataPlane(
 	message, err := stream.Receive(operationCtx)
 	if err != nil {
 		if errors.Is(operationCtx.Err(), context.DeadlineExceeded) {
-			return service.dataPlaneRelay.ExpireDataPlaneSession(
+			return service.dataPlaneStore.ExpireDataPlaneSession(
 				context.WithoutCancel(ctx), session.TenantRef, session.SubjectRef,
 				session.ID, service.now().UTC(),
 			)
@@ -248,7 +248,7 @@ func (service *ControlPlaneService) executeBufferedDataPlane(
 		frame.StreamId != session.StreamID || frame.GetBufferedResult() == nil {
 		return runnercontrol.DataPlaneSession{}, errors.New("SecondBox buffered Exec completion message is invalid")
 	}
-	return service.dataPlaneRelay.CompleteDataPlaneSession(context.WithoutCancel(ctx), runnercontrol.DataPlaneCompletion{
+	return service.dataPlaneStore.CompleteDataPlaneSession(context.WithoutCancel(ctx), runnercontrol.DataPlaneCompletion{
 		TenantRef: session.TenantRef, SubjectRef: session.SubjectRef,
 		SessionID: session.ID, Exec: frame.GetBufferedResult(), Now: service.now().UTC(),
 	})
@@ -316,7 +316,7 @@ func (stream *SandboxExecStream) Send(
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
 	if frame.Sequence != stream.nextSend || stream.terminal {
-		return runnercontrol.ErrRelaySequence
+		return runnercontrol.ErrDataPlaneSequence
 	}
 	isInput := frame.Input != nil || frame.EndInput
 	selected := 0
@@ -334,14 +334,14 @@ func (stream *SandboxExecStream) Send(
 	}
 	if isInput {
 		if stream.closed || len(frame.Input) == 0 && !frame.EndInput {
-			return runnercontrol.ErrRelaySequence
+			return runnercontrol.ErrDataPlaneSequence
 		}
 		if stream.request+int64(len(frame.Input)) > stream.session.MaximumRequestBytes {
-			return runnercontrol.ErrRelaySessionLimit
+			return runnercontrol.ErrDataPlaneSessionLimit
 		}
 	}
 	if frame.Credit > 0 && stream.credit-stream.emitted+frame.Credit > stream.session.StreamWindowBytes {
-		return runnercontrol.ErrRelayFrameLimit
+		return runnercontrol.ErrDataPlaneFrameLimit
 	}
 	runnerFrame := &runnerv1.ExecFrame{
 		Fence: dataPlaneFence(stream.session), OperationId: stream.session.ID,
@@ -412,7 +412,7 @@ func (stream *SandboxExecStream) Cancel(ctx context.Context, reason string) erro
 }
 
 func (stream *SandboxExecStream) recordCancellation(ctx context.Context, reason string) error {
-	_, err := stream.service.dataPlaneRelay.CancelDataPlaneSession(
+	_, err := stream.service.dataPlaneStore.CancelDataPlaneSession(
 		context.WithoutCancel(ctx), stream.session.TenantRef, stream.session.SubjectRef,
 		stream.session.ID, reason, stream.service.now().UTC(),
 	)
@@ -427,7 +427,7 @@ func (stream *SandboxExecStream) Receive(
 	message, err := stream.stream.Receive(operationCtx)
 	if err != nil {
 		if errors.Is(operationCtx.Err(), context.DeadlineExceeded) {
-			session, expireErr := stream.service.dataPlaneRelay.ExpireDataPlaneSession(
+			session, expireErr := stream.service.dataPlaneStore.ExpireDataPlaneSession(
 				context.WithoutCancel(ctx), stream.session.TenantRef, stream.session.SubjectRef,
 				stream.session.ID, stream.service.now().UTC(),
 			)
@@ -447,7 +447,7 @@ func (stream *SandboxExecStream) Receive(
 	defer stream.mu.Unlock()
 	if frame == nil || frame.OperationId != stream.session.ID ||
 		frame.StreamId != stream.session.StreamID || frame.Sequence != stream.nextRecv || stream.terminal {
-		return runnercontrol.ExecServerFrame{}, runnercontrol.DataPlaneSession{}, runnercontrol.ErrRelaySequence
+		return runnercontrol.ExecServerFrame{}, runnercontrol.DataPlaneSession{}, runnercontrol.ErrDataPlaneSequence
 	}
 	result := runnercontrol.ExecServerFrame{Sequence: int64(frame.Sequence - 1)}
 	switch {
@@ -455,14 +455,14 @@ func (stream *SandboxExecStream) Receive(
 		outputBytes := int64(len(frame.GetOutput().Data))
 		if outputBytes == 0 || stream.emitted+outputBytes > stream.credit ||
 			stream.emitted+outputBytes > stream.session.MaximumResponseBytes {
-			return runnercontrol.ExecServerFrame{}, runnercontrol.DataPlaneSession{}, runnercontrol.ErrRelaySessionLimit
+			return runnercontrol.ExecServerFrame{}, runnercontrol.DataPlaneSession{}, runnercontrol.ErrDataPlaneSessionLimit
 		}
 		stream.emitted += outputBytes
 		result.Output = proto.Clone(frame.GetOutput()).(*runnerv1.ExecOutput)
 	case frame.GetTerminal() != nil:
 		stream.terminal = true
 		result.Terminal = proto.Clone(frame.GetTerminal()).(*runnerv1.ExecTerminal)
-		session, err := stream.service.dataPlaneRelay.CompleteDataPlaneSession(
+		session, err := stream.service.dataPlaneStore.CompleteDataPlaneSession(
 			context.WithoutCancel(ctx),
 			runnercontrol.DataPlaneCompletion{
 				TenantRef: stream.session.TenantRef, SubjectRef: stream.session.SubjectRef,
@@ -599,7 +599,7 @@ func (stream *SandboxTerminalStream) Send(
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
 	if stream.closed || stream.terminal || frame.Sequence != stream.nextSend {
-		return runnercontrol.ErrRelaySequence
+		return runnercontrol.ErrDataPlaneSequence
 	}
 	kinds := 0
 	if frame.Input != nil {
@@ -620,10 +620,10 @@ func (stream *SandboxTerminalStream) Send(
 		return errors.New("SecondBox live Terminal frame requires exactly one valid payload")
 	}
 	if stream.request+int64(len(frame.Input)) > stream.session.MaximumRequestBytes {
-		return runnercontrol.ErrRelaySessionLimit
+		return runnercontrol.ErrDataPlaneSessionLimit
 	}
 	if frame.Credit > 0 && stream.credit-stream.emitted+frame.Credit > stream.session.StreamWindowBytes {
-		return runnercontrol.ErrRelayFrameLimit
+		return runnercontrol.ErrDataPlaneFrameLimit
 	}
 	sequence := uint64(frame.Sequence + 2)
 	var message *runnerv1.ControlPlaneToRunner
@@ -661,11 +661,11 @@ func (stream *SandboxTerminalStream) Send(
 	if err := stream.stream.Send(message); err != nil {
 		return err
 	}
-	relay, err := stream.service.terminalRelay()
+	store, err := stream.service.terminalStore()
 	if err != nil {
 		return err
 	}
-	if _, err := relay.RecordTerminalClientFrame(
+	if _, err := store.RecordTerminalClientFrame(
 		context.WithoutCancel(ctx), stream.session.TenantRef, stream.session.SubjectRef,
 		stream.session.ID, stream.attachmentID, frame, stream.service.now().UTC(),
 	); err != nil {
@@ -696,7 +696,7 @@ func (stream *SandboxTerminalStream) Receive(
 		!proto.Equal(frame.Correlation, dataPlaneCorrelation(stream.session)) || frame.Sequence == 0 ||
 		int64(frame.Sequence)-1 != stream.nextRecv || stream.terminal {
 		return runnercontrol.TerminalServerFrame{}, runnercontrol.DataPlaneSession{}, fmt.Errorf(
-			"SecondBox live Terminal response ordering: %w", runnercontrol.ErrRelaySequence,
+			"SecondBox live Terminal response ordering: %w", runnercontrol.ErrDataPlaneSequence,
 		)
 	}
 	result := runnercontrol.TerminalServerFrame{Sequence: stream.nextRecv}
@@ -708,7 +708,7 @@ func (stream *SandboxTerminalStream) Receive(
 			!replayed && (stream.emitted+int64(len(frame.GetOutput().Data)) > stream.credit ||
 				stream.emitted+int64(len(frame.GetOutput().Data)) > stream.session.MaximumResponseBytes) {
 			return runnercontrol.TerminalServerFrame{}, runnercontrol.DataPlaneSession{}, fmt.Errorf(
-				"SecondBox live Terminal response credit: %w", runnercontrol.ErrRelaySequence,
+				"SecondBox live Terminal response credit: %w", runnercontrol.ErrDataPlaneSequence,
 			)
 		}
 		result.Output = bytes.Clone(frame.GetOutput().Data)
@@ -718,11 +718,11 @@ func (stream *SandboxTerminalStream) Receive(
 	default:
 		return runnercontrol.TerminalServerFrame{}, runnercontrol.DataPlaneSession{}, errors.New("SecondBox Terminal response payload is invalid")
 	}
-	relay, err := stream.service.terminalRelay()
+	store, err := stream.service.terminalStore()
 	if err != nil {
 		return runnercontrol.TerminalServerFrame{}, runnercontrol.DataPlaneSession{}, err
 	}
-	session, err := relay.RecordTerminalServerFrame(
+	session, err := store.RecordTerminalServerFrame(
 		context.WithoutCancel(ctx), stream.session.TenantRef, stream.session.SubjectRef,
 		stream.session.ID, result, stream.service.now().UTC(),
 	)
@@ -840,7 +840,7 @@ func (service *ControlPlaneService) executeFileDataPlane(
 		message, err := stream.Receive(operationCtx)
 		if err != nil {
 			if errors.Is(operationCtx.Err(), context.DeadlineExceeded) {
-				return service.dataPlaneRelay.ExpireDataPlaneSession(
+				return service.dataPlaneStore.ExpireDataPlaneSession(
 					context.WithoutCancel(ctx), session.TenantRef, session.SubjectRef,
 					session.ID, service.now().UTC(),
 				)
@@ -862,12 +862,12 @@ func (service *ControlPlaneService) executeFileDataPlane(
 		case frame.GetChunk() != nil:
 			if frame.GetChunk().Offset != uint64(len(result.Content)) ||
 				int64(len(result.Content)+len(frame.GetChunk().Data)) > session.MaximumResponseBytes {
-				return runnercontrol.DataPlaneSession{}, runnercontrol.ErrRelaySessionLimit
+				return runnercontrol.DataPlaneSession{}, runnercontrol.ErrDataPlaneSessionLimit
 			}
 			result.Content = append(result.Content, frame.GetChunk().Data...)
 		case frame.GetTerminal() != nil:
 			result.Terminal = proto.Clone(frame.GetTerminal()).(*runnerv1.FileTerminal)
-			return service.dataPlaneRelay.CompleteDataPlaneSession(context.WithoutCancel(ctx), runnercontrol.DataPlaneCompletion{
+			return service.dataPlaneStore.CompleteDataPlaneSession(context.WithoutCancel(ctx), runnercontrol.DataPlaneCompletion{
 				TenantRef: session.TenantRef, SubjectRef: session.SubjectRef,
 				SessionID: session.ID, File: result, Now: service.now().UTC(),
 			})

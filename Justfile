@@ -48,9 +48,6 @@ prepare-stress:
 test-stress:
     scripts/test-stress.sh
 
-measure-relay-retention:
-    scripts/measure-relay-retention.sh
-
 test-lifecycle:
     scripts/test-lifecycle.sh
 

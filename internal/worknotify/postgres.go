@@ -92,10 +92,6 @@ func decodePostgresPayload(encoded string) (postgresPayload, error) {
 		if payload.Key == "" {
 			return postgresPayload{}, errors.New("SecondBox PostgreSQL runner work notification requires a key")
 		}
-	case KindDataPlaneSession:
-		if payload.Key == "" {
-			return postgresPayload{}, errors.New("SecondBox PostgreSQL data-plane work notification requires a key")
-		}
 	default:
 		return postgresPayload{}, fmt.Errorf(
 			"SecondBox PostgreSQL work notification kind %q is invalid",

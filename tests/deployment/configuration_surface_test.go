@@ -78,7 +78,7 @@ func TestComposeArtifactPreservesAbsentAndSelectedOverrides(t *testing.T) {
 		return model.Services["control-plane"].Environment
 	}
 	environment := readEnvironment()
-	for _, name := range []string{"SECONDBOX_HTTP_TIMEOUT_SECONDS", "SECONDBOX_ASSIGNMENT_RETRY_LIMIT", "SECONDBOX_DATA_PLANE_MAXIMUM_FRAME_BYTES"} {
+	for _, name := range []string{"SECONDBOX_HTTP_TIMEOUT_SECONDS", "SECONDBOX_ASSIGNMENT_RETRY_LIMIT", "SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES"} {
 		value, exists := environment[name]
 		if !exists || value != nil {
 			t.Errorf("absent override %s = %#v, exists=%t", name, value, exists)

@@ -12,12 +12,12 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
-func (service *ControlPlaneService) terminalRelay() (terminalDataPlaneRelay, error) {
-	relay, ok := service.dataPlaneRelay.(terminalDataPlaneRelay)
+func (service *ControlPlaneService) terminalStore() (terminalDataPlaneStore, error) {
+	store, ok := service.dataPlaneStore.(terminalDataPlaneStore)
 	if !ok {
-		return nil, errors.New("SecondBox Terminal relay is unavailable")
+		return nil, errors.New("SecondBox Terminal store is unavailable")
 	}
-	return relay, nil
+	return store, nil
 }
 
 // CreateSandboxTerminal admits one leased PTY against the pinned Profile.
@@ -60,7 +60,7 @@ func (service *ControlPlaneService) CreateSandboxTerminal(
 	open.PtyColumns = uint32(request.Columns)
 	open.Streaming = true
 	sessionID := service.newID("term")
-	return service.dataPlaneRelay.AdmitDataPlane(ctx, runnercontrol.DataPlaneAdmission{
+	return service.dataPlaneStore.AdmitDataPlane(ctx, runnercontrol.DataPlaneAdmission{
 		ID: sessionID, StreamID: service.newID("stream"),
 		TenantRef: principal.TenantRef, SandboxID: sandboxID,
 		SubjectRef: principal.SubjectRef,
@@ -86,7 +86,7 @@ func (service *ControlPlaneService) GetSandboxTerminal(
 	if err := service.requireDataPlane(principal); err != nil {
 		return runnercontrol.DataPlaneSession{}, err
 	}
-	session, err := service.dataPlaneRelay.GetDataPlaneSession(
+	session, err := service.dataPlaneStore.GetDataPlaneSession(
 		ctx, principal.TenantRef, principal.SubjectRef, sessionID,
 	)
 	if err != nil {
@@ -113,12 +113,12 @@ func (service *ControlPlaneService) AcquireSandboxTerminalAttachment(
 	if err := service.requireDataPlane(principal); err != nil {
 		return runnercontrol.DataPlaneSession{}, "", err
 	}
-	relay, err := service.terminalRelay()
+	store, err := service.terminalStore()
 	if err != nil {
 		return runnercontrol.DataPlaneSession{}, "", err
 	}
 	attachmentID := service.newID("attach")
-	session, err := relay.AcquireTerminalAttachment(
+	session, err := store.AcquireTerminalAttachment(
 		ctx, principal.TenantRef, principal.SubjectRef, sandboxID,
 		sessionID, generation, attachmentID, service.now().UTC(),
 	)
@@ -134,11 +134,11 @@ func (service *ControlPlaneService) DetachSandboxTerminalAttachment(
 	if err := service.requireDataPlane(principal); err != nil {
 		return false, err
 	}
-	relay, err := service.terminalRelay()
+	store, err := service.terminalStore()
 	if err != nil {
 		return false, err
 	}
-	return relay.DetachTerminalAttachment(
+	return store.DetachTerminalAttachment(
 		ctx, principal.TenantRef, principal.SubjectRef,
 		sessionID, attachmentID, service.now().UTC(),
 	)
@@ -164,7 +164,7 @@ func (service *ControlPlaneService) CancelSandboxTerminal(
 		return runnercontrol.DataPlaneSession{}, false, err
 	}
 	now := service.now().UTC()
-	return service.dataPlaneRelay.CancelPublicDataPlaneSession(
+	return service.dataPlaneStore.CancelPublicDataPlaneSession(
 		ctx,
 		runnercontrol.PublicDataPlaneCancellation{
 			TenantRef: principal.TenantRef, SandboxID: sandboxID, SessionID: sessionID,
@@ -202,7 +202,7 @@ func (service *ControlPlaneService) SandboxTerminalOutcome(
 	principal contracts.Principal,
 	sessionID string,
 ) (any, error) {
-	session, err := service.dataPlaneRelay.GetDataPlaneSession(
+	session, err := service.dataPlaneStore.GetDataPlaneSession(
 		ctx, principal.TenantRef, principal.SubjectRef, sessionID,
 	)
 	if err != nil {

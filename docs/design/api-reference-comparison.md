@@ -49,6 +49,6 @@ The adapter accepts an already initialized SecondBox Sandbox handle and passes i
 
 Flue owns no Sandbox lifecycle. Repeated harness initialization may reuse the same handle and retained files. Harness close never stops or deletes the Sandbox. Application code performs create, reuse, stop, and delete explicitly.
 
-The integration contract runs the real TypeScript adapter through authenticated public HTTP handlers and the durable PostgreSQL runner relay. It proves missing-parent creation and retry, UTF-8 and binary persistence across separate session environments, stat, directory listing, negative existence, mkdir and remove options, and shell execution with cwd, environment, deadline, output bound, and non-zero exit fidelity.
+The integration contract runs the real TypeScript adapter through authenticated public HTTP handlers and the `SBXDP1` data plane. It proves missing-parent creation and retry, UTF-8 and binary persistence across separate session environments, stat, directory listing, negative existence, mkdir and remove options, and shell execution with cwd, environment, deadline, output bound, and non-zero exit fidelity.
 
 See [API conventions](api-conventions.md) and [Domain and lifecycle](domain-lifecycle.md).

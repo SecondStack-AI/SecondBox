@@ -283,7 +283,7 @@ func (s *RunnerProtocolService) handleDataPlaneCancel(
 	}
 	if command.Kind == runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PORT {
 		s.directPorts.closeSession(command.OperationId, command.Reason)
-		key := runnerRelayOperationKey(command.Fence, command.OperationId, command.StreamId)
+		key := runnerDataPlaneOperationKey(command.Fence, command.OperationId, command.StreamId)
 		s.operationMu.Lock()
 		state := s.portOperations[key]
 		if state != nil && !state.terminal {
@@ -293,7 +293,7 @@ func (s *RunnerProtocolService) handleDataPlaneCancel(
 		return nil
 	}
 	s.directDataPlane.closeSession(command.OperationId, command.Reason)
-	key := runnerRelayOperationKey(command.Fence, command.OperationId, command.StreamId)
+	key := runnerDataPlaneOperationKey(command.Fence, command.OperationId, command.StreamId)
 	s.operationMu.Lock()
 	if command.Kind == runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC ||
 		command.Kind == runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY {

@@ -336,9 +336,8 @@ export SECONDBOX_SCENARIO_COMPOSE_PROJECT="$project_name"
 export SECONDBOX_PLATFORM_TOKEN="scenario-platform-token-0000000000000000"
 # The direct Port transport is granted per application authority, never to the
 # platform token, so qualifying it requires one explicitly provisioned ingress.
-# The deployed interval the direct-transport qualification measures against. An
-# operator can raise it to re-measure how much of a latency figure the relay's
-# poll interval actually governs.
+# The deployed interval used by data-plane session cancellation and retention
+# recovery sweeps during qualification.
 export SECONDBOX_SCENARIO_DATA_PLANE_POLL_INTERVAL_MILLISECONDS="${SECONDBOX_SCENARIO_DATA_PLANE_POLL_INTERVAL_MILLISECONDS:-250}"
 export SECONDBOX_SCENARIO_DIRECT_PORT_PROFILE="scenario-direct-port"
 export SECONDBOX_SCENARIO_DIRECT_PORT_TOKEN="scenario-direct-port-ingress-token-000000"

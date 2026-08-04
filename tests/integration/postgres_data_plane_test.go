@@ -36,7 +36,7 @@ func TestLifecycleStopCancelsInFlightGenerationSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	seedRelayReadyAssignment(t, sandbox, now)
+	seedDataPlaneReadyAssignment(t, sandbox, now)
 	lease, err := controlPlane.AcquireSandboxLease(
 		t.Context(), principal, sandbox.ID, sandbox.Generation,
 		"lifecycle-stop-cancel-lease", 60,
@@ -44,10 +44,10 @@ func TestLifecycleStopCancelsInFlightGenerationSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	relay, err := runnercontrol.NewPostgresFrameRelay(
-		t.Context(), runnercontrol.PostgresFrameRelayConfig{
-			DatabaseURL: integrationDatabaseURL, ClaimDuration: time.Second,
-			Retention: time.Hour, MaximumFrameBytes: 1 << 20, MaximumSessionBytes: 4 << 20,
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(
+		t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{
+			DatabaseURL: integrationDatabaseURL,
+			Retention:   time.Hour, MaximumSessionBytes: 4 << 20,
 		},
 	)
 	if err != nil {
@@ -75,13 +75,6 @@ func TestLifecycleStopCancelsInFlightGenerationSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	var initialFrameCount int64
-	if err := pool.QueryRow(t.Context(), `
-		SELECT count(*) FROM secondbox.data_plane_frames WHERE session_id=$1`,
-		session.ID,
-	).Scan(&initialFrameCount); err != nil {
-		t.Fatal(err)
-	}
 	var revision int64
 	if err := pool.QueryRow(t.Context(), `
 		WITH ready_workspace AS (
@@ -170,19 +163,6 @@ func TestLifecycleStopCancelsInFlightGenerationSession(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	var frameCount int64
-	if err := pool.QueryRow(t.Context(), `
-		SELECT count(*) FROM secondbox.data_plane_frames WHERE session_id=$1`,
-		session.ID,
-	).Scan(&frameCount); err != nil {
-		t.Fatal(err)
-	}
-	if frameCount != initialFrameCount {
-		t.Fatalf(
-			"session frame count after stop replay = %d, want unchanged initial count %d",
-			frameCount, initialFrameCount,
-		)
-	}
 }
 
 func TestPostgresLivePublicCancellationIsAtomicAndKeyScoped(t *testing.T) {
@@ -203,12 +183,12 @@ func TestPostgresLivePublicCancellationIsAtomicAndKeyScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 7, 28, 22, 0, 0, 0, time.UTC)
-	seedRelayReadyAssignment(t, sandbox, now)
-	relay, err := runnercontrol.NewPostgresFrameRelay(
+	seedDataPlaneReadyAssignment(t, sandbox, now)
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(
 		t.Context(),
-		runnercontrol.PostgresFrameRelayConfig{
-			DatabaseURL: integrationDatabaseURL, ClaimDuration: time.Second,
-			Retention: time.Hour, MaximumFrameBytes: 1 << 20, MaximumSessionBytes: 4 << 20,
+		runnercontrol.PostgresDataPlaneStoreConfig{
+			DatabaseURL: integrationDatabaseURL,
+			Retention:   time.Hour, MaximumSessionBytes: 4 << 20,
 		},
 	)
 	if err != nil {
@@ -295,17 +275,6 @@ func TestPostgresLivePublicCancellationIsAtomicAndKeyScoped(t *testing.T) {
 	if unchanged.State != session.State {
 		t.Fatalf("failed cancellation changed session state from %q to %q", session.State, unchanged.State)
 	}
-	var cancelFrameCount int
-	if err := pool.QueryRow(t.Context(), `
-		SELECT count(*) FROM secondbox.data_plane_frames
-		WHERE session_id=$1 AND priority=-100`,
-		session.ID,
-	).Scan(&cancelFrameCount); err != nil {
-		t.Fatal(err)
-	}
-	if cancelFrameCount != 0 {
-		t.Fatalf("failed cancellation retained %d cancellation frames", cancelFrameCount)
-	}
 	var failureRecordCount int
 	if err := pool.QueryRow(t.Context(), `
 		SELECT count(*) FROM secondbox.idempotency_records
@@ -369,7 +338,7 @@ func TestPostgresLivePublicCancellationIsAtomicAndKeyScoped(t *testing.T) {
 	}
 }
 
-func TestPostgresRelayRejectsAdmissionWithoutActiveHomeRunnerConnection(t *testing.T) {
+func TestPostgresDataPlaneRejectsAdmissionWithoutActiveHomeRunnerConnection(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
 	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(
@@ -400,7 +369,7 @@ func TestPostgresRelayRejectsAdmissionWithoutActiveHomeRunnerConnection(t *testi
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 7, 29, 21, 10, 0, 0, time.UTC)
-	seed := seedRelayReadyAssignment(t, sandbox, now)
+	seed := seedDataPlaneReadyAssignment(t, sandbox, now)
 	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
 	if err != nil {
 		t.Fatal(err)
@@ -415,11 +384,11 @@ func TestPostgresRelayRejectsAdmissionWithoutActiveHomeRunnerConnection(t *testi
 	); err != nil {
 		t.Fatal(err)
 	}
-	relay, err := runnercontrol.NewPostgresFrameRelay(
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(
 		t.Context(),
-		runnercontrol.PostgresFrameRelayConfig{
-			DatabaseURL: integrationDatabaseURL, ClaimDuration: time.Second,
-			Retention: time.Hour, MaximumFrameBytes: 1 << 20, MaximumSessionBytes: 4 << 20,
+		runnercontrol.PostgresDataPlaneStoreConfig{
+			DatabaseURL: integrationDatabaseURL,
+			Retention:   time.Hour, MaximumSessionBytes: 4 << 20,
 		},
 	)
 	if err != nil {
@@ -449,7 +418,7 @@ func TestPostgresRelayRejectsAdmissionWithoutActiveHomeRunnerConnection(t *testi
 	}
 }
 
-func TestPostgresLiveDataPlanePersistsOneBufferedExecOutcomeAndNoFrames(t *testing.T) {
+func TestPostgresLiveDataPlanePersistsOneBufferedExecOutcome(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
 	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "live-buffered-exec")
@@ -463,10 +432,10 @@ func TestPostgresLiveDataPlanePersistsOneBufferedExecOutcomeAndNoFrames(t *testi
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 7, 28, 21, 0, 0, 0, time.UTC)
-	seed := seedRelayReadyAssignment(t, sandbox, now)
-	relay, err := runnercontrol.NewPostgresFrameRelay(t.Context(), runnercontrol.PostgresFrameRelayConfig{
-		DatabaseURL: integrationDatabaseURL, ClaimDuration: time.Second,
-		Retention: time.Hour, MaximumFrameBytes: 1 << 20, MaximumSessionBytes: 4 << 20,
+	seedDataPlaneReadyAssignment(t, sandbox, now)
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{
+		DatabaseURL: integrationDatabaseURL,
+		Retention:   time.Hour, MaximumSessionBytes: 4 << 20,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -489,11 +458,6 @@ func TestPostgresLiveDataPlanePersistsOneBufferedExecOutcomeAndNoFrames(t *testi
 	if err != nil || replayed || session.Transport != contracts.DataPlaneTransportProxied {
 		t.Fatalf("buffered Exec admission = %#v, replayed=%t, error=%v", session, replayed, err)
 	}
-	if delivery, found, err := relay.ClaimOutboundFrame(
-		t.Context(), seed.RunnerID, seed.ConnectionOne, now,
-	); err != nil || found {
-		t.Fatalf("buffered Exec relay delivery = %#v, found=%t, error=%v", delivery, found, err)
-	}
 	completed, err := relay.CompleteDataPlaneSession(t.Context(), runnercontrol.DataPlaneCompletion{
 		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef, SessionID: session.ID,
 		Exec: &runnerv1.ExecBufferedResult{
@@ -515,19 +479,14 @@ func TestPostgresLiveDataPlanePersistsOneBufferedExecOutcomeAndNoFrames(t *testi
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	var outcomeRows, frameRows int64
+	var outcomeRows int64
 	if err := pool.QueryRow(t.Context(), `
 		SELECT count(*) FROM secondbox.data_plane_sessions WHERE id=$1`, session.ID,
 	).Scan(&outcomeRows); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(t.Context(), `
-		SELECT count(*) FROM secondbox.data_plane_frames WHERE session_id=$1`, session.ID,
-	).Scan(&frameRows); err != nil {
-		t.Fatal(err)
-	}
-	if outcomeRows != 1 || frameRows != 0 {
-		t.Fatalf("buffered Exec persistence = outcome rows %d, frame rows %d", outcomeRows, frameRows)
+	if outcomeRows != 1 {
+		t.Fatalf("buffered Exec persistence = outcome rows %d, want one", outcomeRows)
 	}
 }
 
@@ -548,7 +507,7 @@ func TestPostgresDirectFileAndTerminalAdmissionsAreDurableAndPayloadFree(t *test
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	seed := seedRelayReadyAssignment(t, sandbox, now)
+	seed := seedDataPlaneReadyAssignment(t, sandbox, now)
 	seedFixtureHomeRunner(t, "default-pool", seed.RunnerID)
 	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
 	if err != nil {
@@ -561,9 +520,9 @@ func TestPostgresDirectFileAndTerminalAdmissionsAreDurableAndPayloadFree(t *test
 	); err != nil {
 		t.Fatal(err)
 	}
-	relay, err := runnercontrol.NewPostgresFrameRelay(t.Context(), runnercontrol.PostgresFrameRelayConfig{
-		DatabaseURL: integrationDatabaseURL, ClaimDuration: time.Second,
-		Retention: time.Hour, MaximumFrameBytes: 1 << 20, MaximumSessionBytes: 4 << 20,
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{
+		DatabaseURL: integrationDatabaseURL,
+		Retention:   time.Hour, MaximumSessionBytes: 4 << 20,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -603,16 +562,6 @@ func TestPostgresDirectFileAndTerminalAdmissionsAreDurableAndPayloadFree(t *test
 		!bytes.Equal(open.CredentialDigest, bytes.Repeat([]byte{0x42}, 32)) {
 		t.Fatalf("direct File command = %#v", open)
 	}
-	var frameRows int64
-	if err := pool.QueryRow(t.Context(), `
-		SELECT count(*) FROM secondbox.data_plane_frames WHERE session_id=$1`, session.ID,
-	).Scan(&frameRows); err != nil {
-		t.Fatal(err)
-	}
-	if frameRows != 0 {
-		t.Fatalf("direct File frame rows = %d, want zero", frameRows)
-	}
-
 	lease, err := controlPlane.AcquireSandboxLease(
 		t.Context(), principal, sandbox.ID, sandbox.Generation, "direct-terminal-lease", 60,
 	)
@@ -655,17 +604,9 @@ func TestPostgresDirectFileAndTerminalAdmissionsAreDurableAndPayloadFree(t *test
 		!bytes.Equal(terminalOpen.CredentialDigest, bytes.Repeat([]byte{0x43}, 32)) {
 		t.Fatalf("direct Terminal command = %#v", terminalOpen)
 	}
-	if err := pool.QueryRow(t.Context(), `
-		SELECT count(*) FROM secondbox.data_plane_frames WHERE session_id=$1`, terminalSession.ID,
-	).Scan(&frameRows); err != nil {
-		t.Fatal(err)
-	}
-	if frameRows != 0 {
-		t.Fatalf("direct Terminal frame rows = %d, want zero", frameRows)
-	}
 }
 
-func TestPostgresLiveStreamingExecTerminalOutcomesWriteNoFrames(t *testing.T) {
+func TestPostgresLiveStreamingExecTerminalOutcomes(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
 	admin := fixtureAdmin(t, controlPlane)
 	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "live-stream-outcomes")
@@ -679,20 +620,15 @@ func TestPostgresLiveStreamingExecTerminalOutcomesWriteNoFrames(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	seedRelayReadyAssignment(t, sandbox, now)
-	relay, err := runnercontrol.NewPostgresFrameRelay(t.Context(), runnercontrol.PostgresFrameRelayConfig{
-		DatabaseURL: integrationDatabaseURL, ClaimDuration: time.Second, Retention: time.Hour,
-		MaximumFrameBytes: 1 << 20, MaximumSessionBytes: 64 << 20,
+	seedDataPlaneReadyAssignment(t, sandbox, now)
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{
+		DatabaseURL: integrationDatabaseURL, Retention: time.Hour,
+		MaximumSessionBytes: 64 << 20,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(relay.Close)
-	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
 	tests := []struct {
 		name         string
 		terminalKind string
@@ -769,20 +705,11 @@ func TestPostgresLiveStreamingExecTerminalOutcomesWriteNoFrames(t *testing.T) {
 			if err != nil || terminal.TerminalKind != testCase.terminalKind {
 				t.Fatalf("stream terminal = %#v, error=%v", terminal, err)
 			}
-			var frameRows int64
-			if err := pool.QueryRow(t.Context(), `
-				SELECT count(*) FROM secondbox.data_plane_frames WHERE session_id=$1`, session.ID,
-			).Scan(&frameRows); err != nil {
-				t.Fatal(err)
-			}
-			if frameRows != 0 {
-				t.Fatalf("stream frame rows = %d, want zero", frameRows)
-			}
 		})
 	}
 }
 
-type relayReadySeed struct {
+type dataPlaneReadySeed struct {
 	Fence            *runnerv1.AssignmentFence
 	RunnerID         string
 	CredentialSerial string
@@ -790,34 +717,11 @@ type relayReadySeed struct {
 	ConnectionTwo    string
 }
 
-func assertRelayCorrelation(
-	t *testing.T,
-	correlation *runnerv1.Correlation,
-	requestID string,
-	operationID string,
-	sandboxID string,
-	leaseID string,
-	seed relayReadySeed,
-) {
-	t.Helper()
-	if correlation == nil ||
-		correlation.RequestId != requestID ||
-		correlation.OperationId != operationID ||
-		correlation.SandboxId != sandboxID ||
-		correlation.InstanceId != seed.Fence.InstanceId ||
-		correlation.SandboxGeneration != seed.Fence.SandboxGeneration ||
-		correlation.AssignmentId != seed.Fence.AssignmentId ||
-		correlation.LeaseId != leaseID ||
-		correlation.RunnerId != seed.RunnerID {
-		t.Fatalf("relay correlation = %#v", correlation)
-	}
-}
-
-func seedRelayReadyAssignment(
+func seedDataPlaneReadyAssignment(
 	t *testing.T,
 	sandbox contracts.Sandbox,
 	now time.Time,
-) relayReadySeed {
+) dataPlaneReadySeed {
 	t.Helper()
 	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
 	if err != nil {
@@ -875,155 +779,8 @@ func seedRelayReadyAssignment(
 			t.Fatal(err)
 		}
 	}
-	return relayReadySeed{
+	return dataPlaneReadySeed{
 		Fence: fence, RunnerID: runnerID, CredentialSerial: credentialSerial,
 		ConnectionOne: connectionOne, ConnectionTwo: connectionTwo,
-	}
-}
-
-func relayExecOutput(
-	fence *runnerv1.AssignmentFence,
-	operationID string,
-	streamID string,
-	sequence uint64,
-	content []byte,
-) *runnerv1.RunnerToControlPlane {
-	return &runnerv1.RunnerToControlPlane{
-		Message: &runnerv1.RunnerToControlPlane_Exec{Exec: &runnerv1.ExecFrame{
-			Fence: fence, OperationId: operationID, StreamId: streamID, Sequence: sequence,
-			Payload: &runnerv1.ExecFrame_Output{Output: &runnerv1.ExecOutput{
-				Channel: runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT, Data: content,
-			}},
-		}},
-	}
-}
-
-func TestPostgresRelayPrunesTerminalFramesWithoutPruningReplay(t *testing.T) {
-	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
-	admin := fixtureAdmin(t, controlPlane)
-	_, account, credential := createProjectAccountAndCredential(
-		t, controlPlane, admin, "relay-frame-retention",
-	)
-	profile := createGrantedProfile(
-		t, controlPlane, databaseStore, admin, account, "profile-relay-frame-retention",
-	)
-	principal := authenticateCredential(t, controlPlane, credential)
-	sandbox, _, err := controlPlane.CreateSandbox(
-		t.Context(), principal, "relay-frame-retention-create",
-		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	seed := seedRelayReadyAssignment(t, sandbox, now)
-	lease, err := controlPlane.AcquireSandboxLease(
-		t.Context(), principal, sandbox.ID, sandbox.Generation,
-		"relay-frame-retention-lease", 60,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	relay, err := runnercontrol.NewPostgresFrameRelay(
-		t.Context(), runnercontrol.PostgresFrameRelayConfig{
-			DatabaseURL: integrationDatabaseURL, ClaimDuration: time.Second,
-			Retention: time.Hour, MaximumFrameBytes: 1 << 20, MaximumSessionBytes: 4 << 20,
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(relay.Close)
-	admission := runnercontrol.DataPlaneAdmission{
-		ID: "dps_relay_frame_retention", StreamID: "stream_relay_frame_retention",
-		TenantRef: principal.TenantRef, SubjectRef: principal.SubjectRef,
-		SandboxID: sandbox.ID, Generation: sandbox.Generation, LeaseID: lease.ID,
-		RequestID: "request-relay-frame-retention", Kind: "terminal", Operation: "terminal",
-		IdempotencyKey: "relay-frame-retention", RequestHash: "relay-frame-retention-hash",
-		DeadlineAt: now.Add(time.Minute), MaximumResponseBytes: 1024,
-		UseProfileStreamWindow: true, DeferResponseCredit: true,
-		ExecOpen: &runnerv1.ExecOpen{
-			Command:        &runnerv1.ExecOpen_Shell{Shell: "printf retained"},
-			DeadlineUnixMs: uint64(now.Add(time.Minute).UnixMilli()), OutputLimitBytes: 1024,
-			AllocatePty: true, Streaming: true, PtyRows: 24, PtyColumns: 80,
-		},
-		Request: map[string]any{"command": "printf retained"}, Now: now,
-	}
-	session, replayed, err := relay.AdmitDataPlane(t.Context(), admission)
-	if err != nil || replayed {
-		t.Fatalf("admission = %#v replayed=%t error=%v", session, replayed, err)
-	}
-	for {
-		delivery, found, err := relay.ClaimOutboundFrame(
-			t.Context(), seed.RunnerID, seed.ConnectionOne, now,
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !found {
-			break
-		}
-		if err := relay.MarkOutboundFrameDelivered(
-			t.Context(), delivery.ID, seed.ConnectionOne, delivery.ClaimAttempt, now,
-		); err != nil {
-			t.Fatal(err)
-		}
-	}
-	terminal := &runnerv1.RunnerToControlPlane{
-		Message: &runnerv1.RunnerToControlPlane_Pty{Pty: &runnerv1.PtyFrame{
-			Fence: seed.Fence, OperationId: session.ID, StreamId: session.StreamID, Sequence: 1,
-			Payload: &runnerv1.PtyFrame_Terminal{Terminal: &runnerv1.ExecTerminal{
-				Kind: runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED,
-			}},
-		}},
-	}
-	completedAt := now.Add(2 * time.Second)
-	if inserted, err := relay.PersistInboundFrame(t.Context(), runnercontrol.InboundRelayFrame{
-		RunnerID: seed.RunnerID, ConnectionID: seed.ConnectionOne, Message: terminal,
-	}, completedAt); err != nil || !inserted {
-		t.Fatalf("terminal persistence = %t, %v", inserted, err)
-	}
-	if changed, err := relay.SweepDataPlane(t.Context(), completedAt, 100); err != nil || !changed {
-		t.Fatalf("frame cleanup = %t, %v", changed, err)
-	}
-	pool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
-	var frames int
-	var cleanupCompleted *time.Time
-	if err := pool.QueryRow(t.Context(), `
-		SELECT count(frame.id),max(session.frame_cleanup_completed_at)
-		FROM secondbox.data_plane_sessions AS session
-		LEFT JOIN secondbox.data_plane_frames AS frame ON frame.session_id=session.id
-		WHERE session.id=$1`, session.ID).Scan(&frames, &cleanupCompleted); err != nil {
-		t.Fatal(err)
-	}
-	if frames != 0 || cleanupCompleted == nil {
-		t.Fatalf("post-cleanup rows=%d cleanup=%v", frames, cleanupCompleted)
-	}
-	current, err := relay.GetDataPlaneSession(
-		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID,
-	)
-	if err != nil || len(current.Stdout) != 0 || current.NextClientSequence != 0 {
-		t.Fatalf("materialised result after cleanup = %#v error=%v", current, err)
-	}
-	replayedSession, replayed, err := relay.AdmitDataPlane(t.Context(), admission)
-	if err != nil || !replayed || len(replayedSession.Stdout) != 0 ||
-		replayedSession.NextClientSequence != current.NextClientSequence {
-		t.Fatalf("admission replay after cleanup = %#v replayed=%t error=%v", replayedSession, replayed, err)
-	}
-	if inserted, err := relay.PersistInboundFrame(t.Context(), runnercontrol.InboundRelayFrame{
-		RunnerID: seed.RunnerID, ConnectionID: seed.ConnectionOne, Message: terminal,
-	}, completedAt.Add(time.Second)); err != nil || inserted {
-		t.Fatalf("exact terminal retransmission = %t, %v", inserted, err)
-	}
-	changedTerminal := proto.Clone(terminal).(*runnerv1.RunnerToControlPlane)
-	changedTerminal.GetPty().GetTerminal().SafeDetail = "changed"
-	if _, err := relay.PersistInboundFrame(t.Context(), runnercontrol.InboundRelayFrame{
-		RunnerID: seed.RunnerID, ConnectionID: seed.ConnectionOne, Message: changedTerminal,
-	}, completedAt.Add(time.Second)); !errors.Is(err, runnercontrol.ErrRelaySequence) {
-		t.Fatalf("changed terminal retransmission error = %v", err)
 	}
 }

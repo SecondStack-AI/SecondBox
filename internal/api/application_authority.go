@@ -209,7 +209,7 @@ func isApplicationScope(scope string) bool {
 // portTransportForRequest resolves which Port transport this caller may receive.
 // The direct transport is denied by default: a request carrying no application
 // authority, or an authority without the exact scope, receives the proxied
-// relay endpoint and never observes a Runner address.
+// endpoint and never observes a Runner address.
 func portTransportForRequest(request *http.Request) string {
 	authority, ok := request.Context().Value(applicationAuthorityContextKey{}).(resolvedApplicationAuthority)
 	if !ok {

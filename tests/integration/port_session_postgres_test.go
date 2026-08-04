@@ -46,16 +46,16 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seed := seedRelayReadyAssignment(t, sandbox, now)
+	seed := seedDataPlaneReadyAssignment(t, sandbox, now)
 	lease, err := controlPlane.AcquireSandboxLease(
 		t.Context(), principal, sandbox.ID, sandbox.Generation, "port-session-lease", 60,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	relay, err := runnercontrol.NewPostgresFrameRelay(t.Context(), runnercontrol.PostgresFrameRelayConfig{
-		DatabaseURL: integrationDatabaseURL, ClaimDuration: 50 * time.Millisecond,
-		Retention: time.Hour, MaximumFrameBytes: 1 << 20, MaximumSessionBytes: 2 << 20,
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{
+		DatabaseURL: integrationDatabaseURL,
+		Retention:   time.Hour, MaximumSessionBytes: 2 << 20,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -67,8 +67,8 @@ func TestPostgresPortSessionAuthorityPolicyTokenAndAccounting(t *testing.T) {
 		DefaultSubjectQuota: generousQuota(),
 		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
-		DataPlaneRelay:        relay, DataPlanePollInterval: time.Millisecond,
-		PortSessionRelay: relay, PublicBaseURL: "https://secondbox.example",
+		DataPlaneStore:        relay, DataPlanePollInterval: time.Millisecond,
+		PortSessionStore: relay, PublicBaseURL: "https://secondbox.example",
 	})
 	if err != nil {
 		t.Fatal(err)

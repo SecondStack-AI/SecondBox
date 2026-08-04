@@ -50,10 +50,10 @@ func (s *RunnerProtocolService) handlePortFrame(
 	if !enabled[runnerprotocol.RunnerFeature_RUNNER_FEATURE_PORT_PROXY] {
 		return fmt.Errorf("SecondBox runner Port proxy feature was not negotiated")
 	}
-	if err := validateRunnerRelayFrameIdentity(frame.GetFence(), frame.GetOperationId(), frame.GetStreamId(), frame.GetSequence()); err != nil {
+	if err := validateRunnerDataPlaneFrameIdentity(frame.GetFence(), frame.GetOperationId(), frame.GetStreamId(), frame.GetSequence()); err != nil {
 		return err
 	}
-	key := runnerRelayOperationKey(frame.Fence, frame.OperationId, frame.StreamId)
+	key := runnerDataPlaneOperationKey(frame.Fence, frame.OperationId, frame.StreamId)
 	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(frame)
 	if err != nil {
 		return fmt.Errorf("SecondBox runner encode Port frame: %w", err)
@@ -106,7 +106,7 @@ func (s *RunnerProtocolService) handlePortFrame(
 			s.operationMu.Unlock()
 			return s.sendUntrackedPortTerminal(stream, frame, runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_GUEST_UNAVAILABLE, "runner Port backend is unavailable")
 		}
-		if len(s.portOperations) >= maxRunnerRelayOperationStates {
+		if len(s.portOperations) >= maxRunnerDataPlaneOperationStates {
 			s.operationMu.Unlock()
 			return s.sendUntrackedPortTerminal(stream, frame, runnerprotocol.PortTerminalKind_PORT_TERMINAL_KIND_FAILED, "runner Port capacity is exhausted")
 		}
@@ -129,13 +129,13 @@ func (s *RunnerProtocolService) handlePortFrame(
 		s.portOperations[key] = state
 		s.setActiveOperation(frame.Fence.AssignmentId, frame.OperationId, true)
 		s.operationMu.Unlock()
-		if err := s.sendPortCredit(stream, state, runnerRelayChunkBytes); err != nil {
+		if err := s.sendPortCredit(stream, state, runnerDataPlaneChunkBytes); err != nil {
 			return err
 		}
 		go s.pumpPortReads(portCtx, stream, state, asyncErrors)
 		return nil
 	}
-	duplicate, sequenceErr := acceptRunnerRelayInput(state.nextIncoming, state.lastIncoming, frame.Sequence, encoded)
+	duplicate, sequenceErr := acceptRunnerDataPlaneInput(state.nextIncoming, state.lastIncoming, frame.Sequence, encoded)
 	if duplicate {
 		terminal := state.terminalFrame
 		s.operationMu.Unlock()
@@ -156,7 +156,7 @@ func (s *RunnerProtocolService) handlePortFrame(
 	switch {
 	case frame.GetBytes() != nil:
 		data := frame.GetBytes().Data
-		if len(data) == 0 || len(data) > runnerRelayChunkBytes {
+		if len(data) == 0 || len(data) > runnerDataPlaneChunkBytes {
 			return fmt.Errorf("SecondBox runner Port bytes exceed the frame bound")
 		}
 		if err := state.connection.Write(ctx, data); err != nil {
@@ -180,7 +180,7 @@ func (s *RunnerProtocolService) pumpPortReads(
 	asyncErrors chan<- error,
 ) {
 	for {
-		credit, err := state.credit.take(ctx, runnerRelayChunkBytes)
+		credit, err := state.credit.take(ctx, runnerDataPlaneChunkBytes)
 		if err != nil {
 			return
 		}
@@ -304,7 +304,7 @@ func (s *RunnerProtocolService) retainPortTerminalLocked(key string) {
 		return
 	}
 	s.portTerminalOrder = append(s.portTerminalOrder, key)
-	for len(s.portTerminalOrder) > maxRunnerRelayTerminalTombstones {
+	for len(s.portTerminalOrder) > maxRunnerDataPlaneTerminalTombstones {
 		oldest := s.portTerminalOrder[0]
 		s.portTerminalOrder = s.portTerminalOrder[1:]
 		if state := s.portOperations[oldest]; state != nil && state.terminal {

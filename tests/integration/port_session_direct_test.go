@@ -147,17 +147,6 @@ func TestPostgresDirectPortTransportAdmissionAndCredentialConsumption(t *testing
 	); !errors.Is(err, ports.ErrPortTokenConsumed) {
 		t.Fatalf("replayed direct credential error = %v", err)
 	}
-
-	// Direct admission is payload-free control, so the frame relay remains empty.
-	var frameCount int64
-	if err := fixture.pool.QueryRow(t.Context(), `
-		SELECT count(*) FROM secondbox.data_plane_frames WHERE session_id=$1`, direct.ID,
-	).Scan(&frameCount); err != nil {
-		t.Fatal(err)
-	}
-	if frameCount != 0 {
-		t.Fatalf("direct PortSession durable frame count = %d", frameCount)
-	}
 }
 
 func TestPostgresDirectPortRejectsPolicyDeadlineAndLeaseFailures(t *testing.T) {
@@ -321,7 +310,7 @@ func TestPostgresDirectPortRequiresAnAdvertisedRunnerAddressAndCertificatePin(t 
 type directPortFixture struct {
 	controlPlane *service.ControlPlaneService
 	portService  *service.ControlPlaneService
-	relay        *runnercontrol.PostgresFrameRelay
+	relay        *runnercontrol.PostgresDataPlaneStore
 	pool         *pgxpool.Pool
 	principal    contracts.Principal
 	sandboxID    string
@@ -379,7 +368,7 @@ func newDirectPortFixture(t *testing.T, name string, now *time.Time) directPortF
 	if err != nil {
 		t.Fatal(err)
 	}
-	seed := seedRelayReadyAssignment(t, sandbox, *now)
+	seed := seedDataPlaneReadyAssignment(t, sandbox, *now)
 	lease, err := controlPlane.AcquireSandboxLease(
 		t.Context(), principal, sandbox.ID, sandbox.Generation, "direct-port-lease-"+name, 60,
 	)
@@ -392,11 +381,11 @@ func newDirectPortFixture(t *testing.T, name string, now *time.Time) directPortF
 	}
 	t.Cleanup(pool.Close)
 	seedAdvertisedDataPlaneRunner(t, pool, seed.RunnerID, *now)
-	relay, err := runnercontrol.NewPostgresFrameRelay(
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(
 		t.Context(),
-		runnercontrol.PostgresFrameRelayConfig{
-			DatabaseURL: integrationDatabaseURL, ClaimDuration: 50 * time.Millisecond,
-			Retention: time.Hour, MaximumFrameBytes: 1 << 20, MaximumSessionBytes: 2 << 20,
+		runnercontrol.PostgresDataPlaneStoreConfig{
+			DatabaseURL: integrationDatabaseURL,
+			Retention:   time.Hour, MaximumSessionBytes: 2 << 20,
 		},
 	)
 	if err != nil {
@@ -409,8 +398,8 @@ func newDirectPortFixture(t *testing.T, name string, now *time.Time) directPortF
 		DefaultSubjectQuota: generousQuota(),
 		Now:                 func() time.Time { return *now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
-		DataPlaneRelay:        relay, DataPlanePollInterval: time.Millisecond,
-		PortSessionRelay: relay, PublicBaseURL: "https://secondbox.example",
+		DataPlaneStore:        relay, DataPlanePollInterval: time.Millisecond,
+		PortSessionStore: relay, PublicBaseURL: "https://secondbox.example",
 	})
 	if err != nil {
 		t.Fatal(err)

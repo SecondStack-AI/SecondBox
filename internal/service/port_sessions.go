@@ -90,7 +90,7 @@ func (service *ControlPlaneService) CreateSandboxPortSession(
 		return contracts.PortSession{}, false, err
 	}
 	digest := sha256.Sum256([]byte(credential))
-	tunnel, replayed, err := service.portSessionRelay.AdmitPortSession(ctx, runnercontrol.PortSessionAdmission{
+	tunnel, replayed, err := service.portSessionStore.AdmitPortSession(ctx, runnercontrol.PortSessionAdmission{
 		Session:  session,
 		StreamID: service.newID("stream"), TenantRef: principal.TenantRef,
 		SubjectRef: principal.SubjectRef,
@@ -118,7 +118,7 @@ func (service *ControlPlaneService) GetSandboxPortSession(
 	if err := service.requirePortAuthority(principal); err != nil {
 		return contracts.PortSession{}, err
 	}
-	tunnel, err := service.portSessionRelay.GetPortTunnel(
+	tunnel, err := service.portSessionStore.GetPortTunnel(
 		ctx, principal.TenantRef, principal.SubjectRef,
 		sandboxID, sessionID, service.now().UTC(),
 	)
@@ -155,7 +155,7 @@ func (service *ControlPlaneService) CloseSandboxPortSession(
 	if err != nil {
 		return err
 	}
-	_, err = service.portSessionRelay.ClosePortSession(ctx, runnercontrol.PortTunnelClose{
+	_, err = service.portSessionStore.ClosePortSession(ctx, runnercontrol.PortTunnelClose{
 		TenantRef: principal.TenantRef, SandboxID: sandboxID, SessionID: sessionID,
 		SubjectRef:     principal.SubjectRef,
 		IdempotencyKey: idempotencyKey,
@@ -197,7 +197,7 @@ func (service *ControlPlaneService) ConsumePortTunnelToken(
 	if now.Unix() >= claims.ExpiresAt {
 		return runnercontrol.PortTunnel{}, ports.ErrPortTokenInvalid
 	}
-	return service.portSessionRelay.ConsumePortSession(
+	return service.portSessionStore.ConsumePortSession(
 		ctx, claims.TenantRef, claims.SubjectRef, claims.SessionID, now,
 	)
 }
@@ -211,7 +211,7 @@ func (service *ControlPlaneService) ClosePortTunnel(
 	if reason == "" {
 		return errors.New("SecondBox PortSession close reason is required")
 	}
-	_, err := service.portSessionRelay.ClosePortSession(ctx, runnercontrol.PortTunnelClose{
+	_, err := service.portSessionStore.ClosePortSession(ctx, runnercontrol.PortTunnelClose{
 		TenantRef: tunnel.TenantRef, SandboxID: tunnel.Session.SandboxID,
 		SubjectRef: tunnel.SubjectRef,
 		SessionID:  tunnel.Session.ID, Generation: tunnel.Session.Generation,
@@ -220,7 +220,7 @@ func (service *ControlPlaneService) ClosePortTunnel(
 	return err
 }
 
-// SandboxPortStream forwards one relayed PortSession over the authenticated
+// SandboxPortStream forwards one proxied PortSession over the authenticated
 // Runner connection without retaining payload bytes in PostgreSQL.
 type SandboxPortStream struct {
 	service        *ControlPlaneService
@@ -325,9 +325,9 @@ func (stream *SandboxPortStream) Send(ctx context.Context, payload []byte) error
 		if len(payload) > 0 && int64(len(payload)) > stream.clientCredit {
 			return ports.ErrPortBackpressure
 		}
-		return runnercontrol.ErrRelaySessionLimit
+		return runnercontrol.ErrDataPlaneSessionLimit
 	}
-	if err := stream.service.portSessionRelay.RecordPortClientBytes(
+	if err := stream.service.portSessionStore.RecordPortClientBytes(
 		ctx, stream.tunnel.TenantRef, stream.tunnel.SubjectRef,
 		stream.tunnel.Session.ID, payload, stream.service.now().UTC(),
 	); err != nil {
@@ -355,7 +355,7 @@ func (stream *SandboxPortStream) Receive(
 			!proto.Equal(frame.Fence, portTunnelFence(stream.tunnel)) ||
 			!proto.Equal(frame.Correlation, portTunnelCorrelation(stream.tunnel)) || stream.terminal {
 			stream.mu.Unlock()
-			return runnercontrol.PortTunnelEvent{}, runnercontrol.ErrRelaySequence
+			return runnercontrol.PortTunnelEvent{}, runnercontrol.ErrDataPlaneSequence
 		}
 		stream.nextReceive++
 		switch {
@@ -363,7 +363,7 @@ func (stream *SandboxPortStream) Receive(
 			credit := int64(frame.GetCredit().ByteCount)
 			if credit < 1 || stream.clientCredit+credit > stream.tunnel.StreamWindowBytes {
 				stream.mu.Unlock()
-				return runnercontrol.PortTunnelEvent{}, runnercontrol.ErrRelayFrameLimit
+				return runnercontrol.PortTunnelEvent{}, runnercontrol.ErrDataPlaneFrameLimit
 			}
 			stream.clientCredit += credit
 			stream.mu.Unlock()
@@ -373,7 +373,7 @@ func (stream *SandboxPortStream) Receive(
 			if len(payload) == 0 || stream.runnerBytes+int64(len(payload)) > stream.responseCredit ||
 				stream.runnerBytes+int64(len(payload)) > stream.tunnel.MaximumResponseBytes {
 				stream.mu.Unlock()
-				return runnercontrol.PortTunnelEvent{}, runnercontrol.ErrRelaySessionLimit
+				return runnercontrol.PortTunnelEvent{}, runnercontrol.ErrDataPlaneSessionLimit
 			}
 			stream.runnerBytes += int64(len(payload))
 			event := runnercontrol.PortTunnelEvent{
@@ -405,9 +405,9 @@ func (stream *SandboxPortStream) Acknowledge(
 	defer stream.mu.Unlock()
 	if event.Sequence <= stream.acknowledged ||
 		(event.Bytes == nil) == (event.TerminalKind == "") {
-		return runnercontrol.ErrRelaySequence
+		return runnercontrol.ErrDataPlaneSequence
 	}
-	if err := stream.service.portSessionRelay.RecordPortTunnelAcknowledgement(
+	if err := stream.service.portSessionStore.RecordPortTunnelAcknowledgement(
 		ctx, stream.tunnel.TenantRef, stream.tunnel.SubjectRef,
 		stream.tunnel.Session.ID, event.Sequence, stream.service.now().UTC(),
 	); err != nil {
@@ -453,7 +453,7 @@ func portTunnelCorrelation(tunnel runnercontrol.PortTunnel) *runnerv1.Correlatio
 }
 
 func (service *ControlPlaneService) requirePortAuthority(principal contracts.Principal) error {
-	if service.portSessionRelay == nil {
+	if service.portSessionStore == nil {
 		return ports.ErrLifecycleUnavailable
 	}
 	if principal.TenantRef == "" || principal.SubjectRef == "" {
@@ -498,7 +498,7 @@ func (service *ControlPlaneService) portTunnelCredential(
 //
 // A caller whose authority does not grant the direct transport never receives a
 // Runner address, so a direct session is unaddressable to it rather than
-// downgraded to a relay endpoint that its home Runner would refuse.
+// downgraded to a proxied endpoint that its home Runner would refuse.
 func (service *ControlPlaneService) portTunnelEndpoint(
 	tunnel runnercontrol.PortTunnel,
 	grantedTransport string,
