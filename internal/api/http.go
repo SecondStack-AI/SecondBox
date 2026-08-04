@@ -1275,7 +1275,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusConflict, "terminal_replay_evicted", "Terminal replay sequence is no longer available", false
 	case errors.Is(err, ports.ErrWaitExpired):
 		return http.StatusRequestTimeout, "wait_expired", "Sandbox wait deadline expired", false
-	case errors.Is(err, ports.ErrLifecycleUnavailable):
+	case errors.Is(err, ports.ErrLifecycleUnavailable),
+		errors.Is(err, runnercontrol.ErrLiveDataPlaneUnavailable):
 		return http.StatusConflict, "execution_node_unavailable", "Execution node lifecycle unavailable", true
 	default:
 		return http.StatusInternalServerError, "internal_error", "SecondBox request failed", true

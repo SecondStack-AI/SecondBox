@@ -159,7 +159,9 @@ func TestPublicStreamingExecIsLiveBackpressuredAndCancellable(t *testing.T) {
 	assertStreamingOutput(t, orderedConnection, 0, "stdout", []byte("stdout:one"))
 	assertStreamingOutput(t, orderedConnection, 1, "stderr", []byte("!"))
 	orderedOutcome := readStreamingOutcome(t, orderedConnection, 2)
-	if orderedOutcome.Kind != "exited" {
+	if orderedOutcome.Kind != "exited" ||
+		decodeStreamingOutput(t, orderedOutcome.Output.StdoutBase64) != "stdout:one" ||
+		decodeStreamingOutput(t, orderedOutcome.Output.StderrBase64) != "!" {
 		t.Fatalf("ordered outcome = %#v", orderedOutcome)
 	}
 	orderedConnection.Close()
@@ -175,7 +177,9 @@ func TestPublicStreamingExecIsLiveBackpressuredAndCancellable(t *testing.T) {
 	}
 	assertStreamingOutput(t, exhaustedConnection, 0, "stdout", []byte("part"))
 	exhaustedOutcome := readStreamingOutcome(t, exhaustedConnection, 1)
-	if exhaustedOutcome.Kind != "output_exhausted" {
+	if exhaustedOutcome.Kind != "output_exhausted" ||
+		decodeStreamingOutput(t, exhaustedOutcome.Output.StdoutBase64) != "part" ||
+		decodeStreamingOutput(t, exhaustedOutcome.Output.StderrBase64) != "" {
 		t.Fatalf("output-exhausted outcome = %#v", exhaustedOutcome)
 	}
 	exhaustedConnection.Close()
@@ -342,6 +346,8 @@ type streamingFakeOperation struct {
 	command      string
 	nextSequence uint64
 	inputClosed  bool
+	stdout       []byte
+	stderr       []byte
 }
 
 func newStreamingExecFakeRunner(
@@ -481,6 +487,14 @@ func (fake *streamingExecFakeRunner) output(
 	channel runnerv1.ExecOutputChannel,
 	data []byte,
 ) error {
+	switch channel {
+	case runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT:
+		operation.stdout = append(operation.stdout, data...)
+	case runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDERR:
+		operation.stderr = append(operation.stderr, data...)
+	default:
+		return fmt.Errorf("streaming fake runner output channel is invalid")
+	}
 	frame := operation.open
 	sequence := operation.nextSequence
 	operation.nextSequence++
@@ -514,7 +528,10 @@ func (fake *streamingExecFakeRunner) terminal(
 		Message: &runnerv1.RunnerToControlPlane_Exec{Exec: &runnerv1.ExecFrame{
 			Fence: frame.Fence, OperationId: frame.OperationId, StreamId: frame.StreamId,
 			Sequence: sequence, Correlation: frame.Correlation,
-			Payload: &runnerv1.ExecFrame_Terminal{Terminal: terminal},
+			Payload: &runnerv1.ExecFrame_BufferedResult{BufferedResult: &runnerv1.ExecBufferedResult{
+				Stdout: bytes.Clone(operation.stdout), Stderr: bytes.Clone(operation.stderr),
+				Terminal: terminal,
+			}},
 		}},
 	})
 }
@@ -668,7 +685,17 @@ func readStreamingOutcome(
 }
 
 type streamingExecOutcome struct {
-	Kind string `json:"kind"`
+	Kind   string               `json:"kind"`
+	Output contracts.ExecOutput `json:"output"`
+}
+
+func decodeStreamingOutput(t *testing.T, encoded string) string {
+	t.Helper()
+	decoded, err := base64.StdEncoding.Strict().DecodeString(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(decoded)
 }
 
 func waitStreamingRunnerEvent(t *testing.T, events <-chan string, expected string) {
