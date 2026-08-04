@@ -36,12 +36,19 @@ func TestNewServerRequiresEachConfiguredDataPlaneTransport(t *testing.T) {
 		config.EnabledFeatures,
 		runnerv1.RunnerFeature_RUNNER_FEATURE_PTY,
 	)
+	if _, err := NewServer(config); err != nil {
+		t.Fatalf("PTY server with live data plane: %v", err)
+	}
+	config.EnabledFeatures = append(
+		config.EnabledFeatures,
+		runnerv1.RunnerFeature_RUNNER_FEATURE_PORT_PROXY,
+	)
 	if _, err := NewServer(config); err == nil {
-		t.Fatal("PTY server accepted a nil durable relay")
+		t.Fatal("Port proxy server accepted a nil durable relay")
 	}
 	config.FrameRelay = &recordingFrameRelay{}
 	if _, err := NewServer(config); err != nil {
-		t.Fatalf("PTY server with relay: %v", err)
+		t.Fatalf("Port proxy server with relay: %v", err)
 	}
 }
 

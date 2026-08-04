@@ -2898,6 +2898,7 @@
           "execution_node_unavailable",
           "dependency_unavailable",
           "internal_error",
+          "terminal_replay_evicted",
           "wait_expired"
         ]
       },

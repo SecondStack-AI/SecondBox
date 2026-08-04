@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -13,7 +14,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func TestDirectDataPlaneCarriesTypedExecAndFileMessages(t *testing.T) {
+func TestDirectDataPlaneCarriesTypedExecFileAndPTYMessages(t *testing.T) {
+	ptyResize := make(chan string, 1)
 	backend := &relayAssignmentBackend{
 		exec: func(
 			_ context.Context,
@@ -37,6 +39,32 @@ func TestDirectDataPlaneCarriesTypedExecAndFileMessages(t *testing.T) {
 			return FileOperationResult{Terminal: &runnerprotocol.FileTerminal{
 				Kind: runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_COMPLETED,
 			}}, nil
+		},
+		pty: func(
+			_ context.Context,
+			_ *runnerprotocol.AssignmentFence,
+			_ *runnerprotocol.ExecOpen,
+			controls <-chan PTYControl,
+			emit func([]byte) error,
+		) (*runnerprotocol.ExecTerminal, error) {
+			for control := range controls {
+				switch {
+				case control.Credit > 0:
+					if err := emit([]byte("direct pty")); err != nil {
+						return nil, err
+					}
+				case control.Rows > 0:
+					ptyResize <- fmt.Sprintf("%dx%d", control.Rows, control.Columns)
+				case control.Input != nil:
+					if err := emit([]byte("done")); err != nil {
+						return nil, err
+					}
+					return &runnerprotocol.ExecTerminal{
+						Kind: runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED,
+					}, nil
+				}
+			}
+			return nil, context.Canceled
 		},
 	}
 	stream := &threadSafeRunnerStream{}
@@ -145,6 +173,127 @@ func TestDirectDataPlaneCarriesTypedExecAndFileMessages(t *testing.T) {
 		t.Fatalf("direct File terminal = %#v", fileTerminal)
 	}
 
+	ptyCredential := "direct-pty-credential-00000000000000000"
+	ptySession := registerDirectDataPlaneTestSession(
+		t, service, fence, "direct-pty", "direct-pty-stream",
+		runnerprotocol.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY, ptyCredential,
+	)
+	ptyConnection, err := tls.Dial("tcp", service.dataPlane.address(), tlsConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := portdirect.WriteCredential(ptyConnection, portdirect.SessionKindPTY, ptyCredential); err != nil {
+		t.Fatal(err)
+	}
+	if verdict, detail, err := portdirect.ReadVerdict(ptyConnection); err != nil || verdict != portdirect.VerdictAdmitted {
+		t.Fatalf("direct PTY verdict = %d/%q, %v", verdict, detail, err)
+	}
+	correlation := relayOperationCorrelation(fence, "direct-pty", "request-direct-pty", "lease-direct-pty")
+	writeDirectDataPlaneTestMessage(t, ptyConnection, &runnerprotocol.ControlPlaneToRunner{
+		Message: &runnerprotocol.ControlPlaneToRunner_Exec{Exec: &runnerprotocol.ExecFrame{
+			Fence: cloneRunnerFence(fence), OperationId: "direct-pty", StreamId: "direct-pty-stream",
+			Sequence: 1, Correlation: correlation,
+			Payload: &runnerprotocol.ExecFrame_Open{Open: &runnerprotocol.ExecOpen{
+				Command: &runnerprotocol.ExecOpen_Shell{Shell: "cat"}, OutputLimitBytes: 1024,
+				AllocatePty: true, PtyRows: 24, PtyColumns: 80, Streaming: true,
+			}},
+		}},
+	})
+	writeDirectDataPlaneTestMessage(t, ptyConnection, directPTYAttachTestMessage(
+		fence, correlation, "attachment-one", -1, 2,
+	))
+	if result := readDirectDataPlaneTestMessage(t, ptyConnection).GetPty().GetAttachResult(); result.GetKind() != runnerprotocol.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ATTACHED {
+		t.Fatalf("direct PTY attachment = %#v", result)
+	}
+	writeDirectDataPlaneTestMessage(t, ptyConnection, &runnerprotocol.ControlPlaneToRunner{
+		Message: &runnerprotocol.ControlPlaneToRunner_Pty{Pty: &runnerprotocol.PtyFrame{
+			Fence: cloneRunnerFence(fence), OperationId: "direct-pty", StreamId: "direct-pty-stream",
+			Sequence: 2, Correlation: correlation,
+			Payload: &runnerprotocol.PtyFrame_Credit{Credit: &runnerprotocol.StreamCredit{ByteCount: 64}},
+		}},
+	})
+	if output := readDirectDataPlaneTestMessage(t, ptyConnection).GetPty().GetOutput(); string(output.GetData()) != "direct pty" {
+		t.Fatalf("direct PTY output = %#v", output)
+	}
+	writeDirectDataPlaneTestMessage(t, ptyConnection, &runnerprotocol.ControlPlaneToRunner{
+		Message: &runnerprotocol.ControlPlaneToRunner_Pty{Pty: &runnerprotocol.PtyFrame{
+			Fence: cloneRunnerFence(fence), OperationId: "direct-pty", StreamId: "direct-pty-stream",
+			Sequence: 3, Correlation: correlation,
+			Payload: &runnerprotocol.PtyFrame_Detach{Detach: &runnerprotocol.PtyDetach{ReconnectId: "attachment-one"}},
+		}},
+	})
+	if err := ptyConnection.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitDirectDataPlaneSessionReleased(t, ptySession)
+
+	ptyReconnect, err := tls.Dial("tcp", service.dataPlane.address(), tlsConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ptyReconnect.Close() })
+	if err := portdirect.WriteCredential(ptyReconnect, portdirect.SessionKindPTY, ptyCredential); err != nil {
+		t.Fatal(err)
+	}
+	if verdict, detail, err := portdirect.ReadVerdict(ptyReconnect); err != nil || verdict != portdirect.VerdictAdmitted {
+		t.Fatalf("direct PTY reconnect verdict = %d/%q, %v", verdict, detail, err)
+	}
+	writeDirectDataPlaneTestMessage(t, ptyReconnect, directPTYAttachTestMessage(
+		fence, correlation, "attachment-two", 0, 3,
+	))
+	if result := readDirectDataPlaneTestMessage(t, ptyReconnect).GetPty().GetAttachResult(); result.GetKind() != runnerprotocol.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ATTACHED {
+		t.Fatalf("direct PTY reattachment = %#v", result)
+	}
+	writeDirectDataPlaneTestMessage(t, ptyReconnect, &runnerprotocol.ControlPlaneToRunner{
+		Message: &runnerprotocol.ControlPlaneToRunner_Pty{Pty: &runnerprotocol.PtyFrame{
+			Fence: cloneRunnerFence(fence), OperationId: "direct-pty", StreamId: "direct-pty-stream",
+			Sequence: 3, Correlation: correlation,
+			Payload: &runnerprotocol.PtyFrame_Resize{Resize: &runnerprotocol.PtyResize{Rows: 40, Columns: 120}},
+		}},
+	})
+	select {
+	case resize := <-ptyResize:
+		if resize != "40x120" {
+			t.Fatalf("direct PTY resize = %q", resize)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("direct PTY resize was not forwarded")
+	}
+	writeDirectDataPlaneTestMessage(t, ptyReconnect, &runnerprotocol.ControlPlaneToRunner{
+		Message: &runnerprotocol.ControlPlaneToRunner_Pty{Pty: &runnerprotocol.PtyFrame{
+			Fence: cloneRunnerFence(fence), OperationId: "direct-pty", StreamId: "direct-pty-stream",
+			Sequence: 4, Correlation: correlation,
+			Payload: &runnerprotocol.PtyFrame_Input{Input: &runnerprotocol.PtyInput{Data: []byte("exit")}},
+		}},
+	})
+	ptyOutput := readDirectDataPlaneTestMessage(t, ptyReconnect).GetPty().GetOutput()
+	ptyTerminal := readDirectDataPlaneTestMessage(t, ptyReconnect).GetPty().GetTerminal()
+	if string(ptyOutput.GetData()) != "done" ||
+		ptyTerminal.GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED {
+		t.Fatalf("direct PTY completion = %#v/%#v", ptyOutput, ptyTerminal)
+	}
+	waitDirectDataPlaneSessionReleased(t, ptySession)
+	ptyTerminalReplay, err := tls.Dial("tcp", service.dataPlane.address(), tlsConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ptyTerminalReplay.Close() })
+	if err := portdirect.WriteCredential(ptyTerminalReplay, portdirect.SessionKindPTY, ptyCredential); err != nil {
+		t.Fatal(err)
+	}
+	if verdict, detail, err := portdirect.ReadVerdict(ptyTerminalReplay); err != nil || verdict != portdirect.VerdictAdmitted {
+		t.Fatalf("direct PTY terminal replay verdict = %d/%q, %v", verdict, detail, err)
+	}
+	writeDirectDataPlaneTestMessage(t, ptyTerminalReplay, directPTYAttachTestMessage(
+		fence, correlation, "attachment-three", 1, 5,
+	))
+	if result := readDirectDataPlaneTestMessage(t, ptyTerminalReplay).GetPty().GetAttachResult(); result.GetKind() != runnerprotocol.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ATTACHED {
+		t.Fatalf("direct PTY terminal replay attachment = %#v", result)
+	}
+	if terminal := readDirectDataPlaneTestMessage(t, ptyTerminalReplay).GetPty().GetTerminal(); terminal.GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED {
+		t.Fatalf("direct PTY replayed terminal = %#v", terminal)
+	}
+
 	cancelCredential := "direct-cancel-credential-00000000000000"
 	registerDirectDataPlaneTestSession(
 		t, service, fence, "direct-cancel", "direct-cancel-stream",
@@ -183,17 +332,51 @@ func registerDirectDataPlaneTestSession(
 	streamID string,
 	kind runnerprotocol.DataPlaneSessionKind,
 	credential string,
-) {
+) *directDataPlaneSession {
 	t.Helper()
 	digest := sha256.Sum256([]byte(credential))
 	if err := service.registerDirectDataPlaneSession(&runnerprotocol.DataPlaneDirectOpen{
 		Fence: cloneRunnerFence(fence), OperationId: operationID, StreamId: streamID,
 		Correlation: relayOperationCorrelation(fence, operationID, "request-"+operationID, "lease-"+operationID),
 		Kind:        kind, DeadlineUnixMs: uint64(time.Now().Add(time.Minute).UnixMilli()),
-		CredentialDigest: digest[:],
+		CredentialDigest: digest[:], StreamWindowBytes: 64,
 	}); err != nil {
 		t.Fatal(err)
 	}
+	return service.directDataPlane.await(t.Context(), digest)
+}
+
+func directPTYAttachTestMessage(
+	fence *runnerprotocol.AssignmentFence,
+	correlation *runnerprotocol.Correlation,
+	attachmentID string,
+	afterSequence int64,
+	sequence uint64,
+) *runnerprotocol.ControlPlaneToRunner {
+	return &runnerprotocol.ControlPlaneToRunner{
+		Message: &runnerprotocol.ControlPlaneToRunner_Pty{Pty: &runnerprotocol.PtyFrame{
+			Fence: cloneRunnerFence(fence), OperationId: "direct-pty", StreamId: "direct-pty-stream",
+			Sequence: sequence, Correlation: correlation,
+			Payload: &runnerprotocol.PtyFrame_Attach{Attach: &runnerprotocol.PtyAttach{
+				ReconnectId: attachmentID, AfterSequence: afterSequence, StreamWindowBytes: 64,
+			}},
+		}},
+	}
+}
+
+func waitDirectDataPlaneSessionReleased(t *testing.T, session *directDataPlaneSession) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		session.mu.Lock()
+		claimed := session.claimed
+		session.mu.Unlock()
+		if !claimed {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("direct PTY session remained claimed after disconnect")
 }
 
 func answerDirectDataPlaneAdmissions(

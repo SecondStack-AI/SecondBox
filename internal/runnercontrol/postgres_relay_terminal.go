@@ -41,7 +41,7 @@ type TerminalClientFrame struct {
 	Cancel        bool
 }
 
-// TerminalServerFrame is one retained PTY output or terminal acknowledgement.
+// TerminalServerFrame is one live PTY output or terminal acknowledgement.
 type TerminalServerFrame struct {
 	Sequence int64
 	Output   []byte
@@ -72,6 +72,9 @@ func (relay *PostgresFrameRelay) AcquireTerminalAttachment(
 		WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3 FOR UPDATE`,
 		tenantRef, subjectRef, sessionID))
 	if err != nil {
+		return DataPlaneSession{}, err
+	}
+	if err := hydrateDataPlaneTransport(ctx, tx, &session); err != nil {
 		return DataPlaneSession{}, err
 	}
 	if session.Kind != "terminal" || session.Operation != "terminal" ||
@@ -244,8 +247,9 @@ func (relay *PostgresFrameRelay) DetachTerminalAttachment(
 	return true, nil
 }
 
-// AppendTerminalClientFrame durably appends one exactly ordered attached PTY control.
-func (relay *PostgresFrameRelay) AppendTerminalClientFrame(
+// RecordTerminalClientFrame advances the compact ordered Terminal projection
+// without retaining the input, resize, credit, or cancellation payload.
+func (relay *PostgresFrameRelay) RecordTerminalClientFrame(
 	ctx context.Context,
 	tenantRef string,
 	subjectRef string,
@@ -254,9 +258,9 @@ func (relay *PostgresFrameRelay) AppendTerminalClientFrame(
 	frame TerminalClientFrame,
 	now time.Time,
 ) (bool, error) {
-	if tenantRef == "" || subjectRef == "" ||
-		sessionID == "" || attachmentID == "" || frame.Sequence < 0 {
-		return false, errors.New("SecondBox public Terminal frame identity is incomplete")
+	if tenantRef == "" || subjectRef == "" || sessionID == "" ||
+		attachmentID == "" || frame.Sequence < 0 || now.IsZero() {
+		return false, errors.New("SecondBox live Terminal frame identity is incomplete")
 	}
 	kinds := 0
 	if frame.Input != nil {
@@ -272,12 +276,14 @@ func (relay *PostgresFrameRelay) AppendTerminalClientFrame(
 		kinds++
 	}
 	if kinds != 1 || frame.Credit < 0 ||
-		((frame.ResizeRows == 0) != (frame.ResizeColumns == 0)) {
-		return false, errors.New("SecondBox public Terminal frame requires exactly one valid payload")
+		((frame.ResizeRows == 0) != (frame.ResizeColumns == 0)) ||
+		(frame.Input != nil && len(frame.Input) == 0) ||
+		frame.ResizeRows > 1000 || frame.ResizeColumns > 1000 {
+		return false, errors.New("SecondBox live Terminal frame requires exactly one valid payload")
 	}
 	tx, err := relay.pool.Begin(ctx)
 	if err != nil {
-		return false, fmt.Errorf("SecondBox public Terminal frame transaction: %w", err)
+		return false, fmt.Errorf("SecondBox live Terminal frame transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 	session, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
@@ -295,188 +301,123 @@ func (relay *PostgresFrameRelay) AppendTerminalClientFrame(
 	if session.State != "pending" && session.State != "running" {
 		return false, ErrRelaySequence
 	}
-	if frame.Input != nil && len(frame.Input) == 0 {
-		return false, errors.New("SecondBox public Terminal input is empty")
-	}
-	if frame.ResizeRows > 1000 || frame.ResizeColumns > 1000 {
-		return false, errors.New("SecondBox public Terminal resize is invalid")
-	}
-	if frame.Input != nil &&
-		session.RequestStreamBytes+int64(len(frame.Input)) > session.MaximumRequestBytes {
-		return false, ErrRelaySessionLimit
-	}
-	if frame.Credit > 0 {
-		emitted := int64(len(session.Stdout) + len(session.Stderr))
-		if session.ResponseCreditBytes-emitted+frame.Credit > session.StreamWindowBytes {
-			return false, ErrRelayFrameLimit
-		}
-	}
-	runnerSequence := frame.Sequence + 2
-	fence := &runnerv1.AssignmentFence{
-		AssignmentId: session.AssignmentID, SandboxId: session.SandboxID,
-		InstanceId: session.InstanceID, SandboxGeneration: uint64(session.Generation),
-		FencingToken: bytes.Clone(session.FencingToken),
-	}
-	var message *runnerv1.ControlPlaneToRunner
-	if frame.Cancel {
-		message = &runnerv1.ControlPlaneToRunner{
-			Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: &runnerv1.ExecFrame{
-				Fence: fence, OperationId: session.ID, StreamId: session.StreamID,
-				Sequence: uint64(runnerSequence), Correlation: dataPlaneCorrelation(session),
-				Payload: &runnerv1.ExecFrame_Cancel{Cancel: &runnerv1.ExecCancel{
-					Reason: "public Terminal client cancellation",
-				}},
-			}},
-		}
-	} else {
-		pty := &runnerv1.PtyFrame{
-			Fence: fence, OperationId: session.ID, StreamId: session.StreamID,
-			Sequence: uint64(runnerSequence), Correlation: dataPlaneCorrelation(session),
-		}
-		switch {
-		case frame.Input != nil:
-			pty.Payload = &runnerv1.PtyFrame_Input{Input: &runnerv1.PtyInput{Data: bytes.Clone(frame.Input)}}
-		case frame.Credit > 0:
-			pty.Payload = &runnerv1.PtyFrame_Credit{Credit: &runnerv1.StreamCredit{ByteCount: uint64(frame.Credit)}}
-		default:
-			pty.Payload = &runnerv1.PtyFrame_Resize{Resize: &runnerv1.PtyResize{
-				Rows: frame.ResizeRows, Columns: frame.ResizeColumns,
-			}}
-		}
-		message = &runnerv1.ControlPlaneToRunner{
-			Message: &runnerv1.ControlPlaneToRunner_Pty{Pty: pty},
-		}
-	}
-	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(message)
-	if err != nil {
-		return false, fmt.Errorf("SecondBox public Terminal frame encoding: %w", err)
-	}
-	if int64(len(payload)) > relay.maximumFrameBytes {
-		return false, ErrRelayFrameLimit
-	}
-	hash := sha256.Sum256(payload)
-	payloadHash := hex.EncodeToString(hash[:])
-	var priorHash string
-	err = tx.QueryRow(ctx, `
-		SELECT payload_hash FROM secondbox.data_plane_frames
-		WHERE session_id=$1 AND direction='outbound' AND sequence=$2`,
-		session.ID, runnerSequence,
-	).Scan(&priorHash)
-	if err == nil {
-		if priorHash != payloadHash {
-			return false, ErrRelaySequence
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return false, fmt.Errorf("SecondBox public Terminal duplicate commit: %w", err)
-		}
-		return false, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return false, fmt.Errorf("SecondBox public Terminal sequence lookup: %w", err)
-	}
-	if runnerSequence != session.NextOutboundSequence {
+	if frame.Sequence != session.NextClientSequence {
 		return false, ErrRelaySequence
 	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO secondbox.data_plane_frames (
-			id,session_id,direction,sequence,payload_hash,payload,payload_bytes,
-			priority,state,claim_owner,claim_expires_at,delivery_count,
-			created_at,updated_at,delivered_at
-		) VALUES ($1,$2,'outbound',$3,$4,$5,$6,0,'pending','',NULL,0,$7,$7,NULL)`,
-		fmt.Sprintf("%s_terminal_%d", session.ID, frame.Sequence), session.ID,
-		runnerSequence, payloadHash, payload, len(payload), now.UTC(),
-	); err != nil {
-		return false, fmt.Errorf("SecondBox public Terminal frame insert: %w", err)
+	if session.RequestStreamBytes+int64(len(frame.Input)) > session.MaximumRequestBytes {
+		return false, ErrRelaySessionLimit
 	}
-	inputBytes := int64(len(frame.Input))
+	if frame.Credit > 0 &&
+		session.ResponseCreditBytes-sessionInboundPayloadBytes(session)+frame.Credit >
+			session.StreamWindowBytes {
+		return false, ErrRelayFrameLimit
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.data_plane_sessions
 		SET request_stream_bytes=request_stream_bytes+$2,
 		    outbound_bytes=outbound_bytes+$3,
 		    response_credit_bytes=response_credit_bytes+$4,
 		    next_outbound_sequence=next_outbound_sequence+1,
-		    frames_retain_until=retain_until,frame_cleanup_completed_at=NULL,
 		    state=CASE WHEN $5 THEN 'cancelling' ELSE state END,
 		    terminal_kind=CASE WHEN $5 THEN $6 ELSE terminal_kind END,
 		    terminal_detail=CASE WHEN $5 THEN 'public Terminal client cancellation' ELSE terminal_detail END,
 		    updated_at=$7
 		WHERE id=$1`,
-		session.ID, inputBytes, len(payload), frame.Credit, frame.Cancel,
+		session.ID, len(frame.Input), len(frame.Input), frame.Credit, frame.Cancel,
 		runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED.String(), now.UTC(),
 	); err != nil {
-		return false, fmt.Errorf("SecondBox public Terminal session update: %w", err)
+		return false, fmt.Errorf("SecondBox live Terminal session update: %w", err)
 	}
 	if err := touchDataPlaneActivity(ctx, tx, session, now.UTC()); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("SecondBox public Terminal frame commit: %w", err)
+		return false, fmt.Errorf("SecondBox live Terminal frame commit: %w", err)
 	}
 	return true, nil
 }
 
-// ListTerminalServerFrames returns retained PTY output and terminal frames.
-func (relay *PostgresFrameRelay) ListTerminalServerFrames(
+// RecordTerminalServerFrame advances Terminal output and terminal evidence
+// without retaining a replayable payload in PostgreSQL.
+func (relay *PostgresFrameRelay) RecordTerminalServerFrame(
 	ctx context.Context,
 	tenantRef string,
 	subjectRef string,
 	sessionID string,
-	afterSequence int64,
-	limit int,
-) ([]TerminalServerFrame, error) {
-	if tenantRef == "" || subjectRef == "" ||
-		sessionID == "" || afterSequence < -1 || limit < 1 || limit > 256 {
-		return nil, errors.New("SecondBox public Terminal frame query is invalid")
+	frame TerminalServerFrame,
+	now time.Time,
+) (DataPlaneSession, error) {
+	if tenantRef == "" || subjectRef == "" || sessionID == "" ||
+		frame.Sequence < 0 || now.IsZero() || (frame.Output == nil) == (frame.Terminal == nil) {
+		return DataPlaneSession{}, errors.New("SecondBox live Terminal response is incomplete")
 	}
-	var kind, operation string
-	if err := relay.pool.QueryRow(ctx, `
-		SELECT kind,operation FROM secondbox.data_plane_sessions
-		WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3`,
-		tenantRef, subjectRef, sessionID,
-	).Scan(&kind, &operation); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrDataPlaneNotFound
-		}
-		return nil, fmt.Errorf("SecondBox public Terminal session lookup: %w", err)
-	}
-	if kind != "terminal" || operation != "terminal" {
-		return nil, ErrDataPlaneNotFound
-	}
-	rows, err := relay.pool.Query(ctx, `
-		SELECT sequence,payload FROM secondbox.data_plane_frames
-		WHERE session_id=$1 AND direction='inbound' AND sequence>$2
-		ORDER BY sequence
-		LIMIT $3`, sessionID, afterSequence+1, limit,
-	)
+	tx, err := relay.pool.Begin(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("SecondBox public Terminal frame lookup: %w", err)
+		return DataPlaneSession{}, fmt.Errorf("SecondBox live Terminal response transaction: %w", err)
 	}
-	defer rows.Close()
-	result := make([]TerminalServerFrame, 0, limit)
-	for rows.Next() {
-		var runnerSequence int64
-		var payload []byte
-		if err := rows.Scan(&runnerSequence, &payload); err != nil {
-			return nil, fmt.Errorf("SecondBox public Terminal frame scan: %w", err)
-		}
-		var message runnerv1.RunnerToControlPlane
-		if err := proto.Unmarshal(payload, &message); err != nil {
-			return nil, fmt.Errorf("SecondBox public Terminal frame decoding: %w", err)
-		}
-		pty := message.GetPty()
-		if pty == nil || (pty.GetOutput() == nil && pty.GetTerminal() == nil) {
-			return nil, errors.New("SecondBox public Terminal retained frame is invalid")
-		}
-		var output []byte
-		if pty.GetOutput() != nil {
-			output = bytes.Clone(pty.GetOutput().Data)
-		}
-		result = append(result, TerminalServerFrame{
-			Sequence: runnerSequence - 1, Output: output, Terminal: pty.GetTerminal(),
-		})
+	defer tx.Rollback(ctx)
+	session, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
+		WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3 FOR UPDATE`,
+		tenantRef, subjectRef, sessionID))
+	if err != nil {
+		return DataPlaneSession{}, err
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("SecondBox public Terminal frame rows: %w", err)
+	if session.Kind != "terminal" || session.Operation != "terminal" {
+		return DataPlaneSession{}, ErrDataPlaneNotFound
 	}
-	return result, nil
+	runnerSequence := frame.Sequence + 1
+	var nextInbound int64
+	if err := tx.QueryRow(ctx, `
+		SELECT next_inbound_sequence FROM secondbox.data_plane_sessions WHERE id=$1`,
+		session.ID,
+	).Scan(&nextInbound); err != nil {
+		return DataPlaneSession{}, fmt.Errorf("SecondBox live Terminal response sequence lookup: %w", err)
+	}
+	if runnerSequence < nextInbound {
+		if err := tx.Commit(ctx); err != nil {
+			return DataPlaneSession{}, fmt.Errorf("SecondBox live Terminal replay commit: %w", err)
+		}
+		return session, nil
+	}
+	if runnerSequence != nextInbound ||
+		sessionInboundPayloadBytes(session)+int64(len(frame.Output)) > session.MaximumResponseBytes ||
+		sessionInboundPayloadBytes(session)+int64(len(frame.Output)) > session.ResponseCreditBytes {
+		return DataPlaneSession{}, ErrRelaySequence
+	}
+	identity := inboundIdentity{
+		sequence: runnerSequence,
+		ptyOutput: &runnerv1.ExecOutput{
+			Channel: runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT,
+			Data:    bytes.Clone(frame.Output),
+		},
+		ptyTerm: frame.Terminal,
+	}
+	payloadHash := ""
+	if frame.Terminal != nil {
+		payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(frame.Terminal)
+		if err != nil {
+			return DataPlaneSession{}, fmt.Errorf("SecondBox live Terminal outcome encoding: %w", err)
+		}
+		hash := sha256.Sum256(payload)
+		payloadHash = hex.EncodeToString(hash[:])
+	}
+	if err := applyInboundPayload(
+		ctx, tx, session, identity, int64(len(frame.Output)), payloadHash,
+		relay.retention, now.UTC(),
+	); err != nil {
+		return DataPlaneSession{}, err
+	}
+	updated, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
+		WHERE id=$1`, session.ID))
+	if err != nil {
+		return DataPlaneSession{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return DataPlaneSession{}, fmt.Errorf("SecondBox live Terminal response commit: %w", err)
+	}
+	return updated, nil
+}
+
+func sessionInboundPayloadBytes(session DataPlaneSession) int64 {
+	return session.InboundBytes
 }

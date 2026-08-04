@@ -237,7 +237,7 @@ func TestHeartbeatMakesMissingActiveAssignmentUncertain(t *testing.T) {
 	}
 }
 
-func TestCloseCurrentConnectionFailsActiveDataPlaneSessionsWithoutPrematureFencing(t *testing.T) {
+func TestCloseCurrentConnectionDetachesProxiedTerminalAndFailsOtherDataPlaneSessions(t *testing.T) {
 	store := openRunnerControlDatabase(t)
 	now := time.Date(2026, 7, 29, 21, 0, 0, 0, time.UTC)
 	seedRunnerConnectionForDataPlaneDisconnect(
@@ -248,6 +248,12 @@ func TestCloseCurrentConnectionFailsActiveDataPlaneSessionsWithoutPrematureFenci
 		now,
 	)
 	if _, err := store.pool.Exec(t.Context(), `
+		INSERT INTO secondbox.profile_revisions (
+			id,profile_name,revision_number,spec_json,created_at
+		) VALUES (
+			'profile-revision','profile',1,
+			'{"execution":{"dataPlaneTransport":"proxied"}}',$3
+		);
 		INSERT INTO secondbox.data_plane_sessions (
 			id,tenant_ref,subject_ref,sandbox_id,profile_revision_id,assignment_id,
 			instance_id,runner_id,generation,fencing_token,request_id,lease_id,kind,
@@ -265,7 +271,9 @@ func TestCloseCurrentConnectionFailsActiveDataPlaneSessionsWithoutPrematureFenci
 			'session-'||kind,'tenant','subject','sandbox','profile-revision',
 			'assignment','instance','runner-home',1,$1,'request','',''||kind,kind,
 			'stream-'||kind,'running',0,'','',$2,1024,1024,1024,1024,0,false,
-			false,0,'',NULL,NULL,NULL,0,0,1,'','',0,0,'',0,0,'',false,'',
+			kind='terminal',CASE WHEN kind='terminal' THEN 30 ELSE 0 END,
+			CASE WHEN kind='terminal' THEN 'attachment-terminal' ELSE '' END,
+			CASE WHEN kind='terminal' THEN $3::timestamptz ELSE NULL END,NULL,NULL,0,0,1,'','',0,0,'',0,0,'',false,'',
 				''::bytea,''::bytea,''::bytea,'{}','{}',$3,$3,NULL,$2,$2,1
 		FROM unnest(ARRAY['exec','terminal','file','port']) AS kind;
 
@@ -329,10 +337,9 @@ func TestCloseCurrentConnectionFailsActiveDataPlaneSessionsWithoutPrematureFenci
 	}
 	defer rows.Close()
 	wantTerminal := map[string]string{
-		"exec":     runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_INFRASTRUCTURE_FAILED.String(),
-		"terminal": runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_INFRASTRUCTURE_FAILED.String(),
-		"file":     runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_FAILED.String(),
-		"port":     runnerv1.PortTerminalKind_PORT_TERMINAL_KIND_GUEST_UNAVAILABLE.String(),
+		"exec": runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_INFRASTRUCTURE_FAILED.String(),
+		"file": runnerv1.FileTerminalKind_FILE_TERMINAL_KIND_FAILED.String(),
+		"port": runnerv1.PortTerminalKind_PORT_TERMINAL_KIND_GUEST_UNAVAILABLE.String(),
 	}
 	seen := make(map[string]bool, len(wantTerminal))
 	for rows.Next() {
@@ -351,6 +358,16 @@ func TestCloseCurrentConnectionFailsActiveDataPlaneSessionsWithoutPrematureFenci
 			&completedAt,
 		); err != nil {
 			t.Fatal(err)
+		}
+		if kind == "terminal" {
+			if state != "running" || terminalKind != "" || infrastructureReason != "" ||
+				retryable || terminalMessage != "" || completedAt != nil {
+				t.Fatalf(
+					"disconnected Terminal state=%q terminal=%q reason=%q retryable=%t message=%q completed=%v",
+					state, terminalKind, infrastructureReason, retryable, terminalMessage, completedAt,
+				)
+			}
+			continue
 		}
 		if state != "failed" ||
 			terminalKind != wantTerminal[kind] ||
@@ -378,6 +395,22 @@ func TestCloseCurrentConnectionFailsActiveDataPlaneSessionsWithoutPrematureFenci
 	}
 	if len(seen) != len(wantTerminal) {
 		t.Fatalf("disconnected session kinds = %v, want %v", seen, wantTerminal)
+	}
+	var terminalAttachment string
+	var terminalDetachedAt, terminalDetachExpiresAt *time.Time
+	if err := store.pool.QueryRow(t.Context(), `
+		SELECT attachment_id,detached_at,detach_expires_at
+		FROM secondbox.data_plane_sessions WHERE id='session-terminal'`,
+	).Scan(&terminalAttachment, &terminalDetachedAt, &terminalDetachExpiresAt); err != nil {
+		t.Fatal(err)
+	}
+	if terminalAttachment != "" || terminalDetachedAt == nil ||
+		!terminalDetachedAt.Equal(disconnectedAt) || terminalDetachExpiresAt == nil ||
+		!terminalDetachExpiresAt.Equal(disconnectedAt.Add(30*time.Second)) {
+		t.Fatalf(
+			"disconnected Terminal attachment=%q detached=%v expires=%v",
+			terminalAttachment, terminalDetachedAt, terminalDetachExpiresAt,
+		)
 	}
 
 	var assignmentState, assignmentFailureClass string
@@ -408,7 +441,7 @@ func TestCloseCurrentConnectionFailsActiveDataPlaneSessionsWithoutPrematureFenci
 	if assignmentState != "ready" ||
 		assignmentFailureClass != "" ||
 		!nextReconcileAt.Equal(now.Add(time.Hour)) ||
-		activeActivities != 0 ||
+		activeActivities != 1 ||
 		portState != "closed" ||
 		portClosedAt == nil ||
 		!portClosedAt.Equal(disconnectedAt) {

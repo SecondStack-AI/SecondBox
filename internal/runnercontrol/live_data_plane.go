@@ -32,7 +32,7 @@ type liveDataPlaneRoute struct {
 	closeOnce sync.Once
 }
 
-// LiveDataPlaneBroker routes Exec and File frames through the process that owns
+// LiveDataPlaneBroker routes Exec, PTY, and File frames through the process that owns
 // the authenticated Runner connection. It retains only bounded channel entries
 // and never writes a payload to PostgreSQL.
 type LiveDataPlaneBroker struct {
@@ -115,7 +115,7 @@ func (route *liveDataPlaneRoute) close(err error) {
 	})
 }
 
-// LiveDataPlaneStream owns one in-memory proxied Exec or File route.
+// LiveDataPlaneStream owns one in-memory proxied Exec, PTY, or File route.
 type LiveDataPlaneStream struct {
 	broker *LiveDataPlaneBroker
 	route  *liveDataPlaneRoute
@@ -231,7 +231,7 @@ func (broker *LiveDataPlaneBroker) Deliver(
 }
 
 func liveDataPlaneKey(kind string, operationID string, streamID string) (string, error) {
-	if (kind != "exec" && kind != "file") || operationID == "" || streamID == "" {
+	if (kind != "exec" && kind != "terminal" && kind != "file") || operationID == "" || streamID == "" {
 		return "", errors.New("SecondBox live data-plane identity is incomplete")
 	}
 	return kind + "\x00" + operationID + "\x00" + streamID, nil
@@ -246,5 +246,8 @@ func liveDataPlaneMessageIdentity(
 	if frame := message.GetFile(); frame != nil {
 		return "file", frame.OperationId, frame.StreamId, nil
 	}
-	return "", "", "", errors.New("SecondBox live data-plane message is not Exec or File")
+	if frame := message.GetPty(); frame != nil {
+		return "terminal", frame.OperationId, frame.StreamId, nil
+	}
+	return "", "", "", errors.New("SecondBox live data-plane message is not Exec, PTY, or File")
 }

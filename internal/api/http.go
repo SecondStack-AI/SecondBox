@@ -1271,6 +1271,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusConflict, "state_conflict", "Terminal already has an active attachment", false
 	case errors.Is(err, runnercontrol.ErrTerminalDetached):
 		return http.StatusConflict, "state_conflict", "Terminal attachment is inactive", false
+	case errors.Is(err, runnercontrol.ErrTerminalReplayEvicted):
+		return http.StatusConflict, "terminal_replay_evicted", "Terminal replay sequence is no longer available", false
 	case errors.Is(err, ports.ErrWaitExpired):
 		return http.StatusRequestTimeout, "wait_expired", "Sandbox wait deadline expired", false
 	case errors.Is(err, ports.ErrLifecycleUnavailable):

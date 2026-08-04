@@ -75,7 +75,7 @@ func TestRunnerDataPlaneListenerRequiresPinnedTLSAndRejectsUnwiredKinds(t *testi
 		detail  string
 	}{
 		{portdirect.SessionKindExec, portdirect.VerdictDenied, "credential rejected"},
-		{portdirect.SessionKindPTY, portdirect.VerdictSessionKindUnsupported, "pty session kind is not implemented"},
+		{portdirect.SessionKindPTY, portdirect.VerdictDenied, "credential rejected"},
 		{portdirect.SessionKindFile, portdirect.VerdictDenied, "credential rejected"},
 	} {
 		connection, err := tls.Dial("tcp", service.dataPlane.address(), tlsConfig)

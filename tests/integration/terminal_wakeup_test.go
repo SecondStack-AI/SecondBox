@@ -11,22 +11,15 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/api"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/internal/service"
-	"github.com/SecondStack-AI/SecondBox/internal/worknotify"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// wakeupTerminalPollInterval is long enough that polling cannot explain a prompt
-// delivery. If the notification path regresses, the test fails on its read
-// deadline rather than passing slowly.
+// wakeupTerminalPollInterval is long enough that PostgreSQL polling cannot
+// explain prompt delivery over the live data plane.
 const wakeupTerminalPollInterval = 60 * time.Second
 
-// TestPublicTerminalDeliversOnNotificationRatherThanPollInterval proves the whole
-// inbound chain: a durable inbound frame fires the migration trigger, the
-// PostgreSQL listener decodes it, the hub fans it out by session, and the
-// caller-facing loop wakes. The poll interval remains configured as the recovery
-// bound and is deliberately too long to account for the result.
-func TestPublicTerminalDeliversOnNotificationRatherThanPollInterval(t *testing.T) {
+func TestPublicTerminalDeliversOverLiveDataPlaneRatherThanPollInterval(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
 	admin := fixtureAdmin(t, controlPlane)
 	project, account, _ := createProjectAccountAndCredential(t, controlPlane, admin, "terminal-wakeup")
@@ -81,18 +74,7 @@ func TestPublicTerminalDeliversOnNotificationRatherThanPollInterval(t *testing.T
 		t.Fatal(err)
 	}
 	t.Cleanup(relay.Close)
-
-	// The real listener is used rather than a hand-published hub, so a broken
-	// trigger, payload, or kind registration fails this test.
-	hub := worknotify.NewHub()
-	listener, err := worknotify.NewPostgresListener(t.Context(), integrationDatabaseURL, hub)
-	if err != nil {
-		t.Fatal(err)
-	}
-	listenerContext, stopListener := context.WithCancel(t.Context())
-	defer stopListener()
-	listenerErrors := make(chan error, 1)
-	go func() { listenerErrors <- listener.Run(listenerContext) }()
+	liveDataPlane := runnercontrol.NewLiveDataPlaneBroker()
 
 	server := httptest.NewUnstartedServer(nil)
 	publicBaseURL := "http://" + server.Listener.Addr().String()
@@ -103,8 +85,8 @@ func TestPublicTerminalDeliversOnNotificationRatherThanPollInterval(t *testing.T
 		Now:                 func() time.Time { return time.Now().UTC() }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		DataPlaneRelay:        relay, DataPlanePollInterval: wakeupTerminalPollInterval,
-		DataPlaneWakeups: hub,
-		PublicBaseURL:    publicBaseURL,
+		LiveDataPlane: liveDataPlane,
+		PublicBaseURL: publicBaseURL,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +103,10 @@ func TestPublicTerminalDeliversOnNotificationRatherThanPollInterval(t *testing.T
 	server.Start()
 	t.Cleanup(server.Close)
 
-	fake := newTerminalHTTPFakeRunner(relay, seed.RunnerID, seed.ConnectionTwo)
+	fake, detachFake := newTerminalHTTPFakeRunner(
+		t, liveDataPlane, seed.RunnerID, seed.ConnectionTwo,
+	)
+	defer detachFake()
 	fakeContext, stopFake := context.WithCancel(t.Context())
 	defer stopFake()
 	fakeErrors := make(chan error, 1)
@@ -134,8 +119,7 @@ func TestPublicTerminalDeliversOnNotificationRatherThanPollInterval(t *testing.T
 	connection := dialTerminal(t, session, key.Credential, sandbox.Generation)
 	defer connection.Close()
 
-	// Granting credit makes the fake Runner emit output, which lands as a durable
-	// inbound frame and is the event under test.
+	// Granting credit makes the fake Runner emit output on the live stream.
 	if err := connection.WriteJSON(map[string]any{
 		"type": "credit", "sequence": 0, "bytes": 8,
 	}); err != nil {
@@ -143,8 +127,8 @@ func TestPublicTerminalDeliversOnNotificationRatherThanPollInterval(t *testing.T
 	}
 	waitTerminalRunnerEvent(t, fake.events, "credit:terminal-order:8")
 
-	// A deadline well inside the poll interval: only the notification path can
-	// deliver in time.
+	// A deadline well inside the poll interval proves PostgreSQL polling is not
+	// carrying terminal output.
 	if err := connection.SetReadDeadline(time.Now().Add(20 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
@@ -154,8 +138,4 @@ func TestPublicTerminalDeliversOnNotificationRatherThanPollInterval(t *testing.T
 		t.Fatalf("Terminal output took %s, which the poll interval could explain", elapsed)
 	}
 
-	stopListener()
-	if err := <-listenerErrors; err != nil && listenerContext.Err() == nil {
-		t.Fatalf("work listener: %v", err)
-	}
 }

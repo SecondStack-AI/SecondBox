@@ -35,8 +35,8 @@ type terminalDataPlaneRelay interface {
 	DataPlaneRelay
 	AcquireTerminalAttachment(context.Context, string, string, string, string, int64, string, time.Time) (runnercontrol.DataPlaneSession, error)
 	DetachTerminalAttachment(context.Context, string, string, string, string, time.Time) (bool, error)
-	AppendTerminalClientFrame(context.Context, string, string, string, string, runnercontrol.TerminalClientFrame, time.Time) (bool, error)
-	ListTerminalServerFrames(context.Context, string, string, string, int64, int) ([]runnercontrol.TerminalServerFrame, error)
+	RecordTerminalClientFrame(context.Context, string, string, string, string, runnercontrol.TerminalClientFrame, time.Time) (bool, error)
+	RecordTerminalServerFrame(context.Context, string, string, string, runnercontrol.TerminalServerFrame, time.Time) (runnercontrol.DataPlaneSession, error)
 }
 
 const (

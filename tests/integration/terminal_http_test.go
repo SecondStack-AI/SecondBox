@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -83,6 +84,7 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 		t.Fatal(err)
 	}
 	t.Cleanup(relay.Close)
+	liveDataPlane := runnercontrol.NewLiveDataPlaneBroker()
 	server := httptest.NewUnstartedServer(nil)
 	publicBaseURL := "http://" + server.Listener.Addr().String()
 	dataPlaneService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
@@ -92,6 +94,7 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 		Now:                 func() time.Time { return time.Now().UTC() }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		DataPlaneRelay:        relay, DataPlanePollInterval: time.Millisecond,
+		LiveDataPlane: liveDataPlane,
 		PublicBaseURL: publicBaseURL,
 	})
 	if err != nil {
@@ -108,7 +111,10 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 	server.Start()
 	t.Cleanup(server.Close)
 
-	fake := newTerminalHTTPFakeRunner(relay, seed.RunnerID, seed.ConnectionTwo)
+	fake, detachFake := newTerminalHTTPFakeRunner(
+		t, liveDataPlane, seed.RunnerID, seed.ConnectionTwo,
+	)
+	defer detachFake()
 	fakeContext, stopFake := context.WithCancel(t.Context())
 	defer stopFake()
 	fakeErrors := make(chan error, 1)
@@ -166,7 +172,6 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 		t.Fatal(err)
 	}
 	waitTerminalRunnerEvent(t, fake.events, "resize:terminal-order:40x120")
-	assertTerminalOutput(t, connection, 0, []byte{0x00, 0x01, 0xfe, 0xff})
 	if err := connection.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -179,19 +184,35 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 
 	reconnected := dialTerminal(t, detachedSession, key.Credential, sandbox.Generation)
 	assertTerminalOutput(t, reconnected, 0, []byte{0x00, 0x01, 0xfe, 0xff})
-	if err := reconnected.WriteJSON(map[string]any{
+	if err := reconnected.Close(); err != nil {
+		t.Fatal(err)
+	}
+	detachedSession = waitTerminalState(
+		t, server.URL, key.Credential, sandbox, session.ID, "detached",
+	)
+	acknowledged := dialTerminalAfter(
+		t, detachedSession, key.Credential, sandbox.Generation, 0,
+	)
+	if err := acknowledged.WriteJSON(map[string]any{
 		"type": "terminal_input", "sequence": 2,
 		"dataBase64": base64.StdEncoding.EncodeToString([]byte{0x00, 0x01, 0xfe, 0xff}),
 	}); err != nil {
 		t.Fatal(err)
 	}
 	waitTerminalRunnerEvent(t, fake.events, "input:terminal-order:0001feff")
-	assertTerminalOutput(t, reconnected, 1, []byte("done"))
-	outcome := readTerminalOutcome(t, reconnected, 2)
+	assertTerminalOutput(t, acknowledged, 1, []byte("done"))
+	outcome := readTerminalOutcome(t, acknowledged, 2)
 	if outcome.Kind != "exited" {
 		t.Fatalf("Terminal outcome = %#v", outcome)
 	}
-	reconnected.Close()
+	acknowledged.Close()
+	var terminalFrameRows int64
+	if err := leasePool.QueryRow(t.Context(), `
+		SELECT count(*) FROM secondbox.data_plane_frames WHERE session_id=$1`,
+		session.ID,
+	).Scan(&terminalFrameRows); err != nil || terminalFrameRows != 0 {
+		t.Fatalf("Terminal frame rows = %d, error=%v", terminalFrameRows, err)
+	}
 
 	cancelled := createTerminalSession(
 		t, server.URL, key.Credential, sandbox, lease.ID, "terminal-http-cancel", "wait-cancel", true,
@@ -214,7 +235,6 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 		(cancellingSession.State != "closing" && cancellingSession.State != "closed") {
 		t.Fatalf("Terminal cancel response = %#v", cancellingSession)
 	}
-	waitTerminalRunnerEvent(t, fake.events, "cancel:wait-cancel")
 	waitTerminalState(
 		t, server.URL, key.Credential, sandbox, string(cancelled.ID), "closed",
 	)
@@ -294,10 +314,18 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 		"terminal-http-nondetachable", "disconnect", false,
 	)
 	nonDetachableConnection := dialTerminal(t, nonDetachable, key.Credential, sandbox.Generation)
-	if err := nonDetachableConnection.Close(); err != nil {
+	if err := nonDetachableConnection.WriteJSON(map[string]any{
+		"type": "cancel", "sequence": 0,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	waitTerminalRunnerEvent(t, fake.events, "cancel:disconnect")
+	if outcome := readTerminalOutcome(t, nonDetachableConnection, 0); outcome.Kind != "cancelled" {
+		t.Fatalf("cancelled Terminal outcome = %#v", outcome)
+	}
+	if err := nonDetachableConnection.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	sandboxResponse := dataPlaneGET(
 		t, server.URL+"/v1/sandboxes/"+sandbox.ID, key.Credential, sandbox.Generation,
@@ -317,9 +345,11 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 }
 
 type terminalHTTPFakeRunner struct {
-	relay        *runnercontrol.PostgresFrameRelay
+	broker       *runnercontrol.LiveDataPlaneBroker
+	session      *runnercontrol.Session
 	runnerID     string
 	connectionID string
+	incoming     chan *runnerv1.ControlPlaneToRunner
 	events       chan string
 	mu           sync.Mutex
 	operations   map[string]*terminalHTTPFakeOperation
@@ -329,45 +359,82 @@ type terminalHTTPFakeOperation struct {
 	open         *runnerv1.ExecFrame
 	command      string
 	nextSequence uint64
+	attached     bool
+	retained     []*runnerv1.RunnerToControlPlane
 }
 
 func newTerminalHTTPFakeRunner(
-	relay *runnercontrol.PostgresFrameRelay,
+	t *testing.T,
+	broker *runnercontrol.LiveDataPlaneBroker,
 	runnerID string,
 	connectionID string,
-) *terminalHTTPFakeRunner {
-	return &terminalHTTPFakeRunner{
-		relay: relay, runnerID: runnerID, connectionID: connectionID,
-		events: make(chan string, 32), operations: map[string]*terminalHTTPFakeOperation{},
+) (*terminalHTTPFakeRunner, func()) {
+	t.Helper()
+	features := []runnerv1.RunnerFeature{
+		runnerv1.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING,
+		runnerv1.RunnerFeature_RUNNER_FEATURE_PTY,
 	}
+	session := runnercontrol.NewSession(runnercontrol.SessionConfig{
+		AuthenticatedRunnerID: runnerID,
+		SupportedVersions:     runnercontrol.VersionRange{Minimum: 1, Maximum: 1},
+		EnabledFeatures:       features, HeartbeatInterval: 10 * time.Second,
+		ConnectionID: connectionID,
+	})
+	if response, err := session.Accept(&runnerv1.RunnerToControlPlane{
+		Message: &runnerv1.RunnerToControlPlane_Hello{Hello: &runnerv1.RunnerHello{
+			RunnerId: runnerID, ConnectionNonce: bytes.Repeat([]byte{0x42}, 32),
+			SupportedVersions: &runnerv1.ProtocolVersionRange{Minimum: 1, Maximum: 1},
+			MandatoryFeatures: features,
+		}},
+	}); err != nil || response.GetWelcome() == nil {
+		t.Fatalf("Terminal fake Runner Hello = %#v, %v", response, err)
+	}
+	if _, err := session.Accept(&runnerv1.RunnerToControlPlane{
+		Message: &runnerv1.RunnerToControlPlane_Registration{Registration: &runnerv1.RunnerRegistration{
+			MessageId: "terminal-registration", Sequence: 1, RunnerId: runnerID,
+			ConnectionId: connectionID, RunnerPoolId: "default-pool",
+			SoftwareVersion: "integration", ProtocolVersion: 1,
+			Capabilities: &runnerv1.RunnerCapabilities{
+				Architecture: "amd64", FirecrackerVersion: "integration",
+				KvmReady: true, JailerReady: true, CgroupReady: true,
+				NetworkPolicyReady: true, StorageReady: true, CleanupReady: true,
+				DataPlaneReady:           true,
+				GuestProtocolGenerations: &runnerv1.ProtocolVersionRange{Minimum: 1, Maximum: 1},
+			},
+			Allocatable: &runnerv1.Capacity{VcpuMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30, Instances: 8},
+			Reserved:    &runnerv1.Capacity{}, StartupTiming: &runnerv1.StartupTiming{},
+			DataPlaneAdvertisedAddress:     "10.0.0.5:7443",
+			DataPlaneCertificateSpkiSha256: strings.Repeat("a", 64),
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fake := &terminalHTTPFakeRunner{
+		broker: broker, session: session, runnerID: runnerID, connectionID: connectionID,
+		incoming: make(chan *runnerv1.ControlPlaneToRunner, 32),
+		events:   make(chan string, 32), operations: map[string]*terminalHTTPFakeOperation{},
+	}
+	detach, err := broker.AttachConnection(runnerID, connectionID, fake, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fake, detach
+}
+
+func (fake *terminalHTTPFakeRunner) Send(message *runnerv1.ControlPlaneToRunner) error {
+	fake.incoming <- message
+	return nil
 }
 
 func (fake *terminalHTTPFakeRunner) run(ctx context.Context) error {
 	for {
-		if ctx.Err() != nil {
+		select {
+		case <-ctx.Done():
 			return nil
-		}
-		now := time.Now().UTC()
-		delivery, found, err := fake.relay.ClaimOutboundFrame(
-			ctx, fake.runnerID, fake.connectionID, now,
-		)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
+		case message := <-fake.incoming:
+			if err := fake.handle(ctx, message); err != nil {
+				return err
 			}
-			return err
-		}
-		if !found {
-			time.Sleep(time.Millisecond)
-			continue
-		}
-		if err := fake.relay.MarkOutboundFrameDelivered(
-			ctx, delivery.ID, fake.connectionID, delivery.ClaimAttempt, now,
-		); err != nil {
-			return err
-		}
-		if err := fake.handle(ctx, delivery.Message, now); err != nil {
-			return err
 		}
 	}
 }
@@ -375,7 +442,6 @@ func (fake *terminalHTTPFakeRunner) run(ctx context.Context) error {
 func (fake *terminalHTTPFakeRunner) handle(
 	ctx context.Context,
 	message *runnerv1.ControlPlaneToRunner,
-	now time.Time,
 ) error {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
@@ -395,7 +461,7 @@ func (fake *terminalHTTPFakeRunner) handle(
 		}
 		if execFrame.GetCancel() != nil {
 			if err := fake.terminal(
-				ctx, operation, runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED, now,
+				ctx, operation, runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED,
 			); err != nil {
 				return err
 			}
@@ -413,10 +479,40 @@ func (fake *terminalHTTPFakeRunner) handle(
 		return fmt.Errorf("Terminal fake runner PTY frame has no Open: %s", ptyFrame.OperationId)
 	}
 	switch {
+	case ptyFrame.GetAttach() != nil:
+		kind := runnerv1.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ATTACHED
+		if operation.attached {
+			kind = runnerv1.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ALREADY_ATTACHED
+		} else {
+			operation.attached = true
+		}
+		if err := fake.deliver(ctx, &runnerv1.RunnerToControlPlane{
+			Message: &runnerv1.RunnerToControlPlane_Pty{Pty: &runnerv1.PtyFrame{
+				Fence: operation.open.Fence, OperationId: operation.open.OperationId,
+				StreamId: operation.open.StreamId, Sequence: uint64(ptyFrame.GetAttach().AfterSequence + 2),
+				Correlation: operation.open.Correlation,
+				Payload: &runnerv1.PtyFrame_AttachResult{AttachResult: &runnerv1.PtyAttachResult{
+					Kind: kind, AfterSequence: ptyFrame.GetAttach().AfterSequence,
+				}},
+			}},
+		}); err != nil {
+			return err
+		}
+		if kind == runnerv1.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ATTACHED {
+			for _, retained := range operation.retained {
+				if int64(retained.GetPty().Sequence)-1 > ptyFrame.GetAttach().AfterSequence {
+					if err := fake.deliver(ctx, retained); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	case ptyFrame.GetDetach() != nil:
+		operation.attached = false
 	case ptyFrame.GetCredit() != nil:
 		fake.events <- fmt.Sprintf("credit:%s:%d", operation.command, ptyFrame.GetCredit().ByteCount)
 		if operation.command == "terminal-order" {
-			return fake.output(ctx, operation, []byte{0x00, 0x01, 0xfe, 0xff}, now)
+			return fake.output(ctx, operation, []byte{0x00, 0x01, 0xfe, 0xff})
 		}
 	case ptyFrame.GetResize() != nil:
 		fake.events <- fmt.Sprintf(
@@ -426,10 +522,10 @@ func (fake *terminalHTTPFakeRunner) handle(
 	case ptyFrame.GetInput() != nil:
 		fake.events <- fmt.Sprintf("input:%s:%x", operation.command, ptyFrame.GetInput().Data)
 		if operation.command == "terminal-order" {
-			if err := fake.output(ctx, operation, []byte("done"), now); err != nil {
+			if err := fake.output(ctx, operation, []byte("done")); err != nil {
 				return err
 			}
-			return fake.terminal(ctx, operation, runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED, now)
+			return fake.terminal(ctx, operation, runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED)
 		}
 	default:
 		return fmt.Errorf("Terminal fake runner received unsupported PTY frame")
@@ -441,32 +537,31 @@ func (fake *terminalHTTPFakeRunner) output(
 	ctx context.Context,
 	operation *terminalHTTPFakeOperation,
 	data []byte,
-	now time.Time,
 ) error {
 	frame := operation.open
 	sequence := operation.nextSequence
 	operation.nextSequence++
-	_, err := fake.relay.PersistInboundFrame(ctx, runnercontrol.InboundRelayFrame{
-		RunnerID: fake.runnerID, ConnectionID: fake.connectionID,
-		Message: &runnerv1.RunnerToControlPlane{
-			Message: &runnerv1.RunnerToControlPlane_Pty{Pty: &runnerv1.PtyFrame{
-				Fence: frame.Fence, OperationId: frame.OperationId, StreamId: frame.StreamId,
-				Sequence: sequence,
-				Payload: &runnerv1.PtyFrame_Output{Output: &runnerv1.ExecOutput{
-					Channel: runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT,
-					Data:    bytes.Clone(data),
-				}},
+	message := &runnerv1.RunnerToControlPlane{
+		Message: &runnerv1.RunnerToControlPlane_Pty{Pty: &runnerv1.PtyFrame{
+			Fence: frame.Fence, OperationId: frame.OperationId, StreamId: frame.StreamId,
+			Sequence: sequence, Correlation: frame.Correlation,
+			Payload: &runnerv1.PtyFrame_Output{Output: &runnerv1.ExecOutput{
+				Channel: runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT,
+				Data:    bytes.Clone(data),
 			}},
-		},
-	}, now)
-	return err
+		}},
+	}
+	operation.retained = append(operation.retained, message)
+	if !operation.attached {
+		return nil
+	}
+	return fake.deliver(ctx, message)
 }
 
 func (fake *terminalHTTPFakeRunner) terminal(
 	ctx context.Context,
 	operation *terminalHTTPFakeOperation,
 	kind runnerv1.ExecTerminalKind,
-	now time.Time,
 ) error {
 	frame := operation.open
 	sequence := operation.nextSequence
@@ -475,19 +570,31 @@ func (fake *terminalHTTPFakeRunner) terminal(
 	if kind == runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED {
 		exitCode = 0
 	}
-	_, err := fake.relay.PersistInboundFrame(ctx, runnercontrol.InboundRelayFrame{
-		RunnerID: fake.runnerID, ConnectionID: fake.connectionID,
-		Message: &runnerv1.RunnerToControlPlane{
-			Message: &runnerv1.RunnerToControlPlane_Pty{Pty: &runnerv1.PtyFrame{
-				Fence: frame.Fence, OperationId: frame.OperationId, StreamId: frame.StreamId,
-				Sequence: sequence,
-				Payload: &runnerv1.PtyFrame_Terminal{Terminal: &runnerv1.ExecTerminal{
-					Kind: kind, ExitCode: exitCode,
-				}},
+	message := &runnerv1.RunnerToControlPlane{
+		Message: &runnerv1.RunnerToControlPlane_Pty{Pty: &runnerv1.PtyFrame{
+			Fence: frame.Fence, OperationId: frame.OperationId, StreamId: frame.StreamId,
+			Sequence: sequence, Correlation: frame.Correlation,
+			Payload: &runnerv1.PtyFrame_Terminal{Terminal: &runnerv1.ExecTerminal{
+				Kind: kind, ExitCode: exitCode,
 			}},
-		},
-	}, now)
-	return err
+		}},
+	}
+	operation.retained = append(operation.retained, message)
+	if !operation.attached {
+		return nil
+	}
+	return fake.deliver(ctx, message)
+}
+
+func (fake *terminalHTTPFakeRunner) deliver(
+	ctx context.Context,
+	message *runnerv1.RunnerToControlPlane,
+) error {
+	event, err := fake.session.Accept(message)
+	if err != nil {
+		return err
+	}
+	return fake.broker.Deliver(ctx, event)
 }
 
 func createTerminalSession(
@@ -549,10 +656,22 @@ func dialTerminal(
 	credential string,
 	generation int64,
 ) *websocket.Conn {
+	return dialTerminalAfter(t, session, credential, generation, -1)
+}
+
+func dialTerminalAfter(
+	t *testing.T,
+	session contracts.TerminalSession,
+	credential string,
+	generation int64,
+	afterSequence int64,
+) *websocket.Conn {
 	t.Helper()
 	dialer := websocket.Dialer{Subprotocols: []string{"secondbox.terminal.v1"}}
+	headers := terminalHTTPHeaders(t, credential, generation)
+	headers.Set("SecondBox-Terminal-After-Sequence", fmt.Sprintf("%d", afterSequence))
 	connection, response, err := dialer.Dial(
-		session.WebsocketURL, terminalHTTPHeaders(t, credential, generation),
+		session.WebsocketURL, headers,
 	)
 	if err != nil {
 		if response != nil {

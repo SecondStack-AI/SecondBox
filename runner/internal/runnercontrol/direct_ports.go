@@ -339,6 +339,7 @@ func (s *RunnerProtocolService) serveDirectPortConnection(
 		return
 	}
 	if credential.SessionKind == portdirect.SessionKindExec ||
+		credential.SessionKind == portdirect.SessionKindPTY ||
 		credential.SessionKind == portdirect.SessionKindFile {
 		_ = s.serveDirectTypedConnection(ctx, connection, credential)
 		return

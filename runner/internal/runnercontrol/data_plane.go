@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
@@ -94,6 +95,16 @@ type runnerExecOperation struct {
 	terminal         bool
 	terminalFrame    *runnerprotocol.ExecFrame
 	ptyTerminalFrame *runnerprotocol.PtyFrame
+	ptyAttachment    *runnerPTYAttachment
+	ptyReplay        []*runnerprotocol.PtyFrame
+	ptyReplayBytes   uint64
+	ptyWindowBytes   uint64
+}
+
+type runnerPTYAttachment struct {
+	stream      RunnerProtocolStream
+	reconnectID string
+	mu          sync.Mutex
 }
 
 type runnerFileOperation struct {
@@ -207,6 +218,19 @@ func (s *RunnerProtocolService) handleExecFrame(
 			state.ptyControls = make(chan PTYControl, 256)
 		}
 		execCtx, cancel := context.WithCancelCause(ctx)
+		if state.pty {
+			execCtx, cancel = context.WithCancelCause(context.Background())
+			if frame.GetOpen().DeadlineUnixMs != 0 {
+				deadline := time.UnixMilli(int64(frame.GetOpen().DeadlineUnixMs))
+				deadlineCtx, stopDeadline := context.WithDeadline(execCtx, deadline)
+				priorCancel := cancel
+				cancel = func(cause error) {
+					stopDeadline()
+					priorCancel(cause)
+				}
+				execCtx = deadlineCtx
+			}
+		}
 		state.cancel = cancel
 		state.lastIncoming = bytes.Clone(encoded)
 		if len(s.execOperations) >= maxRunnerRelayOperationStates {
@@ -341,6 +365,12 @@ func (s *RunnerProtocolService) handlePTYFrame(
 		return err
 	}
 	key := runnerRelayOperationKey(frame.Fence, frame.OperationId, frame.StreamId)
+	if frame.GetAttach() != nil {
+		return s.attachPTYStream(stream, key, frame)
+	}
+	if frame.GetDetach() != nil {
+		return s.detachPTYAttachment(key, frame.GetDetach().ReconnectId)
+	}
 	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(frame)
 	if err != nil {
 		return fmt.Errorf("SecondBox runner encode PTY frame: %w", err)
@@ -411,6 +441,146 @@ func (s *RunnerProtocolService) handlePTYFrame(
 	}
 }
 
+func (s *RunnerProtocolService) attachPTYStream(
+	stream RunnerProtocolStream,
+	key string,
+	frame *runnerprotocol.PtyFrame,
+) error {
+	attach := frame.GetAttach()
+	result := &runnerprotocol.PtyAttachResult{
+		Kind:          runnerprotocol.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ATTACHED,
+		AfterSequence: frame.GetAttach().AfterSequence,
+	}
+	s.operationMu.Lock()
+	state := s.execOperations[key]
+	if state == nil || !state.pty || state.ptyWindowBytes != 0 &&
+		state.ptyWindowBytes != attach.StreamWindowBytes {
+		s.operationMu.Unlock()
+		return fmt.Errorf("SecondBox runner PTY attachment identity is invalid")
+	}
+	if attach.ReconnectId == "" || attach.AfterSequence < -1 || attach.StreamWindowBytes == 0 {
+		s.operationMu.Unlock()
+		return fmt.Errorf("SecondBox runner PTY attachment is incomplete")
+	}
+	if state.ptyAttachment != nil {
+		result.Kind = runnerprotocol.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ALREADY_ATTACHED
+		result.SafeDetail = "Terminal already has an active attachment"
+	} else if len(state.ptyReplay) > 0 &&
+		attach.AfterSequence < int64(state.ptyReplay[0].Sequence)-2 {
+		result.Kind = runnerprotocol.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_REPLAY_EVICTED
+		result.SafeDetail = "Terminal replay sequence was evicted"
+	} else if attach.AfterSequence >= int64(state.nextOutgoing)-1 {
+		s.operationMu.Unlock()
+		return fmt.Errorf("SecondBox runner PTY attachment sequence is invalid")
+	}
+	attachment := &runnerPTYAttachment{stream: stream, reconnectID: attach.ReconnectId}
+	attachment.mu.Lock()
+	var replay []*runnerprotocol.PtyFrame
+	if result.Kind == runnerprotocol.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ATTACHED {
+		state.ptyWindowBytes = attach.StreamWindowBytes
+		state.ptyAttachment = attachment
+		for _, retained := range state.ptyReplay {
+			if int64(retained.Sequence)-1 > attach.AfterSequence {
+				replay = append(replay, proto.Clone(retained).(*runnerprotocol.PtyFrame))
+			}
+		}
+	}
+	resultFrame := &runnerprotocol.PtyFrame{
+		Fence: cloneRunnerFence(state.fence), OperationId: state.operationID,
+		StreamId: state.streamID, Sequence: uint64(attach.AfterSequence + 2),
+		Correlation: cloneRunnerCorrelation(state.correlation),
+		Payload:     &runnerprotocol.PtyFrame_AttachResult{AttachResult: result},
+	}
+	s.operationMu.Unlock()
+
+	err := s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
+		Message: &runnerprotocol.RunnerToControlPlane_Pty{Pty: resultFrame},
+	})
+	for _, retained := range replay {
+		if err != nil {
+			break
+		}
+		err = s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
+			Message: &runnerprotocol.RunnerToControlPlane_Pty{Pty: retained},
+		})
+	}
+	attachment.mu.Unlock()
+	if err != nil && result.Kind == runnerprotocol.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ATTACHED {
+		s.detachPTYAttachment(key, attach.ReconnectId)
+	}
+	return err
+}
+
+func (s *RunnerProtocolService) detachPTYAttachment(key string, reconnectID string) error {
+	if reconnectID == "" {
+		return fmt.Errorf("SecondBox runner PTY detach identity is incomplete")
+	}
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
+	state := s.execOperations[key]
+	if state == nil || !state.pty {
+		return fmt.Errorf("SecondBox runner PTY operation is not active")
+	}
+	if state.ptyAttachment == nil || state.ptyAttachment.reconnectID != reconnectID {
+		return nil
+	}
+	attachment := state.ptyAttachment
+	attachment.mu.Lock()
+	state.ptyAttachment = nil
+	attachment.mu.Unlock()
+	return nil
+}
+
+func (s *RunnerProtocolService) detachPTYAttachmentsForStream(stream RunnerProtocolStream) {
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
+	for _, state := range s.execOperations {
+		if state.ptyAttachment != nil && state.ptyAttachment.stream == stream {
+			attachment := state.ptyAttachment
+			attachment.mu.Lock()
+			state.ptyAttachment = nil
+			attachment.mu.Unlock()
+		}
+	}
+}
+
+func (s *RunnerProtocolService) retainAndSendPTYFrame(
+	state *runnerExecOperation,
+	frame *runnerprotocol.PtyFrame,
+) error {
+	retained := proto.Clone(frame).(*runnerprotocol.PtyFrame)
+	frameBytes := uint64(len(retained.GetOutput().GetData()))
+	s.operationMu.Lock()
+	retained.Sequence = state.nextOutgoing
+	state.nextOutgoing++
+	state.ptyReplay = append(state.ptyReplay, retained)
+	state.ptyReplayBytes += frameBytes
+	for state.ptyReplayBytes > state.ptyWindowBytes && len(state.ptyReplay) > 1 {
+		state.ptyReplayBytes -= uint64(len(state.ptyReplay[0].GetOutput().GetData()))
+		state.ptyReplay = state.ptyReplay[1:]
+	}
+	attachment := state.ptyAttachment
+	s.operationMu.Unlock()
+	if attachment == nil {
+		return nil
+	}
+	attachment.mu.Lock()
+	err := s.sendRunnerFrame(attachment.stream, &runnerprotocol.RunnerToControlPlane{
+		Message: &runnerprotocol.RunnerToControlPlane_Pty{
+			Pty: proto.Clone(retained).(*runnerprotocol.PtyFrame),
+		},
+	})
+	attachment.mu.Unlock()
+	if err != nil {
+		s.operationMu.Lock()
+		if state.ptyAttachment == attachment {
+			state.ptyAttachment = nil
+		}
+		s.operationMu.Unlock()
+	}
+	return nil
+}
+
 func (s *RunnerProtocolService) executePTYOperation(
 	ctx context.Context,
 	stream RunnerProtocolStream,
@@ -433,6 +603,12 @@ func (s *RunnerProtocolService) executePTYOperation(
 				Kind:     runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED,
 				ExitCode: -1, SafeDetail: "Terminal cancelled",
 			}
+		} else if errors.Is(err, context.DeadlineExceeded) ||
+			errors.Is(context.Cause(ctx), context.DeadlineExceeded) {
+			terminal = &runnerprotocol.ExecTerminal{
+				Kind:     runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_DEADLINE_EXCEEDED,
+				ExitCode: -1, SafeDetail: "Terminal deadline exceeded",
+			}
 		} else {
 			terminal = runnerInfrastructureTerminal(
 				runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_RUNNER_FAILED,
@@ -454,7 +630,7 @@ func (s *RunnerProtocolService) executePTYOperation(
 }
 
 func (s *RunnerProtocolService) sendRunnerPTYBytes(
-	stream RunnerProtocolStream,
+	_ RunnerProtocolStream,
 	state *runnerExecOperation,
 	content []byte,
 ) error {
@@ -462,7 +638,13 @@ func (s *RunnerProtocolService) sendRunnerPTYBytes(
 		return fmt.Errorf("SecondBox runner PTY backend emitted empty output")
 	}
 	for len(content) > 0 {
-		size := min(len(content), runnerRelayChunkBytes)
+		s.operationMu.Lock()
+		windowBytes := state.ptyWindowBytes
+		s.operationMu.Unlock()
+		if windowBytes == 0 {
+			return fmt.Errorf("SecondBox runner PTY replay window is unavailable")
+		}
+		size := min(len(content), runnerRelayChunkBytes, int(windowBytes))
 		frame := &runnerprotocol.PtyFrame{
 			Fence: cloneRunnerFence(state.fence), OperationId: state.operationID,
 			StreamId: state.streamID, Sequence: state.nextOutgoing,
@@ -472,10 +654,7 @@ func (s *RunnerProtocolService) sendRunnerPTYBytes(
 				Data:    bytes.Clone(content[:size]),
 			}},
 		}
-		state.nextOutgoing++
-		if err := s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-			Message: &runnerprotocol.RunnerToControlPlane_Pty{Pty: frame},
-		}); err != nil {
+		if err := s.retainAndSendPTYFrame(state, frame); err != nil {
 			return err
 		}
 		content = content[size:]
@@ -495,17 +674,14 @@ func (s *RunnerProtocolService) sendRunnerExecOperationTerminal(
 }
 
 func (s *RunnerProtocolService) sendPTYTerminal(
-	stream RunnerProtocolStream,
+	_ RunnerProtocolStream,
 	state *runnerExecOperation,
 	terminal *runnerprotocol.ExecTerminal,
 ) error {
 	s.operationMu.Lock()
 	if state.terminal {
-		frame := proto.Clone(state.ptyTerminalFrame).(*runnerprotocol.PtyFrame)
 		s.operationMu.Unlock()
-		return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-			Message: &runnerprotocol.RunnerToControlPlane_Pty{Pty: frame},
-		})
+		return nil
 	}
 	frame := &runnerprotocol.PtyFrame{
 		Fence: cloneRunnerFence(state.fence), OperationId: state.operationID,
@@ -515,21 +691,17 @@ func (s *RunnerProtocolService) sendPTYTerminal(
 			Terminal: proto.Clone(terminal).(*runnerprotocol.ExecTerminal),
 		},
 	}
-	state.nextOutgoing++
 	state.terminal = true
 	state.ptyTerminalFrame = proto.Clone(frame).(*runnerprotocol.PtyFrame)
 	s.retainExecTerminalLocked(state.key)
 	s.operationMu.Unlock()
-	if err := s.emitEvidence(
+	retainErr := s.retainAndSendPTYFrame(state, frame)
+	evidenceErr := s.emitEvidence(
 		context.Background(), runnerevidence.EventExecTerminal,
 		state.fence, state.correlation, state.operationID,
 		terminal.Kind.String(), terminalOutcome(terminal.Kind.String()),
-	); err != nil {
-		return err
-	}
-	return s.sendRunnerFrame(stream, &runnerprotocol.RunnerToControlPlane{
-		Message: &runnerprotocol.RunnerToControlPlane_Pty{Pty: frame},
-	})
+	)
+	return errors.Join(retainErr, evidenceErr)
 }
 
 func (s *RunnerProtocolService) executeStreamingOperation(
@@ -1065,6 +1237,7 @@ func (s *RunnerProtocolService) retainExecTerminalLocked(key string) {
 		oldest := s.execTerminalOrder[0]
 		s.execTerminalOrder = s.execTerminalOrder[1:]
 		if state := s.execOperations[oldest]; state != nil && state.terminal {
+			s.directDataPlane.complete(state.operationID)
 			delete(s.execOperations, oldest)
 		}
 	}

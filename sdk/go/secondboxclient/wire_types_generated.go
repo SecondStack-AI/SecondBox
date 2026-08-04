@@ -521,6 +521,7 @@ const (
 	ProblemCodeExecutionNodeUnavailable             ProblemCode = "execution_node_unavailable"
 	ProblemCodeDependencyUnavailable                ProblemCode = "dependency_unavailable"
 	ProblemCodeInternalError                        ProblemCode = "internal_error"
+	ProblemCodeTerminalReplayEvicted                ProblemCode = "terminal_replay_evicted"
 	ProblemCodeWaitExpired                          ProblemCode = "wait_expired"
 )
 

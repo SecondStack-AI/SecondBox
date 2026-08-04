@@ -577,6 +577,21 @@ message PtyDetach {
 
 message PtyAttach {
   string reconnect_id = 1;
+  int64 after_sequence = 2;
+  uint64 stream_window_bytes = 3;
+}
+
+enum PtyAttachResultKind {
+  PTY_ATTACH_RESULT_KIND_UNSPECIFIED = 0;
+  PTY_ATTACH_RESULT_KIND_ATTACHED = 1;
+  PTY_ATTACH_RESULT_KIND_REPLAY_EVICTED = 2;
+  PTY_ATTACH_RESULT_KIND_ALREADY_ATTACHED = 3;
+}
+
+message PtyAttachResult {
+  PtyAttachResultKind kind = 1;
+  string safe_detail = 2;
+  int64 after_sequence = 3;
 }
 
 message PtyFrame {
@@ -593,6 +608,7 @@ message PtyFrame {
     PtyAttach attach = 14;
     StreamCredit credit = 15;
     ExecTerminal terminal = 16;
+    PtyAttachResult attach_result = 17;
   }
 }
 
@@ -668,9 +684,10 @@ enum DataPlaneSessionKind {
   DATA_PLANE_SESSION_KIND_UNSPECIFIED = 0;
   DATA_PLANE_SESSION_KIND_EXEC = 1;
   DATA_PLANE_SESSION_KIND_FILE = 2;
+  DATA_PLANE_SESSION_KIND_PTY = 3;
 }
 
-// DataPlaneDirectOpen admits one payload-free direct Exec or File session.
+// DataPlaneDirectOpen admits one payload-free direct Exec, PTY, or File session.
 // The operation request follows only after the caller spends the credential on
 // the SBXDP1 connection.
 message DataPlaneDirectOpen {
@@ -683,6 +700,7 @@ message DataPlaneDirectOpen {
   DataPlaneSessionKind kind = 7;
   uint64 deadline_unix_ms = 8;
   bytes credential_digest = 9;
+  uint64 stream_window_bytes = 10;
 }
 
 message DataPlaneDirectConsume {

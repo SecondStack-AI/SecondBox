@@ -135,14 +135,14 @@ func NewServer(config ServerConfig) (*Server, error) {
 	}
 	for _, feature := range config.EnabledFeatures {
 		if (feature == runnerv1.RunnerFeature_RUNNER_FEATURE_EXEC_STREAMING ||
-			feature == runnerv1.RunnerFeature_RUNNER_FEATURE_FILE_STREAMING) &&
+			feature == runnerv1.RunnerFeature_RUNNER_FEATURE_FILE_STREAMING ||
+			feature == runnerv1.RunnerFeature_RUNNER_FEATURE_PTY) &&
 			config.LiveDataPlane == nil {
-			return nil, errors.New("SecondBox runner control Exec and File features require the live data-plane broker")
+			return nil, errors.New("SecondBox runner control Exec, PTY, and File features require the live data-plane broker")
 		}
-		if (feature == runnerv1.RunnerFeature_RUNNER_FEATURE_PTY ||
-			feature == runnerv1.RunnerFeature_RUNNER_FEATURE_PORT_PROXY) &&
+		if feature == runnerv1.RunnerFeature_RUNNER_FEATURE_PORT_PROXY &&
 			config.FrameRelay == nil {
-			return nil, errors.New("SecondBox runner control PTY and Port features require the durable frame relay")
+			return nil, errors.New("SecondBox runner control Port feature requires the durable frame relay")
 		}
 	}
 	return &Server{config: config}, nil
@@ -689,7 +689,8 @@ func (server *Server) answerDirectDataPlaneConsumption(
 	if consume == nil || consume.Fence == nil || consume.OperationId == "" ||
 		consume.StreamId == "" || len(consume.CredentialDigest) == 0 ||
 		(consume.Kind != runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_EXEC &&
-			consume.Kind != runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE) {
+			consume.Kind != runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_FILE &&
+			consume.Kind != runnerv1.DataPlaneSessionKind_DATA_PLANE_SESSION_KIND_PTY) {
 		return fmt.Errorf("%w: direct data-plane consumption identity is incomplete", ErrRunnerMessage)
 	}
 	admission := &runnerv1.DataPlaneDirectAdmission{
@@ -736,12 +737,12 @@ func (server *Server) persistEvent(ctx context.Context, event Event, receivedAt 
 	case EventAssignment, EventFence, EventDrain, EventEvidence, EventInstanceTerminal,
 		EventLocalWorkspace:
 		return errors.New("SecondBox runner durable event bypassed the persistence batch")
-	case EventExec, EventFile:
+	case EventExec, EventPty, EventFile:
 		if server.config.LiveDataPlane == nil {
 			return ErrLiveDataPlaneUnavailable
 		}
 		return server.config.LiveDataPlane.Deliver(ctx, event)
-	case EventPty, EventPort:
+	case EventPort:
 		if server.config.FrameRelay == nil {
 			return errors.New("SecondBox runner control data-plane relay is not configured")
 		}
