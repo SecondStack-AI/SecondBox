@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -13,12 +14,15 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
+	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
+	"google.golang.org/protobuf/proto"
 )
 
 const portTunnelTokenDomain = "secondbox/port-tunnel/v1\x00"
@@ -216,40 +220,236 @@ func (service *ControlPlaneService) ClosePortTunnel(
 	return err
 }
 
-// QueuePortTunnelBytes forwards one bounded client WebSocket message to the runner.
-func (service *ControlPlaneService) QueuePortTunnelBytes(
-	ctx context.Context,
-	tunnel runnercontrol.PortTunnel,
-	payload []byte,
-) error {
-	return service.portSessionRelay.QueuePortClientBytes(
-		ctx, tunnel.TenantRef, tunnel.SubjectRef,
-		tunnel.Session.ID, payload, service.now().UTC(),
-	)
+// SandboxPortStream forwards one relayed PortSession over the authenticated
+// Runner connection without retaining payload bytes in PostgreSQL.
+type SandboxPortStream struct {
+	service        *ControlPlaneService
+	tunnel         runnercontrol.PortTunnel
+	stream         *runnercontrol.LiveDataPlaneStream
+	mu             sync.Mutex
+	nextSend       uint64
+	nextReceive    uint64
+	clientCredit   int64
+	clientBytes    int64
+	responseCredit int64
+	runnerBytes    int64
+	acknowledged   int64
+	terminal       bool
 }
 
-// NextPortTunnelEvent returns the next unacknowledged runner payload or terminal event.
-func (service *ControlPlaneService) NextPortTunnelEvent(
+func (service *ControlPlaneService) OpenPortTunnel(
 	ctx context.Context,
 	tunnel runnercontrol.PortTunnel,
-	afterSequence int64,
-) (runnercontrol.PortTunnelEvent, bool, error) {
-	return service.portSessionRelay.NextPortTunnelEvent(
-		ctx, tunnel.TenantRef, tunnel.SubjectRef,
-		tunnel.Session.ID, afterSequence, service.now().UTC(),
+) (*SandboxPortStream, error) {
+	if tunnel.Session.Transport != contracts.PortTransportRelay ||
+		tunnel.Session.State != contracts.PortSessionStateOpen ||
+		tunnel.StreamWindowBytes < 1 || tunnel.MaximumRequestBytes < 1 ||
+		tunnel.MaximumResponseBytes < 1 || service.liveDataPlane == nil {
+		return nil, runnercontrol.ErrLiveDataPlaneUnavailable
+	}
+	stream, err := service.liveDataPlane.Open(
+		tunnel.RunnerID, "port", tunnel.Session.ID, tunnel.StreamID,
 	)
+	if err != nil {
+		return nil, err
+	}
+	result := &SandboxPortStream{
+		service: service, tunnel: tunnel, stream: stream,
+		nextSend: 1, nextReceive: 1, responseCredit: tunnel.StreamWindowBytes,
+		acknowledged: tunnel.AcknowledgedInboundSequence,
+	}
+	idleTimeout := tunnel.Session.ExpiresAt.Sub(service.now().UTC()).Milliseconds()
+	if idleTimeout < 1 {
+		stream.Close()
+		return nil, ports.ErrPortTokenInvalid
+	}
+	if err := result.send(&runnerv1.PortFrame_Open{Open: &runnerv1.PortOpen{
+		GuestPort: uint32(tunnel.GuestPort), Protocol: tunnel.Session.Protocol,
+		IdleTimeoutMs: uint64(idleTimeout),
+	}}); err != nil {
+		stream.Close()
+		return nil, err
+	}
+	if err := result.send(&runnerv1.PortFrame_Credit{Credit: &runnerv1.StreamCredit{
+		ByteCount: uint64(tunnel.StreamWindowBytes),
+	}}); err != nil {
+		stream.Close()
+		return nil, err
+	}
+	return result, nil
 }
 
-// AcknowledgePortTunnelEvent releases runner credit only after client delivery.
-func (service *ControlPlaneService) AcknowledgePortTunnelEvent(
+func (stream *SandboxPortStream) send(payload any) error {
+	frame := &runnerv1.PortFrame{
+		Fence: &runnerv1.AssignmentFence{
+			AssignmentId:      stream.tunnel.AssignmentID,
+			SandboxId:         stream.tunnel.Session.SandboxID,
+			InstanceId:        stream.tunnel.InstanceID,
+			SandboxGeneration: uint64(stream.tunnel.Session.Generation),
+			FencingToken:      bytes.Clone(stream.tunnel.FencingToken),
+		},
+		OperationId: stream.tunnel.Session.ID, StreamId: stream.tunnel.StreamID,
+		Sequence: stream.nextSend,
+		Correlation: &runnerv1.Correlation{
+			RequestId: stream.tunnel.RequestID, OperationId: stream.tunnel.Session.ID,
+			SandboxId: stream.tunnel.Session.SandboxID, InstanceId: stream.tunnel.InstanceID,
+			SandboxGeneration: uint64(stream.tunnel.Session.Generation),
+			AssignmentId:      stream.tunnel.AssignmentID, LeaseId: stream.tunnel.LeaseID,
+			RunnerId: stream.tunnel.RunnerID,
+		},
+	}
+	switch value := payload.(type) {
+	case *runnerv1.PortFrame_Open:
+		frame.Payload = value
+	case *runnerv1.PortFrame_Bytes:
+		frame.Payload = value
+	case *runnerv1.PortFrame_Credit:
+		frame.Payload = value
+	default:
+		return errors.New("SecondBox live Port outbound payload is invalid")
+	}
+	if err := stream.stream.Send(&runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_Port{Port: frame},
+	}); err != nil {
+		return err
+	}
+	stream.nextSend++
+	return nil
+}
+
+func (stream *SandboxPortStream) Send(ctx context.Context, payload []byte) error {
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if stream.terminal || len(payload) == 0 || int64(len(payload)) > stream.clientCredit ||
+		stream.clientBytes+int64(len(payload)) > stream.tunnel.MaximumRequestBytes {
+		if len(payload) > 0 && int64(len(payload)) > stream.clientCredit {
+			return ports.ErrPortBackpressure
+		}
+		return runnercontrol.ErrRelaySessionLimit
+	}
+	if err := stream.service.portSessionRelay.RecordPortClientBytes(
+		ctx, stream.tunnel.TenantRef, stream.tunnel.SubjectRef,
+		stream.tunnel.Session.ID, payload, stream.service.now().UTC(),
+	); err != nil {
+		return err
+	}
+	stream.clientCredit -= int64(len(payload))
+	stream.clientBytes += int64(len(payload))
+	return stream.send(&runnerv1.PortFrame_Bytes{Bytes: &runnerv1.PortBytes{
+		Data: bytes.Clone(payload),
+	}})
+}
+
+func (stream *SandboxPortStream) Receive(
 	ctx context.Context,
-	tunnel runnercontrol.PortTunnel,
-	sequence int64,
+) (runnercontrol.PortTunnelEvent, error) {
+	for {
+		message, err := stream.stream.Receive(ctx)
+		if err != nil {
+			return runnercontrol.PortTunnelEvent{}, err
+		}
+		frame := message.GetPort()
+		stream.mu.Lock()
+		if frame == nil || frame.OperationId != stream.tunnel.Session.ID ||
+			frame.StreamId != stream.tunnel.StreamID || frame.Sequence != stream.nextReceive ||
+			!proto.Equal(frame.Fence, portTunnelFence(stream.tunnel)) ||
+			!proto.Equal(frame.Correlation, portTunnelCorrelation(stream.tunnel)) || stream.terminal {
+			stream.mu.Unlock()
+			return runnercontrol.PortTunnelEvent{}, runnercontrol.ErrRelaySequence
+		}
+		stream.nextReceive++
+		switch {
+		case frame.GetCredit() != nil:
+			credit := int64(frame.GetCredit().ByteCount)
+			if credit < 1 || stream.clientCredit+credit > stream.tunnel.StreamWindowBytes {
+				stream.mu.Unlock()
+				return runnercontrol.PortTunnelEvent{}, runnercontrol.ErrRelayFrameLimit
+			}
+			stream.clientCredit += credit
+			stream.mu.Unlock()
+			continue
+		case frame.GetBytes() != nil:
+			payload := frame.GetBytes().Data
+			if len(payload) == 0 || stream.runnerBytes+int64(len(payload)) > stream.responseCredit ||
+				stream.runnerBytes+int64(len(payload)) > stream.tunnel.MaximumResponseBytes {
+				stream.mu.Unlock()
+				return runnercontrol.PortTunnelEvent{}, runnercontrol.ErrRelaySessionLimit
+			}
+			stream.runnerBytes += int64(len(payload))
+			event := runnercontrol.PortTunnelEvent{
+				Sequence: int64(frame.Sequence), Bytes: bytes.Clone(payload),
+			}
+			stream.mu.Unlock()
+			return event, nil
+		case frame.GetTerminal() != nil:
+			stream.terminal = true
+			event := runnercontrol.PortTunnelEvent{
+				Sequence:       int64(frame.Sequence),
+				TerminalKind:   frame.GetTerminal().Kind.String(),
+				TerminalDetail: frame.GetTerminal().SafeDetail,
+			}
+			stream.mu.Unlock()
+			return event, nil
+		default:
+			stream.mu.Unlock()
+			return runnercontrol.PortTunnelEvent{}, errors.New("SecondBox live Port response payload is invalid")
+		}
+	}
+}
+
+func (stream *SandboxPortStream) Acknowledge(
+	ctx context.Context,
+	event runnercontrol.PortTunnelEvent,
 ) error {
-	return service.portSessionRelay.AcknowledgePortTunnelEvent(
-		ctx, tunnel.TenantRef, tunnel.SubjectRef,
-		tunnel.Session.ID, sequence, service.now().UTC(),
-	)
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if event.Sequence <= stream.acknowledged ||
+		(event.Bytes == nil) == (event.TerminalKind == "") {
+		return runnercontrol.ErrRelaySequence
+	}
+	if err := stream.service.portSessionRelay.RecordPortTunnelAcknowledgement(
+		ctx, stream.tunnel.TenantRef, stream.tunnel.SubjectRef,
+		stream.tunnel.Session.ID, event.Sequence, stream.service.now().UTC(),
+	); err != nil {
+		return err
+	}
+	stream.acknowledged = event.Sequence
+	if event.Bytes == nil {
+		return nil
+	}
+	if err := stream.send(&runnerv1.PortFrame_Credit{Credit: &runnerv1.StreamCredit{
+		ByteCount: uint64(len(event.Bytes)),
+	}}); err != nil {
+		return err
+	}
+	stream.responseCredit += int64(len(event.Bytes))
+	return nil
+}
+
+func (stream *SandboxPortStream) Close() error {
+	if stream == nil || stream.stream == nil {
+		return nil
+	}
+	stream.stream.Close()
+	return nil
+}
+
+func portTunnelFence(tunnel runnercontrol.PortTunnel) *runnerv1.AssignmentFence {
+	return &runnerv1.AssignmentFence{
+		AssignmentId: tunnel.AssignmentID, SandboxId: tunnel.Session.SandboxID,
+		InstanceId: tunnel.InstanceID, SandboxGeneration: uint64(tunnel.Session.Generation),
+		FencingToken: bytes.Clone(tunnel.FencingToken),
+	}
+}
+
+func portTunnelCorrelation(tunnel runnercontrol.PortTunnel) *runnerv1.Correlation {
+	return &runnerv1.Correlation{
+		RequestId: tunnel.RequestID, OperationId: tunnel.Session.ID,
+		SandboxId: tunnel.Session.SandboxID, InstanceId: tunnel.InstanceID,
+		SandboxGeneration: uint64(tunnel.Session.Generation),
+		AssignmentId:      tunnel.AssignmentID, LeaseId: tunnel.LeaseID,
+		RunnerId: tunnel.RunnerID,
+	}
 }
 
 func (service *ControlPlaneService) requirePortAuthority(principal contracts.Principal) error {

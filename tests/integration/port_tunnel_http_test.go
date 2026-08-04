@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -79,6 +82,7 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 		t.Fatal(err)
 	}
 	t.Cleanup(relay.Close)
+	liveDataPlane := runnercontrol.NewLiveDataPlaneBroker()
 	server := httptest.NewUnstartedServer(nil)
 	portService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		BuiltInProfiles: integrationBuiltInProfiles(t),
@@ -87,6 +91,7 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		DataPlaneRelay:        relay, DataPlanePollInterval: time.Millisecond,
+		LiveDataPlane:    liveDataPlane,
 		PortSessionRelay: relay, PublicBaseURL: "http://" + server.Listener.Addr().String(),
 	})
 	if err != nil {
@@ -102,35 +107,20 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 	server.Config.Handler = handler
 	server.Start()
 	t.Cleanup(server.Close)
+	fake, detachFake := newPortTunnelFakeRunner(
+		t, liveDataPlane, relay, seed.RunnerID, seed.ConnectionOne,
+	)
+	defer detachFake()
+	fakeContext, stopFake := context.WithCancel(t.Context())
+	defer stopFake()
+	fakeErrors := make(chan error, 1)
+	go func() { fakeErrors <- fake.run(fakeContext) }()
 
 	session := createPortSessionHTTP(t, server.URL, key.Credential, sandbox, lease.ID)
-	firstOpen, found, err := relay.ClaimOutboundFrame(
-		t.Context(), seed.RunnerID, seed.ConnectionOne, now,
-	)
-	if err != nil || !found || firstOpen.Message.GetPort() == nil {
-		t.Fatalf("first Port Open claim = %#v found=%t error=%v", firstOpen, found, err)
-	}
-	reclaimedOpen, found, err := relay.ClaimOutboundFrame(
-		t.Context(), seed.RunnerID, seed.ConnectionOne, now.Add(51*time.Millisecond),
-	)
-	if err != nil || !found || reclaimedOpen.ID != firstOpen.ID {
-		t.Fatalf("reclaimed Port Open = %#v found=%t error=%v", reclaimedOpen, found, err)
-	}
-	if err := relay.MarkOutboundFrameDelivered(
-		t.Context(), firstOpen.ID, seed.ConnectionOne, firstOpen.ClaimAttempt,
-		now.Add(51*time.Millisecond),
-	); !errors.Is(err, runnercontrol.ErrRelayDeliveryClaim) {
-		t.Fatalf("expired Port Open claim delivery error = %v, want ErrRelayDeliveryClaim", err)
-	}
-	if err := relay.MarkOutboundFrameDelivered(
-		t.Context(), reclaimedOpen.ID, seed.ConnectionOne, reclaimedOpen.ClaimAttempt,
-		now.Add(51*time.Millisecond),
-	); err != nil {
-		t.Fatal(err)
-	}
-	open := reclaimedOpen.Message.GetPort()
-	if open.GetOpen() == nil || open.GetOpen().GuestPort != 8080 || open.GetOpen().Protocol != "tcp" {
-		t.Fatalf("Port Open = %#v", open.GetOpen())
+	if session.Transport != contracts.PortTransportRelay ||
+		!strings.HasPrefix(session.Endpoint, "ws://"+server.Listener.Addr().String()+"/v1/port-tunnels/") ||
+		strings.Contains(session.Endpoint, seed.RunnerID) {
+		t.Fatalf("proxied PortSession = %#v", session)
 	}
 	connection := dialPortTunnel(t, session.Endpoint)
 	defer connection.Close()
@@ -148,27 +138,35 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 		response.Body.Close()
 	}
 
-	initialCredit := claimPortFrame(t, relay, seed, now)
-	if initialCredit.GetCredit().GetByteCount() != 65536 {
-		t.Fatalf("initial Port response credit = %#v", initialCredit.GetCredit())
+	open := waitPortFakeEvent(t, fake.events, "open")
+	if open.frame.GetOpen() == nil || open.frame.GetOpen().GuestPort != 8080 ||
+		open.frame.GetOpen().Protocol != "tcp" || open.frame.Sequence != 1 {
+		t.Fatalf("live Port Open = %#v", open.frame)
 	}
 	clientPayload := []byte{0, 1, 0xff, 2}
 	if err := connection.WriteMessage(websocket.BinaryMessage, clientPayload); err != nil {
 		t.Fatal(err)
 	}
-	assertNoRunnerBoundPortBytes(t, relay, seed, now)
-	persistRunnerPortFrame(t, relay, seed, open, 1, &runnerv1.PortFrame_Credit{
-		Credit: &runnerv1.StreamCredit{ByteCount: 65536},
-	}, now)
-	clientBytes := claimPortFrameEventually(t, relay, seed, now)
-	if !bytes.Equal(clientBytes.GetBytes().GetData(), clientPayload) {
-		t.Fatalf("runner-bound Port frame = %v, want bytes %v", clientBytes, clientPayload)
+	select {
+	case event := <-fake.events:
+		t.Fatalf("runner received Port event before credit = %#v", event.frame)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(fake.grantClientCredit)
+	initialCredit := waitPortFakeEvent(t, fake.events, "credit")
+	if initialCredit.frame.GetCredit().ByteCount != 65536 || initialCredit.frame.Sequence != 2 {
+		t.Fatalf("initial Port response credit = %#v", initialCredit.frame)
+	}
+	clientBytes := waitPortFakeEvent(t, fake.events, "bytes")
+	if !bytes.Equal(clientBytes.frame.GetBytes().GetData(), clientPayload) ||
+		clientBytes.frame.Sequence != 3 {
+		t.Fatalf("runner-bound Port frame = %#v, want bytes %v", clientBytes.frame, clientPayload)
 	}
 
 	runnerPayload := []byte{0xff, 0, 3, 0}
-	persistRunnerPortFrame(t, relay, seed, open, 2, &runnerv1.PortFrame_Bytes{
-		Bytes: &runnerv1.PortBytes{Data: runnerPayload},
-	}, now)
+	if err := fake.output(t.Context(), runnerPayload); err != nil {
+		t.Fatal(err)
+	}
 	if err := connection.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
@@ -179,9 +177,19 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 	if messageType != websocket.BinaryMessage || !bytes.Equal(payload, runnerPayload) {
 		t.Fatalf("public Port message type=%d payload=%v", messageType, payload)
 	}
-	returnedCredit := claimPortFrameEventually(t, relay, seed, now)
-	if returnedCredit.GetCredit().GetByteCount() != uint64(len(runnerPayload)) {
-		t.Fatalf("post-delivery Port credit = %#v", returnedCredit.GetCredit())
+	returnedCredit := waitPortFakeEvent(t, fake.events, "credit")
+	if returnedCredit.frame.GetCredit().GetByteCount() != uint64(len(runnerPayload)) ||
+		returnedCredit.frame.Sequence != 4 {
+		t.Fatalf("post-delivery Port credit = %#v", returnedCredit.frame)
+	}
+	var frameRows int64
+	if err := pool.QueryRow(t.Context(), `
+		SELECT count(*) FROM secondbox.data_plane_frames WHERE session_id=$1`, session.ID,
+	).Scan(&frameRows); err != nil {
+		t.Fatal(err)
+	}
+	if frameRows != 0 {
+		t.Fatalf("relayed Port frame rows = %d, want zero", frameRows)
 	}
 
 	if err := connection.Close(); err != nil {
@@ -203,6 +211,13 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 			t.Fatal("Port tunnel disconnect did not close activity accounting")
 		}
 		time.Sleep(time.Millisecond)
+	}
+	select {
+	case err := <-fakeErrors:
+		if err != nil {
+			t.Fatal(err)
+		}
+	default:
 	}
 }
 
@@ -264,98 +279,139 @@ func portTunnelDialer(t *testing.T, endpoint string) (websocket.Dialer, string) 
 	}}, parsed.String()
 }
 
-func claimPortFrame(
+type portFakeEvent struct {
+	kind  string
+	frame *runnerv1.PortFrame
+}
+
+type portTunnelFakeRunner struct {
+	broker            *runnercontrol.LiveDataPlaneBroker
+	relay             *runnercontrol.PostgresFrameRelay
+	session           *runnercontrol.Session
+	runnerID          string
+	connectionID      string
+	incoming          chan *runnerv1.ControlPlaneToRunner
+	events            chan portFakeEvent
+	grantClientCredit chan struct{}
+	mu                sync.Mutex
+	open              *runnerv1.PortFrame
+	nextSequence      uint64
+}
+
+func newPortTunnelFakeRunner(
 	t *testing.T,
+	broker *runnercontrol.LiveDataPlaneBroker,
 	relay *runnercontrol.PostgresFrameRelay,
-	seed relayReadySeed,
-	now time.Time,
-) *runnerv1.PortFrame {
+	runnerID string,
+	connectionID string,
+) (*portTunnelFakeRunner, func()) {
 	t.Helper()
-	delivery, found, err := relay.ClaimOutboundFrame(
-		t.Context(), seed.RunnerID, seed.ConnectionOne, now,
-	)
-	if err != nil || !found || delivery.Message.GetPort() == nil {
-		t.Fatalf("claim Port frame = %#v found=%t error=%v", delivery, found, err)
+	features := []runnerv1.RunnerFeature{
+		runnerv1.RunnerFeature_RUNNER_FEATURE_PORT_PROXY,
 	}
-	if err := relay.MarkOutboundFrameDelivered(
-		t.Context(), delivery.ID, seed.ConnectionOne, delivery.ClaimAttempt, now,
-	); err != nil {
+	session := runnercontrol.NewSession(runnercontrol.SessionConfig{
+		AuthenticatedRunnerID: runnerID,
+		SupportedVersions:     runnercontrol.VersionRange{Minimum: 1, Maximum: 1},
+		EnabledFeatures:       features, HeartbeatInterval: 10 * time.Second,
+		ConnectionID: connectionID,
+	})
+	if response, err := session.Accept(&runnerv1.RunnerToControlPlane{
+		Message: &runnerv1.RunnerToControlPlane_Hello{Hello: &runnerv1.RunnerHello{
+			RunnerId: runnerID, ConnectionNonce: bytes.Repeat([]byte{0x51}, 32),
+			SupportedVersions: &runnerv1.ProtocolVersionRange{Minimum: 1, Maximum: 1},
+			MandatoryFeatures: features,
+		}},
+	}); err != nil || response.GetWelcome() == nil {
+		t.Fatalf("fake Port Runner Hello = %#v, %v", response, err)
+	}
+	if _, err := session.Accept(&runnerv1.RunnerToControlPlane{
+		Message: &runnerv1.RunnerToControlPlane_Registration{Registration: &runnerv1.RunnerRegistration{
+			MessageId: "registration", Sequence: 1, RunnerId: runnerID,
+			ConnectionId: connectionID, RunnerPoolId: "default-pool",
+			SoftwareVersion: "integration", ProtocolVersion: 1,
+			Capabilities: &runnerv1.RunnerCapabilities{
+				Architecture: "amd64", FirecrackerVersion: "integration",
+				KvmReady: true, JailerReady: true, CgroupReady: true,
+				NetworkPolicyReady: true, StorageReady: true, CleanupReady: true,
+				DataPlaneReady:           true,
+				GuestProtocolGenerations: &runnerv1.ProtocolVersionRange{Minimum: 1, Maximum: 1},
+			},
+			Allocatable: &runnerv1.Capacity{VcpuMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30, Instances: 8},
+			Reserved:    &runnerv1.Capacity{}, StartupTiming: &runnerv1.StartupTiming{},
+			DataPlaneAdvertisedAddress:     "10.0.0.5:7443",
+			DataPlaneCertificateSpkiSha256: strings.Repeat("a", 64),
+		}},
+	}); err != nil {
 		t.Fatal(err)
 	}
-	return delivery.Message.GetPort()
+	fake := &portTunnelFakeRunner{
+		broker: broker, relay: relay, session: session,
+		runnerID: runnerID, connectionID: connectionID,
+		incoming: make(chan *runnerv1.ControlPlaneToRunner, 16),
+		events:   make(chan portFakeEvent, 16), grantClientCredit: make(chan struct{}),
+		nextSequence: 1,
+	}
+	detach, err := broker.AttachConnection(runnerID, connectionID, fake, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fake, detach
 }
 
-func claimPortFrameEventually(
-	t *testing.T,
-	relay *runnercontrol.PostgresFrameRelay,
-	seed relayReadySeed,
-	now time.Time,
-) *runnerv1.PortFrame {
-	t.Helper()
-	deadline := time.Now().Add(time.Second)
+func (fake *portTunnelFakeRunner) Send(message *runnerv1.ControlPlaneToRunner) error {
+	fake.incoming <- message
+	return nil
+}
+
+func (fake *portTunnelFakeRunner) run(ctx context.Context) error {
 	for {
-		delivery, found, err := relay.ClaimOutboundFrame(
-			t.Context(), seed.RunnerID, seed.ConnectionOne, now,
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if found {
-			if delivery.Message.GetPort() == nil {
-				t.Fatalf("claimed non-Port frame = %#v", delivery.Message)
+		select {
+		case <-ctx.Done():
+			return nil
+		case message := <-fake.incoming:
+			if err := fake.handle(ctx, message.GetPort()); err != nil {
+				return err
 			}
-			if err := relay.MarkOutboundFrameDelivered(
-				t.Context(), delivery.ID, seed.ConnectionOne, delivery.ClaimAttempt, now,
-			); err != nil {
-				t.Fatal(err)
-			}
-			return delivery.Message.GetPort()
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for outbound Port frame")
-		}
-		time.Sleep(time.Millisecond)
 	}
 }
 
-func assertNoRunnerBoundPortBytes(
-	t *testing.T,
-	relay *runnercontrol.PostgresFrameRelay,
-	seed relayReadySeed,
-	now time.Time,
-) {
-	t.Helper()
-	delivery, found, err := relay.ClaimOutboundFrame(
-		t.Context(), seed.RunnerID, seed.ConnectionOne, now,
-	)
-	if err != nil || found {
-		if err != nil {
-			t.Fatal(err)
-		}
-		port := delivery.Message.GetPort()
-		if port != nil && port.GetBytes() != nil {
-			t.Fatalf("runner-bound Port bytes bypassed credit: sequence=%d bytes=%v", port.Sequence, port.GetBytes().Data)
-		}
-		t.Fatalf(
-			"unexpected Port control before runner credit: sequence=%d open=%v credit=%v cancel=%v",
-			port.GetSequence(), port.GetOpen(), port.GetCredit(), port.GetCancel(),
-		)
+func (fake *portTunnelFakeRunner) handle(ctx context.Context, frame *runnerv1.PortFrame) error {
+	if frame == nil {
+		return nil
+	}
+	fake.events <- portFakeEvent{kind: portFakeEventKind(frame), frame: proto.Clone(frame).(*runnerv1.PortFrame)}
+	if frame.GetOpen() == nil {
+		return nil
+	}
+	fake.mu.Lock()
+	fake.open = proto.Clone(frame).(*runnerv1.PortFrame)
+	fake.mu.Unlock()
+	select {
+	case <-fake.grantClientCredit:
+		return fake.deliver(ctx, &runnerv1.PortFrame_Credit{Credit: &runnerv1.StreamCredit{
+			ByteCount: 65536,
+		}})
+	case <-ctx.Done():
+		return nil
 	}
 }
 
-func persistRunnerPortFrame(
-	t *testing.T,
-	relay *runnercontrol.PostgresFrameRelay,
-	seed relayReadySeed,
-	open *runnerv1.PortFrame,
-	sequence uint64,
-	payload any,
-	now time.Time,
-) {
-	t.Helper()
+func (fake *portTunnelFakeRunner) output(ctx context.Context, payload []byte) error {
+	return fake.deliver(ctx, &runnerv1.PortFrame_Bytes{Bytes: &runnerv1.PortBytes{
+		Data: bytes.Clone(payload),
+	}})
+}
+
+func (fake *portTunnelFakeRunner) deliver(ctx context.Context, payload any) error {
+	fake.mu.Lock()
+	open := proto.Clone(fake.open).(*runnerv1.PortFrame)
+	sequence := fake.nextSequence
+	fake.nextSequence++
+	fake.mu.Unlock()
 	frame := &runnerv1.PortFrame{
-		Fence: open.Fence, OperationId: open.OperationId, StreamId: open.StreamId, Sequence: sequence,
-		Correlation: proto.Clone(open.Correlation).(*runnerv1.Correlation),
+		Fence: open.Fence, OperationId: open.OperationId, StreamId: open.StreamId,
+		Sequence: sequence, Correlation: open.Correlation,
 	}
 	switch value := payload.(type) {
 	case *runnerv1.PortFrame_Credit:
@@ -363,15 +419,51 @@ func persistRunnerPortFrame(
 	case *runnerv1.PortFrame_Bytes:
 		frame.Payload = value
 	default:
-		t.Fatalf("unsupported test Port payload %T", payload)
+		return fmt.Errorf("fake Port Runner payload %T is invalid", payload)
 	}
-	inserted, err := relay.PersistInboundFrame(t.Context(), runnercontrol.InboundRelayFrame{
-		RunnerID: seed.RunnerID, ConnectionID: seed.ConnectionOne,
-		Message: &runnerv1.RunnerToControlPlane{
-			Message: &runnerv1.RunnerToControlPlane_Port{Port: frame},
-		},
-	}, now)
-	if err != nil || !inserted {
-		t.Fatalf("persist runner Port frame = %t, %v", inserted, err)
+	message := &runnerv1.RunnerToControlPlane{
+		Message: &runnerv1.RunnerToControlPlane_Port{Port: frame},
+	}
+	event, err := fake.session.Accept(message)
+	if err != nil {
+		return err
+	}
+	deliver, err := fake.relay.RecordPortSessionFrame(ctx, runnercontrol.InboundRelayFrame{
+		RunnerID: fake.runnerID, ConnectionID: fake.connectionID, Message: message,
+	}, time.Now().UTC())
+	if err != nil || !deliver {
+		return errors.Join(err, errors.New("fake proxied Port frame was not deliverable"))
+	}
+	return fake.broker.Deliver(ctx, event)
+}
+
+func portFakeEventKind(frame *runnerv1.PortFrame) string {
+	switch {
+	case frame.GetOpen() != nil:
+		return "open"
+	case frame.GetCredit() != nil:
+		return "credit"
+	case frame.GetBytes() != nil:
+		return "bytes"
+	default:
+		return "unknown"
+	}
+}
+
+func waitPortFakeEvent(
+	t *testing.T,
+	events <-chan portFakeEvent,
+	kind string,
+) portFakeEvent {
+	t.Helper()
+	select {
+	case event := <-events:
+		if event.kind != kind {
+			t.Fatalf("fake Port event kind = %q, want %q: %#v", event.kind, kind, event.frame)
+		}
+		return event
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for fake Port event %q", kind)
+		return portFakeEvent{}
 	}
 }

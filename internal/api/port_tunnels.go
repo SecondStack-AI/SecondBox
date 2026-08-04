@@ -131,66 +131,55 @@ func (apiHandler *handler) servePortTunnel(
 ) error {
 	tunnelContext, stopTunnel := context.WithCancel(request.Context())
 	defer stopTunnel()
+	stream, err := apiHandler.service.OpenPortTunnel(tunnelContext, tunnel)
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
 	readErrors := make(chan error, 1)
 	go func() {
-		readErrors <- apiHandler.readPortTunnelMessages(tunnelContext, connection, tunnel)
+		readError := apiHandler.readPortTunnelMessages(tunnelContext, connection, stream)
+		readErrors <- readError
+		stopTunnel()
 	}()
-	ticker := time.NewTicker(apiHandler.service.DataPlanePollInterval())
-	defer ticker.Stop()
-	// Subscribing before the first authoritative read closes the race where a
-	// frame commits between that read and the subscription.
-	wakeups, cancelWakeups := apiHandler.service.SubscribeDataPlaneSession(tunnel.Session.ID)
-	defer cancelWakeups()
-	afterSequence := int64(-1)
 	for {
-		event, found, err := apiHandler.service.NextPortTunnelEvent(
-			tunnelContext, tunnel, afterSequence,
-		)
+		event, err := stream.Receive(tunnelContext)
 		if err != nil {
-			return err
-		}
-		if found {
-			if err := connection.SetWriteDeadline(tunnel.Session.ExpiresAt); err != nil {
-				return fmt.Errorf("SecondBox Port WebSocket write deadline: %w", err)
-			}
-			switch {
-			case event.Bytes != nil:
-				if err := connection.WriteMessage(websocket.BinaryMessage, event.Bytes); err != nil {
-					return fmt.Errorf("SecondBox Port WebSocket binary write: %w", err)
-				}
-			case event.TerminalKind != "":
-				detail := event.TerminalDetail
-				if detail == "" {
-					detail = event.TerminalKind
-				}
-				if err := connection.WriteControl(
-					websocket.CloseMessage,
-					websocket.FormatCloseMessage(websocket.CloseNormalClosure, detail),
-					time.Now().Add(time.Second),
-				); err != nil {
-					return fmt.Errorf("SecondBox Port WebSocket terminal write: %w", err)
-				}
+			select {
+			case readErr := <-readErrors:
+				return readErr
 			default:
-				return errors.New("SecondBox Port tunnel event is invalid")
-			}
-			if err := apiHandler.service.AcknowledgePortTunnelEvent(
-				tunnelContext, tunnel, event.Sequence,
-			); err != nil {
 				return err
 			}
-			afterSequence = event.Sequence
-			if event.TerminalKind != "" {
-				return nil
-			}
-			continue
 		}
-		select {
-		case err := <-readErrors:
+		if err := connection.SetWriteDeadline(tunnel.Session.ExpiresAt); err != nil {
+			return fmt.Errorf("SecondBox Port WebSocket write deadline: %w", err)
+		}
+		switch {
+		case event.Bytes != nil:
+			if err := connection.WriteMessage(websocket.BinaryMessage, event.Bytes); err != nil {
+				return fmt.Errorf("SecondBox Port WebSocket binary write: %w", err)
+			}
+		case event.TerminalKind != "":
+			detail := event.TerminalDetail
+			if detail == "" {
+				detail = event.TerminalKind
+			}
+			if err := connection.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseNormalClosure, detail),
+				time.Now().Add(time.Second),
+			); err != nil {
+				return fmt.Errorf("SecondBox Port WebSocket terminal write: %w", err)
+			}
+		default:
+			return errors.New("SecondBox Port tunnel event is invalid")
+		}
+		if err := stream.Acknowledge(tunnelContext, event); err != nil {
 			return err
-		case <-wakeups:
-		case <-ticker.C:
-		case <-tunnelContext.Done():
-			return tunnelContext.Err()
+		}
+		if event.TerminalKind != "" {
+			return nil
 		}
 	}
 }
@@ -198,7 +187,9 @@ func (apiHandler *handler) servePortTunnel(
 func (apiHandler *handler) readPortTunnelMessages(
 	ctx context.Context,
 	connection *websocket.Conn,
-	tunnel runnercontrol.PortTunnel,
+	stream interface {
+		Send(context.Context, []byte) error
+	},
 ) error {
 	for {
 		messageType, payload, err := connection.ReadMessage()
@@ -209,7 +200,7 @@ func (apiHandler *handler) readPortTunnelMessages(
 			return errors.New("SecondBox Port WebSocket accepts only binary messages")
 		}
 		for {
-			err = apiHandler.service.QueuePortTunnelBytes(ctx, tunnel, payload)
+			err = stream.Send(ctx, payload)
 			if !errors.Is(err, ports.ErrPortBackpressure) {
 				break
 			}

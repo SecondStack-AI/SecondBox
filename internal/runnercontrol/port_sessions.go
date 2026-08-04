@@ -41,6 +41,8 @@ type PortTunnel struct {
 	FencingToken                []byte
 	GuestPort                   int64
 	StreamWindowBytes           int64
+	MaximumRequestBytes         int64
+	MaximumResponseBytes        int64
 	NextOutboundSequence        int64
 	RetainUntil                 time.Time
 	AcknowledgedInboundSequence int64
@@ -120,14 +122,20 @@ type DirectPortConsumption struct {
 	Now              time.Time
 }
 
-// PortSessionRelay persists port admission, single-use connection state, and bounded bytes.
+// PortSessionRelay persists Port admission, single-use connection state, and
+// bounded accounting without retaining proxied payload bytes.
 type PortSessionRelay interface {
 	AdmitPortSession(context.Context, PortSessionAdmission) (PortTunnel, bool, error)
 	GetPortTunnel(context.Context, string, string, string, string, time.Time) (PortTunnel, error)
 	ClosePortSession(context.Context, PortTunnelClose) (contracts.PortSession, error)
 	ConsumePortSession(context.Context, string, string, string, time.Time) (PortTunnel, error)
 	ConsumeDirectPortSession(context.Context, DirectPortConsumption) (PortTunnel, error)
-	QueuePortClientBytes(context.Context, string, string, string, []byte, time.Time) error
-	NextPortTunnelEvent(context.Context, string, string, string, int64, time.Time) (PortTunnelEvent, bool, error)
-	AcknowledgePortTunnelEvent(context.Context, string, string, string, int64, time.Time) error
+	RecordPortClientBytes(context.Context, string, string, string, []byte, time.Time) error
+	RecordPortTunnelAcknowledgement(context.Context, string, string, string, int64, time.Time) error
+}
+
+// PortSessionFrameRecorder projects payload-free Port frame accounting received
+// on the authenticated Runner connection.
+type PortSessionFrameRecorder interface {
+	RecordPortSessionFrame(context.Context, InboundRelayFrame, time.Time) (bool, error)
 }
