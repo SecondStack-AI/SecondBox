@@ -2,23 +2,31 @@
 
 ## Unreleased
 
-- Replaced silent built-in Profile reconciliation with explicit, release-owned `agent-compartment` and `durable-coding` standard bundles, a shared idempotent resource apply engine, and strict deployment-owned RunnerPool inventory and gateway bindings.
-- Added a coordinated `v0.1.0` release path for the existing Go and TypeScript SDKs, host binaries, digest-pinned OCI images, independently signed microVM artifacts, standard resources, SBOMs, provenance, qualification evidence, and an acyclic final release index.
-- Expanded the Go and TypeScript SDKs with equivalent high-level lifecycle, execution, filesystem, Snapshot, Artifact, Lease, Port, and terminal operations; added Node transport helpers; and replaced the obsolete Flue beta.9 compatibility layer with the exact Flue 2 public contract.
-- Added `secondbox-deploy` verification and release-aware production initialization, plus local KVM-qualified candidate preparation, hosted publish-only promotion, and no-checkout local finalization that publishes the final release index last.
-- Replaced the editable 146-variable deployment environment with a strict versioned `secondbox.toml`, create-only initialization and Runner enrollment, redacted inspection, one-shot legacy migration, and atomically generated Compose and systemd environment artifacts.
-- Split the deployment into explicit base, bundled-development, and privileged same-host Runner Compose overlays, with ambient configuration isolation and a one-command ready development control plane.
-- Reduced the control-plane environment contract from 59 required variables to 38: 18 tuning settings are optional validated overrides with compiled reviewed values, and the Runner protocol window is now a verified compiled fact in both binaries.
-- Added the standalone SecondBox control plane with PostgreSQL-backed projects, service accounts, API keys, immutable profiles, durable Sandboxes, quotas, lifecycle intent, bounded Assignment and stop reconciliation, runner scheduling, and end-to-end request correlation.
-- Added home-Runner-pinned durable Workspaces with reflink-only local Snapshots, crash-safe in-place restore, durable generation receipts, exact-home scheduling, bounded drain cancellation, and Lease-aware activity reclamation.
-- Added the outbound mTLS Runner protocol, Firecracker runner, independently versioned guest protocol, signed image pipeline, generation fencing, descriptor-pinned guest operations, fully correlated payload-free Runner operation evidence, and fenced natural-shutdown and cgroup OOM termination reporting.
-- Added authenticated RunnerPool administration and credential-free Runner inventory through the API, generated SDK transports, and CLI.
-- Added buffered and backpressured direct or proxied WebSocket exec with binary stdin, explicit EOF, typed terminal outcomes, exact idempotency, cancellation proof, and assignment fencing, plus ordinary workspace filesystem APIs with binary transfer.
-- Added direct and proxied PTY sessions with authenticated reconnect, exclusive bounded detach, ordered binary input and output, resize, Lease-aware cancellation proof, Go and TypeScript helpers, and the interactive `secondbox sandbox shell` command.
-- Added authenticated, expiring Profile-approved port sessions with single-use proxied WebSocket or scoped direct tunnels, generation and Lease fencing, and guest-loopback-only forwarding without Runner host-port publication.
-- Removed the unused PostgreSQL data-plane frame transport, per-frame wakeups and retention, relay-only configuration and harnesses, and the frame/payload schema; every Port, Exec, File, and PTY payload now uses `SBXDP1` directly or through the in-memory proxy.
-- Added immutable Artifact upload, listing, metadata, verified download, retention deletion, quota enforcement, and S3-compatible garbage collection.
-- Added fail-closed PostgreSQL and Artifact backup tooling with database-derived object manifests and verified checksums, plus an explicit operator recovery boundary for each Runner's stable identity and local workspace filesystem.
-- Added generated Go and TypeScript transports and wire types, handwritten Go and TypeScript helpers, the `secondbox` CLI with bounded log streaming and support bundles, and a frozen Flue beta.9 compatibility adapter.
-- Added clean-clone qualification, compatibility manifests, dependency-age enforcement, license evidence, checksums, signatures, provenance, and non-publishing release gates.
-- Added fail-closed Runner storage-pressure admission for one dedicated reflink-capable workspace filesystem, with explicit hysteresis, bounded audit evidence, and generation-fenced cleanup.
+- Simplified releases to two operator commands: build every artifact locally with `just release-stage`, then publish the supplied artifacts directly to GitHub, GHCR, and npm with `just release-upload` ([#25](https://github.com/SecondStack-AI/SecondBox/pull/25)).
+
+## 0.1.4 - 2026-08-04
+
+First stable public release of SecondBox.
+
+### Added
+
+- Added the self-hosted SecondBox control plane with PostgreSQL-backed projects, service accounts, API keys, immutable Profiles, durable Sandboxes, quotas, Runner scheduling, lifecycle reconciliation, and end-to-end request correlation.
+- Added home-Runner-pinned reflink Workspaces and local Snapshots with generation fencing, crash-safe restore, exact-home scheduling, storage-pressure admission, and explicit stopped-Sandbox relocation.
+- Added the outbound authenticated Runner protocol and Firecracker backend with independently versioned guest assets, cgroup isolation, network policy, termination reporting, and durable generation receipts.
+- Added direct and proxied Exec, filesystem, PTY, and Profile-approved port sessions with bounded backpressure, reconnect, cancellation, idempotency, and Lease fencing.
+- Added immutable Artifact storage, quota enforcement, retention garbage collection, and fail-closed PostgreSQL and Artifact backup tooling.
+- Added generated Go and TypeScript transports, high-level lifecycle helpers, Node transports, the Flue 2 adapter, and the `secondbox` CLI.
+- Added the strict versioned `secondbox.toml` deployment manifest, `secondbox-deploy`, explicit RunnerPool and standard Profile reconciliation, and base, development, and privileged same-host Runner Compose topologies.
+- Published `secondbox` and `secondbox-deploy` binaries for Linux and macOS on amd64 and arm64, the Go and TypeScript SDKs, digest-addressed OCI images, microVM assets, OpenAPI, checksums, and the `agent-compartment` and `durable-coding` standard bundles.
+
+### Changed
+
+- Defined `Sandbox` as the durable public resource and `Instance` as replaceable compute fenced to one Sandbox generation.
+- Removed the PostgreSQL data-plane frame relay; Exec, File, PTY, and Port payloads now travel directly to a Runner or through the bounded in-memory proxy.
+- Replaced implicit built-in Profile reconciliation and ambient deployment defaults with explicit release resources, identities, paths, authorities, and validated configuration.
+
+### Fixed
+
+- Preserved distinct runtime and toolchain identities throughout the release manifest and standard bundles ([#23](https://github.com/SecondStack-AI/SecondBox/pull/23)).
+- Included the mandatory `compute` capability in generated RunnerPools and compared pool architectures and capabilities as unordered sets, preventing missing admission and false deployment drift ([#24](https://github.com/SecondStack-AI/SecondBox/pull/24)).
+- Made packaged lifecycle checks tolerate Runner enrollment races, wait for completed transitions, and resolve the exact Go SDK package ([#24](https://github.com/SecondStack-AI/SecondBox/pull/24)).

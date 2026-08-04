@@ -3,6 +3,7 @@
 **Durable, isolated development sandboxes — as a service you run yourself.**
 
 [![CI](https://github.com/SecondStack-AI/SecondBox/actions/workflows/ci.yml/badge.svg)](https://github.com/SecondStack-AI/SecondBox/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/SecondStack-AI/SecondBox)](https://github.com/SecondStack-AI/SecondBox/releases/latest)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 SecondBox runs untrusted workloads — AI agents, user code, plugins, CI jobs, long-lived dev environments — inside Firecracker microVMs whose filesystems survive between sessions.
@@ -24,6 +25,27 @@ A **Sandbox** is the durable public resource; the **Instance** running it is rep
 `secondboxd` stores desired state in PostgreSQL and immutable **Artifacts** in S3-compatible storage. Workspace bytes stay on the owning Runner except while `secondboxd` forwards a bounded, in-memory stream for an explicit stopped-Sandbox relocation; it never persists those bytes.
 
 ## Getting started
+
+### Install a release
+
+The [latest GitHub release](https://github.com/SecondStack-AI/SecondBox/releases/latest) provides `secondbox` and `secondbox-deploy` for Linux and macOS on amd64 and arm64. For example, on Linux amd64:
+
+```sh
+mkdir -p ~/.local/bin
+curl -fLO https://github.com/SecondStack-AI/SecondBox/releases/download/v0.1.4/secondbox_0.1.4_linux_amd64
+curl -fLO https://github.com/SecondStack-AI/SecondBox/releases/download/v0.1.4/secondbox-deploy_0.1.4_linux_amd64
+install -m 0755 secondbox_0.1.4_linux_amd64 ~/.local/bin/secondbox
+install -m 0755 secondbox-deploy_0.1.4_linux_amd64 ~/.local/bin/secondbox-deploy
+```
+
+Install an SDK at the same version:
+
+```sh
+npm install @secondstack-ai/secondbox@0.1.4
+go get github.com/SecondStack-AI/SecondBox@v0.1.4
+```
+
+See the [v0.1.4 release notes](docs/releases/v0.1.4.md) for highlights, all published artifacts, and the supported platform matrix.
 
 ### Prerequisites
 
@@ -91,6 +113,8 @@ just deploy-development-up .tmp/secondbox-development
 This creates one private, versioned `secondbox.toml`, generates unique referenced secrets, compiles a protected environment transport, and starts the reviewed loopback PostgreSQL, object-store, and control-plane topology. The generated environment is never operator input. This topology is useful for control-plane development and API work, but it cannot execute a Sandbox. Read [deployment and runtime operations](docs/operations/deployment.md) before exposing the API, configuring production, or enrolling a Runner.
 
 ### Install the CLI
+
+Use the release binary above, or build the current checkout from source:
 
 ```sh
 go build -o ./dist/secondbox ./cmd/secondbox
