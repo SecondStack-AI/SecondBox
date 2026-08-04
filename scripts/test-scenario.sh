@@ -142,6 +142,11 @@ workspace_fstype="$(findmnt -T "$workspace_root" -n -o FSTYPE)"
 if [[ "$workspace_fstype" != "xfs" && "$workspace_fstype" != "btrfs" ]]; then
   fail "SECONDBOX_RUNNER_WORKSPACE_ROOT must be on XFS or Btrfs, got $workspace_fstype"
 fi
+workspace_device="$(stat -c %d "$workspace_root")"
+artifacts_device="$(stat -c %d "$artifacts_dir")"
+checkout_device="$(stat -c %d "$repo_root")"
+[[ "$workspace_device" == "$artifacts_device" && "$workspace_device" == "$checkout_device" ]] ||
+  fail "workspace root, microVM artifacts, and checkout must share one reflink filesystem"
 
 required_artifacts=(
   SHA256SUMS

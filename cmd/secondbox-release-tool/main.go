@@ -45,7 +45,94 @@ func run(args []string) error {
 	if len(args) == 3 && args[0] == "verify-candidate-evidence" {
 		return verifyCandidateEvidence(args[1], args[2])
 	}
-	return errors.New("usage: secondbox-release-tool {standard-documents ASSET_DIGEST OUTPUT_DIR|manifest INPUT_JSON OUTPUT_DIR|verify STAGING_DIR|verify-candidate-evidence ARTIFACT_MANIFEST EVIDENCE}")
+	if len(args) == 4 && args[0] == "candidate-evidence" {
+		return writeCandidateEvidence(args[1], args[2], args[3])
+	}
+	if len(args) == 4 && args[0] == "publication-input" {
+		return writePublicationInput(args[1], args[2], args[3])
+	}
+	if len(args) == 2 && args[0] == "verify-publication-input" {
+		return verifyPublicationInput(args[1])
+	}
+	if len(args) == 4 && args[0] == "verify-publication-sources" {
+		return verifyPublicationSources(args[1], args[2], args[3])
+	}
+	return errors.New("usage: secondbox-release-tool {standard-documents ASSET_DIGEST OUTPUT_DIR|manifest INPUT_JSON OUTPUT_DIR|verify STAGING_DIR|verify-candidate-evidence ARTIFACT_MANIFEST EVIDENCE|candidate-evidence ARTIFACT_MANIFEST RUNNER_ENVIRONMENT_DIGEST OUTPUT|publication-input STAGING_DIR EVIDENCE OUTPUT|verify-publication-input INPUT_DIR|verify-publication-sources STAGING_DIR EVIDENCE INPUT}")
+}
+
+func writeCandidateEvidence(manifestPath, runnerEnvironment, outputPath string) error {
+	manifestData, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return err
+	}
+	manifest, err := releasecontract.DecodeArtifactManifest(manifestData)
+	if err != nil {
+		return err
+	}
+	evidence, err := releasepublish.CandidateEvidenceFor(manifest, manifestData, runnerEnvironment)
+	if err != nil {
+		return err
+	}
+	encoded, err := json.MarshalIndent(evidence, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(outputPath, append(encoded, '\n'), 0o644)
+}
+
+func writePublicationInput(candidateDirectory, evidencePath, outputPath string) error {
+	if err := verifyCandidate(candidateDirectory); err != nil {
+		return err
+	}
+	input, err := releasepublish.BuildPublicationInput(candidateDirectory, evidencePath)
+	if err != nil {
+		return err
+	}
+	encoded, err := json.MarshalIndent(input, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(outputPath, append(encoded, '\n'), 0o644)
+}
+
+func verifyPublicationInput(directory string) error {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return err
+	}
+	inputName := ""
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), "-publication-input.json") {
+			if inputName != "" {
+				return errors.New("release publication input: multiple transport manifests")
+			}
+			inputName = entry.Name()
+		}
+	}
+	if inputName == "" {
+		return errors.New("release publication input: transport manifest is absent")
+	}
+	data, err := os.ReadFile(filepath.Join(directory, inputName))
+	if err != nil {
+		return err
+	}
+	input, err := releasepublish.DecodePublicationInput(data)
+	if err != nil {
+		return err
+	}
+	return releasepublish.VerifyPublicationDirectory(directory, input, inputName)
+}
+
+func verifyPublicationSources(candidateDirectory, evidencePath, inputPath string) error {
+	data, err := os.ReadFile(inputPath)
+	if err != nil {
+		return err
+	}
+	input, err := releasepublish.DecodePublicationInput(data)
+	if err != nil {
+		return err
+	}
+	return releasepublish.VerifyPublicationSources(candidateDirectory, evidencePath, input)
 }
 
 func verifyCandidateEvidence(manifestPath, evidencePath string) error {
@@ -61,11 +148,9 @@ func verifyCandidateEvidence(manifestPath, evidencePath string) error {
 	if err != nil {
 		return err
 	}
-	var evidence releasepublish.CandidateEvidence
-	decoder := json.NewDecoder(strings.NewReader(string(evidenceData)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&evidence); err != nil {
-		return fmt.Errorf("release candidate evidence: %w", err)
+	evidence, err := releasepublish.DecodeCandidateEvidence(evidenceData)
+	if err != nil {
+		return err
 	}
 	return releasepublish.ValidateEvidence(evidence, manifest, releasecontract.Digest(manifestData))
 }

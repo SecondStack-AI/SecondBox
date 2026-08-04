@@ -12,6 +12,7 @@ Use a dedicated Linux x86-64 host with:
 - cgroup v2 mounted for the privileged runner container;
 - Docker Engine and Docker Compose v2, with permission to start privileged, host-networked containers and create host mounts;
 - an existing absolute workspace-root directory on XFS or Btrfs;
+- the workspace root, signed artifact directory, and checkout on the same filesystem, so rootfs staging into the operation run directory and jail remains reflink/link-only;
 - working reflink support in that filesystem. The harness checks the filesystem type and runner readiness performs the real `FICLONE` and mutation-isolation probe;
 - `curl`, `docker`, `findmnt`, `git`, `go`, `ip`, `jq`, `mountpoint`, `openssl`, `python3`, `seq`, and `sha256sum`.
 
@@ -68,23 +69,7 @@ just test-scenario
 
 `SECONDBOX_SCENARIO_TEST_PATTERN` is an optional Go regular expression for a focused diagnostic rerun. It does not qualify a commit; qualification requires the unfiltered command.
 
-For CI, configure the four path and fingerprint values as repository or organization variables and attach the labels `self-hosted`, `linux`, `x64`, and `secondbox-kvm` only to hosts satisfying this document. The workflow sets `SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1`.
-
-## Register the qualification runner
-
-The qualified suite runs from the dedicated `scenario-qualification` workflow on its nightly schedule or by manual dispatch. It requires a repository-level self-hosted runner registered to `SecondStack-AI/SecondBox` with the labels `self-hosted`, `linux`, `x64`, and `secondbox-kvm`.
-
-An administrator can obtain a short-lived registration token with `gh` and configure an installed GitHub Actions runner from its installation directory:
-
-```sh
-registration_token="$(gh api --method POST repos/SecondStack-AI/SecondBox/actions/runners/registration-token --jq .token)"
-./config.sh \
-  --url https://github.com/SecondStack-AI/SecondBox \
-  --token "$registration_token" \
-  --labels secondbox-kvm
-```
-
-The equivalent settings path is **SecondStack-AI/SecondBox → Settings → Actions → Runners → New self-hosted runner**. GitHub adds the default `self-hosted`, `Linux`, and `X64` labels; label matching is case-insensitive. Runners registered to other repositories, including repositories in the same organization, are not visible to or usable by SecondBox.
+Release preparation invokes this command directly on the qualified local host. GitHub Actions does not run the KVM suite and no self-hosted Actions runner or repository path variable is required.
 
 ## Evidence and timing budgets
 
@@ -97,7 +82,7 @@ Preserve the beginning and end of the command output. A qualified run prints:
 - the allocated benchmark guest network;
 - `SecondBox scenario qualification passed`.
 
-The expected wall-clock duration is 6–10 minutes on the reference host, including control-plane and runner builds, image construction, Compose startup, 15 serial scenarios, and cleanup. CI allows 45 minutes and the Go test process has a 30-minute hard timeout so slow or wedged teardown remains bounded.
+The expected wall-clock duration is 6–10 minutes on the reference host, including control-plane and runner builds, image construction, Compose startup, 15 serial scenarios, and cleanup. The Go test process has a 30-minute hard timeout so slow or wedged teardown remains bounded.
 
 A normal cold guest reaches `microvm_ready` within 5 seconds on the reference host; the 2026-07-29 qualification observed approximately 2.5–2.7 seconds. The runner logs every `microVM cold start stage` with stage and cumulative milliseconds. The scenario deployment's 30-second assignment deadline is the hard boot budget. Treat a sustained rise above the 5-second expectation as a performance regression even when it remains below the hard deadline.
 
