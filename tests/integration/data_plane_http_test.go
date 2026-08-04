@@ -196,6 +196,58 @@ func TestPublicBufferedExecAndOrdinaryFilesystemUseProxiedDataPlane(t *testing.T
 	if err := fake.assertObserved(); err != nil {
 		t.Fatal(err)
 	}
+
+	t.Run("in-flight Exec reports Runner unavailability", func(t *testing.T) {
+		body, err := json.Marshal(map[string]any{
+			"command":     map[string]any{"mode": "shell", "command": "wait-for-runner-loss"},
+			"environment": map[string]string{}, "deadlineMilliseconds": 5000,
+			"maximumOutputBytes": 1024,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request, err := http.NewRequestWithContext(
+			t.Context(), http.MethodPost,
+			server.URL+"/v1/sandboxes/"+sandbox.ID+"/exec", bytes.NewReader(body),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		setDataPlaneHeaders(t, request, key.Credential, sandbox.Generation, "exec-runner-loss-key")
+		request.Header.Set("Content-Type", "application/json")
+		type execHTTPResult struct {
+			response *http.Response
+			err      error
+		}
+		results := make(chan execHTTPResult, 1)
+		go func() {
+			response, err := (&http.Client{Timeout: 5 * time.Second}).Do(request)
+			results <- execHTTPResult{response: response, err: err}
+		}()
+		select {
+		case command := <-fake.execStarted:
+			if command != "wait-for-runner-loss" {
+				t.Fatalf("in-flight Exec command = %q", command)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("fake Runner did not observe in-flight Exec")
+		}
+		detachFake()
+		select {
+		case result := <-results:
+			if result.err != nil {
+				t.Fatal(result.err)
+			}
+			assertHTTPStatus(t, result.response, http.StatusConflict)
+			var problem contracts.Problem
+			decodeHTTPJSON(t, result.response, &problem)
+			if problem.Code != "execution_node_unavailable" || !problem.Retryable {
+				t.Fatalf("Runner-loss problem = %#v", problem)
+			}
+		case <-time.After(6 * time.Second):
+			t.Fatal("in-flight Exec did not resolve after Runner loss")
+		}
+	})
 	stopFake()
 	select {
 	case err := <-fakeErrors:
@@ -557,6 +609,7 @@ type relayFakeRunner struct {
 	writeAttempts   map[string]int
 	exec            map[string]*runnerv1.ExecFrame
 	files           map[string]*fakeFileOperation
+	execStarted     chan string
 }
 
 type fakeFileOperation struct {
@@ -616,6 +669,7 @@ func newRelayFakeRunner(
 		broker: broker, session: session, runnerID: runnerID, connectionID: connectionID,
 		incoming: make(chan *runnerv1.ControlPlaneToRunner, 32),
 		exec:     map[string]*runnerv1.ExecFrame{}, files: map[string]*fakeFileOperation{},
+		execStarted:    make(chan string, 1),
 		workspaceFiles: map[string][]byte{}, directories: map[string]bool{".": true},
 		modifiedAt: map[string]time.Time{}, writeAttempts: map[string]int{},
 	}
@@ -653,6 +707,10 @@ func (fake *relayFakeRunner) handle(ctx context.Context, message *runnerv1.Contr
 			fake.execOpen = open
 			fake.execObservedAt = now
 			fake.mu.Unlock()
+			if open.GetShell() == "wait-for-runner-loss" {
+				fake.execStarted <- open.GetShell()
+				return nil
+			}
 			if !open.Streaming {
 				stdout, stderr, exitCode := open.Stdin, []byte(nil), int32(0)
 				if open.GetShell() == "printf flue" {

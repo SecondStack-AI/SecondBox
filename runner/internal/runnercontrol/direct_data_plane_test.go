@@ -132,13 +132,15 @@ func TestDirectDataPlaneCarriesTypedExecFileAndPTYMessages(t *testing.T) {
 	})
 	stdout := readDirectDataPlaneTestMessage(t, execConnection).GetExec().GetOutput()
 	stderr := readDirectDataPlaneTestMessage(t, execConnection).GetExec().GetOutput()
-	terminal := readDirectDataPlaneTestMessage(t, execConnection).GetExec().GetTerminal()
+	completion := readDirectDataPlaneTestMessage(t, execConnection).GetExec().GetBufferedResult()
 	if stdout.GetChannel() != runnerprotocol.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT ||
 		string(stdout.GetData()) != "direct stdout" ||
 		stderr.GetChannel() != runnerprotocol.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDERR ||
 		string(stderr.GetData()) != "direct stderr" ||
-		terminal.GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED {
-		t.Fatalf("direct streaming Exec result = %#v/%#v/%#v", stdout, stderr, terminal)
+		completion.GetTerminal().GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED ||
+		string(completion.Stdout) != "direct stdout" ||
+		string(completion.Stderr) != "direct stderr" {
+		t.Fatalf("direct streaming Exec result = %#v/%#v/%#v", stdout, stderr, completion)
 	}
 
 	fileCredential := "direct-file-credential-0000000000000000"

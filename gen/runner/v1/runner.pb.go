@@ -4281,7 +4281,7 @@ func (x *ExecOutput) GetData() []byte {
 	return nil
 }
 
-// ExecBufferedResult carries one bounded non-streaming completion. The Runner
+// ExecBufferedResult carries one bounded Exec completion. The Runner
 // sends stdout, stderr, and the typed terminal together so the control plane
 // never has to persist intermediate output frames.
 type ExecBufferedResult struct {

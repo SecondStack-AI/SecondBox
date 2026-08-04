@@ -459,15 +459,16 @@ func (stream *SandboxExecStream) Receive(
 		}
 		stream.emitted += outputBytes
 		result.Output = proto.Clone(frame.GetOutput()).(*runnerv1.ExecOutput)
-	case frame.GetTerminal() != nil:
+	case frame.GetBufferedResult() != nil && frame.GetBufferedResult().Terminal != nil:
 		stream.terminal = true
-		result.Terminal = proto.Clone(frame.GetTerminal()).(*runnerv1.ExecTerminal)
+		completion := proto.Clone(frame.GetBufferedResult()).(*runnerv1.ExecBufferedResult)
+		result.Terminal = proto.Clone(completion.Terminal).(*runnerv1.ExecTerminal)
 		session, err := stream.service.dataPlaneStore.CompleteDataPlaneSession(
 			context.WithoutCancel(ctx),
 			runnercontrol.DataPlaneCompletion{
 				TenantRef: stream.session.TenantRef, SubjectRef: stream.session.SubjectRef,
 				SessionID: stream.session.ID,
-				Exec:      &runnerv1.ExecBufferedResult{Terminal: result.Terminal},
+				Exec:      completion,
 				Now:       stream.service.now().UTC(),
 			},
 		)

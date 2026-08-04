@@ -168,7 +168,10 @@ func (stream *LiveDataPlaneStream) Send(message *runnerv1.ControlPlaneToRunner) 
 		return err
 	}
 	if err := connection.sender.Send(message); err != nil {
-		return fmt.Errorf("SecondBox live data-plane send: %w", err)
+		return errors.Join(
+			ErrLiveDataPlaneUnavailable,
+			fmt.Errorf("SecondBox live data-plane send: %w", err),
+		)
 	}
 	return nil
 }

@@ -99,6 +99,9 @@ type runnerExecOperation struct {
 	ptyReplay        []*runnerprotocol.PtyFrame
 	ptyReplayBytes   uint64
 	ptyWindowBytes   uint64
+	outputLimitBytes uint64
+	stdout           []byte
+	stderr           []byte
 }
 
 type runnerPTYAttachment struct {
@@ -203,16 +206,17 @@ func (s *RunnerProtocolService) handleExecFrame(
 			return err
 		}
 		state = &runnerExecOperation{
-			key:          key,
-			fence:        cloneRunnerFence(frame.Fence),
-			correlation:  cloneRunnerCorrelation(frame.Correlation),
-			operationID:  frame.OperationId,
-			streamID:     frame.StreamId,
-			nextIncoming: 2,
-			nextOutgoing: 1,
-			credit:       newRunnerCreditWindow(),
-			controls:     make(chan ExecControl, 256),
-			pty:          frame.GetOpen().AllocatePty,
+			key:              key,
+			fence:            cloneRunnerFence(frame.Fence),
+			correlation:      cloneRunnerCorrelation(frame.Correlation),
+			operationID:      frame.OperationId,
+			streamID:         frame.StreamId,
+			nextIncoming:     2,
+			nextOutgoing:     1,
+			credit:           newRunnerCreditWindow(),
+			controls:         make(chan ExecControl, 256),
+			pty:              frame.GetOpen().AllocatePty,
+			outputLimitBytes: frame.GetOpen().OutputLimitBytes,
 		}
 		if state.pty {
 			state.ptyControls = make(chan PTYControl, 256)
@@ -859,6 +863,17 @@ func (s *RunnerProtocolService) sendRunnerExecBytes(
 		if uint64(size) > credit {
 			size = int(credit)
 		}
+		if uint64(len(state.stdout))+uint64(len(state.stderr))+uint64(size) > state.outputLimitBytes {
+			return fmt.Errorf("SecondBox runner streaming Exec output exceeds the configured limit")
+		}
+		switch channel {
+		case runnerprotocol.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT:
+			state.stdout = append(state.stdout, content[:size]...)
+		case runnerprotocol.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDERR:
+			state.stderr = append(state.stderr, content[:size]...)
+		default:
+			return fmt.Errorf("SecondBox runner streaming Exec output channel is invalid")
+		}
 		frame := &runnerprotocol.ExecFrame{
 			Fence:       cloneRunnerFence(state.fence),
 			OperationId: state.operationID,
@@ -901,11 +916,15 @@ func (s *RunnerProtocolService) sendExecTerminal(
 		StreamId:    state.streamID,
 		Sequence:    state.nextOutgoing,
 		Correlation: cloneRunnerCorrelation(state.correlation),
-		Payload:     &runnerprotocol.ExecFrame_Terminal{Terminal: proto.Clone(terminal).(*runnerprotocol.ExecTerminal)},
+		Payload: &runnerprotocol.ExecFrame_BufferedResult{BufferedResult: &runnerprotocol.ExecBufferedResult{
+			Stdout: bytes.Clone(state.stdout), Stderr: bytes.Clone(state.stderr),
+			Terminal: proto.Clone(terminal).(*runnerprotocol.ExecTerminal),
+		}},
 	}
 	state.nextOutgoing++
 	state.terminal = true
 	state.terminalFrame = proto.Clone(frame).(*runnerprotocol.ExecFrame)
+	state.stdout, state.stderr = nil, nil
 	s.retainExecTerminalLocked(state.key)
 	s.operationMu.Unlock()
 	if err := s.emitEvidence(

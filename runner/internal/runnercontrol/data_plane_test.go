@@ -76,8 +76,10 @@ func TestRunnerDataPlaneExecCreditFenceOrderingAndCancellation(t *testing.T) {
 	}
 	waitRunnerMessages(t, stream, 4)
 	messages := stream.messages()
-	if messages[len(messages)-1].GetExec().GetTerminal().GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED {
-		t.Fatalf("Exec terminal = %#v", messages[len(messages)-1].GetExec().GetTerminal())
+	completion := messages[len(messages)-1].GetExec().GetBufferedResult()
+	if completion.GetTerminal().GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED ||
+		string(completion.Stdout) != "stdout" || string(completion.Stderr) != "err" {
+		t.Fatalf("Exec completion = %#v", completion)
 	}
 
 	if err := service.handleExecFrame(t.Context(), stream, relayExecCredit(fence, "exec-1", "exec-stream-1", 3, 64), enabled, asyncErrors); err != nil {
@@ -94,7 +96,7 @@ func TestRunnerDataPlaneExecCreditFenceOrderingAndCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitRunnerMessages(t, stream, beforeStale+1)
-	if got := stream.messages()[beforeStale].GetExec().GetTerminal().GetKind(); got != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_FENCED {
+	if got := stream.messages()[beforeStale].GetExec().GetBufferedResult().GetTerminal().GetKind(); got != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_FENCED {
 		t.Fatalf("stale Exec terminal = %v", got)
 	}
 
@@ -111,7 +113,7 @@ func TestRunnerDataPlaneExecCreditFenceOrderingAndCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitRunnerMessages(t, stream, beforeCancel+1)
-	if got := stream.messages()[beforeCancel].GetExec().GetTerminal().GetKind(); got != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED {
+	if got := stream.messages()[beforeCancel].GetExec().GetBufferedResult().GetTerminal().GetKind(); got != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED {
 		t.Fatalf("cancelled Exec terminal = %v", got)
 	}
 
@@ -132,8 +134,10 @@ func TestRunnerDataPlaneExecCreditFenceOrderingAndCancellation(t *testing.T) {
 	if string(exhausted[0].GetExec().GetOutput().GetData()) != "bounded-partial" {
 		t.Fatalf("output-exhausted partial output = %#v", exhausted[0].GetExec())
 	}
-	if exhausted[1].GetExec().GetTerminal().GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_OUTPUT_EXHAUSTED {
-		t.Fatalf("output-exhausted terminal = %#v", exhausted[1].GetExec().GetTerminal())
+	exhaustedCompletion := exhausted[1].GetExec().GetBufferedResult()
+	if exhaustedCompletion.GetTerminal().GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_OUTPUT_EXHAUSTED ||
+		string(exhaustedCompletion.Stdout) != "bounded-partial" {
+		t.Fatalf("output-exhausted completion = %#v", exhaustedCompletion)
 	}
 
 	slowOpen := relayExecOpen(fence, "exec-slow", "exec-slow-stream", "wait-for-cancel")
@@ -627,7 +631,7 @@ func TestRunnerDataPlaneTerminalTombstonesAreBoundedAndReplayDuplicates(t *testi
 		t.Fatalf("terminal duplicate replay: %v", err)
 	}
 	waitRunnerMessages(t, stream, beforeReplay+1)
-	if got := stream.messages()[beforeReplay].GetExec().GetTerminal().GetKind(); got != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_FENCED {
+	if got := stream.messages()[beforeReplay].GetExec().GetBufferedResult().GetTerminal().GetKind(); got != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_FENCED {
 		t.Fatalf("replayed terminal = %v", got)
 	}
 }
@@ -770,7 +774,8 @@ func TestRunnerDataPlaneForwardsLiveExecInputAndBackpressuresOutput(t *testing.T
 	waitRunnerMessages(t, stream, 2)
 	messages := stream.messages()
 	if string(messages[0].GetExec().GetOutput().Data) != "echo:hello" ||
-		messages[1].GetExec().GetTerminal().GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED {
+		messages[1].GetExec().GetBufferedResult().GetTerminal().GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED ||
+		string(messages[1].GetExec().GetBufferedResult().Stdout) != "echo:hello" {
 		t.Fatalf("Runner live output = %#v", messages)
 	}
 }
