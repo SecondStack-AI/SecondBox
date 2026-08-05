@@ -389,11 +389,18 @@ func TestPostgresFenceResultPreservesStableCausalTerminationReasons(t *testing.T
 			).Scan(&reason, &assignmentState); err != nil {
 				t.Fatal(err)
 			}
+			wantAssignmentState := "released"
+			if cause.reason == "runner_lost" {
+				// Without a durable stop effect the release is owned by the
+				// reconciler, so the assignment parks in fenced until
+				// AdvanceFencedGeneration sweeps it.
+				wantAssignmentState = "fenced"
+			}
 			if reason != cause.reason ||
-				assignmentState != "fenced" {
+				assignmentState != wantAssignmentState {
 				t.Fatalf(
-					"reason propagation = %q, assignment %q",
-					reason, assignmentState,
+					"reason propagation = %q, assignment %q, want %q",
+					reason, assignmentState, wantAssignmentState,
 				)
 			}
 			for _, cleanup := range []struct {

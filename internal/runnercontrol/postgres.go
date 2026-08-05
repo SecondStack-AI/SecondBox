@@ -3798,10 +3798,21 @@ func recordFenceEvent(
 			return errors.New("SecondBox runner FenceResult lacks a durable stop effect")
 		}
 	}
+	// With stop authority the Assignment moves straight to released: this
+	// transaction records the release proof and queues the local generation
+	// advance, and the reconciler could never sweep the row later — fenced
+	// rows are only claimable with a failure class, and finish_stop advances
+	// the Sandbox generation past the claim predicate's join. Without stop
+	// authority the row stays fenced so the reconciler releases it through
+	// AdvanceFencedGeneration; its failure class is validated above.
+	nextAssignmentState := "fenced"
+	if hasStopAuthority {
+		nextAssignmentState = "released"
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.assignments
-		SET state='fenced',release_proof_json=$2,revision=revision+1,updated_at=$3
-		WHERE id=$1`, result.Fence.AssignmentId, proofJSON, now,
+		SET state=$4,release_proof_json=$2,revision=revision+1,updated_at=$3
+		WHERE id=$1`, result.Fence.AssignmentId, proofJSON, now, nextAssignmentState,
 	); err != nil {
 		return fmt.Errorf("SecondBox runner successful FenceResult update: %w", err)
 	}

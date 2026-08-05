@@ -1290,12 +1290,18 @@ func readSubjectQuotaUsage(
 	tenantRef string,
 	subjectRef string,
 ) (quotaUsage, error) {
+	// Compute reservations (active instances, CPU, memory) count only states
+	// with a live or pending Instance; a stopped Sandbox holds no compute.
+	// Durable reservations (Sandbox count, Artifacts, Snapshots) persist until
+	// deletion.
 	var usage quotaUsage
 	if err := tx.QueryRow(ctx, `
 		SELECT count(*),
 		       count(*) FILTER (WHERE sandbox.state IN ('starting','ready','draining','stopping')),
-		       COALESCE(sum((revision.spec_json->'resources'->>'cpuMillis')::bigint),0),
-		       COALESCE(sum((revision.spec_json->'resources'->>'memoryBytes')::bigint),0),
+		       COALESCE(sum((revision.spec_json->'resources'->>'cpuMillis')::bigint)
+		         FILTER (WHERE sandbox.state IN ('starting','ready','draining','stopping')),0),
+		       COALESCE(sum((revision.spec_json->'resources'->>'memoryBytes')::bigint)
+		         FILTER (WHERE sandbox.state IN ('starting','ready','draining','stopping')),0),
 		       (SELECT COALESCE(sum(size_bytes),0) FROM secondbox.artifacts
 		        WHERE tenant_ref=$1 AND subject_ref=$2 AND state<>'deleted'),
 		       (SELECT count(*) FROM secondbox.snapshots
