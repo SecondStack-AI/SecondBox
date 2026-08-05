@@ -32,6 +32,17 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		}
 		return value, nil
 	}
+	requiredBool := func(name string) (bool, error) {
+		raw, err := required(name)
+		if err != nil {
+			return false, err
+		}
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return false, fmt.Errorf("SecondBox Firecracker config requires boolean %s", name)
+		}
+		return value, nil
+	}
 	requiredAddresses := func(name string) ([]netip.Addr, error) {
 		raw, err := required(name)
 		if err != nil {
@@ -115,7 +126,15 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	jailerUID, err := requiredInt("SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID")
+	jailerUIDStart, err := requiredInt("SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_START")
+	if err != nil {
+		return nil, err
+	}
+	jailerUIDCount, err := requiredInt("SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_COUNT")
+	if err != nil {
+		return nil, err
+	}
+	jailerUIDAllowBelow1000, err := requiredBool("SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_ALLOW_BELOW_1000")
 	if err != nil {
 		return nil, err
 	}
@@ -248,6 +267,15 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	if jailerUIDCount < maxGlobal {
+		return nil, fmt.Errorf("SecondBox Firecracker config requires SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_COUNT to be at least SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL")
+	}
+	if jailerUIDStart < 1000 && !jailerUIDAllowBelow1000 {
+		return nil, fmt.Errorf("SecondBox Firecracker config requires SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_ALLOW_BELOW_1000=true when SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_START is below 1000")
+	}
+	if uint64(jailerUIDStart)+uint64(jailerUIDCount)-1 > uint64(^uint32(0)) {
+		return nil, fmt.Errorf("SecondBox Firecracker config jailer UID range must fit within unsigned 32-bit user IDs")
+	}
 	maxOperationsGlobal, err := requiredInt(
 		"SECONDBOX_RUNNER_MAX_CONCURRENT_OPERATIONS_GLOBAL",
 	)
@@ -311,7 +339,9 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		FirecrackerPath:                            firecrackerPath,
 		JailerPath:                                 jailerPath,
 		MicroVMJailerChrootBaseDir:                 jailRoot,
-		MicroVMJailerUID:                           jailerUID,
+		MicroVMJailerUIDStart:                      jailerUIDStart,
+		MicroVMJailerUIDCount:                      jailerUIDCount,
+		MicroVMJailerUIDAllowBelow1000:             jailerUIDAllowBelow1000,
 		MicroVMJailerGID:                           jailerGID,
 		MicroVMJailerCgroupVersion:                 cgroupVersion,
 		MicroVMJailerParentCgroup:                  cgroupParent,

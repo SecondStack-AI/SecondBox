@@ -156,7 +156,9 @@ type Runner struct {
 	FirecrackerPath               string `toml:"firecracker_path"`
 	FirecrackerJailerPath         string `toml:"firecracker_jailer_path"`
 	FirecrackerJailRoot           string `toml:"firecracker_jail_root"`
-	FirecrackerJailerUID          *int64 `toml:"firecracker_jailer_uid"`
+	FirecrackerJailerUIDStart     *int64 `toml:"firecracker_jailer_uid_start"`
+	FirecrackerJailerUIDCount     *int64 `toml:"firecracker_jailer_uid_count"`
+	FirecrackerJailerUIDAllowLow  *bool  `toml:"firecracker_jailer_uid_allow_below_1000"`
 	FirecrackerJailerGID          *int64 `toml:"firecracker_jailer_gid"`
 	FirecrackerCgroupVersion      *int64 `toml:"firecracker_cgroup_version"`
 	FirecrackerCgroupParent       string `toml:"firecracker_cgroup_parent"`

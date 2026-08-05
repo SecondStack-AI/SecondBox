@@ -51,11 +51,11 @@ func (m *Manager) networkRequired(opts runtimemanager.StartOpts) bool {
 	return strings.TrimSpace(m.cfg.MicroVMGuestIP) != ""
 }
 
-func (m *Manager) tapOwnerUID() int {
+func (m *Manager) tapOwnerUID(jailerUID int) int {
 	if m.cfg == nil || m.cfg.MicroVMAllowUnjailed {
 		return os.Getuid()
 	}
-	return m.cfg.MicroVMJailerUID
+	return jailerUID
 }
 
 func tapNameForInstance(prefix, instanceID string) string {

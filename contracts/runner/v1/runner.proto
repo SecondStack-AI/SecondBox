@@ -187,6 +187,8 @@ message ProfileRequirements {
   repeated string required_capabilities = 5;
   uint64 maximum_operation_ms = 6;
   uint64 maximum_output_bytes = 7;
+  uint32 vcpu_millis = 8;
+  uint32 process_limit = 9;
 }
 
 message SignedAssetReference {

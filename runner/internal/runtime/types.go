@@ -44,6 +44,7 @@ type StartOpts struct {
 
 type SandboxRuntimePolicy struct {
 	VCPUs             int
+	CPUMillis         int
 	MemoryMiB         int
 	WorkspaceSizeMiB  int
 	ProcessLimit      int

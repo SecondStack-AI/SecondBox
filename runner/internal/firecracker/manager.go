@@ -35,6 +35,7 @@ const (
 	firecrackerSockName = "firecracker.sock"
 	vsockUDSName        = "guest.vsock"
 	configName          = "firecracker.json"
+	jailerUIDLeaseName  = "jailer-uid"
 )
 
 // maxUnixSocketPathLen is the kernel's sockaddr_un.sun_path capacity (including the
@@ -64,6 +65,7 @@ type Manager struct {
 	sweepCancel          context.CancelFunc
 	sweepDone            chan struct{}
 	guestIPs             map[string]string // instanceID -> reserved guest IP
+	jailerUIDs           map[int]string    // jailer UID -> instanceID
 	network              HostNetworkConfigurer
 	networkPolicy        HostNetworkPolicyEnforcer
 	defaultNetworkPolicy *networkpolicy.CompiledPolicy
@@ -147,6 +149,8 @@ type instance struct {
 	// jailedProcess is true when cmd is the runner-owned jailer supervisor.
 	// The supervisor adopts and reaps the jailer's orphaned Firecracker child.
 	jailedProcess bool
+	jailerUID     int
+	adoptedOrphan bool
 }
 
 type firecrackerLaunch struct {
@@ -301,6 +305,7 @@ func New(cfg *config.Config) (*Manager, error) {
 		provisioning:     map[runtimeInstanceKey]chan struct{}{},
 		pendingSpawns:    map[runtimeInstanceKey]int{},
 		guestIPs:         map[string]string{},
+		jailerUIDs:       map[int]string{},
 		network:          IPTapConfigurer{},
 		trustedArtifacts: trustedArtifacts,
 		evidence:         runnerevidence.SlogSink{},
@@ -523,14 +528,26 @@ func (m *Manager) sweepStartupOrphans(ctx context.Context) error {
 		}
 		slog.Warn("reclaiming startup orphaned microVM", "instance", instanceID, "running", running, "runDir", runDir)
 		if running {
+			jailerUID, uidErr := m.readJailerUIDLease(runDir)
+			if uidErr != nil {
+				joined = errors.Join(joined, fmt.Errorf("read startup orphan %s jailer UID lease: %w", instanceID, uidErr))
+				continue
+			}
+			if uidErr := m.reserveJailerUID(instanceID, jailerUID); uidErr != nil {
+				joined = errors.Join(joined, fmt.Errorf("reserve startup orphan %s jailer UID: %w", instanceID, uidErr))
+				continue
+			}
 			inst := &instance{
 				id:            instanceID,
 				dir:           runDir,
 				jailRoot:      jailRoot,
 				tapName:       tapNameForInstance(m.cfg.MicroVMTapPrefix, instanceID),
 				jailedProcess: true,
+				jailerUID:     jailerUID,
+				adoptedOrphan: true,
 				done:          make(chan struct{}),
 			}
+			go m.watchAdoptedInstance(inst)
 			orphanCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			err := m.stopInstance(orphanCtx, inst, true)
 			cancel()
@@ -730,6 +747,15 @@ func (m *Manager) cleanupUntrackedSandboxOrphans(ctx context.Context, sandboxID 
 	var cleanupErr error
 	for _, id := range m.untrackedInstanceIDs(orphanIDs) {
 		slog.Warn("reclaiming orphaned firecracker process not tracked by any runtime instance", "sandbox", sandboxID, "instance", id)
+		jailerUID, err := m.readJailerUIDLease(filepath.Join(m.cfg.MicroVMRunDir, id))
+		if err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("read orphaned Firecracker process %q jailer UID lease: %w", id, err))
+			continue
+		}
+		if err := m.reserveJailerUID(id, jailerUID); err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("reserve orphaned Firecracker process %q jailer UID: %w", id, err))
+			continue
+		}
 		inst := &instance{
 			id:            id,
 			sandboxID:     sandboxID,
@@ -737,13 +763,36 @@ func (m *Manager) cleanupUntrackedSandboxOrphans(ctx context.Context, sandboxID 
 			jailRoot:      m.jailerRoot(id),
 			tapName:       tapNameForInstance(m.cfg.MicroVMTapPrefix, id),
 			jailedProcess: true,
+			jailerUID:     jailerUID,
+			adoptedOrphan: true,
 			done:          make(chan struct{}),
 		}
+		go m.watchAdoptedInstance(inst)
 		if err := m.stopInstance(ctx, inst, true); err != nil {
 			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("stop orphaned Firecracker process %q: %w", id, err))
 		}
 	}
 	return cleanupErr
+}
+
+// watchAdoptedInstance completes the normal cleanup path for a Firecracker
+// process whose original Runner supervisor was lost. It cannot wait(2) a
+// non-child process, so it polls the same exact instance-ID process evidence
+// used by orphan discovery and finishes only after no matching process remains.
+func (m *Manager) watchAdoptedInstance(inst *instance) {
+	if inst == nil {
+		return
+	}
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for range ticker.C {
+		running, err := firecrackerProcessRunningFunc(inst.id)
+		if err != nil || running {
+			continue
+		}
+		m.finishInstance(inst)
+		return
+	}
 }
 
 // untrackedInstanceIDs returns the subset of candidateIDs the manager is not
@@ -796,6 +845,18 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 	}
 	timer := newColdStartStageTimer("sandbox", sandboxID, "compartment", compartmentID, "instance", id)
 	timer.mark("instance_id_allocated")
+	jailerUID, err := m.allocateJailerUID(id)
+	if err != nil {
+		return "", err
+	}
+	releaseJailerUID := true
+	defer func() {
+		if releaseJailerUID {
+			if releaseErr := m.releaseJailerUID(id, jailerUID); releaseErr != nil {
+				m.recordCleanupFailure(releaseErr)
+			}
+		}
+	}()
 	guestIP, err := m.reserveGuestIP(id)
 	if err != nil {
 		return "", fmt.Errorf("reserve guest IP: %w", err)
@@ -820,7 +881,7 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 			GuestIP:    guestIP,
 			BridgeName: m.cfg.MicroVMBridgeName,
 			BridgeCIDR: m.cfg.MicroVMBridgeCIDR,
-			OwnerUID:   m.tapOwnerUID(),
+			OwnerUID:   m.tapOwnerUID(jailerUID),
 		}); err != nil {
 			return "", fmt.Errorf("configure microVM tap: %w", err)
 		}
@@ -876,6 +937,9 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 	dir := filepath.Join(m.cfg.MicroVMRunDir, id)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", m.joinInstanceNetworkCleanup(ctx, id, tapName, fmt.Errorf("create instance dir: %w", err))
+	}
+	if err := m.writeJailerUIDLease(dir, jailerUID); err != nil {
+		return "", m.joinInstanceNetworkCleanup(ctx, id, tapName, fmt.Errorf("persist jailer UID lease: %w", err))
 	}
 	// The per-instance dir holds disposable launch state (the rootfs copy, the
 	// firecracker config, the identity file). Reclaim it on any early failure;
@@ -959,7 +1023,7 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 	}
 	timer.mark("launch_config_ready")
 
-	launch, launchErr := m.prepareLaunchWithPolicy(setupCtx, id, dir, launchImage.KernelPath, launchImage.RootfsPath, workspacePath, sharedImagePath, tapName, guestIP, opts.SandboxPolicy)
+	launch, launchErr := m.prepareLaunchWithPolicy(setupCtx, id, dir, launchImage.KernelPath, launchImage.RootfsPath, workspacePath, sharedImagePath, tapName, guestIP, jailerUID, opts.SandboxPolicy)
 	if launchErr != nil {
 		return "", m.joinInstanceNetworkCleanup(setupCtx, id, tapName, launchErr)
 	}
@@ -980,7 +1044,7 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 		return "", m.joinInstanceNetworkCleanup(setupCtx, id, tapName, fmt.Errorf("write firecracker config: %w", writeErr))
 	}
 	if launch.jailRoot != "" {
-		if chownErr := chownIfDifferent(launch.configPath, m.cfg.MicroVMJailerUID, m.cfg.MicroVMJailerGID); chownErr != nil {
+		if chownErr := chownIfDifferent(launch.configPath, jailerUID, m.cfg.MicroVMJailerGID); chownErr != nil {
 			m.cleanupLaunch(launch)
 			return "", m.joinInstanceNetworkCleanup(setupCtx, id, tapName, fmt.Errorf("chown jailed firecracker config: %w", chownErr))
 		}
@@ -1025,6 +1089,7 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 		startedAt:           time.Now().UTC(),
 		done:                make(chan struct{}),
 		jailedProcess:       jailedProcess,
+		jailerUID:           jailerUID,
 		requestID:           opts.RequestID,
 		operationID:         opts.OperationID,
 		leaseID:             opts.LeaseID,
@@ -1075,6 +1140,7 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 	}
 	timer.mark("microvm_ready")
 	releaseIP = false // ownership transfers to the running instance
+	releaseJailerUID = false
 	cleanupDir = false
 	slog.Info("started firecracker microVM", "sandbox", sandboxID, "compartment", compartmentID, "instance", id, "elapsedMs", timer.elapsedMs(), "log", logPath)
 	return id, nil
@@ -1156,6 +1222,10 @@ func (m *Manager) finishInstance(inst *instance) {
 			m.recordCleanupFailure(inst.cleanupErr)
 		} else {
 			m.releaseGuestIP(inst.id)
+			if err := m.releaseJailerUID(inst.id, inst.jailerUID); err != nil {
+				inst.cleanupErr = errors.Join(inst.cleanupErr, err)
+				m.recordCleanupFailure(inst.cleanupErr)
+			}
 		}
 		outcome := "completed"
 		terminalKind := "removed"
@@ -1163,17 +1233,22 @@ func (m *Manager) finishInstance(inst *instance) {
 			outcome = "failed"
 			terminalKind = "cleanup_failed"
 		}
-		if err := m.evidenceSink().Emit(
-			context.Background(),
-			m.instanceEvidenceRecord(
-				inst,
-				runnerevidence.EventTeardownTerminal,
-				outcome,
-				terminalKind,
-			),
-		); err != nil {
-			inst.cleanupErr = errors.Join(inst.cleanupErr, err)
-			m.recordCleanupFailure(inst.cleanupErr)
+		// An adopted orphan has only host process and UID lease evidence; its
+		// assignment correlation was owned by the lost Runner process. Do not
+		// fabricate the mandatory fields of a control-plane teardown record.
+		if !inst.adoptedOrphan {
+			if err := m.evidenceSink().Emit(
+				context.Background(),
+				m.instanceEvidenceRecord(
+					inst,
+					runnerevidence.EventTeardownTerminal,
+					outcome,
+					terminalKind,
+				),
+			); err != nil {
+				inst.cleanupErr = errors.Join(inst.cleanupErr, err)
+				m.recordCleanupFailure(inst.cleanupErr)
+			}
 		}
 		close(inst.done)
 	})

@@ -1101,7 +1101,8 @@ func TestSmokeJailedTapGeneratedImage(t *testing.T) {
 		MicroVMWorkspaceSizeMiB:    requiredPositiveEnvInt(t, "SECONDBOX_RUNNER_SANDBOX_MAX_DISK_MIB"),
 		MicroVMAllowUnjailed:       false,
 		MicroVMJailerChrootBaseDir: requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT"),
-		MicroVMJailerUID:           requiredNonNegativeEnvInt(t, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID"),
+		MicroVMJailerUIDStart:      requiredPositiveEnvInt(t, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_START"),
+		MicroVMJailerUIDCount:      requiredPositiveEnvInt(t, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_COUNT"),
 		MicroVMJailerGID:           requiredNonNegativeEnvInt(t, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_GID"),
 		MicroVMJailerCgroupVersion: requiredPositiveEnvInt(t, "SECONDBOX_RUNNER_FIRECRACKER_CGROUP_VERSION"),
 		MicroVMJailerParentCgroup:  requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_CGROUP_PARENT"),
@@ -1238,6 +1239,15 @@ func smokeGuestProtocolOpts(t *testing.T, cfg *config.Config, opts runtimemanage
 	opts.ImageManifestDigest = "sha256:" + digest
 	opts.ToolchainManifestDigest = opts.ImageManifestDigest
 	opts.MandatoryGuestFeatures = []string{"streaming_exec", "descriptor_pinned_filesystem"}
+	if opts.SandboxPolicy == nil {
+		opts.SandboxPolicy = &runtimemanager.SandboxRuntimePolicy{
+			VCPUs:            cfg.MicroVMVCPUs,
+			CPUMillis:        cfg.MicroVMVCPUs * 1000,
+			MemoryMiB:        cfg.MicroVMMemoryMiB,
+			WorkspaceSizeMiB: cfg.MicroVMWorkspaceSizeMiB,
+			ProcessLimit:     128,
+		}
+	}
 	return opts
 }
 
@@ -1300,7 +1310,8 @@ func latestSmokeLog(t *testing.T, workDir string) string {
 }
 
 func smokeJailerConfig(cfg *config.Config) string {
-	return "jailer config: uid=" + strconv.Itoa(cfg.MicroVMJailerUID) +
+	return "jailer config: uid_start=" + strconv.Itoa(cfg.MicroVMJailerUIDStart) +
+		" uid_count=" + strconv.Itoa(cfg.MicroVMJailerUIDCount) +
 		" gid=" + strconv.Itoa(cfg.MicroVMJailerGID) +
 		" cgroup_version=" + strconv.Itoa(cfg.MicroVMJailerCgroupVersion) +
 		" parent_cgroup=" + cfg.MicroVMJailerParentCgroup +

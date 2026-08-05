@@ -405,11 +405,7 @@ func checkUnixSocketPath(label, path, setting string) error {
 	return nil
 }
 
-func (m *Manager) prepareLaunch(ctx context.Context, instanceID, dir, kernelPath, rootfsPath, workspacePath, sharedImagePath, tapName, guestIP string) (firecrackerLaunch, error) {
-	return m.prepareLaunchWithPolicy(ctx, instanceID, dir, kernelPath, rootfsPath, workspacePath, sharedImagePath, tapName, guestIP, nil)
-}
-
-func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, kernelPath, rootfsPath, workspacePath, sharedImagePath, tapName, guestIP string, policy *runtimemanager.SandboxRuntimePolicy) (firecrackerLaunch, error) {
+func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, kernelPath, rootfsPath, workspacePath, sharedImagePath, tapName, guestIP string, jailerUID int, policy *runtimemanager.SandboxRuntimePolicy) (firecrackerLaunch, error) {
 	if m.cfg.MicroVMAllowUnjailed {
 		socket := filepath.Join(dir, firecrackerSockName)
 		vsockUDS := filepath.Join(dir, vsockUDSName)
@@ -442,24 +438,32 @@ func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, 
 	if err := os.MkdirAll(jailRoot, 0o700); err != nil {
 		return firecrackerLaunch{}, fmt.Errorf("create jail root: %w", err)
 	}
+	if jailerUID < 1 {
+		_ = os.RemoveAll(jailRoot)
+		return firecrackerLaunch{}, fmt.Errorf("per-instance jailer UID is required")
+	}
+	if policy == nil || policy.CPUMillis < 1 || policy.ProcessLimit < 1 || policy.VCPUs < 1 || policy.MemoryMiB < 1 {
+		_ = os.RemoveAll(jailRoot)
+		return firecrackerLaunch{}, fmt.Errorf("profile CPU, memory, and process limits are required for jailed launch")
+	}
 	stagedRootfs := filepath.Join(jailRoot, rootfsName)
 	stagedWorkspace := filepath.Join(jailRoot, workspaceName)
-	if err := stageLinkedJailFile(stagedRootfs, rootfsPath, m.cfg.MicroVMJailerUID, m.cfg.MicroVMJailerGID); err != nil {
+	if err := stageLinkedJailFile(stagedRootfs, rootfsPath, jailerUID, m.cfg.MicroVMJailerGID); err != nil {
 		_ = os.RemoveAll(jailRoot)
 		return firecrackerLaunch{}, fmt.Errorf("stage rootfs in jail: %w", err)
 	}
-	if err := stageWorkspaceJailFile(stagedWorkspace, workspacePath, m.cfg.MicroVMJailerUID, m.cfg.MicroVMJailerGID); err != nil {
+	if err := stageWorkspaceJailFile(stagedWorkspace, workspacePath, jailerUID, m.cfg.MicroVMJailerGID); err != nil {
 		_ = os.RemoveAll(jailRoot)
 		return firecrackerLaunch{}, fmt.Errorf("stage workspace in jail: %w", err)
 	}
-	if err := stageCopiedJailFile(filepath.Join(jailRoot, kernelName), kernelPath, 0o600, m.cfg.MicroVMJailerUID, m.cfg.MicroVMJailerGID); err != nil {
+	if err := stageCopiedJailFile(filepath.Join(jailRoot, kernelName), kernelPath, 0o600, jailerUID, m.cfg.MicroVMJailerGID); err != nil {
 		_ = os.RemoveAll(jailRoot)
 		return firecrackerLaunch{}, fmt.Errorf("stage kernel in jail: %w", err)
 	}
 	drivesSharedPath := ""
 	if strings.TrimSpace(sharedImagePath) != "" {
 		drivesSharedPath = sharedImageName
-		if err := stageCopiedJailFile(filepath.Join(jailRoot, sharedImageName), sharedImagePath, 0o600, m.cfg.MicroVMJailerUID, m.cfg.MicroVMJailerGID); err != nil {
+		if err := stageCopiedJailFile(filepath.Join(jailRoot, sharedImageName), sharedImagePath, 0o600, jailerUID, m.cfg.MicroVMJailerGID); err != nil {
 			_ = os.RemoveAll(jailRoot)
 			return firecrackerLaunch{}, fmt.Errorf("stage shared image in jail: %w", err)
 		}
@@ -469,11 +473,7 @@ func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, 
 	fcConfig := buildFirecrackerConfigWithPolicy(m.cfg, kernelName, rootfsName, workspaceName, drivesSharedPath, vsockUDSName, tapName, guestIP, policy)
 	fcConfig.BootSource.KernelImagePath = kernelName
 
-	memoryMiB := m.cfg.MicroVMMemoryMiB
-	if policy != nil {
-		memoryMiB = policy.MemoryMiB
-	}
-	args := m.jailerArgsWithMemory(instanceID, memoryMiB)
+	args := m.jailerArgsWithPolicy(instanceID, jailerUID, policy)
 	args = append(args, "--", "--api-sock", firecrackerSockName, "--config-file", configName)
 	supervisorEnvironment, err := jailersupervisor.CommandEnvironment(m.cfg.JailerPath, args)
 	if err != nil {
@@ -491,11 +491,11 @@ func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, 
 	}, nil
 }
 
-func (m *Manager) jailerArgsWithMemory(instanceID string, memoryMiB int) []string {
+func (m *Manager) jailerArgsWithPolicy(instanceID string, jailerUID int, policy *runtimemanager.SandboxRuntimePolicy) []string {
 	args := []string{
 		"--id", instanceID,
 		"--exec-file", m.cfg.FirecrackerPath,
-		"--uid", strconv.Itoa(m.cfg.MicroVMJailerUID),
+		"--uid", strconv.Itoa(jailerUID),
 		"--gid", strconv.Itoa(m.cfg.MicroVMJailerGID),
 		"--chroot-base-dir", m.cfg.MicroVMJailerChrootBaseDir,
 		"--new-pid-ns",
@@ -506,9 +506,42 @@ func (m *Manager) jailerArgsWithMemory(instanceID string, memoryMiB int) []strin
 		if parent := strings.TrimSpace(m.cfg.MicroVMJailerParentCgroup); parent != "" {
 			args = append(args, "--parent-cgroup", parent)
 		}
-		args = append(args, "--cgroup", jailerMemoryCgroup(m.cfg.MicroVMJailerCgroupVersion, memoryMiB))
+		for _, cgroup := range jailerResourceCgroups(m.cfg.MicroVMJailerCgroupVersion, policy) {
+			args = append(args, "--cgroup", cgroup)
+		}
 	}
 	return args
+}
+
+func jailerResourceCgroups(version int, policy *runtimemanager.SandboxRuntimePolicy) []string {
+	if policy == nil {
+		return nil
+	}
+	cgroups := []string{jailerMemoryCgroup(version, policy.MemoryMiB)}
+	// The host cgroup includes Firecracker's device-emulation and I/O work as
+	// well as guest vCPU execution. Add 10%, with a 100-millis floor, so the
+	// profile's CPU budget remains usable while ancillary VMM work stays bounded.
+	cpuOverheadMillis := policy.CPUMillis / 10
+	if cpuOverheadMillis < 100 {
+		cpuOverheadMillis = 100
+	}
+	const cpuPeriodMicros = 100_000
+	cpuQuotaMicros := int64(policy.CPUMillis+cpuOverheadMillis) * cpuPeriodMicros / 1000
+	if version == 1 {
+		cgroups = append(cgroups,
+			fmt.Sprintf("cpu.cfs_period_us=%d", cpuPeriodMicros),
+			fmt.Sprintf("cpu.cfs_quota_us=%d", cpuQuotaMicros),
+		)
+	} else {
+		cgroups = append(cgroups, fmt.Sprintf("cpu.max=%d %d", cpuQuotaMicros, cpuPeriodMicros))
+	}
+	// Guest processes are not host PIDs, but deriving this ceiling from the same
+	// profile limit keeps host thread growth bounded. The fixed allowance covers
+	// jailer/VMM workers and two threads per configured vCPU.
+	const vmmThreadHeadroom = 32
+	pidsMax := policy.ProcessLimit + vmmThreadHeadroom + 2*policy.VCPUs
+	cgroups = append(cgroups, fmt.Sprintf("pids.max=%d", pidsMax))
+	return cgroups
 }
 
 func (m *Manager) jailerRoot(instanceID string) string {

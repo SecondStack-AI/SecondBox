@@ -2862,6 +2862,8 @@ type ProfileRequirements struct {
 	RequiredCapabilities []string               `protobuf:"bytes,5,rep,name=required_capabilities,json=requiredCapabilities,proto3" json:"required_capabilities,omitempty"`
 	MaximumOperationMs   uint64                 `protobuf:"varint,6,opt,name=maximum_operation_ms,json=maximumOperationMs,proto3" json:"maximum_operation_ms,omitempty"`
 	MaximumOutputBytes   uint64                 `protobuf:"varint,7,opt,name=maximum_output_bytes,json=maximumOutputBytes,proto3" json:"maximum_output_bytes,omitempty"`
+	VcpuMillis           uint32                 `protobuf:"varint,8,opt,name=vcpu_millis,json=vcpuMillis,proto3" json:"vcpu_millis,omitempty"`
+	ProcessLimit         uint32                 `protobuf:"varint,9,opt,name=process_limit,json=processLimit,proto3" json:"process_limit,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -2941,6 +2943,20 @@ func (x *ProfileRequirements) GetMaximumOperationMs() uint64 {
 func (x *ProfileRequirements) GetMaximumOutputBytes() uint64 {
 	if x != nil {
 		return x.MaximumOutputBytes
+	}
+	return 0
+}
+
+func (x *ProfileRequirements) GetVcpuMillis() uint32 {
+	if x != nil {
+		return x.VcpuMillis
+	}
+	return 0
+}
+
+func (x *ProfileRequirements) GetProcessLimit() uint32 {
+	if x != nil {
+		return x.ProcessLimit
 	}
 	return 0
 }
@@ -8672,7 +8688,7 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\rfencing_token\x18\x05 \x01(\fR\ffencingToken\"w\n" +
 	"\x13CapacityReservation\x129\n" +
 	"\bcapacity\x18\x01 \x01(\v2\x1d.secondbox.runner.v1.CapacityR\bcapacity\x12%\n" +
-	"\x0ereservation_id\x18\x02 \x01(\tR\rreservationId\"\xb3\x02\n" +
+	"\x0ereservation_id\x18\x02 \x01(\tR\rreservationId\"\xf9\x02\n" +
 	"\x13ProfileRequirements\x12\x1d\n" +
 	"\n" +
 	"vcpu_count\x18\x01 \x01(\rR\tvcpuCount\x12!\n" +
@@ -8682,7 +8698,10 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\farchitecture\x18\x04 \x01(\tR\farchitecture\x123\n" +
 	"\x15required_capabilities\x18\x05 \x03(\tR\x14requiredCapabilities\x120\n" +
 	"\x14maximum_operation_ms\x18\x06 \x01(\x04R\x12maximumOperationMs\x120\n" +
-	"\x14maximum_output_bytes\x18\a \x01(\x04R\x12maximumOutputBytes\"\xa4\x02\n" +
+	"\x14maximum_output_bytes\x18\a \x01(\x04R\x12maximumOutputBytes\x12\x1f\n" +
+	"\vvcpu_millis\x18\b \x01(\rR\n" +
+	"vcpuMillis\x12#\n" +
+	"\rprocess_limit\x18\t \x01(\rR\fprocessLimit\"\xa4\x02\n" +
 	"\x14SignedAssetReference\x12\x1f\n" +
 	"\vartifact_id\x18\x01 \x01(\tR\n" +
 	"artifactId\x12'\n" +

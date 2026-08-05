@@ -223,7 +223,7 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 					},
 					ProfileRevisionId: profileRevisionID,
 					Requirements: &runnerv1.ProfileRequirements{
-						VcpuCount: 2, MemoryBytes: 4 << 30, DiskBytes: 20 << 30,
+						VcpuCount: 2, VcpuMillis: 2000, ProcessLimit: 128, MemoryBytes: 4 << 30, DiskBytes: 20 << 30,
 						Architecture: "amd64", RequiredCapabilities: []string{"local-workspace", "network-policy"},
 						MaximumOperationMs: 60_000, MaximumOutputBytes: 1 << 20,
 					},

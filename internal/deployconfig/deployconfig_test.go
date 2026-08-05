@@ -852,6 +852,30 @@ func TestSameHostRunnerSelectsOnlyItsOverlayAndRejectsAmbiguousIdentity(t *testi
 }
 
 func TestSameHostRunnerPreflightRejectsUnsafeHostState(t *testing.T) {
+	t.Run("jailer UID is assigned to a host account", func(t *testing.T) {
+		if os.Getuid() == 0 {
+			t.Skip("root UID is rejected by manifest range validation before host-account preflight")
+		}
+		manifestPath := initializedDevelopment(t)
+		provisionSameHostTestRunner(t, manifestPath, "runner-local")
+		manifest, err := ReadManifest(manifestPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		manifest.Runners[0].FirecrackerJailerUIDStart = integer(int64(os.Getuid()))
+		manifest.Runners[0].FirecrackerJailerUIDAllowLow = boolean(os.Getuid() < 1000)
+		encoded, err := encodeManifest(manifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Resolve(manifestPath); err == nil || !strings.Contains(err.Error(), "already assigned to host account") {
+			t.Fatalf("assigned jailer UID error = %v", err)
+		}
+	})
+
 	t.Run("missing bind source", func(t *testing.T) {
 		manifestPath := initializedDevelopment(t)
 		runner := provisionSameHostTestRunner(t, manifestPath, "runner-local")
@@ -909,7 +933,7 @@ func TestSameHostRunnerPreflightRejectsUnsafeHostState(t *testing.T) {
 }
 
 func validTestRunner(id, placement string) Runner {
-	return Runner{RunnerID: id, Placement: placement, PoolID: "secondbox-local", SoftwareVersion: "development", ControlPlaneAddress: "control-plane.example:9443", ControlPlaneServerName: "control-plane", IdentityDirectory: "/etc/secondbox/identity", IdentityHostDirectory: "/var/lib/secondbox/identity", ArtifactHostDirectory: "/var/lib/secondbox/artifacts", StateHostDirectory: "/var/lib/secondbox/state", WorkspaceHostDirectory: "/var/lib/secondbox/workspace", LogPath: "/var/log/secondbox-runner.jsonl", LogDirectory: "/var/lib/secondbox/log", FirecrackerPath: "/usr/local/bin/firecracker", FirecrackerJailerPath: "/usr/local/bin/jailer", FirecrackerJailRoot: "/var/lib/secondbox/jailer", FirecrackerJailerUID: integer(10001), FirecrackerJailerGID: integer(10001), FirecrackerCgroupVersion: integer(2), FirecrackerCgroupParent: "secondbox-runner", FirecrackerKernelPath: "/opt/secondbox/kernel", FirecrackerRootFSPath: "/opt/secondbox/rootfs.ext4", FirecrackerSharedImagePath: "/opt/secondbox/shared.img", FirecrackerKernelArgs: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw quiet loglevel=1 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd init=/init", FirecrackerCPUTemplate: "T2", FirecrackerRunDirectory: "/var/lib/secondbox/run", FirecrackerLogDirectory: "/var/lib/secondbox/firecracker-log", FirecrackerAllowUnjailed: boolean(false), ArtifactPublicKey: "/opt/secondbox/manifest-public.pem", ArtifactPublicKeySHA256: strings.Repeat("a", 64), WorkspaceRoot: "/var/lib/secondbox/workspaces", StorageRecoveryPercent: integer(70), StorageWarningPercent: integer(80), StorageAdmissionDenyPercent: integer(90), SandboxMaxVCPUs: integer(2), SandboxMaxMemoryMiB: integer(2048), SandboxMaxDiskMiB: integer(10240), SandboxMemoryBudgetMiB: integer(8192), SandboxGuestIP: "172.30.0.2", SandboxBridgeName: "sbx0", SandboxBridgeCIDR: "172.30.0.1/24", SandboxGuestCIDR: "172.30.0.0/24", SandboxTapPrefix: "sbx", SandboxNetworkStateDir: "/var/lib/secondbox/network", SandboxDeleteBridge: boolean(true), NetworkPolicyNFTPath: "/usr/sbin/nft", NetworkPolicyMaxDNSPins: integer(256), NetworkPolicyMaxDNSTTL: "5m", NetworkPolicyRunnerAddresses: "172.30.0.1", NetworkPolicyManagementCIDRs: "172.30.0.0/24", NetworkPolicyRunnerGateways: "agent-gateway.secondbox.internal=172.30.0.1,platform-gateway.secondbox.internal=172.30.0.1", NetworkPolicyDNSUpstream: "1.1.1.1:53", MaxConcurrentPerSandbox: integer(4), MaxConcurrentGlobal: integer(16), MaxConcurrentStarts: integer(8), MaxConcurrentWorkspaceCreates: integer(8), MaxConcurrentOperationsGlobal: integer(64), FileTransferMaxBytes: integer(1073741824), GuestControlVSockPort: integer(1024), GuestProtocolVSockPort: integer(1025), GuestHeartbeatInterval: "5s", DataPlaneListenAddress: "127.0.0.1:7443", DataPlaneAdvertisedAddress: "127.0.0.1:7443"}
+	return Runner{RunnerID: id, Placement: placement, PoolID: "secondbox-local", SoftwareVersion: "development", ControlPlaneAddress: "control-plane.example:9443", ControlPlaneServerName: "control-plane", IdentityDirectory: "/etc/secondbox/identity", IdentityHostDirectory: "/var/lib/secondbox/identity", ArtifactHostDirectory: "/var/lib/secondbox/artifacts", StateHostDirectory: "/var/lib/secondbox/state", WorkspaceHostDirectory: "/var/lib/secondbox/workspace", LogPath: "/var/log/secondbox-runner.jsonl", LogDirectory: "/var/lib/secondbox/log", FirecrackerPath: "/usr/local/bin/firecracker", FirecrackerJailerPath: "/usr/local/bin/jailer", FirecrackerJailRoot: "/var/lib/secondbox/jailer", FirecrackerJailerUIDStart: integer(10001), FirecrackerJailerUIDCount: integer(16), FirecrackerJailerUIDAllowLow: boolean(false), FirecrackerJailerGID: integer(10001), FirecrackerCgroupVersion: integer(2), FirecrackerCgroupParent: "secondbox-runner", FirecrackerKernelPath: "/opt/secondbox/kernel", FirecrackerRootFSPath: "/opt/secondbox/rootfs.ext4", FirecrackerSharedImagePath: "/opt/secondbox/shared.img", FirecrackerKernelArgs: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw quiet loglevel=1 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd init=/init", FirecrackerCPUTemplate: "T2", FirecrackerRunDirectory: "/var/lib/secondbox/run", FirecrackerLogDirectory: "/var/lib/secondbox/firecracker-log", FirecrackerAllowUnjailed: boolean(false), ArtifactPublicKey: "/opt/secondbox/manifest-public.pem", ArtifactPublicKeySHA256: strings.Repeat("a", 64), WorkspaceRoot: "/var/lib/secondbox/workspaces", StorageRecoveryPercent: integer(70), StorageWarningPercent: integer(80), StorageAdmissionDenyPercent: integer(90), SandboxMaxVCPUs: integer(2), SandboxMaxMemoryMiB: integer(2048), SandboxMaxDiskMiB: integer(10240), SandboxMemoryBudgetMiB: integer(8192), SandboxGuestIP: "172.30.0.2", SandboxBridgeName: "sbx0", SandboxBridgeCIDR: "172.30.0.1/24", SandboxGuestCIDR: "172.30.0.0/24", SandboxTapPrefix: "sbx", SandboxNetworkStateDir: "/var/lib/secondbox/network", SandboxDeleteBridge: boolean(true), NetworkPolicyNFTPath: "/usr/sbin/nft", NetworkPolicyMaxDNSPins: integer(256), NetworkPolicyMaxDNSTTL: "5m", NetworkPolicyRunnerAddresses: "172.30.0.1", NetworkPolicyManagementCIDRs: "172.30.0.0/24", NetworkPolicyRunnerGateways: "agent-gateway.secondbox.internal=172.30.0.1,platform-gateway.secondbox.internal=172.30.0.1", NetworkPolicyDNSUpstream: "1.1.1.1:53", MaxConcurrentPerSandbox: integer(4), MaxConcurrentGlobal: integer(16), MaxConcurrentStarts: integer(8), MaxConcurrentWorkspaceCreates: integer(8), MaxConcurrentOperationsGlobal: integer(64), FileTransferMaxBytes: integer(1073741824), GuestControlVSockPort: integer(1024), GuestProtocolVSockPort: integer(1025), GuestHeartbeatInterval: "5s", DataPlaneListenAddress: "127.0.0.1:7443", DataPlaneAdvertisedAddress: "127.0.0.1:7443"}
 }
 
 func validSameHostTestRunner(id string) Runner {
@@ -975,6 +999,16 @@ func TestRunnerValidationMatchesRuntimeInvariants(t *testing.T) {
 			r.StorageRecoveryPercent, r.StorageWarningPercent, r.StorageAdmissionDenyPercent = integer(80), integer(90), integer(100)
 		}},
 		{name: "starts exceed global", want: "max_concurrent_starts", mutate: func(r *Runner) { r.MaxConcurrentStarts, r.MaxConcurrentGlobal = integer(17), integer(16) }},
+		{name: "UID range smaller than capacity", want: "uid_count must be at least max_concurrent_global", mutate: func(r *Runner) { r.FirecrackerJailerUIDCount = integer(15) }},
+		{name: "low UID range unacknowledged", want: "below 1000 requires", mutate: func(r *Runner) { r.FirecrackerJailerUIDStart = integer(999) }},
+		{name: "UID range includes zero", want: "uid_start must be positive", mutate: func(r *Runner) {
+			r.FirecrackerJailerUIDStart = integer(0)
+			r.FirecrackerJailerUIDAllowLow = boolean(true)
+		}},
+		{name: "UID range overflows uid_t", want: "unsigned 32-bit", mutate: func(r *Runner) {
+			r.FirecrackerJailerUIDStart = integer(4294967290)
+			r.FirecrackerJailerUIDCount = integer(16)
+		}},
 		{name: "duplicate vsock port", want: "vsock ports", mutate: func(r *Runner) { r.GuestProtocolVSockPort = r.GuestControlVSockPort }},
 		{name: "oversized vsock port", want: "vsock ports", mutate: func(r *Runner) { r.GuestProtocolVSockPort = integer(65536) }},
 		{name: "unjailed", want: "must be false", mutate: func(r *Runner) { r.FirecrackerAllowUnjailed = boolean(true) }},
@@ -1060,8 +1094,8 @@ func TestLegacyMigrationIsOneShotStrictAndPreservesTheSource(t *testing.T) {
 	if _, err := MigrateLegacyEnvironment(legacyPath, target); err == nil {
 		t.Fatal("migration replaced an existing target")
 	}
-	if len(legacyNames) != 139 {
-		t.Fatalf("legacy mapping count = %d, want 139", len(legacyNames))
+	if len(legacyNames) != 141 {
+		t.Fatalf("legacy mapping count = %d, want 141", len(legacyNames))
 	}
 	for name, extra := range map[string]string{"unknown": "SECONDBOX_UNKNOWN=value\n", "duplicate": "SECONDBOX_DEPLOYMENT_MODE=development\n", "placeholder": ""} {
 		t.Run(name, func(t *testing.T) {

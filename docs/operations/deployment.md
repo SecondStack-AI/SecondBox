@@ -189,8 +189,12 @@ firecracker_path = ''
 firecracker_jailer_path = ''
 # Firecracker jail root; absolute and within /var/lib/secondbox-runner for same-host placement.
 firecracker_jail_root = ''
-# Jailer user ID; must be positive.
-firecracker_jailer_uid = 0
+# First per-Instance jailer user ID; must be at least 1000 unless the explicit lower-bound acknowledgement is true, and the range must not include UID 0.
+firecracker_jailer_uid_start = 0
+# Number of distinct jailer user IDs; positive and at least max_concurrent_global.
+firecracker_jailer_uid_count = 0
+# Explicit acknowledgement for a jailer UID range starting below 1000; required, so replace this string with a Boolean.
+firecracker_jailer_uid_allow_below_1000 = '<replace-with-boolean>'
 # Jailer group ID; must be positive.
 firecracker_jailer_gid = 0
 # Host cgroup version used by the jailer; must be positive.

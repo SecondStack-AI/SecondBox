@@ -5,13 +5,26 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 )
 
 func validateSameHostRunnerHost(runner Runner, controlPlaneCAPath string) error {
+	for uid := *runner.FirecrackerJailerUIDStart; uid < *runner.FirecrackerJailerUIDStart+*runner.FirecrackerJailerUIDCount; uid++ {
+		account, err := user.LookupId(strconv.FormatInt(uid, 10))
+		if err == nil {
+			return fmt.Errorf("firecracker jailer UID %d is already assigned to host account %q", uid, account.Username)
+		}
+		var unknown user.UnknownUserIdError
+		if !errors.As(err, &unknown) {
+			return fmt.Errorf("inspect host account assignment for firecracker jailer UID %d: %w", uid, err)
+		}
+	}
 	for name, path := range map[string]string{
 		"identity_host_directory":  runner.IdentityHostDirectory,
 		"artifact_host_directory":  runner.ArtifactHostDirectory,

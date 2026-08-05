@@ -734,12 +734,12 @@ func validateRunner(prefix string, r Runner) error {
 			}
 		}
 	}
-	for name, value := range map[string]*int64{"firecracker_jailer_uid": r.FirecrackerJailerUID, "firecracker_jailer_gid": r.FirecrackerJailerGID, "firecracker_cgroup_version": r.FirecrackerCgroupVersion, "storage_pressure_recovery_percent": r.StorageRecoveryPercent, "storage_pressure_warning_percent": r.StorageWarningPercent, "storage_pressure_admission_deny_percent": r.StorageAdmissionDenyPercent, "sandbox_max_vcpus": r.SandboxMaxVCPUs, "sandbox_max_memory_mib": r.SandboxMaxMemoryMiB, "sandbox_max_disk_mib": r.SandboxMaxDiskMiB, "sandbox_memory_budget_mib": r.SandboxMemoryBudgetMiB, "network_policy_max_dns_pins": r.NetworkPolicyMaxDNSPins, "max_concurrent_per_sandbox": r.MaxConcurrentPerSandbox, "max_concurrent_global": r.MaxConcurrentGlobal, "max_concurrent_starts": r.MaxConcurrentStarts, "max_concurrent_workspace_creates": r.MaxConcurrentWorkspaceCreates, "max_concurrent_operations_global": r.MaxConcurrentOperationsGlobal, "file_transfer_max_bytes": r.FileTransferMaxBytes, "guest_control_vsock_port": r.GuestControlVSockPort, "guest_protocol_vsock_port": r.GuestProtocolVSockPort} {
+	for name, value := range map[string]*int64{"firecracker_jailer_uid_start": r.FirecrackerJailerUIDStart, "firecracker_jailer_uid_count": r.FirecrackerJailerUIDCount, "firecracker_jailer_gid": r.FirecrackerJailerGID, "firecracker_cgroup_version": r.FirecrackerCgroupVersion, "storage_pressure_recovery_percent": r.StorageRecoveryPercent, "storage_pressure_warning_percent": r.StorageWarningPercent, "storage_pressure_admission_deny_percent": r.StorageAdmissionDenyPercent, "sandbox_max_vcpus": r.SandboxMaxVCPUs, "sandbox_max_memory_mib": r.SandboxMaxMemoryMiB, "sandbox_max_disk_mib": r.SandboxMaxDiskMiB, "sandbox_memory_budget_mib": r.SandboxMemoryBudgetMiB, "network_policy_max_dns_pins": r.NetworkPolicyMaxDNSPins, "max_concurrent_per_sandbox": r.MaxConcurrentPerSandbox, "max_concurrent_global": r.MaxConcurrentGlobal, "max_concurrent_starts": r.MaxConcurrentStarts, "max_concurrent_workspace_creates": r.MaxConcurrentWorkspaceCreates, "max_concurrent_operations_global": r.MaxConcurrentOperationsGlobal, "file_transfer_max_bytes": r.FileTransferMaxBytes, "guest_control_vsock_port": r.GuestControlVSockPort, "guest_protocol_vsock_port": r.GuestProtocolVSockPort} {
 		if value == nil || *value < 1 {
 			return manifestError(prefix+"."+name+" must be positive", nil)
 		}
 	}
-	for name, value := range map[string]*bool{"firecracker_allow_unjailed": r.FirecrackerAllowUnjailed, "sandbox_delete_bridge": r.SandboxDeleteBridge} {
+	for name, value := range map[string]*bool{"firecracker_jailer_uid_allow_below_1000": r.FirecrackerJailerUIDAllowLow, "firecracker_allow_unjailed": r.FirecrackerAllowUnjailed, "sandbox_delete_bridge": r.SandboxDeleteBridge} {
 		if value == nil {
 			return manifestError(prefix+"."+name+" is required", nil)
 		}
@@ -752,6 +752,17 @@ func validateRunner(prefix string, r Runner) error {
 	}
 	if r.MaxConcurrentStarts != nil && r.MaxConcurrentGlobal != nil && *r.MaxConcurrentStarts > *r.MaxConcurrentGlobal {
 		return manifestError(prefix+".max_concurrent_starts must not exceed max_concurrent_global", nil)
+	}
+	if r.FirecrackerJailerUIDCount != nil && r.MaxConcurrentGlobal != nil && *r.FirecrackerJailerUIDCount < *r.MaxConcurrentGlobal {
+		return manifestError(prefix+".firecracker_jailer_uid_count must be at least max_concurrent_global", nil)
+	}
+	if r.FirecrackerJailerUIDStart != nil && r.FirecrackerJailerUIDAllowLow != nil &&
+		*r.FirecrackerJailerUIDStart < 1000 && !*r.FirecrackerJailerUIDAllowLow {
+		return manifestError(prefix+".firecracker_jailer_uid_start below 1000 requires firecracker_jailer_uid_allow_below_1000=true", nil)
+	}
+	if r.FirecrackerJailerUIDStart != nil && r.FirecrackerJailerUIDCount != nil &&
+		*r.FirecrackerJailerUIDStart > int64(^uint32(0))-*r.FirecrackerJailerUIDCount+1 {
+		return manifestError(prefix+" jailer UID range must fit within unsigned 32-bit user IDs", nil)
 	}
 	if r.GuestControlVSockPort != nil && r.GuestProtocolVSockPort != nil {
 		if *r.GuestControlVSockPort > 65535 || *r.GuestProtocolVSockPort > 65535 || *r.GuestControlVSockPort == *r.GuestProtocolVSockPort {
@@ -1059,11 +1070,12 @@ func resolveRunnerEnvironment(r Runner, credential string) map[string]string {
 	env["SECONDBOX_RUNNER_CLIENT_CERTIFICATE"] = filepath.Join(r.IdentityDirectory, "runner.crt")
 	env["SECONDBOX_RUNNER_CLIENT_KEY"] = filepath.Join(r.IdentityDirectory, "runner.key")
 	env["SECONDBOX_RUNNER_CONTROL_PLANE_CA"] = filepath.Join(r.IdentityDirectory, "runner-ca.crt")
-	ints := map[string]*int64{"SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID": r.FirecrackerJailerUID, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_GID": r.FirecrackerJailerGID, "SECONDBOX_RUNNER_FIRECRACKER_CGROUP_VERSION": r.FirecrackerCgroupVersion, "SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT": r.StorageRecoveryPercent, "SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT": r.StorageWarningPercent, "SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT": r.StorageAdmissionDenyPercent, "SECONDBOX_RUNNER_SANDBOX_MAX_VCPUS": r.SandboxMaxVCPUs, "SECONDBOX_RUNNER_SANDBOX_MAX_MEMORY_MIB": r.SandboxMaxMemoryMiB, "SECONDBOX_RUNNER_SANDBOX_MAX_DISK_MIB": r.SandboxMaxDiskMiB, "SECONDBOX_RUNNER_SANDBOX_MEMORY_BUDGET_MIB": r.SandboxMemoryBudgetMiB, "SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS": r.NetworkPolicyMaxDNSPins, "SECONDBOX_RUNNER_MAX_CONCURRENT_PER_SANDBOX": r.MaxConcurrentPerSandbox, "SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL": r.MaxConcurrentGlobal, "SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS": r.MaxConcurrentStarts, "SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES": r.MaxConcurrentWorkspaceCreates, "SECONDBOX_RUNNER_MAX_CONCURRENT_OPERATIONS_GLOBAL": r.MaxConcurrentOperationsGlobal, "SECONDBOX_RUNNER_FILE_TRANSFER_MAX_BYTES": r.FileTransferMaxBytes, "SECONDBOX_RUNNER_GUEST_CONTROL_VSOCK_PORT": r.GuestControlVSockPort, "SECONDBOX_RUNNER_GUEST_PROTOCOL_VSOCK_PORT": r.GuestProtocolVSockPort}
+	ints := map[string]*int64{"SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_START": r.FirecrackerJailerUIDStart, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_COUNT": r.FirecrackerJailerUIDCount, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_GID": r.FirecrackerJailerGID, "SECONDBOX_RUNNER_FIRECRACKER_CGROUP_VERSION": r.FirecrackerCgroupVersion, "SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT": r.StorageRecoveryPercent, "SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT": r.StorageWarningPercent, "SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT": r.StorageAdmissionDenyPercent, "SECONDBOX_RUNNER_SANDBOX_MAX_VCPUS": r.SandboxMaxVCPUs, "SECONDBOX_RUNNER_SANDBOX_MAX_MEMORY_MIB": r.SandboxMaxMemoryMiB, "SECONDBOX_RUNNER_SANDBOX_MAX_DISK_MIB": r.SandboxMaxDiskMiB, "SECONDBOX_RUNNER_SANDBOX_MEMORY_BUDGET_MIB": r.SandboxMemoryBudgetMiB, "SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS": r.NetworkPolicyMaxDNSPins, "SECONDBOX_RUNNER_MAX_CONCURRENT_PER_SANDBOX": r.MaxConcurrentPerSandbox, "SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL": r.MaxConcurrentGlobal, "SECONDBOX_RUNNER_MAX_CONCURRENT_STARTS": r.MaxConcurrentStarts, "SECONDBOX_RUNNER_MAX_CONCURRENT_WORKSPACE_CREATES": r.MaxConcurrentWorkspaceCreates, "SECONDBOX_RUNNER_MAX_CONCURRENT_OPERATIONS_GLOBAL": r.MaxConcurrentOperationsGlobal, "SECONDBOX_RUNNER_FILE_TRANSFER_MAX_BYTES": r.FileTransferMaxBytes, "SECONDBOX_RUNNER_GUEST_CONTROL_VSOCK_PORT": r.GuestControlVSockPort, "SECONDBOX_RUNNER_GUEST_PROTOCOL_VSOCK_PORT": r.GuestProtocolVSockPort}
 	for name, value := range ints {
 		env[name] = strconv.FormatInt(*value, 10)
 	}
 	env["SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED"] = strconv.FormatBool(*r.FirecrackerAllowUnjailed)
+	env["SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_ALLOW_BELOW_1000"] = strconv.FormatBool(*r.FirecrackerJailerUIDAllowLow)
 	env["SECONDBOX_RUNNER_SANDBOX_DELETE_BRIDGE"] = strconv.FormatBool(*r.SandboxDeleteBridge)
 	if r.Placement == "same-host" {
 		env["SECONDBOX_RUNNER_IDENTITY_HOST_DIR"] = r.IdentityHostDirectory

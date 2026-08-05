@@ -43,7 +43,8 @@ func TestThreatModelJailedGuestEscapeAndResourceExhaustion(t *testing.T) {
 	memoryMiB := threatRequiredPositiveInt(t, "SECONDBOX_RUNNER_SANDBOX_MAX_MEMORY_MIB")
 	workspaceMiB := threatRequiredPositiveInt(t, "SECONDBOX_RUNNER_SANDBOX_MAX_DISK_MIB")
 	cgroupVersion := threatRequiredPositiveInt(t, "SECONDBOX_RUNNER_FIRECRACKER_CGROUP_VERSION")
-	jailerUID := threatRequiredNonNegativeInt(t, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID")
+	jailerUIDStart := threatRequiredPositiveInt(t, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_START")
+	jailerUIDCount := threatRequiredPositiveInt(t, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_COUNT")
 	jailerGID := threatRequiredNonNegativeInt(t, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_GID")
 	cfg := &config.Config{
 		FirecrackerPath:            requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_PATH"),
@@ -63,7 +64,8 @@ func TestThreatModelJailedGuestEscapeAndResourceExhaustion(t *testing.T) {
 		MicroVMWorkspaceSizeMiB:    workspaceMiB,
 		MicroVMAllowUnjailed:       false,
 		MicroVMJailerChrootBaseDir: requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT"),
-		MicroVMJailerUID:           jailerUID,
+		MicroVMJailerUIDStart:      jailerUIDStart,
+		MicroVMJailerUIDCount:      jailerUIDCount,
 		MicroVMJailerGID:           jailerGID,
 		MicroVMJailerCgroupVersion: cgroupVersion,
 		MicroVMJailerParentCgroup:  requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_CGROUP_PARENT"),
