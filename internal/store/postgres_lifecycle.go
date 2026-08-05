@@ -13,6 +13,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // GetSandboxLifecyclePolicy reads the immutable ProfileRevision pinned by the Sandbox.
@@ -221,48 +222,17 @@ func (store *PostgresControlPlaneStore) ClaimLifecycleBatch(
 		return nil, errors.New("SecondBox lifecycle claim worker, duration, and batch size are required")
 	}
 	now = now.UTC()
+	if err := expireLifecycleLeases(ctx, store.pool, now, batchSize); err != nil {
+		return nil, err
+	}
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox lifecycle claim transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	batch := &pgx.Batch{}
-	batch.Queue(`
-		UPDATE secondbox.leases
-		SET state='expired',revision=revision+1,updated_at=$1
-		WHERE state='active' AND expires_at<=$1`, now)
-	batch.Queue(`
-		UPDATE secondbox.activity_sessions AS session
-		SET state='closed',closed_at=$1,updated_at=$1
-		FROM secondbox.leases AS lease
-		WHERE session.state='active' AND session.lease_id=lease.id
-		  AND lease.state<>'active'`, now)
-	batch.Queue(`
-		SELECT sandbox.id,sandbox.state,sandbox.desired_state,sandbox.revision,
-		       revision.spec_json,sandbox.lifecycle_intent_kind,
-		       COALESCE(sandbox.lifecycle_termination_reason,''),
-		       instance.ready_at,sandbox.last_activity_at,sandbox.drain_started_at,
-		       instance.id IS NOT NULL,
-		       COALESCE(instance.guest_liveness,''),
-		       COALESCE(instance.termination_reason,''),
-		       COALESCE(stop_effect.state,''),
-		       (
-		         SELECT count(*) FROM secondbox.activity_sessions AS session
-		         WHERE session.sandbox_id=sandbox.id AND session.generation=sandbox.generation
-		           AND session.tenant_ref=sandbox.tenant_ref
-		           AND session.subject_ref=sandbox.subject_ref
-		           AND session.state='active'
-		       )
+	rows, err := tx.Query(ctx, `
+		SELECT sandbox.id
 		FROM secondbox.sandboxes AS sandbox
-		JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
-		LEFT JOIN secondbox.instances AS instance ON instance.id=sandbox.current_instance_id
-		LEFT JOIN LATERAL (
-		  SELECT effect.state
-		  FROM secondbox.lifecycle_effects AS effect
-		  WHERE effect.sandbox_id=sandbox.id AND effect.generation=sandbox.generation
-		    AND effect.kind='stop'
-		  ORDER BY effect.created_at DESC,effect.id DESC LIMIT 1
-		) AS stop_effect ON true
 		WHERE sandbox.state<>'deleted' AND sandbox.next_reconcile_at<=$1
 		  AND NOT (
 		    sandbox.state='failed' AND sandbox.lifecycle_failure_class<>''
@@ -279,20 +249,86 @@ func (store *PostgresControlPlaneStore) ClaimLifecycleBatch(
 		ORDER BY sandbox.next_reconcile_at,sandbox.id
 		FOR UPDATE OF sandbox SKIP LOCKED
 		LIMIT $3`, now, workerID, batchSize)
-	results := tx.SendBatch(ctx, batch)
-	var batchErr error
-	if _, resultErr := results.Exec(); resultErr != nil {
-		batchErr = fmt.Errorf("SecondBox lifecycle expired Lease cleanup failed: %w", resultErr)
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox lifecycle claim candidate lookup failed: %w", err)
 	}
-	if _, resultErr := results.Exec(); resultErr != nil && batchErr == nil {
-		batchErr = fmt.Errorf("SecondBox lifecycle inactive Lease session cleanup failed: %w", resultErr)
+	claimedSandboxIDs := make([]string, 0, batchSize)
+	for rows.Next() {
+		var sandboxID string
+		if err := rows.Scan(&sandboxID); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("SecondBox lifecycle claim candidate scan failed: %w", err)
+		}
+		claimedSandboxIDs = append(claimedSandboxIDs, sandboxID)
 	}
-	rows, rowsErr := results.Query()
-	if rowsErr != nil && batchErr == nil {
-		batchErr = fmt.Errorf("SecondBox lifecycle claim lookup failed: %w", rowsErr)
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("SecondBox lifecycle claim candidate iteration failed: %w", err)
+	}
+	rows.Close()
+	if len(claimedSandboxIDs) == 0 {
+		return nil, nil
+	}
+	if _, err := tx.Exec(ctx, `
+		WITH due AS (
+		  SELECT id
+		  FROM secondbox.leases
+		  WHERE sandbox_id=ANY($2::text[]) AND state='active' AND expires_at<=$1
+		  ORDER BY expires_at,id
+		  FOR UPDATE SKIP LOCKED
+		)
+		UPDATE secondbox.leases AS lease
+		SET state='expired',revision=lease.revision+1,updated_at=$1
+		FROM due
+		WHERE lease.id=due.id`, now, claimedSandboxIDs); err != nil {
+		return nil, fmt.Errorf("SecondBox lifecycle claimed Lease cleanup failed: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.activity_sessions AS session
+		SET state='closed',closed_at=$1,updated_at=$1
+		FROM secondbox.leases AS lease
+		WHERE session.sandbox_id=ANY($2::text[])
+		  AND session.state='active' AND session.lease_id=lease.id
+		  AND (lease.state<>'active' OR lease.expires_at<=$1)`, now, claimedSandboxIDs); err != nil {
+		return nil, fmt.Errorf("SecondBox lifecycle claimed Lease session cleanup failed: %w", err)
+	}
+	rows, err = tx.Query(ctx, `
+		SELECT sandbox.id,sandbox.state,sandbox.desired_state,sandbox.revision,
+		       revision.spec_json,sandbox.lifecycle_intent_kind,
+		       COALESCE(sandbox.lifecycle_termination_reason,''),
+		       instance.ready_at,sandbox.last_activity_at,sandbox.drain_started_at,
+		       instance.id IS NOT NULL,
+		       COALESCE(instance.guest_liveness,''),
+		       COALESCE(instance.termination_reason,''),
+		       COALESCE(stop_effect.state,''),
+		       (
+		         SELECT count(*)
+		         FROM secondbox.activity_sessions AS session
+		         JOIN secondbox.leases AS lease ON lease.id=session.lease_id
+		         WHERE session.sandbox_id=sandbox.id AND session.generation=sandbox.generation
+		           AND session.tenant_ref=sandbox.tenant_ref
+		           AND session.subject_ref=sandbox.subject_ref
+		           AND session.state='active'
+		           AND lease.state='active' AND lease.expires_at>$1
+		       )
+		FROM secondbox.sandboxes AS sandbox
+		JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
+		LEFT JOIN secondbox.instances AS instance ON instance.id=sandbox.current_instance_id
+		LEFT JOIN LATERAL (
+		  SELECT effect.state
+		  FROM secondbox.lifecycle_effects AS effect
+		  WHERE effect.sandbox_id=sandbox.id AND effect.generation=sandbox.generation
+		    AND effect.kind='stop'
+		  ORDER BY effect.created_at DESC,effect.id DESC LIMIT 1
+		) AS stop_effect ON true
+		WHERE sandbox.id=ANY($2::text[])
+		ORDER BY sandbox.next_reconcile_at,sandbox.id
+		`, now, claimedSandboxIDs)
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox lifecycle claim lookup failed: %w", err)
 	}
 	claims := make([]ports.LifecycleReconcileClaim, 0, batchSize)
-	for batchErr == nil && rows.Next() {
+	for rows.Next() {
 		var (
 			claim                                   ports.LifecycleReconcileClaim
 			specJSON                                []byte
@@ -307,13 +343,13 @@ func (store *PostgresControlPlaneStore) ClaimLifecycleBatch(
 			&claim.GuestLiveness, &claim.InstanceTerminationReason,
 			&claim.StopEffectState, &claim.ActiveSessions,
 		); err != nil {
-			batchErr = fmt.Errorf("SecondBox lifecycle claim scan failed: %w", err)
-			break
+			rows.Close()
+			return nil, fmt.Errorf("SecondBox lifecycle claim scan failed: %w", err)
 		}
 		var spec contracts.ProfileRevisionSpec
 		if err := json.Unmarshal(specJSON, &spec); err != nil {
-			batchErr = fmt.Errorf("SecondBox lifecycle claim policy decoding failed: %w", err)
-			break
+			rows.Close()
+			return nil, fmt.Errorf("SecondBox lifecycle claim policy decoding failed: %w", err)
 		}
 		claim.WorkerID = workerID
 		claim.IntentKind = intentKind.String
@@ -331,25 +367,11 @@ func (store *PostgresControlPlaneStore) ClaimLifecycleBatch(
 		}
 		claims = append(claims, claim)
 	}
-	if rows != nil {
-		if rowsErr := rows.Err(); rowsErr != nil && batchErr == nil {
-			batchErr = fmt.Errorf("SecondBox lifecycle claim rows failed: %w", rowsErr)
-		}
+	if err := rows.Err(); err != nil {
 		rows.Close()
+		return nil, fmt.Errorf("SecondBox lifecycle claim rows failed: %w", err)
 	}
-	if closeErr := results.Close(); closeErr != nil && batchErr == nil {
-		batchErr = fmt.Errorf("SecondBox lifecycle claim batch close failed: %w", closeErr)
-	}
-	if batchErr != nil {
-		return nil, batchErr
-	}
-	if len(claims) == 0 {
-		return nil, nil
-	}
-	claimedSandboxIDs := make([]string, 0, len(claims))
-	for index := range claims {
-		claimedSandboxIDs = append(claimedSandboxIDs, claims[index].SandboxID)
-	}
+	rows.Close()
 	tag, err := tx.Exec(ctx, `
 		UPDATE secondbox.sandboxes
 		SET reconcile_owner=$1,reconcile_claim_expires_at=$2
@@ -366,6 +388,30 @@ func (store *PostgresControlPlaneStore) ClaimLifecycleBatch(
 		return nil, fmt.Errorf("SecondBox lifecycle claim commit failed: %w", err)
 	}
 	return claims, nil
+}
+
+func expireLifecycleLeases(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	now time.Time,
+	limit int,
+) error {
+	if _, err := pool.Exec(ctx, `
+		WITH due AS (
+		  SELECT id
+		  FROM secondbox.leases
+		  WHERE state='active' AND expires_at<=$1
+		  ORDER BY expires_at,id
+		  FOR UPDATE SKIP LOCKED
+		  LIMIT $2
+		)
+		UPDATE secondbox.leases AS lease
+		SET state='expired',revision=lease.revision+1,updated_at=$1
+		FROM due
+		WHERE lease.id=due.id`, now, limit); err != nil {
+		return fmt.Errorf("SecondBox lifecycle expired Lease sweep failed: %w", err)
+	}
+	return nil
 }
 
 // ApplyLifecycleAction commits one claimed transition only while owner and revision remain current.

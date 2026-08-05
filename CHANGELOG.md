@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Removed the fleet-wide Runner lock from Sandbox creation, Snapshot-clone, and relocation placement: candidates are now ranked unlocked, locked one at a time with `SKIP LOCKED` and a blocking fallback, and admission durably reserves homed Workspace and inbound-relocation disk so concurrent placements cannot oversubscribe a Runner's storage ([#30](https://github.com/SecondStack-AI/SecondBox/pull/30)).
+- Indexed the lifecycle reconciler claim scan and the active-Lease expiry sweep, moved the global Lease sweep out of the claim transaction as a bounded `SKIP LOCKED` statement, and scoped in-transaction Lease fencing to the claimed Sandboxes so lifecycle workers no longer block each other ([#30](https://github.com/SecondStack-AI/SecondBox/pull/30)).
 - Fixed audit events to record the resolved tenant and subject attribution in the service layer for operator and subject actions, instead of depending on store-side normalization of an empty tenant reference ([#27](https://github.com/SecondStack-AI/SecondBox/pull/27)).
 - Simplified releases to two operator commands: build every artifact locally with `just release-stage`, then publish the supplied artifacts directly to GitHub, GHCR, and npm with `just release-upload` ([#25](https://github.com/SecondStack-AI/SecondBox/pull/25)).
 
