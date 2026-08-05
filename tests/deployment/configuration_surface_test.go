@@ -49,6 +49,36 @@ func TestDeploymentCompilerReplacesLegacyOperatorSurface(t *testing.T) {
 	}
 }
 
+func TestDocumentedRunnerTemplateMatchesCommandOutput(t *testing.T) {
+	root := repositoryRootForDeploymentPolicy(t)
+	documentation, err := os.ReadFile(filepath.Join(root, "docs", "operations", "deployment.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := "<!-- runner-template-output:start -->\n```toml\n"
+	suffix := "```\n<!-- runner-template-output:end -->"
+	start := strings.Index(string(documentation), prefix)
+	if start < 0 {
+		t.Fatal("deployment documentation has no Runner template output block")
+	}
+	start += len(prefix)
+	end := strings.Index(string(documentation[start:]), suffix)
+	if end < 0 {
+		t.Fatal("deployment documentation Runner template output block is not closed")
+	}
+	documented := documentation[start : start+end]
+	if string(documented) != string(deployconfig.RunnerTemplate()) {
+		t.Fatal("documented Runner template differs from secondbox-deploy runner-template output")
+	}
+	readme, err := os.ReadFile(filepath.Join(root, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(readme), "secondbox-deploy runner-template") {
+		t.Fatal("README same-host path does not point to runner-template")
+	}
+}
+
 func TestComposeArtifactPreservesAbsentAndSelectedOverrides(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("Docker Compose is unavailable")

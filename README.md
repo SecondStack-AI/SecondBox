@@ -78,7 +78,7 @@ On a qualified host, the shortest existing deployment path uses [`deploy/compose
    ```
 
 4. Install the CLI and log in with the generated platform authority. `secondbox-deploy ... up` creates the selected RunnerPool and standard Profile lineages idempotently. Its name must match the Runner's `pool_id`; its architecture and capabilities must admit the selected amd64 bundles.
-5. Add one explicit `[[runners]]` entry with `placement = "same-host"` to `secondbox.toml`. Supply every identity, artifact, state, workspace, Firecracker, network, capacity, and data-plane value; create the declared artifact, state, and workspace host directories, but leave the identity target absent. The workspace host directory must be on the dedicated XFS or Btrfs filesystem.
+5. Run `secondbox-deploy runner-template` and replace `runners = []` in `secondbox.toml` with the completed `[[runners]]` block. Use `placement = "same-host"`; create the declared artifact, state, and workspace host directories, but leave the identity target absent. The workspace host directory must be on the dedicated XFS or Btrfs filesystem. See the [Runner declaration walkthrough](docs/operations/deployment.md#runner-declaration-scaffold) for every field and cross-resource relationship.
 6. Build the declared Runner image and issue the declared Runner identity:
 
    ```sh

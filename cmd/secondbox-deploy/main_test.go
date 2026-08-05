@@ -87,3 +87,46 @@ done
 		t.Fatal(err)
 	}
 }
+
+func TestRunnerTemplateCommandWritesCreateOnlyFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runner.toml")
+	if err := run([]string{"runner-template", "--output", path}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, deployconfig.RunnerTemplate()) {
+		t.Fatal("runner-template command output differs from the deployconfig template")
+	}
+	if err := run([]string{"runner-template", "--output", path}); err == nil {
+		t.Fatal("runner-template command replaced an existing file")
+	}
+}
+
+func TestRunnerTemplateCommandWritesStdout(t *testing.T) {
+	stdoutPath := filepath.Join(t.TempDir(), "stdout")
+	stdout, err := os.Create(stdoutPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := os.Stdout
+	os.Stdout = stdout
+	runErr := run([]string{"runner-template"})
+	os.Stdout = original
+	closeErr := stdout.Close()
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	got, err := os.ReadFile(stdoutPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, deployconfig.RunnerTemplate()) {
+		t.Fatal("runner-template stdout differs from the deployconfig template")
+	}
+}
