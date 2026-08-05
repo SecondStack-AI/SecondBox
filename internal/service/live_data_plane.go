@@ -41,8 +41,17 @@ func (service *ControlPlaneService) openDataPlaneStream(
 		if service.liveDataPlane == nil {
 			return nil, runnercontrol.ErrLiveDataPlaneUnavailable
 		}
+		responseCreditBytes := int64(0)
+		replayedThrough := uint64(0)
+		if session.Kind == "terminal" {
+			responseCreditBytes = session.ResponseCreditBytes - session.InboundBytes
+			if session.NextInboundSequence > 1 {
+				replayedThrough = uint64(session.NextInboundSequence - 1)
+			}
+		}
 		stream, err := service.liveDataPlane.Open(
 			session.RunnerID, session.Kind, session.ID, session.StreamID,
+			session.StreamWindowBytes, responseCreditBytes, replayedThrough,
 		)
 		if err != nil {
 			return nil, err
@@ -821,14 +830,16 @@ func (service *ControlPlaneService) executeFileDataPlane(
 		}
 		offset += size
 	}
+	responseCreditGranted := int64(0)
 	if open.Operation == runnerv1.FileOperation_FILE_OPERATION_READ {
+		responseCreditGranted = min(session.MaximumResponseBytes, session.StreamWindowBytes)
 		sequence++
 		if err := stream.Send(&runnerv1.ControlPlaneToRunner{
 			Message: &runnerv1.ControlPlaneToRunner_File{File: &runnerv1.FileFrame{
 				Fence: dataPlaneFence(session), OperationId: session.ID, StreamId: session.StreamID,
 				Sequence: sequence, Correlation: dataPlaneCorrelation(session),
 				Payload: &runnerv1.FileFrame_Credit{Credit: &runnerv1.StreamCredit{
-					ByteCount: uint64(session.MaximumResponseBytes),
+					ByteCount: uint64(responseCreditGranted),
 				}},
 			}},
 		}); err != nil {
@@ -866,6 +877,26 @@ func (service *ControlPlaneService) executeFileDataPlane(
 				return runnercontrol.DataPlaneSession{}, runnercontrol.ErrDataPlaneSessionLimit
 			}
 			result.Content = append(result.Content, frame.GetChunk().Data...)
+			additionalCredit := min(
+				int64(len(frame.GetChunk().Data)),
+				session.MaximumResponseBytes-responseCreditGranted,
+			)
+			if additionalCredit > 0 {
+				sequence++
+				if err := stream.Send(&runnerv1.ControlPlaneToRunner{
+					Message: &runnerv1.ControlPlaneToRunner_File{File: &runnerv1.FileFrame{
+						Fence: dataPlaneFence(session), OperationId: session.ID,
+						StreamId: session.StreamID, Sequence: sequence,
+						Correlation: dataPlaneCorrelation(session),
+						Payload: &runnerv1.FileFrame_Credit{Credit: &runnerv1.StreamCredit{
+							ByteCount: uint64(additionalCredit),
+						}},
+					}},
+				}); err != nil {
+					return runnercontrol.DataPlaneSession{}, err
+				}
+				responseCreditGranted += additionalCredit
+			}
 		case frame.GetTerminal() != nil:
 			result.Terminal = proto.Clone(frame.GetTerminal()).(*runnerv1.FileTerminal)
 			return service.dataPlaneStore.CompleteDataPlaneSession(context.WithoutCancel(ctx), runnercontrol.DataPlaneCompletion{

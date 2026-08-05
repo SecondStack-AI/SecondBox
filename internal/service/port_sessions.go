@@ -249,6 +249,7 @@ func (service *ControlPlaneService) OpenPortTunnel(
 	}
 	stream, err := service.liveDataPlane.Open(
 		tunnel.RunnerID, "port", tunnel.Session.ID, tunnel.StreamID,
+		tunnel.StreamWindowBytes, 0, 0,
 	)
 	if err != nil {
 		return nil, err

@@ -206,6 +206,47 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 	}
 	acknowledged.Close()
 
+	closeRace := createTerminalSession(
+		t, server.URL, key.Credential, sandbox, lease.ID,
+		"terminal-http-close-race", "close-race", true,
+	)
+	closeRaceConnection := dialTerminal(t, closeRace, key.Credential, sandbox.Generation)
+	if err := closeRaceConnection.WriteJSON(map[string]any{
+		"type": "credit", "sequence": 0, "bytes": 4,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitTerminalRunnerEvent(t, fake.events, "credit:close-race:4")
+	if err := closeRaceConnection.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitTerminalState(
+		t, server.URL, key.Credential, sandbox, closeRace.ID, "detached",
+	)
+	close(fake.closeRaceGate)
+	waitTerminalRunnerEvent(t, fake.events, "stale-output:close-race")
+	if got := liveDataPlane.MetricsSnapshot().DroppedRouteNotFoundFrames; got != 1 {
+		t.Fatalf("Terminal close-race dropped frames = %d, want 1", got)
+	}
+
+	survivor := createTerminalSession(
+		t, server.URL, key.Credential, sandbox, lease.ID,
+		"terminal-http-close-race-survivor", "close-race-survivor", false,
+	)
+	survivorConnection := dialTerminal(t, survivor, key.Credential, sandbox.Generation)
+	if err := survivorConnection.WriteJSON(map[string]any{
+		"type": "cancel", "sequence": 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitTerminalRunnerEvent(t, fake.events, "cancel:close-race-survivor")
+	if outcome := readTerminalOutcome(t, survivorConnection, 0); outcome.Kind != "cancelled" {
+		t.Fatalf("Terminal close-race survivor outcome = %#v", outcome)
+	}
+	if err := survivorConnection.Close(); err != nil {
+		t.Fatal(err)
+	}
+
 	cancelled := createTerminalSession(
 		t, server.URL, key.Credential, sandbox, lease.ID, "terminal-http-cancel", "wait-cancel", true,
 	)
@@ -337,14 +378,15 @@ func TestPublicTerminalWebSocketIsDurableExclusiveReplayableAndCancellable(t *te
 }
 
 type terminalHTTPFakeRunner struct {
-	broker       *runnercontrol.LiveDataPlaneBroker
-	session      *runnercontrol.Session
-	runnerID     string
-	connectionID string
-	incoming     chan *runnerv1.ControlPlaneToRunner
-	events       chan string
-	mu           sync.Mutex
-	operations   map[string]*terminalHTTPFakeOperation
+	broker        *runnercontrol.LiveDataPlaneBroker
+	session       *runnercontrol.Session
+	runnerID      string
+	connectionID  string
+	incoming      chan *runnerv1.ControlPlaneToRunner
+	events        chan string
+	mu            sync.Mutex
+	operations    map[string]*terminalHTTPFakeOperation
+	closeRaceGate chan struct{}
 }
 
 type terminalHTTPFakeOperation struct {
@@ -405,6 +447,7 @@ func newTerminalHTTPFakeRunner(
 		broker: broker, session: session, runnerID: runnerID, connectionID: connectionID,
 		incoming: make(chan *runnerv1.ControlPlaneToRunner, 32),
 		events:   make(chan string, 32), operations: map[string]*terminalHTTPFakeOperation{},
+		closeRaceGate: make(chan struct{}),
 	}
 	detach, err := broker.AttachConnection(runnerID, connectionID, fake, session)
 	if err != nil {
@@ -500,6 +543,17 @@ func (fake *terminalHTTPFakeRunner) handle(
 			}
 		}
 	case ptyFrame.GetDetach() != nil:
+		if operation.command == "close-race" {
+			select {
+			case <-fake.closeRaceGate:
+			case <-ctx.Done():
+				return nil
+			}
+			if err := fake.output(ctx, operation, []byte("late")); err != nil {
+				return err
+			}
+			fake.events <- "stale-output:" + operation.command
+		}
 		operation.attached = false
 	case ptyFrame.GetCredit() != nil:
 		fake.events <- fmt.Sprintf("credit:%s:%d", operation.command, ptyFrame.GetCredit().ByteCount)
@@ -669,9 +723,9 @@ func dialTerminalAfter(
 		if response != nil {
 			body, _ := io.ReadAll(response.Body)
 			response.Body.Close()
-			t.Fatalf("dial Terminal: status=%d body=%s error=%v", response.StatusCode, body, err)
+			t.Fatalf("dial Terminal %s: status=%d body=%s error=%v", session.ID, response.StatusCode, body, err)
 		}
-		t.Fatal(err)
+		t.Fatalf("dial Terminal %s: %v", session.ID, err)
 	}
 	if connection.Subprotocol() != "secondbox.terminal.v1" {
 		connection.Close()

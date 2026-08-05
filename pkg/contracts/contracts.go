@@ -997,10 +997,11 @@ type ExecDurationMetric struct {
 
 // MetricsSnapshot contains only fixed-cardinality state, outcome, and timing signals.
 type MetricsSnapshot struct {
-	SandboxStates      map[string]int64
-	OperationStates    map[string]int64
-	OperationDurations []OperationDurationMetric
-	BootDuration       MetricDurationHistogram
-	BootStageDurations []BootStageDurationMetric
-	ExecDurations      []ExecDurationMetric
+	SandboxStates                           map[string]int64
+	OperationStates                         map[string]int64
+	OperationDurations                      []OperationDurationMetric
+	BootDuration                            MetricDurationHistogram
+	BootStageDurations                      []BootStageDurationMetric
+	ExecDurations                           []ExecDurationMetric
+	LiveDataPlaneDroppedRouteNotFoundFrames uint64
 }

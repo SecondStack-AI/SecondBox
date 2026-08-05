@@ -1129,9 +1129,15 @@ func (service *ControlPlaneService) Ready(ctx context.Context) error {
 	return service.store.Ping(ctx)
 }
 
-// Metrics returns only fixed-cardinality state counts.
+// Metrics returns only fixed-cardinality state, outcome, timing, and transport signals.
 func (service *ControlPlaneService) Metrics(ctx context.Context) (contracts.MetricsSnapshot, error) {
-	return service.store.ReadMetricsSnapshot(ctx)
+	snapshot, err := service.store.ReadMetricsSnapshot(ctx)
+	if err != nil {
+		return contracts.MetricsSnapshot{}, err
+	}
+	metrics := service.liveDataPlane.MetricsSnapshot()
+	snapshot.LiveDataPlaneDroppedRouteNotFoundFrames = metrics.DroppedRouteNotFoundFrames
+	return snapshot, nil
 }
 
 func (service *ControlPlaneService) adminIdempotency(
