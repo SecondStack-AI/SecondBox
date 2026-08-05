@@ -96,15 +96,28 @@ func TestDockerBuildContextExcludesLocalSecondBoxState(t *testing.T) {
 	}
 }
 
-func TestReleaseDoesNotRequireScenarioQualification(t *testing.T) {
+func TestReleaseStagingRequiresQualificationEvidenceAndHostedPublishRemainsPublishOnly(t *testing.T) {
 	repositoryRoot := repositoryRootForDeploymentPolicy(t)
 	if _, err := os.Stat(filepath.Join(repositoryRoot, ".github/workflows/scenario-qualification.yml")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("scenario qualification must not require a configured GitHub self-hosted runner")
 	}
+	staging := readRepositoryFile(t, "scripts/release-stage.sh")
+	for _, required := range []string{
+		".tmp/scenario-qualification-evidence.json",
+		"secondbox-${version}-qualification-evidence.json",
+		"validate_qualification_evidence",
+		"evidence_commit",
+		"repositoryDirty",
+		"run just test-scenario",
+	} {
+		if !strings.Contains(staging, required) {
+			t.Errorf("release staging does not enforce qualification evidence through %q", required)
+		}
+	}
 	for _, path := range []string{"scripts/release-upload.sh", "scripts/release-publish.sh", ".github/workflows/release.yml"} {
 		releaseFlow := readRepositoryFile(t, path)
 		if strings.Contains(releaseFlow, "test-scenario") || strings.Contains(releaseFlow, "/dev/kvm") || strings.Contains(releaseFlow, "qualification") {
-			t.Errorf("%s must not gate a release on scenario qualification", path)
+			t.Errorf("%s must remain publish-only and free of scenario qualification", path)
 		}
 	}
 	const jobMarker = "  scenario-qualification:\n"

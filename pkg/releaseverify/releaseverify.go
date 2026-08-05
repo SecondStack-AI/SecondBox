@@ -78,6 +78,7 @@ func verifyManifestObjects(ctx context.Context, manifest releasecontract.Artifac
 	}
 	references = append(references, manifest.SBOMs...)
 	references = append(references, manifest.ArtifactAttestations...)
+	references = append(references, manifest.QualificationEvidence)
 	for _, bundle := range manifest.StandardBundles {
 		references = append(references, bundle.Document)
 	}
@@ -89,6 +90,17 @@ func verifyManifestObjects(ctx context.Context, manifest releasecontract.Artifac
 		if releasecontract.Digest(data) != reference.Digest {
 			return fmt.Errorf("SecondBox release verification: digest mismatch at %s", reference.Location)
 		}
+	}
+	evidenceData, err := fetch(ctx, manifest.QualificationEvidence.Location)
+	if err != nil {
+		return err
+	}
+	evidence, err := releasecontract.DecodeQualificationEvidence(evidenceData)
+	if err != nil {
+		return err
+	}
+	if err := evidence.ValidateForRelease(manifest.SourceCommit); err != nil {
+		return err
 	}
 	for _, binary := range manifest.Binaries {
 		data, err := fetch(ctx, binary.Location)

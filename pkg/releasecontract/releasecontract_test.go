@@ -42,6 +42,10 @@ func TestArtifactManifestValidationRejectsInvalidReleaseContent(t *testing.T) {
 		{name: "unsupported platform", mutate: func(value *ArtifactManifest) { value.Platforms.Runner = append(value.Platforms.Runner, "linux/arm64") }, want: "lacks required qualification"},
 		{name: "incompatible protocol window", mutate: func(value *ArtifactManifest) { value.RunnerProtocol = ProtocolWindow{Minimum: 3, Maximum: 2} }, want: "window is invalid"},
 		{name: "malformed signing identity", mutate: func(value *ArtifactManifest) { value.MicroVM.SigningKeyFingerprint = "SHA256:no" }, want: "fingerprint"},
+		{name: "missing qualification evidence", mutate: func(value *ArtifactManifest) { value.QualificationEvidence = Reference{} }, want: "qualification evidence"},
+		{name: "noncanonical qualification evidence", mutate: func(value *ArtifactManifest) {
+			value.QualificationEvidence.Location = "https://example.com/evidence.json"
+		}, want: "not canonical"},
 		{name: "missing runtime component", mutate: func(value *ArtifactManifest) { value.MicroVM.RuntimeBundle = SignedComponent{} }, want: "runtime bundle artifact ID"},
 		{name: "aliased components", mutate: func(value *ArtifactManifest) {
 			value.MicroVM.ToolchainBundle.ManifestDigest = value.MicroVM.RuntimeBundle.ManifestDigest
@@ -55,6 +59,34 @@ func TestArtifactManifestValidationRejectsInvalidReleaseContent(t *testing.T) {
 				t.Fatalf("Validate() error = %v, want containing %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestQualificationEvidenceRequiresCompleteCleanReleaseRun(t *testing.T) {
+	evidence := QualificationEvidence{
+		SchemaVersion: QualificationEvidenceSchema, SourceCommit: testCommit,
+		Suite: "test-scenario", PassCount: 16, WallClockSeconds: 600,
+		Host: QualificationHostEvidence{
+			KVM:                 QualificationDeviceEvidence{Path: "/dev/kvm", Present: true, Readable: true, Writable: true},
+			TUN:                 QualificationDeviceEvidence{Path: "/dev/net/tun", Present: true, Readable: true, Writable: true},
+			WorkspaceFilesystem: QualificationFilesystemEvidence{Mount: "/srv/secondbox xfs", Type: "xfs"},
+		},
+		QualifiedAt: "2026-08-04T12:00:00Z",
+	}
+	decoded, err := DecodeQualificationEvidence(mustJSON(t, evidence))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := decoded.ValidateForRelease(testCommit); err != nil {
+		t.Fatal(err)
+	}
+	decoded.RepositoryDirty = true
+	if err := decoded.ValidateForRelease(testCommit); err == nil || !strings.Contains(err.Error(), "dirty repository") {
+		t.Fatalf("dirty qualification evidence error = %v", err)
+	}
+	decoded.RepositoryDirty = false
+	if err := decoded.ValidateForRelease(strings.Repeat("f", 40)); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("commit-mismatched qualification evidence error = %v", err)
 	}
 }
 
@@ -83,15 +115,16 @@ func validManifest() ArtifactManifest {
 			ControlPlane: []string{"linux/amd64", "linux/arm64"}, Runner: []string{"linux/amd64"},
 			Guest: []string{"linux/amd64"}, QualifiedRunnerGuest: []string{"linux/amd64"},
 		},
-		GoSDK:                SDKArtifact{Identity: identity, Coordinate: GoModule + "@" + identity.Tag, Package: ref("go-sdk.zip")},
-		TypeScriptSDK:        SDKArtifact{Identity: identity, Coordinate: TypeScriptPackage + "@" + identity.Version, Package: ref("secondbox.tgz")},
-		ControlPlane:         OCIArtifact{Identity: identity, Reference: ControlPlaneImage + "@" + testDigest},
-		Runner:               OCIArtifact{Identity: identity, Reference: RunnerImage + "@" + testDigest},
-		MicroVM:              MicroVMArtifact{Identity: identity, ImageReference: MicroVMImage + "@" + testDigest, SignedManifestDigest: testDigest, SigningKeyFingerprint: testKey, RuntimeBundle: SignedComponent{ArtifactID: "test-runtime", ManifestDigest: testRuntimeDigest, MandatoryGuestFeatures: []string{}}, ToolchainBundle: SignedComponent{ArtifactID: "test-toolchain", ManifestDigest: testToolchainDigest, MandatoryGuestFeatures: []string{}}},
-		Binaries:             binaries,
-		SBOMs:                []Reference{ref("sbom.spdx.json")},
-		ArtifactAttestations: []Reference{ref("provenance.intoto.jsonl")},
-		SourceFreeSuite:      Reference{Location: SourceFreeSuiteLocation(identity.Version), Digest: testDigest},
+		GoSDK:                 SDKArtifact{Identity: identity, Coordinate: GoModule + "@" + identity.Tag, Package: ref("go-sdk.zip")},
+		TypeScriptSDK:         SDKArtifact{Identity: identity, Coordinate: TypeScriptPackage + "@" + identity.Version, Package: ref("secondbox.tgz")},
+		ControlPlane:          OCIArtifact{Identity: identity, Reference: ControlPlaneImage + "@" + testDigest},
+		Runner:                OCIArtifact{Identity: identity, Reference: RunnerImage + "@" + testDigest},
+		MicroVM:               MicroVMArtifact{Identity: identity, ImageReference: MicroVMImage + "@" + testDigest, SignedManifestDigest: testDigest, SigningKeyFingerprint: testKey, RuntimeBundle: SignedComponent{ArtifactID: "test-runtime", ManifestDigest: testRuntimeDigest, MandatoryGuestFeatures: []string{}}, ToolchainBundle: SignedComponent{ArtifactID: "test-toolchain", ManifestDigest: testToolchainDigest, MandatoryGuestFeatures: []string{}}},
+		Binaries:              binaries,
+		SBOMs:                 []Reference{ref("sbom.spdx.json")},
+		ArtifactAttestations:  []Reference{ref("provenance.intoto.jsonl")},
+		SourceFreeSuite:       Reference{Location: SourceFreeSuiteLocation(identity.Version), Digest: testDigest},
+		QualificationEvidence: Reference{Location: QualificationEvidenceLocation(identity.Version), Digest: testDigest},
 		StandardBundles: []StandardBundleArtifact{
 			{Identity: identity, Name: "agent-compartment", Document: ref("agent-compartment.json"), Profiles: []StandardProfileIdentity{{Name: "agent-compartment", Revision: 1, SpecDigest: testDigest}}},
 			{Identity: identity, Name: "durable-coding", Document: ref("durable-coding.json"), Profiles: []StandardProfileIdentity{{Name: "durable-coding", Revision: 1, SpecDigest: testDigest}}},

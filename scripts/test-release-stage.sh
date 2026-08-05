@@ -3,8 +3,41 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work_dir="$(mktemp -d)"
-cleanup() { rm -rf "$work_dir"; }
+qualification_evidence="$repo_root/.tmp/scenario-qualification-evidence.json"
+saved_qualification_evidence=false
+mkdir -p "$repo_root/.tmp"
+if [[ -e "$qualification_evidence" || -L "$qualification_evidence" ]]; then
+  cp -a "$qualification_evidence" "$work_dir/original-qualification-evidence"
+  saved_qualification_evidence=true
+fi
+cleanup() {
+  rm -f -- "$qualification_evidence"
+  if $saved_qualification_evidence; then
+    cp -a "$work_dir/original-qualification-evidence" "$qualification_evidence"
+  fi
+  rm -rf "$work_dir"
+}
 trap cleanup EXIT
+
+rm -f -- "$qualification_evidence"
+if "$repo_root/scripts/release-stage.sh" 1.2.3 "$work_dir/missing-evidence" >"$work_dir/missing-evidence.out" 2>&1; then
+  echo "release staging accepted absent qualification evidence" >&2
+  exit 1
+fi
+rg -q 'requires qualification evidence.*run just test-scenario' "$work_dir/missing-evidence.out" || {
+  echo "release staging did not report actionable missing-evidence guidance" >&2
+  exit 1
+}
+jq -n --arg sourceCommit "0000000000000000000000000000000000000000" '{sourceCommit:$sourceCommit}' >"$qualification_evidence"
+if "$repo_root/scripts/release-stage.sh" 1.2.3 "$work_dir/mismatched-evidence" >"$work_dir/mismatched-evidence.out" 2>&1; then
+  echo "release staging accepted commit-mismatched qualification evidence" >&2
+  exit 1
+fi
+rg -q 'qualification evidence source commit .* does not match staged source commit' "$work_dir/mismatched-evidence.out" || {
+  echo "release staging did not report the qualification commit mismatch" >&2
+  exit 1
+}
+rm -f -- "$qualification_evidence"
 
 artifact_dir="$work_dir/microvm"
 mkdir "$artifact_dir"
@@ -34,9 +67,11 @@ export SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256="$fingerprint"
 
 for stage in "$stage_one" "$stage_two"; do
   go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$stage"
-  jq -e --arg runtime "$runtime_digest" --arg toolchain "$toolchain_digest" '.schemaVersion == "secondbox.release/artifact-manifest/v2" and .microvm.runtimeBundle.manifestDigest == $runtime and .microvm.toolchainBundle.manifestDigest == $toolchain' "$stage/secondbox-0.1.0-artifact-manifest.json" >/dev/null
+  jq -e --arg runtime "$runtime_digest" --arg toolchain "$toolchain_digest" '.schemaVersion == "secondbox.release/artifact-manifest/v2" and .microvm.runtimeBundle.manifestDigest == $runtime and .microvm.toolchainBundle.manifestDigest == $toolchain and (.qualificationEvidence.location | endswith("/secondbox-0.1.0-qualification-evidence.json"))' "$stage/secondbox-0.1.0-artifact-manifest.json" >/dev/null
   jq -e --arg runtime "$runtime_digest" --arg toolchain "$toolchain_digest" '.schemaVersion == "secondbox.standard-bundle/v2" and .profile.revisions[0].spec.runtimeBundleDigest == $runtime and .profile.revisions[0].spec.toolchainBundleDigest == $toolchain and (.profile.revisions[0].spec.runtimeBundleDigest != .profile.revisions[0].spec.toolchainBundleDigest)' "$stage/durable-coding.standard-bundle.json" >/dev/null
-  [[ ! -e "$stage/qualification-attestation.json" && ! -e "$stage/release-index.json" ]] || { echo "local staging manufactured qualification/finalization evidence" >&2; exit 1; }
+  jq -e '.schemaVersion == "secondbox.release/qualification-evidence/v1" and .repositoryDirty == false and .suite == "test-scenario" and .passCount == 16 and .wallClockSeconds == 1 and .qualifiedAt == "1970-01-01T00:00:00Z" and .host.kvm.present and .host.tun.present and .host.workspaceFilesystem.type == "xfs"' "$stage/secondbox-0.1.0-qualification-evidence.json" >/dev/null
+  rg -q 'secondbox-0.1.0-qualification-evidence.json$' "$stage/SHA256SUMS"
+  [[ ! -e "$stage/qualification-attestation.json" && ! -e "$stage/release-index.json" ]] || { echo "local staging resurrected removed attestation/finalization evidence" >&2; exit 1; }
 done
 
 diff -u \
@@ -55,6 +90,11 @@ rm "$stage_one/unknown-extra"
 printf 'tampered\n' >>"$stage_one/agent-compartment.standard-bundle.json"
 if go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$stage_one" >/dev/null 2>&1; then
   echo "release verifier accepted checksum drift" >&2
+  exit 1
+fi
+printf 'tampered\n' >>"$stage_two/secondbox-0.1.0-qualification-evidence.json"
+if go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$stage_two" >/dev/null 2>&1; then
+  echo "release verifier accepted qualification-evidence checksum drift" >&2
   exit 1
 fi
 

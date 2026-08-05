@@ -31,6 +31,23 @@ func TestManifestObjectsBindStandardProfilesToSignedComponents(t *testing.T) {
 	baseData := []byte("base")
 	objects[baseLocation] = baseData
 	baseReference := releasecontract.Reference{Location: baseLocation, Digest: releasecontract.Digest(baseData)}
+	sourceCommit := strings.Repeat("a", 40)
+	evidenceData, err := json.Marshal(releasecontract.QualificationEvidence{
+		SchemaVersion: releasecontract.QualificationEvidenceSchema, SourceCommit: sourceCommit,
+		Suite: "test-scenario", PassCount: 16, WallClockSeconds: 600,
+		Host: releasecontract.QualificationHostEvidence{
+			KVM:                 releasecontract.QualificationDeviceEvidence{Path: "/dev/kvm", Present: true, Readable: true, Writable: true},
+			TUN:                 releasecontract.QualificationDeviceEvidence{Path: "/dev/net/tun", Present: true, Readable: true, Writable: true},
+			WorkspaceFilesystem: releasecontract.QualificationFilesystemEvidence{Mount: "/srv xfs", Type: "xfs"},
+		},
+		QualifiedAt: "2026-08-04T12:00:00Z",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidenceLocation := "https://example.com/qualification-evidence.json"
+	objects[evidenceLocation] = evidenceData
+	evidenceReference := releasecontract.Reference{Location: evidenceLocation, Digest: releasecontract.Digest(evidenceData)}
 	bundles := make([]releasecontract.StandardBundleArtifact, 0, len(documents))
 	for _, document := range documents {
 		data, err := json.Marshal(document)
@@ -45,7 +62,7 @@ func TestManifestObjectsBindStandardProfilesToSignedComponents(t *testing.T) {
 		}
 		bundles = append(bundles, releasecontract.StandardBundleArtifact{Name: document.Name, Document: releasecontract.Reference{Location: location, Digest: releasecontract.Digest(data)}, Profiles: profiles})
 	}
-	manifest := releasecontract.ArtifactManifest{OpenAPI: releasecontract.OpenAPIArtifact{Reference: baseReference}, GoSDK: releasecontract.SDKArtifact{Package: baseReference}, TypeScriptSDK: releasecontract.SDKArtifact{Package: baseReference}, SourceFreeSuite: baseReference, MicroVM: releasecontract.MicroVMArtifact{SignedManifestDigest: signed, RuntimeBundle: releasecontract.SignedComponent{ManifestDigest: runtimeDigest}, ToolchainBundle: releasecontract.SignedComponent{ManifestDigest: toolchainDigest}}, StandardBundles: bundles}
+	manifest := releasecontract.ArtifactManifest{Identity: releasecontract.Identity{SourceCommit: sourceCommit}, OpenAPI: releasecontract.OpenAPIArtifact{Reference: baseReference}, GoSDK: releasecontract.SDKArtifact{Package: baseReference}, TypeScriptSDK: releasecontract.SDKArtifact{Package: baseReference}, SourceFreeSuite: baseReference, QualificationEvidence: evidenceReference, MicroVM: releasecontract.MicroVMArtifact{SignedManifestDigest: signed, RuntimeBundle: releasecontract.SignedComponent{ManifestDigest: runtimeDigest}, ToolchainBundle: releasecontract.SignedComponent{ManifestDigest: toolchainDigest}}, StandardBundles: bundles}
 	fetch := func(_ context.Context, location string) ([]byte, error) { return objects[location], nil }
 	if err := verifyManifestObjects(t.Context(), manifest, fetch); err != nil {
 		t.Fatal(err)

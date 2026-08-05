@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workflow="$repo_root/.github/workflows/release.yml"
+stager="$repo_root/scripts/release-stage.sh"
 uploader="$repo_root/scripts/release-upload.sh"
 publisher="$repo_root/scripts/release-publish.sh"
 
@@ -17,10 +18,19 @@ rg -q -- '--draft=false' "$publisher"
 rg -q -- '--prerelease=false' "$publisher"
 rg -q -- '--latest' "$publisher"
 rg -q 'gh workflow run release.yml' "$uploader"
+rg -q 'qualification-evidence' "$stager"
 
-if rg -q 'qualif|attest-build-provenance|candidate-evidence|publication-input|release-index|self-hosted' \
-  "$workflow" "$uploader" "$publisher"; then
-  echo "release flow contains a removed qualification or attestation stage" >&2
+if rg -q 'qualif|/dev/kvm|test-scenario|self-hosted' "$repo_root/.github/workflows"; then
+  echo "GitHub workflows contain a forbidden qualification step" >&2
+  exit 1
+fi
+if rg -q 'qualif|/dev/kvm|test-scenario|self-hosted' "$uploader" "$publisher"; then
+  echo "hosted release publication contains a forbidden qualification step" >&2
+  exit 1
+fi
+if rg -q 'qualification-attestation|attest-build-provenance|candidate-evidence|publication-input|release-index|verify-publication' \
+  "$stager" "$workflow" "$uploader" "$publisher"; then
+  echo "release flow contains a removed candidate, attestation, or finalization surface" >&2
   exit 1
 fi
 if rg -q 'release-stage|docker build|go build|npm pack' "$workflow"; then
