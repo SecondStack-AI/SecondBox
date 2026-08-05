@@ -26,9 +26,8 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 	admin := fixtureAdmin(t, controlPlane)
 	suffix := fmt.Sprintf("pagination-%d", integrationIdentitySequence.Add(1))
 
-	projectIDs := make([]string, 0, 3)
 	for index := 0; index < 3; index++ {
-		project, err := createFixtureProject(t, controlPlane,
+		_, err := createFixtureProject(t, controlPlane,
 			t.Context(),
 			admin,
 			fixtureCreateProjectRequest{Name: fmt.Sprintf("%s-project-%d", suffix, index)},
@@ -36,7 +35,6 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		projectIDs = append(projectIDs, project.ID)
 	}
 
 	accountProject, err := createFixtureProject(t, controlPlane,
@@ -47,9 +45,8 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	accountIDs := make([]string, 0, 3)
 	for index := 0; index < 3; index++ {
-		account, err := createFixtureServiceAccount(t, controlPlane,
+		_, err := createFixtureServiceAccount(t, controlPlane,
 			t.Context(),
 			admin,
 			accountProject.ID,
@@ -62,13 +59,11 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		accountIDs = append(accountIDs, account.ID)
 	}
 
 	keyProject, keyAccount, _ := createProjectAccountAndCredential(t, controlPlane, admin, suffix+"-keys")
-	keyIDs := make([]string, 0, 3)
 	for index := 0; index < 3; index++ {
-		created, err := createFixtureAPIKey(t, controlPlane,
+		_, err := createFixtureAPIKey(t, controlPlane,
 			t.Context(),
 			admin,
 			keyProject.ID,
@@ -81,7 +76,6 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		keyIDs = append(keyIDs, created.APIKey.ID)
 	}
 
 	profileNames := make([]string, 0, 3)

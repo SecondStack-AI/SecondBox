@@ -105,23 +105,6 @@ func (store *PostgresControlPlaneStore) AcquireLease(
 	return lease, nil
 }
 
-// GetLease reads one Project-scoped Lease.
-func (store *PostgresControlPlaneStore) GetLease(
-	ctx context.Context,
-	tenantRef string,
-	subjectRef string,
-	sandboxID string,
-	leaseID string,
-) (contracts.Lease, error) {
-	return scanLease(store.pool.QueryRow(ctx, `
-		SELECT id,tenant_ref,subject_ref,sandbox_id,generation,state,expires_at,
-		       revision,created_at,updated_at
-		FROM secondbox.leases
-		WHERE tenant_ref=$1 AND subject_ref=$2 AND sandbox_id=$3 AND id=$4`,
-		tenantRef, subjectRef, sandboxID, leaseID,
-	))
-}
-
 // GetLeaseByID reads one Lease without accepting a caller-supplied Sandbox scope.
 func (store *PostgresControlPlaneStore) GetLeaseByID(
 	ctx context.Context,
@@ -266,7 +249,7 @@ func (store *PostgresControlPlaneStore) ReleaseLease(
 	return lease, nil
 }
 
-// PingGuest records liveness while deliberately leaving useful activity unchanged.
+// scanLease reads the public Lease projection from one query row.
 func scanLease(row rowScanner) (contracts.Lease, error) {
 	var lease contracts.Lease
 	if err := row.Scan(

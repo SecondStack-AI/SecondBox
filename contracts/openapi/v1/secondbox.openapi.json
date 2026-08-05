@@ -2877,7 +2877,7 @@
           "generation": {"type": "integer", "format": "int64", "minimum": 1},
           "name": {"type": "string", "minLength": 1, "maxLength": 80},
           "protocol": {"type": "string", "enum": ["tcp", "http"]},
-          "transport": {"type": "string", "enum": ["relay", "direct"]},
+          "transport": {"type": "string", "enum": ["proxied", "direct"]},
           "endpoint": {"type": "string", "format": "uri", "maxLength": 2048},
           "certificateSpkiSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
           "state": {"type": "string", "enum": ["open", "closing", "closed", "expired", "fenced"]},

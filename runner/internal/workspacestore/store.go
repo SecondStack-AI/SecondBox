@@ -205,7 +205,7 @@ func (store *Store) probeReflink(ctx context.Context) error {
 		return fmt.Errorf("%w: create active-workspace probe: %v", ErrStorageIncompatible, err)
 	}
 	sourcePath := source.Name()
-	defer os.Remove(sourcePath)
+	defer func() { _ = os.Remove(sourcePath) }()
 	defer source.Close()
 	if err := source.Chmod(writableImageMode); err != nil {
 		return fmt.Errorf("%w: chmod active-workspace probe: %v", ErrStorageIncompatible, err)
@@ -223,7 +223,7 @@ func (store *Store) probeReflink(ctx context.Context) error {
 		return fmt.Errorf("%w: create Snapshot probe: %v", ErrStorageIncompatible, err)
 	}
 	destinationPath := destination.Name()
-	defer os.Remove(destinationPath)
+	defer func() { _ = os.Remove(destinationPath) }()
 	defer destination.Close()
 	if err := destination.Chmod(writableImageMode); err != nil {
 		return fmt.Errorf("%w: chmod Snapshot probe: %v", ErrStorageIncompatible, err)
@@ -883,11 +883,7 @@ func (store *Store) SwapRestore(
 		if err != nil {
 			return Receipt{}, fmt.Errorf("%w: staged restore: %v", ErrCorruptState, err)
 		}
-		swapRequest := PrepareRestoreRequest{
-			Mutation: request.Mutation, SnapshotID: request.SnapshotID,
-			ExpectedGeneration: request.ExpectedGeneration,
-			NextGeneration:     request.NextGeneration,
-		}
+		swapRequest := PrepareRestoreRequest(request)
 		if !stagedMatches(staged, swapRequest) {
 			return Receipt{}, ErrConflictingReplay
 		}
@@ -1306,7 +1302,7 @@ func (store *Store) ensureTemplate(ctx context.Context, capacityBytes int64) (st
 	closeFile := true
 	defer func() {
 		if closeFile {
-			file.Close()
+			_ = file.Close()
 		}
 	}()
 	if err := file.Truncate(capacityBytes); err != nil {
@@ -1398,9 +1394,9 @@ func (store *Store) cloneImage(
 	}
 	removeTemp := true
 	defer func() {
-		destination.Close()
+		_ = destination.Close()
 		if removeTemp {
-			os.Remove(tempPath)
+			_ = os.Remove(tempPath)
 		}
 	}()
 	cloneStartedAt := time.Now()
@@ -1913,11 +1909,13 @@ func (store *Store) lockWorkspace(workspaceID string) (*os.File, error) {
 		return nil, fmt.Errorf("SecondBox WorkspaceStore open Workspace lock: %w", err)
 	}
 	if err := tryLockFile(lock); err != nil {
-		lock.Close()
+		closeErr := lock.Close()
 		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
-			return nil, ErrActiveWriter
+			return nil, errors.Join(ErrActiveWriter, closeErr)
 		}
-		return nil, fmt.Errorf("SecondBox WorkspaceStore acquire Workspace lock: %w", err)
+		return nil, errors.Join(
+			fmt.Errorf("SecondBox WorkspaceStore acquire Workspace lock: %w", err), closeErr,
+		)
 	}
 	return lock, nil
 }
@@ -1950,9 +1948,9 @@ func atomicJSON(path string, value any) error {
 	tempPath := temp.Name()
 	removeTemp := true
 	defer func() {
-		temp.Close()
+		_ = temp.Close()
 		if removeTemp {
-			os.Remove(tempPath)
+			_ = os.Remove(tempPath)
 		}
 	}()
 	if err := temp.Chmod(writableImageMode); err != nil {

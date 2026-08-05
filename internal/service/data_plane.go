@@ -123,20 +123,6 @@ func (service *ControlPlaneService) GetSandboxExecStream(
 	return session, nil
 }
 
-func (service *ControlPlaneService) CancelSandboxExecStream(
-	ctx context.Context,
-	principal contracts.Principal,
-	sessionID string,
-	reason string,
-) (bool, error) {
-	if err := service.requireDataPlane(principal); err != nil {
-		return false, err
-	}
-	return service.dataPlaneStore.CancelDataPlaneSession(
-		ctx, principal.TenantRef, principal.SubjectRef, sessionID, reason, service.now().UTC(),
-	)
-}
-
 // CancelSandboxExecStreamAtGeneration durably replays one key-scoped public cancellation response.
 func (service *ControlPlaneService) CancelSandboxExecStreamAtGeneration(
 	ctx context.Context,

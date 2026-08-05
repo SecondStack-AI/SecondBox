@@ -1,0 +1,52 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  settings:
+    staticcheck:
+      # Quick-fix diagnostics are style rewrites; correctness checks remain enabled.
+      checks:
+        - all
+        - -QF*
+        # Domain-specific exported names and capitalized error prefixes are deliberate project conventions.
+        - -ST*
+  exclusions:
+    rules:
+      # Deferred Close and Rollback calls are cleanup after the operation result is fixed.
+      - linters:
+          - errcheck
+        source: '^\s*defer .*\.(Close|Rollback)\('
+      # Test cleanup cannot change the behavior under assertion.
+      - linters:
+          - errcheck
+        path: '_test\.go$'
+        source: '\.Close\('
+      # Deferred test cleanup cannot change the behavior under assertion.
+      - linters:
+          - errcheck
+        path: '_test\.go$'
+        source: '^\s*defer '
+      # Workspace lock release is best-effort on an already-failing path; ownership Close methods check it.
+      - linters:
+          - errcheck
+        path: '^runner/internal/workspacestore/'
+        text: 'Error return value is not checked'
+        source: 'closeLockedFile\('
+      # This report writes only to an in-memory strings.Builder.
+      - linters:
+          - errcheck
+        path: '^tests/scenario/lifecycle/report\.go$'
+        text: 'Error return value of `fmt\.Fprintf` is not checked'
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

@@ -270,7 +270,7 @@ func startFakeControlServer(t *testing.T, socketPath string, handshakes chan<- s
 					_ = conn.Close()
 					return
 				}
-				http.Serve(&singleConnListener{Conn: &bufferedConn{Conn: conn, reader: br}}, mux)
+				_ = http.Serve(&singleConnListener{Conn: &bufferedConn{Conn: conn, reader: br}}, mux)
 			}(conn)
 		}
 	}()

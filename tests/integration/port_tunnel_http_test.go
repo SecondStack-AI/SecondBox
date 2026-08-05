@@ -74,14 +74,14 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 	); err != nil {
 		t.Fatal(err)
 	}
-	relay, err := runnercontrol.NewPostgresDataPlaneStore(t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{
+	dataPlaneStore, err := runnercontrol.NewPostgresDataPlaneStore(t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{
 		DatabaseURL: integrationDatabaseURL,
 		Retention:   time.Hour, MaximumSessionBytes: 2 << 20,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(relay.Close)
+	t.Cleanup(dataPlaneStore.Close)
 	liveDataPlane := runnercontrol.NewLiveDataPlaneBroker()
 	server := httptest.NewUnstartedServer(nil)
 	portService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
@@ -89,9 +89,9 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 		DefaultSubjectQuota: generousQuota(),
 		Now:                 func() time.Time { return now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
-		DataPlaneStore:        relay, DataPlanePollInterval: time.Millisecond,
+		DataPlaneStore:        dataPlaneStore, DataPlanePollInterval: time.Millisecond,
 		LiveDataPlane:    liveDataPlane,
-		PortSessionStore: relay, PublicBaseURL: "http://" + server.Listener.Addr().String(),
+		PortSessionStore: dataPlaneStore, PublicBaseURL: "http://" + server.Listener.Addr().String(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 	server.Start()
 	t.Cleanup(server.Close)
 	fake, detachFake := newPortTunnelFakeRunner(
-		t, liveDataPlane, relay, seed.RunnerID, seed.ConnectionOne,
+		t, liveDataPlane, dataPlaneStore, seed.RunnerID, seed.ConnectionOne,
 	)
 	defer detachFake()
 	fakeContext, stopFake := context.WithCancel(t.Context())
@@ -116,7 +116,7 @@ func TestPublicPortTunnelIsBinarySingleUseBackpressuredAndAccounted(t *testing.T
 	go func() { fakeErrors <- fake.run(fakeContext) }()
 
 	session := createPortSessionHTTP(t, server.URL, key.Credential, sandbox, lease.ID)
-	if session.Transport != contracts.PortTransportRelay ||
+	if session.Transport != contracts.PortTransportProxied ||
 		!strings.HasPrefix(session.Endpoint, "ws://"+server.Listener.Addr().String()+"/v1/port-tunnels/") ||
 		strings.Contains(session.Endpoint, seed.RunnerID) {
 		t.Fatalf("proxied PortSession = %#v", session)
@@ -276,7 +276,7 @@ type portFakeEvent struct {
 
 type portTunnelFakeRunner struct {
 	broker            *runnercontrol.LiveDataPlaneBroker
-	relay             *runnercontrol.PostgresDataPlaneStore
+	dataPlaneStore    *runnercontrol.PostgresDataPlaneStore
 	session           *runnercontrol.Session
 	runnerID          string
 	connectionID      string
@@ -291,7 +291,7 @@ type portTunnelFakeRunner struct {
 func newPortTunnelFakeRunner(
 	t *testing.T,
 	broker *runnercontrol.LiveDataPlaneBroker,
-	relay *runnercontrol.PostgresDataPlaneStore,
+	dataPlaneStore *runnercontrol.PostgresDataPlaneStore,
 	runnerID string,
 	connectionID string,
 ) (*portTunnelFakeRunner, func()) {
@@ -335,7 +335,7 @@ func newPortTunnelFakeRunner(
 		t.Fatal(err)
 	}
 	fake := &portTunnelFakeRunner{
-		broker: broker, relay: relay, session: session,
+		broker: broker, dataPlaneStore: dataPlaneStore, session: session,
 		runnerID: runnerID, connectionID: connectionID,
 		incoming: make(chan *runnerv1.ControlPlaneToRunner, 16),
 		events:   make(chan portFakeEvent, 16), grantClientCredit: make(chan struct{}),
@@ -418,7 +418,7 @@ func (fake *portTunnelFakeRunner) deliver(ctx context.Context, payload any) erro
 	if err != nil {
 		return err
 	}
-	deliver, err := fake.relay.RecordPortSessionFrame(ctx, runnercontrol.RunnerDataPlaneFrame{
+	deliver, err := fake.dataPlaneStore.RecordPortSessionFrame(ctx, runnercontrol.RunnerDataPlaneFrame{
 		RunnerID: fake.runnerID, ConnectionID: fake.connectionID, Message: message,
 	}, time.Now().UTC())
 	if err != nil || !deliver {

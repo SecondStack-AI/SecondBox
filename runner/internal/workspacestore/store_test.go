@@ -411,12 +411,7 @@ func TestWorkspaceLifecycleIsIdempotentAndCrashRecoverable(t *testing.T) {
 	}); !errors.Is(err, ErrSnapshotInUse) {
 		t.Fatalf("delete in-use Snapshot error = %v", err)
 	}
-	swap := SwapRestoreRequest{
-		Mutation:           prepare.Mutation,
-		SnapshotID:         prepare.SnapshotID,
-		ExpectedGeneration: prepare.ExpectedGeneration,
-		NextGeneration:     prepare.NextGeneration,
-	}
+	swap := SwapRestoreRequest(prepare)
 	if _, err := store.SwapRestore(t.Context(), swap); err != nil {
 		t.Fatalf("swap restore: %v", err)
 	}
@@ -777,12 +772,7 @@ func TestRunnerRestartReplaysEveryLocalWorkspaceOperation(t *testing.T) {
 		store, cloner, formatter := newFakeStore(t)
 		createWorkspace(t, store)
 		prepare := prepareRestore(t, store)
-		request := SwapRestoreRequest{
-			Mutation:           prepare.Mutation,
-			SnapshotID:         prepare.SnapshotID,
-			ExpectedGeneration: prepare.ExpectedGeneration,
-			NextGeneration:     prepare.NextGeneration,
-		}
+		request := SwapRestoreRequest(prepare)
 		first, err := store.SwapRestore(t.Context(), request)
 		if err != nil {
 			t.Fatal(err)
@@ -795,12 +785,7 @@ func TestRunnerRestartReplaysEveryLocalWorkspaceOperation(t *testing.T) {
 		store, cloner, formatter := newFakeStore(t)
 		createWorkspace(t, store)
 		prepare := prepareRestore(t, store)
-		if _, err := store.SwapRestore(t.Context(), SwapRestoreRequest{
-			Mutation:           prepare.Mutation,
-			SnapshotID:         prepare.SnapshotID,
-			ExpectedGeneration: prepare.ExpectedGeneration,
-			NextGeneration:     prepare.NextGeneration,
-		}); err != nil {
+		if _, err := store.SwapRestore(t.Context(), SwapRestoreRequest(prepare)); err != nil {
 			t.Fatal(err)
 		}
 		request := RestoreMutation{Mutation: prepare.Mutation}

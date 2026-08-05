@@ -1388,7 +1388,7 @@ func TestLocalRestoreSwapDatabaseRollbackPreservesOldAuthorityForRetry(t *testin
 		swapResult,
 		now.Add(2*time.Second),
 	); err != nil {
-		tx.Rollback(t.Context())
+		_ = tx.Rollback(t.Context())
 		t.Fatal(err)
 	}
 	if err := tx.Rollback(t.Context()); err != nil {
@@ -2880,7 +2880,7 @@ func openRunnerControlDatabase(
 	parsed.Path = "/" + databaseName
 	testURL := parsed.String()
 	if err := postgresmigrations.Apply(t.Context(), testURL); err != nil {
-		admin.Exec(t.Context(), "DROP DATABASE "+identifier+" WITH (FORCE)")
+		_, _ = admin.Exec(t.Context(), "DROP DATABASE "+identifier+" WITH (FORCE)")
 		admin.Close(t.Context())
 		t.Fatal(err)
 	}

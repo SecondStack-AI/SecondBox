@@ -3,6 +3,7 @@ package deployconfig
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -32,8 +33,7 @@ func MigrateLegacyEnvironment(sourcePath, targetDirectory string) (string, error
 	for {
 		line, readErr := reader.ReadString('\n')
 		if readErr != nil && readErr != io.EOF {
-			file.Close()
-			return "", readErr
+			return "", errors.Join(readErr, file.Close())
 		}
 		if len(line) == 0 && readErr == io.EOF {
 			break
@@ -43,20 +43,28 @@ func MigrateLegacyEnvironment(sourcePath, targetDirectory string) (string, error
 		if strings.TrimSpace(line) != "" && !strings.HasPrefix(strings.TrimSpace(line), "#") {
 			name, value, ok := strings.Cut(line, "=")
 			if !ok || name == "" || strings.TrimSpace(name) != name {
-				file.Close()
-				return "", manifestError(fmt.Sprintf("legacy line %d is invalid", lineNumber), nil)
+				return "", errors.Join(
+					manifestError(fmt.Sprintf("legacy line %d is invalid", lineNumber), nil),
+					file.Close(),
+				)
 			}
 			if !known[name] {
-				file.Close()
-				return "", manifestError("legacy environment contains unknown name "+name, nil)
+				return "", errors.Join(
+					manifestError("legacy environment contains unknown name "+name, nil),
+					file.Close(),
+				)
 			}
 			if _, exists := values[name]; exists {
-				file.Close()
-				return "", manifestError("legacy environment contains duplicate name "+name, nil)
+				return "", errors.Join(
+					manifestError("legacy environment contains duplicate name "+name, nil),
+					file.Close(),
+				)
 			}
 			if value == "" || strings.Contains(value, "REPLACE_WITH_") || strings.Contains(value, "GENERATE_") || strings.ContainsAny(value, "\x00\r") {
-				file.Close()
-				return "", manifestError("legacy environment contains an empty, placeholder, or invalid value for "+name, nil)
+				return "", errors.Join(
+					manifestError("legacy environment contains an empty, placeholder, or invalid value for "+name, nil),
+					file.Close(),
+				)
 			}
 			values[name] = value
 		}
@@ -137,16 +145,39 @@ func MigrateLegacyEnvironment(sourcePath, targetDirectory string) (string, error
 	if err != nil {
 		return "", err
 	}
+	var scalarParseErr error
 	parseInt := func(name string) *int64 {
-		value, parseErr := strconv.ParseInt(values[name], 10, 64)
-		if parseErr != nil {
+		if scalarParseErr != nil {
+			return nil
+		}
+		raw := values[name]
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			scalarParseErr = manifestError(fmt.Sprintf(
+				"legacy environment %s value %q is not a base-10 integer", name, raw,
+			), err)
 			return nil
 		}
 		return integer(value)
 	}
+	// Overrides introduced after the legacy environment era are absent from
+	// every migratable source; only a value that is actually present must parse.
+	parseAbsentableInt := func(name string) *int64 {
+		if _, present := values[name]; !present {
+			return nil
+		}
+		return parseInt(name)
+	}
 	parseBool := func(name string) *bool {
-		value, parseErr := strconv.ParseBool(values[name])
-		if parseErr != nil {
+		if scalarParseErr != nil {
+			return nil
+		}
+		raw := values[name]
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			scalarParseErr = manifestError(fmt.Sprintf(
+				"legacy environment %s value %q is not a boolean", name, raw,
+			), err)
 			return nil
 		}
 		return boolean(value)
@@ -180,7 +211,7 @@ func MigrateLegacyEnvironment(sourcePath, targetDirectory string) (string, error
 		Applications:      Applications{PlatformTokenFile: platformToken, ApplicationAuthoritiesFile: authorities},
 		StandardResources: StandardResources{ArtifactManifest: "development-artifact-manifest.json", Bundles: []string{standardresources.AgentCompartment, standardresources.DurableCoding}, ApplyWaitSeconds: integer(180), RunnerPools: []StandardRunnerPool{{Bundle: standardresources.AgentCompartment, Name: standardresources.PoolAMD64, Architectures: []string{"amd64"}, Capabilities: strings.Split(values["SECONDBOX_RUNNER_ENABLED_FEATURES"], ","), State: "ready", MaxSandboxes: parseInt("SECONDBOX_DEFAULT_SUBJECT_MAX_ACTIVE_INSTANCES"), MaxCPUMillis: parseInt("SECONDBOX_DEFAULT_SUBJECT_MAX_CPU_MILLIS"), MaxMemoryBytes: parseInt("SECONDBOX_DEFAULT_SUBJECT_MAX_MEMORY_BYTES")}, {Bundle: standardresources.DurableCoding, Name: standardresources.PoolAMD64, Architectures: []string{"amd64"}, Capabilities: strings.Split(values["SECONDBOX_RUNNER_ENABLED_FEATURES"], ","), State: "ready", MaxSandboxes: parseInt("SECONDBOX_DEFAULT_SUBJECT_MAX_ACTIVE_INSTANCES"), MaxCPUMillis: parseInt("SECONDBOX_DEFAULT_SUBJECT_MAX_CPU_MILLIS"), MaxMemoryBytes: parseInt("SECONDBOX_DEFAULT_SUBJECT_MAX_MEMORY_BYTES")}}},
 		Policy:            Policy{DataPlaneRetentionSeconds: parseInt("SECONDBOX_DATA_PLANE_RETENTION_SECONDS"), DataPlanePollIntervalMilliseconds: parseInt("SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS"), RunnerCommandPollIntervalMilliseconds: parseInt("SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS"), RunnerEnabledFeatures: values["SECONDBOX_RUNNER_ENABLED_FEATURES"], DefaultSubjectMaxSandboxes: parseInt("SECONDBOX_DEFAULT_SUBJECT_MAX_SANDBOXES"), DefaultSubjectMaxActiveInstances: parseInt("SECONDBOX_DEFAULT_SUBJECT_MAX_ACTIVE_INSTANCES"), DefaultSubjectMaxCPUMillis: parseInt("SECONDBOX_DEFAULT_SUBJECT_MAX_CPU_MILLIS"), DefaultSubjectMaxMemoryBytes: parseInt("SECONDBOX_DEFAULT_SUBJECT_MAX_MEMORY_BYTES"), DefaultSubjectMaxArtifactBytes: parseInt("SECONDBOX_DEFAULT_SUBJECT_MAX_ARTIFACT_BYTES"), DefaultSubjectMaxSnapshots: parseInt("SECONDBOX_DEFAULT_SUBJECT_MAX_SNAPSHOTS"), DefaultSubjectMaxArtifacts: parseInt("SECONDBOX_DEFAULT_SUBJECT_MAX_ARTIFACTS"), DefaultSubjectMaxPortSessions: parseInt("SECONDBOX_DEFAULT_SUBJECT_MAX_PORT_SESSIONS"), DefaultSubjectMaxConcurrentOperations: parseInt("SECONDBOX_DEFAULT_SUBJECT_MAX_CONCURRENT_OPERATIONS")},
-		Overrides:         TuningOverrides{HTTPTimeoutSeconds: parseInt("SECONDBOX_HTTP_TIMEOUT_SECONDS"), RunnerHeartbeatIntervalMilliseconds: parseInt("SECONDBOX_RUNNER_HEARTBEAT_INTERVAL_MILLISECONDS"), RunnerHeartbeatTimeoutMilliseconds: parseInt("SECONDBOX_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS"), RunnerCommandDeliveryBatchSize: parseInt("SECONDBOX_RUNNER_COMMAND_DELIVERY_BATCH_SIZE"), RunnerEventPersistenceBatchSize: parseInt("SECONDBOX_RUNNER_EVENT_PERSISTENCE_BATCH_SIZE"), RunnerEventPersistenceBatchWaitMilliseconds: parseInt("SECONDBOX_RUNNER_EVENT_PERSISTENCE_BATCH_WAIT_MILLISECONDS"), DataPlaneMaximumSessionBytes: parseInt("SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES"), IdempotencyRetentionSeconds: parseInt("SECONDBOX_IDEMPOTENCY_RETENTION_SECONDS"), LifecycleReconcileBatchSize: parseInt("SECONDBOX_LIFECYCLE_RECONCILE_BATCH_SIZE"), LifecycleReconcilePollIntervalMilliseconds: parseInt("SECONDBOX_LIFECYCLE_RECONCILE_POLL_INTERVAL_MILLISECONDS"), LifecycleReconcileClaimDurationMilliseconds: parseInt("SECONDBOX_LIFECYCLE_RECONCILE_CLAIM_DURATION_MILLISECONDS"), GarbageCollectionPollIntervalMilliseconds: parseInt("SECONDBOX_GARBAGE_COLLECTION_POLL_INTERVAL_MILLISECONDS"), AssignmentClaimDurationMilliseconds: parseInt("SECONDBOX_ASSIGNMENT_CLAIM_DURATION_MILLISECONDS"), AssignmentDeadlineMilliseconds: parseInt("SECONDBOX_ASSIGNMENT_DEADLINE_MILLISECONDS"), AssignmentRetryLimit: parseInt("SECONDBOX_ASSIGNMENT_RETRY_LIMIT"), SchedulerSerializationRetryLimit: parseInt("SECONDBOX_SCHEDULER_SERIALIZATION_RETRY_LIMIT"), ObjectStoreRetryMaxAttempts: parseInt("SECONDBOX_OBJECT_STORE_RETRY_MAX_ATTEMPTS"), ObjectStoreHTTPTimeoutMilliseconds: parseInt("SECONDBOX_OBJECT_STORE_HTTP_TIMEOUT_MILLISECONDS"), ObjectStoreMaxObjectBytes: parseInt("SECONDBOX_OBJECT_STORE_MAX_OBJECT_BYTES")},
+		Overrides:         TuningOverrides{HTTPTimeoutSeconds: parseInt("SECONDBOX_HTTP_TIMEOUT_SECONDS"), RunnerHeartbeatIntervalMilliseconds: parseInt("SECONDBOX_RUNNER_HEARTBEAT_INTERVAL_MILLISECONDS"), RunnerHeartbeatTimeoutMilliseconds: parseInt("SECONDBOX_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS"), RunnerCommandDeliveryBatchSize: parseInt("SECONDBOX_RUNNER_COMMAND_DELIVERY_BATCH_SIZE"), RunnerEventPersistenceBatchSize: parseInt("SECONDBOX_RUNNER_EVENT_PERSISTENCE_BATCH_SIZE"), RunnerEventPersistenceBatchWaitMilliseconds: parseInt("SECONDBOX_RUNNER_EVENT_PERSISTENCE_BATCH_WAIT_MILLISECONDS"), DataPlaneMaximumSessionBytes: parseInt("SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES"), IdempotencyRetentionSeconds: parseAbsentableInt("SECONDBOX_IDEMPOTENCY_RETENTION_SECONDS"), LifecycleReconcileBatchSize: parseInt("SECONDBOX_LIFECYCLE_RECONCILE_BATCH_SIZE"), LifecycleReconcilePollIntervalMilliseconds: parseInt("SECONDBOX_LIFECYCLE_RECONCILE_POLL_INTERVAL_MILLISECONDS"), LifecycleReconcileClaimDurationMilliseconds: parseInt("SECONDBOX_LIFECYCLE_RECONCILE_CLAIM_DURATION_MILLISECONDS"), GarbageCollectionPollIntervalMilliseconds: parseInt("SECONDBOX_GARBAGE_COLLECTION_POLL_INTERVAL_MILLISECONDS"), AssignmentClaimDurationMilliseconds: parseInt("SECONDBOX_ASSIGNMENT_CLAIM_DURATION_MILLISECONDS"), AssignmentDeadlineMilliseconds: parseInt("SECONDBOX_ASSIGNMENT_DEADLINE_MILLISECONDS"), AssignmentRetryLimit: parseInt("SECONDBOX_ASSIGNMENT_RETRY_LIMIT"), SchedulerSerializationRetryLimit: parseInt("SECONDBOX_SCHEDULER_SERIALIZATION_RETRY_LIMIT"), ObjectStoreRetryMaxAttempts: parseInt("SECONDBOX_OBJECT_STORE_RETRY_MAX_ATTEMPTS"), ObjectStoreHTTPTimeoutMilliseconds: parseInt("SECONDBOX_OBJECT_STORE_HTTP_TIMEOUT_MILLISECONDS"), ObjectStoreMaxObjectBytes: parseInt("SECONDBOX_OBJECT_STORE_MAX_OBJECT_BYTES")},
 	}
 	if databaseMode == "bundled" {
 		manifest.Database.URLFile = ""
@@ -198,6 +229,9 @@ func MigrateLegacyEnvironment(sourcePath, targetDirectory string) (string, error
 	}
 	if values["SECONDBOX_SAME_HOST_RUNNER_ENABLED"] == "true" {
 		manifest.Runners = []Runner{legacyRunner(values, parseInt, parseBool)}
+	}
+	if scalarParseErr != nil {
+		return "", scalarParseErr
 	}
 	encoded, err := encodeManifest(manifest)
 	if err != nil {

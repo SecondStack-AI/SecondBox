@@ -24,7 +24,6 @@ var (
 	ErrDataPlaneFrameLimit   = errors.New("SecondBox data-plane frame limit exceeded")
 	ErrDataPlaneSessionLimit = errors.New("SecondBox data-plane session limit exceeded")
 	ErrDataPlaneNotFound     = errors.New("SecondBox data-plane session not found")
-	ErrDataPlaneIncomplete   = errors.New("SecondBox data-plane session is not terminal")
 	ErrDataPlaneDeadline     = errors.New("SecondBox data-plane operation deadline exceeded")
 	ErrTerminalAttached      = errors.New("SecondBox Terminal session already has an active attachment")
 	ErrTerminalDetached      = errors.New("SecondBox Terminal attachment is inactive")
@@ -220,8 +219,6 @@ func (store *PostgresDataPlaneStore) AdmitDataPlane(
 	ctx context.Context,
 	input DataPlaneAdmission,
 ) (DataPlaneSession, bool, error) {
-	if input.SubjectRef == "" {
-	}
 	if err := validateDataPlaneAdmission(input); err != nil {
 		return DataPlaneSession{}, false, err
 	}
@@ -750,7 +747,6 @@ func dataPlaneTransport(profileTransport string, kind string, operation string) 
 type dataPlaneProjection struct {
 	execResult *runnerv1.ExecBufferedResult
 	execTerm   *runnerv1.ExecTerminal
-	ptyOutput  *runnerv1.ExecOutput
 	ptyTerm    *runnerv1.ExecTerminal
 	fileChunk  *runnerv1.FileChunk
 	fileMeta   *runnerv1.FileMetadata

@@ -2,6 +2,7 @@
 package runtimeconfig
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -38,20 +39,24 @@ func LoadFromEnvironment(healthcheck bool) (Composition, error) {
 	}
 	logPath := strings.TrimSpace(os.Getenv("SECONDBOX_RUNNER_LOG_PATH"))
 	if logPath == "" || !filepath.IsAbs(logPath) {
-		connector.Close()
-		return Composition{}, fmt.Errorf("SECONDBOX_RUNNER_LOG_PATH must be an absolute path")
+		return Composition{}, errors.Join(
+			fmt.Errorf("SECONDBOX_RUNNER_LOG_PATH must be an absolute path"),
+			connector.Close(),
+		)
 	}
 	for _, name := range []string{"SECONDBOX_RUNNER_WORKSPACE_ROOT", "SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR", "SECONDBOX_RUNNER_FIRECRACKER_LOG_DIR", "SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT", "SECONDBOX_RUNNER_LOG_DIR"} {
 		value := strings.TrimSpace(os.Getenv(name))
 		if value == "" || !filepath.IsAbs(value) {
-			connector.Close()
-			return Composition{}, fmt.Errorf("%s must be an absolute path", name)
+			return Composition{}, errors.Join(
+				fmt.Errorf("%s must be an absolute path", name), connector.Close(),
+			)
 		}
 	}
 	firecrackerConfig, err := firecracker.LoadRunnerFirecrackerConfigFromEnv()
 	if err != nil {
-		connector.Close()
-		return Composition{}, fmt.Errorf("load SecondBox Firecracker config: %w", err)
+		return Composition{}, errors.Join(
+			fmt.Errorf("load SecondBox Firecracker config: %w", err), connector.Close(),
+		)
 	}
 	composition.Firecracker = firecrackerConfig
 	composition.RunnerLogPath = logPath

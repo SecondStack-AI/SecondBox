@@ -23,8 +23,6 @@ func (store *PostgresDataPlaneStore) AdmitPortSession(
 	ctx context.Context,
 	input PortSessionAdmission,
 ) (PortTunnel, bool, error) {
-	if input.SubjectRef == "" {
-	}
 	if input.Session.ID == "" || input.StreamID == "" || input.TenantRef == "" ||
 		input.Session.SandboxID == "" || input.SubjectRef == "" ||
 		input.RequestID == "" || input.LeaseID == "" || input.IdempotencyKey == "" ||
@@ -34,7 +32,7 @@ func (store *PostgresDataPlaneStore) AdmitPortSession(
 		len(input.CredentialDigest) != sha256.Size {
 		return PortTunnel{}, false, errors.New("SecondBox PortSession admission is incomplete")
 	}
-	if input.Session.Transport != contracts.PortTransportRelay &&
+	if input.Session.Transport != contracts.PortTransportProxied &&
 		input.Session.Transport != contracts.PortTransportDirect {
 		return PortTunnel{}, false, errors.New("SecondBox PortSession transport is invalid")
 	}
@@ -266,7 +264,7 @@ func (store *PostgresDataPlaneStore) ConsumePortSession(
 	}
 	// A direct session's credential is spent by its home Runner, never by the
 	// proxied WebSocket, so the proxied transport refuses it outright.
-	if tunnel.Session.Transport != contracts.PortTransportRelay {
+	if tunnel.Session.Transport != contracts.PortTransportProxied {
 		return PortTunnel{}, ports.ErrPortTokenInvalid
 	}
 	var connectedAt *time.Time
@@ -432,8 +430,6 @@ func (store *PostgresDataPlaneStore) ClosePortSession(
 	ctx context.Context,
 	input PortTunnelClose,
 ) (contracts.PortSession, error) {
-	if input.SubjectRef == "" {
-	}
 	if input.TenantRef == "" || input.SubjectRef == "" ||
 		input.SandboxID == "" || input.SessionID == "" || input.Reason == "" {
 		return contracts.PortSession{}, errors.New("SecondBox PortSession close authority is incomplete")
@@ -769,24 +765,6 @@ func validateLivePortAuthority(ctx context.Context, tx pgx.Tx, tunnel PortTunnel
 		leaseState != contracts.LeaseStateActive || leaseAccount != tunnel.SubjectRef ||
 		!now.Before(leaseExpiry) || !now.Before(tunnel.Session.ExpiresAt) || !activeRunner {
 		return ports.ErrLeaseInactive
-	}
-	return nil
-}
-
-func (store *PostgresDataPlaneStore) ensurePortRunnerConnected(ctx context.Context, runnerID string) error {
-	var active bool
-	if err := store.pool.QueryRow(ctx, `
-		SELECT EXISTS (
-		  SELECT 1
-		  FROM secondbox.runner_connections AS connection
-		  WHERE connection.runner_id=$1
-		    AND connection.state='active'
-		)`, runnerID,
-	).Scan(&active); err != nil {
-		return fmt.Errorf("SecondBox Port runner connection lookup: %w", err)
-	}
-	if !active {
-		return ports.ErrLifecycleUnavailable
 	}
 	return nil
 }
@@ -1130,7 +1108,7 @@ func (store *PostgresDataPlaneStore) projectPortSessionFrame(
 	if err := tx.Commit(ctx); err != nil {
 		return false, fmt.Errorf("SecondBox inbound Port commit: %w", err)
 	}
-	return transport == contracts.PortTransportRelay, nil
+	return transport == contracts.PortTransportProxied, nil
 }
 
 // RecordPortSessionFrame projects Port counters and terminal state without

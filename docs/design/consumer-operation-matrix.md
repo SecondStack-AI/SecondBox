@@ -20,7 +20,7 @@ bodies, or response decoders.
 | Snapshots | `CreateSnapshot`, `ListSnapshots`, `GetSnapshot`, `DeleteSnapshot`, `Restore` | matching methods | Explicit optimistic revision and idempotency; no implicit restore or deletion. |
 | Artifacts | `UploadArtifact`, `ListArtifacts`, `GetArtifact`, `DownloadArtifact`, `DeleteArtifact` | matching methods | SDK-owned multipart encoding, bounded download and digest verification. |
 | Lease takeover | `TakeoverLease`, `KeepLease` | `takeoverLease`, `keepLease` | Explicit generation fence; a keeper releases the Lease but never the Sandbox. |
-| Named Ports | `CreatePortSession`, `GetPortSession`, `ClosePortSession`, `ConnectPortTunnel` | matching methods | Consume one credential through its declared relay or direct transport only. |
+| Named Ports | `CreatePortSession`, `GetPortSession`, `ClosePortSession`, `ConnectPortTunnel` | matching methods | Consume one credential through its declared proxied or direct transport only. |
 | Terminals | `CreateTerminal`, `GetTerminal`, `ConnectTerminal`, `CancelTerminal` | matching methods | Authenticated, generation-fenced, sequenced attach/reconnect without lifecycle ownership. |
 | Node transports | not applicable | `@secondstack-ai/secondbox/node` | Authenticated WebSockets and TLS 1.3 direct-port dialing with the admitted SPKI pin. |
 | Flue 2.0 | language-neutral consumer mapping | `@secondstack-ai/secondbox/flue` | Exact `@flue/runtime` 2.x `SandboxFactory`/`SandboxApi` contract over an existing handle. |

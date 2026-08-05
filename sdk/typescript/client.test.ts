@@ -441,7 +441,7 @@ test("SandboxHandle creates, gets, and closes one authenticated PortSession", as
       generation: 7,
       name: "ssh",
       protocol: "tcp",
-      transport: "relay",
+      transport: "proxied",
       endpoint: "wss://secondbox.example/v1/port-sessions/port-1#credential",
       state: "open",
       createdAt: "2026-07-28T00:00:00Z",
@@ -545,7 +545,7 @@ test("SandboxHandle attaches an authenticated binary Port tunnel", async () => {
       generation: 7,
       name: "ssh",
       protocol: "tcp",
-      transport: "relay",
+      transport: "proxied",
       endpoint: "wss://secondbox.example/v1/port-sessions/port-1#single-use-token",
       state: "open",
       createdAt: "2026-07-28T00:00:00Z",
@@ -594,7 +594,7 @@ test("SandboxHandle rejects a PortSession without a single-use endpoint credenti
         generation: 7,
         name: "ssh",
         protocol: "tcp",
-        transport: "relay",
+        transport: "proxied",
         endpoint: "wss://secondbox.example/v1/port-sessions/port-1",
         state: "open",
         createdAt: "2026-07-28T00:00:00Z",
@@ -1011,12 +1011,12 @@ test("SandboxHandle surfaces a denied direct PortSession and closes the socket",
   assert.equal(closed, true);
 });
 
-test("SandboxHandle refuses a direct PortSession when only a relay connector is supplied", async () => {
+test("SandboxHandle refuses a direct PortSession when only a proxied connector is supplied", async () => {
   let connected = false;
   const connector: PortTunnelConnector = {
     async connect() {
       connected = true;
-      throw new Error("relay connector must not serve a direct session");
+      throw new Error("proxied connector must not serve a direct session");
     },
   };
   const api = new SecondBox(

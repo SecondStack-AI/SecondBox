@@ -21,10 +21,6 @@ type vmStateRequest struct {
 	State string `json:"state"`
 }
 
-type instanceActionRequest struct {
-	ActionType string `json:"action_type"`
-}
-
 type snapshotCreateRequest struct {
 	SnapshotType string `json:"snapshot_type"`
 	SnapshotPath string `json:"snapshot_path"`

@@ -16,13 +16,9 @@ const (
 type FailureClass string
 
 const (
-	FailureNone           FailureClass = ""
 	FailureTransient      FailureClass = "transient"
 	FailureCompatibility  FailureClass = "compatibility"
-	FailureAdmission      FailureClass = "admission"
 	FailureFencing        FailureClass = "fencing"
-	FailureIntegrity      FailureClass = "integrity"
-	FailureAuthorization  FailureClass = "authorization"
 	FailureStartupTimeout FailureClass = "startup_timeout"
 )
 

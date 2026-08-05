@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -332,21 +331,6 @@ func FromEnvironment() (Config, error) {
 		DefaultSubjectQuota:         subjectQuota,
 	}, nil
 }
-
-func requiredDigest(name string) (string, error) {
-	value, err := requiredString(name)
-	if err != nil {
-		return "", err
-	}
-	if !sha256DigestPattern.MatchString(value) {
-		return "", fmt.Errorf(
-			"SecondBox environment variable %s must be a sha256:<64 hex characters> digest", name,
-		)
-	}
-	return value, nil
-}
-
-var sha256DigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 func requiredApplicationAuthorities() ([]ApplicationAuthority, error) {
 	raw, err := requiredString("SECONDBOX_APPLICATION_AUTHORITIES_JSON")

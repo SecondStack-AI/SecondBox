@@ -39,7 +39,7 @@ Admission is identical for both Port transports. The single-use credential exist
 
 ### Proxied transport
 
-The default transport returns an expiring WebSocket endpoint whose single-use signed credential is carried in the URI fragment. Clients remove the fragment from the request URL and pass it as the `secondbox.port.token.<credential>` WebSocket protocol alongside `secondbox.port.v1`; this keeps the credential out of the HTTP path, query, and request log. The public transport discriminator remains `relay`, but the implementation is an in-memory proxy. The control plane atomically consumes the credential before upgrading, then forwards binary WebSocket messages over the Runner's authenticated outbound connection without persisting payload bytes. Credit in each direction bounds live buffered bytes and is returned only after the downstream write succeeds.
+The default `proxied` transport returns an expiring WebSocket endpoint whose single-use signed credential is carried in the URI fragment. Clients remove the fragment from the request URL and pass it as the `secondbox.port.token.<credential>` WebSocket protocol alongside `secondbox.port.v1`; this keeps the credential out of the HTTP path, query, and request log. The control plane atomically consumes the credential before upgrading, then forwards binary WebSocket messages over the Runner's authenticated outbound connection without persisting payload bytes. Credit in each direction bounds live buffered bytes and is returned only after the downstream write succeeds.
 
 The Runner forwards the proxied Port stream to the approved guest-loopback port.
 

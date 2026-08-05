@@ -120,12 +120,7 @@ func TestQualifiedFilesystemProvidesRealCopyOnWriteIsolation(t *testing.T) {
 	if _, err := store.PrepareRestore(t.Context(), restore); err != nil {
 		t.Fatalf("prepare qualified restore: %v", err)
 	}
-	if _, err := store.SwapRestore(t.Context(), SwapRestoreRequest{
-		Mutation:           restore.Mutation,
-		SnapshotID:         restore.SnapshotID,
-		ExpectedGeneration: restore.ExpectedGeneration,
-		NextGeneration:     restore.NextGeneration,
-	}); err != nil {
+	if _, err := store.SwapRestore(t.Context(), SwapRestoreRequest(restore)); err != nil {
 		t.Fatalf("swap qualified restore: %v", err)
 	}
 	if _, err := store.FinalizeRestore(

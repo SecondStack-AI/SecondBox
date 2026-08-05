@@ -81,14 +81,14 @@ func TestDirectPortTransportRequiresTheExactGrant(t *testing.T) {
 		absent bool
 		want   string
 	}{
-		"no_application_authority": {absent: true, want: contracts.PortTransportRelay},
+		"no_application_authority": {absent: true, want: contracts.PortTransportProxied},
 		"port_scope_only": {
 			scopes: []string{applicationScopeSandboxPorts},
-			want:   contracts.PortTransportRelay,
+			want:   contracts.PortTransportProxied,
 		},
 		"unrelated_scopes": {
 			scopes: []string{applicationScopeSandboxRead, applicationScopeSandboxExec},
-			want:   contracts.PortTransportRelay,
+			want:   contracts.PortTransportProxied,
 		},
 		"exact_direct_grant": {
 			scopes: []string{applicationScopeSandboxPorts, applicationScopeSandboxPortsDirect},

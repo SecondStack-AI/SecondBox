@@ -31,7 +31,7 @@ const directPortEchoRoundTrips = 20
 // interactive echo for both Port transports against one live Sandbox, and proves
 // that only an authority holding the exact grant learns a Runner address.
 //
-// The relay baseline is measured in the same run against the same guest listener
+// The proxied baseline is measured in the same run against the same guest listener
 // so the comparison isolates the transport rather than the host, the guest, or
 // the network. Both transports share one Sandbox so the qualification adds no
 // compute footprint to the suite.
@@ -58,17 +58,17 @@ func TestScenarioDirectPortTransportQualification(t *testing.T) {
 	lease := acquireScenarioLease(t, ctx, fixture, handle, 60, "direct-port-lease")
 	startScenarioEchoListener(t, ctx, handle)
 
-	relay := measureScenarioRelayPort(t, ctx, fixture, handle, lease.ID)
+	proxied := measureScenarioProxiedPort(t, ctx, fixture, handle, lease.ID)
 	direct := measureScenarioDirectPort(t, ctx, ingress, handle, lease.ID)
 
 	t.Logf(
-		"SecondBox Port transport qualification: relay connect=%v echo_mean=%v echo_max=%v session=%v; direct connect=%v echo_mean=%v echo_max=%v session=%v",
-		relay.connect, relay.echoMean(), relay.echoMaximum(), relay.session(),
+		"SecondBox Port transport qualification: proxied connect=%v echo_mean=%v echo_max=%v session=%v; direct connect=%v echo_mean=%v echo_max=%v session=%v",
+		proxied.connect, proxied.echoMean(), proxied.echoMaximum(), proxied.session(),
 		direct.connect, direct.echoMean(), direct.echoMaximum(), direct.session(),
 	)
 
 	// The plan's success criterion is that interactive latency stops being
-	// governed by the data-plane poll interval. The relay applies that interval
+	// governed by the data-plane poll interval. The proxied path applies that interval
 	// twice per round trip, so a direct round trip must land well inside one.
 	pollInterval := scenarioDataPlanePollInterval(t)
 	if direct.echoMean() >= pollInterval {
@@ -92,12 +92,12 @@ func TestScenarioDirectPortTransportQualification(t *testing.T) {
 	//
 	// An SSH connection completes several round trips before its first prompt.
 	// Comparing whole interactive sessions rather than the bare handshake is
-	// what shows the transport difference: the relay defers its cost to every
+	// what shows the transport difference: the proxy defers its cost to every
 	// round trip instead of charging it at connect.
-	if direct.session() >= relay.session() {
+	if direct.session() >= proxied.session() {
 		t.Fatalf(
-			"direct Port interactive session = %v, relay baseline = %v",
-			direct.session(), relay.session(),
+			"direct Port interactive session = %v, proxied baseline = %v",
+			direct.session(), proxied.session(),
 		)
 	}
 
@@ -126,8 +126,8 @@ func assertScenarioRunnerAddressNeedsTheGrant(
 	leaseID string,
 ) {
 	t.Helper()
-	platform := createScenarioPortSession(t, ctx, fixture, handle, leaseID, "ungranted-relay")
-	if platform.Transport != contracts.PortTransportRelay ||
+	platform := createScenarioPortSession(t, ctx, fixture, handle, leaseID, "ungranted-proxied")
+	if platform.Transport != contracts.PortTransportProxied ||
 		!strings.HasPrefix(platform.Endpoint, "ws") {
 		t.Fatalf("ungranted PortSession = %#v", platform)
 	}
@@ -140,7 +140,7 @@ func assertScenarioRunnerAddressNeedsTheGrant(
 		t.Fatalf("direct PortSession endpoint = %q, error = %v", granted.Endpoint, err)
 	}
 	if strings.Contains(platform.Endpoint, endpoint.Host) {
-		t.Fatalf("relay endpoint %q leaked the Runner address", platform.Endpoint)
+		t.Fatalf("proxied endpoint %q leaked the Runner address", platform.Endpoint)
 	}
 }
 
@@ -174,7 +174,7 @@ func (measurement scenarioPortMeasurement) session() time.Duration {
 	return total
 }
 
-func measureScenarioRelayPort(
+func measureScenarioProxiedPort(
 	t *testing.T,
 	ctx context.Context,
 	fixture scenarioFixture,
@@ -182,7 +182,7 @@ func measureScenarioRelayPort(
 	leaseID string,
 ) scenarioPortMeasurement {
 	t.Helper()
-	session := createScenarioPortSession(t, ctx, fixture, handle, leaseID, "relay-baseline")
+	session := createScenarioPortSession(t, ctx, fixture, handle, leaseID, "proxied-baseline")
 	startedAt := time.Now()
 	connection := dialScenarioPortTunnel(t, ctx, session.Endpoint)
 	defer connection.Close()
@@ -194,21 +194,21 @@ func measureScenarioRelayPort(
 		probe := scenarioEchoProbe(round)
 		sentAt := time.Now()
 		if err := connection.WriteMessage(websocket.BinaryMessage, probe); err != nil {
-			t.Fatalf("relay baseline write: %v", err)
+			t.Fatalf("proxied baseline write: %v", err)
 		}
 		received := make([]byte, 0, len(probe))
 		for len(received) < len(probe) {
 			messageType, payload, err := connection.ReadMessage()
 			if err != nil {
-				t.Fatalf("relay baseline read: %v", err)
+				t.Fatalf("proxied baseline read: %v", err)
 			}
 			if messageType != websocket.BinaryMessage {
-				t.Fatalf("relay baseline message type = %d", messageType)
+				t.Fatalf("proxied baseline message type = %d", messageType)
 			}
 			received = append(received, payload...)
 		}
 		if !bytes.Equal(received, probe) {
-			t.Fatalf("relay baseline echo = %q, want %q", received, probe)
+			t.Fatalf("proxied baseline echo = %q, want %q", received, probe)
 		}
 		measurement.echoes = append(measurement.echoes, time.Since(sentAt))
 	}
@@ -378,7 +378,7 @@ func createScenarioDirectPortSession(
 			PathParameters: map[string]string{"sandboxId": handle.Snapshot().ID},
 			Headers:        scenarioLeaseHeaders(handle, leaseID, uniqueScenarioKey(t, key)),
 			Body: scenarioBodyWithoutTestFailure(
-				// The same duration as the relay baseline, and inside the Lease
+				// The same duration as the proxied baseline, and inside the Lease
 				// that admitted it, so the comparison isolates the transport.
 				contracts.CreatePortSessionRequest{Name: "web", DurationSeconds: 30},
 			),
@@ -390,7 +390,7 @@ func createScenarioDirectPortSession(
 	return session
 }
 
-// scenarioDataPlanePollInterval reads the deployed relay interval so the
+// scenarioDataPlanePollInterval reads the deployed proxy interval so the
 // assertion compares against the configured baseline rather than a constant.
 func scenarioDataPlanePollInterval(t *testing.T) time.Duration {
 	t.Helper()

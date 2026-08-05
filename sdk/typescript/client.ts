@@ -857,7 +857,7 @@ export interface DirectPortDialer {
 
 /** Transports a caller supports. A PortSession is served by exactly one. */
 export interface PortTunnelTransports {
-  readonly relay?: PortTunnelConnector;
+  readonly proxied?: PortTunnelConnector;
   readonly direct?: DirectPortDialer;
 }
 
@@ -1433,8 +1433,8 @@ export class SandboxHandle implements SandboxFilesystem {
     if (session.transport === "direct") {
       return connectDirectPortTunnel(session, endpoint, credential, transports, signal);
     }
-    if (!transports.relay) {
-      throw new Error("SecondBox PortSession relay transport has no connector");
+    if (!transports.proxied) {
+      throw new Error("SecondBox PortSession proxied transport has no connector");
     }
     if (
       (endpoint.protocol !== "ws:" && endpoint.protocol !== "wss:") ||
@@ -1452,7 +1452,7 @@ export class SandboxHandle implements SandboxFilesystem {
       throw new Error("SecondBox PortSession endpoint credential is invalid");
     }
     endpoint.hash = "";
-    const connection = await transports.relay.connect(
+    const connection = await transports.proxied.connect(
       {
         websocketURL: endpoint.toString(),
         subprotocols: [
@@ -2098,7 +2098,7 @@ const DIRECT_PORT_VERDICT_ADMITTED = 0;
 function normalizePortTunnelTransports(
   connector: PortTunnelConnector | PortTunnelTransports,
 ): PortTunnelTransports {
-  return "connect" in connector ? { relay: connector } : connector;
+  return "connect" in connector ? { proxied: connector } : connector;
 }
 
 /**
