@@ -131,17 +131,23 @@ test("SandboxHandle sends generation and maps buffered output", async () => {
   };
   const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
   const handle = new SandboxHandle(api, sandbox("ready"));
-  const result = await handle.exec("false", {
+  const result = await handle.exec({
+    mode: "argv",
+    executable: "false",
+    arguments: ["--verbose"],
+  }, {
     cwd: "project",
     environment: { EXPLICIT: "yes" },
+    stdinBase64: "aW5wdXQ=",
     deadlineMilliseconds: 500,
     maximumOutputBytes: 4096,
   });
   assert.equal(generation, "7");
   assert.deepEqual(requestBody, {
-    command: { mode: "shell", command: "false" },
+    command: { mode: "argv", executable: "false", arguments: ["--verbose"] },
     cwd: "project",
     environment: { EXPLICIT: "yes" },
+    stdinBase64: "aW5wdXQ=",
     deadlineMilliseconds: 500,
     maximumOutputBytes: 4096,
   });
@@ -151,6 +157,39 @@ test("SandboxHandle sends generation and maps buffered output", async () => {
     assert.equal(result.exitCode, 23);
     assert.equal(result.elapsedMilliseconds, 42);
   }
+});
+
+test("SandboxHandle readFile enforces its explicit bound while streaming", async () => {
+  let cancelled = false;
+  let requests = 0;
+  const fetcher: typeof fetch = async () => {
+    requests += 1;
+    if (requests === 1) return new Response(new Uint8Array([1, 2, 3, 4, 5, 6]));
+    return new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+        controller.enqueue(new Uint8Array([4, 5, 6]));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }));
+  };
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
+  const handle = new SandboxHandle(api, sandbox("ready"));
+  assert.deepEqual(
+    await handle.readFile("bounded.bin", 6),
+    new Uint8Array([1, 2, 3, 4, 5, 6]),
+  );
+  await assert.rejects(
+    handle.readFile("bounded.bin", 4),
+    /SecondBox file read exceeds 4 bytes/,
+  );
+  assert.equal(cancelled, true);
+  await assert.rejects(
+    handle.readFile("bounded.bin", 0),
+    /SecondBox file path and positive read bound are required/,
+  );
 });
 
 test("SandboxHandle negotiates a streaming session", async () => {
@@ -724,6 +763,7 @@ test("waitFor returns immediately when the state already holds", async () => {
 
 test("run creates, waits, and executes one command", async () => {
   const paths: string[] = [];
+  let execBody: unknown;
   const fetcher: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
     paths.push(`${init?.method ?? "GET"} ${url.pathname}`);
@@ -739,6 +779,7 @@ test("run creates, waits, and executes one command", async () => {
       });
     }
     if (url.pathname.endsWith("/exec")) {
+      execBody = JSON.parse(String(init?.body));
       return Response.json({
         kind: "exited",
         exitCode: 0,
@@ -754,7 +795,8 @@ test("run creates, waits, and executes one command", async () => {
   const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
   const outcome = await api.run({
     profile: "durable-coding",
-    command: "echo hello",
+    command: { mode: "shell", command: "cat" },
+    stdinBase64: "aGVsbG8K",
     deadlineMilliseconds: 5_000,
     maximumOutputBytes: 1_048_576,
     readyTimeoutMilliseconds: 10_000,
@@ -765,6 +807,13 @@ test("run creates, waits, and executes one command", async () => {
   assert.equal(Buffer.from(outcome.result.stdout).toString(), "hello\n");
   assert.ok(paths.includes("POST /v1/sandboxes"));
   assert.ok(paths.includes("POST /v1/sandboxes/sandbox-1/exec"));
+  assert.deepEqual(execBody, {
+    command: { mode: "shell", command: "cat" },
+    environment: {},
+    stdinBase64: "aGVsbG8K",
+    deadlineMilliseconds: 5_000,
+    maximumOutputBytes: 1_048_576,
+  });
   // run never deletes: disposal stays the caller's decision.
   assert.ok(!paths.some((entry) => entry.startsWith("DELETE")));
 });

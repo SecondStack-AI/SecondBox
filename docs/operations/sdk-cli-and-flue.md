@@ -277,6 +277,7 @@ import { createSecondBoxFlueAdapter } from "@secondstack-ai/secondbox/flue";
 
 const flueSandbox = createSecondBoxFlueAdapter(handle, {
   defaultDeadlineMilliseconds: 60_000,
+  maximumFileBytes: 4 * 1024 * 1024,
   maximumOutputBytes: 4 * 1024 * 1024,
 });
 

@@ -4,6 +4,8 @@ import {
   SecondBoxClient,
   encodeJSONBody,
   type CreateDirectoryRequest,
+  type BufferedExecRequest,
+  type Command,
   type CreatePortSessionRequest,
   type CreateProfileRequest,
   type CreateRunnerPoolRequest,
@@ -51,6 +53,8 @@ import {
 export type {
   Artifact,
   ArtifactPage,
+  BufferedExecRequest,
+  Command,
   ExecStreamFrame,
   FileStat,
   Lease,
@@ -470,6 +474,7 @@ export class SecondBox {
     const result = await handle.exec(request.command, {
       ...(request.cwd === undefined ? {} : { cwd: request.cwd }),
       environment: request.environment ?? {},
+      ...(request.stdinBase64 === undefined ? {} : { stdinBase64: request.stdinBase64 }),
       deadlineMilliseconds: request.deadlineMilliseconds,
       maximumOutputBytes: request.maximumOutputBytes,
       ...(request.signal === undefined ? {} : { signal: request.signal }),
@@ -509,11 +514,7 @@ export class SecondBox {
   }
 }
 
-export interface ExecOptions {
-  readonly cwd?: string;
-  readonly environment: Readonly<Record<string, string>>;
-  readonly deadlineMilliseconds: number;
-  readonly maximumOutputBytes: number;
+export interface ExecOptions extends Omit<BufferedExecRequest, "command"> {
   readonly signal?: AbortSignal;
 }
 
@@ -925,14 +926,14 @@ export class PortTunnel {
 
 /** Filesystem and command surface consumed by the Flue adapter. */
 export interface SandboxFilesystem {
-  readFile(path: string, signal?: AbortSignal): Promise<Uint8Array>;
+  readFile(path: string, maximumBytes: number, signal?: AbortSignal): Promise<Uint8Array>;
   writeFile(path: string, content: Uint8Array, signal?: AbortSignal): Promise<unknown>;
   statFile(path: string, signal?: AbortSignal): Promise<Pick<FileStat, "kind" | "sizeBytes" | "modifiedAt">>;
   listDirectory(path: string, signal?: AbortSignal): Promise<readonly Pick<FileStat, "path">[]>;
   fileExists(path: string, signal?: AbortSignal): Promise<boolean>;
   createDirectory(path: string, recursive: boolean, signal?: AbortSignal): Promise<void>;
   removePath(path: string, recursive: boolean, force: boolean, signal?: AbortSignal): Promise<void>;
-  exec(command: string, options: ExecOptions): Promise<ExecResult>;
+  exec(command: Command, options: ExecOptions): Promise<ExecResult>;
 }
 
 export interface LifecycleOptions {
@@ -1145,7 +1146,7 @@ export class SandboxHandle implements SandboxFilesystem {
     return this.lifecycle("deleteSandbox", options);
   }
 
-  public async exec(command: string, options: ExecOptions): Promise<ExecResult> {
+  public async exec(command: Command, options: ExecOptions): Promise<ExecResult> {
     requirePositiveInteger(options.deadlineMilliseconds, "exec deadlineMilliseconds");
     requirePositiveInteger(options.maximumOutputBytes, "exec maximumOutputBytes");
     const outcome = await this.#api.requestJSON<ExecOutcome>("executeSandboxCommand", {
@@ -1155,9 +1156,10 @@ export class SandboxHandle implements SandboxFilesystem {
         "Idempotency-Key": idempotencyKey(),
       },
       body: encodeJSONBody({
-        command: { mode: "shell", command },
+        command,
         ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
         environment: options.environment,
+        ...(options.stdinBase64 === undefined ? {} : { stdinBase64: options.stdinBase64 }),
         deadlineMilliseconds: options.deadlineMilliseconds,
         maximumOutputBytes: options.maximumOutputBytes,
       }),
@@ -1466,14 +1468,25 @@ export class SandboxHandle implements SandboxFilesystem {
     return new PortTunnel(connection);
   }
 
-  public async readFile(path: string, signal?: AbortSignal): Promise<Uint8Array> {
+  public async readFile(
+    path: string,
+    maximumBytes: number,
+    signal?: AbortSignal,
+  ): Promise<Uint8Array> {
+    if (path === "" || !Number.isInteger(maximumBytes) || maximumBytes < 1) {
+      throw new Error("SecondBox file path and positive read bound are required");
+    }
     const response = await this.#api.request("readSandboxFile", {
       pathParameters: { sandboxId: this.#snapshot.id },
       queryParameters: { path },
       headers: this.dataPlaneHeaders(),
       signal,
     });
-    return new Uint8Array(await response.arrayBuffer());
+    return readBoundedResponse(
+      response,
+      maximumBytes,
+      `SecondBox file read exceeds ${String(maximumBytes)} bytes`,
+    );
   }
 
   public async writeFile(
@@ -1634,15 +1647,11 @@ export interface WaitForOptions {
   readonly signal?: AbortSignal;
 }
 
-export interface RunRequest {
+export interface RunRequest extends Omit<BufferedExecRequest, "environment"> {
   readonly profile: string;
   readonly metadata?: Metadata;
   readonly sourceSnapshotId?: string;
-  readonly command: string;
-  readonly cwd?: string;
-  readonly environment?: Readonly<Record<string, string>>;
-  readonly deadlineMilliseconds: number;
-  readonly maximumOutputBytes: number;
+  readonly environment?: BufferedExecRequest["environment"];
   readonly readyTimeoutMilliseconds: number;
   readonly signal?: AbortSignal;
 }
@@ -1987,6 +1996,38 @@ function ownedArrayBuffer(content: Uint8Array): ArrayBuffer {
   const copy = new ArrayBuffer(content.byteLength);
   new Uint8Array(copy).set(content);
   return copy;
+}
+
+async function readBoundedResponse(
+  response: Response,
+  maximumBytes: number,
+  exceededMessage: string,
+): Promise<Uint8Array> {
+  const reader = response.body?.getReader();
+  if (reader === undefined) return new Uint8Array();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > maximumBytes) {
+        await reader.cancel();
+        throw new Error(exceededMessage);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const content = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    content.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return content;
 }
 
 function idempotencyKey(): string {

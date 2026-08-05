@@ -1,6 +1,7 @@
 package secondboxclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -241,6 +242,30 @@ func TestDataPlanePreservesSuppliedIdempotencyKey(t *testing.T) {
 	}
 	if observedKey != "caller-key" {
 		t.Errorf("Idempotency-Key = %q; want the caller's key", observedKey)
+	}
+}
+
+func TestReadFileEnforcesExplicitBound(t *testing.T) {
+	var observedPath, observedGeneration string
+	client := newLifecycleClient(t, func(writer http.ResponseWriter, request *http.Request) {
+		observedPath = request.URL.Query().Get("path")
+		observedGeneration = request.Header.Get("SecondBox-Generation")
+		_, _ = writer.Write([]byte{0, 1, 2, 3, 4, 5})
+	})
+	handle := readySandbox(t, client)
+	content, err := handle.ReadFile(context.Background(), "bounded.bin", 6, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(content, []byte{0, 1, 2, 3, 4, 5}) {
+		t.Fatalf("content = %v; want all bounded bytes", content)
+	}
+	if observedPath != "bounded.bin" || observedGeneration != "1" {
+		t.Errorf("path = %q, generation = %q; want bounded.bin and 1", observedPath, observedGeneration)
+	}
+	if _, err := handle.ReadFile(context.Background(), "bounded.bin", 5, ""); err == nil ||
+		!strings.Contains(err.Error(), "SecondBox file read exceeds 5 bytes") {
+		t.Fatalf("error = %v; want the stable read-bound error", err)
 	}
 }
 
@@ -624,6 +649,7 @@ func TestCreateSandboxRejectsOperationWithoutSandboxReference(t *testing.T) {
 func TestRunCreatesWaitsAndExecutes(t *testing.T) {
 	var mutex sync.Mutex
 	var paths []string
+	var execRequest BufferedExecRequest
 	client := newLifecycleClient(t, func(writer http.ResponseWriter, request *http.Request) {
 		mutex.Lock()
 		paths = append(paths, request.Method+" "+request.URL.Path)
@@ -635,6 +661,10 @@ func TestRunCreatesWaitsAndExecutes(t *testing.T) {
 				"kind":"create","state":"pending","requestId":"request-1",
 				"createdAt":"2026-07-28T00:00:00Z","updatedAt":"2026-07-28T00:00:00Z"}`)
 		case strings.HasSuffix(request.URL.Path, "/exec"):
+			if err := json.NewDecoder(request.Body).Decode(&execRequest); err != nil {
+				t.Errorf("decode exec request: %v", err)
+				return
+			}
 			_, _ = io.WriteString(writer, `{"kind":"exited","exitCode":0,"elapsedMilliseconds":7,
 				"output":{"stdoutBase64":"`+
 				base64.StdEncoding.EncodeToString([]byte("hello from a sandbox\n"))+
@@ -645,11 +675,13 @@ func TestRunCreatesWaitsAndExecutes(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	stdinBase64 := base64.StdEncoding.EncodeToString([]byte("input\n"))
 	handle, result, err := client.Run(ctx, RunRequest{
 		Profile: "durable-coding",
 		Command: Command{ArgvCommand: &ArgvCommand{
 			Mode: "argv", Executable: "echo", Arguments: []string{"hello"},
 		}},
+		StdinBase64:          &stdinBase64,
 		DeadlineMilliseconds: 5000,
 		MaximumOutputBytes:   1 << 20,
 	})
@@ -664,6 +696,12 @@ func TestRunCreatesWaitsAndExecutes(t *testing.T) {
 	}
 	if result.Result.ExitCode != 0 || result.Sandbox.State != SandboxStateReady {
 		t.Errorf("result = %+v", result)
+	}
+	if execRequest.Command.ArgvCommand == nil ||
+		execRequest.Command.ArgvCommand.Executable != "echo" ||
+		execRequest.StdinBase64 == nil ||
+		*execRequest.StdinBase64 != base64.StdEncoding.EncodeToString([]byte("input\n")) {
+		t.Errorf("exec request = %+v; want argv command and stdin", execRequest)
 	}
 	mutex.Lock()
 	defer mutex.Unlock()

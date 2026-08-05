@@ -178,6 +178,9 @@ func (stream *ExecStream) Receive() (ExecStreamFrame, error) {
 	switch {
 	case frame.StreamOutputFrame != nil:
 		sequence = frame.StreamOutputFrame.Sequence
+		if !isCanonicalBase64(frame.StreamOutputFrame.DataBase64) {
+			return ExecStreamFrame{}, errors.New("SecondBox Exec stream output is not canonical base64")
+		}
 	case frame.StreamOutcomeFrame != nil:
 		sequence = frame.StreamOutcomeFrame.Sequence
 		stream.writeMu.Lock()
@@ -194,6 +197,11 @@ func (stream *ExecStream) Receive() (ExecStreamFrame, error) {
 	}
 	stream.nextOutput++
 	return frame, nil
+}
+
+func isCanonicalBase64(value string) bool {
+	content, err := base64.StdEncoding.Strict().DecodeString(value)
+	return err == nil && base64.StdEncoding.EncodeToString(content) == value
 }
 
 // Close detaches the WebSocket. A nonterminal detach requests server-side cancellation.

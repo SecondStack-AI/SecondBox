@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type {
+  Command,
   ExecResult,
   SandboxFilesystem,
 } from "./client.ts";
@@ -14,18 +15,22 @@ test("Flue adapter translates its absolute root to workspace-relative paths", as
   const filesystem = new RecordingSandbox();
   const api = new SecondBoxFlueSandboxApi(filesystem, {
     defaultDeadlineMilliseconds: 1_000,
+    maximumFileBytes: 16_384,
     maximumOutputBytes: 16_384,
   });
   await api.writeFile("/workspace/nested/value.bin", new Uint8Array([0, 255]));
   assert.deepEqual(filesystem.writes, [["nested/value.bin", [0, 255]]]);
   await assert.rejects(api.readFile("/outside/value.txt"), /outside the SecondBox workspace root/);
   assert.equal(filesystem.reads.length, 0);
+  await api.readFile("/workspace/nested/value.bin");
+  assert.deepEqual(filesystem.readBounds, [16_384]);
 });
 
 test("Flue adapter preserves stat fidelity and directory entry names", async () => {
   const filesystem = new RecordingSandbox();
   const api = new SecondBoxFlueSandboxApi(filesystem, {
     defaultDeadlineMilliseconds: 1_000,
+    maximumFileBytes: 16_384,
     maximumOutputBytes: 16_384,
   });
   assert.deepEqual(await api.stat("/workspace/link"), {
@@ -42,6 +47,7 @@ test("Flue adapter honors cwd, env, timeout, abort, and non-zero results", async
   const filesystem = new RecordingSandbox();
   const api = new SecondBoxFlueSandboxApi(filesystem, {
     defaultDeadlineMilliseconds: 1_000,
+    maximumFileBytes: 16_384,
     maximumOutputBytes: 16_384,
   });
   const controller = new AbortController();
@@ -71,6 +77,7 @@ test("Flue adapter maps a structured deadline outcome to exit code 124", async (
   };
   const api = new SecondBoxFlueSandboxApi(filesystem, {
     defaultDeadlineMilliseconds: 1_000,
+    maximumFileBytes: 16_384,
     maximumOutputBytes: 16_384,
   });
   assert.deepEqual(await api.exec("sleep 10", { timeoutMs: 321 }), {
@@ -84,6 +91,7 @@ test("Flue session rejects an already-aborted command before transport mutation"
   const filesystem = new RecordingSandbox();
   const factory = createSecondBoxFlueAdapter(filesystem, {
     defaultDeadlineMilliseconds: 1_000,
+    maximumFileBytes: 16_384,
     maximumOutputBytes: 16_384,
   });
   const session = await factory.createSessionEnv({ id: "workflow-aborted" });
@@ -100,6 +108,7 @@ test("Flue adapter forwards exact mkdir and rm option values", async () => {
   const filesystem = new RecordingSandbox();
   const api = new SecondBoxFlueSandboxApi(filesystem, {
     defaultDeadlineMilliseconds: 1_000,
+    maximumFileBytes: 16_384,
     maximumOutputBytes: 16_384,
   });
   await api.mkdir("/workspace/a/b", { recursive: true });
@@ -112,6 +121,7 @@ test("separate Flue session environments retain files and never own lifecycle", 
   const filesystem = new RecordingSandbox();
   const factory = createSecondBoxFlueAdapter(filesystem, {
     defaultDeadlineMilliseconds: 1_000,
+    maximumFileBytes: 16_384,
     maximumOutputBytes: 16_384,
   });
   const first = await factory.createSessionEnv({ id: "workflow-1" });
@@ -128,6 +138,7 @@ test("separate Flue session environments retain files and never own lifecycle", 
 
 class RecordingSandbox implements SandboxFilesystem {
   readonly reads: string[] = [];
+  readonly readBounds: number[] = [];
   readonly writes: Array<[string, number[]]> = [];
   readonly files = new Map<string, Uint8Array>();
   execOptions: unknown;
@@ -143,11 +154,15 @@ class RecordingSandbox implements SandboxFilesystem {
   removeOptions: unknown;
   lifecycleCalls = 0;
 
-  async readFile(path: string): Promise<Uint8Array> {
+  async readFile(path: string, maximumBytes: number): Promise<Uint8Array> {
     this.reads.push(path);
+    this.readBounds.push(maximumBytes);
     const value = this.files.get(path);
-    if (value !== undefined) return value;
-    return new TextEncoder().encode("text");
+    const content = value ?? new TextEncoder().encode("text");
+    if (content.byteLength > maximumBytes) {
+      throw new Error(`SecondBox file read exceeds ${String(maximumBytes)} bytes`);
+    }
+    return content;
   }
 
   async writeFile(path: string, content: Uint8Array): Promise<void> {
@@ -188,10 +203,11 @@ class RecordingSandbox implements SandboxFilesystem {
   }
 
   async exec(
-    _command: string,
+    command: Command,
     options: unknown,
   ): Promise<ExecResult> {
     this.execCalls++;
+    assert.equal(command.mode, "shell");
     this.execOptions = options;
     return this.execResult;
   }

@@ -301,6 +301,43 @@ func TestSandboxHandleConnectsAndSequencesExecStream(t *testing.T) {
 	}
 }
 
+func TestExecStreamReceiveRejectsNonCanonicalBase64(t *testing.T) {
+	upgrader := websocket.Upgrader{Subprotocols: []string{execStreamSubprotocol}}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		connection, err := upgrader.Upgrade(response, request, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer connection.Close()
+		if err := connection.WriteJSON(ExecStreamFrame{StreamOutputFrame: &StreamOutputFrame{
+			Type: "output", Sequence: 0, Stream: "stdout", DataBase64: "AB==",
+		}}); err != nil {
+			t.Errorf("write output: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewSecondBoxClient(server.URL, "token", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle := NewSandboxHandle(client, Sandbox{ID: "sandbox-1", Generation: 3})
+	stream, err := handle.ConnectExecStream(t.Context(), ExecStreamSession{
+		ID: "exec-1", SandboxID: "sandbox-1", Generation: 3,
+		State: SessionStateOpen, Subprotocol: execStreamSubprotocol,
+		WebsocketURL: "ws" + strings.TrimPrefix(server.URL, "http"),
+		ExpiresAt:    time.Now().Add(time.Minute),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	if _, err := stream.Receive(); err == nil || !strings.Contains(err.Error(), "canonical base64") {
+		t.Fatalf("error = %v; want a canonical base64 rejection", err)
+	}
+}
+
 func TestSandboxHandleConnectsAndSequencesTerminal(t *testing.T) {
 	upgrader := websocket.Upgrader{Subprotocols: []string{terminalSubprotocol}}
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {

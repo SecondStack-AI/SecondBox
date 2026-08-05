@@ -14,6 +14,7 @@ const FLUE_WORKSPACE_ROOT = "/workspace";
 
 export interface SecondBoxFlueOptions {
   readonly defaultDeadlineMilliseconds: number;
+  readonly maximumFileBytes: number;
   readonly maximumOutputBytes: number;
 }
 
@@ -30,6 +31,7 @@ export class SecondBoxFlueSandboxApi implements SandboxApi {
       options.defaultDeadlineMilliseconds,
       "Flue defaultDeadlineMilliseconds",
     );
+    requirePositiveInteger(options.maximumFileBytes, "Flue maximumFileBytes");
     requirePositiveInteger(options.maximumOutputBytes, "Flue maximumOutputBytes");
     this.#sandbox = sandbox;
     this.#options = options;
@@ -40,7 +42,10 @@ export class SecondBoxFlueSandboxApi implements SandboxApi {
   }
 
   public readFileBuffer(path: string): Promise<Uint8Array> {
-    return this.#sandbox.readFile(workspaceRelativePath(path));
+    return this.#sandbox.readFile(
+      workspaceRelativePath(path),
+      this.#options.maximumFileBytes,
+    );
   }
 
   public async writeFile(
@@ -109,7 +114,7 @@ export class SecondBoxFlueSandboxApi implements SandboxApi {
     const timeout =
       options?.timeoutMs ?? this.#options.defaultDeadlineMilliseconds;
     requirePositiveInteger(timeout, "Flue exec timeoutMs");
-    const outcome = await this.#sandbox.exec(command, {
+    const outcome = await this.#sandbox.exec({ mode: "shell", command }, {
       ...(options?.cwd === undefined
         ? {}
         : { cwd: workspaceRelativePath(options.cwd) }),

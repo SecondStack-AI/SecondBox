@@ -17,7 +17,11 @@ const { handle } = await api.createSandbox({
   metadata: { example: "typescript" },
 });
 await handle.waitFor(["ready"], { deadlineMilliseconds: 10 * 60_000 });
-const result = await handle.exec("printf durable", {
+const result = await handle.exec({
+  mode: "argv",
+  executable: "printf",
+  arguments: ["durable"],
+}, {
   environment: {},
   deadlineMilliseconds: 30_000,
   maximumOutputBytes: 1 << 20,

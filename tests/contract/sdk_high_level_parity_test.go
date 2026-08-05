@@ -45,6 +45,55 @@ func TestGoAndTypeScriptHighLevelSDKBehaviorParity(t *testing.T) {
 	}
 }
 
+func TestGoAndTypeScriptDataPlaneSafetyParity(t *testing.T) {
+	root := repositoryRoot(t)
+	goSurface := readSurfaceFiles(t, root, []string{
+		"sdk/go/secondboxclient/sdk.go", "sdk/go/secondboxclient/data_plane.go",
+		"sdk/go/secondboxclient/lifecycle.go",
+		"sdk/go/secondboxclient/exec_stream.go",
+	})
+	typeScriptSurface := readSurfaceFiles(t, root, []string{"sdk/typescript/client.ts"})
+
+	for _, check := range []struct {
+		name, goSource, typeScriptSource string
+	}{
+		{
+			name:             "explicit file read bounds",
+			goSource:         "path WorkspacePath, maximumBytes int64",
+			typeScriptSource: "maximumBytes: number",
+		},
+		{
+			name:             "stable file read bound errors",
+			goSource:         "SecondBox file read exceeds %d bytes",
+			typeScriptSource: "SecondBox file read exceeds ${String(maximumBytes)} bytes",
+		},
+		{
+			name:             "buffered command unions",
+			goSource:         "request BufferedExecRequest",
+			typeScriptSource: "command: Command, options: ExecOptions",
+		},
+		{
+			name:             "buffered stdin",
+			goSource:         "StdinBase64:          request.StdinBase64",
+			typeScriptSource: "stdinBase64: options.stdinBase64",
+		},
+		{
+			name:             "stream output canonical base64",
+			goSource:         "SecondBox Exec stream output is not canonical base64",
+			typeScriptSource: "SecondBox Exec stream output is not canonical base64",
+		},
+	} {
+		t.Run(check.name, func(t *testing.T) {
+			if !strings.Contains(goSurface, check.goSource) {
+				t.Errorf("Go SDK lacks %s evidence %q", check.name, check.goSource)
+			}
+			if !strings.Contains(typeScriptSurface, check.typeScriptSource) {
+				t.Errorf("TypeScript SDK lacks %s evidence %q", check.name, check.typeScriptSource)
+			}
+		})
+	}
+}
+
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 	_, source, _, ok := runtime.Caller(0)
