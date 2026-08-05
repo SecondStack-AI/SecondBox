@@ -33,8 +33,7 @@ type terminalDataPlaneStore interface {
 	DataPlaneStore
 	AcquireTerminalAttachment(context.Context, string, string, string, string, int64, string, time.Time) (runnercontrol.DataPlaneSession, error)
 	DetachTerminalAttachment(context.Context, string, string, string, string, time.Time) (bool, error)
-	RecordTerminalClientFrame(context.Context, string, string, string, string, runnercontrol.TerminalClientFrame, time.Time) (bool, error)
-	RecordTerminalServerFrame(context.Context, string, string, string, runnercontrol.TerminalServerFrame, time.Time) (runnercontrol.DataPlaneSession, error)
+	CheckpointTerminal(context.Context, string, string, string, runnercontrol.TerminalCheckpoint, time.Time) (runnercontrol.DataPlaneSession, error)
 }
 
 const (
@@ -166,7 +165,7 @@ func (service *ControlPlaneService) CancelSandboxExecStreamAtGeneration(
 			SessionKind: "exec", SessionOperation: "exec-stream",
 			IdempotencyKey: idempotencyKey,
 			RequestHash:    requestHash, Reason: "public streaming client cancelled",
-			Generation: generation, Now: now, IdempotencyEnds: now.Add(idempotencyRetention),
+			Generation: generation, Now: now, IdempotencyEnds: service.idempotencyExpiration(now),
 		},
 	)
 }

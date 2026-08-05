@@ -23,6 +23,7 @@ func TuningDefaults() []TuningDefault {
 		integer("SECONDBOX_RUNNER_EVENT_PERSISTENCE_BATCH_SIZE", DefaultRunnerEventPersistenceBatchSize),
 		integer("SECONDBOX_RUNNER_EVENT_PERSISTENCE_BATCH_WAIT_MILLISECONDS", DefaultRunnerEventPersistenceBatchWaitMilliseconds),
 		integer("SECONDBOX_DATA_PLANE_MAXIMUM_SESSION_BYTES", DefaultDataPlaneMaximumSessionBytes),
+		integer("SECONDBOX_IDEMPOTENCY_RETENTION_SECONDS", DefaultIdempotencyRetentionSeconds),
 		integer("SECONDBOX_LIFECYCLE_RECONCILE_BATCH_SIZE", DefaultLifecycleReconcileBatchSize),
 		integer("SECONDBOX_LIFECYCLE_RECONCILE_POLL_INTERVAL_MILLISECONDS", DefaultLifecycleReconcilePollIntervalMilliseconds),
 		integer("SECONDBOX_LIFECYCLE_RECONCILE_CLAIM_DURATION_MILLISECONDS", DefaultLifecycleReconcileClaimDurationMilliseconds),

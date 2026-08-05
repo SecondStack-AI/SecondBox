@@ -38,6 +38,7 @@ import {
   type SnapshotPage,
   type StreamingExecRequest,
   type TerminalFrame,
+  type TerminalAttachedFrame,
   type TerminalSession,
   type TransportRequestOptions,
   type UpdateSandboxMetadataRequest,
@@ -1350,7 +1351,8 @@ export class SandboxHandle implements SandboxFilesystem {
       },
       signal,
     );
-    return new Terminal(connection, session.nextClientSequence);
+    const attached = decodeTerminalAttachFrame(await connection.receiveText(signal));
+    return new Terminal(connection, attached.nextClientSequence ?? session.nextClientSequence);
   }
 
   /** Creates one generation- and Lease-fenced authenticated PortSession. */
@@ -1907,6 +1909,30 @@ function decodeTerminalServerFrame(payload: string, expectedSequence: number): T
     return decoded as TerminalFrame;
   }
   throw new Error("SecondBox Terminal server frame is invalid");
+}
+
+function decodeTerminalAttachFrame(payload: string): TerminalAttachedFrame {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(payload);
+  } catch {
+    throw new Error("SecondBox Terminal received invalid attach JSON");
+  }
+  if (
+    typeof decoded !== "object" ||
+    decoded === null ||
+    !("type" in decoded) ||
+    decoded.type !== "terminal_attached"
+  ) {
+    throw new Error("SecondBox Terminal attach response is invalid");
+  }
+  if (
+    "nextClientSequence" in decoded &&
+    (!Number.isSafeInteger(decoded.nextClientSequence) || Number(decoded.nextClientSequence) < 0)
+  ) {
+    throw new Error("SecondBox Terminal attach input sequence is invalid");
+  }
+  return decoded as TerminalAttachedFrame;
 }
 
 async function sha256Digest(content: Uint8Array): Promise<string> {

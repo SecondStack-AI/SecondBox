@@ -592,6 +592,7 @@ message PtyAttachResult {
   PtyAttachResultKind kind = 1;
   string safe_detail = 2;
   int64 after_sequence = 3;
+  optional uint64 next_input_sequence = 4;
 }
 
 message PtyFrame {

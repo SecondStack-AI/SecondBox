@@ -450,12 +450,24 @@ func (store *PostgresDataPlaneStore) ClosePortSession(
 			return contracts.PortSession{}, fmt.Errorf("SecondBox PortSession close lock: %w", err)
 		}
 		var priorHash string
+		var expiresAt time.Time
 		err := tx.QueryRow(ctx, `
-			SELECT request_hash FROM secondbox.idempotency_records
+			SELECT request_hash,expires_at FROM secondbox.idempotency_records
 			WHERE tenant_ref=$1 AND subject_ref=$2
 			  AND operation='port_session.close' AND target_id=$3 AND idempotency_key=$4`,
 			input.TenantRef, input.SubjectRef, input.SessionID, input.IdempotencyKey,
-		).Scan(&priorHash)
+		).Scan(&priorHash, &expiresAt)
+		if err == nil && !expiresAt.After(input.Now.UTC()) {
+			if _, deleteErr := tx.Exec(ctx, `
+				DELETE FROM secondbox.idempotency_records
+				WHERE tenant_ref=$1 AND subject_ref=$2
+				  AND operation='port_session.close' AND target_id=$3 AND idempotency_key=$4`,
+				input.TenantRef, input.SubjectRef, input.SessionID, input.IdempotencyKey,
+			); deleteErr != nil {
+				return contracts.PortSession{}, fmt.Errorf("SecondBox expired PortSession close idempotency cleanup: %w", deleteErr)
+			}
+			err = pgx.ErrNoRows
+		}
 		if err == nil && priorHash != input.RequestHash {
 			return contracts.PortSession{}, ports.ErrIdempotencyConflict
 		}
@@ -501,7 +513,7 @@ func (store *PostgresDataPlaneStore) ClosePortSession(
 			ON CONFLICT (tenant_ref,subject_ref,operation,target_id,idempotency_key) DO NOTHING`,
 			input.TenantRef, input.SubjectRef,
 			input.SessionID, input.IdempotencyKey, input.RequestHash,
-			input.Now.UTC(), input.Now.UTC().Add(24*time.Hour),
+			input.Now.UTC(), input.Now.UTC().Add(store.retention),
 		); err != nil {
 			return contracts.PortSession{}, fmt.Errorf("SecondBox PortSession close idempotency insert: %w", err)
 		}

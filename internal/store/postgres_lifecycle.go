@@ -57,27 +57,40 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 		return contracts.Operation{}, fmt.Errorf("SecondBox lifecycle idempotency lock failed: %w", err)
 	}
 	var priorHash, priorOperationID string
+	var expiresAt time.Time
 	idempotencyErr := tx.QueryRow(ctx, `
-		SELECT request_hash,response_resource_id FROM secondbox.idempotency_records
+		SELECT request_hash,response_resource_id,expires_at FROM secondbox.idempotency_records
 		WHERE tenant_ref=$1 AND subject_ref=$2
 		  AND operation=$3 AND target_id=$4 AND idempotency_key=$5`,
 		input.Principal.TenantRef, input.Principal.SubjectRef,
 		"sandbox."+input.Operation.Kind, input.SandboxID, input.IdempotencyKey,
-	).Scan(&priorHash, &priorOperationID)
+	).Scan(&priorHash, &priorOperationID, &expiresAt)
 	if idempotencyErr == nil {
-		if priorHash != input.RequestHash {
-			return contracts.Operation{}, ports.ErrIdempotencyConflict
-		}
-		operation, err := getOperationWithQuerier(
-			ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, `id=$3`, priorOperationID,
+		expired, err := deleteExpiredIdempotencyRecord(
+			ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef,
+			"sandbox."+input.Operation.Kind, input.SandboxID, input.IdempotencyKey,
+			expiresAt, input.Now,
 		)
 		if err != nil {
-			return contracts.Operation{}, err
+			return contracts.Operation{}, fmt.Errorf("SecondBox expired lifecycle idempotency cleanup failed: %w", err)
 		}
-		if err := tx.Commit(ctx); err != nil {
-			return contracts.Operation{}, fmt.Errorf("SecondBox lifecycle replay commit failed: %w", err)
+		if expired {
+			idempotencyErr = pgx.ErrNoRows
+		} else {
+			if priorHash != input.RequestHash {
+				return contracts.Operation{}, ports.ErrIdempotencyConflict
+			}
+			operation, err := getOperationWithQuerier(
+				ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, `id=$3`, priorOperationID,
+			)
+			if err != nil {
+				return contracts.Operation{}, err
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return contracts.Operation{}, fmt.Errorf("SecondBox lifecycle replay commit failed: %w", err)
+			}
+			return operation, nil
 		}
-		return operation, nil
 	}
 	if !errors.Is(idempotencyErr, pgx.ErrNoRows) {
 		return contracts.Operation{}, fmt.Errorf("SecondBox lifecycle idempotency lookup failed: %w", idempotencyErr)

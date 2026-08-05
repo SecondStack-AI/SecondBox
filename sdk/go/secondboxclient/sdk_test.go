@@ -316,13 +316,20 @@ func TestSandboxHandleConnectsAndSequencesTerminal(t *testing.T) {
 			return
 		}
 		defer connection.Close()
+		nextInput := int64(9)
+		if err := connection.WriteJSON(TerminalFrame{TerminalAttachedFrame: &TerminalAttachedFrame{
+			Type: "terminal_attached", NextClientSequence: &nextInput,
+		}}); err != nil {
+			t.Errorf("write Terminal attach response: %v", err)
+			return
+		}
 		var credit TerminalFrame
 		if err := connection.ReadJSON(&credit); err != nil {
 			t.Errorf("read Terminal credit: %v", err)
 			return
 		}
 		if credit.StreamCreditFrame == nil ||
-			credit.StreamCreditFrame.Sequence != 4 ||
+			credit.StreamCreditFrame.Sequence != 9 ||
 			credit.StreamCreditFrame.Bytes != 4096 {
 			t.Errorf("Terminal credit = %#v", credit)
 			return
@@ -333,7 +340,7 @@ func TestSandboxHandleConnectsAndSequencesTerminal(t *testing.T) {
 			return
 		}
 		if resize.TerminalResizeFrame == nil ||
-			resize.TerminalResizeFrame.Sequence != 5 ||
+			resize.TerminalResizeFrame.Sequence != 10 ||
 			resize.TerminalResizeFrame.Rows != 40 ||
 			resize.TerminalResizeFrame.Columns != 120 {
 			t.Errorf("Terminal resize = %#v", resize)
@@ -345,7 +352,7 @@ func TestSandboxHandleConnectsAndSequencesTerminal(t *testing.T) {
 			return
 		}
 		if input.TerminalInputFrame == nil ||
-			input.TerminalInputFrame.Sequence != 6 ||
+			input.TerminalInputFrame.Sequence != 11 ||
 			input.TerminalInputFrame.DataBase64 != base64.StdEncoding.EncodeToString(
 				[]byte{0x00, 0x01, 0xfe, 0xff},
 			) {
@@ -364,7 +371,7 @@ func TestSandboxHandleConnectsAndSequencesTerminal(t *testing.T) {
 			t.Errorf("read Terminal cancel: %v", err)
 			return
 		}
-		if cancel.StreamCancelFrame == nil || cancel.StreamCancelFrame.Sequence != 7 {
+		if cancel.StreamCancelFrame == nil || cancel.StreamCancelFrame.Sequence != 12 {
 			t.Errorf("Terminal cancel = %#v", cancel)
 			return
 		}

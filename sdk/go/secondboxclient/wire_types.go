@@ -155,7 +155,7 @@ func (value TerminalFrame) MarshalJSON() ([]byte, error) {
 	var selected any
 	count := 0
 	for _, variant := range []any{
-		value.TerminalInputFrame, value.TerminalOutputFrame, value.TerminalResizeFrame,
+		value.TerminalAttachedFrame, value.TerminalInputFrame, value.TerminalOutputFrame, value.TerminalResizeFrame,
 		value.StreamCreditFrame, value.StreamCancelFrame, value.StreamOutcomeFrame,
 	} {
 		if !isNilPointer(variant) {
@@ -178,6 +178,8 @@ func (value *TerminalFrame) UnmarshalJSON(data []byte) error {
 	}
 	var decoded any
 	switch discriminator.Type {
+	case "terminal_attached":
+		decoded = &TerminalAttachedFrame{}
 	case "terminal_input":
 		decoded = &TerminalInputFrame{}
 	case "terminal_output":
@@ -197,6 +199,8 @@ func (value *TerminalFrame) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	switch typed := decoded.(type) {
+	case *TerminalAttachedFrame:
+		value.TerminalAttachedFrame = typed
 	case *TerminalInputFrame:
 		value.TerminalInputFrame = typed
 	case *TerminalOutputFrame:

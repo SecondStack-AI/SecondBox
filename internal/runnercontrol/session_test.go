@@ -2,6 +2,7 @@ package runnercontrol
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +47,25 @@ func TestSessionDeduplicatesAndRejectsReorderedRunnerEvidence(t *testing.T) {
 	}
 	if _, err := session.Accept(heartbeatFrame("runner-1", "connection-1", "heartbeat-reordered", 1)); !errors.Is(err, ErrSequenceReordered) {
 		t.Fatalf("reordered heartbeat error = %v, want ErrSequenceReordered", err)
+	}
+}
+
+func TestSessionRejectsMessageIDDedupeOverflow(t *testing.T) {
+	session := negotiatedSession(t)
+	if _, err := session.Accept(registrationFrame("runner-1", "connection-1", 1)); err != nil {
+		t.Fatal(err)
+	}
+	for sequence := uint64(2); sequence <= maxSessionMessageIDs; sequence++ {
+		if _, err := session.Accept(heartbeatFrame(
+			"runner-1", "connection-1", fmt.Sprintf("heartbeat-%d", sequence), sequence,
+		)); err != nil {
+			t.Fatalf("message %d: %v", sequence, err)
+		}
+	}
+	if _, err := session.Accept(heartbeatFrame(
+		"runner-1", "connection-1", "heartbeat-overflow", maxSessionMessageIDs+1,
+	)); !errors.Is(err, ErrSessionMessageIDLimit) {
+		t.Fatalf("dedupe overflow error = %v, want ErrSessionMessageIDLimit", err)
 	}
 }
 
@@ -143,6 +163,55 @@ func TestSessionValidatesRunnerDataPlaneFeatureFenceSequenceAndDuplicates(t *tes
 	incomplete.SandboxGeneration = 0
 	if _, err := session.Accept(runnerFileFrame(incomplete, "operation-2", "stream-2", 1)); !errors.Is(err, ErrRunnerMessage) {
 		t.Fatalf("incomplete generation frame error = %v, want ErrRunnerMessage", err)
+	}
+}
+
+func TestSessionReleasesTerminalDataPlaneState(t *testing.T) {
+	session := negotiatedDataPlaneSession(t)
+	if _, err := session.Accept(registrationFrame("runner-1", "connection-1", 1)); err != nil {
+		t.Fatal(err)
+	}
+	fence := dataPlaneTestFence()
+	if err := session.ValidateOutboundDataPlaneFrame(&runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: &runnerv1.ExecFrame{
+			Fence: fence, OperationId: "operation-terminal", StreamId: "stream-terminal", Sequence: 1,
+			Payload: &runnerv1.ExecFrame_Open{Open: &runnerv1.ExecOpen{
+				Command: &runnerv1.ExecOpen_Shell{Shell: "true"},
+			}},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	terminal := runnerExecFrame(fence, "operation-terminal", "stream-terminal", 1, &runnerv1.ExecFrame_Terminal{
+		Terminal: &runnerv1.ExecTerminal{Kind: runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED},
+	})
+	if _, err := session.Accept(terminal); err != nil {
+		t.Fatal(err)
+	}
+	if len(session.inboundDataPlaneStreams) != 0 || len(session.outboundStreams) != 0 {
+		t.Fatalf(
+			"terminal stream state retained inbound=%d outbound=%d",
+			len(session.inboundDataPlaneStreams), len(session.outboundStreams),
+		)
+	}
+	ptyInboundKey := dataPlaneStreamKey("pty", fence, "operation-pty-terminal", "stream-pty-terminal")
+	ptyExecKey := dataPlaneStreamKey("exec", fence, "operation-pty-terminal", "stream-pty-terminal")
+	session.inboundDataPlaneStreams[ptyInboundKey] = dataPlaneStreamState{sequence: 1}
+	session.outboundStreams[ptyInboundKey] = dataPlaneStreamState{sequence: 2}
+	session.outboundStreams[ptyExecKey] = dataPlaneStreamState{sequence: 1}
+	session.releaseTerminalDataPlaneState(&runnerv1.RunnerToControlPlane{
+		Message: &runnerv1.RunnerToControlPlane_Pty{Pty: &runnerv1.PtyFrame{
+			Fence: fence, OperationId: "operation-pty-terminal", StreamId: "stream-pty-terminal",
+			Payload: &runnerv1.PtyFrame_Terminal{Terminal: &runnerv1.ExecTerminal{
+				Kind: runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED,
+			}},
+		}},
+	}, ptyInboundKey)
+	if len(session.inboundDataPlaneStreams) != 0 || len(session.outboundStreams) != 0 {
+		t.Fatalf(
+			"PTY terminal stream state retained inbound=%d outbound=%d",
+			len(session.inboundDataPlaneStreams), len(session.outboundStreams),
+		)
 	}
 }
 

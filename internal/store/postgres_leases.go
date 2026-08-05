@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
@@ -27,7 +28,7 @@ func (store *PostgresControlPlaneStore) AcquireLease(
 	replayedLease, replayed, err := lookupLeaseIdempotency(
 		ctx, tx, input.TenantRef, input.SubjectRef,
 		"lease.acquire", input.SandboxID,
-		input.IdempotencyKey, input.RequestHash,
+		input.IdempotencyKey, input.RequestHash, input.Now,
 	)
 	if err != nil {
 		return contracts.Lease{}, err
@@ -154,7 +155,7 @@ func (store *PostgresControlPlaneStore) RenewLease(
 	replayedLease, replayed, err := lookupLeaseIdempotency(
 		ctx, tx, input.TenantRef, input.SubjectRef,
 		"lease.renew", input.Lease.ID,
-		input.IdempotencyKey, input.RequestHash,
+		input.IdempotencyKey, input.RequestHash, input.Now,
 	)
 	if err != nil {
 		return contracts.Lease{}, err
@@ -221,7 +222,7 @@ func (store *PostgresControlPlaneStore) ReleaseLease(
 	replayedLease, replayed, err := lookupLeaseIdempotency(
 		ctx, tx, input.TenantRef, input.SubjectRef,
 		"lease.release", input.Lease.ID,
-		input.IdempotencyKey, input.RequestHash,
+		input.IdempotencyKey, input.RequestHash, input.Now,
 	)
 	if err != nil {
 		return contracts.Lease{}, err
@@ -291,19 +292,30 @@ func lookupLeaseIdempotency(
 	targetID string,
 	idempotencyKey string,
 	requestHash string,
+	now time.Time,
 ) (contracts.Lease, bool, error) {
 	var priorHash, leaseID string
+	var expiresAt time.Time
 	err := tx.QueryRow(ctx, `
-		SELECT request_hash,response_resource_id FROM secondbox.idempotency_records
+		SELECT request_hash,response_resource_id,expires_at FROM secondbox.idempotency_records
 		WHERE tenant_ref=$1 AND subject_ref=$2
 		  AND operation=$3 AND target_id=$4 AND idempotency_key=$5`,
 		tenantRef, subjectRef, operation, targetID, idempotencyKey,
-	).Scan(&priorHash, &leaseID)
+	).Scan(&priorHash, &leaseID, &expiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return contracts.Lease{}, false, nil
 	}
 	if err != nil {
 		return contracts.Lease{}, false, fmt.Errorf("SecondBox Lease idempotency lookup failed: %w", err)
+	}
+	expired, err := deleteExpiredIdempotencyRecord(
+		ctx, tx, tenantRef, subjectRef, operation, targetID, idempotencyKey, expiresAt, now,
+	)
+	if err != nil {
+		return contracts.Lease{}, false, fmt.Errorf("SecondBox expired Lease idempotency cleanup failed: %w", err)
+	}
+	if expired {
+		return contracts.Lease{}, false, nil
 	}
 	if priorHash != requestHash {
 		return contracts.Lease{}, false, ports.ErrIdempotencyConflict

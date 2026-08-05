@@ -644,7 +644,12 @@ export interface StreamingExecRequest {
 
 export type StringMap = Readonly<Record<string, string>>;
 
-export type TerminalFrame = TerminalInputFrame | TerminalOutputFrame | TerminalResizeFrame | StreamCreditFrame | StreamCancelFrame | StreamOutcomeFrame;
+export interface TerminalAttachedFrame {
+  readonly nextClientSequence?: number;
+  readonly type: "terminal_attached";
+}
+
+export type TerminalFrame = TerminalAttachedFrame | TerminalInputFrame | TerminalOutputFrame | TerminalResizeFrame | StreamCreditFrame | StreamCancelFrame | StreamOutcomeFrame;
 
 export interface TerminalInputFrame {
   readonly dataBase64: string;

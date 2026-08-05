@@ -63,7 +63,7 @@ func (service *ControlPlaneService) CreateSandboxSnapshot(
 		Snapshot: snapshot, Operation: operation, EffectID: service.newID("effect"),
 		CommandID: service.newID("command"), FencingToken: []byte(service.newCredentialMaterial()),
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
-		IdempotencyEnds: now.Add(idempotencyRetention), ExpectedRevision: expectedRevision,
+		IdempotencyEnds: service.idempotencyExpiration(now), ExpectedRevision: expectedRevision,
 	})
 	if err != nil {
 		return contracts.Operation{}, false, err
@@ -145,7 +145,7 @@ func (service *ControlPlaneService) DeleteSnapshot(
 		Operation: operation, EffectID: service.newID("effect"), CommandID: service.newID("command"),
 		FencingToken:   []byte(service.newCredentialMaterial()),
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
-		IdempotencyEnds: now.Add(idempotencyRetention), Now: now,
+		IdempotencyEnds: service.idempotencyExpiration(now), Now: now,
 	})
 	if err != nil {
 		return contracts.Operation{}, false, err
@@ -197,7 +197,7 @@ func (service *ControlPlaneService) RestoreSandboxSnapshot(
 		AbortCommandID: service.newID("command"),
 		FencingToken:   []byte(service.newCredentialMaterial()),
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
-		IdempotencyEnds: now.Add(idempotencyRetention), ExpectedRevision: expectedRevision, Now: now,
+		IdempotencyEnds: service.idempotencyExpiration(now), ExpectedRevision: expectedRevision, Now: now,
 	})
 	if err != nil {
 		return contracts.Operation{}, false, err

@@ -45,6 +45,19 @@ type TerminalServerFrame struct {
 	Terminal *runnerv1.ExecTerminal
 }
 
+// TerminalCheckpoint is one absolute, payload-free Terminal accounting projection.
+type TerminalCheckpoint struct {
+	AttachmentID        string
+	NextClientSequence  int64
+	RequestBytes        int64
+	ResponseCredit      int64
+	InboundBytes        int64
+	NextInboundSequence int64
+	RecoveryAllowance   int64
+	Cancel              bool
+	Terminal            *runnerv1.ExecTerminal
+}
+
 // AcquireTerminalAttachment atomically grants the only active public attachment.
 func (store *PostgresDataPlaneStore) AcquireTerminalAttachment(
 	ctx context.Context,
@@ -243,113 +256,23 @@ func (store *PostgresDataPlaneStore) DetachTerminalAttachment(
 	return true, nil
 }
 
-// RecordTerminalClientFrame advances the compact ordered Terminal projection
-// without retaining the input, resize, credit, or cancellation payload.
-func (store *PostgresDataPlaneStore) RecordTerminalClientFrame(
+// CheckpointTerminal persists one compact accounting projection without retaining
+// any input, resize, credit, output, or cancellation payload.
+func (store *PostgresDataPlaneStore) CheckpointTerminal(
 	ctx context.Context,
 	tenantRef string,
 	subjectRef string,
 	sessionID string,
-	attachmentID string,
-	frame TerminalClientFrame,
-	now time.Time,
-) (bool, error) {
-	if tenantRef == "" || subjectRef == "" || sessionID == "" ||
-		attachmentID == "" || frame.Sequence < 0 || now.IsZero() {
-		return false, errors.New("SecondBox live Terminal frame identity is incomplete")
-	}
-	kinds := 0
-	if frame.Input != nil {
-		kinds++
-	}
-	if frame.ResizeRows != 0 || frame.ResizeColumns != 0 {
-		kinds++
-	}
-	if frame.Credit != 0 {
-		kinds++
-	}
-	if frame.Cancel {
-		kinds++
-	}
-	if kinds != 1 || frame.Credit < 0 ||
-		((frame.ResizeRows == 0) != (frame.ResizeColumns == 0)) ||
-		(frame.Input != nil && len(frame.Input) == 0) ||
-		frame.ResizeRows > 1000 || frame.ResizeColumns > 1000 {
-		return false, errors.New("SecondBox live Terminal frame requires exactly one valid payload")
-	}
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return false, fmt.Errorf("SecondBox live Terminal frame transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
-	session, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
-		WHERE tenant_ref=$1 AND subject_ref=$2 AND id=$3 FOR UPDATE`,
-		tenantRef, subjectRef, sessionID))
-	if err != nil {
-		return false, err
-	}
-	if session.Kind != "terminal" || session.Operation != "terminal" {
-		return false, ErrDataPlaneNotFound
-	}
-	if session.AttachmentID != attachmentID {
-		return false, ErrTerminalDetached
-	}
-	if session.State != "pending" && session.State != "running" {
-		return false, ErrDataPlaneSequence
-	}
-	if frame.Sequence != session.NextClientSequence {
-		return false, ErrDataPlaneSequence
-	}
-	if session.RequestStreamBytes+int64(len(frame.Input)) > session.MaximumRequestBytes {
-		return false, ErrDataPlaneSessionLimit
-	}
-	if frame.Credit > 0 &&
-		session.ResponseCreditBytes-sessionInboundPayloadBytes(session)+frame.Credit >
-			session.StreamWindowBytes {
-		return false, ErrDataPlaneFrameLimit
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE secondbox.data_plane_sessions
-		SET request_stream_bytes=request_stream_bytes+$2,
-		    outbound_bytes=outbound_bytes+$3,
-		    response_credit_bytes=response_credit_bytes+$4,
-		    next_outbound_sequence=next_outbound_sequence+1,
-		    state=CASE WHEN $5 THEN 'cancelling' ELSE state END,
-		    terminal_kind=CASE WHEN $5 THEN $6 ELSE terminal_kind END,
-		    terminal_detail=CASE WHEN $5 THEN 'public Terminal client cancellation' ELSE terminal_detail END,
-		    updated_at=$7
-		WHERE id=$1`,
-		session.ID, len(frame.Input), len(frame.Input), frame.Credit, frame.Cancel,
-		runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED.String(), now.UTC(),
-	); err != nil {
-		return false, fmt.Errorf("SecondBox live Terminal session update: %w", err)
-	}
-	if err := touchDataPlaneActivity(ctx, tx, session, now.UTC()); err != nil {
-		return false, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("SecondBox live Terminal frame commit: %w", err)
-	}
-	return true, nil
-}
-
-// RecordTerminalServerFrame advances Terminal output and terminal evidence
-// without retaining a replayable payload in PostgreSQL.
-func (store *PostgresDataPlaneStore) RecordTerminalServerFrame(
-	ctx context.Context,
-	tenantRef string,
-	subjectRef string,
-	sessionID string,
-	frame TerminalServerFrame,
+	checkpoint TerminalCheckpoint,
 	now time.Time,
 ) (DataPlaneSession, error) {
 	if tenantRef == "" || subjectRef == "" || sessionID == "" ||
-		frame.Sequence < 0 || now.IsZero() || (frame.Output == nil) == (frame.Terminal == nil) {
-		return DataPlaneSession{}, errors.New("SecondBox live Terminal response is incomplete")
+		(checkpoint.AttachmentID == "" && checkpoint.Terminal == nil) || now.IsZero() {
+		return DataPlaneSession{}, errors.New("SecondBox Terminal checkpoint identity is incomplete")
 	}
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
-		return DataPlaneSession{}, fmt.Errorf("SecondBox live Terminal response transaction: %w", err)
+		return DataPlaneSession{}, fmt.Errorf("SecondBox Terminal checkpoint transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 	session, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
@@ -358,51 +281,104 @@ func (store *PostgresDataPlaneStore) RecordTerminalServerFrame(
 	if err != nil {
 		return DataPlaneSession{}, err
 	}
-	if session.Kind != "terminal" || session.Operation != "terminal" {
-		return DataPlaneSession{}, ErrDataPlaneNotFound
-	}
-	runnerSequence := frame.Sequence + 1
-	var nextInbound int64
-	if err := tx.QueryRow(ctx, `
-		SELECT next_inbound_sequence FROM secondbox.data_plane_sessions WHERE id=$1`,
-		session.ID,
-	).Scan(&nextInbound); err != nil {
-		return DataPlaneSession{}, fmt.Errorf("SecondBox live Terminal response sequence lookup: %w", err)
-	}
-	if runnerSequence < nextInbound {
-		if err := tx.Commit(ctx); err != nil {
-			return DataPlaneSession{}, fmt.Errorf("SecondBox live Terminal replay commit: %w", err)
-		}
-		return session, nil
-	}
-	if runnerSequence != nextInbound ||
-		sessionInboundPayloadBytes(session)+int64(len(frame.Output)) > session.MaximumResponseBytes ||
-		sessionInboundPayloadBytes(session)+int64(len(frame.Output)) > session.ResponseCreditBytes {
-		return DataPlaneSession{}, ErrDataPlaneSequence
-	}
-	identity := dataPlaneProjection{
-		ptyOutput: &runnerv1.ExecOutput{
-			Channel: runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT,
-			Data:    bytes.Clone(frame.Output),
-		},
-		ptyTerm: frame.Terminal,
-	}
-	if err := applyDataPlaneProjection(
-		ctx, tx, session, identity, int64(len(frame.Output)), store.retention, now.UTC(),
-	); err != nil {
-		return DataPlaneSession{}, err
-	}
-	updated, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+`
-		WHERE id=$1`, session.ID))
+	updated, err := store.applyTerminalCheckpoint(ctx, tx, session, checkpoint, now.UTC())
 	if err != nil {
 		return DataPlaneSession{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return DataPlaneSession{}, fmt.Errorf("SecondBox live Terminal response commit: %w", err)
+		return DataPlaneSession{}, fmt.Errorf("SecondBox Terminal checkpoint commit: %w", err)
 	}
 	return updated, nil
 }
 
-func sessionInboundPayloadBytes(session DataPlaneSession) int64 {
-	return session.InboundBytes
+func (store *PostgresDataPlaneStore) applyTerminalCheckpoint(
+	ctx context.Context,
+	tx pgx.Tx,
+	session DataPlaneSession,
+	checkpoint TerminalCheckpoint,
+	now time.Time,
+) (DataPlaneSession, error) {
+	if session.Kind != "terminal" || session.Operation != "terminal" {
+		return DataPlaneSession{}, ErrDataPlaneNotFound
+	}
+	if checkpoint.AttachmentID != session.AttachmentID ||
+		(checkpoint.AttachmentID == "" && checkpoint.Terminal == nil) {
+		return DataPlaneSession{}, ErrTerminalDetached
+	}
+	if session.State != "pending" && session.State != "running" && session.State != "cancelling" {
+		if checkpoint.Terminal != nil && session.CompletedAt != nil {
+			return session, nil
+		}
+		return DataPlaneSession{}, ErrDataPlaneSequence
+	}
+	if checkpoint.NextClientSequence < session.NextClientSequence ||
+		checkpoint.RequestBytes < session.RequestStreamBytes ||
+		checkpoint.ResponseCredit < session.ResponseCreditBytes ||
+		checkpoint.InboundBytes < session.InboundBytes ||
+		checkpoint.NextInboundSequence < session.NextInboundSequence {
+		return DataPlaneSession{}, ErrDataPlaneSequence
+	}
+	if checkpoint.RequestBytes > session.MaximumRequestBytes ||
+		checkpoint.InboundBytes > session.MaximumResponseBytes ||
+		checkpoint.ResponseCredit < checkpoint.InboundBytes ||
+		(checkpoint.RecoveryAllowance != 0 && checkpoint.RecoveryAllowance != session.StreamWindowBytes) ||
+		checkpoint.ResponseCredit-checkpoint.InboundBytes > session.StreamWindowBytes+checkpoint.RecoveryAllowance ||
+		checkpoint.NextClientSequence > int64(^uint64(0)>>1)-2 ||
+		checkpoint.NextInboundSequence < 1 {
+		return DataPlaneSession{}, ErrDataPlaneSessionLimit
+	}
+	nextInbound := checkpoint.NextInboundSequence
+	if checkpoint.Terminal != nil {
+		if nextInbound <= session.NextInboundSequence {
+			return DataPlaneSession{}, ErrDataPlaneSequence
+		}
+		nextInbound--
+	}
+	// A periodic checkpoint may lag until the configured poll interval, while
+	// detach, close, and terminal outcome flush synchronously. After a crash the
+	// client supplies its last acknowledged output sequence for Runner replay,
+	// the Runner supplies its authoritative next input sequence and enforces its
+	// own credit, and the control plane grants at most one stream window while
+	// reconstructing the gap. Sequence and credit staleness are therefore both
+	// bounded without putting PostgreSQL on the per-frame payload path.
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.data_plane_sessions
+		SET request_stream_bytes=$2,outbound_bytes=$2,response_credit_bytes=$3,
+		    inbound_bytes=$4,next_outbound_sequence=$5,next_inbound_sequence=$6,
+		    state=CASE WHEN $7 THEN 'cancelling' ELSE state END,
+		    terminal_kind=CASE WHEN $7 THEN $8 ELSE terminal_kind END,
+		    terminal_detail=CASE WHEN $7 THEN 'public Terminal client cancellation' ELSE terminal_detail END,
+		    updated_at=$9
+		WHERE id=$1`,
+		session.ID, checkpoint.RequestBytes, checkpoint.ResponseCredit,
+		checkpoint.InboundBytes, checkpoint.NextClientSequence+2, nextInbound,
+		checkpoint.Cancel,
+		runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED.String(), now.UTC(),
+	); err != nil {
+		return DataPlaneSession{}, fmt.Errorf("SecondBox Terminal checkpoint update: %w", err)
+	}
+	if checkpoint.Terminal != nil {
+		session.RequestStreamBytes = checkpoint.RequestBytes
+		session.ResponseCreditBytes = checkpoint.ResponseCredit
+		session.InboundBytes = checkpoint.InboundBytes
+		session.NextInboundSequence = nextInbound
+		if checkpoint.Cancel {
+			session.State = "cancelling"
+			session.TerminalKind = runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED.String()
+			session.TerminalDetail = "public Terminal client cancellation"
+		}
+		if err := applyDataPlaneProjection(
+			ctx, tx, session, dataPlaneProjection{ptyTerm: checkpoint.Terminal},
+			0, store.retention, now.UTC(),
+		); err != nil {
+			return DataPlaneSession{}, err
+		}
+	} else if err := touchDataPlaneActivity(ctx, tx, session, now.UTC()); err != nil {
+		return DataPlaneSession{}, err
+	}
+	updated, err := scanDataPlaneSession(tx.QueryRow(ctx, dataPlaneSessionSelect+` WHERE id=$1`, session.ID))
+	if err != nil {
+		return DataPlaneSession{}, err
+	}
+	return updated, nil
 }

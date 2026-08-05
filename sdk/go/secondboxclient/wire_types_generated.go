@@ -589,13 +589,19 @@ type StreamingExecRequest struct {
 
 type StringMap = map[string]string
 
+type TerminalAttachedFrame struct {
+	NextClientSequence *int64 `json:"nextClientSequence,omitempty"`
+	Type               string `json:"type"`
+}
+
 type TerminalFrame struct {
-	TerminalInputFrame  *TerminalInputFrame  `json:"-"`
-	TerminalOutputFrame *TerminalOutputFrame `json:"-"`
-	TerminalResizeFrame *TerminalResizeFrame `json:"-"`
-	StreamCreditFrame   *StreamCreditFrame   `json:"-"`
-	StreamCancelFrame   *StreamCancelFrame   `json:"-"`
-	StreamOutcomeFrame  *StreamOutcomeFrame  `json:"-"`
+	TerminalAttachedFrame *TerminalAttachedFrame `json:"-"`
+	TerminalInputFrame    *TerminalInputFrame    `json:"-"`
+	TerminalOutputFrame   *TerminalOutputFrame   `json:"-"`
+	TerminalResizeFrame   *TerminalResizeFrame   `json:"-"`
+	StreamCreditFrame     *StreamCreditFrame     `json:"-"`
+	StreamCancelFrame     *StreamCancelFrame     `json:"-"`
+	StreamOutcomeFrame    *StreamOutcomeFrame    `json:"-"`
 }
 
 type TerminalInputFrame struct {

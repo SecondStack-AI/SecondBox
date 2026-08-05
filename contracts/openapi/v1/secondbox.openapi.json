@@ -2677,6 +2677,7 @@
       },
       "TerminalFrame": {
         "oneOf": [
+          {"$ref": "#/components/schemas/TerminalAttachedFrame"},
           {"$ref": "#/components/schemas/TerminalInputFrame"},
           {"$ref": "#/components/schemas/TerminalOutputFrame"},
           {"$ref": "#/components/schemas/TerminalResizeFrame"},
@@ -2685,6 +2686,15 @@
           {"$ref": "#/components/schemas/StreamOutcomeFrame"}
         ],
         "discriminator": {"propertyName": "type"}
+      },
+      "TerminalAttachedFrame": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type"],
+        "properties": {
+          "type": {"const": "terminal_attached"},
+          "nextClientSequence": {"type": "integer", "format": "int64", "minimum": 0}
+        }
       },
       "TerminalInputFrame": {
         "type": "object",

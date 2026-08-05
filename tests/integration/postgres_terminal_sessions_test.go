@@ -83,26 +83,15 @@ func TestPostgresTerminalProjectionOwnsAttachmentDetachAndFenceAuthority(t *test
 	); !errors.Is(err, runnercontrol.ErrTerminalAttached) {
 		t.Fatalf("parallel terminal attachment error = %v", err)
 	}
-	inserted, err := relay.RecordTerminalClientFrame(
-		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID, "attachment-one",
-		runnercontrol.TerminalClientFrame{Sequence: 0, Credit: 4}, now,
+	checkpointed, err := relay.CheckpointTerminal(
+		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID,
+		runnercontrol.TerminalCheckpoint{
+			AttachmentID: "attachment-one", NextClientSequence: 3, RequestBytes: 4,
+			ResponseCredit: 4, InboundBytes: 0, NextInboundSequence: 1,
+		}, now,
 	)
-	if err != nil || !inserted {
-		t.Fatalf("terminal credit append = %t, %v", inserted, err)
-	}
-	inserted, err = relay.RecordTerminalClientFrame(
-		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID, "attachment-one",
-		runnercontrol.TerminalClientFrame{Sequence: 1, ResizeRows: 40, ResizeColumns: 120}, now,
-	)
-	if err != nil || !inserted {
-		t.Fatalf("terminal resize append = %t, %v", inserted, err)
-	}
-	inserted, err = relay.RecordTerminalClientFrame(
-		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID, "attachment-one",
-		runnercontrol.TerminalClientFrame{Sequence: 2, Input: []byte{0, 1, 0xfe, 0xff}}, now,
-	)
-	if err != nil || !inserted {
-		t.Fatalf("terminal binary input append = %t, %v", inserted, err)
+	if err != nil || checkpointed.NextClientSequence != 3 {
+		t.Fatalf("terminal accounting checkpoint = %#v, %v", checkpointed, err)
 	}
 	if detached, err := relay.DetachTerminalAttachment(
 		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID, "attachment-one", now.Add(time.Second),
@@ -116,13 +105,16 @@ func TestPostgresTerminalProjectionOwnsAttachmentDetachAndFenceAuthority(t *test
 	if err != nil {
 		t.Fatalf("terminal reconnect within bound: %v", err)
 	}
-	if reattached.NextClientSequence != 3 {
-		t.Fatalf("terminal reconnect next client sequence = %d", reattached.NextClientSequence)
+	if reattached.NextClientSequence != 3 || reattached.ResponseCreditBytes != 4 || reattached.InboundBytes != 0 {
+		t.Fatalf("terminal reconnect accounting = %#v", reattached)
 	}
 
-	recorded, err := relay.RecordTerminalServerFrame(
+	recorded, err := relay.CheckpointTerminal(
 		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID,
-		runnercontrol.TerminalServerFrame{Sequence: 0, Output: []byte{0, 1, 0xfe, 0xff}},
+		runnercontrol.TerminalCheckpoint{
+			AttachmentID: "attachment-two", NextClientSequence: 3, RequestBytes: 4,
+			ResponseCredit: 4, InboundBytes: 4, NextInboundSequence: 2,
+		},
 		now.Add(29*time.Second),
 	)
 	if err != nil || recorded.InboundBytes != 4 {
@@ -174,11 +166,15 @@ func TestPostgresTerminalProjectionOwnsAttachmentDetachAndFenceAuthority(t *test
 	if activityState != contracts.ActivitySessionStateActive {
 		t.Fatalf("Terminal activity closed before terminal acknowledgement: %q", activityState)
 	}
-	if _, err := relay.RecordTerminalServerFrame(
+	if _, err := relay.CheckpointTerminal(
 		t.Context(), principal.TenantRef, principal.SubjectRef, session.ID,
-		runnercontrol.TerminalServerFrame{Sequence: 1, Terminal: &runnerv1.ExecTerminal{
-			Kind: runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED, ExitCode: -1,
-		}}, now.Add(59*time.Second),
+		runnercontrol.TerminalCheckpoint{
+			NextClientSequence: 3, RequestBytes: 4, ResponseCredit: 4,
+			InboundBytes: 4, NextInboundSequence: 3,
+			Terminal: &runnerv1.ExecTerminal{
+				Kind: runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED, ExitCode: -1,
+			},
+		}, now.Add(59*time.Second),
 	); err != nil {
 		t.Fatalf("detached Terminal acknowledgement: %v", err)
 	}

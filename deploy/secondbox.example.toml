@@ -108,6 +108,7 @@ max_memory_bytes = 171798691840
 # runner_event_persistence_batch_size = 16 # default; Runner events persisted per batch.
 # runner_event_persistence_batch_wait_milliseconds = 2 # default; Maximum runner-event batch wait.
 # data_plane_maximum_session_bytes = 67108864 # default; Maximum data-plane session payload.
+# idempotency_retention_seconds = 86400 # default; Retention for expired idempotency and activity-touch records.
 # lifecycle_reconcile_batch_size = 8 # default; Lifecycle rows reconciled per batch.
 # lifecycle_reconcile_poll_interval_milliseconds = 250 # default; Lifecycle fallback polling cadence.
 # lifecycle_reconcile_claim_duration_milliseconds = 30000 # default; Lifecycle work claim duration.
