@@ -1182,7 +1182,7 @@ func (service *ControlPlaneService) newAudit(
 		subjectRef = "secondbox"
 	}
 	return contracts.AuditEvent{
-		ID: service.newID("aud"), TenantRef: projectID,
+		ID: service.newID("aud"), TenantRef: tenantRef,
 		SubjectRef: subjectRef, ActorKind: principal.Kind,
 		ActorID: principal.ID, Action: action, ResourceKind: resourceKind,
 		ResourceID: resourceID, Outcome: "accepted", RequestID: service.requestID(ctx),
