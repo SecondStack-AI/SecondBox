@@ -116,6 +116,19 @@ func TestReleaseDoesNotRequireScenarioQualification(t *testing.T) {
 		!strings.Contains(ciWorkflow, "runs-on: ubuntu-latest") {
 		t.Fatal("portable non-KVM CI gate must remain on a GitHub-hosted runner")
 	}
+	for _, path := range []string{"cmd/secondbox-deploy/main.go", "cmd/secondbox-release-tool/main.go"} {
+		command := readRepositoryFile(t, path)
+		for _, removed := range []string{"qualification-attestation", "release-index", "candidate-evidence", "publication-input", "verify-publication"} {
+			if strings.Contains(command, removed) {
+				t.Errorf("%s retains removed release surface %q", path, removed)
+			}
+		}
+	}
+	for _, path := range []string{"pkg/releasefinalize", "pkg/releasepublish"} {
+		if _, err := os.Stat(filepath.Join(repositoryRoot, path)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("removed release package %s still exists", path)
+		}
+	}
 }
 
 func TestDeploymentCannotReconstructAbsentHomeFromAvailableObjectStore(t *testing.T) {

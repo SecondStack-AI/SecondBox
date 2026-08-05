@@ -27,6 +27,13 @@ if rg -q 'release-stage|docker build|go build|npm pack' "$workflow"; then
   echo "GitHub publisher rebuilds locally supplied artifacts" >&2
   exit 1
 fi
+if rg -q 'qualification-attestation|release-index|candidate-evidence|publication-input|verify-publication' \
+  "$repo_root/cmd/secondbox-deploy/main.go" "$repo_root/cmd/secondbox-release-tool/main.go"; then
+  echo "release CLIs retain a removed candidate or finalization command" >&2
+  exit 1
+fi
+test ! -e "$repo_root/pkg/releasefinalize"
+test ! -e "$repo_root/pkg/releasepublish"
 
 for dockerfile in "$repo_root/Dockerfile" "$repo_root/runner/Dockerfile" "$repo_root/runner/deploy/microvm-artifact-transport.Dockerfile"; do
   while IFS= read -r base; do

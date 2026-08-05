@@ -1,5 +1,5 @@
-// Package releasecontract defines the public, provider-neutral identity chain
-// for a coordinated SecondBox release.
+// Package releasecontract defines the public, provider-neutral identity of a
+// SecondBox release.
 package releasecontract
 
 import (
@@ -17,9 +17,7 @@ import (
 )
 
 const (
-	ArtifactManifestSchema         = "secondbox.release/artifact-manifest/v2"
-	QualificationAttestationSchema = "secondbox.release/qualification-attestation/v1"
-	ReleaseIndexSchema             = "secondbox.release/release-index/v1"
+	ArtifactManifestSchema = "secondbox.release/artifact-manifest/v2"
 
 	TypeScriptPackage = "@secondstack-ai/secondbox"
 	GoModule          = "github.com/SecondStack-AI/SecondBox"
@@ -117,8 +115,7 @@ type MicroVMArtifact struct {
 	ToolchainBundle       SignedComponent `json:"toolchainBundle"`
 }
 
-// ArtifactManifest contains immutable artifact identity only. Qualification is
-// deliberately separate so the final index has no digest cycle.
+// ArtifactManifest contains immutable release artifact identity.
 type ArtifactManifest struct {
 	SchemaVersion string `json:"schemaVersion"`
 	Identity
@@ -138,44 +135,6 @@ type ArtifactManifest struct {
 	StandardBundles      []StandardBundleArtifact `json:"standardBundles"`
 }
 
-type QualifiedGuest struct {
-	ManifestDigest        string `json:"manifestDigest"`
-	SigningKeyFingerprint string `json:"signingKeyFingerprint"`
-}
-
-type RunnerEnvironment struct {
-	RunnerImageReference string `json:"runnerImageReference"`
-	OperatingSystem      string `json:"operatingSystem"`
-	Kernel               string `json:"kernel"`
-	FirecrackerVersion   string `json:"firecrackerVersion"`
-	CPUModel             string `json:"cpuModel"`
-}
-
-// QualificationAttestation proves source-free use of one exact manifest.
-type QualificationAttestation struct {
-	SchemaVersion string `json:"schemaVersion"`
-	Identity
-	ArtifactManifest        Reference         `json:"artifactManifest"`
-	Suite                   string            `json:"suite"`
-	SuiteDigest             string            `json:"suiteDigest"`
-	Architecture            string            `json:"architecture"`
-	RunnerProtocolVersion   uint32            `json:"runnerProtocolVersion"`
-	GuestProtocolGeneration uint32            `json:"guestProtocolGeneration"`
-	Guest                   QualifiedGuest    `json:"guest"`
-	RunnerEnvironment       RunnerEnvironment `json:"runnerEnvironment"`
-	Result                  string            `json:"result"`
-	CompletedAt             string            `json:"completedAt"`
-}
-
-// ReleaseIndex is the last artifact published. Its presence is the release
-// completeness signal consumed by normal deployments.
-type ReleaseIndex struct {
-	SchemaVersion string `json:"schemaVersion"`
-	Identity
-	ArtifactManifest Reference `json:"artifactManifest"`
-	Qualification    Reference `json:"qualificationAttestation"`
-}
-
 func ParseTag(tag string) (string, error) {
 	if !strings.HasPrefix(tag, "v") || !versionPattern.MatchString(strings.TrimPrefix(tag, "v")) {
 		return "", contractError("tag %q must be vMAJOR.MINOR.PATCH with optional SemVer prerelease identifiers and no build metadata", tag)
@@ -185,14 +144,6 @@ func ParseTag(tag string) (string, error) {
 
 func ArtifactManifestLocation(version string) string {
 	return fmt.Sprintf("https://github.com/SecondStack-AI/SecondBox/releases/download/v%s/secondbox-%s-artifact-manifest.json", version, version)
-}
-
-func QualificationAttestationLocation(version string) string {
-	return fmt.Sprintf("https://github.com/SecondStack-AI/SecondBox/releases/download/v%s/secondbox-%s-qualification-attestation.json", version, version)
-}
-
-func ReleaseIndexLocation(version string) string {
-	return fmt.Sprintf("https://github.com/SecondStack-AI/SecondBox/releases/download/v%s/secondbox-%s-release-index.json", version, version)
 }
 
 func SourceFreeSuiteLocation(version string) string {
@@ -212,28 +163,6 @@ func DecodeArtifactManifest(data []byte) (ArtifactManifest, error) {
 		return ArtifactManifest{}, err
 	}
 	return manifest, nil
-}
-
-func DecodeQualificationAttestation(data []byte) (QualificationAttestation, error) {
-	var attestation QualificationAttestation
-	if err := decodeStrict(data, &attestation); err != nil {
-		return QualificationAttestation{}, contractError("decode qualification attestation: %v", err)
-	}
-	if err := attestation.Validate(); err != nil {
-		return QualificationAttestation{}, err
-	}
-	return attestation, nil
-}
-
-func DecodeReleaseIndex(data []byte) (ReleaseIndex, error) {
-	var index ReleaseIndex
-	if err := decodeStrict(data, &index); err != nil {
-		return ReleaseIndex{}, contractError("decode release index: %v", err)
-	}
-	if err := index.Validate(); err != nil {
-		return ReleaseIndex{}, err
-	}
-	return index, nil
 }
 
 func (manifest ArtifactManifest) Validate() error {
@@ -358,132 +287,9 @@ func validateSignedComponent(name string, component SignedComponent) error {
 	return nil
 }
 
-func (attestation QualificationAttestation) Validate() error {
-	if attestation.SchemaVersion != QualificationAttestationSchema {
-		return contractError("qualification attestation schemaVersion must be %q", QualificationAttestationSchema)
-	}
-	if err := validateIdentity(attestation.Identity); err != nil {
-		return err
-	}
-	if err := validateReference("qualification artifact manifest", attestation.ArtifactManifest); err != nil {
-		return err
-	}
-	if attestation.ArtifactManifest.Location != ArtifactManifestLocation(attestation.Version) {
-		return contractError("qualification artifact manifest location is not canonical for %s", attestation.Tag)
-	}
-	if attestation.Suite == "" || !digestPattern.MatchString(attestation.SuiteDigest) {
-		return contractError("qualification suite and canonical suite digest are required")
-	}
-	if !platformPattern.MatchString(attestation.Architecture) {
-		return contractError("qualification architecture must be os/architecture")
-	}
-	if attestation.RunnerProtocolVersion == 0 || attestation.GuestProtocolGeneration == 0 {
-		return contractError("qualification protocol selections must be positive")
-	}
-	if !digestPattern.MatchString(attestation.Guest.ManifestDigest) || !keyPattern.MatchString(attestation.Guest.SigningKeyFingerprint) {
-		return contractError("qualification guest signing identity is malformed")
-	}
-	if err := validateOCIReference(RunnerImage, attestation.RunnerEnvironment.RunnerImageReference); err != nil {
-		return err
-	}
-	if attestation.RunnerEnvironment.OperatingSystem == "" || attestation.RunnerEnvironment.Kernel == "" || attestation.RunnerEnvironment.FirecrackerVersion == "" || attestation.RunnerEnvironment.CPUModel == "" {
-		return contractError("qualification Runner environment is incomplete")
-	}
-	if attestation.Result != "passed" {
-		return contractError("qualification result must be passed")
-	}
-	if attestation.CompletedAt == "" {
-		return contractError("qualification completion time is required")
-	}
-	return nil
-}
-
-func (index ReleaseIndex) Validate() error {
-	if index.SchemaVersion != ReleaseIndexSchema {
-		return contractError("release index schemaVersion must be %q", ReleaseIndexSchema)
-	}
-	if err := validateIdentity(index.Identity); err != nil {
-		return err
-	}
-	if err := validateReference("release-index artifact manifest", index.ArtifactManifest); err != nil {
-		return err
-	}
-	if err := validateReference("release-index qualification attestation", index.Qualification); err != nil {
-		return err
-	}
-	if index.ArtifactManifest.Location != ArtifactManifestLocation(index.Version) || index.Qualification.Location != QualificationAttestationLocation(index.Version) {
-		return contractError("release index references must use canonical public locations for %s", index.Tag)
-	}
-	return nil
-}
-
-// VerifyFinalRelease binds the exact public index bytes to the exact manifest
-// and qualification bytes fetched independently by the caller.
-func VerifyFinalRelease(indexBytes, manifestBytes, qualificationBytes []byte) (ReleaseIndex, ArtifactManifest, QualificationAttestation, error) {
-	index, err := DecodeReleaseIndex(indexBytes)
-	if err != nil {
-		return ReleaseIndex{}, ArtifactManifest{}, QualificationAttestation{}, err
-	}
-	manifest, err := DecodeArtifactManifest(manifestBytes)
-	if err != nil {
-		return ReleaseIndex{}, ArtifactManifest{}, QualificationAttestation{}, err
-	}
-	qualification, err := DecodeQualificationAttestation(qualificationBytes)
-	if err != nil {
-		return ReleaseIndex{}, ArtifactManifest{}, QualificationAttestation{}, err
-	}
-	if err := verifyDigest("artifact manifest", index.ArtifactManifest.Digest, manifestBytes); err != nil {
-		return ReleaseIndex{}, ArtifactManifest{}, QualificationAttestation{}, err
-	}
-	if err := verifyDigest("qualification attestation", index.Qualification.Digest, qualificationBytes); err != nil {
-		return ReleaseIndex{}, ArtifactManifest{}, QualificationAttestation{}, err
-	}
-	if index.Identity != manifest.Identity || index.Identity != qualification.Identity {
-		return ReleaseIndex{}, ArtifactManifest{}, QualificationAttestation{}, contractError("release index, artifact manifest, and qualification identities differ")
-	}
-	if qualification.ArtifactManifest != index.ArtifactManifest {
-		return ReleaseIndex{}, ArtifactManifest{}, QualificationAttestation{}, contractError("qualification is bound to a different artifact manifest")
-	}
-	if qualification.Architecture != "linux/amd64" || !slices.Contains(manifest.Platforms.QualifiedRunnerGuest, qualification.Architecture) {
-		return ReleaseIndex{}, ArtifactManifest{}, QualificationAttestation{}, contractError("qualification architecture %q is not a declared qualified Runner/guest platform", qualification.Architecture)
-	}
-	if qualification.RunnerProtocolVersion < manifest.RunnerProtocol.Minimum || qualification.RunnerProtocolVersion > manifest.RunnerProtocol.Maximum || qualification.GuestProtocolGeneration < manifest.GuestProtocol.Minimum || qualification.GuestProtocolGeneration > manifest.GuestProtocol.Maximum {
-		return ReleaseIndex{}, ArtifactManifest{}, QualificationAttestation{}, contractError("qualification protocol selection is outside the artifact manifest compatibility windows")
-	}
-	if qualification.Guest.ManifestDigest != manifest.MicroVM.SignedManifestDigest || qualification.Guest.SigningKeyFingerprint != manifest.MicroVM.SigningKeyFingerprint {
-		return ReleaseIndex{}, ArtifactManifest{}, QualificationAttestation{}, contractError("qualification guest signing identity does not match the artifact manifest")
-	}
-	if qualification.RunnerEnvironment.RunnerImageReference != manifest.Runner.Reference {
-		return ReleaseIndex{}, ArtifactManifest{}, QualificationAttestation{}, contractError("qualification Runner image does not match the artifact manifest")
-	}
-	if qualification.Suite != "secondbox-source-free-v1" || qualification.SuiteDigest != manifest.SourceFreeSuite.Digest {
-		return ReleaseIndex{}, ArtifactManifest{}, QualificationAttestation{}, contractError("qualification suite identity does not match the artifact manifest")
-	}
-	return index, manifest, qualification, nil
-}
-
 func Digest(data []byte) string {
 	sum := sha256.Sum256(data)
 	return "sha256:" + hex.EncodeToString(sum[:])
-}
-
-// AcceptImmutableRetry permits a publication retry only when the bytes already
-// present at an immutable coordinate are identical to the staged candidate.
-func AcceptImmutableRetry(existing, staged []byte) error {
-	if !bytes.Equal(existing, staged) {
-		return contractError("immutable publication coordinate already contains different bytes")
-	}
-	return nil
-}
-
-// ValidateRuntimeCombination applies the v1 mixed-version policy. Until a
-// future schema records explicit cross-release evidence, all runtime members
-// must carry the artifact manifest's exact coordinated identity.
-func ValidateRuntimeCombination(manifest ArtifactManifest, controlPlane, runner, guest Identity) error {
-	if controlPlane != manifest.Identity || runner != manifest.Identity || guest != manifest.Identity {
-		return contractError("mixed control-plane, Runner, and guest release identities have no recorded compatibility evidence")
-	}
-	return nil
 }
 
 func decodeStrict(data []byte, target any) error {
@@ -621,13 +427,6 @@ func validateBundles(bundles []StandardBundleArtifact) error {
 			}
 		}
 		want[bundle.Name] = true
-	}
-	return nil
-}
-
-func verifyDigest(name, expected string, data []byte) error {
-	if actual := Digest(data); actual != expected {
-		return contractError("%s digest mismatch: expected %s, got %s", name, expected, actual)
 	}
 	return nil
 }

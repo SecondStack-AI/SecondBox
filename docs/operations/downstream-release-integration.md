@@ -1,11 +1,11 @@
 # Downstream release integration
 
-The first coordinated release version is `0.1.0`. Do not integrate it until the public final release index exists and `secondbox-deploy verify release-index` accepts it. The index, rather than the Git tag or a registry listing, is release authority.
+The first release version is `0.1.0`. Do not integrate it until the stable GitHub Release is public. The release is the `v0.1.0` tag plus the locally built files attached to that release; the publishing workflow does not rebuild them.
 
-Download the `secondbox-deploy_0.1.0_OS_ARCH` binary and verify its checksum from the public `SHA256SUMS`. On Linux amd64, verify the complete authority chain:
+Download the `secondbox-deploy_0.1.0_OS_ARCH` binary and verify it against the public `SHA256SUMS`. Then verify the published artifact manifest and every HTTP release object it references:
 
 ```text
-secondbox-deploy verify release-index https://github.com/SecondStack-AI/SecondBox/releases/download/v0.1.0/secondbox-0.1.0-release-index.json
+secondbox-deploy verify artifact-manifest https://github.com/SecondStack-AI/SecondBox/releases/download/v0.1.0/secondbox-0.1.0-artifact-manifest.json
 ```
 
 Keep an operator-reviewed production `secondbox.toml` input containing explicit database, object storage, application authority, secret-file, ingress, Runner placement, workspace, network, gateway, capacity, retention, and independently held guest trust-anchor choices. Materialize the deployment with:
@@ -13,7 +13,7 @@ Keep an operator-reviewed production `secondbox.toml` input containing explicit 
 ```text
 secondbox-deploy init --mode production \
   --input /protected/operator.toml \
-  --release-index https://github.com/SecondStack-AI/SecondBox/releases/download/v0.1.0/secondbox-0.1.0-release-index.json \
+  --artifact-manifest https://github.com/SecondStack-AI/SecondBox/releases/download/v0.1.0/secondbox-0.1.0-artifact-manifest.json \
   /srv/secondbox/deployment
 secondbox-deploy compose /srv/secondbox/deployment/secondbox.toml up
 ```
@@ -27,6 +27,6 @@ go get github.com/SecondStack-AI/SecondBox@v0.1.0
 npm install @secondstack-ai/secondbox@0.1.0
 ```
 
-Production configuration must retain the digest-pinned control-plane, Runner, and microVM image references materialized from the verified index. Never replace them with version tags, `latest`, local builds, a source checkout, copied SDK files, copied Compose files, or consumer-owned standard-resource reconciliation.
+Production configuration must retain the digest-pinned control-plane and Runner image references and the installed verified artifact manifest. The independently configured microVM trust and asset identity must remain consistent with that manifest. Never replace release facts with version tags, `latest`, local builds, a source checkout, copied SDK files, copied Compose files, or consumer-owned standard-resource reconciliation.
 
-After public finalization, the release operator records the final index, artifact manifest, and qualification URLs and digests; npm integrity; OCI digests; binary checksums; standard Profile revision/spec digests; platform matrix; and protocol windows in the GitHub release notes. Those immutable values are the canonical inputs to downstream SecondStack Agent Platform and Agent Claude integration work.
+After publication, record the stable release and artifact-manifest URLs, the `SHA256SUMS` and artifact-manifest digests, npm integrity, OCI digests, binary checksums, standard Profile revision/spec digests, platform matrix, and protocol windows. Those immutable values are the canonical inputs to downstream SecondStack Agent Platform and Agent Claude integration work.
