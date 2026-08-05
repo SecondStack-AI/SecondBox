@@ -15,6 +15,55 @@ fi
 version="$1"
 output_dir="$2"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+qualification_evidence_schema="secondbox.release/qualification-evidence/v1"
+qualification_evidence_source="$repo_root/.tmp/scenario-qualification-evidence.json"
+qualification_evidence_name="secondbox-${version}-qualification-evidence.json"
+
+validate_qualification_evidence() {
+  local evidence="$1"
+  local evidence_commit
+  local evidence_dirty
+
+  [[ -f "$evidence" && ! -L "$evidence" ]] || {
+    echo "release staging requires qualification evidence at $qualification_evidence_source; run just test-scenario on the qualified host" >&2
+    exit 1
+  }
+  jq empty "$evidence" >/dev/null 2>&1 || {
+    echo "release qualification evidence is malformed; rerun just test-scenario on a clean checkout" >&2
+    exit 1
+  }
+  evidence_commit="$(jq -er '.sourceCommit | select(type == "string")' "$evidence" 2>/dev/null)" || {
+    echo "release qualification evidence lacks sourceCommit; rerun just test-scenario on a clean checkout" >&2
+    exit 1
+  }
+  [[ "$evidence_commit" == "$source_commit" ]] || {
+    echo "release qualification evidence source commit $evidence_commit does not match staged source commit $source_commit; rerun just test-scenario at $source_commit" >&2
+    exit 1
+  }
+  evidence_dirty="$(jq -r 'if (.repositoryDirty | type) == "boolean" then .repositoryDirty else error("repositoryDirty must be boolean") end' "$evidence" 2>/dev/null)" || {
+    echo "release qualification evidence lacks repositoryDirty state; rerun just test-scenario on a clean checkout" >&2
+    exit 1
+  }
+  [[ "$evidence_dirty" == "false" ]] || {
+    echo "release qualification evidence was produced from a dirty repository; clean the checkout and rerun just test-scenario" >&2
+    exit 1
+  }
+  jq -e --arg schema "$qualification_evidence_schema" '
+    .schemaVersion == $schema and
+    .suite == "test-scenario" and
+    (.passCount | type == "number") and .passCount > 0 and .passCount == (.passCount | floor) and
+    (.wallClockSeconds | type == "number") and .wallClockSeconds >= 0 and .wallClockSeconds == (.wallClockSeconds | floor) and
+    .host.kvm == {path:"/dev/kvm",present:true,readable:true,writable:true} and
+    .host.tun == {path:"/dev/net/tun",present:true,readable:true,writable:true} and
+    (.host.workspaceFilesystem.mount | type == "string") and (.host.workspaceFilesystem.mount | length) > 0 and
+    (.host.workspaceFilesystem.type == "xfs" or .host.workspaceFilesystem.type == "btrfs") and
+    (.qualifiedAt | type == "string") and
+    (.qualifiedAt | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+  ' "$evidence" >/dev/null || {
+    echo "release qualification evidence does not describe a complete qualified scenario run; rerun just test-scenario on a clean checkout" >&2
+    exit 1
+  }
+}
 
 [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || {
   echo "release version must be SemVer without a v prefix or build metadata" >&2
@@ -30,6 +79,7 @@ if $test_mode; then
       sha256sum | awk '{print substr($1,1,40)}')"
 fi
 if ! $test_mode; then
+  validate_qualification_evidence "$qualification_evidence_source"
   [[ -z "$(git -C "$repo_root" status --porcelain --untracked-files=all)" ]] || {
     echo "release staging requires a clean repository" >&2
     exit 1
@@ -51,6 +101,29 @@ mkdir -p "$repo_root/.tmp"
 temporary="$(mktemp -d "$repo_root/.tmp/release-stage.XXXXXX")"
 cleanup() { rm -rf "$temporary"; }
 trap cleanup EXIT
+
+if $test_mode; then
+  jq -n \
+    --arg schemaVersion "$qualification_evidence_schema" \
+    --arg sourceCommit "$source_commit" \
+    '{
+      schemaVersion: $schemaVersion,
+      sourceCommit: $sourceCommit,
+      repositoryDirty: false,
+      suite: "test-scenario",
+      passCount: 16,
+      wallClockSeconds: 1,
+      host: {
+        kvm: {path: "/dev/kvm", present: true, readable: true, writable: true},
+        tun: {path: "/dev/net/tun", present: true, readable: true, writable: true},
+        workspaceFilesystem: {mount: "/synthetic/qualification xfs", type: "xfs"}
+      },
+      qualifiedAt: "1970-01-01T00:00:00Z"
+    }' >"$output_dir/$qualification_evidence_name"
+else
+  install -m 0644 "$qualification_evidence_source" "$output_dir/$qualification_evidence_name"
+fi
+validate_qualification_evidence "$output_dir/$qualification_evidence_name"
 
 if ! $test_mode; then
   "$repo_root/scripts/verify-generated.sh"

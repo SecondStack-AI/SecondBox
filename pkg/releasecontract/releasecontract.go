@@ -14,10 +14,12 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 )
 
 const (
-	ArtifactManifestSchema = "secondbox.release/artifact-manifest/v2"
+	ArtifactManifestSchema      = "secondbox.release/artifact-manifest/v2"
+	QualificationEvidenceSchema = "secondbox.release/qualification-evidence/v1"
 
 	TypeScriptPackage = "@secondstack-ai/secondbox"
 	GoModule          = "github.com/SecondStack-AI/SecondBox"
@@ -59,6 +61,35 @@ type PlatformMatrix struct {
 type Reference struct {
 	Location string `json:"location"`
 	Digest   string `json:"digest"`
+}
+
+type QualificationDeviceEvidence struct {
+	Path     string `json:"path"`
+	Present  bool   `json:"present"`
+	Readable bool   `json:"readable"`
+	Writable bool   `json:"writable"`
+}
+
+type QualificationFilesystemEvidence struct {
+	Mount string `json:"mount"`
+	Type  string `json:"type"`
+}
+
+type QualificationHostEvidence struct {
+	KVM                 QualificationDeviceEvidence     `json:"kvm"`
+	TUN                 QualificationDeviceEvidence     `json:"tun"`
+	WorkspaceFilesystem QualificationFilesystemEvidence `json:"workspaceFilesystem"`
+}
+
+type QualificationEvidence struct {
+	SchemaVersion    string                    `json:"schemaVersion"`
+	SourceCommit     string                    `json:"sourceCommit"`
+	RepositoryDirty  bool                      `json:"repositoryDirty"`
+	Suite            string                    `json:"suite"`
+	PassCount        int64                     `json:"passCount"`
+	WallClockSeconds int64                     `json:"wallClockSeconds"`
+	Host             QualificationHostEvidence `json:"host"`
+	QualifiedAt      string                    `json:"qualifiedAt"`
 }
 
 type OpenAPIArtifact struct {
@@ -119,20 +150,21 @@ type MicroVMArtifact struct {
 type ArtifactManifest struct {
 	SchemaVersion string `json:"schemaVersion"`
 	Identity
-	OpenAPI              OpenAPIArtifact          `json:"openapi"`
-	RunnerProtocol       ProtocolWindow           `json:"runnerProtocol"`
-	GuestProtocol        ProtocolWindow           `json:"guestProtocol"`
-	Platforms            PlatformMatrix           `json:"platforms"`
-	GoSDK                SDKArtifact              `json:"goSdk"`
-	TypeScriptSDK        SDKArtifact              `json:"typeScriptSdk"`
-	ControlPlane         OCIArtifact              `json:"controlPlane"`
-	Runner               OCIArtifact              `json:"runner"`
-	MicroVM              MicroVMArtifact          `json:"microvm"`
-	Binaries             []BinaryArtifact         `json:"binaries"`
-	SBOMs                []Reference              `json:"sboms"`
-	ArtifactAttestations []Reference              `json:"artifactAttestations,omitempty"`
-	SourceFreeSuite      Reference                `json:"sourceFreeSuite,omitempty"`
-	StandardBundles      []StandardBundleArtifact `json:"standardBundles"`
+	OpenAPI               OpenAPIArtifact          `json:"openapi"`
+	RunnerProtocol        ProtocolWindow           `json:"runnerProtocol"`
+	GuestProtocol         ProtocolWindow           `json:"guestProtocol"`
+	Platforms             PlatformMatrix           `json:"platforms"`
+	GoSDK                 SDKArtifact              `json:"goSdk"`
+	TypeScriptSDK         SDKArtifact              `json:"typeScriptSdk"`
+	ControlPlane          OCIArtifact              `json:"controlPlane"`
+	Runner                OCIArtifact              `json:"runner"`
+	MicroVM               MicroVMArtifact          `json:"microvm"`
+	Binaries              []BinaryArtifact         `json:"binaries"`
+	SBOMs                 []Reference              `json:"sboms"`
+	ArtifactAttestations  []Reference              `json:"artifactAttestations,omitempty"`
+	SourceFreeSuite       Reference                `json:"sourceFreeSuite,omitempty"`
+	QualificationEvidence Reference                `json:"qualificationEvidence"`
+	StandardBundles       []StandardBundleArtifact `json:"standardBundles"`
 }
 
 func ParseTag(tag string) (string, error) {
@@ -150,6 +182,10 @@ func SourceFreeSuiteLocation(version string) string {
 	return fmt.Sprintf("https://github.com/SecondStack-AI/SecondBox/releases/download/v%s/secondbox-%s-source-free-qualify", version, version)
 }
 
+func QualificationEvidenceLocation(version string) string {
+	return fmt.Sprintf("https://github.com/SecondStack-AI/SecondBox/releases/download/v%s/secondbox-%s-qualification-evidence.json", version, version)
+}
+
 func BinaryLocation(version, name, platform string) string {
 	return fmt.Sprintf("https://github.com/SecondStack-AI/SecondBox/releases/download/v%s/%s_%s_%s", version, name, version, strings.ReplaceAll(platform, "/", "_"))
 }
@@ -163,6 +199,60 @@ func DecodeArtifactManifest(data []byte) (ArtifactManifest, error) {
 		return ArtifactManifest{}, err
 	}
 	return manifest, nil
+}
+
+func DecodeQualificationEvidence(data []byte) (QualificationEvidence, error) {
+	var evidence QualificationEvidence
+	if err := decodeStrict(data, &evidence); err != nil {
+		return QualificationEvidence{}, contractError("decode qualification evidence: %v", err)
+	}
+	if err := evidence.Validate(); err != nil {
+		return QualificationEvidence{}, err
+	}
+	return evidence, nil
+}
+
+func (evidence QualificationEvidence) Validate() error {
+	if evidence.SchemaVersion != QualificationEvidenceSchema {
+		return contractError("qualification evidence schemaVersion must be %q", QualificationEvidenceSchema)
+	}
+	if !commitPattern.MatchString(evidence.SourceCommit) {
+		return contractError("qualification evidence source commit must be a full lowercase Git object ID")
+	}
+	if evidence.Suite != "test-scenario" || evidence.PassCount <= 0 || evidence.WallClockSeconds < 0 {
+		return contractError("qualification evidence must describe a complete test-scenario run")
+	}
+	for name, device := range map[string]QualificationDeviceEvidence{"KVM": evidence.Host.KVM, "TUN": evidence.Host.TUN} {
+		wantPath := "/dev/" + strings.ToLower(name)
+		if name == "TUN" {
+			wantPath = "/dev/net/tun"
+		}
+		if device.Path != wantPath || !device.Present || !device.Readable || !device.Writable {
+			return contractError("qualification evidence %s device facts are incomplete", name)
+		}
+	}
+	if strings.TrimSpace(evidence.Host.WorkspaceFilesystem.Mount) == "" ||
+		(evidence.Host.WorkspaceFilesystem.Type != "xfs" && evidence.Host.WorkspaceFilesystem.Type != "btrfs") {
+		return contractError("qualification evidence workspace filesystem facts are incomplete")
+	}
+	qualifiedAt, err := time.Parse(time.RFC3339, evidence.QualifiedAt)
+	if err != nil || evidence.QualifiedAt != qualifiedAt.UTC().Format("2006-01-02T15:04:05Z") {
+		return contractError("qualification evidence qualifiedAt must be a canonical UTC timestamp")
+	}
+	return nil
+}
+
+func (evidence QualificationEvidence) ValidateForRelease(sourceCommit string) error {
+	if err := evidence.Validate(); err != nil {
+		return err
+	}
+	if evidence.SourceCommit != sourceCommit {
+		return contractError("qualification evidence source commit does not match release")
+	}
+	if evidence.RepositoryDirty {
+		return contractError("qualification evidence was produced from a dirty repository")
+	}
+	return nil
 }
 
 func (manifest ArtifactManifest) Validate() error {
@@ -263,6 +353,12 @@ func (manifest ArtifactManifest) Validate() error {
 		if manifest.SourceFreeSuite.Location != SourceFreeSuiteLocation(manifest.Version) {
 			return contractError("source-free qualification suite location is not canonical for %s", manifest.Tag)
 		}
+	}
+	if err := validateReference("qualification evidence", manifest.QualificationEvidence); err != nil {
+		return err
+	}
+	if manifest.QualificationEvidence.Location != QualificationEvidenceLocation(manifest.Version) {
+		return contractError("qualification evidence location is not canonical for %s", manifest.Tag)
 	}
 	if err := validateBundles(manifest.StandardBundles); err != nil {
 		return err

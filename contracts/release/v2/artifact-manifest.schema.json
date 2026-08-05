@@ -4,7 +4,7 @@
   "title": "SecondBox coordinated release artifact manifest v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "version", "tag", "sourceCommit", "openapi", "runnerProtocol", "guestProtocol", "platforms", "goSdk", "typeScriptSdk", "controlPlane", "runner", "microvm", "binaries", "sboms", "artifactAttestations", "sourceFreeSuite", "standardBundles"],
+  "required": ["schemaVersion", "version", "tag", "sourceCommit", "openapi", "runnerProtocol", "guestProtocol", "platforms", "goSdk", "typeScriptSdk", "controlPlane", "runner", "microvm", "binaries", "sboms", "artifactAttestations", "sourceFreeSuite", "qualificationEvidence", "standardBundles"],
   "properties": {
     "schemaVersion": {"const": "secondbox.release/artifact-manifest/v2"},
     "version": {"$ref": "../v1/common.schema.json#/$defs/identity/properties/version"},
@@ -23,6 +23,7 @@
     "sboms": {"type": "array", "minItems": 1, "items": {"$ref": "../v1/common.schema.json#/$defs/reference"}},
     "artifactAttestations": {"type": "array", "minItems": 1, "items": {"$ref": "../v1/common.schema.json#/$defs/reference"}},
     "sourceFreeSuite": {"$ref": "../v1/common.schema.json#/$defs/reference"},
+    "qualificationEvidence": {"$ref": "../v1/common.schema.json#/$defs/reference"},
     "standardBundles": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"$ref": "#/$defs/bundle"}}
   },
   "$defs": {

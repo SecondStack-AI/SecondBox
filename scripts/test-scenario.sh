@@ -3,11 +3,20 @@ set -Eeuo pipefail
 umask 077
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+qualification_evidence="$repo_root/.tmp/scenario-qualification-evidence.json"
+rm -f -- "$qualification_evidence"
 compose_file="$repo_root/scripts/scenario-compose.yml"
 scenario_root="$repo_root/.tmp/scenario"
 scenario_mode="${SECONDBOX_SCENARIO_MODE:-suite}"
 project_name="secondbox-$scenario_mode-$$"
 runner_image="$project_name-runner"
+scenario_started_epoch="$(date +%s)"
+scenario_source_commit="$(git -C "$repo_root" rev-parse HEAD)"
+scenario_repository_dirty=false
+scenario_pass_count=0
+qualification_complete=false
+[[ -z "$(git -C "$repo_root" status --porcelain --untracked-files=all)" ]] ||
+  scenario_repository_dirty=true
 cd "$repo_root"
 
 fail() {
@@ -99,7 +108,7 @@ else
   done
 fi
 
-for command in curl docker findmnt git go ip jq mountpoint openssl python3 seq sha256sum; do
+for command in curl date docker findmnt git go ip jq mountpoint openssl python3 seq sha256sum; do
   command -v "$command" >/dev/null 2>&1 ||
     fail "missing command: $command"
 done
@@ -307,7 +316,7 @@ export SECONDBOX_SCENARIO_WORKSPACE_DIR="$scenario_workspace_dir"
 export SECONDBOX_SCENARIO_ASSET_CATALOG="$asset_catalog"
 export SECONDBOX_SCENARIO_RUNNER_IMAGE="$runner_image"
 export SECONDBOX_SCENARIO_SOURCE_COMMIT
-SECONDBOX_SCENARIO_SOURCE_COMMIT="$(git -C "$repo_root" rev-parse HEAD)"
+SECONDBOX_SCENARIO_SOURCE_COMMIT="$scenario_source_commit"
 export SECONDBOX_SCENARIO_GO_VERSION
 SECONDBOX_SCENARIO_GO_VERSION="$(go version)"
 export SECONDBOX_SCENARIO_ARTIFACT_MANIFEST_DIGEST="$manifest_digest"
@@ -488,6 +497,41 @@ cleanup() {
     echo "SecondBox scenario run-directory cleanup failed: $run_dir" >&2
     status=1
   fi
+  if [[ "$status" -eq 0 && "$qualification_complete" == "true" &&
+        "$scenario_mode" == "suite" && -z "${SECONDBOX_SCENARIO_TEST_PATTERN:-}" ]]; then
+    qualification_evidence_temporary="$qualification_evidence.tmp.$$"
+    qualified_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+    wall_clock_seconds="$(( $(date +%s) - scenario_started_epoch ))"
+    if ! jq -n \
+      --arg schemaVersion "secondbox.release/qualification-evidence/v1" \
+      --arg sourceCommit "$scenario_source_commit" \
+      --argjson repositoryDirty "$scenario_repository_dirty" \
+      --arg suite "test-scenario" \
+      --argjson passCount "$scenario_pass_count" \
+      --argjson wallClockSeconds "$wall_clock_seconds" \
+      --arg workspaceMount "$workspace_mount" \
+      --arg workspaceFilesystem "$workspace_fstype" \
+      --arg qualifiedAt "$qualified_at" \
+      '{
+        schemaVersion: $schemaVersion,
+        sourceCommit: $sourceCommit,
+        repositoryDirty: $repositoryDirty,
+        suite: $suite,
+        passCount: $passCount,
+        wallClockSeconds: $wallClockSeconds,
+        host: {
+          kvm: {path: "/dev/kvm", present: true, readable: true, writable: true},
+          tun: {path: "/dev/net/tun", present: true, readable: true, writable: true},
+          workspaceFilesystem: {mount: $workspaceMount, type: $workspaceFilesystem}
+        },
+        qualifiedAt: $qualifiedAt
+      }' >"$qualification_evidence_temporary" ||
+      ! mv -- "$qualification_evidence_temporary" "$qualification_evidence"; then
+      rm -f -- "$qualification_evidence_temporary" "$qualification_evidence"
+      echo "SecondBox scenario qualification evidence write failed: $qualification_evidence" >&2
+      status=1
+    fi
+  fi
   exit "$status"
 }
 trap cleanup EXIT
@@ -519,7 +563,13 @@ if [[ "$scenario_mode" == "suite" ]]; then
   if [[ -n "${SECONDBOX_SCENARIO_TEST_PATTERN:-}" ]]; then
     scenario_test_arguments+=(-run "$SECONDBOX_SCENARIO_TEST_PATTERN")
   fi
-  go test "${scenario_test_arguments[@]}" ./tests/scenario
+  scenario_test_output="$run_dir/scenario-test-output.log"
+  go test "${scenario_test_arguments[@]}" ./tests/scenario 2>&1 |
+    tee "$scenario_test_output"
+  scenario_pass_count="$(awk '/^--- PASS: / { count++ } END { print count + 0 }' "$scenario_test_output")"
+  [[ "$scenario_pass_count" -gt 0 ]] ||
+    fail "scenario suite reported no passing top-level tests"
+  qualification_complete=true
 elif [[ "$scenario_mode" == "lifecycle" ]]; then
   go run ./tests/scenario/lifecycle \
     --mode run \
