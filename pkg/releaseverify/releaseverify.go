@@ -1,5 +1,5 @@
-// Package releaseverify retrieves and independently verifies public coordinated
-// release authority without a repository checkout.
+// Package releaseverify retrieves and independently verifies a public release
+// artifact manifest without a repository checkout.
 package releaseverify
 
 import (
@@ -20,9 +20,7 @@ const maximumReleaseObjectBytes = 512 << 20
 type FetchFunc func(context.Context, string) ([]byte, error)
 
 type VerifiedRelease struct {
-	Index         *releasecontract.ReleaseIndex
 	Manifest      releasecontract.ArtifactManifest
-	Qualification *releasecontract.QualificationAttestation
 	ManifestBytes []byte
 }
 
@@ -71,36 +69,6 @@ func ArtifactManifest(ctx context.Context, location string, fetch FetchFunc) (Ve
 		return VerifiedRelease{}, err
 	}
 	return VerifiedRelease{Manifest: manifest, ManifestBytes: data}, nil
-}
-
-func FinalRelease(ctx context.Context, location string, fetch FetchFunc) (VerifiedRelease, error) {
-	indexData, err := fetch(ctx, location)
-	if err != nil {
-		return VerifiedRelease{}, err
-	}
-	index, err := releasecontract.DecodeReleaseIndex(indexData)
-	if err != nil {
-		return VerifiedRelease{}, err
-	}
-	if location != releasecontract.ReleaseIndexLocation(index.Version) {
-		return VerifiedRelease{}, fmt.Errorf("SecondBox release verification: release-index location is not canonical for %s", index.Tag)
-	}
-	manifestData, err := fetch(ctx, index.ArtifactManifest.Location)
-	if err != nil {
-		return VerifiedRelease{}, err
-	}
-	qualificationData, err := fetch(ctx, index.Qualification.Location)
-	if err != nil {
-		return VerifiedRelease{}, err
-	}
-	verifiedIndex, manifest, qualification, err := releasecontract.VerifyFinalRelease(indexData, manifestData, qualificationData)
-	if err != nil {
-		return VerifiedRelease{}, err
-	}
-	if err := verifyManifestObjects(ctx, manifest, fetch); err != nil {
-		return VerifiedRelease{}, err
-	}
-	return VerifiedRelease{Index: &verifiedIndex, Manifest: manifest, Qualification: &qualification, ManifestBytes: manifestData}, nil
 }
 
 func verifyManifestObjects(ctx context.Context, manifest releasecontract.ArtifactManifest, fetch FetchFunc) error {

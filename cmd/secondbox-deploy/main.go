@@ -16,7 +16,6 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/deployconfig"
 	"github.com/SecondStack-AI/SecondBox/pkg/buildinfo"
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
-	"github.com/SecondStack-AI/SecondBox/pkg/releasefinalize"
 	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
 )
 
@@ -52,8 +51,8 @@ func run(arguments []string) error {
 			}
 			return err
 		case "production":
-			if len(arguments) == 8 && arguments[3] == "--input" && (arguments[5] == "--release-index" || arguments[5] == "--qualification-artifact-manifest") {
-				verified, err := verifyReleaseLocation(arguments[5], arguments[6])
+			if len(arguments) == 8 && arguments[3] == "--input" && arguments[5] == "--artifact-manifest" {
+				verified, err := verifyReleaseLocation(arguments[6])
 				if err != nil {
 					return err
 				}
@@ -105,24 +104,14 @@ func run(arguments []string) error {
 		}
 		return err
 	case "verify":
-		if len(arguments) != 3 || (arguments[1] != "artifact-manifest" && arguments[1] != "release-index") {
+		if len(arguments) != 3 || arguments[1] != "artifact-manifest" {
 			return usage()
 		}
-		verified, err := verifyReleaseLocation("--"+arguments[1], arguments[2])
+		verified, err := verifyReleaseLocation(arguments[2])
 		if err != nil {
 			return err
 		}
-		return json.NewEncoder(os.Stdout).Encode(map[string]any{"version": verified.Manifest.Version, "tag": verified.Manifest.Tag, "sourceCommit": verified.Manifest.SourceCommit, "artifactManifestDigest": releaseDigest(verified.ManifestBytes), "qualified": verified.Qualification != nil})
-	case "qualification-attestation":
-		if len(arguments) != 7 || arguments[1] != "--manifest" || arguments[3] != "--input" || arguments[5] != "--output" {
-			return usage()
-		}
-		return writeQualificationAttestation(arguments[2], arguments[4], arguments[6])
-	case "release-index":
-		if len(arguments) != 7 || arguments[1] != "--manifest" || arguments[3] != "--qualification" || arguments[5] != "--output" {
-			return usage()
-		}
-		return writeReleaseIndex(arguments[2], arguments[4], arguments[6])
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{"version": verified.Manifest.Version, "tag": verified.Manifest.Tag, "sourceCommit": verified.Manifest.SourceCommit, "artifactManifestDigest": releaseDigest(verified.ManifestBytes)})
 	case "render":
 		if len(arguments) != 4 || arguments[1] != "--output" {
 			return usage()
@@ -166,80 +155,11 @@ func run(arguments []string) error {
 	}
 }
 
-func writeQualificationAttestation(manifestPath, inputPath, outputPath string) error {
-	manifestBytes, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return err
-	}
-	manifest, err := releasecontract.DecodeArtifactManifest(manifestBytes)
-	if err != nil {
-		return err
-	}
-	inputBytes, err := os.ReadFile(inputPath)
-	if err != nil {
-		return err
-	}
-	var input releasefinalize.QualificationInput
-	decoder := json.NewDecoder(strings.NewReader(string(inputBytes)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil {
-		return err
-	}
-	attestation, err := releasefinalize.Qualification(manifest, manifestBytes, input)
-	if err != nil {
-		return err
-	}
-	return writeJSONCreateOnly(outputPath, attestation)
-}
-
-func writeReleaseIndex(manifestPath, qualificationPath, outputPath string) error {
-	manifestBytes, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return err
-	}
-	manifest, err := releasecontract.DecodeArtifactManifest(manifestBytes)
-	if err != nil {
-		return err
-	}
-	qualificationBytes, err := os.ReadFile(qualificationPath)
-	if err != nil {
-		return err
-	}
-	index, err := releasefinalize.Index(manifest, manifestBytes, qualificationBytes)
-	if err != nil {
-		return err
-	}
-	return writeJSONCreateOnly(outputPath, index)
-}
-
-func writeJSONCreateOnly(path string, value any) error {
-	data, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return err
-	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return err
-	}
-	if _, err := file.Write(append(data, '\n')); err != nil {
-		_ = file.Close()
-		return err
-	}
-	return file.Close()
-}
-
-func verifyReleaseLocation(kind, location string) (releaseverify.VerifiedRelease, error) {
+func verifyReleaseLocation(location string) (releaseverify.VerifiedRelease, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	client := &http.Client{Timeout: 2 * time.Minute}
-	switch kind {
-	case "--release-index":
-		return releaseverify.FinalRelease(ctx, location, releaseverify.HTTPFetcher(client))
-	case "--qualification-artifact-manifest", "--artifact-manifest":
-		return releaseverify.ArtifactManifest(ctx, location, releaseverify.HTTPFetcher(client))
-	default:
-		return releaseverify.VerifiedRelease{}, fmt.Errorf("SecondBox deployment release verification mode is invalid")
-	}
+	return releaseverify.ArtifactManifest(ctx, location, releaseverify.HTTPFetcher(client))
 }
 
 func releaseDigest(data []byte) string {
@@ -319,5 +239,5 @@ func runDockerCompose(arguments []string) error {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: secondbox-deploy {init --mode development DIRECTORY|init --mode production [--input COMPLETE_MANIFEST [--release-index URL|--qualification-artifact-manifest URL]] DIRECTORY|runner-template [--output FILE]|verify artifact-manifest URL|verify release-index URL|qualification-attestation --manifest FILE --input FILE --output FILE|release-index --manifest FILE --qualification FILE --output FILE|validate MANIFEST|render --output ENV MANIFEST|runner-init MANIFEST RUNNER_ID TARGET|inspect MANIFEST|migrate LEGACY_ENV TARGET|compose MANIFEST config|prepare|up|down}")
+	return fmt.Errorf("usage: secondbox-deploy {init --mode development DIRECTORY|init --mode production [--input COMPLETE_MANIFEST [--artifact-manifest URL]] DIRECTORY|runner-template [--output FILE]|verify artifact-manifest URL|validate MANIFEST|render --output ENV MANIFEST|runner-init MANIFEST RUNNER_ID TARGET|inspect MANIFEST|migrate LEGACY_ENV TARGET|compose MANIFEST config|prepare|up|down}")
 }

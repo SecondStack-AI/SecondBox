@@ -58,101 +58,6 @@ func TestArtifactManifestValidationRejectsInvalidReleaseContent(t *testing.T) {
 	}
 }
 
-func TestVerifyFinalRelease(t *testing.T) {
-	manifest := validManifest()
-	manifestBytes := mustJSON(t, manifest)
-	manifestRef := Reference{Location: ArtifactManifestLocation(manifest.Version), Digest: Digest(manifestBytes)}
-	qualification := validQualification(manifest, manifestRef)
-	qualificationBytes := mustJSON(t, qualification)
-	index := ReleaseIndex{
-		SchemaVersion:    ReleaseIndexSchema,
-		Identity:         manifest.Identity,
-		ArtifactManifest: manifestRef,
-		Qualification: Reference{
-			Location: QualificationAttestationLocation(manifest.Version),
-			Digest:   Digest(qualificationBytes),
-		},
-	}
-	indexBytes := mustJSON(t, index)
-	if _, _, _, err := VerifyFinalRelease(indexBytes, manifestBytes, qualificationBytes); err != nil {
-		t.Fatalf("VerifyFinalRelease(): %v", err)
-	}
-
-	t.Run("qualification bound to another manifest", func(t *testing.T) {
-		changed := qualification
-		changed.ArtifactManifest.Digest = testDigest
-		changedBytes := mustJSON(t, changed)
-		changedIndex := index
-		changedIndex.Qualification.Digest = Digest(changedBytes)
-		_, _, _, err := VerifyFinalRelease(mustJSON(t, changedIndex), manifestBytes, changedBytes)
-		if err == nil || !strings.Contains(err.Error(), "different artifact manifest") {
-			t.Fatalf("error = %v", err)
-		}
-	})
-
-	t.Run("signing identity mismatch", func(t *testing.T) {
-		changed := qualification
-		changed.Guest.SigningKeyFingerprint = "SHA256:FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
-		changedBytes := mustJSON(t, changed)
-		changedIndex := index
-		changedIndex.Qualification.Digest = Digest(changedBytes)
-		_, _, _, err := VerifyFinalRelease(mustJSON(t, changedIndex), manifestBytes, changedBytes)
-		if err == nil || !strings.Contains(err.Error(), "guest signing identity") {
-			t.Fatalf("error = %v", err)
-		}
-	})
-
-	t.Run("protocol outside compatibility window", func(t *testing.T) {
-		changed := qualification
-		changed.RunnerProtocolVersion = 3
-		changedBytes := mustJSON(t, changed)
-		changedIndex := index
-		changedIndex.Qualification.Digest = Digest(changedBytes)
-		_, _, _, err := VerifyFinalRelease(mustJSON(t, changedIndex), manifestBytes, changedBytes)
-		if err == nil || !strings.Contains(err.Error(), "compatibility windows") {
-			t.Fatalf("error = %v", err)
-		}
-	})
-
-	t.Run("incomplete final index", func(t *testing.T) {
-		changed := index
-		changed.Qualification = Reference{}
-		if _, err := DecodeReleaseIndex(mustJSON(t, changed)); err == nil {
-			t.Fatal("DecodeReleaseIndex() unexpectedly succeeded")
-		}
-	})
-
-	t.Run("self referential evidence", func(t *testing.T) {
-		var raw map[string]any
-		if err := json.Unmarshal(indexBytes, &raw); err != nil {
-			t.Fatal(err)
-		}
-		raw["evidence"] = map[string]any{"digest": testDigest}
-		if _, err := DecodeReleaseIndex(mustJSON(t, raw)); err == nil || !strings.Contains(err.Error(), "unknown field") {
-			t.Fatalf("error = %v", err)
-		}
-	})
-}
-
-func TestImmutableRetryAndMixedVersions(t *testing.T) {
-	if err := AcceptImmutableRetry([]byte("same"), []byte("same")); err != nil {
-		t.Fatal(err)
-	}
-	if err := AcceptImmutableRetry([]byte("old"), []byte("new")); err == nil {
-		t.Fatal("different immutable publication bytes unexpectedly accepted")
-	}
-	manifest := validManifest()
-	if err := ValidateRuntimeCombination(manifest, manifest.Identity, manifest.Identity, manifest.Identity); err != nil {
-		t.Fatal(err)
-	}
-	mixed := manifest.Identity
-	mixed.Version = "1.2.2"
-	mixed.Tag = "v1.2.2"
-	if err := ValidateRuntimeCombination(manifest, manifest.Identity, mixed, manifest.Identity); err == nil {
-		t.Fatal("mixed runtime identities unexpectedly accepted")
-	}
-}
-
 func validManifest() ArtifactManifest {
 	identity := Identity{Version: "1.2.3", Tag: "v1.2.3", SourceCommit: testCommit}
 	ref := func(name string) Reference {
@@ -191,22 +96,6 @@ func validManifest() ArtifactManifest {
 			{Identity: identity, Name: "agent-compartment", Document: ref("agent-compartment.json"), Profiles: []StandardProfileIdentity{{Name: "agent-compartment", Revision: 1, SpecDigest: testDigest}}},
 			{Identity: identity, Name: "durable-coding", Document: ref("durable-coding.json"), Profiles: []StandardProfileIdentity{{Name: "durable-coding", Revision: 1, SpecDigest: testDigest}}},
 		},
-	}
-}
-
-func validQualification(manifest ArtifactManifest, manifestRef Reference) QualificationAttestation {
-	return QualificationAttestation{
-		SchemaVersion:    QualificationAttestationSchema,
-		Identity:         manifest.Identity,
-		ArtifactManifest: manifestRef,
-		Suite:            "secondbox-source-free-v1", SuiteDigest: testDigest, Architecture: "linux/amd64",
-		RunnerProtocolVersion: 2, GuestProtocolGeneration: 1,
-		Guest: QualifiedGuest{ManifestDigest: manifest.MicroVM.SignedManifestDigest, SigningKeyFingerprint: manifest.MicroVM.SigningKeyFingerprint},
-		RunnerEnvironment: RunnerEnvironment{
-			RunnerImageReference: manifest.Runner.Reference, OperatingSystem: "linux", Kernel: "6.12.0",
-			FirecrackerVersion: "1.16.1", CPUModel: "test-cpu",
-		},
-		Result: "passed", CompletedAt: "2026-08-03T12:00:00Z",
 	}
 }
 
