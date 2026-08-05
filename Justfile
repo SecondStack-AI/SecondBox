@@ -9,6 +9,10 @@ verify-generated:
 build:
     go build -o /dev/null ./cmd/secondboxd
 
+lint:
+    golangci-lint run ./...
+    cd runner && golangci-lint run --config ../.golangci.yml ./...
+
 test:
     scripts/test-go.sh
 

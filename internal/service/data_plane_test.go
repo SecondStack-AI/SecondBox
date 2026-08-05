@@ -285,6 +285,25 @@ func (relay *terminalCheckpointProofRelay) CheckpointTerminal(
 	}
 	return runnercontrol.DataPlaneSession{ID: "terminal-periodic", TenantRef: "tenant", SubjectRef: "subject"}, nil
 }
+func TestSandboxPortStreamClosePropagatesTransportError(t *testing.T) {
+	closeErr := errors.New("transport close failed")
+	stream := &SandboxPortStream{stream: closeErrorDataPlaneStream{err: closeErr}}
+	if err := stream.Close(); !errors.Is(err, closeErr) {
+		t.Fatalf("Port stream close error = %v, want %v", err, closeErr)
+	}
+}
+
+type closeErrorDataPlaneStream struct {
+	err error
+}
+
+func (closeErrorDataPlaneStream) Send(*runnerv1.ControlPlaneToRunner) error { return nil }
+
+func (closeErrorDataPlaneStream) Receive(context.Context) (*runnerv1.RunnerToControlPlane, error) {
+	return nil, nil
+}
+
+func (stream closeErrorDataPlaneStream) Close() error { return stream.err }
 
 type unavailableDataPlaneStream struct{}
 

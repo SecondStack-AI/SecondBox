@@ -157,7 +157,7 @@ func (handle *SandboxHandle) ClosePortSession(ctx context.Context, sessionID Opa
 	return response.Body.Close()
 }
 
-// PortTunnel is a bidirectional byte stream over either the relay WebSocket or
+// PortTunnel is a bidirectional byte stream over either the proxied WebSocket or
 // the Runner's SPKI-pinned direct TLS endpoint.
 type PortTunnel struct {
 	direct    net.Conn
@@ -175,8 +175,8 @@ func (handle *SandboxHandle) ConnectPortTunnel(ctx context.Context, session Port
 		return nil, errors.New("SecondBox PortSession does not match the Sandbox handle")
 	}
 	switch session.Transport {
-	case "relay":
-		return connectRelayPortTunnel(ctx, session, websocketDialer)
+	case "proxied":
+		return connectProxiedPortTunnel(ctx, session, websocketDialer)
 	case "direct":
 		return connectDirectPortTunnel(ctx, session, directDialer)
 	default:
@@ -184,7 +184,7 @@ func (handle *SandboxHandle) ConnectPortTunnel(ctx context.Context, session Port
 	}
 }
 
-func connectRelayPortTunnel(ctx context.Context, session PortSession, dialer *websocket.Dialer) (*PortTunnel, error) {
+func connectProxiedPortTunnel(ctx context.Context, session PortSession, dialer *websocket.Dialer) (*PortTunnel, error) {
 	endpoint, credential, err := portEndpoint(session.Endpoint, "ws", "wss")
 	if err != nil {
 		return nil, err

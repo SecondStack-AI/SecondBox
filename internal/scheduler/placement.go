@@ -13,7 +13,6 @@ var ErrHomeRunnerUnavailable = errors.New("SecondBox Sandbox home runner is unav
 const (
 	DrainPhaseActive   = "active"
 	DrainPhaseDraining = "draining"
-	DrainPhaseDrained  = "drained"
 )
 
 // Capacity is runner compute that may be reserved by assignments.

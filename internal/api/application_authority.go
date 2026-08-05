@@ -213,10 +213,10 @@ func isApplicationScope(scope string) bool {
 func portTransportForRequest(request *http.Request) string {
 	authority, ok := request.Context().Value(applicationAuthorityContextKey{}).(resolvedApplicationAuthority)
 	if !ok {
-		return contracts.PortTransportRelay
+		return contracts.PortTransportProxied
 	}
 	if !slices.Contains(authority.scopes, applicationScopeSandboxPortsDirect) {
-		return contracts.PortTransportRelay
+		return contracts.PortTransportProxied
 	}
 	return contracts.PortTransportDirect
 }

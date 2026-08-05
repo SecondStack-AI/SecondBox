@@ -3,6 +3,7 @@ package deployconfig
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -319,16 +320,13 @@ func writeAtomic(path string, content []byte, mode os.FileMode, replace bool) er
 		}
 	}()
 	if err := temporary.Chmod(mode); err != nil {
-		temporary.Close()
-		return err
+		return errors.Join(err, temporary.Close())
 	}
 	if _, err := temporary.Write(content); err != nil {
-		temporary.Close()
-		return err
+		return errors.Join(err, temporary.Close())
 	}
 	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return err
+		return errors.Join(err, temporary.Close())
 	}
 	if err := temporary.Close(); err != nil {
 		return err

@@ -383,7 +383,7 @@ export interface PortSession {
   readonly protocol: "tcp" | "http";
   readonly sandboxId: OpaqueID;
   readonly state: "open" | "closing" | "closed" | "expired" | "fenced";
-  readonly transport: "relay" | "direct";
+  readonly transport: "proxied" | "direct";
 }
 
 export interface Problem {

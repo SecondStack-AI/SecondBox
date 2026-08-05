@@ -20,7 +20,6 @@ import (
 
 type commandAlias struct {
 	operation string
-	injected  []string
 }
 
 var commandAliases = map[string]commandAlias{
@@ -296,10 +295,7 @@ func resolveCommand(args []string) (string, []string, error) {
 		}
 		key := strings.Join(args[:width], " ")
 		if alias, exists := commandAliases[key]; exists {
-			var rest []string
-			rest = append(rest, alias.injected...)
-			rest = append(rest, args[width:]...)
-			return alias.operation, rest, nil
+			return alias.operation, append([]string(nil), args[width:]...), nil
 		}
 	}
 	return "", nil, fmt.Errorf("SecondBox CLI unknown command %q; available commands: %s", strings.Join(args, " "), commandSummary())

@@ -28,7 +28,7 @@ export interface NodeTransportAuthority {
 export interface NodeSecondBoxTransports extends PortTunnelTransports {
   readonly exec: ExecStreamConnector;
   readonly terminal: TerminalConnector;
-  readonly relay: PortTunnelConnector;
+  readonly proxied: PortTunnelConnector;
   readonly direct: DirectPortDialer;
 }
 
@@ -68,7 +68,7 @@ export function createNodeTransports(
       return new NodeTextConnection(socket);
     },
   };
-  const relay: PortTunnelConnector = {
+  const proxied: PortTunnelConnector = {
     async connect(descriptor, signal) {
       const socket = await openWebSocket(
         descriptor.websocketURL,
@@ -82,7 +82,7 @@ export function createNodeTransports(
   const direct: DirectPortDialer = {
     dial: openPinnedTLSSocket,
   };
-  return { exec, terminal, relay, direct };
+  return { exec, terminal, proxied, direct };
 }
 
 class NodeTextConnection implements ExecStreamConnection, TerminalConnection {

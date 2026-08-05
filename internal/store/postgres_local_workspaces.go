@@ -13,20 +13,6 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
-// ReadHomeWorkspace returns private runner ownership and local mutation state.
-// Callers must not project this value into a public resource.
-func (store *PostgresControlPlaneStore) ReadHomeWorkspace(
-	ctx context.Context,
-	tenantRef string,
-	subjectRef string,
-	workspaceID string,
-) (ports.HomeWorkspace, error) {
-	return scanHomeWorkspace(store.pool.QueryRow(ctx, homeWorkspaceSelect+`
-		WHERE workspace.id=$1 AND workspace.tenant_ref=$2 AND workspace.subject_ref=$3`,
-		workspaceID, tenantRef, subjectRef,
-	))
-}
-
 // AcquireWorkspaceMutation serializes all local workspace changes under the
 // invariant row order Sandbox, Workspace, then Snapshot when present.
 func (store *PostgresControlPlaneStore) AcquireWorkspaceMutation(
@@ -156,15 +142,6 @@ func (store *PostgresControlPlaneStore) CompleteWorkspaceMutation(
 	return workspace, nil
 }
 
-const homeWorkspaceSelect = `
-	SELECT workspace.id,workspace.sandbox_id,workspace.home_runner_id,workspace.state,
-	       workspace.logical_capacity_bytes,workspace.generation,
-	       workspace.mutation_kind,workspace.mutation_id,workspace.mutation_effect_id,
-	       workspace.mutation_operation_id,COALESCE(workspace.mutation_expected_generation,0),
-	       COALESCE(workspace.mutation_target_generation,0),workspace.mutation_state,
-	       workspace.local_receipt_json,workspace.created_at,workspace.updated_at
-	FROM secondbox.workspaces AS workspace`
-
 type lockedSandboxWorkspace = rowlock.SandboxWorkspace
 
 // lockSandboxWorkspace establishes the one invariant acquisition order used by
@@ -236,27 +213,6 @@ func lockLocalWorkspaceRows(
 		}
 	}
 	return locked.Workspace, nil
-}
-
-func scanHomeWorkspace(row rowScanner) (ports.HomeWorkspace, error) {
-	var workspace ports.HomeWorkspace
-	var expectedGeneration, targetGeneration int64
-	var receiptJSON []byte
-	if err := row.Scan(
-		&workspace.ID, &workspace.SandboxID, &workspace.HomeRunnerID, &workspace.State,
-		&workspace.LogicalCapacityBytes, &workspace.Generation,
-		&workspace.Mutation.Kind, &workspace.Mutation.ID, &workspace.Mutation.EffectID,
-		&workspace.Mutation.OperationID, &expectedGeneration, &targetGeneration,
-		&workspace.Mutation.State, &receiptJSON, &workspace.CreatedAt, &workspace.UpdatedAt,
-	); err != nil {
-		return ports.HomeWorkspace{}, err
-	}
-	workspace.Mutation.ExpectedGeneration = expectedGeneration
-	workspace.Mutation.TargetGeneration = targetGeneration
-	if err := json.Unmarshal(receiptJSON, &workspace.LocalReceipt); err != nil {
-		return ports.HomeWorkspace{}, fmt.Errorf("SecondBox Workspace local receipt decoding failed: %w", err)
-	}
-	return workspace, nil
 }
 
 func validateWorkspaceMutationInput(input ports.WorkspaceMutationInput) error {

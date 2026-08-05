@@ -3184,12 +3184,16 @@ func (store *PostgresStateStore) beginOrderedMessage(
 		FROM secondbox.runner_connections AS connection
 		WHERE connection.id=$1 FOR UPDATE OF connection`, connectionID,
 	).Scan(&storedRunnerID, &connectionState, &lastSequence); err != nil {
-		tx.Rollback(ctx)
-		return nil, false, fmt.Errorf("SecondBox runner connection ordering lookup: %w", err)
+		return nil, false, errors.Join(
+			fmt.Errorf("SecondBox runner connection ordering lookup: %w", err),
+			tx.Rollback(ctx),
+		)
 	}
 	if storedRunnerID != runnerID || connectionState != "active" {
-		tx.Rollback(ctx)
-		return nil, false, errors.New("SecondBox runner message connection identity is inactive")
+		return nil, false, errors.Join(
+			errors.New("SecondBox runner message connection identity is inactive"),
+			tx.Rollback(ctx),
+		)
 	}
 	var priorSequence int64
 	err = tx.QueryRow(ctx, `
@@ -3203,12 +3207,13 @@ func (store *PostgresStateStore) beginOrderedMessage(
 		return nil, true, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		tx.Rollback(ctx)
-		return nil, false, fmt.Errorf("SecondBox runner message duplicate lookup: %w", err)
+		return nil, false, errors.Join(
+			fmt.Errorf("SecondBox runner message duplicate lookup: %w", err),
+			tx.Rollback(ctx),
+		)
 	}
 	if int64(sequence) <= lastSequence {
-		tx.Rollback(ctx)
-		return nil, false, ErrSequenceReordered
+		return nil, false, errors.Join(ErrSequenceReordered, tx.Rollback(ctx))
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.runner_messages (
@@ -3216,16 +3221,20 @@ func (store *PostgresStateStore) beginOrderedMessage(
 		) VALUES ($1,$2,$3,$4,$5)`,
 		connectionID, messageID, sequence, kind, now.UTC(),
 	); err != nil {
-		tx.Rollback(ctx)
-		return nil, false, fmt.Errorf("SecondBox runner message insert: %w", err)
+		return nil, false, errors.Join(
+			fmt.Errorf("SecondBox runner message insert: %w", err),
+			tx.Rollback(ctx),
+		)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE secondbox.runner_connections
 		SET last_sequence=$2,last_seen_at=$3 WHERE id=$1`,
 		connectionID, sequence, now.UTC(),
 	); err != nil {
-		tx.Rollback(ctx)
-		return nil, false, fmt.Errorf("SecondBox runner message sequence update: %w", err)
+		return nil, false, errors.Join(
+			fmt.Errorf("SecondBox runner message sequence update: %w", err),
+			tx.Rollback(ctx),
+		)
 	}
 	return tx, false, nil
 }

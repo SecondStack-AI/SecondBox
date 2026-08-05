@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -215,8 +216,10 @@ func (c *GRPCConnector) Connect(ctx context.Context) (RunnerProtocolStream, erro
 	)
 	stream, err := runnerprotocol.NewRunnerControlClient(connection).Connect(streamContext)
 	if err != nil {
-		connection.Close()
-		return nil, fmt.Errorf("SecondBox runner gRPC stream: %w", err)
+		return nil, errors.Join(
+			fmt.Errorf("SecondBox runner gRPC stream: %w", err),
+			connection.Close(),
+		)
 	}
 	c.mu.Lock()
 	c.connection = connection

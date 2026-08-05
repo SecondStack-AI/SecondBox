@@ -29,13 +29,7 @@ func (client *Client) Request(ctx context.Context, operationID string, options C
 	if !found {
 		return nil, fmt.Errorf("SecondBox client unknown operation %q", operationID)
 	}
-	return client.Do(ctx, operation, RequestOptions{
-		PathParameters:  options.PathParameters,
-		QueryParameters: options.QueryParameters,
-		Headers:         options.Headers,
-		Body:            options.Body,
-		ContentType:     options.ContentType,
-	})
+	return client.Do(ctx, operation, RequestOptions(options))
 }
 
 // RequestJSON invokes a generated operation and decodes its successful JSON response.

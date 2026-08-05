@@ -68,11 +68,11 @@ func TestPostgresDirectPortTransportAdmissionAndCredentialConsumption(t *testing
 		t.Fatal("direct Port Open carries the single-use credential")
 	}
 
-	// The relay WebSocket cannot spend a direct session's credential.
+	// The proxied WebSocket cannot spend a direct session's credential.
 	if _, err := fixture.portService.ConsumePortTunnelToken(
 		t.Context(), direct.ID, credential,
 	); !errors.Is(err, ports.ErrPortTokenInvalid) {
-		t.Fatalf("relay consumption of a direct PortSession error = %v", err)
+		t.Fatalf("proxied consumption of a direct PortSession error = %v", err)
 	}
 
 	consumption := runnercontrol.DirectPortConsumption{
@@ -115,7 +115,7 @@ func TestPostgresDirectPortTransportAdmissionAndCredentialConsumption(t *testing
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := fixture.relay.ConsumeDirectPortSession(
+			if _, err := fixture.dataPlaneStore.ConsumeDirectPortSession(
 				t.Context(), mutate.mutate(consumption),
 			); !errors.Is(err, mutate.want) {
 				t.Fatalf("consumption error = %v, want %v", err, mutate.want)
@@ -123,7 +123,7 @@ func TestPostgresDirectPortTransportAdmissionAndCredentialConsumption(t *testing
 		})
 	}
 
-	tunnel, err := fixture.relay.ConsumeDirectPortSession(t.Context(), consumption)
+	tunnel, err := fixture.dataPlaneStore.ConsumeDirectPortSession(t.Context(), consumption)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestPostgresDirectPortTransportAdmissionAndCredentialConsumption(t *testing
 	if activeActivity != 1 {
 		t.Fatalf("direct Port activity rows = %d", activeActivity)
 	}
-	if _, err := fixture.relay.ConsumeDirectPortSession(
+	if _, err := fixture.dataPlaneStore.ConsumeDirectPortSession(
 		t.Context(), consumption,
 	); !errors.Is(err, ports.ErrPortTokenConsumed) {
 		t.Fatalf("replayed direct credential error = %v", err)
@@ -175,7 +175,7 @@ func TestPostgresDirectPortRejectsPolicyDeadlineAndLeaseFailures(t *testing.T) {
 	}
 	expiringDigest := directPortCredentialDigest(t, expiring.Endpoint)
 	now = now.Add(11 * time.Second)
-	if _, err := fixture.relay.ConsumeDirectPortSession(
+	if _, err := fixture.dataPlaneStore.ConsumeDirectPortSession(
 		t.Context(),
 		runnercontrol.DirectPortConsumption{
 			RunnerID: fixture.runnerID, SessionID: expiring.ID,
@@ -202,7 +202,7 @@ func TestPostgresDirectPortRejectsPolicyDeadlineAndLeaseFailures(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixture.relay.ConsumeDirectPortSession(
+	if _, err := fixture.dataPlaneStore.ConsumeDirectPortSession(
 		t.Context(),
 		runnercontrol.DirectPortConsumption{
 			RunnerID: fixture.runnerID, SessionID: leased.ID,
@@ -216,35 +216,35 @@ func TestPostgresDirectPortRejectsPolicyDeadlineAndLeaseFailures(t *testing.T) {
 
 // TestPostgresPortTransportGrantGovernsRunnerAddressExposure proves the public
 // surface property: only a caller holding the direct grant learns a Runner
-// address, and an ungranted caller keeps today's relay endpoint shape.
+// address, and an ungranted caller keeps the proxied endpoint shape.
 func TestPostgresPortTransportGrantGovernsRunnerAddressExposure(t *testing.T) {
 	// The fixture control plane and this PortSession service share one clock so
 	// the session always sits inside the Lease that admitted it.
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	fixture := newDirectPortFixture(t, directPortFixtureName(t), &now)
 
-	relaySession, _, err := fixture.portService.CreateSandboxPortSession(
-		t.Context(), fixture.principal, "request-relay-port", fixture.sandboxID,
-		fixture.generation, fixture.leaseID, "relay-port-create",
-		contracts.PortTransportRelay,
+	proxiedSession, _, err := fixture.portService.CreateSandboxPortSession(
+		t.Context(), fixture.principal, "request-proxied-port", fixture.sandboxID,
+		fixture.generation, fixture.leaseID, "proxied-port-create",
+		contracts.PortTransportProxied,
 		contracts.CreatePortSessionRequest{Name: "web", DurationSeconds: 60},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if relaySession.Transport != contracts.PortTransportRelay ||
-		!strings.HasPrefix(relaySession.Endpoint, "wss://secondbox.example/v1/port-tunnels/") ||
-		strings.Contains(relaySession.Endpoint, directPortRunnerAddress) ||
-		strings.Contains(relaySession.Endpoint, fixture.runnerID) {
-		t.Fatalf("relay PortSession endpoint = %q", relaySession.Endpoint)
+	if proxiedSession.Transport != contracts.PortTransportProxied ||
+		!strings.HasPrefix(proxiedSession.Endpoint, "wss://secondbox.example/v1/port-tunnels/") ||
+		strings.Contains(proxiedSession.Endpoint, directPortRunnerAddress) ||
+		strings.Contains(proxiedSession.Endpoint, fixture.runnerID) {
+		t.Fatalf("proxied PortSession endpoint = %q", proxiedSession.Endpoint)
 	}
-	// An ungranted caller reading a relay session observes the identical shape.
+	// An ungranted caller reading a proxied session observes the identical shape.
 	read, err := fixture.portService.GetSandboxPortSession(
-		t.Context(), fixture.principal, fixture.sandboxID, relaySession.ID,
-		contracts.PortTransportRelay,
+		t.Context(), fixture.principal, fixture.sandboxID, proxiedSession.ID,
+		contracts.PortTransportProxied,
 	)
-	if err != nil || read.Endpoint != relaySession.Endpoint {
-		t.Fatalf("relay PortSession read endpoint = %q, %v", read.Endpoint, err)
+	if err != nil || read.Endpoint != proxiedSession.Endpoint {
+		t.Fatalf("proxied PortSession read endpoint = %q, %v", read.Endpoint, err)
 	}
 
 	direct, _, err := fixture.portService.CreateSandboxPortSession(
@@ -258,7 +258,7 @@ func TestPostgresPortTransportGrantGovernsRunnerAddressExposure(t *testing.T) {
 	}
 	if _, err := fixture.portService.GetSandboxPortSession(
 		t.Context(), fixture.principal, fixture.sandboxID, direct.ID,
-		contracts.PortTransportRelay,
+		contracts.PortTransportProxied,
 	); !errors.Is(err, ports.ErrAuthorizationDenied) {
 		t.Fatalf("ungranted read of a direct PortSession error = %v", err)
 	}
@@ -308,17 +308,17 @@ func TestPostgresDirectPortRequiresAnAdvertisedRunnerAddressAndCertificatePin(t 
 }
 
 type directPortFixture struct {
-	controlPlane *service.ControlPlaneService
-	portService  *service.ControlPlaneService
-	relay        *runnercontrol.PostgresDataPlaneStore
-	pool         *pgxpool.Pool
-	principal    contracts.Principal
-	sandboxID    string
-	generation   int64
-	leaseID      string
-	runnerID     string
-	assignmentID string
-	fencingToken []byte
+	controlPlane   *service.ControlPlaneService
+	portService    *service.ControlPlaneService
+	dataPlaneStore *runnercontrol.PostgresDataPlaneStore
+	pool           *pgxpool.Pool
+	principal      contracts.Principal
+	sandboxID      string
+	generation     int64
+	leaseID        string
+	runnerID       string
+	assignmentID   string
+	fencingToken   []byte
 }
 
 // directPortFixtureName derives a Profile-safe suffix so each test owns its own
@@ -381,7 +381,7 @@ func newDirectPortFixture(t *testing.T, name string, now *time.Time) directPortF
 	}
 	t.Cleanup(pool.Close)
 	seedAdvertisedDataPlaneRunner(t, pool, seed.RunnerID, *now)
-	relay, err := runnercontrol.NewPostgresDataPlaneStore(
+	dataPlaneStore, err := runnercontrol.NewPostgresDataPlaneStore(
 		t.Context(),
 		runnercontrol.PostgresDataPlaneStoreConfig{
 			DatabaseURL: integrationDatabaseURL,
@@ -391,20 +391,20 @@ func newDirectPortFixture(t *testing.T, name string, now *time.Time) directPortF
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(relay.Close)
+	t.Cleanup(dataPlaneStore.Close)
 	portService, err := service.NewControlPlaneService(service.ControlPlaneConfig{
 		Store: databaseStore, PlatformToken: testPlatformToken,
 		DefaultSubjectQuota: generousQuota(),
 		Now:                 func() time.Time { return *now }, NewID: service.NewOpaqueID,
 		NewCredentialMaterial: service.NewCredentialMaterial,
-		DataPlaneStore:        relay, DataPlanePollInterval: time.Millisecond,
-		PortSessionStore: relay, PublicBaseURL: "https://secondbox.example",
+		DataPlaneStore:        dataPlaneStore, DataPlanePollInterval: time.Millisecond,
+		PortSessionStore: dataPlaneStore, PublicBaseURL: "https://secondbox.example",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return directPortFixture{
-		controlPlane: controlPlane, portService: portService, relay: relay, pool: pool,
+		controlPlane: controlPlane, portService: portService, dataPlaneStore: dataPlaneStore, pool: pool,
 		principal: principal, sandboxID: sandbox.ID, generation: sandbox.Generation,
 		leaseID: lease.ID, runnerID: seed.RunnerID,
 		assignmentID: seed.Fence.AssignmentId, fencingToken: seed.Fence.FencingToken,

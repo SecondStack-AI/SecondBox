@@ -81,7 +81,9 @@ func (p *protocolPTYProcess) KillAndWait(ctx context.Context) error {
 	if errors.Is(killErr, syscall.ESRCH) {
 		killErr = nil
 	}
-	go p.Wait()
+	go func() {
+		_ = p.Wait()
+	}()
 	select {
 	case <-p.waitDone:
 		var exitErr *exec.ExitError

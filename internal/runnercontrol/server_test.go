@@ -553,31 +553,3 @@ func controlCommandDelivery(id string) CommandDelivery {
 		},
 	}
 }
-
-type priorityStateStore struct {
-	serverStateStore
-	command   CommandDelivery
-	delivered bool
-}
-
-func (store *priorityStateStore) ClaimCommands(
-	context.Context,
-	string,
-	string,
-	int64,
-	time.Time,
-) ([]CommandDelivery, error) {
-	return []CommandDelivery{store.command}, nil
-}
-
-func (store *priorityStateStore) MarkCommandsDelivered(
-	_ context.Context,
-	deliveries []CommandDelivery,
-	_ string,
-) error {
-	if len(deliveries) != 1 || deliveries[0].ID != store.command.ID {
-		return errors.New("unexpected command delivery")
-	}
-	store.delivered = true
-	return nil
-}

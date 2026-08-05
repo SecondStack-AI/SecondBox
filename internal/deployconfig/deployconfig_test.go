@@ -1114,6 +1114,35 @@ func TestLegacyMigrationIsOneShotStrictAndPreservesTheSource(t *testing.T) {
 			}
 		})
 	}
+	for name, testCase := range map[string]struct {
+		key   string
+		value string
+		want  string
+	}{
+		"malformed integer": {
+			key: "SECONDBOX_API_PUBLISHED_PORT", value: "not-an-integer",
+			want: `SECONDBOX_API_PUBLISHED_PORT value "not-an-integer" is not a base-10 integer`,
+		},
+		"malformed boolean": {
+			key: "SECONDBOX_OBJECT_STORE_USE_PATH_STYLE", value: "sometimes",
+			want: `SECONDBOX_OBJECT_STORE_USE_PATH_STYLE value "sometimes" is not a boolean`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			copyPath := filepath.Join(t.TempDir(), "legacy.env")
+			content := strings.Replace(
+				string(before), testCase.key+"="+values[testCase.key],
+				testCase.key+"="+testCase.value, 1,
+			)
+			if err := os.WriteFile(copyPath, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := MigrateLegacyEnvironment(copyPath, filepath.Join(t.TempDir(), "target"))
+			if err == nil || !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("migration error = %v, want substring %q", err, testCase.want)
+			}
+		})
+	}
 }
 
 func TestCanonicalRunnerEnvironmentFixtureMatchesResolvedModel(t *testing.T) {

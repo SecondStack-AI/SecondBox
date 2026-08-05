@@ -644,5 +644,3 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 	}
 	return nil
 }
-
-// AcquireLease creates bounded authority for the current generation.

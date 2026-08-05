@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -370,9 +371,13 @@ func dialFirecrackerVsock(ctx context.Context, udsPath string, port uint32) (net
 	return conn, nil
 }
 
-func readVsockConnectResponse(conn net.Conn) error {
-	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	defer conn.SetReadDeadline(time.Time{})
+func readVsockConnectResponse(conn net.Conn) (resultErr error) {
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		return fmt.Errorf("set vsock CONNECT response deadline: %w", err)
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, conn.SetReadDeadline(time.Time{}))
+	}()
 	line, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil {
 		return fmt.Errorf("read vsock CONNECT response: %w", err)

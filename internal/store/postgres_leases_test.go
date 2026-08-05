@@ -94,9 +94,8 @@ func TestLeaseAcquireTakeoverAtomicallyFencesPriorAuthority(t *testing.T) {
 	if err != nil || second.State != contracts.LeaseStateActive {
 		t.Fatalf("takeover Lease = %#v, %v", second, err)
 	}
-	first, err := store.GetLease(
-		t.Context(), firstInput.TenantRef, firstInput.SubjectRef, sandboxID,
-		firstInput.Lease.ID,
+	first, err := store.GetLeaseByID(
+		t.Context(), firstInput.TenantRef, firstInput.SubjectRef, firstInput.Lease.ID,
 	)
 	if err != nil || first.State != contracts.LeaseStateFenced {
 		t.Fatalf("prior Lease after takeover = %#v, %v", first, err)

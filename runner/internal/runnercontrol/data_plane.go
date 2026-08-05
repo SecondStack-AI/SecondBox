@@ -515,7 +515,7 @@ func (s *RunnerProtocolService) attachPTYStream(
 	}
 	attachment.mu.Unlock()
 	if err != nil && result.Kind == runnerprotocol.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ATTACHED {
-		s.detachPTYAttachment(key, attach.ReconnectId)
+		err = errors.Join(err, s.detachPTYAttachment(key, attach.ReconnectId))
 	}
 	return err
 }

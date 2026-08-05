@@ -54,7 +54,7 @@ func (service *ControlPlaneService) CreateSandboxPortSession(
 	if err := service.requirePortAuthority(principal); err != nil {
 		return contracts.PortSession{}, false, err
 	}
-	if transport != contracts.PortTransportRelay && transport != contracts.PortTransportDirect {
+	if transport != contracts.PortTransportProxied && transport != contracts.PortTransportDirect {
 		return contracts.PortSession{}, false, errors.New("SecondBox PortSession transport is invalid")
 	}
 	if requestID == "" || sandboxID == "" || generation < 1 || leaseID == "" {
@@ -225,7 +225,7 @@ func (service *ControlPlaneService) ClosePortTunnel(
 type SandboxPortStream struct {
 	service        *ControlPlaneService
 	tunnel         runnercontrol.PortTunnel
-	stream         *runnercontrol.LiveDataPlaneStream
+	stream         dataPlaneStream
 	mu             sync.Mutex
 	nextSend       uint64
 	nextReceive    uint64
@@ -241,19 +241,20 @@ func (service *ControlPlaneService) OpenPortTunnel(
 	ctx context.Context,
 	tunnel runnercontrol.PortTunnel,
 ) (*SandboxPortStream, error) {
-	if tunnel.Session.Transport != contracts.PortTransportRelay ||
+	if tunnel.Session.Transport != contracts.PortTransportProxied ||
 		tunnel.Session.State != contracts.PortSessionStateOpen ||
 		tunnel.StreamWindowBytes < 1 || tunnel.MaximumRequestBytes < 1 ||
 		tunnel.MaximumResponseBytes < 1 || service.liveDataPlane == nil {
 		return nil, runnercontrol.ErrLiveDataPlaneUnavailable
 	}
-	stream, err := service.liveDataPlane.Open(
+	liveStream, err := service.liveDataPlane.Open(
 		tunnel.RunnerID, "port", tunnel.Session.ID, tunnel.StreamID,
 		tunnel.StreamWindowBytes, 0, 0,
 	)
 	if err != nil {
 		return nil, err
 	}
+	stream := &proxiedDataPlaneStream{stream: liveStream}
 	result := &SandboxPortStream{
 		service: service, tunnel: tunnel, stream: stream,
 		nextSend: 1, nextReceive: 1, responseCredit: tunnel.StreamWindowBytes,
@@ -261,21 +262,18 @@ func (service *ControlPlaneService) OpenPortTunnel(
 	}
 	idleTimeout := tunnel.Session.ExpiresAt.Sub(service.now().UTC()).Milliseconds()
 	if idleTimeout < 1 {
-		stream.Close()
-		return nil, ports.ErrPortTokenInvalid
+		return nil, errors.Join(ports.ErrPortTokenInvalid, stream.Close())
 	}
 	if err := result.send(&runnerv1.PortFrame_Open{Open: &runnerv1.PortOpen{
 		GuestPort: uint32(tunnel.GuestPort), Protocol: tunnel.Session.Protocol,
 		IdleTimeoutMs: uint64(idleTimeout),
 	}}); err != nil {
-		stream.Close()
-		return nil, err
+		return nil, errors.Join(err, stream.Close())
 	}
 	if err := result.send(&runnerv1.PortFrame_Credit{Credit: &runnerv1.StreamCredit{
 		ByteCount: uint64(tunnel.StreamWindowBytes),
 	}}); err != nil {
-		stream.Close()
-		return nil, err
+		return nil, errors.Join(err, stream.Close())
 	}
 	return result, nil
 }
@@ -431,8 +429,7 @@ func (stream *SandboxPortStream) Close() error {
 	if stream == nil || stream.stream == nil {
 		return nil
 	}
-	stream.stream.Close()
-	return nil
+	return stream.stream.Close()
 }
 
 func portTunnelFence(tunnel runnercontrol.PortTunnel) *runnerv1.AssignmentFence {

@@ -608,7 +608,7 @@ func openLifecyclePostgresTestDatabase(t *testing.T) string {
 	parsed.Path = "/" + databaseName
 	databaseURL := parsed.String()
 	if err := postgresmigrations.Apply(t.Context(), databaseURL); err != nil {
-		admin.Exec(t.Context(), "DROP DATABASE "+identifier+" WITH (FORCE)")
+		_, _ = admin.Exec(t.Context(), "DROP DATABASE "+identifier+" WITH (FORCE)")
 		admin.Close(t.Context())
 		t.Fatal(err)
 	}
