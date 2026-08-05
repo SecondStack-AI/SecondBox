@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed audit events to record the resolved tenant and subject attribution in the service layer for operator and subject actions, instead of depending on store-side normalization of an empty tenant reference ([#27](https://github.com/SecondStack-AI/SecondBox/pull/27)).
 - Simplified releases to two operator commands: build every artifact locally with `just release-stage`, then publish the supplied artifacts directly to GitHub, GHCR, and npm with `just release-upload` ([#25](https://github.com/SecondStack-AI/SecondBox/pull/25)).
 
 ## 0.1.4 - 2026-08-04

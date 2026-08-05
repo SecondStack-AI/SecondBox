@@ -297,6 +297,76 @@ func TestHTTPRequestIDCorrelatesOperationAuditAndStructuredLog(t *testing.T) {
 	}
 }
 
+func TestAuditTenantAttribution(t *testing.T) {
+	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
+	admin := contracts.Principal{Kind: "platform", ID: "audit-attribution-admin"}
+	pool, err := controlPlane.CreateRunnerPool(
+		t.Context(),
+		admin,
+		contracts.CreateRunnerPoolRequest{
+			Name: "audit-attribution-pool", State: contracts.RunnerPoolStateReady,
+			Architectures: []string{"amd64"}, Capabilities: []string{"compute"},
+			CapacityPolicy: map[string]int64{"maxInstances": 4},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminEvents, err := databaseStore.ListAuditEvents(t.Context(), "secondbox", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminAudit := findAuditEvent(adminEvents, "runner_pool.created", pool.Name)
+	if adminAudit == nil {
+		t.Fatalf("RunnerPool creation audit is absent: %#v", adminEvents)
+	}
+	if adminAudit.TenantRef != "secondbox" || adminAudit.SubjectRef != admin.ID {
+		t.Fatalf(
+			"admin audit attribution = %q/%q, want %q/%q",
+			adminAudit.TenantRef, adminAudit.SubjectRef, "secondbox", admin.ID,
+		)
+	}
+
+	project, account, credential := createProjectAccountAndCredential(
+		t, controlPlane, admin, "audit-attribution",
+	)
+	profile := createGrantedProfile(
+		t, controlPlane, databaseStore, admin, account, "profile-audit-attribution",
+	)
+	principal := authenticateCredential(t, controlPlane, credential)
+	sandbox, _, err := controlPlane.CreateSandbox(
+		t.Context(), principal, "audit-attribution-create",
+		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subjectEvents, err := databaseStore.ListAuditEvents(t.Context(), project.ID, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subjectAudit := findAuditEvent(subjectEvents, "sandbox.created", sandbox.ID)
+	if subjectAudit == nil {
+		t.Fatalf("Sandbox creation audit is absent: %#v", subjectEvents)
+	}
+	if subjectAudit.TenantRef != principal.TenantRef || subjectAudit.SubjectRef != principal.SubjectRef {
+		t.Fatalf(
+			"subject audit attribution = %q/%q, want %q/%q",
+			subjectAudit.TenantRef, subjectAudit.SubjectRef,
+			principal.TenantRef, principal.SubjectRef,
+		)
+	}
+}
+
+func findAuditEvent(events []contracts.AuditEvent, action string, resourceID string) *contracts.AuditEvent {
+	for index := range events {
+		if events[index].Action == action && events[index].ResourceID == resourceID {
+			return &events[index]
+		}
+	}
+	return nil
+}
+
 func TestWaitInspectLeasePingAndTouchHTTPContract(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
 	admin := fixtureAdmin(t, controlPlane)
