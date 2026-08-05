@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Hardened the in-memory data-plane broker: frames addressed to a closed or unknown session route are dropped and counted instead of tearing down the Runner control connection, route delivery no longer blocks the control-stream reader behind a slow consumer, per-session credit violations fail only the offending session, and File reads grant stream-window credit incrementally instead of the full transfer limit up front ([#29](https://github.com/SecondStack-AI/SecondBox/pull/29)).
 - Removed the fleet-wide Runner lock from Sandbox creation, Snapshot-clone, and relocation placement: candidates are now ranked unlocked, locked one at a time with `SKIP LOCKED` and a blocking fallback, and admission durably reserves homed Workspace and inbound-relocation disk so concurrent placements cannot oversubscribe a Runner's storage ([#30](https://github.com/SecondStack-AI/SecondBox/pull/30)).
 - Indexed the lifecycle reconciler claim scan and the active-Lease expiry sweep, moved the global Lease sweep out of the claim transaction as a bounded `SKIP LOCKED` statement, and scoped in-transaction Lease fencing to the claimed Sandboxes so lifecycle workers no longer block each other ([#30](https://github.com/SecondStack-AI/SecondBox/pull/30)).
 - Fixed audit events to record the resolved tenant and subject attribution in the service layer for operator and subject actions, instead of depending on store-side normalization of an empty tenant reference ([#27](https://github.com/SecondStack-AI/SecondBox/pull/27)).

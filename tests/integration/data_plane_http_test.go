@@ -610,9 +610,10 @@ type relayFakeRunner struct {
 }
 
 type fakeFileOperation struct {
-	frame   *runnerv1.FileFrame
-	open    *runnerv1.FileOpen
-	content []byte
+	frame     *runnerv1.FileFrame
+	open      *runnerv1.FileOpen
+	content   []byte
+	completed bool
 }
 
 func newRelayFakeRunner(
@@ -871,6 +872,10 @@ func (fake *relayFakeRunner) handle(ctx context.Context, message *runnerv1.Contr
 		return nil
 	}
 	if frame.GetCredit() != nil {
+		if operation.completed {
+			return nil
+		}
+		operation.completed = true
 		return fake.respondFileMetadata(ctx, operation.frame, operation.open, now)
 	}
 	return nil

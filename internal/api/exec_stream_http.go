@@ -230,11 +230,14 @@ func finishExecWebSocketCloseHandshake(
 	readErrors <-chan error,
 ) error {
 	closeDeadline := time.Now().Add(time.Second)
+	// The concurrent read goroutine answers an early peer close through the
+	// connection's default close handler, so a close frame may already be on
+	// the wire; either writer completes the server's side of the handshake.
 	if err := connection.WriteControl(
 		websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "terminal outcome delivered"),
 		closeDeadline,
-	); err != nil {
+	); err != nil && !errors.Is(err, websocket.ErrCloseSent) {
 		return fmt.Errorf("SecondBox Exec WebSocket close write: %w", err)
 	}
 	if err := connection.UnderlyingConn().SetReadDeadline(closeDeadline); err != nil {

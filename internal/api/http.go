@@ -609,6 +609,15 @@ func (apiHandler *handler) metrics(writer http.ResponseWriter, request *http.Req
 			return
 		}
 	}
+	if _, err := fmt.Fprintf(
+		writer,
+		"# TYPE secondbox_live_data_plane_dropped_route_not_found_frames_total counter\n"+
+			"secondbox_live_data_plane_dropped_route_not_found_frames_total %d\n",
+		snapshot.LiveDataPlaneDroppedRouteNotFoundFrames,
+	); err != nil {
+		apiHandler.logResponseAbort(request, "live data-plane metrics response", err)
+		return
+	}
 	if err := writeHTTPDurationMetrics(writer, apiHandler.timings.HTTPSnapshot()); err != nil {
 		apiHandler.logResponseAbort(request, "HTTP duration metrics response", err)
 		return

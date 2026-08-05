@@ -264,7 +264,7 @@ func (service *ControlPlaneService) ExecuteSandboxCommand(
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
 		DeadlineAt:           deadline,
 		MaximumResponseBytes: request.MaximumOutputBytes, MaximumRequestBytes: int64(len(stdin)),
-		ExecOpen: open,
+		UseProfileStreamWindow: true, ExecOpen: open,
 		Request: struct {
 			Command              contracts.ExecCommand `json:"command"`
 			Cwd                  *string               `json:"cwd,omitempty"`
@@ -520,9 +520,10 @@ func (service *ControlPlaneService) runFileOperation(
 		RequestID:  requestID,
 		Generation: generation, Kind: "file", Operation: operation,
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
-		DeadlineAt:           now.Add(time.Duration(fileDeadlineMilliseconds) * time.Millisecond),
-		MaximumResponseBytes: maximumFileResponseBytes(operation),
-		MaximumRequestBytes:  int64(len(content)),
+		DeadlineAt:             now.Add(time.Duration(fileDeadlineMilliseconds) * time.Millisecond),
+		MaximumResponseBytes:   maximumFileResponseBytes(operation),
+		MaximumRequestBytes:    int64(len(content)),
+		UseProfileStreamWindow: true,
 		FileOpen: &runnerv1.FileOpen{
 			Operation: fileOperation, WorkspaceRelativePath: path,
 			ExpectedSize: uint64(expectedSize), ExpectedChecksum: checksum,

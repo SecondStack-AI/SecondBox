@@ -62,7 +62,7 @@ func TestLiveDataPlaneConnectionReplacementClosesPriorRoutes(t *testing.T) {
 	if _, err := broker.AttachConnection("runner-1", "connection-1", first, firstSession); err != nil {
 		t.Fatal(err)
 	}
-	stream, err := broker.Open("runner-1", "exec", "operation-1", "stream-1")
+	stream, err := broker.Open("runner-1", "exec", "operation-1", "stream-1", 4096, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
