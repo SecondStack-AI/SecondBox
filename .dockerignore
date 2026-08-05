@@ -3,6 +3,7 @@
 .env
 .secondbox
 .tmp
+.worktrees
 deploy/environment
 deploy/*.env
 deploy/*.secrets
