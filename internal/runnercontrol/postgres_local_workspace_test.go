@@ -2076,6 +2076,133 @@ func TestStartupTimeoutFenceResultDoesNotRequireStopEffect(t *testing.T) {
 	}
 }
 
+func TestSuccessfulFenceWithStopAuthorityReleasesAssignment(t *testing.T) {
+	store := openRunnerControlDatabase(t)
+	now := time.Date(2026, 7, 29, 20, 50, 0, 0, time.UTC)
+	fence := seedStartingAssignment(t, store, "clean-stop", "ready", now)
+	correlation := &runnerv1.Correlation{
+		RequestId: "request-clean-stop", OperationId: "operation-clean-stop",
+		SandboxId: fence.SandboxId, InstanceId: fence.InstanceId,
+		SandboxGeneration: fence.SandboxGeneration,
+		AssignmentId:      fence.AssignmentId, RunnerId: "runner-home",
+	}
+	effectID := "effect-clean-stop"
+	commandID := "fence-command-clean-stop"
+	payload, err := proto.Marshal(&runnerv1.ControlPlaneToRunner{
+		Message: &runnerv1.ControlPlaneToRunner_Fence{
+			Fence: &runnerv1.FenceCommand{
+				MessageId: commandID, Sequence: 1, Fence: fence,
+				Reason:      runnerv1.FenceReason_FENCE_REASON_OPERATOR_REQUEST,
+				Correlation: correlation,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(t.Context(), `
+		UPDATE secondbox.sandboxes
+		SET state='stopping',desired_state='stopped' WHERE id=$2;
+		UPDATE secondbox.workspaces
+		SET mutation_kind='stop',mutation_id=$6,mutation_effect_id=$6,
+		    mutation_operation_id=$6,mutation_expected_generation=3,
+		    mutation_target_generation=4,mutation_state='stopping'
+		WHERE sandbox_id=$2;
+		INSERT INTO secondbox.lifecycle_effects (
+			id,sandbox_id,generation,kind,state,assignment_id,instance_id,runner_id,
+			command_id,storage_object_id,fencing_token,retry_count,retry_limit,
+			effect_deadline,claim_owner,claim_expires_at,failure_class,failure_message,
+			payload_json,evidence_json,created_at,updated_at
+		) VALUES (
+			$6,$2,3,'stop','queued',$1,$7,'runner-home',$3,'',$8,0,8,
+			$9,'',$5,'','','{}','{}',$5,$5
+		);
+		INSERT INTO secondbox.runner_commands (
+			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
+			delivery_count,created_at,updated_at,delivered_at
+		) VALUES ($3,'runner-home',$1,'fence',$4,'delivered',
+		          'connection-old',1,$5,$5,$5)`,
+		pgx.QueryExecModeSimpleProtocol,
+		fence.AssignmentId,
+		fence.SandboxId,
+		commandID,
+		payload,
+		now,
+		effectID,
+		fence.InstanceId,
+		fence.FencingToken,
+		now.Add(time.Minute),
+	); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := store.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(t.Context())
+	result := &runnerv1.FenceResult{
+		Fence:                     fence,
+		Result:                    runnerv1.FenceResultKind_FENCE_RESULT_KIND_STOPPED,
+		TerminationEvidenceDigest: "sha256:clean-stop",
+		Correlation:               correlation,
+	}
+	if err := recordFenceEvent(
+		t.Context(), tx, "runner-home", result, now.Add(time.Second),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var (
+		assignmentState, proofDigest, instanceState string
+		terminationReason, fenceCommandState        string
+		effectCommandID, effectState, mutationState string
+		advanceCommandState, advanceCommandKind     string
+	)
+	if err := store.pool.QueryRow(t.Context(), `
+		SELECT assignment.state,assignment.release_proof_json->>'terminationEvidenceDigest',
+		       instance.state,instance.termination_reason,fence_command.state,
+		       effect.command_id,effect.state,workspace.mutation_state,
+		       advance_command.state,advance_command.kind
+		FROM secondbox.assignments AS assignment
+		JOIN secondbox.instances AS instance ON instance.id=assignment.instance_id
+		JOIN secondbox.runner_commands AS fence_command ON fence_command.id=$2
+		JOIN secondbox.lifecycle_effects AS effect ON effect.id=$3
+		JOIN secondbox.sandboxes AS sandbox ON sandbox.id=assignment.sandbox_id
+		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+		JOIN secondbox.runner_commands AS advance_command
+		  ON advance_command.id=$3||'-generation-advance'
+		WHERE assignment.id=$1`,
+		fence.AssignmentId,
+		commandID,
+		effectID,
+	).Scan(
+		&assignmentState, &proofDigest, &instanceState, &terminationReason,
+		&fenceCommandState, &effectCommandID, &effectState, &mutationState,
+		&advanceCommandState, &advanceCommandKind,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if assignmentState != "released" ||
+		proofDigest != "sha256:clean-stop" ||
+		instanceState != "stopped" ||
+		terminationReason != "fenced" ||
+		fenceCommandState != "acknowledged" ||
+		effectCommandID != effectID+"-generation-advance" ||
+		effectState != "queued" ||
+		mutationState != "advancing" ||
+		advanceCommandState != "pending" ||
+		advanceCommandKind != "local-workspace" {
+		t.Fatalf(
+			"clean-stop fence assignment=%q proof=%q instance=%q reason=%q fence=%q effect=%q/%q mutation=%q advance=%q/%q",
+			assignmentState, proofDigest, instanceState, terminationReason,
+			fenceCommandState, effectCommandID, effectState, mutationState,
+			advanceCommandState, advanceCommandKind,
+		)
+	}
+}
+
 func TestReadyAssignmentRecordsInitialGuestHeartbeatEvidence(t *testing.T) {
 	store := openRunnerControlDatabase(t)
 	now := time.Date(2026, 7, 29, 20, 45, 0, 0, time.UTC)
