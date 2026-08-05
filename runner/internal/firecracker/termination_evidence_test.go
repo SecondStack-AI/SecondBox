@@ -461,7 +461,7 @@ func terminalPathAssignment(
 		MessageId: "assignment-command", Sequence: 1, Fence: fence,
 		ProfileRevisionId: "profile-terminal",
 		Requirements: &runnerprotocol.ProfileRequirements{
-			VcpuCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
+			VcpuCount: 1, VcpuMillis: 1000, ProcessLimit: 128, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
 			Architecture: "amd64", MaximumOperationMs: 60_000, MaximumOutputBytes: 1 << 20,
 		},
 		Assets: []*runnerprotocol.SignedAssetReference{{

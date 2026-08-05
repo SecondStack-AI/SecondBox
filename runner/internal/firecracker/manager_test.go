@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -354,6 +355,8 @@ func newWarmToolTestManager(t *testing.T) *Manager {
 		MicroVMRunDir:                  filepath.Join(dir, "run"),
 		MicroVMLogDir:                  filepath.Join(dir, "logs"),
 		MicroVMWorkspaceSizeMiB:        8,
+		MicroVMJailerUIDStart:          20000,
+		MicroVMJailerUIDCount:          16,
 		MicroVMMaxConcurrentPerSandbox: 0,
 		MicroVMMaxConcurrentGlobal:     0,
 		MicroVMMemoryBudgetMiB:         0,
@@ -1326,6 +1329,9 @@ func TestStartSweepsStartupOrphanRunDir(t *testing.T) {
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if err := m.writeJailerUIDLease(runDir, m.cfg.MicroVMJailerUIDStart); err != nil {
+		t.Fatal(err)
+	}
 	orig := firecrackerProcessRunningFunc
 	firecrackerProcessRunningFunc = func(string) (bool, error) { return false, nil }
 	t.Cleanup(func() { firecrackerProcessRunningFunc = orig })
@@ -1358,6 +1364,9 @@ func TestStartBoundsRunningStartupOrphanStop(t *testing.T) {
 	m := newWarmToolTestManager(t)
 	runDir := filepath.Join(m.cfg.MicroVMRunDir, "fc-agent-cmp-a-unkillable")
 	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.writeJailerUIDLease(runDir, m.cfg.MicroVMJailerUIDStart); err != nil {
 		t.Fatal(err)
 	}
 	orig := firecrackerProcessRunningFunc
@@ -1519,7 +1528,7 @@ func TestBuildFirecrackerConfigIncludesWorkspaceAndVsock(t *testing.T) {
 func TestBuildFirecrackerConfigEnforcesSandboxRuntimePolicy(t *testing.T) {
 	cfg := &config.Config{MicroVMKernelPath: "/vmlinux", MicroVMVCPUs: 2, MicroVMMemoryMiB: 512}
 	policy := &runtimemanager.SandboxRuntimePolicy{
-		VCPUs: 1, MemoryMiB: 128, WorkspaceSizeMiB: 64, ProcessLimit: 16,
+		VCPUs: 1, CPUMillis: 750, MemoryMiB: 128, WorkspaceSizeMiB: 64, ProcessLimit: 16,
 		WorkspaceWritable: false, SharedReadOnly: true,
 	}
 	got := buildFirecrackerConfigWithPolicy(cfg, "/vmlinux", "/rootfs", "/workspace", "/shared", "/vsock", "", "", policy)
@@ -1716,7 +1725,7 @@ func TestPrepareLaunchUnjailedIncludesInstanceID(t *testing.T) {
 		MicroVMMemoryMiB:     512,
 		MicroVMKernelPath:    "/kernel",
 	}}
-	launch, err := m.prepareLaunch(context.Background(), "fc-agent-cmp-a-id", dir, "/kernel", "/rootfs.ext4", "/workspace.ext4", "", "", "")
+	launch, err := m.prepareLaunchWithPolicy(context.Background(), "fc-agent-cmp-a-id", dir, "/kernel", "/rootfs.ext4", "/workspace.ext4", "", "", "", os.Getuid(), nil)
 	if err != nil {
 		t.Fatalf("prepare launch: %v", err)
 	}
@@ -1791,7 +1800,8 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 		MicroVMKernelPath:          kernel,
 		MicroVMSharedImagePath:     shared,
 		MicroVMJailerChrootBaseDir: filepath.Join(dir, "jailer-root"),
-		MicroVMJailerUID:           os.Getuid(),
+		MicroVMJailerUIDStart:      os.Getuid(),
+		MicroVMJailerUIDCount:      1,
 		MicroVMJailerGID:           os.Getgid(),
 		MicroVMJailerCgroupVersion: 2,
 		MicroVMJailerParentCgroup:  "secondbox-runner-test",
@@ -1800,7 +1810,8 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 		MicroVMWorkspaceSizeMiB:    8,
 		MicroVMAllowUnjailed:       false,
 	}}
-	launch, err := m.prepareLaunch(context.Background(), "fc-agent-123", runDir, kernel, rootfs, workspace, shared, "agfc123", "")
+	policy := &runtimemanager.SandboxRuntimePolicy{VCPUs: 1, CPUMillis: 750, MemoryMiB: 512, ProcessLimit: 64}
+	launch, err := m.prepareLaunchWithPolicy(context.Background(), "fc-agent-123", runDir, kernel, rootfs, workspace, shared, "agfc123", "", os.Getuid(), policy)
 	if err != nil {
 		t.Fatalf("prepare launch: %v", err)
 	}
@@ -1817,6 +1828,8 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 		`"--chroot-base-dir","` + m.cfg.MicroVMJailerChrootBaseDir + `"`,
 		`"--new-pid-ns"`,
 		`"--cgroup","memory.max=805306368"`,
+		`"--cgroup","cpu.max=85000 100000"`,
+		`"--cgroup","pids.max=98"`,
 		`"--","--api-sock","firecracker.sock","--config-file","firecracker.json"`,
 	} {
 		if !strings.Contains(args, want) {
@@ -1858,12 +1871,13 @@ func TestPrepareJailedLaunchRejectsUnixSocketPathOverflowBeforeStaging(t *testin
 	m := &Manager{cfg: &config.Config{
 		FirecrackerPath:            "/usr/local/bin/firecracker",
 		MicroVMJailerChrootBaseDir: base,
-		MicroVMJailerUID:           os.Getuid(),
+		MicroVMJailerUIDStart:      os.Getuid(),
+		MicroVMJailerUIDCount:      1,
 		MicroVMJailerGID:           os.Getgid(),
 		MicroVMAllowUnjailed:       false,
 	}}
 
-	_, err := m.prepareLaunch(
+	_, err := m.prepareLaunchWithPolicy(
 		context.Background(),
 		"fc-agent-123",
 		t.TempDir(),
@@ -1873,6 +1887,8 @@ func TestPrepareJailedLaunchRejectsUnixSocketPathOverflowBeforeStaging(t *testin
 		"",
 		"",
 		"",
+		os.Getuid(),
+		nil,
 	)
 	if err == nil || !strings.Contains(err.Error(), "exceeding the unix socket limit") {
 		t.Fatalf("overlong jailed socket path error = %v", err)
@@ -1894,9 +1910,21 @@ func TestJailerMemoryCgroupAddsHostOverhead(t *testing.T) {
 	}
 }
 
+func TestJailerResourceCgroupsBoundCPUAndPIDsWithVMMHeadroom(t *testing.T) {
+	policy := &runtimemanager.SandboxRuntimePolicy{VCPUs: 2, CPUMillis: 1250, MemoryMiB: 2048, ProcessLimit: 64}
+	wantV2 := []string{"memory.max=2415919104", "cpu.max=137500 100000", "pids.max=100"}
+	if got := jailerResourceCgroups(2, policy); !reflect.DeepEqual(got, wantV2) {
+		t.Fatalf("cgroup v2 = %q, want %q", got, wantV2)
+	}
+	wantV1 := []string{"memory.limit_in_bytes=2415919104", "cpu.cfs_period_us=100000", "cpu.cfs_quota_us=137500", "pids.max=100"}
+	if got := jailerResourceCgroups(1, policy); !reflect.DeepEqual(got, wantV1) {
+		t.Fatalf("cgroup v1 = %q, want %q", got, wantV1)
+	}
+}
+
 func TestTapOwnerUIDUsesJailerUIDWhenJailed(t *testing.T) {
-	m := &Manager{cfg: &config.Config{MicroVMJailerUID: 4242}}
-	if got := m.tapOwnerUID(); got != 4242 {
+	m := &Manager{cfg: &config.Config{MicroVMJailerUIDStart: 4242}}
+	if got := m.tapOwnerUID(4243); got != 4243 {
 		t.Fatalf("tap owner uid = %d", got)
 	}
 }
@@ -2659,11 +2687,12 @@ func TestCreateAndStartColdCleansInstanceDirOnFailure(t *testing.T) {
 	}
 	m := &Manager{
 		cfg: &config.Config{
-			MicroVMRunDir:     runDir,
-			MicroVMLogDir:     logDir,
-			MicroVMRootfsPath: filepath.Join(root, "missing-rootfs.ext4"),
-			MicroVMBridgeName: "agbr0",
-			MicroVMBridgeCIDR: "10.0.0.1/24",
+			MicroVMRunDir:        runDir,
+			MicroVMLogDir:        logDir,
+			MicroVMRootfsPath:    filepath.Join(root, "missing-rootfs.ext4"),
+			MicroVMBridgeName:    "agbr0",
+			MicroVMBridgeCIDR:    "10.0.0.1/24",
+			MicroVMAllowUnjailed: true,
 		},
 		instances: map[string]*instance{},
 		guestIPs:  map[string]string{},

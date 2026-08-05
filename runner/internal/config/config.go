@@ -22,7 +22,9 @@ type Config struct {
 	FirecrackerPath                            string
 	JailerPath                                 string
 	MicroVMJailerChrootBaseDir                 string
-	MicroVMJailerUID                           int
+	MicroVMJailerUIDStart                      int
+	MicroVMJailerUIDCount                      int
+	MicroVMJailerUIDAllowBelow1000             bool
 	MicroVMJailerGID                           int
 	MicroVMJailerCgroupVersion                 int
 	MicroVMJailerParentCgroup                  string

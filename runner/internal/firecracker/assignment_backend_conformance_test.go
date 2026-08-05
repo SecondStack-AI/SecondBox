@@ -318,6 +318,8 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 			WorkspaceId:       "workspace-1",
 			Requirements: &runnerprotocol.ProfileRequirements{
 				VcpuCount:    1,
+				VcpuMillis:   1000,
+				ProcessLimit: 128,
 				MemoryBytes:  512 << 20,
 				DiskBytes:    1024 << 20,
 				Architecture: runtime.GOARCH,

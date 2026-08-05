@@ -444,6 +444,8 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		ProfileRevisionId: plan.profileRevisionID,
 		Requirements: &runnerv1.ProfileRequirements{
 			VcpuCount:            uint32((plan.spec.Resources.CPUMillis + 999) / 1000),
+			VcpuMillis:           uint32(plan.spec.Resources.CPUMillis),
+			ProcessLimit:         uint32(plan.spec.Resources.ProcessLimit),
 			MemoryBytes:          uint64(plan.spec.Resources.MemoryBytes),
 			DiskBytes:            uint64(plan.spec.Resources.WorkspaceBytes),
 			Architecture:         plan.spec.Architecture,

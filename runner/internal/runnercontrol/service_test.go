@@ -1213,6 +1213,8 @@ func resolvedAssignmentCommand() *runnerprotocol.AssignmentCommand {
 		ProfileRevisionId: "profile-revision-1",
 		Requirements: &runnerprotocol.ProfileRequirements{
 			VcpuCount:          2,
+			VcpuMillis:         2000,
+			ProcessLimit:       128,
 			MemoryBytes:        4 << 30,
 			DiskBytes:          16 << 30,
 			Architecture:       "amd64",

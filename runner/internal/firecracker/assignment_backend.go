@@ -191,7 +191,8 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Firecracker readiness signed compatibility metadata: %w", err)
 	}
 	if strings.TrimSpace(cfg.MicroVMJailerChrootBaseDir) == "" ||
-		cfg.MicroVMJailerUID < 1 ||
+		cfg.MicroVMJailerUIDStart < 1 ||
+		cfg.MicroVMJailerUIDCount < cfg.MicroVMMaxConcurrentGlobal ||
 		cfg.MicroVMJailerGID < 1 {
 		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Firecracker readiness jailer isolation is incomplete")
 	}
@@ -397,6 +398,7 @@ func (b *AssignmentBackend) ValidateAssignment(
 		}
 	}
 	if int(requirements.VcpuCount) > b.manager.cfg.MicroVMVCPUs ||
+		int(requirements.VcpuMillis) > b.manager.cfg.MicroVMVCPUs*1000 ||
 		int(requirements.MemoryBytes/mib) > b.manager.cfg.MicroVMMemoryMiB ||
 		int(requirements.DiskBytes/mib) > b.manager.cfg.MicroVMWorkspaceSizeMiB {
 		return fmt.Errorf("SecondBox Firecracker assignment exceeds local immutable profile capacity")
@@ -526,8 +528,10 @@ func (b *AssignmentBackend) StartAssignment(
 		RuntimeClass:            runtimemanager.RuntimeClassToolExecutor,
 		SandboxPolicy: &runtimemanager.SandboxRuntimePolicy{
 			VCPUs:             int(requirements.VcpuCount),
+			CPUMillis:         int(requirements.VcpuMillis),
 			MemoryMiB:         int(requirements.MemoryBytes / mib),
 			WorkspaceSizeMiB:  int(requirements.DiskBytes / mib),
+			ProcessLimit:      int(requirements.ProcessLimit),
 			WorkspaceWritable: true,
 			SharedReadOnly:    true,
 		},

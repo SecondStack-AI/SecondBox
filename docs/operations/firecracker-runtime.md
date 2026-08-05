@@ -34,7 +34,9 @@ SECONDBOX_RUNNER_LOG_PATH
 SECONDBOX_RUNNER_FIRECRACKER_PATH
 SECONDBOX_RUNNER_FIRECRACKER_JAILER_PATH
 SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT
-SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID
+SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_START
+SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_COUNT
+SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_ALLOW_BELOW_1000
 SECONDBOX_RUNNER_FIRECRACKER_JAILER_GID
 SECONDBOX_RUNNER_FIRECRACKER_CGROUP_VERSION
 SECONDBOX_RUNNER_FIRECRACKER_CGROUP_PARENT
@@ -73,7 +75,7 @@ SECONDBOX_RUNNER_DATA_PLANE_LISTEN_ADDRESS
 SECONDBOX_RUNNER_DATA_PLANE_ADVERTISED_ADDRESS
 ```
 
-Production and qualification hosts set `SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED=false`. The jailer UID and GID identify the unprivileged process inside the jail and must be positive. The runner remains root so it can create jail roots, cgroups, TAP devices, and the required jailed file bindings.
+Production and qualification hosts set `SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED=false`. The jailer UID range supplies one unprivileged identity per live Instance; its count must cover `SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL`. The start must be at least 1000 unless `SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_ALLOW_BELOW_1000=true` explicitly acknowledges intentional use of the host's system-UID space. UID 0 and ranges that exceed unsigned 32-bit UIDs are rejected. Same-host preflight also rejects UIDs assigned to host accounts. The GID remains one positive shared group identity. The runner remains root so it can create jail roots, cgroups, TAP devices, and the required jailed file bindings.
 
 The qualified kernel arguments include `quiet loglevel=1` and
 `i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd`. Firecracker has no PS/2
@@ -131,7 +133,9 @@ ${SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT}/firecracker/${instance_id}/root
 
 The jail contains only its kernel, rootfs clone, attached Workspace image, optional shared image, Firecracker configuration, API socket, and `guest.vsock`. Unix socket paths are checked before staging. The Runner resolves the private Workspace attachment inside the process and never copies or reformats it during start.
 
-The runner sets the configured cgroup version and parent on every jailed process. It also enforces the profile-resolved vCPU, memory, and disk limits in the Firecracker configuration and guest boot contract.
+The runner sets the configured cgroup version and parent on every jailed process. The host memory cgroup includes the guest allocation plus 10% or 256 MiB, whichever is larger. The CPU cgroup uses a 100 ms period and the exact Profile CPU millis plus 10% or 100 millis, whichever is larger, so bounded Firecracker emulation and I/O work does not consume the entire guest allowance. The PID cgroup uses the Profile process limit plus 32 jailer/VMM worker slots and two slots per vCPU. It also enforces the profile-resolved vCPU, memory, disk, and guest process limits in the Firecracker configuration and guest boot contract.
+
+Before launch, the Runner reserves a unique UID and persists it as root-owned per-Instance run state. Process launch, jailed artifact ownership, the Workspace hard link, and TAP ownership all use that exact UID. Normal teardown releases it only after the process and network cleanup complete. Startup orphan sweep reads the persisted UID before adopting and stopping a surviving process; missing, malformed, out-of-range, or conflicting evidence fails startup closed. Stale state for an already-dead process is removed without reserving its former UID.
 
 When the control plane has accepted readiness, the runner snapshots the exact `oom_kill` counter from the Instance cgroup: `memory.events.local` for cgroup v2 or `memory.oom_control` for cgroup v1. After an unrequested Firecracker disappearance, an increased counter is the only evidence classified as `resource_exhaustion`. A generic process exit, exit code, missing counter, malformed counter, counter regression, or unavailable cgroup is never treated as OOM.
 
@@ -216,7 +220,7 @@ runner/scripts/microvm-stage-check.sh --static
 Privileged qualification uses the same explicit environment and runs as root:
 
 ```sh
-sudo --preserve-env=SECONDBOX_RUNNER_FIRECRACKER_PATH,SECONDBOX_RUNNER_FIRECRACKER_JAILER_PATH,SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH,SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH,SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH,SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT,SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID,SECONDBOX_RUNNER_FIRECRACKER_JAILER_GID,SECONDBOX_RUNNER_FIRECRACKER_CGROUP_VERSION,SECONDBOX_RUNNER_FIRECRACKER_CGROUP_PARENT,SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED,SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS,SECONDBOX_RUNNER_GUEST_CONTROL_VSOCK_PORT,SECONDBOX_RUNNER_GUEST_PROTOCOL_VSOCK_PORT,SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL,SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY,SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256,SECONDBOX_RUNNER_SANDBOX_BRIDGE_NAME,SECONDBOX_RUNNER_SANDBOX_BRIDGE_CIDR,SECONDBOX_RUNNER_SANDBOX_GUEST_IP,SECONDBOX_RUNNER_SANDBOX_TAP_PREFIX,SECONDBOX_RUNNER_WORKSPACE_ROOT,SECONDBOX_RUNNER_SANDBOX_MAX_MEMORY_MIB,SECONDBOX_RUNNER_SANDBOX_MAX_DISK_MIB,SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT,SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT,SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT \
+sudo --preserve-env=SECONDBOX_RUNNER_FIRECRACKER_PATH,SECONDBOX_RUNNER_FIRECRACKER_JAILER_PATH,SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH,SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH,SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH,SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT,SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_START,SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_COUNT,SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_ALLOW_BELOW_1000,SECONDBOX_RUNNER_FIRECRACKER_JAILER_GID,SECONDBOX_RUNNER_FIRECRACKER_CGROUP_VERSION,SECONDBOX_RUNNER_FIRECRACKER_CGROUP_PARENT,SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED,SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS,SECONDBOX_RUNNER_GUEST_CONTROL_VSOCK_PORT,SECONDBOX_RUNNER_GUEST_PROTOCOL_VSOCK_PORT,SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL,SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY,SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256,SECONDBOX_RUNNER_SANDBOX_BRIDGE_NAME,SECONDBOX_RUNNER_SANDBOX_BRIDGE_CIDR,SECONDBOX_RUNNER_SANDBOX_GUEST_IP,SECONDBOX_RUNNER_SANDBOX_TAP_PREFIX,SECONDBOX_RUNNER_WORKSPACE_ROOT,SECONDBOX_RUNNER_SANDBOX_MAX_MEMORY_MIB,SECONDBOX_RUNNER_SANDBOX_MAX_DISK_MIB,SECONDBOX_RUNNER_STORAGE_PRESSURE_RECOVERY_PERCENT,SECONDBOX_RUNNER_STORAGE_PRESSURE_WARNING_PERCENT,SECONDBOX_RUNNER_STORAGE_PRESSURE_ADMISSION_DENY_PERCENT \
   runner/scripts/microvm-stage-check.sh
 ```
 

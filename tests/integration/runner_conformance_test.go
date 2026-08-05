@@ -188,7 +188,7 @@ func (boundary *postgresConformanceBoundary) SeedAssignment(
 		AssignmentCommand: &runnerv1.AssignmentCommand{
 			Fence: fence, ProfileRevisionId: "profile-revision-conformance", WorkspaceId: workspaceID,
 			Requirements: &runnerv1.ProfileRequirements{
-				VcpuCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
+				VcpuCount: 1, VcpuMillis: 1000, ProcessLimit: 128, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
 				Architecture: "amd64", RequiredCapabilities: []string{"local-workspace"},
 				MaximumOperationMs: 60_000, MaximumOutputBytes: 1 << 20,
 			},

@@ -1662,12 +1662,17 @@ func validateResolvedAssignment(assignment *runnerprotocol.AssignmentCommand) er
 	}
 	requirements := assignment.Requirements
 	if requirements.VcpuCount == 0 ||
+		requirements.VcpuMillis == 0 ||
+		requirements.ProcessLimit == 0 ||
 		requirements.MemoryBytes == 0 ||
 		requirements.DiskBytes == 0 ||
 		strings.TrimSpace(requirements.Architecture) == "" ||
 		requirements.MaximumOperationMs == 0 ||
 		requirements.MaximumOutputBytes == 0 {
 		return fmt.Errorf("SecondBox runner assignment has incomplete immutable profile requirements")
+	}
+	if (requirements.VcpuMillis+999)/1000 != requirements.VcpuCount {
+		return fmt.Errorf("SecondBox runner assignment CPU millis and vCPU count are inconsistent")
 	}
 	if len(assignment.Assets) == 0 {
 		return fmt.Errorf("SecondBox runner assignment has no signed immutable assets")
