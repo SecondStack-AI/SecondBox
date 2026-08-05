@@ -9,6 +9,7 @@ import type { SandboxHandle } from "@secondstack-ai/secondbox";
 export function durableCodingFlueSandbox(handle: SandboxHandle): SandboxFactory {
   return createSecondBoxFlueAdapter(handle, {
     defaultDeadlineMilliseconds: 60_000,
+    maximumFileBytes: 1 << 20,
     maximumOutputBytes: 1 << 20,
   });
 }

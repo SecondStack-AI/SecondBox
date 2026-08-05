@@ -242,7 +242,11 @@ const api = new SecondBox(
 
 const { handle, result } = await api.run({
   profile: "durable-coding",
-  command: "python3 -c 'print(\"hello\")'",
+  command: {
+    mode: "argv",
+    executable: "python3",
+    arguments: ["-c", "print('hello')"],
+  },
   deadlineMilliseconds: 30_000,
   maximumOutputBytes: 1_048_576,
   readyTimeoutMilliseconds: 300_000,

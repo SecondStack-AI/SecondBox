@@ -253,8 +253,7 @@ func (terminal *Terminal) Receive() (TerminalFrame, error) {
 	switch {
 	case frame.TerminalOutputFrame != nil:
 		sequence = frame.TerminalOutputFrame.Sequence
-		content, err := base64.StdEncoding.Strict().DecodeString(frame.TerminalOutputFrame.DataBase64)
-		if err != nil || base64.StdEncoding.EncodeToString(content) != frame.TerminalOutputFrame.DataBase64 {
+		if !isCanonicalBase64(frame.TerminalOutputFrame.DataBase64) {
 			return TerminalFrame{}, errors.New("SecondBox Terminal output is not canonical base64")
 		}
 	case frame.StreamOutcomeFrame != nil:

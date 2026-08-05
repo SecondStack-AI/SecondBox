@@ -27,6 +27,7 @@ test("Flue complete command and filesystem subset uses the real SecondBox servic
     new SandboxHandle(api, sandbox),
     {
       defaultDeadlineMilliseconds: 1_000,
+      maximumFileBytes: 4_096,
       maximumOutputBytes: 4_096,
     },
   );
