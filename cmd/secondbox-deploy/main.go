@@ -81,6 +81,20 @@ func run(arguments []string) error {
 		default:
 			return fmt.Errorf("SecondBox deployment manifest: init mode must be development or production")
 		}
+	case "runner-template":
+		switch {
+		case len(arguments) == 1:
+			_, err := os.Stdout.Write(deployconfig.RunnerTemplate())
+			return err
+		case len(arguments) == 3 && arguments[1] == "--output":
+			if err := deployconfig.WriteRunnerTemplate(arguments[2]); err != nil {
+				return err
+			}
+			fmt.Println(arguments[2])
+			return nil
+		default:
+			return usage()
+		}
 	case "validate":
 		if len(arguments) != 2 {
 			return usage()
@@ -305,5 +319,5 @@ func runDockerCompose(arguments []string) error {
 }
 
 func usage() error {
-	return fmt.Errorf("usage: secondbox-deploy {init --mode development DIRECTORY|init --mode production [--input COMPLETE_MANIFEST [--release-index URL|--qualification-artifact-manifest URL]] DIRECTORY|verify artifact-manifest URL|verify release-index URL|qualification-attestation --manifest FILE --input FILE --output FILE|release-index --manifest FILE --qualification FILE --output FILE|validate MANIFEST|render --output ENV MANIFEST|runner-init MANIFEST RUNNER_ID TARGET|inspect MANIFEST|migrate LEGACY_ENV TARGET|compose MANIFEST config|prepare|up|down}")
+	return fmt.Errorf("usage: secondbox-deploy {init --mode development DIRECTORY|init --mode production [--input COMPLETE_MANIFEST [--release-index URL|--qualification-artifact-manifest URL]] DIRECTORY|runner-template [--output FILE]|verify artifact-manifest URL|verify release-index URL|qualification-attestation --manifest FILE --input FILE --output FILE|release-index --manifest FILE --qualification FILE --output FILE|validate MANIFEST|render --output ENV MANIFEST|runner-init MANIFEST RUNNER_ID TARGET|inspect MANIFEST|migrate LEGACY_ENV TARGET|compose MANIFEST config|prepare|up|down}")
 }
