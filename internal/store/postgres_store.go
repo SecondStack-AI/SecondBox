@@ -1170,58 +1170,10 @@ func selectInitialHomeRunner(
 	tx pgx.Tx,
 	spec contracts.ProfileRevisionSpec,
 ) (string, error) {
-	rows, err := tx.Query(ctx, `
-		SELECT id,architectures_json,capabilities_json,capacity_json,reserved_capacity_json
-		FROM secondbox.runners
-		WHERE pool_name=$1 AND state='ready' AND drain_phase='active'
-		  AND active_connection_id<>''
-		ORDER BY id
-		FOR UPDATE`,
-		spec.Pool,
-	)
-	if err != nil {
-		return "", fmt.Errorf("SecondBox initial home Runner candidates failed: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var runnerID string
-		var architecturesJSON, capabilitiesJSON, capacityJSON, reservedJSON []byte
-		if err := rows.Scan(
-			&runnerID, &architecturesJSON, &capabilitiesJSON, &capacityJSON, &reservedJSON,
-		); err != nil {
-			return "", fmt.Errorf("SecondBox initial home Runner scan failed: %w", err)
-		}
-		var architectures []string
-		var capabilities []string
-		var allocatable, reserved runnerCapacity
-		if err := json.Unmarshal(architecturesJSON, &architectures); err != nil {
-			return "", fmt.Errorf("SecondBox initial home Runner architectures decoding failed: %w", err)
-		}
-		if err := json.Unmarshal(capabilitiesJSON, &capabilities); err != nil {
-			return "", fmt.Errorf("SecondBox initial home Runner capabilities decoding failed: %w", err)
-		}
-		if err := json.Unmarshal(capacityJSON, &allocatable); err != nil {
-			return "", fmt.Errorf("SecondBox initial home Runner capacity decoding failed: %w", err)
-		}
-		if err := json.Unmarshal(reservedJSON, &reserved); err != nil {
-			return "", fmt.Errorf("SecondBox initial home Runner reservation decoding failed: %w", err)
-		}
-		if !contains(architectures, spec.Architecture) ||
-			!contains(capabilities, "compute") ||
-			!contains(capabilities, "local-workspace") ||
-			allocatable.CPUMillis-reserved.CPUMillis < spec.Resources.CPUMillis ||
-			allocatable.MemoryBytes-reserved.MemoryBytes < spec.Resources.MemoryBytes ||
-			allocatable.DiskBytes-reserved.DiskBytes < spec.Resources.WorkspaceBytes ||
-			allocatable.Instances-reserved.Instances < 1 ||
-			allocatable.Operations-reserved.Operations < spec.Resources.ConcurrentOperations {
-			continue
-		}
-		return runnerID, nil
-	}
-	if err := rows.Err(); err != nil {
-		return "", fmt.Errorf("SecondBox initial home Runner iteration failed: %w", err)
-	}
-	return "", ports.ErrHomeRunnerUnavailable
+	return selectRunnerForPlacement(ctx, tx, spec, runnerPlacementOptions{
+		unavailable: ports.ErrHomeRunnerUnavailable,
+		errorPrefix: "SecondBox initial home Runner",
+	})
 }
 
 type runnerCapacity struct {
@@ -1241,28 +1193,19 @@ func selectSnapshotCloneHomeRunner(
 	now time.Time,
 ) (string, error) {
 	var (
-		homeRunnerID                                       string
-		snapshotState, runnerPool, runnerState, drainPhase string
-		activeConnectionID                                 string
-		snapshotSize                                       int64
-		retainUntil                                        time.Time
-		architecturesJSON, capabilitiesJSON                []byte
-		capacityJSON, reservedJSON                         []byte
+		homeRunnerID  string
+		snapshotState string
+		snapshotSize  int64
+		retainUntil   time.Time
 	)
 	if err := tx.QueryRow(ctx, `
-		SELECT snapshot.home_runner_id,snapshot.size_bytes,snapshot.state,snapshot.retain_until,
-		       runner.pool_name,runner.state,runner.drain_phase,runner.active_connection_id,
-		       runner.architectures_json,runner.capabilities_json,
-		       runner.capacity_json,runner.reserved_capacity_json
+		SELECT snapshot.home_runner_id,snapshot.size_bytes,snapshot.state,snapshot.retain_until
 		FROM secondbox.snapshots AS snapshot
-		JOIN secondbox.runners AS runner ON runner.id=snapshot.home_runner_id
 		WHERE snapshot.id=$1 AND snapshot.tenant_ref=$2 AND snapshot.subject_ref=$3
-		FOR UPDATE OF snapshot,runner`,
+		FOR UPDATE OF snapshot`,
 		snapshotID, principal.TenantRef, principal.SubjectRef,
 	).Scan(
 		&homeRunnerID, &snapshotSize, &snapshotState, &retainUntil,
-		&runnerPool, &runnerState, &drainPhase, &activeConnectionID,
-		&architecturesJSON, &capabilitiesJSON, &capacityJSON, &reservedJSON,
 	); err != nil {
 		return "", mapNotFound(err, ports.ErrSnapshotNotFound)
 	}
@@ -1270,35 +1213,11 @@ func selectSnapshotCloneHomeRunner(
 		snapshotSize != spec.Resources.WorkspaceBytes {
 		return "", ports.ErrSnapshotUnavailable
 	}
-	var architectures, capabilities []string
-	var allocatable, reserved runnerCapacity
-	if err := json.Unmarshal(architecturesJSON, &architectures); err != nil {
-		return "", fmt.Errorf("SecondBox Snapshot home Runner architectures decoding failed: %w", err)
-	}
-	if err := json.Unmarshal(capabilitiesJSON, &capabilities); err != nil {
-		return "", fmt.Errorf("SecondBox Snapshot home Runner capabilities decoding failed: %w", err)
-	}
-	if err := json.Unmarshal(capacityJSON, &allocatable); err != nil {
-		return "", fmt.Errorf("SecondBox Snapshot home Runner capacity decoding failed: %w", err)
-	}
-	if err := json.Unmarshal(reservedJSON, &reserved); err != nil {
-		return "", fmt.Errorf("SecondBox Snapshot home Runner reservation decoding failed: %w", err)
-	}
-	if runnerPool != spec.Pool ||
-		runnerState != "ready" ||
-		drainPhase != "active" ||
-		activeConnectionID == "" ||
-		!contains(architectures, spec.Architecture) ||
-		!contains(capabilities, "compute") ||
-		!contains(capabilities, "local-workspace") ||
-		allocatable.CPUMillis-reserved.CPUMillis < spec.Resources.CPUMillis ||
-		allocatable.MemoryBytes-reserved.MemoryBytes < spec.Resources.MemoryBytes ||
-		allocatable.DiskBytes-reserved.DiskBytes < spec.Resources.WorkspaceBytes ||
-		allocatable.Instances-reserved.Instances < 1 ||
-		allocatable.Operations-reserved.Operations < spec.Resources.ConcurrentOperations {
-		return "", ports.ErrHomeRunnerUnavailable
-	}
-	return homeRunnerID, nil
+	return selectRunnerForPlacement(ctx, tx, spec, runnerPlacementOptions{
+		exactRunnerID: homeRunnerID,
+		unavailable:   ports.ErrHomeRunnerUnavailable,
+		errorPrefix:   "SecondBox Snapshot home Runner",
+	})
 }
 
 type quotaUsage struct {

@@ -241,70 +241,11 @@ func selectWorkspaceRelocationTarget(
 	sourceRunnerID string,
 	exactRunnerID string,
 ) (string, error) {
-	rows, err := tx.Query(ctx, `
-		SELECT id,architectures_json,capabilities_json,capacity_json,
-		       reserved_capacity_json,protocol_versions_json
-		FROM secondbox.runners
-		WHERE pool_name=$1 AND state='ready' AND drain_phase='active'
-		  AND active_connection_id<>'' AND id<>$2
-		ORDER BY id
-		FOR UPDATE`,
-		spec.Pool, sourceRunnerID,
-	)
-	if err != nil {
-		return "", fmt.Errorf("SecondBox Workspace relocation target candidates failed: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var runnerID string
-		var architecturesJSON, capabilitiesJSON, capacityJSON, reservedJSON, versionsJSON []byte
-		if err := rows.Scan(
-			&runnerID,
-			&architecturesJSON,
-			&capabilitiesJSON,
-			&capacityJSON,
-			&reservedJSON,
-			&versionsJSON,
-		); err != nil {
-			return "", fmt.Errorf("SecondBox Workspace relocation target scan failed: %w", err)
-		}
-		if exactRunnerID != "" && runnerID != exactRunnerID {
-			continue
-		}
-		var architectures, capabilities, versions []string
-		var allocatable, reserved runnerCapacity
-		if err := json.Unmarshal(architecturesJSON, &architectures); err != nil {
-			return "", fmt.Errorf("SecondBox Workspace relocation target architectures decoding failed: %w", err)
-		}
-		if err := json.Unmarshal(capabilitiesJSON, &capabilities); err != nil {
-			return "", fmt.Errorf("SecondBox Workspace relocation target capabilities decoding failed: %w", err)
-		}
-		if err := json.Unmarshal(capacityJSON, &allocatable); err != nil {
-			return "", fmt.Errorf("SecondBox Workspace relocation target capacity decoding failed: %w", err)
-		}
-		if err := json.Unmarshal(reservedJSON, &reserved); err != nil {
-			return "", fmt.Errorf("SecondBox Workspace relocation target reservation decoding failed: %w", err)
-		}
-		if err := json.Unmarshal(versionsJSON, &versions); err != nil {
-			return "", fmt.Errorf("SecondBox Workspace relocation target protocol decoding failed: %w", err)
-		}
-		if !contains(architectures, spec.Architecture) ||
-			!contains(capabilities, "compute") ||
-			!contains(capabilities, "local-workspace") ||
-			!contains(capabilities, "storage") ||
-			!contains(capabilities, "workspace-relocation") ||
-			!contains(versions, "2") ||
-			allocatable.CPUMillis-reserved.CPUMillis < spec.Resources.CPUMillis ||
-			allocatable.MemoryBytes-reserved.MemoryBytes < spec.Resources.MemoryBytes ||
-			allocatable.DiskBytes-reserved.DiskBytes < spec.Resources.WorkspaceBytes ||
-			allocatable.Instances-reserved.Instances < 1 ||
-			allocatable.Operations-reserved.Operations < spec.Resources.ConcurrentOperations {
-			continue
-		}
-		return runnerID, nil
-	}
-	if err := rows.Err(); err != nil {
-		return "", fmt.Errorf("SecondBox Workspace relocation target iteration failed: %w", err)
-	}
-	return "", ports.ErrRelocationTargetUnavailable
+	return selectRunnerForPlacement(ctx, tx, spec, runnerPlacementOptions{
+		exactRunnerID:            exactRunnerID,
+		excludedRunnerID:         sourceRunnerID,
+		requireWorkspaceTransfer: true,
+		unavailable:              ports.ErrRelocationTargetUnavailable,
+		errorPrefix:              "SecondBox Workspace relocation target",
+	})
 }

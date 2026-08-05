@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -168,6 +169,81 @@ func TestPostgresLifecycleBatchClaimsOrderedCohortAndClosesExpiredActivity(t *te
 		t.Context(), "worker-batch-other", claimAt, time.Minute, 2,
 	); err != nil || len(later) != 0 {
 		t.Fatalf("claimed fenced cohort = %#v, %v", later, err)
+	}
+}
+
+func TestPostgresLifecycleClaimSkipsLockedExpiredLeaseWithoutCountingItsSession(t *testing.T) {
+	controlPlaneStore := openStoreTest(t)
+	now := time.Date(2020, 1, 2, 12, 0, 0, 0, time.UTC)
+	if _, err := controlPlaneStore.pool.Exec(t.Context(), `
+		INSERT INTO secondbox.profile_revisions (
+			id,profile_name,revision_number,spec_json,created_at
+		) VALUES ('revision-locked-expiry','profile-locked-expiry',1,'{}',$1);
+		INSERT INTO secondbox.workspaces (
+			id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,
+			logical_capacity_bytes,generation,mutation_kind,mutation_id,
+			mutation_effect_id,mutation_operation_id,mutation_expected_generation,
+			mutation_target_generation,mutation_state,local_receipt_json,
+			created_at,updated_at
+		) VALUES (
+			'workspace-locked-expiry','tenant','subject','sandbox-locked-expiry',
+			'runner-home','ready',1048576,1,'','','','',NULL,NULL,'','{}',$1,$1
+		);
+		INSERT INTO secondbox.sandboxes (
+			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
+			generation,workspace_id,current_instance_id,metadata_json,
+			compatibility_summary_json,next_reconcile_at,revision,created_at,updated_at
+		) VALUES (
+			'sandbox-locked-expiry','tenant','subject','profile-locked-expiry',
+			'revision-locked-expiry','creating','stopped',1,
+			'workspace-locked-expiry','','{}','{}',$2,1,$1,$1
+		);
+		INSERT INTO secondbox.leases (
+			id,tenant_ref,subject_ref,sandbox_id,generation,state,
+			expires_at,revision,created_at,updated_at
+		) VALUES (
+			'lease-locked-expiry','tenant','subject','sandbox-locked-expiry',1,'active',
+			$2,1,$2,$2
+		);
+		INSERT INTO secondbox.activity_sessions (
+			id,tenant_ref,subject_ref,sandbox_id,generation,kind,state,lease_id,
+			last_activity_at,created_at,updated_at
+		) VALUES (
+			'activity-locked-expiry','tenant','subject','sandbox-locked-expiry',1,
+			'terminal','active','lease-locked-expiry',$2,$2,$2
+		)`, pgx.QueryExecModeSimpleProtocol, now, now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	blocker, err := controlPlaneStore.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Rollback(t.Context())
+	if _, err := blocker.Exec(t.Context(), `
+		SELECT id FROM secondbox.leases WHERE id='lease-locked-expiry' FOR UPDATE`); err != nil {
+		t.Fatal(err)
+	}
+
+	claimContext, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	claims, err := controlPlaneStore.ClaimLifecycleBatch(
+		claimContext, "worker-locked-expiry", now, time.Minute, 1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claims) != 1 || claims[0].SandboxID != "sandbox-locked-expiry" || claims[0].ActiveSessions != 0 {
+		t.Fatalf("locked-expiry claims = %#v", claims)
+	}
+	var sessionState string
+	if err := controlPlaneStore.pool.QueryRow(t.Context(), `
+		SELECT state FROM secondbox.activity_sessions WHERE id='activity-locked-expiry'`,
+	).Scan(&sessionState); err != nil {
+		t.Fatal(err)
+	}
+	if sessionState != "closed" {
+		t.Fatalf("expired Lease session state = %q, want closed", sessionState)
 	}
 }
 
