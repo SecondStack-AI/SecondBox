@@ -93,6 +93,7 @@ func newShellTestServer(t *testing.T) *shellTestServer {
 					return
 				}
 				defer connection.Close()
+				writeCLITerminalAttached(t, connection, 0)
 				// Read the client's opening credit grant before answering, so the
 				// outcome is never written into a connection still being set up.
 				assertCLITerminalCredit(t, connection, 0, defaultShellCreditBytes)
@@ -391,6 +392,7 @@ func newTTYRunServer(t *testing.T) *shellTestServer {
 					return
 				}
 				defer connection.Close()
+				writeCLITerminalAttached(t, connection, 0)
 				assertCLITerminalCredit(t, connection, 0, defaultShellCreditBytes)
 				if err := connection.WriteJSON(secondboxclient.TerminalFrame{
 					StreamOutcomeFrame: &secondboxclient.StreamOutcomeFrame{

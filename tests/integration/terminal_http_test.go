@@ -390,11 +390,12 @@ type terminalHTTPFakeRunner struct {
 }
 
 type terminalHTTPFakeOperation struct {
-	open         *runnerv1.ExecFrame
-	command      string
-	nextSequence uint64
-	attached     bool
-	retained     []*runnerv1.RunnerToControlPlane
+	open              *runnerv1.ExecFrame
+	command           string
+	nextSequence      uint64
+	nextInputSequence uint64
+	attached          bool
+	retained          []*runnerv1.RunnerToControlPlane
 }
 
 func newTerminalHTTPFakeRunner(
@@ -486,7 +487,7 @@ func (fake *terminalHTTPFakeRunner) handle(
 				return fmt.Errorf("Terminal fake runner received non-PTY Open: %#v", open)
 			}
 			fake.operations[execFrame.OperationId] = &terminalHTTPFakeOperation{
-				open: execFrame, command: open.GetShell(), nextSequence: 1,
+				open: execFrame, command: open.GetShell(), nextSequence: 1, nextInputSequence: 2,
 			}
 			return nil
 		}
@@ -495,6 +496,7 @@ func (fake *terminalHTTPFakeRunner) handle(
 			return fmt.Errorf("Terminal fake runner Exec frame has no Open: %s", execFrame.OperationId)
 		}
 		if execFrame.GetCancel() != nil {
+			operation.nextInputSequence = execFrame.Sequence + 1
 			if err := fake.terminal(
 				ctx, operation, runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED,
 			); err != nil {
@@ -528,6 +530,7 @@ func (fake *terminalHTTPFakeRunner) handle(
 				Correlation: operation.open.Correlation,
 				Payload: &runnerv1.PtyFrame_AttachResult{AttachResult: &runnerv1.PtyAttachResult{
 					Kind: kind, AfterSequence: ptyFrame.GetAttach().AfterSequence,
+					NextInputSequence: &operation.nextInputSequence,
 				}},
 			}},
 		}); err != nil {
@@ -556,16 +559,19 @@ func (fake *terminalHTTPFakeRunner) handle(
 		}
 		operation.attached = false
 	case ptyFrame.GetCredit() != nil:
+		operation.nextInputSequence = ptyFrame.Sequence + 1
 		fake.events <- fmt.Sprintf("credit:%s:%d", operation.command, ptyFrame.GetCredit().ByteCount)
 		if operation.command == "terminal-order" {
 			return fake.output(ctx, operation, []byte{0x00, 0x01, 0xfe, 0xff})
 		}
 	case ptyFrame.GetResize() != nil:
+		operation.nextInputSequence = ptyFrame.Sequence + 1
 		fake.events <- fmt.Sprintf(
 			"resize:%s:%dx%d", operation.command,
 			ptyFrame.GetResize().Rows, ptyFrame.GetResize().Columns,
 		)
 	case ptyFrame.GetInput() != nil:
+		operation.nextInputSequence = ptyFrame.Sequence + 1
 		fake.events <- fmt.Sprintf("input:%s:%x", operation.command, ptyFrame.GetInput().Data)
 		if operation.command == "terminal-order" {
 			if err := fake.output(ctx, operation, []byte("done")); err != nil {
@@ -730,6 +736,18 @@ func dialTerminalAfter(
 	if connection.Subprotocol() != "secondbox.terminal.v1" {
 		connection.Close()
 		t.Fatalf("Terminal subprotocol = %q", connection.Subprotocol())
+	}
+	var attached struct {
+		Type               string `json:"type"`
+		NextClientSequence *int64 `json:"nextClientSequence"`
+	}
+	if err := connection.ReadJSON(&attached); err != nil {
+		connection.Close()
+		t.Fatal(err)
+	}
+	if attached.Type != "terminal_attached" || attached.NextClientSequence == nil {
+		connection.Close()
+		t.Fatalf("Terminal attach response = %#v", attached)
 	}
 	return connection
 }

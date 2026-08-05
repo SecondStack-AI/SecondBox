@@ -277,6 +277,7 @@ func TestRunnerDataPlanePTYRoutesBinaryControlOutputAndTypedTerminal(t *testing.
 	waitRunnerMessages(t, stream, 4)
 	messages := stream.messages()
 	if messages[0].GetPty().GetAttachResult().GetKind() != runnerprotocol.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ATTACHED ||
+		messages[0].GetPty().GetAttachResult().GetNextInputSequence() != 2 ||
 		len(messages[1].GetPty().GetOutput().GetData()) != runnerDataPlaneChunkBytes ||
 		!bytes.Equal(messages[2].GetPty().GetOutput().GetData(), []byte{0xaa, 0xbb}) {
 		t.Fatalf("PTY attachment and chunked output = %#v", messages[:3])
@@ -413,6 +414,7 @@ func TestRunnerDataPlanePTYReplayRingDetachEvictionAndExclusiveAttachment(t *tes
 	secondMessages := second.messages()
 	if len(secondMessages) != 3 ||
 		secondMessages[0].GetPty().GetAttachResult().GetKind() != runnerprotocol.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ATTACHED ||
+		secondMessages[0].GetPty().GetAttachResult().GetNextInputSequence() != 2 ||
 		secondMessages[1].GetPty().GetSequence() != 2 || string(secondMessages[1].GetPty().GetOutput().GetData()) != "bb" ||
 		secondMessages[2].GetPty().GetSequence() != 3 || string(secondMessages[2].GetPty().GetOutput().GetData()) != "cc" {
 		t.Fatalf("reattached PTY replay = %#v", secondMessages)

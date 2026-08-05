@@ -85,32 +85,44 @@ func (store *PostgresControlPlaneStore) StageArtifact(
 			return contracts.Artifact{}, fmt.Errorf("SecondBox Artifact idempotency lock failed: %w", err)
 		}
 		var priorHash, artifactID string
+		var expiresAt time.Time
 		idempotencyErr := tx.QueryRow(ctx, `
-			SELECT request_hash,response_resource_id
+			SELECT request_hash,response_resource_id,expires_at
 			FROM secondbox.idempotency_records
 			WHERE tenant_ref=$1 AND subject_ref=$2
 			  AND operation='artifact.upload' AND target_id=$3 AND idempotency_key=$4`,
 			artifact.TenantRef, artifact.SubjectRef, artifact.SandboxID, input.IdempotencyKey,
-		).Scan(&priorHash, &artifactID)
+		).Scan(&priorHash, &artifactID, &expiresAt)
 		if idempotencyErr == nil {
-			if priorHash != input.RequestHash {
-				return contracts.Artifact{}, ports.ErrIdempotencyConflict
+			expired, err := deleteExpiredIdempotencyRecord(
+				ctx, tx, artifact.TenantRef, artifact.SubjectRef, "artifact.upload",
+				artifact.SandboxID, input.IdempotencyKey, expiresAt, artifact.CreatedAt,
+			)
+			if err != nil {
+				return contracts.Artifact{}, fmt.Errorf("SecondBox expired Artifact idempotency cleanup failed: %w", err)
 			}
-			replayed, _, err := scanArtifact(tx.QueryRow(ctx, `
+			if expired {
+				idempotencyErr = pgx.ErrNoRows
+			} else {
+				if priorHash != input.RequestHash {
+					return contracts.Artifact{}, ports.ErrIdempotencyConflict
+				}
+				replayed, _, err := scanArtifact(tx.QueryRow(ctx, `
 				SELECT id,tenant_ref,subject_ref,sandbox_id,source_generation,name,media_type,size_bytes,
 				       sha256,state,metadata_json,retain_until,created_at,published_at,
 				       garbage_collected_at,storage_key
 				FROM secondbox.artifacts
 				WHERE id=$1 AND tenant_ref=$2 AND subject_ref=$3`,
-				artifactID, artifact.TenantRef, artifact.SubjectRef,
-			))
-			if err != nil {
-				return contracts.Artifact{}, err
+					artifactID, artifact.TenantRef, artifact.SubjectRef,
+				))
+				if err != nil {
+					return contracts.Artifact{}, err
+				}
+				if err := tx.Commit(ctx); err != nil {
+					return contracts.Artifact{}, fmt.Errorf("SecondBox Artifact replay commit failed: %w", err)
+				}
+				return replayed, nil
 			}
-			if err := tx.Commit(ctx); err != nil {
-				return contracts.Artifact{}, fmt.Errorf("SecondBox Artifact replay commit failed: %w", err)
-			}
-			return replayed, nil
 		}
 		if !errors.Is(idempotencyErr, pgx.ErrNoRows) {
 			return contracts.Artifact{}, fmt.Errorf("SecondBox Artifact idempotency lookup failed: %w", idempotencyErr)
@@ -372,20 +384,32 @@ func (store *PostgresControlPlaneStore) EndArtifactRetention(
 		return fmt.Errorf("SecondBox Artifact retention idempotency lock failed: %w", err)
 	}
 	var priorHash string
+	var expiresAt time.Time
 	idempotencyErr := tx.QueryRow(ctx, `
-		SELECT request_hash FROM secondbox.idempotency_records
+		SELECT request_hash,expires_at FROM secondbox.idempotency_records
 		WHERE tenant_ref=$1 AND subject_ref=$2 AND operation='artifact.delete'
 		  AND target_id=$3 AND idempotency_key=$4`,
 		input.TenantRef, input.SubjectRef, input.ArtifactID, input.IdempotencyKey,
-	).Scan(&priorHash)
+	).Scan(&priorHash, &expiresAt)
 	if idempotencyErr == nil {
-		if priorHash != input.RequestHash {
-			return ports.ErrIdempotencyConflict
+		expired, err := deleteExpiredIdempotencyRecord(
+			ctx, tx, input.TenantRef, input.SubjectRef, "artifact.delete",
+			input.ArtifactID, input.IdempotencyKey, expiresAt, input.Now,
+		)
+		if err != nil {
+			return fmt.Errorf("SecondBox expired Artifact retention idempotency cleanup failed: %w", err)
 		}
-		if err := tx.Commit(ctx); err != nil {
-			return fmt.Errorf("SecondBox Artifact retention replay commit failed: %w", err)
+		if expired {
+			idempotencyErr = pgx.ErrNoRows
+		} else {
+			if priorHash != input.RequestHash {
+				return ports.ErrIdempotencyConflict
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return fmt.Errorf("SecondBox Artifact retention replay commit failed: %w", err)
+			}
+			return nil
 		}
-		return nil
 	}
 	if !errors.Is(idempotencyErr, pgx.ErrNoRows) {
 		return fmt.Errorf("SecondBox Artifact retention idempotency lookup failed: %w", idempotencyErr)

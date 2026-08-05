@@ -35,6 +35,7 @@ func (store *PostgresControlPlaneStore) CreateSnapshot(
 	replayed, found, err := lookupSnapshotMutationReplay(
 		ctx, tx, input.Snapshot.TenantRef, input.Snapshot.SubjectRef,
 		"snapshot.create", input.Snapshot.SandboxID, input.IdempotencyKey, input.RequestHash,
+		input.Snapshot.CreatedAt,
 	)
 	if err != nil || found {
 		return replayed, err
@@ -194,7 +195,7 @@ func (store *PostgresControlPlaneStore) deleteSnapshot(
 	if recordIdempotency {
 		replayed, found, err := lookupSnapshotMutationReplay(
 			ctx, tx, input.TenantRef, input.SubjectRef, "snapshot.delete",
-			input.SnapshotID, input.IdempotencyKey, input.RequestHash,
+			input.SnapshotID, input.IdempotencyKey, input.RequestHash, input.Now,
 		)
 		if err != nil || found {
 			return replayed, err
@@ -397,7 +398,7 @@ func (store *PostgresControlPlaneStore) RestoreSnapshot(
 	defer tx.Rollback(ctx)
 	replayed, found, err := lookupSnapshotMutationReplay(
 		ctx, tx, input.TenantRef, input.SubjectRef, "snapshot.restore",
-		input.SandboxID, input.IdempotencyKey, input.RequestHash,
+		input.SandboxID, input.IdempotencyKey, input.RequestHash, input.Now,
 	)
 	if err != nil || found {
 		return replayed, err
@@ -602,23 +603,34 @@ func lookupSnapshotMutationReplay(
 	targetID string,
 	idempotencyKey string,
 	requestHash string,
+	now time.Time,
 ) (contracts.Operation, bool, error) {
 	lockKey := tenantRef + "\x1f" + subjectRef + "\x1f" + kind + "\x1f" + targetID + "\x1f" + idempotencyKey
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, lockKey); err != nil {
 		return contracts.Operation{}, false, fmt.Errorf("SecondBox Snapshot idempotency lock failed: %w", err)
 	}
 	var priorHash, operationID string
+	var expiresAt time.Time
 	err := tx.QueryRow(ctx, `
-		SELECT request_hash,response_resource_id FROM secondbox.idempotency_records
+		SELECT request_hash,response_resource_id,expires_at FROM secondbox.idempotency_records
 		WHERE tenant_ref=$1 AND subject_ref=$2 AND operation=$3
 		  AND target_id=$4 AND idempotency_key=$5`,
 		tenantRef, subjectRef, kind, targetID, idempotencyKey,
-	).Scan(&priorHash, &operationID)
+	).Scan(&priorHash, &operationID, &expiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return contracts.Operation{}, false, nil
 	}
 	if err != nil {
 		return contracts.Operation{}, false, fmt.Errorf("SecondBox Snapshot idempotency lookup failed: %w", err)
+	}
+	expired, err := deleteExpiredIdempotencyRecord(
+		ctx, tx, tenantRef, subjectRef, kind, targetID, idempotencyKey, expiresAt, now,
+	)
+	if err != nil {
+		return contracts.Operation{}, false, fmt.Errorf("SecondBox expired Snapshot idempotency cleanup failed: %w", err)
+	}
+	if expired {
+		return contracts.Operation{}, false, nil
 	}
 	if priorHash != requestHash {
 		return contracts.Operation{}, false, ports.ErrIdempotencyConflict

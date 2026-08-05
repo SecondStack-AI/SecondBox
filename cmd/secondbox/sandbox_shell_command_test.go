@@ -67,6 +67,7 @@ func TestSandboxShellUsesRawTTYResizeBinaryIOAndRestoresOnExit(t *testing.T) {
 				return
 			}
 			defer connection.Close()
+			writeCLITerminalAttached(t, connection, 0)
 			assertCLITerminalCredit(t, connection, 0, defaultShellCreditBytes)
 			resizeEvents <- struct{}{}
 			assertCLITerminalResize(t, connection, 1, 40, 120)
@@ -158,6 +159,7 @@ func TestSandboxShellCancellationRestoresRawTTY(t *testing.T) {
 				return
 			}
 			defer connection.Close()
+			writeCLITerminalAttached(t, connection, 0)
 			assertCLITerminalCredit(t, connection, 0, defaultShellCreditBytes)
 			cancel()
 			var frame secondboxclient.TerminalFrame
@@ -219,6 +221,7 @@ func TestSandboxShellReconnectsStableSessionAtRetainedSequence(t *testing.T) {
 				return
 			}
 			defer connection.Close()
+			writeCLITerminalAttached(t, connection, 5)
 			assertCLITerminalCredit(t, connection, 5, defaultShellCreditBytes)
 			assertCLITerminalInput(t, connection, 6, []byte{0x04})
 			if err := connection.WriteJSON(secondboxclient.TerminalFrame{
@@ -289,6 +292,7 @@ func TestSandboxShellClampsOutputCreditToTheSessionWindow(t *testing.T) {
 				return
 			}
 			defer connection.Close()
+			writeCLITerminalAttached(t, connection, 0)
 			assertCLITerminalCredit(t, connection, 0, sessionWindowBytes)
 			assertCLITerminalInput(t, connection, 1, []byte{0x04})
 			if err := connection.WriteJSON(secondboxclient.TerminalFrame{
@@ -389,6 +393,17 @@ type blockingReader struct {
 func (reader *blockingReader) Read([]byte) (int, error) {
 	<-reader.done
 	return 0, io.EOF
+}
+
+func writeCLITerminalAttached(t *testing.T, connection *websocket.Conn, sequence int64) {
+	t.Helper()
+	if err := connection.WriteJSON(secondboxclient.TerminalFrame{
+		TerminalAttachedFrame: &secondboxclient.TerminalAttachedFrame{
+			Type: "terminal_attached", NextClientSequence: &sequence,
+		},
+	}); err != nil {
+		t.Errorf("write Terminal attach response: %v", err)
+	}
 }
 
 func assertCLITerminalCredit(

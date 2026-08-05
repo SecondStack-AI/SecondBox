@@ -316,33 +316,45 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox idempotency lock failed: %w", err)
 	}
 	var priorHash, priorSandboxID string
+	var expiresAt time.Time
 	idempotencyErr := tx.QueryRow(ctx, `
-		SELECT request_hash,response_resource_id
+		SELECT request_hash,response_resource_id,expires_at
 		FROM secondbox.idempotency_records
 		WHERE tenant_ref=$1 AND subject_ref=$2
 		  AND operation='sandbox.create' AND target_id='' AND idempotency_key=$3`,
 		input.Principal.TenantRef, input.Principal.SubjectRef, input.IdempotencyKey,
-	).Scan(&priorHash, &priorSandboxID)
+	).Scan(&priorHash, &priorSandboxID, &expiresAt)
 	if idempotencyErr == nil {
-		if priorHash != input.RequestHash {
-			return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrIdempotencyConflict
-		}
-		sandbox, err := getSandboxWithQuerier(
-			ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, priorSandboxID,
+		expired, err := deleteExpiredIdempotencyRecord(
+			ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef,
+			"sandbox.create", "", input.IdempotencyKey, expiresAt, input.Sandbox.CreatedAt,
 		)
 		if err != nil {
-			return contracts.Sandbox{}, contracts.Operation{}, false, err
+			return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox expired Sandbox idempotency cleanup failed: %w", err)
 		}
-		operation, err := getCreateOperationWithQuerier(
-			ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, priorSandboxID,
-		)
-		if err != nil {
-			return contracts.Sandbox{}, contracts.Operation{}, false, err
+		if expired {
+			idempotencyErr = pgx.ErrNoRows
+		} else {
+			if priorHash != input.RequestHash {
+				return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrIdempotencyConflict
+			}
+			sandbox, err := getSandboxWithQuerier(
+				ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, priorSandboxID,
+			)
+			if err != nil {
+				return contracts.Sandbox{}, contracts.Operation{}, false, err
+			}
+			operation, err := getCreateOperationWithQuerier(
+				ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, priorSandboxID,
+			)
+			if err != nil {
+				return contracts.Sandbox{}, contracts.Operation{}, false, err
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox idempotency replay commit failed: %w", err)
+			}
+			return sandbox, operation, false, nil
 		}
-		if err := tx.Commit(ctx); err != nil {
-			return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox idempotency replay commit failed: %w", err)
-		}
-		return sandbox, operation, false, nil
 	}
 	if !errors.Is(idempotencyErr, pgx.ErrNoRows) {
 		return contracts.Sandbox{}, contracts.Operation{}, false, fmt.Errorf("SecondBox Sandbox idempotency lookup failed: %w", idempotencyErr)

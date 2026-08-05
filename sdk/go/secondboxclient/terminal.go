@@ -150,8 +150,25 @@ func (handle *SandboxHandle) ConnectTerminalAfter(
 		_ = connection.Close()
 		return nil, errors.New("SecondBox Terminal subprotocol was not negotiated")
 	}
+	var attached TerminalFrame
+	if err := connection.ReadJSON(&attached); err != nil {
+		_ = connection.Close()
+		return nil, fmt.Errorf("SecondBox Terminal read attach response: %w", err)
+	}
+	if attached.TerminalAttachedFrame == nil || attached.TerminalAttachedFrame.Type != "terminal_attached" {
+		_ = connection.Close()
+		return nil, errors.New("SecondBox Terminal attach response is invalid")
+	}
+	nextInput := session.NextClientSequence
+	if attached.TerminalAttachedFrame.NextClientSequence != nil {
+		nextInput = *attached.TerminalAttachedFrame.NextClientSequence
+		if nextInput < 0 {
+			_ = connection.Close()
+			return nil, errors.New("SecondBox Terminal attach input sequence is invalid")
+		}
+	}
 	return &Terminal{
-		connection: connection, nextInput: session.NextClientSequence,
+		connection: connection, nextInput: nextInput,
 		nextOutput:    afterSequence + 1,
 		writeDeadline: expiresAt,
 	}, nil

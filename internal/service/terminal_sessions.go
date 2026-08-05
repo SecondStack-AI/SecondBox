@@ -172,7 +172,7 @@ func (service *ControlPlaneService) CancelSandboxTerminal(
 			SessionKind: "terminal", SessionOperation: "terminal",
 			IdempotencyKey: idempotencyKey,
 			RequestHash:    requestHash, Reason: "public Terminal cancellation",
-			Generation: generation, Now: now, IdempotencyEnds: now.Add(idempotencyRetention),
+			Generation: generation, Now: now, IdempotencyEnds: service.idempotencyExpiration(now),
 		},
 	)
 }

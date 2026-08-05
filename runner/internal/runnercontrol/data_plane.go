@@ -466,6 +466,11 @@ func (s *RunnerProtocolService) attachPTYStream(
 		s.operationMu.Unlock()
 		return fmt.Errorf("SecondBox runner PTY attachment is incomplete")
 	}
+	// The Runner owns the live input sequence across a control-plane restart.
+	// Returning it at attach prevents a reconnecting client from replaying an
+	// input frame that the Runner accepted after the last durable checkpoint.
+	nextInputSequence := state.nextIncoming
+	result.NextInputSequence = &nextInputSequence
 	if state.ptyAttachment != nil {
 		result.Kind = runnerprotocol.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ALREADY_ATTACHED
 		result.SafeDetail = "Terminal already has an active attachment"

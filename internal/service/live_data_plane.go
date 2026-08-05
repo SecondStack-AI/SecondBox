@@ -45,6 +45,12 @@ func (service *ControlPlaneService) openDataPlaneStream(
 		replayedThrough := uint64(0)
 		if session.Kind == "terminal" {
 			responseCreditBytes = session.ResponseCreditBytes - session.InboundBytes
+			if session.State != "pending" {
+				// PostgreSQL may trail an attached Terminal by one checkpoint gap.
+				// One window admits bounded replay; the Runner still enforces the
+				// actual credit it received before the control-plane interruption.
+				responseCreditBytes = session.StreamWindowBytes
+			}
 			if session.NextInboundSequence > 1 {
 				replayedThrough = uint64(session.NextInboundSequence - 1)
 			}
@@ -500,20 +506,28 @@ func (stream *SandboxExecStream) Close() error {
 // SandboxTerminalStream forwards one exclusive Terminal attachment while the
 // Runner owns bounded replay across attachment transports.
 type SandboxTerminalStream struct {
-	service         *ControlPlaneService
-	session         runnercontrol.DataPlaneSession
-	attachmentID    string
-	stream          dataPlaneStream
-	mu              sync.Mutex
-	nextSend        int64
-	nextRecv        int64
-	request         int64
-	credit          int64
-	emitted         int64
-	recordedThrough int64
-	terminal        bool
-	closed          bool
-	detached        bool
+	service          *ControlPlaneService
+	session          runnercontrol.DataPlaneSession
+	attachmentID     string
+	stream           dataPlaneStream
+	mu               sync.Mutex
+	checkpointMu     sync.Mutex
+	nextSend         int64
+	nextRecv         int64
+	request          int64
+	credit           int64
+	emitted          int64
+	recordedThrough  int64
+	replayAllowance  int64
+	version          uint64
+	persistedVersion uint64
+	checkpointCancel context.CancelFunc
+	checkpointDone   chan struct{}
+	checkpointErr    error
+	terminal         bool
+	cancelled        bool
+	closed           bool
+	detached         bool
 }
 
 func (service *ControlPlaneService) OpenSandboxTerminalStream(
@@ -541,6 +555,13 @@ func (service *ControlPlaneService) OpenSandboxTerminalStream(
 		request: session.RequestStreamBytes, credit: session.ResponseCreditBytes,
 		emitted:         session.InboundBytes,
 		recordedThrough: session.NextInboundSequence - 2,
+	}
+	if session.State != "pending" {
+		// The durable outstanding value may be stale, so reattach treats fresh
+		// client credit independently and reserves one window for credit the
+		// Runner may already hold. This permits progress while bounding any
+		// over-grant caused by the checkpoint gap to one stream window.
+		result.replayAllowance = session.StreamWindowBytes
 	}
 	if session.State == "pending" {
 		open := publicExecOpen(
@@ -589,6 +610,13 @@ func (service *ControlPlaneService) OpenSandboxTerminalStream(
 	}
 	switch frame.GetAttachResult().Kind {
 	case runnerv1.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_ATTACHED:
+		nextSend, err := terminalAttachNextClientSequence(session, frame.GetAttachResult())
+		if err != nil {
+			_ = stream.Close()
+			return nil, err
+		}
+		result.nextSend = nextSend
+		result.startCheckpointing()
 		return result, nil
 	case runnerv1.PtyAttachResultKind_PTY_ATTACH_RESULT_KIND_REPLAY_EVICTED:
 		_ = stream.Close()
@@ -602,12 +630,45 @@ func (service *ControlPlaneService) OpenSandboxTerminalStream(
 	}
 }
 
+func terminalAttachNextClientSequence(
+	session runnercontrol.DataPlaneSession,
+	result *runnerv1.PtyAttachResult,
+) (int64, error) {
+	if result.NextInputSequence != nil {
+		nextInputSequence := result.GetNextInputSequence()
+		if nextInputSequence < 2 || nextInputSequence > uint64(^uint64(0)>>1) {
+			return 0, errors.New("SecondBox Terminal attachment input sequence is invalid")
+		}
+		// A reconnect adopts the Runner's authoritative next input sequence.
+		// Already-forwarded keystrokes are therefore never silently replayed;
+		// the Runner's existing duplicate and gap checks cover later frames.
+		return int64(nextInputSequence) - 2, nil
+	}
+	if session.State != "pending" {
+		// Older Runners cannot prove the expected input sequence after a
+		// checkpoint gap, so a running Terminal is conservatively non-resumable.
+		return 0, runnercontrol.ErrTerminalReplayEvicted
+	}
+	return session.NextClientSequence, nil
+}
+
+// NextClientSequence returns the Runner-authoritative public input sequence
+// selected by the attachment handshake.
+func (stream *SandboxTerminalStream) NextClientSequence() int64 {
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	return stream.nextSend
+}
+
 func (stream *SandboxTerminalStream) Send(
 	ctx context.Context,
 	frame runnercontrol.TerminalClientFrame,
 ) error {
 	stream.mu.Lock()
 	defer stream.mu.Unlock()
+	if stream.checkpointErr != nil {
+		return stream.checkpointErr
+	}
 	if stream.closed || stream.terminal || frame.Sequence != stream.nextSend {
 		return runnercontrol.ErrDataPlaneSequence
 	}
@@ -632,7 +693,8 @@ func (stream *SandboxTerminalStream) Send(
 	if stream.request+int64(len(frame.Input)) > stream.session.MaximumRequestBytes {
 		return runnercontrol.ErrDataPlaneSessionLimit
 	}
-	if frame.Credit > 0 && stream.credit-stream.emitted+frame.Credit > stream.session.StreamWindowBytes {
+	if frame.Credit > 0 && stream.credit-stream.emitted+frame.Credit >
+		stream.session.StreamWindowBytes+stream.replayAllowance {
 		return runnercontrol.ErrDataPlaneFrameLimit
 	}
 	sequence := uint64(frame.Sequence + 2)
@@ -671,20 +733,12 @@ func (stream *SandboxTerminalStream) Send(
 	if err := stream.stream.Send(message); err != nil {
 		return err
 	}
-	store, err := stream.service.terminalStore()
-	if err != nil {
-		return err
-	}
-	if _, err := store.RecordTerminalClientFrame(
-		context.WithoutCancel(ctx), stream.session.TenantRef, stream.session.SubjectRef,
-		stream.session.ID, stream.attachmentID, frame, stream.service.now().UTC(),
-	); err != nil {
-		return err
-	}
 	stream.nextSend++
 	stream.request += int64(len(frame.Input))
 	stream.credit += frame.Credit
+	stream.version++
 	if frame.Cancel {
+		stream.cancelled = true
 		stream.closed = true
 	}
 	return nil
@@ -693,18 +747,25 @@ func (stream *SandboxTerminalStream) Send(
 func (stream *SandboxTerminalStream) Receive(
 	ctx context.Context,
 ) (runnercontrol.TerminalServerFrame, runnercontrol.DataPlaneSession, error) {
+	stream.mu.Lock()
+	if stream.checkpointErr != nil {
+		err := stream.checkpointErr
+		stream.mu.Unlock()
+		return runnercontrol.TerminalServerFrame{}, runnercontrol.DataPlaneSession{}, err
+	}
+	stream.mu.Unlock()
 	message, err := stream.stream.Receive(ctx)
 	if err != nil {
 		return runnercontrol.TerminalServerFrame{}, runnercontrol.DataPlaneSession{}, err
 	}
 	frame := message.GetPty()
 	stream.mu.Lock()
-	defer stream.mu.Unlock()
 	if frame == nil || frame.OperationId != stream.session.ID ||
 		frame.StreamId != stream.session.StreamID ||
 		!proto.Equal(frame.Fence, dataPlaneFence(stream.session)) ||
 		!proto.Equal(frame.Correlation, dataPlaneCorrelation(stream.session)) || frame.Sequence == 0 ||
 		int64(frame.Sequence)-1 != stream.nextRecv || stream.terminal {
+		stream.mu.Unlock()
 		return runnercontrol.TerminalServerFrame{}, runnercontrol.DataPlaneSession{}, fmt.Errorf(
 			"SecondBox live Terminal response ordering: %w", runnercontrol.ErrDataPlaneSequence,
 		)
@@ -715,35 +776,38 @@ func (stream *SandboxTerminalStream) Receive(
 		replayed := stream.nextRecv <= stream.recordedThrough
 		if frame.GetOutput().Channel != runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT ||
 			len(frame.GetOutput().Data) == 0 ||
-			!replayed && (stream.emitted+int64(len(frame.GetOutput().Data)) > stream.credit ||
+			!replayed && (stream.emitted+int64(len(frame.GetOutput().Data)) > stream.credit+stream.replayAllowance ||
 				stream.emitted+int64(len(frame.GetOutput().Data)) > stream.session.MaximumResponseBytes) {
+			stream.mu.Unlock()
 			return runnercontrol.TerminalServerFrame{}, runnercontrol.DataPlaneSession{}, fmt.Errorf(
 				"SecondBox live Terminal response credit: %w", runnercontrol.ErrDataPlaneSequence,
 			)
 		}
 		result.Output = bytes.Clone(frame.GetOutput().Data)
+		if !replayed {
+			stream.emitted += int64(len(result.Output))
+		}
 	case frame.GetTerminal() != nil:
 		result.Terminal = proto.Clone(frame.GetTerminal()).(*runnerv1.ExecTerminal)
 		stream.terminal = true
 	default:
+		stream.mu.Unlock()
 		return runnercontrol.TerminalServerFrame{}, runnercontrol.DataPlaneSession{}, errors.New("SecondBox Terminal response payload is invalid")
 	}
-	store, err := stream.service.terminalStore()
-	if err != nil {
-		return runnercontrol.TerminalServerFrame{}, runnercontrol.DataPlaneSession{}, err
-	}
-	session, err := store.RecordTerminalServerFrame(
-		context.WithoutCancel(ctx), stream.session.TenantRef, stream.session.SubjectRef,
-		stream.session.ID, result, stream.service.now().UTC(),
-	)
-	if err != nil {
-		return runnercontrol.TerminalServerFrame{}, runnercontrol.DataPlaneSession{}, fmt.Errorf(
-			"SecondBox live Terminal response recording: %w", err,
-		)
-	}
 	stream.nextRecv++
-	stream.emitted = session.InboundBytes
-	stream.recordedThrough = session.NextInboundSequence - 2
+	stream.version++
+	terminal := result.Terminal != nil
+	session := stream.session
+	stream.mu.Unlock()
+	if terminal {
+		updated, err := stream.checkpoint(context.WithoutCancel(ctx), result.Terminal)
+		if err != nil {
+			return runnercontrol.TerminalServerFrame{}, runnercontrol.DataPlaneSession{}, fmt.Errorf(
+				"SecondBox live Terminal outcome checkpoint: %w", err,
+			)
+		}
+		session = updated
+	}
 	return result, session, nil
 }
 
@@ -758,6 +822,18 @@ func (stream *SandboxTerminalStream) Close() error {
 	}
 	stream.closed = true
 	stream.detached = true
+	cancel := stream.checkpointCancel
+	done := stream.checkpointDone
+	stream.mu.Unlock()
+	if cancel != nil {
+		cancel()
+		<-done
+	}
+	checkpointContext, stopCheckpoint := context.WithTimeout(context.Background(), 5*time.Second)
+	_, checkpointErr := stream.checkpoint(checkpointContext, nil)
+	stopCheckpoint()
+	stream.mu.Lock()
+	periodicErr := stream.checkpointErr
 	detachErr := stream.stream.Send(&runnerv1.ControlPlaneToRunner{
 		Message: &runnerv1.ControlPlaneToRunner_Pty{Pty: &runnerv1.PtyFrame{
 			Fence: dataPlaneFence(stream.session), OperationId: stream.session.ID,
@@ -769,7 +845,79 @@ func (stream *SandboxTerminalStream) Close() error {
 		}},
 	})
 	stream.mu.Unlock()
-	return errors.Join(detachErr, stream.stream.Close())
+	return errors.Join(periodicErr, checkpointErr, detachErr, stream.stream.Close())
+}
+
+func (stream *SandboxTerminalStream) startCheckpointing() {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	stream.mu.Lock()
+	stream.checkpointCancel = cancel
+	stream.checkpointDone = done
+	stream.mu.Unlock()
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(stream.service.dataPlanePollInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if _, err := stream.checkpoint(ctx, nil); err != nil {
+					stream.mu.Lock()
+					if stream.checkpointErr == nil {
+						stream.checkpointErr = fmt.Errorf("SecondBox periodic Terminal checkpoint: %w", err)
+					}
+					stream.mu.Unlock()
+					return
+				}
+			}
+		}
+	}()
+}
+
+func (stream *SandboxTerminalStream) checkpoint(
+	ctx context.Context,
+	terminal *runnerv1.ExecTerminal,
+) (runnercontrol.DataPlaneSession, error) {
+	stream.checkpointMu.Lock()
+	defer stream.checkpointMu.Unlock()
+	stream.mu.Lock()
+	if terminal == nil && stream.version == stream.persistedVersion {
+		session := stream.session
+		stream.mu.Unlock()
+		return session, nil
+	}
+	credit := max(stream.session.ResponseCreditBytes, stream.credit, stream.emitted)
+	checkpoint := runnercontrol.TerminalCheckpoint{
+		AttachmentID: stream.attachmentID, NextClientSequence: stream.nextSend,
+		RequestBytes: stream.request, ResponseCredit: credit,
+		InboundBytes: stream.emitted, NextInboundSequence: stream.nextRecv + 1,
+		RecoveryAllowance: stream.replayAllowance,
+		Cancel:            stream.cancelled, Terminal: terminal,
+	}
+	version := stream.version
+	stream.mu.Unlock()
+	store, err := stream.service.terminalStore()
+	if err != nil {
+		return runnercontrol.DataPlaneSession{}, err
+	}
+	updated, err := store.CheckpointTerminal(
+		ctx, stream.session.TenantRef, stream.session.SubjectRef, stream.session.ID,
+		checkpoint, stream.service.now().UTC(),
+	)
+	if err != nil {
+		return runnercontrol.DataPlaneSession{}, err
+	}
+	stream.mu.Lock()
+	if version > stream.persistedVersion {
+		stream.persistedVersion = version
+	}
+	stream.recordedThrough = max(stream.recordedThrough, checkpoint.NextInboundSequence-2)
+	stream.session = updated
+	stream.mu.Unlock()
+	return updated, nil
 }
 
 func inputFileOpen(

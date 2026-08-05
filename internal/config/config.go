@@ -27,6 +27,7 @@ const (
 	DefaultRunnerEventPersistenceBatchSize             int64 = 16
 	DefaultRunnerEventPersistenceBatchWaitMilliseconds int64 = 2
 	DefaultDataPlaneMaximumSessionBytes                int64 = 67108864
+	DefaultIdempotencyRetentionSeconds                 int64 = 86400
 	DefaultLifecycleReconcileBatchSize                 int64 = 8
 	DefaultLifecycleReconcilePollIntervalMilliseconds  int64 = 250
 	DefaultLifecycleReconcileClaimDurationMilliseconds int64 = 30000
@@ -62,6 +63,7 @@ type Config struct {
 	DataPlanePollInterval            time.Duration
 	DataPlaneRetention               time.Duration
 	DataPlaneMaximumSessionBytes     int64
+	IdempotencyRetention             time.Duration
 	LifecycleReconcileBatchSize      int
 	LifecycleReconcilePollInterval   time.Duration
 	LifecycleReconcileClaimDuration  time.Duration
@@ -185,6 +187,10 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	idempotencyRetentionSeconds, err := optionalPositiveInt64("SECONDBOX_IDEMPOTENCY_RETENTION_SECONDS", DefaultIdempotencyRetentionSeconds)
+	if err != nil {
+		return Config{}, err
+	}
 	lifecycleReconcileBatchSize, err := optionalPositiveInt64("SECONDBOX_LIFECYCLE_RECONCILE_BATCH_SIZE", DefaultLifecycleReconcileBatchSize)
 	if err != nil {
 		return Config{}, err
@@ -303,6 +309,7 @@ func FromEnvironment() (Config, error) {
 		DataPlanePollInterval:            time.Duration(dataPlanePollMilliseconds) * time.Millisecond,
 		DataPlaneRetention:               time.Duration(dataPlaneRetentionSeconds) * time.Second,
 		DataPlaneMaximumSessionBytes:     dataPlaneMaximumSessionBytes,
+		IdempotencyRetention:             time.Duration(idempotencyRetentionSeconds) * time.Second,
 		LifecycleReconcileBatchSize:      lifecycleReconcileBatchSizeInt,
 		LifecycleReconcilePollInterval:   time.Duration(lifecycleReconcilePollMilliseconds) * time.Millisecond,
 		LifecycleReconcileClaimDuration:  time.Duration(lifecycleReconcileClaimMilliseconds) * time.Millisecond,

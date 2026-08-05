@@ -96,7 +96,7 @@ func (service *ControlPlaneService) UploadSandboxArtifact(
 		Artifact: artifact, StorageKey: storageKey, ExpectedGeneration: generation,
 		LeaseID:        leaseID,
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
-		IdempotencyEnds: now.Add(idempotencyRetention),
+		IdempotencyEnds: service.idempotencyExpiration(now),
 	}
 	staged, err := service.store.StageArtifact(ctx, publication)
 	if err != nil {
@@ -221,7 +221,7 @@ func (service *ControlPlaneService) DeleteArtifact(
 		TenantRef:  principal.TenantRef,
 		SubjectRef: principal.SubjectRef, ArtifactID: artifactID,
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
-		IdempotencyEnds: now.Add(idempotencyRetention), Now: now,
+		IdempotencyEnds: service.idempotencyExpiration(now), Now: now,
 	}); err != nil {
 		return err
 	}

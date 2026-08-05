@@ -5449,12 +5449,13 @@ func (x *PtyAttach) GetStreamWindowBytes() uint64 {
 }
 
 type PtyAttachResult struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Kind          PtyAttachResultKind    `protobuf:"varint,1,opt,name=kind,proto3,enum=secondbox.runner.v1.PtyAttachResultKind" json:"kind,omitempty"`
-	SafeDetail    string                 `protobuf:"bytes,2,opt,name=safe_detail,json=safeDetail,proto3" json:"safe_detail,omitempty"`
-	AfterSequence int64                  `protobuf:"varint,3,opt,name=after_sequence,json=afterSequence,proto3" json:"after_sequence,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Kind              PtyAttachResultKind    `protobuf:"varint,1,opt,name=kind,proto3,enum=secondbox.runner.v1.PtyAttachResultKind" json:"kind,omitempty"`
+	SafeDetail        string                 `protobuf:"bytes,2,opt,name=safe_detail,json=safeDetail,proto3" json:"safe_detail,omitempty"`
+	AfterSequence     int64                  `protobuf:"varint,3,opt,name=after_sequence,json=afterSequence,proto3" json:"after_sequence,omitempty"`
+	NextInputSequence *uint64                `protobuf:"varint,4,opt,name=next_input_sequence,json=nextInputSequence,proto3,oneof" json:"next_input_sequence,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *PtyAttachResult) Reset() {
@@ -5504,6 +5505,13 @@ func (x *PtyAttachResult) GetSafeDetail() string {
 func (x *PtyAttachResult) GetAfterSequence() int64 {
 	if x != nil {
 		return x.AfterSequence
+	}
+	return 0
+}
+
+func (x *PtyAttachResult) GetNextInputSequence() uint64 {
+	if x != nil && x.NextInputSequence != nil {
+		return *x.NextInputSequence
 	}
 	return 0
 }
@@ -8884,12 +8892,14 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\tPtyAttach\x12!\n" +
 	"\freconnect_id\x18\x01 \x01(\tR\vreconnectId\x12%\n" +
 	"\x0eafter_sequence\x18\x02 \x01(\x03R\rafterSequence\x12.\n" +
-	"\x13stream_window_bytes\x18\x03 \x01(\x04R\x11streamWindowBytes\"\x97\x01\n" +
+	"\x13stream_window_bytes\x18\x03 \x01(\x04R\x11streamWindowBytes\"\xe4\x01\n" +
 	"\x0fPtyAttachResult\x12<\n" +
 	"\x04kind\x18\x01 \x01(\x0e2(.secondbox.runner.v1.PtyAttachResultKindR\x04kind\x12\x1f\n" +
 	"\vsafe_detail\x18\x02 \x01(\tR\n" +
 	"safeDetail\x12%\n" +
-	"\x0eafter_sequence\x18\x03 \x01(\x03R\rafterSequence\"\xdc\x05\n" +
+	"\x0eafter_sequence\x18\x03 \x01(\x03R\rafterSequence\x123\n" +
+	"\x13next_input_sequence\x18\x04 \x01(\x04H\x00R\x11nextInputSequence\x88\x01\x01B\x16\n" +
+	"\x14_next_input_sequence\"\xdc\x05\n" +
 	"\bPtyFrame\x12:\n" +
 	"\x05fence\x18\x01 \x01(\v2$.secondbox.runner.v1.AssignmentFenceR\x05fence\x12!\n" +
 	"\foperation_id\x18\x02 \x01(\tR\voperationId\x12\x1b\n" +
@@ -9700,6 +9710,7 @@ func file_contracts_runner_v1_runner_proto_init() {
 		(*FileFrame_Cancel)(nil),
 		(*FileFrame_Terminal)(nil),
 	}
+	file_contracts_runner_v1_runner_proto_msgTypes[46].OneofWrappers = []any{}
 	file_contracts_runner_v1_runner_proto_msgTypes[47].OneofWrappers = []any{
 		(*PtyFrame_Input)(nil),
 		(*PtyFrame_Output)(nil),

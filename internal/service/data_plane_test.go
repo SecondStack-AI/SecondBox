@@ -137,6 +137,155 @@ func TestStreamingExecCancellationPersistsWhenLiveRouteIsUnavailable(t *testing.
 	}
 }
 
+func TestTerminalFramesDoNotSynchronouslyCheckpoint(t *testing.T) {
+	relay := &terminalCheckpointProofRelay{}
+	session := runnercontrol.DataPlaneSession{
+		ID: "terminal-session", StreamID: "terminal-stream", Kind: "terminal",
+		TenantRef: "tenant", SubjectRef: "subject", SandboxID: "sandbox",
+		AssignmentID: "assignment", InstanceID: "instance", RunnerID: "runner",
+		LeaseID: "lease", RequestID: "request", Generation: 1,
+		FencingToken: []byte("fence"), MaximumRequestBytes: 64,
+		MaximumResponseBytes: 64, StreamWindowBytes: 8,
+	}
+	wire := &queuedDataPlaneStream{receive: []*runnerv1.RunnerToControlPlane{{
+		Message: &runnerv1.RunnerToControlPlane_Pty{Pty: &runnerv1.PtyFrame{
+			Fence: dataPlaneFence(session), Correlation: dataPlaneCorrelation(session),
+			OperationId: session.ID, StreamId: session.StreamID, Sequence: 1,
+			Payload: &runnerv1.PtyFrame_Output{Output: &runnerv1.ExecOutput{
+				Channel: runnerv1.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT, Data: []byte("x"),
+			}},
+		}},
+	}}}
+	stream := &SandboxTerminalStream{
+		service: &ControlPlaneService{dataPlaneStore: relay, now: time.Now},
+		session: session, attachmentID: "attachment", stream: wire,
+		credit: 1, nextRecv: 0, recordedThrough: -1,
+	}
+	if err := stream.Send(t.Context(), runnercontrol.TerminalClientFrame{
+		Sequence: 0, Input: []byte("k"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	frame, _, err := stream.Receive(t.Context())
+	if err != nil || string(frame.Output) != "x" {
+		t.Fatalf("Terminal output = %#v, %v", frame, err)
+	}
+	if relay.checkpoints != 0 {
+		t.Fatalf("per-frame durable checkpoints = %d, want 0", relay.checkpoints)
+	}
+}
+
+func TestTerminalAttachSequenceConvergesAcrossCheckpointGap(t *testing.T) {
+	durable := runnercontrol.DataPlaneSession{State: "running", NextClientSequence: 1}
+	runnerNext := uint64(9)
+	next, err := terminalAttachNextClientSequence(durable, &runnerv1.PtyAttachResult{
+		NextInputSequence: &runnerNext,
+	})
+	if err != nil || next != 7 {
+		t.Fatalf("Runner-authoritative next client sequence = %d, %v", next, err)
+	}
+	if _, err := terminalAttachNextClientSequence(
+		durable, &runnerv1.PtyAttachResult{},
+	); !errors.Is(err, runnercontrol.ErrTerminalReplayEvicted) {
+		t.Fatalf("older Runner reattach error = %v", err)
+	}
+	pending := runnercontrol.DataPlaneSession{State: "pending", NextClientSequence: 3}
+	if next, err := terminalAttachNextClientSequence(pending, &runnerv1.PtyAttachResult{}); err != nil || next != 3 {
+		t.Fatalf("initial older Runner attach sequence = %d, %v", next, err)
+	}
+	stream := &SandboxTerminalStream{
+		service: &ControlPlaneService{now: time.Now},
+		session: runnercontrol.DataPlaneSession{
+			ID: "terminal-gap", StreamID: "stream-gap", MaximumRequestBytes: 64,
+			MaximumResponseBytes: 64, StreamWindowBytes: 8,
+		},
+		stream: &queuedDataPlaneStream{}, nextSend: next,
+		credit: 8, replayAllowance: 8,
+	}
+	if err := stream.Send(t.Context(), runnercontrol.TerminalClientFrame{
+		Sequence: next, Credit: 8,
+	}); err != nil {
+		t.Fatalf("fresh credit across checkpoint gap: %v", err)
+	}
+	if err := stream.Send(t.Context(), runnercontrol.TerminalClientFrame{
+		Sequence: next + 1, Credit: 1,
+	}); !errors.Is(err, runnercontrol.ErrDataPlaneFrameLimit) {
+		t.Fatalf("credit beyond one-window recovery allowance = %v", err)
+	}
+}
+
+func TestAttachedTerminalCheckpointsOnDataPlanePollInterval(t *testing.T) {
+	checkpointed := make(chan runnercontrol.TerminalCheckpoint, 1)
+	relay := &terminalCheckpointProofRelay{checkpointed: checkpointed}
+	stream := &SandboxTerminalStream{
+		service: &ControlPlaneService{
+			dataPlaneStore: relay, dataPlanePollInterval: time.Millisecond, now: time.Now,
+		},
+		session: runnercontrol.DataPlaneSession{
+			ID: "terminal-periodic", TenantRef: "tenant", SubjectRef: "subject",
+		},
+		attachmentID: "attachment", nextSend: 4, nextRecv: 3,
+		request: 2, credit: 8, emitted: 3, version: 1,
+	}
+	stream.startCheckpointing()
+	select {
+	case checkpoint := <-checkpointed:
+		if checkpoint.NextClientSequence != 4 || checkpoint.NextInboundSequence != 4 ||
+			checkpoint.RequestBytes != 2 || checkpoint.ResponseCredit != 8 || checkpoint.InboundBytes != 3 {
+			t.Fatalf("periodic Terminal checkpoint = %#v", checkpoint)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("periodic Terminal checkpoint did not run")
+	}
+	stream.checkpointCancel()
+	<-stream.checkpointDone
+}
+
+type queuedDataPlaneStream struct {
+	receive []*runnerv1.RunnerToControlPlane
+}
+
+func (*queuedDataPlaneStream) Send(*runnerv1.ControlPlaneToRunner) error { return nil }
+
+func (stream *queuedDataPlaneStream) Receive(context.Context) (*runnerv1.RunnerToControlPlane, error) {
+	if len(stream.receive) == 0 {
+		return nil, errors.New("SecondBox test data-plane stream is empty")
+	}
+	message := stream.receive[0]
+	stream.receive = stream.receive[1:]
+	return message, nil
+}
+
+func (*queuedDataPlaneStream) Close() error { return nil }
+
+type terminalCheckpointProofRelay struct {
+	deadlineProofRelay
+	checkpoints  int
+	checkpointed chan<- runnercontrol.TerminalCheckpoint
+}
+
+func (*terminalCheckpointProofRelay) AcquireTerminalAttachment(
+	context.Context, string, string, string, string, int64, string, time.Time,
+) (runnercontrol.DataPlaneSession, error) {
+	panic("unexpected Terminal attachment")
+}
+
+func (*terminalCheckpointProofRelay) DetachTerminalAttachment(
+	context.Context, string, string, string, string, time.Time,
+) (bool, error) {
+	panic("unexpected Terminal detach")
+}
+
+func (relay *terminalCheckpointProofRelay) CheckpointTerminal(
+	_ context.Context, _, _, _ string, checkpoint runnercontrol.TerminalCheckpoint, _ time.Time,
+) (runnercontrol.DataPlaneSession, error) {
+	relay.checkpoints++
+	if relay.checkpointed != nil {
+		relay.checkpointed <- checkpoint
+	}
+	return runnercontrol.DataPlaneSession{ID: "terminal-periodic", TenantRef: "tenant", SubjectRef: "subject"}, nil
+}
+
 type unavailableDataPlaneStream struct{}
 
 func (unavailableDataPlaneStream) Send(*runnerv1.ControlPlaneToRunner) error {

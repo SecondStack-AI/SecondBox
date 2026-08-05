@@ -290,6 +290,7 @@ test("SandboxHandle rejects a mismatched streaming session before connector muta
 test("SandboxHandle attaches a sequenced binary-safe Terminal helper", async () => {
   const sent: string[] = [];
   const received = [
+    `{"type":"terminal_attached","nextClientSequence":9}`,
     `{"type":"terminal_output","sequence":0,"dataBase64":"AAH+/w=="}`,
     `{"type":"outcome","sequence":1,"outcome":{"kind":"cancelled"}}`,
   ];
@@ -346,10 +347,10 @@ test("SandboxHandle attaches a sequenced binary-safe Terminal helper", async () 
   await terminal.sendInput(new Uint8Array([0, 1, 254, 255]));
   await terminal.cancel();
   assert.deepEqual(sent.map((payload) => JSON.parse(payload)), [
-    { type: "credit", sequence: 4, bytes: 4096 },
-    { type: "resize", sequence: 5, rows: 40, columns: 120 },
-    { type: "terminal_input", sequence: 6, dataBase64: "AAH+/w==" },
-    { type: "cancel", sequence: 7 },
+    { type: "credit", sequence: 9, bytes: 4096 },
+    { type: "resize", sequence: 10, rows: 40, columns: 120 },
+    { type: "terminal_input", sequence: 11, dataBase64: "AAH+/w==" },
+    { type: "cancel", sequence: 12 },
   ]);
 
   const output = await terminal.receive();

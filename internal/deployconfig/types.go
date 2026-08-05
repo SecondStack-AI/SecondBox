@@ -123,6 +123,7 @@ type TuningOverrides struct {
 	RunnerEventPersistenceBatchSize             *int64 `toml:"runner_event_persistence_batch_size"`
 	RunnerEventPersistenceBatchWaitMilliseconds *int64 `toml:"runner_event_persistence_batch_wait_milliseconds"`
 	DataPlaneMaximumSessionBytes                *int64 `toml:"data_plane_maximum_session_bytes"`
+	IdempotencyRetentionSeconds                 *int64 `toml:"idempotency_retention_seconds"`
 	LifecycleReconcileBatchSize                 *int64 `toml:"lifecycle_reconcile_batch_size"`
 	LifecycleReconcilePollIntervalMilliseconds  *int64 `toml:"lifecycle_reconcile_poll_interval_milliseconds"`
 	LifecycleReconcileClaimDurationMilliseconds *int64 `toml:"lifecycle_reconcile_claim_duration_milliseconds"`

@@ -21,7 +21,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
-const idempotencyRetention = 24 * time.Hour
+const defaultIdempotencyRetention = 24 * time.Hour
 
 var (
 	profileNamePattern    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,79}$`)
@@ -130,6 +130,7 @@ type ControlPlaneConfig struct {
 	DataPlaneStore        DataPlaneStore
 	LiveDataPlane         *runnercontrol.LiveDataPlaneBroker
 	DataPlanePollInterval time.Duration
+	IdempotencyRetention  time.Duration
 	PortSessionStore      runnercontrol.PortSessionStore
 	PublicBaseURL         string
 }
@@ -146,6 +147,7 @@ type ControlPlaneService struct {
 	dataPlaneStore        DataPlaneStore
 	liveDataPlane         *runnercontrol.LiveDataPlaneBroker
 	dataPlanePollInterval time.Duration
+	idempotencyRetention  time.Duration
 	portSessionStore      runnercontrol.PortSessionStore
 	publicBaseURL         string
 }
@@ -176,11 +178,15 @@ func NewControlPlaneService(config ControlPlaneConfig) (*ControlPlaneService, er
 		now:                  config.Now, newID: config.NewID, newCredentialMaterial: config.NewCredentialMaterial,
 		artifactObjectStore: config.ArtifactObjectStore,
 		dataPlaneStore:      config.DataPlaneStore, dataPlanePollInterval: config.DataPlanePollInterval,
-		liveDataPlane:    config.LiveDataPlane,
-		portSessionStore: config.PortSessionStore, publicBaseURL: config.PublicBaseURL,
+		idempotencyRetention: config.IdempotencyRetention,
+		liveDataPlane:        config.LiveDataPlane,
+		portSessionStore:     config.PortSessionStore, publicBaseURL: config.PublicBaseURL,
 	}
 	if config.DataPlaneStore != nil && config.DataPlanePollInterval <= 0 {
 		return nil, errors.New("SecondBox data-plane poll interval is required with the store")
+	}
+	if config.IdempotencyRetention < 0 {
+		return nil, errors.New("SecondBox idempotency retention must be positive")
 	}
 	if config.PortSessionStore != nil {
 		if _, err := validatedPublicBaseURL(config.PublicBaseURL); err != nil {
@@ -188,6 +194,14 @@ func NewControlPlaneService(config ControlPlaneConfig) (*ControlPlaneService, er
 		}
 	}
 	return controlPlane, nil
+}
+
+func (service *ControlPlaneService) idempotencyExpiration(now time.Time) time.Time {
+	retention := service.idempotencyRetention
+	if retention == 0 {
+		retention = defaultIdempotencyRetention
+	}
+	return now.UTC().Add(retention)
 }
 
 // NewOpaqueID returns a random, prefix-qualified public identifier.
@@ -489,7 +503,7 @@ func (service *ControlPlaneService) createSandboxOperation(
 		Principal: principal, SubjectQuota: service.defaultSubjectQuota,
 		Sandbox: sandbox, Workspace: sandbox.Workspace, Operation: operation,
 		IdempotencyKey: idempotencyKey, RequestHash: hex.EncodeToString(requestHash[:]),
-		IdempotencyEnds:   now.Add(idempotencyRetention),
+		IdempotencyEnds:   service.idempotencyExpiration(now),
 		WorkspaceEffectID: workspaceEffectID, WorkspaceCommandID: workspaceCommandID,
 		FencingToken: workspaceFence, SourceSnapshotID: request.SourceSnapshotID,
 	})
@@ -687,7 +701,7 @@ func (service *ControlPlaneService) RelocateSandbox(
 		ExportCommandID: service.newID("command"),
 		FencingToken:    []byte(service.newCredentialMaterial()), Now: now,
 		IdempotencyKey: idempotencyKey, RequestHash: hex.EncodeToString(requestHash[:]),
-		IdempotencyEnds: now.Add(idempotencyRetention), ExpectedRevision: expectedRevision,
+		IdempotencyEnds: service.idempotencyExpiration(now), ExpectedRevision: expectedRevision,
 	})
 	if err != nil {
 		return contracts.Operation{}, false, err
@@ -741,7 +755,7 @@ func (service *ControlPlaneService) setSandboxDesiredState(
 		Principal: principal, SandboxID: sandboxID, DesiredState: desiredState,
 		Operation: operation, Now: now,
 		IdempotencyKey: idempotencyKey, RequestHash: hex.EncodeToString(requestHash[:]),
-		IdempotencyEnds: now.Add(idempotencyRetention), ExpectedRevision: expectedRevision,
+		IdempotencyEnds: service.idempotencyExpiration(now), ExpectedRevision: expectedRevision,
 	})
 	if err != nil {
 		return contracts.Operation{}, err
@@ -829,7 +843,7 @@ func (service *ControlPlaneService) AcquireSandboxLease(
 		SubjectRef: principal.SubjectRef,
 		ExpiresAt:  now.Add(time.Duration(durationSeconds) * time.Second), Now: now,
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
-		IdempotencyEnds: now.Add(idempotencyRetention),
+		IdempotencyEnds: service.idempotencyExpiration(now),
 		ReplaceActive:   takeover,
 	})
 }
@@ -891,7 +905,7 @@ func (service *ControlPlaneService) RenewSandboxLease(
 		Generation: lease.Generation,
 		ExpiresAt:  now.Add(time.Duration(durationSeconds) * time.Second), Now: now,
 		IdempotencyKey: idempotencyKey, RequestHash: requestHash,
-		IdempotencyEnds: now.Add(idempotencyRetention),
+		IdempotencyEnds: service.idempotencyExpiration(now),
 	})
 }
 
@@ -929,7 +943,7 @@ func (service *ControlPlaneService) ReleaseSandboxLease(
 		SubjectRef: principal.SubjectRef,
 		Generation: lease.Generation,
 		Now:        now, IdempotencyKey: idempotencyKey, RequestHash: requestHash,
-		IdempotencyEnds: now.Add(idempotencyRetention),
+		IdempotencyEnds: service.idempotencyExpiration(now),
 	})
 }
 
@@ -1161,7 +1175,7 @@ func (service *ControlPlaneService) adminIdempotency(
 	return ports.AdminIdempotencyInput{
 		TenantRef: principal.TenantRef, Operation: operation, TargetID: targetID,
 		Key: idempotencyKey, RequestHash: requestHash,
-		Now: now.UTC(), Ends: now.UTC().Add(idempotencyRetention),
+		Now: now.UTC(), Ends: service.idempotencyExpiration(now),
 	}, nil
 }
 

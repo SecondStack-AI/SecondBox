@@ -16,12 +16,15 @@ import (
 // Runner control connection independently from streamed File messages.
 const MaximumBufferedExecBytes int64 = 64 << 20
 
+const maxSessionMessageIDs = 256
+
 var (
-	ErrHelloRequired        = errors.New("SecondBox runner control Hello is required")
-	ErrRegistrationRequired = errors.New("SecondBox runner control Registration is required")
-	ErrSequenceReordered    = errors.New("SecondBox runner control sequence is reordered")
-	ErrRunnerPrerequisites  = errors.New("SecondBox runner prerequisites failed")
-	ErrRunnerMessage        = errors.New("SecondBox runner control message is invalid")
+	ErrHelloRequired         = errors.New("SecondBox runner control Hello is required")
+	ErrRegistrationRequired  = errors.New("SecondBox runner control Registration is required")
+	ErrSequenceReordered     = errors.New("SecondBox runner control sequence is reordered")
+	ErrRunnerPrerequisites   = errors.New("SecondBox runner prerequisites failed")
+	ErrRunnerMessage         = errors.New("SecondBox runner control message is invalid")
+	ErrSessionMessageIDLimit = errors.New("SecondBox runner control message ID dedupe limit exceeded")
 )
 
 type EventKind string
@@ -148,6 +151,9 @@ func (session *Session) Accept(message *runnerv1.RunnerToControlPlane) (Event, e
 			Kind: EventDuplicate, RunnerID: session.config.AuthenticatedRunnerID,
 			ConnectionID: session.config.ConnectionID, Message: message,
 		}, nil
+	}
+	if len(session.messageIDs) >= maxSessionMessageIDs {
+		return Event{}, ErrSessionMessageIDLimit
 	}
 	if sequence <= session.lastSequence {
 		return Event{}, ErrSequenceReordered
@@ -343,10 +349,40 @@ func (session *Session) acceptRunnerDataPlaneFrame(
 			ConnectionID: session.config.ConnectionID, Message: message,
 		}, nil
 	}
+	session.releaseTerminalDataPlaneState(message, key)
 	return Event{
 		Kind: kind, RunnerID: session.config.AuthenticatedRunnerID,
 		ConnectionID: session.config.ConnectionID, Message: message,
 	}, nil
+}
+
+func (session *Session) releaseTerminalDataPlaneState(
+	message *runnerv1.RunnerToControlPlane,
+	inboundKey string,
+) {
+	terminal := false
+	switch {
+	case message.GetExec() != nil:
+		terminal = message.GetExec().GetTerminal() != nil || message.GetExec().GetBufferedResult() != nil
+	case message.GetFile() != nil:
+		terminal = message.GetFile().GetTerminal() != nil
+	case message.GetPty() != nil:
+		terminal = message.GetPty().GetTerminal() != nil
+	case message.GetPort() != nil:
+		terminal = message.GetPort().GetTerminal() != nil
+	case message.GetWorkspaceTransfer() != nil:
+		terminal = message.GetWorkspaceTransfer().GetResult() != nil ||
+			message.GetWorkspaceTransfer().GetCancel() != nil
+	}
+	if terminal {
+		delete(session.inboundDataPlaneStreams, inboundKey)
+		delete(session.outboundStreams, inboundKey)
+		if frame := message.GetPty(); frame != nil {
+			delete(session.outboundStreams, dataPlaneStreamKey(
+				"exec", frame.Fence, frame.OperationId, frame.StreamId,
+			))
+		}
+	}
 }
 
 // ValidateOutboundDataPlaneFrame gates an outbound data-plane frame against negotiated

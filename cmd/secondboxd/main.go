@@ -125,8 +125,9 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		NewCredentialMaterial: service.NewCredentialMaterial,
 		ArtifactObjectStore:   artifactObjects,
 		DataPlaneStore:        dataPlaneStore, DataPlanePollInterval: processConfig.DataPlanePollInterval,
-		LiveDataPlane:    liveDataPlane,
-		PortSessionStore: dataPlaneStore, PublicBaseURL: processConfig.PublicBaseURL,
+		IdempotencyRetention: processConfig.IdempotencyRetention,
+		LiveDataPlane:        liveDataPlane,
+		PortSessionStore:     dataPlaneStore, PublicBaseURL: processConfig.PublicBaseURL,
 	})
 	if err != nil {
 		return err
@@ -286,6 +287,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	snapshotRetentionErrors := make(chan error, 1)
 	garbageCollectionErrors := make(chan error, 1)
 	dataPlaneErrors := make(chan error, 1)
+	sessionAccountingErrors := make(chan error, 1)
 	workListenerErrors := make(chan error, 1)
 	go func() {
 		logger.Info("SecondBox listening", "address", processConfig.ListenAddress)
@@ -350,6 +352,12 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		)
 	}()
 	go func() {
+		sessionAccountingErrors <- runSessionAccountingSweeper(
+			processContext, controlPlaneStore, processConfig.DataPlanePollInterval,
+			processConfig.IdempotencyRetention,
+		)
+	}()
+	go func() {
 		workListenerErrors <- workListener.Run(processContext)
 	}()
 	var serveErr error
@@ -358,6 +366,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	snapshotRetentionExited := false
 	garbageCollectionExited := false
 	dataPlaneExited := false
+	sessionAccountingExited := false
 	workListenerExited := false
 	select {
 	case <-processContext.Done():
@@ -404,6 +413,13 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		} else if processContext.Err() == nil {
 			serveErr = errors.New("SecondBox data-plane sweeper stopped unexpectedly")
 		}
+	case sessionAccountingErr := <-sessionAccountingErrors:
+		sessionAccountingExited = true
+		if sessionAccountingErr != nil {
+			serveErr = sessionAccountingErr
+		} else if processContext.Err() == nil {
+			serveErr = errors.New("SecondBox session-accounting sweeper stopped unexpectedly")
+		}
 	case workListenerErr := <-workListenerErrors:
 		workListenerExited = true
 		if workListenerErr != nil {
@@ -436,6 +452,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		}
 	}
 	var dataPlaneShutdownErr error
+	var sessionAccountingShutdownErr error
 	var snapshotRetentionShutdownErr error
 	if !snapshotRetentionExited {
 		select {
@@ -465,6 +482,15 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 			dataPlaneShutdownErr = fmt.Errorf("SecondBox data-plane sweeper shutdown: %w", shutdownContext.Err())
 		}
 	}
+	if !sessionAccountingExited {
+		select {
+		case sessionAccountingShutdownErr = <-sessionAccountingErrors:
+		case <-shutdownContext.Done():
+			sessionAccountingShutdownErr = fmt.Errorf(
+				"SecondBox session-accounting sweeper shutdown: %w", shutdownContext.Err(),
+			)
+		}
+	}
 	var workListenerShutdownErr error
 	if !workListenerExited {
 		select {
@@ -480,6 +506,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		serveErr, httpShutdownErr, grpcShutdownErr, lifecycleShutdownErr,
 		assignmentShutdownErr, snapshotRetentionShutdownErr, garbageCollectionShutdownErr,
 		dataPlaneShutdownErr, workListenerShutdownErr,
+		sessionAccountingShutdownErr,
 	); err != nil {
 		return fmt.Errorf("SecondBox coordinated server shutdown: %w", err)
 	}
@@ -512,6 +539,35 @@ func runDataPlaneSweeper(
 			return fmt.Errorf("SecondBox data-plane sweep failed: %w", err)
 		}
 		if found {
+			continue
+		}
+		timer := time.NewTimer(pollInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil
+		case <-timer.C:
+		}
+	}
+}
+
+func runSessionAccountingSweeper(
+	ctx context.Context,
+	store *store.PostgresControlPlaneStore,
+	pollInterval time.Duration,
+	retention time.Duration,
+) error {
+	for {
+		deleted, err := store.SweepSessionAccounting(ctx, service.SystemClock(), retention, 100)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("SecondBox session-accounting sweep failed: %w", err)
+		}
+		if deleted == 100 {
 			continue
 		}
 		timer := time.NewTimer(pollInterval)

@@ -171,19 +171,32 @@ func (apiHandler *handler) connectSandboxTerminal(writer http.ResponseWriter, re
 		apiHandler.writeError(writer, request, err)
 		return
 	}
-	defer stream.Close()
 	upgrader := websocket.Upgrader{
 		Subprotocols: []string{terminalSubprotocol},
 		CheckOrigin:  sameWebSocketOrigin,
 	}
 	connection, err := upgrader.Upgrade(writer, request, nil)
 	if err != nil {
-		apiHandler.logger.ErrorContext(request.Context(), "SecondBox Terminal WebSocket upgrade failed", "error", err)
+		apiHandler.logger.ErrorContext(
+			request.Context(), "SecondBox Terminal WebSocket upgrade failed",
+			"error", errors.Join(err, stream.Close()),
+		)
 		return
 	}
 	defer connection.Close()
 	connection.SetReadLimit(apiHandler.maximumDataPlaneBodyBytes)
-	_, err = apiHandler.serveSandboxTerminal(request, connection, session, stream)
+	if err := connection.WriteJSON(struct {
+		Type               string `json:"type"`
+		NextClientSequence int64  `json:"nextClientSequence"`
+	}{Type: "terminal_attached", NextClientSequence: stream.NextClientSequence()}); err != nil {
+		apiHandler.logger.InfoContext(
+			request.Context(), "SecondBox Terminal WebSocket attach response failed",
+			"error", errors.Join(err, stream.Close()), "session_id", session.ID,
+		)
+		return
+	}
+	_, serveErr := apiHandler.serveSandboxTerminal(request, connection, session, stream)
+	err = errors.Join(serveErr, stream.Close())
 	if err != nil {
 		apiHandler.logger.InfoContext(
 			request.Context(), "SecondBox Terminal WebSocket closed",
