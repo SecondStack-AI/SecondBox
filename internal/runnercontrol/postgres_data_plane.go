@@ -294,7 +294,7 @@ func (store *PostgresDataPlaneStore) AdmitDataPlane(
 	if input.Kind == "file" && input.FileOpen != nil &&
 		input.FileOpen.Operation == runnerv1.FileOperation_FILE_OPERATION_READ {
 		if input.MaximumResponseBytes == 0 {
-			input.MaximumResponseBytes = policy.MaximumTransferBytes
+			input.MaximumResponseBytes = min(policy.MaximumTransferBytes, store.maximumSessionBytes)
 		}
 		input.FileOpen = proto.Clone(input.FileOpen).(*runnerv1.FileOpen)
 		input.FileOpen.ExpectedSize = uint64(input.MaximumResponseBytes)

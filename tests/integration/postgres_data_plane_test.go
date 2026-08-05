@@ -606,6 +606,54 @@ func TestPostgresDirectFileAndTerminalAdmissionsAreDurableAndPayloadFree(t *test
 	}
 }
 
+func TestPostgresFileReadCapsProfileTransferLimitToSessionLimit(t *testing.T) {
+	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
+	admin := fixtureAdmin(t, controlPlane)
+	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "file-read-session-limit")
+	profile := createGrantedProfile(t, controlPlane, databaseStore, admin, account, "profile-file-read-session-limit")
+	principal := authenticateCredential(t, controlPlane, credential)
+	sandbox, _, err := controlPlane.CreateSandbox(
+		t.Context(), principal, "file-read-session-limit-create",
+		contracts.CreateSandboxRequest{Profile: profile.Name, Metadata: map[string]string{}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 5, 2, 0, 0, 0, time.UTC)
+	seedDataPlaneReadyAssignment(t, sandbox, now)
+	const maximumSessionBytes int64 = 4 << 20
+	relay, err := runnercontrol.NewPostgresDataPlaneStore(t.Context(), runnercontrol.PostgresDataPlaneStoreConfig{
+		DatabaseURL: integrationDatabaseURL,
+		Retention:   time.Hour, MaximumSessionBytes: maximumSessionBytes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(relay.Close)
+	session, replayed, err := relay.AdmitDataPlane(t.Context(), runnercontrol.DataPlaneAdmission{
+		ID:        "dps_file_read_session_limit_" + sandbox.ID,
+		StreamID:  "stream_file_read_session_limit_" + sandbox.ID,
+		TenantRef: principal.TenantRef, SandboxID: sandbox.ID,
+		SubjectRef: principal.SubjectRef, RequestID: "request-file-read-session-limit",
+		Generation: sandbox.Generation, Kind: "file", Operation: "read",
+		RequestHash: "file-read-session-limit-hash", DeadlineAt: now.Add(30 * time.Second),
+		FileOpen: &runnerv1.FileOpen{
+			Operation:             runnerv1.FileOperation_FILE_OPERATION_READ,
+			WorkspaceRelativePath: "notes/smoke.txt",
+		},
+		Request: map[string]any{"path": "notes/smoke.txt"}, Now: now,
+	})
+	if err != nil || replayed {
+		t.Fatalf("File read admission = %#v, replayed=%t, error=%v", session, replayed, err)
+	}
+	if session.MaximumResponseBytes != maximumSessionBytes {
+		t.Fatalf(
+			"File read response limit = %d; want %d",
+			session.MaximumResponseBytes, maximumSessionBytes,
+		)
+	}
+}
+
 func TestPostgresLiveStreamingExecTerminalOutcomes(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
 	admin := fixtureAdmin(t, controlPlane)
