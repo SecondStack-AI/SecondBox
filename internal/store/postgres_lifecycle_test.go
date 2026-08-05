@@ -9,6 +9,59 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+func TestPostgresMarkReadyStartsNewIdleWindow(t *testing.T) {
+	controlPlaneStore := openStoreTest(t)
+	previousActivity := time.Date(2026, 8, 5, 1, 0, 0, 0, time.UTC)
+	readyAt := previousActivity.Add(15 * time.Minute)
+	if _, err := controlPlaneStore.pool.Exec(t.Context(), `
+		INSERT INTO secondbox.workspaces (
+			id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,
+			logical_capacity_bytes,generation,mutation_kind,mutation_id,
+			mutation_effect_id,mutation_operation_id,mutation_expected_generation,
+			mutation_target_generation,mutation_state,local_receipt_json,
+			created_at,updated_at
+		) VALUES (
+			'workspace-mark-ready-idle','tenant','subject','sandbox-mark-ready-idle',
+			'runner-home','ready',1048576,2,'','','','',NULL,NULL,'','{}',$1,$1
+		);
+		INSERT INTO secondbox.sandboxes (
+			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
+			generation,workspace_id,current_instance_id,metadata_json,
+			compatibility_summary_json,last_activity_at,reconcile_owner,
+			reconcile_claim_expires_at,revision,created_at,updated_at
+		) VALUES (
+			'sandbox-mark-ready-idle','tenant','subject','profile','revision','starting','running',
+			2,'workspace-mark-ready-idle','instance-mark-ready-idle','{}','{}',$1,
+			'worker-mark-ready-idle',$2,7,$1,$1
+		)`,
+		pgx.QueryExecModeSimpleProtocol,
+		previousActivity,
+		readyAt.Add(time.Minute),
+	); err != nil {
+		t.Fatal(err)
+	}
+	claim := ports.LifecycleReconcileClaim{
+		SandboxID: "sandbox-mark-ready-idle", ObservedState: contracts.SandboxStateStarting,
+		DesiredState: contracts.SandboxDesiredStateRunning,
+		WorkerID:     "worker-mark-ready-idle", Revision: 7,
+	}
+	if err := controlPlaneStore.ApplyLifecycleAction(
+		t.Context(), claim, "mark_ready", "", readyAt, readyAt.Add(time.Minute),
+	); err != nil {
+		t.Fatal(err)
+	}
+	var lastActivityAt time.Time
+	if err := controlPlaneStore.pool.QueryRow(t.Context(), `
+		SELECT last_activity_at FROM secondbox.sandboxes
+		WHERE id='sandbox-mark-ready-idle'`,
+	).Scan(&lastActivityAt); err != nil {
+		t.Fatal(err)
+	}
+	if !lastActivityAt.Equal(readyAt) {
+		t.Fatalf("mark-ready last activity = %s, want %s", lastActivityAt, readyAt)
+	}
+}
+
 func TestPostgresLifecycleClaimRequiresExplicitIntentAfterTerminalFailure(t *testing.T) {
 	controlPlaneStore := openStoreTest(t)
 	now := time.Date(2026, 7, 29, 19, 0, 0, 0, time.UTC)

@@ -3568,7 +3568,7 @@ func projectReadySandbox(
 		UPDATE secondbox.sandboxes
 		SET state='ready',lifecycle_action='mark_ready',
 		    next_reconcile_at=$4,reconcile_owner='',reconcile_claim_expires_at=NULL,
-		    last_activity_at=COALESCE(last_activity_at,$4),
+		    last_activity_at=$4,
 		    revision=revision+1,updated_at=$4
 		WHERE id=$1 AND generation=$2 AND current_instance_id=$3
 		  AND state='starting' AND desired_state='running'`,

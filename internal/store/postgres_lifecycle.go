@@ -468,7 +468,7 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 		    END,
 		    current_instance_id=CASE WHEN $2='finish_stop' THEN '' ELSE current_instance_id END,
 		    generation=CASE WHEN $2='finish_stop' THEN generation+1 ELSE generation END,
-		    last_activity_at=CASE WHEN $2='mark_ready' THEN COALESCE(last_activity_at,$5) ELSE last_activity_at END,
+		    last_activity_at=CASE WHEN $2='mark_ready' THEN $5 ELSE last_activity_at END,
 		    revision=revision+1,updated_at=$5
 		WHERE id=$6 AND reconcile_owner=$7 AND revision=$8`,
 		nextState, action, terminationReason, nextReconcileAt.UTC(),

@@ -2080,6 +2080,14 @@ func TestReadyAssignmentRecordsInitialGuestHeartbeatEvidence(t *testing.T) {
 	store := openRunnerControlDatabase(t)
 	now := time.Date(2026, 7, 29, 20, 45, 0, 0, time.UTC)
 	fence := seedStartingAssignment(t, store, "ready-evidence", "starting", now)
+	if _, err := store.pool.Exec(t.Context(), `
+		UPDATE secondbox.sandboxes SET last_activity_at=$2
+		WHERE id=$1`,
+		fence.SandboxId,
+		now.Add(-time.Hour),
+	); err != nil {
+		t.Fatal(err)
+	}
 	insertDeliveredAssignmentCommand(
 		t,
 		store,
@@ -2125,12 +2133,14 @@ func TestReadyAssignmentRecordsInitialGuestHeartbeatEvidence(t *testing.T) {
 		sandboxState, lifecycleAction               string
 		operationState, reconcileOwner              string
 		readyAt, heartbeatAt, nextReconcileAt       time.Time
+		lastActivityAt                              time.Time
 		completedAt, readyProjectedAt               time.Time
 	)
 	if err := store.pool.QueryRow(t.Context(), `
 		SELECT instance.state,instance.guest_liveness,instance.ready_at,
 		       instance.guest_heartbeat_at,workspace.mutation_kind,command.state,
 		       sandbox.state,sandbox.lifecycle_action,sandbox.next_reconcile_at,
+		       sandbox.last_activity_at,
 		       sandbox.reconcile_owner,operation.state,operation.completed_at,
 		       timing.observed_at
 		FROM secondbox.instances AS instance
@@ -2155,6 +2165,7 @@ func TestReadyAssignmentRecordsInitialGuestHeartbeatEvidence(t *testing.T) {
 		&sandboxState,
 		&lifecycleAction,
 		&nextReconcileAt,
+		&lastActivityAt,
 		&reconcileOwner,
 		&operationState,
 		&completedAt,
@@ -2171,12 +2182,13 @@ func TestReadyAssignmentRecordsInitialGuestHeartbeatEvidence(t *testing.T) {
 		sandboxState != "ready" ||
 		lifecycleAction != "mark_ready" ||
 		!nextReconcileAt.Equal(resultAt) ||
+		!lastActivityAt.Equal(resultAt) ||
 		reconcileOwner != "" ||
 		operationState != "succeeded" ||
 		!completedAt.Equal(resultAt) ||
 		!readyProjectedAt.Equal(resultAt) {
 		t.Fatalf(
-			"ready evidence instance=%q/%q readyAt=%s heartbeatAt=%s mutation=%q command=%q Sandbox=%q action=%q next=%s owner=%q Operation=%q completed=%s projected=%s",
+			"ready evidence instance=%q/%q readyAt=%s heartbeatAt=%s mutation=%q command=%q Sandbox=%q action=%q next=%s lastActivity=%s owner=%q Operation=%q completed=%s projected=%s",
 			state,
 			liveness,
 			readyAt,
@@ -2186,6 +2198,7 @@ func TestReadyAssignmentRecordsInitialGuestHeartbeatEvidence(t *testing.T) {
 			sandboxState,
 			lifecycleAction,
 			nextReconcileAt,
+			lastActivityAt,
 			reconcileOwner,
 			operationState,
 			completedAt,
