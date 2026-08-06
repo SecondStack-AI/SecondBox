@@ -77,6 +77,11 @@ func Apply(ctx context.Context, databaseURL string) (resultErr error) {
 	if schemaExists && !ledgerExists {
 		return errors.New("SecondBox PostgreSQL migration ledger is missing from an existing schema")
 	}
+	if ledgerExists {
+		if err := repairLedgerFenceVersionCollision(ctx, connection, lineage); err != nil {
+			return err
+		}
+	}
 	appliedCount, err := validateRecordedMigrationPrefix(ctx, connection, lineage)
 	if err != nil {
 		return err
@@ -123,15 +128,67 @@ func readEmbeddedMigrations() ([]migration, error) {
 	sort.Slice(lineage, func(left, right int) bool {
 		return lineage[left].version < lineage[right].version
 	})
-	if len(lineage) == 0 || lineage[0].version != "0001_secondbox" {
-		return nil, errors.New("SecondBox PostgreSQL migration lineage has no canonical 0001 baseline")
-	}
-	for index := range lineage {
-		if index != 0 && lineage[index-1].version >= lineage[index].version {
-			return nil, errors.New("SecondBox PostgreSQL migration versions are not strictly ordered")
-		}
+	if err := validateMigrationLineage(lineage); err != nil {
+		return nil, err
 	}
 	return lineage, nil
+}
+
+// validateMigrationLineage checks a version-sorted lineage: it must start at
+// the canonical baseline, be strictly ordered, and use each 4-digit numeric
+// prefix exactly once so positional ledger validation has a single ordering.
+func validateMigrationLineage(lineage []migration) error {
+	if len(lineage) == 0 || lineage[0].version != "0001_secondbox" {
+		return errors.New("SecondBox PostgreSQL migration lineage has no canonical 0001 baseline")
+	}
+	for index := range lineage {
+		if index == 0 {
+			continue
+		}
+		if lineage[index-1].version >= lineage[index].version {
+			return errors.New("SecondBox PostgreSQL migration versions are not strictly ordered")
+		}
+		if lineage[index-1].version[:4] == lineage[index].version[:4] {
+			return fmt.Errorf(
+				"SecondBox PostgreSQL migration numeric prefix %s is not unique: %s and %s",
+				lineage[index].version[:4],
+				lineage[index-1].version,
+				lineage[index].version,
+			)
+		}
+	}
+	return nil
+}
+
+type recordedMigration struct {
+	version  string
+	checksum string
+}
+
+func readRecordedMigrations(
+	ctx context.Context,
+	connection *pgx.Conn,
+) ([]recordedMigration, error) {
+	rows, err := connection.Query(ctx, `
+		SELECT version,checksum_sha256
+		FROM secondbox.schema_migrations
+		ORDER BY version,applied_at,checksum_sha256`)
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox PostgreSQL migration ledger read failed: %w", err)
+	}
+	defer rows.Close()
+	var recorded []recordedMigration
+	for rows.Next() {
+		var item recordedMigration
+		if err := rows.Scan(&item.version, &item.checksum); err != nil {
+			return nil, fmt.Errorf("SecondBox PostgreSQL migration ledger scan failed: %w", err)
+		}
+		recorded = append(recorded, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("SecondBox PostgreSQL migration ledger iteration failed: %w", err)
+	}
+	return recorded, nil
 }
 
 func validateRecordedMigrationPrefix(
@@ -146,29 +203,19 @@ func validateRecordedMigrationPrefix(
 	if !ledgerExists {
 		return 0, nil
 	}
-	rows, err := connection.Query(ctx, `
-		SELECT version,checksum_sha256
-		FROM secondbox.schema_migrations
-		ORDER BY version,applied_at,checksum_sha256`)
+	recorded, err := readRecordedMigrations(ctx, connection)
 	if err != nil {
-		return 0, fmt.Errorf("SecondBox PostgreSQL migration ledger read failed: %w", err)
+		return 0, err
 	}
-	defer rows.Close()
-	type recordedMigration struct {
-		version  string
-		checksum string
-	}
-	recorded := make([]recordedMigration, 0, len(lineage))
-	for rows.Next() {
-		var item recordedMigration
-		if err := rows.Scan(&item.version, &item.checksum); err != nil {
-			return 0, fmt.Errorf("SecondBox PostgreSQL migration ledger scan failed: %w", err)
-		}
-		recorded = append(recorded, item)
-	}
-	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("SecondBox PostgreSQL migration ledger iteration failed: %w", err)
-	}
+	return recordedMigrationPrefixLength(recorded, lineage)
+}
+
+// recordedMigrationPrefixLength requires the recorded ledger, sorted by
+// version, to be an exact positional prefix of the embedded lineage.
+func recordedMigrationPrefixLength(
+	recorded []recordedMigration,
+	lineage []migration,
+) (int, error) {
 	if len(recorded) > len(lineage) {
 		return 0, fmt.Errorf(
 			"SecondBox PostgreSQL migration ledger is ahead of embedded lineage: recorded=%d embedded=%d",
@@ -196,6 +243,106 @@ func validateRecordedMigrationPrefix(
 		}
 	}
 	return len(recorded), nil
+}
+
+const (
+	fenceCommandKindVersion          = "0013_lifecycle_fence_command_kind"
+	fenceCommandKindCollisionVersion = "0010_lifecycle_fence_command_kind"
+)
+
+// repairLedgerFenceVersionCollision reconciles the two published lineage
+// orderings of the lifecycle fence command-kind migration. The v0.2.2 release
+// embedded its content as 0010_lifecycle_fence_command_kind, which sorts
+// before three migrations already shipped in v0.2.0
+// (0010_lifecycle_hot_path_indexes, 0011_session_accounting_retention,
+// 0012_proxied_port_transport); every other release orders the same content
+// last as 0013_lifecycle_fence_command_kind. Databases created by v0.2.2
+// therefore recorded the fence version at ledger position 9 and would fail
+// positional prefix validation forever. When the recorded row carries the
+// exact embedded content checksum and renaming it yields an exact prefix of
+// the embedded lineage, the row is renamed in place; nothing is re-executed.
+func repairLedgerFenceVersionCollision(
+	ctx context.Context,
+	connection *pgx.Conn,
+	lineage []migration,
+) error {
+	recorded, err := readRecordedMigrations(ctx, connection)
+	if err != nil {
+		return err
+	}
+	collisionIndex := -1
+	for index, item := range recorded {
+		if item.version == fenceCommandKindCollisionVersion {
+			collisionIndex = index
+			break
+		}
+	}
+	if collisionIndex == -1 {
+		return nil
+	}
+	embeddedChecksum := ""
+	for _, item := range lineage {
+		if item.version == fenceCommandKindVersion {
+			embeddedChecksum = item.sha256
+			break
+		}
+	}
+	if embeddedChecksum == "" {
+		return fmt.Errorf(
+			"SecondBox PostgreSQL migration lineage is missing %s while its ledger repair is active",
+			fenceCommandKindVersion,
+		)
+	}
+	if recorded[collisionIndex].checksum != embeddedChecksum {
+		return fmt.Errorf(
+			"SecondBox PostgreSQL migration ledger row %s carries checksum %s, not the embedded %s content %s; refusing to rename an unrecognized row",
+			fenceCommandKindCollisionVersion,
+			recorded[collisionIndex].checksum,
+			fenceCommandKindVersion,
+			embeddedChecksum,
+		)
+	}
+	renamed := make([]recordedMigration, len(recorded))
+	copy(renamed, recorded)
+	renamed[collisionIndex].version = fenceCommandKindVersion
+	sort.Slice(renamed, func(left, right int) bool {
+		return renamed[left].version < renamed[right].version
+	})
+	if _, err := recordedMigrationPrefixLength(renamed, lineage); err != nil {
+		return fmt.Errorf(
+			"SecondBox PostgreSQL migration ledger recorded %s ahead of migrations that precede it in the embedded lineage; run the release binary that recorded it to completion before upgrading: %w",
+			fenceCommandKindCollisionVersion,
+			err,
+		)
+	}
+	transaction, err := connection.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf(
+			"SecondBox PostgreSQL migration ledger repair transaction failed: %w",
+			err,
+		)
+	}
+	defer transaction.Rollback(ctx)
+	if _, err := transaction.Exec(ctx, `
+		UPDATE secondbox.schema_migrations
+		SET version=$1
+		WHERE version=$2 AND checksum_sha256=$3`,
+		fenceCommandKindVersion,
+		fenceCommandKindCollisionVersion,
+		embeddedChecksum,
+	); err != nil {
+		return fmt.Errorf(
+			"SecondBox PostgreSQL migration ledger repair update failed: %w",
+			err,
+		)
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return fmt.Errorf(
+			"SecondBox PostgreSQL migration ledger repair commit failed: %w",
+			err,
+		)
+	}
+	return nil
 }
 
 func migrationAuthorityState(
