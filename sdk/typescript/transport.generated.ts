@@ -327,7 +327,7 @@ export interface OperationStageTiming {
   readonly cumulativeMilliseconds: number;
   readonly elapsedMilliseconds: number;
   readonly observedAt: Timestamp;
-  readonly stage: "durable_admission" | "workspace_ready" | "placement_ready" | "startup_dispatched" | "ready_projected";
+  readonly stage: "durable_admission" | "lifecycle_pickup_notify" | "lifecycle_pickup_deadline" | "lifecycle_pickup_immediate" | "workspace_ready" | "placement_reconcile_started" | "placement_effect_started" | "placement_plan_ready" | "placement_schedule_started" | "placement_attempt_started" | "placement_sandbox_locked" | "placement_assignment_checked" | "placement_candidates_locked" | "placement_candidate_selected" | "placement_ready" | "startup_dispatched" | "ready_projected" | "teardown_drain_committed" | "teardown_fence_dispatched" | "teardown_fence_acknowledged" | "teardown_generation_advanced" | "teardown_stop_committed" | "teardown_workspace_delete_dispatched" | "teardown_finalized";
 }
 
 export type OperationState = "pending" | "running" | "succeeded" | "failed" | "cancelled";

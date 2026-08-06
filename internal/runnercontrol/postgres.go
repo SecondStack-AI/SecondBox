@@ -1287,6 +1287,15 @@ func recordLocalWorkspaceDeleteResult(
 		); err != nil {
 			return fmt.Errorf("SecondBox runner Workspace delete Sandbox finalization: %w", err)
 		}
+		// Recorded before the Operations are completed: once the delete
+		// Operation leaves ('pending','running') it no longer matches the
+		// in-flight predicate that selects it for attribution.
+		if err := lifecycleprojection.RecordTeardownStage(
+			ctx, tx, result.SandboxId,
+			lifecycleprojection.StageTeardownFinalized, now,
+		); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE secondbox.operations
 			SET state='succeeded',started_at=COALESCE(started_at,$2),
@@ -1567,7 +1576,10 @@ func recordLocalGenerationAdvanceResult(
 	); err != nil {
 		return fmt.Errorf("SecondBox runner generation-advance reconciliation wake: %w", err)
 	}
-	return nil
+	return lifecycleprojection.RecordTeardownStage(
+		ctx, tx, result.SandboxId,
+		lifecycleprojection.StageTeardownGenerationAdvanced, now,
+	)
 }
 
 func recordLocalWorkspaceReconciliation(
@@ -4008,7 +4020,14 @@ func recordFenceEvent(
 	); err != nil {
 		return fmt.Errorf("SecondBox runner stop generation-advance mutation update: %w", err)
 	}
-	return nil
+	// This transaction proves the Instance is fenced and queues the generation
+	// advance, but it deliberately leaves secondbox.sandboxes untouched, so it
+	// emits no lifecycle wakeup. Attributing it separately from the advance
+	// acknowledgement is what makes that gap measurable.
+	return lifecycleprojection.RecordTeardownStage(
+		ctx, tx, result.Fence.SandboxId,
+		lifecycleprojection.StageTeardownFenceAcknowledged, now,
+	)
 }
 
 func acknowledgeRedundantFenceResult(

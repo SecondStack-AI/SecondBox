@@ -151,6 +151,46 @@ starts when that specific item begins processing. Claim acquisition changes
 only the private owner and expiry fence, so it does not create a public Sandbox
 revision or activity update.
 
+## Teardown attribution
+
+Drain, stop, and delete Operations carry their own ordered milestones, written
+by the transactions that establish each fact and read through the same
+Operation timing contract:
+
+| Milestone | Boundary |
+|---|---|
+| `durable_admission` | The lifecycle intent and its Operation row committed. |
+| `lifecycle_pickup_notify` | The lifecycle worker first claimed the Sandbox after a PostgreSQL commit notification. |
+| `lifecycle_pickup_deadline` | The lifecycle worker first claimed the Sandbox only after its bounded recovery poll interval elapsed. |
+| `lifecycle_pickup_immediate` | The lifecycle worker claimed the Sandbox without waiting, draining work it was already processing. |
+| `teardown_drain_committed` | The drain transition committed. |
+| `teardown_fence_dispatched` | The stop effect committed and queued the Fence command. |
+| `teardown_fence_acknowledged` | The runner's Fence result was persisted and the generation advance queued. |
+| `teardown_generation_advanced` | The runner's Workspace generation-advance receipt was persisted. |
+| `teardown_stop_committed` | The finish-stop transition committed and advanced the durable generation. |
+| `teardown_workspace_delete_dispatched` | The delete effect committed and queued the Workspace delete command. |
+| `teardown_finalized` | The Workspace delete receipt was persisted and the Sandbox became `deleted`. |
+
+Exactly one pickup milestone exists per Operation, so its name is the wake
+trigger of that Operation's first claim. Later hops are read from the intervals
+between the teardown milestones.
+
+`sandboxes_notify_due` only emits a lifecycle wakeup when a committed
+`next_reconcile_at` is at or before the commit's own clock. Two teardown
+transitions leave their successor decision immediately available and still
+schedule it one recovery poll interval away, so no notification is emitted and
+the successor waits:
+
+- `teardown_drain_committed` to `teardown_fence_dispatched`
+- `teardown_stop_committed` to `teardown_workspace_delete_dispatched`
+
+At the default 250 ms interval a delete of a running Sandbox therefore pays
+500 ms that no external work occupies. The runner-evidence transitions do move
+the Sandbox due — `teardown_generation_advanced` is followed by a notified
+pickup — so the gap is specific to the transitions the control plane commits
+for itself. `tests/integration/teardown_attribution_test.go` asserts both the
+complete milestone coverage and this wake behaviour.
+
 ## Running it
 
 The benchmark reuses the qualified artifact bundle, trust anchor, and Workspace

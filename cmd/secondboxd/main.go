@@ -595,8 +595,11 @@ func runLifecycleReconciler(
 	reconciler lifecycle.Reconciler,
 	wakeups <-chan struct{},
 ) error {
+	// The first pass after startup has waited for nothing, so it is attributed
+	// as an immediate re-claim exactly like a drain-until-empty pass.
+	wakeTrigger := ports.LifecycleWakeTriggerImmediate
 	for {
-		found, err := reconciler.RunBatch(ctx, service.SystemClock)
+		found, err := reconciler.RunBatch(ctx, service.SystemClock, wakeTrigger)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
@@ -609,15 +612,22 @@ func runLifecycleReconciler(
 			if errors.Is(err, ports.ErrRevisionConflict) ||
 				errors.Is(err, ports.ErrSerializationContention) ||
 				errors.Is(err, ports.ErrGenerationFenced) {
+				wakeTrigger = ports.LifecycleWakeTriggerImmediate
 				continue
 			}
 			return fmt.Errorf("SecondBox lifecycle reconciliation failed: %w", err)
 		}
 		if found {
+			wakeTrigger = ports.LifecycleWakeTriggerImmediate
 			continue
 		}
-		if !waitForWork(ctx, reconciler.PollInterval, wakeups) {
+		notified, running := waitForWork(ctx, reconciler.PollInterval, wakeups)
+		if !running {
 			return nil
+		}
+		wakeTrigger = ports.LifecycleWakeTriggerDeadline
+		if notified {
+			wakeTrigger = ports.LifecycleWakeTriggerNotify
 		}
 	}
 }
@@ -642,26 +652,30 @@ func runAssignmentReconciler(
 		if found {
 			continue
 		}
-		if !waitForWork(ctx, worker.PollInterval, wakeups) {
+		if _, running := waitForWork(ctx, worker.PollInterval, wakeups); !running {
 			return nil
 		}
 	}
 }
 
+// waitForWork blocks until a commit notification arrives or the bounded
+// recovery poll interval elapses. It reports which arm fired, so a worker can
+// attribute its next claim to the notification or to the deadline, and whether
+// the process is still running.
 func waitForWork(
 	ctx context.Context,
 	fallbackInterval time.Duration,
 	wakeups <-chan struct{},
-) bool {
+) (notified bool, running bool) {
 	timer := time.NewTimer(fallbackInterval)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		return false
+		return false, false
 	case <-timer.C:
-		return true
+		return false, true
 	case <-wakeups:
-		return true
+		return true, true
 	}
 }
 

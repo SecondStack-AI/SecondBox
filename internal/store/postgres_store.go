@@ -1124,7 +1124,7 @@ func insertOperation(
 		)
 		SELECT id,sandbox_id,'durable_admission',created_at
 		FROM inserted_operation
-		WHERE kind IN ('create','start')
+		WHERE kind IN ('create','start','drain','stop','delete')
 		UNION ALL
 		SELECT id,sandbox_id,'workspace_ready',created_at
 		FROM inserted_operation

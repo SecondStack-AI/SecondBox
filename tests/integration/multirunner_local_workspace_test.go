@@ -745,7 +745,9 @@ func multirunnerRunLifecycle(
 	); err != nil {
 		t.Fatal(err)
 	}
-	decision, found, err := reconciler.RunOnce(t.Context(), now.UTC())
+	decision, found, err := reconciler.RunOnce(
+		t.Context(), now.UTC(), ports.LifecycleWakeTriggerNotify,
+	)
 	if err != nil || !found || decision.Action != want {
 		t.Fatalf(
 			"lifecycle action for %s = %#v found=%t error=%v, want %s",

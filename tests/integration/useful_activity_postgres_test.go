@@ -63,7 +63,9 @@ func TestEveryUsefulSessionKindSuppressesIdleReclamationWhileGuestHeartbeatDoesN
 				t.Fatal(err)
 			}
 			makeSandboxIdleAndDue(t, pool, sandbox.ID, now)
-			decision, found, err := reconciler.RunOnce(t.Context(), now)
+			decision, found, err := reconciler.RunOnce(
+				t.Context(), now, ports.LifecycleWakeTriggerNotify,
+			)
 			if err != nil || !found {
 				t.Fatalf("active %s lifecycle reconciliation = %#v, %t, %v", kind, decision, found, err)
 			}
@@ -99,7 +101,9 @@ func TestEveryUsefulSessionKindSuppressesIdleReclamationWhileGuestHeartbeatDoesN
 			beforeHeartbeat.LastActivityAt, afterHeartbeat.LastActivityAt,
 		)
 	}
-	decision, found, err := reconciler.RunOnce(t.Context(), now)
+	decision, found, err := reconciler.RunOnce(
+		t.Context(), now, ports.LifecycleWakeTriggerNotify,
+	)
 	if err != nil || !found {
 		t.Fatalf("heartbeat-only lifecycle reconciliation = %#v, %t, %v", decision, found, err)
 	}
@@ -166,7 +170,9 @@ func TestTerminalGuestLivenessWakesDeadlineScheduledSandbox(t *testing.T) {
 		Store: databaseStore, WorkerID: "terminal-liveness-wakeup-worker",
 		ClaimDuration: time.Minute, PollInterval: time.Second,
 	}
-	decision, found, err := reconciler.RunOnce(t.Context(), now)
+	decision, found, err := reconciler.RunOnce(
+		t.Context(), now, ports.LifecycleWakeTriggerNotify,
+	)
 	if err != nil || !found || decision.Action != lifecycle.ActionDrain ||
 		decision.TerminationReason != contracts.TerminationReasonGuestAgentLost {
 		t.Fatalf("terminal liveness reconciliation = %#v, %t, %v", decision, found, err)

@@ -23,6 +23,7 @@ func TestReconcilerConsumesDurableClaimAndCommitsOneTransition(t *testing.T) {
 	}
 	decision, found, err := reconciler.RunOnce(
 		t.Context(), time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
+		ports.LifecycleWakeTriggerNotify,
 	)
 	if err != nil || !found || decision.Action != ActionStartInstance ||
 		effects.action != ActionStartInstance || store.action != "" {
@@ -46,6 +47,7 @@ func TestReconcilerWaitsForStoppedWorkspaceCreationEvidence(t *testing.T) {
 	}
 	decision, found, err := reconciler.RunOnce(
 		t.Context(), time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
+		ports.LifecycleWakeTriggerNotify,
 	)
 	if err != nil || !found || decision.Action != ActionWait ||
 		store.action != string(ActionWait) || effects.action != "" {
@@ -69,6 +71,7 @@ func TestReconcilerDefersWorkspaceEffectContention(t *testing.T) {
 	}
 	decision, found, err := reconciler.RunOnce(
 		t.Context(), time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
+		ports.LifecycleWakeTriggerNotify,
 	)
 	if err != nil || !found || decision.Action != ActionStartInstance ||
 		store.action != string(ActionWait) {
@@ -98,6 +101,7 @@ func TestReconcilerDefersSerializationContentionInsteadOfFailing(t *testing.T) {
 	}
 	decision, found, err := reconciler.RunOnce(
 		t.Context(), time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
+		ports.LifecycleWakeTriggerNotify,
 	)
 	if err != nil {
 		t.Fatalf("serialization contention ended reconciliation: %v", err)
@@ -128,7 +132,7 @@ func TestReconcilerSchedulesHealthyReadySandboxAtIdleDeadline(t *testing.T) {
 	reconciler := Reconciler{
 		Store: store, WorkerID: "worker-1", ClaimDuration: time.Minute, PollInterval: time.Second,
 	}
-	decision, found, err := reconciler.RunOnce(t.Context(), now)
+	decision, found, err := reconciler.RunOnce(t.Context(), now, ports.LifecycleWakeTriggerNotify)
 	if err != nil || !found || decision.Action != ActionWait {
 		t.Fatalf("reconciliation = %#v, %t, %v", decision, found, err)
 	}
@@ -155,7 +159,7 @@ func TestReconcilerSchedulesHealthyReadySandboxAtMaximumDeadline(t *testing.T) {
 	reconciler := Reconciler{
 		Store: store, WorkerID: "worker-1", ClaimDuration: time.Minute, PollInterval: time.Second,
 	}
-	decision, found, err := reconciler.RunOnce(t.Context(), now)
+	decision, found, err := reconciler.RunOnce(t.Context(), now, ports.LifecycleWakeTriggerNotify)
 	if err != nil || !found || decision.Action != ActionWait {
 		t.Fatalf("reconciliation = %#v, %t, %v", decision, found, err)
 	}
@@ -183,7 +187,7 @@ func TestReconcilerPollsHealthyReadySandboxWhileSessionIsActive(t *testing.T) {
 	reconciler := Reconciler{
 		Store: store, WorkerID: "worker-1", ClaimDuration: time.Minute, PollInterval: time.Second,
 	}
-	decision, found, err := reconciler.RunOnce(t.Context(), now)
+	decision, found, err := reconciler.RunOnce(t.Context(), now, ports.LifecycleWakeTriggerNotify)
 	if err != nil || !found || decision.Action != ActionWait {
 		t.Fatalf("reconciliation = %#v, %t, %v", decision, found, err)
 	}
@@ -205,7 +209,7 @@ func TestReconcilerKeepsTransitionalWaitOnPollInterval(t *testing.T) {
 	reconciler := Reconciler{
 		Store: store, WorkerID: "worker-1", ClaimDuration: time.Minute, PollInterval: time.Second,
 	}
-	decision, found, err := reconciler.RunOnce(t.Context(), now)
+	decision, found, err := reconciler.RunOnce(t.Context(), now, ports.LifecycleWakeTriggerNotify)
 	if err != nil || !found || decision.Action != ActionWait {
 		t.Fatalf("reconciliation = %#v, %t, %v", decision, found, err)
 	}
@@ -233,7 +237,10 @@ func TestReconcilerProcessesClaimBatchSequentially(t *testing.T) {
 		PollInterval: time.Second, BatchSize: 2,
 	}
 	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
-	found, err := reconciler.RunBatch(t.Context(), func() time.Time { return now })
+	found, err := reconciler.RunBatch(
+		t.Context(), func() time.Time { return now },
+		ports.LifecycleWakeTriggerNotify,
+	)
 	if err != nil || !found {
 		t.Fatalf("batch reconciliation found=%t error=%v", found, err)
 	}
@@ -254,6 +261,7 @@ type fakeReconcileStore struct {
 	action            string
 	appliedSandboxIDs []string
 	nextReconcileAt   time.Time
+	wakeTrigger       ports.LifecycleWakeTrigger
 }
 
 type fakeEffectExecutor struct {
@@ -273,11 +281,13 @@ func (executor *fakeEffectExecutor) ExecuteLifecycleEffect(
 }
 
 func (store *fakeReconcileStore) ClaimLifecycle(
-	context.Context,
-	string,
-	time.Time,
-	time.Duration,
+	_ context.Context,
+	_ string,
+	_ time.Time,
+	_ time.Duration,
+	wakeTrigger ports.LifecycleWakeTrigger,
 ) (ports.LifecycleReconcileClaim, bool, error) {
+	store.wakeTrigger = wakeTrigger
 	return store.claim, true, nil
 }
 
@@ -287,8 +297,10 @@ func (store *fakeReconcileStore) ClaimLifecycleBatch(
 	_ time.Time,
 	_ time.Duration,
 	batchSize int,
+	wakeTrigger ports.LifecycleWakeTrigger,
 ) ([]ports.LifecycleReconcileClaim, error) {
 	store.batchSize = batchSize
+	store.wakeTrigger = wakeTrigger
 	return append([]ports.LifecycleReconcileClaim(nil), store.batchClaims...), nil
 }
 
