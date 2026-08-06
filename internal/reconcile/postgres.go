@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
@@ -256,7 +257,7 @@ func (store *PostgresStore) ClaimNext(
 	}
 	assignmentCommand := assignmentEnvelope.GetAssignment()
 	if assignmentCommand == nil || assignmentCommand.Correlation == nil {
-		return Claim{}, false, errors.New("SecondBox reconciliation Assignment correlation is absent")
+		return deferPoisonClaim(ctx, tx, claim, "Assignment correlation is absent")
 	}
 	claim.Correlation = proto.Clone(assignmentCommand.Correlation).(*runnerv1.Correlation)
 	if claim.Correlation.RequestId == "" ||
@@ -266,7 +267,10 @@ func (store *PostgresStore) ClaimNext(
 		claim.Correlation.SandboxGeneration != uint64(claim.State.Generation) ||
 		claim.Correlation.AssignmentId != claim.AssignmentID ||
 		claim.Correlation.RunnerId != claim.RunnerID {
-		return Claim{}, false, errors.New("SecondBox reconciliation Assignment correlation does not match durable authority")
+		return deferPoisonClaim(
+			ctx, tx, claim,
+			"Assignment correlation does not match durable authority",
+		)
 	}
 	command, err := tx.Exec(ctx, `
 		UPDATE secondbox.assignments
@@ -284,6 +288,38 @@ func (store *PostgresStore) ClaimNext(
 		return Claim{}, false, fmt.Errorf("SecondBox reconciliation claim commit: %w", err)
 	}
 	return claim, true, nil
+}
+
+// deferPoisonClaim quarantines an Assignment whose durable command payload
+// cannot be validated. Erroring instead would end the reconciler on every
+// pass over the same row — a poison record would keep the whole control
+// plane down — so the row is pushed out of the claim window with backoff,
+// logged for the operator, and the worker moves on.
+func deferPoisonClaim(
+	ctx context.Context,
+	tx pgx.Tx,
+	claim Claim,
+	cause string,
+) (Claim, bool, error) {
+	if _, err := tx.Exec(ctx, `
+		UPDATE secondbox.assignments
+		SET next_reconcile_at=$2
+		WHERE id=$1 AND revision=$3`,
+		claim.AssignmentID, claim.ClaimExpiresAt, claim.Revision,
+	); err != nil {
+		return Claim{}, false, fmt.Errorf("SecondBox reconciliation poison claim deferral: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Claim{}, false, fmt.Errorf("SecondBox reconciliation poison claim commit: %w", err)
+	}
+	slog.WarnContext(
+		ctx,
+		"SecondBox reconciliation deferred an Assignment with an invalid durable command payload",
+		"assignmentId", claim.AssignmentID,
+		"sandboxId", claim.SandboxID,
+		"cause", cause,
+	)
+	return Claim{}, false, nil
 }
 
 // ApplyDecision commits one idempotent revision-fenced reconciliation transition.
@@ -427,7 +463,11 @@ func (store *PostgresStore) ApplyDecision(
 		if locked.Workspace.Mutation.State != "" {
 			if locked.Workspace.Mutation.Kind != "start" ||
 				locked.Workspace.Mutation.ExpectedGeneration != claim.State.Generation {
-				return errors.New("SecondBox terminal startup failure conflicts with the durable Workspace mutation")
+				// A concurrent Workspace mutation (an in-flight stop, for
+				// example) can legitimately coincide with a terminal
+				// Assignment failure. The sentinel lets the worker defer the
+				// row instead of ending the reconciler.
+				return ports.ErrWorkspaceMutation
 			}
 			mutationTag, err := tx.Exec(ctx, `
 				UPDATE secondbox.workspaces
@@ -555,11 +595,14 @@ func (store *PostgresStore) AdvanceFencedGeneration(
 		locked.Generation != generation || locked.CurrentInstanceID != instanceID {
 		return 0, ErrClaimLost
 	}
-	if state != "fenced" || proof["terminationEvidenceDigest"] == "" {
-		return 0, ErrFenceProofAbsent
-	}
+	// The revision fence is checked before the proof: a row that moved on
+	// since the claim is a lost claim, which the worker loop tolerates,
+	// not an absent proof, which it treats as fatal.
 	if expectedRevision != 0 && revision != expectedRevision {
 		return 0, ErrClaimLost
+	}
+	if state != "fenced" || proof["terminationEvidenceDigest"] == "" {
+		return 0, ErrFenceProofAbsent
 	}
 
 	now = now.UTC()

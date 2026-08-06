@@ -798,7 +798,7 @@ func TestReturningRunnerConflictExpiresFailedLifecycleCommand(t *testing.T) {
 			delivery_count,created_at,updated_at,delivered_at
 		) VALUES (
 			'command-stop-reconcile','runner-home','assignment-stop-reconcile',
-			'fence',$4,'pending','',0,$1,$1,NULL
+			'lifecycle_fence',$4,'pending','',0,$1,$1,NULL
 		)`,
 		pgx.QueryExecModeSimpleProtocol,
 		now,
@@ -2120,7 +2120,7 @@ func TestSuccessfulFenceWithStopAuthorityReleasesAssignment(t *testing.T) {
 		INSERT INTO secondbox.runner_commands (
 			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
 			delivery_count,created_at,updated_at,delivered_at
-		) VALUES ($3,'runner-home',$1,'fence',$4,'delivered',
+		) VALUES ($3,'runner-home',$1,'lifecycle_fence',$4,'delivered',
 		          'connection-old',1,$5,$5,$5)`,
 		pgx.QueryExecModeSimpleProtocol,
 		fence.AssignmentId,

@@ -162,6 +162,195 @@ func TestFencedRunnerLossQueuesHomeLocalAdvanceWithoutRelocation(t *testing.T) {
 	}
 }
 
+func TestClaimNextDefersAssignmentWithInvalidCommandPayload(t *testing.T) {
+	store := openReconcileTestDatabase(t)
+	now := time.Date(2026, 8, 6, 13, 45, 0, 0, time.UTC)
+	if _, err := store.pool.Exec(t.Context(), `
+		INSERT INTO secondbox.sandboxes (
+			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
+			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
+			revision,created_at,updated_at
+		) VALUES (
+			'sandbox-poison','tenant','subject','profile','revision','starting','running',
+			3,'workspace-poison','instance-poison','{}','{}',1,$1,$1
+		);
+		INSERT INTO secondbox.assignments (
+			id,sandbox_id,instance_id,runner_id,profile_revision_id,backend_kind,
+			backend_reference,generation,fencing_token,state,capability_snapshot_json,
+			resolved_artifacts_json,release_proof_json,failure_class,retry_count,retry_limit,
+			operation_deadline,claim_expires_at,reconcile_owner,reconcile_claim_expires_at,
+			next_reconcile_at,revision,created_at,updated_at
+		) VALUES (
+			'assignment-poison','sandbox-poison','instance-poison','runner-home','revision',
+			'firecracker','',3,$2,'uncertain','{}','{}','{}','transient',
+			0,8,$3,$3,'',$1,$1,1,$1,$1
+		)`,
+		pgx.QueryExecModeSimpleProtocol,
+		now,
+		[]byte("01234567890123456789012345678901"),
+		now.Add(time.Minute),
+	); err != nil {
+		t.Fatal(err)
+	}
+	// The claimable Assignment has no durable assignment command at all, so
+	// its correlation cannot be validated. That used to error on every pass
+	// and end the reconciler; it now defers the row and reports no work.
+	for attempt := 1; attempt <= 2; attempt++ {
+		_, found, err := store.ClaimNext(
+			t.Context(),
+			"reconcile-worker",
+			now.Add(time.Minute),
+			now,
+		)
+		if err != nil || found {
+			t.Fatalf("poison claim attempt %d = %t, %v, want a silent deferral", attempt, found, err)
+		}
+	}
+	var nextReconcileAt time.Time
+	if err := store.pool.QueryRow(t.Context(), `
+		SELECT next_reconcile_at FROM secondbox.assignments
+		WHERE id='assignment-poison'`,
+	).Scan(&nextReconcileAt); err != nil {
+		t.Fatal(err)
+	}
+	if !nextReconcileAt.After(now) {
+		t.Fatalf("deferred next_reconcile_at = %v, want after %v", nextReconcileAt, now)
+	}
+}
+
+func TestAdvanceFencedGenerationStaleRevisionIsClaimLost(t *testing.T) {
+	store := openReconcileTestDatabase(t)
+	now := time.Date(2026, 8, 6, 14, 0, 0, 0, time.UTC)
+	token := []byte("01234567890123456789012345678901")
+	if _, err := store.pool.Exec(t.Context(), `
+		INSERT INTO secondbox.workspaces (
+			id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,logical_capacity_bytes,
+			generation,mutation_kind,mutation_id,mutation_effect_id,mutation_operation_id,
+			mutation_expected_generation,mutation_target_generation,mutation_state,
+			local_receipt_json,created_at,updated_at
+		) VALUES (
+			'workspace-adv','tenant','subject','sandbox-adv','runner-home','ready',
+			8589934592,3,'','','','',NULL,NULL,'','{}',$1,$1
+		);
+		INSERT INTO secondbox.sandboxes (
+			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
+			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
+			revision,created_at,updated_at
+		) VALUES (
+			'sandbox-adv','tenant','subject','profile','revision','ready','running',
+			3,'workspace-adv','instance-adv','{}','{}',4,$1,$1
+		);
+		INSERT INTO secondbox.assignments (
+			id,sandbox_id,instance_id,runner_id,profile_revision_id,backend_kind,
+			backend_reference,generation,fencing_token,state,capability_snapshot_json,
+			resolved_artifacts_json,release_proof_json,failure_class,retry_count,retry_limit,
+			operation_deadline,claim_expires_at,reconcile_owner,reconcile_claim_expires_at,
+			next_reconcile_at,revision,created_at,updated_at
+		) VALUES (
+			'assignment-adv','sandbox-adv','instance-adv','runner-home','revision',
+			'firecracker','instance-adv',3,$2,'released','{}','{}','{}','',0,8,
+			$3,$3,'worker',$3,$1,9,$1,$1
+		)`,
+		pgx.QueryExecModeSimpleProtocol, now, token, now.Add(time.Minute),
+	); err != nil {
+		t.Fatal(err)
+	}
+	// The row moved on since the claim: its revision advanced and the state
+	// left 'fenced'. That is a lost claim the worker loop tolerates, not an
+	// absent fence proof, which it treats as fatal.
+	_, err := store.AdvanceFencedGeneration(t.Context(), "assignment-adv", 7, now)
+	if !errors.Is(err, ErrClaimLost) {
+		t.Fatalf("stale-revision advance = %v, want ErrClaimLost", err)
+	}
+}
+
+func TestTerminalFailureWithStopMutationReturnsWorkspaceMutationSentinel(t *testing.T) {
+	store := openReconcileTestDatabase(t)
+	now := time.Date(2026, 8, 6, 11, 0, 0, 0, time.UTC)
+	token := []byte("01234567890123456789012345678901")
+	if _, err := store.pool.Exec(t.Context(), `
+		INSERT INTO secondbox.workspaces (
+			id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,logical_capacity_bytes,
+			generation,mutation_kind,mutation_id,mutation_effect_id,mutation_operation_id,
+			mutation_expected_generation,mutation_target_generation,mutation_state,
+			local_receipt_json,created_at,updated_at
+		) VALUES (
+			'workspace-term','tenant','subject','sandbox-term','runner-home','ready',
+			8589934592,3,'stop','effect-stop-term','effect-stop-term','effect-stop-term',
+			3,4,'stopping','{}',$1,$1
+		);
+		INSERT INTO secondbox.sandboxes (
+			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
+			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
+			revision,created_at,updated_at
+		) VALUES (
+			'sandbox-term','tenant','subject','profile','revision','stopping','stopped',
+			3,'workspace-term','instance-term','{}','{}',4,$1,$1
+		);
+		INSERT INTO secondbox.instances (
+			id,sandbox_id,generation,state,guest_liveness,termination_reason,
+			created_at,updated_at
+		) VALUES (
+			'instance-term','sandbox-term',3,'starting','starting','',$1,$1
+		);
+		INSERT INTO secondbox.assignments (
+			id,sandbox_id,instance_id,runner_id,profile_revision_id,backend_kind,
+			backend_reference,generation,fencing_token,state,capability_snapshot_json,
+			resolved_artifacts_json,release_proof_json,failure_class,retry_count,retry_limit,
+			operation_deadline,claim_expires_at,reconcile_owner,reconcile_claim_expires_at,
+			next_reconcile_at,revision,created_at,updated_at
+		) VALUES (
+			'assignment-term','sandbox-term','instance-term','runner-home','revision',
+			'firecracker','',3,$2,'failed','{}','{}','{}','',2,2,
+			$3,$3,'worker',$3,$1,7,$1,$1
+		)`,
+		pgx.QueryExecModeSimpleProtocol, now, token, now.Add(time.Minute),
+	); err != nil {
+		t.Fatal(err)
+	}
+	err := store.ApplyDecision(
+		t.Context(),
+		Claim{
+			AssignmentID: "assignment-term",
+			SandboxID:    "sandbox-term",
+			InstanceID:   "instance-term",
+			RunnerID:     "runner-home",
+			WorkerID:     "worker",
+			FencingToken: token,
+			Revision:     7,
+			State: AssignmentState{
+				State:      "failed",
+				Generation: 3,
+				RetryCount: 2,
+				RetryLimit: 2,
+			},
+		},
+		Decision{Action: ActionFailTerminal},
+		nil,
+		now.Add(time.Second),
+		now,
+	)
+	if !errors.Is(err, ports.ErrWorkspaceMutation) {
+		t.Fatalf("terminal failure with stop mutation = %v, want ports.ErrWorkspaceMutation", err)
+	}
+	var assignmentState, mutationKind, mutationState string
+	if err := store.pool.QueryRow(t.Context(), `
+		SELECT assignment.state,workspace.mutation_kind,workspace.mutation_state
+		FROM secondbox.assignments AS assignment
+		JOIN secondbox.sandboxes AS sandbox ON sandbox.id=assignment.sandbox_id
+		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+		WHERE assignment.id='assignment-term'`,
+	).Scan(&assignmentState, &mutationKind, &mutationState); err != nil {
+		t.Fatal(err)
+	}
+	if assignmentState != "failed" || mutationKind != "stop" || mutationState != "stopping" {
+		t.Fatalf(
+			"assignment=%q mutation=%q/%q, want the rejected transaction rolled back",
+			assignmentState, mutationKind, mutationState,
+		)
+	}
+}
+
 func TestFencedRunnerLossAndWorkspaceMutationSerializeWithoutDeadlock(t *testing.T) {
 	reconcileStore := openReconcileTestDatabase(t)
 	databaseURL := reconcileStore.pool.Config().ConnConfig.ConnString()

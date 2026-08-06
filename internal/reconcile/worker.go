@@ -97,6 +97,22 @@ func (worker AssignmentWorker) RunOnce(
 		ctx, claim, decision, fenceCommand,
 		now.Add(worker.PollInterval), now,
 	)
+	if errors.Is(err, ports.ErrWorkspaceMutation) ||
+		errors.Is(err, ports.ErrSerializationContention) {
+		// A conflicting Workspace mutation or a lost serialization race
+		// defers the row rather than ending the reconciler: ending the
+		// reconciler stops the server, so one contended row would take the
+		// whole control plane down.
+		waitErr := worker.Store.ApplyDecision(
+			ctx,
+			claim,
+			Decision{Action: ActionWait},
+			nil,
+			now.Add(worker.PollInterval),
+			now,
+		)
+		return decision, true, waitErr
+	}
 	return decision, true, err
 }
 

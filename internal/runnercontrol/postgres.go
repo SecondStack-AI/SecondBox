@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"strconv"
 	"strings"
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/store/lifecycleprojection"
 	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/jackc/pgx/v5"
@@ -1024,11 +1026,18 @@ func recordLocalWorkspaceResult(
 	if workspace.HomeRunnerID != runnerID {
 		return errors.New("SecondBox runner local-workspace result came from the wrong home runner")
 	}
-	if workspace.Mutation.ID != result.EffectId || workspace.Mutation.State == "" ||
-		workspace.Mutation.OperationID != result.OperationId ||
-		workspace.Generation != int64(result.Generation) ||
-		workspace.LogicalCapacityBytes != int64(result.LogicalCapacityBytes) {
-		return errors.New("SecondBox runner local-workspace result conflicts with durable authority")
+	// A result for an effect that already reached a terminal state is a
+	// replay of completed work. The Workspace row may have moved on since
+	// (mutation slot released, generation advanced), so replays are absorbed
+	// before the durable-authority comparison, not after it.
+	if effect.state == "succeeded" || effect.state == "runner_failed" {
+		return nil
+	}
+	if conflict := localWorkspaceAuthorityConflict(workspace, result); conflict != "" {
+		return fmt.Errorf(
+			"SecondBox runner local-workspace result conflicts with durable authority: %s",
+			conflict,
+		)
 	}
 	switch result.Kind {
 	case runnerv1.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE:
@@ -1045,9 +1054,6 @@ func recordLocalWorkspaceResult(
 			effect.storageObjectID != result.SnapshotId {
 			return errors.New("SecondBox runner Workspace clone result conflicts with durable Snapshot authority")
 		}
-	}
-	if effect.state == "succeeded" || effect.state == "runner_failed" {
-		return nil
 	}
 	if workspace.State != "creating" || effect.state != "queued" {
 		return errors.New("SecondBox runner local-workspace result is reordered")
@@ -1153,6 +1159,45 @@ func recordLocalWorkspaceResult(
 		}
 	}
 	return acknowledgeRunnerCommand(ctx, tx, effect.commandID, now)
+}
+
+// localWorkspaceAuthorityConflict names every disagreement between the durable
+// Workspace row and a reported local-workspace result, so a rejection carries
+// the exact fields that diverged instead of a bare verdict. An empty return
+// means the result agrees with durable authority.
+func localWorkspaceAuthorityConflict(
+	workspace ports.HomeWorkspace,
+	result *runnerv1.LocalWorkspaceResult,
+) string {
+	var conflicts []string
+	if workspace.Mutation.ID != result.EffectId {
+		conflicts = append(conflicts, fmt.Sprintf(
+			"durable mutationId %q != reported effectId %q",
+			workspace.Mutation.ID, result.EffectId,
+		))
+	}
+	if workspace.Mutation.State == "" {
+		conflicts = append(conflicts, "durable mutationState is empty")
+	}
+	if workspace.Mutation.OperationID != result.OperationId {
+		conflicts = append(conflicts, fmt.Sprintf(
+			"durable mutationOperationId %q != reported operationId %q",
+			workspace.Mutation.OperationID, result.OperationId,
+		))
+	}
+	if workspace.Generation != int64(result.Generation) {
+		conflicts = append(conflicts, fmt.Sprintf(
+			"durable generation %d != reported generation %d",
+			workspace.Generation, result.Generation,
+		))
+	}
+	if workspace.LogicalCapacityBytes != int64(result.LogicalCapacityBytes) {
+		conflicts = append(conflicts, fmt.Sprintf(
+			"durable logicalCapacityBytes %d != reported logicalCapacityBytes %d",
+			workspace.LogicalCapacityBytes, result.LogicalCapacityBytes,
+		))
+	}
+	return strings.Join(conflicts, "; ")
 }
 
 func recordLocalWorkspaceDeleteResult(
@@ -3395,49 +3440,22 @@ func recordAssignmentEvent(
 		); err != nil {
 			return err
 		}
-		stage, err := assignmentProgressStageName(progress.Stage)
+		anomaly, err := recordAssignmentStageTiming(ctx, tx, progress, now)
 		if err != nil {
 			return err
 		}
-		if progress.ObservedAtUnixMs == 0 ||
-			progress.ObservedAtUnixMs > uint64(^uint64(0)>>1) ||
-			progress.ObservedAtUnixNs > uint64(^uint64(0)>>1) {
-			return errors.New("SecondBox runner AssignmentProgress observed time is invalid")
-		}
-		observedAt := time.UnixMilli(int64(progress.ObservedAtUnixMs)).UTC()
-		if progress.ObservedAtUnixNs != 0 {
-			observedAt = time.Unix(0, int64(progress.ObservedAtUnixNs)).UTC()
-			if observedAt.UnixMilli() != int64(progress.ObservedAtUnixMs) {
-				return errors.New("SecondBox runner AssignmentProgress observed times disagree")
-			}
-		}
-		inserted, err := tx.Exec(ctx, `
-			INSERT INTO secondbox.assignment_stage_timings (
-				assignment_id,operation_id,sandbox_id,stage,observed_at,received_at
-			) VALUES ($1,$2,$3,$4,$5,$6)
-			ON CONFLICT (assignment_id,stage) DO NOTHING`,
-			progress.Fence.AssignmentId, progress.Correlation.OperationId,
-			progress.Fence.SandboxId, stage, observedAt, now,
-		)
-		if err != nil {
-			return fmt.Errorf("SecondBox runner AssignmentProgress timing insert: %w", err)
-		}
-		if inserted.RowsAffected() == 0 {
-			var persistedOperationID, persistedSandboxID string
-			var persistedObservedAt time.Time
-			if err := tx.QueryRow(ctx, `
-				SELECT operation_id,sandbox_id,observed_at
-				FROM secondbox.assignment_stage_timings
-				WHERE assignment_id=$1 AND stage=$2`,
-				progress.Fence.AssignmentId, stage,
-			).Scan(&persistedOperationID, &persistedSandboxID, &persistedObservedAt); err != nil {
-				return fmt.Errorf("SecondBox runner AssignmentProgress timing replay lookup: %w", err)
-			}
-			if persistedOperationID != progress.Correlation.OperationId ||
-				persistedSandboxID != progress.Fence.SandboxId ||
-				!persistedObservedAt.Equal(observedAt) {
-				return errors.New("SecondBox runner AssignmentProgress stage was repeated with different evidence")
-			}
+		if anomaly != "" {
+			// assignment_stage_timings is pure telemetry: disagreement with
+			// a replayed stage must never cost the control connection, so
+			// the anomaly is logged and the progress message still advances
+			// the Assignment.
+			slog.WarnContext(
+				ctx,
+				"SecondBox runner AssignmentProgress telemetry was discarded",
+				"assignmentId", progress.Fence.AssignmentId,
+				"operationId", progress.Correlation.OperationId,
+				"anomaly", anomaly,
+			)
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE secondbox.assignments
@@ -3623,6 +3641,77 @@ func wakeSandboxLifecycle(
 		return ErrStaleAssignmentEvidence
 	}
 	return nil
+}
+
+// recordAssignmentStageTiming persists one AssignmentProgress stage into the
+// assignment_stage_timings telemetry table. Evidence problems — an unknown
+// stage, an invalid observed time, or a replay whose evidence disagrees with
+// the persisted row — come back as a non-empty anomaly for the caller to log,
+// never as an error: telemetry disagreement must not cost the control
+// connection. The error return is reserved for database failures, which abort
+// the surrounding transaction.
+func recordAssignmentStageTiming(
+	ctx context.Context,
+	tx pgx.Tx,
+	progress *runnerv1.AssignmentProgress,
+	now time.Time,
+) (string, error) {
+	stage, err := assignmentProgressStageName(progress.Stage)
+	if err != nil {
+		return err.Error(), nil
+	}
+	if progress.ObservedAtUnixMs == 0 ||
+		progress.ObservedAtUnixMs > uint64(^uint64(0)>>1) ||
+		progress.ObservedAtUnixNs > uint64(^uint64(0)>>1) {
+		return "observed time is invalid", nil
+	}
+	observedAt := time.UnixMilli(int64(progress.ObservedAtUnixMs)).UTC()
+	if progress.ObservedAtUnixNs != 0 {
+		observedAt = time.Unix(0, int64(progress.ObservedAtUnixNs)).UTC()
+		if observedAt.UnixMilli() != int64(progress.ObservedAtUnixMs) {
+			return "millisecond and nanosecond observed times disagree", nil
+		}
+	}
+	// observed_at is a timestamptz, which stores microseconds; keeping the
+	// in-memory value at the same precision lets a replayed stage compare
+	// equal to the row its first delivery persisted.
+	observedAt = observedAt.Truncate(time.Microsecond)
+	inserted, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.assignment_stage_timings (
+			assignment_id,operation_id,sandbox_id,stage,observed_at,received_at
+		) VALUES ($1,$2,$3,$4,$5,$6)
+		ON CONFLICT (assignment_id,stage) DO NOTHING`,
+		progress.Fence.AssignmentId, progress.Correlation.OperationId,
+		progress.Fence.SandboxId, stage, observedAt, now,
+	)
+	if err != nil {
+		return "", fmt.Errorf("SecondBox runner AssignmentProgress timing insert: %w", err)
+	}
+	if inserted.RowsAffected() == 0 {
+		var persistedOperationID, persistedSandboxID string
+		var persistedObservedAt time.Time
+		if err := tx.QueryRow(ctx, `
+			SELECT operation_id,sandbox_id,observed_at
+			FROM secondbox.assignment_stage_timings
+			WHERE assignment_id=$1 AND stage=$2`,
+			progress.Fence.AssignmentId, stage,
+		).Scan(&persistedOperationID, &persistedSandboxID, &persistedObservedAt); err != nil {
+			return "", fmt.Errorf("SecondBox runner AssignmentProgress timing replay lookup: %w", err)
+		}
+		if persistedOperationID != progress.Correlation.OperationId ||
+			persistedSandboxID != progress.Fence.SandboxId ||
+			!persistedObservedAt.Equal(observedAt) {
+			return fmt.Sprintf(
+				"stage %s was repeated with different evidence: persisted operationId %q sandboxId %q observedAt %s, reported operationId %q sandboxId %q observedAt %s",
+				stage,
+				persistedOperationID, persistedSandboxID,
+				persistedObservedAt.UTC().Format(time.RFC3339Nano),
+				progress.Correlation.OperationId, progress.Fence.SandboxId,
+				observedAt.Format(time.RFC3339Nano),
+			), nil
+		}
+	}
+	return "", nil
 }
 
 func assignmentProgressStageName(stage runnerv1.AssignmentProgressStage) (string, error) {
@@ -3987,7 +4076,7 @@ func acknowledgeMatchingFenceCommand(
 	rows, err := tx.Query(ctx, `
 		SELECT id,payload
 		FROM secondbox.runner_commands
-		WHERE runner_id=$1 AND assignment_id=$2 AND kind='fence'
+		WHERE runner_id=$1 AND assignment_id=$2 AND kind IN ('fence','lifecycle_fence')
 		  AND state IN ('pending','delivering','delivered')
 		FOR UPDATE`,
 		runnerID,
