@@ -94,13 +94,18 @@ services:
         target: /var/lib/secondbox-runner
         bind:
           create_host_path: false
-          propagation: rshared
+          # rslave, not rshared: the runner creates no mounts meant for the
+          # host, and rshared lets Docker's own bind setup propagate the
+          # workspace mount into the host namespace, doubling leaked mounts
+          # on every container start when workspace_root nests inside this
+          # state mount.
+          propagation: rslave
       - type: bind
         source: ${SECONDBOX_RUNNER_WORKSPACE_HOST_DIR:?set SECONDBOX_RUNNER_WORKSPACE_HOST_DIR}
         target: ${SECONDBOX_RUNNER_WORKSPACE_ROOT:?set SECONDBOX_RUNNER_WORKSPACE_ROOT}
         bind:
           create_host_path: false
-          propagation: rshared
+          propagation: rslave
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
     healthcheck:
       test: ["CMD", "/usr/local/bin/secondbox-runner", "-healthcheck", "-healthcheck-timeout", "5s"]
