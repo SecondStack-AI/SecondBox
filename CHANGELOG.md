@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.2 - 2026-08-06
+
+Stopped single poison records from taking down the whole control plane or locking a runner into a reconnect loop.
+
+### Fixed
+
+- Quarantined every known poison-record path in the reconcilers: a terminal Assignment failure that coincides with an in-flight Workspace stop, an Assignment whose durable command payload has an absent or mismatched correlation, an invalid Profile revision, a delete effect recorded as succeeded without a finalized Sandbox, and a lost generation race all now defer with backoff and a logged warning instead of ending the reconciler — previously any one such row shut down the control plane and kept it down across restarts ([#45](https://github.com/SecondStack-AI/SecondBox/pull/45)).
+- Separated lifecycle stop commands from the assignment reconciler's fence commands in `runner_commands` (`kind='lifecycle_fence'`, retagged by migration): the reconciler's bulk fence expiry could collaterally expire a lifecycle-owned command, after which the stop broker's delivery guard killed the process. The exhaustion path also tolerates an already-terminal command, and it now releases the Workspace stop mutation it holds — previously the slot leaked forever and blocked the restart that recovers a failed Sandbox ([#45](https://github.com/SecondStack-AI/SecondBox/pull/45)).
+- Stopped dropping the runner session over replayed messages: a result for an already-completed local-workspace effect is absorbed as a no-op even after the Workspace row has moved on, and `AssignmentProgress` stage timings are truncated to the microsecond precision PostgreSQL stores, so an exact replay no longer reads as different evidence. Genuine authority conflicts now name each divergent field, and telemetry disagreement is a logged anomaly that never costs the control connection ([#45](https://github.com/SecondStack-AI/SecondBox/pull/45)).
+
 ## 0.2.1 - 2026-08-06
 
 Stopped the same-host runner deployment from leaking bind mounts into the host mount namespace.
