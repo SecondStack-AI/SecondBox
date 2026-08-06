@@ -30,6 +30,19 @@ func TestMain(m *testing.M) {
 // newGuardDatabase creates one disposable database carrying only the baseline.
 func newGuardDatabase(t *testing.T) *pgx.Conn {
 	t.Helper()
+	connection, _ := newDisposableDatabase(t)
+	if _, err := connection.Exec(
+		context.Background(), migrationSQL(t, "0001_secondbox.sql"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	return connection
+}
+
+// newDisposableDatabase creates one empty disposable database and returns a
+// connection to it together with its URL for callers exercising Apply.
+func newDisposableDatabase(t *testing.T) (*pgx.Conn, string) {
+	t.Helper()
 	parsed, err := url.Parse(guardTestDatabaseURL)
 	if err != nil {
 		t.Fatal(err)
@@ -59,10 +72,7 @@ func newGuardDatabase(t *testing.T) *pgx.Conn {
 		}
 		_ = admin.Close(cleanup)
 	})
-	if _, err := connection.Exec(ctx, migrationSQL(t, "0001_secondbox.sql")); err != nil {
-		t.Fatal(err)
-	}
-	return connection
+	return connection, parsed.String()
 }
 
 func migrationSQL(t *testing.T, filename string) string {

@@ -38,7 +38,7 @@ func TestLifecycleFenceCommandKindRetagsOnlyReferencedStopCommands(t *testing.T)
 		t.Fatal(err)
 	}
 	if _, err := connection.Exec(
-		ctx, migrationSQL(t, "0010_lifecycle_fence_command_kind.sql"),
+		ctx, migrationSQL(t, "0013_lifecycle_fence_command_kind.sql"),
 	); err != nil {
 		t.Fatal(err)
 	}
