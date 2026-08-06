@@ -337,7 +337,7 @@ func (driver *lifecycleDriver) runOneMeasurement(
 			samples.recordError(fmt.Errorf("SecondBox lifecycle stop pool exhausted for %s", key))
 			return false
 		}
-		elapsed, err := driver.stopSandbox(operationContext, handle, key+"-stop")
+		elapsed, err := driver.stopSandbox(operationContext, handle, key+"-stop", timings)
 		if err != nil {
 			samples.recordError(err)
 			return false
@@ -349,7 +349,7 @@ func (driver *lifecycleDriver) runOneMeasurement(
 			samples.recordError(fmt.Errorf("SecondBox lifecycle delete pool exhausted for %s", key))
 			return false
 		}
-		elapsed, err := driver.deleteSandbox(operationContext, handle, key+"-delete")
+		elapsed, err := driver.deleteSandbox(operationContext, handle, key+"-delete", timings)
 		if err != nil {
 			samples.recordError(err)
 			return false
@@ -401,7 +401,8 @@ func (driver *lifecycleDriver) releaseResident(
 	for index, handle := range handles {
 		cleanupContext, cancel := driver.operationContext(ctx)
 		if _, err := driver.deleteSandbox(
-			cleanupContext, handle, fmt.Sprintf("lifecycle-resident-%s-%d-cleanup", patternName, index),
+			cleanupContext, handle,
+			fmt.Sprintf("lifecycle-resident-%s-%d-cleanup", patternName, index), nil,
 		); err != nil {
 			cleanupErrors = append(cleanupErrors, fmt.Errorf(
 				"SecondBox lifecycle resident cleanup failed for %s index %d: %w",
@@ -439,7 +440,9 @@ func (driver *lifecycleDriver) prepareMeasurementPool(
 			)
 		}
 		if measurement == measurementStartReady {
-			if _, err := driver.stopSandbox(setupContext, handle, key+"-initial-stop"); err != nil {
+			if _, err := driver.stopSandbox(
+				setupContext, handle, key+"-initial-stop", nil,
+			); err != nil {
 				cancel()
 				return nil, fmt.Errorf(
 					"SecondBox lifecycle start pool initial stop failed: %w", err,
@@ -465,6 +468,7 @@ func (driver *lifecycleDriver) releaseCellResources(
 			cleanupContext,
 			handle,
 			fmt.Sprintf("lifecycle-%s-%s-%d-cleanup", measurement, patternName, index),
+			nil,
 		); err != nil {
 			cleanupErrors = append(cleanupErrors, fmt.Errorf(
 				"SecondBox lifecycle measurement cleanup failed for %s/%s index %d: %w",
