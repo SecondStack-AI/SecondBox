@@ -33,7 +33,7 @@ func TestGoAndTypeScriptHighLevelSDKBehaviorParity(t *testing.T) {
 		{"GetPortSession", "getPortSession"}, {"ClosePortSession", "closePortSession"},
 		{"ConnectPortTunnel", "connectPortTunnel"}, {"CreateTerminal", "createTerminal"},
 		{"GetTerminal", "getTerminal"}, {"CancelTerminal", "cancelTerminal"},
-		{"ConnectTerminal", "connectTerminal"},
+		{"ConnectTerminal", "connectTerminal"}, {"ConnectTerminalAfter", "connectTerminalAfter"},
 	}
 	for _, operation := range operations {
 		if !strings.Contains(goSurface, " "+operation.goName+"(") {
@@ -91,6 +91,19 @@ func TestGoAndTypeScriptDataPlaneSafetyParity(t *testing.T) {
 				t.Errorf("TypeScript SDK lacks %s evidence %q", check.name, check.typeScriptSource)
 			}
 		})
+	}
+}
+
+func TestGoAndTypeScriptTerminalReplayResumeParity(t *testing.T) {
+	root := repositoryRoot(t)
+	surfaces := map[string]string{
+		"Go":         readSurfaceFiles(t, root, []string{"sdk/go/secondboxclient/terminal.go"}),
+		"TypeScript": readSurfaceFiles(t, root, []string{"sdk/typescript/client.ts", "sdk/typescript/node.ts"}),
+	}
+	for sdk, surface := range surfaces {
+		if !strings.Contains(surface, "SecondBox-Terminal-After-Sequence") {
+			t.Errorf("%s SDK lacks the SecondBox-Terminal-After-Sequence replay-resume header", sdk)
+		}
 	}
 }
 

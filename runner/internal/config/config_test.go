@@ -65,6 +65,59 @@ func TestValidateMicroVMTrustAnchorVerifiesRSASignature(t *testing.T) {
 	})
 }
 
+func TestValidateMicroVMTrustAnchorNamesRealEnvironmentVariables(t *testing.T) {
+	t.Run("malformed fingerprint", func(t *testing.T) {
+		cfg := &Config{MicroVMPublicKeySHA256: "not-hex"}
+		if err := cfg.ValidateMicroVMTrustAnchor(); err == nil ||
+			!strings.Contains(err.Error(), "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 must be 64 lowercase hex characters") {
+			t.Fatalf("malformed-fingerprint error = %v", err)
+		}
+	})
+
+	t.Run("fingerprint without key", func(t *testing.T) {
+		cfg := &Config{MicroVMPublicKeySHA256: strings.Repeat("ab", sha256.Size)}
+		if err := cfg.ValidateMicroVMTrustAnchor(); err == nil ||
+			!strings.Contains(err.Error(), "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 requires SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY") {
+			t.Fatalf("fingerprint-without-key error = %v", err)
+		}
+	})
+
+	t.Run("unreadable key path", func(t *testing.T) {
+		cfg := &Config{MicroVMPublicKeyPath: filepath.Join(t.TempDir(), "absent.pem")}
+		if err := cfg.ValidateMicroVMTrustAnchor(); err == nil ||
+			!strings.Contains(err.Error(), "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY ") {
+			t.Fatalf("unreadable-key error = %v", err)
+		}
+	})
+
+	t.Run("separate tool rootfs", func(t *testing.T) {
+		cfg, _ := signedArtifactFixture(t)
+		cfg.MicroVMToolRootfsPath = "/images/other-rootfs.ext4"
+		if err := cfg.ValidateMicroVMTrustAnchor(); err == nil ||
+			!strings.Contains(err.Error(), "must match SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH when SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is set") {
+			t.Fatalf("separate-tool-rootfs error = %v", err)
+		}
+	})
+
+	t.Run("separate tool shared image", func(t *testing.T) {
+		cfg, _ := signedArtifactFixture(t)
+		cfg.MicroVMToolSharedImagePath = "/images/other-shared.img"
+		if err := cfg.ValidateMicroVMTrustAnchor(); err == nil ||
+			!strings.Contains(err.Error(), "must match SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH when SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is set") {
+			t.Fatalf("separate-tool-shared-image error = %v", err)
+		}
+	})
+
+	t.Run("missing shared image", func(t *testing.T) {
+		cfg, _ := signedArtifactFixture(t)
+		cfg.MicroVMSharedImagePath = ""
+		if err := cfg.ValidateMicroVMTrustAnchor(); err == nil ||
+			!strings.Contains(err.Error(), "SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH is required when SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is set") {
+			t.Fatalf("missing-shared-image error = %v", err)
+		}
+	})
+}
+
 func TestVerifyChecksumsWalksRequiredArtifacts(t *testing.T) {
 	t.Run("good", func(t *testing.T) {
 		dir := checksumFixture(t)
