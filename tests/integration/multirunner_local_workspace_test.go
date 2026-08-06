@@ -411,7 +411,7 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 		sandboxA.ID,
 		runnerA,
 		runnerB,
-		"fence",
+		"lifecycle_fence",
 	)
 	fence := fenceEnvelope.GetFence()
 	if fence == nil || fence.Fence == nil {

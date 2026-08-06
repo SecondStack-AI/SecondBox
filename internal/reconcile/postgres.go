@@ -427,7 +427,11 @@ func (store *PostgresStore) ApplyDecision(
 		if locked.Workspace.Mutation.State != "" {
 			if locked.Workspace.Mutation.Kind != "start" ||
 				locked.Workspace.Mutation.ExpectedGeneration != claim.State.Generation {
-				return errors.New("SecondBox terminal startup failure conflicts with the durable Workspace mutation")
+				// A concurrent Workspace mutation (an in-flight stop, for
+				// example) can legitimately coincide with a terminal
+				// Assignment failure. The sentinel lets the worker defer the
+				// row instead of ending the reconciler.
+				return ports.ErrWorkspaceMutation
 			}
 			mutationTag, err := tx.Exec(ctx, `
 				UPDATE secondbox.workspaces

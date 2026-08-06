@@ -350,7 +350,7 @@ func TestPostgresFenceResultPreservesStableCausalTerminationReasons(t *testing.T
 						id,runner_id,assignment_id,kind,payload,state,target_connection_id,
 						delivery_count,created_at,updated_at,delivered_at
 					) VALUES (
-						$5,'runner-conformance',$3,'fence',$8,'delivered',$9,1,$7,$7,$7
+						$5,'runner-conformance',$3,'lifecycle_fence',$8,'delivered',$9,1,$7,$7,$7
 					)`,
 					pgx.QueryExecModeSimpleProtocol,
 					sandboxID, stopEffectID, assignmentID, instanceID,

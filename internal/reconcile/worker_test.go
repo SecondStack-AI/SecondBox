@@ -110,12 +110,43 @@ func TestAssignmentWorkerDefersGenerationAdvanceWorkspaceContention(t *testing.T
 	}
 }
 
+func TestAssignmentWorkerDefersTerminalDecisionWorkspaceContention(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	store := &assignmentWorkerStore{
+		claim: Claim{
+			AssignmentID: "assignment-terminal-contention",
+			Revision:     4,
+			State: AssignmentState{
+				State:      "failed",
+				Generation: 3,
+				RetryCount: 2,
+				RetryLimit: 2,
+			},
+		},
+		found:    true,
+		applyErr: ports.ErrWorkspaceMutation,
+	}
+	worker := AssignmentWorker{
+		Store: store, WorkerID: "assignment-worker", ClaimDuration: time.Minute,
+		PollInterval: time.Second, CommandDeadline: 30 * time.Second,
+		HeartbeatTimeout: time.Minute, NewCommandID: func(string) string { return "command" },
+	}
+	decision, found, err := worker.RunOnce(t.Context(), now)
+	if err != nil || !found || decision.Action != ActionFailTerminal {
+		t.Fatalf("worker decision = %#v, %t, %v", decision, found, err)
+	}
+	if store.appliedDecision.Action != ActionWait {
+		t.Fatalf("contention deferral decision = %#v", store.appliedDecision)
+	}
+}
+
 type assignmentWorkerStore struct {
 	claim           Claim
 	found           bool
 	fenceCommand    *runnerv1.FenceCommand
 	appliedDecision Decision
 	advanceErr      error
+	applyErr        error
 }
 
 func (store *assignmentWorkerStore) MarkExpiredRunners(
@@ -145,7 +176,9 @@ func (store *assignmentWorkerStore) ApplyDecision(
 ) error {
 	store.appliedDecision = decision
 	store.fenceCommand = command
-	return nil
+	err := store.applyErr
+	store.applyErr = nil
+	return err
 }
 
 func (store *assignmentWorkerStore) AdvanceFencedGeneration(

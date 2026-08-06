@@ -603,9 +603,12 @@ func runLifecycleReconciler(
 			}
 			// Contention is retryable by definition. Treating it as fatal here
 			// shuts down the whole server, taking every attached runner with it,
-			// because two placements raced for the same row.
+			// because two placements raced for the same row. A fenced
+			// generation is the same shape: the claim lost its race with a
+			// generation advance, and the next claim observes fresh state.
 			if errors.Is(err, ports.ErrRevisionConflict) ||
-				errors.Is(err, ports.ErrSerializationContention) {
+				errors.Is(err, ports.ErrSerializationContention) ||
+				errors.Is(err, ports.ErrGenerationFenced) {
 				continue
 			}
 			return fmt.Errorf("SecondBox lifecycle reconciliation failed: %w", err)

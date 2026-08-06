@@ -755,7 +755,7 @@ func (broker *PostgresEffectBroker) queueStop(
 	}
 	handled, err := broker.resumeStopEffect(
 		ctx, tx, claim, effectID, commandID, runnerID, assignmentID,
-		payload, deadline, now.UTC(), nextReconcileAt.UTC(),
+		workspace.ID, payload, deadline, now.UTC(), nextReconcileAt.UTC(),
 	)
 	if err != nil {
 		return err
@@ -785,7 +785,7 @@ func (broker *PostgresEffectBroker) queueStop(
 		INSERT INTO secondbox.runner_commands (
 			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
 			delivery_count,created_at,updated_at,delivered_at
-		) VALUES ($1,$2,$3,'fence',$4,'pending','',0,$5,$5,NULL)
+		) VALUES ($1,$2,$3,'lifecycle_fence',$4,'pending','',0,$5,$5,NULL)
 		ON CONFLICT (id) DO NOTHING`,
 		commandID, runnerID, assignmentID, payload, now.UTC(),
 	); err != nil {
@@ -845,6 +845,7 @@ func (broker *PostgresEffectBroker) resumeStopEffect(
 	initialCommandID string,
 	runnerID string,
 	assignmentID string,
+	workspaceID string,
 	commandPayload []byte,
 	nextDeadline time.Time,
 	now time.Time,
@@ -887,17 +888,32 @@ func (broker *PostgresEffectBroker) resumeStopEffect(
 		if tag.RowsAffected() != 1 {
 			return false, ports.ErrRevisionConflict
 		}
-		commandTag, err := tx.Exec(ctx, `
+		// The command may already be terminal (acknowledged, expired, or
+		// failed); the exhaustion transition only requires that it can no
+		// longer be delivered, so zero affected rows is an acceptable
+		// outcome rather than a fault.
+		if _, err := tx.Exec(ctx, `
 			UPDATE secondbox.runner_commands
 			SET state='failed',target_connection_id='',updated_at=$2
 			WHERE id=$1 AND state IN ('pending','delivering','delivered')`,
 			currentCommandID, now,
-		)
-		if err != nil {
+		); err != nil {
 			return false, fmt.Errorf("SecondBox lifecycle stop exhausted command failed: %w", err)
 		}
-		if commandTag.RowsAffected() != 1 {
-			return false, errors.New("SecondBox lifecycle stop exhausted command is missing")
+		// An exhausted stop can never reach finish_stop (that requires the
+		// mutation to be runner_succeeded), so nothing downstream releases
+		// the Workspace stop mutation. Leaving it held would block every
+		// later Workspace mutation, including the restart that recovers a
+		// failed Sandbox.
+		if _, err := tx.Exec(ctx, `
+			UPDATE secondbox.workspaces
+			SET mutation_kind='',mutation_id='',mutation_effect_id='',
+			    mutation_operation_id='',mutation_expected_generation=NULL,
+			    mutation_target_generation=NULL,mutation_state='',updated_at=$3
+			WHERE id=$1 AND mutation_kind='stop' AND mutation_id=$2`,
+			workspaceID, effectID, now,
+		); err != nil {
+			return false, fmt.Errorf("SecondBox lifecycle stop exhausted Workspace mutation release failed: %w", err)
 		}
 		if err := releaseEffectReconcileClaim(
 			ctx, tx, claim, now, nextReconcileAt, "stop",
@@ -922,7 +938,7 @@ func (broker *PostgresEffectBroker) resumeStopEffect(
 		INSERT INTO secondbox.runner_commands (
 			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
 			delivery_count,created_at,updated_at,delivered_at
-		) VALUES ($1,$2,$3,'fence',$4,'pending','',0,$5,$5,NULL)`,
+		) VALUES ($1,$2,$3,'lifecycle_fence',$4,'pending','',0,$5,$5,NULL)`,
 		retryCommandID, runnerID, assignmentID, commandPayload, now,
 	); err != nil {
 		return false, fmt.Errorf("SecondBox lifecycle stop retry command insert failed: %w", err)
