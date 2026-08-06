@@ -1,18 +1,22 @@
 import { createHash, timingSafeEqual, X509Certificate } from "node:crypto";
+import type { IncomingMessage } from "node:http";
 import { connect as connectTLS, type TLSSocket } from "node:tls";
 import WebSocket, { type RawData } from "ws";
 
-import type {
-  DirectPortDialer,
-  DirectPortSocket,
-  ExecStreamConnection,
-  ExecStreamConnector,
-  PortTunnelConnection,
-  PortTunnelConnector,
-  PortTunnelTransports,
-  TerminalConnection,
-  TerminalConnector,
+import {
+  SecondBoxProblemError,
+  type DirectPortDialer,
+  type DirectPortSocket,
+  type ExecStreamConnection,
+  type ExecStreamConnector,
+  type PortTunnelConnection,
+  type PortTunnelConnector,
+  type PortTunnelTransports,
+  type Problem,
+  type TerminalConnection,
+  type TerminalConnector,
 } from "./client.ts";
+import { SecondBoxAPIError } from "./transport.ts";
 
 const websocketMessageQueues = new WeakMap<
   WebSocket,
@@ -62,7 +66,12 @@ export function createNodeTransports(
       const socket = await openWebSocket(
         descriptor.websocketURL,
         [descriptor.subprotocol],
-        authenticatedHeaders(descriptor.generation),
+        {
+          ...authenticatedHeaders(descriptor.generation),
+          ...(descriptor.afterSequence === undefined
+            ? {}
+            : { "SecondBox-Terminal-After-Sequence": String(descriptor.afterSequence) }),
+        },
         signal,
       );
       return new NodeTextConnection(socket);
@@ -253,6 +262,7 @@ function openWebSocket(
       signal?.removeEventListener("abort", abort);
       socket.removeListener("open", opened);
       socket.removeListener("error", failed);
+      socket.removeListener("unexpected-response", rejected);
       if (error) {
         socket.terminate();
         reject(error);
@@ -268,11 +278,64 @@ function openWebSocket(
       finish();
     };
     const failed = (error: Error): void => finish(error);
+    const rejected = (_request: unknown, response: IncomingMessage): void => {
+      void (async () => {
+        try {
+          const body = await readBoundedHandshakeBody(response);
+          finish(handshakeFailure(response.statusCode ?? 0, body));
+        } catch (error) {
+          finish(error instanceof Error ? error : new Error(String(error)));
+        }
+      })();
+    };
     const abort = (): void => finish(abortError(signal));
     socket.once("open", opened);
     socket.once("error", failed);
+    socket.once("unexpected-response", rejected);
     signal?.addEventListener("abort", abort, { once: true });
   });
+}
+
+/** Matches the Go SDK's bound on WebSocket attach error responses. */
+const MAXIMUM_HANDSHAKE_PROBLEM_BYTES = 4 << 20;
+
+function readBoundedHandshakeBody(response: IncomingMessage): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    response.on("data", (chunk: Buffer) => {
+      total += chunk.byteLength;
+      if (total > MAXIMUM_HANDSHAKE_PROBLEM_BYTES) {
+        response.destroy();
+        reject(new Error(
+          `SecondBox Node WebSocket handshake error response exceeds ${String(MAXIMUM_HANDSHAKE_PROBLEM_BYTES)} bytes`,
+        ));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    response.on("end", () => resolve(Buffer.concat(chunks)));
+    response.on("error", reject);
+  });
+}
+
+/**
+ * Surfaces a rejected WebSocket handshake the same way the Go SDK does: a
+ * typed Problem error when the body decodes as one, otherwise a structured
+ * API error that preserves the HTTP status and bounded body.
+ */
+function handshakeFailure(status: number, body: Buffer): Error {
+  const text = body.toString("utf8");
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(text);
+  } catch {
+    decoded = undefined;
+  }
+  if (typeof decoded === "object" && decoded !== null && !Array.isArray(decoded)) {
+    return new SecondBoxProblemError(status, decoded as Problem);
+  }
+  return new SecondBoxAPIError(new Response(text === "" ? null : text, { status }));
 }
 
 function websocketMessages(

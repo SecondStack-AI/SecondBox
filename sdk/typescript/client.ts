@@ -168,7 +168,8 @@ export class SecondBox {
       return await this.transport.send(OPERATIONS[operationID], options);
     } catch (error) {
       if (!(error instanceof SecondBoxAPIError)) throw error;
-      const problem = (await error.response.json()) as Problem;
+      const problem = await decodeProblemResponse(error.response);
+      if (problem === undefined) throw error;
       throw new SecondBoxProblemError(error.response.status, problem);
     }
   }
@@ -701,6 +702,12 @@ export interface TerminalConnector {
       readonly sandboxID: string;
       readonly generation: number;
       readonly expiresAt: string;
+      /**
+       * Requests replay of output after this last successfully received
+       * sequence via the SecondBox-Terminal-After-Sequence header. Absent when
+       * the caller attaches without a replay cursor.
+       */
+      readonly afterSequence?: number;
     },
     signal?: AbortSignal,
   ): Promise<TerminalConnection>;
@@ -710,20 +717,28 @@ export interface TerminalConnector {
 export class Terminal {
   readonly #connection: TerminalConnection;
   #nextClientSequence: number;
-  #nextServerSequence = 0;
+  #nextServerSequence: number;
   #terminal = false;
   #writeTail: Promise<void> = Promise.resolve();
   #readTail: Promise<void> = Promise.resolve();
 
-  public constructor(connection: TerminalConnection, nextClientSequence: number) {
+  public constructor(
+    connection: TerminalConnection,
+    nextClientSequence: number,
+    nextServerSequence = 0,
+  ) {
     if (connection.subprotocol !== "secondbox.terminal.v1") {
       throw new Error("SecondBox Terminal subprotocol was not negotiated");
     }
     if (!Number.isSafeInteger(nextClientSequence) || nextClientSequence < 0) {
       throw new Error("SecondBox Terminal next client sequence is invalid");
     }
+    if (!Number.isSafeInteger(nextServerSequence) || nextServerSequence < 0) {
+      throw new Error("SecondBox Terminal next server sequence is invalid");
+    }
     this.#connection = connection;
     this.#nextClientSequence = nextClientSequence;
+    this.#nextServerSequence = nextServerSequence;
   }
 
   public sendInput(data: Uint8Array): Promise<void> {
@@ -1317,8 +1332,33 @@ export class SandboxHandle implements SandboxFilesystem {
   }
 
   /** Attaches an authenticated Terminal connector and validates the session fence. */
-  public async connectTerminal(
+  public connectTerminal(
     session: TerminalSession,
+    connector: TerminalConnector,
+    signal?: AbortSignal,
+  ): Promise<Terminal> {
+    return this.attachTerminal(session, undefined, connector, signal);
+  }
+
+  /**
+   * Attaches and replays output after the last sequence the caller received
+   * successfully. Pass -1 when no output has been received.
+   */
+  public connectTerminalAfter(
+    session: TerminalSession,
+    afterSequence: number,
+    connector: TerminalConnector,
+    signal?: AbortSignal,
+  ): Promise<Terminal> {
+    if (!Number.isSafeInteger(afterSequence) || afterSequence < -1) {
+      return Promise.reject(new Error("SecondBox Terminal replay sequence is invalid"));
+    }
+    return this.attachTerminal(session, afterSequence, connector, signal);
+  }
+
+  private async attachTerminal(
+    session: TerminalSession,
+    afterSequence: number | undefined,
     connector: TerminalConnector,
     signal?: AbortSignal,
   ): Promise<Terminal> {
@@ -1350,11 +1390,16 @@ export class SandboxHandle implements SandboxFilesystem {
         sandboxID: session.sandboxId,
         generation: session.generation,
         expiresAt: session.expiresAt,
+        ...(afterSequence === undefined ? {} : { afterSequence }),
       },
       signal,
     );
     const attached = decodeTerminalAttachFrame(await connection.receiveText(signal));
-    return new Terminal(connection, attached.nextClientSequence ?? session.nextClientSequence);
+    return new Terminal(
+      connection,
+      attached.nextClientSequence ?? session.nextClientSequence,
+      afterSequence === undefined ? 0 : afterSequence + 1,
+    );
   }
 
   /** Creates one generation- and Lease-fenced authenticated PortSession. */
@@ -1918,6 +1963,29 @@ function decodeTerminalServerFrame(payload: string, expectedSequence: number): T
     return decoded as TerminalFrame;
   }
   throw new Error("SecondBox Terminal server frame is invalid");
+}
+
+/** Bounds Problem decoding the same way the Go transport bounds error bodies. */
+const MAXIMUM_PROBLEM_TEXT_LENGTH = 4 << 20;
+
+/**
+ * Decodes a non-successful response body as a Problem, or undefined when the
+ * body is not a Problem document. A caller receiving undefined must surface
+ * the transport error so the HTTP status and body remain observable.
+ */
+async function decodeProblemResponse(response: Response): Promise<Problem | undefined> {
+  const body = await response.clone().text();
+  if (body.length > MAXIMUM_PROBLEM_TEXT_LENGTH) return undefined;
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+  if (typeof decoded !== "object" || decoded === null || Array.isArray(decoded)) {
+    return undefined;
+  }
+  return decoded as Problem;
 }
 
 function decodeTerminalAttachFrame(payload: string): TerminalAttachedFrame {

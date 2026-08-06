@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.3 - 2026-08-06
+
+Repaired the colliding migration prefix that stopped v0.2.0 and v0.2.1 deployments from starting on v0.2.2, and restored TypeScript SDK terminal replay parity.
+
+Upgrade directly from v0.2.0 or v0.2.1 to v0.2.3 and skip v0.2.2. Deployments already running v0.2.2 are repaired automatically on first start.
+
+### Fixed
+
+- Repaired the schema lineage collision that made v0.2.2 unreachable from v0.2.0 and v0.2.1: v0.2.2 shipped the lifecycle fence retag as `0010_lifecycle_fence_command_kind`, which sorts before the `0010_lifecycle_hot_path_indexes` already shipped in v0.2.0, so an upgraded ledger failed positional prefix validation and the control plane refused to start. The migration is renamed to `0013_lifecycle_fence_command_kind` with byte-identical content, and a checksum-verified ledger repair renames a row recorded under the v0.2.2 name in place, preserving `applied_at` and re-executing nothing. A row whose checksum is not the embedded fence content is refused, a ledger that recorded the fence ahead of the migrations preceding it is refused with an instruction to run the recording release to completion, and every 4-digit numeric prefix must now be unique across the embedded lineage so a colliding prefix cannot embed again ([#49](https://github.com/SecondStack-AI/SecondBox/pull/49)).
+- Restored terminal replay-resume parity in the TypeScript SDK: `connectTerminalAfter` threads the replay cursor through the connector descriptor, sends the `SecondBox-Terminal-After-Sequence` header, resumes output sequencing at `afterSequence + 1`, and surfaces a rejected WebSocket handshake — including `terminal_replay_evicted` — as the same typed Problem error the Go SDK returns. The SDK parity contract test now asserts the capability in both SDKs ([#48](https://github.com/SecondStack-AI/SecondBox/pull/48)).
+- Stopped the TypeScript `request` path from discarding the HTTP status when an error body is not a Problem document: the transport error carrying the status and a bounded body is surfaced instead of a `SyntaxError` ([#48](https://github.com/SecondStack-AI/SecondBox/pull/48)).
+- Made `scripts/test-firecracker.sh` export `SECONDBOX_RUNNER_QUALIFY_FIRECRACKER=1` so an unqualified machine fails loudly instead of skipping every targeted test and passing vacuously, and corrected six runner configuration errors to name the environment variables that actually exist (`SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY`, `SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256`, `SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH`) ([#48](https://github.com/SecondStack-AI/SecondBox/pull/48)).
+
 ## 0.2.2 - 2026-08-06
 
 Stopped single poison records from taking down the whole control plane or locking a runner into a reconnect loop.

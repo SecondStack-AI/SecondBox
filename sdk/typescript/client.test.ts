@@ -22,7 +22,7 @@ import {
   problemCodeOf,
   revisionETag,
 } from "./client.ts";
-import { SecondBoxClient } from "./transport.ts";
+import { SecondBoxAPIError, SecondBoxClient, type TerminalSession } from "./transport.ts";
 
 test("requestJSON uses generated operation metadata", async () => {
   let requested = "";
@@ -59,6 +59,27 @@ test("requestJSON decodes structured SecondBox errors", async () => {
       error.status === 404 &&
       error.problem.code === "not_found",
   );
+});
+
+test("request surfaces the transport error when the error body is not a Problem", async () => {
+  const fetcher: typeof fetch = async () =>
+    new Response("<html>Bad Gateway</html>", {
+      status: 502,
+      headers: { "Content-Type": "text/html" },
+    });
+  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
+  let failure: unknown;
+  try {
+    await api.requestJSON<Sandbox>("getSandbox", {
+      pathParameters: { sandboxId: "sandbox-1" },
+    });
+  } catch (error) {
+    failure = error;
+  }
+  assert.ok(failure instanceof SecondBoxAPIError);
+  assert.equal(failure.response.status, 502);
+  assert.match(failure.message, /status=502/);
+  assert.equal(await failure.response.text(), "<html>Bad Gateway</html>");
 });
 
 test("waitOperation reports structured terminal failure", async () => {
@@ -402,6 +423,66 @@ test("SandboxHandle attaches a sequenced binary-safe Terminal helper", async () 
   assert.equal(closed, true);
 });
 
+test("SandboxHandle resumes a Terminal after the last received sequence", async () => {
+  const received = [
+    `{"type":"terminal_attached","nextClientSequence":9}`,
+    `{"type":"terminal_output","sequence":8,"dataBase64":"AAH+/w=="}`,
+    `{"type":"terminal_output","sequence":0,"dataBase64":"AAH+/w=="}`,
+  ];
+  const connection: TerminalConnection = {
+    subprotocol: "secondbox.terminal.v1",
+    async sendText() {},
+    async receiveText() {
+      const payload = received.shift();
+      if (payload === undefined) throw new Error("missing test Terminal frame");
+      return payload;
+    },
+    async close() {},
+  };
+  let descriptor: Parameters<TerminalConnector["connect"]>[0] | undefined;
+  const connector: TerminalConnector = {
+    async connect(value) {
+      descriptor = value;
+      return connection;
+    },
+  };
+  const api = new SecondBox(
+    new SecondBoxClient("https://secondbox.example", "token", async () => Response.json({})),
+  );
+  const handle = new SandboxHandle(api, sandbox("ready"));
+  const terminal = await handle.connectTerminalAfter(terminalSession(), 7, connector);
+  assert.equal(descriptor?.afterSequence, 7);
+  assert.deepEqual(await terminal.receive(), {
+    type: "terminal_output",
+    sequence: 8,
+    dataBase64: "AAH+/w==",
+  });
+  await assert.rejects(terminal.receive(), /server sequence is invalid/);
+});
+
+test("SandboxHandle rejects an invalid Terminal replay sequence", async () => {
+  let connected = false;
+  const connector: TerminalConnector = {
+    async connect() {
+      connected = true;
+      throw new Error("unreachable test Terminal connector");
+    },
+  };
+  const api = new SecondBox(
+    new SecondBoxClient("https://secondbox.example", "token", async () => Response.json({})),
+  );
+  const handle = new SandboxHandle(api, sandbox("ready"));
+  await assert.rejects(
+    handle.connectTerminalAfter(terminalSession(), -2, connector),
+    /Terminal replay sequence is invalid/,
+  );
+  await assert.rejects(
+    handle.connectTerminalAfter(terminalSession(), 1.5, connector),
+    /Terminal replay sequence is invalid/,
+  );
+  assert.equal(connected, false);
+});
+
 test("SandboxHandle gets and cancels one stable Terminal session", async () => {
   const requests: Request[] = [];
   const fetcher: typeof fetch = async (input, init) => {
@@ -627,6 +708,20 @@ function sandbox(state: Sandbox["state"]): Sandbox {
     revision: 1,
     createdAt: "2026-07-28T00:00:00Z",
     updatedAt: "2026-07-28T00:00:00Z",
+  };
+}
+
+function terminalSession(): TerminalSession {
+  return {
+    id: "term-1",
+    sandboxId: "sandbox-1",
+    generation: 7,
+    state: "detached",
+    websocketUrl: "wss://secondbox.example/v1/sandboxes/sandbox-1/terminals/term-1",
+    subprotocol: "secondbox.terminal.v1",
+    streamWindowBytes: 65536,
+    nextClientSequence: 4,
+    expiresAt: "2026-07-28T00:01:00Z",
   };
 }
 
