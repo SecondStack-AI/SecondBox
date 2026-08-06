@@ -80,23 +80,23 @@ func (c *Config) ValidateMicroVMTrustAnchor() error {
 	}
 	if c.MicroVMPublicKeySHA256 != "" {
 		if _, err := hex.DecodeString(c.MicroVMPublicKeySHA256); err != nil || len(c.MicroVMPublicKeySHA256) != sha256.Size*2 {
-			return fmt.Errorf("SECONDBOX_RUNNER_PUBLIC_KEY_SHA256 must be 64 lowercase hex characters")
+			return fmt.Errorf("SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 must be 64 lowercase hex characters")
 		}
 	}
 	if c.MicroVMPublicKeySHA256 != "" && c.MicroVMPublicKeyPath == "" {
-		return fmt.Errorf("SECONDBOX_RUNNER_PUBLIC_KEY_SHA256 requires SECONDBOX_RUNNER_PUBLIC_KEY")
+		return fmt.Errorf("SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 requires SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY")
 	}
 	if c.MicroVMPublicKeyPath == "" {
 		return nil
 	}
 	publicKey, publicKeyDER, err := readPublicKey(c.MicroVMPublicKeyPath)
 	if err != nil {
-		return fmt.Errorf("SECONDBOX_RUNNER_PUBLIC_KEY %q: %w", c.MicroVMPublicKeyPath, err)
+		return fmt.Errorf("SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY %q: %w", c.MicroVMPublicKeyPath, err)
 	}
 	actualFingerprint := sha256.Sum256(publicKeyDER)
 	actualFingerprintHex := hex.EncodeToString(actualFingerprint[:])
 	if c.MicroVMPublicKeySHA256 != "" && actualFingerprintHex != c.MicroVMPublicKeySHA256 {
-		return fmt.Errorf("SECONDBOX_RUNNER_PUBLIC_KEY_SHA256 mismatch: expected %s, got %s", c.MicroVMPublicKeySHA256, actualFingerprintHex)
+		return fmt.Errorf("SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 mismatch: expected %s, got %s", c.MicroVMPublicKeySHA256, actualFingerprintHex)
 	}
 	return verifyArtifactSet(c, publicKey)
 }
@@ -123,13 +123,13 @@ func readPublicKey(path string) (*rsa.PublicKey, []byte, error) {
 
 func verifyArtifactSet(cfg *Config, publicKey *rsa.PublicKey) error {
 	if cfg.MicroVMToolRootfsPath != "" && cfg.MicroVMToolRootfsPath != cfg.MicroVMRootfsPath {
-		return fmt.Errorf("SECONDBOX_RUNNER_TOOL_ROOTFS_PATH cannot be a separate image when SECONDBOX_RUNNER_PUBLIC_KEY is set")
+		return fmt.Errorf("SecondBox Runner tool rootfs must match SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH when SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is set")
 	}
 	if cfg.MicroVMToolSharedImagePath != "" && cfg.MicroVMToolSharedImagePath != cfg.MicroVMSharedImagePath {
-		return fmt.Errorf("SECONDBOX_RUNNER_TOOL_SHARED_IMAGE_PATH cannot be a separate image when SECONDBOX_RUNNER_PUBLIC_KEY is set")
+		return fmt.Errorf("SecondBox Runner tool shared image must match SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH when SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is set")
 	}
 	if cfg.MicroVMSharedImagePath == "" {
-		return fmt.Errorf("SECONDBOX_RUNNER_SHARED_IMAGE_PATH is required when SECONDBOX_RUNNER_PUBLIC_KEY is set")
+		return fmt.Errorf("SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH is required when SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is set")
 	}
 	artifactDir := filepath.Dir(cfg.MicroVMKernelPath)
 	if filepath.Dir(cfg.MicroVMRootfsPath) != artifactDir || filepath.Dir(cfg.MicroVMSharedImagePath) != artifactDir {
