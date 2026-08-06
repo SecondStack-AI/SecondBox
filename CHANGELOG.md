@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 - 2026-08-06
+
+Stopped the same-host runner deployment from leaking bind mounts into the host mount namespace.
+
+### Fixed
+
+- The same-host runner Compose service now binds its state and workspace directories with `rslave` propagation instead of `rshared`. When `workspace_root` nested inside the state mount, `rshared` let each runner container start propagate the workspace bind back into the host mount namespace, doubling a stack of identical mounts on the workspace host directory every start; the leaked mounts survived container teardown, made the directory undeletable, blocked re-bootstrap, and grew the host mount table without bound. Nothing in the runner creates mounts intended for the host, so `rslave` preserves the needed host-to-container propagation while cutting the leaking direction ([#42](https://github.com/SecondStack-AI/SecondBox/pull/42)).
+
 ## 0.2.0 - 2026-08-05
 
 Hardened microVM and data-plane isolation, unlocked placement and lifecycle database hot paths, brought the TypeScript SDK to parity with Go, and bound release staging to scenario qualification evidence.
