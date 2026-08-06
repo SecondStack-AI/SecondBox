@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
@@ -281,7 +282,22 @@ func (broker *PostgresEffectBroker) resumeWorkspaceDeleteEffect(
 		return false, fmt.Errorf("SecondBox lifecycle Workspace delete retry lookup failed: %w", err)
 	}
 	if state == "succeeded" {
-		return false, errors.New("SecondBox lifecycle Workspace delete succeeded without finalizing its Sandbox")
+		// The delete effect finished but its Sandbox was never finalized:
+		// durable state disagrees with itself. Failing here would end the
+		// reconciler and stop the server, so the row defers with backoff
+		// and the anomaly is logged for the operator.
+		slog.WarnContext(
+			ctx,
+			"SecondBox lifecycle Workspace delete succeeded without finalizing its Sandbox",
+			"sandboxId", claim.SandboxID,
+			"effectId", effectID,
+		)
+		if err := releaseEffectReconcileClaim(
+			ctx, tx, claim, now, nextReconcileAt, "Workspace delete",
+		); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 	if state == "queued" && effectDeadline.After(now) {
 		if err := releaseEffectReconcileClaim(
@@ -426,13 +442,17 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 	}
 	networkPolicy, err := assignmentNetworkPolicy(plan.spec.Network)
 	if err != nil {
-		return err
+		return broker.deferInvalidProfileStart(
+			ctx, claim, plan, err, now.UTC(), nextReconcileAt.UTC(),
+		)
 	}
 	assets, guestProtocolGeneration, err := resolveProfileAssets(
 		broker.config.AssetCatalog, plan.spec,
 	)
 	if err != nil {
-		return err
+		return broker.deferInvalidProfileStart(
+			ctx, claim, plan, err, now.UTC(), nextReconcileAt.UTC(),
+		)
 	}
 	requiredCapabilities := []string{"network-policy", "storage", "cleanup", "local-workspace"}
 	deadline := now.UTC().Add(broker.config.AssignmentDeadline)
@@ -542,6 +562,44 @@ func (broker *PostgresEffectBroker) observeAtOrAfter(previous time.Time) (time.T
 		return previous.UTC(), nil
 	}
 	return observedAt, nil
+}
+
+// deferInvalidProfileStart quarantines a start whose pinned Profile cannot be
+// resolved into a valid assignment. The Profile is durable data, not a
+// transient fault: failing here would end the reconciler and stop the server,
+// so the Sandbox defers with backoff and the anomaly is logged for the
+// operator who has to repair or replace the Profile revision.
+func (broker *PostgresEffectBroker) deferInvalidProfileStart(
+	ctx context.Context,
+	claim ports.LifecycleReconcileClaim,
+	plan startPlan,
+	cause error,
+	now time.Time,
+	nextReconcileAt time.Time,
+) error {
+	slog.WarnContext(
+		ctx,
+		"SecondBox lifecycle start was deferred by an invalid Profile",
+		"sandboxId", claim.SandboxID,
+		"profileRevisionId", plan.profileRevisionID,
+		"error", cause,
+	)
+	tag, err := broker.pool.Exec(ctx, `
+		UPDATE secondbox.sandboxes
+		SET next_reconcile_at=$2,reconcile_owner='',
+		    reconcile_claim_expires_at=NULL,revision=revision+1,updated_at=$3
+		WHERE id=$1 AND generation=$4 AND current_instance_id=''
+		  AND revision=$5 AND reconcile_owner=$6`,
+		claim.SandboxID, nextReconcileAt, now, plan.generation,
+		claim.Revision, claim.WorkerID,
+	)
+	if err != nil {
+		return fmt.Errorf("SecondBox lifecycle invalid Profile deferral failed: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return ports.ErrRevisionConflict
+	}
+	return nil
 }
 
 func (broker *PostgresEffectBroker) deferUnavailableHomeRunnerStart(
