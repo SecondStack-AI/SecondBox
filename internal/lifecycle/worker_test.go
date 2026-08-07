@@ -219,6 +219,110 @@ func TestReconcilerKeepsTransitionalWaitOnPollInterval(t *testing.T) {
 	}
 }
 
+// The drain and finish-stop commits determine their own successor, so they
+// leave the Sandbox due at once instead of paying a recovery poll interval that
+// occupies no work. These four tests fix that boundary: the two transitions
+// that qualify, and the two conditions under which each does not.
+func TestReconcilerLeavesDrainCommitImmediatelyDue(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	store := &fakeReconcileStore{claim: ports.LifecycleReconcileClaim{
+		SandboxID: "sbx-1", WorkerID: "worker-1", Revision: 3,
+		ObservedState: contracts.SandboxStateReady,
+		DesiredState:  contracts.SandboxDesiredStateDeleted,
+		GuestLiveness: contracts.GuestLivenessReady,
+		HasInstance:   true,
+	}}
+	reconciler := Reconciler{
+		Store: store, WorkerID: "worker-1", ClaimDuration: time.Minute, PollInterval: time.Second,
+	}
+	decision, found, err := reconciler.RunOnce(t.Context(), now, ports.LifecycleWakeTriggerNotify)
+	if err != nil || !found || decision.Action != ActionDrain {
+		t.Fatalf("reconciliation = %#v, %t, %v", decision, found, err)
+	}
+	if !store.nextReconcileAt.Equal(now) {
+		t.Fatalf(
+			"next reconciliation = %s, want the drain commit clock %s",
+			store.nextReconcileAt, now,
+		)
+	}
+}
+
+func TestReconcilerKeepsDrainOnPollIntervalWhileASessionIsActive(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	store := &fakeReconcileStore{claim: ports.LifecycleReconcileClaim{
+		SandboxID: "sbx-1", WorkerID: "worker-1", Revision: 3,
+		ObservedState:     contracts.SandboxStateReady,
+		DesiredState:      contracts.SandboxDesiredStateDeleted,
+		GuestLiveness:     contracts.GuestLivenessReady,
+		HasInstance:       true,
+		ActiveSessions:    1,
+		DrainGraceSeconds: 30,
+	}}
+	reconciler := Reconciler{
+		Store: store, WorkerID: "worker-1", ClaimDuration: time.Minute, PollInterval: time.Second,
+	}
+	decision, found, err := reconciler.RunOnce(t.Context(), now, ports.LifecycleWakeTriggerNotify)
+	if err != nil || !found || decision.Action != ActionDrain {
+		t.Fatalf("reconciliation = %#v, %t, %v", decision, found, err)
+	}
+	want := now.Add(time.Second)
+	if !store.nextReconcileAt.Equal(want) {
+		t.Fatalf(
+			"next reconciliation = %s, want the poll deadline %s while the drain barrier holds",
+			store.nextReconcileAt, want,
+		)
+	}
+}
+
+func TestReconcilerLeavesFinishStopImmediatelyDueWhenDeletionIsWanted(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	store := &fakeReconcileStore{claim: ports.LifecycleReconcileClaim{
+		SandboxID: "sbx-1", WorkerID: "worker-1", Revision: 3,
+		ObservedState:   contracts.SandboxStateStopping,
+		DesiredState:    contracts.SandboxDesiredStateDeleted,
+		StopEffectState: "runner_succeeded",
+		GuestLiveness:   contracts.GuestLivenessStopped,
+	}}
+	reconciler := Reconciler{
+		Store: store, WorkerID: "worker-1", ClaimDuration: time.Minute, PollInterval: time.Second,
+	}
+	decision, found, err := reconciler.RunOnce(t.Context(), now, ports.LifecycleWakeTriggerNotify)
+	if err != nil || !found || decision.Action != ActionFinishStop {
+		t.Fatalf("reconciliation = %#v, %t, %v", decision, found, err)
+	}
+	if !store.nextReconcileAt.Equal(now) {
+		t.Fatalf(
+			"next reconciliation = %s, want the finish-stop commit clock %s",
+			store.nextReconcileAt, now,
+		)
+	}
+}
+
+func TestReconcilerKeepsFinishStopOnPollIntervalWhenStoppedIsWanted(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	store := &fakeReconcileStore{claim: ports.LifecycleReconcileClaim{
+		SandboxID: "sbx-1", WorkerID: "worker-1", Revision: 3,
+		ObservedState:   contracts.SandboxStateStopping,
+		DesiredState:    contracts.SandboxDesiredStateStopped,
+		StopEffectState: "runner_succeeded",
+		GuestLiveness:   contracts.GuestLivenessStopped,
+	}}
+	reconciler := Reconciler{
+		Store: store, WorkerID: "worker-1", ClaimDuration: time.Minute, PollInterval: time.Second,
+	}
+	decision, found, err := reconciler.RunOnce(t.Context(), now, ports.LifecycleWakeTriggerNotify)
+	if err != nil || !found || decision.Action != ActionFinishStop {
+		t.Fatalf("reconciliation = %#v, %t, %v", decision, found, err)
+	}
+	want := now.Add(time.Second)
+	if !store.nextReconcileAt.Equal(want) {
+		t.Fatalf(
+			"next reconciliation = %s, want the poll deadline %s for a Sandbox already at rest",
+			store.nextReconcileAt, want,
+		)
+	}
+}
+
 func TestReconcilerProcessesClaimBatchSequentially(t *testing.T) {
 	store := &fakeReconcileStore{batchClaims: []ports.LifecycleReconcileClaim{
 		{

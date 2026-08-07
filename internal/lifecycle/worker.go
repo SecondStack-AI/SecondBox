@@ -183,6 +183,9 @@ func nextLifecycleReconcileAt(
 	pollInterval time.Duration,
 ) time.Time {
 	fallback := now.Add(pollInterval)
+	if successorIsImmediatelyAvailable(view, decision) {
+		return now
+	}
 	if decision.Action != ActionWait ||
 		view.Observed != contracts.SandboxStateReady ||
 		view.Desired != contracts.SandboxDesiredStateRunning ||
@@ -207,6 +210,40 @@ func nextLifecycleReconcileAt(
 		return fallback
 	}
 	return deadline
+}
+
+// successorIsImmediatelyAvailable reports whether the state a decision commits
+// determines its own successor with no further evidence. Such a transition is
+// scheduled at `now`, which both leaves the Sandbox due for the worker's next
+// claim and satisfies the sandboxes_notify_due predicate, so the successor runs
+// without waiting out a recovery poll interval that occupies no work.
+//
+// Only these two transitions qualify, and the restriction is what keeps the
+// worker from spinning:
+//
+//   - Every action requiring a runner or object-store effect must wait for the
+//     Runner's acknowledgement, so it keeps the bounded poll.
+//   - ActionWait is the steady state. Waking a waiting Sandbox immediately
+//     would make an idle deployment reconcile in a tight loop, so a wait is
+//     never immediate and an idle Sandbox still sleeps to its own deadline.
+//   - Both successors named here are effect actions or a wait, never another
+//     immediate transition, so one state change can advance at most one extra
+//     hop before the schedule is bounded again.
+func successorIsImmediatelyAvailable(view View, decision Decision) bool {
+	switch decision.Action {
+	case ActionDrain:
+		// Drain commits `draining`, whose successor is stop_instance for every
+		// desired state — unless an active session holds the drain barrier
+		// open, and then the barrier's own grace period is what must elapse.
+		return view.ActiveSessions == 0
+	case ActionFinishStop:
+		// Finish-stop commits `stopped`. A Sandbox still wanted deleted deletes
+		// and one wanted running starts again; only a Sandbox that is already
+		// in its desired state has nothing waiting on this commit.
+		return view.Desired != contracts.SandboxDesiredStateStopped
+	default:
+		return false
+	}
 }
 
 func earlierFutureDeadline(left, right, now time.Time) time.Time {

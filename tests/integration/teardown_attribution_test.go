@@ -86,16 +86,15 @@ func TestTeardownStagesCoverTheDeleteOperationWallClock(t *testing.T) {
 		t.Fatalf("delete Operation timing = %#v", timing)
 	}
 
-	// The delete Operation's complete hop sequence. The two pickup stages are
-	// the wake evidence: the intent commit notifies, and a later hop is
-	// reached only by the recovery poll deadline. A pickup stage is recorded
-	// once per Operation, so the second poll-bound hop is visible in the stage
-	// intervals asserted below rather than as a second row.
+	// The delete Operation's complete hop sequence. Every pickup on this path is
+	// now earned by a commit notification: each transition whose successor
+	// decision is already available leaves its Sandbox due at its own clock, so
+	// no hop reaches the recovery poll deadline. A pickup stage is recorded once
+	// per Operation, so one notify row covers them all.
 	wantStages := []string{
 		store.StageDurableAdmission,
 		store.StageLifecyclePickupNotify,
 		"teardown_drain_committed",
-		store.StageLifecyclePickupDeadline,
 		"teardown_fence_dispatched",
 		"teardown_fence_acknowledged",
 		"teardown_generation_advanced",
@@ -105,11 +104,9 @@ func TestTeardownStagesCoverTheDeleteOperationWallClock(t *testing.T) {
 	}
 	gotStages := make([]string, len(timing.Orchestration))
 	cumulative := map[string]float64{}
-	elapsed := map[string]float64{}
 	for index, stage := range timing.Orchestration {
 		gotStages[index] = stage.Stage
 		cumulative[stage.Stage] = stage.CumulativeMilliseconds
-		elapsed[stage.Stage] = stage.ElapsedMilliseconds
 	}
 	if len(gotStages) != len(wantStages) {
 		t.Fatalf("delete Operation stages = %v, want %v", gotStages, wantStages)
@@ -141,34 +138,40 @@ func TestTeardownStagesCoverTheDeleteOperationWallClock(t *testing.T) {
 		)
 	}
 
-	// Both poll-bound hops are named, and neither is runner work. The drain
-	// commit and the finish-stop commit each leave their successor decision
-	// immediately available and still schedule it one recovery poll interval
-	// away, so the delete path pays that interval twice for no external work.
+	// No hop on this path waits out the recovery poll interval. The drain commit
+	// and the finish-stop commit each determine their own successor, so both now
+	// schedule it at their own clock; the generation-advance acknowledgement
+	// already did. A hop that reaches the poll floor means a transition went
+	// back to sleep with its successor decision already available.
 	pollFloor := 0.8 * float64(teardownPollInterval.Milliseconds())
-	if elapsed[store.StageLifecyclePickupDeadline] < pollFloor {
-		t.Fatalf(
-			"drain commit to poll-deadline pickup = %.1f ms, want at least %.1f ms",
-			elapsed[store.StageLifecyclePickupDeadline], pollFloor,
-		)
-	}
-	stopToDelete := cumulative["teardown_workspace_delete_dispatched"] -
-		cumulative["teardown_stop_committed"]
-	if stopToDelete < pollFloor {
-		t.Fatalf(
-			"finish-stop commit to Workspace delete dispatch = %.1f ms, want at least %.1f ms",
-			stopToDelete, pollFloor,
-		)
-	}
-	// The generation-advance acknowledgement does move the Sandbox due, so its
-	// successor is notified rather than polled.
-	fenceToAdvance := cumulative["teardown_generation_advanced"] -
-		cumulative["teardown_fence_acknowledged"]
-	if fenceToAdvance >= pollFloor {
-		t.Fatalf(
-			"Fence acknowledgement to generation advance = %.1f ms, want below %.1f ms",
-			fenceToAdvance, pollFloor,
-		)
+	for _, hop := range []struct {
+		name   string
+		from   string
+		to     string
+		reason string
+	}{
+		{
+			name: "drain commit to Fence dispatch",
+			from: "teardown_drain_committed", to: "teardown_fence_dispatched",
+			reason: "the stop decision is available as soon as the drain commits",
+		},
+		{
+			name: "finish-stop commit to Workspace delete dispatch",
+			from: "teardown_stop_committed", to: "teardown_workspace_delete_dispatched",
+			reason: "the delete decision is available as soon as the stop commits",
+		},
+		{
+			name: "Fence acknowledgement to generation advance",
+			from: "teardown_fence_acknowledged", to: "teardown_generation_advanced",
+			reason: "the acknowledgement moves the Sandbox due",
+		},
+	} {
+		if interval := cumulative[hop.to] - cumulative[hop.from]; interval >= pollFloor {
+			t.Fatalf(
+				"%s = %.1f ms, want below %.1f ms (%s)",
+				hop.name, interval, pollFloor, hop.reason,
+			)
+		}
 	}
 
 	if createOperationID == "" {
@@ -177,14 +180,14 @@ func TestTeardownStagesCoverTheDeleteOperationWallClock(t *testing.T) {
 	if trigger := triggers[lifecycle.ActionDrain]; trigger != ports.LifecycleWakeTriggerNotify {
 		t.Fatalf("delete intent pickup trigger = %q, want notify", trigger)
 	}
-	if trigger := triggers[lifecycle.ActionStopInstance]; trigger != ports.LifecycleWakeTriggerDeadline {
-		t.Fatalf("post-drain pickup trigger = %q, want deadline", trigger)
+	if trigger := triggers[lifecycle.ActionStopInstance]; trigger != ports.LifecycleWakeTriggerNotify {
+		t.Fatalf("post-drain pickup trigger = %q, want notify", trigger)
 	}
 	if trigger := triggers[lifecycle.ActionFinishStop]; trigger != ports.LifecycleWakeTriggerNotify {
 		t.Fatalf("post-generation-advance pickup trigger = %q, want notify", trigger)
 	}
-	if trigger := triggers[lifecycle.ActionDelete]; trigger != ports.LifecycleWakeTriggerDeadline {
-		t.Fatalf("post-finish-stop pickup trigger = %q, want deadline", trigger)
+	if trigger := triggers[lifecycle.ActionDelete]; trigger != ports.LifecycleWakeTriggerNotify {
+		t.Fatalf("post-finish-stop pickup trigger = %q, want notify", trigger)
 	}
 }
 
@@ -195,10 +198,10 @@ func TestTeardownStagesCoverTheDeleteOperationWallClock(t *testing.T) {
 // transition that schedules itself into the future cannot notify and its
 // successor must wait out the recovery poll interval.
 //
-// This is a characterization of current behaviour, not an endorsement of it.
-// Two teardown transitions make their successor decision immediately available
-// and still schedule it a full poll interval away. Changing that must change
-// this test.
+// Every transition that makes its successor decision immediately available now
+// leaves the Sandbox due, and every transition still waiting on the Runner does
+// not. This test is the boundary between the two: a transition that moves from
+// one column to the other must be a deliberate change here.
 func TestTeardownTransitionWakeupCoverage(t *testing.T) {
 	fixture := newTeardownFixture(t)
 	sandboxID, _ := fixture.createReadySandbox(t)
@@ -232,8 +235,8 @@ func TestTeardownTransitionWakeupCoverage(t *testing.T) {
 			advance: func(t *testing.T) {
 				fixture.runLifecycle(t, sandboxID, lifecycle.ActionDrain)
 			},
-			wantDueNow:    false,
-			successorNote: "the stop decision is available at once and still waits a poll interval",
+			wantDueNow:    true,
+			successorNote: "the stop decision is available at once",
 		},
 		{
 			name: "stop dispatch commit",
@@ -264,8 +267,8 @@ func TestTeardownTransitionWakeupCoverage(t *testing.T) {
 			advance: func(t *testing.T) {
 				fixture.runLifecycle(t, sandboxID, lifecycle.ActionFinishStop)
 			},
-			wantDueNow:    false,
-			successorNote: "the delete decision is available at once and still waits a poll interval",
+			wantDueNow:    true,
+			successorNote: "the delete decision is available at once",
 		},
 		{
 			name: "Workspace delete dispatch commit",
