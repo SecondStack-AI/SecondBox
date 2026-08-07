@@ -509,6 +509,7 @@
       "resources",
       "retention",
       "runtimeBundleDigest",
+      "startup",
       "toolchainBundleDigest"
     ],
     "optional": []
@@ -690,6 +691,12 @@
     "optional": [
       "nextCursor"
     ]
+  },
+  "StartupPolicy": {
+    "required": [
+      "mode"
+    ],
+    "optional": []
   },
   "StreamCancelFrame": {
     "required": [

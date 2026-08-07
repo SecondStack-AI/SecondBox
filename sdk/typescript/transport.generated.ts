@@ -397,7 +397,7 @@ export interface Problem {
   readonly type: string;
 }
 
-export type ProblemCode = "invalid_request" | "authentication_failed" | "authorization_failed" | "not_found" | "idempotency_conflict" | "precondition_failed" | "state_conflict" | "workspace_mutation_conflict" | "generation_fenced" | "lease_fenced" | "profile_unavailable" | "home_runner_unavailable" | "sandbox_not_stopped" | "workspace_relocation_snapshots_present" | "workspace_relocation_target_unavailable" | "quota_exceeded" | "limit_exceeded" | "guest_unavailable" | "execution_node_unavailable" | "dependency_unavailable" | "internal_error" | "terminal_replay_evicted" | "wait_expired";
+export type ProblemCode = "invalid_request" | "authentication_failed" | "authorization_failed" | "not_found" | "idempotency_conflict" | "precondition_failed" | "state_conflict" | "workspace_mutation_conflict" | "generation_fenced" | "lease_fenced" | "profile_unavailable" | "startup_mode_unsupported" | "home_runner_unavailable" | "sandbox_not_stopped" | "workspace_relocation_snapshots_present" | "workspace_relocation_target_unavailable" | "quota_exceeded" | "limit_exceeded" | "guest_unavailable" | "execution_node_unavailable" | "dependency_unavailable" | "internal_error" | "terminal_replay_evicted" | "wait_expired";
 
 export interface ProblemDetail {
   readonly field: string;
@@ -438,6 +438,7 @@ export interface ProfileRevisionSpec {
   readonly resources: ResourcePolicy;
   readonly retention: RetentionPolicy;
   readonly runtimeBundleDigest: string;
+  readonly startup: StartupPolicy;
   readonly toolchainBundleDigest: string;
 }
 
@@ -482,7 +483,7 @@ export interface ReviseProfileRequest {
 
 export interface Runner {
   readonly architectures: readonly ("amd64" | "arm64")[];
-  readonly capabilities: readonly ("compute" | "network-policy" | "storage" | "cleanup" | "local-workspace" | "exec-streaming" | "file-streaming" | "pty" | "port-proxy" | "evidence")[];
+  readonly capabilities: readonly ("compute" | "network-policy" | "storage" | "cleanup" | "local-workspace" | "snapshot-resume" | "exec-streaming" | "file-streaming" | "pty" | "port-proxy" | "evidence")[];
   readonly capacity: Readonly<Record<string, number>>;
   readonly createdAt: Timestamp;
   readonly credentialState: "pre_shared";
@@ -500,7 +501,7 @@ export interface Runner {
 
 export type RunnerArchitectureList = readonly ("amd64" | "arm64")[];
 
-export type RunnerCapabilityList = readonly ("compute" | "network-policy" | "storage" | "cleanup" | "local-workspace" | "workspace-relocation" | "exec-streaming" | "file-streaming" | "pty" | "port-proxy" | "evidence")[];
+export type RunnerCapabilityList = readonly ("compute" | "network-policy" | "storage" | "cleanup" | "local-workspace" | "snapshot-resume" | "workspace-relocation" | "exec-streaming" | "file-streaming" | "pty" | "port-proxy" | "evidence")[];
 
 export type RunnerCapacityPolicy = Readonly<Record<string, number>>;
 
@@ -595,6 +596,14 @@ export interface SnapshotPage {
 }
 
 export type SpawnFailureKind = "not_found" | "permission_denied" | "invalid_cwd" | "malformed_executable";
+
+/** cold_boot starts a Sandbox by booting its guest. snapshot_resume resumes a prepared, identity-neutral guest, admits only onto Runners advertising the snapshot-resume capability, and never falls back to cold_boot. */
+export type StartupMode = "cold_boot" | "snapshot_resume";
+
+/** How every Instance of this Profile revision reaches ready. There is no default; an operator states the mode on every Profile revision and the immutable revision pins it. */
+export interface StartupPolicy {
+  readonly mode: StartupMode;
+}
 
 export interface StreamCancelFrame {
   readonly sequence: number;

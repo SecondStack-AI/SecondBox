@@ -298,6 +298,10 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox Firecracker config requires boolean SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED")
 	}
+	snapshotTemplateCacheRoot, err := required("SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT")
+	if err != nil {
+		return nil, err
+	}
 	networkPolicyNFTPath, err := required("SECONDBOX_RUNNER_NETWORK_POLICY_NFT_PATH")
 	if err != nil {
 		return nil, err
@@ -367,6 +371,7 @@ func LoadRunnerFirecrackerConfigFromEnv() (*config.Config, error) {
 		MicroVMStoragePressureWarningPercent:       storagePressureWarningPercent,
 		MicroVMStoragePressureAdmissionDenyPercent: storagePressureAdmissionDenyPercent,
 		MicroVMAllowUnjailed:                       allowUnjailed,
+		MicroVMSnapshotTemplateCacheRoot:           snapshotTemplateCacheRoot,
 		MicroVMGuestIP:                             guestIP,
 		MicroVMBridgeName:                          bridgeName,
 		MicroVMBridgeCIDR:                          bridgeCIDR,

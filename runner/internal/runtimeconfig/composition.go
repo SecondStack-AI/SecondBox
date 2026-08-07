@@ -44,7 +44,7 @@ func LoadFromEnvironment(healthcheck bool) (Composition, error) {
 			connector.Close(),
 		)
 	}
-	for _, name := range []string{"SECONDBOX_RUNNER_WORKSPACE_ROOT", "SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR", "SECONDBOX_RUNNER_FIRECRACKER_LOG_DIR", "SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT", "SECONDBOX_RUNNER_LOG_DIR"} {
+	for _, name := range []string{"SECONDBOX_RUNNER_WORKSPACE_ROOT", "SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR", "SECONDBOX_RUNNER_FIRECRACKER_LOG_DIR", "SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT", "SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT", "SECONDBOX_RUNNER_LOG_DIR"} {
 		value := strings.TrimSpace(os.Getenv(name))
 		if value == "" || !filepath.IsAbs(value) {
 			return Composition{}, errors.Join(

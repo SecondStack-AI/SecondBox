@@ -288,6 +288,10 @@ func createPausedSnapshotForQualification(
 
 func snapshotLoadQualificationConfig(t *testing.T, workDir string, memoryMiB int, workspaceMiB int) *config.Config {
 	t.Helper()
+	runDir := filepath.Join(
+		requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_RUN_ROOT"),
+		fmt.Sprintf("m%d", memoryMiB),
+	)
 	return &config.Config{
 		FirecrackerPath:        requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_PATH"),
 		MicroVMKernelPath:      requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH"),
@@ -296,16 +300,17 @@ func snapshotLoadQualificationConfig(t *testing.T, workDir string, memoryMiB int
 		MicroVMPublicKeyPath:   requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"),
 		MicroVMPublicKeySHA256: requiredEnv(t, "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256"),
 		RunnerWorkspaceRoot:    filepath.Join(workDir, "workspaces"),
-		MicroVMRunDir: filepath.Join(
-			requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_RUN_ROOT"),
-			fmt.Sprintf("m%d", memoryMiB),
-		),
-		MicroVMLogDir:           filepath.Join(workDir, "logs"),
-		MicroVMKernelArgs:       requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS"),
-		MicroVMMemoryMiB:        memoryMiB,
-		MicroVMVCPUs:            1,
-		MicroVMWorkspaceSizeMiB: workspaceMiB,
-		MicroVMAllowUnjailed:    true,
+		MicroVMRunDir:          runDir,
+		MicroVMLogDir:          filepath.Join(workDir, "logs"),
+		// The qualifications build their own cache under the same root, so the
+		// Manager's configured root is the one they then admit templates through
+		// and the jailed gate's single-filesystem requirement covers both.
+		MicroVMSnapshotTemplateCacheRoot: filepath.Join(runDir, "templates"),
+		MicroVMKernelArgs:                requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS"),
+		MicroVMMemoryMiB:                 memoryMiB,
+		MicroVMVCPUs:                     1,
+		MicroVMWorkspaceSizeMiB:          workspaceMiB,
+		MicroVMAllowUnjailed:             true,
 	}
 }
 

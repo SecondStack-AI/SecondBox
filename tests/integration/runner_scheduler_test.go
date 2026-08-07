@@ -24,6 +24,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/reconcile"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/internal/scheduler"
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/protobuf/proto"
 )
@@ -112,6 +113,84 @@ func TestRunnerRegistrationRejectsPoolsThatAreNotReady(t *testing.T) {
 		if err == nil || err.Error() != "SecondBox RunnerPool is not accepting runners" {
 			t.Fatalf("%s pool registration error = %v", state, err)
 		}
+	}
+}
+
+// TestRunnerRegistrationAdvertisesSnapshotResumeOnlyWhenTheRunnerReportsIt pins
+// the one place the scheduler's capability vocabulary is minted. Resume capacity
+// is optional: a Runner that does not report it registers normally and stays
+// fully schedulable for cold_boot, and only a Runner that reports it becomes
+// visible to a snapshot_resume Profile.
+func TestRunnerRegistrationAdvertisesSnapshotResumeOnlyWhenTheRunnerReportsIt(t *testing.T) {
+	now := time.Date(2026, 8, 7, 15, 0, 0, 0, time.UTC)
+	poolName := task4ID("resume-capability-pool")
+	task4InsertRunnerPool(t, poolName, now)
+	caCertificate, caPrivateKey := task4CertificateAuthority(t, now)
+	authority := newTask4CredentialAuthority(t, caCertificate, caPrivateKey, now)
+	stateStore, err := runnercontrol.NewPostgresStateStore(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stateStore.Close)
+	databasePool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(databasePool.Close)
+
+	for _, testCase := range []struct {
+		name                string
+		snapshotResumeReady bool
+	}{
+		{"cold boot only", false},
+		{"snapshot resume ready", true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			runnerID := task4ID("runner")
+			connectionID := task4ID("connection")
+			issued, err := authority.Issue(runnerID, task4CertificateRequest(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := stateStore.OpenConnection(
+				t.Context(), issued.Identity, connectionID, 1, now,
+			); err != nil {
+				t.Fatal(err)
+			}
+			registration := task4Registration(runnerID, connectionID, poolName)
+			registration.Capabilities.SnapshotResumeReady = testCase.snapshotResumeReady
+			if duplicate, err := stateStore.RecordRegistration(
+				t.Context(), registration, now,
+			); err != nil || duplicate {
+				t.Fatalf("RecordRegistration duplicate, error = %t, %v", duplicate, err)
+			}
+			var capabilitiesJSON []byte
+			if err := databasePool.QueryRow(t.Context(), `
+				SELECT capabilities_json FROM secondbox.runners WHERE id=$1`, runnerID,
+			).Scan(&capabilitiesJSON); err != nil {
+				t.Fatal(err)
+			}
+			var capabilities []string
+			if err := json.Unmarshal(capabilitiesJSON, &capabilities); err != nil {
+				t.Fatal(err)
+			}
+			advertised := slices.Contains(capabilities, contracts.RunnerCapabilitySnapshotResume)
+			if advertised != testCase.snapshotResumeReady {
+				t.Fatalf(
+					"snapshot-resume advertised = %t, want %t (capabilities %v)",
+					advertised, testCase.snapshotResumeReady, capabilities,
+				)
+			}
+			// Cold-boot placement never depends on resume capacity, so the
+			// ordinary prerequisites must be present either way.
+			for _, prerequisite := range []string{
+				"compute", "network-policy", "storage", "cleanup", "local-workspace",
+			} {
+				if !slices.Contains(capabilities, prerequisite) {
+					t.Errorf("registration lost prerequisite capability %q", prerequisite)
+				}
+			}
+		})
 	}
 }
 

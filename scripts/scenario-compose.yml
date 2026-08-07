@@ -188,6 +188,10 @@ services:
       SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR: /var/lib/secondbox-runner/run
       SECONDBOX_RUNNER_FIRECRACKER_LOG_DIR: /var/lib/secondbox-runner/firecracker-log
       SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED: "false"
+      # The resume template cache must share a filesystem with the jail root so
+      # a golden memory file can be hard-linked into each jail and keep one
+      # inode and one page cache across concurrent resumes.
+      SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT: /w/snapshot-templates
       SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY: /opt/secondbox-artifact-public-key.pem
       SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256: ${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256:?SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256 is required}
       SECONDBOX_RUNNER_WORKSPACE_ROOT: /w

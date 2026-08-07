@@ -30,6 +30,19 @@ const (
 	SandboxDesiredStateStopped = "stopped"
 	SandboxDesiredStateDeleted = "deleted"
 
+	// StartupModeColdBoot starts every Instance by booting its guest.
+	StartupModeColdBoot = "cold_boot"
+	// StartupModeSnapshotResume starts every Instance by resuming a prepared,
+	// identity-neutral guest. It has no cold-boot fallback and admits only onto
+	// Runners advertising RunnerCapabilitySnapshotResume.
+	StartupModeSnapshotResume = "snapshot_resume"
+
+	// RunnerCapabilitySnapshotResume is advertised by a Runner that can start a
+	// Sandbox by resuming a prepared guest: it is configured with a template
+	// cache root and holds an admitted template built from the exact signed
+	// bundle the Runner itself verified.
+	RunnerCapabilitySnapshotResume = "snapshot-resume"
+
 	OperationStatePending   = "pending"
 	OperationStateRunning   = "running"
 	OperationStateSucceeded = "succeeded"
@@ -143,11 +156,20 @@ type ProfileRevisionSpec struct {
 	RuntimeBundleDigest   string          `json:"runtimeBundleDigest"`
 	ToolchainBundleDigest string          `json:"toolchainBundleDigest"`
 	Resources             ResourcePolicy  `json:"resources"`
+	Startup               StartupPolicy   `json:"startup"`
 	Lifecycle             LifecyclePolicy `json:"lifecycle"`
 	Retention             RetentionPolicy `json:"retention"`
 	Execution             ExecutionPolicy `json:"execution"`
 	Network               NetworkPolicy   `json:"network"`
 	Ports                 []PortPolicy    `json:"ports"`
+}
+
+// StartupPolicy states how an Instance of a Profile revision reaches ready.
+// There is no application default: an operator states the mode on every Profile
+// revision, and the mode is pinned by the immutable revision a Sandbox resolves
+// at creation.
+type StartupPolicy struct {
+	Mode string `json:"mode"`
 }
 
 // ResourcePolicy contains per-Sandbox enforceable compute and workspace limits.

@@ -169,3 +169,56 @@ func withRunnerEvidence(
 	runner.ArtifactDigests = artifacts
 	return runner
 }
+
+// TestSelectRunnerAdmitsSnapshotResumeOnlyOnAdvertisingRunners pins the hard
+// placement filter a snapshot_resume Profile depends on. Resume has no cold-boot
+// fallback, so a Runner without resume capacity must be invisible to it rather
+// than chosen and failed at start.
+func TestSelectRunnerAdmitsSnapshotResumeOnlyOnAdvertisingRunners(t *testing.T) {
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	requirements := Requirements{
+		PoolName: "general", BackendKind: "firecracker", Architecture: "amd64",
+		RequiredCapabilities: []string{
+			"network-policy", "storage", "cleanup", "local-workspace", "snapshot-resume",
+		},
+		GuestProtocolGeneration: 1,
+		Capacity:                Capacity{CPUMillis: 1000, MemoryBytes: 1 << 30, DiskBytes: 10 << 30, Instances: 1},
+	}
+	coldOnly := RunnerSnapshot{
+		ID: "runner-cold-only", PoolName: "general", Architecture: "amd64",
+		Capabilities: readyCapabilities(), Allocatable: abundantCapacity(),
+		DrainPhase: DrainPhaseActive, LastHeartbeatAt: now,
+		GuestProtocolMinimum: 1, GuestProtocolMaximum: 1,
+	}
+	resumeCapable := coldOnly
+	resumeCapable.ID = "runner-resume"
+	resumeCapable.Capabilities = readyCapabilities()
+	resumeCapable.Capabilities["snapshot-resume"] = true
+
+	if _, err := SelectRunner(
+		requirements, []RunnerSnapshot{coldOnly}, now, 30*time.Second,
+	); !errors.Is(err, ErrNoCompatibleRunner) {
+		t.Fatalf("cold-only Runner admitted a snapshot_resume Profile: %v", err)
+	}
+	selected, err := SelectRunner(
+		requirements, []RunnerSnapshot{coldOnly, resumeCapable}, now, 30*time.Second,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.ID != "runner-resume" {
+		t.Fatalf("selected runner = %q, want runner-resume", selected.ID)
+	}
+
+	// A cold_boot Profile carries no resume requirement and must keep placing on
+	// every Runner, including the one that also advertises resume capacity.
+	coldRequirements := requirements
+	coldRequirements.RequiredCapabilities = []string{
+		"network-policy", "storage", "cleanup", "local-workspace",
+	}
+	if _, err := SelectRunner(
+		coldRequirements, []RunnerSnapshot{coldOnly}, now, 30*time.Second,
+	); err != nil {
+		t.Fatalf("cold_boot Profile lost its ordinary Runner: %v", err)
+	}
+}

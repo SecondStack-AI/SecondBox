@@ -86,6 +86,7 @@ func (driver *lifecycleDriver) prepare(ctx context.Context) error {
 						ProcessLimit:         driver.config.Profile.ProcessLimit,
 						ConcurrentOperations: driver.config.Profile.ConcurrentOperations,
 					},
+					Startup: secondboxclient.StartupPolicy{Mode: secondboxclient.StartupModeColdBoot},
 					Lifecycle: secondboxclient.LifecyclePolicy{
 						InitialState:           "running",
 						DrainGraceSeconds:      driver.config.Profile.DrainGraceSeconds,

@@ -379,6 +379,7 @@ func testProfileSpec(cpuMillis int64) contracts.ProfileRevisionSpec {
 			CPUMillis: cpuMillis, MemoryBytes: 1 << 30, WorkspaceBytes: 8 << 30,
 			ProcessLimit: 128, ConcurrentOperations: 4,
 		},
+		Startup: contracts.StartupPolicy{Mode: contracts.StartupModeColdBoot},
 		Lifecycle: contracts.LifecyclePolicy{
 			InitialState: "stopped", DrainGraceSeconds: 30, IdleSeconds: 300,
 			MaximumDurationSeconds: 3600, LeaseSeconds: 60,

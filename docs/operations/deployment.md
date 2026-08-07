@@ -218,6 +218,10 @@ firecracker_log_directory = ''
 # Packaged Runner jail policy; must be false.
 firecracker_allow_unjailed = true
 
+# Snapshot-resume startup
+# Runner-local resume template cache; absolute and within /var/lib/secondbox-runner for same-host placement. The Runner advertises snapshot-resume capacity only when this cache already holds a template built from the signed bundle the Runner verified, so a Profile whose startup mode is snapshot_resume never places onto a Runner that cannot resume it. Keep it on the same filesystem as firecracker_jail_root: the golden memory file is hard-linked into each jail so every resumed Instance shares one inode and one page cache.
+snapshot_template_cache_root = ''
+
 # Sandbox networking
 # Guest IP address assigned to Sandboxes; must be an IP address.
 sandbox_guest_ip = ''

@@ -2031,8 +2031,13 @@ type RunnerCapabilities struct {
 	CleanupReady             bool                   `protobuf:"varint,9,opt,name=cleanup_ready,json=cleanupReady,proto3" json:"cleanup_ready,omitempty"`
 	GuestProtocolGenerations *ProtocolVersionRange  `protobuf:"bytes,10,opt,name=guest_protocol_generations,json=guestProtocolGenerations,proto3" json:"guest_protocol_generations,omitempty"`
 	DataPlaneReady           bool                   `protobuf:"varint,11,opt,name=data_plane_ready,json=dataPlaneReady,proto3" json:"data_plane_ready,omitempty"`
-	unknownFields            protoimpl.UnknownFields
-	sizeCache                protoimpl.SizeCache
+	// snapshot_resume_ready is true only when this runner is configured with a
+	// resume template cache root, requires the jailer, and holds at least one
+	// admitted template built from the exact signed bundle it verified. It is not
+	// a prerequisite: a runner without it stays fully eligible for cold boot.
+	SnapshotResumeReady bool `protobuf:"varint,12,opt,name=snapshot_resume_ready,json=snapshotResumeReady,proto3" json:"snapshot_resume_ready,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *RunnerCapabilities) Reset() {
@@ -2138,6 +2143,13 @@ func (x *RunnerCapabilities) GetGuestProtocolGenerations() *ProtocolVersionRange
 func (x *RunnerCapabilities) GetDataPlaneReady() bool {
 	if x != nil {
 		return x.DataPlaneReady
+	}
+	return false
+}
+
+func (x *RunnerCapabilities) GetSnapshotResumeReady() bool {
+	if x != nil {
+		return x.SnapshotResumeReady
 	}
 	return false
 }
@@ -2864,8 +2876,13 @@ type ProfileRequirements struct {
 	MaximumOutputBytes   uint64                 `protobuf:"varint,7,opt,name=maximum_output_bytes,json=maximumOutputBytes,proto3" json:"maximum_output_bytes,omitempty"`
 	VcpuMillis           uint32                 `protobuf:"varint,8,opt,name=vcpu_millis,json=vcpuMillis,proto3" json:"vcpu_millis,omitempty"`
 	ProcessLimit         uint32                 `protobuf:"varint,9,opt,name=process_limit,json=processLimit,proto3" json:"process_limit,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// startup_mode is the immutable ProfileRevision startup policy, provider
+	// neutral and stated by the operator: "cold_boot" or "snapshot_resume". A
+	// runner that cannot honour the stated mode fails the assignment; it never
+	// substitutes the other one.
+	StartupMode   string `protobuf:"bytes,10,opt,name=startup_mode,json=startupMode,proto3" json:"startup_mode,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ProfileRequirements) Reset() {
@@ -2959,6 +2976,13 @@ func (x *ProfileRequirements) GetProcessLimit() uint32 {
 		return x.ProcessLimit
 	}
 	return 0
+}
+
+func (x *ProfileRequirements) GetStartupMode() string {
+	if x != nil {
+		return x.StartupMode
+	}
+	return ""
 }
 
 type SignedAssetReference struct {
@@ -8602,7 +8626,7 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\tinstances\x18\x04 \x01(\rR\tinstances\x12\x1e\n" +
 	"\n" +
 	"operations\x18\x05 \x01(\rR\n" +
-	"operations\"\x82\x04\n" +
+	"operations\"\xb6\x04\n" +
 	"\x12RunnerCapabilities\x12\"\n" +
 	"\farchitecture\x18\x01 \x01(\tR\farchitecture\x12%\n" +
 	"\x0ekernel_release\x18\x02 \x01(\tR\rkernelRelease\x12/\n" +
@@ -8615,7 +8639,8 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\rcleanup_ready\x18\t \x01(\bR\fcleanupReady\x12g\n" +
 	"\x1aguest_protocol_generations\x18\n" +
 	" \x01(\v2).secondbox.runner.v1.ProtocolVersionRangeR\x18guestProtocolGenerations\x12(\n" +
-	"\x10data_plane_ready\x18\v \x01(\bR\x0edataPlaneReady\"\x90\x01\n" +
+	"\x10data_plane_ready\x18\v \x01(\bR\x0edataPlaneReady\x122\n" +
+	"\x15snapshot_resume_ready\x18\f \x01(\bR\x13snapshotResumeReady\"\x90\x01\n" +
 	"\x15ArtifactCacheEvidence\x12\x1f\n" +
 	"\vartifact_id\x18\x01 \x01(\tR\n" +
 	"artifactId\x12'\n" +
@@ -8688,7 +8713,7 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\rfencing_token\x18\x05 \x01(\fR\ffencingToken\"w\n" +
 	"\x13CapacityReservation\x129\n" +
 	"\bcapacity\x18\x01 \x01(\v2\x1d.secondbox.runner.v1.CapacityR\bcapacity\x12%\n" +
-	"\x0ereservation_id\x18\x02 \x01(\tR\rreservationId\"\xf9\x02\n" +
+	"\x0ereservation_id\x18\x02 \x01(\tR\rreservationId\"\x9c\x03\n" +
 	"\x13ProfileRequirements\x12\x1d\n" +
 	"\n" +
 	"vcpu_count\x18\x01 \x01(\rR\tvcpuCount\x12!\n" +
@@ -8701,7 +8726,9 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\x14maximum_output_bytes\x18\a \x01(\x04R\x12maximumOutputBytes\x12\x1f\n" +
 	"\vvcpu_millis\x18\b \x01(\rR\n" +
 	"vcpuMillis\x12#\n" +
-	"\rprocess_limit\x18\t \x01(\rR\fprocessLimit\"\xa4\x02\n" +
+	"\rprocess_limit\x18\t \x01(\rR\fprocessLimit\x12!\n" +
+	"\fstartup_mode\x18\n" +
+	" \x01(\tR\vstartupMode\"\xa4\x02\n" +
 	"\x14SignedAssetReference\x12\x1f\n" +
 	"\vartifact_id\x18\x01 \x01(\tR\n" +
 	"artifactId\x12'\n" +

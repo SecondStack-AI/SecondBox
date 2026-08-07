@@ -33,6 +33,7 @@ var v020MigrationFiles = []string{
 // migration, in the order the embedded lineage sorts it.
 var postFenceMigrationFiles = []string{
 	"0014_lifecycle_quiescent_schedule.sql",
+	"0015_profile_startup_mode.sql",
 }
 
 func embeddedLineageVersions(t *testing.T) []string {

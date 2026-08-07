@@ -674,7 +674,7 @@ func TestSandboxReadsAreScopedToTenantAndSubject(t *testing.T) {
 }
 
 func TestSandboxAdmissionRejectsMissingDisabledAndIncompatibleProfiles(t *testing.T) {
-	controlPlane, _ := newControlPlaneFixture(t, generousQuota())
+	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
 	admin := fixtureAdmin(t, controlPlane)
 	_, _, credential := createProjectAccountAndCredential(t, controlPlane, admin, "admission")
 	principal := authenticateCredential(t, controlPlane, credential)
@@ -712,6 +712,33 @@ func TestSandboxAdmissionRejectsMissingDisabledAndIncompatibleProfiles(t *testin
 		Profile: incompatible.Name, Metadata: map[string]string{},
 	}); !errors.Is(err, ports.ErrRunnerPoolUnavailable) {
 		t.Fatalf("incompatible Profile admission error = %v, want ErrRunnerPoolUnavailable", err)
+	}
+
+	// A snapshot_resume Profile aimed at a pool the operator never declared
+	// resume capacity for is a standing incompatibility, not a shortage. It is
+	// refused distinctly and non-retryably, so a caller is told to change the
+	// declaration rather than to wait.
+	if err := databaseStore.RegisterRunnerPool(t.Context(), contracts.RunnerPool{
+		Name: "default-pool", State: contracts.RunnerPoolStateReady,
+		Architectures: []string{"amd64"}, Capabilities: []string{"compute", "local-workspace"},
+		CapacityPolicy: map[string]int64{"maxInstances": 100}, ReadyRunnerCount: 1,
+		Revision: 1, CreatedAt: time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	resumeSpec := testProfileSpec(1000)
+	resumeSpec.Startup = contracts.StartupPolicy{Mode: contracts.StartupModeSnapshotResume}
+	resumeProfile, err := controlPlane.CreateProfile(t.Context(), admin, contracts.CreateProfileRequest{
+		Name: "snapshot-resume-profile", Spec: resumeSpec,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := controlPlane.CreateSandbox(t.Context(), principal, "snapshot-resume-profile", contracts.CreateSandboxRequest{
+		Profile: resumeProfile.Name, Metadata: map[string]string{},
+	}); !errors.Is(err, ports.ErrStartupModeUnsupported) {
+		t.Fatalf("snapshot_resume admission error = %v, want ErrStartupModeUnsupported", err)
 	}
 }
 

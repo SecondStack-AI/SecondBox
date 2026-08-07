@@ -462,6 +462,12 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		)
 	}
 	requiredCapabilities := []string{"network-policy", "storage", "cleanup", "local-workspace"}
+	// A snapshot_resume Profile revision is placeable only onto a Runner that
+	// advertises resume capacity. There is no cold-boot substitution, so the
+	// requirement is a hard placement filter rather than a preference.
+	if plan.spec.Startup.Mode == contracts.StartupModeSnapshotResume {
+		requiredCapabilities = append(requiredCapabilities, contracts.RunnerCapabilitySnapshotResume)
+	}
 	deadline := now.UTC().Add(broker.config.AssignmentDeadline)
 	assignmentCommand := &runnerv1.AssignmentCommand{
 		Fence: &runnerv1.AssignmentFence{
@@ -477,6 +483,7 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 			DiskBytes:            uint64(plan.spec.Resources.WorkspaceBytes),
 			Architecture:         plan.spec.Architecture,
 			RequiredCapabilities: requiredCapabilities,
+			StartupMode:          plan.spec.Startup.Mode,
 			MaximumOperationMs:   uint64(plan.spec.Execution.MaximumDeadlineMilliseconds),
 			MaximumOutputBytes:   uint64(plan.spec.Execution.MaximumBufferedOutputBytes),
 		},

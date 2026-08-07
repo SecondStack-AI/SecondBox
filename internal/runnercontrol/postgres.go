@@ -18,6 +18,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/store/lifecycleprojection"
 	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/protobuf/proto"
@@ -330,6 +331,13 @@ func (store *PostgresStateStore) RecordRegistration(
 	}
 	if registration.ProtocolVersion >= 2 {
 		capabilities = append(capabilities, "workspace-relocation")
+	}
+	// Snapshot resume is optional runner capacity, not a prerequisite. A runner
+	// without a template cache root, or without an admitted template built from
+	// the bundle it verified, stays fully schedulable for cold_boot Profiles and
+	// is simply invisible to snapshot_resume ones.
+	if registration.Capabilities.SnapshotResumeReady {
+		capabilities = append(capabilities, contracts.RunnerCapabilitySnapshotResume)
 	}
 	architecturesJSON, err := json.Marshal([]string{registration.Capabilities.Architecture})
 	if err != nil {

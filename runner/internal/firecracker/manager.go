@@ -70,6 +70,7 @@ type Manager struct {
 	networkPolicy        HostNetworkPolicyEnforcer
 	defaultNetworkPolicy *networkpolicy.CompiledPolicy
 	trustedArtifacts     *trustedMicroVMArtifacts
+	snapshotTemplates    *SnapshotTemplateCache
 	startCompartment     func(context.Context, string, string, runtimemanager.StartOpts) (string, error)
 	executeTool          func(context.Context, string, ToolExecRequest) (ToolExecResponse, error)
 	freezeWorkspace      func(context.Context, string) (BackupResponse, error)
@@ -298,18 +299,23 @@ func New(cfg *config.Config) (*Manager, error) {
 			return nil, fmt.Errorf("create microVM dir %q: %w", dir, err)
 		}
 	}
+	snapshotTemplates, err := NewSnapshotTemplateCache(cfg.MicroVMSnapshotTemplateCacheRoot)
+	if err != nil {
+		return nil, err
+	}
 	m := &Manager{
-		cfg:              cfg,
-		instances:        map[string]*instance{},
-		instancesByKey:   map[runtimeInstanceKey]string{},
-		provisioning:     map[runtimeInstanceKey]chan struct{}{},
-		pendingSpawns:    map[runtimeInstanceKey]int{},
-		guestIPs:         map[string]string{},
-		jailerUIDs:       map[int]string{},
-		network:          IPTapConfigurer{},
-		trustedArtifacts: trustedArtifacts,
-		evidence:         runnerevidence.SlogSink{},
-		signalInstance:   signalFirecrackerByID,
+		cfg:               cfg,
+		instances:         map[string]*instance{},
+		instancesByKey:    map[runtimeInstanceKey]string{},
+		provisioning:      map[runtimeInstanceKey]chan struct{}{},
+		pendingSpawns:     map[runtimeInstanceKey]int{},
+		guestIPs:          map[string]string{},
+		jailerUIDs:        map[int]string{},
+		network:           IPTapConfigurer{},
+		trustedArtifacts:  trustedArtifacts,
+		snapshotTemplates: snapshotTemplates,
+		evidence:          runnerevidence.SlogSink{},
+		signalInstance:    signalFirecrackerByID,
 	}
 	if strings.TrimSpace(cfg.NetworkPolicyNFTPath) != "" {
 		m.networkPolicy = &NFTablesNetworkPolicyEnforcer{
