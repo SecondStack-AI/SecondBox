@@ -155,7 +155,7 @@ services:
     cgroup: host
     labels:
       org.secondbox.runner.qualification: scenario-suite
-    environment:
+    environment: &scenario-runner-environment
       SECONDBOX_RUNNER_ID: ${SECONDBOX_RUNNER_ID:?SECONDBOX_RUNNER_ID is required}
       SECONDBOX_RUNNER_POOL_ID: ${SECONDBOX_RUNNER_POOL_ID:?SECONDBOX_RUNNER_POOL_ID is required}
       SECONDBOX_RUNNER_SOFTWARE_VERSION: ${SECONDBOX_SCENARIO_SOURCE_COMMIT:?SECONDBOX_SCENARIO_SOURCE_COMMIT is required}
@@ -249,6 +249,53 @@ services:
       timeout: 6s
       retries: 12
       start_period: 15s
+
+  # The interim operator flow for a populated resume cache. A Runner does not
+  # build its own snapshot-resume templates yet, so one is published into
+  # SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT before the Runner starts.
+  #
+  # It runs with the Runner's exact environment, so the kernel arguments, CPU
+  # template, vsock ports, signed bundle, and trust anchor that the template's
+  # compatibility key records cannot disagree with the Runner that must resolve
+  # it. Only the Profile shape is stated separately, because that is the
+  # operator's choice rather than the Runner's.
+  #
+  # It has its own network namespace: the template's capture creates a bridge and
+  # a TAP, and doing that on the host before the Runner has installed its own
+  # host networking would collide with it. The bridge name is not part of the
+  # compatibility key — only the presence of the device and its captured MAC are
+  # — so a private namespace changes nothing about the template.
+  snapshot-template-publisher:
+    image: ${SECONDBOX_SCENARIO_RUNNER_IMAGE:?SECONDBOX_SCENARIO_RUNNER_IMAGE is required}
+    entrypoint: ["/bin/bash", "/usr/local/bin/secondbox-scenario-publish-snapshot-template"]
+    command: []
+    privileged: true
+    network_mode: none
+    cgroup: host
+    labels:
+      org.secondbox.runner.qualification: scenario-snapshot-template
+    environment:
+      <<: *scenario-runner-environment
+      SECONDBOX_RUNNER_PUBLISH_SNAPSHOT_TEMPLATE: "1"
+      SECONDBOX_SNAPSHOT_TEMPLATE_PUBLISH_BUILD_ROOT: /w/.snapshot-template-build
+      SECONDBOX_SNAPSHOT_TEMPLATE_PUBLISH_OUTPUT: /w/.snapshot-template-build/published.json
+      SECONDBOX_SNAPSHOT_TEMPLATE_PUBLISH_MEMORY_MIB: ${SECONDBOX_SCENARIO_SNAPSHOT_RESUME_MEMORY_MIB:?SECONDBOX_SCENARIO_SNAPSHOT_RESUME_MEMORY_MIB is required}
+      SECONDBOX_SNAPSHOT_TEMPLATE_PUBLISH_WORKSPACE_MIB: ${SECONDBOX_SCENARIO_SNAPSHOT_RESUME_WORKSPACE_MIB:?SECONDBOX_SCENARIO_SNAPSHOT_RESUME_WORKSPACE_MIB is required}
+      SECONDBOX_SNAPSHOT_TEMPLATE_PUBLISH_VCPUS: ${SECONDBOX_SCENARIO_SNAPSHOT_RESUME_VCPUS:?SECONDBOX_SCENARIO_SNAPSHOT_RESUME_VCPUS is required}
+      SECONDBOX_SNAPSHOT_TEMPLATE_PUBLISH_PROCESS_LIMIT: ${SECONDBOX_SCENARIO_SNAPSHOT_RESUME_PROCESS_LIMIT:?SECONDBOX_SCENARIO_SNAPSHOT_RESUME_PROCESS_LIMIT is required}
+      SECONDBOX_SNAPSHOT_TEMPLATE_PUBLISH_REPORT: /var/lib/secondbox-runner/snapshot-template-publish.json
+      TMPDIR: /w/.snapshot-template-build/tmp
+    devices:
+      - /dev/kvm:/dev/kvm
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ./scenario-publish-snapshot-template.sh:/usr/local/bin/secondbox-scenario-publish-snapshot-template:ro
+      - ../.tmp/scenario/snapshot-template-publish.test:/opt/secondbox-snapshot-template-publish.test:ro
+      - ${SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR:?SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR is required}:/opt/secondbox-artifacts:ro
+      - ${SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY:?SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY is required}:/opt/secondbox-artifact-public-key.pem:ro
+      - ${SECONDBOX_SCENARIO_STATE_DIR:?SECONDBOX_SCENARIO_STATE_DIR is required}:/var/lib/secondbox-runner:rshared
+      - ${SECONDBOX_SCENARIO_WORKSPACE_DIR:?SECONDBOX_SCENARIO_WORKSPACE_DIR is required}:/w:rshared
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
 
 volumes:
   object-store-data:

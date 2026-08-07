@@ -91,7 +91,7 @@ func TestSmokeSnapshotResumeTemplateLifecycle(t *testing.T) {
 	}
 
 	buildStartedAt := time.Now()
-	key, manifest := buildSnapshotResumeTemplate(t, cfg, cache, memoryMiB, workspaceMiB)
+	key, manifest := buildSnapshotResumeTemplate(t, cfg, cache, memoryMiB, workspaceMiB, nil)
 	report.TemplateBuildMillis = time.Since(buildStartedAt).Milliseconds()
 	report.TemplateID = manifest.TemplateID
 	report.MemoryFileBytes = manifest.Memory.Bytes
@@ -171,12 +171,18 @@ func TestSmokeSnapshotResumeTemplateLifecycle(t *testing.T) {
 // point, and seals VM state, memory, and the post-boot rootfs into the cache.
 // Capturing the rootfs alongside memory is required: boot mutates the disk, so
 // memory alone is not a coherent template.
+//
+// prepareOpts states the Profile shape and signed identity the template is
+// built for. A gate that only resumes its own template passes nil and takes the
+// smoke shape; the interim operator publish flow passes the exact shape the
+// Runner's assignments will carry, because the compatibility key records it.
 func buildSnapshotResumeTemplate(
 	t *testing.T,
 	cfg *config.Config,
 	cache *SnapshotTemplateCache,
 	memoryMiB int,
 	workspaceMiB int,
+	prepareOpts func(runtimemanager.StartOpts) runtimemanager.StartOpts,
 ) (SnapshotTemplateKey, SnapshotTemplateManifest) {
 	t.Helper()
 	workDir := filepath.Dir(cfg.MicroVMLogDir)
@@ -225,6 +231,9 @@ func buildSnapshotResumeTemplate(
 	// A template is keyed by the runtime class it will serve, exactly as a start
 	// is, so the harness states the one class the runner implements.
 	opts.RuntimeClass = runtimemanager.RuntimeClassToolExecutor
+	if prepareOpts != nil {
+		opts = prepareOpts(opts)
+	}
 	instanceID, err := manager.createAndStart(t.Context(), "resumetmpl", opts)
 	if err != nil {
 		_ = attachment.Close()

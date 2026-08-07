@@ -184,6 +184,11 @@ func ensureScenarioRunnerPool(t *testing.T, fixture scenarioFixture) contracts.R
 			"storage",
 			"cleanup",
 			"local-workspace",
+			// The operator's statement that this pool serves snapshot-resume
+			// Profiles. Without it a snapshot_resume Profile aimed here is a
+			// standing incompatibility rather than a shortage, and the control
+			// plane refuses it with startup_mode_unsupported before placement.
+			"snapshot-resume",
 		},
 		CapacityPolicy: map[string]int64{
 			"maximumInstances": 8,

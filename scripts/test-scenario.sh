@@ -4,7 +4,8 @@ umask 077
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 qualification_evidence="$repo_root/.tmp/scenario-qualification-evidence.json"
-rm -f -- "$qualification_evidence"
+snapshot_resume_evidence="$repo_root/.tmp/2026-08-07-snapshot-resume-end-to-end.json"
+rm -f -- "$qualification_evidence" "$snapshot_resume_evidence"
 compose_file="$repo_root/scripts/scenario-compose.yml"
 scenario_root="$repo_root/.tmp/scenario"
 scenario_mode="${SECONDBOX_SCENARIO_MODE:-suite}"
@@ -107,6 +108,18 @@ else
     [[ -n "${!variable:-}" ]] || fail "stress mode requires $variable"
   done
 fi
+
+# The snapshot-resume Profile shape. The template's compatibility key records
+# it, so the same values must reach the template publisher and the resume
+# scenario group; a disagreement is a cache miss, never a silent cold boot.
+# Every Compose service is validated in all modes, so these are stated once here
+# rather than defaulted in the Compose file.
+export SECONDBOX_SCENARIO_SNAPSHOT_RESUME_MEMORY_MIB=256
+export SECONDBOX_SCENARIO_SNAPSHOT_RESUME_WORKSPACE_MIB=64
+export SECONDBOX_SCENARIO_SNAPSHOT_RESUME_VCPUS=1
+export SECONDBOX_SCENARIO_SNAPSHOT_RESUME_PROCESS_LIMIT=128
+export SECONDBOX_SCENARIO_SNAPSHOT_RESUME_ARRIVALS=10
+export SECONDBOX_SCENARIO_SNAPSHOT_RESUME_EVIDENCE="$snapshot_resume_evidence"
 
 for command in curl date docker findmnt git go ip jq mountpoint openssl python3 seq sha256sum; do
   command -v "$command" >/dev/null 2>&1 ||
@@ -215,6 +228,18 @@ mkdir -p "$scenario_root"
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
   -trimpath -buildvcs=false -o "$scenario_root/secondboxd" "$repo_root/cmd/secondboxd"
 chmod 0755 "$scenario_root/secondboxd"
+if [[ "$scenario_mode" == "suite" ]]; then
+  # The snapshot-resume template publisher is compiled on the host, where the
+  # module cache lives, and executed inside the privileged runner image. CGO is
+  # disabled so the binary runs on the Debian-based image regardless of the
+  # build host.
+  (
+    cd "$repo_root/runner"
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c ./internal/firecracker \
+      -o "$scenario_root/snapshot-template-publish.test"
+  )
+  chmod 0755 "$scenario_root/snapshot-template-publish.test"
+fi
 docker build --quiet --file "$repo_root/runner/Dockerfile" --tag "$runner_image" "$repo_root" >/dev/null
 
 run_dir="$(mktemp -d "$scenario_root/run.XXXXXX")"
@@ -554,6 +579,32 @@ elif [[ "$scenario_mode" == "lifecycle" ]]; then
   go run ./tests/scenario/lifecycle \
     --mode prepare \
     --config "$SECONDBOX_STRESS_CONFIG"
+fi
+
+if [[ "$scenario_mode" == "suite" ]]; then
+  # Publish a snapshot-resume template into the Runner's cache before the Runner
+  # starts. Until a Runner builds its own, this is what makes it advertise the
+  # snapshot-resume capability at all; without it every snapshot_resume Profile
+  # would be refused at admission and the resume group would have nothing to
+  # measure.
+  echo "SecondBox scenario publishing a snapshot-resume template"
+  compose run --rm --no-deps snapshot-template-publisher
+  snapshot_template_report="$state_dir/snapshot-template-publish.json"
+  [[ -f "$snapshot_template_report" ]] ||
+    fail "the snapshot-resume template publisher produced no report"
+  export SECONDBOX_SCENARIO_SNAPSHOT_RESUME_TEMPLATE_ID
+  SECONDBOX_SCENARIO_SNAPSHOT_RESUME_TEMPLATE_ID="$(
+    jq -er '.templateId' "$snapshot_template_report"
+  )" || fail "the snapshot-resume template report has no templateId"
+  export SECONDBOX_SCENARIO_SNAPSHOT_RESUME_TEMPLATE_BUILD_MS
+  SECONDBOX_SCENARIO_SNAPSHOT_RESUME_TEMPLATE_BUILD_MS="$(
+    jq -er '.templateBuildMilliseconds' "$snapshot_template_report"
+  )"
+  export SECONDBOX_SCENARIO_SNAPSHOT_RESUME_TEMPLATE_ADMISSION_MS
+  SECONDBOX_SCENARIO_SNAPSHOT_RESUME_TEMPLATE_ADMISSION_MS="$(
+    jq -er '.cacheAdmissionMilliseconds' "$snapshot_template_report"
+  )"
+  echo "SecondBox scenario snapshot-resume template: $SECONDBOX_SCENARIO_SNAPSHOT_RESUME_TEMPLATE_ID"
 fi
 
 compose up --detach --wait --wait-timeout 300 secondbox-runner
