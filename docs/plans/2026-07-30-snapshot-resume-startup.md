@@ -166,7 +166,7 @@ Run the focused tests introduced by each task, then run all repository-wide and 
 - `just test-contract`
 - `just test-compose`
 - `just test-deployment`
-- `just test-snapshot-resume` with the explicit signed bundle, KVM, Btrfs/XFS Workspace root, shapes, iterations, and absent evidence output path
+- `just test-snapshot-resume` with the explicit signed bundle, KVM, Btrfs/XFS Workspace root, shapes, iterations, concurrency rungs, and absent evidence output paths. It runs both the low-level load floor and the composed template lifecycle, and it fails if resumed Instances stop sharing one golden memory inode or if aggregate reads approach one memory image per Instance
 - `git diff --check`
 - `(cd runner && go test ./internal/firecracker ./internal/guest ./internal/runnercontrol)`
 - `just test-scenario` with `SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1`
