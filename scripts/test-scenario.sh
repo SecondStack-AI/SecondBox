@@ -402,8 +402,15 @@ compose() {
   docker compose --project-name "$project_name" --file "$compose_file" "$@"
 }
 
+sweep_host_orphans() {
+  SECONDBOX_SCENARIO_SWEEP_IMAGE="$runner_image" \
+    "$repo_root/scripts/scenario-sweep-host-orphans.sh"
+}
+
+# The Runner writes its host-network state as root into a 0700 directory, so the
+# unprivileged suite cannot read it and must not gate the removal on it. The
+# setup script reports an inactive host network itself.
 remove_host_network() {
-  [[ -f "$state_dir/network/host-network.state" ]] || return 0
   docker run --rm --privileged --network host \
     --entrypoint /usr/local/bin/microvm-host-network-setup \
     -e "SECONDBOX_RUNNER_SANDBOX_BRIDGE_NAME=$SECONDBOX_SCENARIO_BRIDGE_NAME" \
@@ -480,15 +487,19 @@ cleanup() {
       echo "SecondBox scenario could not collect failure logs" >&2
     fi
   fi
-  if ! compose exec --no-TTY secondbox-runner \
-    /usr/local/bin/microvm-host-network-setup remove >/dev/null 2>&1; then
-    if ! remove_host_network; then
-      echo "SecondBox scenario host-network cleanup failed" >&2
-      status=1
-    fi
-  fi
+  # The Runner container restarts unless it is stopped and every start reapplies
+  # host networking, so the bridge can only be removed once the container can no
+  # longer come back and recreate it.
   if ! compose stop secondbox-runner >/dev/null 2>&1; then
     echo "SecondBox scenario runner stop failed for $project_name" >&2
+    status=1
+  fi
+  if ! remove_host_network; then
+    echo "SecondBox scenario host-network cleanup failed" >&2
+    status=1
+  fi
+  if ip link show "$SECONDBOX_SCENARIO_BRIDGE_NAME" >/dev/null 2>&1; then
+    echo "SecondBox scenario host-network cleanup left the bridge behind: $SECONDBOX_SCENARIO_BRIDGE_NAME" >&2
     status=1
   fi
   if ! compose down --volumes --remove-orphans >/dev/null 2>&1; then
@@ -497,6 +508,18 @@ cleanup() {
   fi
   if ! remove_propagated_mounts; then
     echo "SecondBox scenario propagated-mount cleanup failed" >&2
+    status=1
+  fi
+  # The jailer creates one cgroup per Instance under this run's parent and never
+  # removes it, and a host-network removal that could not run leaves this run's
+  # bridge behind. Now that this run's containers are gone both are orphans, so
+  # the same sweep that clears earlier runs reclaims them.
+  if ! sweep_host_orphans; then
+    echo "SecondBox scenario orphan sweep failed" >&2
+    status=1
+  fi
+  if [[ -d "/sys/fs/cgroup/$SECONDBOX_SCENARIO_CGROUP_PARENT" ]]; then
+    echo "SecondBox scenario cgroup parent survived cleanup: $SECONDBOX_SCENARIO_CGROUP_PARENT" >&2
     status=1
   fi
   for directory in "$state_dir" "$scenario_workspace_dir"; do
@@ -566,6 +589,11 @@ echo "SecondBox scenario source commit: $SECONDBOX_SCENARIO_SOURCE_COMMIT"
 echo "SecondBox scenario Go version: $SECONDBOX_SCENARIO_GO_VERSION"
 echo "SecondBox scenario artifact manifest: $manifest_digest"
 echo "SecondBox scenario guest network: $SECONDBOX_SCENARIO_GUEST_CIDR"
+
+# A run killed with SIGKILL never reaches the EXIT trap, so its bridge and
+# cgroup parent survive it. Reclaim those before this run claims host resources
+# of its own; a live run's bridge and cgroup parent are never candidates.
+sweep_host_orphans
 
 compose config --quiet
 compose up --detach --wait --wait-timeout 240 \
