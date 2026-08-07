@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -35,6 +37,11 @@ const (
 	// replaces it with a unique per-Sandbox MAC at its assignment bind, before
 	// the link comes up.
 	snapshotTemplateGuestMAC = "02:00:00:5b:7e:00"
+
+	// snapshotTemplateGuestCID is the guest context ID every VM is configured
+	// with. Like the vsock port numbers it is a compatibility-keyed constant:
+	// only the UDS path changes per Instance.
+	snapshotTemplateGuestCID = 3
 )
 
 // ErrSnapshotTemplateUnavailable marks a resume that cannot proceed because the
@@ -321,5 +328,353 @@ func resumeSnapshotTemplate(
 	if err := client.LoadSnapshotWithOptions(ctx, snapshotResumeLoadRequest(launch, tapName)); err != nil {
 		return fmt.Errorf("load snapshot template: %w", err)
 	}
+	return nil
+}
+
+// snapshotResumeAPIReadyTimeout bounds the jailed VMM's chroot, device-node,
+// exec-file, cgroup, and UID-drop work before its API socket answers. The
+// qualified jailed gate measured 32 ms at one Instance and 179 ms at sixteen.
+const snapshotResumeAPIReadyTimeout = 30 * time.Second
+
+// snapshotResumeLoadTimeout bounds one file-backed snapshot load. The qualified
+// floor is 3-4 ms warm at every memory shape and 5 ms cache-evicted.
+const snapshotResumeLoadTimeout = 120 * time.Second
+
+// snapshotResumeTemplateKey derives the exact compatibility identity this start
+// needs. Every field comes from configuration the runner already verified or
+// from the Profile shape the assignment carries; nothing is hashed here. The
+// kernel, rootfs, and shared-image digests are read from the signed manifest,
+// whose signature Config.ValidateMicroVMTrustAnchor verified against the local
+// files before the Manager existed, so a start never rehashes an 11 GiB bundle.
+//
+// A key this runner cannot state is a template it cannot resolve, so every
+// failure here is the same typed unavailability a cache miss raises.
+func (m *Manager) snapshotResumeTemplateKey(
+	opts runtimemanager.StartOpts,
+	hasNetworkDevice bool,
+	hasSharedImage bool,
+) (SnapshotTemplateKey, error) {
+	policy := opts.SandboxPolicy
+	if policy == nil {
+		return SnapshotTemplateKey{}, fmt.Errorf(
+			"%w: a snapshot-resume start requires the Profile CPU, memory, Workspace, and process shape",
+			ErrSnapshotTemplateUnavailable,
+		)
+	}
+	artifactDir := filepath.Dir(m.cfg.MicroVMKernelPath)
+	manifestPath := filepath.Join(artifactDir, "manifest.json")
+	manifest, err := loadSignedArtifactManifest(manifestPath)
+	if err != nil {
+		return SnapshotTemplateKey{}, fmt.Errorf(
+			"%w: read signed bundle manifest: %w", ErrSnapshotTemplateUnavailable, err,
+		)
+	}
+	manifestDigest, err := fileSHA256(manifestPath)
+	if err != nil {
+		return SnapshotTemplateKey{}, fmt.Errorf(
+			"%w: digest signed bundle manifest: %w", ErrSnapshotTemplateUnavailable, err,
+		)
+	}
+	cpuFingerprint, err := hostCPUCompatibilityFingerprint()
+	if err != nil {
+		return SnapshotTemplateKey{}, fmt.Errorf(
+			"%w: read host CPU compatibility fingerprint: %w", ErrSnapshotTemplateUnavailable, err,
+		)
+	}
+	templateBootArgs, err := m.templateGuestBootArgs()
+	if err != nil {
+		return SnapshotTemplateKey{}, fmt.Errorf(
+			"%w: %w", ErrSnapshotTemplateUnavailable, err,
+		)
+	}
+	networkInterfaceID, templateGuestMAC := "", ""
+	if hasNetworkDevice {
+		networkInterfaceID, templateGuestMAC = snapshotResumeNetworkInterfaceID, snapshotTemplateGuestMAC
+	}
+	sharedImageSHA256 := ""
+	if hasSharedImage {
+		sharedImageSHA256 = manifest.Shared.SHA256
+	}
+	key := SnapshotTemplateKey{
+		ArtifactVersion:       manifest.ArtifactVersion,
+		Architecture:          manifest.Architecture,
+		SigningKeyFingerprint: m.cfg.MicroVMPublicKeySHA256,
+		SignedManifestDigest:  "sha256:" + manifestDigest,
+		KernelSHA256:          manifest.Kernel.SHA256,
+		// The template's own boot arguments, which carry no Sandbox identity and
+		// no guest address. A resumed guest's kernel finished booting before the
+		// Sandbox existed, so its identity arrives at the assignment bind.
+		KernelArgs: strings.TrimSpace(
+			effectiveKernelArgsWithProcessLimit(m.cfg, "", policy.ProcessLimit) + " " + templateBootArgs,
+		),
+		SourceRootfsSHA256:      manifest.Rootfs.SHA256,
+		SharedImageSHA256:       sharedImageSHA256,
+		RuntimeBundleDigest:     opts.ImageManifestDigest,
+		ToolchainBundleDigest:   opts.ToolchainManifestDigest,
+		GuestBuildID:            opts.GuestBuildID,
+		GuestProtocolGeneration: currentGuestProtocolGeneration,
+		GuestFeatures:           append([]string(nil), requestedGuestProtocolFeatureNames...),
+		FirecrackerVersion:      expectedFirecrackerVersionString(),
+		HostCPUFingerprint:      cpuFingerprint,
+		CPUTemplate:             m.cfg.MicroVMCPUTemplate,
+		VCPUCount:               policy.VCPUs,
+		MemorySizeMiB:           policy.MemoryMiB,
+		WorkspaceSizeMiB:        policy.WorkspaceSizeMiB,
+		ProcessLimit:            policy.ProcessLimit,
+		RuntimeClass:            string(opts.RuntimeClass),
+		NetworkInterfaceID:      networkInterfaceID,
+		TemplateGuestMAC:        templateGuestMAC,
+		GuestControlVsockPort:   m.cfg.MicroVMGuestControlVsockPort,
+		GuestProtocolVsockPort:  m.cfg.MicroVMGuestProtocolVsockPort,
+		GuestCID:                snapshotTemplateGuestCID,
+	}
+	if err := key.Validate(); err != nil {
+		return SnapshotTemplateKey{}, fmt.Errorf("%w: %w", ErrSnapshotTemplateUnavailable, err)
+	}
+	return key, nil
+}
+
+// resolveSnapshotResumeTemplate turns this start's compatibility key into an
+// admitted template. A miss, an incompatible shape, a corrupted generation, or
+// a template that changed since admission is the same typed retryable failure,
+// and never a cold boot.
+func (m *Manager) resolveSnapshotResumeTemplate(
+	opts runtimemanager.StartOpts,
+	hasNetworkDevice bool,
+	hasSharedImage bool,
+) (*AdmittedSnapshotTemplate, error) {
+	if m.snapshotTemplates == nil {
+		return nil, fmt.Errorf(
+			"%w: this Runner has no snapshot template cache; set SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT",
+			ErrSnapshotTemplateUnavailable,
+		)
+	}
+	key, err := m.snapshotResumeTemplateKey(opts, hasNetworkDevice, hasSharedImage)
+	if err != nil {
+		return nil, err
+	}
+	template, err := m.snapshotTemplates.Resolve(key)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrSnapshotTemplateUnavailable, err)
+	}
+	return template, nil
+}
+
+// createAndStartResume is the start path a snapshot_resume Profile revision
+// takes. It forks below WorkspaceStore.Open exactly where cold start does, so
+// the exclusive writer lock and the generation fence are already held, and it
+// shares the prologue and epilogue with cold start rather than reproducing
+// them: a divergence between the two paths' isolation properties is the failure
+// this design cannot tolerate.
+//
+// There is no retry inside the load, no second attempt with different
+// parameters, and no cold boot. Every failure tears the Instance down with its
+// TAP, host policy, guest address, staged files, jail, and Workspace attachment
+// and reports the same typed retryable unavailability.
+func (m *Manager) createAndStartResume(
+	ctx context.Context,
+	sandboxID string,
+	compartmentID string,
+	opts runtimemanager.StartOpts,
+	onRegisteredLocked func(),
+) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if opts.WorkspaceAttachment == nil {
+		return "", fmt.Errorf("SecondBox Firecracker Workspace attachment is required")
+	}
+	if opts.TemplateMode {
+		return "", fmt.Errorf("a snapshot-resume template is captured from a cold boot, never resumed from one")
+	}
+	compartmentID = normalizeRuntimeCompartmentID(compartmentID)
+	if err := validateRuntimeCompartmentID(compartmentID); err != nil {
+		return "", err
+	}
+	opts.CompartmentID = compartmentID
+	setupCtx, cancelSetup := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancelSetup()
+
+	host, err := m.reserveInstanceHost(ctx, setupCtx, sandboxID, compartmentID, opts)
+	if err != nil {
+		return "", err
+	}
+	defer host.release()
+	id, dir, timer := host.id, host.dir, host.timer
+
+	workspace, err := m.resolveWorkspaceAttachment(opts)
+	if err != nil {
+		return "", host.joinNetworkCleanup(setupCtx, err)
+	}
+	timer.mark("workspace_ready", "workspace", workspace.path)
+
+	// The shared image is the runner's own verified artifact, staged per
+	// Instance exactly as cold start stages it.
+	sharedImagePath := ""
+	if workspace.sharedReadOnly {
+		image, imageErr := m.microVMImageForStart(opts)
+		if imageErr != nil {
+			return "", host.joinNetworkCleanup(setupCtx, imageErr)
+		}
+		sharedImagePath = image.SharedImagePath
+	}
+	template, err := m.resolveSnapshotResumeTemplate(opts, host.tapName != "", sharedImagePath != "")
+	if err != nil {
+		return "", host.joinNetworkCleanup(setupCtx, err)
+	}
+	timer.mark("snapshot_template_resolved", "template", template.TemplateID)
+
+	startupFingerprint, err := m.startupFingerprint(sandboxID, compartmentID, opts)
+	if err != nil {
+		return "", host.joinNetworkCleanup(setupCtx, fmt.Errorf("build startup fingerprint: %w", err))
+	}
+	if err := m.writeIdentityFile(dir, id, sandboxID, opts); err != nil {
+		return "", host.joinNetworkCleanup(setupCtx, err)
+	}
+
+	launch, err := m.prepareSnapshotResumeLaunch(
+		id,
+		dir,
+		template,
+		workspace.path,
+		sharedImagePath,
+		host.jailerUID,
+		opts.SandboxPolicy,
+	)
+	if err != nil {
+		return "", host.joinNetworkCleanup(setupCtx, fmt.Errorf("%w: %w", ErrSnapshotTemplateUnavailable, err))
+	}
+	timer.mark("snapshot_jail_staged", "jailRoot", launch.jailRoot)
+
+	cmd := exec.Command(launch.executable, launch.args...)
+	cmd.Dir = dir
+	cmd.Stdout = host.logFile
+	cmd.Stderr = host.logFile
+	if len(launch.environment) != 0 {
+		cmd.Env = append(os.Environ(), launch.environment...)
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if startErr := cmd.Start(); startErr != nil {
+		_ = os.RemoveAll(launch.jailRoot)
+		return "", host.joinNetworkCleanup(setupCtx, fmt.Errorf(
+			"%w: start jailed Firecracker for resume: %w", ErrSnapshotTemplateUnavailable, startErr,
+		))
+	}
+	timer.mark("firecracker_process_started", "pid", cmd.Process.Pid)
+
+	// Register before the load so the reaper owns the process from its first
+	// instant and every later failure tears down through one path.
+	inst, err := m.registerLaunchedInstance(
+		setupCtx,
+		host,
+		sandboxID,
+		compartmentID,
+		opts,
+		launchedInstanceFiles{
+			socketPath:      launch.socketPath,
+			vsockUDS:        launch.vsockUDS,
+			jailRoot:        launch.jailRoot,
+			rootfsPath:      filepath.Join(launch.jailRoot, snapshotTemplateRootfsName),
+			rootfsImagePath: template.RootfsPath,
+			workspacePath:   workspace.path,
+			sharedImagePath: sharedImagePath,
+		},
+		startupFingerprint,
+		cmd,
+		onRegisteredLocked,
+	)
+	if err != nil {
+		return "", err
+	}
+
+	if err := m.resumeInstanceGuest(setupCtx, inst, opts, launch, timer); err != nil {
+		diagnostics := inst.logTailDiagnostics(120)
+		cleanupErr := m.stopInstance(setupCtx, inst, true)
+		return "", errors.Join(
+			fmt.Errorf("%w: %w%s", ErrSnapshotTemplateUnavailable, err, diagnostics),
+			cleanupErr,
+		)
+	}
+	if err := m.completeInstanceStartup(setupCtx, inst, sandboxID, opts, timer); err != nil {
+		return "", err
+	}
+	host.transferOwnership() // ownership transfers to the running instance
+	slog.Info(
+		"resumed firecracker microVM from snapshot template",
+		"sandbox", sandboxID,
+		"compartment", compartmentID,
+		"instance", id,
+		"template", template.TemplateID,
+		"elapsedMs", timer.elapsedMs(),
+		"log", host.logPath,
+	)
+	return id, nil
+}
+
+// resumeInstanceGuest loads the template into the started process and brings the
+// guest from restored to bound: first control response, post-resume hardening,
+// then the one permitted assignment bind carrying this Instance's identity,
+// Workspace expectation, and network identity. The caller tears the Instance
+// down on any failure.
+func (m *Manager) resumeInstanceGuest(
+	ctx context.Context,
+	inst *instance,
+	opts runtimemanager.StartOpts,
+	launch snapshotResumeLaunch,
+	timer *coldStartStageTimer,
+) error {
+	if err := resumeSnapshotTemplate(
+		ctx,
+		launch,
+		inst.tapName,
+		snapshotResumeAPIReadyTimeout,
+		snapshotResumeLoadTimeout,
+	); err != nil {
+		return err
+	}
+	timer.mark("snapshot_loaded")
+	controlCtx, cancelControl := context.WithTimeout(ctx, controlPlaneReadyTimeout)
+	controlErr := m.waitForControlPlane(controlCtx, inst, controlPlaneReadyTimeout)
+	cancelControl()
+	if controlErr != nil {
+		return fmt.Errorf("wait for resumed guest control plane: %w", controlErr)
+	}
+	timer.mark("resumed_control_plane_ready")
+	controlClient := inst.controlClient(controlPlaneReadyTimeout)
+	// Hardening is the first permitted post-resume action and the precondition
+	// of the bind: the guest refuses to install an identity it could have
+	// generated template-era randomness under.
+	if err := controlClient.HardenPostRestore(ctx, time.Now().UTC()); err != nil {
+		return fmt.Errorf("harden resumed guest: %w", err)
+	}
+	m.mu.Lock()
+	inst.postResumeHardened = true
+	m.mu.Unlock()
+	timer.mark("post_resume_hardened")
+	bind := AssignmentBindRequest{
+		InstanceID:              inst.compartmentID,
+		SandboxID:               inst.sandboxID,
+		SandboxGeneration:       inst.sandboxGeneration,
+		GuestBuildID:            opts.GuestBuildID,
+		ImageManifestDigest:     opts.ImageManifestDigest,
+		ToolchainManifestDigest: opts.ToolchainManifestDigest,
+		HeartbeatIntervalMs:     uint64(m.cfg.MicroVMGuestHeartbeatInterval / time.Millisecond),
+		WorkspaceWritable:       opts.SandboxPolicy != nil && opts.SandboxPolicy.WorkspaceWritable,
+	}
+	// The network identity is present exactly when this Instance has a TAP. A
+	// resumed guest's kernel consumed no ip= argument, so its address, route,
+	// and unique MAC arrive here or not at all.
+	if strings.TrimSpace(inst.tapName) != "" {
+		bind.Network = &AssignmentNetworkIdentity{
+			Interface:   snapshotResumeNetworkInterfaceID,
+			MACAddress:  guestMACForInstance(inst.tapName),
+			AddressCIDR: guestAddressCIDR(inst.guestIP, m.cfg.MicroVMBridgeCIDR),
+			Gateway:     bridgeAddress(m.cfg.MicroVMBridgeCIDR).String(),
+		}
+	}
+	if err := controlClient.BindAssignment(ctx, bind); err != nil {
+		return fmt.Errorf("bind resumed guest assignment: %w", err)
+	}
+	timer.mark("assignment_bound")
 	return nil
 }

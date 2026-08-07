@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "def289d1af5be8ff9f3756764bd0b6095d00ef3b",
+  "completedAt": "2026-08-07T06:13:05.957937858Z",
+  "templateId": "521d1353d61addf84671e45ef948d2f97f45b2a1615ddb5d07b9b161843ad5b4",
+  "templateBuildMilliseconds": 23246,
+  "cacheAdmissionMilliseconds": 5116,
+  "profileMemoryMiB": 256,
+  "profileWorkspaceMiB": 64,
+  "profileVcpus": 1,
+  "profileProcessLimit": 128,
+  "startToReadyProjectionMilliseconds": 121,
+  "createToReadyProjectionMilliseconds": 206,
+  "concurrencyRungs": [
+    {
+      "concurrency": 1,
+      "arrivals": 10,
+      "createToReadyMilliseconds": {
+        "samples": 10,
+        "p50": 198,
+        "p95": 522,
+        "max": 522
+      },
+      "startToReadyMilliseconds": {
+        "samples": 10,
+        "p50": 125,
+        "p95": 130,
+        "max": 130
+      },
+      "refusalCount": 0,
+      "noColdFallbackObserved": true
+    },
+    {
+      "concurrency": 4,
+      "arrivals": 12,
+      "createToReadyMilliseconds": {
+        "samples": 12,
+        "p50": 376,
+        "p95": 952,
+        "max": 952
+      },
+      "startToReadyMilliseconds": {
+        "samples": 12,
+        "p50": 170,
+        "p95": 213,
+        "max": 213
+      },
+      "refusalCount": 0,
+      "noColdFallbackObserved": true
+    }
+  ],
+  "resumeStartBootStages": [
+    {
+      "stage": "artifact_verify",
+      "samples": 22,
+      "p50Milliseconds": 0.295,
+      "p95Milliseconds": 0.703
+    },
+    {
+      "stage": "compute_launch",
+      "samples": 22,
+      "p50Milliseconds": 8.667,
+      "p95Milliseconds": 11.677
+    },
+    {
+      "stage": "guest_negotiation",
+      "samples": 22,
+      "p50Milliseconds": 68.848,
+      "p95Milliseconds": 75.632
+    },
+    {
+      "stage": "network_setup",
+      "samples": 22,
+      "p50Milliseconds": 11.826,
+      "p95Milliseconds": 13.394
+    },
+    {
+      "stage": "ready",
+      "samples": 22,
+      "p50Milliseconds": 1.492,
+      "p95Milliseconds": 2.063
+    },
+    {
+      "stage": "runner_admission",
+      "samples": 22,
+      "p50Milliseconds": 20.456,
+      "p95Milliseconds": 31.192
+    },
+    {
+      "stage": "workspace_attach",
+      "samples": 22,
+      "p50Milliseconds": 0.11,
+      "p95Milliseconds": 0.206
+    }
+  ]
+}

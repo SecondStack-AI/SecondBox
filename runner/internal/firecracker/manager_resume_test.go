@@ -1,6 +1,8 @@
 package firecracker
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -58,6 +60,222 @@ func resumeTestPolicy() *runtimemanager.SandboxRuntimePolicy {
 		CPUMillis:    1000,
 		MemoryMiB:    512,
 		ProcessLimit: 128,
+	}
+}
+
+// The runtime and toolchain component manifests are distinct files with
+// distinct digests, which loadSignedArtifactManifest proves.
+var (
+	resumeKeyRuntimeComponent   = []byte("{\"component\":\"runtime\"}\n")
+	resumeKeyToolchainComponent = []byte("{\"component\":\"toolchain\"}\n")
+)
+
+func resumeKeyComponentDigest(content []byte) string {
+	digest := sha256.Sum256(content)
+	return "sha256:" + hex.EncodeToString(digest[:])
+}
+
+// newResumeKeyManager builds a Manager whose signed artifact directory carries
+// the digests Config.ValidateMicroVMTrustAnchor would have proved against the
+// local files. The resume path reads them from there rather than rehashing, so
+// the fixture is the manifest and never the images.
+func newResumeKeyManager(t *testing.T) *Manager {
+	t.Helper()
+	runDir := shortResumeDir(t)
+	artifactDir := filepath.Join(runDir, "artifacts")
+	if err := os.MkdirAll(artifactDir, 0o700); err != nil {
+		t.Fatalf("create artifact dir: %v", err)
+	}
+	manifest := `{
+  "artifactVersion": "secondbox-resume-key-test",
+  "architecture": "amd64",
+  "guestProtocol": {"minimum": 1, "maximum": 1},
+  "runtimeBundle": {"artifactId": "runtime", "path": "runtime-manifest.json", "manifestDigest": "` + resumeKeyComponentDigest(resumeKeyRuntimeComponent) + `"},
+  "toolchainBundle": {"artifactId": "toolchain", "path": "toolchain-manifest.json", "manifestDigest": "` + resumeKeyComponentDigest(resumeKeyToolchainComponent) + `"},
+  "kernel": {"path": "kernel", "sha256": "` + strings.Repeat("3", 64) + `"},
+  "rootfs": {"path": "rootfs.ext4", "sha256": "` + strings.Repeat("4", 64) + `"},
+  "shared": {"path": "shared.img", "sha256": "` + strings.Repeat("5", 64) + `"}
+}
+`
+	if err := os.WriteFile(filepath.Join(artifactDir, "manifest.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatalf("write signed manifest: %v", err)
+	}
+	// loadSignedArtifactManifest proves the component manifests it names exist
+	// and hash to the digests the signed manifest records.
+	for name, content := range map[string][]byte{
+		"runtime-manifest.json":   resumeKeyRuntimeComponent,
+		"toolchain-manifest.json": resumeKeyToolchainComponent,
+	} {
+		if err := os.WriteFile(filepath.Join(artifactDir, name), content, 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	manager := newJailedResumeManager(t, runDir)
+	manager.cfg.MicroVMKernelPath = filepath.Join(artifactDir, "kernel")
+	manager.cfg.MicroVMRootfsPath = filepath.Join(artifactDir, "rootfs.ext4")
+	manager.cfg.MicroVMSharedImagePath = filepath.Join(artifactDir, "shared.img")
+	manager.cfg.MicroVMPublicKeySHA256 = strings.Repeat("a", 64)
+	manager.cfg.MicroVMKernelArgs = "console=ttyS0 root=/dev/vda rw"
+	manager.cfg.MicroVMGuestControlVsockPort = 1024
+	manager.cfg.MicroVMGuestProtocolVsockPort = 1025
+	return manager
+}
+
+func resumeKeyStartOpts() runtimemanager.StartOpts {
+	return runtimemanager.StartOpts{
+		SandboxGeneration:       1,
+		GuestBuildID:            "secondbox-resume-key-test",
+		ImageManifestDigest:     resumeKeyComponentDigest(resumeKeyRuntimeComponent),
+		ToolchainManifestDigest: resumeKeyComponentDigest(resumeKeyToolchainComponent),
+		RuntimeClass:            runtimemanager.RuntimeClassToolExecutor,
+		SandboxPolicy: &runtimemanager.SandboxRuntimePolicy{
+			VCPUs:            2,
+			CPUMillis:        2000,
+			MemoryMiB:        512,
+			WorkspaceSizeMiB: 64,
+			ProcessLimit:     128,
+		},
+	}
+}
+
+// The compatibility key must be derivable on the start path without touching a
+// multi-gigabyte image, because the alternative is the 835 ms artifact_verify
+// p95 the plan set out to avoid. Every launch-image digest comes from the signed
+// manifest whose signature already covers them.
+func TestSnapshotResumeTemplateKeyReadsImageDigestsFromTheSignedManifest(t *testing.T) {
+	manager := newResumeKeyManager(t)
+	key, err := manager.snapshotResumeTemplateKey(resumeKeyStartOpts(), true, true)
+	if err != nil {
+		t.Fatalf("derive template key: %v", err)
+	}
+	if key.KernelSHA256 != strings.Repeat("3", 64) ||
+		key.SourceRootfsSHA256 != strings.Repeat("4", 64) ||
+		key.SharedImageSHA256 != strings.Repeat("5", 64) {
+		t.Fatalf("launch image digests = %+v", key)
+	}
+	if key.ArtifactVersion != "secondbox-resume-key-test" || key.Architecture != "amd64" {
+		t.Fatalf("bundle identity = %q %q", key.ArtifactVersion, key.Architecture)
+	}
+	if key.NetworkInterfaceID != snapshotResumeNetworkInterfaceID ||
+		key.TemplateGuestMAC != snapshotTemplateGuestMAC {
+		t.Fatalf("network shape = %q %q", key.NetworkInterfaceID, key.TemplateGuestMAC)
+	}
+	// The key states the template's own boot arguments: identity-neutral, with
+	// no guest address, because a resumed guest's kernel booted before its
+	// Sandbox existed.
+	if !strings.Contains(key.KernelArgs, "secondbox.template_mode=1") ||
+		strings.Contains(key.KernelArgs, "ip=") ||
+		!strings.Contains(key.KernelArgs, "secondbox.process_limit=128") {
+		t.Fatalf("template kernel arguments = %q", key.KernelArgs)
+	}
+	if key.GuestCID != snapshotTemplateGuestCID ||
+		key.GuestControlVsockPort != 1024 ||
+		key.GuestProtocolVsockPort != 1025 {
+		t.Fatalf("vsock shape = %+v", key)
+	}
+}
+
+// The drive set and the network device are part of the identity, not staging
+// choices: a restored Instance opens exactly the devices the VM state recorded
+// and can neither gain nor drop one.
+func TestSnapshotResumeTemplateKeyDistinguishesDeviceShapes(t *testing.T) {
+	manager := newResumeKeyManager(t)
+	opts := resumeKeyStartOpts()
+	withBoth, err := manager.snapshotResumeTemplateKey(opts, true, true)
+	if err != nil {
+		t.Fatalf("derive key with both devices: %v", err)
+	}
+	withoutShared, err := manager.snapshotResumeTemplateKey(opts, true, false)
+	if err != nil {
+		t.Fatalf("derive key without the shared image: %v", err)
+	}
+	withoutNetwork, err := manager.snapshotResumeTemplateKey(opts, false, true)
+	if err != nil {
+		t.Fatalf("derive key without a network device: %v", err)
+	}
+	if withoutShared.HasSharedImage() || !withBoth.HasSharedImage() {
+		t.Fatal("the shared image drive is not reflected in the compatibility key")
+	}
+	if withoutNetwork.HasNetworkDevice() || !withBoth.HasNetworkDevice() {
+		t.Fatal("the network device is not reflected in the compatibility key")
+	}
+	identities := map[string]string{}
+	for name, key := range map[string]SnapshotTemplateKey{
+		"both": withBoth, "no shared": withoutShared, "no network": withoutNetwork,
+	} {
+		identity, err := key.TemplateID()
+		if err != nil {
+			t.Fatalf("%s identity: %v", name, err)
+		}
+		if previous, ok := identities[identity]; ok {
+			t.Fatalf("%s and %s collapsed onto one template identity", name, previous)
+		}
+		identities[identity] = name
+	}
+}
+
+// A Profile shape this runner has no template for is a cache miss, and a cache
+// miss is a typed retryable start failure rather than a cold boot.
+func TestResolveSnapshotResumeTemplateFailsClosedOnEveryMiss(t *testing.T) {
+	manager := newResumeKeyManager(t)
+	opts := resumeKeyStartOpts()
+
+	t.Run("no cache configured", func(t *testing.T) {
+		if _, err := manager.resolveSnapshotResumeTemplate(opts, true, true); !errors.Is(err, ErrSnapshotTemplateUnavailable) {
+			t.Fatalf("error = %v, want ErrSnapshotTemplateUnavailable", err)
+		}
+	})
+
+	manager.snapshotTemplates = newTestSnapshotTemplateCache(t)
+
+	t.Run("empty cache", func(t *testing.T) {
+		if _, err := manager.resolveSnapshotResumeTemplate(opts, true, true); !errors.Is(err, ErrSnapshotTemplateUnavailable) {
+			t.Fatalf("error = %v, want ErrSnapshotTemplateUnavailable", err)
+		}
+	})
+
+	t.Run("no Profile shape", func(t *testing.T) {
+		shapeless := opts
+		shapeless.SandboxPolicy = nil
+		if _, err := manager.resolveSnapshotResumeTemplate(shapeless, true, true); !errors.Is(err, ErrSnapshotTemplateUnavailable) {
+			t.Fatalf("error = %v, want ErrSnapshotTemplateUnavailable", err)
+		}
+	})
+
+	t.Run("published template resolves and a different shape does not", func(t *testing.T) {
+		key, err := manager.snapshotResumeTemplateKey(opts, true, true)
+		if err != nil {
+			t.Fatalf("derive template key: %v", err)
+		}
+		stageTestSnapshotTemplate(t, manager.snapshotTemplates, key)
+		if _, err := manager.resolveSnapshotResumeTemplate(opts, true, true); err != nil {
+			t.Fatalf("resolve published template: %v", err)
+		}
+		larger := opts
+		policy := *opts.SandboxPolicy
+		policy.MemoryMiB = 2048
+		larger.SandboxPolicy = &policy
+		if _, err := manager.resolveSnapshotResumeTemplate(larger, true, true); !errors.Is(err, ErrSnapshotTemplateUnavailable) {
+			t.Fatalf("mismatched shape error = %v, want ErrSnapshotTemplateUnavailable", err)
+		}
+	})
+}
+
+// A resume never starts from a template capture, and never without the
+// generation-fenced Workspace attachment cold start also requires.
+func TestCreateAndStartResumeRefusesIncompleteStarts(t *testing.T) {
+	manager := newResumeKeyManager(t)
+	opts := resumeKeyStartOpts()
+	if _, err := manager.createAndStartResume(t.Context(), "sandbox", "cmp_a", opts, nil); err == nil ||
+		!strings.Contains(err.Error(), "Workspace attachment is required") {
+		t.Fatalf("resume without a Workspace attachment = %v", err)
+	}
+	templateCapture := opts
+	templateCapture.TemplateMode = true
+	templateCapture.WorkspaceAttachment = &managerTestComputeAttachment{workspaceID: "ws", generation: 1}
+	if _, err := manager.createAndStartResume(t.Context(), "sandbox", "cmp_a", templateCapture, nil); err == nil ||
+		!strings.Contains(err.Error(), "captured from a cold boot") {
+		t.Fatalf("resume of a template capture = %v", err)
 	}
 }
 
@@ -391,21 +609,42 @@ func TestStartupGuestBootArgsSelectsTemplateModeOnly(t *testing.T) {
 	}
 }
 
-// TestAssignmentStartupModeRefusesWhatThisRunnerCannotHonour pins the fail-closed
-// gate. Cold boot is the runner's one implemented start path; a snapshot_resume
-// assignment is refused with the same retryable template-unavailability the
-// resume path raises, because quietly cold booting it would be exactly the
-// silent fallback a snapshot_resume Profile is defined not to have.
-func TestAssignmentStartupModeRefusesWhatThisRunnerCannotHonour(t *testing.T) {
-	if err := validateAssignmentStartupMode(assignmentStartupModeColdBoot); err != nil {
-		t.Fatalf("cold_boot startup mode was refused: %v", err)
+// TestAssignmentStartupModeAdmitsOnlyWhatThisRunnerCanHonour pins the
+// fail-closed gate. A snapshot_resume assignment is admitted only by a runner
+// that can actually resume — jailed, with a template cache — and refused
+// otherwise with the same retryable template-unavailability the resume path
+// raises, because quietly cold booting it would be exactly the silent fallback a
+// snapshot_resume Profile is defined not to have.
+func TestAssignmentStartupModeAdmitsOnlyWhatThisRunnerCanHonour(t *testing.T) {
+	runDir := shortResumeDir(t)
+	resumeCapable := &AssignmentBackend{manager: newJailedResumeManager(t, runDir)}
+	cache, _ := newResumeTestTemplate(t)
+	resumeCapable.manager.snapshotTemplates = cache
+
+	mode, err := resumeCapable.validateAssignmentStartupMode(assignmentStartupModeColdBoot)
+	if err != nil || mode != runtimemanager.StartupModeColdBoot {
+		t.Fatalf("cold_boot startup mode = %q, %v", mode, err)
 	}
-	err := validateAssignmentStartupMode(assignmentStartupModeSnapshotResume)
-	if !errors.Is(err, ErrSnapshotTemplateUnavailable) {
-		t.Fatalf("snapshot_resume error = %v, want ErrSnapshotTemplateUnavailable", err)
+	mode, err = resumeCapable.validateAssignmentStartupMode(assignmentStartupModeSnapshotResume)
+	if err != nil || mode != runtimemanager.StartupModeSnapshotResume {
+		t.Fatalf("snapshot_resume startup mode = %q, %v", mode, err)
 	}
+
+	// A runner without a template cache cannot resolve any template, and an
+	// unjailed runner cannot resume at all.
+	noCache := &AssignmentBackend{manager: newJailedResumeManager(t, runDir)}
+	if _, err := noCache.validateAssignmentStartupMode(assignmentStartupModeSnapshotResume); !errors.Is(err, ErrSnapshotTemplateUnavailable) {
+		t.Fatalf("cacheless snapshot_resume error = %v, want ErrSnapshotTemplateUnavailable", err)
+	}
+	unjailed := &AssignmentBackend{manager: newJailedResumeManager(t, runDir)}
+	unjailed.manager.cfg.MicroVMAllowUnjailed = true
+	unjailed.manager.snapshotTemplates = cache
+	if _, err := unjailed.validateAssignmentStartupMode(assignmentStartupModeSnapshotResume); !errors.Is(err, ErrSnapshotTemplateUnavailable) {
+		t.Fatalf("unjailed snapshot_resume error = %v, want ErrSnapshotTemplateUnavailable", err)
+	}
+
 	for _, mode := range []string{"", "ephemeral", "warm_pool"} {
-		if err := validateAssignmentStartupMode(mode); err == nil {
+		if _, err := resumeCapable.validateAssignmentStartupMode(mode); err == nil {
 			t.Errorf("startup mode %q was accepted", mode)
 		}
 	}

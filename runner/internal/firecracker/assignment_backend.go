@@ -40,6 +40,14 @@ type signedArtifactManifest struct {
 	} `json:"guestProtocol"`
 	RuntimeBundle   signedArtifactComponent `json:"runtimeBundle"`
 	ToolchainBundle signedArtifactComponent `json:"toolchainBundle"`
+	// Kernel, Rootfs, and Shared carry the digests the signature already covers.
+	// Config.ValidateMicroVMTrustAnchor proves the runner's local files match
+	// them before the Manager exists, so a snapshot-resume compatibility key can
+	// state the launch-image identity without rehashing multi-gigabyte files on
+	// a start path.
+	Kernel signedArtifactImage `json:"kernel"`
+	Rootfs signedArtifactImage `json:"rootfs"`
+	Shared signedArtifactImage `json:"shared"`
 }
 
 type signedArtifactComponent struct {
@@ -47,6 +55,11 @@ type signedArtifactComponent struct {
 	Path                   string   `json:"path"`
 	ManifestDigest         string   `json:"manifestDigest"`
 	MandatoryGuestFeatures []string `json:"mandatoryGuestFeatures"`
+}
+
+type signedArtifactImage struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
 }
 
 // AssignmentBackend adapts profile-resolved runner assignments to Firecracker.
@@ -436,7 +449,7 @@ func (b *AssignmentBackend) ValidateAssignment(
 			return fmt.Errorf("SecondBox Firecracker assignment requires unsupported capability %q", capability)
 		}
 	}
-	if err := validateAssignmentStartupMode(requirements.StartupMode); err != nil {
+	if _, err := b.validateAssignmentStartupMode(requirements.StartupMode); err != nil {
 		return err
 	}
 	if int(requirements.VcpuCount) > b.manager.cfg.MicroVMVCPUs ||
@@ -470,28 +483,39 @@ const (
 )
 
 // validateAssignmentStartupMode refuses an assignment whose startup mode this
-// runner cannot honour, before any Workspace, TAP, or jail is created.
+// runner cannot honour, before any Workspace, TAP, or jail is created, and
+// returns the runtime mode that selects the start path.
 //
-// snapshot_resume is refused because the production resume start path does not
-// exist yet. That refusal is the point: a snapshot_resume Profile that quietly
-// cold booted would be the silent fallback the design forbids, and the Sandbox
-// would come up without the identity-neutral template, the shared golden memory
-// inode, or the one-time assignment bind that define the mode. The error is the
-// same retryable template-unavailability the resume path itself raises, so an
-// operator sees one classification for "this Runner cannot resume right now".
-func validateAssignmentStartupMode(mode string) error {
+// A snapshot_resume assignment is admitted only by a runner that can actually
+// resume. The jailer is not a preference: Firecracker opens every block device
+// at the path the VM state recorded, during the load, so only chroot-relative
+// names let each Instance open its own staged disks. Refusing here rather than
+// at the load keeps a Profile this runner cannot serve from costing a
+// Workspace, a TAP, or a jail — and the refusal is the same retryable
+// unavailability the resume path itself raises, so an operator sees one
+// classification for "this Runner cannot resume right now".
+func (b *AssignmentBackend) validateAssignmentStartupMode(mode string) (runtimemanager.StartupMode, error) {
 	switch mode {
 	case assignmentStartupModeColdBoot:
-		return nil
+		return runtimemanager.StartupModeColdBoot, nil
 	case assignmentStartupModeSnapshotResume:
-		return fmt.Errorf(
-			"%w: this Runner has no snapshot-resume start path for assignment startup mode %q",
-			ErrSnapshotTemplateUnavailable, mode,
-		)
+		if b.manager.cfg.MicroVMAllowUnjailed {
+			return "", fmt.Errorf(
+				"%w: snapshot resume requires the jailer, so SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED must be false",
+				ErrSnapshotTemplateUnavailable,
+			)
+		}
+		if b.manager.snapshotTemplates == nil {
+			return "", fmt.Errorf(
+				"%w: this Runner has no snapshot template cache; set SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT",
+				ErrSnapshotTemplateUnavailable,
+			)
+		}
+		return runtimemanager.StartupModeSnapshotResume, nil
 	case "":
-		return fmt.Errorf("SecondBox Firecracker assignment startup mode is required")
+		return "", fmt.Errorf("SecondBox Firecracker assignment startup mode is required")
 	default:
-		return fmt.Errorf("SecondBox Firecracker assignment startup mode %q is unsupported", mode)
+		return "", fmt.Errorf("SecondBox Firecracker assignment startup mode %q is unsupported", mode)
 	}
 }
 
@@ -571,6 +595,10 @@ func (b *AssignmentBackend) StartAssignment(
 	if err != nil {
 		return runnercontrol.BackendInstance{}, err
 	}
+	startupMode, err := b.validateAssignmentStartupMode(requirements.StartupMode)
+	if err != nil {
+		return runnercontrol.BackendInstance{}, err
+	}
 	admissionTimer.mark("guest_start_resolved")
 	workspaceAttachment, err := b.manager.workspaceStore.Open(
 		ctx,
@@ -602,6 +630,7 @@ func (b *AssignmentBackend) StartAssignment(
 		ToolchainManifestDigest: guestStart.ToolchainManifestDigest,
 		MandatoryGuestFeatures:  guestStart.MandatoryFeatures,
 		RuntimeClass:            runtimemanager.RuntimeClassToolExecutor,
+		StartupMode:             startupMode,
 		SandboxPolicy: &runtimemanager.SandboxRuntimePolicy{
 			VCPUs:             int(requirements.VcpuCount),
 			CPUMillis:         int(requirements.VcpuMillis),

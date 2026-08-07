@@ -91,7 +91,7 @@ func TestSmokeSnapshotResumeTemplateLifecycle(t *testing.T) {
 	}
 
 	buildStartedAt := time.Now()
-	key, manifest := buildSnapshotResumeTemplate(t, cfg, cache, memoryMiB, workspaceMiB)
+	key, manifest := buildSnapshotResumeTemplate(t, cfg, cache, memoryMiB, workspaceMiB, nil)
 	report.TemplateBuildMillis = time.Since(buildStartedAt).Milliseconds()
 	report.TemplateID = manifest.TemplateID
 	report.MemoryFileBytes = manifest.Memory.Bytes
@@ -171,12 +171,18 @@ func TestSmokeSnapshotResumeTemplateLifecycle(t *testing.T) {
 // point, and seals VM state, memory, and the post-boot rootfs into the cache.
 // Capturing the rootfs alongside memory is required: boot mutates the disk, so
 // memory alone is not a coherent template.
+//
+// prepareOpts states the Profile shape and signed identity the template is
+// built for. A gate that only resumes its own template passes nil and takes the
+// smoke shape; the interim operator publish flow passes the exact shape the
+// Runner's assignments will carry, because the compatibility key records it.
 func buildSnapshotResumeTemplate(
 	t *testing.T,
 	cfg *config.Config,
 	cache *SnapshotTemplateCache,
 	memoryMiB int,
 	workspaceMiB int,
+	prepareOpts func(runtimemanager.StartOpts) runtimemanager.StartOpts,
 ) (SnapshotTemplateKey, SnapshotTemplateManifest) {
 	t.Helper()
 	workDir := filepath.Dir(cfg.MicroVMLogDir)
@@ -222,9 +228,11 @@ func buildSnapshotResumeTemplate(
 	// secrets, no mounted Workspace, and a protocol listener that refuses every
 	// connection until a resumed Instance is bound.
 	opts.TemplateMode = true
-	templateBootArgs, err := manager.templateGuestBootArgs()
-	if err != nil {
-		t.Fatalf("template guest boot arguments: %v", err)
+	// A template is keyed by the runtime class it will serve, exactly as a start
+	// is, so the harness states the one class the runner implements.
+	opts.RuntimeClass = runtimemanager.RuntimeClassToolExecutor
+	if prepareOpts != nil {
+		opts = prepareOpts(opts)
 	}
 	instanceID, err := manager.createAndStart(t.Context(), "resumetmpl", opts)
 	if err != nil {
@@ -273,6 +281,14 @@ func buildSnapshotResumeTemplate(
 			if err := os.Chown(destination, os.Getuid(), os.Getgid()); err != nil {
 				t.Fatalf("take runner ownership of captured template file: %v", err)
 			}
+			// Read-only to everyone, stated rather than inherited from whatever
+			// umask the build ran under. A jailed Firecracker opens the golden
+			// memory file as its own per-Instance UID, and the capture was
+			// written by a different one, so a mode that depended on the umask
+			// would make a resume fail on a file nothing was wrong with.
+			if err := os.Chmod(destination, 0o444); err != nil {
+				t.Fatalf("make the captured template file readable by every jailer UID: %v", err)
+			}
 		}
 	}
 	// The VM stays paused through the rootfs seal so disk and memory are
@@ -293,7 +309,7 @@ func buildSnapshotResumeTemplate(
 		t.Fatal("template source did not terminate")
 	}
 
-	key := snapshotResumeQualificationKey(t, cfg, opts, templateBootArgs, memoryMiB, workspaceMiB)
+	key := snapshotResumeQualificationKey(t, manager, opts, inst.sharedImagePath != "")
 	templateID, err := key.TemplateID()
 	if err != nil {
 		t.Fatalf("template identity: %v", err)
@@ -326,70 +342,24 @@ func describeSnapshotTemplateFile(t *testing.T, path string) SnapshotTemplateFil
 	return SnapshotTemplateFile{Name: filepath.Base(path), SHA256: digest, Bytes: info.Size()}
 }
 
+// snapshotResumeQualificationKey derives the template's identity through the
+// exact production function the resume start path uses. That is the point: a
+// template a qualification harness publishes into a Runner's cache is resolvable
+// by that Runner only if both sides agree on every field of the compatibility
+// key, so there is one derivation and no second implementation to drift.
 func snapshotResumeQualificationKey(
 	t *testing.T,
-	cfg *config.Config,
+	manager *Manager,
 	opts runtimemanager.StartOpts,
-	templateBootArgs string,
-	memoryMiB int,
-	workspaceMiB int,
+	hasSharedImage bool,
 ) SnapshotTemplateKey {
 	t.Helper()
-	artifactDir := filepath.Dir(cfg.MicroVMKernelPath)
-	digest := func(label, path string) string {
-		value, err := fileSHA256(path)
-		if err != nil {
-			t.Fatalf("digest %s: %v", label, err)
-		}
-		return value
-	}
-	cpuFingerprint, err := hostCPUCompatibilityFingerprint()
-	if err != nil {
-		t.Fatalf("host CPU fingerprint: %v", err)
-	}
 	// The template's recorded network shape follows the runner's deployment
 	// configuration, exactly as a cold boot's does. It belongs in the key because
 	// a resumed guest can never acquire an interface the capture did not record.
-	networkInterfaceID, templateGuestMAC := "", ""
-	if microVMNetworkRequired(cfg) {
-		networkInterfaceID, templateGuestMAC = snapshotResumeNetworkInterfaceID, snapshotTemplateGuestMAC
+	key, err := manager.snapshotResumeTemplateKey(opts, microVMNetworkRequired(manager.cfg), hasSharedImage)
+	if err != nil {
+		t.Fatalf("derive snapshot template key: %v", err)
 	}
-	return SnapshotTemplateKey{
-		ArtifactVersion:       "qualification",
-		Architecture:          runtime.GOARCH,
-		SigningKeyFingerprint: cfg.MicroVMPublicKeySHA256,
-		SignedManifestDigest:  "sha256:" + digest("signed manifest", filepath.Join(artifactDir, "manifest.json")),
-		KernelSHA256:          digest("kernel", cfg.MicroVMKernelPath),
-		KernelArgs: strings.TrimSpace(effectiveKernelArgsWithProcessLimit(
-			cfg,
-			"",
-			opts.SandboxPolicy.ProcessLimit,
-		) + " " + templateBootArgs),
-		SourceRootfsSHA256:      digest("rootfs", cfg.MicroVMRootfsPath),
-		SharedImageSHA256:       digest("shared image", cfg.MicroVMSharedImagePath),
-		RuntimeBundleDigest:     opts.ImageManifestDigest,
-		ToolchainBundleDigest:   opts.ToolchainManifestDigest,
-		GuestBuildID:            opts.GuestBuildID,
-		GuestProtocolGeneration: currentGuestProtocolGeneration,
-		GuestFeatures: []string{
-			"streaming_exec",
-			"pty_resize",
-			"descriptor_pinned_filesystem",
-			"activity_events",
-			"port_proxy",
-		},
-		FirecrackerVersion:     expectedFirecrackerVersionString(),
-		HostCPUFingerprint:     cpuFingerprint,
-		CPUTemplate:            cfg.MicroVMCPUTemplate,
-		VCPUCount:              cfg.MicroVMVCPUs,
-		MemorySizeMiB:          memoryMiB,
-		WorkspaceSizeMiB:       workspaceMiB,
-		ProcessLimit:           opts.SandboxPolicy.ProcessLimit,
-		RuntimeClass:           string(runtimemanager.RuntimeClassToolExecutor),
-		NetworkInterfaceID:     networkInterfaceID,
-		TemplateGuestMAC:       templateGuestMAC,
-		GuestControlVsockPort:  cfg.MicroVMGuestControlVsockPort,
-		GuestProtocolVsockPort: cfg.MicroVMGuestProtocolVsockPort,
-		GuestCID:               3,
-	}
+	return key
 }

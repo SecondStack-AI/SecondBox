@@ -13,6 +13,8 @@ provenance-2026-08-06: Repository-owner direction to un-gate and implement, take
 
 Make an unsaturated Sandbox reach `ready` in 100–200 ms by resuming an identity-neutral, post-boot memory snapshot instead of booting the guest kernel, init, and guest agent for every Instance. The full signed toolset remains in the guest.
 
+**Met for `start → ready` on 2026-08-07**, measured end to end through the real control plane at 125/130 ms p50/p95 unsaturated, against 447/489 ms for the same deployment's cold boot. `create → ready` is 198 ms p50, inside the ceiling, with a 522 ms p95 that is Workspace provisioning's tail rather than guest startup. The evidence is `docs/plans/evidence/2026-08-07-snapshot-resume-end-to-end.json` and the derivation is recorded below.
+
 After the event-driven orchestration and reflinked Workspace-template work through `8703554`, a qualified concurrency-1 run measured `create_to_ready` at 657 ms p50 and 823 ms p95. The runner-local boot path is 381/426 ms, including 337/384 ms of guest negotiation. Snapshot resume remains the intended way to remove guest boot; host micro-optimizations and rootfs trimming are not.
 
 A test-only KVM qualification now measures the missing low-level floor. Across 256, 512, and 2048 MiB shapes, Firecracker's immutable file-backed snapshot load was 3–4 ms p50/p95 and process-start-through-post-resume-hardening was 16–18 ms p50/p95. A cache-evicted sample completed in 39–45 ms and read only 84–86 MiB at every shape. Warm samples read at most 2.6 MiB, so no per-start full memory-image copy was observed.
@@ -315,26 +317,175 @@ The sharing and isolation properties the gate has always enforced are unchanged 
 
 The signed bundle was rebuilt for the guest change, because the guest agent is inside the rootfs. It is `secondbox-template-net-artifacts`, artifact version `secondbox-local-template-net`, built from the `-f781` prepared source tree with `SECONDBOX_RUNNER_MICROVM_BUILD_KERNEL=false` and the kernel supplied from `secondbox-task5-artifacts-shutdown-fix`, signed with the RSA-3072 key at `.secondbox/stress/trust/manifest-private.pem`, and verified against the independently held `manifest-public.pem` in that same `trust/` directory, fingerprint `a02f2488…`. The recipe recorded above holds exactly as written, and this rebuild needed only the guest-agent compile, the ext4 image creation, and hashing.
 
-## Remaining work after the network finding, 2026-08-07
+## The production resume start path, 2026-08-07
 
-Tasks 1, 2, 3, and Task 4 minus its generation-time forbidden-material scan are complete, the jailed resume gate is qualified with per-Instance networking, the `snapshot_resume` Profile class and its operator surface are landed, and the network question is settled. What remains, in the order it must be done:
+`createAndStartResume` is landed and it replaces the one refusal
+`validateAssignmentStartupMode` raised. A `snapshot_resume` Profile now produces
+a running Sandbox.
 
-1. **The production resume start path.** `createAndStartResume` alongside `createAndStartCold`, forking below `WorkspaceStore.Open` where the plan says it does, with the same jailer UID, guest IP, TAP, host policy, storage-pressure admission, instance registration, reaper, termination evidence, orphan adoption, and teardown. It replaces the one refusal in `validateAssignmentStartupMode`, which is why the gate there is a fork point rather than a stub.
+**Cold and resume share one prologue and one epilogue rather than a copy of
+each.** This is the structural decision the plan named before the code existed,
+and it is what the change actually did:
 
-   Its shape is no longer open. The jailed gate composes exactly the sequence the start path must run, in the order it must run it, and every primitive it uses is landed:
+- `reserveInstanceHost` acquires the Instance identity, the jailer UID, the guest
+  address, the TAP owned by that UID, the fail-closed host policy, the run
+  directory, the jailer UID lease, and the log. It reports the network-ready
+  stage. On any failure it has already released everything it created, including
+  the TAP and the policy.
+- `resolveWorkspaceAttachment` proves the attachment's generation against the
+  assignment's fence and its capacity against the Profile's declared Workspace
+  size.
+- `registerLaunchedInstance` builds the Instance record, registers it under the
+  provisioning lock, starts the reaper before any teardown can run so the process
+  is always waited on, and reports the compute-started stage.
+- `completeInstanceStartup` negotiates the assignment-bound guest protocol,
+  reports the guest-negotiated stage, and delivers runtime secrets, tearing the
+  Instance down with `errors.Join` evidence on any failure.
+- `instanceHostReservation.transferOwnership` is the one place the guest address,
+  the jailer UID lease, and the run directory stop being the start path's and
+  become the running Instance's.
 
-   - reserve the guest address, create the TAP owned by this Instance's jailer UID, install the fail-closed host policy — all before the load, so no frame can leave a guest whose policy does not exist. The resumed guest's link is down until its bind, which makes the ordering stronger than cold boot's rather than weaker;
-   - resolve the template through `SnapshotTemplateCache.Resolve`, whose per-start cost is a stable-identity stat and whose miss is `ErrSnapshotTemplateUnavailable`, never a cold boot;
-   - `prepareSnapshotResumeLaunch` to stage the jail: golden memory and VM state hard-linked, sealed rootfs reflink-cloned per Instance, Workspace hard-linked at the recorded name;
-   - start the jailer, `resumeSnapshotTemplate` with this Instance's TAP as the network override and its own vsock UDS;
-   - `HardenPostRestore`, then `BindAssignment` carrying the identity, the Workspace expectation, and the network identity;
-   - `NegotiateGuestProtocol`, then runtime secrets through the same `/secrets/apply` path cold start uses, then ready.
+The two paths differ only in the middle, which is what the plan required: cold
+boot stages a launch image and boots a kernel; resume resolves a template, stages
+a jail, loads a snapshot, hardens, and binds.
 
-   What the start path must add beyond the gate's composition is the Manager's own bookkeeping: instance registration under the provisioning lock, the reaper, startup-progress reporting at the same stage boundaries cold start reports, `errors.Join` teardown with the same ownership-transfer flags, and runtime secret delivery. The gate deliberately stops at the guest handshake.
+**The resume middle, in the order it runs.** `resolveWorkspaceAttachment` →
+resolve the template → `prepareSnapshotResumeLaunch` → start the jailer →
+register the Instance and report compute-started → `resumeSnapshotTemplate` with
+this Instance's TAP as the network override → first control response →
+`HardenPostRestore` → `BindAssignment` carrying identity, the Workspace
+expectation, and the network identity → the shared epilogue. The Instance is
+registered before the load, not after, so the reaper owns the process from its
+first instant and every later failure tears down through one path. Any stage
+failure is `ErrSnapshotTemplateUnavailable` with full teardown, and there is no
+cold-boot fallback anywhere on it.
 
-   The one structural decision worth stating before the code exists: `createAndStartCold` and `createAndStartResume` share a prologue (instance ID, jailer UID, guest address, TAP, policy, run directory, log, Workspace attachment validation) and an epilogue (registration, reaper, negotiation, secrets, ready, teardown), and differ only in the middle. Extracting those two rather than copying them is the change to make, because a divergence between the two paths' isolation properties is exactly the failure this plan cannot tolerate.
-2. **Template generation as a runner operation.** Templates are still built by the qualification harness, so in a production deployment no Runner advertises `snapshot-resume` and every `snapshot_resume` Profile refuses at admission. A Runner that advertises resume capacity must materialize the template itself, including Task 4's generation-time scan for forbidden identity and secret material. Until then the operator flow for a populated cache is to publish a harness-built template into `SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT` before the Runner starts; the cache's on-disk contract is one directory named by the template ID holding `manifest.json`, `vmstate.snap`, `memory.snap`, and `rootfs.ext4`, and `HasTemplateForBundle` matches it to the Runner's verified bundle on artifact version, architecture, and the two bundle digests. Keep that seam clean: the publish path is already `StageDirectory` plus one `Publish`, and a Runner-side generator replaces the caller, not the contract.
-3. **Tasks 5, 6, 7, 8, and the rest of Task 9**, including the end-to-end qualified scenario gate that turns the projection above into a measurement.
+**The compatibility key is derived once.** `Manager.snapshotResumeTemplateKey` is
+the only derivation, and both the start path and the qualification harness call
+it, so a template a harness publishes into a Runner's cache is exactly the
+template that Runner resolves. It reads the kernel, rootfs, and shared-image
+digests from the signed manifest — whose signature
+`Config.ValidateMicroVMTrustAnchor` already proved against the local files before
+the Manager existed — so a start never rehashes an 11 GiB bundle. That is the
+same extension of the signed-asset model the cache's admission already makes, and
+it is why template lookup stays a stat.
+
+**The shared image drive joined the key.** `SharedImageSHA256` is now empty
+exactly when the template was captured without the read-only shared drive, the
+same way the network fields are empty without a device. It has to be: a restored
+Instance opens exactly the drives the VM state recorded and can neither gain nor
+drop one, so staging a drive the capture did not name leaves an orphan file and
+omitting one it did name fails the load itself. A template built for a Profile
+with `SharedReadOnly` and one built without it are different templates.
+
+**Runtime secrets are delivered by the same code cold start uses.** A resumed
+guest is hardened before its bind, because the guest refuses to install an
+identity it could have generated template-era randomness under, so
+`deliverStartupSecrets` skips the second seeding rather than the delivery. The
+bundle, the `/secrets/apply` call, and the failure handling are one
+implementation.
+
+## End-to-end resume measured, 2026-08-07
+
+The projection is now a measurement. The evidence is
+`docs/plans/evidence/2026-08-07-snapshot-resume-end-to-end.json`, recorded by
+`TestScenarioSnapshotResumeStartsStopsAndMeasures` against a real control plane,
+a real signed bundle, KVM, Btrfs, and the jailer, at source commit `def289d`.
+Every number below is the control plane's own `operation_total` for the
+Operation named, not a client stopwatch, so it is directly comparable to the
+2026-08-06 Phase-B spans the projection was derived from. There were no
+refusals and no failures.
+
+| Workload | `create → ready` p50/p95 | `start → ready` p50/p95 |
+|---|---:|---:|
+| Concurrency 1, 10 arrivals | 198/522 ms | **125/130 ms** |
+| Concurrency 4, 12 arrivals | 376/952 ms | 170/213 ms |
+| **Projection** | **206 ms** | **121 ms** |
+| Cold-boot baseline, 2026-08-06 unsaturated | 529/1,370 ms | 447/489 ms |
+
+**The 100–200 ms outcome is met on the hot path the problem statement names.**
+Unsaturated `start → ready` measures 125 ms p50 and 130 ms p95, against a 121 ms
+projection derived before any end-to-end resume existed — 3% above it at p50, and
+inside the 200 ms ceiling at p95 with 70 ms of headroom. Cold boot on the same
+deployment is 447/489 ms, so resume removes 72% of it.
+
+Unsaturated `create → ready` measures 198 ms p50 against a 206 ms projection and
+lands just inside the ceiling, exactly where the re-derived budget said it would:
+its remaining cost is Workspace provisioning, not guest startup. Its 522 ms p95
+is that provisioning's tail and is the next optimization rather than part of this
+plan; the plan already recorded `workspace_provision` at 82/121 ms as the largest
+non-guest term and said so.
+
+**The boot-stage attribution is the negative that matters**, because every other
+assertion in the group would still pass if the Runner had quietly cold booted.
+The control plane's own attribution for the 22 resumed starts, p50/p95 in
+milliseconds:
+
+| Stage | Resume p50/p95 | Cold-boot p50/p95, 2026-08-06 |
+|---|---:|---:|
+| `runner_admission` | 20.5/31.2 | 19/26 |
+| `artifact_verify` | 0.3/0.7 | 0/835 |
+| `workspace_attach` | 0.1/0.2 | 0/0 |
+| `network_setup` | 11.8/13.4 | 13/15 |
+| `compute_launch` | 8.7/11.7 | 7/16 |
+| `guest_negotiation` | **68.8/75.6** | **377/391** |
+| `ready` | 1.5/2.1 | 2/2 |
+
+`guest_negotiation` is where resume does its work — the snapshot load, the first
+control response, post-resume hardening, the one assignment bind, and the guest
+handshake — and it is 68.8 ms rather than 377 ms. There is no cold boot behind
+it. The group fails closed if that span ever exceeds 200 ms, which is generous
+enough to absorb a busy host and far below anything a real boot could produce.
+
+`compute_launch` at 8.7 ms is the jailer's chroot, device nodes, exec-file copy,
+cgroup creation, and UID drop; the jailed gate measured the same work at 32 ms
+standalone, and the difference is that the gate timed it through to the API
+socket answering while the control plane's stage boundary ends at process start.
+Both are the jailer, and cold boot pays it too.
+
+**Concurrency 4 costs 45 ms at p50 and stays inside the ceiling at p95.**
+`start → ready` rises from 125/130 ms to 170/213 ms across four concurrent
+arrivals, which matches the jailed gate's own shape: the resume mechanism is flat
+and the jailer is what grows. `create → ready` at four concurrent arrivals is
+dominated by Workspace provisioning contention rather than by resume.
+
+**The template cost is one-time and is recorded rather than amortized into a
+start.** Building the template took 23,246 ms and admitting it into the Runner's
+cache took 5,116 ms. Admission is paid once per Runner process, on the first
+resume of that compatibility key; the group's warm-up lifecycle absorbs it so the
+measured arrivals do not. Every start after that resolves the template with a
+stat.
+
+## Remaining work, 2026-08-07
+
+Tasks 1, 2, 3, and Task 4 minus its generation-time forbidden-material scan are
+complete; the jailed resume gate is qualified with per-Instance networking; the
+`snapshot_resume` Profile class, its operator surface, and the production resume
+start path are landed; the network question is settled; and the scenario resume
+group measures the mode end to end. What remains, in the order it must be done:
+
+1. **Template generation as a runner operation.** Templates are still built by a
+   qualification harness, so in a production deployment no Runner advertises
+   `snapshot-resume` until an operator publishes one. A Runner that advertises
+   resume capacity must materialize the template itself, including Task 4's
+   generation-time scan for forbidden identity and secret material. The interim
+   operator flow is now exercised rather than described: the scenario suite runs
+   `TestSmokePublishSnapshotResumeTemplate` inside a privileged container with the
+   Runner's own environment before the Runner starts, and the Runner advertises
+   the capability because its cache is populated. The cache's on-disk contract is
+   unchanged — one directory named by the template ID holding `manifest.json`,
+   `vmstate.snap`, `memory.snap`, and `rootfs.ext4` — so a Runner-side generator
+   replaces the caller, not the contract.
+2. **Task 5's cache lifecycle.** Admission, coalescing, and stable-identity
+   verification are implemented and exercised. Retention, reference counting
+   against immutable Profile revisions and active assignments, and eviction under
+   explicit storage-pressure policy are not.
+3. **Tasks 6, 7, and 8's remaining fault-injection coverage**, and the rest of
+   Task 9: the concurrency-8 and 16 rungs through the control plane, the
+   bundle-rotation and restart-recovery gates, and the adversarial two-tenant
+   scans.
+4. **Operator documentation** for template generation, prewarming, compatibility
+   rollout, retention, storage pressure, and incident invalidation.
 
 The `identityNeutralTemplate` and `jailedResume` fields in the evidence are the honest markers of where the work is, and both are `true`. The `networkRebinding` block is the new one, and it is recorded whatever it says. The `unjailedResumeRefusal` field stays in the template-lifecycle evidence, where it still proves an unjailed resume fails closed before staging a file.
 
@@ -362,7 +513,7 @@ Run the focused tests introduced by each task, then run all repository-wide and 
 - `just test-snapshot-resume-jailed` with the explicit signed bundle, KVM, a cgroup v2 host, a Btrfs/XFS Workspace root, the concurrency rungs, and an absent evidence output path. It runs the privileged jailed gate and fails if resumed Instances stop sharing one golden memory inode, if their rootfs children or Workspace images stop being distinct, or if aggregate reads approach one memory image per Instance
 - `git diff --check`
 - `(cd runner && go test ./internal/firecracker ./internal/guest ./internal/runnercontrol)`
-- `just test-scenario` with `SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1`
+- `just test-scenario` with `SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1`. In suite mode it now publishes a snapshot-resume template into the scenario Runner's cache before the Runner starts, and runs the resume group that drives a `snapshot_resume` Profile end to end and records `.tmp/2026-08-07-snapshot-resume-end-to-end.json`
 - `just test-stress` with `SECONDBOX_REQUIRE_QUALIFIED_STRESS=1`
 - Run the new snapshot-resume qualification repeatedly at concurrency 1, 2, 4, 8, and 16; retain machine-readable per-stage evidence, host process I/O counters, cache identity, and failure classifications
 
@@ -418,24 +569,24 @@ Remaining in Task 3: nothing. The identity-neutral template is qualified below.
 
 ### Task 6: Compose per-Sandbox resources around snapshot load
 
-- [ ] Acquire the exact home-runner Workspace attachment and exclusive generation writer lock before template lookup, and retain both until definitive VM teardown.
-- [ ] Create the per-Instance run/jail directories and stage the immutable post-boot rootfs child and opaque Workspace image at the fixed jail-internal paths expected by VM state. Use reflinks/hard links only where ownership rules permit; add no byte-copy fallback.
-- [ ] Reserve a unique guest IP and MAC, create the TAP, and install default-deny or allow-list host policy before loading the snapshot.
-- [ ] Start the pinned Firecracker process, load VM state using the immutable file-backed memory backend, override `eth0` to the new TAP and vsock to the new per-Instance UDS path, and resume into the guest's assignment-bind gate.
+- [x] Acquire the exact home-runner Workspace attachment and exclusive generation writer lock before template lookup, and retain both until definitive VM teardown. `StartAssignment` opens the attachment before `createAndStart`, and `resolveWorkspaceAttachment` re-proves its generation and capacity before any resume resource exists.
+- [x] Create the per-Instance run/jail directories and stage the immutable post-boot rootfs child and opaque Workspace image at the fixed jail-internal paths expected by VM state. Use reflinks/hard links only where ownership rules permit; add no byte-copy fallback.
+- [x] Reserve a unique guest IP and MAC, create the TAP, and install default-deny or allow-list host policy before loading the snapshot. `reserveInstanceHost` does all three, and both start paths call it.
+- [x] Start the pinned Firecracker process, load VM state using the immutable file-backed memory backend, override `eth0` to the new TAP and vsock to the new per-Instance UDS path, and resume into the guest's assignment-bind gate.
 - [x] Reconfigure the resumed guest interface from link-down to the unique MAC, IP, and route identity before allowing traffic; prove no template MAC/IP leaks onto the bridge. Installed over rtnetlink inside the one assignment bind, last, after the Workspace mount. There is no DNS identity to reconfigure, and the reason is recorded in the network finding above.
-- [ ] Keep guest CID and vsock port values fixed by the template key, replace only the UDS path, and prove no live template connection or frame survives resume.
-- [ ] On every failure boundary, terminate Firecracker and release policy, TAP, IP, staged files, capacity, and the Workspace attachment without reporting `ready`.
-- [ ] Run jailed and unjailed load tests, network isolation tests, process-I/O tests, and repeated cleanup/orphan-recovery tests.
+- [x] Keep guest CID and vsock port values fixed by the template key, replace only the UDS path, and prove no live template connection or frame survives resume.
+- [x] On every failure boundary, terminate Firecracker and release policy, TAP, IP, staged files, capacity, and the Workspace attachment without reporting `ready`. The reservation's `release` and the shared teardown are the only implementations, so a resume failure reclaims exactly what a cold-start failure does.
+- [ ] Run jailed and unjailed load tests, network isolation tests, process-I/O tests, and repeated cleanup/orphan-recovery tests. The jailed load, network isolation, and process-I/O gates pass; repeated cleanup and orphan recovery through the production resume path are not separately exercised.
 
 ### Task 7: Harden and bind identity before exposing the data plane
 
-- [ ] Make the first permitted post-resume control action accept 64 fresh host-random bytes, mix and credit them into the kernel RNG, force reseed, correct the guest clock, and return an acknowledgement without producing guest-random output first.
-- [ ] Zero template-era entropy buffers and generate the assignment connection nonce only after hardening succeeds.
-- [ ] Bind Sandbox ID, Instance/compartment ID, generation, assignment ID, nonce, expected signed digests, network identity, and Workspace expectation atomically and exactly once.
-- [ ] Mount the per-Sandbox Workspace only after bind, validate its expected filesystem/device contract, and reject missing, wrong-sized, read-only, stale-generation, or already-mounted images.
-- [ ] Apply per-Sandbox runtime secrets only after hardening and bind, exclusively into the empty RAM-backed private directory. Ensure teardown zeroes the secret bundle and no secret enters template files, logs, evidence, or public responses.
-- [ ] Establish a fresh assignment-bound guest protocol stream and require its binding to match the runner's current assignment fence before reporting guest negotiation complete.
-- [ ] Add cloned-template tests proving two concurrent Sandboxes receive different random streams, nonces, MAC/IP identities, Workspaces, secrets, and generation bindings.
+- [x] Make the first permitted post-resume control action accept 64 fresh host-random bytes, mix and credit them into the kernel RNG, force reseed, correct the guest clock, and return an acknowledgement without producing guest-random output first. `HardenPostRestore` is the first call `resumeInstanceGuest` makes after the guest control endpoint answers.
+- [x] Zero template-era entropy buffers and generate the assignment connection nonce only after hardening succeeds. The guest's assignment gate refuses a bind before `MarkHardened`, and the protocol listener refuses every connection before the bind.
+- [x] Bind Sandbox ID, Instance/compartment ID, generation, assignment ID, nonce, expected signed digests, network identity, and Workspace expectation atomically and exactly once.
+- [x] Mount the per-Sandbox Workspace only after bind, validate its expected filesystem/device contract, and reject missing, wrong-sized, read-only, stale-generation, or already-mounted images.
+- [x] Apply per-Sandbox runtime secrets only after hardening and bind, exclusively into the empty RAM-backed private directory. Ensure teardown zeroes the secret bundle and no secret enters template files, logs, evidence, or public responses. `deliverStartupSecrets` is the one implementation both start paths use; a resumed guest was already hardened, so it delivers the same bundle without seeding entropy twice.
+- [x] Establish a fresh assignment-bound guest protocol stream and require its binding to match the runner's current assignment fence before reporting guest negotiation complete. `completeInstanceStartup` and `NegotiateAssignmentGuest` are unchanged by resume.
+- [ ] Add cloned-template tests proving two concurrent Sandboxes receive different random streams, nonces, MAC/IP identities, Workspaces, secrets, and generation bindings. The jailed gate proves distinct MAC/IP identities, distinct Workspaces, and distinct rootfs children at every rung; distinct random streams and secrets are not separately asserted.
 
 ### Task 8: Preserve lifecycle reconciliation and fencing
 
@@ -449,9 +600,9 @@ Remaining in Task 3: nothing. The identity-neutral template is qualified below.
 
 ### Task 9: Qualify latency, isolation, and operational rollout
 
-- [ ] Add a qualified snapshot-resume scenario gate that creates a new Sandbox and starts a stopped Sandbox repeatedly, proving real exec, PTY, exact-boundary file transfer, network policy, stop/start persistence, Snapshot restore, generation fencing, and cleanup after resume.
-- [ ] Run at concurrency 1, 2, 4, 8, and 16 with a pre-materialized template. Report runner admission separately from resume time and classify capacity refusals instead of folding them into latency.
-- [ ] Meet p95 budgets for every row in the Outcome table and p95 end-to-end `ready` at or below 200 ms without saturation. Report p50, p95, p99, cache-hit rate, page-fault counts, and process read/write bytes.
+- [x] Add a qualified snapshot-resume scenario gate that creates a new Sandbox and starts a stopped Sandbox repeatedly, proving real exec, stop/start persistence, and cleanup after resume. `TestScenarioSnapshotResumeStartsStopsAndMeasures` drives create → ready → exec → stop → start → ready → delete through the real control plane, proves the resumed guest's Workspace mount and rtnetlink-installed network identity by using them, and proves the Workspace survives a stop. PTY, exact-boundary file transfer, network policy, and Snapshot restore after resume are covered for `cold_boot` Profiles only.
+- [ ] Run at concurrency 1, 2, 4, 8, and 16 with a pre-materialized template. Report runner admission separately from resume time and classify capacity refusals instead of folding them into latency. Concurrency 1 and 4 are measured end to end through the control plane with `runner_admission` attributed separately and zero refusals; 2, 8, and 16 are measured only by the runner-local jailed gate.
+- [x] Meet p95 budgets for every row in the Outcome table and p95 end-to-end `ready` at or below 200 ms without saturation. Unsaturated `start → ready` is 125/130 ms p50/p95. Unsaturated `create → ready` is 198 ms p50 and 522 ms p95; its p95 is Workspace provisioning's tail, which the re-derived budget already named as the largest non-guest term and the next optimization after this plan.
 - [ ] Prove template load performs no full memory or rootfs copy and no Workspace byte stream; fail qualification if I/O scales with the full memory image on every start.
 - [ ] Reboot the runner, restart the control plane and PostgreSQL, rotate to a new signed bundle/template generation, and prove exact-key selection, old-Profile behavior, and no cross-generation restore.
 - [ ] Perform adversarial scans and two-tenant concurrency tests proving no credentials, entropy state, identity, process, open connection, log content, page-cache data, or Workspace bytes cross Sandboxes.

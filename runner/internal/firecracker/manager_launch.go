@@ -1104,8 +1104,10 @@ func (m *Manager) firecrackerRunning(ctx context.Context, inst *instance) (bool,
 	return firecrackerProcessRunning(inst.id)
 }
 
-// deliverStartupSecrets waits for the guest control plane, then applies the
-// runtime environment bundle over vsock before its first operation.
+// deliverStartupSecrets waits for the guest control plane, seeds its entropy and
+// clock, then applies the runtime environment bundle over vsock before its first
+// operation. A resumed guest was already hardened before its one assignment
+// bind, so this delivers the same bundle to it without seeding entropy twice.
 func (m *Manager) deliverStartupSecrets(ctx context.Context, inst *instance, sandboxID string, opts runtimemanager.StartOpts, timer *coldStartStageTimer) error {
 	bundle, err := m.buildStartupSecretBundle(sandboxID, inst.id, opts)
 	if err != nil {
@@ -1117,8 +1119,10 @@ func (m *Manager) deliverStartupSecrets(ctx context.Context, inst *instance, san
 	}
 	timer.mark("control_plane_ready")
 	controlClient := inst.controlClient(15 * time.Second)
-	if err := controlClient.HardenPostRestore(ctx, time.Now().UTC()); err != nil {
-		return fmt.Errorf("seed guest entropy and clock: %w", err)
+	if !inst.postResumeHardened {
+		if err := controlClient.HardenPostRestore(ctx, time.Now().UTC()); err != nil {
+			return fmt.Errorf("seed guest entropy and clock: %w", err)
+		}
 	}
 	timer.mark("guest_entropy_ready")
 	if err := controlClient.ApplySecrets(ctx, bundle); err != nil {

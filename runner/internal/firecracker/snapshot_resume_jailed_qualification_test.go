@@ -196,7 +196,7 @@ func TestSmokeJailedSnapshotResume(t *testing.T) {
 	}
 
 	buildStartedAt := time.Now()
-	key, manifest := buildSnapshotResumeTemplate(t, cfg, cache, memoryMiB, workspaceMiB)
+	key, manifest := buildSnapshotResumeTemplate(t, cfg, cache, memoryMiB, workspaceMiB, nil)
 	report.TemplateBuildMillis = time.Since(buildStartedAt).Milliseconds()
 	report.TemplateID = manifest.TemplateID
 	report.MemoryFileBytes = manifest.Memory.Bytes

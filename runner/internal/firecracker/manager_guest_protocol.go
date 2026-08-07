@@ -9,6 +9,30 @@ import (
 	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 )
 
+// requestedGuestProtocolFeatureNames is the feature set every start negotiates,
+// in contract vocabulary. It is stated once because a snapshot-resume
+// template's compatibility key records it: a template captured by a runner that
+// asks for a different feature set is a different template.
+var requestedGuestProtocolFeatureNames = []string{
+	"streaming_exec",
+	"pty_resize",
+	"descriptor_pinned_filesystem",
+	"activity_events",
+	"port_proxy",
+}
+
+func requestedGuestProtocolFeatures() ([]guestv1.GuestFeature, error) {
+	features := make([]guestv1.GuestFeature, 0, len(requestedGuestProtocolFeatureNames))
+	for _, name := range requestedGuestProtocolFeatureNames {
+		feature, err := guestFeatureFromContractName(name)
+		if err != nil {
+			return nil, err
+		}
+		features = append(features, feature)
+	}
+	return features, nil
+}
+
 // NegotiateAssignmentGuest establishes the canonical assignment-bound data
 // plane. Assignment readiness must not be reported until this succeeds.
 func (m *Manager) NegotiateAssignmentGuest(
@@ -53,6 +77,10 @@ func (m *Manager) negotiateInstanceGuest(
 		}
 		mandatory = append(mandatory, feature)
 	}
+	requested, err := requestedGuestProtocolFeatures()
+	if err != nil {
+		return err
+	}
 	session, err := NegotiateGuestProtocol(ctx, GuestProtocolNegotiation{
 		UDSPath:                         inst.vsockUDS,
 		Port:                            inst.guestProtocolPort,
@@ -62,14 +90,8 @@ func (m *Manager) negotiateInstanceGuest(
 		ExpectedGuestBuildID:            opts.GuestBuildID,
 		ExpectedImageManifestDigest:     opts.ImageManifestDigest,
 		ExpectedToolchainManifestDigest: opts.ToolchainManifestDigest,
-		RequestedFeatures: []guestv1.GuestFeature{
-			guestv1.GuestFeature_GUEST_FEATURE_STREAMING_EXEC,
-			guestv1.GuestFeature_GUEST_FEATURE_PTY_RESIZE,
-			guestv1.GuestFeature_GUEST_FEATURE_DESCRIPTOR_PINNED_FILESYSTEM,
-			guestv1.GuestFeature_GUEST_FEATURE_ACTIVITY_EVENTS,
-			guestv1.GuestFeature_GUEST_FEATURE_PORT_PROXY,
-		},
-		MandatoryFeatures: mandatory,
+		RequestedFeatures:               requested,
+		MandatoryFeatures:               mandatory,
 	})
 	if err != nil {
 		return err

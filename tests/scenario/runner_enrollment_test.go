@@ -23,7 +23,8 @@ func TestScenarioRunnerEnrollsThroughControlChannel(t *testing.T) {
 		pool.ReadyRunnerCount > 1 ||
 		!slices.Equal(pool.Architectures, []string{"amd64"}) ||
 		!slices.Equal(pool.Capabilities, []string{
-			"cleanup", "compute", "local-workspace", "network-policy", "storage",
+			"cleanup", "compute", "local-workspace", "network-policy",
+			"snapshot-resume", "storage",
 		}) ||
 		pool.CapacityPolicy["maximumInstances"] != 8 {
 		t.Fatalf("SecondBox scenario created RunnerPool = %#v", pool)
@@ -39,6 +40,12 @@ func TestScenarioRunnerEnrollsThroughControlChannel(t *testing.T) {
 	}
 	for _, capability := range []string{
 		"compute", "network-policy", "storage", "cleanup", "local-workspace",
+		// The Runner advertises snapshot-resume only when the jailer is
+		// required and its cache already holds a template built from exactly
+		// the signed bundle it verified. The scenario publisher populates that
+		// cache before the Runner starts, so its absence here is a real
+		// regression rather than a missing fixture.
+		"snapshot-resume",
 	} {
 		if !slices.Contains(runner.Capabilities, capability) {
 			t.Fatalf("SecondBox scenario Runner capabilities = %v, missing %s", runner.Capabilities, capability)

@@ -141,6 +141,44 @@ When the control plane has accepted readiness, the runner snapshots the exact `o
 
 Natural `guest_shutdown` requires the exact successful-exit message emitted by the pinned Firecracker 1.16.1 process log after readiness and no Runner stop, fence, or cleanup has begun. Log parsing validates the structured line and exact message; substring matches do not qualify. Any other post-ready disappearance is `internal_failure`. The successful-exit marker must be requalified before changing `runner/internal/firecracker/firecracker.lock`. Unit tests qualify parsers and classification without KVM; the privileged Firecracker lane remains the boundary for proving the real jailer cgroup layout and process log on `/dev/kvm`.
 
+## Snapshot-resume startup
+
+A Profile revision pinned to `snapshot_resume` resumes an identity-neutral
+post-boot memory snapshot instead of booting a guest. The Runner advertises the
+provider-neutral `snapshot-resume` capability only when the jailer is required,
+`SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT` is configured, and its cache
+already holds a published template built from exactly the signed bundle this
+Runner verified. There is no cold-boot fallback: an absent, incompatible, or
+changed template fails the start with a typed retryable unavailability.
+
+Snapshot resume requires the jailer, and this is a property of the VMM rather
+than a policy choice. Firecracker opens every block device at the path the VM
+state recorded, during the load itself, so a restored Instance receives its own
+disks only when those paths are chroot-relative names it resolves inside its own
+jail. `SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED=true` is incompatible with the
+mode and is refused before anything is staged.
+
+The cache root must share a filesystem with
+`SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT`. The golden memory file is hard-linked
+into every Instance's jail rather than cloned, so all resumed Instances share one
+inode and therefore one page cache; only the sealed post-boot rootfs is
+reflink-cloned per Instance, because a restored guest writes to it. A cross-device
+cache root fails the start with an actionable error rather than copying.
+
+A resume start creates the guest address, the TAP owned by this Instance's jailer
+UID, and the fail-closed host policy before the load, exactly as a cold boot does.
+The resumed guest's interface is captured link-down and stays down until its one
+assignment bind, which installs a unique MAC, address, and default route over
+rtnetlink after the Workspace is mounted. The template's captured MAC never
+reaches the bridge.
+
+A Runner does not build its own templates yet. Until it does, an operator
+materializes one into the cache root before the Runner starts; the on-disk
+contract is one directory named by the template's compatibility identity holding
+`manifest.json`, `vmstate.snap`, `memory.snap`, and `rootfs.ext4`. Cache admission
+verifies every recorded digest once, and every start afterwards proves only stable
+file identity, exactly as the launch artifacts are protected.
+
 ## Host bridge policy
 
 `runner/scripts/microvm-host-network-setup.sh` creates the standalone bridge and installs the base firewall policy. It requires:
