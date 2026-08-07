@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -483,24 +482,6 @@ func evictSnapshotFileCache(path string) error {
 	}
 	defer file.Close()
 	return unix.Fadvise(int(file.Fd()), 0, 0, unix.FADV_DONTNEED)
-}
-
-func waitForUnixSocket(ctx context.Context, path string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
-		connection, err := net.DialTimeout("unix", path, 10*time.Millisecond)
-		if err == nil {
-			return connection.Close()
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("timed out waiting for Firecracker API socket: %w", err)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(time.Millisecond):
-		}
-	}
 }
 
 func waitForSnapshotControl(ctx context.Context, client ControlClient, timeout time.Duration) error {
