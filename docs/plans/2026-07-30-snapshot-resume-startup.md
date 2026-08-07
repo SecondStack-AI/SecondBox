@@ -211,27 +211,27 @@ The gating unknown is closed. `scripts/test-snapshot-resume-jailed.sh` compiles 
 
 The template must itself be built under the jailer, which the earlier passes did not have to know. A jailed Firecracker resolves every API path inside its chroot, in both directions: the capture is requested at jail-relative names and moved into the cache afterwards, and the resulting VM state records chroot-relative drive names — which is exactly what lets a restored Instance open its own disks. A template captured unjailed records the source's absolute paths and cannot be resumed into a jail at all.
 
-The evidence is `docs/plans/evidence/2026-08-07-snapshot-resume-jailed-gate.json`. Every rung passed. Stage p50/p95 in milliseconds:
+The evidence is `docs/plans/evidence/2026-08-07-snapshot-resume-jailed-gate.json`, recording source commit `28f066e` with a clean tree. Every rung passed. Stage p50/p95 in milliseconds:
 
 | Stage | c1 | c2 | c4 | c8 | c16 |
 |---|---:|---:|---:|---:|---:|
-| Template stable-identity check | 0.009/0.009 | 0.010/0.010 | 0.014/0.018 | 0.011/0.062 | 0.017/0.051 |
-| Jail staging | 0.6/0.6 | 0.7/1.1 | 1.4/2.5 | 2.6/4.9 | 5.3/11.8 |
-| Jailer process start through API socket | 32/32 | 43/43 | 55/56 | 98/105 | 180/195 |
-| Snapshot load | 3.3/3.3 | 3.7/4.6 | 3.7/4.6 | 3.7/7.6 | 5.6/9.9 |
-| First control response | 7.1/7.1 | 7.1/7.8 | 6.7/7.1 | 6.9/7.4 | 7.4/10.9 |
-| Post-resume hardening | 2.1/2.1 | 2.1/2.4 | 1.9/2.1 | 2.2/2.5 | 2.1/2.4 |
-| Assignment bind | 5.8/5.8 | 5.4/5.5 | 4.7/5.3 | 5.3/5.7 | 5.6/6.4 |
-| Guest protocol handshake | 7.1/7.1 | 6.3/6.4 | 5.4/6.5 | 6.0/7.2 | 6.6/9.1 |
-| **Resume total** | **58/58** | **69/69** | **79/80** | **129/131** | **216/228** |
+| Template stable-identity check | 0.010/0.010 | 0.011/0.029 | 0.009/0.011 | 0.011/0.068 | 0.020/0.268 |
+| Jail staging | 0.7/0.7 | 1.0/1.4 | 1.4/2.2 | 3.3/6.0 | 5.8/11.6 |
+| Jailer process start through API socket | 32/32 | 48/48 | 60/64 | 103/109 | 179/202 |
+| Snapshot load | 2.7/2.7 | 2.3/3.3 | 3.9/6.1 | 7.8/13.5 | 4.1/7.0 |
+| First control response | 7.3/7.3 | 6.4/7.0 | 6.6/7.3 | 6.9/7.7 | 7.1/9.9 |
+| Post-resume hardening | 1.8/1.8 | 1.7/2.5 | 1.8/2.4 | 2.7/3.3 | 2.8/3.3 |
+| Assignment bind | 5.7/5.7 | 4.5/5.0 | 4.9/5.5 | 6.9/9.8 | 5.1/6.1 |
+| Guest protocol handshake | 7.5/7.5 | 6.5/6.6 | 5.7/6.4 | 6.9/7.2 | 6.6/7.9 |
+| **Resume total** | **58/58** | **72/72** | **87/88** | **138/139** | **219/232** |
 
 Three things the measurement settles.
 
-**The resume mechanism does not scale with concurrency; the jailer does.** Snapshot load stays at 3.3 ms and the four guest-side stages — first control response, hardening, assignment bind, guest handshake — are flat across the entire ladder at roughly 7, 2, 5, and 6 ms, totalling about 21 ms at every rung. Everything that grows is the jailer's process start: chroot, device nodes, exec-file copy, cgroup creation, and UID drop, from 32 ms at one Instance to 180 ms at sixteen. That is not a resume cost and cold boot pays it too; it is simply hidden inside cold boot's 377 ms `guest_negotiation` span, where nothing measured it separately.
+**The resume mechanism does not scale with concurrency; the jailer does.** Snapshot load stays between 2.3 and 7.8 ms across the whole ladder, and the four guest-side stages — first control response, hardening, assignment bind, guest handshake — are flat at roughly 7, 2, 5, and 7 ms, totalling about 22 ms at every rung. Everything that grows is the jailer's process start: chroot, device nodes, exec-file copy, cgroup creation, and UID drop, from 32 ms at one Instance to 179 ms at sixteen. That is not a resume cost and cold boot pays it too; it is simply hidden inside cold boot's 377 ms `guest_negotiation` span, where nothing measured it separately.
 
-**The golden memory file is one inode and one page cache, exactly as the mechanism requires.** Every rung shares the template's memory inode, with a link count of exactly concurrency plus one, while per-Instance rootfs children and Workspace images are distinct inodes. Aggregate Firecracker block reads across sixteen concurrent resumes are 9.3 MB against a nominal 16 × 512 MiB of guest memory — 0.1%, with no per-start memory copy at any rung. The 32-boot rootfs re-read that motivated this plan does not have an analogue here.
+**The golden memory file is one inode and one page cache, exactly as the mechanism requires.** Every rung shares the template's memory inode, with a link count of exactly concurrency plus one, while per-Instance rootfs children and Workspace images are distinct inodes. Aggregate Firecracker block reads across sixteen concurrent resumes are 8.9 MiB against a nominal 16 × 512 MiB of guest memory — 0.1%, with no per-start memory copy at any rung. The 32-boot rootfs re-read that motivated this plan does not have an analogue here.
 
-**The budget's premise holds and one of its rows does not.** The re-derived budget allowed 5–15 ms for process start plus file-backed load. The measured pair is 35.7 ms at concurrency 1, because the qualified low-level floor that produced the 1 ms process-start figure started Firecracker unjailed with `exec`, and a jailed start costs 32 ms. Every other row came in at or under budget: template lookup 9 µs against 0–3 ms, first control plus hardening 9.2 ms against 16–25 ms, and assignment bind 5.8 ms against 10–30 ms. The resume total of 58 ms therefore exceeds the 28–48 ms the budget derived, entirely in the jailer.
+**The budget's premise holds and one of its rows does not.** The re-derived budget allowed 5–15 ms for process start plus file-backed load. The measured pair is 35 ms at concurrency 1, because the qualified low-level floor that produced the 1 ms process-start figure started Firecracker unjailed with `exec`, and a jailed start costs 32 ms. Every other row came in at or under budget: template lookup 10 µs against 0–3 ms, first control plus hardening 9.1 ms against 16–25 ms, and assignment bind 5.7 ms against 10–30 ms. The resume total of 58 ms therefore exceeds the 28–48 ms the budget derived, entirely in the jailer.
 
 That does not threaten the outcome, because the term resume removes is much larger than the term it adds. Resume replaces `compute_launch` at 7/16 ms and `guest_negotiation` at 377/391 ms with one 58 ms span. Carried onto the 2026-08-06 unsaturated spans, `start → ready` projects to 67 − 7 + 58 = **118 ms** and `create → ready` to 152 − 7 + 58 = **203 ms**. Those are arithmetic on two separately measured spans, not an end-to-end measurement: the production start path is not landed, so no `create_to_ready` has been observed through resume. The projection is what releases the remaining work, and the 100–200 ms outcome is claimed only once a qualified end-to-end run shows it.
 
@@ -246,7 +246,7 @@ Tasks 1, 3, and Task 4 minus its generation-time forbidden-material scan are com
 3. **Template generation as a runner operation.** Templates are still built by the qualification harness. A runner that advertises `snapshot_resume` capacity must materialize one itself, including Task 4's generation-time scan for forbidden identity and secret material.
 4. **Tasks 5, 6, 7, 8, and the rest of Task 9**, including the end-to-end qualified scenario gate that turns the 118 ms projection above into a measurement.
 
-The `identityNeutralTemplate` and `jailedResume` fields in the evidence are the honest markers of where the work is: both are now `true`, and `unjailedResumeRefusal` has been retired along with the missing number it stood for.
+The `identityNeutralTemplate` and `jailedResume` fields in the evidence are the honest markers of where the work is, and both are now `true`. The `unjailedResumeRefusal` field stays in the template-lifecycle evidence, where it still proves an unjailed resume fails closed before staging a file; it is no longer standing in for a jailed number nobody had.
 
 ## Non-goals
 
