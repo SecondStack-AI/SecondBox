@@ -19,6 +19,7 @@ rg -q -- '--prerelease=false' "$publisher"
 rg -q -- '--latest' "$publisher"
 rg -q 'gh workflow run release.yml' "$uploader"
 rg -q 'qualification-evidence' "$stager"
+rg -q '^export LC_ALL=C$' "$stager"
 
 if rg -q 'qualif|/dev/kvm|test-scenario|self-hosted' "$repo_root/.github/workflows"; then
   echo "GitHub workflows contain a forbidden qualification step" >&2

@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# A release candidate is a byte-reproducible set of files. Shell collation
+# decides the order of SHA256SUMS, the candidate allowlist, and every archived
+# file list, so the operator's locale would otherwise change the staged bytes and
+# disagree with the byte-ordered comparisons the release tool performs.
+export LC_ALL=C
+
 usage() {
   echo "usage: scripts/release-stage.sh [--test-mode] VERSION OUTPUT_DIR" >&2
   exit 2

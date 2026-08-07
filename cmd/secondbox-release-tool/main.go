@@ -180,7 +180,13 @@ func verifyCandidate(directory string) error {
 		}
 		actualFiles = append(actualFiles, entry.Name())
 	}
-	if strings.Join(actualFiles, "\x00") != strings.Join(allowlist.Files, "\x00") {
+	// The allowlist names a set of files, not an order. Comparing it sorted keeps
+	// the candidate contract exact while leaving the staging script's collation
+	// and the directory read order free to disagree.
+	expectedFiles := append([]string(nil), allowlist.Files...)
+	sort.Strings(expectedFiles)
+	sort.Strings(actualFiles)
+	if strings.Join(actualFiles, "\x00") != strings.Join(expectedFiles, "\x00") {
 		return errors.New("release candidate contains missing or unknown files")
 	}
 	if err := verifyChecksums(directory, allowlist.Files); err != nil {
