@@ -188,14 +188,14 @@ The rebuild is not guest-agent-only in one respect the recipe did not anticipate
 
 ## Identity-neutral template qualified, 2026-08-06
 
-The template PR #57 qualified recorded `identityNeutralTemplate: false`, because the shipped guest took its Sandbox identity from kernel arguments. That is no longer true. The evidence is `docs/plans/evidence/2026-08-06-snapshot-resume-identity-neutral-template.json`, recording source commit `84dcfdb` with a clean tree, and the low-level floor re-measured against the same rebuilt bundle is `docs/plans/evidence/2026-08-06-snapshot-load-512mib-template-mode.json`.
+The template PR #57 qualified recorded `identityNeutralTemplate: false`, because the shipped guest took its Sandbox identity from kernel arguments. That is no longer true. The evidence is `docs/plans/evidence/2026-08-06-snapshot-resume-identity-neutral-template.json`, recording source commit `dc1a0a3` with a clean tree, and the low-level floor re-measured against the same rebuilt bundle is `docs/plans/evidence/2026-08-06-snapshot-load-512mib-template-mode.json`.
 
 | Stage | Measured |
 |---|---:|
 | Template guest boot, process start through control endpoint answering | 402 ms |
-| Template build, boot through sealed publish | 31,358 ms |
-| One-time cache admission, digesting 11.2 GiB | 6,652 ms |
-| Per-start stable-identity check | **7,153 ns** |
+| Template build, boot through sealed publish | 29,662 ms |
+| One-time cache admission, digesting 11.2 GiB | 5,622 ms |
+| Per-start stable-identity check | **6,603 ns** |
 
 The template guest is `secondbox.template_mode=1`: no Sandbox ID, no Instance ID, no generation, no digests, no heartbeat interval, no runtime secrets, an unmounted `/dev/vdb`, and a protocol listener that is bound but refuses every connection. Its `/heartbeat` reports empty identifiers. That 402 ms of boot is exactly what a resume removes; the low-level floor for replacing it remains 3–4 ms of warm load and 16–18 ms through post-resume hardening.
 
