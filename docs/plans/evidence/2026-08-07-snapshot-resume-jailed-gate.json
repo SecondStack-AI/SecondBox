@@ -1,0 +1,777 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "28f066e0f4068b77c4e23b549677e2655419027e",
+  "sourceTreeDirty": false,
+  "goVersion": "go1.26.5",
+  "firecrackerVersion": "Firecracker v1.16.1",
+  "hostKernel": "Linux 7.1.4-arch1-1 x86_64 GNU/Linux",
+  "hostCpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+  "workspaceFilesystem": "btrfs",
+  "completedAt": "2026-08-07T03:31:52.207197188Z",
+  "jailedResume": true,
+  "identityNeutralTemplate": true,
+  "memoryMiB": 512,
+  "workspaceMiB": 64,
+  "templateId": "918691e39a3664a81af38854e7d56dd758799dbae4457454f44b0c0fcc5bc445",
+  "memoryFileBytes": 536870912,
+  "rootfsFileBytes": 10737418240,
+  "vmStateFileBytes": 14585,
+  "templateBuildMilliseconds": 29257,
+  "cacheAdmissionMilliseconds": 5228,
+  "concurrencyRungs": [
+    {
+      "concurrency": 1,
+      "wallClockMilliseconds": 58,
+      "instances": [
+        {
+          "instanceId": "fc-jr1x00-cmp-jr-1-00-c2ddb527",
+          "jailerUid": 10001,
+          "templateIdentityMicroseconds": 10,
+          "stageMicroseconds": 701,
+          "processStartMicroseconds": 32450,
+          "snapshotLoadMicroseconds": 2729,
+          "firstControlMicroseconds": 7282,
+          "postResumeHardeningMicroseconds": 1846,
+          "assignmentBindMicroseconds": 5713,
+          "guestHandshakeMicroseconds": 7524,
+          "resumeTotalMicroseconds": 58261
+        }
+      ],
+      "stages": [
+        {
+          "stage": "template_identity",
+          "p50Microseconds": 10,
+          "p95Microseconds": 10,
+          "maxMicroseconds": 10
+        },
+        {
+          "stage": "jail_staging",
+          "p50Microseconds": 701,
+          "p95Microseconds": 701,
+          "maxMicroseconds": 701
+        },
+        {
+          "stage": "process_start",
+          "p50Microseconds": 32450,
+          "p95Microseconds": 32450,
+          "maxMicroseconds": 32450
+        },
+        {
+          "stage": "snapshot_load",
+          "p50Microseconds": 2729,
+          "p95Microseconds": 2729,
+          "maxMicroseconds": 2729
+        },
+        {
+          "stage": "first_control_response",
+          "p50Microseconds": 7282,
+          "p95Microseconds": 7282,
+          "maxMicroseconds": 7282
+        },
+        {
+          "stage": "post_resume_hardening",
+          "p50Microseconds": 1846,
+          "p95Microseconds": 1846,
+          "maxMicroseconds": 1846
+        },
+        {
+          "stage": "assignment_bind",
+          "p50Microseconds": 5713,
+          "p95Microseconds": 5713,
+          "maxMicroseconds": 5713
+        },
+        {
+          "stage": "guest_handshake",
+          "p50Microseconds": 7524,
+          "p95Microseconds": 7524,
+          "maxMicroseconds": 7524
+        },
+        {
+          "stage": "resume_total",
+          "p50Microseconds": 58261,
+          "p95Microseconds": 58261,
+          "maxMicroseconds": 58261
+        }
+      ],
+      "goldenMemoryInode": "86:128300693",
+      "goldenMemoryInodeShared": true,
+      "goldenMemoryLinkCount": 2,
+      "rootfsChildrenAreDistinct": true,
+      "workspacesAreDistinct": true,
+      "firecrackerReadBytesTotal": 557056,
+      "firecrackerReadCharactersTotal": 473785,
+      "fullMemoryCopyObserved": false
+    },
+    {
+      "concurrency": 2,
+      "wallClockMilliseconds": 72,
+      "instances": [
+        {
+          "instanceId": "fc-jr2x00-cmp-jr-2-00-547c3d0c",
+          "jailerUid": 10001,
+          "templateIdentityMicroseconds": 29,
+          "stageMicroseconds": 1371,
+          "processStartMicroseconds": 47836,
+          "snapshotLoadMicroseconds": 3328,
+          "firstControlMicroseconds": 6379,
+          "postResumeHardeningMicroseconds": 1703,
+          "assignmentBindMicroseconds": 4970,
+          "guestHandshakeMicroseconds": 6612,
+          "resumeTotalMicroseconds": 72236
+        },
+        {
+          "instanceId": "fc-jr2x01-cmp-jr-2-01-3f3feeaf",
+          "jailerUid": 10002,
+          "templateIdentityMicroseconds": 11,
+          "stageMicroseconds": 983,
+          "processStartMicroseconds": 48297,
+          "snapshotLoadMicroseconds": 2337,
+          "firstControlMicroseconds": 6996,
+          "postResumeHardeningMicroseconds": 2532,
+          "assignmentBindMicroseconds": 4510,
+          "guestHandshakeMicroseconds": 6498,
+          "resumeTotalMicroseconds": 72170
+        }
+      ],
+      "stages": [
+        {
+          "stage": "template_identity",
+          "p50Microseconds": 11,
+          "p95Microseconds": 29,
+          "maxMicroseconds": 29
+        },
+        {
+          "stage": "jail_staging",
+          "p50Microseconds": 983,
+          "p95Microseconds": 1371,
+          "maxMicroseconds": 1371
+        },
+        {
+          "stage": "process_start",
+          "p50Microseconds": 47836,
+          "p95Microseconds": 48297,
+          "maxMicroseconds": 48297
+        },
+        {
+          "stage": "snapshot_load",
+          "p50Microseconds": 2337,
+          "p95Microseconds": 3328,
+          "maxMicroseconds": 3328
+        },
+        {
+          "stage": "first_control_response",
+          "p50Microseconds": 6379,
+          "p95Microseconds": 6996,
+          "maxMicroseconds": 6996
+        },
+        {
+          "stage": "post_resume_hardening",
+          "p50Microseconds": 1703,
+          "p95Microseconds": 2532,
+          "maxMicroseconds": 2532
+        },
+        {
+          "stage": "assignment_bind",
+          "p50Microseconds": 4510,
+          "p95Microseconds": 4970,
+          "maxMicroseconds": 4970
+        },
+        {
+          "stage": "guest_handshake",
+          "p50Microseconds": 6498,
+          "p95Microseconds": 6612,
+          "maxMicroseconds": 6612
+        },
+        {
+          "stage": "resume_total",
+          "p50Microseconds": 72170,
+          "p95Microseconds": 72236,
+          "maxMicroseconds": 72236
+        }
+      ],
+      "goldenMemoryInode": "86:128300693",
+      "goldenMemoryInodeShared": true,
+      "goldenMemoryLinkCount": 3,
+      "rootfsChildrenAreDistinct": true,
+      "workspacesAreDistinct": true,
+      "firecrackerReadBytesTotal": 1306624,
+      "firecrackerReadCharactersTotal": 1029483,
+      "fullMemoryCopyObserved": false
+    },
+    {
+      "concurrency": 4,
+      "wallClockMilliseconds": 88,
+      "instances": [
+        {
+          "instanceId": "fc-jr4x00-cmp-jr-4-00-059ac8bc",
+          "jailerUid": 10001,
+          "templateIdentityMicroseconds": 9,
+          "stageMicroseconds": 2241,
+          "processStartMicroseconds": 63428,
+          "snapshotLoadMicroseconds": 3938,
+          "firstControlMicroseconds": 6588,
+          "postResumeHardeningMicroseconds": 1765,
+          "assignmentBindMicroseconds": 5064,
+          "guestHandshakeMicroseconds": 5457,
+          "resumeTotalMicroseconds": 88495
+        },
+        {
+          "instanceId": "fc-jr4x01-cmp-jr-4-01-d25dcfc1",
+          "jailerUid": 10002,
+          "templateIdentityMicroseconds": 11,
+          "stageMicroseconds": 1354,
+          "processStartMicroseconds": 59454,
+          "snapshotLoadMicroseconds": 4982,
+          "firstControlMicroseconds": 7271,
+          "postResumeHardeningMicroseconds": 2402,
+          "assignmentBindMicroseconds": 4856,
+          "guestHandshakeMicroseconds": 6354,
+          "resumeTotalMicroseconds": 86691
+        },
+        {
+          "instanceId": "fc-jr4x02-cmp-jr-4-02-26b815c3",
+          "jailerUid": 10003,
+          "templateIdentityMicroseconds": 7,
+          "stageMicroseconds": 1835,
+          "processStartMicroseconds": 63824,
+          "snapshotLoadMicroseconds": 3905,
+          "firstControlMicroseconds": 6593,
+          "postResumeHardeningMicroseconds": 1646,
+          "assignmentBindMicroseconds": 4929,
+          "guestHandshakeMicroseconds": 5747,
+          "resumeTotalMicroseconds": 88490
+        },
+        {
+          "instanceId": "fc-jr4x03-cmp-jr-4-03-f4d4e924",
+          "jailerUid": 10004,
+          "templateIdentityMicroseconds": 11,
+          "stageMicroseconds": 846,
+          "processStartMicroseconds": 59961,
+          "snapshotLoadMicroseconds": 6090,
+          "firstControlMicroseconds": 6209,
+          "postResumeHardeningMicroseconds": 1759,
+          "assignmentBindMicroseconds": 5462,
+          "guestHandshakeMicroseconds": 5822,
+          "resumeTotalMicroseconds": 86166
+        }
+      ],
+      "stages": [
+        {
+          "stage": "template_identity",
+          "p50Microseconds": 9,
+          "p95Microseconds": 11,
+          "maxMicroseconds": 11
+        },
+        {
+          "stage": "jail_staging",
+          "p50Microseconds": 1354,
+          "p95Microseconds": 2241,
+          "maxMicroseconds": 2241
+        },
+        {
+          "stage": "process_start",
+          "p50Microseconds": 59961,
+          "p95Microseconds": 63824,
+          "maxMicroseconds": 63824
+        },
+        {
+          "stage": "snapshot_load",
+          "p50Microseconds": 3938,
+          "p95Microseconds": 6090,
+          "maxMicroseconds": 6090
+        },
+        {
+          "stage": "first_control_response",
+          "p50Microseconds": 6588,
+          "p95Microseconds": 7271,
+          "maxMicroseconds": 7271
+        },
+        {
+          "stage": "post_resume_hardening",
+          "p50Microseconds": 1759,
+          "p95Microseconds": 2402,
+          "maxMicroseconds": 2402
+        },
+        {
+          "stage": "assignment_bind",
+          "p50Microseconds": 4929,
+          "p95Microseconds": 5462,
+          "maxMicroseconds": 5462
+        },
+        {
+          "stage": "guest_handshake",
+          "p50Microseconds": 5747,
+          "p95Microseconds": 6354,
+          "maxMicroseconds": 6354
+        },
+        {
+          "stage": "resume_total",
+          "p50Microseconds": 86691,
+          "p95Microseconds": 88495,
+          "maxMicroseconds": 88495
+        }
+      ],
+      "goldenMemoryInode": "86:128300693",
+      "goldenMemoryInodeShared": true,
+      "goldenMemoryLinkCount": 5,
+      "rootfsChildrenAreDistinct": true,
+      "workspacesAreDistinct": true,
+      "firecrackerReadBytesTotal": 2244608,
+      "firecrackerReadCharactersTotal": 1911520,
+      "fullMemoryCopyObserved": false
+    },
+    {
+      "concurrency": 8,
+      "wallClockMilliseconds": 139,
+      "instances": [
+        {
+          "instanceId": "fc-jr8x00-cmp-jr-8-00-f210d774",
+          "jailerUid": 10001,
+          "templateIdentityMicroseconds": 68,
+          "stageMicroseconds": 5196,
+          "processStartMicroseconds": 107316,
+          "snapshotLoadMicroseconds": 4271,
+          "firstControlMicroseconds": 6801,
+          "postResumeHardeningMicroseconds": 2696,
+          "assignmentBindMicroseconds": 5042,
+          "guestHandshakeMicroseconds": 6502,
+          "resumeTotalMicroseconds": 137897
+        },
+        {
+          "instanceId": "fc-jr8x01-cmp-jr-8-01-125184e6",
+          "jailerUid": 10002,
+          "templateIdentityMicroseconds": 14,
+          "stageMicroseconds": 4518,
+          "processStartMicroseconds": 108022,
+          "snapshotLoadMicroseconds": 2317,
+          "firstControlMicroseconds": 6788,
+          "postResumeHardeningMicroseconds": 3038,
+          "assignmentBindMicroseconds": 6884,
+          "guestHandshakeMicroseconds": 6889,
+          "resumeTotalMicroseconds": 138475
+        },
+        {
+          "instanceId": "fc-jr8x02-cmp-jr-8-02-bb51652e",
+          "jailerUid": 10003,
+          "templateIdentityMicroseconds": 13,
+          "stageMicroseconds": 3794,
+          "processStartMicroseconds": 94052,
+          "snapshotLoadMicroseconds": 13454,
+          "firstControlMicroseconds": 7662,
+          "postResumeHardeningMicroseconds": 2744,
+          "assignmentBindMicroseconds": 9835,
+          "guestHandshakeMicroseconds": 6625,
+          "resumeTotalMicroseconds": 138185
+        },
+        {
+          "instanceId": "fc-jr8x03-cmp-jr-8-03-e6a63669",
+          "jailerUid": 10004,
+          "templateIdentityMicroseconds": 13,
+          "stageMicroseconds": 1531,
+          "processStartMicroseconds": 103156,
+          "snapshotLoadMicroseconds": 9268,
+          "firstControlMicroseconds": 7418,
+          "postResumeHardeningMicroseconds": 2002,
+          "assignmentBindMicroseconds": 8490,
+          "guestHandshakeMicroseconds": 7101,
+          "resumeTotalMicroseconds": 138983
+        },
+        {
+          "instanceId": "fc-jr8x04-cmp-jr-8-04-9b646a93",
+          "jailerUid": 10005,
+          "templateIdentityMicroseconds": 11,
+          "stageMicroseconds": 5950,
+          "processStartMicroseconds": 98711,
+          "snapshotLoadMicroseconds": 10374,
+          "firstControlMicroseconds": 7629,
+          "postResumeHardeningMicroseconds": 2737,
+          "assignmentBindMicroseconds": 5990,
+          "guestHandshakeMicroseconds": 7121,
+          "resumeTotalMicroseconds": 138529
+        },
+        {
+          "instanceId": "fc-jr8x05-cmp-jr-8-05-12f07f59",
+          "jailerUid": 10006,
+          "templateIdentityMicroseconds": 9,
+          "stageMicroseconds": 3311,
+          "processStartMicroseconds": 109286,
+          "snapshotLoadMicroseconds": 4236,
+          "firstControlMicroseconds": 6810,
+          "postResumeHardeningMicroseconds": 1857,
+          "assignmentBindMicroseconds": 6109,
+          "guestHandshakeMicroseconds": 6993,
+          "resumeTotalMicroseconds": 138615
+        },
+        {
+          "instanceId": "fc-jr8x06-cmp-jr-8-06-5fe79a91",
+          "jailerUid": 10007,
+          "templateIdentityMicroseconds": 11,
+          "stageMicroseconds": 2318,
+          "processStartMicroseconds": 104570,
+          "snapshotLoadMicroseconds": 8251,
+          "firstControlMicroseconds": 6910,
+          "postResumeHardeningMicroseconds": 1766,
+          "assignmentBindMicroseconds": 7798,
+          "guestHandshakeMicroseconds": 6698,
+          "resumeTotalMicroseconds": 138328
+        },
+        {
+          "instanceId": "fc-jr8x07-cmp-jr-8-07-a39103f2",
+          "jailerUid": 10008,
+          "templateIdentityMicroseconds": 11,
+          "stageMicroseconds": 1039,
+          "processStartMicroseconds": 102426,
+          "snapshotLoadMicroseconds": 7831,
+          "firstControlMicroseconds": 7453,
+          "postResumeHardeningMicroseconds": 3317,
+          "assignmentBindMicroseconds": 9550,
+          "guestHandshakeMicroseconds": 7206,
+          "resumeTotalMicroseconds": 138838
+        }
+      ],
+      "stages": [
+        {
+          "stage": "template_identity",
+          "p50Microseconds": 11,
+          "p95Microseconds": 68,
+          "maxMicroseconds": 68
+        },
+        {
+          "stage": "jail_staging",
+          "p50Microseconds": 3311,
+          "p95Microseconds": 5950,
+          "maxMicroseconds": 5950
+        },
+        {
+          "stage": "process_start",
+          "p50Microseconds": 103156,
+          "p95Microseconds": 109286,
+          "maxMicroseconds": 109286
+        },
+        {
+          "stage": "snapshot_load",
+          "p50Microseconds": 7831,
+          "p95Microseconds": 13454,
+          "maxMicroseconds": 13454
+        },
+        {
+          "stage": "first_control_response",
+          "p50Microseconds": 6910,
+          "p95Microseconds": 7662,
+          "maxMicroseconds": 7662
+        },
+        {
+          "stage": "post_resume_hardening",
+          "p50Microseconds": 2696,
+          "p95Microseconds": 3317,
+          "maxMicroseconds": 3317
+        },
+        {
+          "stage": "assignment_bind",
+          "p50Microseconds": 6884,
+          "p95Microseconds": 9835,
+          "maxMicroseconds": 9835
+        },
+        {
+          "stage": "guest_handshake",
+          "p50Microseconds": 6889,
+          "p95Microseconds": 7206,
+          "maxMicroseconds": 7206
+        },
+        {
+          "stage": "resume_total",
+          "p50Microseconds": 138475,
+          "p95Microseconds": 138983,
+          "maxMicroseconds": 138983
+        }
+      ],
+      "goldenMemoryInode": "86:128300693",
+      "goldenMemoryInodeShared": true,
+      "goldenMemoryLinkCount": 9,
+      "rootfsChildrenAreDistinct": true,
+      "workspacesAreDistinct": true,
+      "firecrackerReadBytesTotal": 4595712,
+      "firecrackerReadCharactersTotal": 3929542,
+      "fullMemoryCopyObserved": false
+    },
+    {
+      "concurrency": 16,
+      "wallClockMilliseconds": 232,
+      "instances": [
+        {
+          "instanceId": "fc-jr16x00-cmp-jr-16-00-8236cbe2",
+          "jailerUid": 10001,
+          "templateIdentityMicroseconds": 207,
+          "stageMicroseconds": 9834,
+          "processStartMicroseconds": 179107,
+          "snapshotLoadMicroseconds": 5946,
+          "firstControlMicroseconds": 9540,
+          "postResumeHardeningMicroseconds": 3090,
+          "assignmentBindMicroseconds": 5058,
+          "guestHandshakeMicroseconds": 6668,
+          "resumeTotalMicroseconds": 219455
+        },
+        {
+          "instanceId": "fc-jr16x01-cmp-jr-16-01-072619a9",
+          "jailerUid": 10002,
+          "templateIdentityMicroseconds": 16,
+          "stageMicroseconds": 4408,
+          "processStartMicroseconds": 202208,
+          "snapshotLoadMicroseconds": 4363,
+          "firstControlMicroseconds": 7055,
+          "postResumeHardeningMicroseconds": 2834,
+          "assignmentBindMicroseconds": 4692,
+          "guestHandshakeMicroseconds": 6245,
+          "resumeTotalMicroseconds": 231827
+        },
+        {
+          "instanceId": "fc-jr16x02-cmp-jr-16-02-8d283f1f",
+          "jailerUid": 10003,
+          "templateIdentityMicroseconds": 12,
+          "stageMicroseconds": 5798,
+          "processStartMicroseconds": 195798,
+          "snapshotLoadMicroseconds": 4963,
+          "firstControlMicroseconds": 6835,
+          "postResumeHardeningMicroseconds": 2790,
+          "assignmentBindMicroseconds": 5168,
+          "guestHandshakeMicroseconds": 6931,
+          "resumeTotalMicroseconds": 228301
+        },
+        {
+          "instanceId": "fc-jr16x03-cmp-jr-16-03-fd87e144",
+          "jailerUid": 10004,
+          "templateIdentityMicroseconds": 29,
+          "stageMicroseconds": 6768,
+          "processStartMicroseconds": 159256,
+          "snapshotLoadMicroseconds": 2654,
+          "firstControlMicroseconds": 7037,
+          "postResumeHardeningMicroseconds": 2662,
+          "assignmentBindMicroseconds": 6078,
+          "guestHandshakeMicroseconds": 7174,
+          "resumeTotalMicroseconds": 191665
+        },
+        {
+          "instanceId": "fc-jr16x04-cmp-jr-16-04-90a3508c",
+          "jailerUid": 10005,
+          "templateIdentityMicroseconds": 170,
+          "stageMicroseconds": 1410,
+          "processStartMicroseconds": 76381,
+          "snapshotLoadMicroseconds": 3564,
+          "firstControlMicroseconds": 6666,
+          "postResumeHardeningMicroseconds": 2523,
+          "assignmentBindMicroseconds": 4455,
+          "guestHandshakeMicroseconds": 6678,
+          "resumeTotalMicroseconds": 101867
+        },
+        {
+          "instanceId": "fc-jr16x05-cmp-jr-16-05-75990fd5",
+          "jailerUid": 10006,
+          "templateIdentityMicroseconds": 41,
+          "stageMicroseconds": 10638,
+          "processStartMicroseconds": 185613,
+          "snapshotLoadMicroseconds": 6899,
+          "firstControlMicroseconds": 9469,
+          "postResumeHardeningMicroseconds": 2755,
+          "assignmentBindMicroseconds": 5642,
+          "guestHandshakeMicroseconds": 6359,
+          "resumeTotalMicroseconds": 227422
+        },
+        {
+          "instanceId": "fc-jr16x06-cmp-jr-16-06-a69a8082",
+          "jailerUid": 10007,
+          "templateIdentityMicroseconds": 8,
+          "stageMicroseconds": 11329,
+          "processStartMicroseconds": 195225,
+          "snapshotLoadMicroseconds": 2989,
+          "firstControlMicroseconds": 6672,
+          "postResumeHardeningMicroseconds": 2737,
+          "assignmentBindMicroseconds": 4873,
+          "guestHandshakeMicroseconds": 6947,
+          "resumeTotalMicroseconds": 230786
+        },
+        {
+          "instanceId": "fc-jr16x07-cmp-jr-16-07-4aa664f0",
+          "jailerUid": 10008,
+          "templateIdentityMicroseconds": 14,
+          "stageMicroseconds": 2602,
+          "processStartMicroseconds": 70331,
+          "snapshotLoadMicroseconds": 4057,
+          "firstControlMicroseconds": 6916,
+          "postResumeHardeningMicroseconds": 2403,
+          "assignmentBindMicroseconds": 4502,
+          "guestHandshakeMicroseconds": 5993,
+          "resumeTotalMicroseconds": 96824
+        },
+        {
+          "instanceId": "fc-jr16x08-cmp-jr-16-08-09e757e7",
+          "jailerUid": 10009,
+          "templateIdentityMicroseconds": 12,
+          "stageMicroseconds": 8580,
+          "processStartMicroseconds": 198018,
+          "snapshotLoadMicroseconds": 3001,
+          "firstControlMicroseconds": 7144,
+          "postResumeHardeningMicroseconds": 3311,
+          "assignmentBindMicroseconds": 4544,
+          "guestHandshakeMicroseconds": 6506,
+          "resumeTotalMicroseconds": 231122
+        },
+        {
+          "instanceId": "fc-jr16x09-cmp-jr-16-09-fbf2db3f",
+          "jailerUid": 10010,
+          "templateIdentityMicroseconds": 20,
+          "stageMicroseconds": 5256,
+          "processStartMicroseconds": 201350,
+          "snapshotLoadMicroseconds": 4067,
+          "firstControlMicroseconds": 7287,
+          "postResumeHardeningMicroseconds": 3188,
+          "assignmentBindMicroseconds": 4635,
+          "guestHandshakeMicroseconds": 6447,
+          "resumeTotalMicroseconds": 232256
+        },
+        {
+          "instanceId": "fc-jr16x10-cmp-jr-16-10-4c0a5a52",
+          "jailerUid": 10011,
+          "templateIdentityMicroseconds": 29,
+          "stageMicroseconds": 3096,
+          "processStartMicroseconds": 190920,
+          "snapshotLoadMicroseconds": 6421,
+          "firstControlMicroseconds": 9887,
+          "postResumeHardeningMicroseconds": 2760,
+          "assignmentBindMicroseconds": 5229,
+          "guestHandshakeMicroseconds": 6606,
+          "resumeTotalMicroseconds": 224953
+        },
+        {
+          "instanceId": "fc-jr16x11-cmp-jr-16-11-b3e50997",
+          "jailerUid": 10012,
+          "templateIdentityMicroseconds": 13,
+          "stageMicroseconds": 3716,
+          "processStartMicroseconds": 151548,
+          "snapshotLoadMicroseconds": 3261,
+          "firstControlMicroseconds": 7357,
+          "postResumeHardeningMicroseconds": 1809,
+          "assignmentBindMicroseconds": 5360,
+          "guestHandshakeMicroseconds": 6533,
+          "resumeTotalMicroseconds": 179603
+        },
+        {
+          "instanceId": "fc-jr16x12-cmp-jr-16-12-bc440aff",
+          "jailerUid": 10013,
+          "templateIdentityMicroseconds": 51,
+          "stageMicroseconds": 7599,
+          "processStartMicroseconds": 169077,
+          "snapshotLoadMicroseconds": 5823,
+          "firstControlMicroseconds": 9328,
+          "postResumeHardeningMicroseconds": 2527,
+          "assignmentBindMicroseconds": 5450,
+          "guestHandshakeMicroseconds": 7892,
+          "resumeTotalMicroseconds": 207753
+        },
+        {
+          "instanceId": "fc-jr16x13-cmp-jr-16-13-72c2ebcb",
+          "jailerUid": 10014,
+          "templateIdentityMicroseconds": 268,
+          "stageMicroseconds": 11618,
+          "processStartMicroseconds": 173880,
+          "snapshotLoadMicroseconds": 7046,
+          "firstControlMicroseconds": 9582,
+          "postResumeHardeningMicroseconds": 3136,
+          "assignmentBindMicroseconds": 5337,
+          "guestHandshakeMicroseconds": 6690,
+          "resumeTotalMicroseconds": 217561
+        },
+        {
+          "instanceId": "fc-jr16x14-cmp-jr-16-14-13e6ced4",
+          "jailerUid": 10015,
+          "templateIdentityMicroseconds": 58,
+          "stageMicroseconds": 9155,
+          "processStartMicroseconds": 197213,
+          "snapshotLoadMicroseconds": 4055,
+          "firstControlMicroseconds": 6625,
+          "postResumeHardeningMicroseconds": 2338,
+          "assignmentBindMicroseconds": 5792,
+          "guestHandshakeMicroseconds": 6722,
+          "resumeTotalMicroseconds": 231963
+        },
+        {
+          "instanceId": "fc-jr16x15-cmp-jr-16-15-aacb2b5d",
+          "jailerUid": 10016,
+          "templateIdentityMicroseconds": 11,
+          "stageMicroseconds": 1356,
+          "processStartMicroseconds": 63549,
+          "snapshotLoadMicroseconds": 3852,
+          "firstControlMicroseconds": 7247,
+          "postResumeHardeningMicroseconds": 3001,
+          "assignmentBindMicroseconds": 4916,
+          "guestHandshakeMicroseconds": 6640,
+          "resumeTotalMicroseconds": 90576
+        }
+      ],
+      "stages": [
+        {
+          "stage": "template_identity",
+          "p50Microseconds": 20,
+          "p95Microseconds": 268,
+          "maxMicroseconds": 268
+        },
+        {
+          "stage": "jail_staging",
+          "p50Microseconds": 5798,
+          "p95Microseconds": 11618,
+          "maxMicroseconds": 11618
+        },
+        {
+          "stage": "process_start",
+          "p50Microseconds": 179107,
+          "p95Microseconds": 202208,
+          "maxMicroseconds": 202208
+        },
+        {
+          "stage": "snapshot_load",
+          "p50Microseconds": 4057,
+          "p95Microseconds": 7046,
+          "maxMicroseconds": 7046
+        },
+        {
+          "stage": "first_control_response",
+          "p50Microseconds": 7144,
+          "p95Microseconds": 9887,
+          "maxMicroseconds": 9887
+        },
+        {
+          "stage": "post_resume_hardening",
+          "p50Microseconds": 2755,
+          "p95Microseconds": 3311,
+          "maxMicroseconds": 3311
+        },
+        {
+          "stage": "assignment_bind",
+          "p50Microseconds": 5058,
+          "p95Microseconds": 6078,
+          "maxMicroseconds": 6078
+        },
+        {
+          "stage": "guest_handshake",
+          "p50Microseconds": 6640,
+          "p95Microseconds": 7892,
+          "maxMicroseconds": 7892
+        },
+        {
+          "stage": "resume_total",
+          "p50Microseconds": 219455,
+          "p95Microseconds": 232256,
+          "maxMicroseconds": 232256
+        }
+      ],
+      "goldenMemoryInode": "86:128300693",
+      "goldenMemoryInodeShared": true,
+      "goldenMemoryLinkCount": 17,
+      "rootfsChildrenAreDistinct": true,
+      "workspacesAreDistinct": true,
+      "firecrackerReadBytesTotal": 9342976,
+      "firecrackerReadCharactersTotal": 8010717,
+      "fullMemoryCopyObserved": false
+    }
+  ],
+  "gatePassed": true
+}

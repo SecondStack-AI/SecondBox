@@ -140,7 +140,7 @@ What is qualified is the template artifact itself. The evidence is `docs/plans/e
 
 The last row is the one that matters for the budget. Admission verifies every digest once and costs seconds; every start afterwards costs six microseconds, four orders of magnitude below the 0–3 ms the re-derived budget allows for template lookup. That is the difference between extending the signed-asset model and reproducing the 835 ms `artifact_verify` p95 on every start.
 
-The resume floor remains the separately qualified low-level load: 3–4 ms warm load and 16–18 ms through post-resume hardening at 256, 512, and 2048 MiB, with no full memory-image copy. Qualifying the composed multi-Instance resume needs a privileged jailed gate, which is the first item of Task 9.
+The resume floor remains the separately qualified low-level load: 3–4 ms warm load and 16–18 ms through post-resume hardening at 256, 512, and 2048 MiB, with no full memory-image copy. Qualifying the composed multi-Instance resume needs a privileged jailed gate; it is built and passing below.
 
 ## Implementation decisions, 2026-08-06
 
@@ -205,17 +205,48 @@ Two design points are worth recording because they are not obvious from the fixe
 
 **A template capture has nothing to quiesce.** The fixed architecture called for an explicit prepare-for-snapshot request that drains frames, closes streams, and clears session state. An identity-neutral guest has never accepted a protocol connection, so there is no stream, no session, no outbound frame, and no mounted mutable disk. The quiescent point is structural rather than negotiated, which is why Task 3 records that item as unnecessary rather than done.
 
-## Remaining work after the identity-neutral template, 2026-08-06
+## Jailed resume qualified, 2026-08-07
 
-Tasks 1, 3, and Task 4 minus its generation-time forbidden-material scan are complete. What remains, in the order it must be done:
+The gating unknown is closed. `scripts/test-snapshot-resume-jailed.sh` compiles `TestSmokeJailedSnapshotResume` on the host and runs it as root inside a privileged container with `/dev/kvm`, host cgroups, the signed bundle, and a Btrfs qualification root, exactly as the scenario suite runs every other privileged gate. Inside, it builds an identity-neutral template under the jailer, admits it through the runner-local cache, and resumes real Instances at concurrency 1, 2, 4, 8, and 16, composing the landed primitives with no Manager surgery: `prepareSnapshotResumeLaunch` → start the jailer → `resumeSnapshotTemplate` → `HardenPostRestore` → `BindAssignment` → `NegotiateGuestProtocol`. Each Instance holds its own `WorkspaceStore.Open` attachment with the exclusive writer lock and the generation fence, so the fork point the plan names is exercised rather than asserted.
 
-1. **A jailed resume qualification.** This is the gating unknown and nothing downstream can be measured without it. `prepareSnapshotResumeLaunch` refuses an unjailed resume, and the jailer needs to chroot, chown, and drop UID, which the host user cannot do — there is no passwordless sudo on the qualification host and `just test-snapshot-resume` runs `go test` unprivileged with `MicroVMAllowUnjailed: true`. The gate must therefore run as root inside a privileged container with `/dev/kvm`, the repository, the signed bundle, and a Btrfs Workspace root, exactly as the scenario suite runs every other privileged gate. It can compose the already-landed primitives directly, without Manager surgery: `prepareSnapshotResumeLaunch` → start the jailer → `resumeSnapshotTemplate` → `ControlClient.HardenPostRestore` → `ControlClient.BindAssignment` → guest protocol handshake, timed per stage at concurrency 1, 2, 4, 8, and 16, asserting that every Instance shares one golden memory inode.
-2. **The production resume start path.** `createAndStartResume` alongside `createAndStartCold`, forking below `WorkspaceStore.Open` where the plan says it does, with the same jailer UID, guest IP, TAP, host policy, instance registration, reaper, and teardown. It must not land before item 1, because an unmeasured resume path is a dormant branch.
-3. **Task 2, the provider-neutral `snapshot_resume` Profile class.** This is what makes the start path reachable, and it is the largest remaining piece: `ProfileRevisionSpec`, generated SDKs, every built-in Profile and fixture, scheduling, and the typed template-unavailability errors. The runner-side enablement it needs — an operator-owned template cache root — does not exist yet either; PR #57 recorded that gap and it is still open.
-4. **Task 4's generation-time scan** for forbidden identity and secret material in a capture.
-5. **Tasks 5, 6, 7, 8, and the rest of Task 9.**
+The template must itself be built under the jailer, which the earlier passes did not have to know. A jailed Firecracker resolves every API path inside its chroot, in both directions: the capture is requested at jail-relative names and moved into the cache afterwards, and the resulting VM state records chroot-relative drive names — which is exactly what lets a restored Instance open its own disks. A template captured unjailed records the source's absolute paths and cannot be resumed into a jail at all.
 
-The `identityNeutralTemplate` and `unjailedResumeRefusal` fields in the evidence remain the honest markers of where the work is: the first is now `true`, and the second stops being a refusal only when item 1 lands.
+The evidence is `docs/plans/evidence/2026-08-07-snapshot-resume-jailed-gate.json`, recording source commit `28f066e` with a clean tree. Every rung passed. Stage p50/p95 in milliseconds:
+
+| Stage | c1 | c2 | c4 | c8 | c16 |
+|---|---:|---:|---:|---:|---:|
+| Template stable-identity check | 0.010/0.010 | 0.011/0.029 | 0.009/0.011 | 0.011/0.068 | 0.020/0.268 |
+| Jail staging | 0.7/0.7 | 1.0/1.4 | 1.4/2.2 | 3.3/6.0 | 5.8/11.6 |
+| Jailer process start through API socket | 32/32 | 48/48 | 60/64 | 103/109 | 179/202 |
+| Snapshot load | 2.7/2.7 | 2.3/3.3 | 3.9/6.1 | 7.8/13.5 | 4.1/7.0 |
+| First control response | 7.3/7.3 | 6.4/7.0 | 6.6/7.3 | 6.9/7.7 | 7.1/9.9 |
+| Post-resume hardening | 1.8/1.8 | 1.7/2.5 | 1.8/2.4 | 2.7/3.3 | 2.8/3.3 |
+| Assignment bind | 5.7/5.7 | 4.5/5.0 | 4.9/5.5 | 6.9/9.8 | 5.1/6.1 |
+| Guest protocol handshake | 7.5/7.5 | 6.5/6.6 | 5.7/6.4 | 6.9/7.2 | 6.6/7.9 |
+| **Resume total** | **58/58** | **72/72** | **87/88** | **138/139** | **219/232** |
+
+Three things the measurement settles.
+
+**The resume mechanism does not scale with concurrency; the jailer does.** Snapshot load stays between 2.3 and 7.8 ms across the whole ladder, and the four guest-side stages — first control response, hardening, assignment bind, guest handshake — are flat at roughly 7, 2, 5, and 7 ms, totalling about 22 ms at every rung. Everything that grows is the jailer's process start: chroot, device nodes, exec-file copy, cgroup creation, and UID drop, from 32 ms at one Instance to 179 ms at sixteen. That is not a resume cost and cold boot pays it too; it is simply hidden inside cold boot's 377 ms `guest_negotiation` span, where nothing measured it separately.
+
+**The golden memory file is one inode and one page cache, exactly as the mechanism requires.** Every rung shares the template's memory inode, with a link count of exactly concurrency plus one, while per-Instance rootfs children and Workspace images are distinct inodes. Aggregate Firecracker block reads across sixteen concurrent resumes are 8.9 MiB against a nominal 16 × 512 MiB of guest memory — 0.1%, with no per-start memory copy at any rung. The 32-boot rootfs re-read that motivated this plan does not have an analogue here.
+
+**The budget's premise holds and one of its rows does not.** The re-derived budget allowed 5–15 ms for process start plus file-backed load. The measured pair is 35 ms at concurrency 1, because the qualified low-level floor that produced the 1 ms process-start figure started Firecracker unjailed with `exec`, and a jailed start costs 32 ms. Every other row came in at or under budget: template lookup 10 µs against 0–3 ms, first control plus hardening 9.1 ms against 16–25 ms, and assignment bind 5.7 ms against 10–30 ms. The resume total of 58 ms therefore exceeds the 28–48 ms the budget derived, entirely in the jailer.
+
+That does not threaten the outcome, because the term resume removes is much larger than the term it adds. Resume replaces `compute_launch` at 7/16 ms and `guest_negotiation` at 377/391 ms with one 58 ms span. Carried onto the 2026-08-06 unsaturated spans, `start → ready` projects to 67 − 7 + 58 = **118 ms** and `create → ready` to 152 − 7 + 58 = **203 ms**. Those are arithmetic on two separately measured spans, not an end-to-end measurement: the production start path is not landed, so no `create_to_ready` has been observed through resume. The projection is what releases the remaining work, and the 100–200 ms outcome is claimed only once a qualified end-to-end run shows it.
+
+One defect had to be fixed before any number existed. `AdmittedSnapshotTemplate.VerifyStableIdentity` pinned the same `dev+ino+size+mtime+ctime` identity that protects launch artifacts, but a template file is hard-linked into every Instance's jail and both `link(2)` and `unlink(2)` mark the inode's status-change time. The second concurrent resume therefore failed its own identity check for a file nothing had modified, and so did the first resume after any teardown. Launch artifacts are never linked, so they keep ctime; a template's identity now pins device, inode, size, and modification time only. A replaced, truncated, or rewritten template still fails closed, and `TestSnapshotTemplateStableIdentitySurvivesPerInstanceLinking` and `TestSnapshotTemplateStableIdentityFailsAfterRewrite` pin both halves of that.
+
+## Remaining work after the jailed resume gate, 2026-08-07
+
+Tasks 1, 3, and Task 4 minus its generation-time forbidden-material scan are complete, and the jailed resume gate that blocked everything downstream is qualified. What remains, in the order it must be done:
+
+1. **Task 2, the provider-neutral `snapshot_resume` Profile class.** This moved ahead of the start path rather than behind it. `createAndStartResume` cannot land without it: a start path no Profile can select is exactly the dormant branch this plan's non-goals forbid, and the measurements above no longer need it. It is the largest remaining piece — `ProfileRevisionSpec`, generated SDKs, every built-in Profile and fixture, scheduling, and the typed template-unavailability errors — and the runner-side enablement it needs, an operator-owned template cache root, does not exist yet either. PR #57 recorded that gap and it is still open.
+2. **The production resume start path.** `createAndStartResume` alongside `createAndStartCold`, forking below `WorkspaceStore.Open` where the plan says it does, with the same jailer UID, guest IP, TAP, host policy, instance registration, reaper, and teardown. The jailed gate proves the composition works and how long each stage takes; what it does not carry is TAP creation, host network policy, guest network identity activation, and runtime secret delivery, because it resumes with no network device. Those stay in this item.
+3. **Template generation as a runner operation.** Templates are still built by the qualification harness. A runner that advertises `snapshot_resume` capacity must materialize one itself, including Task 4's generation-time scan for forbidden identity and secret material.
+4. **Tasks 5, 6, 7, 8, and the rest of Task 9**, including the end-to-end qualified scenario gate that turns the 118 ms projection above into a measurement.
+
+The `identityNeutralTemplate` and `jailedResume` fields in the evidence are the honest markers of where the work is, and both are now `true`. The `unjailedResumeRefusal` field stays in the template-lifecycle evidence, where it still proves an unjailed resume fails closed before staging a file; it is no longer standing in for a jailed number nobody had.
 
 ## Non-goals
 
@@ -237,7 +268,8 @@ Run the focused tests introduced by each task, then run all repository-wide and 
 - `just test-contract`
 - `just test-compose`
 - `just test-deployment`
-- `just test-snapshot-resume` with the explicit signed bundle, KVM, Btrfs/XFS Workspace root, shapes, iterations, concurrency rungs, and absent evidence output paths. It runs both the low-level load floor and the composed template lifecycle, and it fails if resumed Instances stop sharing one golden memory inode or if aggregate reads approach one memory image per Instance
+- `just test-snapshot-resume` with the explicit signed bundle, KVM, Btrfs/XFS Workspace root, shapes, iterations, and absent evidence output paths. It runs both the low-level load floor and the composed template lifecycle
+- `just test-snapshot-resume-jailed` with the explicit signed bundle, KVM, a cgroup v2 host, a Btrfs/XFS Workspace root, the concurrency rungs, and an absent evidence output path. It runs the privileged jailed gate and fails if resumed Instances stop sharing one golden memory inode, if their rootfs children or Workspace images stop being distinct, or if aggregate reads approach one memory image per Instance
 - `git diff --check`
 - `(cd runner && go test ./internal/firecracker ./internal/guest ./internal/runnercontrol)`
 - `just test-scenario` with `SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1`

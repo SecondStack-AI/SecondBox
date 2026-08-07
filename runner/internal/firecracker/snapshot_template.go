@@ -206,6 +206,52 @@ func (m SnapshotTemplateManifest) validate() error {
 	return nil
 }
 
+// snapshotTemplateFileIdentity is the per-start stable identity of one admitted
+// template file. It pins device, inode, size, and modification time, and it
+// deliberately omits the inode's status-change time that the launch-artifact
+// identity does pin.
+//
+// A template file is hard-linked into every Instance's jail. That is the
+// mechanism and not an optimization: one inode is one page cache, which is the
+// whole reason a resumed Instance does not page in its own memory image. Both
+// link(2) and unlink(2) mark the inode's status-change time, so a template
+// staged into a second jail — or one whose first Instance has been torn down —
+// would fail an identity check that pinned ctime, for a file nothing had
+// modified. Launch artifacts are never linked, so their identity keeps ctime.
+//
+// A replaced, truncated, or rewritten template still fails closed: replacement
+// changes the inode, truncation changes the size, and any write changes the
+// modification time.
+type snapshotTemplateFileIdentity struct {
+	dev             uint64
+	ino             uint64
+	size            int64
+	modTimeUnixNano int64
+}
+
+type snapshotTemplateFilePin struct {
+	label    string
+	path     string
+	identity snapshotTemplateFileIdentity
+}
+
+func snapshotTemplateFileIdentityFor(path string) (snapshotTemplateFileIdentity, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return snapshotTemplateFileIdentity{}, err
+	}
+	dev, ino, _, ok := fileStatIdentity(info)
+	if !ok {
+		return snapshotTemplateFileIdentity{}, fmt.Errorf("unsupported stat metadata for %q", path)
+	}
+	return snapshotTemplateFileIdentity{
+		dev:             dev,
+		ino:             ino,
+		size:            info.Size(),
+		modTimeUnixNano: info.ModTime().UnixNano(),
+	}, nil
+}
+
 // AdmittedSnapshotTemplate is a template whose digests have been verified once,
 // at cache admission. Every later start proves only that the exact files are
 // still the ones that were verified, exactly as launch artifacts are protected
@@ -218,22 +264,28 @@ type AdmittedSnapshotTemplate struct {
 	RootfsPath   string
 	MemoryBytes  int64
 	Manifest     SnapshotTemplateManifest
-	pinnedFiles  []trustedMicroVMArtifactFile
+	pinnedFiles  []snapshotTemplateFilePin
 	admittedOnce bool
 }
 
 // VerifyStableIdentity proves the admitted files have not been replaced,
-// truncated, or rewritten in place since admission. It is the per-start check.
+// truncated, or rewritten since admission. It is the per-start check.
 func (t *AdmittedSnapshotTemplate) VerifyStableIdentity() error {
 	if t == nil || !t.admittedOnce {
 		return fmt.Errorf("SecondBox snapshot template is not admitted")
 	}
-	unchanged, err := trustedMicroVMArtifactsUnchanged(&trustedMicroVMArtifacts{files: t.pinnedFiles})
-	if err != nil {
-		return err
-	}
-	if !unchanged {
-		return fmt.Errorf("SecondBox snapshot template %q changed after cache admission", t.TemplateID)
+	for _, file := range t.pinnedFiles {
+		identity, err := snapshotTemplateFileIdentityFor(file.path)
+		if err != nil {
+			return fmt.Errorf("stat snapshot template %s: %w", file.label, err)
+		}
+		if identity != file.identity {
+			return fmt.Errorf(
+				"SecondBox snapshot template %q %s changed after cache admission",
+				t.TemplateID,
+				file.label,
+			)
+		}
 	}
 	return nil
 }
@@ -438,12 +490,12 @@ func admitSnapshotTemplate(dir string, key SnapshotTemplateKey, templateID strin
 		if err := verifySnapshotTemplateFile(entry.path, entry.file); err != nil {
 			return nil, err
 		}
-		identity, err := trustedMicroVMArtifactIdentityFor(entry.path)
+		identity, err := snapshotTemplateFileIdentityFor(entry.path)
 		if err != nil {
 			return nil, fmt.Errorf("stat snapshot template %s: %w", entry.label, err)
 		}
-		template.pinnedFiles = append(template.pinnedFiles, trustedMicroVMArtifactFile{
-			label:    "snapshot template " + entry.label,
+		template.pinnedFiles = append(template.pinnedFiles, snapshotTemplateFilePin{
+			label:    entry.label,
 			path:     entry.path,
 			identity: identity,
 		})
