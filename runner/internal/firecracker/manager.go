@@ -1849,51 +1849,6 @@ func (m *Manager) ApplySecrets(ctx context.Context, instanceID string, bundle Se
 	return inst.controlClient(10*time.Second).ApplySecrets(ctx, bundle)
 }
 
-// BindAssignment installs the assignment identity into a resumed template guest.
-// The guest refuses it before HardenPostRestore succeeds and refuses every bind
-// after the first, so this is the single point where a resumed Instance acquires
-// its Sandbox identity, its Workspace, and the right to negotiate.
-func (m *Manager) BindAssignment(ctx context.Context, instanceID string, req AssignmentBindRequest) error {
-	inst := m.lookup(instanceID)
-	if inst == nil {
-		return fmt.Errorf("unknown microVM instance %q", instanceID)
-	}
-	return inst.controlClient(15*time.Second).BindAssignment(ctx, req)
-}
-
-// assignmentBindRequestFor builds the bind request for one start from the exact
-// signed identity the runner was assigned.
-func (m *Manager) assignmentBindRequestFor(
-	instanceID string,
-	sandboxID string,
-	opts runtimemanager.StartOpts,
-) (AssignmentBindRequest, error) {
-	if strings.TrimSpace(instanceID) == "" ||
-		strings.TrimSpace(sandboxID) == "" ||
-		opts.SandboxGeneration == 0 ||
-		strings.TrimSpace(opts.GuestBuildID) == "" ||
-		strings.TrimSpace(opts.ImageManifestDigest) == "" ||
-		strings.TrimSpace(opts.ToolchainManifestDigest) == "" {
-		return AssignmentBindRequest{}, fmt.Errorf("assignment bind identity is incomplete")
-	}
-	if m.cfg.MicroVMGuestHeartbeatInterval <= 0 {
-		return AssignmentBindRequest{}, fmt.Errorf("assignment bind requires a positive guest heartbeat interval")
-	}
-	if opts.SandboxPolicy == nil {
-		return AssignmentBindRequest{}, fmt.Errorf("assignment bind requires a resolved Sandbox runtime policy")
-	}
-	return AssignmentBindRequest{
-		InstanceID:              instanceID,
-		SandboxID:               sandboxID,
-		SandboxGeneration:       opts.SandboxGeneration,
-		GuestBuildID:            opts.GuestBuildID,
-		ImageManifestDigest:     opts.ImageManifestDigest,
-		ToolchainManifestDigest: opts.ToolchainManifestDigest,
-		HeartbeatIntervalMs:     uint64(m.cfg.MicroVMGuestHeartbeatInterval.Milliseconds()),
-		WorkspaceWritable:       opts.SandboxPolicy.WorkspaceWritable,
-	}, nil
-}
-
 func (m *Manager) HardenPostRestore(ctx context.Context, instanceID string) error {
 	inst := m.lookup(instanceID)
 	if inst == nil {
