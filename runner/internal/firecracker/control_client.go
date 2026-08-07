@@ -80,6 +80,20 @@ type RestoreHardenRequest struct {
 	EntropyBase64 string `json:"entropyBase64,omitempty"`
 }
 
+// AssignmentBindRequest installs identity into a resumed template guest. The
+// guest accepts exactly one, after /restore/harden and before its protocol
+// listener accepts a connection.
+type AssignmentBindRequest struct {
+	InstanceID              string `json:"instanceId"`
+	SandboxID               string `json:"sandboxId"`
+	SandboxGeneration       uint64 `json:"sandboxGeneration"`
+	GuestBuildID            string `json:"guestBuildId"`
+	ImageManifestDigest     string `json:"imageManifestDigest"`
+	ToolchainManifestDigest string `json:"toolchainManifestDigest"`
+	HeartbeatIntervalMs     uint64 `json:"heartbeatIntervalMs"`
+	WorkspaceWritable       bool   `json:"workspaceWritable"`
+}
+
 func (c ControlClient) Heartbeat(ctx context.Context) (HeartbeatResponse, error) {
 	var out HeartbeatResponse
 	if err := c.getJSON(ctx, "/heartbeat", &out); err != nil {
@@ -207,6 +221,28 @@ func (c ControlClient) ApplySecrets(ctx context.Context, bundle SecretBundle) er
 	}
 	if !out.Applied {
 		return fmt.Errorf("secret bundle was not applied")
+	}
+	return nil
+}
+
+func (c ControlClient) BindAssignment(ctx context.Context, req AssignmentBindRequest) error {
+	var out struct {
+		Bound      bool   `json:"bound"`
+		InstanceID string `json:"instanceId"`
+		SandboxID  string `json:"sandboxId"`
+	}
+	if err := c.postJSON(ctx, "/assignment/bind", req, &out); err != nil {
+		return err
+	}
+	if !out.Bound {
+		return fmt.Errorf("assignment identity was not installed")
+	}
+	if out.InstanceID != req.InstanceID || out.SandboxID != req.SandboxID {
+		return fmt.Errorf(
+			"resumed guest bound a different assignment: instance %q sandbox %q",
+			out.InstanceID,
+			out.SandboxID,
+		)
 	}
 	return nil
 }

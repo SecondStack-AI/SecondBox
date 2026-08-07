@@ -318,3 +318,75 @@ func TestResumeSnapshotTemplateFailsWhenTheProcessNeverListens(t *testing.T) {
 		t.Fatalf("unexpected resume error: %v", err)
 	}
 }
+
+func TestTemplateGuestBootArgsCarryNoAssignmentIdentity(t *testing.T) {
+	manager := &Manager{cfg: &config.Config{
+		MicroVMGuestControlVsockPort:  1024,
+		MicroVMGuestProtocolVsockPort: 1025,
+	}}
+	args, err := manager.templateGuestBootArgs()
+	if err != nil {
+		t.Fatalf("template guest boot arguments: %v", err)
+	}
+	for _, required := range []string{
+		"secondbox.template_mode=1",
+		"secondbox.guest_control_vsock_port=1024",
+		"secondbox.guest_protocol_vsock_port=1025",
+	} {
+		if !strings.Contains(args, required) {
+			t.Errorf("template boot arguments are missing %q: %s", required, args)
+		}
+	}
+	// A template is captured before any Sandbox exists. Identity in these
+	// arguments would be sealed into the shared memory image.
+	for _, forbidden := range []string{
+		"secondbox.instance_id",
+		"secondbox.sandbox_id",
+		"secondbox.sandbox_generation",
+		"secondbox.guest_build_id",
+		"secondbox.image_manifest_digest",
+		"secondbox.toolchain_manifest_digest",
+		"secondbox.guest_heartbeat_interval",
+	} {
+		if strings.Contains(args, forbidden) {
+			t.Errorf("template boot arguments carry assignment identity %q: %s", forbidden, args)
+		}
+	}
+
+	unconfigured := &Manager{cfg: &config.Config{
+		MicroVMGuestControlVsockPort:  1024,
+		MicroVMGuestProtocolVsockPort: 1024,
+	}}
+	if _, err := unconfigured.templateGuestBootArgs(); err == nil {
+		t.Fatal("template boot accepted identical control and protocol vsock ports")
+	}
+}
+
+func TestStartupGuestBootArgsSelectsTemplateModeOnly(t *testing.T) {
+	manager := &Manager{cfg: &config.Config{
+		MicroVMGuestControlVsockPort:  1024,
+		MicroVMGuestProtocolVsockPort: 1025,
+		MicroVMGuestHeartbeatInterval: time.Second,
+	}}
+	opts := runtimemanager.StartOpts{
+		SandboxGeneration:       7,
+		GuestBuildID:            "guest-build-1",
+		ImageManifestDigest:     "sha256:image",
+		ToolchainManifestDigest: "sha256:toolchain",
+	}
+	cold, err := manager.startupGuestBootArgs("instance-1", "sandbox-1", opts)
+	if err != nil {
+		t.Fatalf("cold boot arguments: %v", err)
+	}
+	if !strings.Contains(cold, "secondbox.sandbox_id=sandbox-1") || strings.Contains(cold, "secondbox.template_mode") {
+		t.Fatalf("cold boot arguments = %s", cold)
+	}
+	opts.TemplateMode = true
+	template, err := manager.startupGuestBootArgs("instance-1", "sandbox-1", opts)
+	if err != nil {
+		t.Fatalf("template boot arguments: %v", err)
+	}
+	if !strings.Contains(template, "secondbox.template_mode=1") || strings.Contains(template, "sandbox-1") {
+		t.Fatalf("template boot arguments = %s", template)
+	}
+}

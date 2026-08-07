@@ -838,6 +838,16 @@ func effectiveKernelArgs(cfg *config.Config, guestIP string) string {
 	return strings.TrimSpace(args)
 }
 
+// startupGuestBootArgs selects the guest boot identity for this start. A
+// template capture boots identity-neutral; every tenant start boots with its
+// exact assignment identity.
+func (m *Manager) startupGuestBootArgs(instanceID, sandboxID string, opts runtimemanager.StartOpts) (string, error) {
+	if opts.TemplateMode {
+		return m.templateGuestBootArgs()
+	}
+	return m.guestProtocolBootArgs(instanceID, sandboxID, opts)
+}
+
 func (m *Manager) guestProtocolBootArgs(instanceID, sandboxID string, opts runtimemanager.StartOpts) (string, error) {
 	values := map[string]string{
 		"secondbox.instance_id":               instanceID,
@@ -877,6 +887,23 @@ func (m *Manager) guestProtocolBootArgs(instanceID, sandboxID string, opts runti
 		args = append(args, name+"="+value)
 	}
 	return strings.Join(args, " "), nil
+}
+
+// templateGuestBootArgs boots the identity-neutral guest a snapshot-resume
+// template is captured from. A template exists before any Sandbox does, so it
+// carries only the compatibility-keyed vsock ports; identity arrives after
+// resume through the guest control endpoint's one permitted assignment bind.
+func (m *Manager) templateGuestBootArgs() (string, error) {
+	if m.cfg.MicroVMGuestControlVsockPort == 0 ||
+		m.cfg.MicroVMGuestProtocolVsockPort == 0 ||
+		m.cfg.MicroVMGuestControlVsockPort == m.cfg.MicroVMGuestProtocolVsockPort {
+		return "", fmt.Errorf("template guest launch requires dedicated guest control and protocol vsock ports")
+	}
+	return strings.Join([]string{
+		"secondbox.template_mode=1",
+		"secondbox.guest_control_vsock_port=" + strconv.FormatUint(uint64(m.cfg.MicroVMGuestControlVsockPort), 10),
+		"secondbox.guest_protocol_vsock_port=" + strconv.FormatUint(uint64(m.cfg.MicroVMGuestProtocolVsockPort), 10),
+	}, " "), nil
 }
 
 func hasKernelArg(args, name string) bool {

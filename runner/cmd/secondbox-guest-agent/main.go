@@ -50,6 +50,7 @@ func run() int {
 	var heartbeatInterval time.Duration
 	var waitSecrets bool
 	var secretsTimeout time.Duration
+	var templateMode bool
 	flag.IntVar(&controlVsockPort, "control-vsock-port", 0, "required AF_VSOCK port for the HTTP control service")
 	flag.IntVar(&protocolVsockPort, "protocol-vsock-port", 0, "required AF_VSOCK port for the canonical gRPC guest protocol")
 	// These two paths are image ABI constants: the init script mounts the
@@ -66,6 +67,7 @@ func run() int {
 	flag.DurationVar(&heartbeatInterval, "heartbeat-interval", 0, "required negotiated heartbeat interval")
 	flag.BoolVar(&waitSecrets, "wait-secrets", false, "wait for runtime-private env.json before starting the runtime command")
 	flag.DurationVar(&secretsTimeout, "secrets-timeout", 0, "required positive maximum wait when --wait-secrets is enabled")
+	flag.BoolVar(&templateMode, "template-mode", false, "boot without Sandbox identity and receive it through one /assignment/bind control request")
 	flag.Parse()
 
 	if controlVsockPort < 1 || controlVsockPort > 65535 ||
@@ -78,6 +80,14 @@ func run() int {
 		slog.Error("--secrets-timeout must be positive when --wait-secrets is enabled")
 		return 1
 	}
+	// A template guest is captured before any Sandbox exists. Identity supplied
+	// at boot would be sealed into the shared memory image, so it is refused.
+	if templateMode && (instanceID != "" || sandboxID != "" || sandboxGeneration != 0 ||
+		guestBuildID != "" || imageManifestDigest != "" || toolchainManifestDigest != "" ||
+		heartbeatInterval != 0) {
+		slog.Error("--template-mode refuses boot identity: it arrives through one /assignment/bind control request")
+		return 1
+	}
 
 	guestServer := microvmguest.Server{
 		WorkspaceDir:      workspace,
@@ -87,16 +97,28 @@ func run() int {
 		LogPath:           logPath,
 		Freezer:           microvmguest.LinuxFreezer{},
 	}
+	var assignment *microvmguest.AssignmentGate
+	if templateMode {
+		assignment = microvmguest.NewAssignmentGate()
+		guestServer.Assignment = assignment
+		guestServer.Mounter = microvmguest.LinuxWorkspaceMounter{}
+	}
 	controlServer := &http.Server{Handler: guestServer.Handler()}
-	protocolService, err := microvmguest.NewProtocolService(guestServer, microvmguest.ProtocolIdentity{
-		InstanceID:              instanceID,
-		SandboxID:               sandboxID,
-		SandboxGeneration:       sandboxGeneration,
-		GuestBuildID:            guestBuildID,
-		ImageManifestDigest:     imageManifestDigest,
-		ToolchainManifestDigest: toolchainManifestDigest,
-		HeartbeatInterval:       heartbeatInterval,
-	})
+	var protocolService *microvmguest.ProtocolService
+	var err error
+	if templateMode {
+		protocolService, err = microvmguest.NewTemplateProtocolService(guestServer)
+	} else {
+		protocolService, err = microvmguest.NewProtocolService(guestServer, microvmguest.ProtocolIdentity{
+			InstanceID:              instanceID,
+			SandboxID:               sandboxID,
+			SandboxGeneration:       sandboxGeneration,
+			GuestBuildID:            guestBuildID,
+			ImageManifestDigest:     imageManifestDigest,
+			ToolchainManifestDigest: toolchainManifestDigest,
+			HeartbeatInterval:       heartbeatInterval,
+		})
+	}
 	if err != nil {
 		slog.Error("invalid guest protocol identity", "error", err)
 		return 1
@@ -114,6 +136,11 @@ func run() int {
 		err = errors.Join(err, controlListener.Close())
 		slog.Error("failed to listen on guest protocol vsock port", "error", err)
 		return 1
+	}
+	// The template socket is bound before capture so the restored guest keeps the
+	// same socket state, but it refuses every connection until identity is bound.
+	if assignment != nil {
+		protocolListener = assignment.GateListener(protocolListener)
 	}
 
 	serviceErrors := make(chan error, 2)

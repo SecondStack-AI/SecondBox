@@ -1027,7 +1027,7 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 	if launchErr != nil {
 		return "", m.joinInstanceNetworkCleanup(setupCtx, id, tapName, launchErr)
 	}
-	guestBootArgs, guestBootArgsErr := m.guestProtocolBootArgs(compartmentID, sandboxID, opts)
+	guestBootArgs, guestBootArgsErr := m.startupGuestBootArgs(compartmentID, sandboxID, opts)
 	if guestBootArgsErr != nil {
 		m.cleanupLaunch(launch)
 		return "", m.joinInstanceNetworkCleanup(setupCtx, id, tapName, guestBootArgsErr)
@@ -1109,6 +1109,28 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 				cleanupErr,
 			)
 		}
+	}
+	// A template guest has no Sandbox identity to negotiate and no runtime
+	// secrets to receive. Its readiness is its control endpoint answering, which
+	// is also the point the capture is coherent at.
+	if opts.TemplateMode {
+		controlCtx, cancelControl := context.WithTimeout(setupCtx, controlPlaneReadyTimeout)
+		controlErr := m.waitForControlPlane(controlCtx, inst, controlPlaneReadyTimeout)
+		cancelControl()
+		if controlErr != nil {
+			diagnostics := inst.logTailDiagnostics(120)
+			cleanupErr := m.stopInstance(setupCtx, inst, true)
+			return "", errors.Join(
+				fmt.Errorf("wait for template guest control plane: %w%s", controlErr, diagnostics),
+				cleanupErr,
+			)
+		}
+		timer.mark("template_control_plane_ready")
+		releaseIP = false
+		releaseJailerUID = false
+		cleanupDir = false
+		slog.Info("started identity-neutral template microVM", "instance", id, "elapsedMs", timer.elapsedMs(), "log", logPath)
+		return id, nil
 	}
 	negotiationCtx, cancelNegotiation := context.WithTimeout(
 		setupCtx,

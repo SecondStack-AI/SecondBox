@@ -52,6 +52,28 @@ func NewProtocolService(server Server, identity ProtocolIdentity) (*ProtocolServ
 	return &ProtocolService{server: server, identity: identity}, nil
 }
 
+// NewTemplateProtocolService builds the protocol service of an identity-neutral
+// template guest. Its identity arrives later through the control endpoint's one
+// permitted assignment bind, so every handshake before that bind is rejected.
+func NewTemplateProtocolService(server Server) (*ProtocolService, error) {
+	if strings.TrimSpace(server.WorkspaceDir) == "" || strings.TrimSpace(server.RuntimePrivateDir) == "" {
+		return nil, fmt.Errorf("guest protocol workspace and runtime-private mount paths are required")
+	}
+	if server.Assignment == nil {
+		return nil, fmt.Errorf("template guest protocol requires an assignment gate")
+	}
+	return &ProtocolService{server: server}, nil
+}
+
+// boundIdentity resolves the identity this service negotiates against. A
+// template-mode service has none until its assignment bind succeeds.
+func (s *ProtocolService) boundIdentity() (ProtocolIdentity, bool) {
+	if s.server.Assignment == nil {
+		return s.identity, true
+	}
+	return s.server.Assignment.Identity()
+}
+
 func (s *ProtocolService) Connect(stream guestv1.GuestAgent_ConnectServer) error {
 	first, err := stream.Recv()
 	if err != nil {
@@ -61,7 +83,15 @@ func (s *ProtocolService) Connect(stream guestv1.GuestAgent_ConnectServer) error
 	if hello == nil {
 		return s.rejectHandshake(stream, guestv1.HandshakeRejectionKind_HANDSHAKE_REJECTION_KIND_INVALID_HELLO, "first frame must be hello")
 	}
-	rejection, enabled := s.negotiate(hello)
+	identity, bound := s.boundIdentity()
+	if !bound {
+		return s.rejectHandshake(
+			stream,
+			guestv1.HandshakeRejectionKind_HANDSHAKE_REJECTION_KIND_BINDING_MISMATCH,
+			"guest has no assignment identity",
+		)
+	}
+	rejection, enabled := s.negotiate(identity, hello)
 	if rejection != nil {
 		return s.rejectHandshake(stream, rejection.Kind, rejection.SafeDetail)
 	}
@@ -70,10 +100,10 @@ func (s *ProtocolService) Connect(stream guestv1.GuestAgent_ConnectServer) error
 			Binding:                 cloneConnectionBinding(hello.Binding),
 			SelectedGeneration:      guestProtocolGeneration,
 			EnabledFeatures:         enabled,
-			GuestBuildId:            s.identity.GuestBuildID,
-			ImageManifestDigest:     s.identity.ImageManifestDigest,
-			ToolchainManifestDigest: s.identity.ToolchainManifestDigest,
-			HeartbeatIntervalMs:     uint64(s.identity.HeartbeatInterval.Milliseconds()),
+			GuestBuildId:            identity.GuestBuildID,
+			ImageManifestDigest:     identity.ImageManifestDigest,
+			ToolchainManifestDigest: identity.ToolchainManifestDigest,
+			HeartbeatIntervalMs:     uint64(identity.HeartbeatInterval.Milliseconds()),
 		}},
 	}); err != nil {
 		return fmt.Errorf("send guest protocol welcome: %w", err)
@@ -81,7 +111,10 @@ func (s *ProtocolService) Connect(stream guestv1.GuestAgent_ConnectServer) error
 	return s.serveNegotiated(stream, hello.Binding, enabled)
 }
 
-func (s *ProtocolService) negotiate(hello *guestv1.Hello) (*guestv1.HandshakeRejection, []guestv1.GuestFeature) {
+func (s *ProtocolService) negotiate(
+	identity ProtocolIdentity,
+	hello *guestv1.Hello,
+) (*guestv1.HandshakeRejection, []guestv1.GuestFeature) {
 	if hello.Binding == nil ||
 		strings.TrimSpace(hello.Binding.InstanceId) == "" ||
 		strings.TrimSpace(hello.Binding.SandboxId) == "" ||
@@ -92,19 +125,19 @@ func (s *ProtocolService) negotiate(hello *guestv1.Hello) (*guestv1.HandshakeRej
 		hello.SupportedGenerations.Maximum < hello.SupportedGenerations.Minimum {
 		return handshakeRejection(guestv1.HandshakeRejectionKind_HANDSHAKE_REJECTION_KIND_INVALID_HELLO, "hello is incomplete"), nil
 	}
-	if hello.Binding.InstanceId != s.identity.InstanceID ||
-		hello.Binding.SandboxId != s.identity.SandboxID ||
-		hello.Binding.SandboxGeneration != s.identity.SandboxGeneration {
+	if hello.Binding.InstanceId != identity.InstanceID ||
+		hello.Binding.SandboxId != identity.SandboxID ||
+		hello.Binding.SandboxGeneration != identity.SandboxGeneration {
 		return handshakeRejection(guestv1.HandshakeRejectionKind_HANDSHAKE_REJECTION_KIND_BINDING_MISMATCH, "connection binding does not match boot identity"), nil
 	}
 	if hello.SupportedGenerations.Minimum > guestProtocolGeneration ||
 		hello.SupportedGenerations.Maximum < guestProtocolGeneration {
 		return handshakeRejection(guestv1.HandshakeRejectionKind_HANDSHAKE_REJECTION_KIND_VERSION_UNSUPPORTED, "protocol generation is unsupported"), nil
 	}
-	if hello.ExpectedImageManifestDigest != s.identity.ImageManifestDigest {
+	if hello.ExpectedImageManifestDigest != identity.ImageManifestDigest {
 		return handshakeRejection(guestv1.HandshakeRejectionKind_HANDSHAKE_REJECTION_KIND_IMAGE_MISMATCH, "image manifest digest does not match boot identity"), nil
 	}
-	if hello.ExpectedToolchainManifestDigest != s.identity.ToolchainManifestDigest {
+	if hello.ExpectedToolchainManifestDigest != identity.ToolchainManifestDigest {
 		return handshakeRejection(guestv1.HandshakeRejectionKind_HANDSHAKE_REJECTION_KIND_TOOLCHAIN_MISMATCH, "toolchain manifest digest does not match boot identity"), nil
 	}
 

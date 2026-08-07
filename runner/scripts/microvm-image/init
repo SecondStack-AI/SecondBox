@@ -28,11 +28,17 @@ if [ -n "$process_limit" ]; then
     printf '%s\n' "$$" > /sys/fs/cgroup/secondbox-tools/cgroup.procs
 fi
 
+template_mode="$(sed -n 's/.*secondbox\.template_mode=\([01]\).*/\1/p' /proc/cmdline)"
+
 mkdir -p /workspace /runtime-private
 # runtime-private holds vsock-delivered secrets; keep it RAM-only so credentials
 # never land on the persistent workspace image or any snapshot.
 mountpoint -q /runtime-private || mount -t tmpfs -o rw,nosuid,nodev,mode=0700 tmpfs /runtime-private
-if ! mountpoint -q /workspace; then
+# A snapshot-resume template must not mount its Workspace before capture: the
+# captured superblock and page cache belong to the template's sterile image, and
+# every resumed Instance stages a different one onto the same device. The guest
+# agent mounts it inside the one assignment bind instead.
+if [ "$template_mode" != "1" ] && ! mountpoint -q /workspace; then
     workspace_mode=rw
     if [ "$(cat /sys/block/vdb/ro)" = "1" ]; then
         workspace_mode=ro

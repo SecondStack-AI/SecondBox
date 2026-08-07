@@ -40,6 +40,11 @@ type StartOpts struct {
 	LeaseID                 string
 	AssignmentID            string
 	StartupProgress         func(StartupStage) error
+	// TemplateMode boots an identity-neutral guest for snapshot-template
+	// capture. Such a guest has no Sandbox identity to negotiate and receives no
+	// runtime secrets; readiness is its control endpoint answering. It is used
+	// only by the privileged template-build path and never serves a tenant.
+	TemplateMode bool
 }
 
 type SandboxRuntimePolicy struct {
