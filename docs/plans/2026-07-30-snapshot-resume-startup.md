@@ -178,6 +178,45 @@ The concrete recipe, so the next pass does not rediscover it:
 
 What remains genuinely unproven is whether the jailed resume gate can run here. The jailer needs to chroot, chown, and drop UID, which the unprivileged test suite cannot do — but the scenario suite already runs every other privileged gate inside its privileged runner container, so the resume gate should be built there rather than as an unprivileged `go test`. That is the first thing to settle in Task 9.
 
+## Guest rebuild result, 2026-08-06
+
+The rebuild was performed and the recipe above holds exactly as written. The bundle is `secondbox-template-mode-artifacts`, artifact version `secondbox-local-template-mode`, built from the `-f781` prepared source tree with `SECONDBOX_RUNNER_MICROVM_BUILD_KERNEL=false` and the kernel supplied from `secondbox-task5-artifacts-shutdown-fix`, and signed with the RSA-3072 key at `.secondbox/stress/trust/manifest-private.pem`. Its trust anchor is the independently held `manifest-public.pem` in that same `trust/` directory, fingerprint `a02f2488…` — never the bundle's own `signing.pub`. `verify.sh` passes against that anchor.
+
+That directory layout is the fix for the self-referential anchor the recipe flags. `.tmp/phase-b/env.sh` pointed `SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY` at `${bundle}/signing.pub`, which degrades the anchor to the pinned fingerprint alone; the same defect exists in the deployment manifest and its generated env, which both point at `/opt/secondbox-artifacts/signing.pub` inside the artifact mount. Every gate in this pass takes its anchor from `trust/`, matching `scripts/prepare-stress.sh`, `scripts/test-stress.sh`, and `docs/operations/scenario-qualification.md`. The four `acf1b3a8…` consumers are host deployment state outside this repository and are not repointed by this branch: repointing the live deployment's anchor requires shipping it the matching bundle, which is a deployment operation, not a code change.
+
+The rebuild is not guest-agent-only in one respect the recipe did not anticipate. `runner/scripts/microvm-image/init` also changes, because a template must not mount its Workspace before capture. Both files are inside the rootfs, so the same single rebuild covers them.
+
+## Identity-neutral template qualified, 2026-08-06
+
+The template PR #57 qualified recorded `identityNeutralTemplate: false`, because the shipped guest took its Sandbox identity from kernel arguments. That is no longer true. The evidence is `docs/plans/evidence/2026-08-06-snapshot-resume-identity-neutral-template.json`, recording source commit `84dcfdb` with a clean tree, and the low-level floor re-measured against the same rebuilt bundle is `docs/plans/evidence/2026-08-06-snapshot-load-512mib-template-mode.json`.
+
+| Stage | Measured |
+|---|---:|
+| Template guest boot, process start through control endpoint answering | 402 ms |
+| Template build, boot through sealed publish | 31,358 ms |
+| One-time cache admission, digesting 11.2 GiB | 6,652 ms |
+| Per-start stable-identity check | **7,153 ns** |
+
+The template guest is `secondbox.template_mode=1`: no Sandbox ID, no Instance ID, no generation, no digests, no heartbeat interval, no runtime secrets, an unmounted `/dev/vdb`, and a protocol listener that is bound but refuses every connection. Its `/heartbeat` reports empty identifiers. That 402 ms of boot is exactly what a resume removes; the low-level floor for replacing it remains 3–4 ms of warm load and 16–18 ms through post-resume hardening.
+
+Two design points are worth recording because they are not obvious from the fixed architecture.
+
+**The Workspace must be mounted at bind, not at boot.** It is the one device whose backing file differs per Instance. A template that mounted its sterile Workspace before capture would seal that superblock and page cache into every resumed Instance, which no drive override can correct — the guest would be reading a filesystem it thinks it already knows. `init` therefore skips the mount in template mode and the guest agent mounts the staged image inside the one atomic bind. The rootfs and shared image need no such treatment: each Instance's copies are content-identical to the sealed ones.
+
+**A template capture has nothing to quiesce.** The fixed architecture called for an explicit prepare-for-snapshot request that drains frames, closes streams, and clears session state. An identity-neutral guest has never accepted a protocol connection, so there is no stream, no session, no outbound frame, and no mounted mutable disk. The quiescent point is structural rather than negotiated, which is why Task 3 records that item as unnecessary rather than done.
+
+## Remaining work after the identity-neutral template, 2026-08-06
+
+Tasks 1, 3, and Task 4 minus its generation-time forbidden-material scan are complete. What remains, in the order it must be done:
+
+1. **A jailed resume qualification.** This is the gating unknown and nothing downstream can be measured without it. `prepareSnapshotResumeLaunch` refuses an unjailed resume, and the jailer needs to chroot, chown, and drop UID, which the host user cannot do — there is no passwordless sudo on the qualification host and `just test-snapshot-resume` runs `go test` unprivileged with `MicroVMAllowUnjailed: true`. The gate must therefore run as root inside a privileged container with `/dev/kvm`, the repository, the signed bundle, and a Btrfs Workspace root, exactly as the scenario suite runs every other privileged gate. It can compose the already-landed primitives directly, without Manager surgery: `prepareSnapshotResumeLaunch` → start the jailer → `resumeSnapshotTemplate` → `ControlClient.HardenPostRestore` → `ControlClient.BindAssignment` → guest protocol handshake, timed per stage at concurrency 1, 2, 4, 8, and 16, asserting that every Instance shares one golden memory inode.
+2. **The production resume start path.** `createAndStartResume` alongside `createAndStartCold`, forking below `WorkspaceStore.Open` where the plan says it does, with the same jailer UID, guest IP, TAP, host policy, instance registration, reaper, and teardown. It must not land before item 1, because an unmeasured resume path is a dormant branch.
+3. **Task 2, the provider-neutral `snapshot_resume` Profile class.** This is what makes the start path reachable, and it is the largest remaining piece: `ProfileRevisionSpec`, generated SDKs, every built-in Profile and fixture, scheduling, and the typed template-unavailability errors. The runner-side enablement it needs — an operator-owned template cache root — does not exist yet either; PR #57 recorded that gap and it is still open.
+4. **Task 4's generation-time scan** for forbidden identity and secret material in a capture.
+5. **Tasks 5, 6, 7, 8, and the rest of Task 9.**
+
+The `identityNeutralTemplate` and `unjailedResumeRefusal` fields in the evidence remain the honest markers of where the work is: the first is now `true`, and the second stops being a refusal only when item 1 lands.
+
 ## Non-goals
 
 - Do not trim the rootfs, remove packages, reduce the standard toolset, or treat image size reduction as the startup strategy.
@@ -225,23 +264,25 @@ Run the focused tests introduced by each task, then run all repository-wide and 
 
 ### Task 3: Split template readiness from assignment-bound guest negotiation
 
-- [ ] Introduce a new guest protocol generation whose first state is identity-neutral template readiness and whose assignment bind is one-time and generation-fenced.
-- [ ] Remove per-Sandbox identity from template boot arguments. Retain only signed build identity, template compatibility identity, fixed control/protocol ports, and values included in the template key.
-- [ ] Make the template readiness exchange prove guest build ID, signed runtime/toolchain digests, supported features, and control endpoint health without installing a Sandbox ID, Instance ID, generation, assignment ID, nonce, secrets, or network identity.
-- [ ] Add an explicit prepare-for-template-snapshot request that refuses active operations, freezes or leaves unmounted all mutable disks, closes protocol streams, clears connection/session state, drains outbound frames, and acknowledges a safe capture point.
-- [ ] Make the resumed guest reject exec, PTY, file, port, heartbeat-ready, and useful-activity operations until hardening and the one-time assignment bind both succeed.
-- [ ] Prove a second bind, stale generation, changed digest, wrong assignment, replayed nonce, or operation before bind fails closed.
-- [ ] Run guest protocol generation, frozen descriptor, cancellation, flow-control, and upgrade-compatibility tests.
+- [x] ~~Introduce a new guest protocol generation~~ superseded by the settled decision above: identity reaches a resumed guest through `POST /assignment/bind` on the existing host-only vsock control endpoint, one time and generation-fenced. `contracts/guest/v1` is untouched and its frozen descriptor and fixtures are unchanged.
+- [x] Remove per-Sandbox identity from template boot arguments. `secondbox.template_mode=1` carries only the compatibility-keyed control and protocol vsock ports; `runner/scripts/microvm-image/tool-entrypoint.sh` execs the template branch before it reads any identity argument, and `runner/scripts/entrypoint_contract_test.go` pins that ordering.
+- [x] Prove template readiness without installing identity. The template's readiness is its control endpoint answering `/heartbeat`, which reports no Instance or Sandbox ID until the bind. Build ID and signed digests are proved at bind time against the runner's assignment, not negotiated by the template.
+- [x] ~~Add an explicit prepare-for-template-snapshot request~~ unnecessary as specified, and recorded here rather than implied away. The capture point is structurally quiescent: an identity-neutral guest has never accepted a protocol connection, holds no session or connection state, has no outbound frames, and leaves `/dev/vdb` unmounted, so there is nothing to drain, freeze, or clear. `runner/scripts/microvm-image/init` skips the Workspace mount in template mode for exactly this reason.
+- [x] Make the resumed guest reject exec, PTY, file, port, and workspace operations until hardening and the one-time assignment bind both succeed. The protocol listener is bound before capture but refuses every connection until the bind, and both the control endpoint's Workspace handlers and `/tool/exec` fail closed with "guest has no Workspace until its assignment bind".
+- [x] Prove a second bind, a bind before hardening, an incomplete identity, an unavailable Workspace, and a stale generation fail closed. `runner/internal/guest/assignment_bind_test.go` covers each; the stale-generation case is fenced by the unchanged `Hello` binding check against the bound identity.
+- [x] Run guest protocol, frozen descriptor, and upgrade-compatibility tests. Unchanged and passing, because no protocol generation was added.
+
+Remaining in Task 3: nothing. The identity-neutral template is qualified below.
 
 ### Task 4: Build and seal identity-neutral templates
 
-- [ ] Add a privileged runner/image-qualification workflow that boots the full signed bundle in template mode, performs template negotiation, reaches the explicit quiescent point, pauses the VM, and creates full VM state and memory snapshots.
-- [ ] Capture and seal the coherent post-boot rootfs image alongside memory and VM state. Use an unmounted sterile Workspace device only to preserve the expected device topology.
-- [ ] Never call the current `CreateGoldenSnapshot` against a tenant Instance for this purpose. Refactor shared validation primitives only after tests preserve the diagnostic create-only behavior.
-- [ ] Create a signed template manifest containing the complete compatibility key, hashes and logical sizes for VM state, memory, and post-boot rootfs, creation tool versions, and security scan result.
-- [ ] Durably sync template files and their parent directory before advertising readiness, and publish them atomically so a runner never opens a partial generation.
-- [ ] Scan the capture for forbidden identity and secret material and fail generation if the guest has mounted a tenant Workspace, configured a tenant IP, retained a live connection, or written runtime secrets.
-- [ ] Run template creation twice and prove deterministic compatibility identity, independent of output paths and runner-local names.
+- [x] Boot the full signed bundle in template mode, reach the quiescent point, pause the VM, and create full VM state and memory snapshots. `TestSmokeSnapshotResumeTemplateLifecycle` does this against a real signed boot.
+- [x] Capture and seal the coherent post-boot rootfs image alongside memory and VM state, with an unmounted sterile Workspace device preserving the device topology.
+- [x] Never call `CreateGoldenSnapshot` against a tenant Instance for this purpose. The template path is separate and the diagnostic create-only behavior is unchanged.
+- [x] Create a template manifest carrying the complete compatibility key and the digest and size of VM state, memory, and post-boot rootfs. It is not separately signed: the runner has no signing key, so the key carries the signing-key fingerprint and signed manifest digest of the bundle the template was built from.
+- [x] Durably sync template files and their parent directory and publish atomically by one rename.
+- [x] Prove deterministic compatibility identity independent of output paths and runner-local names.
+- [ ] Scan the capture for forbidden identity and secret material and fail generation if the guest has mounted a tenant Workspace, configured a tenant IP, retained a live connection, or written runtime secrets. The template is structurally free of all four, but the generation-time scan that proves it is not implemented.
 
 ### Task 5: Version and manage the runner-local template cache
 

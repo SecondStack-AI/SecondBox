@@ -1391,6 +1391,12 @@ func removeWorkspaceEntryAt(parentFD int, name string, recursive bool) error {
 }
 
 func (s Server) toolWorkspacePath(raw string) (string, string, error) {
+	// A template guest has no Workspace until its assignment bind mounts one.
+	if s.Assignment != nil {
+		if _, bound := s.Assignment.Identity(); !bound {
+			return "", "", fmt.Errorf("guest has no Workspace until its assignment bind")
+		}
+	}
 	if strings.ContainsRune(raw, 0) {
 		return "", "", fmt.Errorf("invalid workspace path")
 	}

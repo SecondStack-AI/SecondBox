@@ -17,6 +17,17 @@ The build writes `kernel-provenance.json`, `rootfs-source-manifest.json`, `secon
 manifest includes the kernel provenance and rootfs source-manifest hashes, so
 the OpenSSL signature covers provenance as well as the artifact hashes.
 
+The same signed rootfs boots two ways, selected by kernel argument. A tenant
+Instance boots with its full `secondbox.*` assignment identity. A
+snapshot-resume template boots with `secondbox.template_mode=1` and no identity
+at all: the guest serves only the host-only vsock control endpoint, leaves
+`/dev/vdb` unmounted, and refuses every guest-protocol connection. Such a guest
+receives its Sandbox identity and mounts its Workspace through one
+`POST /assignment/bind` control request, which it refuses before
+`POST /restore/harden` succeeds and refuses for every request after the first.
+Template capture is performed only inside the privileged runner qualification
+boundary; the runner never boots a tenant Instance in template mode.
+
 Verify an artifact set with an independently trusted public key and its canonical DER SHA-256 fingerprint:
 
 ```sh

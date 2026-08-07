@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -203,6 +204,22 @@ func TestTemplateGuestRefusesWorkspaceRequestsBeforeBind(t *testing.T) {
 	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/workspace/list?path=/", nil))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("post-bind workspace list: status %d body %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestTemplateGuestRefusesToolExecutionBeforeBind(t *testing.T) {
+	server, _ := newTemplateGuestServer(t)
+	recorder := postTemplateControl(t, server, "/tool/exec", map[string]any{
+		"operation": "exec",
+		"command":   "sh",
+		"args":      []string{"-c", "printf ok"},
+		"cwd":       ".",
+	})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "no Workspace until its assignment bind") {
+		t.Fatalf("unbound template guest executed a tool operation: %s", recorder.Body.String())
 	}
 }
 
