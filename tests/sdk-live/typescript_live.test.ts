@@ -98,6 +98,9 @@ function liveProfileRevisionSpec(): ProfileRevisionSpec {
       processLimit: 128,
       concurrentOperations: 4,
     },
+    startup: {
+      mode: "cold_boot",
+    },
     lifecycle: {
       initialState: "stopped",
       drainGraceSeconds: 30,
