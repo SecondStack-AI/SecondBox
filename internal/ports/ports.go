@@ -311,6 +311,24 @@ type GarbageObject struct {
 	SizeBytes  int64
 }
 
+// LifecycleWakeTrigger names why the lifecycle worker was running when it
+// claimed a cohort. It is attribution evidence only: PostgreSQL remains the
+// sole work authority, and every trigger reaches the same fenced claim query.
+type LifecycleWakeTrigger string
+
+const (
+	// LifecycleWakeTriggerNotify means a PostgreSQL commit notification made
+	// the worker run before its poll deadline.
+	LifecycleWakeTriggerNotify LifecycleWakeTrigger = "notify"
+	// LifecycleWakeTriggerDeadline means no notification arrived and the
+	// bounded recovery poll interval elapsed. A transition that leaves work
+	// immediately available should never be followed by this trigger.
+	LifecycleWakeTriggerDeadline LifecycleWakeTrigger = "deadline"
+	// LifecycleWakeTriggerImmediate means the worker never waited: it had just
+	// completed a claim and re-ran its claim query directly.
+	LifecycleWakeTriggerImmediate LifecycleWakeTrigger = "immediate"
+)
+
 // LifecycleReconcileClaim is one revision-fenced desired-state work item.
 type LifecycleReconcileClaim struct {
 	SandboxID                 string

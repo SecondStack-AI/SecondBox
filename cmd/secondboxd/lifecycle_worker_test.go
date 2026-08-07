@@ -109,16 +109,24 @@ func TestWorkerWaitReturnsOnWakeupAndFallback(t *testing.T) {
 	wakeups := make(chan struct{}, 1)
 	wakeups <- struct{}{}
 	startedAt := time.Now()
-	if !waitForWork(t.Context(), time.Hour, wakeups) {
+	notified, running := waitForWork(t.Context(), time.Hour, wakeups)
+	if !running {
 		t.Fatal("worker wait stopped while its context was active")
+	}
+	if !notified {
+		t.Fatal("worker wakeup was attributed to its poll deadline")
 	}
 	if time.Since(startedAt) > 500*time.Millisecond {
 		t.Fatalf("worker wakeup took %s", time.Since(startedAt))
 	}
 
 	startedAt = time.Now()
-	if !waitForWork(t.Context(), time.Millisecond, nil) {
+	notified, running = waitForWork(t.Context(), time.Millisecond, nil)
+	if !running {
 		t.Fatal("worker fallback stopped while its context was active")
+	}
+	if notified {
+		t.Fatal("worker poll deadline was attributed to a notification")
 	}
 	if time.Since(startedAt) < time.Millisecond {
 		t.Fatal("worker fallback returned before its poll interval")
@@ -143,6 +151,7 @@ func (store *contentionLifecycleStore) ClaimLifecycle(
 	workerID string,
 	_ time.Time,
 	_ time.Duration,
+	_ ports.LifecycleWakeTrigger,
 ) (ports.LifecycleReconcileClaim, bool, error) {
 	store.claimCalls++
 	if store.claimCalls == 1 {
@@ -230,6 +239,7 @@ func (store *processLifecycleStore) ClaimLifecycle(
 	string,
 	time.Time,
 	time.Duration,
+	ports.LifecycleWakeTrigger,
 ) (ports.LifecycleReconcileClaim, bool, error) {
 	if !store.claimed {
 		store.claimed = true

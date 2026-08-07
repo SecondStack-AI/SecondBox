@@ -11,14 +11,16 @@ import (
 )
 
 // ReconcileStore owns durable claims and compare-and-swap transition commits.
+// The wake trigger is attribution evidence carried into the claim transaction;
+// it never changes which work the claim query finds.
 type ReconcileStore interface {
-	ClaimLifecycle(ctx context.Context, workerID string, now time.Time, claimDuration time.Duration) (ports.LifecycleReconcileClaim, bool, error)
+	ClaimLifecycle(ctx context.Context, workerID string, now time.Time, claimDuration time.Duration, wakeTrigger ports.LifecycleWakeTrigger) (ports.LifecycleReconcileClaim, bool, error)
 	ApplyLifecycleAction(ctx context.Context, claim ports.LifecycleReconcileClaim, action, terminationReason string, now, nextReconcileAt time.Time) error
 }
 
 // BatchReconcileStore claims an ordered cohort under the same worker fence.
 type BatchReconcileStore interface {
-	ClaimLifecycleBatch(ctx context.Context, workerID string, now time.Time, claimDuration time.Duration, batchSize int) ([]ports.LifecycleReconcileClaim, error)
+	ClaimLifecycleBatch(ctx context.Context, workerID string, now time.Time, claimDuration time.Duration, batchSize int, wakeTrigger ports.LifecycleWakeTrigger) ([]ports.LifecycleReconcileClaim, error)
 }
 
 // EffectExecutor performs one durable runner or object-store effect.
@@ -43,13 +45,17 @@ type Reconciler struct {
 }
 
 // RunOnce claims and commits at most one due Sandbox transition.
-func (reconciler Reconciler) RunOnce(ctx context.Context, now time.Time) (Decision, bool, error) {
+func (reconciler Reconciler) RunOnce(
+	ctx context.Context,
+	now time.Time,
+	wakeTrigger ports.LifecycleWakeTrigger,
+) (Decision, bool, error) {
 	if reconciler.Store == nil || reconciler.WorkerID == "" ||
 		reconciler.ClaimDuration <= 0 || reconciler.PollInterval <= 0 {
 		return Decision{}, false, errors.New("SecondBox lifecycle reconciler dependencies and bounds are required")
 	}
 	claim, found, err := reconciler.Store.ClaimLifecycle(
-		ctx, reconciler.WorkerID, now.UTC(), reconciler.ClaimDuration,
+		ctx, reconciler.WorkerID, now.UTC(), reconciler.ClaimDuration, wakeTrigger,
 	)
 	if err != nil || !found {
 		return Decision{}, found, err
@@ -62,6 +68,7 @@ func (reconciler Reconciler) RunOnce(ctx context.Context, now time.Time) (Decisi
 func (reconciler Reconciler) RunBatch(
 	ctx context.Context,
 	clock func() time.Time,
+	wakeTrigger ports.LifecycleWakeTrigger,
 ) (bool, error) {
 	if reconciler.Store == nil || reconciler.WorkerID == "" ||
 		reconciler.ClaimDuration <= 0 || reconciler.PollInterval <= 0 ||
@@ -69,7 +76,7 @@ func (reconciler Reconciler) RunBatch(
 		return false, errors.New("SecondBox lifecycle batch reconciler dependencies and bounds are required")
 	}
 	if reconciler.BatchSize == 1 {
-		_, found, err := reconciler.RunOnce(ctx, clock())
+		_, found, err := reconciler.RunOnce(ctx, clock(), wakeTrigger)
 		return found, err
 	}
 	store, ok := reconciler.Store.(BatchReconcileStore)
@@ -78,7 +85,7 @@ func (reconciler Reconciler) RunBatch(
 	}
 	claims, err := store.ClaimLifecycleBatch(
 		ctx, reconciler.WorkerID, clock().UTC(), reconciler.ClaimDuration,
-		reconciler.BatchSize,
+		reconciler.BatchSize, wakeTrigger,
 	)
 	if err != nil || len(claims) == 0 {
 		return false, err

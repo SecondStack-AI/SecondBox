@@ -46,6 +46,7 @@ func TestPostgresLifecycleClaimRequiresExplicitIntentAfterTerminalFailure(t *tes
 	}
 	if _, found, err := controlPlaneStore.ClaimLifecycle(
 		t.Context(), "worker-terminal-failure", now, time.Minute,
+		ports.LifecycleWakeTriggerNotify,
 	); err != nil || found {
 		t.Fatalf("terminal failure claim found=%t error=%v", found, err)
 	}
@@ -58,6 +59,7 @@ func TestPostgresLifecycleClaimRequiresExplicitIntentAfterTerminalFailure(t *tes
 	}
 	claim, found, err := controlPlaneStore.ClaimLifecycle(
 		t.Context(), "worker-explicit-retry", now, time.Minute,
+		ports.LifecycleWakeTriggerNotify,
 	)
 	if err != nil || !found || claim.SandboxID != "sandbox-terminal-failure" {
 		t.Fatalf("explicit retry claim=%#v found=%t error=%v", claim, found, err)
@@ -134,6 +136,7 @@ func TestPostgresLifecycleBatchClaimsOrderedCohortAndClosesExpiredActivity(t *te
 	claimAt := now.Add(2 * time.Minute)
 	claims, err := controlPlaneStore.ClaimLifecycleBatch(
 		t.Context(), "worker-batch", claimAt, time.Minute, 2,
+		ports.LifecycleWakeTriggerNotify,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -167,6 +170,7 @@ func TestPostgresLifecycleBatchClaimsOrderedCohortAndClosesExpiredActivity(t *te
 	}
 	if later, err := controlPlaneStore.ClaimLifecycleBatch(
 		t.Context(), "worker-batch-other", claimAt, time.Minute, 2,
+		ports.LifecycleWakeTriggerNotify,
 	); err != nil || len(later) != 0 {
 		t.Fatalf("claimed fenced cohort = %#v, %v", later, err)
 	}
@@ -229,6 +233,7 @@ func TestPostgresLifecycleClaimSkipsLockedExpiredLeaseWithoutCountingItsSession(
 	defer cancel()
 	claims, err := controlPlaneStore.ClaimLifecycleBatch(
 		claimContext, "worker-locked-expiry", now, time.Minute, 1,
+		ports.LifecycleWakeTriggerNotify,
 	)
 	if err != nil {
 		t.Fatal(err)

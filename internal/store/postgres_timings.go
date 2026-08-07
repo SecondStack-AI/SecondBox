@@ -13,12 +13,91 @@ import (
 
 	"github.com/SecondStack-AI/SecondBox/internal/observability"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
+	"github.com/SecondStack-AI/SecondBox/internal/store/lifecycleprojection"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
 const startupTimingStagesSQL = `
 	'runner_admission','artifact_verify','workspace_attach','network_setup',
 	'compute_launch','guest_negotiation','ready'`
+
+// OrchestrationStages is the complete ordered vocabulary of provider-neutral
+// control-plane milestones persisted to secondbox.operation_stage_timings. The
+// order is the causal order of one Sandbox lifecycle, so a timing response can
+// break equal-timestamp ties deterministically. Every stage a control-plane
+// transaction writes must appear here or it stays invisible to the timing
+// routes.
+//
+// LifecyclePickup* names carry why the lifecycle worker was awake when it first
+// claimed the Operation's Sandbox: a PostgreSQL commit notification, the
+// bounded recovery poll deadline, or an immediate re-claim after the worker had
+// just finished other work. Encoding the wake trigger in the stage name keeps
+// the evidence fixed-cardinality and needs no extra column.
+var OrchestrationStages = []string{
+	StageDurableAdmission,
+	StageLifecyclePickupNotify,
+	StageLifecyclePickupDeadline,
+	StageLifecyclePickupImmediate,
+	"workspace_ready",
+	"placement_reconcile_started",
+	"placement_effect_started",
+	"placement_plan_ready",
+	"placement_schedule_started",
+	"placement_attempt_started",
+	"placement_sandbox_locked",
+	"placement_assignment_checked",
+	"placement_candidates_locked",
+	"placement_candidate_selected",
+	"placement_ready",
+	"startup_dispatched",
+	"ready_projected",
+	lifecycleprojection.StageTeardownDrainCommitted,
+	lifecycleprojection.StageTeardownFenceDispatched,
+	lifecycleprojection.StageTeardownFenceAcknowledged,
+	lifecycleprojection.StageTeardownGenerationAdvanced,
+	lifecycleprojection.StageTeardownStopCommitted,
+	lifecycleprojection.StageTeardownWorkspaceDeleteDispatched,
+	lifecycleprojection.StageTeardownFinalized,
+}
+
+// Control-plane orchestration milestone names owned by this package. The
+// placement and startup milestones stay literals inside the transactions that
+// establish them, and the teardown milestones belong to lifecycleprojection.
+const (
+	StageDurableAdmission         = "durable_admission"
+	StageLifecyclePickupNotify    = "lifecycle_pickup_notify"
+	StageLifecyclePickupDeadline  = "lifecycle_pickup_deadline"
+	StageLifecyclePickupImmediate = "lifecycle_pickup_immediate"
+)
+
+// orchestrationStageFilterSQL renders the stage allow-list, and
+// orchestrationStageOrderSQL the matching tie-break ordinals, so both are
+// derived from OrchestrationStages instead of drifting from it.
+func orchestrationStageFilterSQL() string {
+	var filter strings.Builder
+	for index, stage := range OrchestrationStages {
+		if index > 0 {
+			filter.WriteString(",")
+		}
+		filter.WriteString("'")
+		filter.WriteString(stage)
+		filter.WriteString("'")
+	}
+	return filter.String()
+}
+
+func orchestrationStageOrderSQL() string {
+	var order strings.Builder
+	order.WriteString("CASE stage")
+	for index, stage := range OrchestrationStages {
+		order.WriteString(" WHEN '")
+		order.WriteString(stage)
+		order.WriteString("' THEN ")
+		order.WriteString(strconv.Itoa(index + 1))
+	}
+	order.WriteString(" END")
+	return order.String()
+}
 
 // ReadSandboxTiming returns one explicitly bounded subject-owned timing history.
 func (store *PostgresControlPlaneStore) ReadSandboxTiming(
@@ -151,32 +230,8 @@ func (store *PostgresControlPlaneStore) attachOperationStageTimings(
 		SELECT operation_id,stage,observed_at
 		FROM secondbox.operation_stage_timings
 		WHERE operation_id=ANY($1::text[])
-		  AND stage IN (
-		    'durable_admission','workspace_ready',
-		    'placement_reconcile_started','placement_effect_started',
-		    'placement_plan_ready','placement_schedule_started',
-		    'placement_attempt_started','placement_sandbox_locked',
-		    'placement_assignment_checked','placement_candidates_locked',
-		    'placement_candidate_selected','placement_ready',
-		    'startup_dispatched','ready_projected'
-		  )
-		ORDER BY operation_id,observed_at,
-		  CASE stage
-		    WHEN 'durable_admission' THEN 1
-		    WHEN 'workspace_ready' THEN 2
-		    WHEN 'placement_reconcile_started' THEN 3
-		    WHEN 'placement_effect_started' THEN 4
-		    WHEN 'placement_plan_ready' THEN 5
-		    WHEN 'placement_schedule_started' THEN 6
-		    WHEN 'placement_attempt_started' THEN 7
-		    WHEN 'placement_sandbox_locked' THEN 8
-		    WHEN 'placement_assignment_checked' THEN 9
-		    WHEN 'placement_candidates_locked' THEN 10
-		    WHEN 'placement_candidate_selected' THEN 11
-		    WHEN 'placement_ready' THEN 12
-		    WHEN 'startup_dispatched' THEN 13
-		    WHEN 'ready_projected' THEN 14
-		  END`,
+		  AND stage IN (`+orchestrationStageFilterSQL()+`)
+		ORDER BY operation_id,observed_at,`+orchestrationStageOrderSQL(),
 		operationIDs,
 	)
 	if err != nil {

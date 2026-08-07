@@ -210,8 +210,9 @@ func (store *PostgresControlPlaneStore) ClaimLifecycle(
 	workerID string,
 	now time.Time,
 	claimDuration time.Duration,
+	wakeTrigger ports.LifecycleWakeTrigger,
 ) (ports.LifecycleReconcileClaim, bool, error) {
-	claims, err := store.ClaimLifecycleBatch(ctx, workerID, now, claimDuration, 1)
+	claims, err := store.ClaimLifecycleBatch(ctx, workerID, now, claimDuration, 1, wakeTrigger)
 	if err != nil {
 		return ports.LifecycleReconcileClaim{}, false, err
 	}
@@ -230,9 +231,14 @@ func (store *PostgresControlPlaneStore) ClaimLifecycleBatch(
 	now time.Time,
 	claimDuration time.Duration,
 	batchSize int,
+	wakeTrigger ports.LifecycleWakeTrigger,
 ) ([]ports.LifecycleReconcileClaim, error) {
 	if workerID == "" || claimDuration <= 0 || batchSize <= 0 {
 		return nil, errors.New("SecondBox lifecycle claim worker, duration, and batch size are required")
+	}
+	pickupStage, err := lifecyclePickupStage(wakeTrigger)
+	if err != nil {
+		return nil, err
 	}
 	now = now.UTC()
 	if err := expireLifecycleLeases(ctx, store.pool, now, batchSize); err != nil {
@@ -397,10 +403,43 @@ func (store *PostgresControlPlaneStore) ClaimLifecycleBatch(
 	if tag.RowsAffected() != int64(len(claims)) {
 		return nil, ports.ErrRevisionConflict
 	}
+	// The wake trigger is recorded once per Operation, on the first claim of its
+	// Sandbox, in the transaction that establishes the claim. A pickup stage
+	// that names the poll deadline rather than the commit notification is the
+	// evidence that a transition left its Sandbox due in the future while its
+	// successor decision was already available.
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO secondbox.operation_stage_timings (
+			operation_id,sandbox_id,stage,observed_at
+		)
+		SELECT id,sandbox_id,$1,$2
+		FROM secondbox.operations
+		WHERE sandbox_id=ANY($3::text[]) AND state IN ('pending','running')
+		ON CONFLICT (operation_id,stage) DO NOTHING`,
+		pickupStage, now, claimedSandboxIDs,
+	); err != nil {
+		return nil, fmt.Errorf("SecondBox lifecycle claim pickup attribution failed: %w", err)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("SecondBox lifecycle claim commit failed: %w", err)
 	}
 	return claims, nil
+}
+
+// lifecyclePickupStage maps a wake trigger onto its fixed stage name. An
+// unrecognized trigger is a programming error and stops the claim rather than
+// silently attributing the pickup to the wrong cause.
+func lifecyclePickupStage(trigger ports.LifecycleWakeTrigger) (string, error) {
+	switch trigger {
+	case ports.LifecycleWakeTriggerNotify:
+		return StageLifecyclePickupNotify, nil
+	case ports.LifecycleWakeTriggerDeadline:
+		return StageLifecyclePickupDeadline, nil
+	case ports.LifecycleWakeTriggerImmediate:
+		return StageLifecyclePickupImmediate, nil
+	default:
+		return "", fmt.Errorf("SecondBox lifecycle claim wake trigger %q is unrecognized", trigger)
+	}
 }
 
 func expireLifecycleLeases(
@@ -611,6 +650,13 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 		return nil
 	}
 	switch action {
+	case "drain":
+		if err := lifecycleprojection.RecordTeardownStage(
+			ctx, tx, claim.SandboxID,
+			lifecycleprojection.StageTeardownDrainCommitted, now,
+		); err != nil {
+			return err
+		}
 	case "mark_ready":
 		if err := lifecycleprojection.ProjectReadyOperations(
 			ctx, tx, claim.SandboxID, now,
@@ -618,6 +664,14 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 			return fmt.Errorf("SecondBox lifecycle ready projection failed: %w", err)
 		}
 	case "finish_stop":
+		// The stop milestone is recorded before the Operations complete, so a
+		// stop Operation still observes the transition that satisfied it.
+		if err := lifecycleprojection.RecordTeardownStage(
+			ctx, tx, claim.SandboxID,
+			lifecycleprojection.StageTeardownStopCommitted, now,
+		); err != nil {
+			return err
+		}
 		if err := completeOperations(
 			[]string{"drain", "stop"}, contracts.OperationStateSucceeded, "", "",
 		); err != nil {

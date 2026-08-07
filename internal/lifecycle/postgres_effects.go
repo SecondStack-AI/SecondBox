@@ -13,6 +13,7 @@ import (
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/scheduler"
+	"github.com/SecondStack-AI/SecondBox/internal/store/lifecycleprojection"
 	"github.com/SecondStack-AI/SecondBox/internal/store/rowlock"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
@@ -247,6 +248,12 @@ func (broker *PostgresEffectBroker) queueWorkspaceDelete(
 	}
 	if tag.RowsAffected() != 1 {
 		return ports.ErrRevisionConflict
+	}
+	if err := lifecycleprojection.RecordTeardownStage(
+		ctx, tx, claim.SandboxID,
+		lifecycleprojection.StageTeardownWorkspaceDeleteDispatched, now,
+	); err != nil {
+		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("SecondBox lifecycle Workspace delete commit failed: %w", err)
@@ -864,6 +871,12 @@ func (broker *PostgresEffectBroker) queueStop(
 	}
 	if tag.RowsAffected() != 1 {
 		return ports.ErrRevisionConflict
+	}
+	if err := lifecycleprojection.RecordTeardownStage(
+		ctx, tx, claim.SandboxID,
+		lifecycleprojection.StageTeardownFenceDispatched, now,
+	); err != nil {
+		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("SecondBox lifecycle stop commit failed: %w", err)
