@@ -198,4 +198,18 @@ func makeSandboxIdleAndDue(
 	); err != nil {
 		t.Fatal(err)
 	}
+	// Readiness bounds the idle window (see lifecycle.IdleSince), so a Sandbox
+	// whose Instance became ready moments ago is not idle however far back its
+	// recorded activity sits.
+	tag, err := pool.Exec(t.Context(), `
+		UPDATE secondbox.instances SET ready_at=$2
+		WHERE sandbox_id=$1 AND ready_at IS NOT NULL`,
+		sandboxID, now.Add(-301*time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("backdated readiness of %d ready Instances, want exactly 1", tag.RowsAffected())
+	}
 }

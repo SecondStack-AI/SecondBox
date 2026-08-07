@@ -115,8 +115,9 @@ func Decide(view View, now time.Time) Decision {
 			if view.MaximumDuration > 0 && !view.ReadyAt.IsZero() && !now.Before(view.ReadyAt.Add(view.MaximumDuration)) {
 				return Decision{Action: ActionDrain, TerminationReason: contracts.TerminationReasonMaximumDuration}
 			}
-			if view.ActiveSessions == 0 && view.IdleTimeout > 0 && !view.LastUsefulActivityAt.IsZero() &&
-				!now.Before(view.LastUsefulActivityAt.Add(view.IdleTimeout)) {
+			idleSince := IdleSince(view)
+			if view.ActiveSessions == 0 && view.IdleTimeout > 0 && !idleSince.IsZero() &&
+				!now.Before(idleSince.Add(view.IdleTimeout)) {
 				return Decision{Action: ActionDrain, TerminationReason: contracts.TerminationReasonIdleTimeout}
 			}
 			return Decision{Action: ActionWait}
@@ -132,6 +133,21 @@ func Decide(view View, now time.Time) Decision {
 		}
 	}
 	return Decision{Action: ActionFail, TerminationReason: contracts.TerminationReasonInternalFailure}
+}
+
+// IdleSince is the instant the running Instance's idle window is measured from,
+// and the single reference both the drain decision and the wake-up it schedules
+// use. Useful activity is generation-scoped, but the Sandbox carries one
+// denormalized `last_activity_at` across generations, so a restarted Sandbox
+// reports activity that belongs to the Instance before it. An Instance cannot
+// have been idle for longer than it has been ready, so readiness bounds the
+// window and a restart earns its full idle timeout instead of draining on its
+// first reconciliation.
+func IdleSince(view View) time.Time {
+	if view.ReadyAt.After(view.LastUsefulActivityAt) {
+		return view.ReadyAt
+	}
+	return view.LastUsefulActivityAt
 }
 
 func decideStopping(view View) Decision {

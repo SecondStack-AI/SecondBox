@@ -137,3 +137,23 @@ func TestTerminationReasonsAreStable(t *testing.T) {
 		t.Fatal("unknown termination reason was accepted")
 	}
 }
+
+// A restarted Sandbox carries `sandboxes.last_activity_at` from the generation
+// that preceded it, so its idle window has to be measured from the readiness of
+// the Instance now running. Without that, the first reconciliation after a
+// restart drains an Instance that has existed for milliseconds.
+func TestRestartedSandboxMeasuresIdleFromItsOwnReadiness(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	view := View{
+		Observed: contracts.SandboxStateReady, Desired: contracts.SandboxDesiredStateRunning,
+		ReadyAt: now, LastUsefulActivityAt: now.Add(-72 * time.Minute),
+		IdleTimeout:   time.Minute,
+		GuestLiveness: contracts.GuestLivenessReady,
+	}
+	if got := Decide(view, now); got.Action != ActionWait {
+		t.Fatalf("freshly ready restart decision = %#v, want a wait", got)
+	}
+	if got := Decide(view, now.Add(time.Minute)); got.TerminationReason != contracts.TerminationReasonIdleTimeout {
+		t.Fatalf("expired restart decision = %#v, want idle timeout", got)
+	}
+}
