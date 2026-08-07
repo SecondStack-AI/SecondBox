@@ -59,13 +59,26 @@ fingerprint="$(openssl pkey -pubin -in "$work_dir/public.pem" -outform DER | sha
 
 stage_one="$work_dir/stage-one"
 stage_two="$work_dir/stage-two"
+stage_dictionary_locale="$work_dir/stage-dictionary-locale"
 export SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR="$artifact_dir"
 export SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY="$work_dir/public.pem"
 export SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY_SHA256="$fingerprint"
-"$repo_root/scripts/release-stage.sh" --test-mode 0.1.0 "$stage_one" >/dev/null
-"$repo_root/scripts/release-stage.sh" --test-mode 0.1.0 "$stage_two" >/dev/null
+# Both reproducibility stagings run under byte collation and the third under
+# dictionary collation, so the comparison below means the same thing whatever
+# locale the operator brought. The dictionary locale is a stated prerequisite
+# rather than an opportunistic check: without it the third staging would silently
+# repeat the byte-ordered ones and assert nothing.
+dictionary_locale="en_US.UTF-8"
+collation_sample=$'SHA256SUMS\nagent-compartment.standard-bundle.json\nsecondbox-deploy_0.1.0_linux_amd64\nsecondbox_0.1.0_linux_amd64'
+if [[ "$(LC_ALL="$dictionary_locale" sort <<<"$collation_sample" 2>/dev/null)" == "$(LC_ALL=C sort <<<"$collation_sample")" ]]; then
+  echo "release staging locale test requires a dictionary-collating $dictionary_locale locale; generate it and rerun" >&2
+  exit 1
+fi
+LC_ALL=C "$repo_root/scripts/release-stage.sh" --test-mode 0.1.0 "$stage_one" >/dev/null
+LC_ALL=C "$repo_root/scripts/release-stage.sh" --test-mode 0.1.0 "$stage_two" >/dev/null
+LC_ALL="$dictionary_locale" "$repo_root/scripts/release-stage.sh" --test-mode 0.1.0 "$stage_dictionary_locale" >/dev/null
 
-for stage in "$stage_one" "$stage_two"; do
+for stage in "$stage_one" "$stage_two" "$stage_dictionary_locale"; do
   go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$stage"
   jq -e --arg runtime "$runtime_digest" --arg toolchain "$toolchain_digest" '.schemaVersion == "secondbox.release/artifact-manifest/v2" and .microvm.runtimeBundle.manifestDigest == $runtime and .microvm.toolchainBundle.manifestDigest == $toolchain and (.qualificationEvidence.location | endswith("/secondbox-0.1.0-qualification-evidence.json"))' "$stage/secondbox-0.1.0-artifact-manifest.json" >/dev/null
   jq -e --arg runtime "$runtime_digest" --arg toolchain "$toolchain_digest" '.schemaVersion == "secondbox.standard-bundle/v2" and .profile.revisions[0].spec.runtimeBundleDigest == $runtime and .profile.revisions[0].spec.toolchainBundleDigest == $toolchain and (.profile.revisions[0].spec.runtimeBundleDigest != .profile.revisions[0].spec.toolchainBundleDigest)' "$stage/durable-coding.standard-bundle.json" >/dev/null
@@ -80,6 +93,12 @@ diff -u \
   echo "release staging is not reproducible" >&2
   exit 1
 }
+diff -u \
+  <(cd "$stage_one" && sha256sum * | sed "s#  #  #" ) \
+  <(cd "$stage_dictionary_locale" && sha256sum * | sed "s#  #  #" ) || {
+  echo "release staging is not reproducible across operator locales" >&2
+  exit 1
+}
 
 touch "$stage_one/unknown-extra"
 if go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$stage_one" >/dev/null 2>&1; then
@@ -87,6 +106,13 @@ if go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$stage_one" >/dev
   exit 1
 fi
 rm "$stage_one/unknown-extra"
+cp "$stage_one/candidate-allowlist.json" "$work_dir/ordered-allowlist.json"
+jq '{schemaVersion:.schemaVersion,files:(.files|reverse)}' "$work_dir/ordered-allowlist.json" >"$stage_one/candidate-allowlist.json"
+go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$stage_one" >/dev/null || {
+  echo "release verifier rejected a complete candidate whose allowlist order differs from the directory order" >&2
+  exit 1
+}
+cp "$work_dir/ordered-allowlist.json" "$stage_one/candidate-allowlist.json"
 printf 'tampered\n' >>"$stage_one/agent-compartment.standard-bundle.json"
 if go -C "$repo_root" run ./cmd/secondbox-release-tool verify "$stage_one" >/dev/null 2>&1; then
   echo "release verifier accepted checksum drift" >&2
