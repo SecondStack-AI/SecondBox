@@ -1,0 +1,301 @@
+{
+  "schemaVersion": 3,
+  "startedAt": "2026-08-07T00:14:40.047890431Z",
+  "completedAt": "2026-08-07T00:15:01.861752845Z",
+  "sourceCommit": "b58716c6a093c21495a065234f78953fffa4934b",
+  "goVersion": "go version go1.26.5 linux/amd64",
+  "artifactManifestDigest": "sha256:e48a49d3870e897585857c33e73227a2c9525869ca6dfd5d38349367e053e6f9",
+  "shedArrivals": 0,
+  "capacity": [
+    {
+      "measurement": "create_to_ready",
+      "patternKind": "burst",
+      "residentPopulation": 0,
+      "steps": 1,
+      "largestFullyAdmitted": 32,
+      "configuredBinding": {
+        "name": "SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL + runner Workspace capacity + runner Operations capacity + subject quota: active instances",
+        "capacity": 40
+      },
+      "refusalKnee": null,
+      "latencyKnee": null,
+      "distressKnee": null
+    }
+  ],
+  "results": [
+    {
+      "measurement": "create_to_ready",
+      "pattern": "burst-32",
+      "patternKind": "burst",
+      "residentPopulation": 0,
+      "offeredArrivals": 32,
+      "completedArrivals": 32,
+      "shedArrivals": 0,
+      "offeredRatePerSecond": null,
+      "completionRatePerSecond": 6.791623817675286,
+      "arrivalWindowMilliseconds": 0,
+      "elapsedMilliseconds": 4711,
+      "peakOutstandingArrivals": 32,
+      "latency": {
+        "samples": 32,
+        "p50Milliseconds": 4387,
+        "p95Milliseconds": 4687,
+        "p99Milliseconds": 4710,
+        "maximumMilliseconds": 4710
+      },
+      "bootStages": [
+        {
+          "stage": "guest_negotiation",
+          "samples": 28,
+          "p50Milliseconds": 2117,
+          "p95Milliseconds": 2670,
+          "p99Milliseconds": 2679
+        },
+        {
+          "stage": "runner_admission",
+          "samples": 32,
+          "p50Milliseconds": 132,
+          "p95Milliseconds": 1151,
+          "p99Milliseconds": 1281
+        },
+        {
+          "stage": "network_setup",
+          "samples": 32,
+          "p50Milliseconds": 25,
+          "p95Milliseconds": 42,
+          "p99Milliseconds": 42
+        },
+        {
+          "stage": "compute_launch",
+          "samples": 32,
+          "p50Milliseconds": 18,
+          "p95Milliseconds": 29,
+          "p99Milliseconds": 42
+        },
+        {
+          "stage": "ready",
+          "samples": 28,
+          "p50Milliseconds": 2,
+          "p95Milliseconds": 4,
+          "p99Milliseconds": 7
+        },
+        {
+          "stage": "artifact_verify",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 3,
+          "p99Milliseconds": 4
+        },
+        {
+          "stage": "workspace_attach",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 2,
+          "p99Milliseconds": 2
+        }
+      ],
+      "dominantBootStage": "guest_negotiation",
+      "startupSpans": [
+        {
+          "span": "client_visibility",
+          "samples": 32,
+          "p50Milliseconds": 34,
+          "p95Milliseconds": 72,
+          "p99Milliseconds": 78
+        },
+        {
+          "span": "operation_total",
+          "samples": 32,
+          "p50Milliseconds": 4361,
+          "p95Milliseconds": 4659,
+          "p99Milliseconds": 4679
+        },
+        {
+          "span": "placement",
+          "samples": 32,
+          "p50Milliseconds": 535,
+          "p95Milliseconds": 942,
+          "p99Milliseconds": 947
+        },
+        {
+          "span": "placement_assignment_check",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 0,
+          "p99Milliseconds": 0
+        },
+        {
+          "span": "placement_candidate_lock",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 20,
+          "p99Milliseconds": 29
+        },
+        {
+          "span": "placement_candidate_select",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 0,
+          "p99Milliseconds": 0
+        },
+        {
+          "span": "placement_handoff",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 0,
+          "p99Milliseconds": 0
+        },
+        {
+          "span": "placement_pickup",
+          "samples": 32,
+          "p50Milliseconds": 119,
+          "p95Milliseconds": 282,
+          "p99Milliseconds": 311
+        },
+        {
+          "span": "placement_plan",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 1,
+          "p99Milliseconds": 1
+        },
+        {
+          "span": "placement_prepare",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 0,
+          "p99Milliseconds": 0
+        },
+        {
+          "span": "placement_reconcile",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 0,
+          "p99Milliseconds": 0
+        },
+        {
+          "span": "placement_retry",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 0,
+          "p99Milliseconds": 20
+        },
+        {
+          "span": "placement_sandbox_lock",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 1,
+          "p99Milliseconds": 1
+        },
+        {
+          "span": "pre_assignment",
+          "samples": 32,
+          "p50Milliseconds": 1525,
+          "p95Milliseconds": 2492,
+          "p99Milliseconds": 2539
+        },
+        {
+          "span": "ready_event_ingest",
+          "samples": 28,
+          "p50Milliseconds": 11,
+          "p95Milliseconds": 42,
+          "p99Milliseconds": 47
+        },
+        {
+          "span": "ready_projection",
+          "samples": 28,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 0,
+          "p99Milliseconds": 32
+        },
+        {
+          "span": "runner_boot",
+          "samples": 32,
+          "p50Milliseconds": 2137,
+          "p95Milliseconds": 3677,
+          "p99Milliseconds": 3762
+        },
+        {
+          "span": "runner_event_ingest",
+          "samples": 216,
+          "p50Milliseconds": 42,
+          "p95Milliseconds": 140,
+          "p99Milliseconds": 156
+        },
+        {
+          "span": "startup_dispatch",
+          "samples": 32,
+          "p50Milliseconds": 131,
+          "p95Milliseconds": 1071,
+          "p99Milliseconds": 1151
+        },
+        {
+          "span": "workspace_provision",
+          "samples": 32,
+          "p50Milliseconds": 993,
+          "p95Milliseconds": 1549,
+          "p99Milliseconds": 1591
+        }
+      ],
+      "refusals": {},
+      "failures": {},
+      "memAvailableLowWaterMiB": 47152,
+      "occupancy": [
+        {
+          "offsetMilliseconds": 500,
+          "ready": 0,
+          "outstandingArrivals": 32,
+          "offeredRatePerSecond": null
+        },
+        {
+          "offsetMilliseconds": 1000,
+          "ready": 0,
+          "outstandingArrivals": 32,
+          "offeredRatePerSecond": null
+        },
+        {
+          "offsetMilliseconds": 1500,
+          "ready": 0,
+          "outstandingArrivals": 32,
+          "offeredRatePerSecond": null
+        },
+        {
+          "offsetMilliseconds": 2000,
+          "ready": 0,
+          "outstandingArrivals": 32,
+          "offeredRatePerSecond": null
+        },
+        {
+          "offsetMilliseconds": 2500,
+          "ready": 2,
+          "outstandingArrivals": 31,
+          "offeredRatePerSecond": null
+        },
+        {
+          "offsetMilliseconds": 3000,
+          "ready": 9,
+          "outstandingArrivals": 23,
+          "offeredRatePerSecond": null
+        },
+        {
+          "offsetMilliseconds": 3500,
+          "ready": 9,
+          "outstandingArrivals": 23,
+          "offeredRatePerSecond": null
+        },
+        {
+          "offsetMilliseconds": 4000,
+          "ready": 13,
+          "outstandingArrivals": 19,
+          "offeredRatePerSecond": null
+        },
+        {
+          "offsetMilliseconds": 4500,
+          "ready": 25,
+          "outstandingArrivals": 7,
+          "offeredRatePerSecond": null
+        }
+      ]
+    }
+  ]
+}
