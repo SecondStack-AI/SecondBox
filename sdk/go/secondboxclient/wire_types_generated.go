@@ -387,6 +387,7 @@ const (
 	ProblemCodeGenerationFenced                     ProblemCode = "generation_fenced"
 	ProblemCodeLeaseFenced                          ProblemCode = "lease_fenced"
 	ProblemCodeProfileUnavailable                   ProblemCode = "profile_unavailable"
+	ProblemCodeStartupModeUnsupported               ProblemCode = "startup_mode_unsupported"
 	ProblemCodeHomeRunnerUnavailable                ProblemCode = "home_runner_unavailable"
 	ProblemCodeSandboxNotStopped                    ProblemCode = "sandbox_not_stopped"
 	ProblemCodeWorkspaceRelocationSnapshotsPresent  ProblemCode = "workspace_relocation_snapshots_present"
@@ -540,6 +541,17 @@ const (
 	SpawnFailureKindInvalidCwd          SpawnFailureKind = "invalid_cwd"
 	SpawnFailureKindMalformedExecutable SpawnFailureKind = "malformed_executable"
 )
+
+// StartupMode cold_boot starts a Sandbox by booting its guest. snapshot_resume resumes a prepared, identity-neutral guest, admits only onto Runners advertising the snapshot-resume capability, and never falls back to cold_boot.
+type StartupMode = string
+
+const (
+	StartupModeColdBoot       StartupMode = "cold_boot"
+	StartupModeSnapshotResume StartupMode = "snapshot_resume"
+)
+
+// StartupPolicy How every Instance of this Profile revision reaches ready. There is no default; an operator states the mode on every Profile revision and the immutable revision pins it.
+type StartupPolicy = contracts.StartupPolicy
 
 type StreamCancelFrame struct {
 	Sequence int64  `json:"sequence"`

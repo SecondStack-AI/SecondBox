@@ -461,7 +461,22 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 			ctx, claim, plan, err, now.UTC(), nextReconcileAt.UTC(),
 		)
 	}
+	// The Runner is told which backend prerequisites its Assignment needs. The
+	// startup mode travels separately, as its own field, because a Runner decides
+	// whether it can honour a mode from its own start paths rather than from a
+	// capability string the control plane echoed back at it.
 	requiredCapabilities := []string{"network-policy", "storage", "cleanup", "local-workspace"}
+	// Placement additionally requires advertised resume capacity for a
+	// snapshot_resume revision. There is no cold-boot substitution, so this is a
+	// hard admission filter rather than a preference, and it is a control-plane
+	// requirement rather than something the Runner is asked to self-assess.
+	placementCapabilities := requiredCapabilities
+	if plan.spec.Startup.Mode == contracts.StartupModeSnapshotResume {
+		placementCapabilities = append(
+			append([]string{}, requiredCapabilities...),
+			contracts.RunnerCapabilitySnapshotResume,
+		)
+	}
 	deadline := now.UTC().Add(broker.config.AssignmentDeadline)
 	assignmentCommand := &runnerv1.AssignmentCommand{
 		Fence: &runnerv1.AssignmentFence{
@@ -477,6 +492,7 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 			DiskBytes:            uint64(plan.spec.Resources.WorkspaceBytes),
 			Architecture:         plan.spec.Architecture,
 			RequiredCapabilities: requiredCapabilities,
+			StartupMode:          plan.spec.Startup.Mode,
 			MaximumOperationMs:   uint64(plan.spec.Execution.MaximumDeadlineMilliseconds),
 			MaximumOutputBytes:   uint64(plan.spec.Execution.MaximumBufferedOutputBytes),
 		},
@@ -500,7 +516,7 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		ProfileRevisionID: plan.profileRevisionID,
 		Requirements: scheduler.Requirements{
 			PoolName: plan.spec.Pool, BackendKind: "firecracker",
-			Architecture: plan.spec.Architecture, RequiredCapabilities: requiredCapabilities,
+			Architecture: plan.spec.Architecture, RequiredCapabilities: placementCapabilities,
 			Capacity: scheduler.Capacity{
 				CPUMillis:   plan.spec.Resources.CPUMillis,
 				MemoryBytes: plan.spec.Resources.MemoryBytes,

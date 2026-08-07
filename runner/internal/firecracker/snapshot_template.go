@@ -444,6 +444,99 @@ func (c *SnapshotTemplateCache) Resolve(key SnapshotTemplateKey) (*AdmittedSnaps
 	return template, nil
 }
 
+// SnapshotTemplateBundleIdentity is the signed-bundle half of a template's
+// compatibility key. It is the part a runner can prove before it has seen any
+// assignment, because it is exactly what the runner verified about its own local
+// bundle. A Profile pins runtime and toolchain digests, the control plane
+// resolves those to the signed components the runner must match, and the runner
+// already refuses any assignment whose component digests differ from its own.
+// So a template built from this bundle is a template compatible with every
+// Profile the runner can serve at all.
+type SnapshotTemplateBundleIdentity struct {
+	ArtifactVersion       string
+	Architecture          string
+	RuntimeBundleDigest   string
+	ToolchainBundleDigest string
+}
+
+func (i SnapshotTemplateBundleIdentity) validate() error {
+	for name, value := range map[string]string{
+		"artifactVersion":       i.ArtifactVersion,
+		"architecture":          i.Architecture,
+		"runtimeBundleDigest":   i.RuntimeBundleDigest,
+		"toolchainBundleDigest": i.ToolchainBundleDigest,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("SecondBox snapshot template bundle identity field %q is required", name)
+		}
+	}
+	return nil
+}
+
+// HasTemplateForBundle reports whether the cache already holds a published
+// template built from exactly this signed bundle. It is what turns runner
+// snapshot-resume capacity on: a runner that advertises the capability before it
+// holds such a template would attract Profiles it cannot start, and snapshot
+// resume has no cold-boot fallback.
+//
+// It reads only manifests, never template bytes, and it deliberately does not
+// admit anything. Full digest verification stays on the first Resolve for the
+// exact compatibility key an assignment asks for.
+func (c *SnapshotTemplateCache) HasTemplateForBundle(
+	identity SnapshotTemplateBundleIdentity,
+) (bool, error) {
+	if c == nil {
+		return false, fmt.Errorf("SecondBox snapshot template cache is required")
+	}
+	if err := identity.validate(); err != nil {
+		return false, err
+	}
+	entries, err := os.ReadDir(c.root)
+	if err != nil {
+		return false, fmt.Errorf("read snapshot template cache root: %w", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), snapshotTemplateStagingPrefix) {
+			continue
+		}
+		manifest, err := readSnapshotTemplateManifest(filepath.Join(c.root, entry.Name()))
+		if err != nil {
+			// A directory that is not a valid published template is not this
+			// runner's compatible template, and it is not a reason to refuse
+			// every other one. The templates that matter are the ones whose
+			// manifest reads, validates, and matches.
+			continue
+		}
+		if manifest.TemplateID != entry.Name() {
+			continue
+		}
+		if manifest.Key.ArtifactVersion == identity.ArtifactVersion &&
+			manifest.Key.Architecture == identity.Architecture &&
+			manifest.Key.RuntimeBundleDigest == identity.RuntimeBundleDigest &&
+			manifest.Key.ToolchainBundleDigest == identity.ToolchainBundleDigest {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func readSnapshotTemplateManifest(dir string) (SnapshotTemplateManifest, error) {
+	manifestBytes, err := os.ReadFile(filepath.Join(dir, snapshotTemplateManifestName))
+	if err != nil {
+		return SnapshotTemplateManifest{}, fmt.Errorf("read snapshot template manifest: %w", err)
+	}
+	var manifest SnapshotTemplateManifest
+	decoder := json.NewDecoder(strings.NewReader(string(manifestBytes)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&manifest); err != nil {
+		return SnapshotTemplateManifest{}, fmt.Errorf("decode snapshot template manifest: %w", err)
+	}
+	if err := manifest.validate(); err != nil {
+		return SnapshotTemplateManifest{}, err
+	}
+	return manifest, nil
+}
+
 func admitSnapshotTemplate(dir string, key SnapshotTemplateKey, templateID string) (*AdmittedSnapshotTemplate, error) {
 	manifestBytes, err := os.ReadFile(filepath.Join(dir, snapshotTemplateManifestName))
 	if err != nil {

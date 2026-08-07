@@ -390,3 +390,23 @@ func TestStartupGuestBootArgsSelectsTemplateModeOnly(t *testing.T) {
 		t.Fatalf("template boot arguments = %s", template)
 	}
 }
+
+// TestAssignmentStartupModeRefusesWhatThisRunnerCannotHonour pins the fail-closed
+// gate. Cold boot is the runner's one implemented start path; a snapshot_resume
+// assignment is refused with the same retryable template-unavailability the
+// resume path raises, because quietly cold booting it would be exactly the
+// silent fallback a snapshot_resume Profile is defined not to have.
+func TestAssignmentStartupModeRefusesWhatThisRunnerCannotHonour(t *testing.T) {
+	if err := validateAssignmentStartupMode(assignmentStartupModeColdBoot); err != nil {
+		t.Fatalf("cold_boot startup mode was refused: %v", err)
+	}
+	err := validateAssignmentStartupMode(assignmentStartupModeSnapshotResume)
+	if !errors.Is(err, ErrSnapshotTemplateUnavailable) {
+		t.Fatalf("snapshot_resume error = %v, want ErrSnapshotTemplateUnavailable", err)
+	}
+	for _, mode := range []string{"", "ephemeral", "warm_pool"} {
+		if err := validateAssignmentStartupMode(mode); err == nil {
+			t.Errorf("startup mode %q was accepted", mode)
+		}
+	}
+}

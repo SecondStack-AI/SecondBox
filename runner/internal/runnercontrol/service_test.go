@@ -1218,6 +1218,7 @@ func resolvedAssignmentCommand() *runnerprotocol.AssignmentCommand {
 			MemoryBytes:        4 << 30,
 			DiskBytes:          16 << 30,
 			Architecture:       "amd64",
+			StartupMode:        "cold_boot",
 			MaximumOperationMs: 30_000,
 			MaximumOutputBytes: 8 << 20,
 		},

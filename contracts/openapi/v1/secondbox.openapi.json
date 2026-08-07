@@ -1780,13 +1780,14 @@
       "ProfileRevisionSpec": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["pool", "architecture", "runtimeBundleDigest", "toolchainBundleDigest", "resources", "lifecycle", "retention", "execution", "network", "ports"],
+        "required": ["pool", "architecture", "runtimeBundleDigest", "toolchainBundleDigest", "resources", "startup", "lifecycle", "retention", "execution", "network", "ports"],
         "properties": {
           "pool": {"type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[a-z][a-z0-9-]*$"},
           "architecture": {"type": "string", "enum": ["amd64", "arm64"]},
           "runtimeBundleDigest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
           "toolchainBundleDigest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
           "resources": {"$ref": "#/components/schemas/ResourcePolicy"},
+          "startup": {"$ref": "#/components/schemas/StartupPolicy"},
           "lifecycle": {"$ref": "#/components/schemas/LifecyclePolicy"},
           "retention": {"$ref": "#/components/schemas/RetentionPolicy"},
           "execution": {"$ref": "#/components/schemas/ExecutionPolicy"},
@@ -1804,6 +1805,20 @@
           "workspaceBytes": {"type": "integer", "format": "int64", "minimum": 1048576},
           "processLimit": {"type": "integer", "minimum": 1},
           "concurrentOperations": {"type": "integer", "minimum": 1}
+        }
+      },
+      "StartupMode": {
+        "type": "string",
+        "description": "cold_boot starts a Sandbox by booting its guest. snapshot_resume resumes a prepared, identity-neutral guest, admits only onto Runners advertising the snapshot-resume capability, and never falls back to cold_boot.",
+        "enum": ["cold_boot", "snapshot_resume"]
+      },
+      "StartupPolicy": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "How every Instance of this Profile revision reaches ready. There is no default; an operator states the mode on every Profile revision and the immutable revision pins it.",
+        "required": ["mode"],
+        "properties": {
+          "mode": {"$ref": "#/components/schemas/StartupMode"}
         }
       },
       "LifecyclePolicy": {
@@ -1916,7 +1931,7 @@
         "uniqueItems": true,
         "items": {
           "type": "string",
-          "enum": ["compute", "network-policy", "storage", "cleanup", "local-workspace", "workspace-relocation", "exec-streaming", "file-streaming", "pty", "port-proxy", "evidence"]
+          "enum": ["compute", "network-policy", "storage", "cleanup", "local-workspace", "snapshot-resume", "workspace-relocation", "exec-streaming", "file-streaming", "pty", "port-proxy", "evidence"]
         }
       },
       "RunnerCapacityPolicy": {
@@ -1985,7 +2000,7 @@
           "state": {"type": "string", "enum": ["enrolling", "enrolled", "connected", "ready", "draining", "drained", "offline"]},
           "credentialState": {"type": "string", "enum": ["pre_shared"]},
           "architectures": {"type": "array", "maxItems": 8, "uniqueItems": true, "items": {"type": "string", "enum": ["amd64", "arm64"]}},
-          "capabilities": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "enum": ["compute", "network-policy", "storage", "cleanup", "local-workspace", "exec-streaming", "file-streaming", "pty", "port-proxy", "evidence"]}},
+          "capabilities": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "enum": ["compute", "network-policy", "storage", "cleanup", "local-workspace", "snapshot-resume", "exec-streaming", "file-streaming", "pty", "port-proxy", "evidence"]}},
           "capacity": {"type": "object", "maxProperties": 32, "additionalProperties": {"type": "integer", "format": "int64", "minimum": 0}},
           "protocolVersions": {"type": "array", "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 32}},
           "sandboxStartSampleCount": {"type": "integer", "format": "int64", "minimum": 0},
@@ -2918,6 +2933,7 @@
           "generation_fenced",
           "lease_fenced",
           "profile_unavailable",
+          "startup_mode_unsupported",
           "home_runner_unavailable",
           "sandbox_not_stopped",
           "workspace_relocation_snapshots_present",

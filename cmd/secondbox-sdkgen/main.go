@@ -55,6 +55,7 @@ var goContractSchemas = stringSet([]string{
 	"SandboxTiming",
 	"Snapshot",
 	"SnapshotPage",
+	"StartupPolicy",
 })
 
 type document struct {

@@ -118,6 +118,7 @@ func liveProfileRevisionSpec() secondboxclient.ProfileRevisionSpec {
 			CPUMillis: 1000, MemoryBytes: 1 << 30, WorkspaceBytes: 8 << 30,
 			ProcessLimit: 128, ConcurrentOperations: 4,
 		},
+		Startup: secondboxclient.StartupPolicy{Mode: secondboxclient.StartupModeColdBoot},
 		Lifecycle: secondboxclient.LifecyclePolicy{
 			InitialState: "stopped", DrainGraceSeconds: 30, IdleSeconds: 300,
 			MaximumDurationSeconds: 3600, LeaseSeconds: 60,

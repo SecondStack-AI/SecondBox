@@ -28,12 +28,15 @@ Registration reports:
 - software and runner-protocol versions;
 - architecture and kernel evidence;
 - verified KVM, Firecracker, jailer, cgroup, networking, storage, cleanup, and caller-facing data-plane capabilities;
+- whether the Runner can start a Sandbox by resuming a prepared guest;
 - supported guest-protocol generations;
 - verified immutable image and toolchain cache entries;
 - allocatable and currently reserved vCPU, memory, disk, Instance, and operation capacity;
 - the advertised caller-facing Port data-plane address.
 
-The runner performs prerequisite and trust validation before advertising schedulable capacity. Instance capacity and concurrent data-plane operation capacity are independent bounds; Profile operation limits reserve the latter while a Sandbox Instance is active. Missing KVM, required network controls, trust anchors, storage health, cleanup capability, or a bound caller-facing data-plane listener make it unready. The control plane treats claims as evidence for scheduling, not as authority to change a ProfileRevision.
+The runner performs prerequisite and trust validation before advertising schedulable capacity. Instance capacity and concurrent data-plane operation capacity are independent bounds; Profile operation limits reserve the latter while a Sandbox Instance is active. Missing KVM, required network controls, trust anchors, storage health, cleanup capability, or a bound caller-facing data-plane listener make it unready.
+
+Resume capacity is optional evidence rather than a prerequisite. A Runner reports it only when it is configured with a resume template cache root, requires the jailer, and already holds a template built from the exact signed execution bundle it verified; the control plane then records the provider-neutral `snapshot-resume` capability, which is the only way a `snapshot_resume` ProfileRevision is admitted. A Runner without it registers and schedules normally for `cold_boot` Profiles. Each Assignment carries the ProfileRevision's startup mode, and a Runner that cannot honour the stated mode fails the Assignment before creating any Workspace, TAP, or jail rather than substituting the other mode. The control plane treats claims as evidence for scheduling, not as authority to change a ProfileRevision.
 
 Heartbeats carry monotonically increasing sequence numbers, connection identity, capacity, active assignment summaries, and drain state. A heartbeat is runner liveness; it is not Sandbox useful activity.
 

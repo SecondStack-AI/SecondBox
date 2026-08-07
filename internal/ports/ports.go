@@ -9,15 +9,20 @@ import (
 )
 
 var (
-	ErrAuthenticationFailed        = errors.New("SecondBox credential authentication failed")
-	ErrAuthorizationDenied         = errors.New("SecondBox authorization denied")
-	ErrInvalidRequest              = errors.New("SecondBox request is invalid")
-	ErrProfileNotFound             = errors.New("SecondBox Profile not found")
-	ErrProfileDisabled             = errors.New("SecondBox Profile is disabled")
-	ErrRunnerPoolNotFound          = errors.New("SecondBox RunnerPool not found")
-	ErrRunnerPoolExists            = errors.New("SecondBox RunnerPool already exists")
-	ErrRunnerNotFound              = errors.New("SecondBox Runner not found")
-	ErrRunnerPoolUnavailable       = errors.New("SecondBox compatible runner pool unavailable")
+	ErrAuthenticationFailed  = errors.New("SecondBox credential authentication failed")
+	ErrAuthorizationDenied   = errors.New("SecondBox authorization denied")
+	ErrInvalidRequest        = errors.New("SecondBox request is invalid")
+	ErrProfileNotFound       = errors.New("SecondBox Profile not found")
+	ErrProfileDisabled       = errors.New("SecondBox Profile is disabled")
+	ErrRunnerPoolNotFound    = errors.New("SecondBox RunnerPool not found")
+	ErrRunnerPoolExists      = errors.New("SecondBox RunnerPool already exists")
+	ErrRunnerNotFound        = errors.New("SecondBox Runner not found")
+	ErrRunnerPoolUnavailable = errors.New("SecondBox compatible runner pool unavailable")
+	// ErrStartupModeUnsupported reports that the Profile's RunnerPool does not
+	// declare the capability its startup mode requires. It is not retryable:
+	// no Runner in that pool is admissible until an operator either declares the
+	// capability on the pool or revises the Profile's startup mode.
+	ErrStartupModeUnsupported      = errors.New("SecondBox RunnerPool does not support the Profile startup mode")
 	ErrSandboxNotFound             = errors.New("SecondBox Sandbox not found")
 	ErrSandboxNameConflict         = errors.New("SecondBox Sandbox name is already in use")
 	ErrIdempotencyConflict         = errors.New("SecondBox idempotency key payload conflict")

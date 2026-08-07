@@ -255,6 +255,10 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 	if err != nil {
 		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Firecracker readiness host kernel evidence: %w", err)
 	}
+	snapshotResumeReady, err := b.snapshotResumeReady(cfg, manifest)
+	if err != nil {
+		return runnercontrol.BackendReadiness{}, err
+	}
 	return runnercontrol.BackendReadiness{
 		Architecture: runtime.GOARCH,
 		Capacity:     runnerAllocatableCapacity(cfg),
@@ -273,6 +277,7 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 				Minimum: manifest.GuestProtocol.Minimum,
 				Maximum: manifest.GuestProtocol.Maximum,
 			},
+			SnapshotResumeReady: snapshotResumeReady,
 		},
 		ArtifactCache: artifactCacheEvidenceForManifest(manifest, time.Now().UTC()),
 	}, nil
@@ -280,6 +285,40 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 
 func firecrackerJailerReady(cfg *config.Config) bool {
 	return !cfg.MicroVMAllowUnjailed
+}
+
+// snapshotResumeReady is the exact condition under which this runner may attract
+// snapshot_resume Profiles. Both halves are load bearing.
+//
+// The jailer is not a policy preference: Firecracker opens every block device at
+// the path the VM state recorded, during the load, so only a chroot-relative
+// name lets each Instance open its own staged disks. An unjailed runner cannot
+// resume at all.
+//
+// The template must already exist and must have been built from the exact signed
+// bundle this runner verified. A Profile pins runtime and toolchain digests and
+// the runner refuses any assignment whose signed components differ from its own,
+// so a template keyed to this bundle is a template compatible with every Profile
+// this runner can serve. A runner with a configured but empty cache advertises
+// nothing, because snapshot resume has no cold-boot fallback and a Profile
+// placed here would fail every start.
+func (b *AssignmentBackend) snapshotResumeReady(
+	cfg *config.Config,
+	manifest signedArtifactManifest,
+) (bool, error) {
+	if cfg.MicroVMAllowUnjailed || b.manager == nil || b.manager.snapshotTemplates == nil {
+		return false, nil
+	}
+	ready, err := b.manager.snapshotTemplates.HasTemplateForBundle(SnapshotTemplateBundleIdentity{
+		ArtifactVersion:       manifest.ArtifactVersion,
+		Architecture:          manifest.Architecture,
+		RuntimeBundleDigest:   manifest.RuntimeBundle.ManifestDigest,
+		ToolchainBundleDigest: manifest.ToolchainBundle.ManifestDigest,
+	})
+	if err != nil {
+		return false, fmt.Errorf("SecondBox Firecracker readiness snapshot-resume template cache: %w", err)
+	}
+	return ready, nil
 }
 
 func runnerAllocatableCapacity(cfg *config.Config) *runnerprotocol.Capacity {
@@ -397,6 +436,9 @@ func (b *AssignmentBackend) ValidateAssignment(
 			return fmt.Errorf("SecondBox Firecracker assignment requires unsupported capability %q", capability)
 		}
 	}
+	if err := validateAssignmentStartupMode(requirements.StartupMode); err != nil {
+		return err
+	}
 	if int(requirements.VcpuCount) > b.manager.cfg.MicroVMVCPUs ||
 		int(requirements.VcpuMillis) > b.manager.cfg.MicroVMVCPUs*1000 ||
 		int(requirements.MemoryBytes/mib) > b.manager.cfg.MicroVMMemoryMiB ||
@@ -417,6 +459,40 @@ func (b *AssignmentBackend) ValidateAssignment(
 
 func (b *AssignmentBackend) checkWorkspaceAdmission(ctx context.Context, requestedBytes uint64) error {
 	return b.storagePressure.CheckAdmission(ctx, requestedBytes)
+}
+
+// The provider-neutral startup modes an immutable Profile revision may pin. They
+// are wire values of the runner protocol, so they are stated here rather than
+// imported: the runner is a separate module and never links the control plane.
+const (
+	assignmentStartupModeColdBoot       = "cold_boot"
+	assignmentStartupModeSnapshotResume = "snapshot_resume"
+)
+
+// validateAssignmentStartupMode refuses an assignment whose startup mode this
+// runner cannot honour, before any Workspace, TAP, or jail is created.
+//
+// snapshot_resume is refused because the production resume start path does not
+// exist yet. That refusal is the point: a snapshot_resume Profile that quietly
+// cold booted would be the silent fallback the design forbids, and the Sandbox
+// would come up without the identity-neutral template, the shared golden memory
+// inode, or the one-time assignment bind that define the mode. The error is the
+// same retryable template-unavailability the resume path itself raises, so an
+// operator sees one classification for "this Runner cannot resume right now".
+func validateAssignmentStartupMode(mode string) error {
+	switch mode {
+	case assignmentStartupModeColdBoot:
+		return nil
+	case assignmentStartupModeSnapshotResume:
+		return fmt.Errorf(
+			"%w: this Runner has no snapshot-resume start path for assignment startup mode %q",
+			ErrSnapshotTemplateUnavailable, mode,
+		)
+	case "":
+		return fmt.Errorf("SecondBox Firecracker assignment startup mode is required")
+	default:
+		return fmt.Errorf("SecondBox Firecracker assignment startup mode %q is unsupported", mode)
+	}
 }
 
 // StartAssignment launches one already-validated profile-resolved assignment.

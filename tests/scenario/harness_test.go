@@ -228,6 +228,7 @@ func scenarioProfileSpec(t *testing.T, initialState string) contracts.ProfileRev
 			ProcessLimit:         128,
 			ConcurrentOperations: 2,
 		},
+		Startup: contracts.StartupPolicy{Mode: contracts.StartupModeColdBoot},
 		Lifecycle: contracts.LifecyclePolicy{
 			InitialState:           initialState,
 			DrainGraceSeconds:      5,

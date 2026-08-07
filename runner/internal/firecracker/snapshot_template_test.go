@@ -591,3 +591,92 @@ func TestHostCPUCompatibilityFingerprintReadsHost(t *testing.T) {
 		t.Fatalf("host fingerprint %q is not a SHA-256 hex digest", fingerprint)
 	}
 }
+
+// TestSnapshotTemplateBundleLookupGatesRunnerResumeCapacity pins the condition a
+// runner advertises snapshot-resume capacity on. An empty cache, or a cache
+// holding only templates built from a different signed bundle, must report no
+// capacity: resume has no cold-boot fallback, so advertising it without a usable
+// template would attract Profiles that could never start.
+func TestSnapshotTemplateBundleLookupGatesRunnerResumeCapacity(t *testing.T) {
+	cache, err := NewSnapshotTemplateCache(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := testSnapshotTemplateKey()
+	identity := SnapshotTemplateBundleIdentity{
+		ArtifactVersion:       key.ArtifactVersion,
+		Architecture:          key.Architecture,
+		RuntimeBundleDigest:   key.RuntimeBundleDigest,
+		ToolchainBundleDigest: key.ToolchainBundleDigest,
+	}
+
+	ready, err := cache.HasTemplateForBundle(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready {
+		t.Fatal("an empty cache reported snapshot-resume capacity")
+	}
+
+	// A template from a different toolchain bundle is not this runner's template.
+	otherKey := key
+	otherKey.ToolchainBundleDigest = "sha256:" + strings.Repeat("9", 64)
+	stageTestSnapshotTemplate(t, cache, otherKey)
+	ready, err = cache.HasTemplateForBundle(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready {
+		t.Fatal("a template from another signed bundle reported snapshot-resume capacity")
+	}
+
+	stageTestSnapshotTemplate(t, cache, key)
+	ready, err = cache.HasTemplateForBundle(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ready {
+		t.Fatal("a template built from this bundle did not report snapshot-resume capacity")
+	}
+
+	// An incomplete bundle identity can never be proved, so it is refused rather
+	// than silently matching whatever the cache happens to hold.
+	if _, err := cache.HasTemplateForBundle(SnapshotTemplateBundleIdentity{
+		ArtifactVersion: key.ArtifactVersion,
+	}); err == nil {
+		t.Fatal("an incomplete bundle identity was accepted")
+	}
+}
+
+// TestSnapshotTemplateBundleLookupIgnoresStagingAndUnreadableDirectories proves
+// the lookup answers from published templates only. A staging directory is a
+// build in progress and a directory without a valid manifest is not a template.
+func TestSnapshotTemplateBundleLookupIgnoresStagingAndUnreadableDirectories(t *testing.T) {
+	root := t.TempDir()
+	cache, err := NewSnapshotTemplateCache(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := testSnapshotTemplateKey()
+	identity := SnapshotTemplateBundleIdentity{
+		ArtifactVersion:       key.ArtifactVersion,
+		Architecture:          key.Architecture,
+		RuntimeBundleDigest:   key.RuntimeBundleDigest,
+		ToolchainBundleDigest: key.ToolchainBundleDigest,
+	}
+	stageDir, err := cache.StageDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTemplateFile(t, filepath.Join(stageDir, snapshotTemplateVMStateName), "vm state")
+	if err := os.MkdirAll(filepath.Join(root, "not-a-template"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := cache.HasTemplateForBundle(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready {
+		t.Fatal("staging and non-template directories reported snapshot-resume capacity")
+	}
+}

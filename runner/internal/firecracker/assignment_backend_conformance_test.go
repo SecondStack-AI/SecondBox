@@ -323,6 +323,7 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 				MemoryBytes:  512 << 20,
 				DiskBytes:    1024 << 20,
 				Architecture: runtime.GOARCH,
+				StartupMode:  "cold_boot",
 				RequiredCapabilities: []string{
 					"network-policy",
 					"storage",

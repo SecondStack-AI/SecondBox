@@ -75,6 +75,11 @@ message RunnerCapabilities {
   bool cleanup_ready = 9;
   ProtocolVersionRange guest_protocol_generations = 10;
   bool data_plane_ready = 11;
+  // snapshot_resume_ready is true only when this runner is configured with a
+  // resume template cache root, requires the jailer, and holds at least one
+  // admitted template built from the exact signed bundle it verified. It is not
+  // a prerequisite: a runner without it stays fully eligible for cold boot.
+  bool snapshot_resume_ready = 12;
 }
 
 message ArtifactCacheEvidence {
@@ -189,6 +194,11 @@ message ProfileRequirements {
   uint64 maximum_output_bytes = 7;
   uint32 vcpu_millis = 8;
   uint32 process_limit = 9;
+  // startup_mode is the immutable ProfileRevision startup policy, provider
+  // neutral and stated by the operator: "cold_boot" or "snapshot_resume". A
+  // runner that cannot honour the stated mode fails the assignment; it never
+  // substitutes the other one.
+  string startup_mode = 10;
 }
 
 message SignedAssetReference {

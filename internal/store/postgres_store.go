@@ -1174,6 +1174,14 @@ func ensureCompatibleRunnerPool(ctx context.Context, tx pgx.Tx, spec contracts.P
 	if !contains(architectures, spec.Architecture) || !isScopeSubset(requiredCapabilities, capabilities) {
 		return ports.ErrRunnerPoolUnavailable
 	}
+	// The pool's declaration is the operator's statement of what the pool serves.
+	// A snapshot_resume Profile aimed at a pool that never declares resume
+	// capacity is a standing incompatibility, not a transient shortage, so it is
+	// refused non-retryably and distinctly from an empty or draining pool.
+	if spec.Startup.Mode == contracts.StartupModeSnapshotResume &&
+		!contains(capabilities, contracts.RunnerCapabilitySnapshotResume) {
+		return ports.ErrStartupModeUnsupported
+	}
 	return nil
 }
 

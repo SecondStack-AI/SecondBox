@@ -1228,6 +1228,10 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 		spec.Resources.ProcessLimit < 1 || spec.Resources.ConcurrentOperations < 1 {
 		return invalidRequest(errors.New("SecondBox Profile resource limits must be positive"))
 	}
+	if spec.Startup.Mode != contracts.StartupModeColdBoot &&
+		spec.Startup.Mode != contracts.StartupModeSnapshotResume {
+		return invalidRequest(errors.New("SecondBox Profile startup mode must be cold_boot or snapshot_resume"))
+	}
 	if spec.Lifecycle.InitialState != contracts.SandboxDesiredStateStopped &&
 		spec.Lifecycle.InitialState != contracts.SandboxDesiredStateRunning {
 		return invalidRequest(errors.New("SecondBox Profile initial state must be stopped or running"))

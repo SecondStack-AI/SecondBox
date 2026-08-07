@@ -386,3 +386,47 @@ func insertPlacementReservation(
 		t.Fatal(err)
 	}
 }
+
+// TestRunnerPlacementRequiresSnapshotResumeCapacityForResumeProfiles pins the
+// second, independent placement filter. A Sandbox never leaves its home Runner,
+// so the Runner chosen at creation has to satisfy the startup mode the Profile
+// revision pins for every Instance it will ever host.
+func TestRunnerPlacementRequiresSnapshotResumeCapacityForResumeProfiles(t *testing.T) {
+	coldOnly := runnerPlacementCandidate{
+		id: "runner-cold-only", poolName: "pool", state: "ready", drainPhase: "active",
+		activeConnectionID: "connection", architectures: []string{"amd64"},
+		capabilities: []string{"compute", "local-workspace"},
+		allocatable: runnerCapacity{
+			CPUMillis: 4000, MemoryBytes: 8 << 30, DiskBytes: 8 << 30, Instances: 4, Operations: 8,
+		},
+	}
+	resumeCapable := coldOnly
+	resumeCapable.id = "runner-resume"
+	resumeCapable.capabilities = []string{"compute", "local-workspace", "snapshot-resume"}
+
+	coldSpec := placementTestSpec("pool")
+	coldSpec.Startup = contracts.StartupPolicy{Mode: contracts.StartupModeColdBoot}
+	resumeSpec := placementTestSpec("pool")
+	resumeSpec.Startup = contracts.StartupPolicy{Mode: contracts.StartupModeSnapshotResume}
+
+	for _, testCase := range []struct {
+		name      string
+		candidate runnerPlacementCandidate
+		spec      contracts.ProfileRevisionSpec
+		want      bool
+	}{
+		{"cold Profile on cold Runner", coldOnly, coldSpec, true},
+		{"cold Profile on resume Runner", resumeCapable, coldSpec, true},
+		{"resume Profile on cold Runner", coldOnly, resumeSpec, false},
+		{"resume Profile on resume Runner", resumeCapable, resumeSpec, true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := runnerPlacementCompatible(
+				testCase.candidate, testCase.spec, runnerPlacementOptions{}, runnerCapacity{},
+			)
+			if got != testCase.want {
+				t.Fatalf("compatible = %t, want %t", got, testCase.want)
+			}
+		})
+	}
+}

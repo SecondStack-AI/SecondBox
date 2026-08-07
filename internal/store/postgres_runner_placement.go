@@ -225,6 +225,13 @@ func runnerPlacementCompatible(
 			!contains(candidate.protocolVersions, "2")) {
 		return false
 	}
+	// A Sandbox never leaves its home Runner, so the startup mode a Profile pins
+	// has to be satisfiable by the Runner chosen here, at creation, and by every
+	// later Instance assignment onto that same Runner.
+	if spec.Startup.Mode == contracts.StartupModeSnapshotResume &&
+		!contains(candidate.capabilities, contracts.RunnerCapabilitySnapshotResume) {
+		return false
+	}
 	return candidate.allocatable.CPUMillis-reserved.CPUMillis >= spec.Resources.CPUMillis &&
 		candidate.allocatable.MemoryBytes-reserved.MemoryBytes >= spec.Resources.MemoryBytes &&
 		candidate.allocatable.DiskBytes-reserved.DiskBytes >= spec.Resources.WorkspaceBytes &&

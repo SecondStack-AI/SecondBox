@@ -350,6 +350,98 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 		}
 	})
 
+	t.Run("startup policy is required and provider neutral", func(t *testing.T) {
+		spec := componentSchema(t, document, "ProfileRevisionSpec")
+		properties := object(t, spec["properties"], "ProfileRevisionSpec.properties")
+		if _, exists := properties["startup"]; !exists {
+			t.Fatal("ProfileRevisionSpec has no startup policy")
+		}
+		required := map[string]bool{}
+		for _, value := range array(t, spec["required"], "ProfileRevisionSpec.required") {
+			required[value.(string)] = true
+		}
+		// The control plane has no application default for the startup mode, so
+		// the contract itself must refuse a revision that omits it.
+		if !required["startup"] {
+			t.Error("ProfileRevisionSpec startup policy must be required, not defaulted")
+		}
+		policy := componentSchema(t, document, "StartupPolicy")
+		policyRequired := map[string]bool{}
+		for _, value := range array(t, policy["required"], "StartupPolicy.required") {
+			policyRequired[value.(string)] = true
+		}
+		if !policyRequired["mode"] {
+			t.Error("StartupPolicy mode must be required")
+		}
+		modes := map[string]bool{}
+		for _, value := range array(
+			t, componentSchema(t, document, "StartupMode")["enum"], "StartupMode.enum",
+		) {
+			modes[value.(string)] = true
+		}
+		if len(modes) != 2 || !modes["cold_boot"] || !modes["snapshot_resume"] {
+			t.Errorf("StartupMode enum = %v, want exactly cold_boot and snapshot_resume", modes)
+		}
+		// The plan's non-goals forbid an ephemeral Profile or lifecycle concept.
+		if modes["ephemeral"] {
+			t.Error("StartupMode introduced an ephemeral Profile class")
+		}
+		encoded, err := json.Marshal([]any{policy, componentSchema(t, document, "StartupMode")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		lower := strings.ToLower(string(encoded))
+		for _, forbidden := range []string{
+			"firecracker", "kvm", "jailer", "memoryfile", "memory_file", "vmstate", "vm_state",
+			"vsock", "tap", "hostpath", "host_path", "templateid", "template_id", "cputemplate",
+			"cachekey", "cache_key", "ephemeral",
+		} {
+			if strings.Contains(lower, forbidden) {
+				t.Errorf("public startup policy exposes %q: %s", forbidden, encoded)
+			}
+		}
+	})
+
+	t.Run("snapshot-resume capacity is a provider-neutral Runner capability", func(t *testing.T) {
+		capabilities := map[string]bool{}
+		for _, value := range array(
+			t,
+			object(
+				t,
+				componentSchema(t, document, "RunnerCapabilityList")["items"],
+				"RunnerCapabilityList.items",
+			)["enum"],
+			"RunnerCapabilityList.items.enum",
+		) {
+			capabilities[value.(string)] = true
+		}
+		if !capabilities["snapshot-resume"] {
+			t.Error("RunnerPool capabilities cannot declare snapshot-resume capacity")
+		}
+		runnerCapabilityItems := object(
+			t,
+			object(
+				t,
+				object(
+					t,
+					componentSchema(t, document, "Runner")["properties"],
+					"Runner.properties",
+				)["capabilities"],
+				"Runner.properties.capabilities",
+			)["items"],
+			"Runner.properties.capabilities.items",
+		)
+		runnerCapabilities := map[string]bool{}
+		for _, value := range array(
+			t, runnerCapabilityItems["enum"], "Runner.properties.capabilities.items.enum",
+		) {
+			runnerCapabilities[value.(string)] = true
+		}
+		if !runnerCapabilities["snapshot-resume"] {
+			t.Error("Runner capabilities cannot advertise snapshot-resume capacity")
+		}
+	})
+
 	t.Run("timing projections are bounded and provider neutral", func(t *testing.T) {
 		components := object(t, document["components"], "components")
 		parameters := object(t, components["parameters"], "components.parameters")

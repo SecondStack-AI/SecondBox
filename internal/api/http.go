@@ -1244,6 +1244,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusConflict, "workspace_relocation_target_unavailable", "Workspace relocation target is unavailable or incompatible", true
 	case errors.Is(err, ports.ErrHomeRunnerUnavailable):
 		return http.StatusServiceUnavailable, "home_runner_unavailable", "Sandbox home runner is unavailable", true
+	case errors.Is(err, ports.ErrStartupModeUnsupported):
+		return http.StatusConflict, "startup_mode_unsupported", "Profile startup mode is not supported by its RunnerPool", false
 	case errors.Is(err, ports.ErrRunnerPoolUnavailable):
 		return http.StatusConflict, "execution_node_unavailable", "Compatible execution node unavailable", true
 	case errors.Is(err, ports.ErrRunnerPoolExists):

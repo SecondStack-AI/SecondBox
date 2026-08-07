@@ -128,6 +128,7 @@ func agentSpec(pool, runtimeDigest, toolchainDigest string) secondboxclient.Prof
 	return secondboxclient.ProfileRevisionSpec{
 		Pool: pool, Architecture: ArchitectureAMD64, RuntimeBundleDigest: runtimeDigest, ToolchainBundleDigest: toolchainDigest,
 		Resources: secondboxclient.ResourcePolicy{CPUMillis: 1000, MemoryBytes: 1 << 30, WorkspaceBytes: 2 << 30, ProcessLimit: 64, ConcurrentOperations: 4},
+		Startup:   secondboxclient.StartupPolicy{Mode: secondboxclient.StartupModeColdBoot},
 		Lifecycle: secondboxclient.LifecyclePolicy{InitialState: secondboxclient.SandboxDesiredStateRunning, DrainGraceSeconds: 10, IdleSeconds: 60, MaximumDurationSeconds: 900, LeaseSeconds: 60},
 		Retention: secondboxclient.RetentionPolicy{SnapshotLimit: 0, SnapshotRetentionSeconds: 3600, ArtifactRetentionSeconds: 86400},
 		Execution: secondboxclient.ExecutionPolicy{MaximumDeadlineMilliseconds: 120000, MaximumBufferedOutputBytes: 1 << 20, StreamWindowBytes: 64 << 10, MaximumTransferBytes: 256 << 20, TerminalDetachSeconds: 0, DataPlaneTransport: "proxied"},
@@ -140,6 +141,7 @@ func codingSpec(pool, runtimeDigest, toolchainDigest string) secondboxclient.Pro
 	return secondboxclient.ProfileRevisionSpec{
 		Pool: pool, Architecture: ArchitectureAMD64, RuntimeBundleDigest: runtimeDigest, ToolchainBundleDigest: toolchainDigest,
 		Resources: secondboxclient.ResourcePolicy{CPUMillis: 4000, MemoryBytes: 8 << 30, WorkspaceBytes: 50 << 30, ProcessLimit: 512, ConcurrentOperations: 16},
+		Startup:   secondboxclient.StartupPolicy{Mode: secondboxclient.StartupModeColdBoot},
 		Lifecycle: secondboxclient.LifecyclePolicy{InitialState: secondboxclient.SandboxDesiredStateRunning, DrainGraceSeconds: 120, IdleSeconds: 28800, MaximumDurationSeconds: 604800, LeaseSeconds: 300},
 		Retention: secondboxclient.RetentionPolicy{SnapshotLimit: 64, SnapshotRetentionSeconds: 2592000, ArtifactRetentionSeconds: 2592000},
 		Execution: secondboxclient.ExecutionPolicy{MaximumDeadlineMilliseconds: 86400000, MaximumBufferedOutputBytes: 16 << 20, StreamWindowBytes: 1 << 20, MaximumTransferBytes: 10 << 30, TerminalDetachSeconds: 86400, DataPlaneTransport: "proxied"},

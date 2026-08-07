@@ -50,24 +50,29 @@ type Config struct {
 	MicroVMStoragePressureWarningPercent       int
 	MicroVMStoragePressureAdmissionDenyPercent int
 	MicroVMAllowUnjailed                       bool
-	MicroVMGuestIP                             string
-	MicroVMBridgeName                          string
-	MicroVMBridgeCIDR                          string
-	MicroVMTapPrefix                           string
-	MicroVMMaxConcurrentPerSandbox             int
-	MicroVMMaxConcurrentGlobal                 int
-	MicroVMMaxConcurrentOperationsGlobal       int
-	MicroVMMemoryBudgetMiB                     int
-	MicroVMToolVMReuseEnabled                  bool
-	MicroVMToolVMIdleTTL                       time.Duration
-	FileTransferMaxBytes                       int64
-	NetworkPolicyNFTPath                       string
-	NetworkPolicyMaximumDNSPins                int
-	NetworkPolicyMaximumDNSTTL                 time.Duration
-	NetworkPolicyRunnerAddresses               []netip.Addr
-	NetworkPolicyManagementCIDRs               []netip.Prefix
-	NetworkPolicyRunnerGateways                map[string]netip.Addr
-	NetworkPolicyDNSUpstream                   netip.AddrPort
+	// MicroVMSnapshotTemplateCacheRoot is the operator-owned runner-local root
+	// for immutable snapshot-resume templates. It is required, so an operator
+	// always states where resume templates live; the runner advertises resume
+	// capacity only when the cache under it already holds a compatible template.
+	MicroVMSnapshotTemplateCacheRoot     string
+	MicroVMGuestIP                       string
+	MicroVMBridgeName                    string
+	MicroVMBridgeCIDR                    string
+	MicroVMTapPrefix                     string
+	MicroVMMaxConcurrentPerSandbox       int
+	MicroVMMaxConcurrentGlobal           int
+	MicroVMMaxConcurrentOperationsGlobal int
+	MicroVMMemoryBudgetMiB               int
+	MicroVMToolVMReuseEnabled            bool
+	MicroVMToolVMIdleTTL                 time.Duration
+	FileTransferMaxBytes                 int64
+	NetworkPolicyNFTPath                 string
+	NetworkPolicyMaximumDNSPins          int
+	NetworkPolicyMaximumDNSTTL           time.Duration
+	NetworkPolicyRunnerAddresses         []netip.Addr
+	NetworkPolicyManagementCIDRs         []netip.Prefix
+	NetworkPolicyRunnerGateways          map[string]netip.Addr
+	NetworkPolicyDNSUpstream             netip.AddrPort
 }
 
 func (c *Config) ToolVMReuseEffective() bool {
