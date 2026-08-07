@@ -158,6 +158,18 @@ These resolve questions the fixed architecture left open. Each states what the p
 
 **A failed resume is a failed start.** There is no retry inside the load, no second attempt with different parameters, and no cold boot. A template that is absent, incompatible, corrupted, or changed since admission fails with a typed retryable unavailability error and the Instance is torn down with its TAP, policy, guest IP, staged files, and Workspace attachment released.
 
+## Guest rebuild feasibility, 2026-08-06
+
+An earlier report from this work claimed an identity-neutral template was blocked because a rebuilt, re-signed rootfs could not be produced on the qualification host. That claim was wrong and is corrected here, because acting on it would have stalled Task 3 and Task 4 indefinitely.
+
+The private key for the currently qualified bundle's signing key `acf1b3a8…` is genuinely absent from this host. That is not the blocker it appeared to be. The runner takes its trust anchor as explicit operator-supplied runtime input — `SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY` and `SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256` — so a locally rebuilt bundle signed by a locally held key verifies through exactly the same three gates as the shipped one: checksum manifest, detached signature, and pinned key fingerprint. Nothing is weakened; the anchor is simply pinned to a key the qualification operator holds.
+
+Such a key is present, with its private half: `secondbox-task5-signing/signing.pem`, deriving public fingerprint `d2bde8b7…`. Two complete bundles on this host were built and signed with it, and the second one proves the incremental path this plan needs. `secondbox-task5-artifacts` and `secondbox-task5-artifacts-shutdown-fix` carry byte-identical `kernel`, `shared.img`, package locks, and license inventories, but different `rootfs.ext4` images — `5ec30581…` against `48383ded…` — with regenerated `manifest.json`, `manifest.sig`, `SHA256SUMS`, and contract files timestamped 1.5 hours later. Its signature verifies against its own `signing.pub`.
+
+A guest-agent-only rebuild is therefore a supported, already-exercised operation on this host: rebuild the rootfs with the new agent, re-sign with the held key, and qualify against that anchor. Task 3 and Task 4 are not blocked.
+
+What remains genuinely unproven is whether the jailed resume gate can run here. The jailer needs to chroot, chown, and drop UID, which the unprivileged test suite cannot do — but the scenario suite already runs every other privileged gate inside its privileged runner container, so the resume gate should be built there rather than as an unprivileged `go test`. That is the first thing to settle in Task 9.
+
 ## Non-goals
 
 - Do not trim the rootfs, remove packages, reduce the standard toolset, or treat image size reduction as the startup strategy.
