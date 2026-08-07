@@ -62,4 +62,6 @@ After readiness, a Runner may report natural guest shutdown, cgroup-proved resou
 
 The lifecycle worker claims due Sandboxes with `FOR UPDATE SKIP LOCKED`, an owner, expiry, and revision. It loads the pinned ProfileRevision, current Instance, authoritative home Workspace, mutation state, and active useful-session count, computes one action, and commits it only while the claim is current. Runner-facing Workspace create, start, stop, Snapshot, restore, relocation, and delete actions remain durable instructions until matching generation-bound receipts advance the next transition.
 
+The durable schedule is the sole authority over which Sandboxes hold reconciliation work. A Sandbox already holding its desired state with no deadline that could change the decision — stopped or failed while stopped is wanted, deleted while deleted is wanted — commits no next reconciliation deadline at all and leaves the claim scan until a lifecycle intent schedules it again. A decision that changes no field a caller can observe holds the public revision and updated timestamp where they are, so an `If-Match` precondition never loses a race to a transition that changed nothing.
+
 See [API conventions](api-conventions.md), [Workspace durability](workspace-durability.md), and [Recovery and reconciliation](recovery-and-reconciliation.md).
