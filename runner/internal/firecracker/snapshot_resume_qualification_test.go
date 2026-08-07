@@ -269,6 +269,13 @@ func buildSnapshotResumeTemplate(
 	case <-time.After(30 * time.Second):
 		t.Fatal("template source did not terminate")
 	}
+	// The VM state records the source's own drive paths. Remove them so a
+	// resumed Instance that silently opened the template source's disks instead
+	// of its own staged files fails loudly here rather than sharing one rootfs
+	// and one Workspace across every Instance.
+	if err := os.RemoveAll(inst.dir); err != nil {
+		t.Fatalf("remove template source run directory: %v", err)
+	}
 
 	key := snapshotResumeQualificationKey(t, cfg, opts, memoryMiB, workspaceMiB)
 	templateID, err := key.TemplateID()

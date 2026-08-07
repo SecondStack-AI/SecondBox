@@ -361,6 +361,113 @@ func TestResumeSnapshotTemplateLoadsThroughTheAPI(t *testing.T) {
 	}
 }
 
+func TestResumeSnapshotTemplateRepointsUnjailedDrivesBeforeResuming(t *testing.T) {
+	socketPath := shortUnixSocketPath(t, "firecracker.sock")
+	seen := make(chan apiCall, 8)
+	closeServer := startFakeFirecrackerAPIServer(t, socketPath, seen)
+	defer closeServer()
+
+	launch := snapshotResumeLaunch{
+		socketPath:          socketPath,
+		vmStateResolvedPath: "/cache/t/vmstate.snap",
+		memoryResolvedPath:  "/cache/t/memory.snap",
+		vsockResolvedPath:   "/run/fc/guest.vsock",
+		stagedDrives: []stagedResumeDrive{
+			{driveID: resumeRootfsDriveID, path: "/run/fc/rootfs.ext4"},
+			{driveID: resumeWorkspaceDriveID, path: "/run/fc/workspace.ext4"},
+		},
+	}
+	if err := resumeSnapshotTemplate(t.Context(), launch, "", 2*time.Second, 2*time.Second); err != nil {
+		t.Fatalf("resume unjailed template: %v", err)
+	}
+	calls := drainAPICalls(seen, 4)
+	if calls[0].Path != "/snapshot/load" {
+		t.Fatalf("first call = %#v", calls[0])
+	}
+	if calls[0].Body["resume_vm"] == true {
+		t.Fatal("an unjailed resume started the guest before repointing its drives")
+	}
+	if calls[1].Path != "/drives/rootfs" || calls[1].Body["path_on_host"] != "/run/fc/rootfs.ext4" {
+		t.Fatalf("rootfs repoint = %#v", calls[1])
+	}
+	if calls[2].Path != "/drives/workspace" || calls[2].Body["path_on_host"] != "/run/fc/workspace.ext4" {
+		t.Fatalf("workspace repoint = %#v", calls[2])
+	}
+	if calls[3].Path != "/vm" || calls[3].Body["state"] != "Resumed" {
+		t.Fatalf("resume call = %#v", calls[3])
+	}
+}
+
+func TestResumeSnapshotTemplateJailedResumesInOneCall(t *testing.T) {
+	socketPath := shortUnixSocketPath(t, "firecracker.sock")
+	seen := make(chan apiCall, 4)
+	closeServer := startFakeFirecrackerAPIServer(t, socketPath, seen)
+	defer closeServer()
+
+	launch := snapshotResumeLaunch{
+		socketPath:          socketPath,
+		jailRoot:            "/srv/jail/firecracker/fc-1/root",
+		vmStateResolvedPath: snapshotResumeVMStateName,
+		memoryResolvedPath:  snapshotResumeMemoryName,
+		vsockResolvedPath:   vsockUDSName,
+	}
+	if err := resumeSnapshotTemplate(t.Context(), launch, "agfc0a1b", 2*time.Second, 2*time.Second); err != nil {
+		t.Fatalf("resume jailed template: %v", err)
+	}
+	call := drainAPICalls(seen, 1)[0]
+	if call.Path != "/snapshot/load" || call.Body["resume_vm"] != true {
+		t.Fatalf("jailed resume did not resume in one call: %#v", call)
+	}
+	select {
+	case extra := <-seen:
+		t.Fatalf("jailed resume issued an extra call: %#v", extra)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestPrepareSnapshotResumeLaunchUnjailedStagesEveryDrive(t *testing.T) {
+	stubRootfsReflink(t)
+	_, template, _ := newResumeTestTemplate(t)
+	runDir := shortResumeDir(t)
+	manager := newResumeTestManager(t, runDir)
+	instanceDir := filepath.Join(runDir, "fc-resume")
+	if err := os.Mkdir(instanceDir, 0o700); err != nil {
+		t.Fatalf("create instance dir: %v", err)
+	}
+	sharedPath := filepath.Join(runDir, "shared-source.img")
+	if err := os.WriteFile(sharedPath, []byte("shared-bytes"), 0o600); err != nil {
+		t.Fatalf("write shared image: %v", err)
+	}
+	launch, err := manager.prepareSnapshotResumeLaunch(
+		"fc-resume",
+		instanceDir,
+		template,
+		writeResumeWorkspace(t, runDir),
+		sharedPath,
+		0,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("prepare unjailed resume: %v", err)
+	}
+	want := map[string]string{
+		resumeRootfsDriveID:    filepath.Join(instanceDir, snapshotTemplateRootfsName),
+		resumeWorkspaceDriveID: filepath.Join(instanceDir, workspaceName),
+		resumeSharedDriveID:    filepath.Join(instanceDir, sharedImageName),
+	}
+	if len(launch.stagedDrives) != len(want) {
+		t.Fatalf("staged drives = %+v, want %d entries", launch.stagedDrives, len(want))
+	}
+	for _, staged := range launch.stagedDrives {
+		if want[staged.driveID] != staged.path {
+			t.Fatalf("drive %q staged at %q, want %q", staged.driveID, staged.path, want[staged.driveID])
+		}
+		if _, err := os.Stat(staged.path); err != nil {
+			t.Fatalf("drive %q was not staged: %v", staged.driveID, err)
+		}
+	}
+}
+
 func TestResumeSnapshotTemplateFailsWhenTheProcessNeverListens(t *testing.T) {
 	launch := snapshotResumeLaunch{
 		socketPath:          filepath.Join(t.TempDir(), "absent.sock"),

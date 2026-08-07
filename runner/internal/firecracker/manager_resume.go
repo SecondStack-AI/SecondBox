@@ -25,6 +25,10 @@ const (
 	snapshotResumeMemoryName  = snapshotTemplateMemoryName
 
 	snapshotResumeNetworkInterfaceID = "eth0"
+
+	resumeRootfsDriveID    = "rootfs"
+	resumeWorkspaceDriveID = "workspace"
+	resumeSharedDriveID    = "shared"
 )
 
 // ErrSnapshotTemplateUnavailable marks a resume that cannot proceed because the
@@ -54,6 +58,15 @@ type snapshotResumeLaunch struct {
 	vmStateResolvedPath string
 	memoryResolvedPath  string
 	vsockResolvedPath   string
+	// stagedDrives repoints an unjailed Instance's block devices at its own
+	// staged files. It is empty under the jailer, where the recorded
+	// chroot-relative names already resolve inside this Instance's jail.
+	stagedDrives []stagedResumeDrive
+}
+
+type stagedResumeDrive struct {
+	driveID string
+	path    string
 }
 
 // stageSharedTemplateFile links an immutable template file into an Instance's
@@ -133,6 +146,16 @@ func (m *Manager) prepareSnapshotResumeLaunch(
 		if err := stageSnapshotResumeInstanceFiles(dir, template, workspacePath, sharedImagePath, 0, 0, false); err != nil {
 			return snapshotResumeLaunch{}, err
 		}
+		stagedDrives := []stagedResumeDrive{
+			{driveID: resumeRootfsDriveID, path: filepath.Join(dir, snapshotTemplateRootfsName)},
+			{driveID: resumeWorkspaceDriveID, path: filepath.Join(dir, workspaceName)},
+		}
+		if strings.TrimSpace(sharedImagePath) != "" {
+			stagedDrives = append(stagedDrives, stagedResumeDrive{
+				driveID: resumeSharedDriveID,
+				path:    filepath.Join(dir, sharedImageName),
+			})
+		}
 		return snapshotResumeLaunch{
 			executable:          m.cfg.FirecrackerPath,
 			args:                []string{"--id", instanceID, "--api-sock", socket},
@@ -141,6 +164,7 @@ func (m *Manager) prepareSnapshotResumeLaunch(
 			vmStateResolvedPath: template.VMStatePath,
 			memoryResolvedPath:  template.MemoryPath,
 			vsockResolvedPath:   vsockUDS,
+			stagedDrives:        stagedDrives,
 		}, nil
 	}
 
@@ -302,6 +326,14 @@ func snapshotResumeLoadRequest(launch snapshotResumeLaunch, tapName string) snap
 // resumeSnapshotTemplate waits for the restored process's API socket and loads
 // the template into it. It performs no retry and no fallback: a failed load is
 // a failed start.
+//
+// A jailed Instance's VM state records chroot-relative drive names, so the
+// files staged in its own jail are the ones Firecracker opens and the load can
+// resume the VM in one call. An unjailed Instance's VM state records the
+// template source's absolute paths, which belong to no Instance and may not
+// exist. It must load paused, repoint every block device at its own staged
+// file, and only then resume — the guest must never execute one instruction
+// against another Instance's disks. This is what PATCH /drives exists for.
 func resumeSnapshotTemplate(
 	ctx context.Context,
 	launch snapshotResumeLaunch,
@@ -313,8 +345,21 @@ func resumeSnapshotTemplate(
 		return fmt.Errorf("wait for restored Firecracker API socket: %w", err)
 	}
 	client := FirecrackerAPIClient{SocketPath: launch.socketPath, Timeout: loadTimeout}
-	if err := client.LoadSnapshotWithOptions(ctx, snapshotResumeLoadRequest(launch, tapName)); err != nil {
+	request := snapshotResumeLoadRequest(launch, tapName)
+	request.ResumeVM = len(launch.stagedDrives) == 0
+	if err := client.LoadSnapshotWithOptions(ctx, request); err != nil {
 		return fmt.Errorf("load snapshot template: %w", err)
+	}
+	if request.ResumeVM {
+		return nil
+	}
+	for _, staged := range launch.stagedDrives {
+		if err := client.UpdateDrivePath(ctx, staged.driveID, staged.path); err != nil {
+			return fmt.Errorf("repoint restored %q drive at this Instance's image: %w", staged.driveID, err)
+		}
+	}
+	if err := client.Resume(ctx); err != nil {
+		return fmt.Errorf("resume restored VM after repointing drives: %w", err)
 	}
 	return nil
 }
