@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.1 - 2026-08-07
+
+Repaired the idle accounting that made a restarted Sandbox unusable, and let a manifest name its Compose project so a second deployment cannot seize the first.
+
+Upgrading from v0.3.0 needs no operator action. There is no migration, no contract change, and the v0.3.0 microVM bundle and its trust anchor carry forward unchanged, so no Profile is re-pinned.
+
+### Fixed
+
+- A Sandbox restarted after its idle window elapsed is no longer drained as `idle_timeout` on its first reconciliation. Useful activity is generation-scoped everywhere it is recorded, but `sandboxes.last_activity_at` is one denormalized column that `finish_stop` never clears when it advances the generation, and `mark_ready` stamps it only through `COALESCE(last_activity_at, now)`, which is a no-op once it is set. A restarted Sandbox therefore came up holding the activity of the Instance that preceded it and was drained immediately — observed 244 ms after `ready_at` against a Profile with a 60 s idle timeout, leaving the Sandbox unusable for the rest of its life. `lifecycle.IdleSince` now bounds the idle window by readiness, because an Instance cannot have been idle for longer than it has been ready, and both the drain decision and the wake-up it schedules read that one reference so they cannot disagree. The public `lastActivityAt` is deliberately untouched: a stopped Sandbox still reports when it was last used ([#77](https://github.com/SecondStack-AI/SecondBox/pull/77)).
+- `secondbox-deploy` can deploy more than one stack on a host. `runCompose` passed the literal project name `secondbox` and `runDockerCompose` scrubs the environment to a Docker-client allowlist that excludes `COMPOSE_PROJECT_NAME`, so there was no override and a second deployment silently seized the first: Compose matched the running project by name, and `up --remove-orphans` bound the second deployment to the first's volumes — including `secondbox_postgres-data` — recreated its containers against the second's configuration, and deleted any container the second service set did not contain. An optional `deployment.compose_project_name`, validated against the Compose project grammar and threaded into `--project-name`, now names the project. Absent means the previous behavior exactly, so every manifest written before this key keeps deploying where it always did ([#76](https://github.com/SecondStack-AI/SecondBox/pull/76)).
+
 ## 0.3.0 - 2026-08-07
 
 Added snapshot-resume Sandbox startup. A `snapshot_resume` Profile reaches `ready` in 125/130 ms p50/p95 on the unsaturated `start → ready` path, against 447/489 ms for the same deployment's cold boot, measured end to end through the real control plane. Teardown got its own attribution and then its own fix, and resting Sandboxes stopped moving their public revision.
