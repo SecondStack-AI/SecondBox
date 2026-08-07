@@ -21,6 +21,10 @@ mkdir -p "$binary_dir"
 cd "$repo_root"
 CGO_ENABLED=0 GOOS=linux go build -trimpath -buildvcs=false -o "$binary_dir/secondboxd" ./cmd/secondboxd
 chmod 0755 "$binary_dir/secondboxd"
+# The Go live half is compiled before the fixture Runner is stamped alive so that
+# compilation never consumes the fixture's heartbeat window.
+go_live_test="$binary_dir/sdk-live.test"
+go test -c -tags=sdk_live -o "$go_live_test" ./tests/sdk-live
 
 pki_dir="$(mktemp -d "$binary_dir/runner-pki.XXXXXX")"
 export SECONDBOX_COMPOSE_TEST_PKI_DIR="$pki_dir"
@@ -117,9 +121,28 @@ if ! compose exec -T postgres psql \
   exit 1
 fi
 
+refresh_fixture_runner() {
+  local half="$1"
+  local refreshed
+  if ! refreshed="$(compose exec -T postgres psql \
+    --username secondbox \
+    --dbname secondbox_compose_test \
+    --set ON_ERROR_STOP=on \
+    --quiet --tuples-only --no-align <"$repo_root/scripts/compose-test-runner-heartbeat.sql")"; then
+    echo "SecondBox Compose smoke test failed: fixture Runner heartbeat refresh failed before the $half live half" >&2
+    exit 1
+  fi
+  if [[ "$refreshed" != "compose-live-runner" ]]; then
+    echo "SecondBox Compose smoke test failed: fixture Runner heartbeat refresh matched no Runner before the $half live half: $refreshed" >&2
+    exit 1
+  fi
+}
+
 export SECONDBOX_LIVE_BASE_URL="$live_base_url"
 export SECONDBOX_LIVE_PLATFORM_TOKEN="compose-test-platform-token-0000000000000000"
-go test -count=1 -tags=sdk_live -v ./tests/sdk-live
+refresh_fixture_runner Go
+"$go_live_test" -test.v
+refresh_fixture_runner TypeScript
 node --test tests/sdk-live/typescript_live.test.ts
 
 echo "SecondBox Compose smoke test passed: PostgreSQL readiness and live Go/TypeScript SDK contracts"
