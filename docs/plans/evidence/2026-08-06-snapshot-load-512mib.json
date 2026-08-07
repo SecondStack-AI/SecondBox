@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "aa59956292bd01f8d1d005763acbc91780e24975",
+  "sourceTreeDirty": true,
+  "goVersion": "go1.26.5",
+  "firecrackerVersion": "Firecracker v1.16.1",
+  "hostKernel": "Linux 7.1.4-arch1-1 x86_64 GNU/Linux",
+  "hostCpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+  "workspaceFilesystem": "btrfs",
+  "memoryBackend": "File",
+  "completedAt": "2026-08-07T01:23:57.079019183Z",
+  "warmIterations": 5,
+  "shapes": [
+    {
+      "memoryMiB": 512,
+      "memoryFileBytes": 536870912,
+      "samples": [
+        {
+          "cacheState": "cold",
+          "processApiReadyMilliseconds": 6,
+          "snapshotLoadMilliseconds": 5,
+          "firstControlMilliseconds": 28,
+          "postResumeHardeningMilliseconds": 2,
+          "totalMilliseconds": 42,
+          "readCharacters": 15947,
+          "writeCharacters": 2701,
+          "readBytes": 81330176,
+          "writeBytes": 0,
+          "majorFaults": 19,
+          "fullCopyObserved": false
+        },
+        {
+          "cacheState": "warm",
+          "processApiReadyMilliseconds": 3,
+          "snapshotLoadMilliseconds": 3,
+          "firstControlMilliseconds": 7,
+          "postResumeHardeningMilliseconds": 3,
+          "totalMilliseconds": 18,
+          "readCharacters": 15818,
+          "writeCharacters": 2218,
+          "readBytes": 0,
+          "writeBytes": 0,
+          "majorFaults": 0,
+          "fullCopyObserved": false
+        },
+        {
+          "cacheState": "warm",
+          "processApiReadyMilliseconds": 2,
+          "snapshotLoadMilliseconds": 3,
+          "firstControlMilliseconds": 8,
+          "postResumeHardeningMilliseconds": 2,
+          "totalMilliseconds": 17,
+          "readCharacters": 15818,
+          "writeCharacters": 2210,
+          "readBytes": 0,
+          "writeBytes": 0,
+          "majorFaults": 0,
+          "fullCopyObserved": false
+        },
+        {
+          "cacheState": "warm",
+          "processApiReadyMilliseconds": 2,
+          "snapshotLoadMilliseconds": 3,
+          "firstControlMilliseconds": 8,
+          "postResumeHardeningMilliseconds": 3,
+          "totalMilliseconds": 17,
+          "readCharacters": 15818,
+          "writeCharacters": 2202,
+          "readBytes": 0,
+          "writeBytes": 0,
+          "majorFaults": 0,
+          "fullCopyObserved": false
+        },
+        {
+          "cacheState": "warm",
+          "processApiReadyMilliseconds": 2,
+          "snapshotLoadMilliseconds": 3,
+          "firstControlMilliseconds": 7,
+          "postResumeHardeningMilliseconds": 3,
+          "totalMilliseconds": 18,
+          "readCharacters": 15818,
+          "writeCharacters": 2210,
+          "readBytes": 0,
+          "writeBytes": 0,
+          "majorFaults": 0,
+          "fullCopyObserved": false
+        },
+        {
+          "cacheState": "warm",
+          "processApiReadyMilliseconds": 2,
+          "snapshotLoadMilliseconds": 3,
+          "firstControlMilliseconds": 13,
+          "postResumeHardeningMilliseconds": 1,
+          "totalMilliseconds": 21,
+          "readCharacters": 15818,
+          "writeCharacters": 2202,
+          "readBytes": 2646016,
+          "writeBytes": 0,
+          "majorFaults": 1,
+          "fullCopyObserved": false
+        }
+      ],
+      "warmSnapshotLoadP50Milliseconds": 3,
+      "warmSnapshotLoadP95Milliseconds": 3,
+      "warmTotalP50Milliseconds": 18,
+      "warmTotalP95Milliseconds": 21,
+      "fullCopyObserved": false
+    }
+  ],
+  "gatePassed": true
+}

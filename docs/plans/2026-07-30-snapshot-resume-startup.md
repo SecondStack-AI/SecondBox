@@ -114,6 +114,22 @@ Snapshot resume can remove only the runner boot portion of these measurements. I
 - A shared template must contain no credentials, runtime secrets, runner credentials, tenant data, prior Sandbox identifiers, live protocol connections, user processes, mutable logs, or reusable random output. Template construction must scan the guest-visible filesystem and memory-facing configuration for forbidden material, zero transient buffers before capture, and restrict template files as privileged immutable execution assets.
 - The existing low-level APIs are only building blocks. `FirecrackerAPIClient` can create and load snapshots with memory, network, and vsock overrides; `CreateGoldenSnapshot` can pause and create a diagnostic snapshot. There is no Manager restore composition path, and a source test explicitly prohibits reintroducing the removed unjailed `RestoreGoldenSnapshot`. `manager_toolvm.go` reuses a still-running VM for the same Sandbox/compartment; its `reusable`/`reused` fields do not mean snapshot resume, and its freeze timing only flushes the Workspace before teardown.
 
+## Qualified resume mechanism, 2026-08-06
+
+The composed resume path is now measured on real hardware, not only as a low-level load. The evidence is `docs/plans/evidence/2026-08-06-snapshot-resume-template-lifecycle.json`; it truthfully records source commit `aa59956` with `sourceTreeDirty: true` because it qualified the harness that produced it, and `identityNeutralTemplate: false` because the shipped guest still takes its Sandbox identity from kernel arguments and cannot yet boot without one. The run built a template from a real signed boot at 512 MiB with a 10.7 GiB sealed post-boot rootfs, published it, admitted it through the runner-local cache, and resumed Instances from it concurrently on Firecracker v1.16.1, Btrfs, KVM.
+
+| Concurrency | Resume p50/p95 | Total p50/p95 | Aggregate block reads | Major faults | One golden memory inode |
+|---:|---:|---:|---:|---:|---|
+| 1 | 25/25 ms | 26/26 ms | 0 B | 0 | yes |
+| 4 | 21/23 ms | 23/24 ms | 0 B | 0 | yes |
+| 8 | 19/30 ms | 21/37 ms | 0 B | 0 | yes |
+
+"Resume" is Firecracker process start through first guest control response and completed post-resume hardening: 3–4 ms of snapshot load, 7–8 ms to the first control response, 2 ms of hardening, and 3–13 ms of process start. It is the span that replaces 377 ms of unsaturated guest negotiation and 2,233 ms of burst-32 guest negotiation.
+
+Two results matter more than the median. Resume does not degrade with concurrency — p50 falls from 25 ms to 19 ms as the page cache warms, where cold boot inflates 5.9× — and every rung read **zero** bytes from the block layer and took **zero** major faults, because all eight Instances mapped the same golden memory inode. That is the mechanism the plan exists to buy, measured rather than argued.
+
+Template build took 30 s and one-time cache admission 5.5 s, dominated by digesting the 10.7 GiB rootfs. Both are off the start path by construction: admission happens once, and every start afterwards costs a stat of three files, measured at 0 ms.
+
 ## Implementation decisions, 2026-08-06
 
 These resolve questions the fixed architecture left open. Each states what the pinned VMM and the shipped guest actually support, because two of them contradict an assumption in the section above.
