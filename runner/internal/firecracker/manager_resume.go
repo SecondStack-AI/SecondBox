@@ -25,10 +25,6 @@ const (
 	snapshotResumeMemoryName  = snapshotTemplateMemoryName
 
 	snapshotResumeNetworkInterfaceID = "eth0"
-
-	resumeRootfsDriveID    = "rootfs"
-	resumeWorkspaceDriveID = "workspace"
-	resumeSharedDriveID    = "shared"
 )
 
 // ErrSnapshotTemplateUnavailable marks a resume that cannot proceed because the
@@ -58,15 +54,6 @@ type snapshotResumeLaunch struct {
 	vmStateResolvedPath string
 	memoryResolvedPath  string
 	vsockResolvedPath   string
-	// stagedDrives repoints an unjailed Instance's block devices at its own
-	// staged files. It is empty under the jailer, where the recorded
-	// chroot-relative names already resolve inside this Instance's jail.
-	stagedDrives []stagedResumeDrive
-}
-
-type stagedResumeDrive struct {
-	driveID string
-	path    string
 }
 
 // stageSharedTemplateFile links an immutable template file into an Instance's
@@ -130,42 +117,22 @@ func (m *Manager) prepareSnapshotResumeLaunch(
 		return snapshotResumeLaunch{}, fmt.Errorf("resume Workspace image path is required")
 	}
 
+	// Snapshot resume requires the jailer, and this is a property of the VMM,
+	// not a policy choice. Firecracker opens every block device at the path the
+	// VM state recorded, during the load itself:
+	//
+	//   Failed to restore devices: Error restoring MMIO devices: Block: Virtio
+	//   backend error: Error manipulating the backing file: No such file or
+	//   directory (os error 2) /.../rootfs.ext4
+	//
+	// so PATCH /drives cannot repair it — the load has already failed by then.
+	// Under the jailer the recorded paths are chroot-relative names that each
+	// Instance resolves inside its own jail. Unjailed they are the template
+	// source's absolute paths, which one Instance at most could ever own.
 	if m.cfg.MicroVMAllowUnjailed {
-		socket := filepath.Join(dir, firecrackerSockName)
-		vsockUDS := filepath.Join(dir, vsockUDSName)
-		if err := checkUnixSocketPath("firecracker api", socket, "SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR"); err != nil {
-			return snapshotResumeLaunch{}, err
-		}
-		if err := checkUnixSocketPath("vsock", vsockUDS, "SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR"); err != nil {
-			return snapshotResumeLaunch{}, err
-		}
-		// An unjailed Firecracker opens absolute host paths, so the template is
-		// referenced where it lives. That is the strongest form of the sharing
-		// the jailed path approximates with a hard link: one inode, one page
-		// cache, no per-Instance file at all.
-		if err := stageSnapshotResumeInstanceFiles(dir, template, workspacePath, sharedImagePath, 0, 0, false); err != nil {
-			return snapshotResumeLaunch{}, err
-		}
-		stagedDrives := []stagedResumeDrive{
-			{driveID: resumeRootfsDriveID, path: filepath.Join(dir, snapshotTemplateRootfsName)},
-			{driveID: resumeWorkspaceDriveID, path: filepath.Join(dir, workspaceName)},
-		}
-		if strings.TrimSpace(sharedImagePath) != "" {
-			stagedDrives = append(stagedDrives, stagedResumeDrive{
-				driveID: resumeSharedDriveID,
-				path:    filepath.Join(dir, sharedImageName),
-			})
-		}
-		return snapshotResumeLaunch{
-			executable:          m.cfg.FirecrackerPath,
-			args:                []string{"--id", instanceID, "--api-sock", socket},
-			socketPath:          socket,
-			vsockUDS:            vsockUDS,
-			vmStateResolvedPath: template.VMStatePath,
-			memoryResolvedPath:  template.MemoryPath,
-			vsockResolvedPath:   vsockUDS,
-			stagedDrives:        stagedDrives,
-		}, nil
+		return snapshotResumeLaunch{}, fmt.Errorf(
+			"snapshot resume requires the jailer: restored VM state records absolute drive paths that cannot be made per-Instance, so SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED must be false",
+		)
 	}
 
 	jailRoot := m.jailerRoot(instanceID)
@@ -327,13 +294,9 @@ func snapshotResumeLoadRequest(launch snapshotResumeLaunch, tapName string) snap
 // the template into it. It performs no retry and no fallback: a failed load is
 // a failed start.
 //
-// A jailed Instance's VM state records chroot-relative drive names, so the
-// files staged in its own jail are the ones Firecracker opens and the load can
-// resume the VM in one call. An unjailed Instance's VM state records the
-// template source's absolute paths, which belong to no Instance and may not
-// exist. It must load paused, repoint every block device at its own staged
-// file, and only then resume — the guest must never execute one instruction
-// against another Instance's disks. This is what PATCH /drives exists for.
+// The load opens every block device at the chroot-relative name the VM state
+// recorded, which resolves inside this Instance's own jail, so one call both
+// attaches this Instance's disks and resumes it.
 func resumeSnapshotTemplate(
 	ctx context.Context,
 	launch snapshotResumeLaunch,
@@ -345,21 +308,8 @@ func resumeSnapshotTemplate(
 		return fmt.Errorf("wait for restored Firecracker API socket: %w", err)
 	}
 	client := FirecrackerAPIClient{SocketPath: launch.socketPath, Timeout: loadTimeout}
-	request := snapshotResumeLoadRequest(launch, tapName)
-	request.ResumeVM = len(launch.stagedDrives) == 0
-	if err := client.LoadSnapshotWithOptions(ctx, request); err != nil {
+	if err := client.LoadSnapshotWithOptions(ctx, snapshotResumeLoadRequest(launch, tapName)); err != nil {
 		return fmt.Errorf("load snapshot template: %w", err)
-	}
-	if request.ResumeVM {
-		return nil
-	}
-	for _, staged := range launch.stagedDrives {
-		if err := client.UpdateDrivePath(ctx, staged.driveID, staged.path); err != nil {
-			return fmt.Errorf("repoint restored %q drive at this Instance's image: %w", staged.driveID, err)
-		}
-	}
-	if err := client.Resume(ctx); err != nil {
-		return fmt.Errorf("resume restored VM after repointing drives: %w", err)
 	}
 	return nil
 }

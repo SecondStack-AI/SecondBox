@@ -2,10 +2,8 @@ package firecracker
 
 import (
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -15,33 +13,7 @@ import (
 	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
 )
 
-// stubRootfsReflink replaces the copy-on-write child clone with a byte copy so
-// resume staging can be exercised on a filesystem without reflink support.
-// Production has no such fallback; TestReflinkOnlyFileFailsAcrossDevices proves
-// the real helper refuses to copy.
-func stubRootfsReflink(t *testing.T) {
-	t.Helper()
-	original := reflinkRootfsChild
-	reflinkRootfsChild = func(destination, source string, mode os.FileMode) error {
-		in, err := os.Open(source)
-		if err != nil {
-			return err
-		}
-		defer in.Close()
-		out, err := os.OpenFile(destination, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
-		if err != nil {
-			return err
-		}
-		if _, err := io.Copy(out, in); err != nil {
-			_ = out.Close()
-			return err
-		}
-		return out.Close()
-	}
-	t.Cleanup(func() { reflinkRootfsChild = original })
-}
-
-func newResumeTestTemplate(t *testing.T) (*SnapshotTemplateCache, *AdmittedSnapshotTemplate, SnapshotTemplateKey) {
+func newResumeTestTemplate(t *testing.T) (*SnapshotTemplateCache, *AdmittedSnapshotTemplate) {
 	t.Helper()
 	cache := newTestSnapshotTemplateCache(t)
 	key := testSnapshotTemplateKey()
@@ -50,7 +22,7 @@ func newResumeTestTemplate(t *testing.T) (*SnapshotTemplateCache, *AdmittedSnaps
 	if err != nil {
 		t.Fatalf("resolve template: %v", err)
 	}
-	return cache, template, key
+	return cache, template
 }
 
 // shortResumeDir keeps the per-Instance API and vsock socket paths inside the
@@ -69,22 +41,24 @@ func shortResumeDir(t *testing.T) string {
 	return dir
 }
 
-func newResumeTestManager(t *testing.T, runDir string) *Manager {
+func newJailedResumeManager(t *testing.T, runDir string) *Manager {
 	t.Helper()
 	return &Manager{cfg: &config.Config{
-		FirecrackerPath:      "/usr/local/bin/firecracker",
-		MicroVMAllowUnjailed: true,
-		MicroVMRunDir:        runDir,
+		FirecrackerPath:            "/usr/local/bin/firecracker",
+		JailerPath:                 "/usr/local/bin/jailer",
+		MicroVMAllowUnjailed:       false,
+		MicroVMRunDir:              runDir,
+		MicroVMJailerChrootBaseDir: filepath.Join(runDir, "jail"),
 	}}
 }
 
-func writeResumeWorkspace(t *testing.T, dir string) string {
-	t.Helper()
-	path := filepath.Join(dir, "workspace-source.ext4")
-	if err := os.WriteFile(path, []byte("workspace-bytes"), 0o600); err != nil {
-		t.Fatalf("write workspace image: %v", err)
+func resumeTestPolicy() *runtimemanager.SandboxRuntimePolicy {
+	return &runtimemanager.SandboxRuntimePolicy{
+		VCPUs:        1,
+		CPUMillis:    1000,
+		MemoryMiB:    512,
+		ProcessLimit: 128,
 	}
-	return path
 }
 
 func TestStageSharedTemplateFileSharesOneInode(t *testing.T) {
@@ -93,13 +67,11 @@ func TestStageSharedTemplateFileSharesOneInode(t *testing.T) {
 	if err := os.WriteFile(source, []byte("golden-memory"), 0o444); err != nil {
 		t.Fatalf("write golden memory: %v", err)
 	}
-	first := filepath.Join(dir, "first")
-	second := filepath.Join(dir, "second")
-	if err := os.Mkdir(first, 0o700); err != nil {
-		t.Fatalf("create first jail: %v", err)
-	}
-	if err := os.Mkdir(second, 0o700); err != nil {
-		t.Fatalf("create second jail: %v", err)
+	first, second := filepath.Join(dir, "first"), filepath.Join(dir, "second")
+	for _, jail := range []string{first, second} {
+		if err := os.Mkdir(jail, 0o700); err != nil {
+			t.Fatalf("create jail %q: %v", jail, err)
+		}
 	}
 	firstStaged := filepath.Join(first, snapshotResumeMemoryName)
 	secondStaged := filepath.Join(second, snapshotResumeMemoryName)
@@ -142,64 +114,55 @@ func TestStageSharedTemplateFileNamesTheTemplateRootOnCrossDeviceFailure(t *test
 	}
 }
 
-func TestPrepareSnapshotResumeLaunchUnjailedReferencesTheTemplateInPlace(t *testing.T) {
-	stubRootfsReflink(t)
-	_, template, _ := newResumeTestTemplate(t)
+// An unjailed restore opens the template source's absolute drive paths during
+// the load itself, so it can neither be given per-Instance disks nor repaired
+// afterwards. It must fail before any file is staged.
+func TestPrepareSnapshotResumeLaunchRefusesUnjailedResume(t *testing.T) {
+	_, template := newResumeTestTemplate(t)
 	runDir := shortResumeDir(t)
-	manager := newResumeTestManager(t, runDir)
+	manager := newJailedResumeManager(t, runDir)
+	manager.cfg.MicroVMAllowUnjailed = true
 	instanceDir := filepath.Join(runDir, "fc-resume")
 	if err := os.Mkdir(instanceDir, 0o700); err != nil {
 		t.Fatalf("create instance dir: %v", err)
 	}
-	workspacePath := writeResumeWorkspace(t, runDir)
-
-	launch, err := manager.prepareSnapshotResumeLaunch(
+	_, err := manager.prepareSnapshotResumeLaunch(
 		"fc-resume",
 		instanceDir,
 		template,
-		workspacePath,
+		filepath.Join(runDir, "workspace.ext4"),
 		"",
-		0,
-		nil,
+		12000,
+		resumeTestPolicy(),
 	)
-	if err != nil {
-		t.Fatalf("prepare unjailed resume: %v", err)
+	if err == nil {
+		t.Fatal("an unjailed resume was accepted")
 	}
-	if launch.vmStateResolvedPath != template.VMStatePath || launch.memoryResolvedPath != template.MemoryPath {
-		t.Fatalf("unjailed resume copied the template instead of referencing it: %+v", launch)
+	if !strings.Contains(err.Error(), "snapshot resume requires the jailer") {
+		t.Fatalf("error does not name the jailer requirement: %v", err)
 	}
-	if slices.Contains(launch.args, "--config-file") {
-		t.Fatalf("resume passed a boot configuration file: %v", launch.args)
+	entries, readErr := os.ReadDir(instanceDir)
+	if readErr != nil {
+		t.Fatalf("read instance dir: %v", readErr)
 	}
-	if !slices.Contains(launch.args, "--api-sock") {
-		t.Fatalf("resume did not expose an API socket: %v", launch.args)
-	}
-	for _, name := range []string{snapshotTemplateRootfsName, workspaceName} {
-		if _, err := os.Stat(filepath.Join(instanceDir, name)); err != nil {
-			t.Fatalf("resume did not stage %s: %v", name, err)
-		}
-	}
-	staged, err := sharesInode(filepath.Join(instanceDir, workspaceName), workspacePath)
-	if err != nil {
-		t.Fatalf("compare workspace inodes: %v", err)
-	}
-	if !staged {
-		t.Fatal("the staged Workspace is a copy, not the WorkspaceStore's image")
+	if len(entries) != 0 {
+		t.Fatalf("a refused resume staged %d files", len(entries))
 	}
 }
 
 func TestPrepareSnapshotResumeLaunchRefusesUnusableTemplates(t *testing.T) {
-	stubRootfsReflink(t)
 	runDir := shortResumeDir(t)
-	manager := newResumeTestManager(t, runDir)
+	manager := newJailedResumeManager(t, runDir)
 	instanceDir := filepath.Join(runDir, "fc-resume")
 	if err := os.Mkdir(instanceDir, 0o700); err != nil {
 		t.Fatalf("create instance dir: %v", err)
 	}
-	workspacePath := writeResumeWorkspace(t, runDir)
+	workspacePath := filepath.Join(runDir, "workspace.ext4")
 
 	t.Run("absent template", func(t *testing.T) {
-		_, err := manager.prepareSnapshotResumeLaunch("fc-resume", instanceDir, nil, workspacePath, "", 0, nil)
+		_, err := manager.prepareSnapshotResumeLaunch(
+			"fc-resume", instanceDir, nil, workspacePath, "", 12000, resumeTestPolicy(),
+		)
 		if !errors.Is(err, ErrSnapshotTemplateUnavailable) {
 			t.Fatalf("absent template error = %v, want ErrSnapshotTemplateUnavailable", err)
 		}
@@ -212,15 +175,15 @@ func TestPrepareSnapshotResumeLaunchRefusesUnusableTemplates(t *testing.T) {
 			&AdmittedSnapshotTemplate{TemplateID: "unadmitted"},
 			workspacePath,
 			"",
-			0,
-			nil,
+			12000,
+			resumeTestPolicy(),
 		); err == nil {
 			t.Fatal("an unadmitted template was accepted")
 		}
 	})
 
 	t.Run("template replaced after admission", func(t *testing.T) {
-		cache, template, _ := newResumeTestTemplate(t)
+		cache, template := newResumeTestTemplate(t)
 		directory := filepath.Join(cache.Root(), template.TemplateID)
 		if err := os.Chmod(directory, 0o700); err != nil {
 			t.Fatalf("chmod template dir: %v", err)
@@ -233,59 +196,41 @@ func TestPrepareSnapshotResumeLaunchRefusesUnusableTemplates(t *testing.T) {
 			t.Fatalf("replace memory: %v", err)
 		}
 		if _, err := manager.prepareSnapshotResumeLaunch(
-			"fc-resume",
-			instanceDir,
-			template,
-			workspacePath,
-			"",
-			0,
-			nil,
+			"fc-resume", instanceDir, template, workspacePath, "", 12000, resumeTestPolicy(),
 		); err == nil {
 			t.Fatal("a template replaced after admission was accepted")
 		}
 	})
 
 	t.Run("absent workspace", func(t *testing.T) {
-		_, template, _ := newResumeTestTemplate(t)
-		if _, err := manager.prepareSnapshotResumeLaunch("fc-resume", instanceDir, template, "  ", "", 0, nil); err == nil {
+		_, template := newResumeTestTemplate(t)
+		if _, err := manager.prepareSnapshotResumeLaunch(
+			"fc-resume", instanceDir, template, "  ", "", 12000, resumeTestPolicy(),
+		); err == nil {
 			t.Fatal("a resume without a Workspace image was accepted")
+		}
+	})
+
+	t.Run("no jailer uid", func(t *testing.T) {
+		_, template := newResumeTestTemplate(t)
+		if _, err := manager.prepareSnapshotResumeLaunch(
+			"fc-resume", instanceDir, template, workspacePath, "", 0, resumeTestPolicy(),
+		); err == nil {
+			t.Fatal("a resume without a jailer UID was accepted")
+		}
+	})
+
+	t.Run("no runtime policy", func(t *testing.T) {
+		_, template := newResumeTestTemplate(t)
+		if _, err := manager.prepareSnapshotResumeLaunch(
+			"fc-resume", instanceDir, template, workspacePath, "", 12000, nil,
+		); err == nil {
+			t.Fatal("a resume without a runtime policy was accepted")
 		}
 	})
 }
 
-func TestPrepareSnapshotResumeLaunchJailedRequiresPolicyAndUID(t *testing.T) {
-	stubRootfsReflink(t)
-	_, template, _ := newResumeTestTemplate(t)
-	runDir := shortResumeDir(t)
-	manager := newResumeTestManager(t, runDir)
-	manager.cfg.MicroVMAllowUnjailed = false
-	manager.cfg.MicroVMJailerChrootBaseDir = filepath.Join(runDir, "jail")
-	instanceDir := filepath.Join(runDir, "fc-resume")
-	if err := os.Mkdir(instanceDir, 0o700); err != nil {
-		t.Fatalf("create instance dir: %v", err)
-	}
-	workspacePath := writeResumeWorkspace(t, runDir)
-
-	if _, err := manager.prepareSnapshotResumeLaunch("fc-resume", instanceDir, template, workspacePath, "", 0, nil); err == nil {
-		t.Fatal("a jailed resume without a jailer UID was accepted")
-	}
-	if _, err := manager.prepareSnapshotResumeLaunch("fc-resume", instanceDir, template, workspacePath, "", 12000, nil); err == nil {
-		t.Fatal("a jailed resume without a runtime policy was accepted")
-	}
-	if _, err := manager.prepareSnapshotResumeLaunch(
-		"fc-resume",
-		instanceDir,
-		template,
-		workspacePath,
-		"",
-		12000,
-		&runtimemanager.SandboxRuntimePolicy{VCPUs: 1, MemoryMiB: 512, CPUMillis: 0, ProcessLimit: 64},
-	); err == nil {
-		t.Fatal("a jailed resume without a CPU budget was accepted")
-	}
-}
-
-func TestSnapshotResumeLoadRequestJailedUsesChrootRelativePaths(t *testing.T) {
+func TestSnapshotResumeLoadRequestUsesChrootRelativePaths(t *testing.T) {
 	launch := snapshotResumeLaunch{
 		jailRoot:            "/srv/jail/firecracker/fc-1/root",
 		vmStateResolvedPath: snapshotResumeVMStateName,
@@ -322,83 +267,16 @@ func TestSnapshotResumeLoadRequestJailedUsesChrootRelativePaths(t *testing.T) {
 
 func TestSnapshotResumeLoadRequestWithoutNetworkOmitsOverride(t *testing.T) {
 	request := snapshotResumeLoadRequest(snapshotResumeLaunch{
-		vmStateResolvedPath: "/cache/t/vmstate.snap",
-		memoryResolvedPath:  "/cache/t/memory.snap",
-		vsockResolvedPath:   "/run/fc/guest.vsock",
+		vmStateResolvedPath: snapshotResumeVMStateName,
+		memoryResolvedPath:  snapshotResumeMemoryName,
+		vsockResolvedPath:   vsockUDSName,
 	}, "   ")
 	if len(request.NetworkOverrides) != 0 {
 		t.Fatalf("network overrides = %+v, want none", request.NetworkOverrides)
 	}
-	if request.SnapshotPath != "/cache/t/vmstate.snap" || request.MemBackend.BackendPath != "/cache/t/memory.snap" {
-		t.Fatalf("unjailed resume request = %+v", request)
-	}
 }
 
-func TestResumeSnapshotTemplateLoadsThroughTheAPI(t *testing.T) {
-	socketPath := shortUnixSocketPath(t, "firecracker.sock")
-	seen := make(chan apiCall, 2)
-	closeServer := startFakeFirecrackerAPIServer(t, socketPath, seen)
-	defer closeServer()
-
-	launch := snapshotResumeLaunch{
-		socketPath:          socketPath,
-		vmStateResolvedPath: snapshotResumeVMStateName,
-		memoryResolvedPath:  snapshotResumeMemoryName,
-		vsockResolvedPath:   vsockUDSName,
-	}
-	if err := resumeSnapshotTemplate(t.Context(), launch, "agfc0a1b", 2*time.Second, 2*time.Second); err != nil {
-		t.Fatalf("resume snapshot template: %v", err)
-	}
-	call := drainAPICalls(seen, 1)[0]
-	if call.Path != "/snapshot/load" {
-		t.Fatalf("resume called %q", call.Path)
-	}
-	if call.Body["snapshot_path"] != snapshotResumeVMStateName {
-		t.Fatalf("resume load body = %#v", call.Body)
-	}
-	if call.Body["resume_vm"] != true || call.Body["clock_realtime"] != true {
-		t.Fatalf("resume load body = %#v", call.Body)
-	}
-}
-
-func TestResumeSnapshotTemplateRepointsUnjailedDrivesBeforeResuming(t *testing.T) {
-	socketPath := shortUnixSocketPath(t, "firecracker.sock")
-	seen := make(chan apiCall, 8)
-	closeServer := startFakeFirecrackerAPIServer(t, socketPath, seen)
-	defer closeServer()
-
-	launch := snapshotResumeLaunch{
-		socketPath:          socketPath,
-		vmStateResolvedPath: "/cache/t/vmstate.snap",
-		memoryResolvedPath:  "/cache/t/memory.snap",
-		vsockResolvedPath:   "/run/fc/guest.vsock",
-		stagedDrives: []stagedResumeDrive{
-			{driveID: resumeRootfsDriveID, path: "/run/fc/rootfs.ext4"},
-			{driveID: resumeWorkspaceDriveID, path: "/run/fc/workspace.ext4"},
-		},
-	}
-	if err := resumeSnapshotTemplate(t.Context(), launch, "", 2*time.Second, 2*time.Second); err != nil {
-		t.Fatalf("resume unjailed template: %v", err)
-	}
-	calls := drainAPICalls(seen, 4)
-	if calls[0].Path != "/snapshot/load" {
-		t.Fatalf("first call = %#v", calls[0])
-	}
-	if calls[0].Body["resume_vm"] == true {
-		t.Fatal("an unjailed resume started the guest before repointing its drives")
-	}
-	if calls[1].Path != "/drives/rootfs" || calls[1].Body["path_on_host"] != "/run/fc/rootfs.ext4" {
-		t.Fatalf("rootfs repoint = %#v", calls[1])
-	}
-	if calls[2].Path != "/drives/workspace" || calls[2].Body["path_on_host"] != "/run/fc/workspace.ext4" {
-		t.Fatalf("workspace repoint = %#v", calls[2])
-	}
-	if calls[3].Path != "/vm" || calls[3].Body["state"] != "Resumed" {
-		t.Fatalf("resume call = %#v", calls[3])
-	}
-}
-
-func TestResumeSnapshotTemplateJailedResumesInOneCall(t *testing.T) {
+func TestResumeSnapshotTemplateLoadsAndResumesInOneCall(t *testing.T) {
 	socketPath := shortUnixSocketPath(t, "firecracker.sock")
 	seen := make(chan apiCall, 4)
 	closeServer := startFakeFirecrackerAPIServer(t, socketPath, seen)
@@ -412,59 +290,16 @@ func TestResumeSnapshotTemplateJailedResumesInOneCall(t *testing.T) {
 		vsockResolvedPath:   vsockUDSName,
 	}
 	if err := resumeSnapshotTemplate(t.Context(), launch, "agfc0a1b", 2*time.Second, 2*time.Second); err != nil {
-		t.Fatalf("resume jailed template: %v", err)
+		t.Fatalf("resume snapshot template: %v", err)
 	}
 	call := drainAPICalls(seen, 1)[0]
-	if call.Path != "/snapshot/load" || call.Body["resume_vm"] != true {
-		t.Fatalf("jailed resume did not resume in one call: %#v", call)
+	if call.Path != "/snapshot/load" || call.Body["resume_vm"] != true || call.Body["clock_realtime"] != true {
+		t.Fatalf("resume load call = %#v", call)
 	}
 	select {
 	case extra := <-seen:
-		t.Fatalf("jailed resume issued an extra call: %#v", extra)
+		t.Fatalf("resume issued an extra call: %#v", extra)
 	case <-time.After(50 * time.Millisecond):
-	}
-}
-
-func TestPrepareSnapshotResumeLaunchUnjailedStagesEveryDrive(t *testing.T) {
-	stubRootfsReflink(t)
-	_, template, _ := newResumeTestTemplate(t)
-	runDir := shortResumeDir(t)
-	manager := newResumeTestManager(t, runDir)
-	instanceDir := filepath.Join(runDir, "fc-resume")
-	if err := os.Mkdir(instanceDir, 0o700); err != nil {
-		t.Fatalf("create instance dir: %v", err)
-	}
-	sharedPath := filepath.Join(runDir, "shared-source.img")
-	if err := os.WriteFile(sharedPath, []byte("shared-bytes"), 0o600); err != nil {
-		t.Fatalf("write shared image: %v", err)
-	}
-	launch, err := manager.prepareSnapshotResumeLaunch(
-		"fc-resume",
-		instanceDir,
-		template,
-		writeResumeWorkspace(t, runDir),
-		sharedPath,
-		0,
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("prepare unjailed resume: %v", err)
-	}
-	want := map[string]string{
-		resumeRootfsDriveID:    filepath.Join(instanceDir, snapshotTemplateRootfsName),
-		resumeWorkspaceDriveID: filepath.Join(instanceDir, workspaceName),
-		resumeSharedDriveID:    filepath.Join(instanceDir, sharedImageName),
-	}
-	if len(launch.stagedDrives) != len(want) {
-		t.Fatalf("staged drives = %+v, want %d entries", launch.stagedDrives, len(want))
-	}
-	for _, staged := range launch.stagedDrives {
-		if want[staged.driveID] != staged.path {
-			t.Fatalf("drive %q staged at %q, want %q", staged.driveID, staged.path, want[staged.driveID])
-		}
-		if _, err := os.Stat(staged.path); err != nil {
-			t.Fatalf("drive %q was not staged: %v", staged.driveID, err)
-		}
 	}
 }
 
