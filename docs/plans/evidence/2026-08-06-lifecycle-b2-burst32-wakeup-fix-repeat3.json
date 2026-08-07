@@ -1,0 +1,295 @@
+{
+  "schemaVersion": 3,
+  "startedAt": "2026-08-07T01:38:27.52119172Z",
+  "completedAt": "2026-08-07T01:38:49.015755732Z",
+  "sourceCommit": "d470b48d14eff32c80736ea607c4ebcedb6d8375",
+  "goVersion": "go version go1.26.5 linux/amd64",
+  "artifactManifestDigest": "sha256:e48a49d3870e897585857c33e73227a2c9525869ca6dfd5d38349367e053e6f9",
+  "shedArrivals": 0,
+  "capacity": [
+    {
+      "measurement": "create_to_ready",
+      "patternKind": "burst",
+      "residentPopulation": 0,
+      "steps": 1,
+      "largestFullyAdmitted": 32,
+      "configuredBinding": {
+        "name": "SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL + runner Workspace capacity + runner Operations capacity + subject quota: active instances",
+        "capacity": 40
+      },
+      "refusalKnee": null,
+      "latencyKnee": null,
+      "distressKnee": null
+    }
+  ],
+  "results": [
+    {
+      "measurement": "create_to_ready",
+      "pattern": "burst-32",
+      "patternKind": "burst",
+      "residentPopulation": 0,
+      "offeredArrivals": 32,
+      "completedArrivals": 32,
+      "shedArrivals": 0,
+      "offeredRatePerSecond": null,
+      "completionRatePerSecond": 7.95568975366621,
+      "arrivalWindowMilliseconds": 0,
+      "elapsedMilliseconds": 4022,
+      "peakOutstandingArrivals": 32,
+      "latency": {
+        "samples": 32,
+        "p50Milliseconds": 3660,
+        "p95Milliseconds": 3969,
+        "p99Milliseconds": 4021,
+        "maximumMilliseconds": 4021
+      },
+      "bootStages": [
+        {
+          "stage": "guest_negotiation",
+          "samples": 28,
+          "p50Milliseconds": 2091,
+          "p95Milliseconds": 2357,
+          "p99Milliseconds": 2384
+        },
+        {
+          "stage": "runner_admission",
+          "samples": 32,
+          "p50Milliseconds": 87,
+          "p95Milliseconds": 914,
+          "p99Milliseconds": 993
+        },
+        {
+          "stage": "network_setup",
+          "samples": 32,
+          "p50Milliseconds": 29,
+          "p95Milliseconds": 46,
+          "p99Milliseconds": 51
+        },
+        {
+          "stage": "compute_launch",
+          "samples": 32,
+          "p50Milliseconds": 20,
+          "p95Milliseconds": 26,
+          "p99Milliseconds": 54
+        },
+        {
+          "stage": "ready",
+          "samples": 28,
+          "p50Milliseconds": 2,
+          "p95Milliseconds": 7,
+          "p99Milliseconds": 11
+        },
+        {
+          "stage": "artifact_verify",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 2,
+          "p99Milliseconds": 3
+        },
+        {
+          "stage": "workspace_attach",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 1,
+          "p99Milliseconds": 1
+        }
+      ],
+      "dominantBootStage": "guest_negotiation",
+      "startupSpans": [
+        {
+          "span": "client_visibility",
+          "samples": 32,
+          "p50Milliseconds": 33,
+          "p95Milliseconds": 57,
+          "p99Milliseconds": 58
+        },
+        {
+          "span": "operation_total",
+          "samples": 32,
+          "p50Milliseconds": 3613,
+          "p95Milliseconds": 3947,
+          "p99Milliseconds": 3988
+        },
+        {
+          "span": "placement",
+          "samples": 32,
+          "p50Milliseconds": 530,
+          "p95Milliseconds": 631,
+          "p99Milliseconds": 649
+        },
+        {
+          "span": "placement_assignment_check",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 0,
+          "p99Milliseconds": 0
+        },
+        {
+          "span": "placement_candidate_lock",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 9,
+          "p99Milliseconds": 18
+        },
+        {
+          "span": "placement_candidate_select",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 0,
+          "p99Milliseconds": 0
+        },
+        {
+          "span": "placement_handoff",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 0,
+          "p99Milliseconds": 0
+        },
+        {
+          "span": "placement_pickup",
+          "samples": 32,
+          "p50Milliseconds": 80,
+          "p95Milliseconds": 250,
+          "p99Milliseconds": 340
+        },
+        {
+          "span": "placement_plan",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 0,
+          "p99Milliseconds": 1
+        },
+        {
+          "span": "placement_prepare",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 0,
+          "p99Milliseconds": 0
+        },
+        {
+          "span": "placement_reconcile",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 0,
+          "p99Milliseconds": 0
+        },
+        {
+          "span": "placement_retry",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 0,
+          "p99Milliseconds": 20
+        },
+        {
+          "span": "placement_sandbox_lock",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 1,
+          "p99Milliseconds": 1
+        },
+        {
+          "span": "pre_assignment",
+          "samples": 32,
+          "p50Milliseconds": 1207,
+          "p95Milliseconds": 1854,
+          "p99Milliseconds": 1902
+        },
+        {
+          "span": "ready_event_ingest",
+          "samples": 28,
+          "p50Milliseconds": 6,
+          "p95Milliseconds": 19,
+          "p99Milliseconds": 31
+        },
+        {
+          "span": "ready_projection",
+          "samples": 28,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 0,
+          "p99Milliseconds": 0
+        },
+        {
+          "span": "runner_boot",
+          "samples": 32,
+          "p50Milliseconds": 1977,
+          "p95Milliseconds": 3067,
+          "p99Milliseconds": 3160
+        },
+        {
+          "span": "runner_event_ingest",
+          "samples": 216,
+          "p50Milliseconds": 36,
+          "p95Milliseconds": 107,
+          "p99Milliseconds": 119
+        },
+        {
+          "span": "startup_dispatch",
+          "samples": 32,
+          "p50Milliseconds": 87,
+          "p95Milliseconds": 864,
+          "p99Milliseconds": 914
+        },
+        {
+          "span": "workspace_provision",
+          "samples": 32,
+          "p50Milliseconds": 631,
+          "p95Milliseconds": 1233,
+          "p99Milliseconds": 1252
+        }
+      ],
+      "refusals": {},
+      "failures": {},
+      "memAvailableLowWaterMiB": 46983,
+      "occupancy": [
+        {
+          "offsetMilliseconds": 500,
+          "ready": 0,
+          "outstandingArrivals": 32,
+          "offeredRatePerSecond": null
+        },
+        {
+          "offsetMilliseconds": 1000,
+          "ready": 0,
+          "outstandingArrivals": 32,
+          "offeredRatePerSecond": null
+        },
+        {
+          "offsetMilliseconds": 1500,
+          "ready": 0,
+          "outstandingArrivals": 32,
+          "offeredRatePerSecond": null
+        },
+        {
+          "offsetMilliseconds": 2000,
+          "ready": 0,
+          "outstandingArrivals": 32,
+          "offeredRatePerSecond": null
+        },
+        {
+          "offsetMilliseconds": 2500,
+          "ready": 9,
+          "outstandingArrivals": 23,
+          "offeredRatePerSecond": null
+        },
+        {
+          "offsetMilliseconds": 3000,
+          "ready": 9,
+          "outstandingArrivals": 23,
+          "offeredRatePerSecond": null
+        },
+        {
+          "offsetMilliseconds": 3500,
+          "ready": 13,
+          "outstandingArrivals": 19,
+          "offeredRatePerSecond": null
+        },
+        {
+          "offsetMilliseconds": 4000,
+          "ready": 31,
+          "outstandingArrivals": 1,
+          "offeredRatePerSecond": null
+        }
+      ]
+    }
+  ]
+}
