@@ -1,0 +1,295 @@
+{
+  "schemaVersion": 3,
+  "startedAt": "2026-08-07T01:30:45.127456284Z",
+  "completedAt": "2026-08-07T01:31:06.136020161Z",
+  "sourceCommit": "d470b48d14eff32c80736ea607c4ebcedb6d8375",
+  "goVersion": "go version go1.26.5 linux/amd64",
+  "artifactManifestDigest": "sha256:e48a49d3870e897585857c33e73227a2c9525869ca6dfd5d38349367e053e6f9",
+  "shedArrivals": 0,
+  "capacity": [
+    {
+      "measurement": "create_to_ready",
+      "patternKind": "burst",
+      "residentPopulation": 0,
+      "steps": 1,
+      "largestFullyAdmitted": 32,
+      "configuredBinding": {
+        "name": "SECONDBOX_RUNNER_MAX_CONCURRENT_GLOBAL + runner Workspace capacity + runner Operations capacity + subject quota: active instances",
+        "capacity": 40
+      },
+      "refusalKnee": null,
+      "latencyKnee": null,
+      "distressKnee": null
+    }
+  ],
+  "results": [
+    {
+      "measurement": "create_to_ready",
+      "pattern": "burst-32",
+      "patternKind": "burst",
+      "residentPopulation": 0,
+      "offeredArrivals": 32,
+      "completedArrivals": 32,
+      "shedArrivals": 0,
+      "offeredRatePerSecond": null,
+      "completionRatePerSecond": 7.677232162496633,
+      "arrivalWindowMilliseconds": 0,
+      "elapsedMilliseconds": 4168,
+      "peakOutstandingArrivals": 32,
+      "latency": {
+        "samples": 32,
+        "p50Milliseconds": 3796,
+        "p95Milliseconds": 4103,
+        "p99Milliseconds": 4165,
+        "maximumMilliseconds": 4165
+      },
+      "bootStages": [
+        {
+          "stage": "guest_negotiation",
+          "samples": 28,
+          "p50Milliseconds": 2095,
+          "p95Milliseconds": 2521,
+          "p99Milliseconds": 2539
+        },
+        {
+          "stage": "runner_admission",
+          "samples": 32,
+          "p50Milliseconds": 133,
+          "p95Milliseconds": 1018,
+          "p99Milliseconds": 1088
+        },
+        {
+          "stage": "network_setup",
+          "samples": 32,
+          "p50Milliseconds": 33,
+          "p95Milliseconds": 63,
+          "p99Milliseconds": 72
+        },
+        {
+          "stage": "compute_launch",
+          "samples": 32,
+          "p50Milliseconds": 19,
+          "p95Milliseconds": 29,
+          "p99Milliseconds": 39
+        },
+        {
+          "stage": "ready",
+          "samples": 28,
+          "p50Milliseconds": 2,
+          "p95Milliseconds": 7,
+          "p99Milliseconds": 9
+        },
+        {
+          "stage": "artifact_verify",
+          "samples": 32,
+          "p50Milliseconds": 1,
+          "p95Milliseconds": 2,
+          "p99Milliseconds": 2
+        },
+        {
+          "stage": "workspace_attach",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 2,
+          "p99Milliseconds": 3
+        }
+      ],
+      "dominantBootStage": "guest_negotiation",
+      "startupSpans": [
+        {
+          "span": "client_visibility",
+          "samples": 32,
+          "p50Milliseconds": 34,
+          "p95Milliseconds": 55,
+          "p99Milliseconds": 56
+        },
+        {
+          "span": "operation_total",
+          "samples": 32,
+          "p50Milliseconds": 3778,
+          "p95Milliseconds": 4055,
+          "p99Milliseconds": 4122
+        },
+        {
+          "span": "placement",
+          "samples": 32,
+          "p50Milliseconds": 508,
+          "p95Milliseconds": 613,
+          "p99Milliseconds": 675
+        },
+        {
+          "span": "placement_assignment_check",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 0,
+          "p99Milliseconds": 0
+        },
+        {
+          "span": "placement_candidate_lock",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 27,
+          "p99Milliseconds": 29
+        },
+        {
+          "span": "placement_candidate_select",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 0,
+          "p99Milliseconds": 0
+        },
+        {
+          "span": "placement_handoff",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 0,
+          "p99Milliseconds": 0
+        },
+        {
+          "span": "placement_pickup",
+          "samples": 32,
+          "p50Milliseconds": 100,
+          "p95Milliseconds": 310,
+          "p99Milliseconds": 348
+        },
+        {
+          "span": "placement_plan",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 1,
+          "p99Milliseconds": 1
+        },
+        {
+          "span": "placement_prepare",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 0,
+          "p99Milliseconds": 0
+        },
+        {
+          "span": "placement_reconcile",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 0,
+          "p99Milliseconds": 0
+        },
+        {
+          "span": "placement_retry",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 0,
+          "p99Milliseconds": 0
+        },
+        {
+          "span": "placement_sandbox_lock",
+          "samples": 32,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 1,
+          "p99Milliseconds": 1
+        },
+        {
+          "span": "pre_assignment",
+          "samples": 32,
+          "p50Milliseconds": 1240,
+          "p95Milliseconds": 1918,
+          "p99Milliseconds": 1995
+        },
+        {
+          "span": "ready_event_ingest",
+          "samples": 28,
+          "p50Milliseconds": 7,
+          "p95Milliseconds": 22,
+          "p99Milliseconds": 25
+        },
+        {
+          "span": "ready_projection",
+          "samples": 28,
+          "p50Milliseconds": 0,
+          "p95Milliseconds": 0,
+          "p99Milliseconds": 0
+        },
+        {
+          "span": "runner_boot",
+          "samples": 32,
+          "p50Milliseconds": 2184,
+          "p95Milliseconds": 3173,
+          "p99Milliseconds": 3289
+        },
+        {
+          "span": "runner_event_ingest",
+          "samples": 216,
+          "p50Milliseconds": 25,
+          "p95Milliseconds": 119,
+          "p99Milliseconds": 130
+        },
+        {
+          "span": "startup_dispatch",
+          "samples": 32,
+          "p50Milliseconds": 131,
+          "p95Milliseconds": 958,
+          "p99Milliseconds": 1018
+        },
+        {
+          "span": "workspace_provision",
+          "samples": 32,
+          "p50Milliseconds": 628,
+          "p95Milliseconds": 1304,
+          "p99Milliseconds": 1320
+        }
+      ],
+      "refusals": {},
+      "failures": {},
+      "memAvailableLowWaterMiB": 47381,
+      "occupancy": [
+        {
+          "offsetMilliseconds": 500,
+          "ready": 0,
+          "outstandingArrivals": 32,
+          "offeredRatePerSecond": null
+        },
+        {
+          "offsetMilliseconds": 1000,
+          "ready": 0,
+          "outstandingArrivals": 32,
+          "offeredRatePerSecond": null
+        },
+        {
+          "offsetMilliseconds": 1500,
+          "ready": 0,
+          "outstandingArrivals": 32,
+          "offeredRatePerSecond": null
+        },
+        {
+          "offsetMilliseconds": 2000,
+          "ready": 0,
+          "outstandingArrivals": 32,
+          "offeredRatePerSecond": null
+        },
+        {
+          "offsetMilliseconds": 2500,
+          "ready": 9,
+          "outstandingArrivals": 23,
+          "offeredRatePerSecond": null
+        },
+        {
+          "offsetMilliseconds": 3000,
+          "ready": 9,
+          "outstandingArrivals": 23,
+          "offeredRatePerSecond": null
+        },
+        {
+          "offsetMilliseconds": 3500,
+          "ready": 13,
+          "outstandingArrivals": 19,
+          "offeredRatePerSecond": null
+        },
+        {
+          "offsetMilliseconds": 4000,
+          "ready": 26,
+          "outstandingArrivals": 6,
+          "offeredRatePerSecond": null
+        }
+      ]
+    }
+  ]
+}

@@ -171,7 +171,11 @@ services:
       SECONDBOX_RUNNER_FIRECRACKER_JAILER_PATH: /usr/local/bin/jailer
       SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT: /w/jailer-root
       SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_START: "10001"
-      SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_COUNT: "16"
+      # One jailer UID per concurrently resident Instance. The Runner refuses to
+      # start when this pool is smaller than its Instance capacity, so binding
+      # both to the same required variable keeps a capacity run from failing on
+      # a constant that silently disagreed with its configuration.
+      SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_COUNT: ${SECONDBOX_SCENARIO_MAX_CONCURRENT_GLOBAL:?SECONDBOX_SCENARIO_MAX_CONCURRENT_GLOBAL is required}
       SECONDBOX_RUNNER_FIRECRACKER_JAILER_UID_ALLOW_BELOW_1000: "false"
       SECONDBOX_RUNNER_FIRECRACKER_JAILER_GID: "10001"
       SECONDBOX_RUNNER_FIRECRACKER_CGROUP_VERSION: "2"

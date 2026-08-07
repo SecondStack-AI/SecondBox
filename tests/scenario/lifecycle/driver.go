@@ -227,14 +227,8 @@ func (driver *lifecycleDriver) startSandbox(
 	key string,
 	timings *startupTimingSamples,
 ) (time.Duration, error) {
-	sandbox, err := handle.Refresh(ctx)
-	if err != nil {
-		return 0, err
-	}
 	startedAt := time.Now()
-	operation, err := handle.Start(ctx, secondboxclient.LifecycleOptions{
-		IdempotencyKey: key, IfMatch: scenarioharness.RevisionETag(sandbox.Revision),
-	})
+	operation, err := issueWithRevisionRetry(ctx, handle, key, handle.Start)
 	if err != nil {
 		return time.Since(startedAt), err
 	}
@@ -261,15 +255,11 @@ func (driver *lifecycleDriver) stopSandbox(
 	ctx context.Context,
 	handle *secondboxclient.SandboxHandle,
 	key string,
+	timings *startupTimingSamples,
 ) (time.Duration, error) {
-	sandbox, err := handle.Refresh(ctx)
-	if err != nil {
-		return 0, err
-	}
 	startedAt := time.Now()
-	if _, err := handle.Stop(ctx, secondboxclient.LifecycleOptions{
-		IdempotencyKey: key, IfMatch: scenarioharness.RevisionETag(sandbox.Revision),
-	}); err != nil {
+	operation, err := issueWithRevisionRetry(ctx, handle, key, handle.Stop)
+	if err != nil {
 		return time.Since(startedAt), err
 	}
 	reached, err := driver.wait(ctx, handle, secondboxclient.SandboxStateStopped)
@@ -283,6 +273,11 @@ func (driver *lifecycleDriver) stopSandbox(
 		)
 	}
 	driver.readyCount.Add(-1)
+	if timings != nil {
+		if err := driver.collectTeardownTiming(ctx, operation.ID, elapsed, timings); err != nil {
+			return elapsed, err
+		}
+	}
 	return elapsed, nil
 }
 
@@ -290,6 +285,7 @@ func (driver *lifecycleDriver) deleteSandbox(
 	ctx context.Context,
 	handle *secondboxclient.SandboxHandle,
 	key string,
+	timings *startupTimingSamples,
 ) (time.Duration, error) {
 	startedAt := time.Now()
 	wasReady := false
@@ -321,10 +317,61 @@ func (driver *lifecycleDriver) deleteSandbox(
 	}
 	_, err := driver.client.WaitOperation(ctx, operation.ID, driver.pollInterval())
 	elapsed := time.Since(startedAt)
-	if err == nil && wasReady {
+	if err != nil {
+		return elapsed, err
+	}
+	if wasReady {
 		driver.readyCount.Add(-1)
 	}
-	return elapsed, err
+	if timings != nil {
+		if err := driver.collectTeardownTiming(ctx, operation.ID, elapsed, timings); err != nil {
+			return elapsed, err
+		}
+	}
+	return elapsed, nil
+}
+
+// issueWithRevisionRetry re-reads the Sandbox and reissues a lifecycle request
+// whose optimistic-concurrency precondition lost a race.
+//
+// Every lifecycle reconciliation commits a new public revision, including the
+// ones that decide to wait, so a Sandbox the deployment is still reconciling
+// changes revision underneath a caller that read it microseconds earlier. That
+// is a lost race, not a rejection of the request, and the delete path already
+// treats it that way. The retry is inside the measured span deliberately: it is
+// latency the client really paid, and hiding it would understate the
+// transition.
+func issueWithRevisionRetry(
+	ctx context.Context,
+	handle *secondboxclient.SandboxHandle,
+	key string,
+	issue func(
+		context.Context, secondboxclient.LifecycleOptions,
+	) (secondboxclient.Operation, error),
+) (secondboxclient.Operation, error) {
+	var operation secondboxclient.Operation
+	for attempt := 0; attempt < 3; attempt++ {
+		sandbox, err := handle.Refresh(ctx)
+		if err != nil {
+			return secondboxclient.Operation{}, err
+		}
+		idempotencyKey := key
+		if attempt > 0 {
+			idempotencyKey = fmt.Sprintf("%s-revision-retry-%d", key, attempt)
+		}
+		operation, err = issue(ctx, secondboxclient.LifecycleOptions{
+			IdempotencyKey: idempotencyKey,
+			IfMatch:        scenarioharness.RevisionETag(sandbox.Revision),
+		})
+		if err == nil {
+			return operation, nil
+		}
+		if secondboxclient.ProblemCodeOf(err) != secondboxclient.ProblemCodePreconditionFailed ||
+			attempt == 2 {
+			return secondboxclient.Operation{}, err
+		}
+	}
+	return operation, nil
 }
 
 // isTransientTransportError reports whether an error is a connection-level fault
@@ -539,6 +586,59 @@ func (driver *lifecycleDriver) collectBootTiming(
 				}
 			}
 		}
+	}
+	return nil
+}
+
+// collectTeardownTiming records the durable orchestration milestones of one
+// stop or delete Operation. Startup already had stage attribution; teardown did
+// not, so ~900 ms of a ~1,016 ms delete could only be named as "orchestration".
+//
+// Each persisted milestone becomes one span carrying its own elapsed value, so
+// a span is the cost of exactly one hop rather than a running total. Unlike the
+// startup spans these do not overlap: they partition the Operation's wall clock
+// end to end, and orchestration_unattributed is whatever no milestone claims.
+func (driver *lifecycleDriver) collectTeardownTiming(
+	ctx context.Context,
+	operationID string,
+	clientElapsed time.Duration,
+	timings *startupTimingSamples,
+) error {
+	timing, err := scenarioharness.RequestJSON[secondboxclient.OperationTiming](
+		ctx, driver.client, "getOperationTiming", secondboxclient.CallOptions{
+			PathParameters: map[string]string{"operationId": operationID},
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("SecondBox lifecycle teardown timing read failed: %w", err)
+	}
+	timings.mu.Lock()
+	defer timings.mu.Unlock()
+	timings.recordStartupSpanLocked(
+		"operation_total",
+		millisecondsPointerDuration(timing.TotalMilliseconds),
+	)
+	attributed := 0.0
+	for _, stage := range timing.Orchestration {
+		timings.recordStartupSpanLocked(
+			stage.Stage,
+			time.Duration(stage.ElapsedMilliseconds*float64(time.Millisecond)),
+		)
+		attributed = stage.CumulativeMilliseconds
+	}
+	if timing.TotalMilliseconds != nil {
+		total := float64(*timing.TotalMilliseconds)
+		timings.recordStartupSpanLocked(
+			"orchestration_unattributed",
+			max(time.Duration((total-attributed)*float64(time.Millisecond)), 0),
+		)
+		// The Operation's own clock stops at its durable completion; the driver
+		// only learns about it on its next poll. That gap is the benchmark's
+		// observation cost, not the deployment's.
+		timings.recordStartupSpanLocked(
+			"client_visibility",
+			max(clientElapsed-time.Duration(total*float64(time.Millisecond)), 0),
+		)
 	}
 	return nil
 }

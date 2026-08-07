@@ -26,6 +26,14 @@ const (
 	scenarioRunnerID   = "scenario-runner"
 )
 
+// A cleanup delete competes with whatever lifecycle work the control plane
+// decided for itself while the test was running, so it reissues against the
+// documented retryable conflicts rather than reporting them as failures.
+const (
+	scenarioCleanupDeleteAttempts = 20
+	scenarioCleanupDeleteBackoff  = 250 * time.Millisecond
+)
+
 var scenarioKeySequence atomic.Uint64
 
 type scenarioFixture struct {
@@ -355,7 +363,7 @@ func cleanupScenarioSandbox(
 		return
 	}
 	var operation contracts.Operation
-	for attempt := 0; attempt < 5; attempt++ {
+	for attempt := 0; attempt < scenarioCleanupDeleteAttempts; attempt++ {
 		operation, err = handle.Delete(ctx, secondboxclient.LifecycleOptions{
 			IdempotencyKey: uniqueScenarioKey(t, "cleanup-delete"),
 			IfMatch:        sandboxRevisionETag(sandbox.Revision),
@@ -363,24 +371,34 @@ func cleanupScenarioSandbox(
 		if err == nil {
 			break
 		}
-		var apiError *secondboxclient.APIError
-		if !errors.As(err, &apiError) ||
-			apiError.StatusCode != http.StatusPreconditionFailed {
+		if !retryableScenarioCleanupConflict(err) {
 			t.Errorf("SecondBox scenario Sandbox cleanup delete: %v", err)
 			return
+		}
+		// A revision conflict clears as soon as the Sandbox is re-read, but a
+		// Workspace mutation conflict only clears once the in-flight mutation
+		// releases the Workspace mutation slot, so wait between attempts.
+		select {
+		case <-ctx.Done():
+			t.Errorf("SecondBox scenario Sandbox cleanup delete: %v", ctx.Err())
+			return
+		case <-time.After(scenarioCleanupDeleteBackoff):
 		}
 		refreshed, refreshErr := handle.Refresh(ctx)
 		if refreshErr != nil {
 			t.Errorf(
-				"SecondBox scenario Sandbox cleanup refresh after revision conflict: %v",
+				"SecondBox scenario Sandbox cleanup refresh after conflict: %v",
 				refreshErr,
 			)
+			return
+		}
+		if refreshed.State == contracts.SandboxStateDeleted {
 			return
 		}
 		sandbox = refreshed
 	}
 	if err != nil {
-		t.Errorf("SecondBox scenario Sandbox cleanup delete remained revision-conflicted: %v", err)
+		t.Errorf("SecondBox scenario Sandbox cleanup delete remained conflicted: %v", err)
 		return
 	}
 	if _, err := client.WaitOperation(ctx, operation.ID, 100*time.Millisecond); err != nil {
@@ -388,6 +406,24 @@ func cleanupScenarioSandbox(
 		return
 	}
 	waitForSandbox(t, ctx, handle, secondboxclient.SandboxStateDeleted)
+}
+
+// retryableScenarioCleanupConflict reports whether a cleanup delete lost a race
+// the control plane resolves on its own: the Sandbox revision moved between the
+// read and the delete, or a Workspace mutation the control plane dispatched for
+// itself still holds the Workspace mutation slot. Both are retryable by
+// contract, and `tests/scenario/stress` already classifies them that way.
+func retryableScenarioCleanupConflict(err error) bool {
+	var apiError *secondboxclient.APIError
+	if !errors.As(err, &apiError) {
+		return false
+	}
+	if apiError.StatusCode == http.StatusPreconditionFailed {
+		return true
+	}
+	return apiError.StatusCode == http.StatusConflict &&
+		apiError.Problem != nil &&
+		apiError.Problem.Code == "workspace_mutation_conflict"
 }
 
 func sandboxRevisionETag(revision int64) string {
