@@ -53,9 +53,10 @@ type snapshotTemplateQualificationReport struct {
 // before any file is staged. The low-level resume floor is measured separately
 // by TestSmokeSnapshotResumeLoadMeasurement.
 //
-// The template this test builds is identity-bearing, because the shipped guest
-// takes its Sandbox identity from kernel arguments and cannot yet boot without
-// one. The report records that rather than implying it away.
+// The template this test builds is identity-neutral: the guest boots with
+// secondbox.template_mode=1, carries no Sandbox ID, generation, secrets, or
+// mounted Workspace, and refuses every protocol connection until a resumed
+// Instance is bound through the control endpoint.
 func TestSmokeSnapshotResumeTemplateLifecycle(t *testing.T) {
 	if os.Getenv("SECONDBOX_RUNNER_QUALIFY_SNAPSHOT_RESUME") != "1" {
 		t.Skip("set SECONDBOX_RUNNER_QUALIFY_SNAPSHOT_RESUME=1 to qualify the snapshot resume template")
@@ -79,7 +80,7 @@ func TestSmokeSnapshotResumeTemplateLifecycle(t *testing.T) {
 		HostKernel:          requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_HOST_KERNEL"),
 		HostCPU:             requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_HOST_CPU"),
 		WorkspaceFilesystem: requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_WORKSPACE_FILESYSTEM"),
-		IdentityNeutral:     false,
+		IdentityNeutral:     true,
 	}
 
 	workDir := shortSmokeDir(t)
@@ -213,6 +214,14 @@ func buildSnapshotResumeTemplate(
 		CompartmentID:       "cmp_snapshot_resume_template",
 		WorkspaceAttachment: attachment,
 	})
+	// The template boots identity-neutral: no Sandbox ID, no generation, no
+	// secrets, no mounted Workspace, and a protocol listener that refuses every
+	// connection until a resumed Instance is bound.
+	opts.TemplateMode = true
+	templateBootArgs, err := manager.templateGuestBootArgs()
+	if err != nil {
+		t.Fatalf("template guest boot arguments: %v", err)
+	}
 	instanceID, err := manager.createAndStart(t.Context(), "resumetmpl", opts)
 	if err != nil {
 		_ = attachment.Close()
@@ -253,7 +262,7 @@ func buildSnapshotResumeTemplate(
 		t.Fatal("template source did not terminate")
 	}
 
-	key := snapshotResumeQualificationKey(t, cfg, opts, memoryMiB, workspaceMiB)
+	key := snapshotResumeQualificationKey(t, cfg, opts, templateBootArgs, memoryMiB, workspaceMiB)
 	templateID, err := key.TemplateID()
 	if err != nil {
 		t.Fatalf("template identity: %v", err)
@@ -290,6 +299,7 @@ func snapshotResumeQualificationKey(
 	t *testing.T,
 	cfg *config.Config,
 	opts runtimemanager.StartOpts,
+	templateBootArgs string,
 	memoryMiB int,
 	workspaceMiB int,
 ) SnapshotTemplateKey {
@@ -312,11 +322,11 @@ func snapshotResumeQualificationKey(
 		SigningKeyFingerprint: cfg.MicroVMPublicKeySHA256,
 		SignedManifestDigest:  "sha256:" + digest("signed manifest", filepath.Join(artifactDir, "manifest.json")),
 		KernelSHA256:          digest("kernel", cfg.MicroVMKernelPath),
-		KernelArgs: effectiveKernelArgsWithProcessLimit(
+		KernelArgs: strings.TrimSpace(effectiveKernelArgsWithProcessLimit(
 			cfg,
 			"",
 			opts.SandboxPolicy.ProcessLimit,
-		),
+		) + " " + templateBootArgs),
 		SourceRootfsSHA256:      digest("rootfs", cfg.MicroVMRootfsPath),
 		SharedImageSHA256:       digest("shared image", cfg.MicroVMSharedImagePath),
 		RuntimeBundleDigest:     opts.ImageManifestDigest,
