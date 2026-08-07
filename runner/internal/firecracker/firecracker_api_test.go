@@ -89,6 +89,39 @@ func TestFirecrackerAPIClientLoadSnapshotWithOverrides(t *testing.T) {
 	}
 }
 
+func TestFirecrackerAPIClientUpdateDrivePath(t *testing.T) {
+	socketPath := shortUnixSocketPath(t, "firecracker.sock")
+	seen := make(chan apiCall, 2)
+	closeServer := startFakeFirecrackerAPIServer(t, socketPath, seen)
+	defer closeServer()
+
+	client := FirecrackerAPIClient{SocketPath: socketPath, Timeout: 2 * time.Second}
+	ctx := context.Background()
+	if err := client.UpdateDrivePath(ctx, " workspace ", " /run/instance/workspace.img "); err != nil {
+		t.Fatalf("update drive path: %v", err)
+	}
+	call := drainAPICalls(seen, 1)[0]
+	if call.Method != http.MethodPatch {
+		t.Fatalf("update drive method = %q, want PATCH", call.Method)
+	}
+	if call.Path != "/drives/workspace" {
+		t.Fatalf("update drive path = %q, want /drives/workspace", call.Path)
+	}
+	if call.Body["drive_id"] != "workspace" || call.Body["path_on_host"] != "/run/instance/workspace.img" {
+		t.Fatalf("update drive body = %#v", call.Body)
+	}
+}
+
+func TestFirecrackerAPIClientUpdateDrivePathRequiresBothFields(t *testing.T) {
+	client := FirecrackerAPIClient{SocketPath: "/nonexistent.sock", Timeout: time.Second}
+	if err := client.UpdateDrivePath(context.Background(), "  ", "/workspace.img"); err == nil {
+		t.Fatal("blank drive id was accepted")
+	}
+	if err := client.UpdateDrivePath(context.Background(), "workspace", "  "); err == nil {
+		t.Fatal("blank backing path was accepted")
+	}
+}
+
 func TestManagerPutMMDSConfiguresV2WhenTapBacked(t *testing.T) {
 	socketPath := shortUnixSocketPath(t, "firecracker.sock")
 	seen := make(chan apiCall, 4)

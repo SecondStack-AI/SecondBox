@@ -57,6 +57,11 @@ type mmdsConfigRequest struct {
 	NetworkInterface []string `json:"network_interfaces,omitempty"`
 }
 
+type partialDriveRequest struct {
+	DriveID    string `json:"drive_id"`
+	PathOnHost string `json:"path_on_host"`
+}
+
 func (c FirecrackerAPIClient) Pause(ctx context.Context) error {
 	return c.patchJSON(ctx, "/vm", vmStateRequest{State: "Paused"}, nil)
 }
@@ -99,6 +104,31 @@ func (c FirecrackerAPIClient) LoadSnapshotWithOptions(ctx context.Context, req s
 		}
 	}
 	return c.putJSON(ctx, "/snapshot/load", req, nil)
+}
+
+// UpdateDrivePath repoints a configured virtio-block device at a different
+// backing file. Firecracker v1.16.1 accepts this only after boot, and its
+// snapshot-load request carries no drive override: SnapshotLoadParams exposes
+// network_overrides, vsock_override, and clock_realtime only. A restored VM is
+// post-boot, so this is the single supported way to move a restored guest's
+// block device onto a per-Instance file when the snapshot recorded an absolute
+// host path.
+//
+// The jailed launch path does not need it. Jailed drives are recorded as
+// chroot-relative names, so a restored Instance opens its own jail's file at
+// the same recorded name and the Workspace swap happens by staging, not by API
+// call. This exists for the unjailed path, where the recorded path is a real
+// host path that cannot be shared between concurrent Instances.
+func (c FirecrackerAPIClient) UpdateDrivePath(ctx context.Context, driveID, pathOnHost string) error {
+	driveID = strings.TrimSpace(driveID)
+	pathOnHost = strings.TrimSpace(pathOnHost)
+	if driveID == "" {
+		return fmt.Errorf("drive id is required")
+	}
+	if pathOnHost == "" {
+		return fmt.Errorf("drive backing path is required")
+	}
+	return c.patchJSON(ctx, "/drives/"+driveID, partialDriveRequest{DriveID: driveID, PathOnHost: pathOnHost}, nil)
 }
 
 func (c FirecrackerAPIClient) ConfigureMMDSV2(ctx context.Context, ifaces []string) error {
