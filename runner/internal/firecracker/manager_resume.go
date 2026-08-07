@@ -78,7 +78,7 @@ func stageSharedTemplateFile(destination, source string) error {
 	if err := hardLinkFile(source, destination); err != nil {
 		if errors.Is(err, syscall.EXDEV) {
 			return fmt.Errorf(
-				"link snapshot template file into jail: %w (SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_ROOT must be on the same filesystem as SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT so the golden memory file keeps one inode and one page cache)",
+				"link snapshot template file into jail: %w (the snapshot template cache root must be on the same filesystem as SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT so the golden memory file keeps one inode and one page cache)",
 				err,
 			)
 		}

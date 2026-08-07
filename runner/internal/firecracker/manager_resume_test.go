@@ -136,8 +136,9 @@ func TestStageSharedTemplateFileNamesTheTemplateRootOnCrossDeviceFailure(t *test
 	if !errors.Is(err, syscall.EXDEV) {
 		t.Fatalf("error does not wrap EXDEV: %v", err)
 	}
-	if !strings.Contains(err.Error(), "SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_ROOT") {
-		t.Fatalf("error does not name the misconfigured setting: %v", err)
+	if !strings.Contains(err.Error(), "snapshot template cache root") ||
+		!strings.Contains(err.Error(), "SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT") {
+		t.Fatalf("error does not name the misconfigured pair of locations: %v", err)
 	}
 }
 
