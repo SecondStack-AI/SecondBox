@@ -298,7 +298,7 @@ func TestReconcilerLeavesFinishStopImmediatelyDueWhenDeletionIsWanted(t *testing
 	}
 }
 
-func TestReconcilerKeepsFinishStopOnPollIntervalWhenStoppedIsWanted(t *testing.T) {
+func TestReconcilerParksFinishStopWhenStoppedIsWanted(t *testing.T) {
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
 	store := &fakeReconcileStore{claim: ports.LifecycleReconcileClaim{
 		SandboxID: "sbx-1", WorkerID: "worker-1", Revision: 3,
@@ -314,12 +314,92 @@ func TestReconcilerKeepsFinishStopOnPollIntervalWhenStoppedIsWanted(t *testing.T
 	if err != nil || !found || decision.Action != ActionFinishStop {
 		t.Fatalf("reconciliation = %#v, %t, %v", decision, found, err)
 	}
-	want := now.Add(time.Second)
-	if !store.nextReconcileAt.Equal(want) {
+	if !store.nextReconcileAt.IsZero() {
 		t.Fatalf(
-			"next reconciliation = %s, want the poll deadline %s for a Sandbox already at rest",
-			store.nextReconcileAt, want,
+			"next reconciliation = %s, want a parked schedule: finish-stop commits the desired state",
+			store.nextReconcileAt,
 		)
+	}
+}
+
+// TestReconcilerParksSandboxesAtRest fixes the boundary of the rest matrix. A
+// Sandbox holding its desired state with no deadline that can change the
+// decision leaves the reconciliation work set entirely; anything with an
+// outstanding transition or an unmet desired state keeps its schedule.
+func TestReconcilerParksSandboxesAtRest(t *testing.T) {
+	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	for _, testCase := range []struct {
+		name       string
+		observed   string
+		desired    string
+		wantAction Action
+		wantParked bool
+	}{
+		{
+			name: "stopped Sandbox wanted stopped", observed: contracts.SandboxStateStopped,
+			desired:    contracts.SandboxDesiredStateStopped,
+			wantAction: ActionWait, wantParked: true,
+		},
+		{
+			name: "failed Sandbox wanted stopped", observed: contracts.SandboxStateFailed,
+			desired:    contracts.SandboxDesiredStateStopped,
+			wantAction: ActionWait, wantParked: true,
+		},
+		{
+			name: "deleted Sandbox wanted deleted", observed: contracts.SandboxStateDeleted,
+			desired:    contracts.SandboxDesiredStateDeleted,
+			wantAction: ActionWait, wantParked: true,
+		},
+		{
+			name: "creating Sandbox wanted stopped", observed: contracts.SandboxStateCreating,
+			desired:    contracts.SandboxDesiredStateStopped,
+			wantAction: ActionWait, wantParked: false,
+		},
+		{
+			name: "stopped Sandbox wanted running", observed: contracts.SandboxStateStopped,
+			desired:    contracts.SandboxDesiredStateRunning,
+			wantAction: ActionStartInstance, wantParked: false,
+		},
+		{
+			name: "stopped Sandbox wanted deleted", observed: contracts.SandboxStateStopped,
+			desired:    contracts.SandboxDesiredStateDeleted,
+			wantAction: ActionDelete, wantParked: false,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			store := &fakeReconcileStore{claim: ports.LifecycleReconcileClaim{
+				SandboxID: "sbx-1", WorkerID: "worker-1", Revision: 3,
+				ObservedState: testCase.observed, DesiredState: testCase.desired,
+			}}
+			effects := &fakeEffectExecutor{}
+			reconciler := Reconciler{
+				Store: store, Effects: effects, WorkerID: "worker-1",
+				ClaimDuration: time.Minute, PollInterval: time.Second,
+			}
+			decision, found, err := reconciler.RunOnce(
+				t.Context(), now, ports.LifecycleWakeTriggerNotify,
+			)
+			if err != nil || !found || decision.Action != testCase.wantAction {
+				t.Fatalf(
+					"reconciliation = %#v, %t, %v, want %s",
+					decision, found, err, testCase.wantAction,
+				)
+			}
+			if !actionRequiresEffect(testCase.wantAction) {
+				if parked := store.nextReconcileAt.IsZero(); parked != testCase.wantParked {
+					t.Fatalf(
+						"next reconciliation = %s parked=%t, want parked=%t",
+						store.nextReconcileAt, parked, testCase.wantParked,
+					)
+				}
+				return
+			}
+			// An effect action never reaches the parking decision: it commits
+			// its own schedule and waits for the Runner's acknowledgement.
+			if store.action != "" {
+				t.Fatalf("effect action committed a database-only decision %q", store.action)
+			}
+		})
 	}
 }
 

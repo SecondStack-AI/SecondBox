@@ -13,6 +13,10 @@ import (
 // ReconcileStore owns durable claims and compare-and-swap transition commits.
 // The wake trigger is attribution evidence carried into the claim transaction;
 // it never changes which work the claim query finds.
+//
+// A zero nextReconcileAt is the parked schedule: the commit carries no durable
+// deadline at all, so the Sandbox leaves the reconciliation work set until an
+// external event schedules it again.
 type ReconcileStore interface {
 	ClaimLifecycle(ctx context.Context, workerID string, now time.Time, claimDuration time.Duration, wakeTrigger ports.LifecycleWakeTrigger) (ports.LifecycleReconcileClaim, bool, error)
 	ApplyLifecycleAction(ctx context.Context, claim ports.LifecycleReconcileClaim, action, terminationReason string, now, nextReconcileAt time.Time) error
@@ -176,6 +180,9 @@ func (reconciler Reconciler) reconcileClaim(
 // interval, but lets a healthy ready Sandbox sleep until durable policy can
 // actually change its decision. Runner terminal evidence and desired-state
 // writes explicitly wake the Sandbox by moving next_reconcile_at to now.
+//
+// A Sandbox the commit leaves at rest carries no deadline at all and returns
+// the zero time, which the store commits as a parked schedule.
 func nextLifecycleReconcileAt(
 	view View,
 	decision Decision,
@@ -185,6 +192,9 @@ func nextLifecycleReconcileAt(
 	fallback := now.Add(pollInterval)
 	if successorIsImmediatelyAvailable(view, decision) {
 		return now
+	}
+	if committedStateIsAtRest(view, decision) {
+		return time.Time{}
 	}
 	if decision.Action != ActionWait ||
 		view.Observed != contracts.SandboxStateReady ||
@@ -239,8 +249,60 @@ func successorIsImmediatelyAvailable(view View, decision Decision) bool {
 	case ActionFinishStop:
 		// Finish-stop commits `stopped`. A Sandbox still wanted deleted deletes
 		// and one wanted running starts again; only a Sandbox that is already
-		// in its desired state has nothing waiting on this commit.
+		// in its desired state has nothing waiting on this commit, and that one
+		// parks instead of being scheduled at all.
 		return view.Desired != contracts.SandboxDesiredStateStopped
+	default:
+		return false
+	}
+}
+
+// committedStateIsAtRest reports whether the state a decision commits is a
+// durable rest state: the Sandbox already holds its desired state and carries
+// no deadline whose expiry could produce a different decision. No amount of
+// elapsed time changes what the reconciler would decide, so scheduling another
+// pass buys nothing and costs a claim transaction and a commit per interval,
+// forever, for every Sandbox in the population.
+//
+// Such a commit parks the Sandbox instead. Only an external event schedules it
+// again, and every event that can change its decision writes the schedule in
+// the same transaction that changes the durable state:
+//
+//   - A lifecycle intent (start, stop, drain, delete) commits desired_state and
+//     next_reconcile_at together in SetSandboxDesiredState, which also satisfies
+//     the sandboxes_notify_due predicate and wakes the worker at once.
+//   - Runner evidence is fenced to the Sandbox's current Instance and
+//     generation, and a Sandbox at rest holds neither, so no Runner event
+//     applies to one.
+//   - Snapshot, relocation, metadata, activity, and Lease writes change no input
+//     to Decide for a Sandbox at rest, so none of them needs a reconciliation
+//     pass and none schedules one.
+//
+// The two idle policy deadlines, the idle timeout and the maximum duration, are
+// running concerns measured from readiness. Neither applies to a Sandbox that
+// holds no Instance, which is why a rest state carries no deadline.
+func committedStateIsAtRest(view View, decision Decision) bool {
+	switch decision.Action {
+	case ActionWait:
+		return stateIsAtRest(view.Desired, view.Observed)
+	case ActionFinishStop:
+		// Finish-stop commits `stopped`; wanting anything else has a successor.
+		return stateIsAtRest(view.Desired, contracts.SandboxStateStopped)
+	default:
+		return false
+	}
+}
+
+// stateIsAtRest names the durable pairs in Decide's matrix that reconcile to
+// ActionWait for every clock. Adding a pair here must be matched by a wake path
+// that covers every event able to change that pair's decision.
+func stateIsAtRest(desired, observed string) bool {
+	switch desired {
+	case contracts.SandboxDesiredStateStopped:
+		return observed == contracts.SandboxStateStopped ||
+			observed == contracts.SandboxStateFailed
+	case contracts.SandboxDesiredStateDeleted:
+		return observed == contracts.SandboxStateDeleted
 	default:
 		return false
 	}
