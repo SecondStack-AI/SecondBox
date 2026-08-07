@@ -77,6 +77,7 @@ type Server struct {
 	Freezer           WorkspaceFreezer
 	Hardener          RestoreHardener
 	Mounter           WorkspaceMounter
+	Networker         NetworkConfigurer
 	Now               func() time.Time
 	// Assignment is set only for a template-mode guest, which boots without any
 	// Sandbox identity and receives one through /assignment/bind after
@@ -523,10 +524,23 @@ func (s Server) handleAssignmentBind(w http.ResponseWriter, r *http.Request) {
 	if mounter == nil {
 		mounter = LinuxWorkspaceMounter{}
 	}
-	// The Workspace is mounted inside the one atomic bind, so a guest that fails
-	// to mount installs no identity and never opens its protocol listener.
+	networker := s.Networker
+	if networker == nil {
+		networker = LinuxNetworkConfigurer{}
+	}
+	// The Workspace mount and the network identity are installed inside the one
+	// atomic bind, so a guest that fails either installs no identity and never
+	// opens its protocol listener. The network is last because it is the step
+	// that brings the link up: nothing can leave this guest until every other
+	// part of its identity is in place.
 	identity, err := s.Assignment.Bind(req, func(ProtocolIdentity) error {
-		return mounter.Mount(r.Context(), s.workspaceRoot(), req.WorkspaceWritable)
+		if err := mounter.Mount(r.Context(), s.workspaceRoot(), req.WorkspaceWritable); err != nil {
+			return err
+		}
+		if req.Network == nil {
+			return nil
+		}
+		return networker.Configure(r.Context(), *req.Network)
 	})
 	if err != nil {
 		if errors.Is(err, ErrAssignmentBindNotHardened) || errors.Is(err, ErrAssignmentAlreadyBound) {

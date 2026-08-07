@@ -45,10 +45,22 @@ func cloneRunnerGateways(source map[string]netip.Addr) map[string]netip.Addr {
 
 func (m *Manager) networkRequired(opts runtimemanager.StartOpts) bool {
 	_ = opts
-	if strings.TrimSpace(m.cfg.MicroVMBridgeName) != "" {
+	return microVMNetworkRequired(m.cfg)
+}
+
+// microVMNetworkRequired reports whether this runner gives guests a network
+// device. It is deployment configuration, not a per-start choice, which is why a
+// snapshot template's recorded network shape follows from it: a template built
+// on a runner without guest networking records no interface, and a resumed guest
+// can never acquire one.
+func microVMNetworkRequired(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	if strings.TrimSpace(cfg.MicroVMBridgeName) != "" {
 		return true
 	}
-	return strings.TrimSpace(m.cfg.MicroVMGuestIP) != ""
+	return strings.TrimSpace(cfg.MicroVMGuestIP) != ""
 }
 
 func (m *Manager) tapOwnerUID(jailerUID int) int {

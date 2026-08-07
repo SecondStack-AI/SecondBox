@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -57,10 +58,19 @@ type SnapshotTemplateKey struct {
 	WorkspaceSizeMiB        int      `json:"workspaceSizeMiB"`
 	ProcessLimit            int      `json:"processLimit"`
 	RuntimeClass            string   `json:"runtimeClass"`
-	NetworkInterfaceID      string   `json:"networkInterfaceId"`
-	GuestControlVsockPort   uint32   `json:"guestControlVsockPort"`
-	GuestProtocolVsockPort  uint32   `json:"guestProtocolVsockPort"`
-	GuestCID                uint32   `json:"guestCid"`
+	// NetworkInterfaceID and TemplateGuestMAC describe the network device the VM
+	// state records. Both are empty exactly when the template was captured
+	// without one. That distinction is load-bearing rather than cosmetic: a
+	// resumed guest can never be given an interface it did not have at capture,
+	// because Firecracker's PUT /network-interfaces is pre-boot only and its
+	// snapshot load override rebinds a recorded interface rather than adding one.
+	// So a template with no device can never serve a Sandbox that needs one, and
+	// a template with a device can only be resumed against a per-Instance TAP.
+	NetworkInterfaceID     string `json:"networkInterfaceId"`
+	TemplateGuestMAC       string `json:"templateGuestMac"`
+	GuestControlVsockPort  uint32 `json:"guestControlVsockPort"`
+	GuestProtocolVsockPort uint32 `json:"guestProtocolVsockPort"`
+	GuestCID               uint32 `json:"guestCid"`
 }
 
 // Validate rejects a key that cannot identify a template. Every field is
@@ -85,7 +95,6 @@ func (k SnapshotTemplateKey) Validate() error {
 		{"firecrackerVersion", k.FirecrackerVersion},
 		{"hostCpuFingerprint", k.HostCPUFingerprint},
 		{"runtimeClass", k.RuntimeClass},
-		{"networkInterfaceId", k.NetworkInterfaceID},
 	}
 	for _, field := range required {
 		if strings.TrimSpace(field.value) == "" {
@@ -121,7 +130,29 @@ func (k SnapshotTemplateKey) Validate() error {
 	if len(k.GuestFeatures) == 0 {
 		return fmt.Errorf("SecondBox snapshot template key field \"guestFeatures\" is required")
 	}
+	// The network device is described by both fields or by neither. A template
+	// that named an interface without recording the MAC it was captured with
+	// would leave the value every resumed Instance must replace unstated.
+	interfaceID := strings.TrimSpace(k.NetworkInterfaceID)
+	guestMAC := strings.TrimSpace(k.TemplateGuestMAC)
+	if (interfaceID == "") != (guestMAC == "") {
+		return fmt.Errorf(
+			"SecondBox snapshot template key fields \"networkInterfaceId\" and \"templateGuestMac\" must both be set or both be empty",
+		)
+	}
+	if guestMAC != "" {
+		if _, err := net.ParseMAC(guestMAC); err != nil {
+			return fmt.Errorf("SecondBox snapshot template key field \"templateGuestMac\" is not a MAC address: %w", err)
+		}
+	}
 	return nil
+}
+
+// HasNetworkDevice reports whether the VM state records a network interface. A
+// template with one may be resumed only against a per-Instance TAP, and a
+// template without one can never acquire an interface at all.
+func (k SnapshotTemplateKey) HasNetworkDevice() bool {
+	return strings.TrimSpace(k.NetworkInterfaceID) != ""
 }
 
 // TemplateID is the stable identity of the compatibility key. It is derived

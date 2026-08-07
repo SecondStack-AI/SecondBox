@@ -25,6 +25,16 @@ const (
 	snapshotResumeMemoryName  = snapshotTemplateMemoryName
 
 	snapshotResumeNetworkInterfaceID = "eth0"
+
+	// snapshotTemplateGuestMAC is the MAC a template's interface is captured
+	// with. It is a compatibility-keyed constant for the same reason the guest
+	// CID and the vsock port numbers are: Firecracker's snapshot load overrides
+	// only an interface's host TAP, never its guest MAC, so the captured value
+	// reaches every resumed Instance and must be reproducible rather than derived
+	// from whichever TAP the template build happened to allocate. Every Instance
+	// replaces it with a unique per-Sandbox MAC at its assignment bind, before
+	// the link comes up.
+	snapshotTemplateGuestMAC = "02:00:00:5b:7e:00"
 )
 
 // ErrSnapshotTemplateUnavailable marks a resume that cannot proceed because the

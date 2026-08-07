@@ -343,6 +343,13 @@ func snapshotResumeQualificationKey(
 	if err != nil {
 		t.Fatalf("host CPU fingerprint: %v", err)
 	}
+	// The template's recorded network shape follows the runner's deployment
+	// configuration, exactly as a cold boot's does. It belongs in the key because
+	// a resumed guest can never acquire an interface the capture did not record.
+	networkInterfaceID, templateGuestMAC := "", ""
+	if microVMNetworkRequired(cfg) {
+		networkInterfaceID, templateGuestMAC = snapshotResumeNetworkInterfaceID, snapshotTemplateGuestMAC
+	}
 	return SnapshotTemplateKey{
 		ArtifactVersion:       "qualification",
 		Architecture:          runtime.GOARCH,
@@ -375,7 +382,8 @@ func snapshotResumeQualificationKey(
 		WorkspaceSizeMiB:       workspaceMiB,
 		ProcessLimit:           opts.SandboxPolicy.ProcessLimit,
 		RuntimeClass:           string(runtimemanager.RuntimeClassToolExecutor),
-		NetworkInterfaceID:     snapshotResumeNetworkInterfaceID,
+		NetworkInterfaceID:     networkInterfaceID,
+		TemplateGuestMAC:       templateGuestMAC,
 		GuestControlVsockPort:  cfg.MicroVMGuestControlVsockPort,
 		GuestProtocolVsockPort: cfg.MicroVMGuestProtocolVsockPort,
 		GuestCID:               3,

@@ -1029,7 +1029,7 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 	}
 	timer.mark("launch_config_ready")
 
-	launch, launchErr := m.prepareLaunchWithPolicy(setupCtx, id, dir, launchImage.KernelPath, launchImage.RootfsPath, workspacePath, sharedImagePath, tapName, guestIP, jailerUID, opts.SandboxPolicy)
+	launch, launchErr := m.prepareLaunchWithPolicy(setupCtx, id, dir, launchImage.KernelPath, launchImage.RootfsPath, workspacePath, sharedImagePath, tapName, guestIP, jailerUID, opts.TemplateMode, opts.SandboxPolicy)
 	if launchErr != nil {
 		return "", m.joinInstanceNetworkCleanup(setupCtx, id, tapName, launchErr)
 	}

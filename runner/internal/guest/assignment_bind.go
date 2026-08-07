@@ -20,6 +20,12 @@ type AssignmentBindRequest struct {
 	ToolchainManifestDigest string `json:"toolchainManifestDigest"`
 	HeartbeatIntervalMs     uint64 `json:"heartbeatIntervalMs"`
 	WorkspaceWritable       bool   `json:"workspaceWritable"`
+	// Network is present exactly when the runner gave this Instance a TAP. A
+	// resumed guest's interface is whatever the template captured — present,
+	// down, and address-less — so this is the only point at which it acquires a
+	// per-Sandbox identity. A deployment without guest networking sends none and
+	// the guest configures none.
+	Network *AssignmentNetworkIdentity `json:"network,omitempty"`
 }
 
 // ErrAssignmentBindNotHardened is returned when a bind arrives before the guest
