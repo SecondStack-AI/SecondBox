@@ -130,7 +130,15 @@ Two consequences follow. `PATCH /drives` cannot repoint a restored Instance's di
 
 The design consequence is not a workaround, it is a constraint: **snapshot resume requires the jailer.** Under the jailer the recorded drive paths are chroot-relative names that each Instance resolves inside its own jail, so staging — not an API call — is what delivers a per-Sandbox Workspace. `prepareSnapshotResumeLaunch` therefore refuses an unjailed resume before staging any file, and the runner's unjailed mode stays what it always was: a test-only escape hatch, now explicitly incompatible with `snapshot_resume`.
 
-What is qualified is the template artifact itself. The evidence is `docs/plans/evidence/2026-08-06-snapshot-resume-template-lifecycle.json`, recording `identityNeutralTemplate: false` because the shipped guest still takes its Sandbox identity from kernel arguments. The run builds a template from a real signed boot at 512 MiB with a 10.7 GiB sealed post-boot rootfs captured at one paused point, publishes it atomically, admits it through the runner-local cache with full digest verification, proves the per-start stable-identity check is stat-only, and proves the unjailed refusal fails closed before staging.
+What is qualified is the template artifact itself. The evidence is `docs/plans/evidence/2026-08-06-snapshot-resume-template-lifecycle.json`, recording source commit `76b73bb` with `sourceTreeDirty: true` because it qualified the harness that produced it, and `identityNeutralTemplate: false` because the shipped guest still takes its Sandbox identity from kernel arguments. The run builds a template from a real signed boot at 512 MiB with a 10.7 GiB sealed post-boot rootfs captured at one paused point, publishes it atomically, admits it through the runner-local cache with full digest verification, proves the per-start stable-identity check is stat-only, and proves the unjailed refusal fails closed before staging.
+
+| Stage | Measured |
+|---|---:|
+| Template build, boot through sealed publish | 28,822 ms |
+| One-time cache admission, digesting 11.2 GiB | 5,187 ms |
+| Per-start stable-identity check | **5,911 ns** |
+
+The last row is the one that matters for the budget. Admission verifies every digest once and costs seconds; every start afterwards costs six microseconds, four orders of magnitude below the 0–3 ms the re-derived budget allows for template lookup. That is the difference between extending the signed-asset model and reproducing the 835 ms `artifact_verify` p95 on every start.
 
 The resume floor remains the separately qualified low-level load: 3–4 ms warm load and 16–18 ms through post-resume hardening at 256, 512, and 2048 MiB, with no full memory-image copy. Qualifying the composed multi-Instance resume needs a privileged jailed gate, which is the first item of Task 9.
 

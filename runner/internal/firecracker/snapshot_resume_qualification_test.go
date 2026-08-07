@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -221,12 +222,6 @@ func buildSnapshotResumeTemplate(
 	if inst == nil || inst.cmd == nil || inst.cmd.Process == nil {
 		t.Fatalf("template source %q has no Firecracker process", instanceID)
 	}
-	defer func() {
-		if err := manager.Remove(t.Context(), instanceID); err != nil {
-			t.Errorf("remove template source: %v", err)
-		}
-	}()
-
 	stageDir, err := cache.StageDirectory()
 	if err != nil {
 		t.Fatalf("stage template: %v", err)
@@ -248,6 +243,14 @@ func buildSnapshotResumeTemplate(
 	}
 	if err := reflinkOnlyFile(filepath.Join(workDir, "template-workspace.ext4"), inst.workspacePath, 0o600); err != nil {
 		t.Fatalf("seal template Workspace shape: %v", err)
+	}
+	if err := syscall.Kill(-inst.cmd.Process.Pid, syscall.SIGKILL); err != nil {
+		t.Fatalf("terminate template source: %v", err)
+	}
+	select {
+	case <-inst.done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("template source did not terminate")
 	}
 
 	key := snapshotResumeQualificationKey(t, cfg, opts, memoryMiB, workspaceMiB)
