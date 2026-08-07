@@ -25,7 +25,6 @@ const (
 	snapshotResumeMemoryName  = snapshotTemplateMemoryName
 
 	snapshotResumeNetworkInterfaceID = "eth0"
-	snapshotResumeWorkspaceDriveID   = "workspace"
 )
 
 // ErrSnapshotTemplateUnavailable marks a resume that cannot proceed because the
@@ -55,12 +54,6 @@ type snapshotResumeLaunch struct {
 	vmStateResolvedPath string
 	memoryResolvedPath  string
 	vsockResolvedPath   string
-}
-
-func (l snapshotResumeLaunch) cleanup() {
-	if l.jailRoot != "" {
-		_ = os.RemoveAll(l.jailRoot)
-	}
 }
 
 // stageSharedTemplateFile links an immutable template file into an Instance's
