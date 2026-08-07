@@ -21,6 +21,18 @@ const (
 	StartupStageGuestNegotiated StartupStage = "guest_negotiated"
 )
 
+// StartupMode is the provider-neutral startup policy an immutable Profile
+// revision pinned. It selects the start path and never falls back: a
+// snapshot-resume Sandbox that cold booted would come up without the
+// identity-neutral template, the shared golden memory inode, or the one-time
+// assignment bind that define the mode.
+type StartupMode string
+
+const (
+	StartupModeColdBoot       StartupMode = "cold_boot"
+	StartupModeSnapshotResume StartupMode = "snapshot_resume"
+)
+
 type StartOpts struct {
 	Timezone                string
 	CompartmentID           string
@@ -45,6 +57,11 @@ type StartOpts struct {
 	// runtime secrets; readiness is its control endpoint answering. It is used
 	// only by the privileged template-build path and never serves a tenant.
 	TemplateMode bool
+	// StartupMode selects the start path. An assignment always states it,
+	// because the control plane refuses a Profile revision that does not. It is
+	// empty only for runner-internal launches that are not Profile-driven — the
+	// tool VM and the template build — and those are cold by construction.
+	StartupMode StartupMode
 }
 
 type SandboxRuntimePolicy struct {

@@ -152,6 +152,12 @@ type instance struct {
 	jailedProcess bool
 	jailerUID     int
 	adoptedOrphan bool
+	// postResumeHardened records that a resumed guest already accepted fresh
+	// host entropy and a corrected clock. Resume must harden before its one
+	// assignment bind, because the guest refuses to bind an unhardened
+	// identity, so the shared secret-delivery step must not seed entropy a
+	// second time.
+	postResumeHardened bool
 }
 
 type firecrackerLaunch struct {
@@ -817,6 +823,16 @@ func (m *Manager) untrackedInstanceIDs(candidateIDs []string) []string {
 	return out
 }
 
+// startCompartmentInstance selects the start path the Sandbox's immutable
+// Profile revision pinned. A snapshot_resume Profile never falls back to cold
+// boot: an unresolvable template is a typed retryable start failure, because a
+// Sandbox that quietly cold booted would come up without the identity-neutral
+// template, the shared golden memory inode, or the one-time assignment bind
+// that define the mode.
+//
+// An empty mode is cold, and only runner-internal launches that no Profile
+// drives can produce one: the tool VM and the template build. Every assignment
+// states a mode, because ValidateAssignment refuses one that does not.
 func (m *Manager) startCompartmentInstance(ctx context.Context, sandboxID, compartmentID string, opts runtimemanager.StartOpts, onRegisteredLocked func()) (id string, err error) {
 	started := time.Now()
 	defer func() {
@@ -827,7 +843,360 @@ func (m *Manager) startCompartmentInstance(ctx context.Context, sandboxID, compa
 	if m.startCompartment != nil {
 		return m.startCompartment(ctx, sandboxID, compartmentID, opts)
 	}
-	return m.createAndStartCold(ctx, sandboxID, compartmentID, opts, onRegisteredLocked)
+	switch opts.StartupMode {
+	case runtimemanager.StartupModeSnapshotResume:
+		return m.createAndStartResume(ctx, sandboxID, compartmentID, opts, onRegisteredLocked)
+	case runtimemanager.StartupModeColdBoot, "":
+		return m.createAndStartCold(ctx, sandboxID, compartmentID, opts, onRegisteredLocked)
+	default:
+		return "", fmt.Errorf("SecondBox Firecracker startup mode %q is unsupported", opts.StartupMode)
+	}
+}
+
+// instanceHostReservation is every host resource a start path owns before a VMM
+// process exists: the Instance identity, its jailer UID, its guest address, its
+// TAP and fail-closed host policy, its run directory, and its log. Cold start
+// and snapshot resume acquire it through one function, because a divergence
+// between the two paths' isolation properties is exactly the failure the
+// snapshot-resume design cannot tolerate.
+//
+// Ownership transfers to the running Instance at transferOwnership; until then
+// release reclaims whatever was acquired, in the reverse order.
+type instanceHostReservation struct {
+	manager   *Manager
+	id        string
+	jailerUID int
+	guestIP   string
+	tapName   string
+	dir       string
+	logPath   string
+	logFile   *os.File
+	timer     *coldStartStageTimer
+
+	releaseJailerUID bool
+	releaseIP        bool
+	cleanupDir       bool
+}
+
+// reserveInstanceHost performs the prologue both start paths share. On failure
+// it has already reclaimed everything it created, including the TAP and the
+// host policy.
+func (m *Manager) reserveInstanceHost(
+	ctx context.Context,
+	setupCtx context.Context,
+	sandboxID string,
+	compartmentID string,
+	opts runtimemanager.StartOpts,
+) (host *instanceHostReservation, err error) {
+	id, err := newInstanceID(sandboxID, compartmentID)
+	if err != nil {
+		return nil, err
+	}
+	timer := newColdStartStageTimer("sandbox", sandboxID, "compartment", compartmentID, "instance", id)
+	timer.mark("instance_id_allocated")
+	jailerUID, err := m.allocateJailerUID(id)
+	if err != nil {
+		return nil, err
+	}
+	host = &instanceHostReservation{
+		manager:          m,
+		id:               id,
+		timer:            timer,
+		jailerUID:        jailerUID,
+		releaseJailerUID: true,
+	}
+	defer func() {
+		if err != nil {
+			host.release()
+			host = nil
+		}
+	}()
+	guestIP, err := m.reserveGuestIP(id)
+	if err != nil {
+		return nil, fmt.Errorf("reserve guest IP: %w", err)
+	}
+	host.guestIP = guestIP
+	host.releaseIP = true
+	timer.mark("guest_ip_reserved", "guestIP", guestIP)
+	if m.networkRequired(opts) {
+		tapName := tapNameForInstance(m.cfg.MicroVMTapPrefix, id)
+		if m.network == nil {
+			return nil, fmt.Errorf("microVM tap networking is required but no host network configurer is available")
+		}
+		if err := m.network.ConfigureTap(setupCtx, TapConfig{
+			SandboxID:  sandboxID,
+			InstanceID: id,
+			TapName:    tapName,
+			GuestIP:    guestIP,
+			BridgeName: m.cfg.MicroVMBridgeName,
+			BridgeCIDR: m.cfg.MicroVMBridgeCIDR,
+			OwnerUID:   m.tapOwnerUID(jailerUID),
+		}); err != nil {
+			return nil, fmt.Errorf("configure microVM tap: %w", err)
+		}
+		host.tapName = tapName
+		policy := opts.NetworkPolicy
+		if policy == nil {
+			policy = m.defaultNetworkPolicy
+		}
+		if m.networkPolicy == nil {
+			return nil, host.joinNetworkCleanup(
+				setupCtx,
+				fmt.Errorf("microVM host network policy enforcement is required but unavailable"),
+			)
+		}
+		if policy == nil {
+			return nil, host.joinNetworkCleanup(
+				setupCtx,
+				fmt.Errorf("microVM default-deny network policy is unavailable"),
+			)
+		}
+		if err := m.networkPolicy.Install(setupCtx, PolicyNetworkConfig{
+			InstanceID: id,
+			TapName:    tapName,
+			GuestIP:    guestIP,
+			DNSAddress: bridgeAddress(m.cfg.MicroVMBridgeCIDR),
+			Policy:     policy,
+			OnFailure: func(policyErr error) {
+				m.handleNetworkPolicyFailure(id, policyErr)
+			},
+		}); err != nil {
+			return nil, host.joinNetworkCleanup(
+				setupCtx,
+				fmt.Errorf("install microVM host network policy: %w", err),
+			)
+		}
+	}
+	timer.mark("network_ready", "tap", host.tapName, "networkRequired", m.networkRequired(opts))
+	if opts.StartupProgress != nil {
+		if progressErr := opts.StartupProgress(runtimemanager.StartupStageNetworkReady); progressErr != nil {
+			return nil, host.joinNetworkCleanup(
+				setupCtx,
+				fmt.Errorf("report network-ready startup stage: %w", progressErr),
+			)
+		}
+	}
+	dir := filepath.Join(m.cfg.MicroVMRunDir, id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, host.joinNetworkCleanup(ctx, fmt.Errorf("create instance dir: %w", err))
+	}
+	// The per-instance dir holds disposable launch state (the rootfs copy, the
+	// firecracker config, the identity file). Reclaim it on any early failure;
+	// ownership transfers to the running instance once it is registered.
+	host.dir = dir
+	host.cleanupDir = true
+	if err := m.writeJailerUIDLease(dir, jailerUID); err != nil {
+		return nil, host.joinNetworkCleanup(ctx, fmt.Errorf("persist jailer UID lease: %w", err))
+	}
+	logPath := filepath.Join(m.cfg.MicroVMLogDir, id+".log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, host.joinNetworkCleanup(ctx, fmt.Errorf("open microVM log: %w", err))
+	}
+	host.logPath = logPath
+	host.logFile = logFile
+	timer.mark("instance_files_ready", "dir", dir, "log", logPath)
+	return host, nil
+}
+
+// joinNetworkCleanup releases this Instance's TAP and host policy and returns
+// the joined evidence. Every start-path failure after the reservation exists
+// and before the Instance is registered goes through it.
+func (h *instanceHostReservation) joinNetworkCleanup(ctx context.Context, cause error) error {
+	return h.manager.joinInstanceNetworkCleanup(ctx, h.id, h.tapName, cause)
+}
+
+// release reclaims everything the reservation still owns. Cleanup failures are
+// recorded rather than returned, because a start that already failed reports
+// its own cause and the runner's cleanup health carries the rest.
+func (h *instanceHostReservation) release() {
+	if h == nil {
+		return
+	}
+	if h.logFile != nil {
+		if err := h.logFile.Close(); err != nil {
+			h.manager.recordCleanupFailure(fmt.Errorf("close microVM log %q: %w", h.logPath, err))
+		}
+		h.logFile = nil
+	}
+	if h.cleanupDir {
+		if err := os.RemoveAll(h.dir); err != nil {
+			h.manager.recordCleanupFailure(fmt.Errorf("remove failed launch directory %q: %w", h.dir, err))
+		}
+		h.cleanupDir = false
+	}
+	if h.releaseIP {
+		h.manager.releaseGuestIP(h.id)
+		h.releaseIP = false
+	}
+	if h.releaseJailerUID {
+		if err := h.manager.releaseJailerUID(h.id, h.jailerUID); err != nil {
+			h.manager.recordCleanupFailure(err)
+		}
+		h.releaseJailerUID = false
+	}
+}
+
+// transferOwnership hands the guest identity, the jailer UID lease, and the run
+// directory to the registered Instance. Teardown releases them from there.
+func (h *instanceHostReservation) transferOwnership() {
+	h.releaseIP = false
+	h.releaseJailerUID = false
+	h.cleanupDir = false
+}
+
+// resolvedWorkspaceAttachment is the opaque Workspace image a start path stages,
+// proved against the assignment's generation fence and the Profile's declared
+// capacity before any compute resource opens it. WorkspaceStore owns the image
+// and its lifetime; launch teardown removes only the jail link and closes the
+// attachment after Firecracker and every host-side user have stopped.
+type resolvedWorkspaceAttachment struct {
+	path           string
+	sizeMiB        int
+	sharedReadOnly bool
+}
+
+func (m *Manager) resolveWorkspaceAttachment(opts runtimemanager.StartOpts) (resolvedWorkspaceAttachment, error) {
+	workspaceSizeMiB := m.cfg.MicroVMWorkspaceSizeMiB
+	sharedReadOnly := true
+	if opts.SandboxPolicy != nil {
+		workspaceSizeMiB = opts.SandboxPolicy.WorkspaceSizeMiB
+		sharedReadOnly = opts.SandboxPolicy.SharedReadOnly
+	}
+	workspaceImage := opts.WorkspaceAttachment.Image()
+	if workspaceImage == nil || opts.WorkspaceAttachment.Generation() != opts.SandboxGeneration {
+		return resolvedWorkspaceAttachment{}, fmt.Errorf("resolved Workspace attachment generation is stale")
+	}
+	info, statErr := workspaceImage.Stat()
+	if statErr != nil {
+		return resolvedWorkspaceAttachment{}, fmt.Errorf("inspect resolved Workspace attachment: %w", statErr)
+	}
+	if !info.Mode().IsRegular() || info.Size() != int64(workspaceSizeMiB)*1024*1024 {
+		return resolvedWorkspaceAttachment{}, fmt.Errorf("resolved Workspace attachment capacity is invalid")
+	}
+	return resolvedWorkspaceAttachment{
+		path:           workspaceImage.Name(),
+		sizeMiB:        workspaceSizeMiB,
+		sharedReadOnly: sharedReadOnly,
+	}, nil
+}
+
+// launchedInstanceFiles is what a started VMM resolved for one Instance: the
+// sockets it binds and the images it opened.
+type launchedInstanceFiles struct {
+	socketPath      string
+	vsockUDS        string
+	jailRoot        string
+	rootfsPath      string
+	rootfsImagePath string
+	workspacePath   string
+	sharedImagePath string
+}
+
+// registerLaunchedInstance takes ownership of a started VMM process. It builds
+// the Instance record, registers it under the provisioning lock, starts the
+// reaper before any teardown can run so the process is always waited on, and
+// reports the compute-started stage. Both start paths use it, so both get the
+// same registration ordering, the same reaper, and the same teardown
+// accounting.
+func (m *Manager) registerLaunchedInstance(
+	setupCtx context.Context,
+	host *instanceHostReservation,
+	sandboxID string,
+	compartmentID string,
+	opts runtimemanager.StartOpts,
+	files launchedInstanceFiles,
+	startupFingerprint string,
+	cmd *exec.Cmd,
+	onRegisteredLocked func(),
+) (*instance, error) {
+	inst := &instance{
+		id:                  host.id,
+		sandboxID:           sandboxID,
+		sandboxGeneration:   opts.SandboxGeneration,
+		compartmentID:       compartmentID,
+		dir:                 host.dir,
+		logPath:             host.logPath,
+		socket:              files.socketPath,
+		vsockUDS:            files.vsockUDS,
+		guestControlPort:    m.cfg.MicroVMGuestControlVsockPort,
+		guestProtocolPort:   m.cfg.MicroVMGuestProtocolVsockPort,
+		tapName:             host.tapName,
+		jailRoot:            files.jailRoot,
+		rootfsPath:          files.rootfsPath,
+		rootfsImagePath:     files.rootfsImagePath,
+		workspacePath:       files.workspacePath,
+		workspaceAttachment: opts.WorkspaceAttachment,
+		sharedImagePath:     files.sharedImagePath,
+		guestIP:             host.guestIP,
+		startupFingerprint:  startupFingerprint,
+		cmd:                 cmd,
+		startedAt:           time.Now().UTC(),
+		done:                make(chan struct{}),
+		jailedProcess:       files.jailRoot != "",
+		jailerUID:           host.jailerUID,
+		requestID:           opts.RequestID,
+		operationID:         opts.OperationID,
+		leaseID:             opts.LeaseID,
+		assignmentID:        opts.AssignmentID,
+		memoryMiB:           m.requestedMemoryMiB(opts),
+	}
+	m.registerStartingInstance(inst, onRegisteredLocked)
+	// Start the reaper before any stopInstance call so the process is always
+	// waited on (no zombie) and cleanup runs exactly once.
+	go m.reap(inst)
+	host.timer.mark("instance_registered")
+	if opts.StartupProgress != nil {
+		if progressErr := opts.StartupProgress(runtimemanager.StartupStageComputeStarted); progressErr != nil {
+			cleanupErr := m.stopInstance(setupCtx, inst, true)
+			return nil, errors.Join(
+				fmt.Errorf("report compute-started startup stage: %w", progressErr),
+				cleanupErr,
+			)
+		}
+	}
+	return inst, nil
+}
+
+// completeInstanceStartup is the epilogue both start paths share: the
+// assignment-bound guest protocol handshake, its stage report, and runtime
+// secret delivery. Any failure tears the Instance down with its TAP, policy,
+// guest identity, staged files, and Workspace attachment, and returns the
+// joined evidence.
+func (m *Manager) completeInstanceStartup(
+	setupCtx context.Context,
+	inst *instance,
+	sandboxID string,
+	opts runtimemanager.StartOpts,
+	timer *coldStartStageTimer,
+) error {
+	negotiationCtx, cancelNegotiation := context.WithTimeout(setupCtx, controlPlaneReadyTimeout)
+	err := m.negotiateInstanceGuest(negotiationCtx, inst, opts)
+	cancelNegotiation()
+	if err != nil {
+		diagnostics := inst.logTailDiagnostics(120)
+		cleanupErr := m.stopInstance(setupCtx, inst, true)
+		return errors.Join(
+			fmt.Errorf("negotiate guest protocol: %w%s", err, diagnostics),
+			cleanupErr,
+		)
+	}
+	timer.mark("guest_protocol_negotiated")
+	if opts.StartupProgress != nil {
+		if progressErr := opts.StartupProgress(runtimemanager.StartupStageGuestNegotiated); progressErr != nil {
+			cleanupErr := m.stopInstance(setupCtx, inst, true)
+			return errors.Join(
+				fmt.Errorf("report guest-negotiated startup stage: %w", progressErr),
+				cleanupErr,
+			)
+		}
+	}
+	if err := m.deliverStartupSecrets(setupCtx, inst, sandboxID, opts, timer); err != nil {
+		cleanupErr := m.stopInstance(setupCtx, inst, true)
+		return errors.Join(fmt.Errorf("deliver runtime startup secrets: %w", err), cleanupErr)
+	}
+	timer.mark("microvm_ready")
+	return nil
 }
 
 func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartmentID string, opts runtimemanager.StartOpts, onRegisteredLocked func()) (string, error) {
@@ -845,276 +1214,103 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 	setupCtx, cancelSetup := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancelSetup()
 
-	id, err := newInstanceID(sandboxID, compartmentID)
+	host, err := m.reserveInstanceHost(ctx, setupCtx, sandboxID, compartmentID, opts)
 	if err != nil {
 		return "", err
 	}
-	timer := newColdStartStageTimer("sandbox", sandboxID, "compartment", compartmentID, "instance", id)
-	timer.mark("instance_id_allocated")
-	jailerUID, err := m.allocateJailerUID(id)
-	if err != nil {
-		return "", err
-	}
-	releaseJailerUID := true
-	defer func() {
-		if releaseJailerUID {
-			if releaseErr := m.releaseJailerUID(id, jailerUID); releaseErr != nil {
-				m.recordCleanupFailure(releaseErr)
-			}
-		}
-	}()
-	guestIP, err := m.reserveGuestIP(id)
-	if err != nil {
-		return "", fmt.Errorf("reserve guest IP: %w", err)
-	}
-	timer.mark("guest_ip_reserved", "guestIP", guestIP)
-	releaseIP := true
-	defer func() {
-		if releaseIP {
-			m.releaseGuestIP(id)
-		}
-	}()
-	tapName := ""
-	if m.networkRequired(opts) {
-		tapName = tapNameForInstance(m.cfg.MicroVMTapPrefix, id)
-		if m.network == nil {
-			return "", fmt.Errorf("microVM tap networking is required but no host network configurer is available")
-		}
-		if err := m.network.ConfigureTap(setupCtx, TapConfig{
-			SandboxID:  sandboxID,
-			InstanceID: id,
-			TapName:    tapName,
-			GuestIP:    guestIP,
-			BridgeName: m.cfg.MicroVMBridgeName,
-			BridgeCIDR: m.cfg.MicroVMBridgeCIDR,
-			OwnerUID:   m.tapOwnerUID(jailerUID),
-		}); err != nil {
-			return "", fmt.Errorf("configure microVM tap: %w", err)
-		}
-		policy := opts.NetworkPolicy
-		if policy == nil {
-			policy = m.defaultNetworkPolicy
-		}
-		if m.networkPolicy == nil {
-			return "", m.joinInstanceNetworkCleanup(
-				setupCtx,
-				id,
-				tapName,
-				fmt.Errorf("microVM host network policy enforcement is required but unavailable"),
-			)
-		}
-		if policy == nil {
-			return "", m.joinInstanceNetworkCleanup(
-				setupCtx,
-				id,
-				tapName,
-				fmt.Errorf("microVM default-deny network policy is unavailable"),
-			)
-		}
-		if err := m.networkPolicy.Install(setupCtx, PolicyNetworkConfig{
-			InstanceID: id,
-			TapName:    tapName,
-			GuestIP:    guestIP,
-			DNSAddress: bridgeAddress(m.cfg.MicroVMBridgeCIDR),
-			Policy:     policy,
-			OnFailure: func(policyErr error) {
-				m.handleNetworkPolicyFailure(id, policyErr)
-			},
-		}); err != nil {
-			return "", m.joinInstanceNetworkCleanup(
-				setupCtx,
-				id,
-				tapName,
-				fmt.Errorf("install microVM host network policy: %w", err),
-			)
-		}
-	}
-	timer.mark("network_ready", "tap", tapName, "networkRequired", m.networkRequired(opts))
-	if opts.StartupProgress != nil {
-		if progressErr := opts.StartupProgress(runtimemanager.StartupStageNetworkReady); progressErr != nil {
-			return "", m.joinInstanceNetworkCleanup(
-				setupCtx,
-				id,
-				tapName,
-				fmt.Errorf("report network-ready startup stage: %w", progressErr),
-			)
-		}
-	}
-	dir := filepath.Join(m.cfg.MicroVMRunDir, id)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", m.joinInstanceNetworkCleanup(ctx, id, tapName, fmt.Errorf("create instance dir: %w", err))
-	}
-	if err := m.writeJailerUIDLease(dir, jailerUID); err != nil {
-		return "", m.joinInstanceNetworkCleanup(ctx, id, tapName, fmt.Errorf("persist jailer UID lease: %w", err))
-	}
-	// The per-instance dir holds disposable launch state (the rootfs copy, the
-	// firecracker config, the identity file). Reclaim it on any early failure;
-	// ownership transfers to the running instance once it is registered below.
-	cleanupDir := true
-	defer func() {
-		if cleanupDir {
-			if err := os.RemoveAll(dir); err != nil {
-				m.recordCleanupFailure(fmt.Errorf("remove failed launch directory %q: %w", dir, err))
-			}
-		}
-	}()
-	logPath := filepath.Join(m.cfg.MicroVMLogDir, id+".log")
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return "", m.joinInstanceNetworkCleanup(ctx, id, tapName, fmt.Errorf("open microVM log: %w", err))
-	}
-	defer func() {
-		if err := logFile.Close(); err != nil {
-			m.recordCleanupFailure(fmt.Errorf("close microVM log %q: %w", logPath, err))
-		}
-	}()
-	timer.mark("instance_files_ready", "dir", dir, "log", logPath)
+	defer host.release()
+	id, dir, timer := host.id, host.dir, host.timer
 
 	image, err := m.microVMImageForStart(opts)
 	if err != nil {
-		return "", m.joinInstanceNetworkCleanup(setupCtx, id, tapName, err)
+		return "", host.joinNetworkCleanup(setupCtx, err)
 	}
 	launchImage, err := m.prepareLaunchImage(dir, image)
 	if err != nil {
-		return "", m.joinInstanceNetworkCleanup(setupCtx, id, tapName, err)
+		return "", host.joinNetworkCleanup(setupCtx, err)
 	}
 	timer.mark("trust_anchor_verified")
 	timer.mark("rootfs_reflinked")
-	workspaceSizeMiB := m.cfg.MicroVMWorkspaceSizeMiB
+	workspace, err := m.resolveWorkspaceAttachment(opts)
+	if err != nil {
+		return "", host.joinNetworkCleanup(setupCtx, err)
+	}
 	sharedImagePath := launchImage.SharedImagePath
-	if opts.SandboxPolicy != nil {
-		workspaceSizeMiB = opts.SandboxPolicy.WorkspaceSizeMiB
-		if !opts.SandboxPolicy.SharedReadOnly {
-			sharedImagePath = ""
-		}
+	if !workspace.sharedReadOnly {
+		sharedImagePath = ""
 	}
-	workspaceImage := opts.WorkspaceAttachment.Image()
-	if workspaceImage == nil || opts.WorkspaceAttachment.Generation() != opts.SandboxGeneration {
-		return "", m.joinInstanceNetworkCleanup(
-			setupCtx,
-			id,
-			tapName,
-			fmt.Errorf("resolved Workspace attachment generation is stale"),
-		)
-	}
-	info, statErr := workspaceImage.Stat()
-	if statErr != nil {
-		return "", m.joinInstanceNetworkCleanup(
-			setupCtx,
-			id,
-			tapName,
-			fmt.Errorf("inspect resolved Workspace attachment: %w", statErr),
-		)
-	}
-	if !info.Mode().IsRegular() || info.Size() != int64(workspaceSizeMiB)*1024*1024 {
-		return "", m.joinInstanceNetworkCleanup(
-			setupCtx,
-			id,
-			tapName,
-			fmt.Errorf("resolved Workspace attachment capacity is invalid"),
-		)
-	}
-	workspacePath := workspaceImage.Name()
-	timer.mark("workspace_ready", "workspace", workspacePath)
-	// WorkspaceStore owns the image and its lifetime. Launch teardown removes
-	// only the jail hard link and closes the opaque attachment after Firecracker
-	// and every host-side user have stopped.
+	timer.mark("workspace_ready", "workspace", workspace.path)
 
 	if err := m.writeIdentityFile(dir, id, sandboxID, opts); err != nil {
-		return "", m.joinInstanceNetworkCleanup(setupCtx, id, tapName, err)
+		return "", host.joinNetworkCleanup(setupCtx, err)
 	}
 	startupFingerprint, err := m.startupFingerprint(sandboxID, compartmentID, opts)
 	if err != nil {
-		return "", m.joinInstanceNetworkCleanup(setupCtx, id, tapName, fmt.Errorf("build startup fingerprint: %w", err))
+		return "", host.joinNetworkCleanup(setupCtx, fmt.Errorf("build startup fingerprint: %w", err))
 	}
 	timer.mark("launch_config_ready")
 
-	launch, launchErr := m.prepareLaunchWithPolicy(setupCtx, id, dir, launchImage.KernelPath, launchImage.RootfsPath, workspacePath, sharedImagePath, tapName, guestIP, jailerUID, opts.TemplateMode, opts.SandboxPolicy)
+	launch, launchErr := m.prepareLaunchWithPolicy(setupCtx, id, dir, launchImage.KernelPath, launchImage.RootfsPath, workspace.path, sharedImagePath, host.tapName, host.guestIP, host.jailerUID, opts.TemplateMode, opts.SandboxPolicy)
 	if launchErr != nil {
-		return "", m.joinInstanceNetworkCleanup(setupCtx, id, tapName, launchErr)
+		return "", host.joinNetworkCleanup(setupCtx, launchErr)
 	}
 	guestBootArgs, guestBootArgsErr := m.startupGuestBootArgs(compartmentID, sandboxID, opts)
 	if guestBootArgsErr != nil {
 		m.cleanupLaunch(launch)
-		return "", m.joinInstanceNetworkCleanup(setupCtx, id, tapName, guestBootArgsErr)
+		return "", host.joinNetworkCleanup(setupCtx, guestBootArgsErr)
 	}
 	launch.config.BootSource.BootArgs = strings.TrimSpace(launch.config.BootSource.BootArgs + " " + guestBootArgs)
 	timer.mark("launch_prepared", "jailRoot", launch.jailRoot)
 	data, marshalErr := json.MarshalIndent(launch.config, "", "  ")
 	if marshalErr != nil {
 		m.cleanupLaunch(launch)
-		return "", m.joinInstanceNetworkCleanup(setupCtx, id, tapName, fmt.Errorf("marshal firecracker config: %w", marshalErr))
+		return "", host.joinNetworkCleanup(setupCtx, fmt.Errorf("marshal firecracker config: %w", marshalErr))
 	}
 	if writeErr := os.WriteFile(launch.configPath, data, 0o600); writeErr != nil {
 		m.cleanupLaunch(launch)
-		return "", m.joinInstanceNetworkCleanup(setupCtx, id, tapName, fmt.Errorf("write firecracker config: %w", writeErr))
+		return "", host.joinNetworkCleanup(setupCtx, fmt.Errorf("write firecracker config: %w", writeErr))
 	}
 	if launch.jailRoot != "" {
-		if chownErr := chownIfDifferent(launch.configPath, jailerUID, m.cfg.MicroVMJailerGID); chownErr != nil {
+		if chownErr := chownIfDifferent(launch.configPath, host.jailerUID, m.cfg.MicroVMJailerGID); chownErr != nil {
 			m.cleanupLaunch(launch)
-			return "", m.joinInstanceNetworkCleanup(setupCtx, id, tapName, fmt.Errorf("chown jailed firecracker config: %w", chownErr))
+			return "", host.joinNetworkCleanup(setupCtx, fmt.Errorf("chown jailed firecracker config: %w", chownErr))
 		}
 	}
 	cmd := exec.Command(launch.executable, launch.args...)
 	cmd.Dir = dir
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
+	cmd.Stdout = host.logFile
+	cmd.Stderr = host.logFile
 	if len(launch.environment) != 0 {
 		cmd.Env = append(os.Environ(), launch.environment...)
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if startErr := cmd.Start(); startErr != nil {
 		m.cleanupLaunch(launch)
-		return "", m.joinInstanceNetworkCleanup(setupCtx, id, tapName, fmt.Errorf("start firecracker: %w", startErr))
+		return "", host.joinNetworkCleanup(setupCtx, fmt.Errorf("start firecracker: %w", startErr))
 	}
-	socketPath, vsockPath, jailRoot := launch.socketPath, launch.vsockUDS, launch.jailRoot
-	jailedProcess := launch.jailRoot != ""
 	timer.mark("firecracker_process_started", "pid", cmd.Process.Pid)
 
-	inst := &instance{
-		id:                  id,
-		sandboxID:           sandboxID,
-		sandboxGeneration:   opts.SandboxGeneration,
-		compartmentID:       compartmentID,
-		dir:                 dir,
-		logPath:             logPath,
-		socket:              socketPath,
-		vsockUDS:            vsockPath,
-		guestControlPort:    m.cfg.MicroVMGuestControlVsockPort,
-		guestProtocolPort:   m.cfg.MicroVMGuestProtocolVsockPort,
-		tapName:             tapName,
-		jailRoot:            jailRoot,
-		rootfsPath:          launchImage.RootfsPath,
-		rootfsImagePath:     image.RootfsPath,
-		workspacePath:       workspacePath,
-		workspaceAttachment: opts.WorkspaceAttachment,
-		sharedImagePath:     launchImage.SharedImagePath,
-		guestIP:             guestIP,
-		startupFingerprint:  startupFingerprint,
-		cmd:                 cmd,
-		startedAt:           time.Now().UTC(),
-		done:                make(chan struct{}),
-		jailedProcess:       jailedProcess,
-		jailerUID:           jailerUID,
-		requestID:           opts.RequestID,
-		operationID:         opts.OperationID,
-		leaseID:             opts.LeaseID,
-		assignmentID:        opts.AssignmentID,
-		memoryMiB:           m.requestedMemoryMiB(opts),
-	}
-	m.registerStartingInstance(inst, onRegisteredLocked)
-	// Start the reaper before any stopInstance call so the process is always
-	// waited on (no zombie) and cleanup runs exactly once.
-	go m.reap(inst)
-	timer.mark("instance_registered")
-	if opts.StartupProgress != nil {
-		if progressErr := opts.StartupProgress(runtimemanager.StartupStageComputeStarted); progressErr != nil {
-			cleanupErr := m.stopInstance(setupCtx, inst, true)
-			return "", errors.Join(
-				fmt.Errorf("report compute-started startup stage: %w", progressErr),
-				cleanupErr,
-			)
-		}
+	inst, err := m.registerLaunchedInstance(
+		setupCtx,
+		host,
+		sandboxID,
+		compartmentID,
+		opts,
+		launchedInstanceFiles{
+			socketPath:      launch.socketPath,
+			vsockUDS:        launch.vsockUDS,
+			jailRoot:        launch.jailRoot,
+			rootfsPath:      launchImage.RootfsPath,
+			rootfsImagePath: image.RootfsPath,
+			workspacePath:   workspace.path,
+			sharedImagePath: launchImage.SharedImagePath,
+		},
+		startupFingerprint,
+		cmd,
+		onRegisteredLocked,
+	)
+	if err != nil {
+		return "", err
 	}
 	// A template guest has no Sandbox identity to negotiate and no runtime
 	// secrets to receive. Its readiness is its control endpoint answering, which
@@ -1132,45 +1328,15 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 			)
 		}
 		timer.mark("template_control_plane_ready")
-		releaseIP = false
-		releaseJailerUID = false
-		cleanupDir = false
-		slog.Info("started identity-neutral template microVM", "instance", id, "elapsedMs", timer.elapsedMs(), "log", logPath)
+		host.transferOwnership()
+		slog.Info("started identity-neutral template microVM", "instance", id, "elapsedMs", timer.elapsedMs(), "log", host.logPath)
 		return id, nil
 	}
-	negotiationCtx, cancelNegotiation := context.WithTimeout(
-		setupCtx,
-		controlPlaneReadyTimeout,
-	)
-	err = m.negotiateInstanceGuest(negotiationCtx, inst, opts)
-	cancelNegotiation()
-	if err != nil {
-		diagnostics := inst.logTailDiagnostics(120)
-		cleanupErr := m.stopInstance(setupCtx, inst, true)
-		return "", errors.Join(
-			fmt.Errorf("negotiate guest protocol: %w%s", err, diagnostics),
-			cleanupErr,
-		)
+	if err := m.completeInstanceStartup(setupCtx, inst, sandboxID, opts, timer); err != nil {
+		return "", err
 	}
-	timer.mark("guest_protocol_negotiated")
-	if opts.StartupProgress != nil {
-		if progressErr := opts.StartupProgress(runtimemanager.StartupStageGuestNegotiated); progressErr != nil {
-			cleanupErr := m.stopInstance(setupCtx, inst, true)
-			return "", errors.Join(
-				fmt.Errorf("report guest-negotiated startup stage: %w", progressErr),
-				cleanupErr,
-			)
-		}
-	}
-	if err := m.deliverStartupSecrets(setupCtx, inst, sandboxID, opts, timer); err != nil {
-		cleanupErr := m.stopInstance(setupCtx, inst, true)
-		return "", errors.Join(fmt.Errorf("deliver runtime startup secrets: %w", err), cleanupErr)
-	}
-	timer.mark("microvm_ready")
-	releaseIP = false // ownership transfers to the running instance
-	releaseJailerUID = false
-	cleanupDir = false
-	slog.Info("started firecracker microVM", "sandbox", sandboxID, "compartment", compartmentID, "instance", id, "elapsedMs", timer.elapsedMs(), "log", logPath)
+	host.transferOwnership() // ownership transfers to the running instance
+	slog.Info("started firecracker microVM", "sandbox", sandboxID, "compartment", compartmentID, "instance", id, "elapsedMs", timer.elapsedMs(), "log", host.logPath)
 	return id, nil
 }
 

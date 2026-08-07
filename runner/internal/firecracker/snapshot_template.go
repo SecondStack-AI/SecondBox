@@ -37,13 +37,18 @@ const (
 // VMM will accept, belongs here. A mismatch in any field is a cache miss, never
 // a best-effort restore.
 type SnapshotTemplateKey struct {
-	ArtifactVersion         string   `json:"artifactVersion"`
-	Architecture            string   `json:"architecture"`
-	SigningKeyFingerprint   string   `json:"signingKeyFingerprint"`
-	SignedManifestDigest    string   `json:"signedManifestDigest"`
-	KernelSHA256            string   `json:"kernelSha256"`
-	KernelArgs              string   `json:"kernelArgs"`
-	SourceRootfsSHA256      string   `json:"sourceRootfsSha256"`
+	ArtifactVersion       string `json:"artifactVersion"`
+	Architecture          string `json:"architecture"`
+	SigningKeyFingerprint string `json:"signingKeyFingerprint"`
+	SignedManifestDigest  string `json:"signedManifestDigest"`
+	KernelSHA256          string `json:"kernelSha256"`
+	KernelArgs            string `json:"kernelArgs"`
+	SourceRootfsSHA256    string `json:"sourceRootfsSha256"`
+	// SharedImageSHA256 is empty exactly when the template was captured without
+	// the read-only shared image drive, for the same reason the network fields
+	// are empty without a device: a restored Instance opens exactly the drives
+	// the VM state recorded and can neither gain nor drop one, so drive presence
+	// is part of the compatibility identity rather than a staging choice.
 	SharedImageSHA256       string   `json:"sharedImageSha256"`
 	RuntimeBundleDigest     string   `json:"runtimeBundleDigest"`
 	ToolchainBundleDigest   string   `json:"toolchainBundleDigest"`
@@ -88,7 +93,6 @@ func (k SnapshotTemplateKey) Validate() error {
 		{"kernelSha256", k.KernelSHA256},
 		{"kernelArgs", k.KernelArgs},
 		{"sourceRootfsSha256", k.SourceRootfsSHA256},
-		{"sharedImageSha256", k.SharedImageSHA256},
 		{"runtimeBundleDigest", k.RuntimeBundleDigest},
 		{"toolchainBundleDigest", k.ToolchainBundleDigest},
 		{"guestBuildId", k.GuestBuildID},
@@ -153,6 +157,14 @@ func (k SnapshotTemplateKey) Validate() error {
 // template without one can never acquire an interface at all.
 func (k SnapshotTemplateKey) HasNetworkDevice() bool {
 	return strings.TrimSpace(k.NetworkInterfaceID) != ""
+}
+
+// HasSharedImage reports whether the VM state records the read-only shared
+// image drive. A resumed Instance must stage exactly the drives the capture
+// recorded: staging one the VM state does not name leaves an orphan file, and
+// omitting one the VM state does name fails the load itself.
+func (k SnapshotTemplateKey) HasSharedImage() bool {
+	return strings.TrimSpace(k.SharedImageSHA256) != ""
 }
 
 // TemplateID is the stable identity of the compatibility key. It is derived
