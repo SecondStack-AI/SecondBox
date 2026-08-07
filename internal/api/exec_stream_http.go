@@ -230,14 +230,9 @@ func finishExecWebSocketCloseHandshake(
 	readErrors <-chan error,
 ) error {
 	closeDeadline := time.Now().Add(time.Second)
-	// The concurrent read goroutine answers an early peer close through the
-	// connection's default close handler, so a close frame may already be on
-	// the wire; either writer completes the server's side of the handshake.
-	if err := connection.WriteControl(
-		websocket.CloseMessage,
-		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "terminal outcome delivered"),
-		closeDeadline,
-	); err != nil && !errors.Is(err, websocket.ErrCloseSent) {
+	if err := writeWebSocketClose(
+		connection, "terminal outcome delivered", closeDeadline,
+	); err != nil {
 		return fmt.Errorf("SecondBox Exec WebSocket close write: %w", err)
 	}
 	if err := connection.UnderlyingConn().SetReadDeadline(closeDeadline); err != nil {
@@ -333,6 +328,29 @@ func decodeStrictFrame(payload []byte, destination any) error {
 		return err
 	}
 	return errors.New("SecondBox Exec WebSocket frame contains trailing JSON")
+}
+
+// writeWebSocketClose sends the server's normal-closure frame and tolerates a
+// close frame this connection has already written.
+//
+// Every streaming handler runs a concurrent read goroutine, and the connection's
+// default close handler answers an early peer close from inside that goroutine.
+// The handler's own close write then fails with websocket.ErrCloseSent through
+// no fault of its own, so it is not a delivery failure: either writer completes
+// the server's side of the handshake.
+func writeWebSocketClose(
+	connection *websocket.Conn,
+	reason string,
+	deadline time.Time,
+) error {
+	if err := connection.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, reason),
+		deadline,
+	); err != nil && !errors.Is(err, websocket.ErrCloseSent) {
+		return err
+	}
+	return nil
 }
 
 func sameWebSocketOrigin(request *http.Request) bool {
