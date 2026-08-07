@@ -19,6 +19,7 @@ type AssignmentBindRequest struct {
 	ImageManifestDigest     string `json:"imageManifestDigest"`
 	ToolchainManifestDigest string `json:"toolchainManifestDigest"`
 	HeartbeatIntervalMs     uint64 `json:"heartbeatIntervalMs"`
+	WorkspaceWritable       bool   `json:"workspaceWritable"`
 }
 
 // ErrAssignmentBindNotHardened is returned when a bind arrives before the guest
@@ -28,6 +29,10 @@ var ErrAssignmentBindNotHardened = errors.New("assignment bind requires post-res
 // ErrAssignmentAlreadyBound is returned for every bind after the first. A
 // template-mode guest installs exactly one identity for its whole lifetime.
 var ErrAssignmentAlreadyBound = errors.New("assignment identity is already installed")
+
+// errAssignmentWorkspaceUnavailable wraps a failure of the bind-time Workspace
+// mount. It leaves the guest unbound, so the runner tears the Instance down.
+var errAssignmentWorkspaceUnavailable = errors.New("assignment Workspace is unavailable")
 
 // AssignmentGate holds the mutable template-mode state of one guest: whether
 // post-restore hardening ran, and the single identity installed by the one
@@ -54,8 +59,12 @@ func (g *AssignmentGate) MarkHardened() {
 }
 
 // Bind installs the assignment identity exactly once. It refuses a bind before
-// hardening and every bind after the first.
-func (g *AssignmentGate) Bind(req AssignmentBindRequest) (ProtocolIdentity, error) {
+// hardening and every bind after the first. install runs under the same lock, so
+// a guest whose Workspace cannot be attached installs no identity at all.
+func (g *AssignmentGate) Bind(
+	req AssignmentBindRequest,
+	install func(ProtocolIdentity) error,
+) (ProtocolIdentity, error) {
 	identity, err := req.protocolIdentity()
 	if err != nil {
 		return ProtocolIdentity{}, err
@@ -67,6 +76,11 @@ func (g *AssignmentGate) Bind(req AssignmentBindRequest) (ProtocolIdentity, erro
 	}
 	if g.bound {
 		return ProtocolIdentity{}, ErrAssignmentAlreadyBound
+	}
+	if install != nil {
+		if err := install(identity); err != nil {
+			return ProtocolIdentity{}, fmt.Errorf("%w: %w", errAssignmentWorkspaceUnavailable, err)
+		}
 	}
 	g.identity = identity
 	g.bound = true

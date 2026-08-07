@@ -1027,7 +1027,7 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 	if launchErr != nil {
 		return "", m.joinInstanceNetworkCleanup(setupCtx, id, tapName, launchErr)
 	}
-	guestBootArgs, guestBootArgsErr := m.guestProtocolBootArgs(compartmentID, sandboxID, opts)
+	guestBootArgs, guestBootArgsErr := m.startupGuestBootArgs(compartmentID, sandboxID, opts)
 	if guestBootArgsErr != nil {
 		m.cleanupLaunch(launch)
 		return "", m.joinInstanceNetworkCleanup(setupCtx, id, tapName, guestBootArgsErr)
@@ -1109,6 +1109,28 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 				cleanupErr,
 			)
 		}
+	}
+	// A template guest has no Sandbox identity to negotiate and no runtime
+	// secrets to receive. Its readiness is its control endpoint answering, which
+	// is also the point the capture is coherent at.
+	if opts.TemplateMode {
+		controlCtx, cancelControl := context.WithTimeout(setupCtx, controlPlaneReadyTimeout)
+		controlErr := m.waitForControlPlane(controlCtx, inst, controlPlaneReadyTimeout)
+		cancelControl()
+		if controlErr != nil {
+			diagnostics := inst.logTailDiagnostics(120)
+			cleanupErr := m.stopInstance(setupCtx, inst, true)
+			return "", errors.Join(
+				fmt.Errorf("wait for template guest control plane: %w%s", controlErr, diagnostics),
+				cleanupErr,
+			)
+		}
+		timer.mark("template_control_plane_ready")
+		releaseIP = false
+		releaseJailerUID = false
+		cleanupDir = false
+		slog.Info("started identity-neutral template microVM", "instance", id, "elapsedMs", timer.elapsedMs(), "log", logPath)
+		return id, nil
 	}
 	negotiationCtx, cancelNegotiation := context.WithTimeout(
 		setupCtx,
@@ -1825,6 +1847,51 @@ func (m *Manager) ApplySecrets(ctx context.Context, instanceID string, bundle Se
 		return fmt.Errorf("unknown microVM instance %q", instanceID)
 	}
 	return inst.controlClient(10*time.Second).ApplySecrets(ctx, bundle)
+}
+
+// BindAssignment installs the assignment identity into a resumed template guest.
+// The guest refuses it before HardenPostRestore succeeds and refuses every bind
+// after the first, so this is the single point where a resumed Instance acquires
+// its Sandbox identity, its Workspace, and the right to negotiate.
+func (m *Manager) BindAssignment(ctx context.Context, instanceID string, req AssignmentBindRequest) error {
+	inst := m.lookup(instanceID)
+	if inst == nil {
+		return fmt.Errorf("unknown microVM instance %q", instanceID)
+	}
+	return inst.controlClient(15*time.Second).BindAssignment(ctx, req)
+}
+
+// assignmentBindRequestFor builds the bind request for one start from the exact
+// signed identity the runner was assigned.
+func (m *Manager) assignmentBindRequestFor(
+	instanceID string,
+	sandboxID string,
+	opts runtimemanager.StartOpts,
+) (AssignmentBindRequest, error) {
+	if strings.TrimSpace(instanceID) == "" ||
+		strings.TrimSpace(sandboxID) == "" ||
+		opts.SandboxGeneration == 0 ||
+		strings.TrimSpace(opts.GuestBuildID) == "" ||
+		strings.TrimSpace(opts.ImageManifestDigest) == "" ||
+		strings.TrimSpace(opts.ToolchainManifestDigest) == "" {
+		return AssignmentBindRequest{}, fmt.Errorf("assignment bind identity is incomplete")
+	}
+	if m.cfg.MicroVMGuestHeartbeatInterval <= 0 {
+		return AssignmentBindRequest{}, fmt.Errorf("assignment bind requires a positive guest heartbeat interval")
+	}
+	if opts.SandboxPolicy == nil {
+		return AssignmentBindRequest{}, fmt.Errorf("assignment bind requires a resolved Sandbox runtime policy")
+	}
+	return AssignmentBindRequest{
+		InstanceID:              instanceID,
+		SandboxID:               sandboxID,
+		SandboxGeneration:       opts.SandboxGeneration,
+		GuestBuildID:            opts.GuestBuildID,
+		ImageManifestDigest:     opts.ImageManifestDigest,
+		ToolchainManifestDigest: opts.ToolchainManifestDigest,
+		HeartbeatIntervalMs:     uint64(m.cfg.MicroVMGuestHeartbeatInterval.Milliseconds()),
+		WorkspaceWritable:       opts.SandboxPolicy.WorkspaceWritable,
+	}, nil
 }
 
 func (m *Manager) HardenPostRestore(ctx context.Context, instanceID string) error {

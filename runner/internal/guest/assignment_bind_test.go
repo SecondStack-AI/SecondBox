@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -28,15 +29,30 @@ func templateBindRequest() AssignmentBindRequest {
 	}
 }
 
-func newTemplateGuestServer(t *testing.T) (Server, *fakeHardener) {
+type fakeWorkspaceMounter struct {
+	mounts   int
+	writable bool
+	dir      string
+	err      error
+}
+
+func (f *fakeWorkspaceMounter) Mount(_ context.Context, workspaceDir string, writable bool) error {
+	f.mounts++
+	f.dir = workspaceDir
+	f.writable = writable
+	return f.err
+}
+
+func newTemplateGuestServer(t *testing.T) (Server, *fakeWorkspaceMounter) {
 	t.Helper()
-	hardener := &fakeHardener{}
+	mounter := &fakeWorkspaceMounter{}
 	return Server{
 		WorkspaceDir:      t.TempDir(),
 		RuntimePrivateDir: t.TempDir(),
-		Hardener:          hardener,
+		Hardener:          &fakeHardener{},
+		Mounter:           mounter,
 		Assignment:        NewAssignmentGate(),
-	}, hardener
+	}, mounter
 }
 
 func postTemplateControl(t *testing.T, server Server, path string, body any) *httptest.ResponseRecorder {
@@ -136,6 +152,57 @@ func TestTemplateGuestRejectsIncompleteAssignmentBind(t *testing.T) {
 				t.Fatal("an incomplete bind installed an identity")
 			}
 		})
+	}
+}
+
+func TestTemplateGuestMountsWorkspaceInsideTheBind(t *testing.T) {
+	server, mounter := newTemplateGuestServer(t)
+	hardenTemplateGuest(t, server)
+	request := templateBindRequest()
+	request.WorkspaceWritable = true
+	if code := postTemplateControl(t, server, "/assignment/bind", request).Code; code != http.StatusOK {
+		t.Fatalf("bind status %d", code)
+	}
+	if mounter.mounts != 1 || !mounter.writable || mounter.dir != server.WorkspaceDir {
+		t.Fatalf("workspace mount = %#v", mounter)
+	}
+	// The Workspace is attached exactly once, with the assignment identity.
+	if code := postTemplateControl(t, server, "/assignment/bind", request).Code; code != http.StatusConflict {
+		t.Fatalf("second bind status %d", code)
+	}
+	if mounter.mounts != 1 {
+		t.Fatalf("a refused bind remounted the Workspace: %d mounts", mounter.mounts)
+	}
+}
+
+func TestTemplateGuestStaysUnboundWhenWorkspaceMountFails(t *testing.T) {
+	server, mounter := newTemplateGuestServer(t)
+	mounter.err = errors.New("no such device")
+	hardenTemplateGuest(t, server)
+	recorder := postTemplateControl(t, server, "/assignment/bind", templateBindRequest())
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d body %s", recorder.Code, recorder.Body.String())
+	}
+	if _, bound := server.Assignment.Identity(); bound {
+		t.Fatal("identity was installed despite an unavailable Workspace")
+	}
+}
+
+func TestTemplateGuestRefusesWorkspaceRequestsBeforeBind(t *testing.T) {
+	server, _ := newTemplateGuestServer(t)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/workspace/list?path=/", nil))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status %d body %s", recorder.Code, recorder.Body.String())
+	}
+	hardenTemplateGuest(t, server)
+	if code := postTemplateControl(t, server, "/assignment/bind", templateBindRequest()).Code; code != http.StatusOK {
+		t.Fatalf("bind status %d", code)
+	}
+	recorder = httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/workspace/list?path=/", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("post-bind workspace list: status %d body %s", recorder.Code, recorder.Body.String())
 	}
 }
 

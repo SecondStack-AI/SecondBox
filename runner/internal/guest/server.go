@@ -76,6 +76,7 @@ type Server struct {
 	LogPath           string
 	Freezer           WorkspaceFreezer
 	Hardener          RestoreHardener
+	Mounter           WorkspaceMounter
 	Now               func() time.Time
 	// Assignment is set only for a template-mode guest, which boots without any
 	// Sandbox identity and receives one through /assignment/bind after
@@ -91,6 +92,14 @@ type WorkspaceFreezer interface {
 
 type RestoreHardener interface {
 	Harden(ctx context.Context, input RestoreHardenInput) error
+}
+
+// WorkspaceMounter mounts the per-Sandbox Workspace image after the assignment
+// bind. A template guest boots with the device present and unmounted, because a
+// captured mount would carry the template's sterile superblock and page cache
+// into every resumed Instance.
+type WorkspaceMounter interface {
+	Mount(ctx context.Context, workspaceDir string, writable bool) error
 }
 
 type SecretBundle struct {
@@ -510,10 +519,22 @@ func (s Server) handleAssignmentBind(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid assignment bind request")
 		return
 	}
-	identity, err := s.Assignment.Bind(req)
+	mounter := s.Mounter
+	if mounter == nil {
+		mounter = LinuxWorkspaceMounter{}
+	}
+	// The Workspace is mounted inside the one atomic bind, so a guest that fails
+	// to mount installs no identity and never opens its protocol listener.
+	identity, err := s.Assignment.Bind(req, func(ProtocolIdentity) error {
+		return mounter.Mount(r.Context(), s.workspaceRoot(), req.WorkspaceWritable)
+	})
 	if err != nil {
 		if errors.Is(err, ErrAssignmentBindNotHardened) || errors.Is(err, ErrAssignmentAlreadyBound) {
 			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		if errors.Is(err, errAssignmentWorkspaceUnavailable) {
+			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -1055,6 +1076,12 @@ func (r *countingLimitReader) Read(p []byte) (int, error) {
 }
 
 func (s Server) workspacePath(raw string) (string, string, error) {
+	// A template guest has no Workspace until its assignment bind mounts one.
+	if s.Assignment != nil {
+		if _, bound := s.Assignment.Identity(); !bound {
+			return "", "", fmt.Errorf("guest has no Workspace until its assignment bind")
+		}
+	}
 	root := s.workspaceRoot()
 	if hasParentSegment(raw) {
 		return "", "", fmt.Errorf("workspace path escapes root")

@@ -91,6 +91,7 @@ type AssignmentBindRequest struct {
 	ImageManifestDigest     string `json:"imageManifestDigest"`
 	ToolchainManifestDigest string `json:"toolchainManifestDigest"`
 	HeartbeatIntervalMs     uint64 `json:"heartbeatIntervalMs"`
+	WorkspaceWritable       bool   `json:"workspaceWritable"`
 }
 
 func (c ControlClient) Heartbeat(ctx context.Context) (HeartbeatResponse, error) {

@@ -101,6 +101,7 @@ func run() int {
 	if templateMode {
 		assignment = microvmguest.NewAssignmentGate()
 		guestServer.Assignment = assignment
+		guestServer.Mounter = microvmguest.LinuxWorkspaceMounter{}
 	}
 	controlServer := &http.Server{Handler: guestServer.Handler()}
 	var protocolService *microvmguest.ProtocolService
