@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "76b73bb3e236fcb049cd9e98eeabd46f9ca431a1",
+  "sourceTreeDirty": true,
+  "goVersion": "go1.26.5",
+  "firecrackerVersion": "Firecracker v1.16.1",
+  "hostKernel": "Linux 7.1.4-arch1-1 x86_64 GNU/Linux",
+  "hostCpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+  "workspaceFilesystem": "btrfs",
+  "completedAt": "2026-08-07T01:51:10.224565848Z",
+  "identityNeutralTemplate": false,
+  "templateId": "d068764cf35b477ba893f8eb74ce2cca5201088da61aae2abd9e8bda87502218",
+  "memoryFileBytes": 536870912,
+  "rootfsFileBytes": 10737418240,
+  "vmStateFileBytes": 15296,
+  "templateBuildMilliseconds": 28822,
+  "cacheAdmissionMilliseconds": 5187,
+  "perStartStableIdentityNanoseconds": 5911,
+  "unjailedResumeRefusal": "snapshot resume requires the jailer: restored VM state records absolute drive paths that cannot be made per-Instance, so SECONDBOX_RUNNER_FIRECRACKER_ALLOW_UNJAILED must be false"
+}

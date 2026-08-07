@@ -1,9 +1,10 @@
 ---
 title: Snapshot-Resume Sandbox Startup
 date: 2026-07-30
-status: gated
+status: in-progress
 owner: SecondStack
 provenance: SecondBox timing qualification and repository-owner direction, 2026-07-30
+provenance-2026-08-06: Repository-owner direction to un-gate and implement, taken with the Phase-B lifecycle measurements on `perf/phase-b-experiments`
 ---
 
 # Plan: Snapshot-Resume Sandbox Startup
@@ -16,27 +17,46 @@ After the event-driven orchestration and reflinked Workspace-template work throu
 
 A test-only KVM qualification now measures the missing low-level floor. Across 256, 512, and 2048 MiB shapes, Firecracker's immutable file-backed snapshot load was 3–4 ms p50/p95 and process-start-through-post-resume-hardening was 16–18 ms p50/p95. A cache-evicted sample completed in 39–45 ms and read only 84–86 MiB at every shape. Warm samples read at most 2.6 MiB, so no per-start full memory-image copy was observed.
 
-The end-to-end target is still not reachable with the path as currently composed. A later 30-arrival candidate moved guarded ready projection into the fenced runner-result transaction, reducing `ready_projection` from 100/300 ms to 0/5 ms p50/p95. The next dispatch pass corrected Assignment-time attribution, batched the scheduler's durable writes, and removed per-connection claim preparation. Its quieter unsaturated baseline measured `runner_admission` at 17/31 ms and `pre_assignment` at 320/488 ms. An eager-dispatch experiment later measured admission at 11/34 ms, but repeated bursts proved that its connection-row lock inside placement could exhaust serialization retries and shut down the control plane. It was rejected in `05bbd8e`. The race-safe owner-claim path subsequently measured `runner_admission` at 39/66 ms, `pre_assignment` at 662/1,152 ms, and `create_to_ready` at 1,144/1,695 ms. Provider-neutral placement attribution then exposed perpetual polling of every healthy ready Sandbox as the dominant unsaturated queue. Scheduling those Sandboxes at their actual idle or maximum-duration deadline reduced that path to 34/58 ms admission, 225/315 ms pre-assignment, and 692/800 ms end to end. Bounded atomic lifecycle claims with sequential effects further reduce the current path to 26/50 ms admission, 192/223 ms pre-assignment, and 635/710 ms end to end. Those spans still exceed the 200 ms ceiling before a production resume path performs template lookup, assignment bind, Workspace mount, or network identity activation. The plan therefore remains gated at Task 1 even though the low-level snapshot-load sub-gate passes and ready projection no longer blocks it.
+The end-to-end target is still not reachable with the path as currently composed. A later 30-arrival candidate moved guarded ready projection into the fenced runner-result transaction, reducing `ready_projection` from 100/300 ms to 0/5 ms p50/p95. The next dispatch pass corrected Assignment-time attribution, batched the scheduler's durable writes, and removed per-connection claim preparation. Its quieter unsaturated baseline measured `runner_admission` at 17/31 ms and `pre_assignment` at 320/488 ms. An eager-dispatch experiment later measured admission at 11/34 ms, but repeated bursts proved that its connection-row lock inside placement could exhaust serialization retries and shut down the control plane. It was rejected in `05bbd8e`. The race-safe owner-claim path subsequently measured `runner_admission` at 39/66 ms, `pre_assignment` at 662/1,152 ms, and `create_to_ready` at 1,144/1,695 ms. Provider-neutral placement attribution then exposed perpetual polling of every healthy ready Sandbox as the dominant unsaturated queue. Scheduling those Sandboxes at their actual idle or maximum-duration deadline reduced that path to 34/58 ms admission, 225/315 ms pre-assignment, and 692/800 ms end to end. Bounded atomic lifecycle claims with sequential effects further reduce the current path to 26/50 ms admission, 192/223 ms pre-assignment, and 635/710 ms end to end. Those spans exceeded the 200 ms ceiling before a production resume path performed template lookup, assignment bind, Workspace mount, or network identity activation, and the plan stayed gated at Task 1 through that pass.
 
-The provisional no-saturation latency budget is:
+## Re-derived budget, 2026-08-06
 
-| Step | Measurement supporting the estimate | Required budget |
+The orchestration work that kept this plan gated has since landed. A Phase-B lifecycle qualification on `perf/phase-b-experiments` at base commit `e9ab1db` — 24 unsaturated arrivals at 0.25/s and one burst of 32, KVM, Btrfs, the signed qualified bundle, zero refusals — measures the path the resume work now attaches to. The evidence is `docs/plans/evidence/2026-08-06-lifecycle-b1-unsaturated-baseline.json` and `docs/plans/evidence/2026-08-06-lifecycle-b2-burst32-baseline.json`, with the post-wakeup-fix repeat in the matching `-wakeup-fix.json` reports.
+
+| Qualified workload | `operation_total` p50/p95 | `guest_negotiation` p50/p95 | Non-guest overhead p50 |
+|---|---:|---:|---:|
+| Unsaturated `create → ready`, 24 arrivals at 0.25/s | 529/1,370 ms | 377/391 ms | **152 ms** |
+| Unsaturated `start → ready`, 24 arrivals at 0.25/s | 447/489 ms | 380/396 ms | **67 ms** |
+| Burst 32, `create → ready` | 3,897/4,172 ms | 2,233/2,673 ms | 1,664 ms |
+
+Guest negotiation is 71% of unsaturated create and 57% of burst-32 create. Under burst it inflates 5.9× while the host pages in rootfs at 1.29 GiB/s: every Instance reflink-clones the rootfs, each clone is a distinct inode, and distinct inodes share no page cache, so 32 concurrent boots fault the same bytes from disk 32 times. A golden memory snapshot removes both terms at once. There is no boot, so guest negotiation collapses to a snapshot load; and every resume maps one shared golden memory file, so the resident set of the first resume is the page cache of every later resume. That is the mechanism this plan buys, not merely the removal of 377 ms.
+
+The re-derived no-saturation budget replaces the earlier provisional one. Each row states the 2026-08-06 measurement it is derived from; the resume column is what the implemented path must hold.
+
+| Step | Measured 2026-08-06 p50/p95 | Resume-path budget |
 |---|---|---:|
-| API validation and durable admission | Stress API p95 was 5 ms | 5–10 ms |
-| Pre-assignment orchestration | Current bounded-claim path is 192/223 ms, including 28/39 ms of placement and 160/197 ms of Workspace provisioning | Must fit inside the total target |
-| Command delivery and runner admission | Current bounded-claim path is 26/50 ms; the owner-side claim remains the retained authority | 10–25 ms required |
-| Signed-template lookup and Workspace attachment | Current trust and attachment stages are 0 ms | 1–3 ms |
-| Guest IP, TAP, and host network policy | Current runner measurement is 12–16 ms | 10–15 ms |
-| Process start and file-backed snapshot load | Qualified test-only floor is 1 ms process start and 3–4 ms warm load p50/p95 | 5–15 ms |
-| First control response and post-resume hardening | Qualified test-only total, including process and load, is 16–18 ms p50/p95 | 10–30 ms before assignment bind and Workspace mount |
-| Runner result production | Current runner `ready` stage is 2 ms | 2–10 ms |
-| Contingency | Required for filesystem and scheduler variance | 20 ms |
-| Ready projection and client visibility | Current 30-arrival measurements are 0/0 ms and 21/44 ms | Must fit inside the total target |
-| **Total** | **Current bounded-claim path is 635/710 ms; low-level warm resume floor is 16–18 ms** | **100–200 ms required** |
+| API validation, durable admission, and placement | `placement` 16/20 ms on create, 18/29 ms on start | unchanged, 16–30 ms |
+| Workspace provisioning (create only) | `workspace_provision` 82/121 ms | unchanged, and the largest remaining non-guest term |
+| Command delivery and runner admission | `runner_admission` 19/26 ms | unchanged, 16–30 ms |
+| Signed-template lookup and Workspace attachment | `artifact_verify` 0/835 ms, `workspace_attach` 0/0 ms | 0–3 ms; template verification must be a stat-identity check, never a per-start rehash |
+| Guest IP, TAP, and host network policy | `network_setup` 13/15 ms | unchanged, 13–20 ms |
+| Process start and file-backed snapshot load | qualified test-only floor: 1 ms process start, 3–4 ms warm load | 5–15 ms, replacing `compute_launch` 7/16 ms |
+| First control response and post-resume hardening | qualified test-only total through hardening, including process start and load, is 16–18 ms | 16–25 ms |
+| Assignment bind, Workspace mount, network identity activation | not yet measured; no cold-path analogue exists | 10–30 ms, to be qualified by Task 9 |
+| Runner result production | `ready` 2/2 ms | unchanged, 2–10 ms |
+| Ready projection and client visibility | `ready_projection` 0/0 ms, `client_visibility` 16/20 ms | unchanged, 16–25 ms |
+| **Total, `start → ready`** | **67 ms non-guest + 380 ms guest negotiation** | **67 + 18 + bind ≈ 95–115 ms** |
+| **Total, `create → ready`** | **152 ms non-guest + 377 ms guest negotiation** | **152 + 18 + bind ≈ 180–200 ms** |
+
+Two conclusions follow, and both bind the implementation.
+
+Warm `start → ready` reaches the target with headroom; the 100–200 ms outcome is met on the hot path the problem statement names as the ephemeral cycle. Cold `create → ready` lands at the 200 ms ceiling with none. Its 82/121 ms of Workspace provisioning is now the single largest non-guest term and is the next optimization after this plan, not part of it. This plan therefore claims the target for `start → ready` and reports `create → ready` honestly against the ceiling rather than assuming provisioning improves.
+
+The 835 ms `artifact_verify` p95 on the create baseline is a trust-anchor re-verification, not a steady cost, and it is the shape of failure the template cache must not reproduce. Template admission verifies digests and signature once; every start after that proves only stable file identity, exactly as `trustedMicroVMArtifactsUnchanged` protects the launch artifacts today.
 
 ## Feasibility gate result
 
-The production snapshot implementation remains stopped at Task 1 as required by the plan. The low-level file-backed load sub-gate passes; the orchestration gate does not.
+The low-level file-backed load sub-gate passed on 2026-07-31 and the orchestration gate passed with the 2026-08-06 Phase-B measurements above. Task 1 is complete and the plan is released to Tasks 2–9.
 
 | Qualified workload | `create_to_ready` p50/p95 | `pre_assignment` p50/p95 | `runner_admission` p50/p95 | `runner_boot` p50/p95 | `ready_projection` p50/p95 |
 |---|---:|---:|---:|---:|---:|
@@ -64,14 +84,14 @@ The standalone snapshot-load evidence is `.tmp/snapshot-resume-feasibility-quali
 
 This is a feasibility floor, not a reusable template. The test snapshots an already assignment-bound guest, keeps its disks and memory coherent by capturing while paused, reloads it with a fresh vsock UDS, proves the first control response, and invokes post-resume hardening. It deliberately does not connect restore to Manager lifecycle, public Profile schemas, runner assignment fencing, networking, or a tenant-neutral template cache. A 64 MiB exploratory source boot was rejected because the signed guest cannot boot at that memory size; the qualified scenario uses 256 MiB of memory and a separate 64 MiB Workspace.
 
-Snapshot resume can remove only the runner boot portion of these measurements. It cannot remove pre-assignment orchestration, runner admission, ready projection, or client visibility. The next optimization pass must therefore:
+Snapshot resume can remove only the runner boot portion of these measurements. It cannot remove pre-assignment orchestration, runner admission, ready projection, or client visibility. The orchestration passes that had to land first were:
 
 1. Receipt-directory pipelining reduced the qualified unsaturated `workspace_provision` span from 148/192 ms to 129/154 ms p50/p95 over 30 arrivals. The full runner-local mutation is 108/132 ms; the earlier 28/40 ms figure covered only UUID rewrite, not manifest and receipt durability.
 2. Guarded transactional ready projection reduced the qualified unsaturated `ready_projection` span from 100/300 ms to 0/5 ms p50/p95 and burst-32 from 495/621 ms to 0/0 ms. `ready_event_ingest` remains separately attributed at 0/13 ms unsaturated and 10/37 ms under burst.
 3. Correct Assignment-time attribution and batch dispatch reduced unsaturated `runner_admission` from 26/43 ms to 17/31 ms p50/p95. Follow-up attribution isolated PostgreSQL execution as the claim cost, while pool acquisition, decode, and stream send remained 0 ms. Empty command and relay polls now avoid idle connection-row locks and writes. Eager Assignment dispatch reduced a consecutive loaded-host comparison from 51/90 ms to 11/34 ms, but it put the runner's single connection row into every concurrent placement transaction and was rejected after a repeated burst could shut down the control plane. The retained owner-side claim remains the only Assignment delivery authority and currently measures 34/58 ms end to end.
 4. Provider-neutral placement milestones isolated lifecycle pickup at 327/839 ms of a 337/859 ms placement span. Scheduling healthy ready Sandboxes at their real idle or maximum-duration deadline reduced pickup to 12/29 ms and placement to 27/54 ms without changing scheduler authority. Bounded atomic claims with sequential effects then reduced repeated burst mean pickup from 1,738/1,933 ms to 1,156/1,342 ms p50/p95. Independent two-worker and eight-worker variants were rejected because they increased scheduler serialization contention and end-to-end latency. The ten-rung burst and full qualified scenario passed.
 5. Optimize the remaining 160/197 ms Workspace provisioning, 359/390 ms guest negotiation, and 26/50 ms runner admission without moving connection binding or sequence allocation back into placement. First split runner-local burst queue time from actual Workspace mutation and guest negotiation; do not add control-plane workers while the scheduler's serializable transaction remains the contention point.
-6. Re-run the 30-arrival gate, repeated burst ladder, and full scenario; only after the unaffected spans fit inside the 200 ms budget should production work proceed to Tasks 2–9.
+6. The 2026-08-06 Phase-B pass re-ran the unsaturated gate and the burst ladder and recorded the spans in the re-derived budget above. Unsaturated `start → ready` non-guest overhead reached 67 ms and `create → ready` reached 152 ms, both inside the 200 ms ceiling before the resume path is added. Tasks 2–9 are released.
 
 ## Fixed architecture
 
@@ -94,10 +114,54 @@ Snapshot resume can remove only the runner boot portion of these measurements. I
 - A shared template must contain no credentials, runtime secrets, runner credentials, tenant data, prior Sandbox identifiers, live protocol connections, user processes, mutable logs, or reusable random output. Template construction must scan the guest-visible filesystem and memory-facing configuration for forbidden material, zero transient buffers before capture, and restrict template files as privileged immutable execution assets.
 - The existing low-level APIs are only building blocks. `FirecrackerAPIClient` can create and load snapshots with memory, network, and vsock overrides; `CreateGoldenSnapshot` can pause and create a diagnostic snapshot. There is no Manager restore composition path, and a source test explicitly prohibits reintroducing the removed unjailed `RestoreGoldenSnapshot`. `manager_toolvm.go` reuses a still-running VM for the same Sandbox/compartment; its `reusable`/`reused` fields do not mean snapshot resume, and its freeze timing only flushes the Workspace before teardown.
 
+## Snapshot resume requires the jailer, 2026-08-06
+
+A first attempt at a composed multi-Instance resume qualification produced concurrency numbers that were **withdrawn**, because the setup was invalid. Recording why, since the mistake is easy to repeat.
+
+Firecracker opens every block device at the path the VM state recorded, and it does so **during the load**, not afterwards:
+
+```
+Load snapshot error: Failed to restore from snapshot: Failed to restore devices:
+Error restoring MMIO devices: Block: Virtio backend error: Error manipulating the
+backing file: No such file or directory (os error 2) /.../rootfs.ext4
+```
+
+Two consequences follow. `PATCH /drives` cannot repoint a restored Instance's disks, because the load has already failed by the time it could be called — the API supports the call, but not for this purpose. And an unjailed restore records the template source's absolute paths, which at most one Instance can own. The first qualification ran unjailed and its resumed Instances silently opened the **template source's** rootfs and Workspace, which happened to still exist; the per-Instance staging it appeared to prove was inert, and its 19–25 ms concurrency figures describe Instances sharing one disk. They are not evidence of anything and are not carried forward.
+
+The design consequence is not a workaround, it is a constraint: **snapshot resume requires the jailer.** Under the jailer the recorded drive paths are chroot-relative names that each Instance resolves inside its own jail, so staging — not an API call — is what delivers a per-Sandbox Workspace. `prepareSnapshotResumeLaunch` therefore refuses an unjailed resume before staging any file, and the runner's unjailed mode stays what it always was: a test-only escape hatch, now explicitly incompatible with `snapshot_resume`.
+
+What is qualified is the template artifact itself. The evidence is `docs/plans/evidence/2026-08-06-snapshot-resume-template-lifecycle.json`, recording source commit `76b73bb` with `sourceTreeDirty: true` because it qualified the harness that produced it, and `identityNeutralTemplate: false` because the shipped guest still takes its Sandbox identity from kernel arguments. The run builds a template from a real signed boot at 512 MiB with a 10.7 GiB sealed post-boot rootfs captured at one paused point, publishes it atomically, admits it through the runner-local cache with full digest verification, proves the per-start stable-identity check is stat-only, and proves the unjailed refusal fails closed before staging.
+
+| Stage | Measured |
+|---|---:|
+| Template build, boot through sealed publish | 28,822 ms |
+| One-time cache admission, digesting 11.2 GiB | 5,187 ms |
+| Per-start stable-identity check | **5,911 ns** |
+
+The last row is the one that matters for the budget. Admission verifies every digest once and costs seconds; every start afterwards costs six microseconds, four orders of magnitude below the 0–3 ms the re-derived budget allows for template lookup. That is the difference between extending the signed-asset model and reproducing the 835 ms `artifact_verify` p95 on every start.
+
+The resume floor remains the separately qualified low-level load: 3–4 ms warm load and 16–18 ms through post-resume hardening at 256, 512, and 2048 MiB, with no full memory-image copy. Qualifying the composed multi-Instance resume needs a privileged jailed gate, which is the first item of Task 9.
+
+## Implementation decisions, 2026-08-06
+
+These resolve questions the fixed architecture left open. Each states what the pinned VMM and the shipped guest actually support, because two of them contradict an assumption in the section above.
+
+**Identity reaches a resumed guest over the existing guest control endpoint, before the first `Hello`.** Settled by the repository owner on 2026-08-06, superseding the fixed architecture's call for a new guest protocol generation. The resumed guest accepts one `/assignment/bind` control request after hardening succeeds and before its protocol listener accepts a connection. The fixed architecture calls for a new guest protocol generation carrying a one-time assignment bind, on the premise that `ProtocolIdentity` comes from kernel arguments and `ConnectionBinding` is immutable after `Hello`. Both remain true, and neither requires a new generation. The guest already exposes a host-only HTTP control endpoint on its own vsock port — the surface that serves `/restore/harden` and already delivers per-Sandbox runtime secrets. Delivering identity there, after hardening and before the guest protocol listener accepts a connection, gives the same one-time, generation-fenced bind with no change to `contracts/guest/v1`, no descriptor or fixture churn, and no widened negotiation window. It is no weaker: the control endpoint refuses any connection whose vsock CID is not the host, and it already carries secrets, which are strictly more sensitive than identifiers. MMDS is not used. It would require the guest to have a configured network before it has an identity, and the runner's egress policy treats the whole link-local range as protected.
+
+**The Workspace reaches a resumed guest by staging, and `PATCH /drives` cannot substitute for it.** Firecracker v1.16.1's `SnapshotLoadParams` carries `network_overrides`, `vsock_override`, and `clock_realtime`, and no drive override; the snapshot restores each block device by opening the `path_on_host` it recorded, during the load. `PATCH /drives/{id}` exists and is post-boot only, but a load whose recorded paths are absent has already failed before it could be called, so it is not a mechanism for attaching per-Instance disks to a restored guest. Under the jailer the recorded path is a chroot-relative name, so a restored Instance opens its own jail's file at the same name and the per-Sandbox Workspace arrives by being staged there. That is the only mechanism, and it is why resume requires the jailer.
+
+**The generation fence and the exclusive writer lock are unchanged by resume.** `WorkspaceStore.Open` already runs before compute in `StartAssignment`, holds the cross-process writer lock for the attachment's lifetime, and fails closed on a stale generation. The resume path forks below that call, exactly where cold start forks, and re-proves the attachment's generation before staging. Nothing about resume moves, weakens, or reorders it.
+
+**The golden memory file is hard-linked into each jail, never reflinked.** This is the mechanism, not an optimization. A reflink clone is a distinct inode, and page cache is per inode; cloning the memory file per Instance would reproduce exactly the per-inode page-in that makes 32 concurrent boots read the same rootfs bytes 32 times. One inode means the first resume's resident set is every later resume's cache hit. The link is never chowned, so no Instance's jailer UID takes ownership of an artifact every other Instance depends on. Only the sealed post-boot rootfs is cloned per Instance, because the restored guest writes to it.
+
+**Template integrity extends the signed-asset model rather than paralleling it.** A template is not separately signed — the runner has no signing key. Its compatibility key carries the signing-key fingerprint and the signed manifest digest of the bundle it was built from, so a template is only ever admitted against the bundle the runner has already verified. Cache admission then verifies every recorded file digest once, and every start after that proves stable file identity with the same dev+ino+size+mtime+ctime check that protects launch artifacts today. Publication is one rename of a fully synced staging directory, so no reader opens a partial generation.
+
+**A failed resume is a failed start.** There is no retry inside the load, no second attempt with different parameters, and no cold boot. A template that is absent, incompatible, corrupted, or changed since admission fails with a typed retryable unavailability error and the Instance is torn down with its TAP, policy, guest IP, staged files, and Workspace attachment released.
+
 ## Non-goals
 
 - Do not trim the rootfs, remove packages, reduce the standard toolset, or treat image size reduction as the startup strategy.
-- Do not implement this plan while writing or reviewing it. Add no placeholder backend, dormant restore function, feature flag, or stub resume branch.
+- Add no placeholder backend, dormant restore function, feature flag, or stub resume branch. Each task lands as a working, tested path or it does not land.
 - Do not turn public Workspace Snapshots into VM-memory snapshots. Public Snapshots remain runner-local reflink copies of one Sandbox Workspace.
 - Do not capture a warmed tenant VM, a warm tool lease, or an assignment-bound guest connection as the shared template.
 - Do not automatically relocate a Sandbox, copy a Workspace across runners outside the operator relocation Operation, reconstruct missing local data, or add a non-reflink fallback.
@@ -114,7 +178,7 @@ Run the focused tests introduced by each task, then run all repository-wide and 
 - `just test-contract`
 - `just test-compose`
 - `just test-deployment`
-- `just test-snapshot-resume` with the explicit signed bundle, KVM, Btrfs/XFS Workspace root, shapes, iterations, and absent evidence output path
+- `just test-snapshot-resume` with the explicit signed bundle, KVM, Btrfs/XFS Workspace root, shapes, iterations, concurrency rungs, and absent evidence output paths. It runs both the low-level load floor and the composed template lifecycle, and it fails if resumed Instances stop sharing one golden memory inode or if aggregate reads approach one memory image per Instance
 - `git diff --check`
 - `(cd runner && go test ./internal/firecracker ./internal/guest ./internal/runnercontrol)`
 - `just test-scenario` with `SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1`

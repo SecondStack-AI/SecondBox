@@ -50,6 +50,9 @@ Set SECONDBOX_REQUIRE_QUALIFIED_SNAPSHOT_LOAD=1 and provide:
   SECONDBOX_SNAPSHOT_QUALIFICATION_WARM_ITERATIONS
   SECONDBOX_SNAPSHOT_QUALIFICATION_WORKSPACE_MIB
   SECONDBOX_SNAPSHOT_QUALIFICATION_OUTPUT (absent absolute path)
+  SECONDBOX_SNAPSHOT_RESUME_MEMORY_MIB
+  SECONDBOX_SNAPSHOT_RESUME_WORKSPACE_MIB
+  SECONDBOX_SNAPSHOT_RESUME_OUTPUT (absent absolute path)
 PREREQUISITES
   exit 1
 fi
@@ -69,6 +72,9 @@ done
 : "${SECONDBOX_SNAPSHOT_QUALIFICATION_WARM_ITERATIONS:?snapshot qualification requires SECONDBOX_SNAPSHOT_QUALIFICATION_WARM_ITERATIONS}"
 : "${SECONDBOX_SNAPSHOT_QUALIFICATION_WORKSPACE_MIB:?snapshot qualification requires SECONDBOX_SNAPSHOT_QUALIFICATION_WORKSPACE_MIB}"
 : "${SECONDBOX_SNAPSHOT_QUALIFICATION_OUTPUT:?snapshot qualification requires SECONDBOX_SNAPSHOT_QUALIFICATION_OUTPUT}"
+: "${SECONDBOX_SNAPSHOT_RESUME_MEMORY_MIB:?snapshot qualification requires SECONDBOX_SNAPSHOT_RESUME_MEMORY_MIB}"
+: "${SECONDBOX_SNAPSHOT_RESUME_WORKSPACE_MIB:?snapshot qualification requires SECONDBOX_SNAPSHOT_RESUME_WORKSPACE_MIB}"
+: "${SECONDBOX_SNAPSHOT_RESUME_OUTPUT:?snapshot qualification requires SECONDBOX_SNAPSHOT_RESUME_OUTPUT}"
 
 artifacts_dir="$SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR"
 workspace_root="$SECONDBOX_RUNNER_WORKSPACE_ROOT"
@@ -85,6 +91,17 @@ done
 output_parent="$(dirname "$output_path")"
 [[ "$(realpath -e "$output_parent")" == "$output_parent" && ! -L "$output_parent" && -d "$output_parent" ]] ||
   fail "SECONDBOX_SNAPSHOT_QUALIFICATION_OUTPUT parent must be an existing clean absolute non-symlink directory"
+resume_output_path="$SECONDBOX_SNAPSHOT_RESUME_OUTPUT"
+[[ "$resume_output_path" = /* && ! -e "$resume_output_path" && ! -L "$resume_output_path" ]] ||
+  fail "SECONDBOX_SNAPSHOT_RESUME_OUTPUT must be an absent absolute path"
+resume_output_parent="$(dirname "$resume_output_path")"
+[[ "$(realpath -e "$resume_output_parent")" == "$resume_output_parent" &&
+   ! -L "$resume_output_parent" && -d "$resume_output_parent" ]] ||
+  fail "SECONDBOX_SNAPSHOT_RESUME_OUTPUT parent must be an existing clean absolute non-symlink directory"
+[[ "$SECONDBOX_SNAPSHOT_RESUME_MEMORY_MIB" =~ ^[1-9][0-9]*$ ]] ||
+  fail "SECONDBOX_SNAPSHOT_RESUME_MEMORY_MIB must be a positive integer"
+[[ "$SECONDBOX_SNAPSHOT_RESUME_WORKSPACE_MIB" =~ ^[1-9][0-9]*$ ]] ||
+  fail "SECONDBOX_SNAPSHOT_RESUME_WORKSPACE_MIB must be a positive integer"
 [[ "$SECONDBOX_SNAPSHOT_QUALIFICATION_MEMORY_MIB" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]] ||
   fail "SECONDBOX_SNAPSHOT_QUALIFICATION_MEMORY_MIB must be comma-separated positive integers without spaces"
 [[ "$SECONDBOX_SNAPSHOT_QUALIFICATION_WARM_ITERATIONS" =~ ^[1-9][0-9]*$ ]] ||
@@ -141,6 +158,10 @@ host_cpu="$(awk -F ': ' '/^model name[[:space:]]*:/{print $2; exit}' /proc/cpuin
 
 cd "$repo_root/runner"
 SECONDBOX_RUNNER_QUALIFY_SNAPSHOT_LOAD=1 \
+SECONDBOX_RUNNER_QUALIFY_SNAPSHOT_RESUME=1 \
+SECONDBOX_SNAPSHOT_RESUME_MEMORY_MIB="$SECONDBOX_SNAPSHOT_RESUME_MEMORY_MIB" \
+SECONDBOX_SNAPSHOT_RESUME_WORKSPACE_MIB="$SECONDBOX_SNAPSHOT_RESUME_WORKSPACE_MIB" \
+SECONDBOX_SNAPSHOT_RESUME_OUTPUT="$resume_output_path" \
 SECONDBOX_RUNNER_FIRECRACKER_PATH="$tools_root/firecracker" \
 SECONDBOX_RUNNER_FIRECRACKER_KERNEL_PATH="$artifacts_dir/kernel" \
 SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH="$artifacts_dir/rootfs.ext4" \
@@ -163,9 +184,10 @@ SECONDBOX_SNAPSHOT_QUALIFICATION_HOST_KERNEL="$(uname -srmo)" \
 SECONDBOX_SNAPSHOT_QUALIFICATION_HOST_CPU="$host_cpu" \
 SECONDBOX_SNAPSHOT_QUALIFICATION_WORKSPACE_FILESYSTEM="$workspace_fstype" \
 go test ./internal/firecracker \
-  -run '^TestSmokeSnapshotResumeLoadMeasurement$' \
+  -run '^(TestSmokeSnapshotResumeLoadMeasurement|TestSmokeSnapshotResumeTemplateLifecycle)$' \
   -count=1 \
   -timeout=60m \
   -v
 
 echo "Snapshot-load qualification passed; evidence: $output_path"
+echo "Snapshot-resume template qualification passed; evidence: $resume_output_path"

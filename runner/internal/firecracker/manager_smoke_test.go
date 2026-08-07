@@ -1246,6 +1246,11 @@ func smokeGuestProtocolOpts(t *testing.T, cfg *config.Config, opts runtimemanage
 			MemoryMiB:        cfg.MicroVMMemoryMiB,
 			WorkspaceSizeMiB: cfg.MicroVMWorkspaceSizeMiB,
 			ProcessLimit:     128,
+			// AssignmentBackend.StartAssignment is the only production caller
+			// and always sets this. Without it the Workspace drive is attached
+			// read-only and every smoke test that writes to the Workspace fails
+			// with "read-only file system".
+			WorkspaceWritable: true,
 		}
 	}
 	return opts
