@@ -450,7 +450,7 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 	networkPolicy, err := assignmentNetworkPolicy(plan.spec.Network)
 	if err != nil {
 		return broker.deferInvalidProfileStart(
-			ctx, claim, plan, err, now.UTC(), nextReconcileAt.UTC(),
+			ctx, claim, plan, err, nextReconcileAt.UTC(),
 		)
 	}
 	assets, guestProtocolGeneration, err := resolveProfileAssets(
@@ -458,7 +458,7 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 	)
 	if err != nil {
 		return broker.deferInvalidProfileStart(
-			ctx, claim, plan, err, now.UTC(), nextReconcileAt.UTC(),
+			ctx, claim, plan, err, nextReconcileAt.UTC(),
 		)
 	}
 	// The Runner is told which backend prerequisites its Assignment needs. The
@@ -544,7 +544,7 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		}
 		if errors.Is(err, scheduler.ErrHomeRunnerUnavailable) {
 			return broker.deferUnavailableHomeRunnerStart(
-				ctx, claim, plan.generation, now.UTC(), nextReconcileAt.UTC(),
+				ctx, claim, plan.generation, nextReconcileAt.UTC(),
 			)
 		}
 		return err
@@ -592,12 +592,18 @@ func (broker *PostgresEffectBroker) observeAtOrAfter(previous time.Time) (time.T
 // transient fault: failing here would end the reconciler and stop the server,
 // so the Sandbox defers with backoff and the anomaly is logged for the
 // operator who has to repair or replace the Profile revision.
+//
+// The deferral leaves the Sandbox exactly where the caller last saw it —
+// stopped, still wanted running — so it holds the public revision and
+// updated_at where they are, on the same rule as an ordinary wait commit: a
+// commit that changes nothing observable must not invalidate a caller's
+// If-Match. The claim stays fenced by the claim's revision and worker, and
+// clearing reconcile_owner is what stops one claim from committing twice.
 func (broker *PostgresEffectBroker) deferInvalidProfileStart(
 	ctx context.Context,
 	claim ports.LifecycleReconcileClaim,
 	plan startPlan,
 	cause error,
-	now time.Time,
 	nextReconcileAt time.Time,
 ) error {
 	slog.WarnContext(
@@ -609,11 +615,10 @@ func (broker *PostgresEffectBroker) deferInvalidProfileStart(
 	)
 	tag, err := broker.pool.Exec(ctx, `
 		UPDATE secondbox.sandboxes
-		SET next_reconcile_at=$2,reconcile_owner='',
-		    reconcile_claim_expires_at=NULL,revision=revision+1,updated_at=$3
-		WHERE id=$1 AND generation=$4 AND current_instance_id=''
-		  AND revision=$5 AND reconcile_owner=$6`,
-		claim.SandboxID, nextReconcileAt, now, plan.generation,
+		SET next_reconcile_at=$2,reconcile_owner='',reconcile_claim_expires_at=NULL
+		WHERE id=$1 AND generation=$3 AND current_instance_id=''
+		  AND revision=$4 AND reconcile_owner=$5`,
+		claim.SandboxID, nextReconcileAt, plan.generation,
 		claim.Revision, claim.WorkerID,
 	)
 	if err != nil {
@@ -625,20 +630,23 @@ func (broker *PostgresEffectBroker) deferInvalidProfileStart(
 	return nil
 }
 
+// deferUnavailableHomeRunnerStart defers a start whose home Runner cannot
+// currently take it. The Sandbox is wanted running, so it keeps its poll
+// deadline and starts as soon as the Runner is placeable again, and it holds
+// the public revision and updated_at for the same reason the invalid-Profile
+// deferral does: nothing a caller can observe changed.
 func (broker *PostgresEffectBroker) deferUnavailableHomeRunnerStart(
 	ctx context.Context,
 	claim ports.LifecycleReconcileClaim,
 	generation int64,
-	now time.Time,
 	nextReconcileAt time.Time,
 ) error {
 	tag, err := broker.pool.Exec(ctx, `
 		UPDATE secondbox.sandboxes
-		SET next_reconcile_at=$2,reconcile_owner='',
-		    reconcile_claim_expires_at=NULL,revision=revision+1,updated_at=$3
-		WHERE id=$1 AND generation=$4 AND current_instance_id=''
-		  AND revision=$5 AND reconcile_owner=$6`,
-		claim.SandboxID, nextReconcileAt, now, generation, claim.Revision, claim.WorkerID,
+		SET next_reconcile_at=$2,reconcile_owner='',reconcile_claim_expires_at=NULL
+		WHERE id=$1 AND generation=$3 AND current_instance_id=''
+		  AND revision=$4 AND reconcile_owner=$5`,
+		claim.SandboxID, nextReconcileAt, generation, claim.Revision, claim.WorkerID,
 	)
 	if err != nil {
 		return fmt.Errorf("SecondBox lifecycle unavailable home Runner deferral failed: %w", err)

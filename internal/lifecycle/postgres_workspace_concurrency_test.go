@@ -185,10 +185,12 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 	); err != nil {
 		t.Fatal(err)
 	}
+	// The deferral releases the claim and reschedules the poll, and it changes
+	// nothing a caller can observe, so the claimed revision stays where it was.
 	if reconcileOwner != "" ||
 		reconcileClaimExpiry != nil ||
 		!persistedNext.Equal(nextReconcileAt) ||
-		revision != 6 {
+		revision != 5 {
 		t.Fatalf(
 			"unavailable home Runner deferral owner=%q expiry=%v next=%s revision=%d",
 			reconcileOwner, reconcileClaimExpiry, persistedNext, revision,
