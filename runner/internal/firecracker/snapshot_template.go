@@ -6,12 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 )
 
 // A resume template is three immutable runner-local files plus a manifest. The
@@ -325,7 +327,10 @@ func (c *SnapshotTemplateCache) Publish(stageDir string, manifest SnapshotTempla
 	}
 	destination := filepath.Join(c.root, manifest.TemplateID)
 	if err := os.Rename(stageDir, destination); err != nil {
-		if !os.IsExist(err) && !isDirectoryNotEmpty(err) {
+		// Templates are immutable and identity-addressed, so losing the rename
+		// to a concurrent publisher of the same identity is the expected
+		// outcome, not a failure. Linux reports it as ENOTEMPTY or EEXIST.
+		if !errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, os.ErrExist) {
 			return "", fmt.Errorf("publish snapshot template %q: %w", manifest.TemplateID, err)
 		}
 		if removeErr := os.RemoveAll(stageDir); removeErr != nil {
@@ -505,10 +510,6 @@ func syncSnapshotTemplateFile(path string) error {
 		return fmt.Errorf("close snapshot template file %q: %w", path, err)
 	}
 	return os.Chmod(path, 0o444)
-}
-
-func isDirectoryNotEmpty(err error) bool {
-	return strings.Contains(err.Error(), "directory not empty")
 }
 
 // hostCPUCompatibilityFingerprint identifies the host CPU closely enough that a
