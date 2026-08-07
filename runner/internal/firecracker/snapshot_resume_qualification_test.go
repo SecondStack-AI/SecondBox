@@ -241,8 +241,35 @@ func buildSnapshotResumeTemplate(
 	}
 	vmStatePath := filepath.Join(stageDir, snapshotTemplateVMStateName)
 	memoryPath := filepath.Join(stageDir, snapshotTemplateMemoryName)
-	if err := client.CreateFullSnapshot(t.Context(), vmStatePath, memoryPath); err != nil {
+	// A jailed Firecracker resolves every API path inside its own chroot, so the
+	// capture is requested at the jail-relative names the resume path expects and
+	// moved into the cache staging directory afterwards. That is not incidental:
+	// the same chroot resolution is why a template built under the jailer records
+	// chroot-relative drive paths, which is the only way a restored Instance can
+	// open its own disks.
+	requestedVMState, requestedMemory := vmStatePath, memoryPath
+	if inst.jailRoot != "" {
+		requestedVMState, requestedMemory = snapshotTemplateVMStateName, snapshotTemplateMemoryName
+	}
+	if err := client.CreateFullSnapshot(t.Context(), requestedVMState, requestedMemory); err != nil {
 		t.Fatalf("capture template snapshot: %v", err)
+	}
+	if inst.jailRoot != "" {
+		for captured, destination := range map[string]string{
+			filepath.Join(inst.jailRoot, snapshotTemplateVMStateName): vmStatePath,
+			filepath.Join(inst.jailRoot, snapshotTemplateMemoryName):  memoryPath,
+		} {
+			if err := os.Rename(captured, destination); err != nil {
+				t.Fatalf("move captured template file out of the jail: %v", err)
+			}
+			// Template files belong to the runner and are read through a hard
+			// link by every Instance's jailer UID. Ownership never transfers to
+			// an Instance, so no Instance can modify or unlink an artifact every
+			// other Instance depends on.
+			if err := os.Chown(destination, os.Getuid(), os.Getgid()); err != nil {
+				t.Fatalf("take runner ownership of captured template file: %v", err)
+			}
+		}
 	}
 	// The VM stays paused through the rootfs seal so disk and memory are
 	// captured at one point in time.

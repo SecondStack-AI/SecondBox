@@ -58,6 +58,9 @@ test-firecracker:
 test-snapshot-resume:
     scripts/test-snapshot-resume.sh
 
+test-snapshot-resume-jailed:
+    scripts/test-snapshot-resume-jailed.sh
+
 test-multirunner:
     scripts/test-multirunner.sh
 

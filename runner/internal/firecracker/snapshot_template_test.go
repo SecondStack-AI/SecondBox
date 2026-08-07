@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -311,6 +312,90 @@ func TestSnapshotTemplateStableIdentityFailsAfterReplacement(t *testing.T) {
 	}
 	if _, err := cache.Resolve(key); err == nil {
 		t.Fatal("resolve returned a template whose files were replaced")
+	}
+}
+
+// TestSnapshotTemplateStableIdentitySurvivesPerInstanceLinking pins the reason
+// a template's identity omits ctime. Every resumed Instance hard-links the
+// golden memory file into its own jail so all Instances share one inode and one
+// page cache, and teardown unlinks it again. Both operations mark the inode's
+// status-change time, so an identity that pinned ctime would refuse the second
+// concurrent resume of a file nothing had modified.
+func TestSnapshotTemplateStableIdentitySurvivesPerInstanceLinking(t *testing.T) {
+	cache := newTestSnapshotTemplateCache(t)
+	key := testSnapshotTemplateKey()
+	stageTestSnapshotTemplate(t, cache, key)
+	template, err := cache.Resolve(key)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	jailRoot := t.TempDir()
+	var staged []string
+	for index := range 3 {
+		destination := filepath.Join(jailRoot, fmt.Sprintf("memory-%d.snap", index))
+		if err := stageSharedTemplateFile(destination, template.MemoryPath); err != nil {
+			t.Fatalf("stage golden memory file %d: %v", index, err)
+		}
+		staged = append(staged, destination)
+		if err := template.VerifyStableIdentity(); err != nil {
+			t.Fatalf("stable identity after staging %d jail links: %v", index+1, err)
+		}
+		shared, err := sharesInode(destination, template.MemoryPath)
+		if err != nil {
+			t.Fatalf("compare staged inode %d: %v", index, err)
+		}
+		if !shared {
+			t.Fatalf("staged golden memory file %d is a different inode", index)
+		}
+	}
+	for index, destination := range staged {
+		if err := os.Remove(destination); err != nil {
+			t.Fatalf("release jail link %d: %v", index, err)
+		}
+		if err := template.VerifyStableIdentity(); err != nil {
+			t.Fatalf("stable identity after releasing %d jail links: %v", index+1, err)
+		}
+	}
+}
+
+// TestSnapshotTemplateStableIdentityFailsAfterRewrite proves omitting ctime did
+// not open the file to in-place modification: rewriting the same byte count
+// still moves the modification time, which the identity does pin.
+func TestSnapshotTemplateStableIdentityFailsAfterRewrite(t *testing.T) {
+	cache := newTestSnapshotTemplateCache(t)
+	key := testSnapshotTemplateKey()
+	manifest := stageTestSnapshotTemplate(t, cache, key)
+	template, err := cache.Resolve(key)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	dir := filepath.Join(cache.Root(), manifest.TemplateID)
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatalf("chmod template dir: %v", err)
+	}
+	memoryPath := filepath.Join(dir, snapshotTemplateMemoryName)
+	if err := os.Chmod(memoryPath, 0o600); err != nil {
+		t.Fatalf("chmod template memory file: %v", err)
+	}
+	original, err := os.ReadFile(memoryPath)
+	if err != nil {
+		t.Fatalf("read template memory file: %v", err)
+	}
+	rewritten := append([]byte(nil), original...)
+	rewritten[0] ^= 0xff
+	file, err := os.OpenFile(memoryPath, os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("open template memory file for rewrite: %v", err)
+	}
+	if _, err := file.WriteAt(rewritten, 0); err != nil {
+		_ = file.Close()
+		t.Fatalf("rewrite template memory file in place: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close rewritten template memory file: %v", err)
+	}
+	if err := template.VerifyStableIdentity(); err == nil {
+		t.Fatal("a template memory file rewritten in place passed the per-start identity check")
 	}
 }
 
