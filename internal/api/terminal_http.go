@@ -273,11 +273,12 @@ func (apiHandler *handler) serveSandboxTerminal(
 			}); err != nil {
 				return false, fmt.Errorf("SecondBox Terminal WebSocket outcome write: %w", err)
 			}
-			return true, connection.WriteControl(
-				websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseNormalClosure, "terminal outcome delivered"),
-				time.Now().Add(time.Second),
-			)
+			if err := writeWebSocketClose(
+				connection, "terminal outcome delivered", time.Now().Add(time.Second),
+			); err != nil {
+				return true, fmt.Errorf("SecondBox Terminal WebSocket close write: %w", err)
+			}
+			return true, nil
 		default:
 			return false, errors.New("SecondBox Terminal response frame is unsupported")
 		}

@@ -2,6 +2,8 @@ package api
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -72,6 +74,104 @@ func TestDecodePublicExecClientFrameRequiresExplicitOrderedInputClosure(t *testi
 				t.Fatalf("decoded frame = %#v", frame)
 			}
 		})
+	}
+}
+
+// A peer that closes first is answered by the connection's default close
+// handler, which runs inside the streaming handler's own read goroutine. The
+// handler's close write then finds the close frame already sent, and that is
+// the handshake completing rather than failing.
+func TestWebSocketCloseWriteToleratesAnAlreadyAnsweredPeerClose(t *testing.T) {
+	closeResults := make(chan error, 1)
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		connection, err := upgrader.Upgrade(writer, request, nil)
+		if err != nil {
+			closeResults <- err
+			return
+		}
+		defer connection.Close()
+		// The default close handler writes the answering close frame before
+		// this read reports the peer's closure, so the close write below is
+		// guaranteed to find one already sent.
+		if _, _, err := connection.ReadMessage(); !websocket.IsCloseError(
+			err, websocket.CloseNormalClosure,
+		) {
+			closeResults <- fmt.Errorf("peer close read = %v", err)
+			return
+		}
+		closeResults <- writeWebSocketClose(
+			connection, "terminal outcome delivered", time.Now().Add(time.Second),
+		)
+	}))
+	defer server.Close()
+
+	connection, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http"),
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	if err := connection.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "peer closed first"),
+		time.Now().Add(time.Second),
+	); err != nil {
+		t.Fatalf("peer close: %v", err)
+	}
+	select {
+	case err := <-closeResults:
+		if err != nil {
+			t.Fatalf("close write after an answered peer close: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not report its close write")
+	}
+}
+
+// The ordinary order still has to deliver: a close write that races nothing
+// reaches the peer as a normal closure.
+func TestWebSocketCloseWriteDeliversNormalClosureToThePeer(t *testing.T) {
+	closeResults := make(chan error, 1)
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		connection, err := upgrader.Upgrade(writer, request, nil)
+		if err != nil {
+			closeResults <- err
+			return
+		}
+		defer connection.Close()
+		closeResults <- writeWebSocketClose(
+			connection, "port tunnel completed", time.Now().Add(time.Second),
+		)
+	}))
+	defer server.Close()
+
+	connection, _, err := websocket.DefaultDialer.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http"),
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	_, _, err = connection.ReadMessage()
+	var closeErr *websocket.CloseError
+	if !errors.As(err, &closeErr) ||
+		closeErr.Code != websocket.CloseNormalClosure ||
+		closeErr.Text != "port tunnel completed" {
+		t.Fatalf("peer read = %v, want a normal closure carrying the reason", err)
+	}
+	if err := <-closeResults; err != nil {
+		t.Fatalf("close write: %v", err)
 	}
 }
 

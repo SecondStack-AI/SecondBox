@@ -165,10 +165,8 @@ func (apiHandler *handler) servePortTunnel(
 			if detail == "" {
 				detail = event.TerminalKind
 			}
-			if err := connection.WriteControl(
-				websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseNormalClosure, detail),
-				time.Now().Add(time.Second),
+			if err := writeWebSocketClose(
+				connection, detail, time.Now().Add(time.Second),
 			); err != nil {
 				return fmt.Errorf("SecondBox Port WebSocket terminal write: %w", err)
 			}
