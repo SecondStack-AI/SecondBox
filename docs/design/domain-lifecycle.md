@@ -30,6 +30,8 @@ Lifecycle mutations require an `Idempotency-Key`; revision-sensitive Sandbox mut
 
 Creation resolves and pins the ProfileRevision, selects one compatible healthy home Runner, persists that home, and remains asynchronous until the Runner returns a durable Workspace-create receipt. A profile determines whether creation also requests a running Instance. Starting always targets the current exact home, resolves the current local image at the expected generation, and makes the Instance ready only after Runner and guest negotiation succeed.
 
+The pinned ProfileRevision's `startup.mode` selects which start path the home Runner takes, and it is never a fallback. A `cold_boot` revision boots a guest kernel and init for every Instance. A `snapshot_resume` revision resumes an identity-neutral post-boot memory snapshot instead: the guest receives its Sandbox identity, Workspace, and network identity in one atomic bind after the resume, rather than from boot arguments. A `snapshot_resume` Sandbox is placeable only onto a Runner advertising the provider-neutral `snapshot-resume` capability, and a Runner that cannot resume refuses the start with a typed retryable unavailability rather than cold booting it. Both modes hold the same generation fence, the same exclusive Workspace writer lock, the same fail-closed host network policy, and the same readiness contract.
+
 `POST /v1/sandboxes/{sandboxId}:relocate` is an asynchronous, revision-sensitive
 operator mutation. It refuses a running Sandbox and a Workspace with any
 non-deleted Snapshot. The caller names a target Runner or requests compatible

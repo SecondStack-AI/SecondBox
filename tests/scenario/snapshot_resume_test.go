@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -312,11 +313,15 @@ func runSnapshotResumeArrival(
 		t.Fatalf("SecondBox scenario resume arrival %s start terminal state = %#v", suffix, restarted)
 	}
 
+	// The timing route bounds its own traversal explicitly; this Sandbox has
+	// exactly one create, one stop, and one start behind it.
+	timingQuery := make(url.Values)
+	timingQuery.Set("limit", "20")
 	timing := scenarioJSON[contracts.SandboxTiming](
 		t, ctx, fixture.subject, "getSandboxTiming",
 		secondboxclient.CallOptions{
-			PathParameters: map[string]string{"sandboxId": ready.ID},
-			Headers:        handle.GenerationHeaders(""),
+			PathParameters:  map[string]string{"sandboxId": ready.ID},
+			QueryParameters: timingQuery,
 		},
 	)
 	createMillis = snapshotResumeOperationTotal(t, timing, "create", suffix)
