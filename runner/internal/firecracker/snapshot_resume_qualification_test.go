@@ -184,6 +184,10 @@ func buildSnapshotResumeTemplate(
 	if err != nil {
 		t.Fatalf("new template source manager: %v", err)
 	}
+	// The template build owns the runner DNS proxy for as long as its Manager
+	// exists. Every later Manager binds the same bridge address, so this one has
+	// to let go once the capture is sealed.
+	defer releaseManagerNetworkPolicy(t, manager)
 	workspaceStore, err := workspacestore.New(t.Context(), workspacestore.Config{
 		Root:                  cfg.RunnerWorkspaceRoot,
 		TemplateCapacityBytes: int64(workspaceMiB) << 20,
@@ -343,6 +347,13 @@ func snapshotResumeQualificationKey(
 	if err != nil {
 		t.Fatalf("host CPU fingerprint: %v", err)
 	}
+	// The template's recorded network shape follows the runner's deployment
+	// configuration, exactly as a cold boot's does. It belongs in the key because
+	// a resumed guest can never acquire an interface the capture did not record.
+	networkInterfaceID, templateGuestMAC := "", ""
+	if microVMNetworkRequired(cfg) {
+		networkInterfaceID, templateGuestMAC = snapshotResumeNetworkInterfaceID, snapshotTemplateGuestMAC
+	}
 	return SnapshotTemplateKey{
 		ArtifactVersion:       "qualification",
 		Architecture:          runtime.GOARCH,
@@ -375,7 +386,8 @@ func snapshotResumeQualificationKey(
 		WorkspaceSizeMiB:       workspaceMiB,
 		ProcessLimit:           opts.SandboxPolicy.ProcessLimit,
 		RuntimeClass:           string(runtimemanager.RuntimeClassToolExecutor),
-		NetworkInterfaceID:     snapshotResumeNetworkInterfaceID,
+		NetworkInterfaceID:     networkInterfaceID,
+		TemplateGuestMAC:       templateGuestMAC,
 		GuestControlVsockPort:  cfg.MicroVMGuestControlVsockPort,
 		GuestProtocolVsockPort: cfg.MicroVMGuestProtocolVsockPort,
 		GuestCID:               3,

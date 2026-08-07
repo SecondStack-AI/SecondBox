@@ -405,7 +405,7 @@ func checkUnixSocketPath(label, path, setting string) error {
 	return nil
 }
 
-func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, kernelPath, rootfsPath, workspacePath, sharedImagePath, tapName, guestIP string, jailerUID int, policy *runtimemanager.SandboxRuntimePolicy) (firecrackerLaunch, error) {
+func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, kernelPath, rootfsPath, workspacePath, sharedImagePath, tapName, guestIP string, jailerUID int, templateMode bool, policy *runtimemanager.SandboxRuntimePolicy) (firecrackerLaunch, error) {
 	if m.cfg.MicroVMAllowUnjailed {
 		socket := filepath.Join(dir, firecrackerSockName)
 		vsockUDS := filepath.Join(dir, vsockUDSName)
@@ -419,7 +419,7 @@ func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, 
 		return firecrackerLaunch{
 			executable: m.cfg.FirecrackerPath,
 			args:       []string{"--id", instanceID, "--api-sock", socket, "--config-file", configPath},
-			config:     buildFirecrackerConfigWithPolicy(m.cfg, kernelPath, rootfsPath, workspacePath, sharedImagePath, vsockUDS, tapName, guestIP, policy),
+			config:     buildFirecrackerConfigWithPolicy(m.cfg, kernelPath, rootfsPath, workspacePath, sharedImagePath, vsockUDS, tapName, guestIP, templateMode, policy),
 			configPath: configPath,
 			socketPath: socket,
 			vsockUDS:   vsockUDS,
@@ -470,7 +470,7 @@ func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, 
 	}
 
 	configPath := filepath.Join(jailRoot, configName)
-	fcConfig := buildFirecrackerConfigWithPolicy(m.cfg, kernelName, rootfsName, workspaceName, drivesSharedPath, vsockUDSName, tapName, guestIP, policy)
+	fcConfig := buildFirecrackerConfigWithPolicy(m.cfg, kernelName, rootfsName, workspaceName, drivesSharedPath, vsockUDSName, tapName, guestIP, templateMode, policy)
 	fcConfig.BootSource.KernelImagePath = kernelName
 
 	args := m.jailerArgsWithPolicy(instanceID, jailerUID, policy)
@@ -782,7 +782,18 @@ type networkIface struct {
 	HostDevName string `json:"host_dev_name,omitempty"`
 }
 
-func buildFirecrackerConfigWithPolicy(cfg *config.Config, kernelPath, rootfsPath, workspacePath, sharedImagePath, vsockUDS, tapName, guestIP string, policy *runtimemanager.SandboxRuntimePolicy) firecrackerConfig {
+func buildFirecrackerConfigWithPolicy(cfg *config.Config, kernelPath, rootfsPath, workspacePath, sharedImagePath, vsockUDS, tapName, guestIP string, templateMode bool, policy *runtimemanager.SandboxRuntimePolicy) firecrackerConfig {
+	guestMAC := guestMACForInstance(tapName)
+	if templateMode {
+		// A snapshot-resume template's network device is identity-neutral. Its
+		// kernel receives no ip= argument, so the interface is captured present,
+		// down, and address-less; and its MAC is a fixed template constant rather
+		// than a per-Instance value, because Firecracker's snapshot load can
+		// rebind the interface to a new TAP but carries no guest MAC. Every
+		// resumed Instance replaces both at its one assignment bind.
+		guestIP = ""
+		guestMAC = snapshotTemplateGuestMAC
+	}
 	workspaceWritable := true
 	vcpus := cfg.MicroVMVCPUs
 	memoryMiB := cfg.MicroVMMemoryMiB
@@ -809,7 +820,7 @@ func buildFirecrackerConfigWithPolicy(cfg *config.Config, kernelPath, rootfsPath
 	if strings.TrimSpace(tapName) != "" {
 		fc.NetworkIfaces = []networkIface{{
 			IfaceID:     "eth0",
-			GuestMAC:    guestMACForInstance(tapName),
+			GuestMAC:    guestMAC,
 			HostDevName: strings.TrimSpace(tapName),
 		}}
 	}

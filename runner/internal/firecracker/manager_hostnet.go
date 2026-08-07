@@ -45,10 +45,22 @@ func cloneRunnerGateways(source map[string]netip.Addr) map[string]netip.Addr {
 
 func (m *Manager) networkRequired(opts runtimemanager.StartOpts) bool {
 	_ = opts
-	if strings.TrimSpace(m.cfg.MicroVMBridgeName) != "" {
+	return microVMNetworkRequired(m.cfg)
+}
+
+// microVMNetworkRequired reports whether this runner gives guests a network
+// device. It is deployment configuration, not a per-start choice, which is why a
+// snapshot template's recorded network shape follows from it: a template built
+// on a runner without guest networking records no interface, and a resumed guest
+// can never acquire one.
+func microVMNetworkRequired(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	if strings.TrimSpace(cfg.MicroVMBridgeName) != "" {
 		return true
 	}
-	return strings.TrimSpace(m.cfg.MicroVMGuestIP) != ""
+	return strings.TrimSpace(cfg.MicroVMGuestIP) != ""
 }
 
 func (m *Manager) tapOwnerUID(jailerUID int) int {
@@ -164,6 +176,23 @@ func guestIPBootArg(cfg *config.Config, guestIP string) string {
 		net.IP(ipnet.Mask).String(),
 		gwIP.String(),
 	)
+}
+
+// guestAddressCIDR renders a reserved guest address with the bridge's prefix
+// length. A cold-booted guest receives the same pair through the kernel `ip=`
+// argument's address and netmask fields; a resumed guest receives it in its
+// assignment bind, because its kernel finished booting before this Sandbox
+// existed. It is empty when this runner gives guests no network device.
+func guestAddressCIDR(guestIP, bridgeCIDR string) string {
+	address, err := netip.ParseAddr(strings.TrimSpace(guestIP))
+	if err != nil {
+		return ""
+	}
+	prefix, err := netip.ParsePrefix(strings.TrimSpace(bridgeCIDR))
+	if err != nil {
+		return ""
+	}
+	return netip.PrefixFrom(address, prefix.Bits()).String()
 }
 
 func bridgeAddress(cidr string) netip.Addr {

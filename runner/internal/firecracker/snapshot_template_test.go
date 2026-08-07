@@ -37,6 +37,7 @@ func testSnapshotTemplateKey() SnapshotTemplateKey {
 		ProcessLimit:            256,
 		RuntimeClass:            "tool_executor",
 		NetworkInterfaceID:      "eth0",
+		TemplateGuestMAC:        "02:00:00:5b:7e:00",
 		GuestControlVsockPort:   1024,
 		GuestProtocolVsockPort:  1025,
 		GuestCID:                3,
@@ -117,21 +118,26 @@ func TestSnapshotTemplateKeyChangeProducesNewIdentity(t *testing.T) {
 		t.Fatalf("base identity: %v", err)
 	}
 	mutations := map[string]func(*SnapshotTemplateKey){
-		"kernel args":      func(k *SnapshotTemplateKey) { k.KernelArgs += " extra=1" },
-		"rootfs digest":    func(k *SnapshotTemplateKey) { k.SourceRootfsSHA256 = strings.Repeat("9", 64) },
-		"firecracker":      func(k *SnapshotTemplateKey) { k.FirecrackerVersion = "1.17.0" },
-		"host cpu":         func(k *SnapshotTemplateKey) { k.HostCPUFingerprint = strings.Repeat("2", 64) },
-		"memory shape":     func(k *SnapshotTemplateKey) { k.MemorySizeMiB = 1024 },
-		"vcpu shape":       func(k *SnapshotTemplateKey) { k.VCPUCount = 2 },
-		"protocol":         func(k *SnapshotTemplateKey) { k.GuestProtocolGeneration = 2 },
-		"features":         func(k *SnapshotTemplateKey) { k.GuestFeatures = []string{"streaming_exec"} },
-		"control port":     func(k *SnapshotTemplateKey) { k.GuestControlVsockPort = 2048 },
-		"signing key":      func(k *SnapshotTemplateKey) { k.SigningKeyFingerprint = strings.Repeat("3", 64) },
-		"signed manifest":  func(k *SnapshotTemplateKey) { k.SignedManifestDigest = "sha256:" + strings.Repeat("4", 64) },
-		"workspace shape":  func(k *SnapshotTemplateKey) { k.WorkspaceSizeMiB = 128 },
-		"process limit":    func(k *SnapshotTemplateKey) { k.ProcessLimit = 512 },
-		"runtime class":    func(k *SnapshotTemplateKey) { k.RuntimeClass = "other" },
-		"network shape":    func(k *SnapshotTemplateKey) { k.NetworkInterfaceID = "eth1" },
+		"kernel args":     func(k *SnapshotTemplateKey) { k.KernelArgs += " extra=1" },
+		"rootfs digest":   func(k *SnapshotTemplateKey) { k.SourceRootfsSHA256 = strings.Repeat("9", 64) },
+		"firecracker":     func(k *SnapshotTemplateKey) { k.FirecrackerVersion = "1.17.0" },
+		"host cpu":        func(k *SnapshotTemplateKey) { k.HostCPUFingerprint = strings.Repeat("2", 64) },
+		"memory shape":    func(k *SnapshotTemplateKey) { k.MemorySizeMiB = 1024 },
+		"vcpu shape":      func(k *SnapshotTemplateKey) { k.VCPUCount = 2 },
+		"protocol":        func(k *SnapshotTemplateKey) { k.GuestProtocolGeneration = 2 },
+		"features":        func(k *SnapshotTemplateKey) { k.GuestFeatures = []string{"streaming_exec"} },
+		"control port":    func(k *SnapshotTemplateKey) { k.GuestControlVsockPort = 2048 },
+		"signing key":     func(k *SnapshotTemplateKey) { k.SigningKeyFingerprint = strings.Repeat("3", 64) },
+		"signed manifest": func(k *SnapshotTemplateKey) { k.SignedManifestDigest = "sha256:" + strings.Repeat("4", 64) },
+		"workspace shape": func(k *SnapshotTemplateKey) { k.WorkspaceSizeMiB = 128 },
+		"process limit":   func(k *SnapshotTemplateKey) { k.ProcessLimit = 512 },
+		"runtime class":   func(k *SnapshotTemplateKey) { k.RuntimeClass = "other" },
+		"network shape":   func(k *SnapshotTemplateKey) { k.NetworkInterfaceID = "eth1" },
+		"template mac":    func(k *SnapshotTemplateKey) { k.TemplateGuestMAC = "02:00:00:5b:7e:01" },
+		"no network device": func(k *SnapshotTemplateKey) {
+			k.NetworkInterfaceID = ""
+			k.TemplateGuestMAC = ""
+		},
 		"guest cid":        func(k *SnapshotTemplateKey) { k.GuestCID = 4 },
 		"cpu template":     func(k *SnapshotTemplateKey) { k.CPUTemplate = "T2" },
 		"toolchain bundle": func(k *SnapshotTemplateKey) { k.ToolchainBundleDigest = "sha256:" + strings.Repeat("5", 64) },
@@ -161,6 +167,12 @@ func TestSnapshotTemplateKeyRejectsIncompleteIdentity(t *testing.T) {
 		"no features":            func(k *SnapshotTemplateKey) { k.GuestFeatures = nil },
 		"colliding vsock ports":  func(k *SnapshotTemplateKey) { k.GuestProtocolVsockPort = k.GuestControlVsockPort },
 		"zero cid":               func(k *SnapshotTemplateKey) { k.GuestCID = 0 },
+		// A network device is described by both fields or by neither. Naming an
+		// interface without the MAC it was captured with, or the reverse, leaves
+		// the shape a resumed Instance must replace unstated.
+		"interface without template mac": func(k *SnapshotTemplateKey) { k.TemplateGuestMAC = "" },
+		"template mac without interface": func(k *SnapshotTemplateKey) { k.NetworkInterfaceID = "" },
+		"malformed template mac":         func(k *SnapshotTemplateKey) { k.TemplateGuestMAC = "not-a-mac" },
 	}
 	for name, mutate := range mutations {
 		t.Run(name, func(t *testing.T) {

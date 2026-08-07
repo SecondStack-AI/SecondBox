@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,38 +45,81 @@ type jailedSnapshotResumeReport struct {
 	VMStateFileBytes    int64                      `json:"vmStateFileBytes"`
 	TemplateBuildMillis int64                      `json:"templateBuildMilliseconds"`
 	AdmissionMillis     int64                      `json:"cacheAdmissionMilliseconds"`
+	NetworkRebinding    jailedResumeNetworkFinding `json:"networkRebinding"`
 	Rungs               []jailedSnapshotResumeRung `json:"concurrencyRungs"`
 	GatePassed          bool                       `json:"gatePassed"`
 	GateFailures        []string                   `json:"gateFailures,omitempty"`
 }
 
+// jailedResumeNetworkFinding records what the pinned VMM actually does with a
+// snapshotted network interface. The plan asserted the shape from the API
+// specification; these are the measurements that settle it.
+type jailedResumeNetworkFinding struct {
+	// TemplateRecordsInterface is whether the captured VM state has a network
+	// device at all. Everything below only means something when it is true.
+	TemplateRecordsInterface bool   `json:"templateRecordsNetworkInterface"`
+	TemplateInterfaceID      string `json:"templateNetworkInterfaceId"`
+	TemplateGuestMAC         string `json:"templateGuestMac"`
+	// RebindsToPerInstanceTap is proved by resuming with an override naming a
+	// TAP that did not exist when the template was captured, after the
+	// template's own TAP has been destroyed. A load that opened the recorded
+	// device name could not succeed.
+	RebindsToPerInstanceTap bool `json:"snapshotLoadRebindsInterfaceToPerInstanceTap"`
+	// AbsentInterfaceOverrideError is the VMM's reply to an override naming an
+	// interface the VM state never recorded. It is the direct evidence that an
+	// override rebinds rather than adds.
+	AbsentInterfaceOverrideError string `json:"absentInterfaceOverrideError"`
+	// PostRestoreInterfaceCreateError is the VMM's reply to PUT
+	// /network-interfaces after a successful load, closing the only other way an
+	// interface could have been added.
+	PostRestoreInterfaceCreateError string `json:"postRestoreInterfaceCreateError"`
+}
+
 type jailedSnapshotResumeRung struct {
-	Concurrency               int                                `json:"concurrency"`
-	WallClockMillis           int64                              `json:"wallClockMilliseconds"`
-	Instances                 []jailedSnapshotResumeSample       `json:"instances"`
-	Stages                    []jailedSnapshotResumeStageSummary `json:"stages"`
-	GoldenMemoryInode         string                             `json:"goldenMemoryInode"`
-	GoldenMemoryInodeShared   bool                               `json:"goldenMemoryInodeShared"`
-	GoldenMemoryLinkCount     uint64                             `json:"goldenMemoryLinkCount"`
-	RootfsChildrenAreDistinct bool                               `json:"rootfsChildrenAreDistinct"`
-	WorkspacesAreDistinct     bool                               `json:"workspacesAreDistinct"`
-	FirecrackerReadBytesTotal uint64                             `json:"firecrackerReadBytesTotal"`
-	FirecrackerReadCharsTotal uint64                             `json:"firecrackerReadCharactersTotal"`
-	FullMemoryCopyObserved    bool                               `json:"fullMemoryCopyObserved"`
+	Concurrency                int                                `json:"concurrency"`
+	WallClockMillis            int64                              `json:"wallClockMilliseconds"`
+	Instances                  []jailedSnapshotResumeSample       `json:"instances"`
+	Stages                     []jailedSnapshotResumeStageSummary `json:"stages"`
+	GoldenMemoryInode          string                             `json:"goldenMemoryInode"`
+	GoldenMemoryInodeShared    bool                               `json:"goldenMemoryInodeShared"`
+	GoldenMemoryLinkCount      uint64                             `json:"goldenMemoryLinkCount"`
+	RootfsChildrenAreDistinct  bool                               `json:"rootfsChildrenAreDistinct"`
+	WorkspacesAreDistinct      bool                               `json:"workspacesAreDistinct"`
+	FirecrackerReadBytesTotal  uint64                             `json:"firecrackerReadBytesTotal"`
+	FirecrackerReadCharsTotal  uint64                             `json:"firecrackerReadCharactersTotal"`
+	FullMemoryCopyObserved     bool                               `json:"fullMemoryCopyObserved"`
+	GuestMACsAreDistinct       bool                               `json:"guestMacsAreDistinct"`
+	GuestAddressesAreDistinct  bool                               `json:"guestAddressesAreDistinct"`
+	EveryGuestReachedItsOwnTap bool                               `json:"everyGuestReachedItsOwnTap"`
+	NoTemplateMACOnTheBridge   bool                               `json:"noTemplateMacOnTheBridge"`
 }
 
 type jailedSnapshotResumeSample struct {
-	InstanceID             string `json:"instanceId"`
-	JailerUID              int    `json:"jailerUid"`
-	TemplateIdentityMicros int64  `json:"templateIdentityMicroseconds"`
-	StageMicros            int64  `json:"stageMicroseconds"`
-	ProcessStartMicros     int64  `json:"processStartMicroseconds"`
-	SnapshotLoadMicros     int64  `json:"snapshotLoadMicroseconds"`
-	FirstControlMicros     int64  `json:"firstControlMicroseconds"`
-	HardenMicros           int64  `json:"postResumeHardeningMicroseconds"`
-	BindMicros             int64  `json:"assignmentBindMicroseconds"`
-	GuestHandshakeMicros   int64  `json:"guestHandshakeMicroseconds"`
-	ResumeTotalMicros      int64  `json:"resumeTotalMicroseconds"`
+	InstanceID string `json:"instanceId"`
+	JailerUID  int    `json:"jailerUid"`
+	// The network identity this Instance was given, and what the host observed
+	// after the guest first transmitted through its own TAP.
+	TapName                string `json:"tapName"`
+	GuestIP                string `json:"guestIp"`
+	GuestMAC               string `json:"guestMac"`
+	ObservedInGuestMAC     string `json:"observedInGuestMac"`
+	ObservedInGuestRoute   string `json:"observedInGuestDefaultRoute"`
+	ObservedNeighbourMAC   string `json:"observedHostNeighbourMac"`
+	ObservedForwardingPort string `json:"observedBridgeForwardingPort"`
+	// NetworkSetupMicros is the host-side half: guest IP reservation, TAP
+	// creation with this Instance's jailer UID, and a fail-closed policy install,
+	// all of which complete before the snapshot is loaded. The guest-side half is
+	// inside assignmentBindMicroseconds.
+	NetworkSetupMicros     int64 `json:"hostNetworkSetupMicroseconds"`
+	TemplateIdentityMicros int64 `json:"templateIdentityMicroseconds"`
+	StageMicros            int64 `json:"stageMicroseconds"`
+	ProcessStartMicros     int64 `json:"processStartMicroseconds"`
+	SnapshotLoadMicros     int64 `json:"snapshotLoadMicroseconds"`
+	FirstControlMicros     int64 `json:"firstControlMicroseconds"`
+	HardenMicros           int64 `json:"postResumeHardeningMicroseconds"`
+	BindMicros             int64 `json:"assignmentBindMicroseconds"`
+	GuestHandshakeMicros   int64 `json:"guestHandshakeMicroseconds"`
+	ResumeTotalMicros      int64 `json:"resumeTotalMicroseconds"`
 }
 
 type jailedSnapshotResumeStageSummary struct {
@@ -174,6 +218,8 @@ func TestSmokeJailedSnapshotResume(t *testing.T) {
 		t.Fatalf("new resume WorkspaceStore: %v", err)
 	}
 
+	report.NetworkRebinding = measureSnapshotResumeNetworkFindings(t, cfg, template, store, memoryMiB, workspaceMiB)
+
 	for _, concurrency := range rungs {
 		rung := measureJailedResumeRung(t, cfg, template, store, concurrency, memoryMiB, workspaceMiB)
 		report.Rungs = append(report.Rungs, rung)
@@ -211,6 +257,27 @@ func TestSmokeJailedSnapshotResume(t *testing.T) {
 			report.GatePassed = false
 			report.GateFailures = append(report.GateFailures, fmt.Sprintf(
 				"concurrency=%d performed memory-image-sized process I/O per Instance",
+				concurrency,
+			))
+		}
+		if !rung.GuestMACsAreDistinct || !rung.GuestAddressesAreDistinct {
+			report.GatePassed = false
+			report.GateFailures = append(report.GateFailures, fmt.Sprintf(
+				"concurrency=%d resumed Instances shared a MAC or an address",
+				concurrency,
+			))
+		}
+		if !rung.EveryGuestReachedItsOwnTap {
+			report.GatePassed = false
+			report.GateFailures = append(report.GateFailures, fmt.Sprintf(
+				"concurrency=%d guest frames arrived on another Instance's TAP",
+				concurrency,
+			))
+		}
+		if !rung.NoTemplateMACOnTheBridge {
+			report.GatePassed = false
+			report.GateFailures = append(report.GateFailures, fmt.Sprintf(
+				"concurrency=%d leaked the template's captured MAC onto the bridge",
 				concurrency,
 			))
 		}
@@ -252,6 +319,7 @@ func measureJailedResumeRung(
 	if err != nil {
 		t.Fatalf("new concurrency-%d resume manager: %v", concurrency, err)
 	}
+	defer releaseManagerNetworkPolicy(t, manager)
 	opts := smokeGuestProtocolOpts(t, cfg, runtimemanager.StartOpts{
 		Timezone:      "UTC",
 		CompartmentID: "cmp_jailed_resume",
@@ -294,6 +362,9 @@ func measureJailedResumeRung(
 				smokeLogPath(t, inst.logPath),
 			)
 		}
+	}
+	assertJailedResumeNetworkIdentities(t, cfg, instances, &rung)
+	for _, inst := range instances {
 		rung.Instances = append(rung.Instances, inst.sample)
 	}
 
@@ -373,20 +444,24 @@ func measureJailedResumeRung(
 // gate composes already-landed primitives around it and performs no Manager
 // surgery.
 type jailedResumeInstance struct {
-	id          string
-	sandboxID   string
-	compartment string
-	jailerUID   int
-	runDir      string
-	logPath     string
-	logFile     *os.File
-	workspaceID string
-	attachment  workspacestore.ComputeAttachment
-	launch      snapshotResumeLaunch
-	cmd         *exec.Cmd
-	session     *GuestProtocolSession
-	sample      jailedSnapshotResumeSample
-	err         error
+	id              string
+	sandboxID       string
+	compartment     string
+	jailerUID       int
+	runDir          string
+	logPath         string
+	logFile         *os.File
+	workspaceID     string
+	attachment      workspacestore.ComputeAttachment
+	launch          snapshotResumeLaunch
+	cmd             *exec.Cmd
+	session         *GuestProtocolSession
+	guestIP         string
+	tapName         string
+	tapConfigured   bool
+	policyInstalled bool
+	sample          jailedSnapshotResumeSample
+	err             error
 }
 
 func newJailedResumeInstance(
@@ -482,40 +557,15 @@ func (inst *jailedResumeInstance) resume(
 		ProcessLimit:      opts.SandboxPolicy.ProcessLimit,
 		WorkspaceWritable: true,
 	}
-	stageStartedAt := time.Now()
-	launch, err := manager.prepareSnapshotResumeLaunch(
-		inst.id,
-		inst.runDir,
-		template,
-		workspaceImage.Name(),
-		"",
-		inst.jailerUID,
-		policy,
-	)
+	launch, err := inst.startResumeProcess(ctx, manager, cfg, template, workspaceImage.Name(), policy)
 	if err != nil {
-		return fmt.Errorf("prepare jailed resume launch: %w", err)
+		return err
 	}
-	inst.launch = launch
-	inst.sample.StageMicros = time.Since(stageStartedAt).Microseconds()
-
-	processStartedAt := time.Now()
-	cmd := exec.Command(launch.executable, launch.args...)
-	cmd.Dir = inst.runDir
-	cmd.Stdout = inst.logFile
-	cmd.Stderr = inst.logFile
-	cmd.Env = append(os.Environ(), launch.environment...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start jailer: %w", err)
-	}
-	inst.cmd = cmd
-	if err := waitForUnixSocket(ctx, launch.socketPath, 30*time.Second); err != nil {
-		return fmt.Errorf("wait for jailed Firecracker API socket: %w", err)
-	}
-	inst.sample.ProcessStartMicros = time.Since(processStartedAt).Microseconds()
 
 	loadStartedAt := time.Now()
-	if err := resumeSnapshotTemplate(ctx, launch, "", 30*time.Second, 120*time.Second); err != nil {
+	// The TAP the template was captured against no longer exists; only the
+	// override can make this load succeed.
+	if err := resumeSnapshotTemplate(ctx, launch, inst.tapName, 30*time.Second, 120*time.Second); err != nil {
 		return err
 	}
 	inst.sample.SnapshotLoadMicros = time.Since(loadStartedAt).Microseconds()
@@ -552,6 +602,12 @@ func (inst *jailedResumeInstance) resume(
 		ToolchainManifestDigest: opts.ToolchainManifestDigest,
 		HeartbeatIntervalMs:     uint64(cfg.MicroVMGuestHeartbeatInterval / time.Millisecond),
 		WorkspaceWritable:       true,
+		Network: &AssignmentNetworkIdentity{
+			Interface:   snapshotResumeNetworkInterfaceID,
+			MACAddress:  guestMACForInstance(inst.tapName),
+			AddressCIDR: guestAddressCIDR(inst.guestIP, cfg.MicroVMBridgeCIDR),
+			Gateway:     bridgeAddress(cfg.MicroVMBridgeCIDR).String(),
+		},
 	}); err != nil {
 		return fmt.Errorf("bind resumed guest assignment: %w", err)
 	}
@@ -585,7 +641,149 @@ func (inst *jailedResumeInstance) resume(
 	inst.session = session
 	inst.sample.GuestHandshakeMicros = time.Since(handshakeStartedAt).Microseconds()
 	inst.sample.ResumeTotalMicros = time.Since(totalStartedAt).Microseconds()
+	// Everything above is the resume. What follows is the evidence that the
+	// resumed guest's interface is its own, collected after the timed path so it
+	// cannot inflate a stage.
+	return inst.observeGuestNetworkIdentity(ctx, bridgeAddress(cfg.MicroVMBridgeCIDR).String())
+}
+
+// startResumeProcess creates everything the host owns and starts the jailed
+// process, stopping just short of the load. The order is the one the production
+// path must also hold: the guest address, the TAP owned by this Instance's
+// jailer UID, and a fail-closed policy all exist before the snapshot is loaded.
+// A resumed guest's interface is captured link-down and stays down until its
+// assignment bind, so no frame can leave it before the policy governing it is
+// installed.
+func (inst *jailedResumeInstance) startResumeProcess(
+	ctx context.Context,
+	manager *Manager,
+	cfg *config.Config,
+	template *AdmittedSnapshotTemplate,
+	workspacePath string,
+	policy *runtimemanager.SandboxRuntimePolicy,
+) (snapshotResumeLaunch, error) {
+	networkStartedAt := time.Now()
+	guestIP, err := manager.reserveGuestIP(inst.id)
+	if err != nil {
+		return snapshotResumeLaunch{}, fmt.Errorf("reserve resume guest IP: %w", err)
+	}
+	inst.guestIP = guestIP
+	inst.tapName = tapNameForInstance(cfg.MicroVMTapPrefix, inst.id)
+	if err := manager.network.ConfigureTap(ctx, TapConfig{
+		SandboxID:  inst.sandboxID,
+		InstanceID: inst.id,
+		TapName:    inst.tapName,
+		GuestIP:    guestIP,
+		BridgeName: cfg.MicroVMBridgeName,
+		BridgeCIDR: cfg.MicroVMBridgeCIDR,
+		OwnerUID:   manager.tapOwnerUID(inst.jailerUID),
+	}); err != nil {
+		return snapshotResumeLaunch{}, fmt.Errorf("configure resume TAP: %w", err)
+	}
+	inst.tapConfigured = true
+	if manager.networkPolicy == nil || manager.defaultNetworkPolicy == nil {
+		return snapshotResumeLaunch{}, fmt.Errorf("host network policy enforcement is required for a jailed resume gate")
+	}
+	if err := manager.networkPolicy.Install(ctx, PolicyNetworkConfig{
+		InstanceID: inst.id,
+		TapName:    inst.tapName,
+		GuestIP:    guestIP,
+		DNSAddress: bridgeAddress(cfg.MicroVMBridgeCIDR),
+		Policy:     manager.defaultNetworkPolicy,
+		OnFailure:  func(error) {},
+	}); err != nil {
+		return snapshotResumeLaunch{}, fmt.Errorf("install resume host network policy: %w", err)
+	}
+	inst.policyInstalled = true
+	inst.sample.NetworkSetupMicros = time.Since(networkStartedAt).Microseconds()
+	inst.sample.TapName = inst.tapName
+	inst.sample.GuestIP = guestIP
+	inst.sample.GuestMAC = guestMACForInstance(inst.tapName)
+
+	stageStartedAt := time.Now()
+	launch, err := manager.prepareSnapshotResumeLaunch(
+		inst.id,
+		inst.runDir,
+		template,
+		workspacePath,
+		"",
+		inst.jailerUID,
+		policy,
+	)
+	if err != nil {
+		return snapshotResumeLaunch{}, fmt.Errorf("prepare jailed resume launch: %w", err)
+	}
+	inst.launch = launch
+	inst.sample.StageMicros = time.Since(stageStartedAt).Microseconds()
+
+	processStartedAt := time.Now()
+	cmd := exec.Command(launch.executable, launch.args...)
+	cmd.Dir = inst.runDir
+	cmd.Stdout = inst.logFile
+	cmd.Stderr = inst.logFile
+	cmd.Env = append(os.Environ(), launch.environment...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		return snapshotResumeLaunch{}, fmt.Errorf("start jailer: %w", err)
+	}
+	inst.cmd = cmd
+	if err := waitForUnixSocket(ctx, launch.socketPath, 30*time.Second); err != nil {
+		return snapshotResumeLaunch{}, fmt.Errorf("wait for jailed Firecracker API socket: %w", err)
+	}
+	inst.sample.ProcessStartMicros = time.Since(processStartedAt).Microseconds()
+	return launch, nil
+}
+
+// observeGuestNetworkIdentity reads the interface state the guest itself sees
+// and then makes it transmit, so the host can record which TAP its frames
+// arrive on.
+func (inst *jailedResumeInstance) observeGuestNetworkIdentity(ctx context.Context, gateway string) error {
+	hardware, err := inst.runGuestShell(ctx, "cat /sys/class/net/"+snapshotResumeNetworkInterfaceID+"/address")
+	if err != nil {
+		return fmt.Errorf("read resumed guest hardware address: %w", err)
+	}
+	inst.sample.ObservedInGuestMAC = hardware
+	// /proc/net/route renders the default route as a zero destination with the
+	// gateway in host byte order. Reading it with the shell alone proves the route
+	// the bind installed without any userspace networking tool, which is the point:
+	// the guest image has none.
+	route, err := inst.runGuestShell(
+		ctx,
+		`while read -r iface dest gw rest; do `+
+			`if [ "$dest" = 00000000 ] && [ "$gw" != 00000000 ]; then echo "$iface $gw"; fi; `+
+			`done < /proc/net/route`,
+	)
+	if err != nil {
+		return fmt.Errorf("read resumed guest default route: %w", err)
+	}
+	inst.sample.ObservedInGuestRoute = route
+	// The default-deny policy drops the echo request, but it permits the ARP
+	// exchange with the gateway that must happen first. That exchange is what
+	// puts this guest's address and MAC into the host's neighbour table and its
+	// MAC into the bridge forwarding database against its own TAP port.
+	if _, err := inst.runGuestShell(
+		ctx,
+		fmt.Sprintf("ping -c 2 -W 1 %s >/dev/null 2>&1; exit 0", gateway),
+	); err != nil {
+		return fmt.Errorf("transmit from resumed guest: %w", err)
+	}
 	return nil
+}
+
+func (inst *jailedResumeInstance) runGuestShell(ctx context.Context, script string) (string, error) {
+	result, err := inst.session.ExecuteBuffered(ctx, "jailed-resume-"+inst.id, &guestv1.ExecRequest{
+		Command:          &guestv1.ExecRequest_Shell{Shell: script},
+		OutputLimitBytes: 64 * 1024,
+		DeadlineUnixMs:   uint64(time.Now().Add(30 * time.Second).UnixMilli()),
+	})
+	if err != nil {
+		return "", err
+	}
+	if result.Terminal.GetKind() != guestv1.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED ||
+		result.Terminal.GetExitCode() != 0 {
+		return "", fmt.Errorf("guest shell %q ended %v: %s", script, result.Terminal, strings.TrimSpace(string(result.Stderr)))
+	}
+	return strings.TrimSpace(string(result.Stdout)), nil
 }
 
 // shutdown releases everything the Instance holds, in the order a real teardown
@@ -613,6 +811,21 @@ func (inst *jailedResumeInstance) shutdown(manager *Manager) error {
 		joined = errors.Join(joined, inst.logFile.Close())
 		inst.logFile = nil
 	}
+	// The policy and the TAP are released only after the VMM is gone, in that
+	// order: nothing may remove the rules governing a link a resumed guest could
+	// still be using.
+	if inst.policyInstalled {
+		joined = errors.Join(joined, manager.networkPolicy.Remove(context.Background(), inst.id))
+		inst.policyInstalled = false
+	}
+	if inst.tapConfigured {
+		joined = errors.Join(joined, manager.cleanupTapChecked(context.Background(), inst.tapName))
+		inst.tapConfigured = false
+	}
+	if inst.guestIP != "" {
+		manager.releaseGuestIP(inst.id)
+		inst.guestIP = ""
+	}
 	if inst.launch.jailRoot != "" {
 		joined = errors.Join(joined, os.RemoveAll(inst.launch.jailRoot))
 		inst.launch.jailRoot = ""
@@ -630,6 +843,265 @@ func (inst *jailedResumeInstance) shutdown(manager *Manager) error {
 		inst.jailerUID = 0
 	}
 	return joined
+}
+
+// measureSnapshotResumeNetworkFindings settles what the pinned VMM will and will
+// not do with a snapshotted network interface.
+//
+// The API specification already says a network override changes "the backing TAP
+// device of a network interface", that PUT /network-interfaces is pre-boot only,
+// and that no endpoint hotplugs one. These are the measurements behind those
+// sentences, taken against the exact binary the runner ships, because the whole
+// template shape depends on the answer: an interface a template did not capture
+// is an interface no Sandbox resumed from it can ever have.
+func measureSnapshotResumeNetworkFindings(
+	t *testing.T,
+	cfg *config.Config,
+	template *AdmittedSnapshotTemplate,
+	store *workspacestore.Store,
+	memoryMiB int,
+	workspaceMiB int,
+) jailedResumeNetworkFinding {
+	t.Helper()
+	finding := jailedResumeNetworkFinding{
+		TemplateRecordsInterface: template.Manifest.Key.HasNetworkDevice(),
+		TemplateInterfaceID:      template.Manifest.Key.NetworkInterfaceID,
+		TemplateGuestMAC:         template.Manifest.Key.TemplateGuestMAC,
+	}
+	if !finding.TemplateRecordsInterface {
+		t.Fatal("the jailed resume gate requires a template captured with a network device")
+	}
+	manager, err := New(cfg)
+	if err != nil {
+		t.Fatalf("new network-finding manager: %v", err)
+	}
+	defer releaseManagerNetworkPolicy(t, manager)
+	opts := smokeGuestProtocolOpts(t, cfg, runtimemanager.StartOpts{
+		Timezone:      "UTC",
+		CompartmentID: "cmp_resume_netfind",
+	})
+	policy := &runtimemanager.SandboxRuntimePolicy{
+		VCPUs:             cfg.MicroVMVCPUs,
+		CPUMillis:         cfg.MicroVMVCPUs * 1000,
+		MemoryMiB:         memoryMiB,
+		WorkspaceSizeMiB:  workspaceMiB,
+		ProcessLimit:      opts.SandboxPolicy.ProcessLimit,
+		WorkspaceWritable: true,
+	}
+
+	// An override naming an interface the VM state never recorded. If an override
+	// could add one, this would succeed.
+	absent := newJailedResumeInstance(t, manager, store, cfg, 0, 0, workspaceMiB)
+	defer func() {
+		if err := absent.shutdown(manager); err != nil {
+			t.Errorf("release absent-interface finding instance: %v", err)
+		}
+	}()
+	absentLaunch, err := absent.startResumeProcess(t.Context(), manager, cfg, template, absent.attachment.Image().Name(), policy)
+	if err != nil {
+		t.Fatalf("start absent-interface finding instance: %v", err)
+	}
+	absentRequest := snapshotResumeLoadRequest(absentLaunch, absent.tapName)
+	absentRequest.NetworkOverrides = []networkOverride{{
+		IfaceID:     unrecordedNetworkInterfaceID,
+		HostDevName: absent.tapName,
+	}}
+	if err := waitForUnixSocket(t.Context(), absentLaunch.socketPath, 30*time.Second); err != nil {
+		t.Fatalf("wait for absent-interface finding API socket: %v", err)
+	}
+	absentErr := (FirecrackerAPIClient{SocketPath: absentLaunch.socketPath, Timeout: 120 * time.Second}).
+		LoadSnapshotWithOptions(t.Context(), absentRequest)
+	if absentErr == nil {
+		t.Fatalf(
+			"the VMM accepted a network override for %q, which the template never recorded",
+			unrecordedNetworkInterfaceID,
+		)
+	}
+	finding.AbsentInterfaceOverrideError = absentErr.Error()
+
+	// A successful resume, then the only other way an interface could arrive.
+	rebound := newJailedResumeInstance(t, manager, store, cfg, 1, 0, workspaceMiB)
+	defer func() {
+		if err := rebound.shutdown(manager); err != nil {
+			t.Errorf("release rebinding finding instance: %v", err)
+		}
+	}()
+	reboundLaunch, err := rebound.startResumeProcess(t.Context(), manager, cfg, template, rebound.attachment.Image().Name(), policy)
+	if err != nil {
+		t.Fatalf("start rebinding finding instance: %v", err)
+	}
+	// The TAP the template was captured against was destroyed with the template
+	// source VM, so a load that opened the recorded device name could not
+	// succeed. This one names a TAP created minutes later.
+	if err := resumeSnapshotTemplate(t.Context(), reboundLaunch, rebound.tapName, 30*time.Second, 120*time.Second); err != nil {
+		t.Fatalf("resume onto a per-Instance TAP: %v\n%s", err, smokeLogPath(t, rebound.logPath))
+	}
+	finding.RebindsToPerInstanceTap = true
+	createErr := (FirecrackerAPIClient{SocketPath: reboundLaunch.socketPath, Timeout: 30 * time.Second}).
+		putJSON(t.Context(), "/network-interfaces/"+unrecordedNetworkInterfaceID, networkIface{
+			IfaceID:     unrecordedNetworkInterfaceID,
+			HostDevName: rebound.tapName,
+			GuestMAC:    snapshotTemplateGuestMAC,
+		}, nil)
+	if createErr == nil {
+		t.Fatal("the VMM created a network interface after a snapshot load")
+	}
+	finding.PostRestoreInterfaceCreateError = createErr.Error()
+
+	t.Logf(
+		"network finding: rebinding to a per-Instance TAP succeeds; override for %q -> %v; post-restore create -> %v",
+		unrecordedNetworkInterfaceID,
+		absentErr,
+		createErr,
+	)
+	return finding
+}
+
+// unrecordedNetworkInterfaceID is an interface identifier no template captures.
+// It is the probe for "can a resumed guest be given a new interface", and the
+// answer is what decides whether templates must be built with one.
+const unrecordedNetworkInterfaceID = "eth1"
+
+// assertJailedResumeNetworkIdentities is the empirical half of the network
+// finding. Every resumed Instance was given a TAP that did not exist when the
+// template was captured, so a load that opened the recorded device name could
+// not have succeeded at all. What remains to prove is that the rebinding is
+// per-Instance: each guest carries its own MAC and address, and each guest's
+// frames arrive on its own TAP rather than on a shared link.
+func assertJailedResumeNetworkIdentities(
+	t *testing.T,
+	cfg *config.Config,
+	instances []*jailedResumeInstance,
+	rung *jailedSnapshotResumeRung,
+) {
+	t.Helper()
+	rung.GuestMACsAreDistinct = true
+	rung.GuestAddressesAreDistinct = true
+	rung.EveryGuestReachedItsOwnTap = true
+	rung.NoTemplateMACOnTheBridge = true
+	macs := map[string]string{}
+	addresses := map[string]string{}
+	for _, inst := range instances {
+		expectedMAC := guestMACForInstance(inst.tapName)
+		if inst.sample.ObservedInGuestMAC != expectedMAC {
+			t.Fatalf(
+				"instance %s reports hardware address %q inside the guest, want the bound %q",
+				inst.id,
+				inst.sample.ObservedInGuestMAC,
+				expectedMAC,
+			)
+		}
+		if inst.sample.ObservedInGuestMAC == snapshotTemplateGuestMAC {
+			t.Fatalf("instance %s still carries the template's captured MAC", inst.id)
+		}
+		wantRoute := snapshotResumeNetworkInterfaceID + " " + littleEndianHexAddress(t, bridgeAddress(cfg.MicroVMBridgeCIDR).String())
+		if inst.sample.ObservedInGuestRoute != wantRoute {
+			t.Fatalf(
+				"instance %s default route is %q, want %q",
+				inst.id,
+				inst.sample.ObservedInGuestRoute,
+				wantRoute,
+			)
+		}
+		if owner, exists := macs[inst.sample.ObservedInGuestMAC]; exists {
+			t.Logf("instances %s and %s share MAC %s", owner, inst.id, inst.sample.ObservedInGuestMAC)
+			rung.GuestMACsAreDistinct = false
+		}
+		macs[inst.sample.ObservedInGuestMAC] = inst.id
+		if owner, exists := addresses[inst.guestIP]; exists {
+			t.Logf("instances %s and %s share address %s", owner, inst.id, inst.guestIP)
+			rung.GuestAddressesAreDistinct = false
+		}
+		addresses[inst.guestIP] = inst.id
+	}
+	neighbours := hostNeighbourTable(t, cfg.MicroVMBridgeName)
+	forwarding := hostBridgeForwardingTable(t, cfg.MicroVMBridgeName)
+	for _, inst := range instances {
+		inst.sample.ObservedNeighbourMAC = neighbours[inst.guestIP]
+		inst.sample.ObservedForwardingPort = forwarding[inst.sample.ObservedInGuestMAC]
+		if inst.sample.ObservedNeighbourMAC != inst.sample.ObservedInGuestMAC {
+			t.Fatalf(
+				"host learned %s at %q, want the guest's own %q",
+				inst.guestIP,
+				inst.sample.ObservedNeighbourMAC,
+				inst.sample.ObservedInGuestMAC,
+			)
+		}
+		if inst.sample.ObservedForwardingPort != inst.tapName {
+			t.Logf(
+				"instance %s frames arrived on %q, not its own TAP %q",
+				inst.id,
+				inst.sample.ObservedForwardingPort,
+				inst.tapName,
+			)
+			rung.EveryGuestReachedItsOwnTap = false
+		}
+	}
+	if _, leaked := forwarding[snapshotTemplateGuestMAC]; leaked {
+		rung.NoTemplateMACOnTheBridge = false
+	}
+}
+
+// hostNeighbourTable maps guest address to learned MAC. The entry exists because
+// the resumed guest ARPed for the gateway, which the default-deny policy permits
+// and nothing else does.
+func hostNeighbourTable(t *testing.T, bridgeName string) map[string]string {
+	t.Helper()
+	table := map[string]string{}
+	forEachIPRoute2Record(t, []string{"ip", "-json", "neigh", "show", "dev", bridgeName}, func(record map[string]any) {
+		address, _ := record["dst"].(string)
+		hardware, _ := record["lladdr"].(string)
+		if address != "" && hardware != "" {
+			table[address] = hardware
+		}
+	})
+	return table
+}
+
+// hostBridgeForwardingTable maps a learned MAC to the bridge port it was learned
+// on. It is the direct observation that a resumed guest's frames arrive on its
+// own TAP: the bridge records the port, not the guest.
+func hostBridgeForwardingTable(t *testing.T, bridgeName string) map[string]string {
+	t.Helper()
+	table := map[string]string{}
+	forEachIPRoute2Record(t, []string{"bridge", "-json", "fdb", "show", "br", bridgeName}, func(record map[string]any) {
+		hardware, _ := record["mac"].(string)
+		port, _ := record["ifname"].(string)
+		if hardware == "" || port == "" || port == bridgeName {
+			return
+		}
+		if _, exists := table[hardware]; !exists {
+			table[hardware] = port
+		}
+	})
+	return table
+}
+
+func forEachIPRoute2Record(t *testing.T, command []string, visit func(map[string]any)) {
+	t.Helper()
+	out, err := exec.Command(command[0], command[1:]...).Output()
+	if err != nil {
+		t.Fatalf("%s: %v", strings.Join(command, " "), err)
+	}
+	var records []map[string]any
+	if err := json.Unmarshal(out, &records); err != nil {
+		t.Fatalf("decode %s output %q: %v", strings.Join(command, " "), string(out), err)
+	}
+	for _, record := range records {
+		visit(record)
+	}
+}
+
+// littleEndianHexAddress renders an IPv4 address the way /proc/net/route does,
+// which is host byte order printed as eight uppercase hex digits.
+func littleEndianHexAddress(t *testing.T, address string) string {
+	t.Helper()
+	parsed, err := netip.ParseAddr(address)
+	if err != nil || !parsed.Is4() {
+		t.Fatalf("parse IPv4 address %q: %v", address, err)
+	}
+	octets := parsed.As4()
+	return fmt.Sprintf("%02X%02X%02X%02X", octets[3], octets[2], octets[1], octets[0])
 }
 
 func jailedResumeQualificationConfig(
@@ -651,6 +1123,26 @@ func jailedResumeQualificationConfig(
 	cfg.MicroVMJailerGID = requiredPositiveEnvInt(t, "SECONDBOX_RUNNER_FIRECRACKER_JAILER_GID")
 	cfg.MicroVMJailerCgroupVersion = requiredPositiveEnvInt(t, "SECONDBOX_RUNNER_FIRECRACKER_CGROUP_VERSION")
 	cfg.MicroVMJailerParentCgroup = requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_CGROUP_PARENT")
+	// The template is captured with a network device and every Instance resumes
+	// onto its own TAP, because a resumed guest can never be given an interface
+	// the capture did not record. Bridge networking is therefore part of the gate
+	// rather than an option in it.
+	cfg.MicroVMBridgeName = requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_BRIDGE_NAME")
+	cfg.MicroVMBridgeCIDR = requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_BRIDGE_CIDR")
+	cfg.MicroVMTapPrefix = requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_TAP_PREFIX")
+	cfg.NetworkPolicyNFTPath = requiredEnv(t, "SECONDBOX_RUNNER_NETWORK_POLICY_NFT_PATH")
+	cfg.NetworkPolicyMaximumDNSPins = requiredPositiveEnvInt(t, "SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS")
+	cfg.NetworkPolicyMaximumDNSTTL = requiredDurationEnv(t, "SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL")
+	cfg.NetworkPolicyRunnerAddresses = []netip.Addr{bridgeAddress(cfg.MicroVMBridgeCIDR)}
+	// The gate runs in an isolated network namespace and resolves nothing, but the
+	// policy enforcer starts the runner's DNS proxy and refuses to run without an
+	// explicit upstream. Stating one keeps the enforcer the same fail-closed
+	// component a production runner installs.
+	dnsUpstream, err := netip.ParseAddrPort(requiredEnv(t, "SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM"))
+	if err != nil {
+		t.Fatalf("SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM must be host:port: %v", err)
+	}
+	cfg.NetworkPolicyDNSUpstream = dnsUpstream
 	if err := os.MkdirAll(cfg.MicroVMJailerChrootBaseDir, 0o700); err != nil {
 		t.Fatalf("create jailer chroot base dir: %v", err)
 	}
@@ -688,6 +1180,33 @@ func requireSingleFilesystem(t *testing.T, roots map[string]string) {
 			strings.Join(described, "; "),
 		)
 	}
+}
+
+// releaseManagerNetworkPolicy stops a Manager's runner DNS proxy. A production
+// runner has exactly one Manager for its whole lifetime; this gate builds several
+// in sequence, and each one's enforcer binds the bridge address on port 53, so
+// the previous one has to let go before the next can start.
+func releaseManagerNetworkPolicy(t *testing.T, manager *Manager) {
+	t.Helper()
+	if manager == nil {
+		return
+	}
+	enforcer, ok := manager.networkPolicy.(*NFTablesNetworkPolicyEnforcer)
+	if !ok {
+		return
+	}
+	if err := enforcer.Close(); err != nil {
+		t.Errorf("close runner DNS proxy: %v", err)
+	}
+}
+
+func requiredDurationEnv(t *testing.T, key string) time.Duration {
+	t.Helper()
+	value, err := time.ParseDuration(requiredEnv(t, key))
+	if err != nil || value <= 0 {
+		t.Fatalf("%s must be a positive Go duration: %v", key, err)
+	}
+	return value
 }
 
 func requiredConcurrencyRungs(t *testing.T, key string) []int {

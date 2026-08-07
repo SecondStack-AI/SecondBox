@@ -92,6 +92,20 @@ type AssignmentBindRequest struct {
 	ToolchainManifestDigest string `json:"toolchainManifestDigest"`
 	HeartbeatIntervalMs     uint64 `json:"heartbeatIntervalMs"`
 	WorkspaceWritable       bool   `json:"workspaceWritable"`
+	// Network is present exactly when this Instance has a TAP. Firecracker's
+	// snapshot load rebinds the snapshotted interface to that TAP but carries no
+	// guest MAC and cannot add an interface the template never recorded, so the
+	// guest-visible half of the network identity arrives here.
+	Network *AssignmentNetworkIdentity `json:"network,omitempty"`
+}
+
+// AssignmentNetworkIdentity is the guest-visible half of one Instance's network
+// identity. It mirrors the guest agent's contract for the same field.
+type AssignmentNetworkIdentity struct {
+	Interface   string `json:"interface"`
+	MACAddress  string `json:"macAddress"`
+	AddressCIDR string `json:"addressCidr"`
+	Gateway     string `json:"gateway"`
 }
 
 func (c ControlClient) Heartbeat(ctx context.Context) (HeartbeatResponse, error) {

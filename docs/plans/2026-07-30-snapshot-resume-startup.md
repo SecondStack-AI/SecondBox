@@ -258,17 +258,85 @@ Task 2 is complete. `ProfileRevisionSpec` now carries a required `startup` polic
 
 The consequence, stated plainly: an operator can now declare, place, and refuse a `snapshot_resume` Profile end to end, and cannot yet start one. In a production deployment no Runner advertises the capability at all, because templates are still built by the qualification harness rather than by a Runner, so the observable behavior is a typed refusal at admission. Nothing about the mode is dormant — every branch above is reachable and tested — but the mode does not yet produce a running Sandbox.
 
-## Remaining work after the jailed resume gate, 2026-08-07
+## The network question, settled 2026-08-07
 
-Tasks 1, 2, 3, and Task 4 minus its generation-time forbidden-material scan are complete, the jailed resume gate that blocked everything downstream is qualified, and the `snapshot_resume` Profile class and its operator surface are landed. What remains, in the order it must be done:
+The open question the previous pass left first in its remaining list is closed, and the answer is the one the fixed architecture assumed. **A resumed guest cannot be given a network interface the template did not capture. Only the interface's host-side TAP is overridable, and its guest MAC is not.** Both halves of the evidence are below, because either alone would be weaker than it looks.
 
-1. **The production resume start path.** `createAndStartResume` alongside `createAndStartCold`, forking below `WorkspaceStore.Open` where the plan says it does, with the same jailer UID, guest IP, TAP, host policy, instance registration, reaper, and teardown. It replaces the one refusal in `validateAssignmentStartupMode`. The jailed gate proves the composition works and how long each stage takes; what it does not carry is TAP creation, host network policy, guest network identity activation, and runtime secret delivery, because it resumes with no network device.
+**What the pinned VMM's API says.** Firecracker v1.16.1's `NetworkOverride` is documented as "Allows for changing the backing TAP device of a network interface during snapshot restore", carries exactly `iface_id` ("the name of the interface to modify") and `host_dev_name`, and carries no guest MAC. `PUT /network-interfaces/{iface_id}` is pre-boot only; `PATCH /network-interfaces/{iface_id}` is post-boot and updates rate limiters only. `PUT /snapshot/load` is itself pre-boot only, so the load is the last moment at which the device set can change. No endpoint in the specification hotplugs a network device — `/hotplug/memory` exists and has no network counterpart.
 
-   **The open question this item must settle first**, before writing the start path: whether a resumed guest can be given a network device at all, or whether the template must be captured *with* one. Firecracker v1.16.1's `SnapshotLoadParams` carries `network_overrides`, which rebinds a snapshotted interface to a new TAP — it does not add an interface that the VM state never recorded, and `PUT /network-interfaces` is pre-boot only. The fixed architecture already assumes the answer ("the template includes a network device with its link down"), and the drive finding in #57 is the same shape: a restored device must exist in the recorded VM state, and only its host-side binding is overridable. The jailed gate resumed with no NIC, so this is asserted rather than measured. The next pass must confirm it against the pinned VMM's API and record the finding in this plan either way, because it decides whether the template builder changes.
-2. **Template generation as a runner operation.** Templates are still built by the qualification harness, so in a production deployment no Runner advertises `snapshot-resume` and every `snapshot_resume` Profile refuses at admission. A Runner that advertises resume capacity must materialize the template itself, including Task 4's generation-time scan for forbidden identity and secret material.
-3. **Tasks 5, 6, 7, 8, and the rest of Task 9**, including the end-to-end qualified scenario gate that turns the 118 ms projection above into a measurement.
+**What the shipped binary does.** `TestSmokeJailedSnapshotResume` now builds its template with a network device and resumes every Instance onto a TAP created minutes after the capture, and records two negative controls. Evidence: `docs/plans/evidence/2026-08-07-snapshot-resume-network-rebinding.json`.
 
-The `identityNeutralTemplate` and `jailedResume` fields in the evidence are the honest markers of where the work is, and both are now `true`. The `unjailedResumeRefusal` field stays in the template-lifecycle evidence, where it still proves an unjailed resume fails closed before staging a file; it is no longer standing in for a jailed number nobody had.
+| Probe | Result |
+|---|---|
+| Resume with `network_overrides` naming this Instance's TAP | succeeds; the template's own TAP no longer exists, so nothing else could have opened the device |
+| Resume with `network_overrides` naming `eth1`, which the VM state never recorded | `400 Load snapshot error: Failed to restore from snapshot: Failed to get snapshot state from file: Unknown Network Device.` |
+| `PUT /network-interfaces/eth1` after a successful load | `400 PCI is not enabled` |
+
+The second row is the finding. An override resolves an interface the snapshot already holds; naming one it does not hold fails the whole load, so an override adds nothing.
+
+The third row deserves its exact wording rather than a paraphrase. In v1.16.1 a post-boot `PUT /network-interfaces` reaches a PCIe hotplug path rather than the pre-boot creation path, and refuses because this runner does not pass `--enable-pci`. The interface still cannot be added, which is what the design depends on; but the honest statement is "not in this machine shape", not "impossible in this VMM". Enabling PCIe would change the machine configuration, which is part of the template compatibility key, so it would be a different template generation and a separate decision — not a way to rescue a template captured without a device.
+
+**The consequence, which the template builder now carries.** A template records the network device its runner's deployment configuration gives guests, and its compatibility key states it in `networkInterfaceId` and `templateGuestMac`. Both are empty exactly when there is no device. That pair is load-bearing: a template captured without an interface can never serve a Sandbox that needs one, and a template captured with one can only be resumed against a per-Instance TAP.
+
+The template's interface is captured identity-neutral in the same sense as the rest of it. `secondbox.template_mode=1` suppresses the kernel `ip=` argument, so the interface is present, link down, and address-less at capture; and the guest MAC is a fixed compatibility-keyed constant rather than a value derived from whichever TAP the template build allocated, because the capture's MAC reaches every resumed Instance and must be reproducible.
+
+**The guest side, which is where the real work was.** A cold-booted guest gets its address, netmask, gateway, and route from kernel IP autoconfiguration consuming the `ip=` argument; there is no userspace networking tool in the rootfs, because a cold boot never needs one. A resumed guest's kernel finished booting before the Sandbox existed, so that argument can never apply to it.
+
+Identity therefore arrives in the one atomic assignment bind, as `AssignmentBindRequest.network`, and the guest agent installs it over rtnetlink: hardware address and address while the link is still down, then the link up, then the default route. It is the last step of the bind, after the Workspace mount, so nothing can leave a guest whose identity is incomplete — and a failure at any point leaves the guest unbound and the Instance torn down. `network` is present exactly when the runner gave the Instance a TAP; a deployment without guest networking sends none and the guest configures none.
+
+Two smaller decisions are recorded because their absence would look like an oversight.
+
+The bind carries no resolver configuration. The cold-boot `ip=` argument's trailing nameserver field is written by the kernel to `/proc/net/pnp`, nothing symlinks `/etc/resolv.conf` to it, and the shipped rootfs ships that file empty. Delivering nameservers at bind would give a resumed Sandbox working resolution that a cold-booted one does not have, which is a behavior difference between the two startup modes rather than parity. The pre-existing gap is noted here and is not this plan's to close.
+
+The guest sets its own MAC because the host cannot. Resumed Instances share one bridge, so two guests carrying the template's captured MAC would make the bridge forwarding database flap between their ports. `NetworkOverride` has no MAC field and the virtio-net configuration space was read by the driver long before the capture, so the only place the MAC can change is inside the guest.
+
+**What the gate proves per Instance.** Each guest reports its own bound MAC from `/sys/class/net/eth0/address` and its own default route through the bridge from `/proc/net/route`, read with the shell alone. Each guest then transmits, which the default-deny policy drops but whose ARP exchange with the gateway it permits, and the host observes the result: its neighbour table learns each guest address at that guest's MAC, and the bridge forwarding database records each MAC against that Instance's own TAP. The template's captured MAC appears on neither. The rung fails closed if MACs or addresses collide, if a guest's frames arrive on another Instance's TAP, or if the template MAC reaches the bridge.
+
+**Cost.** The network adds to two stages and nothing else, and both are small. Stage p50/p95 in milliseconds, from the same evidence file, at a clean tree on source commit `4a426dc`:
+
+| Stage | c1 | c4 | Same stage without a network (#61) |
+|---|---:|---:|---:|
+| Template stable-identity check | 0.01/0.01 | 0.01/0.01 | 0.010/0.010 |
+| Host network setup | 7.3/7.3 | 8.8/9.0 | — |
+| Jail staging | 0.6/0.6 | 1.3/1.9 | 0.7/0.7 |
+| Jailer process start through API socket | 38.7/38.7 | 56.4/59.0 | 32/32 |
+| Snapshot load | 3.0/3.0 | 2.5/6.3 | 2.7/2.7 |
+| First control response | 7.3/7.3 | 6.2/6.9 | 7.3/7.3 |
+| Post-resume hardening | 2.7/2.7 | 2.0/2.7 | 1.8/1.8 |
+| Assignment bind | 7.8/7.8 | 8.1/8.3 | 5.7/5.7 |
+| Guest protocol handshake | 6.7/6.7 | 6.2/6.3 | 7.5/7.5 |
+| **Resume total** | **74.2/74.2** | **93.6/93.6** | **58/58** |
+
+Host-side setup — address reservation, TAP creation under the Instance's jailer UID, and the fail-closed policy install — is 7.3 ms and is the same work cold boot does, where it is attributed to `network_setup` at 13/15 ms. Guest-side installation is inside the assignment bind, which rose from 5.7 ms to 7.8 ms: rtnetlink costs about 2 ms for four messages. Everything else moved with the jailer, not with the network.
+
+Carrying that onto the 2026-08-06 unsaturated spans the same way #61 did, and now subtracting `network_setup` as well because the resume total contains it: `start → ready` projects to 67 − 7 − 13 + 74 = **121 ms**, and `create → ready` to 152 − 7 − 13 + 74 = **206 ms**. Those remain arithmetic on separately measured spans. The production start path is still not landed, so no `create_to_ready` has been observed through resume, and the 100–200 ms outcome is claimed only once a qualified end-to-end run shows it.
+
+The sharing and isolation properties the gate has always enforced are unchanged by the network: the golden memory inode is shared with a link count of exactly concurrency plus one, per-Instance rootfs children and Workspace images are distinct, and aggregate Firecracker block reads at four concurrent resumes are 10.6 MiB against a nominal 4 × 512 MiB of guest memory.
+
+The signed bundle was rebuilt for the guest change, because the guest agent is inside the rootfs. It is `secondbox-template-net-artifacts`, artifact version `secondbox-local-template-net`, built from the `-f781` prepared source tree with `SECONDBOX_RUNNER_MICROVM_BUILD_KERNEL=false` and the kernel supplied from `secondbox-task5-artifacts-shutdown-fix`, signed with the RSA-3072 key at `.secondbox/stress/trust/manifest-private.pem`, and verified against the independently held `manifest-public.pem` in that same `trust/` directory, fingerprint `a02f2488…`. The recipe recorded above holds exactly as written, and this rebuild needed only the guest-agent compile, the ext4 image creation, and hashing.
+
+## Remaining work after the network finding, 2026-08-07
+
+Tasks 1, 2, 3, and Task 4 minus its generation-time forbidden-material scan are complete, the jailed resume gate is qualified with per-Instance networking, the `snapshot_resume` Profile class and its operator surface are landed, and the network question is settled. What remains, in the order it must be done:
+
+1. **The production resume start path.** `createAndStartResume` alongside `createAndStartCold`, forking below `WorkspaceStore.Open` where the plan says it does, with the same jailer UID, guest IP, TAP, host policy, storage-pressure admission, instance registration, reaper, termination evidence, orphan adoption, and teardown. It replaces the one refusal in `validateAssignmentStartupMode`, which is why the gate there is a fork point rather than a stub.
+
+   Its shape is no longer open. The jailed gate composes exactly the sequence the start path must run, in the order it must run it, and every primitive it uses is landed:
+
+   - reserve the guest address, create the TAP owned by this Instance's jailer UID, install the fail-closed host policy — all before the load, so no frame can leave a guest whose policy does not exist. The resumed guest's link is down until its bind, which makes the ordering stronger than cold boot's rather than weaker;
+   - resolve the template through `SnapshotTemplateCache.Resolve`, whose per-start cost is a stable-identity stat and whose miss is `ErrSnapshotTemplateUnavailable`, never a cold boot;
+   - `prepareSnapshotResumeLaunch` to stage the jail: golden memory and VM state hard-linked, sealed rootfs reflink-cloned per Instance, Workspace hard-linked at the recorded name;
+   - start the jailer, `resumeSnapshotTemplate` with this Instance's TAP as the network override and its own vsock UDS;
+   - `HardenPostRestore`, then `BindAssignment` carrying the identity, the Workspace expectation, and the network identity;
+   - `NegotiateGuestProtocol`, then runtime secrets through the same `/secrets/apply` path cold start uses, then ready.
+
+   What the start path must add beyond the gate's composition is the Manager's own bookkeeping: instance registration under the provisioning lock, the reaper, startup-progress reporting at the same stage boundaries cold start reports, `errors.Join` teardown with the same ownership-transfer flags, and runtime secret delivery. The gate deliberately stops at the guest handshake.
+
+   The one structural decision worth stating before the code exists: `createAndStartCold` and `createAndStartResume` share a prologue (instance ID, jailer UID, guest address, TAP, policy, run directory, log, Workspace attachment validation) and an epilogue (registration, reaper, negotiation, secrets, ready, teardown), and differ only in the middle. Extracting those two rather than copying them is the change to make, because a divergence between the two paths' isolation properties is exactly the failure this plan cannot tolerate.
+2. **Template generation as a runner operation.** Templates are still built by the qualification harness, so in a production deployment no Runner advertises `snapshot-resume` and every `snapshot_resume` Profile refuses at admission. A Runner that advertises resume capacity must materialize the template itself, including Task 4's generation-time scan for forbidden identity and secret material. Until then the operator flow for a populated cache is to publish a harness-built template into `SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT` before the Runner starts; the cache's on-disk contract is one directory named by the template ID holding `manifest.json`, `vmstate.snap`, `memory.snap`, and `rootfs.ext4`, and `HasTemplateForBundle` matches it to the Runner's verified bundle on artifact version, architecture, and the two bundle digests. Keep that seam clean: the publish path is already `StageDirectory` plus one `Publish`, and a Runner-side generator replaces the caller, not the contract.
+3. **Tasks 5, 6, 7, 8, and the rest of Task 9**, including the end-to-end qualified scenario gate that turns the projection above into a measurement.
+
+The `identityNeutralTemplate` and `jailedResume` fields in the evidence are the honest markers of where the work is, and both are `true`. The `networkRebinding` block is the new one, and it is recorded whatever it says. The `unjailedResumeRefusal` field stays in the template-lifecycle evidence, where it still proves an unjailed resume fails closed before staging a file.
 
 ## Non-goals
 
@@ -354,7 +422,7 @@ Remaining in Task 3: nothing. The identity-neutral template is qualified below.
 - [ ] Create the per-Instance run/jail directories and stage the immutable post-boot rootfs child and opaque Workspace image at the fixed jail-internal paths expected by VM state. Use reflinks/hard links only where ownership rules permit; add no byte-copy fallback.
 - [ ] Reserve a unique guest IP and MAC, create the TAP, and install default-deny or allow-list host policy before loading the snapshot.
 - [ ] Start the pinned Firecracker process, load VM state using the immutable file-backed memory backend, override `eth0` to the new TAP and vsock to the new per-Instance UDS path, and resume into the guest's assignment-bind gate.
-- [ ] Reconfigure the resumed guest interface from link-down to the unique MAC, IP, route, and DNS identity before allowing traffic; prove no template MAC/IP leaks onto the bridge.
+- [x] Reconfigure the resumed guest interface from link-down to the unique MAC, IP, and route identity before allowing traffic; prove no template MAC/IP leaks onto the bridge. Installed over rtnetlink inside the one assignment bind, last, after the Workspace mount. There is no DNS identity to reconfigure, and the reason is recorded in the network finding above.
 - [ ] Keep guest CID and vsock port values fixed by the template key, replace only the UDS path, and prove no live template connection or frame survives resume.
 - [ ] On every failure boundary, terminate Firecracker and release policy, TAP, IP, staged files, capacity, and the Workspace attachment without reporting `ready`.
 - [ ] Run jailed and unjailed load tests, network isolation tests, process-I/O tests, and repeated cleanup/orphan-recovery tests.

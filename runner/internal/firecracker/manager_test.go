@@ -1531,7 +1531,7 @@ func TestBuildFirecrackerConfigEnforcesSandboxRuntimePolicy(t *testing.T) {
 		VCPUs: 1, CPUMillis: 750, MemoryMiB: 128, WorkspaceSizeMiB: 64, ProcessLimit: 16,
 		WorkspaceWritable: false, SharedReadOnly: true,
 	}
-	got := buildFirecrackerConfigWithPolicy(cfg, "/vmlinux", "/rootfs", "/workspace", "/shared", "/vsock", "", "", policy)
+	got := buildFirecrackerConfigWithPolicy(cfg, "/vmlinux", "/rootfs", "/workspace", "/shared", "/vsock", "", "", false, policy)
 	if got.Machine.VCPUCount != 1 || got.Machine.MemSizeMiB != 128 {
 		t.Fatalf("machine config = %+v", got.Machine)
 	}
@@ -1725,7 +1725,7 @@ func TestPrepareLaunchUnjailedIncludesInstanceID(t *testing.T) {
 		MicroVMMemoryMiB:     512,
 		MicroVMKernelPath:    "/kernel",
 	}}
-	launch, err := m.prepareLaunchWithPolicy(context.Background(), "fc-agent-cmp-a-id", dir, "/kernel", "/rootfs.ext4", "/workspace.ext4", "", "", "", os.Getuid(), nil)
+	launch, err := m.prepareLaunchWithPolicy(context.Background(), "fc-agent-cmp-a-id", dir, "/kernel", "/rootfs.ext4", "/workspace.ext4", "", "", "", os.Getuid(), false, nil)
 	if err != nil {
 		t.Fatalf("prepare launch: %v", err)
 	}
@@ -1811,7 +1811,7 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 		MicroVMAllowUnjailed:       false,
 	}}
 	policy := &runtimemanager.SandboxRuntimePolicy{VCPUs: 1, CPUMillis: 750, MemoryMiB: 512, ProcessLimit: 64}
-	launch, err := m.prepareLaunchWithPolicy(context.Background(), "fc-agent-123", runDir, kernel, rootfs, workspace, shared, "agfc123", "", os.Getuid(), policy)
+	launch, err := m.prepareLaunchWithPolicy(context.Background(), "fc-agent-123", runDir, kernel, rootfs, workspace, shared, "agfc123", "", os.Getuid(), false, policy)
 	if err != nil {
 		t.Fatalf("prepare launch: %v", err)
 	}
@@ -1888,6 +1888,7 @@ func TestPrepareJailedLaunchRejectsUnixSocketPathOverflowBeforeStaging(t *testin
 		"",
 		"",
 		os.Getuid(),
+		false,
 		nil,
 	)
 	if err == nil || !strings.Contains(err.Error(), "exceeding the unix socket limit") {

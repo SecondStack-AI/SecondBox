@@ -1,0 +1,285 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "4a426dc013696b8997031a508a66966581095f4f",
+  "sourceTreeDirty": false,
+  "goVersion": "go1.26.5",
+  "firecrackerVersion": "Firecracker v1.16.1",
+  "hostKernel": "Linux 7.1.4-arch1-1 x86_64 GNU/Linux",
+  "hostCpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+  "workspaceFilesystem": "btrfs",
+  "completedAt": "2026-08-07T05:12:32.624129723Z",
+  "jailedResume": true,
+  "identityNeutralTemplate": true,
+  "memoryMiB": 512,
+  "workspaceMiB": 64,
+  "templateId": "2b84ff716288f3c404fbeb84d97c1196fc1ab8e79c36994d9e5d6f8d40f270a2",
+  "memoryFileBytes": 536870912,
+  "rootfsFileBytes": 10737418240,
+  "vmStateFileBytes": 14742,
+  "templateBuildMilliseconds": 29193,
+  "cacheAdmissionMilliseconds": 5264,
+  "networkRebinding": {
+    "templateRecordsNetworkInterface": true,
+    "templateNetworkInterfaceId": "eth0",
+    "templateGuestMac": "02:00:00:5b:7e:00",
+    "snapshotLoadRebindsInterfaceToPerInstanceTap": true,
+    "absentInterfaceOverrideError": "firecracker API rejected /snapshot/load with 400: {\"fault_message\":\"Load snapshot error: Failed to restore from snapshot: Failed to get snapshot state from file: Unknown Network Device.\"}",
+    "postRestoreInterfaceCreateError": "firecracker API rejected /network-interfaces/eth1 with 400: {\"fault_message\":\"PCI is not enabled\"}"
+  },
+  "concurrencyRungs": [
+    {
+      "concurrency": 1,
+      "wallClockMilliseconds": 2097,
+      "instances": [
+        {
+          "instanceId": "fc-jr1x00-cmp-jr-1-00-b86a0508",
+          "jailerUid": 10001,
+          "tapName": "rj4463fd39ac0a0",
+          "guestIp": "198.18.86.2",
+          "guestMac": "02:2d:66:48:45:4a",
+          "observedInGuestMac": "02:2d:66:48:45:4a",
+          "observedInGuestDefaultRoute": "eth0 015612C6",
+          "observedHostNeighbourMac": "02:2d:66:48:45:4a",
+          "observedBridgeForwardingPort": "rj4463fd39ac0a0",
+          "hostNetworkSetupMicroseconds": 7256,
+          "templateIdentityMicroseconds": 13,
+          "stageMicroseconds": 610,
+          "processStartMicroseconds": 38717,
+          "snapshotLoadMicroseconds": 2961,
+          "firstControlMicroseconds": 7345,
+          "postResumeHardeningMicroseconds": 2725,
+          "assignmentBindMicroseconds": 7844,
+          "guestHandshakeMicroseconds": 6672,
+          "resumeTotalMicroseconds": 74152
+        }
+      ],
+      "stages": [
+        {
+          "stage": "template_identity",
+          "p50Microseconds": 13,
+          "p95Microseconds": 13,
+          "maxMicroseconds": 13
+        },
+        {
+          "stage": "jail_staging",
+          "p50Microseconds": 610,
+          "p95Microseconds": 610,
+          "maxMicroseconds": 610
+        },
+        {
+          "stage": "process_start",
+          "p50Microseconds": 38717,
+          "p95Microseconds": 38717,
+          "maxMicroseconds": 38717
+        },
+        {
+          "stage": "snapshot_load",
+          "p50Microseconds": 2961,
+          "p95Microseconds": 2961,
+          "maxMicroseconds": 2961
+        },
+        {
+          "stage": "first_control_response",
+          "p50Microseconds": 7345,
+          "p95Microseconds": 7345,
+          "maxMicroseconds": 7345
+        },
+        {
+          "stage": "post_resume_hardening",
+          "p50Microseconds": 2725,
+          "p95Microseconds": 2725,
+          "maxMicroseconds": 2725
+        },
+        {
+          "stage": "assignment_bind",
+          "p50Microseconds": 7844,
+          "p95Microseconds": 7844,
+          "maxMicroseconds": 7844
+        },
+        {
+          "stage": "guest_handshake",
+          "p50Microseconds": 6672,
+          "p95Microseconds": 6672,
+          "maxMicroseconds": 6672
+        },
+        {
+          "stage": "resume_total",
+          "p50Microseconds": 74152,
+          "p95Microseconds": 74152,
+          "maxMicroseconds": 74152
+        }
+      ],
+      "goldenMemoryInode": "86:128442177",
+      "goldenMemoryInodeShared": true,
+      "goldenMemoryLinkCount": 2,
+      "rootfsChildrenAreDistinct": true,
+      "workspacesAreDistinct": true,
+      "firecrackerReadBytesTotal": 2777088,
+      "firecrackerReadCharactersTotal": 1545932,
+      "fullMemoryCopyObserved": false,
+      "guestMacsAreDistinct": true,
+      "guestAddressesAreDistinct": true,
+      "everyGuestReachedItsOwnTap": true,
+      "noTemplateMacOnTheBridge": true
+    },
+    {
+      "concurrency": 4,
+      "wallClockMilliseconds": 2118,
+      "instances": [
+        {
+          "instanceId": "fc-jr4x00-cmp-jr-4-00-e7009fe3",
+          "jailerUid": 10001,
+          "tapName": "rj446a8ed0b34d0",
+          "guestIp": "198.18.86.4",
+          "guestMac": "02:b2:76:e4:91:4a",
+          "observedInGuestMac": "02:b2:76:e4:91:4a",
+          "observedInGuestDefaultRoute": "eth0 015612C6",
+          "observedHostNeighbourMac": "02:b2:76:e4:91:4a",
+          "observedBridgeForwardingPort": "rj446a8ed0b34d0",
+          "hostNetworkSetupMicroseconds": 8653,
+          "templateIdentityMicroseconds": 7,
+          "stageMicroseconds": 884,
+          "processStartMicroseconds": 58998,
+          "snapshotLoadMicroseconds": 2477,
+          "firstControlMicroseconds": 6083,
+          "postResumeHardeningMicroseconds": 2033,
+          "assignmentBindMicroseconds": 8184,
+          "guestHandshakeMicroseconds": 6271,
+          "resumeTotalMicroseconds": 93599
+        },
+        {
+          "instanceId": "fc-jr4x01-cmp-jr-4-01-8f5472e1",
+          "jailerUid": 10002,
+          "tapName": "rj4464c299a68b1",
+          "guestIp": "198.18.86.3",
+          "guestMac": "02:47:0c:17:44:41",
+          "observedInGuestMac": "02:47:0c:17:44:41",
+          "observedInGuestDefaultRoute": "eth0 015612C6",
+          "observedHostNeighbourMac": "02:47:0c:17:44:41",
+          "observedBridgeForwardingPort": "rj4464c299a68b1",
+          "hostNetworkSetupMicroseconds": 8834,
+          "templateIdentityMicroseconds": 16,
+          "stageMicroseconds": 1560,
+          "processStartMicroseconds": 53547,
+          "snapshotLoadMicroseconds": 6264,
+          "firstControlMicroseconds": 6865,
+          "postResumeHardeningMicroseconds": 2740,
+          "assignmentBindMicroseconds": 7480,
+          "guestHandshakeMicroseconds": 6250,
+          "resumeTotalMicroseconds": 93565
+        },
+        {
+          "instanceId": "fc-jr4x02-cmp-jr-4-02-d0ebfe30",
+          "jailerUid": 10003,
+          "tapName": "rj4464c76aa3223",
+          "guestIp": "198.18.86.5",
+          "guestMac": "02:57:4a:43:8c:e6",
+          "observedInGuestMac": "02:57:4a:43:8c:e6",
+          "observedInGuestDefaultRoute": "eth0 015612C6",
+          "observedHostNeighbourMac": "02:57:4a:43:8c:e6",
+          "observedBridgeForwardingPort": "rj4464c76aa3223",
+          "hostNetworkSetupMicroseconds": 8652,
+          "templateIdentityMicroseconds": 5,
+          "stageMicroseconds": 1314,
+          "processStartMicroseconds": 56373,
+          "snapshotLoadMicroseconds": 3879,
+          "firstControlMicroseconds": 6929,
+          "postResumeHardeningMicroseconds": 1855,
+          "assignmentBindMicroseconds": 8291,
+          "guestHandshakeMicroseconds": 6201,
+          "resumeTotalMicroseconds": 93509
+        },
+        {
+          "instanceId": "fc-jr4x03-cmp-jr-4-03-ad26882b",
+          "jailerUid": 10004,
+          "tapName": "rj4462f4da2d54c",
+          "guestIp": "198.18.86.2",
+          "guestMac": "02:9f:ed:6a:31:99",
+          "observedInGuestMac": "02:9f:ed:6a:31:99",
+          "observedInGuestDefaultRoute": "eth0 015612C6",
+          "observedHostNeighbourMac": "02:9f:ed:6a:31:99",
+          "observedBridgeForwardingPort": "rj4462f4da2d54c",
+          "hostNetworkSetupMicroseconds": 8987,
+          "templateIdentityMicroseconds": 11,
+          "stageMicroseconds": 1858,
+          "processStartMicroseconds": 57688,
+          "snapshotLoadMicroseconds": 2511,
+          "firstControlMicroseconds": 6163,
+          "postResumeHardeningMicroseconds": 2015,
+          "assignmentBindMicroseconds": 8099,
+          "guestHandshakeMicroseconds": 6233,
+          "resumeTotalMicroseconds": 93572
+        }
+      ],
+      "stages": [
+        {
+          "stage": "template_identity",
+          "p50Microseconds": 7,
+          "p95Microseconds": 16,
+          "maxMicroseconds": 16
+        },
+        {
+          "stage": "jail_staging",
+          "p50Microseconds": 1314,
+          "p95Microseconds": 1858,
+          "maxMicroseconds": 1858
+        },
+        {
+          "stage": "process_start",
+          "p50Microseconds": 56373,
+          "p95Microseconds": 58998,
+          "maxMicroseconds": 58998
+        },
+        {
+          "stage": "snapshot_load",
+          "p50Microseconds": 2511,
+          "p95Microseconds": 6264,
+          "maxMicroseconds": 6264
+        },
+        {
+          "stage": "first_control_response",
+          "p50Microseconds": 6163,
+          "p95Microseconds": 6929,
+          "maxMicroseconds": 6929
+        },
+        {
+          "stage": "post_resume_hardening",
+          "p50Microseconds": 2015,
+          "p95Microseconds": 2740,
+          "maxMicroseconds": 2740
+        },
+        {
+          "stage": "assignment_bind",
+          "p50Microseconds": 8099,
+          "p95Microseconds": 8291,
+          "maxMicroseconds": 8291
+        },
+        {
+          "stage": "guest_handshake",
+          "p50Microseconds": 6233,
+          "p95Microseconds": 6271,
+          "maxMicroseconds": 6271
+        },
+        {
+          "stage": "resume_total",
+          "p50Microseconds": 93565,
+          "p95Microseconds": 93599,
+          "maxMicroseconds": 93599
+        }
+      ],
+      "goldenMemoryInode": "86:128442177",
+      "goldenMemoryInodeShared": true,
+      "goldenMemoryLinkCount": 5,
+      "rootfsChildrenAreDistinct": true,
+      "workspacesAreDistinct": true,
+      "firecrackerReadBytesTotal": 11108352,
+      "firecrackerReadCharactersTotal": 6183522,
+      "fullMemoryCopyObserved": false,
+      "guestMacsAreDistinct": true,
+      "guestAddressesAreDistinct": true,
+      "everyGuestReachedItsOwnTap": true,
+      "noTemplateMacOnTheBridge": true
+    }
+  ],
+  "gatePassed": true
+}
