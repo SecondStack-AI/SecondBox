@@ -281,6 +281,14 @@ func buildSnapshotResumeTemplate(
 			if err := os.Chown(destination, os.Getuid(), os.Getgid()); err != nil {
 				t.Fatalf("take runner ownership of captured template file: %v", err)
 			}
+			// Read-only to everyone, stated rather than inherited from whatever
+			// umask the build ran under. A jailed Firecracker opens the golden
+			// memory file as its own per-Instance UID, and the capture was
+			// written by a different one, so a mode that depended on the umask
+			// would make a resume fail on a file nothing was wrong with.
+			if err := os.Chmod(destination, 0o444); err != nil {
+				t.Fatalf("make the captured template file readable by every jailer UID: %v", err)
+			}
 		}
 	}
 	// The VM stays paused through the rootfs seal so disk and memory are
