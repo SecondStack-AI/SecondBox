@@ -249,16 +249,20 @@ func (store *PostgresControlPlaneStore) ClaimLifecycleBatch(
 		return nil, fmt.Errorf("SecondBox lifecycle claim transaction failed: %w", err)
 	}
 	defer tx.Rollback(ctx)
+	// The durable schedule is the single authority over which Sandboxes hold
+	// reconciliation work. A Sandbox the reconciler left at rest carries no
+	// next_reconcile_at at all, so it is absent from this scan and from
+	// sandboxes_lifecycle_reconcile_idx until an external event schedules it;
+	// the reconciler's own rest matrix is not restated here. The two remaining
+	// predicates are terminal conditions no decision produces: a deleted
+	// Sandbox has no further transition, and a Sandbox holding a lifecycle
+	// failure class waits for an operator rather than for this worker.
 	rows, err := tx.Query(ctx, `
 		SELECT sandbox.id
 		FROM secondbox.sandboxes AS sandbox
 		WHERE sandbox.state<>'deleted' AND sandbox.next_reconcile_at<=$1
 		  AND NOT (
 		    sandbox.state='failed' AND sandbox.lifecycle_failure_class<>''
-		  )
-		  AND NOT (
-		    sandbox.state IN ('stopped','failed')
-		    AND sandbox.desired_state='stopped'
 		  )
 		  AND (
 		    sandbox.reconcile_claim_expires_at IS NULL
@@ -466,7 +470,23 @@ func expireLifecycleLeases(
 	return nil
 }
 
-// ApplyLifecycleAction commits one claimed transition only while owner and revision remain current.
+// ApplyLifecycleAction commits one claimed transition only while owner and
+// revision remain current.
+//
+// A zero nextReconcileAt parks the Sandbox: the commit clears its durable
+// deadline, which removes it from the claim scan until an external event
+// schedules it again.
+//
+// `revision` is the Sandbox's public ETag, and a `wait` changes no field a
+// caller can observe, so a wait holds it — and updated_at with it — exactly
+// where they were. Without that, a caller that reads a Sandbox and sends
+// If-Match on what it read races a reconciliation it cannot see and loses the
+// precondition to a transition that changed nothing.
+//
+// The revision still fences the claim. Every action that changes durable state
+// advances it, so a claim token that has committed such an action can never
+// commit a second one, and a wait that holds the revision still requires
+// reconcile_owner to name this claim's worker — which the commit clears.
 func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 	ctx context.Context,
 	claim ports.LifecycleReconcileClaim,
@@ -547,6 +567,11 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 			terminationReason = finishStopTerminationReason
 		}
 	}
+	var scheduledAt *time.Time
+	if !nextReconcileAt.IsZero() {
+		scheduled := nextReconcileAt.UTC()
+		scheduledAt = &scheduled
+	}
 	tag, err := tx.Exec(ctx, `
 		UPDATE secondbox.sandboxes
 		SET state=$1,lifecycle_action=CASE WHEN $2='wait' THEN lifecycle_action ELSE $2 END,
@@ -567,9 +592,10 @@ func (store *PostgresControlPlaneStore) ApplyLifecycleAction(
 		    current_instance_id=CASE WHEN $2='finish_stop' THEN '' ELSE current_instance_id END,
 		    generation=CASE WHEN $2='finish_stop' THEN generation+1 ELSE generation END,
 		    last_activity_at=CASE WHEN $2='mark_ready' THEN COALESCE(last_activity_at,$5) ELSE last_activity_at END,
-		    revision=revision+1,updated_at=$5
+		    revision=CASE WHEN $2='wait' THEN revision ELSE revision+1 END,
+		    updated_at=CASE WHEN $2='wait' THEN updated_at ELSE $5 END
 		WHERE id=$6 AND reconcile_owner=$7 AND revision=$8`,
-		nextState, action, terminationReason, nextReconcileAt.UTC(),
+		nextState, action, terminationReason, scheduledAt,
 		now.UTC(), claim.SandboxID, claim.WorkerID, claim.Revision,
 	)
 	if err != nil {

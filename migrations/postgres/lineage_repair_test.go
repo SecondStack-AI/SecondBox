@@ -29,13 +29,23 @@ var v020MigrationFiles = []string{
 	"0012_proxied_port_transport.sql",
 }
 
+// postFenceMigrationFiles is the lineage shipped after the fence command-kind
+// migration, in the order the embedded lineage sorts it.
+var postFenceMigrationFiles = []string{
+	"0014_lifecycle_quiescent_schedule.sql",
+}
+
 func embeddedLineageVersions(t *testing.T) []string {
 	t.Helper()
-	versions := make([]string, 0, len(v020MigrationFiles)+1)
+	versions := make([]string, 0, len(v020MigrationFiles)+1+len(postFenceMigrationFiles))
 	for _, filename := range v020MigrationFiles {
 		versions = append(versions, strings.TrimSuffix(filename, ".sql"))
 	}
-	return append(versions, fenceCommandKindVersion)
+	versions = append(versions, fenceCommandKindVersion)
+	for _, filename := range postFenceMigrationFiles {
+		versions = append(versions, strings.TrimSuffix(filename, ".sql"))
+	}
+	return versions
 }
 
 // seedRecordedMigration executes one embedded migration file and records it in
@@ -112,7 +122,8 @@ func assertLedgerVersions(t *testing.T, connection *pgx.Conn, want []string) {
 
 // TestApplyUpgradesLedgerRecordedThroughV021 proves a database that recorded
 // every migration up to and including 0012 under the ordering all pre-fence
-// releases shipped upgrades cleanly, applying only the fence migration last.
+// releases shipped upgrades cleanly, applying the fence migration and every
+// migration that followed it in embedded order.
 func TestApplyUpgradesLedgerRecordedThroughV021(t *testing.T) {
 	connection, databaseURL := newDisposableDatabase(t)
 	for _, filename := range v020MigrationFiles {
@@ -122,7 +133,8 @@ func TestApplyUpgradesLedgerRecordedThroughV021(t *testing.T) {
 	if err := Apply(context.Background(), databaseURL); err != nil {
 		t.Fatalf("upgrade from the pre-fence lineage failed: %v", err)
 	}
-	assertLedgerVersions(t, connection, embeddedLineageVersions(t))
+	embedded := embeddedLineageVersions(t)
+	assertLedgerVersions(t, connection, embedded)
 
 	var lastApplied string
 	if err := connection.QueryRow(context.Background(), `
@@ -131,8 +143,8 @@ func TestApplyUpgradesLedgerRecordedThroughV021(t *testing.T) {
 	).Scan(&lastApplied); err != nil {
 		t.Fatal(err)
 	}
-	if lastApplied != fenceCommandKindVersion {
-		t.Fatalf("last applied migration = %s; want %s", lastApplied, fenceCommandKindVersion)
+	if want := embedded[len(embedded)-1]; lastApplied != want {
+		t.Fatalf("last applied migration = %s; want %s", lastApplied, want)
 	}
 }
 
@@ -169,9 +181,15 @@ func TestApplyRenamesFenceVersionRecordedByFreshV022Install(t *testing.T) {
 	sort.Slice(expected, func(left, right int) bool {
 		return expected[left].version < expected[right].version
 	})
+	// Every version this ledger already carried is renamed in place and never
+	// re-executed; the migrations shipped after the fence row are applied on
+	// top and sort after every one of them.
 	after := readLedgerRows(t, connection)
-	if len(after) != len(expected) {
-		t.Fatalf("ledger rows = %d; want %d", len(after), len(expected))
+	if len(after) != len(expected)+len(postFenceMigrationFiles) {
+		t.Fatalf(
+			"ledger rows = %d; want %d",
+			len(after), len(expected)+len(postFenceMigrationFiles),
+		)
 	}
 	for index := range expected {
 		if after[index].version != expected[index].version ||
@@ -181,6 +199,12 @@ func TestApplyRenamesFenceVersionRecordedByFreshV022Install(t *testing.T) {
 				"ledger row %d = %+v; want the renamed original %+v",
 				index, after[index], expected[index],
 			)
+		}
+	}
+	for index, filename := range postFenceMigrationFiles {
+		want := strings.TrimSuffix(filename, ".sql")
+		if got := after[len(expected)+index].version; got != want {
+			t.Fatalf("ledger row after the repair = %s; want %s", got, want)
 		}
 	}
 
@@ -318,10 +342,10 @@ func TestValidateMigrationLineageRequiresUniqueNumericPrefixes(t *testing.T) {
 	}
 }
 
-// TestEmbeddedLineageOrdersFenceMigrationLast pins the shipped lineage: one
+// TestEmbeddedLineageOrdersEveryShippedMigration pins the shipped lineage: one
 // migration per numeric prefix, with the fence command-kind migration sorted
 // after every migration that predates it.
-func TestEmbeddedLineageOrdersFenceMigrationLast(t *testing.T) {
+func TestEmbeddedLineageOrdersEveryShippedMigration(t *testing.T) {
 	lineage, err := readEmbeddedMigrations()
 	if err != nil {
 		t.Fatal(err)
