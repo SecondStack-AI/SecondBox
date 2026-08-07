@@ -501,3 +501,33 @@ func (store *fakeReconcileStore) ApplyLifecycleAction(
 	store.nextReconcileAt = nextReconcileAt
 	return nil
 }
+
+// The wake-up a restart schedules must agree with the decision the next
+// reconciliation makes, so it is measured from the same readiness rather than
+// from the stale activity the previous generation left behind.
+func TestReconcilerSchedulesRestartedSandboxFromItsOwnReadiness(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	readyAt := now
+	lastActivityAt := now.Add(-72 * time.Minute)
+	store := &fakeReconcileStore{claim: ports.LifecycleReconcileClaim{
+		SandboxID: "sbx-1", WorkerID: "worker-1", Revision: 3,
+		ObservedState:          contracts.SandboxStateReady,
+		DesiredState:           contracts.SandboxDesiredStateRunning,
+		GuestLiveness:          contracts.GuestLivenessReady,
+		ReadyAt:                &readyAt,
+		LastActivityAt:         &lastActivityAt,
+		IdleSeconds:            60,
+		MaximumDurationSeconds: 3600,
+	}}
+	reconciler := Reconciler{
+		Store: store, WorkerID: "worker-1", ClaimDuration: time.Minute, PollInterval: time.Second,
+	}
+	decision, found, err := reconciler.RunOnce(t.Context(), now, ports.LifecycleWakeTriggerNotify)
+	if err != nil || !found || decision.Action != ActionWait {
+		t.Fatalf("reconciliation = %#v, %t, %v", decision, found, err)
+	}
+	want := readyAt.Add(time.Minute)
+	if !store.nextReconcileAt.Equal(want) {
+		t.Fatalf("next reconciliation = %s, want idle deadline %s", store.nextReconcileAt, want)
+	}
+}

@@ -212,8 +212,8 @@ func nextLifecycleReconcileAt(
 	}
 
 	var idleDeadline time.Time
-	if view.IdleTimeout > 0 && !view.LastUsefulActivityAt.IsZero() {
-		idleDeadline = view.LastUsefulActivityAt.Add(view.IdleTimeout)
+	if idleSince := IdleSince(view); view.IdleTimeout > 0 && !idleSince.IsZero() {
+		idleDeadline = idleSince.Add(view.IdleTimeout)
 	}
 	deadline := earlierFutureDeadline(idleDeadline, maximumDeadline, now)
 	if deadline.IsZero() {
