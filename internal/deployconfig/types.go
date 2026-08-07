@@ -40,6 +40,7 @@ type StandardRunnerPool struct {
 
 type Deployment struct {
 	Mode                   string `toml:"mode"`
+	ComposeProjectName     string `toml:"compose_project_name"`
 	PublicBaseURL          string `toml:"public_base_url"`
 	TLSTermination         string `toml:"tls_termination"`
 	ControlPlaneImage      string `toml:"control_plane_image"`
@@ -217,4 +218,15 @@ type ResolvedDeployment struct {
 	ComposeFiles            []string
 	SecretPaths             map[string]string
 	ResourceDocument        resourceapply.Document
+}
+
+// ComposeProject is the Compose project this deployment owns. Compose derives
+// every container, volume, and network name from it, so two deployments that
+// share one Docker daemon must not share it: the second would bind the first's
+// volumes and recreate its containers rather than fail.
+func (r ResolvedDeployment) ComposeProject() string {
+	if r.Manifest.Deployment.ComposeProjectName == "" {
+		return DefaultComposeProjectName
+	}
+	return r.Manifest.Deployment.ComposeProjectName
 }

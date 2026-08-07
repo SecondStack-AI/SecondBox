@@ -33,9 +33,14 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
+// DefaultComposeProjectName is the Compose project a manifest that states no
+// deployment.compose_project_name deploys under.
+const DefaultComposeProjectName = "secondbox"
+
 var (
 	artifactKeyPattern    = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	opaqueRunnerIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	composeProjectPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
 	configValidationMu    sync.Mutex
 )
 
@@ -362,6 +367,9 @@ func validateManifestShape(manifest ManifestV1) error {
 	}
 	if d.Mode != "development" && d.Mode != "production" {
 		return manifestError("deployment.mode must be development or production", nil)
+	}
+	if d.ComposeProjectName != "" && !composeProjectPattern.MatchString(d.ComposeProjectName) {
+		return manifestError("deployment.compose_project_name must start with a lowercase letter or digit and use at most 63 lowercase letters, digits, underscores, or hyphens", nil)
 	}
 	if d.Mode == "development" && (manifest.Database.Mode != "bundled" || manifest.ObjectStore.Mode != "bundled") {
 		return manifestError("development mode requires the reviewed bundled database and object_store topology", nil)

@@ -3,6 +3,7 @@ runners = []
 
 [deployment]
 mode = 'development'
+compose_project_name = 'secondbox'
 public_base_url = 'http://127.0.0.1:8080'
 tls_termination = 'development-loopback'
 control_plane_image = 'secondbox-control-plane:development'

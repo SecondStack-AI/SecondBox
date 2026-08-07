@@ -179,7 +179,7 @@ func runCompose(manifestPath, action string) error {
 	if err != nil {
 		return err
 	}
-	arguments := []string{"compose", "--project-name", "secondbox", "--env-file", environmentPath}
+	arguments := []string{"compose", "--project-name", resolved.ComposeProject(), "--env-file", environmentPath}
 	for _, file := range resolved.ComposeFiles {
 		arguments = append(arguments, "--file", file)
 	}

@@ -122,6 +122,57 @@ func TestExampleManifestIsGeneratedFromTheRegistry(t *testing.T) {
 	}
 }
 
+func TestComposeProjectIsolatesDeploymentsAndDefaultsForOlderManifests(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	original, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(original, []byte("compose_project_name = 'secondbox'")) {
+		t.Fatal("development initialization did not state its Compose project explicitly")
+	}
+	resolved, err := Resolve(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resolved.ComposeProject(); got != DefaultComposeProjectName {
+		t.Fatalf("initialized Compose project = %q", got)
+	}
+
+	// A manifest written before the field existed keeps deploying under the
+	// project it always used.
+	absent := bytes.Replace(original, []byte("compose_project_name = 'secondbox'\n"), nil, 1)
+	if bytes.Equal(absent, original) {
+		t.Fatal("Compose project line was not removed")
+	}
+	absentPath := filepath.Join(filepath.Dir(manifestPath), "absent.toml")
+	if err := os.WriteFile(absentPath, absent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolvedAbsent, err := Resolve(absentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resolvedAbsent.ComposeProject(); got != DefaultComposeProjectName {
+		t.Fatalf("absent Compose project = %q", got)
+	}
+
+	// A second deployment on the same host owns a distinct project, which is
+	// what keeps Compose from binding this deployment's volumes.
+	distinct := bytes.Replace(original, []byte("compose_project_name = 'secondbox'"), []byte("compose_project_name = 'secondbox-v030-test'"), 1)
+	distinctPath := filepath.Join(filepath.Dir(manifestPath), "distinct.toml")
+	if err := os.WriteFile(distinctPath, distinct, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolvedDistinct, err := Resolve(distinctPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resolvedDistinct.ComposeProject(); got != "secondbox-v030-test" {
+		t.Fatalf("distinct Compose project = %q", got)
+	}
+}
+
 func TestStrictDecodeRejectsUnknownDuplicateAndUnsupportedSchema(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
 	original, err := os.ReadFile(manifestPath)
@@ -157,6 +208,12 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 		{name: "Runner listener mismatches container", want: "runner_listen_address must be 0.0.0.0:9443", mutate: func(manifest *ManifestV1) { manifest.Deployment.RunnerListenAddress = "0.0.0.0:9999" }},
 		{name: "asset catalog path mismatches container", want: "signed_asset_catalog_path must be /etc/secondbox/signed-assets.json", mutate: func(manifest *ManifestV1) {
 			manifest.Deployment.SignedAssetCatalogPath = "/different/signed-assets.json"
+		}},
+		{name: "Compose project name carries uppercase", want: "deployment.compose_project_name", mutate: func(manifest *ManifestV1) { manifest.Deployment.ComposeProjectName = "SecondBox" }},
+		{name: "Compose project name starts with a hyphen", want: "deployment.compose_project_name", mutate: func(manifest *ManifestV1) { manifest.Deployment.ComposeProjectName = "-secondbox" }},
+		{name: "Compose project name carries a forbidden byte", want: "deployment.compose_project_name", mutate: func(manifest *ManifestV1) { manifest.Deployment.ComposeProjectName = "secondbox/test" }},
+		{name: "Compose project name exceeds the bound", want: "deployment.compose_project_name", mutate: func(manifest *ManifestV1) {
+			manifest.Deployment.ComposeProjectName = strings.Repeat("a", 64)
 		}},
 		{name: "control plane port exceeds TCP range", want: "deployment.api_published_port", mutate: func(manifest *ManifestV1) { manifest.Deployment.APIPublishedPort = integer(70000) }},
 		{name: "Runner port exceeds TCP range", want: "deployment.runner_published_port", mutate: func(manifest *ManifestV1) { manifest.Deployment.RunnerPublishedPort = integer(70000) }},
