@@ -132,6 +132,39 @@ func TestControlClientHardenPostRestore(t *testing.T) {
 	}
 }
 
+func TestControlClientBindAssignment(t *testing.T) {
+	socketPath := shortUnixSocketPath(t, "control.sock")
+	handshakes := make(chan string, 8)
+	closeServer := startFakeControlServer(t, socketPath, handshakes)
+	defer closeServer()
+
+	client := ControlClient{UDSPath: socketPath, Port: 2048, Timeout: 2 * time.Second}
+	request := AssignmentBindRequest{
+		InstanceID:              "instance-1",
+		SandboxID:               "sandbox-1",
+		SandboxGeneration:       7,
+		GuestBuildID:            "guest-build-1",
+		ImageManifestDigest:     "sha256:image",
+		ToolchainManifestDigest: "sha256:toolchain",
+		HeartbeatIntervalMs:     1000,
+	}
+	if err := client.BindAssignment(context.Background(), request); err != nil {
+		t.Fatalf("bind assignment: %v", err)
+	}
+
+	conflicting := request
+	conflicting.SandboxID = "already-bound"
+	if err := client.BindAssignment(context.Background(), conflicting); err == nil {
+		t.Fatal("a refused second bind was reported as success")
+	}
+
+	mismatched := request
+	mismatched.SandboxID = "wrong-echo"
+	if err := client.BindAssignment(context.Background(), mismatched); err == nil {
+		t.Fatal("a guest that bound a different assignment was reported as success")
+	}
+}
+
 func TestControlClientExecuteTool(t *testing.T) {
 	socketPath := shortUnixSocketPath(t, "control.sock")
 	handshakes := make(chan string, 8)
@@ -222,6 +255,30 @@ func startFakeControlServer(t *testing.T, socketPath string, handshakes chan<- s
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]bool{"hardened": true})
+	})
+	mux.HandleFunc("/assignment/bind", func(w http.ResponseWriter, r *http.Request) {
+		var req AssignmentBindRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid assignment bind request", http.StatusBadRequest)
+			return
+		}
+		if req.SandboxID == "already-bound" {
+			http.Error(w, "assignment identity is already installed", http.StatusConflict)
+			return
+		}
+		if req.SandboxID == "wrong-echo" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"bound":      true,
+				"instanceId": "other-instance",
+				"sandboxId":  "other-sandbox",
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"bound":      true,
+			"instanceId": req.InstanceID,
+			"sandboxId":  req.SandboxID,
+		})
 	})
 	mux.HandleFunc("/logs", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("guest-log\n"))

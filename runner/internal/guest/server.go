@@ -77,6 +77,11 @@ type Server struct {
 	Freezer           WorkspaceFreezer
 	Hardener          RestoreHardener
 	Now               func() time.Time
+	// Assignment is set only for a template-mode guest, which boots without any
+	// Sandbox identity and receives one through /assignment/bind after
+	// /restore/harden succeeds. A nil gate means identity came from boot
+	// arguments and /assignment/bind is refused.
+	Assignment *AssignmentGate
 }
 
 type WorkspaceFreezer interface {
@@ -133,8 +138,22 @@ func (s Server) Handler() http.Handler {
 	mux.HandleFunc("/logs", s.handleLogs)
 	mux.HandleFunc("/secrets/apply", s.handleSecretsApply)
 	mux.HandleFunc("/restore/harden", s.handleRestoreHarden)
+	mux.HandleFunc("/assignment/bind", s.handleAssignmentBind)
 	mux.HandleFunc("/tool/exec", s.handleToolExec)
 	return mux
+}
+
+// boundIdentifiers reports the Sandbox and Instance identity this guest serves.
+// A template-mode guest has none until its one assignment bind succeeds.
+func (s Server) boundIdentifiers() (instanceID string, sandboxID string) {
+	if s.Assignment == nil {
+		return s.InstanceID, s.SandboxID
+	}
+	identity, bound := s.Assignment.Identity()
+	if !bound {
+		return "", ""
+	}
+	return identity.InstanceID, identity.SandboxID
 }
 
 func (s Server) handleHeartbeat(w http.ResponseWriter, _ *http.Request) {
@@ -142,9 +161,10 @@ func (s Server) handleHeartbeat(w http.ResponseWriter, _ *http.Request) {
 	if s.Now != nil {
 		now = s.Now().UTC()
 	}
+	instanceID, sandboxID := s.boundIdentifiers()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"instanceId": s.InstanceID,
-		"sandboxId":  s.SandboxID,
+		"instanceId": instanceID,
+		"sandboxId":  sandboxID,
 		"healthy":    true,
 		"time":       now.Format(time.RFC3339Nano),
 	})
@@ -470,7 +490,40 @@ func (s Server) handleRestoreHarden(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if s.Assignment != nil {
+		s.Assignment.MarkHardened()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"hardened": true, "hostTime": hostTime.Format(time.RFC3339Nano)})
+}
+
+func (s Server) handleAssignmentBind(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.Assignment == nil {
+		writeError(w, http.StatusConflict, "guest is not in template mode")
+		return
+	}
+	var req AssignmentBindRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64*1024)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid assignment bind request")
+		return
+	}
+	identity, err := s.Assignment.Bind(req)
+	if err != nil {
+		if errors.Is(err, ErrAssignmentBindNotHardened) || errors.Is(err, ErrAssignmentAlreadyBound) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"bound":      true,
+		"instanceId": identity.InstanceID,
+		"sandboxId":  identity.SandboxID,
+	})
 }
 
 func (s Server) handleToolExec(w http.ResponseWriter, r *http.Request) {
