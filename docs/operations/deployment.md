@@ -114,7 +114,11 @@ just deploy-up /secure/secondbox-deployment/secondbox.toml
 just deploy-down /secure/secondbox-deployment/secondbox.toml
 ```
 
-The deployment command supplies the project name, env file, and exact overlay list explicitly. It removes ambient `SECONDBOX_*` and `COMPOSE_*` variables and retains only Docker client connectivity variables. The base [`deploy/compose.yml`](../../deploy/compose.yml) contains the control plane and shared resources; `compose.development.yml` adds the reviewed local database and object-store pair; production selects independent bundled-database and bundled-object-store overlays only when requested; `compose.same-host-runner.yml` adds only the privileged Runner. Inactive services are never hidden behind profiles that still interpolate missing values.
+The deployment command supplies the project name, env file, and exact overlay list explicitly. It removes ambient `SECONDBOX_*` and `COMPOSE_*` variables and retains only Docker client connectivity variables, so `COMPOSE_PROJECT_NAME` never reaches Docker; the project name comes from the manifest alone.
+
+The base [`deploy/compose.yml`](../../deploy/compose.yml) contains the control plane and shared resources; `compose.development.yml` adds the reviewed local database and object-store pair; production selects independent bundled-database and bundled-object-store overlays only when requested; `compose.same-host-runner.yml` adds only the privileged Runner. Inactive services are never hidden behind profiles that still interpolate missing values.
+
+`deployment.compose_project_name` names the Compose project. It is optional and defaults to `secondbox`, so a manifest written before the key existed keeps deploying exactly where it always did. Compose derives every container, volume, and network name from it, which makes it the isolation boundary between deployments: two deployments that share one Docker daemon must state different project names, or the second `up` binds the first's volumes and recreates its containers instead of failing. The name must start with a lowercase letter or digit and use at most 63 lowercase letters, digits, underscores, or hyphens.
 
 The control-plane container runs as UID/GID 65532 with a read-only root, dropped capabilities, `no-new-privileges`, and no KVM, TUN/TAP, host-cgroup, workspace, or container-engine access. A selected same-host Runner overlay is privileged and receives host devices and cgroups, but executes `secondbox-runner` directly as PID 1 and starts no private init system, login manager, or console process.
 

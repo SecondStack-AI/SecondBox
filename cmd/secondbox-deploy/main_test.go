@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -85,6 +86,66 @@ done
 	t.Chdir(t.TempDir())
 	if err := runCompose(manifestPath, "config"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Compose derives every container, volume, and network name from the project
+// name, so a second deployment that kept the default would bind the first
+// deployment's volumes and recreate its containers instead of failing.
+func TestComposeProjectNameIsolatesDeploymentsOnOneHost(t *testing.T) {
+	tests := []struct {
+		name    string
+		project string
+		want    string
+	}{
+		{name: "manifest without the field keeps the original project", project: "", want: "secondbox"},
+		{name: "manifest with a distinct project deploys beside it", project: "secondbox-v030-test", want: "secondbox-v030-test"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stub := t.TempDir()
+			argvPath := filepath.Join(stub, "argv")
+			script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + strconv.Quote(argvPath) + "\n"
+			if err := os.WriteFile(filepath.Join(stub, "docker"), []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", stub)
+			manifestPath, err := deployconfig.InitDevelopment(filepath.Join(t.TempDir(), "deployment"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			original, err := os.ReadFile(manifestPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			replacement := "compose_project_name = " + strconv.Quote(test.project)
+			if test.project == "" {
+				replacement = ""
+			}
+			updated := strings.Replace(string(original), "compose_project_name = 'secondbox'", replacement, 1)
+			if updated == string(original) {
+				t.Fatal("initialized manifest did not state a Compose project")
+			}
+			if err := os.WriteFile(manifestPath, []byte(updated), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Chdir(t.TempDir())
+			if err := runCompose(manifestPath, "config"); err != nil {
+				t.Fatal(err)
+			}
+			argv, err := os.ReadFile(argvPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fields := strings.Split(strings.TrimSpace(string(argv)), "\n")
+			index := slices.Index(fields, "--project-name")
+			if index < 0 || index+1 >= len(fields) {
+				t.Fatalf("docker argv carried no project name: %#v", fields)
+			}
+			if fields[index+1] != test.want {
+				t.Fatalf("Compose project = %q, want %q", fields[index+1], test.want)
+			}
+		})
 	}
 }
 
