@@ -19,6 +19,13 @@ container_id=""
 container_name="secondbox-snapshot-resume-jailed-$$"
 workspace_root=""
 cgroup_parent="secondbox-resume-jailed-$$"
+# The gate runs in its own network namespace, so the bridge, its subnet, and the
+# TAP prefix are private to this run. A template is captured with a network
+# device and every Instance resumes onto its own TAP, because the pinned VMM can
+# rebind a snapshotted interface but cannot add one the capture did not record.
+bridge_name="sbrj$(( $$ % 100000 ))"
+tap_prefix="rj$(( $$ % 1000 ))"
+bridge_cidr="198.18.$(( $$ % 200 + 40 )).1/24"
 
 fail() {
   echo "SecondBox jailed snapshot-resume qualification prerequisite failed: $*" >&2
@@ -65,6 +72,7 @@ if [[ "${SECONDBOX_REQUIRE_QUALIFIED_SNAPSHOT_RESUME_JAILED:-}" != "1" ]]; then
 SecondBox jailed snapshot-resume qualification is explicit and never skips.
 Set SECONDBOX_REQUIRE_QUALIFIED_SNAPSHOT_RESUME_JAILED=1 and provide:
   /dev/kvm
+  /dev/net/tun
   a cgroup v2 host
   SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR
   SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY
@@ -83,6 +91,8 @@ for command in awk chmod docker findmnt git go id mktemp openssl realpath sha256
 done
 [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] ||
   fail "/dev/kvm must be a readable and writable character device"
+[[ -c /dev/net/tun && -r /dev/net/tun && -w /dev/net/tun ]] ||
+  fail "/dev/net/tun must be a readable and writable character device"
 [[ -r /sys/fs/cgroup/cgroup.controllers ]] || fail "a cgroup v2 host is required"
 [[ "$(go env GOARCH)" == "amd64" ]] || fail "qualification currently requires an amd64 host"
 
@@ -191,6 +201,13 @@ SECONDBOX_RUNNER_FIRECRACKER_SHARED_IMAGE_PATH=/opt/secondbox-artifacts/shared.i
 SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY=/opt/secondbox-artifact-public-key.pem
 SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256=$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256
 SECONDBOX_RUNNER_FIRECRACKER_KERNEL_ARGS=console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw quiet loglevel=1 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd init=/init
+SECONDBOX_RUNNER_FIRECRACKER_BRIDGE_NAME=$bridge_name
+SECONDBOX_RUNNER_FIRECRACKER_BRIDGE_CIDR=$bridge_cidr
+SECONDBOX_RUNNER_FIRECRACKER_TAP_PREFIX=$tap_prefix
+SECONDBOX_RUNNER_NETWORK_POLICY_NFT_PATH=/usr/sbin/nft
+SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_PINS=256
+SECONDBOX_RUNNER_NETWORK_POLICY_MAX_DNS_TTL=5m
+SECONDBOX_RUNNER_NETWORK_POLICY_DNS_UPSTREAM=1.1.1.1:53
 SECONDBOX_RUNNER_GUEST_CONTROL_VSOCK_PORT=1024
 SECONDBOX_RUNNER_GUEST_PROTOCOL_VSOCK_PORT=1025
 SECONDBOX_RUNNER_GUEST_HEARTBEAT_INTERVAL=1s
@@ -233,6 +250,7 @@ docker run \
   --cgroupns=host \
   --network none \
   --device /dev/kvm:/dev/kvm \
+  --device /dev/net/tun:/dev/net/tun \
   --env-file "$env_file" \
   --volume "$qualification_root:/q" \
   --volume "$artifacts_dir:/opt/secondbox-artifacts:ro" \

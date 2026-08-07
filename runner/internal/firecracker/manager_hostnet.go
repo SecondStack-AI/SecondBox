@@ -178,6 +178,23 @@ func guestIPBootArg(cfg *config.Config, guestIP string) string {
 	)
 }
 
+// guestAddressCIDR renders a reserved guest address with the bridge's prefix
+// length. A cold-booted guest receives the same pair through the kernel `ip=`
+// argument's address and netmask fields; a resumed guest receives it in its
+// assignment bind, because its kernel finished booting before this Sandbox
+// existed. It is empty when this runner gives guests no network device.
+func guestAddressCIDR(guestIP, bridgeCIDR string) string {
+	address, err := netip.ParseAddr(strings.TrimSpace(guestIP))
+	if err != nil {
+		return ""
+	}
+	prefix, err := netip.ParsePrefix(strings.TrimSpace(bridgeCIDR))
+	if err != nil {
+		return ""
+	}
+	return netip.PrefixFrom(address, prefix.Bits()).String()
+}
+
 func bridgeAddress(cidr string) netip.Addr {
 	prefix, err := netip.ParsePrefix(strings.TrimSpace(cidr))
 	if err != nil {

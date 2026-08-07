@@ -184,6 +184,10 @@ func buildSnapshotResumeTemplate(
 	if err != nil {
 		t.Fatalf("new template source manager: %v", err)
 	}
+	// The template build owns the runner DNS proxy for as long as its Manager
+	// exists. Every later Manager binds the same bridge address, so this one has
+	// to let go once the capture is sealed.
+	defer releaseManagerNetworkPolicy(t, manager)
 	workspaceStore, err := workspacestore.New(t.Context(), workspacestore.Config{
 		Root:                  cfg.RunnerWorkspaceRoot,
 		TemplateCapacityBytes: int64(workspaceMiB) << 20,
