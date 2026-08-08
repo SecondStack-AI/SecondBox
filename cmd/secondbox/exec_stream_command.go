@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/SecondStack-AI/SecondBox/internal/cliui"
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 	"github.com/gorilla/websocket"
 )
@@ -87,18 +88,28 @@ func runExecStreamCommand(
 	handle := secondboxclient.NewSandboxHandle(client, secondboxclient.Sandbox{
 		ID: secondboxclient.OpaqueID(*sandboxID), Generation: generation,
 	})
-	session, err := handle.CreateExecStream(ctx, request, *idempotencyKey, *leaseID)
+	activity, err := startGuestStreamActivity(ctx, presentationFromContext(ctx, output).renderer, "Negotiate exec stream")
 	if err != nil {
 		return err
 	}
+	session, err := handle.CreateExecStream(ctx, request, *idempotencyKey, *leaseID)
+	if err != nil {
+		return errors.Join(err, completeGuestStreamActivity(activity, cliui.StatusFailed, "session creation failed"))
+	}
 	if *createOnly {
+		if err := completeGuestStreamActivity(activity, cliui.StatusComplete, "session created"); err != nil {
+			return err
+		}
 		return writeExecStreamJSONLine(output, session)
 	}
 	stream, err := handle.ConnectExecStream(ctx, session, dialer)
 	if err != nil {
-		return err
+		return errors.Join(err, completeGuestStreamActivity(activity, cliui.StatusFailed, "attachment failed"))
 	}
 	defer stream.Close()
+	if err := completeGuestStreamActivity(activity, cliui.StatusComplete, "guest stream ready"); err != nil {
+		return err
+	}
 	inputErrors := make(chan error, 1)
 	go func() {
 		err := pumpExecStreamCLIInput(input, stream)

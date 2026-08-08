@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/SecondStack-AI/SecondBox/internal/cliui"
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 	"github.com/gorilla/websocket"
 	"golang.org/x/term"
@@ -155,18 +156,16 @@ func runSandboxShellCommand(
 			*rows, *columns = height, width
 		}
 	}
-	if interactive {
-		state, rawErr := environment.terminal.MakeRaw(environment.inputFD)
-		if rawErr != nil {
-			return fmt.Errorf("SecondBox CLI enter raw Terminal mode: %w", rawErr)
-		}
-		defer func() {
-			resultErr = errors.Join(
-				resultErr,
-				environment.terminal.Restore(environment.inputFD, state),
-			)
-		}()
+	activity, err := startGuestStreamActivity(ctx, presentationFromContext(ctx, environment.output).renderer, "Negotiate Sandbox terminal")
+	if err != nil {
+		return err
 	}
+	activityComplete := false
+	defer func() {
+		if !activityComplete {
+			resultErr = errors.Join(resultErr, completeGuestStreamActivity(activity, cliui.StatusFailed, "terminal negotiation failed"))
+		}
+	}()
 
 	client, err := secondboxclient.NewSecondBoxSubjectClient(
 		rawURL, token, tenantRef, subjectRef, environment.httpClient,
@@ -217,6 +216,17 @@ func runSandboxShellCommand(
 		shellOutputCredit(*creditBytes, session.StreamWindowBytes),
 	); err != nil {
 		return err
+	}
+	if err := completeGuestStreamActivity(activity, cliui.StatusComplete, "guest stream ready"); err != nil {
+		return err
+	}
+	activityComplete = true
+	if interactive {
+		state, rawErr := environment.terminal.MakeRaw(environment.inputFD)
+		if rawErr != nil {
+			return fmt.Errorf("SecondBox CLI enter raw Terminal mode: %w", rawErr)
+		}
+		defer func() { resultErr = errors.Join(resultErr, environment.terminal.Restore(environment.inputFD, state)) }()
 	}
 
 	resizeEvents, stopResizeEvents := shellResizeEvents(environment.resizeEvents)

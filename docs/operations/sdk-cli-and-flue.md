@@ -25,6 +25,21 @@ The Go package import path is `github.com/SecondStack-AI/SecondBox/sdk/go/second
 
 ## Same-host CLI
 
+Interactive terminal presentation is automatic only for bounded commands.
+`--output json` preserves the API's machine representation, `--output plain`
+selects an unstyled human view, and `--color auto|always|never` controls color.
+`NO_COLOR`, `TERM=dumb`, CI, and `--accessible` /
+`SECONDBOX_ACCESSIBLE=1` are honored. The flags precede the command:
+
+```sh
+./dist/secondbox --output json sandboxes list | jq '.items'
+./dist/secondbox --output plain --color never whoami
+```
+
+File and artifact content, logs, generic `operation` responses, terminal and
+exec streams, and guest exit statuses remain raw. The normative classification
+and script guarantees are in [CLI output and terminal presentation](cli-output-contract.md).
+
 Build the standalone CLI and pass authentication explicitly:
 
 ```sh

@@ -91,3 +91,9 @@ The expected wall-clock duration is 6–10 minutes on the reference host, includ
 A normal cold guest reaches `microvm_ready` within 5 seconds on the reference host; the 2026-07-29 qualification observed approximately 2.5–2.7 seconds. The runner logs every `microVM cold start stage` with stage and cumulative milliseconds. The scenario deployment's 30-second assignment deadline is the hard boot budget. Treat a sustained rise above the 5-second expectation as a performance regression even when it remains below the hard deadline.
 
 Archive failure output as well: the harness prints Compose state plus bounded control-plane, runner, PostgreSQL, object-store, and Firecracker logs before cleanup.
+
+## Installer qualification
+
+`just test-installer` is the ordinary-host suite for installer contracts, release verification, bootstrap generation, fake orchestration, resume, uninstall, and confined purge. It does not substitute for KVM.
+
+`just test-installer-vm` drives disposable systemd guests when an explicit VM controller configuration is present. `just test-installer-qualified` is the non-skipping real-host gate for the published-style bootstrap, Btrfs-image and existing-filesystem paths, reboot recovery, retained-workspace uninstall/resume, purge confinement, and a real hello-world microVM. The harness independently derives a qualification-subject digest from the tested release manifest and requires the driver to report that exact identity. Its evidence is separate from the scenario evidence described above because installer qualification proves host mutation and reboot behavior while `test-scenario` proves the public runtime contract. See [guided single-host installation](guided-single-host-install.md) for the installed topology and authority boundary.

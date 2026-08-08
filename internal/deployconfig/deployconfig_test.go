@@ -2,6 +2,7 @@ package deployconfig
 
 import (
 	"bytes"
+	"context"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
@@ -14,6 +15,13 @@ import (
 	"strings"
 	"testing"
 )
+
+type recordingComposeExecutor struct{ calls [][]string }
+
+func (executor *recordingComposeExecutor) Run(_ context.Context, arguments []string) error {
+	executor.calls = append(executor.calls, slices.Clone(arguments))
+	return nil
+}
 
 func initializedDevelopment(t *testing.T) string {
 	t.Helper()
@@ -170,6 +178,21 @@ func TestComposeProjectIsolatesDeploymentsAndDefaultsForOlderManifests(t *testin
 	}
 	if got := resolvedDistinct.ComposeProject(); got != "secondbox-v030-test" {
 		t.Fatalf("distinct Compose project = %q", got)
+	}
+}
+
+func TestPermanentComposePurgeRemovesExactProjectVolumes(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	executor := &recordingComposeExecutor{}
+	if err := PurgeComposeVolumes(context.Background(), manifestPath, executor); err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.calls) != 1 {
+		t.Fatalf("Compose purge calls = %#v", executor.calls)
+	}
+	arguments := executor.calls[0]
+	if !slices.Contains(arguments, "--project-name") || !slices.Contains(arguments, DefaultComposeProjectName) || !slices.Equal(arguments[len(arguments)-3:], []string{"down", "--remove-orphans", "--volumes"}) {
+		t.Fatalf("Compose purge arguments = %#v", arguments)
 	}
 }
 
@@ -867,6 +890,15 @@ func TestMultipleRemoteRunnerArtifactsAreIsolatedAndHostPathsStayOpaque(t *testi
 	}
 	if err := RunnerInit(manifestPath, "runner-a", handoff); err == nil {
 		t.Fatal("runner-init replaced an existing identity")
+	}
+	if err := RunnerInitOrValidate(manifestPath, "runner-a", handoff); err != nil {
+		t.Fatalf("installer retry did not adopt the exact existing identity: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(handoff, "runner.env"), []byte("SECONDBOX_RUNNER_ID=runner-other\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunnerInitOrValidate(manifestPath, "runner-a", handoff); err == nil {
+		t.Fatal("installer retry adopted a changed existing identity")
 	}
 	if err := RunnerInit(manifestPath, "unknown", filepath.Join(t.TempDir(), "unknown")); err == nil {
 		t.Fatal("runner-init accepted an undeclared identity")

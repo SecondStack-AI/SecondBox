@@ -18,14 +18,16 @@ import (
 )
 
 const (
-	ArtifactManifestSchema      = "secondbox.release/artifact-manifest/v2"
-	QualificationEvidenceSchema = "secondbox.release/qualification-evidence/v1"
+	ArtifactManifestSchema               = "secondbox.release/artifact-manifest/v5"
+	QualificationEvidenceSchema          = "secondbox.release/qualification-evidence/v1"
+	InstallerQualificationEvidenceSchema = "secondbox.release/installer-qualification-evidence/v1"
 
-	TypeScriptPackage = "@secondstack-ai/secondbox"
-	GoModule          = "github.com/SecondStack-AI/SecondBox"
-	ControlPlaneImage = "ghcr.io/secondstack-ai/secondbox/control-plane"
-	RunnerImage       = "ghcr.io/secondstack-ai/secondbox/runner"
-	MicroVMImage      = "ghcr.io/secondstack-ai/secondbox/microvm-artifacts"
+	TypeScriptPackage   = "@secondstack-ai/secondbox"
+	GoModule            = "github.com/SecondStack-AI/SecondBox"
+	ControlPlaneImage   = "ghcr.io/secondstack-ai/secondbox/control-plane"
+	RunnerImage         = "ghcr.io/secondstack-ai/secondbox/runner"
+	MicroVMImage        = "ghcr.io/secondstack-ai/secondbox/microvm-artifacts"
+	InstallerToolsImage = "ghcr.io/secondstack-ai/secondbox/installer-tools"
 )
 
 var (
@@ -53,6 +55,7 @@ type PlatformMatrix struct {
 	HostBinaries         []string `json:"hostBinaries"`
 	ControlPlane         []string `json:"controlPlane"`
 	Runner               []string `json:"runner"`
+	InstallerTools       []string `json:"installerTools"`
 	Guest                []string `json:"guest"`
 	QualifiedRunnerGuest []string `json:"qualifiedRunnerGuest"`
 }
@@ -90,6 +93,20 @@ type QualificationEvidence struct {
 	WallClockSeconds int64                     `json:"wallClockSeconds"`
 	Host             QualificationHostEvidence `json:"host"`
 	QualifiedAt      string                    `json:"qualifiedAt"`
+}
+
+type InstallerQualificationEvidence struct {
+	SchemaVersion         string                    `json:"schemaVersion"`
+	SourceCommit          string                    `json:"sourceCommit"`
+	RepositoryDirty       bool                      `json:"repositoryDirty"`
+	Suite                 string                    `json:"suite"`
+	PassCount             int64                     `json:"passCount"`
+	WallClockSeconds      int64                     `json:"wallClockSeconds"`
+	Host                  QualificationHostEvidence `json:"host"`
+	ReleaseManifestDigest string                    `json:"releaseManifestDigest"`
+	FilesystemIdentity    string                    `json:"filesystemIdentity"`
+	RebootPassed          bool                      `json:"rebootPassed"`
+	QualifiedAt           string                    `json:"qualifiedAt"`
 }
 
 type OpenAPIArtifact struct {
@@ -146,25 +163,36 @@ type MicroVMArtifact struct {
 	ToolchainBundle       SignedComponent `json:"toolchainBundle"`
 }
 
+type BundledServiceImages struct {
+	Postgres          string `json:"postgres"`
+	ObjectStore       string `json:"objectStore"`
+	ObjectStoreClient string `json:"objectStoreClient"`
+}
+
 // ArtifactManifest contains immutable release artifact identity.
 type ArtifactManifest struct {
 	SchemaVersion string `json:"schemaVersion"`
+	Candidate     bool   `json:"candidate,omitempty"`
 	Identity
-	OpenAPI               OpenAPIArtifact          `json:"openapi"`
-	RunnerProtocol        ProtocolWindow           `json:"runnerProtocol"`
-	GuestProtocol         ProtocolWindow           `json:"guestProtocol"`
-	Platforms             PlatformMatrix           `json:"platforms"`
-	GoSDK                 SDKArtifact              `json:"goSdk"`
-	TypeScriptSDK         SDKArtifact              `json:"typeScriptSdk"`
-	ControlPlane          OCIArtifact              `json:"controlPlane"`
-	Runner                OCIArtifact              `json:"runner"`
-	MicroVM               MicroVMArtifact          `json:"microvm"`
-	Binaries              []BinaryArtifact         `json:"binaries"`
-	SBOMs                 []Reference              `json:"sboms"`
-	ArtifactAttestations  []Reference              `json:"artifactAttestations,omitempty"`
-	SourceFreeSuite       Reference                `json:"sourceFreeSuite,omitempty"`
-	QualificationEvidence Reference                `json:"qualificationEvidence"`
-	StandardBundles       []StandardBundleArtifact `json:"standardBundles"`
+	OpenAPI                        OpenAPIArtifact          `json:"openapi"`
+	RunnerProtocol                 ProtocolWindow           `json:"runnerProtocol"`
+	GuestProtocol                  ProtocolWindow           `json:"guestProtocol"`
+	Platforms                      PlatformMatrix           `json:"platforms"`
+	GoSDK                          SDKArtifact              `json:"goSdk"`
+	TypeScriptSDK                  SDKArtifact              `json:"typeScriptSdk"`
+	ControlPlane                   OCIArtifact              `json:"controlPlane"`
+	Runner                         OCIArtifact              `json:"runner"`
+	InstallerTools                 OCIArtifact              `json:"installerTools"`
+	BundledServices                BundledServiceImages     `json:"bundledServices"`
+	InstallBootstrap               Reference                `json:"installBootstrap"`
+	MicroVM                        MicroVMArtifact          `json:"microvm"`
+	Binaries                       []BinaryArtifact         `json:"binaries"`
+	SBOMs                          []Reference              `json:"sboms"`
+	ArtifactAttestations           []Reference              `json:"artifactAttestations,omitempty"`
+	SourceFreeSuite                Reference                `json:"sourceFreeSuite,omitempty"`
+	QualificationEvidence          Reference                `json:"qualificationEvidence"`
+	InstallerQualificationEvidence Reference                `json:"installerQualificationEvidence"`
+	StandardBundles                []StandardBundleArtifact `json:"standardBundles"`
 }
 
 func ParseTag(tag string) (string, error) {
@@ -184,6 +212,14 @@ func SourceFreeSuiteLocation(version string) string {
 
 func QualificationEvidenceLocation(version string) string {
 	return fmt.Sprintf("https://github.com/SecondStack-AI/SecondBox/releases/download/v%s/secondbox-%s-qualification-evidence.json", version, version)
+}
+
+func InstallerQualificationEvidenceLocation(version string) string {
+	return fmt.Sprintf("https://github.com/SecondStack-AI/SecondBox/releases/download/v%s/secondbox-%s-installer-qualification-evidence.json", version, version)
+}
+
+func InstallBootstrapLocation(version string) string {
+	return fmt.Sprintf("https://github.com/SecondStack-AI/SecondBox/releases/download/v%s/install.sh", version)
 }
 
 func BinaryLocation(version, name, platform string) string {
@@ -212,6 +248,17 @@ func DecodeQualificationEvidence(data []byte) (QualificationEvidence, error) {
 	return evidence, nil
 }
 
+func DecodeInstallerQualificationEvidence(data []byte) (InstallerQualificationEvidence, error) {
+	var evidence InstallerQualificationEvidence
+	if err := decodeStrict(data, &evidence); err != nil {
+		return InstallerQualificationEvidence{}, contractError("decode installer qualification evidence: %v", err)
+	}
+	if err := evidence.Validate(); err != nil {
+		return InstallerQualificationEvidence{}, err
+	}
+	return evidence, nil
+}
+
 func (evidence QualificationEvidence) Validate() error {
 	if evidence.SchemaVersion != QualificationEvidenceSchema {
 		return contractError("qualification evidence schemaVersion must be %q", QualificationEvidenceSchema)
@@ -222,22 +269,29 @@ func (evidence QualificationEvidence) Validate() error {
 	if evidence.Suite != "test-scenario" || evidence.PassCount <= 0 || evidence.WallClockSeconds < 0 {
 		return contractError("qualification evidence must describe a complete test-scenario run")
 	}
-	for name, device := range map[string]QualificationDeviceEvidence{"KVM": evidence.Host.KVM, "TUN": evidence.Host.TUN} {
+	if err := validateQualificationHost("qualification", evidence.Host); err != nil {
+		return err
+	}
+	qualifiedAt, err := time.Parse(time.RFC3339, evidence.QualifiedAt)
+	if err != nil || evidence.QualifiedAt != qualifiedAt.UTC().Format("2006-01-02T15:04:05Z") {
+		return contractError("qualification evidence qualifiedAt must be a canonical UTC timestamp")
+	}
+	return nil
+}
+
+func validateQualificationHost(label string, host QualificationHostEvidence) error {
+	for name, device := range map[string]QualificationDeviceEvidence{"KVM": host.KVM, "TUN": host.TUN} {
 		wantPath := "/dev/" + strings.ToLower(name)
 		if name == "TUN" {
 			wantPath = "/dev/net/tun"
 		}
 		if device.Path != wantPath || !device.Present || !device.Readable || !device.Writable {
-			return contractError("qualification evidence %s device facts are incomplete", name)
+			return contractError("%s evidence %s device facts are incomplete", label, name)
 		}
 	}
-	if strings.TrimSpace(evidence.Host.WorkspaceFilesystem.Mount) == "" ||
-		(evidence.Host.WorkspaceFilesystem.Type != "xfs" && evidence.Host.WorkspaceFilesystem.Type != "btrfs") {
-		return contractError("qualification evidence workspace filesystem facts are incomplete")
-	}
-	qualifiedAt, err := time.Parse(time.RFC3339, evidence.QualifiedAt)
-	if err != nil || evidence.QualifiedAt != qualifiedAt.UTC().Format("2006-01-02T15:04:05Z") {
-		return contractError("qualification evidence qualifiedAt must be a canonical UTC timestamp")
+	if strings.TrimSpace(host.WorkspaceFilesystem.Mount) == "" ||
+		(host.WorkspaceFilesystem.Type != "xfs" && host.WorkspaceFilesystem.Type != "btrfs") {
+		return contractError("%s evidence workspace filesystem facts are incomplete", label)
 	}
 	return nil
 }
@@ -255,6 +309,55 @@ func (evidence QualificationEvidence) ValidateForRelease(sourceCommit string) er
 	return nil
 }
 
+func (evidence InstallerQualificationEvidence) Validate() error {
+	if evidence.SchemaVersion != InstallerQualificationEvidenceSchema {
+		return contractError("installer qualification evidence schemaVersion must be %q", InstallerQualificationEvidenceSchema)
+	}
+	if !commitPattern.MatchString(evidence.SourceCommit) || evidence.Suite != "test-installer-qualified" || evidence.PassCount <= 0 || evidence.WallClockSeconds < 0 || !digestPattern.MatchString(evidence.ReleaseManifestDigest) || strings.TrimSpace(evidence.FilesystemIdentity) == "" || !evidence.RebootPassed {
+		return contractError("installer qualification evidence must describe a complete qualified installer run")
+	}
+	if err := validateQualificationHost("installer qualification", evidence.Host); err != nil {
+		return err
+	}
+	qualifiedAt, err := time.Parse(time.RFC3339, evidence.QualifiedAt)
+	if err != nil || evidence.QualifiedAt != qualifiedAt.UTC().Format("2006-01-02T15:04:05Z") {
+		return contractError("installer qualification evidence qualifiedAt must be a canonical UTC timestamp")
+	}
+	return nil
+}
+
+func (evidence InstallerQualificationEvidence) ValidateForRelease(sourceCommit, qualificationSubjectDigest string) error {
+	if err := evidence.Validate(); err != nil {
+		return err
+	}
+	if evidence.SourceCommit != sourceCommit {
+		return contractError("installer qualification evidence source commit does not match release")
+	}
+	if evidence.RepositoryDirty {
+		return contractError("installer qualification evidence was produced from a dirty repository")
+	}
+	if !digestPattern.MatchString(qualificationSubjectDigest) || evidence.ReleaseManifestDigest != qualificationSubjectDigest {
+		return contractError("installer qualification evidence release identity does not match release")
+	}
+	return nil
+}
+
+// InstallerQualificationSubjectDigest identifies all public release contract
+// fields except the installer-evidence reference itself. Omitting that one
+// reference avoids a digest cycle while still binding qualification to the
+// exact binaries, images, protocols, bundles, and other immutable release
+// objects that the final manifest publishes.
+func (manifest ArtifactManifest) InstallerQualificationSubjectDigest() (string, error) {
+	subject := manifest
+	subject.Candidate = false
+	subject.InstallerQualificationEvidence = Reference{}
+	encoded, err := json.Marshal(subject)
+	if err != nil {
+		return "", contractError("encode installer qualification subject: %v", err)
+	}
+	return Digest(encoded), nil
+}
+
 func (manifest ArtifactManifest) Validate() error {
 	if manifest.SchemaVersion != ArtifactManifestSchema {
 		return contractError("artifact manifest schemaVersion must be %q", ArtifactManifestSchema)
@@ -265,7 +368,7 @@ func (manifest ArtifactManifest) Validate() error {
 	for name, identity := range map[string]Identity{
 		"OpenAPI": manifest.OpenAPI.Identity, "Go SDK": manifest.GoSDK.Identity,
 		"TypeScript SDK": manifest.TypeScriptSDK.Identity, "control plane": manifest.ControlPlane.Identity,
-		"Runner": manifest.Runner.Identity, "microVM": manifest.MicroVM.Identity,
+		"Runner": manifest.Runner.Identity, "installer tools": manifest.InstallerTools.Identity, "microVM": manifest.MicroVM.Identity,
 	} {
 		if identity != manifest.Identity {
 			return contractError("%s identity does not match artifact manifest", name)
@@ -306,9 +409,18 @@ func (manifest ArtifactManifest) Validate() error {
 		return err
 	}
 	for name, artifact := range map[string]OCIArtifact{
-		ControlPlaneImage: manifest.ControlPlane, RunnerImage: manifest.Runner,
+		ControlPlaneImage: manifest.ControlPlane, RunnerImage: manifest.Runner, InstallerToolsImage: manifest.InstallerTools,
 	} {
 		if err := validateOCIReference(name, artifact.Reference); err != nil {
+			return err
+		}
+	}
+	for name, reference := range map[string]string{"bundled Postgres": manifest.BundledServices.Postgres, "bundled object store": manifest.BundledServices.ObjectStore, "bundled object-store client": manifest.BundledServices.ObjectStoreClient} {
+		repository, _, found := strings.Cut(reference, "@")
+		if !found || repository == "" {
+			return contractError("%s image must be digest-pinned", name)
+		}
+		if err := validateOCIReference(repository, reference); err != nil {
 			return err
 		}
 	}
@@ -359,6 +471,24 @@ func (manifest ArtifactManifest) Validate() error {
 	}
 	if manifest.QualificationEvidence.Location != QualificationEvidenceLocation(manifest.Version) {
 		return contractError("qualification evidence location is not canonical for %s", manifest.Tag)
+	}
+	if manifest.Candidate {
+		if manifest.InstallerQualificationEvidence != (Reference{}) {
+			return contractError("release candidate must not claim installer qualification evidence")
+		}
+	} else {
+		if err := validateReference("installer qualification evidence", manifest.InstallerQualificationEvidence); err != nil {
+			return err
+		}
+		if manifest.InstallerQualificationEvidence.Location != InstallerQualificationEvidenceLocation(manifest.Version) {
+			return contractError("installer qualification evidence location is not canonical for %s", manifest.Tag)
+		}
+	}
+	if err := validateReference("install bootstrap", manifest.InstallBootstrap); err != nil {
+		return err
+	}
+	if manifest.InstallBootstrap.Location != InstallBootstrapLocation(manifest.Version) {
+		return contractError("install bootstrap location is not canonical for %s", manifest.Tag)
 	}
 	if err := validateBundles(manifest.StandardBundles); err != nil {
 		return err
@@ -427,7 +557,7 @@ func validateWindow(name string, window ProtocolWindow) error {
 func validatePlatforms(platforms PlatformMatrix) error {
 	sets := map[string][]string{
 		"host binary": platforms.HostBinaries, "control-plane": platforms.ControlPlane,
-		"Runner": platforms.Runner, "guest": platforms.Guest,
+		"Runner": platforms.Runner, "installer tools": platforms.InstallerTools, "guest": platforms.Guest,
 		"qualified Runner/guest": platforms.QualifiedRunnerGuest,
 	}
 	for name, values := range sets {

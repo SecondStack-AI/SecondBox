@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SecondStack-AI/SecondBox/internal/cliui"
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 )
 
@@ -137,8 +138,15 @@ func runExecCommand(
 		}
 		request.StdinBase64 = stdin
 	}
+	activity, err := startGuestStreamActivity(ctx, presentationFromContext(ctx, environment.stdout).renderer, "Resolve Sandbox and negotiate execution")
+	if err != nil {
+		return err
+	}
 	outcome, err := handle.Execute(ctx, request, *idempotencyKey, *leaseID)
 	if err != nil {
+		return errors.Join(err, completeGuestStreamActivity(activity, cliui.StatusFailed, "execution negotiation failed"))
+	}
+	if err := completeGuestStreamActivity(activity, cliui.StatusComplete, "guest output ready"); err != nil {
 		return err
 	}
 	if *emitJSON {

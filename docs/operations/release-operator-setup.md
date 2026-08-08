@@ -7,7 +7,7 @@ SecondBox releases are qualified and built locally, then published by one GitHub
 - Authenticate the local `gh` CLI for `SecondStack-AI/SecondBox`.
 - Configure npm trusted publishing for `@secondstack-ai/secondbox` and `.github/workflows/release.yml`.
 - Allow that workflow `contents: write`, `packages: write`, and `id-token: write`.
-- Give the repository workflow access to the public `control-plane`, `runner`, and `microvm-artifacts` GHCR packages.
+- Give the repository workflow access to the public `control-plane`, `runner`, `installer-tools`, and `microvm-artifacts` GHCR packages.
 
 The local build host needs Docker Buildx, `jq`, `openssl`, npm, Node.js, Go, and `just`. It must also satisfy the KVM, TUN, reflink-filesystem, and scenario bundle requirements in [external scenario qualification](scenario-qualification.md). Release staging needs the microVM release bundle variables documented by `scripts/release-stage.sh` because the runner consumes that bundle at runtime.
 
@@ -49,11 +49,22 @@ export SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256="$artifact_public_key_sha256"
 export SECONDBOX_RUNNER_WORKSPACE_ROOT='/srv/secondbox/qualification/workspaces'
 just test-scenario
 
+export SECONDBOX_RELEASE_POSTGRES_IMAGE='docker.io/library/postgres@sha256:REVIEWED_DIGEST'
+export SECONDBOX_RELEASE_OBJECT_STORE_IMAGE='docker.io/rustfs/rustfs@sha256:REVIEWED_DIGEST'
+export SECONDBOX_RELEASE_OBJECT_STORE_CLIENT_IMAGE='quay.io/minio/mc@sha256:REVIEWED_DIGEST'
+just release-candidate 0.1.5 /protected/releases/installer-candidate
+
+export SECONDBOX_REQUIRE_QUALIFIED_INSTALLER=1
+export SECONDBOX_INSTALLER_QUALIFICATION_DRIVER=/opt/secondbox/bin/installer-qualification-driver
+export SECONDBOX_INSTALLER_RELEASE_DIRECTORY=/protected/releases/installer-candidate
+export SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT=/srv/secondbox/qualification/installer-workspaces
+just test-installer-qualified
+
 just release-stage 0.1.5 /protected/releases/secondbox-0.1.5
 just release-upload 0.1.5 /protected/releases/secondbox-0.1.5
 ```
 
-`test-scenario` writes `.tmp/scenario-qualification-evidence.json` only after the full suite and cleanup pass. `release-stage` requires that evidence to name its exact source commit and a clean repository, then records it in the staged manifest and checksums. `release-upload` creates a private draft, uploads the local output, and dispatches the GitHub workflow. The workflow does not rebuild or qualify anything. It publishes the three OCI archives to GHCR, publishes the TypeScript package directly under npm `latest`, removes the transport-only archives from the draft, and opens a stable GitHub release marked latest.
+`test-scenario` writes `.tmp/scenario-qualification-evidence.json` only after the full suite and cleanup pass. `release-candidate` then builds an explicitly non-publishable manifest with the reviewed, digest-pinned bundled-service images and no installer-qualification claim. The controller-driven installer gate tests that candidate and writes `.tmp/installer-qualification-evidence.json` after its clean-host, reboot, resume, uninstall, purge, and real-microVM assertions pass. The candidate and final manifest share a qualification-subject digest: every final manifest field participates except the candidate marker and installer-evidence reference. `release-stage` requires both evidence documents, rejects evidence for different release bytes, and emits the publishable final manifest. `release-upload` creates a private draft and dispatches the GitHub workflow; the workflow does not rebuild or qualify anything.
 
 Watch the dispatched run with:
 

@@ -1,0 +1,148 @@
+package deployconfig
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+)
+
+type ComposeExecutor interface {
+	Run(context.Context, []string) error
+}
+
+// RunCompose renders the validated deployment and delegates one exact Compose
+// action through a narrow executor. Resource application remains the existing
+// idempotent engine and runs only after Compose startup succeeds.
+func RunCompose(ctx context.Context, manifestPath, action string, executor ComposeExecutor, httpClient *http.Client) error {
+	if action != "config" && action != "prepare" && action != "up" && action != "down" {
+		return manifestError("compose action must be config, prepare, up, or down", nil)
+	}
+	if executor == nil {
+		return manifestError("Compose executor is required", nil)
+	}
+	absolute, err := filepath.Abs(manifestPath)
+	if err != nil {
+		return err
+	}
+	environmentPath := filepath.Join(filepath.Dir(absolute), ".secondbox.generated.env")
+	resolved, err := Render(absolute, environmentPath)
+	if err != nil {
+		return err
+	}
+	arguments := []string{"compose", "--project-name", resolved.ComposeProject(), "--env-file", environmentPath}
+	for _, file := range resolved.ComposeFiles {
+		arguments = append(arguments, "--file", file)
+	}
+	switch action {
+	case "config":
+		arguments = append(arguments, "config", "--quiet")
+	case "prepare":
+		if resolved.Manifest.Deployment.Mode != "development" {
+			return manifestError("compose prepare requires development mode", nil)
+		}
+		waitSeconds := fmt.Sprint(*resolved.Manifest.Deployment.DevelopmentWaitSeconds)
+		if err := executor.Run(ctx, composeUpArgumentsInternal(arguments, "--detach", "--wait", "--wait-timeout", waitSeconds, "postgres", "object-store")); err != nil {
+			return err
+		}
+		return executor.Run(ctx, composeUpArgumentsInternal(arguments, "--no-deps", "object-store-init"))
+	case "up":
+		arguments = composeUpArgumentsInternal(arguments, "--detach")
+	case "down":
+		arguments = append(slices.Clone(arguments), "down", "--remove-orphans")
+	}
+	if err := executor.Run(ctx, arguments); err != nil {
+		return err
+	}
+	if action == "up" {
+		if httpClient == nil {
+			return manifestError("Compose startup requires a resource-apply HTTP client", nil)
+		}
+		_, err := ApplyStandardResources(ctx, resolved, httpClient)
+		return err
+	}
+	return nil
+}
+
+// PurgeComposeVolumes removes the exact validated deployment's containers,
+// networks, and named volumes. It is intentionally separate from ordinary
+// Compose down because uninstall preserves the bundled database and object
+// store while the typed permanent-purge workflow must remove them.
+func PurgeComposeVolumes(ctx context.Context, manifestPath string, executor ComposeExecutor) error {
+	if executor == nil {
+		return manifestError("Compose executor is required", nil)
+	}
+	absolute, err := filepath.Abs(manifestPath)
+	if err != nil {
+		return err
+	}
+	environmentPath := filepath.Join(filepath.Dir(absolute), ".secondbox.generated.env")
+	resolved, err := Render(absolute, environmentPath)
+	if err != nil {
+		return err
+	}
+	arguments := []string{"compose", "--project-name", resolved.ComposeProject(), "--env-file", environmentPath}
+	for _, file := range resolved.ComposeFiles {
+		arguments = append(arguments, "--file", file)
+	}
+	return executor.Run(ctx, append(arguments, "down", "--remove-orphans", "--volumes"))
+}
+
+func composeUpArgumentsInternal(arguments []string, options ...string) []string {
+	result := append(slices.Clone(arguments), "up", "--remove-orphans")
+	return append(result, options...)
+}
+
+// ComposeDiagnosticArguments returns the exact existing deployment transport
+// for bounded read-only Docker Compose inspection without rerendering it.
+func ComposeDiagnosticArguments(manifestPath string, command ...string) ([]string, error) {
+	absolute, err := filepath.Abs(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := Resolve(absolute)
+	if err != nil {
+		return nil, err
+	}
+	environmentPath := filepath.Join(filepath.Dir(absolute), ".secondbox.generated.env")
+	info, err := os.Lstat(environmentPath)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
+		return nil, manifestError("existing generated environment is absent or unprotected", err)
+	}
+	arguments := []string{"compose", "--project-name", resolved.ComposeProject(), "--env-file", environmentPath}
+	for _, file := range resolved.ComposeFiles {
+		arguments = append(arguments, "--file", file)
+	}
+	return append(arguments, command...), nil
+}
+
+type SystemComposeExecutor struct {
+	Input      io.Reader
+	Output     io.Writer
+	Diagnostic io.Writer
+}
+
+func (executor SystemComposeExecutor) Run(ctx context.Context, arguments []string) error {
+	command := exec.CommandContext(ctx, "docker", arguments...)
+	command.Stdin, command.Stdout, command.Stderr = executor.Input, executor.Output, executor.Diagnostic
+	command.Env = composeEnvironment()
+	return command.Run()
+}
+
+func composeEnvironment() []string {
+	allow := map[string]bool{"PATH": true, "HOME": true, "DOCKER_CONFIG": true, "DOCKER_HOST": true, "DOCKER_CONTEXT": true, "DOCKER_TLS_VERIFY": true, "DOCKER_CERT_PATH": true, "DOCKER_API_VERSION": true, "SSH_AUTH_SOCK": true, "XDG_RUNTIME_DIR": true}
+	result := []string{}
+	for _, entry := range os.Environ() {
+		name := strings.SplitN(entry, "=", 2)[0]
+		if allow[name] {
+			result = append(result, entry)
+		}
+	}
+	slices.Sort(result)
+	return result
+}

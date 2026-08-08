@@ -4,6 +4,8 @@ SecondBox deploys one unprivileged control plane and separately managed privileg
 
 The standalone binary distribution includes `secondbox-deploy`; the commands below assume it is on `PATH`. The `Justfile` continues to use `go run ./cmd/secondbox-deploy` as a source-checkout developer path.
 
+For one qualified Linux amd64 host, the [guided single-host installer](guided-single-host-install.md) is the shortest release-backed path. It creates a complete loopback development manifest with one same-host Runner from an accepted plan. The manual development, production, and remote-Runner procedures below remain separate; the guided installer does not add defaults to them or change the meaning of `init --mode development`.
+
 ## One-command development control plane
 
 From a clean checkout:

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/SecondStack-AI/SecondBox/internal/cliui"
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 )
 
@@ -243,6 +244,32 @@ func runLoginCommand(
 		TenantRef:  strings.TrimSpace(*tenantRef),
 		SubjectRef: strings.TrimSpace(*subjectRef),
 	}
+	if stored.URL == "" || stored.Token == "" || stored.TenantRef == "" || stored.SubjectRef == "" {
+		view := presentationFromContext(ctx, output)
+		if view.renderer.OutputMode != cliui.OutputJSON && view.renderer.Capabilities.Input.TTY && view.renderer.Capabilities.Output.TTY && view.input != nil {
+			fields := make([]cliui.FieldSpec, 0, 4)
+			if stored.URL == "" {
+				fields = append(fields, cliui.FieldSpec{Kind: cliui.FieldText, Title: "API endpoint", Description: "Absolute URL of the SecondBox control plane", StringValue: &stored.URL, ValidateString: requiredLoginValue("API endpoint")})
+			}
+			if stored.Token == "" {
+				fields = append(fields, cliui.FieldSpec{Kind: cliui.FieldSecret, Title: "Platform token", Description: "Input is masked and is never printed", StringValue: &stored.Token, ValidateString: requiredLoginValue("platform token")})
+			}
+			if stored.TenantRef == "" {
+				fields = append(fields, cliui.FieldSpec{Kind: cliui.FieldText, Title: "Tenant reference", StringValue: &stored.TenantRef, ValidateString: requiredLoginValue("tenant reference")})
+			}
+			if stored.SubjectRef == "" {
+				fields = append(fields, cliui.FieldSpec{Kind: cliui.FieldText, Title: "Subject reference", StringValue: &stored.SubjectRef, ValidateString: requiredLoginValue("subject reference")})
+			}
+			form := cliui.HuhForm{Groups: []cliui.GroupSpec{{Title: "Store credentials in " + session.path, Fields: fields}}}
+			if err := form.Run(ctx, cliui.FormHandles{Input: view.input, Output: output, Width: view.renderer.Capabilities.Output.Width, Accessible: view.accessible, Dark: view.renderer.Capabilities.Output.Background == cliui.BackgroundDark}); err != nil {
+				return err
+			}
+			stored.URL = strings.TrimSpace(stored.URL)
+			stored.Token = strings.TrimSpace(stored.Token)
+			stored.TenantRef = strings.TrimSpace(stored.TenantRef)
+			stored.SubjectRef = strings.TrimSpace(stored.SubjectRef)
+		}
+	}
 	if stored.URL == "" || stored.Token == "" ||
 		stored.TenantRef == "" || stored.SubjectRef == "" {
 		return errors.New(
@@ -264,10 +291,41 @@ func runLoginCommand(
 	if err := writeSessionFile(session.path, stored); err != nil {
 		return err
 	}
+	view := presentationFromContext(ctx, output)
+	if view.renderer.HumanOutput() || view.renderer.OutputMode == cliui.OutputJSON {
+		return nil
+	}
 	_, printErr := fmt.Fprintf(
 		output, "SecondBox verified %s and stored credentials in %s\n", stored.URL, session.path,
 	)
 	return printErr
+}
+
+func runLoginCommandPresented(ctx context.Context, session cliSession, args []string, output io.Writer, httpClient *http.Client) error {
+	if err := runLoginCommand(ctx, session, args, output, httpClient); err != nil {
+		return err
+	}
+	stored, err := readSessionFile(session.path)
+	if err != nil {
+		return err
+	}
+	view := presentationFromContext(ctx, output)
+	if view.renderer.OutputMode == cliui.OutputJSON {
+		return json.NewEncoder(output).Encode(map[string]string{"configuration": session.path, "status": "verified", "url": stored.URL})
+	}
+	if view.renderer.HumanOutput() {
+		return view.renderer.WriteSummary(cliui.Summary{Title: "Login complete", Status: cliui.StatusComplete, Pairs: []cliui.Pair{{Key: "Endpoint", Value: stored.URL}, {Key: "Credentials", Value: session.path}}})
+	}
+	return nil
+}
+
+func requiredLoginValue(name string) func(string) error {
+	return func(value string) error {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("%s is required", name)
+		}
+		return nil
+	}
 }
 
 // verifySessionCredentials proves the authority before it is written to disk.
@@ -308,6 +366,26 @@ func runLogoutCommand(session cliSession, args []string, output io.Writer) error
 	return printErr
 }
 
+func runLogoutCommandPresented(ctx context.Context, session cliSession, args []string, output io.Writer) error {
+	var receipt strings.Builder
+	if err := runLogoutCommand(session, args, &receipt); err != nil {
+		return err
+	}
+	view := presentationFromContext(ctx, output)
+	status := "removed"
+	if strings.Contains(receipt.String(), "no stored credentials") {
+		status = "absent"
+	}
+	if view.renderer.OutputMode == cliui.OutputJSON {
+		return json.NewEncoder(output).Encode(map[string]string{"configuration": session.path, "status": status})
+	}
+	if view.renderer.HumanOutput() {
+		return view.renderer.WriteSummary(cliui.Summary{Title: "Logout complete", Status: cliui.StatusComplete, Pairs: []cliui.Pair{{Key: "Credentials", Value: session.path}, {Key: "Previous state", Value: status}}})
+	}
+	_, err := io.WriteString(output, receipt.String())
+	return err
+}
+
 // runWhoamiCommand reports the resolved authority without disclosing the token.
 func runWhoamiCommand(session cliSession, args []string, output io.Writer) error {
 	if len(args) != 0 {
@@ -329,6 +407,24 @@ func runWhoamiCommand(session cliSession, args []string, output io.Writer) error
 		token, session.origins.token,
 	)
 	return err
+}
+
+func runWhoamiCommandPresented(ctx context.Context, session cliSession, args []string, output io.Writer) error {
+	if len(args) != 0 {
+		return runWhoamiCommand(session, args, output)
+	}
+	view := presentationFromContext(ctx, output)
+	token := "absent"
+	if session.token != "" {
+		token = "present"
+	}
+	if view.renderer.OutputMode == cliui.OutputJSON {
+		return json.NewEncoder(output).Encode(map[string]any{"configuration": session.path, "url": map[string]string{"value": displaySessionValue(session.url), "source": string(session.origins.url)}, "tenantRef": map[string]string{"value": displaySessionValue(session.tenantRef), "source": string(session.origins.tenantRef)}, "subjectRef": map[string]string{"value": displaySessionValue(session.subjectRef), "source": string(session.origins.subjectRef)}, "token": map[string]string{"state": token, "source": string(session.origins.token)}})
+	}
+	if view.renderer.HumanOutput() {
+		return view.renderer.WriteSummary(cliui.Summary{Title: "Current authority", Status: cliui.StatusComplete, Pairs: []cliui.Pair{{Key: "Configuration", Value: session.path}, {Key: "URL", Value: displaySessionValue(session.url) + " (" + string(session.origins.url) + ")"}, {Key: "Tenant", Value: displaySessionValue(session.tenantRef) + " (" + string(session.origins.tenantRef) + ")"}, {Key: "Subject", Value: displaySessionValue(session.subjectRef) + " (" + string(session.origins.subjectRef) + ")"}, {Key: "Token", Value: token + " (" + string(session.origins.token) + ")"}}})
+	}
+	return runWhoamiCommand(session, args, output)
 }
 
 func displaySessionValue(value string) string {

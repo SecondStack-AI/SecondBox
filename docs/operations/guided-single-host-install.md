@@ -1,0 +1,115 @@
+# Guided single-host installation
+
+`secondbox-deploy install` installs one loopback-only development deployment and one same-host Firecracker Runner on Linux amd64. It consumes one verified public release and writes every selected identity, path, capacity, network, retention, trust anchor, and immutable image reference into a durable install plan and `secondbox.toml`. It does not create production authority, a remote Runner topology, an alternate compute backend, or automatic updates.
+
+## Before starting
+
+The host must use systemd and cgroup v2, have Docker Engine and Compose v2, expose accessible `/dev/kvm` and `/dev/net/tun`, and support hardware virtualization. Btrfs kernel support is required only for the portable filesystem-image choice. The host needs at least 6 logical CPUs and 12 GiB of memory so the control services can retain 2 CPUs and 4 GiB while the release-owned `durable-coding` Profile receives 4 CPUs and 8 GiB. Internet access to GitHub Releases and GHCR is required while installing.
+
+The workspace proposal requires at least 50 GiB for that Profile. The deployment filesystem, normally the invoking user's home filesystem, must separately have at least 11 GiB free for verified release materialization. `/var/lib` must retain at least 16 GiB for control-service data and host backing reserve. The portable Btrfs-image choice starts at a fully allocated 65 GiB image and is offered only when the computed image size is at least that large and `/var/lib` still retains the 16 GiB reserve (at least 81 GiB free in the minimum case).
+
+Run the read-only check first:
+
+```sh
+secondbox-deploy install --check
+```
+
+The check performs no sudo, download, image pull, directory creation, mount, or service change. It reports all findings in one pass:
+
+- `pass` means the capability is already present;
+- `warning` identifies a supported but noteworthy condition;
+- `remediable` means the accepted install can perform the bounded change;
+- `needs user action` requires the operator to correct the host and rerun;
+- `blocked` means this host is outside the qualified matrix.
+
+The command exits nonzero when action or an incompatibility remains. Host facts include only the relevant device, filesystem, route, port, capacity, UID, software-version, and connectivity evidence; they exclude credentials and unrelated inventory.
+
+## Run and review the wizard
+
+The stable bootstrap coordinate is:
+
+```sh
+curl -fsSL https://github.com/SecondStack-AI/SecondBox/releases/latest/download/install.sh | sh
+```
+
+For an inspect-first flow:
+
+```sh
+install_dir=$(mktemp -d)
+cd "$install_dir"
+curl -fLO https://github.com/SecondStack-AI/SecondBox/releases/latest/download/install.sh
+curl -fLO https://github.com/SecondStack-AI/SecondBox/releases/latest/download/SHA256SUMS
+grep '  install.sh$' SHA256SUMS | sha256sum -c -
+sed -n '1,240p' install.sh
+sh install.sh
+```
+
+The normal wizard asks for a workspace choice, reviews its conservative resource budget, and asks for final confirmation. `secondbox-deploy install --advanced` additionally exposes the proposed addresses, ports, guest CIDR, DNS upstream, jailer UID range, paths, capacity, and CLI subject identity.
+
+Workspace choices are:
+
+- An existing dedicated, non-root XFS or Btrfs mount. The installer creates only the declared Workspace directory and proves FICLONE mutation isolation on the actual filesystem.
+- A fully allocated Btrfs filesystem image. This is portable and size-bounded, but its availability still depends on the backing filesystem and its systemd loop mount. Back up the image as a durable filesystem, not as a replaceable cache.
+
+The final review lists the release version and manifest, four digest-pinned OCI images, signing-key fingerprint, expected downloads, disk allocation, all generated authority categories, exact paths, services, retention, capacity, network settings, and uninstall behavior. Confirmation creates a mode-`0600` plan and receipt before any secret or host resource exists.
+
+## Privileged actions
+
+After confirmation, the installer displays the precise privileged list and invokes sudo once for its private host-preparation entry point. Root independently verifies the accepted plan, invoking user, machine identity, KVM, TUN, cgroups, UID range, filesystem, free space, and create-only paths. Depending on the workspace choice, it may:
+
+- create the declared root-owned Runner state, jail, runtime, network, log, and snapshot-template-cache directories;
+- fully allocate and format the declared regular Btrfs image with the release-pinned installer-tools image;
+- install, verify, enable, and start the exact systemd mount unit;
+- create the final Workspace directory and prove reflink mutation isolation.
+
+It never formats a physical block device, installs distribution packages, edits shell profiles, creates jailer accounts, or gives the control plane host privileges. The separately deployed Runner container remains the only privileged compute component and executes `secondbox-runner` directly as PID 1.
+
+## Files, services, and first Sandbox
+
+The plan records the exact operation directory, manifest, secrets, Runner identity, verified artifact directory, Runner state paths, Workspace, optional filesystem image and mount unit, CLI configuration, and installed binary paths. The installer creates unique application, platform, Runner-enrollment, and Runner-PKI authority in protected referenced files. No secret value enters the plan, receipt, command arguments, or installer output.
+
+It then pulls exactly the control-plane, Runner, microVM-artifact, and installer-tools images by digest; verifies every release object and the fixed microVM bundle allowlist; publishes the artifact directory atomically; generates the explicit manifest; enrolls the Runner; starts Compose; logs in the local CLI; waits for advertised cold-boot capacity; and runs:
+
+```sh
+secondbox run durable-coding -- python3 -c 'print("hello from a microVM")'
+```
+
+There is no automatic updater. Install a later release only through a separately reviewed future operation; do not replace files or image references behind an existing receipt.
+
+## Resume and diagnose
+
+Every durable stage is recorded. If the process or host stops, use the operation path printed by the installer:
+
+```sh
+secondbox-deploy install --resume /absolute/path/to/operation
+```
+
+Resume locks the operation, revalidates the plan and host identity, and checks recorded files, modes, digests, image identities, artifact hashes, manifest, Runner identity, Compose project, CLI configuration, and health before skipping work. It refuses a changed or foreign resource instead of recreating an empty Workspace. Verified artifacts and binaries are not re-extracted merely because a later stage failed.
+
+Failures are reported as blocked, needs-action, retryable, or internal with the failed stage and a recovery direction. Preserve the operation directory: its plan and receipt are the audit and recovery boundary. The ordinary bounded support bundle is documented in [observability and diagnostics](observability-and-diagnostics.md); installer failures should additionally retain the redacted preflight report, plan digest, non-secret manifest inspection, Compose/systemd status, bounded Runner logs, filesystem facts, and unauthenticated health response.
+
+Create that installer-specific bounded archive with:
+
+```sh
+secondbox-deploy install --support /absolute/path/to/operation \
+  --output /secure/path/secondbox-installer-support.tar.gz
+```
+
+The archive is create-only and mode `0600`. It contains no plan document, process environment, token, private key, Workspace content, database row, or object-store object. Collection rejects output containing any exact installed secret value or a secret-bearing marker. Review bounded Runner log text before sharing it.
+
+## Uninstall and purge
+
+Ordinary uninstall stops the Compose project and deliberately preserves the manifest, secrets, Runner identity, database and object-store volumes, verified artifacts, binaries, CLI configuration, Workspace, optional Btrfs image and mount unit, and receipt:
+
+```sh
+secondbox-deploy uninstall /absolute/path/to/operation
+secondbox-deploy install --resume /absolute/path/to/operation
+```
+
+Permanent deletion is a separate workflow. Run ordinary uninstall first, inspect the listed targets, then request purge:
+
+```sh
+secondbox-deploy uninstall --purge /absolute/path/to/operation
+```
+
+Purge requires an interactive typed `PURGE <operation-id>` confirmation. It first removes the exact Compose project's bundled PostgreSQL and object-store volumes, then deletes only exact plan-and-receipt-matched installation resources through symlink- and mount-confined operations. It refuses broad paths, globs, physical or foreign mounts, altered ownership evidence, and changed targets. The plan and receipt remain as a bounded tombstone.

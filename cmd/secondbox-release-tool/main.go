@@ -15,10 +15,15 @@ import (
 )
 
 type candidateInput struct {
+	Candidate                    bool                            `json:"candidate"`
 	Version                      string                          `json:"version"`
 	SourceCommit                 string                          `json:"sourceCommit"`
 	ControlPlaneDigest           string                          `json:"controlPlaneDigest"`
 	RunnerDigest                 string                          `json:"runnerDigest"`
+	InstallerToolsDigest         string                          `json:"installerToolsDigest"`
+	PostgresImage                string                          `json:"postgresImage"`
+	ObjectStoreImage             string                          `json:"objectStoreImage"`
+	ObjectStoreClientImage       string                          `json:"objectStoreClientImage"`
 	MicroVMImageDigest           string                          `json:"microvmImageDigest"`
 	MicroVMManifestDigest        string                          `json:"microvmManifestDigest"`
 	MicroVMSigningKeyFingerprint string                          `json:"microvmSigningKeyFingerprint"`
@@ -43,7 +48,27 @@ func run(args []string) error {
 	if len(args) == 2 && args[0] == "verify" {
 		return verifyCandidate(args[1])
 	}
-	return errors.New("usage: secondbox-release-tool {standard-documents SIGNED_MANIFEST_DIGEST RUNTIME_BUNDLE_DIGEST TOOLCHAIN_BUNDLE_DIGEST OUTPUT_DIR|manifest INPUT_JSON OUTPUT_DIR|verify STAGING_DIR}")
+	if len(args) == 2 && args[0] == "installer-qualification-subject" {
+		return writeInstallerQualificationSubject(args[1])
+	}
+	return errors.New("usage: secondbox-release-tool {standard-documents SIGNED_MANIFEST_DIGEST RUNTIME_BUNDLE_DIGEST TOOLCHAIN_BUNDLE_DIGEST OUTPUT_DIR|manifest INPUT_JSON OUTPUT_DIR|installer-qualification-subject ARTIFACT_MANIFEST|verify STAGING_DIR}")
+}
+
+func writeInstallerQualificationSubject(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	manifest, err := releasecontract.DecodeArtifactManifest(data)
+	if err != nil {
+		return err
+	}
+	digest, err := manifest.InstallerQualificationSubjectDigest()
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(os.Stdout, digest)
+	return err
 }
 
 func writeStandardDocuments(signedManifestDigest, runtimeBundleDigest, toolchainBundleDigest, outputDirectory string) error {
@@ -123,6 +148,20 @@ func writeManifest(inputPath, outputDirectory string) error {
 	if err != nil {
 		return err
 	}
+	var installerQualificationEvidence releasecontract.Reference
+	if !input.Candidate {
+		if err := verifyInstallerQualificationEvidenceSource(outputDirectory, input.Version, input.SourceCommit); err != nil {
+			return err
+		}
+		installerQualificationEvidence, err = ref(fmt.Sprintf("secondbox-%s-installer-qualification-evidence.json", input.Version))
+		if err != nil {
+			return err
+		}
+	}
+	installBootstrap, err := ref("install.sh")
+	if err != nil {
+		return err
+	}
 	bundles := make([]releasecontract.StandardBundleArtifact, 0, 2)
 	for _, name := range []string{standardresources.AgentCompartment, standardresources.DurableCoding} {
 		filename := name + ".standard-bundle.json"
@@ -144,7 +183,7 @@ func writeManifest(inputPath, outputDirectory string) error {
 		}
 		bundles = append(bundles, releasecontract.StandardBundleArtifact{Identity: identity, Name: name, Document: bundleRef, Profiles: profiles})
 	}
-	manifest := releasecontract.ArtifactManifest{SchemaVersion: releasecontract.ArtifactManifestSchema, Identity: identity, OpenAPI: releasecontract.OpenAPIArtifact{Identity: identity, Reference: openapi}, RunnerProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, GuestProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, Platforms: releasecontract.PlatformMatrix{HostBinaries: []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"}, ControlPlane: []string{"linux/amd64", "linux/arm64"}, Runner: []string{"linux/amd64"}, Guest: []string{"linux/amd64"}, QualifiedRunnerGuest: []string{"linux/amd64"}}, GoSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.GoModule + "@" + tag, Package: goPackage}, TypeScriptSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.TypeScriptPackage + "@" + input.Version, Package: tsPackage}, ControlPlane: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.ControlPlaneImage + "@" + input.ControlPlaneDigest}, Runner: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.RunnerImage + "@" + input.RunnerDigest}, MicroVM: releasecontract.MicroVMArtifact{Identity: identity, ImageReference: releasecontract.MicroVMImage + "@" + input.MicroVMImageDigest, SignedManifestDigest: input.MicroVMManifestDigest, SigningKeyFingerprint: "SHA256:" + strings.ToUpper(input.MicroVMSigningKeyFingerprint), RuntimeBundle: input.MicroVMRuntimeBundle, ToolchainBundle: input.MicroVMToolchainBundle}, Binaries: binaries, SBOMs: []releasecontract.Reference{sbom}, QualificationEvidence: qualificationEvidence, StandardBundles: bundles}
+	manifest := releasecontract.ArtifactManifest{SchemaVersion: releasecontract.ArtifactManifestSchema, Candidate: input.Candidate, Identity: identity, OpenAPI: releasecontract.OpenAPIArtifact{Identity: identity, Reference: openapi}, RunnerProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, GuestProtocol: releasecontract.ProtocolWindow{Minimum: 1, Maximum: 1}, Platforms: releasecontract.PlatformMatrix{HostBinaries: []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"}, ControlPlane: []string{"linux/amd64", "linux/arm64"}, Runner: []string{"linux/amd64"}, InstallerTools: []string{"linux/amd64"}, Guest: []string{"linux/amd64"}, QualifiedRunnerGuest: []string{"linux/amd64"}}, GoSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.GoModule + "@" + tag, Package: goPackage}, TypeScriptSDK: releasecontract.SDKArtifact{Identity: identity, Coordinate: releasecontract.TypeScriptPackage + "@" + input.Version, Package: tsPackage}, ControlPlane: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.ControlPlaneImage + "@" + input.ControlPlaneDigest}, Runner: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.RunnerImage + "@" + input.RunnerDigest}, InstallerTools: releasecontract.OCIArtifact{Identity: identity, Reference: releasecontract.InstallerToolsImage + "@" + input.InstallerToolsDigest}, BundledServices: releasecontract.BundledServiceImages{Postgres: input.PostgresImage, ObjectStore: input.ObjectStoreImage, ObjectStoreClient: input.ObjectStoreClientImage}, InstallBootstrap: installBootstrap, MicroVM: releasecontract.MicroVMArtifact{Identity: identity, ImageReference: releasecontract.MicroVMImage + "@" + input.MicroVMImageDigest, SignedManifestDigest: input.MicroVMManifestDigest, SigningKeyFingerprint: "SHA256:" + strings.ToUpper(input.MicroVMSigningKeyFingerprint), RuntimeBundle: input.MicroVMRuntimeBundle, ToolchainBundle: input.MicroVMToolchainBundle}, Binaries: binaries, SBOMs: []releasecontract.Reference{sbom}, QualificationEvidence: qualificationEvidence, InstallerQualificationEvidence: installerQualificationEvidence, StandardBundles: bundles}
 	if err := manifest.Validate(); err != nil {
 		return err
 	}
@@ -215,10 +254,13 @@ func verifyCandidate(directory string) error {
 	if err := verifyCandidateMetadata(directory, manifest); err != nil {
 		return err
 	}
-	refs := []releasecontract.Reference{manifest.OpenAPI.Reference, manifest.GoSDK.Package, manifest.TypeScriptSDK.Package}
+	refs := []releasecontract.Reference{manifest.OpenAPI.Reference, manifest.GoSDK.Package, manifest.TypeScriptSDK.Package, manifest.InstallBootstrap}
 	refs = append(refs, manifest.SBOMs...)
 	refs = append(refs, manifest.ArtifactAttestations...)
 	refs = append(refs, manifest.QualificationEvidence)
+	if !manifest.Candidate {
+		refs = append(refs, manifest.InstallerQualificationEvidence)
+	}
 	for _, bundle := range manifest.StandardBundles {
 		refs = append(refs, bundle.Document)
 	}
@@ -307,9 +349,15 @@ func verifyCandidateMetadata(directory string, manifest releasecontract.Artifact
 	if err := verifyQualificationEvidence(directory, manifest.Version, manifest.SourceCommit); err != nil {
 		return err
 	}
+	if !manifest.Candidate {
+		if err := verifyInstallerQualificationEvidence(directory, manifest); err != nil {
+			return err
+		}
+	}
 	for filename, artifact := range map[string]releasecontract.OCIArtifact{
-		"control-plane.oci.json": manifest.ControlPlane,
-		"runner.oci.json":        manifest.Runner,
+		"control-plane.oci.json":   manifest.ControlPlane,
+		"runner.oci.json":          manifest.Runner,
+		"installer-tools.oci.json": manifest.InstallerTools,
 	} {
 		if err := verifySyntheticOCIMetadata(directory, filename, manifest.Identity, artifact.Reference); err != nil {
 			return err
@@ -329,6 +377,36 @@ func verifyQualificationEvidence(directory, version, sourceCommit string) error 
 		return err
 	}
 	return evidence.ValidateForRelease(sourceCommit)
+}
+
+func verifyInstallerQualificationEvidenceSource(directory, version, sourceCommit string) error {
+	filename := fmt.Sprintf("secondbox-%s-installer-qualification-evidence.json", version)
+	data, err := os.ReadFile(filepath.Join(directory, filename))
+	if err != nil {
+		return fmt.Errorf("release installer qualification evidence: %w", err)
+	}
+	evidence, err := releasecontract.DecodeInstallerQualificationEvidence(data)
+	if err != nil {
+		return err
+	}
+	return evidence.ValidateForRelease(sourceCommit, evidence.ReleaseManifestDigest)
+}
+
+func verifyInstallerQualificationEvidence(directory string, manifest releasecontract.ArtifactManifest) error {
+	filename := fmt.Sprintf("secondbox-%s-installer-qualification-evidence.json", manifest.Version)
+	data, err := os.ReadFile(filepath.Join(directory, filename))
+	if err != nil {
+		return fmt.Errorf("release installer qualification evidence: %w", err)
+	}
+	evidence, err := releasecontract.DecodeInstallerQualificationEvidence(data)
+	if err != nil {
+		return err
+	}
+	subject, err := manifest.InstallerQualificationSubjectDigest()
+	if err != nil {
+		return err
+	}
+	return evidence.ValidateForRelease(manifest.SourceCommit, subject)
 }
 
 func verifySyntheticOCIMetadata(directory, filename string, identity releasecontract.Identity, reference string) error {

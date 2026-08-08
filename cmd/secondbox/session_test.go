@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/SecondStack-AI/SecondBox/internal/cliui"
+	"github.com/creack/pty"
 )
 
 // newSessionEnvironment isolates one test from the developer's own credentials.
@@ -239,6 +243,29 @@ func TestLoginVerifiesAndStoresCredentials(t *testing.T) {
 	}
 }
 
+func TestPresentedLoginReportsStoredEqualsFormURL(t *testing.T) {
+	path := newSessionEnvironment(t)
+	server := newVerifyingSessionServer(t, "good-token")
+	session, err := resolveSession(cliSession{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	capabilities := cliui.ForWriter(&output, io.Discard)
+	ctx := withPresentation(context.Background(), presentation{renderer: cliui.Renderer{Output: &output, Diagnostic: io.Discard, Capabilities: capabilities, OutputMode: cliui.OutputJSON, ColorMode: cliui.ColorNever}})
+	args := []string{"--url=" + server.URL, "--token=good-token", "--tenant-ref=tenant-1", "--subject-ref=subject-1"}
+	if err := runLoginCommandPresented(ctx, session, args, &output, server.Client()); err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]string
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result["url"] != server.URL || result["configuration"] != path {
+		t.Fatalf("presented login = %#v", result)
+	}
+}
+
 func TestLoginRejectedCredentialsAreNotStored(t *testing.T) {
 	path := newSessionEnvironment(t)
 	server := newVerifyingSessionServer(t, "good-token")
@@ -331,6 +358,54 @@ func TestLoginRequiresEveryCredential(t *testing.T) {
 	}, &output, http.DefaultClient)
 	if err == nil || !strings.Contains(err.Error(), "login requires") {
 		t.Fatalf("login error = %v; want a missing-credential rejection", err)
+	}
+}
+
+func TestLoginAccessibleFormPromptsOnlyForMissingValues(t *testing.T) {
+	path := newSessionEnvironment(t)
+	server := newVerifyingSessionServer(t, "good-token")
+	session, err := resolveSession(cliSession{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	capabilities := cliui.ForWriter(&output, io.Discard)
+	capabilities.Input.TTY = true
+	capabilities.Output.TTY = true
+	capabilities.Output.Width = 80
+	master, input, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+	defer input.Close()
+	writeDone := make(chan error, 1)
+	go func() { _, err := io.WriteString(master, "good-token\ntenant-form\nsubject-form\n"); writeDone <- err }()
+	ctx := withPresentation(context.Background(), presentation{renderer: cliui.Renderer{Output: &output, Diagnostic: io.Discard, Capabilities: capabilities, OutputMode: cliui.OutputAuto, ColorMode: cliui.ColorNever}, accessible: true, input: input})
+	if err := runLoginCommand(ctx, session, []string{"--url", server.URL}, &output, server.Client()); err != nil {
+		t.Fatalf("%v; transcript %q", err, output.String())
+	}
+	if err := <-writeDone; err != nil {
+		t.Fatal(err)
+	}
+	stored, err := readSessionFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Token != "good-token" || stored.TenantRef != "tenant-form" || stored.SubjectRef != "subject-form" {
+		t.Fatalf("stored form values = %#v", stored)
+	}
+	transcript := output.String()
+	if strings.Contains(transcript, "API endpoint") {
+		t.Fatalf("form prompted for supplied URL: %q", transcript)
+	}
+	for _, prompt := range []string{"Platform token", "Tenant reference", "Subject reference", path} {
+		if !strings.Contains(transcript, prompt) {
+			t.Fatalf("form transcript lacks %q: %q", prompt, transcript)
+		}
+	}
+	if strings.Contains(transcript, "good-token") {
+		t.Fatalf("secret appeared in transcript: %q", transcript)
 	}
 }
 

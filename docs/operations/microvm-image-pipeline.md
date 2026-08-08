@@ -52,6 +52,8 @@ There is no automatic selection or fallback between modes. Both paths verify the
 
 Docker access belongs to the host init process. The runner never receives artifact-distribution credentials.
 
+The [guided single-host installer](guided-single-host-install.md) implements the same `ghcr-image` trust boundary for a published release: it pulls only the digest-pinned microVM-artifact reference, extracts into a create-only temporary directory, enforces the fixed allowlist and signed component identities, compares `signing.pub` with the separately release-bound canonical fingerprint, and publishes the directory atomically. A recorded verified directory is rechecked and reused on resume rather than re-extracting the approximately 11 GB image.
+
 The build pipeline:
 
 - validates the supplied or built kernel config for virtio block/net/vsock, ext4, FUSE,

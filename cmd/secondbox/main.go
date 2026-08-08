@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/SecondStack-AI/SecondBox/internal/cliui"
 	"github.com/SecondStack-AI/SecondBox/pkg/buildinfo"
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 )
@@ -90,8 +92,39 @@ func main() {
 	if errors.As(err, &exited) {
 		os.Exit(exited.code)
 	}
-	_, _ = fmt.Fprintln(os.Stderr, err)
+	if isOnlyContextCancellation(err) {
+		os.Exit(130)
+	}
+	var presented *commandPresentationError
+	if errors.As(err, &presented) && presented.renderer.Capabilities.Diagnostic.TTY && !presented.renderer.Capabilities.Dumb {
+		_ = presented.renderer.WriteError(err, "Run the command with --output plain for a stable diagnostic transcript.")
+	} else {
+		_, _ = fmt.Fprintln(os.Stderr, err)
+	}
 	os.Exit(1)
+}
+
+func isOnlyContextCancellation(err error) bool {
+	if !errors.Is(err, context.Canceled) {
+		return false
+	}
+	switch value := err.(type) {
+	case interface{ Unwrap() []error }:
+		children := value.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !isOnlyContextCancellation(child) {
+				return false
+			}
+		}
+		return true
+	case interface{ Unwrap() error }:
+		return isOnlyContextCancellation(value.Unwrap())
+	default:
+		return err == context.Canceled
+	}
 }
 
 // interruptibleContext cancels on the signals a terminal actually sends, so the
@@ -114,16 +147,49 @@ func interruptibleContext() context.Context {
 	return ctx
 }
 
-func run(ctx context.Context, args []string, output io.Writer) error {
+type commandPresentationError struct {
+	cause    error
+	renderer cliui.Renderer
+}
+
+func (failure *commandPresentationError) Error() string { return failure.cause.Error() }
+func (failure *commandPresentationError) Unwrap() error { return failure.cause }
+
+func run(ctx context.Context, args []string, output io.Writer) (resultErr error) {
 	global := flag.NewFlagSet("secondbox", flag.ContinueOnError)
 	global.SetOutput(io.Discard)
 	rawURL := global.String("url", "", "absolute SecondBox API endpoint")
 	token := global.String("token", "", "SecondBox platform token")
 	tenantRef := global.String("tenant-ref", "", "trusted caller tenant reference")
 	subjectRef := global.String("subject-ref", "", "trusted caller subject reference")
+	outputModeValue := global.String("output", "auto", "output mode: auto, json, or plain")
+	colorModeValue := global.String("color", "auto", "color mode: auto, always, or never")
+	accessible := global.Bool("accessible", false, "use accessible prompts and output")
 	if err := global.Parse(args); err != nil {
 		return fmt.Errorf("SecondBox CLI parse global options: %w", err)
 	}
+	outputMode, err := cliui.ParseOutputMode(*outputModeValue)
+	if err != nil {
+		return err
+	}
+	colorMode, err := cliui.ParseColorMode(*colorModeValue)
+	if err != nil {
+		return err
+	}
+	capabilities := cliui.ForWriter(output, os.Stderr)
+	if outputFile, ok := output.(*os.File); ok {
+		capabilities = cliui.Probe(cliui.ProbeOptions{Input: os.Stdin, Output: outputFile, Diagnostic: os.Stderr, Environment: os.Environ()})
+	}
+	if *accessible {
+		capabilities.Accessible = true
+	}
+	renderer := cliui.Renderer{Output: output, Diagnostic: os.Stderr, Capabilities: capabilities, OutputMode: outputMode, ColorMode: colorMode}
+	defer func() {
+		if resultErr != nil {
+			resultErr = &commandPresentationError{cause: resultErr, renderer: renderer}
+		}
+	}()
+	ctx = withPresentation(ctx, presentation{renderer: renderer, accessible: capabilities.Accessible, input: os.Stdin})
 	session, err := resolveSession(cliSession{
 		url: *rawURL, token: *token, tenantRef: *tenantRef, subjectRef: *subjectRef,
 	})
@@ -143,7 +209,9 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	if session.tenantRef == "" || session.subjectRef == "" {
 		return errors.New("SecondBox CLI requires --tenant-ref and --subject-ref" + sessionSourceHint)
 	}
-	operationID, operationArgs, err := resolveCommand(global.Args())
+	commandArguments := global.Args()
+	genericRawOperation := len(commandArguments) > 0 && commandArguments[0] == "operation"
+	operationID, operationArgs, err := resolveCommand(commandArguments)
 	if err != nil {
 		return err
 	}
@@ -164,6 +232,15 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	response, err := client.Request(ctx, operationID, options)
 	if err != nil {
 		return err
+	}
+	view := presentationFromContext(ctx, output)
+	if !genericRawOperation && boundedOperations[operationID] && view.renderer.HumanOutput() {
+		content, readErr := io.ReadAll(response.Body)
+		closeErr := response.Body.Close()
+		if err := errors.Join(readErr, closeErr); err != nil {
+			return fmt.Errorf("SecondBox CLI read %s response: %w", operationID, err)
+		}
+		return renderBoundedOperation(operationID, content, view.renderer)
 	}
 	_, copyErr := io.Copy(output, response.Body)
 	closeErr := response.Body.Close()
@@ -190,13 +267,21 @@ func runOperationalCommand(
 		if len(args) != 1 {
 			return true, errors.New("SecondBox version accepts no arguments")
 		}
-		return true, buildinfo.Write(output)
+		view := presentationFromContext(ctx, output)
+		if view.renderer.HumanOutput() {
+			return true, view.renderer.WriteSummary(cliui.Summary{Title: "SecondBox CLI", Status: cliui.StatusComplete, Pairs: []cliui.Pair{{Key: "Version", Value: buildinfo.Version}, {Key: "Source commit", Value: buildinfo.SourceCommit}}})
+		}
+		var encoded bytes.Buffer
+		if err := buildinfo.Write(&encoded); err != nil {
+			return true, err
+		}
+		return true, cliui.WriteJSONPassthrough(output, encoded.Bytes())
 	case "login":
-		return true, runLoginCommand(ctx, session, args[1:], output, http.DefaultClient)
+		return true, runLoginCommandPresented(ctx, session, args[1:], output, http.DefaultClient)
 	case "logout":
-		return true, runLogoutCommand(session, args[1:], output)
+		return true, runLogoutCommandPresented(ctx, session, args[1:], output)
 	case "whoami":
-		return true, runWhoamiCommand(session, args[1:], output)
+		return true, runWhoamiCommandPresented(ctx, session, args[1:], output)
 	}
 	if args[0] == "exec" && !isExecSubcommand(args) {
 		return true, runExecCommand(ctx, session, args[1:], execCommandEnvironment{

@@ -72,13 +72,17 @@ func ArtifactManifest(ctx context.Context, location string, fetch FetchFunc) (Ve
 }
 
 func verifyManifestObjects(ctx context.Context, manifest releasecontract.ArtifactManifest, fetch FetchFunc) error {
-	references := []releasecontract.Reference{manifest.OpenAPI.Reference, manifest.GoSDK.Package, manifest.TypeScriptSDK.Package}
+	verifiedObjects := map[string][]byte{}
+	references := []releasecontract.Reference{manifest.OpenAPI.Reference, manifest.GoSDK.Package, manifest.TypeScriptSDK.Package, manifest.InstallBootstrap}
 	if manifest.SourceFreeSuite != (releasecontract.Reference{}) {
 		references = append(references, manifest.SourceFreeSuite)
 	}
 	references = append(references, manifest.SBOMs...)
 	references = append(references, manifest.ArtifactAttestations...)
 	references = append(references, manifest.QualificationEvidence)
+	if !manifest.Candidate {
+		references = append(references, manifest.InstallerQualificationEvidence)
+	}
 	for _, bundle := range manifest.StandardBundles {
 		references = append(references, bundle.Document)
 	}
@@ -90,17 +94,29 @@ func verifyManifestObjects(ctx context.Context, manifest releasecontract.Artifac
 		if releasecontract.Digest(data) != reference.Digest {
 			return fmt.Errorf("SecondBox release verification: digest mismatch at %s", reference.Location)
 		}
+		verifiedObjects[reference.Location] = data
 	}
-	evidenceData, err := fetch(ctx, manifest.QualificationEvidence.Location)
-	if err != nil {
-		return err
-	}
+	evidenceData := verifiedObjects[manifest.QualificationEvidence.Location]
 	evidence, err := releasecontract.DecodeQualificationEvidence(evidenceData)
 	if err != nil {
 		return err
 	}
 	if err := evidence.ValidateForRelease(manifest.SourceCommit); err != nil {
 		return err
+	}
+	if !manifest.Candidate {
+		installerEvidenceData := verifiedObjects[manifest.InstallerQualificationEvidence.Location]
+		installerEvidence, err := releasecontract.DecodeInstallerQualificationEvidence(installerEvidenceData)
+		if err != nil {
+			return err
+		}
+		qualificationSubject, err := manifest.InstallerQualificationSubjectDigest()
+		if err != nil {
+			return err
+		}
+		if err := installerEvidence.ValidateForRelease(manifest.SourceCommit, qualificationSubject); err != nil {
+			return err
+		}
 	}
 	for _, binary := range manifest.Binaries {
 		data, err := fetch(ctx, binary.Location)

@@ -26,83 +26,47 @@ A **Sandbox** is the durable public resource; the **Instance** running it is rep
 
 ## Getting started
 
-### Install a release
+### Guided single-host install
 
-The [latest GitHub release](https://github.com/SecondStack-AI/SecondBox/releases/latest) provides `secondbox` and `secondbox-deploy` for Linux and macOS on amd64 and arm64. For example, on Linux amd64:
+The guided installer turns one qualified Linux amd64 systemd host into a loopback-only development deployment with PostgreSQL, object storage, the control plane, and one same-host Firecracker Runner. It verifies a published release, records every accepted path and authority decision, and finishes by running a hello-world command inside a microVM.
 
-```sh
-mkdir -p ~/.local/bin
-curl -fLO https://github.com/SecondStack-AI/SecondBox/releases/download/v0.1.4/secondbox_0.1.4_linux_amd64
-curl -fLO https://github.com/SecondStack-AI/SecondBox/releases/download/v0.1.4/secondbox-deploy_0.1.4_linux_amd64
-install -m 0755 secondbox_0.1.4_linux_amd64 ~/.local/bin/secondbox
-install -m 0755 secondbox-deploy_0.1.4_linux_amd64 ~/.local/bin/secondbox-deploy
-```
-
-Install an SDK at the same version:
+The host needs Docker Engine with Compose v2, cgroup v2, accessible KVM and TUN devices, hardware virtualization, at least 6 logical CPUs and 12 GiB of memory, and capacity for a 50 GiB `durable-coding` workspace. Keep at least 27 GiB free on `/var/lib` for the approximately 11 GiB release bundle and a 16 GiB reserve. The workspace must be on a dedicated reflink-capable XFS/Btrfs filesystem, or the installer can create a fully allocated Btrfs filesystem image of at least 65 GiB. Check the host without changing it:
 
 ```sh
-npm install @secondstack-ai/secondbox@0.1.4
-go get github.com/SecondStack-AI/SecondBox@v0.1.4
+secondbox-deploy install --check
 ```
 
-See the [v0.1.4 release notes](docs/releases/v0.1.4.md) for highlights, all published artifacts, and the supported platform matrix.
+To fetch the small published bootstrap and run the wizard:
 
-### Prerequisites
+```sh
+curl -fsSL https://github.com/SecondStack-AI/SecondBox/releases/latest/download/install.sh | sh
+```
 
-Executing a Sandbox requires:
+The bootstrap downloads only the release-pinned Linux amd64 `secondbox-deploy` binary to a temporary directory, verifies its embedded SHA-256 digest, and starts `secondbox-deploy install`. It does not invoke sudo or modify the host itself. The installer shows its exact privileged action list before asking sudo to run its narrow host-preparation entry point.
 
-- a Linux Runner host with KVM and TUN;
-- cgroup v2;
-- a workspace root on an XFS or Btrfs filesystem with reflink support; ext4 and ZFS do not work;
-- a signed microVM bundle built, verified, and materialized as described by the [microVM image pipeline](docs/operations/microvm-image-pipeline.md);
-- an enrolled Runner and a Profile that pins that bundle's runtime and toolchain digests.
+If you do not pipe scripts into a shell, download and inspect the same assets first:
 
-These requirements are inherent to running hardware-isolated Firecracker microVMs. The development topology starts the control plane, PostgreSQL, and object storage. It does not start a Runner, so `secondbox run` will not succeed until a Runner is enrolled in a ready RunnerPool.
+```sh
+install_dir=$(mktemp -d)
+cd "$install_dir"
+curl -fLO https://github.com/SecondStack-AI/SecondBox/releases/latest/download/install.sh
+curl -fLO https://github.com/SecondStack-AI/SecondBox/releases/latest/download/SHA256SUMS
+grep '  install.sh$' SHA256SUMS | sha256sum -c -
+less install.sh
+sh install.sh
+```
 
-### Shortest same-host path
+See [guided single-host installation](docs/operations/guided-single-host-install.md) for every prerequisite, wizard choice, created resource, recovery command, and durability boundary.
 
-On a qualified host, the shortest existing deployment path uses [`deploy/compose.same-host-runner.yml`](deploy/compose.same-host-runner.yml). `secondbox-deploy` selects that overlay when the manifest contains one Runner with `placement = "same-host"` and preflights its host directories, dedicated workspace filesystem, and enrolled identity before Compose starts it.
+### Other deployment paths
 
-1. Obtain and independently verify the signed microVM bundle. Materialize its files and trusted public key in the Runner artifact host directory, construct the verified signed-asset catalog, and record the runtime and toolchain component digests.
-2. Initialize the development deployment:
+The guided path is deliberately Linux amd64, same-host, loopback-only, and development-mode. It does not replace these separate workflows:
 
-   ```sh
-   just deploy-init-development .tmp/secondbox-development
-   ```
-
-   Replace the development bootstrap catalog and artifact manifest in `secondbox.toml` with verified release artifacts. Review the explicit `[standard_resources]` bundle and typed RunnerPool selections. Keep `runners = []` for the first start.
-3. Start the control plane, PostgreSQL, and object storage:
-
-   ```sh
-   just deploy-development-up .tmp/secondbox-development
-   ```
-
-4. Install the CLI and log in with the generated platform authority. `secondbox-deploy ... up` creates the selected RunnerPool and standard Profile lineages idempotently. Its name must match the Runner's `pool_id`; its architecture and capabilities must admit the selected amd64 bundles.
-5. Run `secondbox-deploy runner-template` and replace `runners = []` in `secondbox.toml` with the completed `[[runners]]` block. Use `placement = "same-host"`; create the declared artifact, state, and workspace host directories, but leave the identity target absent. The workspace host directory must be on the dedicated XFS or Btrfs filesystem. See the [Runner declaration walkthrough](docs/operations/deployment.md#runner-declaration-scaffold) for every field and cross-resource relationship.
-6. Build the declared Runner image and issue the declared Runner identity:
-
-   ```sh
-   docker build --file runner/Dockerfile --tag secondbox-runner:development .
-   secondbox-deploy runner-init \
-     .tmp/secondbox-development/secondbox.toml \
-     <runner-id> \
-     <identity-host-directory>
-   ```
-
-7. Validate and apply the expanded topology. This selects the privileged same-host overlay and starts the Runner only after the host preflight passes:
-
-   ```sh
-   secondbox-deploy validate .tmp/secondbox-development/secondbox.toml
-   just deploy-up .tmp/secondbox-development/secondbox.toml
-   ```
-
-8. Confirm the Runner is ready with `secondbox runners get --path runnerId=<runner-id>`, then run the pinned standard Profile:
-
-   ```sh
-   secondbox run durable-coding -- python3 -c 'print("hello from a microVM")'
-   ```
-
-The generated development artifact identity is synthetic and must not be used as an execution asset. Production selects a verified release artifact manifest, signed-asset catalog, standard bundles, RunnerPool inventory, and Runner gateway mappings explicitly. See [deployment and runtime operations](docs/operations/deployment.md), [declarative resources](docs/operations/declarative-resources.md), and [the Firecracker runtime](docs/operations/firecracker-runtime.md).
+- Download individual release binaries or SDKs from the [latest release](https://github.com/SecondStack-AI/SecondBox/releases/latest) when you only need a client.
+- Follow [deployment and runtime operations](docs/operations/deployment.md) for production authority, remote Runners, or a manually reviewed same-host topology.
+- For a manually reviewed same-host Runner declaration, start with `secondbox-deploy runner-template`; it emits every required Runner-host path and authority field without installing anything.
+- Use `just deploy-development-up .tmp/secondbox-development` for control-plane-only source-checkout development. That topology has synthetic development artifact identity and cannot execute a Sandbox until a real Runner and verified assets are configured.
+- Follow the [microVM image pipeline](docs/operations/microvm-image-pipeline.md) and [release distribution](docs/operations/release-distribution.md) when producing or independently materializing execution assets.
 
 ### Control-plane-only start
 
@@ -139,6 +103,26 @@ secondbox run durable-coding -- python3 -c 'print("hello from a microVM")'
 ```
 
 ## Using the CLI
+
+### Terminal presentation and scripts
+
+Interactive terminals receive compact summaries, width-aware tables, and
+lifecycle status on stderr. Pipes and redirects retain the existing machine
+bytes. Global presentation flags precede the command:
+
+```sh
+secondbox --output plain --color never sandboxes list
+secondbox --output json sandboxes list | jq '.items[] | .id'
+secondbox --accessible login
+```
+
+`--output auto|json|plain` chooses automatic TTY presentation, original JSON,
+or an unstyled human view. `--color auto|always|never` controls ANSI color;
+`NO_COLOR` disables automatic color, and `SECONDBOX_ACCESSIBLE=1` is equivalent
+to `--accessible`. Raw file/artifact/log responses, generic `operation` output,
+Docker Compose output, and all guest streams ignore human rendering. See the
+[complete CLI output contract](docs/operations/cli-output-contract.md) before
+using a command in automation.
 
 ### One-off commands
 

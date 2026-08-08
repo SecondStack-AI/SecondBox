@@ -104,8 +104,11 @@ func TestReleaseStagingRequiresQualificationEvidenceAndHostedPublishRemainsPubli
 	staging := readRepositoryFile(t, "scripts/release-stage.sh")
 	for _, required := range []string{
 		".tmp/scenario-qualification-evidence.json",
+		".tmp/installer-qualification-evidence.json",
 		"secondbox-${version}-qualification-evidence.json",
+		"secondbox-${version}-installer-qualification-evidence.json",
 		"validate_qualification_evidence",
+		"validate_installer_qualification_evidence",
 		"evidence_commit",
 		"repositoryDirty",
 		"run just test-scenario",

@@ -1,0 +1,385 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"maps"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/SecondStack-AI/SecondBox/internal/cliui"
+	"github.com/SecondStack-AI/SecondBox/internal/deployconfig"
+	"github.com/SecondStack-AI/SecondBox/internal/install"
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
+	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
+	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
+)
+
+func TestInstallResumeOrchestratesEveryDurableStageWithoutPrintingSecrets(t *testing.T) {
+	operation := filepath.Join(t.TempDir(), "operation")
+	verified := fakeGuidedRelease()
+	plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), CLITenantRef: "tenant-reviewed", CLISubjectRef: "subject-reviewed", BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: 86400})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(operation, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := install.NewReceipt(plan, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range []install.Stage{install.StagePreflight, install.StagePlanAccepted, install.StageHostApply} {
+		if err := receipt.CompleteStage(stage, time.Now(), map[string]string{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := install.WriteAccepted(operation, plan, receipt); err != nil {
+		t.Fatal(err)
+	}
+	calls := []string{}
+	now := time.Now()
+	dependencies := installResumeDependencies{
+		OwnerUID: os.Getuid(), Now: func() time.Time { now = now.Add(time.Second); return now },
+		HostApply:  func(context.Context, string, string) error { t.Fatal("host apply repeated"); return nil },
+		Revalidate: func(install.InstallPlan) error { calls = append(calls, "revalidate"); return nil },
+		VerifyRelease: func(context.Context, string) (releaseverify.VerifiedRelease, error) {
+			calls = append(calls, "verify-release")
+			return verified, nil
+		},
+		Postconditions: func(install.InstallPlan, install.InstallReceipt, releaseverify.VerifiedRelease) error {
+			calls = append(calls, "postconditions")
+			return nil
+		},
+		Materialize: func(_ context.Context, _ install.InstallPlan, current install.InstallReceipt, _ releaseverify.VerifiedRelease, persist func(install.InstallReceipt) error) (install.InstallReceipt, install.VerifiedArtifact, error) {
+			calls = append(calls, "materialize")
+			if err := current.CompleteStage(install.StageReleaseVerified, now, map[string]string{"verified": "true"}); err != nil {
+				return current, install.VerifiedArtifact{}, err
+			}
+			if err := persist(current); err != nil {
+				return current, install.VerifiedArtifact{}, err
+			}
+			if err := current.CompleteStage(install.StageAssetsMaterialized, now, map[string]string{"verified": "true"}); err != nil {
+				return current, install.VerifiedArtifact{}, err
+			}
+			return current, install.VerifiedArtifact{ManifestDigest: "sha256:" + strings.Repeat("d", 64), SigningKeyID: strings.Repeat("a", 64)}, persist(current)
+		},
+		Initialize: func(plan install.InstallPlan, _ releaseverify.VerifiedRelease, _ install.VerifiedArtifact) (deployconfig.SingleHostInstallResult, error) {
+			calls = append(calls, "initialize")
+			skip := map[string]bool{"deployment": true, "runner-identity": true, "compose-environment": true, "compose-assets": true, "cli-config-root": true, "cli-config-directory": true, "cli-config": true, "binary-directory-root": true, "binary-directory": true, "secondbox-binary": true, "secondbox-deploy-binary": true, "artifacts": true, "workspace": true}
+			for _, planned := range plan.Paths {
+				if skip[planned.Name] || planned.RequiresSudo {
+					continue
+				}
+				if planned.Kind == install.ResourceDirectory {
+					if err := os.Mkdir(planned.Path, os.FileMode(planned.Mode)); err != nil {
+						return deployconfig.SingleHostInstallResult{}, err
+					}
+				} else if err := os.WriteFile(planned.Path, []byte("fixture"), os.FileMode(planned.Mode)); err != nil {
+					return deployconfig.SingleHostInstallResult{}, err
+				}
+			}
+			manifest := installerPlannedPath(plan, "manifest")
+			if err := os.WriteFile(manifest, []byte("explicit manifest"), 0o600); err != nil {
+				return deployconfig.SingleHostInstallResult{}, err
+			}
+			return deployconfig.SingleHostInstallResult{ManifestPath: manifest, RunnerID: "runner-0123456789abcdef", RunnerIdentityDirectory: installerPlannedPath(plan, "runner-identity")}, nil
+		},
+		Enroll: func(deployconfig.SingleHostInstallResult) error { calls = append(calls, "enroll"); return nil },
+		Compose: func(_ context.Context, _ string, action string) error {
+			calls = append(calls, "compose-"+action)
+			if action == "up" {
+				if err := os.WriteFile(installerPlannedPath(plan, "compose-environment"), []byte("generated"), 0o600); err != nil {
+					return err
+				}
+				if err := os.Mkdir(installerPlannedPath(plan, "compose-assets"), 0o700); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		ComposeProject: func(string) (string, error) { return "secondbox-test", nil },
+		Login: func(_ context.Context, plan install.InstallPlan) ([]install.CreatedResource, error) {
+			calls = append(calls, "login")
+			return []install.CreatedResource{{ID: "cli-config", Kind: install.ResourceFile, Path: plan.CLI.ConfigPath, Class: install.PathUserDeployment, Stage: install.StageCLILogin, Mode: 0o600, OwnerUID: int64(os.Getuid()), OwnerGID: int64(os.Getgid()), Digest: "sha256:" + strings.Repeat("a", 64)}}, nil
+		},
+		Readiness: func(context.Context, install.InstallPlan) (map[string]string, error) {
+			calls = append(calls, "readiness")
+			return map[string]string{"runnerState": "ready"}, nil
+		},
+		Smoke: func(context.Context, install.InstallPlan) (map[string]string, error) {
+			calls = append(calls, "smoke")
+			return map[string]string{"output": "hello from a microVM"}, nil
+		},
+	}
+	var output, diagnostic bytes.Buffer
+	renderer := cliui.Renderer{Output: &output, Diagnostic: &diagnostic, Capabilities: cliui.ForWriter(&output, &diagnostic), OutputMode: cliui.OutputPlain, ColorMode: cliui.ColorNever}
+	if err := runInstallResumeWith(context.Background(), operation, renderer, dependencies); err != nil {
+		t.Fatalf("resume: %v\n%s", err, diagnostic.String())
+	}
+	_, final, err := install.ReadOperation(operation, os.Getuid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Status != install.OperationSucceeded || len(final.CompletedStages) != len(install.StageSequence) {
+		t.Fatalf("final receipt = status %s stages %#v", final.Status, final.CompletedStages)
+	}
+	wantCalls := []string{"revalidate", "verify-release", "postconditions", "materialize", "initialize", "enroll", "compose-prepare", "compose-up", "login", "readiness", "smoke"}
+	if strings.Join(calls, ",") != strings.Join(wantCalls, ",") {
+		t.Fatalf("calls = %#v", calls)
+	}
+	combined := output.String() + diagnostic.String()
+	for _, secret := range []string{"platform-token", "Bearer ", `"token"`} {
+		if strings.Contains(combined, secret) {
+			t.Fatalf("installer presentation exposed %q: %s", secret, combined)
+		}
+	}
+	calls = nil
+	if err := runInstallResumeWith(context.Background(), operation, renderer, dependencies); err != nil {
+		t.Fatalf("repeat resume: %v", err)
+	}
+	if want := "revalidate,verify-release,postconditions,readiness"; strings.Join(calls, ",") != want {
+		t.Fatalf("repeat resume calls = %#v, want %s", calls, want)
+	}
+}
+
+func TestInstalledRunnerReadinessRequiresExactAuthenticatedColdBootCapacity(t *testing.T) {
+	plan := install.InstallPlan{OperationID: "install_0123456789abcdef"}
+	ready := contracts.Runner{ID: "runner-0123456789abcdef", State: "ready", CredentialState: "active", Architectures: []string{"amd64"}, Capabilities: []string{"compute", "local-workspace"}, Capacity: map[string]int64{"CPUMillis": install.DurableCodingCPUMillis, "MemoryBytes": install.DurableCodingMemoryBytes, "DiskBytes": install.MinimumWorkspaceBytes, "Instances": 1, "Operations": 1}}
+	if evidence, ok := installedRunnerReadinessEvidence(plan, []contracts.Runner{{ID: "runner-unrelated", State: "ready"}, ready}); !ok || evidence["runnerId"] != ready.ID || evidence["coldBootCapacity"] != "advertised" {
+		t.Fatalf("exact readiness evidence = %#v, %t", evidence, ok)
+	}
+	for _, mutate := range []func(*contracts.Runner){
+		func(runner *contracts.Runner) { runner.ID = "runner-other" },
+		func(runner *contracts.Runner) { runner.CredentialState = "revoked" },
+		func(runner *contracts.Runner) { runner.Capabilities = []string{"local-workspace"} },
+		func(runner *contracts.Runner) { runner.Capacity["MemoryBytes"]-- },
+	} {
+		candidate := ready
+		candidate.Architectures = slices.Clone(ready.Architectures)
+		candidate.Capabilities = slices.Clone(ready.Capabilities)
+		candidate.Capacity = maps.Clone(ready.Capacity)
+		mutate(&candidate)
+		if evidence, ok := installedRunnerReadinessEvidence(plan, []contracts.Runner{candidate}); ok {
+			t.Fatalf("insufficient Runner accepted: %#v %#v", candidate, evidence)
+		}
+	}
+}
+
+func TestInstalledSmokeSandboxIDAdoptsOnlyOneExactLiveName(t *testing.T) {
+	name := "installer-smoke-0123456789abcdef"
+	id := "sbx_0123456789abcdefghijklmn"
+	page := contracts.SandboxPage{Items: []contracts.Sandbox{
+		{ID: "sbx_deleted000000000000000000", State: "deleted", Metadata: map[string]string{contracts.SandboxNameMetadataKey: name}},
+		{ID: id, State: "ready", Metadata: map[string]string{contracts.SandboxNameMetadataKey: name}},
+	}}
+	if got, found, err := installedSmokeSandboxID(page, name); err != nil || !found || got != id {
+		t.Fatalf("retained smoke lookup = %q, %t, %v", got, found, err)
+	}
+	page.Items = append(page.Items, contracts.Sandbox{ID: "sbx_abcdefghijklmnopqrstuvwxyz", State: "ready", Metadata: map[string]string{contracts.SandboxNameMetadataKey: name}})
+	if _, _, err := installedSmokeSandboxID(page, name); err == nil {
+		t.Fatal("duplicate live retained smoke Sandbox names were accepted")
+	}
+}
+
+func TestOrdinaryUninstallStopsComposeAndPreservesDurableResources(t *testing.T) {
+	operation := filepath.Join(t.TempDir(), "operation")
+	verified := fakeGuidedRelease()
+	plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), CLITenantRef: "tenant-reviewed", CLISubjectRef: "subject-reviewed", BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: 86400})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(operation, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	preserved := filepath.Join(operation, "preserved-workspace-evidence")
+	if err := os.WriteFile(preserved, []byte("durable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := install.NewReceipt(plan, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range install.StageSequence {
+		if err := receipt.CompleteStage(stage, time.Now(), map[string]string{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := receipt.AppendResource(install.CreatedResource{ID: "compose-project", Kind: install.ResourceComposeProject, Stage: install.StageComposeStarted, Identity: "secondbox-test"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := install.WriteAccepted(operation, plan, receipt); err != nil {
+		t.Fatal(err)
+	}
+	composeCalls := 0
+	var output, diagnostic bytes.Buffer
+	renderer := cliui.Renderer{Output: &output, Diagnostic: &diagnostic, Capabilities: cliui.ForWriter(&output, &diagnostic), OutputMode: cliui.OutputJSON, ColorMode: cliui.ColorNever}
+	dependencies := installUninstallDependencies{OwnerUID: os.Getuid(), Now: time.Now, ValidateTeardown: func(install.InstallPlan, install.InstallReceipt) error { return nil }, ComposeDown: func(context.Context, string) error {
+		composeCalls++
+		if composeCalls == 1 {
+			return errors.New("injected Compose shutdown interruption")
+		}
+		return nil
+	}}
+	if err := runInstallUninstallWith(context.Background(), operation, renderer, dependencies); err == nil || !strings.Contains(err.Error(), "injected Compose shutdown interruption") {
+		t.Fatalf("first uninstall interruption = %v", err)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("failed JSON uninstall emitted partial output: %q", output.String())
+	}
+	_, interrupted, err := install.ReadOperation(operation, os.Getuid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if interrupted.Status != install.OperationUninstalling {
+		t.Fatalf("interrupted uninstall status = %s", interrupted.Status)
+	}
+	if err := runInstallUninstallWith(context.Background(), operation, renderer, dependencies); err != nil {
+		t.Fatal(err)
+	}
+	if composeCalls != 2 {
+		t.Fatalf("Compose down calls = %d", composeCalls)
+	}
+	var summary map[string]string
+	if err := json.Unmarshal(output.Bytes(), &summary); err != nil || summary["Workspace"] != plan.Storage.WorkspacePath {
+		t.Fatalf("JSON uninstall summary = %q, %#v, %v", output.String(), summary, err)
+	}
+	if content, err := os.ReadFile(preserved); err != nil || string(content) != "durable" {
+		t.Fatalf("ordinary uninstall changed durable evidence: %q, %v", content, err)
+	}
+	_, final, err := install.ReadOperation(operation, os.Getuid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Status != install.OperationUninstalled {
+		t.Fatalf("uninstall receipt status = %s", final.Status)
+	}
+}
+
+func TestBoundedCommandBufferCollectsSupportEvidence(t *testing.T) {
+	buffer := boundedCommandBuffer{maximum: int(maximumInstallerEvidenceBytes())}
+	if _, err := buffer.Write([]byte("systemd evidence")); err != nil {
+		t.Fatal(err)
+	}
+	if buffer.String() != "systemd evidence" || buffer.tooLong {
+		t.Fatalf("bounded support buffer = %q tooLong=%t", buffer.String(), buffer.tooLong)
+	}
+}
+
+func TestInstallResumeFailureInjectionStopsAtEveryOrchestrationBoundary(t *testing.T) {
+	verified := fakeGuidedRelease()
+	tests := []struct {
+		name         string
+		initial      install.Stage
+		failureStage install.Stage
+		inject       func(*installResumeDependencies)
+	}{
+		{"release verification", install.StageHostApply, install.StageReleaseVerified, func(d *installResumeDependencies) {
+			d.VerifyRelease = func(context.Context, string) (releaseverify.VerifiedRelease, error) {
+				return releaseverify.VerifiedRelease{}, errors.New("injected release verification")
+			}
+		}},
+		{"asset materialization", install.StageReleaseVerified, install.StageAssetsMaterialized, func(d *installResumeDependencies) {
+			d.Materialize = func(context.Context, install.InstallPlan, install.InstallReceipt, releaseverify.VerifiedRelease, func(install.InstallReceipt) error) (install.InstallReceipt, install.VerifiedArtifact, error) {
+				return install.InstallReceipt{}, install.VerifiedArtifact{}, errors.New("injected materialization")
+			}
+		}},
+		{"deployment materialization", install.StageReleaseVerified, install.StageDeploymentMaterialized, func(d *installResumeDependencies) {
+			d.Materialize = func(_ context.Context, _ install.InstallPlan, current install.InstallReceipt, _ releaseverify.VerifiedRelease, persist func(install.InstallReceipt) error) (install.InstallReceipt, install.VerifiedArtifact, error) {
+				if err := current.CompleteStage(install.StageAssetsMaterialized, time.Now(), map[string]string{}); err != nil {
+					return current, install.VerifiedArtifact{}, err
+				}
+				if err := persist(current); err != nil {
+					return current, install.VerifiedArtifact{}, err
+				}
+				return current, install.VerifiedArtifact{ManifestDigest: "sha256:" + strings.Repeat("d", 64)}, nil
+			}
+			d.Initialize = func(install.InstallPlan, releaseverify.VerifiedRelease, install.VerifiedArtifact) (deployconfig.SingleHostInstallResult, error) {
+				return deployconfig.SingleHostInstallResult{}, errors.New("injected initialization")
+			}
+		}},
+		{"Runner enrollment", install.StageDeploymentMaterialized, install.StageRunnerEnrolled, func(d *installResumeDependencies) {
+			d.Enroll = func(deployconfig.SingleHostInstallResult) error { return errors.New("injected enrollment") }
+		}},
+		{"Compose startup", install.StageRunnerEnrolled, install.StageComposeStarted, func(d *installResumeDependencies) {
+			d.Compose = func(context.Context, string, string) error { return errors.New("injected Compose") }
+		}},
+		{"CLI login", install.StageComposeStarted, install.StageCLILogin, func(d *installResumeDependencies) {
+			d.Login = func(context.Context, install.InstallPlan) ([]install.CreatedResource, error) {
+				return nil, errors.New("injected login")
+			}
+		}},
+		{"readiness", install.StageCLILogin, install.StageReadiness, func(d *installResumeDependencies) {
+			d.Readiness = func(context.Context, install.InstallPlan) (map[string]string, error) {
+				return nil, errors.New("injected readiness")
+			}
+		}},
+		{"smoke", install.StageReadiness, install.StageSmokeExecution, func(d *installResumeDependencies) {
+			d.Smoke = func(context.Context, install.InstallPlan) (map[string]string, error) {
+				return nil, errors.New("injected smoke")
+			}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			operation := filepath.Join(t.TempDir(), "operation")
+			plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), CLITenantRef: "tenant-reviewed", CLISubjectRef: "subject-reviewed", BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: 86400})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(operation, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			receipt, err := install.NewReceipt(plan, time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, stage := range install.StageSequence {
+				if err := receipt.CompleteStage(stage, time.Now(), map[string]string{}); err != nil {
+					t.Fatal(err)
+				}
+				if stage == test.initial {
+					break
+				}
+			}
+			if _, _, err := install.WriteAccepted(operation, plan, receipt); err != nil {
+				t.Fatal(err)
+			}
+			dependencies := installResumeDependencies{
+				OwnerUID: os.Getuid(), Now: time.Now,
+				HostApply: func(context.Context, string, string) error { return nil }, Revalidate: func(install.InstallPlan) error { return nil },
+				VerifyRelease:  func(context.Context, string) (releaseverify.VerifiedRelease, error) { return verified, nil },
+				Postconditions: func(install.InstallPlan, install.InstallReceipt, releaseverify.VerifiedRelease) error { return nil },
+				Materialize: func(context.Context, install.InstallPlan, install.InstallReceipt, releaseverify.VerifiedRelease, func(install.InstallReceipt) error) (install.InstallReceipt, install.VerifiedArtifact, error) {
+					return install.InstallReceipt{}, install.VerifiedArtifact{}, nil
+				},
+				Initialize: func(install.InstallPlan, releaseverify.VerifiedRelease, install.VerifiedArtifact) (deployconfig.SingleHostInstallResult, error) {
+					return deployconfig.SingleHostInstallResult{}, nil
+				},
+				Enroll: func(deployconfig.SingleHostInstallResult) error { return nil }, Compose: func(context.Context, string, string) error { return nil }, ComposeProject: func(string) (string, error) { return "secondbox-test", nil },
+				Login: func(context.Context, install.InstallPlan) ([]install.CreatedResource, error) { return nil, nil }, Readiness: func(context.Context, install.InstallPlan) (map[string]string, error) { return map[string]string{}, nil }, Smoke: func(context.Context, install.InstallPlan) (map[string]string, error) { return map[string]string{}, nil },
+			}
+			test.inject(&dependencies)
+			renderer := cliui.Renderer{Output: &bytes.Buffer{}, Diagnostic: &bytes.Buffer{}, Capabilities: cliui.ForWriter(&bytes.Buffer{}, &bytes.Buffer{}), OutputMode: cliui.OutputPlain, ColorMode: cliui.ColorNever}
+			if err := runInstallResumeWith(context.Background(), operation, renderer, dependencies); err == nil || !strings.Contains(err.Error(), "injected") {
+				t.Fatalf("injected failure result = %v", err)
+			}
+			if test.failureStage == install.StageAssetsMaterialized {
+				return // MaterializeRelease owns and tests its own durable failure record.
+			}
+			_, failed, err := install.ReadOperation(operation, os.Getuid())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if failed.Status != install.OperationFailed || failed.FailureStage != test.failureStage {
+				t.Fatalf("failure receipt = status %s stage %s", failed.Status, failed.FailureStage)
+			}
+		})
+	}
+}

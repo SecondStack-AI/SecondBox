@@ -1,16 +1,35 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/SecondStack-AI/SecondBox/internal/cliui"
 	"github.com/SecondStack-AI/SecondBox/internal/deployconfig"
+	"github.com/SecondStack-AI/SecondBox/internal/install"
 )
+
+func TestDeployCommandFailurePreservesExplicitPresentationModes(t *testing.T) {
+	err := run([]string{"--output", "plain", "--color", "never", "unknown-command"})
+	var presented *deployPresentationError
+	if !errors.As(err, &presented) {
+		t.Fatalf("failure lacks presentation contract: %v", err)
+	}
+	if presented.renderer.OutputMode != cliui.OutputPlain || presented.renderer.ColorMode != cliui.ColorNever {
+		t.Fatalf("failure renderer = output %s color %s", presented.renderer.OutputMode, presented.renderer.ColorMode)
+	}
+}
 
 func TestComposeUpArgumentsRemoveOrphanedTopology(t *testing.T) {
 	base := []string{"compose", "--project-name", "secondbox"}
@@ -21,6 +40,61 @@ func TestComposeUpArgumentsRemoveOrphanedTopology(t *testing.T) {
 	}
 	if !reflect.DeepEqual(base, []string{"compose", "--project-name", "secondbox"}) {
 		t.Fatalf("Compose base arguments mutated = %#v", base)
+	}
+}
+
+func TestEveryDeployCommandHasOutputContract(t *testing.T) {
+	for _, command := range []string{"version", "install", "init", "runner-template", "verify", "validate", "render", "runner-init", "inspect", "migrate", "compose"} {
+		contract, found := deployCommandContracts[command]
+		if !found || contract.Command != command || contract.Output == "" || contract.ExitOwner == "" {
+			t.Errorf("command %q has incomplete output contract: %#v", command, contract)
+		}
+	}
+	if deployCommandContracts["compose"].Output != "subprocess" || deployCommandContracts["runner-template"].Output != "raw-bytes" || deployCommandContracts["inspect"].Output != "machine-json" {
+		t.Fatal("machine-authoritative deploy contracts changed")
+	}
+}
+
+func TestInstallCheckRendersCompletePreflightAndStops(t *testing.T) {
+	facts := install.HostFacts{ObservedAt: time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC), HostIdentity: "machine-id:test", OS: "linux", Architecture: "amd64", Findings: []install.Finding{{ID: "platform", Class: install.FindingPass, Summary: "Linux amd64 host"}, {ID: "storage", Class: install.FindingWarning, Summary: "Review storage"}}}
+	var output bytes.Buffer
+	renderer := cliui.Renderer{Output: &output, Diagnostic: io.Discard, Capabilities: cliui.ForWriter(&output, io.Discard), OutputMode: cliui.OutputPlain, ColorMode: cliui.ColorNever}
+	called := 0
+	err := runInstallPreflightWith(context.Background(), []string{"--check"}, renderer, func(context.Context) (install.HostFacts, error) {
+		called++
+		return facts, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if called != 1 || !strings.Contains(output.String(), "SecondBox single-host preflight") || !strings.Contains(output.String(), "WARNING") {
+		t.Fatalf("preflight invocation/output = %d, %q", called, output.String())
+	}
+}
+
+func TestInstallCheckUsesStableBlockedExitStatus(t *testing.T) {
+	facts := install.HostFacts{HostIdentity: "machine-id:test", OS: "linux", Architecture: "arm64", Findings: []install.Finding{{ID: "platform", Class: install.FindingBlocked, Summary: "Linux amd64 is required"}}}
+	var output bytes.Buffer
+	renderer := cliui.Renderer{Output: &output, Diagnostic: io.Discard, Capabilities: cliui.ForWriter(&output, io.Discard), OutputMode: cliui.OutputJSON, ColorMode: cliui.ColorNever}
+	err := runInstallPreflightWith(context.Background(), []string{"--check"}, renderer, func(context.Context) (install.HostFacts, error) { return facts, nil })
+	var exited interface{ ExitCode() int }
+	if !errors.As(err, &exited) || exited.ExitCode() != 2 {
+		t.Fatalf("error = %v; want installer exit 2", err)
+	}
+	if !strings.Contains(output.String(), `"class":"blocked"`) || strings.Contains(output.String(), "\x1b[") {
+		t.Fatalf("JSON report = %q", output.String())
+	}
+}
+
+func TestInstallUsageRejectsUnknownForms(t *testing.T) {
+	var output bytes.Buffer
+	renderer := cliui.Renderer{Output: &output, Diagnostic: io.Discard, Capabilities: cliui.ForWriter(&output, io.Discard), OutputMode: cliui.OutputPlain, ColorMode: cliui.ColorNever}
+	err := runInstallPreflightWith(context.Background(), []string{"--check", "extra"}, renderer, func(context.Context) (install.HostFacts, error) {
+		t.Fatal("preflight ran for invalid grammar")
+		return install.HostFacts{}, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "secondbox-deploy") {
+		t.Fatalf("usage error = %v", err)
 	}
 }
 
@@ -55,6 +129,44 @@ func TestDockerComposeReceivesOperatorClientConfiguration(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(output)); got != "/operator/docker-config\n/operator/ssh-agent.sock" {
 		t.Fatalf("Docker client environment = %q", got)
+	}
+}
+
+func TestDockerComposeExitStatusSurvives(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "docker"), []byte("#!/bin/sh\nexit 42\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory)
+	err := runDockerCompose([]string{"compose", "version"})
+	var exited *exec.ExitError
+	if !errors.As(err, &exited) || exited.ExitCode() != 42 {
+		t.Fatalf("compose error = %v, want exit 42", err)
+	}
+}
+
+func TestComposePresentationStaysOnDiagnosticStream(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "docker"), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory)
+	manifest, err := deployconfig.InitDevelopment(filepath.Join(t.TempDir(), "deployment"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output, diagnostic bytes.Buffer
+	capabilities := cliui.ForWriter(&output, &diagnostic)
+	capabilities.Diagnostic.TTY = true
+	renderer := cliui.Renderer{Output: &output, Diagnostic: &diagnostic, Capabilities: capabilities, OutputMode: cliui.OutputAuto, ColorMode: cliui.ColorNever}
+	if err := runComposePresented(renderer, manifest, "config"); err != nil {
+		t.Fatal(err)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("presentation contaminated stdout: %q", output.String())
+	}
+	if diagnostic.Len() != 0 {
+		t.Fatalf("presentation contaminated Docker stderr: %q", diagnostic.String())
 	}
 }
 
@@ -190,4 +302,38 @@ func TestRunnerTemplateCommandWritesStdout(t *testing.T) {
 	if !reflect.DeepEqual(got, deployconfig.RunnerTemplate()) {
 		t.Fatal("runner-template stdout differs from the deployconfig template")
 	}
+}
+
+func TestInspectCommandPreservesMachineJSONBytes(t *testing.T) {
+	manifestPath, err := deployconfig.InitDevelopment(filepath.Join(t.TempDir(), "deployment"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := deployconfig.Inspect(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, runErr := captureDeployStdout(t, func() error { return run([]string{"inspect", manifestPath}) })
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	if !bytes.Equal(got, append(want, '\n')) {
+		t.Fatalf("inspect bytes changed:\n got %q\nwant %q", got, append(want, '\n'))
+	}
+}
+
+func captureDeployStdout(t *testing.T, action func() error) ([]byte, error) {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := os.Stdout
+	os.Stdout = writer
+	actionErr := action()
+	os.Stdout = original
+	closeErr := writer.Close()
+	content, readErr := io.ReadAll(reader)
+	_ = reader.Close()
+	return content, errors.Join(actionErr, closeErr, readErr)
 }
