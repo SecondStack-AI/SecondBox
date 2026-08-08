@@ -2,6 +2,8 @@
 
 Build a release-backed `secondbox-deploy install` wizard that takes one qualified Linux amd64 host with systemd, Docker, and KVM from read-only capability checks to a successful `secondbox run durable-coding -- ...`. The installer must keep SecondBox's deployment authority explicit: it may propose detected values, generate development authority, and materialize a reviewed single-host topology, but every accepted identity, path, capacity, network, retention, and pinned asset must be written into the installation plan and `secondbox.toml` rather than becoming a runtime default.
 
+Implement [Polished Human-Facing CLI UI](2026-08-07-polished-cli-ui.md) first. This plan consumes its shared `internal/cliui` capability detection, Huh forms, phase rendering, progress, accessibility, and plain-output contracts rather than creating a second installer-specific terminal layer.
+
 The first version is intentionally limited to one loopback-only development deployment and one same-host Firecracker Runner. It does not add production or remote-Runner installation, arm64 Runner support, automatic physical-disk partitioning, distribution-specific package installation, daemonless execution, fallback compute backends, or automatic upgrades. An existing dedicated XFS/Btrfs filesystem remains the preferred workspace location; the portable alternative is a fully allocated, size-bounded Btrfs filesystem image mounted persistently by systemd. Ordinary uninstall must preserve all durable data.
 
 ## Validation Commands
@@ -54,9 +56,9 @@ Make the first visible installer phase a complete capability report that perform
 
 ### Task 3: Build the guided planner and explicit review UX
 
-Turn accepted host facts into a short line-oriented wizard that works in ordinary terminals and remains easy to test. The normal path should ask only for workspace storage, resource budget, and final confirmation; advanced mode exposes every proposed value before acceptance.
+Turn accepted host facts into a short Huh-backed wizard through the shared `internal/cliui` form and presentation interfaces. The normal path should ask only for workspace storage, resource budget, and final confirmation; advanced mode exposes every proposed value before acceptance, and accessible/plain behavior comes from the prerequisite UI contract.
 
-- [ ] Add injectable terminal input/output with EOF, cancellation, invalid-answer, and non-TTY behavior that never hangs or silently accepts a proposal.
+- [ ] Build installer-specific form groups and validation on `internal/cliui` without importing Charm packages into `internal/install`; preserve explicit input/output, EOF, cancellation, invalid-answer, accessible, and non-TTY behavior.
 - [ ] Offer each detected dedicated XFS/Btrfs mount plus a clearly labeled Btrfs filesystem-image choice; never offer a physical block device as a formatting target.
 - [ ] For the filesystem-image choice, propose a fully allocated capacity from available disk while enforcing enough room for the selected Profile workspace, the approximately 11 GB execution bundle, runner state, and a reserve for the backing filesystem.
 - [ ] Derive a conservative Runner/RunnerPool capacity proposal from host CPU, memory, and workspace capacity, including per-Sandbox limits, concurrent starts and operations, storage-pressure thresholds, and all nine subject quotas.
@@ -65,7 +67,7 @@ Turn accepted host facts into a short line-oriented wizard that works in ordinar
 - [ ] Propose exact deployment, secret, identity, artifact, state, workspace, filesystem-image, mount-unit, CLI, and receipt paths and show which ones require sudo.
 - [ ] Present release version, digest-pinned images, signing-key fingerprint, expected downloads, disk allocation, generated-authority categories, retention, capacity, network choices, persistent services, and uninstall behavior in one final plan.
 - [ ] Require an explicit final confirmation, then atomically create a mode-`0600` canonical plan and initial receipt without generating secrets or performing host mutations.
-- [ ] Add golden transcript tests for the normal path, existing-filesystem path, advanced review, collision replacement, rejected proposal, EOF, non-TTY invocation, and secret-redacted output.
+- [ ] Add installer form/model tests for the normal path, existing-filesystem path, advanced review, collision replacement, rejected proposal, EOF, accessible and non-TTY invocation, and secret-redacted output; reuse the prerequisite plan's PTY and renderer golden harness.
 
 ### Task 4: Add the narrow privileged host-apply boundary
 
