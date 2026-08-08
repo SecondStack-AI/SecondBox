@@ -226,35 +226,19 @@ qualification_base_image="$resource_root/base.img"
 
 subnet=''
 mapfile -t host_routes < <(ip -4 -o route show table all | awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/ {print $1}')
-subnet_overlaps_host_routes() {
-  python3 - "$@" <<'PY'
-import ipaddress
-import sys
-
-candidate = ipaddress.ip_network(sys.argv[1], strict=False)
-for value in sys.argv[2:]:
-    route = ipaddress.ip_network(value if "/" in value else value + "/32", strict=False)
-    if candidate.overlaps(route):
-        raise SystemExit(0)
-raise SystemExit(1)
-PY
+subnet="$("$repo_root/scripts/select-installer-qualification-subnet" "${host_routes[@]}")" || {
+  echo 'qualification could not allocate an isolated RFC1918 subnet' >&2
+  exit 1
 }
-for octet in $(seq 240 250); do
-  candidate="192.168.${octet}.0/24"
-  if ! subnet_overlaps_host_routes "$candidate" "${host_routes[@]}"; then
-    subnet_octet="$octet"
-    subnet="$candidate"
-    break
-  fi
-done
-[[ -n "$subnet" ]] || { echo 'qualification could not allocate an isolated RFC1918 subnet' >&2; exit 1; }
+subnet_address="${subnet%/*}"
+subnet_prefix="${subnet_address%.*}"
 cat >"$resource_root/network.xml" <<EOF
 <network>
   <name>${network}</name>
   <forward mode='nat'/>
   <bridge name='virbr${run_id:0:6}' stp='on' delay='0'/>
-  <ip address='192.168.${subnet_octet}.1' netmask='255.255.255.0'>
-    <dhcp><range start='192.168.${subnet_octet}.20' end='192.168.${subnet_octet}.80'/></dhcp>
+  <ip address='${subnet_prefix}.1' netmask='255.255.255.0'>
+    <dhcp><range start='${subnet_prefix}.20' end='${subnet_prefix}.80'/></dhcp>
   </ip>
 </network>
 EOF

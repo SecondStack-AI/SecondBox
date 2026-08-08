@@ -172,7 +172,7 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 		`destroy "$domain"`,
 		`undefine "$domain"`,
 		`net-destroy "$network"`,
-		"subnet_overlaps_host_routes",
+		"select-installer-qualification-subnet",
 		"cleanup_success",
 		`mktemp -d "$existing_workspace_root/secondbox-installer-qualification-`,
 		`chmod 0700 "$guest_root"`,
@@ -185,6 +185,19 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 		if !strings.Contains(driver, required) {
 			t.Errorf("repository qualification driver lacks %q", required)
 		}
+	}
+	allocator := filepath.Join(repositoryRootForDeploymentPolicy(t), "scripts/select-installer-qualification-subnet")
+	command := exec.Command(allocator, "192.168.240.0/20")
+	selected, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("select subnet around occupied former allocation window: %v\n%s", err, selected)
+	}
+	if got := strings.TrimSpace(string(selected)); got != "192.168.0.0/24" {
+		t.Fatalf("selected subnet = %q, want first free private /24", got)
+	}
+	command = exec.Command(allocator, "192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8")
+	if selected, err = command.CombinedOutput(); err == nil || !strings.Contains(string(selected), "no isolated RFC1918 /24 remains") {
+		t.Fatalf("exhausted subnet selection = %v, %q", err, selected)
 	}
 	for _, forbidden := range []string{"net-start default", "net-destroy default", "destroy --all", "undefine --all"} {
 		if strings.Contains(driver, forbidden) {
