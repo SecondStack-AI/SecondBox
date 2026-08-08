@@ -100,6 +100,9 @@ func runGuidedInstallWith(ctx context.Context, renderer cliui.Renderer, facts in
 	if !renderer.Capabilities.Input.TTY && !renderer.Capabilities.Accessible {
 		return &deployExitError{code: 3, err: errors.New("SecondBox installer: guided installation requires a terminal or --accessible; use install --check for unattended preflight")}
 	}
+	if buildinfo.Version == "0.0.0-development" || buildinfo.SourceCommit == "development" {
+		return &deployExitError{code: 3, err: fmt.Errorf("SecondBox installer: guided installation requires a published qualified release binary, got version %q and source commit %q; local development binaries cannot select release assets, so publish and download a release containing this installer first", buildinfo.Version, buildinfo.SourceCommit)}
+	}
 	if _, err := releasecontract.ParseTag("v" + buildinfo.Version); err != nil {
 		return &deployExitError{code: 3, err: fmt.Errorf("SecondBox installer: guided installation requires a versioned release binary, got %q", buildinfo.Version)}
 	}

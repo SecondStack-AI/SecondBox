@@ -25,10 +25,19 @@ func fakeGuidedRelease() releaseverify.VerifiedRelease {
 	return releaseverify.VerifiedRelease{Manifest: releasecontract.ArtifactManifest{Identity: releasecontract.Identity{Version: "0.4.0", Tag: "v0.4.0", SourceCommit: strings.Repeat("a", 40)}, ControlPlane: releasecontract.OCIArtifact{Reference: "ghcr.io/secondstack-ai/secondbox/control-plane@sha256:" + strings.Repeat("b", 64)}, Runner: releasecontract.OCIArtifact{Reference: "ghcr.io/secondstack-ai/secondbox/runner@sha256:" + strings.Repeat("c", 64)}, InstallerTools: releasecontract.OCIArtifact{Reference: "ghcr.io/secondstack-ai/secondbox/installer-tools@sha256:" + strings.Repeat("1", 64)}, BundledServices: releasecontract.BundledServiceImages{Postgres: "docker.io/library/postgres@sha256:" + strings.Repeat("2", 64), ObjectStore: "docker.io/rustfs/rustfs@sha256:" + strings.Repeat("3", 64), ObjectStoreClient: "quay.io/minio/mc@sha256:" + strings.Repeat("4", 64)}, MicroVM: releasecontract.MicroVMArtifact{ImageReference: "ghcr.io/secondstack-ai/secondbox/microvm-artifacts@sha256:" + strings.Repeat("d", 64), SigningKeyFingerprint: fingerprint}, Binaries: []releasecontract.BinaryArtifact{{Name: "secondbox", Platform: "linux/amd64", SHA256: strings.Repeat("e", 64)}, {Name: "secondbox-deploy", Platform: "linux/amd64", SHA256: strings.Repeat("f", 64)}}}, ManifestBytes: []byte("verified manifest bytes")}
 }
 
-func TestGuidedInstallAccessibleAcceptsAndPersistsCanonicalPlan(t *testing.T) {
-	originalVersion := buildinfo.Version
+func usePublishedGuidedReleaseBuild(t *testing.T) {
+	t.Helper()
+	originalVersion, originalCommit := buildinfo.Version, buildinfo.SourceCommit
 	buildinfo.Version = "0.4.0"
-	t.Cleanup(func() { buildinfo.Version = originalVersion })
+	buildinfo.SourceCommit = strings.Repeat("a", 40)
+	t.Cleanup(func() {
+		buildinfo.Version = originalVersion
+		buildinfo.SourceCommit = originalCommit
+	})
+}
+
+func TestGuidedInstallAccessibleAcceptsAndPersistsCanonicalPlan(t *testing.T) {
+	usePublishedGuidedReleaseBuild(t)
 	home := t.TempDir()
 	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	var output, diagnostic bytes.Buffer
@@ -74,9 +83,7 @@ func TestGuidedInstallAccessibleAcceptsAndPersistsCanonicalPlan(t *testing.T) {
 }
 
 func TestGuidedInstallOffersAndPersistsExistingReflinkFilesystem(t *testing.T) {
-	originalVersion := buildinfo.Version
-	buildinfo.Version = "0.4.0"
-	t.Cleanup(func() { buildinfo.Version = originalVersion })
+	usePublishedGuidedReleaseBuild(t)
 	home := t.TempDir()
 	facts := guidedFacts()
 	facts.Devices = []install.DeviceFact{{Path: "/dev/sdb", Identity: "8:16", Filesystem: "xfs", SizeBytes: 200 << 30, AvailableBytes: 160 << 30, Mountpoint: "/srv/secondbox-dedicated"}}
@@ -109,9 +116,7 @@ func TestGuidedInstallOffersAndPersistsExistingReflinkFilesystem(t *testing.T) {
 }
 
 func TestGuidedInstallRejectsNonTTYAndJSONBeforeReleaseFetch(t *testing.T) {
-	originalVersion := buildinfo.Version
-	buildinfo.Version = "0.4.0"
-	t.Cleanup(func() { buildinfo.Version = originalVersion })
+	usePublishedGuidedReleaseBuild(t)
 	for _, test := range []struct {
 		name       string
 		outputMode cliui.OutputMode
@@ -134,10 +139,26 @@ func TestGuidedInstallRejectsNonTTYAndJSONBeforeReleaseFetch(t *testing.T) {
 	}
 }
 
+func TestGuidedInstallDevelopmentBuildFailsBeforeReleaseFetch(t *testing.T) {
+	originalVersion, originalCommit := buildinfo.Version, buildinfo.SourceCommit
+	buildinfo.Version, buildinfo.SourceCommit = "0.0.0-development", "development"
+	t.Cleanup(func() { buildinfo.Version, buildinfo.SourceCommit = originalVersion, originalCommit })
+	capabilities := cliui.ForWriter(&bytes.Buffer{}, &bytes.Buffer{})
+	capabilities.Accessible = true
+	renderer := cliui.Renderer{Output: &bytes.Buffer{}, Diagnostic: &bytes.Buffer{}, Capabilities: capabilities, OutputMode: cliui.OutputPlain, ColorMode: cliui.ColorNever}
+	dependencies := systemGuidedInstallDependencies()
+	dependencies.VerifyRelease = func(context.Context, string) (releaseverify.VerifiedRelease, error) {
+		t.Fatal("development build attempted a release fetch")
+		return releaseverify.VerifiedRelease{}, nil
+	}
+	err := runGuidedInstallWith(context.Background(), renderer, guidedFacts(), false, dependencies)
+	if err == nil || !strings.Contains(err.Error(), "requires a published qualified release binary") || strings.Contains(err.Error(), "releases/download/v0.0.0-development") {
+		t.Fatalf("development build error = %v", err)
+	}
+}
+
 func TestGuidedInstallEOFDoesNotCreateOperationDirectory(t *testing.T) {
-	originalVersion := buildinfo.Version
-	buildinfo.Version = "0.4.0"
-	t.Cleanup(func() { buildinfo.Version = originalVersion })
+	usePublishedGuidedReleaseBuild(t)
 	created := false
 	capabilities := cliui.ForWriter(&bytes.Buffer{}, &bytes.Buffer{})
 	capabilities.Accessible = true
@@ -158,9 +179,7 @@ func TestGuidedInstallEOFDoesNotCreateOperationDirectory(t *testing.T) {
 }
 
 func TestGuidedInstallAdvancedReviewUsesSharedFormsAndPersistsOverrides(t *testing.T) {
-	originalVersion := buildinfo.Version
-	buildinfo.Version = "0.4.0"
-	t.Cleanup(func() { buildinfo.Version = originalVersion })
+	usePublishedGuidedReleaseBuild(t)
 	home := t.TempDir()
 	capabilities := cliui.ForWriter(&bytes.Buffer{}, &bytes.Buffer{})
 	capabilities.Accessible = true
@@ -210,9 +229,7 @@ func TestGuidedInstallAdvancedReviewUsesSharedFormsAndPersistsOverrides(t *testi
 }
 
 func TestGuidedInstallRejectedCapacityCreatesNothing(t *testing.T) {
-	originalVersion := buildinfo.Version
-	buildinfo.Version = "0.4.0"
-	t.Cleanup(func() { buildinfo.Version = originalVersion })
+	usePublishedGuidedReleaseBuild(t)
 	created := false
 	capabilities := cliui.ForWriter(&bytes.Buffer{}, &bytes.Buffer{})
 	capabilities.Accessible = true
