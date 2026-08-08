@@ -165,6 +165,8 @@ func run(ctx context.Context, args []string, output io.Writer) (resultErr error)
 	outputModeValue := global.String("output", "auto", "output mode: auto, json, or plain")
 	colorModeValue := global.String("color", "auto", "color mode: auto, always, or never")
 	accessible := global.Bool("accessible", false, "use accessible prompts and output")
+	helpLong := global.Bool("help", false, "show help")
+	helpShort := global.Bool("h", false, "show help")
 	if err := global.Parse(args); err != nil {
 		return fmt.Errorf("SecondBox CLI parse global options: %w", err)
 	}
@@ -190,6 +192,22 @@ func run(ctx context.Context, args []string, output io.Writer) (resultErr error)
 		}
 	}()
 	ctx = withPresentation(ctx, presentation{renderer: renderer, accessible: capabilities.Accessible, input: os.Stdin})
+	commandArguments := global.Args()
+	if *helpLong || *helpShort {
+		if len(commandArguments) != 0 {
+			return errors.New("SecondBox CLI --help accepts no command arguments; run secondbox help")
+		}
+		return renderer.WriteHelp(secondboxHelp())
+	}
+	if len(commandArguments) == 0 {
+		return renderer.WriteHelp(secondboxHelp())
+	}
+	if commandArguments[0] == "help" {
+		if len(commandArguments) != 1 {
+			return errors.New("SecondBox CLI help accepts no arguments")
+		}
+		return renderer.WriteHelp(secondboxHelp())
+	}
 	session, err := resolveSession(cliSession{
 		url: *rawURL, token: *token, tenantRef: *tenantRef, subjectRef: *subjectRef,
 	})
@@ -209,7 +227,6 @@ func run(ctx context.Context, args []string, output io.Writer) (resultErr error)
 	if session.tenantRef == "" || session.subjectRef == "" {
 		return errors.New("SecondBox CLI requires --tenant-ref and --subject-ref" + sessionSourceHint)
 	}
-	commandArguments := global.Args()
 	genericRawOperation := len(commandArguments) > 0 && commandArguments[0] == "operation"
 	operationID, operationArgs, err := resolveCommand(commandArguments)
 	if err != nil {

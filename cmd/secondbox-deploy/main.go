@@ -55,6 +55,8 @@ func run(arguments []string) (resultErr error) {
 	outputValue := global.String("output", "auto", "output mode: auto, json, or plain")
 	colorValue := global.String("color", "auto", "color mode: auto, always, or never")
 	accessible := global.Bool("accessible", false, "use accessible prompts and output")
+	helpLong := global.Bool("help", false, "show help")
+	helpShort := global.Bool("h", false, "show help")
 	if err := global.Parse(arguments); err != nil {
 		return fmt.Errorf("SecondBox deployment CLI parse global options: %w", err)
 	}
@@ -76,14 +78,25 @@ func run(arguments []string) (resultErr error) {
 			resultErr = &deployPresentationError{cause: resultErr, renderer: renderer}
 		}
 	}()
+	if *helpLong || *helpShort {
+		if len(global.Args()) != 0 {
+			return errors.New("SecondBox Deploy --help accepts no command arguments; run secondbox-deploy help")
+		}
+		return renderer.WriteHelp(secondboxDeployHelp())
+	}
 	return runCommand(global.Args(), renderer)
 }
 
 func runCommand(arguments []string, renderer cliui.Renderer) error {
 	if len(arguments) == 0 {
-		return usage(renderer)
+		return renderer.WriteHelp(secondboxDeployHelp())
 	}
 	switch arguments[0] {
+	case "help":
+		if len(arguments) != 1 {
+			return errors.New("SecondBox Deploy help accepts no arguments")
+		}
+		return renderer.WriteHelp(secondboxDeployHelp())
 	case "version":
 		if len(arguments) != 1 {
 			return usage(renderer)
@@ -343,5 +356,6 @@ func runDockerCompose(arguments []string) error {
 }
 
 func usage(renderer cliui.Renderer) error {
-	return fmt.Errorf("%s", renderer.FormatHelp(cliui.Help{Title: "SecondBox Deploy", Usage: "secondbox-deploy [--output MODE] [--color MODE] [--accessible] COMMAND", Commands: []cliui.Pair{{Key: "install", Value: "guide an install; use --check, --resume DIRECTORY, or --support DIRECTORY --output ARCHIVE"}, {Key: "uninstall", Value: "stop an installed deployment while preserving data; use --purge for deletion"}, {Key: "init", Value: "create an explicit deployment manifest"}, {Key: "validate", Value: "validate a deployment manifest"}, {Key: "runner-template", Value: "emit the Runner TOML template"}, {Key: "runner-init", Value: "issue one Runner identity"}, {Key: "verify", Value: "verify a release artifact manifest"}, {Key: "inspect", Value: "emit redacted deployment JSON"}, {Key: "render", Value: "render a process environment file"}, {Key: "migrate", Value: "migrate a legacy environment"}, {Key: "compose", Value: "run config, prepare, up, or down"}}, Footer: "Run command-specific forms exactly as documented; generated artifacts remain machine-authoritative."}))
+	_ = renderer
+	return errors.New("SecondBox Deploy invalid command or arguments; run secondbox-deploy help")
 }

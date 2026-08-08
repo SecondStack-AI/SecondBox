@@ -10,6 +10,7 @@ import (
 // commandContracts is the stdout/exit-status inventory. Raw and guest-stream
 // entries are never passed to a human renderer, even on a TTY.
 var commandContracts = map[string]cliui.CommandContract{
+	"help":               {Command: "help", Output: cliui.OutputBoundedHuman, ExitOwner: "cli"},
 	"version":            {Command: "version", Output: cliui.OutputBoundedHuman, ExitOwner: "cli"},
 	"login":              {Command: "login", Output: cliui.OutputBoundedHuman, ExitOwner: "cli"},
 	"logout":             {Command: "logout", Output: cliui.OutputBoundedHuman, ExitOwner: "cli"},

@@ -31,6 +31,23 @@ func TestDeployCommandFailurePreservesExplicitPresentationModes(t *testing.T) {
 	}
 }
 
+func TestDeployRootHelpIsSuccessfulAndSeparateFromUsageErrors(t *testing.T) {
+	var output bytes.Buffer
+	renderer := cliui.Renderer{Output: &output, Diagnostic: io.Discard, Capabilities: cliui.ForWriter(&output, io.Discard), OutputMode: cliui.OutputAuto, ColorMode: cliui.ColorAuto}
+	for _, arguments := range [][]string{nil, {"help"}} {
+		output.Reset()
+		if err := runCommand(arguments, renderer); err != nil {
+			t.Fatalf("secondbox-deploy %v help error = %v", arguments, err)
+		}
+		if !strings.Contains(output.String(), "SecondBox Deploy\n\nUsage\n") || !strings.Contains(output.String(), "Global options\n") || strings.Contains(output.String(), "\x1b") {
+			t.Fatalf("secondbox-deploy %v help output = %q", arguments, output.String())
+		}
+	}
+	if err := runCommand([]string{"unknown"}, renderer); err == nil || !strings.Contains(err.Error(), "run secondbox-deploy help") {
+		t.Fatalf("unknown command error = %v", err)
+	}
+}
+
 func TestComposeUpArgumentsRemoveOrphanedTopology(t *testing.T) {
 	base := []string{"compose", "--project-name", "secondbox"}
 	got := composeUpArguments(base, "--detach")
@@ -44,7 +61,7 @@ func TestComposeUpArgumentsRemoveOrphanedTopology(t *testing.T) {
 }
 
 func TestEveryDeployCommandHasOutputContract(t *testing.T) {
-	for _, command := range []string{"version", "install", "init", "runner-template", "verify", "validate", "render", "runner-init", "inspect", "migrate", "compose"} {
+	for _, command := range []string{"help", "version", "install", "init", "runner-template", "verify", "validate", "render", "runner-init", "inspect", "migrate", "compose"} {
 		contract, found := deployCommandContracts[command]
 		if !found || contract.Command != command || contract.Output == "" || contract.ExitOwner == "" {
 			t.Errorf("command %q has incomplete output contract: %#v", command, contract)

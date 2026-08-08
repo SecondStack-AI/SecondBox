@@ -120,6 +120,28 @@ func TestGlobalPresentationFlags(t *testing.T) {
 	}
 }
 
+func TestRootHelpFormsExitSuccessfullyWithoutSession(t *testing.T) {
+	for _, arguments := range [][]string{nil, {"help"}, {"--help"}, {"-h"}} {
+		var output bytes.Buffer
+		if err := run(context.Background(), arguments, &output); err != nil {
+			t.Fatalf("secondbox %v help error = %v", arguments, err)
+		}
+		if !strings.Contains(output.String(), "SecondBox CLI\n\nUsage\n") || !strings.Contains(output.String(), "Global options\n") || strings.Contains(output.String(), "\x1b") {
+			t.Fatalf("secondbox %v help output = %q", arguments, output.String())
+		}
+	}
+}
+
+func TestForcedColorHelpContainsRealANSI(t *testing.T) {
+	var output bytes.Buffer
+	if err := run(context.Background(), []string{"--color", "always", "help"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "\x1b[") || strings.Contains(output.String(), "�[") {
+		t.Fatalf("forced-color help contains escaped or sanitized ANSI: %q", output.String())
+	}
+}
+
 func TestBoundedAliasPlainViewAndMachinePassthrough(t *testing.T) {
 	newSessionEnvironment(t)
 	const response = "{ \"items\" : [{\"id\":\"sbx_123456789\",\"profile\":\"durable-coding\",\"state\":\"ready\",\"desiredState\":\"running\",\"generation\":2,\"revision\":7,\"workspace\":{},\"metadata\":{},\"createdAt\":\"2026-08-07T00:00:00Z\",\"updatedAt\":\"2026-08-07T00:00:00Z\",\"unknownFutureField\":true}] }\n"
