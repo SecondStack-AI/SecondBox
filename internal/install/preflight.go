@@ -220,7 +220,7 @@ func Preflight(ctx context.Context, probes PreflightProbes) (HostFacts, error) {
 }
 
 func preflightSystemd(ctx context.Context, p PreflightProbes, f *HostFacts, add func(string, FindingClass, string, string, string)) {
-	version, versionErr := p.Process.Run(ctx, "systemd", "--version")
+	version, versionErr := p.Process.Run(ctx, "systemctl", "--version")
 	active, activeErr := p.Process.Run(ctx, "systemctl", "is-system-running")
 	if versionErr != nil || (activeErr != nil && active.Stdout != "degraded") || (active.Stdout != "running" && active.Stdout != "degraded") {
 		add("systemd", FindingBlocked, "systemd is not the active service manager", strings.TrimSpace(version.Stdout+" "+active.Stdout+" "+active.Stderr), "Boot the host under systemd before installing.")

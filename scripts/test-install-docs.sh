@@ -7,8 +7,8 @@ coordinate='https://github.com/SecondStack-AI/SecondBox/releases/latest/download
 rg -qF "$coordinate" "$repo_root/README.md"
 rg -qF "$coordinate" "$repo_root/docs/operations/guided-single-host-install.md"
 rg -qF 'install --check' "$repo_root/README.md" "$repo_root/docs/operations/guided-single-host-install.md"
-rg -qF -- '--resume DIRECTORY, or --support DIRECTORY --output ARCHIVE' "$repo_root/cmd/secondbox-deploy/main.go"
-rg -qF 'use --purge for deletion' "$repo_root/cmd/secondbox-deploy/main.go"
+rg -qF -- '--resume DIRECTORY, or --support DIRECTORY --output ARCHIVE' "$repo_root/cmd/secondbox-deploy/help.go"
+rg -qF 'use --purge for deletion' "$repo_root/cmd/secondbox-deploy/help.go"
 rg -qF 'ref("install.sh")' "$repo_root/cmd/secondbox-release-tool/main.go"
 rg -qF 'install.sh$' "$repo_root/scripts/test-release-stage.sh"
 if rg -q 'releases/download/v0\.1\.4' "$repo_root/README.md"; then

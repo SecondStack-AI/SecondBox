@@ -98,7 +98,7 @@ func (users fakeUsersWithRanges) ReservedIDRanges() ([]UIDRange, error) { return
 
 func qualifiedProbes() PreflightProbes {
 	files := map[string]string{"/etc/machine-id": "host-1\n", "/sys/fs/cgroup/cgroup.controllers": "cpu memory pids io\n", "/proc/filesystems": "nodev\tbtrfs\n\txfs\n", "/proc/cpuinfo": "processor: 0\nflags : fpu vmx sse\n", "/proc/meminfo": "MemTotal:       33554432 kB\n", "/proc/self/mountinfo": "22 1 8:1 / / rw - ext4 /dev/root rw\n23 1 8:2 / /srv/workspace rw - xfs /dev/sdb rw\n", "/etc/resolv.conf": "nameserver 192.0.2.53\n"}
-	process := &fakeProcess{results: map[string]CommandResult{"uname -r": {Stdout: "6.12.0"}, "systemd --version": {Stdout: "systemd 257"}, "systemctl is-system-running": {Stdout: "running"}, "docker version --format {{.Server.Version}}": {Stdout: "27.5.1"}, "docker compose version --short": {Stdout: "2.32.4"}, "docker compose ls --format json": {Stdout: "[]"}, "ip -o route show": {Stdout: "default via 192.0.2.1 dev eth0\n192.0.2.0/24 dev eth0"}, "ss -H -lntu": {Stdout: "tcp LISTEN 0 128 127.0.0.1:22"}}, errors: map[string]error{}, missing: map[string]bool{}}
+	process := &fakeProcess{results: map[string]CommandResult{"uname -r": {Stdout: "6.12.0"}, "systemctl --version": {Stdout: "systemd 257"}, "systemctl is-system-running": {Stdout: "running"}, "docker version --format {{.Server.Version}}": {Stdout: "27.5.1"}, "docker compose version --short": {Stdout: "2.32.4"}, "docker compose ls --format json": {Stdout: "[]"}, "ip -o route show": {Stdout: "default via 192.0.2.1 dev eth0\n192.0.2.0/24 dev eth0"}, "ss -H -lntu": {Stdout: "tcp LISTEN 0 128 127.0.0.1:22"}}, errors: map[string]error{}, missing: map[string]bool{}}
 	return PreflightProbes{Filesystem: &fakeFilesystem{files: files, lstatErrors: map[string]error{}, openErrors: map[string]error{}, stats: map[string][2]int64{"/srv/workspace": {200 << 30, 250 << 30}}}, Process: process, Network: fakeNetwork{status: 200}, Clock: fakeClock{now: time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)}, Users: fakeUsers{assigned: map[int64]bool{0: true, 1000: true}}, LookupEnv: func(string) (string, bool) { return "", false }, OS: "linux", Architecture: "amd64", CPUCount: 8, InvokingUID: 1000, InvokingGID: 1000}
 }
 
@@ -149,6 +149,20 @@ func TestPreflightAcceptsSystemdDegradedExitStatusAsWarning(t *testing.T) {
 	}
 	if finding := findingByID(t, facts, "systemd"); finding.Class != FindingWarning {
 		t.Fatalf("degraded systemd finding = %#v", finding)
+	}
+}
+
+func TestPreflightDoesNotRequireSystemdLauncherInPath(t *testing.T) {
+	probes := qualifiedProbes()
+	process := probes.Process.(*fakeProcess)
+	process.errors["systemd --version"] = fs.ErrNotExist
+	process.results["systemctl --version"] = CommandResult{Stdout: "systemd 261\n+PAM +AUDIT"}
+	facts, err := Preflight(context.Background(), probes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finding := findingByID(t, facts, "systemd"); finding.Class != FindingPass || facts.SystemdVersion != "systemd 261" {
+		t.Fatalf("systemd finding = %#v, version = %q", finding, facts.SystemdVersion)
 	}
 }
 
