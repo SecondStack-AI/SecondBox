@@ -96,4 +96,30 @@ Archive failure output as well: the harness prints Compose state plus bounded co
 
 `just test-installer` is the ordinary-host suite for installer contracts, release verification, bootstrap generation, fake orchestration, resume, uninstall, and confined purge. It does not substitute for KVM.
 
-`just test-installer-vm` drives disposable systemd guests when an explicit VM controller configuration is present. `just test-installer-qualified` is the non-skipping real-host gate for the published-style bootstrap, Btrfs-image and existing-filesystem paths, reboot recovery, retained-workspace uninstall/resume, purge confinement, and a real hello-world microVM. The harness independently derives a qualification-subject digest from the tested release manifest and requires the driver to report that exact identity. Its evidence is separate from the scenario evidence described above because installer qualification proves host mutation and reboot behavior while `test-scenario` proves the public runtime contract. See [guided single-host installation](guided-single-host-install.md) for the installed topology and authority boundary.
+`just test-installer-vm` drives disposable systemd guests when an explicit VM controller configuration is present. `just test-installer-qualified` is the non-skipping real-host gate for the published-style bootstrap, Btrfs-image and existing-filesystem paths, reboot recovery, retained-workspace uninstall/resume, purge confinement, and a real hello-world microVM. The harness independently derives a qualification-subject digest from the tested release manifest and requires the driver to report that exact identity. Its evidence is separate from the scenario evidence described above because installer qualification proves host mutation and reboot behavior while `test-scenario` proves the public runtime contract.
+
+The repository-owned qualification driver uses `qemu:///system` and creates two sequential, uniquely named Ubuntu guests on one transient NAT network. It stores the pinned base-image copy and guest overlays beneath the explicit qualification workspace root, with traversal permissions for system libvirt; use a dedicated, capacious XFS or Btrfs mount that libvirt can traverse. Cleanup targets only that run's domains, network, and disks; it never uses the libvirt default network or an existing domain. Each guest receives nested KVM, a fresh root disk, and a separate data disk. One guest exercises the bounded Btrfs image; the other formats and mounts the data disk as the explicit existing Btrfs filesystem.
+
+Download the dated qualification image once. The preparation command refuses a different image digest:
+
+```sh
+qualification_image="$PWD/.tmp/installer-qualification/ubuntu-24.04-20260725-amd64.img"
+scripts/prepare-installer-qualification-image.sh "$qualification_image"
+```
+
+After creating the non-publishable candidate, run the gate from the clean tagged checkout:
+
+```sh
+export SECONDBOX_REQUIRE_QUALIFIED_INSTALLER=1
+export SECONDBOX_INSTALLER_RELEASE_DIRECTORY='/absolute/path/to/candidate'
+export SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT='/srv/secondbox/qualification/installer-workspaces'
+export SECONDBOX_INSTALLER_QUALIFICATION_IMAGE="$qualification_image"
+export SECONDBOX_INSTALLER_QUALIFICATION_IMAGE_SHA256='d1940f7d69d343355e183dff1e08a59852d32e7309baa7a4bad8365b11b005ac'
+just test-installer-qualified
+```
+
+Provision `SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT` on the dedicated XFS or Btrfs qualification mount before the run. The release operator must own it, and every ancestor must be traversable by the system libvirt QEMU account; do not place it below a private home directory.
+
+The candidate-only installer path verifies the staged v5 manifest, every referenced release object, and the running deployment binary's embedded version and source commit. The guest then exposes the four staged OCI archives through a guest-local TLS registry under their exact manifest digest references. Public PostgreSQL and object-store images are pulled by digest before the registry override. This path is accepted only through the explicit `--candidate-directory` qualification argument; ordinary install and resume continue to fetch canonical HTTPS release objects and immutable public registry references.
+
+See [guided single-host installation](guided-single-host-install.md) for the installed topology and authority boundary.

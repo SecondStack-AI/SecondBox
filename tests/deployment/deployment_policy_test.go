@@ -147,6 +147,67 @@ func TestReleaseStagingRequiresQualificationEvidenceAndHostedPublishRemainsPubli
 	}
 }
 
+func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testing.T) {
+	wrapper := readRepositoryFile(t, "scripts/test-installer-qualified.sh")
+	for _, required := range []string{
+		`driver="$repo_root/scripts/installer-qualification-driver"`,
+		`--base-image "$SECONDBOX_INSTALLER_QUALIFICATION_IMAGE"`,
+		`--base-image-sha256 "$SECONDBOX_INSTALLER_QUALIFICATION_IMAGE_SHA256"`,
+	} {
+		if !strings.Contains(wrapper, required) {
+			t.Errorf("installer qualification wrapper lacks %q", required)
+		}
+	}
+	if strings.Contains(wrapper, "SECONDBOX_INSTALLER_QUALIFICATION_DRIVER") {
+		t.Fatal("installer qualification must not delegate release evidence to an external driver")
+	}
+
+	driver := readRepositoryFile(t, "scripts/installer-qualification-driver")
+	for _, required := range []string{
+		"qemu:///system",
+		`net-create "$resource_root/network.xml"`,
+		"--cpu host-passthrough",
+		"run_guest btrfs_image",
+		"run_guest existing_reflink_filesystem",
+		`destroy "$domain"`,
+		`undefine "$domain"`,
+		`net-destroy "$network"`,
+		"subnet_overlaps_host_routes",
+		"cleanup_success",
+		`mktemp -d "$existing_workspace_root/secondbox-installer-qualification-`,
+		`chmod 0700 "$guest_root"`,
+		`setfacl -m "u:${account}:rw-"`,
+		`[modprobe, btrfs]`,
+		"repository_base_image_sha256",
+		"candidate_snapshot",
+		"candidateManifestDigest",
+	} {
+		if !strings.Contains(driver, required) {
+			t.Errorf("repository qualification driver lacks %q", required)
+		}
+	}
+	for _, forbidden := range []string{"net-start default", "net-destroy default", "destroy --all", "undefine --all"} {
+		if strings.Contains(driver, forbidden) {
+			t.Errorf("repository qualification driver contains unsafe libvirt operation %q", forbidden)
+		}
+	}
+
+	guest := readRepositoryFile(t, "tests/installer/qualified-guest.sh")
+	for _, required := range []string{
+		"--candidate-directory",
+		"oci-archive:",
+		"qualification-$mode",
+		"docker.io/library/registry@sha256:",
+		"hello after reboot",
+		"purge accepted an unrecorded nested mount",
+		"resume accepted a replacement filesystem",
+	} {
+		if !strings.Contains(guest, required) {
+			t.Errorf("qualified guest executor lacks %q", required)
+		}
+	}
+}
+
 func TestDeploymentCannotReconstructAbsentHomeFromAvailableObjectStore(t *testing.T) {
 	objectStore := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusOK)

@@ -314,6 +314,33 @@ type SystemReleaseMaterializer struct {
 	HTTPClient *http.Client
 }
 
+// CandidateReleaseMaterializer uses only exact images already loaded by the
+// qualification controller and exact staged release objects. It never contacts
+// a registry or release server before publication.
+type CandidateReleaseMaterializer struct {
+	Directory  string
+	Output     io.Writer
+	Diagnostic io.Writer
+}
+
+func (executor CandidateReleaseMaterializer) PullImage(ctx context.Context, reference string) error {
+	command := exec.CommandContext(ctx, "docker", "image", "inspect", reference)
+	command.Env = materializerEnvironment()
+	command.Stdout, command.Stderr = executor.Output, executor.Diagnostic
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("inspect preloaded candidate image %s: %w", reference, err)
+	}
+	return nil
+}
+
+func (executor CandidateReleaseMaterializer) ExtractMicroVMImage(ctx context.Context, reference, target string) error {
+	return (SystemReleaseMaterializer{Output: executor.Output, Diagnostic: executor.Diagnostic}).ExtractMicroVMImage(ctx, reference, target)
+}
+
+func (executor CandidateReleaseMaterializer) Fetch(ctx context.Context, location string) ([]byte, error) {
+	return releaseverify.DirectoryFetcher(executor.Directory)(ctx, location)
+}
+
 func (executor SystemReleaseMaterializer) PullImage(ctx context.Context, reference string) error {
 	return executor.runDocker(ctx, "pull", reference)
 }

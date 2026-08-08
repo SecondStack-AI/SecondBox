@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added a repository-owned QEMU/libvirt installer qualification driver that runs the candidate through isolated Btrfs-image and existing-Btrfs guests, real nested Firecracker execution, reboot and interrupted-stage recovery, retained-lineage uninstall/resume, and mount-confined purge. Candidate installation is explicit, verifies the staged manifest and embedded binary identity, and resolves exact OCI digests through a guest-local TLS registry without weakening the public installer path.
+
 ## 0.4.0 - 2026-08-08
 
 Added a qualified guided installer for one loopback-only Linux amd64 deployment and rebuilt both CLIs around explicit human, plain, JSON, accessible, and raw-output contracts.

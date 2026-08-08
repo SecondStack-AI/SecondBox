@@ -93,6 +93,33 @@ func runGuidedInstall(ctx context.Context, renderer cliui.Renderer, facts instal
 	return runGuidedInstallWith(ctx, renderer, facts, advanced, dependencies)
 }
 
+func runInstallCandidate(ctx context.Context, directory string, renderer cliui.Renderer) error {
+	guide := func(ctx context.Context, renderer cliui.Renderer, facts install.HostFacts, advanced bool) error {
+		dependencies := systemGuidedInstallDependencies()
+		dependencies.VerifyRelease = func(ctx context.Context, _ string) (releaseverify.VerifiedRelease, error) {
+			return verifyCandidateDirectory(ctx, directory)
+		}
+		dependencies.Continue = func(ctx context.Context, operation string) error {
+			return runInstallResumeWith(ctx, operation, renderer, candidateInstallResumeDependencies(renderer, directory))
+		}
+		return runGuidedInstallWith(ctx, renderer, facts, advanced, dependencies)
+	}
+	return runInstallPreflightWithGuide(ctx, nil, renderer, func(ctx context.Context) (install.HostFacts, error) {
+		return install.Preflight(ctx, install.SystemPreflightProbes())
+	}, guide)
+}
+
+func verifyCandidateDirectory(ctx context.Context, directory string) (releaseverify.VerifiedRelease, error) {
+	verified, err := releaseverify.CandidateDirectory(ctx, directory)
+	if err != nil {
+		return releaseverify.VerifiedRelease{}, err
+	}
+	if verified.Manifest.Version != buildinfo.Version || verified.Manifest.SourceCommit != buildinfo.SourceCommit {
+		return releaseverify.VerifiedRelease{}, fmt.Errorf("SecondBox installer candidate identity %s at %s differs from running binary %s at %s", verified.Manifest.Version, verified.Manifest.SourceCommit, buildinfo.Version, buildinfo.SourceCommit)
+	}
+	return verified, nil
+}
+
 func runGuidedInstallWith(ctx context.Context, renderer cliui.Renderer, facts install.HostFacts, advanced bool, dependencies guidedInstallDependencies) error {
 	if renderer.OutputMode == cliui.OutputJSON {
 		return &deployExitError{code: 3, err: errors.New("SecondBox installer: guided installation does not accept --output json; use install --check for JSON host facts")}

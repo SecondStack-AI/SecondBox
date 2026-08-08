@@ -104,6 +104,25 @@ func runInstallResume(ctx context.Context, directory string, renderer cliui.Rend
 	return runInstallResumeWith(ctx, directory, renderer, systemInstallResumeDependencies(renderer))
 }
 
+func runInstallCandidateResume(ctx context.Context, directory, candidateDirectory string, renderer cliui.Renderer) error {
+	if renderer.OutputMode == cliui.OutputJSON {
+		return &deployExitError{code: 3, err: errors.New("SecondBox installer: candidate resume does not accept --output json")}
+	}
+	return runInstallResumeWith(ctx, directory, renderer, candidateInstallResumeDependencies(renderer, candidateDirectory))
+}
+
+func candidateInstallResumeDependencies(renderer cliui.Renderer, directory string) installResumeDependencies {
+	dependencies := systemInstallResumeDependencies(renderer)
+	dependencies.VerifyRelease = func(ctx context.Context, _ string) (releaseverify.VerifiedRelease, error) {
+		return verifyCandidateDirectory(ctx, directory)
+	}
+	dependencies.Materialize = func(ctx context.Context, plan install.InstallPlan, receipt install.InstallReceipt, verified releaseverify.VerifiedRelease, persist func(install.InstallReceipt) error) (install.InstallReceipt, install.VerifiedArtifact, error) {
+		executor := install.CandidateReleaseMaterializer{Directory: directory, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic}
+		return install.MaterializeRelease(ctx, plan, receipt, verified, install.ReleaseMaterializeDependencies{Executor: executor, PersistReceipt: persist, Now: time.Now})
+	}
+	return dependencies
+}
+
 func runInstallResumeWith(ctx context.Context, directory string, renderer cliui.Renderer, dependencies installResumeDependencies) (resultErr error) {
 	if dependencies.Now == nil || dependencies.VerifyRelease == nil || dependencies.Postconditions == nil || dependencies.Materialize == nil || dependencies.Initialize == nil || dependencies.Enroll == nil || dependencies.Compose == nil || dependencies.ComposeProject == nil || dependencies.Login == nil || dependencies.Readiness == nil || dependencies.Smoke == nil || dependencies.HostApply == nil || dependencies.Revalidate == nil {
 		return errors.New("SecondBox installer resume: dependencies are incomplete")

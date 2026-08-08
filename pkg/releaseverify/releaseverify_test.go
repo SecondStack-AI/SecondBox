@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -15,6 +17,35 @@ func TestHTTPFetcherRejectsNonPublicLocation(t *testing.T) {
 	_, err := HTTPFetcher(http.DefaultClient)(context.Background(), "http://example.com/artifact-manifest.json")
 	if err == nil || !strings.Contains(err.Error(), "public HTTPS") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestDirectoryFetcherAcceptsOnlyExactCandidateObjects(t *testing.T) {
+	directory := t.TempDir()
+	object := filepath.Join(directory, "secondbox-object.json")
+	if err := os.WriteFile(object, []byte("candidate bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fetch := DirectoryFetcher(directory)
+	location := "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.4.0/secondbox-object.json"
+	data, err := fetch(t.Context(), location)
+	if err != nil || string(data) != "candidate bytes" {
+		t.Fatalf("candidate fetch = %q, %v", data, err)
+	}
+	for _, rejected := range []string{
+		"http://github.com/SecondStack-AI/SecondBox/releases/download/v0.4.0/secondbox-object.json",
+		"https://example.com/SecondStack-AI/SecondBox/releases/download/v0.4.0/secondbox-object.json",
+		location + "?replacement=true",
+	} {
+		if _, err := fetch(t.Context(), rejected); err == nil {
+			t.Fatalf("candidate fetch accepted %q", rejected)
+		}
+	}
+	if err := os.Symlink(object, filepath.Join(directory, "linked.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fetch(t.Context(), "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.4.0/linked.json"); err == nil || !strings.Contains(err.Error(), "non-symbolic-link regular file") {
+		t.Fatalf("candidate symlink error = %v", err)
 	}
 }
 
