@@ -31,8 +31,15 @@ func TestStandardResourcesFreshUpgradeAndReplayConvergeThroughLiveControlPlane(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(fresh.Results) != 3 {
+	if len(fresh.Results) != 4 || fresh.Results[1].Action != resourceapply.ActionCreate || fresh.Results[2].Action != resourceapply.ActionAppend {
 		t.Fatalf("fresh results = %#v", fresh.Results)
+	}
+	agent, err := client.GetProfile(t.Context(), standardresources.AgentCompartment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(agent.Revisions) != 2 || agent.Revisions[0].Spec.Execution.MaximumDeadlineMilliseconds != 120000 || agent.CurrentRevision.Number != 2 || agent.CurrentRevision.Spec.Execution.MaximumDeadlineMilliseconds != 900000 {
+		t.Fatalf("fresh agent-compartment lineage = %#v", agent)
 	}
 
 	upgraded := document
@@ -72,8 +79,8 @@ func TestStandardResourcesFreshUpgradeAndReplayConvergeThroughLiveControlPlane(t
 
 func liveStandardDocument(t *testing.T) resourceapply.Document {
 	t.Helper()
-	runtimeDigest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	toolchainDigest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	runtimeDigest := "sha256:9279ca3f8bc3eac4adcd1953926a33fc42da99641d60af042eea12eb12ba0335"
+	toolchainDigest := "sha256:cd859a7b0ef9849cc842c8b9c4d0b3b21340e50bed1ac712126585a9fa5553b4"
 	agent, err := standardresources.ProfileLineage(standardresources.AgentCompartment, runtimeDigest, toolchainDigest)
 	if err != nil {
 		t.Fatal(err)
