@@ -8,7 +8,7 @@ Superseded the unpublished v0.4.1 tag after real-host qualification reached a la
 
 ### Fixed
 
-- The installer qualification driver now assigns its guest mode before deriving the domain and workspace names from it. With `set -u`, the original combined `local` declaration expanded `mode` before assigning it and stopped before creating the first disposable VM.
+- The installer qualification driver now assigns its guest mode before deriving the domain and workspace names from it. With `set -u`, the original combined `local` declaration expanded `mode` before assigning it and stopped before creating the first disposable VM ([#83](https://github.com/SecondStack-AI/SecondBox/pull/83)).
 
 ## 0.4.1 - 2026-08-08
 
