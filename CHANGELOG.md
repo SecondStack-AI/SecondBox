@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.4.3 - 2026-08-08
+
+Superseded the unpublished v0.4.2 tag after real-host release qualification reproduced a long-lived Runner control-session failure.
+
+### Fixed
+
+- Runner control sessions now keep a bounded recent message-ID window and defer older replays to PostgreSQL's durable duplicate and sequence authority. The former 256-ID map was a fatal connection-lifetime cap: the release scenario crossed it during four-way snapshot-resume measurement, disconnected the Runner, and left otherwise-ready Sandboxes stuck in `starting` ([#84](https://github.com/SecondStack-AI/SecondBox/pull/84)).
+
 ## 0.4.2 - 2026-08-08
 
 Superseded the unpublished v0.4.1 tag after real-host qualification reached a latent strict-shell failure in the new driver.

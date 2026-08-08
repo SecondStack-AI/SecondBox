@@ -50,22 +50,36 @@ func TestSessionDeduplicatesAndRejectsReorderedRunnerEvidence(t *testing.T) {
 	}
 }
 
-func TestSessionRejectsMessageIDDedupeOverflow(t *testing.T) {
+func TestSessionBoundsMessageIDDedupeAndDefersOldReplayToDurableState(t *testing.T) {
 	session := negotiatedSession(t)
 	if _, err := session.Accept(registrationFrame("runner-1", "connection-1", 1)); err != nil {
 		t.Fatal(err)
 	}
-	for sequence := uint64(2); sequence <= maxSessionMessageIDs; sequence++ {
+	for sequence := uint64(2); sequence <= maxSessionMessageIDs+2; sequence++ {
 		if _, err := session.Accept(heartbeatFrame(
 			"runner-1", "connection-1", fmt.Sprintf("heartbeat-%d", sequence), sequence,
 		)); err != nil {
 			t.Fatalf("message %d: %v", sequence, err)
 		}
 	}
-	if _, err := session.Accept(heartbeatFrame(
-		"runner-1", "connection-1", "heartbeat-overflow", maxSessionMessageIDs+1,
-	)); !errors.Is(err, ErrSessionMessageIDLimit) {
-		t.Fatalf("dedupe overflow error = %v, want ErrSessionMessageIDLimit", err)
+	if got := len(session.messageIDs); got != maxSessionMessageIDs {
+		t.Fatalf("message ID window size = %d, want %d", got, maxSessionMessageIDs)
+	}
+	if _, found := session.messageIDs["heartbeat-2"]; found {
+		t.Fatal("oldest message ID remained in the bounded window")
+	}
+	if _, found := session.messageIDs[fmt.Sprintf("heartbeat-%d", maxSessionMessageIDs+2)]; !found {
+		t.Fatal("newest message ID is absent from the bounded window")
+	}
+
+	oldReplay, err := session.Accept(heartbeatFrame(
+		"runner-1", "connection-1", "heartbeat-2", 2,
+	))
+	if err != nil || oldReplay.Kind != EventHeartbeat {
+		t.Fatalf("old replay event = %#v, %v; want durable Heartbeat validation", oldReplay, err)
+	}
+	if got := session.lastSequence; got != maxSessionMessageIDs+2 {
+		t.Fatalf("last sequence after old replay = %d, want %d", got, maxSessionMessageIDs+2)
 	}
 }
 

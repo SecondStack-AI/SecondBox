@@ -287,6 +287,28 @@ func RunRunnerConformanceSuite(t *testing.T, factory BoundaryFactory) {
 		}
 	})
 
+	t.Run("duplicate_older_than_session_window", func(t *testing.T) {
+		boundary := factory(t, now)
+		runner := NewFakeRunner("runner-conformance", "pool-conformance", "connection-1")
+		connectAndRegister(t, boundary, runner, now)
+		first := runner.Heartbeat(runnerv1.DrainPhase_DRAIN_PHASE_ACTIVE)
+		if _, err := boundary.Receive(t.Context(), runner.ConnectionID, first, now); err != nil {
+			t.Fatal(err)
+		}
+		for range 260 {
+			if _, err := boundary.Receive(
+				t.Context(), runner.ConnectionID,
+				runner.Heartbeat(runnerv1.DrainPhase_DRAIN_PHASE_ACTIVE), now,
+			); err != nil {
+				t.Fatal(err)
+			}
+		}
+		outcome, err := boundary.Receive(t.Context(), runner.ConnectionID, first, now)
+		if err != nil || outcome != OutcomeDuplicate {
+			t.Fatalf("old duplicate outcome, error = %q, %v", outcome, err)
+		}
+	})
+
 	t.Run("reordered_result", func(t *testing.T) {
 		boundary := factory(t, now)
 		runner := NewFakeRunner("runner-conformance", "pool-conformance", "connection-1")
