@@ -92,4 +92,28 @@ func TestReadAcceptedRejectsChangedReceiptBoundary(t *testing.T) {
 	if _, _, err := ReadAccepted(directory, digest, os.Getuid()); err == nil {
 		t.Fatal("post-acceptance receipt succeeded at private apply boundary")
 	}
+	if _, completed, err := ReadHostApply(directory, digest, os.Getuid()); err != nil || completed.CompletedStages[len(completed.CompletedStages)-1].Stage != StageHostApply {
+		t.Fatalf("completed host apply was unavailable for privileged replay: %#v, %v", completed.CompletedStages, err)
+	}
+}
+
+func TestReadHostApplyRejectsPreAcceptanceReceipt(t *testing.T) {
+	directory, plan, digest := acceptedFixture(t)
+	receipt, err := NewReceipt(plan, plan.CreatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := receipt.CompleteStage(StagePreflight, plan.CreatedAt, nil); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := Canonical(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "install-receipt.json"), append(encoded, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ReadHostApply(directory, digest, os.Getuid()); err == nil {
+		t.Fatal("pre-acceptance receipt reached private host apply")
+	}
 }

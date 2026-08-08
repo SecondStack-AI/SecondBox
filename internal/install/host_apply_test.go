@@ -272,11 +272,6 @@ func TestHostApplyRevalidationAndReplayFailBeforeMutation(t *testing.T) {
 	}{
 		{"not root", acceptedReceipt(t, plan), &fakeHostApplyExecutor{euid: 1000, nonempty: map[ResourceKind]bool{}}},
 		{"stale root facts", acceptedReceipt(t, plan), &fakeHostApplyExecutor{euid: 0, revalidate: errors.New("KVM changed"), nonempty: map[ResourceKind]bool{}}},
-		{"repeated apply", func() InstallReceipt {
-			value := acceptedReceipt(t, plan)
-			_ = value.CompleteStage(StageHostApply, plan.CreatedAt, nil)
-			return value
-		}(), &fakeHostApplyExecutor{euid: 0, nonempty: map[ResourceKind]bool{}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := ApplyHost(context.Background(), plan, test.receipt, HostApplyDependencies{Executor: test.exec, Now: time.Now, PersistReceipt: func(InstallReceipt) error { t.Fatal("receipt persisted"); return nil }})
@@ -289,5 +284,25 @@ func TestHostApplyRevalidationAndReplayFailBeforeMutation(t *testing.T) {
 				t.Fatalf("mutation occurred: %#v", test.exec.calls)
 			}
 		})
+	}
+}
+
+func TestCompletedHostApplyReplayOnlyRevalidates(t *testing.T) {
+	plan := imageApplyPlan(t)
+	receipt := acceptedReceipt(t, plan)
+	if err := receipt.CompleteStage(StageHostApply, plan.CreatedAt, map[string]string{"workspaceDeviceIdentity": "8:44", "reflinkMutationIsolation": "passed"}); err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeHostApplyExecutor{euid: 0, nonempty: map[ResourceKind]bool{}}
+	persisted := false
+	updated, err := ApplyHost(context.Background(), plan, receipt, HostApplyDependencies{Executor: executor, Now: time.Now, PersistReceipt: func(InstallReceipt) error {
+		persisted = true
+		return nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted || !slices.Equal(executor.calls, []string{"revalidate"}) || len(updated.CompletedStages) != len(receipt.CompletedStages) {
+		t.Fatalf("completed replay mutated state: persisted=%t calls=%#v stages=%#v", persisted, executor.calls, updated.CompletedStages)
 	}
 }

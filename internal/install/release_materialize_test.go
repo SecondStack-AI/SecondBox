@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,6 +15,38 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
 	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
 )
+
+func TestSystemReleaseMaterializerExtractMicroVMImageOverridesMissingImageCommand(t *testing.T) {
+	bin := t.TempDir()
+	docker := filepath.Join(bin, "docker")
+	const reference = "ghcr.io/secondstack-ai/secondbox/microvm-artifacts@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const script = `#!/bin/sh
+case "$1" in
+create)
+	[ "$#" -eq 4 ] && [ "$2" = "--entrypoint" ] && [ "$3" = "/bin/true" ] && [ "$4" = "` + reference + `" ] || exit 91
+	printf '%s\n' fake-container-id
+	;;
+cp)
+	[ "$#" -eq 3 ] && [ "$2" = "fake-container-id:/secondbox-runner-microvm/." ] || exit 92
+	;;
+rm)
+	[ "$#" -eq 3 ] && [ "$2" = "--force" ] && [ "$3" = "fake-container-id" ] || exit 93
+	;;
+*)
+	exit 94
+	;;
+esac
+`
+	if err := os.WriteFile(docker, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+
+	materializer := SystemReleaseMaterializer{Output: io.Discard, Diagnostic: io.Discard}
+	if err := materializer.ExtractMicroVMImage(context.Background(), reference, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+}
 
 type fakeReleaseMaterializer struct {
 	source      string
@@ -83,6 +116,9 @@ func TestMaterializeReleaseResumesWithoutReextractingVerifiedBundle(t *testing.T
 		t.Fatal(err)
 	}
 	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".local"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	operation := filepath.Join(root, "operation")
 	if err := os.Mkdir(operation, 0o700); err != nil {
 		t.Fatal(err)
@@ -168,6 +204,16 @@ func TestMaterializeReleaseResumesWithoutReextractingVerifiedBundle(t *testing.T
 		if info.Mode().Perm() != 0o755 {
 			t.Fatalf("%s mode under hardened umask = %o", name, info.Mode().Perm())
 		}
+	}
+	localInfo, err := os.Stat(filepath.Join(root, ".local"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if localInfo.Mode().Perm() != 0o700 {
+		t.Fatalf("pre-existing binary root mode = %o, want preserved 700", localInfo.Mode().Perm())
+	}
+	if _, recorded := receiptResource(completed, "binary-directory-root"); recorded {
+		t.Fatal("pre-existing binary root was claimed as an installer-created resource")
 	}
 }
 

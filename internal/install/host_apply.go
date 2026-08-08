@@ -33,7 +33,7 @@ func ApplyAcceptedHost(ctx context.Context, directory, expectedDigest string, ca
 		return InstallReceipt{}, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
-	plan, receipt, err := ReadAccepted(directory, expectedDigest, callerUID)
+	plan, receipt, err := ReadHostApply(directory, expectedDigest, callerUID)
 	if err != nil {
 		return InstallReceipt{}, err
 	}
@@ -63,11 +63,17 @@ func ApplyHost(ctx context.Context, plan InstallPlan, receipt InstallReceipt, de
 	if dependencies.Executor.EffectiveUID() != 0 {
 		return receipt, installerError("private host apply must run as root through sudo", nil)
 	}
-	if len(receipt.CompletedStages) != 2 || receipt.CompletedStages[1].Stage != StagePlanAccepted {
+	_, hostApplyComplete := completedStage(receipt, StageHostApply)
+	if !hostApplyComplete && (len(receipt.CompletedStages) != 2 || receipt.CompletedStages[1].Stage != StagePlanAccepted) {
 		return receipt, installerError("host apply requires an accepted, not-yet-applied plan", nil)
 	}
 	if err := dependencies.Executor.Revalidate(ctx, plan, receipt); err != nil {
 		return receipt, installerError("root prerequisite revalidation", err)
+	}
+	if hostApplyComplete {
+		// A completed host-apply replay is a privileged postcondition check,
+		// not permission to mutate the accepted host paths again.
+		return receipt, nil
 	}
 	createdThisAttempt := []CreatedResource{}
 	fail := func(problem error) (InstallReceipt, error) {

@@ -136,12 +136,17 @@ func runInstallResumeWith(ctx context.Context, directory string, renderer cliui.
 		return err
 	}
 	last := lastInstallStage(receipt)
-	if last == install.StagePlanAccepted {
+	if slices.Index(install.StageSequence, last) >= slices.Index(install.StageSequence, install.StagePlanAccepted) &&
+		receipt.Status != install.OperationPurging && receipt.Status != install.OperationPurged && receipt.Status != install.OperationUninstalling {
 		digest, err := install.PlanDigest(plan)
 		if err != nil {
 			return err
 		}
-		if err := runInstallPhase(ctx, renderer, "Privileged host preparation", "apply reviewed host resources", func() error { return dependencies.HostApply(ctx, absolute, digest) }); err != nil {
+		name, detail := "Privileged host verification", "verify reviewed host resources"
+		if last == install.StagePlanAccepted {
+			name, detail = "Privileged host preparation", "apply reviewed host resources"
+		}
+		if err := runInstallPhase(ctx, renderer, name, detail, func() error { return dependencies.HostApply(ctx, absolute, digest) }); err != nil {
 			return err
 		}
 	}

@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -106,12 +107,27 @@ func (executor SystemHostApplyExecutor) Revalidate(ctx context.Context, plan Ins
 			return installerError("privileged target "+planned.Name, err)
 		}
 	}
+	if hostApply, complete := completedStage(receipt, StageHostApply); complete {
+		workspace, found := plannedPathByName(plan.Paths, "workspace")
+		resource, recorded := receiptResource(receipt, "workspace")
+		if !found || !recorded {
+			return installerError("completed host apply lacks the recorded Workspace", nil)
+		}
+		info, err := os.Lstat(workspace.Path)
+		stat, ok := infoSyscallStat(info, err)
+		if !ok || hostApply.Evidence["workspaceDeviceIdentity"] == "" || filesystemDeviceIdentity(stat) != hostApply.Evidence["workspaceDeviceIdentity"] {
+			return installerError("recorded Workspace device identity changed", err)
+		}
+		if err := validateRecordedHostApplyPath(plan, workspace, resource); err != nil {
+			return err
+		}
+	}
 	if plan.Storage.Choice == StorageBtrfsImage {
 		if filepath.Base(plan.Storage.MountUnitPath) != systemdMountUnitName(plan.Storage.WorkspacePath) {
 			return installerError("mount unit name does not encode the exact workspace mountpoint", nil)
 		}
-		var stat unix.Statfs_t
-		if err := unix.Statfs(filepath.Dir(plan.Storage.FilesystemImagePath), &stat); err != nil {
+		stat, err := statfsExistingAncestor(filepath.Dir(plan.Storage.FilesystemImagePath))
+		if err != nil {
 			return installerError("inspect filesystem-image backing capacity", err)
 		}
 		available := int64(stat.Bavail) * int64(stat.Bsize)
@@ -140,6 +156,47 @@ func (executor SystemHostApplyExecutor) Revalidate(ctx context.Context, plan Ins
 		return installerError("deployment filesystem capacity became insufficient", nil)
 	}
 	return ctx.Err()
+}
+
+func infoSyscallStat(info os.FileInfo, err error) (*syscall.Stat_t, bool) {
+	if err != nil || info == nil {
+		return nil, false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return stat, ok
+}
+
+func statfsExistingAncestor(path string) (unix.Statfs_t, error) {
+	for {
+		info, err := os.Lstat(path)
+		if err == nil {
+			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return unix.Statfs_t{}, errors.New("existing capacity ancestor is not a real directory")
+			}
+			fd, err := openDirectoryNoSymlinks(path)
+			if err != nil {
+				return unix.Statfs_t{}, err
+			}
+			var stat unix.Statfs_t
+			statErr := unix.Fstatfs(fd, &stat)
+			closeErr := unix.Close(fd)
+			if statErr != nil {
+				return unix.Statfs_t{}, statErr
+			}
+			if closeErr != nil {
+				return unix.Statfs_t{}, closeErr
+			}
+			return stat, nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return unix.Statfs_t{}, err
+		}
+		next := filepath.Dir(path)
+		if next == path {
+			return unix.Statfs_t{}, errors.New("capacity path has no existing ancestor")
+		}
+		path = next
+	}
 }
 
 func filesystemImageBackingRequired(plan InstallPlan, receipt InstallReceipt, imageExists bool) int64 {

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.4.4 - 2026-08-08
+
+Superseded the unpublished v0.4.3 tag after the first installer qualification VM exposed a host-firewall dependency in the libvirt bridge transport.
+
+### Fixed
+
+- Installer qualification now gives each disposable guest a deterministic MAC address, an explicit NoCloud v2 DHCP configuration, and an isolated QEMU user network with a verified localhost-only SSH forward. This removes its dependency on host firewall rules for libvirt bridge DHCP and DNS. A bounded serial-console tail now accompanies future reachability failures before cleanup ([#85](https://github.com/SecondStack-AI/SecondBox/pull/85)).
+- Filesystem-image installation now revalidates free capacity through the nearest existing safe ancestor before creating its operation-specific Runner directory. The former check addressed the not-yet-created image parent directly and rejected every new Btrfs-image installation with `no such file or directory` ([#85](https://github.com/SecondStack-AI/SecondBox/pull/85)).
+- The release-pinned installer-tools image now starts the Debian `btrfs-progs` formatter from its packaged `/usr/sbin/mkfs.btrfs` path. The former `/usr/bin` entrypoint made every filesystem-image installation fail after allocation when the container runtime could not start the formatter ([#85](https://github.com/SecondStack-AI/SecondBox/pull/85)).
+- Installer resume now revalidates root-owned host resources through the private sudo helper and limits unprivileged postcondition checks to their exact plan-and-receipt identity. The former unprivileged `lstat` attempted to traverse the intentionally root-only Runner directory immediately after host apply and stopped every installation with `permission denied` ([#85](https://github.com/SecondStack-AI/SecondBox/pull/85)).
+- MicroVM artifact extraction now supplies an inert create-time entrypoint before copying files out of the release-pinned OCI image. The artifact-only image intentionally has no configured command, so bare `docker create` rejected every installation during release asset materialization ([#85](https://github.com/SecondStack-AI/SecondBox/pull/85)).
+- Release materialization now preserves safe invoking-user directory parents that predate the installation, including a private `~/.local`. The previous exact create-time mode check rejected a normal pre-existing `0700` parent even though it was owner-controlled and the installer neither created nor claimed it ([#85](https://github.com/SecondStack-AI/SecondBox/pull/85)).
+
 ## 0.4.3 - 2026-08-08
 
 Superseded the unpublished v0.4.2 tag after real-host release qualification reproduced a long-lived Runner control-session failure.

@@ -17,6 +17,33 @@ import (
 const maximumAcceptedDocumentBytes = 8 << 20
 
 func ReadAccepted(directory, expectedPlanDigest string, ownerUID int) (InstallPlan, InstallReceipt, error) {
+	plan, receipt, err := readOperationWithDigest(directory, expectedPlanDigest, ownerUID)
+	if err != nil {
+		return InstallPlan{}, InstallReceipt{}, err
+	}
+	if len(receipt.CompletedStages) != 2 || receipt.CompletedStages[0].Stage != StagePreflight || receipt.CompletedStages[1].Stage != StagePlanAccepted || receipt.Status != OperationRunning {
+		return InstallPlan{}, InstallReceipt{}, installerError("accepted receipt is not at the immutable host-apply boundary", nil)
+	}
+	return plan, receipt, nil
+}
+
+// ReadHostApply securely loads either the immutable pre-apply boundary or a
+// receipt whose host apply has completed. The latter authorizes only the
+// privileged read-only replay implemented by ApplyHost.
+func ReadHostApply(directory, expectedPlanDigest string, ownerUID int) (InstallPlan, InstallReceipt, error) {
+	plan, receipt, err := readOperationWithDigest(directory, expectedPlanDigest, ownerUID)
+	if err != nil {
+		return InstallPlan{}, InstallReceipt{}, err
+	}
+	accepted := len(receipt.CompletedStages) == 2 && receipt.CompletedStages[0].Stage == StagePreflight && receipt.CompletedStages[1].Stage == StagePlanAccepted && receipt.Status == OperationRunning
+	_, completed := completedStage(receipt, StageHostApply)
+	if !accepted && !completed {
+		return InstallPlan{}, InstallReceipt{}, installerError("receipt is not at or beyond the immutable host-apply boundary", nil)
+	}
+	return plan, receipt, nil
+}
+
+func readOperationWithDigest(directory, expectedPlanDigest string, ownerUID int) (InstallPlan, InstallReceipt, error) {
 	if err := validateSafePath(directory); err != nil {
 		return InstallPlan{}, InstallReceipt{}, installerError("accepted operation directory", err)
 	}
@@ -47,9 +74,6 @@ func ReadAccepted(directory, expectedPlanDigest string, ownerUID int) (InstallPl
 	receipt, err := DecodeReceipt(receiptBytes, plan)
 	if err != nil {
 		return InstallPlan{}, InstallReceipt{}, err
-	}
-	if len(receipt.CompletedStages) != 2 || receipt.CompletedStages[0].Stage != StagePreflight || receipt.CompletedStages[1].Stage != StagePlanAccepted || receipt.Status != OperationRunning {
-		return InstallPlan{}, InstallReceipt{}, installerError("accepted receipt is not at the immutable host-apply boundary", nil)
 	}
 	return plan, receipt, nil
 }

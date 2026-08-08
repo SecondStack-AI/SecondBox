@@ -47,7 +47,7 @@ func TestInstallResumeOrchestratesEveryDurableStageWithoutPrintingSecrets(t *tes
 	now := time.Now()
 	dependencies := installResumeDependencies{
 		OwnerUID: os.Getuid(), Now: func() time.Time { now = now.Add(time.Second); return now },
-		HostApply:  func(context.Context, string, string) error { t.Fatal("host apply repeated"); return nil },
+		HostApply:  func(context.Context, string, string) error { calls = append(calls, "host-apply"); return nil },
 		Revalidate: func(install.InstallPlan) error { calls = append(calls, "revalidate"); return nil },
 		VerifyRelease: func(context.Context, string) (releaseverify.VerifiedRelease, error) {
 			calls = append(calls, "verify-release")
@@ -130,7 +130,7 @@ func TestInstallResumeOrchestratesEveryDurableStageWithoutPrintingSecrets(t *tes
 	if final.Status != install.OperationSucceeded || len(final.CompletedStages) != len(install.StageSequence) {
 		t.Fatalf("final receipt = status %s stages %#v", final.Status, final.CompletedStages)
 	}
-	wantCalls := []string{"revalidate", "verify-release", "postconditions", "materialize", "initialize", "enroll", "compose-prepare", "compose-up", "login", "readiness", "smoke"}
+	wantCalls := []string{"host-apply", "revalidate", "verify-release", "postconditions", "materialize", "initialize", "enroll", "compose-prepare", "compose-up", "login", "readiness", "smoke"}
 	if strings.Join(calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("calls = %#v", calls)
 	}
@@ -144,7 +144,7 @@ func TestInstallResumeOrchestratesEveryDurableStageWithoutPrintingSecrets(t *tes
 	if err := runInstallResumeWith(context.Background(), operation, renderer, dependencies); err != nil {
 		t.Fatalf("repeat resume: %v", err)
 	}
-	if want := "revalidate,verify-release,postconditions,readiness"; strings.Join(calls, ",") != want {
+	if want := "host-apply,revalidate,verify-release,postconditions,readiness"; strings.Join(calls, ",") != want {
 		t.Fatalf("repeat resume calls = %#v, want %s", calls, want)
 	}
 }

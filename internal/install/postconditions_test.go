@@ -35,8 +35,21 @@ func TestRecordedResourcePostconditionsRejectChangedModeAndMissingTarget(t *test
 	if err := receipt.AppendResource(CreatedResource{ID: "operation-directory", Kind: ResourceDirectory, Path: path, Class: PathUserDeployment, Stage: StagePlanAccepted, Mode: 0o700, OwnerUID: int64(os.Getuid()), OwnerGID: int64(os.Getgid())}); err != nil {
 		t.Fatal(err)
 	}
+	workspace, found := plannedPathByName(plan.Paths, "workspace")
+	if !found {
+		t.Fatal("workspace path is absent")
+	}
+	if err := receipt.AppendResource(resourceFromPath(workspace, StageHostApply)); err != nil {
+		t.Fatal(err)
+	}
 	if err := ValidateRecordedResources(plan, receipt); err != nil {
 		t.Fatal(err)
+	}
+	changedStage := receipt
+	changedStage.CreatedResources = append([]CreatedResource(nil), receipt.CreatedResources...)
+	changedStage.CreatedResources[len(changedStage.CreatedResources)-1].Stage = StageAssetsMaterialized
+	if err := ValidateRecordedResources(plan, changedStage); err == nil {
+		t.Fatal("privileged resource with an invalid stage was accepted")
 	}
 	if err := os.Chmod(path, 0o755); err != nil {
 		t.Fatal(err)

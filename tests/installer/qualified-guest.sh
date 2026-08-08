@@ -70,7 +70,7 @@ setup_candidate_registry() {
 control-plane control-plane.oci.tar $(jq -er .controlPlane.reference "$manifest")
 runner runner.oci.tar $(jq -er .runner.reference "$manifest")
 installer-tools installer-tools.oci.tar $(jq -er .installerTools.reference "$manifest")
-microvm-artifacts microvm-artifacts.oci.tar $(jq -er .microVM.imageReference "$manifest")
+microvm-artifacts microvm-artifacts.oci.tar $(jq -er .microvm.imageReference "$manifest")
 EOF
 }
 
