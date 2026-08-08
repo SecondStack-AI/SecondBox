@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+
+import ipaddress
+import sys
+
+
+def fail(message):
+    print(f"qualification subnet selection: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+reserved = []
+for value in sys.argv[1:]:
+    try:
+        network = ipaddress.ip_network(value, strict=False)
+    except ValueError:
+        fail(f"invalid reserved network {value!r}")
+    if not isinstance(network, ipaddress.IPv4Network):
+        fail(f"reserved network is not IPv4: {value!r}")
+    reserved.append(network)
+
+for private_pool in (
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("10.0.0.0/8"),
+):
+    for candidate in private_pool.subnets(new_prefix=24):
+        if all(not candidate.overlaps(network) for network in reserved):
+            print(candidate)
+            raise SystemExit(0)
+
+fail("no isolated RFC1918 /24 remains")
