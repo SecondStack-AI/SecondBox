@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.0 - 2026-08-08
+
+Added a qualified guided installer for one loopback-only Linux amd64 deployment and rebuilt both CLIs around explicit human, plain, JSON, accessible, and raw-output contracts.
+
+Existing v0.3.1 deployments need no database migration, public API change, Runner protocol change, or guest update. The v0.3.0 microVM bundle and trust anchor carry forward unchanged. Applying the release-owned standard resources creates a new `agent-compartment` revision whose command deadline ceiling matches the Sandbox's 900-second maximum lifetime.
+
+### Added
+
+- Added `secondbox-deploy install`, a resumable single-host workflow that performs read-only preflight, verifies one immutable public release, reviews storage and capacity, records every accepted path and authority decision, prepares only bounded host resources, starts the deployment, logs in the CLI, and proves the result by running a command in a Firecracker microVM. Ordinary uninstall preserves durable state, explicit purge deletes only plan-and-receipt-matched resources, and a bounded support workflow excludes secrets and Workspace content ([#79](https://github.com/SecondStack-AI/SecondBox/pull/79)).
+- Added a release-pinned `install.sh`, digest-pinned bundled-service and installer-tools artifacts, and clean-VM installer qualification evidence to the release manifest. Release staging refuses to publish installer bytes that were not exercised through install, reboot, resume, uninstall, purge, and a real microVM run ([#79](https://github.com/SecondStack-AI/SecondBox/pull/79)).
+- Added capability-aware terminal presentation to both CLIs: width-aware tables, bounded summaries, lifecycle progress, accessible prompts, explicit `--output auto|json|plain` and `--color auto|always|never` modes, `NO_COLOR`, and help through no arguments, `help`, `--help`, or `-h`. Raw guest, file, artifact, log, and Compose streams remain byte-authoritative and never pass through the presentation layer ([#79](https://github.com/SecondStack-AI/SecondBox/pull/79)).
+
+### Changed
+
+- Raised the release-owned `agent-compartment` command deadline ceiling from 120 seconds to 900 seconds, matching the Sandbox's own maximum lifetime so callers may request enough time for an install, build, or large search without the Profile rejecting the deadline ([#79](https://github.com/SecondStack-AI/SecondBox/pull/79)).
+
+### Fixed
+
+- Kept ANSI presentation bytes out of error sanitization, detected systemd through `systemctl` on distributions that do not install a standalone `systemd` executable, and made local development installers reject their non-release identity before attempting a fabricated `v0.0.0-development` download ([#79](https://github.com/SecondStack-AI/SecondBox/pull/79)).
+
 ## 0.3.1 - 2026-08-07
 
 Repaired the idle accounting that made a restarted Sandbox unusable, and let a manifest name its Compose project so a second deployment cannot seize the first.
