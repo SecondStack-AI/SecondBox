@@ -181,6 +181,8 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 		"repository_base_image_sha256",
 		"candidate_snapshot",
 		"candidateManifestDigest",
+		"local mode domain guest_root",
+		`mode="$1"`,
 	} {
 		if !strings.Contains(driver, required) {
 			t.Errorf("repository qualification driver lacks %q", required)

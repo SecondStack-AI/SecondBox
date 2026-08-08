@@ -278,8 +278,11 @@ wait_for_boot_change() {
 }
 
 run_guest() {
-  local mode="$1" domain="sbq-${mode//_/-}-${run_id}" guest_root="$resource_root/$mode"
+  local mode domain guest_root
   local image_format address old_boot
+  mode="$1"
+  domain="sbq-${mode//_/-}-${run_id}"
+  guest_root="$resource_root/$mode"
   domains+=("$domain")
   mkdir -p "$guest_root"
   chmod 0700 "$guest_root"
