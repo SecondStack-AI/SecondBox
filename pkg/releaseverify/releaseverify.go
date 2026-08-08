@@ -4,11 +4,15 @@ package releaseverify
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
 	"github.com/SecondStack-AI/SecondBox/pkg/resourceapply"
@@ -22,6 +26,80 @@ type FetchFunc func(context.Context, string) ([]byte, error)
 type VerifiedRelease struct {
 	Manifest      releasecontract.ArtifactManifest
 	ManifestBytes []byte
+}
+
+// DirectoryFetcher resolves canonical release URLs to exact regular files in
+// one explicitly supplied staging directory. It exists only for qualification
+// of pre-publication candidates; ordinary installers use HTTPFetcher.
+func DirectoryFetcher(directory string) FetchFunc {
+	return func(_ context.Context, location string) ([]byte, error) {
+		absolute, err := filepath.Abs(directory)
+		if err != nil {
+			return nil, fmt.Errorf("SecondBox release verification: candidate directory: %w", err)
+		}
+		info, err := os.Lstat(absolute)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("SecondBox release verification: candidate directory must be a non-symbolic-link directory: %w", err)
+		}
+		parsed, err := url.Parse(location)
+		if err != nil || parsed.Scheme != "https" || parsed.Host != "github.com" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return nil, fmt.Errorf("SecondBox release verification: %q is not a canonical GitHub release location", location)
+		}
+		const prefix = "/SecondStack-AI/SecondBox/releases/download/"
+		if !strings.HasPrefix(parsed.Path, prefix) {
+			return nil, fmt.Errorf("SecondBox release verification: %q is outside the SecondBox release namespace", location)
+		}
+		name := filepath.Base(parsed.Path)
+		if name == "." || name == string(filepath.Separator) || name == "" {
+			return nil, fmt.Errorf("SecondBox release verification: %q has no release filename", location)
+		}
+		path := filepath.Join(absolute, name)
+		fileInfo, err := os.Lstat(path)
+		if err != nil || !fileInfo.Mode().IsRegular() || fileInfo.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("SecondBox release verification: candidate object %q must be a non-symbolic-link regular file: %w", name, err)
+		}
+		if fileInfo.Size() > maximumReleaseObjectBytes {
+			return nil, fmt.Errorf("SecondBox release verification: candidate object %q exceeds size limit", name)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("SecondBox release verification: read candidate object %q: %w", name, err)
+		}
+		return data, nil
+	}
+}
+
+// CandidateDirectory verifies the one candidate artifact manifest and every
+// referenced release object from an explicit staging directory.
+func CandidateDirectory(ctx context.Context, directory string) (VerifiedRelease, error) {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return VerifiedRelease{}, fmt.Errorf("SecondBox release verification: read candidate directory: %w", err)
+	}
+	manifestNames := []string{}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), "secondbox-") && strings.HasSuffix(entry.Name(), "-artifact-manifest.json") {
+			manifestNames = append(manifestNames, entry.Name())
+		}
+	}
+	if len(manifestNames) != 1 {
+		return VerifiedRelease{}, fmt.Errorf("SecondBox release verification: candidate directory must contain exactly one artifact manifest, found %d", len(manifestNames))
+	}
+	manifestBytes, err := os.ReadFile(filepath.Join(directory, manifestNames[0]))
+	if err != nil {
+		return VerifiedRelease{}, err
+	}
+	manifest, err := releasecontract.DecodeArtifactManifest(manifestBytes)
+	if err != nil {
+		return VerifiedRelease{}, err
+	}
+	if !manifest.Candidate {
+		return VerifiedRelease{}, errors.New("SecondBox release verification: candidate directory manifest is not marked as a candidate")
+	}
+	if manifestNames[0] != fmt.Sprintf("secondbox-%s-artifact-manifest.json", manifest.Version) {
+		return VerifiedRelease{}, errors.New("SecondBox release verification: candidate artifact manifest filename differs from its version")
+	}
+	return ArtifactManifest(ctx, releasecontract.ArtifactManifestLocation(manifest.Version), DirectoryFetcher(directory))
 }
 
 func HTTPFetcher(client *http.Client) FetchFunc {

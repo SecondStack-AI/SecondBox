@@ -1,0 +1,388 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+connection='qemu:///system'
+release_directory=''
+existing_workspace_root=''
+scenario=''
+output=''
+base_image=''
+base_image_sha256=''
+
+usage() {
+  echo 'usage: scripts/installer-qualification-driver run --release-directory DIR --existing-workspace-root DIR --scenario FILE --output FILE --base-image FILE --base-image-sha256 SHA256' >&2
+  exit 2
+}
+
+[[ "${1:-}" == run ]] || usage
+shift
+while [[ "$#" -gt 0 ]]; do
+  [[ "$#" -ge 2 ]] || usage
+  case "$1" in
+    --release-directory) release_directory="$2" ;;
+    --existing-workspace-root) existing_workspace_root="$2" ;;
+    --scenario) scenario="$2" ;;
+    --output) output="$2" ;;
+    --base-image) base_image="$2" ;;
+    --base-image-sha256) base_image_sha256="$2" ;;
+    *) usage ;;
+  esac
+  shift 2
+done
+
+for value in "$release_directory" "$existing_workspace_root" "$scenario" "$output" "$base_image" "$base_image_sha256"; do
+  [[ -n "$value" ]] || usage
+done
+[[ "$release_directory" == /* && -d "$release_directory" && ! -L "$release_directory" ]] || { echo 'qualification release directory must be an absolute non-symlink directory' >&2; exit 1; }
+[[ "$existing_workspace_root" == /* && -d "$existing_workspace_root" && ! -L "$existing_workspace_root" ]] || { echo 'qualification existing workspace root must be an absolute non-symlink directory' >&2; exit 1; }
+[[ "$scenario" == /* && -f "$scenario" && ! -L "$scenario" ]] || { echo 'qualification scenario must be an absolute non-symlink regular file' >&2; exit 1; }
+[[ "$output" == /* && ! -e "$output" && ! -L "$output" ]] || { echo 'qualification output must be a new absolute path' >&2; exit 1; }
+[[ "$base_image" == /* && -f "$base_image" && ! -L "$base_image" ]] || { echo 'qualification base image must be an absolute non-symlink regular file' >&2; exit 1; }
+[[ "$base_image_sha256" =~ ^[0-9a-f]{64}$ ]] || { echo 'qualification base image SHA-256 must be lowercase hexadecimal' >&2; exit 1; }
+repository_base_image_sha256="$("$repo_root/scripts/prepare-installer-qualification-image.sh" --print-sha256)"
+[[ "$base_image_sha256" == "$repository_base_image_sha256" ]] || { echo 'qualification base image SHA-256 differs from the repository pin' >&2; exit 1; }
+printf '%s  %s\n' "$base_image_sha256" "$base_image" | sha256sum --check --status || { echo 'qualification base image digest mismatch' >&2; exit 1; }
+
+for command in virsh virt-install qemu-img cloud-localds ssh scp ssh-keygen jq sha256sum findmnt openssl ip python3 getent setfacl; do
+  command -v "$command" >/dev/null || { echo "qualification host command is absent: $command" >&2; exit 1; }
+done
+[[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] || { echo 'qualification requires accessible /dev/kvm' >&2; exit 1; }
+[[ -c /dev/net/tun && -r /dev/net/tun && -w /dev/net/tun ]] || { echo 'qualification requires accessible /dev/net/tun' >&2; exit 1; }
+[[ "$(cat /sys/module/kvm_amd/parameters/nested 2>/dev/null || cat /sys/module/kvm_intel/parameters/nested 2>/dev/null || true)" =~ ^(1|Y)$ ]] || { echo 'qualification requires nested KVM' >&2; exit 1; }
+virsh -c "$connection" uri >/dev/null
+jq -e '.schemaVersion == "secondbox.install.vm-scenario/v1" and (.requiredAssertions | type == "array" and length > 0)' "$scenario" >/dev/null
+
+run_id="$(openssl rand -hex 6)"
+resource_root="$(mktemp -d "$existing_workspace_root/secondbox-installer-qualification-${run_id}.XXXXXX")"
+chmod 0700 "$resource_root"
+qemu_accounts=()
+for account in libvirt-qemu qemu; do
+  if getent passwd "$account" >/dev/null; then
+    qemu_accounts+=("$account")
+    setfacl -m "u:${account}:--x" "$resource_root"
+  fi
+done
+[[ "${#qemu_accounts[@]}" -gt 0 ]] || { echo 'qualification could not resolve a system-libvirt QEMU account' >&2; exit 1; }
+network="sbq-${run_id}"
+domains=()
+network_started=false
+active_child=''
+
+run_interruptible() {
+  local status
+  "$@" &
+  active_child=$!
+  if wait "$active_child"; then
+    status=0
+  else
+    status=$?
+  fi
+  active_child=''
+  return "$status"
+}
+
+domain_defined() {
+  local listing
+  if ! listing="$(virsh -c "$connection" list --all --name)"; then
+    return 2
+  fi
+  grep -Fxq -- "$1" <<<"$listing"
+}
+
+network_defined() {
+  local listing
+  if ! listing="$(virsh -c "$connection" net-list --all --name)"; then
+    return 2
+  fi
+  grep -Fxq -- "$1" <<<"$listing"
+}
+
+cleanup_best_effort() {
+  local domain state status
+  local cleanup_failed=false resources_survive=false
+  for domain in "${domains[@]}"; do
+    if domain_defined "$domain"; then
+      :
+    else
+      status=$?
+      if [[ "$status" -eq 2 ]]; then
+        echo "qualification cleanup could not inspect domain state: $domain" >&2
+        cleanup_failed=true
+        resources_survive=true
+      fi
+      continue
+    fi
+    if ! state="$(virsh -c "$connection" domstate "$domain")"; then
+      echo "qualification cleanup could not read domain state: $domain" >&2
+      cleanup_failed=true
+      resources_survive=true
+      continue
+    fi
+    if [[ "$state" != 'shut off' ]] && ! virsh -c "$connection" destroy "$domain" >/dev/null 2>&1; then
+      echo "qualification cleanup could not stop domain: $domain" >&2
+      cleanup_failed=true
+    fi
+    if ! virsh -c "$connection" undefine "$domain" --nvram >/dev/null 2>&1 && ! virsh -c "$connection" undefine "$domain" >/dev/null 2>&1; then
+      echo "qualification cleanup could not undefine domain: $domain" >&2
+      cleanup_failed=true
+    fi
+    if domain_defined "$domain"; then
+      resources_survive=true
+    else
+      status=$?
+      if [[ "$status" -eq 2 ]]; then
+        echo "qualification cleanup could not verify domain removal: $domain" >&2
+        cleanup_failed=true
+        resources_survive=true
+      fi
+    fi
+  done
+  if $network_started; then
+    if ! virsh -c "$connection" net-destroy "$network" >/dev/null 2>&1; then
+      echo "qualification cleanup could not destroy network: $network" >&2
+      cleanup_failed=true
+    fi
+    if network_defined "$network"; then
+      resources_survive=true
+    else
+      status=$?
+      if [[ "$status" -eq 2 ]]; then
+        echo "qualification cleanup could not verify network removal: $network" >&2
+        cleanup_failed=true
+        resources_survive=true
+      fi
+    fi
+  fi
+  if $resources_survive; then
+    echo "qualification cleanup retained recovery state at $resource_root" >&2
+  elif ! rm -rf -- "$resource_root"; then
+    echo "qualification cleanup could not remove recovery state: $resource_root" >&2
+    cleanup_failed=true
+  fi
+  ! $cleanup_failed
+}
+
+terminate() {
+  local status="$1"
+  trap - EXIT INT TERM
+  if [[ -n "$active_child" ]]; then
+    kill -TERM "$active_child" >/dev/null 2>&1 || true
+    wait "$active_child" >/dev/null 2>&1 || true
+    active_child=''
+  fi
+  cleanup_best_effort || true
+  exit "$status"
+}
+
+trap cleanup_best_effort EXIT
+trap 'terminate 130' INT
+trap 'terminate 143' TERM
+
+cleanup_success() {
+  local domain status
+  for domain in "${domains[@]}"; do
+    if domain_defined "$domain"; then
+      echo "qualification domain remains defined after successful run: $domain" >&2
+      return 1
+    else
+      status=$?
+      if [[ "$status" -eq 2 ]]; then
+        echo "qualification could not verify domain removal after successful run: $domain" >&2
+        return 1
+      fi
+    fi
+  done
+  if $network_started; then
+    virsh -c "$connection" net-destroy "$network" >/dev/null
+    network_started=false
+  fi
+  rm -rf -- "$resource_root"
+}
+
+candidate_snapshot="$resource_root/candidate"
+mkdir "$candidate_snapshot"
+chmod 0755 "$candidate_snapshot"
+mapfile -t candidate_sources < <(find "$release_directory" -mindepth 1 -maxdepth 1 -print | sort)
+[[ "${#candidate_sources[@]}" -gt 0 ]] || { echo 'qualification release directory is empty' >&2; exit 1; }
+for candidate_source in "${candidate_sources[@]}"; do
+  [[ -f "$candidate_source" && ! -L "$candidate_source" ]] || { echo "qualification candidate contains a non-regular entry: $candidate_source" >&2; exit 1; }
+  cp --reflink=auto --preserve=mode,timestamps -- "$candidate_source" "$candidate_snapshot/$(basename "$candidate_source")"
+done
+release_directory="$candidate_snapshot"
+mapfile -t manifests < <(find "$release_directory" -maxdepth 1 -type f -name 'secondbox-*-artifact-manifest.json' -print)
+[[ "${#manifests[@]}" -eq 1 ]] || { echo 'qualification release directory must contain exactly one artifact manifest' >&2; exit 1; }
+manifest="${manifests[0]}"
+jq -e '.candidate == true and .schemaVersion == "secondbox.release/artifact-manifest/v5"' "$manifest" >/dev/null || { echo 'qualification requires a v5 candidate artifact manifest' >&2; exit 1; }
+release_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool installer-qualification-subject "$manifest")"
+candidate_manifest_digest="sha256:$(sha256sum "$manifest" | awk '{print $1}')"
+
+cp --reflink=auto -- "$base_image" "$resource_root/base.img"
+chmod 0600 "$resource_root/base.img"
+for account in "${qemu_accounts[@]}"; do
+  setfacl -m "u:${account}:r--" "$resource_root/base.img"
+done
+qualification_base_image="$resource_root/base.img"
+
+subnet=''
+mapfile -t host_routes < <(ip -4 -o route show table all | awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/ {print $1}')
+subnet_overlaps_host_routes() {
+  python3 - "$@" <<'PY'
+import ipaddress
+import sys
+
+candidate = ipaddress.ip_network(sys.argv[1], strict=False)
+for value in sys.argv[2:]:
+    route = ipaddress.ip_network(value if "/" in value else value + "/32", strict=False)
+    if candidate.overlaps(route):
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+for octet in $(seq 240 250); do
+  candidate="192.168.${octet}.0/24"
+  if ! subnet_overlaps_host_routes "$candidate" "${host_routes[@]}"; then
+    subnet_octet="$octet"
+    subnet="$candidate"
+    break
+  fi
+done
+[[ -n "$subnet" ]] || { echo 'qualification could not allocate an isolated RFC1918 subnet' >&2; exit 1; }
+cat >"$resource_root/network.xml" <<EOF
+<network>
+  <name>${network}</name>
+  <forward mode='nat'/>
+  <bridge name='virbr${run_id:0:6}' stp='on' delay='0'/>
+  <ip address='192.168.${subnet_octet}.1' netmask='255.255.255.0'>
+    <dhcp><range start='192.168.${subnet_octet}.20' end='192.168.${subnet_octet}.80'/></dhcp>
+  </ip>
+</network>
+EOF
+virsh -c "$connection" net-create "$resource_root/network.xml" >/dev/null
+network_started=true
+
+ssh-keygen -q -t ed25519 -N '' -f "$resource_root/id_ed25519"
+public_key="$(<"$resource_root/id_ed25519.pub")"
+ssh_options=(-i "$resource_root/id_ed25519" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10)
+
+guest_address() {
+  local domain="$1" address=''
+  for _ in $(seq 1 180); do
+    address="$(virsh -c "$connection" domifaddr "$domain" --source lease 2>/dev/null | awk '/ipv4/ {sub("/.*", "", $4); print $4; exit}')"
+    if [[ -n "$address" ]] && ssh "${ssh_options[@]}" "secondbox@$address" true >/dev/null 2>&1; then
+      printf '%s\n' "$address"
+      return 0
+    fi
+    sleep 2
+  done
+  echo "qualification guest did not become reachable: $domain" >&2
+  return 1
+}
+
+wait_for_boot_change() {
+  local address="$1" old_boot="$2" current=''
+  for _ in $(seq 1 180); do
+    current="$(ssh "${ssh_options[@]}" "secondbox@$address" cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+    if [[ -n "$current" && "$current" != "$old_boot" ]]; then
+      ssh "${ssh_options[@]}" "secondbox@$address" cloud-init status --wait >/dev/null
+      return 0
+    fi
+    sleep 2
+  done
+  echo 'qualification guest did not complete its reboot' >&2
+  return 1
+}
+
+run_guest() {
+  local mode="$1" domain="sbq-${mode//_/-}-${run_id}" guest_root="$resource_root/$mode"
+  local image_format address old_boot
+  domains+=("$domain")
+  mkdir -p "$guest_root"
+  chmod 0700 "$guest_root"
+  for account in "${qemu_accounts[@]}"; do
+    setfacl -m "u:${account}:--x" "$guest_root"
+  done
+  image_format="$(qemu-img info --output json "$qualification_base_image" | jq -er .format)"
+  qemu-img create -q -f qcow2 -F "$image_format" -b "$qualification_base_image" "$guest_root/root.qcow2" 220G
+  qemu-img create -q -f qcow2 "$guest_root/data.qcow2" 120G
+  cat >"$guest_root/meta-data" <<EOF
+instance-id: ${domain}
+local-hostname: ${domain}
+EOF
+  cat >"$guest_root/user-data" <<EOF
+#cloud-config
+users:
+  - name: secondbox
+    groups: [adm, sudo]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - ${public_key}
+package_update: true
+packages:
+  - btrfs-progs
+  - ca-certificates
+  - curl
+  - docker.io
+  - docker-compose-v2
+  - jq
+  - openssl
+  - skopeo
+  - uidmap
+runcmd:
+  - [modprobe, btrfs]
+  - [bash, -lc, 'grep -qw btrfs /proc/filesystems']
+  - [systemctl, enable, --now, docker]
+  - [usermod, -aG, 'docker,kvm', secondbox]
+  - [bash, -lc, 'docker compose version']
+  - [bash, -lc, 'test -c /dev/kvm && test -r /dev/kvm && test -w /dev/kvm']
+  - [bash, -lc, 'test -c /dev/net/tun && test -r /dev/net/tun && test -w /dev/net/tun']
+EOF
+  cloud-localds "$guest_root/seed.img" "$guest_root/user-data" "$guest_root/meta-data"
+  chmod 0600 "$guest_root"/*.qcow2 "$guest_root/seed.img"
+  for account in "${qemu_accounts[@]}"; do
+    setfacl -m "u:${account}:rw-" "$guest_root/root.qcow2" "$guest_root/data.qcow2"
+    setfacl -m "u:${account}:r--" "$guest_root/seed.img"
+  done
+  run_interruptible virt-install --connect "$connection" --name "$domain" --memory 24576 --vcpus 8 \
+    --cpu host-passthrough --machine q35 --osinfo ubuntu24.04 --import --noautoconsole --graphics none \
+    --disk "path=$guest_root/root.qcow2,format=qcow2,bus=virtio" \
+    --disk "path=$guest_root/data.qcow2,format=qcow2,bus=virtio" \
+    --disk "path=$guest_root/seed.img,device=cdrom" --network "network=$network,model=virtio" >/dev/null
+  address="$(guest_address "$domain")"
+  run_interruptible ssh "${ssh_options[@]}" "secondbox@$address" cloud-init status --wait >/dev/null
+  ssh "${ssh_options[@]}" "secondbox@$address" 'sudo install -d -m 0755 /opt/secondbox-qualification && sudo chown secondbox:secondbox /opt/secondbox-qualification'
+  run_interruptible scp "${ssh_options[@]}" -r "$release_directory" "secondbox@$address:/opt/secondbox-qualification/release" >/dev/null
+  scp "${ssh_options[@]}" "$repo_root/tests/installer/qualified-guest.sh" "secondbox@$address:/opt/secondbox-qualification/qualified-guest.sh" >/dev/null
+  ssh "${ssh_options[@]}" "secondbox@$address" chmod 0755 /opt/secondbox-qualification/qualified-guest.sh
+  run_interruptible ssh "${ssh_options[@]}" "secondbox@$address" /opt/secondbox-qualification/qualified-guest.sh install "$mode" /opt/secondbox-qualification/release
+  old_boot="$(ssh "${ssh_options[@]}" "secondbox@$address" cat /proc/sys/kernel/random/boot_id)"
+  virsh -c "$connection" reboot "$domain" >/dev/null
+  wait_for_boot_change "$address" "$old_boot"
+  run_interruptible ssh "${ssh_options[@]}" "secondbox@$address" /opt/secondbox-qualification/qualified-guest.sh verify "$mode" /opt/secondbox-qualification/release
+  run_interruptible scp "${ssh_options[@]}" "secondbox@$address:/opt/secondbox-qualification/evidence-${mode}.json" "$guest_root/evidence.json" >/dev/null
+  jq -e --arg mode "$mode" --arg manifestDigest "$candidate_manifest_digest" '.passed == true and .mode == $mode and .candidateManifestDigest == $manifestDigest and (.filesystemIdentity | length > 0)' "$guest_root/evidence.json" >/dev/null
+  virsh -c "$connection" destroy "$domain" >/dev/null
+  virsh -c "$connection" undefine "$domain" --nvram >/dev/null 2>&1 || virsh -c "$connection" undefine "$domain" >/dev/null
+  rm -f -- "$guest_root/root.qcow2" "$guest_root/data.qcow2" "$guest_root/seed.img"
+}
+
+run_guest btrfs_image
+run_guest existing_reflink_filesystem
+
+jq -s --arg schemaVersion 'secondbox.install.qualified-driver-evidence/v1' --arg subject "$release_subject" --slurpfile scenario "$scenario" '
+  ([.[].assertions[]] | unique_by(.id)) as $assertions |
+  ($scenario[0].requiredAssertions | sort) as $required |
+  ([ $assertions[] | select(.passed == true) | .id ] | sort) as $passed |
+  {
+    schemaVersion: $schemaVersion,
+    passed: ($passed == $required),
+    rebootPassed: (all(.[]; .rebootPassed == true)),
+    releaseManifestDigest: $subject,
+    filesystemIdentity: ([.[].filesystemIdentity] | join(",")),
+    assertions: $assertions
+  }
+' "$resource_root/btrfs_image/evidence.json" "$resource_root/existing_reflink_filesystem/evidence.json" >"$output"
+jq -e '.passed == true and .rebootPassed == true' "$output" >/dev/null
+cleanup_success
+trap - EXIT INT TERM

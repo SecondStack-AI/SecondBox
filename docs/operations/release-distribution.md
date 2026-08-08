@@ -36,6 +36,8 @@ just release-upload VERSION OUTPUT_DIR
 
 Run the scenario suite, build the non-publishable installer candidate, point `SECONDBOX_INSTALLER_RELEASE_DIRECTORY` at that candidate, and then run installer qualification on the qualified release host. The candidate contains the exact binaries, digest-pinned images, bundles, and protocol windows but no installer-evidence claim. Installer qualification records their shared qualification-subject digest. `release-stage` refuses absent, dirty, commit-mismatched, or release-mismatched evidence and emits the final publishable manifest; `release-publish` rejects candidate manifests.
 
+Installer qualification also requires the repository's `scripts/installer-qualification-driver`, the explicitly pinned Ubuntu image and SHA-256 documented in [scenario qualification](scenario-qualification.md), and a dedicated existing XFS/Btrfs host directory. The driver performs all guest mutation inside uniquely named disposable libvirt resources and uses a candidate-only local release transport. It does not publish candidate images or weaken the normal installer's HTTPS and immutable-registry requirements.
+
 The installer candidate is the only pre-final phase and cannot be published. There is no separate attestation or hosted finalization phase. GitHub Actions does not rebuild or qualify the release.
 
 See [release operator setup](release-operator-setup.md) for one-time permissions and the exact operator commands.

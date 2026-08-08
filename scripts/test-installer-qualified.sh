@@ -3,16 +3,18 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 evidence="$repo_root/.tmp/installer-qualification-evidence.json"
+driver="$repo_root/scripts/installer-qualification-driver"
 rm -f -- "$evidence"
 
 [[ "${SECONDBOX_REQUIRE_QUALIFIED_INSTALLER:-}" == 1 ]] || {
   echo 'installer qualification requires SECONDBOX_REQUIRE_QUALIFIED_INSTALLER=1' >&2
   exit 1
 }
-: "${SECONDBOX_INSTALLER_QUALIFICATION_DRIVER:?installer qualification requires an executable driver}"
 : "${SECONDBOX_INSTALLER_RELEASE_DIRECTORY:?installer qualification requires a staged published-style release directory}"
 : "${SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT:?installer qualification requires a dedicated existing XFS/Btrfs workspace parent}"
-[[ -x "$SECONDBOX_INSTALLER_QUALIFICATION_DRIVER" ]] || { echo 'installer qualification driver is not executable' >&2; exit 1; }
+: "${SECONDBOX_INSTALLER_QUALIFICATION_IMAGE:?installer qualification requires an explicit pinned VM base image}"
+: "${SECONDBOX_INSTALLER_QUALIFICATION_IMAGE_SHA256:?installer qualification requires the VM base image SHA-256}"
+[[ -x "$driver" ]] || { echo 'repository installer qualification driver is not executable' >&2; exit 1; }
 for device in /dev/kvm /dev/net/tun; do
   [[ -c "$device" && -r "$device" && -w "$device" ]] || { echo "installer qualification requires readable/writable $device" >&2; exit 1; }
 done
@@ -28,10 +30,12 @@ started="$(date +%s)"
 mapfile -t release_manifests < <(find "$SECONDBOX_INSTALLER_RELEASE_DIRECTORY" -maxdepth 1 -type f -name 'secondbox-*-artifact-manifest.json' -print)
 [[ "${#release_manifests[@]}" == 1 ]] || { echo 'installer qualification release directory must contain exactly one artifact manifest' >&2; exit 1; }
 qualification_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool installer-qualification-subject "${release_manifests[0]}")"
-"$SECONDBOX_INSTALLER_QUALIFICATION_DRIVER" run \
+"$driver" run \
   --release-directory "$SECONDBOX_INSTALLER_RELEASE_DIRECTORY" \
   --existing-workspace-root "$SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT" \
   --scenario "$repo_root/tests/installer/vm-scenario.json" \
+  --base-image "$SECONDBOX_INSTALLER_QUALIFICATION_IMAGE" \
+  --base-image-sha256 "$SECONDBOX_INSTALLER_QUALIFICATION_IMAGE_SHA256" \
   --output "$temporary/driver-evidence.json"
 finished="$(date +%s)"
 

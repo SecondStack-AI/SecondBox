@@ -113,6 +113,12 @@ func runCommand(arguments []string, renderer cliui.Renderer) error {
 		if len(arguments) == 3 && arguments[1] == "--resume" {
 			return runInstallResume(context.Background(), arguments[2], renderer)
 		}
+		if len(arguments) == 5 && arguments[1] == "--resume" && arguments[3] == "--candidate-directory" {
+			return runInstallCandidateResume(context.Background(), arguments[2], arguments[4], renderer)
+		}
+		if len(arguments) == 3 && arguments[1] == "--candidate-directory" {
+			return runInstallCandidate(context.Background(), arguments[2], renderer)
+		}
 		if len(arguments) == 5 && arguments[1] == "--support" {
 			return runInstallSupport(context.Background(), arguments[2:], renderer)
 		}
@@ -285,6 +291,10 @@ func runInstallPreflight(ctx context.Context, arguments []string, renderer cliui
 }
 
 func runInstallPreflightWith(ctx context.Context, arguments []string, renderer cliui.Renderer, preflight func(context.Context) (install.HostFacts, error)) error {
+	return runInstallPreflightWithGuide(ctx, arguments, renderer, preflight, runGuidedInstall)
+}
+
+func runInstallPreflightWithGuide(ctx context.Context, arguments []string, renderer cliui.Renderer, preflight func(context.Context) (install.HostFacts, error), guide func(context.Context, cliui.Renderer, install.HostFacts, bool) error) error {
 	checkOnly := len(arguments) == 1 && arguments[0] == "--check"
 	advanced := len(arguments) == 1 && arguments[0] == "--advanced"
 	if len(arguments) != 0 && !checkOnly && !advanced {
@@ -309,7 +319,7 @@ func runInstallPreflightWith(ctx context.Context, arguments []string, renderer c
 	if checkOnly {
 		return nil
 	}
-	return runGuidedInstall(ctx, renderer, facts, advanced)
+	return guide(ctx, renderer, facts, advanced)
 }
 
 func verifyReleaseLocation(location string) (releaseverify.VerifiedRelease, error) {
