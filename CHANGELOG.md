@@ -2,9 +2,13 @@
 
 ## Unreleased
 
+## 0.4.1 - 2026-08-08
+
+Superseded the unpublished v0.4.0 tag with a qualification driver that can run on hosts whose Docker networks occupy its original private-address window.
+
 ### Fixed
 
-- Installer qualification now searches all RFC1918 `/24` networks for a subnet that does not overlap any host route. The initial driver searched only `192.168.240.0/24` through `192.168.250.0/24`, so a normal Docker `192.168.240.0/20` network blocked release qualification before any disposable VM started.
+- Installer qualification now searches all RFC1918 `/24` networks for a subnet that does not overlap any host route. The initial driver searched only `192.168.240.0/24` through `192.168.250.0/24`, so a normal Docker `192.168.240.0/20` network blocked release qualification before any disposable VM started ([#82](https://github.com/SecondStack-AI/SecondBox/pull/82)).
 
 ### Added
 
