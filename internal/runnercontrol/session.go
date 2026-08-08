@@ -19,12 +19,11 @@ const MaximumBufferedExecBytes int64 = 64 << 20
 const maxSessionMessageIDs = 256
 
 var (
-	ErrHelloRequired         = errors.New("SecondBox runner control Hello is required")
-	ErrRegistrationRequired  = errors.New("SecondBox runner control Registration is required")
-	ErrSequenceReordered     = errors.New("SecondBox runner control sequence is reordered")
-	ErrRunnerPrerequisites   = errors.New("SecondBox runner prerequisites failed")
-	ErrRunnerMessage         = errors.New("SecondBox runner control message is invalid")
-	ErrSessionMessageIDLimit = errors.New("SecondBox runner control message ID dedupe limit exceeded")
+	ErrHelloRequired        = errors.New("SecondBox runner control Hello is required")
+	ErrRegistrationRequired = errors.New("SecondBox runner control Registration is required")
+	ErrSequenceReordered    = errors.New("SecondBox runner control sequence is reordered")
+	ErrRunnerPrerequisites  = errors.New("SecondBox runner prerequisites failed")
+	ErrRunnerMessage        = errors.New("SecondBox runner control message is invalid")
 )
 
 type EventKind string
@@ -98,9 +97,17 @@ type Session struct {
 	selectedVersion         uint32
 	lastSequence            uint64
 	messageIDs              map[string]struct{}
+	messageIDOrder          [maxSessionMessageIDs]sessionMessageID
+	messageIDCount          int
+	nextMessageID           int
 	enabledFeatures         map[runnerv1.RunnerFeature]bool
 	inboundDataPlaneStreams map[string]dataPlaneStreamState
 	outboundStreams         map[string]dataPlaneStreamState
+}
+
+type sessionMessageID struct {
+	id       string
+	sequence uint64
 }
 
 // NewSession constructs the state machine after mTLS client verification.
@@ -152,10 +159,8 @@ func (session *Session) Accept(message *runnerv1.RunnerToControlPlane) (Event, e
 			ConnectionID: session.config.ConnectionID, Message: message,
 		}, nil
 	}
-	if len(session.messageIDs) >= maxSessionMessageIDs {
-		return Event{}, ErrSessionMessageIDLimit
-	}
-	if sequence <= session.lastSequence {
+	replayOutsideWindow := session.replayOutsideMessageIDWindow(sequence)
+	if sequence <= session.lastSequence && !replayOutsideWindow {
 		return Event{}, ErrSequenceReordered
 	}
 	if !session.registered {
@@ -175,6 +180,13 @@ func (session *Session) Accept(message *runnerv1.RunnerToControlPlane) (Event, e
 		}, nil
 	}
 	if registration := message.GetRegistration(); registration != nil {
+		if replayOutsideWindow {
+			return Event{
+				Kind: EventRegistration, RunnerID: session.config.AuthenticatedRunnerID,
+				ConnectionID: session.config.ConnectionID,
+				Registration: registration, Message: message,
+			}, nil
+		}
 		return Event{}, fmt.Errorf("%w: Registration may appear only once per connection", ErrRunnerMessage)
 	}
 	if heartbeat := message.GetHeartbeat(); heartbeat != nil {
@@ -636,8 +648,28 @@ func (session *Session) rejection(
 }
 
 func (session *Session) record(messageID string, sequence uint64) {
+	if sequence <= session.lastSequence {
+		return
+	}
+	if session.messageIDCount == maxSessionMessageIDs {
+		delete(session.messageIDs, session.messageIDOrder[session.nextMessageID].id)
+	} else {
+		session.messageIDCount++
+	}
+	session.messageIDOrder[session.nextMessageID] = sessionMessageID{
+		id: messageID, sequence: sequence,
+	}
+	session.nextMessageID = (session.nextMessageID + 1) % maxSessionMessageIDs
 	session.messageIDs[messageID] = struct{}{}
 	session.lastSequence = sequence
+}
+
+func (session *Session) replayOutsideMessageIDWindow(sequence uint64) bool {
+	if sequence > session.lastSequence || session.messageIDCount < maxSessionMessageIDs {
+		return false
+	}
+	oldest := session.messageIDOrder[session.nextMessageID]
+	return sequence < oldest.sequence
 }
 
 func runnerEnvelope(message *runnerv1.RunnerToControlPlane) (string, uint64, error) {
