@@ -1,17 +1,43 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/SecondStack-AI/SecondBox/internal/cliui"
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 )
+
+func TestCommandFailurePreservesExplicitPresentationModes(t *testing.T) {
+	err := run(context.Background(), []string{"--output", "plain", "--color", "never", "unknown-command"}, &bytes.Buffer{})
+	var presented *commandPresentationError
+	if !errors.As(err, &presented) {
+		t.Fatalf("failure lacks presentation contract: %v", err)
+	}
+	if presented.renderer.OutputMode != cliui.OutputPlain || presented.renderer.ColorMode != cliui.ColorNever {
+		t.Fatalf("failure renderer = output %s color %s", presented.renderer.OutputMode, presented.renderer.ColorMode)
+	}
+}
+
+func TestCancellationExitClassificationPreservesCleanupFailures(t *testing.T) {
+	if !isOnlyContextCancellation(context.Canceled) || !isOnlyContextCancellation(fmt.Errorf("wrapped: %w", context.Canceled)) || !isOnlyContextCancellation(errors.Join(context.Canceled, fmt.Errorf("also canceled: %w", context.Canceled))) {
+		t.Fatal("pure cancellation was not classified for exit 130")
+	}
+	cleanup := errors.New("Sandbox cleanup failed")
+	if isOnlyContextCancellation(errors.Join(context.Canceled, cleanup)) {
+		t.Fatal("cleanup failure joined with cancellation was swallowed")
+	}
+}
 
 func TestResolveCommandAliases(t *testing.T) {
 	tests := []struct {
@@ -51,6 +77,109 @@ func TestCommandAliasesReferenceGeneratedOperations(t *testing.T) {
 		if _, found := secondboxclient.LookupOperation(alias.operation); !found {
 			t.Errorf("command %q references unknown operation %q", command, alias.operation)
 		}
+	}
+}
+
+func TestEveryCommandHasOutputContract(t *testing.T) {
+	for command := range commandAliases {
+		if _, found := commandContracts[command]; !found {
+			t.Errorf("command %q has no output contract", command)
+		}
+	}
+	for _, command := range []string{
+		"version", "login", "logout", "whoami", "run", "exec", "shell",
+		"sandbox shell", "exec stream", "logs tail", "logs follow",
+		"diagnostics bundle", "timings sandbox", "timings operation",
+		"timings summary", "resources check", "resources apply", "operation",
+	} {
+		contract, found := commandContracts[command]
+		if !found || contract.Command != command || contract.Output == "" || contract.ExitOwner == "" {
+			t.Errorf("command %q has incomplete output contract: %#v", command, contract)
+		}
+	}
+}
+
+func TestGlobalPresentationFlags(t *testing.T) {
+	newSessionEnvironment(t)
+	var plain bytes.Buffer
+	if err := run(context.Background(), []string{"--output", "plain", "--color", "never", "version"}, &plain); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(plain.Bytes(), []byte("SecondBox CLI\n")) || bytes.Contains(plain.Bytes(), []byte("\x1b")) {
+		t.Fatalf("plain version output = %q", plain.String())
+	}
+	var machine bytes.Buffer
+	if err := run(context.Background(), []string{"--output", "json", "version"}, &machine); err != nil {
+		t.Fatal(err)
+	}
+	if got := machine.String(); got != "{\"version\":\"0.0.0-development\",\"sourceCommit\":\"development\"}\n" {
+		t.Fatalf("JSON version output = %q", got)
+	}
+	if err := run(context.Background(), []string{"--color", "sometimes", "version"}, io.Discard); err == nil {
+		t.Fatal("invalid color mode must fail")
+	}
+}
+
+func TestRootHelpFormsExitSuccessfullyWithoutSession(t *testing.T) {
+	for _, arguments := range [][]string{nil, {"help"}, {"--help"}, {"-h"}} {
+		var output bytes.Buffer
+		if err := run(context.Background(), arguments, &output); err != nil {
+			t.Fatalf("secondbox %v help error = %v", arguments, err)
+		}
+		if !strings.Contains(output.String(), "SecondBox CLI\n\nUsage\n") || !strings.Contains(output.String(), "Global options\n") || strings.Contains(output.String(), "\x1b") {
+			t.Fatalf("secondbox %v help output = %q", arguments, output.String())
+		}
+	}
+}
+
+func TestForcedColorHelpContainsRealANSI(t *testing.T) {
+	var output bytes.Buffer
+	if err := run(context.Background(), []string{"--color", "always", "help"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "\x1b[") || strings.Contains(output.String(), "�[") {
+		t.Fatalf("forced-color help contains escaped or sanitized ANSI: %q", output.String())
+	}
+}
+
+func TestBoundedAliasPlainViewAndMachinePassthrough(t *testing.T) {
+	newSessionEnvironment(t)
+	const response = "{ \"items\" : [{\"id\":\"sbx_123456789\",\"profile\":\"durable-coding\",\"state\":\"ready\",\"desiredState\":\"running\",\"generation\":2,\"revision\":7,\"workspace\":{},\"metadata\":{},\"createdAt\":\"2026-08-07T00:00:00Z\",\"updatedAt\":\"2026-08-07T00:00:00Z\",\"unknownFutureField\":true}] }\n"
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, response)
+	}))
+	defer server.Close()
+	credentials := []string{"--url", server.URL, "--token", "token", "--tenant-ref", "tenant", "--subject-ref", "subject"}
+	var machine bytes.Buffer
+	if err := run(context.Background(), append(append([]string{}, credentials...), "sandboxes", "list"), &machine); err != nil {
+		t.Fatal(err)
+	}
+	if machine.String() != response {
+		t.Fatalf("machine response changed:\n got %q\nwant %q", machine.String(), response)
+	}
+	var plain bytes.Buffer
+	args := append([]string{"--output", "plain"}, credentials...)
+	args = append(args, "sandboxes", "list")
+	if err := run(context.Background(), args, &plain); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"sbx_123456789", "durable-coding", "ready"} {
+		if !strings.Contains(plain.String(), value) {
+			t.Fatalf("plain view lacks %q: %q", value, plain.String())
+		}
+	}
+	if strings.Contains(plain.String(), "unknownFutureField") || strings.Contains(plain.String(), "\x1b") {
+		t.Fatalf("unsafe or unknown presentation bytes: %q", plain.String())
+	}
+	var escapeHatch bytes.Buffer
+	escapeArgs := append([]string{"--output", "plain"}, credentials...)
+	escapeArgs = append(escapeArgs, "operation", "listSandboxes")
+	if err := run(context.Background(), escapeArgs, &escapeHatch); err != nil {
+		t.Fatal(err)
+	}
+	if escapeHatch.String() != response {
+		t.Fatalf("generic operation escape hatch changed bytes: %q", escapeHatch.String())
 	}
 }
 

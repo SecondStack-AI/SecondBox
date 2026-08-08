@@ -37,6 +37,8 @@ func TestArtifactManifestValidationRejectsInvalidReleaseContent(t *testing.T) {
 		{name: "inconsistent version", mutate: func(value *ArtifactManifest) { value.GoSDK.Identity.Version = "9.9.9" }, want: "identity does not match"},
 		{name: "inconsistent commit", mutate: func(value *ArtifactManifest) { value.Runner.Identity.SourceCommit = strings.Repeat("f", 40) }, want: "identity does not match"},
 		{name: "mutable OCI reference", mutate: func(value *ArtifactManifest) { value.Runner.Reference = RunnerImage + ":latest" }, want: "immutable canonical"},
+		{name: "missing installer tools identity", mutate: func(value *ArtifactManifest) { value.InstallerTools.Identity = Identity{} }, want: "installer tools identity"},
+		{name: "mutable installer tools", mutate: func(value *ArtifactManifest) { value.InstallerTools.Reference = InstallerToolsImage + ":latest" }, want: "immutable canonical"},
 		{name: "malformed digest", mutate: func(value *ArtifactManifest) { value.OpenAPI.Digest = "sha256:no" }, want: "canonical sha256"},
 		{name: "absent checksum", mutate: func(value *ArtifactManifest) { value.Binaries[0].SHA256 = "" }, want: "checksum"},
 		{name: "unsupported platform", mutate: func(value *ArtifactManifest) { value.Platforms.Runner = append(value.Platforms.Runner, "linux/arm64") }, want: "lacks required qualification"},
@@ -59,6 +61,30 @@ func TestArtifactManifestValidationRejectsInvalidReleaseContent(t *testing.T) {
 				t.Fatalf("Validate() error = %v, want containing %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestInstallerCandidateAndFinalReleaseShareQualificationSubject(t *testing.T) {
+	final := validManifest()
+	candidate := final
+	candidate.Candidate = true
+	candidate.InstallerQualificationEvidence = Reference{}
+	if err := candidate.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	finalSubject, err := final.InstallerQualificationSubjectDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateSubject, err := candidate.InstallerQualificationSubjectDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidateSubject != finalSubject {
+		t.Fatalf("candidate subject %s != final subject %s", candidateSubject, finalSubject)
+	}
+	if candidate.InstallerQualificationEvidence != (Reference{}) || !candidate.Candidate {
+		t.Fatal("candidate claimed final installer evidence")
 	}
 }
 
@@ -90,6 +116,58 @@ func TestQualificationEvidenceRequiresCompleteCleanReleaseRun(t *testing.T) {
 	}
 }
 
+func TestInstallerQualificationSubjectExcludesOnlyItsOwnEvidenceReference(t *testing.T) {
+	manifest := validManifest()
+	one, err := manifest.InstallerQualificationSubjectDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.InstallerQualificationEvidence = Reference{Location: InstallerQualificationEvidenceLocation(manifest.Version), Digest: "sha256:" + strings.Repeat("e", 64)}
+	two, err := manifest.InstallerQualificationSubjectDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one != two {
+		t.Fatalf("installer evidence reference changed qualification subject: %s != %s", one, two)
+	}
+	manifest.Runner.Reference = RunnerImage + "@sha256:" + strings.Repeat("e", 64)
+	three, err := manifest.InstallerQualificationSubjectDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if three == two {
+		t.Fatal("Runner identity did not change installer qualification subject")
+	}
+}
+
+func TestInstallerQualificationEvidenceRequiresRebootAndPinnedRelease(t *testing.T) {
+	evidence := InstallerQualificationEvidence{
+		SchemaVersion: InstallerQualificationEvidenceSchema, SourceCommit: testCommit,
+		Suite: "test-installer-qualified", PassCount: 19, WallClockSeconds: 1200,
+		Host: QualificationHostEvidence{
+			KVM:                 QualificationDeviceEvidence{Path: "/dev/kvm", Present: true, Readable: true, Writable: true},
+			TUN:                 QualificationDeviceEvidence{Path: "/dev/net/tun", Present: true, Readable: true, Writable: true},
+			WorkspaceFilesystem: QualificationFilesystemEvidence{Mount: "/srv/secondbox xfs", Type: "xfs"},
+		},
+		ReleaseManifestDigest: testDigest, FilesystemIdentity: "8:16", RebootPassed: true,
+		QualifiedAt: "2026-08-08T12:00:00Z",
+	}
+	decoded, err := DecodeInstallerQualificationEvidence(mustJSON(t, evidence))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := decoded.ValidateForRelease(testCommit, testDigest); err != nil {
+		t.Fatal(err)
+	}
+	if err := decoded.ValidateForRelease(testCommit, "sha256:"+strings.Repeat("f", 64)); err == nil || !strings.Contains(err.Error(), "release identity") {
+		t.Fatalf("mismatched installer release identity error = %v", err)
+	}
+	decoded.RebootPassed = false
+	if err := decoded.Validate(); err == nil {
+		t.Fatal("installer evidence without reboot recovery was accepted")
+	}
+}
+
 func validManifest() ArtifactManifest {
 	identity := Identity{Version: "1.2.3", Tag: "v1.2.3", SourceCommit: testCommit}
 	ref := func(name string) Reference {
@@ -113,18 +191,22 @@ func validManifest() ArtifactManifest {
 		Platforms: PlatformMatrix{
 			HostBinaries: []string{"linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64"},
 			ControlPlane: []string{"linux/amd64", "linux/arm64"}, Runner: []string{"linux/amd64"},
-			Guest: []string{"linux/amd64"}, QualifiedRunnerGuest: []string{"linux/amd64"},
+			InstallerTools: []string{"linux/amd64"}, Guest: []string{"linux/amd64"}, QualifiedRunnerGuest: []string{"linux/amd64"},
 		},
-		GoSDK:                 SDKArtifact{Identity: identity, Coordinate: GoModule + "@" + identity.Tag, Package: ref("go-sdk.zip")},
-		TypeScriptSDK:         SDKArtifact{Identity: identity, Coordinate: TypeScriptPackage + "@" + identity.Version, Package: ref("secondbox.tgz")},
-		ControlPlane:          OCIArtifact{Identity: identity, Reference: ControlPlaneImage + "@" + testDigest},
-		Runner:                OCIArtifact{Identity: identity, Reference: RunnerImage + "@" + testDigest},
-		MicroVM:               MicroVMArtifact{Identity: identity, ImageReference: MicroVMImage + "@" + testDigest, SignedManifestDigest: testDigest, SigningKeyFingerprint: testKey, RuntimeBundle: SignedComponent{ArtifactID: "test-runtime", ManifestDigest: testRuntimeDigest, MandatoryGuestFeatures: []string{}}, ToolchainBundle: SignedComponent{ArtifactID: "test-toolchain", ManifestDigest: testToolchainDigest, MandatoryGuestFeatures: []string{}}},
-		Binaries:              binaries,
-		SBOMs:                 []Reference{ref("sbom.spdx.json")},
-		ArtifactAttestations:  []Reference{ref("provenance.intoto.jsonl")},
-		SourceFreeSuite:       Reference{Location: SourceFreeSuiteLocation(identity.Version), Digest: testDigest},
-		QualificationEvidence: Reference{Location: QualificationEvidenceLocation(identity.Version), Digest: testDigest},
+		GoSDK:                          SDKArtifact{Identity: identity, Coordinate: GoModule + "@" + identity.Tag, Package: ref("go-sdk.zip")},
+		TypeScriptSDK:                  SDKArtifact{Identity: identity, Coordinate: TypeScriptPackage + "@" + identity.Version, Package: ref("secondbox.tgz")},
+		ControlPlane:                   OCIArtifact{Identity: identity, Reference: ControlPlaneImage + "@" + testDigest},
+		Runner:                         OCIArtifact{Identity: identity, Reference: RunnerImage + "@" + testDigest},
+		InstallerTools:                 OCIArtifact{Identity: identity, Reference: InstallerToolsImage + "@" + testDigest},
+		BundledServices:                BundledServiceImages{Postgres: "docker.io/library/postgres@" + testDigest, ObjectStore: "docker.io/rustfs/rustfs@" + testDigest, ObjectStoreClient: "quay.io/minio/mc@" + testDigest},
+		InstallBootstrap:               Reference{Location: InstallBootstrapLocation(identity.Version), Digest: testDigest},
+		MicroVM:                        MicroVMArtifact{Identity: identity, ImageReference: MicroVMImage + "@" + testDigest, SignedManifestDigest: testDigest, SigningKeyFingerprint: testKey, RuntimeBundle: SignedComponent{ArtifactID: "test-runtime", ManifestDigest: testRuntimeDigest, MandatoryGuestFeatures: []string{}}, ToolchainBundle: SignedComponent{ArtifactID: "test-toolchain", ManifestDigest: testToolchainDigest, MandatoryGuestFeatures: []string{}}},
+		Binaries:                       binaries,
+		SBOMs:                          []Reference{ref("sbom.spdx.json")},
+		ArtifactAttestations:           []Reference{ref("provenance.intoto.jsonl")},
+		SourceFreeSuite:                Reference{Location: SourceFreeSuiteLocation(identity.Version), Digest: testDigest},
+		QualificationEvidence:          Reference{Location: QualificationEvidenceLocation(identity.Version), Digest: testDigest},
+		InstallerQualificationEvidence: Reference{Location: InstallerQualificationEvidenceLocation(identity.Version), Digest: testDigest},
 		StandardBundles: []StandardBundleArtifact{
 			{Identity: identity, Name: "agent-compartment", Document: ref("agent-compartment.json"), Profiles: []StandardProfileIdentity{{Name: "agent-compartment", Revision: 1, SpecDigest: testDigest}}},
 			{Identity: identity, Name: "durable-coding", Document: ref("durable-coding.json"), Profiles: []StandardProfileIdentity{{Name: "durable-coding", Revision: 1, SpecDigest: testDigest}}},

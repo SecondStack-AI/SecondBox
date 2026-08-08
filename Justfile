@@ -34,6 +34,24 @@ test-deployment:
 test-sdk-packages:
     scripts/test-sdk-packages.sh
 
+test-cli-ui:
+    go test ./internal/cliui ./cmd/secondbox ./cmd/secondbox-deploy ./tests/cliui -count=1
+    go test -race ./internal/cliui ./cmd/secondbox -run 'Activity|Progress|Stream|Shell|Exec|Run' -count=1
+
+test-install-docs:
+    scripts/test-install-docs.sh
+
+test-installer:
+    go test ./internal/install ./internal/deployconfig ./pkg/releasecontract ./pkg/releaseverify ./cmd/secondbox-deploy ./tests/cliui -count=1
+    scripts/test-install-docs.sh
+    scripts/test-installer-unattended.sh
+
+test-installer-vm:
+    scripts/test-installer-vm.sh
+
+test-installer-qualified:
+    scripts/test-installer-qualified.sh
+
 test-standard-resources:
     scripts/test-standard-resources.sh
 
@@ -42,6 +60,9 @@ build-artifacts:
 
 release-stage version output_dir:
     scripts/release-stage.sh "{{version}}" "{{output_dir}}"
+
+release-candidate version output_dir:
+    scripts/release-stage.sh --candidate "{{version}}" "{{output_dir}}"
 
 test-release-stage:
     scripts/test-release-stage.sh

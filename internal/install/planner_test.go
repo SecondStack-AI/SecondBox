@@ -1,0 +1,219 @@
+package install
+
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func plannerFacts(t *testing.T) HostFacts {
+	t.Helper()
+	facts := validPlan(t).HostFacts
+	facts.BtrfsSupported = true
+	facts.DNSUpstreams = []string{"192.0.2.53"}
+	facts.Devices = []DeviceFact{
+		{Path: "/dev/sdb", Identity: "8:16", Filesystem: "xfs", SizeBytes: 300 << 30, AvailableBytes: 240 << 30, Mountpoint: "/srv/secondbox-workspace"},
+		{Path: "/dev/sdc", Identity: "8:32", Filesystem: "ext4", SizeBytes: 300 << 30, AvailableBytes: 240 << 30, Mountpoint: "/srv/not-supported"},
+		{Path: "/dev/root", Identity: "8:1", Filesystem: "btrfs", SizeBytes: 500 << 30, AvailableBytes: 300 << 30, Mountpoint: "/"},
+	}
+	facts.Routes = []RouteFact{{Destination: "172.30.0.0/24", Interface: "eth0"}, {Destination: "default", Interface: "eth0", Gateway: "192.0.2.1"}}
+	return facts
+}
+
+func plannerInput(t *testing.T, choice StorageChoice) ProposalInput {
+	t.Helper()
+	return ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC), DeploymentDirectory: "/home/operator/.local/share/secondbox", BinaryDirectory: "/home/operator/.local/bin", CLIConfigPath: "/home/operator/.config/secondbox/config.json", CLITenantRef: "tenant-reviewed", CLISubjectRef: "subject-reviewed", BackingAvailableBytes: 105 << 30, DeploymentAvailableBytes: 100 << 30, Release: validPlan(t).Release, StorageChoice: choice, ExistingMountpoint: "/srv/secondbox-workspace", StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: 86400}
+}
+
+func TestProposalRequiresExplicitCLIIdentity(t *testing.T) {
+	input := plannerInput(t, StorageBtrfsImage)
+	input.CLISubjectRef = ""
+	if _, err := ProposePlan(plannerFacts(t), input); err == nil || !strings.Contains(err.Error(), "explicit CLI") {
+		t.Fatalf("implicit CLI identity proposal error = %v", err)
+	}
+}
+
+func TestProposalRequiresExplicitStandardBundles(t *testing.T) {
+	input := plannerInput(t, StorageBtrfsImage)
+	input.StandardBundles = nil
+	if _, err := ProposePlan(plannerFacts(t), input); err == nil || !strings.Contains(err.Error(), "standard bundles") {
+		t.Fatalf("implicit standard bundle proposal error = %v", err)
+	}
+}
+
+func TestStorageOptionsOfferOnlyDedicatedFilesystemOrBoundedImage(t *testing.T) {
+	options := StorageOptions(plannerFacts(t), 100<<30, ExecutionBundleEstimateBytes)
+	if len(options) != 2 {
+		t.Fatalf("storage options = %#v", options)
+	}
+	if options[0].Mountpoint != "/srv/secondbox-workspace" || options[0].Filesystem != "xfs" || options[1].Choice != StorageBtrfsImage {
+		t.Fatalf("unsafe or unexpected options = %#v", options)
+	}
+	if options[1].AvailableBytes != 65<<30 {
+		t.Fatalf("image proposal = %d, want fully allocated capacity minus backing, release, and object-store reserves", options[1].AvailableBytes)
+	}
+}
+
+func TestStorageOptionsRejectMountOnRootDevice(t *testing.T) {
+	facts := plannerFacts(t)
+	facts.Devices = append(facts.Devices, DeviceFact{Path: "/dev/root", Identity: "8:1", Filesystem: "btrfs", SizeBytes: 300 << 30, AvailableBytes: 240 << 30, Mountpoint: "/srv/root-subvolume"})
+	for _, option := range StorageOptions(facts, 100<<30, ExecutionBundleEstimateBytes) {
+		if option.Mountpoint == "/srv/root-subvolume" {
+			t.Fatal("a non-root mount on the root filesystem device was offered as dedicated storage")
+		}
+	}
+}
+
+func TestStorageOptionsRequireBackingForControlServicesAndReleaseAssets(t *testing.T) {
+	if options := StorageOptions(plannerFacts(t), MinimumControlBackingBytes+ExecutionBundleEstimateBytes+MinimumObjectStoreBytes-1, ExecutionBundleEstimateBytes); len(options) != 0 {
+		t.Fatalf("storage options with insufficient control backing = %#v", options)
+	}
+}
+
+func TestStorageOptionsUseDistinctExistingMountAndImageMinimums(t *testing.T) {
+	facts := plannerFacts(t)
+	facts.Devices[0].AvailableBytes = MinimumWorkspaceBytes
+	options := StorageOptions(facts, 81<<30, ExecutionBundleEstimateBytes)
+	if len(options) != 1 || options[0].Choice != StorageExistingMount {
+		t.Fatalf("storage options at exact thresholds = %#v", options)
+	}
+}
+
+func TestProposeExistingFilesystemPlanIsCompleteAndExplicit(t *testing.T) {
+	plan, err := ProposePlan(plannerFacts(t), plannerInput(t, StorageExistingMount))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Storage.ExistingDeviceIdentity != "8:16" || plan.Storage.WorkspacePath != "/srv/secondbox-workspace/secondbox-workspaces" {
+		t.Fatalf("storage = %#v", plan.Storage)
+	}
+	if len(plan.Capacity.SubjectQuotas) != 9 || len(plan.Network.Gateways) != 2 || plan.Network.GuestBridgeCIDR != "172.31.0.0/24" {
+		t.Fatalf("capacity/network incomplete: %#v %#v", plan.Capacity, plan.Network)
+	}
+	if len(plan.SecretTargets) < 8 {
+		t.Fatalf("secret targets = %#v", plan.SecretTargets)
+	}
+	workspace, found := plannedPathByName(plan.Paths, "workspace")
+	if !found || workspace.OwnerUID != runnerContainerUID || workspace.OwnerGID != runnerContainerGID {
+		t.Fatalf("workspace ownership = %#v", workspace)
+	}
+	state, _ := plannedPathByName(plan.Paths, "state")
+	for _, name := range []string{"jail", "run", "network", "snapshot-template-cache", "logs"} {
+		planned, found := plannedPathByName(plan.Paths, name)
+		if !found || !strings.HasPrefix(planned.Path, state.Path+string(filepath.Separator)) {
+			t.Fatalf("runner path %s is outside state bind mount: %#v", name, planned)
+		}
+	}
+	logs, _ := plannedPathByName(plan.Paths, "logs")
+	if logs.OwnerUID != runnerContainerUID || logs.OwnerGID != runnerContainerGID {
+		t.Fatalf("runner log ownership = %#v", logs)
+	}
+	encoded, err := Canonical(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"secretValue", "privateKeyPem", "bearerToken"} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("plan contains secret-bearing field %q", forbidden)
+		}
+	}
+}
+
+func TestProposeImagePlanBoundsAllocationAndReplacesPortCollisions(t *testing.T) {
+	facts := plannerFacts(t)
+	facts.ListeningPorts = []PortFact{{Address: "127.0.0.1", Port: 8080}, {Address: "127.0.0.1", Port: 9443}, {Address: "127.0.0.1", Port: 9444}}
+	input := plannerInput(t, StorageBtrfsImage)
+	plan, err := ProposePlan(facts, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Storage.ImageSizeBytes != 68<<30 || plan.Capacity.MaxWorkspaceBytes != 68<<30 {
+		t.Fatalf("image capacity = %#v", plan.Storage)
+	}
+	if plan.Capacity.SubjectQuotas["maxArtifactBytes"] != 2<<30 {
+		t.Fatalf("artifact quota is not derived from reserved object-store capacity: %#v", plan.Capacity.SubjectQuotas)
+	}
+	if plan.Network.APIAddress != "127.0.0.1:8081" || plan.Network.RunnerAddress != "127.0.0.1:9445" || plan.Network.DataPlaneAddress != "127.0.0.1:9446" {
+		t.Fatalf("replacement ports = %#v", plan.Network)
+	}
+	if !strings.Contains(RenderPlanReview(plan), "Ordinary uninstall preserves") || !strings.Contains(RenderPlanReview(plan), "Paths requiring sudo") {
+		t.Fatalf("review omitted durable or privilege boundary:\n%s", RenderPlanReview(plan))
+	}
+	if plan.Capacity.MaxCPUMillis < DurableCodingCPUMillis || plan.Capacity.MaxMemoryBytes < DurableCodingMemoryBytes || plan.Capacity.MaxWorkspaceBytes < MinimumWorkspaceBytes {
+		t.Fatalf("proposal cannot run durable-coding: %#v", plan.Capacity)
+	}
+}
+
+func TestProposePlanReplacesBundledServicePortCollisions(t *testing.T) {
+	facts := plannerFacts(t)
+	facts.ListeningPorts = []PortFact{{Port: 5432}, {Port: 9000}, {Port: 9001}}
+	plan, err := ProposePlan(facts, plannerInput(t, StorageExistingMount))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Network.DatabaseAddress != "127.0.0.1:5433" || plan.Network.ObjectStoreAddress != "127.0.0.1:9002" || plan.Network.ObjectStoreConsoleAddress != "127.0.0.1:9003" {
+		t.Fatalf("bundled service replacements = %#v", plan.Network)
+	}
+}
+
+func TestPlannerRejectsUnsafeOrUnreviewedChoices(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*HostFacts, *ProposalInput)
+	}{
+		{"physical device", func(_ *HostFacts, input *ProposalInput) { input.ExistingMountpoint = "/dev/sdb" }},
+		{"oversized image", func(_ *HostFacts, input *ProposalInput) {
+			input.StorageChoice = StorageBtrfsImage
+			input.FilesystemImageBytes = 99 << 30
+		}},
+		{"occupied advanced port", func(facts *HostFacts, input *ProposalInput) {
+			facts.ListeningPorts = []PortFact{{Port: 10000}}
+			input.NetworkOverrides.APIPort = 10000
+		}},
+		{"route collision", func(_ *HostFacts, input *ProposalInput) { input.NetworkOverrides.GuestCIDR = "172.30.0.0/24" }},
+		{"loopback DNS", func(_ *HostFacts, input *ProposalInput) { input.NetworkOverrides.DNSUpstream = "127.0.0.53" }},
+		{"unsafe deployment", func(_ *HostFacts, input *ProposalInput) { input.DeploymentDirectory = "/" }},
+		{"small deployment filesystem", func(_ *HostFacts, input *ProposalInput) { input.DeploymentAvailableBytes = MinimumDeploymentBytes - 1 }},
+		{"IPv6 guest network", func(_ *HostFacts, input *ProposalInput) { input.NetworkOverrides.GuestCIDR = "fd00::/64" }},
+		{"guest network without usable addresses", func(_ *HostFacts, input *ProposalInput) { input.NetworkOverrides.GuestCIDR = "192.0.2.0/31" }},
+		{"overflowing jailer range", func(_ *HostFacts, input *ProposalInput) {
+			input.NetworkOverrides.JailerUID = UIDRange{Start: int64(^uint32(0)), Count: 2}
+		}},
+		{"missing retention decision", func(_ *HostFacts, input *ProposalInput) { input.RetentionSeconds = 0 }},
+		{"subordinate ID collision", func(facts *HostFacts, input *ProposalInput) {
+			facts.ReservedIDRanges = []UIDRange{{Start: 200000, Count: 65536}}
+			input.NetworkOverrides.JailerUID = UIDRange{Start: 200000, Count: 64}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			facts, input := plannerFacts(t), plannerInput(t, StorageExistingMount)
+			test.mutate(&facts, &input)
+			if _, err := ProposePlan(facts, input); err == nil {
+				t.Fatal("unsafe proposal succeeded")
+			}
+		})
+	}
+}
+
+func TestAutomaticGuestCIDRNeverLeavesRFC1918Space(t *testing.T) {
+	routes := []RouteFact{{Destination: "172.30.0.0/24"}, {Destination: "172.31.0.0/24"}}
+	if candidate := freeGuestCIDR(routes); candidate != "" {
+		t.Fatalf("automatic CIDR escaped 172.16.0.0/12: %s", candidate)
+	}
+}
+
+func TestOperationIDsAreRandomAndValid(t *testing.T) {
+	one, err := NewOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := NewOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one == two || !operationPattern.MatchString(one) || !operationPattern.MatchString(two) {
+		t.Fatalf("operation IDs = %q, %q", one, two)
+	}
+}

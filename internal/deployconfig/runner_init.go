@@ -1,6 +1,7 @@
 package deployconfig
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -10,8 +11,26 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 )
+
+// RunnerInitOrValidate closes the receipt-persistence crash window for the
+// guided installer. A missing target is created once; an existing target is
+// accepted only when every file still proves the exact declared Runner
+// identity, CA, private key, and rendered environment.
+func RunnerInitOrValidate(manifestPath, runnerID, target string) error {
+	absoluteTarget, err := filepath.Abs(target)
+	if err != nil {
+		return manifestError("runner-init target", err)
+	}
+	if _, err := os.Lstat(absoluteTarget); os.IsNotExist(err) {
+		return RunnerInit(manifestPath, runnerID, target)
+	} else if err != nil {
+		return manifestError("runner-init inspect target", err)
+	}
+	return validateExistingRunnerIdentity(manifestPath, runnerID, absoluteTarget)
+}
 
 func RunnerInit(manifestPath, runnerID, target string) error {
 	manifest, err := ReadManifest(manifestPath)
@@ -151,4 +170,129 @@ func RunnerInit(manifestPath, runnerID, target string) error {
 	}
 	created = false
 	return syncDirectory(parent)
+}
+
+func validateExistingRunnerIdentity(manifestPath, runnerID, target string) error {
+	manifest, err := ReadManifest(manifestPath)
+	if err != nil {
+		return err
+	}
+	absoluteManifest, err := filepath.Abs(manifestPath)
+	if err != nil {
+		return manifestError("runner-init manifest", err)
+	}
+	base := filepath.Dir(absoluteManifest)
+	resolved, err := resolveManifestWithOptions(manifest, base, false)
+	if err != nil {
+		return err
+	}
+	var declared *Runner
+	for index := range manifest.Runners {
+		if manifest.Runners[index].RunnerID == runnerID {
+			declared = &manifest.Runners[index]
+			break
+		}
+	}
+	if declared == nil {
+		return manifestError("runner-init runner_id is not declared: "+runnerID, nil)
+	}
+	if declared.Placement == "same-host" {
+		expected := declared.IdentityHostDirectory
+		if !filepath.IsAbs(expected) {
+			expected = filepath.Join(base, expected)
+		}
+		if filepath.Clean(expected) != target {
+			return manifestError("runner-init target does not match the declared same-host identity directory", nil)
+		}
+	}
+	directory, err := os.Lstat(target)
+	if err != nil || !directory.IsDir() || directory.Mode()&os.ModeSymlink != 0 || directory.Mode().Perm() != 0o700 {
+		return manifestError("existing runner-init target is not a protected directory", err)
+	}
+	entries, err := os.ReadDir(target)
+	if err != nil {
+		return err
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	slices.Sort(names)
+	if !slices.Equal(names, []string{"runner-ca.crt", "runner.crt", "runner.env", "runner.key"}) {
+		return manifestError("existing runner-init target has unexpected entries", nil)
+	}
+	readRegular := func(name string, mode os.FileMode) ([]byte, error) {
+		path := filepath.Join(target, name)
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != mode {
+			return nil, manifestError("existing runner-init file differs: "+name, err)
+		}
+		return os.ReadFile(path)
+	}
+	caPath, err := resolveRegularReference(base, manifest.RunnerTrust.CACertificateFile)
+	if err != nil {
+		return manifestError("runner-init CA certificate", err)
+	}
+	expectedCA, err := os.ReadFile(caPath)
+	if err != nil {
+		return err
+	}
+	actualCA, err := readRegular("runner-ca.crt", 0o644)
+	if err != nil || !bytes.Equal(actualCA, expectedCA) {
+		return manifestError("existing runner-init CA differs from the deployment authority", err)
+	}
+	caBlock, remainder := pem.Decode(actualCA)
+	if caBlock == nil || len(remainder) != 0 || caBlock.Type != "CERTIFICATE" {
+		return manifestError("existing runner-init CA is invalid", nil)
+	}
+	caCert, err := x509.ParseCertificate(caBlock.Bytes)
+	if err != nil || !caCert.IsCA {
+		return manifestError("existing runner-init CA is invalid", err)
+	}
+	certPEM, err := readRegular("runner.crt", 0o600)
+	if err != nil {
+		return err
+	}
+	certBlock, remainder := pem.Decode(certPEM)
+	if certBlock == nil || len(remainder) != 0 || certBlock.Type != "CERTIFICATE" {
+		return manifestError("existing runner-init certificate is invalid", nil)
+	}
+	certificate, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		return manifestError("existing runner-init certificate is invalid", err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(caCert)
+	if _, err := certificate.Verify(x509.VerifyOptions{Roots: roots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
+		return manifestError("existing runner-init certificate is not valid for the deployment authority", err)
+	}
+	expectedURI := "spiffe://secondbox/runner/" + url.PathEscape(runnerID)
+	if certificate.Subject.CommonName != runnerID || len(certificate.URIs) != 1 || certificate.URIs[0].String() != expectedURI || certificate.KeyUsage&x509.KeyUsageDigitalSignature == 0 {
+		return manifestError("existing runner-init certificate identity differs from the declared Runner", nil)
+	}
+	keyPEM, err := readRegular("runner.key", 0o600)
+	if err != nil {
+		return err
+	}
+	keyBlock, remainder := pem.Decode(keyPEM)
+	if keyBlock == nil || len(remainder) != 0 {
+		return manifestError("existing runner-init private key is invalid", nil)
+	}
+	key, err := parseRSAPrivateKey(keyBlock.Bytes)
+	if err != nil || !key.PublicKey.Equal(certificate.PublicKey) {
+		return manifestError("existing runner-init private key does not match its certificate", err)
+	}
+	environment := resolved.RemoteRunnerEnvironment[runnerID]
+	if declared.Placement == "same-host" {
+		environment = resolveRunnerEnvironment(*declared, resolved.Environment["SECONDBOX_RUNNER_CREDENTIAL"])
+	}
+	expectedEnvironment, err := EncodeSystemdEnvironment(environment)
+	if err != nil {
+		return err
+	}
+	actualEnvironment, err := readRegular("runner.env", 0o600)
+	if err != nil || !bytes.Equal(actualEnvironment, expectedEnvironment) {
+		return manifestError("existing runner-init environment differs from the declared Runner", err)
+	}
+	return nil
 }

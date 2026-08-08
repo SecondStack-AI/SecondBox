@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/SecondStack-AI/SecondBox/internal/cliui"
 )
 
 const maximumDiagnosticProbeBytes = int64(10 << 20)
@@ -108,6 +110,10 @@ func runDiagnosticsBundleCommand(
 	files["SHA256SUMS"] = diagnosticChecksums(files)
 	if err := writeDiagnosticArchive(*outputPath, files); err != nil {
 		return err
+	}
+	view := presentationFromContext(ctx, output)
+	if view.renderer.HumanOutput() {
+		return view.renderer.WriteSummary(cliui.Summary{Title: "Support bundle created", Status: cliui.StatusComplete, Pairs: []cliui.Pair{{Key: "Archive", Value: *outputPath}, {Key: "Files", Value: strconv.Itoa(len(files))}}, Next: "Keep the archive private; it contains bounded operational evidence."})
 	}
 	if _, err := fmt.Fprintf(output, "Created bounded support bundle: %s\n", *outputPath); err != nil {
 		return fmt.Errorf("SecondBox diagnostics bundle result write failed: %w", err)

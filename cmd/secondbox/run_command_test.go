@@ -14,6 +14,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/SecondStack-AI/SecondBox/internal/cliui"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 )
@@ -167,6 +168,19 @@ func TestRunKeepsTheSandboxWhenAsked(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "sbx_run1") {
 		t.Errorf("stderr = %q; want the retained Sandbox reported", stderr)
+	}
+}
+
+func TestRetainedSandboxKeepsLegacyDiagnosticInNonTTYMode(t *testing.T) {
+	var diagnostic bytes.Buffer
+	capabilities := cliui.ForWriter(io.Discard, &diagnostic)
+	renderer := cliui.Renderer{Output: io.Discard, Diagnostic: &diagnostic, Capabilities: capabilities, OutputMode: cliui.OutputAuto, ColorMode: cliui.ColorAuto}
+	ctx := withPresentation(context.Background(), presentation{renderer: renderer})
+	if err := writeRetainedSandbox(ctx, &diagnostic, "sbx_retained"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := diagnostic.String(), "SecondBox retained Sandbox sbx_retained\n"; got != want {
+		t.Fatalf("non-TTY retained Sandbox diagnostic = %q, want %q", got, want)
 	}
 }
 

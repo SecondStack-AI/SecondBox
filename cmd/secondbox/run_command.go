@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SecondStack-AI/SecondBox/internal/cliui"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 )
@@ -143,16 +144,30 @@ func runRunCommand(
 	// The SDK requires a deadline covering both becoming ready and running.
 	runContext, cancel := context.WithTimeout(ctx, *readyTimeout+*deadline)
 	defer cancel()
+	activity, err := startGuestStreamActivity(runContext, presentationFromContext(ctx, environment.stdout).renderer, "Create, schedule, and execute Sandbox")
+	if err != nil {
+		return err
+	}
 	handle, result, runErr := client.Run(runContext, request)
 	if handle != nil && !*keep {
 		defer func() {
-			resultErr = errors.Join(resultErr, deleteRunSandbox(ctx, handle))
+			cleanupErr := deleteRunSandbox(ctx, handle)
+			if resultErr == nil && cleanupErr == nil {
+				cleanupErr = writeRunCompletion(ctx, "Sandbox cleanup", "deleted")
+			}
+			resultErr = errors.Join(resultErr, cleanupErr)
 		}()
 	}
+	activityStatus, activityDetail := cliui.StatusComplete, "guest stream ready"
+	var executionFailure *secondboxclient.ExecFailure
+	if runErr != nil && !errors.As(runErr, &executionFailure) {
+		activityStatus, activityDetail = cliui.StatusFailed, "lifecycle failed"
+	}
+	if err := completeGuestStreamActivity(activity, activityStatus, activityDetail); err != nil {
+		return errors.Join(runErr, err)
+	}
 	if handle != nil && *keep {
-		if _, err := fmt.Fprintf(
-			environment.stderr, "SecondBox retained Sandbox %s\n", handle.Snapshot().ID,
-		); err != nil {
+		if err := writeRetainedSandbox(ctx, environment.stderr, handle.Snapshot().ID); err != nil {
 			return err
 		}
 	}
@@ -165,6 +180,29 @@ func runRunCommand(
 		return writeExecOutcomeJSON(environment.stdout, result.Outcome)
 	}
 	return writeExecOutcome(environment, result.Outcome)
+}
+
+func writeRetainedSandbox(ctx context.Context, fallback io.Writer, sandboxID string) error {
+	if value, ok := ctx.Value(presentationContextKey{}).(presentation); ok {
+		if value.renderer.Capabilities.Diagnostic.TTY {
+			renderer := value.renderer
+			renderer.Output = fallback
+			renderer.Capabilities.Output = renderer.Capabilities.Diagnostic
+			return renderer.WritePhases([]cliui.Phase{{Name: "Retained Sandbox", Detail: sandboxID, Status: cliui.StatusComplete}})
+		}
+	}
+	_, err := fmt.Fprintf(fallback, "SecondBox retained Sandbox %s\n", sandboxID)
+	return err
+}
+
+func writeRunCompletion(ctx context.Context, name, detail string) error {
+	if value, ok := ctx.Value(presentationContextKey{}).(presentation); ok {
+		if !value.renderer.Capabilities.Diagnostic.TTY {
+			return nil
+		}
+		return value.renderer.WritePhases([]cliui.Phase{{Name: name, Detail: detail, Status: cliui.StatusComplete}})
+	}
+	return nil
 }
 
 // interactiveRequest is one ephemeral interactive Sandbox request.
@@ -204,13 +242,18 @@ func runInteractiveSandbox(
 	}
 	readyContext, cancel := context.WithTimeout(ctx, request.readyTimeout)
 	defer cancel()
+	activity, err := startGuestStreamActivity(readyContext, presentationFromContext(ctx, terminal.output).renderer, "Create and attach Sandbox terminal")
+	if err != nil {
+		return err
+	}
 	if _, err := handle.WaitFor(readyContext, secondboxclient.SandboxStateReady); err != nil {
+		return errors.Join(err, completeGuestStreamActivity(activity, cliui.StatusFailed, "readiness failed"))
+	}
+	if err := completeGuestStreamActivity(activity, cliui.StatusComplete, "terminal ready"); err != nil {
 		return err
 	}
 	if request.keep {
-		if _, err := fmt.Fprintf(
-			report, "SecondBox retained Sandbox %s\n", handle.Snapshot().ID,
-		); err != nil {
+		if err := writeRetainedSandbox(ctx, report, handle.Snapshot().ID); err != nil {
 			return err
 		}
 	}

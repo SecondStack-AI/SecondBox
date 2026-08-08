@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SecondStack-AI/SecondBox/internal/cliui"
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 )
 
@@ -127,6 +128,26 @@ func TestDeploymentTimingCommandRequiresAndSendsExplicitWindow(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "requires --window") {
 		t.Fatalf("missing-window error = %v", err)
+	}
+}
+
+func TestTimingCommandHonorsExplicitJSONOutput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(writer).Encode(secondboxclient.OperationTiming{OperationID: "op_json", SandboxID: "sbox_json", Kind: "start", State: "succeeded"})
+	}))
+	defer server.Close()
+	var output bytes.Buffer
+	capabilities := cliui.ForWriter(&output, &output)
+	ctx := withPresentation(context.Background(), presentation{renderer: cliui.Renderer{Output: &output, Diagnostic: &output, Capabilities: capabilities, OutputMode: cliui.OutputJSON, ColorMode: cliui.ColorNever}})
+	if err := runTimingCommand(ctx, server.URL, "token", "tenant", "subject", "operation", []string{"--operation-id", "op_json"}, &output, server.Client()); err != nil {
+		t.Fatal(err)
+	}
+	var decoded secondboxclient.OperationTiming
+	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+		t.Fatalf("timing JSON = %q: %v", output.String(), err)
+	}
+	if decoded.OperationID != "op_json" || strings.Contains(output.String(), "OPERATION") {
+		t.Fatalf("timing JSON contract = %q", output.String())
 	}
 }
 

@@ -48,6 +48,24 @@ func TestManifestObjectsBindStandardProfilesToSignedComponents(t *testing.T) {
 	evidenceLocation := "https://example.com/qualification-evidence.json"
 	objects[evidenceLocation] = evidenceData
 	evidenceReference := releasecontract.Reference{Location: evidenceLocation, Digest: releasecontract.Digest(evidenceData)}
+	installerEvidence := releasecontract.InstallerQualificationEvidence{
+		SchemaVersion: releasecontract.InstallerQualificationEvidenceSchema, SourceCommit: sourceCommit,
+		Suite: "test-installer-qualified", PassCount: 19, WallClockSeconds: 1200,
+		Host: releasecontract.QualificationHostEvidence{
+			KVM:                 releasecontract.QualificationDeviceEvidence{Path: "/dev/kvm", Present: true, Readable: true, Writable: true},
+			TUN:                 releasecontract.QualificationDeviceEvidence{Path: "/dev/net/tun", Present: true, Readable: true, Writable: true},
+			WorkspaceFilesystem: releasecontract.QualificationFilesystemEvidence{Mount: "/srv xfs", Type: "xfs"},
+		},
+		ReleaseManifestDigest: "sha256:" + strings.Repeat("d", 64), FilesystemIdentity: "8:16", RebootPassed: true,
+		QualifiedAt: "2026-08-04T12:00:00Z",
+	}
+	installerEvidenceData, err := json.Marshal(installerEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installerEvidenceLocation := "https://example.com/installer-qualification-evidence.json"
+	objects[installerEvidenceLocation] = installerEvidenceData
+	installerEvidenceReference := releasecontract.Reference{Location: installerEvidenceLocation, Digest: releasecontract.Digest(installerEvidenceData)}
 	bundles := make([]releasecontract.StandardBundleArtifact, 0, len(documents))
 	for _, document := range documents {
 		data, err := json.Marshal(document)
@@ -62,12 +80,41 @@ func TestManifestObjectsBindStandardProfilesToSignedComponents(t *testing.T) {
 		}
 		bundles = append(bundles, releasecontract.StandardBundleArtifact{Name: document.Name, Document: releasecontract.Reference{Location: location, Digest: releasecontract.Digest(data)}, Profiles: profiles})
 	}
-	manifest := releasecontract.ArtifactManifest{Identity: releasecontract.Identity{SourceCommit: sourceCommit}, OpenAPI: releasecontract.OpenAPIArtifact{Reference: baseReference}, GoSDK: releasecontract.SDKArtifact{Package: baseReference}, TypeScriptSDK: releasecontract.SDKArtifact{Package: baseReference}, SourceFreeSuite: baseReference, QualificationEvidence: evidenceReference, MicroVM: releasecontract.MicroVMArtifact{SignedManifestDigest: signed, RuntimeBundle: releasecontract.SignedComponent{ManifestDigest: runtimeDigest}, ToolchainBundle: releasecontract.SignedComponent{ManifestDigest: toolchainDigest}}, StandardBundles: bundles}
-	fetch := func(_ context.Context, location string) ([]byte, error) { return objects[location], nil }
+	manifest := releasecontract.ArtifactManifest{Identity: releasecontract.Identity{SourceCommit: sourceCommit}, OpenAPI: releasecontract.OpenAPIArtifact{Reference: baseReference}, GoSDK: releasecontract.SDKArtifact{Package: baseReference}, TypeScriptSDK: releasecontract.SDKArtifact{Package: baseReference}, InstallBootstrap: baseReference, SourceFreeSuite: baseReference, QualificationEvidence: evidenceReference, InstallerQualificationEvidence: installerEvidenceReference, MicroVM: releasecontract.MicroVMArtifact{SignedManifestDigest: signed, RuntimeBundle: releasecontract.SignedComponent{ManifestDigest: runtimeDigest}, ToolchainBundle: releasecontract.SignedComponent{ManifestDigest: toolchainDigest}}, StandardBundles: bundles}
+	qualificationSubject, err := manifest.InstallerQualificationSubjectDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	installerEvidence.ReleaseManifestDigest = qualificationSubject
+	installerEvidenceData, err = json.Marshal(installerEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects[installerEvidenceLocation] = installerEvidenceData
+	manifest.InstallerQualificationEvidence.Digest = releasecontract.Digest(installerEvidenceData)
+	fetchCalls := map[string]int{}
+	fetch := func(_ context.Context, location string) ([]byte, error) {
+		fetchCalls[location]++
+		return objects[location], nil
+	}
 	if err := verifyManifestObjects(t.Context(), manifest, fetch); err != nil {
 		t.Fatal(err)
 	}
+	if fetchCalls[evidenceLocation] != 1 || fetchCalls[installerEvidenceLocation] != 1 {
+		t.Fatalf("qualification evidence fetches = scenario %d installer %d", fetchCalls[evidenceLocation], fetchCalls[installerEvidenceLocation])
+	}
 	manifest.MicroVM.RuntimeBundle.ManifestDigest = "sha256:" + strings.Repeat("d", 64)
+	qualificationSubject, err = manifest.InstallerQualificationSubjectDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	installerEvidence.ReleaseManifestDigest = qualificationSubject
+	installerEvidenceData, err = json.Marshal(installerEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects[installerEvidenceLocation] = installerEvidenceData
+	manifest.InstallerQualificationEvidence.Digest = releasecontract.Digest(installerEvidenceData)
 	if err := verifyManifestObjects(t.Context(), manifest, fetch); err == nil || !strings.Contains(err.Error(), "identity mismatch") {
 		t.Fatalf("component substitution error = %v", err)
 	}

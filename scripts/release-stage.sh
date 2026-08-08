@@ -8,15 +8,20 @@ set -euo pipefail
 export LC_ALL=C
 
 usage() {
-  echo "usage: scripts/release-stage.sh [--test-mode] VERSION OUTPUT_DIR" >&2
+	echo "usage: scripts/release-stage.sh [--test-mode] [--candidate] VERSION OUTPUT_DIR" >&2
   exit 2
 }
 
 test_mode=false
-if [[ "${1:-}" == "--test-mode" ]]; then
-  test_mode=true
-  shift
-fi
+candidate_mode=false
+while [[ "${1:-}" == --* ]]; do
+	case "$1" in
+		--test-mode) test_mode=true ;;
+		--candidate) candidate_mode=true ;;
+		*) usage ;;
+	esac
+	shift
+done
 [[ "$#" -eq 2 ]] || usage
 version="$1"
 output_dir="$2"
@@ -24,6 +29,9 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 qualification_evidence_schema="secondbox.release/qualification-evidence/v1"
 qualification_evidence_source="$repo_root/.tmp/scenario-qualification-evidence.json"
 qualification_evidence_name="secondbox-${version}-qualification-evidence.json"
+installer_qualification_evidence_schema="secondbox.release/installer-qualification-evidence/v1"
+installer_qualification_evidence_source="$repo_root/.tmp/installer-qualification-evidence.json"
+installer_qualification_evidence_name="secondbox-${version}-installer-qualification-evidence.json"
 
 validate_qualification_evidence() {
   local evidence="$1"
@@ -71,6 +79,32 @@ validate_qualification_evidence() {
   }
 }
 
+validate_installer_qualification_evidence() {
+  local evidence="$1"
+  [[ -f "$evidence" && ! -L "$evidence" ]] || {
+    echo "release staging requires installer qualification evidence at $installer_qualification_evidence_source; run just test-installer-qualified on the qualified host" >&2
+    exit 1
+  }
+  jq -e --arg schema "$installer_qualification_evidence_schema" --arg commit "$source_commit" '
+    .schemaVersion == $schema and .sourceCommit == $commit and .repositoryDirty == false and
+    .suite == "test-installer-qualified" and
+    (.passCount | type == "number") and .passCount > 0 and .passCount == (.passCount | floor) and
+    (.wallClockSeconds | type == "number") and .wallClockSeconds >= 0 and .wallClockSeconds == (.wallClockSeconds | floor) and
+    .host.kvm == {path:"/dev/kvm",present:true,readable:true,writable:true} and
+    .host.tun == {path:"/dev/net/tun",present:true,readable:true,writable:true} and
+    (.host.workspaceFilesystem.mount | type == "string") and (.host.workspaceFilesystem.mount | length) > 0 and
+    (.host.workspaceFilesystem.type == "xfs" or .host.workspaceFilesystem.type == "btrfs") and
+    (.releaseManifestDigest | test("^sha256:[0-9a-f]{64}$")) and
+    (.filesystemIdentity | type == "string") and (.filesystemIdentity | length) > 0 and
+    .rebootPassed == true and
+    (.qualifiedAt | type == "string") and
+    (.qualifiedAt | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+  ' "$evidence" >/dev/null || {
+    echo "release installer qualification evidence does not describe a complete clean qualified run; rerun just test-installer-qualified" >&2
+    exit 1
+  }
+}
+
 [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] || {
   echo "release version must be SemVer without a v prefix or build metadata" >&2
   exit 1
@@ -109,7 +143,7 @@ cleanup() { rm -rf "$temporary"; }
 trap cleanup EXIT
 
 if $test_mode; then
-  jq -n \
+	jq -n \
     --arg schemaVersion "$qualification_evidence_schema" \
     --arg sourceCommit "$source_commit" \
     '{
@@ -130,6 +164,32 @@ else
   install -m 0644 "$qualification_evidence_source" "$output_dir/$qualification_evidence_name"
 fi
 validate_qualification_evidence "$output_dir/$qualification_evidence_name"
+
+if $test_mode && ! $candidate_mode; then
+  jq -n \
+    --arg schemaVersion "$installer_qualification_evidence_schema" \
+    --arg sourceCommit "$source_commit" \
+    --arg releaseManifestDigest "sha256:$(printf '%s' "$source_commit-installer-qualified" | sha256sum | awk '{print $1}')" \
+    '{schemaVersion:$schemaVersion,sourceCommit:$sourceCommit,repositoryDirty:false,suite:"test-installer-qualified",passCount:19,wallClockSeconds:1,host:{kvm:{path:"/dev/kvm",present:true,readable:true,writable:true},tun:{path:"/dev/net/tun",present:true,readable:true,writable:true},workspaceFilesystem:{mount:"/synthetic/installer xfs",type:"xfs"}},releaseManifestDigest:$releaseManifestDigest,filesystemIdentity:"8:16",rebootPassed:true,qualifiedAt:"1970-01-01T00:00:00Z"}' >"$output_dir/$installer_qualification_evidence_name"
+elif ! $candidate_mode; then
+	install -m 0644 "$installer_qualification_evidence_source" "$output_dir/$installer_qualification_evidence_name"
+fi
+if ! $candidate_mode; then
+	validate_installer_qualification_evidence "$output_dir/$installer_qualification_evidence_name"
+fi
+
+if $test_mode; then
+	postgres_image="docker.io/library/postgres@sha256:$(printf postgres | sha256sum | awk '{print $1}')"
+	object_store_image="docker.io/rustfs/rustfs@sha256:$(printf rustfs | sha256sum | awk '{print $1}')"
+	object_store_client_image="quay.io/minio/mc@sha256:$(printf minio-mc | sha256sum | awk '{print $1}')"
+else
+	: "${SECONDBOX_RELEASE_POSTGRES_IMAGE:?release staging requires digest-pinned SECONDBOX_RELEASE_POSTGRES_IMAGE}"
+	: "${SECONDBOX_RELEASE_OBJECT_STORE_IMAGE:?release staging requires digest-pinned SECONDBOX_RELEASE_OBJECT_STORE_IMAGE}"
+	: "${SECONDBOX_RELEASE_OBJECT_STORE_CLIENT_IMAGE:?release staging requires digest-pinned SECONDBOX_RELEASE_OBJECT_STORE_CLIENT_IMAGE}"
+	postgres_image="$SECONDBOX_RELEASE_POSTGRES_IMAGE"
+	object_store_image="$SECONDBOX_RELEASE_OBJECT_STORE_IMAGE"
+	object_store_client_image="$SECONDBOX_RELEASE_OBJECT_STORE_CLIENT_IMAGE"
+fi
 
 if ! $test_mode; then
   "$repo_root/scripts/verify-generated.sh"
@@ -198,6 +258,8 @@ for binary in "$output_dir"/secondbox*_${version}_* "$temporary/secondboxd_linux
   fi
   strings "$binary" | grep -Fx -- "$source_commit" >/dev/null || { echo "binary lacks source commit: $binary" >&2; exit 1; }
 done
+deploy_linux_amd64="$output_dir/secondbox-deploy_${version}_linux_amd64"
+"$repo_root/scripts/generate-install-bootstrap.sh" "$version" "$(sha256sum "$deploy_linux_amd64" | awk '{print $1}')" "$output_dir/install.sh"
 
 : "${SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR:?release staging requires SECONDBOX_RUNNER_MICROVM_RELEASE_SOURCE_DIR}"
 : "${SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY:?release staging requires SECONDBOX_RUNNER_MICROVM_RELEASE_PUBLIC_KEY}"
@@ -230,17 +292,21 @@ microvm_toolchain_digest="$(jq -er '.manifestDigest' <<<"$microvm_toolchain_bund
 public_contract_digest="sha256:$(sha256sum "$output_dir/$openapi_name" | awk '{print $1}')"
 if $test_mode; then
   control_plane_digest="sha256:$(for arch in amd64 arm64; do sha256sum "$temporary/secondboxd_linux_${arch}" | awk '{print $1}'; done | sha256sum | awk '{print $1}')"
-  runner_digest="sha256:$(sha256sum "$temporary/secondbox-runner" | awk '{print $1}')"
+	runner_digest="sha256:$(sha256sum "$temporary/secondbox-runner" | awk '{print $1}')"
+	installer_tools_digest="sha256:$(sha256sum "$repo_root/deploy/installer-tools.Dockerfile" | awk '{print $1}')"
   microvm_image_digest="sha256:$(printf '%s\n' "${microvm_files[@]}" "$microvm_manifest_digest" | sha256sum | awk '{print $1}')"
   jq -n --arg version "$version" --arg commit "$source_commit" --arg digest "$control_plane_digest" --arg contract "$public_contract_digest" '{image:"control-plane",version:$version,sourceCommit:$commit,digest:$digest,platforms:["linux/amd64","linux/arm64"],publicContractDigest:$contract}' >"$output_dir/control-plane.oci.json"
-  jq -n --arg version "$version" --arg commit "$source_commit" --arg digest "$runner_digest" --arg contract "$public_contract_digest" '{image:"runner",version:$version,sourceCommit:$commit,digest:$digest,platforms:["linux/amd64"],publicContractDigest:$contract}' >"$output_dir/runner.oci.json"
+	jq -n --arg version "$version" --arg commit "$source_commit" --arg digest "$runner_digest" --arg contract "$public_contract_digest" '{image:"runner",version:$version,sourceCommit:$commit,digest:$digest,platforms:["linux/amd64"],publicContractDigest:$contract}' >"$output_dir/runner.oci.json"
+	jq -n --arg version "$version" --arg commit "$source_commit" --arg digest "$installer_tools_digest" '{image:"installer-tools",version:$version,sourceCommit:$commit,digest:$digest,platforms:["linux/amd64"]}' >"$output_dir/installer-tools.oci.json"
   jq -n --arg version "$version" --arg commit "$source_commit" --arg digest "$microvm_image_digest" --arg manifest "$microvm_manifest_digest" --arg fingerprint "$microvm_fingerprint" '{image:"microvm-artifacts",version:$version,sourceCommit:$commit,digest:$digest,platforms:["linux/amd64"],signedManifestDigest:$manifest,signingKeyFingerprint:$fingerprint}' >"$output_dir/microvm-artifacts.oci.json"
 else
   docker buildx build --platform linux/amd64,linux/arm64 --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --build-arg "PUBLIC_CONTRACT_DIGEST=$public_contract_digest" --output "type=oci,dest=$output_dir/control-plane.oci.tar" --metadata-file "$output_dir/control-plane.oci.json" "$repo_root"
-  docker buildx build --platform linux/amd64 --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --build-arg "PUBLIC_CONTRACT_DIGEST=$public_contract_digest" --file "$repo_root/runner/Dockerfile" --output "type=oci,dest=$output_dir/runner.oci.tar" --metadata-file "$output_dir/runner.oci.json" "$repo_root"
+	docker buildx build --platform linux/amd64 --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --build-arg "PUBLIC_CONTRACT_DIGEST=$public_contract_digest" --file "$repo_root/runner/Dockerfile" --output "type=oci,dest=$output_dir/runner.oci.tar" --metadata-file "$output_dir/runner.oci.json" "$repo_root"
+	docker buildx build --platform linux/amd64 --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --file "$repo_root/deploy/installer-tools.Dockerfile" --output "type=oci,dest=$output_dir/installer-tools.oci.tar" --metadata-file "$output_dir/installer-tools.oci.json" "$repo_root"
   docker buildx build --platform linux/amd64 --provenance=false --sbom=false --build-arg "RELEASE_VERSION=$version" --build-arg "SOURCE_COMMIT=$source_commit" --build-arg "SIGNED_MANIFEST_DIGEST=$microvm_manifest_digest" --file "$repo_root/runner/deploy/microvm-artifact-transport.Dockerfile" --output "type=oci,dest=$output_dir/microvm-artifacts.oci.tar" --metadata-file "$output_dir/microvm-artifacts.oci.json" "$microvm_source"
   control_plane_digest="$(jq -er '."containerimage.digest"' "$output_dir/control-plane.oci.json")"
-  runner_digest="$(jq -er '."containerimage.digest"' "$output_dir/runner.oci.json")"
+	runner_digest="$(jq -er '."containerimage.digest"' "$output_dir/runner.oci.json")"
+	installer_tools_digest="$(jq -er '."containerimage.digest"' "$output_dir/installer-tools.oci.json")"
   microvm_image_digest="$(jq -er '."containerimage.digest"' "$output_dir/microvm-artifacts.oci.json")"
 fi
 
@@ -248,8 +314,22 @@ go -C "$repo_root" run ./cmd/secondbox-release-tool standard-documents "$microvm
 
 jq -n --arg version "$version" --arg commit "$source_commit" --arg ts "$typescript_name" --arg go "secondbox-${version}-go-module.tar.gz" '{schemaVersion:1,version:$version,sourceCommit:$commit,typeScriptPackage:$ts,goModuleArchive:$go}' >"$output_dir/secondbox-${version}-package-metadata.json"
 jq -n --arg version "$version" --arg commit "$source_commit" '{spdxVersion:"SPDX-2.3",dataLicense:"CC0-1.0",SPDXID:"SPDXRef-DOCUMENT",name:("SecondBox-"+$version),documentNamespace:("https://github.com/SecondStack-AI/SecondBox/releases/tag/v"+$version),creationInfo:{creators:["Organization: SecondStack AI"],comment:("deterministic source commit "+$commit)},packages:[{name:"SecondBox",SPDXID:"SPDXRef-Package-SecondBox",versionInfo:$version,downloadLocation:("git+https://github.com/SecondStack-AI/SecondBox.git@"+$commit),filesAnalyzed:false}]}' >"$output_dir/secondbox-${version}.spdx.json"
-jq -n --arg version "$version" --arg commit "$source_commit" --arg control "$control_plane_digest" --arg runner "$runner_digest" --arg microImage "$microvm_image_digest" --arg microManifest "$microvm_manifest_digest" --arg fingerprint "$microvm_fingerprint" --argjson runtime "$microvm_runtime_bundle" --argjson toolchain "$microvm_toolchain_bundle" '{version:$version,sourceCommit:$commit,controlPlaneDigest:$control,runnerDigest:$runner,microvmImageDigest:$microImage,microvmManifestDigest:$microManifest,microvmSigningKeyFingerprint:$fingerprint,microvmRuntimeBundle:$runtime,microvmToolchainBundle:$toolchain}' >"$temporary/candidate-input.json"
+jq -n --argjson candidate "$candidate_mode" --arg version "$version" --arg commit "$source_commit" --arg control "$control_plane_digest" --arg runner "$runner_digest" --arg installerTools "$installer_tools_digest" --arg postgresImage "$postgres_image" --arg objectStoreImage "$object_store_image" --arg objectStoreClientImage "$object_store_client_image" --arg microImage "$microvm_image_digest" --arg microManifest "$microvm_manifest_digest" --arg fingerprint "$microvm_fingerprint" --argjson runtime "$microvm_runtime_bundle" --argjson toolchain "$microvm_toolchain_bundle" '{candidate:$candidate,version:$version,sourceCommit:$commit,controlPlaneDigest:$control,runnerDigest:$runner,installerToolsDigest:$installerTools,postgresImage:$postgresImage,objectStoreImage:$objectStoreImage,objectStoreClientImage:$objectStoreClientImage,microvmImageDigest:$microImage,microvmManifestDigest:$microManifest,microvmSigningKeyFingerprint:$fingerprint,microvmRuntimeBundle:$runtime,microvmToolchainBundle:$toolchain}' >"$temporary/candidate-input.json"
 go -C "$repo_root" run ./cmd/secondbox-release-tool manifest "$temporary/candidate-input.json" "$output_dir"
+artifact_manifest="$output_dir/secondbox-${version}-artifact-manifest.json"
+installer_qualification_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool installer-qualification-subject "$artifact_manifest")"
+if $test_mode && ! $candidate_mode; then
+  jq --arg digest "$installer_qualification_subject" '.releaseManifestDigest = $digest' "$output_dir/$installer_qualification_evidence_name" >"$temporary/installer-qualification-evidence.json"
+  mv "$temporary/installer-qualification-evidence.json" "$output_dir/$installer_qualification_evidence_name"
+  go -C "$repo_root" run ./cmd/secondbox-release-tool manifest "$temporary/candidate-input.json" "$output_dir"
+  installer_qualification_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool installer-qualification-subject "$artifact_manifest")"
+fi
+if ! $candidate_mode; then
+	[[ "$(jq -er '.releaseManifestDigest' "$output_dir/$installer_qualification_evidence_name")" == "$installer_qualification_subject" ]] || {
+		echo 'release installer qualification evidence was produced for different release bytes' >&2
+		exit 1
+	}
+fi
 
 (
   cd "$output_dir"

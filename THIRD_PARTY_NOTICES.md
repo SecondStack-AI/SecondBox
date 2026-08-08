@@ -4,6 +4,25 @@ SecondBox includes source code that depends on third-party Go modules and builds
 
 ## Go modules
 
+- `charm.land/bubbles/v2` — MIT
+- `charm.land/bubbletea/v2` — MIT
+- `charm.land/huh/v2` — MIT
+- `charm.land/lipgloss/v2` — MIT
+- `github.com/atotto/clipboard` — BSD-3-Clause
+- `github.com/catppuccin/go` — MIT
+- `github.com/charmbracelet/colorprofile` — MIT
+- `github.com/charmbracelet/harmonica` — MIT
+- `github.com/charmbracelet/ultraviolet` — MIT
+- `github.com/charmbracelet/x/ansi`, `x/exp/ordered`, `x/exp/strings`, `x/term`, `x/termios`, and `x/windows` — MIT
+- `github.com/clipperhouse/displaywidth` and `github.com/clipperhouse/uax29/v2` — MIT
+- `github.com/creack/pty` — MIT
+- `github.com/dustin/go-humanize` — MIT
+- `github.com/lucasb-eyer/go-colorful` — MIT
+- `github.com/mattn/go-runewidth` — MIT
+- `github.com/mitchellh/hashstructure/v2` — MIT
+- `github.com/muesli/cancelreader` — MIT
+- `github.com/rivo/uniseg` — MIT
+- `github.com/xo/terminfo` — MIT
 - `github.com/aws/aws-sdk-go-v2` and its `aws`, `credentials`, `service/s3`, and internal modules — Apache-2.0
 - `github.com/aws/smithy-go` — Apache-2.0
 - `github.com/gorilla/websocket` — BSD-2-Clause

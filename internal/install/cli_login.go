@@ -1,0 +1,186 @@
+package install
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+
+	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
+)
+
+// LoginCLI verifies the generated platform authority, then writes the invoking
+// user's ordinary CLI configuration without ever putting the token in process
+// arguments, the receipt, or diagnostic output.
+func LoginCLI(ctx context.Context, plan InstallPlan, httpClient *http.Client) ([]CreatedResource, error) {
+	if httpClient == nil {
+		return nil, installerError("CLI login HTTP client is required", nil)
+	}
+	tokenPath := ""
+	for _, target := range plan.SecretTargets {
+		if target.Category == "platform-authority" {
+			tokenPath = target.Path
+			break
+		}
+	}
+	token, err := readInstallerSecret(tokenPath, plan.HostFacts.InvokingUID)
+	if err != nil {
+		return nil, err
+	}
+	client, err := secondboxclient.NewSecondBoxSubjectClient("http://"+plan.Network.APIAddress, token, plan.CLI.TenantRef, plan.CLI.SubjectRef, httpClient)
+	if err != nil {
+		return nil, err
+	}
+	response, err := client.Request(ctx, "listSandboxes", secondboxclient.CallOptions{QueryParameters: url.Values{"limit": {"1"}}})
+	if err != nil {
+		return nil, installerError("verify generated CLI authority", err)
+	}
+	if err := response.Body.Close(); err != nil {
+		return nil, installerError("close CLI authority verification response", err)
+	}
+	created := []CreatedResource{}
+	for _, name := range []string{"cli-config-root", "cli-config-directory"} {
+		planned, found := plannedPathByName(plan.Paths, name)
+		if !found {
+			return nil, installerError("CLI configuration directory is absent from plan: "+name, nil)
+		}
+		wasCreated, err := ensureOwnedDirectory(planned)
+		if err != nil {
+			return nil, err
+		}
+		if wasCreated {
+			created = append(created, resourceFromPath(planned, StageCLILogin))
+		}
+	}
+	content, err := cliConfigurationBytes(plan, token)
+	if err != nil {
+		return nil, err
+	}
+	planned, found := plannedPathByName(plan.Paths, "cli-config")
+	if !found || planned.Path != plan.CLI.ConfigPath {
+		return nil, installerError("CLI configuration file is absent from plan", nil)
+	}
+	if existing, statErr := os.Lstat(planned.Path); statErr == nil {
+		actual, readErr := os.ReadFile(planned.Path)
+		stat, ok := existing.Sys().(*syscall.Stat_t)
+		if readErr != nil || !ok || !existing.Mode().IsRegular() || existing.Mode()&os.ModeSymlink != 0 || existing.Mode().Perm() != os.FileMode(planned.Mode) || int64(stat.Uid) != planned.OwnerUID || int64(stat.Gid) != planned.OwnerGID || !bytes.Equal(actual, content) {
+			return nil, installerError("existing CLI configuration differs from the verified accepted authority", readErr)
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return nil, installerError("inspect CLI configuration", statErr)
+	} else if err := writePrivateCreateOnly(planned.Path, content, os.FileMode(planned.Mode)); err != nil {
+		return nil, err
+	}
+	resource := resourceFromPath(planned, StageCLILogin)
+	resource.Digest = Digest(content)
+	created = append(created, resource)
+	return created, nil
+}
+
+// ValidateCLIConfig checks the protected stored authority without contacting
+// the control plane or exposing the token through arguments or diagnostics.
+func ValidateCLIConfig(plan InstallPlan) error {
+	tokenPath := ""
+	for _, target := range plan.SecretTargets {
+		if target.Category == "platform-authority" {
+			tokenPath = target.Path
+			break
+		}
+	}
+	token, err := readInstallerSecret(tokenPath, plan.HostFacts.InvokingUID)
+	if err != nil {
+		return err
+	}
+	expected, err := cliConfigurationBytes(plan, token)
+	if err != nil {
+		return err
+	}
+	planned, found := plannedPathByName(plan.Paths, "cli-config")
+	if !found || planned.Path != plan.CLI.ConfigPath {
+		return installerError("CLI configuration file is absent from plan", nil)
+	}
+	info, err := os.Lstat(planned.Path)
+	if err != nil {
+		return installerError("inspect CLI configuration", err)
+	}
+	actual, readErr := os.ReadFile(planned.Path)
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if readErr != nil || !ok || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != os.FileMode(planned.Mode) || int64(stat.Uid) != planned.OwnerUID || int64(stat.Gid) != planned.OwnerGID || !bytes.Equal(actual, expected) {
+		return installerError("existing CLI configuration differs from the verified accepted authority", readErr)
+	}
+	return nil
+}
+
+func cliConfigurationBytes(plan InstallPlan, token string) ([]byte, error) {
+	configuration := struct {
+		URL        string `json:"url"`
+		Token      string `json:"token"`
+		TenantRef  string `json:"tenantRef"`
+		SubjectRef string `json:"subjectRef"`
+	}{URL: "http://" + plan.Network.APIAddress, Token: token, TenantRef: plan.CLI.TenantRef, SubjectRef: plan.CLI.SubjectRef}
+	content, err := json.MarshalIndent(configuration, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(content, '\n'), nil
+}
+
+func readInstallerSecret(path string, ownerUID int64) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
+		return "", installerError("platform authority must be a protected regular file", err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int64(stat.Uid) != ownerUID {
+		return "", installerError("platform authority owner differs from accepted invoking user", nil)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	value := strings.TrimSuffix(string(content), "\n")
+	if value == "" || strings.ContainsAny(value, "\r\n\x00") {
+		return "", installerError("platform authority is empty or malformed", nil)
+	}
+	return value, nil
+}
+
+func ensureOwnedDirectory(planned PlannedPath) (bool, error) {
+	info, err := os.Lstat(planned.Path)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := os.Mkdir(planned.Path, os.FileMode(planned.Mode)); err != nil {
+			return false, installerError("create "+planned.Name, err)
+		}
+		if err := os.Chmod(planned.Path, os.FileMode(planned.Mode)); err != nil {
+			return false, errors.Join(installerError("secure "+planned.Name, err), os.Remove(planned.Path))
+		}
+		return true, nil
+	}
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return false, installerError(planned.Name+" must be an existing non-symbolic-link directory", err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int64(stat.Uid) != planned.OwnerUID || int64(stat.Gid) != planned.OwnerGID {
+		return false, installerError(planned.Name+" ownership differs from the accepted plan", nil)
+	}
+	return false, nil
+}
+
+func writePrivateCreateOnly(path string, content []byte, mode os.FileMode) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return installerError("create protected file "+path, err)
+	}
+	_, writeErr := file.Write(content)
+	closeErr := errors.Join(file.Sync(), file.Close())
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		return errors.Join(installerError("write protected file "+path, err), os.Remove(path))
+	}
+	return syncInstallDirectory(filepath.Dir(path))
+}

@@ -1,19 +1,24 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/SecondStack-AI/SecondBox/internal/cliui"
 	"github.com/SecondStack-AI/SecondBox/internal/deployconfig"
+	"github.com/SecondStack-AI/SecondBox/internal/install"
 	"github.com/SecondStack-AI/SecondBox/pkg/buildinfo"
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
 	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
@@ -21,33 +26,115 @@ import (
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		var presented *deployPresentationError
+		if errors.As(err, &presented) && presented.renderer.Capabilities.Diagnostic.TTY && !presented.renderer.Capabilities.Dumb {
+			_ = presented.renderer.WriteError(err, "Review the command and explicit deployment paths above.")
+		} else {
+			fmt.Fprintln(os.Stderr, err)
+		}
+		status := 1
+		var exited interface{ ExitCode() int }
+		if errors.As(err, &exited) {
+			status = exited.ExitCode()
+		}
+		os.Exit(status)
 	}
 }
 
-func run(arguments []string) error {
+type deployPresentationError struct {
+	cause    error
+	renderer cliui.Renderer
+}
+
+func (failure *deployPresentationError) Error() string { return failure.cause.Error() }
+func (failure *deployPresentationError) Unwrap() error { return failure.cause }
+
+func run(arguments []string) (resultErr error) {
+	global := flag.NewFlagSet("secondbox-deploy", flag.ContinueOnError)
+	global.SetOutput(io.Discard)
+	outputValue := global.String("output", "auto", "output mode: auto, json, or plain")
+	colorValue := global.String("color", "auto", "color mode: auto, always, or never")
+	accessible := global.Bool("accessible", false, "use accessible prompts and output")
+	helpLong := global.Bool("help", false, "show help")
+	helpShort := global.Bool("h", false, "show help")
+	if err := global.Parse(arguments); err != nil {
+		return fmt.Errorf("SecondBox deployment CLI parse global options: %w", err)
+	}
+	outputMode, err := cliui.ParseOutputMode(*outputValue)
+	if err != nil {
+		return err
+	}
+	colorMode, err := cliui.ParseColorMode(*colorValue)
+	if err != nil {
+		return err
+	}
+	capabilities := cliui.Probe(cliui.ProbeOptions{Input: os.Stdin, Output: os.Stdout, Diagnostic: os.Stderr, Environment: os.Environ()})
+	if *accessible {
+		capabilities.Accessible = true
+	}
+	renderer := cliui.Renderer{Output: os.Stdout, Diagnostic: os.Stderr, Capabilities: capabilities, OutputMode: outputMode, ColorMode: colorMode}
+	defer func() {
+		if resultErr != nil {
+			resultErr = &deployPresentationError{cause: resultErr, renderer: renderer}
+		}
+	}()
+	if *helpLong || *helpShort {
+		if len(global.Args()) != 0 {
+			return errors.New("SecondBox Deploy --help accepts no command arguments; run secondbox-deploy help")
+		}
+		return renderer.WriteHelp(secondboxDeployHelp())
+	}
+	return runCommand(global.Args(), renderer)
+}
+
+func runCommand(arguments []string, renderer cliui.Renderer) error {
 	if len(arguments) == 0 {
-		return usage()
+		return renderer.WriteHelp(secondboxDeployHelp())
 	}
 	switch arguments[0] {
+	case "help":
+		if len(arguments) != 1 {
+			return errors.New("SecondBox Deploy help accepts no arguments")
+		}
+		return renderer.WriteHelp(secondboxDeployHelp())
 	case "version":
 		if len(arguments) != 1 {
-			return usage()
+			return usage(renderer)
 		}
-		return buildinfo.Write(os.Stdout)
+		if renderer.HumanOutput() {
+			return renderer.WriteSummary(cliui.Summary{Title: "SecondBox Deploy", Status: cliui.StatusComplete, Pairs: []cliui.Pair{{Key: "Version", Value: buildinfo.Version}, {Key: "Source commit", Value: buildinfo.SourceCommit}}})
+		}
+		var encoded bytes.Buffer
+		if err := buildinfo.Write(&encoded); err != nil {
+			return err
+		}
+		return cliui.WriteJSONPassthrough(os.Stdout, encoded.Bytes())
+	case "install":
+		if len(arguments) == 3 && arguments[1] == "--resume" {
+			return runInstallResume(context.Background(), arguments[2], renderer)
+		}
+		if len(arguments) == 5 && arguments[1] == "--support" {
+			return runInstallSupport(context.Background(), arguments[2:], renderer)
+		}
+		return runInstallPreflight(context.Background(), arguments[1:], renderer, install.SystemPreflightProbes())
+	case "uninstall":
+		return runInstallUninstall(context.Background(), arguments[1:], renderer)
+	case "_install-host-apply":
+		return runPrivateHostApply(context.Background(), arguments[1:])
+	case "_install-host-purge":
+		return runPrivateHostPurge(context.Background(), arguments[1:])
 	case "init":
 		if len(arguments) < 4 || arguments[1] != "--mode" {
-			return usage()
+			return usage(renderer)
 		}
 		switch arguments[2] {
 		case "development":
 			if len(arguments) != 4 {
-				return usage()
+				return usage(renderer)
 			}
 			path, err := deployconfig.InitDevelopment(arguments[3])
 			if err == nil {
-				fmt.Println(path)
+				err = writeDeployReceipt(renderer, "Deployment initialized", []cliui.Pair{{Key: "Manifest", Value: path}}, path+"\n")
 			}
 			return err
 		case "production":
@@ -58,23 +145,23 @@ func run(arguments []string) error {
 				}
 				path, err := deployconfig.InitProductionFromRelease(arguments[4], arguments[7], verified.Manifest, verified.ManifestBytes)
 				if err == nil {
-					fmt.Println(path)
+					err = writeDeployReceipt(renderer, "Deployment initialized", []cliui.Pair{{Key: "Manifest", Value: path}}, path+"\n")
 				}
 				return err
 			}
 			if len(arguments) == 6 && arguments[3] == "--input" {
 				path, err := deployconfig.InitProductionFromManifest(arguments[4], arguments[5])
 				if err == nil {
-					fmt.Println(path)
+					err = writeDeployReceipt(renderer, "Deployment initialized", []cliui.Pair{{Key: "Manifest", Value: path}}, path+"\n")
 				}
 				return err
 			}
 			if len(arguments) != 4 {
-				return usage()
+				return usage(renderer)
 			}
 			path, err := deployconfig.InitProduction(arguments[3])
-			if path != "" {
-				fmt.Println(path)
+			if err == nil && path != "" {
+				err = writeDeployReceipt(renderer, "Deployment initialized", []cliui.Pair{{Key: "Manifest", Value: path}}, path+"\n")
 			}
 			return err
 		default:
@@ -92,20 +179,20 @@ func run(arguments []string) error {
 			fmt.Println(arguments[2])
 			return nil
 		default:
-			return usage()
+			return usage(renderer)
 		}
 	case "validate":
 		if len(arguments) != 2 {
-			return usage()
+			return usage(renderer)
 		}
 		resolved, err := deployconfig.Resolve(arguments[1])
 		if err == nil {
-			fmt.Printf("SecondBox deployment manifest valid: %s (%d Runner declarations)\n", arguments[1], len(resolved.Manifest.Runners))
+			err = writeDeployReceipt(renderer, "Deployment manifest valid", []cliui.Pair{{Key: "Manifest", Value: arguments[1]}, {Key: "Runner declarations", Value: strconv.Itoa(len(resolved.Manifest.Runners))}}, fmt.Sprintf("SecondBox deployment manifest valid: %s (%d Runner declarations)\n", arguments[1], len(resolved.Manifest.Runners)))
 		}
 		return err
 	case "verify":
 		if len(arguments) != 3 || arguments[1] != "artifact-manifest" {
-			return usage()
+			return usage(renderer)
 		}
 		verified, err := verifyReleaseLocation(arguments[2])
 		if err != nil {
@@ -114,7 +201,7 @@ func run(arguments []string) error {
 		return json.NewEncoder(os.Stdout).Encode(map[string]any{"version": verified.Manifest.Version, "tag": verified.Manifest.Tag, "sourceCommit": verified.Manifest.SourceCommit, "artifactManifestDigest": releaseDigest(verified.ManifestBytes)})
 	case "render":
 		if len(arguments) != 4 || arguments[1] != "--output" {
-			return usage()
+			return usage(renderer)
 		}
 		_, err := deployconfig.Render(arguments[3], arguments[2])
 		if err == nil {
@@ -123,12 +210,18 @@ func run(arguments []string) error {
 		return err
 	case "runner-init":
 		if len(arguments) != 4 {
-			return usage()
+			return usage(renderer)
 		}
-		return deployconfig.RunnerInit(arguments[1], arguments[2], arguments[3])
+		if err := deployconfig.RunnerInit(arguments[1], arguments[2], arguments[3]); err != nil {
+			return err
+		}
+		if renderer.HumanOutput() || renderer.OutputMode == cliui.OutputJSON {
+			return writeDeployReceipt(renderer, "Runner enrolled", []cliui.Pair{{Key: "Runner", Value: arguments[2]}, {Key: "Identity", Value: arguments[3]}}, "")
+		}
+		return nil
 	case "inspect":
 		if len(arguments) != 2 {
-			return usage()
+			return usage(renderer)
 		}
 		output, err := deployconfig.Inspect(arguments[1])
 		if err != nil {
@@ -138,26 +231,94 @@ func run(arguments []string) error {
 		return nil
 	case "migrate":
 		if len(arguments) != 3 {
-			return usage()
+			return usage(renderer)
 		}
 		path, err := deployconfig.MigrateLegacyEnvironment(arguments[1], arguments[2])
 		if err == nil {
-			fmt.Println(path)
+			err = writeDeployReceipt(renderer, "Deployment migrated", []cliui.Pair{{Key: "Manifest", Value: path}}, path+"\n")
 		}
 		return err
 	case "compose":
 		if len(arguments) != 3 {
-			return usage()
+			return usage(renderer)
 		}
-		return runCompose(arguments[1], arguments[2])
+		return runComposePresented(renderer, arguments[1], arguments[2])
 	default:
-		return usage()
+		return usage(renderer)
 	}
+}
+
+func runComposePresented(renderer cliui.Renderer, manifestPath, action string) error {
+	// Docker owns both top-level streams for this passthrough command. Higher
+	// level installer phases wrap Compose only when its streams are captured.
+	return runCompose(manifestPath, action)
+}
+
+func writeDeployReceipt(renderer cliui.Renderer, title string, pairs []cliui.Pair, automatic string) error {
+	if renderer.OutputMode == cliui.OutputJSON {
+		values := make(map[string]string, len(pairs))
+		for _, pair := range pairs {
+			values[pair.Key] = pair.Value
+		}
+		return json.NewEncoder(renderer.Output).Encode(values)
+	}
+	if renderer.HumanOutput() {
+		return renderer.WriteSummary(cliui.Summary{Title: title, Status: cliui.StatusComplete, Pairs: pairs})
+	}
+	_, err := io.WriteString(renderer.Output, automatic)
+	return err
+}
+
+type deployExitError struct {
+	code int
+	err  error
+}
+
+func (err *deployExitError) Error() string { return err.err.Error() }
+func (err *deployExitError) Unwrap() error { return err.err }
+func (err *deployExitError) ExitCode() int { return err.code }
+
+func runInstallPreflight(ctx context.Context, arguments []string, renderer cliui.Renderer, probes install.PreflightProbes) error {
+	return runInstallPreflightWith(ctx, arguments, renderer, func(ctx context.Context) (install.HostFacts, error) {
+		return install.Preflight(ctx, probes)
+	})
+}
+
+func runInstallPreflightWith(ctx context.Context, arguments []string, renderer cliui.Renderer, preflight func(context.Context) (install.HostFacts, error)) error {
+	checkOnly := len(arguments) == 1 && arguments[0] == "--check"
+	advanced := len(arguments) == 1 && arguments[0] == "--advanced"
+	if len(arguments) != 0 && !checkOnly && !advanced {
+		return usage(renderer)
+	}
+	facts, err := preflight(ctx)
+	if err != nil {
+		return err
+	}
+	if renderer.OutputMode == cliui.OutputJSON {
+		if err := json.NewEncoder(renderer.Output).Encode(facts); err != nil {
+			return fmt.Errorf("SecondBox installer preflight output: %w", err)
+		}
+	} else {
+		if _, err := io.WriteString(renderer.Output, install.RenderPreflight(facts)); err != nil {
+			return fmt.Errorf("SecondBox installer preflight output: %w", err)
+		}
+	}
+	if install.HasBlockingFindings(facts) {
+		return &deployExitError{code: 2, err: errors.New("SecondBox installer preflight: host has blocked or needs-action findings; review every remedy above")}
+	}
+	if checkOnly {
+		return nil
+	}
+	return runGuidedInstall(ctx, renderer, facts, advanced)
 }
 
 func verifyReleaseLocation(location string) (releaseverify.VerifiedRelease, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
+	return verifyReleaseLocationWithContext(ctx, location)
+}
+
+func verifyReleaseLocationWithContext(ctx context.Context, location string) (releaseverify.VerifiedRelease, error) {
 	client := &http.Client{Timeout: 2 * time.Minute}
 	return releaseverify.ArtifactManifest(ctx, location, releaseverify.HTTPFetcher(client))
 }
@@ -167,51 +328,7 @@ func releaseDigest(data []byte) string {
 }
 
 func runCompose(manifestPath, action string) error {
-	if action != "config" && action != "prepare" && action != "up" && action != "down" {
-		return fmt.Errorf("SecondBox deployment manifest: compose action must be config, prepare, up, or down")
-	}
-	absolute, err := filepath.Abs(manifestPath)
-	if err != nil {
-		return err
-	}
-	environmentPath := filepath.Join(filepath.Dir(absolute), ".secondbox.generated.env")
-	resolved, err := deployconfig.Render(absolute, environmentPath)
-	if err != nil {
-		return err
-	}
-	arguments := []string{"compose", "--project-name", resolved.ComposeProject(), "--env-file", environmentPath}
-	for _, file := range resolved.ComposeFiles {
-		arguments = append(arguments, "--file", file)
-	}
-	switch action {
-	case "config":
-		arguments = append(arguments, "config", "--quiet")
-	case "prepare":
-		if resolved.Manifest.Deployment.Mode != "development" {
-			return fmt.Errorf("SecondBox deployment manifest: compose prepare requires development mode")
-		}
-		waitSeconds := strconv.FormatInt(*resolved.Manifest.Deployment.DevelopmentWaitSeconds, 10)
-		if err := runDockerCompose(composeUpArguments(
-			arguments,
-			"--detach", "--wait", "--wait-timeout", waitSeconds,
-			"postgres", "object-store",
-		)); err != nil {
-			return err
-		}
-		return runDockerCompose(composeUpArguments(arguments, "--no-deps", "object-store-init"))
-	case "up":
-		arguments = composeUpArguments(arguments, "--detach")
-	case "down":
-		arguments = composeDownArguments(arguments)
-	}
-	if err := runDockerCompose(arguments); err != nil {
-		return err
-	}
-	if action == "up" {
-		_, err := deployconfig.ApplyStandardResources(context.Background(), resolved, http.DefaultClient)
-		return err
-	}
-	return nil
+	return deployconfig.RunCompose(context.Background(), manifestPath, action, deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: os.Stdout, Diagnostic: os.Stderr}, http.DefaultClient)
 }
 
 func composeUpArguments(arguments []string, options ...string) []string {
@@ -238,6 +355,7 @@ func runDockerCompose(arguments []string) error {
 	return command.Run()
 }
 
-func usage() error {
-	return fmt.Errorf("usage: secondbox-deploy {init --mode development DIRECTORY|init --mode production [--input COMPLETE_MANIFEST [--artifact-manifest URL]] DIRECTORY|runner-template [--output FILE]|verify artifact-manifest URL|validate MANIFEST|render --output ENV MANIFEST|runner-init MANIFEST RUNNER_ID TARGET|inspect MANIFEST|migrate LEGACY_ENV TARGET|compose MANIFEST config|prepare|up|down}")
+func usage(renderer cliui.Renderer) error {
+	_ = renderer
+	return errors.New("SecondBox Deploy invalid command or arguments; run secondbox-deploy help")
 }

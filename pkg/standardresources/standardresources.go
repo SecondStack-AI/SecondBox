@@ -131,7 +131,10 @@ func agentSpec(pool, runtimeDigest, toolchainDigest string) secondboxclient.Prof
 		Startup:   secondboxclient.StartupPolicy{Mode: secondboxclient.StartupModeColdBoot},
 		Lifecycle: secondboxclient.LifecyclePolicy{InitialState: secondboxclient.SandboxDesiredStateRunning, DrainGraceSeconds: 10, IdleSeconds: 60, MaximumDurationSeconds: 900, LeaseSeconds: 60},
 		Retention: secondboxclient.RetentionPolicy{SnapshotLimit: 0, SnapshotRetentionSeconds: 3600, ArtifactRetentionSeconds: 86400},
-		Execution: secondboxclient.ExecutionPolicy{MaximumDeadlineMilliseconds: 120000, MaximumBufferedOutputBytes: 1 << 20, StreamWindowBytes: 64 << 10, MaximumTransferBytes: 256 << 20, TerminalDetachSeconds: 0, DataPlaneTransport: "proxied"},
+		// The deadline ceiling matches the Instance's own MaximumDurationSeconds. An Agent command
+		// is legitimately unbounded, so the Sandbox's lifetime is the only bound that means
+		// anything; a lower ceiling imposes a command timeout no caller asked for.
+		Execution: secondboxclient.ExecutionPolicy{MaximumDeadlineMilliseconds: 900000, MaximumBufferedOutputBytes: 1 << 20, StreamWindowBytes: 64 << 10, MaximumTransferBytes: 256 << 20, TerminalDetachSeconds: 0, DataPlaneTransport: "proxied"},
 		Network:   secondboxclient.NetworkPolicy{Mode: "allow_list", Destinations: []secondboxclient.NetworkDestination{{Protocol: "https", Domain: AgentGateway, Port: 443}}},
 		Ports:     []secondboxclient.PortPolicy{},
 	}
