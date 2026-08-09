@@ -31,6 +31,7 @@ const (
 	DurableCodingCPUMillis            = standardresources.DurableCodingCPUMillis
 	DurableCodingMemoryBytes          = standardresources.DurableCodingMemoryBytes
 	DurableCodingConcurrentOperations = standardresources.DurableCodingConcurrentOperations
+	SingleHostFirecrackerCPUTemplate  = "None"
 )
 
 type StorageOption struct {
@@ -165,7 +166,7 @@ func ProposePlan(facts HostFacts, input ProposalInput) (InstallPlan, error) {
 	if input.RetentionSeconds <= 0 {
 		return InstallPlan{}, installerError("operator-selected retention is required", nil)
 	}
-	plan := InstallPlan{SchemaVersion: PlanSchema, OperationID: input.OperationID, CreatedAt: input.CreatedAt.UTC(), HostFacts: facts, HostFactsDigest: factsDigest, Release: input.Release, Storage: storage, Capacity: capacity, Network: network, CLI: CLIPlan{ConfigPath: input.CLIConfigPath, TenantRef: input.CLITenantRef, SubjectRef: input.CLISubjectRef}, Paths: paths, SecretTargets: secretTargets, GeneratedAuthorityCategories: []string{"application-authority", "platform-authority", "runner-enrollment", "runner-pki", "database", "object-storage"}, StandardBundles: slices.Clone(input.StandardBundles), RetentionSeconds: input.RetentionSeconds, PrivilegedActions: privilegedActions(storage)}
+	plan := InstallPlan{SchemaVersion: PlanSchema, OperationID: input.OperationID, CreatedAt: input.CreatedAt.UTC(), HostFacts: facts, HostFactsDigest: factsDigest, Release: input.Release, Storage: storage, Capacity: capacity, Compute: ComputePlan{FirecrackerCPUTemplate: SingleHostFirecrackerCPUTemplate}, Network: network, CLI: CLIPlan{ConfigPath: input.CLIConfigPath, TenantRef: input.CLITenantRef, SubjectRef: input.CLISubjectRef}, Paths: paths, SecretTargets: secretTargets, GeneratedAuthorityCategories: []string{"application-authority", "platform-authority", "runner-enrollment", "runner-pki", "database", "object-storage"}, StandardBundles: slices.Clone(input.StandardBundles), RetentionSeconds: input.RetentionSeconds, PrivilegedActions: privilegedActions(storage)}
 	if err := plan.Validate(); err != nil {
 		return InstallPlan{}, err
 	}
@@ -434,7 +435,7 @@ func privilegedActions(storage StoragePlan) []string {
 func RenderPlanReview(plan InstallPlan) string {
 	var result strings.Builder
 	fmt.Fprintf(&result, "Release %s\nArtifact manifest: %s\nManifest digest: %s\nSigning key: %s\nExpected downloads: %s\n", plan.Release.Version, plan.Release.ArtifactManifestURL, plan.Release.ArtifactManifestDigest, plan.Release.SigningKeyFingerprint, formatBytes(plan.Release.ExpectedDownloadBytes))
-	fmt.Fprintf(&result, "Workspace: %s (%s, %s capacity)\nCapacity: %d Sandboxes, %d concurrent starts, %s memory\nStandard bundles: %s\nNetwork: API %s, Runner %s, data plane %s, database %s, object store %s, object console %s, guests %s, DNS %s\nCLI: %s as %s/%s\nRetention: %s\n", plan.Storage.WorkspacePath, plan.Storage.Choice, formatBytes(plan.Capacity.MaxWorkspaceBytes), plan.Capacity.MaxSandboxes, plan.Capacity.ConcurrentStarts, formatBytes(plan.Capacity.MaxMemoryBytes), strings.Join(plan.StandardBundles, ", "), plan.Network.APIAddress, plan.Network.RunnerAddress, plan.Network.DataPlaneAddress, plan.Network.DatabaseAddress, plan.Network.ObjectStoreAddress, plan.Network.ObjectStoreConsoleAddress, plan.Network.GuestBridgeCIDR, plan.Network.DNSUpstream, plan.CLI.ConfigPath, plan.CLI.TenantRef, plan.CLI.SubjectRef, time.Duration(plan.RetentionSeconds)*time.Second)
+	fmt.Fprintf(&result, "Workspace: %s (%s, %s capacity)\nCapacity: %d Sandboxes, %d concurrent starts, %s memory\nCompute: Firecracker CPU template %s\nStandard bundles: %s\nNetwork: API %s, Runner %s, data plane %s, database %s, object store %s, object console %s, guests %s, DNS %s\nCLI: %s as %s/%s\nRetention: %s\n", plan.Storage.WorkspacePath, plan.Storage.Choice, formatBytes(plan.Capacity.MaxWorkspaceBytes), plan.Capacity.MaxSandboxes, plan.Capacity.ConcurrentStarts, formatBytes(plan.Capacity.MaxMemoryBytes), plan.Compute.FirecrackerCPUTemplate, strings.Join(plan.StandardBundles, ", "), plan.Network.APIAddress, plan.Network.RunnerAddress, plan.Network.DataPlaneAddress, plan.Network.DatabaseAddress, plan.Network.ObjectStoreAddress, plan.Network.ObjectStoreConsoleAddress, plan.Network.GuestBridgeCIDR, plan.Network.DNSUpstream, plan.CLI.ConfigPath, plan.CLI.TenantRef, plan.CLI.SubjectRef, time.Duration(plan.RetentionSeconds)*time.Second)
 	result.WriteString("Generated authority: " + strings.Join(plan.GeneratedAuthorityCategories, ", ") + "\nPersistent services: PostgreSQL, object storage, control plane, same-host Runner\nOrdinary uninstall preserves workspaces, authority, manifests, artifacts, and service data.\nPaths requiring sudo:\n")
 	for _, path := range plan.Paths {
 		if path.RequiresSudo {

@@ -178,6 +178,9 @@ type CapacityPlan struct {
 	StoragePressurePercent int64            `json:"storagePressurePercent"`
 	SubjectQuotas          map[string]int64 `json:"subjectQuotas"`
 }
+type ComputePlan struct {
+	FirecrackerCPUTemplate string `json:"firecrackerCpuTemplate"`
+}
 type NetworkPlan struct {
 	APIAddress                string            `json:"apiAddress"`
 	RunnerAddress             string            `json:"runnerAddress"`
@@ -216,6 +219,7 @@ type InstallPlan struct {
 	Release                      ReleasePlan    `json:"release"`
 	Storage                      StoragePlan    `json:"storage"`
 	Capacity                     CapacityPlan   `json:"capacity"`
+	Compute                      ComputePlan    `json:"compute"`
 	Network                      NetworkPlan    `json:"network"`
 	CLI                          CLIPlan        `json:"cli"`
 	Paths                        []PlannedPath  `json:"paths"`

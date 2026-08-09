@@ -101,6 +101,9 @@ func TestProposeExistingFilesystemPlanIsCompleteAndExplicit(t *testing.T) {
 	if len(plan.Capacity.SubjectQuotas) != 9 || len(plan.Network.Gateways) != 2 || plan.Network.GuestBridgeCIDR != "172.31.0.0/24" {
 		t.Fatalf("capacity/network incomplete: %#v %#v", plan.Capacity, plan.Network)
 	}
+	if plan.Compute.FirecrackerCPUTemplate != SingleHostFirecrackerCPUTemplate {
+		t.Fatalf("compute plan = %#v", plan.Compute)
+	}
 	if len(plan.SecretTargets) < 8 {
 		t.Fatalf("secret targets = %#v", plan.SecretTargets)
 	}
@@ -162,7 +165,7 @@ func TestProposeImagePlanBoundsAllocationAndReplacesPortCollisions(t *testing.T)
 	if plan.Network.APIAddress != "127.0.0.1:8081" || plan.Network.RunnerAddress != "127.0.0.1:9445" || plan.Network.DataPlaneAddress != "127.0.0.1:9446" {
 		t.Fatalf("replacement ports = %#v", plan.Network)
 	}
-	if !strings.Contains(RenderPlanReview(plan), "Ordinary uninstall preserves") || !strings.Contains(RenderPlanReview(plan), "Paths requiring sudo") {
+	if !strings.Contains(RenderPlanReview(plan), "Compute: Firecracker CPU template None") || !strings.Contains(RenderPlanReview(plan), "Ordinary uninstall preserves") || !strings.Contains(RenderPlanReview(plan), "Paths requiring sudo") {
 		t.Fatalf("review omitted durable or privilege boundary:\n%s", RenderPlanReview(plan))
 	}
 	if plan.Capacity.MaxCPUMillis < DurableCodingCPUMillis || plan.Capacity.MaxMemoryBytes < DurableCodingMemoryBytes || plan.Capacity.MaxWorkspaceBytes < MinimumWorkspaceBytes || plan.Capacity.ConcurrentOperations < plan.Capacity.MaxSandboxes*DurableCodingConcurrentOperations || plan.Capacity.SubjectQuotas["maxConcurrentOperations"] < plan.Capacity.SubjectQuotas["maxActiveInstances"]*DurableCodingConcurrentOperations {

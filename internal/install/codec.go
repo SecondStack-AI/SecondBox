@@ -275,6 +275,9 @@ func (plan InstallPlan) Validate() error {
 	if plan.Capacity.MaxSandboxes <= 0 || plan.Capacity.MaxCPUMillis <= 0 || plan.Capacity.MaxMemoryBytes <= 0 || plan.Capacity.MaxWorkspaceBytes <= 0 || plan.Capacity.ConcurrentStarts <= 0 || plan.Capacity.ConcurrentOperations <= 0 || plan.Capacity.StoragePressurePercent < 50 || plan.Capacity.StoragePressurePercent > 95 {
 		return installerError("capacity plan is incomplete or unsafe", nil)
 	}
+	if plan.Compute.FirecrackerCPUTemplate != SingleHostFirecrackerCPUTemplate {
+		return installerError("single-host compute plan requires the explicit vendor-neutral Firecracker CPU template", nil)
+	}
 	for name, value := range plan.Capacity.SubjectQuotas {
 		if name == "" || value <= 0 {
 			return installerError("subject quota is invalid", nil)

@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Guided installation now records and reviews the vendor-neutral Firecracker CPU template (`None`) in the accepted plan and materializes that exact choice into the Runner manifest. The former hidden `T2` literal was Intel-only, so an otherwise-qualified AMD host reached the first smoke Sandbox and then Firecracker rejected it with `CpuVendorMismatched`.
 - Installer-created Btrfs Runner storage now permits executable files and device nodes, which Firecracker's jail requires after it enters the per-Instance chroot. Existing XFS/Btrfs choices with `noexec` or `nodev` are no longer offered and are rejected again during privileged apply if their mount flags change; the Runner container also fails startup immediately instead of advertising readiness and timing out each Sandbox. The accepted plan now records the shortened jail directory itself so purge owns the path the Runner actually uses.
 - Installer-generated Runner manifests now keep the Firecracker jail root short enough for maximum-length Instance IDs and validate the resulting API socket path before deployment. The single-root storage correction had placed the jail beneath an extra `state` segment, so the first installed microVM reached a 112-byte Unix socket path and failed Linux's 108-byte limit even though Runner readiness was green.
 - The Compose contract test now creates and removes an explicit isolated `/24` instead of consuming Docker's finite default-address pools, so a host with many unrelated networks can run the required gate without deleting them.
