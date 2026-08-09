@@ -77,7 +77,7 @@ func (executor *fakeHostApplyExecutor) ProveReflinkIsolation(string) (string, er
 	if executor.failAt == "reflink" {
 		return "", errors.New("injected reflink failure")
 	}
-	return "8:44", nil
+	return "btrfs-uuid:01234567-89ab-cdef-0123-456789abcdef", nil
 }
 func (executor *fakeHostApplyExecutor) RemoveEmpty(resource CreatedResource) (bool, error) {
 	executor.calls = append(executor.calls, "remove:"+resource.ID)
@@ -290,7 +290,7 @@ func TestHostApplyRevalidationAndReplayFailBeforeMutation(t *testing.T) {
 func TestCompletedHostApplyReplayOnlyRevalidates(t *testing.T) {
 	plan := imageApplyPlan(t)
 	receipt := acceptedReceipt(t, plan)
-	if err := receipt.CompleteStage(StageHostApply, plan.CreatedAt, map[string]string{"workspaceDeviceIdentity": "8:44", "reflinkMutationIsolation": "passed"}); err != nil {
+	if err := receipt.CompleteStage(StageHostApply, plan.CreatedAt, map[string]string{"workspaceDeviceIdentity": "btrfs-uuid:01234567-89ab-cdef-0123-456789abcdef", "reflinkMutationIsolation": "passed"}); err != nil {
 		t.Fatal(err)
 	}
 	executor := &fakeHostApplyExecutor{euid: 0, nonempty: map[ResourceKind]bool{}}

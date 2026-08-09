@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -126,20 +125,17 @@ func TestPurgeRefusesChangedRegularFileDigest(t *testing.T) {
 
 func TestPurgeWorkspaceRequiresHostApplyDeviceIdentity(t *testing.T) {
 	workspace := t.TempDir()
-	info, err := os.Lstat(workspace)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stat := info.Sys().(*syscall.Stat_t)
+	identity := "btrfs-uuid:01234567-89ab-cdef-0123-456789abcdef"
 	plan := validPlan(t)
 	plan.Storage.Choice = StorageBtrfsImage
 	resource := CreatedResource{ID: "workspace", Path: workspace}
-	receipt := InstallReceipt{CompletedStages: []StageRecord{{Stage: StageHostApply, CompletedAt: time.Now(), Evidence: map[string]string{"workspaceDeviceIdentity": filesystemDeviceIdentity(stat)}}}}
-	if err := validatePurgeWorkspaceIdentity(plan, receipt, resource); err != nil {
+	receipt := InstallReceipt{CompletedStages: []StageRecord{{Stage: StageHostApply, CompletedAt: time.Now(), Evidence: map[string]string{"workspaceDeviceIdentity": identity}}}}
+	identify := func(string) (string, error) { return identity, nil }
+	if err := validatePurgeWorkspaceIdentityWith(plan, receipt, resource, identify); err != nil {
 		t.Fatal(err)
 	}
 	receipt.CompletedStages[0].Evidence["workspaceDeviceIdentity"] = "changed-device"
-	if err := validatePurgeWorkspaceIdentity(plan, receipt, resource); err == nil {
+	if err := validatePurgeWorkspaceIdentityWith(plan, receipt, resource, identify); err == nil {
 		t.Fatal("workspace on a different device was accepted for recursive purge")
 	}
 }

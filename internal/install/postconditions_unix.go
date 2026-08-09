@@ -57,7 +57,8 @@ func ValidateRecordedResources(plan InstallPlan, receipt InstallReceipt) error {
 		}
 		if resource.ID == "workspace" {
 			hostApply, found := completedStage(receipt, StageHostApply)
-			if !found || hostApply.Evidence["workspaceDeviceIdentity"] == "" || filesystemDeviceIdentity(stat) != hostApply.Evidence["workspaceDeviceIdentity"] {
+			identity, identityErr := workspaceFilesystemIdentity(resource.Path)
+			if identityErr != nil || !found || hostApply.Evidence["workspaceDeviceIdentity"] == "" || identity != hostApply.Evidence["workspaceDeviceIdentity"] {
 				return installerError("recorded Workspace device identity changed", nil)
 			}
 		}

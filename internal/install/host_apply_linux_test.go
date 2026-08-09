@@ -39,12 +39,16 @@ func TestExistingWorkspaceMountRejectsRootDeviceReuse(t *testing.T) {
 		"21 1 8:1 / / rw,relatime - btrfs /dev/vda1 rw",
 		"22 21 8:1 /data /srv/secondbox rw,relatime - btrfs /dev/vda1 rw",
 	}, "\n")
-	if err := verifyExistingWorkspaceMountInfo(plan, []byte(mountInfo)); err == nil || !strings.Contains(err.Error(), "identity or filesystem changed") {
+	if err := verifyExistingWorkspaceMountInfo(plan, []byte(mountInfo), true); err == nil || !strings.Contains(err.Error(), "identity or filesystem changed") {
 		t.Fatalf("root-device Workspace mount result = %v", err)
 	}
 	plan.Storage.ExistingDeviceIdentity = "8:2"
 	mountInfo = strings.Replace(mountInfo, "22 21 8:1", "22 21 8:2", 1)
-	if err := verifyExistingWorkspaceMountInfo(plan, []byte(mountInfo)); err != nil {
+	if err := verifyExistingWorkspaceMountInfo(plan, []byte(mountInfo), true); err != nil {
 		t.Fatalf("dedicated Workspace mount result = %v", err)
+	}
+	plan.Storage.ExistingDeviceIdentity = "259:99"
+	if err := verifyExistingWorkspaceMountInfo(plan, []byte(mountInfo), false); err != nil {
+		t.Fatalf("completed host apply depended on transient device identity: %v", err)
 	}
 }

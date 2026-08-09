@@ -14,7 +14,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -113,9 +112,8 @@ func (executor SystemHostApplyExecutor) Revalidate(ctx context.Context, plan Ins
 		if !found || !recorded {
 			return installerError("completed host apply lacks the recorded Workspace", nil)
 		}
-		info, err := os.Lstat(workspace.Path)
-		stat, ok := infoSyscallStat(info, err)
-		if !ok || hostApply.Evidence["workspaceDeviceIdentity"] == "" || filesystemDeviceIdentity(stat) != hostApply.Evidence["workspaceDeviceIdentity"] {
+		identity, err := workspaceFilesystemIdentity(workspace.Path)
+		if err != nil || hostApply.Evidence["workspaceDeviceIdentity"] == "" || identity != hostApply.Evidence["workspaceDeviceIdentity"] {
 			return installerError("recorded Workspace device identity changed", err)
 		}
 		if err := validateRecordedHostApplyPath(plan, workspace, resource); err != nil {
@@ -141,8 +139,11 @@ func (executor SystemHostApplyExecutor) Revalidate(ctx context.Context, plan Ins
 		if available < required {
 			return installerError("filesystem-image backing capacity became stale", nil)
 		}
-	} else if err := verifyExistingWorkspaceMount(plan); err != nil {
-		return err
+	} else {
+		_, hostApplyComplete := completedStage(receipt, StageHostApply)
+		if err := verifyExistingWorkspaceMount(plan, !hostApplyComplete); err != nil {
+			return err
+		}
 	}
 	deployment, found := plannedPathByName(plan.Paths, "deployment")
 	if !found {
@@ -156,14 +157,6 @@ func (executor SystemHostApplyExecutor) Revalidate(ctx context.Context, plan Ins
 		return installerError("deployment filesystem capacity became insufficient", nil)
 	}
 	return ctx.Err()
-}
-
-func infoSyscallStat(info os.FileInfo, err error) (*syscall.Stat_t, bool) {
-	if err != nil || info == nil {
-		return nil, false
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	return stat, ok
 }
 
 func statfsExistingAncestor(path string) (unix.Statfs_t, error) {
@@ -265,15 +258,15 @@ func verifyCreateOnlyPath(path string) error {
 	}
 }
 
-func verifyExistingWorkspaceMount(plan InstallPlan) error {
+func verifyExistingWorkspaceMount(plan InstallPlan, requireAcceptedDeviceIdentity bool) error {
 	content, err := os.ReadFile("/proc/self/mountinfo")
 	if err != nil {
 		return err
 	}
-	return verifyExistingWorkspaceMountInfo(plan, content)
+	return verifyExistingWorkspaceMountInfo(plan, content, requireAcceptedDeviceIdentity)
 }
 
-func verifyExistingWorkspaceMountInfo(plan InstallPlan, content []byte) error {
+func verifyExistingWorkspaceMountInfo(plan InstallPlan, content []byte, requireAcceptedDeviceIdentity bool) error {
 	parent := filepath.Dir(plan.Storage.WorkspacePath)
 	rootDeviceIdentity := ""
 	for _, line := range strings.Split(string(content), "\n") {
@@ -292,7 +285,7 @@ func verifyExistingWorkspaceMountInfo(plan InstallPlan, content []byte) error {
 		if separator < 0 || separator+2 >= len(fields) || len(fields) < 6 || decodeMount(fields[4]) != parent {
 			continue
 		}
-		if fields[2] != plan.Storage.ExistingDeviceIdentity || fields[2] == rootDeviceIdentity || (fields[separator+1] != "xfs" && fields[separator+1] != "btrfs") || parent == "/" {
+		if (requireAcceptedDeviceIdentity && fields[2] != plan.Storage.ExistingDeviceIdentity) || fields[2] == rootDeviceIdentity || (fields[separator+1] != "xfs" && fields[separator+1] != "btrfs") || parent == "/" {
 			return installerError("existing workspace mount identity or filesystem changed", nil)
 		}
 		return nil
@@ -460,14 +453,14 @@ func (SystemHostApplyExecutor) ProveReflinkIsolation(workspace string) (identity
 	if string(content) != "source-proof" {
 		return "", errors.Join(errors.New("reflink mutation changed the source"), source.Close(), destination.Close())
 	}
-	var stat unix.Stat_t
-	if err := unix.Fstat(int(source.Fd()), &stat); err != nil {
+	identity, err = workspaceFilesystemIdentityFromFD(int(source.Fd()))
+	if err != nil {
 		return "", errors.Join(err, source.Close(), destination.Close())
 	}
 	if err := errors.Join(source.Close(), destination.Close()); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%d:%d", unix.Major(uint64(stat.Dev)), unix.Minor(uint64(stat.Dev))), nil
+	return identity, nil
 }
 
 func (SystemHostApplyExecutor) RemoveEmpty(resource CreatedResource) (bool, error) {

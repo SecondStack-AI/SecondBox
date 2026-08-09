@@ -1,5 +1,18 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+
+report_qualification_failure() {
+  local status="$?" line="$1"
+  trap - ERR
+  echo "qualification driver failed: mode=${mode:-setup} domain=${domain:-none} line=$line status=$status" >&2
+  if [[ -n "${console_log:-}" && -s "$console_log" ]]; then
+    echo "qualification guest serial tail: ${domain:-unknown}" >&2
+    tail -n 120 -- "$console_log" >&2
+  fi
+  return "$status"
+}
+
+trap 'report_qualification_failure "$LINENO"' ERR
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 connection='qemu:///system'

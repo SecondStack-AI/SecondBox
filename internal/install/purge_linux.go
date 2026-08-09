@@ -149,21 +149,25 @@ func validatePurgeTargetMetadata(resource CreatedResource) error {
 }
 
 func validatePurgeWorkspaceIdentity(plan InstallPlan, receipt InstallReceipt, resource CreatedResource) error {
+	return validatePurgeWorkspaceIdentityWith(plan, receipt, resource, workspaceFilesystemIdentity)
+}
+
+func validatePurgeWorkspaceIdentityWith(plan InstallPlan, receipt InstallReceipt, resource CreatedResource, identify func(string) (string, error)) error {
 	if plan.Storage.Choice == StorageExistingMount {
-		if err := verifyExistingWorkspaceMount(plan); err != nil {
+		if err := verifyExistingWorkspaceMount(plan, false); err != nil {
 			return installerError("purge requires the accepted existing Workspace filesystem to remain mounted", err)
 		}
 	}
-	info, err := os.Lstat(resource.Path)
+	_, err := os.Lstat(resource.Path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
 	hostApply, found := completedStage(receipt, StageHostApply)
-	if !ok || !found || hostApply.Evidence["workspaceDeviceIdentity"] == "" || filesystemDeviceIdentity(stat) != hostApply.Evidence["workspaceDeviceIdentity"] {
+	identity, identityErr := identify(resource.Path)
+	if identityErr != nil || !found || hostApply.Evidence["workspaceDeviceIdentity"] == "" || identity != hostApply.Evidence["workspaceDeviceIdentity"] {
 		return installerError("purge Workspace device identity differs from the completed host apply", nil)
 	}
 	return nil

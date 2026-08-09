@@ -1,5 +1,20 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+
+report_qualified_guest_failure() {
+  local status="$?" line="$1" log
+  trap - ERR
+  echo "qualified guest failed: phase=${phase:-setup} mode=${mode:-unknown} line=$line status=$status" >&2
+  if [[ -d "${qualification_root:-}" ]]; then
+    while IFS= read -r -d '' log; do
+      echo "qualified guest log tail: $(basename "$log")" >&2
+      tail -n 100 -- "$log" >&2
+    done < <(find "$qualification_root" -maxdepth 1 -type f -name '*.log' -print0 | sort -z)
+  fi
+  return "$status"
+}
+
+trap 'report_qualified_guest_failure "$LINENO"' ERR
 
 phase="${1:-}"
 mode="${2:-}"

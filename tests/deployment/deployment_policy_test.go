@@ -202,6 +202,7 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 		`TCP\[HOST_FORWARD\]`,
 		`--serial "pty,log.file=$console_log,log.append=on"`,
 		`tail -n 120 -- "$console_log"`,
+		"report_qualification_failure",
 	} {
 		if !strings.Contains(driver, required) {
 			t.Errorf("repository qualification driver lacks %q", required)
@@ -223,6 +224,7 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 		".microvm.imageReference",
 		"purge accepted an unrecorded nested mount",
 		"resume accepted a replacement filesystem",
+		"report_qualified_guest_failure",
 	} {
 		if !strings.Contains(guest, required) {
 			t.Errorf("qualified guest executor lacks %q", required)
