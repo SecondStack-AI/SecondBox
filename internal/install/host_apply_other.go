@@ -26,10 +26,10 @@ func (SystemHostApplyExecutor) WriteMountUnit(PlannedPath, string) error {
 func (SystemHostApplyExecutor) EnableMountUnit(context.Context, string) error {
 	return errors.ErrUnsupported
 }
-func (SystemHostApplyExecutor) SecureMountedWorkspace(PlannedPath) error {
+func (SystemHostApplyExecutor) SecureDirectory(PlannedPath) error {
 	return errors.ErrUnsupported
 }
-func (SystemHostApplyExecutor) ProveReflinkIsolation(string) (string, error) {
+func (SystemHostApplyExecutor) ProveReflinkTopology(string, string, string) (string, error) {
 	return "", errors.ErrUnsupported
 }
 func (SystemHostApplyExecutor) RemoveEmpty(CreatedResource) (bool, error) {
