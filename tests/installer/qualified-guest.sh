@@ -209,7 +209,7 @@ if printf 'PURGE %s\n' "$operation_id" | "$deploy" --accessible uninstall --purg
   echo 'purge accepted an unrecorded nested mount' >&2
   exit 1
 fi
-mountpoint -q "$workspace/.qualification-foreign-mount"
+sudo mountpoint -q "$workspace/.qualification-foreign-mount"
 sudo umount "$workspace/.qualification-foreign-mount"
 sudo rmdir "$workspace/.qualification-foreign-mount"
 mapfile -t purge_paths < <(jq -er '.createdResources[] | select(.id != "operation-directory" and (.path | type) == "string" and (.path | length) > 0) | .path' "$receipt")
