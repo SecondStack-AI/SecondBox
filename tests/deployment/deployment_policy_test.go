@@ -229,6 +229,8 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 		".microvm.imageReference",
 		"purge accepted an unrecorded nested mount",
 		"resume accepted a replacement filesystem",
+		`sudo cp --reflink=always -- "$isolation/source" "$isolation/copy"`,
+		`sudo cat -- "$isolation/source"`,
 		"report_qualified_guest_failure",
 	} {
 		if !strings.Contains(guest, required) {

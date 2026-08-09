@@ -169,11 +169,11 @@ findmnt --target "$workspace" --types btrfs >/dev/null
 
 if [[ "$mode" == existing_reflink_filesystem ]]; then
   isolation="$workspace/.qualification-reflink"
-  sudo install -d -m 0755 -o "$USER" -g "$USER" "$isolation"
-  printf 'source\n' >"$isolation/source"
-  cp --reflink=always "$isolation/source" "$isolation/copy"
-  printf 'copy changed\n' >"$isolation/copy"
-  [[ "$(<"$isolation/source")" == source ]]
+  sudo install -d -m 0700 -o root -g root -- "$isolation"
+  printf 'source\n' | sudo tee -- "$isolation/source" >/dev/null
+  sudo cp --reflink=always -- "$isolation/source" "$isolation/copy"
+  printf 'copy changed\n' | sudo tee -- "$isolation/copy" >/dev/null
+  [[ "$(sudo cat -- "$isolation/source")" == source ]]
   jq -e '.storage.choice == "existing_mount" and (.storage.existingDeviceIdentity | length > 0) and ([.paths[].path | select(startswith("/dev"))] | length == 0)' "$plan" >/dev/null
   sudo mount -t tmpfs -o size=1m,nosuid,nodev,noexec tmpfs /srv/secondbox-dedicated
   if "$deploy" --accessible install --resume "$operation" --candidate-directory "$release_directory" >"$qualification_root/unsafe-filesystem-${mode}.log" 2>&1; then
