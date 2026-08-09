@@ -15,6 +15,15 @@ import (
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 )
 
+const maximumCLIConfigurationBytes = 1 << 20
+
+type cliConfiguration struct {
+	URL        string `json:"url"`
+	Token      string `json:"token"`
+	TenantRef  string `json:"tenantRef"`
+	SubjectRef string `json:"subjectRef"`
+}
+
 // LoginCLI verifies the generated platform authority, then writes the invoking
 // user's ordinary CLI configuration without ever putting the token in process
 // arguments, the receipt, or diagnostic output.
@@ -66,15 +75,7 @@ func LoginCLI(ctx context.Context, plan InstallPlan, httpClient *http.Client) ([
 	if !found || planned.Path != plan.CLI.ConfigPath {
 		return nil, installerError("CLI configuration file is absent from plan", nil)
 	}
-	if existing, statErr := os.Lstat(planned.Path); statErr == nil {
-		actual, readErr := os.ReadFile(planned.Path)
-		stat, ok := existing.Sys().(*syscall.Stat_t)
-		if readErr != nil || !ok || !existing.Mode().IsRegular() || existing.Mode()&os.ModeSymlink != 0 || existing.Mode().Perm() != os.FileMode(planned.Mode) || int64(stat.Uid) != planned.OwnerUID || int64(stat.Gid) != planned.OwnerGID || !bytes.Equal(actual, content) {
-			return nil, installerError("existing CLI configuration differs from the verified accepted authority", readErr)
-		}
-	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return nil, installerError("inspect CLI configuration", statErr)
-	} else if err := writePrivateCreateOnly(planned.Path, content, os.FileMode(planned.Mode)); err != nil {
+	if err := publishCLIConfiguration(planned, content); err != nil {
 		return nil, err
 	}
 	resource := resourceFromPath(planned, StageCLILogin)
@@ -118,17 +119,98 @@ func ValidateCLIConfig(plan InstallPlan) error {
 }
 
 func cliConfigurationBytes(plan InstallPlan, token string) ([]byte, error) {
-	configuration := struct {
-		URL        string `json:"url"`
-		Token      string `json:"token"`
-		TenantRef  string `json:"tenantRef"`
-		SubjectRef string `json:"subjectRef"`
-	}{URL: "http://" + plan.Network.APIAddress, Token: token, TenantRef: plan.CLI.TenantRef, SubjectRef: plan.CLI.SubjectRef}
+	configuration := cliConfiguration{URL: "http://" + plan.Network.APIAddress, Token: token, TenantRef: plan.CLI.TenantRef, SubjectRef: plan.CLI.SubjectRef}
 	content, err := json.MarshalIndent(configuration, "", "  ")
 	if err != nil {
 		return nil, err
 	}
 	return append(content, '\n'), nil
+}
+
+func validateCLIConfigurationTarget(plan InstallPlan) error {
+	planned, found := plannedPathByName(plan.Paths, "cli-config")
+	if !found || planned.Path != plan.CLI.ConfigPath {
+		return installerError("CLI configuration file is absent from plan", nil)
+	}
+	_, err := os.Lstat(planned.Path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return installerError("inspect CLI configuration", err)
+	}
+	return validateReplaceableCLIConfiguration(planned)
+}
+
+func validateReplaceableCLIConfiguration(planned PlannedPath) error {
+	if err := ValidatePlannedPath(planned); err != nil {
+		return err
+	}
+	info, err := os.Lstat(planned.Path)
+	if err != nil || info.Size() <= 0 || info.Size() > maximumCLIConfigurationBytes {
+		return installerError("pre-existing CLI configuration size is invalid", err)
+	}
+	content, err := os.ReadFile(planned.Path)
+	if err != nil {
+		return installerError("read pre-existing CLI configuration", err)
+	}
+	var configuration cliConfiguration
+	if err := decodeStrict(content, &configuration); err != nil {
+		return installerError("pre-existing CLI configuration is not a SecondBox session document", err)
+	}
+	parsed, err := url.ParseRequestURI(configuration.URL)
+	if err != nil || parsed.Host == "" || parsed.User != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return installerError("pre-existing CLI configuration URL is invalid", err)
+	}
+	for name, value := range map[string]string{"token": configuration.Token, "tenantRef": configuration.TenantRef, "subjectRef": configuration.SubjectRef} {
+		if value == "" || strings.TrimSpace(value) != value || strings.ContainsAny(value, "\r\n\x00") {
+			return installerError("pre-existing CLI configuration "+name+" is invalid", nil)
+		}
+	}
+	return nil
+}
+
+func publishCLIConfiguration(planned PlannedPath, content []byte) error {
+	_, err := os.Lstat(planned.Path)
+	if errors.Is(err, os.ErrNotExist) {
+		return writePrivateCreateOnly(planned.Path, content, os.FileMode(planned.Mode))
+	}
+	if err != nil {
+		return installerError("inspect CLI configuration", err)
+	}
+	if err := validateReplaceableCLIConfiguration(planned); err != nil {
+		return err
+	}
+	actual, err := os.ReadFile(planned.Path)
+	if err != nil {
+		return installerError("read existing CLI configuration", err)
+	}
+	if bytes.Equal(actual, content) {
+		return nil
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(planned.Path), ".secondbox-cli-config-")
+	if err != nil {
+		return installerError("stage CLI configuration", err)
+	}
+	temporaryPath := temporary.Name()
+	cleanup := func() { _ = os.Remove(temporaryPath) }
+	defer cleanup()
+	modeErr := temporary.Chmod(os.FileMode(planned.Mode))
+	_, writeErr := temporary.Write(content)
+	closeErr := errors.Join(temporary.Sync(), temporary.Close())
+	if err := errors.Join(modeErr, writeErr, closeErr); err != nil {
+		return installerError("stage CLI configuration", err)
+	}
+	if err := validateReplaceableCLIConfiguration(planned); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryPath, planned.Path); err != nil {
+		return installerError("atomically replace SecondBox CLI configuration", err)
+	}
+	if err := syncInstallDirectory(filepath.Dir(planned.Path)); err != nil {
+		return installerError("sync replaced SecondBox CLI configuration", err)
+	}
+	return nil
 }
 
 func readInstallerSecret(path string, ownerUID int64) (string, error) {

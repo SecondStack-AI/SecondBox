@@ -2,6 +2,7 @@ package install
 
 import (
 	"context"
+	"debug/buildinfo"
 	"errors"
 	"fmt"
 	"io"
@@ -24,9 +25,10 @@ type ReleaseMaterializeExecutor interface {
 }
 
 type ReleaseMaterializeDependencies struct {
-	Executor       ReleaseMaterializeExecutor
-	PersistReceipt func(InstallReceipt) error
-	Now            func() time.Time
+	Executor                  ReleaseMaterializeExecutor
+	PersistReceipt            func(InstallReceipt) error
+	Now                       func() time.Time
+	ValidateBinaryReplacement func(PlannedPath, string) error
 }
 
 // MaterializeRelease installs only bytes named by an independently verified
@@ -52,6 +54,12 @@ func MaterializeRelease(ctx context.Context, plan InstallPlan, receipt InstallRe
 	}
 	if err := validateVerifiedReleasePlan(plan, verified); err != nil {
 		return failMaterialization(receipt, StageReleaseVerified, FailureBlocked, dependencies, err)
+	}
+	if err := validateReleaseBinaryTargets(plan, verified.Manifest, dependencies.ValidateBinaryReplacement); err != nil {
+		return failMaterialization(receipt, StageAssetsMaterialized, FailureNeedsAction, dependencies, err)
+	}
+	if err := validateCLIConfigurationTarget(plan); err != nil {
+		return failMaterialization(receipt, StageAssetsMaterialized, FailureNeedsAction, dependencies, err)
 	}
 	if lastStage == StageHostApply {
 		if err := receipt.CompleteStage(StageReleaseVerified, dependencies.Now(), map[string]string{"artifactManifestDigest": plan.Release.ArtifactManifestDigest, "version": plan.Release.Version}); err != nil {
@@ -170,16 +178,16 @@ func MaterializeRelease(ctx context.Context, plan InstallPlan, receipt InstallRe
 		if !found {
 			return failMaterialization(receipt, StageAssetsMaterialized, FailureInternal, dependencies, installerError("verified release omits linux/amd64 binary "+name, nil))
 		}
+		target, found := plannedPathByName(plan.Paths, name+"-binary")
+		if !found {
+			return failMaterialization(receipt, StageAssetsMaterialized, FailureInternal, dependencies, installerError("binary target is absent from plan: "+name, nil))
+		}
 		content, err := dependencies.Executor.Fetch(ctx, binary.Location)
 		if err != nil {
 			return failMaterialization(receipt, StageAssetsMaterialized, FailureRetryable, dependencies, err)
 		}
 		if Digest(content) != "sha256:"+binary.SHA256 {
 			return failMaterialization(receipt, StageAssetsMaterialized, FailureBlocked, dependencies, installerError("downloaded binary digest mismatch for "+name, nil))
-		}
-		target, found := plannedPathByName(plan.Paths, name+"-binary")
-		if !found {
-			return failMaterialization(receipt, StageAssetsMaterialized, FailureInternal, dependencies, installerError("binary target is absent from plan: "+name, nil))
 		}
 		if resource, recorded := receiptResource(receipt, target.Name); recorded {
 			actual, digestErr := fileSHA256(target.Path)
@@ -190,11 +198,6 @@ func MaterializeRelease(ctx context.Context, plan InstallPlan, receipt InstallRe
 		} else {
 			pending := slices.Contains(receipt.PendingResourceIDs, target.Name)
 			if !pending {
-				if _, statErr := os.Lstat(target.Path); statErr == nil {
-					return failMaterialization(receipt, StageAssetsMaterialized, FailureNeedsAction, dependencies, installerError("refusing to adopt pre-existing binary "+target.Path, nil))
-				} else if !os.IsNotExist(statErr) {
-					return failMaterialization(receipt, StageAssetsMaterialized, FailureNeedsAction, dependencies, installerError("inspect verified binary "+target.Path, statErr))
-				}
 				if err := receipt.BeginResource(target.Name, dependencies.Now()); err != nil {
 					return receipt, VerifiedArtifact{}, err
 				}
@@ -202,14 +205,7 @@ func MaterializeRelease(ctx context.Context, plan InstallPlan, receipt InstallRe
 					return receipt, VerifiedArtifact{}, err
 				}
 			}
-			if _, statErr := os.Lstat(target.Path); statErr == nil {
-				actual, digestErr := fileSHA256(target.Path)
-				if validateErr := validateMaterializedPath(target); digestErr != nil || validateErr != nil || actual != binary.SHA256 {
-					return failMaterialization(receipt, StageAssetsMaterialized, FailureNeedsAction, dependencies, installerError("pending binary publication differs for "+name, errors.Join(digestErr, validateErr)))
-				}
-			} else if !os.IsNotExist(statErr) {
-				return failMaterialization(receipt, StageAssetsMaterialized, FailureNeedsAction, dependencies, installerError("inspect verified binary "+target.Path, statErr))
-			} else if err := writeExecutableCreateOnly(target.Path, content, os.FileMode(target.Mode)); err != nil {
+			if err := publishReleaseBinary(target, name, binary.SHA256, content, dependencies.ValidateBinaryReplacement); err != nil {
 				return failMaterialization(receipt, StageAssetsMaterialized, FailureNeedsAction, dependencies, err)
 			}
 			resource := resourceFromPath(target, StageAssetsMaterialized)
@@ -282,6 +278,121 @@ func releaseBinaryForMaterialization(manifest releasecontract.ArtifactManifest, 
 		}
 	}
 	return releasecontract.BinaryArtifact{}, false
+}
+
+type releaseBinaryTargetState uint8
+
+const (
+	releaseBinaryTargetMissing releaseBinaryTargetState = iota
+	releaseBinaryTargetVerified
+	releaseBinaryTargetReplaceable
+)
+
+func validateReleaseBinaryTargets(plan InstallPlan, manifest releasecontract.ArtifactManifest, validateReplacement func(PlannedPath, string) error) error {
+	for _, name := range []string{"secondbox", "secondbox-deploy"} {
+		binary, found := releaseBinaryForMaterialization(manifest, name)
+		if !found {
+			return installerError("verified release omits linux/amd64 binary "+name, nil)
+		}
+		target, found := plannedPathByName(plan.Paths, name+"-binary")
+		if !found {
+			return installerError("binary target is absent from plan: "+name, nil)
+		}
+		if _, err := inspectReleaseBinaryTarget(target, name, binary.SHA256, validateReplacement); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func inspectReleaseBinaryTarget(target PlannedPath, name, expectedSHA256 string, validateReplacement func(PlannedPath, string) error) (releaseBinaryTargetState, error) {
+	if _, err := os.Lstat(target.Path); errors.Is(err, os.ErrNotExist) {
+		return releaseBinaryTargetMissing, nil
+	} else if err != nil {
+		return 0, installerError("inspect verified binary "+target.Path, err)
+	}
+	if err := validateMaterializedPath(target); err != nil {
+		return 0, err
+	}
+	actual, err := fileSHA256(target.Path)
+	if err != nil {
+		return 0, installerError("hash pre-existing binary "+target.Path, err)
+	}
+	if actual == expectedSHA256 {
+		return releaseBinaryTargetVerified, nil
+	}
+	if validateReplacement == nil {
+		validateReplacement = validateReplaceableSecondBoxBinary
+	}
+	if err := validateReplacement(target, name); err != nil {
+		return 0, installerError("refusing to replace pre-existing non-SecondBox binary "+target.Path, err)
+	}
+	return releaseBinaryTargetReplaceable, nil
+}
+
+func validateReplaceableSecondBoxBinary(target PlannedPath, name string) error {
+	info, err := buildinfo.ReadFile(target.Path)
+	if err != nil {
+		return installerError("read embedded Go build identity", err)
+	}
+	const module = "github.com/SecondStack-AI/SecondBox"
+	if info.Path != module+"/cmd/"+name || info.Main.Path != module {
+		return installerError("embedded Go build identity is not SecondBox "+name, nil)
+	}
+	return nil
+}
+
+func publishReleaseBinary(target PlannedPath, name, expectedSHA256 string, content []byte, validateReplacement func(PlannedPath, string) error) error {
+	state, err := inspectReleaseBinaryTarget(target, name, expectedSHA256, validateReplacement)
+	if err != nil {
+		return err
+	}
+	switch state {
+	case releaseBinaryTargetVerified:
+		return nil
+	case releaseBinaryTargetMissing:
+		return writeExecutableCreateOnly(target.Path, content, os.FileMode(target.Mode))
+	case releaseBinaryTargetReplaceable:
+		return writeExecutableAtomicReplace(target, name, expectedSHA256, content, validateReplacement)
+	default:
+		return installerError("binary target state is invalid: "+name, nil)
+	}
+}
+
+func writeExecutableAtomicReplace(target PlannedPath, name, expectedSHA256 string, content []byte, validateReplacement func(PlannedPath, string) error) error {
+	file, err := os.CreateTemp(filepath.Dir(target.Path), ".secondbox-binary-")
+	if err != nil {
+		return installerError("stage verified binary "+target.Path, err)
+	}
+	staging := file.Name()
+	cleanup := func() { _ = os.Remove(staging) }
+	defer cleanup()
+	modeErr := file.Chmod(os.FileMode(target.Mode))
+	_, writeErr := file.Write(content)
+	closeErr := errors.Join(file.Sync(), file.Close())
+	if err := errors.Join(modeErr, writeErr, closeErr); err != nil {
+		return installerError("stage verified binary "+target.Path, err)
+	}
+	state, err := inspectReleaseBinaryTarget(target, name, expectedSHA256, validateReplacement)
+	if err != nil {
+		return err
+	}
+	if state == releaseBinaryTargetVerified {
+		return nil
+	}
+	if state == releaseBinaryTargetMissing {
+		return writeExecutableCreateOnly(target.Path, content, os.FileMode(target.Mode))
+	}
+	if state != releaseBinaryTargetReplaceable {
+		return installerError("binary target changed before atomic replacement: "+target.Path, nil)
+	}
+	if err := os.Rename(staging, target.Path); err != nil {
+		return installerError("atomically replace verified SecondBox binary "+target.Path, err)
+	}
+	if err := syncInstallDirectory(filepath.Dir(target.Path)); err != nil {
+		return installerError("sync replaced verified SecondBox binary "+target.Path, err)
+	}
+	return nil
 }
 
 func writeExecutableCreateOnly(path string, content []byte, mode os.FileMode) error {

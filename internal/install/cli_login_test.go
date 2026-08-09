@@ -29,6 +29,13 @@ func TestLoginCLIRecordsDigestForPurgeFence(t *testing.T) {
 	configRoot := filepath.Join(root, "config")
 	configDirectory := filepath.Join(configRoot, "secondbox")
 	configPath := filepath.Join(configDirectory, "config.json")
+	if err := os.MkdirAll(configDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	oldConfiguration := []byte("{\n  \"url\": \"http://127.0.0.1:9000\",\n  \"token\": \"older-token\",\n  \"tenantRef\": \"older-tenant\",\n  \"subjectRef\": \"older-subject\"\n}\n")
+	if err := os.WriteFile(configPath, oldConfiguration, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	plan := InstallPlan{
 		HostFacts: HostFacts{InvokingUID: uid, InvokingGID: gid},
 		Network:   NetworkPlan{APIAddress: strings.TrimPrefix(server.URL, "http://")},
@@ -51,6 +58,33 @@ func TestLoginCLIRecordsDigestForPurgeFence(t *testing.T) {
 	resource := resources[len(resources)-1]
 	if resource.ID != "cli-config" || resource.Digest != Digest(content) {
 		t.Fatalf("CLI configuration deletion fence = %#v", resource)
+	}
+	if string(content) == string(oldConfiguration) || strings.Contains(string(content), "older-token") {
+		t.Fatal("older SecondBox CLI configuration was not atomically upgraded")
+	}
+}
+
+func TestValidateCLIConfigurationTargetRefusesUnrelatedFile(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "config.json")
+	original := []byte("unrelated configuration\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan := InstallPlan{
+		HostFacts: HostFacts{InvokingUID: int64(os.Getuid()), InvokingGID: int64(os.Getgid())},
+		CLI:       CLIPlan{ConfigPath: path, TenantRef: "tenant", SubjectRef: "subject"},
+		Paths:     []PlannedPath{plannedPath("cli-config", path, PathUserDeployment, ResourceFile, 0o600, int64(os.Getuid()), int64(os.Getgid()), false, true)},
+	}
+	if err := validateCLIConfigurationTarget(plan); err == nil || !strings.Contains(err.Error(), "not a SecondBox session document") {
+		t.Fatalf("unrelated CLI configuration error = %v", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != string(original) {
+		t.Fatal("unrelated CLI configuration was modified")
 	}
 }
 
