@@ -113,16 +113,38 @@ func (executor SystemHostApplyExecutor) Revalidate(ctx context.Context, plan Ins
 			return installerError("completed host apply lacks the recorded Workspace", nil)
 		}
 		identity, err := workspaceFilesystemIdentity(workspace.Path)
-		if err != nil || hostApply.Evidence["workspaceDeviceIdentity"] == "" || identity != hostApply.Evidence["workspaceDeviceIdentity"] {
+		expectedIdentity := hostApply.Evidence["runnerStorageDeviceIdentity"]
+		if err != nil || expectedIdentity == "" || hostApply.Evidence["workspaceDeviceIdentity"] != expectedIdentity || identity != expectedIdentity {
 			return installerError("recorded Workspace device identity changed", err)
 		}
 		if err := validateRecordedHostApplyPath(plan, workspace, resource); err != nil {
 			return err
 		}
+		for _, name := range []string{"artifacts-parent", "run"} {
+			path, found := plannedPathByName(plan.Paths, name)
+			if !found {
+				return installerError("completed host apply lacks Runner storage path "+name, nil)
+			}
+			actual, err := workspaceFilesystemIdentity(path.Path)
+			if err != nil || actual != expectedIdentity {
+				return installerError("recorded Runner storage device identity changed for "+name, err)
+			}
+		}
+		if artifacts, found := plannedPathByName(plan.Paths, "artifacts"); found {
+			if _, statErr := os.Lstat(artifacts.Path); statErr == nil {
+				actual, err := workspaceFilesystemIdentity(artifacts.Path)
+				if err != nil || actual != expectedIdentity {
+					return installerError("materialized Runner artifacts moved to another filesystem", err)
+				}
+			} else if !errors.Is(statErr, fs.ErrNotExist) {
+				return installerError("inspect materialized Runner artifacts", statErr)
+			}
+		}
 	}
 	if plan.Storage.Choice == StorageBtrfsImage {
-		if filepath.Base(plan.Storage.MountUnitPath) != systemdMountUnitName(plan.Storage.WorkspacePath) {
-			return installerError("mount unit name does not encode the exact workspace mountpoint", nil)
+		runnerStorage, found := plannedPathByName(plan.Paths, "runner-storage")
+		if !found || filepath.Base(plan.Storage.MountUnitPath) != systemdMountUnitName(runnerStorage.Path) {
+			return installerError("mount unit name does not encode the exact Runner storage mountpoint", nil)
 		}
 		stat, err := statfsExistingAncestor(filepath.Dir(plan.Storage.FilesystemImagePath))
 		if err != nil {
@@ -221,7 +243,8 @@ func validateRecordedHostApplyPath(plan InstallPlan, planned PlannedPath, resour
 	}
 	if planned.Kind == ResourceMountUnit {
 		content, err := os.ReadFile(planned.Path)
-		if err != nil || string(content) != MountUnit(plan.Storage.FilesystemImagePath, plan.Storage.WorkspacePath) {
+		runnerStorage, found := plannedPathByName(plan.Paths, "runner-storage")
+		if err != nil || !found || string(content) != MountUnit(plan.Storage.FilesystemImagePath, runnerStorage.Path) {
 			return installerError("recorded workspace mount unit changed", err)
 		}
 	}
@@ -267,7 +290,11 @@ func verifyExistingWorkspaceMount(plan InstallPlan, requireAcceptedDeviceIdentit
 }
 
 func verifyExistingWorkspaceMountInfo(plan InstallPlan, content []byte, requireAcceptedDeviceIdentity bool) error {
-	parent := filepath.Dir(plan.Storage.WorkspacePath)
+	runnerRoot, found := plannedPathByName(plan.Paths, "runner-root")
+	if !found {
+		return installerError("existing Runner root is absent from plan", nil)
+	}
+	parent := filepath.Dir(runnerRoot.Path)
 	rootDeviceIdentity := ""
 	for _, line := range strings.Split(string(content), "\n") {
 		fields := strings.Fields(line)
@@ -409,22 +436,22 @@ func (SystemHostApplyExecutor) EnableMountUnit(ctx context.Context, unitPath str
 	return nil
 }
 
-func (SystemHostApplyExecutor) SecureMountedWorkspace(path PlannedPath) error {
+func (SystemHostApplyExecutor) SecureDirectory(path PlannedPath) error {
 	info, err := os.Lstat(path.Path)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return installerError("mounted Workspace is not a real directory", err)
+		return installerError("Runner storage root is not a real directory", err)
 	}
 	return errors.Join(os.Chown(path.Path, int(path.OwnerUID), int(path.OwnerGID)), os.Chmod(path.Path, fs.FileMode(path.Mode)))
 }
 
-func (SystemHostApplyExecutor) ProveReflinkIsolation(workspace string) (identity string, resultErr error) {
-	source, err := os.CreateTemp(workspace, ".secondbox-reflink-source-*")
+func (SystemHostApplyExecutor) ProveReflinkTopology(artifactParent, runDirectory, workspace string) (identity string, resultErr error) {
+	source, err := os.CreateTemp(artifactParent, ".secondbox-reflink-source-*")
 	if err != nil {
 		return "", err
 	}
 	sourcePath := source.Name()
 	defer func() { resultErr = errors.Join(resultErr, os.Remove(sourcePath)) }()
-	destination, err := os.CreateTemp(workspace, ".secondbox-reflink-destination-*")
+	destination, err := os.CreateTemp(runDirectory, ".secondbox-reflink-destination-*")
 	if err != nil {
 		_ = source.Close()
 		return "", err
@@ -456,6 +483,14 @@ func (SystemHostApplyExecutor) ProveReflinkIsolation(workspace string) (identity
 	identity, err = workspaceFilesystemIdentityFromFD(int(source.Fd()))
 	if err != nil {
 		return "", errors.Join(err, source.Close(), destination.Close())
+	}
+	destinationIdentity, err := workspaceFilesystemIdentityFromFD(int(destination.Fd()))
+	if err != nil {
+		return "", errors.Join(err, source.Close(), destination.Close())
+	}
+	workspaceIdentity, err := workspaceFilesystemIdentity(workspace)
+	if err != nil || destinationIdentity != identity || workspaceIdentity != identity {
+		return "", errors.Join(installerError("release assets, Runner run state, and Workspaces are not on one filesystem", nil), err, source.Close(), destination.Close())
 	}
 	if err := errors.Join(source.Close(), destination.Close()); err != nil {
 		return "", err

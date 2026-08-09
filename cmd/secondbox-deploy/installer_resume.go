@@ -889,6 +889,23 @@ func runInstallPurge(ctx context.Context, directory string, renderer cliui.Rende
 			return err
 		}
 	}
+	artifactLock, err := install.AcquireLock(absolute)
+	if err != nil {
+		return err
+	}
+	plan, receipt, err = install.ReadOperation(absolute, os.Getuid())
+	if err == nil {
+		persistArtifacts := func(value install.InstallReceipt) error {
+			return install.SaveReceipt(absolute, plan, value, os.Getuid())
+		}
+		receipt, err = install.PurgeVerifiedArtifacts(plan, receipt, time.Now, persistArtifacts)
+	}
+	if closeErr := artifactLock.Close(); closeErr != nil {
+		err = errors.Join(err, closeErr)
+	}
+	if err != nil {
+		return err
+	}
 	digest, err := install.PlanDigest(plan)
 	if err != nil {
 		return err

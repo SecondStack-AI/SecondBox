@@ -177,7 +177,7 @@ func (plan InstallPlan) Validate() error {
 		return installerError("workspace path", err)
 	}
 	if plan.Storage.Choice == StorageExistingMount {
-		if plan.Storage.ExistingDeviceIdentity == "" || plan.Storage.FilesystemImagePath != "" || plan.Storage.ImageSizeBytes != 0 {
+		if plan.Storage.ExistingDeviceIdentity == "" || plan.Storage.FilesystemImagePath != "" || plan.Storage.ImageSizeBytes != 0 || plan.Storage.MountUnitPath != "" {
 			return installerError("existing workspace storage is inconsistent", nil)
 		}
 	}
@@ -217,6 +217,8 @@ func (plan InstallPlan) Validate() error {
 			wantUID, wantGID := int64(0), int64(0)
 			if planned.Name == "workspace" || planned.Name == "logs" {
 				wantUID, wantGID = runnerContainerUID, runnerContainerGID
+			} else if planned.Name == "artifacts-parent" {
+				wantUID, wantGID = plan.HostFacts.InvokingUID, plan.HostFacts.InvokingGID
 			}
 			if planned.OwnerUID != wantUID || planned.OwnerGID != wantGID {
 				return installerError("privileged planned path has unexpected explicit ownership: "+planned.Name, nil)
@@ -227,10 +229,25 @@ func (plan InstallPlan) Validate() error {
 	if workspaceIndex < 0 || plan.Paths[workspaceIndex].Path != plan.Storage.WorkspacePath || plan.Paths[workspaceIndex].Kind != ResourceDirectory || !plan.Paths[workspaceIndex].RequiresSudo {
 		return installerError("workspace storage does not match its privileged planned resource", nil)
 	}
+	runnerRoot, hasRunnerRoot := plannedPathByName(plan.Paths, "runner-root")
+	runnerStorage, hasRunnerStorage := plannedPathByName(plan.Paths, "runner-storage")
+	artifactParent, hasArtifactParent := plannedPathByName(plan.Paths, "artifacts-parent")
+	artifacts, hasArtifacts := plannedPathByName(plan.Paths, "artifacts")
+	state, hasState := plannedPathByName(plan.Paths, "state")
+	run, hasRun := plannedPathByName(plan.Paths, "run")
+	if !hasRunnerRoot || !hasRunnerStorage || !hasArtifactParent || !hasArtifacts || !hasState || !hasRun ||
+		!runnerRoot.RequiresSudo || runnerRoot.Kind != ResourceDirectory ||
+		!runnerStorage.RequiresSudo || runnerStorage.Kind != ResourceDirectory || runnerStorage.Path != filepath.Dir(plan.Storage.WorkspacePath) || filepath.Dir(runnerStorage.Path) != runnerRoot.Path ||
+		!artifactParent.RequiresSudo || artifactParent.Kind != ResourceDirectory || artifactParent.Path != filepath.Join(runnerStorage.Path, "release") ||
+		artifacts.RequiresSudo || artifacts.Kind != ResourceDirectory || artifacts.Path != filepath.Join(artifactParent.Path, "artifacts") ||
+		!state.RequiresSudo || state.Kind != ResourceDirectory || state.Path != filepath.Join(runnerStorage.Path, "state") ||
+		!run.RequiresSudo || run.Kind != ResourceDirectory || run.Path != filepath.Join(state.Path, "run") {
+		return installerError("runner storage topology must colocate release assets, run state, and Workspaces", nil)
+	}
 	if plan.Storage.Choice == StorageBtrfsImage {
 		imageIndex := slices.IndexFunc(plan.Paths, func(path PlannedPath) bool { return path.Name == "filesystem-image" })
 		unitIndex := slices.IndexFunc(plan.Paths, func(path PlannedPath) bool { return path.Name == "workspace-mount-unit" })
-		if imageIndex < 0 || plan.Paths[imageIndex].Path != plan.Storage.FilesystemImagePath || plan.Paths[imageIndex].Kind != ResourceFilesystemImage || unitIndex < 0 || plan.Paths[unitIndex].Path != plan.Storage.MountUnitPath || plan.Paths[unitIndex].Kind != ResourceMountUnit {
+		if imageIndex < 0 || plan.Paths[imageIndex].Path != plan.Storage.FilesystemImagePath || plan.Paths[imageIndex].Kind != ResourceFilesystemImage || filepath.Dir(plan.Storage.FilesystemImagePath) != runnerRoot.Path || unitIndex < 0 || plan.Paths[unitIndex].Path != plan.Storage.MountUnitPath || plan.Paths[unitIndex].Kind != ResourceMountUnit || filepath.Base(plan.Storage.MountUnitPath) != systemdMountUnitName(runnerStorage.Path) {
 			return installerError("filesystem-image storage does not match its planned resources", nil)
 		}
 	}

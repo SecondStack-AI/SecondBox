@@ -3,12 +3,15 @@
 package install
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
 )
 
 func TestRemoveTreeConfinesDeletionToOpenedExactTarget(t *testing.T) {
@@ -39,19 +42,19 @@ func TestRemoveTreeConfinesDeletionToOpenedExactTarget(t *testing.T) {
 	}
 }
 
-func TestUserPurgeRecoversWhenArtifactTargetsWereRemovedBeforeReceiptPersist(t *testing.T) {
+func TestUserPurgeResumesAfterVerifiedArtifactsWereRemoved(t *testing.T) {
 	root := t.TempDir()
 	uid, gid := int64(os.Getuid()), int64(os.Getgid())
 	plan := validPlan(t)
-	plan.Paths = append(plan.Paths,
-		plannedPath("artifacts", filepath.Join(root, "artifacts"), PathUserDeployment, ResourceDirectory, 0o700, uid, gid, false, true),
-		plannedPath("release-artifact-manifest", filepath.Join(root, "release-artifact-manifest.json"), PathUserDeployment, ResourceFile, 0o644, uid, gid, false, true),
-	)
+	artifactIndex := slices.IndexFunc(plan.Paths, func(path PlannedPath) bool { return path.Name == "artifacts" })
+	plan.Paths[artifactIndex] = plannedPath("artifacts", filepath.Join(root, "artifacts"), PathUserDeployment, ResourceDirectory, 0o700, uid, gid, false, true)
+	plan.Paths = append(plan.Paths, plannedPath("release-artifact-manifest", filepath.Join(root, "release-artifact-manifest.json"), PathUserDeployment, ResourceFile, 0o644, uid, gid, false, true))
 	receipt := InstallReceipt{Status: OperationPurging, CreatedResources: []CreatedResource{
-		resourceFromPath(plan.Paths[len(plan.Paths)-2], StageAssetsMaterialized),
+		resourceFromPath(plan.Paths[artifactIndex], StageAssetsMaterialized),
 		resourceFromPath(plan.Paths[len(plan.Paths)-1], StageAssetsMaterialized),
 	}}
 	receipt.CreatedResources[1].Digest = "sha256:" + strings.Repeat("a", 64)
+	receipt.RemovedResourceIDs = []string{"artifacts"}
 	persisted := 0
 	updated, err := PurgeUserResources(plan, receipt, func() time.Time { return plan.CreatedAt.Add(time.Minute) }, func(InstallReceipt) error {
 		persisted++
@@ -60,8 +63,61 @@ func TestUserPurgeRecoversWhenArtifactTargetsWereRemovedBeforeReceiptPersist(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if persisted != 2 || !slices.Contains(updated.RemovedResourceIDs, "artifacts") || !slices.Contains(updated.RemovedResourceIDs, "release-artifact-manifest") {
+	if persisted != 1 || !slices.Contains(updated.RemovedResourceIDs, "artifacts") || !slices.Contains(updated.RemovedResourceIDs, "release-artifact-manifest") {
 		t.Fatalf("recovered removal ledger = %#v after %d persists", updated.RemovedResourceIDs, persisted)
+	}
+}
+
+func TestVerifiedArtifactPurgePrecedesPrivilegedRunnerStorageDeletion(t *testing.T) {
+	root := t.TempDir()
+	artifacts := filepath.Join(root, "runner", "storage", "release", "artifacts")
+	if err := os.MkdirAll(artifacts, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	release := writeSignedArtifactFixture(t, artifacts)
+	releaseBytes, err := json.Marshal(release)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(root, "deployment", "release-artifact-manifest.json")
+	if err := os.MkdirAll(filepath.Dir(manifest), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, releaseBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	uid, gid := int64(os.Getuid()), int64(os.Getgid())
+	plan := validPlan(t)
+	plan.Release.ArtifactManifestDigest = releasecontract.Digest(releaseBytes)
+	for index := range plan.Paths {
+		switch plan.Paths[index].Name {
+		case "artifacts":
+			plan.Paths[index] = plannedPath("artifacts", artifacts, PathInstallerHost, ResourceDirectory, 0o700, uid, gid, false, true)
+		case "release-artifact-manifest":
+			plan.Paths[index].Path = manifest
+		}
+	}
+	if _, found := plannedPathByName(plan.Paths, "release-artifact-manifest"); !found {
+		plan.Paths = append(plan.Paths, plannedPath("release-artifact-manifest", manifest, PathUserDeployment, ResourceFile, 0o644, uid, gid, false, true))
+	}
+	artifactPath, _ := plannedPathByName(plan.Paths, "artifacts")
+	releasePath, _ := plannedPathByName(plan.Paths, "release-artifact-manifest")
+	receipt := InstallReceipt{Status: OperationPurging, CreatedResources: []CreatedResource{resourceFromPath(artifactPath, StageAssetsMaterialized), resourceFromPath(releasePath, StageAssetsMaterialized)}}
+	receipt.CreatedResources[0].Digest = release.MicroVM.SignedManifestDigest
+	receipt.CreatedResources[1].Digest = Digest(releaseBytes)
+	persisted := 0
+	updated, err := PurgeVerifiedArtifacts(plan, receipt, time.Now, func(InstallReceipt) error { persisted++; return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted != 1 || !slices.Contains(updated.RemovedResourceIDs, "artifacts") {
+		t.Fatalf("artifact removal was not journaled exactly once: %#v after %d persists", updated.RemovedResourceIDs, persisted)
+	}
+	if _, err := os.Lstat(artifacts); !os.IsNotExist(err) {
+		t.Fatalf("verified artifacts remain: %v", err)
+	}
+	if content, err := os.ReadFile(manifest); err != nil || string(content) != string(releaseBytes) {
+		t.Fatalf("release verification authority changed before sudo purge: %v", err)
 	}
 }
 
@@ -88,7 +144,6 @@ func TestRemoveTreeRefusesSymlinkTargetWithoutTouchingReferent(t *testing.T) {
 
 func TestPrivilegedPurgeRequiresExactPlanAndReceiptAuthority(t *testing.T) {
 	plan := validPlan(t)
-	plan.Paths = append(plan.Paths, plannedPath("runner-root", "/var/lib/secondbox-install_0123456789abcdef", PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true))
 	receipt, err := NewReceipt(plan, plan.CreatedAt)
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +151,8 @@ func TestPrivilegedPurgeRequiresExactPlanAndReceiptAuthority(t *testing.T) {
 	if _, err := requirePrivilegedPurgeResource(plan, receipt, "runner-root"); err == nil {
 		t.Fatal("plan-only deletion authority was accepted")
 	}
-	resource := resourceFromPath(plan.Paths[len(plan.Paths)-1], StageHostApply)
+	runnerRoot, _ := plannedPathByName(plan.Paths, "runner-root")
+	resource := resourceFromPath(runnerRoot, StageHostApply)
 	if err := receipt.AppendResource(resource); err != nil {
 		t.Fatal(err)
 	}

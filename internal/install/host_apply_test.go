@@ -19,6 +19,7 @@ type fakeHostApplyExecutor struct {
 	nonempty   map[ResourceKind]bool
 	retained   map[string]bool
 	revalidate error
+	reflink    []string
 }
 
 func (executor *fakeHostApplyExecutor) EffectiveUID() int { return executor.euid }
@@ -65,15 +66,16 @@ func (executor *fakeHostApplyExecutor) EnableMountUnit(context.Context, string) 
 	}
 	return nil
 }
-func (executor *fakeHostApplyExecutor) SecureMountedWorkspace(path PlannedPath) error {
+func (executor *fakeHostApplyExecutor) SecureDirectory(path PlannedPath) error {
 	executor.calls = append(executor.calls, "secure:"+path.Name)
 	if executor.failAt == "secure" {
 		return errors.New("injected mounted-workspace security failure")
 	}
 	return nil
 }
-func (executor *fakeHostApplyExecutor) ProveReflinkIsolation(string) (string, error) {
+func (executor *fakeHostApplyExecutor) ProveReflinkTopology(artifactParent, runDirectory, workspace string) (string, error) {
 	executor.calls = append(executor.calls, "reflink")
+	executor.reflink = []string{artifactParent, runDirectory, workspace}
 	if executor.failAt == "reflink" {
 		return "", errors.New("injected reflink failure")
 	}
@@ -158,6 +160,20 @@ func TestHostApplyUsesOnlyAcceptedResourcesAndRecordsEachMutation(t *testing.T) 
 	}) {
 		t.Fatalf("format did not use pinned installer image: %#v", executor.calls)
 	}
+	callIndex := func(want string) int { return slices.Index(executor.calls, want) }
+	for _, assertion := range []struct {
+		before string
+		after  string
+	}{{"mkdir:runner-storage", "enable"}, {"enable", "secure:runner-storage"}, {"secure:runner-storage", "mkdir:artifacts-parent"}, {"secure:runner-storage", "mkdir:run"}, {"secure:runner-storage", "mkdir:workspace"}, {"mkdir:workspace", "reflink"}} {
+		if before, after := callIndex(assertion.before), callIndex(assertion.after); before < 0 || after < 0 || before >= after {
+			t.Fatalf("host storage mutation order %q -> %q is unsafe: %#v", assertion.before, assertion.after, executor.calls)
+		}
+	}
+	artifactParent, _ := plannedPathByName(plan.Paths, "artifacts-parent")
+	run, _ := plannedPathByName(plan.Paths, "run")
+	if !slices.Equal(executor.reflink, []string{artifactParent.Path, run.Path, plan.Storage.WorkspacePath}) {
+		t.Fatalf("reflink proof escaped accepted storage topology: %#v", executor.reflink)
+	}
 }
 
 func TestHostApplyFailureRollsBackOnlyEmptyResourcesAndKeepsReceiptAccurate(t *testing.T) {
@@ -172,7 +188,7 @@ func TestHostApplyFailureRollsBackOnlyEmptyResourcesAndKeepsReceiptAccurate(t *t
 	if len(updated.CreatedResources) != 2 || !slices.ContainsFunc(updated.CreatedResources, func(resource CreatedResource) bool { return resource.Kind == ResourceFilesystemImage }) || !slices.ContainsFunc(updated.CreatedResources, func(resource CreatedResource) bool { return resource.ID == "runner-root" }) || len(persisted.CreatedResources) != 2 {
 		t.Fatalf("retained receipt = %#v persisted %#v", updated.CreatedResources, persisted.CreatedResources)
 	}
-	if slices.Contains(executor.removed, "filesystem-image") || slices.Contains(executor.removed, "runner-root") || !slices.Contains(executor.removed, "state") {
+	if slices.Contains(executor.removed, "filesystem-image") || slices.Contains(executor.removed, "runner-root") || !slices.Contains(executor.removed, "runner-storage") {
 		t.Fatalf("rollback removed wrong resources: %#v", executor.removed)
 	}
 }

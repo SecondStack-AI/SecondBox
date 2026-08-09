@@ -48,27 +48,27 @@ The normal wizard asks for a workspace choice, reviews its conservative resource
 
 Workspace choices are:
 
-- An existing dedicated, non-root XFS or Btrfs mount. The installer creates only the declared Workspace directory and proves FICLONE mutation isolation on the actual filesystem.
-- A fully allocated Btrfs filesystem image. This is portable and size-bounded, but its availability still depends on the backing filesystem and its systemd loop mount. Back up the image as a durable filesystem, not as a replaceable cache.
+- An existing dedicated, non-root XFS or Btrfs mount with at least 65 GiB available. The installer creates one operation-specific Runner storage tree there for verified execution assets, run state, Workspaces, and local Snapshots.
+- A fully allocated Btrfs filesystem image of at least 65 GiB. The image contains the same complete Runner storage tree. It is portable and size-bounded, but its availability still depends on the backing filesystem and its systemd loop mount. Back it up as durable Runner storage, not as a replaceable cache.
 
-The final review lists the release version and manifest, four digest-pinned OCI images, signing-key fingerprint, expected downloads, disk allocation, all generated authority categories, exact paths, services, retention, capacity, network settings, and uninstall behavior. Confirmation creates a mode-`0600` plan and receipt before any secret or host resource exists.
+The final review lists the release version and manifest, seven digest-pinned OCI images, signing-key fingerprint, expected downloads, disk allocation, all generated authority categories, exact paths, services, retention, capacity, network settings, and uninstall behavior. Confirmation creates a mode-`0600` plan and receipt before any secret or host resource exists.
 
 ## Privileged actions
 
 After confirmation, the installer displays the precise privileged list and invokes sudo once for its private host-preparation entry point. Root independently verifies the accepted plan, invoking user, machine identity, KVM, TUN, cgroups, UID range, filesystem, free space, and create-only paths. Depending on the workspace choice, it may:
 
-- create the declared root-owned Runner state, jail, runtime, network, log, and snapshot-template-cache directories;
+- create the declared Runner storage root, invoking-user-owned atomic artifact-publication parent, and root- or Runner-owned state, jail, runtime, network, log, snapshot-template-cache, and Workspace directories;
 - fully allocate and format the declared regular Btrfs image with the release-pinned installer-tools image;
 - install, verify, enable, and start the exact systemd mount unit;
-- create the final Workspace directory and prove reflink mutation isolation.
+- prove an actual cross-directory rootfs reflink from the artifact-publication parent into the Runner run directory, mutation isolation, and one matching filesystem identity for assets, run state, and Workspaces.
 
 It never formats a physical block device, installs distribution packages, edits shell profiles, creates jailer accounts, or gives the control plane host privileges. The separately deployed Runner container remains the only privileged compute component and executes `secondbox-runner` directly as PID 1.
 
 ## Files, services, and first Sandbox
 
-The plan records the exact operation directory, manifest, secrets, Runner identity, verified artifact directory, Runner state paths, Workspace, optional filesystem image and mount unit, CLI configuration, and installed binary paths. The installer creates unique application, platform, Runner-enrollment, and Runner-PKI authority in protected referenced files. No secret value enters the plan, receipt, command arguments, or installer output.
+The plan records the exact operation directory, manifest, secrets, Runner identity, reflink-capable Runner storage root, verified artifact directory, Runner state paths, Workspace, optional filesystem image and mount unit, CLI configuration, and installed binary paths. The verified assets, run/jail/cache state, and Workspace are sibling subtrees on the selected filesystem; WorkspaceStore remains the only component that resolves paths beneath the Workspace subtree. The installer creates unique application, platform, Runner-enrollment, and Runner-PKI authority in protected referenced files. No secret value enters the plan, receipt, command arguments, or installer output.
 
-It then pulls exactly the control-plane, Runner, microVM-artifact, and installer-tools images by digest; verifies every release object and the fixed microVM bundle allowlist; publishes the artifact directory atomically; generates the explicit manifest; enrolls the Runner; starts Compose; logs in the local CLI; waits for advertised cold-boot capacity; and runs:
+It then pulls exactly the control-plane, Runner, microVM-artifact, installer-tools, PostgreSQL, object-store, and object-store-client images by digest; verifies every release object and the fixed microVM bundle allowlist; publishes the artifact directory atomically on Runner storage; generates the explicit manifest; enrolls the Runner; starts Compose; logs in the local CLI; waits for advertised cold-boot capacity; and runs:
 
 ```sh
 secondbox run durable-coding -- python3 -c 'print("hello from a microVM")'
@@ -112,4 +112,4 @@ Permanent deletion is a separate workflow. Run ordinary uninstall first, inspect
 secondbox-deploy uninstall --purge /absolute/path/to/operation
 ```
 
-Purge requires an interactive typed `PURGE <operation-id>` confirmation. It first removes the exact Compose project's bundled PostgreSQL and object-store volumes, then deletes only exact plan-and-receipt-matched installation resources through symlink- and mount-confined operations. It refuses broad paths, globs, physical or foreign mounts, altered ownership evidence, and changed targets. The plan and receipt remain as a bounded tombstone.
+Purge requires an interactive typed `PURGE <operation-id>` confirmation. It first removes the exact Compose project's bundled PostgreSQL and object-store volumes, verifies and journals removal of the execution assets while the accepted release manifest remains available, and only then removes the privileged Runner storage root. All deletion remains constrained to exact plan-and-receipt-matched resources through symlink- and mount-confined operations. It refuses broad paths, globs, physical or foreign mounts, altered ownership evidence, and changed targets. The plan and receipt remain as a bounded tombstone.

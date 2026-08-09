@@ -34,7 +34,7 @@ func TestStatfsExistingAncestorUsesTheCreateOnlyTargetFilesystem(t *testing.T) {
 
 func TestExistingWorkspaceMountRejectsRootDeviceReuse(t *testing.T) {
 	plan := validPlan(t)
-	plan.Storage = StoragePlan{Choice: StorageExistingMount, WorkspacePath: "/srv/secondbox/workspaces", ExistingDeviceIdentity: "8:1"}
+	plan.Storage.ExistingDeviceIdentity = "8:1"
 	mountInfo := strings.Join([]string{
 		"21 1 8:1 / / rw,relatime - btrfs /dev/vda1 rw",
 		"22 21 8:1 /data /srv/secondbox rw,relatime - btrfs /dev/vda1 rw",

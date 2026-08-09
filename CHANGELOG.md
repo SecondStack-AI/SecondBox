@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Guided installation now places verified microVM assets, Runner run/jail/cache state, and Workspace storage beneath one operation-specific root on the selected reflink-capable filesystem. Host apply proves an asset-to-run `FICLONE` and a matching Workspace filesystem identity before materializing the release; resume rechecks the topology. The former layout mounted only the Workspace on Btrfs/XFS, so every installed Sandbox reached Firecracker and then failed while cloning its rootfs across filesystems with `operation not supported`. Purge verifies and journals the colocated assets before removing the privileged storage root.
 - Installer readiness now accepts the public `pre_shared` credential state emitted for a ready, authenticated Runner instead of waiting for the nonexistent `active` projection until its five-minute deadline expired.
 - Single-host capacity planning now reserves all 16 concurrent operations required by each selected `durable-coding` Sandbox, and installer readiness verifies the exact pool, scheduling capabilities, and operation capacity before attempting its smoke Sandbox. The former plan advertised at most eight operations while the Profile required 16, then reported the incompatible Runner as ready and failed the first Sandbox with `home_runner_unavailable`.
 

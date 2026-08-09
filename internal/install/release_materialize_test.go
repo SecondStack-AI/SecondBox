@@ -130,19 +130,31 @@ func TestMaterializeReleaseResumesWithoutReextractingVerifiedBundle(t *testing.T
 		t.Fatal(err)
 	}
 	plan.Release = releasePlanForMaterializer(release, releaseBytes)
-	plan.Storage = StoragePlan{Choice: StorageExistingMount, WorkspacePath: filepath.Join(root, "workspace"), ExistingDeviceIdentity: "fixture-device"}
+	runnerRoot := filepath.Join(root, "runner")
+	runnerStorage := filepath.Join(runnerRoot, "storage")
+	workspace := filepath.Join(runnerStorage, "workspaces")
+	artifactParent := filepath.Join(runnerStorage, "release")
+	if err := os.MkdirAll(artifactParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plan.Storage = StoragePlan{Choice: StorageExistingMount, WorkspacePath: workspace, ExistingDeviceIdentity: "fixture-device"}
 	plan.CLI = CLIPlan{ConfigPath: filepath.Join(root, "config", "secondbox", "config.json"), TenantRef: "tenant", SubjectRef: "subject"}
 	uid, gid := int64(os.Getuid()), int64(os.Getgid())
 	plan.Paths = []PlannedPath{
 		plannedPath("deployment", operation, PathUserDeployment, ResourceDirectory, 0o700, uid, gid, false, true),
-		plannedPath("artifacts", filepath.Join(operation, "artifacts"), PathUserDeployment, ResourceDirectory, 0o700, uid, gid, false, true),
+		plannedPath("runner-root", runnerRoot, PathExistingWorkspace, ResourceDirectory, 0o700, 0, 0, true, true),
+		plannedPath("runner-storage", runnerStorage, PathExistingWorkspace, ResourceDirectory, 0o711, 0, 0, true, true),
+		plannedPath("artifacts-parent", artifactParent, PathInstallerHost, ResourceDirectory, 0o700, uid, gid, true, true),
+		plannedPath("artifacts", filepath.Join(artifactParent, "artifacts"), PathInstallerHost, ResourceDirectory, 0o700, uid, gid, false, true),
+		plannedPath("state", filepath.Join(runnerStorage, "state"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
+		plannedPath("run", filepath.Join(runnerStorage, "state", "run"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
 		plannedPath("binary-directory-root", filepath.Join(root, ".local"), PathUserDeployment, ResourceDirectory, 0o755, uid, gid, false, true),
 		plannedPath("binary-directory", filepath.Join(root, ".local", "bin"), PathUserDeployment, ResourceDirectory, 0o755, uid, gid, false, true),
 		plannedPath("secondbox-binary", filepath.Join(root, ".local", "bin", "secondbox"), PathUserDeployment, ResourceBinary, 0o755, uid, gid, false, true),
 		plannedPath("secondbox-deploy-binary", filepath.Join(root, ".local", "bin", "secondbox-deploy"), PathUserDeployment, ResourceBinary, 0o755, uid, gid, false, true),
 		plannedPath("cli-config", plan.CLI.ConfigPath, PathUserDeployment, ResourceFile, 0o600, uid, gid, false, true),
 		plannedPath("platform-token", filepath.Join(operation, "platform-token"), PathUserDeployment, ResourceFile, 0o600, uid, gid, false, true),
-		plannedPath("workspace", plan.Storage.WorkspacePath, PathExistingWorkspace, ResourceDirectory, 0o750, runnerContainerUID, runnerContainerGID, true, true),
+		plannedPath("workspace", workspace, PathExistingWorkspace, ResourceDirectory, 0o750, runnerContainerUID, runnerContainerGID, true, true),
 	}
 	plan.SecretTargets = []SecretTarget{{Category: "platform-authority", Path: filepath.Join(operation, "platform-token")}}
 	if err := plan.Validate(); err != nil {

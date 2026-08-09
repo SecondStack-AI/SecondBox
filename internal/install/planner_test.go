@@ -73,7 +73,7 @@ func TestStorageOptionsRequireBackingForControlServicesAndReleaseAssets(t *testi
 
 func TestStorageOptionsUseDistinctExistingMountAndImageMinimums(t *testing.T) {
 	facts := plannerFacts(t)
-	facts.Devices[0].AvailableBytes = MinimumWorkspaceBytes
+	facts.Devices[0].AvailableBytes = MinimumRunnerStorageBytes
 	options := StorageOptions(facts, 81<<30, ExecutionBundleEstimateBytes)
 	if len(options) != 1 || options[0].Choice != StorageExistingMount {
 		t.Fatalf("storage options at exact thresholds = %#v", options)
@@ -85,7 +85,7 @@ func TestProposeExistingFilesystemPlanIsCompleteAndExplicit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Storage.ExistingDeviceIdentity != "8:16" || plan.Storage.WorkspacePath != "/srv/secondbox-workspace/secondbox-workspaces" {
+	if plan.Storage.ExistingDeviceIdentity != "8:16" || plan.Storage.WorkspacePath != "/srv/secondbox-workspace/secondbox-install_0123456789abcdef/storage/workspaces" || plan.Capacity.MaxWorkspaceBytes != 225<<30 {
 		t.Fatalf("storage = %#v", plan.Storage)
 	}
 	if len(plan.Capacity.SubjectQuotas) != 9 || len(plan.Network.Gateways) != 2 || plan.Network.GuestBridgeCIDR != "172.31.0.0/24" {
@@ -97,6 +97,12 @@ func TestProposeExistingFilesystemPlanIsCompleteAndExplicit(t *testing.T) {
 	workspace, found := plannedPathByName(plan.Paths, "workspace")
 	if !found || workspace.OwnerUID != runnerContainerUID || workspace.OwnerGID != runnerContainerGID {
 		t.Fatalf("workspace ownership = %#v", workspace)
+	}
+	runnerStorage, _ := plannedPathByName(plan.Paths, "runner-storage")
+	artifacts, _ := plannedPathByName(plan.Paths, "artifacts")
+	run, _ := plannedPathByName(plan.Paths, "run")
+	if filepath.Dir(workspace.Path) != runnerStorage.Path || !strings.HasPrefix(artifacts.Path, runnerStorage.Path+string(filepath.Separator)) || !strings.HasPrefix(run.Path, runnerStorage.Path+string(filepath.Separator)) {
+		t.Fatalf("Runner assets, run state, and Workspaces are not colocated: storage=%#v artifacts=%#v run=%#v workspace=%#v", runnerStorage, artifacts, run, workspace)
 	}
 	state, _ := plannedPathByName(plan.Paths, "state")
 	for _, name := range []string{"jail", "run", "network", "snapshot-template-cache", "logs"} {
@@ -128,7 +134,7 @@ func TestProposeImagePlanBoundsAllocationAndReplacesPortCollisions(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Storage.ImageSizeBytes != 68<<30 || plan.Capacity.MaxWorkspaceBytes != 68<<30 {
+	if plan.Storage.ImageSizeBytes != 68<<30 || plan.Capacity.MaxWorkspaceBytes != 53<<30 {
 		t.Fatalf("image capacity = %#v", plan.Storage)
 	}
 	if plan.Capacity.SubjectQuotas["maxArtifactBytes"] != 2<<30 {
