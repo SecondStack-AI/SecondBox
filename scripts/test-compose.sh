@@ -5,6 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 compose_file="$repo_root/scripts/compose-test.yml"
 binary_dir="$repo_root/.tmp/compose-test"
 project_name="secondbox-compose-test-$$"
+network_name="$project_name-network"
 
 for command in curl docker go node openssl; do
   if ! command -v "$command" >/dev/null 2>&1; then
@@ -32,6 +33,7 @@ export SECONDBOX_COMPOSE_TEST_UID
 SECONDBOX_COMPOSE_TEST_UID="$(id -u)"
 export SECONDBOX_COMPOSE_TEST_GID
 SECONDBOX_COMPOSE_TEST_GID="$(id -g)"
+export SECONDBOX_COMPOSE_TEST_NETWORK="$network_name"
 
 openssl req -x509 -newkey rsa:3072 -nodes \
   -keyout "$pki_dir/runner-ca.key" \
@@ -74,6 +76,12 @@ cleanup() {
       status=1
     fi
   fi
+  if [[ "$network_created" == true ]] && ! docker network rm "$network_name" >/dev/null 2>&1; then
+    echo "SecondBox Compose smoke test network cleanup failed: $network_name" >&2
+    if [[ "$status" -eq 0 ]]; then
+      status=1
+    fi
+  fi
   if ! rm -r -- "$pki_dir"; then
     echo "SecondBox Compose smoke test PKI cleanup failed: $pki_dir" >&2
     if [[ "$status" -eq 0 ]]; then
@@ -83,6 +91,25 @@ cleanup() {
   exit "$status"
 }
 trap cleanup EXIT
+
+network_created=false
+for offset in $(seq 0 511); do
+  network_index=$(( ($$ + offset) % 512 ))
+  second_octet=$(( 18 + network_index / 256 ))
+  third_octet=$(( network_index % 256 ))
+  if docker network create \
+    --driver bridge \
+    --subnet "198.${second_octet}.${third_octet}.0/24" \
+    --label org.secondbox.qualification=compose-test \
+    "$network_name" >/dev/null 2>&1; then
+    network_created=true
+    break
+  fi
+done
+if [[ "$network_created" != true ]]; then
+  echo "SecondBox Compose test could not allocate an isolated network in 198.18.0.0/15" >&2
+  exit 1
+fi
 
 compose config --quiet
 compose up --detach --wait --wait-timeout 180
