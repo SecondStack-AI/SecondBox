@@ -361,7 +361,21 @@ for offset in $(seq 0 511); do
 done
 [[ "$scenario_network_found" == "true" ]] ||
   fail "no unused scenario guest /24 is available in 198.18.0.0/15"
+scenario_compose_network_found=false
+for offset in $(seq 1 511); do
+  scenario_compose_network_index=$(( (scenario_network_index + offset) % 512 ))
+  scenario_compose_second_octet=$(( 18 + scenario_compose_network_index / 256 ))
+  scenario_compose_third_octet=$(( scenario_compose_network_index % 256 ))
+  scenario_compose_cidr="198.${scenario_compose_second_octet}.${scenario_compose_third_octet}.0/24"
+  if [[ -z "$(ip route show "$scenario_compose_cidr")" ]]; then
+    scenario_compose_network_found=true
+    break
+  fi
+done
+[[ "$scenario_compose_network_found" == "true" ]] ||
+  fail "no unused scenario Compose /24 is available in 198.18.0.0/15"
 export SECONDBOX_SCENARIO_GUEST_CIDR="$scenario_guest_cidr"
+export SECONDBOX_SCENARIO_COMPOSE_CIDR="$scenario_compose_cidr"
 export SECONDBOX_SCENARIO_BRIDGE_ADDRESS="198.${scenario_network_second_octet}.${scenario_network_third_octet}.1"
 export SECONDBOX_SCENARIO_BRIDGE_CIDR="$SECONDBOX_SCENARIO_BRIDGE_ADDRESS/24"
 export SECONDBOX_SCENARIO_GUEST_IP="198.${scenario_network_second_octet}.${scenario_network_third_octet}.2"
@@ -589,6 +603,7 @@ echo "SecondBox scenario source commit: $SECONDBOX_SCENARIO_SOURCE_COMMIT"
 echo "SecondBox scenario Go version: $SECONDBOX_SCENARIO_GO_VERSION"
 echo "SecondBox scenario artifact manifest: $manifest_digest"
 echo "SecondBox scenario guest network: $SECONDBOX_SCENARIO_GUEST_CIDR"
+echo "SecondBox scenario Compose network: $SECONDBOX_SCENARIO_COMPOSE_CIDR"
 
 # A run killed with SIGKILL never reaches the EXIT trap, so its bridge and
 # cgroup parent survive it. Reclaim those before this run claims host resources

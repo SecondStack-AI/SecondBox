@@ -299,3 +299,9 @@ services:
 
 volumes:
   object-store-data:
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${SECONDBOX_SCENARIO_COMPOSE_CIDR:?SECONDBOX_SCENARIO_COMPOSE_CIDR is required}

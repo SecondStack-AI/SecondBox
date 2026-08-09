@@ -49,6 +49,8 @@ func TestStressQualificationUsesExternalSDKHarnessAndFailsLoudly(t *testing.T) {
 		"SecondBox scenario source commit",
 		"SecondBox scenario Go version",
 		"SecondBox scenario artifact manifest",
+		"SECONDBOX_SCENARIO_COMPOSE_CIDR",
+		"SecondBox scenario Compose network",
 		"SECONDBOX_SCENARIO_DIAGNOSTICS_DIR",
 		`"$diagnostics_dir/runner.jsonl"`,
 		`"$diagnostics_dir/compose.log"`,
@@ -67,6 +69,7 @@ func TestStressQualificationUsesExternalSDKHarnessAndFailsLoudly(t *testing.T) {
 		"cgroup: host",
 		"stop_grace_period: 45s",
 		"- -healthcheck",
+		"SECONDBOX_SCENARIO_COMPOSE_CIDR is required",
 	} {
 		if !strings.Contains(compose, required) {
 			t.Errorf("stress Compose topology must contain %q", required)

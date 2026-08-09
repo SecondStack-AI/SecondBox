@@ -84,6 +84,7 @@ Preserve the beginning and end of the command output. A qualified run prints:
 - the Go version;
 - the resolved `manifest.json` SHA-256;
 - the allocated benchmark guest network;
+- the separately allocated Compose backend network;
 - `SecondBox scenario qualification passed`.
 
 The expected wall-clock duration is 6–10 minutes on the reference host, including control-plane and runner builds, image construction, Compose startup, the serial scenario suite, and cleanup. The Go test process has a 30-minute hard timeout so slow or wedged teardown remains bounded.
