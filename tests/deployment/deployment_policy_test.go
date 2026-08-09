@@ -40,8 +40,11 @@ func TestComposeSeparatesOptionalPrivilegedRunnerFromControlPlane(t *testing.T) 
 			t.Errorf("same-host Runner overlay missing %q", required)
 		}
 	}
-	if count := strings.Count(runner, "create_host_path: false"); count != 4 {
-		t.Errorf("same-host Runner overlay disables host path creation for %d of 4 operator-owned binds", count)
+	if count := strings.Count(runner, "create_host_path: false"); count != 3 {
+		t.Errorf("same-host Runner overlay disables host path creation for %d of 3 operator-owned binds", count)
+	}
+	if strings.Contains(runner, "source: ${SECONDBOX_RUNNER_WORKSPACE_HOST_DIR") {
+		t.Error("same-host Runner overlay must not create a nested Workspace bind inside the Runner storage bind")
 	}
 	controlPlane := strings.Split(strings.Split(base, "  control-plane:")[1], "\n  runner-pki-init:")[0]
 	for _, forbidden := range []string{"privileged: true", "/dev/kvm", "/dev/net/tun", "/sys/fs/cgroup"} {

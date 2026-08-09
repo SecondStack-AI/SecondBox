@@ -733,6 +733,12 @@ func validateRunner(prefix string, r Runner) error {
 		if r.IdentityDirectory != "/run/secondbox-runner-identity" {
 			return manifestError(prefix+".identity_directory must be /run/secondbox-runner-identity for same-host Compose placement", nil)
 		}
+		if r.WorkspaceHostDirectory != filepath.Join(r.StateHostDirectory, "workspaces") {
+			return manifestError(prefix+".workspace_host_directory must be the workspaces child of state_host_directory for same-host Compose placement", nil)
+		}
+		if r.WorkspaceRoot != "/var/lib/secondbox-runner/workspaces" {
+			return manifestError(prefix+".workspace_root must be /var/lib/secondbox-runner/workspaces for same-host Compose placement", nil)
+		}
 		for name, value := range map[string]string{
 			"firecracker_kernel_path":       r.FirecrackerKernelPath,
 			"firecracker_rootfs_path":       r.FirecrackerRootFSPath,
@@ -752,8 +758,8 @@ func validateRunner(prefix string, r Runner) error {
 			"snapshot_template_cache_root":    r.SnapshotTemplateCacheRoot,
 			"sandbox_network_state_directory": r.SandboxNetworkStateDir,
 		} {
-			if !pathWithin("/var/lib/secondbox-runner", value) {
-				return manifestError(prefix+"."+name+" must be within /var/lib/secondbox-runner for same-host Compose placement", nil)
+			if !pathWithin("/var/lib/secondbox-runner/state", value) {
+				return manifestError(prefix+"."+name+" must be within /var/lib/secondbox-runner/state for same-host Compose placement", nil)
 			}
 		}
 	}

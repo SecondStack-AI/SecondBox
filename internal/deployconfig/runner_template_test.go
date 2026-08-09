@@ -19,16 +19,16 @@ func TestRunnerTemplateSubstitutionValidatesAsSameHostTopology(t *testing.T) {
 
 	manifestPath := initializedDevelopment(t)
 	hostRoot := t.TempDir()
-	workspaceDirectory, err := os.MkdirTemp("/dev/shm", "secondbox-template-workspace-")
+	storageDirectory, err := os.MkdirTemp("/dev/shm", "secondbox-template-storage-")
 	if err != nil {
 		t.Skipf("dedicated tmpfs unavailable: %v", err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(workspaceDirectory) })
+	t.Cleanup(func() { _ = os.RemoveAll(storageDirectory) })
 	rootDevice, err := filesystemDevice("/")
 	if err != nil {
 		t.Fatal(err)
 	}
-	workspaceDevice, err := filesystemDevice(workspaceDirectory)
+	workspaceDevice, err := filesystemDevice(storageDirectory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,11 +39,11 @@ func TestRunnerTemplateSubstitutionValidatesAsSameHostTopology(t *testing.T) {
 	runner := validSameHostTestRunner("runner-template-test")
 	runner.PoolID = "standard-amd64"
 	runner.IdentityHostDirectory = filepath.Join(hostRoot, "identity")
-	runner.ArtifactHostDirectory = filepath.Join(hostRoot, "artifacts")
-	runner.StateHostDirectory = filepath.Join(hostRoot, "state")
-	runner.WorkspaceHostDirectory = workspaceDirectory
-	for _, directory := range []string{runner.ArtifactHostDirectory, runner.StateHostDirectory} {
-		if err := os.Mkdir(directory, 0o700); err != nil {
+	runner.ArtifactHostDirectory = filepath.Join(storageDirectory, "release", "artifacts")
+	runner.StateHostDirectory = storageDirectory
+	runner.WorkspaceHostDirectory = filepath.Join(storageDirectory, "workspaces")
+	for _, directory := range []string{runner.ArtifactHostDirectory, runner.WorkspaceHostDirectory} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}

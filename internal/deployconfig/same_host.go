@@ -43,12 +43,23 @@ func validateSameHostRunnerHost(runner Runner, controlPlaneCAPath string) error 
 	if err != nil {
 		return fmt.Errorf("inspect host root filesystem: %w", err)
 	}
+	storageDevice, err := filesystemDevice(runner.StateHostDirectory)
+	if err != nil {
+		return fmt.Errorf("inspect Runner storage host filesystem: %w", err)
+	}
 	workspaceDevice, err := filesystemDevice(runner.WorkspaceHostDirectory)
 	if err != nil {
 		return fmt.Errorf("inspect workspace host filesystem: %w", err)
 	}
-	if workspaceDevice == rootDevice {
-		return fmt.Errorf("workspace_host_directory must use a dedicated non-root filesystem")
+	artifactDevice, err := filesystemDevice(runner.ArtifactHostDirectory)
+	if err != nil {
+		return fmt.Errorf("inspect artifact host filesystem: %w", err)
+	}
+	if storageDevice == rootDevice {
+		return fmt.Errorf("state_host_directory must use a dedicated non-root filesystem")
+	}
+	if workspaceDevice != storageDevice || artifactDevice != storageDevice {
+		return fmt.Errorf("artifact_host_directory, state_host_directory, and workspace_host_directory must use one filesystem")
 	}
 
 	identityCAPath, err := resolveRegularReference("", filepath.Join(runner.IdentityHostDirectory, "runner-ca.crt"))

@@ -947,7 +947,7 @@ func TestSameHostRunnerPreflightRejectsUnsafeHostState(t *testing.T) {
 		}
 		manifestPath := initializedDevelopment(t)
 		runner := provisionSameHostTestRunner(t, manifestPath, "runner-local")
-		hostRoot := filepath.Dir(runner.StateHostDirectory)
+		hostRoot := runner.StateHostDirectory
 		if err := os.Chmod(hostRoot, 0); err != nil {
 			t.Fatal(err)
 		}
@@ -1006,12 +1006,19 @@ func TestSameHostRunnerPreflightRejectsUnsafeHostState(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rootBackedWorkspace, err := os.MkdirTemp("/var/tmp", "secondbox-root-workspace-")
+		rootBackedStorage, err := os.MkdirTemp("/var/tmp", "secondbox-root-storage-")
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { _ = os.RemoveAll(rootBackedWorkspace) })
-		manifest.Runners[0].WorkspaceHostDirectory = rootBackedWorkspace
+		t.Cleanup(func() { _ = os.RemoveAll(rootBackedStorage) })
+		manifest.Runners[0].StateHostDirectory = rootBackedStorage
+		manifest.Runners[0].WorkspaceHostDirectory = filepath.Join(rootBackedStorage, "workspaces")
+		manifest.Runners[0].ArtifactHostDirectory = filepath.Join(rootBackedStorage, "release", "artifacts")
+		for _, directory := range []string{manifest.Runners[0].WorkspaceHostDirectory, manifest.Runners[0].ArtifactHostDirectory} {
+			if err := os.MkdirAll(directory, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
 		encoded, err := encodeManifest(manifest)
 		if err != nil {
 			t.Fatal(err)
@@ -1051,36 +1058,38 @@ func validTestRunner(id, placement string) Runner {
 func validSameHostTestRunner(id string) Runner {
 	runner := validTestRunner(id, "same-host")
 	runner.IdentityDirectory = "/run/secondbox-runner-identity"
-	runner.LogPath = "/var/lib/secondbox-runner/log/runner.jsonl"
-	runner.LogDirectory = "/var/lib/secondbox-runner/log"
-	runner.FirecrackerJailRoot = "/var/lib/secondbox-runner/jailer"
+	runner.StateHostDirectory = "/var/lib/secondbox-runner-storage"
+	runner.WorkspaceHostDirectory = "/var/lib/secondbox-runner-storage/workspaces"
+	runner.LogPath = "/var/lib/secondbox-runner/state/logs/runner.jsonl"
+	runner.LogDirectory = "/var/lib/secondbox-runner/state/logs"
+	runner.FirecrackerJailRoot = "/var/lib/secondbox-runner/state/jailer"
 	runner.FirecrackerKernelPath = "/opt/secondbox-artifacts/kernel"
 	runner.FirecrackerRootFSPath = "/opt/secondbox-artifacts/rootfs.ext4"
 	runner.FirecrackerSharedImagePath = "/opt/secondbox-artifacts/shared.img"
-	runner.FirecrackerRunDirectory = "/var/lib/secondbox-runner/run"
-	runner.FirecrackerLogDirectory = "/var/lib/secondbox-runner/firecracker-log"
-	runner.SnapshotTemplateCacheRoot = "/var/lib/secondbox-runner/snapshot-templates"
+	runner.FirecrackerRunDirectory = "/var/lib/secondbox-runner/state/run"
+	runner.FirecrackerLogDirectory = "/var/lib/secondbox-runner/state/firecracker-log"
+	runner.SnapshotTemplateCacheRoot = "/var/lib/secondbox-runner/state/snapshot-templates"
 	runner.ArtifactPublicKey = "/opt/secondbox-artifacts/manifest-public.pem"
 	runner.WorkspaceRoot = "/var/lib/secondbox-runner/workspaces"
-	runner.SandboxNetworkStateDir = "/var/lib/secondbox-runner/network"
+	runner.SandboxNetworkStateDir = "/var/lib/secondbox-runner/state/network"
 	return runner
 }
 
 func provisionSameHostTestRunner(t *testing.T, manifestPath, id string) Runner {
 	t.Helper()
 	hostRoot := t.TempDir()
-	workspaceDirectory, err := os.MkdirTemp("/dev/shm", "secondbox-workspace-")
+	storageDirectory, err := os.MkdirTemp("/dev/shm", "secondbox-runner-storage-")
 	if err != nil {
 		t.Skipf("dedicated tmpfs unavailable: %v", err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(workspaceDirectory) })
+	t.Cleanup(func() { _ = os.RemoveAll(storageDirectory) })
 	runner := validSameHostTestRunner(id)
 	runner.IdentityHostDirectory = filepath.Join(hostRoot, "identity")
-	runner.ArtifactHostDirectory = filepath.Join(hostRoot, "artifacts")
-	runner.StateHostDirectory = filepath.Join(hostRoot, "state")
-	runner.WorkspaceHostDirectory = workspaceDirectory
-	for _, directory := range []string{runner.ArtifactHostDirectory, runner.StateHostDirectory} {
-		if err := os.Mkdir(directory, 0o700); err != nil {
+	runner.ArtifactHostDirectory = filepath.Join(storageDirectory, "release", "artifacts")
+	runner.StateHostDirectory = storageDirectory
+	runner.WorkspaceHostDirectory = filepath.Join(storageDirectory, "workspaces")
+	for _, directory := range []string{runner.ArtifactHostDirectory, runner.WorkspaceHostDirectory} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
