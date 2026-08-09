@@ -6,8 +6,10 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -119,6 +121,18 @@ func TestMaterializeReleaseResumesWithoutReextractingVerifiedBundle(t *testing.T
 	if err := os.Mkdir(filepath.Join(root, ".local"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Mkdir(filepath.Join(root, ".local", "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string][]byte{"secondbox": []byte("older secondbox binary"), "secondbox-deploy": []byte("older secondbox-deploy binary")} {
+		path := filepath.Join(root, ".local", "bin", name)
+		if err := os.WriteFile(path, content, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	operation := filepath.Join(root, "operation")
 	if err := os.Mkdir(operation, 0o700); err != nil {
 		t.Fatal(err)
@@ -189,7 +203,21 @@ func TestMaterializeReleaseResumesWithoutReextractingVerifiedBundle(t *testing.T
 	verified := releaseverify.VerifiedRelease{Manifest: release, ManifestBytes: releaseBytes}
 	persisted := receipt
 	persist := func(value InstallReceipt) error { persisted = value; return nil }
-	first, _, err := MaterializeRelease(context.Background(), plan, receipt, verified, ReleaseMaterializeDependencies{Executor: executor, PersistReceipt: persist, Now: time.Now})
+	blocked, _, err := MaterializeRelease(context.Background(), plan, receipt, verified, ReleaseMaterializeDependencies{Executor: executor, PersistReceipt: persist, Now: time.Now})
+	if err == nil || blocked.Status != OperationFailed || blocked.FailureStage != StageAssetsMaterialized || len(executor.pulls) != 0 || executor.extractions != 0 {
+		t.Fatalf("pre-existing unrelated binaries = status %s stage %s pulls %d extractions %d error %v", blocked.Status, blocked.FailureStage, len(executor.pulls), executor.extractions, err)
+	}
+	validateReplacement := func(target PlannedPath, name string) error {
+		content, err := os.ReadFile(target.Path)
+		if err != nil {
+			return err
+		}
+		if string(content) != "older "+name+" binary" {
+			return errors.New("unexpected replacement candidate")
+		}
+		return nil
+	}
+	first, _, err := MaterializeRelease(context.Background(), plan, blocked, verified, ReleaseMaterializeDependencies{Executor: executor, PersistReceipt: persist, Now: time.Now, ValidateBinaryReplacement: validateReplacement})
 	if err == nil || first.Status != OperationFailed || lastStageForTest(first) != StageReleaseVerified || executor.extractions != 1 {
 		t.Fatalf("first materialization = status %s stage %s extractions %d error %v", first.Status, lastStageForTest(first), executor.extractions, err)
 	}
@@ -201,7 +229,7 @@ func TestMaterializeReleaseResumesWithoutReextractingVerifiedBundle(t *testing.T
 	})
 	persisted.PendingResourceIDs = append(persisted.PendingResourceIDs, "artifacts", "secondbox-binary")
 	executor.failFetch = ""
-	completed, artifact, err := MaterializeRelease(context.Background(), plan, persisted, verified, ReleaseMaterializeDependencies{Executor: executor, PersistReceipt: persist, Now: time.Now})
+	completed, artifact, err := MaterializeRelease(context.Background(), plan, persisted, verified, ReleaseMaterializeDependencies{Executor: executor, PersistReceipt: persist, Now: time.Now, ValidateBinaryReplacement: validateReplacement})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,6 +247,17 @@ func TestMaterializeReleaseResumesWithoutReextractingVerifiedBundle(t *testing.T
 		if info.Mode().Perm() != 0o755 {
 			t.Fatalf("%s mode under hardened umask = %o", name, info.Mode().Perm())
 		}
+		content, err := os.ReadFile(filepath.Join(root, ".local", "bin", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected := secondboxBytes
+		if name == "secondbox-deploy" {
+			expected = deployBytes
+		}
+		if !slices.Equal(content, expected) {
+			t.Fatalf("%s was not atomically upgraded", name)
+		}
 	}
 	localInfo, err := os.Stat(filepath.Join(root, ".local"))
 	if err != nil {
@@ -229,6 +268,42 @@ func TestMaterializeReleaseResumesWithoutReextractingVerifiedBundle(t *testing.T
 	}
 	if _, recorded := receiptResource(completed, "binary-directory-root"); recorded {
 		t.Fatal("pre-existing binary root was claimed as an installer-created resource")
+	}
+}
+
+func TestValidateReplaceableSecondBoxBinaryRequiresExactEmbeddedCommandIdentity(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module github.com/SecondStack-AI/SecondBox\n\ngo 1.25.12\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	commandDirectory := filepath.Join(root, "cmd", "secondbox")
+	if err := os.MkdirAll(commandDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(commandDirectory, "main.go"), []byte("package main\nfunc main() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	targetPath := filepath.Join(root, "secondbox")
+	command := exec.Command("go", "build", "-buildvcs=false", "-ldflags=-s -w", "-o", targetPath, "./cmd/secondbox")
+	command.Dir = root
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build SecondBox identity fixture: %v: %s", err, strings.TrimSpace(string(output)))
+	}
+	if err := os.Chmod(targetPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := plannedPath("secondbox-binary", targetPath, PathUserDeployment, ResourceBinary, 0o755, int64(os.Getuid()), int64(os.Getgid()), false, true)
+	if err := validateReplaceableSecondBoxBinary(target, "secondbox"); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateReplaceableSecondBoxBinary(target, "secondbox-deploy"); err == nil || !strings.Contains(err.Error(), "embedded Go build identity") {
+		t.Fatalf("mismatched command identity error = %v", err)
+	}
+	if err := os.WriteFile(targetPath, []byte("not a Go executable"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateReplaceableSecondBoxBinary(target, "secondbox"); err == nil || !strings.Contains(err.Error(), "embedded Go build identity") {
+		t.Fatalf("non-Go replacement error = %v", err)
 	}
 }
 
