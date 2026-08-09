@@ -858,6 +858,36 @@ func runInstallPurge(ctx context.Context, directory string, renderer cliui.Rende
 	if err = errors.Join(err, closeErr); err != nil {
 		return err
 	}
+	validationLock, err := install.AcquireLock(absolute)
+	if err != nil {
+		return err
+	}
+	plan, receipt, err = install.ReadOperation(absolute, os.Getuid())
+	if err == nil {
+		err = install.ValidatePurgeVerifiedArtifacts(plan, receipt)
+	}
+	if err == nil {
+		err = install.ValidatePurgeUserResources(plan, receipt)
+	}
+	if closeErr := validationLock.Close(); closeErr != nil {
+		err = errors.Join(err, closeErr)
+	}
+	if err != nil {
+		return err
+	}
+	digest, err := install.PlanDigest(plan)
+	if err != nil {
+		return err
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	validationCommand := exec.CommandContext(ctx, "sudo", "--", executable, "_install-host-purge-validate", absolute, digest)
+	validationCommand.Stdin, validationCommand.Stdout, validationCommand.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := validationCommand.Run(); err != nil {
+		return fmt.Errorf("SecondBox installer purge validate privileged resources: %w", err)
+	}
 	manifestPath := installerPlannedPath(plan, "manifest")
 	if !slices.Contains(receipt.CompletedPurgeSteps, "compose-volumes") {
 		if _, statErr := os.Lstat(manifestPath); statErr != nil {
@@ -906,14 +936,6 @@ func runInstallPurge(ctx context.Context, directory string, renderer cliui.Rende
 	if err != nil {
 		return err
 	}
-	digest, err := install.PlanDigest(plan)
-	if err != nil {
-		return err
-	}
-	executable, err := os.Executable()
-	if err != nil {
-		return err
-	}
 	command := exec.CommandContext(ctx, "sudo", "--", executable, "_install-host-purge", absolute, digest)
 	command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := command.Run(); err != nil {
@@ -956,6 +978,21 @@ func runPrivateHostPurge(ctx context.Context, arguments []string) error {
 	_, err = install.PurgeAcceptedHost(ctx, arguments[0], arguments[1], uid, time.Now)
 	if err != nil {
 		return fmt.Errorf("SecondBox installer private host purge: %w", err)
+	}
+	return nil
+}
+
+func runPrivateHostPurgeValidate(arguments []string) error {
+	if len(arguments) != 2 {
+		return errors.New("SecondBox installer private host purge validation: expected OPERATION_DIRECTORY PLAN_DIGEST")
+	}
+	uidText, present := os.LookupEnv("SUDO_UID")
+	uid, err := strconv.Atoi(uidText)
+	if !present || err != nil || uid < 0 {
+		return errors.New("SecondBox installer private host purge validation: SUDO_UID is required and must be a non-negative integer")
+	}
+	if err := install.ValidateAcceptedHostPurge(arguments[0], arguments[1], uid); err != nil {
+		return fmt.Errorf("SecondBox installer private host purge validation: %w", err)
 	}
 	return nil
 }

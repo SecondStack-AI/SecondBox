@@ -38,31 +38,7 @@ func PurgeAcceptedHost(ctx context.Context, directory, expectedDigest string, ow
 	if err != nil {
 		return InstallReceipt{}, err
 	}
-	digest, err := PlanDigest(plan)
-	if err != nil || digest != expectedDigest {
-		return InstallReceipt{}, installerError("private host purge plan digest differs from the accepted plan", err)
-	}
-	if receipt.Status != OperationPurging {
-		return InstallReceipt{}, installerError("private host purge requires ordinary uninstall first", nil)
-	}
-	runnerRootResource, err := requirePrivilegedPurgeResource(plan, receipt, "runner-root")
-	if err != nil {
-		return receipt, err
-	}
-	workspaceResource, err := requirePrivilegedPurgeResource(plan, receipt, "workspace")
-	if err != nil {
-		return receipt, err
-	}
-	runnerStorageResource, err := requirePrivilegedPurgeResource(plan, receipt, "runner-storage")
-	if err != nil {
-		return receipt, err
-	}
-	for _, resource := range []CreatedResource{runnerRootResource, runnerStorageResource, workspaceResource} {
-		if err := validatePurgeTargetMetadata(resource); err != nil {
-			return receipt, err
-		}
-	}
-	if err := validatePurgeWorkspaceIdentity(plan, receipt, workspaceResource); err != nil {
+	if err := validateAcceptedHostPurge(plan, receipt, expectedDigest); err != nil {
 		return receipt, err
 	}
 	persist := func() error { return SaveReceipt(directory, plan, receipt, ownerUID) }
@@ -122,6 +98,101 @@ func PurgeAcceptedHost(ctx context.Context, directory, expectedDigest string, ow
 		return receipt, err
 	}
 	return receipt, nil
+}
+
+// ValidateAcceptedHostPurge proves that the privileged purge boundary is still
+// exactly the one accepted by the plan and receipt without mutating it. The
+// public purge command runs this before removing Compose volumes or artifacts;
+// PurgeAcceptedHost repeats it immediately before privileged deletion.
+func ValidateAcceptedHostPurge(directory, expectedDigest string, ownerUID int) (resultErr error) {
+	if os.Geteuid() != 0 || ownerUID < 0 {
+		return installerError("private host purge validation requires root and SUDO_UID", nil)
+	}
+	lock, err := AcquireLock(directory)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
+	plan, receipt, err := ReadOperation(directory, ownerUID)
+	if err != nil {
+		return err
+	}
+	return validateAcceptedHostPurge(plan, receipt, expectedDigest)
+}
+
+func validateAcceptedHostPurge(plan InstallPlan, receipt InstallReceipt, expectedDigest string) error {
+	digest, err := PlanDigest(plan)
+	if err != nil || digest != expectedDigest {
+		return installerError("private host purge plan digest differs from the accepted plan", err)
+	}
+	if receipt.Status != OperationPurging {
+		return installerError("private host purge requires ordinary uninstall first", nil)
+	}
+	runnerRoot, err := requirePrivilegedPurgeResource(plan, receipt, "runner-root")
+	if err != nil {
+		return err
+	}
+	runnerStorage, err := requirePrivilegedPurgeResource(plan, receipt, "runner-storage")
+	if err != nil {
+		return err
+	}
+	workspace, err := requirePrivilegedPurgeResource(plan, receipt, "workspace")
+	if err != nil {
+		return err
+	}
+	for _, resource := range []CreatedResource{runnerRoot, runnerStorage, workspace} {
+		if err := validatePurgeTargetMetadata(resource); err != nil {
+			return err
+		}
+	}
+	if err := validatePurgeWorkspaceIdentity(plan, receipt, workspace); err != nil {
+		return err
+	}
+	if err := validateNoNestedMounts(runnerStorage.Path); err != nil {
+		return err
+	}
+	if plan.Storage.Choice != StorageBtrfsImage {
+		return nil
+	}
+	unit, err := requirePrivilegedPurgeResource(plan, receipt, "workspace-mount-unit")
+	if err != nil {
+		return err
+	}
+	if err := validatePurgeTargetMetadata(unit); err != nil {
+		return err
+	}
+	plannedStorage, found := plannedPathByName(plan.Paths, "runner-storage")
+	if !found {
+		return installerError("private host purge Runner storage is absent from plan", nil)
+	}
+	expectedUnitDigest := Digest([]byte(MountUnit(plan.Storage.FilesystemImagePath, plannedStorage.Path)))
+	_, err = validateRegularPathIfExists(plan.Storage.MountUnitPath, expectedUnitDigest)
+	return err
+}
+
+func validateNoNestedMounts(root string) error {
+	content, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return installerError("purge cannot inspect the host mount table", err)
+	}
+	return validateNoNestedMountsInfo(root, content)
+}
+
+func validateNoNestedMountsInfo(root string, content []byte) error {
+	root = filepath.Clean(root)
+	for _, line := range strings.Split(string(content), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 6 {
+			continue
+		}
+		mountpoint := filepath.Clean(decodeMount(fields[4]))
+		relative, err := filepath.Rel(root, mountpoint)
+		if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			continue
+		}
+		return installerError("purge refuses a nested mount beneath Runner storage: "+mountpoint, nil)
+	}
+	return nil
 }
 
 func requirePrivilegedPurgeResource(plan InstallPlan, receipt InstallReceipt, id string) (CreatedResource, error) {
@@ -186,50 +257,118 @@ func PurgeVerifiedArtifacts(plan InstallPlan, receipt InstallReceipt, now func()
 	if slices.Contains(receipt.RemovedResourceIDs, "artifacts") {
 		return receipt, nil
 	}
-	releasePath, found := plannedPathByName(plan.Paths, "release-artifact-manifest")
-	if !found || slices.Contains(receipt.RemovedResourceIDs, "release-artifact-manifest") {
-		return receipt, installerError("purge release manifest must remain before verified artifacts", nil)
-	}
-	artifactPath, found := plannedPathByName(plan.Paths, "artifacts")
-	if !found || artifactPath.RequiresSudo {
-		return receipt, installerError("purge artifact directory is absent from the user-owned plan boundary", nil)
-	}
-	resource, recorded := receiptResource(receipt, "artifacts")
-	if !recorded || resource.Path != artifactPath.Path || resource.Kind != artifactPath.Kind || resource.OwnerUID != artifactPath.OwnerUID || resource.OwnerGID != artifactPath.OwnerGID {
-		return receipt, installerError("purge artifacts lack exact plan-and-receipt authority", nil)
-	}
-	releaseInfo, err := os.Lstat(releasePath.Path)
-	if err != nil || releaseInfo.Mode()&os.ModeSymlink != 0 || !releaseInfo.Mode().IsRegular() {
-		return receipt, installerError("purge release manifest must remain a regular file", err)
-	}
-	releaseBytes, err := os.ReadFile(releasePath.Path)
+	artifactPath, artifactPresent, err := validatePurgeVerifiedArtifacts(plan, receipt)
 	if err != nil {
 		return receipt, err
 	}
-	release, err := releasecontract.DecodeArtifactManifest(releaseBytes)
-	if err != nil || releasecontract.Digest(releaseBytes) != plan.Release.ArtifactManifestDigest {
-		return receipt, installerError("purge release manifest differs from accepted release", err)
-	}
-	artifactInfo, err := os.Lstat(artifactPath.Path)
-	if errors.Is(err, os.ErrNotExist) {
-		if err := receipt.MarkResourceRemoved("artifacts", now()); err != nil {
-			return receipt, err
+	if artifactPresent {
+		if _, err := removeTreeIfExists(artifactPath.Path); err != nil {
+			return receipt, installerError("purge verified artifacts", err)
 		}
-		return receipt, persist(receipt)
-	}
-	if err != nil || artifactInfo.Mode()&os.ModeSymlink != 0 || !artifactInfo.IsDir() {
-		return receipt, installerError("purge artifact target must remain a directory", err)
-	}
-	if _, err := VerifyArtifactDirectory(artifactPath.Path, release); err != nil {
-		return receipt, err
-	}
-	if _, err := removeTreeIfExists(artifactPath.Path); err != nil {
-		return receipt, installerError("purge verified artifacts", err)
 	}
 	if err := receipt.MarkResourceRemoved("artifacts", now()); err != nil {
 		return receipt, err
 	}
 	return receipt, persist(receipt)
+}
+
+// ValidatePurgeVerifiedArtifacts proves the complete release-owned artifact
+// directory against the still-present signed release manifest without removing
+// either one.
+func ValidatePurgeVerifiedArtifacts(plan InstallPlan, receipt InstallReceipt) error {
+	_, _, err := validatePurgeVerifiedArtifacts(plan, receipt)
+	return err
+}
+
+func validatePurgeVerifiedArtifacts(plan InstallPlan, receipt InstallReceipt) (PlannedPath, bool, error) {
+	if receipt.Status != OperationPurging {
+		return PlannedPath{}, false, installerError("verified artifact purge validation requires a purge-in-progress receipt", nil)
+	}
+	if slices.Contains(receipt.RemovedResourceIDs, "artifacts") {
+		return PlannedPath{}, false, nil
+	}
+	releasePath, found := plannedPathByName(plan.Paths, "release-artifact-manifest")
+	if !found || slices.Contains(receipt.RemovedResourceIDs, "release-artifact-manifest") {
+		return PlannedPath{}, false, installerError("purge release manifest must remain before verified artifacts", nil)
+	}
+	artifactPath, found := plannedPathByName(plan.Paths, "artifacts")
+	if !found || artifactPath.RequiresSudo {
+		return PlannedPath{}, false, installerError("purge artifact directory is absent from the user-owned plan boundary", nil)
+	}
+	resource, recorded := receiptResource(receipt, "artifacts")
+	if !recorded || resource.Path != artifactPath.Path || resource.Kind != artifactPath.Kind || resource.OwnerUID != artifactPath.OwnerUID || resource.OwnerGID != artifactPath.OwnerGID {
+		return PlannedPath{}, false, installerError("purge artifacts lack exact plan-and-receipt authority", nil)
+	}
+	releaseInfo, err := os.Lstat(releasePath.Path)
+	if err != nil || releaseInfo.Mode()&os.ModeSymlink != 0 || !releaseInfo.Mode().IsRegular() {
+		return PlannedPath{}, false, installerError("purge release manifest must remain a regular file", err)
+	}
+	releaseBytes, err := os.ReadFile(releasePath.Path)
+	if err != nil {
+		return PlannedPath{}, false, err
+	}
+	release, err := releasecontract.DecodeArtifactManifest(releaseBytes)
+	if err != nil || releasecontract.Digest(releaseBytes) != plan.Release.ArtifactManifestDigest {
+		return PlannedPath{}, false, installerError("purge release manifest differs from accepted release", err)
+	}
+	artifactInfo, err := os.Lstat(artifactPath.Path)
+	if errors.Is(err, os.ErrNotExist) {
+		return artifactPath, false, nil
+	}
+	if err != nil || artifactInfo.Mode()&os.ModeSymlink != 0 || !artifactInfo.IsDir() {
+		return PlannedPath{}, false, installerError("purge artifact target must remain a directory", err)
+	}
+	if _, err := VerifyArtifactDirectory(artifactPath.Path, release); err != nil {
+		return PlannedPath{}, false, err
+	}
+	return artifactPath, true, nil
+}
+
+// ValidatePurgeUserResources checks every remaining user-owned target without
+// deleting it. It catches changed files and closed directory allowlists before
+// the public purge crosses any destructive boundary.
+func ValidatePurgeUserResources(plan InstallPlan, receipt InstallReceipt) error {
+	if receipt.Status != OperationPurging {
+		return installerError("user resource purge validation requires a purge-in-progress receipt", nil)
+	}
+	for _, resource := range receipt.CreatedResources {
+		if resource.ID == "operation-directory" || resource.ID == "compose-project" || slices.Contains(receipt.RemovedResourceIDs, resource.ID) {
+			continue
+		}
+		planned, found := plannedPathByName(plan.Paths, resource.ID)
+		if !found {
+			return installerError("user purge validation resource is absent from the accepted plan: "+resource.ID, nil)
+		}
+		if planned.RequiresSudo {
+			continue
+		}
+		if resource.Path != planned.Path || resource.Kind != planned.Kind || resource.Mode != planned.Mode || resource.OwnerUID != planned.OwnerUID || resource.OwnerGID != planned.OwnerGID {
+			return installerError("user purge validation resource differs from accepted plan: "+resource.ID, nil)
+		}
+		if err := validatePurgeTargetMetadata(resource); err != nil {
+			return err
+		}
+		switch resource.ID {
+		case "runner-identity":
+			if err := validateRunnerIdentityDirectory(resource.Path); err != nil {
+				return err
+			}
+		case "compose-assets":
+			if err := validateComposeAssetDirectory(resource.Path); err != nil {
+				return err
+			}
+		default:
+			if resource.Kind != ResourceDirectory {
+				if resource.Digest == "" {
+					return installerError("purge regular resource lacks recorded content identity: "+resource.ID, nil)
+				}
+				if _, err := validateRegularPathIfExists(resource.Path, resource.Digest); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // PurgeUserResources removes remaining create-only user-owned resources
@@ -240,6 +379,9 @@ func PurgeUserResources(plan InstallPlan, receipt InstallReceipt, now func() tim
 	}
 	if !slices.Contains(receipt.RemovedResourceIDs, "artifacts") {
 		return receipt, installerError("verified artifacts remain before the sudo purge boundary", nil)
+	}
+	if err := ValidatePurgeUserResources(plan, receipt); err != nil {
+		return receipt, err
 	}
 	resources := slices.Clone(receipt.CreatedResources)
 	slices.SortFunc(resources, func(a, b CreatedResource) int {
@@ -509,17 +651,18 @@ func validateRunnerIdentityDirectory(path string) error {
 	if err != nil {
 		return err
 	}
-	want := []string{"runner-ca.crt", "runner.crt", "runner.env", "runner.key"}
+	want := map[string]os.FileMode{"runner-ca.crt": 0o644, "runner.crt": 0o600, "runner.env": 0o600, "runner.key": 0o600}
 	actual := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		info, err := os.Lstat(filepath.Join(path, entry.Name()))
-		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
+		expectedMode, allowed := want[entry.Name()]
+		if err != nil || !allowed || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != expectedMode {
 			return installerError("Runner identity purge found an unexpected or exposed entry", err)
 		}
 		actual = append(actual, entry.Name())
 	}
 	slices.Sort(actual)
-	return boolError(slices.Equal(actual, want), "Runner identity purge allowlist differs")
+	return boolError(slices.Equal(actual, []string{"runner-ca.crt", "runner.crt", "runner.env", "runner.key"}), "Runner identity purge allowlist differs")
 }
 
 func validateComposeAssetDirectory(path string) error {

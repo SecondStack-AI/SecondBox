@@ -105,6 +105,12 @@ func TestVerifiedArtifactPurgePrecedesPrivilegedRunnerStorageDeletion(t *testing
 	receipt := InstallReceipt{Status: OperationPurging, CreatedResources: []CreatedResource{resourceFromPath(artifactPath, StageAssetsMaterialized), resourceFromPath(releasePath, StageAssetsMaterialized)}}
 	receipt.CreatedResources[0].Digest = release.MicroVM.SignedManifestDigest
 	receipt.CreatedResources[1].Digest = Digest(releaseBytes)
+	if err := ValidatePurgeVerifiedArtifacts(plan, receipt); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(artifacts); err != nil {
+		t.Fatalf("artifact validation mutated its target: %v", err)
+	}
 	persisted := 0
 	updated, err := PurgeVerifiedArtifacts(plan, receipt, time.Now, func(InstallReceipt) error { persisted++; return nil })
 	if err != nil {
@@ -193,5 +199,39 @@ func TestPurgeWorkspaceRequiresHostApplyDeviceIdentity(t *testing.T) {
 	receipt.CompletedStages[0].Evidence["workspaceDeviceIdentity"] = "changed-device"
 	if err := validatePurgeWorkspaceIdentityWith(plan, receipt, resource, identify); err == nil {
 		t.Fatal("workspace on a different device was accepted for recursive purge")
+	}
+}
+
+func TestPurgePreflightRefusesNestedMountBeforeMutation(t *testing.T) {
+	root := "/var/lib/secondbox-install/storage"
+	withoutNested := []byte("22 1 8:1 / / rw - ext4 /dev/root rw\n23 22 0:51 / " + root + " rw - btrfs /dev/loop0 rw\n24 22 8:2 / /srv/unrelated rw - xfs /dev/sdb rw\n")
+	if err := validateNoNestedMountsInfo(root, withoutNested); err != nil {
+		t.Fatal(err)
+	}
+	withNested := append(withoutNested, []byte("25 23 0:52 / "+root+"/workspaces/.foreign rw - tmpfs tmpfs rw\n")...)
+	if err := validateNoNestedMountsInfo(root, withNested); err == nil || !strings.Contains(err.Error(), "nested mount") {
+		t.Fatalf("nested mount validation error = %v", err)
+	}
+}
+
+func TestRunnerIdentityPurgeAcceptsGeneratedModesExactly(t *testing.T) {
+	directory := t.TempDir()
+	for name, mode := range map[string]os.FileMode{"runner-ca.crt": 0o644, "runner.crt": 0o600, "runner.env": 0o600, "runner.key": 0o600} {
+		path := filepath.Join(directory, name)
+		if err := os.WriteFile(path, []byte(name), mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := validateRunnerIdentityDirectory(directory); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(directory, "runner.key"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateRunnerIdentityDirectory(directory); err == nil || !strings.Contains(err.Error(), "unexpected or exposed") {
+		t.Fatalf("exposed Runner key validation error = %v", err)
 	}
 }

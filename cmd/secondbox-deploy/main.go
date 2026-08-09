@@ -129,6 +129,8 @@ func runCommand(arguments []string, renderer cliui.Renderer) error {
 		return runPrivateHostApply(context.Background(), arguments[1:])
 	case "_install-host-purge":
 		return runPrivateHostPurge(context.Background(), arguments[1:])
+	case "_install-host-purge-validate":
+		return runPrivateHostPurgeValidate(arguments[1:])
 	case "init":
 		if len(arguments) < 4 || arguments[1] != "--mode" {
 			return usage(renderer)
