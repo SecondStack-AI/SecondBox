@@ -64,6 +64,8 @@ The manifest also requires three contested rollout/recovery decisions: data-plan
 
 The `[overrides]` table contains code-owned tuning. Every field is optional. When absent, `secondboxd` uses the reviewed value shown by `inspect`; when present, the exact value is rendered and passes the same validation and cross-field checks as before. Invalid overrides fail rather than falling back. Compose uses value-less pass-through mappings so an absent override remains unset instead of becoming an empty string.
 
+`http_timeout_seconds` bounds request reads, response writes, idle keep-alive connections, and graceful server shutdown. The response write deadline starts only when an ordinary response begins, so it does not expire while a handler waits for an operation-specific result. Buffered Exec, Sandbox wait, proxied File operations, and upgraded streaming connections already have operation-specific bounds. A server-wide response deadline cannot be compatible with every valid Profile because Profile execution deadlines are explicit and may exceed this process tuning value.
+
 Runner protocol minimum and maximum are not configuration. Both binaries compile the one supported protocol window, and generated-protocol verification rejects drift between the two modules.
 
 ## Production initialization

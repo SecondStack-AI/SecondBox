@@ -85,7 +85,7 @@ max_memory_bytes = 171798691840
 
 # Optional tuning overrides. Uncomment only an intentional override.
 # [overrides]
-# http_timeout_seconds = 30 # default; HTTP request timeout.
+# http_timeout_seconds = 30 # default; HTTP request-read, response-write, keep-alive, and shutdown timeout.
 # runner_heartbeat_interval_milliseconds = 5000 # default; Runner heartbeat cadence.
 # runner_heartbeat_timeout_milliseconds = 30000 # default; Runner liveness timeout.
 # runner_command_delivery_batch_size = 16 # default; Commands delivered per claim.

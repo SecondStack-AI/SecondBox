@@ -15,13 +15,9 @@ import (
 	"time"
 )
 
-// maximumWaitRequest bounds one waitForSandbox request. The service permits up
-// to 60 seconds, but a deployment's own HTTP timeout closes the connection
-// first: SECONDBOX_HTTP_TIMEOUT_SECONDS defaults to 30, and a longer poll then
-// fails with an unexplained EOF rather than a state. Staying well under that
-// default costs an extra request per half-minute of waiting and works against
-// an unmodified deployment.
-const maximumWaitRequest = 20 * time.Second
+// maximumWaitRequest matches the service's public waitForSandbox request bound.
+// Longer caller waits use repeated requests so each request remains valid.
+const maximumWaitRequest = 60 * time.Second
 
 // NewIdempotencyKey returns one unguessable single-use request key.
 //
