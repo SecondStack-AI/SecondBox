@@ -75,13 +75,26 @@ func ReadManifest(path string) (ManifestV1, error) {
 // Resolve validates and resolves a manifest without consulting ambient process
 // environment. Relative source references are anchored to the manifest.
 func Resolve(path string) (ResolvedDeployment, error) {
+	return resolvePath(path, true)
+}
+
+// ResolveForAcceptedInstaller resolves an installer-owned manifest after the
+// private host-apply helper has revalidated the accepted plan and its recorded
+// root-owned paths. It retains every manifest, secret, trust, and environment
+// check while avoiding a second unprivileged traversal of those root-only
+// paths.
+func ResolveForAcceptedInstaller(path string) (ResolvedDeployment, error) {
+	return resolvePath(path, false)
+}
+
+func resolvePath(path string, validateSameHost bool) (ResolvedDeployment, error) {
 	manifest, err := ReadManifest(path)
 	if err != nil {
 		return ResolvedDeployment{}, err
 	}
 	absolute, _ := filepath.Abs(path)
 	base := filepath.Dir(absolute)
-	return resolveManifest(manifest, base)
+	return resolveManifestWithOptions(manifest, base, validateSameHost)
 }
 
 func resolveManifest(manifest ManifestV1, base string) (ResolvedDeployment, error) {

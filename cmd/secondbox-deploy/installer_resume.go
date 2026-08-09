@@ -71,17 +71,13 @@ func systemInstallResumeDependencies(renderer cliui.Renderer) installResumeDepen
 			return deployconfig.InitSingleHostFromReleaseOrValidate(plan, verified.Manifest, verified.ManifestBytes, artifact)
 		},
 		Enroll: func(result deployconfig.SingleHostInstallResult) error {
-			if err := deployconfig.RunnerInitOrValidate(result.ManifestPath, result.RunnerID, result.RunnerIdentityDirectory); err != nil {
-				return err
-			}
-			_, err := deployconfig.Resolve(result.ManifestPath)
-			return err
+			return deployconfig.RunnerInitOrValidate(result.ManifestPath, result.RunnerID, result.RunnerIdentityDirectory)
 		},
 		Compose: func(ctx context.Context, manifestPath, action string) error {
-			return deployconfig.RunCompose(ctx, manifestPath, action, deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic}, httpClient)
+			return deployconfig.RunComposeForAcceptedInstaller(ctx, manifestPath, action, deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic}, httpClient)
 		},
 		ComposeProject: func(manifestPath string) (string, error) {
-			resolved, err := deployconfig.Resolve(manifestPath)
+			resolved, err := deployconfig.ResolveForAcceptedInstaller(manifestPath)
 			if err != nil {
 				return "", err
 			}
@@ -407,7 +403,7 @@ func validateInstallPostconditions(plan install.InstallPlan, receipt install.Ins
 		}
 	}
 	if slices.Index(install.StageSequence, last) >= slices.Index(install.StageSequence, install.StageComposeStarted) {
-		resolved, err := deployconfig.Resolve(installerPlannedPath(plan, "manifest"))
+		resolved, err := deployconfig.ResolveForAcceptedInstaller(installerPlannedPath(plan, "manifest"))
 		if err != nil {
 			return err
 		}
@@ -425,7 +421,7 @@ func validateComposeTeardownAuthority(plan install.InstallPlan, receipt install.
 	if err := install.ValidateRecordedResources(plan, receipt); err != nil {
 		return err
 	}
-	resolved, err := deployconfig.Resolve(installerPlannedPath(plan, "manifest"))
+	resolved, err := deployconfig.ResolveForAcceptedInstaller(installerPlannedPath(plan, "manifest"))
 	if err != nil {
 		return err
 	}
@@ -710,7 +706,7 @@ func runInstallUninstall(ctx context.Context, arguments []string, renderer cliui
 		return runInstallPurge(ctx, directory, renderer)
 	}
 	return runInstallUninstallWith(ctx, directory, renderer, installUninstallDependencies{OwnerUID: os.Getuid(), Now: time.Now, ValidateTeardown: validateComposeTeardownAuthority, ComposeDown: func(ctx context.Context, manifest string) error {
-		return deployconfig.RunCompose(ctx, manifest, "down", deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic}, http.DefaultClient)
+		return deployconfig.RunComposeForAcceptedInstaller(ctx, manifest, "down", deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic}, http.DefaultClient)
 	}})
 }
 
@@ -867,7 +863,7 @@ func runInstallPurge(ctx context.Context, directory string, renderer cliui.Rende
 			return statErr
 		}
 		if err := runInstallPhase(ctx, renderer, "Compose durable-data purge", "remove exact bundled database and object-store volumes", func() error {
-			return deployconfig.PurgeComposeVolumes(ctx, manifestPath, deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic})
+			return deployconfig.PurgeComposeVolumesForAcceptedInstaller(ctx, manifestPath, deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic})
 		}); err != nil {
 			return err
 		}

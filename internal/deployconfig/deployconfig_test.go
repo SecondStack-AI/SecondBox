@@ -941,6 +941,29 @@ func TestSameHostRunnerSelectsOnlyItsOverlayAndRejectsAmbiguousIdentity(t *testi
 }
 
 func TestSameHostRunnerPreflightRejectsUnsafeHostState(t *testing.T) {
+	t.Run("accepted installer retains root-only host paths", func(t *testing.T) {
+		if os.Getuid() == 0 {
+			t.Skip("root can traverse a mode-000 fixture")
+		}
+		manifestPath := initializedDevelopment(t)
+		runner := provisionSameHostTestRunner(t, manifestPath, "runner-local")
+		hostRoot := filepath.Dir(runner.StateHostDirectory)
+		if err := os.Chmod(hostRoot, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(hostRoot, 0o700) })
+		if _, err := Resolve(manifestPath); err == nil || !strings.Contains(err.Error(), "permission denied") {
+			t.Fatalf("ordinary same-host resolution did not retain host preflight: %v", err)
+		}
+		resolved, err := ResolveForAcceptedInstaller(manifestPath)
+		if err != nil {
+			t.Fatalf("accepted installer repeated unprivileged host traversal: %v", err)
+		}
+		if resolved.ComposeProject() == "" || resolved.Environment["SECONDBOX_RUNNER_STATE_HOST_DIR"] != runner.StateHostDirectory {
+			t.Fatalf("accepted installer resolution lost exact host identity: %#v", resolved.Environment)
+		}
+	})
+
 	t.Run("jailer UID is assigned to a host account", func(t *testing.T) {
 		if os.Getuid() == 0 {
 			t.Skip("root UID is rejected by manifest range validation before host-account preflight")

@@ -21,7 +21,15 @@ const dataPlaneRetentionHelp = "Data-plane session, result, and idempotency rete
 // Render resolves the manifest and atomically replaces generated environment
 // artifacts. The manifest and its referenced secret files remain authoritative.
 func Render(manifestPath, environmentPath string) (ResolvedDeployment, error) {
-	resolved, err := Resolve(manifestPath)
+	return render(manifestPath, environmentPath, true)
+}
+
+func renderForAcceptedInstaller(manifestPath, environmentPath string) (ResolvedDeployment, error) {
+	return render(manifestPath, environmentPath, false)
+}
+
+func render(manifestPath, environmentPath string, validateSameHost bool) (ResolvedDeployment, error) {
+	resolved, err := resolvePath(manifestPath, validateSameHost)
 	if err != nil {
 		return ResolvedDeployment{}, err
 	}
