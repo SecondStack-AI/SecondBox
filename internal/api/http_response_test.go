@@ -15,20 +15,20 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
-func TestArtifactDownloadClientDisconnectLogsAndDoesNotPanic(t *testing.T) {
+func TestResponseWriteClientDisconnectLogsAndDoesNotPanic(t *testing.T) {
 	var logs bytes.Buffer
 	apiHandler := &handler{
 		logger: slog.New(slog.NewTextHandler(&logs, nil)),
 	}
-	request := httptest.NewRequest("GET", "/v1/artifacts/art_1/content", nil)
+	request := httptest.NewRequest("GET", "/v1/sandboxes/sbx_1/files?path=output.txt", nil)
 	request.Header.Set("X-Request-ID", "request-disconnect")
 	writer := &disconnectingWriter{maximumBytes: 4}
 
 	apiHandler.writeResponseBytes(
 		writer,
 		request,
-		"Artifact download",
-		[]byte("artifact-content"),
+		"file download",
+		[]byte("file-content"),
 	)
 
 	if writer.written != 4 {
@@ -36,9 +36,9 @@ func TestArtifactDownloadClientDisconnectLogsAndDoesNotPanic(t *testing.T) {
 	}
 	for _, fragment := range []string{
 		"SecondBox HTTP response write aborted",
-		"Artifact download",
+		"file download",
 		"client disconnected",
-		"/v1/artifacts/art_1/content",
+		"/v1/sandboxes/sbx_1/files",
 		"request-disconnect",
 	} {
 		if !strings.Contains(logs.String(), fragment) {

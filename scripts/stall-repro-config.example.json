@@ -186,7 +186,6 @@
     "leaseSeconds": 60,
     "snapshotLimit": 32,
     "snapshotRetentionSeconds": 86400,
-    "artifactRetentionSeconds": 86400,
     "maximumDeadlineMilliseconds": 60000,
     "maximumBufferedOutputBytes": 1048576,
     "streamWindowBytes": 65536,
@@ -198,8 +197,6 @@
   "subjectMaxActiveInstances": 160,
   "subjectMaxConcurrentOperations": 640,
   "subjectMaxSnapshots": 400,
-  "subjectMaxArtifactBytes": 10737418240,
-  "subjectMaxArtifacts": 100,
   "subjectMaxPortSessions": 100,
   "subjectMaxCpuMillis": 160000,
   "subjectMaxMemoryBytes": 85899345920

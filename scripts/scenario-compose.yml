@@ -17,51 +17,6 @@ services:
       timeout: 5s
       retries: 60
 
-  object-store:
-    image: docker.io/rustfs/rustfs:1.0.0-beta.11
-    command: ["/data"]
-    environment:
-      RUSTFS_ACCESS_KEY: scenario-object-user
-      RUSTFS_SECRET_KEY: scenario-object-password-000000000000
-      RUSTFS_ADDRESS: ":9000"
-      RUSTFS_CONSOLE_ADDRESS: ":9001"
-      RUSTFS_CONSOLE_ENABLE: "false"
-      RUSTFS_HEALTH_ENDPOINT_ENABLE: "true"
-    volumes:
-      - object-store-data:/data
-    healthcheck:
-      test:
-        - CMD
-        - curl
-        - --fail
-        - --silent
-        - --show-error
-        - --max-time
-        - "3"
-        - http://127.0.0.1:9000/health/ready
-      interval: 1s
-      timeout: 5s
-      retries: 60
-
-  object-store-init:
-    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
-    depends_on:
-      object-store:
-        condition: service_healthy
-    restart: "no"
-    entrypoint: ["/usr/bin/mc"]
-    command: ["mb", "--ignore-existing", "secondbox/scenario"]
-    environment:
-      MC_CONFIG_DIR: /tmp/mc
-      MC_HOST_secondbox: http://scenario-object-user:scenario-object-password-000000000000@object-store:9000
-    read_only: true
-    tmpfs:
-      - /tmp:size=8m,mode=1777
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-
   control-plane:
     image: docker.io/library/golang:1.25.12-bookworm
     user: "${SECONDBOX_SCENARIO_UID:?SECONDBOX_SCENARIO_UID is required}:${SECONDBOX_SCENARIO_GID:?SECONDBOX_SCENARIO_GID is required}"
@@ -69,19 +24,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      object-store-init:
-        condition: service_completed_successfully
     environment:
       SECONDBOX_PLATFORM_TOKEN: ${SECONDBOX_PLATFORM_TOKEN:?SECONDBOX_PLATFORM_TOKEN is required}
       SECONDBOX_APPLICATION_AUTHORITIES_JSON: ${SECONDBOX_APPLICATION_AUTHORITIES_JSON:?SECONDBOX_APPLICATION_AUTHORITIES_JSON is required}
       SECONDBOX_DATABASE_URL: postgresql://secondbox:secondbox-scenario-password@postgres:5432/secondbox_scenario?sslmode=disable
       SECONDBOX_DEFAULT_SUBJECT_MAX_ACTIVE_INSTANCES: ${SECONDBOX_SCENARIO_SUBJECT_MAX_ACTIVE_INSTANCES:?SECONDBOX_SCENARIO_SUBJECT_MAX_ACTIVE_INSTANCES is required}
-      SECONDBOX_DEFAULT_SUBJECT_MAX_ARTIFACTS: ${SECONDBOX_SCENARIO_SUBJECT_MAX_ARTIFACTS:?SECONDBOX_SCENARIO_SUBJECT_MAX_ARTIFACTS is required}
       SECONDBOX_DEFAULT_SUBJECT_MAX_CONCURRENT_OPERATIONS: ${SECONDBOX_SCENARIO_SUBJECT_MAX_CONCURRENT_OPERATIONS:?SECONDBOX_SCENARIO_SUBJECT_MAX_CONCURRENT_OPERATIONS is required}
       SECONDBOX_DEFAULT_SUBJECT_MAX_CPU_MILLIS: ${SECONDBOX_SCENARIO_SUBJECT_MAX_CPU_MILLIS:?SECONDBOX_SCENARIO_SUBJECT_MAX_CPU_MILLIS is required}
       SECONDBOX_DEFAULT_SUBJECT_MAX_MEMORY_BYTES: ${SECONDBOX_SCENARIO_SUBJECT_MAX_MEMORY_BYTES:?SECONDBOX_SCENARIO_SUBJECT_MAX_MEMORY_BYTES is required}
       SECONDBOX_DEFAULT_SUBJECT_MAX_PORT_SESSIONS: ${SECONDBOX_SCENARIO_SUBJECT_MAX_PORT_SESSIONS:?SECONDBOX_SCENARIO_SUBJECT_MAX_PORT_SESSIONS is required}
-      SECONDBOX_DEFAULT_SUBJECT_MAX_ARTIFACT_BYTES: ${SECONDBOX_SCENARIO_SUBJECT_MAX_ARTIFACT_BYTES:?SECONDBOX_SCENARIO_SUBJECT_MAX_ARTIFACT_BYTES is required}
       SECONDBOX_DEFAULT_SUBJECT_MAX_SANDBOXES: ${SECONDBOX_SCENARIO_SUBJECT_MAX_SANDBOXES:?SECONDBOX_SCENARIO_SUBJECT_MAX_SANDBOXES is required}
       SECONDBOX_DEFAULT_SUBJECT_MAX_SNAPSHOTS: ${SECONDBOX_SCENARIO_SUBJECT_MAX_SNAPSHOTS:?SECONDBOX_SCENARIO_SUBJECT_MAX_SNAPSHOTS is required}
       SECONDBOX_HTTP_TIMEOUT_SECONDS: ${SECONDBOX_SCENARIO_HTTP_TIMEOUT_SECONDS:?SECONDBOX_SCENARIO_HTTP_TIMEOUT_SECONDS is required}
@@ -97,16 +48,6 @@ services:
       SECONDBOX_SCHEDULER_SERIALIZATION_RETRY_LIMIT: "3"
       SECONDBOX_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS: ${SECONDBOX_SCENARIO_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS:?SECONDBOX_SCENARIO_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS is required}
       SECONDBOX_SIGNED_ASSET_CATALOG_PATH: /opt/secondbox/signed-assets.json
-      SECONDBOX_OBJECT_STORE_ENDPOINT: http://object-store:9000
-      SECONDBOX_OBJECT_STORE_REGION: us-east-1
-      SECONDBOX_OBJECT_STORE_BUCKET: scenario
-      SECONDBOX_OBJECT_STORE_ROOT_USER: scenario-object-user
-      SECONDBOX_OBJECT_STORE_ROOT_PASSWORD: scenario-object-password-000000000000
-      SECONDBOX_OBJECT_STORE_USE_PATH_STYLE: "true"
-      SECONDBOX_OBJECT_STORE_RETRY_MAX_ATTEMPTS: "3"
-      SECONDBOX_OBJECT_STORE_HTTP_TIMEOUT_MILLISECONDS: "30000"
-      SECONDBOX_OBJECT_STORE_TEMP_DIRECTORY: /tmp
-      SECONDBOX_OBJECT_STORE_MAX_OBJECT_BYTES: "10737418240"
       SECONDBOX_LISTEN_ADDR: "0.0.0.0:8080"
       SECONDBOX_PUBLIC_BASE_URL: "http://127.0.0.1:${SECONDBOX_SCENARIO_API_PORT:?SECONDBOX_SCENARIO_API_PORT is required}"
       SECONDBOX_LOG_PATH: /tmp/secondbox-scenario.log
@@ -296,9 +237,6 @@ services:
       - ${SECONDBOX_SCENARIO_STATE_DIR:?SECONDBOX_SCENARIO_STATE_DIR is required}:/var/lib/secondbox-runner:rshared
       - ${SECONDBOX_SCENARIO_WORKSPACE_DIR:?SECONDBOX_SCENARIO_WORKSPACE_DIR is required}:/w:rshared
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
-
-volumes:
-  object-store-data:
 
 networks:
   default:

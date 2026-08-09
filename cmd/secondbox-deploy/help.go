@@ -18,7 +18,6 @@ func secondboxDeployHelp() cliui.Help {
 			{Key: "verify", Value: "verify a release artifact manifest"},
 			{Key: "inspect", Value: "emit redacted deployment JSON"},
 			{Key: "render", Value: "render a process environment file"},
-			{Key: "migrate", Value: "migrate a legacy environment"},
 			{Key: "compose", Value: "run config, prepare, up, or down"},
 		},
 		Options: []cliui.Pair{

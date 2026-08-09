@@ -27,16 +27,15 @@ The reviewed development topology intentionally starts no privileged Runner. Run
 
 ## The deployment manifest
 
-[`deploy/secondbox.example.toml`](../../deploy/secondbox.example.toml) documents `schema_version = 1` and every accepted field. The manifest has eight decision groups:
+[`deploy/secondbox.example.toml`](../../deploy/secondbox.example.toml) documents `schema_version = 1` and every accepted field. The manifest has seven decision groups:
 
 1. `deployment`: mode, public ingress, TLS termination, process bind addresses, and image references;
 2. `database`: bundled or external PostgreSQL and the authority required by that choice;
-3. `object_store`: bundled or external S3-compatible storage, addressing, bucket, region, temporary path, and credentials;
-4. `[[runners]]`: immutable Runner IDs, same-host or remote placement, pool, capacity, host integration, networking, and execution assets;
-5. `runner_trust`: enrollment credential, CA, server identity, and certificate policy;
-6. `applications`: platform and application authorities;
-7. `standard_resources`: verified release manifest, explicit standard bundles, typed RunnerPool inventory, and apply readiness bound;
-8. `policy` and `overrides`: subject quota limits, data-plane retention, contested recovery/rollout settings, and intentionally selected tuning overrides.
+3. `[[runners]]`: immutable Runner IDs, same-host or remote placement, pool, capacity, host integration, networking, and execution assets;
+4. `runner_trust`: enrollment credential, CA, server identity, and certificate policy;
+5. `applications`: platform and application authorities;
+6. `standard_resources`: verified release manifest, explicit standard bundles, typed RunnerPool inventory, and apply readiness bound;
+7. `policy` and `overrides`: subject quota limits, data-plane retention, contested recovery/rollout settings, and intentionally selected tuning overrides.
 
 Unknown keys, duplicate keys, unsupported schema versions, ambiguous bundled/external fields, incomplete authority, mutable production images, invalid cross-field relationships, and invalid cryptographic trust material fail with a `SecondBox deployment manifest` error. The decoder does not interpolate `${ENV}`, include files, or merge ambient environment variables.
 
@@ -57,7 +56,7 @@ Runner host paths are different: they are typed absolute values interpreted on t
 
 ### Authority, policy, tuning, and compiled facts
 
-Required deployment authority has no default. This includes identities, credentials, endpoints, process and storage paths, signed-asset catalog, verified artifact manifest, explicit standard-bundle selection, typed RunnerPool inventory, object-store addressing mode, the nine subject quota limits, and data-plane retention. Runtime and toolchain digests are resolved from the verified artifact manifest rather than copied into policy fields.
+Required deployment authority has no default. This includes identities, credentials, endpoints, process and storage paths, signed-asset catalog, verified artifact manifest, explicit standard-bundle selection, typed RunnerPool inventory, the seven subject quota limits, and data-plane retention. Runtime and toolchain digests are resolved from the verified artifact manifest rather than copied into policy fields.
 
 `policy.data_plane_retention_seconds` participates in each data-plane session's result and idempotency deadline. The retained session row contains bounded one-shot results, terminal outcome, admission replay, and accounting, but no streaming payload bytes.
 
@@ -79,11 +78,10 @@ An incomplete production initialization is intentionally unusable and reports ev
 
 - digest-pinned control-plane and Runner images, public HTTPS ingress, and external TLS termination;
 - bundled or external database authority, with `sslmode=verify-full` for an external database;
-- bundled object storage at its explicit private Compose endpoint, or external object-store authority at an HTTPS endpoint;
 - zero or more explicit immutable Runner declarations and their placement;
 - an operator-supplied signed-asset catalog, verified release artifact manifest, explicit standard-bundle and RunnerPool inventory selection, Runner CA, and server keypair;
 - independent platform, application, and Runner enrollment authorities;
-- all nine subject quota limits;
+- all seven subject quota limits;
 - retention, contested recovery/rollout policy, and any intentional tuning overrides.
 
 Automation can materialize a complete create-only target non-interactively after generating and reviewing the same typed input:
@@ -118,7 +116,7 @@ just deploy-down /secure/secondbox-deployment/secondbox.toml
 
 The deployment command supplies the project name, env file, and exact overlay list explicitly. It removes ambient `SECONDBOX_*` and `COMPOSE_*` variables and retains only Docker client connectivity variables, so `COMPOSE_PROJECT_NAME` never reaches Docker; the project name comes from the manifest alone.
 
-The base [`deploy/compose.yml`](../../deploy/compose.yml) contains the control plane and shared resources; `compose.explicit-network.yml` applies a manifest-reviewed backend CIDR when one is stated; `compose.development.yml` adds the reviewed local database and object-store pair; production selects independent bundled-database and bundled-object-store overlays only when requested; `compose.same-host-runner.yml` adds only the privileged Runner. Inactive services are never hidden behind profiles that still interpolate missing values.
+The base [`deploy/compose.yml`](../../deploy/compose.yml) contains the control plane and shared resources; `compose.explicit-network.yml` applies a manifest-reviewed backend CIDR when one is stated; `compose.development.yml` adds the reviewed local database; production selects the bundled-database overlay only when requested; `compose.same-host-runner.yml` adds only the privileged Runner. Inactive services are never hidden behind profiles that still interpolate missing values.
 
 `deployment.compose_project_name` names the Compose project. It is optional and defaults to `secondbox`, so a manifest written before the key existed keeps deploying exactly where it always did. Compose derives every container, volume, and network name from it, which makes it the isolation boundary between deployments: two deployments that share one Docker daemon must state different project names, or the second `up` binds the first's volumes and recreates its containers instead of failing. The name must start with a lowercase letter or digit and use at most 63 lowercase letters, digits, underscores, or hyphens.
 
@@ -316,23 +314,11 @@ The command signs a client certificate carrying `spiffe://secondbox/runner/<runn
 
 Selected RunnerPools and standard Profile lineages are checked and applied after the control plane becomes ready. A repeated deployment is a no-op; an interrupted application resumes from the verified installed prefix. Each Runner in a selected pool maps the standard Profile's logical gateway in `network_policy_runner_gateways`. See [declarative resources](declarative-resources.md).
 
-## One-shot migration from the legacy environment
-
-The former editable environment interface is intentionally replaced. Migrate one already validated legacy environment without modifying it:
-
-```sh
-secondbox-deploy migrate \
-  /secure/legacy/secondbox.env \
-  /secure/secondbox-deployment
-```
-
-Migration requires a mode-`0600` regular source with exactly the historical 146 names. It rejects unknown, duplicate, missing, placeholder, or invalid values; extracts inline secrets into protected referenced files; writes the manifest once; pins the legacy tuning values as explicit overrides; and removes the obsolete protocol declarations. It refuses an existing target and cleans up only artifacts it created after a failure. Migration is not a runtime compatibility path: all later validation, rendering, inspection, and Compose commands consume only the manifest.
-
 ## Recovery and replacement
 
-PostgreSQL owns desired state, authoritative home assignments, generations, Leases, profiles, audit, and reconciliation. S3-compatible storage owns Artifacts and immutable execution assets. Each home Runner's reflink-capable workspace root owns its Workspaces and local Snapshots. Ordinary lifecycle and recovery never relocate a Sandbox; only the operator-initiated stopped-Sandbox relocation Operation may change its home. Neither PostgreSQL nor object storage can reconstruct a lost unbacked Runner workspace filesystem.
+PostgreSQL owns desired state, authoritative home assignments, generations, Leases, profiles, audit, and reconciliation. Each home Runner's reflink-capable workspace root owns its Workspaces and local Snapshots. Ordinary lifecycle and recovery never relocate a Sandbox; only the operator-initiated stopped-Sandbox relocation Operation may change its home. PostgreSQL cannot reconstruct a lost unbacked Runner workspace filesystem.
 
-Before replacement, take and verify a coordinated PostgreSQL/Artifact backup and quiescent backups of every affected Runner identity plus workspace root. Restore each stable Runner identity and workspace root as one consistent unit. The generated environment can be reproduced from `secondbox.toml` and its referenced secret material; it is not backup authority.
+Before replacement, take and verify a PostgreSQL backup and quiescent backups of every affected Runner identity plus workspace root. Restore each stable Runner identity and workspace root as one consistent unit. The generated environment can be reproduced from `secondbox.toml` and its referenced secret material; it is not backup authority.
 
 Every `secondboxd` applies the embedded ordered migration lineage under a PostgreSQL advisory lock before opening listeners. Use coordinated replacement unless the exact deployment has independently proven mixed-version operation.
 

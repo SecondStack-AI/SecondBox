@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SecondStack-AI/SecondBox/internal/objectstore"
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
@@ -88,15 +87,6 @@ type SnapshotStore interface {
 	GetSnapshot(ctx context.Context, tenantRef, subjectRef, snapshotID string, now time.Time) (contracts.Snapshot, error)
 }
 
-// ArtifactStore owns immutable artifact publication and retention.
-type ArtifactStore interface {
-	StageArtifact(ctx context.Context, input ports.ArtifactPublicationInput) (contracts.Artifact, error)
-	PublishArtifact(ctx context.Context, input ports.ArtifactPublicationInput, now time.Time) (contracts.Artifact, error)
-	ListArtifacts(ctx context.Context, tenantRef, subjectRef, sandboxID string, limit int, cursor string, now time.Time) (contracts.ArtifactPage, error)
-	GetArtifactObject(ctx context.Context, tenantRef, subjectRef, artifactID string, now time.Time) (ports.ArtifactObject, error)
-	EndArtifactRetention(ctx context.Context, input ports.ArtifactRetentionInput) error
-}
-
 // ObservabilityStore owns audit and metrics reads/writes.
 type ObservabilityStore interface {
 	AppendAuditEvent(ctx context.Context, event contracts.AuditEvent) error
@@ -114,7 +104,6 @@ type ControlPlaneStore interface {
 	SandboxStore
 	ActivityStore
 	SnapshotStore
-	ArtifactStore
 	ObservabilityStore
 }
 
@@ -126,7 +115,6 @@ type ControlPlaneConfig struct {
 	Now                   func() time.Time
 	NewID                 func(string) string
 	NewCredentialMaterial func() string
-	ArtifactObjectStore   objectstore.Store
 	DataPlaneStore        DataPlaneStore
 	LiveDataPlane         *runnercontrol.LiveDataPlaneBroker
 	DataPlanePollInterval time.Duration
@@ -143,7 +131,6 @@ type ControlPlaneService struct {
 	now                   func() time.Time
 	newID                 func(string) string
 	newCredentialMaterial func() string
-	artifactObjectStore   objectstore.Store
 	dataPlaneStore        DataPlaneStore
 	liveDataPlane         *runnercontrol.LiveDataPlaneBroker
 	dataPlanePollInterval time.Duration
@@ -176,8 +163,7 @@ func NewControlPlaneService(config ControlPlaneConfig) (*ControlPlaneService, er
 		credentialSealSecret: []byte(config.PlatformToken),
 		defaultSubjectQuota:  config.DefaultSubjectQuota,
 		now:                  config.Now, newID: config.NewID, newCredentialMaterial: config.NewCredentialMaterial,
-		artifactObjectStore: config.ArtifactObjectStore,
-		dataPlaneStore:      config.DataPlaneStore, dataPlanePollInterval: config.DataPlanePollInterval,
+		dataPlaneStore: config.DataPlaneStore, dataPlanePollInterval: config.DataPlanePollInterval,
 		idempotencyRetention: config.IdempotencyRetention,
 		liveDataPlane:        config.LiveDataPlane,
 		portSessionStore:     config.PortSessionStore, publicBaseURL: config.PublicBaseURL,
@@ -1240,8 +1226,7 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 		spec.Lifecycle.MaximumDurationSeconds < 1 || spec.Lifecycle.LeaseSeconds < 1 {
 		return invalidRequest(errors.New("SecondBox Profile lifecycle limits must be positive"))
 	}
-	if spec.Retention.SnapshotRetentionSeconds < 1 ||
-		spec.Retention.SnapshotLimit < 0 || spec.Retention.ArtifactRetentionSeconds < 1 {
+	if spec.Retention.SnapshotRetentionSeconds < 1 || spec.Retention.SnapshotLimit < 0 {
 		return invalidRequest(errors.New("SecondBox Profile retention limits are invalid"))
 	}
 	if spec.Execution.MaximumDeadlineMilliseconds < 1 || spec.Execution.MaximumBufferedOutputBytes < 1 ||
@@ -1350,8 +1335,8 @@ func validateQuotaLimits(name string, quota contracts.QuotaLimits) error {
 	}
 	values := []int64{
 		quota.MaxActiveInstances, quota.MaxCPUMillis,
-		quota.MaxMemoryBytes, quota.MaxArtifactBytes, quota.MaxSnapshots,
-		quota.MaxArtifacts, quota.MaxPortSessions, quota.MaxConcurrentOperations,
+		quota.MaxMemoryBytes, quota.MaxSnapshots, quota.MaxPortSessions,
+		quota.MaxConcurrentOperations,
 	}
 	for _, value := range values {
 		if value < 0 {

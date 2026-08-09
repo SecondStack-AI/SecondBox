@@ -62,10 +62,7 @@ func runCompose(ctx context.Context, manifestPath, action string, executor Compo
 			return manifestError("compose prepare requires development mode", nil)
 		}
 		waitSeconds := fmt.Sprint(*resolved.Manifest.Deployment.DevelopmentWaitSeconds)
-		if err := executor.Run(ctx, composeUpArgumentsInternal(arguments, "--detach", "--wait", "--wait-timeout", waitSeconds, "postgres", "object-store")); err != nil {
-			return err
-		}
-		return executor.Run(ctx, composeUpArgumentsInternal(arguments, "--no-deps", "object-store-init"))
+		return executor.Run(ctx, composeUpArgumentsInternal(arguments, "--detach", "--wait", "--wait-timeout", waitSeconds, "postgres"))
 	case "up":
 		arguments = composeUpArgumentsInternal(arguments, "--detach")
 	case "down":
@@ -87,7 +84,7 @@ func runCompose(ctx context.Context, manifestPath, action string, executor Compo
 // PurgeComposeVolumes removes the exact validated deployment's containers,
 // networks, and named volumes. It is intentionally separate from ordinary
 // Compose down because uninstall preserves the bundled database and object
-// store while the typed permanent-purge workflow must remove them.
+// while the typed permanent-purge workflow must remove it.
 func PurgeComposeVolumes(ctx context.Context, manifestPath string, executor ComposeExecutor) error {
 	return purgeComposeVolumes(ctx, manifestPath, executor, true)
 }

@@ -28,7 +28,7 @@ func TestSecondBoxBaselineOwnsCleanLogicalSchemaWithoutPhysicalCrossTableConstra
 		"profiles", "profile_revisions",
 		"runner_pools", "runners", "sandboxes", "workspaces", "instances",
 		"assignments", "assignment_stage_timings", "leases", "activity_sessions", "activity_touches",
-		"snapshots", "workspace_restores", "artifacts",
+		"snapshots", "workspace_restores",
 		"port_sessions", "data_plane_sessions", "data_plane_frames",
 		"operations", "idempotency_records", "audit_events",
 	} {
@@ -116,7 +116,6 @@ func TestOwnershipColumnsAndSubjectQuotaArePresentAfterFreshMigration(t *testing
 		"activity_touches",
 		"snapshots",
 		"workspace_restores",
-		"artifacts",
 		"port_sessions",
 		"data_plane_sessions",
 		"operations",
@@ -139,7 +138,7 @@ func TestOwnershipColumnsAndSubjectQuotaArePresentAfterFreshMigration(t *testing
 			migrated := table == "sandboxes" || table == "workspaces" ||
 				table == "leases" || table == "activity_sessions" ||
 				table == "activity_touches" || table == "snapshots" ||
-				table == "workspace_restores" || table == "artifacts" ||
+				table == "workspace_restores" ||
 				table == "port_sessions" || table == "data_plane_sessions" ||
 				table == "operations" || table == "idempotency_records" ||
 				table == "audit_events"

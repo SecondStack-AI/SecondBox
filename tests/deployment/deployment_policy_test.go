@@ -3,8 +3,6 @@ package deployment_test
 import (
 	"bytes"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,17 +18,17 @@ func TestComposeSeparatesOptionalPrivilegedRunnerFromControlPlane(t *testing.T) 
 	base := readRepositoryFile(t, "deploy/compose.yml")
 	development := readRepositoryFile(t, "deploy/compose.development.yml")
 	runner := readRepositoryFile(t, "deploy/compose.same-host-runner.yml")
-	for _, forbidden := range []string{"same-host-runner:", "postgres:", "object-store:", "profiles:", "SECONDBOX_RUNNER_PROTOCOL_MINIMUM", "SECONDBOX_RUNNER_PROTOCOL_MAXIMUM"} {
+	for _, forbidden := range []string{"same-host-runner:", "postgres:", "profiles:", "SECONDBOX_RUNNER_PROTOCOL_MINIMUM", "SECONDBOX_RUNNER_PROTOCOL_MAXIMUM"} {
 		if strings.Contains(base, forbidden) {
 			t.Errorf("base Compose model contains inactive topology %q", forbidden)
 		}
 	}
-	for _, required := range []string{"control-plane:", "runner-pki-init:", "SECONDBOX_HTTP_TIMEOUT_SECONDS:", "SECONDBOX_OBJECT_STORE_MAX_OBJECT_BYTES:"} {
+	for _, required := range []string{"control-plane:", "runner-pki-init:", "SECONDBOX_HTTP_TIMEOUT_SECONDS:"} {
 		if !strings.Contains(base, required) {
 			t.Errorf("base Compose model missing %q", required)
 		}
 	}
-	for _, required := range []string{"postgres:", "object-store:", "object-store-init:", "pg_isready -h 127.0.0.1"} {
+	for _, required := range []string{"postgres:", "pg_isready -h 127.0.0.1"} {
 		if !strings.Contains(development, required) {
 			t.Errorf("development overlay missing %q", required)
 		}
@@ -244,20 +242,7 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 	}
 }
 
-func TestDeploymentCannotReconstructAbsentHomeFromAvailableObjectStore(t *testing.T) {
-	objectStore := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.WriteHeader(http.StatusOK)
-	}))
-	defer objectStore.Close()
-	response, err := http.Get(objectStore.URL)
-	if err != nil {
-		t.Fatalf("prove object store availability: %v", err)
-	}
-	response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("object store status = %d", response.StatusCode)
-	}
-
+func TestDeploymentCannotReconstructAbsentHomeOnReplacementRunner(t *testing.T) {
 	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 	requirements := scheduler.Requirements{
 		PoolName: "deployment", BackendKind: "firecracker", Architecture: "amd64",
@@ -285,7 +270,7 @@ func TestDeploymentCannotReconstructAbsentHomeFromAvailableObjectStore(t *testin
 		"runner-home", requirements, []scheduler.RunnerSnapshot{replacement},
 		now, 30*time.Second,
 	); !errors.Is(err, scheduler.ErrHomeRunnerUnavailable) {
-		t.Fatalf("available S3 and replacement Runner changed exact-home result: %v", err)
+		t.Fatalf("replacement Runner changed exact-home result: %v", err)
 	}
 }
 
@@ -310,7 +295,6 @@ func TestSupportBundleCollectionIsBoundedAndSecretAvoiding(t *testing.T) {
 	for _, forbidden := range []string{
 		"BOOTSTRAP_ADMIN_TOKEN",
 		"API_KEY_HASH_SECRET",
-		"OBJECT_STORE_ROOT_PASSWORD",
 		"env >",
 		"printenv",
 	} {
@@ -454,16 +438,14 @@ printf '%s\n' '{"id":"audit-1","action":"project.created"}'
 	}
 }
 
-func TestBackupScriptContainsOnlyDatabaseAndArtifactAuthority(t *testing.T) {
+func TestBackupScriptContainsOnlyDatabaseAuthority(t *testing.T) {
 	backup := readRepositoryFile(t, "scripts/backup.sh")
 
 	for _, required := range []string{
-		"secondbox-backup/v3",
-		"secondbox-backup-database-state/v2",
-		"secondbox-backup-publication-fence/v1",
+		"secondbox-backup/v4",
+		"secondbox-backup-database-state/v3",
+		"secondbox-backup-database-fence/v1",
 		"database-share-lock-held",
-		"SECONDBOX_BACKUP_OBJECT_EXPORT",
-		"secondbox-artifact-reachability/v1",
 		"databaseRecoveryPosition",
 		"--schema=secondbox",
 		"psql",
@@ -487,7 +469,7 @@ func TestBackupScriptContainsOnlyDatabaseAndArtifactAuthority(t *testing.T) {
 		"materialization",
 	} {
 		if strings.Contains(backup, forbidden) {
-			t.Errorf("artifact-only backup script contains stale Workspace authority %q", forbidden)
+			t.Errorf("database-only backup script contains stale Workspace authority %q", forbidden)
 		}
 	}
 	restorePath := filepath.Join(repositoryRootForDeploymentPolicy(t), "scripts", "restore-drill.sh")
@@ -520,7 +502,7 @@ case "$*" in
     ;;
 esac
 printf '%s\n' \
-  '{"contractVersion":"secondbox-backup-database-state/v2","databaseRecoveryPosition":"0/ABC","quiescence":{"activeSandboxes":1,"activeAssignments":0,"activeLifecycleEffects":0,"activeObjectPublications":0,"activeDataPlaneSessions":0},"fencing":{"activeInstances":0,"activeAssignments":0},"objects":[]}'`)
+  '{"contractVersion":"secondbox-backup-database-state/v3","databaseRecoveryPosition":"0/ABC","quiescence":{"activeSandboxes":1,"activeAssignments":0,"activeLifecycleEffects":0,"activeDataPlaneSessions":0},"fencing":{"activeInstances":0,"activeAssignments":0}}'`)
 	command := exec.Command(filepath.Join(repositoryRoot, "scripts", "backup.sh"))
 	command.Env = append(os.Environ(),
 		"PATH="+fakeBin+":"+os.Getenv("PATH"),
@@ -528,7 +510,6 @@ printf '%s\n' \
 		"SECONDBOX_BACKUP_DATABASE_URL=postgresql://backup@example/secondbox",
 		"SECONDBOX_BACKUP_DIR="+t.TempDir(),
 		"SECONDBOX_BACKUP_RECOVERY_POINT_ID=test-recovery-point",
-		"SECONDBOX_BACKUP_OBJECT_EXPORT="+t.TempDir(),
 	)
 	output, err := command.CombinedOutput()
 	if err == nil {
@@ -542,7 +523,7 @@ printf '%s\n' \
 	}
 }
 
-func TestBackupHoldsSharedDatabasePublicationFenceThroughDump(t *testing.T) {
+func TestBackupHoldsSharedDatabaseFenceThroughDump(t *testing.T) {
 	backup := readRepositoryFile(t, "scripts/backup.sh")
 	dumpIndex := strings.LastIndex(backup, "\npg_dump ")
 	if dumpIndex < 0 {
@@ -555,35 +536,32 @@ func TestBackupHoldsSharedDatabasePublicationFenceThroughDump(t *testing.T) {
 	} {
 		index := strings.Index(backup, required)
 		if index < 0 {
-			t.Fatalf("backup publication fence is missing %q", required)
+			t.Fatalf("backup fence is missing %q", required)
 		}
 		if index >= dumpIndex {
-			t.Fatalf("backup acquires publication fence after pg_dump at %q", required)
+			t.Fatalf("backup acquires its fence after pg_dump at %q", required)
 		}
 	}
 	if !strings.Contains(backup, "COMMIT;") {
-		t.Fatal("backup publication fence has no successful release")
+		t.Fatal("backup fence has no successful release")
 	}
-	for _, forbidden := range []string{
-		"publication must already be stopped",
-		"does not expose a shared backup publication fence",
-	} {
+	for _, forbidden := range []string{"database mutations must already be stopped", "does not expose a shared backup fence"} {
 		if strings.Contains(backup, forbidden) {
-			t.Fatalf("backup still delegates publication fencing to the operator: %q", forbidden)
+			t.Fatalf("backup still delegates database fencing to the operator: %q", forbidden)
 		}
 	}
 }
 
-func TestBackupArtifactManifestContainsNoWorkspaceImages(t *testing.T) {
+func TestBackupManifestContainsNoWorkspaceImagesOrObjectState(t *testing.T) {
 	backup := readRepositoryFile(t, "scripts/backup.sh")
-	for _, required := range []string{"secondbox-backup/v3", "secondbox-artifact-reachability/v1", "artifactReachability"} {
+	for _, required := range []string{"secondbox-backup/v4", "databaseRecoveryPosition"} {
 		if !strings.Contains(backup, required) {
-			t.Errorf("artifact-only backup script must contain %q", required)
+			t.Errorf("database-only backup script must contain %q", required)
 		}
 	}
-	for _, forbidden := range []string{"checkpoint", "workspace_checkpoints", "current_checkpoint", "freshRunner", "materialization"} {
+	for _, forbidden := range []string{"checkpoint", "workspace_checkpoints", "current_checkpoint", "freshRunner", "materialization", "object-state.tar", "artifactReachability", "SECONDBOX_BACKUP_OBJECT_EXPORT"} {
 		if strings.Contains(backup, forbidden) {
-			t.Errorf("artifact-only backup script retains %q", forbidden)
+			t.Errorf("database-only backup script retains %q", forbidden)
 		}
 	}
 }

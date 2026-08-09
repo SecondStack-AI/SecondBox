@@ -52,9 +52,7 @@ setup_candidate_registry() {
 
   docker pull "$registry_image" >/dev/null
   for reference in \
-    "$(jq -er .bundledServices.postgres "$manifest")" \
-    "$(jq -er .bundledServices.objectStore "$manifest")" \
-    "$(jq -er .bundledServices.objectStoreClient "$manifest")"; do
+    "$(jq -er .bundledServices.postgres "$manifest")"; do
     docker pull "$reference" >/dev/null
   done
 

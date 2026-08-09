@@ -216,7 +216,7 @@ Omitting the artifact, trust, and Workspace variables falls back to the prepared
 `.secondbox/stress` state.
 
 Every lifecycle run also writes a sibling diagnostics directory containing
-`runner.jsonl` and timestamped control-plane/PostgreSQL/object-store Compose
+`runner.jsonl` and timestamped control-plane/PostgreSQL Compose
 logs. Set `SECONDBOX_SCENARIO_DIAGNOSTICS_DIR` to an explicit absent absolute
 path to place it elsewhere. The runner log carries command delivery, event
 persistence, local Workspace execution, and format/fsync/publish timing needed

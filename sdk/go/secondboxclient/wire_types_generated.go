@@ -16,24 +16,6 @@ type ArgvCommand struct {
 	Mode       string   `json:"mode"`
 }
 
-type Artifact struct {
-	CreatedAt  Timestamp `json:"createdAt"`
-	ExpiresAt  Timestamp `json:"expiresAt"`
-	Generation int64     `json:"generation"`
-	ID         OpaqueID  `json:"id"`
-	MediaType  string    `json:"mediaType"`
-	Metadata   Metadata  `json:"metadata"`
-	Name       string    `json:"name"`
-	SandboxID  OpaqueID  `json:"sandboxId"`
-	SHA256     string    `json:"sha256"`
-	SizeBytes  int64     `json:"sizeBytes"`
-}
-
-type ArtifactPage struct {
-	Items      []Artifact `json:"items"`
-	NextCursor *string    `json:"nextCursor,omitempty"`
-}
-
 type BootStage = string
 
 const (
@@ -664,14 +646,6 @@ type UpdateRunnerPoolRequest struct {
 
 type UpdateSandboxMetadataRequest struct {
 	Metadata Metadata `json:"metadata"`
-}
-
-type UploadArtifactRequest struct {
-	Content   string   `json:"content"`
-	MediaType string   `json:"mediaType"`
-	Metadata  Metadata `json:"metadata"`
-	Name      string   `json:"name"`
-	SHA256    string   `json:"sha256"`
 }
 
 type WaitSandboxRequest struct {

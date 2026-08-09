@@ -51,7 +51,7 @@ Workspace choices are:
 - An existing dedicated, non-root XFS or Btrfs mount with at least 65 GiB available. The mount must permit executable files and device nodes because Firecracker executes and opens KVM/TUN devices inside its per-Instance jail. The installer creates one operation-specific Runner storage tree there for verified execution assets, run state, Workspaces, and local Snapshots.
 - A fully allocated Btrfs filesystem image of at least 65 GiB. The image contains the same complete Runner storage tree and is mounted `nosuid` while permitting the execution and device access required by the jailer. It is portable and size-bounded, but its availability still depends on the backing filesystem and its systemd loop mount. Back it up as durable Runner storage, not as a replaceable cache.
 
-The final review lists the release version and manifest, seven digest-pinned OCI images, signing-key fingerprint, expected downloads, disk allocation, the explicit vendor-neutral Firecracker CPU-template choice (`None`), all generated authority categories, exact paths, services, retention, capacity, network settings, CLI upgrade policy, and uninstall behavior. Confirmation creates a mode-`0600` plan and receipt before any secret or host resource exists. The guided single-host topology intentionally exposes the host CPU feature set instead of applying Firecracker's vendor-specific static templates; snapshots remain Runner-local and a running Sandbox never relocates.
+The final review lists the release version and manifest, five digest-pinned OCI images, signing-key fingerprint, expected downloads, disk allocation, the explicit vendor-neutral Firecracker CPU-template choice (`None`), all generated authority categories, exact paths, services, retention, capacity, network settings, CLI upgrade policy, and uninstall behavior. Confirmation creates a mode-`0600` plan and receipt before any secret or host resource exists. The guided single-host topology intentionally exposes the host CPU feature set instead of applying Firecracker's vendor-specific static templates; snapshots remain Runner-local and a running Sandbox never relocates.
 
 ## Privileged actions
 
@@ -68,7 +68,7 @@ It never formats a physical block device, installs distribution packages, edits 
 
 The plan records the exact operation directory, manifest, secrets, Runner identity, reflink-capable Runner storage root, verified artifact directory, Runner state paths, Workspace, optional filesystem image and mount unit, CLI configuration, and installed binary paths. Before downloading release bytes, the installer checks both binary destinations and the CLI configuration destination. A missing target is created, an exact release binary is adopted, and an older executable is replaced atomically only when its embedded Go main-package and module identities are exactly the corresponding SecondBox CLI. An existing configuration is replaced atomically only when it has the reviewed mode and ownership and strictly decodes as a complete SecondBox session document. Any unrelated file, symbolic link, ownership change, permission change, or malformed configuration is refused without modification. A purged installation removes the reviewed, receipt-managed CLI binaries and configuration even when they replaced an older SecondBox release. The verified assets, run/jail/cache state, and Workspace are sibling subtrees on the selected filesystem; WorkspaceStore remains the only component that resolves paths beneath the Workspace subtree. The installer creates unique application, platform, Runner-enrollment, and Runner-PKI authority in protected referenced files. No secret value enters the plan, receipt, command arguments, or installer output.
 
-It then pulls exactly the control-plane, Runner, microVM-artifact, installer-tools, PostgreSQL, object-store, and object-store-client images by digest; verifies every release object and the fixed microVM bundle allowlist; publishes the artifact directory atomically on Runner storage; generates the explicit manifest; enrolls the Runner; starts Compose; logs in the local CLI; waits for advertised cold-boot capacity; and runs:
+It then pulls exactly the control-plane, Runner, microVM-artifact, installer-tools, and PostgreSQL images by digest; verifies every release object and the fixed microVM bundle allowlist; publishes the artifact directory atomically on Runner storage; generates the explicit manifest; enrolls the Runner; starts Compose; logs in the local CLI; waits for advertised cold-boot capacity; and runs:
 
 ```sh
 secondbox run durable-coding -- python3 -c 'print("hello from a microVM")'
@@ -175,11 +175,11 @@ secondbox-deploy install --support /absolute/path/to/operation \
   --output /secure/path/secondbox-installer-support.tar.gz
 ```
 
-The archive is create-only and mode `0600`. It contains no plan document, process environment, token, private key, Workspace content, database row, or object-store object. Collection rejects output containing any exact installed secret value or a secret-bearing marker. Review bounded Runner log text before sharing it.
+The archive is create-only and mode `0600`. It contains no plan document, process environment, token, private key, Workspace content, or database row. Collection rejects output containing any exact installed secret value or a secret-bearing marker. Review bounded Runner log text before sharing it.
 
 ## Uninstall and purge
 
-Ordinary uninstall stops the Compose project and deliberately preserves the manifest, secrets, Runner identity, database and object-store volumes, verified artifacts, binaries, CLI configuration, Workspace, optional Btrfs image and mount unit, and receipt:
+Ordinary uninstall stops the Compose project and deliberately preserves the manifest, secrets, Runner identity, database volume, verified artifacts, binaries, CLI configuration, Workspace, optional Btrfs image and mount unit, and receipt:
 
 ```sh
 secondbox-deploy uninstall /absolute/path/to/operation
@@ -192,4 +192,4 @@ Permanent deletion is a separate workflow. Run ordinary uninstall first, inspect
 secondbox-deploy uninstall --purge /absolute/path/to/operation
 ```
 
-Purge requires an interactive typed `PURGE <operation-id>` confirmation. It first removes the exact Compose project's bundled PostgreSQL and object-store volumes, verifies and journals removal of the execution assets while the accepted release manifest remains available, and only then removes the privileged Runner storage root. All deletion remains constrained to exact plan-and-receipt-matched resources through symlink- and mount-confined operations. It refuses broad paths, globs, physical or foreign mounts, altered ownership evidence, and changed targets. The plan and receipt remain as a bounded tombstone.
+Purge requires an interactive typed `PURGE <operation-id>` confirmation. It first removes the exact Compose project's bundled PostgreSQL volume, verifies and journals removal of the execution assets while the accepted release manifest remains available, and only then removes the privileged Runner storage root. All deletion remains constrained to exact plan-and-receipt-matched resources through symlink- and mount-confined operations. It refuses broad paths, globs, physical or foreign mounts, altered ownership evidence, and changed targets. The plan and receipt remain as a bounded tombstone.

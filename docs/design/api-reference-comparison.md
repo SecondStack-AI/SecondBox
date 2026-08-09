@@ -29,7 +29,7 @@ SecondBox deliberately keeps shell and argv distinct, uses byte-credit backpress
 
 Gondolin's VM filesystem includes binary/text and streaming reads and writes, stat, direct-child listing, mkdir, rename, and recursive/force delete across the visible guest filesystem. Microsandbox exposes binary/text and streaming access, metadata, list, mkdir, remove, copy, rename, and host-copy helpers. Kilntainers intentionally provides no separate filesystem API; agents use shell commands through `sandbox_exec`.
 
-SecondBox exposes the subset required for ordinary SDKs and Flue: binary and UTF-8 read/write, stat, direct-child list, exists, mkdir, remove, and bounded streaming transfer. It deliberately limits paths to the Workspace rather than the full guest root, does not expose host-copy paths, and separates Artifact exchange from filesystem paths.
+SecondBox exposes the subset required for ordinary SDKs and Flue: binary and UTF-8 read/write, stat, direct-child list, exists, mkdir, remove, and bounded streaming transfer. It deliberately limits paths to the Workspace rather than the full guest root and does not expose host-copy paths.
 
 ## PTY and ports
 

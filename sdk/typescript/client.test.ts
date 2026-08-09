@@ -1184,15 +1184,3 @@ test("high-level lifecycle and Metadata mutation use the observed revision fence
   assert.notEqual(idempotencies[0], "");
   assert.equal(handle.snapshot.revision, 2);
 });
-
-test("high-level Artifact download requires its bound and Digest", async () => {
-  const content = new TextEncoder().encode("artifact");
-  const digest = await crypto.subtle.digest("SHA-256", content);
-  const header = `sha-256=:${Buffer.from(digest).toString("base64")}:`;
-  const fetcher: typeof fetch = async () => new Response(content, {
-    headers: { Digest: header, "Content-Length": String(content.byteLength) },
-  });
-  const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
-  assert.deepEqual(await api.downloadArtifact("artifact-1", content.byteLength), content);
-  await assert.rejects(api.downloadArtifact("artifact-1", content.byteLength - 1), /exceeds/);
-});

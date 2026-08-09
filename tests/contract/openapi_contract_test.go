@@ -189,7 +189,7 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 			"createProfile", "reviseProfile", "createSandbox", "updateSandboxMetadata", "startSandbox",
 			"drainSandbox", "stopSandbox", "restoreSandboxSnapshot", "getOperation",
 			"executeSandboxCommand", "createSandboxExecStream", "readSandboxFile",
-			"writeSandboxFile", "uploadSandboxArtifact", "downloadArtifactContent",
+			"writeSandboxFile",
 			"createSandboxPortSession",
 			"getSandboxTiming", "getOperationTiming", "getDeploymentTiming",
 		} {
@@ -571,8 +571,7 @@ func TestDataPlaneSchemasHideProviderRunnerAndUpstreamAuthority(t *testing.T) {
 	for path, pathItem := range paths {
 		if strings.HasPrefix(path, "/v1/sandboxes") ||
 			strings.HasPrefix(path, "/v1/operations") ||
-			strings.HasPrefix(path, "/v1/leases") ||
-			strings.HasPrefix(path, "/v1/artifacts") {
+			strings.HasPrefix(path, "/v1/leases") {
 			for name := range reachableSchemaNames(t, document, pathItem) {
 				reachable[name] = true
 			}
@@ -670,15 +669,6 @@ func TestPublicResourcesAndGeneratedSDKsContainNoPrivateWorkspaceAuthority(
 	if _, exists := runnerProperties["id"]; !exists {
 		t.Fatal("administrative Runner schema lost its logical Runner ID")
 	}
-	artifactProperties := object(
-		t,
-		componentSchema(t, document, "Artifact")["properties"],
-		"Artifact.properties",
-	)
-	if _, exists := artifactProperties["sha256"]; !exists {
-		t.Fatal("Artifact schema lost its content SHA")
-	}
-
 	_, sourceFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("cannot locate SecondBox contract test source")

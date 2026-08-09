@@ -2,7 +2,7 @@
 
 SecondBox v1 does not ship or qualify Kubernetes manifests.
 
-The unprivileged control plane has no KVM, TUN/TAP, host-cgroup, host-path, or container-engine dependency, so operators may run it in Kubernetes using ordinary platform controls, external PostgreSQL, and an external S3-compatible Artifact store. The binary never receives or mounts a Runner Workspace and never gives object credentials to Runners.
+The unprivileged control plane has no KVM, TUN/TAP, host-cgroup, host-path, or container-engine dependency, so operators may run it in Kubernetes using ordinary platform controls and external PostgreSQL. The binary never receives or mounts a Runner Workspace.
 
 An operator-authored workload must expose the HTTP port behind TLS and the Runner gRPC port without replacing client-certificate identity. It must inject the platform token and pre-shared Runner credential, mount the Runner CA certificate and server keypair read-only, provide TLS-verified PostgreSQL, preserve the log path, and configure probes and every quota/protocol/timing setting explicitly. Each `secondboxd` process validates and applies the embedded ordered database migration lineage under one PostgreSQL advisory lock before opening stores or listeners; a separate workload must not bypass or rewrite that ledger. The Runner CA private key can issue Runner identities and must remain outside the control-plane workload.
 

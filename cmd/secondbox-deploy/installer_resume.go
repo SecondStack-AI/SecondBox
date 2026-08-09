@@ -311,7 +311,7 @@ func runInstallResumeWith(ctx context.Context, directory string, renderer cliui.
 		last = install.StageRunnerEnrolled
 	}
 	if last == install.StageRunnerEnrolled {
-		if err := runInstallPhase(ctx, renderer, "Compose startup", "database, object store, control plane, and Runner", func() error {
+		if err := runInstallPhase(ctx, renderer, "Compose startup", "database, control plane, and Runner", func() error {
 			if err := dependencies.Compose(ctx, manifestPath, "prepare"); err != nil {
 				return err
 			}
@@ -1039,7 +1039,7 @@ func runInstallPurge(ctx context.Context, directory string, renderer cliui.Rende
 			}
 			return statErr
 		}
-		if err := runInstallPhase(ctx, renderer, "Compose durable-data purge", "remove exact bundled database and object-store volumes", func() error {
+		if err := runInstallPhase(ctx, renderer, "Compose durable-data purge", "remove the exact bundled database volume", func() error {
 			return deployconfig.PurgeComposeVolumesForAcceptedInstaller(ctx, manifestPath, deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic})
 		}); err != nil {
 			return err

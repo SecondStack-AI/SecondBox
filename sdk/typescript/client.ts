@@ -18,8 +18,6 @@ import {
   type FileExistsResult,
   type FileStat,
   type FileWriteResult,
-  type Artifact,
-  type ArtifactPage,
   type JSONValue,
   type Lease,
   type Metadata,
@@ -51,8 +49,6 @@ import {
 } from "./transport.ts";
 
 export type {
-  Artifact,
-  ArtifactPage,
   BufferedExecRequest,
   Command,
   ExecStreamFrame,
@@ -362,50 +358,6 @@ export class SecondBox {
     requireNonempty(snapshotID, "Snapshot ID");
     return this.requestJSON<Operation>("deleteSnapshot", {
       pathParameters: { snapshotId: snapshotID },
-      headers: { "Idempotency-Key": options.idempotencyKey ?? idempotencyKey() },
-      signal: options.signal,
-    });
-  }
-
-  public getArtifact(artifactID: string, signal?: AbortSignal): Promise<Artifact> {
-    requireNonempty(artifactID, "Artifact ID");
-    return this.requestJSON<Artifact>("getArtifact", {
-      pathParameters: { artifactId: artifactID }, signal,
-    });
-  }
-
-  public async downloadArtifact(
-    artifactID: string,
-    maximumBytes: number,
-    signal?: AbortSignal,
-  ): Promise<Uint8Array> {
-    requireNonempty(artifactID, "Artifact ID");
-    requirePositiveInteger(maximumBytes, "Artifact download maximumBytes");
-    const response = await this.request("downloadArtifactContent", {
-      pathParameters: { artifactId: artifactID }, signal,
-    });
-    const declaredLength = Number(response.headers.get("Content-Length"));
-    if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) {
-      await response.body?.cancel();
-      throw new Error(`SecondBox Artifact download exceeds ${String(maximumBytes)} bytes`);
-    }
-    const content = new Uint8Array(await response.arrayBuffer());
-    if (content.byteLength > maximumBytes) {
-      throw new Error(`SecondBox Artifact download exceeds ${String(maximumBytes)} bytes`);
-    }
-    if (response.headers.get("Digest") !== await sha256Digest(content)) {
-      throw new Error("SecondBox Artifact download Digest header does not match content");
-    }
-    return content;
-  }
-
-  public async deleteArtifact(
-    artifactID: string,
-    options: { readonly idempotencyKey?: string; readonly signal?: AbortSignal } = {},
-  ): Promise<void> {
-    requireNonempty(artifactID, "Artifact ID");
-    await this.requestVoid("deleteArtifact", {
-      pathParameters: { artifactId: artifactID },
       headers: { "Idempotency-Key": options.idempotencyKey ?? idempotencyKey() },
       signal: options.signal,
     });
@@ -1015,43 +967,6 @@ export class SandboxHandle implements SandboxFilesystem {
         "Idempotency-Key": options.idempotencyKey ?? idempotencyKey(),
       },
       body: encodeJSONBody(request), signal: options.signal,
-    });
-  }
-
-  public listArtifacts(options: PageOptions = {}, signal?: AbortSignal): Promise<ArtifactPage> {
-    return this.#api.requestJSON<ArtifactPage>("listSandboxArtifacts", {
-      pathParameters: { sandboxId: this.#snapshot.id },
-      queryParameters: pageQuery(options), signal,
-    });
-  }
-
-  public async uploadArtifact(
-    request: {
-      readonly name: string;
-      readonly mediaType: string;
-      readonly metadata: Metadata;
-      readonly content: Uint8Array;
-      readonly idempotencyKey?: string;
-      readonly signal?: AbortSignal;
-    },
-  ): Promise<Artifact> {
-    requireNonempty(request.name, "Artifact name");
-    requireNonempty(request.mediaType, "Artifact media type");
-    const form = new FormData();
-    form.set("name", request.name);
-    form.set("mediaType", request.mediaType);
-    form.set("sha256", await sha256Hex(request.content));
-    form.set("metadata", new Blob([JSON.stringify(request.metadata)], { type: "application/json" }));
-    form.set("content", new Blob([ownedArrayBuffer(request.content)], { type: "application/octet-stream" }), "content");
-    return this.#api.requestJSON<Artifact>("uploadSandboxArtifact", {
-      pathParameters: { sandboxId: this.#snapshot.id },
-      headers: {
-        ...this.dataPlaneHeaders(),
-        "Idempotency-Key": request.idempotencyKey ?? idempotencyKey(),
-      },
-      body: form,
-      contentType: null,
-      signal: request.signal,
     });
   }
 
@@ -2022,16 +1937,6 @@ async function sha256Digest(content: Uint8Array): Promise<string> {
   let binary = "";
   for (const byte of digest) binary += String.fromCharCode(byte);
   return `sha-256=:${btoa(binary)}:`;
-}
-
-async function sha256Hex(content: Uint8Array): Promise<string> {
-  if (globalThis.crypto?.subtle === undefined) {
-    throw new Error("SecondBox Web Crypto SHA-256 support is required for Artifact upload");
-  }
-  const digest = new Uint8Array(
-    await globalThis.crypto.subtle.digest("SHA-256", ownedArrayBuffer(content)),
-  );
-  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function pageQuery(options: PageOptions): Readonly<Record<string, string>> {

@@ -48,12 +48,10 @@ if [[ "$scenario_mode" == "suite" ]]; then
   export SECONDBOX_RUNNER_ID=scenario-runner
   export SECONDBOX_RUNNER_POOL_ID=scenario-pool
   export SECONDBOX_SCENARIO_SUBJECT_MAX_ACTIVE_INSTANCES=10
-  export SECONDBOX_SCENARIO_SUBJECT_MAX_ARTIFACTS=100
   export SECONDBOX_SCENARIO_SUBJECT_MAX_CONCURRENT_OPERATIONS=20
   export SECONDBOX_SCENARIO_SUBJECT_MAX_CPU_MILLIS=100000
   export SECONDBOX_SCENARIO_SUBJECT_MAX_MEMORY_BYTES=107374182400
   export SECONDBOX_SCENARIO_SUBJECT_MAX_PORT_SESSIONS=100
-  export SECONDBOX_SCENARIO_SUBJECT_MAX_ARTIFACT_BYTES=1099511627776
   export SECONDBOX_SCENARIO_SUBJECT_MAX_SANDBOXES=100
   export SECONDBOX_SCENARIO_SUBJECT_MAX_SNAPSHOTS=100
   export SECONDBOX_SCENARIO_HTTP_TIMEOUT_SECONDS=65
@@ -80,12 +78,10 @@ else
     SECONDBOX_RUNNER_ID \
     SECONDBOX_RUNNER_POOL_ID \
     SECONDBOX_SCENARIO_SUBJECT_MAX_ACTIVE_INSTANCES \
-    SECONDBOX_SCENARIO_SUBJECT_MAX_ARTIFACTS \
     SECONDBOX_SCENARIO_SUBJECT_MAX_CONCURRENT_OPERATIONS \
     SECONDBOX_SCENARIO_SUBJECT_MAX_CPU_MILLIS \
     SECONDBOX_SCENARIO_SUBJECT_MAX_MEMORY_BYTES \
     SECONDBOX_SCENARIO_SUBJECT_MAX_PORT_SESSIONS \
-    SECONDBOX_SCENARIO_SUBJECT_MAX_ARTIFACT_BYTES \
     SECONDBOX_SCENARIO_SUBJECT_MAX_SANDBOXES \
     SECONDBOX_SCENARIO_SUBJECT_MAX_SNAPSHOTS \
     SECONDBOX_SCENARIO_HTTP_TIMEOUT_SECONDS \
@@ -469,7 +465,7 @@ collect_diagnostics() {
     return 1
   fi
   if ! compose logs --no-color --timestamps \
-    control-plane postgres object-store \
+    control-plane postgres \
     >"$diagnostics_dir/compose.log"; then
     return 1
   fi
@@ -497,7 +493,7 @@ cleanup() {
       'find /var/lib/secondbox-runner/firecracker-log -type f -exec tail -n 200 {} +' >&2; then
       echo "SecondBox scenario could not collect Firecracker logs" >&2
     fi
-    if ! compose logs --tail 200 control-plane secondbox-runner postgres object-store >&2; then
+    if ! compose logs --tail 200 control-plane secondbox-runner postgres >&2; then
       echo "SecondBox scenario could not collect failure logs" >&2
     fi
   fi
@@ -612,7 +608,7 @@ sweep_host_orphans
 
 compose config --quiet
 compose up --detach --wait --wait-timeout 240 \
-  postgres object-store object-store-init control-plane
+  postgres control-plane
 
 if [[ "$scenario_mode" == "stress" ]]; then
   go run ./tests/scenario/stress \

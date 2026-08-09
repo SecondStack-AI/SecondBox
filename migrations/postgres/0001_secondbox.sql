@@ -14,9 +14,7 @@ CREATE TABLE secondbox.subject_quotas (
     max_active_instances bigint NOT NULL,
     max_cpu_millis bigint NOT NULL,
     max_memory_bytes bigint NOT NULL,
-    max_artifact_bytes bigint NOT NULL,
     max_snapshots bigint NOT NULL,
-    max_artifacts bigint NOT NULL,
     max_port_sessions bigint NOT NULL,
     max_concurrent_operations bigint NOT NULL,
     updated_at timestamptz NOT NULL,
@@ -395,28 +393,6 @@ CREATE TABLE secondbox.workspace_restores (
 CREATE UNIQUE INDEX workspace_restores_operation_idx ON secondbox.workspace_restores (operation_id);
 CREATE INDEX workspace_restores_home_state_idx
     ON secondbox.workspace_restores (home_runner_id, state, updated_at, id);
-
-CREATE TABLE secondbox.artifacts (
-    id text PRIMARY KEY,
-    tenant_ref text NOT NULL,
-    subject_ref text NOT NULL,
-    sandbox_id text NOT NULL,
-    source_generation bigint NOT NULL,
-    name text NOT NULL,
-    media_type text NOT NULL,
-    size_bytes bigint NOT NULL,
-    sha256 text NOT NULL,
-    storage_key text NOT NULL,
-    state text,
-    metadata_json jsonb NOT NULL,
-    retain_until timestamptz NOT NULL,
-    created_at timestamptz NOT NULL,
-    published_at timestamptz,
-    garbage_collection_marked_at timestamptz,
-    garbage_collected_at timestamptz
-);
-CREATE INDEX artifacts_project_sandbox_created_idx ON secondbox.artifacts (tenant_ref, subject_ref, sandbox_id, created_at DESC, id DESC);
-CREATE INDEX artifacts_gc_idx ON secondbox.artifacts (state, retain_until, id);
 
 CREATE TABLE secondbox.port_sessions (
     id text PRIMARY KEY,

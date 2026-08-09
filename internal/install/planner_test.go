@@ -50,8 +50,8 @@ func TestStorageOptionsOfferOnlyDedicatedFilesystemOrBoundedImage(t *testing.T) 
 	if options[0].Mountpoint != "/srv/secondbox-workspace" || options[0].Filesystem != "xfs" || options[1].Choice != StorageBtrfsImage {
 		t.Fatalf("unsafe or unexpected options = %#v", options)
 	}
-	if options[1].AvailableBytes != 65<<30 {
-		t.Fatalf("image proposal = %d, want fully allocated capacity minus backing, release, and object-store reserves", options[1].AvailableBytes)
+	if options[1].AvailableBytes != 69<<30 {
+		t.Fatalf("image proposal = %d, want fully allocated capacity minus backing and release reserves", options[1].AvailableBytes)
 	}
 }
 
@@ -76,7 +76,7 @@ func TestStorageOptionsRejectMountThatCannotHostJailer(t *testing.T) {
 }
 
 func TestStorageOptionsRequireBackingForControlServicesAndReleaseAssets(t *testing.T) {
-	if options := StorageOptions(plannerFacts(t), MinimumControlBackingBytes+ExecutionBundleEstimateBytes+MinimumObjectStoreBytes-1, ExecutionBundleEstimateBytes); len(options) != 0 {
+	if options := StorageOptions(plannerFacts(t), MinimumControlBackingBytes+ExecutionBundleEstimateBytes-1, ExecutionBundleEstimateBytes); len(options) != 0 {
 		t.Fatalf("storage options with insufficient control backing = %#v", options)
 	}
 }
@@ -98,13 +98,13 @@ func TestProposeExistingFilesystemPlanIsCompleteAndExplicit(t *testing.T) {
 	if plan.Storage.ExistingDeviceIdentity != "8:16" || plan.Storage.WorkspacePath != "/srv/secondbox-workspace/secondbox-install_0123456789abcdef/storage/workspaces" || plan.Capacity.MaxWorkspaceBytes != 225<<30 {
 		t.Fatalf("storage = %#v", plan.Storage)
 	}
-	if len(plan.Capacity.SubjectQuotas) != 9 || len(plan.Network.Gateways) != 2 || plan.Network.GuestBridgeCIDR != "172.31.0.0/24" || plan.Network.ComposeBackendCIDR != "172.16.0.0/24" {
+	if len(plan.Capacity.SubjectQuotas) != 7 || len(plan.Network.Gateways) != 2 || plan.Network.GuestBridgeCIDR != "172.31.0.0/24" || plan.Network.ComposeBackendCIDR != "172.16.0.0/24" {
 		t.Fatalf("capacity/network incomplete: %#v %#v", plan.Capacity, plan.Network)
 	}
 	if plan.Compute.FirecrackerCPUTemplate != SingleHostFirecrackerCPUTemplate {
 		t.Fatalf("compute plan = %#v", plan.Compute)
 	}
-	if len(plan.SecretTargets) < 8 {
+	if len(plan.SecretTargets) != 8 {
 		t.Fatalf("secret targets = %#v", plan.SecretTargets)
 	}
 	workspace, found := plannedPathByName(plan.Paths, "workspace")
@@ -160,11 +160,8 @@ func TestProposeImagePlanBoundsAllocationAndReplacesPortCollisions(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Storage.ImageSizeBytes != 68<<30 || plan.Capacity.MaxWorkspaceBytes != 53<<30 {
+	if plan.Storage.ImageSizeBytes != 72<<30 || plan.Capacity.MaxWorkspaceBytes != 57<<30 {
 		t.Fatalf("image capacity = %#v", plan.Storage)
-	}
-	if plan.Capacity.SubjectQuotas["maxArtifactBytes"] != 2<<30 {
-		t.Fatalf("artifact quota is not derived from reserved object-store capacity: %#v", plan.Capacity.SubjectQuotas)
 	}
 	if plan.Network.APIAddress != "127.0.0.1:8081" || plan.Network.RunnerAddress != "127.0.0.1:9445" || plan.Network.DataPlaneAddress != "127.0.0.1:9446" {
 		t.Fatalf("replacement ports = %#v", plan.Network)
@@ -179,12 +176,12 @@ func TestProposeImagePlanBoundsAllocationAndReplacesPortCollisions(t *testing.T)
 
 func TestProposePlanReplacesBundledServicePortCollisions(t *testing.T) {
 	facts := plannerFacts(t)
-	facts.ListeningPorts = []PortFact{{Port: 5432}, {Port: 9000}, {Port: 9001}}
+	facts.ListeningPorts = []PortFact{{Port: 5432}}
 	plan, err := ProposePlan(facts, plannerInput(t, StorageExistingMount))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Network.DatabaseAddress != "127.0.0.1:5433" || plan.Network.ObjectStoreAddress != "127.0.0.1:9002" || plan.Network.ObjectStoreConsoleAddress != "127.0.0.1:9003" {
+	if plan.Network.DatabaseAddress != "127.0.0.1:5433" {
 		t.Fatalf("bundled service replacements = %#v", plan.Network)
 	}
 }

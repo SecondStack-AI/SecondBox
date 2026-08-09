@@ -295,8 +295,6 @@ func reviewAdvancedInstallSettings(ctx context.Context, dependencies guidedInsta
 	runner := portFromAddress(plan.Network.RunnerAddress)
 	data := portFromAddress(plan.Network.DataPlaneAddress)
 	database := portFromAddress(plan.Network.DatabaseAddress)
-	objectStore := portFromAddress(plan.Network.ObjectStoreAddress)
-	objectStoreConsole := portFromAddress(plan.Network.ObjectStoreConsoleAddress)
 	uidStart := strconv.FormatInt(plan.Network.JailerUIDRange.Start, 10)
 	retention := strconv.FormatInt(plan.RetentionSeconds, 10)
 	imageGiB := strconv.FormatInt(plan.Storage.ImageSizeBytes>>30, 10)
@@ -307,8 +305,6 @@ func reviewAdvancedInstallSettings(ctx context.Context, dependencies guidedInsta
 		{Title: "Runner control loopback port", Value: &runner, Validate: validateInstallerPort},
 		{Title: "Data-plane loopback port", Value: &data, Validate: validateInstallerPort},
 		{Title: "Database loopback port", Value: &database, Validate: validateInstallerPort},
-		{Title: "Object-store loopback port", Value: &objectStore, Validate: validateInstallerPort},
-		{Title: "Object-store console loopback port", Value: &objectStoreConsole, Validate: validateInstallerPort},
 		{Title: "Guest bridge CIDR", Value: &plan.Network.GuestBridgeCIDR, Validate: validateInstallerCIDR},
 		{Title: "Compose backend CIDR", Value: &plan.Network.ComposeBackendCIDR, Validate: validateInstallerComposeCIDR},
 		{Title: "TAP prefix", Value: &plan.Network.TAPPrefix, Validate: validateInstallerName},
@@ -327,12 +323,10 @@ func reviewAdvancedInstallSettings(ctx context.Context, dependencies guidedInsta
 	runnerPort, _ := strconv.Atoi(runner)
 	dataPort, _ := strconv.Atoi(data)
 	databasePort, _ := strconv.Atoi(database)
-	objectStorePort, _ := strconv.Atoi(objectStore)
-	objectStoreConsolePort, _ := strconv.Atoi(objectStoreConsole)
 	uid, _ := strconv.ParseInt(uidStart, 10, 64)
 	retentionSeconds, _ := strconv.ParseInt(retention, 10, 64)
 	input.RetentionSeconds = retentionSeconds
-	input.NetworkOverrides = install.NetworkOverrides{APIPort: apiPort, RunnerPort: runnerPort, DataPlanePort: dataPort, DatabasePort: databasePort, ObjectStorePort: objectStorePort, ObjectStoreConsolePort: objectStoreConsolePort, GuestCIDR: plan.Network.GuestBridgeCIDR, ComposeCIDR: plan.Network.ComposeBackendCIDR, TAPPrefix: plan.Network.TAPPrefix, CgroupParent: plan.Network.CgroupParent, DNSUpstream: plan.Network.DNSUpstream, JailerUID: install.UIDRange{Start: uid, Count: plan.Network.JailerUIDRange.Count}}
+	input.NetworkOverrides = install.NetworkOverrides{APIPort: apiPort, RunnerPort: runnerPort, DataPlanePort: dataPort, DatabasePort: databasePort, GuestCIDR: plan.Network.GuestBridgeCIDR, ComposeCIDR: plan.Network.ComposeBackendCIDR, TAPPrefix: plan.Network.TAPPrefix, CgroupParent: plan.Network.CgroupParent, DNSUpstream: plan.Network.DNSUpstream, JailerUID: install.UIDRange{Start: uid, Count: plan.Network.JailerUIDRange.Count}}
 	if input.StorageChoice == install.StorageBtrfsImage {
 		gib, _ := strconv.ParseInt(imageGiB, 10, 64)
 		input.FilesystemImageBytes = gib << 30
@@ -359,7 +353,7 @@ func installerFormError(err error) error {
 
 func releasePlan(verified releaseverify.VerifiedRelease, location string) install.ReleasePlan {
 	manifest := verified.Manifest
-	images := map[string]string{"control-plane": manifest.ControlPlane.Reference, "runner": manifest.Runner.Reference, "microvm-artifacts": manifest.MicroVM.ImageReference, "installer-tools": manifest.InstallerTools.Reference, "postgres": manifest.BundledServices.Postgres, "object-store": manifest.BundledServices.ObjectStore, "object-store-client": manifest.BundledServices.ObjectStoreClient}
+	images := map[string]string{"control-plane": manifest.ControlPlane.Reference, "runner": manifest.Runner.Reference, "microvm-artifacts": manifest.MicroVM.ImageReference, "installer-tools": manifest.InstallerTools.Reference, "postgres": manifest.BundledServices.Postgres}
 	binaries := map[string]string{}
 	for _, binary := range manifest.Binaries {
 		if binary.Platform == "linux/amd64" && (binary.Name == "secondbox" || binary.Name == "secondbox-deploy") {

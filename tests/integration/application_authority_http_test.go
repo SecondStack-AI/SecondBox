@@ -35,13 +35,13 @@ func TestApplicationAuthoritiesBindOwnershipProfilesScopesAndAdministrativeDenia
 			{
 				ID: "agent-service", Token: agentToken,
 				TenantRef: agentProject.ID, SubjectRef: agentAccount.ID,
-				Scopes:        []string{"sandbox:read", "sandbox:lifecycle", "sandbox:exec", "sandbox:files", "sandbox:artifacts"},
+				Scopes:        []string{"sandbox:read", "sandbox:lifecycle", "sandbox:exec", "sandbox:files"},
 				ProfileGrants: []string{agentProfile.Name},
 			},
 			{
 				ID: "agent-runtime", Token: runtimeToken,
 				TenantRef: runtimeProject.ID, SubjectRef: runtimeAccount.ID,
-				Scopes:        []string{"sandbox:read", "sandbox:lifecycle", "sandbox:exec", "sandbox:files", "sandbox:artifacts", "sandbox:ports"},
+				Scopes:        []string{"sandbox:read", "sandbox:lifecycle", "sandbox:exec", "sandbox:files", "sandbox:ports"},
 				ProfileGrants: []string{runtimeProfile.Name},
 			},
 		},

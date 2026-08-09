@@ -20,21 +20,12 @@ var requiredControlPlaneEnvironment = map[string]string{
 	"SECONDBOX_RUNNER_SERVER_PRIVATE_KEY":                 "/tmp/server.key",
 	"SECONDBOX_RUNNER_CA_CERTIFICATE":                     "/tmp/ca.crt",
 	"SECONDBOX_SIGNED_ASSET_CATALOG_PATH":                 "/tmp/assets.json",
-	"SECONDBOX_OBJECT_STORE_ENDPOINT":                     "http://object-store:9000",
-	"SECONDBOX_OBJECT_STORE_REGION":                       "us-east-1",
-	"SECONDBOX_OBJECT_STORE_BUCKET":                       "secondbox",
-	"SECONDBOX_OBJECT_STORE_ROOT_USER":                    "secondbox",
-	"SECONDBOX_OBJECT_STORE_ROOT_PASSWORD":                "object-password-000000000000",
-	"SECONDBOX_OBJECT_STORE_USE_PATH_STYLE":               "true",
-	"SECONDBOX_OBJECT_STORE_TEMP_DIRECTORY":               "/tmp",
 	"SECONDBOX_DATA_PLANE_RETENTION_SECONDS":              "86400",
 	"SECONDBOX_DEFAULT_SUBJECT_MAX_SANDBOXES":             "100",
 	"SECONDBOX_DEFAULT_SUBJECT_MAX_ACTIVE_INSTANCES":      "20",
 	"SECONDBOX_DEFAULT_SUBJECT_MAX_CPU_MILLIS":            "80000",
 	"SECONDBOX_DEFAULT_SUBJECT_MAX_MEMORY_BYTES":          "171798691840",
-	"SECONDBOX_DEFAULT_SUBJECT_MAX_ARTIFACT_BYTES":        "1099511627776",
 	"SECONDBOX_DEFAULT_SUBJECT_MAX_SNAPSHOTS":             "500",
-	"SECONDBOX_DEFAULT_SUBJECT_MAX_ARTIFACTS":             "5000",
 	"SECONDBOX_DEFAULT_SUBJECT_MAX_PORT_SESSIONS":         "100",
 	"SECONDBOX_DEFAULT_SUBJECT_MAX_CONCURRENT_OPERATIONS": "20",
 	"SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS":     "250",
@@ -57,8 +48,8 @@ func setRequiredControlPlaneEnvironment(t *testing.T) {
 }
 
 func TestFromEnvironmentRequiresExactlyDeploymentAuthorityAndContestedSettings(t *testing.T) {
-	if got := len(requiredControlPlaneEnvironment); got != 32 {
-		t.Fatalf("required environment count = %d, want 32", got)
+	if got := len(requiredControlPlaneEnvironment); got != 23 {
+		t.Fatalf("required environment count = %d, want 23", got)
 	}
 	for absent := range requiredControlPlaneEnvironment {
 		t.Run(absent, func(t *testing.T) {
@@ -94,8 +85,8 @@ func TestEnvironmentSurfaceHasAnExplicitFinalCategory(t *testing.T) {
 		}
 		seen[name] = "removed compiled fact"
 	}
-	if got := len(seen); got != 53 {
-		t.Fatalf("classified environment surface = %d names, want 53", got)
+	if got := len(seen); got != 40 {
+		t.Fatalf("classified environment surface = %d names, want 40", got)
 	}
 }
 
@@ -112,11 +103,8 @@ func TestFromEnvironmentUsesLiteralTuningDefaultsAndValidatedOverrides(t *testin
 		got.LifecycleReconcileBatchSize != 8 ||
 		got.LifecycleReconcilePollInterval != 250*time.Millisecond ||
 		got.LifecycleReconcileClaimDuration != 30000*time.Millisecond ||
-		got.GarbageCollectionPollInterval != 60000*time.Millisecond ||
 		got.AssignmentClaimDuration != 30000*time.Millisecond || got.AssignmentDeadline != 120000*time.Millisecond ||
-		got.AssignmentRetryLimit != 2 || got.SchedulerSerializationRetryLimit != 3 ||
-		got.ObjectStoreRetryMaxAttempts != 3 || got.ObjectStoreHTTPTimeout != 30000*time.Millisecond ||
-		got.ObjectStoreMaxObjectBytes != 10737418240 {
+		got.AssignmentRetryLimit != 2 || got.SchedulerSerializationRetryLimit != 3 {
 		t.Fatalf("unexpected tuning defaults: %+v", got)
 	}
 
@@ -135,8 +123,8 @@ func TestFromEnvironmentUsesLiteralTuningDefaultsAndValidatedOverrides(t *testin
 // compiled constant would silently run a deployment on a value it did not
 // choose, which is the failure mode the tuning defaults exist to avoid.
 func TestFromEnvironmentRejectsEveryUnusableTuningOverride(t *testing.T) {
-	if len(TuningDefaults()) != 19 {
-		t.Fatalf("tuning surface = %d, want 19", len(TuningDefaults()))
+	if len(TuningDefaults()) != 15 {
+		t.Fatalf("tuning surface = %d, want 15", len(TuningDefaults()))
 	}
 	for _, tuning := range TuningDefaults() {
 		for _, unusable := range []string{"invalid", "-1", ""} {

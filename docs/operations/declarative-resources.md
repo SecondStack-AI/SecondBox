@@ -16,7 +16,7 @@ A Profile declaration contains its complete ordered lineage. Every revision carr
 The release owns two amd64 standard bundles:
 
 - `agent-compartment` is short-lived, has no public Ports or Snapshots, and can reach only `agent-gateway.secondbox.internal` over HTTPS.
-- `durable-coding` is a bounded long-lived workspace with Snapshots, Artifacts, terminal detach, and the named `development-http` Port; it can reach only `platform-gateway.secondbox.internal` over HTTPS.
+- `durable-coding` is a bounded long-lived workspace with Snapshots, terminal detach, and the named `development-http` Port; it can reach only `platform-gateway.secondbox.internal` over HTTPS.
 
 The bundle resolver takes runtime/toolchain identity from the verified release artifact manifest. Standard documents contain no tokens, application authorities, runner credentials, host paths, or storage keys.
 

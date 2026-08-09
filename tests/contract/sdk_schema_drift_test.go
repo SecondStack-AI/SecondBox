@@ -21,7 +21,6 @@ var schemaBackedTypes = map[string]any{
 	"Operation":         contracts.Operation{},
 	"Lease":             contracts.Lease{},
 	"Snapshot":          contracts.Snapshot{},
-	"Artifact":          contracts.Artifact{},
 	"PortSession":       contracts.PortSession{},
 	"TerminalSession":   contracts.TerminalSession{},
 	"ExecStreamSession": contracts.ExecStreamSession{},

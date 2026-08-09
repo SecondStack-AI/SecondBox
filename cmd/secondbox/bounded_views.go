@@ -16,7 +16,6 @@ var boundedOperations = map[string]bool{
 	"listRunners": true, "getRunner": true,
 	"listSandboxes": true, "getSandbox": true,
 	"listSandboxSnapshots": true, "getSnapshot": true,
-	"listSandboxArtifacts": true, "getArtifact": true,
 	"getSandboxLease": true, "getSandboxPortSession": true,
 	"inspectSandbox": true, "getOperation": true,
 }
@@ -73,16 +72,6 @@ func renderBoundedOperation(operationID string, content []byte, renderer cliui.R
 			rows = append(rows, cliui.Row{"id": item.ID, "name": item.Name, "state": item.State, "sandbox": item.SandboxID, "size": strconv.FormatInt(item.SizeBytes, 10)})
 		}
 		return renderer.WriteTable(cliui.Table{Columns: []cliui.Column{{Key: "id", Title: "ID", Priority: 0, MinWidth: 16}, {Key: "name", Title: "NAME", Priority: 1, MinWidth: 10}, {Key: "state", Title: "STATE", Priority: 2, MinWidth: 8}, {Key: "sandbox", Title: "SANDBOX", Priority: 3, MinWidth: 16}, {Key: "size", Title: "BYTES", Priority: 4, MinWidth: 8}}, Rows: rows, Empty: "No Snapshots found.", ContinuationCursor: pageCursor(page.NextCursor)})
-	case "listSandboxArtifacts":
-		var page secondboxclient.ArtifactPage
-		if err := decodeView(content, &page); err != nil {
-			return err
-		}
-		rows := make([]cliui.Row, 0, len(page.Items))
-		for _, item := range page.Items {
-			rows = append(rows, cliui.Row{"id": string(item.ID), "name": item.Name, "sandbox": string(item.SandboxID), "type": item.MediaType, "size": strconv.FormatInt(item.SizeBytes, 10)})
-		}
-		return renderer.WriteTable(cliui.Table{Columns: []cliui.Column{{Key: "id", Title: "ID", Priority: 0, MinWidth: 16}, {Key: "name", Title: "NAME", Priority: 1, MinWidth: 10}, {Key: "sandbox", Title: "SANDBOX", Priority: 2, MinWidth: 16}, {Key: "type", Title: "MEDIA TYPE", Priority: 3, MinWidth: 12}, {Key: "size", Title: "BYTES", Priority: 4, MinWidth: 8}}, Rows: rows, Empty: "No Artifacts found.", ContinuationCursor: pageCursor(page.NextCursor)})
 	case "getProfile":
 		var item secondboxclient.Profile
 		if err := decodeView(content, &item); err != nil {
@@ -113,12 +102,6 @@ func renderBoundedOperation(operationID string, content []byte, renderer cliui.R
 			return err
 		}
 		return renderer.WriteSummary(cliui.Summary{Title: "Snapshot", Status: viewStatus(item.State), Pairs: []cliui.Pair{{Key: "ID", Value: item.ID}, {Key: "Name", Value: item.Name}, {Key: "Sandbox", Value: item.SandboxID}, {Key: "State", Value: item.State}, {Key: "Generation", Value: strconv.FormatInt(item.SourceGeneration, 10)}, {Key: "Size bytes", Value: strconv.FormatInt(item.SizeBytes, 10)}}})
-	case "getArtifact":
-		var item secondboxclient.Artifact
-		if err := decodeView(content, &item); err != nil {
-			return err
-		}
-		return renderer.WriteSummary(cliui.Summary{Title: "Artifact", Status: cliui.StatusComplete, Pairs: []cliui.Pair{{Key: "ID", Value: string(item.ID)}, {Key: "Name", Value: item.Name}, {Key: "Sandbox", Value: string(item.SandboxID)}, {Key: "Media type", Value: item.MediaType}, {Key: "Size bytes", Value: strconv.FormatInt(item.SizeBytes, 10)}, {Key: "SHA-256", Value: item.SHA256}}})
 	case "getSandboxLease":
 		var item secondboxclient.Lease
 		if err := decodeView(content, &item); err != nil {

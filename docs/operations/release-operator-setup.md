@@ -50,8 +50,6 @@ export SECONDBOX_RUNNER_WORKSPACE_ROOT='/srv/secondbox/qualification/workspaces'
 just test-scenario
 
 export SECONDBOX_RELEASE_POSTGRES_IMAGE='docker.io/library/postgres@sha256:REVIEWED_DIGEST'
-export SECONDBOX_RELEASE_OBJECT_STORE_IMAGE='docker.io/rustfs/rustfs@sha256:REVIEWED_DIGEST'
-export SECONDBOX_RELEASE_OBJECT_STORE_CLIENT_IMAGE='quay.io/minio/mc@sha256:REVIEWED_DIGEST'
 just release-candidate 0.1.5 /protected/releases/installer-candidate
 
 export SECONDBOX_REQUIRE_QUALIFIED_INSTALLER=1

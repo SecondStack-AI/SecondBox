@@ -1,6 +1,6 @@
 # External scenario qualification
 
-`just test-scenario` is the qualified black-box gate for the complete SecondBox path: public HTTP API, PostgreSQL desired state, S3-compatible Artifact storage, the authenticated runner protocol, runner-local reflink Workspaces and Snapshots, and Firecracker guests on real KVM.
+`just test-scenario` is the qualified black-box gate for the complete SecondBox path: public HTTP API, PostgreSQL desired state, the authenticated runner protocol, runner-local reflink Workspaces and Snapshots, and Firecracker guests on real KVM.
 
 The suite never skips. It exits non-zero unless qualification is explicitly required and every host and artifact prerequisite is present. A passing `just test-compose` is not evidence for this gate: the Compose suite has no real runner or guest, while the scenario suite proves that public operations reach real compute.
 
@@ -91,7 +91,7 @@ The expected wall-clock duration is 6–10 minutes on the reference host, includ
 
 A normal cold guest reaches `microvm_ready` within 5 seconds on the reference host; the 2026-07-29 qualification observed approximately 2.5–2.7 seconds. The runner logs every `microVM cold start stage` with stage and cumulative milliseconds. The scenario deployment's 30-second assignment deadline is the hard boot budget. Treat a sustained rise above the 5-second expectation as a performance regression even when it remains below the hard deadline.
 
-Archive failure output as well: the harness prints Compose state plus bounded control-plane, runner, PostgreSQL, object-store, and Firecracker logs before cleanup.
+Archive failure output as well: the harness prints Compose state plus bounded control-plane, runner, PostgreSQL, and Firecracker logs before cleanup.
 
 ## Installer qualification
 
@@ -121,6 +121,6 @@ just test-installer-qualified
 
 Provision `SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT` on the dedicated XFS or Btrfs qualification mount before the run. The release operator must own it, and every ancestor must be traversable by the system libvirt QEMU account; do not place it below a private home directory.
 
-The candidate-only installer path verifies the staged v5 manifest, every referenced release object, and the running deployment binary's embedded version and source commit. The guest then exposes the four staged OCI archives through a guest-local TLS registry under their exact manifest digest references. Public PostgreSQL and object-store images are pulled by digest before the registry override. This path is accepted only through the explicit `--candidate-directory` qualification argument; ordinary install and resume continue to fetch canonical HTTPS release objects and immutable public registry references.
+The candidate-only installer path verifies the staged manifest, every referenced release object, and the running deployment binary's embedded version and source commit. The guest then exposes the four staged OCI archives through a guest-local TLS registry under their exact manifest digest references. The public PostgreSQL image is pulled by digest before the registry override. This path is accepted only through the explicit `--candidate-directory` qualification argument; ordinary install and resume continue to fetch canonical HTTPS release objects and immutable public registry references.
 
 See [guided single-host installation](guided-single-host-install.md) for the installed topology and authority boundary.

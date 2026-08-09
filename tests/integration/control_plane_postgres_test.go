@@ -55,8 +55,7 @@ func TestMain(m *testing.M) {
 func TestConcurrentSandboxCreationIsIdempotentAndPinsProfileRevision(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, contracts.QuotaLimits{
 		MaxSandboxes: 20, MaxActiveInstances: 20, MaxCPUMillis: 40000,
-		MaxMemoryBytes: 40 << 30, MaxArtifactBytes: 100 << 30,
-		MaxSnapshots: 100, MaxArtifacts: 100, MaxPortSessions: 20,
+		MaxMemoryBytes: 40 << 30, MaxSnapshots: 100, MaxPortSessions: 20,
 		MaxConcurrentOperations: 20,
 	})
 	admin := fixtureAdmin(t, controlPlane)

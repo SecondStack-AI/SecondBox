@@ -1,14 +1,14 @@
 # Threat model
 
-SecondBox treats guest workloads, network peers, mutable infrastructure, and stale distributed actors as hostile or fallible. The trusted upstream caller and operators are inside the platform boundary. Availability against an operator with database, object-store, platform-token, or Runner-host control is out of scope.
+SecondBox treats guest workloads, network peers, mutable infrastructure, and stale distributed actors as hostile or fallible. The trusted upstream caller and operators are inside the platform boundary. Availability against an operator with database, platform-token, or Runner-host control is out of scope.
 
 ## Trust boundaries
 
 The HTTP boundary validates one deployment-wide platform token and accepts caller-asserted tenant and subject references. The caller is responsible for authenticating end users and authorizing those assertions. A caller bug or compromise can cross subjects; this is an explicit accepted risk.
 
-PostgreSQL is the desired-state and ownership authority. The S3-compatible store is the durable-byte authority for Artifacts and immutable execution assets. Each home Runner's local filesystem is the durable-byte authority for its Workspaces and Snapshots. The outbound Runner gRPC boundary uses a separate pre-shared credential plus CA-signed mTLS identity. A privileged Runner host contains an additional Firecracker/jailer boundary around each untrusted guest.
+PostgreSQL is the desired-state and ownership authority. Each home Runner's local filesystem is the durable-byte authority for its Workspaces and Snapshots. Signed immutable execution assets are release inputs verified and cached by each Runner. The outbound Runner gRPC boundary uses a separate pre-shared credential plus CA-signed mTLS identity. A privileged Runner host contains an additional Firecracker/jailer boundary around each untrusted guest.
 
-The control-plane image has no reason to access KVM, TUN/TAP, host cgroups, host paths, the container-engine socket, Runner private keys, or guest files. A Runner has no reason to receive the HTTP platform token, database credentials, or global object-store credentials.
+The control-plane image has no reason to access KVM, TUN/TAP, host cgroups, host paths, the container-engine socket, Runner private keys, or guest files. A Runner has no reason to receive the HTTP platform token or database credentials.
 
 ## Threats and required controls
 
@@ -20,9 +20,8 @@ The control-plane image has no reason to access KVM, TUN/TAP, host cgroups, host
 | Stale Runner or duplicate assignment | Single generation authority | Monotonic generations, opaque fencing tokens, durable assignment state, authenticated Runner identity, and rejection before mutation |
 | Compromised Runner | Bounded blast radius | Explicit trust pools, credential replacement, drain and fencing, operator recovery of stable identity plus Workspace root, and no platform/database credentials |
 | Malicious guest escape or host probing | Host and peer isolation | Signed immutable assets, Firecracker/jailer, cgroups, minimal devices, TAP/firewall policy, narrow vsock protocol, and bounded paths/payloads |
-| Artifact substitution | Execution and data integrity | Trusted signing keys, SHA-256 manifests, immutable keys, staged verification, atomic publication, and verified downloads |
+| Execution-asset substitution | Execution integrity | Trusted signing keys, SHA-256 manifests, staged verification, and atomic local publication |
 | Control-plane compromise | No direct compute-host access | Non-root container, dropped capabilities, read-only filesystem, no host devices or sockets, and distinct Runner authority |
-| Object-store tampering | Artifact integrity | Content hashes, size evidence, retention, and verified Artifact reads |
 | Home-Runner disk loss | Explicit durability boundary | Reflink-store readiness, no empty or automatic cross-Runner fallback, source-required operator relocation, and consistent external backup of stable Runner identity plus Workspace root |
 | Resource exhaustion | Shared-service availability | Explicit per-subject quotas, request deadlines, payload/output limits, admission capacity, and backpressure |
 | Unauthenticated peer reaching a Runner data-plane listener | No admission without PostgreSQL | Framed single-use credential before any payload byte, bounded handshake time and message size, constant-time local rejection against assignment-bound session state, and credential consumption through the authenticated control connection |
@@ -31,7 +30,7 @@ The control-plane image has no reason to access KVM, TUN/TAP, host cgroups, host
 
 ## Credential lifecycle
 
-The platform token, PostgreSQL credential, object-store credential, pre-shared Runner credential, Runner mTLS keys, artifact-signing keys, and guest runtime credentials are separate secrets. The deployment bootstrap creates the Compose development credentials and Runner PKI. Operators issue Runner certificates out of band; the Runner CA private key is not mounted into the control plane.
+The platform token, PostgreSQL credential, pre-shared Runner credential, Runner mTLS keys, artifact-signing keys, and guest runtime credentials are separate secrets. The deployment bootstrap creates the Compose development credentials and Runner PKI. Operators issue Runner certificates out of band; the Runner CA private key is not mounted into the control plane.
 
 Replacing the platform token requires coordinated caller and control-plane rollout. Replacing the Runner credential requires restarting the control plane and every trusted Runner so no old authenticated stream remains. A CA compromise additionally requires replacing the CA, server credential, and Runner certificates.
 

@@ -75,7 +75,6 @@ type profileLimits struct {
 	LeaseSeconds                int64  `json:"leaseSeconds"`
 	SnapshotLimit               int64  `json:"snapshotLimit"`
 	SnapshotRetentionSeconds    int64  `json:"snapshotRetentionSeconds"`
-	ArtifactRetentionSeconds    int64  `json:"artifactRetentionSeconds"`
 	MaximumDeadlineMilliseconds int64  `json:"maximumDeadlineMilliseconds"`
 	MaximumBufferedOutputBytes  int64  `json:"maximumBufferedOutputBytes"`
 	StreamWindowBytes           int64  `json:"streamWindowBytes"`
@@ -119,8 +118,6 @@ type lifecycleConfig struct {
 	SubjectMaxActiveInstances      int64 `json:"subjectMaxActiveInstances"`
 	SubjectMaxConcurrentOperations int64 `json:"subjectMaxConcurrentOperations"`
 	SubjectMaxSnapshots            int64 `json:"subjectMaxSnapshots"`
-	SubjectMaxArtifactBytes        int64 `json:"subjectMaxArtifactBytes"`
-	SubjectMaxArtifacts            int64 `json:"subjectMaxArtifacts"`
 	SubjectMaxPortSessions         int64 `json:"subjectMaxPortSessions"`
 	SubjectMaxCPUMillis            int64 `json:"subjectMaxCpuMillis"`
 	SubjectMaxMemoryBytes          int64 `json:"subjectMaxMemoryBytes"`

@@ -4,8 +4,7 @@ Each Sandbox owns one durable Workspace and one authoritative `home_runner_id`.
 The assigned runner's configured `SECONDBOX_RUNNER_WORKSPACE_ROOT` is the only
 writable authoritative copy of that Workspace known to SecondBox. PostgreSQL records the
 logical owner, generation, desired state, local mutation state, and durable
-runner receipts; it never records a host path. S3-compatible storage is not a
-Workspace persistence layer.
+runner receipts; it never records a host path.
 
 The WorkspaceStore keeps sparse raw ext4 images on a reflink-capable filesystem.
 Startup proves that its active-image and Snapshot directories share a device,
@@ -58,7 +57,7 @@ preserves the existing Snapshot lock and durability model.
 
 If the home runner is unavailable, the Sandbox is unavailable. Scheduling never
 automatically selects another runner, creates an empty replacement, or
-reconstructs a Workspace from object storage. Relocation requires the source
+reconstructs a Workspace from another service. Relocation requires the source
 Runner and its intact WorkspaceStore to be online. Operators must preserve the
 stable runner identity and workspace filesystem together through their own
 backup system.

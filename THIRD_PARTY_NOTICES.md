@@ -23,8 +23,6 @@ SecondBox includes source code that depends on third-party Go modules and builds
 - `github.com/muesli/cancelreader` — MIT
 - `github.com/rivo/uniseg` — MIT
 - `github.com/xo/terminfo` — MIT
-- `github.com/aws/aws-sdk-go-v2` and its `aws`, `credentials`, `service/s3`, and internal modules — Apache-2.0
-- `github.com/aws/smithy-go` — Apache-2.0
 - `github.com/gorilla/websocket` — BSD-2-Clause
 - `github.com/jackc/pgx/v5` — MIT
 - `github.com/jackc/pgpassfile` — MIT
@@ -49,8 +47,6 @@ SecondBox includes source code that depends on third-party Go modules and builds
 
 ## Execution assets
 
-- RustFS — Apache-2.0; the optional development Compose profile references the
-  `rustfs/rustfs` image, with source at https://github.com/rustfs/rustfs
 - Firecracker — Apache-2.0
 - Linux kernel — GPL-2.0-only WITH Linux-syscall-note
 - Debian packages used to construct the guest root filesystem — licenses recorded by the Debian package metadata copied into each generated image bundle

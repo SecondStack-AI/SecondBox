@@ -3,8 +3,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      object-store-init:
-        condition: service_completed_successfully
 
   postgres:
     image: ${SECONDBOX_POSTGRES_IMAGE:?set SECONDBOX_POSTGRES_IMAGE}
@@ -25,46 +23,5 @@ services:
       start_period: 10s
     networks: [secondbox-backend]
 
-  object-store:
-    image: ${SECONDBOX_OBJECT_STORE_IMAGE:?set SECONDBOX_OBJECT_STORE_IMAGE}
-    restart: unless-stopped
-    command: ["/data"]
-    environment:
-      RUSTFS_ACCESS_KEY: ${SECONDBOX_OBJECT_STORE_ROOT_USER:?set SECONDBOX_OBJECT_STORE_ROOT_USER}
-      RUSTFS_SECRET_KEY: ${SECONDBOX_OBJECT_STORE_ROOT_PASSWORD:?set SECONDBOX_OBJECT_STORE_ROOT_PASSWORD}
-      RUSTFS_ADDRESS: ":9000"
-      RUSTFS_CONSOLE_ADDRESS: ":9001"
-      RUSTFS_CONSOLE_ENABLE: "true"
-      RUSTFS_HEALTH_ENDPOINT_ENABLE: "true"
-    ports:
-      - "${SECONDBOX_OBJECT_STORE_BIND_IP:?set SECONDBOX_OBJECT_STORE_BIND_IP}:${SECONDBOX_OBJECT_STORE_PUBLISHED_PORT:?set SECONDBOX_OBJECT_STORE_PUBLISHED_PORT}:9000"
-      - "${SECONDBOX_OBJECT_STORE_BIND_IP:?set SECONDBOX_OBJECT_STORE_BIND_IP}:${SECONDBOX_OBJECT_STORE_CONSOLE_PUBLISHED_PORT:?set SECONDBOX_OBJECT_STORE_CONSOLE_PUBLISHED_PORT}:9001"
-    volumes: [object-store-data:/data]
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--max-time", "3", "http://127.0.0.1:9000/health/ready"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-      start_period: 10s
-    networks: [secondbox-backend]
-
-  object-store-init:
-    image: ${SECONDBOX_OBJECT_STORE_CLIENT_IMAGE:?set SECONDBOX_OBJECT_STORE_CLIENT_IMAGE}
-    depends_on:
-      object-store:
-        condition: service_healthy
-    restart: "no"
-    entrypoint: ["/usr/bin/mc"]
-    command: ["mb", "--ignore-existing", "secondbox/${SECONDBOX_OBJECT_STORE_BUCKET:?set SECONDBOX_OBJECT_STORE_BUCKET}"]
-    environment:
-      MC_CONFIG_DIR: /tmp/mc
-      MC_HOST_secondbox: ${SECONDBOX_OBJECT_STORE_MC_HOST:?set SECONDBOX_OBJECT_STORE_MC_HOST}
-    read_only: true
-    tmpfs: ["/tmp:size=8m,mode=1777"]
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    networks: [secondbox-backend]
-
 volumes:
-  object-store-data:
   postgres-data:

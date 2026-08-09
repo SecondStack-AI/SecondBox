@@ -49,8 +49,6 @@ type stressConfig struct {
 	SubjectMaxActiveInstances  int                 `json:"subjectMaxActiveInstances"`
 	SubjectMaxConcurrentOps    int                 `json:"subjectMaxConcurrentOperations"`
 	SubjectMaxSnapshots        int                 `json:"subjectMaxSnapshots"`
-	SubjectMaxArtifactBytes    int64               `json:"subjectMaxArtifactBytes"`
-	SubjectMaxArtifacts        int                 `json:"subjectMaxArtifacts"`
 	SubjectMaxPortSessions     int                 `json:"subjectMaxPortSessions"`
 	SubjectMaxCPUMillis        int64               `json:"subjectMaxCpuMillis"`
 	SubjectMaxMemoryBytes      int64               `json:"subjectMaxMemoryBytes"`
@@ -84,7 +82,6 @@ type stressProfileConfig struct {
 	LeaseSeconds                int64  `json:"leaseSeconds"`
 	SnapshotLimit               int64  `json:"snapshotLimit"`
 	SnapshotRetentionSeconds    int64  `json:"snapshotRetentionSeconds"`
-	ArtifactRetentionSeconds    int64  `json:"artifactRetentionSeconds"`
 	MaximumDeadlineMilliseconds int64  `json:"maximumDeadlineMilliseconds"`
 	MaximumBufferedOutputBytes  int64  `json:"maximumBufferedOutputBytes"`
 	StreamWindowBytes           int64  `json:"streamWindowBytes"`
@@ -188,7 +185,6 @@ func (config stressConfig) validate() error {
 		"subjectMaxActiveInstances":      config.SubjectMaxActiveInstances,
 		"subjectMaxConcurrentOperations": config.SubjectMaxConcurrentOps,
 		"subjectMaxSnapshots":            config.SubjectMaxSnapshots,
-		"subjectMaxArtifacts":            config.SubjectMaxArtifacts,
 		"subjectMaxPortSessions":         config.SubjectMaxPortSessions,
 	} {
 		if value < 1 {
@@ -202,7 +198,6 @@ func (config stressConfig) validate() error {
 		return errors.New("SecondBox stress config latencyDegradationRatio must be greater than 1")
 	}
 	for name, value := range map[string]int64{
-		"subjectMaxArtifactBytes": config.SubjectMaxArtifactBytes,
 		"subjectMaxCpuMillis":     config.SubjectMaxCPUMillis,
 		"subjectMaxMemoryBytes":   config.SubjectMaxMemoryBytes,
 	} {
@@ -286,7 +281,6 @@ func (config stressProfileConfig) validate() error {
 		"leaseSeconds":                config.LeaseSeconds,
 		"snapshotLimit":               config.SnapshotLimit,
 		"snapshotRetentionSeconds":    config.SnapshotRetentionSeconds,
-		"artifactRetentionSeconds":    config.ArtifactRetentionSeconds,
 		"maximumDeadlineMilliseconds": config.MaximumDeadlineMilliseconds,
 		"maximumBufferedOutputBytes":  config.MaximumBufferedOutputBytes,
 		"streamWindowBytes":           config.StreamWindowBytes,

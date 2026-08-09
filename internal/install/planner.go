@@ -19,7 +19,6 @@ const (
 	ExecutionBundleEstimateBytes      = int64(11 << 30)
 	MinimumWorkspaceBytes             = standardresources.DurableCodingWorkspaceBytes
 	MinimumBackingReserveBytes        = int64(16 << 30)
-	MinimumObjectStoreBytes           = int64(4 << 30)
 	MinimumControlBackingBytes        = MinimumBackingReserveBytes
 	MinimumDeploymentBytes            = ExecutionBundleEstimateBytes
 	RunnerStorageReserveBytes         = int64(4 << 30)
@@ -45,18 +44,16 @@ type StorageOption struct {
 }
 
 type NetworkOverrides struct {
-	APIPort                int
-	RunnerPort             int
-	DataPlanePort          int
-	DatabasePort           int
-	ObjectStorePort        int
-	ObjectStoreConsolePort int
-	GuestCIDR              string
-	ComposeCIDR            string
-	TAPPrefix              string
-	CgroupParent           string
-	DNSUpstream            string
-	JailerUID              UIDRange
+	APIPort       int
+	RunnerPort    int
+	DataPlanePort int
+	DatabasePort  int
+	GuestCIDR     string
+	ComposeCIDR   string
+	TAPPrefix     string
+	CgroupParent  string
+	DNSUpstream   string
+	JailerUID     UIDRange
 }
 
 type ProposalInput struct {
@@ -88,7 +85,7 @@ func NewOperationID() (string, error) {
 
 func StorageOptions(facts HostFacts, backingAvailableBytes, releaseDownloadBytes int64) []StorageOption {
 	options := []StorageOption{}
-	if releaseDownloadBytes <= 0 || backingAvailableBytes < MinimumControlBackingBytes+releaseDownloadBytes+MinimumObjectStoreBytes {
+	if releaseDownloadBytes <= 0 || backingAvailableBytes < MinimumControlBackingBytes+releaseDownloadBytes {
 		return options
 	}
 	rootDevice := ""
@@ -112,7 +109,7 @@ func StorageOptions(facts HostFacts, backingAvailableBytes, releaseDownloadBytes
 
 func proposedImageBytes(available, releaseDownloadBytes int64) int64 {
 	reserve := max(MinimumBackingReserveBytes, available/5)
-	value := available - reserve - releaseDownloadBytes - MinimumObjectStoreBytes
+	value := available - reserve - releaseDownloadBytes
 	if value <= 0 {
 		return 0
 	}
@@ -152,8 +149,7 @@ func ProposePlan(facts HostFacts, input ProposalInput) (InstallPlan, error) {
 	if err != nil {
 		return InstallPlan{}, err
 	}
-	objectStoreBytes := input.BackingAvailableBytes - backingReserveBytes(input.BackingAvailableBytes) - input.Release.ExpectedDownloadBytes - storage.ImageSizeBytes
-	capacity, err := proposeCapacity(facts, workspaceBytes, objectStoreBytes)
+	capacity, err := proposeCapacity(facts, workspaceBytes)
 	if err != nil {
 		return InstallPlan{}, err
 	}
@@ -168,7 +164,7 @@ func ProposePlan(facts HostFacts, input ProposalInput) (InstallPlan, error) {
 	if input.RetentionSeconds <= 0 {
 		return InstallPlan{}, installerError("operator-selected retention is required", nil)
 	}
-	plan := InstallPlan{SchemaVersion: PlanSchema, OperationID: input.OperationID, CreatedAt: input.CreatedAt.UTC(), HostFacts: facts, HostFactsDigest: factsDigest, Release: input.Release, Storage: storage, Capacity: capacity, Compute: ComputePlan{FirecrackerCPUTemplate: SingleHostFirecrackerCPUTemplate}, Network: network, CLI: CLIPlan{ConfigPath: input.CLIConfigPath, TenantRef: input.CLITenantRef, SubjectRef: input.CLISubjectRef}, Paths: paths, SecretTargets: secretTargets, GeneratedAuthorityCategories: []string{"application-authority", "platform-authority", "runner-enrollment", "runner-pki", "database", "object-storage"}, StandardBundles: slices.Clone(input.StandardBundles), RetentionSeconds: input.RetentionSeconds, PrivilegedActions: privilegedActions(storage)}
+	plan := InstallPlan{SchemaVersion: PlanSchema, OperationID: input.OperationID, CreatedAt: input.CreatedAt.UTC(), HostFacts: facts, HostFactsDigest: factsDigest, Release: input.Release, Storage: storage, Capacity: capacity, Compute: ComputePlan{FirecrackerCPUTemplate: SingleHostFirecrackerCPUTemplate}, Network: network, CLI: CLIPlan{ConfigPath: input.CLIConfigPath, TenantRef: input.CLITenantRef, SubjectRef: input.CLISubjectRef}, Paths: paths, SecretTargets: secretTargets, GeneratedAuthorityCategories: []string{"application-authority", "platform-authority", "runner-enrollment", "runner-pki", "database"}, StandardBundles: slices.Clone(input.StandardBundles), RetentionSeconds: input.RetentionSeconds, PrivilegedActions: privilegedActions(storage)}
 	if err := plan.Validate(); err != nil {
 		return InstallPlan{}, err
 	}
@@ -219,8 +215,8 @@ func proposeStorage(facts HostFacts, input ProposalInput) (StoragePlan, int64, [
 	}
 }
 
-func proposeCapacity(facts HostFacts, workspaceBytes, objectStoreBytes int64) (CapacityPlan, error) {
-	if facts.CPUCount < MinimumHostCPUCount || facts.MemoryBytes < MinimumHostMemoryBytes || workspaceBytes < MinimumWorkspaceBytes || objectStoreBytes < MinimumObjectStoreBytes {
+func proposeCapacity(facts HostFacts, workspaceBytes int64) (CapacityPlan, error) {
+	if facts.CPUCount < MinimumHostCPUCount || facts.MemoryBytes < MinimumHostMemoryBytes || workspaceBytes < MinimumWorkspaceBytes {
 		return CapacityPlan{}, installerError("host capacity is insufficient for the durable-coding smoke Sandbox and control services", nil)
 	}
 	cpuMillis := int64(facts.CPUCount)*1000 - HostCPUReserveMillis
@@ -229,7 +225,7 @@ func proposeCapacity(facts HostFacts, workspaceBytes, objectStoreBytes int64) (C
 	active := min(sandboxes, int64(4))
 	runnerOperations := sandboxes * DurableCodingConcurrentOperations
 	subjectOperations := active * DurableCodingConcurrentOperations
-	quotas := map[string]int64{"maxSandboxes": sandboxes * 4, "maxActiveInstances": active, "maxCpuMillis": cpuMillis, "maxMemoryBytes": memory, "maxArtifactBytes": objectStoreBytes / 2, "maxSnapshots": sandboxes * 10, "maxArtifacts": sandboxes * 100, "maxPortSessions": sandboxes * 4, "maxConcurrentOperations": subjectOperations}
+	quotas := map[string]int64{"maxSandboxes": sandboxes * 4, "maxActiveInstances": active, "maxCpuMillis": cpuMillis, "maxMemoryBytes": memory, "maxSnapshots": sandboxes * 10, "maxPortSessions": sandboxes * 4, "maxConcurrentOperations": subjectOperations}
 	return CapacityPlan{MaxSandboxes: sandboxes, MaxCPUMillis: cpuMillis, MaxMemoryBytes: memory, MaxWorkspaceBytes: workspaceBytes, ConcurrentStarts: min(int64(2), active), ConcurrentOperations: runnerOperations, StoragePressurePercent: 85, SubjectQuotas: quotas}, nil
 }
 
@@ -271,14 +267,6 @@ func proposeNetwork(facts HostFacts, overrides NetworkOverrides) (NetworkPlan, e
 		return NetworkPlan{}, err
 	}
 	database, err := port(overrides.DatabasePort, 5432)
-	if err != nil {
-		return NetworkPlan{}, err
-	}
-	objectStore, err := port(overrides.ObjectStorePort, 9000)
-	if err != nil {
-		return NetworkPlan{}, err
-	}
-	objectStoreConsole, err := port(overrides.ObjectStoreConsolePort, 9001)
 	if err != nil {
 		return NetworkPlan{}, err
 	}
@@ -329,7 +317,7 @@ func proposeNetwork(facts HostFacts, overrides NetworkOverrides) (NetworkPlan, e
 	if dnsIP == nil || dnsIP.IsLoopback() || dnsIP.IsUnspecified() {
 		return NetworkPlan{}, installerError("DNS upstream must be an observed or reviewed non-loopback address", nil)
 	}
-	return NetworkPlan{APIAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(api)), RunnerAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(runner)), DataPlaneAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(data)), DatabaseAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(database)), ObjectStoreAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(objectStore)), ObjectStoreConsoleAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(objectStoreConsole)), GuestBridgeCIDR: guestCIDR, ComposeBackendCIDR: composeCIDR, TAPPrefix: tap, CgroupParent: cgroup, JailerUIDRange: uidRange, DNSUpstream: dns, Gateways: map[string]string{"agent-compartment": "agent-gateway.secondbox.internal", "durable-coding": "platform-gateway.secondbox.internal"}}, nil
+	return NetworkPlan{APIAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(api)), RunnerAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(runner)), DataPlaneAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(data)), DatabaseAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(database)), GuestBridgeCIDR: guestCIDR, ComposeBackendCIDR: composeCIDR, TAPPrefix: tap, CgroupParent: cgroup, JailerUIDRange: uidRange, DNSUpstream: dns, Gateways: map[string]string{"agent-compartment": "agent-gateway.secondbox.internal", "durable-coding": "platform-gateway.secondbox.internal"}}, nil
 }
 
 func freeRFC1918CIDR(observed []netip.Prefix) string {
@@ -484,8 +472,6 @@ func proposePaths(facts HostFacts, input ProposalInput, storagePlan StoragePlan,
 		{"runner-server-certificate", "runner-server-certificate", "runner-pki/server.crt"},
 		{"runner-server-private-key", "runner-server-private-key", "runner-pki/server.key"},
 		{"database-password", "database-password", "postgres-password"},
-		{"object-access-key", "object-access-key", "object-access-key"},
-		{"object-secret-key", "object-secret-key", "object-secret-key"},
 	}
 	targets := make([]SecretTarget, 0, len(targetSpecs))
 	for _, spec := range targetSpecs {
@@ -529,8 +515,8 @@ func privilegedActions(storage StoragePlan) []string {
 func RenderPlanReview(plan InstallPlan) string {
 	var result strings.Builder
 	fmt.Fprintf(&result, "Release %s\nArtifact manifest: %s\nManifest digest: %s\nSigning key: %s\nExpected downloads: %s\n", plan.Release.Version, plan.Release.ArtifactManifestURL, plan.Release.ArtifactManifestDigest, plan.Release.SigningKeyFingerprint, formatBytes(plan.Release.ExpectedDownloadBytes))
-	fmt.Fprintf(&result, "Workspace: %s (%s, %s capacity)\nCapacity: %d Sandboxes, %d concurrent starts, %s memory\nCompute: Firecracker CPU template %s\nStandard bundles: %s\nNetwork: API %s, Runner %s, data plane %s, database %s, object store %s, object console %s, guests %s, Compose backend %s, DNS %s\nCLI: %s as %s/%s\nRetention: %s\n", plan.Storage.WorkspacePath, plan.Storage.Choice, formatBytes(plan.Capacity.MaxWorkspaceBytes), plan.Capacity.MaxSandboxes, plan.Capacity.ConcurrentStarts, formatBytes(plan.Capacity.MaxMemoryBytes), plan.Compute.FirecrackerCPUTemplate, strings.Join(plan.StandardBundles, ", "), plan.Network.APIAddress, plan.Network.RunnerAddress, plan.Network.DataPlaneAddress, plan.Network.DatabaseAddress, plan.Network.ObjectStoreAddress, plan.Network.ObjectStoreConsoleAddress, plan.Network.GuestBridgeCIDR, plan.Network.ComposeBackendCIDR, plan.Network.DNSUpstream, plan.CLI.ConfigPath, plan.CLI.TenantRef, plan.CLI.SubjectRef, time.Duration(plan.RetentionSeconds)*time.Second)
-	result.WriteString("Generated authority: " + strings.Join(plan.GeneratedAuthorityCategories, ", ") + "\nPersistent services: PostgreSQL, object storage, control plane, same-host Runner\nExisting SecondBox CLIs and CLI configuration at the reviewed paths are upgraded atomically; unrelated files are refused.\nOrdinary uninstall preserves workspaces, authority, manifests, artifacts, and service data.\nPaths requiring sudo:\n")
+	fmt.Fprintf(&result, "Workspace: %s (%s, %s capacity)\nCapacity: %d Sandboxes, %d concurrent starts, %s memory\nCompute: Firecracker CPU template %s\nStandard bundles: %s\nNetwork: API %s, Runner %s, data plane %s, database %s, guests %s, Compose backend %s, DNS %s\nCLI: %s as %s/%s\nRetention: %s\n", plan.Storage.WorkspacePath, plan.Storage.Choice, formatBytes(plan.Capacity.MaxWorkspaceBytes), plan.Capacity.MaxSandboxes, plan.Capacity.ConcurrentStarts, formatBytes(plan.Capacity.MaxMemoryBytes), plan.Compute.FirecrackerCPUTemplate, strings.Join(plan.StandardBundles, ", "), plan.Network.APIAddress, plan.Network.RunnerAddress, plan.Network.DataPlaneAddress, plan.Network.DatabaseAddress, plan.Network.GuestBridgeCIDR, plan.Network.ComposeBackendCIDR, plan.Network.DNSUpstream, plan.CLI.ConfigPath, plan.CLI.TenantRef, plan.CLI.SubjectRef, time.Duration(plan.RetentionSeconds)*time.Second)
+	result.WriteString("Generated authority: " + strings.Join(plan.GeneratedAuthorityCategories, ", ") + "\nPersistent services: PostgreSQL, control plane, same-host Runner\nExisting SecondBox CLIs and CLI configuration at the reviewed paths are upgraded atomically; unrelated files are refused.\nOrdinary uninstall preserves workspaces, authority, manifests, execution assets, and service data.\nPaths requiring sudo:\n")
 	for _, path := range plan.Paths {
 		if path.RequiresSudo {
 			fmt.Fprintf(&result, "  %s: %s\n", path.Name, path.Path)

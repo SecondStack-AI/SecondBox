@@ -10,9 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
-	"mime/multipart"
 	"net/http"
-	"net/textproto"
 	"net/url"
 	"strings"
 	"testing"
@@ -24,7 +22,7 @@ import (
 
 const scenarioFileTransferMaxBytes = 1 << 20
 
-func TestScenarioTerminalFilesystemAndArtifacts(t *testing.T) {
+func TestScenarioTerminalAndFilesystem(t *testing.T) {
 	fixture := newScenarioFixture(t)
 	ensureScenarioRunnerPool(t, fixture)
 	waitForScenarioRunner(t, fixture, 90*time.Second)
@@ -254,79 +252,6 @@ func TestScenarioTerminalFilesystemAndArtifacts(t *testing.T) {
 		assertScenarioExited(t, guest, 0, "", "")
 	})
 
-	t.Run("artifact object-store round trip and listing", func(t *testing.T) {
-		content := []byte("SecondBox artifact\x00binary\n")
-		sum := sha256.Sum256(content)
-		digest := hex.EncodeToString(sum[:])
-		artifact := uploadScenarioArtifact(t, ctx, fixture.subject, handle, content, digest)
-		if artifact.SandboxID != string(handle.Snapshot().ID) ||
-			artifact.SourceGeneration != handle.Snapshot().Generation ||
-			artifact.SHA256 != digest ||
-			artifact.SizeBytes != int64(len(content)) {
-			t.Fatalf("SecondBox scenario uploaded Artifact = %#v", artifact)
-		}
-		got := scenarioJSON[contracts.Artifact](
-			t,
-			ctx,
-			fixture.subject,
-			"getArtifact",
-			secondboxclient.CallOptions{
-				PathParameters: map[string]string{"artifactId": artifact.ID},
-			},
-		)
-		if got.ID != artifact.ID || got.SHA256 != digest {
-			t.Fatalf("SecondBox scenario fetched Artifact = %#v", got)
-		}
-		downloaded, responseDigest := downloadScenarioArtifact(
-			t,
-			ctx,
-			fixture.subject,
-			artifact.ID,
-		)
-		if !bytes.Equal(downloaded, content) || responseDigest != scenarioHTTPDigest(sum) {
-			t.Fatalf(
-				"SecondBox scenario downloaded Artifact bytes=%v digest=%q",
-				downloaded,
-				responseDigest,
-			)
-		}
-		page := scenarioJSON[contracts.ArtifactPage](
-			t,
-			ctx,
-			fixture.subject,
-			"listSandboxArtifacts",
-			secondboxclient.CallOptions{
-				PathParameters:  map[string]string{"sandboxId": string(handle.Snapshot().ID)},
-				QueryParameters: url.Values{"limit": []string{"200"}},
-			},
-		)
-		if !scenarioArtifactPageContains(page, artifact.ID) {
-			t.Fatalf("SecondBox scenario Artifact page = %#v", page)
-		}
-		scenarioVoid(
-			t,
-			ctx,
-			fixture.subject,
-			"deleteArtifact",
-			secondboxclient.CallOptions{
-				PathParameters: map[string]string{"artifactId": artifact.ID},
-				Headers:        scenarioHeaders(uniqueScenarioKey(t, "artifact-delete")),
-			},
-		)
-		page = scenarioJSON[contracts.ArtifactPage](
-			t,
-			ctx,
-			fixture.subject,
-			"listSandboxArtifacts",
-			secondboxclient.CallOptions{
-				PathParameters:  map[string]string{"sandboxId": string(handle.Snapshot().ID)},
-				QueryParameters: url.Values{"limit": []string{"200"}},
-			},
-		)
-		if scenarioArtifactPageContains(page, artifact.ID) {
-			t.Fatalf("SecondBox scenario deleted Artifact remains listed: %#v", page)
-		}
-	})
 }
 
 func requireScenarioTerminalText(
@@ -501,87 +426,6 @@ func scenarioHTTPDigest(sum [sha256.Size]byte) string {
 func scenarioListingContains(listing secondboxclient.DirectoryListing, path string) bool {
 	for _, entry := range listing.Entries {
 		if string(entry.Path) == path {
-			return true
-		}
-	}
-	return false
-}
-
-func uploadScenarioArtifact(
-	t *testing.T,
-	ctx context.Context,
-	client *secondboxclient.Client,
-	handle *secondboxclient.SandboxHandle,
-	content []byte,
-	digest string,
-) contracts.Artifact {
-	t.Helper()
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	writeField := func(name string, value []byte, contentType string) {
-		header := make(textproto.MIMEHeader)
-		header.Set("Content-Disposition", `form-data; name="`+name+`"`)
-		if contentType != "" {
-			header.Set("Content-Type", contentType)
-		}
-		part, err := writer.CreatePart(header)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := part.Write(value); err != nil {
-			t.Fatal(err)
-		}
-	}
-	writeField("name", []byte("scenario-artifact.bin"), "")
-	writeField("mediaType", []byte("application/octet-stream"), "")
-	writeField("sha256", []byte(digest), "")
-	metadata, err := json.Marshal(map[string]string{"scenario": "data-paths"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeField("metadata", metadata, "application/json")
-	writeField("content", content, "application/octet-stream")
-	if err := writer.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return scenarioJSON[contracts.Artifact](
-		t,
-		ctx,
-		client,
-		"uploadSandboxArtifact",
-		secondboxclient.CallOptions{
-			PathParameters: map[string]string{"sandboxId": string(handle.Snapshot().ID)},
-			Headers:        scenarioDataPlaneHeaders(handle, uniqueScenarioKey(t, "artifact-upload")),
-			Body:           &body,
-			ContentType:    writer.FormDataContentType(),
-		},
-	)
-}
-
-func downloadScenarioArtifact(
-	t *testing.T,
-	ctx context.Context,
-	client *secondboxclient.Client,
-	artifactID string,
-) ([]byte, string) {
-	t.Helper()
-	response, err := client.Request(ctx, "downloadArtifactContent", secondboxclient.CallOptions{
-		PathParameters: map[string]string{"artifactId": artifactID},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	content, readErr := io.ReadAll(response.Body)
-	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil {
-		t.Fatalf("SecondBox scenario Artifact read=%v close=%v", readErr, closeErr)
-	}
-	return content, response.Header.Get("Digest")
-}
-
-func scenarioArtifactPageContains(page contracts.ArtifactPage, artifactID string) bool {
-	for _, artifact := range page.Items {
-		if artifact.ID == artifactID {
 			return true
 		}
 	}

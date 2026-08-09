@@ -36,7 +36,7 @@ selects an unstyled human view, and `--color auto|always|never` controls color.
 ./dist/secondbox --output plain --color never whoami
 ```
 
-File and artifact content, logs, generic `operation` responses, terminal and
+File content, logs, generic `operation` responses, terminal and
 exec streams, and guest exit statuses remain raw. The normative classification
 and script guarantees are in [CLI output and terminal presentation](cli-output-contract.md).
 
@@ -84,7 +84,7 @@ Configuration is stored at `$SECONDBOX_CONFIG` when that variable holds an absol
 
 These three commands are the only ones that do not accept an operation; every other command continues to work with fully explicit flags, and an explicit flag always wins over the environment and stored configuration.
 
-Grouped aliases cover Profiles, RunnerPools, Runners, Sandboxes, Operations, Leases, streaming exec, terminal negotiation, files, Snapshot create/list/get/delete/restore, Artifacts, and ports. Their remaining arguments are thin transport values:
+Grouped aliases cover Profiles, RunnerPools, Runners, Sandboxes, Operations, Leases, streaming exec, terminal negotiation, files, Snapshot create/list/get/delete/restore, and ports. Their remaining arguments are thin transport values:
 
 ```sh
 ./dist/secondbox \

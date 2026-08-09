@@ -65,7 +65,7 @@ func InitSingleHostFromRelease(plan install.InstallPlan, release releasecontract
 	if releasecontract.Digest(releaseBytes) != plan.Release.ArtifactManifestDigest || release.Version != plan.Release.Version ||
 		release.ControlPlane.Reference != plan.Release.Images["control-plane"] || release.Runner.Reference != plan.Release.Images["runner"] ||
 		release.MicroVM.ImageReference != plan.Release.Images["microvm-artifacts"] || release.InstallerTools.Reference != plan.Release.Images["installer-tools"] ||
-		release.BundledServices.Postgres != plan.Release.Images["postgres"] || release.BundledServices.ObjectStore != plan.Release.Images["object-store"] || release.BundledServices.ObjectStoreClient != plan.Release.Images["object-store-client"] ||
+		release.BundledServices.Postgres != plan.Release.Images["postgres"] ||
 		release.MicroVM.SigningKeyFingerprint != plan.Release.SigningKeyFingerprint || verified.ManifestDigest != release.MicroVM.SignedManifestDigest ||
 		verified.SigningKeyID != strings.ToLower(strings.TrimPrefix(release.MicroVM.SigningKeyFingerprint, "SHA256:")) {
 		return SingleHostInstallResult{}, manifestError("single-host release identity differs from the accepted install plan", nil)
@@ -150,14 +150,6 @@ func InitSingleHostFromRelease(plan install.InstallPlan, release releasecontract
 	if err != nil {
 		return SingleHostInstallResult{}, err
 	}
-	objectAccess, err := randomSecret("object-access-key", 16)
-	if err != nil {
-		return SingleHostInstallResult{}, err
-	}
-	objectSecret, err := randomSecret("object-secret-key", 32)
-	if err != nil {
-		return SingleHostInstallResult{}, err
-	}
 	platformToken, err := randomSecret("platform-authority", 32)
 	if err != nil {
 		return SingleHostInstallResult{}, err
@@ -201,7 +193,7 @@ func InitSingleHostFromRelease(plan install.InstallPlan, release releasecontract
 		return SingleHostInstallResult{}, err
 	}
 
-	manifest, err := singleHostManifest(plan, release, verified.SigningKeyID, runnerID, runnerIdentity, postgresPassword, objectAccess, objectSecret, platformToken, runnerCredential, relativeTo(deployment, applicationAuthorities), relativeTo(deployment, catalogPath), relativeTo(deployment, releasePath), relativeTo(deployment, pki))
+	manifest, err := singleHostManifest(plan, release, verified.SigningKeyID, runnerID, runnerIdentity, postgresPassword, platformToken, runnerCredential, relativeTo(deployment, applicationAuthorities), relativeTo(deployment, catalogPath), relativeTo(deployment, releasePath), relativeTo(deployment, pki))
 	if err != nil {
 		return SingleHostInstallResult{}, err
 	}
@@ -299,7 +291,7 @@ func validateExistingSingleHostInstall(plan install.InstallPlan, release release
 	if releasecontract.Digest(releaseBytes) != plan.Release.ArtifactManifestDigest || release.Version != plan.Release.Version ||
 		release.ControlPlane.Reference != plan.Release.Images["control-plane"] || release.Runner.Reference != plan.Release.Images["runner"] ||
 		release.MicroVM.ImageReference != plan.Release.Images["microvm-artifacts"] || release.InstallerTools.Reference != plan.Release.Images["installer-tools"] ||
-		release.BundledServices.Postgres != plan.Release.Images["postgres"] || release.BundledServices.ObjectStore != plan.Release.Images["object-store"] || release.BundledServices.ObjectStoreClient != plan.Release.Images["object-store-client"] ||
+		release.BundledServices.Postgres != plan.Release.Images["postgres"] ||
 		release.MicroVM.SigningKeyFingerprint != plan.Release.SigningKeyFingerprint || verified.ManifestDigest != release.MicroVM.SignedManifestDigest ||
 		verified.SigningKeyID != strings.ToLower(strings.TrimPrefix(release.MicroVM.SigningKeyFingerprint, "SHA256:")) {
 		return SingleHostInstallResult{}, manifestError("existing single-host release identity differs from the accepted install plan", nil)
@@ -322,7 +314,7 @@ func validateExistingSingleHostInstall(plan install.InstallPlan, release release
 	catalogPath := installPath(plan, "signed-asset-catalog")
 	releasePath := installPath(plan, "release-artifact-manifest")
 	pkiPath := installPath(plan, "runner-pki")
-	expectedManifest, err := singleHostManifest(plan, release, verified.SigningKeyID, runnerID, runnerIdentity, relativeTarget("database-password"), relativeTarget("object-access-key"), relativeTarget("object-secret-key"), relativeTarget("platform-authority"), relativeTarget("runner-enrollment"), relativeTarget("application-authority"), relativeTo(deployment, catalogPath), relativeTo(deployment, releasePath), relativeTo(deployment, pkiPath))
+	expectedManifest, err := singleHostManifest(plan, release, verified.SigningKeyID, runnerID, runnerIdentity, relativeTarget("database-password"), relativeTarget("platform-authority"), relativeTarget("runner-enrollment"), relativeTarget("application-authority"), relativeTo(deployment, catalogPath), relativeTo(deployment, releasePath), relativeTo(deployment, pkiPath))
 	if err != nil {
 		return SingleHostInstallResult{}, err
 	}
@@ -376,7 +368,7 @@ func readSingleHostPlannedFile(plan install.InstallPlan, name string) ([]byte, e
 	return os.ReadFile(path)
 }
 
-func singleHostManifest(plan install.InstallPlan, release releasecontract.ArtifactManifest, signingKeyID, runnerID, runnerIdentity, postgresPassword, objectAccess, objectSecret, platformToken, runnerCredential, applicationAuthorities, catalogPath, releasePath, pkiPath string) (ManifestV1, error) {
+func singleHostManifest(plan install.InstallPlan, release releasecontract.ArtifactManifest, signingKeyID, runnerID, runnerIdentity, postgresPassword, platformToken, runnerCredential, applicationAuthorities, catalogPath, releasePath, pkiPath string) (ManifestV1, error) {
 	apiHost, apiPort, err := splitPlanAddress(plan.Network.APIAddress)
 	if err != nil {
 		return ManifestV1{}, err
@@ -392,17 +384,6 @@ func singleHostManifest(plan install.InstallPlan, release releasecontract.Artifa
 	databaseHost, databasePort, err := splitPlanAddress(plan.Network.DatabaseAddress)
 	if err != nil {
 		return ManifestV1{}, err
-	}
-	objectStoreHost, objectStorePort, err := splitPlanAddress(plan.Network.ObjectStoreAddress)
-	if err != nil {
-		return ManifestV1{}, err
-	}
-	objectStoreConsoleHost, objectStoreConsolePort, err := splitPlanAddress(plan.Network.ObjectStoreConsoleAddress)
-	if err != nil {
-		return ManifestV1{}, err
-	}
-	if objectStoreConsoleHost != objectStoreHost {
-		return ManifestV1{}, manifestError("single-host object-store addresses must use one loopback host", nil)
 	}
 	prefix, err := netip.ParsePrefix(plan.Network.GuestBridgeCIDR)
 	if err != nil || !prefix.Addr().Is4() || prefix.Bits() > 30 {
@@ -434,13 +415,12 @@ func singleHostManifest(plan install.InstallPlan, release releasecontract.Artifa
 	maxDiskMiB := max(int64(1024), plan.Capacity.MaxWorkspaceBytes/plan.Capacity.MaxSandboxes/(1<<20))
 	manifest := ManifestV1{
 		SchemaVersion:     1,
-		Deployment:        Deployment{Mode: "development", ComposeProjectName: "secondbox-" + strings.ReplaceAll(strings.TrimPrefix(plan.OperationID, "install_"), "_", "-"), ComposeBackendCIDR: plan.Network.ComposeBackendCIDR, PublicBaseURL: "http://" + plan.Network.APIAddress, TLSTermination: "development-loopback", ControlPlaneImage: release.ControlPlane.Reference, RunnerImage: release.Runner.Reference, PostgresImage: release.BundledServices.Postgres, ObjectStoreImage: release.BundledServices.ObjectStore, ObjectStoreClientImage: release.BundledServices.ObjectStoreClient, APIBindIP: apiHost, APIPublishedPort: integer(apiPort), ListenAddress: "0.0.0.0:8080", RunnerBindIP: runnerHost, RunnerPublishedPort: integer(runnerPort), RunnerListenAddress: "0.0.0.0:9443", LogPath: "/var/log/secondbox/control-plane.jsonl", SignedAssetCatalog: catalogPath, SignedAssetCatalogPath: "/etc/secondbox/signed-assets.json", DevelopmentWaitSeconds: integer(300)},
+		Deployment:        Deployment{Mode: "development", ComposeProjectName: "secondbox-" + strings.ReplaceAll(strings.TrimPrefix(plan.OperationID, "install_"), "_", "-"), ComposeBackendCIDR: plan.Network.ComposeBackendCIDR, PublicBaseURL: "http://" + plan.Network.APIAddress, TLSTermination: "development-loopback", ControlPlaneImage: release.ControlPlane.Reference, RunnerImage: release.Runner.Reference, PostgresImage: release.BundledServices.Postgres, APIBindIP: apiHost, APIPublishedPort: integer(apiPort), ListenAddress: "0.0.0.0:8080", RunnerBindIP: runnerHost, RunnerPublishedPort: integer(runnerPort), RunnerListenAddress: "0.0.0.0:9443", LogPath: "/var/log/secondbox/control-plane.jsonl", SignedAssetCatalog: catalogPath, SignedAssetCatalogPath: "/etc/secondbox/signed-assets.json", DevelopmentWaitSeconds: integer(300)},
 		Database:          Database{Mode: "bundled", BindIP: databaseHost, PublishedPort: integer(databasePort), Name: "secondbox", User: "secondbox", PasswordFile: postgresPassword},
-		ObjectStore:       ObjectStore{Mode: "bundled", Endpoint: "http://object-store:9000", Bucket: "secondbox-" + strings.TrimPrefix(plan.OperationID, "install_"), Region: "us-east-1", UsePathStyle: boolean(true), TempDirectory: "/tmp", AccessKeyFile: objectAccess, SecretKeyFile: objectSecret, BindIP: objectStoreHost, PublishedPort: integer(objectStorePort), ConsolePublishedPort: integer(objectStoreConsolePort)},
 		RunnerTrust:       RunnerTrust{EnrollmentCredentialFile: runnerCredential, CACertificateFile: filepath.Join(pkiPath, "runner-ca.crt"), CAPrivateKeyFile: filepath.Join(pkiPath, "runner-ca.key"), ServerCertificateFile: filepath.Join(pkiPath, "server.crt"), ServerPrivateKeyFile: filepath.Join(pkiPath, "server.key"), ServerName: "control-plane", CertificateLifetimeDays: integer(825)},
 		Applications:      Applications{PlatformTokenFile: platformToken, ApplicationAuthoritiesFile: applicationAuthorities},
 		StandardResources: StandardResources{ArtifactManifest: releasePath, Bundles: slices.Clone(plan.StandardBundles), RunnerPools: pools, ApplyWaitSeconds: integer(300)},
-		Policy:            Policy{DataPlaneRetentionSeconds: integer(plan.RetentionSeconds), DataPlanePollIntervalMilliseconds: integer(250), RunnerCommandPollIntervalMilliseconds: integer(250), RunnerEnabledFeatures: strings.Join(features[1:], ","), DefaultSubjectMaxSandboxes: quota("maxSandboxes"), DefaultSubjectMaxActiveInstances: quota("maxActiveInstances"), DefaultSubjectMaxCPUMillis: quota("maxCpuMillis"), DefaultSubjectMaxMemoryBytes: quota("maxMemoryBytes"), DefaultSubjectMaxArtifactBytes: quota("maxArtifactBytes"), DefaultSubjectMaxSnapshots: quota("maxSnapshots"), DefaultSubjectMaxArtifacts: quota("maxArtifacts"), DefaultSubjectMaxPortSessions: quota("maxPortSessions"), DefaultSubjectMaxConcurrentOperations: quota("maxConcurrentOperations")},
+		Policy:            Policy{DataPlaneRetentionSeconds: integer(plan.RetentionSeconds), DataPlanePollIntervalMilliseconds: integer(250), RunnerCommandPollIntervalMilliseconds: integer(250), RunnerEnabledFeatures: strings.Join(features[1:], ","), DefaultSubjectMaxSandboxes: quota("maxSandboxes"), DefaultSubjectMaxActiveInstances: quota("maxActiveInstances"), DefaultSubjectMaxCPUMillis: quota("maxCpuMillis"), DefaultSubjectMaxMemoryBytes: quota("maxMemoryBytes"), DefaultSubjectMaxSnapshots: quota("maxSnapshots"), DefaultSubjectMaxPortSessions: quota("maxPortSessions"), DefaultSubjectMaxConcurrentOperations: quota("maxConcurrentOperations")},
 	}
 	dnsUpstream := netip.MustParseAddr(plan.Network.DNSUpstream)
 	manifest.Runners = []Runner{{RunnerID: runnerID, Placement: "same-host", PoolID: standardresources.PoolAMD64, SoftwareVersion: release.Version, ControlPlaneAddress: plan.Network.RunnerAddress, ControlPlaneServerName: "control-plane", IdentityDirectory: "/run/secondbox-runner-identity", IdentityHostDirectory: runnerIdentity, ArtifactHostDirectory: artifacts, StateHostDirectory: runnerStorage, WorkspaceHostDirectory: plan.Storage.WorkspacePath, LogPath: "/var/lib/secondbox-runner/state/logs/runner.jsonl", LogDirectory: "/var/lib/secondbox-runner/state/logs", FirecrackerPath: "/usr/local/bin/firecracker", FirecrackerJailerPath: "/usr/local/bin/jailer", FirecrackerJailRoot: "/var/lib/secondbox-runner/jail", FirecrackerJailerUIDStart: integer(plan.Network.JailerUIDRange.Start), FirecrackerJailerUIDCount: integer(plan.Network.JailerUIDRange.Count), FirecrackerJailerUIDAllowLow: boolean(false), FirecrackerJailerGID: integer(plan.Network.JailerUIDRange.Start), FirecrackerCgroupVersion: integer(2), FirecrackerCgroupParent: plan.Network.CgroupParent, FirecrackerKernelPath: "/opt/secondbox-artifacts/kernel", FirecrackerRootFSPath: "/opt/secondbox-artifacts/rootfs.ext4", FirecrackerSharedImagePath: "/opt/secondbox-artifacts/shared.img", FirecrackerKernelArgs: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw quiet loglevel=1 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd init=/init", FirecrackerCPUTemplate: plan.Compute.FirecrackerCPUTemplate, FirecrackerRunDirectory: "/var/lib/secondbox-runner/state/run", FirecrackerLogDirectory: "/var/lib/secondbox-runner/state/firecracker-logs", FirecrackerAllowUnjailed: boolean(false), SnapshotTemplateCacheRoot: "/var/lib/secondbox-runner/state/snapshot-template-cache", ArtifactPublicKey: "/opt/secondbox-artifacts/signing.pub", ArtifactPublicKeySHA256: signingKeyID, WorkspaceRoot: "/var/lib/secondbox-runner/workspaces", StorageRecoveryPercent: integer(storageDeny - 10), StorageWarningPercent: integer(storageDeny - 5), StorageAdmissionDenyPercent: integer(storageDeny), SandboxMaxVCPUs: integer(maxVCPUs), SandboxMaxMemoryMiB: integer(maxMemoryMiB), SandboxMaxDiskMiB: integer(maxDiskMiB), SandboxMemoryBudgetMiB: integer(plan.Capacity.MaxMemoryBytes / (1 << 20)), SandboxGuestIP: guest.String(), SandboxBridgeName: "sbx0", SandboxBridgeCIDR: bridge.String() + "/" + fmt.Sprint(prefix.Bits()), SandboxGuestCIDR: prefix.String(), SandboxTapPrefix: plan.Network.TAPPrefix, SandboxNetworkStateDir: "/var/lib/secondbox-runner/state/network", SandboxDeleteBridge: boolean(true), NetworkPolicyNFTPath: "/usr/sbin/nft", NetworkPolicyMaxDNSPins: integer(256), NetworkPolicyMaxDNSTTL: "5m", NetworkPolicyRunnerAddresses: bridge.String(), NetworkPolicyManagementCIDRs: prefix.String(), NetworkPolicyRunnerGateways: strings.Join(gatewayEntries, ","), NetworkPolicyDNSUpstream: netip.AddrPortFrom(dnsUpstream, 53).String(), MaxConcurrentPerSandbox: integer(4), MaxConcurrentGlobal: integer(plan.Capacity.MaxSandboxes), MaxConcurrentStarts: integer(plan.Capacity.ConcurrentStarts), MaxConcurrentWorkspaceCreates: integer(plan.Capacity.ConcurrentStarts), MaxConcurrentOperationsGlobal: integer(plan.Capacity.ConcurrentOperations), FileTransferMaxBytes: integer(1 << 30), GuestControlVSockPort: integer(1024), GuestProtocolVSockPort: integer(1025), GuestHeartbeatInterval: "5s", DataPlaneListenAddress: "127.0.0.1:" + fmt.Sprint(dataPort), DataPlaneAdvertisedAddress: plan.Network.DataPlaneAddress}}

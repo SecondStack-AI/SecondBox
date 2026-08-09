@@ -16,7 +16,6 @@ import (
 	"mime"
 	"net"
 	"net/http"
-	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -124,11 +123,6 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	mux.Handle("GET /v1/sandboxes/{sandboxID}/directories", apiHandler.authenticate(http.HandlerFunc(apiHandler.listSandboxDirectory)))
 	mux.Handle("POST /v1/sandboxes/{sandboxID}/directories", apiHandler.authenticate(http.HandlerFunc(apiHandler.createSandboxDirectory)))
 	mux.Handle("DELETE /v1/sandboxes/{sandboxID}/directories", apiHandler.authenticate(http.HandlerFunc(apiHandler.removeSandboxPath)))
-	mux.Handle("GET /v1/sandboxes/{sandboxID}/artifacts", apiHandler.authenticate(http.HandlerFunc(apiHandler.listSandboxArtifacts)))
-	mux.Handle("POST /v1/sandboxes/{sandboxID}/artifacts", apiHandler.authenticate(http.HandlerFunc(apiHandler.uploadSandboxArtifact)))
-	mux.Handle("GET /v1/artifacts/{artifactID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getArtifact)))
-	mux.Handle("DELETE /v1/artifacts/{artifactID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.deleteArtifact)))
-	mux.Handle("GET /v1/artifacts/{artifactID}/content", apiHandler.authenticate(http.HandlerFunc(apiHandler.downloadArtifact)))
 	mux.Handle("GET /v1/sandboxes/{sandboxID}/snapshots", apiHandler.authenticate(http.HandlerFunc(apiHandler.listSandboxSnapshots)))
 	mux.Handle("POST /v1/sandboxes/{sandboxID}/snapshots", apiHandler.authenticate(http.HandlerFunc(apiHandler.createSandboxSnapshot)))
 	mux.Handle("GET /v1/snapshots/{snapshotID}", apiHandler.authenticate(http.HandlerFunc(apiHandler.getSnapshot)))
@@ -346,235 +340,6 @@ func (apiHandler *handler) removeSandboxPath(writer http.ResponseWriter, request
 	}
 	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
 	writer.WriteHeader(http.StatusNoContent)
-}
-
-func (apiHandler *handler) listSandboxArtifacts(writer http.ResponseWriter, request *http.Request) {
-	limit, err := queryLimit(request)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	page, err := apiHandler.service.ListSandboxArtifacts(
-		request.Context(), requestPrincipal(request), request.PathValue("sandboxID"),
-		limit, request.URL.Query().Get("cursor"),
-	)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	apiHandler.writeJSON(writer, request, http.StatusOK, page)
-}
-
-func (apiHandler *handler) uploadSandboxArtifact(writer http.ResponseWriter, request *http.Request) {
-	generation, err := parseGeneration(request)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	upload, err := decodeArtifactUpload(writer, request, apiHandler.maximumDataPlaneBodyBytes)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	defer func() {
-		if closeErr := upload.Content.Close(); closeErr != nil {
-			apiHandler.logResponseAbort(request, "Artifact upload staging close", closeErr)
-		}
-	}()
-	artifact, err := apiHandler.service.UploadSandboxArtifact(
-		request.Context(), requestPrincipal(request), request.PathValue("sandboxID"),
-		generation, request.Header.Get("SecondBox-Lease-ID"),
-		request.Header.Get("Idempotency-Key"), upload,
-	)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	apiHandler.writeJSON(writer, request, http.StatusCreated, artifact)
-}
-
-func (apiHandler *handler) getArtifact(writer http.ResponseWriter, request *http.Request) {
-	artifact, err := apiHandler.service.GetArtifact(
-		request.Context(), requestPrincipal(request), request.PathValue("artifactID"),
-	)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	apiHandler.writeJSON(writer, request, http.StatusOK, artifact)
-}
-
-func (apiHandler *handler) downloadArtifact(writer http.ResponseWriter, request *http.Request) {
-	content, artifact, err := apiHandler.service.DownloadArtifact(
-		request.Context(), requestPrincipal(request), request.PathValue("artifactID"),
-	)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	defer func() {
-		if closeErr := content.Close(); closeErr != nil {
-			apiHandler.logResponseAbort(request, "Artifact download close", closeErr)
-		}
-	}()
-	digest, err := protocolChecksumToHTTPDigest("sha256:" + artifact.SHA256)
-	if err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	writer.Header().Set("Content-Type", "application/octet-stream")
-	writer.Header().Set("Digest", digest)
-	writer.WriteHeader(http.StatusOK)
-	if _, err := io.Copy(writer, content); err != nil {
-		apiHandler.logResponseAbort(request, "Artifact download", err)
-	}
-}
-
-func (apiHandler *handler) deleteArtifact(writer http.ResponseWriter, request *http.Request) {
-	if err := requireEmptyBody(request); err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	if err := apiHandler.service.DeleteArtifact(
-		request.Context(), requestPrincipal(request), request.PathValue("artifactID"),
-		request.Header.Get("Idempotency-Key"),
-	); err != nil {
-		apiHandler.writeError(writer, request, err)
-		return
-	}
-	writer.WriteHeader(http.StatusNoContent)
-}
-
-func decodeArtifactUpload(
-	writer http.ResponseWriter,
-	request *http.Request,
-	maximumBodyBytes int64,
-) (service.ArtifactUpload, error) {
-	request.Body = http.MaxBytesReader(writer, request.Body, maximumBodyBytes)
-	reader, err := request.MultipartReader()
-	if err != nil {
-		return service.ArtifactUpload{}, requestValidationError(errors.New("SecondBox Artifact upload must be multipart/form-data"))
-	}
-	fields := map[string][]byte{}
-	var contentFile *os.File
-	var contentSize int64
-	var contentSHA256 string
-	cleanupContent := true
-	defer func() {
-		if cleanupContent && contentFile != nil {
-			_ = contentFile.Close()
-			_ = os.Remove(contentFile.Name())
-		}
-	}()
-	for {
-		part, err := reader.NextPart()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		var maximumBytesError *http.MaxBytesError
-		if errors.As(err, &maximumBytesError) {
-			return service.ArtifactUpload{}, runnercontrol.ErrDataPlaneSessionLimit
-		}
-		if err != nil {
-			return service.ArtifactUpload{}, requestValidationError(fmt.Errorf("SecondBox Artifact multipart read failed: %w", err))
-		}
-		name := part.FormName()
-		if name == "" {
-			return service.ArtifactUpload{}, requestValidationError(errors.Join(
-				errors.New("SecondBox Artifact multipart field name is required"),
-				part.Close(),
-			))
-		}
-		if _, exists := fields[name]; exists {
-			return service.ArtifactUpload{}, requestValidationError(errors.Join(
-				errors.New("SecondBox Artifact multipart fields must be unique"),
-				part.Close(),
-			))
-		}
-		switch name {
-		case "name", "mediaType", "sha256", "metadata", "content":
-		default:
-			return service.ArtifactUpload{}, requestValidationError(errors.Join(
-				errors.New("SecondBox Artifact multipart field is unknown"),
-				part.Close(),
-			))
-		}
-		if name == "metadata" || name == "content" {
-			mediaType, _, mediaTypeErr := mime.ParseMediaType(part.Header.Get("Content-Type"))
-			expectedMediaType := "application/json"
-			if name == "content" {
-				expectedMediaType = "application/octet-stream"
-			}
-			if mediaTypeErr != nil || mediaType != expectedMediaType {
-				return service.ArtifactUpload{}, requestValidationError(errors.Join(
-					errors.New("SecondBox Artifact multipart field Content-Type is invalid: "+name),
-					part.Close(),
-				))
-			}
-		}
-		if name == "content" {
-			contentFile, err = os.CreateTemp("", "secondbox-artifact-upload-*")
-			if err != nil {
-				return service.ArtifactUpload{}, errors.Join(
-					fmt.Errorf("SecondBox Artifact staging create failed: %w", err),
-					part.Close(),
-				)
-			}
-			hasher := sha256.New()
-			contentSize, err = io.Copy(io.MultiWriter(contentFile, hasher), part)
-			closeErr := part.Close()
-			if err != nil || closeErr != nil {
-				if errors.As(err, &maximumBytesError) {
-					return service.ArtifactUpload{}, runnercontrol.ErrDataPlaneSessionLimit
-				}
-				return service.ArtifactUpload{}, errors.Join(
-					fmt.Errorf("SecondBox Artifact content staging failed: %w", err),
-					closeErr,
-				)
-			}
-			contentSHA256 = hex.EncodeToString(hasher.Sum(nil))
-			fields[name] = nil
-			continue
-		}
-		value, readErr := io.ReadAll(io.LimitReader(part, 1<<20+1))
-		closeErr := part.Close()
-		if readErr != nil || closeErr != nil {
-			if errors.As(readErr, &maximumBytesError) {
-				return service.ArtifactUpload{}, runnercontrol.ErrDataPlaneSessionLimit
-			}
-			return service.ArtifactUpload{}, requestValidationError(fmt.Errorf(
-				"SecondBox Artifact multipart field read failed: read=%v close=%v",
-				readErr, closeErr,
-			))
-		}
-		fields[name] = value
-	}
-	for _, required := range []string{"name", "mediaType", "sha256", "metadata", "content"} {
-		if _, exists := fields[required]; !exists {
-			return service.ArtifactUpload{}, requestValidationError(errors.New(
-				"SecondBox Artifact multipart field is required: " + required,
-			))
-		}
-	}
-	var metadata map[string]string
-	if err := json.Unmarshal(fields["metadata"], &metadata); err != nil || metadata == nil {
-		return service.ArtifactUpload{}, requestValidationError(errors.New("SecondBox Artifact metadata must be a JSON string map"))
-	}
-	cleanupContent = false
-	return service.ArtifactUpload{
-		Name: string(fields["name"]), MediaType: string(fields["mediaType"]),
-		SHA256: string(fields["sha256"]), Metadata: metadata, Content: &removingArtifactFile{contentFile},
-		SizeBytes: contentSize, ActualSHA256: contentSHA256,
-	}, nil
-}
-
-type removingArtifactFile struct {
-	*os.File
-}
-
-func (file *removingArtifactFile) Close() error {
-	name := file.Name()
-	return errors.Join(file.File.Close(), os.Remove(name))
 }
 
 func (apiHandler *handler) health(writer http.ResponseWriter, request *http.Request) {
@@ -1226,7 +991,6 @@ func classifyError(err error) (int, string, string, bool) {
 	case errors.Is(err, ports.ErrProfileNotFound),
 		errors.Is(err, ports.ErrRunnerPoolNotFound), errors.Is(err, ports.ErrRunnerNotFound),
 		errors.Is(err, ports.ErrSandboxNotFound), errors.Is(err, ports.ErrLeaseNotFound),
-		errors.Is(err, ports.ErrArtifactNotFound),
 		errors.Is(err, ports.ErrSnapshotNotFound), errors.Is(err, ports.ErrPortSessionNotFound),
 		errors.Is(err, runnercontrol.ErrDataPlaneNotFound):
 		return http.StatusNotFound, "not_found", "Resource not found", false
@@ -1254,12 +1018,8 @@ func classifyError(err error) (int, string, string, bool) {
 		return http.StatusConflict, "state_conflict", "Sandbox name is already in use", false
 	case errors.Is(err, ports.ErrIdempotencyConflict):
 		return http.StatusConflict, "idempotency_conflict", "Idempotency key payload conflict", false
-	case errors.Is(err, ports.ErrArtifactIntegrity):
-		return http.StatusConflict, "state_conflict", "Artifact integrity verification failed", false
 	case errors.Is(err, ports.ErrPortTokenConsumed):
 		return http.StatusConflict, "state_conflict", "Port tunnel token was already consumed", false
-	case errors.Is(err, ports.ErrArtifactStorage):
-		return http.StatusServiceUnavailable, "dependency_unavailable", "Artifact storage unavailable", true
 	case errors.Is(err, runnercontrol.ErrFileChecksum):
 		return http.StatusConflict, "checksum_mismatch", "Content checksum mismatch", false
 	case errors.Is(err, runnercontrol.ErrDataPlaneDeadline):

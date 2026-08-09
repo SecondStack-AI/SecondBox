@@ -87,7 +87,7 @@ artifact bundle and never substitutes mock compute.
 
 ## Bounded support bundles
 
-The support collector includes the three unauthenticated probes, their HTTP status, an authenticated aggregate timing summary, and a bounded tail of the configured control-plane JSON log. It never collects process environments, environment files, credentials, database contents, object-store objects, workspaces, runner credentials, or guest files. The platform token is sent only to the aggregate timing route and is never written to the archive.
+The support collector includes the three unauthenticated probes, their HTTP status, an authenticated aggregate timing summary, and a bounded tail of the configured control-plane JSON log. It never collects process environments, environment files, credentials, database contents, workspaces, runner credentials, or guest files. The platform token is sent only to the aggregate timing route and is never written to the archive.
 
 ```sh
 export SECONDBOX_SUPPORT_BASE_URL=http://127.0.0.1:8080

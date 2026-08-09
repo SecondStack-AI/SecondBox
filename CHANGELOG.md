@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Removed
+
+- Removed the application Artifact resource, its API/SDK/CLI surfaces, S3-compatible storage integration, quotas, retention, garbage collection, and bundled object-store deployment.
+
 ### Fixed
 
 - Guided installation now inspects existing Docker IPAM allocations and chooses a separate, reviewed RFC1918 `/24` for the Compose backend network. Compose startup no longer depends on Docker's finite automatic address pools, and both the Firecracker guest network and Compose network are rejected when they overlap each other, a host route, or an allocated Docker network. A receipt-compatible v0.4.4 through v0.4.6 operation can use the v0.4.7 bootstrap to validate and stop its exact partial Compose project, journal a retry from the pre-Compose boundary, replace the conflicting network, and resume without downloading the release again.

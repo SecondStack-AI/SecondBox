@@ -94,15 +94,6 @@ const (
 	DataPlaneTransportProxied = "proxied"
 	DataPlaneTransportDirect  = "direct"
 
-	ObjectStateStaging         = "staging"
-	ObjectStateVerified        = "verified"
-	ObjectStatePublished       = "published"
-	ObjectStateIntegrityFailed = "integrity_failed"
-	ObjectStateQuotaFailed     = "quota_failed"
-	ObjectStateGarbagePending  = "garbage_pending"
-	ObjectStateGarbageDeleting = "garbage_deleting"
-	ObjectStateDeleted         = "deleted"
-
 	TerminationReasonRequestedDrain     = "requested_drain"
 	TerminationReasonRequestedStop      = "requested_stop"
 	TerminationReasonIdleTimeout        = "idle_timeout"
@@ -190,11 +181,10 @@ type LifecyclePolicy struct {
 	LeaseSeconds           int64  `json:"leaseSeconds"`
 }
 
-// RetentionPolicy bounds local Snapshot count/lifetime and Artifact retention.
+// RetentionPolicy bounds local Snapshot count and lifetime.
 type RetentionPolicy struct {
 	SnapshotLimit            int64 `json:"snapshotLimit"`
 	SnapshotRetentionSeconds int64 `json:"snapshotRetentionSeconds"`
-	ArtifactRetentionSeconds int64 `json:"artifactRetentionSeconds"`
 }
 
 // ExecutionPolicy bounds exec, transfer, terminal, and port-session resources.
@@ -369,31 +359,6 @@ type SnapshotPage struct {
 	NextCursor *string    `json:"nextCursor,omitempty"`
 }
 
-// Artifact is immutable application exchange evidence.
-type Artifact struct {
-	ID                 string            `json:"id"`
-	TenantRef          string            `json:"-"`
-	SubjectRef         string            `json:"-"`
-	SandboxID          string            `json:"sandboxId"`
-	SourceGeneration   int64             `json:"generation"`
-	Name               string            `json:"name"`
-	MediaType          string            `json:"mediaType"`
-	SizeBytes          int64             `json:"sizeBytes"`
-	SHA256             string            `json:"sha256"`
-	State              string            `json:"-"`
-	Metadata           map[string]string `json:"metadata"`
-	RetainUntil        time.Time         `json:"expiresAt"`
-	CreatedAt          time.Time         `json:"createdAt"`
-	PublishedAt        *time.Time        `json:"-"`
-	GarbageCollectedAt *time.Time        `json:"-"`
-}
-
-// ArtifactPage is one bounded, newest-first immutable Artifact page.
-type ArtifactPage struct {
-	Items      []Artifact `json:"items"`
-	NextCursor *string    `json:"nextCursor,omitempty"`
-}
-
 // CreatePortSessionRequest requests one pinned Profile port by name.
 type CreatePortSessionRequest struct {
 	Name            string `json:"name"`
@@ -421,9 +386,7 @@ type QuotaLimits struct {
 	MaxActiveInstances      int64 `json:"maxActiveInstances"`
 	MaxCPUMillis            int64 `json:"maxCpuMillis"`
 	MaxMemoryBytes          int64 `json:"maxMemoryBytes"`
-	MaxArtifactBytes        int64 `json:"maxArtifactBytes"`
 	MaxSnapshots            int64 `json:"maxSnapshots"`
-	MaxArtifacts            int64 `json:"maxArtifacts"`
 	MaxPortSessions         int64 `json:"maxPortSessions"`
 	MaxConcurrentOperations int64 `json:"maxConcurrentOperations"`
 }
@@ -434,9 +397,7 @@ type QuotaUsage struct {
 	ActiveInstances      int64 `json:"activeInstances"`
 	CPUMillis            int64 `json:"cpuMillis"`
 	MemoryBytes          int64 `json:"memoryBytes"`
-	ArtifactBytes        int64 `json:"artifactBytes"`
 	Snapshots            int64 `json:"snapshots"`
-	Artifacts            int64 `json:"artifacts"`
 	PortSessions         int64 `json:"portSessions"`
 	ConcurrentOperations int64 `json:"concurrentOperations"`
 }

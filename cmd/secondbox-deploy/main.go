@@ -242,15 +242,6 @@ func runCommand(arguments []string, renderer cliui.Renderer) error {
 		}
 		fmt.Println(string(output))
 		return nil
-	case "migrate":
-		if len(arguments) != 3 {
-			return usage(renderer)
-		}
-		path, err := deployconfig.MigrateLegacyEnvironment(arguments[1], arguments[2])
-		if err == nil {
-			err = writeDeployReceipt(renderer, "Deployment migrated", []cliui.Pair{{Key: "Manifest", Value: path}}, path+"\n")
-		}
-		return err
 	case "compose":
 		if len(arguments) != 3 {
 			return usage(renderer)

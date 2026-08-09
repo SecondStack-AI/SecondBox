@@ -32,16 +32,16 @@ without a classification fails command tests.
 | `secondbox` surface | stdin | stdout authority | stderr and exit owner |
 |---|---:|---|---|
 | `version`, `login`, `logout`, `whoami` | no | bounded human or explicit JSON/plain | CLI |
-| bounded `profiles`, `runner-pools`, `runners`, `sandboxes`, `snapshots`, `artifacts`, `leases`, and `ports` list/get aliases | request body only where declared | human only when explicitly selected or eligible; otherwise original API JSON | API errors; CLI exit |
+| bounded `profiles`, `runner-pools`, `runners`, `sandboxes`, `snapshots`, `leases`, and `ports` list/get aliases | request body only where declared | human only when explicitly selected or eligible; otherwise original API JSON | API errors; CLI exit |
 | mutating aliases and `resources check/apply` | optional request/file input | machine JSON | API/CLI |
 | `operation OPERATION_ID` | operation-defined | original response bytes | API |
-| `files read`, `artifacts download`, logs | no | raw file, artifact, or log bytes | CLI/API |
+| `files read`, logs | no | raw file or log bytes | CLI/API |
 | `run`, `exec`, `shell`, `sandbox shell`, `exec stream` | guest stdin/control stream | guest stdout/control bytes | guest stderr and guest exit status |
 | timings and diagnostics receipt | no | bounded report or declared archive/path | CLI |
 
 | `secondbox-deploy` surface | stdin | stdout authority | stderr and exit owner |
 |---|---:|---|---|
-| `version`, `init`, `validate`, `migrate` | no | bounded receipt with historical non-TTY form | CLI |
+| `version`, `init`, `validate` | no | bounded receipt with historical non-TTY form | CLI |
 | `runner-template`, `render`, `runner-init` | no | exact TOML, environment, path, or generated artifact contract | CLI |
 | `verify`, `inspect` | no | machine JSON | CLI |
 | `compose` | Docker-defined | Docker Compose stdout, connected directly | Docker Compose stderr and exit status |
@@ -57,7 +57,6 @@ go run ./cmd/secondbox-deploy inspect "$manifest" | jq ...
 go run ./cmd/secondbox-deploy runner-template > runner.toml
 secondbox sandboxes list | jq ...
 secondbox files read ... > workspace-file
-secondbox artifacts download ... > artifact
 ```
 
 Use `--output json` in new scripts when a bounded command also has a human

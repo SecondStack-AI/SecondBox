@@ -26,6 +26,6 @@ Import the public wire types from `@secondstack-ai/secondbox`, the Flue 2.x adap
 
 `SandboxHandle.connectExecStream` accepts an application-supplied authenticated connector. The returned helper validates the Sandbox generation and WebSocket subprotocol, sequences stdin, explicit EOF, credit, and cancellation frames, and rejects input after EOF or any operation after the terminal outcome. The connector owns runtime-specific credential attachment because browser and server WebSocket implementations expose different authentication surfaces.
 
-High-level methods cover Profiles, RunnerPools, Sandbox creation/adoption/listing, Metadata, lifecycle and waiting, buffered/streaming execution, files, Snapshots, Artifacts, Leases, Ports, and terminals. They generate request keys when absent and translate observed resource revisions into optimistic-concurrency headers without refreshing and replaying fenced work.
+High-level methods cover Profiles, RunnerPools, Sandbox creation/adoption/listing, Metadata, lifecycle and waiting, buffered/streaming execution, files, Snapshots, Leases, Ports, and terminals. They generate request keys when absent and translate observed resource revisions into optimistic-concurrency headers without refreshing and replaying fenced work.
 
 The canonical API contract, runnable examples, and deployment guidance live in the [SecondBox repository](https://github.com/SecondStack-AI/SecondBox).

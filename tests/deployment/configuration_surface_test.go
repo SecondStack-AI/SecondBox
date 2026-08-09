@@ -42,7 +42,7 @@ func TestDeploymentCompilerReplacesLegacyOperatorSurface(t *testing.T) {
 			t.Errorf("legacy operator input still exists: %s", removed)
 		}
 	}
-	for _, present := range []string{"deploy/secondbox.example.toml", "deploy/compose.yml", "deploy/compose.development.yml", "deploy/compose.explicit-network.yml", "deploy/compose.bundled-database.yml", "deploy/compose.bundled-object-store.yml", "deploy/compose.same-host-runner.yml"} {
+	for _, present := range []string{"deploy/secondbox.example.toml", "deploy/compose.yml", "deploy/compose.development.yml", "deploy/compose.explicit-network.yml", "deploy/compose.bundled-database.yml", "deploy/compose.same-host-runner.yml"} {
 		if _, err := os.Stat(filepath.Join(root, present)); err != nil {
 			t.Errorf("new deployment artifact missing: %s: %v", present, err)
 		}
