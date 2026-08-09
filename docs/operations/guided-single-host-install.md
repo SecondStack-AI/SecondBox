@@ -48,8 +48,8 @@ The normal wizard asks for a workspace choice, reviews its conservative resource
 
 Workspace choices are:
 
-- An existing dedicated, non-root XFS or Btrfs mount with at least 65 GiB available. The installer creates one operation-specific Runner storage tree there for verified execution assets, run state, Workspaces, and local Snapshots.
-- A fully allocated Btrfs filesystem image of at least 65 GiB. The image contains the same complete Runner storage tree. It is portable and size-bounded, but its availability still depends on the backing filesystem and its systemd loop mount. Back it up as durable Runner storage, not as a replaceable cache.
+- An existing dedicated, non-root XFS or Btrfs mount with at least 65 GiB available. The mount must permit executable files and device nodes because Firecracker executes and opens KVM/TUN devices inside its per-Instance jail. The installer creates one operation-specific Runner storage tree there for verified execution assets, run state, Workspaces, and local Snapshots.
+- A fully allocated Btrfs filesystem image of at least 65 GiB. The image contains the same complete Runner storage tree and is mounted `nosuid` while permitting the execution and device access required by the jailer. It is portable and size-bounded, but its availability still depends on the backing filesystem and its systemd loop mount. Back it up as durable Runner storage, not as a replaceable cache.
 
 The final review lists the release version and manifest, seven digest-pinned OCI images, signing-key fingerprint, expected downloads, disk allocation, all generated authority categories, exact paths, services, retention, capacity, network settings, and uninstall behavior. Confirmation creates a mode-`0600` plan and receipt before any secret or host resource exists.
 

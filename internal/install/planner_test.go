@@ -13,7 +13,7 @@ func plannerFacts(t *testing.T) HostFacts {
 	facts.BtrfsSupported = true
 	facts.DNSUpstreams = []string{"192.0.2.53"}
 	facts.Devices = []DeviceFact{
-		{Path: "/dev/sdb", Identity: "8:16", Filesystem: "xfs", SizeBytes: 300 << 30, AvailableBytes: 240 << 30, Mountpoint: "/srv/secondbox-workspace"},
+		{Path: "/dev/sdb", Identity: "8:16", Filesystem: "xfs", SizeBytes: 300 << 30, AvailableBytes: 240 << 30, Mountpoint: "/srv/secondbox-workspace", JailerCompatible: true},
 		{Path: "/dev/sdc", Identity: "8:32", Filesystem: "ext4", SizeBytes: 300 << 30, AvailableBytes: 240 << 30, Mountpoint: "/srv/not-supported"},
 		{Path: "/dev/root", Identity: "8:1", Filesystem: "btrfs", SizeBytes: 500 << 30, AvailableBytes: 300 << 30, Mountpoint: "/"},
 	}
@@ -65,6 +65,16 @@ func TestStorageOptionsRejectMountOnRootDevice(t *testing.T) {
 	}
 }
 
+func TestStorageOptionsRejectMountThatCannotHostJailer(t *testing.T) {
+	facts := plannerFacts(t)
+	facts.Devices[0].JailerCompatible = false
+	for _, option := range StorageOptions(facts, 100<<30, ExecutionBundleEstimateBytes) {
+		if option.Choice == StorageExistingMount {
+			t.Fatalf("jailer-incompatible mount was offered: %#v", option)
+		}
+	}
+}
+
 func TestStorageOptionsRequireBackingForControlServicesAndReleaseAssets(t *testing.T) {
 	if options := StorageOptions(plannerFacts(t), MinimumControlBackingBytes+ExecutionBundleEstimateBytes+MinimumObjectStoreBytes-1, ExecutionBundleEstimateBytes); len(options) != 0 {
 		t.Fatalf("storage options with insufficient control backing = %#v", options)
@@ -110,7 +120,11 @@ func TestProposeExistingFilesystemPlanIsCompleteAndExplicit(t *testing.T) {
 		t.Fatalf("artifact publication path is not traversable without exposing privileged Runner storage: root=%#v storage=%#v parent=%#v artifacts=%#v", runnerRoot, runnerStorage, artifactParent, artifacts)
 	}
 	state, _ := plannedPathByName(plan.Paths, "state")
-	for _, name := range []string{"jail", "run", "network", "snapshot-template-cache", "logs"} {
+	jail, _ := plannedPathByName(plan.Paths, "jail")
+	if jail.Path != filepath.Join(runnerStorage.Path, "jail") {
+		t.Fatalf("Runner jail is not the reviewed storage child: %#v", jail)
+	}
+	for _, name := range []string{"run", "network", "snapshot-template-cache", "logs"} {
 		planned, found := plannedPathByName(plan.Paths, name)
 		if !found || !strings.HasPrefix(planned.Path, state.Path+string(filepath.Separator)) {
 			t.Fatalf("runner path %s is outside state bind mount: %#v", name, planned)

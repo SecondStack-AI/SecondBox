@@ -315,6 +315,9 @@ func verifyExistingWorkspaceMountInfo(plan InstallPlan, content []byte, requireA
 		if (requireAcceptedDeviceIdentity && fields[2] != plan.Storage.ExistingDeviceIdentity) || fields[2] == rootDeviceIdentity || (fields[separator+1] != "xfs" && fields[separator+1] != "btrfs") || parent == "/" {
 			return installerError("existing workspace mount identity or filesystem changed", nil)
 		}
+		if !mountAllowsJailer(fields, separator) {
+			return installerError("existing Runner storage mount must permit executable files and device nodes for the Firecracker jailer", nil)
+		}
 		return nil
 	}
 	return installerError("accepted existing workspace mount is no longer mounted", nil)

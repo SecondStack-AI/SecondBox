@@ -47,6 +47,12 @@ func TestExistingWorkspaceMountRejectsRootDeviceReuse(t *testing.T) {
 	if err := verifyExistingWorkspaceMountInfo(plan, []byte(mountInfo), true); err != nil {
 		t.Fatalf("dedicated Workspace mount result = %v", err)
 	}
+	for _, incompatible := range []string{"noexec", "nodev"} {
+		incompatibleMount := strings.Replace(mountInfo, "/data /srv/secondbox rw,relatime - btrfs /dev/vda1 rw", "/data /srv/secondbox rw,relatime,"+incompatible+" - btrfs /dev/vda1 rw,"+incompatible, 1)
+		if err := verifyExistingWorkspaceMountInfo(plan, []byte(incompatibleMount), true); err == nil || !strings.Contains(err.Error(), "must permit executable files and device nodes") {
+			t.Fatalf("%s Runner storage mount result = %v", incompatible, err)
+		}
+	}
 	plan.Storage.ExistingDeviceIdentity = "259:99"
 	if err := verifyExistingWorkspaceMountInfo(plan, []byte(mountInfo), false); err != nil {
 		t.Fatalf("completed host apply depended on transient device identity: %v", err)

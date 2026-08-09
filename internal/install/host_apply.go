@@ -263,5 +263,5 @@ func rollbackEmpty(executor HostApplyExecutor, resources []CreatedResource) (map
 }
 
 func MountUnit(imagePath, storagePath string) string {
-	return "[Unit]\nDescription=SecondBox reflink-capable Runner storage\nAfter=local-fs-pre.target\nBefore=docker.service\n\n[Mount]\nWhat=" + imagePath + "\nWhere=" + storagePath + "\nType=btrfs\nOptions=loop,nodev,nosuid,noexec\nTimeoutSec=120\n\n[Install]\nWantedBy=local-fs.target\n"
+	return "[Unit]\nDescription=SecondBox reflink-capable Runner storage\nAfter=local-fs-pre.target\nBefore=docker.service\n\n[Mount]\nWhat=" + imagePath + "\nWhere=" + storagePath + "\nType=btrfs\nOptions=loop,nosuid\nTimeoutSec=120\n\n[Install]\nWantedBy=local-fs.target\n"
 }

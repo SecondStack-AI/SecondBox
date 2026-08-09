@@ -152,7 +152,7 @@ func TestHostApplyUsesOnlyAcceptedResourcesAndRecordsEachMutation(t *testing.T) 
 			t.Fatalf("receipt resource escaped plan: %#v", created)
 		}
 	}
-	if !strings.Contains(executor.calls[len(executor.calls)-1], "reflink") || !strings.Contains(executor.unit, "Options=loop,nodev,nosuid,noexec") || !strings.Contains(executor.unit, "Before=docker.service") {
+	if !strings.Contains(executor.calls[len(executor.calls)-1], "reflink") || !strings.Contains(executor.unit, "Options=loop,nosuid") || strings.Contains(executor.unit, "noexec") || strings.Contains(executor.unit, "nodev") || !strings.Contains(executor.unit, "Before=docker.service") {
 		t.Fatalf("calls/unit = %#v\n%s", executor.calls, executor.unit)
 	}
 	if !slices.ContainsFunc(executor.calls, func(call string) bool {

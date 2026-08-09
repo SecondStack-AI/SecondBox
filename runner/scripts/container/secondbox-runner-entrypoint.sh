@@ -29,6 +29,14 @@ install -d -o 0 -g 0 -m 0700 \
     "$SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT" \
     "$SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT"
 
+jail_mount_options="$(findmnt -T "$SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT" -n -o OPTIONS)"
+case ",$jail_mount_options," in
+    *,noexec,*|*,nodev,*)
+        echo "SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT mount must permit executable files and device nodes" >&2
+        exit 2
+        ;;
+esac
+
 umask 077
 
 /usr/local/bin/microvm-host-network-setup apply

@@ -147,6 +147,7 @@ func TestMaterializeReleaseResumesWithoutReextractingVerifiedBundle(t *testing.T
 		plannedPath("artifacts-parent", artifactParent, PathInstallerHost, ResourceDirectory, 0o700, uid, gid, true, true),
 		plannedPath("artifacts", filepath.Join(artifactParent, "artifacts"), PathInstallerHost, ResourceDirectory, 0o700, uid, gid, false, true),
 		plannedPath("state", filepath.Join(runnerStorage, "state"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
+		plannedPath("jail", filepath.Join(runnerStorage, "jail"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
 		plannedPath("run", filepath.Join(runnerStorage, "state", "run"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
 		plannedPath("binary-directory-root", filepath.Join(root, ".local"), PathUserDeployment, ResourceDirectory, 0o755, uid, gid, false, true),
 		plannedPath("binary-directory", filepath.Join(root, ".local", "bin"), PathUserDeployment, ResourceDirectory, 0o755, uid, gid, false, true),

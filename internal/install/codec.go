@@ -234,13 +234,15 @@ func (plan InstallPlan) Validate() error {
 	artifactParent, hasArtifactParent := plannedPathByName(plan.Paths, "artifacts-parent")
 	artifacts, hasArtifacts := plannedPathByName(plan.Paths, "artifacts")
 	state, hasState := plannedPathByName(plan.Paths, "state")
+	jail, hasJail := plannedPathByName(plan.Paths, "jail")
 	run, hasRun := plannedPathByName(plan.Paths, "run")
-	if !hasRunnerRoot || !hasRunnerStorage || !hasArtifactParent || !hasArtifacts || !hasState || !hasRun ||
+	if !hasRunnerRoot || !hasRunnerStorage || !hasArtifactParent || !hasArtifacts || !hasState || !hasJail || !hasRun ||
 		!runnerRoot.RequiresSudo || runnerRoot.Kind != ResourceDirectory || runnerRoot.Mode != 0o711 ||
 		!runnerStorage.RequiresSudo || runnerStorage.Kind != ResourceDirectory || runnerStorage.Mode != 0o711 || runnerStorage.Path != filepath.Dir(plan.Storage.WorkspacePath) || filepath.Dir(runnerStorage.Path) != runnerRoot.Path ||
 		!artifactParent.RequiresSudo || artifactParent.Kind != ResourceDirectory || artifactParent.Mode != 0o700 || artifactParent.Path != filepath.Join(runnerStorage.Path, "release") ||
 		artifacts.RequiresSudo || artifacts.Kind != ResourceDirectory || artifacts.Path != filepath.Join(artifactParent.Path, "artifacts") ||
 		!state.RequiresSudo || state.Kind != ResourceDirectory || state.Path != filepath.Join(runnerStorage.Path, "state") ||
+		!jail.RequiresSudo || jail.Kind != ResourceDirectory || jail.Mode != 0o700 || jail.Path != filepath.Join(runnerStorage.Path, "jail") ||
 		!run.RequiresSudo || run.Kind != ResourceDirectory || run.Path != filepath.Join(state.Path, "run") {
 		return installerError("runner storage topology must colocate release assets, run state, and Workspaces", nil)
 	}

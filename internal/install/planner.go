@@ -96,7 +96,7 @@ func StorageOptions(facts HostFacts, backingAvailableBytes, releaseDownloadBytes
 		}
 	}
 	for _, device := range facts.Devices {
-		if device.Mountpoint == "" || device.Mountpoint == "/" || device.Identity == rootDevice || (device.Filesystem != "xfs" && device.Filesystem != "btrfs") || device.AvailableBytes < MinimumRunnerStorageBytes {
+		if device.Mountpoint == "" || device.Mountpoint == "/" || device.Identity == rootDevice || (device.Filesystem != "xfs" && device.Filesystem != "btrfs") || device.AvailableBytes < MinimumRunnerStorageBytes || !device.JailerCompatible {
 			continue
 		}
 		options = append(options, StorageOption{Choice: StorageExistingMount, Label: fmt.Sprintf("%s dedicated %s mount (%s available)", device.Mountpoint, strings.ToUpper(device.Filesystem), formatBytes(device.AvailableBytes)), Mountpoint: device.Mountpoint, DeviceIdentity: device.Identity, Filesystem: device.Filesystem, AvailableBytes: device.AvailableBytes})
@@ -371,7 +371,7 @@ func proposePaths(facts HostFacts, input ProposalInput, storagePlan StoragePlan,
 		plannedPath("cli-config-directory", filepath.Dir(input.CLIConfigPath), PathUserDeployment, ResourceDirectory, 0o700, uid, gid, false, true),
 		plannedPath("cli-config", input.CLIConfigPath, PathUserDeployment, ResourceFile, 0o600, uid, gid, false, true),
 		plannedPath("state", runnerState, PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
-		plannedPath("jail", filepath.Join(runnerState, "jail"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
+		plannedPath("jail", filepath.Join(runnerStorage, "jail"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
 		plannedPath("run", filepath.Join(runnerState, "run"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
 		plannedPath("network", filepath.Join(runnerState, "network"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
 		plannedPath("snapshot-template-cache", filepath.Join(runnerState, "snapshot-template-cache"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),

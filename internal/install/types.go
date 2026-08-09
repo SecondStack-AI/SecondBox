@@ -90,12 +90,13 @@ type Finding struct {
 	Remedy  string       `json:"remedy,omitempty"`
 }
 type DeviceFact struct {
-	Path           string `json:"path"`
-	Identity       string `json:"identity"`
-	Filesystem     string `json:"filesystem,omitempty"`
-	SizeBytes      int64  `json:"sizeBytes"`
-	AvailableBytes int64  `json:"availableBytes"`
-	Mountpoint     string `json:"mountpoint,omitempty"`
+	Path             string `json:"path"`
+	Identity         string `json:"identity"`
+	Filesystem       string `json:"filesystem,omitempty"`
+	SizeBytes        int64  `json:"sizeBytes"`
+	AvailableBytes   int64  `json:"availableBytes"`
+	Mountpoint       string `json:"mountpoint,omitempty"`
+	JailerCompatible bool   `json:"jailerCompatible"`
 }
 type PortFact struct {
 	Address  string `json:"address"`

@@ -86,7 +86,7 @@ func TestGuidedInstallOffersAndPersistsExistingReflinkFilesystem(t *testing.T) {
 	usePublishedGuidedReleaseBuild(t)
 	home := t.TempDir()
 	facts := guidedFacts()
-	facts.Devices = []install.DeviceFact{{Path: "/dev/sdb", Identity: "8:16", Filesystem: "xfs", SizeBytes: 200 << 30, AvailableBytes: 160 << 30, Mountpoint: "/srv/secondbox-dedicated"}}
+	facts.Devices = []install.DeviceFact{{Path: "/dev/sdb", Identity: "8:16", Filesystem: "xfs", SizeBytes: 200 << 30, AvailableBytes: 160 << 30, Mountpoint: "/srv/secondbox-dedicated", JailerCompatible: true}}
 	capabilities := cliui.ForWriter(&bytes.Buffer{}, &bytes.Buffer{})
 	capabilities.Accessible = true
 	renderer := cliui.Renderer{Output: &bytes.Buffer{}, Diagnostic: &bytes.Buffer{}, Capabilities: capabilities, OutputMode: cliui.OutputPlain, ColorMode: cliui.ColorNever}

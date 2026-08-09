@@ -359,7 +359,7 @@ func preflightMounts(p PreflightProbes, f *HostFacts, add func(string, FindingCl
 	for _, line := range strings.Split(string(content), "\n") {
 		fields := strings.Fields(line)
 		separator := slices.Index(fields, "-")
-		if len(fields) < 6 || separator < 0 || separator+2 >= len(fields) {
+		if len(fields) < 6 || separator < 0 || separator+3 >= len(fields) {
 			continue
 		}
 		device, mountpoint, filesystem := fields[2], decodeMount(fields[4]), fields[separator+1]
@@ -373,16 +373,16 @@ func preflightMounts(p PreflightProbes, f *HostFacts, add func(string, FindingCl
 		if statErr != nil {
 			continue
 		}
-		f.Devices = append(f.Devices, DeviceFact{Path: mountpoint, Identity: device, Filesystem: filesystem, SizeBytes: total, AvailableBytes: available, Mountpoint: mountpoint})
+		f.Devices = append(f.Devices, DeviceFact{Path: mountpoint, Identity: device, Filesystem: filesystem, SizeBytes: total, AvailableBytes: available, Mountpoint: mountpoint, JailerCompatible: mountAllowsJailer(fields, separator)})
 	}
 	candidates := 0
 	for _, device := range f.Devices {
-		if device.Mountpoint != "/" && device.Identity != rootDevice && device.AvailableBytes >= MinimumWorkspaceBytes {
+		if device.Mountpoint != "/" && device.Identity != rootDevice && device.AvailableBytes >= MinimumWorkspaceBytes && device.JailerCompatible {
 			candidates++
 		}
 	}
 	if candidates == 0 {
-		add("workspace_filesystem", FindingRemediable, "No dedicated XFS/Btrfs workspace candidate was found", "The installer can create a bounded Btrfs filesystem image.", "Choose the filesystem-image option or mount a dedicated filesystem.")
+		add("workspace_filesystem", FindingRemediable, "No jailer-compatible dedicated XFS/Btrfs storage candidate was found", "The mount must permit executable files and device nodes; the installer can create a bounded Btrfs filesystem image.", "Choose the filesystem-image option or mount a dedicated filesystem without noexec or nodev.")
 	} else {
 		add("workspace_filesystem", FindingPass, "Dedicated workspace candidates found", strconv.Itoa(candidates), "")
 	}
@@ -564,6 +564,20 @@ func boundedDetail(value string) string {
 }
 func decodeMount(value string) string {
 	return strings.NewReplacer(`\040`, ` `, `\011`, `\t`, `\134`, `\`).Replace(value)
+}
+
+func mountAllowsJailer(fields []string, separator int) bool {
+	if len(fields) < 6 || separator < 0 || separator+3 >= len(fields) {
+		return false
+	}
+	for _, options := range []string{fields[5], fields[separator+3]} {
+		for _, option := range strings.Split(options, ",") {
+			if option == "noexec" || option == "nodev" {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func HasBlockingFindings(facts HostFacts) bool {

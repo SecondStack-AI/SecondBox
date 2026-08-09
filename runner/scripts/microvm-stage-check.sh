@@ -13,12 +13,13 @@ fail() {
     exit 1
 }
 
-fail_if_nodev_mount() {
+fail_if_incompatible_jail_mount() {
     path="$1"
     [ -e "$path" ] || return 0
     options="$(findmnt -T "$path" -n -o OPTIONS 2>/dev/null || true)"
     case ",$options," in
         *,nodev,*) fail "$path is on a nodev mount; Firecracker jailer needs device nodes for /dev/net/tun and /dev/kvm" ;;
+        *,noexec,*) fail "$path is on a noexec mount; Firecracker jailer must execute Firecracker inside the jail" ;;
     esac
 }
 
@@ -142,7 +143,7 @@ if command -v debugfs >/dev/null 2>&1; then
 fi
 sample_socket_path="$SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT/firecracker/fc-abcd-01234567-compartment01234-01234567/root/firecracker.sock"
 [ "${#sample_socket_path}" -lt 108 ] || fail "SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT is too long for maximum-length Firecracker API Unix sockets: $SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT"
-fail_if_nodev_mount "$SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT"
+fail_if_incompatible_jail_mount "$SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT"
 
 if [ "$static_only" = true ]; then
     echo "microVM staging static checks passed"
@@ -153,7 +154,7 @@ fi
 mkdir -p "$SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT"
 chown root:root "$SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT"
 chmod 0755 "$SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT"
-fail_if_nodev_mount "$SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT"
+fail_if_incompatible_jail_mount "$SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT"
 mkdir -p "$SECONDBOX_RUNNER_WORKSPACE_ROOT"
 [ -d "$SECONDBOX_RUNNER_WORKSPACE_ROOT" ] || fail "SECONDBOX_RUNNER_WORKSPACE_ROOT is not a directory"
 [ -e /dev/kvm ] || fail "/dev/kvm is missing"

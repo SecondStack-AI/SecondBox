@@ -17,6 +17,9 @@ func TestRunnerEntrypointCreatesRuntimeDirectoriesAndExecutesRunner(t *testing.T
 		"SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR",
 		"SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT",
 		`"$1" != "/usr/local/bin/secondbox-runner"`,
+		`findmnt -T "$SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT"`,
+		"noexec",
+		"nodev",
 		`exec "$@"`,
 	} {
 		if !strings.Contains(entrypoint, required) {
