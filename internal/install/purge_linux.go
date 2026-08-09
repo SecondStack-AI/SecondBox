@@ -673,7 +673,7 @@ func validateComposeAssetDirectory(path string) error {
 	if err != nil {
 		return err
 	}
-	allow := map[string]bool{"compose.yml": true, "compose.development.yml": true, "compose.same-host-runner.yml": true}
+	allow := map[string]bool{"compose.yml": true, "compose.development.yml": true, "compose.explicit-network.yml": true, "compose.same-host-runner.yml": true}
 	for _, entry := range entries {
 		info, err := os.Lstat(filepath.Join(path, entry.Name()))
 		if err != nil || !allow[entry.Name()] || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o600 {

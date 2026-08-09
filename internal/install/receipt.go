@@ -103,6 +103,40 @@ func (receipt *InstallReceipt) RecoverSucceeded(now time.Time) error {
 	return nil
 }
 
+// PrepareComposeRetry journals a failed post-Compose operation back to the
+// last durable pre-Compose stage. Generated Compose resources and the CLI
+// configuration are replay-owned and must be recorded again after restart;
+// pre-existing or installer-created CLI parent directories stay ledgered so a
+// later purge does not lose ownership of directories the installer created.
+func (receipt *InstallReceipt) PrepareComposeRetry(now time.Time) error {
+	composeIndex := slices.Index(StageSequence, StageComposeStarted)
+	runnerIndex := slices.Index(StageSequence, StageRunnerEnrolled)
+	failureIndex := slices.Index(StageSequence, receipt.FailureStage)
+	lastIndex := -1
+	if len(receipt.CompletedStages) > 0 {
+		lastIndex = slices.Index(StageSequence, receipt.CompletedStages[len(receipt.CompletedStages)-1].Stage)
+	}
+	if receipt.Status != OperationFailed || failureIndex < composeIndex || lastIndex < runnerIndex {
+		return installerError("Compose retry requires a failed operation at or after Compose startup", nil)
+	}
+	if len(receipt.PendingResourceIDs) != 0 || len(receipt.RemovedResourceIDs) != 0 || len(receipt.CompletedPurgeSteps) != 0 {
+		return installerError("Compose retry requires an installation receipt without pending or removed resources", nil)
+	}
+	for index, record := range receipt.CompletedStages {
+		if slices.Index(StageSequence, record.Stage) != index {
+			return installerError("Compose retry requires a contiguous completed stage sequence", nil)
+		}
+	}
+	replayOwned := map[string]bool{"compose-project": true, "compose-environment": true, "compose-assets": true, "cli-config": true}
+	receipt.CompletedStages = slices.Clone(receipt.CompletedStages[:composeIndex])
+	receipt.CreatedResources = slices.DeleteFunc(receipt.CreatedResources, func(resource CreatedResource) bool { return replayOwned[resource.ID] })
+	receipt.Status = OperationFailed
+	receipt.FailureClass = FailureRetryable
+	receipt.FailureStage = StageComposeStarted
+	receipt.UpdatedAt = now.UTC()
+	return nil
+}
+
 func (receipt *InstallReceipt) AppendResource(resource CreatedResource) error {
 	for _, existing := range receipt.CreatedResources {
 		if existing.ID == resource.ID {

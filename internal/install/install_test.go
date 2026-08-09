@@ -26,7 +26,7 @@ func validPlan(t *testing.T) InstallPlan {
 	runnerRoot := "/srv/secondbox/secondbox-install_0123456789abcdef"
 	runnerStorage := runnerRoot + "/storage"
 	workspace := runnerStorage + "/workspaces"
-	return InstallPlan{SchemaVersion: PlanSchema, OperationID: "install_0123456789abcdef", CreatedAt: now, HostFacts: facts, HostFactsDigest: factsDigest, Release: ReleasePlan{Version: "0.4.0", ArtifactManifestURL: "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.4.0/secondbox-0.4.0-artifact-manifest.json", ArtifactManifestDigest: "sha256:" + strings.Repeat("a", 64), SigningKeyFingerprint: "SHA256:" + strings.Repeat("A", 64), Images: images, BinaryDigests: map[string]string{"secondbox": strings.Repeat("c", 64), "secondbox-deploy": strings.Repeat("d", 64)}, ExpectedDownloadBytes: 12 << 30}, Storage: StoragePlan{Choice: StorageExistingMount, WorkspacePath: workspace, ExistingDeviceIdentity: "8:2"}, Capacity: CapacityPlan{MaxSandboxes: 8, MaxCPUMillis: 32000, MaxMemoryBytes: 24 << 30, MaxWorkspaceBytes: 200 << 30, ConcurrentStarts: 2, ConcurrentOperations: 8, StoragePressurePercent: 85, SubjectQuotas: quotas}, Compute: ComputePlan{FirecrackerCPUTemplate: SingleHostFirecrackerCPUTemplate}, Network: NetworkPlan{APIAddress: "127.0.0.1:8080", RunnerAddress: "127.0.0.1:9443", DataPlaneAddress: "127.0.0.1:9444", DatabaseAddress: "127.0.0.1:5432", ObjectStoreAddress: "127.0.0.1:9000", ObjectStoreConsoleAddress: "127.0.0.1:9001", GuestBridgeCIDR: "172.30.0.0/24", TAPPrefix: "sbx", CgroupParent: "secondbox", JailerUIDRange: UIDRange{Start: 200000, Count: 64}, DNSUpstream: "1.1.1.1", Gateways: map[string]string{"agent-compartment": "gateway-agent", "durable-coding": "gateway-coding"}}, CLI: CLIPlan{ConfigPath: "/home/operator/.config/secondbox/config.json", TenantRef: "local-tenant", SubjectRef: "local-operator"}, Paths: []PlannedPath{plannedPath("deployment", "/srv/secondbox/deployment", PathUserDeployment, ResourceDirectory, 0o700, 1000, 1000, false, true), plannedPath("platform-token", "/srv/secondbox/deployment/secrets/platform-token", PathUserDeployment, ResourceFile, 0o600, 1000, 1000, false, true), plannedPath("binary-directory-root", "/home/operator/.local", PathUserDeployment, ResourceDirectory, 0o755, 1000, 1000, false, true), plannedPath("binary-directory", "/home/operator/.local/bin", PathUserDeployment, ResourceDirectory, 0o755, 1000, 1000, false, true), plannedPath("cli-config", "/home/operator/.config/secondbox/config.json", PathUserDeployment, ResourceFile, 0o600, 1000, 1000, false, true), plannedPath("runner-root", runnerRoot, PathExistingWorkspace, ResourceDirectory, 0o711, 0, 0, true, true), plannedPath("runner-storage", runnerStorage, PathExistingWorkspace, ResourceDirectory, 0o711, 0, 0, true, true), plannedPath("artifacts-parent", runnerStorage+"/release", PathInstallerHost, ResourceDirectory, 0o700, 1000, 1000, true, true), plannedPath("artifacts", runnerStorage+"/release/artifacts", PathInstallerHost, ResourceDirectory, 0o700, 1000, 1000, false, true), plannedPath("state", runnerStorage+"/state", PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true), plannedPath("jail", runnerStorage+"/jail", PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true), plannedPath("run", runnerStorage+"/state/run", PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true), plannedPath("logs", runnerStorage+"/state/logs", PathInstallerHost, ResourceDirectory, 0o750, runnerContainerUID, runnerContainerGID, true, true), plannedPath("firecracker-logs", runnerStorage+"/state/firecracker-logs", PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true), plannedPath("workspace", workspace, PathExistingWorkspace, ResourceDirectory, 0o750, runnerContainerUID, runnerContainerGID, true, true)}, SecretTargets: []SecretTarget{{Category: "platform-authority", Path: "/srv/secondbox/deployment/secrets/platform-token"}}, GeneratedAuthorityCategories: []string{"platform-authority"}, StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: 86400, PrivilegedActions: []string{"create Runner directories"}}
+	return InstallPlan{SchemaVersion: PlanSchema, OperationID: "install_0123456789abcdef", CreatedAt: now, HostFacts: facts, HostFactsDigest: factsDigest, Release: ReleasePlan{Version: "0.4.0", ArtifactManifestURL: "https://github.com/SecondStack-AI/SecondBox/releases/download/v0.4.0/secondbox-0.4.0-artifact-manifest.json", ArtifactManifestDigest: "sha256:" + strings.Repeat("a", 64), SigningKeyFingerprint: "SHA256:" + strings.Repeat("A", 64), Images: images, BinaryDigests: map[string]string{"secondbox": strings.Repeat("c", 64), "secondbox-deploy": strings.Repeat("d", 64)}, ExpectedDownloadBytes: 12 << 30}, Storage: StoragePlan{Choice: StorageExistingMount, WorkspacePath: workspace, ExistingDeviceIdentity: "8:2"}, Capacity: CapacityPlan{MaxSandboxes: 8, MaxCPUMillis: 32000, MaxMemoryBytes: 24 << 30, MaxWorkspaceBytes: 200 << 30, ConcurrentStarts: 2, ConcurrentOperations: 8, StoragePressurePercent: 85, SubjectQuotas: quotas}, Compute: ComputePlan{FirecrackerCPUTemplate: SingleHostFirecrackerCPUTemplate}, Network: NetworkPlan{APIAddress: "127.0.0.1:8080", RunnerAddress: "127.0.0.1:9443", DataPlaneAddress: "127.0.0.1:9444", DatabaseAddress: "127.0.0.1:5432", ObjectStoreAddress: "127.0.0.1:9000", ObjectStoreConsoleAddress: "127.0.0.1:9001", GuestBridgeCIDR: "172.30.0.0/24", ComposeBackendCIDR: "172.31.0.0/24", TAPPrefix: "sbx", CgroupParent: "secondbox", JailerUIDRange: UIDRange{Start: 200000, Count: 64}, DNSUpstream: "1.1.1.1", Gateways: map[string]string{"agent-compartment": "gateway-agent", "durable-coding": "gateway-coding"}}, CLI: CLIPlan{ConfigPath: "/home/operator/.config/secondbox/config.json", TenantRef: "local-tenant", SubjectRef: "local-operator"}, Paths: []PlannedPath{plannedPath("deployment", "/srv/secondbox/deployment", PathUserDeployment, ResourceDirectory, 0o700, 1000, 1000, false, true), plannedPath("platform-token", "/srv/secondbox/deployment/secrets/platform-token", PathUserDeployment, ResourceFile, 0o600, 1000, 1000, false, true), plannedPath("binary-directory-root", "/home/operator/.local", PathUserDeployment, ResourceDirectory, 0o755, 1000, 1000, false, true), plannedPath("binary-directory", "/home/operator/.local/bin", PathUserDeployment, ResourceDirectory, 0o755, 1000, 1000, false, true), plannedPath("cli-config", "/home/operator/.config/secondbox/config.json", PathUserDeployment, ResourceFile, 0o600, 1000, 1000, false, true), plannedPath("runner-root", runnerRoot, PathExistingWorkspace, ResourceDirectory, 0o711, 0, 0, true, true), plannedPath("runner-storage", runnerStorage, PathExistingWorkspace, ResourceDirectory, 0o711, 0, 0, true, true), plannedPath("artifacts-parent", runnerStorage+"/release", PathInstallerHost, ResourceDirectory, 0o700, 1000, 1000, true, true), plannedPath("artifacts", runnerStorage+"/release/artifacts", PathInstallerHost, ResourceDirectory, 0o700, 1000, 1000, false, true), plannedPath("state", runnerStorage+"/state", PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true), plannedPath("jail", runnerStorage+"/jail", PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true), plannedPath("run", runnerStorage+"/state/run", PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true), plannedPath("logs", runnerStorage+"/state/logs", PathInstallerHost, ResourceDirectory, 0o750, runnerContainerUID, runnerContainerGID, true, true), plannedPath("firecracker-logs", runnerStorage+"/state/firecracker-logs", PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true), plannedPath("workspace", workspace, PathExistingWorkspace, ResourceDirectory, 0o750, runnerContainerUID, runnerContainerGID, true, true)}, SecretTargets: []SecretTarget{{Category: "platform-authority", Path: "/srv/secondbox/deployment/secrets/platform-token"}}, GeneratedAuthorityCategories: []string{"platform-authority"}, StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: 86400, PrivilegedActions: []string{"create Runner directories"}}
 }
 
 func TestStrictCanonicalPlanAndReceiptIdentity(t *testing.T) {
@@ -78,6 +78,28 @@ func TestStrictCanonicalPlanAndReceiptIdentity(t *testing.T) {
 	other.RetentionSeconds++
 	if _, err := DecodeReceipt(encoded, other); err == nil {
 		t.Fatal("receipt accepted a different plan")
+	}
+}
+
+func TestPreComposeNetworkPlanKeepsV1CanonicalIdentityAndRemainsResumable(t *testing.T) {
+	plan := validPlan(t)
+	plan.Network.ComposeBackendCIDR = ""
+	plan.Network.GuestBridgeCIDR = "100.64.0.0/24"
+	plan.HostFacts.DockerNetworkSubnets = nil
+	factsDigest, err := HostFactsDigest(plan.HostFacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.HostFactsDigest = factsDigest
+	if err := plan.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := Canonical(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("composeBackendCidr")) || bytes.Contains(encoded, []byte("dockerNetworkSubnets")) {
+		t.Fatalf("pre-field v1 plan canonical bytes changed: %s", encoded)
 	}
 }
 
@@ -143,6 +165,94 @@ func TestFailedCompletedReceiptRecoversAfterReadinessPasses(t *testing.T) {
 	}
 	if receipt.Status != OperationSucceeded || receipt.FailureClass != "" || receipt.FailureStage != "" || len(receipt.CompletedStages) != len(StageSequence) {
 		t.Fatalf("recovered receipt = %#v", receipt)
+	}
+}
+
+func TestPrepareComposeRetryRewindsStagesAndReplayOwnedResources(t *testing.T) {
+	plan := validPlan(t)
+	receipt, err := NewReceipt(plan, plan.CreatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range StageSequence {
+		if err := receipt.CompleteStage(stage, plan.CreatedAt, map[string]string{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resources := []CreatedResource{
+		{ID: "compose-project", Kind: ResourceComposeProject, Stage: StageComposeStarted, Identity: "secondbox-0123456789abcdef"},
+		{ID: "compose-environment", Kind: ResourceFile, Path: "/tmp/compose.env", Class: PathUserDeployment, Stage: StageComposeStarted, Mode: 0o600, OwnerUID: 1000, OwnerGID: 1000, Digest: "sha256:" + strings.Repeat("a", 64)},
+		{ID: "compose-assets", Kind: ResourceDirectory, Path: "/tmp/compose-assets", Class: PathUserDeployment, Stage: StageComposeStarted, Mode: 0o700, OwnerUID: 1000, OwnerGID: 1000},
+		{ID: "cli-config-root", Kind: ResourceDirectory, Path: "/tmp/cli-root", Class: PathUserDeployment, Stage: StageCLILogin, Mode: 0o700, OwnerUID: 1000, OwnerGID: 1000},
+		{ID: "cli-config", Kind: ResourceFile, Path: "/tmp/cli.json", Class: PathUserDeployment, Stage: StageCLILogin, Mode: 0o600, OwnerUID: 1000, OwnerGID: 1000, Digest: "sha256:" + strings.Repeat("b", 64)},
+	}
+	for _, resource := range resources {
+		if err := receipt.AppendResource(resource); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := receipt.Fail(StageReadiness, FailureRetryable, plan.CreatedAt.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := receipt.PrepareComposeRetry(plan.CreatedAt.Add(2 * time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Status != OperationFailed || receipt.FailureClass != FailureRetryable || receipt.FailureStage != StageComposeStarted || receipt.CompletedStages[len(receipt.CompletedStages)-1].Stage != StageRunnerEnrolled {
+		t.Fatalf("Compose retry receipt = %#v", receipt)
+	}
+	for _, removed := range []string{"compose-project", "compose-environment", "compose-assets", "cli-config"} {
+		if slices.ContainsFunc(receipt.CreatedResources, func(resource CreatedResource) bool { return resource.ID == removed }) {
+			t.Fatalf("replay-owned resource remained ledgered: %s", removed)
+		}
+	}
+	if !slices.ContainsFunc(receipt.CreatedResources, func(resource CreatedResource) bool { return resource.ID == "cli-config-root" }) {
+		t.Fatal("installer-created CLI parent directory lost from ledger")
+	}
+	digest, err := PlanDigest(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := receipt.Validate(digest, plan.HostFacts.HostIdentity, plan.OperationID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPrepareComposeRetryRejectsPreComposeAndMutationReceipts(t *testing.T) {
+	plan := validPlan(t)
+	for _, test := range []struct {
+		name   string
+		mutate func(*InstallReceipt) error
+	}{
+		{name: "pre-Compose failure", mutate: func(receipt *InstallReceipt) error {
+			return receipt.Fail(StageRunnerEnrolled, FailureRetryable, plan.CreatedAt)
+		}},
+		{name: "pending resource", mutate: func(receipt *InstallReceipt) error {
+			if err := receipt.Fail(StageComposeStarted, FailureRetryable, plan.CreatedAt); err != nil {
+				return err
+			}
+			return receipt.BeginResource("unexpected", plan.CreatedAt)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			receipt, err := NewReceipt(plan, plan.CreatedAt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, stage := range StageSequence {
+				if stage == StageComposeStarted {
+					break
+				}
+				if err := receipt.CompleteStage(stage, plan.CreatedAt, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := test.mutate(&receipt); err != nil {
+				t.Fatal(err)
+			}
+			if err := receipt.PrepareComposeRetry(plan.CreatedAt.Add(time.Minute)); err == nil {
+				t.Fatal("unsafe Compose retry receipt was accepted")
+			}
+		})
 	}
 }
 

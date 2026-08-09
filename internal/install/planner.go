@@ -52,6 +52,7 @@ type NetworkOverrides struct {
 	ObjectStorePort        int
 	ObjectStoreConsolePort int
 	GuestCIDR              string
+	ComposeCIDR            string
 	TAPPrefix              string
 	CgroupParent           string
 	DNSUpstream            string
@@ -281,20 +282,28 @@ func proposeNetwork(facts HostFacts, overrides NetworkOverrides) (NetworkPlan, e
 	if err != nil {
 		return NetworkPlan{}, err
 	}
-	cidr := overrides.GuestCIDR
-	if cidr == "" {
-		cidr = freeGuestCIDR(facts.Routes)
-		if cidr == "" {
+	occupied := observedInstallIPv4Prefixes(facts)
+	guestCIDR := overrides.GuestCIDR
+	if guestCIDR == "" {
+		guestCIDR = freeRFC1918CIDR(occupied)
+		if guestCIDR == "" {
 			return NetworkPlan{}, installerError("no collision-free RFC1918 guest /24 is available", nil)
 		}
 	}
-	ip, network, cidrErr := net.ParseCIDR(cidr)
-	ones, bits := 0, 0
-	if cidrErr == nil {
-		ones, bits = network.Mask.Size()
+	guestPrefix, err := validatedInstallCIDR(guestCIDR, occupied)
+	if err != nil {
+		return NetworkPlan{}, installerError("guest bridge CIDR is invalid or conflicts with a host route or Docker network", err)
 	}
-	if cidrErr != nil || ip.To4() == nil || bits != 32 || ones > 30 || !network.IP.Equal(ip) || routeCollides(cidr, facts.Routes) {
-		return NetworkPlan{}, installerError("guest bridge CIDR is invalid or conflicts with a host route", nil)
+	occupied = append(occupied, guestPrefix)
+	composeCIDR := overrides.ComposeCIDR
+	if composeCIDR == "" {
+		composeCIDR = freeRFC1918CIDR(occupied)
+		if composeCIDR == "" {
+			return NetworkPlan{}, installerError("no collision-free RFC1918 Compose backend /24 is available", nil)
+		}
+	}
+	if _, err := validatedComposeCIDR(composeCIDR, occupied); err != nil {
+		return NetworkPlan{}, installerError("Compose backend CIDR is invalid or conflicts with the guest network, a host route, or a Docker network", err)
 	}
 	tap := overrides.TAPPrefix
 	if tap == "" {
@@ -320,11 +329,10 @@ func proposeNetwork(facts HostFacts, overrides NetworkOverrides) (NetworkPlan, e
 	if dnsIP == nil || dnsIP.IsLoopback() || dnsIP.IsUnspecified() {
 		return NetworkPlan{}, installerError("DNS upstream must be an observed or reviewed non-loopback address", nil)
 	}
-	return NetworkPlan{APIAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(api)), RunnerAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(runner)), DataPlaneAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(data)), DatabaseAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(database)), ObjectStoreAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(objectStore)), ObjectStoreConsoleAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(objectStoreConsole)), GuestBridgeCIDR: cidr, TAPPrefix: tap, CgroupParent: cgroup, JailerUIDRange: uidRange, DNSUpstream: dns, Gateways: map[string]string{"agent-compartment": "agent-gateway.secondbox.internal", "durable-coding": "platform-gateway.secondbox.internal"}}, nil
+	return NetworkPlan{APIAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(api)), RunnerAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(runner)), DataPlaneAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(data)), DatabaseAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(database)), ObjectStoreAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(objectStore)), ObjectStoreConsoleAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(objectStoreConsole)), GuestBridgeCIDR: guestCIDR, ComposeBackendCIDR: composeCIDR, TAPPrefix: tap, CgroupParent: cgroup, JailerUIDRange: uidRange, DNSUpstream: dns, Gateways: map[string]string{"agent-compartment": "agent-gateway.secondbox.internal", "durable-coding": "platform-gateway.secondbox.internal"}}, nil
 }
 
-func freeGuestCIDR(routes []RouteFact) string {
-	observed := observedIPv4RoutePrefixes(routes)
+func freeRFC1918CIDR(observed []netip.Prefix) string {
 	free := func(first, second, third byte) string {
 		candidate := netip.PrefixFrom(netip.AddrFrom4([4]byte{first, second, third, 0}), 24)
 		if !routePrefixCollides(candidate, observed) {
@@ -366,16 +374,50 @@ func freeGuestCIDR(routes []RouteFact) string {
 	return ""
 }
 
-func rangesOverlap(a, b UIDRange) bool {
-	return a.Count > 0 && b.Count > 0 && a.Start < b.Start+b.Count && b.Start < a.Start+a.Count
+func observedInstallIPv4Prefixes(facts HostFacts) []netip.Prefix {
+	prefixes := observedIPv4RoutePrefixes(facts.Routes)
+	for _, subnet := range facts.DockerNetworkSubnets {
+		prefix, err := netip.ParsePrefix(subnet)
+		if err == nil && prefix.Addr().Is4() {
+			prefixes = append(prefixes, prefix.Masked())
+		}
+	}
+	return prefixes
 }
 
-func routeCollides(candidate string, routes []RouteFact) bool {
-	candidatePrefix, err := netip.ParsePrefix(candidate)
-	if err != nil {
-		return true
+func validatedInstallCIDR(candidate string, occupied []netip.Prefix) (netip.Prefix, error) {
+	prefix, err := netip.ParsePrefix(candidate)
+	if err != nil || !prefix.Addr().Is4() || prefix.Bits() > 30 || prefix != prefix.Masked() || !isRFC1918Prefix(prefix) {
+		return netip.Prefix{}, fmt.Errorf("must be an RFC1918 IPv4 network with usable host addresses")
 	}
-	return routePrefixCollides(candidatePrefix.Masked(), observedIPv4RoutePrefixes(routes))
+	if routePrefixCollides(prefix, occupied) {
+		return netip.Prefix{}, fmt.Errorf("overlaps an occupied network")
+	}
+	return prefix, nil
+}
+
+func validatedComposeCIDR(candidate string, occupied []netip.Prefix) (netip.Prefix, error) {
+	prefix, err := validatedInstallCIDR(candidate, occupied)
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+	if prefix.Bits() != 24 {
+		return netip.Prefix{}, fmt.Errorf("must be an RFC1918 IPv4 /24")
+	}
+	return prefix, nil
+}
+
+func isRFC1918Prefix(prefix netip.Prefix) bool {
+	for _, private := range []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("172.16.0.0/12"), netip.MustParsePrefix("192.168.0.0/16")} {
+		if prefix.Bits() >= private.Bits() && private.Contains(prefix.Addr()) {
+			return true
+		}
+	}
+	return false
+}
+
+func rangesOverlap(a, b UIDRange) bool {
+	return a.Count > 0 && b.Count > 0 && a.Start < b.Start+b.Count && b.Start < a.Start+a.Count
 }
 
 func observedIPv4RoutePrefixes(routes []RouteFact) []netip.Prefix {
@@ -487,7 +529,7 @@ func privilegedActions(storage StoragePlan) []string {
 func RenderPlanReview(plan InstallPlan) string {
 	var result strings.Builder
 	fmt.Fprintf(&result, "Release %s\nArtifact manifest: %s\nManifest digest: %s\nSigning key: %s\nExpected downloads: %s\n", plan.Release.Version, plan.Release.ArtifactManifestURL, plan.Release.ArtifactManifestDigest, plan.Release.SigningKeyFingerprint, formatBytes(plan.Release.ExpectedDownloadBytes))
-	fmt.Fprintf(&result, "Workspace: %s (%s, %s capacity)\nCapacity: %d Sandboxes, %d concurrent starts, %s memory\nCompute: Firecracker CPU template %s\nStandard bundles: %s\nNetwork: API %s, Runner %s, data plane %s, database %s, object store %s, object console %s, guests %s, DNS %s\nCLI: %s as %s/%s\nRetention: %s\n", plan.Storage.WorkspacePath, plan.Storage.Choice, formatBytes(plan.Capacity.MaxWorkspaceBytes), plan.Capacity.MaxSandboxes, plan.Capacity.ConcurrentStarts, formatBytes(plan.Capacity.MaxMemoryBytes), plan.Compute.FirecrackerCPUTemplate, strings.Join(plan.StandardBundles, ", "), plan.Network.APIAddress, plan.Network.RunnerAddress, plan.Network.DataPlaneAddress, plan.Network.DatabaseAddress, plan.Network.ObjectStoreAddress, plan.Network.ObjectStoreConsoleAddress, plan.Network.GuestBridgeCIDR, plan.Network.DNSUpstream, plan.CLI.ConfigPath, plan.CLI.TenantRef, plan.CLI.SubjectRef, time.Duration(plan.RetentionSeconds)*time.Second)
+	fmt.Fprintf(&result, "Workspace: %s (%s, %s capacity)\nCapacity: %d Sandboxes, %d concurrent starts, %s memory\nCompute: Firecracker CPU template %s\nStandard bundles: %s\nNetwork: API %s, Runner %s, data plane %s, database %s, object store %s, object console %s, guests %s, Compose backend %s, DNS %s\nCLI: %s as %s/%s\nRetention: %s\n", plan.Storage.WorkspacePath, plan.Storage.Choice, formatBytes(plan.Capacity.MaxWorkspaceBytes), plan.Capacity.MaxSandboxes, plan.Capacity.ConcurrentStarts, formatBytes(plan.Capacity.MaxMemoryBytes), plan.Compute.FirecrackerCPUTemplate, strings.Join(plan.StandardBundles, ", "), plan.Network.APIAddress, plan.Network.RunnerAddress, plan.Network.DataPlaneAddress, plan.Network.DatabaseAddress, plan.Network.ObjectStoreAddress, plan.Network.ObjectStoreConsoleAddress, plan.Network.GuestBridgeCIDR, plan.Network.ComposeBackendCIDR, plan.Network.DNSUpstream, plan.CLI.ConfigPath, plan.CLI.TenantRef, plan.CLI.SubjectRef, time.Duration(plan.RetentionSeconds)*time.Second)
 	result.WriteString("Generated authority: " + strings.Join(plan.GeneratedAuthorityCategories, ", ") + "\nPersistent services: PostgreSQL, object storage, control plane, same-host Runner\nExisting SecondBox CLIs and CLI configuration at the reviewed paths are upgraded atomically; unrelated files are refused.\nOrdinary uninstall preserves workspaces, authority, manifests, artifacts, and service data.\nPaths requiring sudo:\n")
 	for _, path := range plan.Paths {
 		if path.RequiresSudo {

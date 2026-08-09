@@ -23,12 +23,8 @@ type SystemHostApplyExecutor struct{ CallerUID int }
 func (executor SystemHostApplyExecutor) EffectiveUID() int { return os.Geteuid() }
 
 func (executor SystemHostApplyExecutor) Revalidate(ctx context.Context, plan InstallPlan, receipt InstallReceipt) error {
-	if executor.CallerUID < 0 || plan.HostFacts.InvokingUID != int64(executor.CallerUID) {
-		return installerError("SUDO_UID differs from the accepted invoking user", nil)
-	}
-	machineID, err := os.ReadFile("/etc/machine-id")
-	if err != nil || "machine-id:"+strings.TrimSpace(string(machineID)) != plan.HostFacts.HostIdentity {
-		return installerError("host identity changed after preflight", err)
+	if err := executor.validateCallerAndHostIdentity(plan); err != nil {
+		return err
 	}
 	controllers, err := os.ReadFile("/sys/fs/cgroup/cgroup.controllers")
 	if err != nil {
@@ -79,12 +75,16 @@ func (executor SystemHostApplyExecutor) Revalidate(ctx context.Context, plan Ins
 	if err != nil {
 		return installerError("resolve SUDO_UID account", err)
 	}
+	_, hostApplyComplete := completedStage(receipt, StageHostApply)
 	for _, planned := range plan.Paths {
 		if !planned.RequiresSudo || !planned.Create {
 			continue
 		}
 		if planned.Path == caller.HomeDir || planned.Path == "/home" || planned.Path == "/root" {
 			return installerError("privileged target is a home-directory root", nil)
+		}
+		if hostApplyComplete {
+			continue
 		}
 		if resource, recorded := receiptResource(receipt, planned.Name); recorded {
 			if err := validateRecordedHostApplyPath(plan, planned, resource); err != nil {
@@ -106,39 +106,9 @@ func (executor SystemHostApplyExecutor) Revalidate(ctx context.Context, plan Ins
 			return installerError("privileged target "+planned.Name, err)
 		}
 	}
-	if hostApply, complete := completedStage(receipt, StageHostApply); complete {
-		workspace, found := plannedPathByName(plan.Paths, "workspace")
-		resource, recorded := receiptResource(receipt, "workspace")
-		if !found || !recorded {
-			return installerError("completed host apply lacks the recorded Workspace", nil)
-		}
-		identity, err := workspaceFilesystemIdentity(workspace.Path)
-		expectedIdentity := hostApply.Evidence["runnerStorageDeviceIdentity"]
-		if err != nil || expectedIdentity == "" || hostApply.Evidence["workspaceDeviceIdentity"] != expectedIdentity || identity != expectedIdentity {
-			return installerError("recorded Workspace device identity changed", err)
-		}
-		if err := validateRecordedHostApplyPath(plan, workspace, resource); err != nil {
+	if hostApplyComplete {
+		if err := validateCompletedHostResources(plan, receipt); err != nil {
 			return err
-		}
-		for _, name := range []string{"artifacts-parent", "run"} {
-			path, found := plannedPathByName(plan.Paths, name)
-			if !found {
-				return installerError("completed host apply lacks Runner storage path "+name, nil)
-			}
-			actual, err := workspaceFilesystemIdentity(path.Path)
-			if err != nil || actual != expectedIdentity {
-				return installerError("recorded Runner storage device identity changed for "+name, err)
-			}
-		}
-		if artifacts, found := plannedPathByName(plan.Paths, "artifacts"); found {
-			if _, statErr := os.Lstat(artifacts.Path); statErr == nil {
-				actual, err := workspaceFilesystemIdentity(artifacts.Path)
-				if err != nil || actual != expectedIdentity {
-					return installerError("materialized Runner artifacts moved to another filesystem", err)
-				}
-			} else if !errors.Is(statErr, fs.ErrNotExist) {
-				return installerError("inspect materialized Runner artifacts", statErr)
-			}
 		}
 	}
 	if plan.Storage.Choice == StorageBtrfsImage {
@@ -162,7 +132,6 @@ func (executor SystemHostApplyExecutor) Revalidate(ctx context.Context, plan Ins
 			return installerError("filesystem-image backing capacity became stale", nil)
 		}
 	} else {
-		_, hostApplyComplete := completedStage(receipt, StageHostApply)
 		if err := verifyExistingWorkspaceMount(plan, !hostApplyComplete); err != nil {
 			return err
 		}
@@ -179,6 +148,76 @@ func (executor SystemHostApplyExecutor) Revalidate(ctx context.Context, plan Ins
 		return installerError("deployment filesystem capacity became insufficient", nil)
 	}
 	return ctx.Err()
+}
+
+func (executor SystemHostApplyExecutor) RevalidateTeardown(ctx context.Context, plan InstallPlan, receipt InstallReceipt) error {
+	if err := executor.validateCallerAndHostIdentity(plan); err != nil {
+		return err
+	}
+	if err := validateCompletedHostResources(plan, receipt); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+func (executor SystemHostApplyExecutor) validateCallerAndHostIdentity(plan InstallPlan) error {
+	if executor.CallerUID < 0 || plan.HostFacts.InvokingUID != int64(executor.CallerUID) {
+		return installerError("SUDO_UID differs from the accepted invoking user", nil)
+	}
+	machineID, err := os.ReadFile("/etc/machine-id")
+	if err != nil || "machine-id:"+strings.TrimSpace(string(machineID)) != plan.HostFacts.HostIdentity {
+		return installerError("host identity changed after preflight", err)
+	}
+	return nil
+}
+
+func validateCompletedHostResources(plan InstallPlan, receipt InstallReceipt) error {
+	hostApply, complete := completedStage(receipt, StageHostApply)
+	if !complete {
+		return installerError("completed host apply evidence is absent", nil)
+	}
+	for _, planned := range plan.Paths {
+		if !planned.RequiresSudo || !planned.Create {
+			continue
+		}
+		resource, recorded := receiptResource(receipt, planned.Name)
+		if !recorded {
+			return installerError("completed host apply lacks recorded resource "+planned.Name, nil)
+		}
+		if err := validateRecordedHostApplyPath(plan, planned, resource); err != nil {
+			return err
+		}
+	}
+	workspace, found := plannedPathByName(plan.Paths, "workspace")
+	if !found {
+		return installerError("completed host apply lacks the recorded Workspace", nil)
+	}
+	identity, err := workspaceFilesystemIdentity(workspace.Path)
+	expectedIdentity := hostApply.Evidence["runnerStorageDeviceIdentity"]
+	if err != nil || expectedIdentity == "" || hostApply.Evidence["workspaceDeviceIdentity"] != expectedIdentity || identity != expectedIdentity {
+		return installerError("recorded Workspace device identity changed", err)
+	}
+	for _, name := range []string{"artifacts-parent", "run"} {
+		path, found := plannedPathByName(plan.Paths, name)
+		if !found {
+			return installerError("completed host apply lacks Runner storage path "+name, nil)
+		}
+		actual, err := workspaceFilesystemIdentity(path.Path)
+		if err != nil || actual != expectedIdentity {
+			return installerError("recorded Runner storage device identity changed for "+name, err)
+		}
+	}
+	if artifacts, found := plannedPathByName(plan.Paths, "artifacts"); found {
+		if _, statErr := os.Lstat(artifacts.Path); statErr == nil {
+			actual, err := workspaceFilesystemIdentity(artifacts.Path)
+			if err != nil || actual != expectedIdentity {
+				return installerError("materialized Runner artifacts moved to another filesystem", err)
+			}
+		} else if !errors.Is(statErr, fs.ErrNotExist) {
+			return installerError("inspect materialized Runner artifacts", statErr)
+		}
+	}
+	return nil
 }
 
 func statfsExistingAncestor(path string) (unix.Statfs_t, error) {

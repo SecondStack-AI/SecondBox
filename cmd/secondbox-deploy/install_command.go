@@ -275,6 +275,21 @@ func runPrivateHostApply(ctx context.Context, arguments []string) error {
 	return nil
 }
 
+func runPrivateHostTeardownVerify(ctx context.Context, arguments []string) error {
+	if len(arguments) != 2 {
+		return errors.New("SecondBox installer private host teardown verification: expected OPERATION_DIRECTORY PLAN_DIGEST")
+	}
+	uidText, present := os.LookupEnv("SUDO_UID")
+	uid, err := strconv.Atoi(uidText)
+	if !present || err != nil || uid < 0 {
+		return errors.New("SecondBox installer private host teardown verification: SUDO_UID is required and must be a non-negative integer")
+	}
+	if err := install.VerifyAcceptedHostTeardown(ctx, arguments[0], arguments[1], uid, install.SystemHostApplyExecutor{CallerUID: uid}); err != nil {
+		return fmt.Errorf("SecondBox installer private host teardown verification: %w", err)
+	}
+	return nil
+}
+
 func reviewAdvancedInstallSettings(ctx context.Context, dependencies guidedInstallDependencies, handles cliui.FormHandles, facts install.HostFacts, input *install.ProposalInput, plan *install.InstallPlan) error {
 	api := portFromAddress(plan.Network.APIAddress)
 	runner := portFromAddress(plan.Network.RunnerAddress)
@@ -295,6 +310,7 @@ func reviewAdvancedInstallSettings(ctx context.Context, dependencies guidedInsta
 		{Title: "Object-store loopback port", Value: &objectStore, Validate: validateInstallerPort},
 		{Title: "Object-store console loopback port", Value: &objectStoreConsole, Validate: validateInstallerPort},
 		{Title: "Guest bridge CIDR", Value: &plan.Network.GuestBridgeCIDR, Validate: validateInstallerCIDR},
+		{Title: "Compose backend CIDR", Value: &plan.Network.ComposeBackendCIDR, Validate: validateInstallerComposeCIDR},
 		{Title: "TAP prefix", Value: &plan.Network.TAPPrefix, Validate: validateInstallerName},
 		{Title: "Cgroup parent", Value: &plan.Network.CgroupParent, Validate: validateInstallerName},
 		{Title: "Non-loopback DNS upstream", Value: &plan.Network.DNSUpstream, Validate: validateInstallerIP},
@@ -316,7 +332,7 @@ func reviewAdvancedInstallSettings(ctx context.Context, dependencies guidedInsta
 	uid, _ := strconv.ParseInt(uidStart, 10, 64)
 	retentionSeconds, _ := strconv.ParseInt(retention, 10, 64)
 	input.RetentionSeconds = retentionSeconds
-	input.NetworkOverrides = install.NetworkOverrides{APIPort: apiPort, RunnerPort: runnerPort, DataPlanePort: dataPort, DatabasePort: databasePort, ObjectStorePort: objectStorePort, ObjectStoreConsolePort: objectStoreConsolePort, GuestCIDR: plan.Network.GuestBridgeCIDR, TAPPrefix: plan.Network.TAPPrefix, CgroupParent: plan.Network.CgroupParent, DNSUpstream: plan.Network.DNSUpstream, JailerUID: install.UIDRange{Start: uid, Count: plan.Network.JailerUIDRange.Count}}
+	input.NetworkOverrides = install.NetworkOverrides{APIPort: apiPort, RunnerPort: runnerPort, DataPlanePort: dataPort, DatabasePort: databasePort, ObjectStorePort: objectStorePort, ObjectStoreConsolePort: objectStoreConsolePort, GuestCIDR: plan.Network.GuestBridgeCIDR, ComposeCIDR: plan.Network.ComposeBackendCIDR, TAPPrefix: plan.Network.TAPPrefix, CgroupParent: plan.Network.CgroupParent, DNSUpstream: plan.Network.DNSUpstream, JailerUID: install.UIDRange{Start: uid, Count: plan.Network.JailerUIDRange.Count}}
 	if input.StorageChoice == install.StorageBtrfsImage {
 		gib, _ := strconv.ParseInt(imageGiB, 10, 64)
 		input.FilesystemImageBytes = gib << 30
@@ -381,6 +397,18 @@ func validateInstallerCIDR(value string) error {
 	}
 	if err != nil || ip.To4() == nil || bits != 32 || ones > 30 || !network.IP.Equal(ip) {
 		return errors.New("enter a canonical IPv4 CIDR with at least two usable host addresses")
+	}
+	return nil
+}
+
+func validateInstallerComposeCIDR(value string) error {
+	if err := validateInstallerCIDR(value); err != nil {
+		return err
+	}
+	ip, network, _ := net.ParseCIDR(strings.TrimSpace(value))
+	ones, _ := network.Mask.Size()
+	if ones != 24 || !ip.IsPrivate() {
+		return errors.New("enter an RFC1918 IPv4 /24 for the Compose backend")
 	}
 	return nil
 }

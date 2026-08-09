@@ -115,34 +115,35 @@ type UIDRange struct {
 }
 
 type HostFacts struct {
-	SchemaVersion      string            `json:"schemaVersion"`
-	ObservedAt         time.Time         `json:"observedAt"`
-	HostIdentity       string            `json:"hostIdentity"`
-	OS                 string            `json:"os"`
-	Architecture       string            `json:"architecture"`
-	InvokingUID        int64             `json:"invokingUid"`
-	InvokingGID        int64             `json:"invokingGid"`
-	KernelVersion      string            `json:"kernelVersion"`
-	SystemdVersion     string            `json:"systemdVersion,omitempty"`
-	DockerVersion      string            `json:"dockerVersion,omitempty"`
-	ComposeVersion     string            `json:"composeVersion,omitempty"`
-	CgroupVersion      int               `json:"cgroupVersion"`
-	CgroupControllers  []string          `json:"cgroupControllers"`
-	CPUCount           int               `json:"cpuCount"`
-	MemoryBytes        int64             `json:"memoryBytes"`
-	Virtualization     string            `json:"virtualization,omitempty"`
-	BtrfsSupported     bool              `json:"btrfsSupported"`
-	KVMAccessible      bool              `json:"kvmAccessible"`
-	TUNAccessible      bool              `json:"tunAccessible"`
-	Devices            []DeviceFact      `json:"devices"`
-	ListeningPorts     []PortFact        `json:"listeningPorts"`
-	Routes             []RouteFact       `json:"routes"`
-	DNSUpstreams       []string          `json:"dnsUpstreams"`
-	AssignedUIDs       []int64           `json:"assignedUIDs"`
-	ReservedIDRanges   []UIDRange        `json:"reservedIdRanges"`
-	CandidateUIDRanges []UIDRange        `json:"candidateUIDRanges"`
-	Utilities          map[string]string `json:"utilities"`
-	Findings           []Finding         `json:"findings"`
+	SchemaVersion        string            `json:"schemaVersion"`
+	ObservedAt           time.Time         `json:"observedAt"`
+	HostIdentity         string            `json:"hostIdentity"`
+	OS                   string            `json:"os"`
+	Architecture         string            `json:"architecture"`
+	InvokingUID          int64             `json:"invokingUid"`
+	InvokingGID          int64             `json:"invokingGid"`
+	KernelVersion        string            `json:"kernelVersion"`
+	SystemdVersion       string            `json:"systemdVersion,omitempty"`
+	DockerVersion        string            `json:"dockerVersion,omitempty"`
+	ComposeVersion       string            `json:"composeVersion,omitempty"`
+	CgroupVersion        int               `json:"cgroupVersion"`
+	CgroupControllers    []string          `json:"cgroupControllers"`
+	CPUCount             int               `json:"cpuCount"`
+	MemoryBytes          int64             `json:"memoryBytes"`
+	Virtualization       string            `json:"virtualization,omitempty"`
+	BtrfsSupported       bool              `json:"btrfsSupported"`
+	KVMAccessible        bool              `json:"kvmAccessible"`
+	TUNAccessible        bool              `json:"tunAccessible"`
+	Devices              []DeviceFact      `json:"devices"`
+	ListeningPorts       []PortFact        `json:"listeningPorts"`
+	Routes               []RouteFact       `json:"routes"`
+	DockerNetworkSubnets []string          `json:"dockerNetworkSubnets,omitempty"`
+	DNSUpstreams         []string          `json:"dnsUpstreams"`
+	AssignedUIDs         []int64           `json:"assignedUIDs"`
+	ReservedIDRanges     []UIDRange        `json:"reservedIdRanges"`
+	CandidateUIDRanges   []UIDRange        `json:"candidateUIDRanges"`
+	Utilities            map[string]string `json:"utilities"`
+	Findings             []Finding         `json:"findings"`
 }
 
 type PlannedPath struct {
@@ -189,6 +190,7 @@ type NetworkPlan struct {
 	ObjectStoreAddress        string            `json:"objectStoreAddress"`
 	ObjectStoreConsoleAddress string            `json:"objectStoreConsoleAddress"`
 	GuestBridgeCIDR           string            `json:"guestBridgeCidr"`
+	ComposeBackendCIDR        string            `json:"composeBackendCidr,omitempty"`
 	TAPPrefix                 string            `json:"tapPrefix"`
 	CgroupParent              string            `json:"cgroupParent"`
 	JailerUIDRange            UIDRange          `json:"jailerUidRange"`

@@ -13,6 +13,9 @@ func (SystemHostApplyExecutor) EffectiveUID() int { return -1 }
 func (SystemHostApplyExecutor) Revalidate(context.Context, InstallPlan, InstallReceipt) error {
 	return errors.ErrUnsupported
 }
+func (SystemHostApplyExecutor) RevalidateTeardown(context.Context, InstallPlan, InstallReceipt) error {
+	return errors.ErrUnsupported
+}
 func (SystemHostApplyExecutor) CreateDirectory(PlannedPath) error { return errors.ErrUnsupported }
 func (SystemHostApplyExecutor) AllocateFilesystemImage(PlannedPath, int64) error {
 	return errors.ErrUnsupported

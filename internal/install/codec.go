@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -108,6 +109,12 @@ func (facts HostFacts) Validate() error {
 	}
 	if facts.ObservedAt.IsZero() || facts.HostIdentity == "" || facts.OS == "" || facts.Architecture == "" || facts.KernelVersion == "" || facts.InvokingUID < 0 || facts.InvokingGID < 0 {
 		return installerError("host facts identity is incomplete", nil)
+	}
+	for _, subnet := range facts.DockerNetworkSubnets {
+		prefix, err := netip.ParsePrefix(subnet)
+		if err != nil || prefix != prefix.Masked() {
+			return installerError("Docker network subnet fact is invalid", err)
+		}
 	}
 	classes := map[FindingClass]bool{FindingPass: true, FindingWarning: true, FindingRemediable: true, FindingNeedsAction: true, FindingBlocked: true}
 	ids := map[string]bool{}
@@ -310,13 +317,29 @@ func (plan InstallPlan) Validate() error {
 		}
 		ports[port] = true
 	}
-	ip, network, err := net.ParseCIDR(plan.Network.GuestBridgeCIDR)
-	ones, bits := 0, 0
-	if err == nil {
-		ones, bits = network.Mask.Size()
-	}
-	if err != nil || ip.To4() == nil || bits != 32 || ones > 30 || !network.IP.Equal(ip) {
-		return installerError("guest bridge CIDR is invalid", err)
+	// Accepted v1 plans from v0.4.6 and earlier predate the explicit Compose
+	// backend field and allowed an advanced operator to state any canonical IPv4
+	// guest network. Preserve that validator and canonical identity only for
+	// those plans; every proposal created by this version states both RFC1918
+	// networks and validates them against its observed host and Docker facts.
+	if plan.Network.ComposeBackendCIDR == "" {
+		ip, network, err := net.ParseCIDR(plan.Network.GuestBridgeCIDR)
+		ones, bits := 0, 0
+		if err == nil {
+			ones, bits = network.Mask.Size()
+		}
+		if err != nil || ip.To4() == nil || bits != 32 || ones > 30 || !network.IP.Equal(ip) {
+			return installerError("guest bridge CIDR is invalid", err)
+		}
+	} else {
+		occupied := observedInstallIPv4Prefixes(plan.HostFacts)
+		guestPrefix, err := validatedInstallCIDR(plan.Network.GuestBridgeCIDR, occupied)
+		if err != nil {
+			return installerError("guest bridge CIDR is invalid", err)
+		}
+		if _, err := validatedComposeCIDR(plan.Network.ComposeBackendCIDR, append(occupied, guestPrefix)); err != nil {
+			return installerError("Compose backend CIDR is invalid or overlaps the guest bridge CIDR", err)
+		}
 	}
 	maximumUID := int64(^uint32(0))
 	uidRange := plan.Network.JailerUIDRange

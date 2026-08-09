@@ -42,6 +42,18 @@ func TestRemoveTreeConfinesDeletionToOpenedExactTarget(t *testing.T) {
 	}
 }
 
+func TestComposeAssetPurgeAcceptsExplicitNetworkOverlay(t *testing.T) {
+	directory := t.TempDir()
+	for _, name := range []string{"compose.yml", "compose.development.yml", "compose.explicit-network.yml", "compose.same-host-runner.yml"} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte("reviewed\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := validateComposeAssetDirectory(directory); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestUserPurgeResumesAfterVerifiedArtifactsWereRemoved(t *testing.T) {
 	root := t.TempDir()
 	uid, gid := int64(os.Getuid()), int64(os.Getgid())

@@ -98,7 +98,7 @@ func (users fakeUsersWithRanges) ReservedIDRanges() ([]UIDRange, error) { return
 
 func qualifiedProbes() PreflightProbes {
 	files := map[string]string{"/etc/machine-id": "host-1\n", "/sys/fs/cgroup/cgroup.controllers": "cpu memory pids io\n", "/proc/filesystems": "nodev\tbtrfs\n\txfs\n", "/proc/cpuinfo": "processor: 0\nflags : fpu vmx sse\n", "/proc/meminfo": "MemTotal:       33554432 kB\n", "/proc/self/mountinfo": "22 1 8:1 / / rw - ext4 /dev/root rw\n23 1 8:2 / /srv/workspace rw - xfs /dev/sdb rw\n", "/etc/resolv.conf": "nameserver 192.0.2.53\n"}
-	process := &fakeProcess{results: map[string]CommandResult{"uname -r": {Stdout: "6.12.0"}, "systemctl --version": {Stdout: "systemd 257"}, "systemctl is-system-running": {Stdout: "running"}, "docker version --format {{.Server.Version}}": {Stdout: "27.5.1"}, "docker compose version --short": {Stdout: "2.32.4"}, "docker compose ls --format json": {Stdout: "[]"}, "ip -o route show": {Stdout: "default via 192.0.2.1 dev eth0\n192.0.2.0/24 dev eth0"}, "ss -H -lntu": {Stdout: "tcp LISTEN 0 128 127.0.0.1:22"}}, errors: map[string]error{}, missing: map[string]bool{}}
+	process := &fakeProcess{results: map[string]CommandResult{"uname -r": {Stdout: "6.12.0"}, "systemctl --version": {Stdout: "systemd 257"}, "systemctl is-system-running": {Stdout: "running"}, "docker version --format {{.Server.Version}}": {Stdout: "27.5.1"}, "docker compose version --short": {Stdout: "2.32.4"}, "docker compose ls --format json": {Stdout: "[]"}, "ip -j -4 route show table all": {Stdout: `[{"dst":"default","gateway":"192.0.2.1","dev":"eth0"},{"dst":"192.0.2.0/24","dev":"eth0"}]`}, "ss -H -lntu": {Stdout: "tcp LISTEN 0 128 127.0.0.1:22"}}, errors: map[string]error{}, missing: map[string]bool{}}
 	return PreflightProbes{Filesystem: &fakeFilesystem{files: files, lstatErrors: map[string]error{}, openErrors: map[string]error{}, stats: map[string][2]int64{"/srv/workspace": {200 << 30, 250 << 30}}}, Process: process, Network: fakeNetwork{status: 200}, Clock: fakeClock{now: time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)}, Users: fakeUsers{assigned: map[int64]bool{0: true, 1000: true}}, LookupEnv: func(string) (string, bool) { return "", false }, OS: "linux", Architecture: "amd64", CPUCount: 8, InvokingUID: 1000, InvokingGID: 1000}
 }
 
@@ -135,6 +135,44 @@ func TestQualifiedPreflightAggregatesReadOnlyFacts(t *testing.T) {
 		if !strings.Contains(report, text) {
 			t.Fatalf("report lacks %q:\n%s", text, report)
 		}
+	}
+}
+
+func TestDockerNetworkInspectionRecordsSortedUniqueIPAMSubnets(t *testing.T) {
+	process := &fakeProcess{results: map[string]CommandResult{
+		"docker network ls --quiet --no-trunc":       {Stdout: "network-b\nnetwork-a"},
+		"docker network inspect network-b network-a": {Stdout: `[{"IPAM":{"Config":[{"Subnet":"192.168.16.0/20"},{"Subnet":"fd00::/64"}]}},{"IPAM":{"Config":[{"Subnet":"172.18.0.0/16"},{"Subnet":"192.168.16.0/20"}]}}]`},
+	}, errors: map[string]error{}}
+	subnets, err := inspectDockerNetworkSubnets(context.Background(), process)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"172.18.0.0/16", "192.168.16.0/20", "fd00::/64"}
+	if !slices.Equal(subnets, want) {
+		t.Fatalf("Docker subnets = %#v, want %#v", subnets, want)
+	}
+}
+
+func TestDockerNetworkInspectionFailsClosedOnUnreadableAllocations(t *testing.T) {
+	process := &fakeProcess{results: map[string]CommandResult{
+		"docker network ls --quiet --no-trunc": {Stderr: "permission denied"},
+	}, errors: map[string]error{"docker network ls --quiet --no-trunc": errors.New("exit 1")}}
+	if _, err := inspectDockerNetworkSubnets(context.Background(), process); err == nil || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("Docker network inspection error = %v", err)
+	}
+}
+
+func TestIPv4RouteInspectionIncludesAllTablesAndNormalizesHostRoutes(t *testing.T) {
+	routes, err := parseIPv4RouteFacts([]byte(`[{"dst":"default","gateway":"192.0.2.1","dev":"eth0","table":"main"},{"dst":"10.8.0.0/24","dev":"wg0","table":100},{"type":"local","dst":"192.0.2.10","dev":"eth0","table":"local"}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []RouteFact{{Destination: "default", Interface: "eth0", Gateway: "192.0.2.1"}, {Destination: "10.8.0.0/24", Interface: "wg0"}, {Destination: "192.0.2.10/32", Interface: "eth0"}}
+	if !slices.Equal(routes, want) {
+		t.Fatalf("route facts = %#v, want %#v", routes, want)
+	}
+	if _, err := parseIPv4RouteFacts([]byte(`[{"dst":"not-an-address"}]`)); err == nil {
+		t.Fatal("invalid route destination passed inspection")
 	}
 }
 

@@ -1,0 +1,5 @@
+networks:
+  secondbox-backend:
+    ipam:
+      config:
+        - subnet: ${SECONDBOX_COMPOSE_BACKEND_CIDR:?SECONDBOX_COMPOSE_BACKEND_CIDR is required}

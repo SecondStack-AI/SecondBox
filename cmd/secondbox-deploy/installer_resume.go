@@ -47,15 +47,7 @@ func systemInstallResumeDependencies(renderer cliui.Renderer) installResumeDepen
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	return installResumeDependencies{
 		OwnerUID: os.Getuid(), Now: time.Now,
-		HostApply: func(ctx context.Context, directory, digest string) error {
-			executable, err := os.Executable()
-			if err != nil {
-				return err
-			}
-			command := exec.CommandContext(ctx, "sudo", "--", executable, "_install-host-apply", directory, digest)
-			command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
-			return command.Run()
-		},
+		HostApply:  runPrivilegedHostApply,
 		Revalidate: revalidateResumeHost,
 		VerifyRelease: func(ctx context.Context, location string) (releaseverify.VerifiedRelease, error) {
 			ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
@@ -92,6 +84,26 @@ func systemInstallResumeDependencies(renderer cliui.Renderer) installResumeDepen
 		},
 		Smoke: runInstalledSmoke,
 	}
+}
+
+func runPrivilegedHostApply(ctx context.Context, directory, digest string) error {
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	command := exec.CommandContext(ctx, "sudo", "--", executable, "_install-host-apply", directory, digest)
+	command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return command.Run()
+}
+
+func runPrivilegedHostTeardownVerify(ctx context.Context, directory, digest string) error {
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	command := exec.CommandContext(ctx, "sudo", "--", executable, "_install-host-teardown-verify", directory, digest)
+	command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return command.Run()
 }
 
 func runInstallResume(ctx context.Context, directory string, renderer cliui.Renderer) error {
@@ -712,6 +724,137 @@ func runInstallUninstall(ctx context.Context, arguments []string, renderer cliui
 	return runInstallUninstallWith(ctx, directory, renderer, installUninstallDependencies{OwnerUID: os.Getuid(), Now: time.Now, ValidateTeardown: validateComposeTeardownAuthority, ComposeDown: func(ctx context.Context, manifest string) error {
 		return deployconfig.RunComposeForAcceptedInstaller(ctx, manifest, "down", deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic}, http.DefaultClient)
 	}})
+}
+
+func runInstallComposeRecovery(ctx context.Context, directory string, renderer cliui.Renderer) error {
+	return runInstallComposeRecoveryWith(ctx, directory, renderer, installComposeRecoveryDependencies{
+		OwnerUID:         os.Getuid(),
+		Now:              time.Now,
+		HostVerify:       runPrivilegedHostTeardownVerify,
+		ValidateTeardown: validatePartialComposeTeardownAuthority,
+		ComposeDown: func(ctx context.Context, manifest string) error {
+			return deployconfig.RunComposeForAcceptedInstaller(ctx, manifest, "down", deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic}, http.DefaultClient)
+		},
+	})
+}
+
+type installComposeRecoveryDependencies struct {
+	OwnerUID         int
+	Now              func() time.Time
+	HostVerify       func(context.Context, string, string) error
+	ValidateTeardown func(install.InstallPlan, install.InstallReceipt) error
+	ComposeDown      func(context.Context, string) error
+}
+
+func runInstallComposeRecoveryWith(ctx context.Context, directory string, renderer cliui.Renderer, dependencies installComposeRecoveryDependencies) (resultErr error) {
+	if dependencies.Now == nil || dependencies.HostVerify == nil || dependencies.ValidateTeardown == nil || dependencies.ComposeDown == nil {
+		return errors.New("SecondBox installer Compose recovery: dependencies are incomplete")
+	}
+	absolute, err := filepath.Abs(directory)
+	if err != nil {
+		return err
+	}
+	plan, receipt, err := install.ReadOperation(absolute, dependencies.OwnerUID)
+	if err != nil {
+		return err
+	}
+	if err := validatePartialComposeRecoveryState(receipt); err != nil {
+		return err
+	}
+	digest, err := install.PlanDigest(plan)
+	if err != nil {
+		return err
+	}
+	if err := runInstallPhase(ctx, renderer, "Privileged host verification", "verify reviewed host resources", func() error {
+		return dependencies.HostVerify(ctx, absolute, digest)
+	}); err != nil {
+		return err
+	}
+	lock, err := install.AcquireLock(absolute)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
+	plan, receipt, err = install.ReadOperation(absolute, dependencies.OwnerUID)
+	if err != nil {
+		return err
+	}
+	if err := validatePartialComposeRecoveryState(receipt); err != nil {
+		return err
+	}
+	lockedDigest, err := install.PlanDigest(plan)
+	if err != nil {
+		return err
+	}
+	if lockedDigest != digest {
+		return errors.New("SecondBox installer Compose recovery: accepted plan changed after privileged host verification")
+	}
+	if err := dependencies.ValidateTeardown(plan, receipt); err != nil {
+		return err
+	}
+	if err := receipt.PrepareComposeRetry(dependencies.Now()); err != nil {
+		return err
+	}
+	if err := install.SaveReceipt(absolute, plan, receipt, dependencies.OwnerUID); err != nil {
+		return err
+	}
+	if err := runInstallPhase(ctx, renderer, "Partial Compose shutdown", "preserve the accepted operation and durable resources", func() error {
+		return dependencies.ComposeDown(ctx, installerPlannedPath(plan, "manifest"))
+	}); err != nil {
+		return err
+	}
+	return writeDeployReceipt(renderer, "Partial Compose project stopped", []cliui.Pair{{Key: "Project", Value: expectedInstallerComposeProject(plan)}, {Key: "Operation", Value: absolute}, {Key: "Manifest", Value: installerPlannedPath(plan, "manifest")}}, "")
+}
+
+func validatePartialComposeRecoveryState(receipt install.InstallReceipt) error {
+	composeIndex := slices.Index(install.StageSequence, install.StageComposeStarted)
+	runnerIndex := slices.Index(install.StageSequence, install.StageRunnerEnrolled)
+	if receipt.Status != install.OperationFailed || slices.Index(install.StageSequence, receipt.FailureStage) < composeIndex || slices.Index(install.StageSequence, lastInstallStage(receipt)) < runnerIndex {
+		return errors.New("SecondBox installer Compose recovery: operation must have failed at or after Compose startup")
+	}
+	return nil
+}
+
+func validatePartialComposeTeardownAuthority(plan install.InstallPlan, receipt install.InstallReceipt) error {
+	if err := install.ValidateRecordedResources(plan, receipt); err != nil {
+		return err
+	}
+	manifestIndex := slices.IndexFunc(receipt.CreatedResources, func(resource install.CreatedResource) bool {
+		return resource.ID == "manifest" && resource.Kind == install.ResourceFile && resource.Stage == install.StageDeploymentMaterialized && resource.Digest != ""
+	})
+	composeResourceIndex := slices.IndexFunc(receipt.CreatedResources, func(resource install.CreatedResource) bool { return resource.ID == "compose-project" })
+	if manifestIndex < 0 {
+		return errors.New("SecondBox installer Compose recovery: receipt lacks the materialized deployment manifest")
+	}
+	resolved, err := deployconfig.ResolveForAcceptedInstaller(installerPlannedPath(plan, "manifest"))
+	if err != nil {
+		return err
+	}
+	if expected := expectedInstallerComposeProject(plan); resolved.ComposeProject() != expected {
+		return fmt.Errorf("SecondBox installer Compose recovery: manifest project %q differs from accepted project %q", resolved.ComposeProject(), expected)
+	}
+	composeCompleted := slices.Index(install.StageSequence, lastInstallStage(receipt)) >= slices.Index(install.StageSequence, install.StageComposeStarted)
+	if !composeCompleted {
+		if composeResourceIndex >= 0 {
+			return errors.New("SecondBox installer Compose recovery: incomplete Compose startup unexpectedly recorded a Compose project")
+		}
+		return nil
+	}
+	if composeResourceIndex < 0 {
+		return errors.New("SecondBox installer Compose recovery: completed Compose startup lacks its project resource")
+	}
+	resource := receipt.CreatedResources[composeResourceIndex]
+	if resource.Kind != install.ResourceComposeProject || resource.Stage != install.StageComposeStarted || resource.Identity != resolved.ComposeProject() {
+		return errors.New("SecondBox installer Compose recovery: recorded Compose project differs from the accepted manifest")
+	}
+	if err := install.ValidateComposeProjectEvidence(receipt, resolved.ComposeProject()); err != nil {
+		return err
+	}
+	return nil
+}
+
+func expectedInstallerComposeProject(plan install.InstallPlan) string {
+	return "secondbox-" + strings.TrimPrefix(plan.OperationID, "install_")
 }
 
 type installUninstallDependencies struct {

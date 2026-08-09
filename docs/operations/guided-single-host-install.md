@@ -22,7 +22,7 @@ The check performs no sudo, download, image pull, directory creation, mount, or 
 - `needs user action` requires the operator to correct the host and rerun;
 - `blocked` means this host is outside the qualified matrix.
 
-The command exits nonzero when action or an incompatibility remains. Host facts include only the relevant device, filesystem, route, port, capacity, UID, software-version, and connectivity evidence; they exclude credentials and unrelated inventory.
+The command exits nonzero when action or an incompatibility remains. Host facts include only the relevant device, filesystem, route, Docker IPAM allocation, port, capacity, UID, software-version, and connectivity evidence; they exclude credentials and unrelated inventory. The plan uses those routes and allocations to choose distinct guest and Compose backend networks instead of asking Docker to consume an automatic address pool.
 
 ## Run and review the wizard
 
@@ -44,7 +44,7 @@ sed -n '1,240p' install.sh
 sh install.sh
 ```
 
-The normal wizard asks for a workspace choice, reviews its conservative resource budget, and asks for final confirmation. `secondbox-deploy install --advanced` additionally exposes the proposed addresses, ports, guest CIDR, DNS upstream, jailer UID range, paths, capacity, and CLI subject identity.
+The normal wizard asks for a workspace choice, reviews its conservative resource budget, and asks for final confirmation. `secondbox-deploy install --advanced` additionally exposes the proposed addresses, ports, separate guest and Compose backend CIDRs, DNS upstream, jailer UID range, paths, capacity, and CLI subject identity.
 
 Workspace choices are:
 
@@ -85,6 +85,86 @@ secondbox-deploy install --resume /absolute/path/to/operation
 ```
 
 Resume locks the operation, revalidates the plan and host identity, and checks recorded files, modes, digests, image identities, artifact hashes, manifest, Runner identity, Compose project, CLI configuration, and health before skipping work. It refuses a changed or foreign resource instead of recreating an empty Workspace. Verified artifacts and binaries are not re-extracted merely because a later stage failed.
+
+### Recover a pre-v0.4.7 Compose network failure
+
+An operation accepted by v0.4.4 through v0.4.6 does not contain a Compose backend CIDR. If it failed at `Compose startup` with `all predefined address pools have been fully subnetted`, preserve that immutable plan and create the exact project-scoped network before resuming. This procedure applies to that allocation failure and those receipt-compatible installer versions only.
+
+First derive the project identity from the accepted plan and inspect every conflicting source:
+
+```bash
+set -euo pipefail
+
+operation=/absolute/path/to/operation
+plan="$operation/install-plan.json"
+operation_id=$(jq -er '.operationId | select(test("^install_[0-9a-f]{16}$"))' "$plan")
+project="secondbox-${operation_id#install_}"
+network="${project}_secondbox-backend"
+guest_cidr=$(jq -er '.network.guestBridgeCidr' "$plan")
+
+printf 'Guest network: %s\n' "$guest_cidr"
+ip -j -4 route show table all | jq -r '.[] | (.dst // "default")'
+network_ids=$(docker network ls --quiet --no-trunc)
+if [ -n "$network_ids" ]; then
+  docker network inspect $network_ids | jq -r '.[].IPAM.Config[]?.Subnet'
+fi
+```
+
+Choose one canonical RFC1918 `/24` that does not overlap the guest CIDR, any prefix or bare host address from any host routing table, or any Docker IPAM subnet. Review the exact value, then create the Compose-owned network with both required labels:
+
+```bash
+set -euo pipefail
+
+operation=/absolute/path/to/operation
+plan="$operation/install-plan.json"
+operation_id=$(jq -er '.operationId | select(test("^install_[0-9a-f]{16}$"))' "$plan")
+project="secondbox-${operation_id#install_}"
+network="${project}_secondbox-backend"
+compose_cidr=10.0.0.0/24 # replace with the reviewed collision-free /24
+
+docker network create \
+  --driver bridge \
+  --subnet "$compose_cidr" \
+  --label "com.docker.compose.project=$project" \
+  --label 'com.docker.compose.network=secondbox-backend' \
+  "$network"
+
+docker network inspect "$network" | jq -e \
+  --arg project "$project" --arg cidr "$compose_cidr" \
+  'length == 1 and
+   .[0].Labels["com.docker.compose.project"] == $project and
+   .[0].Labels["com.docker.compose.network"] == "secondbox-backend" and
+   .[0].IPAM.Config == [{"Subnet": $cidr, "Gateway": .[0].IPAM.Config[0].Gateway}]'
+
+secondbox-deploy install --resume "$operation"
+```
+
+If the CIDR review was wrong, roll back only while the network has no attached containers; the check fails closed otherwise:
+
+```bash
+set -euo pipefail
+
+operation=/absolute/path/to/operation
+plan="$operation/install-plan.json"
+operation_id=$(jq -er '.operationId | select(test("^install_[0-9a-f]{16}$"))' "$plan")
+project="secondbox-${operation_id#install_}"
+network="${project}_secondbox-backend"
+
+docker network inspect "$network" | jq -e '.[0].Containers | length == 0'
+docker network rm "$network"
+```
+
+Once containers are attached, do not remove the network manually. Use the v0.4.7 bootstrap to run the installer recovery action from its temporary, checksum-verified binary. Do not replace the older receipt-bound binary installed by the failed operation. The recovery action accepts failures from Compose startup through CLI login, readiness, or smoke execution. It locks and validates the plan, receipt, recorded manifest and binary digests, host identity, privileged resource identities, failed stage, and exact Compose project before journaling a retry from the last pre-Compose stage and tearing down partial containers. It does not require current KVM/TUN availability, a still-free jailer UID range, or new allocation capacity. It preserves the failed operation's durable paths, verified release assets, generated authority, installed binaries, and retryable receipt:
+
+```bash
+set -euo pipefail
+
+operation=/absolute/path/to/operation
+curl -fsSL https://github.com/SecondStack-AI/SecondBox/releases/download/v0.4.7/install.sh \
+  | sh -s -- --recover-compose-network "$operation"
+```
+
+After the recovery action succeeds, repeat the collision review and network-creation procedure with a corrected `/24`, then resume the preserved operation. Use the operation's support workflow if receipt-bound teardown fails.
 
 Failures are reported as blocked, needs-action, retryable, or internal with the failed stage and a recovery direction. Preserve the operation directory: its plan and receipt are the audit and recovery boundary. The ordinary bounded support bundle is documented in [observability and diagnostics](observability-and-diagnostics.md); installer failures should additionally retain the redacted preflight report, plan digest, non-secret manifest inspection, Compose/systemd status, bounded Runner logs, filesystem facts, and unauthenticated health response.
 

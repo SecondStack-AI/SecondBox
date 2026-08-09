@@ -157,6 +157,17 @@ func TestGuidedInstallDevelopmentBuildFailsBeforeReleaseFetch(t *testing.T) {
 	}
 }
 
+func TestComposeCIDRValidatorRequiresPrivateSlash24(t *testing.T) {
+	if err := validateInstallerComposeCIDR("10.42.0.0/24"); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"10.42.0.0/30", "198.51.100.0/24"} {
+		if err := validateInstallerComposeCIDR(value); err == nil {
+			t.Fatalf("Compose CIDR %q passed validation", value)
+		}
+	}
+}
+
 func TestGuidedInstallEOFDoesNotCreateOperationDirectory(t *testing.T) {
 	usePublishedGuidedReleaseBuild(t)
 	created := false
@@ -253,7 +264,7 @@ func TestPrivateHostApplyGrammarIsStrictAndAbsentFromHelp(t *testing.T) {
 	var output bytes.Buffer
 	renderer := cliui.Renderer{Output: &output, Diagnostic: &output, Capabilities: cliui.ForWriter(&output, &output), OutputMode: cliui.OutputPlain, ColorMode: cliui.ColorNever}
 	helpErr := usage(renderer)
-	if strings.Contains(helpErr.Error(), "_install-host-apply") || strings.Contains(helpErr.Error(), "_install-host-purge") || strings.Contains(helpErr.Error(), "_install-host-purge-validate") {
+	if strings.Contains(helpErr.Error(), "_install-host-apply") || strings.Contains(helpErr.Error(), "_install-host-teardown-verify") || strings.Contains(helpErr.Error(), "_install-host-purge") || strings.Contains(helpErr.Error(), "_install-host-purge-validate") {
 		t.Fatal("private installer command leaked into ordinary help")
 	}
 	for _, arguments := range [][]string{nil, {"one"}, {"one", "two", "three"}} {
@@ -266,6 +277,12 @@ func TestPrivateHostApplyGrammarIsStrictAndAbsentFromHelp(t *testing.T) {
 	err := runPrivateHostApply(context.Background(), []string{"/operation", "sha256:" + strings.Repeat("a", 64)})
 	if err == nil || !strings.Contains(err.Error(), "SUDO_UID") {
 		t.Fatalf("invalid SUDO_UID error = %v", err)
+	}
+	for _, arguments := range [][]string{nil, {"one"}, {"one", "two", "three"}} {
+		err := runPrivateHostTeardownVerify(context.Background(), arguments)
+		if err == nil || !strings.HasPrefix(err.Error(), "SecondBox installer private host teardown verification:") {
+			t.Fatalf("teardown verification arguments %#v error = %v", arguments, err)
+		}
 	}
 	for _, arguments := range [][]string{nil, {"one"}, {"one", "two", "three"}} {
 		err := runPrivateHostPurge(context.Background(), arguments)

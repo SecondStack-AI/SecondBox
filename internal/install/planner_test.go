@@ -98,7 +98,7 @@ func TestProposeExistingFilesystemPlanIsCompleteAndExplicit(t *testing.T) {
 	if plan.Storage.ExistingDeviceIdentity != "8:16" || plan.Storage.WorkspacePath != "/srv/secondbox-workspace/secondbox-install_0123456789abcdef/storage/workspaces" || plan.Capacity.MaxWorkspaceBytes != 225<<30 {
 		t.Fatalf("storage = %#v", plan.Storage)
 	}
-	if len(plan.Capacity.SubjectQuotas) != 9 || len(plan.Network.Gateways) != 2 || plan.Network.GuestBridgeCIDR != "172.31.0.0/24" {
+	if len(plan.Capacity.SubjectQuotas) != 9 || len(plan.Network.Gateways) != 2 || plan.Network.GuestBridgeCIDR != "172.31.0.0/24" || plan.Network.ComposeBackendCIDR != "172.16.0.0/24" {
 		t.Fatalf("capacity/network incomplete: %#v %#v", plan.Capacity, plan.Network)
 	}
 	if plan.Compute.FirecrackerCPUTemplate != SingleHostFirecrackerCPUTemplate {
@@ -204,10 +204,20 @@ func TestPlannerRejectsUnsafeOrUnreviewedChoices(t *testing.T) {
 			input.NetworkOverrides.APIPort = 10000
 		}},
 		{"route collision", func(_ *HostFacts, input *ProposalInput) { input.NetworkOverrides.GuestCIDR = "172.30.0.0/24" }},
+		{"Compose and guest collision", func(_ *HostFacts, input *ProposalInput) {
+			input.NetworkOverrides.GuestCIDR = "10.10.0.0/24"
+			input.NetworkOverrides.ComposeCIDR = "10.10.0.0/24"
+		}},
+		{"Compose and Docker collision", func(facts *HostFacts, input *ProposalInput) {
+			facts.DockerNetworkSubnets = []string{"10.20.0.0/16"}
+			input.NetworkOverrides.ComposeCIDR = "10.20.1.0/24"
+		}},
 		{"loopback DNS", func(_ *HostFacts, input *ProposalInput) { input.NetworkOverrides.DNSUpstream = "127.0.0.53" }},
 		{"unsafe deployment", func(_ *HostFacts, input *ProposalInput) { input.DeploymentDirectory = "/" }},
 		{"small deployment filesystem", func(_ *HostFacts, input *ProposalInput) { input.DeploymentAvailableBytes = MinimumDeploymentBytes - 1 }},
 		{"IPv6 guest network", func(_ *HostFacts, input *ProposalInput) { input.NetworkOverrides.GuestCIDR = "fd00::/64" }},
+		{"public Compose network", func(_ *HostFacts, input *ProposalInput) { input.NetworkOverrides.ComposeCIDR = "198.51.100.0/24" }},
+		{"undersized Compose network", func(_ *HostFacts, input *ProposalInput) { input.NetworkOverrides.ComposeCIDR = "10.42.0.0/30" }},
 		{"guest network without usable addresses", func(_ *HostFacts, input *ProposalInput) { input.NetworkOverrides.GuestCIDR = "192.0.2.0/31" }},
 		{"overflowing jailer range", func(_ *HostFacts, input *ProposalInput) {
 			input.NetworkOverrides.JailerUID = UIDRange{Start: int64(^uint32(0)), Count: 2}
@@ -231,7 +241,7 @@ func TestPlannerRejectsUnsafeOrUnreviewedChoices(t *testing.T) {
 
 func TestAutomaticGuestCIDRSearchesBeyondPreferredSubnets(t *testing.T) {
 	routes := []RouteFact{{Destination: "172.30.0.0/24"}, {Destination: "172.31.0.0/16"}, {Destination: "0.0.0.0/0"}}
-	if candidate := freeGuestCIDR(routes); candidate != "172.16.0.0/24" {
+	if candidate := freeRFC1918CIDR(observedIPv4RoutePrefixes(routes)); candidate != "172.16.0.0/24" {
 		t.Fatalf("automatic CIDR did not continue through RFC1918 space: %s", candidate)
 	}
 }
@@ -242,7 +252,7 @@ func TestAutomaticGuestCIDRFallsBackAcrossRFC1918Pools(t *testing.T) {
 		{Destination: "10.0.0.0/8"},
 		{Destination: "192.168.0.0/25"},
 	}
-	if candidate := freeGuestCIDR(routes); candidate != "192.168.1.0/24" {
+	if candidate := freeRFC1918CIDR(observedIPv4RoutePrefixes(routes)); candidate != "192.168.1.0/24" {
 		t.Fatalf("automatic CIDR did not reach the remaining RFC1918 pool: %s", candidate)
 	}
 }
@@ -253,8 +263,24 @@ func TestAutomaticGuestCIDRRejectsExhaustedRFC1918Space(t *testing.T) {
 		{Destination: "10.0.0.0/8"},
 		{Destination: "192.168.0.0/16"},
 	}
-	if candidate := freeGuestCIDR(routes); candidate != "" {
+	if candidate := freeRFC1918CIDR(observedIPv4RoutePrefixes(routes)); candidate != "" {
 		t.Fatalf("automatic CIDR escaped RFC1918 space: %s", candidate)
+	}
+}
+
+func TestPlanChoosesDistinctCIDRsBeyondDockerAllocations(t *testing.T) {
+	facts := plannerFacts(t)
+	facts.Routes = []RouteFact{{Destination: "172.30.0.0/24"}, {Destination: "192.168.240.0/20"}}
+	facts.DockerNetworkSubnets = []string{"172.16.0.0/12", "192.168.0.0/16", "10.0.0.0/24"}
+	plan, err := ProposePlan(facts, plannerInput(t, StorageExistingMount))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Network.GuestBridgeCIDR != "10.0.1.0/24" || plan.Network.ComposeBackendCIDR != "10.0.2.0/24" {
+		t.Fatalf("selected networks = guest %s, Compose %s", plan.Network.GuestBridgeCIDR, plan.Network.ComposeBackendCIDR)
+	}
+	if review := RenderPlanReview(plan); !strings.Contains(review, "guests 10.0.1.0/24, Compose backend 10.0.2.0/24") {
+		t.Fatalf("plan review omitted explicit networks:\n%s", review)
 	}
 }
 
