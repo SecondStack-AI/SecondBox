@@ -224,6 +224,7 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 		"qualification-$mode",
 		"docker.io/library/registry@sha256:",
 		"hello after reboot",
+		`--path "sandboxId=$sandbox_id"`,
 		".microvm.imageReference",
 		"purge accepted an unrecorded nested mount",
 		"resume accepted a replacement filesystem",

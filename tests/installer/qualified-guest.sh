@@ -193,13 +193,13 @@ jq -e '.completedStages[] | select(.stage == "cli_login")' "$receipt" >/dev/null
 jq -e '.completedStages[] | select(.stage == "smoke_execution") | .evidence.output == "hello from a microVM" and .evidence.exitStatus == "0"' "$receipt" >/dev/null
 sandbox_id="$(jq -er '.completedStages[] | select(.stage == "smoke_execution") | .evidence.sandboxId' "$receipt")"
 SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output plain exec "$sandbox_id" -- python3 -c 'print("hello after reboot")' | grep -Fx 'hello after reboot' >/dev/null
-sandbox_before="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get "$sandbox_id" | jq -cS '{id,profile,profileRevisionId,generation,workspace}')"
+sandbox_before="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$sandbox_id" | jq -cS '{id,profile,profileRevisionId,generation,workspace}')"
 
 "$deploy" --accessible uninstall "$operation" >"$qualification_root/uninstall-${mode}.log" 2>&1
 jq -e '.status == "uninstalled"' "$receipt" >/dev/null
 [[ -d "$workspace" && -d "$artifacts" && -f "$manifest_path" ]]
 "$deploy" --accessible install --resume "$operation" --candidate-directory "$release_directory" >"$qualification_root/resume-after-uninstall-${mode}.log" 2>&1
-sandbox_after="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get "$sandbox_id" | jq -cS '{id,profile,profileRevisionId,generation,workspace}')"
+sandbox_after="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$sandbox_id" | jq -cS '{id,profile,profileRevisionId,generation,workspace}')"
 [[ "$sandbox_before" == "$sandbox_after" ]] || { echo 'retained smoke Sandbox lineage changed across uninstall/resume' >&2; exit 1; }
 "$deploy" --accessible uninstall "$operation" >/dev/null 2>&1
 
