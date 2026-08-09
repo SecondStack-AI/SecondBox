@@ -157,6 +157,17 @@ func TestGuidedInstallDevelopmentBuildFailsBeforeReleaseFetch(t *testing.T) {
 	}
 }
 
+func TestComposeCIDRValidatorRequiresPrivateSlash24(t *testing.T) {
+	if err := validateInstallerComposeCIDR("10.42.0.0/24"); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"10.42.0.0/30", "198.51.100.0/24"} {
+		if err := validateInstallerComposeCIDR(value); err == nil {
+			t.Fatalf("Compose CIDR %q passed validation", value)
+		}
+	}
+}
+
 func TestGuidedInstallEOFDoesNotCreateOperationDirectory(t *testing.T) {
 	usePublishedGuidedReleaseBuild(t)
 	created := false

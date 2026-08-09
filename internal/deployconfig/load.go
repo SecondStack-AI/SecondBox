@@ -129,6 +129,9 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 	putInt("SECONDBOX_RUNNER_PUBLISHED_PORT", deployment.RunnerPublishedPort)
 	put("SECONDBOX_RUNNER_LISTEN_ADDR", deployment.RunnerListenAddress)
 	put("SECONDBOX_LOG_PATH", deployment.LogPath)
+	if deployment.ComposeBackendCIDR != "" {
+		put("SECONDBOX_COMPOSE_BACKEND_CIDR", deployment.ComposeBackendCIDR)
+	}
 	if deployment.DevelopmentWaitSeconds != nil {
 		putInt("SECONDBOX_DEVELOPMENT_PREPARE_WAIT_TIMEOUT_SECONDS", deployment.DevelopmentWaitSeconds)
 	}
@@ -308,6 +311,9 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 
 	remote := make(map[string]map[string]string)
 	composeFiles := []string{"deploy/compose.yml"}
+	if deployment.ComposeBackendCIDR != "" {
+		composeFiles = append(composeFiles, "deploy/compose.explicit-network.yml")
+	}
 	if deployment.Mode == "development" {
 		composeFiles = append(composeFiles, "deploy/compose.development.yml")
 	} else {
@@ -388,6 +394,14 @@ func validateManifestShape(manifest ManifestV1) error {
 	}
 	if d.ComposeProjectName != "" && !composeProjectPattern.MatchString(d.ComposeProjectName) {
 		return manifestError("deployment.compose_project_name must start with a lowercase letter or digit and use at most 63 lowercase letters, digits, underscores, or hyphens", nil)
+	}
+	var composeBackendPrefix netip.Prefix
+	if d.ComposeBackendCIDR != "" {
+		prefix, err := netip.ParsePrefix(d.ComposeBackendCIDR)
+		if err != nil || !prefix.Addr().Is4() || prefix.Bits() != 24 || prefix != prefix.Masked() || !privateIPv4Prefix(prefix) {
+			return manifestError("deployment.compose_backend_cidr must be an RFC1918 IPv4 /24", err)
+		}
+		composeBackendPrefix = prefix
 	}
 	if d.Mode == "development" && (manifest.Database.Mode != "bundled" || manifest.ObjectStore.Mode != "bundled") {
 		return manifestError("development mode requires the reviewed bundled database and object_store topology", nil)
@@ -561,8 +575,33 @@ func validateManifestShape(manifest ManifestV1) error {
 		if err := validateRunner(prefix, r); err != nil {
 			return err
 		}
+		if r.Placement == "same-host" && composeBackendPrefix.IsValid() {
+			guestPrefix, err := netip.ParsePrefix(r.SandboxGuestCIDR)
+			if err != nil {
+				return manifestError(prefix+".sandbox_guest_cidr must be a valid prefix", err)
+			}
+			bridgePrefix, err := netip.ParsePrefix(r.SandboxBridgeCIDR)
+			if err != nil {
+				return manifestError(prefix+".sandbox_bridge_cidr must be a valid prefix", err)
+			}
+			if composeBackendPrefix.Overlaps(guestPrefix.Masked()) {
+				return manifestError("deployment.compose_backend_cidr must not overlap "+prefix+".sandbox_guest_cidr", nil)
+			}
+			if composeBackendPrefix.Overlaps(bridgePrefix.Masked()) {
+				return manifestError("deployment.compose_backend_cidr must not overlap "+prefix+".sandbox_bridge_cidr", nil)
+			}
+		}
 	}
 	return nil
+}
+
+func privateIPv4Prefix(prefix netip.Prefix) bool {
+	for _, private := range []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("172.16.0.0/12"), netip.MustParsePrefix("192.168.0.0/16")} {
+		if prefix.Bits() >= private.Bits() && private.Contains(prefix.Addr()) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateDistinctCredentials(credentials map[string]string) error {

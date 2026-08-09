@@ -22,7 +22,7 @@ The check performs no sudo, download, image pull, directory creation, mount, or 
 - `needs user action` requires the operator to correct the host and rerun;
 - `blocked` means this host is outside the qualified matrix.
 
-The command exits nonzero when action or an incompatibility remains. Host facts include only the relevant device, filesystem, route, port, capacity, UID, software-version, and connectivity evidence; they exclude credentials and unrelated inventory.
+The command exits nonzero when action or an incompatibility remains. Host facts include only the relevant device, filesystem, route, Docker IPAM allocation, port, capacity, UID, software-version, and connectivity evidence; they exclude credentials and unrelated inventory. The plan uses those routes and allocations to choose distinct guest and Compose backend networks instead of asking Docker to consume an automatic address pool.
 
 ## Run and review the wizard
 
@@ -44,7 +44,7 @@ sed -n '1,240p' install.sh
 sh install.sh
 ```
 
-The normal wizard asks for a workspace choice, reviews its conservative resource budget, and asks for final confirmation. `secondbox-deploy install --advanced` additionally exposes the proposed addresses, ports, guest CIDR, DNS upstream, jailer UID range, paths, capacity, and CLI subject identity.
+The normal wizard asks for a workspace choice, reviews its conservative resource budget, and asks for final confirmation. `secondbox-deploy install --advanced` additionally exposes the proposed addresses, ports, separate guest and Compose backend CIDRs, DNS upstream, jailer UID range, paths, capacity, and CLI subject identity.
 
 Workspace choices are:
 

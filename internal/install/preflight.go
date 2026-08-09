@@ -3,11 +3,13 @@ package install
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"runtime"
@@ -179,7 +181,7 @@ func Preflight(ctx context.Context, probes PreflightProbes) (HostFacts, error) {
 	if probes.Filesystem == nil || probes.Process == nil || probes.Network == nil || probes.Clock == nil || probes.Users == nil || probes.LookupEnv == nil {
 		return HostFacts{}, installerError("preflight requires filesystem, process, network, clock, and user probes", nil)
 	}
-	facts := HostFacts{SchemaVersion: HostFactsSchema, ObservedAt: probes.Clock.Now().UTC(), OS: probes.OS, Architecture: probes.Architecture, InvokingUID: probes.InvokingUID, InvokingGID: probes.InvokingGID, CPUCount: probes.CPUCount, Devices: []DeviceFact{}, ListeningPorts: []PortFact{}, Routes: []RouteFact{}, DNSUpstreams: []string{}, AssignedUIDs: []int64{}, ReservedIDRanges: []UIDRange{}, CandidateUIDRanges: []UIDRange{}, Utilities: map[string]string{}, Findings: []Finding{}}
+	facts := HostFacts{SchemaVersion: HostFactsSchema, ObservedAt: probes.Clock.Now().UTC(), OS: probes.OS, Architecture: probes.Architecture, InvokingUID: probes.InvokingUID, InvokingGID: probes.InvokingGID, CPUCount: probes.CPUCount, Devices: []DeviceFact{}, ListeningPorts: []PortFact{}, Routes: []RouteFact{}, DockerNetworkSubnets: []string{}, DNSUpstreams: []string{}, AssignedUIDs: []int64{}, ReservedIDRanges: []UIDRange{}, CandidateUIDRanges: []UIDRange{}, Utilities: map[string]string{}, Findings: []Finding{}}
 	add := func(id string, class FindingClass, summary, detail, remedy string) {
 		facts.Findings = append(facts.Findings, Finding{ID: id, Class: class, Summary: summary, Detail: detail, Remedy: remedy})
 	}
@@ -254,6 +256,13 @@ func preflightDocker(ctx context.Context, p PreflightProbes, f *HostFacts, add f
 	} else {
 		f.DockerVersion = docker.Stdout
 		add("docker", FindingPass, "Docker Engine is reachable", docker.Stdout, "")
+		subnets, inspectErr := inspectDockerNetworkSubnets(ctx, p.Process)
+		if inspectErr != nil {
+			add("docker_networks", FindingNeedsAction, "Docker network allocations could not be inspected", inspectErr.Error(), "Restore Docker network inspection before installation so the reviewed backend subnet can be selected safely.")
+		} else {
+			f.DockerNetworkSubnets = subnets
+			add("docker_networks", FindingPass, "Docker network allocations inspected", fmt.Sprintf("%d allocated subnets", len(subnets)), "")
+		}
 	}
 	compose, composeErr := p.Process.Run(ctx, "docker", "compose", "version", "--short")
 	if composeErr != nil {
@@ -269,6 +278,59 @@ func preflightDocker(ctx context.Context, p PreflightProbes, f *HostFacts, add f
 		f.Utilities["composeProjects"] = projects.Stdout
 		add("compose_projects", FindingPass, "Existing Compose projects inspected", boundedDetail(projects.Stdout), "")
 	}
+}
+
+func inspectDockerNetworkSubnets(ctx context.Context, process ProcessProbe) ([]string, error) {
+	listed, err := process.Run(ctx, "docker", "network", "ls", "--quiet", "--no-trunc")
+	if err != nil {
+		detail := strings.TrimSpace(listed.Stdout + " " + listed.Stderr)
+		if detail == "" {
+			return nil, fmt.Errorf("list Docker networks: %w", err)
+		}
+		return nil, fmt.Errorf("list Docker networks: %s: %w", detail, err)
+	}
+	ids := strings.Fields(listed.Stdout)
+	if len(ids) == 0 {
+		return []string{}, nil
+	}
+	arguments := append([]string{"network", "inspect"}, ids...)
+	inspected, err := process.Run(ctx, "docker", arguments...)
+	if err != nil {
+		detail := strings.TrimSpace(inspected.Stdout + " " + inspected.Stderr)
+		if detail == "" {
+			return nil, fmt.Errorf("inspect Docker networks: %w", err)
+		}
+		return nil, fmt.Errorf("inspect Docker networks: %s: %w", detail, err)
+	}
+	var networks []struct {
+		IPAM struct {
+			Config []struct {
+				Subnet string `json:"Subnet"`
+			} `json:"Config"`
+		} `json:"IPAM"`
+	}
+	if err := json.Unmarshal([]byte(inspected.Stdout), &networks); err != nil {
+		return nil, fmt.Errorf("decode Docker network allocations: %w", err)
+	}
+	unique := map[string]bool{}
+	for _, network := range networks {
+		for _, config := range network.IPAM.Config {
+			if config.Subnet == "" {
+				continue
+			}
+			prefix, err := netip.ParsePrefix(config.Subnet)
+			if err != nil || prefix != prefix.Masked() {
+				return nil, fmt.Errorf("Docker reported invalid network subnet %q", config.Subnet)
+			}
+			unique[config.Subnet] = true
+		}
+	}
+	subnets := make([]string, 0, len(unique))
+	for subnet := range unique {
+		subnets = append(subnets, subnet)
+	}
+	slices.Sort(subnets)
+	return subnets, nil
 }
 func preflightCgroup(p PreflightProbes, f *HostFacts, add func(string, FindingClass, string, string, string)) {
 	content, err := p.Filesystem.ReadFile("/sys/fs/cgroup/cgroup.controllers")

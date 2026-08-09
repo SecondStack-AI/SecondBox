@@ -74,7 +74,7 @@ func TestInitSingleHostFromReleaseMaterializesEveryAcceptedRunnerValue(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Deployment.Mode != "development" || manifest.Deployment.ControlPlaneImage != release.ControlPlane.Reference || manifest.Deployment.RunnerImage != release.Runner.Reference || len(manifest.Runners) != 1 {
+	if manifest.Deployment.Mode != "development" || manifest.Deployment.ControlPlaneImage != release.ControlPlane.Reference || manifest.Deployment.RunnerImage != release.Runner.Reference || manifest.Deployment.ComposeBackendCIDR != plan.Network.ComposeBackendCIDR || len(manifest.Runners) != 1 {
 		t.Fatalf("release-backed deployment = %#v", manifest.Deployment)
 	}
 	runner := manifest.Runners[0]

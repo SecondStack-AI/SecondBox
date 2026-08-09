@@ -138,6 +138,30 @@ func TestQualifiedPreflightAggregatesReadOnlyFacts(t *testing.T) {
 	}
 }
 
+func TestDockerNetworkInspectionRecordsSortedUniqueIPAMSubnets(t *testing.T) {
+	process := &fakeProcess{results: map[string]CommandResult{
+		"docker network ls --quiet --no-trunc":       {Stdout: "network-b\nnetwork-a"},
+		"docker network inspect network-b network-a": {Stdout: `[{"IPAM":{"Config":[{"Subnet":"192.168.16.0/20"},{"Subnet":"fd00::/64"}]}},{"IPAM":{"Config":[{"Subnet":"172.18.0.0/16"},{"Subnet":"192.168.16.0/20"}]}}]`},
+	}, errors: map[string]error{}}
+	subnets, err := inspectDockerNetworkSubnets(context.Background(), process)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"172.18.0.0/16", "192.168.16.0/20", "fd00::/64"}
+	if !slices.Equal(subnets, want) {
+		t.Fatalf("Docker subnets = %#v, want %#v", subnets, want)
+	}
+}
+
+func TestDockerNetworkInspectionFailsClosedOnUnreadableAllocations(t *testing.T) {
+	process := &fakeProcess{results: map[string]CommandResult{
+		"docker network ls --quiet --no-trunc": {Stderr: "permission denied"},
+	}, errors: map[string]error{"docker network ls --quiet --no-trunc": errors.New("exit 1")}}
+	if _, err := inspectDockerNetworkSubnets(context.Background(), process); err == nil || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("Docker network inspection error = %v", err)
+	}
+}
+
 func TestPreflightRejectsNoexecAndNodevStorageCandidates(t *testing.T) {
 	for _, option := range []string{"noexec", "nodev"} {
 		t.Run(option, func(t *testing.T) {

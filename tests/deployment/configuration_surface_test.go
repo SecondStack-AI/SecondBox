@@ -42,7 +42,7 @@ func TestDeploymentCompilerReplacesLegacyOperatorSurface(t *testing.T) {
 			t.Errorf("legacy operator input still exists: %s", removed)
 		}
 	}
-	for _, present := range []string{"deploy/secondbox.example.toml", "deploy/compose.yml", "deploy/compose.development.yml", "deploy/compose.bundled-database.yml", "deploy/compose.bundled-object-store.yml", "deploy/compose.same-host-runner.yml"} {
+	for _, present := range []string{"deploy/secondbox.example.toml", "deploy/compose.yml", "deploy/compose.development.yml", "deploy/compose.explicit-network.yml", "deploy/compose.bundled-database.yml", "deploy/compose.bundled-object-store.yml", "deploy/compose.same-host-runner.yml"} {
 		if _, err := os.Stat(filepath.Join(root, present)); err != nil {
 			t.Errorf("new deployment artifact missing: %s: %v", present, err)
 		}
@@ -76,6 +76,57 @@ func TestDocumentedRunnerTemplateMatchesCommandOutput(t *testing.T) {
 	}
 	if !strings.Contains(string(readme), "secondbox-deploy runner-template") {
 		t.Fatal("README same-host path does not point to runner-template")
+	}
+}
+
+func TestExplicitComposeNetworkOverlayRendersReviewedSubnet(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("Docker Compose is unavailable")
+	}
+	if err := exec.Command("docker", "compose", "version").Run(); err != nil {
+		t.Skip("Docker Compose v2 is unavailable")
+	}
+	manifestPath, err := deployconfig.InitDevelopment(filepath.Join(t.TempDir(), "deployment"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest = []byte(strings.Replace(string(manifest), "compose_project_name = 'secondbox'\n", "compose_project_name = 'secondbox'\ncompose_backend_cidr = '10.254.253.0/24'\n", 1))
+	if err := os.WriteFile(manifestPath, manifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	environmentPath := filepath.Join(filepath.Dir(manifestPath), "generated.env")
+	resolved, err := deployconfig.Render(manifestPath, environmentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments := []string{"compose", "--project-name", "secondbox-network-config-test", "--env-file", environmentPath}
+	for _, composeFile := range resolved.ComposeFiles {
+		arguments = append(arguments, "--file", composeFile)
+	}
+	arguments = append(arguments, "config", "--format", "json")
+	output, err := exec.Command("docker", arguments...).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var model struct {
+		Networks map[string]struct {
+			IPAM struct {
+				Config []struct {
+					Subnet string `json:"subnet"`
+				} `json:"config"`
+			} `json:"ipam"`
+		} `json:"networks"`
+	}
+	if err := json.Unmarshal(output, &model); err != nil {
+		t.Fatal(err)
+	}
+	config := model.Networks["secondbox-backend"].IPAM.Config
+	if len(config) != 1 || config[0].Subnet != "10.254.253.0/24" {
+		t.Fatalf("rendered Compose backend IPAM = %#v", config)
 	}
 }
 

@@ -181,6 +181,22 @@ func TestComposeProjectIsolatesDeploymentsAndDefaultsForOlderManifests(t *testin
 	}
 }
 
+func TestExplicitComposeBackendCIDRSelectsIPAMOverlay(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	manifest, err := ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.Deployment.ComposeBackendCIDR = "10.42.0.0/24"
+	resolved, err := resolveManifest(manifest, filepath.Dir(manifestPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Environment["SECONDBOX_COMPOSE_BACKEND_CIDR"] != "10.42.0.0/24" || !slices.Contains(resolved.ComposeFiles, "deploy/compose.explicit-network.yml") {
+		t.Fatalf("explicit Compose network resolution = env %q, files %#v", resolved.Environment["SECONDBOX_COMPOSE_BACKEND_CIDR"], resolved.ComposeFiles)
+	}
+}
+
 func TestPermanentComposePurgeRemovesExactProjectVolumes(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
 	executor := &recordingComposeExecutor{}
@@ -237,6 +253,21 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 		{name: "Compose project name carries a forbidden byte", want: "deployment.compose_project_name", mutate: func(manifest *ManifestV1) { manifest.Deployment.ComposeProjectName = "secondbox/test" }},
 		{name: "Compose project name exceeds the bound", want: "deployment.compose_project_name", mutate: func(manifest *ManifestV1) {
 			manifest.Deployment.ComposeProjectName = strings.Repeat("a", 64)
+		}},
+		{name: "Compose backend CIDR is not a network", want: "deployment.compose_backend_cidr", mutate: func(manifest *ManifestV1) { manifest.Deployment.ComposeBackendCIDR = "10.42.0.1/24" }},
+		{name: "Compose backend CIDR is public", want: "deployment.compose_backend_cidr", mutate: func(manifest *ManifestV1) { manifest.Deployment.ComposeBackendCIDR = "198.51.100.0/24" }},
+		{name: "Compose backend CIDR is undersized", want: "deployment.compose_backend_cidr", mutate: func(manifest *ManifestV1) { manifest.Deployment.ComposeBackendCIDR = "10.42.0.0/30" }},
+		{name: "Compose backend CIDR overlaps same-host guests", want: "deployment.compose_backend_cidr must not overlap runners[0].sandbox_guest_cidr", mutate: func(manifest *ManifestV1) {
+			runner := validSameHostTestRunner("runner-local")
+			manifest.Runners = []Runner{runner}
+			manifest.Deployment.ComposeBackendCIDR = runner.SandboxGuestCIDR
+		}},
+		{name: "Compose backend CIDR overlaps broader same-host bridge", want: "deployment.compose_backend_cidr must not overlap runners[0].sandbox_bridge_cidr", mutate: func(manifest *ManifestV1) {
+			runner := validSameHostTestRunner("runner-local")
+			runner.SandboxBridgeCIDR = "10.42.0.1/16"
+			runner.SandboxGuestCIDR = "10.42.0.0/24"
+			manifest.Runners = []Runner{runner}
+			manifest.Deployment.ComposeBackendCIDR = "10.42.1.0/24"
 		}},
 		{name: "control plane port exceeds TCP range", want: "deployment.api_published_port", mutate: func(manifest *ManifestV1) { manifest.Deployment.APIPublishedPort = integer(70000) }},
 		{name: "Runner port exceeds TCP range", want: "deployment.runner_published_port", mutate: func(manifest *ManifestV1) { manifest.Deployment.RunnerPublishedPort = integer(70000) }},
