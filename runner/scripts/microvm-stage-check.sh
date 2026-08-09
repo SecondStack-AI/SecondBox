@@ -140,8 +140,8 @@ esac
 if command -v debugfs >/dev/null 2>&1; then
     debugfs -R 'stat /init' "$SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH" 2>/dev/null | grep -q '^Inode:' || fail "SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH must be a generated microVM rootfs with /init: $SECONDBOX_RUNNER_FIRECRACKER_ROOTFS_PATH"
 fi
-sample_vsock_path="$SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT/firecracker/fc-0123456789abcdef-00000000/root/guest.vsock"
-[ "${#sample_vsock_path}" -lt 108 ] || fail "SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT is too long for Firecracker vsock Unix sockets: $SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT"
+sample_socket_path="$SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT/firecracker/fc-abcd-01234567-compartment01234-01234567/root/firecracker.sock"
+[ "${#sample_socket_path}" -lt 108 ] || fail "SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT is too long for maximum-length Firecracker API Unix sockets: $SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT"
 fail_if_nodev_mount "$SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT"
 
 if [ "$static_only" = true ]; then

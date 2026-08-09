@@ -159,6 +159,9 @@ func TestNewInstanceIDIncludesCompartmentSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new production-length instance id: %v", err)
 	}
+	if len(productionID) != 42 {
+		t.Fatalf("production-length instance id is %d bytes, want 42: %q", len(productionID), productionID)
+	}
 	for _, socketName := range []string{firecrackerSockName, vsockUDSName} {
 		socketPath := filepath.Join(
 			"/agent-sandbox/state/jailer",

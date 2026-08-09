@@ -54,7 +54,7 @@ storage_pressure_admission_deny_percent = 0
 firecracker_path = ''
 # Firecracker jailer executable; an absolute Runner-host path.
 firecracker_jailer_path = ''
-# Firecracker jail root; absolute and within /var/lib/secondbox-runner/state for same-host placement.
+# Firecracker jail root; absolute, below the Unix-socket path limit, and within /var/lib/secondbox-runner but outside its workspaces child for same-host placement.
 firecracker_jail_root = ''
 # First per-Instance jailer user ID; must be at least 1000 unless the explicit lower-bound acknowledgement is true, and the range must not include UID 0.
 firecracker_jailer_uid_start = 0

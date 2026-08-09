@@ -37,6 +37,11 @@ import (
 // deployment.compose_project_name deploys under.
 const DefaultComposeProjectName = "secondbox"
 
+const (
+	linuxUnixSocketPathLimit      = 108
+	maxFirecrackerInstanceIDBytes = 42
+)
+
 var (
 	artifactKeyPattern    = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	opaqueRunnerIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
@@ -714,6 +719,11 @@ func validateRunner(prefix string, r Runner) error {
 			return manifestError(prefix+"."+name+" must be an absolute Runner-host path", nil)
 		}
 	}
+	maximumInstanceID := strings.Repeat("i", maxFirecrackerInstanceIDBytes)
+	maximumSocketPath := filepath.Join(r.FirecrackerJailRoot, filepath.Base(r.FirecrackerPath), maximumInstanceID, "root", "firecracker.sock")
+	if len(maximumSocketPath) >= linuxUnixSocketPathLimit {
+		return manifestError(fmt.Sprintf("%s.firecracker_jail_root must keep the maximum Firecracker API socket path below %d bytes; got %d", prefix, linuxUnixSocketPathLimit, len(maximumSocketPath)), nil)
+	}
 	for name, value := range map[string]string{
 		"identity_host_directory":  r.IdentityHostDirectory,
 		"artifact_host_directory":  r.ArtifactHostDirectory,
@@ -752,7 +762,6 @@ func validateRunner(prefix string, r Runner) error {
 		for name, value := range map[string]string{
 			"log_path":                        r.LogPath,
 			"log_directory":                   r.LogDirectory,
-			"firecracker_jail_root":           r.FirecrackerJailRoot,
 			"firecracker_run_directory":       r.FirecrackerRunDirectory,
 			"firecracker_log_directory":       r.FirecrackerLogDirectory,
 			"snapshot_template_cache_root":    r.SnapshotTemplateCacheRoot,
@@ -761,6 +770,9 @@ func validateRunner(prefix string, r Runner) error {
 			if !pathWithin("/var/lib/secondbox-runner/state", value) {
 				return manifestError(prefix+"."+name+" must be within /var/lib/secondbox-runner/state for same-host Compose placement", nil)
 			}
+		}
+		if !pathWithin("/var/lib/secondbox-runner", r.FirecrackerJailRoot) || pathWithin(r.WorkspaceRoot, r.FirecrackerJailRoot) {
+			return manifestError(prefix+".firecracker_jail_root must be within /var/lib/secondbox-runner and outside its workspaces child for same-host Compose placement", nil)
 		}
 	}
 	for name, value := range map[string]*int64{"firecracker_jailer_uid_start": r.FirecrackerJailerUIDStart, "firecracker_jailer_uid_count": r.FirecrackerJailerUIDCount, "firecracker_jailer_gid": r.FirecrackerJailerGID, "firecracker_cgroup_version": r.FirecrackerCgroupVersion, "storage_pressure_recovery_percent": r.StorageRecoveryPercent, "storage_pressure_warning_percent": r.StorageWarningPercent, "storage_pressure_admission_deny_percent": r.StorageAdmissionDenyPercent, "sandbox_max_vcpus": r.SandboxMaxVCPUs, "sandbox_max_memory_mib": r.SandboxMaxMemoryMiB, "sandbox_max_disk_mib": r.SandboxMaxDiskMiB, "sandbox_memory_budget_mib": r.SandboxMemoryBudgetMiB, "network_policy_max_dns_pins": r.NetworkPolicyMaxDNSPins, "max_concurrent_per_sandbox": r.MaxConcurrentPerSandbox, "max_concurrent_global": r.MaxConcurrentGlobal, "max_concurrent_starts": r.MaxConcurrentStarts, "max_concurrent_workspace_creates": r.MaxConcurrentWorkspaceCreates, "max_concurrent_operations_global": r.MaxConcurrentOperationsGlobal, "file_transfer_max_bytes": r.FileTransferMaxBytes, "guest_control_vsock_port": r.GuestControlVSockPort, "guest_protocol_vsock_port": r.GuestProtocolVSockPort} {

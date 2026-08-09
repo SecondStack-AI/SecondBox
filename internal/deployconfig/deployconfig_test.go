@@ -1062,7 +1062,7 @@ func validSameHostTestRunner(id string) Runner {
 	runner.WorkspaceHostDirectory = "/var/lib/secondbox-runner-storage/workspaces"
 	runner.LogPath = "/var/lib/secondbox-runner/state/logs/runner.jsonl"
 	runner.LogDirectory = "/var/lib/secondbox-runner/state/logs"
-	runner.FirecrackerJailRoot = "/var/lib/secondbox-runner/state/jailer"
+	runner.FirecrackerJailRoot = "/var/lib/secondbox-runner/jail"
 	runner.FirecrackerKernelPath = "/opt/secondbox-artifacts/kernel"
 	runner.FirecrackerRootFSPath = "/opt/secondbox-artifacts/rootfs.ext4"
 	runner.FirecrackerSharedImagePath = "/opt/secondbox-artifacts/shared.img"
@@ -1134,6 +1134,9 @@ func TestRunnerValidationMatchesRuntimeInvariants(t *testing.T) {
 		{name: "duplicate vsock port", want: "vsock ports", mutate: func(r *Runner) { r.GuestProtocolVSockPort = r.GuestControlVSockPort }},
 		{name: "oversized vsock port", want: "vsock ports", mutate: func(r *Runner) { r.GuestProtocolVSockPort = integer(65536) }},
 		{name: "unjailed", want: "must be false", mutate: func(r *Runner) { r.FirecrackerAllowUnjailed = boolean(true) }},
+		{name: "Firecracker jail socket path too long", want: "maximum Firecracker API socket path below 108 bytes", mutate: func(r *Runner) {
+			r.FirecrackerJailRoot = "/" + strings.Repeat("j", 80)
+		}},
 		{name: "placeholder artifact fingerprint", want: "provisioned signed artifact key", mutate: func(r *Runner) { r.ArtifactPublicKeySHA256 = strings.Repeat("0", 64) }},
 		{name: "missing kernel argument", want: "i8042.noaux", mutate: func(r *Runner) {
 			r.FirecrackerKernelArgs = strings.ReplaceAll(r.FirecrackerKernelArgs, " i8042.noaux", "")
