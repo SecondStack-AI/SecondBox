@@ -236,14 +236,18 @@ func (plan InstallPlan) Validate() error {
 	state, hasState := plannedPathByName(plan.Paths, "state")
 	jail, hasJail := plannedPathByName(plan.Paths, "jail")
 	run, hasRun := plannedPathByName(plan.Paths, "run")
-	if !hasRunnerRoot || !hasRunnerStorage || !hasArtifactParent || !hasArtifacts || !hasState || !hasJail || !hasRun ||
+	logs, hasLogs := plannedPathByName(plan.Paths, "logs")
+	firecrackerLogs, hasFirecrackerLogs := plannedPathByName(plan.Paths, "firecracker-logs")
+	if !hasRunnerRoot || !hasRunnerStorage || !hasArtifactParent || !hasArtifacts || !hasState || !hasJail || !hasRun || !hasLogs || !hasFirecrackerLogs ||
 		!runnerRoot.RequiresSudo || runnerRoot.Kind != ResourceDirectory || runnerRoot.Mode != 0o711 ||
 		!runnerStorage.RequiresSudo || runnerStorage.Kind != ResourceDirectory || runnerStorage.Mode != 0o711 || runnerStorage.Path != filepath.Dir(plan.Storage.WorkspacePath) || filepath.Dir(runnerStorage.Path) != runnerRoot.Path ||
 		!artifactParent.RequiresSudo || artifactParent.Kind != ResourceDirectory || artifactParent.Mode != 0o700 || artifactParent.Path != filepath.Join(runnerStorage.Path, "release") ||
 		artifacts.RequiresSudo || artifacts.Kind != ResourceDirectory || artifacts.Path != filepath.Join(artifactParent.Path, "artifacts") ||
 		!state.RequiresSudo || state.Kind != ResourceDirectory || state.Path != filepath.Join(runnerStorage.Path, "state") ||
 		!jail.RequiresSudo || jail.Kind != ResourceDirectory || jail.Mode != 0o700 || jail.Path != filepath.Join(runnerStorage.Path, "jail") ||
-		!run.RequiresSudo || run.Kind != ResourceDirectory || run.Path != filepath.Join(state.Path, "run") {
+		!run.RequiresSudo || run.Kind != ResourceDirectory || run.Path != filepath.Join(state.Path, "run") ||
+		!logs.RequiresSudo || logs.Kind != ResourceDirectory || logs.Mode != 0o750 || logs.Path != filepath.Join(state.Path, "logs") ||
+		!firecrackerLogs.RequiresSudo || firecrackerLogs.Kind != ResourceDirectory || firecrackerLogs.Mode != 0o700 || firecrackerLogs.Path != filepath.Join(state.Path, "firecracker-logs") {
 		return installerError("runner storage topology must colocate release assets, run state, and Workspaces", nil)
 	}
 	if plan.Storage.Choice == StorageBtrfsImage {

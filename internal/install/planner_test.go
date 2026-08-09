@@ -127,7 +127,7 @@ func TestProposeExistingFilesystemPlanIsCompleteAndExplicit(t *testing.T) {
 	if jail.Path != filepath.Join(runnerStorage.Path, "jail") {
 		t.Fatalf("Runner jail is not the reviewed storage child: %#v", jail)
 	}
-	for _, name := range []string{"run", "network", "snapshot-template-cache", "logs"} {
+	for _, name := range []string{"run", "network", "snapshot-template-cache", "firecracker-logs", "logs"} {
 		planned, found := plannedPathByName(plan.Paths, name)
 		if !found || !strings.HasPrefix(planned.Path, state.Path+string(filepath.Separator)) {
 			t.Fatalf("runner path %s is outside state bind mount: %#v", name, planned)
@@ -136,6 +136,10 @@ func TestProposeExistingFilesystemPlanIsCompleteAndExplicit(t *testing.T) {
 	logs, _ := plannedPathByName(plan.Paths, "logs")
 	if logs.OwnerUID != runnerContainerUID || logs.OwnerGID != runnerContainerGID {
 		t.Fatalf("runner log ownership = %#v", logs)
+	}
+	firecrackerLogs, _ := plannedPathByName(plan.Paths, "firecracker-logs")
+	if firecrackerLogs.OwnerUID != 0 || firecrackerLogs.OwnerGID != 0 || firecrackerLogs.Mode != 0o700 || firecrackerLogs.Path == logs.Path {
+		t.Fatalf("Firecracker log isolation = Runner %#v Firecracker %#v", logs, firecrackerLogs)
 	}
 	encoded, err := Canonical(plan)
 	if err != nil {

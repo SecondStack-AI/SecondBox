@@ -84,6 +84,9 @@ func TestInitSingleHostFromReleaseMaterializesEveryAcceptedRunnerValue(t *testin
 	if runner.FirecrackerJailRoot != "/var/lib/secondbox-runner/jail" {
 		t.Fatalf("installer-generated Firecracker jail root = %q", runner.FirecrackerJailRoot)
 	}
+	if runner.LogDirectory != "/var/lib/secondbox-runner/state/logs" || runner.FirecrackerLogDirectory != "/var/lib/secondbox-runner/state/firecracker-logs" || runner.LogDirectory == runner.FirecrackerLogDirectory {
+		t.Fatalf("installer-generated Runner and Firecracker logs overlap: Runner %q Firecracker %q", runner.LogDirectory, runner.FirecrackerLogDirectory)
+	}
 	maximumSocketPath := filepath.Join(runner.FirecrackerJailRoot, filepath.Base(runner.FirecrackerPath), strings.Repeat("i", maxFirecrackerInstanceIDBytes), "root", "firecracker.sock")
 	if len(maximumSocketPath) >= linuxUnixSocketPathLimit {
 		t.Fatalf("installer-generated maximum Firecracker API socket path is %d bytes: %s", len(maximumSocketPath), maximumSocketPath)

@@ -149,6 +149,8 @@ func TestMaterializeReleaseResumesWithoutReextractingVerifiedBundle(t *testing.T
 		plannedPath("state", filepath.Join(runnerStorage, "state"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
 		plannedPath("jail", filepath.Join(runnerStorage, "jail"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
 		plannedPath("run", filepath.Join(runnerStorage, "state", "run"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
+		plannedPath("logs", filepath.Join(runnerStorage, "state", "logs"), PathInstallerHost, ResourceDirectory, 0o750, runnerContainerUID, runnerContainerGID, true, true),
+		plannedPath("firecracker-logs", filepath.Join(runnerStorage, "state", "firecracker-logs"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
 		plannedPath("binary-directory-root", filepath.Join(root, ".local"), PathUserDeployment, ResourceDirectory, 0o755, uid, gid, false, true),
 		plannedPath("binary-directory", filepath.Join(root, ".local", "bin"), PathUserDeployment, ResourceDirectory, 0o755, uid, gid, false, true),
 		plannedPath("secondbox-binary", filepath.Join(root, ".local", "bin", "secondbox"), PathUserDeployment, ResourceBinary, 0o755, uid, gid, false, true),
