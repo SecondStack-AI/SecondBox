@@ -9,7 +9,7 @@ func secondboxDeployHelp() cliui.Help {
 		Commands: []cliui.Pair{
 			{Key: "help", Value: "show this help"},
 			{Key: "version", Value: "show CLI version information"},
-			{Key: "install", Value: "guide an install; use --check, --resume DIRECTORY, or --support DIRECTORY --output ARCHIVE; qualification only: --candidate-directory DIRECTORY"},
+			{Key: "install", Value: "guide an install; use --check, --resume DIRECTORY, --recover-compose-network DIRECTORY, or --support DIRECTORY --output ARCHIVE; qualification only: --candidate-directory DIRECTORY"},
 			{Key: "uninstall", Value: "stop a deployment while preserving data; use --purge for deletion"},
 			{Key: "init", Value: "create an explicit deployment manifest"},
 			{Key: "validate", Value: "validate a deployment manifest"},

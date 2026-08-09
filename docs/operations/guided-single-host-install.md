@@ -88,7 +88,7 @@ Resume locks the operation, revalidates the plan and host identity, and checks r
 
 ### Recover a pre-v0.4.7 Compose network failure
 
-An operation accepted by v0.4.6 or earlier does not contain a Compose backend CIDR. If it failed at `Compose startup` with `all predefined address pools have been fully subnetted`, preserve that immutable plan and create the exact project-scoped network before resuming. This procedure applies to that allocation failure only.
+An operation accepted by v0.4.4 through v0.4.6 does not contain a Compose backend CIDR. If it failed at `Compose startup` with `all predefined address pools have been fully subnetted`, preserve that immutable plan and create the exact project-scoped network before resuming. This procedure applies to that allocation failure and those receipt-compatible installer versions only.
 
 First derive the project identity from the accepted plan and inspect every conflicting source:
 
@@ -154,7 +154,17 @@ docker network inspect "$network" | jq -e '.[0].Containers | length == 0'
 docker network rm "$network"
 ```
 
-Once containers are attached, do not remove the network manually. Preserve the operation and use its resume, support, or uninstall workflow.
+Once containers are attached, do not remove the network manually. Use the v0.4.7 bootstrap to run the installer recovery action from its temporary, checksum-verified binary. Do not replace the older receipt-bound binary installed by the failed operation. The recovery action locks and validates the plan, receipt, recorded manifest and binary digests, failed stage, and exact Compose project before tearing down partial containers. It preserves the failed operation's durable paths, verified release assets, generated authority, installed binaries, and retryable receipt:
+
+```bash
+set -euo pipefail
+
+operation=/absolute/path/to/operation
+curl -fsSL https://github.com/SecondStack-AI/SecondBox/releases/download/v0.4.7/install.sh \
+  | sh -s -- --recover-compose-network "$operation"
+```
+
+After the recovery action succeeds, repeat the collision review and network-creation procedure with a corrected `/24`, then resume the preserved operation. Use the operation's support workflow if receipt-bound teardown fails.
 
 Failures are reported as blocked, needs-action, retryable, or internal with the failed stage and a recovery direction. Preserve the operation directory: its plan and receipt are the audit and recovery boundary. The ordinary bounded support bundle is documented in [observability and diagnostics](observability-and-diagnostics.md); installer failures should additionally retain the redacted preflight report, plan digest, non-secret manifest inspection, Compose/systemd status, bounded Runner logs, filesystem facts, and unauthenticated health response.
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -263,6 +264,125 @@ func TestOrdinaryUninstallStopsComposeAndPreservesDurableResources(t *testing.T)
 	if final.Status != install.OperationUninstalled {
 		t.Fatalf("uninstall receipt status = %s", final.Status)
 	}
+}
+
+func TestFailedComposeNetworkRecoveryValidatesBeforeExactProjectTeardown(t *testing.T) {
+	operation, plan := failedComposeRecoveryOperation(t)
+	calls := []string{}
+	var output, diagnostic bytes.Buffer
+	renderer := cliui.Renderer{Output: &output, Diagnostic: &diagnostic, Capabilities: cliui.ForWriter(&output, &diagnostic), OutputMode: cliui.OutputJSON, ColorMode: cliui.ColorNever}
+	dependencies := installComposeRecoveryDependencies{
+		OwnerUID: os.Getuid(),
+		HostVerify: func(_ context.Context, directory, digest string) error {
+			calls = append(calls, "host-verify")
+			if directory != operation {
+				t.Fatalf("host verification directory = %q", directory)
+			}
+			wantDigest, err := install.PlanDigest(plan)
+			if err != nil || digest != wantDigest {
+				t.Fatalf("host verification digest = %q, want %q, %v", digest, wantDigest, err)
+			}
+			return nil
+		},
+		ValidateTeardown: func(gotPlan install.InstallPlan, receipt install.InstallReceipt) error {
+			calls = append(calls, "validate")
+			if gotPlan.OperationID != plan.OperationID || receipt.Status != install.OperationFailed || receipt.FailureStage != install.StageComposeStarted {
+				t.Fatalf("recovery authority = %#v %#v", gotPlan, receipt)
+			}
+			return nil
+		},
+		ComposeDown: func(_ context.Context, manifest string) error {
+			calls = append(calls, "compose-down")
+			if manifest != installerPlannedPath(plan, "manifest") {
+				t.Fatalf("manifest = %q", manifest)
+			}
+			return nil
+		},
+	}
+	if err := runInstallComposeRecoveryWith(context.Background(), operation, renderer, dependencies); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(calls, []string{"host-verify", "validate", "compose-down"}) {
+		t.Fatalf("recovery calls = %#v", calls)
+	}
+	var summary map[string]string
+	if err := json.Unmarshal(output.Bytes(), &summary); err != nil || summary["Project"] != "secondbox-0123456789abcdef" || summary["Operation"] != operation {
+		t.Fatalf("recovery summary = %q, %#v, %v", output.String(), summary, err)
+	}
+	_, receipt, err := install.ReadOperation(operation, os.Getuid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Status != install.OperationFailed || receipt.FailureStage != install.StageComposeStarted || lastInstallStage(receipt) != install.StageRunnerEnrolled {
+		t.Fatalf("recovery changed retryable receipt = %#v", receipt)
+	}
+}
+
+func TestFailedComposeNetworkRecoveryFailsClosedBeforeTeardown(t *testing.T) {
+	operation, _ := failedComposeRecoveryOperation(t)
+	composeCalled := false
+	renderer := cliui.Renderer{Output: io.Discard, Diagnostic: io.Discard, Capabilities: cliui.ForWriter(io.Discard, io.Discard), OutputMode: cliui.OutputPlain, ColorMode: cliui.ColorNever}
+	want := errors.New("recorded manifest digest changed")
+	err := runInstallComposeRecoveryWith(context.Background(), operation, renderer, installComposeRecoveryDependencies{
+		OwnerUID:         os.Getuid(),
+		HostVerify:       func(context.Context, string, string) error { return nil },
+		ValidateTeardown: func(install.InstallPlan, install.InstallReceipt) error { return want },
+		ComposeDown:      func(context.Context, string) error { composeCalled = true; return nil },
+	})
+	if !errors.Is(err, want) || composeCalled {
+		t.Fatalf("failed recovery = %v, Compose called = %t", err, composeCalled)
+	}
+}
+
+func TestFailedComposeNetworkRecoveryRequiresPrivilegedHostVerification(t *testing.T) {
+	operation, _ := failedComposeRecoveryOperation(t)
+	validateCalled, composeCalled := false, false
+	renderer := cliui.Renderer{Output: io.Discard, Diagnostic: io.Discard, Capabilities: cliui.ForWriter(io.Discard, io.Discard), OutputMode: cliui.OutputPlain, ColorMode: cliui.ColorNever}
+	want := errors.New("accepted host resources changed")
+	err := runInstallComposeRecoveryWith(context.Background(), operation, renderer, installComposeRecoveryDependencies{
+		OwnerUID:   os.Getuid(),
+		HostVerify: func(context.Context, string, string) error { return want },
+		ValidateTeardown: func(install.InstallPlan, install.InstallReceipt) error {
+			validateCalled = true
+			return nil
+		},
+		ComposeDown: func(context.Context, string) error { composeCalled = true; return nil },
+	})
+	if !errors.Is(err, want) || validateCalled || composeCalled {
+		t.Fatalf("failed host verification = %v, validation called = %t, Compose called = %t", err, validateCalled, composeCalled)
+	}
+}
+
+func failedComposeRecoveryOperation(t *testing.T) (string, install.InstallPlan) {
+	t.Helper()
+	operation := filepath.Join(t.TempDir(), "operation")
+	verified := fakeGuidedRelease()
+	plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), CLITenantRef: "tenant-reviewed", CLISubjectRef: "subject-reviewed", BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: 86400})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(operation, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := install.NewReceipt(plan, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range install.StageSequence {
+		if stage == install.StageComposeStarted {
+			break
+		}
+		if err := receipt.CompleteStage(stage, time.Now(), map[string]string{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := receipt.Fail(install.StageComposeStarted, install.FailureRetryable, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := install.WriteAccepted(operation, plan, receipt); err != nil {
+		t.Fatal(err)
+	}
+	return operation, plan
 }
 
 func TestBoundedCommandBufferCollectsSupportEvidence(t *testing.T) {
