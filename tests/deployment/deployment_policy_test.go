@@ -231,6 +231,8 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 		"resume accepted a replacement filesystem",
 		`sudo cp --reflink=always -- "$isolation/source" "$isolation/copy"`,
 		`sudo cat -- "$isolation/source"`,
+		`workspaceId:.workspace.id`,
+		`workspace_generation_after == generation_after`,
 		"report_qualified_guest_failure",
 	} {
 		if !strings.Contains(guest, required) {

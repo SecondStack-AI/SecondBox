@@ -194,18 +194,23 @@ jq -e '.completedStages[] | select(.stage == "smoke_execution") | .evidence.outp
 sandbox_id="$(jq -er '.completedStages[] | select(.stage == "smoke_execution") | .evidence.sandboxId' "$receipt")"
 SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output plain exec "$sandbox_id" -- python3 -c 'print("hello after reboot")' | grep -Fx 'hello after reboot' >/dev/null
 sandbox_before_document="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$sandbox_id")"
-sandbox_before="$(jq -cS '{id,profile,profileRevisionId,workspace}' <<<"$sandbox_before_document")"
+sandbox_before="$(jq -cS '{id,profile,profileRevisionId,workspaceId:.workspace.id}' <<<"$sandbox_before_document")"
 generation_before="$(jq -er '.generation | select(type == "number" and . >= 1)' <<<"$sandbox_before_document")"
+workspace_generation_before="$(jq -er '.workspace.generation | select(type == "number" and . >= 1)' <<<"$sandbox_before_document")"
+(( workspace_generation_before == generation_before )) || { printf 'retained smoke Sandbox and Workspace generations differ before uninstall: sandbox=%s workspace=%s\n' "$generation_before" "$workspace_generation_before" >&2; exit 1; }
 
 "$deploy" --accessible uninstall "$operation" >"$qualification_root/uninstall-${mode}.log" 2>&1
 jq -e '.status == "uninstalled"' "$receipt" >/dev/null
 [[ -d "$workspace" && -d "$artifacts" && -f "$manifest_path" ]]
 "$deploy" --accessible install --resume "$operation" --candidate-directory "$release_directory" >"$qualification_root/resume-after-uninstall-${mode}.log" 2>&1
 sandbox_after_document="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$sandbox_id")"
-sandbox_after="$(jq -cS '{id,profile,profileRevisionId,workspace}' <<<"$sandbox_after_document")"
+sandbox_after="$(jq -cS '{id,profile,profileRevisionId,workspaceId:.workspace.id}' <<<"$sandbox_after_document")"
 generation_after="$(jq -er '.generation | select(type == "number" and . >= 1)' <<<"$sandbox_after_document")"
+workspace_generation_after="$(jq -er '.workspace.generation | select(type == "number" and . >= 1)' <<<"$sandbox_after_document")"
 [[ "$sandbox_before" == "$sandbox_after" ]] || { printf 'retained smoke Sandbox lineage changed across uninstall/resume: before=%s after=%s\n' "$sandbox_before" "$sandbox_after" >&2; exit 1; }
 (( generation_after >= generation_before )) || { printf 'retained smoke Sandbox generation regressed across uninstall/resume: before=%s after=%s\n' "$generation_before" "$generation_after" >&2; exit 1; }
+(( workspace_generation_after >= workspace_generation_before )) || { printf 'retained smoke Workspace generation regressed across uninstall/resume: before=%s after=%s\n' "$workspace_generation_before" "$workspace_generation_after" >&2; exit 1; }
+(( workspace_generation_after == generation_after )) || { printf 'retained smoke Sandbox and Workspace generations differ after resume: sandbox=%s workspace=%s\n' "$generation_after" "$workspace_generation_after" >&2; exit 1; }
 "$deploy" --accessible uninstall "$operation" >/dev/null 2>&1
 
 sudo install -d -m 0755 "$workspace/.qualification-foreign-mount"
