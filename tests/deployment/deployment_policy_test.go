@@ -191,6 +191,7 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 		"cleanup_success",
 		`mktemp -d "$existing_workspace_root/secondbox-installer-qualification-`,
 		`chmod 0700 "$guest_root"`,
+		`cp --reflink=auto -- "$base_image" "$qualification_base_image"`,
 		`setfacl -m "u:${account}:rw-"`,
 		`[modprobe, btrfs]`,
 		"repository_base_image_sha256",

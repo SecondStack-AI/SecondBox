@@ -201,13 +201,6 @@ jq -e '.candidate == true and .schemaVersion == "secondbox.release/artifact-mani
 release_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool installer-qualification-subject "$manifest")"
 candidate_manifest_digest="sha256:$(sha256sum "$manifest" | awk '{print $1}')"
 
-cp --reflink=auto -- "$base_image" "$resource_root/base.img"
-chmod 0600 "$resource_root/base.img"
-for account in "${qemu_accounts[@]}"; do
-  setfacl -m "u:${account}:r--" "$resource_root/base.img"
-done
-qualification_base_image="$resource_root/base.img"
-
 ssh-keygen -q -t ed25519 -N '' -f "$resource_root/id_ed25519"
 public_key="$(<"$resource_root/id_ed25519.pub")"
 ssh_common_options=(-i "$resource_root/id_ed25519" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10)
@@ -285,7 +278,7 @@ wait_for_boot_change() {
 
 run_guest() {
   local mode domain guest_root
-  local image_format address old_boot guest_mac console_log
+  local image_format address old_boot guest_mac console_log qualification_base_image
   mode="$1"
   domain="sbq-${mode//_/-}-${run_id}"
   guest_root="$resource_root/$mode"
@@ -300,6 +293,12 @@ run_guest() {
   chmod 0700 "$guest_root"
   for account in "${qemu_accounts[@]}"; do
     setfacl -m "u:${account}:--x" "$guest_root"
+  done
+  qualification_base_image="$guest_root/base.img"
+  cp --reflink=auto -- "$base_image" "$qualification_base_image"
+  chmod 0600 "$qualification_base_image"
+  for account in "${qemu_accounts[@]}"; do
+    setfacl -m "u:${account}:r--" "$qualification_base_image"
   done
   image_format="$(qemu-img info --output json "$qualification_base_image" | jq -er .format)"
   qemu-img create -q -f qcow2 -F "$image_format" -b "$qualification_base_image" "$guest_root/root.qcow2" 220G
@@ -379,7 +378,7 @@ EOF
   virsh -c "$connection" destroy "$domain" >/dev/null
   virsh -c "$connection" undefine "$domain" --nvram >/dev/null 2>&1 || virsh -c "$connection" undefine "$domain" >/dev/null
   active_ssh_port=''
-  rm -f -- "$guest_root/root.qcow2" "$guest_root/data.qcow2" "$guest_root/seed.img"
+  rm -f -- "$guest_root/root.qcow2" "$guest_root/data.qcow2" "$guest_root/seed.img" "$qualification_base_image"
 }
 
 run_guest btrfs_image
