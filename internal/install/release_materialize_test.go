@@ -273,7 +273,7 @@ func TestMaterializeReleaseResumesWithoutReextractingVerifiedBundle(t *testing.T
 
 func TestValidateReplaceableSecondBoxBinaryRequiresExactEmbeddedCommandIdentity(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module github.com/SecondStack-AI/SecondBox\n\ngo 1.26\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module github.com/SecondStack-AI/SecondBox\n\ngo 1.25.12\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	commandDirectory := filepath.Join(root, "cmd", "secondbox")
