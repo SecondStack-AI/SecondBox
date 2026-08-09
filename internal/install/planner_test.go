@@ -229,10 +229,45 @@ func TestPlannerRejectsUnsafeOrUnreviewedChoices(t *testing.T) {
 	}
 }
 
-func TestAutomaticGuestCIDRNeverLeavesRFC1918Space(t *testing.T) {
-	routes := []RouteFact{{Destination: "172.30.0.0/24"}, {Destination: "172.31.0.0/24"}}
+func TestAutomaticGuestCIDRSearchesBeyondPreferredSubnets(t *testing.T) {
+	routes := []RouteFact{{Destination: "172.30.0.0/24"}, {Destination: "172.31.0.0/16"}, {Destination: "0.0.0.0/0"}}
+	if candidate := freeGuestCIDR(routes); candidate != "172.16.0.0/24" {
+		t.Fatalf("automatic CIDR did not continue through RFC1918 space: %s", candidate)
+	}
+}
+
+func TestAutomaticGuestCIDRFallsBackAcrossRFC1918Pools(t *testing.T) {
+	routes := []RouteFact{
+		{Destination: "172.16.0.0/12"},
+		{Destination: "10.0.0.0/8"},
+		{Destination: "192.168.0.0/25"},
+	}
+	if candidate := freeGuestCIDR(routes); candidate != "192.168.1.0/24" {
+		t.Fatalf("automatic CIDR did not reach the remaining RFC1918 pool: %s", candidate)
+	}
+}
+
+func TestAutomaticGuestCIDRRejectsExhaustedRFC1918Space(t *testing.T) {
+	routes := []RouteFact{
+		{Destination: "172.16.0.0/12"},
+		{Destination: "10.0.0.0/8"},
+		{Destination: "192.168.0.0/16"},
+	}
 	if candidate := freeGuestCIDR(routes); candidate != "" {
-		t.Fatalf("automatic CIDR escaped 172.16.0.0/12: %s", candidate)
+		t.Fatalf("automatic CIDR escaped RFC1918 space: %s", candidate)
+	}
+}
+
+func TestProposalReportsExhaustedRFC1918Space(t *testing.T) {
+	facts := plannerFacts(t)
+	facts.Routes = []RouteFact{
+		{Destination: "172.16.0.0/12"},
+		{Destination: "10.0.0.0/8"},
+		{Destination: "192.168.0.0/16"},
+	}
+	_, err := ProposePlan(facts, plannerInput(t, StorageExistingMount))
+	if err == nil || !strings.Contains(err.Error(), "no collision-free RFC1918 guest /24") {
+		t.Fatalf("RFC1918 exhaustion error = %v", err)
 	}
 }
 

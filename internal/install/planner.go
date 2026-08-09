@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"net/netip"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -283,13 +284,16 @@ func proposeNetwork(facts HostFacts, overrides NetworkOverrides) (NetworkPlan, e
 	cidr := overrides.GuestCIDR
 	if cidr == "" {
 		cidr = freeGuestCIDR(facts.Routes)
+		if cidr == "" {
+			return NetworkPlan{}, installerError("no collision-free RFC1918 guest /24 is available", nil)
+		}
 	}
 	ip, network, cidrErr := net.ParseCIDR(cidr)
 	ones, bits := 0, 0
 	if cidrErr == nil {
 		ones, bits = network.Mask.Size()
 	}
-	if cidr == "" || cidrErr != nil || ip.To4() == nil || bits != 32 || ones > 30 || !network.IP.Equal(ip) || routeCollides(cidr, facts.Routes) {
+	if cidrErr != nil || ip.To4() == nil || bits != 32 || ones > 30 || !network.IP.Equal(ip) || routeCollides(cidr, facts.Routes) {
 		return NetworkPlan{}, installerError("guest bridge CIDR is invalid or conflicts with a host route", nil)
 	}
 	tap := overrides.TAPPrefix
@@ -320,9 +324,42 @@ func proposeNetwork(facts HostFacts, overrides NetworkOverrides) (NetworkPlan, e
 }
 
 func freeGuestCIDR(routes []RouteFact) string {
-	for third := 30; third <= 31; third++ {
-		candidate := fmt.Sprintf("172.%d.0.0/24", third)
-		if !routeCollides(candidate, routes) {
+	observed := observedIPv4RoutePrefixes(routes)
+	free := func(first, second, third byte) string {
+		candidate := netip.PrefixFrom(netip.AddrFrom4([4]byte{first, second, third, 0}), 24)
+		if !routePrefixCollides(candidate, observed) {
+			return candidate.String()
+		}
+		return ""
+	}
+
+	// Preserve the historical choices when they are available, then search
+	// every RFC1918 /24 deterministically. A host with many Docker networks can
+	// legitimately occupy all of 172.30/31 without exhausting private space.
+	for _, preferred := range [][3]byte{{172, 30, 0}, {172, 31, 0}} {
+		if candidate := free(preferred[0], preferred[1], preferred[2]); candidate != "" {
+			return candidate
+		}
+	}
+	for second := 16; second <= 31; second++ {
+		for third := 0; third <= 255; third++ {
+			if (second == 30 || second == 31) && third == 0 {
+				continue
+			}
+			if candidate := free(172, byte(second), byte(third)); candidate != "" {
+				return candidate
+			}
+		}
+	}
+	for second := 0; second <= 255; second++ {
+		for third := 0; third <= 255; third++ {
+			if candidate := free(10, byte(second), byte(third)); candidate != "" {
+				return candidate
+			}
+		}
+	}
+	for third := 0; third <= 255; third++ {
+		if candidate := free(192, 168, byte(third)); candidate != "" {
 			return candidate
 		}
 	}
@@ -334,13 +371,27 @@ func rangesOverlap(a, b UIDRange) bool {
 }
 
 func routeCollides(candidate string, routes []RouteFact) bool {
-	_, candidateNetwork, err := net.ParseCIDR(candidate)
+	candidatePrefix, err := netip.ParsePrefix(candidate)
 	if err != nil {
 		return true
 	}
+	return routePrefixCollides(candidatePrefix.Masked(), observedIPv4RoutePrefixes(routes))
+}
+
+func observedIPv4RoutePrefixes(routes []RouteFact) []netip.Prefix {
+	prefixes := make([]netip.Prefix, 0, len(routes))
 	for _, route := range routes {
-		_, routeNetwork, err := net.ParseCIDR(route.Destination)
-		if err == nil && (routeNetwork.Contains(candidateNetwork.IP) || candidateNetwork.Contains(routeNetwork.IP)) {
+		prefix, err := netip.ParsePrefix(route.Destination)
+		if err == nil && prefix.Addr().Is4() && prefix.Bits() > 0 {
+			prefixes = append(prefixes, prefix.Masked())
+		}
+	}
+	return prefixes
+}
+
+func routePrefixCollides(candidate netip.Prefix, routes []netip.Prefix) bool {
+	for _, route := range routes {
+		if candidate.Overlaps(route) {
 			return true
 		}
 	}
