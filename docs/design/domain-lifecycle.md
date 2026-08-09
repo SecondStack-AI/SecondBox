@@ -41,7 +41,7 @@ moves. Source seal, bounded transfer, checksum-verified target import, atomic
 home change, and source deletion are separate receipt-backed phases under the
 one Workspace mutation slot.
 
-Drain rejects new exec, filesystem transfer, PTY, port, and Lease admission. Already admitted operations receive the profile's bounded drain grace. Stop flushes and detaches compute, durably advances the local Workspace generation, then commits that exact generation in PostgreSQL. It does not create a Snapshot, hash an image, or contact object storage. Delete drains and stops, asks the home Runner to delete all local Workspace and Snapshot state, and only then tombstones the Sandbox. Deletion is never implied by a client disconnect or Flue harness close.
+Drain rejects new exec, filesystem transfer, PTY, port, and Lease admission. Already admitted operations receive the profile's bounded drain grace. Stop flushes and detaches compute, durably advances the local Workspace generation, then commits that exact generation in PostgreSQL. It does not create a Snapshot, hash an image, or transfer Workspace bytes off the Runner. Delete drains and stops, asks the home Runner to delete all local Workspace and Snapshot state, and only then tombstones the Sandbox. Deletion is never implied by a client disconnect or Flue harness close.
 
 ## Generation and assignment invariants
 

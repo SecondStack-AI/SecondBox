@@ -8,7 +8,7 @@ Download the `secondbox-deploy_0.1.0_OS_ARCH` binary and verify it against the p
 secondbox-deploy verify artifact-manifest https://github.com/SecondStack-AI/SecondBox/releases/download/v0.1.0/secondbox-0.1.0-artifact-manifest.json
 ```
 
-Keep an operator-reviewed production `secondbox.toml` input containing explicit database, object storage, application authority, secret-file, ingress, Runner placement, workspace, network, gateway, capacity, retention, and independently held guest trust-anchor choices. Materialize the deployment with:
+Keep an operator-reviewed production `secondbox.toml` input containing explicit database, application authority, secret-file, ingress, Runner placement, workspace, network, gateway, capacity, retention, and independently held guest trust-anchor choices. Materialize the deployment with:
 
 ```text
 secondbox-deploy init --mode production \

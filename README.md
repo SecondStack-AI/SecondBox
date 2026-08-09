@@ -28,7 +28,7 @@ A **Sandbox** is the durable public resource; the **Instance** running it is rep
 
 ### Guided single-host install
 
-The guided installer turns one qualified Linux amd64 systemd host into a loopback-only development deployment with PostgreSQL, object storage, the control plane, and one same-host Firecracker Runner. It verifies a published release, records every accepted path and authority decision, and finishes by running a hello-world command inside a microVM.
+The guided installer turns one qualified Linux amd64 systemd host into a loopback-only development deployment with PostgreSQL, the control plane, and one same-host Firecracker Runner. It verifies a published release, records every accepted path and authority decision, and finishes by running a hello-world command inside a microVM.
 
 The host needs Docker Engine with Compose v2, cgroup v2, accessible KVM and TUN devices, hardware virtualization, at least 6 logical CPUs and 12 GiB of memory. Runner storage needs at least 65 GiB: 50 GiB for the `durable-coding` Workspace, approximately 11 GiB for verified execution assets, and a 4 GiB margin. Use a dedicated non-root XFS/Btrfs filesystem with that capacity, or let the installer create a fully allocated Btrfs image of at least 65 GiB; the image choice additionally needs its full allocation plus the reviewed control-service, download, and backing reserves on `/var/lib`. Check the host without changing it:
 
@@ -272,7 +272,7 @@ Firecracker validation requires a dedicated Linux host with KVM and the configur
 just test-firecracker
 ```
 
-The external scenario gate joins the HTTP API, PostgreSQL, object storage, the runner protocol, and real Firecracker guests. It needs a self-hosted Linux x86-64 machine with writable KVM and TUN devices, cgroup v2, a separately verified signed microVM bundle, and an XFS or Btrfs workspace root with reflink support:
+The external scenario gate joins the HTTP API, PostgreSQL, the runner protocol, and real Firecracker guests. It needs a self-hosted Linux x86-64 machine with writable KVM and TUN devices, cgroup v2, a separately verified signed microVM bundle, and an XFS or Btrfs workspace root with reflink support:
 
 ```sh
 SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1 just test-scenario

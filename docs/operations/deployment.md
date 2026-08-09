@@ -14,7 +14,7 @@ From a clean checkout:
 just deploy-development-up .tmp/secondbox-development
 ```
 
-The command creates the directory only when it is absent, writes a mode-`0600` manifest and mode-`0700` secret directory, generates independent local authorities and Runner PKI, explicitly selects both reviewed development standard bundles, builds the control-plane image, renders and validates the environment, starts loopback-only PostgreSQL and object storage, creates the configured bucket, starts the control plane, requires `/readyz`, and applies the selected resources. It refuses an existing directory without `secondbox.toml` and never rewrites an existing manifest, secret, identity, workspace, or execution asset.
+The command creates the directory only when it is absent, writes a mode-`0600` manifest and mode-`0700` secret directory, generates independent local authorities and Runner PKI, explicitly selects both reviewed development standard bundles, builds the control-plane image, renders and validates the environment, starts loopback-only PostgreSQL and the control plane, requires `/readyz`, and applies the selected resources. It refuses an existing directory without `secondbox.toml` and never rewrites an existing manifest, secret, identity, workspace, or execution asset.
 
 Development initialization alone is available as:
 

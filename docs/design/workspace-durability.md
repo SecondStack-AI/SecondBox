@@ -41,7 +41,7 @@ An operator may relocate only a stopped Sandbox with no retained Snapshots. The
 source Runner first seals the current generation and persists its receipt, so
 the source image cannot be opened for a writer. The control plane then forwards
 64 KiB chunks through a one MiB credit window directly from the source stream to
-the target stream without storing them in PostgreSQL, object storage, or a file.
+the target stream without persisting them in the control plane.
 The target verifies the exact logical size, ext4 identity, and SHA-256 checksum,
 fsyncs the imported image, publishes its manifest, and persists a receipt before
 acknowledgement. PostgreSQL changes `home_runner_id` only after that receipt and

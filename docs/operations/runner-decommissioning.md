@@ -46,7 +46,7 @@ Before the home-assignment transaction, the source image remains the only home
 and stays sealed against writers. A terminal transfer failure queues a durable
 unseal and fails the Operation only after the original source is writable
 again. A control-plane or Runner reconnect restarts transfer from the sealed
-source; image chunks are not resumed from PostgreSQL or object storage.
+source; the control plane does not persist image chunks for resumption.
 
 After the target's checksum-verified receipt commits the home assignment, the
 source stays sealed and only source deletion remains. Reconnect recovery replays

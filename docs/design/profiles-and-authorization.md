@@ -35,7 +35,7 @@ SecondBox releases two explicitly selected standard Profile bundles:
 
 The declarative resource engine materializes standard bundles as ordinary immutable ProfileRevisions. Selection is explicit in `[standard_resources]`; the control plane has no built-in defaults, reserved-name behavior, or request-time reconciler. Each release declares the complete ordered lineage and canonical spec digest, validates an installed prefix, and appends only missing revisions. Existing Sandboxes retain the exact earlier revision they pinned. Operator-defined Profiles remain fully supported and follow the same immutable pinning rules.
 
-Ordinary stop always flushes and detaches compute, advances the local Workspace manifest generation, and preserves every committed Workspace write without creating a Snapshot or contacting object storage. A later start resolves that same current image on the current home Runner; it never adopts a newer Profile head. Operator relocation preserves the pinned ProfileRevision and validates its compatibility requirements against the target.
+Ordinary stop always flushes and detaches compute, advances the local Workspace manifest generation, and preserves every committed Workspace write without creating a Snapshot or transferring Workspace bytes off the Runner. A later start resolves that same current image on the current home Runner; it never adopts a newer Profile head. Operator relocation preserves the pinned ProfileRevision and validates its compatibility requirements against the target.
 
 ## Creation and compatibility
 

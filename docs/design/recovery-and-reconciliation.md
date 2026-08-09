@@ -89,8 +89,8 @@ creation.
 
 Heartbeat expiry marks the Runner unavailable and makes its Sandboxes
 unavailable. It does not prove compute stopped, advance a generation, or
-authorize another Runner. No scheduler or automatic recovery path relocates the
-Workspace or restores it from object storage. Explicit relocation still
+authorize another Runner. No scheduler or automatic recovery path relocates or
+reconstructs the Workspace. Explicit relocation still
 requires the source Runner to be connected and its local image intact.
 
 Recovery requires the same trusted Runner identity and WorkspaceStore to return.
