@@ -99,10 +99,15 @@ func TestProposeExistingFilesystemPlanIsCompleteAndExplicit(t *testing.T) {
 		t.Fatalf("workspace ownership = %#v", workspace)
 	}
 	runnerStorage, _ := plannedPathByName(plan.Paths, "runner-storage")
+	runnerRoot, _ := plannedPathByName(plan.Paths, "runner-root")
+	artifactParent, _ := plannedPathByName(plan.Paths, "artifacts-parent")
 	artifacts, _ := plannedPathByName(plan.Paths, "artifacts")
 	run, _ := plannedPathByName(plan.Paths, "run")
 	if filepath.Dir(workspace.Path) != runnerStorage.Path || !strings.HasPrefix(artifacts.Path, runnerStorage.Path+string(filepath.Separator)) || !strings.HasPrefix(run.Path, runnerStorage.Path+string(filepath.Separator)) {
 		t.Fatalf("Runner assets, run state, and Workspaces are not colocated: storage=%#v artifacts=%#v run=%#v workspace=%#v", runnerStorage, artifacts, run, workspace)
+	}
+	if runnerRoot.Mode != 0o711 || runnerRoot.OwnerUID != 0 || runnerStorage.Mode != 0o711 || artifactParent.Mode != 0o700 || artifactParent.OwnerUID != plan.HostFacts.InvokingUID || artifacts.OwnerUID != plan.HostFacts.InvokingUID {
+		t.Fatalf("artifact publication path is not traversable without exposing privileged Runner storage: root=%#v storage=%#v parent=%#v artifacts=%#v", runnerRoot, runnerStorage, artifactParent, artifacts)
 	}
 	state, _ := plannedPathByName(plan.Paths, "state")
 	for _, name := range []string{"jail", "run", "network", "snapshot-template-cache", "logs"} {

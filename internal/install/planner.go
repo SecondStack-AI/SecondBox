@@ -182,7 +182,7 @@ func proposeStorage(facts HostFacts, input ProposalInput) (StoragePlan, int64, [
 				workspace := filepath.Join(storageRoot, "workspaces")
 				workspaceBytes := option.AvailableBytes - ExecutionBundleEstimateBytes - RunnerStorageReserveBytes
 				return StoragePlan{Choice: StorageExistingMount, WorkspacePath: workspace, ExistingDeviceIdentity: option.DeviceIdentity}, workspaceBytes, []PlannedPath{
-					plannedPath("runner-root", runnerRoot, PathExistingWorkspace, ResourceDirectory, 0o700, 0, 0, true, true),
+					plannedPath("runner-root", runnerRoot, PathExistingWorkspace, ResourceDirectory, 0o711, 0, 0, true, true),
 					plannedPath("runner-storage", storageRoot, PathExistingWorkspace, ResourceDirectory, 0o711, 0, 0, true, true),
 					plannedPath("workspace", workspace, PathExistingWorkspace, ResourceDirectory, 0o750, runnerContainerUID, runnerContainerGID, true, true),
 				}, nil
@@ -205,7 +205,7 @@ func proposeStorage(facts HostFacts, input ProposalInput) (StoragePlan, int64, [
 		unit := filepath.Join("/etc/systemd/system", systemdMountUnitName(storageRoot))
 		workspaceBytes := size - ExecutionBundleEstimateBytes - RunnerStorageReserveBytes
 		return StoragePlan{Choice: StorageBtrfsImage, WorkspacePath: workspace, FilesystemImagePath: image, ImageSizeBytes: size, MountUnitPath: unit}, workspaceBytes, []PlannedPath{
-			plannedPath("runner-root", runnerRoot, PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
+			plannedPath("runner-root", runnerRoot, PathInstallerHost, ResourceDirectory, 0o711, 0, 0, true, true),
 			plannedPath("runner-storage", storageRoot, PathInstallerHost, ResourceDirectory, 0o711, 0, 0, true, true),
 			plannedPath("filesystem-image", image, PathFilesystemImage, ResourceFilesystemImage, 0o600, 0, 0, true, true),
 			plannedPath("workspace", workspace, PathInstallerHost, ResourceDirectory, 0o750, runnerContainerUID, runnerContainerGID, true, true),
