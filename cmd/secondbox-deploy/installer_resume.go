@@ -557,7 +557,7 @@ func waitForInstalledRunner(ctx context.Context, plan install.InstallPlan) (map[
 func installedRunnerReadinessEvidence(plan install.InstallPlan, runners []contracts.Runner) (map[string]string, bool) {
 	expectedID := "runner-" + strings.TrimPrefix(plan.OperationID, "install_")
 	for _, runner := range runners {
-		if runner.ID != expectedID || runner.State != "ready" || runner.CredentialState != "active" || !slices.Contains(runner.Architectures, "amd64") || !slices.Contains(runner.Capabilities, "compute") || !slices.Contains(runner.Capabilities, "local-workspace") {
+		if runner.ID != expectedID || runner.State != "ready" || runner.CredentialState != "pre_shared" || !slices.Contains(runner.Architectures, "amd64") || !slices.Contains(runner.Capabilities, "compute") || !slices.Contains(runner.Capabilities, "local-workspace") {
 			continue
 		}
 		if runner.Capacity["CPUMillis"] < install.DurableCodingCPUMillis || runner.Capacity["MemoryBytes"] < install.DurableCodingMemoryBytes || runner.Capacity["DiskBytes"] < install.MinimumWorkspaceBytes || runner.Capacity["Instances"] < 1 || runner.Capacity["Operations"] < 1 {

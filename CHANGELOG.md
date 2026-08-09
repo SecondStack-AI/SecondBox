@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Installer readiness now accepts the public `pre_shared` credential state emitted for a ready, authenticated Runner instead of waiting for the nonexistent `active` projection until its five-minute deadline expired.
+
 ## 0.4.4 - 2026-08-08
 
 Superseded the unpublished v0.4.3 tag after the first installer qualification VM exposed a host-firewall dependency in the libvirt bridge transport.
