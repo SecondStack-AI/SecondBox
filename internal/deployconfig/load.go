@@ -114,7 +114,6 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 	secretPaths := make(map[string]string)
 	put := func(name, value string) { environment[name] = value }
 	putInt := func(name string, value *int64) { environment[name] = strconv.FormatInt(*value, 10) }
-	putBool := func(name string, value *bool) { environment[name] = strconv.FormatBool(*value) }
 
 	deployment := manifest.Deployment
 	put("SECONDBOX_DEPLOYMENT_MODE", deployment.Mode)
@@ -187,38 +186,6 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 		put("SECONDBOX_DATABASE_URL", databaseURL)
 	}
 
-	objectStore := manifest.ObjectStore
-	put("SECONDBOX_OBJECT_STORE_ENDPOINT", objectStore.Endpoint)
-	put("SECONDBOX_OBJECT_STORE_BUCKET", objectStore.Bucket)
-	put("SECONDBOX_OBJECT_STORE_REGION", objectStore.Region)
-	putBool("SECONDBOX_OBJECT_STORE_USE_PATH_STYLE", objectStore.UsePathStyle)
-	put("SECONDBOX_OBJECT_STORE_TEMP_DIRECTORY", objectStore.TempDirectory)
-	access, accessPath, err := readSecretReference(base, objectStore.AccessKeyFile)
-	if err != nil {
-		return ResolvedDeployment{}, manifestError("object_store.access_key_file", err)
-	}
-	secretPaths["object_store.access_key_file"] = accessPath
-	secret, secretPath, err := readSecretReference(base, objectStore.SecretKeyFile)
-	if err != nil {
-		return ResolvedDeployment{}, manifestError("object_store.secret_key_file", err)
-	}
-	secretPaths["object_store.secret_key_file"] = secretPath
-	put("SECONDBOX_OBJECT_STORE_ROOT_USER", access)
-	put("SECONDBOX_OBJECT_STORE_ROOT_PASSWORD", secret)
-	if objectStore.Mode == "bundled" {
-		clientEndpoint, err := url.Parse(objectStore.Endpoint)
-		if err != nil {
-			return ResolvedDeployment{}, manifestError("object_store.endpoint", err)
-		}
-		clientEndpoint.User = url.UserPassword(access, secret)
-		put("SECONDBOX_OBJECT_STORE_MC_HOST", clientEndpoint.String())
-		put("SECONDBOX_OBJECT_STORE_IMAGE", deployment.ObjectStoreImage)
-		put("SECONDBOX_OBJECT_STORE_CLIENT_IMAGE", deployment.ObjectStoreClientImage)
-		put("SECONDBOX_OBJECT_STORE_BIND_IP", objectStore.BindIP)
-		putInt("SECONDBOX_OBJECT_STORE_PUBLISHED_PORT", objectStore.PublishedPort)
-		putInt("SECONDBOX_OBJECT_STORE_CONSOLE_PUBLISHED_PORT", objectStore.ConsolePublishedPort)
-	}
-
 	trust := manifest.RunnerTrust
 	credential, credentialPath, err := readSecretReference(base, trust.EnrollmentCredentialFile)
 	if err != nil {
@@ -284,8 +251,6 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 	credentials := map[string]string{
 		"applications.platform_token_file":        platformToken,
 		"runner_trust.enrollment_credential_file": credential,
-		"object_store.access_key_file":            access,
-		"object_store.secret_key_file":            secret,
 	}
 	if databasePassword != "" {
 		credentials["database.password_file"] = databasePassword
@@ -319,9 +284,6 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 	} else {
 		if database.Mode == "bundled" {
 			composeFiles = append(composeFiles, "deploy/compose.bundled-database.yml")
-		}
-		if objectStore.Mode == "bundled" {
-			composeFiles = append(composeFiles, "deploy/compose.bundled-object-store.yml")
 		}
 	}
 	for _, runner := range manifest.Runners {
@@ -403,8 +365,8 @@ func validateManifestShape(manifest ManifestV1) error {
 		}
 		composeBackendPrefix = prefix
 	}
-	if d.Mode == "development" && (manifest.Database.Mode != "bundled" || manifest.ObjectStore.Mode != "bundled") {
-		return manifestError("development mode requires the reviewed bundled database and object_store topology", nil)
+	if d.Mode == "development" && manifest.Database.Mode != "bundled" {
+		return manifestError("development mode requires the reviewed bundled database topology", nil)
 	}
 	if err := requirePort("deployment.api_published_port", d.APIPublishedPort); err != nil {
 		return err
@@ -428,7 +390,7 @@ func validateManifestShape(manifest ManifestV1) error {
 	} else if d.Mode == "development" {
 		return manifestError("deployment.development_prepare_wait_timeout_seconds is required in development mode", nil)
 	}
-	if d.Mode == "development" && (d.APIBindIP != "127.0.0.1" || d.RunnerBindIP != "127.0.0.1" || manifest.Database.BindIP != "127.0.0.1" || manifest.ObjectStore.BindIP != "127.0.0.1") {
+	if d.Mode == "development" && (d.APIBindIP != "127.0.0.1" || d.RunnerBindIP != "127.0.0.1" || manifest.Database.BindIP != "127.0.0.1") {
 		return manifestError("development mode must bind every published port to 127.0.0.1", nil)
 	}
 	if !filepath.IsAbs(d.LogPath) || !filepath.IsAbs(d.SignedAssetCatalogPath) {
@@ -449,13 +411,6 @@ func validateManifestShape(manifest ManifestV1) error {
 		}
 		if manifest.Database.Mode == "bundled" && !strings.Contains(d.PostgresImage, "@sha256:") {
 			return manifestError("deployment.postgres_image must be an immutable digest reference for a production bundled database", nil)
-		}
-		if manifest.ObjectStore.Mode == "bundled" {
-			for path, image := range map[string]string{"deployment.object_store_image": d.ObjectStoreImage, "deployment.object_store_client_image": d.ObjectStoreClientImage} {
-				if !strings.Contains(image, "@sha256:") {
-					return manifestError(path+" must be an immutable digest reference in production", nil)
-				}
-			}
 		}
 	}
 
@@ -486,49 +441,6 @@ func validateManifestShape(manifest ManifestV1) error {
 			return manifestError("external database contains bundled-only fields", nil)
 		}
 	}
-	osConfig := manifest.ObjectStore
-	if osConfig.Mode != "bundled" && osConfig.Mode != "external" {
-		return manifestError("object_store.mode must be bundled or external", nil)
-	}
-	for p, v := range map[string]string{"object_store.endpoint": osConfig.Endpoint, "object_store.bucket": osConfig.Bucket, "object_store.region": osConfig.Region, "object_store.temp_directory": osConfig.TempDirectory, "object_store.access_key_file": osConfig.AccessKeyFile, "object_store.secret_key_file": osConfig.SecretKeyFile} {
-		if err := require(p, v); err != nil {
-			return err
-		}
-	}
-	if osConfig.UsePathStyle == nil {
-		return manifestError("object_store.use_path_style is required", nil)
-	}
-	if !filepath.IsAbs(osConfig.TempDirectory) {
-		return manifestError("object_store.temp_directory must be absolute", nil)
-	}
-	endpoint, err := url.Parse(osConfig.Endpoint)
-	if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
-		return manifestError("object_store.endpoint must be an absolute HTTP URL", err)
-	}
-	if endpoint.User != nil {
-		return manifestError("object_store.endpoint must not contain userinfo; use the credential files", nil)
-	}
-	if osConfig.Mode == "external" && d.Mode == "production" && endpoint.Scheme != "https" {
-		return manifestError("production external object_store.endpoint must use HTTPS", nil)
-	}
-	if osConfig.Mode == "bundled" {
-		if osConfig.Endpoint != "http://object-store:9000" {
-			return manifestError("bundled object_store.endpoint must be http://object-store:9000", nil)
-		}
-		for p, v := range map[string]string{"object_store.bind_ip": osConfig.BindIP, "deployment.object_store_image": d.ObjectStoreImage, "deployment.object_store_client_image": d.ObjectStoreClientImage} {
-			if err := require(p, v); err != nil {
-				return err
-			}
-		}
-		for p, v := range map[string]*int64{"object_store.published_port": osConfig.PublishedPort, "object_store.console_published_port": osConfig.ConsolePublishedPort} {
-			if err := requirePort(p, v); err != nil {
-				return err
-			}
-		}
-	} else if osConfig.BindIP != "" || osConfig.PublishedPort != nil || osConfig.ConsolePublishedPort != nil {
-		return manifestError("external object_store contains bundled-only fields", nil)
-	}
-
 	t := manifest.RunnerTrust
 	for p, v := range map[string]string{"runner_trust.enrollment_credential_file": t.EnrollmentCredentialFile, "runner_trust.ca_certificate_file": t.CACertificateFile, "runner_trust.ca_private_key_file": t.CAPrivateKeyFile, "runner_trust.server_certificate_file": t.ServerCertificateFile, "runner_trust.server_private_key_file": t.ServerPrivateKeyFile, "runner_trust.server_name": t.ServerName} {
 		if err := require(p, v); err != nil {
@@ -643,7 +555,7 @@ func validatePolicy(p Policy) error {
 			return manifestError("policy."+name+" must be positive", nil)
 		}
 	}
-	quotas := map[string]*int64{"default_subject_max_sandboxes": p.DefaultSubjectMaxSandboxes, "default_subject_max_active_instances": p.DefaultSubjectMaxActiveInstances, "default_subject_max_cpu_millis": p.DefaultSubjectMaxCPUMillis, "default_subject_max_memory_bytes": p.DefaultSubjectMaxMemoryBytes, "default_subject_max_artifact_bytes": p.DefaultSubjectMaxArtifactBytes, "default_subject_max_snapshots": p.DefaultSubjectMaxSnapshots, "default_subject_max_artifacts": p.DefaultSubjectMaxArtifacts, "default_subject_max_port_sessions": p.DefaultSubjectMaxPortSessions, "default_subject_max_concurrent_operations": p.DefaultSubjectMaxConcurrentOperations}
+	quotas := map[string]*int64{"default_subject_max_sandboxes": p.DefaultSubjectMaxSandboxes, "default_subject_max_active_instances": p.DefaultSubjectMaxActiveInstances, "default_subject_max_cpu_millis": p.DefaultSubjectMaxCPUMillis, "default_subject_max_memory_bytes": p.DefaultSubjectMaxMemoryBytes, "default_subject_max_snapshots": p.DefaultSubjectMaxSnapshots, "default_subject_max_port_sessions": p.DefaultSubjectMaxPortSessions, "default_subject_max_concurrent_operations": p.DefaultSubjectMaxConcurrentOperations}
 	for name, value := range quotas {
 		if value == nil || *value < 0 {
 			return manifestError("policy."+name+" must be non-negative", nil)
@@ -964,7 +876,7 @@ func validateDataPlaneAddress(path, value string, listen bool) error {
 }
 
 func addPolicyEnvironment(environment map[string]string, p Policy) {
-	values := map[string]*int64{"SECONDBOX_DATA_PLANE_RETENTION_SECONDS": p.DataPlaneRetentionSeconds, "SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS": p.DataPlanePollIntervalMilliseconds, "SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS": p.RunnerCommandPollIntervalMilliseconds, "SECONDBOX_DEFAULT_SUBJECT_MAX_SANDBOXES": p.DefaultSubjectMaxSandboxes, "SECONDBOX_DEFAULT_SUBJECT_MAX_ACTIVE_INSTANCES": p.DefaultSubjectMaxActiveInstances, "SECONDBOX_DEFAULT_SUBJECT_MAX_CPU_MILLIS": p.DefaultSubjectMaxCPUMillis, "SECONDBOX_DEFAULT_SUBJECT_MAX_MEMORY_BYTES": p.DefaultSubjectMaxMemoryBytes, "SECONDBOX_DEFAULT_SUBJECT_MAX_ARTIFACT_BYTES": p.DefaultSubjectMaxArtifactBytes, "SECONDBOX_DEFAULT_SUBJECT_MAX_SNAPSHOTS": p.DefaultSubjectMaxSnapshots, "SECONDBOX_DEFAULT_SUBJECT_MAX_ARTIFACTS": p.DefaultSubjectMaxArtifacts, "SECONDBOX_DEFAULT_SUBJECT_MAX_PORT_SESSIONS": p.DefaultSubjectMaxPortSessions, "SECONDBOX_DEFAULT_SUBJECT_MAX_CONCURRENT_OPERATIONS": p.DefaultSubjectMaxConcurrentOperations}
+	values := map[string]*int64{"SECONDBOX_DATA_PLANE_RETENTION_SECONDS": p.DataPlaneRetentionSeconds, "SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS": p.DataPlanePollIntervalMilliseconds, "SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS": p.RunnerCommandPollIntervalMilliseconds, "SECONDBOX_DEFAULT_SUBJECT_MAX_SANDBOXES": p.DefaultSubjectMaxSandboxes, "SECONDBOX_DEFAULT_SUBJECT_MAX_ACTIVE_INSTANCES": p.DefaultSubjectMaxActiveInstances, "SECONDBOX_DEFAULT_SUBJECT_MAX_CPU_MILLIS": p.DefaultSubjectMaxCPUMillis, "SECONDBOX_DEFAULT_SUBJECT_MAX_MEMORY_BYTES": p.DefaultSubjectMaxMemoryBytes, "SECONDBOX_DEFAULT_SUBJECT_MAX_SNAPSHOTS": p.DefaultSubjectMaxSnapshots, "SECONDBOX_DEFAULT_SUBJECT_MAX_PORT_SESSIONS": p.DefaultSubjectMaxPortSessions, "SECONDBOX_DEFAULT_SUBJECT_MAX_CONCURRENT_OPERATIONS": p.DefaultSubjectMaxConcurrentOperations}
 	for name, value := range values {
 		environment[name] = strconv.FormatInt(*value, 10)
 	}

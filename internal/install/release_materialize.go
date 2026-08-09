@@ -69,7 +69,7 @@ func MaterializeRelease(ctx context.Context, plan InstallPlan, receipt InstallRe
 			return receipt, VerifiedArtifact{}, err
 		}
 	}
-	for _, name := range []string{"control-plane", "runner", "installer-tools", "microvm-artifacts", "postgres", "object-store", "object-store-client"} {
+	for _, name := range []string{"control-plane", "runner", "installer-tools", "microvm-artifacts", "postgres"} {
 		if err := dependencies.Executor.PullImage(ctx, plan.Release.Images[name]); err != nil {
 			return failMaterialization(receipt, StageAssetsMaterialized, FailureRetryable, dependencies, installerError("pull immutable "+name+" image", err))
 		}
@@ -242,7 +242,7 @@ func receiptResource(receipt InstallReceipt, id string) (CreatedResource, bool) 
 
 func validateVerifiedReleasePlan(plan InstallPlan, verified releaseverify.VerifiedRelease) error {
 	manifest := verified.Manifest
-	if releasecontract.Digest(verified.ManifestBytes) != plan.Release.ArtifactManifestDigest || manifest.Version != plan.Release.Version || manifest.ControlPlane.Reference != plan.Release.Images["control-plane"] || manifest.Runner.Reference != plan.Release.Images["runner"] || manifest.InstallerTools.Reference != plan.Release.Images["installer-tools"] || manifest.MicroVM.ImageReference != plan.Release.Images["microvm-artifacts"] || manifest.BundledServices.Postgres != plan.Release.Images["postgres"] || manifest.BundledServices.ObjectStore != plan.Release.Images["object-store"] || manifest.BundledServices.ObjectStoreClient != plan.Release.Images["object-store-client"] || manifest.MicroVM.SigningKeyFingerprint != plan.Release.SigningKeyFingerprint {
+	if releasecontract.Digest(verified.ManifestBytes) != plan.Release.ArtifactManifestDigest || manifest.Version != plan.Release.Version || manifest.ControlPlane.Reference != plan.Release.Images["control-plane"] || manifest.Runner.Reference != plan.Release.Images["runner"] || manifest.InstallerTools.Reference != plan.Release.Images["installer-tools"] || manifest.MicroVM.ImageReference != plan.Release.Images["microvm-artifacts"] || manifest.BundledServices.Postgres != plan.Release.Images["postgres"] || manifest.MicroVM.SigningKeyFingerprint != plan.Release.SigningKeyFingerprint {
 		return installerError("verified release differs from accepted plan identity", nil)
 	}
 	for _, name := range []string{"secondbox", "secondbox-deploy"} {

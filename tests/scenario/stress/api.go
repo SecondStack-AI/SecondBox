@@ -74,7 +74,6 @@ func (driver *stressDriver) prepare(ctx context.Context) error {
 					Retention: secondboxclient.RetentionPolicy{
 						SnapshotLimit:            driver.config.Profile.SnapshotLimit,
 						SnapshotRetentionSeconds: driver.config.Profile.SnapshotRetentionSeconds,
-						ArtifactRetentionSeconds: driver.config.Profile.ArtifactRetentionSeconds,
 					},
 					Execution: secondboxclient.ExecutionPolicy{
 						MaximumDeadlineMilliseconds: driver.config.Profile.MaximumDeadlineMilliseconds,

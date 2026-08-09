@@ -244,7 +244,6 @@ func scenarioProfileSpec(t *testing.T, initialState string) contracts.ProfileRev
 		Retention: contracts.RetentionPolicy{
 			SnapshotLimit:            4,
 			SnapshotRetentionSeconds: 3600,
-			ArtifactRetentionSeconds: 3600,
 		},
 		Execution: contracts.ExecutionPolicy{
 			MaximumDeadlineMilliseconds: 60000,

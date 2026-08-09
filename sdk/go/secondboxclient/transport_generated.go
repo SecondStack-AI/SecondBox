@@ -75,9 +75,6 @@ var operations = map[string]OperationMetadata{
 		},
 		RequestBodyRequired: true,
 	},
-	"deleteArtifact": {
-		OperationID: "deleteArtifact", Method: "DELETE", PathTemplate: "/v1/artifacts/{artifactId}",
-	},
 	"deleteSandbox": {
 		OperationID: "deleteSandbox", Method: "DELETE", PathTemplate: "/v1/sandboxes/{sandboxId}",
 	},
@@ -86,9 +83,6 @@ var operations = map[string]OperationMetadata{
 	},
 	"disableProfile": {
 		OperationID: "disableProfile", Method: "POST", PathTemplate: "/v1/profiles/{profileName}:disable",
-	},
-	"downloadArtifactContent": {
-		OperationID: "downloadArtifactContent", Method: "GET", PathTemplate: "/v1/artifacts/{artifactId}/content",
 	},
 	"drainSandbox": {
 		OperationID: "drainSandbox", Method: "POST", PathTemplate: "/v1/sandboxes/{sandboxId}:drain",
@@ -99,9 +93,6 @@ var operations = map[string]OperationMetadata{
 			{ContentType: "application/json", Schema: "BufferedExecRequest"},
 		},
 		RequestBodyRequired: true,
-	},
-	"getArtifact": {
-		OperationID: "getArtifact", Method: "GET", PathTemplate: "/v1/artifacts/{artifactId}",
 	},
 	"getDeploymentTiming": {
 		OperationID: "getDeploymentTiming", Method: "GET", PathTemplate: "/v1/timings",
@@ -147,9 +138,6 @@ var operations = map[string]OperationMetadata{
 	},
 	"listRunners": {
 		OperationID: "listRunners", Method: "GET", PathTemplate: "/v1/runners",
-	},
-	"listSandboxArtifacts": {
-		OperationID: "listSandboxArtifacts", Method: "GET", PathTemplate: "/v1/sandboxes/{sandboxId}/artifacts",
 	},
 	"listSandboxDirectory": {
 		OperationID: "listSandboxDirectory", Method: "GET", PathTemplate: "/v1/sandboxes/{sandboxId}/directories",
@@ -233,13 +221,6 @@ var operations = map[string]OperationMetadata{
 		OperationID: "updateSandboxMetadata", Method: "PUT", PathTemplate: "/v1/sandboxes/{sandboxId}/metadata",
 		RequestBody: []OperationMediaType{
 			{ContentType: "application/json", Schema: "UpdateSandboxMetadataRequest"},
-		},
-		RequestBodyRequired: true,
-	},
-	"uploadSandboxArtifact": {
-		OperationID: "uploadSandboxArtifact", Method: "POST", PathTemplate: "/v1/sandboxes/{sandboxId}/artifacts",
-		RequestBody: []OperationMediaType{
-			{ContentType: "multipart/form-data", Schema: "UploadArtifactRequest"},
 		},
 		RequestBodyRequired: true,
 	},

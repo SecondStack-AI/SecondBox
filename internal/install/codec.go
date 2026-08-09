@@ -159,9 +159,9 @@ func (plan InstallPlan) Validate() error {
 	if plan.Release.Version == "" || !keyPattern.MatchString(plan.Release.SigningKeyFingerprint) || plan.Release.ExpectedDownloadBytes <= 0 {
 		return installerError("release identity, signing key, or expected download size is invalid", nil)
 	}
-	wantImages := []string{"control-plane", "runner", "microvm-artifacts", "installer-tools", "postgres", "object-store", "object-store-client"}
+	wantImages := []string{"control-plane", "runner", "microvm-artifacts", "installer-tools", "postgres"}
 	if len(plan.Release.Images) != len(wantImages) {
-		return installerError("release plan must contain exactly seven immutable images", nil)
+		return installerError("release plan must contain exactly five immutable images", nil)
 	}
 	for _, name := range wantImages {
 		_, digest, found := strings.Cut(plan.Release.Images[name], "@")
@@ -280,8 +280,8 @@ func (plan InstallPlan) Validate() error {
 	if len(plan.StandardBundles) != 2 || !slices.Contains(plan.StandardBundles, "agent-compartment") || !slices.Contains(plan.StandardBundles, "durable-coding") {
 		return installerError("both standard bundles must be selected explicitly", nil)
 	}
-	if len(plan.Capacity.SubjectQuotas) != 9 {
-		return installerError("all nine subject quotas are required", nil)
+	if len(plan.Capacity.SubjectQuotas) != 7 {
+		return installerError("all seven subject quotas are required", nil)
 	}
 	if plan.Capacity.MaxSandboxes <= 0 || plan.Capacity.MaxCPUMillis <= 0 || plan.Capacity.MaxMemoryBytes <= 0 || plan.Capacity.MaxWorkspaceBytes <= 0 || plan.Capacity.ConcurrentStarts <= 0 || plan.Capacity.ConcurrentOperations <= 0 || plan.Capacity.StoragePressurePercent < 50 || plan.Capacity.StoragePressurePercent > 95 {
 		return installerError("capacity plan is incomplete or unsafe", nil)
@@ -294,7 +294,7 @@ func (plan InstallPlan) Validate() error {
 			return installerError("subject quota is invalid", nil)
 		}
 	}
-	if plan.Network.APIAddress == "" || plan.Network.RunnerAddress == "" || plan.Network.DataPlaneAddress == "" || plan.Network.DatabaseAddress == "" || plan.Network.ObjectStoreAddress == "" || plan.Network.ObjectStoreConsoleAddress == "" || plan.Network.GuestBridgeCIDR == "" || plan.Network.DNSUpstream == "" || len(plan.Network.Gateways) != 2 {
+	if plan.Network.APIAddress == "" || plan.Network.RunnerAddress == "" || plan.Network.DataPlaneAddress == "" || plan.Network.DatabaseAddress == "" || plan.Network.GuestBridgeCIDR == "" || plan.Network.DNSUpstream == "" || len(plan.Network.Gateways) != 2 {
 		return installerError("network plan is incomplete", nil)
 	}
 	if err := validateSafePath(plan.CLI.ConfigPath); err != nil || strings.TrimSpace(plan.CLI.TenantRef) == "" || strings.TrimSpace(plan.CLI.SubjectRef) == "" || strings.ContainsAny(plan.CLI.TenantRef+plan.CLI.SubjectRef, "\r\n\x00") {
@@ -310,7 +310,7 @@ func (plan InstallPlan) Validate() error {
 		return installerError("binary directory hierarchy does not match its planned resources", nil)
 	}
 	ports := map[string]bool{}
-	for _, address := range []string{plan.Network.APIAddress, plan.Network.RunnerAddress, plan.Network.DataPlaneAddress, plan.Network.DatabaseAddress, plan.Network.ObjectStoreAddress, plan.Network.ObjectStoreConsoleAddress} {
+	for _, address := range []string{plan.Network.APIAddress, plan.Network.RunnerAddress, plan.Network.DataPlaneAddress, plan.Network.DatabaseAddress} {
 		host, port, err := net.SplitHostPort(address)
 		if err != nil || host != "127.0.0.1" || ports[port] {
 			return installerError("network service addresses must use distinct loopback ports", nil)

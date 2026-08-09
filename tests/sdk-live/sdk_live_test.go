@@ -125,7 +125,6 @@ func liveProfileRevisionSpec() secondboxclient.ProfileRevisionSpec {
 		},
 		Retention: secondboxclient.RetentionPolicy{
 			SnapshotLimit: 8, SnapshotRetentionSeconds: 86400,
-			ArtifactRetentionSeconds: 86400,
 		},
 		Execution: secondboxclient.ExecutionPolicy{
 			MaximumDeadlineMilliseconds: 60000, MaximumBufferedOutputBytes: 1 << 20,

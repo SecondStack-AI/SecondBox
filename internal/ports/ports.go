@@ -47,9 +47,6 @@ var (
 	ErrActivitySessionNotFound = errors.New("SecondBox activity session not found")
 	ErrSnapshotNotFound        = errors.New("SecondBox Snapshot not found")
 	ErrSnapshotUnavailable     = errors.New("SecondBox Snapshot requires stopped committed disk state")
-	ErrArtifactIntegrity       = errors.New("SecondBox Artifact integrity failed")
-	ErrArtifactNotFound        = errors.New("SecondBox Artifact not found")
-	ErrArtifactStorage         = errors.New("SecondBox Artifact storage unavailable")
 	ErrPortSessionNotFound     = errors.New("SecondBox PortSession not found")
 	ErrPortPolicyDenied        = errors.New("SecondBox exposed port is not approved by the pinned Profile")
 	ErrPortTokenInvalid        = errors.New("SecondBox port tunnel token is invalid")
@@ -277,43 +274,6 @@ type SnapshotRestoreInput struct {
 	IdempotencyEnds   time.Time
 	ExpectedRevision  int64
 	Now               time.Time
-}
-
-// ArtifactPublicationInput publishes immutable application exchange evidence.
-type ArtifactPublicationInput struct {
-	Artifact           contracts.Artifact
-	StorageKey         string
-	ExpectedGeneration int64
-	LeaseID            string
-	IdempotencyKey     string
-	RequestHash        string
-	IdempotencyEnds    time.Time
-}
-
-// ArtifactObject binds public metadata to its private immutable provider key.
-type ArtifactObject struct {
-	Artifact   contracts.Artifact
-	StorageKey string
-}
-
-// ArtifactRetentionInput ends public reachability idempotently before provider garbage collection.
-type ArtifactRetentionInput struct {
-	TenantRef       string
-	SubjectRef      string
-	ArtifactID      string
-	IdempotencyKey  string
-	RequestHash     string
-	IdempotencyEnds time.Time
-	Now             time.Time
-}
-
-// GarbageObject is private provider evidence for one unreachable immutable object.
-type GarbageObject struct {
-	Kind       string
-	ID         string
-	StorageKey string
-	SHA256     string
-	SizeBytes  int64
 }
 
 // LifecycleWakeTrigger names why the lifecycle worker was running when it

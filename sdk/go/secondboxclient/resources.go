@@ -3,16 +3,10 @@ package secondboxclient
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"mime/multipart"
 	"net/http"
-	"net/textproto"
 	"net/url"
 	"slices"
 	"strconv"
@@ -189,127 +183,6 @@ func (client *Client) GetSnapshot(ctx context.Context, snapshotID OpaqueID) (Sna
 	var snapshot Snapshot
 	err := client.RequestJSON(ctx, "getSnapshot", CallOptions{PathParameters: map[string]string{"snapshotId": snapshotID}}, &snapshot)
 	return snapshot, err
-}
-
-func (handle *SandboxHandle) ListArtifacts(ctx context.Context, options PageOptions) (ArtifactPage, error) {
-	query, err := pageQuery(options)
-	if err != nil {
-		return ArtifactPage{}, err
-	}
-	var page ArtifactPage
-	err = handle.client.RequestJSON(ctx, "listSandboxArtifacts", CallOptions{
-		PathParameters: map[string]string{"sandboxId": handle.Snapshot().ID}, QueryParameters: query,
-	}, &page)
-	return page, err
-}
-
-func (client *Client) GetArtifact(ctx context.Context, artifactID OpaqueID) (Artifact, error) {
-	if artifactID == "" {
-		return Artifact{}, errors.New("SecondBox Artifact ID is required")
-	}
-	var artifact Artifact
-	err := client.RequestJSON(ctx, "getArtifact", CallOptions{PathParameters: map[string]string{"artifactId": artifactID}}, &artifact)
-	return artifact, err
-}
-
-// DownloadArtifact reads one immutable Artifact under an explicit output bound
-// and verifies the HTTP Digest header before returning bytes.
-func (client *Client) DownloadArtifact(ctx context.Context, artifactID OpaqueID, maximumBytes int64) ([]byte, error) {
-	if artifactID == "" || maximumBytes < 1 {
-		return nil, errors.New("SecondBox Artifact ID and positive download bound are required")
-	}
-	response, err := client.Request(ctx, "downloadArtifactContent", CallOptions{PathParameters: map[string]string{"artifactId": artifactID}})
-	if err != nil {
-		return nil, err
-	}
-	content, readErr := io.ReadAll(io.LimitReader(response.Body, maximumBytes+1))
-	closeErr := response.Body.Close()
-	if readErr != nil || closeErr != nil {
-		return nil, fmt.Errorf("SecondBox Artifact download read and close: %w", errors.Join(readErr, closeErr))
-	}
-	if int64(len(content)) > maximumBytes {
-		return nil, fmt.Errorf("SecondBox Artifact download exceeds %d bytes", maximumBytes)
-	}
-	sum := sha256.Sum256(content)
-	want := "sha-256=:" + base64.StdEncoding.EncodeToString(sum[:]) + ":"
-	if response.Header.Get("Digest") != want {
-		return nil, errors.New("SecondBox Artifact download Digest header does not match content")
-	}
-	return content, nil
-}
-
-func (client *Client) DeleteArtifact(ctx context.Context, artifactID OpaqueID, idempotencyKey string) error {
-	if artifactID == "" {
-		return errors.New("SecondBox Artifact ID is required")
-	}
-	idempotencyKey, err := resolveIdempotencyKey(idempotencyKey)
-	if err != nil {
-		return err
-	}
-	headers := make(http.Header)
-	headers.Set("Idempotency-Key", idempotencyKey)
-	response, err := client.Request(ctx, "deleteArtifact", CallOptions{PathParameters: map[string]string{"artifactId": artifactID}, Headers: headers})
-	if err != nil {
-		return err
-	}
-	return response.Body.Close()
-}
-
-// UploadArtifact creates one immutable Artifact from bounded caller-owned bytes.
-func (handle *SandboxHandle) UploadArtifact(ctx context.Context, name, mediaType string, metadata Metadata, content []byte, idempotencyKey, leaseID string) (Artifact, error) {
-	if name == "" || mediaType == "" {
-		return Artifact{}, errors.New("SecondBox Artifact name and media type are required")
-	}
-	idempotencyKey, err := resolveIdempotencyKey(idempotencyKey)
-	if err != nil {
-		return Artifact{}, err
-	}
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	writeField := func(name, value string) error { return writer.WriteField(name, value) }
-	sum := sha256.Sum256(content)
-	metadataJSON, err := json.Marshal(metadata)
-	if err == nil {
-		err = writeField("name", name)
-	}
-	if err == nil {
-		err = writeField("mediaType", mediaType)
-	}
-	if err == nil {
-		err = writeField("sha256", hex.EncodeToString(sum[:]))
-	}
-	if err == nil {
-		headers := make(textproto.MIMEHeader)
-		headers.Set("Content-Disposition", `form-data; name="metadata"`)
-		headers.Set("Content-Type", "application/json")
-		var part io.Writer
-		part, err = writer.CreatePart(headers)
-		if err == nil {
-			_, err = part.Write(metadataJSON)
-		}
-	}
-	if err == nil {
-		headers := make(textproto.MIMEHeader)
-		headers.Set("Content-Disposition", `form-data; name="content"; filename="content"`)
-		headers.Set("Content-Type", "application/octet-stream")
-		var part io.Writer
-		part, err = writer.CreatePart(headers)
-		if err == nil {
-			_, err = part.Write(content)
-		}
-	}
-	err = errors.Join(err, writer.Close())
-	if err != nil {
-		return Artifact{}, fmt.Errorf("SecondBox Artifact encode multipart request: %w", err)
-	}
-	headers := handle.GenerationHeaders(leaseID)
-	headers.Set("Idempotency-Key", idempotencyKey)
-	var artifact Artifact
-	err = handle.client.RequestJSON(ctx, "uploadSandboxArtifact", CallOptions{
-		PathParameters: map[string]string{"sandboxId": handle.Snapshot().ID}, Headers: headers,
-		Body: &body, ContentType: writer.FormDataContentType(),
-	}, &artifact)
-	return artifact, err
 }
 
 func (client *Client) mutateJSON(ctx context.Context, operationID string, path map[string]string, expectedRevision int64, idempotencyKey string, request any, target any) error {

@@ -9,8 +9,6 @@ tls_termination = 'development-loopback'
 control_plane_image = 'secondbox-control-plane:development'
 runner_image = 'secondbox-runner:development'
 postgres_image = 'docker.io/library/postgres:18.4-bookworm'
-object_store_image = 'docker.io/rustfs/rustfs:1.0.0-beta.11'
-object_store_client_image = 'quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z'
 api_bind_ip = '127.0.0.1'
 api_published_port = 8080
 listen_address = '0.0.0.0:8080'
@@ -30,19 +28,6 @@ published_port = 5432
 name = 'secondbox'
 user = 'secondbox'
 password_file = 'secrets/postgres-password'
-
-[object_store]
-mode = 'bundled'
-endpoint = 'http://object-store:9000'
-bucket = 'secondbox-development'
-region = 'us-east-1'
-use_path_style = true
-temp_directory = '/tmp'
-access_key_file = 'secrets/object-store-access-key'
-secret_key_file = 'secrets/object-store-secret-key'
-bind_ip = '127.0.0.1'
-published_port = 9000
-console_published_port = 9001
 
 [runner_trust]
 enrollment_credential_file = 'secrets/runner-enrollment-credential'
@@ -67,9 +52,7 @@ default_subject_max_sandboxes = 100
 default_subject_max_active_instances = 20
 default_subject_max_cpu_millis = 80000
 default_subject_max_memory_bytes = 171798691840
-default_subject_max_artifact_bytes = 1099511627776
 default_subject_max_snapshots = 500
-default_subject_max_artifacts = 5000
 default_subject_max_port_sessions = 100
 default_subject_max_concurrent_operations = 20
 
@@ -113,11 +96,7 @@ max_memory_bytes = 171798691840
 # lifecycle_reconcile_batch_size = 8 # default; Lifecycle rows reconciled per batch.
 # lifecycle_reconcile_poll_interval_milliseconds = 250 # default; Lifecycle fallback polling cadence.
 # lifecycle_reconcile_claim_duration_milliseconds = 30000 # default; Lifecycle work claim duration.
-# garbage_collection_poll_interval_milliseconds = 60000 # default; Artifact garbage-collection polling cadence.
 # assignment_claim_duration_milliseconds = 30000 # default; Assignment dispatch claim duration.
 # assignment_deadline_milliseconds = 120000 # default; Assignment readiness deadline.
 # assignment_retry_limit = 2 # default; Assignment retry count.
 # scheduler_serialization_retry_limit = 3 # default; Serializable scheduling retry count.
-# object_store_retry_max_attempts = 3 # default; Object-store operation attempts.
-# object_store_http_timeout_milliseconds = 30000 # default; Object-store HTTP timeout.
-# object_store_max_object_bytes = 10737418240 # default; Maximum object size accepted by the adapter.

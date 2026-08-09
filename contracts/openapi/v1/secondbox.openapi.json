@@ -25,7 +25,6 @@
     {"name": "Leases"},
     {"name": "Execution"},
     {"name": "Files"},
-    {"name": "Artifacts"},
     {"name": "Snapshots"},
     {"name": "Ports"}
   ],
@@ -1118,122 +1117,6 @@
         }
       }
     },
-    "/v1/sandboxes/{sandboxId}/artifacts": {
-      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
-      "get": {
-        "tags": ["Artifacts"],
-        "operationId": "listSandboxArtifacts",
-        "parameters": [
-          {"$ref": "#/components/parameters/SandboxID"},
-          {"$ref": "#/components/parameters/PageLimit"},
-          {"$ref": "#/components/parameters/PageCursor"},
-          {"$ref": "#/components/parameters/RequestID"}
-        ],
-        "responses": {
-          "200": {
-            "description": "Artifact page.",
-            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ArtifactPage"}}}
-          },
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"},
-          "404": {"$ref": "#/components/responses/NotFound"}
-        }
-      },
-      "post": {
-        "tags": ["Artifacts"],
-        "operationId": "uploadSandboxArtifact",
-        "parameters": [
-          {"$ref": "#/components/parameters/SandboxID"},
-          {"$ref": "#/components/parameters/Generation"},
-          {"$ref": "#/components/parameters/LeaseIDHeader"},
-          {"$ref": "#/components/parameters/IdempotencyKey"},
-          {"$ref": "#/components/parameters/RequestID"}
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {"multipart/form-data": {"schema": {"$ref": "#/components/schemas/UploadArtifactRequest"}}}
-        },
-        "responses": {
-          "201": {
-            "description": "Immutable Artifact metadata.",
-            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Artifact"}}}
-          },
-          "400": {"$ref": "#/components/responses/BadRequest"},
-          "429": {"$ref": "#/components/responses/TooManyRequests"},
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"},
-          "404": {"$ref": "#/components/responses/NotFound"},
-          "409": {"$ref": "#/components/responses/Conflict"},
-          "413": {"$ref": "#/components/responses/LimitExceeded"}
-        }
-      }
-    },
-    "/v1/artifacts/{artifactId}": {
-      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
-      "get": {
-        "tags": ["Artifacts"],
-        "operationId": "getArtifact",
-        "parameters": [
-          {"$ref": "#/components/parameters/ArtifactID"},
-          {"$ref": "#/components/parameters/RequestID"}
-        ],
-        "responses": {
-          "200": {
-            "description": "Artifact metadata.",
-            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
-            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Artifact"}}}
-          },
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"},
-          "404": {"$ref": "#/components/responses/NotFound"}
-        }
-      },
-      "delete": {
-        "tags": ["Artifacts"],
-        "operationId": "deleteArtifact",
-        "parameters": [
-          {"$ref": "#/components/parameters/ArtifactID"},
-          {"$ref": "#/components/parameters/IdempotencyKey"},
-          {"$ref": "#/components/parameters/RequestID"}
-        ],
-        "responses": {
-          "204": {
-            "description": "Artifact retention ended.",
-            "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}
-          },
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"},
-          "404": {"$ref": "#/components/responses/NotFound"},
-          "409": {"$ref": "#/components/responses/Conflict"}
-        }
-      }
-    },
-    "/v1/artifacts/{artifactId}/content": {
-      "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
-      "get": {
-        "tags": ["Artifacts"],
-        "operationId": "downloadArtifactContent",
-        "parameters": [
-          {"$ref": "#/components/parameters/ArtifactID"},
-          {"$ref": "#/components/parameters/RequestID"}
-        ],
-        "responses": {
-          "200": {
-            "description": "Bounded immutable Artifact content.",
-            "headers": {
-              "X-Request-ID": {"$ref": "#/components/headers/RequestID"},
-              "Digest": {"$ref": "#/components/headers/Digest"}
-            },
-            "content": {"application/octet-stream": {"schema": {"type": "string", "contentEncoding": "binary"}}}
-          },
-          "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"},
-          "404": {"$ref": "#/components/responses/NotFound"}
-        }
-      }
-    },
     "/v1/sandboxes/{sandboxId}/snapshots": {
       "parameters": [{"$ref": "#/components/parameters/TenantRef"}, {"$ref": "#/components/parameters/SubjectRef"}],
       "get": {
@@ -1527,7 +1410,6 @@
       "LeaseID": {"name": "leaseId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/OpaqueID"}},
       "ExecSessionID": {"name": "execSessionId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/OpaqueID"}},
       "TerminalSessionID": {"name": "terminalSessionId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/OpaqueID"}},
-      "ArtifactID": {"name": "artifactId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/OpaqueID"}},
       "SnapshotID": {"name": "snapshotId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/OpaqueID"}},
       "PortSessionID": {"name": "portSessionId", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/OpaqueID"}},
       "WorkspacePath": {
@@ -1836,11 +1718,10 @@
       "RetentionPolicy": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["snapshotLimit", "snapshotRetentionSeconds", "artifactRetentionSeconds"],
+        "required": ["snapshotLimit", "snapshotRetentionSeconds"],
         "properties": {
           "snapshotLimit": {"type": "integer", "minimum": 0},
-          "snapshotRetentionSeconds": {"type": "integer", "minimum": 1},
-          "artifactRetentionSeconds": {"type": "integer", "minimum": 1}
+          "snapshotRetentionSeconds": {"type": "integer", "minimum": 1}
         }
       },
       "ExecutionPolicy": {
@@ -2818,44 +2699,6 @@
           "path": {"$ref": "#/components/schemas/WorkspacePath"},
           "recursive": {"type": "boolean"},
           "force": {"type": "boolean"}
-        }
-      },
-      "Artifact": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "sandboxId", "generation", "name", "mediaType", "sizeBytes", "sha256", "metadata", "createdAt", "expiresAt"],
-        "properties": {
-          "id": {"$ref": "#/components/schemas/OpaqueID"},
-          "sandboxId": {"$ref": "#/components/schemas/OpaqueID"},
-          "generation": {"type": "integer", "format": "int64", "minimum": 1},
-          "name": {"type": "string", "minLength": 1, "maxLength": 255},
-          "mediaType": {"type": "string", "minLength": 1, "maxLength": 255},
-          "sizeBytes": {"type": "integer", "format": "int64", "minimum": 0},
-          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
-          "metadata": {"$ref": "#/components/schemas/Metadata"},
-          "createdAt": {"$ref": "#/components/schemas/Timestamp"},
-          "expiresAt": {"$ref": "#/components/schemas/Timestamp"}
-        }
-      },
-      "UploadArtifactRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["name", "mediaType", "sha256", "metadata", "content"],
-        "properties": {
-          "name": {"type": "string", "minLength": 1, "maxLength": 255},
-          "mediaType": {"type": "string", "minLength": 1, "maxLength": 255},
-          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
-          "metadata": {"$ref": "#/components/schemas/Metadata"},
-          "content": {"type": "string", "contentEncoding": "binary"}
-        }
-      },
-      "ArtifactPage": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["items"],
-        "properties": {
-          "items": {"type": "array", "maxItems": 200, "items": {"$ref": "#/components/schemas/Artifact"}},
-          "nextCursor": {"type": "string", "minLength": 1, "maxLength": 512}
         }
       },
       "Snapshot": {

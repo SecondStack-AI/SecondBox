@@ -1394,7 +1394,6 @@ func seedLocalWorkspacePolicyAndRunner(
 		},
 		Retention: contracts.RetentionPolicy{
 			SnapshotLimit: 8, SnapshotRetentionSeconds: 86400,
-			ArtifactRetentionSeconds: 86400,
 		},
 	})
 	if err != nil {
@@ -1407,19 +1406,17 @@ func seedLocalWorkspacePolicyAndRunner(
 		ON CONFLICT (id) DO NOTHING;
 		INSERT INTO secondbox.subject_quotas (
 			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_cpu_millis,
-			max_memory_bytes,max_artifact_bytes,max_snapshots,max_artifacts,
+			max_memory_bytes,max_snapshots,
 			max_port_sessions,max_concurrent_operations,updated_at
 		) VALUES (
 			'tenant-local','subject-local',100,100,100000,1099511627776,
-			1099511627776,100,100,100,100,$2
+			100,100,100,$2
 		) ON CONFLICT (tenant_ref,subject_ref) DO UPDATE SET
 			max_sandboxes=EXCLUDED.max_sandboxes,
 			max_active_instances=EXCLUDED.max_active_instances,
 			max_cpu_millis=EXCLUDED.max_cpu_millis,
 			max_memory_bytes=EXCLUDED.max_memory_bytes,
-			max_artifact_bytes=EXCLUDED.max_artifact_bytes,
 			max_snapshots=EXCLUDED.max_snapshots,
-			max_artifacts=EXCLUDED.max_artifacts,
 			max_port_sessions=EXCLUDED.max_port_sessions,
 			max_concurrent_operations=EXCLUDED.max_concurrent_operations,
 			updated_at=EXCLUDED.updated_at;

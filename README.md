@@ -13,7 +13,7 @@ SecondBox runs untrusted workloads — AI agents, user code, plugins, CI jobs, l
 - **Real terminals.** A genuine PTY with raw mode, resize forwarding, and bounded reconnect — not a line-buffered exec loop.
 - **Multi-tenant by construction.** Every row is scoped to an opaque tenant and subject reference. Application tokens carry fixed scopes and explicit Profile grants.
 - **Immutable Profiles.** Operators fix image, resources, lifecycle, network, and port policy. Each Sandbox pins the revision resolved at creation.
-- **Self-hosted.** One unprivileged control plane, PostgreSQL, S3-compatible storage, and one or more privileged runners you place yourself.
+- **Self-hosted.** One unprivileged control plane, PostgreSQL, and one or more privileged runners you place yourself.
 
 > [!NOTE]
 > SecondBox is a **networked control plane**, not an embeddable library. Sandboxes run on separately deployed runners, and a client only ever talks to the control plane over HTTPS. There is no daemonless mode.
@@ -22,13 +22,13 @@ SecondBox runs untrusted workloads — AI agents, user code, plugins, CI jobs, l
 
 A **Sandbox** is the durable public resource; the **Instance** running it is replaceable compute fenced to one Sandbox generation. Each Sandbox is placed at creation on one home **Runner**, whose reflink-capable filesystem owns that Sandbox's **Workspace** and local **Snapshots**. Ordinary lifecycle and automatic recovery never relocate it. An operator may relocate a stopped Sandbox with no retained Snapshots through the explicit asynchronous relocation operation.
 
-`secondboxd` stores desired state in PostgreSQL and immutable **Artifacts** in S3-compatible storage. Workspace bytes stay on the owning Runner except while `secondboxd` forwards a bounded, in-memory stream for an explicit stopped-Sandbox relocation; it never persists those bytes.
+`secondboxd` stores desired state in PostgreSQL. Workspace bytes stay on the owning Runner except while `secondboxd` forwards a bounded, in-memory stream for an explicit stopped-Sandbox relocation; it never persists those bytes.
 
 ## Getting started
 
 ### Guided single-host install
 
-The guided installer turns one qualified Linux amd64 systemd host into a loopback-only development deployment with PostgreSQL, object storage, the control plane, and one same-host Firecracker Runner. It verifies a published release, records every accepted path and authority decision, and finishes by running a hello-world command inside a microVM.
+The guided installer turns one qualified Linux amd64 systemd host into a loopback-only development deployment with PostgreSQL, the control plane, and one same-host Firecracker Runner. It verifies a published release, records every accepted path and authority decision, and finishes by running a hello-world command inside a microVM.
 
 The host needs Docker Engine with Compose v2, cgroup v2, accessible KVM and TUN devices, hardware virtualization, at least 6 logical CPUs and 12 GiB of memory. Runner storage needs at least 65 GiB: 50 GiB for the `durable-coding` Workspace, approximately 11 GiB for verified execution assets, and a 4 GiB margin. Use a dedicated non-root XFS/Btrfs filesystem with that capacity, or let the installer create a fully allocated Btrfs image of at least 65 GiB; the image choice additionally needs its full allocation plus the reviewed control-service, download, and backing reserves on `/var/lib`. Check the host without changing it:
 
@@ -74,7 +74,7 @@ The guided path is deliberately Linux amd64, same-host, loopback-only, and devel
 just deploy-development-up .tmp/secondbox-development
 ```
 
-This creates one private, versioned `secondbox.toml`, generates unique referenced secrets, compiles a protected environment transport, and starts the reviewed loopback PostgreSQL, object-store, and control-plane topology. The generated environment is never operator input. This topology is useful for control-plane development and API work, but it cannot execute a Sandbox. Read [deployment and runtime operations](docs/operations/deployment.md) before exposing the API, configuring production, or enrolling a Runner.
+This creates one private, versioned `secondbox.toml`, generates unique referenced secrets, compiles a protected environment transport, and starts the reviewed loopback PostgreSQL and control-plane topology. The generated environment is never operator input. This topology is useful for control-plane development and API work, but it cannot execute a Sandbox. Read [deployment and runtime operations](docs/operations/deployment.md) before exposing the API, configuring production, or enrolling a Runner.
 
 ### Install the CLI
 
@@ -119,7 +119,7 @@ secondbox --accessible login
 `--output auto|json|plain` chooses automatic TTY presentation, original JSON,
 or an unstyled human view. `--color auto|always|never` controls ANSI color;
 `NO_COLOR` disables automatic color, and `SECONDBOX_ACCESSIBLE=1` is equivalent
-to `--accessible`. Raw file/artifact/log responses, generic `operation` output,
+to `--accessible`. Raw file/log responses, generic `operation` output,
 Docker Compose output, and all guest streams ignore human rendering. See the
 [complete CLI output contract](docs/operations/cli-output-contract.md) before
 using a command in automation.
@@ -272,7 +272,7 @@ Firecracker validation requires a dedicated Linux host with KVM and the configur
 just test-firecracker
 ```
 
-The external scenario gate joins the HTTP API, PostgreSQL, object storage, the runner protocol, and real Firecracker guests. It needs a self-hosted Linux x86-64 machine with writable KVM and TUN devices, cgroup v2, a separately verified signed microVM bundle, and an XFS or Btrfs workspace root with reflink support:
+The external scenario gate joins the HTTP API, PostgreSQL, the runner protocol, and real Firecracker guests. It needs a self-hosted Linux x86-64 machine with writable KVM and TUN devices, cgroup v2, a separately verified signed microVM bundle, and an XFS or Btrfs workspace root with reflink support:
 
 ```sh
 SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1 just test-scenario
@@ -284,7 +284,7 @@ See [scenario qualification](docs/operations/scenario-qualification.md) for opti
 
 Runner connections require TLS 1.3, a CA-signed certificate identifying the Runner, and a pre-shared Runner credential. The HTTP API accepts the deployment-wide platform token for operators, and explicitly configured application authorities bound to fixed tenant and subject references, exact operation scopes, and named Profile grants. None of these authorities are interchangeable.
 
-Loss of an unbacked home-runner workspace filesystem loses that Sandbox: PostgreSQL or S3 recovery alone is not sufficient. Back up each Runner's stable identity and workspace root as one consistent unit — see [backup and recovery](docs/operations/backup-and-restore.md) and the [threat model](docs/design/threat-model.md).
+Loss of an unbacked home-runner workspace filesystem loses that Sandbox: PostgreSQL recovery cannot reconstruct runner-local data. Back up each Runner's stable identity and workspace root as one consistent unit — see [backup and recovery](docs/operations/backup-and-restore.md) and the [threat model](docs/design/threat-model.md).
 
 ## License
 

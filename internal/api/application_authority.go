@@ -18,7 +18,6 @@ const (
 	applicationScopeSandboxLifecycle = "sandbox:lifecycle"
 	applicationScopeSandboxExec      = "sandbox:exec"
 	applicationScopeSandboxFiles     = "sandbox:files"
-	applicationScopeSandboxArtifacts = "sandbox:artifacts"
 	applicationScopeSandboxPorts     = "sandbox:ports"
 	// applicationScopeSandboxPortsDirect grants the direct Port transport. It is
 	// never an implied consequence of sandbox:ports: only an authority holding
@@ -185,9 +184,6 @@ func applicationRequestScope(method string, pattern string) (string, bool) {
 	case strings.Contains(pattern, "/files"),
 		strings.Contains(pattern, "/directories"):
 		return applicationScopeSandboxFiles, false
-	case strings.Contains(pattern, "/artifacts") || strings.HasPrefix(pattern, "GET /v1/artifacts") ||
-		strings.HasPrefix(pattern, "DELETE /v1/artifacts"):
-		return applicationScopeSandboxArtifacts, false
 	case strings.Contains(pattern, "/port-sessions"):
 		return applicationScopeSandboxPorts, false
 	default:
@@ -201,7 +197,6 @@ func isApplicationScope(scope string) bool {
 		scope == applicationScopeSandboxLifecycle ||
 		scope == applicationScopeSandboxExec ||
 		scope == applicationScopeSandboxFiles ||
-		scope == applicationScopeSandboxArtifacts ||
 		scope == applicationScopeSandboxPorts ||
 		scope == applicationScopeSandboxPortsDirect
 }

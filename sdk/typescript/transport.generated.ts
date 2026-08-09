@@ -19,24 +19,6 @@ export interface ArgvCommand {
   readonly mode: "argv";
 }
 
-export interface Artifact {
-  readonly createdAt: Timestamp;
-  readonly expiresAt: Timestamp;
-  readonly generation: number;
-  readonly id: OpaqueID;
-  readonly mediaType: string;
-  readonly metadata: Metadata;
-  readonly name: string;
-  readonly sandboxId: OpaqueID;
-  readonly sha256: string;
-  readonly sizeBytes: number;
-}
-
-export interface ArtifactPage {
-  readonly items: readonly Artifact[];
-  readonly nextCursor?: string;
-}
-
 export type BootStage = "runner_admission" | "artifact_verify" | "workspace_attach" | "network_setup" | "compute_launch" | "guest_negotiation" | "ready";
 
 export interface BootStageTiming {
@@ -472,7 +454,6 @@ export interface RestoreSnapshotRequest {
 }
 
 export interface RetentionPolicy {
-  readonly artifactRetentionSeconds: number;
   readonly snapshotLimit: number;
   readonly snapshotRetentionSeconds: number;
 }
@@ -710,14 +691,6 @@ export interface UpdateSandboxMetadataRequest {
   readonly metadata: Metadata;
 }
 
-export interface UploadArtifactRequest {
-  readonly content: string;
-  readonly mediaType: string;
-  readonly metadata: Metadata;
-  readonly name: string;
-  readonly sha256: string;
-}
-
 export interface WaitSandboxRequest {
   readonly deadlineMilliseconds: number;
   readonly states: readonly SandboxState[];
@@ -747,14 +720,11 @@ export type OperationID =
   | "createSandboxPortSession"
   | "createSandboxSnapshot"
   | "createSandboxTerminal"
-  | "deleteArtifact"
   | "deleteSandbox"
   | "deleteSnapshot"
   | "disableProfile"
-  | "downloadArtifactContent"
   | "drainSandbox"
   | "executeSandboxCommand"
-  | "getArtifact"
   | "getDeploymentTiming"
   | "getOperation"
   | "getOperationTiming"
@@ -770,7 +740,6 @@ export type OperationID =
   | "listProfiles"
   | "listRunnerPools"
   | "listRunners"
-  | "listSandboxArtifacts"
   | "listSandboxDirectory"
   | "listSandboxSnapshots"
   | "listSandboxes"
@@ -790,7 +759,6 @@ export type OperationID =
   | "touchSandbox"
   | "updateRunnerPool"
   | "updateSandboxMetadata"
-  | "uploadSandboxArtifact"
   | "waitForSandbox"
   | "writeSandboxFile";
 
@@ -813,14 +781,11 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   createSandboxPortSession: { method: "POST", path: "/v1/sandboxes/{sandboxId}/port-sessions", contentType: "application/json" },
   createSandboxSnapshot: { method: "POST", path: "/v1/sandboxes/{sandboxId}/snapshots", contentType: "application/json" },
   createSandboxTerminal: { method: "POST", path: "/v1/sandboxes/{sandboxId}/terminals", contentType: "application/json" },
-  deleteArtifact: { method: "DELETE", path: "/v1/artifacts/{artifactId}" },
   deleteSandbox: { method: "DELETE", path: "/v1/sandboxes/{sandboxId}" },
   deleteSnapshot: { method: "DELETE", path: "/v1/snapshots/{snapshotId}" },
   disableProfile: { method: "POST", path: "/v1/profiles/{profileName}:disable" },
-  downloadArtifactContent: { method: "GET", path: "/v1/artifacts/{artifactId}/content" },
   drainSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:drain" },
   executeSandboxCommand: { method: "POST", path: "/v1/sandboxes/{sandboxId}/exec", contentType: "application/json" },
-  getArtifact: { method: "GET", path: "/v1/artifacts/{artifactId}" },
   getDeploymentTiming: { method: "GET", path: "/v1/timings" },
   getOperation: { method: "GET", path: "/v1/operations/{operationId}" },
   getOperationTiming: { method: "GET", path: "/v1/operations/{operationId}/timings" },
@@ -836,7 +801,6 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   listProfiles: { method: "GET", path: "/v1/profiles" },
   listRunnerPools: { method: "GET", path: "/v1/runner-pools" },
   listRunners: { method: "GET", path: "/v1/runners" },
-  listSandboxArtifacts: { method: "GET", path: "/v1/sandboxes/{sandboxId}/artifacts" },
   listSandboxDirectory: { method: "GET", path: "/v1/sandboxes/{sandboxId}/directories" },
   listSandboxSnapshots: { method: "GET", path: "/v1/sandboxes/{sandboxId}/snapshots" },
   listSandboxes: { method: "GET", path: "/v1/sandboxes" },
@@ -856,7 +820,6 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   touchSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:touch" },
   updateRunnerPool: { method: "PATCH", path: "/v1/runner-pools/{runnerPoolName}", contentType: "application/json" },
   updateSandboxMetadata: { method: "PUT", path: "/v1/sandboxes/{sandboxId}/metadata", contentType: "application/json" },
-  uploadSandboxArtifact: { method: "POST", path: "/v1/sandboxes/{sandboxId}/artifacts", contentType: "multipart/form-data" },
   waitForSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:wait", contentType: "application/json" },
   writeSandboxFile: { method: "PUT", path: "/v1/sandboxes/{sandboxId}/files", contentType: "application/octet-stream" },
 };

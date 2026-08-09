@@ -198,7 +198,7 @@ func validManifest() ArtifactManifest {
 		ControlPlane:                   OCIArtifact{Identity: identity, Reference: ControlPlaneImage + "@" + testDigest},
 		Runner:                         OCIArtifact{Identity: identity, Reference: RunnerImage + "@" + testDigest},
 		InstallerTools:                 OCIArtifact{Identity: identity, Reference: InstallerToolsImage + "@" + testDigest},
-		BundledServices:                BundledServiceImages{Postgres: "docker.io/library/postgres@" + testDigest, ObjectStore: "docker.io/rustfs/rustfs@" + testDigest, ObjectStoreClient: "quay.io/minio/mc@" + testDigest},
+		BundledServices:                BundledServiceImages{Postgres: "docker.io/library/postgres@" + testDigest},
 		InstallBootstrap:               Reference{Location: InstallBootstrapLocation(identity.Version), Digest: testDigest},
 		MicroVM:                        MicroVMArtifact{Identity: identity, ImageReference: MicroVMImage + "@" + testDigest, SignedManifestDigest: testDigest, SigningKeyFingerprint: testKey, RuntimeBundle: SignedComponent{ArtifactID: "test-runtime", ManifestDigest: testRuntimeDigest, MandatoryGuestFeatures: []string{}}, ToolchainBundle: SignedComponent{ArtifactID: "test-toolchain", ManifestDigest: testToolchainDigest, MandatoryGuestFeatures: []string{}}},
 		Binaries:                       binaries,

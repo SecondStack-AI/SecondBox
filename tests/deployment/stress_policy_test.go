@@ -43,7 +43,7 @@ func TestStressQualificationUsesExternalSDKHarnessAndFailsLoudly(t *testing.T) {
 		"SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY_SHA256",
 		"SECONDBOX_RUNNER_WORKSPACE_ROOT",
 		"trap cleanup EXIT",
-		"compose logs --tail 200 control-plane secondbox-runner postgres object-store",
+		"compose logs --tail 200 control-plane secondbox-runner postgres",
 		"--entrypoint /usr/local/bin/microvm-host-network-setup",
 		"sha256sum --check --strict SHA256SUMS",
 		"SecondBox scenario source commit",

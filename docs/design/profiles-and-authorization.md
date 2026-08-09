@@ -8,7 +8,7 @@ The deployment-wide `SECONDBOX_PLATFORM_TOKEN` is the operator authority. It may
 
 `SECONDBOX_APPLICATION_AUTHORITIES_JSON` explicitly provisions zero or more application authorities. Each entry has a unique ID and token, one fixed tenant reference, one fixed subject reference, one or more exact Sandbox operation scopes, and one or more Profile grants. An application request must present the bound references exactly. It cannot call Profile mutation, Runner administration, or aggregate timing routes; it can read only granted Profiles and can create Sandboxes only from them. Owned resource queries remain restricted to its bound tenant and subject.
 
-Supported application scopes are `sandbox:read`, `sandbox:lifecycle`, `sandbox:exec`, `sandbox:files`, `sandbox:artifacts`, `sandbox:ports`, and `sandbox:ports:direct`. Unknown routes and missing scopes fail closed.
+Supported application scopes are `sandbox:read`, `sandbox:lifecycle`, `sandbox:exec`, `sandbox:files`, `sandbox:ports`, and `sandbox:ports:direct`. Unknown routes and missing scopes fail closed.
 
 `sandbox:ports:direct` grants no route of its own. It selects the direct Port transport for an authority that already holds `sandbox:ports`, and it is the only grant through which any caller learns a Runner data-plane address. It is denied by default and is never implied by `sandbox:ports`; an authority without it receives the proxied WebSocket endpoint. See [Networking and ports](networking-and-ports.md). Tokens must be unique and distinct from the platform token. The Runner channel remains separate and requires the pre-shared Runner credential plus a CA-signed mTLS identity.
 
@@ -24,7 +24,7 @@ Every ProfileRevision contains:
 - the startup mode every Instance uses, explicitly `cold_boot` or `snapshot_resume`;
 - exec deadline, buffered output, streaming window, transfer, PTY, and port-session bounds;
 - drain grace, idle timeout, maximum Instance duration, lease duration, and desired create state;
-- Snapshot count and retention plus Artifact count, byte, and retention policy;
+- Snapshot count and retention;
 - outbound network and DNS policy;
 - approved exposed ports, protocols, and session limits.
 
@@ -35,7 +35,7 @@ SecondBox releases two explicitly selected standard Profile bundles:
 
 The declarative resource engine materializes standard bundles as ordinary immutable ProfileRevisions. Selection is explicit in `[standard_resources]`; the control plane has no built-in defaults, reserved-name behavior, or request-time reconciler. Each release declares the complete ordered lineage and canonical spec digest, validates an installed prefix, and appends only missing revisions. Existing Sandboxes retain the exact earlier revision they pinned. Operator-defined Profiles remain fully supported and follow the same immutable pinning rules.
 
-Ordinary stop always flushes and detaches compute, advances the local Workspace manifest generation, and preserves every committed Workspace write without creating a Snapshot or contacting object storage. A later start resolves that same current image on the current home Runner; it never adopts a newer Profile head. Operator relocation preserves the pinned ProfileRevision and validates its compatibility requirements against the target.
+Ordinary stop always flushes and detaches compute, advances the local Workspace manifest generation, and preserves every committed Workspace write without creating a Snapshot or transferring Workspace bytes off the Runner. A later start resolves that same current image on the current home Runner; it never adopts a newer Profile head. Operator relocation preserves the pinned ProfileRevision and validates its compatibility requirements against the target.
 
 ## Creation and compatibility
 
@@ -55,8 +55,8 @@ Revisions recorded before the field existed are stamped `cold_boot` by migration
 
 ## Quotas
 
-`subject_quotas` is the only persisted quota set. It covers total Sandboxes, active Instances, vCPU, memory, Artifact bytes, Snapshots, Artifacts, exposed-port sessions, and concurrent data-plane operations for the asserted tenant and subject. Workspace and Snapshot filesystem allocation is governed by Runner storage-pressure admission rather than charged as uniquely retained bytes. Profile resource limits, including standard Profile limits, remain inline immutable execution policy rather than a second quota table. Admission and quota reservation are transactional. A concurrent race either commits one authorized reservation or returns a typed quota error; it never overcommits and repairs later.
+`subject_quotas` is the only persisted quota set. It covers total Sandboxes, active Instances, vCPU, memory, Snapshots, exposed-port sessions, and concurrent data-plane operations for the asserted tenant and subject. Workspace and Snapshot filesystem allocation is governed by Runner storage-pressure admission rather than charged as uniquely retained bytes. Profile resource limits, including standard Profile limits, remain inline immutable execution policy rather than a second quota table. Admission and quota reservation are transactional. A concurrent race either commits one authorized reservation or returns a typed quota error; it never overcommits and repairs later.
 
-Metrics use fixed-cardinality labels. Tenant refs, subject refs, Sandbox IDs, profile names, workspace paths, and artifact names are audit fields rather than metric dimensions.
+Metrics use fixed-cardinality labels. Tenant refs, subject refs, Sandbox IDs, profile names, and workspace paths are audit fields rather than metric dimensions.
 
 See [Domain and lifecycle](domain-lifecycle.md), [API conventions](api-conventions.md), and [Security](security.md).

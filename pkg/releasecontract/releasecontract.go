@@ -164,9 +164,7 @@ type MicroVMArtifact struct {
 }
 
 type BundledServiceImages struct {
-	Postgres          string `json:"postgres"`
-	ObjectStore       string `json:"objectStore"`
-	ObjectStoreClient string `json:"objectStoreClient"`
+	Postgres string `json:"postgres"`
 }
 
 // ArtifactManifest contains immutable release artifact identity.
@@ -415,7 +413,7 @@ func (manifest ArtifactManifest) Validate() error {
 			return err
 		}
 	}
-	for name, reference := range map[string]string{"bundled Postgres": manifest.BundledServices.Postgres, "bundled object store": manifest.BundledServices.ObjectStore, "bundled object-store client": manifest.BundledServices.ObjectStoreClient} {
+	for name, reference := range map[string]string{"bundled Postgres": manifest.BundledServices.Postgres} {
 		repository, _, found := strings.Cut(reference, "@")
 		if !found || repository == "" {
 			return contractError("%s image must be digest-pinned", name)

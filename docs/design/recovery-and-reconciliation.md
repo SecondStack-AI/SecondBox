@@ -49,9 +49,8 @@ connections, Assignment leases, desired and observed Sandbox state, and durable
 local-workspace results.
 
 A PostgreSQL outage rejects mutations and pauses reconciliation. The system does
-not continue from stale caches. An object-store outage affects Artifact and
-immutable execution-asset operations only; ordinary Sandbox start, stop,
-Snapshot, and restore never depend on S3-compatible storage.
+not continue from stale caches. Ordinary Sandbox start, stop, Snapshot, and
+restore depend on PostgreSQL plus the owning Runner's local state.
 
 If a Runner has completed a local mutation but PostgreSQL did not commit it, the
 replayed receipt drives recovery:
@@ -90,8 +89,8 @@ creation.
 
 Heartbeat expiry marks the Runner unavailable and makes its Sandboxes
 unavailable. It does not prove compute stopped, advance a generation, or
-authorize another Runner. No scheduler or automatic recovery path relocates the
-Workspace or restores it from object storage. Explicit relocation still
+authorize another Runner. No scheduler or automatic recovery path relocates or
+reconstructs the Workspace. Explicit relocation still
 requires the source Runner to be connected and its local image intact.
 
 Recovery requires the same trusted Runner identity and WorkspaceStore to return.
@@ -121,13 +120,11 @@ Sandbox. Before counting useful activity, lifecycle claiming transactionally
 expires due Leases and closes sessions bound to released, expired, or fenced
 Leases, so abandoned session rows cannot suppress reclamation.
 
-## Retention and garbage collection
+## Snapshot retention
 
 Expired local Snapshots are selected from PostgreSQL and deleted through the
 same idempotent home-Runner effect as explicit deletion. Snapshot rows are
-removed only after a durable local receipt. The object-store garbage collector
-handles application Artifacts and immutable execution assets only; Workspace
-images, local Snapshots, restore state, and Runner receipts are never S3 roots.
+removed only after a durable local receipt.
 
 ## Operational evidence
 

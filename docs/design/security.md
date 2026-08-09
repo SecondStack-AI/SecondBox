@@ -16,13 +16,13 @@ One Port operation scope is a capability rather than an operation permission. `s
 
 ## Control-plane boundary
 
-The control plane has database and object-store authority and can schedule Runners, so compromise is severe. It remains unprivileged and has no KVM, TUN/TAP, host cgroups, host paths, container-engine socket, Runner private keys, or Runner shell access. The Runner CA private key stays outside the control-plane deployment.
+The control plane has database authority and can schedule Runners, so compromise is severe. It remains unprivileged and has no KVM, TUN/TAP, host cgroups, host paths, container-engine socket, Runner private keys, or Runner shell access. The Runner CA private key stays outside the control-plane deployment.
 
 Idempotency, subject quota reservation, generation checks, ownership checks, and optimistic concurrency are transactional. A stale Lease, stream, Instance, Assignment, or reconciliation claim cannot mutate a newer generation. Audit records capture security-sensitive mutations without storing credentials or workspace content.
 
 ## Runner and guest boundary
 
-A Runner is privileged on its host and can observe active guest memory and every Workspace homed there. Runner pools are explicit trust and placement boundaries. A Runner receives only fully resolved assignments and logical local-workspace commands for its stable identity. It does not receive the platform token, PostgreSQL credentials, or global object-store credentials.
+A Runner is privileged on its host and can observe active guest memory and every Workspace homed there. Runner pools are explicit trust and placement boundaries. A Runner receives only fully resolved assignments and logical local-workspace commands for its stable identity. It does not receive the platform token or PostgreSQL credentials.
 
 Firecracker, jailer, cgroups, namespaces, minimal devices, signed images, and a narrow guest protocol provide defense in depth. Guest paths resolve beneath descriptor-pinned workspace roots. Resource, deadline, payload, transfer, and output bounds apply at admission and execution. Guest output, filenames, log text, and protocol errors are untrusted and bounded.
 
@@ -30,15 +30,13 @@ Control-plane fencing prevents a stale Runner from committing authoritative stat
 
 ## Durable bytes and recovery
 
-Artifact publication uses immutable keys, declared size and SHA-256 evidence, verified object reads, atomic metadata publication, retention, and two-phase garbage collection. Uploads spool and hash before durable admission; downloads are fully integrity-verified before response bytes are exposed. Missing or corrupt reachable bytes fail explicitly.
-
 Workspace durability is local to one authoritative home Runner at a time. The WorkspaceStore
 uses reflink-only cloning, atomic manifests, fsync, exclusive writer locks, and
 durable operation receipts. Except for the bounded operator-initiated stopped-Sandbox relocation stream, the runner protocol never transports image bytes or
 paths. Loss of an unbacked home-Runner filesystem loses its Sandboxes and local
-Snapshots; PostgreSQL or S3 recovery alone is insufficient.
+Snapshots; PostgreSQL recovery alone is insufficient.
 
-All work is deadline- and size-bounded. Per-subject quotas protect shared control-plane and Runner capacity. Backpressure prevents slow clients from creating unbounded output buffers. Database, object-store, Runner, and guest failures produce explicit state rather than fallback execution or empty-data success. On a direct Port connection, backpressure is TCP flow control on the caller leg and the retained guest-protocol credit window on the guest leg, so no unbounded buffer exists on either.
+All work is deadline- and size-bounded. Per-subject quotas protect shared control-plane and Runner capacity. Backpressure prevents slow clients from creating unbounded output buffers. Database, Runner, and guest failures produce explicit state rather than fallback execution or empty-data success. On a direct Port connection, backpressure is TCP flow control on the caller leg and the retained guest-protocol credit window on the guest leg, so no unbounded buffer exists on either.
 
 Port evidence is transport independent. Both transports keep payload-free session accounting, terminal state, correlation, acknowledgement state, and admission replay until the session deadline. Both emit fixed-shape Runner evidence at admitted open and close, neither persists per-frame payloads, and payload reconstruction is outside the forensic boundary. No Port evidence record can contain a payload byte, a credential, a fencing token, or a Runner address.
 

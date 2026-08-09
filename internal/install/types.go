@@ -187,8 +187,6 @@ type NetworkPlan struct {
 	RunnerAddress             string            `json:"runnerAddress"`
 	DataPlaneAddress          string            `json:"dataPlaneAddress"`
 	DatabaseAddress           string            `json:"databaseAddress"`
-	ObjectStoreAddress        string            `json:"objectStoreAddress"`
-	ObjectStoreConsoleAddress string            `json:"objectStoreConsoleAddress"`
 	GuestBridgeCIDR           string            `json:"guestBridgeCidr"`
 	ComposeBackendCIDR        string            `json:"composeBackendCidr,omitempty"`
 	TAPPrefix                 string            `json:"tapPrefix"`

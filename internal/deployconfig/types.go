@@ -9,7 +9,6 @@ type ManifestV1 struct {
 	SchemaVersion     int               `toml:"schema_version"`
 	Deployment        Deployment        `toml:"deployment"`
 	Database          Database          `toml:"database"`
-	ObjectStore       ObjectStore       `toml:"object_store"`
 	RunnerTrust       RunnerTrust       `toml:"runner_trust"`
 	Runners           []Runner          `toml:"runners"`
 	Applications      Applications      `toml:"applications"`
@@ -47,8 +46,6 @@ type Deployment struct {
 	ControlPlaneImage      string `toml:"control_plane_image"`
 	RunnerImage            string `toml:"runner_image"`
 	PostgresImage          string `toml:"postgres_image"`
-	ObjectStoreImage       string `toml:"object_store_image"`
-	ObjectStoreClientImage string `toml:"object_store_client_image"`
 	APIBindIP              string `toml:"api_bind_ip"`
 	APIPublishedPort       *int64 `toml:"api_published_port"`
 	ListenAddress          string `toml:"listen_address"`
@@ -69,20 +66,6 @@ type Database struct {
 	Name          string `toml:"name"`
 	User          string `toml:"user"`
 	PasswordFile  string `toml:"password_file"`
-}
-
-type ObjectStore struct {
-	Mode                 string `toml:"mode"`
-	Endpoint             string `toml:"endpoint"`
-	Bucket               string `toml:"bucket"`
-	Region               string `toml:"region"`
-	UsePathStyle         *bool  `toml:"use_path_style"`
-	TempDirectory        string `toml:"temp_directory"`
-	AccessKeyFile        string `toml:"access_key_file"`
-	SecretKeyFile        string `toml:"secret_key_file"`
-	BindIP               string `toml:"bind_ip"`
-	PublishedPort        *int64 `toml:"published_port"`
-	ConsolePublishedPort *int64 `toml:"console_published_port"`
 }
 
 type RunnerTrust struct {
@@ -109,9 +92,7 @@ type Policy struct {
 	DefaultSubjectMaxActiveInstances      *int64 `toml:"default_subject_max_active_instances"`
 	DefaultSubjectMaxCPUMillis            *int64 `toml:"default_subject_max_cpu_millis"`
 	DefaultSubjectMaxMemoryBytes          *int64 `toml:"default_subject_max_memory_bytes"`
-	DefaultSubjectMaxArtifactBytes        *int64 `toml:"default_subject_max_artifact_bytes"`
 	DefaultSubjectMaxSnapshots            *int64 `toml:"default_subject_max_snapshots"`
-	DefaultSubjectMaxArtifacts            *int64 `toml:"default_subject_max_artifacts"`
 	DefaultSubjectMaxPortSessions         *int64 `toml:"default_subject_max_port_sessions"`
 	DefaultSubjectMaxConcurrentOperations *int64 `toml:"default_subject_max_concurrent_operations"`
 }
@@ -129,14 +110,10 @@ type TuningOverrides struct {
 	LifecycleReconcileBatchSize                 *int64 `toml:"lifecycle_reconcile_batch_size"`
 	LifecycleReconcilePollIntervalMilliseconds  *int64 `toml:"lifecycle_reconcile_poll_interval_milliseconds"`
 	LifecycleReconcileClaimDurationMilliseconds *int64 `toml:"lifecycle_reconcile_claim_duration_milliseconds"`
-	GarbageCollectionPollIntervalMilliseconds   *int64 `toml:"garbage_collection_poll_interval_milliseconds"`
 	AssignmentClaimDurationMilliseconds         *int64 `toml:"assignment_claim_duration_milliseconds"`
 	AssignmentDeadlineMilliseconds              *int64 `toml:"assignment_deadline_milliseconds"`
 	AssignmentRetryLimit                        *int64 `toml:"assignment_retry_limit"`
 	SchedulerSerializationRetryLimit            *int64 `toml:"scheduler_serialization_retry_limit"`
-	ObjectStoreRetryMaxAttempts                 *int64 `toml:"object_store_retry_max_attempts"`
-	ObjectStoreHTTPTimeoutMilliseconds          *int64 `toml:"object_store_http_timeout_milliseconds"`
-	ObjectStoreMaxObjectBytes                   *int64 `toml:"object_store_max_object_bytes"`
 }
 
 // Runner is one immutable runner_id and its typed, placement-local runtime

@@ -113,12 +113,12 @@ prepared values.
 
 `SECONDBOX_STRESS_OUTPUT` must be an absent absolute path whose parent already exists. The harness
 refuses to overwrite it and creates it with mode `0600`. The shared topology's distinct test-only
-platform, runner, database, and object-store credentials are supplied only to their consumers and
+platform, runner, and database credentials are supplied only to their consumers and
 are never written to the result.
 
 The gate prints the source commit, Go version, `findmnt` evidence, and signed artifact-manifest
-digest before starting the sweep. Failure logs come from the control plane, runner, PostgreSQL, and
-object store. Cleanup runs for both success and failure.
+digest before starting the sweep. Failure logs come from the control plane, runner, and PostgreSQL.
+Cleanup runs for both success and failure.
 
 ## Reading the result
 

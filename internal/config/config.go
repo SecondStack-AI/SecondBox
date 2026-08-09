@@ -30,14 +30,10 @@ const (
 	DefaultLifecycleReconcileBatchSize                 int64 = 8
 	DefaultLifecycleReconcilePollIntervalMilliseconds  int64 = 250
 	DefaultLifecycleReconcileClaimDurationMilliseconds int64 = 30000
-	DefaultGarbageCollectionPollIntervalMilliseconds   int64 = 60000
 	DefaultAssignmentClaimDurationMilliseconds         int64 = 30000
 	DefaultAssignmentDeadlineMilliseconds              int64 = 120000
 	DefaultAssignmentRetryLimit                        int64 = 2
 	DefaultSchedulerSerializationRetryLimit            int64 = 3
-	DefaultObjectStoreRetryMaxAttempts                 int64 = 3
-	DefaultObjectStoreHTTPTimeoutMilliseconds          int64 = 30000
-	DefaultObjectStoreMaxObjectBytes                   int64 = 10737418240
 )
 
 // Config contains only explicitly configured control-plane settings.
@@ -66,23 +62,12 @@ type Config struct {
 	LifecycleReconcileBatchSize      int
 	LifecycleReconcilePollInterval   time.Duration
 	LifecycleReconcileClaimDuration  time.Duration
-	GarbageCollectionPollInterval    time.Duration
 	AssignmentClaimDuration          time.Duration
 	AssignmentDeadline               time.Duration
 	RunnerHeartbeatTimeout           time.Duration
 	AssignmentRetryLimit             int64
 	SchedulerSerializationRetryLimit int
 	SignedAssetCatalogPath           string
-	ObjectStoreEndpoint              string
-	ObjectStoreRegion                string
-	ObjectStoreBucket                string
-	ObjectStoreAccessKeyID           string
-	ObjectStoreSecretAccessKey       string
-	ObjectStoreUsePathStyle          bool
-	ObjectStoreRetryMaxAttempts      int
-	ObjectStoreHTTPTimeout           time.Duration
-	ObjectStoreTempDirectory         string
-	ObjectStoreMaxObjectBytes        int64
 	RunnerEnabledFeatures            []string
 	DefaultSubjectQuota              contracts.QuotaLimits
 }
@@ -206,10 +191,6 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	garbageCollectionPollMilliseconds, err := optionalPositiveInt64("SECONDBOX_GARBAGE_COLLECTION_POLL_INTERVAL_MILLISECONDS", DefaultGarbageCollectionPollIntervalMilliseconds)
-	if err != nil {
-		return Config{}, err
-	}
 	assignmentClaimMilliseconds, err := optionalPositiveInt64("SECONDBOX_ASSIGNMENT_CLAIM_DURATION_MILLISECONDS", DefaultAssignmentClaimDurationMilliseconds)
 	if err != nil {
 		return Config{}, err
@@ -235,50 +216,6 @@ func FromEnvironment() (Config, error) {
 		return Config{}, errorsForEnvironment("scheduler serialization retry limit exceeds process integer range")
 	}
 	signedAssetCatalogPath, err := requiredAbsolutePath("SECONDBOX_SIGNED_ASSET_CATALOG_PATH")
-	if err != nil {
-		return Config{}, err
-	}
-	objectStoreEndpoint, err := requiredString("SECONDBOX_OBJECT_STORE_ENDPOINT")
-	if err != nil {
-		return Config{}, err
-	}
-	objectStoreRegion, err := requiredString("SECONDBOX_OBJECT_STORE_REGION")
-	if err != nil {
-		return Config{}, err
-	}
-	objectStoreBucket, err := requiredString("SECONDBOX_OBJECT_STORE_BUCKET")
-	if err != nil {
-		return Config{}, err
-	}
-	objectStoreAccessKeyID, err := requiredString("SECONDBOX_OBJECT_STORE_ROOT_USER")
-	if err != nil {
-		return Config{}, err
-	}
-	objectStoreSecretAccessKey, err := requiredSecret("SECONDBOX_OBJECT_STORE_ROOT_PASSWORD", 24)
-	if err != nil {
-		return Config{}, err
-	}
-	objectStoreUsePathStyle, err := requiredBool("SECONDBOX_OBJECT_STORE_USE_PATH_STYLE")
-	if err != nil {
-		return Config{}, err
-	}
-	objectStoreRetryMaxAttempts, err := optionalPositiveInt64("SECONDBOX_OBJECT_STORE_RETRY_MAX_ATTEMPTS", DefaultObjectStoreRetryMaxAttempts)
-	if err != nil {
-		return Config{}, err
-	}
-	objectStoreRetryMaxAttemptsInt := int(objectStoreRetryMaxAttempts)
-	if int64(objectStoreRetryMaxAttemptsInt) != objectStoreRetryMaxAttempts {
-		return Config{}, errorsForEnvironment("object store retry attempts exceed process integer range")
-	}
-	objectStoreHTTPTimeoutMilliseconds, err := optionalPositiveInt64("SECONDBOX_OBJECT_STORE_HTTP_TIMEOUT_MILLISECONDS", DefaultObjectStoreHTTPTimeoutMilliseconds)
-	if err != nil {
-		return Config{}, err
-	}
-	objectStoreTempDirectory, err := requiredAbsolutePath("SECONDBOX_OBJECT_STORE_TEMP_DIRECTORY")
-	if err != nil {
-		return Config{}, err
-	}
-	objectStoreMaxObjectBytes, err := optionalPositiveInt64("SECONDBOX_OBJECT_STORE_MAX_OBJECT_BYTES", DefaultObjectStoreMaxObjectBytes)
 	if err != nil {
 		return Config{}, err
 	}
@@ -312,23 +249,14 @@ func FromEnvironment() (Config, error) {
 		LifecycleReconcileBatchSize:      lifecycleReconcileBatchSizeInt,
 		LifecycleReconcilePollInterval:   time.Duration(lifecycleReconcilePollMilliseconds) * time.Millisecond,
 		LifecycleReconcileClaimDuration:  time.Duration(lifecycleReconcileClaimMilliseconds) * time.Millisecond,
-		GarbageCollectionPollInterval:    time.Duration(garbageCollectionPollMilliseconds) * time.Millisecond,
 		AssignmentClaimDuration:          time.Duration(assignmentClaimMilliseconds) * time.Millisecond,
 		AssignmentDeadline:               time.Duration(assignmentDeadlineMilliseconds) * time.Millisecond,
 		RunnerHeartbeatTimeout:           time.Duration(runnerHeartbeatTimeoutMilliseconds) * time.Millisecond,
 		AssignmentRetryLimit:             assignmentRetryLimit,
 		SchedulerSerializationRetryLimit: schedulerSerializationRetryLimitInt,
 		SignedAssetCatalogPath:           signedAssetCatalogPath,
-		ObjectStoreEndpoint:              objectStoreEndpoint, ObjectStoreRegion: objectStoreRegion,
-		ObjectStoreBucket: objectStoreBucket, ObjectStoreAccessKeyID: objectStoreAccessKeyID,
-		ObjectStoreSecretAccessKey:  objectStoreSecretAccessKey,
-		ObjectStoreUsePathStyle:     objectStoreUsePathStyle,
-		ObjectStoreRetryMaxAttempts: objectStoreRetryMaxAttemptsInt,
-		ObjectStoreHTTPTimeout:      time.Duration(objectStoreHTTPTimeoutMilliseconds) * time.Millisecond,
-		ObjectStoreTempDirectory:    objectStoreTempDirectory,
-		ObjectStoreMaxObjectBytes:   objectStoreMaxObjectBytes,
-		RunnerEnabledFeatures:       runnerEnabledFeatures,
-		DefaultSubjectQuota:         subjectQuota,
+		RunnerEnabledFeatures:            runnerEnabledFeatures,
+		DefaultSubjectQuota:              subjectQuota,
 	}, nil
 }
 
@@ -403,22 +331,10 @@ func requiredCSV(name string) ([]string, error) {
 	return values, nil
 }
 
-func requiredBool(name string) (bool, error) {
-	raw, err := requiredString(name)
-	if err != nil {
-		return false, err
-	}
-	value, err := strconv.ParseBool(raw)
-	if err != nil {
-		return false, fmt.Errorf("SecondBox environment variable %s must be true or false", name)
-	}
-	return value, nil
-}
-
 func requiredQuota(prefix string) (contracts.QuotaLimits, error) {
 	names := []string{
 		"MAX_SANDBOXES", "MAX_ACTIVE_INSTANCES", "MAX_CPU_MILLIS", "MAX_MEMORY_BYTES",
-		"MAX_ARTIFACT_BYTES", "MAX_SNAPSHOTS", "MAX_ARTIFACTS", "MAX_PORT_SESSIONS",
+		"MAX_SNAPSHOTS", "MAX_PORT_SESSIONS",
 		"MAX_CONCURRENT_OPERATIONS",
 	}
 	values := make([]int64, len(names))
@@ -431,8 +347,8 @@ func requiredQuota(prefix string) (contracts.QuotaLimits, error) {
 	}
 	return contracts.QuotaLimits{
 		MaxSandboxes: values[0], MaxActiveInstances: values[1], MaxCPUMillis: values[2],
-		MaxMemoryBytes: values[3], MaxArtifactBytes: values[4], MaxSnapshots: values[5],
-		MaxArtifacts: values[6], MaxPortSessions: values[7], MaxConcurrentOperations: values[8],
+		MaxMemoryBytes: values[3], MaxSnapshots: values[4], MaxPortSessions: values[5],
+		MaxConcurrentOperations: values[6],
 	}, nil
 }
 

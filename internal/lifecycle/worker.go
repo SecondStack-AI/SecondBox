@@ -27,7 +27,7 @@ type BatchReconcileStore interface {
 	ClaimLifecycleBatch(ctx context.Context, workerID string, now time.Time, claimDuration time.Duration, batchSize int, wakeTrigger ports.LifecycleWakeTrigger) ([]ports.LifecycleReconcileClaim, error)
 }
 
-// EffectExecutor performs one durable runner or object-store effect.
+// EffectExecutor performs one durable Runner effect.
 type EffectExecutor interface {
 	ExecuteLifecycleEffect(
 		ctx context.Context,
@@ -231,7 +231,7 @@ func nextLifecycleReconcileAt(
 // Only these two transitions qualify, and the restriction is what keeps the
 // worker from spinning:
 //
-//   - Every action requiring a runner or object-store effect must wait for the
+//   - Every action requiring a Runner effect must wait for the
 //     Runner's acknowledgement, so it keeps the bounded poll.
 //   - ActionWait is the steady state. Waking a waiting Sandbox immediately
 //     would make an idle deployment reconcile in a tight loop, so a wait is

@@ -9,14 +9,13 @@ All identifiers are server-generated opaque strings. Timestamps are UTC RFC 3339
 | Record | Owner and lifecycle |
 | --- | --- |
 | `Profile` | Operator-owned stable name and mutable head. It is enabled or disabled and points to its current immutable ProfileRevision. There is no implicit profile. |
-| `ProfileRevision` | Immutable resolved policy, resources, artifacts, and runner-pool selector. A Sandbox pins one revision for its lifetime. |
+| `ProfileRevision` | Immutable resolved policy, resources, execution assets, and runner-pool selector. A Sandbox pins one revision for its lifetime. |
 | `Sandbox` | Belongs to one asserted tenant/subject pair and one ProfileRevision. It owns a Workspace, desired and observed state, current generation, lifecycle timestamps, bounded client metadata, and optional current Instance. |
 | `Instance` | Belongs to one Sandbox generation. It records state, Assignment, start/ready/stop timestamps, and one stable termination reason. It contains no public backend or host location. |
-| `Assignment` | Internal authority joining one Sandbox generation to one Runner. It contains the fencing token, capability snapshot, resolved artifacts, state, and proof of release. |
+| `Assignment` | Internal authority joining one Sandbox generation to one Runner. It contains the fencing token, capability snapshot, resolved execution assets, state, and proof of release. |
 | `Lease` | Subject-scoped, bounded authority for useful activity against one Sandbox generation. It expires, is released, or is fenced; it never outlives its generation. |
 | `Workspace` | Belongs to one Sandbox and has one authoritative home Runner. It records logical capacity, current generation, readiness/deletion state, one durable mutation slot, and opaque local receipt evidence without a host path. Its home changes only through an operator-initiated stopped-Sandbox relocation. |
 | `Snapshot` | Subject-owned immutable local reflink of one stopped Sandbox Workspace. It records logical size, lifecycle state, creation time, optional expiration, and bounded metadata without an image digest or storage reference. |
-| `Artifact` | Subject-owned immutable application exchange object with name, media type, size, checksum, source generation, and retention timestamps. It is separate from a workspace path. |
 | `RunnerPool` | Operator-owned placement and trust boundary. It declares allowed architectures, capabilities, capacity policy, and enrolled Runners. |
 | `Runner` | Operator-provisioned execution identity. It belongs to one pool and records pre-shared credential state, advertised/verified capabilities, capacity, protocol versions, health, and drain state. |
 
@@ -42,7 +41,7 @@ moves. Source seal, bounded transfer, checksum-verified target import, atomic
 home change, and source deletion are separate receipt-backed phases under the
 one Workspace mutation slot.
 
-Drain rejects new exec, filesystem transfer, PTY, port, and Lease admission. Already admitted operations receive the profile's bounded drain grace. Stop flushes and detaches compute, durably advances the local Workspace generation, then commits that exact generation in PostgreSQL. It does not create a Snapshot, hash an image, or contact object storage. Delete drains and stops, asks the home Runner to delete all local Workspace and Snapshot state, and only then tombstones the Sandbox. Deletion is never implied by a client disconnect or Flue harness close.
+Drain rejects new exec, filesystem transfer, PTY, port, and Lease admission. Already admitted operations receive the profile's bounded drain grace. Stop flushes and detaches compute, durably advances the local Workspace generation, then commits that exact generation in PostgreSQL. It does not create a Snapshot, hash an image, or transfer Workspace bytes off the Runner. Delete drains and stops, asks the home Runner to delete all local Workspace and Snapshot state, and only then tombstones the Sandbox. Deletion is never implied by a client disconnect or Flue harness close.
 
 ## Generation and assignment invariants
 

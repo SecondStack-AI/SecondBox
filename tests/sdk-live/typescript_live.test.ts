@@ -111,7 +111,6 @@ function liveProfileRevisionSpec(): ProfileRevisionSpec {
     retention: {
       snapshotLimit: 8,
       snapshotRetentionSeconds: 86400,
-      artifactRetentionSeconds: 86400,
     },
     execution: {
       maximumDeadlineMilliseconds: 60000,

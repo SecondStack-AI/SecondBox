@@ -224,7 +224,7 @@ symbolic link or the filesystem root.
 Runner startup creates the deterministic private layout, proves the Workspace
 and Snapshot roots share one device, performs a real `FICLONE`, and verifies
 copy-on-write mutation isolation. Any failure makes the Runner unready; there is
-no byte-copy, alternate backend, or object-store fallback. `mke2fs` is required
+no byte-copy or alternate backend fallback. `mke2fs` is required
 to preformat the explicitly configured maximum-capacity template before Runner
 registration, and `tune2fs` is required to assign each reflink child its stable
 Workspace UUID before publication. Other exact capacities are formatted once

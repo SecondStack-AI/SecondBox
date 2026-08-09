@@ -18,7 +18,6 @@ bodies, or response decoders.
 | Streaming execution | `CreateExecStream`, `ConnectExecStream` | matching methods plus an injected connector | Preserve sequence, flow-control, EOF, cancellation and terminal outcome. Closing cancels process work, not the Sandbox. |
 | Filesystem | `ReadFile`, `WriteFile`, `StatFile`, `ListDirectory`, `FileExists`, `CreateDirectory`, `RemovePath` | matching handle methods | Workspace-relative only, generation/Lease fenced, bounded reads and digest-checked writes. |
 | Snapshots | `CreateSnapshot`, `ListSnapshots`, `GetSnapshot`, `DeleteSnapshot`, `Restore` | matching methods | Explicit optimistic revision and idempotency; no implicit restore or deletion. |
-| Artifacts | `UploadArtifact`, `ListArtifacts`, `GetArtifact`, `DownloadArtifact`, `DeleteArtifact` | matching methods | SDK-owned multipart encoding, bounded download and digest verification. |
 | Lease takeover | `TakeoverLease`, `KeepLease` | `takeoverLease`, `keepLease` | Explicit generation fence; a keeper releases the Lease but never the Sandbox. |
 | Named Ports | `CreatePortSession`, `GetPortSession`, `ClosePortSession`, `ConnectPortTunnel` | matching methods | Consume one credential through its declared proxied or direct transport only. |
 | Terminals | `CreateTerminal`, `GetTerminal`, `ConnectTerminal`, `CancelTerminal` | matching methods | Authenticated, generation-fenced, sequenced attach/reconnect without lifecycle ownership. |

@@ -386,7 +386,7 @@ func testProfileSpec(cpuMillis int64) contracts.ProfileRevisionSpec {
 		},
 		Retention: contracts.RetentionPolicy{
 			SnapshotRetentionSeconds: 86400,
-			SnapshotLimit:            8, ArtifactRetentionSeconds: 86400,
+			SnapshotLimit:            8,
 		},
 		Execution: contracts.ExecutionPolicy{
 			MaximumDeadlineMilliseconds: 60000, MaximumBufferedOutputBytes: 1 << 20,
@@ -407,8 +407,7 @@ func testProfileSpec(cpuMillis int64) contracts.ProfileRevisionSpec {
 func generousQuota() contracts.QuotaLimits {
 	return contracts.QuotaLimits{
 		MaxSandboxes: 100, MaxActiveInstances: 100, MaxCPUMillis: 100000,
-		MaxMemoryBytes: 100 << 30, MaxArtifactBytes: 1 << 40,
-		MaxSnapshots: 1000, MaxArtifacts: 1000, MaxPortSessions: 100,
+		MaxMemoryBytes: 100 << 30, MaxSnapshots: 1000, MaxPortSessions: 100,
 		MaxConcurrentOperations: 100,
 	}
 }

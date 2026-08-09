@@ -108,7 +108,7 @@ func TestDevelopmentInitializationAndRenderAreCompleteAndReproducible(t *testing
 }
 
 func TestExampleManifestIsGeneratedFromTheRegistry(t *testing.T) {
-	manifest := developmentManifest("secrets/postgres-password", "secrets/object-store-access-key", "secrets/object-store-secret-key", "secrets/platform-token", "secrets/runner-enrollment-credential")
+	manifest := developmentManifest("secrets/postgres-password", "secrets/platform-token", "secrets/runner-enrollment-credential")
 	for _, pool := range manifest.StandardResources.RunnerPools {
 		if !slices.Contains(pool.Capabilities, "compute") {
 			t.Fatalf("development RunnerPool %q cannot admit compute", pool.Name)
@@ -125,7 +125,7 @@ func TestExampleManifestIsGeneratedFromTheRegistry(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Fatal("deploy/secondbox.example.toml drifted from the typed schema or override registry")
 	}
-	if len(OverrideRegistry()) != 19 {
+	if len(OverrideRegistry()) != 15 {
 		t.Fatalf("override count = %d", len(OverrideRegistry()))
 	}
 }
@@ -242,7 +242,6 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 		{name: "control plane published beyond loopback", want: "bind every published port to 127.0.0.1", mutate: func(manifest *ManifestV1) { manifest.Deployment.APIBindIP = "0.0.0.0" }},
 		{name: "Runner endpoint published beyond loopback", want: "bind every published port to 127.0.0.1", mutate: func(manifest *ManifestV1) { manifest.Deployment.RunnerBindIP = "0.0.0.0" }},
 		{name: "database published beyond loopback", want: "bind every published port to 127.0.0.1", mutate: func(manifest *ManifestV1) { manifest.Database.BindIP = "0.0.0.0" }},
-		{name: "object store published beyond loopback", want: "bind every published port to 127.0.0.1", mutate: func(manifest *ManifestV1) { manifest.ObjectStore.BindIP = "0.0.0.0" }},
 		{name: "control plane listener mismatches container", want: "listen_address must be 0.0.0.0:8080", mutate: func(manifest *ManifestV1) { manifest.Deployment.ListenAddress = "0.0.0.0:9999" }},
 		{name: "Runner listener mismatches container", want: "runner_listen_address must be 0.0.0.0:9443", mutate: func(manifest *ManifestV1) { manifest.Deployment.RunnerListenAddress = "0.0.0.0:9999" }},
 		{name: "asset catalog path mismatches container", want: "signed_asset_catalog_path must be /etc/secondbox/signed-assets.json", mutate: func(manifest *ManifestV1) {
@@ -272,8 +271,6 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 		{name: "control plane port exceeds TCP range", want: "deployment.api_published_port", mutate: func(manifest *ManifestV1) { manifest.Deployment.APIPublishedPort = integer(70000) }},
 		{name: "Runner port exceeds TCP range", want: "deployment.runner_published_port", mutate: func(manifest *ManifestV1) { manifest.Deployment.RunnerPublishedPort = integer(70000) }},
 		{name: "database port exceeds TCP range", want: "database.published_port", mutate: func(manifest *ManifestV1) { manifest.Database.PublishedPort = integer(70000) }},
-		{name: "object store port exceeds TCP range", want: "object_store.published_port", mutate: func(manifest *ManifestV1) { manifest.ObjectStore.PublishedPort = integer(70000) }},
-		{name: "object store console port exceeds TCP range", want: "object_store.console_published_port", mutate: func(manifest *ManifestV1) { manifest.ObjectStore.ConsolePublishedPort = integer(70000) }},
 		{name: "unsupported Runner feature", want: "runner feature \"unsupported-feature\" is unsupported", mutate: func(manifest *ManifestV1) {
 			manifest.Policy.RunnerEnabledFeatures = "local-workspace,unsupported-feature"
 		}},
@@ -297,9 +294,6 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 			runner := validTestRunner("runner-a", "remote")
 			runner.LogPath = "/var/log/runner\npoison"
 			manifest.Runners = []Runner{runner}
-		}},
-		{name: "object store endpoint contains userinfo", want: "must not contain userinfo", mutate: func(manifest *ManifestV1) {
-			manifest.ObjectStore.Endpoint = "http://user:password@object-store:9000"
 		}},
 		{name: "Runner ID escapes artifact directory", want: "valid opaque Runner ID", mutate: func(manifest *ManifestV1) { manifest.Runners = []Runner{validTestRunner("../escaped", "remote")} }},
 		{name: "remote Runner path is relative", want: "identity_directory must be an absolute Runner-host path", mutate: func(manifest *ManifestV1) {
@@ -406,35 +400,6 @@ func TestBundledDatabasePasswordRequiresLegacyMinimumStrength(t *testing.T) {
 	}
 	if _, err := Resolve(manifestPath); err == nil || !strings.Contains(err.Error(), "database.password_file must contain at least 24 bytes") {
 		t.Fatalf("short bundled database password error = %v", err)
-	}
-}
-
-func TestBundledObjectStoreClientURLPreservesCredentialBytes(t *testing.T) {
-	manifestPath := initializedDevelopment(t)
-	manifest, err := ReadManifest(manifestPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	access := "operator/name@example"
-	secret := "a/secret?with#url%bytes+and=padding"
-	base := filepath.Dir(manifestPath)
-	if err := os.WriteFile(filepath.Join(base, manifest.ObjectStore.AccessKeyFile), []byte(access+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(base, manifest.ObjectStore.SecretKeyFile), []byte(secret+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	resolved, err := Resolve(manifestPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	clientURL, err := url.Parse(resolved.Environment["SECONDBOX_OBJECT_STORE_MC_HOST"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	gotSecret, ok := clientURL.User.Password()
-	if clientURL.User.Username() != access || !ok || gotSecret != secret || clientURL.Host != "object-store:9000" {
-		t.Fatalf("object-store client URL = %#v, password = %q/%t", clientURL, gotSecret, ok)
 	}
 }
 
@@ -697,8 +662,8 @@ func TestInspectRedactsSecretValuesAndPathsAndShowsAllDefaults(t *testing.T) {
 			t.Errorf("inspect exposed secret material %q", secret)
 		}
 	}
-	if strings.Count(text, "codeDefault") != 19 {
-		t.Fatalf("inspect defaults = %d, want 19", strings.Count(text, "codeDefault"))
+	if strings.Count(text, "codeDefault") != 15 {
+		t.Fatalf("inspect defaults = %d, want 15", strings.Count(text, "codeDefault"))
 	}
 	if !strings.Contains(text, `"name": "data_plane_retention_seconds"`) || !strings.Contains(text, dataPlaneRetentionHelp) {
 		t.Fatalf("inspect omitted retention policy help: %s", text)
@@ -730,7 +695,7 @@ func TestProductionInitializationReportsEveryUnresolvedDecisionGroup(t *testing.
 	if path == "" || err == nil {
 		t.Fatalf("path, error = %q, %v", path, err)
 	}
-	for _, group := range []string{"deployment", "database", "object store", "Runner topology", "execution-asset trust", "application authorities", "tenancy policy", "lifecycle policy"} {
+	for _, group := range []string{"deployment", "database", "Runner topology", "execution-asset trust", "application authorities", "tenancy policy", "lifecycle policy"} {
 		if !strings.Contains(err.Error(), group) {
 			t.Errorf("production error omitted %q: %v", group, err)
 		}
@@ -768,96 +733,83 @@ func TestProductionInitializationRefusesSymlinkedParent(t *testing.T) {
 	}
 }
 
-func TestProductionQualifiesBundledAndExternalDatabaseAndObjectStoreCombinations(t *testing.T) {
+func TestProductionQualifiesBundledAndExternalDatabase(t *testing.T) {
 	for _, databaseMode := range []string{"bundled", "external"} {
-		for _, objectMode := range []string{"bundled", "external"} {
-			t.Run(databaseMode+"_database_"+objectMode+"_object_store", func(t *testing.T) {
-				manifestPath := initializedDevelopment(t)
-				manifest, err := ReadManifest(manifestPath)
-				if err != nil {
+		t.Run(databaseMode+"_database", func(t *testing.T) {
+			manifestPath := initializedDevelopment(t)
+			manifest, err := ReadManifest(manifestPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			digestRef := "registry.example/secondbox@sha256:" + strings.Repeat("a", 64)
+			manifest.Deployment.Mode = "production"
+			manifest.Deployment.PublicBaseURL = "https://secondbox.example.com"
+			manifest.Deployment.TLSTermination = "external"
+			manifest.Deployment.ControlPlaneImage = digestRef
+			manifest.Deployment.RunnerImage = digestRef
+			manifest.Deployment.PostgresImage = digestRef
+			if databaseMode == "external" {
+				urlPath := filepath.Join(filepath.Dir(manifestPath), "secrets", "database-url-production")
+				if err := os.WriteFile(urlPath, []byte("postgres://secondbox:secret@database.example/secondbox?sslmode=verify-full\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
-				digestRef := "registry.example/secondbox@sha256:" + strings.Repeat("a", 64)
-				manifest.Deployment.Mode = "production"
-				manifest.Deployment.PublicBaseURL = "https://secondbox.example.com"
-				manifest.Deployment.TLSTermination = "external"
-				manifest.Deployment.ControlPlaneImage = digestRef
-				manifest.Deployment.RunnerImage = digestRef
-				manifest.Deployment.PostgresImage = digestRef
-				manifest.Deployment.ObjectStoreImage = digestRef
-				manifest.Deployment.ObjectStoreClientImage = digestRef
-				manifest.ObjectStore.Endpoint = "http://object-store:9000"
-				if databaseMode == "external" {
-					urlPath := filepath.Join(filepath.Dir(manifestPath), "secrets", "database-url-production")
-					if err := os.WriteFile(urlPath, []byte("postgres://secondbox:secret@database.example/secondbox?sslmode=verify-full\n"), 0o600); err != nil {
-						t.Fatal(err)
-					}
-					manifest.Database = Database{Mode: "external", URLFile: "secrets/database-url-production"}
+				manifest.Database = Database{Mode: "external", URLFile: "secrets/database-url-production"}
+			}
+			if databaseMode == "bundled" {
+				if _, err := resolveManifest(manifest, filepath.Dir(manifestPath)); err == nil || !strings.Contains(err.Error(), "operator-supplied signed asset catalog") {
+					t.Fatalf("development catalog in production error = %v", err)
 				}
-				if objectMode == "external" {
-					manifest.ObjectStore.Mode = "external"
-					manifest.ObjectStore.Endpoint = "https://object-store.example.com"
-					manifest.ObjectStore.BindIP = ""
-					manifest.ObjectStore.PublishedPort = nil
-					manifest.ObjectStore.ConsolePublishedPort = nil
-				}
-				if databaseMode == "bundled" && objectMode == "bundled" {
-					if _, err := resolveManifest(manifest, filepath.Dir(manifestPath)); err == nil || !strings.Contains(err.Error(), "operator-supplied signed asset catalog") {
-						t.Fatalf("development catalog in production error = %v", err)
-					}
-				}
-				productionCatalog := `{"assets":[{"artifactId":"secondbox-development-runtime","manifestDigest":"` + developmentRuntimeDigest + `","signatureKeyId":"` + strings.Repeat("d", 64) + `","architecture":"amd64","guestProtocolGeneration":1,"mandatoryGuestFeatures":[]},{"artifactId":"secondbox-development-toolchain","manifestDigest":"` + developmentToolchainDigest + `","signatureKeyId":"` + strings.Repeat("d", 64) + `","architecture":"amd64","guestProtocolGeneration":1,"mandatoryGuestFeatures":[]}]}` + "\n"
-				if err := os.WriteFile(filepath.Join(filepath.Dir(manifestPath), manifest.Deployment.SignedAssetCatalog), []byte(productionCatalog), 0o600); err != nil {
-					t.Fatal(err)
-				}
-				encoded, err := encodeManifest(manifest)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
-					t.Fatal(err)
-				}
-				resolved, err := Resolve(manifestPath)
-				if err != nil {
-					t.Fatal(err)
-				}
-				_, hasPostgres := resolved.Environment["SECONDBOX_POSTGRES_IMAGE"]
-				_, hasObject := resolved.Environment["SECONDBOX_OBJECT_STORE_IMAGE"]
-				if hasPostgres != (databaseMode == "bundled") || hasObject != (objectMode == "bundled") {
-					t.Fatalf("inactive environment leaked: postgres=%t object=%t", hasPostgres, hasObject)
-				}
-				files := strings.Join(resolved.ComposeFiles, ",")
-				if strings.Contains(files, "compose.development.yml") || strings.Contains(files, "bundled-database") != (databaseMode == "bundled") || strings.Contains(files, "bundled-object-store") != (objectMode == "bundled") {
-					t.Fatalf("production overlay selection = %#v", resolved.ComposeFiles)
-				}
-				automated, err := InitProductionFromManifest(manifestPath, filepath.Join(t.TempDir(), "production"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, err := Resolve(automated); err != nil {
-					t.Fatal(err)
-				}
-				release, err := developmentReleaseManifest()
-				if err != nil {
-					t.Fatal(err)
-				}
-				releaseBytes, err := json.Marshal(release)
-				if err != nil {
-					t.Fatal(err)
-				}
-				fromRelease, err := InitProductionFromRelease(manifestPath, filepath.Join(t.TempDir(), "release-production"), release, releaseBytes)
-				if err != nil {
-					t.Fatal(err)
-				}
-				materialized, err := ReadManifest(fromRelease)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if materialized.Deployment.ControlPlaneImage != release.ControlPlane.Reference || materialized.Deployment.RunnerImage != release.Runner.Reference || materialized.StandardResources.ArtifactManifest != "release-artifact-manifest.json" {
-					t.Fatalf("release software facts were not materialized: %#v", materialized.Deployment)
-				}
-			})
-		}
+			}
+			productionCatalog := `{"assets":[{"artifactId":"secondbox-development-runtime","manifestDigest":"` + developmentRuntimeDigest + `","signatureKeyId":"` + strings.Repeat("d", 64) + `","architecture":"amd64","guestProtocolGeneration":1,"mandatoryGuestFeatures":[]},{"artifactId":"secondbox-development-toolchain","manifestDigest":"` + developmentToolchainDigest + `","signatureKeyId":"` + strings.Repeat("d", 64) + `","architecture":"amd64","guestProtocolGeneration":1,"mandatoryGuestFeatures":[]}]}` + "\n"
+			if err := os.WriteFile(filepath.Join(filepath.Dir(manifestPath), manifest.Deployment.SignedAssetCatalog), []byte(productionCatalog), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := encodeManifest(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := writeAtomic(manifestPath, encoded, 0o600, true); err != nil {
+				t.Fatal(err)
+			}
+			resolved, err := Resolve(manifestPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, hasPostgres := resolved.Environment["SECONDBOX_POSTGRES_IMAGE"]
+			if hasPostgres != (databaseMode == "bundled") {
+				t.Fatalf("inactive environment leaked: postgres=%t", hasPostgres)
+			}
+			files := strings.Join(resolved.ComposeFiles, ",")
+			if strings.Contains(files, "compose.development.yml") || strings.Contains(files, "bundled-database") != (databaseMode == "bundled") {
+				t.Fatalf("production overlay selection = %#v", resolved.ComposeFiles)
+			}
+			automated, err := InitProductionFromManifest(manifestPath, filepath.Join(t.TempDir(), "production"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Resolve(automated); err != nil {
+				t.Fatal(err)
+			}
+			release, err := developmentReleaseManifest()
+			if err != nil {
+				t.Fatal(err)
+			}
+			releaseBytes, err := json.Marshal(release)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fromRelease, err := InitProductionFromRelease(manifestPath, filepath.Join(t.TempDir(), "release-production"), release, releaseBytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			materialized, err := ReadManifest(fromRelease)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if materialized.Deployment.ControlPlaneImage != release.ControlPlane.Reference || materialized.Deployment.RunnerImage != release.Runner.Reference || materialized.StandardResources.ArtifactManifest != "release-artifact-manifest.json" {
+				t.Fatalf("release software facts were not materialized: %#v", materialized.Deployment)
+			}
+		})
 	}
 }
 
@@ -1186,116 +1138,6 @@ func TestRunnerValidationMatchesRuntimeInvariants(t *testing.T) {
 			test.mutate(&runner)
 			if err := validateRunner("runners[0]", runner); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want substring %q", err, test.want)
-			}
-		})
-	}
-}
-
-func TestLegacyMigrationIsOneShotStrictAndPreservesTheSource(t *testing.T) {
-	manifestPath := initializedDevelopment(t)
-	resolved, err := Resolve(manifestPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	values := make(map[string]string)
-	legacyNames := legacyEnvironmentNames()
-	for name, value := range resolved.Environment {
-		values[name] = value
-	}
-	for _, definition := range OverrideRegistry() {
-		values[definition.Environment] = definition.Default
-	}
-	for name := range legacyNames {
-		if values[name] == "" {
-			values[name] = "1"
-		}
-	}
-	values["SECONDBOX_SAME_HOST_RUNNER_ENABLED"] = "false"
-	values["SECONDBOX_RUNNER_PROTOCOL_MINIMUM"] = "1"
-	values["SECONDBOX_RUNNER_PROTOCOL_MAXIMUM"] = "1"
-	values["SECONDBOX_APPLICATION_AUTHORITIES_JSON"] = `[{"id":"large-authority","token":"` + strings.Repeat("x", 70<<10) + `","tenantRef":"tenant","subjectRef":"subject","scopes":[],"profileGrants":[]}]`
-	for name := range values {
-		if !legacyNames[name] {
-			delete(values, name)
-		}
-	}
-	legacyPath := filepath.Join(t.TempDir(), "legacy.env")
-	keys := sortedKeys(values)
-	var source strings.Builder
-	for _, name := range keys {
-		source.WriteString(name + "=" + values[name] + "\n")
-	}
-	if err := os.WriteFile(legacyPath, []byte(source.String()), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadFile(legacyPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	target := filepath.Join(t.TempDir(), "migrated")
-	migrated, err := MigrateLegacyEnvironment(legacyPath, target)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Resolve(migrated); err != nil {
-		t.Fatal(err)
-	}
-	after, err := os.ReadFile(legacyPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(before, after) {
-		t.Fatal("migration modified its source")
-	}
-	if _, err := MigrateLegacyEnvironment(legacyPath, target); err == nil {
-		t.Fatal("migration replaced an existing target")
-	}
-	if len(legacyNames) != 142 {
-		t.Fatalf("legacy mapping count = %d, want 142", len(legacyNames))
-	}
-	for name, extra := range map[string]string{"unknown": "SECONDBOX_UNKNOWN=value\n", "duplicate": "SECONDBOX_DEPLOYMENT_MODE=development\n", "placeholder": ""} {
-		t.Run(name, func(t *testing.T) {
-			copyPath := filepath.Join(t.TempDir(), "legacy.env")
-			content := append([]byte{}, before...)
-			if name == "placeholder" {
-				content = []byte(strings.Replace(string(content), "SECONDBOX_PLATFORM_TOKEN="+values["SECONDBOX_PLATFORM_TOKEN"], "SECONDBOX_PLATFORM_TOKEN=REPLACE_WITH_SECRET", 1))
-			} else {
-				content = append(content, []byte(extra)...)
-			}
-			if err := os.WriteFile(copyPath, content, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := MigrateLegacyEnvironment(copyPath, filepath.Join(t.TempDir(), "target")); err == nil {
-				t.Fatal("invalid legacy environment migrated")
-			}
-		})
-	}
-	for name, testCase := range map[string]struct {
-		key   string
-		value string
-		want  string
-	}{
-		"malformed integer": {
-			key: "SECONDBOX_API_PUBLISHED_PORT", value: "not-an-integer",
-			want: `SECONDBOX_API_PUBLISHED_PORT value "not-an-integer" is not a base-10 integer`,
-		},
-		"malformed boolean": {
-			key: "SECONDBOX_OBJECT_STORE_USE_PATH_STYLE", value: "sometimes",
-			want: `SECONDBOX_OBJECT_STORE_USE_PATH_STYLE value "sometimes" is not a boolean`,
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			copyPath := filepath.Join(t.TempDir(), "legacy.env")
-			content := strings.Replace(
-				string(before), testCase.key+"="+values[testCase.key],
-				testCase.key+"="+testCase.value, 1,
-			)
-			if err := os.WriteFile(copyPath, []byte(content), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			_, err := MigrateLegacyEnvironment(copyPath, filepath.Join(t.TempDir(), "target"))
-			if err == nil || !strings.Contains(err.Error(), testCase.want) {
-				t.Fatalf("migration error = %v, want substring %q", err, testCase.want)
 			}
 		})
 	}

@@ -5,15 +5,12 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -721,34 +718,6 @@ func TestSmokeRunnerLocalLifecycleStopPaths(t *testing.T) {
 	if os.Getenv("SECONDBOX_RUNNER_QUALIFY_FIRECRACKER") != "1" {
 		t.Skip("set SECONDBOX_RUNNER_QUALIFY_FIRECRACKER=1 to qualify runner-local lifecycle stops")
 	}
-	var objectStoreRequests atomic.Int64
-	objectStoreTrap := httptest.NewServer(http.HandlerFunc(func(
-		response http.ResponseWriter,
-		_ *http.Request,
-	) {
-		objectStoreRequests.Add(1)
-		http.Error(response, "unexpected Workspace object-store request", http.StatusTeapot)
-	}))
-	defer objectStoreTrap.Close()
-	for name, value := range map[string]string{
-		"SECONDBOX_OBJECT_STORE_ENDPOINT":                  objectStoreTrap.URL,
-		"SECONDBOX_OBJECT_STORE_REGION":                    "qualification",
-		"SECONDBOX_OBJECT_STORE_BUCKET":                    "must-not-be-used",
-		"SECONDBOX_OBJECT_STORE_ROOT_USER":                 "must-not-be-used",
-		"SECONDBOX_OBJECT_STORE_ROOT_PASSWORD":             "must-not-be-used-credential",
-		"SECONDBOX_OBJECT_STORE_USE_PATH_STYLE":            "true",
-		"SECONDBOX_OBJECT_STORE_RETRY_MAX_ATTEMPTS":        "1",
-		"SECONDBOX_OBJECT_STORE_HTTP_TIMEOUT_MILLISECONDS": "1000",
-		"SECONDBOX_OBJECT_STORE_TEMP_DIRECTORY":            t.TempDir(),
-		"SECONDBOX_OBJECT_STORE_MAX_OBJECT_BYTES":          "10737418240",
-	} {
-		t.Setenv(name, value)
-	}
-	t.Cleanup(func() {
-		if got := objectStoreRequests.Load(); got != 0 {
-			t.Errorf("lifecycle stops issued %d object-store requests, want zero", got)
-		}
-	})
 	workDir := shortSmokeDir(t)
 	cfg := &config.Config{
 		FirecrackerPath:                  requiredEnv(t, "SECONDBOX_RUNNER_FIRECRACKER_PATH"),

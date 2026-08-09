@@ -180,15 +180,9 @@ fi
 
 if $test_mode; then
 	postgres_image="docker.io/library/postgres@sha256:$(printf postgres | sha256sum | awk '{print $1}')"
-	object_store_image="docker.io/rustfs/rustfs@sha256:$(printf rustfs | sha256sum | awk '{print $1}')"
-	object_store_client_image="quay.io/minio/mc@sha256:$(printf minio-mc | sha256sum | awk '{print $1}')"
 else
 	: "${SECONDBOX_RELEASE_POSTGRES_IMAGE:?release staging requires digest-pinned SECONDBOX_RELEASE_POSTGRES_IMAGE}"
-	: "${SECONDBOX_RELEASE_OBJECT_STORE_IMAGE:?release staging requires digest-pinned SECONDBOX_RELEASE_OBJECT_STORE_IMAGE}"
-	: "${SECONDBOX_RELEASE_OBJECT_STORE_CLIENT_IMAGE:?release staging requires digest-pinned SECONDBOX_RELEASE_OBJECT_STORE_CLIENT_IMAGE}"
 	postgres_image="$SECONDBOX_RELEASE_POSTGRES_IMAGE"
-	object_store_image="$SECONDBOX_RELEASE_OBJECT_STORE_IMAGE"
-	object_store_client_image="$SECONDBOX_RELEASE_OBJECT_STORE_CLIENT_IMAGE"
 fi
 
 if ! $test_mode; then
@@ -314,7 +308,7 @@ go -C "$repo_root" run ./cmd/secondbox-release-tool standard-documents "$microvm
 
 jq -n --arg version "$version" --arg commit "$source_commit" --arg ts "$typescript_name" --arg go "secondbox-${version}-go-module.tar.gz" '{schemaVersion:1,version:$version,sourceCommit:$commit,typeScriptPackage:$ts,goModuleArchive:$go}' >"$output_dir/secondbox-${version}-package-metadata.json"
 jq -n --arg version "$version" --arg commit "$source_commit" '{spdxVersion:"SPDX-2.3",dataLicense:"CC0-1.0",SPDXID:"SPDXRef-DOCUMENT",name:("SecondBox-"+$version),documentNamespace:("https://github.com/SecondStack-AI/SecondBox/releases/tag/v"+$version),creationInfo:{creators:["Organization: SecondStack AI"],comment:("deterministic source commit "+$commit)},packages:[{name:"SecondBox",SPDXID:"SPDXRef-Package-SecondBox",versionInfo:$version,downloadLocation:("git+https://github.com/SecondStack-AI/SecondBox.git@"+$commit),filesAnalyzed:false}]}' >"$output_dir/secondbox-${version}.spdx.json"
-jq -n --argjson candidate "$candidate_mode" --arg version "$version" --arg commit "$source_commit" --arg control "$control_plane_digest" --arg runner "$runner_digest" --arg installerTools "$installer_tools_digest" --arg postgresImage "$postgres_image" --arg objectStoreImage "$object_store_image" --arg objectStoreClientImage "$object_store_client_image" --arg microImage "$microvm_image_digest" --arg microManifest "$microvm_manifest_digest" --arg fingerprint "$microvm_fingerprint" --argjson runtime "$microvm_runtime_bundle" --argjson toolchain "$microvm_toolchain_bundle" '{candidate:$candidate,version:$version,sourceCommit:$commit,controlPlaneDigest:$control,runnerDigest:$runner,installerToolsDigest:$installerTools,postgresImage:$postgresImage,objectStoreImage:$objectStoreImage,objectStoreClientImage:$objectStoreClientImage,microvmImageDigest:$microImage,microvmManifestDigest:$microManifest,microvmSigningKeyFingerprint:$fingerprint,microvmRuntimeBundle:$runtime,microvmToolchainBundle:$toolchain}' >"$temporary/candidate-input.json"
+jq -n --argjson candidate "$candidate_mode" --arg version "$version" --arg commit "$source_commit" --arg control "$control_plane_digest" --arg runner "$runner_digest" --arg installerTools "$installer_tools_digest" --arg postgresImage "$postgres_image" --arg microImage "$microvm_image_digest" --arg microManifest "$microvm_manifest_digest" --arg fingerprint "$microvm_fingerprint" --argjson runtime "$microvm_runtime_bundle" --argjson toolchain "$microvm_toolchain_bundle" '{candidate:$candidate,version:$version,sourceCommit:$commit,controlPlaneDigest:$control,runnerDigest:$runner,installerToolsDigest:$installerTools,postgresImage:$postgresImage,microvmImageDigest:$microImage,microvmManifestDigest:$microManifest,microvmSigningKeyFingerprint:$fingerprint,microvmRuntimeBundle:$runtime,microvmToolchainBundle:$toolchain}' >"$temporary/candidate-input.json"
 go -C "$repo_root" run ./cmd/secondbox-release-tool manifest "$temporary/candidate-input.json" "$output_dir"
 artifact_manifest="$output_dir/secondbox-${version}-artifact-manifest.json"
 installer_qualification_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool installer-qualification-subject "$artifact_manifest")"

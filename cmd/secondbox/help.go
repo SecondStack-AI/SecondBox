@@ -15,7 +15,7 @@ func secondboxHelp() cliui.Help {
 			{Key: "shell | sandbox shell", Value: "attach an interactive Sandbox terminal"},
 			{Key: "sandboxes | snapshots", Value: "manage durable Sandboxes and Snapshots"},
 			{Key: "profiles | runner-pools | runners", Value: "inspect and manage compute configuration"},
-			{Key: "files | artifacts", Value: "transfer Sandbox files and immutable Artifacts"},
+			{Key: "files", Value: "transfer Sandbox files"},
 			{Key: "leases | ports", Value: "manage generation Leases and port sessions"},
 			{Key: "logs | timings | diagnostics", Value: "inspect bounded operational evidence"},
 			{Key: "resources", Value: "check or apply explicit standard resources"},

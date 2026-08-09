@@ -38,7 +38,7 @@ func init() {
 		}
 		kind := cliui.OutputMachineJSON
 		switch command {
-		case "files read", "artifacts download":
+		case "files read":
 			kind = cliui.OutputRawBytes
 		case "exec stream":
 			kind = cliui.OutputGuestStream

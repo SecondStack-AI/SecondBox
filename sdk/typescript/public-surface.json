@@ -15,29 +15,6 @@
     ],
     "optional": []
   },
-  "Artifact": {
-    "required": [
-      "createdAt",
-      "expiresAt",
-      "generation",
-      "id",
-      "mediaType",
-      "metadata",
-      "name",
-      "sandboxId",
-      "sha256",
-      "sizeBytes"
-    ],
-    "optional": []
-  },
-  "ArtifactPage": {
-    "required": [
-      "items"
-    ],
-    "optional": [
-      "nextCursor"
-    ]
-  },
   "BootStageTiming": {
     "required": [
       "cumulativeMilliseconds",
@@ -553,7 +530,6 @@
   },
   "RetentionPolicy": {
     "required": [
-      "artifactRetentionSeconds",
       "snapshotLimit",
       "snapshotRetentionSeconds"
     ],
@@ -837,16 +813,6 @@
   "UpdateSandboxMetadataRequest": {
     "required": [
       "metadata"
-    ],
-    "optional": []
-  },
-  "UploadArtifactRequest": {
-    "required": [
-      "content",
-      "mediaType",
-      "metadata",
-      "name",
-      "sha256"
     ],
     "optional": []
   },

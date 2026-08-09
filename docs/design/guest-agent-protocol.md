@@ -45,6 +45,6 @@ feature.
 
 Heartbeat reports guest liveness and protocol health. Useful-activity events separately identify active exec, filesystem transfer, PTY, and port sessions plus explicit touch acknowledgements. Health traffic and read-only polling do not update idle time.
 
-The guest never receives object-store, database, runner enrollment, application API-key, or model-provider credentials. SecondBox v1 does not provide a general secret-injection protocol.
+The guest never receives database, runner enrollment, application API-key, or model-provider credentials. SecondBox v1 does not provide a general secret-injection protocol.
 
 See [API conventions](api-conventions.md), [Runner protocol](runner-protocol.md), and [Workspace durability](workspace-durability.md).

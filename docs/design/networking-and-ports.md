@@ -29,7 +29,7 @@ There is no unrestricted resolver fallback. A DNS outage fails the attempted con
 
 ## Runner and control-plane isolation
 
-Guest traffic cannot reach Runner listeners, the Runner's control-plane connection, KVM management, object-store credentials, host services, or other Sandbox interfaces. Per-TAP firewall and per-assignment DNS pin state prevent cross-Sandbox traffic. Cleanup cancels pin expiry work and removes nftables and TAP state before assignment release; readiness fails if nftables or the UDP/TCP DNS listener is unavailable. A later atomic policy update failure is reported to the Manager and terminates the affected instance because continued enforcement cannot be proven.
+Guest traffic cannot reach Runner listeners, the Runner's control-plane connection, KVM management, host services, or other Sandbox interfaces. Per-TAP firewall and per-assignment DNS pin state prevent cross-Sandbox traffic. Cleanup cancels pin expiry work and removes nftables and TAP state before assignment release; readiness fails if nftables or the UDP/TCP DNS listener is unavailable. A later atomic policy update failure is reported to the Manager and terminates the affected instance because continued enforcement cannot be proven.
 
 ## Exposed ports
 

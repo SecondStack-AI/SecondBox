@@ -254,7 +254,7 @@ func statfsExistingAncestor(path string) (unix.Statfs_t, error) {
 }
 
 func filesystemImageBackingRequired(plan InstallPlan, receipt InstallReceipt, imageExists bool) int64 {
-	required := MinimumBackingReserveBytes + plan.Release.ExpectedDownloadBytes + MinimumObjectStoreBytes
+	required := MinimumBackingReserveBytes + plan.Release.ExpectedDownloadBytes
 	_, recorded := receiptResource(receipt, "filesystem-image")
 	if !imageExists || (!recorded && !slices.Contains(receipt.PendingResourceIDs, "filesystem-image")) {
 		required += plan.Storage.ImageSizeBytes

@@ -16,7 +16,7 @@ Errors use `application/problem+json` with stable `type`, `title`, `status`, `co
 
 ## Resource surface
 
-The HTTP resources cover Profiles and revisions, RunnerPools, Runners, Sandboxes, Operations, Leases, exec sessions, terminal sessions, files, snapshots, artifacts, and port sessions. Runner projections never appear inside Sandbox responses.
+The HTTP resources cover Profiles and revisions, RunnerPools, Runners, Sandboxes, Operations, Leases, exec sessions, terminal sessions, files, snapshots, and port sessions. Runner projections never appear inside Sandbox responses.
 
 Snapshot creation is a lifecycle-scoped, revision-guarded, idempotent reflink of the stopped Sandbox's current local Workspace image. Snapshot create, delete, and restore return durable Operations; list and get use read scope. Snapshot responses contain logical size, creation time, optional expiry, lifecycle state, and bounded metadata. They contain no Workspace-image checksum, home Runner, host path, provider reference, or storage key.
 
@@ -60,11 +60,9 @@ PTY creation pins the current tenant, subject, Sandbox generation, ready Assignm
 
 A detachable disconnect starts the ProfileRevision's pinned `terminalDetachSeconds` interval; reconnect replaces the attachment identity without replacing the Terminal session or its runner operation. Expiry of that interval, release or expiry of the bound Lease, generation fencing, deadline, and explicit cancellation all enqueue a priority guest cancel and remain `closing` until the current-fence PTY terminal acknowledges process exit. A non-detachable disconnect takes the same cancellation path immediately. No Terminal action stops or deletes the Sandbox.
 
-## Files, artifacts, and ports
+## Files and ports
 
 Filesystem operations are binary-safe read/write, UTF-8 convenience read/write, stat, direct-child list, exists, mkdir, and remove. Paths are workspace-relative protocol strings; the guest resolves them beneath a descriptor-pinned root and rejects traversal or symlink replacement. Transfer bodies are bounded streams with checksums.
-
-Artifacts use separate upload, list, metadata, download, and delete resources. Their retention and authorization do not depend on a mutable workspace path.
 
 An exposed-port session names only a profile-approved guest port and protocol and requires the current generation and Lease. The control plane never discloses a runner address except to an authority holding the direct data-plane scope, for one admitted session, with the expected certificate SPKI SHA-256 pin. Proxied sessions return an expiring control-plane WebSocket endpoint. Both transports use a one-time endpoint credential; public payloads are binary bytes, and disconnect closes the session.
 
