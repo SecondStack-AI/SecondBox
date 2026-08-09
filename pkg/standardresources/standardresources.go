@@ -18,6 +18,11 @@ const (
 	ArchitectureAMD64 = "amd64"
 	PoolAMD64         = "standard-amd64"
 
+	DurableCodingCPUMillis            = int64(4000)
+	DurableCodingMemoryBytes          = int64(8 << 30)
+	DurableCodingWorkspaceBytes       = int64(50 << 30)
+	DurableCodingConcurrentOperations = int64(16)
+
 	AgentGateway    = "agent-gateway.secondbox.internal"
 	PlatformGateway = "platform-gateway.secondbox.internal"
 
@@ -189,7 +194,7 @@ func agentSpec(pool, runtimeDigest, toolchainDigest string, maximumDeadlineMilli
 func codingSpec(pool, runtimeDigest, toolchainDigest string) secondboxclient.ProfileRevisionSpec {
 	return secondboxclient.ProfileRevisionSpec{
 		Pool: pool, Architecture: ArchitectureAMD64, RuntimeBundleDigest: runtimeDigest, ToolchainBundleDigest: toolchainDigest,
-		Resources: secondboxclient.ResourcePolicy{CPUMillis: 4000, MemoryBytes: 8 << 30, WorkspaceBytes: 50 << 30, ProcessLimit: 512, ConcurrentOperations: 16},
+		Resources: secondboxclient.ResourcePolicy{CPUMillis: DurableCodingCPUMillis, MemoryBytes: DurableCodingMemoryBytes, WorkspaceBytes: DurableCodingWorkspaceBytes, ProcessLimit: 512, ConcurrentOperations: DurableCodingConcurrentOperations},
 		Startup:   secondboxclient.StartupPolicy{Mode: secondboxclient.StartupModeColdBoot},
 		Lifecycle: secondboxclient.LifecyclePolicy{InitialState: secondboxclient.SandboxDesiredStateRunning, DrainGraceSeconds: 120, IdleSeconds: 28800, MaximumDurationSeconds: 604800, LeaseSeconds: 300},
 		Retention: secondboxclient.RetentionPolicy{SnapshotLimit: 64, SnapshotRetentionSeconds: 2592000, ArtifactRetentionSeconds: 2592000},

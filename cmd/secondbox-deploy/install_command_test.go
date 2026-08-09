@@ -86,7 +86,7 @@ func TestGuidedInstallOffersAndPersistsExistingReflinkFilesystem(t *testing.T) {
 	usePublishedGuidedReleaseBuild(t)
 	home := t.TempDir()
 	facts := guidedFacts()
-	facts.Devices = []install.DeviceFact{{Path: "/dev/sdb", Identity: "8:16", Filesystem: "xfs", SizeBytes: 200 << 30, AvailableBytes: 160 << 30, Mountpoint: "/srv/secondbox-dedicated"}}
+	facts.Devices = []install.DeviceFact{{Path: "/dev/sdb", Identity: "8:16", Filesystem: "xfs", SizeBytes: 200 << 30, AvailableBytes: 160 << 30, Mountpoint: "/srv/secondbox-dedicated", JailerCompatible: true}}
 	capabilities := cliui.ForWriter(&bytes.Buffer{}, &bytes.Buffer{})
 	capabilities.Accessible = true
 	renderer := cliui.Renderer{Output: &bytes.Buffer{}, Diagnostic: &bytes.Buffer{}, Capabilities: capabilities, OutputMode: cliui.OutputPlain, ColorMode: cliui.ColorNever}
@@ -253,7 +253,7 @@ func TestPrivateHostApplyGrammarIsStrictAndAbsentFromHelp(t *testing.T) {
 	var output bytes.Buffer
 	renderer := cliui.Renderer{Output: &output, Diagnostic: &output, Capabilities: cliui.ForWriter(&output, &output), OutputMode: cliui.OutputPlain, ColorMode: cliui.ColorNever}
 	helpErr := usage(renderer)
-	if strings.Contains(helpErr.Error(), "_install-host-apply") || strings.Contains(helpErr.Error(), "_install-host-purge") {
+	if strings.Contains(helpErr.Error(), "_install-host-apply") || strings.Contains(helpErr.Error(), "_install-host-purge") || strings.Contains(helpErr.Error(), "_install-host-purge-validate") {
 		t.Fatal("private installer command leaked into ordinary help")
 	}
 	for _, arguments := range [][]string{nil, {"one"}, {"one", "two", "three"}} {
@@ -271,6 +271,12 @@ func TestPrivateHostApplyGrammarIsStrictAndAbsentFromHelp(t *testing.T) {
 		err := runPrivateHostPurge(context.Background(), arguments)
 		if err == nil || !strings.HasPrefix(err.Error(), "SecondBox installer private host purge:") {
 			t.Fatalf("purge arguments %#v error = %v", arguments, err)
+		}
+	}
+	for _, arguments := range [][]string{nil, {"one"}, {"one", "two", "three"}} {
+		err := runPrivateHostPurgeValidate(arguments)
+		if err == nil || !strings.HasPrefix(err.Error(), "SecondBox installer private host purge validation:") {
+			t.Fatalf("purge validation arguments %#v error = %v", arguments, err)
 		}
 	}
 }

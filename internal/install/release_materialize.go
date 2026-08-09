@@ -149,7 +149,7 @@ func MaterializeRelease(ctx context.Context, plan InstallPlan, receipt InstallRe
 		if err := appendAndPersistResource(&receipt, resourceFromPath(binaryDirectoryRoot, StageAssetsMaterialized), dependencies.PersistReceipt); err != nil {
 			return receipt, VerifiedArtifact{}, err
 		}
-	} else if err := validateMaterializedPath(binaryDirectoryRoot); err != nil {
+	} else if err := validateOwnedDirectoryBoundary(binaryDirectoryRoot); err != nil {
 		return failMaterialization(receipt, StageAssetsMaterialized, FailureNeedsAction, dependencies, err)
 	}
 	binaryDirectory, found := plannedPathByName(plan.Paths, "binary-directory")
@@ -162,7 +162,7 @@ func MaterializeRelease(ctx context.Context, plan InstallPlan, receipt InstallRe
 		if err := appendAndPersistResource(&receipt, resourceFromPath(binaryDirectory, StageAssetsMaterialized), dependencies.PersistReceipt); err != nil {
 			return receipt, VerifiedArtifact{}, err
 		}
-	} else if err := validateMaterializedPath(binaryDirectory); err != nil {
+	} else if err := validateOwnedDirectoryBoundary(binaryDirectory); err != nil {
 		return failMaterialization(receipt, StageAssetsMaterialized, FailureNeedsAction, dependencies, err)
 	}
 	for _, name := range []string{"secondbox", "secondbox-deploy"} {
@@ -346,8 +346,9 @@ func (executor SystemReleaseMaterializer) PullImage(ctx context.Context, referen
 }
 
 func (executor SystemReleaseMaterializer) ExtractMicroVMImage(ctx context.Context, reference, target string) (resultErr error) {
-	create := exec.CommandContext(ctx, "docker", "create", reference)
+	create := exec.CommandContext(ctx, "docker", "create", "--entrypoint", "/bin/true", reference)
 	create.Env = materializerEnvironment()
+	create.Stderr = executor.Diagnostic
 	created, err := create.Output()
 	if err != nil {
 		return fmt.Errorf("docker create immutable artifact image: %w", err)

@@ -11,8 +11,10 @@ import (
 )
 
 // ValidateRecordedResources treats the accepted plan and receipt as evidence,
-// not deletion or replay authority. Every still-present resource must retain
-// its exact path, kind, owner, mode, and recorded content digest.
+// not deletion or replay authority. The privileged host-apply helper validates
+// root-only resources before this unprivileged validation runs; every other
+// still-present resource must retain its exact path, kind, owner, mode, and
+// recorded content digest.
 func ValidateRecordedResources(plan InstallPlan, receipt InstallReceipt) error {
 	digest, err := PlanDigest(plan)
 	if err != nil {
@@ -33,8 +35,14 @@ func ValidateRecordedResources(plan InstallPlan, receipt InstallReceipt) error {
 			continue
 		}
 		expected, found := planned[resource.ID]
-		if !found || resource.Path != expected.Path || resource.Kind != expected.Kind || resource.Mode != expected.Mode || resource.OwnerUID != expected.OwnerUID || resource.OwnerGID != expected.OwnerGID {
+		if !found || resource.Path != expected.Path || resource.Kind != expected.Kind || resource.Class != expected.Class || resource.Mode != expected.Mode || resource.OwnerUID != expected.OwnerUID || resource.OwnerGID != expected.OwnerGID {
 			return installerError("recorded resource differs from accepted plan: "+resource.ID, nil)
+		}
+		if expected.RequiresSudo {
+			if resource.Stage != StageHostApply {
+				return installerError("recorded privileged resource has an invalid stage: "+resource.ID, nil)
+			}
+			continue
 		}
 		info, err := os.Lstat(resource.Path)
 		if err != nil {
@@ -49,7 +57,8 @@ func ValidateRecordedResources(plan InstallPlan, receipt InstallReceipt) error {
 		}
 		if resource.ID == "workspace" {
 			hostApply, found := completedStage(receipt, StageHostApply)
-			if !found || hostApply.Evidence["workspaceDeviceIdentity"] == "" || filesystemDeviceIdentity(stat) != hostApply.Evidence["workspaceDeviceIdentity"] {
+			identity, identityErr := workspaceFilesystemIdentity(resource.Path)
+			if identityErr != nil || !found || hostApply.Evidence["workspaceDeviceIdentity"] == "" || identity != hostApply.Evidence["workspaceDeviceIdentity"] {
 				return installerError("recorded Workspace device identity changed", nil)
 			}
 		}

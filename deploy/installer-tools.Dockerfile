@@ -13,4 +13,4 @@ LABEL org.opencontainers.image.source="https://github.com/SecondStack-AI/SecondB
       org.opencontainers.image.revision="${SOURCE_COMMIT}"
 
 USER 0:0
-ENTRYPOINT ["/usr/bin/mkfs.btrfs"]
+ENTRYPOINT ["/usr/sbin/mkfs.btrfs"]

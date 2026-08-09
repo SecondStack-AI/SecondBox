@@ -152,7 +152,7 @@ func readInstallerSecret(path string, ownerUID int64) (string, error) {
 }
 
 func ensureOwnedDirectory(planned PlannedPath) (bool, error) {
-	info, err := os.Lstat(planned.Path)
+	_, err := os.Lstat(planned.Path)
 	if errors.Is(err, os.ErrNotExist) {
 		if err := os.Mkdir(planned.Path, os.FileMode(planned.Mode)); err != nil {
 			return false, installerError("create "+planned.Name, err)
@@ -162,14 +162,28 @@ func ensureOwnedDirectory(planned PlannedPath) (bool, error) {
 		}
 		return true, nil
 	}
+	return false, validateOwnedDirectoryBoundary(planned)
+}
+
+// validateOwnedDirectoryBoundary admits an invoking-user directory that
+// predates the installation without changing or claiming it. The plan's mode
+// remains the create-time mode for a missing directory; an existing parent may
+// be more restrictive, but must remain owner-accessible and non-writable by
+// group or other users.
+func validateOwnedDirectoryBoundary(planned PlannedPath) error {
+	info, err := os.Lstat(planned.Path)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return false, installerError(planned.Name+" must be an existing non-symbolic-link directory", err)
+		return installerError(planned.Name+" must be an existing non-symbolic-link directory", err)
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || int64(stat.Uid) != planned.OwnerUID || int64(stat.Gid) != planned.OwnerGID {
-		return false, installerError(planned.Name+" ownership differs from the accepted plan", nil)
+		return installerError(planned.Name+" ownership differs from the accepted plan", nil)
 	}
-	return false, nil
+	mode := info.Mode().Perm()
+	if mode&0o700 != 0o700 || mode&0o022 != 0 {
+		return installerError(planned.Name+" permissions do not form a safe invoking-user directory boundary", nil)
+	}
+	return nil
 }
 
 func writePrivateCreateOnly(path string, content []byte, mode os.FileMode) error {

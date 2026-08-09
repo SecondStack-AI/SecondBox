@@ -53,3 +53,18 @@ func TestLoginCLIRecordsDigestForPurgeFence(t *testing.T) {
 		t.Fatalf("CLI configuration deletion fence = %#v", resource)
 	}
 }
+
+func TestEnsureOwnedDirectoryRejectsWritableExistingBoundary(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "existing")
+	if err := os.Mkdir(path, 0o775); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o775); err != nil {
+		t.Fatal(err)
+	}
+	planned := plannedPath("existing", path, PathUserDeployment, ResourceDirectory, 0o755, int64(os.Getuid()), int64(os.Getgid()), false, true)
+	if _, err := ensureOwnedDirectory(planned); err == nil || !strings.Contains(err.Error(), "safe invoking-user directory boundary") {
+		t.Fatalf("unsafe existing directory error = %v", err)
+	}
+}

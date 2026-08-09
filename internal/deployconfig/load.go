@@ -37,6 +37,11 @@ import (
 // deployment.compose_project_name deploys under.
 const DefaultComposeProjectName = "secondbox"
 
+const (
+	linuxUnixSocketPathLimit      = 108
+	maxFirecrackerInstanceIDBytes = 42
+)
+
 var (
 	artifactKeyPattern    = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	opaqueRunnerIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
@@ -75,13 +80,26 @@ func ReadManifest(path string) (ManifestV1, error) {
 // Resolve validates and resolves a manifest without consulting ambient process
 // environment. Relative source references are anchored to the manifest.
 func Resolve(path string) (ResolvedDeployment, error) {
+	return resolvePath(path, true)
+}
+
+// ResolveForAcceptedInstaller resolves an installer-owned manifest after the
+// private host-apply helper has revalidated the accepted plan and its recorded
+// root-owned paths. It retains every manifest, secret, trust, and environment
+// check while avoiding a second unprivileged traversal of those root-only
+// paths.
+func ResolveForAcceptedInstaller(path string) (ResolvedDeployment, error) {
+	return resolvePath(path, false)
+}
+
+func resolvePath(path string, validateSameHost bool) (ResolvedDeployment, error) {
 	manifest, err := ReadManifest(path)
 	if err != nil {
 		return ResolvedDeployment{}, err
 	}
 	absolute, _ := filepath.Abs(path)
 	base := filepath.Dir(absolute)
-	return resolveManifest(manifest, base)
+	return resolveManifestWithOptions(manifest, base, validateSameHost)
 }
 
 func resolveManifest(manifest ManifestV1, base string) (ResolvedDeployment, error) {
@@ -701,6 +719,11 @@ func validateRunner(prefix string, r Runner) error {
 			return manifestError(prefix+"."+name+" must be an absolute Runner-host path", nil)
 		}
 	}
+	maximumInstanceID := strings.Repeat("i", maxFirecrackerInstanceIDBytes)
+	maximumSocketPath := filepath.Join(r.FirecrackerJailRoot, filepath.Base(r.FirecrackerPath), maximumInstanceID, "root", "firecracker.sock")
+	if len(maximumSocketPath) >= linuxUnixSocketPathLimit {
+		return manifestError(fmt.Sprintf("%s.firecracker_jail_root must keep the maximum Firecracker API socket path below %d bytes; got %d", prefix, linuxUnixSocketPathLimit, len(maximumSocketPath)), nil)
+	}
 	for name, value := range map[string]string{
 		"identity_host_directory":  r.IdentityHostDirectory,
 		"artifact_host_directory":  r.ArtifactHostDirectory,
@@ -720,6 +743,12 @@ func validateRunner(prefix string, r Runner) error {
 		if r.IdentityDirectory != "/run/secondbox-runner-identity" {
 			return manifestError(prefix+".identity_directory must be /run/secondbox-runner-identity for same-host Compose placement", nil)
 		}
+		if r.WorkspaceHostDirectory != filepath.Join(r.StateHostDirectory, "workspaces") {
+			return manifestError(prefix+".workspace_host_directory must be the workspaces child of state_host_directory for same-host Compose placement", nil)
+		}
+		if r.WorkspaceRoot != "/var/lib/secondbox-runner/workspaces" {
+			return manifestError(prefix+".workspace_root must be /var/lib/secondbox-runner/workspaces for same-host Compose placement", nil)
+		}
 		for name, value := range map[string]string{
 			"firecracker_kernel_path":       r.FirecrackerKernelPath,
 			"firecracker_rootfs_path":       r.FirecrackerRootFSPath,
@@ -733,15 +762,17 @@ func validateRunner(prefix string, r Runner) error {
 		for name, value := range map[string]string{
 			"log_path":                        r.LogPath,
 			"log_directory":                   r.LogDirectory,
-			"firecracker_jail_root":           r.FirecrackerJailRoot,
 			"firecracker_run_directory":       r.FirecrackerRunDirectory,
 			"firecracker_log_directory":       r.FirecrackerLogDirectory,
 			"snapshot_template_cache_root":    r.SnapshotTemplateCacheRoot,
 			"sandbox_network_state_directory": r.SandboxNetworkStateDir,
 		} {
-			if !pathWithin("/var/lib/secondbox-runner", value) {
-				return manifestError(prefix+"."+name+" must be within /var/lib/secondbox-runner for same-host Compose placement", nil)
+			if !pathWithin("/var/lib/secondbox-runner/state", value) {
+				return manifestError(prefix+"."+name+" must be within /var/lib/secondbox-runner/state for same-host Compose placement", nil)
 			}
+		}
+		if !pathWithin("/var/lib/secondbox-runner", r.FirecrackerJailRoot) || pathWithin(r.WorkspaceRoot, r.FirecrackerJailRoot) {
+			return manifestError(prefix+".firecracker_jail_root must be within /var/lib/secondbox-runner and outside its workspaces child for same-host Compose placement", nil)
 		}
 	}
 	for name, value := range map[string]*int64{"firecracker_jailer_uid_start": r.FirecrackerJailerUIDStart, "firecracker_jailer_uid_count": r.FirecrackerJailerUIDCount, "firecracker_jailer_gid": r.FirecrackerJailerGID, "firecracker_cgroup_version": r.FirecrackerCgroupVersion, "storage_pressure_recovery_percent": r.StorageRecoveryPercent, "storage_pressure_warning_percent": r.StorageWarningPercent, "storage_pressure_admission_deny_percent": r.StorageAdmissionDenyPercent, "sandbox_max_vcpus": r.SandboxMaxVCPUs, "sandbox_max_memory_mib": r.SandboxMaxMemoryMiB, "sandbox_max_disk_mib": r.SandboxMaxDiskMiB, "sandbox_memory_budget_mib": r.SandboxMemoryBudgetMiB, "network_policy_max_dns_pins": r.NetworkPolicyMaxDNSPins, "max_concurrent_per_sandbox": r.MaxConcurrentPerSandbox, "max_concurrent_global": r.MaxConcurrentGlobal, "max_concurrent_starts": r.MaxConcurrentStarts, "max_concurrent_workspace_creates": r.MaxConcurrentWorkspaceCreates, "max_concurrent_operations_global": r.MaxConcurrentOperationsGlobal, "file_transfer_max_bytes": r.FileTransferMaxBytes, "guest_control_vsock_port": r.GuestControlVSockPort, "guest_protocol_vsock_port": r.GuestProtocolVSockPort} {

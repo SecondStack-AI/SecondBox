@@ -90,12 +90,13 @@ type Finding struct {
 	Remedy  string       `json:"remedy,omitempty"`
 }
 type DeviceFact struct {
-	Path           string `json:"path"`
-	Identity       string `json:"identity"`
-	Filesystem     string `json:"filesystem,omitempty"`
-	SizeBytes      int64  `json:"sizeBytes"`
-	AvailableBytes int64  `json:"availableBytes"`
-	Mountpoint     string `json:"mountpoint,omitempty"`
+	Path             string `json:"path"`
+	Identity         string `json:"identity"`
+	Filesystem       string `json:"filesystem,omitempty"`
+	SizeBytes        int64  `json:"sizeBytes"`
+	AvailableBytes   int64  `json:"availableBytes"`
+	Mountpoint       string `json:"mountpoint,omitempty"`
+	JailerCompatible bool   `json:"jailerCompatible"`
 }
 type PortFact struct {
 	Address  string `json:"address"`
@@ -177,6 +178,9 @@ type CapacityPlan struct {
 	StoragePressurePercent int64            `json:"storagePressurePercent"`
 	SubjectQuotas          map[string]int64 `json:"subjectQuotas"`
 }
+type ComputePlan struct {
+	FirecrackerCPUTemplate string `json:"firecrackerCpuTemplate"`
+}
 type NetworkPlan struct {
 	APIAddress                string            `json:"apiAddress"`
 	RunnerAddress             string            `json:"runnerAddress"`
@@ -215,6 +219,7 @@ type InstallPlan struct {
 	Release                      ReleasePlan    `json:"release"`
 	Storage                      StoragePlan    `json:"storage"`
 	Capacity                     CapacityPlan   `json:"capacity"`
+	Compute                      ComputePlan    `json:"compute"`
 	Network                      NetworkPlan    `json:"network"`
 	CLI                          CLIPlan        `json:"cli"`
 	Paths                        []PlannedPath  `json:"paths"`

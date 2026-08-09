@@ -40,8 +40,11 @@ func TestComposeSeparatesOptionalPrivilegedRunnerFromControlPlane(t *testing.T) 
 			t.Errorf("same-host Runner overlay missing %q", required)
 		}
 	}
-	if count := strings.Count(runner, "create_host_path: false"); count != 4 {
-		t.Errorf("same-host Runner overlay disables host path creation for %d of 4 operator-owned binds", count)
+	if count := strings.Count(runner, "create_host_path: false"); count != 3 {
+		t.Errorf("same-host Runner overlay disables host path creation for %d of 3 operator-owned binds", count)
+	}
+	if strings.Contains(runner, "source: ${SECONDBOX_RUNNER_WORKSPACE_HOST_DIR") {
+		t.Error("same-host Runner overlay must not create a nested Workspace bind inside the Runner storage bind")
 	}
 	controlPlane := strings.Split(strings.Split(base, "  control-plane:")[1], "\n  runner-pki-init:")[0]
 	for _, forbidden := range []string{"privileged: true", "/dev/kvm", "/dev/net/tun", "/sys/fs/cgroup"} {
@@ -93,6 +96,21 @@ func TestDockerBuildContextExcludesLocalSecondBoxState(t *testing.T) {
 	dockerignore := readRepositoryFile(t, ".dockerignore")
 	if !strings.Contains(dockerignore, "\n.secondbox\n") {
 		t.Fatal(".dockerignore must exclude local .secondbox operator and qualification state")
+	}
+}
+
+func TestInstallerToolsImageExecutesPackagedBtrfsFormatter(t *testing.T) {
+	dockerfile := readRepositoryFile(t, "deploy/installer-tools.Dockerfile")
+	for _, required := range []string{
+		"apt-get install -y --no-install-recommends btrfs-progs",
+		`ENTRYPOINT ["/usr/sbin/mkfs.btrfs"]`,
+	} {
+		if !strings.Contains(dockerfile, required) {
+			t.Errorf("installer-tools image must contain %q", required)
+		}
+	}
+	if strings.Contains(dockerfile, `ENTRYPOINT ["/usr/bin/mkfs.btrfs"]`) {
+		t.Fatal("installer-tools image must use the btrfs-progs executable path shipped by Debian")
 	}
 }
 
@@ -165,17 +183,15 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 	driver := readRepositoryFile(t, "scripts/installer-qualification-driver")
 	for _, required := range []string{
 		"qemu:///system",
-		`net-create "$resource_root/network.xml"`,
 		"--cpu host-passthrough",
 		"run_guest btrfs_image",
 		"run_guest existing_reflink_filesystem",
 		`destroy "$domain"`,
 		`undefine "$domain"`,
-		`net-destroy "$network"`,
-		"select-installer-qualification-subnet",
 		"cleanup_success",
 		`mktemp -d "$existing_workspace_root/secondbox-installer-qualification-`,
 		`chmod 0700 "$guest_root"`,
+		`cp --reflink=auto -- "$base_image" "$qualification_base_image"`,
 		`setfacl -m "u:${account}:rw-"`,
 		`[modprobe, btrfs]`,
 		"repository_base_image_sha256",
@@ -183,25 +199,20 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 		"candidateManifestDigest",
 		"local mode domain guest_root",
 		`mode="$1"`,
+		`cloud-localds --network-config "$guest_root/network-config"`,
+		`--network "user,model=virtio,mac=$guest_mac"`,
+		"allocate_loopback_port",
+		`hostfwd_add hostnet0 tcp:127.0.0.1:`,
+		`TCP\[HOST_FORWARD\]`,
+		`--serial "pty,log.file=$console_log,log.append=on"`,
+		`tail -n 120 -- "$console_log"`,
+		"report_qualification_failure",
 	} {
 		if !strings.Contains(driver, required) {
 			t.Errorf("repository qualification driver lacks %q", required)
 		}
 	}
-	allocator := filepath.Join(repositoryRootForDeploymentPolicy(t), "scripts/select-installer-qualification-subnet")
-	command := exec.Command(allocator, "192.168.240.0/20")
-	selected, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("select subnet around occupied former allocation window: %v\n%s", err, selected)
-	}
-	if got := strings.TrimSpace(string(selected)); got != "192.168.0.0/24" {
-		t.Fatalf("selected subnet = %q, want first free private /24", got)
-	}
-	command = exec.Command(allocator, "192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8")
-	if selected, err = command.CombinedOutput(); err == nil || !strings.Contains(string(selected), "no isolated RFC1918 /24 remains") {
-		t.Fatalf("exhausted subnet selection = %v, %q", err, selected)
-	}
-	for _, forbidden := range []string{"net-start default", "net-destroy default", "destroy --all", "undefine --all"} {
+	for _, forbidden := range []string{"net-create", "net-start", "net-destroy", `network=$network`, "destroy --all", "undefine --all"} {
 		if strings.Contains(driver, forbidden) {
 			t.Errorf("repository qualification driver contains unsafe libvirt operation %q", forbidden)
 		}
@@ -214,12 +225,22 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 		"qualification-$mode",
 		"docker.io/library/registry@sha256:",
 		"hello after reboot",
+		`--path "sandboxId=$sandbox_id"`,
+		".microvm.imageReference",
 		"purge accepted an unrecorded nested mount",
 		"resume accepted a replacement filesystem",
+		`sudo cp --reflink=always -- "$isolation/source" "$isolation/copy"`,
+		`sudo cat -- "$isolation/source"`,
+		`workspaceId:.workspace.id`,
+		`workspace_generation_after == generation_after`,
+		"report_qualified_guest_failure",
 	} {
 		if !strings.Contains(guest, required) {
 			t.Errorf("qualified guest executor lacks %q", required)
 		}
+	}
+	if strings.Contains(guest, ".microVM.imageReference") {
+		t.Error("qualified guest reads the microVM image from a noncanonical manifest field")
 	}
 }
 

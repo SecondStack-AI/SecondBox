@@ -22,6 +22,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/install"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
+	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
 )
 
 type installResumeDependencies struct {
@@ -71,17 +72,13 @@ func systemInstallResumeDependencies(renderer cliui.Renderer) installResumeDepen
 			return deployconfig.InitSingleHostFromReleaseOrValidate(plan, verified.Manifest, verified.ManifestBytes, artifact)
 		},
 		Enroll: func(result deployconfig.SingleHostInstallResult) error {
-			if err := deployconfig.RunnerInitOrValidate(result.ManifestPath, result.RunnerID, result.RunnerIdentityDirectory); err != nil {
-				return err
-			}
-			_, err := deployconfig.Resolve(result.ManifestPath)
-			return err
+			return deployconfig.RunnerInitOrValidate(result.ManifestPath, result.RunnerID, result.RunnerIdentityDirectory)
 		},
 		Compose: func(ctx context.Context, manifestPath, action string) error {
-			return deployconfig.RunCompose(ctx, manifestPath, action, deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic}, httpClient)
+			return deployconfig.RunComposeForAcceptedInstaller(ctx, manifestPath, action, deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic}, httpClient)
 		},
 		ComposeProject: func(manifestPath string) (string, error) {
-			resolved, err := deployconfig.Resolve(manifestPath)
+			resolved, err := deployconfig.ResolveForAcceptedInstaller(manifestPath)
 			if err != nil {
 				return "", err
 			}
@@ -136,12 +133,17 @@ func runInstallResumeWith(ctx context.Context, directory string, renderer cliui.
 		return err
 	}
 	last := lastInstallStage(receipt)
-	if last == install.StagePlanAccepted {
+	if slices.Index(install.StageSequence, last) >= slices.Index(install.StageSequence, install.StagePlanAccepted) &&
+		receipt.Status != install.OperationPurging && receipt.Status != install.OperationPurged && receipt.Status != install.OperationUninstalling {
 		digest, err := install.PlanDigest(plan)
 		if err != nil {
 			return err
 		}
-		if err := runInstallPhase(ctx, renderer, "Privileged host preparation", "apply reviewed host resources", func() error { return dependencies.HostApply(ctx, absolute, digest) }); err != nil {
+		name, detail := "Privileged host verification", "verify reviewed host resources"
+		if last == install.StagePlanAccepted {
+			name, detail = "Privileged host preparation", "apply reviewed host resources"
+		}
+		if err := runInstallPhase(ctx, renderer, name, detail, func() error { return dependencies.HostApply(ctx, absolute, digest) }); err != nil {
 			return err
 		}
 	}
@@ -402,7 +404,7 @@ func validateInstallPostconditions(plan install.InstallPlan, receipt install.Ins
 		}
 	}
 	if slices.Index(install.StageSequence, last) >= slices.Index(install.StageSequence, install.StageComposeStarted) {
-		resolved, err := deployconfig.Resolve(installerPlannedPath(plan, "manifest"))
+		resolved, err := deployconfig.ResolveForAcceptedInstaller(installerPlannedPath(plan, "manifest"))
 		if err != nil {
 			return err
 		}
@@ -420,7 +422,7 @@ func validateComposeTeardownAuthority(plan install.InstallPlan, receipt install.
 	if err := install.ValidateRecordedResources(plan, receipt); err != nil {
 		return err
 	}
-	resolved, err := deployconfig.Resolve(installerPlannedPath(plan, "manifest"))
+	resolved, err := deployconfig.ResolveForAcceptedInstaller(installerPlannedPath(plan, "manifest"))
 	if err != nil {
 		return err
 	}
@@ -556,13 +558,16 @@ func waitForInstalledRunner(ctx context.Context, plan install.InstallPlan) (map[
 func installedRunnerReadinessEvidence(plan install.InstallPlan, runners []contracts.Runner) (map[string]string, bool) {
 	expectedID := "runner-" + strings.TrimPrefix(plan.OperationID, "install_")
 	for _, runner := range runners {
-		if runner.ID != expectedID || runner.State != "ready" || runner.CredentialState != "active" || !slices.Contains(runner.Architectures, "amd64") || !slices.Contains(runner.Capabilities, "compute") || !slices.Contains(runner.Capabilities, "local-workspace") {
+		if runner.ID != expectedID || runner.PoolName != standardresources.PoolAMD64 || runner.State != "ready" || runner.CredentialState != "pre_shared" || !slices.Contains(runner.Architectures, standardresources.ArchitectureAMD64) {
 			continue
 		}
-		if runner.Capacity["CPUMillis"] < install.DurableCodingCPUMillis || runner.Capacity["MemoryBytes"] < install.DurableCodingMemoryBytes || runner.Capacity["DiskBytes"] < install.MinimumWorkspaceBytes || runner.Capacity["Instances"] < 1 || runner.Capacity["Operations"] < 1 {
+		if slices.ContainsFunc([]string{"compute", "network-policy", "storage", "cleanup", "local-workspace"}, func(capability string) bool { return !slices.Contains(runner.Capabilities, capability) }) {
 			continue
 		}
-		return map[string]string{"runnerId": runner.ID, "runnerState": runner.State, "runnerCredentialState": runner.CredentialState, "coldBootCapacity": "advertised"}, true
+		if runner.Capacity["CPUMillis"] < install.DurableCodingCPUMillis || runner.Capacity["MemoryBytes"] < install.DurableCodingMemoryBytes || runner.Capacity["DiskBytes"] < install.MinimumWorkspaceBytes || runner.Capacity["Instances"] < 1 || runner.Capacity["Operations"] < install.DurableCodingConcurrentOperations {
+			continue
+		}
+		return map[string]string{"runnerId": runner.ID, "runnerPool": runner.PoolName, "runnerState": runner.State, "runnerCredentialState": runner.CredentialState, "coldBootCapacity": "advertised", "concurrentOperationCapacity": strconv.FormatInt(runner.Capacity["Operations"], 10)}, true
 	}
 	return nil, false
 }
@@ -705,7 +710,7 @@ func runInstallUninstall(ctx context.Context, arguments []string, renderer cliui
 		return runInstallPurge(ctx, directory, renderer)
 	}
 	return runInstallUninstallWith(ctx, directory, renderer, installUninstallDependencies{OwnerUID: os.Getuid(), Now: time.Now, ValidateTeardown: validateComposeTeardownAuthority, ComposeDown: func(ctx context.Context, manifest string) error {
-		return deployconfig.RunCompose(ctx, manifest, "down", deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic}, http.DefaultClient)
+		return deployconfig.RunComposeForAcceptedInstaller(ctx, manifest, "down", deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic}, http.DefaultClient)
 	}})
 }
 
@@ -853,6 +858,36 @@ func runInstallPurge(ctx context.Context, directory string, renderer cliui.Rende
 	if err = errors.Join(err, closeErr); err != nil {
 		return err
 	}
+	validationLock, err := install.AcquireLock(absolute)
+	if err != nil {
+		return err
+	}
+	plan, receipt, err = install.ReadOperation(absolute, os.Getuid())
+	if err == nil {
+		err = install.ValidatePurgeVerifiedArtifacts(plan, receipt)
+	}
+	if err == nil {
+		err = install.ValidatePurgeUserResources(plan, receipt)
+	}
+	if closeErr := validationLock.Close(); closeErr != nil {
+		err = errors.Join(err, closeErr)
+	}
+	if err != nil {
+		return err
+	}
+	digest, err := install.PlanDigest(plan)
+	if err != nil {
+		return err
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	validationCommand := exec.CommandContext(ctx, "sudo", "--", executable, "_install-host-purge-validate", absolute, digest)
+	validationCommand.Stdin, validationCommand.Stdout, validationCommand.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := validationCommand.Run(); err != nil {
+		return fmt.Errorf("SecondBox installer purge validate privileged resources: %w", err)
+	}
 	manifestPath := installerPlannedPath(plan, "manifest")
 	if !slices.Contains(receipt.CompletedPurgeSteps, "compose-volumes") {
 		if _, statErr := os.Lstat(manifestPath); statErr != nil {
@@ -862,7 +897,7 @@ func runInstallPurge(ctx context.Context, directory string, renderer cliui.Rende
 			return statErr
 		}
 		if err := runInstallPhase(ctx, renderer, "Compose durable-data purge", "remove exact bundled database and object-store volumes", func() error {
-			return deployconfig.PurgeComposeVolumes(ctx, manifestPath, deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic})
+			return deployconfig.PurgeComposeVolumesForAcceptedInstaller(ctx, manifestPath, deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic})
 		}); err != nil {
 			return err
 		}
@@ -884,11 +919,20 @@ func runInstallPurge(ctx context.Context, directory string, renderer cliui.Rende
 			return err
 		}
 	}
-	digest, err := install.PlanDigest(plan)
+	artifactLock, err := install.AcquireLock(absolute)
 	if err != nil {
 		return err
 	}
-	executable, err := os.Executable()
+	plan, receipt, err = install.ReadOperation(absolute, os.Getuid())
+	if err == nil {
+		persistArtifacts := func(value install.InstallReceipt) error {
+			return install.SaveReceipt(absolute, plan, value, os.Getuid())
+		}
+		receipt, err = install.PurgeVerifiedArtifacts(plan, receipt, time.Now, persistArtifacts)
+	}
+	if closeErr := artifactLock.Close(); closeErr != nil {
+		err = errors.Join(err, closeErr)
+	}
 	if err != nil {
 		return err
 	}
@@ -934,6 +978,21 @@ func runPrivateHostPurge(ctx context.Context, arguments []string) error {
 	_, err = install.PurgeAcceptedHost(ctx, arguments[0], arguments[1], uid, time.Now)
 	if err != nil {
 		return fmt.Errorf("SecondBox installer private host purge: %w", err)
+	}
+	return nil
+}
+
+func runPrivateHostPurgeValidate(arguments []string) error {
+	if len(arguments) != 2 {
+		return errors.New("SecondBox installer private host purge validation: expected OPERATION_DIRECTORY PLAN_DIGEST")
+	}
+	uidText, present := os.LookupEnv("SUDO_UID")
+	uid, err := strconv.Atoi(uidText)
+	if !present || err != nil || uid < 0 {
+		return errors.New("SecondBox installer private host purge validation: SUDO_UID is required and must be a non-negative integer")
+	}
+	if err := install.ValidateAcceptedHostPurge(arguments[0], arguments[1], uid); err != nil {
+		return fmt.Errorf("SecondBox installer private host purge validation: %w", err)
 	}
 	return nil
 }

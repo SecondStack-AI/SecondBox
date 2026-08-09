@@ -1,5 +1,20 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+
+report_qualified_guest_failure() {
+  local status="$?" line="$1" log
+  trap - ERR
+  echo "qualified guest failed: phase=${phase:-setup} mode=${mode:-unknown} line=$line status=$status" >&2
+  if [[ -d "${qualification_root:-}" ]]; then
+    while IFS= read -r -d '' log; do
+      echo "qualified guest log tail: $(basename "$log")" >&2
+      tail -n 100 -- "$log" >&2
+    done < <(find "$qualification_root" -maxdepth 1 -type f -name '*.log' -print0 | sort -z)
+  fi
+  return "$status"
+}
+
+trap 'report_qualified_guest_failure "$LINENO"' ERR
 
 phase="${1:-}"
 mode="${2:-}"
@@ -70,7 +85,7 @@ setup_candidate_registry() {
 control-plane control-plane.oci.tar $(jq -er .controlPlane.reference "$manifest")
 runner runner.oci.tar $(jq -er .runner.reference "$manifest")
 installer-tools installer-tools.oci.tar $(jq -er .installerTools.reference "$manifest")
-microvm-artifacts microvm-artifacts.oci.tar $(jq -er .microVM.imageReference "$manifest")
+microvm-artifacts microvm-artifacts.oci.tar $(jq -er .microvm.imageReference "$manifest")
 EOF
 }
 
@@ -154,11 +169,11 @@ findmnt --target "$workspace" --types btrfs >/dev/null
 
 if [[ "$mode" == existing_reflink_filesystem ]]; then
   isolation="$workspace/.qualification-reflink"
-  sudo install -d -m 0755 -o "$USER" -g "$USER" "$isolation"
-  printf 'source\n' >"$isolation/source"
-  cp --reflink=always "$isolation/source" "$isolation/copy"
-  printf 'copy changed\n' >"$isolation/copy"
-  [[ "$(<"$isolation/source")" == source ]]
+  sudo install -d -m 0700 -o root -g root -- "$isolation"
+  printf 'source\n' | sudo tee -- "$isolation/source" >/dev/null
+  sudo cp --reflink=always -- "$isolation/source" "$isolation/copy"
+  printf 'copy changed\n' | sudo tee -- "$isolation/copy" >/dev/null
+  [[ "$(sudo cat -- "$isolation/source")" == source ]]
   jq -e '.storage.choice == "existing_mount" and (.storage.existingDeviceIdentity | length > 0) and ([.paths[].path | select(startswith("/dev"))] | length == 0)' "$plan" >/dev/null
   sudo mount -t tmpfs -o size=1m,nosuid,nodev,noexec tmpfs /srv/secondbox-dedicated
   if "$deploy" --accessible install --resume "$operation" --candidate-directory "$release_directory" >"$qualification_root/unsafe-filesystem-${mode}.log" 2>&1; then
@@ -178,14 +193,24 @@ jq -e '.completedStages[] | select(.stage == "cli_login")' "$receipt" >/dev/null
 jq -e '.completedStages[] | select(.stage == "smoke_execution") | .evidence.output == "hello from a microVM" and .evidence.exitStatus == "0"' "$receipt" >/dev/null
 sandbox_id="$(jq -er '.completedStages[] | select(.stage == "smoke_execution") | .evidence.sandboxId' "$receipt")"
 SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output plain exec "$sandbox_id" -- python3 -c 'print("hello after reboot")' | grep -Fx 'hello after reboot' >/dev/null
-sandbox_before="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get "$sandbox_id" | jq -cS '{id,profile,profileRevisionId,generation,workspace}')"
+sandbox_before_document="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$sandbox_id")"
+sandbox_before="$(jq -cS '{id,profile,profileRevisionId,workspaceId:.workspace.id}' <<<"$sandbox_before_document")"
+generation_before="$(jq -er '.generation | select(type == "number" and . >= 1)' <<<"$sandbox_before_document")"
+workspace_generation_before="$(jq -er '.workspace.generation | select(type == "number" and . >= 1)' <<<"$sandbox_before_document")"
+(( workspace_generation_before == generation_before )) || { printf 'retained smoke Sandbox and Workspace generations differ before uninstall: sandbox=%s workspace=%s\n' "$generation_before" "$workspace_generation_before" >&2; exit 1; }
 
 "$deploy" --accessible uninstall "$operation" >"$qualification_root/uninstall-${mode}.log" 2>&1
 jq -e '.status == "uninstalled"' "$receipt" >/dev/null
 [[ -d "$workspace" && -d "$artifacts" && -f "$manifest_path" ]]
 "$deploy" --accessible install --resume "$operation" --candidate-directory "$release_directory" >"$qualification_root/resume-after-uninstall-${mode}.log" 2>&1
-sandbox_after="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get "$sandbox_id" | jq -cS '{id,profile,profileRevisionId,generation,workspace}')"
-[[ "$sandbox_before" == "$sandbox_after" ]] || { echo 'retained smoke Sandbox lineage changed across uninstall/resume' >&2; exit 1; }
+sandbox_after_document="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$sandbox_id")"
+sandbox_after="$(jq -cS '{id,profile,profileRevisionId,workspaceId:.workspace.id}' <<<"$sandbox_after_document")"
+generation_after="$(jq -er '.generation | select(type == "number" and . >= 1)' <<<"$sandbox_after_document")"
+workspace_generation_after="$(jq -er '.workspace.generation | select(type == "number" and . >= 1)' <<<"$sandbox_after_document")"
+[[ "$sandbox_before" == "$sandbox_after" ]] || { printf 'retained smoke Sandbox lineage changed across uninstall/resume: before=%s after=%s\n' "$sandbox_before" "$sandbox_after" >&2; exit 1; }
+(( generation_after >= generation_before )) || { printf 'retained smoke Sandbox generation regressed across uninstall/resume: before=%s after=%s\n' "$generation_before" "$generation_after" >&2; exit 1; }
+(( workspace_generation_after >= workspace_generation_before )) || { printf 'retained smoke Workspace generation regressed across uninstall/resume: before=%s after=%s\n' "$workspace_generation_before" "$workspace_generation_after" >&2; exit 1; }
+(( workspace_generation_after == generation_after )) || { printf 'retained smoke Sandbox and Workspace generations differ after resume: sandbox=%s workspace=%s\n' "$generation_after" "$workspace_generation_after" >&2; exit 1; }
 "$deploy" --accessible uninstall "$operation" >/dev/null 2>&1
 
 sudo install -d -m 0755 "$workspace/.qualification-foreign-mount"
@@ -194,7 +219,7 @@ if printf 'PURGE %s\n' "$operation_id" | "$deploy" --accessible uninstall --purg
   echo 'purge accepted an unrecorded nested mount' >&2
   exit 1
 fi
-mountpoint -q "$workspace/.qualification-foreign-mount"
+sudo mountpoint -q "$workspace/.qualification-foreign-mount"
 sudo umount "$workspace/.qualification-foreign-mount"
 sudo rmdir "$workspace/.qualification-foreign-mount"
 mapfile -t purge_paths < <(jq -er '.createdResources[] | select(.id != "operation-directory" and (.path | type) == "string" and (.path | length) > 0) | .path' "$receipt")

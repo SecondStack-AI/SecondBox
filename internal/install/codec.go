@@ -177,7 +177,7 @@ func (plan InstallPlan) Validate() error {
 		return installerError("workspace path", err)
 	}
 	if plan.Storage.Choice == StorageExistingMount {
-		if plan.Storage.ExistingDeviceIdentity == "" || plan.Storage.FilesystemImagePath != "" || plan.Storage.ImageSizeBytes != 0 {
+		if plan.Storage.ExistingDeviceIdentity == "" || plan.Storage.FilesystemImagePath != "" || plan.Storage.ImageSizeBytes != 0 || plan.Storage.MountUnitPath != "" {
 			return installerError("existing workspace storage is inconsistent", nil)
 		}
 	}
@@ -217,6 +217,8 @@ func (plan InstallPlan) Validate() error {
 			wantUID, wantGID := int64(0), int64(0)
 			if planned.Name == "workspace" || planned.Name == "logs" {
 				wantUID, wantGID = runnerContainerUID, runnerContainerGID
+			} else if planned.Name == "artifacts-parent" {
+				wantUID, wantGID = plan.HostFacts.InvokingUID, plan.HostFacts.InvokingGID
 			}
 			if planned.OwnerUID != wantUID || planned.OwnerGID != wantGID {
 				return installerError("privileged planned path has unexpected explicit ownership: "+planned.Name, nil)
@@ -227,10 +229,31 @@ func (plan InstallPlan) Validate() error {
 	if workspaceIndex < 0 || plan.Paths[workspaceIndex].Path != plan.Storage.WorkspacePath || plan.Paths[workspaceIndex].Kind != ResourceDirectory || !plan.Paths[workspaceIndex].RequiresSudo {
 		return installerError("workspace storage does not match its privileged planned resource", nil)
 	}
+	runnerRoot, hasRunnerRoot := plannedPathByName(plan.Paths, "runner-root")
+	runnerStorage, hasRunnerStorage := plannedPathByName(plan.Paths, "runner-storage")
+	artifactParent, hasArtifactParent := plannedPathByName(plan.Paths, "artifacts-parent")
+	artifacts, hasArtifacts := plannedPathByName(plan.Paths, "artifacts")
+	state, hasState := plannedPathByName(plan.Paths, "state")
+	jail, hasJail := plannedPathByName(plan.Paths, "jail")
+	run, hasRun := plannedPathByName(plan.Paths, "run")
+	logs, hasLogs := plannedPathByName(plan.Paths, "logs")
+	firecrackerLogs, hasFirecrackerLogs := plannedPathByName(plan.Paths, "firecracker-logs")
+	if !hasRunnerRoot || !hasRunnerStorage || !hasArtifactParent || !hasArtifacts || !hasState || !hasJail || !hasRun || !hasLogs || !hasFirecrackerLogs ||
+		!runnerRoot.RequiresSudo || runnerRoot.Kind != ResourceDirectory || runnerRoot.Mode != 0o711 ||
+		!runnerStorage.RequiresSudo || runnerStorage.Kind != ResourceDirectory || runnerStorage.Mode != 0o711 || runnerStorage.Path != filepath.Dir(plan.Storage.WorkspacePath) || filepath.Dir(runnerStorage.Path) != runnerRoot.Path ||
+		!artifactParent.RequiresSudo || artifactParent.Kind != ResourceDirectory || artifactParent.Mode != 0o700 || artifactParent.Path != filepath.Join(runnerStorage.Path, "release") ||
+		artifacts.RequiresSudo || artifacts.Kind != ResourceDirectory || artifacts.Path != filepath.Join(artifactParent.Path, "artifacts") ||
+		!state.RequiresSudo || state.Kind != ResourceDirectory || state.Path != filepath.Join(runnerStorage.Path, "state") ||
+		!jail.RequiresSudo || jail.Kind != ResourceDirectory || jail.Mode != 0o700 || jail.Path != filepath.Join(runnerStorage.Path, "jail") ||
+		!run.RequiresSudo || run.Kind != ResourceDirectory || run.Path != filepath.Join(state.Path, "run") ||
+		!logs.RequiresSudo || logs.Kind != ResourceDirectory || logs.Mode != 0o750 || logs.Path != filepath.Join(state.Path, "logs") ||
+		!firecrackerLogs.RequiresSudo || firecrackerLogs.Kind != ResourceDirectory || firecrackerLogs.Mode != 0o700 || firecrackerLogs.Path != filepath.Join(state.Path, "firecracker-logs") {
+		return installerError("runner storage topology must colocate release assets, run state, and Workspaces", nil)
+	}
 	if plan.Storage.Choice == StorageBtrfsImage {
 		imageIndex := slices.IndexFunc(plan.Paths, func(path PlannedPath) bool { return path.Name == "filesystem-image" })
 		unitIndex := slices.IndexFunc(plan.Paths, func(path PlannedPath) bool { return path.Name == "workspace-mount-unit" })
-		if imageIndex < 0 || plan.Paths[imageIndex].Path != plan.Storage.FilesystemImagePath || plan.Paths[imageIndex].Kind != ResourceFilesystemImage || unitIndex < 0 || plan.Paths[unitIndex].Path != plan.Storage.MountUnitPath || plan.Paths[unitIndex].Kind != ResourceMountUnit {
+		if imageIndex < 0 || plan.Paths[imageIndex].Path != plan.Storage.FilesystemImagePath || plan.Paths[imageIndex].Kind != ResourceFilesystemImage || filepath.Dir(plan.Storage.FilesystemImagePath) != runnerRoot.Path || unitIndex < 0 || plan.Paths[unitIndex].Path != plan.Storage.MountUnitPath || plan.Paths[unitIndex].Kind != ResourceMountUnit || filepath.Base(plan.Storage.MountUnitPath) != systemdMountUnitName(runnerStorage.Path) {
 			return installerError("filesystem-image storage does not match its planned resources", nil)
 		}
 	}
@@ -255,6 +278,9 @@ func (plan InstallPlan) Validate() error {
 	}
 	if plan.Capacity.MaxSandboxes <= 0 || plan.Capacity.MaxCPUMillis <= 0 || plan.Capacity.MaxMemoryBytes <= 0 || plan.Capacity.MaxWorkspaceBytes <= 0 || plan.Capacity.ConcurrentStarts <= 0 || plan.Capacity.ConcurrentOperations <= 0 || plan.Capacity.StoragePressurePercent < 50 || plan.Capacity.StoragePressurePercent > 95 {
 		return installerError("capacity plan is incomplete or unsafe", nil)
+	}
+	if plan.Compute.FirecrackerCPUTemplate != SingleHostFirecrackerCPUTemplate {
+		return installerError("single-host compute plan requires the explicit vendor-neutral Firecracker CPU template", nil)
 	}
 	for name, value := range plan.Capacity.SubjectQuotas {
 		if name == "" || value <= 0 {

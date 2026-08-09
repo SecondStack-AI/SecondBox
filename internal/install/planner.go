@@ -10,22 +10,28 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
 )
 
 const (
-	ExecutionBundleEstimateBytes = int64(11 << 30)
-	MinimumWorkspaceBytes        = int64(50 << 30)
-	MinimumBackingReserveBytes   = int64(16 << 30)
-	MinimumObjectStoreBytes      = int64(4 << 30)
-	MinimumControlBackingBytes   = MinimumBackingReserveBytes
-	MinimumDeploymentBytes       = ExecutionBundleEstimateBytes
-	MinimumFilesystemImageBytes  = ExecutionBundleEstimateBytes + MinimumWorkspaceBytes + (4 << 30)
-	MinimumHostMemoryBytes       = int64(12 << 30)
-	HostMemoryReserveBytes       = int64(4 << 30)
-	MinimumHostCPUCount          = 6
-	HostCPUReserveMillis         = int64(2000)
-	DurableCodingCPUMillis       = int64(4000)
-	DurableCodingMemoryBytes     = int64(8 << 30)
+	ExecutionBundleEstimateBytes      = int64(11 << 30)
+	MinimumWorkspaceBytes             = standardresources.DurableCodingWorkspaceBytes
+	MinimumBackingReserveBytes        = int64(16 << 30)
+	MinimumObjectStoreBytes           = int64(4 << 30)
+	MinimumControlBackingBytes        = MinimumBackingReserveBytes
+	MinimumDeploymentBytes            = ExecutionBundleEstimateBytes
+	RunnerStorageReserveBytes         = int64(4 << 30)
+	MinimumRunnerStorageBytes         = ExecutionBundleEstimateBytes + MinimumWorkspaceBytes + RunnerStorageReserveBytes
+	MinimumFilesystemImageBytes       = MinimumRunnerStorageBytes
+	MinimumHostMemoryBytes            = int64(12 << 30)
+	HostMemoryReserveBytes            = int64(4 << 30)
+	MinimumHostCPUCount               = 6
+	HostCPUReserveMillis              = int64(2000)
+	DurableCodingCPUMillis            = standardresources.DurableCodingCPUMillis
+	DurableCodingMemoryBytes          = standardresources.DurableCodingMemoryBytes
+	DurableCodingConcurrentOperations = standardresources.DurableCodingConcurrentOperations
+	SingleHostFirecrackerCPUTemplate  = "None"
 )
 
 type StorageOption struct {
@@ -91,7 +97,7 @@ func StorageOptions(facts HostFacts, backingAvailableBytes, releaseDownloadBytes
 		}
 	}
 	for _, device := range facts.Devices {
-		if device.Mountpoint == "" || device.Mountpoint == "/" || device.Identity == rootDevice || (device.Filesystem != "xfs" && device.Filesystem != "btrfs") || device.AvailableBytes < MinimumWorkspaceBytes {
+		if device.Mountpoint == "" || device.Mountpoint == "/" || device.Identity == rootDevice || (device.Filesystem != "xfs" && device.Filesystem != "btrfs") || device.AvailableBytes < MinimumRunnerStorageBytes || !device.JailerCompatible {
 			continue
 		}
 		options = append(options, StorageOption{Choice: StorageExistingMount, Label: fmt.Sprintf("%s dedicated %s mount (%s available)", device.Mountpoint, strings.ToUpper(device.Filesystem), formatBytes(device.AvailableBytes)), Mountpoint: device.Mountpoint, DeviceIdentity: device.Identity, Filesystem: device.Filesystem, AvailableBytes: device.AvailableBytes})
@@ -153,14 +159,14 @@ func ProposePlan(facts HostFacts, input ProposalInput) (InstallPlan, error) {
 	if err != nil {
 		return InstallPlan{}, err
 	}
-	paths, secretTargets := proposePaths(facts, input, storagePaths)
+	paths, secretTargets := proposePaths(facts, input, storage, storagePaths)
 	if len(input.StandardBundles) != 2 || !slices.Contains(input.StandardBundles, "agent-compartment") || !slices.Contains(input.StandardBundles, "durable-coding") {
 		return InstallPlan{}, installerError("operator selection of both release-owned standard bundles is required", nil)
 	}
 	if input.RetentionSeconds <= 0 {
 		return InstallPlan{}, installerError("operator-selected retention is required", nil)
 	}
-	plan := InstallPlan{SchemaVersion: PlanSchema, OperationID: input.OperationID, CreatedAt: input.CreatedAt.UTC(), HostFacts: facts, HostFactsDigest: factsDigest, Release: input.Release, Storage: storage, Capacity: capacity, Network: network, CLI: CLIPlan{ConfigPath: input.CLIConfigPath, TenantRef: input.CLITenantRef, SubjectRef: input.CLISubjectRef}, Paths: paths, SecretTargets: secretTargets, GeneratedAuthorityCategories: []string{"application-authority", "platform-authority", "runner-enrollment", "runner-pki", "database", "object-storage"}, StandardBundles: slices.Clone(input.StandardBundles), RetentionSeconds: input.RetentionSeconds, PrivilegedActions: privilegedActions(storage)}
+	plan := InstallPlan{SchemaVersion: PlanSchema, OperationID: input.OperationID, CreatedAt: input.CreatedAt.UTC(), HostFacts: facts, HostFactsDigest: factsDigest, Release: input.Release, Storage: storage, Capacity: capacity, Compute: ComputePlan{FirecrackerCPUTemplate: SingleHostFirecrackerCPUTemplate}, Network: network, CLI: CLIPlan{ConfigPath: input.CLIConfigPath, TenantRef: input.CLITenantRef, SubjectRef: input.CLISubjectRef}, Paths: paths, SecretTargets: secretTargets, GeneratedAuthorityCategories: []string{"application-authority", "platform-authority", "runner-enrollment", "runner-pki", "database", "object-storage"}, StandardBundles: slices.Clone(input.StandardBundles), RetentionSeconds: input.RetentionSeconds, PrivilegedActions: privilegedActions(storage)}
 	if err := plan.Validate(); err != nil {
 		return InstallPlan{}, err
 	}
@@ -172,8 +178,15 @@ func proposeStorage(facts HostFacts, input ProposalInput) (StoragePlan, int64, [
 	case StorageExistingMount:
 		for _, option := range StorageOptions(facts, input.BackingAvailableBytes, input.Release.ExpectedDownloadBytes) {
 			if option.Choice == StorageExistingMount && option.Mountpoint == input.ExistingMountpoint {
-				workspace := filepath.Join(option.Mountpoint, "secondbox-workspaces")
-				return StoragePlan{Choice: StorageExistingMount, WorkspacePath: workspace, ExistingDeviceIdentity: option.DeviceIdentity}, option.AvailableBytes, []PlannedPath{plannedPath("workspace", workspace, PathExistingWorkspace, ResourceDirectory, 0o750, runnerContainerUID, runnerContainerGID, true, true)}, nil
+				runnerRoot := filepath.Join(option.Mountpoint, "secondbox-"+input.OperationID)
+				storageRoot := filepath.Join(runnerRoot, "storage")
+				workspace := filepath.Join(storageRoot, "workspaces")
+				workspaceBytes := option.AvailableBytes - ExecutionBundleEstimateBytes - RunnerStorageReserveBytes
+				return StoragePlan{Choice: StorageExistingMount, WorkspacePath: workspace, ExistingDeviceIdentity: option.DeviceIdentity}, workspaceBytes, []PlannedPath{
+					plannedPath("runner-root", runnerRoot, PathExistingWorkspace, ResourceDirectory, 0o711, 0, 0, true, true),
+					plannedPath("runner-storage", storageRoot, PathExistingWorkspace, ResourceDirectory, 0o711, 0, 0, true, true),
+					plannedPath("workspace", workspace, PathExistingWorkspace, ResourceDirectory, 0o750, runnerContainerUID, runnerContainerGID, true, true),
+				}, nil
 			}
 		}
 		return StoragePlan{}, 0, nil, installerError("selected workspace mount is not an observed dedicated XFS/Btrfs candidate", nil)
@@ -187,10 +200,18 @@ func proposeStorage(facts HostFacts, input ProposalInput) (StoragePlan, int64, [
 			return StoragePlan{}, 0, nil, installerError("filesystem image capacity is outside the safe fully allocated range", nil)
 		}
 		runnerRoot := filepath.Join("/var/lib", "secondbox-"+input.OperationID)
-		image := filepath.Join(runnerRoot, "workspaces.btrfs")
-		workspace := filepath.Join(runnerRoot, "workspaces")
-		unit := filepath.Join("/etc/systemd/system", systemdMountUnitName(workspace))
-		return StoragePlan{Choice: StorageBtrfsImage, WorkspacePath: workspace, FilesystemImagePath: image, ImageSizeBytes: size, MountUnitPath: unit}, size, []PlannedPath{plannedPath("filesystem-image", image, PathFilesystemImage, ResourceFilesystemImage, 0o600, 0, 0, true, true), plannedPath("workspace", workspace, PathInstallerHost, ResourceDirectory, 0o750, runnerContainerUID, runnerContainerGID, true, true), plannedPath("workspace-mount-unit", unit, PathInstallerHost, ResourceMountUnit, 0o644, 0, 0, true, true)}, nil
+		storageRoot := filepath.Join(runnerRoot, "storage")
+		image := filepath.Join(runnerRoot, "runner-storage.btrfs")
+		workspace := filepath.Join(storageRoot, "workspaces")
+		unit := filepath.Join("/etc/systemd/system", systemdMountUnitName(storageRoot))
+		workspaceBytes := size - ExecutionBundleEstimateBytes - RunnerStorageReserveBytes
+		return StoragePlan{Choice: StorageBtrfsImage, WorkspacePath: workspace, FilesystemImagePath: image, ImageSizeBytes: size, MountUnitPath: unit}, workspaceBytes, []PlannedPath{
+			plannedPath("runner-root", runnerRoot, PathInstallerHost, ResourceDirectory, 0o711, 0, 0, true, true),
+			plannedPath("runner-storage", storageRoot, PathInstallerHost, ResourceDirectory, 0o711, 0, 0, true, true),
+			plannedPath("filesystem-image", image, PathFilesystemImage, ResourceFilesystemImage, 0o600, 0, 0, true, true),
+			plannedPath("workspace", workspace, PathInstallerHost, ResourceDirectory, 0o750, runnerContainerUID, runnerContainerGID, true, true),
+			plannedPath("workspace-mount-unit", unit, PathInstallerHost, ResourceMountUnit, 0o644, 0, 0, true, true),
+		}, nil
 	default:
 		return StoragePlan{}, 0, nil, installerError("storage choice is unsupported", nil)
 	}
@@ -204,9 +225,10 @@ func proposeCapacity(facts HostFacts, workspaceBytes, objectStoreBytes int64) (C
 	memory := facts.MemoryBytes - HostMemoryReserveBytes
 	sandboxes := min(cpuMillis/DurableCodingCPUMillis, memory/DurableCodingMemoryBytes, workspaceBytes/MinimumWorkspaceBytes)
 	active := min(sandboxes, int64(4))
-	operations := max(int64(2), min(int64(8), sandboxes))
-	quotas := map[string]int64{"maxSandboxes": sandboxes * 4, "maxActiveInstances": active, "maxCpuMillis": cpuMillis, "maxMemoryBytes": memory, "maxArtifactBytes": objectStoreBytes / 2, "maxSnapshots": sandboxes * 10, "maxArtifacts": sandboxes * 100, "maxPortSessions": sandboxes * 4, "maxConcurrentOperations": operations}
-	return CapacityPlan{MaxSandboxes: sandboxes, MaxCPUMillis: cpuMillis, MaxMemoryBytes: memory, MaxWorkspaceBytes: workspaceBytes, ConcurrentStarts: min(int64(2), active), ConcurrentOperations: operations, StoragePressurePercent: 85, SubjectQuotas: quotas}, nil
+	runnerOperations := sandboxes * DurableCodingConcurrentOperations
+	subjectOperations := active * DurableCodingConcurrentOperations
+	quotas := map[string]int64{"maxSandboxes": sandboxes * 4, "maxActiveInstances": active, "maxCpuMillis": cpuMillis, "maxMemoryBytes": memory, "maxArtifactBytes": objectStoreBytes / 2, "maxSnapshots": sandboxes * 10, "maxArtifacts": sandboxes * 100, "maxPortSessions": sandboxes * 4, "maxConcurrentOperations": subjectOperations}
+	return CapacityPlan{MaxSandboxes: sandboxes, MaxCPUMillis: cpuMillis, MaxMemoryBytes: memory, MaxWorkspaceBytes: workspaceBytes, ConcurrentStarts: min(int64(2), active), ConcurrentOperations: runnerOperations, StoragePressurePercent: 85, SubjectQuotas: quotas}, nil
 }
 
 func backingReserveBytes(available int64) int64 {
@@ -325,15 +347,17 @@ func routeCollides(candidate string, routes []RouteFact) bool {
 	return false
 }
 
-func proposePaths(facts HostFacts, input ProposalInput, storage []PlannedPath) ([]PlannedPath, []SecretTarget) {
+func proposePaths(facts HostFacts, input ProposalInput, storagePlan StoragePlan, storage []PlannedPath) ([]PlannedPath, []SecretTarget) {
 	root := input.DeploymentDirectory
 	uid, gid := facts.InvokingUID, facts.InvokingGID
-	runnerRoot := filepath.Join("/var/lib", "secondbox-"+input.OperationID)
-	runnerState := filepath.Join(runnerRoot, "state")
+	runnerStorage := filepath.Dir(storagePlan.WorkspacePath)
+	runnerState := filepath.Join(runnerStorage, "state")
+	artifactParent := filepath.Join(runnerStorage, "release")
 	paths := []PlannedPath{
 		plannedPath("deployment", root, PathUserDeployment, ResourceDirectory, 0o700, uid, gid, false, true),
 		plannedPath("manifest", filepath.Join(root, "secondbox.toml"), PathUserDeployment, ResourceFile, 0o600, uid, gid, false, true),
-		plannedPath("artifacts", filepath.Join(root, "artifacts"), PathUserDeployment, ResourceDirectory, 0o700, uid, gid, false, true),
+		plannedPath("artifacts-parent", artifactParent, PathInstallerHost, ResourceDirectory, 0o700, uid, gid, true, true),
+		plannedPath("artifacts", filepath.Join(artifactParent, "artifacts"), PathInstallerHost, ResourceDirectory, 0o700, uid, gid, false, true),
 		plannedPath("identity-parent", filepath.Join(root, "identity"), PathUserDeployment, ResourceDirectory, 0o700, uid, gid, false, true),
 		plannedPath("runner-identity", filepath.Join(root, "identity", "runner-"+strings.TrimPrefix(input.OperationID, "install_")), PathUserDeployment, ResourceDirectory, 0o700, uid, gid, false, true),
 		plannedPath("secrets", filepath.Join(root, "secrets"), PathUserDeployment, ResourceDirectory, 0o700, uid, gid, false, true),
@@ -347,12 +371,12 @@ func proposePaths(facts HostFacts, input ProposalInput, storage []PlannedPath) (
 		plannedPath("cli-config-root", filepath.Dir(filepath.Dir(input.CLIConfigPath)), PathUserDeployment, ResourceDirectory, 0o700, uid, gid, false, true),
 		plannedPath("cli-config-directory", filepath.Dir(input.CLIConfigPath), PathUserDeployment, ResourceDirectory, 0o700, uid, gid, false, true),
 		plannedPath("cli-config", input.CLIConfigPath, PathUserDeployment, ResourceFile, 0o600, uid, gid, false, true),
-		plannedPath("runner-root", runnerRoot, PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
 		plannedPath("state", runnerState, PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
-		plannedPath("jail", filepath.Join(runnerState, "jail"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
+		plannedPath("jail", filepath.Join(runnerStorage, "jail"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
 		plannedPath("run", filepath.Join(runnerState, "run"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
 		plannedPath("network", filepath.Join(runnerState, "network"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
 		plannedPath("snapshot-template-cache", filepath.Join(runnerState, "snapshot-template-cache"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
+		plannedPath("firecracker-logs", filepath.Join(runnerState, "firecracker-logs"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
 		plannedPath("logs", filepath.Join(runnerState, "logs"), PathInstallerHost, ResourceDirectory, 0o750, runnerContainerUID, runnerContainerGID, true, true),
 		plannedPath("secondbox-binary", filepath.Join(input.BinaryDirectory, "secondbox"), PathUserDeployment, ResourceBinary, 0o755, uid, gid, false, true),
 		plannedPath("secondbox-deploy-binary", filepath.Join(input.BinaryDirectory, "secondbox-deploy"), PathUserDeployment, ResourceBinary, 0o755, uid, gid, false, true),
@@ -412,7 +436,7 @@ func privilegedActions(storage StoragePlan) []string {
 func RenderPlanReview(plan InstallPlan) string {
 	var result strings.Builder
 	fmt.Fprintf(&result, "Release %s\nArtifact manifest: %s\nManifest digest: %s\nSigning key: %s\nExpected downloads: %s\n", plan.Release.Version, plan.Release.ArtifactManifestURL, plan.Release.ArtifactManifestDigest, plan.Release.SigningKeyFingerprint, formatBytes(plan.Release.ExpectedDownloadBytes))
-	fmt.Fprintf(&result, "Workspace: %s (%s, %s capacity)\nCapacity: %d Sandboxes, %d concurrent starts, %s memory\nStandard bundles: %s\nNetwork: API %s, Runner %s, data plane %s, database %s, object store %s, object console %s, guests %s, DNS %s\nCLI: %s as %s/%s\nRetention: %s\n", plan.Storage.WorkspacePath, plan.Storage.Choice, formatBytes(plan.Capacity.MaxWorkspaceBytes), plan.Capacity.MaxSandboxes, plan.Capacity.ConcurrentStarts, formatBytes(plan.Capacity.MaxMemoryBytes), strings.Join(plan.StandardBundles, ", "), plan.Network.APIAddress, plan.Network.RunnerAddress, plan.Network.DataPlaneAddress, plan.Network.DatabaseAddress, plan.Network.ObjectStoreAddress, plan.Network.ObjectStoreConsoleAddress, plan.Network.GuestBridgeCIDR, plan.Network.DNSUpstream, plan.CLI.ConfigPath, plan.CLI.TenantRef, plan.CLI.SubjectRef, time.Duration(plan.RetentionSeconds)*time.Second)
+	fmt.Fprintf(&result, "Workspace: %s (%s, %s capacity)\nCapacity: %d Sandboxes, %d concurrent starts, %s memory\nCompute: Firecracker CPU template %s\nStandard bundles: %s\nNetwork: API %s, Runner %s, data plane %s, database %s, object store %s, object console %s, guests %s, DNS %s\nCLI: %s as %s/%s\nRetention: %s\n", plan.Storage.WorkspacePath, plan.Storage.Choice, formatBytes(plan.Capacity.MaxWorkspaceBytes), plan.Capacity.MaxSandboxes, plan.Capacity.ConcurrentStarts, formatBytes(plan.Capacity.MaxMemoryBytes), plan.Compute.FirecrackerCPUTemplate, strings.Join(plan.StandardBundles, ", "), plan.Network.APIAddress, plan.Network.RunnerAddress, plan.Network.DataPlaneAddress, plan.Network.DatabaseAddress, plan.Network.ObjectStoreAddress, plan.Network.ObjectStoreConsoleAddress, plan.Network.GuestBridgeCIDR, plan.Network.DNSUpstream, plan.CLI.ConfigPath, plan.CLI.TenantRef, plan.CLI.SubjectRef, time.Duration(plan.RetentionSeconds)*time.Second)
 	result.WriteString("Generated authority: " + strings.Join(plan.GeneratedAuthorityCategories, ", ") + "\nPersistent services: PostgreSQL, object storage, control plane, same-host Runner\nOrdinary uninstall preserves workspaces, authority, manifests, artifacts, and service data.\nPaths requiring sudo:\n")
 	for _, path := range plan.Paths {
 		if path.RequiresSudo {

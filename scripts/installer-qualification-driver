@@ -1,5 +1,18 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+
+report_qualification_failure() {
+  local status="$?" line="$1"
+  trap - ERR
+  echo "qualification driver failed: mode=${mode:-setup} domain=${domain:-none} line=$line status=$status" >&2
+  if [[ -n "${console_log:-}" && -s "$console_log" ]]; then
+    echo "qualification guest serial tail: ${domain:-unknown}" >&2
+    tail -n 120 -- "$console_log" >&2
+  fi
+  return "$status"
+}
+
+trap 'report_qualification_failure "$LINENO"' ERR
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 connection='qemu:///system'
@@ -44,7 +57,7 @@ repository_base_image_sha256="$("$repo_root/scripts/prepare-installer-qualificat
 [[ "$base_image_sha256" == "$repository_base_image_sha256" ]] || { echo 'qualification base image SHA-256 differs from the repository pin' >&2; exit 1; }
 printf '%s  %s\n' "$base_image_sha256" "$base_image" | sha256sum --check --status || { echo 'qualification base image digest mismatch' >&2; exit 1; }
 
-for command in virsh virt-install qemu-img cloud-localds ssh scp ssh-keygen jq sha256sum findmnt openssl ip python3 getent setfacl; do
+for command in virsh virt-install qemu-img cloud-localds ssh scp ssh-keygen jq sha256sum findmnt openssl python3 getent setfacl; do
   command -v "$command" >/dev/null || { echo "qualification host command is absent: $command" >&2; exit 1; }
 done
 [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] || { echo 'qualification requires accessible /dev/kvm' >&2; exit 1; }
@@ -64,10 +77,9 @@ for account in libvirt-qemu qemu; do
   fi
 done
 [[ "${#qemu_accounts[@]}" -gt 0 ]] || { echo 'qualification could not resolve a system-libvirt QEMU account' >&2; exit 1; }
-network="sbq-${run_id}"
 domains=()
-network_started=false
 active_child=''
+active_ssh_port=''
 
 run_interruptible() {
   local status
@@ -85,14 +97,6 @@ run_interruptible() {
 domain_defined() {
   local listing
   if ! listing="$(virsh -c "$connection" list --all --name)"; then
-    return 2
-  fi
-  grep -Fxq -- "$1" <<<"$listing"
-}
-
-network_defined() {
-  local listing
-  if ! listing="$(virsh -c "$connection" net-list --all --name)"; then
     return 2
   fi
   grep -Fxq -- "$1" <<<"$listing"
@@ -138,22 +142,6 @@ cleanup_best_effort() {
       fi
     fi
   done
-  if $network_started; then
-    if ! virsh -c "$connection" net-destroy "$network" >/dev/null 2>&1; then
-      echo "qualification cleanup could not destroy network: $network" >&2
-      cleanup_failed=true
-    fi
-    if network_defined "$network"; then
-      resources_survive=true
-    else
-      status=$?
-      if [[ "$status" -eq 2 ]]; then
-        echo "qualification cleanup could not verify network removal: $network" >&2
-        cleanup_failed=true
-        resources_survive=true
-      fi
-    fi
-  fi
   if $resources_survive; then
     echo "qualification cleanup retained recovery state at $resource_root" >&2
   elif ! rm -rf -- "$resource_root"; then
@@ -193,10 +181,6 @@ cleanup_success() {
       fi
     fi
   done
-  if $network_started; then
-    virsh -c "$connection" net-destroy "$network" >/dev/null
-    network_started=false
-  fi
   rm -rf -- "$resource_root"
 }
 
@@ -217,58 +201,73 @@ jq -e '.candidate == true and .schemaVersion == "secondbox.release/artifact-mani
 release_subject="$(go -C "$repo_root" run ./cmd/secondbox-release-tool installer-qualification-subject "$manifest")"
 candidate_manifest_digest="sha256:$(sha256sum "$manifest" | awk '{print $1}')"
 
-cp --reflink=auto -- "$base_image" "$resource_root/base.img"
-chmod 0600 "$resource_root/base.img"
-for account in "${qemu_accounts[@]}"; do
-  setfacl -m "u:${account}:r--" "$resource_root/base.img"
-done
-qualification_base_image="$resource_root/base.img"
-
-subnet=''
-mapfile -t host_routes < <(ip -4 -o route show table all | awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/ {print $1}')
-subnet="$("$repo_root/scripts/select-installer-qualification-subnet" "${host_routes[@]}")" || {
-  echo 'qualification could not allocate an isolated RFC1918 subnet' >&2
-  exit 1
-}
-subnet_address="${subnet%/*}"
-subnet_prefix="${subnet_address%.*}"
-cat >"$resource_root/network.xml" <<EOF
-<network>
-  <name>${network}</name>
-  <forward mode='nat'/>
-  <bridge name='virbr${run_id:0:6}' stp='on' delay='0'/>
-  <ip address='${subnet_prefix}.1' netmask='255.255.255.0'>
-    <dhcp><range start='${subnet_prefix}.20' end='${subnet_prefix}.80'/></dhcp>
-  </ip>
-</network>
-EOF
-virsh -c "$connection" net-create "$resource_root/network.xml" >/dev/null
-network_started=true
-
 ssh-keygen -q -t ed25519 -N '' -f "$resource_root/id_ed25519"
 public_key="$(<"$resource_root/id_ed25519.pub")"
-ssh_options=(-i "$resource_root/id_ed25519" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10)
+ssh_common_options=(-i "$resource_root/id_ed25519" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10)
 
-guest_address() {
-  local domain="$1" address=''
+guest_ssh() {
+  ssh -p "$active_ssh_port" "${ssh_common_options[@]}" "$@"
+}
+
+guest_scp() {
+  scp -P "$active_ssh_port" "${ssh_common_options[@]}" "$@"
+}
+
+allocate_loopback_port() {
+  python3 - <<'PY'
+import socket
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+    listener.bind(("127.0.0.1", 0))
+    print(listener.getsockname()[1])
+PY
+}
+
+configure_ssh_forward() {
+  local domain="$1" port response usernet
+  usernet="$(virsh -c "$connection" qemu-monitor-command "$domain" --hmp 'info usernet')" || {
+    echo "qualification could not inspect QEMU user network: $domain" >&2
+    return 1
+  }
+  grep -Fq 'Hub -1 (hostnet0):' <<<"$usernet" || {
+    echo "qualification QEMU user network is absent: $domain" >&2
+    return 1
+  }
+  for _ in $(seq 1 20); do
+    port="$(allocate_loopback_port)"
+    if response="$(virsh -c "$connection" qemu-monitor-command "$domain" --hmp "hostfwd_add hostnet0 tcp:127.0.0.1:${port}-:22" 2>&1)" &&
+      [[ -z "$response" ]] &&
+      virsh -c "$connection" qemu-monitor-command "$domain" --hmp 'info usernet' | grep -Eq "TCP\[HOST_FORWARD\].*127\\.0\\.0\\.1[[:space:]]+${port}[[:space:]]+10\\.0\\.2\\.15[[:space:]]+22"; then
+      printf '%s\n' "$port"
+      return 0
+    fi
+  done
+  echo "qualification could not allocate a localhost SSH forward: $domain" >&2
+  return 1
+}
+
+wait_for_guest_ssh() {
+  local domain="$1" console_log="$2"
   for _ in $(seq 1 180); do
-    address="$(virsh -c "$connection" domifaddr "$domain" --source lease 2>/dev/null | awk '/ipv4/ {sub("/.*", "", $4); print $4; exit}')"
-    if [[ -n "$address" ]] && ssh "${ssh_options[@]}" "secondbox@$address" true >/dev/null 2>&1; then
-      printf '%s\n' "$address"
+    if guest_ssh secondbox@127.0.0.1 true >/dev/null 2>&1; then
       return 0
     fi
     sleep 2
   done
   echo "qualification guest did not become reachable: $domain" >&2
+  if [[ -s "$console_log" ]]; then
+    echo "qualification guest serial tail: $domain" >&2
+    tail -n 120 -- "$console_log" >&2
+  fi
   return 1
 }
 
 wait_for_boot_change() {
   local address="$1" old_boot="$2" current=''
   for _ in $(seq 1 180); do
-    current="$(ssh "${ssh_options[@]}" "secondbox@$address" cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+    current="$(guest_ssh "secondbox@$address" cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
     if [[ -n "$current" && "$current" != "$old_boot" ]]; then
-      ssh "${ssh_options[@]}" "secondbox@$address" cloud-init status --wait >/dev/null
+      guest_ssh "secondbox@$address" cloud-init status --wait >/dev/null
       return 0
     fi
     sleep 2
@@ -279,15 +278,27 @@ wait_for_boot_change() {
 
 run_guest() {
   local mode domain guest_root
-  local image_format address old_boot
+  local image_format address old_boot guest_mac console_log qualification_base_image
   mode="$1"
   domain="sbq-${mode//_/-}-${run_id}"
   guest_root="$resource_root/$mode"
+  case "$mode" in
+    btrfs_image) guest_mac="52:54:${run_id:0:2}:${run_id:2:2}:${run_id:4:2}:01" ;;
+    existing_reflink_filesystem) guest_mac="52:54:${run_id:0:2}:${run_id:2:2}:${run_id:4:2}:02" ;;
+    *) echo "qualification guest mode is unsupported: $mode" >&2; return 1 ;;
+  esac
+  console_log="$guest_root/console.log"
   domains+=("$domain")
   mkdir -p "$guest_root"
   chmod 0700 "$guest_root"
   for account in "${qemu_accounts[@]}"; do
     setfacl -m "u:${account}:--x" "$guest_root"
+  done
+  qualification_base_image="$guest_root/base.img"
+  cp --reflink=auto -- "$base_image" "$qualification_base_image"
+  chmod 0600 "$qualification_base_image"
+  for account in "${qemu_accounts[@]}"; do
+    setfacl -m "u:${account}:r--" "$qualification_base_image"
   done
   image_format="$(qemu-img info --output json "$qualification_base_image" | jq -er .format)"
   qemu-img create -q -f qcow2 -F "$image_format" -b "$qualification_base_image" "$guest_root/root.qcow2" 220G
@@ -325,33 +336,49 @@ runcmd:
   - [bash, -lc, 'test -c /dev/kvm && test -r /dev/kvm && test -w /dev/kvm']
   - [bash, -lc, 'test -c /dev/net/tun && test -r /dev/net/tun && test -w /dev/net/tun']
 EOF
-  cloud-localds "$guest_root/seed.img" "$guest_root/user-data" "$guest_root/meta-data"
-  chmod 0600 "$guest_root"/*.qcow2 "$guest_root/seed.img"
+  cat >"$guest_root/network-config" <<EOF
+version: 2
+ethernets:
+  qualification:
+    match:
+      macaddress: "${guest_mac}"
+    set-name: eth0
+    dhcp4: true
+    dhcp6: false
+EOF
+  cloud-localds --network-config "$guest_root/network-config" "$guest_root/seed.img" "$guest_root/user-data" "$guest_root/meta-data"
+  : >"$console_log"
+  chmod 0600 "$guest_root"/*.qcow2 "$guest_root/seed.img" "$console_log"
   for account in "${qemu_accounts[@]}"; do
     setfacl -m "u:${account}:rw-" "$guest_root/root.qcow2" "$guest_root/data.qcow2"
     setfacl -m "u:${account}:r--" "$guest_root/seed.img"
+    setfacl -m "u:${account}:rw-" "$console_log"
   done
   run_interruptible virt-install --connect "$connection" --name "$domain" --memory 24576 --vcpus 8 \
     --cpu host-passthrough --machine q35 --osinfo ubuntu24.04 --import --noautoconsole --graphics none \
     --disk "path=$guest_root/root.qcow2,format=qcow2,bus=virtio" \
     --disk "path=$guest_root/data.qcow2,format=qcow2,bus=virtio" \
-    --disk "path=$guest_root/seed.img,device=cdrom" --network "network=$network,model=virtio" >/dev/null
-  address="$(guest_address "$domain")"
-  run_interruptible ssh "${ssh_options[@]}" "secondbox@$address" cloud-init status --wait >/dev/null
-  ssh "${ssh_options[@]}" "secondbox@$address" 'sudo install -d -m 0755 /opt/secondbox-qualification && sudo chown secondbox:secondbox /opt/secondbox-qualification'
-  run_interruptible scp "${ssh_options[@]}" -r "$release_directory" "secondbox@$address:/opt/secondbox-qualification/release" >/dev/null
-  scp "${ssh_options[@]}" "$repo_root/tests/installer/qualified-guest.sh" "secondbox@$address:/opt/secondbox-qualification/qualified-guest.sh" >/dev/null
-  ssh "${ssh_options[@]}" "secondbox@$address" chmod 0755 /opt/secondbox-qualification/qualified-guest.sh
-  run_interruptible ssh "${ssh_options[@]}" "secondbox@$address" /opt/secondbox-qualification/qualified-guest.sh install "$mode" /opt/secondbox-qualification/release
-  old_boot="$(ssh "${ssh_options[@]}" "secondbox@$address" cat /proc/sys/kernel/random/boot_id)"
+    --disk "path=$guest_root/seed.img,device=cdrom" --network "user,model=virtio,mac=$guest_mac" \
+    --serial "pty,log.file=$console_log,log.append=on" >/dev/null
+  active_ssh_port="$(configure_ssh_forward "$domain")"
+  address='127.0.0.1'
+  wait_for_guest_ssh "$domain" "$console_log"
+  run_interruptible guest_ssh "secondbox@$address" cloud-init status --wait >/dev/null
+  guest_ssh "secondbox@$address" 'sudo install -d -m 0755 /opt/secondbox-qualification && sudo chown secondbox:secondbox /opt/secondbox-qualification'
+  run_interruptible guest_scp -r "$release_directory" "secondbox@$address:/opt/secondbox-qualification/release" >/dev/null
+  guest_scp "$repo_root/tests/installer/qualified-guest.sh" "secondbox@$address:/opt/secondbox-qualification/qualified-guest.sh" >/dev/null
+  guest_ssh "secondbox@$address" chmod 0755 /opt/secondbox-qualification/qualified-guest.sh
+  run_interruptible guest_ssh "secondbox@$address" /opt/secondbox-qualification/qualified-guest.sh install "$mode" /opt/secondbox-qualification/release
+  old_boot="$(guest_ssh "secondbox@$address" cat /proc/sys/kernel/random/boot_id)"
   virsh -c "$connection" reboot "$domain" >/dev/null
   wait_for_boot_change "$address" "$old_boot"
-  run_interruptible ssh "${ssh_options[@]}" "secondbox@$address" /opt/secondbox-qualification/qualified-guest.sh verify "$mode" /opt/secondbox-qualification/release
-  run_interruptible scp "${ssh_options[@]}" "secondbox@$address:/opt/secondbox-qualification/evidence-${mode}.json" "$guest_root/evidence.json" >/dev/null
+  run_interruptible guest_ssh "secondbox@$address" /opt/secondbox-qualification/qualified-guest.sh verify "$mode" /opt/secondbox-qualification/release
+  run_interruptible guest_scp "secondbox@$address:/opt/secondbox-qualification/evidence-${mode}.json" "$guest_root/evidence.json" >/dev/null
   jq -e --arg mode "$mode" --arg manifestDigest "$candidate_manifest_digest" '.passed == true and .mode == $mode and .candidateManifestDigest == $manifestDigest and (.filesystemIdentity | length > 0)' "$guest_root/evidence.json" >/dev/null
   virsh -c "$connection" destroy "$domain" >/dev/null
   virsh -c "$connection" undefine "$domain" --nvram >/dev/null 2>&1 || virsh -c "$connection" undefine "$domain" >/dev/null
-  rm -f -- "$guest_root/root.qcow2" "$guest_root/data.qcow2" "$guest_root/seed.img"
+  active_ssh_port=''
+  rm -f -- "$guest_root/root.qcow2" "$guest_root/data.qcow2" "$guest_root/seed.img" "$qualification_base_image"
 }
 
 run_guest btrfs_image

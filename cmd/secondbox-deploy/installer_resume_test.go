@@ -19,6 +19,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
 	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
+	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
 )
 
 func TestInstallResumeOrchestratesEveryDurableStageWithoutPrintingSecrets(t *testing.T) {
@@ -47,7 +48,7 @@ func TestInstallResumeOrchestratesEveryDurableStageWithoutPrintingSecrets(t *tes
 	now := time.Now()
 	dependencies := installResumeDependencies{
 		OwnerUID: os.Getuid(), Now: func() time.Time { now = now.Add(time.Second); return now },
-		HostApply:  func(context.Context, string, string) error { t.Fatal("host apply repeated"); return nil },
+		HostApply:  func(context.Context, string, string) error { calls = append(calls, "host-apply"); return nil },
 		Revalidate: func(install.InstallPlan) error { calls = append(calls, "revalidate"); return nil },
 		VerifyRelease: func(context.Context, string) (releaseverify.VerifiedRelease, error) {
 			calls = append(calls, "verify-release")
@@ -130,7 +131,7 @@ func TestInstallResumeOrchestratesEveryDurableStageWithoutPrintingSecrets(t *tes
 	if final.Status != install.OperationSucceeded || len(final.CompletedStages) != len(install.StageSequence) {
 		t.Fatalf("final receipt = status %s stages %#v", final.Status, final.CompletedStages)
 	}
-	wantCalls := []string{"revalidate", "verify-release", "postconditions", "materialize", "initialize", "enroll", "compose-prepare", "compose-up", "login", "readiness", "smoke"}
+	wantCalls := []string{"host-apply", "revalidate", "verify-release", "postconditions", "materialize", "initialize", "enroll", "compose-prepare", "compose-up", "login", "readiness", "smoke"}
 	if strings.Join(calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("calls = %#v", calls)
 	}
@@ -144,22 +145,24 @@ func TestInstallResumeOrchestratesEveryDurableStageWithoutPrintingSecrets(t *tes
 	if err := runInstallResumeWith(context.Background(), operation, renderer, dependencies); err != nil {
 		t.Fatalf("repeat resume: %v", err)
 	}
-	if want := "revalidate,verify-release,postconditions,readiness"; strings.Join(calls, ",") != want {
+	if want := "host-apply,revalidate,verify-release,postconditions,readiness"; strings.Join(calls, ",") != want {
 		t.Fatalf("repeat resume calls = %#v, want %s", calls, want)
 	}
 }
 
 func TestInstalledRunnerReadinessRequiresExactAuthenticatedColdBootCapacity(t *testing.T) {
 	plan := install.InstallPlan{OperationID: "install_0123456789abcdef"}
-	ready := contracts.Runner{ID: "runner-0123456789abcdef", State: "ready", CredentialState: "active", Architectures: []string{"amd64"}, Capabilities: []string{"compute", "local-workspace"}, Capacity: map[string]int64{"CPUMillis": install.DurableCodingCPUMillis, "MemoryBytes": install.DurableCodingMemoryBytes, "DiskBytes": install.MinimumWorkspaceBytes, "Instances": 1, "Operations": 1}}
-	if evidence, ok := installedRunnerReadinessEvidence(plan, []contracts.Runner{{ID: "runner-unrelated", State: "ready"}, ready}); !ok || evidence["runnerId"] != ready.ID || evidence["coldBootCapacity"] != "advertised" {
+	ready := contracts.Runner{ID: "runner-0123456789abcdef", PoolName: standardresources.PoolAMD64, State: "ready", CredentialState: "pre_shared", Architectures: []string{standardresources.ArchitectureAMD64}, Capabilities: []string{"compute", "network-policy", "storage", "cleanup", "local-workspace"}, Capacity: map[string]int64{"CPUMillis": install.DurableCodingCPUMillis, "MemoryBytes": install.DurableCodingMemoryBytes, "DiskBytes": install.MinimumWorkspaceBytes, "Instances": 1, "Operations": install.DurableCodingConcurrentOperations}}
+	if evidence, ok := installedRunnerReadinessEvidence(plan, []contracts.Runner{{ID: "runner-unrelated", State: "ready"}, ready}); !ok || evidence["runnerId"] != ready.ID || evidence["runnerPool"] != standardresources.PoolAMD64 || evidence["coldBootCapacity"] != "advertised" || evidence["concurrentOperationCapacity"] != "16" {
 		t.Fatalf("exact readiness evidence = %#v, %t", evidence, ok)
 	}
 	for _, mutate := range []func(*contracts.Runner){
 		func(runner *contracts.Runner) { runner.ID = "runner-other" },
-		func(runner *contracts.Runner) { runner.CredentialState = "revoked" },
+		func(runner *contracts.Runner) { runner.PoolName = "other-pool" },
+		func(runner *contracts.Runner) { runner.CredentialState = "active" },
 		func(runner *contracts.Runner) { runner.Capabilities = []string{"local-workspace"} },
 		func(runner *contracts.Runner) { runner.Capacity["MemoryBytes"]-- },
+		func(runner *contracts.Runner) { runner.Capacity["Operations"]-- },
 	} {
 		candidate := ready
 		candidate.Architectures = slices.Clone(ready.Architectures)

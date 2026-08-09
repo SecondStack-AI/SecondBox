@@ -26,7 +26,7 @@ func TestInitSingleHostFromReleaseMaterializesEveryAcceptedRunnerValue(t *testin
 	base := t.TempDir()
 	deployment := filepath.Join(base, "deployment")
 	workspaceMount := filepath.Join(base, "dedicated-workspace")
-	facts := install.HostFacts{SchemaVersion: install.HostFactsSchema, ObservedAt: time.Date(2026, 8, 8, 1, 0, 0, 0, time.UTC), HostIdentity: "machine-id:fixture", OS: "linux", Architecture: "amd64", InvokingUID: int64(os.Getuid()), InvokingGID: int64(os.Getgid()), KernelVersion: "6.12", CgroupVersion: 2, CPUCount: 8, MemoryBytes: 32 << 30, BtrfsSupported: true, KVMAccessible: true, TUNAccessible: true, Devices: []install.DeviceFact{{Path: "/dev/fixture", Identity: "8:99", Filesystem: "xfs", SizeBytes: 200 << 30, AvailableBytes: 100 << 30, Mountpoint: workspaceMount}}, Routes: []install.RouteFact{}, DNSUpstreams: []string{"192.0.2.53"}, CandidateUIDRanges: []install.UIDRange{{Start: 200000, Count: 64}}, Utilities: map[string]string{"docker": "fixture"}, Findings: []install.Finding{{ID: "platform", Class: install.FindingPass, Summary: "Linux amd64"}}}
+	facts := install.HostFacts{SchemaVersion: install.HostFactsSchema, ObservedAt: time.Date(2026, 8, 8, 1, 0, 0, 0, time.UTC), HostIdentity: "machine-id:fixture", OS: "linux", Architecture: "amd64", InvokingUID: int64(os.Getuid()), InvokingGID: int64(os.Getgid()), KernelVersion: "6.12", CgroupVersion: 2, CPUCount: 8, MemoryBytes: 32 << 30, BtrfsSupported: true, KVMAccessible: true, TUNAccessible: true, Devices: []install.DeviceFact{{Path: "/dev/fixture", Identity: "8:99", Filesystem: "xfs", SizeBytes: 200 << 30, AvailableBytes: 100 << 30, Mountpoint: workspaceMount, JailerCompatible: true}}, Routes: []install.RouteFact{}, DNSUpstreams: []string{"192.0.2.53"}, CandidateUIDRanges: []install.UIDRange{{Start: 200000, Count: 64}}, Utilities: map[string]string{"docker": "fixture"}, Findings: []install.Finding{{ID: "platform", Class: install.FindingPass, Summary: "Linux amd64"}}}
 	releasePlan := install.ReleasePlan{Version: release.Version, ArtifactManifestURL: releasecontract.ArtifactManifestLocation(release.Version), ArtifactManifestDigest: releasecontract.Digest(releaseBytes), SigningKeyFingerprint: release.MicroVM.SigningKeyFingerprint, Images: map[string]string{"control-plane": release.ControlPlane.Reference, "runner": release.Runner.Reference, "microvm-artifacts": release.MicroVM.ImageReference, "installer-tools": release.InstallerTools.Reference, "postgres": release.BundledServices.Postgres, "object-store": release.BundledServices.ObjectStore, "object-store-client": release.BundledServices.ObjectStoreClient}, BinaryDigests: map[string]string{}, ExpectedDownloadBytes: install.ExecutionBundleEstimateBytes}
 	for _, binary := range release.Binaries {
 		if binary.Platform == "linux/amd64" {
@@ -78,8 +78,18 @@ func TestInitSingleHostFromReleaseMaterializesEveryAcceptedRunnerValue(t *testin
 		t.Fatalf("release-backed deployment = %#v", manifest.Deployment)
 	}
 	runner := manifest.Runners[0]
-	if runner.RunnerID != result.RunnerID || runner.IdentityHostDirectory != result.RunnerIdentityDirectory || runner.WorkspaceHostDirectory != plan.Storage.WorkspacePath || runner.ArtifactHostDirectory != filepath.Join(deployment, "artifacts") || runner.FirecrackerJailerUIDStart == nil || *runner.FirecrackerJailerUIDStart != plan.Network.JailerUIDRange.Start || runner.NetworkPolicyDNSUpstream != "[2001:db8::53]:53" || runner.DataPlaneAdvertisedAddress != plan.Network.DataPlaneAddress || runner.ArtifactPublicKeySHA256 != keyID {
+	if runner.RunnerID != result.RunnerID || runner.IdentityHostDirectory != result.RunnerIdentityDirectory || runner.WorkspaceHostDirectory != plan.Storage.WorkspacePath || runner.ArtifactHostDirectory != installPath(plan, "artifacts") || runner.StateHostDirectory != installPath(plan, "runner-storage") || runner.FirecrackerCPUTemplate != plan.Compute.FirecrackerCPUTemplate || runner.FirecrackerJailerUIDStart == nil || *runner.FirecrackerJailerUIDStart != plan.Network.JailerUIDRange.Start || runner.MaxConcurrentOperationsGlobal == nil || *runner.MaxConcurrentOperationsGlobal != plan.Capacity.ConcurrentOperations || *runner.MaxConcurrentOperationsGlobal < install.DurableCodingConcurrentOperations || runner.NetworkPolicyDNSUpstream != "[2001:db8::53]:53" || runner.DataPlaneAdvertisedAddress != plan.Network.DataPlaneAddress || runner.ArtifactPublicKeySHA256 != keyID {
 		t.Fatalf("Runner does not match accepted plan: %#v", runner)
+	}
+	if runner.FirecrackerJailRoot != "/var/lib/secondbox-runner/jail" {
+		t.Fatalf("installer-generated Firecracker jail root = %q", runner.FirecrackerJailRoot)
+	}
+	if runner.LogDirectory != "/var/lib/secondbox-runner/state/logs" || runner.FirecrackerLogDirectory != "/var/lib/secondbox-runner/state/firecracker-logs" || runner.LogDirectory == runner.FirecrackerLogDirectory {
+		t.Fatalf("installer-generated Runner and Firecracker logs overlap: Runner %q Firecracker %q", runner.LogDirectory, runner.FirecrackerLogDirectory)
+	}
+	maximumSocketPath := filepath.Join(runner.FirecrackerJailRoot, filepath.Base(runner.FirecrackerPath), strings.Repeat("i", maxFirecrackerInstanceIDBytes), "root", "firecracker.sock")
+	if len(maximumSocketPath) >= linuxUnixSocketPathLimit {
+		t.Fatalf("installer-generated maximum Firecracker API socket path is %d bytes: %s", len(maximumSocketPath), maximumSocketPath)
 	}
 	storedRelease, err := os.ReadFile(filepath.Join(deployment, "release-artifact-manifest.json"))
 	if err != nil || string(storedRelease) != string(releaseBytes) {

@@ -16,8 +16,8 @@ type HostApplyExecutor interface {
 	FormatBtrfs(context.Context, string, string) error
 	WriteMountUnit(PlannedPath, string) error
 	EnableMountUnit(context.Context, string) error
-	SecureMountedWorkspace(PlannedPath) error
-	ProveReflinkIsolation(string) (string, error)
+	SecureDirectory(PlannedPath) error
+	ProveReflinkTopology(string, string, string) (string, error)
 	RemoveEmpty(CreatedResource) (bool, error)
 }
 
@@ -33,7 +33,7 @@ func ApplyAcceptedHost(ctx context.Context, directory, expectedDigest string, ca
 		return InstallReceipt{}, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
-	plan, receipt, err := ReadAccepted(directory, expectedDigest, callerUID)
+	plan, receipt, err := ReadHostApply(directory, expectedDigest, callerUID)
 	if err != nil {
 		return InstallReceipt{}, err
 	}
@@ -63,11 +63,17 @@ func ApplyHost(ctx context.Context, plan InstallPlan, receipt InstallReceipt, de
 	if dependencies.Executor.EffectiveUID() != 0 {
 		return receipt, installerError("private host apply must run as root through sudo", nil)
 	}
-	if len(receipt.CompletedStages) != 2 || receipt.CompletedStages[1].Stage != StagePlanAccepted {
+	_, hostApplyComplete := completedStage(receipt, StageHostApply)
+	if !hostApplyComplete && (len(receipt.CompletedStages) != 2 || receipt.CompletedStages[1].Stage != StagePlanAccepted) {
 		return receipt, installerError("host apply requires an accepted, not-yet-applied plan", nil)
 	}
 	if err := dependencies.Executor.Revalidate(ctx, plan, receipt); err != nil {
 		return receipt, installerError("root prerequisite revalidation", err)
+	}
+	if hostApplyComplete {
+		// A completed host-apply replay is a privileged postcondition check,
+		// not permission to mutate the accepted host paths again.
+		return receipt, nil
 	}
 	createdThisAttempt := []CreatedResource{}
 	fail := func(problem error) (InstallReceipt, error) {
@@ -110,20 +116,26 @@ func ApplyHost(ctx context.Context, plan InstallPlan, receipt InstallReceipt, de
 		}
 		return true, nil
 	}
-	for _, path := range plan.Paths {
-		if !path.RequiresSudo || !path.Create || path.Kind != ResourceDirectory || path.Name == "workspace" {
-			continue
-		}
+	createDirectory := func(path PlannedPath) error {
 		already, err := recorded(path)
 		if err != nil {
-			return fail(err)
+			return err
 		}
 		if already {
-			continue
+			return nil
 		}
 		resource := resourceFromPath(path, StageHostApply)
 		if err := materialize(resource, func() error { return dependencies.Executor.CreateDirectory(path) }); err != nil {
-			return fail(installerError("create privileged directory "+path.Name, err))
+			return installerError("create privileged directory "+path.Name, err)
+		}
+		return nil
+	}
+	for _, path := range plan.Paths {
+		if !path.RequiresSudo || !path.Create || path.Kind != ResourceDirectory || (path.Name != "runner-root" && path.Name != "runner-storage") {
+			continue
+		}
+		if err := createDirectory(path); err != nil {
+			return fail(err)
 		}
 	}
 	workspace, found := plannedPathByName(plan.Paths, "workspace")
@@ -158,21 +170,16 @@ func ApplyHost(ctx context.Context, plan InstallPlan, receipt InstallReceipt, de
 			}
 		}
 	}
-	workspaceRecorded, err := recorded(workspace)
-	if err != nil {
-		return fail(err)
-	}
-	if !workspaceRecorded {
-		if err := materialize(resourceFromPath(workspace, StageHostApply), func() error { return dependencies.Executor.CreateDirectory(workspace) }); err != nil {
-			return fail(installerError("create final workspace directory", err))
-		}
+	runnerStorage, found := plannedPathByName(plan.Paths, "runner-storage")
+	if !found {
+		return fail(installerError("runner storage resource is absent from plan", nil))
 	}
 	if plan.Storage.Choice == StorageBtrfsImage {
 		unit, found := plannedPathByName(plan.Paths, "workspace-mount-unit")
 		if !found {
 			return fail(installerError("workspace mount unit resource is absent from plan", nil))
 		}
-		content := MountUnit(plan.Storage.FilesystemImagePath, plan.Storage.WorkspacePath)
+		content := MountUnit(plan.Storage.FilesystemImagePath, runnerStorage.Path)
 		unitRecorded, err := recorded(unit)
 		if err != nil {
 			return fail(err)
@@ -187,13 +194,26 @@ func ApplyHost(ctx context.Context, plan InstallPlan, receipt InstallReceipt, de
 		if err := dependencies.Executor.EnableMountUnit(ctx, unit.Path); err != nil {
 			return fail(installerError("enable and start workspace mount unit", err))
 		}
-		if err := dependencies.Executor.SecureMountedWorkspace(workspace); err != nil {
-			return fail(installerError("secure mounted workspace root", err))
+	}
+	if err := dependencies.Executor.SecureDirectory(runnerStorage); err != nil {
+		return fail(installerError("secure runner storage root", err))
+	}
+	for _, path := range plan.Paths {
+		if !path.RequiresSudo || !path.Create || path.Kind != ResourceDirectory || path.Name == "runner-root" || path.Name == "runner-storage" {
+			continue
+		}
+		if err := createDirectory(path); err != nil {
+			return fail(err)
 		}
 	}
-	identity, err := dependencies.Executor.ProveReflinkIsolation(plan.Storage.WorkspacePath)
+	artifactParent, artifactParentFound := plannedPathByName(plan.Paths, "artifacts-parent")
+	run, runFound := plannedPathByName(plan.Paths, "run")
+	if !artifactParentFound || !runFound {
+		return fail(installerError("runner reflink topology resources are absent from plan", nil))
+	}
+	identity, err := dependencies.Executor.ProveReflinkTopology(artifactParent.Path, run.Path, workspace.Path)
 	if err != nil {
-		return fail(installerError("workspace FICLONE and mutation-isolation proof", err))
+		return fail(installerError("runner asset-to-run FICLONE and Workspace identity proof", err))
 	}
 	beforeStageCompletion := receipt
 	beforeStageCompletion.CompletedStages = slices.Clone(receipt.CompletedStages)
@@ -201,7 +221,7 @@ func ApplyHost(ctx context.Context, plan InstallPlan, receipt InstallReceipt, de
 	beforeStageCompletion.PendingResourceIDs = slices.Clone(receipt.PendingResourceIDs)
 	beforeStageCompletion.RemovedResourceIDs = slices.Clone(receipt.RemovedResourceIDs)
 	beforeStageCompletion.CompletedPurgeSteps = slices.Clone(receipt.CompletedPurgeSteps)
-	if err := receipt.CompleteStage(StageHostApply, dependencies.Now().UTC(), map[string]string{"workspaceDeviceIdentity": identity, "reflinkMutationIsolation": "passed"}); err != nil {
+	if err := receipt.CompleteStage(StageHostApply, dependencies.Now().UTC(), map[string]string{"workspaceDeviceIdentity": identity, "runnerStorageDeviceIdentity": identity, "reflinkMutationIsolation": "passed", "reflinkTopology": "artifacts-to-run-and-workspace"}); err != nil {
 		return fail(err)
 	}
 	if err := dependencies.PersistReceipt(receipt); err != nil {
@@ -242,6 +262,6 @@ func rollbackEmpty(executor HostApplyExecutor, resources []CreatedResource) (map
 	return removedResources, result
 }
 
-func MountUnit(imagePath, workspacePath string) string {
-	return "[Unit]\nDescription=SecondBox durable Workspace filesystem\nAfter=local-fs-pre.target\nBefore=docker.service\n\n[Mount]\nWhat=" + imagePath + "\nWhere=" + workspacePath + "\nType=btrfs\nOptions=loop,nodev,nosuid,noexec\nTimeoutSec=120\n\n[Install]\nWantedBy=local-fs.target\n"
+func MountUnit(imagePath, storagePath string) string {
+	return "[Unit]\nDescription=SecondBox reflink-capable Runner storage\nAfter=local-fs-pre.target\nBefore=docker.service\n\n[Mount]\nWhat=" + imagePath + "\nWhere=" + storagePath + "\nType=btrfs\nOptions=loop,nosuid\nTimeoutSec=120\n\n[Install]\nWantedBy=local-fs.target\n"
 }

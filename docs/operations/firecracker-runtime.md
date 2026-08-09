@@ -233,11 +233,15 @@ read-only mode, ext4 identity, and deterministic template UUID; invalid
 template evidence makes startup or Workspace creation fail closed.
 
 The same-host Compose profile mounts the explicitly configured
-`SECONDBOX_RUNNER_WORKSPACE_HOST_DIR` at
-`SECONDBOX_RUNNER_WORKSPACE_ROOT`. The deployment validator requires that host
-directory to exist on a device distinct from the host root. Operators must back
-up this directory together with the stable Runner identity; it is authoritative
-durable state, not expendable cache.
+`SECONDBOX_RUNNER_STATE_HOST_DIR` once at `/var/lib/secondbox-runner`. Its
+`workspaces` child is the exact `SECONDBOX_RUNNER_WORKSPACE_HOST_DIR`, while
+mutable Firecracker state is kept under its `state` child. The deployment
+validator requires that storage root to exist on a device distinct from the
+host root and requires artifacts, Workspaces, and Runner state to share that
+device. A separate nested Workspace bind is forbidden because the jailer must
+hard-link Workspace images into its jail. Operators must back up the Workspace
+child together with the stable Runner identity; it is authoritative durable
+state, not expendable cache.
 
 The recovery, warning, and admission-denial percentages are required integers satisfying `0 < recovery < warning < admission deny < 100`. One storage-pressure controller combines measured consumption with atomic reservations for accepted-but-not-yet-materialized assignment disks. It emits bounded `storage_pressure` evidence on warning, admission denial, probe failure, and recovery. Warning does not reject work. Admission denial occurs before workspace progress or allocation, remains latched while utilization is above the recovery threshold, and makes readiness fail closed. Probe errors also fail readiness and admission rather than returning partial success.
 

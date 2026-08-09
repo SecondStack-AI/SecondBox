@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,6 +15,38 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
 	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
 )
+
+func TestSystemReleaseMaterializerExtractMicroVMImageOverridesMissingImageCommand(t *testing.T) {
+	bin := t.TempDir()
+	docker := filepath.Join(bin, "docker")
+	const reference = "ghcr.io/secondstack-ai/secondbox/microvm-artifacts@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const script = `#!/bin/sh
+case "$1" in
+create)
+	[ "$#" -eq 4 ] && [ "$2" = "--entrypoint" ] && [ "$3" = "/bin/true" ] && [ "$4" = "` + reference + `" ] || exit 91
+	printf '%s\n' fake-container-id
+	;;
+cp)
+	[ "$#" -eq 3 ] && [ "$2" = "fake-container-id:/secondbox-runner-microvm/." ] || exit 92
+	;;
+rm)
+	[ "$#" -eq 3 ] && [ "$2" = "--force" ] && [ "$3" = "fake-container-id" ] || exit 93
+	;;
+*)
+	exit 94
+	;;
+esac
+`
+	if err := os.WriteFile(docker, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+
+	materializer := SystemReleaseMaterializer{Output: io.Discard, Diagnostic: io.Discard}
+	if err := materializer.ExtractMicroVMImage(context.Background(), reference, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+}
 
 type fakeReleaseMaterializer struct {
 	source      string
@@ -83,6 +116,9 @@ func TestMaterializeReleaseResumesWithoutReextractingVerifiedBundle(t *testing.T
 		t.Fatal(err)
 	}
 	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".local"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	operation := filepath.Join(root, "operation")
 	if err := os.Mkdir(operation, 0o700); err != nil {
 		t.Fatal(err)
@@ -94,19 +130,34 @@ func TestMaterializeReleaseResumesWithoutReextractingVerifiedBundle(t *testing.T
 		t.Fatal(err)
 	}
 	plan.Release = releasePlanForMaterializer(release, releaseBytes)
-	plan.Storage = StoragePlan{Choice: StorageExistingMount, WorkspacePath: filepath.Join(root, "workspace"), ExistingDeviceIdentity: "fixture-device"}
+	runnerRoot := filepath.Join(root, "runner")
+	runnerStorage := filepath.Join(runnerRoot, "storage")
+	workspace := filepath.Join(runnerStorage, "workspaces")
+	artifactParent := filepath.Join(runnerStorage, "release")
+	if err := os.MkdirAll(artifactParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plan.Storage = StoragePlan{Choice: StorageExistingMount, WorkspacePath: workspace, ExistingDeviceIdentity: "fixture-device"}
 	plan.CLI = CLIPlan{ConfigPath: filepath.Join(root, "config", "secondbox", "config.json"), TenantRef: "tenant", SubjectRef: "subject"}
 	uid, gid := int64(os.Getuid()), int64(os.Getgid())
 	plan.Paths = []PlannedPath{
 		plannedPath("deployment", operation, PathUserDeployment, ResourceDirectory, 0o700, uid, gid, false, true),
-		plannedPath("artifacts", filepath.Join(operation, "artifacts"), PathUserDeployment, ResourceDirectory, 0o700, uid, gid, false, true),
+		plannedPath("runner-root", runnerRoot, PathExistingWorkspace, ResourceDirectory, 0o711, 0, 0, true, true),
+		plannedPath("runner-storage", runnerStorage, PathExistingWorkspace, ResourceDirectory, 0o711, 0, 0, true, true),
+		plannedPath("artifacts-parent", artifactParent, PathInstallerHost, ResourceDirectory, 0o700, uid, gid, true, true),
+		plannedPath("artifacts", filepath.Join(artifactParent, "artifacts"), PathInstallerHost, ResourceDirectory, 0o700, uid, gid, false, true),
+		plannedPath("state", filepath.Join(runnerStorage, "state"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
+		plannedPath("jail", filepath.Join(runnerStorage, "jail"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
+		plannedPath("run", filepath.Join(runnerStorage, "state", "run"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
+		plannedPath("logs", filepath.Join(runnerStorage, "state", "logs"), PathInstallerHost, ResourceDirectory, 0o750, runnerContainerUID, runnerContainerGID, true, true),
+		plannedPath("firecracker-logs", filepath.Join(runnerStorage, "state", "firecracker-logs"), PathInstallerHost, ResourceDirectory, 0o700, 0, 0, true, true),
 		plannedPath("binary-directory-root", filepath.Join(root, ".local"), PathUserDeployment, ResourceDirectory, 0o755, uid, gid, false, true),
 		plannedPath("binary-directory", filepath.Join(root, ".local", "bin"), PathUserDeployment, ResourceDirectory, 0o755, uid, gid, false, true),
 		plannedPath("secondbox-binary", filepath.Join(root, ".local", "bin", "secondbox"), PathUserDeployment, ResourceBinary, 0o755, uid, gid, false, true),
 		plannedPath("secondbox-deploy-binary", filepath.Join(root, ".local", "bin", "secondbox-deploy"), PathUserDeployment, ResourceBinary, 0o755, uid, gid, false, true),
 		plannedPath("cli-config", plan.CLI.ConfigPath, PathUserDeployment, ResourceFile, 0o600, uid, gid, false, true),
 		plannedPath("platform-token", filepath.Join(operation, "platform-token"), PathUserDeployment, ResourceFile, 0o600, uid, gid, false, true),
-		plannedPath("workspace", plan.Storage.WorkspacePath, PathExistingWorkspace, ResourceDirectory, 0o750, runnerContainerUID, runnerContainerGID, true, true),
+		plannedPath("workspace", workspace, PathExistingWorkspace, ResourceDirectory, 0o750, runnerContainerUID, runnerContainerGID, true, true),
 	}
 	plan.SecretTargets = []SecretTarget{{Category: "platform-authority", Path: filepath.Join(operation, "platform-token")}}
 	if err := plan.Validate(); err != nil {
@@ -168,6 +219,16 @@ func TestMaterializeReleaseResumesWithoutReextractingVerifiedBundle(t *testing.T
 		if info.Mode().Perm() != 0o755 {
 			t.Fatalf("%s mode under hardened umask = %o", name, info.Mode().Perm())
 		}
+	}
+	localInfo, err := os.Stat(filepath.Join(root, ".local"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if localInfo.Mode().Perm() != 0o700 {
+		t.Fatalf("pre-existing binary root mode = %o, want preserved 700", localInfo.Mode().Perm())
+	}
+	if _, recorded := receiptResource(completed, "binary-directory-root"); recorded {
+		t.Fatal("pre-existing binary root was claimed as an installer-created resource")
 	}
 }
 

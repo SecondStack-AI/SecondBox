@@ -13,7 +13,7 @@ func plannerFacts(t *testing.T) HostFacts {
 	facts.BtrfsSupported = true
 	facts.DNSUpstreams = []string{"192.0.2.53"}
 	facts.Devices = []DeviceFact{
-		{Path: "/dev/sdb", Identity: "8:16", Filesystem: "xfs", SizeBytes: 300 << 30, AvailableBytes: 240 << 30, Mountpoint: "/srv/secondbox-workspace"},
+		{Path: "/dev/sdb", Identity: "8:16", Filesystem: "xfs", SizeBytes: 300 << 30, AvailableBytes: 240 << 30, Mountpoint: "/srv/secondbox-workspace", JailerCompatible: true},
 		{Path: "/dev/sdc", Identity: "8:32", Filesystem: "ext4", SizeBytes: 300 << 30, AvailableBytes: 240 << 30, Mountpoint: "/srv/not-supported"},
 		{Path: "/dev/root", Identity: "8:1", Filesystem: "btrfs", SizeBytes: 500 << 30, AvailableBytes: 300 << 30, Mountpoint: "/"},
 	}
@@ -65,6 +65,16 @@ func TestStorageOptionsRejectMountOnRootDevice(t *testing.T) {
 	}
 }
 
+func TestStorageOptionsRejectMountThatCannotHostJailer(t *testing.T) {
+	facts := plannerFacts(t)
+	facts.Devices[0].JailerCompatible = false
+	for _, option := range StorageOptions(facts, 100<<30, ExecutionBundleEstimateBytes) {
+		if option.Choice == StorageExistingMount {
+			t.Fatalf("jailer-incompatible mount was offered: %#v", option)
+		}
+	}
+}
+
 func TestStorageOptionsRequireBackingForControlServicesAndReleaseAssets(t *testing.T) {
 	if options := StorageOptions(plannerFacts(t), MinimumControlBackingBytes+ExecutionBundleEstimateBytes+MinimumObjectStoreBytes-1, ExecutionBundleEstimateBytes); len(options) != 0 {
 		t.Fatalf("storage options with insufficient control backing = %#v", options)
@@ -73,7 +83,7 @@ func TestStorageOptionsRequireBackingForControlServicesAndReleaseAssets(t *testi
 
 func TestStorageOptionsUseDistinctExistingMountAndImageMinimums(t *testing.T) {
 	facts := plannerFacts(t)
-	facts.Devices[0].AvailableBytes = MinimumWorkspaceBytes
+	facts.Devices[0].AvailableBytes = MinimumRunnerStorageBytes
 	options := StorageOptions(facts, 81<<30, ExecutionBundleEstimateBytes)
 	if len(options) != 1 || options[0].Choice != StorageExistingMount {
 		t.Fatalf("storage options at exact thresholds = %#v", options)
@@ -85,11 +95,14 @@ func TestProposeExistingFilesystemPlanIsCompleteAndExplicit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Storage.ExistingDeviceIdentity != "8:16" || plan.Storage.WorkspacePath != "/srv/secondbox-workspace/secondbox-workspaces" {
+	if plan.Storage.ExistingDeviceIdentity != "8:16" || plan.Storage.WorkspacePath != "/srv/secondbox-workspace/secondbox-install_0123456789abcdef/storage/workspaces" || plan.Capacity.MaxWorkspaceBytes != 225<<30 {
 		t.Fatalf("storage = %#v", plan.Storage)
 	}
 	if len(plan.Capacity.SubjectQuotas) != 9 || len(plan.Network.Gateways) != 2 || plan.Network.GuestBridgeCIDR != "172.31.0.0/24" {
 		t.Fatalf("capacity/network incomplete: %#v %#v", plan.Capacity, plan.Network)
+	}
+	if plan.Compute.FirecrackerCPUTemplate != SingleHostFirecrackerCPUTemplate {
+		t.Fatalf("compute plan = %#v", plan.Compute)
 	}
 	if len(plan.SecretTargets) < 8 {
 		t.Fatalf("secret targets = %#v", plan.SecretTargets)
@@ -98,8 +111,23 @@ func TestProposeExistingFilesystemPlanIsCompleteAndExplicit(t *testing.T) {
 	if !found || workspace.OwnerUID != runnerContainerUID || workspace.OwnerGID != runnerContainerGID {
 		t.Fatalf("workspace ownership = %#v", workspace)
 	}
+	runnerStorage, _ := plannedPathByName(plan.Paths, "runner-storage")
+	runnerRoot, _ := plannedPathByName(plan.Paths, "runner-root")
+	artifactParent, _ := plannedPathByName(plan.Paths, "artifacts-parent")
+	artifacts, _ := plannedPathByName(plan.Paths, "artifacts")
+	run, _ := plannedPathByName(plan.Paths, "run")
+	if filepath.Dir(workspace.Path) != runnerStorage.Path || !strings.HasPrefix(artifacts.Path, runnerStorage.Path+string(filepath.Separator)) || !strings.HasPrefix(run.Path, runnerStorage.Path+string(filepath.Separator)) {
+		t.Fatalf("Runner assets, run state, and Workspaces are not colocated: storage=%#v artifacts=%#v run=%#v workspace=%#v", runnerStorage, artifacts, run, workspace)
+	}
+	if runnerRoot.Mode != 0o711 || runnerRoot.OwnerUID != 0 || runnerStorage.Mode != 0o711 || artifactParent.Mode != 0o700 || artifactParent.OwnerUID != plan.HostFacts.InvokingUID || artifacts.OwnerUID != plan.HostFacts.InvokingUID {
+		t.Fatalf("artifact publication path is not traversable without exposing privileged Runner storage: root=%#v storage=%#v parent=%#v artifacts=%#v", runnerRoot, runnerStorage, artifactParent, artifacts)
+	}
 	state, _ := plannedPathByName(plan.Paths, "state")
-	for _, name := range []string{"jail", "run", "network", "snapshot-template-cache", "logs"} {
+	jail, _ := plannedPathByName(plan.Paths, "jail")
+	if jail.Path != filepath.Join(runnerStorage.Path, "jail") {
+		t.Fatalf("Runner jail is not the reviewed storage child: %#v", jail)
+	}
+	for _, name := range []string{"run", "network", "snapshot-template-cache", "firecracker-logs", "logs"} {
 		planned, found := plannedPathByName(plan.Paths, name)
 		if !found || !strings.HasPrefix(planned.Path, state.Path+string(filepath.Separator)) {
 			t.Fatalf("runner path %s is outside state bind mount: %#v", name, planned)
@@ -108,6 +136,10 @@ func TestProposeExistingFilesystemPlanIsCompleteAndExplicit(t *testing.T) {
 	logs, _ := plannedPathByName(plan.Paths, "logs")
 	if logs.OwnerUID != runnerContainerUID || logs.OwnerGID != runnerContainerGID {
 		t.Fatalf("runner log ownership = %#v", logs)
+	}
+	firecrackerLogs, _ := plannedPathByName(plan.Paths, "firecracker-logs")
+	if firecrackerLogs.OwnerUID != 0 || firecrackerLogs.OwnerGID != 0 || firecrackerLogs.Mode != 0o700 || firecrackerLogs.Path == logs.Path {
+		t.Fatalf("Firecracker log isolation = Runner %#v Firecracker %#v", logs, firecrackerLogs)
 	}
 	encoded, err := Canonical(plan)
 	if err != nil {
@@ -128,7 +160,7 @@ func TestProposeImagePlanBoundsAllocationAndReplacesPortCollisions(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Storage.ImageSizeBytes != 68<<30 || plan.Capacity.MaxWorkspaceBytes != 68<<30 {
+	if plan.Storage.ImageSizeBytes != 68<<30 || plan.Capacity.MaxWorkspaceBytes != 53<<30 {
 		t.Fatalf("image capacity = %#v", plan.Storage)
 	}
 	if plan.Capacity.SubjectQuotas["maxArtifactBytes"] != 2<<30 {
@@ -137,10 +169,10 @@ func TestProposeImagePlanBoundsAllocationAndReplacesPortCollisions(t *testing.T)
 	if plan.Network.APIAddress != "127.0.0.1:8081" || plan.Network.RunnerAddress != "127.0.0.1:9445" || plan.Network.DataPlaneAddress != "127.0.0.1:9446" {
 		t.Fatalf("replacement ports = %#v", plan.Network)
 	}
-	if !strings.Contains(RenderPlanReview(plan), "Ordinary uninstall preserves") || !strings.Contains(RenderPlanReview(plan), "Paths requiring sudo") {
+	if !strings.Contains(RenderPlanReview(plan), "Compute: Firecracker CPU template None") || !strings.Contains(RenderPlanReview(plan), "Ordinary uninstall preserves") || !strings.Contains(RenderPlanReview(plan), "Paths requiring sudo") {
 		t.Fatalf("review omitted durable or privilege boundary:\n%s", RenderPlanReview(plan))
 	}
-	if plan.Capacity.MaxCPUMillis < DurableCodingCPUMillis || plan.Capacity.MaxMemoryBytes < DurableCodingMemoryBytes || plan.Capacity.MaxWorkspaceBytes < MinimumWorkspaceBytes {
+	if plan.Capacity.MaxCPUMillis < DurableCodingCPUMillis || plan.Capacity.MaxMemoryBytes < DurableCodingMemoryBytes || plan.Capacity.MaxWorkspaceBytes < MinimumWorkspaceBytes || plan.Capacity.ConcurrentOperations < plan.Capacity.MaxSandboxes*DurableCodingConcurrentOperations || plan.Capacity.SubjectQuotas["maxConcurrentOperations"] < plan.Capacity.SubjectQuotas["maxActiveInstances"]*DurableCodingConcurrentOperations {
 		t.Fatalf("proposal cannot run durable-coding: %#v", plan.Capacity)
 	}
 }

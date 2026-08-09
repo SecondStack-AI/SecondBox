@@ -62,7 +62,7 @@ func collectComposeEvidence(ctx context.Context, manifestPath string, evidence m
 		name    string
 		command []string
 	}{{"compose-status", []string{"ps", "--format", "json"}}, {"runner-log-tail", []string{"logs", "--no-color", "--tail", "200", "runner"}}} {
-		arguments, err := deployconfig.ComposeDiagnosticArguments(manifestPath, item.command...)
+		arguments, err := deployconfig.ComposeDiagnosticArgumentsForAcceptedInstaller(manifestPath, item.command...)
 		if err != nil {
 			evidence[item.name+".status"] = evidenceStatus(err)
 			continue

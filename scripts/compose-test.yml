@@ -93,3 +93,8 @@ services:
       - ../.tmp/compose-test/secondboxd:/opt/secondbox/secondboxd:ro
       - ${SECONDBOX_COMPOSE_TEST_PKI_DIR:?SECONDBOX_COMPOSE_TEST_PKI_DIR is required}:/opt/secondbox/pki:ro
       - ./compose-test-signed-assets.json:/opt/secondbox/signed-assets.json:ro
+
+networks:
+  default:
+    external: true
+    name: ${SECONDBOX_COMPOSE_TEST_NETWORK:?SECONDBOX_COMPOSE_TEST_NETWORK is required}

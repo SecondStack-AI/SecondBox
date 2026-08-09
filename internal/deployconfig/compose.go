@@ -20,6 +20,16 @@ type ComposeExecutor interface {
 // action through a narrow executor. Resource application remains the existing
 // idempotent engine and runs only after Compose startup succeeds.
 func RunCompose(ctx context.Context, manifestPath, action string, executor ComposeExecutor, httpClient *http.Client) error {
+	return runCompose(ctx, manifestPath, action, executor, httpClient, true)
+}
+
+// RunComposeForAcceptedInstaller uses the accepted installer's independently
+// revalidated root-host evidence while retaining all ordinary manifest checks.
+func RunComposeForAcceptedInstaller(ctx context.Context, manifestPath, action string, executor ComposeExecutor, httpClient *http.Client) error {
+	return runCompose(ctx, manifestPath, action, executor, httpClient, false)
+}
+
+func runCompose(ctx context.Context, manifestPath, action string, executor ComposeExecutor, httpClient *http.Client, validateSameHost bool) error {
 	if action != "config" && action != "prepare" && action != "up" && action != "down" {
 		return manifestError("compose action must be config, prepare, up, or down", nil)
 	}
@@ -31,7 +41,12 @@ func RunCompose(ctx context.Context, manifestPath, action string, executor Compo
 		return err
 	}
 	environmentPath := filepath.Join(filepath.Dir(absolute), ".secondbox.generated.env")
-	resolved, err := Render(absolute, environmentPath)
+	var resolved ResolvedDeployment
+	if validateSameHost {
+		resolved, err = Render(absolute, environmentPath)
+	} else {
+		resolved, err = renderForAcceptedInstaller(absolute, environmentPath)
+	}
 	if err != nil {
 		return err
 	}
@@ -74,6 +89,14 @@ func RunCompose(ctx context.Context, manifestPath, action string, executor Compo
 // Compose down because uninstall preserves the bundled database and object
 // store while the typed permanent-purge workflow must remove them.
 func PurgeComposeVolumes(ctx context.Context, manifestPath string, executor ComposeExecutor) error {
+	return purgeComposeVolumes(ctx, manifestPath, executor, true)
+}
+
+func PurgeComposeVolumesForAcceptedInstaller(ctx context.Context, manifestPath string, executor ComposeExecutor) error {
+	return purgeComposeVolumes(ctx, manifestPath, executor, false)
+}
+
+func purgeComposeVolumes(ctx context.Context, manifestPath string, executor ComposeExecutor, validateSameHost bool) error {
 	if executor == nil {
 		return manifestError("Compose executor is required", nil)
 	}
@@ -82,7 +105,12 @@ func PurgeComposeVolumes(ctx context.Context, manifestPath string, executor Comp
 		return err
 	}
 	environmentPath := filepath.Join(filepath.Dir(absolute), ".secondbox.generated.env")
-	resolved, err := Render(absolute, environmentPath)
+	var resolved ResolvedDeployment
+	if validateSameHost {
+		resolved, err = Render(absolute, environmentPath)
+	} else {
+		resolved, err = renderForAcceptedInstaller(absolute, environmentPath)
+	}
 	if err != nil {
 		return err
 	}
@@ -101,11 +129,19 @@ func composeUpArgumentsInternal(arguments []string, options ...string) []string 
 // ComposeDiagnosticArguments returns the exact existing deployment transport
 // for bounded read-only Docker Compose inspection without rerendering it.
 func ComposeDiagnosticArguments(manifestPath string, command ...string) ([]string, error) {
+	return composeDiagnosticArguments(manifestPath, true, command...)
+}
+
+func ComposeDiagnosticArgumentsForAcceptedInstaller(manifestPath string, command ...string) ([]string, error) {
+	return composeDiagnosticArguments(manifestPath, false, command...)
+}
+
+func composeDiagnosticArguments(manifestPath string, validateSameHost bool, command ...string) ([]string, error) {
 	absolute, err := filepath.Abs(manifestPath)
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := Resolve(absolute)
+	resolved, err := resolvePath(absolute, validateSameHost)
 	if err != nil {
 		return nil, err
 	}

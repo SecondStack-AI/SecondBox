@@ -124,7 +124,7 @@ func TestQualifiedPreflightAggregatesReadOnlyFacts(t *testing.T) {
 	if HasBlockingFindings(facts) {
 		t.Fatalf("qualified findings blocked: %#v", facts.Findings)
 	}
-	if len(facts.Devices) != 1 || facts.Devices[0].Identity != "8:2" {
+	if len(facts.Devices) != 1 || facts.Devices[0].Identity != "8:2" || !facts.Devices[0].JailerCompatible {
 		t.Fatalf("devices = %#v", facts.Devices)
 	}
 	if len(facts.CandidateUIDRanges) == 0 {
@@ -135,6 +135,26 @@ func TestQualifiedPreflightAggregatesReadOnlyFacts(t *testing.T) {
 		if !strings.Contains(report, text) {
 			t.Fatalf("report lacks %q:\n%s", text, report)
 		}
+	}
+}
+
+func TestPreflightRejectsNoexecAndNodevStorageCandidates(t *testing.T) {
+	for _, option := range []string{"noexec", "nodev"} {
+		t.Run(option, func(t *testing.T) {
+			probes := qualifiedProbes()
+			filesystem := probes.Filesystem.(*fakeFilesystem)
+			filesystem.files["/proc/self/mountinfo"] = strings.Replace(filesystem.files["/proc/self/mountinfo"], "/srv/workspace rw - xfs /dev/sdb rw", "/srv/workspace rw,"+option+" - xfs /dev/sdb rw,"+option, 1)
+			facts, err := Preflight(context.Background(), probes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(facts.Devices) != 1 || facts.Devices[0].JailerCompatible {
+				t.Fatalf("%s mount facts = %#v", option, facts.Devices)
+			}
+			if finding := findingByID(t, facts, "workspace_filesystem"); finding.Class != FindingRemediable {
+				t.Fatalf("%s workspace finding = %#v", option, finding)
+			}
+		})
 	}
 }
 

@@ -19,6 +19,7 @@ type fakeHostApplyExecutor struct {
 	nonempty   map[ResourceKind]bool
 	retained   map[string]bool
 	revalidate error
+	reflink    []string
 }
 
 func (executor *fakeHostApplyExecutor) EffectiveUID() int { return executor.euid }
@@ -65,19 +66,20 @@ func (executor *fakeHostApplyExecutor) EnableMountUnit(context.Context, string) 
 	}
 	return nil
 }
-func (executor *fakeHostApplyExecutor) SecureMountedWorkspace(path PlannedPath) error {
+func (executor *fakeHostApplyExecutor) SecureDirectory(path PlannedPath) error {
 	executor.calls = append(executor.calls, "secure:"+path.Name)
 	if executor.failAt == "secure" {
 		return errors.New("injected mounted-workspace security failure")
 	}
 	return nil
 }
-func (executor *fakeHostApplyExecutor) ProveReflinkIsolation(string) (string, error) {
+func (executor *fakeHostApplyExecutor) ProveReflinkTopology(artifactParent, runDirectory, workspace string) (string, error) {
 	executor.calls = append(executor.calls, "reflink")
+	executor.reflink = []string{artifactParent, runDirectory, workspace}
 	if executor.failAt == "reflink" {
 		return "", errors.New("injected reflink failure")
 	}
-	return "8:44", nil
+	return "btrfs-uuid:01234567-89ab-cdef-0123-456789abcdef", nil
 }
 func (executor *fakeHostApplyExecutor) RemoveEmpty(resource CreatedResource) (bool, error) {
 	executor.calls = append(executor.calls, "remove:"+resource.ID)
@@ -150,13 +152,27 @@ func TestHostApplyUsesOnlyAcceptedResourcesAndRecordsEachMutation(t *testing.T) 
 			t.Fatalf("receipt resource escaped plan: %#v", created)
 		}
 	}
-	if !strings.Contains(executor.calls[len(executor.calls)-1], "reflink") || !strings.Contains(executor.unit, "Options=loop,nodev,nosuid,noexec") || !strings.Contains(executor.unit, "Before=docker.service") {
+	if !strings.Contains(executor.calls[len(executor.calls)-1], "reflink") || !strings.Contains(executor.unit, "Options=loop,nosuid") || strings.Contains(executor.unit, "noexec") || strings.Contains(executor.unit, "nodev") || !strings.Contains(executor.unit, "Before=docker.service") {
 		t.Fatalf("calls/unit = %#v\n%s", executor.calls, executor.unit)
 	}
 	if !slices.ContainsFunc(executor.calls, func(call string) bool {
 		return strings.HasPrefix(call, "format:ghcr.io/") && strings.Contains(call, "@sha256:")
 	}) {
 		t.Fatalf("format did not use pinned installer image: %#v", executor.calls)
+	}
+	callIndex := func(want string) int { return slices.Index(executor.calls, want) }
+	for _, assertion := range []struct {
+		before string
+		after  string
+	}{{"mkdir:runner-storage", "enable"}, {"enable", "secure:runner-storage"}, {"secure:runner-storage", "mkdir:artifacts-parent"}, {"secure:runner-storage", "mkdir:run"}, {"secure:runner-storage", "mkdir:workspace"}, {"mkdir:workspace", "reflink"}} {
+		if before, after := callIndex(assertion.before), callIndex(assertion.after); before < 0 || after < 0 || before >= after {
+			t.Fatalf("host storage mutation order %q -> %q is unsafe: %#v", assertion.before, assertion.after, executor.calls)
+		}
+	}
+	artifactParent, _ := plannedPathByName(plan.Paths, "artifacts-parent")
+	run, _ := plannedPathByName(plan.Paths, "run")
+	if !slices.Equal(executor.reflink, []string{artifactParent.Path, run.Path, plan.Storage.WorkspacePath}) {
+		t.Fatalf("reflink proof escaped accepted storage topology: %#v", executor.reflink)
 	}
 }
 
@@ -172,7 +188,7 @@ func TestHostApplyFailureRollsBackOnlyEmptyResourcesAndKeepsReceiptAccurate(t *t
 	if len(updated.CreatedResources) != 2 || !slices.ContainsFunc(updated.CreatedResources, func(resource CreatedResource) bool { return resource.Kind == ResourceFilesystemImage }) || !slices.ContainsFunc(updated.CreatedResources, func(resource CreatedResource) bool { return resource.ID == "runner-root" }) || len(persisted.CreatedResources) != 2 {
 		t.Fatalf("retained receipt = %#v persisted %#v", updated.CreatedResources, persisted.CreatedResources)
 	}
-	if slices.Contains(executor.removed, "filesystem-image") || slices.Contains(executor.removed, "runner-root") || !slices.Contains(executor.removed, "state") {
+	if slices.Contains(executor.removed, "filesystem-image") || slices.Contains(executor.removed, "runner-root") || !slices.Contains(executor.removed, "runner-storage") {
 		t.Fatalf("rollback removed wrong resources: %#v", executor.removed)
 	}
 }
@@ -272,11 +288,6 @@ func TestHostApplyRevalidationAndReplayFailBeforeMutation(t *testing.T) {
 	}{
 		{"not root", acceptedReceipt(t, plan), &fakeHostApplyExecutor{euid: 1000, nonempty: map[ResourceKind]bool{}}},
 		{"stale root facts", acceptedReceipt(t, plan), &fakeHostApplyExecutor{euid: 0, revalidate: errors.New("KVM changed"), nonempty: map[ResourceKind]bool{}}},
-		{"repeated apply", func() InstallReceipt {
-			value := acceptedReceipt(t, plan)
-			_ = value.CompleteStage(StageHostApply, plan.CreatedAt, nil)
-			return value
-		}(), &fakeHostApplyExecutor{euid: 0, nonempty: map[ResourceKind]bool{}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := ApplyHost(context.Background(), plan, test.receipt, HostApplyDependencies{Executor: test.exec, Now: time.Now, PersistReceipt: func(InstallReceipt) error { t.Fatal("receipt persisted"); return nil }})
@@ -289,5 +300,25 @@ func TestHostApplyRevalidationAndReplayFailBeforeMutation(t *testing.T) {
 				t.Fatalf("mutation occurred: %#v", test.exec.calls)
 			}
 		})
+	}
+}
+
+func TestCompletedHostApplyReplayOnlyRevalidates(t *testing.T) {
+	plan := imageApplyPlan(t)
+	receipt := acceptedReceipt(t, plan)
+	if err := receipt.CompleteStage(StageHostApply, plan.CreatedAt, map[string]string{"workspaceDeviceIdentity": "btrfs-uuid:01234567-89ab-cdef-0123-456789abcdef", "reflinkMutationIsolation": "passed"}); err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeHostApplyExecutor{euid: 0, nonempty: map[ResourceKind]bool{}}
+	persisted := false
+	updated, err := ApplyHost(context.Background(), plan, receipt, HostApplyDependencies{Executor: executor, Now: time.Now, PersistReceipt: func(InstallReceipt) error {
+		persisted = true
+		return nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted || !slices.Equal(executor.calls, []string{"revalidate"}) || len(updated.CompletedStages) != len(receipt.CompletedStages) {
+		t.Fatalf("completed replay mutated state: persisted=%t calls=%#v stages=%#v", persisted, executor.calls, updated.CompletedStages)
 	}
 }

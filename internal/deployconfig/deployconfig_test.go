@@ -941,6 +941,29 @@ func TestSameHostRunnerSelectsOnlyItsOverlayAndRejectsAmbiguousIdentity(t *testi
 }
 
 func TestSameHostRunnerPreflightRejectsUnsafeHostState(t *testing.T) {
+	t.Run("accepted installer retains root-only host paths", func(t *testing.T) {
+		if os.Getuid() == 0 {
+			t.Skip("root can traverse a mode-000 fixture")
+		}
+		manifestPath := initializedDevelopment(t)
+		runner := provisionSameHostTestRunner(t, manifestPath, "runner-local")
+		hostRoot := runner.StateHostDirectory
+		if err := os.Chmod(hostRoot, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(hostRoot, 0o700) })
+		if _, err := Resolve(manifestPath); err == nil || !strings.Contains(err.Error(), "permission denied") {
+			t.Fatalf("ordinary same-host resolution did not retain host preflight: %v", err)
+		}
+		resolved, err := ResolveForAcceptedInstaller(manifestPath)
+		if err != nil {
+			t.Fatalf("accepted installer repeated unprivileged host traversal: %v", err)
+		}
+		if resolved.ComposeProject() == "" || resolved.Environment["SECONDBOX_RUNNER_STATE_HOST_DIR"] != runner.StateHostDirectory {
+			t.Fatalf("accepted installer resolution lost exact host identity: %#v", resolved.Environment)
+		}
+	})
+
 	t.Run("jailer UID is assigned to a host account", func(t *testing.T) {
 		if os.Getuid() == 0 {
 			t.Skip("root UID is rejected by manifest range validation before host-account preflight")
@@ -983,12 +1006,19 @@ func TestSameHostRunnerPreflightRejectsUnsafeHostState(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rootBackedWorkspace, err := os.MkdirTemp("/var/tmp", "secondbox-root-workspace-")
+		rootBackedStorage, err := os.MkdirTemp("/var/tmp", "secondbox-root-storage-")
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { _ = os.RemoveAll(rootBackedWorkspace) })
-		manifest.Runners[0].WorkspaceHostDirectory = rootBackedWorkspace
+		t.Cleanup(func() { _ = os.RemoveAll(rootBackedStorage) })
+		manifest.Runners[0].StateHostDirectory = rootBackedStorage
+		manifest.Runners[0].WorkspaceHostDirectory = filepath.Join(rootBackedStorage, "workspaces")
+		manifest.Runners[0].ArtifactHostDirectory = filepath.Join(rootBackedStorage, "release", "artifacts")
+		for _, directory := range []string{manifest.Runners[0].WorkspaceHostDirectory, manifest.Runners[0].ArtifactHostDirectory} {
+			if err := os.MkdirAll(directory, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
 		encoded, err := encodeManifest(manifest)
 		if err != nil {
 			t.Fatal(err)
@@ -1028,36 +1058,38 @@ func validTestRunner(id, placement string) Runner {
 func validSameHostTestRunner(id string) Runner {
 	runner := validTestRunner(id, "same-host")
 	runner.IdentityDirectory = "/run/secondbox-runner-identity"
-	runner.LogPath = "/var/lib/secondbox-runner/log/runner.jsonl"
-	runner.LogDirectory = "/var/lib/secondbox-runner/log"
-	runner.FirecrackerJailRoot = "/var/lib/secondbox-runner/jailer"
+	runner.StateHostDirectory = "/var/lib/secondbox-runner-storage"
+	runner.WorkspaceHostDirectory = "/var/lib/secondbox-runner-storage/workspaces"
+	runner.LogPath = "/var/lib/secondbox-runner/state/logs/runner.jsonl"
+	runner.LogDirectory = "/var/lib/secondbox-runner/state/logs"
+	runner.FirecrackerJailRoot = "/var/lib/secondbox-runner/jail"
 	runner.FirecrackerKernelPath = "/opt/secondbox-artifacts/kernel"
 	runner.FirecrackerRootFSPath = "/opt/secondbox-artifacts/rootfs.ext4"
 	runner.FirecrackerSharedImagePath = "/opt/secondbox-artifacts/shared.img"
-	runner.FirecrackerRunDirectory = "/var/lib/secondbox-runner/run"
-	runner.FirecrackerLogDirectory = "/var/lib/secondbox-runner/firecracker-log"
-	runner.SnapshotTemplateCacheRoot = "/var/lib/secondbox-runner/snapshot-templates"
+	runner.FirecrackerRunDirectory = "/var/lib/secondbox-runner/state/run"
+	runner.FirecrackerLogDirectory = "/var/lib/secondbox-runner/state/firecracker-log"
+	runner.SnapshotTemplateCacheRoot = "/var/lib/secondbox-runner/state/snapshot-templates"
 	runner.ArtifactPublicKey = "/opt/secondbox-artifacts/manifest-public.pem"
 	runner.WorkspaceRoot = "/var/lib/secondbox-runner/workspaces"
-	runner.SandboxNetworkStateDir = "/var/lib/secondbox-runner/network"
+	runner.SandboxNetworkStateDir = "/var/lib/secondbox-runner/state/network"
 	return runner
 }
 
 func provisionSameHostTestRunner(t *testing.T, manifestPath, id string) Runner {
 	t.Helper()
 	hostRoot := t.TempDir()
-	workspaceDirectory, err := os.MkdirTemp("/dev/shm", "secondbox-workspace-")
+	storageDirectory, err := os.MkdirTemp("/dev/shm", "secondbox-runner-storage-")
 	if err != nil {
 		t.Skipf("dedicated tmpfs unavailable: %v", err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(workspaceDirectory) })
+	t.Cleanup(func() { _ = os.RemoveAll(storageDirectory) })
 	runner := validSameHostTestRunner(id)
 	runner.IdentityHostDirectory = filepath.Join(hostRoot, "identity")
-	runner.ArtifactHostDirectory = filepath.Join(hostRoot, "artifacts")
-	runner.StateHostDirectory = filepath.Join(hostRoot, "state")
-	runner.WorkspaceHostDirectory = workspaceDirectory
-	for _, directory := range []string{runner.ArtifactHostDirectory, runner.StateHostDirectory} {
-		if err := os.Mkdir(directory, 0o700); err != nil {
+	runner.ArtifactHostDirectory = filepath.Join(storageDirectory, "release", "artifacts")
+	runner.StateHostDirectory = storageDirectory
+	runner.WorkspaceHostDirectory = filepath.Join(storageDirectory, "workspaces")
+	for _, directory := range []string{runner.ArtifactHostDirectory, runner.WorkspaceHostDirectory} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1102,6 +1134,9 @@ func TestRunnerValidationMatchesRuntimeInvariants(t *testing.T) {
 		{name: "duplicate vsock port", want: "vsock ports", mutate: func(r *Runner) { r.GuestProtocolVSockPort = r.GuestControlVSockPort }},
 		{name: "oversized vsock port", want: "vsock ports", mutate: func(r *Runner) { r.GuestProtocolVSockPort = integer(65536) }},
 		{name: "unjailed", want: "must be false", mutate: func(r *Runner) { r.FirecrackerAllowUnjailed = boolean(true) }},
+		{name: "Firecracker jail socket path too long", want: "maximum Firecracker API socket path below 108 bytes", mutate: func(r *Runner) {
+			r.FirecrackerJailRoot = "/" + strings.Repeat("j", 80)
+		}},
 		{name: "placeholder artifact fingerprint", want: "provisioned signed artifact key", mutate: func(r *Runner) { r.ArtifactPublicKeySHA256 = strings.Repeat("0", 64) }},
 		{name: "missing kernel argument", want: "i8042.noaux", mutate: func(r *Runner) {
 			r.FirecrackerKernelArgs = strings.ReplaceAll(r.FirecrackerKernelArgs, " i8042.noaux", "")
