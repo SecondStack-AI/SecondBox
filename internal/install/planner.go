@@ -229,10 +229,6 @@ func proposeCapacity(facts HostFacts, workspaceBytes int64) (CapacityPlan, error
 	return CapacityPlan{MaxSandboxes: sandboxes, MaxCPUMillis: cpuMillis, MaxMemoryBytes: memory, MaxWorkspaceBytes: workspaceBytes, ConcurrentStarts: min(int64(2), active), ConcurrentOperations: runnerOperations, StoragePressurePercent: 85, SubjectQuotas: quotas}, nil
 }
 
-func backingReserveBytes(available int64) int64 {
-	return max(MinimumBackingReserveBytes, available/5)
-}
-
 func proposeNetwork(facts HostFacts, overrides NetworkOverrides) (NetworkPlan, error) {
 	used := map[int]bool{}
 	for _, listener := range facts.ListeningPorts {

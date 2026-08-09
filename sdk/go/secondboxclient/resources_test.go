@@ -68,13 +68,3 @@ func sandboxResourceJSON(revision int) string {
 	return `{"id":"sandbox-1","profile":"durable-coding","profileRevisionId":"profile-revision-1","metadata":{},"desiredState":"running","state":"ready","generation":3,"revision":` +
 		strconv.Itoa(revision) + `,"workspace":{"id":"workspace-1","generation":3,"state":"ready","sizeBytes":0,"createdAt":"2026-08-03T00:00:00Z","updatedAt":"2026-08-03T00:00:00Z"},"createdAt":"2026-08-03T00:00:00Z","updatedAt":"2026-08-03T00:00:00Z"}`
 }
-
-func hexDigest(value []byte) string {
-	const digits = "0123456789abcdef"
-	encoded := make([]byte, len(value)*2)
-	for index, item := range value {
-		encoded[index*2] = digits[item>>4]
-		encoded[index*2+1] = digits[item&15]
-	}
-	return string(encoded)
-}
