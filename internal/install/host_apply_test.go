@@ -19,7 +19,13 @@ type fakeHostApplyExecutor struct {
 	nonempty   map[ResourceKind]bool
 	retained   map[string]bool
 	revalidate error
+	teardown   error
 	reflink    []string
+}
+
+func (executor *fakeHostApplyExecutor) RevalidateTeardown(context.Context, InstallPlan, InstallReceipt) error {
+	executor.calls = append(executor.calls, "revalidate-teardown")
+	return executor.teardown
 }
 
 func (executor *fakeHostApplyExecutor) EffectiveUID() int { return executor.euid }
@@ -320,5 +326,24 @@ func TestCompletedHostApplyReplayOnlyRevalidates(t *testing.T) {
 	}
 	if persisted || !slices.Equal(executor.calls, []string{"revalidate"}) || len(updated.CompletedStages) != len(receipt.CompletedStages) {
 		t.Fatalf("completed replay mutated state: persisted=%t calls=%#v stages=%#v", persisted, executor.calls, updated.CompletedStages)
+	}
+}
+
+func TestHostTeardownUsesOnlyNarrowPrivilegedVerification(t *testing.T) {
+	plan := imageApplyPlan(t)
+	receipt := acceptedReceipt(t, plan)
+	if err := receipt.CompleteStage(StageHostApply, plan.CreatedAt, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeHostApplyExecutor{euid: 0, nonempty: map[ResourceKind]bool{}}
+	if err := VerifyHostTeardown(context.Background(), plan, receipt, executor); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(executor.calls, []string{"revalidate-teardown"}) {
+		t.Fatalf("host teardown verification calls = %#v", executor.calls)
+	}
+	executor = &fakeHostApplyExecutor{euid: 0, teardown: errors.New("recorded host resource changed"), nonempty: map[ResourceKind]bool{}}
+	if err := VerifyHostTeardown(context.Background(), plan, receipt, executor); err == nil || !strings.Contains(err.Error(), "recorded host resource changed") {
+		t.Fatalf("host teardown verification failure = %v", err)
 	}
 }

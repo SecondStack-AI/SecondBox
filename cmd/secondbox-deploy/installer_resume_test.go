@@ -273,6 +273,7 @@ func TestFailedComposeNetworkRecoveryValidatesBeforeExactProjectTeardown(t *test
 	renderer := cliui.Renderer{Output: &output, Diagnostic: &diagnostic, Capabilities: cliui.ForWriter(&output, &diagnostic), OutputMode: cliui.OutputJSON, ColorMode: cliui.ColorNever}
 	dependencies := installComposeRecoveryDependencies{
 		OwnerUID: os.Getuid(),
+		Now:      func() time.Time { return plan.CreatedAt.Add(time.Hour) },
 		HostVerify: func(_ context.Context, directory, digest string) error {
 			calls = append(calls, "host-verify")
 			if directory != operation {
@@ -325,6 +326,7 @@ func TestFailedComposeNetworkRecoveryFailsClosedBeforeTeardown(t *testing.T) {
 	want := errors.New("recorded manifest digest changed")
 	err := runInstallComposeRecoveryWith(context.Background(), operation, renderer, installComposeRecoveryDependencies{
 		OwnerUID:         os.Getuid(),
+		Now:              time.Now,
 		HostVerify:       func(context.Context, string, string) error { return nil },
 		ValidateTeardown: func(install.InstallPlan, install.InstallReceipt) error { return want },
 		ComposeDown:      func(context.Context, string) error { composeCalled = true; return nil },
@@ -341,6 +343,7 @@ func TestFailedComposeNetworkRecoveryRequiresPrivilegedHostVerification(t *testi
 	want := errors.New("accepted host resources changed")
 	err := runInstallComposeRecoveryWith(context.Background(), operation, renderer, installComposeRecoveryDependencies{
 		OwnerUID:   os.Getuid(),
+		Now:        time.Now,
 		HostVerify: func(context.Context, string, string) error { return want },
 		ValidateTeardown: func(install.InstallPlan, install.InstallReceipt) error {
 			validateCalled = true
@@ -353,7 +356,53 @@ func TestFailedComposeNetworkRecoveryRequiresPrivilegedHostVerification(t *testi
 	}
 }
 
+func TestFailedPostComposeRecoveryRewindsReceiptForFullRetry(t *testing.T) {
+	operation, plan := failedComposeRecoveryOperationAt(t, install.StageCLILogin, install.StageReadiness)
+	var output bytes.Buffer
+	renderer := cliui.Renderer{Output: &output, Diagnostic: io.Discard, Capabilities: cliui.ForWriter(&output, io.Discard), OutputMode: cliui.OutputJSON, ColorMode: cliui.ColorNever}
+	calls := []string{}
+	err := runInstallComposeRecoveryWith(context.Background(), operation, renderer, installComposeRecoveryDependencies{
+		OwnerUID: os.Getuid(),
+		Now:      func() time.Time { return plan.CreatedAt.Add(time.Hour) },
+		HostVerify: func(context.Context, string, string) error {
+			calls = append(calls, "host-verify")
+			return nil
+		},
+		ValidateTeardown: func(_ install.InstallPlan, receipt install.InstallReceipt) error {
+			calls = append(calls, "validate")
+			if lastInstallStage(receipt) != install.StageCLILogin || receipt.FailureStage != install.StageReadiness {
+				t.Fatalf("post-Compose recovery authority = %#v", receipt)
+			}
+			return nil
+		},
+		ComposeDown: func(context.Context, string) error {
+			calls = append(calls, "compose-down")
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(calls, []string{"host-verify", "validate", "compose-down"}) {
+		t.Fatalf("post-Compose recovery calls = %#v", calls)
+	}
+	_, receipt, err := install.ReadOperation(operation, os.Getuid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Status != install.OperationFailed || receipt.FailureStage != install.StageComposeStarted || receipt.FailureClass != install.FailureRetryable || lastInstallStage(receipt) != install.StageRunnerEnrolled {
+		t.Fatalf("rewound post-Compose receipt = %#v", receipt)
+	}
+	if slices.ContainsFunc(receipt.CreatedResources, func(resource install.CreatedResource) bool { return resource.ID == "compose-project" }) {
+		t.Fatal("rewound post-Compose receipt retained the Compose project")
+	}
+}
+
 func failedComposeRecoveryOperation(t *testing.T) (string, install.InstallPlan) {
+	return failedComposeRecoveryOperationAt(t, install.StageRunnerEnrolled, install.StageComposeStarted)
+}
+
+func failedComposeRecoveryOperationAt(t *testing.T, completed, failure install.Stage) (string, install.InstallPlan) {
 	t.Helper()
 	operation := filepath.Join(t.TempDir(), "operation")
 	verified := fakeGuidedRelease()
@@ -369,14 +418,24 @@ func failedComposeRecoveryOperation(t *testing.T) (string, install.InstallPlan) 
 		t.Fatal(err)
 	}
 	for _, stage := range install.StageSequence {
-		if stage == install.StageComposeStarted {
-			break
-		}
 		if err := receipt.CompleteStage(stage, time.Now(), map[string]string{}); err != nil {
 			t.Fatal(err)
 		}
+		if stage == completed {
+			break
+		}
 	}
-	if err := receipt.Fail(install.StageComposeStarted, install.FailureRetryable, time.Now()); err != nil {
+	if slices.Index(install.StageSequence, completed) >= slices.Index(install.StageSequence, install.StageComposeStarted) {
+		if err := receipt.AppendResource(install.CreatedResource{ID: "compose-project", Kind: install.ResourceComposeProject, Stage: install.StageComposeStarted, Identity: "secondbox-0123456789abcdef"}); err != nil {
+			t.Fatal(err)
+		}
+		for index := range receipt.CompletedStages {
+			if receipt.CompletedStages[index].Stage == install.StageComposeStarted {
+				receipt.CompletedStages[index].Evidence = map[string]string{"composeProject": "secondbox-0123456789abcdef"}
+			}
+		}
+	}
+	if err := receipt.Fail(failure, install.FailureRetryable, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := install.WriteAccepted(operation, plan, receipt); err != nil {

@@ -264,7 +264,7 @@ func TestPrivateHostApplyGrammarIsStrictAndAbsentFromHelp(t *testing.T) {
 	var output bytes.Buffer
 	renderer := cliui.Renderer{Output: &output, Diagnostic: &output, Capabilities: cliui.ForWriter(&output, &output), OutputMode: cliui.OutputPlain, ColorMode: cliui.ColorNever}
 	helpErr := usage(renderer)
-	if strings.Contains(helpErr.Error(), "_install-host-apply") || strings.Contains(helpErr.Error(), "_install-host-purge") || strings.Contains(helpErr.Error(), "_install-host-purge-validate") {
+	if strings.Contains(helpErr.Error(), "_install-host-apply") || strings.Contains(helpErr.Error(), "_install-host-teardown-verify") || strings.Contains(helpErr.Error(), "_install-host-purge") || strings.Contains(helpErr.Error(), "_install-host-purge-validate") {
 		t.Fatal("private installer command leaked into ordinary help")
 	}
 	for _, arguments := range [][]string{nil, {"one"}, {"one", "two", "three"}} {
@@ -277,6 +277,12 @@ func TestPrivateHostApplyGrammarIsStrictAndAbsentFromHelp(t *testing.T) {
 	err := runPrivateHostApply(context.Background(), []string{"/operation", "sha256:" + strings.Repeat("a", 64)})
 	if err == nil || !strings.Contains(err.Error(), "SUDO_UID") {
 		t.Fatalf("invalid SUDO_UID error = %v", err)
+	}
+	for _, arguments := range [][]string{nil, {"one"}, {"one", "two", "three"}} {
+		err := runPrivateHostTeardownVerify(context.Background(), arguments)
+		if err == nil || !strings.HasPrefix(err.Error(), "SecondBox installer private host teardown verification:") {
+			t.Fatalf("teardown verification arguments %#v error = %v", arguments, err)
+		}
 	}
 	for _, arguments := range [][]string{nil, {"one"}, {"one", "two", "three"}} {
 		err := runPrivateHostPurge(context.Background(), arguments)

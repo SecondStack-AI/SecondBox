@@ -96,6 +96,16 @@ func runPrivilegedHostApply(ctx context.Context, directory, digest string) error
 	return command.Run()
 }
 
+func runPrivilegedHostTeardownVerify(ctx context.Context, directory, digest string) error {
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	command := exec.CommandContext(ctx, "sudo", "--", executable, "_install-host-teardown-verify", directory, digest)
+	command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return command.Run()
+}
+
 func runInstallResume(ctx context.Context, directory string, renderer cliui.Renderer) error {
 	if renderer.OutputMode == cliui.OutputJSON {
 		return &deployExitError{code: 3, err: errors.New("SecondBox installer: install --resume does not accept --output json")}
@@ -719,7 +729,8 @@ func runInstallUninstall(ctx context.Context, arguments []string, renderer cliui
 func runInstallComposeRecovery(ctx context.Context, directory string, renderer cliui.Renderer) error {
 	return runInstallComposeRecoveryWith(ctx, directory, renderer, installComposeRecoveryDependencies{
 		OwnerUID:         os.Getuid(),
-		HostVerify:       runPrivilegedHostApply,
+		Now:              time.Now,
+		HostVerify:       runPrivilegedHostTeardownVerify,
 		ValidateTeardown: validatePartialComposeTeardownAuthority,
 		ComposeDown: func(ctx context.Context, manifest string) error {
 			return deployconfig.RunComposeForAcceptedInstaller(ctx, manifest, "down", deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic}, http.DefaultClient)
@@ -729,13 +740,14 @@ func runInstallComposeRecovery(ctx context.Context, directory string, renderer c
 
 type installComposeRecoveryDependencies struct {
 	OwnerUID         int
+	Now              func() time.Time
 	HostVerify       func(context.Context, string, string) error
 	ValidateTeardown func(install.InstallPlan, install.InstallReceipt) error
 	ComposeDown      func(context.Context, string) error
 }
 
 func runInstallComposeRecoveryWith(ctx context.Context, directory string, renderer cliui.Renderer, dependencies installComposeRecoveryDependencies) (resultErr error) {
-	if dependencies.HostVerify == nil || dependencies.ValidateTeardown == nil || dependencies.ComposeDown == nil {
+	if dependencies.Now == nil || dependencies.HostVerify == nil || dependencies.ValidateTeardown == nil || dependencies.ComposeDown == nil {
 		return errors.New("SecondBox installer Compose recovery: dependencies are incomplete")
 	}
 	absolute, err := filepath.Abs(directory)
@@ -780,6 +792,12 @@ func runInstallComposeRecoveryWith(ctx context.Context, directory string, render
 	if err := dependencies.ValidateTeardown(plan, receipt); err != nil {
 		return err
 	}
+	if err := receipt.PrepareComposeRetry(dependencies.Now()); err != nil {
+		return err
+	}
+	if err := install.SaveReceipt(absolute, plan, receipt, dependencies.OwnerUID); err != nil {
+		return err
+	}
 	if err := runInstallPhase(ctx, renderer, "Partial Compose shutdown", "preserve the accepted operation and durable resources", func() error {
 		return dependencies.ComposeDown(ctx, installerPlannedPath(plan, "manifest"))
 	}); err != nil {
@@ -789,8 +807,10 @@ func runInstallComposeRecoveryWith(ctx context.Context, directory string, render
 }
 
 func validatePartialComposeRecoveryState(receipt install.InstallReceipt) error {
-	if receipt.Status != install.OperationFailed || receipt.FailureStage != install.StageComposeStarted || lastInstallStage(receipt) != install.StageRunnerEnrolled {
-		return errors.New("SecondBox installer Compose recovery: operation must be a failed, incomplete Compose-startup attempt")
+	composeIndex := slices.Index(install.StageSequence, install.StageComposeStarted)
+	runnerIndex := slices.Index(install.StageSequence, install.StageRunnerEnrolled)
+	if receipt.Status != install.OperationFailed || slices.Index(install.StageSequence, receipt.FailureStage) < composeIndex || slices.Index(install.StageSequence, lastInstallStage(receipt)) < runnerIndex {
+		return errors.New("SecondBox installer Compose recovery: operation must have failed at or after Compose startup")
 	}
 	return nil
 }
@@ -802,9 +822,9 @@ func validatePartialComposeTeardownAuthority(plan install.InstallPlan, receipt i
 	manifestIndex := slices.IndexFunc(receipt.CreatedResources, func(resource install.CreatedResource) bool {
 		return resource.ID == "manifest" && resource.Kind == install.ResourceFile && resource.Stage == install.StageDeploymentMaterialized && resource.Digest != ""
 	})
-	composeIndex := slices.IndexFunc(receipt.CreatedResources, func(resource install.CreatedResource) bool { return resource.ID == "compose-project" })
-	if manifestIndex < 0 || composeIndex >= 0 {
-		return errors.New("SecondBox installer Compose recovery: receipt does not describe an incomplete, materialized Compose project")
+	composeResourceIndex := slices.IndexFunc(receipt.CreatedResources, func(resource install.CreatedResource) bool { return resource.ID == "compose-project" })
+	if manifestIndex < 0 {
+		return errors.New("SecondBox installer Compose recovery: receipt lacks the materialized deployment manifest")
 	}
 	resolved, err := deployconfig.ResolveForAcceptedInstaller(installerPlannedPath(plan, "manifest"))
 	if err != nil {
@@ -812,6 +832,23 @@ func validatePartialComposeTeardownAuthority(plan install.InstallPlan, receipt i
 	}
 	if expected := expectedInstallerComposeProject(plan); resolved.ComposeProject() != expected {
 		return fmt.Errorf("SecondBox installer Compose recovery: manifest project %q differs from accepted project %q", resolved.ComposeProject(), expected)
+	}
+	composeCompleted := slices.Index(install.StageSequence, lastInstallStage(receipt)) >= slices.Index(install.StageSequence, install.StageComposeStarted)
+	if !composeCompleted {
+		if composeResourceIndex >= 0 {
+			return errors.New("SecondBox installer Compose recovery: incomplete Compose startup unexpectedly recorded a Compose project")
+		}
+		return nil
+	}
+	if composeResourceIndex < 0 {
+		return errors.New("SecondBox installer Compose recovery: completed Compose startup lacks its project resource")
+	}
+	resource := receipt.CreatedResources[composeResourceIndex]
+	if resource.Kind != install.ResourceComposeProject || resource.Stage != install.StageComposeStarted || resource.Identity != resolved.ComposeProject() {
+		return errors.New("SecondBox installer Compose recovery: recorded Compose project differs from the accepted manifest")
+	}
+	if err := install.ValidateComposeProjectEvidence(receipt, resolved.ComposeProject()); err != nil {
+		return err
 	}
 	return nil
 }

@@ -275,6 +275,21 @@ func runPrivateHostApply(ctx context.Context, arguments []string) error {
 	return nil
 }
 
+func runPrivateHostTeardownVerify(ctx context.Context, arguments []string) error {
+	if len(arguments) != 2 {
+		return errors.New("SecondBox installer private host teardown verification: expected OPERATION_DIRECTORY PLAN_DIGEST")
+	}
+	uidText, present := os.LookupEnv("SUDO_UID")
+	uid, err := strconv.Atoi(uidText)
+	if !present || err != nil || uid < 0 {
+		return errors.New("SecondBox installer private host teardown verification: SUDO_UID is required and must be a non-negative integer")
+	}
+	if err := install.VerifyAcceptedHostTeardown(ctx, arguments[0], arguments[1], uid, install.SystemHostApplyExecutor{CallerUID: uid}); err != nil {
+		return fmt.Errorf("SecondBox installer private host teardown verification: %w", err)
+	}
+	return nil
+}
+
 func reviewAdvancedInstallSettings(ctx context.Context, dependencies guidedInstallDependencies, handles cliui.FormHandles, facts install.HostFacts, input *install.ProposalInput, plan *install.InstallPlan) error {
 	api := portFromAddress(plan.Network.APIAddress)
 	runner := portFromAddress(plan.Network.RunnerAddress)

@@ -154,7 +154,7 @@ docker network inspect "$network" | jq -e '.[0].Containers | length == 0'
 docker network rm "$network"
 ```
 
-Once containers are attached, do not remove the network manually. Use the v0.4.7 bootstrap to run the installer recovery action from its temporary, checksum-verified binary. Do not replace the older receipt-bound binary installed by the failed operation. The recovery action locks and validates the plan, receipt, recorded manifest and binary digests, failed stage, and exact Compose project before tearing down partial containers. It preserves the failed operation's durable paths, verified release assets, generated authority, installed binaries, and retryable receipt:
+Once containers are attached, do not remove the network manually. Use the v0.4.7 bootstrap to run the installer recovery action from its temporary, checksum-verified binary. Do not replace the older receipt-bound binary installed by the failed operation. The recovery action accepts failures from Compose startup through CLI login, readiness, or smoke execution. It locks and validates the plan, receipt, recorded manifest and binary digests, host identity, privileged resource identities, failed stage, and exact Compose project before journaling a retry from the last pre-Compose stage and tearing down partial containers. It does not require current KVM/TUN availability, a still-free jailer UID range, or new allocation capacity. It preserves the failed operation's durable paths, verified release assets, generated authority, installed binaries, and retryable receipt:
 
 ```bash
 set -euo pipefail

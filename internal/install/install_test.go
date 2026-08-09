@@ -168,6 +168,94 @@ func TestFailedCompletedReceiptRecoversAfterReadinessPasses(t *testing.T) {
 	}
 }
 
+func TestPrepareComposeRetryRewindsStagesAndReplayOwnedResources(t *testing.T) {
+	plan := validPlan(t)
+	receipt, err := NewReceipt(plan, plan.CreatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range StageSequence {
+		if err := receipt.CompleteStage(stage, plan.CreatedAt, map[string]string{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resources := []CreatedResource{
+		{ID: "compose-project", Kind: ResourceComposeProject, Stage: StageComposeStarted, Identity: "secondbox-0123456789abcdef"},
+		{ID: "compose-environment", Kind: ResourceFile, Path: "/tmp/compose.env", Class: PathUserDeployment, Stage: StageComposeStarted, Mode: 0o600, OwnerUID: 1000, OwnerGID: 1000, Digest: "sha256:" + strings.Repeat("a", 64)},
+		{ID: "compose-assets", Kind: ResourceDirectory, Path: "/tmp/compose-assets", Class: PathUserDeployment, Stage: StageComposeStarted, Mode: 0o700, OwnerUID: 1000, OwnerGID: 1000},
+		{ID: "cli-config-root", Kind: ResourceDirectory, Path: "/tmp/cli-root", Class: PathUserDeployment, Stage: StageCLILogin, Mode: 0o700, OwnerUID: 1000, OwnerGID: 1000},
+		{ID: "cli-config", Kind: ResourceFile, Path: "/tmp/cli.json", Class: PathUserDeployment, Stage: StageCLILogin, Mode: 0o600, OwnerUID: 1000, OwnerGID: 1000, Digest: "sha256:" + strings.Repeat("b", 64)},
+	}
+	for _, resource := range resources {
+		if err := receipt.AppendResource(resource); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := receipt.Fail(StageReadiness, FailureRetryable, plan.CreatedAt.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := receipt.PrepareComposeRetry(plan.CreatedAt.Add(2 * time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Status != OperationFailed || receipt.FailureClass != FailureRetryable || receipt.FailureStage != StageComposeStarted || receipt.CompletedStages[len(receipt.CompletedStages)-1].Stage != StageRunnerEnrolled {
+		t.Fatalf("Compose retry receipt = %#v", receipt)
+	}
+	for _, removed := range []string{"compose-project", "compose-environment", "compose-assets", "cli-config"} {
+		if slices.ContainsFunc(receipt.CreatedResources, func(resource CreatedResource) bool { return resource.ID == removed }) {
+			t.Fatalf("replay-owned resource remained ledgered: %s", removed)
+		}
+	}
+	if !slices.ContainsFunc(receipt.CreatedResources, func(resource CreatedResource) bool { return resource.ID == "cli-config-root" }) {
+		t.Fatal("installer-created CLI parent directory lost from ledger")
+	}
+	digest, err := PlanDigest(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := receipt.Validate(digest, plan.HostFacts.HostIdentity, plan.OperationID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPrepareComposeRetryRejectsPreComposeAndMutationReceipts(t *testing.T) {
+	plan := validPlan(t)
+	for _, test := range []struct {
+		name   string
+		mutate func(*InstallReceipt) error
+	}{
+		{name: "pre-Compose failure", mutate: func(receipt *InstallReceipt) error {
+			return receipt.Fail(StageRunnerEnrolled, FailureRetryable, plan.CreatedAt)
+		}},
+		{name: "pending resource", mutate: func(receipt *InstallReceipt) error {
+			if err := receipt.Fail(StageComposeStarted, FailureRetryable, plan.CreatedAt); err != nil {
+				return err
+			}
+			return receipt.BeginResource("unexpected", plan.CreatedAt)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			receipt, err := NewReceipt(plan, plan.CreatedAt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, stage := range StageSequence {
+				if stage == StageComposeStarted {
+					break
+				}
+				if err := receipt.CompleteStage(stage, plan.CreatedAt, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := test.mutate(&receipt); err != nil {
+				t.Fatal(err)
+			}
+			if err := receipt.PrepareComposeRetry(plan.CreatedAt.Add(time.Minute)); err == nil {
+				t.Fatal("unsafe Compose retry receipt was accepted")
+			}
+		})
+	}
+}
+
 func TestPermanentPurgeIntentPreventsInstallationRestore(t *testing.T) {
 	plan := validPlan(t)
 	receipt, err := NewReceipt(plan, plan.CreatedAt)

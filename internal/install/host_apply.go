@@ -21,6 +21,11 @@ type HostApplyExecutor interface {
 	RemoveEmpty(CreatedResource) (bool, error)
 }
 
+type HostTeardownVerifier interface {
+	EffectiveUID() int
+	RevalidateTeardown(context.Context, InstallPlan, InstallReceipt) error
+}
+
 type HostApplyDependencies struct {
 	Executor       HostApplyExecutor
 	PersistReceipt func(InstallReceipt) error
@@ -47,6 +52,46 @@ func ApplyAcceptedHost(ctx context.Context, directory, expectedDigest string, ca
 		}
 		return writeReceiptAtomic(directory, updated, callerUID)
 	}})
+}
+
+// VerifyAcceptedHostTeardown proves that a completed host-apply boundary still
+// identifies the same host and exact recorded privileged resources. Unlike a
+// host-apply replay, it deliberately does not require compute devices, free UID
+// ranges, or allocation capacity that Compose teardown does not consume.
+func VerifyAcceptedHostTeardown(ctx context.Context, directory, expectedDigest string, callerUID int, verifier HostTeardownVerifier) (resultErr error) {
+	lock, err := AcquireLock(directory)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
+	plan, receipt, err := ReadHostApply(directory, expectedDigest, callerUID)
+	if err != nil {
+		return err
+	}
+	return VerifyHostTeardown(ctx, plan, receipt, verifier)
+}
+
+func VerifyHostTeardown(ctx context.Context, plan InstallPlan, receipt InstallReceipt, verifier HostTeardownVerifier) error {
+	if verifier == nil {
+		return installerError("host teardown verifier is absent", nil)
+	}
+	digest, err := PlanDigest(plan)
+	if err != nil {
+		return err
+	}
+	if err := receipt.Validate(digest, plan.HostFacts.HostIdentity, plan.OperationID); err != nil {
+		return err
+	}
+	if verifier.EffectiveUID() != 0 {
+		return installerError("private host teardown verification must run as root through sudo", nil)
+	}
+	if _, complete := completedStage(receipt, StageHostApply); !complete {
+		return installerError("host teardown verification requires completed host apply", nil)
+	}
+	if err := verifier.RevalidateTeardown(ctx, plan, receipt); err != nil {
+		return installerError("root teardown prerequisite revalidation", err)
+	}
+	return nil
 }
 
 func ApplyHost(ctx context.Context, plan InstallPlan, receipt InstallReceipt, dependencies HostApplyDependencies) (InstallReceipt, error) {
