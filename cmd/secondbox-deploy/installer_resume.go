@@ -22,6 +22,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/internal/install"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
+	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
 )
 
 type installResumeDependencies struct {
@@ -557,13 +558,16 @@ func waitForInstalledRunner(ctx context.Context, plan install.InstallPlan) (map[
 func installedRunnerReadinessEvidence(plan install.InstallPlan, runners []contracts.Runner) (map[string]string, bool) {
 	expectedID := "runner-" + strings.TrimPrefix(plan.OperationID, "install_")
 	for _, runner := range runners {
-		if runner.ID != expectedID || runner.State != "ready" || runner.CredentialState != "pre_shared" || !slices.Contains(runner.Architectures, "amd64") || !slices.Contains(runner.Capabilities, "compute") || !slices.Contains(runner.Capabilities, "local-workspace") {
+		if runner.ID != expectedID || runner.PoolName != standardresources.PoolAMD64 || runner.State != "ready" || runner.CredentialState != "pre_shared" || !slices.Contains(runner.Architectures, standardresources.ArchitectureAMD64) {
 			continue
 		}
-		if runner.Capacity["CPUMillis"] < install.DurableCodingCPUMillis || runner.Capacity["MemoryBytes"] < install.DurableCodingMemoryBytes || runner.Capacity["DiskBytes"] < install.MinimumWorkspaceBytes || runner.Capacity["Instances"] < 1 || runner.Capacity["Operations"] < 1 {
+		if slices.ContainsFunc([]string{"compute", "network-policy", "storage", "cleanup", "local-workspace"}, func(capability string) bool { return !slices.Contains(runner.Capabilities, capability) }) {
 			continue
 		}
-		return map[string]string{"runnerId": runner.ID, "runnerState": runner.State, "runnerCredentialState": runner.CredentialState, "coldBootCapacity": "advertised"}, true
+		if runner.Capacity["CPUMillis"] < install.DurableCodingCPUMillis || runner.Capacity["MemoryBytes"] < install.DurableCodingMemoryBytes || runner.Capacity["DiskBytes"] < install.MinimumWorkspaceBytes || runner.Capacity["Instances"] < 1 || runner.Capacity["Operations"] < install.DurableCodingConcurrentOperations {
+			continue
+		}
+		return map[string]string{"runnerId": runner.ID, "runnerPool": runner.PoolName, "runnerState": runner.State, "runnerCredentialState": runner.CredentialState, "coldBootCapacity": "advertised", "concurrentOperationCapacity": strconv.FormatInt(runner.Capacity["Operations"], 10)}, true
 	}
 	return nil, false
 }

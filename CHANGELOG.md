@@ -5,6 +5,7 @@
 ### Fixed
 
 - Installer readiness now accepts the public `pre_shared` credential state emitted for a ready, authenticated Runner instead of waiting for the nonexistent `active` projection until its five-minute deadline expired.
+- Single-host capacity planning now reserves all 16 concurrent operations required by each selected `durable-coding` Sandbox, and installer readiness verifies the exact pool, scheduling capabilities, and operation capacity before attempting its smoke Sandbox. The former plan advertised at most eight operations while the Profile required 16, then reported the incompatible Runner as ready and failed the first Sandbox with `home_runner_unavailable`.
 
 ## 0.4.4 - 2026-08-08
 

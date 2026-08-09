@@ -10,22 +10,25 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
 )
 
 const (
-	ExecutionBundleEstimateBytes = int64(11 << 30)
-	MinimumWorkspaceBytes        = int64(50 << 30)
-	MinimumBackingReserveBytes   = int64(16 << 30)
-	MinimumObjectStoreBytes      = int64(4 << 30)
-	MinimumControlBackingBytes   = MinimumBackingReserveBytes
-	MinimumDeploymentBytes       = ExecutionBundleEstimateBytes
-	MinimumFilesystemImageBytes  = ExecutionBundleEstimateBytes + MinimumWorkspaceBytes + (4 << 30)
-	MinimumHostMemoryBytes       = int64(12 << 30)
-	HostMemoryReserveBytes       = int64(4 << 30)
-	MinimumHostCPUCount          = 6
-	HostCPUReserveMillis         = int64(2000)
-	DurableCodingCPUMillis       = int64(4000)
-	DurableCodingMemoryBytes     = int64(8 << 30)
+	ExecutionBundleEstimateBytes      = int64(11 << 30)
+	MinimumWorkspaceBytes             = standardresources.DurableCodingWorkspaceBytes
+	MinimumBackingReserveBytes        = int64(16 << 30)
+	MinimumObjectStoreBytes           = int64(4 << 30)
+	MinimumControlBackingBytes        = MinimumBackingReserveBytes
+	MinimumDeploymentBytes            = ExecutionBundleEstimateBytes
+	MinimumFilesystemImageBytes       = ExecutionBundleEstimateBytes + MinimumWorkspaceBytes + (4 << 30)
+	MinimumHostMemoryBytes            = int64(12 << 30)
+	HostMemoryReserveBytes            = int64(4 << 30)
+	MinimumHostCPUCount               = 6
+	HostCPUReserveMillis              = int64(2000)
+	DurableCodingCPUMillis            = standardresources.DurableCodingCPUMillis
+	DurableCodingMemoryBytes          = standardresources.DurableCodingMemoryBytes
+	DurableCodingConcurrentOperations = standardresources.DurableCodingConcurrentOperations
 )
 
 type StorageOption struct {
@@ -204,9 +207,10 @@ func proposeCapacity(facts HostFacts, workspaceBytes, objectStoreBytes int64) (C
 	memory := facts.MemoryBytes - HostMemoryReserveBytes
 	sandboxes := min(cpuMillis/DurableCodingCPUMillis, memory/DurableCodingMemoryBytes, workspaceBytes/MinimumWorkspaceBytes)
 	active := min(sandboxes, int64(4))
-	operations := max(int64(2), min(int64(8), sandboxes))
-	quotas := map[string]int64{"maxSandboxes": sandboxes * 4, "maxActiveInstances": active, "maxCpuMillis": cpuMillis, "maxMemoryBytes": memory, "maxArtifactBytes": objectStoreBytes / 2, "maxSnapshots": sandboxes * 10, "maxArtifacts": sandboxes * 100, "maxPortSessions": sandboxes * 4, "maxConcurrentOperations": operations}
-	return CapacityPlan{MaxSandboxes: sandboxes, MaxCPUMillis: cpuMillis, MaxMemoryBytes: memory, MaxWorkspaceBytes: workspaceBytes, ConcurrentStarts: min(int64(2), active), ConcurrentOperations: operations, StoragePressurePercent: 85, SubjectQuotas: quotas}, nil
+	runnerOperations := sandboxes * DurableCodingConcurrentOperations
+	subjectOperations := active * DurableCodingConcurrentOperations
+	quotas := map[string]int64{"maxSandboxes": sandboxes * 4, "maxActiveInstances": active, "maxCpuMillis": cpuMillis, "maxMemoryBytes": memory, "maxArtifactBytes": objectStoreBytes / 2, "maxSnapshots": sandboxes * 10, "maxArtifacts": sandboxes * 100, "maxPortSessions": sandboxes * 4, "maxConcurrentOperations": subjectOperations}
+	return CapacityPlan{MaxSandboxes: sandboxes, MaxCPUMillis: cpuMillis, MaxMemoryBytes: memory, MaxWorkspaceBytes: workspaceBytes, ConcurrentStarts: min(int64(2), active), ConcurrentOperations: runnerOperations, StoragePressurePercent: 85, SubjectQuotas: quotas}, nil
 }
 
 func backingReserveBytes(available int64) int64 {

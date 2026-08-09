@@ -78,7 +78,7 @@ func TestInitSingleHostFromReleaseMaterializesEveryAcceptedRunnerValue(t *testin
 		t.Fatalf("release-backed deployment = %#v", manifest.Deployment)
 	}
 	runner := manifest.Runners[0]
-	if runner.RunnerID != result.RunnerID || runner.IdentityHostDirectory != result.RunnerIdentityDirectory || runner.WorkspaceHostDirectory != plan.Storage.WorkspacePath || runner.ArtifactHostDirectory != filepath.Join(deployment, "artifacts") || runner.FirecrackerJailerUIDStart == nil || *runner.FirecrackerJailerUIDStart != plan.Network.JailerUIDRange.Start || runner.NetworkPolicyDNSUpstream != "[2001:db8::53]:53" || runner.DataPlaneAdvertisedAddress != plan.Network.DataPlaneAddress || runner.ArtifactPublicKeySHA256 != keyID {
+	if runner.RunnerID != result.RunnerID || runner.IdentityHostDirectory != result.RunnerIdentityDirectory || runner.WorkspaceHostDirectory != plan.Storage.WorkspacePath || runner.ArtifactHostDirectory != filepath.Join(deployment, "artifacts") || runner.FirecrackerJailerUIDStart == nil || *runner.FirecrackerJailerUIDStart != plan.Network.JailerUIDRange.Start || runner.MaxConcurrentOperationsGlobal == nil || *runner.MaxConcurrentOperationsGlobal != plan.Capacity.ConcurrentOperations || *runner.MaxConcurrentOperationsGlobal < install.DurableCodingConcurrentOperations || runner.NetworkPolicyDNSUpstream != "[2001:db8::53]:53" || runner.DataPlaneAdvertisedAddress != plan.Network.DataPlaneAddress || runner.ArtifactPublicKeySHA256 != keyID {
 		t.Fatalf("Runner does not match accepted plan: %#v", runner)
 	}
 	storedRelease, err := os.ReadFile(filepath.Join(deployment, "release-artifact-manifest.json"))

@@ -19,6 +19,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
 	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
+	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
 )
 
 func TestInstallResumeOrchestratesEveryDurableStageWithoutPrintingSecrets(t *testing.T) {
@@ -151,15 +152,17 @@ func TestInstallResumeOrchestratesEveryDurableStageWithoutPrintingSecrets(t *tes
 
 func TestInstalledRunnerReadinessRequiresExactAuthenticatedColdBootCapacity(t *testing.T) {
 	plan := install.InstallPlan{OperationID: "install_0123456789abcdef"}
-	ready := contracts.Runner{ID: "runner-0123456789abcdef", State: "ready", CredentialState: "pre_shared", Architectures: []string{"amd64"}, Capabilities: []string{"compute", "local-workspace"}, Capacity: map[string]int64{"CPUMillis": install.DurableCodingCPUMillis, "MemoryBytes": install.DurableCodingMemoryBytes, "DiskBytes": install.MinimumWorkspaceBytes, "Instances": 1, "Operations": 1}}
-	if evidence, ok := installedRunnerReadinessEvidence(plan, []contracts.Runner{{ID: "runner-unrelated", State: "ready"}, ready}); !ok || evidence["runnerId"] != ready.ID || evidence["coldBootCapacity"] != "advertised" {
+	ready := contracts.Runner{ID: "runner-0123456789abcdef", PoolName: standardresources.PoolAMD64, State: "ready", CredentialState: "pre_shared", Architectures: []string{standardresources.ArchitectureAMD64}, Capabilities: []string{"compute", "network-policy", "storage", "cleanup", "local-workspace"}, Capacity: map[string]int64{"CPUMillis": install.DurableCodingCPUMillis, "MemoryBytes": install.DurableCodingMemoryBytes, "DiskBytes": install.MinimumWorkspaceBytes, "Instances": 1, "Operations": install.DurableCodingConcurrentOperations}}
+	if evidence, ok := installedRunnerReadinessEvidence(plan, []contracts.Runner{{ID: "runner-unrelated", State: "ready"}, ready}); !ok || evidence["runnerId"] != ready.ID || evidence["runnerPool"] != standardresources.PoolAMD64 || evidence["coldBootCapacity"] != "advertised" || evidence["concurrentOperationCapacity"] != "16" {
 		t.Fatalf("exact readiness evidence = %#v, %t", evidence, ok)
 	}
 	for _, mutate := range []func(*contracts.Runner){
 		func(runner *contracts.Runner) { runner.ID = "runner-other" },
+		func(runner *contracts.Runner) { runner.PoolName = "other-pool" },
 		func(runner *contracts.Runner) { runner.CredentialState = "active" },
 		func(runner *contracts.Runner) { runner.Capabilities = []string{"local-workspace"} },
 		func(runner *contracts.Runner) { runner.Capacity["MemoryBytes"]-- },
+		func(runner *contracts.Runner) { runner.Capacity["Operations"]-- },
 	} {
 		candidate := ready
 		candidate.Architectures = slices.Clone(ready.Architectures)
