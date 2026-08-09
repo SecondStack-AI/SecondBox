@@ -66,6 +66,8 @@ The `[overrides]` table contains code-owned tuning. Every field is optional. Whe
 
 `http_timeout_seconds` bounds request reads, response writes, idle keep-alive connections, and graceful server shutdown. The response write deadline starts only when an ordinary response begins, so it does not expire while a handler waits for an operation-specific result. Buffered Exec, Sandbox wait, proxied File operations, and upgraded streaming connections already have operation-specific bounds. A server-wide response deadline cannot be compatible with every valid Profile because Profile execution deadlines are explicit and may exceed this process tuning value.
 
+Production ingress is a separate deadline boundary. Configure reverse proxies and load balancers so request and response timeouts exceed the longest admitted Profile operation and the 60-second Sandbox wait bound, including practical transport overhead. Upgraded Exec, Terminal, and Port connections must remain open for their full session lifetime with compatible idle timeouts. A shorter ingress deadline can still terminate a valid request even when `secondboxd` accepts it.
+
 Runner protocol minimum and maximum are not configuration. Both binaries compile the one supported protocol window, and generated-protocol verification rejects drift between the two modules.
 
 ## Production initialization
