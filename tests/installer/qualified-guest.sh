@@ -185,7 +185,11 @@ fi
 jq -e '.status == "succeeded" and .completedStages[-1].stage == "smoke_execution"' "$receipt" >/dev/null
 [[ "$(artifact_fingerprint "$artifacts")" == "$(jq -er .artifactFingerprint "$state")" ]] || { echo 'verified artifact bundle was unexpectedly re-extracted' >&2; exit 1; }
 compose_project="$(jq -er '.completedStages[] | select(.stage == "compose_started") | .evidence.composeProject' "$receipt")"
-[[ "$(docker ps --filter "label=com.docker.compose.project=$compose_project" --format '{{.ID}}' | wc -l)" -ge 4 ]]
+mapfile -t running_services < <(
+  docker ps --filter "label=com.docker.compose.project=$compose_project" \
+    --format '{{.Label "com.docker.compose.service"}}' | sort
+)
+[[ "${running_services[*]}" == 'control-plane postgres same-host-runner' ]]
 jq -e '.completedStages[] | select(.stage == "readiness") | .evidence.runnerState == "ready"' "$receipt" >/dev/null
 jq -e '.completedStages[] | select(.stage == "cli_login")' "$receipt" >/dev/null
 jq -e '.completedStages[] | select(.stage == "smoke_execution") | .evidence.output == "hello from a microVM" and .evidence.exitStatus == "0"' "$receipt" >/dev/null
