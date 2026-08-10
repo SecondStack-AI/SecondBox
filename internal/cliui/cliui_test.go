@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
@@ -370,13 +371,70 @@ func TestStyledActivityDoesNotQueryOrMutateTerminalModes(t *testing.T) {
 	if readErr != nil && !errors.Is(readErr, syscall.EIO) {
 		t.Fatal(readErr)
 	}
-	for _, forbidden := range []string{
-		"\x1b[?2026$p", "\x1b[?2027$p", "\x1b[?u",
-		"\x1b[=0;1u", "\x1b[>4;2m",
-	} {
-		if bytes.Contains(output, []byte(forbidden)) {
-			t.Fatalf("styled activity emitted terminal negotiation %q: %q", forbidden, output)
+	if err := validateActivityControls(output); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func validateActivityControls(output []byte) error {
+	for index := 0; index < len(output); {
+		value := output[index]
+		if value != 0x1b {
+			runeValue, size := utf8.DecodeRune(output[index:])
+			if runeValue == utf8.RuneError && size == 1 {
+				return fmt.Errorf("styled activity emitted malformed UTF-8 at byte %d: %q", index, output)
+			}
+			if runeValue != '\r' && runeValue != '\n' && (!unicode.IsPrint(runeValue) || unicode.IsControl(runeValue)) {
+				return fmt.Errorf("styled activity emitted non-printable rune %U: %q", runeValue, output)
+			}
+			index += size
+			continue
 		}
+		start := index
+		index++
+		if index >= len(output) || output[index] != '[' {
+			return fmt.Errorf("styled activity emitted non-CSI escape at byte %d: %q", start, output)
+		}
+		index++
+		parameterStart := index
+		for index < len(output) && (output[index] < 0x40 || output[index] > 0x7e) {
+			index++
+		}
+		if index >= len(output) {
+			return fmt.Errorf("styled activity emitted incomplete CSI sequence at byte %d: %q", start, output)
+		}
+		parameters, final := output[parameterStart:index], output[index]
+		index++
+		sequence := output[start:index]
+		if bytes.Equal(sequence, []byte("\x1b[2K")) || bytes.Equal(sequence, []byte("\x1b[1A")) {
+			continue
+		}
+		if final != 'm' {
+			return fmt.Errorf("styled activity emitted non-renderer CSI sequence %q: %q", sequence, output)
+		}
+		for _, parameter := range parameters {
+			if parameter != ';' && (parameter < '0' || parameter > '9') {
+				return fmt.Errorf("styled activity emitted non-SGR CSI sequence %q: %q", sequence, output)
+			}
+		}
+	}
+	return nil
+}
+
+func TestActivityControlValidationRejectsQueriesAndModes(t *testing.T) {
+	for name, output := range map[string][]byte{
+		"bracketed paste":   []byte("\x1b[?2004h"),
+		"terminal query":    []byte("\x1b[?2026$p"),
+		"7-bit OSC":         []byte("\x1b]0;title\x07"),
+		"8-bit DCS":         {0x90, 'q'},
+		"UTF-8 8-bit OSC":   []byte("\u009d0;title\u009c"),
+		"UTF-8 8-bit query": []byte("\u009b?2026$p"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateActivityControls(output); err == nil {
+				t.Fatalf("accepted input-affecting terminal control: %q", output)
+			}
+		})
 	}
 }
 
