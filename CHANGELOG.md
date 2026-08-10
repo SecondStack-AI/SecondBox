@@ -4,11 +4,11 @@
 
 ### Removed
 
-- Removed the application Artifact resource, its API/SDK/CLI surfaces, S3-compatible storage integration, quotas, retention, garbage collection, and bundled object-store deployment.
+- Removed the application Artifact resource, its API/SDK/CLI surfaces, S3-compatible storage integration, quotas, retention, garbage collection, and bundled object-store deployment ([#88](https://github.com/SecondStack-AI/SecondBox/pull/88)).
 
 ### Fixed
 
-- Buffered Exec and other long-running HTTP responses now remain connected for their operation-defined lifetime. The control plane previously applied its 30-second connection timeout as a server-wide response write deadline, so a valid command could complete and persist its result while the SDK received only `EOF` or `fetch failed`.
+- Buffered Exec and other long-running HTTP responses now remain connected for their operation-defined lifetime. The control plane previously applied its 30-second connection timeout as a server-wide response write deadline, so a valid command could complete and persist its result while the SDK received only `EOF` or `fetch failed` ([#90](https://github.com/SecondStack-AI/SecondBox/pull/90)).
 - Guided installation now inspects existing Docker IPAM allocations and chooses a separate, reviewed RFC1918 `/24` for the Compose backend network. Compose startup no longer depends on Docker's finite automatic address pools, and both the Firecracker guest network and Compose network are rejected when they overlap each other, a host route, or an allocated Docker network. A receipt-compatible v0.4.4 through v0.4.6 operation can use the v0.4.7 bootstrap to validate and stop its exact partial Compose project, journal a retry from the pre-Compose boundary, replace the conflicting network, and resume without downloading the release again.
 - Guided installation now validates both reviewed CLI binary destinations and the CLI configuration destination before pulling images or extracting the microVM bundle. Existing executables are upgraded atomically only when their embedded Go build identities are exactly the corresponding SecondBox CLIs, and an existing configuration is upgraded only when it is a protected, strictly decoded SecondBox session document. Unrelated files remain untouched and stop the operation before expensive release materialization; interrupted binary upgrades adopt only the release's exact digest on resume.
 - Guided installation now searches every RFC1918 `/24` for an unused guest bridge network while preserving its established preferred subnets. The former selector tried only `172.30.0.0/24` and `172.31.0.0/24`, so hosts with Docker, VPN, or other routes covering both failed before plan review even when other private networks were free.
