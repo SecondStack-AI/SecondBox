@@ -143,12 +143,14 @@ The guest's stdout and stderr land on your two streams, unmerged, and **its exit
 secondbox run durable-coding --name my-box --keep -- true
 
 # Address it by name from any machine
-secondbox exec my-box -- go test ./...
-secondbox exec my-box --shell -- 'cd /workspace && make build'
+secondbox exec my-box --shell -- 'printf "hello from my-box\n" > /workspace/hello.txt'
+secondbox exec my-box -- cat /workspace/hello.txt
 secondbox shell my-box
 ```
 
 Names are the reserved metadata key `secondbox.dev/name`, unique per tenant and subject and resolved **server-side** — so the same name works from anywhere, with nothing cached locally. A deleted Sandbox releases its name.
+
+A Sandbox created without a source Snapshot starts with its own empty durable Workspace. Populate `/workspace` through the File API or guest commands; SecondBox never mounts or copies the caller's host checkout implicitly.
 
 `run`, `exec`, and `shell` accept a name or an opaque `sbx_…` identifier, telling them apart by the identifier prefix. The transport-level commands below take the identifier only; `secondbox sandboxes list` shows both.
 

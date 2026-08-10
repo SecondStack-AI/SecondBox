@@ -8,9 +8,12 @@ import (
 	"io"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/colorprofile"
 	"github.com/creack/pty"
 	"golang.org/x/term"
@@ -333,6 +336,72 @@ func TestActivityConcurrentCancellationAndCompletion(t *testing.T) {
 			}
 		case <-time.After(2 * time.Second):
 			t.Fatal("activity completion deadlocked")
+		}
+	}
+}
+
+func TestStyledActivityDoesNotQueryOrMutateTerminalModes(t *testing.T) {
+	master, slave, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer master.Close()
+
+	capabilities := ForWriter(io.Discard, slave)
+	capabilities.Diagnostic = StreamCapabilities{
+		TTY: true, Width: 80, Height: 24, Color: ProfileANSI, Background: BackgroundDark,
+	}
+	renderer := Renderer{
+		Output: io.Discard, Diagnostic: slave, Capabilities: capabilities,
+		OutputMode: OutputAuto, ColorMode: ColorAuto,
+	}
+	activity, err := renderer.StartActivity(context.Background(), "Negotiate stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if err := activity.Complete(StatusComplete, "ready"); err != nil {
+		t.Fatal(err)
+	}
+	if err := slave.Close(); err != nil {
+		t.Fatal(err)
+	}
+	output, readErr := io.ReadAll(master)
+	if readErr != nil && !errors.Is(readErr, syscall.EIO) {
+		t.Fatal(readErr)
+	}
+	for _, forbidden := range []string{
+		"\x1b[?2026$p", "\x1b[?2027$p", "\x1b[?u",
+		"\x1b[=0;1u", "\x1b[>4;2m",
+	} {
+		if bytes.Contains(output, []byte(forbidden)) {
+			t.Fatalf("styled activity emitted terminal negotiation %q: %q", forbidden, output)
+		}
+	}
+}
+
+func TestActivityLineFitsNarrowTerminal(t *testing.T) {
+	theme := NewTheme(StreamCapabilities{Color: ProfileANSI, Background: BackgroundDark}, true)
+	for width := 1; width <= 40; width++ {
+		for _, unicodeOK := range []bool{false, true} {
+			line := activityLine(theme, "|", "Create, schedule, and execute Sandbox", width, unicodeOK)
+			if !utf8.ValidString(line) {
+				t.Fatalf("width %d unicode %t activity line is invalid UTF-8: %q", width, unicodeOK, line)
+			}
+			if got := lipgloss.Width(line); got > max(1, width-1) {
+				t.Fatalf("width %d activity line occupies %d columns: %q", width, got, line)
+			}
+		}
+	}
+}
+
+func TestTruncatePreservesUTF8AtEveryNarrowWidth(t *testing.T) {
+	for width := 0; width <= 10; width++ {
+		for _, unicodeOK := range []bool{false, true} {
+			result := truncate("Create Sandbox", width, unicodeOK)
+			if !utf8.ValidString(result) || lipgloss.Width(result) > width {
+				t.Fatalf("truncate width %d unicode %t = %q", width, unicodeOK, result)
+			}
 		}
 	}
 }

@@ -251,9 +251,9 @@ func TestExecReportsNonExitedOutcomes(t *testing.T) {
 	}{
 		{
 			name: "spawn failed",
-			outcome: `{"kind":"spawn_failed","reason":"executable_not_found",
+			outcome: `{"kind":"spawn_failed","reason":"not_found",
 				"message":"no such file"}`,
-			wantIn: "no such file",
+			wantIn: "not_found: no such file",
 		},
 		{
 			name: "deadline exceeded",
