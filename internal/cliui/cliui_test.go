@@ -370,12 +370,46 @@ func TestStyledActivityDoesNotQueryOrMutateTerminalModes(t *testing.T) {
 	if readErr != nil && !errors.Is(readErr, syscall.EIO) {
 		t.Fatal(readErr)
 	}
-	for _, forbidden := range []string{
-		"\x1b[?2026$p", "\x1b[?2027$p", "\x1b[?u",
-		"\x1b[=0;1u", "\x1b[>4;2m",
-	} {
-		if bytes.Contains(output, []byte(forbidden)) {
-			t.Fatalf("styled activity emitted terminal negotiation %q: %q", forbidden, output)
+	assertActivityControls(t, output)
+}
+
+func assertActivityControls(t *testing.T, output []byte) {
+	t.Helper()
+	for index := 0; index < len(output); {
+		value := output[index]
+		switch {
+		case value == '\r' || value == '\n' || value >= 0x20 && value != 0x7f && value != 0x9b:
+			index++
+		case value != 0x1b:
+			t.Fatalf("styled activity emitted control byte 0x%02x: %q", value, output)
+		default:
+			start := index
+			index++
+			if index >= len(output) || output[index] != '[' {
+				t.Fatalf("styled activity emitted non-CSI escape at byte %d: %q", start, output)
+			}
+			index++
+			parameterStart := index
+			for index < len(output) && (output[index] < 0x40 || output[index] > 0x7e) {
+				index++
+			}
+			if index >= len(output) {
+				t.Fatalf("styled activity emitted incomplete CSI sequence at byte %d: %q", start, output)
+			}
+			parameters, final := output[parameterStart:index], output[index]
+			index++
+			sequence := output[start:index]
+			if bytes.Equal(sequence, []byte("\x1b[2K")) || bytes.Equal(sequence, []byte("\x1b[1A")) {
+				continue
+			}
+			if final != 'm' {
+				t.Fatalf("styled activity emitted non-renderer CSI sequence %q: %q", sequence, output)
+			}
+			for _, parameter := range parameters {
+				if parameter != ';' && (parameter < '0' || parameter > '9') {
+					t.Fatalf("styled activity emitted non-SGR CSI sequence %q: %q", sequence, output)
+				}
+			}
 		}
 	}
 }
