@@ -834,7 +834,7 @@ test("waitFor retries after the service reports the wait expired", async () => {
   assert.ok(waits >= 2);
 });
 
-test("waitFor keeps each service request below the default HTTP timeout", async () => {
+test("waitFor keeps each service request within the public service bound", async () => {
   let requestDeadline = 0;
   const fetcher: typeof fetch = async (_input, init) => {
     const body = JSON.parse(String(init?.body)) as { deadlineMilliseconds: number };
@@ -843,8 +843,8 @@ test("waitFor keeps each service request below the default HTTP timeout", async 
   };
   const api = new SecondBox(new SecondBoxClient("https://secondbox.example", "token", fetcher));
   const handle = new SandboxHandle(api, sandbox("starting"));
-  await handle.waitFor(["ready"], { deadlineMilliseconds: 45_000 });
-  assert.equal(requestDeadline, 20_000);
+  await handle.waitFor(["ready"], { deadlineMilliseconds: 75_000 });
+  assert.equal(requestDeadline, 60_000);
 });
 
 test("waitFor returns immediately when the state already holds", async () => {

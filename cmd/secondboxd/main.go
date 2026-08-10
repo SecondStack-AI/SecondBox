@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
@@ -260,11 +261,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		"",
 	)
 	defer cancelAssignmentWakeups()
-	server := &http.Server{
-		Addr: processConfig.ListenAddress, Handler: httpHandler,
-		ReadHeaderTimeout: processConfig.HTTPTimeout, ReadTimeout: processConfig.HTTPTimeout,
-		WriteTimeout: processConfig.HTTPTimeout, IdleTimeout: processConfig.HTTPTimeout,
-	}
+	server := newPublicHTTPServer(processConfig, httpHandler)
 	serverErrors := make(chan error, 1)
 	runnerServerErrors := make(chan error, 1)
 	lifecycleErrors := make(chan error, 1)
@@ -543,6 +540,89 @@ func newLifecycleFencingToken() ([]byte, error) {
 		return nil, fmt.Errorf("SecondBox lifecycle fencing token: %w", err)
 	}
 	return token, nil
+}
+
+func newPublicHTTPServer(processConfig config.Config, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              processConfig.ListenAddress,
+		Handler:           withResponseWriteDeadline(handler, processConfig.HTTPTimeout),
+		ReadHeaderTimeout: processConfig.HTTPTimeout, ReadTimeout: processConfig.HTTPTimeout,
+		// Buffered Exec and other response-producing operations carry their own
+		// contract bounds. Profiles may accept deadlines longer than any fixed
+		// process timeout, so a server-wide write deadline would terminate valid
+		// responses before those operation bounds expire. The Handler starts the
+		// configured write deadline when an ordinary response begins instead.
+		WriteTimeout: 0, IdleTimeout: processConfig.HTTPTimeout,
+	}
+}
+
+func withResponseWriteDeadline(handler http.Handler, timeout time.Duration) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		handler.ServeHTTP(&responseWriteDeadlineWriter{
+			ResponseWriter: writer,
+			timeout:        timeout,
+		}, request)
+	})
+}
+
+type responseWriteDeadlineWriter struct {
+	http.ResponseWriter
+	timeout     time.Duration
+	deadlineSet bool
+	deadlineErr error
+}
+
+func (writer *responseWriteDeadlineWriter) startDeadline() error {
+	if writer.deadlineSet {
+		return writer.deadlineErr
+	}
+	writer.deadlineSet = true
+	if err := http.NewResponseController(writer.ResponseWriter).SetWriteDeadline(time.Now().Add(writer.timeout)); err != nil {
+		writer.deadlineErr = fmt.Errorf("SecondBox public HTTP response write deadline: %w", err)
+	}
+	return writer.deadlineErr
+}
+
+func (writer *responseWriteDeadlineWriter) WriteHeader(status int) {
+	if err := writer.startDeadline(); err != nil {
+		panic(err)
+	}
+	writer.ResponseWriter.WriteHeader(status)
+}
+
+func (writer *responseWriteDeadlineWriter) Write(content []byte) (int, error) {
+	if err := writer.startDeadline(); err != nil {
+		return 0, err
+	}
+	return writer.ResponseWriter.Write(content)
+}
+
+func (writer *responseWriteDeadlineWriter) Flush() {
+	if err := writer.startDeadline(); err != nil {
+		panic(err)
+	}
+	if err := http.NewResponseController(writer.ResponseWriter).Flush(); err != nil {
+		panic(fmt.Errorf("SecondBox public HTTP response flush: %w", err))
+	}
+}
+
+func (writer *responseWriteDeadlineWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return http.NewResponseController(writer.ResponseWriter).Hijack()
+}
+
+func (writer *responseWriteDeadlineWriter) Push(target string, options *http.PushOptions) error {
+	if err := writer.startDeadline(); err != nil {
+		return err
+	}
+	pusher, ok := writer.ResponseWriter.(http.Pusher)
+	if !ok {
+		return http.ErrNotSupported
+	}
+	return pusher.Push(target, options)
+}
+
+func (writer *responseWriteDeadlineWriter) Unwrap() http.ResponseWriter {
+	return writer.ResponseWriter
 }
 
 func runLifecycleReconciler(

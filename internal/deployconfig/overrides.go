@@ -24,7 +24,7 @@ func OverrideRegistry() []OverrideDefinition {
 		defaults[item.Environment] = item.Value
 	}
 	definitions := []OverrideDefinition{
-		{"http_timeout_seconds", "SECONDBOX_HTTP_TIMEOUT_SECONDS", "", "HTTP request timeout.", false, "HTTPTimeoutSeconds"},
+		{"http_timeout_seconds", "SECONDBOX_HTTP_TIMEOUT_SECONDS", "", "HTTP request-read, response-write, keep-alive, and shutdown timeout.", false, "HTTPTimeoutSeconds"},
 		{"runner_heartbeat_interval_milliseconds", "SECONDBOX_RUNNER_HEARTBEAT_INTERVAL_MILLISECONDS", "", "Runner heartbeat cadence.", false, "RunnerHeartbeatIntervalMilliseconds"},
 		{"runner_heartbeat_timeout_milliseconds", "SECONDBOX_RUNNER_HEARTBEAT_TIMEOUT_MILLISECONDS", "", "Runner liveness timeout.", false, "RunnerHeartbeatTimeoutMilliseconds"},
 		{"runner_command_delivery_batch_size", "SECONDBOX_RUNNER_COMMAND_DELIVERY_BATCH_SIZE", "", "Commands delivered per claim.", false, "RunnerCommandDeliveryBatchSize"},

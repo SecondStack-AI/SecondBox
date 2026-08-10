@@ -120,15 +120,8 @@ export function problemCodeOf(error: unknown): string {
   return error instanceof SecondBoxProblemError ? error.problem.code : "";
 }
 
-/**
- * Bounds one waitForSandbox request. The service permits up to 60 seconds, but
- * a deployment's own HTTP timeout closes the connection first:
- * SECONDBOX_HTTP_TIMEOUT_SECONDS defaults to 30, and a longer poll then fails
- * with an unexplained network error rather than a state. Staying well under
- * that default costs an extra request per half-minute of waiting and works
- * against an unmodified deployment.
- */
-const MAXIMUM_WAIT_REQUEST_MILLISECONDS = 20_000;
+/** Matches the service's public waitForSandbox request bound. */
+const MAXIMUM_WAIT_REQUEST_MILLISECONDS = 60_000;
 
 /** Keeps a very short Lease from busy-looping. */
 const DEFAULT_MINIMUM_RENEWAL_DELAY_MILLISECONDS = 1_000;
