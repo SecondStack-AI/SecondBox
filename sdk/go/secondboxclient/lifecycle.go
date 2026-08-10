@@ -57,16 +57,24 @@ type ExecResult struct {
 
 // ExecFailure is one terminal ExecOutcome that did not reach an exit status.
 type ExecFailure struct {
-	Kind    string
-	Message string
-	Output  ExecOutput
+	Kind               string
+	Message            string
+	SpawnFailureReason SpawnFailureKind
+	Output             ExecOutput
 }
 
 func (failure *ExecFailure) Error() string {
-	if failure.Message == "" {
+	detail := failure.Message
+	if failure.SpawnFailureReason != "" {
+		detail = string(failure.SpawnFailureReason)
+		if failure.Message != "" {
+			detail += ": " + failure.Message
+		}
+	}
+	if detail == "" {
 		return "SecondBox command " + failure.Kind
 	}
-	return "SecondBox command " + failure.Kind + ": " + failure.Message
+	return "SecondBox command " + failure.Kind + ": " + detail
 }
 
 // ExecOutcomeError maps one terminal ExecOutcome to an error, or nil when the
@@ -101,8 +109,9 @@ func ExecOutcomeError(outcome ExecOutcome) error {
 		}
 	case outcome.ExecSpawnFailed != nil:
 		return &ExecFailure{
-			Kind:    "spawn_failed",
-			Message: outcome.ExecSpawnFailed.Message,
+			Kind:               "spawn_failed",
+			Message:            outcome.ExecSpawnFailed.Message,
+			SpawnFailureReason: outcome.ExecSpawnFailed.Reason,
 		}
 	case outcome.ExecInfrastructureFailed != nil:
 		return &ExecFailure{

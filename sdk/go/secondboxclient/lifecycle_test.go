@@ -91,8 +91,8 @@ func TestExecOutcomeErrorCoversEveryVariant(t *testing.T) {
 		},
 		{
 			name:    "spawn failed",
-			outcome: ExecOutcome{ExecSpawnFailed: &ExecSpawnFailed{Message: "no such file"}},
-			wantErr: true, wantIn: "no such file",
+			outcome: ExecOutcome{ExecSpawnFailed: &ExecSpawnFailed{Reason: SpawnFailureKindNotFound, Message: "no such file"}},
+			wantErr: true, wantIn: "not_found: no such file",
 		},
 		{
 			name: "infrastructure failed",
@@ -116,6 +116,19 @@ func TestExecOutcomeErrorCoversEveryVariant(t *testing.T) {
 				t.Errorf("error = %q; want it to contain %q", err, test.wantIn)
 			}
 		})
+	}
+}
+
+func TestExecOutcomeErrorPreservesSpawnFailureReason(t *testing.T) {
+	err := ExecOutcomeError(ExecOutcome{ExecSpawnFailed: &ExecSpawnFailed{
+		Reason: SpawnFailureKindNotFound, Message: "command could not be spawned",
+	}})
+	var failure *ExecFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("ExecOutcomeError = %T %v; want *ExecFailure", err, err)
+	}
+	if failure.SpawnFailureReason != SpawnFailureKindNotFound {
+		t.Fatalf("spawn failure reason = %q", failure.SpawnFailureReason)
 	}
 }
 

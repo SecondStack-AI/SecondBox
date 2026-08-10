@@ -135,6 +135,9 @@ func pad(value string, width int) string {
 	return value + strings.Repeat(" ", max(0, width-lipgloss.Width(value)))
 }
 func truncate(value string, width int, unicodeOK bool) string {
+	if width <= 0 {
+		return ""
+	}
 	if lipgloss.Width(value) <= width {
 		return value
 	}
@@ -142,9 +145,13 @@ func truncate(value string, width int, unicodeOK bool) string {
 	if unicodeOK {
 		marker = "…"
 	}
-	limit := width - lipgloss.Width(marker)
+	markerWidth := lipgloss.Width(marker)
+	if markerWidth > width {
+		return strings.Repeat(".", width)
+	}
+	limit := width - markerWidth
 	if limit <= 0 {
-		return marker[:min(len(marker), width)]
+		return marker
 	}
 	var result strings.Builder
 	for _, r := range value {
