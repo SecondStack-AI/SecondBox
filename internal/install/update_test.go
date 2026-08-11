@@ -269,6 +269,16 @@ func TestStageUpdateReleaseIsResumableAndDoesNotReplaceActivePaths(t *testing.T)
 	}
 	executor := &fakeReleaseMaterializer{source: source, binaries: binaries}
 	verified := releaseverify.VerifiedRelease{Manifest: release, ManifestBytes: releaseBytes}
+	interrupted, err := UpdateStaging(plan, update)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(interrupted.ArtifactPartial, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(interrupted.ArtifactPartial, "incomplete"), []byte("crash residue"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	staged, artifact, err := StageUpdateRelease(context.Background(), plan, update, verified, executor)
 	if err != nil {
 		t.Fatal(err)
@@ -325,9 +335,23 @@ func TestStageUpdateReleaseIsResumableAndDoesNotReplaceActivePaths(t *testing.T)
 	if _, err := VerifyArtifactDirectory(active, release); err != nil {
 		t.Fatalf("active target changed during cleanup: %v", err)
 	}
-	for _, path := range []string{staged.PreviousArtifacts, staged.Root, staged.Artifacts} {
+	for _, path := range []string{staged.PreviousArtifacts, staged.Root, staged.Artifacts, staged.ArtifactPartial} {
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {
 			t.Fatalf("update-owned cleanup residue %s: %v", path, err)
 		}
+	}
+}
+
+func TestInterruptedUpdateArtifactCleanupRejectsUnsafePath(t *testing.T) {
+	outside := t.TempDir()
+	partial := filepath.Join(t.TempDir(), ".artifacts-update_0123456789abcdef.partial")
+	if err := os.Symlink(outside, partial); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeInterruptedUpdateArtifacts(partial); err == nil || !strings.Contains(err.Error(), "unsafe") {
+		t.Fatalf("unsafe interrupted staging cleanup = %v", err)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("outside directory changed: %v", err)
 	}
 }

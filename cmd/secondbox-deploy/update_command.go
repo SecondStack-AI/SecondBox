@@ -414,7 +414,18 @@ func continueUpdate(ctx context.Context, directory string, plan install.InstallP
 			problem := fmt.Errorf("SecondBox installer update: Sandboxes changed while control-plane admission was being fenced: %s", strings.Join(active, ", "))
 			return fail(install.UpdateStageActivationStarted, install.FailureNeedsAction, restoreSource(problem))
 		}
-		if err := journalUpdateActivationBoundary(complete, restoreSource); err != nil {
+		activationCommitted := func() (bool, error) {
+			_, durableReceipt, err := install.ReadOperationReadOnly(directory, dependencies.OwnerUID)
+			if err != nil {
+				return false, err
+			}
+			durableUpdate, ok := durableReceipt.ActiveUpdate()
+			if !ok || durableUpdate.ID != current.ID {
+				return false, nil
+			}
+			return len(durableUpdate.CompletedStages) > 3 && durableUpdate.CompletedStages[3].Stage == install.UpdateStageActivationStarted, nil
+		}
+		if err := journalUpdateActivationBoundary(complete, activationCommitted, restoreSource); err != nil {
 			return err
 		}
 		current, _ = receipt.ActiveUpdate()
@@ -501,8 +512,15 @@ func continueUpdate(ctx context.Context, directory string, plan install.InstallP
 	return writeUpdateSuccess(renderer, directory, plan)
 }
 
-func journalUpdateActivationBoundary(complete func(install.UpdateStage, map[string]string) error, restoreSource func(error) error) error {
+func journalUpdateActivationBoundary(complete func(install.UpdateStage, map[string]string) error, committed func() (bool, error), restoreSource func(error) error) error {
 	if err := complete(install.UpdateStageActivationStarted, map[string]string{"forwardOnly": "true", "controlPlaneAdmission": "stopped", "deploymentQuiescence": "verified"}); err != nil {
+		visible, inspectErr := committed()
+		if inspectErr != nil {
+			return errors.Join(err, fmt.Errorf("SecondBox installer update cannot determine whether the forward-only activation boundary committed; control-plane admission remains stopped: %w", inspectErr))
+		}
+		if visible {
+			return err
+		}
 		return restoreSource(err)
 	}
 	return nil
@@ -573,7 +591,7 @@ AND NOT (
   )
 )`
 	command := `exec psql --no-psqlrc --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --tuples-only --no-align --command "$1"`
-	arguments, err := deployconfig.ComposeDiagnosticArgumentsForAcceptedInstaller(
+	arguments, err := deployconfig.ComposeDiagnosticArgumentsForRecordedInstaller(
 		manifestPath, "exec", "--no-TTY", "postgres", "sh", "-eu", "-c", command, "secondbox-update-quiescence", query,
 	)
 	if err != nil {

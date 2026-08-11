@@ -21,12 +21,47 @@ func TestActivationBoundaryPersistenceFailureRestartsSource(t *testing.T) {
 			t.Fatalf("activation boundary = %s %#v", stage, evidence)
 		}
 		return persistErr
+	}, func() (bool, error) {
+		return false, nil
 	}, func(problem error) error {
 		restored = true
 		return problem
 	})
 	if !errors.Is(err, persistErr) || !restored {
 		t.Fatalf("boundary failure = %v, restored=%t", err, restored)
+	}
+}
+
+func TestActivationBoundaryPersistenceFailureKeepsCommittedFence(t *testing.T) {
+	persistErr := errors.New("sync receipt directory")
+	restored := false
+	err := journalUpdateActivationBoundary(func(install.UpdateStage, map[string]string) error {
+		return persistErr
+	}, func() (bool, error) {
+		return true, nil
+	}, func(problem error) error {
+		restored = true
+		return problem
+	})
+	if !errors.Is(err, persistErr) || restored {
+		t.Fatalf("committed boundary failure = %v, restored=%t", err, restored)
+	}
+}
+
+func TestActivationBoundaryPersistenceFailureKeepsFenceWhenCommitIsAmbiguous(t *testing.T) {
+	persistErr := errors.New("sync receipt directory")
+	inspectErr := errors.New("read durable receipt")
+	restored := false
+	err := journalUpdateActivationBoundary(func(install.UpdateStage, map[string]string) error {
+		return persistErr
+	}, func() (bool, error) {
+		return false, inspectErr
+	}, func(problem error) error {
+		restored = true
+		return problem
+	})
+	if !errors.Is(err, persistErr) || !errors.Is(err, inspectErr) || restored || !strings.Contains(err.Error(), "remains stopped") {
+		t.Fatalf("ambiguous boundary failure = %v, restored=%t", err, restored)
 	}
 }
 

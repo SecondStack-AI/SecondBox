@@ -16,6 +16,7 @@ import (
 type StagedUpdate struct {
 	Root                    string
 	Artifacts               string
+	ArtifactPartial         string
 	PreviousArtifacts       string
 	SecondBoxBinary         string
 	SecondBoxDeployBinary   string
@@ -65,6 +66,7 @@ func UpdateStaging(plan InstallPlan, update UpdateRecord) (StagedUpdate, error) 
 	return StagedUpdate{
 		Root:                    root,
 		Artifacts:               filepath.Join(filepath.Dir(artifacts.Path), "artifacts-"+update.ID),
+		ArtifactPartial:         filepath.Join(filepath.Dir(artifacts.Path), ".artifacts-"+update.ID+".partial"),
 		PreviousArtifacts:       filepath.Join(filepath.Dir(artifacts.Path), "artifacts-before-"+update.ID),
 		SecondBoxBinary:         filepath.Join(root, "secondbox"),
 		SecondBoxDeployBinary:   filepath.Join(root, "secondbox-deploy"),
@@ -95,7 +97,7 @@ func StageUpdateRelease(ctx context.Context, plan InstallPlan, update UpdateReco
 			return StagedUpdate{}, VerifiedArtifact{}, installerError("pull immutable update "+name+" image", err)
 		}
 	}
-	artifact, err := stageUpdateArtifacts(ctx, staged.Artifacts, verified, executor)
+	artifact, err := stageUpdateArtifacts(ctx, staged.Artifacts, staged.ArtifactPartial, verified, executor)
 	if err != nil {
 		return StagedUpdate{}, VerifiedArtifact{}, err
 	}
@@ -139,33 +141,56 @@ func validateVerifiedRelease(target ReleasePlan, verified releaseverify.Verified
 	return nil
 }
 
-func stageUpdateArtifacts(ctx context.Context, target string, verified releaseverify.VerifiedRelease, executor ReleaseMaterializeExecutor) (VerifiedArtifact, error) {
+func stageUpdateArtifacts(ctx context.Context, target, partial string, verified releaseverify.VerifiedRelease, executor ReleaseMaterializeExecutor) (VerifiedArtifact, error) {
+	if err := removeInterruptedUpdateArtifacts(partial); err != nil {
+		return VerifiedArtifact{}, err
+	}
 	if _, err := os.Lstat(target); err == nil {
 		return VerifyArtifactDirectory(target, verified.Manifest)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return VerifiedArtifact{}, installerError("inspect staged update artifacts", err)
 	}
-	temporary, err := os.MkdirTemp(filepath.Dir(target), ".secondbox-update-artifacts-")
-	if err != nil {
+	if err := os.Mkdir(partial, 0o700); err != nil {
 		return VerifiedArtifact{}, installerError("create update artifact staging directory", err)
 	}
-	if err := os.Chmod(temporary, 0o700); err != nil {
-		return VerifiedArtifact{}, errors.Join(err, os.RemoveAll(temporary))
+	if err := os.Chmod(partial, 0o700); err != nil {
+		return VerifiedArtifact{}, errors.Join(installerError("protect update artifact staging directory", err), os.RemoveAll(partial))
 	}
-	if err := executor.ExtractMicroVMImage(ctx, verified.Manifest.MicroVM.ImageReference, temporary); err != nil {
-		return VerifiedArtifact{}, errors.Join(installerError("extract immutable update microVM artifact image", err), os.RemoveAll(temporary))
+	if err := executor.ExtractMicroVMImage(ctx, verified.Manifest.MicroVM.ImageReference, partial); err != nil {
+		return VerifiedArtifact{}, errors.Join(installerError("extract immutable update microVM artifact image", err), os.RemoveAll(partial))
 	}
-	artifact, err := VerifyArtifactDirectory(temporary, verified.Manifest)
+	artifact, err := VerifyArtifactDirectory(partial, verified.Manifest)
 	if err != nil {
-		return VerifiedArtifact{}, errors.Join(err, os.RemoveAll(temporary))
+		return VerifiedArtifact{}, errors.Join(err, os.RemoveAll(partial))
 	}
-	if err := os.Rename(temporary, target); err != nil {
-		return VerifiedArtifact{}, errors.Join(installerError("publish staged update artifact directory", err), os.RemoveAll(temporary))
+	if err := os.Rename(partial, target); err != nil {
+		return VerifiedArtifact{}, errors.Join(installerError("publish staged update artifact directory", err), os.RemoveAll(partial))
 	}
 	if err := syncInstallDirectory(filepath.Dir(target)); err != nil {
 		return VerifiedArtifact{}, err
 	}
 	return artifact, nil
+}
+
+func removeInterruptedUpdateArtifacts(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return installerError("inspect interrupted update artifact staging directory", err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o700 || !ok || stat.Uid != uint32(os.Getuid()) {
+		return installerError("interrupted update artifact staging directory is unsafe", nil)
+	}
+	if err := validateUpdatePartialRemoval(path); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(path); err != nil {
+		return installerError("remove interrupted update artifact staging directory", err)
+	}
+	return syncInstallDirectory(filepath.Dir(path))
 }
 
 func ensureUpdateDirectory(path string) error {

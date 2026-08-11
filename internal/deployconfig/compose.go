@@ -43,7 +43,7 @@ func RunExistingComposeForAcceptedInstaller(ctx context.Context, manifestPath, a
 	if action == "start-control-plane" {
 		command = []string{"up", "--remove-orphans", "--detach", "control-plane"}
 	}
-	arguments, err := ComposeDiagnosticArgumentsForAcceptedInstaller(manifestPath, command...)
+	arguments, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, command...)
 	if err != nil {
 		return err
 	}
@@ -156,6 +156,57 @@ func ComposeDiagnosticArgumentsForAcceptedInstaller(manifestPath string, command
 	return composeDiagnosticArguments(manifestPath, false, command...)
 }
 
+// ComposeDiagnosticArgumentsForRecordedInstaller resolves only the immutable
+// Compose transport identity recorded in an accepted installer manifest. The
+// caller must already have verified the manifest against the accepted
+// operation and its public source release. In particular, this path does not
+// regenerate historical standard Profile lineage with the running target
+// binary's policy.
+func ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath string, command ...string) ([]string, error) {
+	absolute, err := filepath.Abs(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	manifest, err := ReadManifest(absolute)
+	if err != nil {
+		return nil, err
+	}
+	if manifest.Deployment.Mode != "development" && manifest.Deployment.Mode != "production" {
+		return nil, manifestError("recorded Compose deployment mode is unsupported", nil)
+	}
+	if manifest.Database.Mode != "bundled" && manifest.Database.Mode != "external" {
+		return nil, manifestError("recorded Compose database mode is unsupported", nil)
+	}
+	composeFiles := []string{"deploy/compose.yml"}
+	if manifest.Deployment.ComposeBackendCIDR != "" {
+		composeFiles = append(composeFiles, "deploy/compose.explicit-network.yml")
+	}
+	if manifest.Deployment.Mode == "development" {
+		composeFiles = append(composeFiles, "deploy/compose.development.yml")
+	} else if manifest.Database.Mode == "bundled" {
+		composeFiles = append(composeFiles, "deploy/compose.bundled-database.yml")
+	}
+	sameHost := false
+	for _, runner := range manifest.Runners {
+		if runner.Placement == "same-host" {
+			if sameHost {
+				return nil, manifestError("recorded Compose topology has multiple same-host Runners", nil)
+			}
+			sameHost = true
+			composeFiles = append(composeFiles, "deploy/compose.same-host-runner.yml")
+		} else if runner.Placement != "remote" {
+			return nil, manifestError("recorded Compose Runner placement is unsupported", nil)
+		}
+	}
+	project := manifest.Deployment.ComposeProjectName
+	if project == "" {
+		project = DefaultComposeProjectName
+	} else if !composeProjectPattern.MatchString(project) {
+		return nil, manifestError("recorded Compose project identity is invalid", nil)
+	}
+	return existingComposeArguments(absolute, project, composeFiles, command...)
+}
+
 func composeDiagnosticArguments(manifestPath string, validateSameHost bool, command ...string) ([]string, error) {
 	absolute, err := filepath.Abs(manifestPath)
 	if err != nil {
@@ -165,13 +216,17 @@ func composeDiagnosticArguments(manifestPath string, validateSameHost bool, comm
 	if err != nil {
 		return nil, err
 	}
-	environmentPath := filepath.Join(filepath.Dir(absolute), ".secondbox.generated.env")
+	return existingComposeArguments(absolute, resolved.ComposeProject(), resolved.ComposeFiles, command...)
+}
+
+func existingComposeArguments(manifestPath, project string, selected []string, command ...string) ([]string, error) {
+	environmentPath := filepath.Join(filepath.Dir(manifestPath), ".secondbox.generated.env")
 	info, err := os.Lstat(environmentPath)
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
 		return nil, manifestError("existing generated environment is absent or unprotected", err)
 	}
-	arguments := []string{"compose", "--project-name", resolved.ComposeProject(), "--env-file", environmentPath}
-	composeFiles, err := existingMaterializedComposeFiles(environmentPath, resolved.ComposeFiles)
+	arguments := []string{"compose", "--project-name", project, "--env-file", environmentPath}
+	composeFiles, err := existingMaterializedComposeFiles(environmentPath, selected)
 	if err != nil {
 		return nil, err
 	}

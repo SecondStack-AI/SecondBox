@@ -246,6 +246,41 @@ func TestComposeDiagnosticsUseInstalledMaterializedAssets(t *testing.T) {
 	}
 }
 
+func TestRecordedInstallerComposeDiagnosticsDoNotRegenerateSourceProfiles(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	environmentPath := filepath.Join(filepath.Dir(manifestPath), ".secondbox.generated.env")
+	resolved, err := Render(manifestPath, environmentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releasePath := manifest.StandardResources.ArtifactManifest
+	if !filepath.IsAbs(releasePath) {
+		releasePath = filepath.Join(filepath.Dir(manifestPath), releasePath)
+	}
+	// The updater independently verifies the immutable source release. Existing
+	// Compose transport must not rebuild its historical Profile lineage with the
+	// target binary's standard-resource implementation.
+	if err := os.WriteFile(releasePath, []byte("target-era regeneration must not read this\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ComposeDiagnosticArgumentsForAcceptedInstaller(manifestPath, "ps"); err == nil {
+		t.Fatal("ordinary accepted-manifest resolution unexpectedly accepted changed release input")
+	}
+	arguments, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, "ps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, materialized := range resolved.ComposeFiles {
+		if !slices.Contains(arguments, materialized) {
+			t.Fatalf("recorded diagnostics omitted source Compose asset %q: %#v", materialized, arguments)
+		}
+	}
+}
+
 func TestExistingComposeControlPlaneActionsPreserveMaterializedAssets(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
 	environmentPath := filepath.Join(filepath.Dir(manifestPath), ".secondbox.generated.env")
