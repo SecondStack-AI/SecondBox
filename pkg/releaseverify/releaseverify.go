@@ -220,24 +220,45 @@ func verifyManifestObjects(ctx context.Context, manifest releasecontract.Artifac
 		if err != nil {
 			return err
 		}
-		var document standardresources.BundleDocument
+		var documentName, profileName, signedManifestDigest, runtimeBundleDigest, toolchainBundleDigest string
+		type recordedRevisionIdentity struct {
+			number     int64
+			specDigest string
+		}
+		var revisions []recordedRevisionIdentity
 		if recorded {
-			document, err = standardresources.DecodeRecordedDocument(data)
+			document, decodeErr := standardresources.DecodeRecordedDocument(data)
+			err = decodeErr
+			if err == nil {
+				documentName, profileName = document.Name, document.Profile.Name
+				signedManifestDigest, runtimeBundleDigest, toolchainBundleDigest = document.SignedManifestDigest, document.RuntimeBundleDigest, document.ToolchainBundleDigest
+				for _, revision := range document.Profile.Revisions {
+					revisions = append(revisions, recordedRevisionIdentity{number: revision.Number, specDigest: revision.SpecDigest})
+				}
+			}
 		} else {
-			document, err = standardresources.DecodeDocument(data)
+			document, decodeErr := standardresources.DecodeDocument(data)
+			err = decodeErr
+			if err == nil {
+				documentName, profileName = document.Name, document.Profile.Name
+				signedManifestDigest, runtimeBundleDigest, toolchainBundleDigest = document.SignedManifestDigest, document.RuntimeBundleDigest, document.ToolchainBundleDigest
+				for _, revision := range document.Profile.Revisions {
+					revisions = append(revisions, recordedRevisionIdentity{number: revision.Number, specDigest: revision.SpecDigest})
+				}
+			}
 		}
 		if err != nil {
 			return fmt.Errorf("SecondBox release verification: standard bundle %s: %w", bundle.Name, err)
 		}
-		if document.Name != bundle.Name || document.Profile.Name != bundle.Name || len(document.Profile.Revisions) != len(bundle.Profiles) ||
-			document.SignedManifestDigest != manifest.MicroVM.SignedManifestDigest ||
-			document.RuntimeBundleDigest != manifest.MicroVM.RuntimeBundle.ManifestDigest ||
-			document.ToolchainBundleDigest != manifest.MicroVM.ToolchainBundle.ManifestDigest {
+		if documentName != bundle.Name || profileName != bundle.Name || len(revisions) != len(bundle.Profiles) ||
+			signedManifestDigest != manifest.MicroVM.SignedManifestDigest ||
+			runtimeBundleDigest != manifest.MicroVM.RuntimeBundle.ManifestDigest ||
+			toolchainBundleDigest != manifest.MicroVM.ToolchainBundle.ManifestDigest {
 			return fmt.Errorf("SecondBox release verification: standard bundle %s identity mismatch", bundle.Name)
 		}
 		for index, profile := range bundle.Profiles {
-			revision := document.Profile.Revisions[index]
-			if profile.Name != bundle.Name || revision.Number != profile.Revision || revision.SpecDigest != profile.SpecDigest {
+			revision := revisions[index]
+			if profile.Name != bundle.Name || revision.number != profile.Revision || revision.specDigest != profile.SpecDigest {
 				return fmt.Errorf("SecondBox release verification: standard bundle %s Profile lineage mismatch", bundle.Name)
 			}
 		}

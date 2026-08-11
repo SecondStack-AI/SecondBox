@@ -281,14 +281,14 @@ func TestRecordedInstallerComposeDiagnosticsDoNotRegenerateSourceProfiles(t *tes
 	}
 }
 
-func TestExistingComposeControlPlaneActionsPreserveMaterializedAssets(t *testing.T) {
+func TestExistingComposeUpdateActionsPreserveMaterializedAssets(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
 	environmentPath := filepath.Join(filepath.Dir(manifestPath), ".secondbox.generated.env")
 	resolved, err := Render(manifestPath, environmentPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, action := range []string{"stop-control-plane", "start-control-plane"} {
+	for _, action := range []string{"stop-control-plane", "start-control-plane", "down"} {
 		executor := &recordingComposeExecutor{}
 		if err := RunExistingComposeForAcceptedInstaller(context.Background(), manifestPath, action, executor); err != nil {
 			t.Fatal(err)
@@ -307,6 +307,9 @@ func TestExistingComposeControlPlaneActionsPreserveMaterializedAssets(t *testing
 		}
 		if action == "start-control-plane" && !slices.Equal(arguments[len(arguments)-4:], []string{"up", "--remove-orphans", "--detach", "control-plane"}) {
 			t.Fatalf("existing Compose start arguments = %#v", arguments)
+		}
+		if action == "down" && !slices.Equal(arguments[len(arguments)-2:], []string{"down", "--remove-orphans"}) {
+			t.Fatalf("existing Compose down arguments = %#v", arguments)
 		}
 	}
 }

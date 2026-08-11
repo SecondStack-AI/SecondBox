@@ -29,12 +29,12 @@ func RunComposeForAcceptedInstaller(ctx context.Context, manifestPath, action st
 	return runCompose(ctx, manifestPath, action, executor, httpClient, false)
 }
 
-// RunExistingComposeForAcceptedInstaller fences or restores control-plane
-// admission through the already-materialized source environment and Compose
+// RunExistingComposeForAcceptedInstaller fences, shuts down, or restores the
+// source deployment through its already-materialized environment and Compose
 // assets. It deliberately does not render target-binary embedded assets.
 func RunExistingComposeForAcceptedInstaller(ctx context.Context, manifestPath, action string, executor ComposeExecutor) error {
-	if action != "stop-control-plane" && action != "start-control-plane" {
-		return manifestError("existing Compose action must stop or start the control plane", nil)
+	if action != "stop-control-plane" && action != "start-control-plane" && action != "down" {
+		return manifestError("existing Compose action must stop, start, or shut down the recorded deployment", nil)
 	}
 	if executor == nil {
 		return manifestError("Compose executor is required", nil)
@@ -42,6 +42,8 @@ func RunExistingComposeForAcceptedInstaller(ctx context.Context, manifestPath, a
 	command := []string{"stop", "control-plane"}
 	if action == "start-control-plane" {
 		command = []string{"up", "--remove-orphans", "--detach", "control-plane"}
+	} else if action == "down" {
+		command = []string{"down", "--remove-orphans"}
 	}
 	arguments, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, command...)
 	if err != nil {

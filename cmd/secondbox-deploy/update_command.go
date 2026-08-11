@@ -57,7 +57,7 @@ func systemUpdateDependencies(renderer cliui.Renderer) updateDependencies {
 		CheckCapacity: install.ValidateUpdateStagingCapacity,
 		Materializer:  install.SystemReleaseMaterializer{Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic, HTTPClient: httpClient},
 		Compose: func(ctx context.Context, manifestPath, action string) error {
-			if action == "stop-control-plane" || action == "start-control-plane" {
+			if action == "stop-control-plane" || action == "start-control-plane" || action == "down" {
 				return deployconfig.RunExistingComposeForAcceptedInstaller(ctx, manifestPath, action, deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic})
 			}
 			return deployconfig.RunComposeForAcceptedInstaller(ctx, manifestPath, action, deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic}, httpClient)
