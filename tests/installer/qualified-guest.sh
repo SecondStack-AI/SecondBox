@@ -114,24 +114,74 @@ if [[ "$phase" == install ]]; then
   printf '%s  %s\n' "$binary_digest" "$deploy" | sha256sum --check --status
   grep -F -- "$binary_digest" "$release_directory/$bootstrap" >/dev/null
 
-  setup_candidate_registry
-  install_log="$qualification_root/install-${mode}.log"
-  setsid bash -c 'printf "1\ny\n1\ny\ny\n" | "$1" --accessible install --candidate-directory "$2"' bash "$deploy" "$release_directory" >"$install_log" 2>&1 &
-  install_pid=$!
-  operation=''
-  interrupted=false
-  for _ in $(seq 1 3600); do
+  update_qualified=false
+  if [[ "$mode" == existing_reflink_filesystem ]]; then
+    source_bootstrap="$qualification_root/source-install.sh"
+    curl --fail --location --proto '=https' --tlsv1.2 --output "$source_bootstrap" https://github.com/SecondStack-AI/SecondBox/releases/latest/download/install.sh
+    source_version="$(sed -n "s/^version='\([^']*\)'$/\1/p" "$source_bootstrap")"
+    source_binary_digest="$(sed -n "s/^expected_sha256='\([0-9a-f]\{64\}\)'$/\1/p" "$source_bootstrap")"
+    candidate_version="$(jq -er .version "$manifest")"
+    [[ -n "$source_version" && -n "$source_binary_digest" && "$source_version" != "$candidate_version" ]] || { echo 'qualified update requires a distinct latest public source release' >&2; exit 1; }
+    source_deploy="$qualification_root/secondbox-deploy-source"
+    curl --fail --location --proto '=https' --tlsv1.2 --output "$source_deploy" "https://github.com/SecondStack-AI/SecondBox/releases/download/v${source_version}/secondbox-deploy_${source_version}_linux_amd64"
+    printf '%s  %s\n' "$source_binary_digest" "$source_deploy" | sha256sum --check --status
+    chmod 0755 "$source_deploy"
+    install_log="$qualification_root/install-source-${mode}.log"
+    printf '1\ny\n1\ny\ny\n' | "$source_deploy" --accessible install >"$install_log" 2>&1
     operation="$(find "$HOME" -maxdepth 1 -type d -name 'secondbox-install_*' -print -quit)"
-    if [[ -n "$operation" && -f "$operation/install-receipt.json" ]] && jq -e '[.completedStages[].stage] | index("assets_materialized") != null and index("deployment_materialized") == null' "$operation/install-receipt.json" >/dev/null 2>&1; then
-      kill -TERM -- "-$install_pid" >/dev/null 2>&1 || true
-      wait "$install_pid" >/dev/null 2>&1 || true
-      interrupted=true
-      break
-    fi
-    if ! kill -0 "$install_pid" >/dev/null 2>&1; then break; fi
-    sleep 0.1
-  done
-  $interrupted || { echo 'qualified guest could not interrupt the installer after verified materialization' >&2; tail -n 100 "$install_log" >&2; exit 1; }
+    [[ -n "$operation" && -f "$operation/install-plan.json" && -f "$operation/install-receipt.json" ]] || { echo 'qualified source installation is absent' >&2; exit 1; }
+    plan="$operation/install-plan.json"
+    receipt="$operation/install-receipt.json"
+    jq -e --arg source "$source_version" '(.schemaVersion == "secondbox.install.plan/v1" or .schemaVersion == "secondbox.install.plan/v2") and .release.version == $source' "$plan" >/dev/null
+    jq -e '.status == "succeeded" and (.schemaVersion == "secondbox.install.receipt/v1" or .schemaVersion == "secondbox.install.receipt/v2")' "$receipt" >/dev/null
+    cli_binary="$(jq -er '.paths[] | select(.name == "secondbox-binary") | .path' "$plan")"
+    cli_config="$(jq -er .cli.configPath "$plan")"
+    source_sandbox_id="$(jq -er '.completedStages[] | select(.stage == "smoke_execution") | .evidence.sandboxId' "$receipt")"
+    source_sandbox_lineage="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$source_sandbox_id" | jq -cS '{id,profile,profileRevisionId,workspaceId:.workspace.id}')"
+    SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output plain exec "$source_sandbox_id" -- python3 -c 'open("/workspace/update-preserved.txt","w").write("preserved through update\n")'
+    SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes stop --path "sandboxId=$source_sandbox_id" >/dev/null
+    for _ in $(seq 1 300); do
+      source_state="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$source_sandbox_id" | jq -er .state)"
+      [[ "$source_state" == stopped ]] && break
+      [[ "$source_state" != failed ]] || { echo 'qualified update source Sandbox failed while stopping' >&2; exit 1; }
+      sleep 1
+    done
+    [[ "$source_state" == stopped ]] || { echo 'qualified update source Sandbox did not stop' >&2; exit 1; }
+    setup_candidate_registry
+    "$deploy" --output json update --check "$operation" --candidate-directory "$release_directory" >"$qualification_root/update-check-${mode}.json"
+    printf 'y\n' | "$deploy" --accessible update "$operation" --candidate-directory "$release_directory" >"$qualification_root/update-${mode}.log" 2>&1
+    jq -e --arg source "$source_version" --arg target "$candidate_version" '
+      .schemaVersion == "secondbox.install.receipt/v2" and
+      .updates[-1].status == "succeeded" and
+      .updates[-1].sourceRelease.version == $source and
+      .updates[-1].targetRelease.version == $target and
+      .updates[-1].completedStages[-1].stage == "smoke_execution"
+    ' "$receipt" >/dev/null
+    jq -e --arg source "$source_version" --arg target "$candidate_version" '
+      .schemaVersion == "secondbox.install.plan/v2" and .release.version == $target and
+      .releaseHistory[0].release.version == $source and .releaseHistory[-1].release.version == $target
+    ' "$plan" >/dev/null
+    update_qualified=true
+  else
+    setup_candidate_registry
+    install_log="$qualification_root/install-${mode}.log"
+    setsid bash -c 'printf "1\ny\n1\ny\ny\n" | "$1" --accessible install --candidate-directory "$2"' bash "$deploy" "$release_directory" >"$install_log" 2>&1 &
+    install_pid=$!
+    operation=''
+    interrupted=false
+    for _ in $(seq 1 3600); do
+      operation="$(find "$HOME" -maxdepth 1 -type d -name 'secondbox-install_*' -print -quit)"
+      if [[ -n "$operation" && -f "$operation/install-receipt.json" ]] && jq -e '[.completedStages[].stage] | index("assets_materialized") != null and index("deployment_materialized") == null' "$operation/install-receipt.json" >/dev/null 2>&1; then
+        kill -TERM -- "-$install_pid" >/dev/null 2>&1 || true
+        wait "$install_pid" >/dev/null 2>&1 || true
+        interrupted=true
+        break
+      fi
+      if ! kill -0 "$install_pid" >/dev/null 2>&1; then break; fi
+      sleep 0.1
+    done
+    $interrupted || { echo 'qualified guest could not interrupt the installer after verified materialization' >&2; tail -n 100 "$install_log" >&2; exit 1; }
+  fi
   [[ -n "$operation" && -f "$operation/install-plan.json" && -f "$operation/install-receipt.json" ]] || { echo 'qualified guest interrupted operation is absent' >&2; exit 1; }
   plan="$operation/install-plan.json"
   receipt="$operation/install-receipt.json"
@@ -147,7 +197,8 @@ if [[ "$phase" == install ]]; then
   jq -n --arg operation "$operation" --arg operationId "$operation_id" --arg workspace "$workspace" \
     --arg artifacts "$artifacts" --arg manifest "$manifest_path" --arg cliBinary "$cli_binary" --arg cliConfig "$cli_config" \
     --arg artifactFingerprint "$(artifact_fingerprint "$artifacts")" --arg filesystemIdentity "$filesystem_identity" --arg neighbor "$neighbor" \
-    '{operation:$operation,operationId:$operationId,workspace:$workspace,artifacts:$artifacts,manifest:$manifest,cliBinary:$cliBinary,cliConfig:$cliConfig,artifactFingerprint:$artifactFingerprint,filesystemIdentity:$filesystemIdentity,neighbor:$neighbor}' >"$state"
+    --arg sourceSandboxLineage "${source_sandbox_lineage:-}" --argjson updateQualified "$update_qualified" \
+    '{operation:$operation,operationId:$operationId,workspace:$workspace,artifacts:$artifacts,manifest:$manifest,cliBinary:$cliBinary,cliConfig:$cliConfig,artifactFingerprint:$artifactFingerprint,filesystemIdentity:$filesystemIdentity,neighbor:$neighbor,updateQualified:$updateQualified,sourceSandboxLineage:$sourceSandboxLineage}' >"$state"
   exit 0
 fi
 
@@ -197,6 +248,10 @@ sandbox_id="$(jq -er '.completedStages[] | select(.stage == "smoke_execution") |
 SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output plain exec "$sandbox_id" -- python3 -c 'print("hello after reboot")' | grep -Fx 'hello after reboot' >/dev/null
 sandbox_before_document="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$sandbox_id")"
 sandbox_before="$(jq -cS '{id,profile,profileRevisionId,workspaceId:.workspace.id}' <<<"$sandbox_before_document")"
+if jq -e '.updateQualified == true' "$state" >/dev/null; then
+  [[ "$sandbox_before" == "$(jq -er .sourceSandboxLineage "$state")" ]] || { echo 'retained Sandbox lineage changed across release update' >&2; exit 1; }
+  SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output plain exec "$sandbox_id" -- python3 -c 'print(open("/workspace/update-preserved.txt").read(), end="")' | grep -Fx 'preserved through update' >/dev/null
+fi
 generation_before="$(jq -er '.generation | select(type == "number" and . >= 1)' <<<"$sandbox_before_document")"
 workspace_generation_before="$(jq -er '.workspace.generation | select(type == "number" and . >= 1)' <<<"$sandbox_before_document")"
 (( workspace_generation_before == generation_before )) || { printf 'retained smoke Sandbox and Workspace generations differ before uninstall: sandbox=%s workspace=%s\n' "$generation_before" "$workspace_generation_before" >&2; exit 1; }
@@ -238,7 +293,7 @@ done
 
 common=(clean_host read_only_preflight bootstrap_checksum guided_install reboot_recovery mount_recovery compose_ready runner_ready cli_login hello_microvm stage_interrupt_resume verified_bundle_not_reextracted uninstall_workspace_preserved resume_same_sandbox_lineage purge_exact_resources purge_neighbor_preserved purge_foreign_mount_refused)
 if [[ "$mode" == existing_reflink_filesystem ]]; then
-  common+=(existing_reflink_isolation unsafe_filesystem_refusals)
+  common+=(existing_reflink_isolation unsafe_filesystem_refusals update_receipt_history_preserved update_release_activated update_workspace_preserved)
 fi
 jq -n --arg mode "$mode" --arg filesystemIdentity "$(jq -er .filesystemIdentity "$state")" \
   --arg candidateManifestDigest "sha256:$(sha256sum "$manifest" | awk '{print $1}')" --argjson assertions "$(assertions_json "${common[@]}")" \

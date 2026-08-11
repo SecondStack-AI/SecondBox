@@ -42,6 +42,10 @@ func FinalInstallConfirmationForm(review string, accepted *bool) HuhForm {
 	return HuhForm{Groups: []GroupSpec{{Title: "Final installation review", Fields: []FieldSpec{{Kind: FieldConfirm, Title: "Install this reviewed plan?", Description: Sanitize(review), BoolValue: accepted, RequireAffirmative: true}}}}}
 }
 
+func FinalUpdateConfirmationForm(review string, accepted *bool) HuhForm {
+	return HuhForm{Groups: []GroupSpec{{Title: "Final update review", Fields: []FieldSpec{{Kind: FieldConfirm, Title: "Activate this verified release update?", Description: Sanitize(review), BoolValue: accepted, RequireAffirmative: true}}}}}
+}
+
 func ResumeSelectionForm(options []Option, target *string) HuhForm {
 	return HuhForm{Groups: []GroupSpec{{Title: "Resume installation", Fields: []FieldSpec{{Kind: FieldSelect, Title: "Select an interrupted operation", StringValue: target, Options: options}}}}}
 }

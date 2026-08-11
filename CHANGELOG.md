@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Added a resumable `secondbox-deploy update` workflow for completed guided single-host installations. The latest verified bootstrap stages every target release input before downtime, requires all Sandboxes to be stopped, preserves PostgreSQL data, authority, Runner identity, Workspaces, Snapshots, topology, and Compose volumes, then advances the original plan and receipt with append-only release history after readiness and microVM smoke execution succeed.
+
 ### Removed
 
 - Removed the application Artifact resource, its API/SDK/CLI surfaces, S3-compatible storage integration, quotas, retention, garbage collection, and bundled object-store deployment ([#88](https://github.com/SecondStack-AI/SecondBox/pull/88)).

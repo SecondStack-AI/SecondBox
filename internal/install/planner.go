@@ -83,6 +83,14 @@ func NewOperationID() (string, error) {
 	return "install_" + hex.EncodeToString(value[:]), nil
 }
 
+func NewUpdateID() (string, error) {
+	var value [8]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", installerError("generate update identity", err)
+	}
+	return "update_" + hex.EncodeToString(value[:]), nil
+}
+
 func StorageOptions(facts HostFacts, backingAvailableBytes, releaseDownloadBytes int64) []StorageOption {
 	options := []StorageOption{}
 	if releaseDownloadBytes <= 0 || backingAvailableBytes < MinimumControlBackingBytes+releaseDownloadBytes {
@@ -164,7 +172,7 @@ func ProposePlan(facts HostFacts, input ProposalInput) (InstallPlan, error) {
 	if input.RetentionSeconds <= 0 {
 		return InstallPlan{}, installerError("operator-selected retention is required", nil)
 	}
-	plan := InstallPlan{SchemaVersion: PlanSchema, OperationID: input.OperationID, CreatedAt: input.CreatedAt.UTC(), HostFacts: facts, HostFactsDigest: factsDigest, Release: input.Release, Storage: storage, Capacity: capacity, Compute: ComputePlan{FirecrackerCPUTemplate: SingleHostFirecrackerCPUTemplate}, Network: network, CLI: CLIPlan{ConfigPath: input.CLIConfigPath, TenantRef: input.CLITenantRef, SubjectRef: input.CLISubjectRef}, Paths: paths, SecretTargets: secretTargets, GeneratedAuthorityCategories: []string{"application-authority", "platform-authority", "runner-enrollment", "runner-pki", "database"}, StandardBundles: slices.Clone(input.StandardBundles), RetentionSeconds: input.RetentionSeconds, PrivilegedActions: privilegedActions(storage)}
+	plan := InstallPlan{SchemaVersion: PlanSchema, OperationID: input.OperationID, CreatedAt: input.CreatedAt.UTC(), HostFacts: facts, HostFactsDigest: factsDigest, Release: input.Release, Storage: storage, Capacity: capacity, Compute: ComputePlan{FirecrackerCPUTemplate: SingleHostFirecrackerCPUTemplate}, Network: network, CLI: CLIPlan{ConfigPath: input.CLIConfigPath, TenantRef: input.CLITenantRef, SubjectRef: input.CLISubjectRef}, Paths: paths, SecretTargets: secretTargets, GeneratedAuthorityCategories: []string{"application-authority", "platform-authority", "runner-enrollment", "runner-pki", "database"}, StandardBundles: slices.Clone(input.StandardBundles), RetentionSeconds: input.RetentionSeconds, PrivilegedActions: privilegedActions(storage), ReleaseHistory: []ReleaseActivation{{Release: input.Release, ActivatedAt: input.CreatedAt.UTC()}}}
 	if err := plan.Validate(); err != nil {
 		return InstallPlan{}, err
 	}

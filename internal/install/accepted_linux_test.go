@@ -3,10 +3,12 @@
 package install
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func acceptedFixture(t *testing.T) (string, InstallPlan, string) {
@@ -115,5 +117,64 @@ func TestReadHostApplyRejectsPreAcceptanceReceipt(t *testing.T) {
 	}
 	if _, _, err := ReadHostApply(directory, digest, os.Getuid()); err == nil {
 		t.Fatal("pre-acceptance receipt reached private host apply")
+	}
+}
+
+func TestSaveOperationCommitsActivatedReleaseAndReadRecoversIt(t *testing.T) {
+	directory := t.TempDir()
+	plan := validPlan(t)
+	receipt := successfulReceipt(t, plan)
+	if _, _, err := WriteAccepted(directory, plan, receipt); err != nil {
+		t.Fatal(err)
+	}
+	started := plan.CreatedAt.Add(time.Hour)
+	if err := receipt.BeginUpdate("update_0123456789abcdef", plan.Release, targetRelease(plan, "0.5.0"), started); err != nil {
+		t.Fatal(err)
+	}
+	for index, stage := range UpdateStageSequence {
+		if err := receipt.CompleteUpdateStage(stage, started.Add(time.Duration(index+1)*time.Second), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := receipt.ActivateUpdate(&plan, started.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveOperation(directory, plan, receipt, os.Getuid()); err != nil {
+		t.Fatal(err)
+	}
+	readPlan, readReceipt, err := ReadOperation(directory, os.Getuid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readPlan.Release.Version != "0.5.0" || len(readReceipt.Updates) != 1 || readReceipt.Updates[0].Status != UpdateSucceeded {
+		t.Fatalf("committed operation = plan %#v receipt %#v", readPlan.Release, readReceipt.Updates)
+	}
+	for _, name := range []string{operationPlanStageName, operationReceiptStageName, operationCommitMarkerName} {
+		if _, err := os.Lstat(filepath.Join(directory, name)); !os.IsNotExist(err) {
+			t.Fatalf("commit residue %s: %v", name, err)
+		}
+	}
+
+	planBytes, _ := Canonical(plan)
+	receiptBytes, _ := Canonical(receipt)
+	marker := operationCommitMarker{SchemaVersion: "secondbox.install.operation-commit/v1", OperationID: plan.OperationID, PlanDocumentDigest: Digest(planBytes), ReceiptDocumentDigest: Digest(receiptBytes)}
+	markerBytes, _ := Canonical(marker)
+	if err := os.WriteFile(filepath.Join(directory, operationPlanStageName), append(bytes.Clone(planBytes), '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, operationReceiptStageName), append(bytes.Clone(receiptBytes), '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, operationCommitMarkerName), append(markerBytes, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ReadOperationReadOnly(directory, os.Getuid()); err == nil || !strings.Contains(err.Error(), "update --resume") {
+		t.Fatalf("read-only operation unexpectedly recovered pending commit: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(directory, operationCommitMarkerName)); err != nil {
+		t.Fatalf("read-only operation changed pending commit: %v", err)
+	}
+	if _, _, err := ReadOperation(directory, os.Getuid()); err != nil {
+		t.Fatal(err)
 	}
 }
