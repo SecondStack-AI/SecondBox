@@ -33,7 +33,11 @@ exit 2
 set -eu
 printf '%s\n' "$*" >> "$FAKE_IP_LOG"
 case "$*" in
-  "-4 addr show dev sbx0") echo "inet 172.30.0.1/24" ;;
+  "link show sbx0") [ "$(cat "$FAKE_IP_STATE")" != "missing" ] ;;
+  "-4 addr show dev sbx0") [ "$(cat "$FAKE_IP_STATE")" = "addressed" ] && echo "inet 172.30.0.1/24" ;;
+  "link add name sbx0 type bridge") printf '%s\n' bridge > "$FAKE_IP_STATE" ;;
+  "addr add 172.30.0.1/24 dev sbx0") printf '%s\n' addressed > "$FAKE_IP_STATE" ;;
+  "link delete sbx0 type bridge") printf '%s\n' missing > "$FAKE_IP_STATE" ;;
 esac
 exit 0
 `)
@@ -80,6 +84,10 @@ exit 0
 	if err := os.WriteFile(sysctlState, []byte("0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	ipState := filepath.Join(dir, "ip-state")
+	if err := os.WriteFile(ipState, []byte("addressed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	runtimeDir := filepath.Join(dir, "runtime")
 	firewallState := filepath.Join(dir, "firewall")
 	firewallLog := filepath.Join(dir, "firewall-log")
@@ -90,6 +98,7 @@ exit 0
 		"FAKE_FIREWALL_STATE="+firewallState,
 		"FAKE_FIREWALL_LOG="+firewallLog,
 		"FAKE_IP_LOG="+ipLog,
+		"FAKE_IP_STATE="+ipState,
 		"SECONDBOX_RUNNER_SANDBOX_BRIDGE_NAME=sbx0",
 		"SECONDBOX_RUNNER_SANDBOX_BRIDGE_CIDR=172.30.0.1/24",
 		"SECONDBOX_RUNNER_SANDBOX_GUEST_CIDR=172.30.0.0/24",
@@ -139,8 +148,31 @@ exit 0
 		t.Fatalf("changed active config mutated firewall: log size %d -> %d", logBefore, got)
 	}
 
+	// A host reboot loses the bridge, its address, forwarding state, and
+	// firewall tables while preserving the Runner's durable state directory.
+	// Applying the same accepted configuration must reconstruct that ephemeral
+	// state before the Runner starts.
+	if err := os.WriteFile(ipState, []byte("missing\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sysctlState, []byte("0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(firewallState+".iptables", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(firewallState+".ip6tables", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runNetworkScript(t, env, "apply", true)
+	assertFileText(t, ipState, "addressed")
+	assertFileText(t, sysctlState, "1")
+	assertFileText(t, filepath.Join(runtimeDir, "host-network.state"), strings.Replace(strings.Replace(expectedState, "bridge_created=0", "bridge_created=1", 1), "bridge_address_added=0", "bridge_address_added=1", 1))
+	assertFileContains(t, firewallState+".iptables", "-C INPUT -i sbx0 -m comment --comment secondbox-runner-host-input -j SBX_INPUT_sbx0")
+
 	runNetworkScript(t, env, "remove", true)
 	assertFileText(t, sysctlState, "0")
+	assertFileText(t, ipState, "missing")
 	if _, err := os.Stat(filepath.Join(runtimeDir, "host-network.state")); !os.IsNotExist(err) {
 		t.Fatalf("state remains after remove: %v", err)
 	}
@@ -153,6 +185,9 @@ exit 0
 	}
 
 	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ipState, []byte("addressed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	interruptedState := strings.Replace(expectedState, "status=active", "status=applying", 1)
