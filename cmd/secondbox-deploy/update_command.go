@@ -427,9 +427,8 @@ func runInstalledUpdateSmoke(ctx context.Context, plan install.InstallPlan) (map
 		return nil, err
 	}
 	if found {
-		command, _, stderr := installedCLICommand(ctx, plan, "--output", "plain", "sandboxes", "start", "--path", "sandboxId="+sandboxID)
-		if err := command.Run(); err != nil {
-			return nil, fmt.Errorf("SecondBox installer update start retained smoke Sandbox: %w: %s", err, cliui.Sanitize(stderr.String()))
+		if err := mutateInstalledUpdateSandbox(ctx, plan, sandboxID, "start"); err != nil {
+			return nil, err
 		}
 		if err := waitForInstalledSandboxState(ctx, plan, sandboxID, "ready"); err != nil {
 			return nil, err
@@ -457,11 +456,32 @@ func runInstalledUpdateSmoke(ctx context.Context, plan install.InstallPlan) (map
 }
 
 func stopInstalledUpdateSmoke(ctx context.Context, plan install.InstallPlan, sandboxID string) error {
-	command, _, stderr := installedCLICommand(ctx, plan, "--output", "plain", "sandboxes", "stop", "--path", "sandboxId="+sandboxID)
-	if err := command.Run(); err != nil {
-		return fmt.Errorf("SecondBox installer update stop retained smoke Sandbox: %w: %s", err, cliui.Sanitize(stderr.String()))
+	if err := mutateInstalledUpdateSandbox(ctx, plan, sandboxID, "stop"); err != nil {
+		return err
 	}
 	return waitForInstalledSandboxState(ctx, plan, sandboxID, "stopped")
+}
+
+func mutateInstalledUpdateSandbox(ctx context.Context, plan install.InstallPlan, sandboxID, action string) error {
+	command, stdout, stderr := installedCLICommand(ctx, plan, "--output", "json", "sandboxes", "get", "--path", "sandboxId="+sandboxID)
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("SecondBox installer update inspect retained smoke Sandbox before %s: %w: %s", action, err, cliui.Sanitize(stderr.String()))
+	}
+	var sandbox contracts.Sandbox
+	if err := json.Unmarshal(stdout.Bytes(), &sandbox); err != nil {
+		return fmt.Errorf("SecondBox installer update decode retained smoke Sandbox before %s: %w", action, err)
+	}
+	idempotencyKey := fmt.Sprintf("installer-update-%s-%s-%s", buildinfo.Version, action, sandboxID)
+	command, _, stderr = installedCLICommand(ctx, plan,
+		"--output", "plain", "sandboxes", action,
+		"--path", "sandboxId="+sandboxID,
+		"--header", fmt.Sprintf(`If-Match="revision-%d"`, sandbox.Revision),
+		"--header", "Idempotency-Key="+idempotencyKey,
+	)
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("SecondBox installer update %s retained smoke Sandbox: %w: %s", action, err, cliui.Sanitize(stderr.String()))
+	}
+	return nil
 }
 
 func waitForInstalledSandboxState(ctx context.Context, plan install.InstallPlan, sandboxID, target string) error {

@@ -139,7 +139,11 @@ if [[ "$phase" == install ]]; then
     source_sandbox_id="$(jq -er '.completedStages[] | select(.stage == "smoke_execution") | .evidence.sandboxId' "$receipt")"
     source_sandbox_lineage="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$source_sandbox_id" | jq -cS '{id,profile,profileRevisionId,workspaceId:.workspace.id}')"
     SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output plain exec "$source_sandbox_id" -- python3 -c 'open("/workspace/update-preserved.txt","w").write("preserved through update\n")'
-    SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes stop --path "sandboxId=$source_sandbox_id" >/dev/null
+    source_sandbox_revision="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$source_sandbox_id" | jq -er .revision)"
+    SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes stop \
+      --path "sandboxId=$source_sandbox_id" \
+      --header "If-Match=\"revision-${source_sandbox_revision}\"" \
+      --header "Idempotency-Key=qualification-update-stop-${source_sandbox_id}" >/dev/null
     for _ in $(seq 1 300); do
       source_state="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$source_sandbox_id" | jq -er .state)"
       [[ "$source_state" == stopped ]] && break
