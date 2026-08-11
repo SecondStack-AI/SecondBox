@@ -22,6 +22,33 @@ type StagedUpdate struct {
 	ReleaseArtifactManifest string
 }
 
+// ValidateUpdateStagingCapacity preserves the operational storage margin while
+// a second verified execution bundle exists beside the active bundle. It runs
+// before an update is journaled so lack of local capacity remains a read-only
+// admission failure.
+func ValidateUpdateStagingCapacity(plan InstallPlan, target ReleasePlan) error {
+	if err := validateReleasePlan(target); err != nil {
+		return err
+	}
+	artifacts, found := plannedPathByName(plan.Paths, "artifacts")
+	if !found || artifacts.Kind != ResourceDirectory {
+		return installerError("update staging capacity requires the active artifact path", nil)
+	}
+	if err := ValidatePlannedPath(artifacts); err != nil {
+		return err
+	}
+	var filesystem syscall.Statfs_t
+	if err := syscall.Statfs(filepath.Dir(artifacts.Path), &filesystem); err != nil {
+		return installerError("inspect update artifact filesystem capacity", err)
+	}
+	available := int64(filesystem.Bavail) * int64(filesystem.Bsize)
+	required := target.ExpectedDownloadBytes + RunnerStorageReserveBytes
+	if required < target.ExpectedDownloadBytes || available < required {
+		return installerError("update artifact filesystem capacity is insufficient for target staging and the Runner storage reserve", nil)
+	}
+	return nil
+}
+
 func UpdateStaging(plan InstallPlan, update UpdateRecord) (StagedUpdate, error) {
 	if !updatePattern.MatchString(update.ID) {
 		return StagedUpdate{}, installerError("update staging identity is invalid", nil)

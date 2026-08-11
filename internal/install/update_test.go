@@ -41,6 +41,29 @@ func targetRelease(plan InstallPlan, version string) ReleasePlan {
 	return target
 }
 
+func TestUpdateStagingCapacityIsCheckedBeforeJournaling(t *testing.T) {
+	plan := validPlan(t)
+	artifactParent := t.TempDir()
+	artifacts := filepath.Join(artifactParent, "artifacts")
+	if err := os.Mkdir(artifacts, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for index := range plan.Paths {
+		if plan.Paths[index].Name == "artifacts" {
+			plan.Paths[index] = plannedPath("artifacts", artifacts, PathUserDeployment, ResourceDirectory, 0o700, int64(os.Getuid()), int64(os.Getgid()), false, true)
+		}
+	}
+	target := targetRelease(plan, "0.5.0")
+	target.ExpectedDownloadBytes = 1
+	if err := ValidateUpdateStagingCapacity(plan, target); err != nil {
+		t.Fatalf("available staging capacity = %v", err)
+	}
+	target.ExpectedDownloadBytes = int64(^uint64(0) >> 1)
+	if err := ValidateUpdateStagingCapacity(plan, target); err == nil || !strings.Contains(err.Error(), "capacity") {
+		t.Fatalf("impossible staging capacity = %v", err)
+	}
+}
+
 func TestDecodeMigratesV1PlanAndReceiptWithoutLosingIdentity(t *testing.T) {
 	plan := validPlan(t)
 	legacyPlan := plan

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +12,23 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
 )
+
+func TestActivationBoundaryPersistenceFailureRestartsSource(t *testing.T) {
+	persistErr := errors.New("sync receipt")
+	restored := false
+	err := journalUpdateActivationBoundary(func(stage install.UpdateStage, evidence map[string]string) error {
+		if stage != install.UpdateStageActivationStarted || evidence["controlPlaneAdmission"] != "stopped" {
+			t.Fatalf("activation boundary = %s %#v", stage, evidence)
+		}
+		return persistErr
+	}, func(problem error) error {
+		restored = true
+		return problem
+	})
+	if !errors.Is(err, persistErr) || !restored {
+		t.Fatalf("boundary failure = %v, restored=%t", err, restored)
+	}
+}
 
 func installReleasePlanFixture() install.ReleasePlan {
 	images := map[string]string{}
@@ -98,7 +116,7 @@ func TestCompletedUpdateMatchesOnlyExactSucceededTarget(t *testing.T) {
 func TestContinueUpdateRejectsSourceIdentityDriftBeforeActivation(t *testing.T) {
 	update := install.UpdateRecord{SourceRelease: installReleasePlanFixture()}
 	err := continueUpdate(context.Background(), t.TempDir(), install.InstallPlan{}, install.InstallReceipt{}, update, releaseverify.VerifiedRelease{}, cliui.Renderer{}, updateDependencies{
-		VerifyRelease: func(context.Context, string) (releaseverify.VerifiedRelease, error) {
+		VerifySource: func(context.Context, string) (releaseverify.VerifiedRelease, error) {
 			return releaseverify.VerifiedRelease{ManifestBytes: []byte("replaced source release")}, nil
 		},
 	})

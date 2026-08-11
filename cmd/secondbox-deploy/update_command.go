@@ -25,6 +25,8 @@ type updateDependencies struct {
 	Now           func() time.Time
 	HostVerify    func(context.Context, string, string) error
 	VerifyRelease func(context.Context, string) (releaseverify.VerifiedRelease, error)
+	VerifySource  func(context.Context, string) (releaseverify.VerifiedRelease, error)
+	CheckCapacity func(install.InstallPlan, install.ReleasePlan) error
 	Materializer  install.ReleaseMaterializeExecutor
 	Compose       func(context.Context, string, string) error
 	Readiness     func(context.Context, install.InstallPlan) (map[string]string, error)
@@ -47,7 +49,13 @@ func systemUpdateDependencies(renderer cliui.Renderer) updateDependencies {
 			defer cancel()
 			return verifyReleaseLocationWithContext(ctx, location)
 		},
-		Materializer: install.SystemReleaseMaterializer{Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic, HTTPClient: httpClient},
+		VerifySource: func(ctx context.Context, location string) (releaseverify.VerifiedRelease, error) {
+			ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+			defer cancel()
+			return releaseverify.RecordedArtifactManifest(ctx, location, releaseverify.HTTPFetcher(httpClient))
+		},
+		CheckCapacity: install.ValidateUpdateStagingCapacity,
+		Materializer:  install.SystemReleaseMaterializer{Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic, HTTPClient: httpClient},
 		Compose: func(ctx context.Context, manifestPath, action string) error {
 			if action == "stop-control-plane" || action == "start-control-plane" {
 				return deployconfig.RunExistingComposeForAcceptedInstaller(ctx, manifestPath, action, deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic})
@@ -113,7 +121,7 @@ func parseUpdateArguments(arguments []string) (check, resume bool, directory str
 }
 
 func runUpdateWith(ctx context.Context, directory string, check, resume bool, renderer cliui.Renderer, dependencies updateDependencies) (resultErr error) {
-	if dependencies.Now == nil || dependencies.HostVerify == nil || dependencies.VerifyRelease == nil || dependencies.Materializer == nil || dependencies.Compose == nil || dependencies.Readiness == nil || dependencies.Smoke == nil || dependencies.Quiescent == nil || dependencies.Confirm == nil || dependencies.NewUpdateID == nil || dependencies.SaveReceipt == nil || dependencies.SaveOperation == nil {
+	if dependencies.Now == nil || dependencies.HostVerify == nil || dependencies.VerifyRelease == nil || dependencies.VerifySource == nil || dependencies.CheckCapacity == nil || dependencies.Materializer == nil || dependencies.Compose == nil || dependencies.Readiness == nil || dependencies.Smoke == nil || dependencies.Quiescent == nil || dependencies.Confirm == nil || dependencies.NewUpdateID == nil || dependencies.SaveReceipt == nil || dependencies.SaveOperation == nil {
 		return errors.New("SecondBox installer update: dependencies are incomplete")
 	}
 	absolute, err := filepath.Abs(directory)
@@ -295,6 +303,9 @@ func validateNewUpdate(ctx context.Context, plan install.InstallPlan, receipt in
 	if err := install.ValidateUpdateAssetCompatibility(sourceVerified.Manifest, targetVerified.Manifest); err != nil {
 		return fmt.Errorf("SecondBox installer update: %w", err)
 	}
+	if err := dependencies.CheckCapacity(plan, target); err != nil {
+		return err
+	}
 	active, err := dependencies.Quiescent(ctx, plan)
 	if err != nil {
 		return err
@@ -309,7 +320,7 @@ func validateUpdateSource(ctx context.Context, plan install.InstallPlan, receipt
 	if err := install.ValidateRecordedResources(plan, receipt); err != nil {
 		return releaseverify.VerifiedRelease{}, err
 	}
-	sourceVerified, err := dependencies.VerifyRelease(ctx, plan.Release.ArtifactManifestURL)
+	sourceVerified, err := dependencies.VerifySource(ctx, plan.Release.ArtifactManifestURL)
 	if err != nil {
 		return releaseverify.VerifiedRelease{}, err
 	}
@@ -327,7 +338,7 @@ func validateUpdateSource(ctx context.Context, plan install.InstallPlan, receipt
 }
 
 func continueUpdate(ctx context.Context, directory string, plan install.InstallPlan, receipt install.InstallReceipt, update install.UpdateRecord, target releaseverify.VerifiedRelease, renderer cliui.Renderer, dependencies updateDependencies) error {
-	source, err := dependencies.VerifyRelease(ctx, update.SourceRelease.ArtifactManifestURL)
+	source, err := dependencies.VerifySource(ctx, update.SourceRelease.ArtifactManifestURL)
 	if err != nil {
 		return err
 	}
@@ -403,7 +414,7 @@ func continueUpdate(ctx context.Context, directory string, plan install.InstallP
 			problem := fmt.Errorf("SecondBox installer update: Sandboxes changed while control-plane admission was being fenced: %s", strings.Join(active, ", "))
 			return fail(install.UpdateStageActivationStarted, install.FailureNeedsAction, restoreSource(problem))
 		}
-		if err := complete(install.UpdateStageActivationStarted, map[string]string{"forwardOnly": "true", "controlPlaneAdmission": "stopped", "deploymentQuiescence": "verified"}); err != nil {
+		if err := journalUpdateActivationBoundary(complete, restoreSource); err != nil {
 			return err
 		}
 		current, _ = receipt.ActiveUpdate()
@@ -488,6 +499,13 @@ func continueUpdate(ctx context.Context, directory string, plan install.InstallP
 		}
 	}
 	return writeUpdateSuccess(renderer, directory, plan)
+}
+
+func journalUpdateActivationBoundary(complete func(install.UpdateStage, map[string]string) error, restoreSource func(error) error) error {
+	if err := complete(install.UpdateStageActivationStarted, map[string]string{"forwardOnly": "true", "controlPlaneAdmission": "stopped", "deploymentQuiescence": "verified"}); err != nil {
+		return restoreSource(err)
+	}
+	return nil
 }
 
 func completedUpdateMatchesTarget(receipt install.InstallReceipt, target install.ReleasePlan) bool {
