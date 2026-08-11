@@ -190,7 +190,7 @@ func validateNoNestedMountsInfo(root string, content []byte) error {
 		if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 			continue
 		}
-		return installerError("purge refuses a nested mount beneath Runner storage: "+mountpoint, nil)
+		return installerError("recursive removal refuses a nested mount beneath "+root+": "+mountpoint, nil)
 	}
 	return nil
 }

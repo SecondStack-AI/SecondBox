@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -34,9 +35,11 @@ type updateDependencies struct {
 	CheckCapacity func(install.InstallPlan, install.ReleasePlan) error
 	Materializer  install.ReleaseMaterializeExecutor
 	Compose       func(context.Context, string, string) error
+	SourceCompose func(context.Context, string, string, string) error
+	SourceSubject func(context.Context, install.InstallPlan) (string, error)
 	Readiness     func(context.Context, install.InstallPlan) (map[string]string, error)
 	Smoke         func(context.Context, install.InstallPlan) (map[string]string, error)
-	Quiescent     func(context.Context, install.InstallPlan) ([]string, error)
+	Quiescent     func(context.Context, install.InstallPlan, string) ([]string, error)
 	Confirm       func(context.Context, string) error
 	NewUpdateID   func() (string, error)
 	SaveReceipt   func(string, install.InstallPlan, install.InstallReceipt, int) error
@@ -62,14 +65,15 @@ func systemUpdateDependencies(renderer cliui.Renderer) updateDependencies {
 		CheckCapacity: install.ValidateUpdateStagingCapacity,
 		Materializer:  install.SystemReleaseMaterializer{Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic, HTTPClient: httpClient},
 		Compose: func(ctx context.Context, manifestPath, action string) error {
-			if action == "stop-control-plane" || action == "start-control-plane" || action == "down" {
-				return deployconfig.RunExistingComposeForAcceptedInstaller(ctx, manifestPath, action, deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic})
-			}
 			return deployconfig.RunComposeForAcceptedInstaller(ctx, manifestPath, action, deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic}, httpClient)
 		},
-		Readiness: waitForInstalledRunner,
-		Smoke:     runInstalledUpdateSmoke,
-		Quiescent: installedDeploymentSandboxesRequiringStop,
+		SourceCompose: func(ctx context.Context, manifestPath, action, subject string) error {
+			return deployconfig.RunExistingComposeForAcceptedInstaller(ctx, manifestPath, action, subject, deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic})
+		},
+		SourceSubject: authenticatedSourceComposeSubject,
+		Readiness:     waitForInstalledRunner,
+		Smoke:         runInstalledUpdateSmoke,
+		Quiescent:     installedDeploymentSandboxesRequiringStop,
 		Confirm: func(ctx context.Context, review string) error {
 			accepted := false
 			handles := cliui.FormHandles{Input: os.Stdin, Output: renderer.Diagnostic, Width: renderer.Capabilities.Diagnostic.Width, Accessible: renderer.Capabilities.Accessible, Dark: renderer.Capabilities.Diagnostic.Background != cliui.BackgroundLight}
@@ -83,6 +87,38 @@ func systemUpdateDependencies(renderer cliui.Renderer) updateDependencies {
 		},
 		NewUpdateID: install.NewUpdateID, SaveReceipt: install.SaveReceipt, SaveOperation: install.SaveOperation,
 	}
+}
+
+func authenticatedSourceComposeSubject(ctx context.Context, plan install.InstallPlan) (subject string, resultErr error) {
+	temporary, err := os.MkdirTemp("", "secondbox-source-compose-")
+	if err != nil {
+		return "", fmt.Errorf("SecondBox installer update create source Compose authentication directory: %w", err)
+	}
+	defer func() { resultErr = errors.Join(resultErr, os.RemoveAll(temporary)) }()
+	environmentPath := filepath.Join(temporary, ".secondbox.generated.env")
+	manifestPath := installerPlannedPath(plan, "manifest")
+	binaryPath := installerPlannedPath(plan, "secondbox-deploy-binary")
+	stdout, stderr := &boundedCommandBuffer{maximum: 1 << 20}, &boundedCommandBuffer{maximum: 1 << 20}
+	command := exec.CommandContext(ctx, binaryPath, "--output", "plain", "render", "--output", environmentPath, manifestPath)
+	command.Stdout, command.Stderr = stdout, stderr
+	if err := command.Run(); err != nil {
+		return "", fmt.Errorf("SecondBox installer update render verified source Compose assets: %w: %s", err, cliui.Sanitize(stderr.String()))
+	}
+	if stdout.tooLong || stderr.tooLong {
+		return "", errors.New("SecondBox installer update source Compose render exceeded the bounded output limit")
+	}
+	expected, err := deployconfig.RecordedInstallerComposeSubject(manifestPath, environmentPath)
+	if err != nil {
+		return "", err
+	}
+	actual, err := deployconfig.RecordedInstallerComposeSubject(manifestPath, "")
+	if err != nil {
+		return "", err
+	}
+	if actual != expected {
+		return "", errors.New("SecondBox installer update: recorded Compose assets differ from the verified source release")
+	}
+	return expected, nil
 }
 
 func runUpdateCommand(ctx context.Context, arguments []string, renderer cliui.Renderer) error {
@@ -318,7 +354,11 @@ func validateNewUpdate(ctx context.Context, plan install.InstallPlan, receipt in
 	if err := dependencies.CheckCapacity(plan, target); err != nil {
 		return err
 	}
-	active, err := dependencies.Quiescent(ctx, plan)
+	sourceComposeSubject, err := dependencies.SourceSubject(ctx, plan)
+	if err != nil {
+		return err
+	}
+	active, err := dependencies.Quiescent(ctx, plan, sourceComposeSubject)
 	if err != nil {
 		return err
 	}
@@ -404,7 +444,11 @@ func continueUpdate(ctx context.Context, directory string, plan install.InstallP
 			return fail(install.UpdateStageActivationStarted, install.FailureNeedsAction, errors.New("SecondBox installer update: source release changed before activation"))
 		}
 		source = validatedSource
-		active, err := dependencies.Quiescent(ctx, plan)
+		sourceComposeSubject, err := dependencies.SourceSubject(ctx, plan)
+		if err != nil {
+			return fail(install.UpdateStageActivationStarted, install.FailureNeedsAction, err)
+		}
+		active, err := dependencies.Quiescent(ctx, plan, sourceComposeSubject)
 		if err != nil {
 			return fail(install.UpdateStageActivationStarted, install.FailureRetryable, err)
 		}
@@ -412,13 +456,13 @@ func continueUpdate(ctx context.Context, directory string, plan install.InstallP
 			return fail(install.UpdateStageActivationStarted, install.FailureNeedsAction, fmt.Errorf("SecondBox installer update: Sandboxes became active before activation: %s", strings.Join(active, ", ")))
 		}
 		manifestPath := installerPlannedPath(plan, "manifest")
-		if err := dependencies.Compose(ctx, manifestPath, "stop-control-plane"); err != nil {
+		if err := dependencies.SourceCompose(ctx, manifestPath, "stop-control-plane", sourceComposeSubject); err != nil {
 			return fail(install.UpdateStageActivationStarted, install.FailureRetryable, fmt.Errorf("SecondBox installer update fence control-plane admission: %w", err))
 		}
 		restoreSource := func(problem error) error {
-			return errors.Join(problem, dependencies.Compose(ctx, manifestPath, "start-control-plane"))
+			return errors.Join(problem, dependencies.SourceCompose(ctx, manifestPath, "start-control-plane", sourceComposeSubject))
 		}
-		active, err = dependencies.Quiescent(ctx, plan)
+		active, err = dependencies.Quiescent(ctx, plan, sourceComposeSubject)
 		if err != nil {
 			return fail(install.UpdateStageActivationStarted, install.FailureRetryable, restoreSource(err))
 		}
@@ -437,14 +481,18 @@ func continueUpdate(ctx context.Context, directory string, plan install.InstallP
 			}
 			return len(durableUpdate.CompletedStages) > 3 && durableUpdate.CompletedStages[3].Stage == install.UpdateStageActivationStarted, nil
 		}
-		if err := journalUpdateActivationBoundary(complete, activationCommitted, restoreSource); err != nil {
+		if err := journalUpdateActivationBoundary(complete, sourceComposeSubject, activationCommitted, restoreSource); err != nil {
 			return err
 		}
 		current, _ = receipt.ActiveUpdate()
 	}
 	if len(current.CompletedStages) == 4 {
 		manifestPath := installerPlannedPath(plan, "manifest")
-		if err := dependencies.Compose(ctx, manifestPath, "down"); err != nil {
+		sourceComposeSubject := current.CompletedStages[3].Evidence["sourceComposeSubject"]
+		if sourceComposeSubject == "" {
+			return fail(install.UpdateStageDeploymentPublished, install.FailureNeedsAction, errors.New("SecondBox installer update: authenticated source Compose identity is absent from the activation boundary"))
+		}
+		if err := dependencies.SourceCompose(ctx, manifestPath, "down", sourceComposeSubject); err != nil {
 			return fail(install.UpdateStageDeploymentPublished, install.FailureRetryable, err)
 		}
 		artifact, err = install.ActivateUpdateArtifactsAndBinaries(plan, current, source.Manifest, target)
@@ -524,8 +572,11 @@ func continueUpdate(ctx context.Context, directory string, plan install.InstallP
 	return writeUpdateSuccess(renderer, directory, plan)
 }
 
-func journalUpdateActivationBoundary(complete func(install.UpdateStage, map[string]string) error, committed func() (bool, error), restoreSource func(error) error) error {
-	if err := complete(install.UpdateStageActivationStarted, map[string]string{"forwardOnly": "true", "controlPlaneAdmission": "stopped", "deploymentQuiescence": "verified"}); err != nil {
+func journalUpdateActivationBoundary(complete func(install.UpdateStage, map[string]string) error, sourceComposeSubject string, committed func() (bool, error), restoreSource func(error) error) error {
+	if sourceComposeSubject == "" {
+		return restoreSource(errors.New("SecondBox installer update activation boundary lacks the authenticated source Compose identity"))
+	}
+	if err := complete(install.UpdateStageActivationStarted, map[string]string{"forwardOnly": "true", "controlPlaneAdmission": "stopped", "deploymentQuiescence": "verified", "sourceComposeSubject": sourceComposeSubject}); err != nil {
 		visible, inspectErr := committed()
 		if inspectErr != nil {
 			return errors.Join(err, fmt.Errorf("SecondBox installer update cannot determine whether the forward-only activation boundary committed; control-plane admission remains stopped: %w", inspectErr))
@@ -577,22 +628,22 @@ type blockingUpdateSandbox struct {
 	WorkspaceMutation string `json:"workspaceMutation"`
 }
 
-func installedDeploymentSandboxesRequiringStop(ctx context.Context, plan install.InstallPlan) ([]string, error) {
-	manifestPath := installerPlannedPath(plan, "manifest")
-	query := `
-SELECT COALESCE(json_agg(json_build_object(
-  'id', sandbox.id,
-  'tenantRef', sandbox.tenant_ref,
-  'subjectRef', sandbox.subject_ref,
-  'state', sandbox.state,
-  'desiredState', sandbox.desired_state,
-  'workspaceMutation', workspace.mutation_state
-) ORDER BY sandbox.tenant_ref, sandbox.subject_ref, sandbox.id), '[]'::json)
+const installedDeploymentQuiescenceQuery = `
+WITH blockers AS (
+SELECT
+  0 AS sort_group,
+  sandbox.id,
+  sandbox.tenant_ref,
+  sandbox.subject_ref,
+  sandbox.state,
+  sandbox.desired_state,
+  COALESCE(workspace.mutation_state, 'missing') AS workspace_mutation
 FROM secondbox.sandboxes AS sandbox
-JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+LEFT JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
 WHERE sandbox.deleted_at IS NULL AND sandbox.state<>'deleted'
 AND NOT (
-  sandbox.state='stopped' AND sandbox.desired_state='stopped'
+  workspace.id IS NOT NULL
+  AND sandbox.state='stopped' AND sandbox.desired_state='stopped'
   AND sandbox.current_instance_id=''
   AND workspace.mutation_state=''
   AND sandbox.next_reconcile_at IS NULL
@@ -601,10 +652,40 @@ AND NOT (
     WHERE instance.sandbox_id=sandbox.id
       AND instance.state NOT IN ('stopped','lost','failed')
   )
-)`
+)
+UNION ALL
+SELECT
+  1 AS sort_group,
+  instance.id,
+  'orphan-instance' AS tenant_ref,
+  instance.sandbox_id AS subject_ref,
+  'instance ' || instance.state AS state,
+  'missing sandbox' AS desired_state,
+  '' AS workspace_mutation
+FROM secondbox.instances AS instance
+LEFT JOIN secondbox.sandboxes AS sandbox
+  ON sandbox.id=instance.sandbox_id
+  AND sandbox.deleted_at IS NULL
+  AND sandbox.state<>'deleted'
+WHERE instance.state NOT IN ('stopped','lost','failed')
+AND sandbox.id IS NULL
+)
+SELECT COALESCE(json_agg(json_build_object(
+  'id', blocker.id,
+  'tenantRef', blocker.tenant_ref,
+  'subjectRef', blocker.subject_ref,
+  'state', blocker.state,
+  'desiredState', blocker.desired_state,
+  'workspaceMutation', blocker.workspace_mutation
+) ORDER BY blocker.sort_group, blocker.tenant_ref, blocker.subject_ref, blocker.id), '[]'::json)
+FROM blockers AS blocker`
+
+func installedDeploymentSandboxesRequiringStop(ctx context.Context, plan install.InstallPlan, sourceComposeSubject string) ([]string, error) {
+	manifestPath := installerPlannedPath(plan, "manifest")
+	query := installedDeploymentQuiescenceQuery
 	command := `exec psql --no-psqlrc --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --tuples-only --no-align --command "$1"`
 	arguments, err := deployconfig.ComposeDiagnosticArgumentsForRecordedInstaller(
-		manifestPath, "exec", "--no-TTY", "postgres", "sh", "-eu", "-c", command, "secondbox-update-quiescence", query,
+		manifestPath, sourceComposeSubject, "exec", "--no-TTY", "postgres", "sh", "-eu", "-c", command, "secondbox-update-quiescence", query,
 	)
 	if err != nil {
 		return nil, err

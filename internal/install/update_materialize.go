@@ -338,6 +338,10 @@ func activateUpdateArtifacts(active string, staged StagedUpdate, source, target 
 // CleanupUpdateStaging removes only the verified, update-owned source backup
 // and staging paths after the target deployment has passed its smoke test.
 func CleanupUpdateStaging(plan InstallPlan, update UpdateRecord, source, target releasecontract.ArtifactManifest) error {
+	return cleanupUpdateStaging(plan, update, source, target, validateUpdatePartialRemoval)
+}
+
+func cleanupUpdateStaging(plan InstallPlan, update UpdateRecord, source, target releasecontract.ArtifactManifest, validateRemoval func(string) error) error {
 	staged, err := UpdateStaging(plan, update)
 	if err != nil {
 		return err
@@ -362,6 +366,9 @@ func CleanupUpdateStaging(plan InstallPlan, update UpdateRecord, source, target 
 		if _, err := VerifyArtifactDirectory(candidate.path, candidate.manifest); err != nil {
 			return installerError("refuse cleanup of unverified "+candidate.label+" update artifacts", err)
 		}
+		if err := validateRemoval(candidate.path); err != nil {
+			return installerError("refuse cleanup of "+candidate.label+" update artifacts with nested mounts", err)
+		}
 		if err := os.RemoveAll(candidate.path); err != nil {
 			return installerError("remove "+candidate.label+" update artifacts", err)
 		}
@@ -373,8 +380,11 @@ func CleanupUpdateStaging(plan InstallPlan, update UpdateRecord, source, target 
 		return nil
 	} else if err != nil {
 		return installerError("inspect update staging root before cleanup", err)
-	} else if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o700 {
+	} else if stat, ok := info.Sys().(*syscall.Stat_t); !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o700 || !ok || stat.Uid != uint32(os.Getuid()) {
 		return installerError("refuse cleanup of unsafe update staging root", nil)
+	}
+	if err := validateRemoval(staged.Root); err != nil {
+		return installerError("refuse cleanup of update staging root with nested mounts", err)
 	}
 	if err := os.RemoveAll(staged.Root); err != nil {
 		return installerError("remove update staging root", err)

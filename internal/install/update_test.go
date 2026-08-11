@@ -3,6 +3,7 @@ package install
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,14 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
 	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
 )
+
+func testUpdateStageEvidence(stage UpdateStage) map[string]string {
+	evidence := map[string]string{"verified": "true"}
+	if stage == UpdateStageActivationStarted {
+		evidence["sourceComposeSubject"] = "sha256:" + strings.Repeat("e", 64)
+	}
+	return evidence
+}
 
 func successfulReceipt(t *testing.T, plan InstallPlan) InstallReceipt {
 	t.Helper()
@@ -115,7 +124,7 @@ func TestUpdateLedgerAdvancesReleaseOnlyAfterSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	for index, stage := range UpdateStageSequence {
-		if err := receipt.CompleteUpdateStage(stage, started.Add(time.Duration(index+1)*time.Second), map[string]string{"verified": "true"}); err != nil {
+		if err := receipt.CompleteUpdateStage(stage, started.Add(time.Duration(index+1)*time.Second), testUpdateStageEvidence(stage)); err != nil {
 			t.Fatal(err)
 		}
 		if plan.Release.Version != "0.4.0" {
@@ -145,6 +154,27 @@ func TestUpdateLedgerAdvancesReleaseOnlyAfterSmoke(t *testing.T) {
 	}
 	if _, err := DecodeReceipt(encoded, plan); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReceiptRejectsActivationBoundaryWithoutSourceComposeIdentity(t *testing.T) {
+	plan := validPlan(t)
+	receipt := successfulReceipt(t, plan)
+	started := plan.CreatedAt.Add(time.Hour)
+	if err := receipt.BeginUpdate("update_0123456789abcdef", plan.Release, targetRelease(plan, "0.5.0"), started); err != nil {
+		t.Fatal(err)
+	}
+	for index, stage := range UpdateStageSequence[:4] {
+		if err := receipt.CompleteUpdateStage(stage, started.Add(time.Duration(index+1)*time.Second), map[string]string{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	digest, err := PlanDigest(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := receipt.Validate(digest, plan.HostFacts.HostIdentity, plan.OperationID); err == nil || !strings.Contains(err.Error(), "source Compose identity") {
+		t.Fatalf("activation without source Compose identity validation = %v", err)
 	}
 }
 
@@ -325,6 +355,18 @@ func TestStageUpdateReleaseIsResumableAndDoesNotReplaceActivePaths(t *testing.T)
 	}
 	if _, err := ValidateActivatedUpdateArtifactsAndBinaries(plan, update, verified); err != nil {
 		t.Fatal(err)
+	}
+	refused := errors.New("injected nested mount")
+	if err := cleanupUpdateStaging(plan, update, release, release, func(path string) error {
+		if path == staged.PreviousArtifacts {
+			return refused
+		}
+		return nil
+	}); !errors.Is(err, refused) {
+		t.Fatalf("cleanup nested-mount refusal = %v", err)
+	}
+	if _, err := os.Lstat(staged.PreviousArtifacts); err != nil {
+		t.Fatalf("refused cleanup changed previous artifacts: %v", err)
 	}
 	if err := CleanupUpdateStaging(plan, update, release, release); err != nil {
 		t.Fatal(err)

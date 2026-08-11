@@ -132,7 +132,7 @@ func TestSaveOperationCommitsActivatedReleaseAndReadRecoversIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	for index, stage := range UpdateStageSequence {
-		if err := receipt.CompleteUpdateStage(stage, started.Add(time.Duration(index+1)*time.Second), nil); err != nil {
+		if err := receipt.CompleteUpdateStage(stage, started.Add(time.Duration(index+1)*time.Second), testUpdateStageEvidence(stage)); err != nil {
 			t.Fatal(err)
 		}
 	}

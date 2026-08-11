@@ -122,7 +122,7 @@ func TestRecordedResourcePostconditionsUseActiveManifestAfterSuccessfulUpdate(t 
 		t.Fatal(err)
 	}
 	for index, stage := range UpdateStageSequence {
-		if err := receipt.CompleteUpdateStage(stage, started.Add(time.Duration(index+1)*time.Second), map[string]string{}); err != nil {
+		if err := receipt.CompleteUpdateStage(stage, started.Add(time.Duration(index+1)*time.Second), testUpdateStageEvidence(stage)); err != nil {
 			t.Fatal(err)
 		}
 	}

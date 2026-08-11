@@ -2,6 +2,8 @@ package deployconfig
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,7 +34,7 @@ func RunComposeForAcceptedInstaller(ctx context.Context, manifestPath, action st
 // RunExistingComposeForAcceptedInstaller fences, shuts down, or restores the
 // source deployment through its already-materialized environment and Compose
 // assets. It deliberately does not render target-binary embedded assets.
-func RunExistingComposeForAcceptedInstaller(ctx context.Context, manifestPath, action string, executor ComposeExecutor) error {
+func RunExistingComposeForAcceptedInstaller(ctx context.Context, manifestPath, action, expectedSubject string, executor ComposeExecutor) error {
 	if action != "stop-control-plane" && action != "start-control-plane" && action != "down" {
 		return manifestError("existing Compose action must stop, start, or shut down the recorded deployment", nil)
 	}
@@ -45,7 +47,7 @@ func RunExistingComposeForAcceptedInstaller(ctx context.Context, manifestPath, a
 	} else if action == "down" {
 		command = []string{"down", "--remove-orphans"}
 	}
-	arguments, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, command...)
+	arguments, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, expectedSubject, command...)
 	if err != nil {
 		return err
 	}
@@ -164,20 +166,70 @@ func ComposeDiagnosticArgumentsForAcceptedInstaller(manifestPath string, command
 // operation and its public source release. In particular, this path does not
 // regenerate historical standard Profile lineage with the running target
 // binary's policy.
-func ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath string, command ...string) ([]string, error) {
-	absolute, err := filepath.Abs(manifestPath)
+func ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, expectedSubject string, command ...string) ([]string, error) {
+	absolute, project, composeFiles, err := recordedInstallerComposeIdentity(manifestPath)
 	if err != nil {
 		return nil, err
+	}
+	actualSubject, err := RecordedInstallerComposeSubject(absolute, "")
+	if err != nil {
+		return nil, err
+	}
+	if expectedSubject == "" || actualSubject != expectedSubject {
+		return nil, manifestError("recorded Compose assets differ from the verified source release", nil)
+	}
+	return existingComposeArguments(absolute, project, composeFiles, command...)
+}
+
+// RecordedInstallerComposeSubject binds the generated environment and selected
+// Compose files without regenerating them with the running binary. A non-empty
+// environmentPath is used to authenticate a canonical source-binary render.
+func RecordedInstallerComposeSubject(manifestPath, environmentPath string) (string, error) {
+	absolute, _, selected, err := recordedInstallerComposeIdentity(manifestPath)
+	if err != nil {
+		return "", err
+	}
+	if environmentPath == "" {
+		environmentPath = filepath.Join(filepath.Dir(absolute), ".secondbox.generated.env")
+	}
+	info, err := os.Lstat(environmentPath)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
+		return "", manifestError("existing generated environment is absent or unprotected", err)
+	}
+	composeFiles, err := existingMaterializedComposeFiles(environmentPath, selected)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.New()
+	paths := append([]string{environmentPath}, composeFiles...)
+	logical := append([]string{".secondbox.generated.env"}, selected...)
+	for index, path := range paths {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return "", manifestError("read recorded Compose asset: "+logical[index], err)
+		}
+		_, _ = io.WriteString(hash, logical[index])
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write(content)
+		_, _ = hash.Write([]byte{0})
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func recordedInstallerComposeIdentity(manifestPath string) (string, string, []string, error) {
+	absolute, err := filepath.Abs(manifestPath)
+	if err != nil {
+		return "", "", nil, err
 	}
 	manifest, err := ReadManifest(absolute)
 	if err != nil {
-		return nil, err
+		return "", "", nil, err
 	}
 	if manifest.Deployment.Mode != "development" && manifest.Deployment.Mode != "production" {
-		return nil, manifestError("recorded Compose deployment mode is unsupported", nil)
+		return "", "", nil, manifestError("recorded Compose deployment mode is unsupported", nil)
 	}
 	if manifest.Database.Mode != "bundled" && manifest.Database.Mode != "external" {
-		return nil, manifestError("recorded Compose database mode is unsupported", nil)
+		return "", "", nil, manifestError("recorded Compose database mode is unsupported", nil)
 	}
 	composeFiles := []string{"deploy/compose.yml"}
 	if manifest.Deployment.ComposeBackendCIDR != "" {
@@ -192,21 +244,21 @@ func ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath string, command
 	for _, runner := range manifest.Runners {
 		if runner.Placement == "same-host" {
 			if sameHost {
-				return nil, manifestError("recorded Compose topology has multiple same-host Runners", nil)
+				return "", "", nil, manifestError("recorded Compose topology has multiple same-host Runners", nil)
 			}
 			sameHost = true
 			composeFiles = append(composeFiles, "deploy/compose.same-host-runner.yml")
 		} else if runner.Placement != "remote" {
-			return nil, manifestError("recorded Compose Runner placement is unsupported", nil)
+			return "", "", nil, manifestError("recorded Compose Runner placement is unsupported", nil)
 		}
 	}
 	project := manifest.Deployment.ComposeProjectName
 	if project == "" {
 		project = DefaultComposeProjectName
 	} else if !composeProjectPattern.MatchString(project) {
-		return nil, manifestError("recorded Compose project identity is invalid", nil)
+		return "", "", nil, manifestError("recorded Compose project identity is invalid", nil)
 	}
-	return existingComposeArguments(absolute, project, composeFiles, command...)
+	return absolute, project, composeFiles, nil
 }
 
 func composeDiagnosticArguments(manifestPath string, validateSameHost bool, command ...string) ([]string, error) {

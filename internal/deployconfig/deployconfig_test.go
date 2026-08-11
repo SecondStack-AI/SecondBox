@@ -270,7 +270,11 @@ func TestRecordedInstallerComposeDiagnosticsDoNotRegenerateSourceProfiles(t *tes
 	if _, err := ComposeDiagnosticArgumentsForAcceptedInstaller(manifestPath, "ps"); err == nil {
 		t.Fatal("ordinary accepted-manifest resolution unexpectedly accepted changed release input")
 	}
-	arguments, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, "ps")
+	subject, err := RecordedInstallerComposeSubject(manifestPath, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, subject, "ps")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,9 +292,13 @@ func TestExistingComposeUpdateActionsPreserveMaterializedAssets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	subject, err := RecordedInstallerComposeSubject(manifestPath, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, action := range []string{"stop-control-plane", "start-control-plane", "down"} {
 		executor := &recordingComposeExecutor{}
-		if err := RunExistingComposeForAcceptedInstaller(context.Background(), manifestPath, action, executor); err != nil {
+		if err := RunExistingComposeForAcceptedInstaller(context.Background(), manifestPath, action, subject, executor); err != nil {
 			t.Fatal(err)
 		}
 		if len(executor.calls) != 1 {
@@ -311,6 +319,12 @@ func TestExistingComposeUpdateActionsPreserveMaterializedAssets(t *testing.T) {
 		if action == "down" && !slices.Equal(arguments[len(arguments)-2:], []string{"down", "--remove-orphans"}) {
 			t.Fatalf("existing Compose down arguments = %#v", arguments)
 		}
+	}
+	if err := os.WriteFile(resolved.ComposeFiles[0], []byte("drifted\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunExistingComposeForAcceptedInstaller(context.Background(), manifestPath, "down", subject, &recordingComposeExecutor{}); err == nil || !strings.Contains(err.Error(), "differ from the verified source release") {
+		t.Fatalf("drifted recorded Compose asset result = %v", err)
 	}
 }
 

@@ -517,6 +517,9 @@ func validateUpdateRecords(updates []UpdateRecord) error {
 			if stageIndex >= len(UpdateStageSequence) || record.Stage != UpdateStageSequence[stageIndex] || record.CompletedAt.IsZero() || record.CompletedAt.Before(update.StartedAt) || (stageIndex > 0 && record.CompletedAt.Before(update.CompletedStages[stageIndex-1].CompletedAt)) {
 				return installerError("update stage sequence is invalid", nil)
 			}
+			if record.Stage == UpdateStageActivationStarted && !digestPattern.MatchString(record.Evidence["sourceComposeSubject"]) {
+				return installerError("update activation lacks an authenticated source Compose identity", nil)
+			}
 		}
 		switch update.Status {
 		case UpdateRunning:

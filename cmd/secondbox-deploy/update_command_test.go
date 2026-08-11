@@ -16,12 +16,13 @@ import (
 func TestActivationBoundaryPersistenceFailureRestartsSource(t *testing.T) {
 	persistErr := errors.New("sync receipt")
 	restored := false
+	sourceSubject := "sha256:" + strings.Repeat("a", 64)
 	err := journalUpdateActivationBoundary(func(stage install.UpdateStage, evidence map[string]string) error {
-		if stage != install.UpdateStageActivationStarted || evidence["controlPlaneAdmission"] != "stopped" {
+		if stage != install.UpdateStageActivationStarted || evidence["controlPlaneAdmission"] != "stopped" || evidence["sourceComposeSubject"] != sourceSubject {
 			t.Fatalf("activation boundary = %s %#v", stage, evidence)
 		}
 		return persistErr
-	}, func() (bool, error) {
+	}, sourceSubject, func() (bool, error) {
 		return false, nil
 	}, func(problem error) error {
 		restored = true
@@ -37,7 +38,7 @@ func TestActivationBoundaryPersistenceFailureKeepsCommittedFence(t *testing.T) {
 	restored := false
 	err := journalUpdateActivationBoundary(func(install.UpdateStage, map[string]string) error {
 		return persistErr
-	}, func() (bool, error) {
+	}, "sha256:"+strings.Repeat("a", 64), func() (bool, error) {
 		return true, nil
 	}, func(problem error) error {
 		restored = true
@@ -54,7 +55,7 @@ func TestActivationBoundaryPersistenceFailureKeepsFenceWhenCommitIsAmbiguous(t *
 	restored := false
 	err := journalUpdateActivationBoundary(func(install.UpdateStage, map[string]string) error {
 		return persistErr
-	}, func() (bool, error) {
+	}, "sha256:"+strings.Repeat("a", 64), func() (bool, error) {
 		return false, inspectErr
 	}, func(problem error) error {
 		restored = true
@@ -76,7 +77,9 @@ func installReleasePlanFixture() install.ReleasePlan {
 func TestDecodeBlockingUpdateSandboxesPreservesProjectAndLifecycleState(t *testing.T) {
 	blocking, err := decodeBlockingUpdateSandboxes([]byte(`[
   {"id":"sbx_one","tenantRef":"tenant-a","subjectRef":"subject-a","state":"stopped","desiredState":"running","workspaceMutation":"start"},
-  {"id":"sbx_two","tenantRef":"tenant-b","subjectRef":"subject-b","state":"ready","desiredState":"running","workspaceMutation":""}
+  {"id":"sbx_two","tenantRef":"tenant-b","subjectRef":"subject-b","state":"ready","desiredState":"running","workspaceMutation":""},
+  {"id":"sbx_missing","tenantRef":"tenant-c","subjectRef":"subject-c","state":"stopped","desiredState":"stopped","workspaceMutation":"missing"},
+  {"id":"instance_orphan","tenantRef":"orphan-instance","subjectRef":"sbx_gone","state":"instance ready","desiredState":"missing sandbox","workspaceMutation":""}
 ]`))
 	if err != nil {
 		t.Fatal(err)
@@ -84,12 +87,29 @@ func TestDecodeBlockingUpdateSandboxesPreservesProjectAndLifecycleState(t *testi
 	want := []string{
 		"tenant-a/subject-a/sbx_one (stopped -> running; workspace start)",
 		"tenant-b/subject-b/sbx_two (ready -> running)",
+		"tenant-c/subject-c/sbx_missing (stopped -> stopped; workspace missing)",
+		"orphan-instance/sbx_gone/instance_orphan (instance ready -> missing sandbox)",
 	}
 	if !slices.Equal(blocking, want) {
 		t.Fatalf("blocking Sandboxes = %#v, want %#v", blocking, want)
 	}
 	if _, err := decodeBlockingUpdateSandboxes([]byte(`{"id":"not-an-array"}`)); err == nil {
 		t.Fatal("malformed deployment-wide inventory was accepted")
+	}
+}
+
+func TestDeploymentQuiescenceQueryFailsClosedOnMissingReferences(t *testing.T) {
+	for _, required := range []string{
+		"LEFT JOIN secondbox.workspaces",
+		"workspace.id IS NOT NULL",
+		"COALESCE(workspace.mutation_state, 'missing')",
+		"UNION ALL",
+		"LEFT JOIN secondbox.sandboxes",
+		"AND sandbox.id IS NULL",
+	} {
+		if !strings.Contains(installedDeploymentQuiescenceQuery, required) {
+			t.Fatalf("deployment quiescence query lacks fail-closed clause %q", required)
+		}
 	}
 }
 
