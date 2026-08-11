@@ -267,6 +267,16 @@ jq -e '.completedStages[] | select(.stage == "readiness") | .evidence.runnerStat
 jq -e '.completedStages[] | select(.stage == "cli_login")' "$receipt" >/dev/null
 jq -e '.completedStages[] | select(.stage == "smoke_execution") | .evidence.output == "hello from a microVM" and .evidence.exitStatus == "0"' "$receipt" >/dev/null
 sandbox_id="$(jq -er '.completedStages[] | select(.stage == "smoke_execution") | .evidence.sandboxId' "$receipt")"
+expected_runner_id="runner-${operation_id#install_}"
+live_runner_state=''
+for _ in $(seq 1 300); do
+  if live_runners="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json runners list 2>/dev/null)"; then
+    live_runner_state="$(jq -r --arg id "$expected_runner_id" '.items[] | select(.id == $id) | .state' <<<"$live_runners")"
+  fi
+  [[ "$live_runner_state" == ready ]] && break
+  sleep 1
+done
+[[ "$live_runner_state" == ready ]] || { echo 'installed Runner did not become ready after reboot' >&2; exit 1; }
 if [[ "$mode" == existing_reflink_update ]]; then
   sandbox_after_update_document="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$sandbox_id")"
   [[ "$(jq -er .state <<<"$sandbox_after_update_document")" == stopped ]] || { echo 'retained smoke Sandbox was not stopped after release update and reboot' >&2; exit 1; }
