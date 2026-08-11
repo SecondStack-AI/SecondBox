@@ -159,7 +159,8 @@ if [[ "$phase" == install ]]; then
       .updates[-1].status == "succeeded" and
       .updates[-1].sourceRelease.version == $source and
       .updates[-1].targetRelease.version == $target and
-      .updates[-1].completedStages[-1].stage == "smoke_execution"
+      .updates[-1].completedStages[-1].stage == "smoke_execution" and
+      .updates[-1].completedStages[-1].evidence.postUpdateState == "stopped"
     ' "$receipt" >/dev/null
     jq -e --arg source "$source_version" --arg target "$candidate_version" '
       .schemaVersion == "secondbox.install.plan/v2" and .release.version == $target and
@@ -249,6 +250,22 @@ jq -e '.completedStages[] | select(.stage == "readiness") | .evidence.runnerStat
 jq -e '.completedStages[] | select(.stage == "cli_login")' "$receipt" >/dev/null
 jq -e '.completedStages[] | select(.stage == "smoke_execution") | .evidence.output == "hello from a microVM" and .evidence.exitStatus == "0"' "$receipt" >/dev/null
 sandbox_id="$(jq -er '.completedStages[] | select(.stage == "smoke_execution") | .evidence.sandboxId' "$receipt")"
+if jq -e '.updateQualified == true' "$state" >/dev/null; then
+  sandbox_after_update_document="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$sandbox_id")"
+  [[ "$(jq -er .state <<<"$sandbox_after_update_document")" == stopped ]] || { echo 'retained smoke Sandbox was not stopped after release update and reboot' >&2; exit 1; }
+  sandbox_after_update_revision="$(jq -er .revision <<<"$sandbox_after_update_document")"
+  SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes start \
+    --path "sandboxId=$sandbox_id" \
+    --header "If-Match=\"revision-${sandbox_after_update_revision}\"" \
+    --header "Idempotency-Key=qualification-update-reboot-start-${sandbox_id}" >/dev/null
+  for _ in $(seq 1 300); do
+    sandbox_after_update_state="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$sandbox_id" | jq -er .state)"
+    [[ "$sandbox_after_update_state" == ready ]] && break
+    [[ "$sandbox_after_update_state" != failed ]] || { echo 'retained smoke Sandbox failed while starting after release update and reboot' >&2; exit 1; }
+    sleep 1
+  done
+  [[ "$sandbox_after_update_state" == ready ]] || { echo 'retained smoke Sandbox did not become ready after release update and reboot' >&2; exit 1; }
+fi
 SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output plain exec "$sandbox_id" -- python3 -c 'print("hello after reboot")' | grep -Fx 'hello after reboot' >/dev/null
 sandbox_before_document="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$sandbox_id")"
 sandbox_before="$(jq -cS '{id,profile,profileRevisionId,workspaceId:.workspace.id}' <<<"$sandbox_before_document")"
