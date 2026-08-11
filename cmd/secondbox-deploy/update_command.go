@@ -120,12 +120,16 @@ func runUpdateWith(ctx context.Context, directory string, check, resume bool, re
 	if dependencies.TargetVersion == "0.0.0-development" || dependencies.TargetVersion == "development" {
 		return errors.New("SecondBox installer update: a published qualified target-release binary is required")
 	}
-	targetLocation := releasecontract.ArtifactManifestLocation(dependencies.TargetVersion)
-	targetVerified, err := dependencies.VerifyRelease(ctx, targetLocation)
-	if err != nil {
-		return err
+	var targetVerified releaseverify.VerifiedRelease
+	var targetPlan install.ReleasePlan
+	if !resume {
+		targetLocation := releasecontract.ArtifactManifestLocation(dependencies.TargetVersion)
+		targetVerified, err = dependencies.VerifyRelease(ctx, targetLocation)
+		if err != nil {
+			return err
+		}
+		targetPlan = releasePlan(targetVerified, targetLocation)
 	}
-	targetPlan := releasePlan(targetVerified, targetLocation)
 	if check {
 		verifiedPlan, _, err := install.ReadOperationReadOnly(absolute, dependencies.OwnerUID)
 		if err != nil {
@@ -175,6 +179,12 @@ func runUpdateWith(ctx context.Context, directory string, check, resume bool, re
 		return errors.New("SecondBox installer update: accepted operation changed after privileged-resource verification")
 	}
 	active, hasActive := receipt.ActiveUpdate()
+	if resume {
+		targetVerified, targetPlan, err = verifyRecordedResumeTarget(ctx, receipt, dependencies)
+		if err != nil {
+			return err
+		}
+	}
 	if hasActive {
 		if receipt.Status != install.OperationSucceeded {
 			return errors.New("SecondBox installer update: incomplete update requires a successful installation receipt")
@@ -240,6 +250,25 @@ func runUpdateCheck(ctx context.Context, directory, verifiedPlanDigest string, t
 		return json.NewEncoder(renderer.Output).Encode(values)
 	}
 	return renderer.WriteSummary(cliui.Summary{Title: "SecondBox update check", Status: cliui.StatusComplete, Pairs: []cliui.Pair{{Key: "Source release", Value: plan.Release.Version}, {Key: "Target release", Value: target.Version}, {Key: "Deployment", Value: directory}, {Key: "Sandboxes", Value: "all stopped"}}})
+}
+
+func verifyRecordedResumeTarget(ctx context.Context, receipt install.InstallReceipt, dependencies updateDependencies) (releaseverify.VerifiedRelease, install.ReleasePlan, error) {
+	recorded, found := receipt.ActiveUpdate()
+	if !found && len(receipt.Updates) != 0 && receipt.Updates[len(receipt.Updates)-1].Status == install.UpdateSucceeded {
+		recorded, found = receipt.Updates[len(receipt.Updates)-1], true
+	}
+	if !found {
+		return releaseverify.VerifiedRelease{}, install.ReleasePlan{}, errors.New("SecondBox installer update: no incomplete update is available to resume")
+	}
+	verified, err := dependencies.VerifyRelease(ctx, recorded.TargetRelease.ArtifactManifestURL)
+	if err != nil {
+		return releaseverify.VerifiedRelease{}, install.ReleasePlan{}, err
+	}
+	resolved := releasePlan(verified, recorded.TargetRelease.ArtifactManifestURL)
+	if !sameUpdateTarget(recorded.TargetRelease, resolved) {
+		return releaseverify.VerifiedRelease{}, install.ReleasePlan{}, errors.New("SecondBox installer update: journaled target differs from its verified public identity")
+	}
+	return verified, resolved, nil
 }
 
 func validateNewUpdate(ctx context.Context, plan install.InstallPlan, receipt install.InstallReceipt, target install.ReleasePlan, targetVerified releaseverify.VerifiedRelease, dependencies updateDependencies) error {
@@ -341,6 +370,14 @@ func continueUpdate(ctx context.Context, directory string, plan install.InstallP
 		current, _ = receipt.ActiveUpdate()
 	}
 	if len(current.CompletedStages) == 3 {
+		validatedSource, err := validateUpdateSource(ctx, plan, receipt, dependencies)
+		if err != nil {
+			return fail(install.UpdateStageActivationStarted, install.FailureNeedsAction, err)
+		}
+		if !sameUpdateTarget(current.SourceRelease, releasePlan(validatedSource, current.SourceRelease.ArtifactManifestURL)) {
+			return fail(install.UpdateStageActivationStarted, install.FailureNeedsAction, errors.New("SecondBox installer update: source release changed before activation"))
+		}
+		source = validatedSource
 		active, err := dependencies.Quiescent(ctx, plan)
 		if err != nil {
 			return fail(install.UpdateStageActivationStarted, install.FailureRetryable, err)
@@ -521,7 +558,7 @@ AND NOT (
 	if err != nil {
 		return nil, err
 	}
-	stdout, stderr := &boundedCommandBuffer{}, &boundedCommandBuffer{}
+	stdout, stderr := &boundedCommandBuffer{maximum: 4 << 20}, &boundedCommandBuffer{maximum: 4 << 20}
 	executor := deployconfig.SystemComposeExecutor{Output: stdout, Diagnostic: stderr}
 	if err := executor.Run(ctx, arguments); err != nil {
 		return nil, fmt.Errorf("SecondBox installer update inspect deployment-wide Sandbox state: %w: %s", err, cliui.Sanitize(stderr.String()))

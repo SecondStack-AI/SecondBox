@@ -107,6 +107,37 @@ func TestContinueUpdateRejectsSourceIdentityDriftBeforeActivation(t *testing.T) 
 	}
 }
 
+func TestRecordedResumeTargetIgnoresNewerBootstrapVersion(t *testing.T) {
+	target := installReleasePlanFixture()
+	target.Version = "0.5.2"
+	receipt := install.InstallReceipt{Updates: []install.UpdateRecord{{TargetRelease: target, Status: install.UpdateFailed}}}
+	requested := ""
+	verified := releaseverify.VerifiedRelease{ManifestBytes: []byte("target manifest")}
+	resolved := releasePlan(verified, target.ArtifactManifestURL)
+	target = resolved
+	receipt.Updates[0].TargetRelease = target
+	gotVerified, gotPlan, err := verifyRecordedResumeTarget(context.Background(), receipt, updateDependencies{
+		TargetVersion: "0.6.0",
+		VerifyRelease: func(_ context.Context, location string) (releaseverify.VerifiedRelease, error) {
+			requested = location
+			return verified, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requested != target.ArtifactManifestURL || !sameUpdateTarget(gotPlan, target) || string(gotVerified.ManifestBytes) != string(verified.ManifestBytes) {
+		t.Fatalf("recorded resume target = %q/%#v, want journaled %#v", requested, gotPlan, target)
+	}
+}
+
+func TestUpdateDiagnosticBufferAcceptsQuiescenceResult(t *testing.T) {
+	buffer := &boundedCommandBuffer{maximum: 4 << 20}
+	if _, err := buffer.Write([]byte("[]\n")); err != nil || buffer.tooLong || buffer.String() != "[]\n" {
+		t.Fatalf("quiescence buffer = %q tooLong=%t err=%v", buffer.String(), buffer.tooLong, err)
+	}
+}
+
 func TestUpdateSmokeMutationRecoversLostResponsesAndFencesLaterTransitions(t *testing.T) {
 	sandbox := contracts.Sandbox{ID: "sbx_0123456789abcdefghijklmn", State: "stopped", DesiredState: contracts.SandboxDesiredStateStopped, Revision: 41}
 	mutate, firstKey, err := installedUpdateSandboxMutation(sandbox, "start")
