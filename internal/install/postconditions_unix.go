@@ -87,8 +87,22 @@ func ValidateRecordedResources(plan InstallPlan, receipt InstallReceipt) error {
 		if err != nil {
 			return err
 		}
-		if Digest(content) != record.Evidence["manifestDigest"] {
+		actual := Digest(content)
+		if len(plan.ReleaseHistory) == 1 && actual != record.Evidence["manifestDigest"] {
 			return installerError("deployment manifest digest changed", nil)
+		}
+		// The materialization-stage digest is immutable historical evidence for
+		// the original installation. A successful update replaces the manifest
+		// and refreshes its CreatedResource digest as part of the same atomic
+		// plan/receipt commit, so the active file was validated against that
+		// ledger above instead of against the original stage evidence.
+		if len(plan.ReleaseHistory) > 1 {
+			index := slices.IndexFunc(receipt.CreatedResources, func(resource CreatedResource) bool {
+				return resource.ID == "manifest" && !slices.Contains(receipt.RemovedResourceIDs, resource.ID)
+			})
+			if index < 0 || receipt.CreatedResources[index].Digest == "" || actual != receipt.CreatedResources[index].Digest {
+				return installerError("active deployment manifest identity is absent or changed", nil)
+			}
 		}
 	}
 	if record, found := completedStage(receipt, StageRunnerEnrolled); found {
