@@ -227,6 +227,25 @@ func TestComposeCanFenceControlPlaneWithoutStoppingDatabase(t *testing.T) {
 	}
 }
 
+func TestComposeDiagnosticsUseInstalledMaterializedAssets(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	environmentPath := filepath.Join(filepath.Dir(manifestPath), ".secondbox.generated.env")
+	resolved, err := Render(manifestPath, environmentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+	arguments, err := ComposeDiagnosticArguments(manifestPath, "ps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, materialized := range resolved.ComposeFiles {
+		if !filepath.IsAbs(materialized) || !slices.Contains(arguments, materialized) {
+			t.Fatalf("diagnostic arguments do not use materialized Compose asset %q: %#v", materialized, arguments)
+		}
+	}
+}
+
 func TestStrictDecodeRejectsUnknownDuplicateAndUnsupportedSchema(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
 	original, err := os.ReadFile(manifestPath)

@@ -150,10 +150,32 @@ func composeDiagnosticArguments(manifestPath string, validateSameHost bool, comm
 		return nil, manifestError("existing generated environment is absent or unprotected", err)
 	}
 	arguments := []string{"compose", "--project-name", resolved.ComposeProject(), "--env-file", environmentPath}
-	for _, file := range resolved.ComposeFiles {
+	composeFiles, err := existingMaterializedComposeFiles(environmentPath, resolved.ComposeFiles)
+	if err != nil {
+		return nil, err
+	}
+	for _, file := range composeFiles {
 		arguments = append(arguments, "--file", file)
 	}
 	return append(arguments, command...), nil
+}
+
+func existingMaterializedComposeFiles(environmentPath string, selected []string) ([]string, error) {
+	directory := environmentPath + ".compose"
+	info, err := os.Lstat(directory)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
+		return nil, manifestError("existing generated Compose asset directory is absent or unprotected", err)
+	}
+	files := make([]string, 0, len(selected))
+	for _, logicalPath := range selected {
+		path := filepath.Join(directory, filepath.Base(logicalPath))
+		fileInfo, err := os.Lstat(path)
+		if err != nil || !fileInfo.Mode().IsRegular() || fileInfo.Mode()&os.ModeSymlink != 0 || fileInfo.Mode().Perm()&0o077 != 0 {
+			return nil, manifestError("existing generated Compose asset is absent or unprotected: "+logicalPath, err)
+		}
+		files = append(files, path)
+	}
+	return files, nil
 }
 
 type SystemComposeExecutor struct {

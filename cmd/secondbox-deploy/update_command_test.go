@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/SecondStack-AI/SecondBox/internal/cliui"
 	"github.com/SecondStack-AI/SecondBox/internal/install"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
+	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
 )
 
 func installReleasePlanFixture() install.ReleasePlan {
@@ -72,6 +75,35 @@ func TestUpdateTargetIdentityIncludesEveryReleaseInput(t *testing.T) {
 	right.Images["runner"] = strings.Replace(right.Images["runner"], strings.Repeat("b", 64), strings.Repeat("c", 64), 1)
 	if sameUpdateTarget(left, right) {
 		t.Fatal("changed target image was accepted")
+	}
+}
+
+func TestCompletedUpdateMatchesOnlyExactSucceededTarget(t *testing.T) {
+	target := installReleasePlanFixture()
+	receipt := install.InstallReceipt{Updates: []install.UpdateRecord{{TargetRelease: target, Status: install.UpdateSucceeded}}}
+	if !completedUpdateMatchesTarget(receipt, target) {
+		t.Fatal("exact completed update was not accepted as an idempotent resume")
+	}
+	receipt.Updates[0].Status = install.UpdateFailed
+	if completedUpdateMatchesTarget(receipt, target) {
+		t.Fatal("failed update was accepted as completed")
+	}
+	receipt.Updates[0].Status = install.UpdateSucceeded
+	target.ArtifactManifestDigest = "sha256:" + strings.Repeat("e", 64)
+	if completedUpdateMatchesTarget(receipt, target) {
+		t.Fatal("different completed target was accepted")
+	}
+}
+
+func TestContinueUpdateRejectsSourceIdentityDriftBeforeActivation(t *testing.T) {
+	update := install.UpdateRecord{SourceRelease: installReleasePlanFixture()}
+	err := continueUpdate(context.Background(), t.TempDir(), install.InstallPlan{}, install.InstallReceipt{}, update, releaseverify.VerifiedRelease{}, cliui.Renderer{}, updateDependencies{
+		VerifyRelease: func(context.Context, string) (releaseverify.VerifiedRelease, error) {
+			return releaseverify.VerifiedRelease{ManifestBytes: []byte("replaced source release")}, nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "journaled public identity") {
+		t.Fatalf("source release drift = %v, want journal identity rejection", err)
 	}
 }
 

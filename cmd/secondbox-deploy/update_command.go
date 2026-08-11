@@ -187,6 +187,9 @@ func runUpdateWith(ctx context.Context, directory string, check, resume bool, re
 		}
 	} else {
 		if resume {
+			if completedUpdateMatchesTarget(receipt, targetPlan) && sameUpdateTarget(plan.Release, targetPlan) {
+				return writeUpdateSuccess(renderer, absolute, plan)
+			}
 			return errors.New("SecondBox installer update: no incomplete update is available to resume")
 		}
 		if err := validateNewUpdate(ctx, plan, receipt, targetPlan, targetVerified, dependencies); err != nil {
@@ -295,6 +298,9 @@ func continueUpdate(ctx context.Context, directory string, plan install.InstallP
 	source, err := dependencies.VerifyRelease(ctx, update.SourceRelease.ArtifactManifestURL)
 	if err != nil {
 		return err
+	}
+	if !sameUpdateTarget(update.SourceRelease, releasePlan(source, update.SourceRelease.ArtifactManifestURL)) {
+		return errors.New("SecondBox installer update: resumed source release differs from its journaled public identity")
 	}
 	if err := install.ValidateUpdateAssetCompatibility(source.Manifest, target.Manifest); err != nil {
 		return fmt.Errorf("SecondBox installer update: %w", err)
@@ -441,6 +447,18 @@ func continueUpdate(ctx context.Context, directory string, plan install.InstallP
 			return err
 		}
 	}
+	return writeUpdateSuccess(renderer, directory, plan)
+}
+
+func completedUpdateMatchesTarget(receipt install.InstallReceipt, target install.ReleasePlan) bool {
+	if len(receipt.Updates) == 0 {
+		return false
+	}
+	latest := receipt.Updates[len(receipt.Updates)-1]
+	return latest.Status == install.UpdateSucceeded && sameUpdateTarget(latest.TargetRelease, target)
+}
+
+func writeUpdateSuccess(renderer cliui.Renderer, directory string, plan install.InstallPlan) error {
 	return renderer.WriteSummary(cliui.Summary{Title: "SecondBox single-host update complete", Status: cliui.StatusComplete, Pairs: []cliui.Pair{{Key: "Release", Value: plan.Release.Version}, {Key: "Deployment", Value: directory}, {Key: "Manifest", Value: installerPlannedPath(plan, "manifest")}}, Next: "Health: secondbox whoami && secondbox runners list"})
 }
 
