@@ -48,6 +48,7 @@ assertions_json() {
 
 setup_candidate_registry() {
   local registry_image='docker.io/library/registry@sha256:46faa9a1ae6813194b53921a370f2f4f8c5e1aae228a89bceafef5847a6a3278' certificate_dir="$qualification_root/registry-certs"
+  local skopeo_home="$qualification_root/skopeo-home"
   local name archive reference repository actual
 
   docker pull "$registry_image" >/dev/null
@@ -57,6 +58,7 @@ setup_candidate_registry() {
   done
 
   mkdir -p "$certificate_dir"
+  install -d -m 0700 "$skopeo_home"
   openssl req -x509 -newkey rsa:3072 -sha256 -days 2 -nodes -subj '/CN=ghcr.io' \
     -addext 'subjectAltName=DNS:ghcr.io' -keyout "$certificate_dir/tls.key" -out "$certificate_dir/tls.crt" >/dev/null 2>&1
   sudo install -m 0644 "$certificate_dir/tls.crt" /usr/local/share/ca-certificates/secondbox-qualification-ghcr.crt
@@ -74,8 +76,8 @@ setup_candidate_registry() {
   while read -r name archive reference; do
     [[ -f "$release_directory/$archive" && ! -L "$release_directory/$archive" ]] || { echo "qualified guest OCI archive is absent: $archive" >&2; exit 1; }
     repository="${reference%@*}"
-    skopeo copy --all "oci-archive:$release_directory/$archive" "docker://$repository:qualification-$mode" >/dev/null
-    actual="sha256:$(skopeo inspect --raw "docker://$reference" | sha256sum | awk '{print $1}')"
+    HOME="$skopeo_home" skopeo copy --all "oci-archive:$release_directory/$archive" "docker://$repository:qualification-$mode" >/dev/null
+    actual="sha256:$(HOME="$skopeo_home" skopeo inspect --raw "docker://$reference" | sha256sum | awk '{print $1}')"
     [[ "$actual" == "${reference#*@}" ]] || { echo "qualified guest $name registry digest mismatch: $actual" >&2; exit 1; }
     docker pull "$reference" >/dev/null
     docker image inspect "$reference" >/dev/null
