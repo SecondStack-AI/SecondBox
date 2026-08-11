@@ -23,6 +23,7 @@ import (
 type updateDependencies struct {
 	OwnerUID      int
 	Now           func() time.Time
+	HostVerify    func(context.Context, string, string) error
 	VerifyRelease func(context.Context, string) (releaseverify.VerifiedRelease, error)
 	Materializer  install.ReleaseMaterializeExecutor
 	Compose       func(context.Context, string, string) error
@@ -40,6 +41,7 @@ func systemUpdateDependencies(renderer cliui.Renderer) updateDependencies {
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	return updateDependencies{
 		OwnerUID: os.Getuid(), Now: time.Now, TargetVersion: buildinfo.Version,
+		HostVerify: runPrivilegedHostUpdateVerify,
 		VerifyRelease: func(ctx context.Context, location string) (releaseverify.VerifiedRelease, error) {
 			ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 			defer cancel()
@@ -51,7 +53,7 @@ func systemUpdateDependencies(renderer cliui.Renderer) updateDependencies {
 		},
 		Readiness: waitForInstalledRunner,
 		Smoke:     runInstalledUpdateSmoke,
-		Quiescent: installedSandboxesRequiringStop,
+		Quiescent: installedDeploymentSandboxesRequiringStop,
 		Confirm: func(ctx context.Context, review string) error {
 			accepted := false
 			handles := cliui.FormHandles{Input: os.Stdin, Output: renderer.Diagnostic, Width: renderer.Capabilities.Diagnostic.Width, Accessible: renderer.Capabilities.Accessible, Dark: renderer.Capabilities.Diagnostic.Background != cliui.BackgroundLight}
@@ -108,7 +110,7 @@ func parseUpdateArguments(arguments []string) (check, resume bool, directory str
 }
 
 func runUpdateWith(ctx context.Context, directory string, check, resume bool, renderer cliui.Renderer, dependencies updateDependencies) (resultErr error) {
-	if dependencies.Now == nil || dependencies.VerifyRelease == nil || dependencies.Materializer == nil || dependencies.Compose == nil || dependencies.Readiness == nil || dependencies.Smoke == nil || dependencies.Quiescent == nil || dependencies.Confirm == nil || dependencies.NewUpdateID == nil || dependencies.SaveReceipt == nil || dependencies.SaveOperation == nil {
+	if dependencies.Now == nil || dependencies.HostVerify == nil || dependencies.VerifyRelease == nil || dependencies.Materializer == nil || dependencies.Compose == nil || dependencies.Readiness == nil || dependencies.Smoke == nil || dependencies.Quiescent == nil || dependencies.Confirm == nil || dependencies.NewUpdateID == nil || dependencies.SaveReceipt == nil || dependencies.SaveOperation == nil {
 		return errors.New("SecondBox installer update: dependencies are incomplete")
 	}
 	absolute, err := filepath.Abs(directory)
@@ -125,16 +127,52 @@ func runUpdateWith(ctx context.Context, directory string, check, resume bool, re
 	}
 	targetPlan := releasePlan(targetVerified, targetLocation)
 	if check {
-		return runUpdateCheck(ctx, absolute, targetPlan, targetVerified, renderer, dependencies)
+		verifiedPlan, _, err := install.ReadOperationReadOnly(absolute, dependencies.OwnerUID)
+		if err != nil {
+			return err
+		}
+		verifiedPlanDigest, err := install.PlanDigest(verifiedPlan)
+		if err != nil {
+			return err
+		}
+		if err := dependencies.HostVerify(ctx, absolute, verifiedPlanDigest); err != nil {
+			return err
+		}
+		return runUpdateCheck(ctx, absolute, verifiedPlanDigest, targetPlan, targetVerified, renderer, dependencies)
+	}
+	verificationLock, err := install.AcquireLock(absolute)
+	if err != nil {
+		return err
+	}
+	verifiedPlan, _, err := install.RecoverOperation(absolute, dependencies.OwnerUID, verificationLock)
+	if closeErr := verificationLock.Close(); closeErr != nil {
+		err = errors.Join(err, closeErr)
+	}
+	if err != nil {
+		return err
+	}
+	verifiedPlanDigest, err := install.PlanDigest(verifiedPlan)
+	if err != nil {
+		return err
+	}
+	if err := dependencies.HostVerify(ctx, absolute, verifiedPlanDigest); err != nil {
+		return err
 	}
 	lock, err := install.AcquireLock(absolute)
 	if err != nil {
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
-	plan, receipt, err := install.ReadOperation(absolute, dependencies.OwnerUID)
+	plan, receipt, err := install.RecoverOperation(absolute, dependencies.OwnerUID, lock)
 	if err != nil {
 		return err
+	}
+	lockedPlanDigest, err := install.PlanDigest(plan)
+	if err != nil {
+		return err
+	}
+	if lockedPlanDigest != verifiedPlanDigest {
+		return errors.New("SecondBox installer update: accepted operation changed after privileged-resource verification")
 	}
 	active, hasActive := receipt.ActiveUpdate()
 	if hasActive {
@@ -176,13 +214,20 @@ func runUpdateWith(ctx context.Context, directory string, check, resume bool, re
 	return continueUpdate(ctx, absolute, plan, receipt, active, targetVerified, renderer, dependencies)
 }
 
-func runUpdateCheck(ctx context.Context, directory string, target install.ReleasePlan, verified releaseverify.VerifiedRelease, renderer cliui.Renderer, dependencies updateDependencies) error {
+func runUpdateCheck(ctx context.Context, directory, verifiedPlanDigest string, target install.ReleasePlan, verified releaseverify.VerifiedRelease, renderer cliui.Renderer, dependencies updateDependencies) error {
 	plan, receipt, err := install.ReadOperationReadOnly(directory, dependencies.OwnerUID)
 	if err != nil {
 		return err
 	}
 	if _, active := receipt.ActiveUpdate(); active {
 		return errors.New("SecondBox installer update check: an update is already incomplete; use update --resume")
+	}
+	currentPlanDigest, err := install.PlanDigest(plan)
+	if err != nil {
+		return err
+	}
+	if currentPlanDigest != verifiedPlanDigest {
+		return errors.New("SecondBox installer update check: accepted operation changed after privileged-resource verification")
 	}
 	if err := validateNewUpdate(ctx, plan, receipt, target, verified, dependencies); err != nil {
 		return err
@@ -297,7 +342,22 @@ func continueUpdate(ctx context.Context, directory string, plan install.InstallP
 		if len(active) != 0 {
 			return fail(install.UpdateStageActivationStarted, install.FailureNeedsAction, fmt.Errorf("SecondBox installer update: Sandboxes became active before activation: %s", strings.Join(active, ", ")))
 		}
-		if err := complete(install.UpdateStageActivationStarted, map[string]string{"forwardOnly": "true"}); err != nil {
+		manifestPath := installerPlannedPath(plan, "manifest")
+		if err := dependencies.Compose(ctx, manifestPath, "stop-control-plane"); err != nil {
+			return fail(install.UpdateStageActivationStarted, install.FailureRetryable, fmt.Errorf("SecondBox installer update fence control-plane admission: %w", err))
+		}
+		restoreSource := func(problem error) error {
+			return errors.Join(problem, dependencies.Compose(ctx, manifestPath, "up"))
+		}
+		active, err = dependencies.Quiescent(ctx, plan)
+		if err != nil {
+			return fail(install.UpdateStageActivationStarted, install.FailureRetryable, restoreSource(err))
+		}
+		if len(active) != 0 {
+			problem := fmt.Errorf("SecondBox installer update: Sandboxes changed while control-plane admission was being fenced: %s", strings.Join(active, ", "))
+			return fail(install.UpdateStageActivationStarted, install.FailureNeedsAction, restoreSource(problem))
+		}
+		if err := complete(install.UpdateStageActivationStarted, map[string]string{"forwardOnly": "true", "controlPlaneAdmission": "stopped", "deploymentQuiescence": "verified"}); err != nil {
 			return err
 		}
 		current, _ = receipt.ActiveUpdate()
@@ -357,13 +417,21 @@ func continueUpdate(ctx context.Context, directory string, plan install.InstallP
 		if err != nil {
 			return fail(install.UpdateStageSmokeExecution, install.FailureRetryable, err)
 		}
+		artifact, err = install.ValidateActivatedUpdateArtifactsAndBinaries(plan, current, target)
+		if err != nil {
+			return fail(install.UpdateStageSmokeExecution, install.FailureNeedsAction, err)
+		}
+		expectedDigests, err := deployconfig.ValidatePublishedSingleHostUpdate(plan, current, target, artifact)
+		if err != nil {
+			return fail(install.UpdateStageSmokeExecution, install.FailureNeedsAction, err)
+		}
 		if err := install.CleanupUpdateStaging(plan, current, source.Manifest, target.Manifest); err != nil {
 			return fail(install.UpdateStageSmokeExecution, install.FailureRetryable, err)
 		}
 		if err := receipt.CompleteUpdateStage(install.UpdateStageSmokeExecution, dependencies.Now(), evidence); err != nil {
 			return err
 		}
-		if err := refreshUpdateResourceLedger(plan, &receipt, target); err != nil {
+		if err := refreshUpdateResourceLedger(&receipt, current, target, expectedDigests); err != nil {
 			return err
 		}
 		if err := receipt.ActivateUpdate(&plan, dependencies.Now()); err != nil {
@@ -376,14 +444,16 @@ func continueUpdate(ctx context.Context, directory string, plan install.InstallP
 	return renderer.WriteSummary(cliui.Summary{Title: "SecondBox single-host update complete", Status: cliui.StatusComplete, Pairs: []cliui.Pair{{Key: "Release", Value: plan.Release.Version}, {Key: "Deployment", Value: directory}, {Key: "Manifest", Value: installerPlannedPath(plan, "manifest")}}, Next: "Health: secondbox whoami && secondbox runners list"})
 }
 
-func refreshUpdateResourceLedger(plan install.InstallPlan, receipt *install.InstallReceipt, target releaseverify.VerifiedRelease) error {
+func refreshUpdateResourceLedger(receipt *install.InstallReceipt, update install.UpdateRecord, target releaseverify.VerifiedRelease, expected map[string]string) error {
 	if err := receipt.RefreshUpdatedResource("artifacts", target.Manifest.MicroVM.SignedManifestDigest); err != nil {
 		return err
 	}
+	expected["secondbox-binary"] = "sha256:" + update.TargetRelease.BinaryDigests["secondbox"]
+	expected["secondbox-deploy-binary"] = "sha256:" + update.TargetRelease.BinaryDigests["secondbox-deploy"]
 	for _, id := range []string{"secondbox-binary", "secondbox-deploy-binary", "signed-asset-catalog", "release-artifact-manifest", "manifest", "compose-environment"} {
-		digest, err := install.FileDigest(installerPlannedPath(plan, id))
-		if err != nil {
-			return err
+		digest := expected[id]
+		if digest == "" {
+			return fmt.Errorf("SecondBox installer update: verified target digest is absent for %s", id)
 		}
 		if err := receipt.RefreshUpdatedResource(id, digest); err != nil {
 			return err
@@ -392,45 +462,72 @@ func refreshUpdateResourceLedger(plan install.InstallPlan, receipt *install.Inst
 	return nil
 }
 
-func installedSandboxesRequiringStop(ctx context.Context, plan install.InstallPlan) ([]string, error) {
-	active := []string{}
-	cursor := ""
-	seenCursors := map[string]bool{}
-	for {
-		arguments := []string{"--output", "json", "sandboxes", "list", "--query", "limit=100"}
-		if cursor != "" {
-			arguments = append(arguments, "--query", "cursor="+cursor)
-		}
-		command, stdout, stderr := installedCLICommand(ctx, plan, arguments...)
-		if err := command.Run(); err != nil {
-			return nil, fmt.Errorf("SecondBox installer update inspect Sandboxes: %w: %s", err, cliui.Sanitize(stderr.String()))
-		}
-		if stdout.tooLong {
-			return nil, errors.New("SecondBox installer update Sandbox response exceeded the bounded output limit")
-		}
-		var page contracts.SandboxPage
-		if err := json.Unmarshal(stdout.Bytes(), &page); err != nil {
-			return nil, fmt.Errorf("SecondBox installer update decode Sandboxes: %w", err)
-		}
-		for _, sandbox := range page.Items {
-			if sandbox.DeletedAt != nil || sandbox.State == "deleted" || sandbox.State == "stopped" {
-				continue
-			}
-			name := sandbox.Metadata[contracts.SandboxNameMetadataKey]
-			if name == "" {
-				name = sandbox.ID
-			}
-			active = append(active, name+" ("+sandbox.State+")")
-		}
-		if page.NextCursor == nil {
-			return active, nil
-		}
-		cursor = *page.NextCursor
-		if cursor == "" || seenCursors[cursor] {
-			return nil, errors.New("SecondBox installer update Sandbox pagination returned an invalid cursor")
-		}
-		seenCursors[cursor] = true
+type blockingUpdateSandbox struct {
+	ID                string `json:"id"`
+	TenantRef         string `json:"tenantRef"`
+	SubjectRef        string `json:"subjectRef"`
+	State             string `json:"state"`
+	DesiredState      string `json:"desiredState"`
+	WorkspaceMutation string `json:"workspaceMutation"`
+}
+
+func installedDeploymentSandboxesRequiringStop(ctx context.Context, plan install.InstallPlan) ([]string, error) {
+	manifestPath := installerPlannedPath(plan, "manifest")
+	query := `
+SELECT COALESCE(json_agg(json_build_object(
+  'id', sandbox.id,
+  'tenantRef', sandbox.tenant_ref,
+  'subjectRef', sandbox.subject_ref,
+  'state', sandbox.state,
+  'desiredState', sandbox.desired_state,
+  'workspaceMutation', workspace.mutation_state
+) ORDER BY sandbox.tenant_ref, sandbox.subject_ref, sandbox.id), '[]'::json)
+FROM secondbox.sandboxes AS sandbox
+JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+WHERE sandbox.deleted_at IS NULL AND sandbox.state<>'deleted'
+AND NOT (
+  sandbox.state='stopped' AND sandbox.desired_state='stopped'
+  AND sandbox.current_instance_id=''
+  AND workspace.mutation_state=''
+  AND sandbox.next_reconcile_at IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM secondbox.instances AS instance
+    WHERE instance.sandbox_id=sandbox.id
+      AND instance.state NOT IN ('stopped','lost','failed')
+  )
+)`
+	command := `exec psql --no-psqlrc --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --tuples-only --no-align --command "$1"`
+	arguments, err := deployconfig.ComposeDiagnosticArgumentsForAcceptedInstaller(
+		manifestPath, "exec", "--no-TTY", "postgres", "sh", "-eu", "-c", command, "secondbox-update-quiescence", query,
+	)
+	if err != nil {
+		return nil, err
 	}
+	stdout, stderr := &boundedCommandBuffer{}, &boundedCommandBuffer{}
+	executor := deployconfig.SystemComposeExecutor{Output: stdout, Diagnostic: stderr}
+	if err := executor.Run(ctx, arguments); err != nil {
+		return nil, fmt.Errorf("SecondBox installer update inspect deployment-wide Sandbox state: %w: %s", err, cliui.Sanitize(stderr.String()))
+	}
+	if stdout.tooLong || stderr.tooLong {
+		return nil, errors.New("SecondBox installer update deployment-wide Sandbox response exceeded the bounded output limit")
+	}
+	return decodeBlockingUpdateSandboxes(stdout.Bytes())
+}
+
+func decodeBlockingUpdateSandboxes(content []byte) ([]string, error) {
+	var blocking []blockingUpdateSandbox
+	if err := json.Unmarshal(content, &blocking); err != nil {
+		return nil, fmt.Errorf("SecondBox installer update decode deployment-wide Sandbox state: %w", err)
+	}
+	result := make([]string, 0, len(blocking))
+	for _, sandbox := range blocking {
+		state := sandbox.State + " -> " + sandbox.DesiredState
+		if sandbox.WorkspaceMutation != "" {
+			state += "; workspace " + sandbox.WorkspaceMutation
+		}
+		result = append(result, sandbox.TenantRef+"/"+sandbox.SubjectRef+"/"+sandbox.ID+" ("+state+")")
+	}
+	return result, nil
 }
 
 func runInstalledUpdateSmoke(ctx context.Context, plan install.InstallPlan) (map[string]string, error) {

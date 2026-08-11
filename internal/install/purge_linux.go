@@ -34,7 +34,7 @@ func PurgeAcceptedHost(ctx context.Context, directory, expectedDigest string, ow
 		return InstallReceipt{}, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
-	plan, receipt, err := ReadOperation(directory, ownerUID)
+	plan, receipt, err := RecoverOperation(directory, ownerUID, lock)
 	if err != nil {
 		return InstallReceipt{}, err
 	}
@@ -113,7 +113,7 @@ func ValidateAcceptedHostPurge(directory, expectedDigest string, ownerUID int) (
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
-	plan, receipt, err := ReadOperation(directory, ownerUID)
+	plan, receipt, err := RecoverOperation(directory, ownerUID, lock)
 	if err != nil {
 		return err
 	}

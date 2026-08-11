@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,6 +15,26 @@ func installReleasePlanFixture() install.ReleasePlan {
 		images[name] = "example.invalid/" + name + "@sha256:" + strings.Repeat("b", 64)
 	}
 	return install.ReleasePlan{Version: "0.5.1", ArtifactManifestURL: "https://example.invalid/manifest.json", ArtifactManifestDigest: "sha256:" + strings.Repeat("a", 64), SigningKeyFingerprint: "SHA256:" + strings.Repeat("A", 64), Images: images, BinaryDigests: map[string]string{"secondbox": strings.Repeat("c", 64), "secondbox-deploy": strings.Repeat("d", 64)}, ExpectedDownloadBytes: 1}
+}
+
+func TestDecodeBlockingUpdateSandboxesPreservesProjectAndLifecycleState(t *testing.T) {
+	blocking, err := decodeBlockingUpdateSandboxes([]byte(`[
+  {"id":"sbx_one","tenantRef":"tenant-a","subjectRef":"subject-a","state":"stopped","desiredState":"running","workspaceMutation":"start"},
+  {"id":"sbx_two","tenantRef":"tenant-b","subjectRef":"subject-b","state":"ready","desiredState":"running","workspaceMutation":""}
+]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"tenant-a/subject-a/sbx_one (stopped -> running; workspace start)",
+		"tenant-b/subject-b/sbx_two (ready -> running)",
+	}
+	if !slices.Equal(blocking, want) {
+		t.Fatalf("blocking Sandboxes = %#v, want %#v", blocking, want)
+	}
+	if _, err := decodeBlockingUpdateSandboxes([]byte(`{"id":"not-an-array"}`)); err == nil {
+		t.Fatal("malformed deployment-wide inventory was accepted")
+	}
 }
 
 func TestParseUpdateArgumentsKeepsCheckAndResumeExplicit(t *testing.T) {

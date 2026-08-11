@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added a resumable `secondbox-deploy update` workflow for completed guided single-host installations. The latest verified bootstrap stages every compatible target release input before downtime, requires all Sandboxes to be stopped, rejects execution-bundle changes that would strand immutable Profile revisions, fences other installer lifecycle commands while an update is active, preserves PostgreSQL data, authority, Runner identity, Workspaces, Snapshots, topology, and Compose volumes, then advances the original plan and receipt with append-only release history after readiness and retry-safe microVM smoke execution succeed.
+- Added a resumable `secondbox-deploy update` workflow for completed guided single-host installations. The latest verified bootstrap stages every compatible target release input before downtime, revalidates privileged Runner storage, requires every Project's Sandboxes and pending lifecycle intents to be stopped, fences control-plane admission before the forward-only boundary, rejects execution-bundle changes that would strand immutable Profile revisions, preserves PostgreSQL data, authority, Runner identity, Workspaces, Snapshots, topology, and Compose volumes, then advances the original plan and receipt with append-only release history after readiness and retry-safe microVM smoke execution succeed.
 
 ### Removed
 

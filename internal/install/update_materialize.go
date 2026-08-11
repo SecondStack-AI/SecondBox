@@ -215,6 +215,36 @@ func ActivateUpdateArtifactsAndBinaries(plan InstallPlan, update UpdateRecord, s
 	return artifact, nil
 }
 
+// ValidateActivatedUpdateArtifactsAndBinaries verifies active target bytes
+// without relying on staging paths that cleanup may already have removed.
+func ValidateActivatedUpdateArtifactsAndBinaries(plan InstallPlan, update UpdateRecord, target releaseverify.VerifiedRelease) (VerifiedArtifact, error) {
+	if err := validateVerifiedRelease(update.TargetRelease, target); err != nil {
+		return VerifiedArtifact{}, err
+	}
+	active, found := plannedPathByName(plan.Paths, "artifacts")
+	if !found {
+		return VerifiedArtifact{}, installerError("active artifact path is absent", nil)
+	}
+	artifact, err := VerifyArtifactDirectory(active.Path, target.Manifest)
+	if err != nil {
+		return VerifiedArtifact{}, installerError("active update artifacts differ from the verified target", err)
+	}
+	for _, name := range []string{"secondbox", "secondbox-deploy"} {
+		path, found := plannedPathByName(plan.Paths, name+"-binary")
+		if !found || path.Kind != ResourceBinary {
+			return VerifiedArtifact{}, installerError("active update binary path is absent: "+name, nil)
+		}
+		if err := ValidatePlannedPath(path); err != nil {
+			return VerifiedArtifact{}, err
+		}
+		digest, err := fileSHA256(path.Path)
+		if err != nil || digest != update.TargetRelease.BinaryDigests[name] {
+			return VerifiedArtifact{}, installerError("active update binary differs from the verified target: "+name, err)
+		}
+	}
+	return artifact, nil
+}
+
 func activateUpdateArtifacts(active string, staged StagedUpdate, source, target releasecontract.ArtifactManifest) (VerifiedArtifact, error) {
 	if _, err := os.Lstat(staged.PreviousArtifacts); err == nil {
 		if _, err := VerifyArtifactDirectory(staged.PreviousArtifacts, source); err != nil {

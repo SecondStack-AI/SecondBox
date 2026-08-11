@@ -32,7 +32,7 @@ func runInstallSupport(ctx context.Context, arguments []string, renderer cliui.R
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
-	plan, receipt, err := install.ReadOperation(directory, os.Getuid())
+	plan, receipt, err := install.RecoverOperation(directory, os.Getuid(), lock)
 	if err != nil {
 		return err
 	}

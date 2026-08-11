@@ -212,6 +212,21 @@ func TestPermanentComposePurgeRemovesExactProjectVolumes(t *testing.T) {
 	}
 }
 
+func TestComposeCanFenceControlPlaneWithoutStoppingDatabase(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	executor := &recordingComposeExecutor{}
+	if err := RunCompose(context.Background(), manifestPath, "stop-control-plane", executor, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(executor.calls) != 1 {
+		t.Fatalf("Compose control-plane fence calls = %#v", executor.calls)
+	}
+	arguments := executor.calls[0]
+	if !slices.Contains(arguments, "--project-name") || !slices.Equal(arguments[len(arguments)-2:], []string{"stop", "control-plane"}) {
+		t.Fatalf("Compose control-plane fence arguments = %#v", arguments)
+	}
+}
+
 func TestStrictDecodeRejectsUnknownDuplicateAndUnsupportedSchema(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
 	original, err := os.ReadFile(manifestPath)

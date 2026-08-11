@@ -174,7 +174,64 @@ func TestSaveOperationCommitsActivatedReleaseAndReadRecoversIt(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(directory, operationCommitMarkerName)); err != nil {
 		t.Fatalf("read-only operation changed pending commit: %v", err)
 	}
-	if _, _, err := ReadOperation(directory, os.Getuid()); err != nil {
+	lock, err := AcquireLock(directory)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if _, _, err := RecoverOperation(directory, os.Getuid(), lock); err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecoverOperationDiscardsSafeMarkerlessStagedDocuments(t *testing.T) {
+	directory, plan, _ := acceptedFixture(t)
+	planBytes, err := Canonical(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, operationPlanStageName), append(planBytes, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ReadOperation(directory, os.Getuid()); err == nil || !strings.Contains(err.Error(), "update --resume") {
+		t.Fatalf("markerless stage did not fence read-only operation: %v", err)
+	}
+	lock, err := AcquireLock(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveredPlan, _, recoverErr := RecoverOperation(directory, os.Getuid(), lock)
+	closeErr := lock.Close()
+	if recoverErr != nil || closeErr != nil {
+		t.Fatalf("locked markerless recovery = %v, close = %v", recoverErr, closeErr)
+	}
+	if recoveredPlan.OperationID != plan.OperationID {
+		t.Fatalf("recovered operation = %s, want %s", recoveredPlan.OperationID, plan.OperationID)
+	}
+	if _, err := os.Lstat(filepath.Join(directory, operationPlanStageName)); !os.IsNotExist(err) {
+		t.Fatalf("markerless staged plan remains: %v", err)
+	}
+}
+
+func TestRecoverOperationRequiresMatchingLiveLock(t *testing.T) {
+	directory, _, _ := acceptedFixture(t)
+	otherDirectory, _, _ := acceptedFixture(t)
+	if _, _, err := RecoverOperation(directory, os.Getuid(), nil); err == nil || !strings.Contains(err.Error(), "matching operation lock") {
+		t.Fatalf("nil recovery lock = %v", err)
+	}
+	lock, err := AcquireLock(otherDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := RecoverOperation(directory, os.Getuid(), lock); err == nil || !strings.Contains(err.Error(), "matching operation lock") {
+		t.Fatalf("mismatched recovery lock = %v", err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := RecoverOperation(otherDirectory, os.Getuid(), lock); err == nil || !strings.Contains(err.Error(), "matching operation lock") {
+		t.Fatalf("closed recovery lock = %v", err)
 	}
 }

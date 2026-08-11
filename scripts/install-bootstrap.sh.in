@@ -70,7 +70,7 @@ if [ "$command" = install ] && [ "$#" -eq 0 ]; then
     exit 1
   fi
   "$binary" install </dev/tty &
-elif [ "$command" = update ] && { [ "$#" -eq 0 ] || [ "$1" != --check ]; }; then
+elif [ "$command" = update ] && { [ "$#" -eq 0 ] || { [ "$1" != --check ] && [ "$1" != --resume ]; }; }; then
   if [ ! -r /dev/tty ]; then
     printf '%s\n' 'SecondBox guided update requires an interactive terminal. Use update --check for unattended validation.' >&2
     exit 1

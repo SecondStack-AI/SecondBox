@@ -95,3 +95,12 @@ PATH="$probe/bin:$PATH" \
   echo 'install bootstrap did not dispatch update to the verified target binary' >&2
   exit 1
 }
+BOOTSTRAP_FIXTURE_BINARY="$probe/dispatch-child" \
+BOOTSTRAP_DISPATCH_ARGUMENTS="$probe/dispatch-arguments" \
+BOOTSTRAP_DOWNLOAD_DIRECTORY="$probe/dispatch-download" \
+PATH="$probe/bin:$PATH" \
+  sh "$dispatch_bootstrap" update --resume /srv/secondbox-operation </dev/null
+[[ "$(cat "$probe/dispatch-arguments")" == 'update --resume /srv/secondbox-operation' ]] || {
+  echo 'install bootstrap did not dispatch noninteractive update recovery' >&2
+  exit 1
+}

@@ -223,8 +223,16 @@ func TestStageUpdateReleaseIsResumableAndDoesNotReplaceActivePaths(t *testing.T)
 			plan.Paths[index].Path = artifactParent
 		case "artifacts":
 			plan.Paths[index].Path = filepath.Join(artifactParent, "artifacts")
+		case "secondbox-binary":
+			plan.Paths[index].Path = filepath.Join(deployment, "secondbox")
+		case "secondbox-deploy-binary":
+			plan.Paths[index].Path = filepath.Join(deployment, "secondbox-deploy")
 		}
 	}
+	plan.Paths = append(plan.Paths,
+		plannedPath("secondbox-binary", filepath.Join(deployment, "secondbox"), PathUserDeployment, ResourceBinary, 0o755, int64(os.Getuid()), int64(os.Getgid()), false, true),
+		plannedPath("secondbox-deploy-binary", filepath.Join(deployment, "secondbox-deploy"), PathUserDeployment, ResourceBinary, 0o755, int64(os.Getuid()), int64(os.Getgid()), false, true),
+	)
 	target := releasePlanForMaterializer(release, releaseBytes)
 	update := UpdateRecord{ID: "update_0123456789abcdef", SourceRelease: plan.Release, TargetRelease: target, Status: UpdateRunning, StartedAt: time.Now(), UpdatedAt: time.Now()}
 	binaries := map[string][]byte{}
@@ -260,17 +268,36 @@ func TestStageUpdateReleaseIsResumableAndDoesNotReplaceActivePaths(t *testing.T)
 		}
 	}
 	active := filepath.Join(artifactParent, "artifacts")
-	if err := os.Rename(staged.Artifacts, active); err != nil {
+	if err := os.Mkdir(active, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(staged.PreviousArtifacts, 0o700); err != nil {
+	if err := executor.ExtractMicroVMImage(context.Background(), release.MicroVM.ImageReference, active); err != nil {
 		t.Fatal(err)
 	}
-	if err := executor.ExtractMicroVMImage(context.Background(), release.MicroVM.ImageReference, staged.PreviousArtifacts); err != nil {
+	if _, err := ActivateUpdateArtifactsAndBinaries(plan, update, release, verified); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ValidateActivatedUpdateArtifactsAndBinaries(plan, update, verified); err != nil {
+		t.Fatalf("activated target validation = %v", err)
+	}
+	deployPath, _ := plannedPathByName(plan.Paths, "secondbox-deploy-binary")
+	if err := os.WriteFile(deployPath.Path, []byte("unverified replacement"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ValidateActivatedUpdateArtifactsAndBinaries(plan, update, verified); err == nil || !strings.Contains(err.Error(), "verified target") {
+		t.Fatalf("changed active update binary was adopted: %v", err)
+	}
+	if err := os.WriteFile(deployPath.Path, deployBytes, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ValidateActivatedUpdateArtifactsAndBinaries(plan, update, verified); err != nil {
 		t.Fatal(err)
 	}
 	if err := CleanupUpdateStaging(plan, update, release, release); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := ValidateActivatedUpdateArtifactsAndBinaries(plan, update, verified); err != nil {
+		t.Fatalf("post-cleanup target validation = %v", err)
 	}
 	if _, err := VerifyArtifactDirectory(active, release); err != nil {
 		t.Fatalf("active target changed during cleanup: %v", err)

@@ -92,15 +92,10 @@ func readOperationWithDigest(directory, expectedPlanDigest string, ownerUID int)
 	return plan, receipt, nil
 }
 
-// ReadOperation securely reloads a durable installer operation at any stage.
+// ReadOperation securely reloads a durable installer operation without
+// mutating pending commit state.
 func ReadOperation(directory string, ownerUID int) (InstallPlan, InstallReceipt, error) {
-	if err := validateSafePath(directory); err != nil || ownerUID < 0 {
-		return InstallPlan{}, InstallReceipt{}, installerError("operation directory or owner is invalid", err)
-	}
-	if err := recoverOperationCommit(directory, ownerUID); err != nil {
-		return InstallPlan{}, InstallReceipt{}, err
-	}
-	return readOperationDocuments(directory, ownerUID)
+	return ReadOperationReadOnly(directory, ownerUID)
 }
 
 // ReadOperationReadOnly securely reloads an installer operation without
@@ -123,6 +118,21 @@ func ReadOperationReadOnly(directory string, ownerUID int) (InstallPlan, Install
 		}
 	}
 	return readOperationDocumentsFromFD(directoryFD, ownerUID)
+}
+
+// RecoverOperation completes or discards a pending plan/receipt commit before
+// reloading the operation. The caller must hold the operation lock.
+func RecoverOperation(directory string, ownerUID int, lock *OperationLock) (InstallPlan, InstallReceipt, error) {
+	if err := validateSafePath(directory); err != nil || ownerUID < 0 {
+		return InstallPlan{}, InstallReceipt{}, installerError("operation directory or owner is invalid", err)
+	}
+	if !lock.heldFor(directory) {
+		return InstallPlan{}, InstallReceipt{}, installerError("operation commit recovery requires the matching operation lock", nil)
+	}
+	if err := recoverOperationCommit(directory, ownerUID); err != nil {
+		return InstallPlan{}, InstallReceipt{}, err
+	}
+	return readOperationDocuments(directory, ownerUID)
 }
 
 func readOperationDocuments(directory string, ownerUID int) (InstallPlan, InstallReceipt, error) {
@@ -152,8 +162,8 @@ func readOperationDocumentsFromFD(directoryFD, ownerUID int) (InstallPlan, Insta
 }
 
 // SaveOperation atomically advances the plan and receipt as one recoverable
-// logical commit. A protected marker lets ReadOperation finish either rename
-// after process or host failure; it never accepts a mixed plan/receipt pair.
+// logical commit. A protected marker lets lock-owning recovery finish either
+// rename after process or host failure; readers never accept a mixed pair.
 func SaveOperation(directory string, plan InstallPlan, receipt InstallReceipt, ownerUID int) error {
 	if err := plan.Validate(); err != nil {
 		return err
@@ -214,10 +224,12 @@ func SaveOperation(directory string, plan InstallPlan, receipt InstallReceipt, o
 	if err := writeOperationDocument(directoryFD, operationCommitMarkerName, markerBytes, ownerUID); err != nil {
 		return err
 	}
+	// Commit intent now exists. Preserve both staged documents even when the
+	// directory sync or finalization fails so locked recovery can finish it.
+	cleanupPlan, cleanupReceipt = false, false
 	if err := unix.Fsync(directoryFD); err != nil {
 		return installerError("sync operation commit intent", err)
 	}
-	cleanupPlan, cleanupReceipt = false, false
 	return finishOperationCommit(directoryFD, ownerUID, marker)
 }
 
@@ -241,11 +253,23 @@ func recoverOperationCommit(directory string, ownerUID int) error {
 	defer unix.Close(directoryFD)
 	var stat unix.Stat_t
 	if err := unix.Fstatat(directoryFD, operationCommitMarkerName, &stat, unix.AT_SYMLINK_NOFOLLOW); err == unix.ENOENT {
+		removed := false
 		for _, name := range []string{operationPlanStageName, operationReceiptStageName} {
 			if stageErr := unix.Fstatat(directoryFD, name, &stat, unix.AT_SYMLINK_NOFOLLOW); stageErr == nil {
-				return installerError("operation contains uncommitted staged document without commit intent", nil)
+				if _, readErr := readAcceptedFile(directoryFD, name, ownerUID); readErr != nil {
+					return installerError("validate uncommitted staged operation document", readErr)
+				}
+				if unlinkErr := unix.Unlinkat(directoryFD, name, 0); unlinkErr != nil {
+					return installerError("discard uncommitted staged operation document", unlinkErr)
+				}
+				removed = true
 			} else if stageErr != unix.ENOENT {
 				return installerError("inspect staged operation document", stageErr)
+			}
+		}
+		if removed {
+			if err := unix.Fsync(directoryFD); err != nil {
+				return installerError("sync discarded uncommitted operation documents", err)
 			}
 		}
 		return nil

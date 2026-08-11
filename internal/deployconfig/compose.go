@@ -30,8 +30,8 @@ func RunComposeForAcceptedInstaller(ctx context.Context, manifestPath, action st
 }
 
 func runCompose(ctx context.Context, manifestPath, action string, executor ComposeExecutor, httpClient *http.Client, validateSameHost bool) error {
-	if action != "config" && action != "prepare" && action != "up" && action != "down" {
-		return manifestError("compose action must be config, prepare, up, or down", nil)
+	if action != "config" && action != "prepare" && action != "up" && action != "down" && action != "stop-control-plane" {
+		return manifestError("compose action must be config, prepare, up, down, or stop-control-plane", nil)
 	}
 	if executor == nil {
 		return manifestError("Compose executor is required", nil)
@@ -67,6 +67,8 @@ func runCompose(ctx context.Context, manifestPath, action string, executor Compo
 		arguments = composeUpArgumentsInternal(arguments, "--detach")
 	case "down":
 		arguments = append(slices.Clone(arguments), "down", "--remove-orphans")
+	case "stop-control-plane":
+		arguments = append(slices.Clone(arguments), "stop", "control-plane")
 	}
 	if err := executor.Run(ctx, arguments); err != nil {
 		return err

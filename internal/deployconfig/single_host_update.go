@@ -31,8 +31,23 @@ func StageSingleHostUpdate(plan install.InstallPlan, update install.UpdateRecord
 	if err != nil {
 		return StagedSingleHostUpdate{}, err
 	}
+	manifestBytes, catalogBytes, err := singleHostUpdateContents(plan, update, verified, artifact)
+	if err != nil {
+		return StagedSingleHostUpdate{}, err
+	}
+	result := StagedSingleHostUpdate{ManifestPath: filepath.Join(staging.Root, "secondbox.toml"), SignedAssetCatalog: filepath.Join(staging.Root, "signed-assets.json"), ReleaseArtifactManifest: staging.ReleaseArtifactManifest}
+	if err := writeOrValidateStagedUpdate(result.ManifestPath, manifestBytes, 0o600); err != nil {
+		return StagedSingleHostUpdate{}, err
+	}
+	if err := writeOrValidateStagedUpdate(result.SignedAssetCatalog, catalogBytes, 0o600); err != nil {
+		return StagedSingleHostUpdate{}, err
+	}
+	return result, nil
+}
+
+func singleHostUpdateContents(plan install.InstallPlan, update install.UpdateRecord, verified releaseverify.VerifiedRelease, artifact install.VerifiedArtifact) ([]byte, []byte, error) {
 	if verified.Manifest.Version != update.TargetRelease.Version || artifact.ManifestDigest != verified.Manifest.MicroVM.SignedManifestDigest || artifact.SigningKeyID != strings.ToLower(strings.TrimPrefix(verified.Manifest.MicroVM.SigningKeyFingerprint, "SHA256:")) {
-		return StagedSingleHostUpdate{}, manifestError("staged single-host update release identity differs", nil)
+		return nil, nil, manifestError("staged single-host update release identity differs", nil)
 	}
 	deployment := installPath(plan, "deployment")
 	runnerID := "runner-" + strings.TrimPrefix(plan.OperationID, "install_")
@@ -46,11 +61,11 @@ func StageSingleHostUpdate(plan install.InstallPlan, update install.UpdateRecord
 	pkiPath := installPath(plan, "runner-pki")
 	manifest, err := singleHostManifest(plan, verified.Manifest, artifact.SigningKeyID, runnerID, installPath(plan, "runner-identity"), relativeTarget("database-password"), relativeTarget("platform-authority"), relativeTarget("runner-enrollment"), relativeTarget("application-authority"), relativeTo(deployment, catalogPath), relativeTo(deployment, releasePath), relativeTo(deployment, pkiPath))
 	if err != nil {
-		return StagedSingleHostUpdate{}, err
+		return nil, nil, err
 	}
 	manifestBytes, err := encodeManifest(manifest)
 	if err != nil {
-		return StagedSingleHostUpdate{}, err
+		return nil, nil, err
 	}
 	catalog := struct {
 		Assets []assetcatalog.SignedAsset `json:"assets"`
@@ -60,16 +75,9 @@ func StageSingleHostUpdate(plan install.InstallPlan, update install.UpdateRecord
 	}}
 	catalogBytes, err := json.Marshal(catalog)
 	if err != nil {
-		return StagedSingleHostUpdate{}, err
+		return nil, nil, err
 	}
-	result := StagedSingleHostUpdate{ManifestPath: filepath.Join(staging.Root, "secondbox.toml"), SignedAssetCatalog: filepath.Join(staging.Root, "signed-assets.json"), ReleaseArtifactManifest: staging.ReleaseArtifactManifest}
-	if err := writeOrValidateStagedUpdate(result.ManifestPath, manifestBytes, 0o600); err != nil {
-		return StagedSingleHostUpdate{}, err
-	}
-	if err := writeOrValidateStagedUpdate(result.SignedAssetCatalog, append(catalogBytes, '\n'), 0o600); err != nil {
-		return StagedSingleHostUpdate{}, err
-	}
-	return result, nil
+	return manifestBytes, append(catalogBytes, '\n'), nil
 }
 
 func PublishSingleHostUpdate(plan install.InstallPlan, staged StagedSingleHostUpdate) error {
@@ -93,6 +101,65 @@ func PublishSingleHostUpdate(plan install.InstallPlan, staged StagedSingleHostUp
 	}
 	_, err := ResolveForAcceptedInstaller(installPath(plan, "manifest"))
 	return err
+}
+
+// ValidatePublishedSingleHostUpdate proves that every release-derived active
+// file still matches the verified target before the installer journals its
+// final content identities. It returns those expected identities without
+// deriving trust from the active files themselves.
+func ValidatePublishedSingleHostUpdate(plan install.InstallPlan, update install.UpdateRecord, verified releaseverify.VerifiedRelease, artifact install.VerifiedArtifact) (map[string]string, error) {
+	manifestBytes, catalogBytes, err := singleHostUpdateContents(plan, update, verified, artifact)
+	if err != nil {
+		return nil, err
+	}
+	expected := map[string][]byte{
+		"manifest":                  manifestBytes,
+		"signed-asset-catalog":      catalogBytes,
+		"release-artifact-manifest": verified.ManifestBytes,
+	}
+	for name, content := range expected {
+		if err := validatePublishedUpdateFile(plan, name, content); err != nil {
+			return nil, err
+		}
+	}
+	resolved, err := ResolveForAcceptedInstaller(installPath(plan, "manifest"))
+	if err != nil {
+		return nil, err
+	}
+	environmentBytes, err := EncodeComposeEnvironment(resolved.Environment)
+	if err != nil {
+		return nil, err
+	}
+	if err := validatePublishedUpdateFile(plan, "compose-environment", environmentBytes); err != nil {
+		return nil, err
+	}
+	expected["compose-environment"] = environmentBytes
+	digests := make(map[string]string, len(expected))
+	for name, content := range expected {
+		digests[name] = install.Digest(content)
+	}
+	return digests, nil
+}
+
+func validatePublishedUpdateFile(plan install.InstallPlan, name string, expected []byte) error {
+	var target *install.PlannedPath
+	for index := range plan.Paths {
+		if plan.Paths[index].Name == name {
+			target = &plan.Paths[index]
+			break
+		}
+	}
+	if target == nil || (target.Kind != install.ResourceFile && target.Kind != install.ResourceBinary) {
+		return manifestError("published update file is absent from the accepted plan: "+name, nil)
+	}
+	if err := install.ValidatePlannedPath(*target); err != nil {
+		return manifestError("published update file metadata differs: "+name, err)
+	}
+	actual, err := os.ReadFile(target.Path)
+	if err != nil || !bytes.Equal(actual, expected) {
+		return manifestError("published update file differs from the verified target: "+name, err)
+	}
+	return nil
 }
 
 func writeOrValidateStagedUpdate(path string, content []byte, mode os.FileMode) error {

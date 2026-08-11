@@ -149,14 +149,6 @@ func (receipt *InstallReceipt) RefreshUpdatedResource(id, digest string) error {
 	return installerError("updated resource is absent from installation ledger: "+id, nil)
 }
 
-func FileDigest(path string) (string, error) {
-	digest, err := fileSHA256(path)
-	if err != nil {
-		return "", err
-	}
-	return "sha256:" + digest, nil
-}
-
 func (receipt *InstallReceipt) activeUpdate() (*UpdateRecord, error) {
 	if len(receipt.Updates) == 0 {
 		return nil, installerError("active update is absent", nil)

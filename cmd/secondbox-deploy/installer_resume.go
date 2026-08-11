@@ -106,6 +106,19 @@ func runPrivilegedHostTeardownVerify(ctx context.Context, directory, digest stri
 	return command.Run()
 }
 
+func runPrivilegedHostUpdateVerify(ctx context.Context, directory, digest string) error {
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	command := exec.CommandContext(ctx, "sudo", "--", executable, "_install-host-update-verify", directory, digest)
+	command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("SecondBox installer update privileged-resource verification: %w", err)
+	}
+	return nil
+}
+
 func runInstallResume(ctx context.Context, directory string, renderer cliui.Renderer) error {
 	if renderer.OutputMode == cliui.OutputJSON {
 		return &deployExitError{code: 3, err: errors.New("SecondBox installer: install --resume does not accept --output json")}
@@ -140,7 +153,7 @@ func runInstallResumeWith(ctx context.Context, directory string, renderer cliui.
 	if err != nil {
 		return err
 	}
-	plan, receipt, err := install.ReadOperation(absolute, dependencies.OwnerUID)
+	plan, receipt, err := install.ReadOperationReadOnly(absolute, dependencies.OwnerUID)
 	if err != nil {
 		return err
 	}
@@ -170,7 +183,7 @@ func runInstallResumeWith(ctx context.Context, directory string, renderer cliui.
 	// The pre-lock read is only a hint used to decide whether the separately
 	// privileged host-apply helper is needed. All state used below must be
 	// reloaded while this process owns the operation lock.
-	plan, receipt, err = install.ReadOperation(absolute, dependencies.OwnerUID)
+	plan, receipt, err = install.RecoverOperation(absolute, dependencies.OwnerUID, lock)
 	if err != nil {
 		return err
 	}
@@ -760,7 +773,7 @@ func runInstallComposeRecoveryWith(ctx context.Context, directory string, render
 	if err != nil {
 		return err
 	}
-	plan, receipt, err := install.ReadOperation(absolute, dependencies.OwnerUID)
+	plan, receipt, err := install.ReadOperationReadOnly(absolute, dependencies.OwnerUID)
 	if err != nil {
 		return err
 	}
@@ -784,7 +797,7 @@ func runInstallComposeRecoveryWith(ctx context.Context, directory string, render
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
-	plan, receipt, err = install.ReadOperation(absolute, dependencies.OwnerUID)
+	plan, receipt, err = install.RecoverOperation(absolute, dependencies.OwnerUID, lock)
 	if err != nil {
 		return err
 	}
@@ -889,7 +902,7 @@ func runInstallUninstallWith(ctx context.Context, directory string, renderer cli
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
-	plan, receipt, err := install.ReadOperation(absolute, dependencies.OwnerUID)
+	plan, receipt, err := install.RecoverOperation(absolute, dependencies.OwnerUID, lock)
 	if err != nil {
 		return err
 	}
@@ -950,7 +963,7 @@ func runInstallPurge(ctx context.Context, directory string, renderer cliui.Rende
 	if err != nil {
 		return err
 	}
-	plan, receipt, err := install.ReadOperation(absolute, os.Getuid())
+	plan, receipt, err := install.ReadOperationReadOnly(absolute, os.Getuid())
 	if err != nil {
 		return err
 	}
@@ -996,7 +1009,7 @@ func runInstallPurge(ctx context.Context, directory string, renderer cliui.Rende
 	if err != nil {
 		return err
 	}
-	plan, receipt, err = install.ReadOperation(absolute, os.Getuid())
+	plan, receipt, err = install.RecoverOperation(absolute, os.Getuid(), purgeLock)
 	if err == nil && receipt.Status != install.OperationUninstalled && receipt.Status != install.OperationPurging {
 		err = errors.New("SecondBox installer purge: operation changed after confirmation; no resources were removed")
 	}
@@ -1020,7 +1033,7 @@ func runInstallPurge(ctx context.Context, directory string, renderer cliui.Rende
 	if err != nil {
 		return err
 	}
-	plan, receipt, err = install.ReadOperation(absolute, os.Getuid())
+	plan, receipt, err = install.RecoverOperation(absolute, os.Getuid(), validationLock)
 	if err == nil {
 		err = install.ValidatePurgeVerifiedArtifacts(plan, receipt)
 	}
@@ -1063,7 +1076,7 @@ func runInstallPurge(ctx context.Context, directory string, renderer cliui.Rende
 		if err != nil {
 			return err
 		}
-		plan, receipt, err = install.ReadOperation(absolute, os.Getuid())
+		plan, receipt, err = install.RecoverOperation(absolute, os.Getuid(), stepLock)
 		if err == nil {
 			err = receipt.CompletePurgeStep("compose-volumes", time.Now())
 		}
@@ -1081,7 +1094,7 @@ func runInstallPurge(ctx context.Context, directory string, renderer cliui.Rende
 	if err != nil {
 		return err
 	}
-	plan, receipt, err = install.ReadOperation(absolute, os.Getuid())
+	plan, receipt, err = install.RecoverOperation(absolute, os.Getuid(), artifactLock)
 	if err == nil {
 		persistArtifacts := func(value install.InstallReceipt) error {
 			return install.SaveReceipt(absolute, plan, value, os.Getuid())
@@ -1104,7 +1117,7 @@ func runInstallPurge(ctx context.Context, directory string, renderer cliui.Rende
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
-	plan, receipt, err = install.ReadOperation(absolute, os.Getuid())
+	plan, receipt, err = install.RecoverOperation(absolute, os.Getuid(), lock)
 	if err != nil {
 		return err
 	}
