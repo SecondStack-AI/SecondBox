@@ -185,7 +185,7 @@ func ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, expectedSubjec
 // Compose files without regenerating them with the running binary. A non-empty
 // environmentPath is used to authenticate a canonical source-binary render.
 func RecordedInstallerComposeSubject(manifestPath, environmentPath string) (string, error) {
-	absolute, _, selected, err := recordedInstallerComposeIdentity(manifestPath)
+	absolute, project, selected, err := recordedInstallerComposeIdentity(manifestPath)
 	if err != nil {
 		return "", err
 	}
@@ -201,6 +201,10 @@ func RecordedInstallerComposeSubject(manifestPath, environmentPath string) (stri
 		return "", err
 	}
 	hash := sha256.New()
+	_, _ = io.WriteString(hash, "compose_project_name")
+	_, _ = hash.Write([]byte{0})
+	_, _ = io.WriteString(hash, project)
+	_, _ = hash.Write([]byte{0})
 	paths := append([]string{environmentPath}, composeFiles...)
 	logical := append([]string{".secondbox.generated.env"}, selected...)
 	for index, path := range paths {

@@ -328,6 +328,44 @@ func TestExistingComposeUpdateActionsPreserveMaterializedAssets(t *testing.T) {
 	}
 }
 
+func TestRecordedInstallerComposeSubjectAuthenticatesProjectIdentity(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	environmentPath := filepath.Join(filepath.Dir(manifestPath), ".secondbox.generated.env")
+	if _, err := Render(manifestPath, environmentPath); err != nil {
+		t.Fatal(err)
+	}
+	subject, err := RecordedInstallerComposeSubject(manifestPath, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drifted := bytes.Replace(
+		manifest,
+		[]byte("compose_project_name = 'secondbox'"),
+		[]byte("compose_project_name = 'secondbox-drifted'"),
+		1,
+	)
+	if bytes.Equal(drifted, manifest) {
+		t.Fatal("Compose project identity was not found in initialized manifest")
+	}
+	if err := os.WriteFile(manifestPath, drifted, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	driftedSubject, err := RecordedInstallerComposeSubject(manifestPath, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if driftedSubject == subject {
+		t.Fatal("Compose project-only drift preserved the authenticated subject")
+	}
+	if _, err := ComposeDiagnosticArgumentsForRecordedInstaller(manifestPath, subject, "ps"); err == nil || !strings.Contains(err.Error(), "differ from the verified source release") {
+		t.Fatalf("Compose project-only drift result = %v", err)
+	}
+}
+
 func TestStrictDecodeRejectsUnknownDuplicateAndUnsupportedSchema(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
 	original, err := os.ReadFile(manifestPath)
