@@ -4,7 +4,30 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
 )
+
+// ValidateUpdateAssetCompatibility keeps existing Sandboxes runnable after an
+// update. Sandboxes remain pinned to their immutable Profile revision, while a
+// v1 Runner serves one verified runtime/toolchain bundle at a time.
+func ValidateUpdateAssetCompatibility(source, target releasecontract.ArtifactManifest) error {
+	for _, digest := range []string{
+		source.MicroVM.RuntimeBundle.ManifestDigest,
+		source.MicroVM.ToolchainBundle.ManifestDigest,
+		target.MicroVM.RuntimeBundle.ManifestDigest,
+		target.MicroVM.ToolchainBundle.ManifestDigest,
+	} {
+		if !digestPattern.MatchString(digest) {
+			return installerError("update execution asset identity is invalid", nil)
+		}
+	}
+	if source.MicroVM.RuntimeBundle.ManifestDigest != target.MicroVM.RuntimeBundle.ManifestDigest ||
+		source.MicroVM.ToolchainBundle.ManifestDigest != target.MicroVM.ToolchainBundle.ManifestDigest {
+		return installerError("update target changes execution assets pinned by existing Sandbox Profile revisions", nil)
+	}
+	return nil
+}
 
 func (receipt *InstallReceipt) BeginUpdate(id string, source, target ReleasePlan, now time.Time) error {
 	if receipt.Status != OperationSucceeded {

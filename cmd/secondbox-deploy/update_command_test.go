@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/SecondStack-AI/SecondBox/internal/install"
+	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
 func installReleasePlanFixture() install.ReleasePlan {
@@ -50,5 +51,33 @@ func TestUpdateTargetIdentityIncludesEveryReleaseInput(t *testing.T) {
 	right.Images["runner"] = strings.Replace(right.Images["runner"], strings.Repeat("b", 64), strings.Repeat("c", 64), 1)
 	if sameUpdateTarget(left, right) {
 		t.Fatal("changed target image was accepted")
+	}
+}
+
+func TestUpdateSmokeMutationRecoversLostResponsesAndFencesLaterTransitions(t *testing.T) {
+	sandbox := contracts.Sandbox{ID: "sbx_0123456789abcdefghijklmn", State: "stopped", DesiredState: contracts.SandboxDesiredStateStopped, Revision: 41}
+	mutate, firstKey, err := installedUpdateSandboxMutation(sandbox, "start")
+	if err != nil || !mutate || !strings.Contains(firstKey, "revision-41") {
+		t.Fatalf("initial start mutation = %t, %q, %v", mutate, firstKey, err)
+	}
+
+	// The intent committed but its response was lost. Desired state is the
+	// durable acknowledgement, even while observed state still says stopped.
+	sandbox.DesiredState = contracts.SandboxDesiredStateRunning
+	sandbox.Revision = 42
+	if mutate, key, err := installedUpdateSandboxMutation(sandbox, "start"); err != nil || mutate || key != "" {
+		t.Fatalf("ambiguous committed start = %t, %q, %v", mutate, key, err)
+	}
+
+	// A completed stop advances the revision, so the next smoke retry receives a
+	// distinct idempotency key instead of replaying the preceding start.
+	sandbox.DesiredState = contracts.SandboxDesiredStateStopped
+	sandbox.Revision = 43
+	mutate, restartKey, err := installedUpdateSandboxMutation(sandbox, "start")
+	if err != nil || !mutate || restartKey == firstKey || !strings.Contains(restartKey, "revision-43") {
+		t.Fatalf("post-stop restart = %t, %q, %v", mutate, restartKey, err)
+	}
+	if _, _, err := installedUpdateSandboxMutation(sandbox, "delete"); err == nil {
+		t.Fatal("invalid update smoke action was accepted")
 	}
 }

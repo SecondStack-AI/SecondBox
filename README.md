@@ -49,7 +49,7 @@ curl -fsSL https://github.com/SecondStack-AI/SecondBox/releases/latest/download/
   | sh -s -- update /absolute/path/to/secondbox-install-operation
 ```
 
-Run the same command with `update --check` first for read-only compatibility and drift validation. Updates preserve the existing PostgreSQL volume, generated authority, Runner identity, Workspaces, Snapshots, storage, ports, and Compose project.
+Run the same command with `update --check` first for read-only compatibility and drift validation. Updates preserve the existing PostgreSQL volume, generated authority, Runner identity, Workspaces, Snapshots, storage, ports, and Compose project. The v1 updater rejects releases that change runtime or toolchain bundle digests because existing Sandboxes remain pinned to their immutable Profile revisions.
 
 The bootstrap downloads only the release-pinned Linux amd64 `secondbox-deploy` binary to a temporary directory, verifies its embedded SHA-256 digest, and dispatches the requested install or update operation. It does not invoke sudo or modify the host itself. The installer shows its exact privileged action list before asking sudo to run its narrow host-preparation entry point.
 

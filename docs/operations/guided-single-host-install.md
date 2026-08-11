@@ -93,7 +93,7 @@ curl -fsSL https://github.com/SecondStack-AI/SecondBox/releases/latest/download/
   | sh -s -- update "$operation"
 ```
 
-The updater verifies the successful source receipt and every recorded live resource, rejects same-version updates and downgrades, and stages all target binaries, images, microVM assets, manifests, and standard bundles while the source deployment remains running. After final confirmation it records the forward-only activation boundary, stops the existing Compose project without deleting volumes, atomically publishes the target release inputs, and restarts the same project against the same PostgreSQL volume and Runner storage. Generated authority, Runner identity, CLI authority, network settings, capacity, retention, Workspaces, Snapshots, and storage paths remain unchanged.
+The updater verifies the successful source receipt and every recorded live resource, rejects same-version updates and downgrades, and stages all target binaries, images, microVM assets, manifests, and standard bundles while the source deployment remains running. Because existing Sandboxes remain pinned to immutable Profile revisions and the v1 single-host Runner serves one verified execution bundle, the check also rejects a target that changes the runtime or toolchain bundle digest. After final confirmation it records the forward-only activation boundary, stops the existing Compose project without deleting volumes, atomically publishes the target release inputs, and restarts the same project against the same PostgreSQL volume and Runner storage. Generated authority, Runner identity, CLI authority, network settings, capacity, retention, Workspaces, Snapshots, and storage paths remain unchanged.
 
 Database migrations begin when the target control plane starts. A failure before activation leaves the source deployment unchanged. A failure after activation remains bound to the verified target; resume it rather than running older binaries against potentially migrated data:
 
@@ -103,6 +103,8 @@ curl -fsSL https://github.com/SecondStack-AI/SecondBox/releases/latest/download/
 ```
 
 Each successful activation appends its source and target release identities, immutable digests, stages, and evidence to the original installation history. Uninstall, purge, support, and later updates consume that current plan and complete history. Do not replace receipt-managed files or image references manually.
+
+While an update is incomplete, installer resume, Compose recovery, and uninstall are fenced. Complete the journaled update with `update --resume` before running another deployment lifecycle command.
 
 ## Resume and diagnose
 

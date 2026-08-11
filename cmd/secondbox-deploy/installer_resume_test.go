@@ -192,6 +192,95 @@ func TestInstalledSmokeSandboxIDAdoptsOnlyOneExactLiveName(t *testing.T) {
 	}
 }
 
+func TestInstallerLifecycleCommandsAreFencedDuringActiveUpdate(t *testing.T) {
+	operation, plan := activeUpdateOperation(t)
+	renderer := cliui.Renderer{Output: io.Discard, Diagnostic: io.Discard, Capabilities: cliui.ForWriter(io.Discard, io.Discard), OutputMode: cliui.OutputPlain, ColorMode: cliui.ColorNever}
+
+	if err := runInstallResumeWith(context.Background(), operation, renderer, systemInstallResumeDependencies(renderer)); err == nil || !strings.Contains(err.Error(), "update --resume") {
+		t.Fatalf("install resume during update = %v", err)
+	}
+	uninstallCalled := false
+	err := runInstallUninstallWith(context.Background(), operation, renderer, installUninstallDependencies{
+		OwnerUID: os.Getuid(),
+		Now:      time.Now,
+		ValidateTeardown: func(install.InstallPlan, install.InstallReceipt) error {
+			uninstallCalled = true
+			return nil
+		},
+		ComposeDown: func(context.Context, string) error {
+			uninstallCalled = true
+			return nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "update is incomplete") || uninstallCalled {
+		t.Fatalf("uninstall during update = %v, side effect = %t", err, uninstallCalled)
+	}
+	recoveryCalled := false
+	err = runInstallComposeRecoveryWith(context.Background(), operation, renderer, installComposeRecoveryDependencies{
+		OwnerUID: os.Getuid(),
+		Now:      time.Now,
+		HostVerify: func(context.Context, string, string) error {
+			recoveryCalled = true
+			return nil
+		},
+		ValidateTeardown: func(install.InstallPlan, install.InstallReceipt) error {
+			recoveryCalled = true
+			return nil
+		},
+		ComposeDown: func(context.Context, string) error {
+			recoveryCalled = true
+			return nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "update is incomplete") || recoveryCalled {
+		t.Fatalf("Compose recovery during update = %v, side effect = %t", err, recoveryCalled)
+	}
+
+	readPlan, readReceipt, err := install.ReadOperation(operation, os.Getuid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readPlan.OperationID != plan.OperationID || readReceipt.Status != install.OperationSucceeded {
+		t.Fatalf("fenced commands changed operation = %#v %#v", readPlan, readReceipt)
+	}
+	if _, active := readReceipt.ActiveUpdate(); !active {
+		t.Fatal("fenced commands removed active update")
+	}
+}
+
+func activeUpdateOperation(t *testing.T) (string, install.InstallPlan) {
+	t.Helper()
+	operation := filepath.Join(t.TempDir(), "operation")
+	verified := fakeGuidedRelease()
+	plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), CLITenantRef: "tenant-reviewed", CLISubjectRef: "subject-reviewed", BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: 86400})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(operation, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := install.NewReceipt(plan, plan.CreatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, stage := range install.StageSequence {
+		if err := receipt.CompleteStage(stage, plan.CreatedAt.Add(time.Duration(index+1)*time.Second), map[string]string{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := plan.Release
+	target.Version = "0.5.0"
+	target.ArtifactManifestURL = releasecontract.ArtifactManifestLocation(target.Version)
+	target.ArtifactManifestDigest = "sha256:" + strings.Repeat("9", 64)
+	if err := receipt.BeginUpdate("update_0123456789abcdef", plan.Release, target, plan.CreatedAt.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := install.WriteAccepted(operation, plan, receipt); err != nil {
+		t.Fatal(err)
+	}
+	return operation, plan
+}
+
 func TestOrdinaryUninstallStopsComposeAndPreservesDurableResources(t *testing.T) {
 	operation := filepath.Join(t.TempDir(), "operation")
 	verified := fakeGuidedRelease()

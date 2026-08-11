@@ -138,6 +138,9 @@ func runUpdateWith(ctx context.Context, directory string, check, resume bool, re
 	}
 	active, hasActive := receipt.ActiveUpdate()
 	if hasActive {
+		if receipt.Status != install.OperationSucceeded {
+			return errors.New("SecondBox installer update: incomplete update requires a successful installation receipt")
+		}
 		if !resume {
 			return errors.New("SecondBox installer update: an update is incomplete; resume it with update --resume " + absolute)
 		}
@@ -205,8 +208,12 @@ func validateNewUpdate(ctx context.Context, plan install.InstallPlan, receipt in
 	if !sameUpdateTarget(target, releasePlan(targetVerified, target.ArtifactManifestURL)) {
 		return errors.New("SecondBox installer update: target release verification changed")
 	}
-	if err := validateUpdateSource(ctx, plan, receipt, dependencies); err != nil {
+	sourceVerified, err := validateUpdateSource(ctx, plan, receipt, dependencies)
+	if err != nil {
 		return err
+	}
+	if err := install.ValidateUpdateAssetCompatibility(sourceVerified.Manifest, targetVerified.Manifest); err != nil {
+		return fmt.Errorf("SecondBox installer update: %w", err)
 	}
 	active, err := dependencies.Quiescent(ctx, plan)
 	if err != nil {
@@ -218,28 +225,34 @@ func validateNewUpdate(ctx context.Context, plan install.InstallPlan, receipt in
 	return nil
 }
 
-func validateUpdateSource(ctx context.Context, plan install.InstallPlan, receipt install.InstallReceipt, dependencies updateDependencies) error {
+func validateUpdateSource(ctx context.Context, plan install.InstallPlan, receipt install.InstallReceipt, dependencies updateDependencies) (releaseverify.VerifiedRelease, error) {
 	if err := install.ValidateRecordedResources(plan, receipt); err != nil {
-		return err
+		return releaseverify.VerifiedRelease{}, err
 	}
 	sourceVerified, err := dependencies.VerifyRelease(ctx, plan.Release.ArtifactManifestURL)
 	if err != nil {
-		return err
+		return releaseverify.VerifiedRelease{}, err
 	}
 	if !sameUpdateTarget(plan.Release, releasePlan(sourceVerified, plan.Release.ArtifactManifestURL)) {
-		return errors.New("SecondBox installer update: active release differs from its verified public identity")
+		return releaseverify.VerifiedRelease{}, errors.New("SecondBox installer update: active release differs from its verified public identity")
 	}
 	artifact, err := install.VerifyArtifactDirectory(installerPlannedPath(plan, "artifacts"), sourceVerified.Manifest)
 	if err != nil {
-		return err
+		return releaseverify.VerifiedRelease{}, err
 	}
-	return deployconfig.ValidateSingleHostUpdateSource(plan, sourceVerified.Manifest, sourceVerified.ManifestBytes, artifact)
+	if err := deployconfig.ValidateSingleHostUpdateSource(plan, sourceVerified.Manifest, sourceVerified.ManifestBytes, artifact); err != nil {
+		return releaseverify.VerifiedRelease{}, err
+	}
+	return sourceVerified, nil
 }
 
 func continueUpdate(ctx context.Context, directory string, plan install.InstallPlan, receipt install.InstallReceipt, update install.UpdateRecord, target releaseverify.VerifiedRelease, renderer cliui.Renderer, dependencies updateDependencies) error {
 	source, err := dependencies.VerifyRelease(ctx, update.SourceRelease.ArtifactManifestURL)
 	if err != nil {
 		return err
+	}
+	if err := install.ValidateUpdateAssetCompatibility(source.Manifest, target.Manifest); err != nil {
+		return fmt.Errorf("SecondBox installer update: %w", err)
 	}
 	persist := func() error { return dependencies.SaveReceipt(directory, plan, receipt, dependencies.OwnerUID) }
 	fail := func(stage install.UpdateStage, class install.FailureClass, problem error) error {
@@ -471,7 +484,13 @@ func mutateInstalledUpdateSandbox(ctx context.Context, plan install.InstallPlan,
 	if err := json.Unmarshal(stdout.Bytes(), &sandbox); err != nil {
 		return fmt.Errorf("SecondBox installer update decode retained smoke Sandbox before %s: %w", action, err)
 	}
-	idempotencyKey := fmt.Sprintf("installer-update-%s-%s-%s", buildinfo.Version, action, sandboxID)
+	mutate, idempotencyKey, err := installedUpdateSandboxMutation(sandbox, action)
+	if err != nil {
+		return err
+	}
+	if !mutate {
+		return nil
+	}
 	command, _, stderr = installedCLICommand(ctx, plan,
 		"--output", "plain", "sandboxes", action,
 		"--path", "sandboxId="+sandboxID,
@@ -482,6 +501,28 @@ func mutateInstalledUpdateSandbox(ctx context.Context, plan install.InstallPlan,
 		return fmt.Errorf("SecondBox installer update %s retained smoke Sandbox: %w: %s", action, err, cliui.Sanitize(stderr.String()))
 	}
 	return nil
+}
+
+func installedUpdateSandboxMutation(sandbox contracts.Sandbox, action string) (bool, string, error) {
+	target := ""
+	switch action {
+	case "start":
+		target = contracts.SandboxDesiredStateRunning
+	case "stop":
+		target = contracts.SandboxDesiredStateStopped
+	default:
+		return false, "", fmt.Errorf("SecondBox installer update retained smoke Sandbox action is invalid: %s", action)
+	}
+	// A matching desired state means a prior request may have committed even if
+	// its response was lost. Continue waiting instead of issuing a second intent.
+	if sandbox.DesiredState == target {
+		return false, "", nil
+	}
+	if sandbox.ID == "" || sandbox.Revision < 1 {
+		return false, "", errors.New("SecondBox installer update retained smoke Sandbox identity or revision is invalid")
+	}
+	key := fmt.Sprintf("installer-update-%s-%s-%s-revision-%d", buildinfo.Version, action, sandbox.ID, sandbox.Revision)
+	return true, key, nil
 }
 
 func waitForInstalledSandboxState(ctx context.Context, plan install.InstallPlan, sandboxID, target string) error {

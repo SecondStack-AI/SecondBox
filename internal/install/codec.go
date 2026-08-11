@@ -491,6 +491,9 @@ func (receipt InstallReceipt) Validate(planDigest, hostIdentity, operationID str
 	if err := validateUpdateRecords(receipt.Updates); err != nil {
 		return err
 	}
+	if _, active := receipt.ActiveUpdate(); active && receipt.Status != OperationSucceeded {
+		return installerError("active update requires a successful installation receipt", nil)
+	}
 	return nil
 }
 

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SecondStack-AI/SecondBox/pkg/releasecontract"
 	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
 )
 
@@ -143,6 +144,44 @@ func TestFailedUpdateResumesAtFirstIncompleteStage(t *testing.T) {
 	update, ok := receipt.ActiveUpdate()
 	if !ok || update.Status != UpdateRunning || len(update.CompletedStages) != 2 || update.FailureStage != "" {
 		t.Fatalf("resumed update = %#v, active %v", update, ok)
+	}
+}
+
+func TestUpdateRequiresAssetsCompatibleWithPinnedProfileRevisions(t *testing.T) {
+	runtimeDigest := "sha256:" + strings.Repeat("a", 64)
+	toolchainDigest := "sha256:" + strings.Repeat("b", 64)
+	source := releasecontract.ArtifactManifest{MicroVM: releasecontract.MicroVMArtifact{
+		RuntimeBundle:   releasecontract.SignedComponent{ManifestDigest: runtimeDigest},
+		ToolchainBundle: releasecontract.SignedComponent{ManifestDigest: toolchainDigest},
+	}}
+	target := source
+	if err := ValidateUpdateAssetCompatibility(source, target); err != nil {
+		t.Fatalf("unchanged execution assets = %v", err)
+	}
+	target.MicroVM.RuntimeBundle.ManifestDigest = "sha256:" + strings.Repeat("c", 64)
+	if err := ValidateUpdateAssetCompatibility(source, target); err == nil || !strings.Contains(err.Error(), "pinned") {
+		t.Fatalf("changed runtime asset = %v", err)
+	}
+	target = source
+	target.MicroVM.ToolchainBundle.ManifestDigest = "sha256:" + strings.Repeat("d", 64)
+	if err := ValidateUpdateAssetCompatibility(source, target); err == nil || !strings.Contains(err.Error(), "pinned") {
+		t.Fatalf("changed toolchain asset = %v", err)
+	}
+}
+
+func TestReceiptRejectsLifecycleStateDuringActiveUpdate(t *testing.T) {
+	plan := validPlan(t)
+	receipt := successfulReceipt(t, plan)
+	if err := receipt.BeginUpdate("update_0123456789abcdef", plan.Release, targetRelease(plan, "0.5.0"), plan.CreatedAt.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	receipt.Status = OperationUninstalled
+	encoded, err := Canonical(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeReceipt(encoded, plan); err == nil || !strings.Contains(err.Error(), "active update requires") {
+		t.Fatalf("conflicting lifecycle state = %v", err)
 	}
 }
 

@@ -144,6 +144,9 @@ func runInstallResumeWith(ctx context.Context, directory string, renderer cliui.
 	if err != nil {
 		return err
 	}
+	if _, active := receipt.ActiveUpdate(); active {
+		return errors.New("SecondBox installer resume: an update is incomplete; use secondbox-deploy update --resume " + absolute)
+	}
 	last := lastInstallStage(receipt)
 	if slices.Index(install.StageSequence, last) >= slices.Index(install.StageSequence, install.StagePlanAccepted) &&
 		receipt.Status != install.OperationPurging && receipt.Status != install.OperationPurged && receipt.Status != install.OperationUninstalling {
@@ -170,6 +173,9 @@ func runInstallResumeWith(ctx context.Context, directory string, renderer cliui.
 	plan, receipt, err = install.ReadOperation(absolute, dependencies.OwnerUID)
 	if err != nil {
 		return err
+	}
+	if _, active := receipt.ActiveUpdate(); active {
+		return errors.New("SecondBox installer resume: an update is incomplete; use secondbox-deploy update --resume " + absolute)
 	}
 	last = lastInstallStage(receipt)
 	if receipt.Status == install.OperationPurging || receipt.Status == install.OperationPurged {
@@ -758,6 +764,9 @@ func runInstallComposeRecoveryWith(ctx context.Context, directory string, render
 	if err != nil {
 		return err
 	}
+	if _, active := receipt.ActiveUpdate(); active {
+		return errors.New("SecondBox installer Compose recovery: an update is incomplete; resume it before recovery")
+	}
 	if err := validatePartialComposeRecoveryState(receipt); err != nil {
 		return err
 	}
@@ -778,6 +787,9 @@ func runInstallComposeRecoveryWith(ctx context.Context, directory string, render
 	plan, receipt, err = install.ReadOperation(absolute, dependencies.OwnerUID)
 	if err != nil {
 		return err
+	}
+	if _, active := receipt.ActiveUpdate(); active {
+		return errors.New("SecondBox installer Compose recovery: an update is incomplete; resume it before recovery")
 	}
 	if err := validatePartialComposeRecoveryState(receipt); err != nil {
 		return err
@@ -880,6 +892,9 @@ func runInstallUninstallWith(ctx context.Context, directory string, renderer cli
 	plan, receipt, err := install.ReadOperation(absolute, dependencies.OwnerUID)
 	if err != nil {
 		return err
+	}
+	if _, active := receipt.ActiveUpdate(); active {
+		return errors.New("SecondBox installer uninstall: an update is incomplete; resume it before uninstalling")
 	}
 	if receipt.Status == install.OperationUninstalled {
 		return writeUninstallSummary(renderer, plan)
