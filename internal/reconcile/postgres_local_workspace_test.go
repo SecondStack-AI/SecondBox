@@ -162,6 +162,108 @@ func TestFencedRunnerLossQueuesHomeLocalAdvanceWithoutRelocation(t *testing.T) {
 	}
 }
 
+func TestFencedRunnerLossReplacesItsExpiredStartMutation(t *testing.T) {
+	store := openReconcileTestDatabase(t)
+	now := time.Date(2026, 8, 11, 13, 0, 0, 0, time.UTC)
+	token := []byte("01234567890123456789012345678901")
+	if _, err := store.pool.Exec(t.Context(), `
+		INSERT INTO secondbox.workspaces (
+			id,tenant_ref,subject_ref,sandbox_id,home_runner_id,state,logical_capacity_bytes,
+			generation,mutation_kind,mutation_id,mutation_effect_id,mutation_operation_id,
+			mutation_expected_generation,mutation_target_generation,mutation_state,
+			local_receipt_json,created_at,updated_at
+		) VALUES (
+			'workspace-start-loss','tenant','subject','sandbox-start-loss','runner-home','ready',
+			8589934592,3,'start','operation-start','command-start','operation-start',
+			3,3,'assigned','{}',$1,$1
+		);
+		INSERT INTO secondbox.sandboxes (
+			id,tenant_ref,subject_ref,profile_name,profile_revision_id,state,desired_state,
+			generation,workspace_id,current_instance_id,metadata_json,compatibility_summary_json,
+			revision,created_at,updated_at
+		) VALUES (
+			'sandbox-start-loss','tenant','subject','profile','revision','starting','running',
+			3,'workspace-start-loss','instance-start-loss','{}','{}',4,$1,$1
+		);
+		INSERT INTO secondbox.instances (
+			id,sandbox_id,generation,state,guest_liveness,termination_reason,
+			created_at,updated_at,stopped_at
+		) VALUES (
+			'instance-start-loss','sandbox-start-loss',3,'stopped','stopped','runner_lost',
+			$1,$1,$1
+		);
+		INSERT INTO secondbox.assignments (
+			id,sandbox_id,instance_id,runner_id,profile_revision_id,backend_kind,
+			backend_reference,generation,fencing_token,state,capability_snapshot_json,
+			resolved_artifacts_json,release_proof_json,failure_class,retry_count,retry_limit,
+			operation_deadline,claim_expires_at,reconcile_owner,reconcile_claim_expires_at,
+			next_reconcile_at,revision,created_at,updated_at
+		) VALUES (
+			'assignment-start-loss','sandbox-start-loss','instance-start-loss','runner-home',
+			'revision','firecracker','',3,$2,'fenced','{}','{}',
+			'{"terminationEvidenceDigest":"sha256:proved"}','fencing',0,8,
+			$3,$3,'worker',$3,$1,7,$1,$1
+		);
+		INSERT INTO secondbox.runner_commands (
+			id,runner_id,assignment_id,kind,payload,state,target_connection_id,
+			delivery_count,created_at,updated_at,delivered_at
+		) VALUES (
+			'command-start','runner-home','assignment-start-loss','assignment',
+			''::bytea,'pending','',0,$1,$1,NULL
+		)`,
+		pgx.QueryExecModeSimpleProtocol, now, token, now.Add(time.Minute),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.AdvanceFencedGeneration(
+		t.Context(), "assignment-start-loss", 7, now.Add(time.Second),
+	); !errors.Is(err, ports.ErrWorkspaceMutation) {
+		t.Fatalf("advance with a live start command = %v, want Workspace mutation conflict", err)
+	}
+	if _, err := store.pool.Exec(t.Context(), `
+		UPDATE secondbox.runner_commands SET state='expired'
+		WHERE id='command-start'`); err != nil {
+		t.Fatal(err)
+	}
+	nextGeneration, err := store.AdvanceFencedGeneration(
+		t.Context(), "assignment-start-loss", 7, now.Add(time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nextGeneration != 4 {
+		t.Fatalf("reported next generation = %d", nextGeneration)
+	}
+	var sandboxState, assignmentState, mutationKind, mutationState string
+	var pendingAdvanceCommands int64
+	if err := store.pool.QueryRow(t.Context(), `
+		SELECT sandbox.state,assignment.state,workspace.mutation_kind,
+		       workspace.mutation_state,
+		       (SELECT count(*) FROM secondbox.runner_commands
+		        WHERE assignment_id='runner-loss-stop-assignment-start-loss'
+		          AND kind='local-workspace' AND state='pending')
+		FROM secondbox.sandboxes AS sandbox
+		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+		JOIN secondbox.assignments AS assignment ON assignment.id='assignment-start-loss'
+		WHERE sandbox.id='sandbox-start-loss'`,
+	).Scan(
+		&sandboxState, &assignmentState, &mutationKind, &mutationState,
+		&pendingAdvanceCommands,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if sandboxState != "stopping" || assignmentState != "released" ||
+		mutationKind != "stop" || mutationState != "advancing" ||
+		pendingAdvanceCommands != 1 {
+		t.Fatalf(
+			"state=%q assignment=%q mutation=%q/%q pending advances=%d",
+			sandboxState, assignmentState, mutationKind, mutationState,
+			pendingAdvanceCommands,
+		)
+	}
+}
+
 func TestClaimNextDefersAssignmentWithInvalidCommandPayload(t *testing.T) {
 	store := openReconcileTestDatabase(t)
 	now := time.Date(2026, 8, 6, 13, 45, 0, 0, time.UTC)
