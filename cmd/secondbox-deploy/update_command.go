@@ -20,6 +20,8 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
 )
 
+const minimumGuidedUpdateSourceVersion = "0.5.1"
+
 type updateDependencies struct {
 	OwnerUID      int
 	Now           func() time.Time
@@ -285,6 +287,13 @@ func verifyRecordedResumeTarget(ctx context.Context, receipt install.InstallRece
 func validateNewUpdate(ctx context.Context, plan install.InstallPlan, receipt install.InstallReceipt, target install.ReleasePlan, targetVerified releaseverify.VerifiedRelease, dependencies updateDependencies) error {
 	if receipt.Status != install.OperationSucceeded || len(receipt.CompletedStages) != len(install.StageSequence) {
 		return errors.New("SecondBox installer update: only a successful complete guided installation can be updated")
+	}
+	sourceComparison, err := releasecontract.CompareVersions(plan.Release.Version, minimumGuidedUpdateSourceVersion)
+	if err != nil {
+		return err
+	}
+	if sourceComparison < 0 {
+		return fmt.Errorf("SecondBox installer update: active release %s predates the minimum supported guided-update source %s; install a fresh deployment and migrate workloads explicitly", plan.Release.Version, minimumGuidedUpdateSourceVersion)
 	}
 	comparison, err := releasecontract.CompareVersions(target.Version, plan.Release.Version)
 	if err != nil {

@@ -131,6 +131,24 @@ func TestUpdateTargetIdentityIncludesEveryReleaseInput(t *testing.T) {
 	}
 }
 
+func TestGuidedUpdateRejectsSourceBeforeV051WithoutConsultingReleaseInputs(t *testing.T) {
+	plan := install.InstallPlan{Release: installReleasePlanFixture()}
+	plan.Release.Version = "0.4.7"
+	receipt := install.InstallReceipt{Status: install.OperationSucceeded, CompletedStages: make([]install.StageRecord, len(install.StageSequence))}
+	target := installReleasePlanFixture()
+	target.Version = "0.5.2"
+	verified := false
+	err := validateNewUpdate(context.Background(), plan, receipt, target, releaseverify.VerifiedRelease{}, updateDependencies{
+		VerifySource: func(context.Context, string) (releaseverify.VerifiedRelease, error) {
+			verified = true
+			return releaseverify.VerifiedRelease{}, nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "minimum supported guided-update source 0.5.1") || verified {
+		t.Fatalf("historical source rejection = %v, verified=%t", err, verified)
+	}
+}
+
 func TestCompletedUpdateMatchesOnlyExactSucceededTarget(t *testing.T) {
 	target := installReleasePlanFixture()
 	receipt := install.InstallReceipt{Updates: []install.UpdateRecord{{TargetRelease: target, Status: install.UpdateSucceeded}}}

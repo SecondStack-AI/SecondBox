@@ -32,54 +32,6 @@ func TestRecordedBundleAcceptsImmutablePrefixAfterPolicyAppends(t *testing.T) {
 	}
 }
 
-func TestRecordedBundleAcceptsV04ArtifactRetentionProfile(t *testing.T) {
-	// This is the first agent-compartment Profile revision published by v0.4.7.
-	// Its digest includes artifactRetentionSeconds, a field intentionally removed
-	// from the current public Profile contract in v0.5.0.
-	content := []byte(`{
-  "schemaVersion":"secondbox.standard-bundle/v2",
-  "name":"agent-compartment",
-  "architecture":"amd64",
-  "runnerPoolSelector":"standard-amd64",
-  "logicalGateway":"agent-gateway.secondbox.internal",
-  "signedManifestDigest":"sha256:ced70a4475c251d297cabe77331f0680b23e162d318d94841d308ed7ec554332",
-  "runtimeBundleDigest":"sha256:9279ca3f8bc3eac4adcd1953926a33fc42da99641d60af042eea12eb12ba0335",
-  "toolchainBundleDigest":"sha256:cd859a7b0ef9849cc842c8b9c4d0b3b21340e50bed1ac712126585a9fa5553b4",
-  "profile":{"name":"agent-compartment","revisions":[{
-    "number":1,
-    "specDigest":"sha256:ea4f38d9276ed6c7c519bc3ce677a035e8549434af8d00aae890815e9e3b2a08",
-    "spec":{
-      "pool":"standard-amd64",
-      "architecture":"amd64",
-      "runtimeBundleDigest":"sha256:9279ca3f8bc3eac4adcd1953926a33fc42da99641d60af042eea12eb12ba0335",
-      "toolchainBundleDigest":"sha256:cd859a7b0ef9849cc842c8b9c4d0b3b21340e50bed1ac712126585a9fa5553b4",
-      "resources":{"cpuMillis":1000,"memoryBytes":1073741824,"workspaceBytes":2147483648,"processLimit":64,"concurrentOperations":4},
-      "startup":{"mode":"cold_boot"},
-      "lifecycle":{"initialState":"running","drainGraceSeconds":10,"idleSeconds":60,"maximumDurationSeconds":900,"leaseSeconds":60},
-      "retention":{"snapshotLimit":0,"snapshotRetentionSeconds":3600,"artifactRetentionSeconds":86400},
-      "execution":{"maximumDeadlineMilliseconds":120000,"maximumBufferedOutputBytes":1048576,"streamWindowBytes":65536,"maximumTransferBytes":268435456,"terminalDetachSeconds":0,"dataPlaneTransport":"proxied"},
-      "network":{"mode":"allow_list","destinations":[{"protocol":"https","domain":"agent-gateway.secondbox.internal","port":443}]},
-      "ports":[]
-    }
-  }]},
-  "parameterSchema":{}
-}`)
-	if _, err := DecodeDocument(content); err == nil || !strings.Contains(err.Error(), "artifactRetentionSeconds") {
-		t.Fatalf("current decoder accepted historical Profile wire shape: %v", err)
-	}
-	recorded, err := DecodeRecordedDocument(content)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := recorded.Profile.Revisions[0].SpecDigest; got != "sha256:ea4f38d9276ed6c7c519bc3ce677a035e8549434af8d00aae890815e9e3b2a08" {
-		t.Fatalf("recorded v0.4.7 Profile digest = %q", got)
-	}
-	unknown := []byte(strings.Replace(string(content), "artifactRetentionSeconds", "unknownRetentionSeconds", 1))
-	if _, err := DecodeRecordedDocument(unknown); err == nil {
-		t.Fatal("recorded decoder accepted an unknown historical Profile field")
-	}
-}
-
 func TestStandardProfilesHaveFixedArchitectureCapabilitiesAndGatewayBounds(t *testing.T) {
 	runtimeDigest := v030RuntimeBundleDigest
 	toolchainDigest := v030ToolchainBundleDigest
