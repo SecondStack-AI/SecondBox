@@ -215,6 +215,32 @@ func TestRecoverOperationDiscardsSafeMarkerlessStagedDocuments(t *testing.T) {
 	}
 }
 
+func TestRecoverOperationDiscardsEmptyMarkerlessCrashResidue(t *testing.T) {
+	directory, plan, _ := acceptedFixture(t)
+	for _, name := range []string{operationPlanStageName, operationReceiptStageName} {
+		if err := os.WriteFile(filepath.Join(directory, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lock, err := AcquireLock(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveredPlan, _, recoverErr := RecoverOperation(directory, os.Getuid(), lock)
+	closeErr := lock.Close()
+	if recoverErr != nil || closeErr != nil {
+		t.Fatalf("empty markerless recovery = %v, close = %v", recoverErr, closeErr)
+	}
+	if recoveredPlan.OperationID != plan.OperationID {
+		t.Fatalf("recovered operation = %s, want %s", recoveredPlan.OperationID, plan.OperationID)
+	}
+	for _, name := range []string{operationPlanStageName, operationReceiptStageName} {
+		if _, err := os.Lstat(filepath.Join(directory, name)); !os.IsNotExist(err) {
+			t.Fatalf("empty crash residue %s remains: %v", name, err)
+		}
+	}
+}
+
 func TestRecoverOperationRequiresMatchingLiveLock(t *testing.T) {
 	directory, _, _ := acceptedFixture(t)
 	otherDirectory, _, _ := acceptedFixture(t)

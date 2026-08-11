@@ -49,6 +49,9 @@ func systemUpdateDependencies(renderer cliui.Renderer) updateDependencies {
 		},
 		Materializer: install.SystemReleaseMaterializer{Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic, HTTPClient: httpClient},
 		Compose: func(ctx context.Context, manifestPath, action string) error {
+			if action == "stop-control-plane" || action == "start-control-plane" {
+				return deployconfig.RunExistingComposeForAcceptedInstaller(ctx, manifestPath, action, deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic})
+			}
 			return deployconfig.RunComposeForAcceptedInstaller(ctx, manifestPath, action, deployconfig.SystemComposeExecutor{Input: os.Stdin, Output: renderer.Diagnostic, Diagnostic: renderer.Diagnostic}, httpClient)
 		},
 		Readiness: waitForInstalledRunner,
@@ -390,7 +393,7 @@ func continueUpdate(ctx context.Context, directory string, plan install.InstallP
 			return fail(install.UpdateStageActivationStarted, install.FailureRetryable, fmt.Errorf("SecondBox installer update fence control-plane admission: %w", err))
 		}
 		restoreSource := func(problem error) error {
-			return errors.Join(problem, dependencies.Compose(ctx, manifestPath, "up"))
+			return errors.Join(problem, dependencies.Compose(ctx, manifestPath, "start-control-plane"))
 		}
 		active, err = dependencies.Quiescent(ctx, plan)
 		if err != nil {
@@ -667,7 +670,7 @@ func installedUpdateSandboxMutation(sandbox contracts.Sandbox, action string) (b
 	}
 	// A matching desired state means a prior request may have committed even if
 	// its response was lost. Continue waiting instead of issuing a second intent.
-	if sandbox.DesiredState == target {
+	if sandbox.DesiredState == target && !(action == "start" && sandbox.State == contracts.SandboxStateFailed) {
 		return false, "", nil
 	}
 	if sandbox.ID == "" || sandbox.Revision < 1 {

@@ -22,8 +22,45 @@ type StagedSingleHostUpdate struct {
 }
 
 func ValidateSingleHostUpdateSource(plan install.InstallPlan, release releasecontract.ArtifactManifest, releaseBytes []byte, artifact install.VerifiedArtifact) error {
-	_, err := validateExistingSingleHostInstall(plan, release, releaseBytes, artifact)
-	return err
+	if err := release.Validate(); err != nil {
+		return err
+	}
+	if releasecontract.Digest(releaseBytes) != plan.Release.ArtifactManifestDigest || release.Version != plan.Release.Version ||
+		release.ControlPlane.Reference != plan.Release.Images["control-plane"] || release.Runner.Reference != plan.Release.Images["runner"] ||
+		release.MicroVM.ImageReference != plan.Release.Images["microvm-artifacts"] || release.InstallerTools.Reference != plan.Release.Images["installer-tools"] ||
+		release.BundledServices.Postgres != plan.Release.Images["postgres"] ||
+		release.MicroVM.SigningKeyFingerprint != plan.Release.SigningKeyFingerprint || artifact.ManifestDigest != release.MicroVM.SignedManifestDigest ||
+		artifact.SigningKeyID != strings.ToLower(strings.TrimPrefix(release.MicroVM.SigningKeyFingerprint, "SHA256:")) {
+		return manifestError("existing single-host release identity differs from the accepted install plan", nil)
+	}
+	for _, name := range []string{"secondbox", "secondbox-deploy"} {
+		binary, found := releaseBinary(release, name)
+		if !found || binary.SHA256 != plan.Release.BinaryDigests[name] {
+			return manifestError("existing single-host binary identity differs from the accepted install plan: "+name, nil)
+		}
+	}
+	actualReleaseBytes, err := readSingleHostPlannedFile(plan, "release-artifact-manifest")
+	if err != nil || !bytes.Equal(actualReleaseBytes, releaseBytes) {
+		return manifestError("existing single-host release manifest differs from the verified release", err)
+	}
+	catalog := struct {
+		Assets []assetcatalog.SignedAsset `json:"assets"`
+	}{Assets: []assetcatalog.SignedAsset{
+		componentAsset(release.MicroVM.RuntimeBundle, artifact.SigningKeyID, release.GuestProtocol.Maximum),
+		componentAsset(release.MicroVM.ToolchainBundle, artifact.SigningKeyID, release.GuestProtocol.Maximum),
+	}}
+	expectedCatalog, err := json.Marshal(catalog)
+	if err != nil {
+		return err
+	}
+	actualCatalog, err := readSingleHostPlannedFile(plan, "signed-asset-catalog")
+	if err != nil || !bytes.Equal(actualCatalog, append(expectedCatalog, '\n')) {
+		return manifestError("existing single-host signed-asset catalog differs from the verified release", err)
+	}
+	// The accepted plan/receipt ledger validates the active manifest's exact
+	// recorded bytes. Do not regenerate a source-era manifest with target-era
+	// code-owned policy, tuning, Compose assets, or Profile lineage here.
+	return nil
 }
 
 func StageSingleHostUpdate(plan install.InstallPlan, update install.UpdateRecord, verified releaseverify.VerifiedRelease, artifact install.VerifiedArtifact) (StagedSingleHostUpdate, error) {

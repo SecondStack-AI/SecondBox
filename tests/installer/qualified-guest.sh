@@ -20,7 +20,7 @@ phase="${1:-}"
 mode="${2:-}"
 release_directory="${3:-}"
 [[ "$phase" == install || "$phase" == verify ]] || { echo 'qualified guest phase must be install or verify' >&2; exit 2; }
-[[ "$mode" == btrfs_image || "$mode" == existing_reflink_filesystem ]] || { echo 'qualified guest mode is invalid' >&2; exit 2; }
+[[ "$mode" == btrfs_image || "$mode" == existing_reflink_filesystem || "$mode" == existing_reflink_update ]] || { echo 'qualified guest mode is invalid' >&2; exit 2; }
 [[ "$release_directory" == /* && -d "$release_directory" && ! -L "$release_directory" ]] || { echo 'qualified guest release directory is unsafe' >&2; exit 1; }
 
 qualification_root="$HOME/.secondbox-installer-qualification"
@@ -94,7 +94,7 @@ if [[ "$phase" == install ]]; then
   [[ -z "$(find "$HOME" -maxdepth 1 -type d -name 'secondbox-install_*' -print -quit)" ]] || { echo 'qualified guest has a prior installer operation' >&2; exit 1; }
   [[ -z "$(docker ps -a --filter label=com.docker.compose.project --format '{{.Names}}' | grep secondbox || true)" ]] || { echo 'qualified guest has prior SecondBox containers' >&2; exit 1; }
 
-  if [[ "$mode" == existing_reflink_filesystem ]]; then
+  if [[ "$mode" == existing_reflink_filesystem || "$mode" == existing_reflink_update ]]; then
     sudo mkfs.btrfs -q -f -L secondbox-qualification /dev/vdb
     sudo install -d -m 0755 /srv/secondbox-dedicated
     data_uuid="$(sudo blkid -s UUID -o value /dev/vdb)"
@@ -116,8 +116,10 @@ if [[ "$phase" == install ]]; then
   printf '%s  %s\n' "$binary_digest" "$deploy" | sha256sum --check --status
   grep -F -- "$binary_digest" "$release_directory/$bootstrap" >/dev/null
 
-  update_qualified=false
-  if [[ "$mode" == existing_reflink_filesystem ]]; then
+  update_attempt='not_run'
+  source_sandbox_lineage=''
+  source_deploy=''
+  if [[ "$mode" == existing_reflink_update ]]; then
     source_bootstrap="$qualification_root/source-install.sh"
     curl --fail --location --proto '=https' --tlsv1.2 --output "$source_bootstrap" https://github.com/SecondStack-AI/SecondBox/releases/latest/download/install.sh
     source_version="$(sed -n "s/^version='\([^']*\)'$/\1/p" "$source_bootstrap")"
@@ -154,21 +156,30 @@ if [[ "$phase" == install ]]; then
     done
     [[ "$source_state" == stopped ]] || { echo 'qualified update source Sandbox did not stop' >&2; exit 1; }
     setup_candidate_registry
-    "$deploy" --output json update --check "$operation" --candidate-directory "$release_directory" >"$qualification_root/update-check-${mode}.json"
-    printf 'y\n' | "$deploy" --accessible update "$operation" --candidate-directory "$release_directory" >"$qualification_root/update-${mode}.log" 2>&1
-    jq -e --arg source "$source_version" --arg target "$candidate_version" '
-      .schemaVersion == "secondbox.install.receipt/v2" and
-      .updates[-1].status == "succeeded" and
-      .updates[-1].sourceRelease.version == $source and
-      .updates[-1].targetRelease.version == $target and
-      .updates[-1].completedStages[-1].stage == "smoke_execution" and
-      .updates[-1].completedStages[-1].evidence.postUpdateState == "stopped"
-    ' "$receipt" >/dev/null
-    jq -e --arg source "$source_version" --arg target "$candidate_version" '
-      .schemaVersion == "secondbox.install.plan/v2" and .release.version == $target and
-      .releaseHistory[0].release.version == $source and .releaseHistory[-1].release.version == $target
-    ' "$plan" >/dev/null
-    update_qualified=true
+    if "$deploy" --output json update --check "$operation" --candidate-directory "$release_directory" >"$qualification_root/update-check-${mode}.json" 2>"$qualification_root/update-check-${mode}.log"; then
+      printf 'y\n' | "$deploy" --accessible update "$operation" --candidate-directory "$release_directory" >"$qualification_root/update-${mode}.log" 2>&1
+      jq -e --arg source "$source_version" --arg target "$candidate_version" '
+        .schemaVersion == "secondbox.install.receipt/v2" and
+        .updates[-1].status == "succeeded" and
+        .updates[-1].sourceRelease.version == $source and
+        .updates[-1].targetRelease.version == $target and
+        .updates[-1].completedStages[-1].stage == "smoke_execution" and
+        .updates[-1].completedStages[-1].evidence.postUpdateState == "stopped"
+      ' "$receipt" >/dev/null
+      jq -e --arg source "$source_version" --arg target "$candidate_version" '
+        .schemaVersion == "secondbox.install.plan/v2" and .release.version == $target and
+        .releaseHistory[0].release.version == $source and .releaseHistory[-1].release.version == $target
+      ' "$plan" >/dev/null
+      update_attempt='succeeded'
+    else
+      grep -F 'update target changes execution assets pinned by existing Sandbox Profile revisions' "$qualification_root/update-check-${mode}.log" >/dev/null || {
+        echo 'qualified update check failed for a reason other than execution-asset incompatibility' >&2
+        exit 1
+      }
+      jq -e --arg source "$source_version" '.release.version == $source' "$plan" >/dev/null
+      jq -e '.status == "succeeded" and ((.updates // []) | length) == 0' "$receipt" >/dev/null
+      update_attempt='incompatible'
+    fi
   else
     setup_candidate_registry
     install_log="$qualification_root/install-${mode}.log"
@@ -204,8 +215,8 @@ if [[ "$phase" == install ]]; then
   jq -n --arg operation "$operation" --arg operationId "$operation_id" --arg workspace "$workspace" \
     --arg artifacts "$artifacts" --arg manifest "$manifest_path" --arg cliBinary "$cli_binary" --arg cliConfig "$cli_config" \
     --arg artifactFingerprint "$(artifact_fingerprint "$artifacts")" --arg filesystemIdentity "$filesystem_identity" --arg neighbor "$neighbor" \
-    --arg sourceSandboxLineage "${source_sandbox_lineage:-}" --argjson updateQualified "$update_qualified" \
-    '{operation:$operation,operationId:$operationId,workspace:$workspace,artifacts:$artifacts,manifest:$manifest,cliBinary:$cliBinary,cliConfig:$cliConfig,artifactFingerprint:$artifactFingerprint,filesystemIdentity:$filesystemIdentity,neighbor:$neighbor,updateQualified:$updateQualified,sourceSandboxLineage:$sourceSandboxLineage}' >"$state"
+    --arg sourceSandboxLineage "$source_sandbox_lineage" --arg updateAttempt "$update_attempt" --arg sourceDeploy "$source_deploy" \
+    '{operation:$operation,operationId:$operationId,workspace:$workspace,artifacts:$artifacts,manifest:$manifest,cliBinary:$cliBinary,cliConfig:$cliConfig,artifactFingerprint:$artifactFingerprint,filesystemIdentity:$filesystemIdentity,neighbor:$neighbor,updateAttempt:$updateAttempt,sourceSandboxLineage:$sourceSandboxLineage,sourceDeploy:$sourceDeploy}' >"$state"
   exit 0
 fi
 
@@ -223,7 +234,7 @@ plan="$operation/install-plan.json"
 [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm && -c /dev/net/tun ]] || { echo 'nested virtualization devices did not survive reboot' >&2; exit 1; }
 findmnt --target "$workspace" --types btrfs >/dev/null
 
-if [[ "$mode" == existing_reflink_filesystem ]]; then
+if [[ "$mode" == existing_reflink_filesystem || "$mode" == existing_reflink_update ]]; then
   isolation="$workspace/.qualification-reflink"
   sudo install -d -m 0700 -o root -g root -- "$isolation"
   printf 'source\n' | sudo tee -- "$isolation/source" >/dev/null
@@ -231,15 +242,19 @@ if [[ "$mode" == existing_reflink_filesystem ]]; then
   printf 'copy changed\n' | sudo tee -- "$isolation/copy" >/dev/null
   [[ "$(sudo cat -- "$isolation/source")" == source ]]
   jq -e '.storage.choice == "existing_mount" and (.storage.existingDeviceIdentity | length > 0) and ([.paths[].path | select(startswith("/dev"))] | length == 0)' "$plan" >/dev/null
-  sudo mount -t tmpfs -o size=1m,nosuid,nodev,noexec tmpfs /srv/secondbox-dedicated
-  if "$deploy" --accessible install --resume "$operation" --candidate-directory "$release_directory" >"$qualification_root/unsafe-filesystem-${mode}.log" 2>&1; then
-    echo 'resume accepted a replacement filesystem at the reviewed existing mount' >&2
-    exit 1
+  if [[ "$mode" == existing_reflink_filesystem ]]; then
+    sudo mount -t tmpfs -o size=1m,nosuid,nodev,noexec tmpfs /srv/secondbox-dedicated
+    if "$deploy" --accessible install --resume "$operation" --candidate-directory "$release_directory" >"$qualification_root/unsafe-filesystem-${mode}.log" 2>&1; then
+      echo 'resume accepted a replacement filesystem at the reviewed existing mount' >&2
+      exit 1
+    fi
+    sudo umount /srv/secondbox-dedicated
   fi
-  sudo umount /srv/secondbox-dedicated
 fi
 
-"$deploy" --accessible install --resume "$operation" --candidate-directory "$release_directory" >"$qualification_root/resume-${mode}.log" 2>&1
+if [[ "$mode" != existing_reflink_update ]]; then
+  "$deploy" --accessible install --resume "$operation" --candidate-directory "$release_directory" >"$qualification_root/resume-${mode}.log" 2>&1
+fi
 jq -e '.status == "succeeded" and .completedStages[-1].stage == "smoke_execution"' "$receipt" >/dev/null
 [[ "$(artifact_fingerprint "$artifacts")" == "$(jq -er .artifactFingerprint "$state")" ]] || { echo 'verified artifact bundle was unexpectedly re-extracted' >&2; exit 1; }
 compose_project="$(jq -er '.completedStages[] | select(.stage == "compose_started") | .evidence.composeProject' "$receipt")"
@@ -252,7 +267,7 @@ jq -e '.completedStages[] | select(.stage == "readiness") | .evidence.runnerStat
 jq -e '.completedStages[] | select(.stage == "cli_login")' "$receipt" >/dev/null
 jq -e '.completedStages[] | select(.stage == "smoke_execution") | .evidence.output == "hello from a microVM" and .evidence.exitStatus == "0"' "$receipt" >/dev/null
 sandbox_id="$(jq -er '.completedStages[] | select(.stage == "smoke_execution") | .evidence.sandboxId' "$receipt")"
-if jq -e '.updateQualified == true' "$state" >/dev/null; then
+if [[ "$mode" == existing_reflink_update ]]; then
   sandbox_after_update_document="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$sandbox_id")"
   [[ "$(jq -er .state <<<"$sandbox_after_update_document")" == stopped ]] || { echo 'retained smoke Sandbox was not stopped after release update and reboot' >&2; exit 1; }
   sandbox_after_update_revision="$(jq -er .revision <<<"$sandbox_after_update_document")"
@@ -271,7 +286,7 @@ fi
 SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output plain exec "$sandbox_id" -- python3 -c 'print("hello after reboot")' | grep -Fx 'hello after reboot' >/dev/null
 sandbox_before_document="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$sandbox_id")"
 sandbox_before="$(jq -cS '{id,profile,profileRevisionId,workspaceId:.workspace.id}' <<<"$sandbox_before_document")"
-if jq -e '.updateQualified == true' "$state" >/dev/null; then
+if [[ "$mode" == existing_reflink_update ]]; then
   [[ "$sandbox_before" == "$(jq -er .sourceSandboxLineage "$state")" ]] || { echo 'retained Sandbox lineage changed across release update' >&2; exit 1; }
   SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output plain exec "$sandbox_id" -- python3 -c 'print(open("/workspace/update-preserved.txt").read(), end="")' | grep -Fx 'preserved through update' >/dev/null
 fi
@@ -279,10 +294,18 @@ generation_before="$(jq -er '.generation | select(type == "number" and . >= 1)' 
 workspace_generation_before="$(jq -er '.workspace.generation | select(type == "number" and . >= 1)' <<<"$sandbox_before_document")"
 (( workspace_generation_before == generation_before )) || { printf 'retained smoke Sandbox and Workspace generations differ before uninstall: sandbox=%s workspace=%s\n' "$generation_before" "$workspace_generation_before" >&2; exit 1; }
 
-"$deploy" --accessible uninstall "$operation" >"$qualification_root/uninstall-${mode}.log" 2>&1
+lifecycle_deploy="$deploy"
+if [[ "$(jq -er .updateAttempt "$state")" == incompatible ]]; then
+  lifecycle_deploy="$(jq -er .sourceDeploy "$state")"
+fi
+"$lifecycle_deploy" --accessible uninstall "$operation" >"$qualification_root/uninstall-${mode}.log" 2>&1
 jq -e '.status == "uninstalled"' "$receipt" >/dev/null
 [[ -d "$workspace" && -d "$artifacts" && -f "$manifest_path" ]]
-"$deploy" --accessible install --resume "$operation" --candidate-directory "$release_directory" >"$qualification_root/resume-after-uninstall-${mode}.log" 2>&1
+if [[ "$(jq -er .updateAttempt "$state")" == incompatible ]]; then
+  "$lifecycle_deploy" --accessible install --resume "$operation" >"$qualification_root/resume-after-uninstall-${mode}.log" 2>&1
+else
+  "$lifecycle_deploy" --accessible install --resume "$operation" --candidate-directory "$release_directory" >"$qualification_root/resume-after-uninstall-${mode}.log" 2>&1
+fi
 sandbox_after_document="$(SECONDBOX_CONFIG="$cli_config" "$cli_binary" --output json sandboxes get --path "sandboxId=$sandbox_id")"
 sandbox_after="$(jq -cS '{id,profile,profileRevisionId,workspaceId:.workspace.id}' <<<"$sandbox_after_document")"
 generation_after="$(jq -er '.generation | select(type == "number" and . >= 1)' <<<"$sandbox_after_document")"
@@ -291,11 +314,11 @@ workspace_generation_after="$(jq -er '.workspace.generation | select(type == "nu
 (( generation_after >= generation_before )) || { printf 'retained smoke Sandbox generation regressed across uninstall/resume: before=%s after=%s\n' "$generation_before" "$generation_after" >&2; exit 1; }
 (( workspace_generation_after >= workspace_generation_before )) || { printf 'retained smoke Workspace generation regressed across uninstall/resume: before=%s after=%s\n' "$workspace_generation_before" "$workspace_generation_after" >&2; exit 1; }
 (( workspace_generation_after == generation_after )) || { printf 'retained smoke Sandbox and Workspace generations differ after resume: sandbox=%s workspace=%s\n' "$generation_after" "$workspace_generation_after" >&2; exit 1; }
-"$deploy" --accessible uninstall "$operation" >/dev/null 2>&1
+"$lifecycle_deploy" --accessible uninstall "$operation" >/dev/null 2>&1
 
 sudo install -d -m 0755 "$workspace/.qualification-foreign-mount"
 sudo mount -t tmpfs -o size=1m,nosuid,nodev,noexec tmpfs "$workspace/.qualification-foreign-mount"
-if printf 'PURGE %s\n' "$operation_id" | "$deploy" --accessible uninstall --purge "$operation" >"$qualification_root/foreign-purge-${mode}.log" 2>&1; then
+if printf 'PURGE %s\n' "$operation_id" | "$lifecycle_deploy" --accessible uninstall --purge "$operation" >"$qualification_root/foreign-purge-${mode}.log" 2>&1; then
   echo 'purge accepted an unrecorded nested mount' >&2
   exit 1
 fi
@@ -303,7 +326,7 @@ sudo mountpoint -q "$workspace/.qualification-foreign-mount"
 sudo umount "$workspace/.qualification-foreign-mount"
 sudo rmdir "$workspace/.qualification-foreign-mount"
 mapfile -t purge_paths < <(jq -er '.createdResources[] | select(.id != "operation-directory" and (.path | type) == "string" and (.path | length) > 0) | .path' "$receipt")
-printf 'PURGE %s\n' "$operation_id" | "$deploy" --accessible uninstall --purge "$operation" >"$qualification_root/purge-${mode}.log" 2>&1
+printf 'PURGE %s\n' "$operation_id" | "$lifecycle_deploy" --accessible uninstall --purge "$operation" >"$qualification_root/purge-${mode}.log" 2>&1
 jq -e '.status == "purged"' "$receipt" >/dev/null
 [[ -f "$neighbor" && "$(<"$neighbor")" == 'preserve me' ]]
 for purge_path in "${purge_paths[@]}"; do
@@ -316,7 +339,14 @@ done
 
 common=(clean_host read_only_preflight bootstrap_checksum guided_install reboot_recovery mount_recovery compose_ready runner_ready cli_login hello_microvm stage_interrupt_resume verified_bundle_not_reextracted uninstall_workspace_preserved resume_same_sandbox_lineage purge_exact_resources purge_neighbor_preserved purge_foreign_mount_refused)
 if [[ "$mode" == existing_reflink_filesystem ]]; then
-  common+=(existing_reflink_isolation unsafe_filesystem_refusals update_receipt_history_preserved update_release_activated update_workspace_preserved)
+  common+=(existing_reflink_isolation unsafe_filesystem_refusals fresh_existing_reflink_install)
+elif [[ "$mode" == existing_reflink_update ]]; then
+  common=(update_compatibility_enforced)
+  if [[ "$(jq -er .updateAttempt "$state")" == succeeded ]]; then
+    common+=(update_receipt_history_preserved update_release_activated update_workspace_preserved)
+  else
+    common+=(update_incompatible_release_refused)
+  fi
 fi
 jq -n --arg mode "$mode" --arg filesystemIdentity "$(jq -er .filesystemIdentity "$state")" \
   --arg candidateManifestDigest "sha256:$(sha256sum "$manifest" | awk '{print $1}')" --argjson assertions "$(assertions_json "${common[@]}")" \

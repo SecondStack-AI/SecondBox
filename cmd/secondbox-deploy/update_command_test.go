@@ -152,6 +152,11 @@ func TestUpdateSmokeMutationRecoversLostResponsesAndFencesLaterTransitions(t *te
 	if mutate, key, err := installedUpdateSandboxMutation(sandbox, "start"); err != nil || mutate || key != "" {
 		t.Fatalf("ambiguous committed start = %t, %q, %v", mutate, key, err)
 	}
+	sandbox.State = contracts.SandboxStateFailed
+	if mutate, key, err := installedUpdateSandboxMutation(sandbox, "start"); err != nil || !mutate || !strings.Contains(key, "revision-42") {
+		t.Fatalf("terminally failed start retry = %t, %q, %v", mutate, key, err)
+	}
+	sandbox.State = contracts.SandboxStateStopped
 
 	// A completed stop advances the revision, so the next smoke retry receives a
 	// distinct idempotency key instead of replaying the preceding start.

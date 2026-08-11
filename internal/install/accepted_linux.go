@@ -256,8 +256,11 @@ func recoverOperationCommit(directory string, ownerUID int) error {
 		removed := false
 		for _, name := range []string{operationPlanStageName, operationReceiptStageName} {
 			if stageErr := unix.Fstatat(directoryFD, name, &stat, unix.AT_SYMLINK_NOFOLLOW); stageErr == nil {
-				if _, readErr := readAcceptedFile(directoryFD, name, ownerUID); readErr != nil {
-					return installerError("validate uncommitted staged operation document", readErr)
+				// Without a commit marker, staged bytes have no authority. A crash can
+				// leave the create-only file empty or partially written, so validate
+				// only its protected inode identity before discarding it.
+				if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Mode&0o777 != 0o600 || stat.Uid != uint32(ownerUID) || stat.Nlink != 1 {
+					return installerError("uncommitted staged operation document must be a singly-linked mode-0600 regular file owned by SUDO_UID", nil)
 				}
 				if unlinkErr := unix.Unlinkat(directoryFD, name, 0); unlinkErr != nil {
 					return installerError("discard uncommitted staged operation document", unlinkErr)

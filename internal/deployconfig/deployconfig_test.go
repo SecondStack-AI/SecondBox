@@ -246,6 +246,36 @@ func TestComposeDiagnosticsUseInstalledMaterializedAssets(t *testing.T) {
 	}
 }
 
+func TestExistingComposeControlPlaneActionsPreserveMaterializedAssets(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	environmentPath := filepath.Join(filepath.Dir(manifestPath), ".secondbox.generated.env")
+	resolved, err := Render(manifestPath, environmentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"stop-control-plane", "start-control-plane"} {
+		executor := &recordingComposeExecutor{}
+		if err := RunExistingComposeForAcceptedInstaller(context.Background(), manifestPath, action, executor); err != nil {
+			t.Fatal(err)
+		}
+		if len(executor.calls) != 1 {
+			t.Fatalf("existing Compose %s calls = %#v", action, executor.calls)
+		}
+		arguments := executor.calls[0]
+		for _, materialized := range resolved.ComposeFiles {
+			if !slices.Contains(arguments, materialized) {
+				t.Fatalf("existing Compose %s replaced materialized asset %q: %#v", action, materialized, arguments)
+			}
+		}
+		if action == "stop-control-plane" && !slices.Equal(arguments[len(arguments)-2:], []string{"stop", "control-plane"}) {
+			t.Fatalf("existing Compose stop arguments = %#v", arguments)
+		}
+		if action == "start-control-plane" && !slices.Equal(arguments[len(arguments)-4:], []string{"up", "--remove-orphans", "--detach", "control-plane"}) {
+			t.Fatalf("existing Compose start arguments = %#v", arguments)
+		}
+	}
+}
+
 func TestStrictDecodeRejectsUnknownDuplicateAndUnsupportedSchema(t *testing.T) {
 	manifestPath := initializedDevelopment(t)
 	original, err := os.ReadFile(manifestPath)

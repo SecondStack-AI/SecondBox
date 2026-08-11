@@ -285,6 +285,7 @@ run_guest() {
   case "$mode" in
     btrfs_image) guest_mac="52:54:${run_id:0:2}:${run_id:2:2}:${run_id:4:2}:01" ;;
     existing_reflink_filesystem) guest_mac="52:54:${run_id:0:2}:${run_id:2:2}:${run_id:4:2}:02" ;;
+    existing_reflink_update) guest_mac="52:54:${run_id:0:2}:${run_id:2:2}:${run_id:4:2}:03" ;;
     *) echo "qualification guest mode is unsupported: $mode" >&2; return 1 ;;
   esac
   console_log="$guest_root/console.log"
@@ -383,6 +384,7 @@ EOF
 
 run_guest btrfs_image
 run_guest existing_reflink_filesystem
+run_guest existing_reflink_update
 
 jq -s --arg schemaVersion 'secondbox.install.qualified-driver-evidence/v1' --arg subject "$release_subject" --slurpfile scenario "$scenario" '
   ([.[].assertions[]] | unique_by(.id)) as $assertions |
@@ -390,13 +392,13 @@ jq -s --arg schemaVersion 'secondbox.install.qualified-driver-evidence/v1' --arg
   ([ $assertions[] | select(.passed == true) | .id ] | sort) as $passed |
   {
     schemaVersion: $schemaVersion,
-    passed: ($passed == $required),
+    passed: (($required - $passed) | length == 0) and (all($assertions[]; .passed == true)),
     rebootPassed: (all(.[]; .rebootPassed == true)),
     releaseManifestDigest: $subject,
     filesystemIdentity: ([.[].filesystemIdentity] | join(",")),
     assertions: $assertions
   }
-' "$resource_root/btrfs_image/evidence.json" "$resource_root/existing_reflink_filesystem/evidence.json" >"$output"
+' "$resource_root/btrfs_image/evidence.json" "$resource_root/existing_reflink_filesystem/evidence.json" "$resource_root/existing_reflink_update/evidence.json" >"$output"
 jq -e '.passed == true and .rebootPassed == true' "$output" >/dev/null
 cleanup_success
 trap - EXIT INT TERM
