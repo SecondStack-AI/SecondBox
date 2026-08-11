@@ -20,6 +20,9 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/releaseverify"
 )
 
+// v0.5.1 is the immutable source release exercised by the guided-update
+// installer qualification. Do not widen this boundary without qualifying that
+// additional source release through the full retained-Workspace update path.
 const minimumGuidedUpdateSourceVersion = "0.5.1"
 
 type updateDependencies struct {
