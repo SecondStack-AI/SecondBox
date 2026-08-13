@@ -343,7 +343,7 @@ func TestPrepareSnapshotResumeLaunchRefusesUnjailedResume(t *testing.T) {
 		"fc-resume",
 		instanceDir,
 		template,
-		filepath.Join(runDir, "workspace.ext4"),
+		managerTestAttachment(t, filepath.Join(runDir, "workspace.ext4")),
 		"",
 		12000,
 		resumeTestPolicy(),
@@ -371,10 +371,11 @@ func TestPrepareSnapshotResumeLaunchRefusesUnusableTemplates(t *testing.T) {
 		t.Fatalf("create instance dir: %v", err)
 	}
 	workspacePath := filepath.Join(runDir, "workspace.ext4")
+	workspaceAttachment := managerTestAttachment(t, workspacePath)
 
 	t.Run("absent template", func(t *testing.T) {
 		_, err := manager.prepareSnapshotResumeLaunch(
-			"fc-resume", instanceDir, nil, workspacePath, "", 12000, resumeTestPolicy(),
+			"fc-resume", instanceDir, nil, workspaceAttachment, "", 12000, resumeTestPolicy(),
 		)
 		if !errors.Is(err, ErrSnapshotTemplateUnavailable) {
 			t.Fatalf("absent template error = %v, want ErrSnapshotTemplateUnavailable", err)
@@ -386,7 +387,7 @@ func TestPrepareSnapshotResumeLaunchRefusesUnusableTemplates(t *testing.T) {
 			"fc-resume",
 			instanceDir,
 			&AdmittedSnapshotTemplate{TemplateID: "unadmitted"},
-			workspacePath,
+			workspaceAttachment,
 			"",
 			12000,
 			resumeTestPolicy(),
@@ -409,7 +410,7 @@ func TestPrepareSnapshotResumeLaunchRefusesUnusableTemplates(t *testing.T) {
 			t.Fatalf("replace memory: %v", err)
 		}
 		if _, err := manager.prepareSnapshotResumeLaunch(
-			"fc-resume", instanceDir, template, workspacePath, "", 12000, resumeTestPolicy(),
+			"fc-resume", instanceDir, template, workspaceAttachment, "", 12000, resumeTestPolicy(),
 		); err == nil {
 			t.Fatal("a template replaced after admission was accepted")
 		}
@@ -418,7 +419,7 @@ func TestPrepareSnapshotResumeLaunchRefusesUnusableTemplates(t *testing.T) {
 	t.Run("absent workspace", func(t *testing.T) {
 		_, template := newResumeTestTemplate(t)
 		if _, err := manager.prepareSnapshotResumeLaunch(
-			"fc-resume", instanceDir, template, "  ", "", 12000, resumeTestPolicy(),
+			"fc-resume", instanceDir, template, nil, "", 12000, resumeTestPolicy(),
 		); err == nil {
 			t.Fatal("a resume without a Workspace image was accepted")
 		}
@@ -427,7 +428,7 @@ func TestPrepareSnapshotResumeLaunchRefusesUnusableTemplates(t *testing.T) {
 	t.Run("no jailer uid", func(t *testing.T) {
 		_, template := newResumeTestTemplate(t)
 		if _, err := manager.prepareSnapshotResumeLaunch(
-			"fc-resume", instanceDir, template, workspacePath, "", 0, resumeTestPolicy(),
+			"fc-resume", instanceDir, template, workspaceAttachment, "", 0, resumeTestPolicy(),
 		); err == nil {
 			t.Fatal("a resume without a jailer UID was accepted")
 		}
@@ -436,7 +437,7 @@ func TestPrepareSnapshotResumeLaunchRefusesUnusableTemplates(t *testing.T) {
 	t.Run("no runtime policy", func(t *testing.T) {
 		_, template := newResumeTestTemplate(t)
 		if _, err := manager.prepareSnapshotResumeLaunch(
-			"fc-resume", instanceDir, template, workspacePath, "", 12000, nil,
+			"fc-resume", instanceDir, template, workspaceAttachment, "", 12000, nil,
 		); err == nil {
 			t.Fatal("a resume without a runtime policy was accepted")
 		}

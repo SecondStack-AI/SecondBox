@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"io"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -253,14 +254,45 @@ func (store *Store) BeginRelocationImport(
 		closeLockedFile(lock)
 		return nil, err
 	}
-	image, err := os.OpenFile(
-		store.relocationImagePath(request.WorkspaceID, request.OperationID),
-		os.O_CREATE|os.O_TRUNC|os.O_WRONLY,
-		writableImageMode,
-	)
+	imagePath := store.relocationImagePath(request.WorkspaceID, request.OperationID)
+	if err := removeExactFile(imagePath); err != nil {
+		closeLockedFile(lock)
+		return nil, err
+	}
+	templatePath, err := store.ensureTemplate(ctx, request.CapacityBytes)
 	if err != nil {
 		closeLockedFile(lock)
+		return nil, err
+	}
+	template, err := os.Open(templatePath)
+	if err != nil {
+		closeLockedFile(lock)
+		return nil, fmt.Errorf("SecondBox WorkspaceStore open relocation capacity template: %w", err)
+	}
+	image, err := os.OpenFile(imagePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, writableImageMode)
+	if err != nil {
+		_ = template.Close()
+		closeLockedFile(lock)
 		return nil, fmt.Errorf("SecondBox WorkspaceStore open relocation target staging: %w", err)
+	}
+	if err := store.driver.Clone(image, template); err != nil {
+		_ = template.Close()
+		_ = image.Close()
+		_ = removeExactFile(imagePath)
+		closeLockedFile(lock)
+		return nil, fmt.Errorf("%w: SecondBox WorkspaceStore relocation FICLONE failed: %w", ErrStorageIncompatible, err)
+	}
+	if err := template.Close(); err != nil {
+		_ = image.Close()
+		_ = removeExactFile(imagePath)
+		closeLockedFile(lock)
+		return nil, err
+	}
+	if err := store.driver.ResetSparse(image, request.CapacityBytes); err != nil {
+		_ = image.Close()
+		_ = removeExactFile(imagePath)
+		closeLockedFile(lock)
+		return nil, err
 	}
 	return &relocationImport{
 		store: store, request: request, digest: digest, file: image, lock: lock,
@@ -279,7 +311,11 @@ func (relocation *relocationImport) WriteChunk(offset uint64, data []byte) error
 	if relocation.written+uint64(len(data)) > uint64(relocation.request.CapacityBytes) {
 		return ErrStorageIncompatible
 	}
-	if _, err := relocation.file.Write(data); err != nil {
+	if allZero(data) {
+		if _, err := relocation.file.Seek(int64(len(data)), io.SeekCurrent); err != nil {
+			return fmt.Errorf("SecondBox WorkspaceStore seek sparse relocation target: %w", err)
+		}
+	} else if _, err := relocation.file.Write(data); err != nil {
 		return fmt.Errorf("SecondBox WorkspaceStore write relocation target: %w", err)
 	}
 	if _, err := relocation.hash.Write(data); err != nil {
@@ -300,6 +336,9 @@ func (relocation *relocationImport) Complete(size uint64, checksum string) (Rece
 	actualChecksum := "sha256:" + hex.EncodeToString(relocation.hash.Sum(nil))
 	if checksum != actualChecksum {
 		return Receipt{}, fmt.Errorf("%w: relocation checksum mismatch", ErrCorruptState)
+	}
+	if err := relocation.file.Truncate(relocation.request.CapacityBytes); err != nil {
+		return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore size sparse relocation target: %w", err)
 	}
 	if err := relocation.file.Sync(); err != nil {
 		return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore fsync relocation target: %w", err)
@@ -331,7 +370,7 @@ func (relocation *relocationImport) Complete(size uint64, checksum string) (Rece
 	if err := os.Rename(stagedPath, imagePath); err != nil {
 		return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore publish relocation image: %w", err)
 	}
-	if err := syncDir(relocation.store.versionsDir(relocation.request.WorkspaceID)); err != nil {
+	if err := relocation.store.driver.SyncDirectory(relocation.store.versionsDir(relocation.request.WorkspaceID)); err != nil {
 		return Receipt{}, err
 	}
 	if err := relocation.store.publishCurrentManifest(
@@ -371,6 +410,15 @@ func (relocation *relocationImport) Complete(size uint64, checksum string) (Rece
 	return receipt, nil
 }
 
+func allZero(data []byte) bool {
+	for _, value := range data {
+		if value != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func (relocation *relocationImport) Abort() error {
 	if relocation == nil || !relocation.receipt.RecordedAt.IsZero() {
 		return nil
@@ -384,7 +432,7 @@ func (relocation *relocationImport) Abort() error {
 		result = errors.Join(
 			result,
 			relocation.store.removeWorkspaceTree(relocation.request.WorkspaceID),
-			syncDir(relocation.store.workspacesRoot()),
+			relocation.store.driver.SyncDirectory(relocation.store.workspacesRoot()),
 		)
 		relocation.created = false
 	}
@@ -416,5 +464,5 @@ func (relocation *relocationImport) cleanupStaging() error {
 		!errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTEMPTY) {
 		return fmt.Errorf("SecondBox WorkspaceStore remove relocation workspace staging: %w", err)
 	}
-	return syncDir(relocation.store.relocationsRoot())
+	return relocation.store.driver.SyncDirectory(relocation.store.relocationsRoot())
 }

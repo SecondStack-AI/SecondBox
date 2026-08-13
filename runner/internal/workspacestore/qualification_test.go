@@ -1,7 +1,10 @@
 package workspacestore
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,10 +33,14 @@ func TestQualifiedFilesystemProvidesRealCopyOnWriteIsolation(t *testing.T) {
 		})
 	}
 	store, err := New(t.Context(), Config{
-		Root:                  root,
-		TemplateCapacityBytes: minimumExt4Bytes,
+		Root:                         root,
+		TemplateCapacityBytes:        minimumExt4Bytes,
+		MicrosandboxHelperExecutable: strings.TrimSpace(os.Getenv("SECONDBOX_MICROSANDBOX_HELPER_EXECUTABLE")),
 	})
 	if err != nil {
+		if os.Getenv("SECONDBOX_REQUIRE_WORKSPACESTORE_LINUX") == "1" {
+			t.Fatalf("qualified Linux WorkspaceStore is required: %v", err)
+		}
 		if errors.Is(err, ErrStorageIncompatible) {
 			t.Skipf("qualification filesystem does not support FICLONE: %v", err)
 		}
@@ -55,7 +62,22 @@ func TestQualifiedFilesystemProvidesRealCopyOnWriteIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := attachment.Image().WriteAt([]byte{0x41}, testOffset); err != nil {
+	linkedPath := filepath.Join(root, "qualified-compute-link.ext4")
+	if err := attachment.LinkInto(linkedPath); err != nil {
+		t.Fatalf("link qualified attachment into compute-private root: %v", err)
+	}
+	linkedInfo, err := os.Stat(linkedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptorInfo, err := attachment.Descriptor().Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(linkedInfo, descriptorInfo) {
+		t.Fatal("compute-private link does not identify the held Workspace descriptor")
+	}
+	if _, err := attachment.Descriptor().WriteAt([]byte{0x41}, testOffset); err != nil {
 		t.Fatal(err)
 	}
 	if err := attachment.Close(); err != nil {
@@ -93,7 +115,7 @@ func TestQualifiedFilesystemProvidesRealCopyOnWriteIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := attachment.Image().WriteAt([]byte{0x42}, testOffset); err != nil {
+	if _, err := attachment.Descriptor().WriteAt([]byte{0x42}, testOffset); err != nil {
 		t.Fatal(err)
 	}
 	if err := attachment.Close(); err != nil {
@@ -134,13 +156,13 @@ func TestQualifiedFilesystemProvidesRealCopyOnWriteIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	restored := make([]byte, 1)
-	if _, err := attachment.Image().ReadAt(restored, testOffset); err != nil {
+	if _, err := attachment.Descriptor().ReadAt(restored, testOffset); err != nil {
 		t.Fatal(err)
 	}
 	if restored[0] != 0x41 {
 		t.Fatalf("restored byte = %#x, want Snapshot state 0x41", restored[0])
 	}
-	if _, err := attachment.Image().WriteAt([]byte{0x43}, testOffset); err != nil {
+	if _, err := attachment.Descriptor().WriteAt([]byte{0x43}, testOffset); err != nil {
 		t.Fatal(err)
 	}
 	if err := attachment.Close(); err != nil {
@@ -151,6 +173,73 @@ func TestQualifiedFilesystemProvidesRealCopyOnWriteIsolation(t *testing.T) {
 	}
 	if actual[0] != 0x41 {
 		t.Fatalf("Snapshot byte changed through restored-image mutation: %#x", actual[0])
+	}
+
+	targetRoot := root + "-relocation-target"
+	t.Cleanup(func() { _ = os.RemoveAll(targetRoot) })
+	target, err := New(t.Context(), Config{
+		Root: targetRoot, TemplateCapacityBytes: capacity,
+		MicrosandboxHelperExecutable: strings.TrimSpace(os.Getenv("SECONDBOX_MICROSANDBOX_HELPER_EXECUTABLE")),
+	})
+	if err != nil {
+		t.Fatalf("initialize qualified relocation target: %v", err)
+	}
+	export, err := store.OpenRelocationExport(t.Context(), RelocationExportRequest{
+		Mutation: testMutation("qualification-relocation", workspaceID), ExpectedGeneration: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer export.Close()
+	importer, err := target.BeginRelocationImport(t.Context(), RelocationImportRequest{
+		Mutation:   testMutation("qualification-relocation", workspaceID),
+		Generation: 2, CapacityBytes: capacity,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.New()
+	buffer := make([]byte, 1<<20)
+	var offset uint64
+	for {
+		count, readErr := export.Read(buffer)
+		if count > 0 {
+			chunk := buffer[:count]
+			if err := importer.WriteChunk(offset, chunk); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = hash.Write(chunk)
+			offset += uint64(count)
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+	}
+	if _, err := importer.Complete(offset, "sha256:"+hex.EncodeToString(hash.Sum(nil))); err != nil {
+		t.Fatal(err)
+	}
+	relocated, err := target.Open(t.Context(), workspaceID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer relocated.Close()
+	relocatedByte := []byte{0}
+	if _, err := relocated.Descriptor().ReadAt(relocatedByte, testOffset); err != nil {
+		t.Fatal(err)
+	}
+	if relocatedByte[0] != 0x43 {
+		t.Fatalf("relocated byte = %#x, want 0x43", relocatedByte[0])
+	}
+	relocatedInfo, err := relocated.Descriptor().Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relocatedStat, ok := relocatedInfo.Sys().(*syscall.Stat_t)
+	if !ok || int64(relocatedStat.Blocks)*512 >= capacity {
+		t.Fatalf("qualified relocation did not preserve sparse allocation: %#v", relocatedInfo.Sys())
 	}
 }
 
@@ -208,15 +297,17 @@ func TestQualifiedTwoRunnerRootsAreDistinctAndIsolated(t *testing.T) {
 		}
 	})
 	storeA, err := New(t.Context(), Config{
-		Root:                  rootA,
-		TemplateCapacityBytes: minimumExt4Bytes,
+		Root:                         rootA,
+		TemplateCapacityBytes:        minimumExt4Bytes,
+		MicrosandboxHelperExecutable: strings.TrimSpace(os.Getenv("SECONDBOX_MICROSANDBOX_HELPER_EXECUTABLE")),
 	})
 	if err != nil {
 		t.Fatalf("initialize runner %q WorkspaceStore: %v", runnerA, err)
 	}
 	storeB, err := New(t.Context(), Config{
-		Root:                  rootB,
-		TemplateCapacityBytes: minimumExt4Bytes,
+		Root:                         rootB,
+		TemplateCapacityBytes:        minimumExt4Bytes,
+		MicrosandboxHelperExecutable: strings.TrimSpace(os.Getenv("SECONDBOX_MICROSANDBOX_HELPER_EXECUTABLE")),
 	})
 	if err != nil {
 		t.Fatalf("initialize runner %q WorkspaceStore: %v", runnerB, err)

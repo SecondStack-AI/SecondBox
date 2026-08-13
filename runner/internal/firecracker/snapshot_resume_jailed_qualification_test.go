@@ -211,8 +211,9 @@ func TestSmokeJailedSnapshotResume(t *testing.T) {
 	report.AdmissionMillis = time.Since(admissionStartedAt).Milliseconds()
 
 	store, err := workspacestore.New(t.Context(), workspacestore.Config{
-		Root:                  filepath.Join(workDir, "resume-workspaces"),
-		TemplateCapacityBytes: int64(workspaceMiB) << 20,
+		Root:                         filepath.Join(workDir, "resume-workspaces"),
+		TemplateCapacityBytes:        int64(workspaceMiB) << 20,
+		MicrosandboxHelperExecutable: strings.TrimSpace(os.Getenv("SECONDBOX_MICROSANDBOX_HELPER_EXECUTABLE")),
 	})
 	if err != nil {
 		t.Fatalf("new resume WorkspaceStore: %v", err)
@@ -545,7 +546,7 @@ func (inst *jailedResumeInstance) resume(
 	}
 	inst.sample.TemplateIdentityMicros = time.Since(identityStartedAt).Microseconds()
 
-	workspaceImage := inst.attachment.Image()
+	workspaceImage := inst.attachment.Descriptor()
 	if workspaceImage == nil || inst.attachment.Generation() != 1 {
 		return fmt.Errorf("resolved Workspace attachment generation is stale")
 	}
@@ -556,7 +557,7 @@ func (inst *jailedResumeInstance) resume(
 
 		WorkspaceWritable: true,
 	}
-	launch, err := inst.startResumeProcess(ctx, manager, cfg, template, workspaceImage.Name(), policy)
+	launch, err := inst.startResumeProcess(ctx, manager, cfg, template, policy)
 	if err != nil {
 		return err
 	}
@@ -658,7 +659,6 @@ func (inst *jailedResumeInstance) startResumeProcess(
 	manager *Manager,
 	cfg *config.Config,
 	template *AdmittedSnapshotTemplate,
-	workspacePath string,
 	policy *runtimemanager.SandboxRuntimePolicy,
 ) (snapshotResumeLaunch, error) {
 	networkStartedAt := time.Now()
@@ -704,7 +704,7 @@ func (inst *jailedResumeInstance) startResumeProcess(
 		inst.id,
 		inst.runDir,
 		template,
-		workspacePath,
+		inst.attachment,
 		"",
 		inst.jailerUID,
 		policy,
@@ -891,7 +891,7 @@ func measureSnapshotResumeNetworkFindings(
 			t.Errorf("release absent-interface finding instance: %v", err)
 		}
 	}()
-	absentLaunch, err := absent.startResumeProcess(t.Context(), manager, cfg, template, absent.attachment.Image().Name(), policy)
+	absentLaunch, err := absent.startResumeProcess(t.Context(), manager, cfg, template, policy)
 	if err != nil {
 		t.Fatalf("start absent-interface finding instance: %v", err)
 	}
@@ -920,7 +920,7 @@ func measureSnapshotResumeNetworkFindings(
 			t.Errorf("release rebinding finding instance: %v", err)
 		}
 	}()
-	reboundLaunch, err := rebound.startResumeProcess(t.Context(), manager, cfg, template, rebound.attachment.Image().Name(), policy)
+	reboundLaunch, err := rebound.startResumeProcess(t.Context(), manager, cfg, template, policy)
 	if err != nil {
 		t.Fatalf("start rebinding finding instance: %v", err)
 	}

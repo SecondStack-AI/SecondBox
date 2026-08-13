@@ -140,8 +140,9 @@ func measureSnapshotLoadShape(t *testing.T, memoryMiB int, warmIterations int) s
 		t.Fatalf("new %d MiB snapshot source manager: %v", memoryMiB, err)
 	}
 	workspaceStore, err := workspacestore.New(t.Context(), workspacestore.Config{
-		Root:                  cfg.RunnerWorkspaceRoot,
-		TemplateCapacityBytes: int64(workspaceMiB) << 20,
+		Root:                         cfg.RunnerWorkspaceRoot,
+		TemplateCapacityBytes:        int64(workspaceMiB) << 20,
+		MicrosandboxHelperExecutable: strings.TrimSpace(os.Getenv("SECONDBOX_MICROSANDBOX_HELPER_EXECUTABLE")),
 	})
 	if err != nil {
 		t.Fatalf("new %d MiB snapshot WorkspaceStore: %v", memoryMiB, err)

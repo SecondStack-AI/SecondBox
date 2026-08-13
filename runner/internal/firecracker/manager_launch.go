@@ -22,6 +22,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/jailersupervisor"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
 
 // relocateRunDirForUnixSockets returns a shorter run dir (and true) when runDir is
@@ -405,7 +406,10 @@ func checkUnixSocketPath(label, path, setting string) error {
 	return nil
 }
 
-func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, kernelPath, rootfsPath, workspacePath, sharedImagePath, tapName, guestIP string, jailerUID int, templateMode bool, policy *runtimemanager.SandboxRuntimePolicy) (firecrackerLaunch, error) {
+func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, kernelPath, rootfsPath string, workspace workspacestore.ComputeAttachment, sharedImagePath, tapName, guestIP string, jailerUID int, templateMode bool, policy *runtimemanager.SandboxRuntimePolicy) (firecrackerLaunch, error) {
+	if workspace == nil || workspace.Descriptor() == nil {
+		return firecrackerLaunch{}, fmt.Errorf("Workspace attachment is required")
+	}
 	if m.cfg.MicroVMAllowUnjailed {
 		socket := filepath.Join(dir, firecrackerSockName)
 		vsockUDS := filepath.Join(dir, vsockUDSName)
@@ -416,13 +420,18 @@ func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, 
 			return firecrackerLaunch{}, err
 		}
 		configPath := filepath.Join(dir, configName)
+		workspacePath := filepath.Join(dir, workspaceName)
+		if err := workspace.LinkInto(workspacePath); err != nil {
+			return firecrackerLaunch{}, fmt.Errorf("stage unjailed Workspace attachment: %w", err)
+		}
 		return firecrackerLaunch{
-			executable: m.cfg.FirecrackerPath,
-			args:       []string{"--id", instanceID, "--api-sock", socket, "--config-file", configPath},
-			config:     buildFirecrackerConfigWithPolicy(m.cfg, kernelPath, rootfsPath, workspacePath, sharedImagePath, vsockUDS, tapName, guestIP, templateMode, policy),
-			configPath: configPath,
-			socketPath: socket,
-			vsockUDS:   vsockUDS,
+			executable:    m.cfg.FirecrackerPath,
+			args:          []string{"--id", instanceID, "--api-sock", socket, "--config-file", configPath},
+			config:        buildFirecrackerConfigWithPolicy(m.cfg, kernelPath, rootfsPath, workspacePath, sharedImagePath, vsockUDS, tapName, guestIP, templateMode, policy),
+			configPath:    configPath,
+			socketPath:    socket,
+			vsockUDS:      vsockUDS,
+			workspacePath: workspacePath,
 		}, nil
 	}
 
@@ -452,7 +461,7 @@ func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, 
 		_ = os.RemoveAll(jailRoot)
 		return firecrackerLaunch{}, fmt.Errorf("stage rootfs in jail: %w", err)
 	}
-	if err := stageWorkspaceJailFile(stagedWorkspace, workspacePath, jailerUID, m.cfg.MicroVMJailerGID); err != nil {
+	if err := stageWorkspaceJailFile(stagedWorkspace, workspace, jailerUID, m.cfg.MicroVMJailerGID); err != nil {
 		_ = os.RemoveAll(jailRoot)
 		return firecrackerLaunch{}, fmt.Errorf("stage workspace in jail: %w", err)
 	}
@@ -480,14 +489,15 @@ func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, 
 		return firecrackerLaunch{}, err
 	}
 	return firecrackerLaunch{
-		executable:  "/proc/self/exe",
-		args:        []string{jailersupervisor.InvocationArgument},
-		environment: []string{supervisorEnvironment},
-		config:      fcConfig,
-		configPath:  configPath,
-		socketPath:  socket,
-		vsockUDS:    vsockUDS,
-		jailRoot:    jailRoot,
+		executable:    "/proc/self/exe",
+		args:          []string{jailersupervisor.InvocationArgument},
+		environment:   []string{supervisorEnvironment},
+		config:        fcConfig,
+		configPath:    configPath,
+		socketPath:    socket,
+		vsockUDS:      vsockUDS,
+		jailRoot:      jailRoot,
+		workspacePath: stagedWorkspace,
 	}, nil
 }
 
@@ -707,9 +717,9 @@ func stageLinkedJailFile(dst, src string, uid, gid int) error {
 	return nil
 }
 
-func stageWorkspaceJailFile(dst, src string, uid, gid int) error {
+func stageWorkspaceJailFile(dst string, workspace workspacestore.ComputeAttachment, uid, gid int) error {
 	_ = os.Remove(dst)
-	if err := hardLinkFile(src, dst); err != nil {
+	if err := workspace.LinkInto(dst); err != nil {
 		if errors.Is(err, syscall.EXDEV) {
 			return fmt.Errorf("link workspace image into jail: %w (jailer chroot base dir must be on the same filesystem as SECONDBOX_RUNNER_WORKSPACE_ROOT)", err)
 		}
