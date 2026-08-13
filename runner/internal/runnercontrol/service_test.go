@@ -756,12 +756,12 @@ func TestRunnerProtocolServiceNegotiatesBeforeProfileResolvedAssignment(t *testi
 	backend := &recordingAssignmentBackend{
 		readiness: BackendReadiness{
 			Architecture: "amd64",
-			Capacity:     &runnerprotocol.Capacity{VcpuMillis: 4000, MemoryBytes: 8 << 30, DiskBytes: 64 << 30, Instances: 2, Operations: 8},
+			Capacity:     &runnerprotocol.Capacity{VcpuCount: 4, MemoryBytes: 8 << 30, DiskBytes: 64 << 30, Instances: 2, Operations: 8},
 			Capabilities: &runnerprotocol.RunnerCapabilities{
 				Architecture:             "amd64",
-				FirecrackerVersion:       "1.16.1",
-				KvmReady:                 true,
-				JailerReady:              true,
+				ComputeBackendVersion:    "1.16.1",
+				HypervisorReady:          true,
+				IsolationReady:           true,
 				CgroupReady:              true,
 				NetworkPolicyReady:       true,
 				StorageReady:             true,
@@ -1213,8 +1213,6 @@ func resolvedAssignmentCommand() *runnerprotocol.AssignmentCommand {
 		ProfileRevisionId: "profile-revision-1",
 		Requirements: &runnerprotocol.ProfileRequirements{
 			VcpuCount:          2,
-			VcpuMillis:         2000,
-			ProcessLimit:       128,
 			MemoryBytes:        4 << 30,
 			DiskBytes:          16 << 30,
 			Architecture:       "amd64",
@@ -1222,11 +1220,10 @@ func resolvedAssignmentCommand() *runnerprotocol.AssignmentCommand {
 			MaximumOperationMs: 30_000,
 			MaximumOutputBytes: 8 << 20,
 		},
-		Assets: []*runnerprotocol.SignedAssetReference{
+		Assets: []*runnerprotocol.AssetReference{
 			{
 				ArtifactId:              "secondbox-rootfs-1",
 				ManifestDigest:          "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-				SignatureKeyId:          "key-1",
 				Architecture:            "amd64",
 				GuestProtocolGeneration: 1,
 			},

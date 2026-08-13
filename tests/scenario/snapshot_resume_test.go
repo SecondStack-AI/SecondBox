@@ -48,7 +48,6 @@ type snapshotResumeEvidence struct {
 	ProfileMemoryMiB       int                          `json:"profileMemoryMiB"`
 	ProfileWorkspaceMiB    int                          `json:"profileWorkspaceMiB"`
 	ProfileVCPUs           int                          `json:"profileVcpus"`
-	ProfileProcessLimit    int                          `json:"profileProcessLimit"`
 	StartToReadyProjection int                          `json:"startToReadyProjectionMilliseconds"`
 	CreateToReadyProjectn  int                          `json:"createToReadyProjectionMilliseconds"`
 	Rungs                  []snapshotResumeRung         `json:"concurrencyRungs"`
@@ -116,7 +115,6 @@ func TestScenarioSnapshotResumeStartsStopsAndMeasures(t *testing.T) {
 		ProfileMemoryMiB:       scenarioEnvironmentInt(t, "SECONDBOX_SCENARIO_SNAPSHOT_RESUME_MEMORY_MIB"),
 		ProfileWorkspaceMiB:    scenarioEnvironmentInt(t, "SECONDBOX_SCENARIO_SNAPSHOT_RESUME_WORKSPACE_MIB"),
 		ProfileVCPUs:           scenarioEnvironmentInt(t, "SECONDBOX_SCENARIO_SNAPSHOT_RESUME_VCPUS"),
-		ProfileProcessLimit:    scenarioEnvironmentInt(t, "SECONDBOX_SCENARIO_SNAPSHOT_RESUME_PROCESS_LIMIT"),
 		StartToReadyProjection: snapshotResumeStartToReadyProjectionMs,
 		CreateToReadyProjectn:  snapshotResumeCreateToReadyProjectionMs,
 	}
@@ -477,10 +475,9 @@ func snapshotResumeProfileSpec(t *testing.T) contracts.ProfileRevisionSpec {
 	t.Helper()
 	spec := scenarioProfileSpec(t, contracts.SandboxDesiredStateRunning)
 	spec.Startup = contracts.StartupPolicy{Mode: contracts.StartupModeSnapshotResume}
-	spec.Resources.CPUMillis = int64(scenarioEnvironmentInt(t, "SECONDBOX_SCENARIO_SNAPSHOT_RESUME_VCPUS")) * 1000
+	spec.Resources.VCPUCount = int64(scenarioEnvironmentInt(t, "SECONDBOX_SCENARIO_SNAPSHOT_RESUME_VCPUS"))
 	spec.Resources.MemoryBytes = int64(scenarioEnvironmentInt(t, "SECONDBOX_SCENARIO_SNAPSHOT_RESUME_MEMORY_MIB")) << 20
 	spec.Resources.WorkspaceBytes = int64(scenarioEnvironmentInt(t, "SECONDBOX_SCENARIO_SNAPSHOT_RESUME_WORKSPACE_MIB")) << 20
-	spec.Resources.ProcessLimit = int64(scenarioEnvironmentInt(t, "SECONDBOX_SCENARIO_SNAPSHOT_RESUME_PROCESS_LIMIT"))
 	return spec
 }
 

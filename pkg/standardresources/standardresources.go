@@ -18,7 +18,7 @@ const (
 	ArchitectureAMD64 = "amd64"
 	PoolAMD64         = "standard-amd64"
 
-	DurableCodingCPUMillis            = int64(4000)
+	DurableCodingVCPUCount            = int64(4)
 	DurableCodingMemoryBytes          = int64(8 << 30)
 	DurableCodingWorkspaceBytes       = int64(50 << 30)
 	DurableCodingConcurrentOperations = int64(16)
@@ -181,7 +181,7 @@ func appendOrValidatePool(pools []resourceapply.RunnerPool, binding PoolBinding)
 func agentSpec(pool, runtimeDigest, toolchainDigest string, maximumDeadlineMilliseconds int64) secondboxclient.ProfileRevisionSpec {
 	return secondboxclient.ProfileRevisionSpec{
 		Pool: pool, Architecture: ArchitectureAMD64, RuntimeBundleDigest: runtimeDigest, ToolchainBundleDigest: toolchainDigest,
-		Resources: secondboxclient.ResourcePolicy{CPUMillis: 1000, MemoryBytes: 1 << 30, WorkspaceBytes: 2 << 30, ProcessLimit: 64, ConcurrentOperations: 4},
+		Resources: secondboxclient.ResourcePolicy{VCPUCount: 1, MemoryBytes: 1 << 30, WorkspaceBytes: 2 << 30, ConcurrentOperations: 4},
 		Startup:   secondboxclient.StartupPolicy{Mode: secondboxclient.StartupModeColdBoot},
 		Lifecycle: secondboxclient.LifecyclePolicy{InitialState: secondboxclient.SandboxDesiredStateRunning, DrainGraceSeconds: 10, IdleSeconds: 60, MaximumDurationSeconds: 900, LeaseSeconds: 60},
 		Retention: secondboxclient.RetentionPolicy{SnapshotLimit: 0, SnapshotRetentionSeconds: 3600},
@@ -194,7 +194,7 @@ func agentSpec(pool, runtimeDigest, toolchainDigest string, maximumDeadlineMilli
 func codingSpec(pool, runtimeDigest, toolchainDigest string) secondboxclient.ProfileRevisionSpec {
 	return secondboxclient.ProfileRevisionSpec{
 		Pool: pool, Architecture: ArchitectureAMD64, RuntimeBundleDigest: runtimeDigest, ToolchainBundleDigest: toolchainDigest,
-		Resources: secondboxclient.ResourcePolicy{CPUMillis: DurableCodingCPUMillis, MemoryBytes: DurableCodingMemoryBytes, WorkspaceBytes: DurableCodingWorkspaceBytes, ProcessLimit: 512, ConcurrentOperations: DurableCodingConcurrentOperations},
+		Resources: secondboxclient.ResourcePolicy{VCPUCount: DurableCodingVCPUCount, MemoryBytes: DurableCodingMemoryBytes, WorkspaceBytes: DurableCodingWorkspaceBytes, ConcurrentOperations: DurableCodingConcurrentOperations},
 		Startup:   secondboxclient.StartupPolicy{Mode: secondboxclient.StartupModeColdBoot},
 		Lifecycle: secondboxclient.LifecyclePolicy{InitialState: secondboxclient.SandboxDesiredStateRunning, DrainGraceSeconds: 120, IdleSeconds: 28800, MaximumDurationSeconds: 604800, LeaseSeconds: 300},
 		Retention: secondboxclient.RetentionPolicy{SnapshotLimit: 64, SnapshotRetentionSeconds: 2592000},

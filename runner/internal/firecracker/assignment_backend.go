@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/materialization"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
@@ -272,31 +273,36 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 	if err != nil {
 		return runnercontrol.BackendReadiness{}, err
 	}
+	materializations, err := firecrackerMaterializationEvidence(manifest, time.Now().UTC())
+	if err != nil {
+		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Firecracker readiness materialization: %w", err)
+	}
 	return runnercontrol.BackendReadiness{
 		Architecture: runtime.GOARCH,
 		Capacity:     runnerAllocatableCapacity(cfg),
 		Reserved:     &runnerprotocol.Capacity{},
 		Capabilities: &runnerprotocol.RunnerCapabilities{
-			Architecture:       runtime.GOARCH,
-			KernelRelease:      strings.TrimSpace(string(kernelRelease)),
-			FirecrackerVersion: expectedFirecrackerVersionString(),
-			KvmReady:           true,
-			JailerReady:        firecrackerJailerReady(cfg),
-			CgroupReady:        true,
-			NetworkPolicyReady: true,
-			StorageReady:       true,
-			CleanupReady:       true,
+			Architecture:          runtime.GOARCH,
+			KernelRelease:         strings.TrimSpace(string(kernelRelease)),
+			ComputeBackendVersion: expectedComputeBackendVersionString(),
+			HypervisorReady:       true,
+			IsolationReady:        firecrackerIsolationReady(cfg),
+			CgroupReady:           true,
+			NetworkPolicyReady:    true,
+			StorageReady:          true,
+			CleanupReady:          true,
 			GuestProtocolGenerations: &runnerprotocol.ProtocolVersionRange{
 				Minimum: manifest.GuestProtocol.Minimum,
 				Maximum: manifest.GuestProtocol.Maximum,
 			},
 			SnapshotResumeReady: snapshotResumeReady,
 		},
-		ArtifactCache: artifactCacheEvidenceForManifest(manifest, time.Now().UTC()),
+		BackendKind:      runnerprotocol.ComputeBackendKind_COMPUTE_BACKEND_KIND_FIRECRACKER,
+		Materializations: materializations,
 	}, nil
 }
 
-func firecrackerJailerReady(cfg *config.Config) bool {
+func firecrackerIsolationReady(cfg *config.Config) bool {
 	return !cfg.MicroVMAllowUnjailed
 }
 
@@ -336,8 +342,8 @@ func (b *AssignmentBackend) snapshotResumeReady(
 
 func runnerAllocatableCapacity(cfg *config.Config) *runnerprotocol.Capacity {
 	return &runnerprotocol.Capacity{
-		VcpuMillis: uint32(
-			cfg.MicroVMVCPUs * cfg.MicroVMMaxConcurrentGlobal * 1000,
+		VcpuCount: uint32(
+			cfg.MicroVMVCPUs * cfg.MicroVMMaxConcurrentGlobal,
 		),
 		MemoryBytes: uint64(cfg.MicroVMMemoryBudgetMiB) << 20,
 		DiskBytes: uint64(
@@ -348,23 +354,49 @@ func runnerAllocatableCapacity(cfg *config.Config) *runnerprotocol.Capacity {
 	}
 }
 
-func artifactCacheEvidenceForManifest(
+func firecrackerMaterializationEvidence(
 	manifest signedArtifactManifest,
 	verifiedAt time.Time,
-) []*runnerprotocol.ArtifactCacheEvidence {
-	verifiedAtUnixMs := uint64(verifiedAt.UnixMilli())
-	return []*runnerprotocol.ArtifactCacheEvidence{
-		{
-			ArtifactId:       manifest.RuntimeBundle.ArtifactID,
-			ManifestDigest:   manifest.RuntimeBundle.ManifestDigest,
-			VerifiedAtUnixMs: verifiedAtUnixMs,
-		},
-		{
-			ArtifactId:       manifest.ToolchainBundle.ArtifactID,
-			ManifestDigest:   manifest.ToolchainBundle.ManifestDigest,
-			VerifiedAtUnixMs: verifiedAtUnixMs,
-		},
+) ([]*runnerprotocol.BackendMaterializationEvidence, error) {
+	digest := func(value string) string {
+		if strings.HasPrefix(value, "sha256:") {
+			return value
+		}
+		return "sha256:" + value
 	}
+	local := materialization.Manifest{
+		SchemaVersion: materialization.SchemaVersion,
+		Key: materialization.Key{
+			BackendKind:             materialization.BackendFirecracker,
+			GuestArchitecture:       manifest.Architecture,
+			RuntimeManifestDigest:   manifest.RuntimeBundle.ManifestDigest,
+			ToolchainManifestDigest: manifest.ToolchainBundle.ManifestDigest,
+		},
+		LaunchArtifacts: []materialization.LaunchArtifact{
+			{ID: "kernel", SHA256: digest(manifest.Kernel.SHA256)},
+			{ID: "rootfs", SHA256: digest(manifest.Rootfs.SHA256)},
+			{ID: "shared", SHA256: digest(manifest.Shared.SHA256)},
+		},
+		AgentProtocolGeneration: manifest.GuestProtocol.Maximum,
+		AgentFeatures:           []string{"exec-streaming", "file-streaming", "pty"},
+		BackendBuildID:          expectedComputeBackendVersionString(),
+	}
+	materializationDigest, err := local.Digest()
+	if err != nil {
+		return nil, err
+	}
+	return []*runnerprotocol.BackendMaterializationEvidence{{
+		SchemaVersion:           1,
+		BackendKind:             runnerprotocol.ComputeBackendKind_COMPUTE_BACKEND_KIND_FIRECRACKER,
+		GuestArchitecture:       local.Key.GuestArchitecture,
+		RuntimeManifestDigest:   local.Key.RuntimeManifestDigest,
+		ToolchainManifestDigest: local.Key.ToolchainManifestDigest,
+		MaterializationDigest:   materializationDigest,
+		AgentProtocolGeneration: local.AgentProtocolGeneration,
+		AgentFeatures:           append([]string(nil), local.AgentFeatures...),
+		BackendBuildId:          local.BackendBuildID,
+		VerifiedAtUnixMs:        uint64(verifiedAt.UnixMilli()),
+	}}, nil
 }
 
 func containsSpaceSeparated(values, required string) bool {
@@ -453,7 +485,6 @@ func (b *AssignmentBackend) ValidateAssignment(
 		return err
 	}
 	if int(requirements.VcpuCount) > b.manager.cfg.MicroVMVCPUs ||
-		int(requirements.VcpuMillis) > b.manager.cfg.MicroVMVCPUs*1000 ||
 		int(requirements.MemoryBytes/mib) > b.manager.cfg.MicroVMMemoryMiB ||
 		int(requirements.DiskBytes/mib) > b.manager.cfg.MicroVMWorkspaceSizeMiB {
 		return fmt.Errorf("SecondBox Firecracker assignment exceeds local immutable profile capacity")
@@ -632,11 +663,10 @@ func (b *AssignmentBackend) StartAssignment(
 		RuntimeClass:            runtimemanager.RuntimeClassToolExecutor,
 		StartupMode:             startupMode,
 		SandboxPolicy: &runtimemanager.SandboxRuntimePolicy{
-			VCPUs:             int(requirements.VcpuCount),
-			CPUMillis:         int(requirements.VcpuMillis),
-			MemoryMiB:         int(requirements.MemoryBytes / mib),
-			WorkspaceSizeMiB:  int(requirements.DiskBytes / mib),
-			ProcessLimit:      int(requirements.ProcessLimit),
+			VCPUs:            int(requirements.VcpuCount),
+			MemoryMiB:        int(requirements.MemoryBytes / mib),
+			WorkspaceSizeMiB: int(requirements.DiskBytes / mib),
+
 			WorkspaceWritable: true,
 			SharedReadOnly:    true,
 		},
@@ -650,7 +680,7 @@ func (b *AssignmentBackend) StartAssignment(
 			case runtimemanager.StartupStageNetworkReady:
 				return progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_NETWORK_SETUP)
 			case runtimemanager.StartupStageComputeStarted:
-				return progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_FIRECRACKER_LAUNCH)
+				return progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_COMPUTE_LAUNCH)
 			case runtimemanager.StartupStageGuestNegotiated:
 				return progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_GUEST_NEGOTIATION)
 			default:
@@ -795,23 +825,20 @@ func (b *AssignmentBackend) assignmentGuestProtocolStart(assignment *runnerproto
 	if err != nil {
 		return assignmentGuestProtocolStart{}, fmt.Errorf("SecondBox Firecracker assignment signed compatibility metadata: %w", err)
 	}
-	expectedKeyID := b.manager.cfg.MicroVMPublicKeySHA256
 	if len(assignment.Assets) != 2 {
 		return assignmentGuestProtocolStart{}, fmt.Errorf("SecondBox Firecracker assignment must select exactly runtime and toolchain assets")
 	}
-	runtimeAsset, err := matchSignedAssignmentComponent(
+	runtimeAsset, err := matchAssignmentComponent(
 		assignment.Assets,
 		manifest.RuntimeBundle,
-		expectedKeyID,
 		manifest,
 	)
 	if err != nil {
 		return assignmentGuestProtocolStart{}, fmt.Errorf("SecondBox Firecracker runtime asset: %w", err)
 	}
-	toolchainAsset, err := matchSignedAssignmentComponent(
+	toolchainAsset, err := matchAssignmentComponent(
 		assignment.Assets,
 		manifest.ToolchainBundle,
-		expectedKeyID,
 		manifest,
 	)
 	if err != nil {
@@ -851,10 +878,9 @@ func mergeUniqueStrings(groups ...[]string) []string {
 	return merged
 }
 
-func matchSignedAssignmentComponent(
-	assets []*runnerprotocol.SignedAssetReference,
+func matchAssignmentComponent(
+	assets []*runnerprotocol.AssetReference,
 	component signedArtifactComponent,
-	expectedKeyID string,
 	manifest signedArtifactManifest,
 ) (int, error) {
 	for index, asset := range assets {
@@ -863,12 +889,11 @@ func matchSignedAssignmentComponent(
 			asset.ManifestDigest != component.ManifestDigest {
 			continue
 		}
-		if asset.SignatureKeyId != expectedKeyID ||
-			asset.Architecture != manifest.Architecture ||
+		if asset.Architecture != manifest.Architecture ||
 			asset.GuestProtocolGeneration < manifest.GuestProtocol.Minimum ||
 			asset.GuestProtocolGeneration > manifest.GuestProtocol.Maximum ||
 			!equalStringSets(asset.MandatoryGuestFeatures, component.MandatoryGuestFeatures) {
-			return -1, fmt.Errorf("assignment trust or compatibility evidence does not match the signed component")
+			return -1, fmt.Errorf("assignment compatibility evidence does not match the locally verified signed component")
 		}
 		for _, name := range asset.MandatoryGuestFeatures {
 			if _, err := guestFeatureFromContractName(name); err != nil {

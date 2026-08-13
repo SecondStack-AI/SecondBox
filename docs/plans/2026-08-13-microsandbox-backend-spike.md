@@ -1,8 +1,9 @@
 # Plan: Linux-First Mergeable Microsandbox Backend Spike
 
-> **Execution status (2026-08-13): Task 0L in progress.** Host-daemon checks confirm that `deimos`
-> is a real Linux KVM host and that Apple Silicon macOS hosts are available for the later macOS
-> phase. The work is strictly sequential: complete and qualify Linux end to end, then begin macOS.
+> **Execution status (2026-08-13): Tasks 0L and 1L passed; Task 2L is next.** Host-daemon checks
+> confirm that `deimos` is a real Linux KVM host and that Apple Silicon macOS hosts are available
+> for the later macOS phase. The work is strictly sequential: complete and qualify Linux end to
+> end, then begin macOS.
 > No macOS implementation or qualification may run before Task 7L passes. See
 > [Task 0 host-readiness evidence](evidence/2026-08-13-microsandbox-task-0-host-readiness.md).
 
@@ -135,31 +136,31 @@ After Task 0L passes, define the shared resource and runner contracts needed by 
 task changes contracts and control-plane behavior but adds no production Microsandbox composition
 and no macOS implementation.
 
-- [ ] Replace `SignedAssetReference` with `AssetReference`; remove `signature_key_id`; retain
+- [x] Replace `SignedAssetReference` with `AssetReference`; remove `signature_key_id`; retain
   immutable digest, architecture, guest protocol generation, artifact identity, and required
   features.
-- [ ] Define a strict versioned backend-materialization manifest keyed by backend kind, guest
+- [x] Define a strict versioned backend-materialization manifest keyed by backend kind, guest
   architecture, runtime digest, and toolchain digest. Bind local launch-artifact digests,
   agent protocol/features, and backend/helper build identity.
-- [ ] Preserve Firecracker's local signature and trust-anchor verification as a backend-specific
+- [x] Preserve Firecracker's local signature and trust-anchor verification as a backend-specific
   admission rule while removing signature evidence from the shared runner protocol.
-- [ ] Require Microsandbox materializations to name a digest-pinned source OCI manifest and a
+- [x] Require Microsandbox materializations to name a digest-pinned source OCI manifest and a
   pre-materialized content-addressed flat root artifact. Assignment start never resolves a mutable
   tag or performs an implicit registry pull.
-- [ ] Advertise only locally present, revalidated materializations and reject a missing tuple before
+- [x] Advertise only locally present, revalidated materializations and reject a missing tuple before
   creating a Workspace or helper.
-- [ ] Transactionally seal each RunnerPool to the first healthy Runner's private backend kind and
+- [x] Transactionally seal each RunnerPool to the first healthy Runner's private backend kind and
   reject every later mismatch. Do not add a mutation/reset API.
-- [ ] Keep backend kind out of public Profile, Sandbox, Instance, operation, and data-plane schemas.
-- [ ] Replace `vcpu_millis` with integer `vcpu_count`; remove `process_limit` throughout profiles,
+- [x] Keep backend kind out of public Profile, Sandbox, Instance, operation, and data-plane schemas.
+- [x] Replace `vcpu_millis` with integer `vcpu_count`; remove `process_limit` throughout profiles,
   assignments, quotas, accounting, projections, CLI output, fixtures, and tests.
-- [ ] Retain guest memory, workspace capacity, maximum duration/output/concurrency, architecture,
+- [x] Retain guest memory, workspace capacity, maximum duration/output/concurrency, architecture,
   capabilities, and startup mode.
-- [ ] Replace Firecracker-named universal capabilities and progress stages with provider-neutral
+- [x] Replace Firecracker-named universal capabilities and progress stages with provider-neutral
   evidence and compute-launch stages without changing lifecycle ordering.
-- [ ] Regenerate Go and TypeScript bindings and update migrations, fixtures, fake runners,
+- [x] Regenerate Go and TypeScript bindings and update migrations, fixtures, fake runners,
   scheduling, reconciliation, release inputs, and standard resources in the same task.
-- [ ] Update intended-design documents for profiles, protocol, assets, security, boundaries,
+- [x] Update intended-design documents for profiles, protocol, assets, security, boundaries,
   observability, placement, and release operation. Do not claim macOS support yet.
 
 #### Task 1L validation

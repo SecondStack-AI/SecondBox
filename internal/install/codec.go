@@ -283,7 +283,7 @@ func (plan InstallPlan) Validate() error {
 	if len(plan.Capacity.SubjectQuotas) != 7 {
 		return installerError("all seven subject quotas are required", nil)
 	}
-	if plan.Capacity.MaxSandboxes <= 0 || plan.Capacity.MaxCPUMillis <= 0 || plan.Capacity.MaxMemoryBytes <= 0 || plan.Capacity.MaxWorkspaceBytes <= 0 || plan.Capacity.ConcurrentStarts <= 0 || plan.Capacity.ConcurrentOperations <= 0 || plan.Capacity.StoragePressurePercent < 50 || plan.Capacity.StoragePressurePercent > 95 {
+	if plan.Capacity.MaxSandboxes <= 0 || plan.Capacity.MaxVCPUCount <= 0 || plan.Capacity.MaxMemoryBytes <= 0 || plan.Capacity.MaxWorkspaceBytes <= 0 || plan.Capacity.ConcurrentStarts <= 0 || plan.Capacity.ConcurrentOperations <= 0 || plan.Capacity.StoragePressurePercent < 50 || plan.Capacity.StoragePressurePercent > 95 {
 		return installerError("capacity plan is incomplete or unsafe", nil)
 	}
 	if plan.Compute.FirecrackerCPUTemplate != SingleHostFirecrackerCPUTemplate {

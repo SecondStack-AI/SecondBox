@@ -1531,7 +1531,7 @@ func TestBuildFirecrackerConfigIncludesWorkspaceAndVsock(t *testing.T) {
 func TestBuildFirecrackerConfigEnforcesSandboxRuntimePolicy(t *testing.T) {
 	cfg := &config.Config{MicroVMKernelPath: "/vmlinux", MicroVMVCPUs: 2, MicroVMMemoryMiB: 512}
 	policy := &runtimemanager.SandboxRuntimePolicy{
-		VCPUs: 1, CPUMillis: 750, MemoryMiB: 128, WorkspaceSizeMiB: 64, ProcessLimit: 16,
+		VCPUs: 1, MemoryMiB: 128, WorkspaceSizeMiB: 64,
 		WorkspaceWritable: false, SharedReadOnly: true,
 	}
 	got := buildFirecrackerConfigWithPolicy(cfg, "/vmlinux", "/rootfs", "/workspace", "/shared", "/vsock", "", "", false, policy)
@@ -1540,9 +1540,6 @@ func TestBuildFirecrackerConfigEnforcesSandboxRuntimePolicy(t *testing.T) {
 	}
 	if len(got.Drives) != 3 || !got.Drives[1].IsReadOnly || !got.Drives[2].IsReadOnly {
 		t.Fatalf("drive policy = %+v", got.Drives)
-	}
-	if !strings.Contains(got.BootSource.BootArgs, "secondbox.process_limit=16") {
-		t.Fatalf("boot args = %q", got.BootSource.BootArgs)
 	}
 }
 
@@ -1813,7 +1810,7 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 		MicroVMWorkspaceSizeMiB:    8,
 		MicroVMAllowUnjailed:       false,
 	}}
-	policy := &runtimemanager.SandboxRuntimePolicy{VCPUs: 1, CPUMillis: 750, MemoryMiB: 512, ProcessLimit: 64}
+	policy := &runtimemanager.SandboxRuntimePolicy{VCPUs: 1, MemoryMiB: 512}
 	launch, err := m.prepareLaunchWithPolicy(context.Background(), "fc-agent-123", runDir, kernel, rootfs, workspace, shared, "agfc123", "", os.Getuid(), false, policy)
 	if err != nil {
 		t.Fatalf("prepare launch: %v", err)
@@ -1831,8 +1828,8 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 		`"--chroot-base-dir","` + m.cfg.MicroVMJailerChrootBaseDir + `"`,
 		`"--new-pid-ns"`,
 		`"--cgroup","memory.max=805306368"`,
-		`"--cgroup","cpu.max=85000 100000"`,
-		`"--cgroup","pids.max=98"`,
+		`"--cgroup","cpu.max=110000 100000"`,
+		`"--cgroup","pids.max=34"`,
 		`"--","--api-sock","firecracker.sock","--config-file","firecracker.json"`,
 	} {
 		if !strings.Contains(args, want) {
@@ -1915,12 +1912,12 @@ func TestJailerMemoryCgroupAddsHostOverhead(t *testing.T) {
 }
 
 func TestJailerResourceCgroupsBoundCPUAndPIDsWithVMMHeadroom(t *testing.T) {
-	policy := &runtimemanager.SandboxRuntimePolicy{VCPUs: 2, CPUMillis: 1250, MemoryMiB: 2048, ProcessLimit: 64}
-	wantV2 := []string{"memory.max=2415919104", "cpu.max=137500 100000", "pids.max=100"}
+	policy := &runtimemanager.SandboxRuntimePolicy{VCPUs: 2, MemoryMiB: 2048}
+	wantV2 := []string{"memory.max=2415919104", "cpu.max=220000 100000", "pids.max=36"}
 	if got := jailerResourceCgroups(2, policy); !reflect.DeepEqual(got, wantV2) {
 		t.Fatalf("cgroup v2 = %q, want %q", got, wantV2)
 	}
-	wantV1 := []string{"memory.limit_in_bytes=2415919104", "cpu.cfs_period_us=100000", "cpu.cfs_quota_us=137500", "pids.max=100"}
+	wantV1 := []string{"memory.limit_in_bytes=2415919104", "cpu.cfs_period_us=100000", "cpu.cfs_quota_us=220000", "pids.max=36"}
 	if got := jailerResourceCgroups(1, policy); !reflect.DeepEqual(got, wantV1) {
 		t.Fatalf("cgroup v1 = %q, want %q", got, wantV1)
 	}
@@ -2105,30 +2102,30 @@ func TestUnjailedModeEmitsExplicitSecurityWarning(t *testing.T) {
 	}
 }
 
-func TestEnsureFirecrackerVersionAcceptsPinnedVersion(t *testing.T) {
-	fc := writeFakeFirecrackerVersion(t, "Firecracker v1.16.1")
-	if err := ensureFirecrackerVersion(fc); err != nil {
-		t.Fatalf("ensureFirecrackerVersion: %v", err)
+func TestEnsureComputeBackendVersionAcceptsPinnedVersion(t *testing.T) {
+	fc := writeFakeComputeBackendVersion(t, "Firecracker v1.16.1")
+	if err := ensureComputeBackendVersion(fc); err != nil {
+		t.Fatalf("ensureComputeBackendVersion: %v", err)
 	}
 }
 
-func TestEnsureFirecrackerVersionRejectsMismatch(t *testing.T) {
-	fc := writeFakeFirecrackerVersion(t, "Firecracker v1.16.2")
-	err := ensureFirecrackerVersion(fc)
+func TestEnsureComputeBackendVersionRejectsMismatch(t *testing.T) {
+	fc := writeFakeComputeBackendVersion(t, "Firecracker v1.16.2")
+	err := ensureComputeBackendVersion(fc)
 	if err == nil || !strings.Contains(err.Error(), "does not match pinned version 1.16.1") {
 		t.Fatalf("expected pinned-version mismatch, got %v", err)
 	}
 }
 
-func TestEnsureFirecrackerVersionRejectsUnparseableOutput(t *testing.T) {
-	fc := writeFakeFirecrackerVersion(t, "Firecracker dev-build")
-	err := ensureFirecrackerVersion(fc)
+func TestEnsureComputeBackendVersionRejectsUnparseableOutput(t *testing.T) {
+	fc := writeFakeComputeBackendVersion(t, "Firecracker dev-build")
+	err := ensureComputeBackendVersion(fc)
 	if err == nil || !strings.Contains(err.Error(), "parse firecracker --version output") {
 		t.Fatalf("expected parse error, got %v", err)
 	}
 }
 
-func writeFakeFirecrackerVersion(t *testing.T, output string) string {
+func writeFakeComputeBackendVersion(t *testing.T, output string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "firecracker")
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf '%s\\n' "+shellQuote(output)+"\n"), 0o700); err != nil {

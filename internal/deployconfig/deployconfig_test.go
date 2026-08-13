@@ -245,7 +245,7 @@ func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 		{name: "control plane listener mismatches container", want: "listen_address must be 0.0.0.0:8080", mutate: func(manifest *ManifestV1) { manifest.Deployment.ListenAddress = "0.0.0.0:9999" }},
 		{name: "Runner listener mismatches container", want: "runner_listen_address must be 0.0.0.0:9443", mutate: func(manifest *ManifestV1) { manifest.Deployment.RunnerListenAddress = "0.0.0.0:9999" }},
 		{name: "asset catalog path mismatches container", want: "signed_asset_catalog_path must be /etc/secondbox/signed-assets.json", mutate: func(manifest *ManifestV1) {
-			manifest.Deployment.SignedAssetCatalogPath = "/different/signed-assets.json"
+			manifest.Deployment.AssetCatalogPath = "/different/signed-assets.json"
 		}},
 		{name: "Compose project name carries uppercase", want: "deployment.compose_project_name", mutate: func(manifest *ManifestV1) { manifest.Deployment.ComposeProjectName = "SecondBox" }},
 		{name: "Compose project name starts with a hyphen", want: "deployment.compose_project_name", mutate: func(manifest *ManifestV1) { manifest.Deployment.ComposeProjectName = "-secondbox" }},
@@ -345,8 +345,8 @@ func TestManifestValidationUsesTheRuntimeAssetCatalogSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalogPath := filepath.Join(filepath.Dir(manifestPath), manifest.Deployment.SignedAssetCatalog)
-	incomplete := `{"assets":[{"manifestDigest":"` + developmentRuntimeDigest + `","signatureKeyId":"review-key"}]}`
+	catalogPath := filepath.Join(filepath.Dir(manifestPath), manifest.Deployment.AssetCatalog)
+	incomplete := `{"assets":[{"manifestDigest":"` + developmentRuntimeDigest + `"}]}`
 	if err := os.WriteFile(catalogPath, []byte(incomplete), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -754,15 +754,6 @@ func TestProductionQualifiesBundledAndExternalDatabase(t *testing.T) {
 					t.Fatal(err)
 				}
 				manifest.Database = Database{Mode: "external", URLFile: "secrets/database-url-production"}
-			}
-			if databaseMode == "bundled" {
-				if _, err := resolveManifest(manifest, filepath.Dir(manifestPath)); err == nil || !strings.Contains(err.Error(), "operator-supplied signed asset catalog") {
-					t.Fatalf("development catalog in production error = %v", err)
-				}
-			}
-			productionCatalog := `{"assets":[{"artifactId":"secondbox-development-runtime","manifestDigest":"` + developmentRuntimeDigest + `","signatureKeyId":"` + strings.Repeat("d", 64) + `","architecture":"amd64","guestProtocolGeneration":1,"mandatoryGuestFeatures":[]},{"artifactId":"secondbox-development-toolchain","manifestDigest":"` + developmentToolchainDigest + `","signatureKeyId":"` + strings.Repeat("d", 64) + `","architecture":"amd64","guestProtocolGeneration":1,"mandatoryGuestFeatures":[]}]}` + "\n"
-			if err := os.WriteFile(filepath.Join(filepath.Dir(manifestPath), manifest.Deployment.SignedAssetCatalog), []byte(productionCatalog), 0o600); err != nil {
-				t.Fatal(err)
 			}
 			encoded, err := encodeManifest(manifest)
 			if err != nil {

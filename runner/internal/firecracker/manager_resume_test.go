@@ -56,10 +56,8 @@ func newJailedResumeManager(t *testing.T, runDir string) *Manager {
 
 func resumeTestPolicy() *runtimemanager.SandboxRuntimePolicy {
 	return &runtimemanager.SandboxRuntimePolicy{
-		VCPUs:        1,
-		CPUMillis:    1000,
-		MemoryMiB:    512,
-		ProcessLimit: 128,
+		VCPUs:     1,
+		MemoryMiB: 512,
 	}
 }
 
@@ -130,10 +128,8 @@ func resumeKeyStartOpts() runtimemanager.StartOpts {
 		RuntimeClass:            runtimemanager.RuntimeClassToolExecutor,
 		SandboxPolicy: &runtimemanager.SandboxRuntimePolicy{
 			VCPUs:            2,
-			CPUMillis:        2000,
 			MemoryMiB:        512,
 			WorkspaceSizeMiB: 64,
-			ProcessLimit:     128,
 		},
 	}
 }
@@ -164,8 +160,7 @@ func TestSnapshotResumeTemplateKeyReadsImageDigestsFromTheSignedManifest(t *test
 	// no guest address, because a resumed guest's kernel booted before its
 	// Sandbox existed.
 	if !strings.Contains(key.KernelArgs, "secondbox.template_mode=1") ||
-		strings.Contains(key.KernelArgs, "ip=") ||
-		!strings.Contains(key.KernelArgs, "secondbox.process_limit=128") {
+		strings.Contains(key.KernelArgs, "ip=") {
 		t.Fatalf("template kernel arguments = %q", key.KernelArgs)
 	}
 	if key.GuestCID != snapshotTemplateGuestCID ||

@@ -155,7 +155,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		return err
 	}
 	defer assignmentReconcileStore.Close()
-	signedAssetCatalog, err := lifecycle.LoadFileAssetCatalog(processConfig.SignedAssetCatalogPath)
+	signedAssetCatalog, err := lifecycle.LoadFileAssetCatalog(processConfig.AssetCatalogPath)
 	if err != nil {
 		return err
 	}

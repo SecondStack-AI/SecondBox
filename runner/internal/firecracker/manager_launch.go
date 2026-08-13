@@ -442,9 +442,9 @@ func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, 
 		_ = os.RemoveAll(jailRoot)
 		return firecrackerLaunch{}, fmt.Errorf("per-instance jailer UID is required")
 	}
-	if policy == nil || policy.CPUMillis < 1 || policy.ProcessLimit < 1 || policy.VCPUs < 1 || policy.MemoryMiB < 1 {
+	if policy == nil || policy.VCPUs < 1 || policy.MemoryMiB < 1 {
 		_ = os.RemoveAll(jailRoot)
-		return firecrackerLaunch{}, fmt.Errorf("profile CPU, memory, and process limits are required for jailed launch")
+		return firecrackerLaunch{}, fmt.Errorf("profile vCPU and memory limits are required for jailed launch")
 	}
 	stagedRootfs := filepath.Join(jailRoot, rootfsName)
 	stagedWorkspace := filepath.Join(jailRoot, workspaceName)
@@ -521,12 +521,13 @@ func jailerResourceCgroups(version int, policy *runtimemanager.SandboxRuntimePol
 	// The host cgroup includes Firecracker's device-emulation and I/O work as
 	// well as guest vCPU execution. Add 10%, with a 100-millis floor, so the
 	// profile's CPU budget remains usable while ancillary VMM work stays bounded.
-	cpuOverheadMillis := policy.CPUMillis / 10
-	if cpuOverheadMillis < 100 {
-		cpuOverheadMillis = 100
+	cpuQuotaUnits := policy.VCPUs * 1000
+	cpuOverheadUnits := cpuQuotaUnits / 10
+	if cpuOverheadUnits < 100 {
+		cpuOverheadUnits = 100
 	}
 	const cpuPeriodMicros = 100_000
-	cpuQuotaMicros := int64(policy.CPUMillis+cpuOverheadMillis) * cpuPeriodMicros / 1000
+	cpuQuotaMicros := int64(cpuQuotaUnits+cpuOverheadUnits) * cpuPeriodMicros / 1000
 	if version == 1 {
 		cgroups = append(cgroups,
 			fmt.Sprintf("cpu.cfs_period_us=%d", cpuPeriodMicros),
@@ -535,11 +536,10 @@ func jailerResourceCgroups(version int, policy *runtimemanager.SandboxRuntimePol
 	} else {
 		cgroups = append(cgroups, fmt.Sprintf("cpu.max=%d %d", cpuQuotaMicros, cpuPeriodMicros))
 	}
-	// Guest processes are not host PIDs, but deriving this ceiling from the same
-	// profile limit keeps host thread growth bounded. The fixed allowance covers
-	// jailer/VMM workers and two threads per configured vCPU.
+	// Guest processes are not host PIDs. This backend-owned ceiling bounds the
+	// jailer/VMM workers without exposing a provider-specific PID promise in a Profile.
 	const vmmThreadHeadroom = 32
-	pidsMax := policy.ProcessLimit + vmmThreadHeadroom + 2*policy.VCPUs
+	pidsMax := vmmThreadHeadroom + 2*policy.VCPUs
 	cgroups = append(cgroups, fmt.Sprintf("pids.max=%d", pidsMax))
 	return cgroups
 }
@@ -797,12 +797,10 @@ func buildFirecrackerConfigWithPolicy(cfg *config.Config, kernelPath, rootfsPath
 	workspaceWritable := true
 	vcpus := cfg.MicroVMVCPUs
 	memoryMiB := cfg.MicroVMMemoryMiB
-	processLimit := 0
 	if policy != nil {
 		workspaceWritable = policy.WorkspaceWritable
 		vcpus = policy.VCPUs
 		memoryMiB = policy.MemoryMiB
-		processLimit = policy.ProcessLimit
 	}
 	drives := []drive{
 		{DriveID: "rootfs", PathOnHost: rootfsPath, IsRootDevice: true, IsReadOnly: false},
@@ -812,7 +810,7 @@ func buildFirecrackerConfigWithPolicy(cfg *config.Config, kernelPath, rootfsPath
 		drives = append(drives, drive{DriveID: "shared", PathOnHost: sharedImagePath, IsRootDevice: false, IsReadOnly: true})
 	}
 	fc := firecrackerConfig{
-		BootSource: bootSource{KernelImagePath: kernelPath, BootArgs: effectiveKernelArgsWithProcessLimit(cfg, guestIP, processLimit)},
+		BootSource: bootSource{KernelImagePath: kernelPath, BootArgs: effectiveKernelArgs(cfg, guestIP)},
 		Drives:     drives,
 		Machine:    machineConfig{VCPUCount: vcpus, MemSizeMiB: memoryMiB, SMT: false, CPUTemplate: cfg.MicroVMCPUTemplate},
 		Vsock:      vsockConfig{VsockID: "secondbox-vsock", GuestCID: 3, UDSPath: vsockUDS},
@@ -825,14 +823,6 @@ func buildFirecrackerConfigWithPolicy(cfg *config.Config, kernelPath, rootfsPath
 		}}
 	}
 	return fc
-}
-
-func effectiveKernelArgsWithProcessLimit(cfg *config.Config, guestIP string, processLimit int) string {
-	args := effectiveKernelArgs(cfg, guestIP)
-	if processLimit > 0 {
-		args += " secondbox.process_limit=" + strconv.Itoa(processLimit)
-	}
-	return args
 }
 
 func effectiveKernelArgs(cfg *config.Config, guestIP string) string {

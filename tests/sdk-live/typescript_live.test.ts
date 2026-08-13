@@ -92,10 +92,9 @@ function liveProfileRevisionSpec(): ProfileRevisionSpec {
     runtimeBundleDigest: `sha256:${"a".repeat(64)}`,
     toolchainBundleDigest: `sha256:${"b".repeat(64)}`,
     resources: {
-      cpuMillis: 1000,
+      vcpuCount: 1,
       memoryBytes: 2 ** 30,
       workspaceBytes: 8 * 2 ** 30,
-      processLimit: 128,
       concurrentOperations: 4,
     },
     startup: {

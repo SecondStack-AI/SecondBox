@@ -615,8 +615,8 @@ func (session *Session) validateRegistration(registration *runnerv1.RunnerRegist
 		return fmt.Errorf("%w: Registration identity, version, or capacity evidence is incomplete", ErrRunnerMessage)
 	}
 	if len(registration.ReadinessFailures) != 0 ||
-		!registration.Capabilities.KvmReady ||
-		!registration.Capabilities.JailerReady ||
+		!registration.Capabilities.HypervisorReady ||
+		!registration.Capabilities.IsolationReady ||
 		!registration.Capabilities.CgroupReady ||
 		!registration.Capabilities.NetworkPolicyReady ||
 		!registration.Capabilities.StorageReady ||

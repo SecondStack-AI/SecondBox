@@ -171,7 +171,7 @@ type StoragePlan struct {
 }
 type CapacityPlan struct {
 	MaxSandboxes           int64            `json:"maxSandboxes"`
-	MaxCPUMillis           int64            `json:"maxCpuMillis"`
+	MaxVCPUCount           int64            `json:"maxVcpuCount"`
 	MaxMemoryBytes         int64            `json:"maxMemoryBytes"`
 	MaxWorkspaceBytes      int64            `json:"maxWorkspaceBytes"`
 	ConcurrentStarts       int64            `json:"concurrentStarts"`
@@ -183,17 +183,17 @@ type ComputePlan struct {
 	FirecrackerCPUTemplate string `json:"firecrackerCpuTemplate"`
 }
 type NetworkPlan struct {
-	APIAddress                string            `json:"apiAddress"`
-	RunnerAddress             string            `json:"runnerAddress"`
-	DataPlaneAddress          string            `json:"dataPlaneAddress"`
-	DatabaseAddress           string            `json:"databaseAddress"`
-	GuestBridgeCIDR           string            `json:"guestBridgeCidr"`
-	ComposeBackendCIDR        string            `json:"composeBackendCidr,omitempty"`
-	TAPPrefix                 string            `json:"tapPrefix"`
-	CgroupParent              string            `json:"cgroupParent"`
-	JailerUIDRange            UIDRange          `json:"jailerUidRange"`
-	DNSUpstream               string            `json:"dnsUpstream"`
-	Gateways                  map[string]string `json:"gateways"`
+	APIAddress         string            `json:"apiAddress"`
+	RunnerAddress      string            `json:"runnerAddress"`
+	DataPlaneAddress   string            `json:"dataPlaneAddress"`
+	DatabaseAddress    string            `json:"databaseAddress"`
+	GuestBridgeCIDR    string            `json:"guestBridgeCidr"`
+	ComposeBackendCIDR string            `json:"composeBackendCidr,omitempty"`
+	TAPPrefix          string            `json:"tapPrefix"`
+	CgroupParent       string            `json:"cgroupParent"`
+	JailerUIDRange     UIDRange          `json:"jailerUidRange"`
+	DNSUpstream        string            `json:"dnsUpstream"`
+	Gateways           map[string]string `json:"gateways"`
 }
 type ReleasePlan struct {
 	Version                string            `json:"version"`

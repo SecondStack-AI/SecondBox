@@ -54,7 +54,7 @@ type BoundaryFactory func(*testing.T, time.Time) Boundary
 type Snapshot struct {
 	RunnerState        string
 	DrainPhase         string
-	CPUMillis          int64
+	VCPUCount          int64
 	MemoryBytes        int64
 	DiskBytes          int64
 	Instances          int64
@@ -104,11 +104,12 @@ func (runner *FakeRunner) Registration() *runnerv1.RunnerToControlPlane {
 				MessageId: runner.messageID("registration", sequence), Sequence: sequence,
 				RunnerId: runner.RunnerID, ConnectionId: runner.ConnectionID,
 				RunnerPoolId: runner.PoolName, SoftwareVersion: "1.0.0",
-				ProtocolVersion: 1,
+				ProtocolVersion: 3,
+				BackendKind:     runnerv1.ComputeBackendKind_COMPUTE_BACKEND_KIND_FIRECRACKER,
 				Capabilities: &runnerv1.RunnerCapabilities{
 					Architecture: "amd64", KernelRelease: "6.12.0",
-					FirecrackerVersion: "1.16.1",
-					KvmReady:           true, JailerReady: true, CgroupReady: true,
+					ComputeBackendVersion: "1.16.1",
+					HypervisorReady:       true, IsolationReady: true, CgroupReady: true,
 					NetworkPolicyReady: true, StorageReady: true, CleanupReady: true,
 					DataPlaneReady: true,
 					GuestProtocolGenerations: &runnerv1.ProtocolVersionRange{
@@ -116,17 +117,11 @@ func (runner *FakeRunner) Registration() *runnerv1.RunnerToControlPlane {
 					},
 				},
 				Allocatable: &runnerv1.Capacity{
-					VcpuMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30,
+					VcpuCount: 8, MemoryBytes: 32 << 30, DiskBytes: 200 << 30,
 					Instances: 8, Operations: 32,
 				},
-				Reserved: &runnerv1.Capacity{},
-				ArtifactCache: []*runnerv1.ArtifactCacheEvidence{
-					{
-						ArtifactId:       "runtime",
-						ManifestDigest:   "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-						VerifiedAtUnixMs: 1,
-					},
-				},
+				Reserved:                       &runnerv1.Capacity{},
+				Materializations:               fixtureMaterializations(),
 				StartupTiming:                  &runnerv1.StartupTiming{},
 				DataPlaneAdvertisedAddress:     "10.0.0.5:7443",
 				DataPlaneCertificateSpkiSha256: strings.Repeat("a", 64),
@@ -144,7 +139,7 @@ func (runner *FakeRunner) Heartbeat(phase runnerv1.DrainPhase) *runnerv1.RunnerT
 				RunnerId: runner.RunnerID, ConnectionId: runner.ConnectionID,
 				ObservedAtUnixMs: 1,
 				Allocatable: &runnerv1.Capacity{
-					VcpuMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30,
+					VcpuCount: 8, MemoryBytes: 32 << 30, DiskBytes: 200 << 30,
 					Instances: 8, Operations: 32,
 				},
 				Reserved: &runnerv1.Capacity{}, DrainPhase: phase,
@@ -240,7 +235,7 @@ func RunRunnerConformanceSuite(t *testing.T, factory BoundaryFactory) {
 		connectAndRegister(t, boundary, runner, now)
 		snapshot := readSnapshot(t, boundary, runner.RunnerID)
 		if snapshot.RunnerState != "ready" ||
-			snapshot.CPUMillis != 8000 ||
+			snapshot.VCPUCount != 8 ||
 			snapshot.MemoryBytes != 32<<30 ||
 			snapshot.DiskBytes != 200<<30 ||
 			snapshot.Instances != 8 ||
@@ -388,7 +383,8 @@ func RunRunnerConformanceSuite(t *testing.T, factory BoundaryFactory) {
 		boundary := factory(t, now)
 		runner := NewFakeRunner("runner-conformance", "pool-conformance", "connection-version")
 		response, err := boundary.Connect(
-			t.Context(), runner.RunnerID, runner.ConnectionID, runner.Hello(2, 3),
+			t.Context(), runner.RunnerID, runner.ConnectionID,
+			runner.Hello(runnerv1.SupportedProtocolMaximum+1, runnerv1.SupportedProtocolMaximum+2),
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -407,7 +403,8 @@ func connectAndRegister(
 ) {
 	t.Helper()
 	response, err := boundary.Connect(
-		t.Context(), runner.RunnerID, runner.ConnectionID, runner.Hello(1, 1),
+		t.Context(), runner.RunnerID, runner.ConnectionID,
+		runner.Hello(runnerv1.SupportedProtocolMinimum, runnerv1.SupportedProtocolMaximum),
 	)
 	if err != nil || response.GetWelcome() == nil {
 		t.Fatalf("Welcome, error = %#v, %v", response, err)

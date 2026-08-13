@@ -297,15 +297,19 @@ func (store *PostgresStateStore) RecordRegistration(
 	if len(registration.ReadinessFailures) != 0 {
 		return false, ErrRunnerPrerequisites
 	}
+	backendKind := protocolBackendKind(registration.BackendKind)
+	if backendKind == "" {
+		return false, ErrRunnerPrerequisites
+	}
 	prerequisites := map[string]bool{
-		"firecracker":    registration.Capabilities != nil && registration.Capabilities.FirecrackerVersion != "",
-		"kvm":            registration.Capabilities != nil && registration.Capabilities.KvmReady,
-		"jailer":         registration.Capabilities != nil && registration.Capabilities.JailerReady,
-		"cgroup":         registration.Capabilities != nil && registration.Capabilities.CgroupReady,
-		"network-policy": registration.Capabilities != nil && registration.Capabilities.NetworkPolicyReady,
-		"storage":        registration.Capabilities != nil && registration.Capabilities.StorageReady,
-		"cleanup":        registration.Capabilities != nil && registration.Capabilities.CleanupReady,
-		"data-plane":     registration.Capabilities != nil && registration.Capabilities.DataPlaneReady,
+		"compute-backend": registration.Capabilities != nil && registration.Capabilities.ComputeBackendVersion != "",
+		"hypervisor":      registration.Capabilities != nil && registration.Capabilities.HypervisorReady,
+		"isolation":       registration.Capabilities != nil && registration.Capabilities.IsolationReady,
+		"cgroup":          registration.Capabilities != nil && registration.Capabilities.CgroupReady,
+		"network-policy":  registration.Capabilities != nil && registration.Capabilities.NetworkPolicyReady,
+		"storage":         registration.Capabilities != nil && registration.Capabilities.StorageReady,
+		"cleanup":         registration.Capabilities != nil && registration.Capabilities.CleanupReady,
+		"data-plane":      registration.Capabilities != nil && registration.Capabilities.DataPlaneReady,
 	}
 	prerequisites["local-workspace"] = prerequisites["storage"] && prerequisites["cleanup"]
 	if registration.Capabilities == nil ||
@@ -360,12 +364,30 @@ func (store *PostgresStateStore) RecordRegistration(
 		return false, fmt.Errorf("SecondBox runner protocol versions encoding: %w", err)
 	}
 	cache := struct {
-		ArtifactDigests []string `json:"artifactDigests"`
-	}{ArtifactDigests: make([]string, 0, len(registration.ArtifactCache))}
-	for _, evidence := range registration.ArtifactCache {
-		if evidence != nil {
-			cache.ArtifactDigests = append(cache.ArtifactDigests, evidence.ManifestDigest)
+		ArtifactDigests  []string `json:"artifactDigests"`
+		Materializations []struct {
+			BackendKind     string `json:"backendKind"`
+			Architecture    string `json:"architecture"`
+			RuntimeDigest   string `json:"runtimeDigest"`
+			ToolchainDigest string `json:"toolchainDigest"`
+			Digest          string `json:"digest"`
+		} `json:"materializations"`
+	}{ArtifactDigests: make([]string, 0, len(registration.Materializations)*2)}
+	if len(registration.Materializations) == 0 {
+		return false, ErrRunnerPrerequisites
+	}
+	for _, evidence := range registration.Materializations {
+		if !validMaterializationEvidence(evidence, registration.BackendKind, registration.Capabilities.Architecture) {
+			return false, ErrRunnerPrerequisites
 		}
+		cache.ArtifactDigests = append(cache.ArtifactDigests, evidence.RuntimeManifestDigest, evidence.ToolchainManifestDigest)
+		cache.Materializations = append(cache.Materializations, struct {
+			BackendKind     string `json:"backendKind"`
+			Architecture    string `json:"architecture"`
+			RuntimeDigest   string `json:"runtimeDigest"`
+			ToolchainDigest string `json:"toolchainDigest"`
+			Digest          string `json:"digest"`
+		}{backendKind, evidence.GuestArchitecture, evidence.RuntimeManifestDigest, evidence.ToolchainManifestDigest, evidence.MaterializationDigest})
 	}
 	cacheJSON, err := json.Marshal(cache)
 	if err != nil {
@@ -383,29 +405,37 @@ func (store *PostgresStateStore) RecordRegistration(
 		return duplicate, err
 	}
 	defer tx.Rollback(ctx)
-	var poolState string
+	var poolState, poolBackendKind string
 	if err := tx.QueryRow(ctx, `
-		SELECT state FROM secondbox.runner_pools WHERE name=$1`,
+		SELECT state,backend_kind FROM secondbox.runner_pools WHERE name=$1 FOR UPDATE`,
 		registration.RunnerPoolId,
-	).Scan(&poolState); err != nil {
+	).Scan(&poolState, &poolBackendKind); err != nil {
 		return false, fmt.Errorf("SecondBox runner Registration pool lookup: %w", err)
 	}
 	if poolState != "ready" {
 		return false, errors.New("SecondBox RunnerPool is not accepting runners")
+	}
+	if poolBackendKind != "" && poolBackendKind != backendKind {
+		return false, errors.New("SecondBox RunnerPool is sealed to a different compute backend")
+	}
+	if poolBackendKind == "" {
+		if _, err := tx.Exec(ctx, `UPDATE secondbox.runner_pools SET backend_kind=$2 WHERE name=$1 AND backend_kind=''`, registration.RunnerPoolId, backendKind); err != nil {
+			return false, fmt.Errorf("SecondBox RunnerPool backend seal: %w", err)
+		}
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.runners (
 			id,pool_name,name,state,architectures_json,capabilities_json,capacity_json,
 			protocol_versions_json,guest_protocol_minimum,guest_protocol_maximum,
 			software_version,active_connection_id,last_sequence,drain_phase,
-			reserved_capacity_json,artifact_cache_json,sandbox_start_sample_count,
+			reserved_capacity_json,artifact_cache_json,backend_kind,sandbox_start_sample_count,
 			sandbox_start_p95_milliseconds,last_seen_at,revision,created_at,updated_at
-		) VALUES ($1,$2,$1,'connected','[]','{}','{}','[]',0,0,'',$3,0,'active','{}','[]',0,0,NULL,1,$4,$4)
+		) VALUES ($1,$2,$1,'connected','[]','{}','{}','[]',0,0,'',$3,0,'active','{}','[]',$5,0,0,NULL,1,$4,$4)
 		ON CONFLICT (id) DO UPDATE SET
 			pool_name=EXCLUDED.pool_name,active_connection_id=EXCLUDED.active_connection_id,
 			state='connected',last_sequence=0,revision=secondbox.runners.revision+1,
 			updated_at=EXCLUDED.updated_at`,
-		registration.RunnerId, registration.RunnerPoolId, registration.ConnectionId, now.UTC(),
+		registration.RunnerId, registration.RunnerPoolId, registration.ConnectionId, now.UTC(), backendKind,
 	); err != nil {
 		return false, fmt.Errorf("SecondBox runner Registration identity upsert: %w", err)
 	}
@@ -417,7 +447,7 @@ func (store *PostgresStateStore) RecordRegistration(
 			last_sequence=$10,drain_phase='active',reserved_capacity_json=$11,
 			artifact_cache_json=$12,sandbox_start_sample_count=$13,
 			sandbox_start_p95_milliseconds=$14,last_seen_at=$15,
-			data_plane_address=$17,
+			data_plane_address=$17,backend_kind=$18,
 			revision=revision+1,updated_at=$15
 		WHERE id=$1 AND pool_name=$2 AND active_connection_id=$16`,
 		registration.RunnerId, registration.RunnerPoolId, architecturesJSON, capabilitiesJSON,
@@ -426,7 +456,7 @@ func (store *PostgresStateStore) RecordRegistration(
 		registration.Capabilities.GuestProtocolGenerations.Maximum,
 		registration.SoftwareVersion, registration.Sequence,
 		reservedJSON, cacheJSON, startCount, startP95Milliseconds,
-		now.UTC(), registration.ConnectionId, dataPlaneEndpoint,
+		now.UTC(), registration.ConnectionId, dataPlaneEndpoint, backendKind,
 	)
 	if err != nil {
 		return false, fmt.Errorf("SecondBox runner Registration update: %w", err)
@@ -695,7 +725,7 @@ func durableRunnerReservation(
 	var capacity runnerCapacity
 	if err := tx.QueryRow(ctx, `
 		SELECT
-		  COALESCE(sum((revision.spec_json->'resources'->>'cpuMillis')::bigint),0),
+		  COALESCE(sum((revision.spec_json->'resources'->>'vcpuCount')::bigint),0),
 		  COALESCE(sum((revision.spec_json->'resources'->>'memoryBytes')::bigint),0),
 		  COALESCE(sum((revision.spec_json->'resources'->>'workspaceBytes')::bigint),0),
 		  count(*),
@@ -711,7 +741,7 @@ func durableRunnerReservation(
 		  AND assignment.state IN ('assigned','accepted','starting','ready','uncertain')`,
 		runnerID,
 	).Scan(
-		&capacity.CPUMillis,
+		&capacity.VCPUCount,
 		&capacity.MemoryBytes,
 		&capacity.DiskBytes,
 		&capacity.Instances,
@@ -3306,7 +3336,7 @@ func (store *PostgresStateStore) beginOrderedMessage(
 
 func allPrerequisitesReady(capabilities map[string]bool) bool {
 	for _, name := range []string{
-		"firecracker", "kvm", "jailer", "cgroup", "network-policy", "storage", "cleanup",
+		"compute-backend", "hypervisor", "isolation", "cgroup", "network-policy", "storage", "cleanup", "data-plane",
 	} {
 		if !capabilities[name] {
 			return false
@@ -3315,8 +3345,47 @@ func allPrerequisitesReady(capabilities map[string]bool) bool {
 	return true
 }
 
+func protocolBackendKind(kind runnerv1.ComputeBackendKind) string {
+	switch kind {
+	case runnerv1.ComputeBackendKind_COMPUTE_BACKEND_KIND_FIRECRACKER:
+		return "firecracker"
+	case runnerv1.ComputeBackendKind_COMPUTE_BACKEND_KIND_MICROSANDBOX:
+		return "microsandbox"
+	default:
+		return ""
+	}
+}
+
+func validMaterializationEvidence(evidence *runnerv1.BackendMaterializationEvidence, backend runnerv1.ComputeBackendKind, architecture string) bool {
+	if evidence == nil || evidence.SchemaVersion != 1 || evidence.BackendKind != backend ||
+		evidence.GuestArchitecture != architecture || evidence.AgentProtocolGeneration == 0 ||
+		strings.TrimSpace(evidence.BackendBuildId) == "" || evidence.VerifiedAtUnixMs == 0 {
+		return false
+	}
+	for _, digest := range []string{
+		evidence.RuntimeManifestDigest, evidence.ToolchainManifestDigest, evidence.MaterializationDigest,
+	} {
+		if !canonicalSHA256Digest(digest) {
+			return false
+		}
+	}
+	if backend == runnerv1.ComputeBackendKind_COMPUTE_BACKEND_KIND_MICROSANDBOX {
+		return canonicalSHA256Digest(evidence.SourceOciManifestDigest) &&
+			canonicalSHA256Digest(evidence.FlatRootDigest) && strings.TrimSpace(evidence.HelperBuildId) != ""
+	}
+	return evidence.SourceOciManifestDigest == "" && evidence.FlatRootDigest == "" && evidence.HelperBuildId == ""
+}
+
+func canonicalSHA256Digest(value string) bool {
+	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") {
+		return false
+	}
+	decoded, err := hex.DecodeString(strings.TrimPrefix(value, "sha256:"))
+	return err == nil && len(decoded) == sha256.Size
+}
+
 type runnerCapacity struct {
-	CPUMillis   int64
+	VCPUCount   int64
 	MemoryBytes int64
 	DiskBytes   int64
 	Instances   int64
@@ -3328,7 +3397,7 @@ func runnerCapacityFromProtocol(capacity *runnerv1.Capacity) (runnerCapacity, er
 		return runnerCapacity{}, errors.New("SecondBox runner capacity is required")
 	}
 	return runnerCapacity{
-		CPUMillis: int64(capacity.VcpuMillis), MemoryBytes: int64(capacity.MemoryBytes),
+		VCPUCount: int64(capacity.VcpuCount), MemoryBytes: int64(capacity.MemoryBytes),
 		DiskBytes: int64(capacity.DiskBytes), Instances: int64(capacity.Instances),
 		Operations: int64(capacity.Operations),
 	}, nil
@@ -3352,7 +3421,7 @@ func encodeRunnerCapacity(capacity runnerCapacity) ([]byte, error) {
 
 func maxRunnerCapacity(left runnerCapacity, right runnerCapacity) runnerCapacity {
 	return runnerCapacity{
-		CPUMillis:   max(left.CPUMillis, right.CPUMillis),
+		VCPUCount:   max(left.VCPUCount, right.VCPUCount),
 		MemoryBytes: max(left.MemoryBytes, right.MemoryBytes),
 		DiskBytes:   max(left.DiskBytes, right.DiskBytes),
 		Instances:   max(left.Instances, right.Instances),
@@ -3744,7 +3813,7 @@ func assignmentProgressStageName(stage runnerv1.AssignmentProgressStage) (string
 		return "workspace_attach", nil
 	case runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_NETWORK_SETUP:
 		return "network_setup", nil
-	case runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_FIRECRACKER_LAUNCH:
+	case runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_COMPUTE_LAUNCH:
 		return "compute_launch", nil
 	case runnerv1.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_GUEST_NEGOTIATION:
 		return "guest_negotiation", nil

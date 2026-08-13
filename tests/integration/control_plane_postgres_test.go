@@ -54,7 +54,7 @@ func TestMain(m *testing.M) {
 
 func TestConcurrentSandboxCreationIsIdempotentAndPinsProfileRevision(t *testing.T) {
 	controlPlane, databaseStore := newControlPlaneFixture(t, contracts.QuotaLimits{
-		MaxSandboxes: 20, MaxActiveInstances: 20, MaxCPUMillis: 40000,
+		MaxSandboxes: 20, MaxActiveInstances: 20, MaxVCPUCount: 40,
 		MaxMemoryBytes: 40 << 30, MaxSnapshots: 100, MaxPortSessions: 20,
 		MaxConcurrentOperations: 20,
 	})
@@ -139,7 +139,7 @@ func TestConcurrentSandboxCreationIsIdempotentAndPinsProfileRevision(t *testing.
 	}
 
 	revised, err := controlPlane.ReviseProfile(t.Context(), admin, profile.Name, contracts.ReviseProfileRequest{
-		Spec: testProfileSpec(2000),
+		Spec: testProfileSpec(2),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -256,7 +256,7 @@ func TestSandboxCreationFromSnapshotPinsSourceHomeRunner(t *testing.T) {
 	if _, err := pool.Exec(t.Context(), `
 		UPDATE secondbox.runners
 		SET reserved_capacity_json=jsonb_build_object(
-		      'CPUMillis',(capacity_json->>'CPUMillis')::bigint,
+		      'VCPUCount',(capacity_json->>'VCPUCount')::bigint,
 		      'MemoryBytes',(capacity_json->>'MemoryBytes')::bigint,
 		      'DiskBytes',0,
 		      'Instances',(capacity_json->>'Instances')::bigint,
@@ -545,7 +545,7 @@ func TestProfileIdempotencyReplaysAfterIdentityTablesAreRemoved(t *testing.T) {
 	controlPlane, _ := newControlPlaneFixture(t, generousQuota())
 	admin := fixtureAdmin(t, controlPlane)
 	request := contracts.CreateProfileRequest{
-		Name: "profile-replay-without-identity", Spec: testProfileSpec(1000),
+		Name: "profile-replay-without-identity", Spec: testProfileSpec(1),
 	}
 	first, replayed, err := controlPlane.CreateProfileIdempotent(
 		t.Context(), admin, "profile-replay-without-identity", request,
@@ -685,7 +685,7 @@ func TestSandboxAdmissionRejectsMissingDisabledAndIncompatibleProfiles(t *testin
 	}
 
 	disabled, err := controlPlane.CreateProfile(t.Context(), admin, contracts.CreateProfileRequest{
-		Name: "disabled-profile", Spec: testProfileSpec(1000),
+		Name: "disabled-profile", Spec: testProfileSpec(1),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -699,7 +699,7 @@ func TestSandboxAdmissionRejectsMissingDisabledAndIncompatibleProfiles(t *testin
 		t.Fatalf("disabled Profile admission error = %v, want ErrProfileDisabled", err)
 	}
 
-	incompatibleSpec := testProfileSpec(1000)
+	incompatibleSpec := testProfileSpec(1)
 	incompatibleSpec.Pool = "unavailable-pool"
 	incompatible, err := controlPlane.CreateProfile(t.Context(), admin, contracts.CreateProfileRequest{
 		Name: "incompatible-profile", Spec: incompatibleSpec,
@@ -726,7 +726,7 @@ func TestSandboxAdmissionRejectsMissingDisabledAndIncompatibleProfiles(t *testin
 	}); err != nil {
 		t.Fatal(err)
 	}
-	resumeSpec := testProfileSpec(1000)
+	resumeSpec := testProfileSpec(1)
 	resumeSpec.Startup = contracts.StartupPolicy{Mode: contracts.StartupModeSnapshotResume}
 	resumeProfile, err := controlPlane.CreateProfile(t.Context(), admin, contracts.CreateProfileRequest{
 		Name: "snapshot-resume-profile", Spec: resumeSpec,

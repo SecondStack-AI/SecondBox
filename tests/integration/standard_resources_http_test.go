@@ -46,7 +46,7 @@ func TestStandardResourcesFreshUpgradeAndReplayConvergeThroughLiveControlPlane(t
 	upgraded.Profiles = append([]resourceapply.Profile(nil), document.Profiles...)
 	upgraded.Profiles[1].Revisions = append([]resourceapply.ProfileRevision(nil), document.Profiles[1].Revisions...)
 	second := upgraded.Profiles[1].Revisions[0].Spec
-	second.Resources.CPUMillis++
+	second.Resources.VCPUCount++
 	digest, err := resourceapply.SpecDigest(second)
 	if err != nil {
 		t.Fatal(err)
@@ -89,5 +89,5 @@ func liveStandardDocument(t *testing.T) resourceapply.Document {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return resourceapply.Document{SchemaVersion: resourceapply.SchemaVersion, RunnerPools: []resourceapply.RunnerPool{{Name: standardresources.PoolAMD64, Architectures: []string{"amd64"}, Capabilities: []string{"compute", "local-workspace"}, CapacityPolicy: map[string]int64{"maxSandboxes": 20, "maxCpuMillis": 80000, "maxMemoryBytes": 171798691840}, State: "ready", MutableFields: []string{"capacityPolicy", "state"}}}, Profiles: []resourceapply.Profile{agent, coding}}
+	return resourceapply.Document{SchemaVersion: resourceapply.SchemaVersion, RunnerPools: []resourceapply.RunnerPool{{Name: standardresources.PoolAMD64, Architectures: []string{"amd64"}, Capabilities: []string{"compute", "local-workspace"}, CapacityPolicy: map[string]int64{"maxSandboxes": 20, "maxVcpuCount": 80, "maxMemoryBytes": 171798691840}, State: "ready", MutableFields: []string{"capacityPolicy", "state"}}}, Profiles: []resourceapply.Profile{agent, coding}}
 }

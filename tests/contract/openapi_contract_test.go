@@ -497,7 +497,7 @@ func TestSandboxCreateRejectsInfrastructureAuthorityOverrides(t *testing.T) {
 	}
 
 	for _, forbidden := range []string{
-		"backend", "backendRef", "cpuMillis", "environmentId", "fencingToken",
+		"backend", "backendRef", "vcpuCount", "environmentId", "fencingToken",
 		"hostPath", "image", "imageRef", "idempotencyKey", "lifecycle",
 		"lifecyclePolicyId", "memoryBytes", "network", "placement",
 		"resourceClassId", "resources", "runnerCredential", "runnerId",

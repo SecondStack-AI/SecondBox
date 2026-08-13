@@ -76,18 +76,18 @@ func validStressConfig() stressConfig {
 			StoragePressureDenyPercent: 90,
 		},
 		Profile: stressProfileConfig{
-			CPUMillis: 1000, MemoryBytes: 512 << 20, WorkspaceBytes: 1 << 30,
-			ProcessLimit: 128, ConcurrentOperations: 4, DrainGraceSeconds: 30,
+			VCPUCount: 1, MemoryBytes: 512 << 20, WorkspaceBytes: 1 << 30,
+			ConcurrentOperations: 4, DrainGraceSeconds: 30,
 			IdleSeconds: 3600, MaximumDurationSeconds: 7200, LeaseSeconds: 60,
 			SnapshotLimit: 32, SnapshotRetentionSeconds: 86400,
 			MaximumDeadlineMilliseconds: 60000,
-			MaximumBufferedOutputBytes: 1 << 20, StreamWindowBytes: 65536,
+			MaximumBufferedOutputBytes:  1 << 20, StreamWindowBytes: 65536,
 			MaximumTransferBytes: 1 << 20, TerminalDetachSeconds: 30,
 			DataPlaneTransport: "proxied",
 		},
 		SubjectMaxSandboxes: 100, SubjectMaxActiveInstances: 20,
 		SubjectMaxConcurrentOps: 100, SubjectMaxSnapshots: 100,
-		SubjectMaxPortSessions: 100, SubjectMaxCPUMillis: 100000,
+		SubjectMaxPortSessions: 100, SubjectMaxVCPUCount: 100,
 		SubjectMaxMemoryBytes: 100 << 30,
 	}
 }

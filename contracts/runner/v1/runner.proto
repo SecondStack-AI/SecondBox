@@ -56,7 +56,7 @@ message ProtocolRejection {
 }
 
 message Capacity {
-  uint32 vcpu_millis = 1;
+  uint32 vcpu_count = 1;
   uint64 memory_bytes = 2;
   uint64 disk_bytes = 3;
   uint32 instances = 4;
@@ -66,9 +66,9 @@ message Capacity {
 message RunnerCapabilities {
   string architecture = 1;
   string kernel_release = 2;
-  string firecracker_version = 3;
-  bool kvm_ready = 4;
-  bool jailer_ready = 5;
+  string compute_backend_version = 3;
+  bool hypervisor_ready = 4;
+  bool isolation_ready = 5;
   bool cgroup_ready = 6;
   bool network_policy_ready = 7;
   bool storage_ready = 8;
@@ -82,10 +82,26 @@ message RunnerCapabilities {
   bool snapshot_resume_ready = 12;
 }
 
-message ArtifactCacheEvidence {
-  string artifact_id = 1;
-  string manifest_digest = 2;
-  uint64 verified_at_unix_ms = 3;
+enum ComputeBackendKind {
+  COMPUTE_BACKEND_KIND_UNSPECIFIED = 0;
+  COMPUTE_BACKEND_KIND_FIRECRACKER = 1;
+  COMPUTE_BACKEND_KIND_MICROSANDBOX = 2;
+}
+
+message BackendMaterializationEvidence {
+  uint32 schema_version = 1;
+  ComputeBackendKind backend_kind = 2;
+  string guest_architecture = 3;
+  string runtime_manifest_digest = 4;
+  string toolchain_manifest_digest = 5;
+  string materialization_digest = 6;
+  string source_oci_manifest_digest = 7;
+  string flat_root_digest = 8;
+  uint32 agent_protocol_generation = 9;
+  repeated string agent_features = 10;
+  string backend_build_id = 11;
+  string helper_build_id = 12;
+  uint64 verified_at_unix_ms = 13;
 }
 
 message StartupTiming {
@@ -95,8 +111,8 @@ message StartupTiming {
 
 enum RunnerReadinessFailure {
   RUNNER_READINESS_FAILURE_UNSPECIFIED = 0;
-  RUNNER_READINESS_FAILURE_KVM = 1;
-  RUNNER_READINESS_FAILURE_JAILER = 2;
+  RUNNER_READINESS_FAILURE_HYPERVISOR = 1;
+  RUNNER_READINESS_FAILURE_ISOLATION = 2;
   RUNNER_READINESS_FAILURE_CGROUP = 3;
   RUNNER_READINESS_FAILURE_NETWORK = 4;
   RUNNER_READINESS_FAILURE_STORAGE = 5;
@@ -106,6 +122,7 @@ enum RunnerReadinessFailure {
 }
 
 message RunnerRegistration {
+  reserved 11;
   string message_id = 1;
   uint64 sequence = 2;
   string runner_id = 3;
@@ -116,7 +133,6 @@ message RunnerRegistration {
   RunnerCapabilities capabilities = 8;
   Capacity allocatable = 9;
   Capacity reserved = 10;
-  repeated ArtifactCacheEvidence artifact_cache = 11;
   repeated RunnerReadinessFailure readiness_failures = 12;
   StartupTiming startup_timing = 13;
   // data_plane_advertised_address is administrative capacity evidence of the
@@ -126,6 +142,8 @@ message RunnerRegistration {
   // data_plane_certificate_spki_sha256 pins the runner identity certificate
   // used by the caller-facing listener.
   string data_plane_certificate_spki_sha256 = 15;
+  ComputeBackendKind backend_kind = 16;
+  repeated BackendMaterializationEvidence materializations = 17;
 }
 
 enum DrainPhase {
@@ -185,6 +203,7 @@ message CapacityReservation {
 }
 
 message ProfileRequirements {
+  reserved 8, 9;
   uint32 vcpu_count = 1;
   uint64 memory_bytes = 2;
   uint64 disk_bytes = 3;
@@ -192,8 +211,6 @@ message ProfileRequirements {
   repeated string required_capabilities = 5;
   uint64 maximum_operation_ms = 6;
   uint64 maximum_output_bytes = 7;
-  uint32 vcpu_millis = 8;
-  uint32 process_limit = 9;
   // startup_mode is the immutable ProfileRevision startup policy, provider
   // neutral and stated by the operator: "cold_boot" or "snapshot_resume". A
   // runner that cannot honour the stated mode fails the assignment; it never
@@ -201,10 +218,10 @@ message ProfileRequirements {
   string startup_mode = 10;
 }
 
-message SignedAssetReference {
+message AssetReference {
   string artifact_id = 1;
   string manifest_digest = 2;
-  string signature_key_id = 3;
+  reserved 3;
   string architecture = 4;
   uint32 guest_protocol_generation = 5;
   repeated string mandatory_guest_features = 6;
@@ -244,7 +261,7 @@ message AssignmentCommand {
   AssignmentFence fence = 3;
   string profile_revision_id = 4;
   ProfileRequirements requirements = 5;
-  repeated SignedAssetReference assets = 6;
+  repeated AssetReference assets = 6;
   uint64 deadline_unix_ms = 8;
   Correlation correlation = 9;
   NetworkPolicy network_policy = 10;
@@ -276,7 +293,7 @@ enum AssignmentProgressStage {
   ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY = 1;
   ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_ATTACH = 2;
   ASSIGNMENT_PROGRESS_STAGE_NETWORK_SETUP = 3;
-  ASSIGNMENT_PROGRESS_STAGE_FIRECRACKER_LAUNCH = 4;
+  ASSIGNMENT_PROGRESS_STAGE_COMPUTE_LAUNCH = 4;
   ASSIGNMENT_PROGRESS_STAGE_GUEST_NEGOTIATION = 5;
   ASSIGNMENT_PROGRESS_STAGE_READY = 6;
   ASSIGNMENT_PROGRESS_STAGE_TEARDOWN = 7;

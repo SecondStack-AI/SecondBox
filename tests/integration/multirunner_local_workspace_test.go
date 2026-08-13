@@ -48,7 +48,7 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 	seedFixtureHomeRunner(t, poolName, runnerA)
 	seedFixtureHomeRunner(t, poolName, runnerB)
 	profileName := fmt.Sprintf("multirunner-profile-%d", fixtureSequence)
-	spec := testProfileSpec(1000)
+	spec := testProfileSpec(1)
 	spec.Pool = poolName
 	profile, err := controlPlane.CreateProfile(
 		t.Context(),
@@ -150,7 +150,7 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 		SET reserved_capacity_json=$2,updated_at=$3
 		WHERE id=$1`,
 		runnerA,
-		`{"CPUMillis":0,"MemoryBytes":0,"DiskBytes":10995116277760,"Instances":0,"Operations":0}`,
+		`{"VCPUCount":0,"MemoryBytes":0,"DiskBytes":10995116277760,"Instances":0,"Operations":0}`,
 		now.Add(2*time.Second),
 	); err != nil {
 		t.Fatal(err)
@@ -202,7 +202,7 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 		    drain_phase='draining',updated_at=$3
 		WHERE id=$1`,
 		runnerA,
-		`{"CPUMillis":0,"MemoryBytes":0,"DiskBytes":0,"Instances":0,"Operations":0}`,
+		`{"VCPUCount":0,"MemoryBytes":0,"DiskBytes":0,"Instances":0,"Operations":0}`,
 		now.Add(4*time.Second),
 	); err != nil {
 		t.Fatal(err)
@@ -252,7 +252,7 @@ func TestTwoFakeRunnersPinHomesAndNeverRelocateAutomatically(t *testing.T) {
 	if _, err := pool.Exec(t.Context(), `
 		UPDATE secondbox.runners
 		SET state='ready',active_connection_id=$2,drain_phase='active',
-		    reserved_capacity_json='{"CPUMillis":0,"MemoryBytes":0,"DiskBytes":0,
+		    reserved_capacity_json='{"VCPUCount":0,"MemoryBytes":0,"DiskBytes":0,
 		      "Instances":0,"Operations":0}',updated_at=$3
 		WHERE id=$1`,
 		runnerA,
@@ -907,14 +907,14 @@ func multirunnerRecordEvent(
 
 type multirunnerAssetCatalog struct{}
 
-func (multirunnerAssetCatalog) Resolve(digest string) (lifecycle.SignedAsset, error) {
+func (multirunnerAssetCatalog) Resolve(digest string) (lifecycle.Asset, error) {
 	if digest == "" {
-		return lifecycle.SignedAsset{}, errors.New("empty fixture asset digest")
+		return lifecycle.Asset{}, errors.New("empty fixture asset digest")
 	}
-	return lifecycle.SignedAsset{
-		ArtifactID:              "asset-" + digest[len(digest)-8:],
-		ManifestDigest:          digest,
-		SignatureKeyID:          "multirunner-signing-key",
+	return lifecycle.Asset{
+		ArtifactID:     "asset-" + digest[len(digest)-8:],
+		ManifestDigest: digest,
+
 		Architecture:            "amd64",
 		GuestProtocolGeneration: 1,
 		MandatoryGuestFeatures:  []string{},

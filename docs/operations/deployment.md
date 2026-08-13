@@ -1,5 +1,7 @@
 # Deployment and runtime operations
 
+Each Runner selects one compute backend explicitly. RunnerPool backend homogeneity is control-plane-private and is sealed by the first healthy registration; operators cannot mutate or reset it. Profiles and public resources continue to name only the RunnerPool.
+
 SecondBox deploys one unprivileged control plane and separately managed privileged Firecracker Runners. Operators describe the deployment in one strict, versioned `secondbox.toml`; `secondbox-deploy` compiles that manifest into the process environments consumed by Compose, `secondboxd`, and remote Runner service managers. The generated environment is transport, not operator input.
 
 The standalone binary distribution includes `secondbox-deploy`; the commands below assume it is on `PATH`. The `Justfile` continues to use `go run ./cmd/secondbox-deploy` as a source-checkout developer path.
