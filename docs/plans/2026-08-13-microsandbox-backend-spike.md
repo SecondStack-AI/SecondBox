@@ -177,29 +177,29 @@ and no macOS implementation.
 Create the minimal production helper before WorkspaceStore depends on it. The helper owns one
 Instance's libkrun process lifetime but never owns durable Sandbox identity, fencing, or storage.
 
-- [ ] Create `runner/microsandbox-helper` as a locked Rust crate using the exact locally patched
+- [x] Create `runner/microsandbox-helper` as a locked Rust crate using the exact locally patched
   dependency input proven in Task 0L; commit its lockfile, patch/build manifest, and license
   inventory without publishing externally.
-- [ ] Define one private versioned helper protobuf covering start/ready, exec, files, PTY, TCP,
+- [x] Define one private versioned helper protobuf covering start/ready, exec, files, PTY, TCP,
   shutdown, cancellation, terminal events, diagnostics, and stream credit. Generate Go and Rust
   bindings from the same schema.
-- [ ] Carry the protocol over one inherited Unix socket using bounded frames, multiplexed request
+- [x] Carry the protocol over one inherited Unix socket using bounded frames, multiplexed request
   and stream IDs, bounded diagnostic text, and no secret-bearing command-line arguments.
-- [ ] Pass the Workspace image and lifecycle pipe as inherited descriptors. Reopen the image only
+- [x] Pass the Workspace image and lifecycle pipe as inherited descriptors. Reopen the image only
   through `/proc/self/fd/<n>` and attach it with a stable block ID for `/workspace`.
-- [ ] Implement `format-workspace` using explicit UUID formatting. Accept a destination descriptor,
+- [x] Implement `format-workspace` using explicit UUID formatting. Accept a destination descriptor,
   logical capacity, label, and deterministic Workspace UUID; validate and durably flush before
   returning.
-- [ ] Configure integer VCPU count, guest memory, exact pre-materialized root artifact, startup
+- [x] Configure integer VCPU count, guest memory, exact pre-materialized root artifact, startup
   environment, and translated network policy without a Microsandbox database, named volume,
   secondary workspace lock, or runtime registry pull.
-- [ ] Emit dependency/helper versions, host platform, agent protocol/features, supported operations,
+- [x] Emit dependency/helper versions, host platform, agent protocol/features, supported operations,
   and active materialization digest before readiness.
-- [ ] Treat lifecycle-pipe EOF as parent loss; shut down, flush within a bound, and exit. Never
+- [x] Treat lifecycle-pipe EOF as parent loss; shut down, flush within a bound, and exit. Never
   daemonize or survive the runner parent.
-- [ ] Reject malformed, oversized, out-of-order, unknown-version, and stale-stream frames; add
+- [x] Reject malformed, oversized, out-of-order, unknown-version, and stale-stream frames; add
   fuzz/property coverage for framing and stream state.
-- [ ] Keep cgo and in-process libkrun linkage out of the Go runner.
+- [x] Keep cgo and in-process libkrun linkage out of the Go runner.
 
 #### Task 2L validation
 
