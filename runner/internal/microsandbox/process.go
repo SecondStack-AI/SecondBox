@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -168,7 +169,8 @@ func launchHelper(
 	if response.RequestId != 1 || ready == nil ||
 		ready.MaterializationDigest != config.MaterializationDigest ||
 		ready.HelperVersion == "" || ready.DependencyVersion == "" ||
-		ready.AgentProtocolGeneration != config.manifest.AgentProtocolGeneration {
+		ready.AgentProtocolGeneration != config.manifest.AgentProtocolGeneration ||
+		!containsAll(ready.AgentFeatures, "agent-relay", "network-policy", "network-smoltcp") {
 		process.forceStop()
 		return nil, nil, fmt.Errorf("SecondBox Microsandbox helper readiness identity mismatch")
 	}
@@ -180,6 +182,15 @@ func launchHelper(
 	cleanupConnection = false
 	cleanupLifecycle = false
 	return process, ready, nil
+}
+
+func containsAll(values []string, required ...string) bool {
+	for _, requirement := range required {
+		if !slices.Contains(values, requirement) {
+			return false
+		}
+	}
+	return true
 }
 
 func helperStartRequest(

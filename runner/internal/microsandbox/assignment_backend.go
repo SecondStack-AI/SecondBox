@@ -12,10 +12,13 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/materialization"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/microsandboxprotocol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 	"google.golang.org/protobuf/proto"
 )
@@ -39,6 +42,8 @@ type activeAssignment struct {
 	terminalSent   bool
 	operations     map[uint64]context.CancelFunc
 	nextOperation  uint64
+	ready          *microsandboxprotocol.ReadyEvent
+	evidenceErr    error
 }
 
 // AssignmentBackend composes one local helper process per fenced Instance.
@@ -49,6 +54,100 @@ type AssignmentBackend struct {
 	reserved          capacityReservation
 	instanceTerminals chan runnercontrol.BackendInstanceTerminal
 	startupSamples    []time.Duration
+	evidence          runnerevidence.Sink
+	runnerID          string
+}
+
+type BackendDimensions struct {
+	BackendKind  string
+	HostPlatform string
+}
+
+type MetricsSnapshot struct {
+	Dimensions       BackendDimensions
+	ActiveInstances  uint32
+	ActiveOperations uint32
+	ColdStartCount   uint64
+	ColdStartP95     time.Duration
+}
+
+type cleanupStack struct {
+	steps []func() error
+	armed []bool
+}
+
+type assignmentFailure struct {
+	decision runnerprotocol.AssignmentDecision
+	terminal runnerprotocol.AssignmentTerminalKind
+	cause    error
+}
+
+func (failure assignmentFailure) Error() string { return failure.cause.Error() }
+func (failure assignmentFailure) Unwrap() error { return failure.cause }
+func (failure assignmentFailure) AssignmentDecision() runnerprotocol.AssignmentDecision {
+	return failure.decision
+}
+func (failure assignmentFailure) AssignmentTerminal() runnerprotocol.AssignmentTerminalKind {
+	return failure.terminal
+}
+
+func incompatibleAssignment(cause error) error {
+	return assignmentFailure{
+		decision: runnerprotocol.AssignmentDecision_ASSIGNMENT_DECISION_REJECTED_INCOMPATIBLE_PROFILE,
+		terminal: runnerprotocol.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_ADMISSION_FAILED,
+		cause:    cause,
+	}
+}
+
+func capacityAssignment(cause error) error {
+	return assignmentFailure{
+		decision: runnerprotocol.AssignmentDecision_ASSIGNMENT_DECISION_REJECTED_CAPACITY,
+		terminal: runnerprotocol.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_ADMISSION_FAILED,
+		cause:    cause,
+	}
+}
+
+func artifactAssignment(cause error) error {
+	return assignmentFailure{
+		decision: runnerprotocol.AssignmentDecision_ASSIGNMENT_DECISION_REJECTED_ARTIFACT,
+		terminal: runnerprotocol.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_ADMISSION_FAILED,
+		cause:    cause,
+	}
+}
+
+func infrastructureAssignment(cause error) error {
+	return assignmentFailure{
+		decision: runnerprotocol.AssignmentDecision_ASSIGNMENT_DECISION_REJECTED_PREREQUISITE,
+		terminal: runnerprotocol.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_INFRASTRUCTURE_FAILED,
+		cause:    cause,
+	}
+}
+
+func (stack *cleanupStack) push(step func() error) int {
+	stack.steps = append(stack.steps, step)
+	stack.armed = append(stack.armed, true)
+	return len(stack.steps) - 1
+}
+
+func (stack *cleanupStack) disarm(index int) {
+	stack.armed[index] = false
+}
+
+func (stack *cleanupStack) clear() {
+	for index := range stack.armed {
+		stack.armed[index] = false
+	}
+}
+
+func (stack *cleanupStack) run() error {
+	var result error
+	for index := len(stack.steps) - 1; index >= 0; index-- {
+		if stack.armed[index] {
+			result = errors.Join(result, stack.steps[index]())
+			stack.armed[index] = false
+		}
+	}
+	return result
 }
 
 // NewAssignmentBackend validates all immutable local inputs before the backend can advertise.
@@ -66,6 +165,30 @@ func NewAssignmentBackend(config Config) (*AssignmentBackend, error) {
 
 func (backend *AssignmentBackend) InstanceTerminals() <-chan runnercontrol.BackendInstanceTerminal {
 	return backend.instanceTerminals
+}
+
+func (backend *AssignmentBackend) SetRunnerEvidenceSink(sink runnerevidence.Sink, runnerID string) {
+	if sink == nil || strings.TrimSpace(runnerID) == "" {
+		return
+	}
+	backend.mu.Lock()
+	backend.evidence = sink
+	backend.runnerID = strings.TrimSpace(runnerID)
+	backend.mu.Unlock()
+}
+
+func (backend *AssignmentBackend) DiagnosticDimensions() BackendDimensions {
+	return BackendDimensions{BackendKind: "microsandbox", HostPlatform: runtime.GOOS + "-" + runtime.GOARCH}
+}
+
+func (backend *AssignmentBackend) MetricsSnapshot() MetricsSnapshot {
+	count, p95 := backend.StartupTiming()
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	return MetricsSnapshot{
+		Dimensions: backend.DiagnosticDimensions(), ActiveInstances: backend.reserved.instances,
+		ActiveOperations: backend.reserved.operations, ColdStartCount: count, ColdStartP95: p95,
+	}
 }
 
 func (backend *AssignmentBackend) StartupTiming() (uint64, time.Duration) {
@@ -150,27 +273,27 @@ func (backend *AssignmentBackend) ValidateAssignment(
 		return err
 	}
 	if assignment == nil || assignment.Fence == nil || assignment.Requirements == nil || assignment.Correlation == nil {
-		return fmt.Errorf("SecondBox Microsandbox assignment is incomplete")
+		return incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox assignment is incomplete"))
 	}
 	if strings.TrimSpace(assignment.WorkspaceId) == "" || !completeFence(assignment.Fence) {
-		return fmt.Errorf("SecondBox Microsandbox assignment Workspace or fence identity is incomplete")
+		return incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox assignment Workspace or fence identity is incomplete"))
 	}
 	if assignment.DeadlineUnixMs == 0 || time.Now().UnixMilli() >= int64(assignment.DeadlineUnixMs) {
-		return fmt.Errorf("SecondBox Microsandbox assignment deadline has expired")
+		return incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox assignment deadline has expired"))
 	}
 	requirements := assignment.Requirements
 	const mib = uint64(1 << 20)
 	if requirements.VcpuCount == 0 || requirements.MemoryBytes == 0 || requirements.DiskBytes == 0 ||
 		requirements.MemoryBytes%mib != 0 || requirements.DiskBytes%mib != 0 {
-		return fmt.Errorf("SecondBox Microsandbox assignment requires whole-MiB nonzero resources")
+		return incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox assignment requires whole-MiB nonzero resources"))
 	}
 	if requirements.Architecture != runtime.GOARCH || requirements.StartupMode != "cold_boot" {
-		return fmt.Errorf("SecondBox Microsandbox assignment architecture or startup mode is unsupported")
+		return incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox assignment architecture or startup mode is unsupported"))
 	}
 	if requirements.VcpuCount > backend.config.MaximumVCPUs ||
 		requirements.MemoryBytes > backend.config.MaximumMemoryBytes ||
 		requirements.DiskBytes > backend.config.MaximumDiskBytes {
-		return fmt.Errorf("SecondBox Microsandbox assignment exceeds immutable local capacity")
+		return capacityAssignment(fmt.Errorf("SecondBox Microsandbox assignment exceeds immutable local capacity"))
 	}
 	supported := map[string]bool{
 		"cleanup": true, "evidence": true, "kvm": true, "local-workspace": true,
@@ -178,14 +301,14 @@ func (backend *AssignmentBackend) ValidateAssignment(
 	}
 	for _, capability := range requirements.RequiredCapabilities {
 		if !supported[capability] {
-			return fmt.Errorf("SecondBox Microsandbox assignment requires unsupported capability %q", capability)
+			return incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox assignment requires unsupported capability %q", capability))
 		}
 	}
 	if err := backend.validateAssignmentMaterialization(assignment); err != nil {
-		return err
+		return artifactAssignment(err)
 	}
 	if _, err := translateNetworkPolicy(assignment.NetworkPolicy); err != nil {
-		return err
+		return incompatibleAssignment(err)
 	}
 	backend.mu.Lock()
 	defer backend.mu.Unlock()
@@ -193,12 +316,18 @@ func (backend *AssignmentBackend) ValidateAssignment(
 		if sameFence(active.fence, assignment.Fence) {
 			return nil
 		}
-		return fmt.Errorf("SecondBox Microsandbox assignment ID was reused with different fencing")
+		return incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox assignment ID was reused with different fencing"))
 	}
 	for _, active := range backend.assignments {
 		if active.fence.SandboxId == assignment.Fence.SandboxId && !active.fenced {
-			return fmt.Errorf("SecondBox Microsandbox Sandbox already has an unfenced assignment")
+			return incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox Sandbox already has an unfenced assignment"))
 		}
+	}
+	if backend.reserved.vcpus+requirements.VcpuCount > backend.config.MaximumVCPUs ||
+		backend.reserved.memory+requirements.MemoryBytes > backend.config.MaximumMemoryBytes ||
+		backend.reserved.disk+requirements.DiskBytes > backend.config.MaximumDiskBytes ||
+		backend.reserved.instances+1 > backend.config.MaximumInstances {
+		return capacityAssignment(fmt.Errorf("SecondBox Microsandbox assignment capacity is unavailable"))
 	}
 	return nil
 }
@@ -217,12 +346,16 @@ func (backend *AssignmentBackend) StartAssignment(
 		disk: assignment.Requirements.DiskBytes, instances: 1,
 	}
 	if err := backend.reserve(reservation); err != nil {
-		return result, err
+		return result, capacityAssignment(err)
 	}
-	reserved := true
+	cleanup := &cleanupStack{}
+	cleanup.push(func() error {
+		backend.release(reservation)
+		return nil
+	})
 	defer func() {
-		if resultErr != nil && reserved {
-			backend.release(reservation)
+		if resultErr != nil {
+			resultErr = errors.Join(resultErr, cleanup.run())
 		}
 	}()
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY); err != nil {
@@ -230,16 +363,11 @@ func (backend *AssignmentBackend) StartAssignment(
 	}
 	workspace, err := backend.config.WorkspaceStore.Open(ctx, assignment.WorkspaceId, assignment.Fence.SandboxGeneration)
 	if err != nil {
-		return result, fmt.Errorf("SecondBox Microsandbox resolve Workspace attachment: %w", err)
+		return result, infrastructureAssignment(fmt.Errorf("SecondBox Microsandbox resolve Workspace attachment: %w", err))
 	}
-	workspaceOwned := true
-	defer func() {
-		if resultErr != nil && workspaceOwned {
-			resultErr = errors.Join(resultErr, workspace.Close())
-		}
-	}()
+	workspaceCleanup := cleanup.push(workspace.Close)
 	if uint64(workspace.CapacityBytes()) != assignment.Requirements.DiskBytes {
-		return result, fmt.Errorf("SecondBox Microsandbox Workspace capacity differs from immutable Profile")
+		return result, incompatibleAssignment(fmt.Errorf("SecondBox Microsandbox Workspace capacity differs from immutable Profile"))
 	}
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_ATTACH); err != nil {
 		return result, err
@@ -253,17 +381,15 @@ func (backend *AssignmentBackend) StartAssignment(
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_COMPUTE_LAUNCH); err != nil {
 		return result, err
 	}
-	process, _, err := launchHelper(ctx, backend.config, assignment, workspace)
+	process, ready, err := launchHelper(ctx, backend.config, assignment, workspace)
 	if err != nil {
-		return result, err
+		return result, infrastructureAssignment(err)
 	}
-	workspaceOwned = false
-	cleanupProcess := true
-	defer func() {
-		if resultErr != nil && cleanupProcess {
-			process.forceStop()
-		}
-	}()
+	cleanup.disarm(workspaceCleanup)
+	cleanup.push(func() error {
+		process.forceStop()
+		return nil
+	})
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_GUEST_NEGOTIATION); err != nil {
 		return result, err
 	}
@@ -275,6 +401,10 @@ func (backend *AssignmentBackend) StartAssignment(
 		backendRef:    fmt.Sprintf("microsandbox:%d", process.command.Process.Pid),
 		operations:    make(map[uint64]context.CancelFunc),
 		nextOperation: 1,
+		ready:         ready,
+	}
+	if err := backend.emitLifecycle(ctx, active, "ready", "control:1", "completed", "ready"); err != nil {
+		return result, infrastructureAssignment(err)
 	}
 	backend.mu.Lock()
 	backend.assignments[assignment.Fence.AssignmentId] = active
@@ -287,8 +417,7 @@ func (backend *AssignmentBackend) StartAssignment(
 		backend.mu.Unlock()
 		return result, err
 	}
-	cleanupProcess = false
-	reserved = false
+	cleanup.clear()
 	return runnercontrol.BackendInstance{BackendKind: "microsandbox", BackendReference: active.backendRef}, nil
 }
 
@@ -320,6 +449,10 @@ func (backend *AssignmentBackend) observeExit(active *activeAssignment) {
 		ObservedAt:     time.Now().UTC(),
 		EvidenceDigest: digest,
 	}
+	backend.mu.Unlock()
+	evidenceErr := backend.emitLifecycle(context.Background(), active, "unexpected_exit", "control:terminal", "failed", "helper_exit")
+	backend.mu.Lock()
+	active.evidenceErr = errors.Join(active.evidenceErr, evidenceErr)
 	backend.mu.Unlock()
 	backend.instanceTerminals <- terminal
 }
@@ -366,7 +499,13 @@ func (backend *AssignmentBackend) FenceAssignment(
 	default:
 		err = active.process.shutdown(shutdownCtx)
 	}
+	outcome, terminalKind := "completed", "stopped"
+	if err != nil {
+		outcome, terminalKind = "failed", "cleanup_failed"
+	}
+	evidenceErr := backend.emitLifecycle(ctx, active, "teardown", "control:shutdown", outcome, terminalKind)
 	backend.mu.Lock()
+	err = errors.Join(err, evidenceErr, active.evidenceErr)
 	delete(backend.assignments, command.Fence.AssignmentId)
 	backend.releaseLocked(active.reservation)
 	backend.mu.Unlock()
@@ -522,6 +661,73 @@ func fenceDigest(fence *runnerprotocol.AssignmentFence) string {
 
 func helperTerminalDigest(active *activeAssignment) string {
 	value := fmt.Sprintf("%s\x00%s\x00%s", active.backendRef, active.process.stderr.String(), active.process.processWaitError())
+	sum := sha256.Sum256([]byte(value))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func (backend *AssignmentBackend) emitLifecycle(
+	ctx context.Context,
+	active *activeAssignment,
+	stage string,
+	streamID string,
+	outcome string,
+	terminalKind string,
+) error {
+	backend.mu.Lock()
+	sink, runnerID := backend.evidence, backend.runnerID
+	backend.mu.Unlock()
+	if sink == nil || runnerID == "" {
+		return nil
+	}
+	record := runnerevidence.NewRecord(runnerevidence.EventLifecycleStage, outcome, terminalKind, time.Now().UTC())
+	record.RunnerID = runnerID
+	record.RequestID = active.correlation.GetRequestId()
+	record.OperationID = active.correlation.GetOperationId()
+	record.LeaseID = active.correlation.GetLeaseId()
+	record.SandboxID = active.fence.SandboxId
+	record.InstanceID = active.fence.InstanceId
+	record.SandboxGeneration = active.fence.SandboxGeneration
+	record.AssignmentID = active.fence.AssignmentId
+	record.BackendKind = "microsandbox"
+	record.HostPlatform = active.ready.GetHostPlatform()
+	record.BackendVersion = active.ready.GetDependencyVersion()
+	record.Materialization = backend.config.MaterializationDigest
+	record.Stage = stage
+	record.StreamID = streamID
+	record.HelperPID = active.process.command.Process.Pid
+	if stage == "unexpected_exit" {
+		record.ExitCode, record.Signal, record.HelperReason = helperExitClassification(active.process)
+		record.StderrDigest = digestString(active.process.stderr.String())
+		record.EventTailDigest = digestString(fmt.Sprintf("%s\x00%d\x00%d", record.HelperReason, record.ExitCode, record.Signal))
+	}
+	if err := record.Validate(); err != nil {
+		return err
+	}
+	return sink.Emit(ctx, record)
+}
+
+func helperExitClassification(process *helperProcess) (int, int, string) {
+	err := process.processWaitError()
+	if err == nil {
+		return 0, 0, "exited"
+	}
+	var exit *os.PathError
+	if errors.As(err, &exit) {
+		return -1, 0, "launch_io_failure"
+	}
+	if process.command.ProcessState != nil {
+		if status, ok := process.command.ProcessState.Sys().(syscall.WaitStatus); ok {
+			if status.Signaled() {
+				return -1, int(status.Signal()), "signaled"
+			}
+			return status.ExitStatus(), 0, "exited_nonzero"
+		}
+		return process.command.ProcessState.ExitCode(), 0, "exited_nonzero"
+	}
+	return -1, 0, "unknown"
+}
+
+func digestString(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return "sha256:" + hex.EncodeToString(sum[:])
 }

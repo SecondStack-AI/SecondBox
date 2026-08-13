@@ -1,6 +1,6 @@
 # Plan: Linux-First Mergeable Microsandbox Backend Spike
 
-> **Execution status (2026-08-13): Tasks 0L through 5L passed; Task 6L is next.** Host-daemon checks
+> **Execution status (2026-08-13): Tasks 0L through 6L passed; Task 7L is next.** Host-daemon checks
 > confirm that `deimos` is a real Linux KVM host and that Apple Silicon macOS hosts are available
 > for the later macOS phase. The work is strictly sequential: complete and qualify Linux end to
 > end, then begin macOS.
@@ -311,22 +311,22 @@ Evidence: [Task 5L data-plane qualification](evidence/2026-08-13-microsandbox-ta
 Use Microsandbox's user-space network stack as the Linux backend implementation while preserving
 SecondBox's fail-closed resolved-policy contract and bounded operational evidence.
 
-- [ ] Translate deny-all and every supported domain, CIDR, protocol, and port allow-list exactly.
+- [x] Translate deny-all and every supported domain, CIDR, protocol, and port allow-list exactly.
   Reject any rule without an exact representation; never omit or broaden it.
-- [ ] Preserve DNS pinning, rebinding defense, private/metadata blocking, TLS behavior, and resolver
+- [x] Preserve DNS pinning, rebinding defense, private/metadata blocking, TLS behavior, and resolver
   discovery as documented backend properties rather than universal guarantees.
-- [ ] Make readiness prove the user-space policy engine and agent relay without TAP, nftables,
+- [x] Make readiness prove the user-space policy engine and agent relay without TAP, nftables,
   bridge, or elevated network privileges.
-- [ ] Record bounded lifecycle evidence containing runner, Sandbox, Instance, assignment,
+- [x] Record bounded lifecycle evidence containing runner, Sandbox, Instance, assignment,
   generation, helper PID, backend/platform versions, materialization digest, stage, and stream ID,
   excluding environment values, payloads, file contents, and network bodies.
-- [ ] Use a reverse-order cleanup stack for capacity, Workspace attachment, helper, socket, and
+- [x] Use a reverse-order cleanup stack for capacity, Workspace attachment, helper, socket, and
   network state on every pre-ready failure.
-- [ ] Map unsupported shapes/policies, absent capacity, digest mismatch, helper/hypervisor failure,
+- [x] Map unsupported shapes/policies, absent capacity, digest mismatch, helper/hypervisor failure,
   and guest negotiation/mount failures to their provider-neutral rejection classes.
-- [ ] Record exit status, signal, helper reason, and bounded stderr/event-tail digest after
+- [x] Record exit status, signal, helper reason, and bounded stderr/event-tail digest after
   unexpected exit without inventing cgroup OOM or PID-limit attribution.
-- [ ] Add fixed-cardinality backend and host-platform dimensions to diagnostics and metrics.
+- [x] Add fixed-cardinality backend and host-platform dimensions to diagnostics and metrics.
 
 #### Task 6L validation
 
@@ -334,6 +334,8 @@ SecondBox's fail-closed resolved-policy contract and bounded operational evidenc
 - `just test-microsandbox-linux`
 - `just lint`
 - `just test`
+
+Evidence: [Task 6L network and lifecycle qualification](evidence/2026-08-13-microsandbox-task-6-network-lifecycle.md).
 
 ### Task 7L: Qualify the complete Linux vertical slice
 

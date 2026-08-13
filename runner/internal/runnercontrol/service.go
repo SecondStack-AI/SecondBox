@@ -156,6 +156,14 @@ type evidenceAwareBackend interface {
 	SetRunnerEvidenceSink(runnerevidence.Sink, string)
 }
 
+type assignmentDecisionError interface {
+	AssignmentDecision() runnerprotocol.AssignmentDecision
+}
+
+type assignmentTerminalError interface {
+	AssignmentTerminal() runnerprotocol.AssignmentTerminalKind
+}
+
 type instanceTerminalBackend interface {
 	InstanceTerminals() <-chan BackendInstanceTerminal
 	MarkAssignmentReady(*runnerprotocol.AssignmentFence) error
@@ -1089,10 +1097,15 @@ func (s *RunnerProtocolService) handleAssignment(
 		)
 	}
 	if err := s.backend.ValidateAssignment(ctx, assignment); err != nil {
+		decision := runnerprotocol.AssignmentDecision_ASSIGNMENT_DECISION_REJECTED_PREREQUISITE
+		var typed assignmentDecisionError
+		if errors.As(err, &typed) {
+			decision = typed.AssignmentDecision()
+		}
 		return s.sendAssignmentAck(
 			stream,
 			assignment,
-			runnerprotocol.AssignmentDecision_ASSIGNMENT_DECISION_REJECTED_PREREQUISITE,
+			decision,
 			err.Error(),
 		)
 	}
@@ -1126,6 +1139,10 @@ func (s *RunnerProtocolService) handleAssignment(
 			"error", err,
 		)
 		terminal = runnerprotocol.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_RUNNER_FAILED
+		var typed assignmentTerminalError
+		if errors.As(err, &typed) {
+			terminal = typed.AssignmentTerminal()
+		}
 		safeDetail = "runner failed to start assignment"
 	} else {
 		s.recordActiveAssignment(assignment.Fence, instance.BackendReference)

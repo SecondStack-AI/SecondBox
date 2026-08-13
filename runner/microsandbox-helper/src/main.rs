@@ -82,7 +82,7 @@ fn serve() -> Result<(), String> {
         .map_err(|error| format!("create private guest runtime directory: {error}"))?;
     let vm = launch
         .build(console.backend(), runtime_dir.path())
-        .map_err(|error| format!("SecondBox Microsandbox helper libkrun configuration: {error}"))?;
+        .map_err(|error| error.to_string())?;
     let exit_handle = vm.exit_handle();
     thread::Builder::new()
         .name("secondbox-helper-control".into())
@@ -142,6 +142,9 @@ fn supervise_instance(
                     "file-streaming".into(),
                     "pty".into(),
                     "tcp".into(),
+                    "agent-relay".into(),
+                    "network-policy".into(),
+                    "network-smoltcp".into(),
                 ],
                 operations: supported_operations()
                     .into_iter()

@@ -21,7 +21,7 @@ export CARGO_HOME="$build_dir/helper-cargo-home"
 export CARGO_TARGET_DIR="$build_dir/cargo-target"
 export CARGO_NET_OFFLINE=true
 
-cargo test --locked --manifest-path runner/microsandbox-helper/Cargo.toml
+cargo test --locked --manifest-path "$build_dir/source/runner/microsandbox-helper/Cargo.toml"
 (
   cd runner
   go test ./cmd/secondbox-runner ./internal/microsandbox/... -count=1
