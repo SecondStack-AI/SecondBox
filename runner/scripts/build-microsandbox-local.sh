@@ -7,6 +7,7 @@ readonly EXPECTED_PATCHED_TREE="972fd637a835c175a4aa5b11fd52ccd0ab087f95"
 readonly EXPECTED_CARGO_LOCK_SHA256="7827c5aad40cfc4ab36be6aba3bc4c0d923e525c50fc4b54741776bcf13b95c8"
 readonly EXPECTED_PATCH_SHA256="943e728067cce9f0efe9ed578c74f6323bd6c1cf8407822a1e8ee998f64564de"
 readonly EXPECTED_PROBE_LOCK_SHA256="95f0107a1c27f7ad079012a919213207b4256950b73aec33ee624ed33c4638a7"
+readonly EXPECTED_HELPER_LOCK_SHA256="f8e07fd675fd194c9ba571547a05e122ad77e96829b3ff00e4455008b52eb5a8"
 readonly EXPECTED_LIBKRUNFW_COMMIT="21cb6dce19a615f63e41ecb913334d18560c1364"
 readonly EXPECTED_KERNEL_TARBALL_SHA256="194eef900ade82df74ed1d695daa45d03ee4bb415cae4f936a3dbaab2dbbb951"
 readonly ROOTFS_IMAGE="docker.io/library/alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce"
@@ -99,6 +100,11 @@ actual_probe_lock_sha256="$(sha256sum "$runner_dir/microsandbox-probe/Cargo.lock
   echo "SecondBox Microsandbox probe lock digest is $actual_probe_lock_sha256, expected $EXPECTED_PROBE_LOCK_SHA256" >&2
   exit 1
 }
+actual_helper_lock_sha256="$(sha256sum "$runner_dir/microsandbox-helper/Cargo.lock" | awk '{print $1}')"
+[[ "$actual_helper_lock_sha256" == "$EXPECTED_HELPER_LOCK_SHA256" ]] || {
+  echo "SecondBox Microsandbox helper lock digest is $actual_helper_lock_sha256, expected $EXPECTED_HELPER_LOCK_SHA256" >&2
+  exit 1
+}
 
 output_parent="$(dirname -- "$output_dir")"
 mkdir -p -- "$output_parent"
@@ -136,6 +142,10 @@ actual_patched_tree="$(git -C "$stage_dir/source" write-tree)"
 }
 
 cp -R -- "$runner_dir/microsandbox-probe" "$stage_dir/source/secondbox-probe"
+mkdir -p -- "$stage_dir/source/runner" "$stage_dir/source/contracts/microsandbox-helper/v1"
+cp -R -- "$runner_dir/microsandbox-helper" "$stage_dir/source/runner/microsandbox-helper"
+cp -- "$runner_dir/../contracts/microsandbox-helper/v1/helper.proto" \
+  "$stage_dir/source/contracts/microsandbox-helper/v1/helper.proto"
 mkdir -p -- "$stage_dir/source/build"
 
 docker build --file "$stage_dir/source/secondbox-probe/agentd.Dockerfile" \
@@ -163,6 +173,7 @@ install -m 0644 "$stage_dir/source/vendor/libkrunfw/libkrunfw.so.5.6.1" \
   printf 'cargo_lock_sha256=%s\n' "$EXPECTED_CARGO_LOCK_SHA256"
   printf 'patch_sha256=%s\n' "$EXPECTED_PATCH_SHA256"
   printf 'probe_lock_sha256=%s\n' "$EXPECTED_PROBE_LOCK_SHA256"
+  printf 'helper_lock_sha256=%s\n' "$EXPECTED_HELPER_LOCK_SHA256"
   printf 'libkrunfw_commit=%s\n' "$EXPECTED_LIBKRUNFW_COMMIT"
   printf 'kernel_tarball_sha256=%s\n' "$EXPECTED_KERNEL_TARBALL_SHA256"
   printf 'rootfs_image=%s\n' "$ROOTFS_IMAGE"
@@ -182,9 +193,20 @@ CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="$stage_dir/cargo-target" \
 CARGO_NET_OFFLINE=true CARGO_TARGET_DIR="$stage_dir/cargo-target" \
   cargo build --locked --manifest-path "$stage_dir/source/secondbox-probe/Cargo.toml" \
   --bin secondbox-microsandbox-probe
+CARGO_HOME="$stage_dir/helper-cargo-home" \
+  cargo fetch --locked --manifest-path "$stage_dir/source/runner/microsandbox-helper/Cargo.toml"
+CARGO_NET_OFFLINE=true CARGO_HOME="$stage_dir/helper-cargo-home" \
+  CARGO_TARGET_DIR="$stage_dir/cargo-target" \
+  cargo test --locked --manifest-path "$stage_dir/source/runner/microsandbox-helper/Cargo.toml"
+CARGO_NET_OFFLINE=true CARGO_HOME="$stage_dir/helper-cargo-home" \
+  CARGO_TARGET_DIR="$stage_dir/cargo-target" \
+  cargo build --locked --manifest-path "$stage_dir/source/runner/microsandbox-helper/Cargo.toml" \
+  --bin secondbox-microsandbox-helper
 
 mkdir -p -- "$stage_dir/runtime/bin" "$stage_dir/runtime/lib" "$stage_dir/rootfs"
 install -m 0755 "$stage_dir/cargo-target/debug/msb" "$stage_dir/runtime/bin/msb"
+install -m 0755 "$stage_dir/cargo-target/debug/secondbox-microsandbox-helper" \
+  "$stage_dir/runtime/bin/secondbox-microsandbox-helper"
 install -m 0644 "$stage_dir/source/build/libkrunfw.so.5.6.1" \
   "$stage_dir/runtime/lib/libkrunfw.so.5.6.1"
 ln -s libkrunfw.so.5.6.1 "$stage_dir/runtime/lib/libkrunfw.so.5"
@@ -201,6 +223,7 @@ rootfs_container=""
   sha256sum "$stage_dir/runtime/bin/msb"
   sha256sum "$stage_dir/runtime/lib/libkrunfw.so.5.6.1"
   sha256sum "$stage_dir/cargo-target/debug/secondbox-microsandbox-probe"
+  sha256sum "$stage_dir/runtime/bin/secondbox-microsandbox-helper"
 } >>"$stage_dir/build-evidence.txt"
 
 mv -- "$stage_dir" "$output_dir"

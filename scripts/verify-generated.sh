@@ -5,6 +5,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 scripts/verify-runner-protocol-generated.sh
 scripts/verify-guest-protocol-generated.sh
+scripts/verify-microsandbox-helper-generated.sh
 scripts/verify-portdirect-mirrored.sh
 scripts/verify-sdk-generated.sh
 go test ./internal/deployconfig -run TestExampleManifestIsGeneratedFromTheRegistry -count=1
