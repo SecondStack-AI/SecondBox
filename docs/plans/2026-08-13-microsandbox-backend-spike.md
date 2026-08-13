@@ -215,23 +215,23 @@ Extract durable workspace ownership behind a narrow platform driver while implem
 qualifying only the Linux driver. Common code owns manifests, generations, receipts, retention,
 snapshot/restore/delete, relocation framing, and path confinement.
 
-- [ ] Make only WorkspaceStore resolve host paths. Compute backends receive an opaque attachment
+- [x] Make only WorkspaceStore resolve host paths. Compute backends receive an opaque attachment
   containing the generation fence, exclusive writer lock, inherited descriptor, stable block ID,
   capacity, and filesystem identity.
-- [ ] Extract common manifest, generation, receipt, retention, snapshot, restore, delete, and
+- [x] Extract common manifest, generation, receipt, retention, snapshot, restore, delete, and
   relocation logic from platform operations.
-- [ ] Implement the Linux driver with `FICLONE`, `flock`, durable directory `fsync`, helper-based
+- [x] Implement the Linux driver with `FICLONE`, `flock`, durable directory `fsync`, helper-based
   ext4 formatting, and `/proc/self/fd/<n>` child attachment.
-- [ ] Preserve deterministic per-Workspace ext4 UUID validation on open, clone, restore, relocation,
+- [x] Preserve deterministic per-Workspace ext4 UUID validation on open, clone, restore, relocation,
   and replay. A virtio block ID is mount addressing, not image identity.
-- [ ] Keep workspace creation, snapshots, restores, and relocation destination creation reflink-only.
+- [x] Keep workspace creation, snapshots, restores, and relocation destination creation reflink-only.
   Return storage incompatibility on failure and never copy or reconstruct empty state.
-- [ ] Prove cross-process writer exclusion, crash release, receipt replay, UUID validation, atomic
+- [x] Prove cross-process writer exclusion, crash release, receipt replay, UUID validation, atomic
   publication, retention, relocation framing, sparse-file preservation, capacity accounting, and
   path confinement.
-- [ ] Make readiness create a source and clone under the configured final roots, mutate both, and
+- [x] Make readiness create a source and clone under the configured final roots, mutate both, and
   prove isolation before advertising storage readiness.
-- [ ] Preserve Firecracker WorkspaceStore behavior and existing recovery semantics.
+- [x] Preserve Firecracker WorkspaceStore behavior and existing recovery semantics.
 
 #### Task 3L validation
 

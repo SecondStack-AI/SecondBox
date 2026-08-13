@@ -28,6 +28,7 @@ type managerTestComputeAttachment struct {
 	workspaceID string
 	generation  uint64
 	image       *os.File
+	linkErr     error
 }
 
 func (*managerTestComputeAttachment) Handle() workspacestore.WorkspaceHandle {
@@ -42,8 +43,44 @@ func (attachment *managerTestComputeAttachment) Generation() uint64 {
 	return attachment.generation
 }
 
-func (attachment *managerTestComputeAttachment) Image() *os.File {
+func (attachment *managerTestComputeAttachment) Descriptor() *os.File {
 	return attachment.image
+}
+
+func (*managerTestComputeAttachment) StableBlockID() string { return "workspace" }
+func (attachment *managerTestComputeAttachment) CapacityBytes() int64 {
+	if attachment.image == nil {
+		return 0
+	}
+	info, _ := attachment.image.Stat()
+	if info == nil {
+		return 0
+	}
+	return info.Size()
+}
+func (*managerTestComputeAttachment) FilesystemUUID() string { return "test-workspace-uuid" }
+func (*managerTestComputeAttachment) ChildDescriptorPath(descriptor int) string {
+	return fmt.Sprintf("/proc/self/fd/%d", descriptor)
+}
+func (attachment *managerTestComputeAttachment) LinkInto(destination string) error {
+	if attachment.linkErr != nil {
+		return attachment.linkErr
+	}
+	_ = os.Remove(destination)
+	return os.Link(attachment.image.Name(), destination)
+}
+
+func managerTestAttachment(t *testing.T, path string) *managerTestComputeAttachment {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	return &managerTestComputeAttachment{workspaceID: "test-workspace", generation: 1, image: file}
 }
 
 func (attachment *managerTestComputeAttachment) Close() error {
@@ -1725,7 +1762,8 @@ func TestPrepareLaunchUnjailedIncludesInstanceID(t *testing.T) {
 		MicroVMMemoryMiB:     512,
 		MicroVMKernelPath:    "/kernel",
 	}}
-	launch, err := m.prepareLaunchWithPolicy(context.Background(), "fc-agent-cmp-a-id", dir, "/kernel", "/rootfs.ext4", "/workspace.ext4", "", "", "", os.Getuid(), false, nil)
+	workspace := managerTestAttachment(t, filepath.Join(t.TempDir(), "workspace.ext4"))
+	launch, err := m.prepareLaunchWithPolicy(context.Background(), "fc-agent-cmp-a-id", dir, "/kernel", "/rootfs.ext4", workspace, "", "", "", os.Getuid(), false, nil)
 	if err != nil {
 		t.Fatalf("prepare launch: %v", err)
 	}
@@ -1811,7 +1849,8 @@ func TestPrepareJailedLaunchStagesArtifactsAndCommand(t *testing.T) {
 		MicroVMAllowUnjailed:       false,
 	}}
 	policy := &runtimemanager.SandboxRuntimePolicy{VCPUs: 1, MemoryMiB: 512}
-	launch, err := m.prepareLaunchWithPolicy(context.Background(), "fc-agent-123", runDir, kernel, rootfs, workspace, shared, "agfc123", "", os.Getuid(), false, policy)
+	attachment := managerTestAttachment(t, workspace)
+	launch, err := m.prepareLaunchWithPolicy(context.Background(), "fc-agent-123", runDir, kernel, rootfs, attachment, shared, "agfc123", "", os.Getuid(), false, policy)
 	if err != nil {
 		t.Fatalf("prepare launch: %v", err)
 	}
@@ -1883,7 +1922,7 @@ func TestPrepareJailedLaunchRejectsUnixSocketPathOverflowBeforeStaging(t *testin
 		t.TempDir(),
 		"missing-kernel",
 		"missing-rootfs",
-		"missing-workspace",
+		managerTestAttachment(t, filepath.Join(t.TempDir(), "workspace.ext4")),
 		"",
 		"",
 		"",
@@ -1983,13 +2022,9 @@ func TestStageWorkspaceJailFileRejectsCrossDeviceCopyFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	dst := filepath.Join(dir, "jail-workspace.ext4")
-	orig := hardLinkFile
-	hardLinkFile = func(_, _ string) error {
-		return syscall.EXDEV
-	}
-	t.Cleanup(func() { hardLinkFile = orig })
-
-	err := stageWorkspaceJailFile(dst, src, os.Getuid(), os.Getgid())
+	attachment := managerTestAttachment(t, src)
+	attachment.linkErr = syscall.EXDEV
+	err := stageWorkspaceJailFile(dst, attachment, os.Getuid(), os.Getgid())
 	if err == nil {
 		t.Fatal("expected EXDEV error")
 	}

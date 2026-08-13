@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -28,7 +29,7 @@ func TestWorkspaceRelocationSealsTransfersImportsAndDeletesSource(t *testing.T) 
 		t.Fatal(err)
 	}
 	marker := []byte("SecondBox relocation preserves Workspace bytes")
-	if _, err := attachment.Image().WriteAt(marker, 1<<20); err != nil {
+	if _, err := attachment.Descriptor().WriteAt(marker, 1<<20); err != nil {
 		t.Fatal(err)
 	}
 	if err := attachment.Close(); err != nil {
@@ -107,11 +108,19 @@ func TestWorkspaceRelocationSealsTransfersImportsAndDeletesSource(t *testing.T) 
 		t.Fatal(err)
 	}
 	actual := make([]byte, len(marker))
-	if _, err := targetAttachment.Image().ReadAt(actual, 1<<20); err != nil {
+	if _, err := targetAttachment.Descriptor().ReadAt(actual, 1<<20); err != nil {
 		t.Fatal(err)
 	}
 	if string(actual) != string(marker) {
 		t.Fatalf("relocated marker = %q", actual)
+	}
+	targetInfo, err := targetAttachment.Descriptor().Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetStat, ok := targetInfo.Sys().(*syscall.Stat_t)
+	if !ok || int64(targetStat.Blocks)*512 >= capacity {
+		t.Fatalf("relocated Workspace lost sparse allocation: %#v", targetInfo.Sys())
 	}
 	if err := targetAttachment.Close(); err != nil {
 		t.Fatal(err)

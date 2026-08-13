@@ -86,8 +86,9 @@ func run(arguments []string) (runErr error) {
 	workspaceStore, err := workspacestore.New(
 		context.Background(),
 		workspacestore.Config{
-			Root:                  firecrackerConfig.RunnerWorkspaceRoot,
-			TemplateCapacityBytes: int64(firecrackerConfig.MicroVMWorkspaceSizeMiB) << 20,
+			Root:                         firecrackerConfig.RunnerWorkspaceRoot,
+			TemplateCapacityBytes:        int64(firecrackerConfig.MicroVMWorkspaceSizeMiB) << 20,
+			MicrosandboxHelperExecutable: strings.TrimSpace(os.Getenv("SECONDBOX_MICROSANDBOX_HELPER_EXECUTABLE")),
 		},
 	)
 	if err != nil {

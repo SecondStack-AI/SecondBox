@@ -37,6 +37,9 @@ test-image-policy:
 test-non-kvm:
     scripts/test-non-kvm.sh
 
+test-workspacestore-linux:
+    scripts/test-workspacestore-linux.sh
+
 test-deployment:
     go test ./tests/deployment -count=1
 

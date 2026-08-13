@@ -132,7 +132,7 @@ func TestSmokeSnapshotResumeTemplateLifecycle(t *testing.T) {
 		"refused-resume",
 		instanceDir,
 		template,
-		filepath.Join(workDir, "template-workspace.ext4"),
+		managerTestAttachment(t, filepath.Join(workDir, "template-workspace.ext4")),
 		"",
 		12000,
 		&runtimemanager.SandboxRuntimePolicy{VCPUs: 1, MemoryMiB: memoryMiB},
@@ -195,8 +195,9 @@ func buildSnapshotResumeTemplate(
 	// to let go once the capture is sealed.
 	defer releaseManagerNetworkPolicy(t, manager)
 	workspaceStore, err := workspacestore.New(t.Context(), workspacestore.Config{
-		Root:                  cfg.RunnerWorkspaceRoot,
-		TemplateCapacityBytes: int64(workspaceMiB) << 20,
+		Root:                         cfg.RunnerWorkspaceRoot,
+		TemplateCapacityBytes:        int64(workspaceMiB) << 20,
+		MicrosandboxHelperExecutable: strings.TrimSpace(os.Getenv("SECONDBOX_MICROSANDBOX_HELPER_EXECUTABLE")),
 	})
 	if err != nil {
 		t.Fatalf("new template WorkspaceStore: %v", err)

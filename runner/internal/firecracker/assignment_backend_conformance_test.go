@@ -211,18 +211,18 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 		if opts.WorkspaceAttachment == nil ||
 			opts.WorkspaceAttachment.WorkspaceID() != "workspace-1" ||
 			opts.WorkspaceAttachment.Generation() != opts.SandboxGeneration ||
-			opts.WorkspaceAttachment.Image() == nil {
+			opts.WorkspaceAttachment.Descriptor() == nil {
 			t.Fatalf("resolved Workspace attachment = %#v", opts.WorkspaceAttachment)
 		}
 		marker := []byte("SecondBox-attachment")
 		switch opts.SandboxGeneration {
 		case 7:
-			if _, err := opts.WorkspaceAttachment.Image().WriteAt(marker, 0); err != nil {
+			if _, err := opts.WorkspaceAttachment.Descriptor().WriteAt(marker, 0); err != nil {
 				t.Fatalf("write Workspace mutation: %v", err)
 			}
 		case 8:
 			got := make([]byte, len(marker))
-			if _, err := opts.WorkspaceAttachment.Image().ReadAt(got, 0); err != nil {
+			if _, err := opts.WorkspaceAttachment.Descriptor().ReadAt(got, 0); err != nil {
 				t.Fatalf("read persisted Workspace mutation: %v", err)
 			}
 			if string(got) != string(marker) {
@@ -419,8 +419,28 @@ func (attachment *conformanceComputeAttachment) Generation() uint64 {
 	return attachment.generation
 }
 
-func (attachment *conformanceComputeAttachment) Image() *os.File {
+func (attachment *conformanceComputeAttachment) Descriptor() *os.File {
 	return attachment.image
+}
+
+func (*conformanceComputeAttachment) StableBlockID() string { return "workspace" }
+func (attachment *conformanceComputeAttachment) CapacityBytes() int64 {
+	if attachment.image == nil {
+		return 0
+	}
+	info, _ := attachment.image.Stat()
+	if info == nil {
+		return 0
+	}
+	return info.Size()
+}
+func (*conformanceComputeAttachment) FilesystemUUID() string { return "test-workspace-uuid" }
+func (*conformanceComputeAttachment) ChildDescriptorPath(descriptor int) string {
+	return fmt.Sprintf("/proc/self/fd/%d", descriptor)
+}
+func (attachment *conformanceComputeAttachment) LinkInto(destination string) error {
+	_ = os.Remove(destination)
+	return os.Link(attachment.image.Name(), destination)
 }
 
 func (attachment *conformanceComputeAttachment) Close() error {

@@ -155,7 +155,7 @@ func TestWorkspaceTemplatePrewarmReusesOneImmutableFilesystem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := first.Image().WriteAt([]byte{0x7f}, capacity-1); err != nil {
+	if _, err := first.Descriptor().WriteAt([]byte{0x7f}, capacity-1); err != nil {
 		t.Fatal(err)
 	}
 	if err := first.Close(); err != nil {
@@ -166,7 +166,7 @@ func TestWorkspaceTemplatePrewarmReusesOneImmutableFilesystem(t *testing.T) {
 		t.Fatal(err)
 	}
 	actual := []byte{0xff}
-	if _, err := second.Image().ReadAt(actual, capacity-1); err != nil {
+	if _, err := second.Descriptor().ReadAt(actual, capacity-1); err != nil {
 		t.Fatal(err)
 	}
 	if err := second.Close(); err != nil {
@@ -329,7 +329,7 @@ func TestWorkspaceLifecycleIsIdempotentAndCrashRecoverable(t *testing.T) {
 		attachment.Handle().Generation() != 1 {
 		t.Fatalf("opaque attachment = %#v", attachment.Handle())
 	}
-	if _, err := attachment.Image().WriteAt([]byte("A"), 4096); err != nil {
+	if _, err := attachment.Descriptor().WriteAt([]byte("A"), 4096); err != nil {
 		t.Fatalf("write state A: %v", err)
 	}
 	activeReport, err := store.Reconcile(t.Context())
@@ -368,7 +368,7 @@ func TestWorkspaceLifecycleIsIdempotentAndCrashRecoverable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen Workspace: %v", err)
 	}
-	if _, err := attachment.Image().WriteAt([]byte("B"), 4096); err != nil {
+	if _, err := attachment.Descriptor().WriteAt([]byte("B"), 4096); err != nil {
 		t.Fatalf("write state B: %v", err)
 	}
 	if err := attachment.Close(); err != nil {
@@ -448,7 +448,7 @@ func TestWorkspaceLifecycleIsIdempotentAndCrashRecoverable(t *testing.T) {
 		t.Fatalf("open restored Workspace: %v", err)
 	}
 	state := make([]byte, 1)
-	if _, err := attachment.Image().ReadAt(state, 4096); err != nil {
+	if _, err := attachment.Descriptor().ReadAt(state, 4096); err != nil {
 		t.Fatalf("read restored state: %v", err)
 	}
 	if string(state) != "A" {
@@ -552,7 +552,7 @@ func TestCloneWorkspaceFromSnapshotCreatesIndependentGenerationOne(t *testing.T)
 	if err != nil {
 		t.Fatalf("open source Workspace: %v", err)
 	}
-	if _, err := source.Image().WriteAt([]byte("portable-workspace"), 4096); err != nil {
+	if _, err := source.Descriptor().WriteAt([]byte("portable-workspace"), 4096); err != nil {
 		t.Fatalf("write source Workspace: %v", err)
 	}
 	if err := source.Close(); err != nil {
@@ -587,7 +587,7 @@ func TestCloneWorkspaceFromSnapshotCreatesIndependentGenerationOne(t *testing.T)
 	}
 	defer target.Close()
 	got := make([]byte, len("portable-workspace"))
-	if _, err := target.Image().ReadAt(got, 4096); err != nil {
+	if _, err := target.Descriptor().ReadAt(got, 4096); err != nil {
 		t.Fatalf("read target Workspace: %v", err)
 	}
 	if string(got) != "portable-workspace" {
@@ -879,7 +879,7 @@ func TestWorkspaceStoreRejectsPathsUnsupportedCloneAndDiskFull(t *testing.T) {
 		Mutation:           testMutation("unsupported", "workspace"),
 		SnapshotID:         "unsupported",
 		ExpectedGeneration: 1,
-	}); !errors.Is(err, syscall.EOPNOTSUPP) {
+	}); !errors.Is(err, syscall.EOPNOTSUPP) || !errors.Is(err, ErrStorageIncompatible) {
 		t.Fatalf("unsupported FICLONE error = %v", err)
 	}
 	if _, err := os.Stat(store.snapshotImagePath("unsupported")); !errors.Is(err, os.ErrNotExist) {
@@ -899,7 +899,7 @@ func TestWorkspaceStoreRejectsPathsUnsupportedCloneAndDiskFull(t *testing.T) {
 		SnapshotID:         "restore-source",
 		ExpectedGeneration: 1,
 		NextGeneration:     2,
-	}); !errors.Is(err, syscall.EOPNOTSUPP) {
+	}); !errors.Is(err, syscall.EOPNOTSUPP) || !errors.Is(err, ErrStorageIncompatible) {
 		t.Fatalf("unsupported restore FICLONE error = %v", err)
 	}
 	if _, err := os.Stat(
