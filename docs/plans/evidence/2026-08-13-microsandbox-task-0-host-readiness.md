@@ -4,7 +4,7 @@ Date: 2026-08-13
 
 Corrected at: 2026-08-13T11:07:25-04:00
 
-SecondBox revision: `d5eb9a5c2c76dde056e0277dc42e88e6fe304e9b`
+SecondBox checklist baseline: `4dd8dd255a012af14234b8d6037a8f409fcefbcb`
 
 ## Correction
 
@@ -54,17 +54,12 @@ Allocation Block Size: 4096 Bytes
 
 ## Gate status
 
-Task 0L is **in progress**, not passed. Linux host availability is established, but none of the
-mandatory Microsandbox/libkrun Linux mechanism proofs has completed yet. Tasks 1L through 7L remain
-closed until every Task 0L checkbox succeeds on deimos. Tasks 8M through 10M remain closed until the
-complete Linux end-to-end gate in Task 7L passes.
+Task 0L is **GO / passed**. Every mandatory Linux mechanism proof completed on deimos from the
+checked-in local builder and qualification target. Tasks 1L through 7L may now proceed in order.
+Tasks 8M through 10M remain closed until the complete Linux end-to-end gate in Task 7L passes.
 
-The evaluated Microsandbox revision does not expose the two ext4 APIs required by the reviewed
-gate: formatting an already-open file with a caller-supplied UUID and safely changing the UUID of a
-clone. The gate requires a reviewed dependency change to land and be pinned before the standalone
-probe continues. The required changes will be maintained as a SecondBox-owned local patch and build
-input. No external contribution path is authorized. No Tasks 1L through 10M implementation has
-started.
+No dependency source or artifact was published. The evaluated change is a SecondBox-owned local
+patch and build input only. No external contribution path is authorized.
 
 ## Dependency investigation and prerequisite
 
@@ -76,6 +71,89 @@ started.
 | Local prerequisite experiment | Commit `a6807d1d2454d0b62dc1818d57c1f69012360355` in a temporary fork clone; it is not an approved SecondBox dependency pin |
 | External publication correction | An external PR was opened without approval and is closed. No comments or reviews were added. |
 | Safety mechanism | New images use ext4 `INCOMPAT_CSUM_SEED`, keeping metadata checksums independent of the filesystem UUID. The rewrite validates a clean formatter image, updates the empty journal and backup superblocks, flushes, and revalidates. Legacy images remain growable but are rejected by the UUID rewrite. |
+
+## Final pinned inputs and local build
+
+| Input | Exact evidence |
+| --- | --- |
+| Microsandbox source | commit `5b335537afad433ad2c0308cb54de13b7015b4e7`; tree `dc506dffd600fcea281bd4ebfc924e1b31afcb2a`; Apache-2.0 |
+| Local patch | `runner/microsandbox-patches/0001-explicit-ext4-uuid-fd-api.patch`; SHA-256 `943e728067cce9f0efe9ed578c74f6323bd6c1cf8407822a1e8ee998f64564de`; patched tree `972fd637a835c175a4aa5b11fd52ccd0ab087f95` |
+| Microsandbox lock | SHA-256 `7827c5aad40cfc4ab36be6aba3bc4c0d923e525c50fc4b54741776bcf13b95c8` |
+| Probe lock | SHA-256 `95f0107a1c27f7ad079012a919213207b4256950b73aec33ee624ed33c4638a7` |
+| libkrun crates | `msb_krun = 0.1.30` SHA-256 `b57b2304dc1cef25b7cdd93be44c6515a97c90e00308b7d35eabc4fe27b02af5`; `msb_krun_utils = 0.1.30` SHA-256 `5f4f682dec7289463f89adfd1df7605a425c069d238265496a99dbff921075a9` |
+| libkrunfw | commit `21cb6dce19a615f63e41ecb913334d18560c1364`; version `5.6.1`; library LGPL-2.1-only; bundled kernel and patches GPL-2.0-only |
+| Linux bundle | Linux `6.12.99`; tarball SHA-256 `194eef900ade82df74ed1d695daa45d03ee4bb415cae4f936a3dbaab2dbbb951` |
+| Agent builder | `rust:alpine@sha256:3c38f3f82c2f3d73da3b38e18d279393a04cb43ddded0e35088a8c3324d40900`; evaluated Cargo lock retained |
+| Guest fixture | `alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce` |
+
+The deterministic entry point was:
+
+```text
+just build-microsandbox-probe-linux \
+  /tmp/secondbox-msb-base-env4w9 \
+  /home/sasha/.bb/thread-storage/microsandbox-build-task0l-final
+```
+
+It rejected the wrong revision `a6807d1d2454d0b62dc1818d57c1f69012360355` and a dirty source checkout
+before creating output. It also verifies the exact source tree, patch, both lockfiles, initialized
+libkrunfw submodule, and kernel tarball. Cargo builds use `--locked`; host Cargo builds are offline.
+The agent is built locally from the pinned container and lock. The command performs no push or
+external repository write.
+
+Build host tools were rustc `1.95.0`, cargo `1.95.0`, Docker client/server `29.6.2`, and uv
+`0.9.21`. Final artifact SHA-256 values were:
+
+```text
+agentd      dcf2b4e76335ae77566997de93dbddefe659cc6d99dbed2c53117f9f001dd6df
+msb         7b3660da494a12e69e4e160a455d28b046ee7a4901475f462999a26f793dc7fd
+libkrunfw   858bfd9a63236409a409191a1ea3c69413f4163f49ebd0f3835f68385831481c
+probe       5af4ebf36a353fddbb08b5cf6d1a7176f2166cfb842489b9b71043082a62f891
+```
+
+## Final deimos qualification
+
+The qualified root is Btrfs. deimos ran Linux `7.1.4-arch1-1` on x86_64, with 32 logical CPUs on
+an AMD Ryzen AI MAX+ 395. `/dev/kvm` was writable and AMD-V was present.
+
+```text
+just test-microsandbox-probe-linux \
+  /home/sasha/.bb/thread-storage/microsandbox-build-task0l-final \
+  /home/sasha/.bb/thread-storage/microsandbox-task0l-qualification-final
+```
+
+Bounded output:
+
+```text
+proof=ext4-descriptor-uuid source_inode=94129856 clone_inode=94129857 logical_bytes=268435456 source_uuid=41414141414141414141414141414141 clone_uuid=52525252525252525252525252525252 status=passed
+proof=vm-descriptor-lifecycle inode=94129859 vmm_pid=411690 buffered=buffered-ok streamed=stream-astream-b ping_rtt_micros=2669 shutdown_millis=2028 marker=secondbox-task0l-marker lifecycle_pid=412214 lifecycle_shutdown_millis=2051 lifecycle_marker=lifecycle-eof-marker status=passed
+proof=network-policy allowed_bytes=559 denied_domain=true denied_private=true denied_metadata=true deny_all=true dns_change=true status=passed
+```
+
+The VM proof cleared `FD_CLOEXEC`, named the already-open image as `/proc/self/fd/<n>`, verified the
+same device/inode in `/proc/<vmm-pid>/fd/<n>`, and renamed the original pathname after attachment.
+The guest retained the stable disk mount, wrote a marker, and `e2fsck -fn` plus `debugfs` recovered
+that marker after shutdown. The parent descriptor retained the same inode throughout.
+
+The evaluated runtime constructs its multithreaded Tokio relay runtime, starts the agent relay,
+runtime control listener, parent watchdog, heartbeat, and timer tasks before the final
+`vm.enter()`. While `vm.enter()` owned the calling thread, the live proof concurrently completed a
+buffered command, streaming command, and control ping. Control-channel shutdown flushed and exited
+in 2028 ms. Closing the inherited parent-watchdog writer independently flushed the second image and
+exited in 2051 ms; the fixed deadline was 45 seconds and the force-kill path was not used.
+
+The network proof enforced a default-deny exact-domain TCP/80 rule. The allowed request returned
+559 bytes; a disjoint domain, a private address, and `169.254.169.254` were denied. A separate
+no-network guest denied the public request. The policy-engine check replaced the cached A record,
+proved the former address was revoked, the replacement was admitted, and private/metadata targets
+remained denied.
+
+Final validation:
+
+- Final local builder: passed.
+- Probe `cargo test --locked`: 1 passed, 0 failed; doc tests passed.
+- Checked-in real-KVM qualification target: passed, no skips.
+- Wrong-revision and dirty-source rejection: passed.
+- `git diff --check`: passed.
 
 Local prerequisite experiment validation at commit `a6807d1d2454d0b62dc1818d57c1f69012360355`:
 

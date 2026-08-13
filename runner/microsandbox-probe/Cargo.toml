@@ -1,0 +1,25 @@
+[package]
+name = "secondbox-microsandbox-probe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+libc = "0.2"
+microsandbox = { path = "../sdk/rust", default-features = false, features = ["net"] }
+microsandbox-image = { path = "../crates/image" }
+microsandbox-network = { path = "../crates/network" }
+microsandbox-types = { path = "../packages/microsandbox-types/rust" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+
+[dev-dependencies]
+tempfile = "3.15"
+
+[lib]
+path = "lib/lib.rs"
+
+[[bin]]
+name = "secondbox-microsandbox-probe"
+path = "bin/main.rs"

@@ -9,6 +9,15 @@ verify-generated:
 build:
     go build -o /dev/null ./cmd/secondboxd
 
+build-microsandbox-probe-linux source output:
+    just -f runner/Justfile build-microsandbox-probe-linux "{{source}}" "{{output}}"
+
+test-microsandbox-probe-ext4-linux build_dir work_dir:
+    just -f runner/Justfile test-microsandbox-probe-ext4-linux "{{build_dir}}" "{{work_dir}}"
+
+test-microsandbox-probe-linux build_dir work_dir:
+    just -f runner/Justfile test-microsandbox-probe-linux "{{build_dir}}" "{{work_dir}}"
+
 lint:
     golangci-lint run ./...
     cd runner && golangci-lint run --config ../.golangci.yml ./...

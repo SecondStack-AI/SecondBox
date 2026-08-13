@@ -94,38 +94,39 @@ SecondBox-owned local patch. This task changes no public contract, database, dep
 production composition, or WorkspaceStore implementation. The probe may live under
 `runner/microsandbox-probe` and may use generated test fixtures.
 
-- [ ] Materialize the required ext4 changes as a reviewable local patch tied to exact upstream
+- [x] Materialize the required ext4 changes as a reviewable local patch tied to exact upstream
   commit `5b335537afad433ad2c0308cb54de13b7015b4e7`; record the patch digest, Cargo lock digest,
   Microsandbox/libkrun versions, licenses, and deterministic local build command.
-- [ ] Build the patched Microsandbox and probe locally on deimos. Refuse a dirty, wrong-revision,
+- [x] Build the patched Microsandbox and probe locally on deimos. Refuse a dirty, wrong-revision,
   or wrong-patch source tree rather than silently building different dependency code.
-- [ ] Start control threads before calling `Vm::enter()` and prove the inherited control socket
+- [x] Start control threads before calling `Vm::enter()` and prove the inherited control socket
   remains responsive while the VMM owns the calling thread.
-- [ ] Pass an already-open writable raw-ext4 descriptor, reopen it through `/proc/self/fd/<n>`,
+- [x] Pass an already-open writable raw-ext4 descriptor, reopen it through `/proc/self/fd/<n>`,
   attach it with a stable block ID, mount it in the guest, write a marker, stop, reopen the image,
   and verify the marker.
-- [ ] Prove the VMM does not replace the inode, close the parent-held descriptor, or take independent
+- [x] Prove the VMM does not replace the inode, close the parent-held descriptor, or take independent
   durable ownership of the descriptor-backed image.
-- [ ] Run one buffered agent command and one streaming command while simultaneously exchanging
+- [x] Run one buffered agent command and one streaming command while simultaneously exchanging
   probe control frames, then request shutdown through the control channel.
-- [ ] Close an inherited lifecycle pipe and prove the guest shuts down, writable disks flush within
+- [x] Close an inherited lifecycle pipe and prove the guest shuts down, writable disks flush within
   a fixed deadline, and the process exits. Force-kill after the deadline and record that path
   separately.
-- [ ] Translate and enforce `deny_all` plus a representative domain/port allow-list with an allowed
+- [x] Translate and enforce `deny_all` plus a representative domain/port allow-list with an allowed
   request, denied request, DNS change, private-address target, and metadata target.
-- [ ] Format through an inherited descriptor with an explicit caller-supplied filesystem UUID and
+- [x] Format through an inherited descriptor with an explicit caller-supplied filesystem UUID and
   safely change the UUID of a cloned image while preserving valid ext4 metadata checksums. Do not
   rewrite superblock bytes ad hoc from SecondBox code.
-- [ ] Record exact host OS/architecture, filesystem, source revisions, local patch/build digests,
+- [x] Record exact host OS/architecture, filesystem, source revisions, local patch/build digests,
   commands, deadlines, outcomes, and bounded logs in dated Linux evidence.
-- [ ] Declare Task 0L passed only if every Linux proof succeeds on deimos. On any mandatory failure,
+- [x] Declare Task 0L passed only if every Linux proof succeeds on deimos. On any mandatory failure,
   record NO-GO and stop the spike.
 
 #### Task 0L validation
 
-- `just build-microsandbox-probe-linux`
-- `cargo test --manifest-path runner/microsandbox-probe/Cargo.toml`
-- `just test-microsandbox-probe-linux`
+- `just build-microsandbox-probe-linux <clean-source> <new-output-directory>`
+- `cargo test --locked --manifest-path <build-directory>/source/secondbox-probe/Cargo.toml`
+- `just test-microsandbox-probe-ext4-linux <build-directory> <new-work-directory>`
+- `just test-microsandbox-probe-linux <build-directory> <new-work-directory>`
 - `git diff --check`
 
 ### Task 1L: Define portable contracts and homogeneous RunnerPools
