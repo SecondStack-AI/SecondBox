@@ -40,6 +40,9 @@ test-non-kvm:
 test-workspacestore-linux:
     scripts/test-workspacestore-linux.sh
 
+test-microsandbox-linux:
+    scripts/test-microsandbox-linux.sh
+
 test-deployment:
     go test ./tests/deployment -count=1
 

@@ -46,6 +46,7 @@ fi
 
 if [[ "$scenario_mode" == "suite" ]]; then
   export SECONDBOX_RUNNER_ID=scenario-runner
+  export SECONDBOX_COMPUTE_BACKEND=firecracker
   export SECONDBOX_RUNNER_POOL_ID=scenario-pool
   export SECONDBOX_SCENARIO_SUBJECT_MAX_ACTIVE_INSTANCES=10
   export SECONDBOX_SCENARIO_SUBJECT_MAX_CONCURRENT_OPERATIONS=20

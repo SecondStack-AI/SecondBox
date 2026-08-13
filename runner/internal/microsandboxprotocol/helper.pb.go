@@ -201,6 +201,61 @@ func (HelperNetworkProtocol) EnumDescriptor() ([]byte, []int) {
 	return file_microsandbox_helper_v1_helper_proto_rawDescGZIP(), []int{2}
 }
 
+type StreamChannel int32
+
+const (
+	StreamChannel_STREAM_CHANNEL_UNSPECIFIED StreamChannel = 0
+	StreamChannel_STREAM_CHANNEL_STDIN       StreamChannel = 1
+	StreamChannel_STREAM_CHANNEL_STDOUT      StreamChannel = 2
+	StreamChannel_STREAM_CHANNEL_STDERR      StreamChannel = 3
+	StreamChannel_STREAM_CHANNEL_TCP         StreamChannel = 4
+)
+
+// Enum value maps for StreamChannel.
+var (
+	StreamChannel_name = map[int32]string{
+		0: "STREAM_CHANNEL_UNSPECIFIED",
+		1: "STREAM_CHANNEL_STDIN",
+		2: "STREAM_CHANNEL_STDOUT",
+		3: "STREAM_CHANNEL_STDERR",
+		4: "STREAM_CHANNEL_TCP",
+	}
+	StreamChannel_value = map[string]int32{
+		"STREAM_CHANNEL_UNSPECIFIED": 0,
+		"STREAM_CHANNEL_STDIN":       1,
+		"STREAM_CHANNEL_STDOUT":      2,
+		"STREAM_CHANNEL_STDERR":      3,
+		"STREAM_CHANNEL_TCP":         4,
+	}
+)
+
+func (x StreamChannel) Enum() *StreamChannel {
+	p := new(StreamChannel)
+	*p = x
+	return p
+}
+
+func (x StreamChannel) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (StreamChannel) Descriptor() protoreflect.EnumDescriptor {
+	return file_microsandbox_helper_v1_helper_proto_enumTypes[3].Descriptor()
+}
+
+func (StreamChannel) Type() protoreflect.EnumType {
+	return &file_microsandbox_helper_v1_helper_proto_enumTypes[3]
+}
+
+func (x StreamChannel) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use StreamChannel.Descriptor instead.
+func (StreamChannel) EnumDescriptor() ([]byte, []int) {
+	return file_microsandbox_helper_v1_helper_proto_rawDescGZIP(), []int{3}
+}
+
 type Envelope struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	ProtocolVersion uint32                 `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
@@ -222,6 +277,8 @@ type Envelope struct {
 	//	*Envelope_Terminal
 	//	*Envelope_Diagnostic
 	//	*Envelope_FormatWorkspace
+	//	*Envelope_FileMetadata
+	//	*Envelope_TcpConnected
 	Message       isEnvelope_Message `protobuf_oneof:"message"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -409,6 +466,24 @@ func (x *Envelope) GetFormatWorkspace() *FormatWorkspaceRequest {
 	return nil
 }
 
+func (x *Envelope) GetFileMetadata() *FileMetadataEvent {
+	if x != nil {
+		if x, ok := x.Message.(*Envelope_FileMetadata); ok {
+			return x.FileMetadata
+		}
+	}
+	return nil
+}
+
+func (x *Envelope) GetTcpConnected() *TcpConnectedEvent {
+	if x != nil {
+		if x, ok := x.Message.(*Envelope_TcpConnected); ok {
+			return x.TcpConnected
+		}
+	}
+	return nil
+}
+
 type isEnvelope_Message interface {
 	isEnvelope_Message()
 }
@@ -465,6 +540,14 @@ type Envelope_FormatWorkspace struct {
 	FormatWorkspace *FormatWorkspaceRequest `protobuf:"bytes,22,opt,name=format_workspace,json=formatWorkspace,proto3,oneof"`
 }
 
+type Envelope_FileMetadata struct {
+	FileMetadata *FileMetadataEvent `protobuf:"bytes,23,opt,name=file_metadata,json=fileMetadata,proto3,oneof"`
+}
+
+type Envelope_TcpConnected struct {
+	TcpConnected *TcpConnectedEvent `protobuf:"bytes,24,opt,name=tcp_connected,json=tcpConnected,proto3,oneof"`
+}
+
 func (*Envelope_Start) isEnvelope_Message() {}
 
 func (*Envelope_Ready) isEnvelope_Message() {}
@@ -491,6 +574,10 @@ func (*Envelope_Diagnostic) isEnvelope_Message() {}
 
 func (*Envelope_FormatWorkspace) isEnvelope_Message() {}
 
+func (*Envelope_FileMetadata) isEnvelope_Message() {}
+
+func (*Envelope_TcpConnected) isEnvelope_Message() {}
+
 type StartRequest struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
 	MaterializationDigest  string                 `protobuf:"bytes,1,opt,name=materialization_digest,json=materializationDigest,proto3" json:"materialization_digest,omitempty"`
@@ -504,6 +591,8 @@ type StartRequest struct {
 	WorkspaceCapacityBytes uint64                 `protobuf:"varint,9,opt,name=workspace_capacity_bytes,json=workspaceCapacityBytes,proto3" json:"workspace_capacity_bytes,omitempty"`
 	WorkspaceUuid          []byte                 `protobuf:"bytes,10,opt,name=workspace_uuid,json=workspaceUuid,proto3" json:"workspace_uuid,omitempty"`
 	FlatRootPath           string                 `protobuf:"bytes,11,opt,name=flat_root_path,json=flatRootPath,proto3" json:"flat_root_path,omitempty"`
+	LibkrunfwPath          string                 `protobuf:"bytes,12,opt,name=libkrunfw_path,json=libkrunfwPath,proto3" json:"libkrunfw_path,omitempty"`
+	AgentdPath             string                 `protobuf:"bytes,13,opt,name=agentd_path,json=agentdPath,proto3" json:"agentd_path,omitempty"`
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
@@ -611,6 +700,20 @@ func (x *StartRequest) GetWorkspaceUuid() []byte {
 func (x *StartRequest) GetFlatRootPath() string {
 	if x != nil {
 		return x.FlatRootPath
+	}
+	return ""
+}
+
+func (x *StartRequest) GetLibkrunfwPath() string {
+	if x != nil {
+		return x.LibkrunfwPath
+	}
+	return ""
+}
+
+func (x *StartRequest) GetAgentdPath() string {
+	if x != nil {
+		return x.AgentdPath
 	}
 	return ""
 }
@@ -864,6 +967,10 @@ type ExecRequest struct {
 	Environment      []string               `protobuf:"bytes,3,rep,name=environment,proto3" json:"environment,omitempty"`
 	DeadlineUnixMs   uint64                 `protobuf:"varint,4,opt,name=deadline_unix_ms,json=deadlineUnixMs,proto3" json:"deadline_unix_ms,omitempty"`
 	Pty              bool                   `protobuf:"varint,5,opt,name=pty,proto3" json:"pty,omitempty"`
+	Stdin            []byte                 `protobuf:"bytes,6,opt,name=stdin,proto3" json:"stdin,omitempty"`
+	Rows             uint32                 `protobuf:"varint,7,opt,name=rows,proto3" json:"rows,omitempty"`
+	Columns          uint32                 `protobuf:"varint,8,opt,name=columns,proto3" json:"columns,omitempty"`
+	OutputLimitBytes uint64                 `protobuf:"varint,9,opt,name=output_limit_bytes,json=outputLimitBytes,proto3" json:"output_limit_bytes,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -933,6 +1040,34 @@ func (x *ExecRequest) GetPty() bool {
 	return false
 }
 
+func (x *ExecRequest) GetStdin() []byte {
+	if x != nil {
+		return x.Stdin
+	}
+	return nil
+}
+
+func (x *ExecRequest) GetRows() uint32 {
+	if x != nil {
+		return x.Rows
+	}
+	return 0
+}
+
+func (x *ExecRequest) GetColumns() uint32 {
+	if x != nil {
+		return x.Columns
+	}
+	return 0
+}
+
+func (x *ExecRequest) GetOutputLimitBytes() uint64 {
+	if x != nil {
+		return x.OutputLimitBytes
+	}
+	return 0
+}
+
 type FileRequest struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Operation       Operation              `protobuf:"varint,1,opt,name=operation,proto3,enum=secondbox.microsandbox.helper.v1.Operation" json:"operation,omitempty"`
@@ -942,6 +1077,7 @@ type FileRequest struct {
 	Limit           uint64                 `protobuf:"varint,5,opt,name=limit,proto3" json:"limit,omitempty"`
 	Mode            uint32                 `protobuf:"varint,6,opt,name=mode,proto3" json:"mode,omitempty"`
 	Recursive       bool                   `protobuf:"varint,7,opt,name=recursive,proto3" json:"recursive,omitempty"`
+	Content         []byte                 `protobuf:"bytes,8,opt,name=content,proto3" json:"content,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -1023,6 +1159,13 @@ func (x *FileRequest) GetRecursive() bool {
 		return x.Recursive
 	}
 	return false
+}
+
+func (x *FileRequest) GetContent() []byte {
+	if x != nil {
+		return x.Content
+	}
+	return nil
 }
 
 type PtyRequest struct {
@@ -1137,6 +1280,42 @@ func (x *TcpRequest) GetPort() uint32 {
 	return 0
 }
 
+type TcpConnectedEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TcpConnectedEvent) Reset() {
+	*x = TcpConnectedEvent{}
+	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TcpConnectedEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TcpConnectedEvent) ProtoMessage() {}
+
+func (x *TcpConnectedEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TcpConnectedEvent.ProtoReflect.Descriptor instead.
+func (*TcpConnectedEvent) Descriptor() ([]byte, []int) {
+	return file_microsandbox_helper_v1_helper_proto_rawDescGZIP(), []int{9}
+}
+
 type ShutdownRequest struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
 	FlushDeadlineUnixMs uint64                 `protobuf:"varint,1,opt,name=flush_deadline_unix_ms,json=flushDeadlineUnixMs,proto3" json:"flush_deadline_unix_ms,omitempty"`
@@ -1146,7 +1325,7 @@ type ShutdownRequest struct {
 
 func (x *ShutdownRequest) Reset() {
 	*x = ShutdownRequest{}
-	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[9]
+	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1158,7 +1337,7 @@ func (x *ShutdownRequest) String() string {
 func (*ShutdownRequest) ProtoMessage() {}
 
 func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[9]
+	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1171,7 +1350,7 @@ func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownRequest.ProtoReflect.Descriptor instead.
 func (*ShutdownRequest) Descriptor() ([]byte, []int) {
-	return file_microsandbox_helper_v1_helper_proto_rawDescGZIP(), []int{9}
+	return file_microsandbox_helper_v1_helper_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ShutdownRequest) GetFlushDeadlineUnixMs() uint64 {
@@ -1190,7 +1369,7 @@ type CancelRequest struct {
 
 func (x *CancelRequest) Reset() {
 	*x = CancelRequest{}
-	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[10]
+	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1202,7 +1381,7 @@ func (x *CancelRequest) String() string {
 func (*CancelRequest) ProtoMessage() {}
 
 func (x *CancelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[10]
+	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1215,7 +1394,7 @@ func (x *CancelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelRequest.ProtoReflect.Descriptor instead.
 func (*CancelRequest) Descriptor() ([]byte, []int) {
-	return file_microsandbox_helper_v1_helper_proto_rawDescGZIP(), []int{10}
+	return file_microsandbox_helper_v1_helper_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *CancelRequest) GetTargetRequestId() uint64 {
@@ -1229,13 +1408,14 @@ type StreamData struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
 	Eof           bool                   `protobuf:"varint,2,opt,name=eof,proto3" json:"eof,omitempty"`
+	Channel       StreamChannel          `protobuf:"varint,3,opt,name=channel,proto3,enum=secondbox.microsandbox.helper.v1.StreamChannel" json:"channel,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *StreamData) Reset() {
 	*x = StreamData{}
-	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[11]
+	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1247,7 +1427,7 @@ func (x *StreamData) String() string {
 func (*StreamData) ProtoMessage() {}
 
 func (x *StreamData) ProtoReflect() protoreflect.Message {
-	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[11]
+	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1260,7 +1440,7 @@ func (x *StreamData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamData.ProtoReflect.Descriptor instead.
 func (*StreamData) Descriptor() ([]byte, []int) {
-	return file_microsandbox_helper_v1_helper_proto_rawDescGZIP(), []int{11}
+	return file_microsandbox_helper_v1_helper_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *StreamData) GetData() []byte {
@@ -1277,6 +1457,13 @@ func (x *StreamData) GetEof() bool {
 	return false
 }
 
+func (x *StreamData) GetChannel() StreamChannel {
+	if x != nil {
+		return x.Channel
+	}
+	return StreamChannel_STREAM_CHANNEL_UNSPECIFIED
+}
+
 type StreamCredit struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Bytes         uint64                 `protobuf:"varint,1,opt,name=bytes,proto3" json:"bytes,omitempty"`
@@ -1286,7 +1473,7 @@ type StreamCredit struct {
 
 func (x *StreamCredit) Reset() {
 	*x = StreamCredit{}
-	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[12]
+	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1298,7 +1485,7 @@ func (x *StreamCredit) String() string {
 func (*StreamCredit) ProtoMessage() {}
 
 func (x *StreamCredit) ProtoReflect() protoreflect.Message {
-	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[12]
+	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1311,7 +1498,7 @@ func (x *StreamCredit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamCredit.ProtoReflect.Descriptor instead.
 func (*StreamCredit) Descriptor() ([]byte, []int) {
-	return file_microsandbox_helper_v1_helper_proto_rawDescGZIP(), []int{12}
+	return file_microsandbox_helper_v1_helper_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *StreamCredit) GetBytes() uint64 {
@@ -1322,17 +1509,23 @@ func (x *StreamCredit) GetBytes() uint64 {
 }
 
 type TerminalEvent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
-	ExitCode      int32                  `protobuf:"varint,2,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
-	Reason        string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                       protoimpl.MessageState `protogen:"open.v1"`
+	Success                     bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	ExitCode                    int32                  `protobuf:"varint,2,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	Reason                      string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	Signal                      int32                  `protobuf:"varint,4,opt,name=signal,proto3" json:"signal,omitempty"`
+	SpawnFailureReason          uint32                 `protobuf:"varint,5,opt,name=spawn_failure_reason,json=spawnFailureReason,proto3" json:"spawn_failure_reason,omitempty"`
+	InfrastructureFailureReason uint32                 `protobuf:"varint,6,opt,name=infrastructure_failure_reason,json=infrastructureFailureReason,proto3" json:"infrastructure_failure_reason,omitempty"`
+	Retryable                   bool                   `protobuf:"varint,7,opt,name=retryable,proto3" json:"retryable,omitempty"`
+	ElapsedMilliseconds         uint64                 `protobuf:"varint,8,opt,name=elapsed_milliseconds,json=elapsedMilliseconds,proto3" json:"elapsed_milliseconds,omitempty"`
+	LimitBytes                  uint64                 `protobuf:"varint,9,opt,name=limit_bytes,json=limitBytes,proto3" json:"limit_bytes,omitempty"`
+	unknownFields               protoimpl.UnknownFields
+	sizeCache                   protoimpl.SizeCache
 }
 
 func (x *TerminalEvent) Reset() {
 	*x = TerminalEvent{}
-	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[13]
+	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1344,7 +1537,7 @@ func (x *TerminalEvent) String() string {
 func (*TerminalEvent) ProtoMessage() {}
 
 func (x *TerminalEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[13]
+	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1357,7 +1550,7 @@ func (x *TerminalEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminalEvent.ProtoReflect.Descriptor instead.
 func (*TerminalEvent) Descriptor() ([]byte, []int) {
-	return file_microsandbox_helper_v1_helper_proto_rawDescGZIP(), []int{13}
+	return file_microsandbox_helper_v1_helper_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *TerminalEvent) GetSuccess() bool {
@@ -1381,6 +1574,216 @@ func (x *TerminalEvent) GetReason() string {
 	return ""
 }
 
+func (x *TerminalEvent) GetSignal() int32 {
+	if x != nil {
+		return x.Signal
+	}
+	return 0
+}
+
+func (x *TerminalEvent) GetSpawnFailureReason() uint32 {
+	if x != nil {
+		return x.SpawnFailureReason
+	}
+	return 0
+}
+
+func (x *TerminalEvent) GetInfrastructureFailureReason() uint32 {
+	if x != nil {
+		return x.InfrastructureFailureReason
+	}
+	return 0
+}
+
+func (x *TerminalEvent) GetRetryable() bool {
+	if x != nil {
+		return x.Retryable
+	}
+	return false
+}
+
+func (x *TerminalEvent) GetElapsedMilliseconds() uint64 {
+	if x != nil {
+		return x.ElapsedMilliseconds
+	}
+	return 0
+}
+
+func (x *TerminalEvent) GetLimitBytes() uint64 {
+	if x != nil {
+		return x.LimitBytes
+	}
+	return 0
+}
+
+type FileMetadataEvent struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	Exists             bool                   `protobuf:"varint,1,opt,name=exists,proto3" json:"exists,omitempty"`
+	Size               uint64                 `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
+	Mode               uint32                 `protobuf:"varint,3,opt,name=mode,proto3" json:"mode,omitempty"`
+	Checksum           string                 `protobuf:"bytes,4,opt,name=checksum,proto3" json:"checksum,omitempty"`
+	DirectChildren     []string               `protobuf:"bytes,5,rep,name=direct_children,json=directChildren,proto3" json:"direct_children,omitempty"`
+	Kind               uint32                 `protobuf:"varint,6,opt,name=kind,proto3" json:"kind,omitempty"`
+	ModifiedAtUnixMs   uint64                 `protobuf:"varint,7,opt,name=modified_at_unix_ms,json=modifiedAtUnixMs,proto3" json:"modified_at_unix_ms,omitempty"`
+	DirectChildEntries []*FileMetadataEntry   `protobuf:"bytes,8,rep,name=direct_child_entries,json=directChildEntries,proto3" json:"direct_child_entries,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *FileMetadataEvent) Reset() {
+	*x = FileMetadataEvent{}
+	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FileMetadataEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileMetadataEvent) ProtoMessage() {}
+
+func (x *FileMetadataEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileMetadataEvent.ProtoReflect.Descriptor instead.
+func (*FileMetadataEvent) Descriptor() ([]byte, []int) {
+	return file_microsandbox_helper_v1_helper_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *FileMetadataEvent) GetExists() bool {
+	if x != nil {
+		return x.Exists
+	}
+	return false
+}
+
+func (x *FileMetadataEvent) GetSize() uint64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *FileMetadataEvent) GetMode() uint32 {
+	if x != nil {
+		return x.Mode
+	}
+	return 0
+}
+
+func (x *FileMetadataEvent) GetChecksum() string {
+	if x != nil {
+		return x.Checksum
+	}
+	return ""
+}
+
+func (x *FileMetadataEvent) GetDirectChildren() []string {
+	if x != nil {
+		return x.DirectChildren
+	}
+	return nil
+}
+
+func (x *FileMetadataEvent) GetKind() uint32 {
+	if x != nil {
+		return x.Kind
+	}
+	return 0
+}
+
+func (x *FileMetadataEvent) GetModifiedAtUnixMs() uint64 {
+	if x != nil {
+		return x.ModifiedAtUnixMs
+	}
+	return 0
+}
+
+func (x *FileMetadataEvent) GetDirectChildEntries() []*FileMetadataEntry {
+	if x != nil {
+		return x.DirectChildEntries
+	}
+	return nil
+}
+
+type FileMetadataEntry struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Path             string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Kind             uint32                 `protobuf:"varint,2,opt,name=kind,proto3" json:"kind,omitempty"`
+	Size             uint64                 `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
+	ModifiedAtUnixMs uint64                 `protobuf:"varint,4,opt,name=modified_at_unix_ms,json=modifiedAtUnixMs,proto3" json:"modified_at_unix_ms,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *FileMetadataEntry) Reset() {
+	*x = FileMetadataEntry{}
+	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FileMetadataEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileMetadataEntry) ProtoMessage() {}
+
+func (x *FileMetadataEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileMetadataEntry.ProtoReflect.Descriptor instead.
+func (*FileMetadataEntry) Descriptor() ([]byte, []int) {
+	return file_microsandbox_helper_v1_helper_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *FileMetadataEntry) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *FileMetadataEntry) GetKind() uint32 {
+	if x != nil {
+		return x.Kind
+	}
+	return 0
+}
+
+func (x *FileMetadataEntry) GetSize() uint64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *FileMetadataEntry) GetModifiedAtUnixMs() uint64 {
+	if x != nil {
+		return x.ModifiedAtUnixMs
+	}
+	return 0
+}
+
 type DiagnosticEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Code          string                 `protobuf:"bytes,1,opt,name=code,proto3" json:"code,omitempty"`
@@ -1391,7 +1794,7 @@ type DiagnosticEvent struct {
 
 func (x *DiagnosticEvent) Reset() {
 	*x = DiagnosticEvent{}
-	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[14]
+	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1403,7 +1806,7 @@ func (x *DiagnosticEvent) String() string {
 func (*DiagnosticEvent) ProtoMessage() {}
 
 func (x *DiagnosticEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[14]
+	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1416,7 +1819,7 @@ func (x *DiagnosticEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiagnosticEvent.ProtoReflect.Descriptor instead.
 func (*DiagnosticEvent) Descriptor() ([]byte, []int) {
-	return file_microsandbox_helper_v1_helper_proto_rawDescGZIP(), []int{14}
+	return file_microsandbox_helper_v1_helper_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *DiagnosticEvent) GetCode() string {
@@ -1444,7 +1847,7 @@ type FormatWorkspaceRequest struct {
 
 func (x *FormatWorkspaceRequest) Reset() {
 	*x = FormatWorkspaceRequest{}
-	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[15]
+	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1456,7 +1859,7 @@ func (x *FormatWorkspaceRequest) String() string {
 func (*FormatWorkspaceRequest) ProtoMessage() {}
 
 func (x *FormatWorkspaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[15]
+	mi := &file_microsandbox_helper_v1_helper_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1469,7 +1872,7 @@ func (x *FormatWorkspaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FormatWorkspaceRequest.ProtoReflect.Descriptor instead.
 func (*FormatWorkspaceRequest) Descriptor() ([]byte, []int) {
-	return file_microsandbox_helper_v1_helper_proto_rawDescGZIP(), []int{15}
+	return file_microsandbox_helper_v1_helper_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *FormatWorkspaceRequest) GetLogicalCapacityBytes() uint64 {
@@ -1497,7 +1900,8 @@ var File_microsandbox_helper_v1_helper_proto protoreflect.FileDescriptor
 
 const file_microsandbox_helper_v1_helper_proto_rawDesc = "" +
 	"\n" +
-	"#microsandbox-helper/v1/helper.proto\x12 secondbox.microsandbox.helper.v1\"\x83\t\n" +
+	"#microsandbox-helper/v1/helper.proto\x12 secondbox.microsandbox.helper.v1\"\xbb\n" +
+	"\n" +
 	"\bEnvelope\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12\x1d\n" +
 	"\n" +
@@ -1520,8 +1924,10 @@ const file_microsandbox_helper_v1_helper_proto_rawDesc = "" +
 	"\n" +
 	"diagnostic\x18\x15 \x01(\v21.secondbox.microsandbox.helper.v1.DiagnosticEventH\x00R\n" +
 	"diagnostic\x12e\n" +
-	"\x10format_workspace\x18\x16 \x01(\v28.secondbox.microsandbox.helper.v1.FormatWorkspaceRequestH\x00R\x0fformatWorkspaceB\t\n" +
-	"\amessage\"\xa2\x04\n" +
+	"\x10format_workspace\x18\x16 \x01(\v28.secondbox.microsandbox.helper.v1.FormatWorkspaceRequestH\x00R\x0fformatWorkspace\x12Z\n" +
+	"\rfile_metadata\x18\x17 \x01(\v23.secondbox.microsandbox.helper.v1.FileMetadataEventH\x00R\ffileMetadata\x12Z\n" +
+	"\rtcp_connected\x18\x18 \x01(\v23.secondbox.microsandbox.helper.v1.TcpConnectedEventH\x00R\ftcpConnectedB\t\n" +
+	"\amessage\"\xea\x04\n" +
 	"\fStartRequest\x125\n" +
 	"\x16materialization_digest\x18\x01 \x01(\tR\x15materializationDigest\x12-\n" +
 	"\x12guest_architecture\x18\x02 \x01(\tR\x11guestArchitecture\x12\x1d\n" +
@@ -1535,7 +1941,10 @@ const file_microsandbox_helper_v1_helper_proto_rawDesc = "" +
 	"\x18workspace_capacity_bytes\x18\t \x01(\x04R\x16workspaceCapacityBytes\x12%\n" +
 	"\x0eworkspace_uuid\x18\n" +
 	" \x01(\fR\rworkspaceUuid\x12$\n" +
-	"\x0eflat_root_path\x18\v \x01(\tR\fflatRootPath\"\xbd\x01\n" +
+	"\x0eflat_root_path\x18\v \x01(\tR\fflatRootPath\x12%\n" +
+	"\x0elibkrunfw_path\x18\f \x01(\tR\rlibkrunfwPath\x12\x1f\n" +
+	"\vagentd_path\x18\r \x01(\tR\n" +
+	"agentdPath\"\xbd\x01\n" +
 	"\x18HelperNetworkDestination\x12\x18\n" +
 	"\x06domain\x18\x01 \x01(\tH\x00R\x06domain\x12\x14\n" +
 	"\x04cidr\x18\x02 \x01(\tH\x00R\x04cidr\x12S\n" +
@@ -1555,13 +1964,17 @@ const file_microsandbox_helper_v1_helper_proto_rawDesc = "" +
 	"\n" +
 	"operations\x18\x06 \x03(\x0e2+.secondbox.microsandbox.helper.v1.OperationR\n" +
 	"operations\x125\n" +
-	"\x16materialization_digest\x18\a \x01(\tR\x15materializationDigest\"\xac\x01\n" +
+	"\x16materialization_digest\x18\a \x01(\tR\x15materializationDigest\"\x9e\x02\n" +
 	"\vExecRequest\x12\x12\n" +
 	"\x04argv\x18\x01 \x03(\tR\x04argv\x12+\n" +
 	"\x11working_directory\x18\x02 \x01(\tR\x10workingDirectory\x12 \n" +
 	"\venvironment\x18\x03 \x03(\tR\venvironment\x12(\n" +
 	"\x10deadline_unix_ms\x18\x04 \x01(\x04R\x0edeadlineUnixMs\x12\x10\n" +
-	"\x03pty\x18\x05 \x01(\bR\x03pty\"\xf7\x01\n" +
+	"\x03pty\x18\x05 \x01(\bR\x03pty\x12\x14\n" +
+	"\x05stdin\x18\x06 \x01(\fR\x05stdin\x12\x12\n" +
+	"\x04rows\x18\a \x01(\rR\x04rows\x12\x18\n" +
+	"\acolumns\x18\b \x01(\rR\acolumns\x12,\n" +
+	"\x12output_limit_bytes\x18\t \x01(\x04R\x10outputLimitBytes\"\x91\x02\n" +
 	"\vFileRequest\x12I\n" +
 	"\toperation\x18\x01 \x01(\x0e2+.secondbox.microsandbox.helper.v1.OperationR\toperation\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12)\n" +
@@ -1569,7 +1982,8 @@ const file_microsandbox_helper_v1_helper_proto_rawDesc = "" +
 	"\x06offset\x18\x04 \x01(\x04R\x06offset\x12\x14\n" +
 	"\x05limit\x18\x05 \x01(\x04R\x05limit\x12\x12\n" +
 	"\x04mode\x18\x06 \x01(\rR\x04mode\x12\x1c\n" +
-	"\trecursive\x18\a \x01(\bR\trecursive\"V\n" +
+	"\trecursive\x18\a \x01(\bR\trecursive\x12\x18\n" +
+	"\acontent\x18\b \x01(\fR\acontent\"V\n" +
 	"\n" +
 	"PtyRequest\x12\x12\n" +
 	"\x04rows\x18\x01 \x01(\rR\x04rows\x12\x18\n" +
@@ -1578,21 +1992,44 @@ const file_microsandbox_helper_v1_helper_proto_rawDesc = "" +
 	"\n" +
 	"TcpRequest\x12\x12\n" +
 	"\x04host\x18\x01 \x01(\tR\x04host\x12\x12\n" +
-	"\x04port\x18\x02 \x01(\rR\x04port\"F\n" +
+	"\x04port\x18\x02 \x01(\rR\x04port\"\x13\n" +
+	"\x11TcpConnectedEvent\"F\n" +
 	"\x0fShutdownRequest\x123\n" +
 	"\x16flush_deadline_unix_ms\x18\x01 \x01(\x04R\x13flushDeadlineUnixMs\";\n" +
 	"\rCancelRequest\x12*\n" +
-	"\x11target_request_id\x18\x01 \x01(\x04R\x0ftargetRequestId\"2\n" +
+	"\x11target_request_id\x18\x01 \x01(\x04R\x0ftargetRequestId\"}\n" +
 	"\n" +
 	"StreamData\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\x12\x10\n" +
-	"\x03eof\x18\x02 \x01(\bR\x03eof\"$\n" +
+	"\x03eof\x18\x02 \x01(\bR\x03eof\x12I\n" +
+	"\achannel\x18\x03 \x01(\x0e2/.secondbox.microsandbox.helper.v1.StreamChannelR\achannel\"$\n" +
 	"\fStreamCredit\x12\x14\n" +
-	"\x05bytes\x18\x01 \x01(\x04R\x05bytes\"^\n" +
+	"\x05bytes\x18\x01 \x01(\x04R\x05bytes\"\xde\x02\n" +
 	"\rTerminalEvent\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x1b\n" +
 	"\texit_code\x18\x02 \x01(\x05R\bexitCode\x12\x16\n" +
-	"\x06reason\x18\x03 \x01(\tR\x06reason\"9\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\x12\x16\n" +
+	"\x06signal\x18\x04 \x01(\x05R\x06signal\x120\n" +
+	"\x14spawn_failure_reason\x18\x05 \x01(\rR\x12spawnFailureReason\x12B\n" +
+	"\x1dinfrastructure_failure_reason\x18\x06 \x01(\rR\x1binfrastructureFailureReason\x12\x1c\n" +
+	"\tretryable\x18\a \x01(\bR\tretryable\x121\n" +
+	"\x14elapsed_milliseconds\x18\b \x01(\x04R\x13elapsedMilliseconds\x12\x1f\n" +
+	"\vlimit_bytes\x18\t \x01(\x04R\n" +
+	"limitBytes\"\xc2\x02\n" +
+	"\x11FileMetadataEvent\x12\x16\n" +
+	"\x06exists\x18\x01 \x01(\bR\x06exists\x12\x12\n" +
+	"\x04size\x18\x02 \x01(\x04R\x04size\x12\x12\n" +
+	"\x04mode\x18\x03 \x01(\rR\x04mode\x12\x1a\n" +
+	"\bchecksum\x18\x04 \x01(\tR\bchecksum\x12'\n" +
+	"\x0fdirect_children\x18\x05 \x03(\tR\x0edirectChildren\x12\x12\n" +
+	"\x04kind\x18\x06 \x01(\rR\x04kind\x12-\n" +
+	"\x13modified_at_unix_ms\x18\a \x01(\x04R\x10modifiedAtUnixMs\x12e\n" +
+	"\x14direct_child_entries\x18\b \x03(\v23.secondbox.microsandbox.helper.v1.FileMetadataEntryR\x12directChildEntries\"~\n" +
+	"\x11FileMetadataEntry\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
+	"\x04kind\x18\x02 \x01(\rR\x04kind\x12\x12\n" +
+	"\x04size\x18\x03 \x01(\x04R\x04size\x12-\n" +
+	"\x13modified_at_unix_ms\x18\x04 \x01(\x04R\x10modifiedAtUnixMs\"9\n" +
 	"\x0fDiagnosticEvent\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x12\n" +
 	"\x04text\x18\x02 \x01(\tR\x04text\"\x8b\x01\n" +
@@ -1623,7 +2060,13 @@ const file_microsandbox_helper_v1_helper_proto_rawDesc = "" +
 	"#HELPER_NETWORK_PROTOCOL_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bHELPER_NETWORK_PROTOCOL_TCP\x10\x01\x12 \n" +
 	"\x1cHELPER_NETWORK_PROTOCOL_HTTP\x10\x02\x12!\n" +
-	"\x1dHELPER_NETWORK_PROTOCOL_HTTPS\x10\x03B_Z]github.com/SecondStack-AI/SecondBox/runner/internal/microsandboxprotocol;microsandboxprotocolb\x06proto3"
+	"\x1dHELPER_NETWORK_PROTOCOL_HTTPS\x10\x03*\x97\x01\n" +
+	"\rStreamChannel\x12\x1e\n" +
+	"\x1aSTREAM_CHANNEL_UNSPECIFIED\x10\x00\x12\x18\n" +
+	"\x14STREAM_CHANNEL_STDIN\x10\x01\x12\x19\n" +
+	"\x15STREAM_CHANNEL_STDOUT\x10\x02\x12\x19\n" +
+	"\x15STREAM_CHANNEL_STDERR\x10\x03\x12\x16\n" +
+	"\x12STREAM_CHANNEL_TCP\x10\x04B_Z]github.com/SecondStack-AI/SecondBox/runner/internal/microsandboxprotocol;microsandboxprotocolb\x06proto3"
 
 var (
 	file_microsandbox_helper_v1_helper_proto_rawDescOnce sync.Once
@@ -1637,54 +2080,62 @@ func file_microsandbox_helper_v1_helper_proto_rawDescGZIP() []byte {
 	return file_microsandbox_helper_v1_helper_proto_rawDescData
 }
 
-var file_microsandbox_helper_v1_helper_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_microsandbox_helper_v1_helper_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_microsandbox_helper_v1_helper_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_microsandbox_helper_v1_helper_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_microsandbox_helper_v1_helper_proto_goTypes = []any{
 	(Operation)(0),                   // 0: secondbox.microsandbox.helper.v1.Operation
 	(HelperNetworkPolicyMode)(0),     // 1: secondbox.microsandbox.helper.v1.HelperNetworkPolicyMode
 	(HelperNetworkProtocol)(0),       // 2: secondbox.microsandbox.helper.v1.HelperNetworkProtocol
-	(*Envelope)(nil),                 // 3: secondbox.microsandbox.helper.v1.Envelope
-	(*StartRequest)(nil),             // 4: secondbox.microsandbox.helper.v1.StartRequest
-	(*HelperNetworkDestination)(nil), // 5: secondbox.microsandbox.helper.v1.HelperNetworkDestination
-	(*HelperNetworkPolicy)(nil),      // 6: secondbox.microsandbox.helper.v1.HelperNetworkPolicy
-	(*ReadyEvent)(nil),               // 7: secondbox.microsandbox.helper.v1.ReadyEvent
-	(*ExecRequest)(nil),              // 8: secondbox.microsandbox.helper.v1.ExecRequest
-	(*FileRequest)(nil),              // 9: secondbox.microsandbox.helper.v1.FileRequest
-	(*PtyRequest)(nil),               // 10: secondbox.microsandbox.helper.v1.PtyRequest
-	(*TcpRequest)(nil),               // 11: secondbox.microsandbox.helper.v1.TcpRequest
-	(*ShutdownRequest)(nil),          // 12: secondbox.microsandbox.helper.v1.ShutdownRequest
-	(*CancelRequest)(nil),            // 13: secondbox.microsandbox.helper.v1.CancelRequest
-	(*StreamData)(nil),               // 14: secondbox.microsandbox.helper.v1.StreamData
-	(*StreamCredit)(nil),             // 15: secondbox.microsandbox.helper.v1.StreamCredit
-	(*TerminalEvent)(nil),            // 16: secondbox.microsandbox.helper.v1.TerminalEvent
-	(*DiagnosticEvent)(nil),          // 17: secondbox.microsandbox.helper.v1.DiagnosticEvent
-	(*FormatWorkspaceRequest)(nil),   // 18: secondbox.microsandbox.helper.v1.FormatWorkspaceRequest
+	(StreamChannel)(0),               // 3: secondbox.microsandbox.helper.v1.StreamChannel
+	(*Envelope)(nil),                 // 4: secondbox.microsandbox.helper.v1.Envelope
+	(*StartRequest)(nil),             // 5: secondbox.microsandbox.helper.v1.StartRequest
+	(*HelperNetworkDestination)(nil), // 6: secondbox.microsandbox.helper.v1.HelperNetworkDestination
+	(*HelperNetworkPolicy)(nil),      // 7: secondbox.microsandbox.helper.v1.HelperNetworkPolicy
+	(*ReadyEvent)(nil),               // 8: secondbox.microsandbox.helper.v1.ReadyEvent
+	(*ExecRequest)(nil),              // 9: secondbox.microsandbox.helper.v1.ExecRequest
+	(*FileRequest)(nil),              // 10: secondbox.microsandbox.helper.v1.FileRequest
+	(*PtyRequest)(nil),               // 11: secondbox.microsandbox.helper.v1.PtyRequest
+	(*TcpRequest)(nil),               // 12: secondbox.microsandbox.helper.v1.TcpRequest
+	(*TcpConnectedEvent)(nil),        // 13: secondbox.microsandbox.helper.v1.TcpConnectedEvent
+	(*ShutdownRequest)(nil),          // 14: secondbox.microsandbox.helper.v1.ShutdownRequest
+	(*CancelRequest)(nil),            // 15: secondbox.microsandbox.helper.v1.CancelRequest
+	(*StreamData)(nil),               // 16: secondbox.microsandbox.helper.v1.StreamData
+	(*StreamCredit)(nil),             // 17: secondbox.microsandbox.helper.v1.StreamCredit
+	(*TerminalEvent)(nil),            // 18: secondbox.microsandbox.helper.v1.TerminalEvent
+	(*FileMetadataEvent)(nil),        // 19: secondbox.microsandbox.helper.v1.FileMetadataEvent
+	(*FileMetadataEntry)(nil),        // 20: secondbox.microsandbox.helper.v1.FileMetadataEntry
+	(*DiagnosticEvent)(nil),          // 21: secondbox.microsandbox.helper.v1.DiagnosticEvent
+	(*FormatWorkspaceRequest)(nil),   // 22: secondbox.microsandbox.helper.v1.FormatWorkspaceRequest
 }
 var file_microsandbox_helper_v1_helper_proto_depIdxs = []int32{
-	4,  // 0: secondbox.microsandbox.helper.v1.Envelope.start:type_name -> secondbox.microsandbox.helper.v1.StartRequest
-	7,  // 1: secondbox.microsandbox.helper.v1.Envelope.ready:type_name -> secondbox.microsandbox.helper.v1.ReadyEvent
-	8,  // 2: secondbox.microsandbox.helper.v1.Envelope.exec:type_name -> secondbox.microsandbox.helper.v1.ExecRequest
-	9,  // 3: secondbox.microsandbox.helper.v1.Envelope.file:type_name -> secondbox.microsandbox.helper.v1.FileRequest
-	10, // 4: secondbox.microsandbox.helper.v1.Envelope.pty:type_name -> secondbox.microsandbox.helper.v1.PtyRequest
-	11, // 5: secondbox.microsandbox.helper.v1.Envelope.tcp:type_name -> secondbox.microsandbox.helper.v1.TcpRequest
-	12, // 6: secondbox.microsandbox.helper.v1.Envelope.shutdown:type_name -> secondbox.microsandbox.helper.v1.ShutdownRequest
-	13, // 7: secondbox.microsandbox.helper.v1.Envelope.cancel:type_name -> secondbox.microsandbox.helper.v1.CancelRequest
-	14, // 8: secondbox.microsandbox.helper.v1.Envelope.stream_data:type_name -> secondbox.microsandbox.helper.v1.StreamData
-	15, // 9: secondbox.microsandbox.helper.v1.Envelope.stream_credit:type_name -> secondbox.microsandbox.helper.v1.StreamCredit
-	16, // 10: secondbox.microsandbox.helper.v1.Envelope.terminal:type_name -> secondbox.microsandbox.helper.v1.TerminalEvent
-	17, // 11: secondbox.microsandbox.helper.v1.Envelope.diagnostic:type_name -> secondbox.microsandbox.helper.v1.DiagnosticEvent
-	18, // 12: secondbox.microsandbox.helper.v1.Envelope.format_workspace:type_name -> secondbox.microsandbox.helper.v1.FormatWorkspaceRequest
-	6,  // 13: secondbox.microsandbox.helper.v1.StartRequest.network_policy:type_name -> secondbox.microsandbox.helper.v1.HelperNetworkPolicy
-	2,  // 14: secondbox.microsandbox.helper.v1.HelperNetworkDestination.protocol:type_name -> secondbox.microsandbox.helper.v1.HelperNetworkProtocol
-	1,  // 15: secondbox.microsandbox.helper.v1.HelperNetworkPolicy.mode:type_name -> secondbox.microsandbox.helper.v1.HelperNetworkPolicyMode
-	5,  // 16: secondbox.microsandbox.helper.v1.HelperNetworkPolicy.destinations:type_name -> secondbox.microsandbox.helper.v1.HelperNetworkDestination
-	0,  // 17: secondbox.microsandbox.helper.v1.ReadyEvent.operations:type_name -> secondbox.microsandbox.helper.v1.Operation
-	0,  // 18: secondbox.microsandbox.helper.v1.FileRequest.operation:type_name -> secondbox.microsandbox.helper.v1.Operation
-	19, // [19:19] is the sub-list for method output_type
-	19, // [19:19] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	5,  // 0: secondbox.microsandbox.helper.v1.Envelope.start:type_name -> secondbox.microsandbox.helper.v1.StartRequest
+	8,  // 1: secondbox.microsandbox.helper.v1.Envelope.ready:type_name -> secondbox.microsandbox.helper.v1.ReadyEvent
+	9,  // 2: secondbox.microsandbox.helper.v1.Envelope.exec:type_name -> secondbox.microsandbox.helper.v1.ExecRequest
+	10, // 3: secondbox.microsandbox.helper.v1.Envelope.file:type_name -> secondbox.microsandbox.helper.v1.FileRequest
+	11, // 4: secondbox.microsandbox.helper.v1.Envelope.pty:type_name -> secondbox.microsandbox.helper.v1.PtyRequest
+	12, // 5: secondbox.microsandbox.helper.v1.Envelope.tcp:type_name -> secondbox.microsandbox.helper.v1.TcpRequest
+	14, // 6: secondbox.microsandbox.helper.v1.Envelope.shutdown:type_name -> secondbox.microsandbox.helper.v1.ShutdownRequest
+	15, // 7: secondbox.microsandbox.helper.v1.Envelope.cancel:type_name -> secondbox.microsandbox.helper.v1.CancelRequest
+	16, // 8: secondbox.microsandbox.helper.v1.Envelope.stream_data:type_name -> secondbox.microsandbox.helper.v1.StreamData
+	17, // 9: secondbox.microsandbox.helper.v1.Envelope.stream_credit:type_name -> secondbox.microsandbox.helper.v1.StreamCredit
+	18, // 10: secondbox.microsandbox.helper.v1.Envelope.terminal:type_name -> secondbox.microsandbox.helper.v1.TerminalEvent
+	21, // 11: secondbox.microsandbox.helper.v1.Envelope.diagnostic:type_name -> secondbox.microsandbox.helper.v1.DiagnosticEvent
+	22, // 12: secondbox.microsandbox.helper.v1.Envelope.format_workspace:type_name -> secondbox.microsandbox.helper.v1.FormatWorkspaceRequest
+	19, // 13: secondbox.microsandbox.helper.v1.Envelope.file_metadata:type_name -> secondbox.microsandbox.helper.v1.FileMetadataEvent
+	13, // 14: secondbox.microsandbox.helper.v1.Envelope.tcp_connected:type_name -> secondbox.microsandbox.helper.v1.TcpConnectedEvent
+	7,  // 15: secondbox.microsandbox.helper.v1.StartRequest.network_policy:type_name -> secondbox.microsandbox.helper.v1.HelperNetworkPolicy
+	2,  // 16: secondbox.microsandbox.helper.v1.HelperNetworkDestination.protocol:type_name -> secondbox.microsandbox.helper.v1.HelperNetworkProtocol
+	1,  // 17: secondbox.microsandbox.helper.v1.HelperNetworkPolicy.mode:type_name -> secondbox.microsandbox.helper.v1.HelperNetworkPolicyMode
+	6,  // 18: secondbox.microsandbox.helper.v1.HelperNetworkPolicy.destinations:type_name -> secondbox.microsandbox.helper.v1.HelperNetworkDestination
+	0,  // 19: secondbox.microsandbox.helper.v1.ReadyEvent.operations:type_name -> secondbox.microsandbox.helper.v1.Operation
+	0,  // 20: secondbox.microsandbox.helper.v1.FileRequest.operation:type_name -> secondbox.microsandbox.helper.v1.Operation
+	3,  // 21: secondbox.microsandbox.helper.v1.StreamData.channel:type_name -> secondbox.microsandbox.helper.v1.StreamChannel
+	20, // 22: secondbox.microsandbox.helper.v1.FileMetadataEvent.direct_child_entries:type_name -> secondbox.microsandbox.helper.v1.FileMetadataEntry
+	23, // [23:23] is the sub-list for method output_type
+	23, // [23:23] is the sub-list for method input_type
+	23, // [23:23] is the sub-list for extension type_name
+	23, // [23:23] is the sub-list for extension extendee
+	0,  // [0:23] is the sub-list for field type_name
 }
 
 func init() { file_microsandbox_helper_v1_helper_proto_init() }
@@ -1706,6 +2157,8 @@ func file_microsandbox_helper_v1_helper_proto_init() {
 		(*Envelope_Terminal)(nil),
 		(*Envelope_Diagnostic)(nil),
 		(*Envelope_FormatWorkspace)(nil),
+		(*Envelope_FileMetadata)(nil),
+		(*Envelope_TcpConnected)(nil),
 	}
 	file_microsandbox_helper_v1_helper_proto_msgTypes[2].OneofWrappers = []any{
 		(*HelperNetworkDestination_Domain)(nil),
@@ -1716,8 +2169,8 @@ func file_microsandbox_helper_v1_helper_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_microsandbox_helper_v1_helper_proto_rawDesc), len(file_microsandbox_helper_v1_helper_proto_rawDesc)),
-			NumEnums:      3,
-			NumMessages:   16,
+			NumEnums:      4,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

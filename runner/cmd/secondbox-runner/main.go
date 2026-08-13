@@ -17,6 +17,7 @@ import (
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/firecracker"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/jailersupervisor"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/microsandbox"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runtimeconfig"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
@@ -82,31 +83,59 @@ func run(arguments []string) (runErr error) {
 	defer func() {
 		runErr = errors.Join(runErr, closeLog())
 	}()
-	firecrackerConfig := composition.Firecracker
 	workspaceStore, err := workspacestore.New(
 		context.Background(),
 		workspacestore.Config{
-			Root:                         firecrackerConfig.RunnerWorkspaceRoot,
-			TemplateCapacityBytes:        int64(firecrackerConfig.MicroVMWorkspaceSizeMiB) << 20,
+			Root:                         composition.WorkspaceRoot,
+			TemplateCapacityBytes:        composition.WorkspaceTemplateCapacityBytes,
 			MicrosandboxHelperExecutable: strings.TrimSpace(os.Getenv("SECONDBOX_MICROSANDBOX_HELPER_EXECUTABLE")),
 		},
 	)
 	if err != nil {
 		return fmt.Errorf("initialize SecondBox runner WorkspaceStore: %w", err)
 	}
-	manager, err := firecracker.New(firecrackerConfig)
-	if err != nil {
-		return fmt.Errorf("create SecondBox Firecracker backend: %w", err)
-	}
-	if err := manager.SetWorkspaceStore(workspaceStore); err != nil {
-		return fmt.Errorf("bind SecondBox runner WorkspaceStore: %w", err)
-	}
-	if err := manager.Start(context.Background()); err != nil {
-		return fmt.Errorf("start SecondBox Firecracker backend: %w", err)
-	}
-	backend, err := firecracker.NewAssignmentBackend(manager)
-	if err != nil {
-		return fmt.Errorf("create SecondBox assignment backend: %w", err)
+	var backend runnercontrol.AssignmentBackend
+	var shutdownBackend func(context.Context) error
+	switch composition.BackendKind {
+	case "firecracker":
+		manager, createErr := firecracker.New(composition.Firecracker)
+		if createErr != nil {
+			return fmt.Errorf("create SecondBox Firecracker backend: %w", createErr)
+		}
+		if createErr = manager.SetWorkspaceStore(workspaceStore); createErr != nil {
+			return fmt.Errorf("bind SecondBox runner WorkspaceStore: %w", createErr)
+		}
+		if createErr = manager.Start(context.Background()); createErr != nil {
+			return fmt.Errorf("start SecondBox Firecracker backend: %w", createErr)
+		}
+		backend, createErr = firecracker.NewAssignmentBackend(manager)
+		if createErr != nil {
+			return fmt.Errorf("create SecondBox Firecracker assignment backend: %w", createErr)
+		}
+		shutdownBackend = manager.Shutdown
+	case "microsandbox":
+		settings := composition.Microsandbox
+		microsandboxBackend, createErr := microsandbox.NewAssignmentBackend(microsandbox.Config{
+			HelperExecutable:      settings.HelperExecutable,
+			LibkrunfwPath:         settings.LibkrunfwPath,
+			AgentdPath:            settings.AgentdPath,
+			FlatRootPath:          settings.FlatRootPath,
+			MaterializationPath:   settings.MaterializationPath,
+			MaterializationDigest: settings.MaterializationDigest,
+			MaximumVCPUs:          settings.MaximumVCPUs,
+			MaximumMemoryBytes:    settings.MaximumMemoryBytes,
+			MaximumDiskBytes:      settings.MaximumDiskBytes,
+			MaximumInstances:      settings.MaximumInstances,
+			MaximumOperations:     settings.MaximumOperations,
+			WorkspaceStore:        workspaceStore,
+		})
+		if createErr != nil {
+			return fmt.Errorf("create SecondBox Microsandbox assignment backend: %w", createErr)
+		}
+		backend = microsandboxBackend
+		shutdownBackend = microsandboxBackend.Shutdown
+	default:
+		return fmt.Errorf("SecondBox runner compute backend selection is invalid")
 	}
 	service, err := runnercontrol.NewRunnerProtocolService(protocolConfig, backend, connector)
 	if err != nil {
@@ -118,7 +147,7 @@ func run(arguments []string) (runErr error) {
 	runErr = service.Run(ctx)
 	shutdownContext, cancelShutdown := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelShutdown()
-	shutdownErr := manager.Shutdown(shutdownContext)
+	shutdownErr := shutdownBackend(shutdownContext)
 	if runErr != nil && ctx.Err() == nil {
 		runErr = fmt.Errorf("SecondBox runner protocol stopped: %w", runErr)
 	} else {
@@ -145,7 +174,7 @@ func configureRunnerLogging(path string) (func() error, error) {
 
 func validateRunnerExecutionIdentity(healthcheck bool, effectiveUID int) error {
 	if !healthcheck && effectiveUID != 0 {
-		return fmt.Errorf("SecondBox runner must run as root to own Firecracker host resources")
+		return fmt.Errorf("SecondBox runner must run as root to own local compute host resources")
 	}
 	return nil
 }

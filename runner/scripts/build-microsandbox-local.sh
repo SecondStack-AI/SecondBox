@@ -7,7 +7,7 @@ readonly EXPECTED_PATCHED_TREE="972fd637a835c175a4aa5b11fd52ccd0ab087f95"
 readonly EXPECTED_CARGO_LOCK_SHA256="7827c5aad40cfc4ab36be6aba3bc4c0d923e525c50fc4b54741776bcf13b95c8"
 readonly EXPECTED_PATCH_SHA256="943e728067cce9f0efe9ed578c74f6323bd6c1cf8407822a1e8ee998f64564de"
 readonly EXPECTED_PROBE_LOCK_SHA256="95f0107a1c27f7ad079012a919213207b4256950b73aec33ee624ed33c4638a7"
-readonly EXPECTED_HELPER_LOCK_SHA256="f8e07fd675fd194c9ba571547a05e122ad77e96829b3ff00e4455008b52eb5a8"
+readonly EXPECTED_HELPER_LOCK_SHA256="3fc5183298bda9579eab9c5f5046c3909bc933d7740a013ce8678135dd504170"
 readonly EXPECTED_LIBKRUNFW_COMMIT="21cb6dce19a615f63e41ecb913334d18560c1364"
 readonly EXPECTED_KERNEL_TARBALL_SHA256="194eef900ade82df74ed1d695daa45d03ee4bb415cae4f936a3dbaab2dbbb951"
 readonly ROOTFS_IMAGE="docker.io/library/alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce"
@@ -207,6 +207,7 @@ mkdir -p -- "$stage_dir/runtime/bin" "$stage_dir/runtime/lib" "$stage_dir/rootfs
 install -m 0755 "$stage_dir/cargo-target/debug/msb" "$stage_dir/runtime/bin/msb"
 install -m 0755 "$stage_dir/cargo-target/debug/secondbox-microsandbox-helper" \
   "$stage_dir/runtime/bin/secondbox-microsandbox-helper"
+install -m 0755 "$stage_dir/source/build/agentd" "$stage_dir/runtime/bin/agentd"
 install -m 0644 "$stage_dir/source/build/libkrunfw.so.5.6.1" \
   "$stage_dir/runtime/lib/libkrunfw.so.5.6.1"
 ln -s libkrunfw.so.5.6.1 "$stage_dir/runtime/lib/libkrunfw.so.5"
@@ -217,10 +218,12 @@ rootfs_container="$(docker create "$ROOTFS_IMAGE")"
 docker export "$rootfs_container" | tar -C "$stage_dir/rootfs" -xf -
 docker rm "$rootfs_container" >/dev/null
 rootfs_container=""
+install -m 0755 "$stage_dir/source/build/agentd" "$stage_dir/rootfs/init.secondbox-agentd"
 
 {
   sha256sum "$stage_dir/source/build/agentd"
   sha256sum "$stage_dir/runtime/bin/msb"
+  sha256sum "$stage_dir/runtime/bin/agentd"
   sha256sum "$stage_dir/runtime/lib/libkrunfw.so.5.6.1"
   sha256sum "$stage_dir/cargo-target/debug/secondbox-microsandbox-probe"
   sha256sum "$stage_dir/runtime/bin/secondbox-microsandbox-helper"
