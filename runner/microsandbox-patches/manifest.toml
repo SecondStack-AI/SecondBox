@@ -1,0 +1,32 @@
+schema_version = 1
+upstream_repository = "https://github.com/superradcompany/microsandbox"
+upstream_version = "0.6.8"
+upstream_commit = "5b335537afad433ad2c0308cb54de13b7015b4e7"
+upstream_tree = "dc506dffd600fcea281bd4ebfc924e1b31afcb2a"
+patched_tree = "972fd637a835c175a4aa5b11fd52ccd0ab087f95"
+cargo_lock_sha256 = "7827c5aad40cfc4ab36be6aba3bc4c0d923e525c50fc4b54741776bcf13b95c8"
+probe_cargo_lock_sha256 = "95f0107a1c27f7ad079012a919213207b4256950b73aec33ee624ed33c4638a7"
+license = "Apache-2.0"
+libkrunfw_commit = "21cb6dce19a615f63e41ecb913334d18560c1364"
+libkrunfw_version = "5.6.1"
+libkrunfw_library_license = "LGPL-2.1-only"
+libkrunfw_bundled_kernel_and_patches_license = "GPL-2.0-only"
+kernel_version = "6.12.99"
+kernel_tarball_sha256 = "194eef900ade82df74ed1d695daa45d03ee4bb415cae4f936a3dbaab2dbbb951"
+agentd_builder_image = "docker.io/library/rust:alpine@sha256:3c38f3f82c2f3d73da3b38e18d279393a04cb43ddded0e35088a8c3324d40900"
+probe_rootfs_image = "docker.io/library/alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce"
+
+[[patches]]
+path = "0001-explicit-ext4-uuid-fd-api.patch"
+sha256 = "943e728067cce9f0efe9ed578c74f6323bd6c1cf8407822a1e8ee998f64564de"
+purpose = "Format caller-owned ext4 files with explicit UUIDs and safely rewrite clone UUIDs."
+
+[[locked_crates]]
+name = "msb_krun"
+version = "0.1.30"
+sha256 = "b57b2304dc1cef25b7cdd93be44c6515a97c90e00308b7d35eabc4fe27b02af5"
+
+[[locked_crates]]
+name = "msb_krun_utils"
+version = "0.1.30"
+sha256 = "5f4f682dec7289463f89adfd1df7605a425c069d238265496a99dbff921075a9"
