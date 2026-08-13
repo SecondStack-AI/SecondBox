@@ -13,7 +13,9 @@ build = "build.rs"
 [dependencies]
 libc = "=0.2.183"
 microsandbox-agent-client = { version = "=0.6.8", default-features = false, features = ["stream"] }
+microsandbox-network = { path = "../../crates/network" }
 microsandbox-protocol = "=0.6.8"
+microsandbox-types = { path = "../../packages/microsandbox-types/rust" }
 msb_krun = { version = "=0.1.30", features = ["blk", "net"] }
 msb_krun_utils = "=0.1.30"
 prost = "=0.14.3"

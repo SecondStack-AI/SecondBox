@@ -2,6 +2,12 @@
 
 use std::path::PathBuf;
 
+use microsandbox_network::{
+    builder::NetworkBuilder,
+    network::SmoltcpNetwork,
+    policy::{Action, Destination, Direction, NetworkPolicy, PortRange, Protocol, Rule},
+};
+use microsandbox_types::DeploymentProfile;
 use msb_krun::{DiskImageFormat, SyncMode, VmBuilder};
 use thiserror::Error;
 
@@ -23,6 +29,12 @@ pub struct LaunchConfiguration {
     pub memory_mib: usize,
     pub environment: Vec<(String, String)>,
     pub network: TranslatedNetworkPolicy,
+    pub network_slot: u64,
+}
+
+pub struct RunningVm {
+    vm: msb_krun::Vm,
+    _network_runtime: tokio::runtime::Runtime,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -59,6 +71,32 @@ pub enum LaunchError {
     Network,
     #[error("SecondBox Microsandbox helper Workspace attachment identity is invalid")]
     Workspace,
+}
+
+#[derive(Debug, Error)]
+pub enum BuildError {
+    #[error("SecondBox Microsandbox helper network policy cannot be represented: {0}")]
+    NetworkPolicy(String),
+    #[error("SecondBox Microsandbox helper network configuration: {0}")]
+    NetworkConfiguration(String),
+    #[error("SecondBox Microsandbox helper network runtime: {0}")]
+    NetworkRuntime(#[from] std::io::Error),
+    #[error("SecondBox Microsandbox helper libkrun configuration: {0}")]
+    Libkrun(#[from] msb_krun::Error),
+}
+
+impl RunningVm {
+    pub fn exit_handle(&self) -> msb_krun::ExitHandle {
+        self.vm.exit_handle()
+    }
+
+    pub fn enter(self) -> Result<std::convert::Infallible, msb_krun::Error> {
+        let Self {
+            vm,
+            _network_runtime,
+        } = self;
+        vm.enter()
+    }
 }
 
 impl LaunchConfiguration {
@@ -103,6 +141,11 @@ impl LaunchConfiguration {
             memory_mib,
             environment,
             network,
+            network_slot: u64::from_be_bytes(
+                start.workspace_uuid[..8]
+                    .try_into()
+                    .map_err(|_| LaunchError::Workspace)?,
+            ) % 65_536,
         })
     }
 
@@ -111,7 +154,7 @@ impl LaunchConfiguration {
         self,
         console: crate::console::AgentConsoleBackend,
         runtime_dir: &std::path::Path,
-    ) -> Result<msb_krun::Vm, msb_krun::Error> {
+    ) -> Result<RunningVm, BuildError> {
         self.build_with_workspace(
             PathBuf::from(WORKSPACE_DESCRIPTOR_PATH),
             Some(console),
@@ -124,13 +167,33 @@ impl LaunchConfiguration {
         workspace_path: PathBuf,
         console: Option<crate::console::AgentConsoleBackend>,
         runtime_dir: Option<PathBuf>,
-    ) -> Result<msb_krun::Vm, msb_krun::Error> {
+    ) -> Result<RunningVm, BuildError> {
         let root = self.root;
         let libkrunfw = self.libkrunfw;
         let agentd = self.agentd;
         let vcpus = self.vcpus;
         let memory_mib = self.memory_mib;
-        let environment = self.environment;
+        let mut environment = self.environment;
+        let policy = microsandbox_policy(&self.network)?;
+        let network_config = NetworkBuilder::new()
+            .enabled(true)
+            .policy(policy)
+            .build()
+            .map_err(|error| BuildError::NetworkConfiguration(error.to_string()))?;
+        let network_runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_name("secondbox-microsandbox-network")
+            .build()?;
+        let mut network = SmoltcpNetwork::new_with_profile(
+            network_config,
+            self.network_slot,
+            DeploymentProfile::MultiTenant,
+        )
+        .map_err(|error| BuildError::NetworkConfiguration(error.to_string()))?;
+        network.start(network_runtime.handle().clone());
+        let guest_mac = network.guest_mac();
+        let net_backend = network.take_backend();
+        environment.extend(network.guest_env_vars());
         let mut builder = VmBuilder::new()
             .machine(|machine| {
                 let machine = machine
@@ -163,7 +226,8 @@ impl LaunchConfiguration {
             .exec(|exec| {
                 exec.env("MSB_DISK_MOUNTS", "workspace:/workspace:fstype=ext4")
                     .envs(environment)
-            });
+            })
+            .net(move |net| net.mac(guest_mac).custom(net_backend));
         if let Some(runtime_dir) = runtime_dir {
             builder = builder.fs(|filesystem| filesystem.tag("msb_runtime").path(runtime_dir));
         }
@@ -174,8 +238,44 @@ impl LaunchConfiguration {
                     .custom("agent", Box::new(console))
             });
         }
-        builder.build()
+        Ok(RunningVm {
+            vm: builder.build()?,
+            _network_runtime: network_runtime,
+        })
     }
+}
+
+fn microsandbox_policy(translated: &TranslatedNetworkPolicy) -> Result<NetworkPolicy, BuildError> {
+    let TranslatedNetworkPolicy::AllowList(destinations) = translated else {
+        return Ok(NetworkPolicy::none());
+    };
+    let mut rules = Vec::with_capacity(destinations.len() + 1);
+    if destinations.iter().any(|destination| destination.is_domain) {
+        rules.push(Rule::allow_dns());
+    }
+    for destination in destinations {
+        let target = if destination.is_domain {
+            Destination::Domain(destination.target.parse().map_err(|error| {
+                BuildError::NetworkPolicy(format!("invalid domain {}: {error}", destination.target))
+            })?)
+        } else {
+            Destination::Cidr(destination.target.parse().map_err(|error| {
+                BuildError::NetworkPolicy(format!("invalid CIDR {}: {error}", destination.target))
+            })?)
+        };
+        rules.push(Rule {
+            direction: Direction::Egress,
+            destination: target,
+            protocols: vec![Protocol::Tcp],
+            ports: vec![PortRange::single(destination.port)],
+            action: Action::Allow,
+        });
+    }
+    Ok(NetworkPolicy {
+        default_egress: Action::Deny,
+        default_ingress: Action::Deny,
+        rules,
+    })
 }
 
 fn validate_asset(value: &str) -> Result<PathBuf, LaunchError> {
@@ -212,7 +312,7 @@ fn translate_network(start: &StartRequest) -> Result<TranslatedNetworkPolicy, La
         HelperNetworkPolicyMode::DenyAll if policy.destinations.is_empty() => {
             Ok(TranslatedNetworkPolicy::DenyAll)
         }
-        HelperNetworkPolicyMode::AllowList if !policy.destinations.is_empty() => policy
+        HelperNetworkPolicyMode::AllowList => policy
             .destinations
             .iter()
             .map(translate_destination)
@@ -304,6 +404,59 @@ mod tests {
         assert_eq!(
             launch.environment[1],
             ("SECONDBOX_AGENT".into(), "1".into())
+        );
+    }
+
+    #[test]
+    fn translates_exact_network_rules_into_fail_closed_smoltcp_policy() {
+        let translated = TranslatedNetworkPolicy::AllowList(vec![
+            TranslatedNetworkDestination {
+                target: "api.example.com".into(),
+                is_domain: true,
+                protocol: HelperNetworkProtocol::Https,
+                port: 443,
+            },
+            TranslatedNetworkDestination {
+                target: "93.184.216.0/24".into(),
+                is_domain: false,
+                protocol: HelperNetworkProtocol::Http,
+                port: 8080,
+            },
+            TranslatedNetworkDestination {
+                target: "2001:4860:4860::/48".into(),
+                is_domain: false,
+                protocol: HelperNetworkProtocol::Tcp,
+                port: 8443,
+            },
+        ]);
+        let policy = microsandbox_policy(&translated).unwrap();
+        assert!(matches!(policy.default_egress, Action::Deny));
+        assert!(matches!(policy.default_ingress, Action::Deny));
+        assert_eq!(policy.rules.len(), 4);
+        assert!(matches!(policy.rules[0].destination, Destination::Group(_)));
+        assert!(matches!(
+            policy.rules[1].destination,
+            Destination::Domain(_)
+        ));
+        assert!(matches!(policy.rules[2].destination, Destination::Cidr(_)));
+        assert!(matches!(policy.rules[3].destination, Destination::Cidr(_)));
+        for (rule, port) in policy.rules[1..].iter().zip([443, 8080, 8443]) {
+            assert_eq!(rule.protocols, vec![Protocol::Tcp]);
+            assert_eq!(rule.ports[0].start, port);
+            assert_eq!(rule.ports[0].end, port);
+            assert!(matches!(rule.action, Action::Allow));
+        }
+        assert!(
+            microsandbox_policy(&TranslatedNetworkPolicy::DenyAll)
+                .unwrap()
+                .rules
+                .is_empty()
+        );
+        assert!(
+            microsandbox_policy(&TranslatedNetworkPolicy::AllowList(Vec::new()))
+                .unwrap()
+                .rules
+                .is_empty()
         );
     }
 

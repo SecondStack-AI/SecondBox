@@ -13,18 +13,39 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/materialization"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
 	runnerconformance "github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol/conformance"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 	"google.golang.org/protobuf/proto"
 )
 
 const qualificationWorkspaceBytes = int64(64 << 20)
+
+type qualificationEvidenceSink struct {
+	mu      sync.Mutex
+	records []runnerevidence.Record
+}
+
+func (sink *qualificationEvidenceSink) Emit(_ context.Context, record runnerevidence.Record) error {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	sink.records = append(sink.records, record)
+	return nil
+}
+
+func (sink *qualificationEvidenceSink) snapshot() []runnerevidence.Record {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	return append([]runnerevidence.Record(nil), sink.records...)
+}
 
 func TestQualifiedLinuxBackendBootsAgentAndWorkspaceOnKVM(t *testing.T) {
 	buildRoot := os.Getenv("SECONDBOX_MICROSANDBOX_LINUX_BUILD")
@@ -98,6 +119,8 @@ func TestQualifiedLinuxBackendBootsAgentAndWorkspaceOnKVM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	evidenceSink := &qualificationEvidenceSink{}
+	backend.SetRunnerEvidenceSink(evidenceSink, "qualification-runner")
 	if _, err := backend.ExecuteLocalWorkspace(t.Context(), &runnerprotocol.LocalWorkspaceCommand{
 		Kind:        runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE,
 		OperationId: "qualification-create", WorkspaceId: "qualification-workspace",
@@ -128,7 +151,7 @@ func TestQualifiedLinuxBackendBootsAgentAndWorkspaceOnKVM(t *testing.T) {
 			{ArtifactId: "toolchain", ManifestDigest: manifest.Key.ToolchainManifestDigest, Architecture: "amd64", GuestProtocolGeneration: 6},
 		},
 		DeadlineUnixMs: uint64(time.Now().Add(3 * time.Minute).UnixMilli()),
-		Correlation:    &runnerprotocol.Correlation{RequestId: "qualification-request"},
+		Correlation:    &runnerprotocol.Correlation{RequestId: "qualification-request", OperationId: "qualification-operation", LeaseId: "qualification-lease"},
 		NetworkPolicy:  &runnerprotocol.NetworkPolicy{Mode: runnerprotocol.NetworkPolicyMode_NETWORK_POLICY_MODE_DENY_ALL},
 	}
 	instance, err := backend.StartAssignment(t.Context(), assignment, func(runnerprotocol.AssignmentProgressStage) error { return nil })
@@ -370,6 +393,54 @@ func TestQualifiedLinuxBackendBootsAgentAndWorkspaceOnKVM(t *testing.T) {
 
 	if _, err := backend.ExecuteLocalWorkspace(t.Context(), &runnerprotocol.LocalWorkspaceCommand{
 		Kind:        runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE,
+		OperationId: "qualification-network-create", WorkspaceId: "qualification-network-workspace",
+		FencingToken:         []byte("qualification-network-store-fence"),
+		LogicalCapacityBytes: uint64(qualificationWorkspaceBytes),
+	}); err != nil {
+		t.Fatalf("create network-policy Workspace: %v", err)
+	}
+	networkAssignment := proto.Clone(assignment).(*runnerprotocol.AssignmentCommand)
+	networkAssignment.WorkspaceId = "qualification-network-workspace"
+	networkAssignment.Correlation = &runnerprotocol.Correlation{RequestId: "qualification-network-request", OperationId: "qualification-network-operation", LeaseId: "qualification-network-lease"}
+	networkAssignment.Fence = &runnerprotocol.AssignmentFence{
+		AssignmentId: "qualification-network-assignment", SandboxId: "qualification-network-sandbox",
+		InstanceId: "qualification-network-instance", SandboxGeneration: 1,
+		FencingToken: []byte("qualification-network-fence-000"),
+	}
+	networkAssignment.NetworkPolicy = &runnerprotocol.NetworkPolicy{
+		Mode: runnerprotocol.NetworkPolicyMode_NETWORK_POLICY_MODE_ALLOW_LIST,
+		Destinations: []*runnerprotocol.NetworkDestination{{
+			Target:   &runnerprotocol.NetworkDestination_Domain{Domain: "example.com"},
+			Protocol: runnerprotocol.NetworkDestinationProtocol_NETWORK_DESTINATION_PROTOCOL_HTTP,
+			Port:     80,
+		}},
+	}
+	if _, err := backend.StartAssignment(t.Context(), networkAssignment, func(runnerprotocol.AssignmentProgressStage) error { return nil }); err != nil {
+		t.Fatalf("start exact network-policy Instance: %v", err)
+	}
+	if err := backend.MarkAssignmentReady(networkAssignment.Fence); err != nil {
+		t.Fatal(err)
+	}
+	allowedNetwork, err := backend.ExecuteBuffered(t.Context(), networkAssignment.Fence, &runnerprotocol.ExecOpen{
+		Command:        &runnerprotocol.ExecOpen_Shell{Shell: "wget -q -T 10 -O - http://example.com/ | grep -q 'Example Domain'"},
+		DeadlineUnixMs: uint64(time.Now().Add(15 * time.Second).UnixMilli()), OutputLimitBytes: 4096,
+	})
+	if err != nil || allowedNetwork.Terminal.GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED || allowedNetwork.Terminal.GetExitCode() != 0 {
+		t.Fatalf("qualified exact-domain allow = %#v, %v", allowedNetwork, err)
+	}
+	blockedMetadata, err := backend.ExecuteBuffered(t.Context(), networkAssignment.Fence, &runnerprotocol.ExecOpen{
+		Command:        &runnerprotocol.ExecOpen_Shell{Shell: "wget -q -T 2 -O /dev/null http://169.254.169.254/"},
+		DeadlineUnixMs: uint64(time.Now().Add(5 * time.Second).UnixMilli()), OutputLimitBytes: 4096,
+	})
+	if err != nil || blockedMetadata.Terminal.GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED || blockedMetadata.Terminal.GetExitCode() == 0 {
+		t.Fatalf("qualified metadata block = %#v, %v", blockedMetadata, err)
+	}
+	if _, err := backend.FenceAssignment(t.Context(), &runnerprotocol.FenceCommand{Fence: networkAssignment.Fence, DeadlineUnixMs: uint64(time.Now().Add(20 * time.Second).UnixMilli())}); err != nil {
+		t.Fatalf("fence network-policy Instance: %v", err)
+	}
+
+	if _, err := backend.ExecuteLocalWorkspace(t.Context(), &runnerprotocol.LocalWorkspaceCommand{
+		Kind:        runnerprotocol.LocalWorkspaceCommandKind_LOCAL_WORKSPACE_COMMAND_KIND_CREATE,
 		OperationId: "qualification-terminal-create", WorkspaceId: "qualification-terminal-workspace",
 		FencingToken:         []byte("qualification-terminal-store-fence"),
 		LogicalCapacityBytes: uint64(qualificationWorkspaceBytes),
@@ -415,6 +486,22 @@ func TestQualifiedLinuxBackendBootsAgentAndWorkspaceOnKVM(t *testing.T) {
 		DeadlineUnixMs: uint64(time.Now().Add(4 * time.Second).UnixMilli()),
 	}); err != nil {
 		t.Fatalf("release unexpectedly exited Instance: %v", err)
+	}
+	records := evidenceSink.snapshot()
+	if len(records) < 6 {
+		t.Fatalf("qualified lifecycle evidence count = %d: %#v", len(records), records)
+	}
+	foundUnexpected := false
+	for _, record := range records {
+		if record.BackendKind != "microsandbox" || record.HostPlatform != "linux-x86_64" || record.HelperPID <= 0 || record.Materialization != manifestDigest || record.StreamID == "" {
+			t.Fatalf("incomplete qualified lifecycle evidence: %#v", record)
+		}
+		if record.Stage == "unexpected_exit" {
+			foundUnexpected = record.HelperReason != "" && strings.HasPrefix(record.StderrDigest, "sha256:") && strings.HasPrefix(record.EventTailDigest, "sha256:")
+		}
+	}
+	if !foundUnexpected {
+		t.Fatalf("unexpected-exit evidence missing bounded termination digests: %#v", records)
 	}
 }
 
