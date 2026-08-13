@@ -15,7 +15,7 @@ import (
 
 func TestQuotaWouldExceedEverySubjectLimit(t *testing.T) {
 	base := contracts.QuotaLimits{
-		MaxSandboxes: 10, MaxActiveInstances: 10, MaxCPUMillis: 10,
+		MaxSandboxes: 10, MaxActiveInstances: 10, MaxVCPUCount: 10,
 		MaxMemoryBytes: 10, MaxSnapshots: 10, MaxPortSessions: 10,
 		MaxConcurrentOperations: 10,
 	}
@@ -27,7 +27,7 @@ func TestQuotaWouldExceedEverySubjectLimit(t *testing.T) {
 	}{
 		"sandboxes":             {usage: quotaUsage{sandboxes: 10}},
 		"active instances":      {usage: quotaUsage{activeInstances: 10}, requestedActive: 1},
-		"CPU":                   {usage: quotaUsage{cpuMillis: 10}, requestedCPU: 1},
+		"CPU":                   {usage: quotaUsage{vcpuCount: 10}, requestedCPU: 1},
 		"memory":                {usage: quotaUsage{memoryBytes: 10}, requestedMemory: 1},
 		"snapshots":             {usage: quotaUsage{snapshots: 11}},
 		"port sessions":         {usage: quotaUsage{portSessions: 11}},
@@ -262,10 +262,10 @@ func TestSubjectQuotaUsageCountsComputeForActiveStatesOnly(t *testing.T) {
 			id,profile_name,revision_number,spec_json,created_at
 		) VALUES (
 			'revision-usage','profile-usage',1,
-			'{"resources":{"cpuMillis":1000,"memoryBytes":1073741824}}',$1
+			'{"resources":{"vcpuCount":1,"memoryBytes":1073741824}}',$1
 		);
 		INSERT INTO secondbox.subject_quotas (
-			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_cpu_millis,
+			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_vcpu_count,
 			max_memory_bytes,max_snapshots,
 			max_port_sessions,max_concurrent_operations,updated_at
 		) VALUES ($2,$3,100,20,80000,171798691840,1,1,1,$1)`,
@@ -305,12 +305,12 @@ func TestSubjectQuotaUsageCountsComputeForActiveStatesOnly(t *testing.T) {
 	}
 	if usage.Usage.Sandboxes != 3 ||
 		usage.Usage.ActiveInstances != 2 ||
-		usage.Usage.CPUMillis != 2000 ||
+		usage.Usage.VCPUCount != 2 ||
 		usage.Usage.MemoryBytes != 2*1073741824 {
 		t.Fatalf(
-			"subject usage sandboxes=%d active=%d cpu=%d memory=%d, want 3/2/2000/2147483648",
+			"subject usage sandboxes=%d active=%d cpu=%d memory=%d, want 3/2/2/2147483648",
 			usage.Usage.Sandboxes, usage.Usage.ActiveInstances,
-			usage.Usage.CPUMillis, usage.Usage.MemoryBytes,
+			usage.Usage.VCPUCount, usage.Usage.MemoryBytes,
 		)
 	}
 }

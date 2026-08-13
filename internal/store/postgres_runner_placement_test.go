@@ -303,7 +303,7 @@ func placementTestSpec(poolName string) contracts.ProfileRevisionSpec {
 	return contracts.ProfileRevisionSpec{
 		Pool: poolName, Architecture: "amd64",
 		Resources: contracts.ResourcePolicy{
-			CPUMillis: 1000, MemoryBytes: 1 << 30, WorkspaceBytes: 1 << 30,
+			VCPUCount: 1, MemoryBytes: 1 << 30, WorkspaceBytes: 1 << 30,
 			ConcurrentOperations: 1,
 		},
 	}
@@ -326,7 +326,7 @@ func seedPlacementRunner(
 			sandbox_start_p95_milliseconds,last_seen_at,revision,created_at,updated_at
 		) VALUES (
 			$1,$2,$1,'ready','["amd64"]','["compute","local-workspace"]',
-			'{"CPUMillis":1000,"MemoryBytes":1073741824,"DiskBytes":1073741824,"Instances":1,"Operations":1}',
+			'{"VCPUCount":1,"MemoryBytes":1073741824,"DiskBytes":1073741824,"Instances":1,"Operations":1}',
 			'["1"]',1,1,'test','connection-' || $1,0,'active','{}','[]',0,0,$3,1,$3,$3
 		)`, runnerID, poolName, now); err != nil {
 		t.Fatal(err)
@@ -397,7 +397,7 @@ func TestRunnerPlacementRequiresSnapshotResumeCapacityForResumeProfiles(t *testi
 		activeConnectionID: "connection", architectures: []string{"amd64"},
 		capabilities: []string{"compute", "local-workspace"},
 		allocatable: runnerCapacity{
-			CPUMillis: 4000, MemoryBytes: 8 << 30, DiskBytes: 8 << 30, Instances: 4, Operations: 8,
+			VCPUCount: 4, MemoryBytes: 8 << 30, DiskBytes: 8 << 30, Instances: 4, Operations: 8,
 		},
 	}
 	resumeCapable := coldOnly

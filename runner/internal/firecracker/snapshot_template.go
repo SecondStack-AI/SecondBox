@@ -55,13 +55,12 @@ type SnapshotTemplateKey struct {
 	GuestBuildID            string   `json:"guestBuildId"`
 	GuestProtocolGeneration uint32   `json:"guestProtocolGeneration"`
 	GuestFeatures           []string `json:"guestFeatures"`
-	FirecrackerVersion      string   `json:"firecrackerVersion"`
+	ComputeBackendVersion   string   `json:"firecrackerVersion"`
 	HostCPUFingerprint      string   `json:"hostCpuFingerprint"`
 	CPUTemplate             string   `json:"cpuTemplate"`
 	VCPUCount               int      `json:"vcpuCount"`
 	MemorySizeMiB           int      `json:"memorySizeMiB"`
 	WorkspaceSizeMiB        int      `json:"workspaceSizeMiB"`
-	ProcessLimit            int      `json:"processLimit"`
 	RuntimeClass            string   `json:"runtimeClass"`
 	// NetworkInterfaceID and TemplateGuestMAC describe the network device the VM
 	// state records. Both are empty exactly when the template was captured
@@ -96,7 +95,7 @@ func (k SnapshotTemplateKey) Validate() error {
 		{"runtimeBundleDigest", k.RuntimeBundleDigest},
 		{"toolchainBundleDigest", k.ToolchainBundleDigest},
 		{"guestBuildId", k.GuestBuildID},
-		{"firecrackerVersion", k.FirecrackerVersion},
+		{"firecrackerVersion", k.ComputeBackendVersion},
 		{"hostCpuFingerprint", k.HostCPUFingerprint},
 		{"runtimeClass", k.RuntimeClass},
 	}
@@ -112,7 +111,6 @@ func (k SnapshotTemplateKey) Validate() error {
 		{"vcpuCount", k.VCPUCount},
 		{"memorySizeMiB", k.MemorySizeMiB},
 		{"workspaceSizeMiB", k.WorkspaceSizeMiB},
-		{"processLimit", k.ProcessLimit},
 	}
 	for _, field := range positive {
 		if field.value < 1 {

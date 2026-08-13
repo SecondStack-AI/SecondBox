@@ -49,7 +49,7 @@ if [[ "$scenario_mode" == "suite" ]]; then
   export SECONDBOX_RUNNER_POOL_ID=standard-amd64
   export SECONDBOX_SCENARIO_SUBJECT_MAX_ACTIVE_INSTANCES=10
   export SECONDBOX_SCENARIO_SUBJECT_MAX_CONCURRENT_OPERATIONS=20
-  export SECONDBOX_SCENARIO_SUBJECT_MAX_CPU_MILLIS=100000
+  export SECONDBOX_SCENARIO_SUBJECT_MAX_VCPU_COUNT=100000
   export SECONDBOX_SCENARIO_SUBJECT_MAX_MEMORY_BYTES=107374182400
   export SECONDBOX_SCENARIO_SUBJECT_MAX_PORT_SESSIONS=100
   export SECONDBOX_SCENARIO_SUBJECT_MAX_SANDBOXES=100
@@ -79,7 +79,7 @@ else
     SECONDBOX_RUNNER_POOL_ID \
     SECONDBOX_SCENARIO_SUBJECT_MAX_ACTIVE_INSTANCES \
     SECONDBOX_SCENARIO_SUBJECT_MAX_CONCURRENT_OPERATIONS \
-    SECONDBOX_SCENARIO_SUBJECT_MAX_CPU_MILLIS \
+    SECONDBOX_SCENARIO_SUBJECT_MAX_VCPU_COUNT \
     SECONDBOX_SCENARIO_SUBJECT_MAX_MEMORY_BYTES \
     SECONDBOX_SCENARIO_SUBJECT_MAX_PORT_SESSIONS \
     SECONDBOX_SCENARIO_SUBJECT_MAX_SANDBOXES \
@@ -113,7 +113,6 @@ fi
 export SECONDBOX_SCENARIO_SNAPSHOT_RESUME_MEMORY_MIB=256
 export SECONDBOX_SCENARIO_SNAPSHOT_RESUME_WORKSPACE_MIB=64
 export SECONDBOX_SCENARIO_SNAPSHOT_RESUME_VCPUS=1
-export SECONDBOX_SCENARIO_SNAPSHOT_RESUME_PROCESS_LIMIT=128
 export SECONDBOX_SCENARIO_SNAPSHOT_RESUME_ARRIVALS=10
 export SECONDBOX_SCENARIO_SNAPSHOT_RESUME_EVIDENCE="$snapshot_resume_evidence"
 
@@ -300,7 +299,6 @@ jq -n \
   --arg architecture "$architecture" \
   --arg runtime "$runtime_digest" \
   --arg runtimeArtifactID "$runtime_artifact_id" \
-  --arg signatureKeyID "$actual_key_fingerprint" \
   --arg toolchain "$toolchain_digest" \
   --arg toolchainArtifactID "$toolchain_artifact_id" \
   --argjson runtimeFeatures "$runtime_features" \
@@ -310,7 +308,6 @@ jq -n \
       {
         artifactId: $runtimeArtifactID,
         manifestDigest: $runtime,
-        signatureKeyId: $signatureKeyID,
         architecture: $architecture,
         guestProtocolGeneration: 1,
         mandatoryGuestFeatures: $runtimeFeatures
@@ -318,7 +315,6 @@ jq -n \
       {
         artifactId: $toolchainArtifactID,
         manifestDigest: $toolchain,
-        signatureKeyId: $signatureKeyID,
         architecture: $architecture,
         guestProtocolGeneration: 1,
         mandatoryGuestFeatures: $toolchainFeatures

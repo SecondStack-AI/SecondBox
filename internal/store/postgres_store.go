@@ -412,14 +412,14 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	requestedActiveInstances := int64(0)
 	if profile.CurrentRevision.Spec.Lifecycle.InitialState == contracts.SandboxDesiredStateRunning {
 		requestedActiveInstances = 1
-		requestedCPU = profile.CurrentRevision.Spec.Resources.CPUMillis
+		requestedCPU = profile.CurrentRevision.Spec.Resources.VCPUCount
 		requestedMemory = profile.CurrentRevision.Spec.Resources.MemoryBytes
 	}
 	if quotaWouldExceed(
 		subjectQuota, subjectUsage, requestedCPU, requestedMemory, requestedActiveInstances,
 	) || tenantDataPlaneQuotaWouldExceed(tenantQuota, tenantUsage, quotaUsage{
 		sandboxes: 1, activeInstances: requestedActiveInstances,
-		cpuMillis: requestedCPU, memoryBytes: requestedMemory,
+		vcpuCount: requestedCPU, memoryBytes: requestedMemory,
 	}) {
 		return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrQuotaExceeded
 	}
@@ -609,7 +609,7 @@ func (store *PostgresControlPlaneStore) GetSubjectUsage(
 		TenantRef: tenantRef, SubjectRef: subjectRef, Limits: limits,
 		Usage: contracts.QuotaUsage{
 			Sandboxes: usage.sandboxes, ActiveInstances: usage.activeInstances,
-			CPUMillis: usage.cpuMillis, MemoryBytes: usage.memoryBytes,
+			VCPUCount: usage.vcpuCount, MemoryBytes: usage.memoryBytes,
 			Snapshots: usage.snapshots, PortSessions: usage.portSessions,
 			ConcurrentOperations: usage.concurrentOperations,
 		},
@@ -1226,7 +1226,7 @@ func selectInitialHomeRunner(
 }
 
 type runnerCapacity struct {
-	CPUMillis   int64
+	VCPUCount   int64
 	MemoryBytes int64
 	DiskBytes   int64
 	Instances   int64
@@ -1270,7 +1270,7 @@ func selectSnapshotCloneHomeRunner(
 }
 
 type quotaUsage struct {
-	sandboxes, activeInstances, cpuMillis, memoryBytes int64
+	sandboxes, activeInstances, vcpuCount, memoryBytes int64
 	snapshots, portSessions                            int64
 	concurrentOperations                               int64
 }
@@ -1285,12 +1285,12 @@ func ensureSubjectQuota(
 ) error {
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO secondbox.subject_quotas (
-			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
+			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_vcpu_count,max_memory_bytes,
 			max_snapshots,max_port_sessions,max_concurrent_operations,updated_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		ON CONFLICT (tenant_ref,subject_ref) DO NOTHING`,
 		tenantRef, subjectRef, quota.MaxSandboxes, quota.MaxActiveInstances,
-		quota.MaxCPUMillis, quota.MaxMemoryBytes, quota.MaxSnapshots,
+		quota.MaxVCPUCount, quota.MaxMemoryBytes, quota.MaxSnapshots,
 		quota.MaxPortSessions, quota.MaxConcurrentOperations, now.UTC(),
 	); err != nil {
 		return fmt.Errorf("SecondBox subject quota initialization failed: %w", err)
@@ -1306,11 +1306,11 @@ func readSubjectQuota(
 ) (contracts.QuotaLimits, error) {
 	var quota contracts.QuotaLimits
 	if err := tx.QueryRow(ctx, `
-		SELECT max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
+		SELECT max_sandboxes,max_active_instances,max_vcpu_count,max_memory_bytes,
 		       max_snapshots,max_port_sessions,max_concurrent_operations
 		FROM secondbox.subject_quotas
 		WHERE tenant_ref=$1 AND subject_ref=$2`, tenantRef, subjectRef).Scan(
-		&quota.MaxSandboxes, &quota.MaxActiveInstances, &quota.MaxCPUMillis,
+		&quota.MaxSandboxes, &quota.MaxActiveInstances, &quota.MaxVCPUCount,
 		&quota.MaxMemoryBytes, &quota.MaxSnapshots, &quota.MaxPortSessions,
 		&quota.MaxConcurrentOperations,
 	); err != nil {
@@ -1421,7 +1421,7 @@ func readSubjectQuotaUsage(
 		       count(*) FILTER (WHERE (sandbox.desired_state='running'
 		           AND sandbox.state IN ('creating','stopped'))
 		         OR sandbox.state IN ('starting','ready','draining','stopping')),
-		       COALESCE(sum((revision.spec_json->'resources'->>'cpuMillis')::bigint)
+		       COALESCE(sum((revision.spec_json->'resources'->>'vcpuCount')::bigint)
 		         FILTER (WHERE (sandbox.desired_state='running'
 		             AND sandbox.state IN ('creating','stopped'))
 		           OR sandbox.state IN ('starting','ready','draining','stopping')),0),
@@ -1441,7 +1441,7 @@ func readSubjectQuotaUsage(
 		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
 		WHERE sandbox.tenant_ref=$1 AND sandbox.subject_ref=$2 AND sandbox.state<>'deleted'`,
 		tenantRef, subjectRef).Scan(
-		&usage.sandboxes, &usage.activeInstances, &usage.cpuMillis, &usage.memoryBytes,
+		&usage.sandboxes, &usage.activeInstances, &usage.vcpuCount, &usage.memoryBytes,
 		&usage.snapshots, &usage.portSessions,
 		&usage.concurrentOperations,
 	); err != nil {
@@ -1537,7 +1537,7 @@ func readDeploymentQuotaUsage(
 func subjectQuotaCoversUsage(quota contracts.QuotaLimits, usage quotaUsage) bool {
 	return quota.MaxSandboxes >= usage.sandboxes &&
 		quota.MaxActiveInstances >= usage.activeInstances &&
-		quota.MaxCPUMillis >= usage.cpuMillis &&
+		quota.MaxVCPUCount >= usage.vcpuCount &&
 		quota.MaxMemoryBytes >= usage.memoryBytes &&
 		quota.MaxSnapshots >= usage.snapshots &&
 		quota.MaxPortSessions >= usage.portSessions &&
@@ -1567,7 +1567,7 @@ func quotaWouldExceed(
 ) bool {
 	return usage.sandboxes+1 > quota.MaxSandboxes ||
 		usage.activeInstances+requestedActiveInstances > quota.MaxActiveInstances ||
-		usage.cpuMillis+requestedCPU > quota.MaxCPUMillis ||
+		usage.vcpuCount+requestedCPU > quota.MaxVCPUCount ||
 		usage.memoryBytes+requestedMemory > quota.MaxMemoryBytes ||
 		usage.snapshots > quota.MaxSnapshots ||
 		usage.portSessions > quota.MaxPortSessions ||

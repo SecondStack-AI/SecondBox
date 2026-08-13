@@ -1,5 +1,7 @@
 # Security model
 
+Execution-asset identity in the shared runner protocol is provider-neutral. Firecracker admission still requires its independently configured local trust anchor and signed bundle verification. Microsandbox admission requires an exact locally revalidated materialization whose source OCI manifest and flat root are both content-addressed. Neither backend may resolve mutable tags or implicitly pull during assignment start.
+
 SecondBox assumes guest workloads and network peers may be malicious. Its control plane is also a trusted subsystem. The platform token is deployment-wide, tenant-controller authorities are fixed to one Tenant, and application authorities are fixed to one Tenant, one Subject, exact Sandbox scopes, and explicit Profile grants. SecondBox does not authenticate end users or duplicate an upstream identity graph.
 
 ## Principals and authority

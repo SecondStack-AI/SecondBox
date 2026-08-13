@@ -354,8 +354,8 @@ func (*terminalPathBackend) Readiness(context.Context) (runnercontrol.BackendRea
 		Capacity: &runnerprotocol.Capacity{},
 		Reserved: &runnerprotocol.Capacity{},
 		Capabilities: &runnerprotocol.RunnerCapabilities{
-			Architecture: "amd64", FirecrackerVersion: "1.16.1",
-			KvmReady: true, JailerReady: true, CgroupReady: true,
+			Architecture: "amd64", ComputeBackendVersion: "1.16.1",
+			HypervisorReady: true, IsolationReady: true, CgroupReady: true,
 			NetworkPolicyReady: true, StorageReady: true, CleanupReady: true,
 			GuestProtocolGenerations: &runnerprotocol.ProtocolVersionRange{Minimum: 1, Maximum: 1},
 		},
@@ -461,14 +461,13 @@ func terminalPathAssignment(
 		MessageId: "assignment-command", Sequence: 1, Fence: fence,
 		ProfileRevisionId: "profile-terminal",
 		Requirements: &runnerprotocol.ProfileRequirements{
-			VcpuCount: 1, VcpuMillis: 1000, ProcessLimit: 128, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
+			VcpuCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
 			Architecture: "amd64", StartupMode: "cold_boot",
 			MaximumOperationMs: 60_000, MaximumOutputBytes: 1 << 20,
 		},
-		Assets: []*runnerprotocol.SignedAssetReference{{
+		Assets: []*runnerprotocol.AssetReference{{
 			ArtifactId: "runtime", Architecture: "amd64", GuestProtocolGeneration: 1,
 			ManifestDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-			SignatureKeyId: "release-key",
 		}},
 		DeadlineUnixMs: uint64(time.Now().Add(time.Minute).UnixMilli()),
 		Correlation: &runnerprotocol.Correlation{

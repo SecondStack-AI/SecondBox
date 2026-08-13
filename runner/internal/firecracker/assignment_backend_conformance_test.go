@@ -60,10 +60,10 @@ func TestAssignmentBackendRejectsImmutableAssetSubstitution(t *testing.T) {
 			assignment.Assets = assignment.Assets[:1]
 		},
 		"runtime substituted for toolchain": func(assignment *runnerprotocol.AssignmentCommand) {
-			assignment.Assets[1] = proto.Clone(assignment.Assets[0]).(*runnerprotocol.SignedAssetReference)
+			assignment.Assets[1] = proto.Clone(assignment.Assets[0]).(*runnerprotocol.AssetReference)
 		},
-		"wrong signing key": func(assignment *runnerprotocol.AssignmentCommand) {
-			assignment.Assets[0].SignatureKeyId = "untrusted-key"
+		"wrong immutable digest": func(assignment *runnerprotocol.AssignmentCommand) {
+			assignment.Assets[0].ManifestDigest = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 		},
 		"wrong architecture": func(assignment *runnerprotocol.AssignmentCommand) {
 			assignment.Assets[1].Architecture = "incompatible"
@@ -87,8 +87,8 @@ func TestAssignmentBackendRejectsImmutableAssetSubstitution(t *testing.T) {
 }
 
 func TestReadinessEvidenceHelpers(t *testing.T) {
-	if !firecrackerJailerReady(&config.Config{}) ||
-		firecrackerJailerReady(&config.Config{MicroVMAllowUnjailed: true}) {
+	if !firecrackerIsolationReady(&config.Config{}) ||
+		firecrackerIsolationReady(&config.Config{MicroVMAllowUnjailed: true}) {
 		t.Fatal("Jailer readiness does not reflect unjailed mode")
 	}
 	if !containsSpaceSeparated("cpu io memory pids", "memory") ||
@@ -103,21 +103,28 @@ func TestReadinessEvidenceHelpers(t *testing.T) {
 		containsNetworkAddress(addresses, "198.18.0.2/24") {
 		t.Fatal("bridge address matching is not interface-and-prefix exact")
 	}
-	cache := artifactCacheEvidenceForManifest(signedArtifactManifest{
+	cache, err := firecrackerMaterializationEvidence(signedArtifactManifest{
+		ArtifactVersion: "fixture-v1",
+		Architecture:    "amd64",
+		GuestProtocol: struct {
+			Minimum uint32 `json:"minimum"`
+			Maximum uint32 `json:"maximum"`
+		}{Minimum: 1, Maximum: 1},
 		RuntimeBundle: signedArtifactComponent{
-			ArtifactID: "runtime-v1", ManifestDigest: "sha256:runtime",
+			ArtifactID: "runtime-v1", ManifestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		},
 		ToolchainBundle: signedArtifactComponent{
-			ArtifactID: "toolchain-v1", ManifestDigest: "sha256:toolchain",
+			ArtifactID: "toolchain-v1", ManifestDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		},
+		Kernel: signedArtifactImage{SHA256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+		Rootfs: signedArtifactImage{SHA256: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+		Shared: signedArtifactImage{SHA256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
 	}, time.UnixMilli(1234))
-	if len(cache) != 2 ||
-		cache[0].ArtifactId != "runtime-v1" ||
-		cache[0].ManifestDigest != "sha256:runtime" ||
-		cache[1].ArtifactId != "toolchain-v1" ||
-		cache[1].ManifestDigest != "sha256:toolchain" ||
-		cache[0].VerifiedAtUnixMs != 1234 ||
-		cache[1].VerifiedAtUnixMs != 1234 {
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cache) != 1 || cache[0].RuntimeManifestDigest == "" || cache[0].ToolchainManifestDigest == "" ||
+		cache[0].MaterializationDigest == "" || cache[0].VerifiedAtUnixMs != 1234 {
 		t.Fatalf("component cache evidence = %+v", cache)
 	}
 }
@@ -130,7 +137,7 @@ func TestRunnerAllocatableCapacityUsesIndependentOperationLimit(t *testing.T) {
 		MicroVMMaxConcurrentGlobal:           16,
 		MicroVMMaxConcurrentOperationsGlobal: 64,
 	})
-	if capacity.VcpuMillis != 64000 ||
+	if capacity.VcpuCount != 64 ||
 		capacity.MemoryBytes != 16<<30 ||
 		capacity.DiskBytes != 800<<30 ||
 		capacity.Instances != 16 ||
@@ -318,8 +325,6 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 			WorkspaceId:       "workspace-1",
 			Requirements: &runnerprotocol.ProfileRequirements{
 				VcpuCount:    1,
-				VcpuMillis:   1000,
-				ProcessLimit: 128,
 				MemoryBytes:  512 << 20,
 				DiskBytes:    1024 << 20,
 				Architecture: runtime.GOARCH,
@@ -331,18 +336,16 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 					"local-workspace",
 				},
 			},
-			Assets: []*runnerprotocol.SignedAssetReference{
+			Assets: []*runnerprotocol.AssetReference{
 				{
 					ArtifactId:              "artifact-v1-runtime",
 					ManifestDigest:          runtimeDigestString,
-					SignatureKeyId:          keyID,
 					Architecture:            runtime.GOARCH,
 					GuestProtocolGeneration: 1,
 				},
 				{
 					ArtifactId:              "artifact-v1-toolchain",
 					ManifestDigest:          toolchainDigestString,
-					SignatureKeyId:          keyID,
 					Architecture:            runtime.GOARCH,
 					GuestProtocolGeneration: 1,
 				},

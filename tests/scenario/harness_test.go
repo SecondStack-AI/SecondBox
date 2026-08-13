@@ -232,10 +232,10 @@ func scenarioProfileSpec(t *testing.T, initialState string) contracts.ProfileRev
 		RuntimeBundleDigest:   requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST"),
 		ToolchainBundleDigest: requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST"),
 		Resources: contracts.ResourcePolicy{
-			CPUMillis:            1000,
-			MemoryBytes:          256 << 20,
-			WorkspaceBytes:       64 << 20,
-			ProcessLimit:         128,
+			VCPUCount:      1,
+			MemoryBytes:    256 << 20,
+			WorkspaceBytes: 64 << 20,
+
 			ConcurrentOperations: 2,
 		},
 		Startup: contracts.StartupPolicy{Mode: contracts.StartupModeColdBoot},

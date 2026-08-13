@@ -246,11 +246,11 @@ func TestInstallerQualificationUsesRepositoryOwnedIsolatedLibvirtDriver(t *testi
 func TestDeploymentCannotReconstructAbsentHomeOnReplacementRunner(t *testing.T) {
 	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 	requirements := scheduler.Requirements{
-		PoolName: "deployment", BackendKind: "firecracker", Architecture: "amd64",
+		PoolName: "deployment", Architecture: "amd64",
 		RequiredCapabilities:    []string{"local-workspace"},
 		GuestProtocolGeneration: 1,
 		Capacity: scheduler.Capacity{
-			CPUMillis: 1000, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
+			VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
 			Instances: 1, Operations: 1,
 		},
 	}
@@ -261,7 +261,7 @@ func TestDeploymentCannotReconstructAbsentHomeOnReplacementRunner(t *testing.T) 
 			"cleanup": true, "local-workspace": true,
 		},
 		Allocatable: scheduler.Capacity{
-			CPUMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30,
+			VCPUCount: 8, MemoryBytes: 32 << 30, DiskBytes: 200 << 30,
 			Instances: 8, Operations: 32,
 		},
 		DrainPhase: scheduler.DrainPhaseActive, LastHeartbeatAt: now,

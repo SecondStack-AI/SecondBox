@@ -133,13 +133,13 @@ func TestProfileLineageRejectsUnknownBundle(t *testing.T) {
 	}
 }
 
-func TestAgentCompartmentPreservesV031RevisionIdentity(t *testing.T) {
+func TestAgentCompartmentPinsPortableResourceRevisionIdentity(t *testing.T) {
 	profile, err := ProfileLineage(AgentCompartment, v030RuntimeBundleDigest, v030ToolchainBundleDigest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := profile.Revisions[0].SpecDigest, "sha256:837ec1f0810f9cc10d3ec760fd385cb90db894d6446f09f97a00c310449d618f"; got != want {
-		t.Fatalf("v0.3.1 revision 1 digest = %q, want %q", got, want)
+	if got, want := profile.Revisions[0].SpecDigest, "sha256:0724aee520173710db793ad365db28cdb6905f2a5fecb2cb785c475443f98ed4"; got != want {
+		t.Fatalf("portable revision 1 digest = %q, want %q", got, want)
 	}
 }
 
@@ -171,7 +171,7 @@ func TestProfileLineageAppendsChangedBundleWithoutRewritingHistory(t *testing.T)
 	if len(agent.Revisions) != 3 || len(coding.Revisions) != 2 || len(isolated.Revisions) != 2 {
 		t.Fatalf("changed-bundle lineage = agent %#v coding %#v isolated %#v", agent.Revisions, coding.Revisions, isolated.Revisions)
 	}
-	if agent.Revisions[0].SpecDigest != "sha256:837ec1f0810f9cc10d3ec760fd385cb90db894d6446f09f97a00c310449d618f" {
+	if agent.Revisions[0].SpecDigest != "sha256:0724aee520173710db793ad365db28cdb6905f2a5fecb2cb785c475443f98ed4" {
 		t.Fatalf("changed bundle rewrote agent revision 1: %#v", agent.Revisions)
 	}
 	if isolated.Revisions[0].SpecDigest != "sha256:59693b73e62e21d3ce705060edba3e13301eaf8e14c00d90792ab78afa74be6c" {

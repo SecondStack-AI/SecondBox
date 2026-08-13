@@ -28,9 +28,9 @@ var profileStartupModeLineage = []string{
 // like: the operator stated the startup mode. preFieldSpec is the same revision
 // as it was recorded before the field existed.
 const (
-	coldBootSpec  = `{"pool":"standard-amd64","architecture":"amd64","startup":{"mode":"cold_boot"},"resources":{"cpuMillis":1000}}`
-	preFieldSpec  = `{"pool":"standard-amd64","architecture":"amd64","resources":{"cpuMillis":1000}}`
-	resumeSpec    = `{"pool":"standard-amd64","architecture":"amd64","startup":{"mode":"snapshot_resume"},"resources":{"cpuMillis":1000}}`
+	coldBootSpec  = `{"pool":"standard-amd64","architecture":"amd64","startup":{"mode":"cold_boot"},"resources":{"vcpuCount":1}}`
+	preFieldSpec  = `{"pool":"standard-amd64","architecture":"amd64","resources":{"vcpuCount":1}}`
+	resumeSpec    = `{"pool":"standard-amd64","architecture":"amd64","startup":{"mode":"snapshot_resume"},"resources":{"vcpuCount":1}}`
 	seededProfile = "profile-startup"
 )
 

@@ -165,7 +165,7 @@ func TestInstallResumeOrchestratesEveryDurableStageWithoutPrintingSecrets(t *tes
 
 func TestInstalledRunnerReadinessRequiresExactAuthenticatedColdBootCapacity(t *testing.T) {
 	plan := install.InstallPlan{OperationID: "install_0123456789abcdef"}
-	ready := contracts.Runner{ID: "runner-0123456789abcdef", PoolName: standardresources.PoolAMD64, State: "ready", CredentialState: "pre_shared", Architectures: []string{standardresources.ArchitectureAMD64}, Capabilities: []string{"compute", "network-policy", "storage", "cleanup", "local-workspace"}, Capacity: map[string]int64{"CPUMillis": install.DurableCodingCPUMillis, "MemoryBytes": install.DurableCodingMemoryBytes, "DiskBytes": install.MinimumWorkspaceBytes, "Instances": 1, "Operations": install.DurableCodingConcurrentOperations}}
+	ready := contracts.Runner{ID: "runner-0123456789abcdef", PoolName: standardresources.PoolAMD64, State: "ready", CredentialState: "pre_shared", Architectures: []string{standardresources.ArchitectureAMD64}, Capabilities: []string{"compute", "network-policy", "storage", "cleanup", "local-workspace"}, Capacity: map[string]int64{"VCPUCount": install.DurableCodingVCPUCount, "MemoryBytes": install.DurableCodingMemoryBytes, "DiskBytes": install.MinimumWorkspaceBytes, "Instances": 1, "Operations": install.DurableCodingConcurrentOperations}}
 	if evidence, ok := installedRunnerReadinessEvidence(plan, []contracts.Runner{{ID: "runner-unrelated", State: "ready"}, ready}); !ok || evidence["runnerId"] != ready.ID || evidence["runnerPool"] != standardresources.PoolAMD64 || evidence["coldBootCapacity"] != "advertised" || evidence["concurrentOperationCapacity"] != "16" {
 		t.Fatalf("exact readiness evidence = %#v, %t", evidence, ok)
 	}

@@ -2258,12 +2258,11 @@
       "ResourcePolicy": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["cpuMillis", "memoryBytes", "workspaceBytes", "processLimit", "concurrentOperations"],
+        "required": ["vcpuCount", "memoryBytes", "workspaceBytes", "concurrentOperations"],
         "properties": {
-          "cpuMillis": {"type": "integer", "minimum": 1},
+          "vcpuCount": {"type": "integer", "minimum": 1},
           "memoryBytes": {"type": "integer", "format": "int64", "minimum": 67108864},
           "workspaceBytes": {"type": "integer", "format": "int64", "minimum": 1048576},
-          "processLimit": {"type": "integer", "minimum": 1},
           "concurrentOperations": {"type": "integer", "minimum": 1}
         }
       },

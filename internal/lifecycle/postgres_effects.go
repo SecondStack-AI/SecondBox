@@ -38,7 +38,7 @@ type EffectBrokerConfig struct {
 	HeartbeatTimeout        time.Duration
 	RetryLimit              int64
 	SerializationRetryLimit int
-	AssetCatalog            SignedAssetCatalog
+	AssetCatalog            AssetCatalog
 	SessionCanceller        ActiveSessionCanceller
 	NewID                   func(string) string
 	NewFencingToken         func() ([]byte, error)
@@ -485,9 +485,7 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		},
 		ProfileRevisionId: plan.profileRevisionID,
 		Requirements: &runnerv1.ProfileRequirements{
-			VcpuCount:            uint32((plan.spec.Resources.CPUMillis + 999) / 1000),
-			VcpuMillis:           uint32(plan.spec.Resources.CPUMillis),
-			ProcessLimit:         uint32(plan.spec.Resources.ProcessLimit),
+			VcpuCount:            uint32(plan.spec.Resources.VCPUCount),
 			MemoryBytes:          uint64(plan.spec.Resources.MemoryBytes),
 			DiskBytes:            uint64(plan.spec.Resources.WorkspaceBytes),
 			Architecture:         plan.spec.Architecture,
@@ -515,10 +513,10 @@ func (broker *PostgresEffectBroker) scheduleAndStart(
 		WorkspaceID: plan.workspaceID, StartMutationID: startMutationID,
 		ProfileRevisionID: plan.profileRevisionID,
 		Requirements: scheduler.Requirements{
-			PoolName: plan.spec.Pool, BackendKind: "firecracker",
+			PoolName:     plan.spec.Pool,
 			Architecture: plan.spec.Architecture, RequiredCapabilities: placementCapabilities,
 			Capacity: scheduler.Capacity{
-				CPUMillis:   plan.spec.Resources.CPUMillis,
+				VCPUCount:   plan.spec.Resources.VCPUCount,
 				MemoryBytes: plan.spec.Resources.MemoryBytes,
 				DiskBytes:   plan.spec.Resources.WorkspaceBytes,
 				Instances:   1, Operations: plan.spec.Resources.ConcurrentOperations,
@@ -691,9 +689,9 @@ func (broker *PostgresEffectBroker) deferUnavailableHomeRunnerStart(
 }
 
 func resolveProfileAssets(
-	catalog SignedAssetCatalog,
+	catalog AssetCatalog,
 	spec contracts.ProfileRevisionSpec,
-) ([]*runnerv1.SignedAssetReference, uint32, error) {
+) ([]*runnerv1.AssetReference, uint32, error) {
 	runtimeAsset, err := catalog.Resolve(spec.RuntimeBundleDigest)
 	if err != nil {
 		return nil, 0, err
@@ -709,16 +707,16 @@ func resolveProfileAssets(
 		runtimeAsset.GuestProtocolGeneration != toolchainAsset.GuestProtocolGeneration {
 		return nil, 0, errors.New("SecondBox signed asset catalog is incompatible with the pinned Profile")
 	}
-	assets := []*runnerv1.SignedAssetReference{
+	assets := []*runnerv1.AssetReference{
 		{
 			ArtifactId: runtimeAsset.ArtifactID, ManifestDigest: runtimeAsset.ManifestDigest,
-			SignatureKeyId: runtimeAsset.SignatureKeyID, Architecture: runtimeAsset.Architecture,
+			Architecture:            runtimeAsset.Architecture,
 			GuestProtocolGeneration: runtimeAsset.GuestProtocolGeneration,
 			MandatoryGuestFeatures:  append([]string(nil), runtimeAsset.MandatoryGuestFeatures...),
 		},
 		{
 			ArtifactId: toolchainAsset.ArtifactID, ManifestDigest: toolchainAsset.ManifestDigest,
-			SignatureKeyId: toolchainAsset.SignatureKeyID, Architecture: toolchainAsset.Architecture,
+			Architecture:            toolchainAsset.Architecture,
 			GuestProtocolGeneration: toolchainAsset.GuestProtocolGeneration,
 			MandatoryGuestFeatures:  append([]string(nil), toolchainAsset.MandatoryGuestFeatures...),
 		},

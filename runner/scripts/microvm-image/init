@@ -17,17 +17,6 @@ rm -f /dev/mem /dev/kmem /dev/port /dev/kvm /dev/net/tun
 mkdir -p /dev/shm
 mountpoint -q /dev/shm || mount -t tmpfs -o rw,nosuid,nodev,mode=1777,size=512m tmpfs /dev/shm
 
-process_limit="$(sed -n 's/.*secondbox\.process_limit=\([0-9][0-9]*\).*/\1/p' /proc/cmdline)"
-if [ -n "$process_limit" ]; then
-    mkdir -p /sys/fs/cgroup
-    mountpoint -q /sys/fs/cgroup || mount -t cgroup2 cgroup2 /sys/fs/cgroup
-    grep -qw pids /sys/fs/cgroup/cgroup.controllers
-    grep -qw pids /sys/fs/cgroup/cgroup.subtree_control || printf '%s\n' +pids > /sys/fs/cgroup/cgroup.subtree_control
-    mkdir -p /sys/fs/cgroup/secondbox-tools
-    printf '%s\n' "$process_limit" > /sys/fs/cgroup/secondbox-tools/pids.max
-    printf '%s\n' "$$" > /sys/fs/cgroup/secondbox-tools/cgroup.procs
-fi
-
 template_mode="$(sed -n 's/.*secondbox\.template_mode=\([01]\).*/\1/p' /proc/cmdline)"
 
 mkdir -p /workspace /runtime-private

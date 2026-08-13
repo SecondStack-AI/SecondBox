@@ -1384,8 +1384,8 @@ func seedLocalWorkspacePolicyAndRunner(
 	specJSON, err := json.Marshal(contracts.ProfileRevisionSpec{
 		Pool: "pool-local", Architecture: "amd64",
 		Resources: contracts.ResourcePolicy{
-			CPUMillis: 1000, MemoryBytes: 1 << 30, WorkspaceBytes: 8 << 30,
-			ProcessLimit: 128, ConcurrentOperations: 4,
+			VCPUCount: 1, MemoryBytes: 1 << 30, WorkspaceBytes: 8 << 30,
+			ConcurrentOperations: 4,
 		},
 		Startup: contracts.StartupPolicy{Mode: contracts.StartupModeColdBoot},
 		Lifecycle: contracts.LifecyclePolicy{
@@ -1435,7 +1435,7 @@ func seedLocalWorkspacePolicyAndRunner(
 		) VALUES ('revision-local','profile-local',1,$1,$2)
 		ON CONFLICT (id) DO NOTHING;
 		INSERT INTO secondbox.subject_quotas (
-			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_cpu_millis,
+			tenant_ref,subject_ref,max_sandboxes,max_active_instances,max_vcpu_count,
 			max_memory_bytes,max_snapshots,
 			max_port_sessions,max_concurrent_operations,updated_at
 		) VALUES (
@@ -1444,7 +1444,7 @@ func seedLocalWorkspacePolicyAndRunner(
 		) ON CONFLICT (tenant_ref,subject_ref) DO UPDATE SET
 			max_sandboxes=EXCLUDED.max_sandboxes,
 			max_active_instances=EXCLUDED.max_active_instances,
-			max_cpu_millis=EXCLUDED.max_cpu_millis,
+			max_vcpu_count=EXCLUDED.max_vcpu_count,
 			max_memory_bytes=EXCLUDED.max_memory_bytes,
 			max_snapshots=EXCLUDED.max_snapshots,
 			max_port_sessions=EXCLUDED.max_port_sessions,

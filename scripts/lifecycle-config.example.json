@@ -114,10 +114,9 @@
     "storagePressureAdmissionDenyPercent": 90
   },
   "profile": {
-    "cpuMillis": 1000,
+    "vcpuCount": 1,
     "memoryBytes": 536870912,
     "workspaceBytes": 1073741824,
-    "processLimit": 128,
     "concurrentOperations": 4,
     "drainGraceSeconds": 30,
     "idleSeconds": 3600,
@@ -137,6 +136,6 @@
   "subjectMaxConcurrentOperations": 100,
   "subjectMaxSnapshots": 100,
   "subjectMaxPortSessions": 100,
-  "subjectMaxCpuMillis": 100000,
+  "subjectMaxVcpuCount": 100,
   "subjectMaxMemoryBytes": 68719476736
 }

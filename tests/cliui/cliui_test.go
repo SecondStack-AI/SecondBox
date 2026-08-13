@@ -89,6 +89,7 @@ func TestReleaseBinariesSelectPipeAndPTYRenderers(t *testing.T) {
 	for _, size := range []struct{ columns, rows uint16 }{{40, 10}, {120, 30}} {
 		command = exec.Command(secondbox, "--color", "never", "version")
 		command.Dir = working
+		command.Env = terminalEnvironment(os.Environ())
 		terminal, err := pty.StartWithSize(command, &pty.Winsize{Cols: size.columns, Rows: size.rows})
 		if err != nil {
 			t.Fatal(err)
@@ -161,4 +162,15 @@ func TestReleaseBinariesSelectPipeAndPTYRenderers(t *testing.T) {
 	if !bytes.Contains(coloredHelp, []byte("\x1b[")) || bytes.Contains(coloredHelp, []byte("�[")) {
 		t.Fatalf("automatic PTY help contains broken ANSI: %q", coloredHelp)
 	}
+}
+
+func terminalEnvironment(environment []string) []string {
+	result := make([]string, 0, len(environment)+1)
+	for _, entry := range environment {
+		if strings.HasPrefix(entry, "CI=") || strings.HasPrefix(entry, "TERM=") {
+			continue
+		}
+		result = append(result, entry)
+	}
+	return append(result, "TERM=xterm-256color")
 }

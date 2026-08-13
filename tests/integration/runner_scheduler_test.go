@@ -117,6 +117,60 @@ func TestRunnerRegistrationRejectsPoolsThatAreNotReady(t *testing.T) {
 	}
 }
 
+func TestRunnerPoolSealsToFirstHealthyBackendAndRejectsMismatch(t *testing.T) {
+	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	poolName := task4ID("sealed-backend-pool")
+	task4InsertRunnerPool(t, poolName, now)
+	caCertificate, caPrivateKey := task4CertificateAuthority(t, now)
+	authority := newTask4CredentialAuthority(t, caCertificate, caPrivateKey, now)
+	stateStore, err := runnercontrol.NewPostgresStateStore(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stateStore.Close)
+
+	register := func(runnerID, connectionID string, registration *runnerv1.RunnerRegistration) error {
+		issued, err := authority.Issue(runnerID, task4CertificateRequest(t))
+		if err != nil {
+			return err
+		}
+		if err := stateStore.OpenConnection(t.Context(), issued.Identity, connectionID, 1, now); err != nil {
+			return err
+		}
+		_, err = stateStore.RecordRegistration(t.Context(), registration, now)
+		return err
+	}
+
+	firstRunner, firstConnection := task4ID("firecracker-runner"), task4ID("firecracker-connection")
+	if err := register(firstRunner, firstConnection, task4Registration(firstRunner, firstConnection, poolName)); err != nil {
+		t.Fatal(err)
+	}
+
+	databasePool, err := pgxpool.New(t.Context(), integrationDatabaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(databasePool.Close)
+	var sealedKind string
+	if err := databasePool.QueryRow(t.Context(), `SELECT backend_kind FROM secondbox.runner_pools WHERE name=$1`, poolName).Scan(&sealedKind); err != nil {
+		t.Fatal(err)
+	}
+	if sealedKind != "firecracker" {
+		t.Fatalf("sealed backend kind = %q", sealedKind)
+	}
+
+	secondRunner, secondConnection := task4ID("microsandbox-runner"), task4ID("microsandbox-connection")
+	mismatch := task4Registration(secondRunner, secondConnection, poolName)
+	mismatch.BackendKind = runnerv1.ComputeBackendKind_COMPUTE_BACKEND_KIND_MICROSANDBOX
+	mismatch.Materializations[0].BackendKind = mismatch.BackendKind
+	mismatch.Materializations[0].SourceOciManifestDigest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	mismatch.Materializations[0].FlatRootDigest = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	mismatch.Materializations[0].HelperBuildId = "secondbox-microsandbox-helper-v1"
+	if err := register(secondRunner, secondConnection, mismatch); err == nil || !strings.Contains(err.Error(), "sealed to a different compute backend") {
+		t.Fatalf("backend mismatch registration error = %v", err)
+	}
+}
+
 // TestRunnerRegistrationAdvertisesSnapshotResumeOnlyWhenTheRunnerReportsIt pins
 // the one place the scheduler's capability vocabulary is minted. Resume capacity
 // is optional: a Runner that does not report it registers normally and stays
@@ -281,19 +335,20 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 			instanceID := task4IDForIndex("instance", index)
 			fencingToken := []byte("01234567890123456789012345678901")
 			runtimeDigest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			toolchainDigest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 			assignment, created, err := schedulerStore.Schedule(t.Context(), scheduler.ScheduleRequest{
 				AssignmentID: assignmentID, AssignmentCommandID: task4IDForIndex("assignment-command", index),
 				InstanceID: instanceID, SandboxID: sandboxID, ProfileRevisionID: profileRevisionID,
 				WorkspaceID: workspaceID, StartMutationID: task4IDForIndex("workspace-start", index),
 				Requirements: scheduler.Requirements{
-					PoolName: poolName, BackendKind: "firecracker", Architecture: "amd64",
+					PoolName: poolName, Architecture: "amd64",
 					RequiredCapabilities:    []string{"local-workspace", "network-policy"},
 					GuestProtocolGeneration: 1,
 					Capacity: scheduler.Capacity{
-						CPUMillis: 2000, MemoryBytes: 4 << 30, DiskBytes: 20 << 30,
+						VCPUCount: 2, MemoryBytes: 4 << 30, DiskBytes: 20 << 30,
 						Instances: 1, Operations: 1,
 					},
-					PreferredArtifactDigests: []string{runtimeDigest},
+					PreferredArtifactDigests: []string{runtimeDigest, toolchainDigest},
 				},
 				AssignmentCommand: &runnerv1.AssignmentCommand{
 					WorkspaceId: workspaceID,
@@ -303,14 +358,14 @@ func TestRunnerProtocolPersistenceAndMultiControlPlaneSchedulingAreReplicaSafe(t
 					},
 					ProfileRevisionId: profileRevisionID,
 					Requirements: &runnerv1.ProfileRequirements{
-						VcpuCount: 2, VcpuMillis: 2000, ProcessLimit: 128, MemoryBytes: 4 << 30, DiskBytes: 20 << 30,
+						VcpuCount: 2, MemoryBytes: 4 << 30, DiskBytes: 20 << 30,
 						Architecture: "amd64", RequiredCapabilities: []string{"local-workspace", "network-policy"},
 						MaximumOperationMs: 60_000, MaximumOutputBytes: 1 << 20,
 					},
-					Assets: []*runnerv1.SignedAssetReference{
+					Assets: []*runnerv1.AssetReference{
 						{
 							ArtifactId: "runtime", ManifestDigest: runtimeDigest,
-							SignatureKeyId: "release-key-1", Architecture: "amd64",
+							Architecture:            "amd64",
 							GuestProtocolGeneration: 1,
 						},
 					},
@@ -1070,22 +1125,29 @@ func task4Registration(
 	return &runnerv1.RunnerRegistration{
 		MessageId: "registration-1", Sequence: 1, RunnerId: runnerID,
 		ConnectionId: connectionID, RunnerPoolId: poolName,
-		SoftwareVersion: "1.0.0", ProtocolVersion: 1,
+		SoftwareVersion: "1.0.0", ProtocolVersion: 3,
+		BackendKind: runnerv1.ComputeBackendKind_COMPUTE_BACKEND_KIND_FIRECRACKER,
 		Capabilities: &runnerv1.RunnerCapabilities{
-			Architecture: "amd64", FirecrackerVersion: "1.16.1",
-			KvmReady: true, JailerReady: true, CgroupReady: true,
+			Architecture: "amd64", ComputeBackendVersion: "1.16.1",
+			HypervisorReady: true, IsolationReady: true, CgroupReady: true,
 			NetworkPolicyReady: true, StorageReady: true, CleanupReady: true,
 			DataPlaneReady:           true,
 			GuestProtocolGenerations: &runnerv1.ProtocolVersionRange{Minimum: 1, Maximum: 1},
 		},
 		Allocatable: &runnerv1.Capacity{
-			VcpuMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30,
+			VcpuCount: 8, MemoryBytes: 32 << 30, DiskBytes: 200 << 30,
 			Instances: 8, Operations: 32,
 		},
 		Reserved: &runnerv1.Capacity{},
-		ArtifactCache: []*runnerv1.ArtifactCacheEvidence{
-			{ArtifactId: "runtime", ManifestDigest: "sha256:runtime", VerifiedAtUnixMs: 1},
-		},
+		Materializations: []*runnerv1.BackendMaterializationEvidence{{
+			SchemaVersion:           1,
+			BackendKind:             runnerv1.ComputeBackendKind_COMPUTE_BACKEND_KIND_FIRECRACKER,
+			GuestArchitecture:       "amd64",
+			RuntimeManifestDigest:   "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			ToolchainManifestDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			MaterializationDigest:   "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+			AgentProtocolGeneration: 1, BackendBuildId: "firecracker-1.16.1", VerifiedAtUnixMs: 1,
+		}},
 		StartupTiming:                  &runnerv1.StartupTiming{SampleCount: 2, P95Milliseconds: 50},
 		DataPlaneAdvertisedAddress:     "10.0.0.5:7443",
 		DataPlaneCertificateSpkiSha256: strings.Repeat("a", 64),
@@ -1103,7 +1165,7 @@ func task4Heartbeat(
 		MessageId: messageID, Sequence: sequence, RunnerId: runnerID,
 		ConnectionId: connectionID, ObservedAtUnixMs: 1,
 		Allocatable: &runnerv1.Capacity{
-			VcpuMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30,
+			VcpuCount: 8, MemoryBytes: 32 << 30, DiskBytes: 200 << 30,
 			Instances: 8, Operations: 32,
 		},
 		Reserved: &runnerv1.Capacity{}, DrainPhase: phase,

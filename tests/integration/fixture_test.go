@@ -298,7 +298,7 @@ func createGrantedProfileWithDataPlaneTransport(
 		t.Fatal(err)
 	}
 	seedFixtureHomeRunner(t, "default-pool", "runner-fixture-"+name)
-	spec := testProfileSpec(1000)
+	spec := testProfileSpec(1)
 	spec.Execution.DataPlaneTransport = transport
 	profile, err := controlPlane.CreateProfile(
 		t.Context(),
@@ -337,17 +337,17 @@ func seedFixtureHomeRunner(t *testing.T, poolName string, runnerID string) {
 			id,pool_name,name,state,architectures_json,capabilities_json,capacity_json,
 			protocol_versions_json,guest_protocol_minimum,guest_protocol_maximum,
 			software_version,active_connection_id,last_sequence,drain_phase,
-			reserved_capacity_json,artifact_cache_json,sandbox_start_sample_count,
+			reserved_capacity_json,artifact_cache_json,backend_kind,sandbox_start_sample_count,
 			sandbox_start_p95_milliseconds,last_seen_at,revision,created_at,updated_at
 		) VALUES (
 			$1,$2,$1,'ready','["amd64"]',
 			'["compute","network-policy","storage","cleanup","local-workspace"]',
-			'{"CPUMillis":1000000,"MemoryBytes":1099511627776,"DiskBytes":10995116277760,
+			'{"VCPUCount":1000,"MemoryBytes":1099511627776,"DiskBytes":10995116277760,
 			  "Instances":1000,"Operations":1000}',
-			'[1]',1,1,'fixture','fixture-connection',1,'active',
-			'{"CPUMillis":0,"MemoryBytes":0,"DiskBytes":0,"Instances":0,"Operations":0}',
-			'{"artifactDigests":[]}',
-			0,0,$3,1,$3,$3
+			'[3]',1,1,'fixture','fixture-connection',1,'active',
+			'{"VCPUCount":0,"MemoryBytes":0,"DiskBytes":0,"Instances":0,"Operations":0}',
+			'{"artifactDigests":["sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],"materializations":[{"backendKind":"firecracker","architecture":"amd64","runtimeDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","toolchainDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","digest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}]}',
+			'firecracker',0,0,$3,1,$3,$3
 		)
 		ON CONFLICT (id) DO UPDATE SET
 			state='ready',active_connection_id='fixture-connection',drain_phase='active',
@@ -415,14 +415,14 @@ func completeFixtureSandboxCreation(t *testing.T, sandboxID string) {
 	)
 }
 
-func testProfileSpec(cpuMillis int64) contracts.ProfileRevisionSpec {
+func testProfileSpec(vcpuCount int64) contracts.ProfileRevisionSpec {
 	return contracts.ProfileRevisionSpec{
 		Pool: "default-pool", Architecture: "amd64",
 		RuntimeBundleDigest:   "sha256:" + strings.Repeat("a", 64),
 		ToolchainBundleDigest: "sha256:" + strings.Repeat("b", 64),
 		Resources: contracts.ResourcePolicy{
-			CPUMillis: cpuMillis, MemoryBytes: 1 << 30, WorkspaceBytes: 8 << 30,
-			ProcessLimit: 128, ConcurrentOperations: 4,
+			VCPUCount: vcpuCount, MemoryBytes: 1 << 30, WorkspaceBytes: 8 << 30,
+			ConcurrentOperations: 4,
 		},
 		Startup: contracts.StartupPolicy{Mode: contracts.StartupModeColdBoot},
 		Lifecycle: contracts.LifecyclePolicy{
@@ -451,7 +451,7 @@ func testProfileSpec(cpuMillis int64) contracts.ProfileRevisionSpec {
 
 func generousQuota() contracts.QuotaLimits {
 	return contracts.QuotaLimits{
-		MaxSandboxes: 100, MaxActiveInstances: 100, MaxCPUMillis: 100000,
+		MaxSandboxes: 100, MaxActiveInstances: 100, MaxVCPUCount: 100,
 		MaxMemoryBytes: 100 << 30, MaxSnapshots: 1000, MaxPortSessions: 100,
 		MaxConcurrentOperations: 100,
 	}

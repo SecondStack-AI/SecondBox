@@ -353,7 +353,7 @@ func newTeardownFixture(t *testing.T) *teardownFixture {
 	runnerID := fmt.Sprintf("runner-teardown-%d", fixtureSequence)
 	seedFixtureHomeRunner(t, poolName, runnerID)
 	profileName := fmt.Sprintf("teardown-profile-%d", fixtureSequence)
-	spec := testProfileSpec(1000)
+	spec := testProfileSpec(1)
 	spec.Pool = poolName
 	profile, err := controlPlane.CreateProfile(
 		t.Context(), admin, contracts.CreateProfileRequest{Name: profileName, Spec: spec},
@@ -771,14 +771,14 @@ func (fixture *teardownFixture) readOperationTiming(
 
 type teardownAssetCatalog struct{}
 
-func (teardownAssetCatalog) Resolve(digest string) (lifecycle.SignedAsset, error) {
+func (teardownAssetCatalog) Resolve(digest string) (lifecycle.Asset, error) {
 	if digest == "" {
-		return lifecycle.SignedAsset{}, errors.New("empty teardown fixture asset digest")
+		return lifecycle.Asset{}, errors.New("empty teardown fixture asset digest")
 	}
-	return lifecycle.SignedAsset{
-		ArtifactID:              "asset-" + digest[len(digest)-8:],
-		ManifestDigest:          digest,
-		SignatureKeyID:          "teardown-signing-key",
+	return lifecycle.Asset{
+		ArtifactID:     "asset-" + digest[len(digest)-8:],
+		ManifestDigest: digest,
+
 		Architecture:            "amd64",
 		GuestProtocolGeneration: 1,
 		MandatoryGuestFeatures:  []string{},

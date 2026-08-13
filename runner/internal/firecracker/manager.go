@@ -251,7 +251,7 @@ func New(cfg *config.Config) (*Manager, error) {
 			return nil, err
 		}
 	}
-	if err := ensureFirecrackerVersion(cfg.FirecrackerPath); err != nil {
+	if err := ensureComputeBackendVersion(cfg.FirecrackerPath); err != nil {
 		return nil, err
 	}
 	if !cfg.MicroVMAllowUnjailed {
@@ -590,24 +590,24 @@ func (m *Manager) sweepStartupOrphans(ctx context.Context) error {
 	return joined
 }
 
-// ensureFirecrackerVersion pins the VMM snapshot ABI and keeps the
+// ensureComputeBackendVersion pins the VMM snapshot ABI and keeps the
 // CVE-2026-5747 floor explicit. Golden snapshots are not portable across
 // Firecracker major/minor changes unless rebuilt.
-func ensureFirecrackerVersion(fcPath string) error {
+func ensureComputeBackendVersion(fcPath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, fcPath, "--version").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("run firecracker --version: %w", err)
 	}
-	maj, minr, pat, ok := parseFirecrackerVersion(string(out))
+	maj, minr, pat, ok := parseComputeBackendVersion(string(out))
 	if !ok {
 		return fmt.Errorf("parse firecracker --version output %q", strings.TrimSpace(string(out)))
 	}
 	if !firecrackerVersionSupported(maj, minr, pat) {
 		return fmt.Errorf("firecracker %d.%d.%d is below the required minimum (>=1.14.4 / >=1.15.1, CVE-2026-5747); upgrade the firecracker binary", maj, minr, pat)
 	}
-	wantMaj, wantMin, wantPatch, ok := expectedFirecrackerVersion()
+	wantMaj, wantMin, wantPatch, ok := expectedComputeBackendVersion()
 	if !ok {
 		return fmt.Errorf("parse embedded firecracker.lock")
 	}
@@ -635,7 +635,7 @@ func firecrackerVersionSupported(major, minor, patch int) bool {
 	}
 }
 
-func parseFirecrackerVersion(out string) (int, int, int, bool) {
+func parseComputeBackendVersion(out string) (int, int, int, bool) {
 	for _, tok := range strings.Fields(out) {
 		tok = strings.TrimPrefix(strings.TrimSpace(tok), "v")
 		parts := strings.SplitN(tok, ".", 3)
@@ -652,7 +652,7 @@ func parseFirecrackerVersion(out string) (int, int, int, bool) {
 	return 0, 0, 0, false
 }
 
-func expectedFirecrackerVersion() (int, int, int, bool) {
+func expectedComputeBackendVersion() (int, int, int, bool) {
 	for _, line := range strings.Split(firecrackerVersionLock, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -662,13 +662,13 @@ func expectedFirecrackerVersion() (int, int, int, bool) {
 		if !ok || strings.TrimSpace(key) != "FIRECRACKER_VERSION" {
 			continue
 		}
-		return parseFirecrackerVersion(strings.TrimSpace(value))
+		return parseComputeBackendVersion(strings.TrimSpace(value))
 	}
 	return 0, 0, 0, false
 }
 
-func expectedFirecrackerVersionString() string {
-	maj, minr, pat, ok := expectedFirecrackerVersion()
+func expectedComputeBackendVersionString() string {
+	maj, minr, pat, ok := expectedComputeBackendVersion()
 	if !ok {
 		return ""
 	}

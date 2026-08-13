@@ -552,9 +552,8 @@ export interface RenewLeaseRequest {
 
 export interface ResourcePolicy {
   readonly concurrentOperations: number;
-  readonly cpuMillis: number;
   readonly memoryBytes: number;
-  readonly processLimit: number;
+  readonly vcpuCount: number;
   readonly workspaceBytes: number;
 }
 

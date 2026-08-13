@@ -1249,8 +1249,8 @@ func validateProfileRevisionSpec(spec contracts.ProfileRevisionSpec) error {
 	if !digestPattern.MatchString(spec.RuntimeBundleDigest) || !digestPattern.MatchString(spec.ToolchainBundleDigest) {
 		return invalidRequest(errors.New("SecondBox Profile immutable artifact references must be sha256 digests"))
 	}
-	if spec.Resources.CPUMillis < 1 || spec.Resources.MemoryBytes < 1 || spec.Resources.WorkspaceBytes < 1 ||
-		spec.Resources.ProcessLimit < 1 || spec.Resources.ConcurrentOperations < 1 {
+	if spec.Resources.VCPUCount < 1 || spec.Resources.MemoryBytes < 1 || spec.Resources.WorkspaceBytes < 1 ||
+		spec.Resources.ConcurrentOperations < 1 {
 		return invalidRequest(errors.New("SecondBox Profile resource limits must be positive"))
 	}
 	if spec.Startup.Mode != contracts.StartupModeColdBoot &&
@@ -1373,7 +1373,7 @@ func validateQuotaLimits(name string, quota contracts.QuotaLimits) error {
 		return fmt.Errorf("SecondBox %s Sandbox quota must be positive", name)
 	}
 	values := []int64{
-		quota.MaxActiveInstances, quota.MaxCPUMillis,
+		quota.MaxActiveInstances, quota.MaxVCPUCount,
 		quota.MaxMemoryBytes, quota.MaxSnapshots, quota.MaxPortSessions,
 		quota.MaxConcurrentOperations,
 	}

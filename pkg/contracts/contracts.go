@@ -165,10 +165,9 @@ type StartupPolicy struct {
 
 // ResourcePolicy contains per-Sandbox enforceable compute and workspace limits.
 type ResourcePolicy struct {
-	CPUMillis            int64 `json:"cpuMillis"`
+	VCPUCount            int64 `json:"vcpuCount"`
 	MemoryBytes          int64 `json:"memoryBytes"`
 	WorkspaceBytes       int64 `json:"workspaceBytes"`
-	ProcessLimit         int64 `json:"processLimit"`
 	ConcurrentOperations int64 `json:"concurrentOperations"`
 }
 
@@ -384,7 +383,7 @@ type PortSession struct {
 type QuotaLimits struct {
 	MaxSandboxes            int64 `json:"maxSandboxes"`
 	MaxActiveInstances      int64 `json:"maxActiveInstances"`
-	MaxCPUMillis            int64 `json:"maxCpuMillis"`
+	MaxVCPUCount            int64 `json:"maxVcpuCount"`
 	MaxMemoryBytes          int64 `json:"maxMemoryBytes"`
 	MaxSnapshots            int64 `json:"maxSnapshots"`
 	MaxPortSessions         int64 `json:"maxPortSessions"`
@@ -395,7 +394,7 @@ type QuotaLimits struct {
 type QuotaUsage struct {
 	Sandboxes            int64 `json:"sandboxes"`
 	ActiveInstances      int64 `json:"activeInstances"`
-	CPUMillis            int64 `json:"cpuMillis"`
+	VCPUCount            int64 `json:"vcpuCount"`
 	MemoryBytes          int64 `json:"memoryBytes"`
 	Snapshots            int64 `json:"snapshots"`
 	PortSessions         int64 `json:"portSessions"`

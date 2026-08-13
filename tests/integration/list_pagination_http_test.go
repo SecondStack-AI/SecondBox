@@ -84,7 +84,7 @@ func TestCanonicalListEndpointsTraverseStableOpaqueCursorPages(t *testing.T) {
 		profile, err := controlPlane.CreateProfile(
 			t.Context(),
 			admin,
-			contracts.CreateProfileRequest{Name: profileName, Spec: testProfileSpec(1000)},
+			contracts.CreateProfileRequest{Name: profileName, Spec: testProfileSpec(1)},
 		)
 		if err != nil {
 			t.Fatal(err)

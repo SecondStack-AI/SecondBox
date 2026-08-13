@@ -26,29 +26,29 @@ import (
 const jailedSnapshotResumeQualificationSchemaVersion = 1
 
 type jailedSnapshotResumeReport struct {
-	SchemaVersion       int                        `json:"schemaVersion"`
-	SourceCommit        string                     `json:"sourceCommit"`
-	SourceTreeDirty     bool                       `json:"sourceTreeDirty"`
-	GoVersion           string                     `json:"goVersion"`
-	FirecrackerVersion  string                     `json:"firecrackerVersion"`
-	HostKernel          string                     `json:"hostKernel"`
-	HostCPU             string                     `json:"hostCpu"`
-	WorkspaceFilesystem string                     `json:"workspaceFilesystem"`
-	CompletedAt         string                     `json:"completedAt"`
-	Jailed              bool                       `json:"jailedResume"`
-	IdentityNeutral     bool                       `json:"identityNeutralTemplate"`
-	MemoryMiB           int                        `json:"memoryMiB"`
-	WorkspaceMiB        int                        `json:"workspaceMiB"`
-	TemplateID          string                     `json:"templateId"`
-	MemoryFileBytes     int64                      `json:"memoryFileBytes"`
-	RootfsFileBytes     int64                      `json:"rootfsFileBytes"`
-	VMStateFileBytes    int64                      `json:"vmStateFileBytes"`
-	TemplateBuildMillis int64                      `json:"templateBuildMilliseconds"`
-	AdmissionMillis     int64                      `json:"cacheAdmissionMilliseconds"`
-	NetworkRebinding    jailedResumeNetworkFinding `json:"networkRebinding"`
-	Rungs               []jailedSnapshotResumeRung `json:"concurrencyRungs"`
-	GatePassed          bool                       `json:"gatePassed"`
-	GateFailures        []string                   `json:"gateFailures,omitempty"`
+	SchemaVersion         int                        `json:"schemaVersion"`
+	SourceCommit          string                     `json:"sourceCommit"`
+	SourceTreeDirty       bool                       `json:"sourceTreeDirty"`
+	GoVersion             string                     `json:"goVersion"`
+	ComputeBackendVersion string                     `json:"firecrackerVersion"`
+	HostKernel            string                     `json:"hostKernel"`
+	HostCPU               string                     `json:"hostCpu"`
+	WorkspaceFilesystem   string                     `json:"workspaceFilesystem"`
+	CompletedAt           string                     `json:"completedAt"`
+	Jailed                bool                       `json:"jailedResume"`
+	IdentityNeutral       bool                       `json:"identityNeutralTemplate"`
+	MemoryMiB             int                        `json:"memoryMiB"`
+	WorkspaceMiB          int                        `json:"workspaceMiB"`
+	TemplateID            string                     `json:"templateId"`
+	MemoryFileBytes       int64                      `json:"memoryFileBytes"`
+	RootfsFileBytes       int64                      `json:"rootfsFileBytes"`
+	VMStateFileBytes      int64                      `json:"vmStateFileBytes"`
+	TemplateBuildMillis   int64                      `json:"templateBuildMilliseconds"`
+	AdmissionMillis       int64                      `json:"cacheAdmissionMilliseconds"`
+	NetworkRebinding      jailedResumeNetworkFinding `json:"networkRebinding"`
+	Rungs                 []jailedSnapshotResumeRung `json:"concurrencyRungs"`
+	GatePassed            bool                       `json:"gatePassed"`
+	GateFailures          []string                   `json:"gateFailures,omitempty"`
 }
 
 // jailedResumeNetworkFinding records what the pinned VMM actually does with a
@@ -165,19 +165,19 @@ func TestSmokeJailedSnapshotResume(t *testing.T) {
 	}
 
 	report := jailedSnapshotResumeReport{
-		SchemaVersion:       jailedSnapshotResumeQualificationSchemaVersion,
-		SourceCommit:        requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_SOURCE_COMMIT"),
-		SourceTreeDirty:     requiredEnvBool(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_SOURCE_TREE_DIRTY"),
-		GoVersion:           runtime.Version(),
-		FirecrackerVersion:  firecrackerQualificationVersion(t),
-		HostKernel:          requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_HOST_KERNEL"),
-		HostCPU:             requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_HOST_CPU"),
-		WorkspaceFilesystem: requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_WORKSPACE_FILESYSTEM"),
-		Jailed:              true,
-		IdentityNeutral:     true,
-		MemoryMiB:           memoryMiB,
-		WorkspaceMiB:        workspaceMiB,
-		GatePassed:          true,
+		SchemaVersion:         jailedSnapshotResumeQualificationSchemaVersion,
+		SourceCommit:          requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_SOURCE_COMMIT"),
+		SourceTreeDirty:       requiredEnvBool(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_SOURCE_TREE_DIRTY"),
+		GoVersion:             runtime.Version(),
+		ComputeBackendVersion: firecrackerQualificationVersion(t),
+		HostKernel:            requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_HOST_KERNEL"),
+		HostCPU:               requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_HOST_CPU"),
+		WorkspaceFilesystem:   requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_WORKSPACE_FILESYSTEM"),
+		Jailed:                true,
+		IdentityNeutral:       true,
+		MemoryMiB:             memoryMiB,
+		WorkspaceMiB:          workspaceMiB,
+		GatePassed:            true,
 	}
 
 	workDir := shortSmokeDir(t)
@@ -550,11 +550,10 @@ func (inst *jailedResumeInstance) resume(
 		return fmt.Errorf("resolved Workspace attachment generation is stale")
 	}
 	policy := &runtimemanager.SandboxRuntimePolicy{
-		VCPUs:             cfg.MicroVMVCPUs,
-		CPUMillis:         cfg.MicroVMVCPUs * 1000,
-		MemoryMiB:         memoryMiB,
-		WorkspaceSizeMiB:  workspaceMiB,
-		ProcessLimit:      opts.SandboxPolicy.ProcessLimit,
+		VCPUs:            cfg.MicroVMVCPUs,
+		MemoryMiB:        memoryMiB,
+		WorkspaceSizeMiB: workspaceMiB,
+
 		WorkspaceWritable: true,
 	}
 	launch, err := inst.startResumeProcess(ctx, manager, cfg, template, workspaceImage.Name(), policy)
@@ -876,16 +875,11 @@ func measureSnapshotResumeNetworkFindings(
 		t.Fatalf("new network-finding manager: %v", err)
 	}
 	defer releaseManagerNetworkPolicy(t, manager)
-	opts := smokeGuestProtocolOpts(t, cfg, runtimemanager.StartOpts{
-		Timezone:      "UTC",
-		CompartmentID: "cmp_resume_netfind",
-	})
 	policy := &runtimemanager.SandboxRuntimePolicy{
-		VCPUs:             cfg.MicroVMVCPUs,
-		CPUMillis:         cfg.MicroVMVCPUs * 1000,
-		MemoryMiB:         memoryMiB,
-		WorkspaceSizeMiB:  workspaceMiB,
-		ProcessLimit:      opts.SandboxPolicy.ProcessLimit,
+		VCPUs:            cfg.MicroVMVCPUs,
+		MemoryMiB:        memoryMiB,
+		WorkspaceSizeMiB: workspaceMiB,
+
 		WorkspaceWritable: true,
 	}
 

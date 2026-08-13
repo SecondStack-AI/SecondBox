@@ -10,15 +10,15 @@ import (
 func TestProfileAssetsResolveTwoExactDigestsWithoutSubstitution(t *testing.T) {
 	runtimeDigest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	toolchainDigest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	catalog := fakeSignedAssetCatalog{assets: map[string]SignedAsset{
+	catalog := fakeAssetCatalog{assets: map[string]Asset{
 		runtimeDigest: {
 			ArtifactID: "runtime-component", ManifestDigest: runtimeDigest,
-			SignatureKeyID: "release-key", Architecture: "amd64",
+			Architecture:            "amd64",
 			GuestProtocolGeneration: 3, MandatoryGuestFeatures: []string{"runtime"},
 		},
 		toolchainDigest: {
 			ArtifactID: "toolchain-component", ManifestDigest: toolchainDigest,
-			SignatureKeyID: "release-key", Architecture: "amd64",
+			Architecture:            "amd64",
 			GuestProtocolGeneration: 3, MandatoryGuestFeatures: []string{"toolchain"},
 		},
 	}}
@@ -45,14 +45,14 @@ func TestProfileAssetsResolveTwoExactDigestsWithoutSubstitution(t *testing.T) {
 	}
 }
 
-type fakeSignedAssetCatalog struct {
-	assets map[string]SignedAsset
+type fakeAssetCatalog struct {
+	assets map[string]Asset
 }
 
-func (catalog fakeSignedAssetCatalog) Resolve(digest string) (SignedAsset, error) {
+func (catalog fakeAssetCatalog) Resolve(digest string) (Asset, error) {
 	asset, found := catalog.assets[digest]
 	if !found {
-		return SignedAsset{}, errors.New("missing asset")
+		return Asset{}, errors.New("missing asset")
 	}
 	return asset, nil
 }

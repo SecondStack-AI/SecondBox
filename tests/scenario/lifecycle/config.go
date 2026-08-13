@@ -64,10 +64,9 @@ type runnerLimits struct {
 }
 
 type profileLimits struct {
-	CPUMillis                   int64  `json:"cpuMillis"`
+	VCPUCount                   int64  `json:"vcpuCount"`
 	MemoryBytes                 int64  `json:"memoryBytes"`
 	WorkspaceBytes              int64  `json:"workspaceBytes"`
-	ProcessLimit                int64  `json:"processLimit"`
 	ConcurrentOperations        int64  `json:"concurrentOperations"`
 	DrainGraceSeconds           int64  `json:"drainGraceSeconds"`
 	IdleSeconds                 int64  `json:"idleSeconds"`
@@ -119,7 +118,7 @@ type lifecycleConfig struct {
 	SubjectMaxConcurrentOperations int64 `json:"subjectMaxConcurrentOperations"`
 	SubjectMaxSnapshots            int64 `json:"subjectMaxSnapshots"`
 	SubjectMaxPortSessions         int64 `json:"subjectMaxPortSessions"`
-	SubjectMaxCPUMillis            int64 `json:"subjectMaxCpuMillis"`
+	SubjectMaxVCPUCount            int64 `json:"subjectMaxVcpuCount"`
 	SubjectMaxMemoryBytes          int64 `json:"subjectMaxMemoryBytes"`
 }
 

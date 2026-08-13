@@ -1,4 +1,4 @@
-// Package assetcatalog owns the immutable signed execution-asset catalog.
+// Package assetcatalog owns immutable provider-neutral execution-asset identity.
 package assetcatalog
 
 import (
@@ -12,24 +12,23 @@ import (
 
 var catalogDigestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
-// SignedAsset is immutable release-catalog evidence consumed by placement.
-type SignedAsset struct {
+// Asset is immutable release-catalog evidence consumed by placement.
+type Asset struct {
 	ArtifactID              string   `json:"artifactId"`
 	ManifestDigest          string   `json:"manifestDigest"`
-	SignatureKeyID          string   `json:"signatureKeyId"`
 	Architecture            string   `json:"architecture"`
 	GuestProtocolGeneration uint32   `json:"guestProtocolGeneration"`
 	MandatoryGuestFeatures  []string `json:"mandatoryGuestFeatures"`
 }
 
-// SignedAssetCatalog resolves Profile digests without inventing trust metadata.
-type SignedAssetCatalog interface {
-	Resolve(string) (SignedAsset, error)
+// AssetCatalog resolves Profile digests without inventing backend trust metadata.
+type AssetCatalog interface {
+	Resolve(string) (Asset, error)
 }
 
 // FileAssetCatalog is an immutable startup snapshot of a release-generated catalog.
 type FileAssetCatalog struct {
-	byDigest map[string]SignedAsset
+	byDigest map[string]Asset
 }
 
 // LoadFileAssetCatalog validates one absolute read-only catalog path.
@@ -43,7 +42,7 @@ func LoadFileAssetCatalog(path string) (*FileAssetCatalog, error) {
 	}
 	defer file.Close()
 	var document struct {
-		Assets []SignedAsset `json:"assets"`
+		Assets []Asset `json:"assets"`
 	}
 	decoder := json.NewDecoder(file)
 	decoder.DisallowUnknownFields()
@@ -53,10 +52,9 @@ func LoadFileAssetCatalog(path string) (*FileAssetCatalog, error) {
 	if len(document.Assets) == 0 {
 		return nil, errors.New("SecondBox signed asset catalog contains no assets")
 	}
-	catalog := &FileAssetCatalog{byDigest: make(map[string]SignedAsset, len(document.Assets))}
+	catalog := &FileAssetCatalog{byDigest: make(map[string]Asset, len(document.Assets))}
 	for _, asset := range document.Assets {
 		if asset.ArtifactID == "" || !catalogDigestPattern.MatchString(asset.ManifestDigest) ||
-			asset.SignatureKeyID == "" ||
 			(asset.Architecture != "amd64" && asset.Architecture != "arm64") ||
 			asset.GuestProtocolGeneration == 0 {
 			return nil, errors.New("SecondBox signed asset catalog contains incomplete trust evidence")
@@ -70,21 +68,11 @@ func LoadFileAssetCatalog(path string) (*FileAssetCatalog, error) {
 }
 
 // Resolve returns an independent copy of one exact signed asset record.
-func (catalog *FileAssetCatalog) Resolve(digest string) (SignedAsset, error) {
+func (catalog *FileAssetCatalog) Resolve(digest string) (Asset, error) {
 	asset, found := catalog.byDigest[digest]
 	if !found {
-		return SignedAsset{}, fmt.Errorf("SecondBox signed asset catalog has no record for %s", digest)
+		return Asset{}, fmt.Errorf("SecondBox asset catalog has no record for %s", digest)
 	}
 	asset.MandatoryGuestFeatures = append([]string(nil), asset.MandatoryGuestFeatures...)
 	return asset, nil
-}
-
-// UsesSignatureKeyID reports whether any catalog asset names the exact signing key.
-func (catalog *FileAssetCatalog) UsesSignatureKeyID(keyID string) bool {
-	for _, asset := range catalog.byDigest {
-		if asset.SignatureKeyID == keyID {
-			return true
-		}
-	}
-	return false
 }

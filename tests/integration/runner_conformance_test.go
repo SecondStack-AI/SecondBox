@@ -91,7 +91,9 @@ func (boundary *postgresConformanceBoundary) Connect(
 ) (*runnerv1.ControlPlaneToRunner, error) {
 	session := runnercontrol.NewSession(runnercontrol.SessionConfig{
 		AuthenticatedRunnerID: runnerID,
-		SupportedVersions:     runnercontrol.VersionRange{Minimum: 1, Maximum: 1},
+		SupportedVersions: runnercontrol.VersionRange{
+			Minimum: runnerv1.SupportedProtocolMinimum, Maximum: runnerv1.SupportedProtocolMaximum,
+		},
 		EnabledFeatures: []runnerv1.RunnerFeature{
 			runnerv1.RunnerFeature_RUNNER_FEATURE_EVIDENCE,
 		},
@@ -170,32 +172,33 @@ func (boundary *postgresConformanceBoundary) SeedAssignment(
 		boundary.t, fence.SandboxId, "profile-revision-conformance", "runner-conformance", now,
 	)
 	runtimeDigest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	toolchainDigest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	_, created, err := boundary.schedulerStore.Schedule(ctx, scheduler.ScheduleRequest{
 		AssignmentID: fence.AssignmentId, AssignmentCommandID: "assignment-command-" + fence.AssignmentId,
 		InstanceID: fence.InstanceId, SandboxID: fence.SandboxId,
 		ProfileRevisionID: "profile-revision-conformance",
 		WorkspaceID:       workspaceID, StartMutationID: "workspace-start-" + fence.AssignmentId,
 		Requirements: scheduler.Requirements{
-			PoolName: "pool-conformance", BackendKind: "firecracker",
+			PoolName:     "pool-conformance",
 			Architecture: "amd64", RequiredCapabilities: []string{"local-workspace"},
 			GuestProtocolGeneration: 1,
 			Capacity: scheduler.Capacity{
-				CPUMillis: 1000, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
+				VCPUCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
 				Instances: 1, Operations: 1,
 			},
-			PreferredArtifactDigests: []string{runtimeDigest},
+			PreferredArtifactDigests: []string{runtimeDigest, toolchainDigest},
 		},
 		AssignmentCommand: &runnerv1.AssignmentCommand{
 			Fence: fence, ProfileRevisionId: "profile-revision-conformance", WorkspaceId: workspaceID,
 			Requirements: &runnerv1.ProfileRequirements{
-				VcpuCount: 1, VcpuMillis: 1000, ProcessLimit: 128, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
+				VcpuCount: 1, MemoryBytes: 1 << 30, DiskBytes: 10 << 30,
 				Architecture: "amd64", RequiredCapabilities: []string{"local-workspace"},
 				MaximumOperationMs: 60_000, MaximumOutputBytes: 1 << 20,
 			},
-			Assets: []*runnerv1.SignedAssetReference{
+			Assets: []*runnerv1.AssetReference{
 				{
 					ArtifactId: "runtime", ManifestDigest: runtimeDigest,
-					SignatureKeyId: "release-key-1", Architecture: "amd64",
+					Architecture:            "amd64",
 					GuestProtocolGeneration: 1,
 				},
 			},
@@ -255,7 +258,7 @@ func (boundary *postgresConformanceBoundary) Snapshot(
 	if err := json.Unmarshal(capacityJSON, &capacity); err != nil {
 		return conformance.Snapshot{}, err
 	}
-	snapshot.CPUMillis = capacity.CPUMillis
+	snapshot.VCPUCount = capacity.VCPUCount
 	snapshot.MemoryBytes = capacity.MemoryBytes
 	snapshot.DiskBytes = capacity.DiskBytes
 	snapshot.Instances = capacity.Instances

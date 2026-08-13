@@ -155,7 +155,7 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 	if deployment.DevelopmentWaitSeconds != nil {
 		putInt("SECONDBOX_DEVELOPMENT_PREPARE_WAIT_TIMEOUT_SECONDS", deployment.DevelopmentWaitSeconds)
 	}
-	catalog, err := resolveRegularReference(base, deployment.SignedAssetCatalog)
+	catalog, err := resolveRegularReference(base, deployment.AssetCatalog)
 	if err != nil {
 		return ResolvedDeployment{}, manifestError("deployment.signed_asset_catalog", err)
 	}
@@ -163,11 +163,8 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 	if err != nil {
 		return ResolvedDeployment{}, manifestError("deployment.signed_asset_catalog", err)
 	}
-	if deployment.Mode == "production" && verifiedCatalog.UsesSignatureKeyID("secondbox-development-local-trust") {
-		return ResolvedDeployment{}, manifestError("production requires an operator-supplied signed asset catalog", nil)
-	}
 	put("SECONDBOX_SIGNED_ASSET_CATALOG_HOST_PATH", catalog)
-	put("SECONDBOX_SIGNED_ASSET_CATALOG_PATH", deployment.SignedAssetCatalogPath)
+	put("SECONDBOX_SIGNED_ASSET_CATALOG_PATH", deployment.AssetCatalogPath)
 
 	database := manifest.Database
 	databasePassword := ""
@@ -354,7 +351,7 @@ func validateManifestShape(manifest ManifestV1) error {
 		return manifestError("schema_version must be 1", nil)
 	}
 	d := manifest.Deployment
-	for path, value := range map[string]string{"deployment.mode": d.Mode, "deployment.public_base_url": d.PublicBaseURL, "deployment.tls_termination": d.TLSTermination, "deployment.control_plane_image": d.ControlPlaneImage, "deployment.runner_image": d.RunnerImage, "deployment.api_bind_ip": d.APIBindIP, "deployment.listen_address": d.ListenAddress, "deployment.runner_bind_ip": d.RunnerBindIP, "deployment.runner_listen_address": d.RunnerListenAddress, "deployment.log_path": d.LogPath, "deployment.signed_asset_catalog": d.SignedAssetCatalog, "deployment.signed_asset_catalog_path": d.SignedAssetCatalogPath} {
+	for path, value := range map[string]string{"deployment.mode": d.Mode, "deployment.public_base_url": d.PublicBaseURL, "deployment.tls_termination": d.TLSTermination, "deployment.control_plane_image": d.ControlPlaneImage, "deployment.runner_image": d.RunnerImage, "deployment.api_bind_ip": d.APIBindIP, "deployment.listen_address": d.ListenAddress, "deployment.runner_bind_ip": d.RunnerBindIP, "deployment.runner_listen_address": d.RunnerListenAddress, "deployment.log_path": d.LogPath, "deployment.signed_asset_catalog": d.AssetCatalog, "deployment.signed_asset_catalog_path": d.AssetCatalogPath} {
 		if err := require(path, value); err != nil {
 			return err
 		}
@@ -388,7 +385,7 @@ func validateManifestShape(manifest ManifestV1) error {
 	if d.RunnerListenAddress != "0.0.0.0:9443" {
 		return manifestError("deployment.runner_listen_address must be 0.0.0.0:9443 for the packaged container mapping", nil)
 	}
-	if d.SignedAssetCatalogPath != "/etc/secondbox/signed-assets.json" {
+	if d.AssetCatalogPath != "/etc/secondbox/signed-assets.json" {
 		return manifestError("deployment.signed_asset_catalog_path must be /etc/secondbox/signed-assets.json for the packaged container mapping", nil)
 	}
 	if d.DevelopmentWaitSeconds != nil {
@@ -401,7 +398,7 @@ func validateManifestShape(manifest ManifestV1) error {
 	if d.Mode == "development" && (d.APIBindIP != "127.0.0.1" || d.RunnerBindIP != "127.0.0.1" || manifest.Database.BindIP != "127.0.0.1") {
 		return manifestError("development mode must bind every published port to 127.0.0.1", nil)
 	}
-	if !filepath.IsAbs(d.LogPath) || !filepath.IsAbs(d.SignedAssetCatalogPath) {
+	if !filepath.IsAbs(d.LogPath) || !filepath.IsAbs(d.AssetCatalogPath) {
 		return manifestError("deployment process paths must be absolute", nil)
 	}
 	parsedURL, err := url.Parse(d.PublicBaseURL)
@@ -561,7 +558,7 @@ func validatePolicy(p Policy) error {
 			return manifestError("policy."+name+" must be positive", nil)
 		}
 	}
-	quotas := map[string]*int64{"default_subject_max_sandboxes": p.DefaultSubjectMaxSandboxes, "default_subject_max_active_instances": p.DefaultSubjectMaxActiveInstances, "default_subject_max_cpu_millis": p.DefaultSubjectMaxCPUMillis, "default_subject_max_memory_bytes": p.DefaultSubjectMaxMemoryBytes, "default_subject_max_snapshots": p.DefaultSubjectMaxSnapshots, "default_subject_max_port_sessions": p.DefaultSubjectMaxPortSessions, "default_subject_max_concurrent_operations": p.DefaultSubjectMaxConcurrentOperations}
+	quotas := map[string]*int64{"default_subject_max_sandboxes": p.DefaultSubjectMaxSandboxes, "default_subject_max_active_instances": p.DefaultSubjectMaxActiveInstances, "default_subject_max_vcpu_count": p.DefaultSubjectMaxVCPUCount, "default_subject_max_memory_bytes": p.DefaultSubjectMaxMemoryBytes, "default_subject_max_snapshots": p.DefaultSubjectMaxSnapshots, "default_subject_max_port_sessions": p.DefaultSubjectMaxPortSessions, "default_subject_max_concurrent_operations": p.DefaultSubjectMaxConcurrentOperations}
 	for name, value := range quotas {
 		if value == nil || *value < 0 {
 			return manifestError("policy."+name+" must be non-negative", nil)
@@ -614,7 +611,7 @@ func validateStandardResources(resources StandardResources, runners []Runner) er
 		if pool.Name != standardresources.PoolAMD64 || pool.State == "" || len(pool.Architectures) == 0 || !slices.Contains(pool.Architectures, "amd64") || len(pool.Capabilities) == 0 {
 			return manifestError(prefix+" requires name, ready state, capabilities and amd64 architecture inventory", nil)
 		}
-		for name, value := range map[string]*int64{"max_sandboxes": pool.MaxSandboxes, "max_cpu_millis": pool.MaxCPUMillis, "max_memory_bytes": pool.MaxMemoryBytes} {
+		for name, value := range map[string]*int64{"max_sandboxes": pool.MaxSandboxes, "max_vcpu_count": pool.MaxVCPUCount, "max_memory_bytes": pool.MaxMemoryBytes} {
 			if value == nil || *value < 1 {
 				return manifestError(prefix+"."+name+" must be positive", nil)
 			}
@@ -882,14 +879,14 @@ func validateDataPlaneAddress(path, value string, listen bool) error {
 }
 
 func addPolicyEnvironment(environment map[string]string, p Policy) {
-	values := map[string]*int64{"SECONDBOX_DATA_PLANE_RETENTION_SECONDS": p.DataPlaneRetentionSeconds, "SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS": p.DataPlanePollIntervalMilliseconds, "SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS": p.RunnerCommandPollIntervalMilliseconds, "SECONDBOX_DEFAULT_SUBJECT_MAX_SANDBOXES": p.DefaultSubjectMaxSandboxes, "SECONDBOX_DEFAULT_SUBJECT_MAX_ACTIVE_INSTANCES": p.DefaultSubjectMaxActiveInstances, "SECONDBOX_DEFAULT_SUBJECT_MAX_CPU_MILLIS": p.DefaultSubjectMaxCPUMillis, "SECONDBOX_DEFAULT_SUBJECT_MAX_MEMORY_BYTES": p.DefaultSubjectMaxMemoryBytes, "SECONDBOX_DEFAULT_SUBJECT_MAX_SNAPSHOTS": p.DefaultSubjectMaxSnapshots, "SECONDBOX_DEFAULT_SUBJECT_MAX_PORT_SESSIONS": p.DefaultSubjectMaxPortSessions, "SECONDBOX_DEFAULT_SUBJECT_MAX_CONCURRENT_OPERATIONS": p.DefaultSubjectMaxConcurrentOperations}
+	values := map[string]*int64{"SECONDBOX_DATA_PLANE_RETENTION_SECONDS": p.DataPlaneRetentionSeconds, "SECONDBOX_DATA_PLANE_POLL_INTERVAL_MILLISECONDS": p.DataPlanePollIntervalMilliseconds, "SECONDBOX_RUNNER_COMMAND_POLL_INTERVAL_MILLISECONDS": p.RunnerCommandPollIntervalMilliseconds, "SECONDBOX_DEFAULT_SUBJECT_MAX_SANDBOXES": p.DefaultSubjectMaxSandboxes, "SECONDBOX_DEFAULT_SUBJECT_MAX_ACTIVE_INSTANCES": p.DefaultSubjectMaxActiveInstances, "SECONDBOX_DEFAULT_SUBJECT_MAX_VCPU_COUNT": p.DefaultSubjectMaxVCPUCount, "SECONDBOX_DEFAULT_SUBJECT_MAX_MEMORY_BYTES": p.DefaultSubjectMaxMemoryBytes, "SECONDBOX_DEFAULT_SUBJECT_MAX_SNAPSHOTS": p.DefaultSubjectMaxSnapshots, "SECONDBOX_DEFAULT_SUBJECT_MAX_PORT_SESSIONS": p.DefaultSubjectMaxPortSessions, "SECONDBOX_DEFAULT_SUBJECT_MAX_CONCURRENT_OPERATIONS": p.DefaultSubjectMaxConcurrentOperations}
 	for name, value := range values {
 		environment[name] = strconv.FormatInt(*value, 10)
 	}
 	environment["SECONDBOX_RUNNER_ENABLED_FEATURES"] = p.RunnerEnabledFeatures
 }
 
-func resolveStandardResources(base string, manifest ManifestV1, catalog assetcatalog.SignedAssetCatalog) (resourceapply.Document, error) {
+func resolveStandardResources(base string, manifest ManifestV1, catalog assetcatalog.AssetCatalog) (resourceapply.Document, error) {
 	path, err := resolveRegularReference(base, manifest.StandardResources.ArtifactManifest)
 	if err != nil {
 		return resourceapply.Document{}, manifestError("standard_resources.artifact_manifest", err)
@@ -914,9 +911,6 @@ func resolveStandardResources(base string, manifest ManifestV1, catalog assetcat
 			!slices.Equal(asset.MandatoryGuestFeatures, component.MandatoryGuestFeatures) {
 			return resourceapply.Document{}, manifestError("standard_resources artifact manifest component identity differs from deployment.signed_asset_catalog", nil)
 		}
-		if manifest.Deployment.Mode == "production" && asset.SignatureKeyID != expectedKeyID {
-			return resourceapply.Document{}, manifestError("standard_resources artifact manifest signing identity differs from deployment.signed_asset_catalog", nil)
-		}
 	}
 	if manifest.Deployment.Mode == "production" {
 		for index, runner := range manifest.Runners {
@@ -927,7 +921,7 @@ func resolveStandardResources(base string, manifest ManifestV1, catalog assetcat
 	}
 	pools := make(map[string]standardresources.PoolBinding, len(manifest.StandardResources.RunnerPools))
 	for _, configured := range manifest.StandardResources.RunnerPools {
-		pools[configured.Bundle] = standardresources.PoolBinding{Name: configured.Name, Architectures: configured.Architectures, Capabilities: configured.Capabilities, State: configured.State, CapacityPolicy: map[string]int64{"maxSandboxes": *configured.MaxSandboxes, "maxCpuMillis": *configured.MaxCPUMillis, "maxMemoryBytes": *configured.MaxMemoryBytes}}
+		pools[configured.Bundle] = standardresources.PoolBinding{Name: configured.Name, Architectures: configured.Architectures, Capabilities: configured.Capabilities, State: configured.State, CapacityPolicy: map[string]int64{"maxSandboxes": *configured.MaxSandboxes, "maxVcpuCount": *configured.MaxVCPUCount, "maxMemoryBytes": *configured.MaxMemoryBytes}}
 	}
 	document, err := standardresources.Build(releaseManifest, standardresources.Selection{Bundles: manifest.StandardResources.Bundles, Pools: pools})
 	if err != nil {

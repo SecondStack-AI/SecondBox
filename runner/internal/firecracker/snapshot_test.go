@@ -73,7 +73,7 @@ func TestCreateGoldenSnapshotPausesSnapshotsResumesAndWritesManifest(t *testing.
 	if err := json.Unmarshal(data, &fromDisk); err != nil {
 		t.Fatalf("decode manifest: %v", err)
 	}
-	if fromDisk.Metadata["artifactVersion"] != "local" || fromDisk.CreatedAt == "" || fromDisk.FirecrackerVersion != expectedFirecrackerVersionString() {
+	if fromDisk.Metadata["artifactVersion"] != "local" || fromDisk.CreatedAt == "" || fromDisk.ComputeBackendVersion != expectedComputeBackendVersionString() {
 		t.Fatalf("manifest from disk = %#v", fromDisk)
 	}
 	if _, err := time.Parse(time.RFC3339, fromDisk.CreatedAt); err != nil {
@@ -95,12 +95,12 @@ func TestVerifySnapshotArtifactsHashIsAuthoritative(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest := GoldenSnapshotManifest{
-		SnapshotPath:       snapshotPath,
-		MemFilePath:        memPath,
-		KernelPath:         kernel,
-		KernelSHA256:       sum,
-		KernelIdentity:     identity,
-		FirecrackerVersion: expectedFirecrackerVersionString(),
+		SnapshotPath:          snapshotPath,
+		MemFilePath:           memPath,
+		KernelPath:            kernel,
+		KernelSHA256:          sum,
+		KernelIdentity:        identity,
+		ComputeBackendVersion: expectedComputeBackendVersionString(),
 	}
 
 	if err := os.WriteFile(kernel, []byte("bbbb"), 0o600); err != nil {

@@ -49,7 +49,7 @@ runner_command_poll_interval_milliseconds = 250
 runner_enabled_features = 'exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy'
 default_subject_max_sandboxes = 100
 default_subject_max_active_instances = 20
-default_subject_max_cpu_millis = 80000
+default_subject_max_vcpu_count = 80
 default_subject_max_memory_bytes = 171798691840
 default_subject_max_snapshots = 500
 default_subject_max_port_sessions = 100
@@ -67,7 +67,7 @@ architectures = ['amd64']
 capabilities = ['compute', 'evidence', 'exec-streaming', 'file-streaming', 'local-workspace', 'port-proxy', 'pty']
 state = 'ready'
 max_sandboxes = 20
-max_cpu_millis = 80000
+max_vcpu_count = 80
 max_memory_bytes = 171798691840
 
 [[standard_resources.runner_pools]]
@@ -77,7 +77,7 @@ architectures = ['amd64']
 capabilities = ['compute', 'evidence', 'exec-streaming', 'file-streaming', 'local-workspace', 'port-proxy', 'pty']
 state = 'ready'
 max_sandboxes = 20
-max_cpu_millis = 80000
+max_vcpu_count = 80
 max_memory_bytes = 171798691840
 
 [[standard_resources.runner_pools]]

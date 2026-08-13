@@ -232,7 +232,7 @@ func runnerPlacementCompatible(
 		!contains(candidate.capabilities, contracts.RunnerCapabilitySnapshotResume) {
 		return false
 	}
-	return candidate.allocatable.CPUMillis-reserved.CPUMillis >= spec.Resources.CPUMillis &&
+	return candidate.allocatable.VCPUCount-reserved.VCPUCount >= spec.Resources.VCPUCount &&
 		candidate.allocatable.MemoryBytes-reserved.MemoryBytes >= spec.Resources.MemoryBytes &&
 		candidate.allocatable.DiskBytes-reserved.DiskBytes >= spec.Resources.WorkspaceBytes &&
 		candidate.allocatable.Instances-reserved.Instances >= 1 &&
@@ -263,7 +263,7 @@ func durableHomeReservation(ctx context.Context, tx pgx.Tx, runnerID string) (ru
 
 func maxRunnerPlacementCapacity(left, right runnerCapacity) runnerCapacity {
 	return runnerCapacity{
-		CPUMillis:   max(left.CPUMillis, right.CPUMillis),
+		VCPUCount:   max(left.VCPUCount, right.VCPUCount),
 		MemoryBytes: max(left.MemoryBytes, right.MemoryBytes),
 		DiskBytes:   max(left.DiskBytes, right.DiskBytes),
 		Instances:   max(left.Instances, right.Instances),

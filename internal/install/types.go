@@ -197,7 +197,7 @@ type StoragePlan struct {
 }
 type CapacityPlan struct {
 	MaxSandboxes           int64            `json:"maxSandboxes"`
-	MaxCPUMillis           int64            `json:"maxCpuMillis"`
+	MaxVCPUCount           int64            `json:"maxVcpuCount"`
 	MaxMemoryBytes         int64            `json:"maxMemoryBytes"`
 	MaxWorkspaceBytes      int64            `json:"maxWorkspaceBytes"`
 	ConcurrentStarts       int64            `json:"concurrentStarts"`

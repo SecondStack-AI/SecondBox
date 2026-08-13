@@ -7,9 +7,9 @@ import (
 )
 
 func verifySnapshotArtifacts(manifest GoldenSnapshotManifest) error {
-	wantFirecrackerVersion := expectedFirecrackerVersionString()
-	if strings.TrimPrefix(strings.TrimSpace(manifest.FirecrackerVersion), "v") != wantFirecrackerVersion {
-		return fmt.Errorf("snapshot firecracker version %q does not match pinned version %s; discard and recreate the golden snapshot", manifest.FirecrackerVersion, wantFirecrackerVersion)
+	wantComputeBackendVersion := expectedComputeBackendVersionString()
+	if strings.TrimPrefix(strings.TrimSpace(manifest.ComputeBackendVersion), "v") != wantComputeBackendVersion {
+		return fmt.Errorf("snapshot firecracker version %q does not match pinned version %s; discard and recreate the golden snapshot", manifest.ComputeBackendVersion, wantComputeBackendVersion)
 	}
 	for label, path := range map[string]string{
 		"snapshot": manifest.SnapshotPath,
