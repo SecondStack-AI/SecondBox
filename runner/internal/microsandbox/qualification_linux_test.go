@@ -8,6 +8,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -15,6 +18,7 @@ import (
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/materialization"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
+	runnerconformance "github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol/conformance"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 	"google.golang.org/protobuf/proto"
@@ -137,6 +141,13 @@ func TestQualifiedLinuxBackendBootsAgentAndWorkspaceOnKVM(t *testing.T) {
 	if err := backend.MarkAssignmentReady(fence); err != nil {
 		t.Fatal(err)
 	}
+	freshMissing, err := backend.ExecuteBuffered(t.Context(), fence, &runnerprotocol.ExecOpen{
+		Command:        &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{"/definitely/missing"}}},
+		DeadlineUnixMs: uint64(time.Now().Add(2 * time.Second).UnixMilli()), OutputLimitBytes: 1024,
+	})
+	if err != nil || freshMissing.Terminal.GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_SPAWN_FAILED {
+		t.Fatalf("qualified fresh spawn failure = %#v, %v", freshMissing, err)
+	}
 	execResult, err := backend.ExecuteBuffered(t.Context(), fence, &runnerprotocol.ExecOpen{
 		Command: &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{"/bin/sh", "-c", "printf linux-stdout; printf linux-stderr >&2; exit 7"}}},
 		Cwd:     "/workspace", OutputLimitBytes: 1024,
@@ -152,26 +163,188 @@ func TestQualifiedLinuxBackendBootsAgentAndWorkspaceOnKVM(t *testing.T) {
 	}
 	writeResult, err := backend.ExecuteFile(t.Context(), fence, &runnerprotocol.FileOpen{
 		Operation: runnerprotocol.FileOperation_FILE_OPERATION_WRITE, WorkspaceRelativePath: "qualification/data.bin", ExpectedSize: 5,
+		ExpectedChecksum: "sha256:103597c5abb6113da596c18e9d1da69364eafe00a2bfaa8b12e53c44bd6b0429",
 	}, []byte{0, 1, 2, 254, 255})
 	if err != nil || writeResult.Terminal.GetKind() != runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_COMPLETED {
 		t.Fatalf("qualified File write = %#v, %v", writeResult, err)
 	}
 	readResult, err := backend.ExecuteFile(t.Context(), fence, &runnerprotocol.FileOpen{
-		Operation: runnerprotocol.FileOperation_FILE_OPERATION_READ, WorkspaceRelativePath: "qualification/data.bin",
+		Operation: runnerprotocol.FileOperation_FILE_OPERATION_READ, WorkspaceRelativePath: "qualification/data.bin", ExpectedSize: 5,
 	}, nil)
 	if err != nil || !bytes.Equal(readResult.Content, []byte{0, 1, 2, 254, 255}) {
 		t.Fatalf("qualified binary File read = %#v, %v", readResult, err)
 	}
+	if readResult.Metadata.GetChecksum() != "sha256:103597c5abb6113da596c18e9d1da69364eafe00a2bfaa8b12e53c44bd6b0429" {
+		t.Fatalf("qualified File checksum = %#v", readResult.Metadata)
+	}
+	statResult, err := backend.ExecuteFile(t.Context(), fence, &runnerprotocol.FileOpen{
+		Operation: runnerprotocol.FileOperation_FILE_OPERATION_STAT, WorkspaceRelativePath: "qualification/data.bin",
+	}, nil)
+	if err != nil || statResult.Metadata.GetSize() != 5 || statResult.Metadata.GetKind() != runnerprotocol.FileKind_FILE_KIND_FILE {
+		t.Fatalf("qualified File stat = %#v, %v", statResult, err)
+	}
+	listResult, err := backend.ExecuteFile(t.Context(), fence, &runnerprotocol.FileOpen{
+		Operation: runnerprotocol.FileOperation_FILE_OPERATION_LIST, WorkspaceRelativePath: "qualification",
+	}, nil)
+	if err != nil || len(listResult.Metadata.GetDirectChildren()) != 1 || listResult.Metadata.GetDirectChildren()[0] != "data.bin" || listResult.Metadata.GetDirectChildEntries()[0].GetPath() != "qualification/data.bin" {
+		t.Fatalf("qualified File list = %#v, %v", listResult, err)
+	}
+	existsResult, err := backend.ExecuteFile(t.Context(), fence, &runnerprotocol.FileOpen{
+		Operation: runnerprotocol.FileOperation_FILE_OPERATION_EXISTS, WorkspaceRelativePath: "qualification/data.bin",
+	}, nil)
+	if err != nil || !existsResult.Metadata.GetExists() {
+		t.Fatalf("qualified File exists = %#v, %v", existsResult, err)
+	}
+	missingResult, err := backend.ExecuteFile(t.Context(), fence, &runnerprotocol.FileOpen{
+		Operation: runnerprotocol.FileOperation_FILE_OPERATION_EXISTS, WorkspaceRelativePath: "qualification/missing",
+	}, nil)
+	if err != nil || missingResult.Metadata.GetExists() || missingResult.Terminal.GetKind() != runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_COMPLETED {
+		t.Fatalf("qualified missing File exists = %#v, %v", missingResult, err)
+	}
+	recursiveMkdir, err := backend.ExecuteFile(t.Context(), fence, &runnerprotocol.FileOpen{
+		Operation: runnerprotocol.FileOperation_FILE_OPERATION_MKDIR, WorkspaceRelativePath: "qualification/nested/child", Recursive: true,
+	}, nil)
+	if err != nil || recursiveMkdir.Terminal.GetKind() != runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_COMPLETED {
+		t.Fatalf("qualified recursive File mkdir = %#v, %v", recursiveMkdir, err)
+	}
 	var streamed bytes.Buffer
+	streamControls := make(chan runnercontrol.ExecControl, 1)
+	streamControls <- runnercontrol.ExecControl{Credit: 1024}
+	close(streamControls)
 	streamTerminal, err := backend.ExecuteStreaming(t.Context(), fence, &runnerprotocol.ExecOpen{
 		Command: &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{"/bin/sh", "-c", "printf streamed"}}},
 		Cwd:     "/workspace", Streaming: true, OutputLimitBytes: 1024,
-	}, make(chan runnercontrol.ExecControl), func(_ runnerprotocol.ExecOutputChannel, data []byte) error {
+	}, streamControls, func(_ runnerprotocol.ExecOutputChannel, data []byte) error {
 		_, err := streamed.Write(data)
 		return err
 	})
 	if err != nil || streamed.String() != "streamed" || streamTerminal.GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED {
 		t.Fatalf("qualified streaming Exec = %q %#v, %v", streamed.String(), streamTerminal, err)
+	}
+	stdinControls := make(chan runnercontrol.ExecControl, 3)
+	stdinControls <- runnercontrol.ExecControl{Input: &runnerprotocol.ExecInput{Data: []byte("interactive-stdin")}}
+	stdinControls <- runnercontrol.ExecControl{Input: &runnerprotocol.ExecInput{EndOfInput: true}}
+	stdinControls <- runnercontrol.ExecControl{Credit: 1024}
+	close(stdinControls)
+	streamed.Reset()
+	stdinTerminal, err := backend.ExecuteStreaming(t.Context(), fence, &runnerprotocol.ExecOpen{
+		Command: &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{"/bin/cat"}}},
+		Cwd:     "/workspace", Streaming: true, OutputLimitBytes: 1024,
+	}, stdinControls, func(_ runnerprotocol.ExecOutputChannel, data []byte) error {
+		_, err := streamed.Write(data)
+		return err
+	})
+	if err != nil || streamed.String() != "interactive-stdin" || stdinTerminal.GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED {
+		t.Fatalf("qualified streaming stdin = %q %#v, %v", streamed.String(), stdinTerminal, err)
+	}
+	creditControls := make(chan runnercontrol.ExecControl, 3)
+	creditControls <- runnercontrol.ExecControl{Input: &runnerprotocol.ExecInput{EndOfInput: true}}
+	creditOutput := make(chan []byte, 1)
+	creditResult := make(chan error, 1)
+	go func() {
+		terminal, executeErr := backend.ExecuteStreaming(t.Context(), fence, &runnerprotocol.ExecOpen{
+			Command: &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{"/bin/sh", "-c", "printf credit-gated"}}},
+			Cwd:     "/workspace", Streaming: true, OutputLimitBytes: 1024,
+		}, creditControls, func(_ runnerprotocol.ExecOutputChannel, data []byte) error {
+			creditOutput <- bytes.Clone(data)
+			return nil
+		})
+		if executeErr == nil && terminal.GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED {
+			executeErr = fmt.Errorf("unexpected credit terminal: %s", terminal.GetKind())
+		}
+		creditResult <- executeErr
+	}()
+	select {
+	case output := <-creditOutput:
+		t.Fatalf("qualified streaming output bypassed credit: %q", output)
+	case <-time.After(100 * time.Millisecond):
+	}
+	creditControls <- runnercontrol.ExecControl{Credit: 1024}
+	close(creditControls)
+	if output := <-creditOutput; string(output) != "credit-gated" {
+		t.Fatalf("qualified credit-gated output = %q", output)
+	}
+	if err := <-creditResult; err != nil {
+		t.Fatal(err)
+	}
+	exhausted, err := backend.ExecuteBuffered(t.Context(), fence, &runnerprotocol.ExecOpen{
+		Command: &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{"/bin/sh", "-c", "printf 0123456789"}}},
+		Cwd:     "/workspace", OutputLimitBytes: 5,
+	})
+	if err != nil || string(exhausted.Stdout) != "01234" || exhausted.Terminal.GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_OUTPUT_EXHAUSTED {
+		t.Fatalf("qualified output exhaustion = %#v, %v", exhausted, err)
+	}
+	cancelCtx, cancelExec := context.WithCancel(t.Context())
+	go func() { time.Sleep(100 * time.Millisecond); cancelExec() }()
+	cancelled, err := backend.ExecuteBuffered(cancelCtx, fence, &runnerprotocol.ExecOpen{
+		Command: &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{"/bin/sleep", "5"}}},
+		Cwd:     "/workspace", OutputLimitBytes: 1024,
+	})
+	if err != nil || cancelled.Terminal.GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED {
+		t.Fatalf("qualified Exec cancellation = %#v, %v", cancelled, err)
+	}
+	deadline, err := backend.ExecuteBuffered(t.Context(), fence, &runnerprotocol.ExecOpen{
+		Command: &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{"/bin/sleep", "5"}}},
+		Cwd:     "/workspace", DeadlineUnixMs: uint64(time.Now().Add(100 * time.Millisecond).UnixMilli()), OutputLimitBytes: 1024,
+	})
+	if err != nil || deadline.Terminal.GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_DEADLINE_EXCEEDED {
+		t.Fatalf("qualified Exec deadline = %#v, %v", deadline, err)
+	}
+	signalled, err := backend.ExecuteBuffered(t.Context(), fence, &runnerprotocol.ExecOpen{
+		Command: &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{"/bin/sh", "-c", "kill -TERM $$"}}},
+		Cwd:     "/workspace", OutputLimitBytes: 1024,
+	})
+	if err != nil || signalled.Terminal.GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED || signalled.Terminal.GetSignal() != 15 {
+		t.Fatalf("qualified Exec signal = %#v, %v", signalled, err)
+	}
+	runnerconformance.RunDataPlane(t, runnerconformance.DataPlaneFixture{
+		Backend: backend, PTY: backend, Port: backend, Fence: fence,
+	})
+	ptyControls := make(chan runnercontrol.PTYControl, 2)
+	ptyControls <- runnercontrol.PTYControl{Rows: 40, Columns: 100}
+	ptyControls <- runnercontrol.PTYControl{Credit: 1024}
+	close(ptyControls)
+	var ptyOutput bytes.Buffer
+	ptyTerminal, err := backend.ExecutePTY(t.Context(), fence, &runnerprotocol.ExecOpen{
+		Command: &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{"/bin/sh", "-c", "printf pty-ready"}}},
+		Cwd:     "/workspace", Streaming: true, AllocatePty: true, PtyRows: 24, PtyColumns: 80, OutputLimitBytes: 1024,
+	}, ptyControls, func(data []byte) error { _, err := ptyOutput.Write(data); return err })
+	if err != nil || ptyOutput.String() != "pty-ready" || ptyTerminal.GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED {
+		t.Fatalf("qualified PTY = %q %#v, %v", ptyOutput.String(), ptyTerminal, err)
+	}
+	portServer, err := backend.ExecuteBuffered(t.Context(), fence, &runnerprotocol.ExecOpen{
+		Command: &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{"/bin/sh", "-c", "nc -l -p 23456 -e /bin/cat </dev/null >/dev/null 2>&1 & sleep 0.1"}}},
+		Cwd:     "/workspace", OutputLimitBytes: 1024,
+	})
+	if err != nil || portServer.Terminal.GetKind() != runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED {
+		t.Fatalf("start qualified guest Port server = %#v, %v", portServer, err)
+	}
+	port, err := backend.OpenPort(t.Context(), fence, &runnerprotocol.PortOpen{Protocol: "tcp", GuestPort: 23456, IdleTimeoutMs: 30_000})
+	if err != nil {
+		t.Fatalf("qualified Port open: %v", err)
+	}
+	portContent := []byte{0, 1, 2, 254, 255}
+	if err := port.Write(t.Context(), portContent); err != nil {
+		t.Fatalf("qualified Port write: %v", err)
+	}
+	portResponse, err := port.Read(t.Context(), len(portContent))
+	if err != nil || !bytes.Equal(portResponse, portContent) {
+		t.Fatalf("qualified Port response = %v, %v", portResponse, err)
+	}
+	if err := port.Close(); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("qualified Port close: %v", err)
+	}
+	postPort, err := backend.ExecuteBuffered(t.Context(), fence, &runnerprotocol.ExecOpen{
+		Command: &runnerprotocol.ExecOpen_Shell{Shell: "printf post-port"}, DeadlineUnixMs: uint64(time.Now().Add(2 * time.Second).UnixMilli()), OutputLimitBytes: 1024,
+	})
+	if err != nil || string(postPort.Stdout) != "post-port" {
+		t.Fatalf("qualified post-Port operation = %#v, %v", postPort, err)
+	}
+	removeResult, err := backend.ExecuteFile(t.Context(), fence, &runnerprotocol.FileOpen{
+		Operation: runnerprotocol.FileOperation_FILE_OPERATION_REMOVE, WorkspaceRelativePath: "qualification", Recursive: true,
+	}, nil)
+	if err != nil || removeResult.Terminal.GetKind() != runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_COMPLETED {
+		t.Fatalf("qualified File remove = %#v, %v", removeResult, err)
 	}
 	overCapacity := proto.Clone(assignment).(*runnerprotocol.AssignmentCommand)
 	overCapacity.Fence = &runnerprotocol.AssignmentFence{

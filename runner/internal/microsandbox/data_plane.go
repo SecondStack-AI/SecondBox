@@ -3,9 +3,12 @@ package microsandbox
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	microsandboxprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/microsandboxprotocol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
@@ -28,14 +31,19 @@ func (backend *AssignmentBackend) ExecuteBuffered(
 	if err != nil {
 		return runnercontrol.BufferedExecResult{}, err
 	}
-	events, err := active.process.request(opCtx, &microsandboxprotocol.Envelope_Exec{Exec: request})
+	result := runnercontrol.BufferedExecResult{}
+	terminal, err := active.process.execOperation(opCtx, request, nil, func(data *microsandboxprotocol.StreamData) error {
+		if data.Channel == microsandboxprotocol.StreamChannel_STREAM_CHANNEL_STDERR {
+			result.Stderr = append(result.Stderr, data.Data...)
+		} else {
+			result.Stdout = append(result.Stdout, data.Data...)
+		}
+		return nil
+	})
 	if err != nil {
 		return runnercontrol.BufferedExecResult{}, err
 	}
-	result, err := translateExecEvents(events, open.OutputLimitBytes, nil)
-	if err != nil {
-		return runnercontrol.BufferedExecResult{}, err
-	}
+	result.Terminal = helperExecTerminal(terminal)
 	if !backend.operationFenceActive(active, fence) {
 		return runnercontrol.BufferedExecResult{}, staleOperationError()
 	}
@@ -58,24 +66,25 @@ func (backend *AssignmentBackend) ExecuteStreaming(
 	if err != nil {
 		return nil, err
 	}
-	// Fixed Open stdin is sent atomically. Subsequent controls are drained while
-	// the helper operation runs; the helper protocol rejects unsupported signal
-	// values rather than silently dropping them.
-	done := make(chan struct{})
-	defer close(done)
-	go drainExecControls(opCtx, controls, done)
-	events, err := active.process.request(opCtx, &microsandboxprotocol.Envelope_Exec{Exec: request})
-	if err != nil {
-		return nil, err
-	}
-	result, err := translateExecEvents(events, open.OutputLimitBytes, emit)
+	helperControls := make(chan helperExecControl, 256)
+	bridgeDone := make(chan struct{})
+	credit := newMicrosandboxOutputCredit()
+	go bridgeExecControls(opCtx, controls, helperControls, credit, bridgeDone)
+	terminal, err := active.process.execOperation(opCtx, request, helperControls, func(data *microsandboxprotocol.StreamData) error {
+		channel := runnerprotocol.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT
+		if data.Channel == microsandboxprotocol.StreamChannel_STREAM_CHANNEL_STDERR {
+			channel = runnerprotocol.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDERR
+		}
+		return emitExecWithCredit(opCtx, credit, channel, data.Data, emit)
+	})
+	close(bridgeDone)
 	if err != nil {
 		return nil, err
 	}
 	if !backend.operationFenceActive(active, fence) {
 		return nil, staleOperationError()
 	}
-	return result.Terminal, nil
+	return helperExecTerminal(terminal), nil
 }
 
 func (backend *AssignmentBackend) ExecutePTY(
@@ -94,21 +103,21 @@ func (backend *AssignmentBackend) ExecutePTY(
 	if err != nil {
 		return nil, err
 	}
-	done := make(chan struct{})
-	defer close(done)
-	go drainPTYControls(opCtx, controls, done)
-	events, err := active.process.request(opCtx, &microsandboxprotocol.Envelope_Exec{Exec: request})
-	if err != nil {
-		return nil, err
-	}
-	result, err := translateExecEvents(events, open.OutputLimitBytes, func(_ runnerprotocol.ExecOutputChannel, data []byte) error { return emit(data) })
+	helperControls := make(chan helperExecControl, 256)
+	bridgeDone := make(chan struct{})
+	credit := newMicrosandboxOutputCredit()
+	go bridgePTYControls(opCtx, controls, helperControls, credit, bridgeDone)
+	terminal, err := active.process.execOperation(opCtx, request, helperControls, func(data *microsandboxprotocol.StreamData) error {
+		return emitPTYWithCredit(opCtx, credit, data.Data, emit)
+	})
+	close(bridgeDone)
 	if err != nil {
 		return nil, err
 	}
 	if !backend.operationFenceActive(active, fence) {
 		return nil, staleOperationError()
 	}
-	return result.Terminal, nil
+	return helperExecTerminal(terminal), nil
 }
 
 func (backend *AssignmentBackend) ExecuteFile(
@@ -126,7 +135,7 @@ func (backend *AssignmentBackend) ExecuteFile(
 	if err != nil {
 		return runnercontrol.FileOperationResult{}, err
 	}
-	events, err := active.process.request(opCtx, &microsandboxprotocol.Envelope_File{File: request})
+	events, err := active.process.fileOperation(opCtx, request, content)
 	if err != nil {
 		return runnercontrol.FileOperationResult{}, err
 	}
@@ -136,6 +145,19 @@ func (backend *AssignmentBackend) ExecuteFile(
 	}
 	if !backend.operationFenceActive(active, fence) {
 		return runnercontrol.FileOperationResult{}, staleOperationError()
+	}
+	if open.Operation == runnerprotocol.FileOperation_FILE_OPERATION_READ {
+		if uint64(len(result.Content)) > open.ExpectedSize {
+			result.Content = nil
+			result.Terminal = &runnerprotocol.FileTerminal{Kind: runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_LIMIT_EXCEEDED, SafeDetail: "file read limit exceeded"}
+		} else {
+			digest := sha256.Sum256(result.Content)
+			if result.Metadata == nil {
+				result.Metadata = &runnerprotocol.FileMetadata{Exists: true, Kind: runnerprotocol.FileKind_FILE_KIND_FILE}
+			}
+			result.Metadata.Size = uint64(len(result.Content))
+			result.Metadata.Checksum = "sha256:" + hex.EncodeToString(digest[:])
+		}
 	}
 	return result, nil
 }
@@ -147,7 +169,7 @@ func microsandboxExecRequest(open *runnerprotocol.ExecOpen, requirePTY bool) (*m
 	request := &microsandboxprotocol.ExecRequest{
 		WorkingDirectory: open.Cwd, DeadlineUnixMs: open.DeadlineUnixMs,
 		Pty: open.AllocatePty, Rows: open.PtyRows, Columns: open.PtyColumns,
-		Stdin: bytes.Clone(open.Stdin), OutputLimitBytes: open.OutputLimitBytes,
+		Stdin: bytes.Clone(open.Stdin), OutputLimitBytes: open.OutputLimitBytes, Streaming: open.Streaming,
 	}
 	if requirePTY && (!open.AllocatePty || !open.Streaming || open.PtyRows == 0 || open.PtyColumns == 0 || open.PtyRows > 65535 || open.PtyColumns > 65535) {
 		return nil, fmt.Errorf("SecondBox Microsandbox PTY dimensions or streaming mode is invalid")
@@ -176,17 +198,29 @@ func microsandboxFileRequest(open *runnerprotocol.FileOpen, content []byte) (*mi
 	if open == nil {
 		return nil, fmt.Errorf("SecondBox Microsandbox File Open is required")
 	}
-	request := &microsandboxprotocol.FileRequest{Path: open.WorkspaceRelativePath, Recursive: open.Recursive, Content: bytes.Clone(content), Mode: microsandboxFileCreateMode}
+	request := &microsandboxprotocol.FileRequest{Path: open.WorkspaceRelativePath, Recursive: open.Recursive, Force: open.Force, Content: bytes.Clone(content), Mode: microsandboxFileCreateMode}
 	switch open.Operation {
 	case runnerprotocol.FileOperation_FILE_OPERATION_READ:
 		request.Operation = microsandboxprotocol.Operation_OPERATION_FILE_READ
+		request.Limit = open.ExpectedSize
+		if request.Limit != ^uint64(0) {
+			request.Limit++
+		}
 	case runnerprotocol.FileOperation_FILE_OPERATION_WRITE:
 		request.Operation = microsandboxprotocol.Operation_OPERATION_FILE_WRITE
+		request.Limit = open.ExpectedSize
+		request.Content = nil
 		if uint64(len(content)) != open.ExpectedSize {
 			return nil, fmt.Errorf("SecondBox Microsandbox File content differs from expected size")
 		}
-	case runnerprotocol.FileOperation_FILE_OPERATION_STAT, runnerprotocol.FileOperation_FILE_OPERATION_EXISTS:
+		digest := sha256.Sum256(content)
+		if open.ExpectedChecksum != "sha256:"+hex.EncodeToString(digest[:]) {
+			return nil, fmt.Errorf("SecondBox Microsandbox File content differs from expected checksum")
+		}
+	case runnerprotocol.FileOperation_FILE_OPERATION_STAT:
 		request.Operation = microsandboxprotocol.Operation_OPERATION_FILE_STAT
+	case runnerprotocol.FileOperation_FILE_OPERATION_EXISTS:
+		request.Operation = microsandboxprotocol.Operation_OPERATION_FILE_EXISTS
 	case runnerprotocol.FileOperation_FILE_OPERATION_LIST:
 		request.Operation = microsandboxprotocol.Operation_OPERATION_FILE_LIST
 	case runnerprotocol.FileOperation_FILE_OPERATION_MKDIR:
@@ -200,46 +234,20 @@ func microsandboxFileRequest(open *runnerprotocol.FileOpen, content []byte) (*mi
 	return request, nil
 }
 
-func translateExecEvents(events []*microsandboxprotocol.Envelope, limit uint64, emit func(runnerprotocol.ExecOutputChannel, []byte) error) (runnercontrol.BufferedExecResult, error) {
-	result := runnercontrol.BufferedExecResult{}
-	var used uint64
-	for _, event := range events {
-		if data := event.GetStreamData(); data != nil {
-			if uint64(len(data.Data)) > limit-used {
-				result.Terminal = &runnerprotocol.ExecTerminal{Kind: runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_OUTPUT_EXHAUSTED, ExitCode: -1, LimitBytes: limit, SafeDetail: "output limit exhausted"}
-				return result, nil
-			}
-			used += uint64(len(data.Data))
-			channel := runnerprotocol.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDOUT
-			if data.Channel == microsandboxprotocol.StreamChannel_STREAM_CHANNEL_STDERR {
-				channel = runnerprotocol.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDERR
-			}
-			if emit != nil {
-				if err := emit(channel, data.Data); err != nil {
-					return result, err
-				}
-			} else if channel == runnerprotocol.ExecOutputChannel_EXEC_OUTPUT_CHANNEL_STDERR {
-				result.Stderr = append(result.Stderr, data.Data...)
-			} else {
-				result.Stdout = append(result.Stdout, data.Data...)
-			}
-		}
-		if terminal := event.GetTerminal(); terminal != nil {
-			result.Terminal = helperExecTerminal(terminal)
-		}
-	}
-	if result.Terminal == nil {
-		return result, fmt.Errorf("SecondBox Microsandbox Exec completed without terminal")
-	}
-	return result, nil
-}
-
 func helperExecTerminal(value *microsandboxprotocol.TerminalEvent) *runnerprotocol.ExecTerminal {
 	kind := runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED
 	if value.Reason == "spawn-failed" {
 		kind = runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_SPAWN_FAILED
 	}
-	if value.Reason != "exited" && value.Reason != "spawn-failed" {
+	switch value.Reason {
+	case "deadline-exceeded":
+		kind = runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_DEADLINE_EXCEEDED
+	case "cancelled":
+		kind = runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_CANCELLED
+	case "output-exhausted":
+		kind = runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_OUTPUT_EXHAUSTED
+	case "exited", "spawn-failed":
+	default:
 		kind = runnerprotocol.ExecTerminalKind_EXEC_TERMINAL_KIND_INFRASTRUCTURE_FAILED
 	}
 	return &runnerprotocol.ExecTerminal{Kind: kind, ExitCode: value.ExitCode, Signal: value.Signal, SpawnFailureReason: runnerprotocol.SpawnFailureReason(value.SpawnFailureReason), InfrastructureFailureReason: runnerprotocol.InfrastructureFailureReason(value.InfrastructureFailureReason), Retryable: value.Retryable, ElapsedMilliseconds: value.ElapsedMilliseconds, LimitBytes: value.LimitBytes, SafeDetail: value.Reason}
@@ -249,6 +257,9 @@ func translateFileEvents(events []*microsandboxprotocol.Envelope) (runnercontrol
 	result := runnercontrol.FileOperationResult{}
 	for _, event := range events {
 		if data := event.GetStreamData(); data != nil {
+			if data.Channel != microsandboxprotocol.StreamChannel_STREAM_CHANNEL_FILE {
+				return runnercontrol.FileOperationResult{}, fmt.Errorf("SecondBox Microsandbox File returned an unexpected stream channel")
+			}
 			result.Content = append(result.Content, data.Data...)
 		}
 		if metadata := event.GetFileMetadata(); metadata != nil {
@@ -258,12 +269,19 @@ func translateFileEvents(events []*microsandboxprotocol.Envelope) (runnercontrol
 			}
 		}
 		if terminal := event.GetTerminal(); terminal != nil {
-			kind := runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_COMPLETED
-			if !terminal.Success {
-				kind = runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_FAILED
-				if strings.Contains(strings.ToLower(terminal.Reason), "not found") || strings.Contains(terminal.Reason, "ENOENT") {
-					kind = runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_NOT_FOUND
-				}
+			kind := runnerprotocol.FileTerminalKind(terminal.FileTerminalKind)
+			switch kind {
+			case runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_COMPLETED,
+				runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_NOT_FOUND,
+				runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_INVALID_PATH,
+				runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_PERMISSION_DENIED,
+				runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_CHECKSUM_MISMATCH,
+				runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_LIMIT_EXCEEDED,
+				runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_CANCELLED,
+				runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_FENCED,
+				runnerprotocol.FileTerminalKind_FILE_TERMINAL_KIND_FAILED:
+			default:
+				return runnercontrol.FileOperationResult{}, fmt.Errorf("SecondBox Microsandbox File returned unknown terminal kind %d", terminal.FileTerminalKind)
 			}
 			result.Terminal = &runnerprotocol.FileTerminal{Kind: kind, SafeDetail: terminal.Reason}
 		}
@@ -274,34 +292,133 @@ func translateFileEvents(events []*microsandboxprotocol.Envelope) (runnercontrol
 	return result, nil
 }
 
-func drainExecControls(ctx context.Context, controls <-chan runnercontrol.ExecControl, done <-chan struct{}) {
+func bridgeExecControls(ctx context.Context, controls <-chan runnercontrol.ExecControl, output chan<- helperExecControl, credit *microsandboxOutputCredit, done <-chan struct{}) {
+	defer close(output)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-done:
 			return
-		case _, ok := <-controls:
+		case control, ok := <-controls:
 			if !ok {
 				return
+			}
+			if control.Credit != 0 {
+				credit.add(control.Credit)
+			}
+			if control.Input != nil {
+				select {
+				case output <- helperExecControl{data: bytes.Clone(control.Input.Data), eof: control.Input.EndOfInput}:
+				case <-ctx.Done():
+					return
+				case <-done:
+					return
+				}
 			}
 		}
 	}
 }
-func drainPTYControls(ctx context.Context, controls <-chan runnercontrol.PTYControl, done <-chan struct{}) {
+func bridgePTYControls(ctx context.Context, controls <-chan runnercontrol.PTYControl, output chan<- helperExecControl, credit *microsandboxOutputCredit, done <-chan struct{}) {
+	defer close(output)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-done:
 			return
-		case _, ok := <-controls:
+		case control, ok := <-controls:
 			if !ok {
+				return
+			}
+			if control.Credit != 0 {
+				credit.add(control.Credit)
+			}
+			if len(control.Input) == 0 && control.Rows == 0 && control.Columns == 0 {
+				continue
+			}
+			translated := helperExecControl{data: bytes.Clone(control.Input), rows: control.Rows, columns: control.Columns}
+			select {
+			case output <- translated:
+			case <-ctx.Done():
+				return
+			case <-done:
 				return
 			}
 		}
 	}
 }
+
+type microsandboxOutputCredit struct {
+	mu        sync.Mutex
+	available uint64
+	wake      chan struct{}
+}
+
+func newMicrosandboxOutputCredit() *microsandboxOutputCredit {
+	return &microsandboxOutputCredit{wake: make(chan struct{}, 1)}
+}
+
+func (credit *microsandboxOutputCredit) add(value uint64) {
+	credit.mu.Lock()
+	if ^uint64(0)-credit.available < value {
+		credit.available = ^uint64(0)
+	} else {
+		credit.available += value
+	}
+	credit.mu.Unlock()
+	select {
+	case credit.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (credit *microsandboxOutputCredit) take(ctx context.Context, maximum uint64) (uint64, error) {
+	for {
+		credit.mu.Lock()
+		if credit.available != 0 {
+			value := min(credit.available, maximum)
+			credit.available -= value
+			credit.mu.Unlock()
+			return value, nil
+		}
+		credit.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		case <-credit.wake:
+		}
+	}
+}
+
+func emitExecWithCredit(ctx context.Context, credit *microsandboxOutputCredit, channel runnerprotocol.ExecOutputChannel, data []byte, emit func(runnerprotocol.ExecOutputChannel, []byte) error) error {
+	for len(data) != 0 {
+		allowed, err := credit.take(ctx, uint64(len(data)))
+		if err != nil {
+			return err
+		}
+		if err := emit(channel, data[:allowed]); err != nil {
+			return err
+		}
+		data = data[allowed:]
+	}
+	return nil
+}
+
+func emitPTYWithCredit(ctx context.Context, credit *microsandboxOutputCredit, data []byte, emit func([]byte) error) error {
+	for len(data) != 0 {
+		allowed, err := credit.take(ctx, uint64(len(data)))
+		if err != nil {
+			return err
+		}
+		if err := emit(data[:allowed]); err != nil {
+			return err
+		}
+		data = data[allowed:]
+	}
+	return nil
+}
+
 func staleOperationError() error {
 	return errors.New("SecondBox Microsandbox operation was fenced before terminal publication")
 }

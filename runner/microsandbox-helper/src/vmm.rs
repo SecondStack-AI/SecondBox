@@ -138,12 +138,15 @@ impl LaunchConfiguration {
                     .memory_mib(memory_mib)
                     .max_vcpus(vcpus)
                     .max_memory_mib(memory_mib)
-                    .enable_inet_hijack(false)
-                ;
+                    .enable_inet_hijack(false);
                 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-                { machine.split_irqchip(true) }
+                {
+                    machine.split_irqchip(true)
+                }
                 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-                { machine }
+                {
+                    machine
+                }
             })
             .kernel(|kernel| {
                 let _validated_host_agent = agentd;

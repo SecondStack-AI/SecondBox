@@ -587,3 +587,16 @@ index 0ba2e850..bb7fe360 100644
  
  /// Profile-v1 journal size: 64 MiB with 4 KiB filesystem blocks.
  const DEFAULT_ROOTFS_JOURNAL_BLOCKS: u32 = 16_384;
+diff --git a/crates/agentd/lib/process.rs b/crates/agentd/lib/process.rs
+index 90b28a78..5a8b1e49 100644
+--- a/crates/agentd/lib/process.rs
++++ b/crates/agentd/lib/process.rs
+@@ -531,6 +531,8 @@ fn exit_code(status: i32) -> i32 {
+     if libc::WIFEXITED(status) {
+         libc::WEXITSTATUS(status)
++    } else if libc::WIFSIGNALED(status) {
++        -libc::WTERMSIG(status)
+     } else {
+         -1
+     }
+ }

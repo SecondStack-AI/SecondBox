@@ -18,6 +18,7 @@ enum Operation {
   OPERATION_TCP = 10;
   OPERATION_SHUTDOWN = 11;
   OPERATION_FORMAT_WORKSPACE = 12;
+  OPERATION_FILE_EXISTS = 13;
 }
 
 message Envelope {
@@ -107,6 +108,7 @@ message ExecRequest {
   uint32 rows = 7;
   uint32 columns = 8;
   uint64 output_limit_bytes = 9;
+  bool streaming = 10;
 }
 
 message FileRequest {
@@ -118,6 +120,7 @@ message FileRequest {
   uint32 mode = 6;
   bool recursive = 7;
   bytes content = 8;
+  bool force = 9;
 }
 
 message PtyRequest {
@@ -147,6 +150,7 @@ enum StreamChannel {
   STREAM_CHANNEL_STDOUT = 2;
   STREAM_CHANNEL_STDERR = 3;
   STREAM_CHANNEL_TCP = 4;
+  STREAM_CHANNEL_FILE = 5;
 }
 
 message StreamCredit { uint64 bytes = 1; }
@@ -161,6 +165,7 @@ message TerminalEvent {
   bool retryable = 7;
   uint64 elapsed_milliseconds = 8;
   uint64 limit_bytes = 9;
+  uint32 file_terminal_kind = 10;
 }
 
 message FileMetadataEvent {

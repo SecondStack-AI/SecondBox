@@ -3,6 +3,7 @@
 use std::{
     io::{Read, Write},
     os::unix::net::UnixStream,
+    path::Path,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -15,8 +16,14 @@ use microsandbox_agent_client::AgentClient;
 use microsandbox_protocol::{
     codec,
     core::InitAck,
-    exec::{ExecExited, ExecFailed, ExecRequest, ExecStderr, ExecStdin, ExecStdout},
-    fs::{FsData, FsEntryInfo, FsOp, FsOpenOptions, FsRequest, FsResponse, FsResponseData, FS_CHUNK_SIZE},
+    exec::{
+        ExecExited, ExecFailed, ExecFailureKind, ExecRequest, ExecResize, ExecSignal, ExecStderr,
+        ExecStdin, ExecStdout,
+    },
+    fs::{
+        FS_CHUNK_SIZE, FsData, FsEntryInfo, FsOp, FsOpenOptions, FsRequest, FsResponse,
+        FsResponseData,
+    },
     message::{Message, MessageType},
     tcp::{TcpClose, TcpConnect, TcpData, TcpEof},
 };
@@ -35,13 +42,6 @@ pub struct AgentSession {
     stopping: Arc<AtomicBool>,
 }
 
-pub struct AgentExecResult {
-    pub stdout: Vec<u8>,
-    pub stderr: Vec<u8>,
-    pub exit_code: i32,
-    pub failed: Option<ExecFailed>,
-}
-
 pub struct AgentFileResult {
     pub content: Vec<u8>,
     pub metadata: Option<helper::FileMetadataEvent>,
@@ -51,6 +51,58 @@ pub struct AgentTcpSession<'a> {
     session: &'a AgentSession,
     id: u32,
     events: tokio::sync::mpsc::Receiver<Message>,
+}
+
+pub struct AgentExecSession<'a> {
+    session: &'a AgentSession,
+    id: u32,
+    events: tokio::sync::mpsc::Receiver<Message>,
+}
+
+impl AgentExecSession<'_> {
+    pub fn next(&mut self, timeout: Duration) -> Result<Option<Message>, String> {
+        self.session.runtime.block_on(async {
+            match tokio::time::timeout(timeout, self.events.recv()).await {
+                Ok(value) => Ok(value),
+                Err(_) => Ok(None),
+            }
+        })
+    }
+
+    pub fn stdin(&self, data: Vec<u8>) -> Result<(), String> {
+        self.session
+            .runtime
+            .block_on(self.session.client.send(
+                self.id,
+                MessageType::ExecStdin,
+                &ExecStdin { data },
+            ))
+            .map_err(|error| format!("send Exec stdin: {error}"))
+    }
+
+    pub fn resize(&self, rows: u32, columns: u32) -> Result<(), String> {
+        let rows = u16::try_from(rows).map_err(|_| "PTY rows exceed u16")?;
+        let cols = u16::try_from(columns).map_err(|_| "PTY columns exceed u16")?;
+        self.session
+            .runtime
+            .block_on(self.session.client.send(
+                self.id,
+                MessageType::ExecResize,
+                &ExecResize { rows, cols },
+            ))
+            .map_err(|error| format!("resize Exec PTY: {error}"))
+    }
+
+    pub fn signal(&self, signal: i32) -> Result<(), String> {
+        self.session
+            .runtime
+            .block_on(self.session.client.send(
+                self.id,
+                MessageType::ExecSignal,
+                &ExecSignal { signal },
+            ))
+            .map_err(|error| format!("signal Exec: {error}"))
+    }
 }
 
 impl AgentTcpSession<'_> {
@@ -64,17 +116,35 @@ impl AgentTcpSession<'_> {
     }
 
     pub fn send(&self, data: Vec<u8>) -> Result<(), String> {
-        self.session.runtime.block_on(self.session.client.send(self.id, MessageType::TcpData, &TcpData { data }))
+        self.session
+            .runtime
+            .block_on(
+                self.session
+                    .client
+                    .send(self.id, MessageType::TcpData, &TcpData { data }),
+            )
             .map_err(|error| format!("send TCP data: {error}"))
     }
 
     pub fn eof(&self) -> Result<(), String> {
-        self.session.runtime.block_on(self.session.client.send(self.id, MessageType::TcpEof, &TcpEof {}))
+        self.session
+            .runtime
+            .block_on(
+                self.session
+                    .client
+                    .send(self.id, MessageType::TcpEof, &TcpEof {}),
+            )
             .map_err(|error| format!("send TCP EOF: {error}"))
     }
 
     pub fn close(&self) -> Result<(), String> {
-        self.session.runtime.block_on(self.session.client.send(self.id, MessageType::TcpClose, &TcpClose {}))
+        self.session
+            .runtime
+            .block_on(
+                self.session
+                    .client
+                    .send(self.id, MessageType::TcpClose, &TcpClose {}),
+            )
             .map_err(|error| format!("close TCP session: {error}"))
     }
 }
@@ -213,7 +283,10 @@ impl AgentSession {
         })
     }
 
-    pub fn execute(&self, request: &helper::ExecRequest) -> Result<AgentExecResult, String> {
+    pub fn start_exec(
+        &self,
+        request: &helper::ExecRequest,
+    ) -> Result<AgentExecSession<'_>, String> {
         if request.argv.is_empty() || request.argv[0].is_empty() {
             return Err("Exec argv is empty".into());
         }
@@ -230,38 +303,61 @@ impl AgentSession {
             cols: if request.pty { cols } else { 80 },
             rlimits: Vec::new(),
         };
+        let (id, events) = self
+            .runtime
+            .block_on(self.client.stream(MessageType::ExecRequest, &exec))
+            .map_err(|error| format!("start Exec: {error}"))?;
+        Ok(AgentExecSession {
+            session: self,
+            id,
+            events,
+        })
+    }
+
+    pub fn preflight_exec(
+        &self,
+        request: &helper::ExecRequest,
+    ) -> Result<Option<ExecFailureKind>, String> {
+        let command = request.argv.first().ok_or("Exec argv is empty")?;
+        if !command.contains('/') {
+            return Ok(None);
+        }
+        let command_path = Path::new(command);
+        let path = if command_path.is_absolute() || request.working_directory.is_empty() {
+            command_path.to_path_buf()
+        } else {
+            Path::new(&request.working_directory).join(command_path)
+        };
+        let path = path
+            .to_str()
+            .ok_or("Exec command path is not valid UTF-8")?
+            .to_owned();
         self.runtime.block_on(async {
-            let (id, mut events) = self.client.stream(MessageType::ExecRequest, &exec).await
-                .map_err(|error| format!("start Exec: {error}"))?;
-            if !request.stdin.is_empty() {
-                self.client.send(id, MessageType::ExecStdin, &ExecStdin { data: request.stdin.clone() }).await
-                    .map_err(|error| format!("send Exec stdin: {error}"))?;
-            }
-            // Empty stdin is the protocol EOF marker, including after fixed input.
-            self.client.send(id, MessageType::ExecStdin, &ExecStdin { data: Vec::new() }).await
-                .map_err(|error| format!("close Exec stdin: {error}"))?;
-            let mut result = AgentExecResult { stdout: Vec::new(), stderr: Vec::new(), exit_code: -1, failed: None };
-            while let Some(event) = events.recv().await {
-                match event.t {
-                    MessageType::ExecStarted | MessageType::ExecStdinError => {}
-                    MessageType::ExecStdout => result.stdout.extend(event.payload::<ExecStdout>()
-                        .map_err(|error| format!("decode Exec stdout: {error}"))?.data),
-                    MessageType::ExecStderr => result.stderr.extend(event.payload::<ExecStderr>()
-                        .map_err(|error| format!("decode Exec stderr: {error}"))?.data),
-                    MessageType::ExecExited => {
-                        result.exit_code = event.payload::<ExecExited>()
-                            .map_err(|error| format!("decode Exec exit: {error}"))?.code;
-                        return Ok(result);
+            match fs_request(
+                &self.client,
+                FsOp::Stat {
+                    path,
+                    follow_symlink: true,
+                },
+            )
+            .await
+            {
+                Ok(response) => match response.data {
+                    Some(FsResponseData::Stat(entry)) if entry.kind == "dir" => {
+                        Ok(Some(ExecFailureKind::NotExecutable))
                     }
-                    MessageType::ExecFailed => {
-                        result.failed = Some(event.payload::<ExecFailed>()
-                            .map_err(|error| format!("decode Exec failure: {error}"))?);
-                        return Ok(result);
+                    Some(FsResponseData::Stat(entry)) if entry.mode & 0o111 == 0 => {
+                        Ok(Some(ExecFailureKind::PermissionDenied))
                     }
-                    other => return Err(format!("Exec received unexpected agent event {}", other.as_str())),
+                    Some(FsResponseData::Stat(_)) => Ok(None),
+                    _ => Err("Exec command preflight returned no metadata".into()),
+                },
+                Err(error) if file_not_found(&error) => Ok(Some(ExecFailureKind::NotFound)),
+                Err(error) if file_permission_denied(&error) => {
+                    Ok(Some(ExecFailureKind::PermissionDenied))
                 }
+                Err(error) => Err(format!("Exec command preflight: {error}")),
             }
-            Err("Exec agent stream closed without a terminal event".into())
         })
     }
 
@@ -271,45 +367,220 @@ impl AgentSession {
             use helper::Operation;
             match Operation::try_from(request.operation).unwrap_or(Operation::Unspecified) {
                 Operation::FileRead => {
-                    let handle = fs_handle(&self.client, FsOp::OpenFile { path, options: FsOpenOptions { read: true, ..Default::default() } }).await?;
+                    validate_workspace_path(&self.client, &path, false).await?;
+                    let handle = fs_handle(
+                        &self.client,
+                        FsOp::OpenFile {
+                            path,
+                            options: FsOpenOptions {
+                                read: true,
+                                ..Default::default()
+                            },
+                        },
+                    )
+                    .await?;
                     let result = async {
-                        let req = FsRequest { op: FsOp::Read { handle, offset: request.offset, len: (request.limit != 0).then_some(request.limit) } };
-                        let (_, mut events) = self.client.stream(MessageType::FsRequest, &req).await.map_err(|e| format!("read file: {e}"))?;
+                        let req = FsRequest {
+                            op: FsOp::Read {
+                                handle,
+                                offset: request.offset,
+                                len: (request.limit != 0).then_some(request.limit),
+                            },
+                        };
+                        let (_, mut events) = self
+                            .client
+                            .stream(MessageType::FsRequest, &req)
+                            .await
+                            .map_err(|e| format!("read file: {e}"))?;
                         let mut content = Vec::new();
                         while let Some(event) = events.recv().await {
                             match event.t {
-                                MessageType::FsData => content.extend(event.payload::<FsData>().map_err(|e| format!("decode file data: {e}"))?.data),
-                                MessageType::FsResponse => { fs_ok(event.payload().map_err(|e| format!("decode file response: {e}"))?)?; return Ok(AgentFileResult { content, metadata: None }); }
-                                other => return Err(format!("file read received unexpected event {}", other.as_str())),
+                                MessageType::FsData => content.extend(
+                                    event
+                                        .payload::<FsData>()
+                                        .map_err(|e| format!("decode file data: {e}"))?
+                                        .data,
+                                ),
+                                MessageType::FsResponse => {
+                                    fs_ok(
+                                        event
+                                            .payload()
+                                            .map_err(|e| format!("decode file response: {e}"))?,
+                                    )?;
+                                    return Ok(AgentFileResult {
+                                        content,
+                                        metadata: None,
+                                    });
+                                }
+                                other => {
+                                    return Err(format!(
+                                        "file read received unexpected event {}",
+                                        other.as_str()
+                                    ));
+                                }
                             }
                         }
                         Err("file read closed without terminal response".into())
-                    }.await;
+                    }
+                    .await;
                     let _ = fs_request(&self.client, FsOp::CloseHandle { handle }).await;
                     result
                 }
                 Operation::FileWrite => {
-                    let handle = fs_handle(&self.client, FsOp::OpenFile { path, options: FsOpenOptions { write: true, create: true, truncate: true, mode: Some(request.mode), ..Default::default() } }).await?;
+                    validate_workspace_path(&self.client, &path, true).await?;
+                    let handle = fs_handle(
+                        &self.client,
+                        FsOp::OpenFile {
+                            path,
+                            options: FsOpenOptions {
+                                write: true,
+                                create: true,
+                                truncate: true,
+                                mode: Some(request.mode),
+                                ..Default::default()
+                            },
+                        },
+                    )
+                    .await?;
                     let result = async {
-                        let req = FsRequest { op: FsOp::Write { handle, offset: request.offset, len: Some(request.content.len() as u64) } };
-                        let (id, mut events) = self.client.stream(MessageType::FsRequest, &req).await.map_err(|e| format!("write file: {e}"))?;
+                        let req = FsRequest {
+                            op: FsOp::Write {
+                                handle,
+                                offset: request.offset,
+                                len: Some(request.content.len() as u64),
+                            },
+                        };
+                        let (id, mut events) = self
+                            .client
+                            .stream(MessageType::FsRequest, &req)
+                            .await
+                            .map_err(|e| format!("write file: {e}"))?;
                         for chunk in request.content.chunks(FS_CHUNK_SIZE) {
-                            self.client.send(id, MessageType::FsData, &FsData { data: chunk.to_vec() }).await.map_err(|e| format!("write file data: {e}"))?;
+                            self.client
+                                .send(
+                                    id,
+                                    MessageType::FsData,
+                                    &FsData {
+                                        data: chunk.to_vec(),
+                                    },
+                                )
+                                .await
+                                .map_err(|e| format!("write file data: {e}"))?;
                         }
-                        self.client.send(id, MessageType::FsData, &FsData { data: Vec::new() }).await.map_err(|e| format!("finish file data: {e}"))?;
+                        self.client
+                            .send(id, MessageType::FsData, &FsData { data: Vec::new() })
+                            .await
+                            .map_err(|e| format!("finish file data: {e}"))?;
                         while let Some(event) = events.recv().await {
-                            if event.t == MessageType::FsResponse { fs_ok(event.payload().map_err(|e| format!("decode file response: {e}"))?)?; return Ok(AgentFileResult { content: Vec::new(), metadata: None }); }
+                            if event.t == MessageType::FsResponse {
+                                fs_ok(
+                                    event
+                                        .payload()
+                                        .map_err(|e| format!("decode file response: {e}"))?,
+                                )?;
+                                return Ok(AgentFileResult {
+                                    content: Vec::new(),
+                                    metadata: None,
+                                });
+                            }
                         }
                         Err("file write closed without terminal response".into())
-                    }.await;
+                    }
+                    .await;
                     let _ = fs_request(&self.client, FsOp::CloseHandle { handle }).await;
                     result
                 }
-                Operation::FileStat => fs_metadata(&self.client, FsOp::Stat { path, follow_symlink: false }).await,
-                Operation::FileList => fs_metadata(&self.client, FsOp::List { path }).await,
-                Operation::FileMkdir => { fs_request(&self.client, FsOp::Mkdir { path, mode: Some(request.mode) }).await?; Ok(empty_file_result()) }
-                Operation::FileRemove if request.recursive => { fs_request(&self.client, FsOp::RemoveDir { path, recursive: true }).await?; Ok(empty_file_result()) }
-                Operation::FileRemove => { fs_request(&self.client, FsOp::Remove { path }).await?; Ok(empty_file_result()) }
+                Operation::FileStat => {
+                    validate_workspace_path(&self.client, &path, false).await?;
+                    fs_metadata(
+                        &self.client,
+                        FsOp::Stat {
+                            path,
+                            follow_symlink: false,
+                        },
+                    )
+                    .await
+                }
+                Operation::FileExists => {
+                    let stat = async {
+                        validate_workspace_path(&self.client, &path, false).await?;
+                        fs_metadata(
+                            &self.client,
+                            FsOp::Stat {
+                                path,
+                                follow_symlink: false,
+                            },
+                        )
+                        .await
+                    }
+                    .await;
+                    match stat {
+                        Ok(result) => Ok(result),
+                        Err(error) if file_not_found(&error) => Ok(AgentFileResult {
+                            content: Vec::new(),
+                            metadata: Some(helper::FileMetadataEvent {
+                                exists: false,
+                                ..Default::default()
+                            }),
+                        }),
+                        Err(error) => Err(error),
+                    }
+                }
+                Operation::FileList => {
+                    validate_workspace_path(&self.client, &path, false).await?;
+                    fs_metadata(&self.client, FsOp::List { path }).await
+                }
+                Operation::FileMkdir if request.recursive => {
+                    mkdir_all(&self.client, &path, request.mode).await?;
+                    Ok(empty_file_result())
+                }
+                Operation::FileMkdir => {
+                    validate_workspace_path(&self.client, &path, true).await?;
+                    fs_request(
+                        &self.client,
+                        FsOp::Mkdir {
+                            path,
+                            mode: Some(request.mode),
+                        },
+                    )
+                    .await?;
+                    Ok(empty_file_result())
+                }
+                Operation::FileRemove if request.recursive => {
+                    let removal = async {
+                        validate_workspace_path(&self.client, &path, false).await?;
+                        fs_request(
+                            &self.client,
+                            FsOp::RemoveDir {
+                                path,
+                                recursive: true,
+                            },
+                        )
+                        .await
+                    }
+                    .await;
+                    match removal {
+                        Ok(_) => Ok(empty_file_result()),
+                        Err(error) if request.force && file_not_found(&error) => {
+                            Ok(empty_file_result())
+                        }
+                        Err(error) => Err(error),
+                    }
+                }
+                Operation::FileRemove => {
+                    let removal = async {
+                        validate_workspace_path(&self.client, &path, false).await?;
+                        fs_request(&self.client, FsOp::Remove { path }).await
+                    }
+                    .await;
+                    match removal {
+                        Ok(_) => Ok(empty_file_result()),
+                        Err(error) if request.force && file_not_found(&error) => {
+                            Ok(empty_file_result())
+                        }
+                        Err(error) => Err(error),
+                    }
+                }
                 _ => Err("unsupported helper File operation".into()),
             }
         })
@@ -317,11 +588,21 @@ impl AgentSession {
 
     pub fn tcp(&self, request: &helper::TcpRequest) -> Result<AgentTcpSession<'_>, String> {
         let port = u16::try_from(request.port).map_err(|_| "TCP port exceeds u16")?;
-        let (id, events) = self.runtime.block_on(self.client.stream(
-            MessageType::TcpConnect,
-            &TcpConnect { host: request.host.clone(), port },
-        )).map_err(|error| format!("connect guest TCP: {error}"))?;
-        Ok(AgentTcpSession { session: self, id, events })
+        let (id, events) = self
+            .runtime
+            .block_on(self.client.stream(
+                MessageType::TcpConnect,
+                &TcpConnect {
+                    host: request.host.clone(),
+                    port,
+                },
+            ))
+            .map_err(|error| format!("connect guest TCP: {error}"))?;
+        Ok(AgentTcpSession {
+            session: self,
+            id,
+            events,
+        })
     }
 
     pub fn shutdown(&self) -> Result<(), String> {
@@ -337,22 +618,129 @@ impl AgentSession {
 }
 
 fn workspace_path(relative: &str) -> Result<String, String> {
-    if relative.is_empty() || relative.starts_with('/') || relative.split('/').any(|part| part == "..") {
+    if relative.is_empty()
+        || relative.starts_with('/')
+        || relative
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
         return Err("workspace-relative path is invalid".into());
     }
     Ok(format!("/workspace/{relative}"))
 }
 
-fn empty_file_result() -> AgentFileResult { AgentFileResult { content: Vec::new(), metadata: None } }
+async fn validate_workspace_path(
+    client: &AgentClient,
+    path: &str,
+    allow_missing_leaf: bool,
+) -> Result<(), String> {
+    let candidate = if allow_missing_leaf {
+        Path::new(path)
+            .parent()
+            .and_then(Path::to_str)
+            .ok_or("workspace-relative path parent is invalid")?
+    } else {
+        path
+    };
+    let response = fs_request(
+        client,
+        FsOp::RealPath {
+            path: candidate.into(),
+        },
+    )
+    .await?;
+    match response.data {
+        Some(FsResponseData::Path(resolved))
+            if resolved == candidate
+                && (resolved == "/workspace" || resolved.starts_with("/workspace/")) =>
+        {
+            Ok(())
+        }
+        Some(FsResponseData::Path(_)) => {
+            Err("workspace-relative path resolves through a symbolic link".into())
+        }
+        _ => Err("workspace-relative path resolution returned no path".into()),
+    }
+}
+
+async fn mkdir_all(client: &AgentClient, path: &str, mode: u32) -> Result<(), String> {
+    let relative = path
+        .strip_prefix("/workspace/")
+        .ok_or("workspace-relative mkdir path is invalid")?;
+    let mut current = String::from("/workspace");
+    for component in relative.split('/') {
+        current.push('/');
+        current.push_str(component);
+        match validate_workspace_path(client, &current, false).await {
+            Ok(()) => continue,
+            Err(error) if file_not_found(&error) => {
+                validate_workspace_path(client, &current, true).await?;
+                match fs_request(
+                    client,
+                    FsOp::Mkdir {
+                        path: current.clone(),
+                        mode: Some(mode),
+                    },
+                )
+                .await
+                {
+                    Ok(_) => {}
+                    Err(error) if file_already_exists(&error) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+fn file_not_found(error: &str) -> bool {
+    let value = error.to_ascii_lowercase();
+    value.contains("enoent")
+        || value.contains("not found")
+        || value.contains("no such file or directory")
+        || value.contains("os error 2")
+}
+
+fn file_already_exists(error: &str) -> bool {
+    let value = error.to_ascii_lowercase();
+    value.contains("eexist") || value.contains("already exists") || value.contains("os error 17")
+}
+
+fn file_permission_denied(error: &str) -> bool {
+    let value = error.to_ascii_lowercase();
+    value.contains("eacces")
+        || value.contains("eperm")
+        || value.contains("permission denied")
+        || value.contains("os error 13")
+}
+
+fn empty_file_result() -> AgentFileResult {
+    AgentFileResult {
+        content: Vec::new(),
+        metadata: None,
+    }
+}
 
 async fn fs_request(client: &AgentClient, op: FsOp) -> Result<FsResponse, String> {
-    let response: FsResponse = client.request(MessageType::FsRequest, &FsRequest { op }).await
-        .map_err(|e| format!("filesystem request: {e}"))?.payload().map_err(|e| format!("decode filesystem response: {e}"))?;
+    let response: FsResponse = client
+        .request(MessageType::FsRequest, &FsRequest { op })
+        .await
+        .map_err(|e| format!("filesystem request: {e}"))?
+        .payload()
+        .map_err(|e| format!("decode filesystem response: {e}"))?;
     fs_ok(response)
 }
 
 fn fs_ok(response: FsResponse) -> Result<FsResponse, String> {
-    if response.ok { Ok(response) } else { Err(response.error.unwrap_or_else(|| "filesystem operation failed".into())) }
+    if response.ok {
+        Ok(response)
+    } else {
+        Err(response
+            .error
+            .unwrap_or_else(|| "filesystem operation failed".into()))
+    }
 }
 
 async fn fs_handle(client: &AgentClient, op: FsOp) -> Result<u64, String> {
@@ -364,22 +752,41 @@ async fn fs_handle(client: &AgentClient, op: FsOp) -> Result<u64, String> {
 
 async fn fs_metadata(client: &AgentClient, op: FsOp) -> Result<AgentFileResult, String> {
     let response = fs_request(client, op).await?;
-    let mut metadata = helper::FileMetadataEvent { exists: true, ..Default::default() };
+    let mut metadata = helper::FileMetadataEvent {
+        exists: true,
+        ..Default::default()
+    };
     match response.data {
         Some(FsResponseData::Stat(entry)) => apply_entry(&mut metadata, &entry),
         Some(FsResponseData::List(entries)) => {
             metadata.kind = 2;
             for entry in entries {
-                metadata.direct_children.push(entry.path.clone());
-                metadata.direct_child_entries.push(helper::FileMetadataEntry {
-                    path: entry.path.clone(), kind: file_kind(&entry.kind), size: entry.size,
-                    modified_at_unix_ms: entry.modified.unwrap_or_default().max(0) as u64 * 1000,
-                });
+                let relative = entry
+                    .path
+                    .strip_prefix("/workspace/")
+                    .ok_or("filesystem list returned an entry outside /workspace")?;
+                let child = Path::new(relative)
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .ok_or("filesystem list returned an invalid child name")?;
+                metadata.direct_children.push(child.into());
+                metadata
+                    .direct_child_entries
+                    .push(helper::FileMetadataEntry {
+                        path: relative.into(),
+                        kind: file_kind(&entry.kind),
+                        size: entry.size,
+                        modified_at_unix_ms: entry.modified.unwrap_or_default().max(0) as u64
+                            * 1000,
+                    });
             }
         }
         _ => {}
     }
-    Ok(AgentFileResult { content: Vec::new(), metadata: Some(metadata) })
+    Ok(AgentFileResult {
+        content: Vec::new(),
+        metadata: Some(metadata),
+    })
 }
 
 fn apply_entry(metadata: &mut helper::FileMetadataEvent, entry: &FsEntryInfo) {
@@ -390,7 +797,12 @@ fn apply_entry(metadata: &mut helper::FileMetadataEvent, entry: &FsEntryInfo) {
 }
 
 fn file_kind(kind: &str) -> u32 {
-    match kind { "file" => 1, "dir" => 2, "symlink" => 3, _ => 0 }
+    match kind {
+        "file" => 1,
+        "dir" => 2,
+        "symlink" => 3,
+        _ => 0,
+    }
 }
 
 impl Drop for AgentSession {

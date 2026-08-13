@@ -61,6 +61,12 @@ Tasks 8M through 10M remain closed until the complete Linux end-to-end gate in T
 No dependency source or artifact was published. The evaluated change is a SecondBox-owned local
 patch and build input only. No external contribution path is authorized.
 
+Task 5L expanded that same local patch solely to preserve signal termination in agentd. The final
+patch/tree identities in the table below therefore supersede the smaller Task 0L build input, while
+the ext4 descriptor, VM lifecycle, and network-policy feasibility conclusions remain unchanged.
+The expanded input was rebuilt locally and requalified on deimos through the complete Task 5L KVM
+data plane; no external repository was modified.
+
 ## Dependency investigation and prerequisite
 
 | Item | Exact evidence |
@@ -77,7 +83,7 @@ patch and build input only. No external contribution path is authorized.
 | Input | Exact evidence |
 | --- | --- |
 | Microsandbox source | commit `5b335537afad433ad2c0308cb54de13b7015b4e7`; tree `dc506dffd600fcea281bd4ebfc924e1b31afcb2a`; Apache-2.0 |
-| Local patch | `runner/microsandbox-patches/0001-explicit-ext4-uuid-fd-api.patch`; SHA-256 `943e728067cce9f0efe9ed578c74f6323bd6c1cf8407822a1e8ee998f64564de`; patched tree `972fd637a835c175a4aa5b11fd52ccd0ab087f95` |
+| Local patch | `runner/microsandbox-patches/0001-explicit-ext4-uuid-fd-api.patch`; SHA-256 `f38294823f2c8e3b8e7918a8c58b48b0c9c7c521874add5d5985af3d4134eb7c`; patched tree `2bb82ba33e2175cd7574ffa6d058c6968453fa4b` |
 | Microsandbox lock | SHA-256 `7827c5aad40cfc4ab36be6aba3bc4c0d923e525c50fc4b54741776bcf13b95c8` |
 | Probe lock | SHA-256 `95f0107a1c27f7ad079012a919213207b4256950b73aec33ee624ed33c4638a7` |
 | libkrun crates | `msb_krun = 0.1.30` SHA-256 `b57b2304dc1cef25b7cdd93be44c6515a97c90e00308b7d35eabc4fe27b02af5`; `msb_krun_utils = 0.1.30` SHA-256 `5f4f682dec7289463f89adfd1df7605a425c069d238265496a99dbff921075a9` |
