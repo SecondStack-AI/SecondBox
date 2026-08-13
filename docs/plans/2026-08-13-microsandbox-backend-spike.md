@@ -1,6 +1,6 @@
 # Plan: Linux-First Mergeable Microsandbox Backend Spike
 
-> **Execution status (2026-08-13): Tasks 0L through 4L passed; Task 5L is next.** Host-daemon checks
+> **Execution status (2026-08-13): Tasks 0L through 5L passed; Task 6L is next.** Host-daemon checks
 > confirm that `deimos` is a real Linux KVM host and that Apple Silicon macOS hosts are available
 > for the later macOS phase. The work is strictly sequential: complete and qualify Linux end to
 > end, then begin macOS.
@@ -280,21 +280,21 @@ to the existing runner protocol and WorkspaceStore. There is no runtime fallback
 Map the existing provider-neutral runner interfaces onto Microsandbox's agent client. Do not add a
 backend-specific public operation surface.
 
-- [ ] Implement bounded buffered exec with typed spawn failures, deadlines, cancellation, exact
+- [x] Implement bounded buffered exec with typed spawn failures, deadlines, cancellation, exact
   stdout/stderr limits, exit status, and signal results.
-- [ ] Implement streaming exec with stdin, signals, caller credit, bounded queues, output-channel
+- [x] Implement streaming exec with stdin, signals, caller credit, bounded queues, output-channel
   preservation, terminal delivery, and guest cancellation.
-- [ ] Implement binary-safe file stat, read, write, list, exists, mkdir, and remove with the existing
+- [x] Implement binary-safe file stat, read, write, list, exists, mkdir, and remove with the existing
   workspace-relative path contracts.
-- [ ] Implement PTY open, input/output, resize, detach/reattach where the public contract supports
+- [x] Implement PTY open, input/output, resize, detach/reattach where the public contract supports
   it, cancellation, and terminal delivery.
-- [ ] Implement Port open as a generation-fenced guest TCP connection with bounded bidirectional
+- [x] Implement Port open as a generation-fenced guest TCP connection with bounded bidirectional
   relay and no backend-created host listener.
-- [ ] Check the complete assignment generation before every operation and again before terminal
+- [x] Check the complete assignment generation before every operation and again before terminal
   publication. Stale work must not reach agentd.
-- [ ] Map every known helper/agentd outcome to an existing provider-neutral result. Treat unknown
+- [x] Map every known helper/agentd outcome to an existing provider-neutral result. Treat unknown
   outcomes as infrastructure failures.
-- [ ] Prove cancellation races, helper death, caller disconnect, fencing, output exhaustion, stream
+- [x] Prove cancellation races, helper death, caller disconnect, fencing, output exhaustion, stream
   credit, and duplicate terminal delivery through conformance tests shared with Firecracker.
 
 #### Task 5L validation
@@ -303,6 +303,8 @@ backend-specific public operation surface.
 - `just test-contract`
 - `just test-microsandbox-linux`
 - `just test-firecracker`
+
+Evidence: [Task 5L data-plane qualification](evidence/2026-08-13-microsandbox-task-5-data-plane.md).
 
 ### Task 6L: Translate network policy and complete lifecycle evidence
 

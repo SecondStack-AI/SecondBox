@@ -37,6 +37,7 @@ const (
 	Operation_OPERATION_TCP              Operation = 10
 	Operation_OPERATION_SHUTDOWN         Operation = 11
 	Operation_OPERATION_FORMAT_WORKSPACE Operation = 12
+	Operation_OPERATION_FILE_EXISTS      Operation = 13
 )
 
 // Enum value maps for Operation.
@@ -55,6 +56,7 @@ var (
 		10: "OPERATION_TCP",
 		11: "OPERATION_SHUTDOWN",
 		12: "OPERATION_FORMAT_WORKSPACE",
+		13: "OPERATION_FILE_EXISTS",
 	}
 	Operation_value = map[string]int32{
 		"OPERATION_UNSPECIFIED":      0,
@@ -70,6 +72,7 @@ var (
 		"OPERATION_TCP":              10,
 		"OPERATION_SHUTDOWN":         11,
 		"OPERATION_FORMAT_WORKSPACE": 12,
+		"OPERATION_FILE_EXISTS":      13,
 	}
 )
 
@@ -209,6 +212,7 @@ const (
 	StreamChannel_STREAM_CHANNEL_STDOUT      StreamChannel = 2
 	StreamChannel_STREAM_CHANNEL_STDERR      StreamChannel = 3
 	StreamChannel_STREAM_CHANNEL_TCP         StreamChannel = 4
+	StreamChannel_STREAM_CHANNEL_FILE        StreamChannel = 5
 )
 
 // Enum value maps for StreamChannel.
@@ -219,6 +223,7 @@ var (
 		2: "STREAM_CHANNEL_STDOUT",
 		3: "STREAM_CHANNEL_STDERR",
 		4: "STREAM_CHANNEL_TCP",
+		5: "STREAM_CHANNEL_FILE",
 	}
 	StreamChannel_value = map[string]int32{
 		"STREAM_CHANNEL_UNSPECIFIED": 0,
@@ -226,6 +231,7 @@ var (
 		"STREAM_CHANNEL_STDOUT":      2,
 		"STREAM_CHANNEL_STDERR":      3,
 		"STREAM_CHANNEL_TCP":         4,
+		"STREAM_CHANNEL_FILE":        5,
 	}
 )
 
@@ -971,6 +977,7 @@ type ExecRequest struct {
 	Rows             uint32                 `protobuf:"varint,7,opt,name=rows,proto3" json:"rows,omitempty"`
 	Columns          uint32                 `protobuf:"varint,8,opt,name=columns,proto3" json:"columns,omitempty"`
 	OutputLimitBytes uint64                 `protobuf:"varint,9,opt,name=output_limit_bytes,json=outputLimitBytes,proto3" json:"output_limit_bytes,omitempty"`
+	Streaming        bool                   `protobuf:"varint,10,opt,name=streaming,proto3" json:"streaming,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -1068,6 +1075,13 @@ func (x *ExecRequest) GetOutputLimitBytes() uint64 {
 	return 0
 }
 
+func (x *ExecRequest) GetStreaming() bool {
+	if x != nil {
+		return x.Streaming
+	}
+	return false
+}
+
 type FileRequest struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Operation       Operation              `protobuf:"varint,1,opt,name=operation,proto3,enum=secondbox.microsandbox.helper.v1.Operation" json:"operation,omitempty"`
@@ -1078,6 +1092,7 @@ type FileRequest struct {
 	Mode            uint32                 `protobuf:"varint,6,opt,name=mode,proto3" json:"mode,omitempty"`
 	Recursive       bool                   `protobuf:"varint,7,opt,name=recursive,proto3" json:"recursive,omitempty"`
 	Content         []byte                 `protobuf:"bytes,8,opt,name=content,proto3" json:"content,omitempty"`
+	Force           bool                   `protobuf:"varint,9,opt,name=force,proto3" json:"force,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -1166,6 +1181,13 @@ func (x *FileRequest) GetContent() []byte {
 		return x.Content
 	}
 	return nil
+}
+
+func (x *FileRequest) GetForce() bool {
+	if x != nil {
+		return x.Force
+	}
+	return false
 }
 
 type PtyRequest struct {
@@ -1519,6 +1541,7 @@ type TerminalEvent struct {
 	Retryable                   bool                   `protobuf:"varint,7,opt,name=retryable,proto3" json:"retryable,omitempty"`
 	ElapsedMilliseconds         uint64                 `protobuf:"varint,8,opt,name=elapsed_milliseconds,json=elapsedMilliseconds,proto3" json:"elapsed_milliseconds,omitempty"`
 	LimitBytes                  uint64                 `protobuf:"varint,9,opt,name=limit_bytes,json=limitBytes,proto3" json:"limit_bytes,omitempty"`
+	FileTerminalKind            uint32                 `protobuf:"varint,10,opt,name=file_terminal_kind,json=fileTerminalKind,proto3" json:"file_terminal_kind,omitempty"`
 	unknownFields               protoimpl.UnknownFields
 	sizeCache                   protoimpl.SizeCache
 }
@@ -1612,6 +1635,13 @@ func (x *TerminalEvent) GetElapsedMilliseconds() uint64 {
 func (x *TerminalEvent) GetLimitBytes() uint64 {
 	if x != nil {
 		return x.LimitBytes
+	}
+	return 0
+}
+
+func (x *TerminalEvent) GetFileTerminalKind() uint32 {
+	if x != nil {
+		return x.FileTerminalKind
 	}
 	return 0
 }
@@ -1964,7 +1994,7 @@ const file_microsandbox_helper_v1_helper_proto_rawDesc = "" +
 	"\n" +
 	"operations\x18\x06 \x03(\x0e2+.secondbox.microsandbox.helper.v1.OperationR\n" +
 	"operations\x125\n" +
-	"\x16materialization_digest\x18\a \x01(\tR\x15materializationDigest\"\x9e\x02\n" +
+	"\x16materialization_digest\x18\a \x01(\tR\x15materializationDigest\"\xbc\x02\n" +
 	"\vExecRequest\x12\x12\n" +
 	"\x04argv\x18\x01 \x03(\tR\x04argv\x12+\n" +
 	"\x11working_directory\x18\x02 \x01(\tR\x10workingDirectory\x12 \n" +
@@ -1974,7 +2004,9 @@ const file_microsandbox_helper_v1_helper_proto_rawDesc = "" +
 	"\x05stdin\x18\x06 \x01(\fR\x05stdin\x12\x12\n" +
 	"\x04rows\x18\a \x01(\rR\x04rows\x12\x18\n" +
 	"\acolumns\x18\b \x01(\rR\acolumns\x12,\n" +
-	"\x12output_limit_bytes\x18\t \x01(\x04R\x10outputLimitBytes\"\x91\x02\n" +
+	"\x12output_limit_bytes\x18\t \x01(\x04R\x10outputLimitBytes\x12\x1c\n" +
+	"\tstreaming\x18\n" +
+	" \x01(\bR\tstreaming\"\xa7\x02\n" +
 	"\vFileRequest\x12I\n" +
 	"\toperation\x18\x01 \x01(\x0e2+.secondbox.microsandbox.helper.v1.OperationR\toperation\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12)\n" +
@@ -1983,7 +2015,8 @@ const file_microsandbox_helper_v1_helper_proto_rawDesc = "" +
 	"\x05limit\x18\x05 \x01(\x04R\x05limit\x12\x12\n" +
 	"\x04mode\x18\x06 \x01(\rR\x04mode\x12\x1c\n" +
 	"\trecursive\x18\a \x01(\bR\trecursive\x12\x18\n" +
-	"\acontent\x18\b \x01(\fR\acontent\"V\n" +
+	"\acontent\x18\b \x01(\fR\acontent\x12\x14\n" +
+	"\x05force\x18\t \x01(\bR\x05force\"V\n" +
 	"\n" +
 	"PtyRequest\x12\x12\n" +
 	"\x04rows\x18\x01 \x01(\rR\x04rows\x12\x18\n" +
@@ -2004,7 +2037,7 @@ const file_microsandbox_helper_v1_helper_proto_rawDesc = "" +
 	"\x03eof\x18\x02 \x01(\bR\x03eof\x12I\n" +
 	"\achannel\x18\x03 \x01(\x0e2/.secondbox.microsandbox.helper.v1.StreamChannelR\achannel\"$\n" +
 	"\fStreamCredit\x12\x14\n" +
-	"\x05bytes\x18\x01 \x01(\x04R\x05bytes\"\xde\x02\n" +
+	"\x05bytes\x18\x01 \x01(\x04R\x05bytes\"\x8c\x03\n" +
 	"\rTerminalEvent\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x1b\n" +
 	"\texit_code\x18\x02 \x01(\x05R\bexitCode\x12\x16\n" +
@@ -2015,7 +2048,9 @@ const file_microsandbox_helper_v1_helper_proto_rawDesc = "" +
 	"\tretryable\x18\a \x01(\bR\tretryable\x121\n" +
 	"\x14elapsed_milliseconds\x18\b \x01(\x04R\x13elapsedMilliseconds\x12\x1f\n" +
 	"\vlimit_bytes\x18\t \x01(\x04R\n" +
-	"limitBytes\"\xc2\x02\n" +
+	"limitBytes\x12,\n" +
+	"\x12file_terminal_kind\x18\n" +
+	" \x01(\rR\x10fileTerminalKind\"\xc2\x02\n" +
 	"\x11FileMetadataEvent\x12\x16\n" +
 	"\x06exists\x18\x01 \x01(\bR\x06exists\x12\x12\n" +
 	"\x04size\x18\x02 \x01(\x04R\x04size\x12\x12\n" +
@@ -2036,7 +2071,7 @@ const file_microsandbox_helper_v1_helper_proto_rawDesc = "" +
 	"\x16FormatWorkspaceRequest\x124\n" +
 	"\x16logical_capacity_bytes\x18\x01 \x01(\x04R\x14logicalCapacityBytes\x12\x14\n" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x12%\n" +
-	"\x0eworkspace_uuid\x18\x03 \x01(\fR\rworkspaceUuid*\xc7\x02\n" +
+	"\x0eworkspace_uuid\x18\x03 \x01(\fR\rworkspaceUuid*\xe2\x02\n" +
 	"\tOperation\x12\x19\n" +
 	"\x15OPERATION_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fOPERATION_START\x10\x01\x12\x12\n" +
@@ -2051,7 +2086,8 @@ const file_microsandbox_helper_v1_helper_proto_rawDesc = "" +
 	"\rOPERATION_TCP\x10\n" +
 	"\x12\x16\n" +
 	"\x12OPERATION_SHUTDOWN\x10\v\x12\x1e\n" +
-	"\x1aOPERATION_FORMAT_WORKSPACE\x10\f*\x99\x01\n" +
+	"\x1aOPERATION_FORMAT_WORKSPACE\x10\f\x12\x19\n" +
+	"\x15OPERATION_FILE_EXISTS\x10\r*\x99\x01\n" +
 	"\x17HelperNetworkPolicyMode\x12*\n" +
 	"&HELPER_NETWORK_POLICY_MODE_UNSPECIFIED\x10\x00\x12'\n" +
 	"#HELPER_NETWORK_POLICY_MODE_DENY_ALL\x10\x01\x12)\n" +
@@ -2060,13 +2096,14 @@ const file_microsandbox_helper_v1_helper_proto_rawDesc = "" +
 	"#HELPER_NETWORK_PROTOCOL_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bHELPER_NETWORK_PROTOCOL_TCP\x10\x01\x12 \n" +
 	"\x1cHELPER_NETWORK_PROTOCOL_HTTP\x10\x02\x12!\n" +
-	"\x1dHELPER_NETWORK_PROTOCOL_HTTPS\x10\x03*\x97\x01\n" +
+	"\x1dHELPER_NETWORK_PROTOCOL_HTTPS\x10\x03*\xb0\x01\n" +
 	"\rStreamChannel\x12\x1e\n" +
 	"\x1aSTREAM_CHANNEL_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14STREAM_CHANNEL_STDIN\x10\x01\x12\x19\n" +
 	"\x15STREAM_CHANNEL_STDOUT\x10\x02\x12\x19\n" +
 	"\x15STREAM_CHANNEL_STDERR\x10\x03\x12\x16\n" +
-	"\x12STREAM_CHANNEL_TCP\x10\x04B_Z]github.com/SecondStack-AI/SecondBox/runner/internal/microsandboxprotocol;microsandboxprotocolb\x06proto3"
+	"\x12STREAM_CHANNEL_TCP\x10\x04\x12\x17\n" +
+	"\x13STREAM_CHANNEL_FILE\x10\x05B_Z]github.com/SecondStack-AI/SecondBox/runner/internal/microsandboxprotocol;microsandboxprotocolb\x06proto3"
 
 var (
 	file_microsandbox_helper_v1_helper_proto_rawDescOnce sync.Once

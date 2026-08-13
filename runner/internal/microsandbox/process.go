@@ -21,6 +21,7 @@ import (
 )
 
 const helperStderrLimit = 16 << 10
+const helperFileChunkBytes = 64 << 10
 
 type helperProcess struct {
 	command         *exec.Cmd
@@ -36,6 +37,13 @@ type helperProcess struct {
 	requestMu       sync.Mutex
 	nextRequestID   uint64
 	materialization string
+}
+
+type helperExecControl struct {
+	data    []byte
+	eof     bool
+	rows    uint32
+	columns uint32
 }
 
 func launchHelper(
@@ -240,60 +248,194 @@ func (process *helperProcess) shutdown(ctx context.Context) error {
 	}
 }
 
-func (process *helperProcess) request(ctx context.Context, message any) ([]*microsandboxprotocol.Envelope, error) {
+func (process *helperProcess) execOperation(
+	ctx context.Context,
+	request *microsandboxprotocol.ExecRequest,
+	controls <-chan helperExecControl,
+	emit func(*microsandboxprotocol.StreamData) error,
+) (*microsandboxprotocol.TerminalEvent, error) {
 	process.requestMu.Lock()
 	defer process.requestMu.Unlock()
 	requestID := process.nextRequestID
 	process.nextRequestID++
+	if err := process.control.SetDeadline(time.Time{}); err != nil {
+		return nil, err
+	}
+	if err := microsandboxprotocol.WriteFrame(process.control, &microsandboxprotocol.Envelope{
+		ProtocolVersion: microsandboxprotocol.Version, RequestId: requestID,
+		Message: &microsandboxprotocol.Envelope_Exec{Exec: request},
+	}); err != nil {
+		return nil, fmt.Errorf("SecondBox Microsandbox write helper Exec: %w", err)
+	}
+	writesDone := make(chan struct{})
+	stopWrites := make(chan struct{})
+	cancelRequest := make(chan struct{}, 1)
+	go func() {
+		defer close(writesDone)
+		sequence := uint64(1)
+		for {
+			var envelope *microsandboxprotocol.Envelope
+			select {
+			case <-stopWrites:
+				return
+			case <-cancelRequest:
+				envelope = &microsandboxprotocol.Envelope{ProtocolVersion: microsandboxprotocol.Version, RequestId: requestID, StreamId: requestID, Sequence: sequence, Message: &microsandboxprotocol.Envelope_Cancel{Cancel: &microsandboxprotocol.CancelRequest{TargetRequestId: requestID}}}
+			case <-ctx.Done():
+				envelope = &microsandboxprotocol.Envelope{ProtocolVersion: microsandboxprotocol.Version, RequestId: requestID, StreamId: requestID, Sequence: sequence, Message: &microsandboxprotocol.Envelope_Cancel{Cancel: &microsandboxprotocol.CancelRequest{TargetRequestId: requestID}}}
+			case control, ok := <-controls:
+				if !ok {
+					return
+				}
+				if control.rows != 0 || control.columns != 0 {
+					envelope = &microsandboxprotocol.Envelope{ProtocolVersion: microsandboxprotocol.Version, RequestId: requestID, StreamId: requestID, Sequence: sequence, Message: &microsandboxprotocol.Envelope_Pty{Pty: &microsandboxprotocol.PtyRequest{Rows: control.rows, Columns: control.columns}}}
+				} else {
+					envelope = &microsandboxprotocol.Envelope{ProtocolVersion: microsandboxprotocol.Version, RequestId: requestID, StreamId: requestID, Sequence: sequence, Message: &microsandboxprotocol.Envelope_StreamData{StreamData: &microsandboxprotocol.StreamData{Data: bytes.Clone(control.data), Eof: control.eof, Channel: microsandboxprotocol.StreamChannel_STREAM_CHANNEL_STDIN}}}
+				}
+			}
+			_ = process.control.SetWriteDeadline(time.Now().Add(5 * time.Second))
+			if microsandboxprotocol.WriteFrame(process.control, envelope) != nil {
+				return
+			}
+			sequence++
+			if ctx.Err() != nil {
+				return
+			}
+		}
+	}()
+	defer func() { close(stopWrites); <-writesDone; _ = process.control.SetDeadline(time.Time{}) }()
 	deadline := time.Now().Add(24 * time.Hour)
 	if value, ok := ctx.Deadline(); ok {
-		deadline = value
+		deadline = value.Add(5 * time.Second)
 	}
-	if err := process.control.SetDeadline(deadline); err != nil {
-		return nil, fmt.Errorf("SecondBox Microsandbox set operation deadline: %w", err)
+	if request.DeadlineUnixMs != 0 {
+		value := time.UnixMilli(int64(request.DeadlineUnixMs)).Add(5 * time.Second)
+		if value.Before(deadline) {
+			deadline = value
+		}
 	}
-	stop := context.AfterFunc(ctx, func() { _ = process.control.SetDeadline(time.Now()) })
-	defer stop()
-	envelope := &microsandboxprotocol.Envelope{ProtocolVersion: microsandboxprotocol.Version, RequestId: requestID}
-	switch value := message.(type) {
-	case *microsandboxprotocol.Envelope_Exec:
-		envelope.Message = value
-	case *microsandboxprotocol.Envelope_File:
-		envelope.Message = value
-	case *microsandboxprotocol.Envelope_Pty:
-		envelope.Message = value
-	case *microsandboxprotocol.Envelope_Tcp:
-		envelope.Message = value
-	default:
-		return nil, fmt.Errorf("SecondBox Microsandbox helper request type is unsupported")
+	if err := process.control.SetReadDeadline(deadline); err != nil {
+		return nil, err
 	}
-	if err := microsandboxprotocol.WriteFrame(process.control, envelope); err != nil {
-		return nil, fmt.Errorf("SecondBox Microsandbox write helper operation: %w", err)
+	stopContextDeadline := context.AfterFunc(ctx, func() {
+		_ = process.control.SetReadDeadline(time.Now().Add(5 * time.Second))
+	})
+	defer stopContextDeadline()
+	var emitErr error
+	for {
+		event, err := microsandboxprotocol.ReadFrame(process.control)
+		if err != nil {
+			process.forceStop()
+			return nil, fmt.Errorf(
+				"SecondBox Microsandbox read helper Exec: %w: process=%v stderr=%s",
+				err, process.processWaitError(), process.stderr.String(),
+			)
+		}
+		if event.RequestId != requestID {
+			return nil, fmt.Errorf("SecondBox Microsandbox helper Exec response identity mismatch")
+		}
+		if diagnostic := event.GetDiagnostic(); diagnostic != nil {
+			return nil, fmt.Errorf("SecondBox Microsandbox helper %s: %s", diagnostic.Code, diagnostic.Text)
+		}
+		if data := event.GetStreamData(); data != nil {
+			if emitErr == nil {
+				if err := emit(data); err != nil {
+					emitErr = err
+					_ = process.control.SetReadDeadline(time.Now().Add(5 * time.Second))
+					select {
+					case cancelRequest <- struct{}{}:
+					default:
+					}
+				}
+			}
+			continue
+		}
+		if terminal := event.GetTerminal(); terminal != nil {
+			return terminal, emitErr
+		}
+		return nil, fmt.Errorf("SecondBox Microsandbox helper Exec event is unsupported")
 	}
+}
+
+func (process *helperProcess) fileOperation(
+	ctx context.Context,
+	request *microsandboxprotocol.FileRequest,
+	content []byte,
+) ([]*microsandboxprotocol.Envelope, error) {
+	process.requestMu.Lock()
+	defer process.requestMu.Unlock()
+	requestID := process.nextRequestID
+	process.nextRequestID++
+	if err := process.control.SetDeadline(time.Time{}); err != nil {
+		return nil, fmt.Errorf("SecondBox Microsandbox clear helper File deadline: %w", err)
+	}
+	if err := microsandboxprotocol.WriteFrame(process.control, &microsandboxprotocol.Envelope{
+		ProtocolVersion: microsandboxprotocol.Version, RequestId: requestID,
+		Message: &microsandboxprotocol.Envelope_File{File: request},
+	}); err != nil {
+		return nil, fmt.Errorf("SecondBox Microsandbox write helper File request: %w", err)
+	}
+	if request.Operation == microsandboxprotocol.Operation_OPERATION_FILE_WRITE {
+		sequence := uint64(1)
+		for len(content) != 0 {
+			count := min(len(content), helperFileChunkBytes)
+			if err := microsandboxprotocol.WriteFrame(process.control, &microsandboxprotocol.Envelope{
+				ProtocolVersion: microsandboxprotocol.Version, RequestId: requestID, StreamId: requestID, Sequence: sequence,
+				Message: &microsandboxprotocol.Envelope_StreamData{StreamData: &microsandboxprotocol.StreamData{
+					Data: bytes.Clone(content[:count]), Channel: microsandboxprotocol.StreamChannel_STREAM_CHANNEL_FILE,
+				}},
+			}); err != nil {
+				return nil, fmt.Errorf("SecondBox Microsandbox write helper File content: %w", err)
+			}
+			sequence++
+			content = content[count:]
+		}
+		if err := microsandboxprotocol.WriteFrame(process.control, &microsandboxprotocol.Envelope{
+			ProtocolVersion: microsandboxprotocol.Version, RequestId: requestID, StreamId: requestID, Sequence: sequence,
+			Message: &microsandboxprotocol.Envelope_StreamData{StreamData: &microsandboxprotocol.StreamData{
+				Eof: true, Channel: microsandboxprotocol.StreamChannel_STREAM_CHANNEL_FILE,
+			}},
+		}); err != nil {
+			return nil, fmt.Errorf("SecondBox Microsandbox finish helper File content: %w", err)
+		}
+	}
+	deadline := time.Now().Add(24 * time.Hour)
+	if value, ok := ctx.Deadline(); ok {
+		deadline = value.Add(5 * time.Second)
+	}
+	if err := process.control.SetReadDeadline(deadline); err != nil {
+		return nil, err
+	}
+	stopContextDeadline := context.AfterFunc(ctx, func() {
+		_ = process.control.SetReadDeadline(time.Now().Add(5 * time.Second))
+	})
+	defer func() {
+		stopContextDeadline()
+		_ = process.control.SetDeadline(time.Time{})
+	}()
 	var events []*microsandboxprotocol.Envelope
 	for {
-		response, err := microsandboxprotocol.ReadFrame(process.control)
+		event, err := microsandboxprotocol.ReadFrame(process.control)
 		if err != nil {
+			if ctx.Err() != nil {
+				process.forceStop()
+				return nil, ctx.Err()
+			}
+			return nil, fmt.Errorf("SecondBox Microsandbox read helper File: %w", err)
+		}
+		if event.RequestId != requestID {
+			return nil, fmt.Errorf("SecondBox Microsandbox helper File response identity mismatch")
+		}
+		if diagnostic := event.GetDiagnostic(); diagnostic != nil {
+			return nil, fmt.Errorf("SecondBox Microsandbox helper %s: %s", diagnostic.Code, diagnostic.Text)
+		}
+		events = append(events, event)
+		if event.GetTerminal() != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			return nil, fmt.Errorf("SecondBox Microsandbox read helper operation: %w", err)
-		}
-		if response.RequestId != requestID {
-			return nil, fmt.Errorf("SecondBox Microsandbox helper operation response identity mismatch")
-		}
-		if diagnostic := response.GetDiagnostic(); diagnostic != nil {
-			return nil, fmt.Errorf("SecondBox Microsandbox helper %s: %s", diagnostic.Code, diagnostic.Text)
-		}
-		events = append(events, response)
-		if response.GetTerminal() != nil {
-			break
+			return events, nil
 		}
 	}
-	if err := process.control.SetDeadline(time.Time{}); err != nil {
-		return nil, fmt.Errorf("SecondBox Microsandbox clear operation deadline: %w", err)
-	}
-	return events, nil
 }
 
 func (process *helperProcess) forceStop() {

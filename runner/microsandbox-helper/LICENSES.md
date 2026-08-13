@@ -4,7 +4,7 @@ The helper is built locally and is not published. Its locked direct dependencies
 
 | Input | Pin | License |
 | --- | --- | --- |
-| Microsandbox source | `5b335537afad433ad2c0308cb54de13b7015b4e7` plus SecondBox patch `943e728067cce9f0efe9ed578c74f6323bd6c1cf8407822a1e8ee998f64564de` | Apache-2.0 |
+| Microsandbox source | `5b335537afad433ad2c0308cb54de13b7015b4e7` plus SecondBox patch `f38294823f2c8e3b8e7918a8c58b48b0c9c7c521874add5d5985af3d4134eb7c` | Apache-2.0 |
 | `msb_krun` | 0.1.30, checksum `b57b2304dc1cef25b7cdd93be44c6515a97c90e00308b7d35eabc4fe27b02af5` | Apache-2.0 |
 | `msb_krun_utils` | 0.1.30, checksum `5f4f682dec7289463f89adfd1df7605a425c069d238265496a99dbff921075a9` | Apache-2.0 |
 | libkrunfw | `21cb6dce19a615f63e41ecb913334d18560c1364`, 5.6.1 | LGPL-2.1-only; bundled kernel and patches GPL-2.0-only |

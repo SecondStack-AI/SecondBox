@@ -25,6 +25,7 @@ type helperPortConnection struct {
 	readMu       sync.Mutex
 	writeMu      sync.Mutex
 	buffer       bytes.Buffer
+	sawEOF       bool
 	terminal     error
 	closeOnce    sync.Once
 	closeErr     error
@@ -60,6 +61,8 @@ func (backend *AssignmentBackend) OpenPort(ctx context.Context, fence *runnerpro
 		if err == nil && (response.RequestId != requestID || response.GetTcpConnected() == nil) {
 			if diagnostic := response.GetDiagnostic(); diagnostic != nil {
 				err = fmt.Errorf("%s: %s", diagnostic.Code, diagnostic.Text)
+			} else if terminal := response.GetTerminal(); terminal != nil {
+				err = fmt.Errorf("guest TCP connection failed: %s", terminal.Reason)
 			} else {
 				err = fmt.Errorf("invalid TCP connected event")
 			}
@@ -85,6 +88,9 @@ func (connection *helperPortConnection) Read(ctx context.Context, maximum int) (
 	if connection.buffer.Len() > 0 {
 		return connection.buffer.Next(min(maximum, connection.buffer.Len())), nil
 	}
+	if connection.sawEOF {
+		return nil, io.EOF
+	}
 	if connection.terminal != nil {
 		return nil, connection.terminal
 	}
@@ -106,7 +112,7 @@ func (connection *helperPortConnection) Read(ctx context.Context, maximum int) (
 		}
 		if data := event.GetStreamData(); data != nil {
 			if data.Eof {
-				connection.terminal = io.EOF
+				connection.sawEOF = true
 				return nil, io.EOF
 			}
 			connection.buffer.Write(data.Data)
@@ -160,6 +166,14 @@ func (connection *helperPortConnection) Close() error {
 			event, readErr := microsandboxprotocol.ReadFrame(connection.process.control)
 			if readErr != nil {
 				err = errors.Join(err, readErr)
+				break
+			}
+			if event.RequestId != connection.requestID {
+				err = errors.Join(err, fmt.Errorf("SecondBox Microsandbox Port terminal identity mismatch"))
+				break
+			}
+			if diagnostic := event.GetDiagnostic(); diagnostic != nil {
+				err = errors.Join(err, fmt.Errorf("SecondBox Microsandbox helper %s: %s", diagnostic.Code, diagnostic.Text))
 				break
 			}
 			if terminal := event.GetTerminal(); terminal != nil {

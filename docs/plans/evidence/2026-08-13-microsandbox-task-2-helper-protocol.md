@@ -40,9 +40,9 @@ Pinned evidence:
 
 ```text
 Microsandbox commit       5b335537afad433ad2c0308cb54de13b7015b4e7
-Microsandbox patched tree 972fd637a835c175a4aa5b11fd52ccd0ab087f95
+Microsandbox patched tree 2bb82ba33e2175cd7574ffa6d058c6968453fa4b
 Microsandbox lock SHA256  7827c5aad40cfc4ab36be6aba3bc4c0d923e525c50fc4b54741776bcf13b95c8
-SecondBox patch SHA256    943e728067cce9f0efe9ed578c74f6323bd6c1cf8407822a1e8ee998f64564de
+SecondBox patch SHA256    f38294823f2c8e3b8e7918a8c58b48b0c9c7c521874add5d5985af3d4134eb7c
 Helper lock SHA256        f8e07fd675fd194c9ba571547a05e122ad77e96829b3ff00e4455008b52eb5a8
 libkrunfw commit          21cb6dce19a615f63e41ecb913334d18560c1364
 Helper binary SHA256      d4422b2ae330e3038af1ed80724d9674c20a9f3ed4f9503605540ed8ad01b784

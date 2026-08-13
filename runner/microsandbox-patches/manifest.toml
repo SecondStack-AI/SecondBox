@@ -3,7 +3,7 @@ upstream_repository = "https://github.com/superradcompany/microsandbox"
 upstream_version = "0.6.8"
 upstream_commit = "5b335537afad433ad2c0308cb54de13b7015b4e7"
 upstream_tree = "dc506dffd600fcea281bd4ebfc924e1b31afcb2a"
-patched_tree = "972fd637a835c175a4aa5b11fd52ccd0ab087f95"
+patched_tree = "2bb82ba33e2175cd7574ffa6d058c6968453fa4b"
 cargo_lock_sha256 = "7827c5aad40cfc4ab36be6aba3bc4c0d923e525c50fc4b54741776bcf13b95c8"
 probe_cargo_lock_sha256 = "95f0107a1c27f7ad079012a919213207b4256950b73aec33ee624ed33c4638a7"
 license = "Apache-2.0"
@@ -18,8 +18,8 @@ probe_rootfs_image = "docker.io/library/alpine@sha256:14358309a308569c32bdc37e2e
 
 [[patches]]
 path = "0001-explicit-ext4-uuid-fd-api.patch"
-sha256 = "943e728067cce9f0efe9ed578c74f6323bd6c1cf8407822a1e8ee998f64564de"
-purpose = "Format caller-owned ext4 files with explicit UUIDs and safely rewrite clone UUIDs."
+sha256 = "f38294823f2c8e3b8e7918a8c58b48b0c9c7c521874add5d5985af3d4134eb7c"
+purpose = "Format caller-owned ext4 files with explicit UUIDs, safely rewrite clone UUIDs, and preserve terminating signal identity from agentd."
 
 [[locked_crates]]
 name = "msb_krun"
