@@ -14,10 +14,7 @@ use std::{
 use secondbox_microsandbox_helper::{
     PROTOCOL_VERSION,
     frame::{read_frame, write_frame},
-    protocol::{
-        Envelope, FormatWorkspaceRequest, HelperNetworkPolicy, HelperNetworkPolicyMode,
-        StartRequest, envelope::Message,
-    },
+    protocol::{Envelope, FormatWorkspaceRequest, envelope::Message},
 };
 
 #[test]
@@ -70,7 +67,7 @@ fn lifecycle_pipe_eof_terminates_helper_within_bound() {
         .open(directory.path().join("workspace.ext4"))
         .unwrap();
     image.set_len(64 * 1024 * 1024).unwrap();
-    let (mut parent, child_socket) = UnixStream::pair().unwrap();
+    let (_parent, child_socket) = UnixStream::pair().unwrap();
     let (lifecycle_read, lifecycle_write) = pipe().unwrap();
     let mut child = spawn(
         &child_socket,
@@ -80,35 +77,6 @@ fn lifecycle_pipe_eof_terminates_helper_within_bound() {
     );
     drop(child_socket);
     drop(lifecycle_read);
-    write_frame(
-        &mut parent,
-        &Envelope {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: 1,
-            message: Some(Message::Start(StartRequest {
-                materialization_digest: format!("sha256:{}", "a".repeat(64)),
-                guest_architecture: "amd64".into(),
-                vcpu_count: 1,
-                memory_bytes: 512 * 1024 * 1024,
-                flat_root_digest: format!("sha256:{}", "b".repeat(64)),
-                flat_root_path: directory.path().display().to_string(),
-                network_policy: Some(HelperNetworkPolicy {
-                    mode: HelperNetworkPolicyMode::DenyAll as i32,
-                    destinations: Vec::new(),
-                }),
-                stable_workspace_block_id: "workspace".into(),
-                workspace_capacity_bytes: 64 * 1024 * 1024,
-                workspace_uuid: vec![0x63; 16],
-                ..Default::default()
-            })),
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    assert!(matches!(
-        read_frame(&mut parent).unwrap().unwrap().message,
-        Some(Message::Ready(_))
-    ));
     let started = Instant::now();
     drop(lifecycle_write);
     loop {

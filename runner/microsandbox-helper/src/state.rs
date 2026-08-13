@@ -115,6 +115,7 @@ mod tests {
             message: Some(Message::StreamData(StreamData {
                 data: vec![1, 2, 3, 4],
                 eof: false,
+                channel: 0,
             })),
         };
         assert_eq!(state.admit(&data), Err(StateError::Credit));

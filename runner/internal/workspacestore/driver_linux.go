@@ -17,8 +17,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const inheritedWorkspaceDescriptor = 4
-
 type linuxDriver struct {
 	helperExecutable  string
 	setUUIDExecutable string

@@ -11,11 +11,14 @@ use crate::protocol::{
 };
 
 pub const WORKSPACE_DESCRIPTOR_PATH: &str = "/proc/self/fd/4";
+pub const GUEST_AGENTD_PATH: &str = "/init.secondbox-agentd";
 const MIB: u64 = 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LaunchConfiguration {
     pub root: PathBuf,
+    pub libkrunfw: PathBuf,
+    pub agentd: PathBuf,
     pub vcpus: u8,
     pub memory_mib: usize,
     pub environment: Vec<(String, String)>,
@@ -42,6 +45,8 @@ pub enum LaunchError {
     Materialization,
     #[error("SecondBox Microsandbox helper flat root artifact is invalid")]
     Root,
+    #[error("SecondBox Microsandbox helper execution asset is invalid")]
+    Asset,
     #[error("SecondBox Microsandbox helper architecture is incompatible with this host")]
     Architecture,
     #[error("SecondBox Microsandbox helper VCPU count is invalid")]
@@ -68,6 +73,8 @@ impl LaunchConfiguration {
         if !root.is_absolute() || !root.is_dir() {
             return Err(LaunchError::Root);
         }
+        let libkrunfw = validate_asset(&start.libkrunfw_path)?;
+        let agentd = validate_asset(&start.agentd_path)?;
         if !architecture_matches(&start.guest_architecture) {
             return Err(LaunchError::Architecture);
         }
@@ -90,6 +97,8 @@ impl LaunchConfiguration {
         }
         Ok(Self {
             root,
+            libkrunfw,
+            agentd,
             vcpus,
             memory_mib,
             environment,
@@ -98,24 +107,47 @@ impl LaunchConfiguration {
     }
 
     /// Build the complete libkrun configuration without starting its non-returning VMM loop.
-    pub fn build(self) -> Result<msb_krun::Vm, msb_krun::Error> {
-        self.build_with_workspace(PathBuf::from(WORKSPACE_DESCRIPTOR_PATH))
+    pub fn build(
+        self,
+        console: crate::console::AgentConsoleBackend,
+        runtime_dir: &std::path::Path,
+    ) -> Result<msb_krun::Vm, msb_krun::Error> {
+        self.build_with_workspace(
+            PathBuf::from(WORKSPACE_DESCRIPTOR_PATH),
+            Some(console),
+            Some(runtime_dir.to_path_buf()),
+        )
     }
 
     fn build_with_workspace(
         self,
         workspace_path: PathBuf,
+        console: Option<crate::console::AgentConsoleBackend>,
+        runtime_dir: Option<PathBuf>,
     ) -> Result<msb_krun::Vm, msb_krun::Error> {
         let root = self.root;
+        let libkrunfw = self.libkrunfw;
+        let agentd = self.agentd;
         let vcpus = self.vcpus;
         let memory_mib = self.memory_mib;
         let environment = self.environment;
-        VmBuilder::new()
+        let mut builder = VmBuilder::new()
             .machine(|machine| {
-                machine
+                let machine = machine
                     .vcpus(vcpus)
                     .memory_mib(memory_mib)
+                    .max_vcpus(vcpus)
+                    .max_memory_mib(memory_mib)
                     .enable_inet_hijack(false)
+                ;
+                #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+                { machine.split_irqchip(true) }
+                #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+                { machine }
+            })
+            .kernel(|kernel| {
+                let _validated_host_agent = agentd;
+                kernel.krunfw_path(libkrunfw).init_path(GUEST_AGENTD_PATH)
             })
             .fs(|filesystem| filesystem.root(root))
             .disk(|disk| {
@@ -125,9 +157,30 @@ impl LaunchConfiguration {
                     .read_only(false)
                     .sync(SyncMode::Full)
             })
-            .exec(|exec| exec.envs(environment))
-            .build()
+            .exec(|exec| {
+                exec.env("MSB_DISK_MOUNTS", "workspace:/workspace:fstype=ext4")
+                    .envs(environment)
+            });
+        if let Some(runtime_dir) = runtime_dir {
+            builder = builder.fs(|filesystem| filesystem.tag("msb_runtime").path(runtime_dir));
+        }
+        if let Some(console) = console {
+            builder = builder.console(|ports| {
+                ports
+                    .output("/proc/self/fd/6")
+                    .custom("agent", Box::new(console))
+            });
+        }
+        builder.build()
     }
+}
+
+fn validate_asset(value: &str) -> Result<PathBuf, LaunchError> {
+    let path = PathBuf::from(value);
+    if !path.is_absolute() || !path.is_file() {
+        return Err(LaunchError::Asset);
+    }
+    Ok(path)
 }
 
 fn translate_environment(values: &[String]) -> Result<Vec<(String, String)>, LaunchError> {
@@ -233,6 +286,8 @@ mod tests {
             workspace_capacity_bytes: 64 * MIB,
             workspace_uuid: vec![0x42; 16],
             flat_root_path: root.display().to_string(),
+            libkrunfw_path: "/bin/true".into(),
+            agentd_path: "/bin/true".into(),
         }
     }
 
@@ -256,7 +311,7 @@ mod tests {
         workspace.as_file().set_len(64 * MIB).unwrap();
         let result = LaunchConfiguration::from_start(&valid_start(root.path()))
             .unwrap()
-            .build_with_workspace(workspace.path().to_owned());
+            .build_with_workspace(workspace.path().to_owned(), None, None);
         if let Err(error) = result {
             panic!("libkrun rejected the launch configuration: {error}");
         }

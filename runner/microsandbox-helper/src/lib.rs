@@ -1,5 +1,7 @@
 //! Private inherited-descriptor protocol for one SecondBox Microsandbox Instance.
 
+pub mod agent;
+pub mod console;
 pub mod frame;
 pub mod state;
 pub mod vmm;

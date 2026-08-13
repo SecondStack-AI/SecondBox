@@ -1,6 +1,6 @@
 # Plan: Linux-First Mergeable Microsandbox Backend Spike
 
-> **Execution status (2026-08-13): Tasks 0L and 1L passed; Task 2L is next.** Host-daemon checks
+> **Execution status (2026-08-13): Tasks 0L through 4L passed; Task 5L is next.** Host-daemon checks
 > confirm that `deimos` is a real Linux KVM host and that Apple Silicon macOS hosts are available
 > for the later macOS phase. The work is strictly sequential: complete and qualify Linux end to
 > end, then begin macOS.
@@ -245,27 +245,27 @@ snapshot/restore/delete, relocation framing, and path confinement.
 Refactor the Linux runner composition root only enough to select one concrete backend and bind it
 to the existing runner protocol and WorkspaceStore. There is no runtime fallback.
 
-- [ ] Add strict `SECONDBOX_COMPUTE_BACKEND=firecracker|microsandbox` parsing with no production
+- [x] Add strict `SECONDBOX_COMPUTE_BACKEND=firecracker|microsandbox` parsing with no production
   default.
-- [ ] Separate common runner, protocol, logging, WorkspaceStore, materialization cache, and capacity
+- [x] Separate common runner, protocol, logging, WorkspaceStore, materialization cache, and capacity
   configuration from Firecracker-only jail, TAP, bridge, trust-anchor, and cgroup settings.
-- [ ] Add `runner/internal/microsandbox` implementing `AssignmentBackend`, startup timing, terminal
+- [x] Add `runner/internal/microsandbox` implementing `AssignmentBackend`, startup timing, terminal
   events, local Workspace, relocation, and data-plane integration.
-- [ ] Report private backend kind/version evidence so control-plane registration enforces the
+- [x] Report private backend kind/version evidence so control-plane registration enforces the
   homogeneous-pool invariant before readiness.
-- [ ] Admit only `cold_boot`, supported architecture, available integer VCPU/memory, an exact cached
+- [x] Admit only `cold_boot`, supported architecture, available integer VCPU/memory, an exact cached
   materialization tuple, expressible policy, and required agent features.
-- [ ] Keep the complete assignment fence and Workspace attachment in Go for the Instance lifetime.
-- [ ] Start one helper per Instance with inherited socket, Workspace descriptor, and lifecycle pipe.
+- [x] Keep the complete assignment fence and Workspace attachment in Go for the Instance lifetime.
+- [x] Start one helper per Instance with inherited socket, Workspace descriptor, and lifecycle pipe.
   Publish ready only after helper/agent identity matches the materialization and `/workspace`
   passes a read/write probe.
-- [ ] Reserve and release VCPU, memory, Instance, and operation capacity without CPU-millis or PID
+- [x] Reserve and release VCPU, memory, Instance, and operation capacity without CPU-millis or PID
   accounting.
-- [ ] On fence, reject new work atomically, cancel streams, request shutdown, enforce the deadline,
+- [x] On fence, reject new work atomically, cancel streams, request shutdown, enforce the deadline,
   reap the helper, then release the Workspace.
-- [ ] Convert unexpected post-ready helper exit into exactly one provider-neutral terminal event;
+- [x] Convert unexpected post-ready helper exit into exactly one provider-neutral terminal event;
   never adopt a helper after runner restart.
-- [ ] Keep Firecracker jailer, cgroup, network, snapshot-resume, signature verification, and
+- [x] Keep Firecracker jailer, cgroup, network, snapshot-resume, signature verification, and
   cleanup behavior passing.
 
 #### Task 4L validation

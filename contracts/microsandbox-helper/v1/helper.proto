@@ -39,6 +39,8 @@ message Envelope {
     TerminalEvent terminal = 20;
     DiagnosticEvent diagnostic = 21;
     FormatWorkspaceRequest format_workspace = 22;
+    FileMetadataEvent file_metadata = 23;
+    TcpConnectedEvent tcp_connected = 24;
   }
 }
 
@@ -54,6 +56,8 @@ message StartRequest {
   uint64 workspace_capacity_bytes = 9;
   bytes workspace_uuid = 10;
   string flat_root_path = 11;
+  string libkrunfw_path = 12;
+  string agentd_path = 13;
 }
 
 enum HelperNetworkPolicyMode {
@@ -99,6 +103,10 @@ message ExecRequest {
   repeated string environment = 3;
   uint64 deadline_unix_ms = 4;
   bool pty = 5;
+  bytes stdin = 6;
+  uint32 rows = 7;
+  uint32 columns = 8;
+  uint64 output_limit_bytes = 9;
 }
 
 message FileRequest {
@@ -109,6 +117,7 @@ message FileRequest {
   uint64 limit = 5;
   uint32 mode = 6;
   bool recursive = 7;
+  bytes content = 8;
 }
 
 message PtyRequest {
@@ -121,6 +130,7 @@ message TcpRequest {
   string host = 1;
   uint32 port = 2;
 }
+message TcpConnectedEvent {}
 
 message ShutdownRequest { uint64 flush_deadline_unix_ms = 1; }
 message CancelRequest { uint64 target_request_id = 1; }
@@ -128,6 +138,15 @@ message CancelRequest { uint64 target_request_id = 1; }
 message StreamData {
   bytes data = 1;
   bool eof = 2;
+  StreamChannel channel = 3;
+}
+
+enum StreamChannel {
+  STREAM_CHANNEL_UNSPECIFIED = 0;
+  STREAM_CHANNEL_STDIN = 1;
+  STREAM_CHANNEL_STDOUT = 2;
+  STREAM_CHANNEL_STDERR = 3;
+  STREAM_CHANNEL_TCP = 4;
 }
 
 message StreamCredit { uint64 bytes = 1; }
@@ -136,6 +155,30 @@ message TerminalEvent {
   bool success = 1;
   int32 exit_code = 2;
   string reason = 3;
+  int32 signal = 4;
+  uint32 spawn_failure_reason = 5;
+  uint32 infrastructure_failure_reason = 6;
+  bool retryable = 7;
+  uint64 elapsed_milliseconds = 8;
+  uint64 limit_bytes = 9;
+}
+
+message FileMetadataEvent {
+  bool exists = 1;
+  uint64 size = 2;
+  uint32 mode = 3;
+  string checksum = 4;
+  repeated string direct_children = 5;
+  uint32 kind = 6;
+  uint64 modified_at_unix_ms = 7;
+  repeated FileMetadataEntry direct_child_entries = 8;
+}
+
+message FileMetadataEntry {
+  string path = 1;
+  uint32 kind = 2;
+  uint64 size = 3;
+  uint64 modified_at_unix_ms = 4;
 }
 
 message DiagnosticEvent {
