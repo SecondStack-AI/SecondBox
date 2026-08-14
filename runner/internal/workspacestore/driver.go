@@ -15,6 +15,7 @@ type platformDriver interface {
 	OpenAttachment(string) (*os.File, error)
 	LinkDescriptor(*os.File, string) error
 	ResetSparse(*os.File, int64) error
+	CompactSparse(*os.File, int64) error
 	TryLock(*os.File) error
 	Unlock(*os.File) error
 	SyncDirectory(string) error
@@ -59,3 +60,5 @@ func (injectedDriver) ResetSparse(file *os.File, capacity int64) error {
 	}
 	return file.Truncate(capacity)
 }
+
+func (injectedDriver) CompactSparse(*os.File, int64) error { return nil }

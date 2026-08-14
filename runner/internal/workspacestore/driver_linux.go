@@ -24,6 +24,10 @@ type linuxDriver struct {
 	setUUIDExecutable string
 }
 
+func newPlatformDriver(formatterKind FormatterKind, helperExecutable string) (platformDriver, error) {
+	return newLinuxDriver(formatterKind, helperExecutable)
+}
+
 func newLinuxDriver(formatterKind FormatterKind, helperExecutable string) (platformDriver, error) {
 	setUUIDExecutable, err := exec.LookPath("tune2fs")
 	if err != nil {
@@ -202,6 +206,8 @@ func (linuxDriver) ResetSparse(file *os.File, capacity int64) error {
 	}
 	return nil
 }
+
+func (linuxDriver) CompactSparse(*os.File, int64) error { return nil }
 
 func (linuxDriver) TryLock(file *os.File) error     { return platformTryLock(file) }
 func (linuxDriver) Unlock(file *os.File) error      { return platformUnlock(file) }

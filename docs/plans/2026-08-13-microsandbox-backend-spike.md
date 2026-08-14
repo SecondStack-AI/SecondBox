@@ -422,27 +422,27 @@ Port the already-qualified Linux design without changing public contracts or wea
 Darwin source graph must exclude Linux-only Firecracker, jailer, cgroup, namespace, TAP, and
 nftables code.
 
-- [ ] Split production backend factories and process/syscall supervision by build target. Linux
+- [x] Split production backend factories and process/syscall supervision by build target. Linux
   implementations remain unchanged; Darwin compiles only common runner and Microsandbox paths.
-- [ ] Add a Darwin WorkspaceStore driver using APFS `clonefile`, `flock`, platform-correct durable
+- [x] Add a Darwin WorkspaceStore driver using APFS `clonefile`, `flock`, platform-correct durable
   directory synchronization, helper formatting, and `/dev/fd/<n>` attachment.
-- [ ] Preserve clone-only snapshots/restores, deterministic ext4 UUID validation, receipts,
+- [x] Preserve clone-only snapshots/restores, deterministic ext4 UUID validation, receipts,
   retention, atomic publication, sparse files, path confinement, and cross-process writer locks.
-- [ ] Add a portable raw-ext4 fixture created on one platform and structurally validated on the
+- [x] Add a portable raw-ext4 fixture created on one platform and structurally validated on the
   other. Do not call cross-architecture live Sandbox movement portable relocation.
-- [ ] Add an explicit operator-defined `arm64` Microsandbox RunnerPool, materialization, and Profile
+- [x] Add an explicit operator-defined `arm64` Microsandbox RunnerPool, materialization, and Profile
   fixture without changing existing `amd64` standard Profile semantics.
-- [ ] Build `secondbox-runner` and the helper for `darwin/arm64` with pinned `libkrunfw.dylib` and
+- [x] Build `secondbox-runner` and the helper for `darwin/arm64` with pinned `libkrunfw.dylib` and
   required runtime libraries.
-- [ ] Add a repository-owned Hypervisor entitlement and deterministic signing step. Local builds
+- [x] Add a repository-owned Hypervisor entitlement and deterministic signing step. Local builds
   may use ad-hoc signing but must verify the helper's effective entitlement.
-- [ ] Resolve runtime libraries relative to the installed bundle without global mutable search
+- [x] Resolve runtime libraries relative to the installed bundle without global mutable search
   paths or a user-specific Microsandbox home.
-- [ ] Add macOS readiness for architecture, Hypervisor.framework, signature/entitlement, libraries,
+- [x] Add macOS readiness for architecture, Hypervisor.framework, signature/entitlement, libraries,
   APFS cloning, materialization cache, descriptor reopening, network engine, and cleanup.
-- [ ] Use inherited socketpairs and short runtime paths so Unix socket limits and `/var` versus
+- [x] Use inherited socketpairs and short runtime paths so Unix socket limits and `/var` versus
   `/private/var` canonicalization do not destabilize identity.
-- [ ] Add an explicit experimental macOS install/run document without altering the qualified Linux
+- [x] Add an explicit experimental macOS install/run document without altering the qualified Linux
   Firecracker installer path.
 
 #### Task 9M validation
@@ -453,6 +453,8 @@ nftables code.
 - `just test-microsandbox-macos`
 - `just test-workspacestore-linux`
 - `just test-microsandbox-linux`
+
+Evidence: [Task 9M macOS port qualification](evidence/2026-08-13-microsandbox-task-9-macos-port.md).
 
 ### Task 10M: Qualify macOS and close the dual-platform spike
 

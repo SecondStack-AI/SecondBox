@@ -1,5 +1,3 @@
-//go:build linux
-
 package microsandbox
 
 import (
@@ -13,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -47,18 +46,30 @@ func (sink *qualificationEvidenceSink) snapshot() []runnerevidence.Record {
 	return append([]runnerevidence.Record(nil), sink.records...)
 }
 
-func TestQualifiedLinuxBackendBootsAgentAndWorkspaceOnKVM(t *testing.T) {
-	buildRoot := os.Getenv("SECONDBOX_MICROSANDBOX_LINUX_BUILD")
+func TestQualifiedBackendBootsAgentAndWorkspace(t *testing.T) {
+	buildEnvironment := ""
+	firmwareName := ""
+	switch runtime.GOOS {
+	case "linux":
+		buildEnvironment = "SECONDBOX_MICROSANDBOX_LINUX_BUILD"
+		firmwareName = "libkrunfw.so.5.6.1"
+	case "darwin":
+		buildEnvironment = "SECONDBOX_MICROSANDBOX_MACOS_BUILD"
+		firmwareName = "libkrunfw.5.dylib"
+	default:
+		t.Skip("Microsandbox qualification supports Linux and Darwin")
+	}
+	buildRoot := os.Getenv(buildEnvironment)
 	if buildRoot == "" {
-		t.Skip("SECONDBOX_MICROSANDBOX_LINUX_BUILD is not set")
+		t.Skipf("%s is not set", buildEnvironment)
 	}
 	buildRoot, err := filepath.Abs(buildRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	helper := filepath.Join(buildRoot, "cargo-target", "debug", "secondbox-microsandbox-helper")
+	helper := filepath.Join(buildRoot, "runtime", "bin", "secondbox-microsandbox-helper")
 	agentd := filepath.Join(buildRoot, "runtime", "bin", "agentd")
-	firmware := filepath.Join(buildRoot, "runtime", "lib", "libkrunfw.so.5.6.1")
+	firmware := filepath.Join(buildRoot, "runtime", "lib", firmwareName)
 	rootfs := filepath.Join(buildRoot, "rootfs")
 
 	qualificationRoot := t.TempDir()
@@ -82,7 +93,7 @@ func TestQualifiedLinuxBackendBootsAgentAndWorkspaceOnKVM(t *testing.T) {
 	manifest := materialization.Manifest{
 		SchemaVersion: materialization.SchemaVersion,
 		Key: materialization.Key{
-			BackendKind: materialization.BackendMicrosandbox, GuestArchitecture: "amd64",
+			BackendKind: materialization.BackendMicrosandbox, GuestArchitecture: runtime.GOARCH,
 			RuntimeManifestDigest:   digestText("qualification-runtime"),
 			ToolchainManifestDigest: digestText("qualification-toolchain"),
 		},
@@ -143,13 +154,13 @@ func TestQualifiedLinuxBackendBootsAgentAndWorkspaceOnKVM(t *testing.T) {
 		ProfileRevisionId: "qualification-profile", WorkspaceId: "qualification-workspace",
 		Requirements: &runnerprotocol.ProfileRequirements{
 			VcpuCount: 1, MemoryBytes: 256 << 20, DiskBytes: uint64(qualificationWorkspaceBytes),
-			Architecture: "amd64", StartupMode: "cold_boot",
+			Architecture: runtime.GOARCH, StartupMode: "cold_boot",
 			RequiredCapabilities: []string{"cleanup", "kvm", "local-workspace", "microsandbox", "storage"},
 			MaximumOperationMs:   60_000, MaximumOutputBytes: 8 << 20,
 		},
 		Assets: []*runnerprotocol.AssetReference{
-			{ArtifactId: "runtime", ManifestDigest: manifest.Key.RuntimeManifestDigest, Architecture: "amd64", GuestProtocolGeneration: 6},
-			{ArtifactId: "toolchain", ManifestDigest: manifest.Key.ToolchainManifestDigest, Architecture: "amd64", GuestProtocolGeneration: 6},
+			{ArtifactId: "runtime", ManifestDigest: manifest.Key.RuntimeManifestDigest, Architecture: runtime.GOARCH, GuestProtocolGeneration: 6},
+			{ArtifactId: "toolchain", ManifestDigest: manifest.Key.ToolchainManifestDigest, Architecture: runtime.GOARCH, GuestProtocolGeneration: 6},
 		},
 		DeadlineUnixMs: uint64(time.Now().Add(3 * time.Minute).UnixMilli()),
 		Correlation:    &runnerprotocol.Correlation{RequestId: "qualification-request", OperationId: "qualification-operation", LeaseId: "qualification-lease"},
@@ -173,10 +184,10 @@ func TestQualifiedLinuxBackendBootsAgentAndWorkspaceOnKVM(t *testing.T) {
 		t.Fatalf("qualified fresh spawn failure = %#v, %v", freshMissing, err)
 	}
 	execResult, err := backend.ExecuteBuffered(t.Context(), fence, &runnerprotocol.ExecOpen{
-		Command: &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{"/bin/sh", "-c", "printf linux-stdout; printf linux-stderr >&2; exit 7"}}},
+		Command: &runnerprotocol.ExecOpen_Argv{Argv: &runnerprotocol.ArgvCommand{Argument: []string{"/bin/sh", "-c", "printf qualified-stdout; printf qualified-stderr >&2; exit 7"}}},
 		Cwd:     "/workspace", OutputLimitBytes: 1024,
 	})
-	if err != nil || !bytes.Equal(execResult.Stdout, []byte("linux-stdout")) || !bytes.Equal(execResult.Stderr, []byte("linux-stderr")) || execResult.Terminal.GetExitCode() != 7 {
+	if err != nil || !bytes.Equal(execResult.Stdout, []byte("qualified-stdout")) || !bytes.Equal(execResult.Stderr, []byte("qualified-stderr")) || execResult.Terminal.GetExitCode() != 7 {
 		t.Fatalf("qualified buffered Exec = %#v, %v", execResult, err)
 	}
 	mkdirResult, err := backend.ExecuteFile(t.Context(), fence, &runnerprotocol.FileOpen{
@@ -494,7 +505,7 @@ func TestQualifiedLinuxBackendBootsAgentAndWorkspaceOnKVM(t *testing.T) {
 	}
 	foundUnexpected := false
 	for _, record := range records {
-		if record.BackendKind != "microsandbox" || record.HostPlatform != "linux-x86_64" || record.HelperPID <= 0 || record.Materialization != manifestDigest || record.StreamID == "" {
+		if record.BackendKind != "microsandbox" || record.HostPlatform != microsandboxHostPlatform() || record.HelperPID <= 0 || record.Materialization != manifestDigest || record.StreamID == "" {
 			t.Fatalf("incomplete qualified lifecycle evidence: %#v", record)
 		}
 		if record.Stage == "unexpected_exit" {

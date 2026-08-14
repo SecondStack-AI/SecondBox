@@ -79,7 +79,7 @@ func New(ctx context.Context, config Config) (*Store, error) {
 			minimumExt4Bytes,
 		)
 	}
-	driver, err := newLinuxDriver(config.FormatterKind, config.MicrosandboxHelperExecutable)
+	driver, err := newPlatformDriver(config.FormatterKind, config.MicrosandboxHelperExecutable)
 	if err != nil {
 		return nil, err
 	}

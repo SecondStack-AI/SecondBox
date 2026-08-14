@@ -20,6 +20,8 @@ type relocationExport struct {
 	receipt Receipt
 }
 
+const relocationSparseBlockBytes = uint64(4096)
+
 func (export *relocationExport) Read(buffer []byte) (int, error) {
 	return export.file.Read(buffer)
 }
@@ -311,18 +313,57 @@ func (relocation *relocationImport) WriteChunk(offset uint64, data []byte) error
 	if relocation.written+uint64(len(data)) > uint64(relocation.request.CapacityBytes) {
 		return ErrStorageIncompatible
 	}
-	if allZero(data) {
-		if _, err := relocation.file.Seek(int64(len(data)), io.SeekCurrent); err != nil {
-			return fmt.Errorf("SecondBox WorkspaceStore seek sparse relocation target: %w", err)
-		}
-	} else if _, err := relocation.file.Write(data); err != nil {
-		return fmt.Errorf("SecondBox WorkspaceStore write relocation target: %w", err)
+	if err := writeSparseRelocationChunk(relocation.file, offset, data); err != nil {
+		return err
 	}
 	if _, err := relocation.hash.Write(data); err != nil {
 		return fmt.Errorf("SecondBox WorkspaceStore hash relocation target: %w", err)
 	}
 	relocation.written += uint64(len(data))
 	return nil
+}
+
+func writeSparseRelocationChunk(file *os.File, offset uint64, data []byte) error {
+	if _, err := file.Seek(int64(offset), io.SeekStart); err != nil {
+		return fmt.Errorf("SecondBox WorkspaceStore position sparse relocation target: %w", err)
+	}
+	runStart := 0
+	runZero := false
+	haveRun := false
+	flush := func(end int) error {
+		if !haveRun || end == runStart {
+			return nil
+		}
+		if runZero {
+			if _, err := file.Seek(int64(end-runStart), io.SeekCurrent); err != nil {
+				return fmt.Errorf("SecondBox WorkspaceStore seek sparse relocation target: %w", err)
+			}
+			return nil
+		}
+		if _, err := file.Write(data[runStart:end]); err != nil {
+			return fmt.Errorf("SecondBox WorkspaceStore write relocation target: %w", err)
+		}
+		return nil
+	}
+	for position := 0; position < len(data); {
+		absolute := offset + uint64(position)
+		segmentBytes := int(relocationSparseBlockBytes - absolute%relocationSparseBlockBytes)
+		if remaining := len(data) - position; remaining < segmentBytes {
+			segmentBytes = remaining
+		}
+		end := position + segmentBytes
+		segmentZero := allZero(data[position:end])
+		if !haveRun {
+			runStart, runZero, haveRun = position, segmentZero, true
+		} else if segmentZero != runZero {
+			if err := flush(position); err != nil {
+				return err
+			}
+			runStart, runZero = position, segmentZero
+		}
+		position = end
+	}
+	return flush(len(data))
 }
 
 func (relocation *relocationImport) Complete(size uint64, checksum string) (Receipt, error) {
@@ -339,6 +380,12 @@ func (relocation *relocationImport) Complete(size uint64, checksum string) (Rece
 	}
 	if err := relocation.file.Truncate(relocation.request.CapacityBytes); err != nil {
 		return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore size sparse relocation target: %w", err)
+	}
+	if err := relocation.store.driver.CompactSparse(
+		relocation.file,
+		relocation.request.CapacityBytes,
+	); err != nil {
+		return Receipt{}, err
 	}
 	if err := relocation.file.Sync(); err != nil {
 		return Receipt{}, fmt.Errorf("SecondBox WorkspaceStore fsync relocation target: %w", err)

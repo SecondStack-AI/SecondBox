@@ -15,9 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/SecondStack-AI/SecondBox/runner/internal/firecracker"
-	"github.com/SecondStack-AI/SecondBox/runner/internal/jailersupervisor"
-	"github.com/SecondStack-AI/SecondBox/runner/internal/microsandbox"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runtimeconfig"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
@@ -36,7 +33,7 @@ func main() {
 		}
 		return
 	}
-	if handled, err := jailersupervisor.RunInvocation(os.Args[1:]); handled {
+	if handled, err := runPlatformSupervisorInvocation(os.Args[1:]); handled {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "SecondBox jailer supervisor failed: %v\n", err)
 			os.Exit(1)
@@ -99,48 +96,11 @@ func run(arguments []string) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("initialize SecondBox runner WorkspaceStore: %w", err)
 	}
-	var backend runnercontrol.AssignmentBackend
-	var shutdownBackend func(context.Context) error
-	switch composition.BackendKind {
-	case "firecracker":
-		manager, createErr := firecracker.New(composition.Firecracker)
-		if createErr != nil {
-			return fmt.Errorf("create SecondBox Firecracker backend: %w", createErr)
-		}
-		if createErr = manager.SetWorkspaceStore(workspaceStore); createErr != nil {
-			return fmt.Errorf("bind SecondBox runner WorkspaceStore: %w", createErr)
-		}
-		if createErr = manager.Start(context.Background()); createErr != nil {
-			return fmt.Errorf("start SecondBox Firecracker backend: %w", createErr)
-		}
-		backend, createErr = firecracker.NewAssignmentBackend(manager)
-		if createErr != nil {
-			return fmt.Errorf("create SecondBox Firecracker assignment backend: %w", createErr)
-		}
-		shutdownBackend = manager.Shutdown
-	case "microsandbox":
-		settings := composition.Microsandbox
-		microsandboxBackend, createErr := microsandbox.NewAssignmentBackend(microsandbox.Config{
-			HelperExecutable:      settings.HelperExecutable,
-			LibkrunfwPath:         settings.LibkrunfwPath,
-			AgentdPath:            settings.AgentdPath,
-			FlatRootPath:          settings.FlatRootPath,
-			MaterializationPath:   settings.MaterializationPath,
-			MaterializationDigest: settings.MaterializationDigest,
-			MaximumVCPUs:          settings.MaximumVCPUs,
-			MaximumMemoryBytes:    settings.MaximumMemoryBytes,
-			MaximumDiskBytes:      settings.MaximumDiskBytes,
-			MaximumInstances:      settings.MaximumInstances,
-			MaximumOperations:     settings.MaximumOperations,
-			WorkspaceStore:        workspaceStore,
-		})
-		if createErr != nil {
-			return fmt.Errorf("create SecondBox Microsandbox assignment backend: %w", createErr)
-		}
-		backend = microsandboxBackend
-		shutdownBackend = microsandboxBackend.Shutdown
-	default:
-		return fmt.Errorf("SecondBox runner compute backend selection is invalid")
+	backend, shutdownBackend, err := newPlatformAssignmentBackend(
+		context.Background(), composition, workspaceStore,
+	)
+	if err != nil {
+		return err
 	}
 	service, err := runnercontrol.NewRunnerProtocolService(protocolConfig, backend, connector)
 	if err != nil {

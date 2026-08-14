@@ -39,7 +39,8 @@ func TestQualifiedFilesystemProvidesRealCopyOnWriteIsolation(t *testing.T) {
 		MicrosandboxHelperExecutable: strings.TrimSpace(os.Getenv("SECONDBOX_MICROSANDBOX_HELPER_EXECUTABLE")),
 	})
 	if err != nil {
-		if os.Getenv("SECONDBOX_REQUIRE_WORKSPACESTORE_LINUX") == "1" {
+		if os.Getenv("SECONDBOX_REQUIRE_WORKSPACESTORE_LINUX") == "1" ||
+			os.Getenv("SECONDBOX_REQUIRE_WORKSPACESTORE_QUALIFICATION") == "1" {
 			t.Fatalf("qualified Linux WorkspaceStore is required: %v", err)
 		}
 		if errors.Is(err, ErrStorageIncompatible) {
