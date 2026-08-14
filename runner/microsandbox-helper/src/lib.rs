@@ -2,6 +2,7 @@
 
 pub mod agent;
 pub mod console;
+pub mod fd;
 pub mod frame;
 pub mod state;
 pub mod vmm;

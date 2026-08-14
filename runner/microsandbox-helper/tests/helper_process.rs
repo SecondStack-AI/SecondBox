@@ -134,14 +134,6 @@ fn duplicate(fd: i32) -> std::fs::File {
 }
 
 fn pipe() -> std::io::Result<(std::fs::File, std::fs::File)> {
-    let mut descriptors = [0_i32; 2];
-    if unsafe { libc::pipe2(descriptors.as_mut_ptr(), libc::O_CLOEXEC) } < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(unsafe {
-        (
-            std::fs::File::from_raw_fd(descriptors[0]),
-            std::fs::File::from_raw_fd(descriptors[1]),
-        )
-    })
+    let (read, write) = secondbox_microsandbox_helper::fd::pipe_cloexec(false)?;
+    Ok((read.into(), write.into()))
 }

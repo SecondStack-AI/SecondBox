@@ -47,10 +47,12 @@ async fn run() -> Result<(), String> {
 
     let result = run_descriptor_uuid_proof(&work_dir)?;
     println!(
-        "proof=ext4-descriptor-uuid source_inode={} clone_inode={} logical_bytes={} source_uuid={} clone_uuid={} status=passed",
+        "proof=ext4-descriptor-uuid source_inode={} clone_inode={} logical_bytes={} source_allocated_bytes={} clone_allocated_bytes={} source_uuid={} clone_uuid={} status=passed",
         result.source_inode,
         result.clone_inode,
         result.logical_bytes,
+        result.source_allocated_bytes,
+        result.clone_allocated_bytes,
         encode_hex(&result.source_uuid),
         encode_hex(&result.clone_uuid),
     );
@@ -100,7 +102,7 @@ async fn run_vm(mut args: impl Iterator<Item = std::ffi::OsString>) -> Result<()
     }
     let proof = run_vm_descriptor_lifecycle_proof(&work_dir, &rootfs).await?;
     println!(
-        "proof=vm-descriptor-lifecycle inode={} vmm_pid={} buffered={} streamed={} ping_rtt_micros={} shutdown_millis={} marker={} lifecycle_pid={} lifecycle_shutdown_millis={} lifecycle_marker={} status=passed",
+        "proof=vm-descriptor-lifecycle inode={} vmm_pid={} buffered={} streamed={} ping_rtt_micros={} shutdown_millis={} marker={} lifecycle_pid={} lifecycle_shutdown_millis={} lifecycle_marker={} force_kill_pid={} force_kill_millis={} status=passed",
         proof.workspace_inode,
         proof.vmm_pid,
         proof.buffered_output,
@@ -111,6 +113,8 @@ async fn run_vm(mut args: impl Iterator<Item = std::ffi::OsString>) -> Result<()
         proof.lifecycle_pid,
         proof.lifecycle_shutdown_millis,
         proof.lifecycle_marker,
+        proof.force_kill_pid,
+        proof.force_kill_millis,
     );
     Ok(())
 }

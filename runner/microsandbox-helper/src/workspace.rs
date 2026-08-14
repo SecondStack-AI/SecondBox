@@ -30,7 +30,7 @@ pub fn format_workspace(
     }
     image.set_len(logical_capacity)?;
     clear_cloexec(image)?;
-    let descriptor = format!("/proc/self/fd/{}", image.as_raw_fd());
+    let descriptor = crate::fd::reopen_path(image.as_raw_fd());
     let uuid = format_uuid(uuid);
     let output = Command::new("mke2fs")
         .args([
@@ -114,7 +114,7 @@ mod tests {
             .unwrap();
         format_workspace(&file, 64 * 1024 * 1024, "secondbox", [0x42; 16]).unwrap();
         let output = Command::new("tune2fs")
-            .args(["-l", &format!("/proc/self/fd/{}", file.as_raw_fd())])
+            .args(["-l", &crate::fd::reopen_path(file.as_raw_fd())])
             .output()
             .unwrap();
         let text = String::from_utf8_lossy(&output.stdout);

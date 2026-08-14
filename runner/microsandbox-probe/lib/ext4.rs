@@ -3,6 +3,8 @@
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
 use std::os::fd::AsRawFd;
+#[cfg(target_os = "macos")]
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::Command;
@@ -17,6 +19,7 @@ const EXT4_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
 const EXT4_JOURNAL_BLOCKS: u32 = 4096;
 const EXT4_SUPERBLOCK_OFFSET: u64 = 1024;
 const EXT4_UUID_OFFSET: u64 = EXT4_SUPERBLOCK_OFFSET + 0x68;
+#[cfg(target_os = "linux")]
 const FICLONE: libc::c_ulong = 0x4004_9409;
 const SOURCE_UUID: [u8; 16] = [0x41; 16];
 const CLONE_UUID: [u8; 16] = [0x52; 16];
@@ -34,6 +37,10 @@ pub struct DescriptorUuidProof {
     pub clone_inode: u64,
     /// Sparse logical image size in bytes.
     pub logical_bytes: u64,
+    /// Allocated bytes in the sparse source image before cloning.
+    pub source_allocated_bytes: u64,
+    /// Allocated bytes in the copy-on-write clone before mutation.
+    pub clone_allocated_bytes: u64,
     /// UUID retained by the source image.
     pub source_uuid: [u8; 16],
     /// UUID assigned to the clone.
@@ -95,7 +102,7 @@ pub fn run_descriptor_uuid_proof(work_dir: &Path) -> Result<DescriptorUuidProof,
         ));
     }
 
-    let descriptor_path = format!("/proc/self/fd/{}", source.as_raw_fd());
+    let descriptor_path = descriptor_path(source.as_raw_fd());
     let mut reopened = OpenOptions::new()
         .read(true)
         .write(true)
@@ -111,16 +118,12 @@ pub fn run_descriptor_uuid_proof(work_dir: &Path) -> Result<DescriptorUuidProof,
         return Err("reopened source descriptor has the wrong UUID".to_string());
     }
 
+    clone_image(&source_path, &source, &clone_path)?;
     let clone = OpenOptions::new()
-        .create_new(true)
         .read(true)
         .write(true)
         .open(&clone_path)
-        .map_err(|error| format!("create clone image: {error}"))?;
-    clone
-        .set_len(EXT4_IMAGE_BYTES)
-        .map_err(|error| format!("size clone image: {error}"))?;
-    reflink(&source, &clone)?;
+        .map_err(|error| format!("open clone image: {error}"))?;
     clone
         .sync_all()
         .map_err(|error| format!("flush reflink clone: {error}"))?;
@@ -129,8 +132,17 @@ pub fn run_descriptor_uuid_proof(work_dir: &Path) -> Result<DescriptorUuidProof,
         .map_err(|error| format!("stat reflink clone: {error}"))?;
     if clone_metadata.dev() != after.dev() || clone_metadata.ino() == after.ino() {
         return Err(
-            "FICLONE did not create an independent inode on the source filesystem".to_string(),
+            "copy-on-write clone did not create an independent inode on the source filesystem"
+                .to_string(),
         );
+    }
+    if clone_metadata.len() != after.len() {
+        return Err("copy-on-write clone changed the sparse logical size".to_string());
+    }
+    let source_allocated_bytes = after.blocks().saturating_mul(512);
+    let clone_allocated_bytes = clone_metadata.blocks().saturating_mul(512);
+    if source_allocated_bytes >= after.len() || clone_allocated_bytes >= clone_metadata.len() {
+        return Err("ext4 source or clone is not sparse on the qualified filesystem".to_string());
     }
     drop(clone);
 
@@ -155,12 +167,35 @@ pub fn run_descriptor_uuid_proof(work_dir: &Path) -> Result<DescriptorUuidProof,
         source_inode: after.ino(),
         clone_inode: clone_metadata.ino(),
         logical_bytes: after.len(),
+        source_allocated_bytes,
+        clone_allocated_bytes,
         source_uuid: SOURCE_UUID,
         clone_uuid: CLONE_UUID,
     })
 }
 
-fn reflink(source: &File, destination: &File) -> Result<(), String> {
+fn descriptor_path(fd: i32) -> String {
+    #[cfg(target_os = "macos")]
+    {
+        return format!("/dev/fd/{fd}");
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        format!("/proc/self/fd/{fd}")
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn clone_image(_source_path: &Path, source: &File, clone_path: &Path) -> Result<(), String> {
+    let destination = OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(clone_path)
+        .map_err(|error| format!("create clone image: {error}"))?;
+    destination
+        .set_len(EXT4_IMAGE_BYTES)
+        .map_err(|error| format!("size clone image: {error}"))?;
     // SAFETY: FICLONE reads the source fd passed as the third argument and writes into the valid,
     // open destination fd. Both files remain owned by the caller for the entire ioctl.
     let result = unsafe { libc::ioctl(destination.as_raw_fd(), FICLONE, source.as_raw_fd()) };
@@ -169,6 +204,25 @@ fn reflink(source: &File, destination: &File) -> Result<(), String> {
     }
     Err(format!(
         "FICLONE source image: {}",
+        std::io::Error::last_os_error()
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn clone_image(source_path: &Path, _source: &File, clone_path: &Path) -> Result<(), String> {
+    use std::ffi::CString;
+
+    let source = CString::new(source_path.as_os_str().as_bytes())
+        .map_err(|_| "source clone path contains an interior NUL".to_string())?;
+    let destination = CString::new(clone_path.as_os_str().as_bytes())
+        .map_err(|_| "destination clone path contains an interior NUL".to_string())?;
+    // SAFETY: both C strings remain alive for the call and name explicit paths on the same APFS
+    // filesystem. clonefile creates the destination atomically and refuses a pre-existing file.
+    if unsafe { libc::clonefile(source.as_ptr(), destination.as_ptr(), 0) } == 0 {
+        return Ok(());
+    }
+    Err(format!(
+        "APFS clonefile source image: {}",
         std::io::Error::last_os_error()
     ))
 }

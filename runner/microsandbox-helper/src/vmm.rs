@@ -21,7 +21,7 @@ use crate::protocol::{
     helper_network_destination::Target,
 };
 
-pub const WORKSPACE_DESCRIPTOR_PATH: &str = "/proc/self/fd/4";
+pub const WORKSPACE_DESCRIPTOR_PATH: &str = crate::fd::WORKSPACE_DESCRIPTOR_PATH;
 pub const GUEST_AGENTD_PATH: &str = "/init.secondbox-agentd";
 const MIB: u64 = 1024 * 1024;
 
@@ -246,7 +246,7 @@ impl LaunchConfiguration {
         if let Some(console) = console {
             builder = builder.console(|ports| {
                 ports
-                    .output("/proc/self/fd/6")
+                    .output(crate::fd::AGENT_CONSOLE_DESCRIPTOR_PATH)
                     .custom("agent", Box::new(console))
             });
         }
@@ -643,6 +643,10 @@ mod tests {
     use crate::protocol::{HelperNetworkPolicy, StartRequest};
 
     fn valid_start(root: &Path) -> StartRequest {
+        let test_asset = std::env::current_exe()
+            .expect("resolve current test executable")
+            .display()
+            .to_string();
         StartRequest {
             materialization_digest: format!("sha256:{}", "a".repeat(64)),
             guest_architecture: if cfg!(target_arch = "x86_64") {
@@ -662,8 +666,8 @@ mod tests {
             workspace_capacity_bytes: 64 * MIB,
             workspace_uuid: vec![0x42; 16],
             flat_root_path: root.display().to_string(),
-            libkrunfw_path: "/bin/true".into(),
-            agentd_path: "/bin/true".into(),
+            libkrunfw_path: test_asset.clone(),
+            agentd_path: test_asset,
         }
     }
 
