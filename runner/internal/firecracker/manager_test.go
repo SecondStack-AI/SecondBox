@@ -2137,30 +2137,30 @@ func TestUnjailedModeEmitsExplicitSecurityWarning(t *testing.T) {
 	}
 }
 
-func TestEnsureComputeBackendVersionAcceptsPinnedVersion(t *testing.T) {
-	fc := writeFakeComputeBackendVersion(t, "Firecracker v1.16.1")
-	if err := ensureComputeBackendVersion(fc); err != nil {
-		t.Fatalf("ensureComputeBackendVersion: %v", err)
+func TestEnsureFirecrackerVersionAcceptsPinnedVersion(t *testing.T) {
+	fc := writeFakeFirecrackerVersion(t, "Firecracker v1.16.1")
+	if err := ensureFirecrackerVersion(fc); err != nil {
+		t.Fatalf("ensureFirecrackerVersion: %v", err)
 	}
 }
 
-func TestEnsureComputeBackendVersionRejectsMismatch(t *testing.T) {
-	fc := writeFakeComputeBackendVersion(t, "Firecracker v1.16.2")
-	err := ensureComputeBackendVersion(fc)
+func TestEnsureFirecrackerVersionRejectsMismatch(t *testing.T) {
+	fc := writeFakeFirecrackerVersion(t, "Firecracker v1.16.2")
+	err := ensureFirecrackerVersion(fc)
 	if err == nil || !strings.Contains(err.Error(), "does not match pinned version 1.16.1") {
 		t.Fatalf("expected pinned-version mismatch, got %v", err)
 	}
 }
 
-func TestEnsureComputeBackendVersionRejectsUnparseableOutput(t *testing.T) {
-	fc := writeFakeComputeBackendVersion(t, "Firecracker dev-build")
-	err := ensureComputeBackendVersion(fc)
+func TestEnsureFirecrackerVersionRejectsUnparseableOutput(t *testing.T) {
+	fc := writeFakeFirecrackerVersion(t, "Firecracker dev-build")
+	err := ensureFirecrackerVersion(fc)
 	if err == nil || !strings.Contains(err.Error(), "parse firecracker --version output") {
 		t.Fatalf("expected parse error, got %v", err)
 	}
 }
 
-func writeFakeComputeBackendVersion(t *testing.T, output string) string {
+func writeFakeFirecrackerVersion(t *testing.T, output string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "firecracker")
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf '%s\\n' "+shellQuote(output)+"\n"), 0o700); err != nil {

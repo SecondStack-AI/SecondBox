@@ -284,7 +284,7 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 		Capabilities: &runnerprotocol.RunnerCapabilities{
 			Architecture:          runtime.GOARCH,
 			KernelRelease:         strings.TrimSpace(string(kernelRelease)),
-			ComputeBackendVersion: expectedComputeBackendVersionString(),
+			ComputeBackendVersion: expectedFirecrackerVersionString(),
 			HypervisorReady:       true,
 			IsolationReady:        firecrackerIsolationReady(cfg),
 			ResourceLimitsReady:   true,
@@ -379,7 +379,7 @@ func firecrackerMaterializationEvidence(
 		},
 		AgentProtocolGeneration: manifest.GuestProtocol.Maximum,
 		AgentFeatures:           []string{"exec-streaming", "file-streaming", "pty"},
-		BackendBuildID:          expectedComputeBackendVersionString(),
+		BackendBuildID:          expectedFirecrackerVersionString(),
 	}
 	materializationDigest, err := local.Digest()
 	if err != nil {

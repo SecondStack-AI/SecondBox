@@ -413,7 +413,7 @@ func (m *Manager) snapshotResumeTemplateKey(
 		GuestBuildID:            opts.GuestBuildID,
 		GuestProtocolGeneration: currentGuestProtocolGeneration,
 		GuestFeatures:           append([]string(nil), requestedGuestProtocolFeatureNames...),
-		ComputeBackendVersion:   expectedComputeBackendVersionString(),
+		FirecrackerVersion:      expectedFirecrackerVersionString(),
 		HostCPUFingerprint:      cpuFingerprint,
 		CPUTemplate:             m.cfg.MicroVMCPUTemplate,
 		VCPUCount:               policy.VCPUs,

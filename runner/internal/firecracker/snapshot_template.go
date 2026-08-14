@@ -55,7 +55,7 @@ type SnapshotTemplateKey struct {
 	GuestBuildID            string   `json:"guestBuildId"`
 	GuestProtocolGeneration uint32   `json:"guestProtocolGeneration"`
 	GuestFeatures           []string `json:"guestFeatures"`
-	ComputeBackendVersion   string   `json:"firecrackerVersion"`
+	FirecrackerVersion      string   `json:"firecrackerVersion"`
 	HostCPUFingerprint      string   `json:"hostCpuFingerprint"`
 	CPUTemplate             string   `json:"cpuTemplate"`
 	VCPUCount               int      `json:"vcpuCount"`
@@ -95,7 +95,7 @@ func (k SnapshotTemplateKey) Validate() error {
 		{"runtimeBundleDigest", k.RuntimeBundleDigest},
 		{"toolchainBundleDigest", k.ToolchainBundleDigest},
 		{"guestBuildId", k.GuestBuildID},
-		{"firecrackerVersion", k.ComputeBackendVersion},
+		{"firecrackerVersion", k.FirecrackerVersion},
 		{"hostCpuFingerprint", k.HostCPUFingerprint},
 		{"runtimeClass", k.RuntimeClass},
 	}

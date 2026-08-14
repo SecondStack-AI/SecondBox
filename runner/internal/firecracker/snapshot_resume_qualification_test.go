@@ -19,24 +19,24 @@ import (
 const snapshotTemplateQualificationSchemaVersion = 1
 
 type snapshotTemplateQualificationReport struct {
-	SchemaVersion         int    `json:"schemaVersion"`
-	SourceCommit          string `json:"sourceCommit"`
-	SourceTreeDirty       bool   `json:"sourceTreeDirty"`
-	GoVersion             string `json:"goVersion"`
-	ComputeBackendVersion string `json:"firecrackerVersion"`
-	HostKernel            string `json:"hostKernel"`
-	HostCPU               string `json:"hostCpu"`
-	WorkspaceFilesystem   string `json:"workspaceFilesystem"`
-	CompletedAt           string `json:"completedAt"`
-	IdentityNeutral       bool   `json:"identityNeutralTemplate"`
-	TemplateID            string `json:"templateId"`
-	MemoryFileBytes       int64  `json:"memoryFileBytes"`
-	RootfsFileBytes       int64  `json:"rootfsFileBytes"`
-	VMStateFileBytes      int64  `json:"vmStateFileBytes"`
-	TemplateBuildMillis   int64  `json:"templateBuildMilliseconds"`
-	AdmissionMillis       int64  `json:"cacheAdmissionMilliseconds"`
-	StableIdentityNanos   int64  `json:"perStartStableIdentityNanoseconds"`
-	UnjailedResumeError   string `json:"unjailedResumeRefusal"`
+	SchemaVersion       int    `json:"schemaVersion"`
+	SourceCommit        string `json:"sourceCommit"`
+	SourceTreeDirty     bool   `json:"sourceTreeDirty"`
+	GoVersion           string `json:"goVersion"`
+	FirecrackerVersion  string `json:"firecrackerVersion"`
+	HostKernel          string `json:"hostKernel"`
+	HostCPU             string `json:"hostCpu"`
+	WorkspaceFilesystem string `json:"workspaceFilesystem"`
+	CompletedAt         string `json:"completedAt"`
+	IdentityNeutral     bool   `json:"identityNeutralTemplate"`
+	TemplateID          string `json:"templateId"`
+	MemoryFileBytes     int64  `json:"memoryFileBytes"`
+	RootfsFileBytes     int64  `json:"rootfsFileBytes"`
+	VMStateFileBytes    int64  `json:"vmStateFileBytes"`
+	TemplateBuildMillis int64  `json:"templateBuildMilliseconds"`
+	AdmissionMillis     int64  `json:"cacheAdmissionMilliseconds"`
+	StableIdentityNanos int64  `json:"perStartStableIdentityNanoseconds"`
+	UnjailedResumeError string `json:"unjailedResumeRefusal"`
 }
 
 // TestSmokeSnapshotResumeTemplateLifecycle qualifies the runner-managed
@@ -72,15 +72,15 @@ func TestSmokeSnapshotResumeTemplateLifecycle(t *testing.T) {
 	}
 
 	report := snapshotTemplateQualificationReport{
-		SchemaVersion:         snapshotTemplateQualificationSchemaVersion,
-		SourceCommit:          requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_SOURCE_COMMIT"),
-		SourceTreeDirty:       requiredEnvBool(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_SOURCE_TREE_DIRTY"),
-		GoVersion:             runtime.Version(),
-		ComputeBackendVersion: firecrackerQualificationVersion(t),
-		HostKernel:            requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_HOST_KERNEL"),
-		HostCPU:               requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_HOST_CPU"),
-		WorkspaceFilesystem:   requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_WORKSPACE_FILESYSTEM"),
-		IdentityNeutral:       true,
+		SchemaVersion:       snapshotTemplateQualificationSchemaVersion,
+		SourceCommit:        requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_SOURCE_COMMIT"),
+		SourceTreeDirty:     requiredEnvBool(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_SOURCE_TREE_DIRTY"),
+		GoVersion:           runtime.Version(),
+		FirecrackerVersion:  firecrackerQualificationVersion(t),
+		HostKernel:          requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_HOST_KERNEL"),
+		HostCPU:             requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_HOST_CPU"),
+		WorkspaceFilesystem: requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_WORKSPACE_FILESYSTEM"),
+		IdentityNeutral:     true,
 	}
 
 	workDir := shortSmokeDir(t)
