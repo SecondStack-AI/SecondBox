@@ -1,11 +1,11 @@
 # Plan: Linux-First Mergeable Microsandbox Backend Spike
 
-> **Execution status (2026-08-14): Tasks 0L through 9M passed; the verifiable macOS Task 10M
-> scenario passed, but dual-platform closure is incomplete.** The final macOS suite passed 22
-> scenario tests on Apple Silicon. The required Linux Microsandbox and Firecracker real-host reruns
-> are currently unavailable because `/dev/kvm` is absent on `deimos`, despite AMD-V and the KVM
-> modules being present. Production or repository signing cannot be qualified on `mini1`; ad-hoc
-> signing used only to execute a local binary is not signing verification. See
+> **Execution status (2026-08-14): Tasks 0L through 9M and every verifiable Task 10M functional
+> gate passed.** The final suites passed 22 scenarios on Apple Silicon Microsandbox, 22 scenarios
+> on Linux Microsandbox, and 22 scenarios on Linux Firecracker. The Linux rerun used a freshly
+> built bundle from the post-macOS patched tree. Production or repository signing cannot be
+> qualified on `mini1`; ad-hoc signing used only to execute a local binary is not signing
+> verification. Microsandbox remains experimental. See
 > [Task 10M qualification evidence](evidence/2026-08-14-microsandbox-task-10-qualification.md).
 
 Add Microsandbox as an explicitly selected experimental SecondBox compute backend alongside
@@ -478,14 +478,13 @@ The spike is complete only when both real-host suites pass with comparable evide
   only where both runners support the identical immutable Profile/materialization tuple.
 - [x] Record 30 macOS cold starts with p50/p95, stage breakdown, and peak helper memory as
   observations rather than a release gate.
-- [ ] Rerun the complete Linux Microsandbox, WorkspaceStore, scenario, and Firecracker suites after
-  macOS changes. `test-workspacestore-linux` and all non-KVM regressions pass; real-compute reruns
-  are unavailable while `deimos` has no `/dev/kvm` device.
+- [x] Rerun the complete Linux Microsandbox, WorkspaceStore, scenario, and Firecracker suites after
+  macOS changes. The real-compute reruns used the post-macOS `daf8457b...` patched tree.
 - [ ] Record exact macOS commands, versions, entitlements, build/materialization digests, bounded
   logs, and outcomes alongside the Linux evidence. Commands, versions, digests, bounded logs, and
   outcomes are recorded; production/repository signing and entitlement verification remain
   unavailable external evidence.
-- [ ] Update current architecture, operations, qualification, distribution, and security documents
+- [x] Update current architecture, operations, qualification, distribution, and security documents
   only after both platforms pass. Describe backend-specific isolation and trust accurately and keep
   `snapshot_resume` absent from Microsandbox capabilities.
 - [x] Keep Microsandbox experimental. Removing that label requires a later decision covering
@@ -510,5 +509,8 @@ The spike is complete only when both real-host suites pass with comparable evide
 - `just test-scenario`
 
 Evidence: [Task 10M qualification](evidence/2026-08-14-microsandbox-task-10-qualification.md),
-[macOS scenario result](evidence/2026-08-14-microsandbox-task-10-macos-scenario.json), and
-[macOS cold starts](evidence/2026-08-14-microsandbox-task-10-macos-cold-starts.json).
+[macOS scenario result](evidence/2026-08-14-microsandbox-task-10-macos-scenario.json),
+[macOS cold starts](evidence/2026-08-14-microsandbox-task-10-macos-cold-starts.json),
+[Linux Microsandbox scenario](evidence/2026-08-14-microsandbox-task-10-linux-scenario.json),
+[Linux cold starts](evidence/2026-08-14-microsandbox-task-10-linux-cold-starts.json), and
+[Firecracker scenario](evidence/2026-08-14-microsandbox-task-10-firecracker-scenario.json).
