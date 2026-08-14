@@ -1,11 +1,14 @@
 From a6807d1d2454d0b62dc1818d57c1f69012360355 Mon Sep 17 00:00:00 2001
 From: Alex Mabe <alex@melonamin.com>
 Date: Thu, 13 Aug 2026 11:23:28 -0400
-Subject: [PATCH] feat(image): add explicit ext4 UUID APIs
+Subject: [PATCH] feat(image): add explicit ext4 UUID and descriptor APIs
 
 Format caller-owned files without reopening their paths and rewrite clone UUIDs without invalidating metadata checksums. Keep legacy formatter images growable, but require explicit checksum seeds for safe UUID rewrites.
 
 Bump the ext4 materializer ABI because newly formatted images enable INCOMPAT_CSUM_SEED.
+
+On Unix, identify disk-image attachments by device and inode without canonicalizing their caller
+paths, so inherited `/proc/self/fd/<n>` and `/dev/fd/<n>` attachments remain valid.
 
 diff --git a/crates/image/lib/ext4/format.rs b/crates/image/lib/ext4/format.rs
 index cbdc9a4b..d4ad0212 100644
@@ -600,3 +603,138 @@ index 90b28a78..5a8b1e49 100644
          -1
      }
  }
+diff --git a/sdk/rust/lib/runtime/spawn.rs b/sdk/rust/lib/runtime/spawn.rs
+index 1fa9cebd..61c8c6f0 100644
+--- a/sdk/rust/lib/runtime/spawn.rs
++++ b/sdk/rust/lib/runtime/spawn.rs
+@@ -14,7 +14,7 @@ use std::os::fd::{FromRawFd, OwnedFd};
+ #[cfg(unix)]
+ use std::os::unix::ffi::OsStrExt;
+ #[cfg(unix)]
+-use std::os::unix::fs::PermissionsExt;
++use std::os::unix::fs::{MetadataExt, PermissionsExt};
+ #[cfg(windows)]
+ use std::os::windows::fs::OpenOptionsExt;
+ #[cfg(windows)]
+@@ -1659,26 +1659,55 @@ fn lock_disk_mounts(
+         }
+     }
+ 
+-    let mut seen = HashMap::new();
+-    for request in requests {
+-        let canonical = std::fs::canonicalize(&request.path).map_err(|err| {
+-            MicrosandboxError::InvalidConfig(format!(
+-                "disk image host path does not exist: {} ({err})",
+-                request.path.display()
+-            ))
+-        })?;
+-        if let Some(previous) = seen.insert(canonical.clone(), request.label.clone()) {
+-            return Err(MicrosandboxError::InvalidConfig(format!(
+-                "disk images cannot be attached more than once per sandbox: {} ({previous}; {})",
+-                canonical.display(),
+-                request.label
+-            )));
++    #[cfg(unix)]
++    {
++        let mut seen = HashMap::new();
++        for request in requests {
++            let metadata = std::fs::metadata(&request.path).map_err(|err| {
++                MicrosandboxError::InvalidConfig(format!(
++                    "inspect disk image identity {}: {err}",
++                    request.path.display()
++                ))
++            })?;
++            let identity = (metadata.dev(), metadata.ino());
++            if let Some(previous) = seen.insert(identity, request.label.clone()) {
++                return Err(MicrosandboxError::InvalidConfig(format!(
++                    "disk images cannot be attached more than once per sandbox: {} ({previous}; {})",
++                    request.path.display(),
++                    request.label
++                )));
++            }
++            locks.push(lock_disk_image(
++                &request.path,
++                request.readonly,
++                request.volume_name.as_deref(),
++            )?);
++        }
++    }
++
++    #[cfg(windows)]
++    {
++        let mut seen = HashMap::new();
++        for request in requests {
++            let canonical = std::fs::canonicalize(&request.path).map_err(|err| {
++                MicrosandboxError::InvalidConfig(format!(
++                    "disk image host path does not exist: {} ({err})",
++                    request.path.display()
++                ))
++            })?;
++            if let Some(previous) = seen.insert(canonical.clone(), request.label.clone()) {
++                return Err(MicrosandboxError::InvalidConfig(format!(
++                    "disk images cannot be attached more than once per sandbox: {} ({previous}; {})",
++                    canonical.display(),
++                    request.label
++                )));
++            }
++            locks.push(lock_disk_image(
++                &canonical,
++                request.readonly,
++                request.volume_name.as_deref(),
++            )?);
+         }
+-        locks.push(lock_disk_image(
+-            &canonical,
+-            request.readonly,
+-            request.volume_name.as_deref(),
+-        )?);
+     }
+ 
+     Ok(locks)
+@@ -4610,6 +4639,46 @@ mod tests {
+         assert!(err.to_string().contains("more than once per sandbox"));
+     }
+ 
++    #[cfg(any(target_os = "linux", target_os = "macos"))]
++    #[test]
++    fn test_lock_disk_mounts_accepts_inherited_descriptor_path() {
++        use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
++
++        let dir = tempfile::tempdir().unwrap();
++        let disk = std::fs::OpenOptions::new()
++            .create_new(true)
++            .read(true)
++            .write(true)
++            .open(dir.path().join("disk.raw"))
++            .unwrap();
++        #[cfg(target_os = "linux")]
++        let inherited = PathBuf::from(format!("/proc/self/fd/{}", disk.as_raw_fd()));
++        #[cfg(target_os = "macos")]
++        let inherited = PathBuf::from(format!("/dev/fd/{}", disk.as_raw_fd()));
++        let config = SandboxConfig {
++            spec: microsandbox_types::SandboxSpec {
++                mounts: vec![VolumeMount::DiskImage {
++                    host: inherited,
++                    guest: "/data".to_string(),
++                    format: DiskImageFormat::Raw,
++                    fstype: Some("ext4".to_string()),
++                    options: MountOptions::default(),
++                }],
++                ..Default::default()
++            },
++            ..Default::default()
++        };
++
++        let locks = super::lock_disk_mounts(&config, &HashMap::new()).unwrap();
++        assert_eq!(locks.len(), 1);
++        let expected = disk.metadata().unwrap();
++        let actual = locks[0].metadata().unwrap();
++        assert_eq!(
++            (actual.dev(), actual.ino()),
++            (expected.dev(), expected.ino())
++        );
++    }
++
+     #[cfg(windows)]
+     #[test]
+     fn test_lock_disk_image_windows_uses_sidecar_lock() {

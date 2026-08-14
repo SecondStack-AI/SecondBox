@@ -387,24 +387,24 @@ Only after Task 7L passes, select one real Apple Silicon host and run a bounded 
 probe against the same dependency source, local patch, helper protocol, and guest assets. This task
 does not redesign shared contracts.
 
-- [ ] Build the exact locally patched Microsandbox dependency and probe on the selected Mac; record
+- [x] Build the exact locally patched Microsandbox dependency and probe on the selected Mac; record
   OS, architecture, Hypervisor.framework, libkrun, signing/entitlement mode, filesystem, source,
   patch, Cargo lock, and binary digests.
-- [ ] Prove the pre-created control threads and inherited control socket remain responsive while
+- [x] Prove the pre-created control threads and inherited control socket remain responsive while
   `Vm::enter()` owns the calling thread.
-- [ ] Reopen an inherited Workspace descriptor through `/dev/fd/<n>`, mount it, write and persist a
+- [x] Reopen an inherited Workspace descriptor through `/dev/fd/<n>`, mount it, write and persist a
   marker, and prove inode plus parent-descriptor ownership remain stable.
-- [ ] Run simultaneous buffered/streaming commands and control frames, then shut down through the
+- [x] Run simultaneous buffered/streaming commands and control frames, then shut down through the
   control channel.
-- [ ] Close the lifecycle pipe and prove bounded guest shutdown, disk flush, and process exit;
+- [x] Close the lifecycle pipe and prove bounded guest shutdown, disk flush, and process exit;
   record the deadline force-kill path separately.
-- [ ] Prove deny-all and the representative allow-list, including DNS change, private target, and
+- [x] Prove deny-all and the representative allow-list, including DNS change, private target, and
   metadata target behavior.
-- [ ] Perform a real APFS `clonefile`, mutate source and destination independently, and prove
+- [x] Perform a real APFS `clonefile`, mutate source and destination independently, and prove
   copy-on-write isolation plus stable sparse logical size.
-- [ ] Format through an inherited descriptor with the deterministic UUID and rewrite a cloned
+- [x] Format through an inherited descriptor with the deterministic UUID and rewrite a cloned
   image UUID while preserving valid ext4 metadata checksums.
-- [ ] Record bounded macOS feasibility evidence and declare Task 8M passed only if every proof
+- [x] Record bounded macOS feasibility evidence and declare Task 8M passed only if every proof
   succeeds on a real Hypervisor.framework boot.
 
 #### Task 8M validation
@@ -413,6 +413,8 @@ does not redesign shared contracts.
 - `cargo test --manifest-path runner/microsandbox-probe/Cargo.toml`
 - `just test-microsandbox-probe-macos`
 - `git diff --check`
+
+Evidence: [Task 8M Apple Silicon feasibility](evidence/2026-08-13-microsandbox-task-8-macos-feasibility.md).
 
 ### Task 9M: Port WorkspaceStore, runner composition, and packaging to macOS
 

@@ -885,7 +885,7 @@ fn inherited_socket(fd: RawFd) -> Result<UnixStream, String> {
 }
 
 fn inherited_file(fd: RawFd, writable: bool) -> Result<File, String> {
-    let path = format!("/proc/self/fd/{fd}");
+    let path = secondbox_microsandbox_helper::fd::reopen_path(fd);
     OpenOptions::new()
         .read(true)
         .write(writable)

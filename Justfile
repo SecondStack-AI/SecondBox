@@ -12,6 +12,12 @@ build:
 build-microsandbox-probe-linux source output:
     just -f runner/Justfile build-microsandbox-probe-linux "{{source}}" "{{output}}"
 
+build-microsandbox-probe-macos source output:
+    just -f runner/Justfile build-microsandbox-probe-macos "{{source}}" "{{output}}"
+
+test-microsandbox-probe-macos build_dir work_dir:
+    just -f runner/Justfile test-microsandbox-probe-macos "{{build_dir}}" "{{work_dir}}"
+
 test-microsandbox-probe-ext4-linux build_dir work_dir:
     just -f runner/Justfile test-microsandbox-probe-ext4-linux "{{build_dir}}" "{{work_dir}}"
 

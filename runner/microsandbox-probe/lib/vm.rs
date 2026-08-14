@@ -40,6 +40,10 @@ pub struct VmDescriptorLifecycleProof {
     pub lifecycle_shutdown_millis: u128,
     /// Marker flushed by lifecycle-pipe shutdown.
     pub lifecycle_marker: String,
+    /// VMM process used to exercise the explicit deadline force-kill path.
+    pub force_kill_pid: u32,
+    /// Time from explicit kill request to stopped state.
+    pub force_kill_millis: u128,
 }
 
 /// Boot a real VM with a raw-ext4 image named only by an inherited descriptor, exercise the
@@ -77,7 +81,7 @@ pub async fn run_vm_descriptor_lifecycle_proof(
     let before = workspace
         .metadata()
         .map_err(|error| format!("stat workspace descriptor: {error}"))?;
-    let inherited_path = PathBuf::from(format!("/proc/self/fd/{}", workspace.as_raw_fd()));
+    let inherited_path = descriptor_path(workspace.as_raw_fd());
 
     let name = format!("secondbox-task0l-{}", std::process::id());
     if let Ok(existing) = Sandbox::get(&name).await {
@@ -186,6 +190,7 @@ pub async fn run_vm_descriptor_lifecycle_proof(
         .map_err(|error| format!("remove stopped sandbox record: {error}"))?;
 
     let lifecycle = run_lifecycle_eof_proof(work_dir, rootfs).await?;
+    let force_kill = run_force_kill_proof(work_dir, rootfs).await?;
 
     Ok(VmDescriptorLifecycleProof {
         workspace_inode: before.ino(),
@@ -201,6 +206,8 @@ pub async fn run_vm_descriptor_lifecycle_proof(
         lifecycle_pid: lifecycle.pid,
         lifecycle_shutdown_millis: lifecycle.shutdown_millis,
         lifecycle_marker: lifecycle.marker,
+        force_kill_pid: force_kill.pid,
+        force_kill_millis: force_kill.shutdown_millis,
     })
 }
 
@@ -240,7 +247,7 @@ async fn run_lifecycle_eof_proof(
     let metadata = image
         .metadata()
         .map_err(|error| format!("stat lifecycle workspace: {error}"))?;
-    let descriptor = PathBuf::from(format!("/proc/self/fd/{}", image.as_raw_fd()));
+    let descriptor = descriptor_path(image.as_raw_fd());
     let name = format!("secondbox-task0l-eof-{}", std::process::id());
 
     let sandbox = Sandbox::builder(&name)
@@ -311,6 +318,47 @@ async fn run_lifecycle_eof_proof(
     })
 }
 
+async fn run_force_kill_proof(work_dir: &Path, rootfs: &Path) -> Result<LifecycleEofProof, String> {
+    let force_dir = work_dir.join("force-kill");
+    std::fs::create_dir(&force_dir)
+        .map_err(|error| format!("create force-kill proof directory: {error}"))?;
+    let name = format!("secondbox-task8m-kill-{}", std::process::id());
+    let sandbox = Sandbox::builder(&name)
+        .image(rootfs.to_path_buf())
+        .cpus(1)
+        .memory(384)
+        .disable_metrics_sample()
+        .replace()
+        .create()
+        .await
+        .map_err(|error| format!("create force-kill sandbox: {error}"))?;
+    let process = sandbox
+        .local()
+        .and_then(|local| local.handle.as_ref())
+        .ok_or_else(|| "force-kill sandbox has no owned process handle".to_string())?;
+    let pid = process.lock().await.pid();
+    let started = Instant::now();
+    tokio::time::timeout(SHUTDOWN_DEADLINE, sandbox.kill())
+        .await
+        .map_err(|_| format!("force-kill exceeded {SHUTDOWN_DEADLINE:?}"))?
+        .map_err(|error| format!("force-kill sandbox: {error}"))?;
+    let stopped = Sandbox::get(&name)
+        .await
+        .map_err(|error| format!("get force-killed sandbox: {error}"))?;
+    if stopped.status_snapshot() != SandboxStatus::Stopped {
+        return Err("force-killed sandbox did not reach stopped state".to_string());
+    }
+    stopped
+        .remove()
+        .await
+        .map_err(|error| format!("remove force-killed sandbox: {error}"))?;
+    Ok(LifecycleEofProof {
+        pid,
+        shutdown_millis: started.elapsed().as_millis(),
+        marker: "not-applicable-force-kill".to_string(),
+    })
+}
+
 async fn collect_stream(stream: &mut microsandbox::ExecHandle) -> Result<String, String> {
     let mut output = Vec::new();
     while let Some(event) = stream.recv().await {
@@ -345,11 +393,99 @@ fn clear_cloexec(file: &File) -> Result<(), String> {
     Ok(())
 }
 
+fn descriptor_path(fd: i32) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        return PathBuf::from(format!("/dev/fd/{fd}"));
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        PathBuf::from(format!("/proc/self/fd/{fd}"))
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn verify_inherited_inode(pid: u32, fd: i32, dev: u64, ino: u64) -> Result<(), String> {
     let path = PathBuf::from(format!("/proc/{pid}/fd/{fd}"));
     let metadata = std::fs::metadata(&path)
         .map_err(|error| format!("stat inherited VMM descriptor {}: {error}", path.display()))?;
     if (metadata.dev(), metadata.ino()) != (dev, ino) {
+        return Err("VMM inherited descriptor points at a different inode".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn verify_inherited_inode(pid: u32, fd: i32, dev: u64, ino: u64) -> Result<(), String> {
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct ProcFileInfo {
+        open_flags: u32,
+        status: u32,
+        offset: i64,
+        file_type: i32,
+        guard_flags: u32,
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct VInfoStat {
+        dev: u32,
+        mode: u16,
+        nlink: u16,
+        ino: u64,
+        uid: u32,
+        gid: u32,
+        times_and_size: [i64; 9],
+        blocks: i64,
+        block_size: i32,
+        flags: u32,
+        generation: u32,
+        rdev: u32,
+        spare: [i64; 2],
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct VnodeInfo {
+        stat: VInfoStat,
+        vnode_type: i32,
+        pad: i32,
+        fsid: [i32; 2],
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    struct VnodeFdInfo {
+        file: ProcFileInfo,
+        vnode: VnodeInfo,
+    }
+    unsafe extern "C" {
+        fn proc_pidfdinfo(
+            pid: libc::c_int,
+            fd: libc::c_int,
+            flavor: libc::c_int,
+            buffer: *mut libc::c_void,
+            buffer_size: libc::c_int,
+        ) -> libc::c_int;
+    }
+    const PROC_PIDFDVNODEINFO: libc::c_int = 1;
+    let mut info = VnodeFdInfo::default();
+    // SAFETY: `info` is a writable C-layout buffer of the exact advertised size and remains alive
+    // for the call. pid/fd identify the child process and inherited descriptor under test.
+    let read = unsafe {
+        proc_pidfdinfo(
+            pid as libc::c_int,
+            fd,
+            PROC_PIDFDVNODEINFO,
+            (&mut info as *mut VnodeFdInfo).cast(),
+            std::mem::size_of::<VnodeFdInfo>() as libc::c_int,
+        )
+    };
+    if read != std::mem::size_of::<VnodeFdInfo>() as libc::c_int {
+        return Err(format!(
+            "inspect inherited VMM descriptor with proc_pidfdinfo: read={read} error={}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if (u64::from(info.vnode.stat.dev), info.vnode.stat.ino) != (dev, ino) {
         return Err("VMM inherited descriptor points at a different inode".to_string());
     }
     Ok(())

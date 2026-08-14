@@ -38,7 +38,7 @@ grep -Fxq 'upstream_commit=5b335537afad433ad2c0308cb54de13b7015b4e7' "$evidence"
   echo "SecondBox Microsandbox local build has the wrong upstream revision" >&2
   exit 1
 }
-grep -Fxq 'patched_tree=2bb82ba33e2175cd7574ffa6d058c6968453fa4b' "$evidence" || {
+grep -Fxq 'patched_tree=daf8457b13e5f124a63e23a12edbd8482d7da43a' "$evidence" || {
   echo "SecondBox Microsandbox local build has the wrong patched tree" >&2
   exit 1
 }

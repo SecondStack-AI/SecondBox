@@ -3,7 +3,7 @@
 use std::{
     collections::VecDeque,
     io,
-    os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
+    os::fd::{AsRawFd, OwnedFd, RawFd},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -19,18 +19,8 @@ struct WakePipe {
 
 impl WakePipe {
     fn new() -> io::Result<Self> {
-        let mut fds = [0; 2];
-        // SAFETY: `pipe2` initializes both descriptors on success; ownership is
-        // transferred immediately into `OwnedFd`.
-        if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) } != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(Self {
-            // SAFETY: the descriptors are distinct, valid, and unowned.
-            read: unsafe { OwnedFd::from_raw_fd(fds[0]) },
-            // SAFETY: the descriptors are distinct, valid, and unowned.
-            write: unsafe { OwnedFd::from_raw_fd(fds[1]) },
-        })
+        let (read, write) = crate::fd::pipe_cloexec(true)?;
+        Ok(Self { read, write })
     }
 
     fn wake(&self) {
