@@ -25,20 +25,20 @@ import (
 const snapshotLoadQualificationSchemaVersion = 1
 
 type snapshotLoadQualificationReport struct {
-	SchemaVersion         int                              `json:"schemaVersion"`
-	SourceCommit          string                           `json:"sourceCommit"`
-	SourceTreeDirty       bool                             `json:"sourceTreeDirty"`
-	GoVersion             string                           `json:"goVersion"`
-	ComputeBackendVersion string                           `json:"firecrackerVersion"`
-	HostKernel            string                           `json:"hostKernel"`
-	HostCPU               string                           `json:"hostCpu"`
-	WorkspaceFilesystem   string                           `json:"workspaceFilesystem"`
-	MemoryBackend         string                           `json:"memoryBackend"`
-	CompletedAt           string                           `json:"completedAt"`
-	WarmIterations        int                              `json:"warmIterations"`
-	Shapes                []snapshotLoadQualificationShape `json:"shapes"`
-	GatePassed            bool                             `json:"gatePassed"`
-	GateFailures          []string                         `json:"gateFailures,omitempty"`
+	SchemaVersion       int                              `json:"schemaVersion"`
+	SourceCommit        string                           `json:"sourceCommit"`
+	SourceTreeDirty     bool                             `json:"sourceTreeDirty"`
+	GoVersion           string                           `json:"goVersion"`
+	FirecrackerVersion  string                           `json:"firecrackerVersion"`
+	HostKernel          string                           `json:"hostKernel"`
+	HostCPU             string                           `json:"hostCpu"`
+	WorkspaceFilesystem string                           `json:"workspaceFilesystem"`
+	MemoryBackend       string                           `json:"memoryBackend"`
+	CompletedAt         string                           `json:"completedAt"`
+	WarmIterations      int                              `json:"warmIterations"`
+	Shapes              []snapshotLoadQualificationShape `json:"shapes"`
+	GatePassed          bool                             `json:"gatePassed"`
+	GateFailures        []string                         `json:"gateFailures,omitempty"`
 }
 
 type snapshotLoadQualificationShape struct {
@@ -90,17 +90,17 @@ func TestSmokeSnapshotResumeLoadMeasurement(t *testing.T) {
 	}
 
 	report := snapshotLoadQualificationReport{
-		SchemaVersion:         snapshotLoadQualificationSchemaVersion,
-		SourceCommit:          requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_SOURCE_COMMIT"),
-		SourceTreeDirty:       requiredEnvBool(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_SOURCE_TREE_DIRTY"),
-		GoVersion:             runtime.Version(),
-		ComputeBackendVersion: firecrackerQualificationVersion(t),
-		HostKernel:            requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_HOST_KERNEL"),
-		HostCPU:               requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_HOST_CPU"),
-		WorkspaceFilesystem:   requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_WORKSPACE_FILESYSTEM"),
-		MemoryBackend:         "File",
-		WarmIterations:        warmIterations,
-		GatePassed:            true,
+		SchemaVersion:       snapshotLoadQualificationSchemaVersion,
+		SourceCommit:        requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_SOURCE_COMMIT"),
+		SourceTreeDirty:     requiredEnvBool(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_SOURCE_TREE_DIRTY"),
+		GoVersion:           runtime.Version(),
+		FirecrackerVersion:  firecrackerQualificationVersion(t),
+		HostKernel:          requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_HOST_KERNEL"),
+		HostCPU:             requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_HOST_CPU"),
+		WorkspaceFilesystem: requiredEnv(t, "SECONDBOX_SNAPSHOT_QUALIFICATION_WORKSPACE_FILESYSTEM"),
+		MemoryBackend:       "File",
+		WarmIterations:      warmIterations,
+		GatePassed:          true,
 	}
 	for _, memoryMiB := range shapes {
 		shape := measureSnapshotLoadShape(t, memoryMiB, warmIterations)

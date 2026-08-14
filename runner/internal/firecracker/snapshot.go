@@ -14,33 +14,33 @@ import (
 )
 
 type GoldenSnapshotManifest struct {
-	InstanceID            string            `json:"instanceId"`
-	SandboxID             string            `json:"sandboxId"`
-	CompartmentID         string            `json:"compartmentId,omitempty"`
-	CreatedAt             string            `json:"createdAt"`
-	SnapshotPath          string            `json:"snapshotPath"`
-	MemFilePath           string            `json:"memFilePath"`
-	KernelPath            string            `json:"kernelPath"`
-	KernelArgs            string            `json:"kernelArgs,omitempty"`
-	KernelSHA256          string            `json:"kernelSha256,omitempty"`
-	KernelIdentity        *ArtifactIdentity `json:"kernelIdentity,omitempty"`
-	RootfsPath            string            `json:"rootfsPath"`
-	RootfsSHA256          string            `json:"rootfsSha256,omitempty"`
-	RootfsIdentity        *ArtifactIdentity `json:"rootfsIdentity,omitempty"`
-	WorkspacePath         string            `json:"workspacePath,omitempty"`
-	SharedImagePath       string            `json:"sharedImagePath,omitempty"`
-	SharedSHA256          string            `json:"sharedSha256,omitempty"`
-	SharedIdentity        *ArtifactIdentity `json:"sharedIdentity,omitempty"`
-	FirecrackerPath       string            `json:"firecrackerPath"`
-	ComputeBackendVersion string            `json:"firecrackerVersion"`
-	Machine               machineConfig     `json:"machine"`
-	VsockUDSPath          string            `json:"vsockUDSPath,omitempty"`
-	TapName               string            `json:"tapName,omitempty"`
-	GuestIP               string            `json:"guestIp,omitempty"`
-	OriginalRunDir        string            `json:"originalRunDir,omitempty"`
-	Jailed                bool              `json:"jailed,omitempty"`
-	StartupFingerprint    string            `json:"startupFingerprint,omitempty"`
-	Metadata              map[string]string `json:"metadata,omitempty"`
+	InstanceID         string            `json:"instanceId"`
+	SandboxID          string            `json:"sandboxId"`
+	CompartmentID      string            `json:"compartmentId,omitempty"`
+	CreatedAt          string            `json:"createdAt"`
+	SnapshotPath       string            `json:"snapshotPath"`
+	MemFilePath        string            `json:"memFilePath"`
+	KernelPath         string            `json:"kernelPath"`
+	KernelArgs         string            `json:"kernelArgs,omitempty"`
+	KernelSHA256       string            `json:"kernelSha256,omitempty"`
+	KernelIdentity     *ArtifactIdentity `json:"kernelIdentity,omitempty"`
+	RootfsPath         string            `json:"rootfsPath"`
+	RootfsSHA256       string            `json:"rootfsSha256,omitempty"`
+	RootfsIdentity     *ArtifactIdentity `json:"rootfsIdentity,omitempty"`
+	WorkspacePath      string            `json:"workspacePath,omitempty"`
+	SharedImagePath    string            `json:"sharedImagePath,omitempty"`
+	SharedSHA256       string            `json:"sharedSha256,omitempty"`
+	SharedIdentity     *ArtifactIdentity `json:"sharedIdentity,omitempty"`
+	FirecrackerPath    string            `json:"firecrackerPath"`
+	FirecrackerVersion string            `json:"firecrackerVersion"`
+	Machine            machineConfig     `json:"machine"`
+	VsockUDSPath       string            `json:"vsockUDSPath,omitempty"`
+	TapName            string            `json:"tapName,omitempty"`
+	GuestIP            string            `json:"guestIp,omitempty"`
+	OriginalRunDir     string            `json:"originalRunDir,omitempty"`
+	Jailed             bool              `json:"jailed,omitempty"`
+	StartupFingerprint string            `json:"startupFingerprint,omitempty"`
+	Metadata           map[string]string `json:"metadata,omitempty"`
 }
 
 type ArtifactIdentity struct {
@@ -84,26 +84,26 @@ func (m *Manager) CreateGoldenSnapshot(ctx context.Context, instanceID, outDir s
 	resumed = true
 
 	manifest := GoldenSnapshotManifest{
-		InstanceID:            inst.id,
-		SandboxID:             inst.sandboxID,
-		CreatedAt:             time.Now().UTC().Format(time.RFC3339),
-		SnapshotPath:          snapshotPath,
-		MemFilePath:           memPath,
-		KernelPath:            m.cfg.MicroVMKernelPath,
-		KernelArgs:            effectiveKernelArgs(m.cfg, firstNonEmpty(inst.guestIP, m.guestIP(inst.id))),
-		RootfsPath:            firstNonEmpty(inst.rootfsPath, m.cfg.MicroVMRootfsPath),
-		WorkspacePath:         inst.workspacePath,
-		SharedImagePath:       firstNonEmpty(inst.sharedImagePath, m.cfg.MicroVMSharedImagePath),
-		FirecrackerPath:       m.cfg.FirecrackerPath,
-		ComputeBackendVersion: expectedComputeBackendVersionString(),
-		Machine:               machineConfig{VCPUCount: m.cfg.MicroVMVCPUs, MemSizeMiB: m.cfg.MicroVMMemoryMiB, SMT: false, CPUTemplate: m.cfg.MicroVMCPUTemplate},
-		VsockUDSPath:          inst.vsockUDS,
-		TapName:               inst.tapName,
-		GuestIP:               firstNonEmpty(inst.guestIP, m.guestIP(inst.id)),
-		OriginalRunDir:        inst.dir,
-		Jailed:                inst.jailRoot != "",
-		StartupFingerprint:    inst.startupFingerprint,
-		Metadata:              copyStringMap(metadata),
+		InstanceID:         inst.id,
+		SandboxID:          inst.sandboxID,
+		CreatedAt:          time.Now().UTC().Format(time.RFC3339),
+		SnapshotPath:       snapshotPath,
+		MemFilePath:        memPath,
+		KernelPath:         m.cfg.MicroVMKernelPath,
+		KernelArgs:         effectiveKernelArgs(m.cfg, firstNonEmpty(inst.guestIP, m.guestIP(inst.id))),
+		RootfsPath:         firstNonEmpty(inst.rootfsPath, m.cfg.MicroVMRootfsPath),
+		WorkspacePath:      inst.workspacePath,
+		SharedImagePath:    firstNonEmpty(inst.sharedImagePath, m.cfg.MicroVMSharedImagePath),
+		FirecrackerPath:    m.cfg.FirecrackerPath,
+		FirecrackerVersion: expectedFirecrackerVersionString(),
+		Machine:            machineConfig{VCPUCount: m.cfg.MicroVMVCPUs, MemSizeMiB: m.cfg.MicroVMMemoryMiB, SMT: false, CPUTemplate: m.cfg.MicroVMCPUTemplate},
+		VsockUDSPath:       inst.vsockUDS,
+		TapName:            inst.tapName,
+		GuestIP:            firstNonEmpty(inst.guestIP, m.guestIP(inst.id)),
+		OriginalRunDir:     inst.dir,
+		Jailed:             inst.jailRoot != "",
+		StartupFingerprint: inst.startupFingerprint,
+		Metadata:           copyStringMap(metadata),
 	}
 	manifest.KernelSHA256, _ = fileSHA256(manifest.KernelPath)
 	manifest.RootfsSHA256, _ = fileSHA256(manifest.RootfsPath)

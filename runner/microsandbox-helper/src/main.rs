@@ -263,8 +263,8 @@ fn supervise_instance(
             | Some(Message::StreamCredit(_)) => write_diagnostic(
                 &mut control,
                 &envelope,
-                "operation_pending_data_plane",
-                "operation is admitted but not implemented by this helper build",
+                "inactive_stream",
+                "stream control is not accepted outside an active operation",
             )?,
             _ => write_diagnostic(
                 &mut control,

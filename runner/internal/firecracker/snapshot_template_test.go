@@ -28,7 +28,7 @@ func testSnapshotTemplateKey() SnapshotTemplateKey {
 		GuestBuildID:            "guest-build-1",
 		GuestProtocolGeneration: 1,
 		GuestFeatures:           []string{"streaming_exec", "pty_resize"},
-		ComputeBackendVersion:   "1.16.1",
+		FirecrackerVersion:      "1.16.1",
 		HostCPUFingerprint:      strings.Repeat("1", 64),
 		CPUTemplate:             "",
 		VCPUCount:               1,
@@ -120,7 +120,7 @@ func TestSnapshotTemplateKeyChangeProducesNewIdentity(t *testing.T) {
 	mutations := map[string]func(*SnapshotTemplateKey){
 		"kernel args":     func(k *SnapshotTemplateKey) { k.KernelArgs += " extra=1" },
 		"rootfs digest":   func(k *SnapshotTemplateKey) { k.SourceRootfsSHA256 = strings.Repeat("9", 64) },
-		"firecracker":     func(k *SnapshotTemplateKey) { k.ComputeBackendVersion = "1.17.0" },
+		"firecracker":     func(k *SnapshotTemplateKey) { k.FirecrackerVersion = "1.17.0" },
 		"host cpu":        func(k *SnapshotTemplateKey) { k.HostCPUFingerprint = strings.Repeat("2", 64) },
 		"memory shape":    func(k *SnapshotTemplateKey) { k.MemorySizeMiB = 1024 },
 		"vcpu shape":      func(k *SnapshotTemplateKey) { k.VCPUCount = 2 },
