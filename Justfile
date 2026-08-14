@@ -118,6 +118,9 @@ test-scenario:
 test-scenario-microsandbox-linux:
     scripts/test-scenario-microsandbox-linux.sh
 
+test-scenario-microsandbox-macos:
+    scripts/test-scenario-microsandbox-macos.sh
+
 prepare-stress:
     scripts/prepare-stress.sh
 

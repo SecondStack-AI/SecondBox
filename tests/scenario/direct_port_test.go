@@ -325,8 +325,20 @@ raise SystemExit(1)'`
 	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") == "microsandbox" {
 		// The pinned Alpine fixture deliberately contains BusyBox rather than
 		// Python. Its netcat exec mode preserves one interactive TCP stream,
-		// which is the behavior this transport qualification measures.
-		command = `nohup sh -c 'while :; do nc -l -p 8080 -e cat; done' >/workspace/echo-server.log 2>&1 </dev/null & sleep 1`
+		// which is the behavior this transport qualification measures. Prove
+		// readiness with a real echoed connection instead of a fixed delay: a
+		// loaded Hypervisor.framework host can take longer than one second to
+		// schedule the background listener even though the spawning Exec has
+		// already returned.
+		command = `nohup nc -ll -p 8080 -e cat >/workspace/echo-server.log 2>&1 </dev/null &
+i=0
+while [ "$i" -lt 50 ]; do
+    probe="$(printf probe | nc -w 1 127.0.0.1 8080 2>/dev/null || true)"
+    [ "$probe" = probe ] && exit 0
+    i=$((i+1))
+    sleep 0.1
+done
+exit 1`
 	}
 	listener := executeScenarioCommand(
 		t,

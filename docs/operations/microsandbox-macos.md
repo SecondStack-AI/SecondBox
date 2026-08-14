@@ -33,8 +33,10 @@ build-evidence.txt
 signing-evidence.txt
 ```
 
-Local qualification uses ad-hoc signing. A persistent installation must select its signing
-identity explicitly and rerun the repository signing step:
+Local development may use ad-hoc signing only when it is mechanically required to execute the
+helper. That does not verify the repository signing workflow or qualify production distribution.
+A persistent installation must select its signing identity explicitly and rerun the repository
+signing step in an environment that can provide independent signing evidence:
 
 ```sh
 runner/scripts/sign-microsandbox-macos.sh \
@@ -101,8 +103,9 @@ export SECONDBOX_MICROSANDBOX_WORKSPACE_TEMPLATE_CAPACITY_BYTES=8589934592
 
 Also set every required runner protocol address, RunnerPool ID, runner identity, mTLS certificate,
 private key, CA, enabled feature, and evidence setting. These are deployment authority and have no
-application defaults. Run the native runner as the dedicated privileged runner identity; never run
-the control plane with Hypervisor or WorkspaceStore access.
+application defaults. Run the native runner as a dedicated unprivileged identity; Darwin rejects a
+root runner because Hypervisor.framework and APFS clonefile do not require Linux's KVM, cgroup,
+namespace, or TAP authority. Never run the control plane with Hypervisor or WorkspaceStore access.
 
 The runner uses inherited socketpairs rather than pathname Unix sockets. `TMPDIR=/tmp` keeps
 ephemeral runtime paths short, and identity checks tolerate macOS's `/var` to `/private/var`
@@ -117,7 +120,9 @@ just test-workspacestore-macos
 just test-microsandbox-macos
 ```
 
-These commands fail rather than skip when Hypervisor.framework, APFS clonefile, code signatures,
-helper entitlement, e2fs tooling, the materialization, inherited descriptors, the network engine,
-or cleanup are unavailable. Task 10M adds the full control-plane scenario and cross-platform
-regression gate. Passing this document's checks does not remove the experimental label.
+These commands fail rather than skip when Hypervisor.framework execution, APFS clonefile, e2fs
+tooling, the materialization, inherited descriptors, the network engine, or cleanup are
+unavailable. They may exercise a locally or ad-hoc signed binary as a mechanical prerequisite, but
+they do not qualify repository or production signing. Task 10M adds the full control-plane scenario
+and cross-platform regression gate. Passing this document's checks does not remove the experimental
+label.

@@ -136,10 +136,3 @@ func configureRunnerLogging(path string) (func() error, error) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(io.MultiWriter(os.Stdout, file), nil)))
 	return file.Close, nil
 }
-
-func validateRunnerExecutionIdentity(healthcheck bool, effectiveUID int) error {
-	if !healthcheck && effectiveUID != 0 {
-		return fmt.Errorf("SecondBox runner must run as root to own local compute host resources")
-	}
-	return nil
-}

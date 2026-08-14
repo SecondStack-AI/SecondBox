@@ -9,16 +9,30 @@ if [[ "$scenario_backend" != "firecracker" && "$scenario_backend" != "microsandb
   exit 1
 fi
 export SECONDBOX_SCENARIO_COMPUTE_BACKEND="$scenario_backend"
+scenario_host_platform="${SECONDBOX_SCENARIO_HOST_PLATFORM:-linux}"
+if [[ "$scenario_host_platform" != "linux" && "$scenario_host_platform" != "darwin" ]]; then
+  echo "SecondBox scenario prerequisite failed: SECONDBOX_SCENARIO_HOST_PLATFORM must be linux or darwin" >&2
+  exit 1
+fi
+if [[ "$scenario_host_platform" == "darwin" && "$scenario_backend" != "microsandbox" ]]; then
+  echo "SecondBox scenario prerequisite failed: Darwin supports only the Microsandbox scenario" >&2
+  exit 1
+fi
+native_macos=false
+if [[ "$scenario_host_platform" == "darwin" ]]; then
+  native_macos=true
+fi
+export SECONDBOX_SCENARIO_HOST_PLATFORM="$scenario_host_platform"
 qualification_evidence="$repo_root/.tmp/scenario-qualification-evidence.json"
 if [[ "$scenario_backend" == "microsandbox" ]]; then
-  qualification_evidence="$repo_root/.tmp/microsandbox-linux-scenario-qualification-evidence.json"
+  qualification_evidence="$repo_root/.tmp/microsandbox-$scenario_host_platform-scenario-qualification-evidence.json"
 fi
 snapshot_resume_evidence="$repo_root/.tmp/2026-08-07-snapshot-resume-end-to-end.json"
-microsandbox_cold_start_evidence="$repo_root/.tmp/2026-08-13-microsandbox-linux-cold-starts.json"
+microsandbox_cold_start_evidence="$repo_root/.tmp/2026-08-13-microsandbox-$scenario_host_platform-cold-starts.json"
 rm -f -- "$qualification_evidence" "$snapshot_resume_evidence" "$microsandbox_cold_start_evidence"
 compose_file="$repo_root/scripts/scenario-compose.yml"
 compose_override_file=""
-if [[ "$scenario_backend" == "microsandbox" ]]; then
+if [[ "$scenario_backend" == "microsandbox" && "$native_macos" != "true" ]]; then
   compose_override_file="$repo_root/scripts/scenario-microsandbox-compose.yml"
 fi
 scenario_root="$repo_root/.tmp/scenario"
@@ -39,6 +53,14 @@ fail() {
   exit 1
 }
 
+sha256_stream() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum
+  else
+    shasum -a 256
+  fi
+}
+
 if [[ "$scenario_mode" != "suite" && "$scenario_mode" != "stress" &&
       "$scenario_mode" != "lifecycle" ]]; then
   fail "SECONDBOX_SCENARIO_MODE must be suite, stress, or lifecycle"
@@ -48,9 +70,9 @@ if [[ "${SECONDBOX_REQUIRE_QUALIFIED_SCENARIO:-}" != "1" ]]; then
   cat >&2 <<'PREREQUISITES'
 SecondBox scenario qualification is mandatory and never skips.
 Set SECONDBOX_REQUIRE_QUALIFIED_SCENARIO=1 and provide:
-  /dev/kvm
+  the selected host hypervisor and native prerequisites
   the selected backend's explicit local artifacts and trust inputs
-  SECONDBOX_RUNNER_WORKSPACE_ROOT on XFS or Btrfs
+  SECONDBOX_RUNNER_WORKSPACE_ROOT on the platform-qualified reflink filesystem
 PREREQUISITES
   exit 1
 fi
@@ -141,21 +163,39 @@ export SECONDBOX_SCENARIO_SNAPSHOT_RESUME_ARRIVALS=10
 export SECONDBOX_SCENARIO_SNAPSHOT_RESUME_EVIDENCE="$snapshot_resume_evidence"
 export SECONDBOX_SCENARIO_MICROSANDBOX_COLD_START_EVIDENCE="$microsandbox_cold_start_evidence"
 
-for command in curl date docker findmnt git go ip jq mountpoint openssl python3 seq sha256sum; do
+required_commands=(curl date docker git go jq openssl python3 seq)
+if [[ "$native_macos" == "true" ]]; then
+  required_commands+=(diskutil pgrep ps shasum sysctl)
+else
+  required_commands+=(findmnt ip mountpoint sha256sum)
+fi
+for command in "${required_commands[@]}"; do
   command -v "$command" >/dev/null 2>&1 ||
     fail "missing command: $command"
 done
-docker compose version >/dev/null 2>&1 ||
+if docker compose version >/dev/null 2>&1; then
+  compose_command=(docker compose)
+elif command -v docker-compose >/dev/null 2>&1 && docker-compose version >/dev/null 2>&1; then
+  compose_command=(docker-compose)
+else
   fail "Docker Compose v2 is required"
-
-required_devices=(/dev/kvm)
-if [[ "$scenario_backend" == "firecracker" ]]; then
-  required_devices+=(/dev/net/tun)
 fi
-for device in "${required_devices[@]}"; do
-  [[ -c "$device" && -r "$device" && -w "$device" ]] ||
-    fail "$device must be a readable and writable character device"
-done
+
+if [[ "$native_macos" == "true" ]]; then
+  [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]] ||
+    fail "the native macOS scenario requires Apple Silicon"
+  [[ "$(sysctl -n kern.hv_support)" == "1" ]] ||
+    fail "Hypervisor.framework support is required"
+else
+  required_devices=(/dev/kvm)
+  if [[ "$scenario_backend" == "firecracker" ]]; then
+    required_devices+=(/dev/net/tun)
+  fi
+  for device in "${required_devices[@]}"; do
+    [[ -c "$device" && -r "$device" && -w "$device" ]] ||
+      fail "$device must be a readable and writable character device"
+  done
+fi
 if [[ "$scenario_backend" == "firecracker" ]]; then
   [[ -r /sys/fs/cgroup/cgroup.controllers ]] ||
     fail "a writable cgroup v2 host is required"
@@ -185,10 +225,10 @@ artifacts_dir="$SECONDBOX_SCENARIO_MICROVM_ARTIFACTS_DIR"
 workspace_root="$SECONDBOX_RUNNER_WORKSPACE_ROOT"
 public_key="$SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY"
 for directory in "$artifacts_dir" "$workspace_root"; do
-  [[ "$directory" = /* && "$(realpath -e "$directory")" == "$directory" && ! -L "$directory" && -d "$directory" ]] ||
+  [[ "$directory" = /* && "$(realpath "$directory")" == "$directory" && ! -L "$directory" && -d "$directory" ]] ||
     fail "directory must be an existing clean absolute non-symlink path: $directory"
 done
-[[ "$public_key" = /* && "$(realpath -e "$public_key")" == "$public_key" && ! -L "$public_key" && -f "$public_key" ]] ||
+[[ "$public_key" = /* && "$(realpath "$public_key")" == "$public_key" && ! -L "$public_key" && -f "$public_key" ]] ||
   fail "SECONDBOX_RUNNER_ARTIFACT_PUBLIC_KEY must be an existing clean absolute non-symlink file"
 diagnostics_dir="${SECONDBOX_SCENARIO_DIAGNOSTICS_DIR:-}"
 if [[ -n "$diagnostics_dir" ]]; then
@@ -199,13 +239,23 @@ if [[ -n "$diagnostics_dir" ]]; then
     fail "SECONDBOX_SCENARIO_DIAGNOSTICS_DIR parent must be an existing non-symlink directory"
 fi
 
-workspace_mount="$(findmnt -T "$workspace_root" -n -o TARGET,SOURCE,FSTYPE,OPTIONS)" ||
-  fail "findmnt could not resolve SECONDBOX_RUNNER_WORKSPACE_ROOT"
-workspace_fstype="$(findmnt -T "$workspace_root" -n -o FSTYPE)"
-if [[ "$workspace_fstype" != "xfs" && "$workspace_fstype" != "btrfs" ]]; then
-  fail "SECONDBOX_RUNNER_WORKSPACE_ROOT must be on XFS or Btrfs, got $workspace_fstype"
+if [[ "$native_macos" == "true" ]]; then
+  workspace_device_node="$(df -P "$workspace_root" | awk 'NR == 2 { print $1 }')"
+  workspace_disk_info="$(diskutil info "$workspace_device_node")"
+  grep -q 'File System Personality:.*APFS' <<<"$workspace_disk_info" ||
+    fail "SECONDBOX_RUNNER_WORKSPACE_ROOT must be on APFS"
+  workspace_fstype=apfs
+  workspace_mount="$(df -P "$workspace_root" | awk 'NR == 2 { print $6 " " $1 " apfs" }')"
+  workspace_device="$(stat -f %d "$workspace_root")"
+else
+  workspace_mount="$(findmnt -T "$workspace_root" -n -o TARGET,SOURCE,FSTYPE,OPTIONS)" ||
+    fail "findmnt could not resolve SECONDBOX_RUNNER_WORKSPACE_ROOT"
+  workspace_fstype="$(findmnt -T "$workspace_root" -n -o FSTYPE)"
+  if [[ "$workspace_fstype" != "xfs" && "$workspace_fstype" != "btrfs" ]]; then
+    fail "SECONDBOX_RUNNER_WORKSPACE_ROOT must be on XFS or Btrfs, got $workspace_fstype"
+  fi
+  workspace_device="$(stat -c %d "$workspace_root")"
 fi
-workspace_device="$(stat -c %d "$workspace_root")"
 if [[ "$scenario_backend" == "firecracker" ]]; then
   artifacts_device="$(stat -c %d "$artifacts_dir")"
   checkout_device="$(stat -c %d "$repo_root")"
@@ -254,7 +304,7 @@ if [[ "$scenario_backend" == "firecracker" ]]; then
     fail "artifact manifest lacks architecture"
 else
   materialization="$SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION"
-  [[ "sha256:$(jq --compact-output --join-output . "$materialization" | sha256sum | awk '{print $1}')" == "$SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION_DIGEST" ]] ||
+  [[ "sha256:$(jq --compact-output --join-output . "$materialization" | sha256_stream | awk '{print $1}')" == "$SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION_DIGEST" ]] ||
     fail "Microsandbox materialization digest differs from its pinned identity"
   [[ "$(jq -er '.schemaVersion' "$materialization")" == "secondbox.runner/backend-materialization/v1" &&
      "$(jq -er '.key.backendKind' "$materialization")" == "microsandbox" ]] ||
@@ -267,18 +317,25 @@ else
   toolchain_features='[]'
   guest_protocol_minimum=6
   guest_protocol_maximum=6
-  architecture=amd64
+  architecture="$(jq -er '.key.guestArchitecture' "$materialization")" ||
+    fail "Microsandbox materialization lacks key.guestArchitecture"
   manifest_digest="$SECONDBOX_SCENARIO_MICROSANDBOX_MATERIALIZATION_DIGEST"
 fi
-[[ "$architecture" == "amd64" ]] ||
-  fail "scenario runner currently requires amd64 local artifacts"
+if [[ "$native_macos" == "true" ]]; then
+  [[ "$architecture" == "arm64" ]] ||
+    fail "native macOS scenario requires arm64 local artifacts"
+else
+  [[ "$architecture" == "amd64" ]] ||
+    fail "Linux scenario requires amd64 local artifacts"
+fi
+export SECONDBOX_SCENARIO_ARCHITECTURE="$architecture"
 
 mkdir -p "$scenario_root"
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
   -trimpath -buildvcs=false -o "$scenario_root/secondboxd" "$repo_root/cmd/secondboxd"
 chmod 0755 "$scenario_root/secondboxd"
 runner_dockerfile="$repo_root/runner/Dockerfile"
-if [[ "$scenario_backend" == "microsandbox" ]]; then
+if [[ "$scenario_backend" == "microsandbox" && "$native_macos" != "true" ]]; then
   (
     cd "$repo_root/runner"
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
@@ -300,11 +357,18 @@ if [[ "$scenario_mode" == "suite" && "$scenario_backend" == "firecracker" ]]; th
   )
   chmod 0755 "$scenario_root/snapshot-template-publish.test"
 fi
-runner_build_arguments=(--quiet --file "$runner_dockerfile" --tag "$runner_image")
-if [[ "$scenario_backend" == "microsandbox" ]]; then
-  runner_build_arguments+=(--build-context "scenario=$scenario_root")
+if [[ "$native_macos" != "true" ]]; then
+  runner_build_arguments=(--quiet --file "$runner_dockerfile" --tag "$runner_image")
+  if [[ "$scenario_backend" == "microsandbox" ]]; then
+    runner_build_arguments+=(--build-context "scenario=$scenario_root")
+  fi
+  docker build "${runner_build_arguments[@]}" "$repo_root" >/dev/null
+else
+  : "${SECONDBOX_SCENARIO_NATIVE_RUNNER_BUILD:?native macOS scenario requires SECONDBOX_SCENARIO_NATIVE_RUNNER_BUILD}"
+  [[ "$(cd "$SECONDBOX_SCENARIO_NATIVE_RUNNER_BUILD" && pwd -P)" == "$SECONDBOX_SCENARIO_NATIVE_RUNNER_BUILD" ]] ||
+    fail "SECONDBOX_SCENARIO_NATIVE_RUNNER_BUILD must be a clean absolute path"
+  export SECONDBOX_SCENARIO_SERVICE_CONTROL="$repo_root/scripts/scenario-microsandbox-macos-service-control.sh"
 fi
-docker build "${runner_build_arguments[@]}" "$repo_root" >/dev/null
 
 run_dir="$(mktemp -d "$scenario_root/run.XXXXXX")"
 pki_dir="$run_dir/pki"
@@ -433,7 +497,7 @@ for offset in $(seq 0 511); do
   scenario_network_second_octet=$(( 18 + scenario_network_index / 256 ))
   scenario_network_third_octet=$(( scenario_network_index % 256 ))
   scenario_guest_cidr="198.${scenario_network_second_octet}.${scenario_network_third_octet}.0/24"
-  if [[ -z "$(ip route show "$scenario_guest_cidr")" ]]; then
+  if [[ "$native_macos" == "true" ]] || [[ -z "$(ip route show "$scenario_guest_cidr")" ]]; then
     scenario_network_found=true
     break
   fi
@@ -446,7 +510,7 @@ for offset in $(seq 1 511); do
   scenario_compose_second_octet=$(( 18 + scenario_compose_network_index / 256 ))
   scenario_compose_third_octet=$(( scenario_compose_network_index % 256 ))
   scenario_compose_cidr="198.${scenario_compose_second_octet}.${scenario_compose_third_octet}.0/24"
-  if [[ -z "$(ip route show "$scenario_compose_cidr")" ]]; then
+  if [[ "$native_macos" == "true" ]] || [[ -z "$(ip route show "$scenario_compose_cidr")" ]]; then
     scenario_compose_network_found=true
     break
   fi
@@ -481,7 +545,7 @@ compose() {
   if [[ -n "$compose_override_file" ]]; then
     compose_files+=(--file "$compose_override_file")
   fi
-  docker compose --project-name "$project_name" "${compose_files[@]}" "$@"
+  "${compose_command[@]}" --project-name "$project_name" "${compose_files[@]}" "$@"
 }
 
 sweep_host_orphans() {
@@ -538,12 +602,15 @@ collect_diagnostics() {
   [[ -n "$diagnostics_dir" ]] || return 0
   mkdir -m 0700 -- "$diagnostics_dir" ||
     return 1
-  if ! compose exec --no-TTY secondbox-runner \
-    /bin/sh -c \
-    'test -f /var/lib/secondbox-runner/log/runner.jsonl &&
-     cat /var/lib/secondbox-runner/log/runner.jsonl' \
-    >"$diagnostics_dir/runner.jsonl"; then
-    return 1
+  if [[ "$native_macos" == "true" ]]; then
+    "$SECONDBOX_SCENARIO_SERVICE_CONTROL" logs secondbox-runner \
+      >"$diagnostics_dir/runner.jsonl" || return 1
+  else
+    compose exec --no-TTY secondbox-runner \
+      /bin/sh -c \
+      'test -f /var/lib/secondbox-runner/log/runner.jsonl &&
+       cat /var/lib/secondbox-runner/log/runner.jsonl' \
+      >"$diagnostics_dir/runner.jsonl" || return 1
   fi
   if ! compose logs --no-color --timestamps \
     control-plane postgres \
@@ -563,7 +630,10 @@ cleanup() {
     if ! compose ps --all >&2; then
       echo "SecondBox scenario could not collect container state" >&2
     fi
-    if ! compose exec --no-TTY secondbox-runner \
+    if [[ "$native_macos" == "true" ]]; then
+      "$SECONDBOX_SCENARIO_SERVICE_CONTROL" logs secondbox-runner >&2 ||
+        echo "SecondBox scenario could not collect native runner application logs" >&2
+    elif ! compose exec --no-TTY secondbox-runner \
       /bin/sh -c \
       'test ! -f /var/lib/secondbox-runner/log/runner.jsonl ||
        tail -n 500 /var/lib/secondbox-runner/log/runner.jsonl' >&2; then
@@ -574,14 +644,25 @@ cleanup() {
       'find /var/lib/secondbox-runner/firecracker-log -type f -exec tail -n 200 {} +' >&2; then
       echo "SecondBox scenario could not collect Firecracker logs" >&2
     fi
-    if ! compose logs --tail 200 control-plane secondbox-runner postgres >&2; then
+    if [[ "$native_macos" == "true" ]]; then
+      failure_logs=("$SECONDBOX_SCENARIO_SERVICE_CONTROL" logs --tail 200 control-plane secondbox-runner postgres)
+    else
+      failure_logs=(compose logs --tail 200 control-plane secondbox-runner postgres)
+    fi
+    if ! "${failure_logs[@]}" >&2; then
       echo "SecondBox scenario could not collect failure logs" >&2
     fi
   fi
   # The Runner container restarts unless it is stopped and every start reapplies
   # host networking, so the bridge can only be removed once the container can no
   # longer come back and recreate it.
-  if ! compose stop secondbox-runner >/dev/null 2>&1; then
+  if [[ "$native_macos" == "true" ]]; then
+    runner_stop_command=("$SECONDBOX_SCENARIO_SERVICE_CONTROL" stop secondbox-runner)
+    "$SECONDBOX_SCENARIO_SERVICE_CONTROL" stop secondbox-runner-relocation >/dev/null 2>&1 || true
+  else
+    runner_stop_command=(compose stop secondbox-runner)
+  fi
+  if ! "${runner_stop_command[@]}" >/dev/null 2>&1; then
     echo "SecondBox scenario runner stop failed for $project_name" >&2
     status=1
   fi
@@ -595,7 +676,7 @@ cleanup() {
     status=1
   fi
   compose_down_arguments=(down --volumes --remove-orphans)
-  if [[ "$scenario_backend" == "microsandbox" ]]; then
+  if [[ "$scenario_backend" == "microsandbox" && "$native_macos" != "true" ]]; then
     # Docker Compose excludes inactive profile services from `down`. The
     # relocation runner may be stopped but still retain the locally built
     # image, so activate its profile for complete topology cleanup.
@@ -622,20 +703,22 @@ cleanup() {
     echo "SecondBox scenario cgroup parent survived cleanup: $SECONDBOX_SCENARIO_CGROUP_PARENT" >&2
     status=1
   fi
-  for directory in "$state_dir" "$relocation_state_dir" "$scenario_workspace_dir" "$relocation_workspace_dir"; do
-    if [[ -d "$directory" ]] &&
-       ! docker run --rm \
-         --entrypoint /bin/chown \
-         -v "$directory:/cleanup" \
-         "$runner_image" \
-         -R "$SECONDBOX_SCENARIO_UID:$SECONDBOX_SCENARIO_GID" /cleanup >/dev/null; then
-      echo "SecondBox scenario ownership cleanup failed: $directory" >&2
+  if [[ "$native_macos" != "true" ]]; then
+    for directory in "$state_dir" "$relocation_state_dir" "$scenario_workspace_dir" "$relocation_workspace_dir"; do
+      if [[ -d "$directory" ]] &&
+         ! docker run --rm \
+           --entrypoint /bin/chown \
+           -v "$directory:/cleanup" \
+           "$runner_image" \
+           -R "$SECONDBOX_SCENARIO_UID:$SECONDBOX_SCENARIO_GID" /cleanup >/dev/null; then
+        echo "SecondBox scenario ownership cleanup failed: $directory" >&2
+        status=1
+      fi
+    done
+    if ! docker image rm "$runner_image" >/dev/null 2>&1; then
+      echo "SecondBox scenario runner image cleanup failed: $runner_image" >&2
       status=1
     fi
-  done
-  if ! docker image rm "$runner_image" >/dev/null 2>&1; then
-    echo "SecondBox scenario runner image cleanup failed: $runner_image" >&2
-    status=1
   fi
   if [[ -d "$scenario_workspace_dir" ]] && ! rm -rf -- "$scenario_workspace_dir"; then
     echo "SecondBox scenario Workspace cleanup failed: $scenario_workspace_dir" >&2
@@ -657,7 +740,7 @@ cleanup() {
     if [[ "$scenario_backend" == "firecracker" ]]; then
       evidence_suite="test-scenario"
     else
-      evidence_suite="test-scenario-microsandbox-linux"
+      evidence_suite="test-scenario-microsandbox-$scenario_host_platform"
     fi
     if ! jq -n \
       --arg schemaVersion "secondbox.release/qualification-evidence/v1" \
@@ -665,6 +748,7 @@ cleanup() {
       --argjson repositoryDirty "$scenario_repository_dirty" \
       --arg suite "$evidence_suite" \
       --arg backend "$scenario_backend" \
+      --arg hostPlatform "$scenario_host_platform" \
       --argjson passCount "$scenario_pass_count" \
       --argjson wallClockSeconds "$wall_clock_seconds" \
       --arg workspaceMount "$workspace_mount" \
@@ -677,13 +761,18 @@ cleanup() {
         suite: $suite,
         passCount: $passCount,
         wallClockSeconds: $wallClockSeconds,
-        host: ({
-          kvm: {path: "/dev/kvm", present: true, readable: true, writable: true},
-          workspaceFilesystem: {mount: $workspaceMount, type: $workspaceFilesystem}
-        } + if $backend == "firecracker" then {
-          tun: {path: "/dev/net/tun", present: true, readable: true, writable: true}
-        } else {
+        host: ({workspaceFilesystem: {mount: $workspaceMount, type: $workspaceFilesystem}} +
+        if $hostPlatform == "darwin" then {
+          platform: "darwin-arm64",
+          hypervisorFramework: {supported: true},
+          kvm: {required: false},
           tun: {required: false}
+        } else {
+          platform: "linux-amd64",
+          kvm: {path: "/dev/kvm", present: true, readable: true, writable: true},
+          tun: (if $backend == "firecracker" then
+            {path: "/dev/net/tun", present: true, readable: true, writable: true}
+          else {required: false} end)
         } end),
         qualifiedAt: $qualifiedAt
       } + if $backend == "microsandbox" then {backend: $backend} else {} end' \
@@ -821,7 +910,11 @@ if [[ "$scenario_mode" == "suite" && "$scenario_backend" == "firecracker" ]]; th
   echo "SecondBox scenario snapshot-resume template: $SECONDBOX_SCENARIO_SNAPSHOT_RESUME_TEMPLATE_ID"
 fi
 
-compose up --detach --wait --wait-timeout 300 secondbox-runner
+if [[ "$native_macos" == "true" ]]; then
+  "$SECONDBOX_SCENARIO_SERVICE_CONTROL" up --detach --wait --wait-timeout 300 secondbox-runner
+else
+  compose up --detach --wait --wait-timeout 300 secondbox-runner
+fi
 
 if [[ "$scenario_mode" == "suite" ]]; then
   scenario_test_arguments=(-count=1 -tags=scenario_live -timeout=30m -v)
