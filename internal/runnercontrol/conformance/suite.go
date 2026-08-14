@@ -105,7 +105,7 @@ func registered(
 				BackendKind: runnerv1.ComputeBackendKind_COMPUTE_BACKEND_KIND_FIRECRACKER,
 				Capabilities: &runnerv1.RunnerCapabilities{
 					Architecture: "amd64", ComputeBackendVersion: "1.16.1",
-					HypervisorReady: true, IsolationReady: true, CgroupReady: true,
+					HypervisorReady: true, IsolationReady: true, ResourceLimitsReady: true,
 					NetworkPolicyReady: true, StorageReady: true, CleanupReady: true,
 					DataPlaneReady:           true,
 					GuestProtocolGenerations: &runnerv1.ProtocolVersionRange{Minimum: 1, Maximum: 1},

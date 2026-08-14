@@ -103,6 +103,9 @@ test-multirunner:
 test-scenario:
     scripts/test-scenario.sh
 
+test-scenario-microsandbox-linux:
+    scripts/test-scenario-microsandbox-linux.sh
+
 prepare-stress:
     scripts/prepare-stress.sh
 

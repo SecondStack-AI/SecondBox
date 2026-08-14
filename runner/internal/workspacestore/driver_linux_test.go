@@ -7,8 +7,32 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestLinuxFormatterCompositionIsExplicit(t *testing.T) {
+	bin := t.TempDir()
+	for _, name := range []string{"mke2fs", "tune2fs", "e2fsck", "microsandbox-helper"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin)
+
+	if _, err := newLinuxDriver("", ""); err == nil || !strings.Contains(err.Error(), "formatter kind") {
+		t.Fatalf("missing formatter kind error = %v", err)
+	}
+	if _, err := newLinuxDriver(FormatterMke2fs, ""); err != nil {
+		t.Fatalf("compose Firecracker formatter without Microsandbox helper: %v", err)
+	}
+	if _, err := newLinuxDriver(
+		FormatterMicrosandboxHelper,
+		filepath.Join(bin, "microsandbox-helper"),
+	); err != nil {
+		t.Fatalf("compose Microsandbox helper formatter: %v", err)
+	}
+}
 
 func TestLinuxAttachmentIsOpaqueAndCarriesPortableIdentity(t *testing.T) {
 	store, _, _ := newFakeStore(t)

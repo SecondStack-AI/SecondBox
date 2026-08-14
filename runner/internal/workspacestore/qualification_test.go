@@ -35,6 +35,7 @@ func TestQualifiedFilesystemProvidesRealCopyOnWriteIsolation(t *testing.T) {
 	store, err := New(t.Context(), Config{
 		Root:                         root,
 		TemplateCapacityBytes:        minimumExt4Bytes,
+		FormatterKind:                FormatterMicrosandboxHelper,
 		MicrosandboxHelperExecutable: strings.TrimSpace(os.Getenv("SECONDBOX_MICROSANDBOX_HELPER_EXECUTABLE")),
 	})
 	if err != nil {
@@ -179,6 +180,7 @@ func TestQualifiedFilesystemProvidesRealCopyOnWriteIsolation(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(targetRoot) })
 	target, err := New(t.Context(), Config{
 		Root: targetRoot, TemplateCapacityBytes: capacity,
+		FormatterKind:                FormatterMicrosandboxHelper,
 		MicrosandboxHelperExecutable: strings.TrimSpace(os.Getenv("SECONDBOX_MICROSANDBOX_HELPER_EXECUTABLE")),
 	})
 	if err != nil {
@@ -299,6 +301,7 @@ func TestQualifiedTwoRunnerRootsAreDistinctAndIsolated(t *testing.T) {
 	storeA, err := New(t.Context(), Config{
 		Root:                         rootA,
 		TemplateCapacityBytes:        minimumExt4Bytes,
+		FormatterKind:                FormatterMicrosandboxHelper,
 		MicrosandboxHelperExecutable: strings.TrimSpace(os.Getenv("SECONDBOX_MICROSANDBOX_HELPER_EXECUTABLE")),
 	})
 	if err != nil {
@@ -307,6 +310,7 @@ func TestQualifiedTwoRunnerRootsAreDistinctAndIsolated(t *testing.T) {
 	storeB, err := New(t.Context(), Config{
 		Root:                         rootB,
 		TemplateCapacityBytes:        minimumExt4Bytes,
+		FormatterKind:                FormatterMicrosandboxHelper,
 		MicrosandboxHelperExecutable: strings.TrimSpace(os.Getenv("SECONDBOX_MICROSANDBOX_HELPER_EXECUTABLE")),
 	})
 	if err != nil {

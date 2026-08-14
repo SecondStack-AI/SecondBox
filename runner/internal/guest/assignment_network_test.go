@@ -14,6 +14,7 @@ func templateNetworkIdentity() AssignmentNetworkIdentity {
 		MACAddress:  "02:9f:1c:44:5e:07",
 		AddressCIDR: "198.18.7.13/24",
 		Gateway:     "198.18.7.1",
+		Nameserver:  "198.18.7.1",
 	}
 }
 
@@ -37,6 +38,9 @@ func TestAssignmentNetworkIdentityResolvesCompleteIdentity(t *testing.T) {
 	if resolved.gateway.String() != "198.18.7.1" {
 		t.Fatalf("gateway = %s", resolved.gateway)
 	}
+	if resolved.nameserver.String() != "198.18.7.1" {
+		t.Fatalf("nameserver = %s", resolved.nameserver)
+	}
 }
 
 func TestAssignmentNetworkIdentityBroadcastFollowsPrefix(t *testing.T) {
@@ -53,6 +57,7 @@ func TestAssignmentNetworkIdentityBroadcastFollowsPrefix(t *testing.T) {
 		identity := templateNetworkIdentity()
 		identity.AddressCIDR = testCase.cidr
 		identity.Gateway = testCase.broadcast
+		identity.Nameserver = testCase.broadcast
 		resolved, err := identity.resolve()
 		if err != nil {
 			t.Fatalf("resolve %s: %v", testCase.cidr, err)
@@ -81,6 +86,10 @@ func TestAssignmentNetworkIdentityRejectsUnusableValues(t *testing.T) {
 		"gateway is this vm":  func(i *AssignmentNetworkIdentity) { i.Gateway = "198.18.7.13" },
 		"malformed gateway":   func(i *AssignmentNetworkIdentity) { i.Gateway = "198.18.7.300" },
 		"gateway with prefix": func(i *AssignmentNetworkIdentity) { i.Gateway = "198.18.7.1/24" },
+		"blank nameserver":    func(i *AssignmentNetworkIdentity) { i.Nameserver = "" },
+		"off-gateway nameserver": func(i *AssignmentNetworkIdentity) {
+			i.Nameserver = "198.18.7.2"
+		},
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {

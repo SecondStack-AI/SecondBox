@@ -16,7 +16,7 @@ func TestRelocateSandboxAdmitsOnlyStoppedSnapshotFreeWorkspaceToCompatibleRunner
 	if _, err := store.pool.Exec(t.Context(), `
 		UPDATE secondbox.runners
 		SET capabilities_json='["compute","local-workspace","workspace-relocation"]',
-		    protocol_versions_json='["2"]',state='ready',
+		    protocol_versions_json='["3"]',state='ready',
 		    active_connection_id='connection-home',drain_phase='active'
 		WHERE id='runner-home'`,
 	); err != nil {

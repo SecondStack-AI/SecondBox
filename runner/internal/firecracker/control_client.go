@@ -106,6 +106,7 @@ type AssignmentNetworkIdentity struct {
 	MACAddress  string `json:"macAddress"`
 	AddressCIDR string `json:"addressCidr"`
 	Gateway     string `json:"gateway"`
+	Nameserver  string `json:"nameserver"`
 }
 
 func (c ControlClient) Heartbeat(ctx context.Context) (HeartbeatResponse, error) {

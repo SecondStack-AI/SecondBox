@@ -47,9 +47,9 @@ func TestSmokeBootFirecracker(t *testing.T) {
 	workspaceStore, err := workspacestore.New(
 		ctx,
 		workspacestore.Config{
-			Root:                         cfg.RunnerWorkspaceRoot,
-			TemplateCapacityBytes:        int64(cfg.MicroVMWorkspaceSizeMiB) << 20,
-			MicrosandboxHelperExecutable: strings.TrimSpace(os.Getenv("SECONDBOX_MICROSANDBOX_HELPER_EXECUTABLE")),
+			Root:                  cfg.RunnerWorkspaceRoot,
+			TemplateCapacityBytes: int64(cfg.MicroVMWorkspaceSizeMiB) << 20,
+			FormatterKind:         workspacestore.FormatterMke2fs,
 		},
 	)
 	if err != nil {
@@ -519,9 +519,9 @@ func TestSmokeRunnerLocalSnapshotRestore(t *testing.T) {
 	workspaceStore, err := workspacestore.New(
 		ctx,
 		workspacestore.Config{
-			Root:                         filepath.Join(workDir, "durable-workspaces"),
-			TemplateCapacityBytes:        int64(cfg.MicroVMWorkspaceSizeMiB) << 20,
-			MicrosandboxHelperExecutable: strings.TrimSpace(os.Getenv("SECONDBOX_MICROSANDBOX_HELPER_EXECUTABLE")),
+			Root:                  filepath.Join(workDir, "durable-workspaces"),
+			TemplateCapacityBytes: int64(cfg.MicroVMWorkspaceSizeMiB) << 20,
+			FormatterKind:         workspacestore.FormatterMke2fs,
 		},
 	)
 	if err != nil {
@@ -743,9 +743,9 @@ func TestSmokeRunnerLocalLifecycleStopPaths(t *testing.T) {
 	workspaceStore, err := workspacestore.New(
 		ctx,
 		workspacestore.Config{
-			Root:                         filepath.Join(workDir, "durable-workspaces"),
-			TemplateCapacityBytes:        int64(cfg.MicroVMWorkspaceSizeMiB) << 20,
-			MicrosandboxHelperExecutable: strings.TrimSpace(os.Getenv("SECONDBOX_MICROSANDBOX_HELPER_EXECUTABLE")),
+			Root:                  filepath.Join(workDir, "durable-workspaces"),
+			TemplateCapacityBytes: int64(cfg.MicroVMWorkspaceSizeMiB) << 20,
+			FormatterKind:         workspacestore.FormatterMke2fs,
 		},
 	)
 	if err != nil {

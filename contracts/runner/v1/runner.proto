@@ -69,7 +69,7 @@ message RunnerCapabilities {
   string compute_backend_version = 3;
   bool hypervisor_ready = 4;
   bool isolation_ready = 5;
-  bool cgroup_ready = 6;
+  bool resource_limits_ready = 6;
   bool network_policy_ready = 7;
   bool storage_ready = 8;
   bool cleanup_ready = 9;

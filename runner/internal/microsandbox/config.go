@@ -84,6 +84,13 @@ func validateConfig(config Config) (validatedConfig, error) {
 		manifest.Key.GuestArchitecture != runtime.GOARCH {
 		return validatedConfig{}, fmt.Errorf("SecondBox Microsandbox materialization does not match this backend and architecture")
 	}
+	flatRootDigest, err := materialization.DigestFlatRoot(config.FlatRootPath)
+	if err != nil {
+		return validatedConfig{}, fmt.Errorf("SecondBox Microsandbox flat root identity: %w", err)
+	}
+	if flatRootDigest != manifest.FlatRootDigest {
+		return validatedConfig{}, fmt.Errorf("SecondBox Microsandbox flat root differs from materialization")
+	}
 	for id, path := range map[string]string{
 		"agentd": config.AgentdPath, "helper": config.HelperExecutable, "libkrunfw": config.LibkrunfwPath,
 	} {

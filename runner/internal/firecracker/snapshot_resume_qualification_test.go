@@ -195,9 +195,9 @@ func buildSnapshotResumeTemplate(
 	// to let go once the capture is sealed.
 	defer releaseManagerNetworkPolicy(t, manager)
 	workspaceStore, err := workspacestore.New(t.Context(), workspacestore.Config{
-		Root:                         cfg.RunnerWorkspaceRoot,
-		TemplateCapacityBytes:        int64(workspaceMiB) << 20,
-		MicrosandboxHelperExecutable: strings.TrimSpace(os.Getenv("SECONDBOX_MICROSANDBOX_HELPER_EXECUTABLE")),
+		Root:                  cfg.RunnerWorkspaceRoot,
+		TemplateCapacityBytes: int64(workspaceMiB) << 20,
+		FormatterKind:         workspacestore.FormatterMke2fs,
 	})
 	if err != nil {
 		t.Fatalf("new template WorkspaceStore: %v", err)

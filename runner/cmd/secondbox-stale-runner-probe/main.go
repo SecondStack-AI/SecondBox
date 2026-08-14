@@ -154,7 +154,7 @@ func staleProbeRegistration(
 				ProtocolVersion: config.ProtocolMaximum,
 				Capabilities: &runnerprotocol.RunnerCapabilities{
 					Architecture: "amd64", HypervisorReady: true, IsolationReady: true,
-					CgroupReady: true, NetworkPolicyReady: true, StorageReady: true,
+					ResourceLimitsReady: true, NetworkPolicyReady: true, StorageReady: true,
 					CleanupReady: true, ComputeBackendVersion: "qualification-stale-probe",
 					GuestProtocolGenerations: &runnerprotocol.ProtocolVersionRange{
 						Minimum: 1, Maximum: 1,

@@ -634,6 +634,19 @@ async fn validate_workspace_path(
     path: &str,
     allow_missing_leaf: bool,
 ) -> Result<(), String> {
+    if !allow_missing_leaf {
+        let response = fs_request(
+            client,
+            FsOp::Stat {
+                path: path.into(),
+                follow_symlink: false,
+            },
+        )
+        .await?;
+        if !matches!(response.data, Some(FsResponseData::Stat(_))) {
+            return Err("workspace-relative path stat returned no metadata".into());
+        }
+    }
     let candidate = if allow_missing_leaf {
         Path::new(path)
             .parent()
