@@ -343,27 +343,27 @@ Run the full product scenario on deimos through the normal control plane, authen
 protocol, direct data plane, and durable WorkspaceStore. This is the hard gate before any macOS
 work.
 
-- [ ] Add a real-KVM Linux scenario driver that fails when KVM or the local patched dependency build
+- [x] Add a real-KVM Linux scenario driver that fails when KVM or the local patched dependency build
   is unavailable; it must not skip successfully.
-- [ ] Create a durable Sandbox and run buffered and streaming exec, binary file operations, PTY
+- [x] Create a durable Sandbox and run buffered and streaming exec, binary file operations, PTY
   open/resize/close, Port relay, deny-all, and an exact network allow-list.
-- [ ] Stop and restart while preserving Workspace data; create a Snapshot, mutate, restore, and
+- [x] Stop and restart while preserving Workspace data; create a Snapshot, mutate, restore, and
   prove the earlier contents return.
-- [ ] Reject a stale generation during active work; kill the runner and prove the helper exits and
+- [x] Reject a stale generation during active work; kill the runner and prove the helper exits and
   the Workspace lock becomes available without reconstructing empty state.
-- [ ] Reject wrong logical/materialization digests, a backend mismatch in a sealed RunnerPool, and
+- [x] Reject wrong logical/materialization digests, a backend mismatch in a sealed RunnerPool, and
   unsupported `snapshot_resume` before creating compute.
-- [ ] Run at least two concurrent Instances with independent operations, streams, disks, and
+- [x] Run at least two concurrent Instances with independent operations, streams, disks, and
   terminal events; prove no cross-Instance data or frame delivery.
-- [ ] Exercise relocation only between stopped, Snapshot-free compatible Linux runners and prove
+- [x] Exercise relocation only between stopped, Snapshot-free compatible Linux runners and prove
   image bytes never persist in the control plane.
-- [ ] Record 30 cold starts with start-to-ready p50/p95, stage breakdown, and peak helper memory as
+- [x] Record 30 cold starts with start-to-ready p50/p95, stage breakdown, and peak helper memory as
   observations rather than a release gate.
-- [ ] Run the complete Firecracker regression suite and scenario; prove selection introduced no
+- [x] Run the complete Firecracker regression suite and scenario; prove selection introduced no
   fallback and preserved Firecracker-specific controls.
-- [ ] Record exact commands, versions, materialization/build digests, bounded logs, and outcomes in
+- [x] Record exact commands, versions, materialization/build digests, bounded logs, and outcomes in
   dated Linux qualification evidence.
-- [ ] Mark Task 7L passed only when every Linux scenario and regression command succeeds. Begin no
+- [x] Mark Task 7L passed only when every Linux scenario and regression command succeeds. Begin no
   macOS work on partial success.
 
 #### Task 7L validation
@@ -378,6 +378,8 @@ work.
 - `just test-workspacestore-linux`
 - `just test-scenario-microsandbox-linux`
 - `just test-scenario`
+
+Evidence: [Task 7L Linux vertical-slice qualification](evidence/2026-08-13-microsandbox-task-7-linux-qualification.md).
 
 ### Task 8M: Prove the completed Linux mechanisms on Apple Silicon
 
