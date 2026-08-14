@@ -2,11 +2,11 @@
 
 Date: 2026-08-14
 
-Result: macOS scenario pass; dual-platform closure incomplete
+Result: verifiable dual-platform functional qualification pass
 
-The verifiable Apple Silicon qualification passed. The required post-port Linux real-compute and
-Firecracker reruns could not run because `/dev/kvm` is currently absent on `deimos`. Production or
-repository macOS signing verification is unavailable on `mini1` and is not claimed by this result.
+The Apple Silicon, post-port Linux Microsandbox, and unchanged Firecracker qualifications passed.
+Production or repository macOS signing verification is unavailable on `mini1` and is not claimed
+by this result. Microsandbox remains experimental.
 
 ## macOS scenario
 
@@ -85,17 +85,62 @@ The direct helper command requires staging beneath the pinned Microsandbox sourc
 dependencies are intentional. A temporary task-owned staging tree passed the helper suite without
 modifying the retained dependency checkout.
 
-## Unavailable required checks
+## Post-macOS Linux real-host qualification
 
-On `deimos`, `lscpu` reports AMD-V and `kvm_amd` plus `kvm` are loaded, but `/dev/kvm` does not
-exist. No host device or kernel state was changed. Therefore these mandatory real-host validations
-were not rerun:
+After `/dev/kvm` became available again, a deimos host terminal verified it as a readable and
+writable character device. The Task 7 bundle correctly failed the Task 10 scenario preflight
+because it recorded the older `2bb82ba3...` patched tree. It was not used as Task 10 evidence.
 
-- `just test-microsandbox-linux`
-- `just test-scenario-microsandbox-linux`
-- `just test-firecracker`
-- `just test-scenario`
+A clean pinned checkout at `/tmp/secondbox-msb-base-task5-spawnfix` was passed to the
+repository-owned builder. It did not modify that checkout or any external repository. The new
+task-owned build is retained at:
 
-The previously reviewed Task 7L and Task 9M Linux evidence remains intact, but it does not
-substitute for Task 10M's required post-macOS rerun. The spike stays experimental and Task 10M
-dual-platform closure remains incomplete until a qualified Linux KVM host is available.
+```text
+/home/sasha/.bb/thread-storage/microsandbox-build-task10m-final
+```
+
+It records the same pinned upstream commit and lock identities as macOS, patched tree
+`daf8457b13e5f124a63e23a12edbd8482d7da43a`, Linux libkrunfw
+`858bfd9a63236409a409191a1ea3c69413f4163f49ebd0f3835f68385831481c`, and helper
+`394a54ff67d5323b8bda0d0bb97919bb60b0e07c63daac1c54de7e6084aec4f6`.
+
+The following real-host gates passed using that build and the reviewed Firecracker artifacts:
+
+```text
+just test-microsandbox-linux             pass; real KVM boot and 14+2 helper tests
+just test-firecracker                    pass; 3 real-KVM tests in 26.724 s
+just test-scenario-microsandbox-linux    pass; 22 scenarios in 393 s
+just test-scenario                       pass; 22 Firecracker scenarios in 222 s
+```
+
+The Linux Microsandbox suite exercised the same normal-control-plane vertical slice as macOS. Its
+30 cold starts recorded 471.701/520.480 ms start-to-ready p50/p95 and 70468/72240 KiB peak helper
+RSS p50/p95. The Firecracker suite also published and admitted the real snapshot-resume template,
+then measured resume arrivals at concurrency one and four with no refusals.
+
+Bounded build and test logs, including diagnostics, are retained beneath:
+
+```text
+/home/sasha/.bb/thread-storage/task10m-linux-final-81dddd3
+```
+
+The final log SHA-256 values are:
+
+```text
+8b94b89b4b981a20767d1ce2a5b6365feb628d82da577ac24ffbb18dc9f41d07  build-microsandbox-linux.log
+d0afa8d99fb9f07a2de68238b7cf6a0cf595021fa1a410da04aa68e6c091b343  test-microsandbox-linux-final.log
+61be5f88250aad0dec4894721a8ce9d97ca7fb98982fa8f3bf9ff0e52f5c8f0b  test-firecracker-final.log
+34f2ab39bd5ffada1b7543eb687064f7c735373f08e9f499e487af5b3c488d07  test-scenario-microsandbox-linux-final.log
+304cf252cf6d75107c642ee97f8c27c45dd497877d853cf3d3d16e09dc2d1da2  test-scenario-firecracker-final.log
+```
+
+The earlier preflight failure against the stale Task 7 build and the first Firecracker invocation
+that omitted the required heartbeat interval are retained as diagnostic logs but are not presented
+as product failures or qualification evidence.
+
+## Unavailable external evidence
+
+The remaining unchecked plan items concern production/repository macOS signing and its effective
+entitlement evidence. `mini1` cannot meaningfully verify that external distribution authority.
+Local ad-hoc signing remains only a mechanical execution prerequisite and does not prevent the
+functional dual-platform qualification from passing.

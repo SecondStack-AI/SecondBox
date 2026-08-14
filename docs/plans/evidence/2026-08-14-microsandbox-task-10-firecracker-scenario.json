@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "secondbox.release/qualification-evidence/v1",
+  "sourceCommit": "81dddd3c2eec613c16e4f6ed55f179f6090dc051",
+  "repositoryDirty": false,
+  "suite": "test-scenario",
+  "passCount": 22,
+  "wallClockSeconds": 222,
+  "host": {
+    "workspaceFilesystem": {
+      "mount": "/home /dev/mapper/root[/@home] btrfs rw,noatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvolid=257,subvol=/@home",
+      "type": "btrfs"
+    },
+    "platform": "linux-amd64",
+    "kvm": {
+      "path": "/dev/kvm",
+      "present": true,
+      "readable": true,
+      "writable": true
+    },
+    "tun": {
+      "path": "/dev/net/tun",
+      "present": true,
+      "readable": true,
+      "writable": true
+    }
+  },
+  "qualifiedAt": "2026-08-14T16:25:38Z"
+}
