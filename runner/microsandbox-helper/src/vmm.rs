@@ -354,6 +354,9 @@ fn copy_xattrs(source: &Path, destination: &Path) -> Result<(), BuildError> {
         .split(|byte| *byte == 0)
         .filter(|name| !name.is_empty())
     {
+        if !portable_xattr(name_bytes) {
+            continue;
+        }
         let name = CString::new(name_bytes).map_err(|_| {
             BuildError::EphemeralRoot("flat-root xattr name contains NUL".to_owned())
         })?;
@@ -363,6 +366,17 @@ fn copy_xattrs(source: &Path, destination: &Path) -> Result<(), BuildError> {
             .map_err(|error| BuildError::EphemeralRoot(format!("write xattr: {error}")))?;
     }
     Ok(())
+}
+
+fn portable_xattr(name: &[u8]) -> bool {
+    // APFS attaches com.apple.provenance and other host-only metadata while
+    // unpacking the signed Linux flat root. Those attributes are neither OCI
+    // guest metadata nor writable after the clone's ownership is restored.
+    #[cfg(target_os = "macos")]
+    if name.starts_with(b"com.apple.") {
+        return false;
+    }
+    true
 }
 
 fn path_c_string(path: &Path) -> Result<CString, BuildError> {
@@ -744,6 +758,13 @@ mod tests {
             fs::read_to_string(clone.join("etc/hosts")).unwrap(),
             "guest-private\n"
         );
+    }
+
+    #[test]
+    fn ephemeral_root_rejects_host_only_xattrs() {
+        assert!(portable_xattr(b"user.secondbox.guest"));
+        #[cfg(target_os = "macos")]
+        assert!(!portable_xattr(b"com.apple.provenance"));
     }
 
     #[test]

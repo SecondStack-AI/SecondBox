@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "secondbox.runner/portable-ext4-fixture/v1",
+  "createdOn": "linux/amd64",
+  "logicalBytes": 8388608,
+  "filesystem": "ext4",
+  "label": "secondbox-port",
+  "uuid": "9e98fc46-3ca1-5e74-9b6c-bbb0fbf36dd6",
+  "sha256": "93a1b0a91ce6a1db192cd9852daf4557688fe66bff5e4c6473bffee2522703a2",
+  "transport": "gzip-n-base64",
+  "transportSha256": "e800ddacbeff4dafcd70cff22370f77ddfbf39ff56285abff7fb72028f8955ec",
+  "formatter": "mke2fs 1.47.4",
+  "formatterArguments": [
+    "-t", "ext4", "-F", "-q", "-L", "secondbox-port",
+    "-U", "9e98fc46-3ca1-5e74-9b6c-bbb0fbf36dd6",
+    "-E", "lazy_itable_init=0,lazy_journal_init=0,nodiscard"
+  ]
+}

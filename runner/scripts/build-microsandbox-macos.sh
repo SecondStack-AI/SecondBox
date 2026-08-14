@@ -49,7 +49,7 @@ done
   exit 1
 }
 export PATH="/opt/homebrew/opt/e2fsprogs/bin:/opt/homebrew/opt/e2fsprogs/sbin:$PATH"
-for tool in cargo codesign docker e2fsck git make mke2fs protoc rustc shasum sysctl tar tune2fs; do
+for tool in cargo codesign docker e2fsck git go make mke2fs otool protoc rustc shasum sysctl tar tune2fs; do
   command -v "$tool" >/dev/null || {
     echo "SecondBox macOS Microsandbox build requires $tool" >&2
     exit 1
@@ -211,9 +211,15 @@ install -m 0755 "$stage_dir/source/build/agentd" "$stage_dir/runtime/bin/agentd"
 install -m 0644 "$stage_dir/source/build/libkrunfw.5.dylib" \
   "$stage_dir/runtime/lib/libkrunfw.5.dylib"
 ln -s libkrunfw.5.dylib "$stage_dir/runtime/lib/libkrunfw.dylib"
-codesign --entitlements "$stage_dir/source/msb-entitlements.plist" --force -s - \
-  "$stage_dir/runtime/bin/msb"
-codesign --force -s - "$stage_dir/runtime/lib/libkrunfw.5.dylib"
+(
+  cd -- "$runner_dir"
+  CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 GOCACHE="$stage_dir/go-cache" GOTOOLCHAIN=local \
+    go build -trimpath -buildvcs=false \
+    -ldflags '-buildid= -X main.releaseVersion=0.0.0-experimental-macos -X main.sourceCommit=local-reviewed' \
+    -o "$stage_dir/runtime/bin/secondbox-runner" ./cmd/secondbox-runner
+)
+"$script_dir/sign-microsandbox-macos.sh" --bundle "$stage_dir/runtime" --identity - \
+  >"$stage_dir/signing-evidence.txt"
 
 docker pull "$ROOTFS_IMAGE"
 rootfs_container="$(docker create "$ROOTFS_IMAGE")"
@@ -243,11 +249,13 @@ install -m 0755 "$stage_dir/source/build/agentd" "$stage_dir/rootfs/init.secondb
   diskutil info / | grep -E 'Device Node|File System Personality|Volume Name'
   rustc -Vv
   cargo -V
+  go version
   docker version --format 'docker_client={{.Client.Version}} docker_server={{.Server.Version}}'
-  codesign -d --entitlements :- "$stage_dir/runtime/bin/msb" 2>&1
+  codesign -d --entitlements :- "$stage_dir/runtime/bin/secondbox-microsandbox-helper" 2>&1
   shasum -a 256 \
     "$stage_dir/source/build/agentd" \
     "$stage_dir/runtime/bin/msb" \
+    "$stage_dir/runtime/bin/secondbox-runner" \
     "$stage_dir/runtime/bin/agentd" \
     "$stage_dir/runtime/lib/libkrunfw.5.dylib" \
     "$stage_dir/cargo-target/debug/secondbox-microsandbox-probe" \

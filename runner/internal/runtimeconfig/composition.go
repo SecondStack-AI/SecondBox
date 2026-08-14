@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	runnerconfig "github.com/SecondStack-AI/SecondBox/runner/internal/config"
-	"github.com/SecondStack-AI/SecondBox/runner/internal/firecracker"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
 )
 
@@ -58,6 +57,9 @@ func LoadFromEnvironment(healthcheck bool) (Composition, error) {
 			fmt.Errorf("SECONDBOX_COMPUTE_BACKEND must be firecracker or microsandbox"), connector.Close(),
 		)
 	}
+	if err := validatePlatformBackendKind(backendKind); err != nil {
+		return Composition{}, errors.Join(err, connector.Close())
+	}
 	composition := Composition{Protocol: protocol, Connector: connector, BackendKind: backendKind}
 	if healthcheck {
 		return composition, nil
@@ -88,21 +90,7 @@ func LoadFromEnvironment(healthcheck bool) (Composition, error) {
 		composition.WorkspaceTemplateCapacityBytes = templateBytes
 		return composition, nil
 	}
-	for _, name := range []string{"SECONDBOX_RUNNER_FIRECRACKER_RUN_DIR", "SECONDBOX_RUNNER_FIRECRACKER_LOG_DIR", "SECONDBOX_RUNNER_FIRECRACKER_JAIL_ROOT", "SECONDBOX_RUNNER_SNAPSHOT_TEMPLATE_CACHE_ROOT"} {
-		value := strings.TrimSpace(os.Getenv(name))
-		if value == "" || !filepath.IsAbs(value) {
-			return Composition{}, errors.Join(fmt.Errorf("%s must be an absolute path", name), connector.Close())
-		}
-	}
-	firecrackerConfig, err := firecracker.LoadRunnerFirecrackerConfigFromEnv()
-	if err != nil {
-		return Composition{}, errors.Join(
-			fmt.Errorf("load SecondBox Firecracker config: %w", err), connector.Close(),
-		)
-	}
-	composition.Firecracker = firecrackerConfig
-	composition.WorkspaceTemplateCapacityBytes = int64(firecrackerConfig.MicroVMWorkspaceSizeMiB) << 20
-	return composition, nil
+	return loadPlatformBackendComposition(composition, connector)
 }
 
 func loadMicrosandboxComposition() (MicrosandboxComposition, int64, error) {

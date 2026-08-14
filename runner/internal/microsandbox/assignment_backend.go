@@ -178,7 +178,22 @@ func (backend *AssignmentBackend) SetRunnerEvidenceSink(sink runnerevidence.Sink
 }
 
 func (backend *AssignmentBackend) DiagnosticDimensions() BackendDimensions {
-	return BackendDimensions{BackendKind: "microsandbox", HostPlatform: runtime.GOOS + "-" + runtime.GOARCH}
+	return BackendDimensions{BackendKind: "microsandbox", HostPlatform: microsandboxHostPlatform()}
+}
+
+func microsandboxHostPlatform() string {
+	osName := runtime.GOOS
+	if osName == "darwin" {
+		osName = "macos"
+	}
+	architecture := runtime.GOARCH
+	switch architecture {
+	case "amd64":
+		architecture = "x86_64"
+	case "arm64":
+		architecture = "aarch64"
+	}
+	return osName + "-" + architecture
 }
 
 func (backend *AssignmentBackend) MetricsSnapshot() MetricsSnapshot {
@@ -203,17 +218,14 @@ func (backend *AssignmentBackend) StartupTiming() (uint64, time.Duration) {
 	return uint64(len(values)), values[index-1]
 }
 
-// Readiness proves local KVM, immutable assets, exact materialization, and integer capacity.
-func (backend *AssignmentBackend) Readiness(context.Context) (runnercontrol.BackendReadiness, error) {
+// Readiness proves the host hypervisor boundary, immutable assets, exact materialization, and
+// integer capacity for the selected build target.
+func (backend *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.BackendReadiness, error) {
 	if _, err := validateConfig(backend.config.Config); err != nil {
 		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Microsandbox readiness materialization: %w", err)
 	}
-	kvm, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0)
-	if err != nil {
-		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Microsandbox readiness KVM: %w", err)
-	}
-	if err := kvm.Close(); err != nil {
-		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Microsandbox readiness close KVM: %w", err)
+	if err := platformReadiness(ctx, backend.config); err != nil {
+		return runnercontrol.BackendReadiness{}, err
 	}
 	backend.mu.Lock()
 	reserved := backend.reserved

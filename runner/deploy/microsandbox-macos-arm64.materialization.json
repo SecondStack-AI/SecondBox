@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "secondbox.runner/backend-materialization/v1",
+  "key": {
+    "backendKind": "microsandbox",
+    "guestArchitecture": "arm64",
+    "runtimeManifestDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "toolchainManifestDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "sourceOciManifestDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+  "flatRootDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+  "launchArtifacts": [
+    {"id": "agentd", "sha256": "sha256:5555555555555555555555555555555555555555555555555555555555555555"},
+    {"id": "helper", "sha256": "sha256:6666666666666666666666666666666666666666666666666666666666666666"},
+    {"id": "libkrunfw", "sha256": "sha256:7777777777777777777777777777777777777777777777777777777777777777"}
+  ],
+  "agentProtocolGeneration": 6,
+  "agentFeatures": ["exec-streaming", "file-streaming", "pty", "tcp"],
+  "backendBuildId": "microsandbox-0.6.8-msb_krun-0.1.30-darwin-arm64",
+  "helperBuildId": "secondbox-microsandbox-helper-0.1.0-darwin-arm64"
+}

@@ -18,7 +18,6 @@ import (
 	microsandboxprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/microsandboxprotocol"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
-	"golang.org/x/sys/unix"
 )
 
 const helperStderrLimit = 16 << 10
@@ -53,7 +52,7 @@ func launchHelper(
 	assignment *runnerprotocol.AssignmentCommand,
 	workspace workspacestore.ComputeAttachment,
 ) (*helperProcess, *microsandboxprotocol.ReadyEvent, error) {
-	descriptors, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	descriptors, err := platformSocketpair()
 	if err != nil {
 		return nil, nil, fmt.Errorf("SecondBox Microsandbox create helper socketpair: %w", err)
 	}
