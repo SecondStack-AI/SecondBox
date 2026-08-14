@@ -146,6 +146,50 @@ func TestScenarioSandboxRejectsRequirementsAboveRunnerCapacity(t *testing.T) {
 	}
 }
 
+func TestScenarioSandboxRejectsUnsupportedArchitectureBeforeCompute(t *testing.T) {
+	fixture := newScenarioFixture(t)
+	ensureScenarioRunnerPool(t, fixture)
+	runnerBefore := waitForScenarioRunnerStartupTimingSettled(t, fixture, 15*time.Second)
+	spec := scenarioProfileSpec(t, contracts.SandboxDesiredStateRunning)
+	if spec.Architecture == "arm64" {
+		spec.Architecture = "amd64"
+	} else {
+		spec.Architecture = "arm64"
+	}
+	profile := createScenarioProfile(t, fixture, "scenario-unsupported-architecture", spec)
+
+	var operation contracts.Operation
+	err := fixture.subject.RequestJSON(
+		context.Background(),
+		"createSandbox",
+		secondboxclient.CallOptions{
+			Headers: scenarioHeaders(uniqueScenarioKey(t, "unsupported-architecture")),
+			Body: scenarioBody(t, contracts.CreateSandboxRequest{
+				Profile:  profile.Name,
+				Metadata: map[string]string{"scenario": "unsupported-architecture"},
+			}),
+		},
+		&operation,
+	)
+	var apiError *secondboxclient.APIError
+	if !errors.As(err, &apiError) ||
+		apiError.StatusCode != http.StatusConflict ||
+		apiError.Problem == nil ||
+		apiError.Problem.Code != "execution_node_unavailable" ||
+		!apiError.Problem.Retryable ||
+		operation.ID != "" || operation.SandboxID != "" {
+		t.Fatalf("SecondBox unsupported architecture rejection = error %#v operation %#v", apiError, operation)
+	}
+	runnerAfter := waitForScenarioRunnerStartupTimingSettled(t, fixture, 15*time.Second)
+	if runnerAfter.SandboxStartSampleCount != runnerBefore.SandboxStartSampleCount {
+		t.Fatalf(
+			"SecondBox unsupported architecture reached compute: start samples %d -> %d",
+			runnerBefore.SandboxStartSampleCount,
+			runnerAfter.SandboxStartSampleCount,
+		)
+	}
+}
+
 func TestScenarioSandboxRejectsUncachedLogicalMaterializationTuple(t *testing.T) {
 	fixture := newScenarioFixture(t)
 	ensureScenarioRunnerPool(t, fixture)

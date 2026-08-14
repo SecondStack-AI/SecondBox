@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -190,7 +191,7 @@ func ensureScenarioRunnerPool(t *testing.T, fixture scenarioFixture) contracts.R
 	request := contracts.CreateRunnerPoolRequest{
 		Name:          scenarioRunnerPool,
 		State:         contracts.RunnerPoolStateReady,
-		Architectures: []string{"amd64"},
+		Architectures: []string{requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_ARCHITECTURE")},
 		Capabilities:  capabilities,
 		CapacityPolicy: map[string]int64{
 			"maximumInstances": 8,
@@ -225,7 +226,7 @@ func scenarioProfileSpec(t *testing.T, initialState string) contracts.ProfileRev
 	t.Helper()
 	return contracts.ProfileRevisionSpec{
 		Pool:                  scenarioRunnerPool,
-		Architecture:          "amd64",
+		Architecture:          requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_ARCHITECTURE"),
 		RuntimeBundleDigest:   requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST"),
 		ToolchainBundleDigest: requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST"),
 		Resources: contracts.ResourcePolicy{
@@ -546,6 +547,17 @@ func scenarioCompose(t *testing.T, arguments ...string) {
 
 func scenarioComposeOutput(t *testing.T, arguments ...string) []byte {
 	t.Helper()
+	if controller := strings.TrimSpace(os.Getenv("SECONDBOX_SCENARIO_SERVICE_CONTROL")); controller != "" {
+		if !filepath.IsAbs(controller) || filepath.Clean(controller) != controller {
+			t.Fatalf("SECONDBOX_SCENARIO_SERVICE_CONTROL must be a clean absolute path: %q", controller)
+		}
+		command := exec.CommandContext(context.Background(), controller, arguments...)
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("SecondBox scenario service control %v: %v\n%s", arguments, err, output)
+		}
+		return output
+	}
 	commandArguments := []string{
 		"compose",
 		"--project-name", requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_COMPOSE_PROJECT"),

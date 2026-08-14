@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "secondbox.release/qualification-evidence/v1",
+  "sourceCommit": "e38600de2a28327ece6abe37b33ed2ab2e2db64e",
+  "repositoryDirty": true,
+  "suite": "test-scenario-microsandbox-darwin",
+  "passCount": 22,
+  "wallClockSeconds": 344,
+  "host": {
+    "workspaceFilesystem": {
+      "mount": "/System/Volumes/Data /dev/disk3s5 apfs",
+      "type": "apfs"
+    },
+    "platform": "darwin-arm64",
+    "hypervisorFramework": {
+      "supported": true
+    },
+    "kvm": {
+      "required": false
+    },
+    "tun": {
+      "required": false
+    }
+  },
+  "qualifiedAt": "2026-08-14T09:37:44Z",
+  "backend": "microsandbox"
+}

@@ -25,6 +25,7 @@ func TestScenarioRunnerEnrollsThroughControlChannel(t *testing.T) {
 	wantRunnerCapabilities := []string{
 		"compute", "network-policy", "storage", "cleanup", "local-workspace",
 	}
+	architecture := requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_ARCHITECTURE")
 	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") == "firecracker" {
 		wantPoolCapabilities = append(wantPoolCapabilities[:4], "snapshot-resume", "storage")
 		wantRunnerCapabilities = append(wantRunnerCapabilities, "snapshot-resume")
@@ -32,7 +33,7 @@ func TestScenarioRunnerEnrollsThroughControlChannel(t *testing.T) {
 	if pool.Name != scenarioRunnerPool ||
 		pool.State != contracts.RunnerPoolStateReady ||
 		pool.ReadyRunnerCount > 1 ||
-		!slices.Equal(pool.Architectures, []string{"amd64"}) ||
+		!slices.Equal(pool.Architectures, []string{architecture}) ||
 		!slices.Equal(pool.Capabilities, wantPoolCapabilities) ||
 		pool.CapacityPolicy["maximumInstances"] != 8 {
 		t.Fatalf("SecondBox scenario created RunnerPool = %#v", pool)
@@ -43,7 +44,7 @@ func TestScenarioRunnerEnrollsThroughControlChannel(t *testing.T) {
 		runner.PoolName != scenarioRunnerPool ||
 		runner.State != "ready" ||
 		runner.CredentialState != "pre_shared" ||
-		!slices.Equal(runner.Architectures, []string{"amd64"}) {
+		!slices.Equal(runner.Architectures, []string{architecture}) {
 		t.Fatalf("SecondBox scenario enrolled Runner = %#v", runner)
 	}
 	for _, capability := range wantRunnerCapabilities {

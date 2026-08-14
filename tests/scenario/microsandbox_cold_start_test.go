@@ -166,10 +166,15 @@ func microsandboxReadyLifecycleLog(t *testing.T, sandboxID string) microsandboxL
 
 func microsandboxHelperPeakRSSKiB(t *testing.T, helperPID int) int {
 	t.Helper()
-	output := scenarioComposeOutput(
-		t, "exec", "-T", "secondbox-runner", "awk",
-		`$1 == "VmHWM:" { print $2 }`, fmt.Sprintf("/proc/%d/status", helperPID),
-	)
+	var output []byte
+	if os.Getenv("SECONDBOX_SCENARIO_SERVICE_CONTROL") != "" {
+		output = scenarioComposeOutput(t, "helper-rss-kib", strconv.Itoa(helperPID))
+	} else {
+		output = scenarioComposeOutput(
+			t, "exec", "-T", "secondbox-runner", "awk",
+			`$1 == "VmHWM:" { print $2 }`, fmt.Sprintf("/proc/%d/status", helperPID),
+		)
+	}
 	value, err := strconv.Atoi(strings.TrimSpace(string(output)))
 	if err != nil || value <= 0 {
 		t.Fatalf("SecondBox Microsandbox helper %d peak RSS = %q: %v", helperPID, output, err)
