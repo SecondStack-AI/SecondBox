@@ -19,6 +19,21 @@ mountpoint -q /dev/shm || mount -t tmpfs -o rw,nosuid,nodev,mode=1777,size=512m 
 
 template_mode="$(sed -n 's/.*secondbox\.template_mode=\([01]\).*/\1/p' /proc/cmdline)"
 
+# The kernel's ip= autoconfiguration records its explicit nameserver only in
+# /proc/net/pnp. libc does not read that file, so materialize the runner DNS
+# proxy before any networked cold-booted Sandbox command can resolve a domain.
+# An intentionally offline runner attaches no eth0 and therefore has no DNS
+# identity to require. A resumed template receives the same resolver during its
+# one assignment bind instead.
+if [ "$template_mode" != "1" ] && [ -e /sys/class/net/eth0 ]; then
+    nameserver="$(sed -n 's/^nameserver \([^ ]*\)$/\1/p' /proc/net/pnp | head -n 1)"
+    if [ -z "$nameserver" ]; then
+        echo "SecondBox guest cold boot lacks the runner DNS identity" >&2
+        exit 1
+    fi
+    printf 'nameserver %s\noptions attempts:1 timeout:2\n' "$nameserver" > /etc/resolv.conf
+fi
+
 mkdir -p /workspace /runtime-private
 # runtime-private holds vsock-delivered secrets; keep it RAM-only so credentials
 # never land on the persistent workspace image or any snapshot.

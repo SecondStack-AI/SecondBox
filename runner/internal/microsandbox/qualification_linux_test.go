@@ -73,6 +73,7 @@ func TestQualifiedLinuxBackendBootsAgentAndWorkspaceOnKVM(t *testing.T) {
 	store, err := workspacestore.New(t.Context(), workspacestore.Config{
 		Root:                         storeRoot,
 		TemplateCapacityBytes:        qualificationWorkspaceBytes,
+		FormatterKind:                workspacestore.FormatterMicrosandboxHelper,
 		MicrosandboxHelperExecutable: helper,
 	})
 	if err != nil {
@@ -86,7 +87,7 @@ func TestQualifiedLinuxBackendBootsAgentAndWorkspaceOnKVM(t *testing.T) {
 			ToolchainManifestDigest: digestText("qualification-toolchain"),
 		},
 		SourceOCIManifestDigest: digestText("alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce"),
-		FlatRootDigest:          digestText(rootfs),
+		FlatRootDigest:          digestFlatRoot(t, rootfs),
 		LaunchArtifacts: []materialization.LaunchArtifact{
 			{ID: "agentd", SHA256: digestFile(t, agentd)},
 			{ID: "helper", SHA256: digestFile(t, helper)},
@@ -518,4 +519,13 @@ func digestFile(t *testing.T, path string) string {
 	}
 	sum := sha256.Sum256(content)
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func digestFlatRoot(t *testing.T, path string) string {
+	t.Helper()
+	digest, err := materialization.DigestFlatRoot(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digest
 }

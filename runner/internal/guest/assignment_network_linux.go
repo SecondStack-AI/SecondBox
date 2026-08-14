@@ -5,6 +5,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"net/netip"
+	"os"
+	"path/filepath"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -56,6 +59,44 @@ func (LinuxNetworkConfigurer) Configure(_ context.Context, identity AssignmentNe
 	}
 	if err := connection.addDefaultRoute(index, resolved); err != nil {
 		return fmt.Errorf("add assignment network default route: %w", err)
+	}
+	if err := writeResolverConfig("/etc/resolv.conf", resolved.nameserver); err != nil {
+		return err
+	}
+	return nil
+}
+
+func writeResolverConfig(path string, nameserver netip.Addr) error {
+	if !nameserver.Is4() || !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return fmt.Errorf("assignment network resolver configuration is invalid")
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".secondbox-resolv-*")
+	if err != nil {
+		return fmt.Errorf("create assignment resolver configuration: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer func() { _ = os.Remove(temporaryPath) }()
+	if err := temporary.Chmod(0o644); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("set assignment resolver configuration mode: %w", err)
+	}
+	if _, err := fmt.Fprintf(
+		temporary,
+		"nameserver %s\noptions attempts:1 timeout:2\n",
+		nameserver,
+	); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("write assignment resolver configuration: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("flush assignment resolver configuration: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close assignment resolver configuration: %w", err)
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("publish assignment resolver configuration: %w", err)
 	}
 	return nil
 }

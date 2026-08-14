@@ -287,7 +287,7 @@ func (b *AssignmentBackend) Readiness(ctx context.Context) (runnercontrol.Backen
 			ComputeBackendVersion: expectedComputeBackendVersionString(),
 			HypervisorReady:       true,
 			IsolationReady:        firecrackerIsolationReady(cfg),
-			CgroupReady:           true,
+			ResourceLimitsReady:   true,
 			NetworkPolicyReady:    true,
 			StorageReady:          true,
 			CleanupReady:          true,

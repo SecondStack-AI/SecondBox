@@ -1,0 +1,22 @@
+FROM docker.io/library/ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      ca-certificates e2fsprogs libbz2-1.0 libcap-ng0 libgcc-s1 procps \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 secondbox-runner \
+    && useradd --system --uid 10001 --gid 10001 --home-dir /var/lib/secondbox-runner --create-home --shell /usr/sbin/nologin secondbox-runner \
+    && install -d -m 0700 /var/lib/secondbox-runner \
+    && rm -f /usr/lib/systemd/systemd /usr/sbin/agetty /sbin/agetty \
+    && test ! -e /usr/lib/systemd/systemd \
+    && test ! -e /usr/sbin/agetty \
+    && test ! -e /sbin/agetty
+
+COPY --from=scenario /secondbox-runner /usr/local/bin/secondbox-runner
+COPY LICENSE /usr/share/licenses/secondbox-runner/LICENSE
+
+USER 0:0
+WORKDIR /var/lib/secondbox-runner
+STOPSIGNAL SIGTERM
+HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=4 CMD ["/usr/local/bin/secondbox-runner", "-healthcheck", "-healthcheck-timeout", "5s"]
+ENTRYPOINT ["/usr/local/bin/secondbox-runner"]

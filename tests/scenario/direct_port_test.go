@@ -298,11 +298,7 @@ func startScenarioEchoListener(
 	handle *secondboxclient.SandboxHandle,
 ) {
 	t.Helper()
-	listener := executeScenarioCommand(
-		t,
-		ctx,
-		handle,
-		`nohup python3 -c '
+	command := `nohup python3 -c '
 import socketserver
 
 class Echo(socketserver.BaseRequestHandler):
@@ -325,7 +321,18 @@ for _ in range(50):
         raise SystemExit(0)
     except OSError:
         time.sleep(0.1)
-raise SystemExit(1)'`,
+raise SystemExit(1)'`
+	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") == "microsandbox" {
+		// The pinned Alpine fixture deliberately contains BusyBox rather than
+		// Python. Its netcat exec mode preserves one interactive TCP stream,
+		// which is the behavior this transport qualification measures.
+		command = `nohup sh -c 'while :; do nc -l -p 8080 -e cat; done' >/workspace/echo-server.log 2>&1 </dev/null & sleep 1`
+	}
+	listener := executeScenarioCommand(
+		t,
+		ctx,
+		handle,
+		command,
 		4096,
 		"direct-port-echo-listener",
 	)

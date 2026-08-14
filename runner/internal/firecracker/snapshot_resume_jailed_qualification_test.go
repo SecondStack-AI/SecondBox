@@ -211,9 +211,9 @@ func TestSmokeJailedSnapshotResume(t *testing.T) {
 	report.AdmissionMillis = time.Since(admissionStartedAt).Milliseconds()
 
 	store, err := workspacestore.New(t.Context(), workspacestore.Config{
-		Root:                         filepath.Join(workDir, "resume-workspaces"),
-		TemplateCapacityBytes:        int64(workspaceMiB) << 20,
-		MicrosandboxHelperExecutable: strings.TrimSpace(os.Getenv("SECONDBOX_MICROSANDBOX_HELPER_EXECUTABLE")),
+		Root:                  filepath.Join(workDir, "resume-workspaces"),
+		TemplateCapacityBytes: int64(workspaceMiB) << 20,
+		FormatterKind:         workspacestore.FormatterMke2fs,
 	})
 	if err != nil {
 		t.Fatalf("new resume WorkspaceStore: %v", err)
@@ -607,6 +607,7 @@ func (inst *jailedResumeInstance) resume(
 			MACAddress:  guestMACForInstance(inst.tapName),
 			AddressCIDR: guestAddressCIDR(inst.guestIP, cfg.MicroVMBridgeCIDR),
 			Gateway:     bridgeAddress(cfg.MicroVMBridgeCIDR).String(),
+			Nameserver:  bridgeAddress(cfg.MicroVMBridgeCIDR).String(),
 		},
 	}); err != nil {
 		return fmt.Errorf("bind resumed guest assignment: %w", err)

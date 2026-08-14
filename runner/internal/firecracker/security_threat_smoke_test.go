@@ -32,6 +32,21 @@ func TestMicroVMInitRemovesForbiddenDeviceNodesBeforeEntrypoint(t *testing.T) {
 	}
 }
 
+func TestMicroVMInitRequiresDNSIdentityOnlyForNetworkedColdBoot(t *testing.T) {
+	initScript, err := os.ReadFile("../../scripts/microvm-image/init")
+	if err != nil {
+		t.Fatalf("read microVM init: %v", err)
+	}
+	content := string(initScript)
+	networkGate := strings.Index(content, `if [ "$template_mode" != "1" ] && [ -e /sys/class/net/eth0 ]; then`)
+	nameserverRead := strings.Index(content, `sed -n 's/^nameserver \([^ ]*\)$/\1/p' /proc/net/pnp`)
+	failClosed := strings.Index(content, "SecondBox guest cold boot lacks the runner DNS identity")
+	resolverWrite := strings.Index(content, `> /etc/resolv.conf`)
+	if networkGate < 0 || nameserverRead <= networkGate || failClosed <= nameserverRead || resolverWrite <= failClosed {
+		t.Fatal("microVM init must require and install runner DNS for a networked cold boot while permitting an intentionally offline guest")
+	}
+}
+
 func TestThreatModelJailedGuestEscapeAndResourceExhaustion(t *testing.T) {
 	if os.Getenv("SECONDBOX_RUNNER_QUALIFY_THREAT") != "1" {
 		t.Skip("set SECONDBOX_RUNNER_QUALIFY_THREAT=1 to run hostile workloads in a jailed KVM guest")

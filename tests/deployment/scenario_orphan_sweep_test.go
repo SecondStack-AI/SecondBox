@@ -127,7 +127,7 @@ func TestScenarioHarnessReleasesAndProvesItsPerRunHostResources(t *testing.T) {
 	}
 	stop := strings.Index(harness, "compose stop secondbox-runner")
 	remove := strings.Index(harness, "if ! remove_host_network; then")
-	proof := strings.Index(harness, `if ip link show "$SECONDBOX_SCENARIO_BRIDGE_NAME"`)
+	proof := strings.Index(harness, `ip link show "$SECONDBOX_SCENARIO_BRIDGE_NAME"`)
 	if stop < 0 || remove < 0 || proof < 0 {
 		t.Fatalf(
 			"scenario teardown lost the Runner stop (%d), the host-network removal (%d), or its proof (%d)",

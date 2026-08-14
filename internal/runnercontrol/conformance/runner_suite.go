@@ -109,7 +109,7 @@ func (runner *FakeRunner) Registration() *runnerv1.RunnerToControlPlane {
 				Capabilities: &runnerv1.RunnerCapabilities{
 					Architecture: "amd64", KernelRelease: "6.12.0",
 					ComputeBackendVersion: "1.16.1",
-					HypervisorReady:       true, IsolationReady: true, CgroupReady: true,
+					HypervisorReady:       true, IsolationReady: true, ResourceLimitsReady: true,
 					NetworkPolicyReady: true, StorageReady: true, CleanupReady: true,
 					DataPlaneReady: true,
 					GuestProtocolGenerations: &runnerv1.ProtocolVersionRange{

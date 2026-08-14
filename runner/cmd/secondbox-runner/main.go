@@ -83,11 +83,16 @@ func run(arguments []string) (runErr error) {
 	defer func() {
 		runErr = errors.Join(runErr, closeLog())
 	}()
+	formatterKind := workspacestore.FormatterMke2fs
+	if composition.BackendKind == "microsandbox" {
+		formatterKind = workspacestore.FormatterMicrosandboxHelper
+	}
 	workspaceStore, err := workspacestore.New(
 		context.Background(),
 		workspacestore.Config{
 			Root:                         composition.WorkspaceRoot,
 			TemplateCapacityBytes:        composition.WorkspaceTemplateCapacityBytes,
+			FormatterKind:                formatterKind,
 			MicrosandboxHelperExecutable: strings.TrimSpace(os.Getenv("SECONDBOX_MICROSANDBOX_HELPER_EXECUTABLE")),
 		},
 	)

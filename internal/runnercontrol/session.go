@@ -617,7 +617,7 @@ func (session *Session) validateRegistration(registration *runnerv1.RunnerRegist
 	if len(registration.ReadinessFailures) != 0 ||
 		!registration.Capabilities.HypervisorReady ||
 		!registration.Capabilities.IsolationReady ||
-		!registration.Capabilities.CgroupReady ||
+		!registration.Capabilities.ResourceLimitsReady ||
 		!registration.Capabilities.NetworkPolicyReady ||
 		!registration.Capabilities.StorageReady ||
 		!registration.Capabilities.CleanupReady ||

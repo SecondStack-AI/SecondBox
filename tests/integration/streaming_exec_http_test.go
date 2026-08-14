@@ -383,7 +383,7 @@ func newStreamingExecFakeRunner(
 			SoftwareVersion: "integration", ProtocolVersion: 1,
 			Capabilities: &runnerv1.RunnerCapabilities{
 				Architecture: "amd64", ComputeBackendVersion: "integration",
-				HypervisorReady: true, IsolationReady: true, CgroupReady: true,
+				HypervisorReady: true, IsolationReady: true, ResourceLimitsReady: true,
 				NetworkPolicyReady: true, StorageReady: true, CleanupReady: true,
 				DataPlaneReady:           true,
 				GuestProtocolGenerations: &runnerv1.ProtocolVersionRange{Minimum: 1, Maximum: 1},

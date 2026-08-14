@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
@@ -222,7 +223,7 @@ func runnerPlacementCompatible(
 	if options.requireWorkspaceTransfer &&
 		(!contains(candidate.capabilities, "storage") ||
 			!contains(candidate.capabilities, "workspace-relocation") ||
-			!contains(candidate.protocolVersions, "2")) {
+			!supportsProtocolGeneration(candidate.protocolVersions, 2)) {
 		return false
 	}
 	// A Sandbox never leaves its home Runner, so the startup mode a Profile pins
@@ -237,6 +238,16 @@ func runnerPlacementCompatible(
 		candidate.allocatable.DiskBytes-reserved.DiskBytes >= spec.Resources.WorkspaceBytes &&
 		candidate.allocatable.Instances-reserved.Instances >= 1 &&
 		candidate.allocatable.Operations-reserved.Operations >= spec.Resources.ConcurrentOperations
+}
+
+func supportsProtocolGeneration(versions []string, minimum uint64) bool {
+	for _, version := range versions {
+		parsed, err := strconv.ParseUint(version, 10, 32)
+		if err == nil && parsed >= minimum {
+			return true
+		}
+	}
+	return false
 }
 
 func durableHomeReservation(ctx context.Context, tx pgx.Tx, runnerID string) (runnerCapacity, error) {

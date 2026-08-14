@@ -18,31 +18,45 @@ import (
 )
 
 type linuxDriver struct {
+	formatterKind     FormatterKind
+	formatExecutable  string
 	helperExecutable  string
 	setUUIDExecutable string
 }
 
-func newLinuxDriver(helperExecutable string) (platformDriver, error) {
-	if !filepath.IsAbs(helperExecutable) || filepath.Clean(helperExecutable) != helperExecutable {
-		return nil, fmt.Errorf("SecondBox WorkspaceStore Microsandbox helper executable must be a clean absolute path")
-	}
-	info, err := os.Stat(helperExecutable)
-	if err != nil {
-		return nil, fmt.Errorf("SecondBox WorkspaceStore inspect Microsandbox helper executable: %w", err)
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
-		return nil, fmt.Errorf("SecondBox WorkspaceStore Microsandbox helper is not executable")
-	}
+func newLinuxDriver(formatterKind FormatterKind, helperExecutable string) (platformDriver, error) {
 	setUUIDExecutable, err := exec.LookPath("tune2fs")
 	if err != nil {
 		return nil, fmt.Errorf("SecondBox WorkspaceStore tune2fs is required: %w", err)
 	}
-	for _, dependency := range []string{"mke2fs", "e2fsck"} {
-		if _, err := exec.LookPath(dependency); err != nil {
-			return nil, fmt.Errorf("SecondBox WorkspaceStore %s is required by the Microsandbox helper: %w", dependency, err)
+	driver := linuxDriver{formatterKind: formatterKind, setUUIDExecutable: setUUIDExecutable}
+	switch formatterKind {
+	case FormatterMke2fs:
+		driver.formatExecutable, err = exec.LookPath("mke2fs")
+		if err != nil {
+			return nil, fmt.Errorf("SecondBox WorkspaceStore mke2fs is required: %w", err)
 		}
+	case FormatterMicrosandboxHelper:
+		if !filepath.IsAbs(helperExecutable) || filepath.Clean(helperExecutable) != helperExecutable {
+			return nil, fmt.Errorf("SecondBox WorkspaceStore Microsandbox helper executable must be a clean absolute path")
+		}
+		info, statErr := os.Stat(helperExecutable)
+		if statErr != nil {
+			return nil, fmt.Errorf("SecondBox WorkspaceStore inspect Microsandbox helper executable: %w", statErr)
+		}
+		if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+			return nil, fmt.Errorf("SecondBox WorkspaceStore Microsandbox helper is not executable")
+		}
+		for _, dependency := range []string{"mke2fs", "e2fsck"} {
+			if _, dependencyErr := exec.LookPath(dependency); dependencyErr != nil {
+				return nil, fmt.Errorf("SecondBox WorkspaceStore %s is required by the Microsandbox helper: %w", dependency, dependencyErr)
+			}
+		}
+		driver.helperExecutable = helperExecutable
+	default:
+		return nil, fmt.Errorf("SecondBox WorkspaceStore formatter kind %q is invalid", formatterKind)
 	}
-	return linuxDriver{helperExecutable: helperExecutable, setUUIDExecutable: setUUIDExecutable}, nil
+	return driver, nil
 }
 
 func (linuxDriver) Clone(destination *os.File, source *os.File) error {
@@ -50,6 +64,29 @@ func (linuxDriver) Clone(destination *os.File, source *os.File) error {
 }
 
 func (driver linuxDriver) Format(ctx context.Context, workspace *os.File, capacity int64, uuid string) error {
+	if driver.formatterKind == FormatterMke2fs {
+		command := exec.CommandContext(
+			ctx,
+			driver.formatExecutable,
+			"-t", "ext4",
+			"-F",
+			"-q",
+			"-L", workspaceFilesystemLabel,
+			"-U", uuid,
+			"-E", "lazy_itable_init=0,lazy_journal_init=0,nodiscard",
+			"/proc/self/fd/3",
+		)
+		command.ExtraFiles = []*os.File{workspace}
+		output, err := command.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf(
+				"SecondBox WorkspaceStore ext4 format failed: %w: %s",
+				err,
+				strings.TrimSpace(string(output)),
+			)
+		}
+		return nil
+	}
 	decoded, err := decodeUUID(uuid)
 	if err != nil {
 		return fmt.Errorf("SecondBox WorkspaceStore decode helper format UUID: %w", err)

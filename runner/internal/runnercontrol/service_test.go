@@ -762,7 +762,7 @@ func TestRunnerProtocolServiceNegotiatesBeforeProfileResolvedAssignment(t *testi
 				ComputeBackendVersion:    "1.16.1",
 				HypervisorReady:          true,
 				IsolationReady:           true,
-				CgroupReady:              true,
+				ResourceLimitsReady:      true,
 				NetworkPolicyReady:       true,
 				StorageReady:             true,
 				CleanupReady:             true,

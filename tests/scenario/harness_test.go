@@ -174,22 +174,24 @@ func ensureScenarioRunnerPool(t *testing.T, fixture scenarioFixture) contracts.R
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	capabilities := []string{
+		"compute",
+		"network-policy",
+		"storage",
+		"cleanup",
+		"local-workspace",
+	}
+	if os.Getenv("SECONDBOX_SCENARIO_COMPUTE_BACKEND") == "firecracker" {
+		// Firecracker's qualified template cache makes snapshot-resume an
+		// operator-declared pool capability. Microsandbox is cold-boot-only and
+		// must remain a standing incompatibility rather than a capacity wait.
+		capabilities = append(capabilities, "snapshot-resume")
+	}
 	request := contracts.CreateRunnerPoolRequest{
 		Name:          scenarioRunnerPool,
 		State:         contracts.RunnerPoolStateReady,
 		Architectures: []string{"amd64"},
-		Capabilities: []string{
-			"compute",
-			"network-policy",
-			"storage",
-			"cleanup",
-			"local-workspace",
-			// The operator's statement that this pool serves snapshot-resume
-			// Profiles. Without it a snapshot_resume Profile aimed here is a
-			// standing incompatibility rather than a shortage, and the control
-			// plane refuses it with startup_mode_unsupported before placement.
-			"snapshot-resume",
-		},
+		Capabilities:  capabilities,
 		CapacityPolicy: map[string]int64{
 			"maximumInstances": 8,
 		},
@@ -539,10 +541,18 @@ func startScenarioSandbox(
 
 func scenarioCompose(t *testing.T, arguments ...string) {
 	t.Helper()
+	_ = scenarioComposeOutput(t, arguments...)
+}
+
+func scenarioComposeOutput(t *testing.T, arguments ...string) []byte {
+	t.Helper()
 	commandArguments := []string{
 		"compose",
 		"--project-name", requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_COMPOSE_PROJECT"),
 		"--file", requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_COMPOSE_FILE"),
+	}
+	if override := strings.TrimSpace(os.Getenv("SECONDBOX_SCENARIO_COMPOSE_OVERRIDE_FILE")); override != "" {
+		commandArguments = append(commandArguments, "--file", override)
 	}
 	commandArguments = append(commandArguments, arguments...)
 	command := exec.CommandContext(context.Background(), "docker", commandArguments...)
@@ -550,4 +560,5 @@ func scenarioCompose(t *testing.T, arguments ...string) {
 	if err != nil {
 		t.Fatalf("SecondBox scenario Compose %v: %v\n%s", arguments, err, output)
 	}
+	return output
 }

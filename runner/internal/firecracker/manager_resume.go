@@ -669,6 +669,7 @@ func (m *Manager) resumeInstanceGuest(
 			MACAddress:  guestMACForInstance(inst.tapName),
 			AddressCIDR: guestAddressCIDR(inst.guestIP, m.cfg.MicroVMBridgeCIDR),
 			Gateway:     bridgeAddress(m.cfg.MicroVMBridgeCIDR).String(),
+			Nameserver:  bridgeAddress(m.cfg.MicroVMBridgeCIDR).String(),
 		}
 	}
 	if err := controlClient.BindAssignment(ctx, bind); err != nil {

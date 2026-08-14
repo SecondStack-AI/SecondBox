@@ -37,8 +37,19 @@ var logicalIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 type Config struct {
 	Root                         string
 	TemplateCapacityBytes        int64
+	FormatterKind                FormatterKind
 	MicrosandboxHelperExecutable string
 }
+
+// FormatterKind selects the explicitly composed Linux ext4 formatter. The
+// Firecracker runner retains its descriptor-based mke2fs path, while the
+// Microsandbox runner delegates formatting to its separately built helper.
+type FormatterKind string
+
+const (
+	FormatterMke2fs             FormatterKind = "mke2fs"
+	FormatterMicrosandboxHelper FormatterKind = "microsandbox_helper"
+)
 
 type imageCloner interface {
 	Clone(destination *os.File, source *os.File) error
@@ -68,7 +79,7 @@ func New(ctx context.Context, config Config) (*Store, error) {
 			minimumExt4Bytes,
 		)
 	}
-	driver, err := newLinuxDriver(config.MicrosandboxHelperExecutable)
+	driver, err := newLinuxDriver(config.FormatterKind, config.MicrosandboxHelperExecutable)
 	if err != nil {
 		return nil, err
 	}

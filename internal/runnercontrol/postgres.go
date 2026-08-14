@@ -305,7 +305,7 @@ func (store *PostgresStateStore) RecordRegistration(
 		"compute-backend": registration.Capabilities != nil && registration.Capabilities.ComputeBackendVersion != "",
 		"hypervisor":      registration.Capabilities != nil && registration.Capabilities.HypervisorReady,
 		"isolation":       registration.Capabilities != nil && registration.Capabilities.IsolationReady,
-		"cgroup":          registration.Capabilities != nil && registration.Capabilities.CgroupReady,
+		"resource-limits": registration.Capabilities != nil && registration.Capabilities.ResourceLimitsReady,
 		"network-policy":  registration.Capabilities != nil && registration.Capabilities.NetworkPolicyReady,
 		"storage":         registration.Capabilities != nil && registration.Capabilities.StorageReady,
 		"cleanup":         registration.Capabilities != nil && registration.Capabilities.CleanupReady,
@@ -3336,7 +3336,7 @@ func (store *PostgresStateStore) beginOrderedMessage(
 
 func allPrerequisitesReady(capabilities map[string]bool) bool {
 	for _, name := range []string{
-		"compute-backend", "hypervisor", "isolation", "cgroup", "network-policy", "storage", "cleanup", "data-plane",
+		"compute-backend", "hypervisor", "isolation", "resource-limits", "network-policy", "storage", "cleanup", "data-plane",
 	} {
 		if !capabilities[name] {
 			return false

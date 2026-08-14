@@ -2074,7 +2074,7 @@ type RunnerCapabilities struct {
 	ComputeBackendVersion    string                 `protobuf:"bytes,3,opt,name=compute_backend_version,json=computeBackendVersion,proto3" json:"compute_backend_version,omitempty"`
 	HypervisorReady          bool                   `protobuf:"varint,4,opt,name=hypervisor_ready,json=hypervisorReady,proto3" json:"hypervisor_ready,omitempty"`
 	IsolationReady           bool                   `protobuf:"varint,5,opt,name=isolation_ready,json=isolationReady,proto3" json:"isolation_ready,omitempty"`
-	CgroupReady              bool                   `protobuf:"varint,6,opt,name=cgroup_ready,json=cgroupReady,proto3" json:"cgroup_ready,omitempty"`
+	ResourceLimitsReady      bool                   `protobuf:"varint,6,opt,name=resource_limits_ready,json=resourceLimitsReady,proto3" json:"resource_limits_ready,omitempty"`
 	NetworkPolicyReady       bool                   `protobuf:"varint,7,opt,name=network_policy_ready,json=networkPolicyReady,proto3" json:"network_policy_ready,omitempty"`
 	StorageReady             bool                   `protobuf:"varint,8,opt,name=storage_ready,json=storageReady,proto3" json:"storage_ready,omitempty"`
 	CleanupReady             bool                   `protobuf:"varint,9,opt,name=cleanup_ready,json=cleanupReady,proto3" json:"cleanup_ready,omitempty"`
@@ -2154,9 +2154,9 @@ func (x *RunnerCapabilities) GetIsolationReady() bool {
 	return false
 }
 
-func (x *RunnerCapabilities) GetCgroupReady() bool {
+func (x *RunnerCapabilities) GetResourceLimitsReady() bool {
 	if x != nil {
-		return x.CgroupReady
+		return x.ResourceLimitsReady
 	}
 	return false
 }
@@ -8739,14 +8739,14 @@ const file_contracts_runner_v1_runner_proto_rawDesc = "" +
 	"\tinstances\x18\x04 \x01(\rR\tinstances\x12\x1e\n" +
 	"\n" +
 	"operations\x18\x05 \x01(\rR\n" +
-	"operations\"\xd1\x04\n" +
+	"operations\"\xe2\x04\n" +
 	"\x12RunnerCapabilities\x12\"\n" +
 	"\farchitecture\x18\x01 \x01(\tR\farchitecture\x12%\n" +
 	"\x0ekernel_release\x18\x02 \x01(\tR\rkernelRelease\x126\n" +
 	"\x17compute_backend_version\x18\x03 \x01(\tR\x15computeBackendVersion\x12)\n" +
 	"\x10hypervisor_ready\x18\x04 \x01(\bR\x0fhypervisorReady\x12'\n" +
-	"\x0fisolation_ready\x18\x05 \x01(\bR\x0eisolationReady\x12!\n" +
-	"\fcgroup_ready\x18\x06 \x01(\bR\vcgroupReady\x120\n" +
+	"\x0fisolation_ready\x18\x05 \x01(\bR\x0eisolationReady\x122\n" +
+	"\x15resource_limits_ready\x18\x06 \x01(\bR\x13resourceLimitsReady\x120\n" +
 	"\x14network_policy_ready\x18\a \x01(\bR\x12networkPolicyReady\x12#\n" +
 	"\rstorage_ready\x18\b \x01(\bR\fstorageReady\x12#\n" +
 	"\rcleanup_ready\x18\t \x01(\bR\fcleanupReady\x12g\n" +

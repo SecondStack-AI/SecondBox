@@ -205,6 +205,9 @@ func (backend *AssignmentBackend) StartupTiming() (uint64, time.Duration) {
 
 // Readiness proves local KVM, immutable assets, exact materialization, and integer capacity.
 func (backend *AssignmentBackend) Readiness(context.Context) (runnercontrol.BackendReadiness, error) {
+	if _, err := validateConfig(backend.config.Config); err != nil {
+		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Microsandbox readiness materialization: %w", err)
+	}
 	kvm, err := os.OpenFile("/dev/kvm", os.O_RDWR, 0)
 	if err != nil {
 		return runnercontrol.BackendReadiness{}, fmt.Errorf("SecondBox Microsandbox readiness KVM: %w", err)
@@ -237,6 +240,7 @@ func (backend *AssignmentBackend) Readiness(context.Context) (runnercontrol.Back
 			ComputeBackendVersion: manifest.BackendBuildID,
 			HypervisorReady:       true,
 			IsolationReady:        true,
+			ResourceLimitsReady:   true,
 			NetworkPolicyReady:    true,
 			StorageReady:          true,
 			CleanupReady:          true,
@@ -306,6 +310,9 @@ func (backend *AssignmentBackend) ValidateAssignment(
 	}
 	if err := backend.validateAssignmentMaterialization(assignment); err != nil {
 		return artifactAssignment(err)
+	}
+	if _, err := validateConfig(backend.config.Config); err != nil {
+		return artifactAssignment(fmt.Errorf("SecondBox Microsandbox revalidate local materialization: %w", err))
 	}
 	if _, err := translateNetworkPolicy(assignment.NetworkPolicy); err != nil {
 		return incompatibleAssignment(err)
