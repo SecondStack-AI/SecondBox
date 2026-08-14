@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -226,6 +227,65 @@ func TestSessionReleasesTerminalDataPlaneState(t *testing.T) {
 			"PTY terminal stream state retained inbound=%d outbound=%d",
 			len(session.inboundDataPlaneStreams), len(session.outboundStreams),
 		)
+	}
+}
+
+func TestSessionSerializesConcurrentInboundTerminalsAndOutboundControls(t *testing.T) {
+	session := negotiatedDataPlaneSession(t)
+	if _, err := session.Accept(registrationFrame("runner-1", "connection-1", 1)); err != nil {
+		t.Fatal(err)
+	}
+	fence := dataPlaneTestFence()
+	const streams = 128
+	for index := range streams {
+		operationID := fmt.Sprintf("operation-concurrent-%d", index)
+		streamID := fmt.Sprintf("stream-concurrent-%d", index)
+		if err := session.ValidateOutboundDataPlaneFrame(&runnerv1.ControlPlaneToRunner{
+			Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: &runnerv1.ExecFrame{
+				Fence: fence, OperationId: operationID, StreamId: streamID, Sequence: 1,
+				Payload: &runnerv1.ExecFrame_Open{Open: &runnerv1.ExecOpen{
+					Command: &runnerv1.ExecOpen_Shell{Shell: "true"},
+				}},
+			}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	errors := make(chan error, streams*2)
+	var group sync.WaitGroup
+	for index := range streams {
+		operationID := fmt.Sprintf("operation-concurrent-%d", index)
+		streamID := fmt.Sprintf("stream-concurrent-%d", index)
+		group.Add(2)
+		go func() {
+			defer group.Done()
+			_, err := session.Accept(runnerExecFrame(
+				fence, operationID, streamID, 1,
+				&runnerv1.ExecFrame_Terminal{Terminal: &runnerv1.ExecTerminal{
+					Kind: runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED,
+				}},
+			))
+			errors <- err
+		}()
+		go func() {
+			defer group.Done()
+			errors <- session.ValidateOutboundDataPlaneFrame(&runnerv1.ControlPlaneToRunner{
+				Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: &runnerv1.ExecFrame{
+					Fence: fence, OperationId: operationID, StreamId: streamID, Sequence: 2,
+					Payload: &runnerv1.ExecFrame_Credit{Credit: &runnerv1.StreamCredit{
+						ByteCount: 1,
+					}},
+				}},
+			})
+		}()
+	}
+	group.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatalf("concurrent data-plane session mutation: %v", err)
+		}
 	}
 }
 
