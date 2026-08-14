@@ -149,7 +149,7 @@ func TestScenarioSandboxRejectsRequirementsAboveRunnerCapacity(t *testing.T) {
 func TestScenarioSandboxRejectsUncachedLogicalMaterializationTuple(t *testing.T) {
 	fixture := newScenarioFixture(t)
 	ensureScenarioRunnerPool(t, fixture)
-	runnerBefore := waitForScenarioRunner(t, fixture, 90*time.Second)
+	runnerBefore := waitForScenarioRunnerStartupTimingSettled(t, fixture, 15*time.Second)
 	spec := scenarioProfileSpec(t, contracts.SandboxDesiredStateRunning)
 	spec.RuntimeBundleDigest = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 	profile := createScenarioProfile(t, fixture, "scenario-uncached-materialization", spec)
@@ -189,7 +189,7 @@ func TestScenarioSandboxRejectsUncachedLogicalMaterializationTuple(t *testing.T)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	runnerAfter := waitForScenarioRunner(t, fixture, 30*time.Second)
+	runnerAfter := waitForScenarioRunnerStartupTimingSettled(t, fixture, 15*time.Second)
 	if runnerAfter.SandboxStartSampleCount != runnerBefore.SandboxStartSampleCount {
 		t.Fatalf(
 			"SecondBox uncached materialization reached compute: start samples %d -> %d",
@@ -197,4 +197,38 @@ func TestScenarioSandboxRejectsUncachedLogicalMaterializationTuple(t *testing.T)
 			runnerAfter.SandboxStartSampleCount,
 		)
 	}
+}
+
+func waitForScenarioRunnerStartupTimingSettled(
+	t *testing.T,
+	fixture scenarioFixture,
+	timeout time.Duration,
+) contracts.Runner {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	previous := waitForScenarioRunner(t, fixture, timeout)
+	stableHeartbeats := 0
+	for time.Now().Before(deadline) {
+		time.Sleep(250 * time.Millisecond)
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		current := waitForScenarioRunner(t, fixture, remaining)
+		if current.LastSeenAt == nil || previous.LastSeenAt == nil ||
+			!current.LastSeenAt.After(*previous.LastSeenAt) {
+			continue
+		}
+		if current.SandboxStartSampleCount == previous.SandboxStartSampleCount {
+			stableHeartbeats++
+		} else {
+			stableHeartbeats = 0
+		}
+		previous = current
+		if stableHeartbeats == 2 {
+			return current
+		}
+	}
+	t.Fatalf("SecondBox scenario Runner startup timing did not settle within %s", timeout)
+	return contracts.Runner{}
 }
