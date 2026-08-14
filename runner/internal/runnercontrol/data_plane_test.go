@@ -88,6 +88,28 @@ func TestRunnerDataPlaneExecCreditFenceOrderingAndCancellation(t *testing.T) {
 	if err := service.handleExecFrame(t.Context(), stream, relayExecCredit(fence, "exec-1", "exec-stream-1", 5, 1), enabled, asyncErrors); err == nil {
 		t.Fatal("reordered Exec credit was accepted")
 	}
+	postTerminalCredits := make(chan error, 1)
+	go func() {
+		for sequence := uint64(4); sequence < 304; sequence++ {
+			if err := service.handleExecFrame(
+				t.Context(), stream,
+				relayExecCredit(fence, "exec-1", "exec-stream-1", sequence, 1),
+				enabled, asyncErrors,
+			); err != nil {
+				postTerminalCredits <- err
+				return
+			}
+		}
+		postTerminalCredits <- nil
+	}()
+	select {
+	case err := <-postTerminalCredits:
+		if err != nil {
+			t.Fatalf("post-terminal Exec credit: %v", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("post-terminal Exec credit blocked the control receive path")
+	}
 
 	stale := cloneRunnerFence(fence)
 	stale.SandboxGeneration++

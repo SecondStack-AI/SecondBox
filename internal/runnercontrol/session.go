@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	runnerv1 "github.com/SecondStack-AI/SecondBox/gen/runner/v1"
@@ -91,6 +92,7 @@ func (event Event) GetRejection() *runnerv1.ProtocolRejection {
 
 // Session enforces negotiation, registration, identity, connection, and ordering.
 type Session struct {
+	mu                      sync.Mutex
 	config                  SessionConfig
 	helloAccepted           bool
 	registered              bool
@@ -128,6 +130,8 @@ type dataPlaneStreamState struct {
 
 // Accept validates one runner frame without granting any durable authority in memory.
 func (session *Session) Accept(message *runnerv1.RunnerToControlPlane) (Event, error) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
 	if message == nil {
 		return Event{}, ErrRunnerMessage
 	}
@@ -400,6 +404,8 @@ func (session *Session) releaseTerminalDataPlaneState(
 // ValidateOutboundDataPlaneFrame gates an outbound data-plane frame against negotiated
 // features and connection-local stream ordering before transport mutation.
 func (session *Session) ValidateOutboundDataPlaneFrame(message *runnerv1.ControlPlaneToRunner) error {
+	session.mu.Lock()
+	defer session.mu.Unlock()
 	if !session.helloAccepted || !session.registered || message == nil {
 		return ErrRegistrationRequired
 	}

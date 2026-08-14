@@ -89,6 +89,7 @@ type runnerExecOperation struct {
 	nextOutgoing     uint64
 	credit           *runnerCreditWindow
 	controls         chan ExecControl
+	done             chan struct{}
 	ptyControls      chan PTYControl
 	pty              bool
 	cancel           context.CancelCauseFunc
@@ -215,6 +216,7 @@ func (s *RunnerProtocolService) handleExecFrame(
 			nextOutgoing:     1,
 			credit:           newRunnerCreditWindow(),
 			controls:         make(chan ExecControl, 256),
+			done:             make(chan struct{}),
 			pty:              frame.GetOpen().AllocatePty,
 			outputLimitBytes: frame.GetOpen().OutputLimitBytes,
 		}
@@ -319,7 +321,14 @@ func (s *RunnerProtocolService) handleExecFrame(
 	}
 	state.nextIncoming++
 	state.lastIncoming = bytes.Clone(encoded)
+	terminal := state.terminal
 	s.operationMu.Unlock()
+	if terminal {
+		// Credits and input already in flight when the terminal was emitted are
+		// sequenced and acknowledged, but never enter the now-unowned backend
+		// control queue. Exact duplicates above still replay the retained terminal.
+		return nil
+	}
 
 	switch {
 	case frame.GetCredit() != nil:
@@ -329,12 +338,12 @@ func (s *RunnerProtocolService) handleExecFrame(
 		if err := state.credit.add(frame.GetCredit().ByteCount); err != nil {
 			return err
 		}
-		return sendExecControl(ctx, state.controls, ExecControl{Credit: frame.GetCredit().ByteCount})
+		return sendExecControl(ctx, state.done, state.controls, ExecControl{Credit: frame.GetCredit().ByteCount})
 	case frame.GetInput() != nil:
 		if state.pty {
 			return fmt.Errorf("SecondBox runner PTY input requires a PtyFrame")
 		}
-		return sendExecControl(ctx, state.controls, ExecControl{
+		return sendExecControl(ctx, state.done, state.controls, ExecControl{
 			Input: proto.Clone(frame.GetInput()).(*runnerprotocol.ExecInput),
 		})
 	case frame.GetCancel() != nil:
@@ -345,12 +354,21 @@ func (s *RunnerProtocolService) handleExecFrame(
 	}
 }
 
-func sendExecControl(ctx context.Context, controls chan<- ExecControl, control ExecControl) error {
+func sendExecControl(ctx context.Context, done <-chan struct{}, controls chan<- ExecControl, control ExecControl) error {
+	select {
+	case <-done:
+		return nil
+	default:
+	}
 	select {
 	case controls <- control:
 		return nil
+	case <-done:
+		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	default:
+		return fmt.Errorf("SecondBox runner Exec control queue is full")
 	}
 }
 
@@ -701,6 +719,7 @@ func (s *RunnerProtocolService) sendPTYTerminal(
 		},
 	}
 	state.terminal = true
+	close(state.done)
 	state.ptyTerminalFrame = proto.Clone(frame).(*runnerprotocol.PtyFrame)
 	s.retainExecTerminalLocked(state.key)
 	s.operationMu.Unlock()
@@ -818,6 +837,7 @@ func (s *RunnerProtocolService) sendExecBufferedResult(
 	}
 	state.nextOutgoing++
 	state.terminal = true
+	close(state.done)
 	state.terminalFrame = proto.Clone(frame).(*runnerprotocol.ExecFrame)
 	s.retainExecTerminalLocked(state.key)
 	s.operationMu.Unlock()
@@ -928,6 +948,7 @@ func (s *RunnerProtocolService) sendExecTerminal(
 	}
 	state.nextOutgoing++
 	state.terminal = true
+	close(state.done)
 	state.terminalFrame = proto.Clone(frame).(*runnerprotocol.ExecFrame)
 	state.stdout, state.stderr = nil, nil
 	s.retainExecTerminalLocked(state.key)

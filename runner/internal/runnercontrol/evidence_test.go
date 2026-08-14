@@ -44,6 +44,7 @@ func TestTerminalEvidenceRetainsDistinctOperationCorrelationWithoutPayloads(t *t
 		key: "exec-key", fence: cloneRunnerFence(fence),
 		correlation: relayOperationCorrelation(fence, "exec-operation", "request-exec", "lease-exec"),
 		operationID: "exec-operation", streamID: "exec-stream", nextOutgoing: 1,
+		done: make(chan struct{}),
 	}
 	service.execOperations[execState.key] = execState
 	if err := service.sendExecTerminal(stream, execState, &runnerprotocol.ExecTerminal{
