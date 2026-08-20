@@ -22,7 +22,6 @@ type snapshotTemplatePublishReport struct {
 	MemoryMiB       int    `json:"memoryMiB"`
 	WorkspaceMiB    int    `json:"workspaceMiB"`
 	VCPUCount       int    `json:"vcpuCount"`
-	ProcessLimit    int    `json:"processLimit"`
 	NetworkDevice   bool   `json:"networkDevice"`
 	SharedImage     bool   `json:"sharedImage"`
 	BuildMillis     int64  `json:"templateBuildMilliseconds"`
@@ -59,7 +58,6 @@ func TestSmokePublishSnapshotResumeTemplate(t *testing.T) {
 	memoryMiB := requiredPositiveEnvInt(t, "SECONDBOX_SNAPSHOT_TEMPLATE_PUBLISH_MEMORY_MIB")
 	workspaceMiB := requiredPositiveEnvInt(t, "SECONDBOX_SNAPSHOT_TEMPLATE_PUBLISH_WORKSPACE_MIB")
 	vcpus := requiredPositiveEnvInt(t, "SECONDBOX_SNAPSHOT_TEMPLATE_PUBLISH_VCPUS")
-	processLimit := requiredPositiveEnvInt(t, "SECONDBOX_SNAPSHOT_TEMPLATE_PUBLISH_PROCESS_LIMIT")
 
 	cfg, err := LoadRunnerFirecrackerConfigFromEnv()
 	if err != nil {
@@ -105,7 +103,7 @@ func TestSmokePublishSnapshotResumeTemplate(t *testing.T) {
 	key, published := buildSnapshotResumeTemplate(
 		t, cfg, cache, memoryMiB, workspaceMiB,
 		func(opts runtimemanager.StartOpts) runtimemanager.StartOpts {
-			return productionTemplateStartOpts(opts, manifest, cfg, processLimit)
+			return productionTemplateStartOpts(opts, manifest, cfg)
 		},
 	)
 	buildMillis := time.Since(buildStartedAt).Milliseconds()
@@ -137,7 +135,7 @@ func TestSmokePublishSnapshotResumeTemplate(t *testing.T) {
 		MemoryMiB:       memoryMiB,
 		WorkspaceMiB:    workspaceMiB,
 		VCPUCount:       vcpus,
-		ProcessLimit:    processLimit,
+
 		NetworkDevice:   key.HasNetworkDevice(),
 		SharedImage:     key.HasSharedImage(),
 		BuildMillis:     buildMillis,
@@ -169,18 +167,16 @@ func productionTemplateStartOpts(
 	opts runtimemanager.StartOpts,
 	manifest signedArtifactManifest,
 	cfg *config.Config,
-	processLimit int,
 ) runtimemanager.StartOpts {
 	opts.GuestBuildID = manifest.ArtifactVersion
 	opts.ImageManifestDigest = manifest.RuntimeBundle.ManifestDigest
 	opts.ToolchainManifestDigest = manifest.ToolchainBundle.ManifestDigest
 	opts.RuntimeClass = runtimemanager.RuntimeClassToolExecutor
 	opts.SandboxPolicy = &runtimemanager.SandboxRuntimePolicy{
-		VCPUs:             cfg.MicroVMVCPUs,
-		CPUMillis:         cfg.MicroVMVCPUs * 1000,
-		MemoryMiB:         cfg.MicroVMMemoryMiB,
-		WorkspaceSizeMiB:  cfg.MicroVMWorkspaceSizeMiB,
-		ProcessLimit:      processLimit,
+		VCPUs:            cfg.MicroVMVCPUs,
+		MemoryMiB:        cfg.MicroVMMemoryMiB,
+		WorkspaceSizeMiB: cfg.MicroVMWorkspaceSizeMiB,
+
 		WorkspaceWritable: true,
 		SharedReadOnly:    true,
 	}

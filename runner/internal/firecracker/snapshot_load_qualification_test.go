@@ -142,6 +142,7 @@ func measureSnapshotLoadShape(t *testing.T, memoryMiB int, warmIterations int) s
 	workspaceStore, err := workspacestore.New(t.Context(), workspacestore.Config{
 		Root:                  cfg.RunnerWorkspaceRoot,
 		TemplateCapacityBytes: int64(workspaceMiB) << 20,
+		FormatterKind:         workspacestore.FormatterMke2fs,
 	})
 	if err != nil {
 		t.Fatalf("new %d MiB snapshot WorkspaceStore: %v", memoryMiB, err)

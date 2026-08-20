@@ -22,6 +22,7 @@ import (
 	"github.com/SecondStack-AI/SecondBox/runner/internal/config"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/jailersupervisor"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
 
 // relocateRunDirForUnixSockets returns a shorter run dir (and true) when runDir is
@@ -405,7 +406,10 @@ func checkUnixSocketPath(label, path, setting string) error {
 	return nil
 }
 
-func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, kernelPath, rootfsPath, workspacePath, sharedImagePath, tapName, guestIP string, jailerUID int, templateMode bool, policy *runtimemanager.SandboxRuntimePolicy) (firecrackerLaunch, error) {
+func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, kernelPath, rootfsPath string, workspace workspacestore.ComputeAttachment, sharedImagePath, tapName, guestIP string, jailerUID int, templateMode bool, policy *runtimemanager.SandboxRuntimePolicy) (firecrackerLaunch, error) {
+	if workspace == nil || workspace.Descriptor() == nil {
+		return firecrackerLaunch{}, fmt.Errorf("Workspace attachment is required")
+	}
 	if m.cfg.MicroVMAllowUnjailed {
 		socket := filepath.Join(dir, firecrackerSockName)
 		vsockUDS := filepath.Join(dir, vsockUDSName)
@@ -416,13 +420,18 @@ func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, 
 			return firecrackerLaunch{}, err
 		}
 		configPath := filepath.Join(dir, configName)
+		workspacePath := filepath.Join(dir, workspaceName)
+		if err := workspace.LinkInto(workspacePath); err != nil {
+			return firecrackerLaunch{}, fmt.Errorf("stage unjailed Workspace attachment: %w", err)
+		}
 		return firecrackerLaunch{
-			executable: m.cfg.FirecrackerPath,
-			args:       []string{"--id", instanceID, "--api-sock", socket, "--config-file", configPath},
-			config:     buildFirecrackerConfigWithPolicy(m.cfg, kernelPath, rootfsPath, workspacePath, sharedImagePath, vsockUDS, tapName, guestIP, templateMode, policy),
-			configPath: configPath,
-			socketPath: socket,
-			vsockUDS:   vsockUDS,
+			executable:    m.cfg.FirecrackerPath,
+			args:          []string{"--id", instanceID, "--api-sock", socket, "--config-file", configPath},
+			config:        buildFirecrackerConfigWithPolicy(m.cfg, kernelPath, rootfsPath, workspacePath, sharedImagePath, vsockUDS, tapName, guestIP, templateMode, policy),
+			configPath:    configPath,
+			socketPath:    socket,
+			vsockUDS:      vsockUDS,
+			workspacePath: workspacePath,
 		}, nil
 	}
 
@@ -442,9 +451,9 @@ func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, 
 		_ = os.RemoveAll(jailRoot)
 		return firecrackerLaunch{}, fmt.Errorf("per-instance jailer UID is required")
 	}
-	if policy == nil || policy.CPUMillis < 1 || policy.ProcessLimit < 1 || policy.VCPUs < 1 || policy.MemoryMiB < 1 {
+	if policy == nil || policy.VCPUs < 1 || policy.MemoryMiB < 1 {
 		_ = os.RemoveAll(jailRoot)
-		return firecrackerLaunch{}, fmt.Errorf("profile CPU, memory, and process limits are required for jailed launch")
+		return firecrackerLaunch{}, fmt.Errorf("profile vCPU and memory limits are required for jailed launch")
 	}
 	stagedRootfs := filepath.Join(jailRoot, rootfsName)
 	stagedWorkspace := filepath.Join(jailRoot, workspaceName)
@@ -452,7 +461,7 @@ func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, 
 		_ = os.RemoveAll(jailRoot)
 		return firecrackerLaunch{}, fmt.Errorf("stage rootfs in jail: %w", err)
 	}
-	if err := stageWorkspaceJailFile(stagedWorkspace, workspacePath, jailerUID, m.cfg.MicroVMJailerGID); err != nil {
+	if err := stageWorkspaceJailFile(stagedWorkspace, workspace, jailerUID, m.cfg.MicroVMJailerGID); err != nil {
 		_ = os.RemoveAll(jailRoot)
 		return firecrackerLaunch{}, fmt.Errorf("stage workspace in jail: %w", err)
 	}
@@ -480,14 +489,15 @@ func (m *Manager) prepareLaunchWithPolicy(ctx context.Context, instanceID, dir, 
 		return firecrackerLaunch{}, err
 	}
 	return firecrackerLaunch{
-		executable:  "/proc/self/exe",
-		args:        []string{jailersupervisor.InvocationArgument},
-		environment: []string{supervisorEnvironment},
-		config:      fcConfig,
-		configPath:  configPath,
-		socketPath:  socket,
-		vsockUDS:    vsockUDS,
-		jailRoot:    jailRoot,
+		executable:    "/proc/self/exe",
+		args:          []string{jailersupervisor.InvocationArgument},
+		environment:   []string{supervisorEnvironment},
+		config:        fcConfig,
+		configPath:    configPath,
+		socketPath:    socket,
+		vsockUDS:      vsockUDS,
+		jailRoot:      jailRoot,
+		workspacePath: stagedWorkspace,
 	}, nil
 }
 
@@ -521,12 +531,13 @@ func jailerResourceCgroups(version int, policy *runtimemanager.SandboxRuntimePol
 	// The host cgroup includes Firecracker's device-emulation and I/O work as
 	// well as guest vCPU execution. Add 10%, with a 100-millis floor, so the
 	// profile's CPU budget remains usable while ancillary VMM work stays bounded.
-	cpuOverheadMillis := policy.CPUMillis / 10
-	if cpuOverheadMillis < 100 {
-		cpuOverheadMillis = 100
+	cpuQuotaUnits := policy.VCPUs * 1000
+	cpuOverheadUnits := cpuQuotaUnits / 10
+	if cpuOverheadUnits < 100 {
+		cpuOverheadUnits = 100
 	}
 	const cpuPeriodMicros = 100_000
-	cpuQuotaMicros := int64(policy.CPUMillis+cpuOverheadMillis) * cpuPeriodMicros / 1000
+	cpuQuotaMicros := int64(cpuQuotaUnits+cpuOverheadUnits) * cpuPeriodMicros / 1000
 	if version == 1 {
 		cgroups = append(cgroups,
 			fmt.Sprintf("cpu.cfs_period_us=%d", cpuPeriodMicros),
@@ -535,11 +546,10 @@ func jailerResourceCgroups(version int, policy *runtimemanager.SandboxRuntimePol
 	} else {
 		cgroups = append(cgroups, fmt.Sprintf("cpu.max=%d %d", cpuQuotaMicros, cpuPeriodMicros))
 	}
-	// Guest processes are not host PIDs, but deriving this ceiling from the same
-	// profile limit keeps host thread growth bounded. The fixed allowance covers
-	// jailer/VMM workers and two threads per configured vCPU.
+	// Guest processes are not host PIDs. This backend-owned ceiling bounds the
+	// jailer/VMM workers without exposing a provider-specific PID promise in a Profile.
 	const vmmThreadHeadroom = 32
-	pidsMax := policy.ProcessLimit + vmmThreadHeadroom + 2*policy.VCPUs
+	pidsMax := vmmThreadHeadroom + 2*policy.VCPUs
 	cgroups = append(cgroups, fmt.Sprintf("pids.max=%d", pidsMax))
 	return cgroups
 }
@@ -707,9 +717,9 @@ func stageLinkedJailFile(dst, src string, uid, gid int) error {
 	return nil
 }
 
-func stageWorkspaceJailFile(dst, src string, uid, gid int) error {
+func stageWorkspaceJailFile(dst string, workspace workspacestore.ComputeAttachment, uid, gid int) error {
 	_ = os.Remove(dst)
-	if err := hardLinkFile(src, dst); err != nil {
+	if err := workspace.LinkInto(dst); err != nil {
 		if errors.Is(err, syscall.EXDEV) {
 			return fmt.Errorf("link workspace image into jail: %w (jailer chroot base dir must be on the same filesystem as SECONDBOX_RUNNER_WORKSPACE_ROOT)", err)
 		}
@@ -797,12 +807,10 @@ func buildFirecrackerConfigWithPolicy(cfg *config.Config, kernelPath, rootfsPath
 	workspaceWritable := true
 	vcpus := cfg.MicroVMVCPUs
 	memoryMiB := cfg.MicroVMMemoryMiB
-	processLimit := 0
 	if policy != nil {
 		workspaceWritable = policy.WorkspaceWritable
 		vcpus = policy.VCPUs
 		memoryMiB = policy.MemoryMiB
-		processLimit = policy.ProcessLimit
 	}
 	drives := []drive{
 		{DriveID: "rootfs", PathOnHost: rootfsPath, IsRootDevice: true, IsReadOnly: false},
@@ -812,7 +820,7 @@ func buildFirecrackerConfigWithPolicy(cfg *config.Config, kernelPath, rootfsPath
 		drives = append(drives, drive{DriveID: "shared", PathOnHost: sharedImagePath, IsRootDevice: false, IsReadOnly: true})
 	}
 	fc := firecrackerConfig{
-		BootSource: bootSource{KernelImagePath: kernelPath, BootArgs: effectiveKernelArgsWithProcessLimit(cfg, guestIP, processLimit)},
+		BootSource: bootSource{KernelImagePath: kernelPath, BootArgs: effectiveKernelArgs(cfg, guestIP)},
 		Drives:     drives,
 		Machine:    machineConfig{VCPUCount: vcpus, MemSizeMiB: memoryMiB, SMT: false, CPUTemplate: cfg.MicroVMCPUTemplate},
 		Vsock:      vsockConfig{VsockID: "secondbox-vsock", GuestCID: 3, UDSPath: vsockUDS},
@@ -825,14 +833,6 @@ func buildFirecrackerConfigWithPolicy(cfg *config.Config, kernelPath, rootfsPath
 		}}
 	}
 	return fc
-}
-
-func effectiveKernelArgsWithProcessLimit(cfg *config.Config, guestIP string, processLimit int) string {
-	args := effectiveKernelArgs(cfg, guestIP)
-	if processLimit > 0 {
-		args += " secondbox.process_limit=" + strconv.Itoa(processLimit)
-	}
-	return args
 }
 
 func effectiveKernelArgs(cfg *config.Config, guestIP string) string {

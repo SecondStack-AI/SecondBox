@@ -67,7 +67,7 @@ type Config struct {
 	RunnerHeartbeatTimeout           time.Duration
 	AssignmentRetryLimit             int64
 	SchedulerSerializationRetryLimit int
-	SignedAssetCatalogPath           string
+	AssetCatalogPath                 string
 	RunnerEnabledFeatures            []string
 	DefaultSubjectQuota              contracts.QuotaLimits
 }
@@ -254,7 +254,7 @@ func FromEnvironment() (Config, error) {
 		RunnerHeartbeatTimeout:           time.Duration(runnerHeartbeatTimeoutMilliseconds) * time.Millisecond,
 		AssignmentRetryLimit:             assignmentRetryLimit,
 		SchedulerSerializationRetryLimit: schedulerSerializationRetryLimitInt,
-		SignedAssetCatalogPath:           signedAssetCatalogPath,
+		AssetCatalogPath:                 signedAssetCatalogPath,
 		RunnerEnabledFeatures:            runnerEnabledFeatures,
 		DefaultSubjectQuota:              subjectQuota,
 	}, nil
@@ -333,7 +333,7 @@ func requiredCSV(name string) ([]string, error) {
 
 func requiredQuota(prefix string) (contracts.QuotaLimits, error) {
 	names := []string{
-		"MAX_SANDBOXES", "MAX_ACTIVE_INSTANCES", "MAX_CPU_MILLIS", "MAX_MEMORY_BYTES",
+		"MAX_SANDBOXES", "MAX_ACTIVE_INSTANCES", "MAX_VCPU_COUNT", "MAX_MEMORY_BYTES",
 		"MAX_SNAPSHOTS", "MAX_PORT_SESSIONS",
 		"MAX_CONCURRENT_OPERATIONS",
 	}
@@ -346,7 +346,7 @@ func requiredQuota(prefix string) (contracts.QuotaLimits, error) {
 		values[index] = value
 	}
 	return contracts.QuotaLimits{
-		MaxSandboxes: values[0], MaxActiveInstances: values[1], MaxCPUMillis: values[2],
+		MaxSandboxes: values[0], MaxActiveInstances: values[1], MaxVCPUCount: values[2],
 		MaxMemoryBytes: values[3], MaxSnapshots: values[4], MaxPortSessions: values[5],
 		MaxConcurrentOperations: values[6],
 	}, nil

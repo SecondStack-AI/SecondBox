@@ -46,8 +46,9 @@ type NFTablesNetworkPolicyEnforcer struct {
 	dnsUpstream netip.AddrPort
 	dnsProxy    *runnerDNSProxy
 
-	mu        sync.Mutex
-	instances map[string]nftPolicyInstance
+	mutationMu sync.Mutex
+	mu         sync.Mutex
+	instances  map[string]nftPolicyInstance
 }
 
 type nftPolicyInstance struct {
@@ -106,6 +107,8 @@ func (e *NFTablesNetworkPolicyEnforcer) handleDNSProxyFailure(proxyErr error) {
 }
 
 func (e *NFTablesNetworkPolicyEnforcer) Install(ctx context.Context, cfg PolicyNetworkConfig) error {
+	e.mutationMu.Lock()
+	defer e.mutationMu.Unlock()
 	instanceID := strings.TrimSpace(cfg.InstanceID)
 	tapName := strings.TrimSpace(cfg.TapName)
 	if instanceID == "" || tapName == "" || cfg.Policy == nil {
@@ -191,6 +194,18 @@ func (e *NFTablesNetworkPolicyEnforcer) ObserveDNSAnswer(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// A resolver commonly sends A and AAAA queries concurrently. Serialize the
+	// read-modify-replace transaction so neither answer can replace the nft table
+	// or stored pin set derived from stale state.
+	e.mutationMu.Lock()
+	var enforcementFailure error
+	var failureConfig PolicyNetworkConfig
+	defer func() {
+		e.mutationMu.Unlock()
+		if enforcementFailure != nil {
+			e.reportFailure(failureConfig, enforcementFailure)
+		}
+	}()
 	now := time.Now().UTC()
 	if e.now != nil {
 		now = e.now().UTC()
@@ -270,7 +285,8 @@ func (e *NFTablesNetworkPolicyEnforcer) ObserveDNSAnswer(
 			return fmt.Errorf("update observed DNS pin for %s: policy removed", instanceID)
 		}
 		policyErr := fmt.Errorf("update observed DNS pin for %s: %w: %s", instanceID, err, strings.TrimSpace(string(output)))
-		e.reportFailure(instance.cfg, policyErr)
+		failureConfig = instance.cfg
+		enforcementFailure = policyErr
 		return policyErr
 	}
 	e.mu.Lock()
@@ -327,6 +343,14 @@ func (e *NFTablesNetworkPolicyEnforcer) expireDNSPin(instanceID, domain string, 
 	case <-instance.ctx.Done():
 		return
 	}
+	e.mutationMu.Lock()
+	var enforcementFailure error
+	defer func() {
+		e.mutationMu.Unlock()
+		if enforcementFailure != nil {
+			e.reportFailure(instance.cfg, enforcementFailure)
+		}
+	}()
 	e.mu.Lock()
 	instance, found = e.instances[instanceID]
 	if !found {
@@ -351,7 +375,7 @@ func (e *NFTablesNetworkPolicyEnforcer) expireDNSPin(instanceID, domain string, 
 		if instance.ctx.Err() != nil {
 			return
 		}
-		e.reportFailure(instance.cfg, fmt.Errorf("expire DNS pin for %s: %w: %s", instanceID, err, strings.TrimSpace(string(output))))
+		enforcementFailure = fmt.Errorf("expire DNS pin for %s: %w: %s", instanceID, err, strings.TrimSpace(string(output)))
 		return
 	}
 	e.mu.Lock()
@@ -368,6 +392,8 @@ func (e *NFTablesNetworkPolicyEnforcer) reportFailure(cfg PolicyNetworkConfig, e
 }
 
 func (e *NFTablesNetworkPolicyEnforcer) Remove(ctx context.Context, instanceID string) error {
+	e.mutationMu.Lock()
+	defer e.mutationMu.Unlock()
 	instanceID = strings.TrimSpace(instanceID)
 	if instanceID == "" {
 		return nil

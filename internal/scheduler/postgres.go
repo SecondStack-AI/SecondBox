@@ -320,7 +320,7 @@ func (store *PostgresStore) scheduleOnce(
 	assignment := DurableAssignment{
 		ID: request.AssignmentID, SandboxID: request.SandboxID, InstanceID: request.InstanceID,
 		RunnerID: selected.ID, ProfileRevisionID: request.ProfileRevisionID,
-		BackendKind: request.Requirements.BackendKind, Generation: generation,
+		BackendKind: selected.BackendKind, Generation: generation,
 		FencingToken: append([]byte(nil), request.FencingToken...), State: "assigned",
 		CapabilitySnapshot: capabilitySnapshot, ResolvedArtifacts: request.ResolvedArtifacts,
 		ReleaseProof: map[string]string{}, RetryLimit: request.RetryLimit,
@@ -470,7 +470,7 @@ func validateScheduleRequest(request ScheduleRequest) error {
 		request.InstanceID == "" || request.SandboxID == "" ||
 		request.WorkspaceID == "" || request.StartMutationID == "" ||
 		request.ProfileRevisionID == "" || request.Requirements.PoolName == "" ||
-		request.Requirements.BackendKind == "" || request.Requirements.Architecture == "" ||
+		request.Requirements.Architecture == "" ||
 		request.Requirements.GuestProtocolGeneration == 0 ||
 		len(request.FencingToken) < 32 || request.ClaimExpiresAt.IsZero() ||
 		request.OperationDeadline.IsZero() || request.HeartbeatTimeout <= 0 ||
@@ -528,7 +528,7 @@ func lockRunnerCandidates(
 	rows, err := tx.Query(ctx, `
 		SELECT id,pool_name,architectures_json,capabilities_json,capacity_json,
 			reserved_capacity_json,drain_phase,last_seen_at,artifact_cache_json,
-			guest_protocol_minimum,guest_protocol_maximum
+			guest_protocol_minimum,guest_protocol_maximum,backend_kind
 		FROM secondbox.runners
 		WHERE pool_name=$1 AND state='ready'
 		ORDER BY id FOR UPDATE`, poolName)
@@ -543,7 +543,7 @@ func lockRunnerCandidates(
 		if err := rows.Scan(
 			&runner.ID, &runner.PoolName, &architecturesJSON, &capabilitiesJSON,
 			&allocatableJSON, &reservedJSON, &runner.DrainPhase, &runner.LastHeartbeatAt,
-			&cacheJSON, &runner.GuestProtocolMinimum, &runner.GuestProtocolMaximum,
+			&cacheJSON, &runner.GuestProtocolMinimum, &runner.GuestProtocolMaximum, &runner.BackendKind,
 		); err != nil {
 			return nil, fmt.Errorf("SecondBox scheduler Runner candidate scan: %w", err)
 		}
@@ -567,12 +567,14 @@ func lockRunnerCandidates(
 			return nil, fmt.Errorf("SecondBox scheduler Runner reservation decoding: %w", err)
 		}
 		var cacheEvidence struct {
-			ArtifactDigests []string `json:"artifactDigests"`
+			ArtifactDigests  []string                  `json:"artifactDigests"`
+			Materializations []MaterializationSnapshot `json:"materializations"`
 		}
 		if err := json.Unmarshal(cacheJSON, &cacheEvidence); err != nil {
 			return nil, fmt.Errorf("SecondBox scheduler Runner cache decoding: %w", err)
 		}
 		runner.ArtifactDigests = cacheEvidence.ArtifactDigests
+		runner.Materializations = cacheEvidence.Materializations
 		runners = append(runners, runner)
 	}
 	if err := rows.Err(); err != nil {
@@ -639,7 +641,7 @@ func capabilitySnapshot(runner RunnerSnapshot) map[string]string {
 
 func addCapacity(left, right Capacity) Capacity {
 	return Capacity{
-		CPUMillis:   left.CPUMillis + right.CPUMillis,
+		VCPUCount:   left.VCPUCount + right.VCPUCount,
 		MemoryBytes: left.MemoryBytes + right.MemoryBytes,
 		DiskBytes:   left.DiskBytes + right.DiskBytes,
 		Instances:   left.Instances + right.Instances,

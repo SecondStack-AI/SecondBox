@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 	"github.com/jackc/pgx/v5"
@@ -222,7 +223,7 @@ func runnerPlacementCompatible(
 	if options.requireWorkspaceTransfer &&
 		(!contains(candidate.capabilities, "storage") ||
 			!contains(candidate.capabilities, "workspace-relocation") ||
-			!contains(candidate.protocolVersions, "2")) {
+			!supportsProtocolGeneration(candidate.protocolVersions, 2)) {
 		return false
 	}
 	// A Sandbox never leaves its home Runner, so the startup mode a Profile pins
@@ -232,11 +233,21 @@ func runnerPlacementCompatible(
 		!contains(candidate.capabilities, contracts.RunnerCapabilitySnapshotResume) {
 		return false
 	}
-	return candidate.allocatable.CPUMillis-reserved.CPUMillis >= spec.Resources.CPUMillis &&
+	return candidate.allocatable.VCPUCount-reserved.VCPUCount >= spec.Resources.VCPUCount &&
 		candidate.allocatable.MemoryBytes-reserved.MemoryBytes >= spec.Resources.MemoryBytes &&
 		candidate.allocatable.DiskBytes-reserved.DiskBytes >= spec.Resources.WorkspaceBytes &&
 		candidate.allocatable.Instances-reserved.Instances >= 1 &&
 		candidate.allocatable.Operations-reserved.Operations >= spec.Resources.ConcurrentOperations
+}
+
+func supportsProtocolGeneration(versions []string, minimum uint64) bool {
+	for _, version := range versions {
+		parsed, err := strconv.ParseUint(version, 10, 32)
+		if err == nil && parsed >= minimum {
+			return true
+		}
+	}
+	return false
 }
 
 func durableHomeReservation(ctx context.Context, tx pgx.Tx, runnerID string) (runnerCapacity, error) {
@@ -263,7 +274,7 @@ func durableHomeReservation(ctx context.Context, tx pgx.Tx, runnerID string) (ru
 
 func maxRunnerPlacementCapacity(left, right runnerCapacity) runnerCapacity {
 	return runnerCapacity{
-		CPUMillis:   max(left.CPUMillis, right.CPUMillis),
+		VCPUCount:   max(left.VCPUCount, right.VCPUCount),
 		MemoryBytes: max(left.MemoryBytes, right.MemoryBytes),
 		DiskBytes:   max(left.DiskBytes, right.DiskBytes),
 		Instances:   max(left.Instances, right.Instances),

@@ -93,12 +93,4 @@ func TestGuestEntrypointRequiresAssignmentIdentityAndDedicatedVsockPorts(t *test
 			t.Errorf("guest entrypoint reads %q before the template-mode exec", identityArg)
 		}
 	}
-	initSource, err := os.ReadFile("microvm-image/init")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(initSource), "secondbox\\.process_limit=") ||
-		strings.Contains(string(initSource), "secondbox-runner\\.process_limit=") {
-		t.Fatal("guest init process-limit kernel argument does not match the runner launch contract")
-	}
 }

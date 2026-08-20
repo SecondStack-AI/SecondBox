@@ -8,6 +8,119 @@ build:
     go build -o bin/secondbox-runner ./cmd/secondbox-runner
     go build -o bin/secondbox-guest-agent ./cmd/secondbox-guest-agent
 
+build-microsandbox-probe-linux source output:
+    scripts/build-microsandbox-local.sh --source "{{source}}" --output "{{output}}"
+
+build-microsandbox-probe-macos source output:
+    scripts/build-microsandbox-macos.sh --source "{{source}}" --output "{{output}}"
+
+test-microsandbox-probe-macos build_dir work_dir:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]] || {
+      echo "SecondBox macOS Microsandbox probe requires Apple Silicon macOS" >&2
+      exit 1
+    }
+    [[ "$(sysctl -n kern.hv_support)" == "1" ]] || {
+      echo "SecondBox macOS Microsandbox probe requires Hypervisor.framework" >&2
+      exit 1
+    }
+    work_parent="$(dirname -- "{{work_dir}}")"
+    filesystem_device="$(df -P "$work_parent" | awk 'NR == 2 { print $1 }')"
+    [[ -n "$filesystem_device" ]] || {
+      echo "SecondBox macOS Microsandbox probe cannot resolve work filesystem" >&2
+      exit 1
+    }
+    diskutil info "$filesystem_device" | grep -q 'File System Personality:.*APFS' || {
+      echo "SecondBox macOS Microsandbox probe requires APFS" >&2
+      exit 1
+    }
+    export PATH="/opt/homebrew/opt/e2fsprogs/bin:/opt/homebrew/opt/e2fsprogs/sbin:$PATH"
+    for tool in debugfs e2fsck; do
+      command -v "$tool" >/dev/null || {
+        echo "SecondBox macOS Microsandbox probe requires Homebrew e2fsprogs ($tool missing)" >&2
+        exit 1
+      }
+    done
+    build_dir="{{build_dir}}"
+    work_dir="{{work_dir}}"
+    probe="$build_dir/cargo-target/debug/secondbox-microsandbox-probe"
+    msb="$build_dir/runtime/bin/msb"
+    libkrunfw="$build_dir/runtime/lib/libkrunfw.5.dylib"
+    rootfs="$build_dir/rootfs"
+    [[ -x "$probe" ]] || { echo "SecondBox Microsandbox probe binary is missing: $probe" >&2; exit 1; }
+    [[ -x "$msb" ]] || { echo "SecondBox local msb binary is missing: $msb" >&2; exit 1; }
+    [[ -f "$libkrunfw" ]] || { echo "SecondBox local libkrunfw is missing: $libkrunfw" >&2; exit 1; }
+    [[ -d "$rootfs" ]] || { echo "SecondBox probe rootfs is missing: $rootfs" >&2; exit 1; }
+    mkdir -- "$work_dir"
+    msb_home="$(mktemp -d /tmp/secondbox-msb-task8m.XXXXXXXX)"
+    cleanup() { rm -rf -- "$msb_home"; }
+    trap cleanup EXIT
+    export MSB_HOME="$msb_home"
+    export MSB_PATH="$msb"
+    export MSB_LIBKRUNFW_PATH="$libkrunfw"
+    "$probe" ext4-descriptor-uuid --work-dir "$work_dir/ext4"
+    "$probe" vm-descriptor-lifecycle --work-dir "$work_dir/vm" --rootfs "$rootfs"
+    "$probe" network-policy --work-dir "$work_dir/network" --rootfs "$rootfs"
+
+test-microsandbox-probe-ext4-linux build_dir work_dir:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [[ "$(uname -s)" == "Linux" ]] || {
+      echo "SecondBox Linux Microsandbox probe requires Linux" >&2
+      exit 1
+    }
+    [[ -r /dev/kvm && -w /dev/kvm ]] || {
+      echo "SecondBox Linux Microsandbox probe requires usable /dev/kvm" >&2
+      exit 1
+    }
+    probe="{{build_dir}}/cargo-target/debug/secondbox-microsandbox-probe"
+    [[ -x "$probe" ]] || {
+      echo "SecondBox Linux Microsandbox probe binary is missing: $probe" >&2
+      exit 1
+    }
+    "$probe" ext4-descriptor-uuid --work-dir "{{work_dir}}"
+
+test-microsandbox-probe-linux build_dir work_dir:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [[ "$(uname -s)" == "Linux" ]] || {
+      echo "SecondBox Linux Microsandbox probe requires Linux" >&2
+      exit 1
+    }
+    [[ -r /dev/kvm && -w /dev/kvm ]] || {
+      echo "SecondBox Linux Microsandbox probe requires usable /dev/kvm" >&2
+      exit 1
+    }
+    for tool in debugfs e2fsck; do
+      command -v "$tool" >/dev/null || {
+        echo "SecondBox Linux Microsandbox probe requires $tool" >&2
+        exit 1
+      }
+    done
+    build_dir="{{build_dir}}"
+    work_dir="{{work_dir}}"
+    probe="$build_dir/cargo-target/debug/secondbox-microsandbox-probe"
+    msb="$build_dir/runtime/bin/msb"
+    libkrunfw="$build_dir/runtime/lib/libkrunfw.so.5.6.1"
+    rootfs="$build_dir/rootfs"
+    [[ -x "$probe" ]] || { echo "SecondBox Microsandbox probe binary is missing: $probe" >&2; exit 1; }
+    [[ -x "$msb" ]] || { echo "SecondBox local msb binary is missing: $msb" >&2; exit 1; }
+    [[ -f "$libkrunfw" ]] || { echo "SecondBox local libkrunfw is missing: $libkrunfw" >&2; exit 1; }
+    [[ -d "$rootfs" ]] || { echo "SecondBox probe rootfs is missing: $rootfs" >&2; exit 1; }
+    mkdir -- "$work_dir"
+    msb_home="$(mktemp -d /tmp/secondbox-msb-task0l.XXXXXXXX)"
+    cleanup() {
+      rm -rf -- "$msb_home"
+    }
+    trap cleanup EXIT
+    export MSB_HOME="$msb_home"
+    export MSB_PATH="$msb"
+    export MSB_LIBKRUNFW_PATH="$libkrunfw"
+    "$probe" ext4-descriptor-uuid --work-dir "$work_dir/ext4"
+    "$probe" vm-descriptor-lifecycle --work-dir "$work_dir/vm" --rootfs "$rootfs"
+    "$probe" network-policy --work-dir "$work_dir/network" --rootfs "$rootfs"
+
 build-microvm-images:
     scripts/microvm-image/build.sh
 

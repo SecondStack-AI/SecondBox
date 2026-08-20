@@ -15,6 +15,7 @@ import (
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/jailersupervisor"
 	runtimemanager "github.com/SecondStack-AI/SecondBox/runner/internal/runtime"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/workspacestore"
 )
 
 // The names a restored Instance opens are part of the template contract. A
@@ -119,7 +120,7 @@ func (m *Manager) prepareSnapshotResumeLaunch(
 	instanceID string,
 	dir string,
 	template *AdmittedSnapshotTemplate,
-	workspacePath string,
+	workspace workspacestore.ComputeAttachment,
 	sharedImagePath string,
 	jailerUID int,
 	policy *runtimemanager.SandboxRuntimePolicy,
@@ -130,8 +131,8 @@ func (m *Manager) prepareSnapshotResumeLaunch(
 	if err := template.VerifyStableIdentity(); err != nil {
 		return snapshotResumeLaunch{}, err
 	}
-	if strings.TrimSpace(workspacePath) == "" {
-		return snapshotResumeLaunch{}, fmt.Errorf("resume Workspace image path is required")
+	if workspace == nil || workspace.Descriptor() == nil {
+		return snapshotResumeLaunch{}, fmt.Errorf("resume Workspace attachment is required")
 	}
 
 	// Snapshot resume requires the jailer, and this is a property of the VMM,
@@ -164,8 +165,8 @@ func (m *Manager) prepareSnapshotResumeLaunch(
 	if jailerUID < 1 {
 		return snapshotResumeLaunch{}, fmt.Errorf("per-instance jailer UID is required")
 	}
-	if policy == nil || policy.CPUMillis < 1 || policy.ProcessLimit < 1 || policy.VCPUs < 1 || policy.MemoryMiB < 1 {
-		return snapshotResumeLaunch{}, fmt.Errorf("profile CPU, memory, and process limits are required for jailed resume")
+	if policy == nil || policy.VCPUs < 1 || policy.MemoryMiB < 1 {
+		return snapshotResumeLaunch{}, fmt.Errorf("profile vCPU and memory limits are required for jailed resume")
 	}
 	if err := os.MkdirAll(jailRoot, 0o700); err != nil {
 		return snapshotResumeLaunch{}, fmt.Errorf("create jail root: %w", err)
@@ -181,7 +182,7 @@ func (m *Manager) prepareSnapshotResumeLaunch(
 	if err := stageSnapshotResumeInstanceFiles(
 		jailRoot,
 		template,
-		workspacePath,
+		workspace,
 		sharedImagePath,
 		jailerUID,
 		m.cfg.MicroVMJailerGID,
@@ -216,7 +217,7 @@ func (m *Manager) prepareSnapshotResumeLaunch(
 func stageSnapshotResumeInstanceFiles(
 	root string,
 	template *AdmittedSnapshotTemplate,
-	workspacePath string,
+	workspace workspacestore.ComputeAttachment,
 	sharedImagePath string,
 	uid int,
 	gid int,
@@ -232,7 +233,7 @@ func stageSnapshotResumeInstanceFiles(
 	}
 	stagedWorkspace := filepath.Join(root, workspaceName)
 	_ = os.Remove(stagedWorkspace)
-	if err := hardLinkFile(workspacePath, stagedWorkspace); err != nil {
+	if err := workspace.LinkInto(stagedWorkspace); err != nil {
 		if errors.Is(err, syscall.EXDEV) {
 			return fmt.Errorf(
 				"link Workspace image for resume: %w (the jailer chroot base dir must be on the same filesystem as SECONDBOX_RUNNER_WORKSPACE_ROOT)",
@@ -404,9 +405,7 @@ func (m *Manager) snapshotResumeTemplateKey(
 		// The template's own boot arguments, which carry no Sandbox identity and
 		// no guest address. A resumed guest's kernel finished booting before the
 		// Sandbox existed, so its identity arrives at the assignment bind.
-		KernelArgs: strings.TrimSpace(
-			effectiveKernelArgsWithProcessLimit(m.cfg, "", policy.ProcessLimit) + " " + templateBootArgs,
-		),
+		KernelArgs:              strings.TrimSpace(effectiveKernelArgs(m.cfg, "") + " " + templateBootArgs),
 		SourceRootfsSHA256:      manifest.Rootfs.SHA256,
 		SharedImageSHA256:       sharedImageSHA256,
 		RuntimeBundleDigest:     opts.ImageManifestDigest,
@@ -420,13 +419,13 @@ func (m *Manager) snapshotResumeTemplateKey(
 		VCPUCount:               policy.VCPUs,
 		MemorySizeMiB:           policy.MemoryMiB,
 		WorkspaceSizeMiB:        policy.WorkspaceSizeMiB,
-		ProcessLimit:            policy.ProcessLimit,
-		RuntimeClass:            string(opts.RuntimeClass),
-		NetworkInterfaceID:      networkInterfaceID,
-		TemplateGuestMAC:        templateGuestMAC,
-		GuestControlVsockPort:   m.cfg.MicroVMGuestControlVsockPort,
-		GuestProtocolVsockPort:  m.cfg.MicroVMGuestProtocolVsockPort,
-		GuestCID:                snapshotTemplateGuestCID,
+
+		RuntimeClass:           string(opts.RuntimeClass),
+		NetworkInterfaceID:     networkInterfaceID,
+		TemplateGuestMAC:       templateGuestMAC,
+		GuestControlVsockPort:  m.cfg.MicroVMGuestControlVsockPort,
+		GuestProtocolVsockPort: m.cfg.MicroVMGuestProtocolVsockPort,
+		GuestCID:               snapshotTemplateGuestCID,
 	}
 	if err := key.Validate(); err != nil {
 		return SnapshotTemplateKey{}, fmt.Errorf("%w: %w", ErrSnapshotTemplateUnavailable, err)
@@ -506,7 +505,7 @@ func (m *Manager) createAndStartResume(
 	if err != nil {
 		return "", host.joinNetworkCleanup(setupCtx, err)
 	}
-	timer.mark("workspace_ready", "workspace", workspace.path)
+	timer.mark("workspace_ready", "workspaceId", workspace.attachment.WorkspaceID())
 
 	// The shared image is the runner's own verified artifact, staged per
 	// Instance exactly as cold start stages it.
@@ -536,7 +535,7 @@ func (m *Manager) createAndStartResume(
 		id,
 		dir,
 		template,
-		workspace.path,
+		workspace.attachment,
 		sharedImagePath,
 		host.jailerUID,
 		opts.SandboxPolicy,
@@ -576,7 +575,7 @@ func (m *Manager) createAndStartResume(
 			jailRoot:        launch.jailRoot,
 			rootfsPath:      filepath.Join(launch.jailRoot, snapshotTemplateRootfsName),
 			rootfsImagePath: template.RootfsPath,
-			workspacePath:   workspace.path,
+			workspacePath:   filepath.Join(launch.jailRoot, workspaceName),
 			sharedImagePath: sharedImagePath,
 		},
 		startupFingerprint,
@@ -670,6 +669,7 @@ func (m *Manager) resumeInstanceGuest(
 			MACAddress:  guestMACForInstance(inst.tapName),
 			AddressCIDR: guestAddressCIDR(inst.guestIP, m.cfg.MicroVMBridgeCIDR),
 			Gateway:     bridgeAddress(m.cfg.MicroVMBridgeCIDR).String(),
+			Nameserver:  bridgeAddress(m.cfg.MicroVMBridgeCIDR).String(),
 		}
 	}
 	if err := controlClient.BindAssignment(ctx, bind); err != nil {

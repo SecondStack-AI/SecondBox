@@ -80,10 +80,10 @@ func (driver *lifecycleDriver) prepare(ctx context.Context) error {
 					RuntimeBundleDigest:   driver.runtimeDigest,
 					ToolchainBundleDigest: driver.toolchainDigest,
 					Resources: secondboxclient.ResourcePolicy{
-						CPUMillis:            driver.config.Profile.CPUMillis,
-						MemoryBytes:          driver.config.Profile.MemoryBytes,
-						WorkspaceBytes:       driver.config.Profile.WorkspaceBytes,
-						ProcessLimit:         driver.config.Profile.ProcessLimit,
+						VCPUCount:      driver.config.Profile.VCPUCount,
+						MemoryBytes:    driver.config.Profile.MemoryBytes,
+						WorkspaceBytes: driver.config.Profile.WorkspaceBytes,
+
 						ConcurrentOperations: driver.config.Profile.ConcurrentOperations,
 					},
 					Startup: secondboxclient.StartupPolicy{Mode: secondboxclient.StartupModeColdBoot},

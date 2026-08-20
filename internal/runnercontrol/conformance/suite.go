@@ -19,7 +19,7 @@ func RunSessionSuite(
 	t.Helper()
 	t.Run("registration_duplicate_reorder", func(t *testing.T) {
 		session := factory("connection-1")
-		welcome, err := session.Accept(hello("runner-1", 1, 1))
+		welcome, err := session.Accept(hello("runner-1", runnerv1.SupportedProtocolMinimum, runnerv1.SupportedProtocolMaximum))
 		if err != nil || welcome.GetWelcome() == nil {
 			t.Fatalf("Welcome = %#v, %v", welcome, err)
 		}
@@ -40,7 +40,7 @@ func RunSessionSuite(
 	})
 	t.Run("reconnect_resets_connection_sequence_not_identity", func(t *testing.T) {
 		session := factory("connection-2")
-		if welcome, err := session.Accept(hello("runner-1", 1, 1)); err != nil || welcome.GetWelcome() == nil {
+		if welcome, err := session.Accept(hello("runner-1", runnerv1.SupportedProtocolMinimum, runnerv1.SupportedProtocolMaximum)); err != nil || welcome.GetWelcome() == nil {
 			t.Fatalf("reconnect Welcome = %#v, %v", welcome, err)
 		}
 		if event, err := session.Accept(registered("runner-1", "connection-2", "registration-new", 1)); err != nil || event.Kind != runnercontrol.EventRegistration {
@@ -101,25 +101,41 @@ func registered(
 			Registration: &runnerv1.RunnerRegistration{
 				MessageId: messageID, Sequence: sequence, RunnerId: runnerID,
 				ConnectionId: connectionID, RunnerPoolId: "general",
-				SoftwareVersion: "1.0.0", ProtocolVersion: 1,
+				SoftwareVersion: "1.0.0", ProtocolVersion: 3,
+				BackendKind: runnerv1.ComputeBackendKind_COMPUTE_BACKEND_KIND_FIRECRACKER,
 				Capabilities: &runnerv1.RunnerCapabilities{
-					Architecture: "amd64", FirecrackerVersion: "1.16.1",
-					KvmReady: true, JailerReady: true, CgroupReady: true,
+					Architecture: "amd64", ComputeBackendVersion: "1.16.1",
+					HypervisorReady: true, IsolationReady: true, ResourceLimitsReady: true,
 					NetworkPolicyReady: true, StorageReady: true, CleanupReady: true,
 					DataPlaneReady:           true,
 					GuestProtocolGenerations: &runnerv1.ProtocolVersionRange{Minimum: 1, Maximum: 1},
 				},
 				Allocatable: &runnerv1.Capacity{
-					VcpuMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30,
+					VcpuCount: 8, MemoryBytes: 32 << 30, DiskBytes: 200 << 30,
 					Instances: 8, Operations: 32,
 				},
 				Reserved:                       &runnerv1.Capacity{},
+				Materializations:               fixtureMaterializations(),
 				StartupTiming:                  &runnerv1.StartupTiming{},
 				DataPlaneAdvertisedAddress:     "10.0.0.5:7443",
 				DataPlaneCertificateSpkiSha256: strings.Repeat("a", 64),
 			},
 		},
 	}
+}
+
+func fixtureMaterializations() []*runnerv1.BackendMaterializationEvidence {
+	return []*runnerv1.BackendMaterializationEvidence{{
+		SchemaVersion:           1,
+		BackendKind:             runnerv1.ComputeBackendKind_COMPUTE_BACKEND_KIND_FIRECRACKER,
+		GuestArchitecture:       "amd64",
+		RuntimeManifestDigest:   "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ToolchainManifestDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		MaterializationDigest:   "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		AgentProtocolGeneration: 1,
+		BackendBuildId:          "firecracker-1.16.1",
+		VerifiedAtUnixMs:        1,
+	}}
 }
 
 func activeHeartbeat(
@@ -134,7 +150,7 @@ func activeHeartbeat(
 				MessageId: messageID, Sequence: sequence, RunnerId: runnerID,
 				ConnectionId: connectionID, ObservedAtUnixMs: 1,
 				Allocatable: &runnerv1.Capacity{
-					VcpuMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30,
+					VcpuCount: 8, MemoryBytes: 32 << 30, DiskBytes: 200 << 30,
 					Instances: 8, Operations: 32,
 				},
 				Reserved:                   &runnerv1.Capacity{},

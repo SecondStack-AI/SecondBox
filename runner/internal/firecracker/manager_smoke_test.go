@@ -49,6 +49,7 @@ func TestSmokeBootFirecracker(t *testing.T) {
 		workspacestore.Config{
 			Root:                  cfg.RunnerWorkspaceRoot,
 			TemplateCapacityBytes: int64(cfg.MicroVMWorkspaceSizeMiB) << 20,
+			FormatterKind:         workspacestore.FormatterMke2fs,
 		},
 	)
 	if err != nil {
@@ -520,6 +521,7 @@ func TestSmokeRunnerLocalSnapshotRestore(t *testing.T) {
 		workspacestore.Config{
 			Root:                  filepath.Join(workDir, "durable-workspaces"),
 			TemplateCapacityBytes: int64(cfg.MicroVMWorkspaceSizeMiB) << 20,
+			FormatterKind:         workspacestore.FormatterMke2fs,
 		},
 	)
 	if err != nil {
@@ -743,6 +745,7 @@ func TestSmokeRunnerLocalLifecycleStopPaths(t *testing.T) {
 		workspacestore.Config{
 			Root:                  filepath.Join(workDir, "durable-workspaces"),
 			TemplateCapacityBytes: int64(cfg.MicroVMWorkspaceSizeMiB) << 20,
+			FormatterKind:         workspacestore.FormatterMke2fs,
 		},
 	)
 	if err != nil {
@@ -1218,10 +1221,8 @@ func smokeGuestProtocolOpts(t *testing.T, cfg *config.Config, opts runtimemanage
 	if opts.SandboxPolicy == nil {
 		opts.SandboxPolicy = &runtimemanager.SandboxRuntimePolicy{
 			VCPUs:            cfg.MicroVMVCPUs,
-			CPUMillis:        cfg.MicroVMVCPUs * 1000,
 			MemoryMiB:        cfg.MicroVMMemoryMiB,
 			WorkspaceSizeMiB: cfg.MicroVMWorkspaceSizeMiB,
-			ProcessLimit:     128,
 			// AssignmentBackend.StartAssignment is the only production caller
 			// and always sets this. Without it the Workspace drive is attached
 			// read-only and every smoke test that writes to the Workspace fails
@@ -1250,7 +1251,10 @@ func shortSmokeDir(t *testing.T) string {
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		t.Fatalf("create smoke parent dir: %v", err)
 	}
-	dir, err := os.MkdirTemp(parent, "agfc-smoke-")
+	// Keep the qualification path short enough for the longest Instance API
+	// and vsock socket names without forcing a relocation to /tmp. Qualified
+	// reflink roots commonly live on a different filesystem than /tmp.
+	dir, err := os.MkdirTemp(parent, "")
 	if err != nil {
 		t.Fatalf("create short smoke dir: %v", err)
 	}

@@ -6,7 +6,7 @@ SecondBox is a self-hostable network service for durable isolated Sandboxes. The
 
 The unprivileged control plane serves the HTTP API, validates the platform token and trusted ownership assertions, resolves immutable profile revisions, persists desired state, schedules work, and reconciles failures. PostgreSQL is its authority for ownership refs, desired state, generations, home assignments, leases, idempotency, audit, and operation state. It never stores Workspace or Snapshot images.
 
-The runner is a separately deployed privileged Go process on a qualified Linux host. It establishes an outbound mutually authenticated connection to the control plane, advertises verified capacity, and owns Firecracker, KVM, jailer, cgroups, network namespaces, TUN/TAP devices, its reflink-capable WorkspaceStore, and process cleanup. A runner accepts only fully resolved assignments and local-workspace commands addressed to its authenticated stable identity. It does not resolve profiles, authenticate HTTP callers, or choose ownership policy.
+The runner is a separately deployed privileged process on a qualified host. It selects exactly one private compute backend at startup, establishes an outbound mutually authenticated connection to the control plane, advertises only locally revalidated materializations, and owns backend composition, its reflink-capable WorkspaceStore, and process cleanup. Firecracker remains the production backend while the experimental Microsandbox backend is qualified Linux-first. A runner accepts only fully resolved assignments and local-workspace commands addressed to its authenticated stable identity. It does not resolve profiles, authenticate HTTP callers, or choose ownership policy.
 
 The guest agent runs inside each released Firecracker image. It performs bounded command, filesystem, PTY, activity, and port operations for the runner over the independently versioned guest protocol. It has no control-plane database credentials.
 
@@ -31,7 +31,7 @@ SecondBox does not own end-user identity, authorization, billing, an LLM runtime
 
 ## Supported v1 shape
 
-Firecracker is the only compute backend. A single provider-neutral compute port and conformance suite preserve a clean internal seam, but v1 contains no placeholder adapters, capability claims, or fallback execution. The supported deployment is a Compose control plane with one or more same-host or remote Linux Firecracker runners.
+Firecracker remains the only supported v1 production backend. The experimental Microsandbox spike uses the same provider-neutral compute port with explicit runner-wide selection and no per-assignment selection or fallback. RunnerPools are homogeneous and privately sealed to one backend kind; backend identity never enters public resources.
 
 ## Future smolvm adapter contract
 

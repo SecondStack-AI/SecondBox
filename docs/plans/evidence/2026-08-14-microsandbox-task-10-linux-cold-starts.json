@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "81dddd3c2eec613c16e4f6ed55f179f6090dc051",
+  "completedAt": "2026-08-14T16:19:13.056078932Z",
+  "backendVersion": "microsandbox-0.6.8/msb_krun-0.1.30/agentd-0.6.8",
+  "hostPlatform": "linux-x86_64",
+  "materializationDigest": "sha256:ce2bb6647e51db81b1d5d299bbff1084afee53e0308be898873db9faba80ab62",
+  "samples": 30,
+  "startToReadyMilliseconds": {
+    "samples": 30,
+    "p50": 471.701,
+    "p95": 520.48,
+    "max": 524.527
+  },
+  "bootStages": [
+    {"stage": "artifact_verify", "samples": 30, "p50Milliseconds": 192.013, "p95Milliseconds": 235.449},
+    {"stage": "compute_launch", "samples": 30, "p50Milliseconds": 0.002, "p95Milliseconds": 0.003},
+    {"stage": "guest_negotiation", "samples": 30, "p50Milliseconds": 256.809, "p95Milliseconds": 268.794},
+    {"stage": "network_setup", "samples": 30, "p50Milliseconds": 0.004, "p95Milliseconds": 0.007},
+    {"stage": "ready", "samples": 30, "p50Milliseconds": 0.123, "p95Milliseconds": 0.145},
+    {"stage": "runner_admission", "samples": 30, "p50Milliseconds": 17.781, "p95Milliseconds": 30.054},
+    {"stage": "workspace_attach", "samples": 30, "p50Milliseconds": 0.157, "p95Milliseconds": 0.179}
+  ],
+  "peakHelperRssKiB": {
+    "samples": 30,
+    "p50": 70468,
+    "p95": 72240,
+    "max": 72672
+  }
+}

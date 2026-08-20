@@ -161,14 +161,15 @@ type instance struct {
 }
 
 type firecrackerLaunch struct {
-	executable  string
-	args        []string
-	environment []string
-	config      firecrackerConfig
-	configPath  string
-	socketPath  string
-	vsockUDS    string
-	jailRoot    string
+	executable    string
+	args          []string
+	environment   []string
+	config        firecrackerConfig
+	configPath    string
+	socketPath    string
+	vsockUDS      string
+	jailRoot      string
+	workspacePath string
 }
 
 type microVMImageSelection struct {
@@ -1051,7 +1052,7 @@ func (h *instanceHostReservation) transferOwnership() {
 // and its lifetime; launch teardown removes only the jail link and closes the
 // attachment after Firecracker and every host-side user have stopped.
 type resolvedWorkspaceAttachment struct {
-	path           string
+	attachment     workspacestore.ComputeAttachment
 	sizeMiB        int
 	sharedReadOnly bool
 }
@@ -1063,7 +1064,7 @@ func (m *Manager) resolveWorkspaceAttachment(opts runtimemanager.StartOpts) (res
 		workspaceSizeMiB = opts.SandboxPolicy.WorkspaceSizeMiB
 		sharedReadOnly = opts.SandboxPolicy.SharedReadOnly
 	}
-	workspaceImage := opts.WorkspaceAttachment.Image()
+	workspaceImage := opts.WorkspaceAttachment.Descriptor()
 	if workspaceImage == nil || opts.WorkspaceAttachment.Generation() != opts.SandboxGeneration {
 		return resolvedWorkspaceAttachment{}, fmt.Errorf("resolved Workspace attachment generation is stale")
 	}
@@ -1071,11 +1072,14 @@ func (m *Manager) resolveWorkspaceAttachment(opts runtimemanager.StartOpts) (res
 	if statErr != nil {
 		return resolvedWorkspaceAttachment{}, fmt.Errorf("inspect resolved Workspace attachment: %w", statErr)
 	}
-	if !info.Mode().IsRegular() || info.Size() != int64(workspaceSizeMiB)*1024*1024 {
+	if !info.Mode().IsRegular() || info.Size() != int64(workspaceSizeMiB)*1024*1024 ||
+		opts.WorkspaceAttachment.CapacityBytes() != info.Size() ||
+		opts.WorkspaceAttachment.StableBlockID() != "workspace" ||
+		opts.WorkspaceAttachment.FilesystemUUID() == "" {
 		return resolvedWorkspaceAttachment{}, fmt.Errorf("resolved Workspace attachment capacity is invalid")
 	}
 	return resolvedWorkspaceAttachment{
-		path:           workspaceImage.Name(),
+		attachment:     opts.WorkspaceAttachment,
 		sizeMiB:        workspaceSizeMiB,
 		sharedReadOnly: sharedReadOnly,
 	}, nil
@@ -1239,7 +1243,7 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 	if !workspace.sharedReadOnly {
 		sharedImagePath = ""
 	}
-	timer.mark("workspace_ready", "workspace", workspace.path)
+	timer.mark("workspace_ready", "workspaceId", workspace.attachment.WorkspaceID())
 
 	if err := m.writeIdentityFile(dir, id, sandboxID, opts); err != nil {
 		return "", host.joinNetworkCleanup(setupCtx, err)
@@ -1250,7 +1254,7 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 	}
 	timer.mark("launch_config_ready")
 
-	launch, launchErr := m.prepareLaunchWithPolicy(setupCtx, id, dir, launchImage.KernelPath, launchImage.RootfsPath, workspace.path, sharedImagePath, host.tapName, host.guestIP, host.jailerUID, opts.TemplateMode, opts.SandboxPolicy)
+	launch, launchErr := m.prepareLaunchWithPolicy(setupCtx, id, dir, launchImage.KernelPath, launchImage.RootfsPath, workspace.attachment, sharedImagePath, host.tapName, host.guestIP, host.jailerUID, opts.TemplateMode, opts.SandboxPolicy)
 	if launchErr != nil {
 		return "", host.joinNetworkCleanup(setupCtx, launchErr)
 	}
@@ -1302,7 +1306,7 @@ func (m *Manager) createAndStartCold(ctx context.Context, sandboxID, compartment
 			jailRoot:        launch.jailRoot,
 			rootfsPath:      launchImage.RootfsPath,
 			rootfsImagePath: image.RootfsPath,
-			workspacePath:   workspace.path,
+			workspacePath:   launch.workspacePath,
 			sharedImagePath: launchImage.SharedImagePath,
 		},
 		startupFingerprint,

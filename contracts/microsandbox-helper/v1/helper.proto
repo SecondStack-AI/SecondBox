@@ -1,0 +1,198 @@
+syntax = "proto3";
+
+package secondbox.microsandbox.helper.v1;
+
+option go_package = "github.com/SecondStack-AI/SecondBox/runner/internal/microsandboxprotocol;microsandboxprotocol";
+
+enum Operation {
+  OPERATION_UNSPECIFIED = 0;
+  OPERATION_START = 1;
+  OPERATION_EXEC = 2;
+  OPERATION_FILE_READ = 3;
+  OPERATION_FILE_WRITE = 4;
+  OPERATION_FILE_STAT = 5;
+  OPERATION_FILE_LIST = 6;
+  OPERATION_FILE_MKDIR = 7;
+  OPERATION_FILE_REMOVE = 8;
+  OPERATION_PTY = 9;
+  OPERATION_TCP = 10;
+  OPERATION_SHUTDOWN = 11;
+  OPERATION_FORMAT_WORKSPACE = 12;
+  OPERATION_FILE_EXISTS = 13;
+}
+
+message Envelope {
+  uint32 protocol_version = 1;
+  uint64 request_id = 2;
+  uint64 stream_id = 3;
+  uint64 sequence = 4;
+  oneof message {
+    StartRequest start = 10;
+    ReadyEvent ready = 11;
+    ExecRequest exec = 12;
+    FileRequest file = 13;
+    PtyRequest pty = 14;
+    TcpRequest tcp = 15;
+    ShutdownRequest shutdown = 16;
+    CancelRequest cancel = 17;
+    StreamData stream_data = 18;
+    StreamCredit stream_credit = 19;
+    TerminalEvent terminal = 20;
+    DiagnosticEvent diagnostic = 21;
+    FormatWorkspaceRequest format_workspace = 22;
+    FileMetadataEvent file_metadata = 23;
+    TcpConnectedEvent tcp_connected = 24;
+  }
+}
+
+message StartRequest {
+  string materialization_digest = 1;
+  string guest_architecture = 2;
+  uint32 vcpu_count = 3;
+  uint64 memory_bytes = 4;
+  string flat_root_digest = 5;
+  repeated string environment = 6;
+  HelperNetworkPolicy network_policy = 7;
+  string stable_workspace_block_id = 8;
+  uint64 workspace_capacity_bytes = 9;
+  bytes workspace_uuid = 10;
+  string flat_root_path = 11;
+  string libkrunfw_path = 12;
+  string agentd_path = 13;
+}
+
+enum HelperNetworkPolicyMode {
+  HELPER_NETWORK_POLICY_MODE_UNSPECIFIED = 0;
+  HELPER_NETWORK_POLICY_MODE_DENY_ALL = 1;
+  HELPER_NETWORK_POLICY_MODE_ALLOW_LIST = 2;
+}
+
+enum HelperNetworkProtocol {
+  HELPER_NETWORK_PROTOCOL_UNSPECIFIED = 0;
+  HELPER_NETWORK_PROTOCOL_TCP = 1;
+  HELPER_NETWORK_PROTOCOL_HTTP = 2;
+  HELPER_NETWORK_PROTOCOL_HTTPS = 3;
+}
+
+message HelperNetworkDestination {
+  oneof target {
+    string domain = 1;
+    string cidr = 2;
+  }
+  HelperNetworkProtocol protocol = 3;
+  uint32 port = 4;
+}
+
+message HelperNetworkPolicy {
+  HelperNetworkPolicyMode mode = 1;
+  repeated HelperNetworkDestination destinations = 2;
+}
+
+message ReadyEvent {
+  string helper_version = 1;
+  string dependency_version = 2;
+  string host_platform = 3;
+  uint32 agent_protocol_generation = 4;
+  repeated string agent_features = 5;
+  repeated Operation operations = 6;
+  string materialization_digest = 7;
+}
+
+message ExecRequest {
+  repeated string argv = 1;
+  string working_directory = 2;
+  repeated string environment = 3;
+  uint64 deadline_unix_ms = 4;
+  bool pty = 5;
+  bytes stdin = 6;
+  uint32 rows = 7;
+  uint32 columns = 8;
+  uint64 output_limit_bytes = 9;
+  bool streaming = 10;
+}
+
+message FileRequest {
+  Operation operation = 1;
+  string path = 2;
+  string destination_path = 3;
+  uint64 offset = 4;
+  uint64 limit = 5;
+  uint32 mode = 6;
+  bool recursive = 7;
+  bytes content = 8;
+  bool force = 9;
+}
+
+message PtyRequest {
+  uint32 rows = 1;
+  uint32 columns = 2;
+  string terminal = 3;
+}
+
+message TcpRequest {
+  string host = 1;
+  uint32 port = 2;
+}
+message TcpConnectedEvent {}
+
+message ShutdownRequest { uint64 flush_deadline_unix_ms = 1; }
+message CancelRequest { uint64 target_request_id = 1; }
+
+message StreamData {
+  bytes data = 1;
+  bool eof = 2;
+  StreamChannel channel = 3;
+}
+
+enum StreamChannel {
+  STREAM_CHANNEL_UNSPECIFIED = 0;
+  STREAM_CHANNEL_STDIN = 1;
+  STREAM_CHANNEL_STDOUT = 2;
+  STREAM_CHANNEL_STDERR = 3;
+  STREAM_CHANNEL_TCP = 4;
+  STREAM_CHANNEL_FILE = 5;
+}
+
+message StreamCredit { uint64 bytes = 1; }
+
+message TerminalEvent {
+  bool success = 1;
+  int32 exit_code = 2;
+  string reason = 3;
+  int32 signal = 4;
+  uint32 spawn_failure_reason = 5;
+  uint32 infrastructure_failure_reason = 6;
+  bool retryable = 7;
+  uint64 elapsed_milliseconds = 8;
+  uint64 limit_bytes = 9;
+  uint32 file_terminal_kind = 10;
+}
+
+message FileMetadataEvent {
+  bool exists = 1;
+  uint64 size = 2;
+  uint32 mode = 3;
+  string checksum = 4;
+  repeated string direct_children = 5;
+  uint32 kind = 6;
+  uint64 modified_at_unix_ms = 7;
+  repeated FileMetadataEntry direct_child_entries = 8;
+}
+
+message FileMetadataEntry {
+  string path = 1;
+  uint32 kind = 2;
+  uint64 size = 3;
+  uint64 modified_at_unix_ms = 4;
+}
+
+message DiagnosticEvent {
+  string code = 1;
+  string text = 2;
+}
+
+message FormatWorkspaceRequest {
+  uint64 logical_capacity_bytes = 1;
+  string label = 2;
+  bytes workspace_uuid = 3;
+}

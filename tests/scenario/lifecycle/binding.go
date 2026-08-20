@@ -62,7 +62,7 @@ func (config lifecycleConfig) configuredBinding(guestCIDR string) configuredLimi
 		{Name: "Sandboxes", Capacity: int(config.SubjectMaxSandboxes)},
 		{
 			Name:     "CPU",
-			Capacity: int(config.SubjectMaxCPUMillis / config.Profile.CPUMillis),
+			Capacity: int(config.SubjectMaxVCPUCount / config.Profile.VCPUCount),
 		},
 		{
 			Name:     "memory",
@@ -81,7 +81,7 @@ func (config lifecycleConfig) configuredBinding(guestCIDR string) configuredLimi
 			Name: "runner CPU capacity",
 			Capacity: int(
 				int64(config.Runner.SandboxMaxVcpus*config.Runner.MaxConcurrentGlobal*1000) /
-					config.Profile.CPUMillis,
+					config.Profile.VCPUCount,
 			),
 		},
 		{

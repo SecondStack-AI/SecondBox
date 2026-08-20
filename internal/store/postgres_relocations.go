@@ -127,7 +127,7 @@ func (store *PostgresControlPlaneStore) RelocateSandbox(
 	}
 	if !contains(sourceCapabilities, "local-workspace") ||
 		!contains(sourceCapabilities, "workspace-relocation") ||
-		!contains(sourceVersions, "2") {
+		!supportsProtocolGeneration(sourceVersions, 2) {
 		return contracts.Operation{}, ports.ErrHomeRunnerUnavailable
 	}
 	var specJSON []byte

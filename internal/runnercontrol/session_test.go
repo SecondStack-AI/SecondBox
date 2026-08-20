@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -87,7 +88,7 @@ func TestSessionRejectsRegistrationWithFailedPrerequisitesAndVersionSkew(t *test
 	session := negotiatedSession(t)
 	registration := registrationFrame("runner-1", "connection-1", 1)
 	registration.GetRegistration().ReadinessFailures = []runnerv1.RunnerReadinessFailure{
-		runnerv1.RunnerReadinessFailure_RUNNER_READINESS_FAILURE_KVM,
+		runnerv1.RunnerReadinessFailure_RUNNER_READINESS_FAILURE_HYPERVISOR,
 	}
 	if _, err := session.Accept(registration); !errors.Is(err, ErrRunnerPrerequisites) {
 		t.Fatalf("failed prerequisite registration error = %v, want ErrRunnerPrerequisites", err)
@@ -226,6 +227,65 @@ func TestSessionReleasesTerminalDataPlaneState(t *testing.T) {
 			"PTY terminal stream state retained inbound=%d outbound=%d",
 			len(session.inboundDataPlaneStreams), len(session.outboundStreams),
 		)
+	}
+}
+
+func TestSessionSerializesConcurrentInboundTerminalsAndOutboundControls(t *testing.T) {
+	session := negotiatedDataPlaneSession(t)
+	if _, err := session.Accept(registrationFrame("runner-1", "connection-1", 1)); err != nil {
+		t.Fatal(err)
+	}
+	fence := dataPlaneTestFence()
+	const streams = 128
+	for index := range streams {
+		operationID := fmt.Sprintf("operation-concurrent-%d", index)
+		streamID := fmt.Sprintf("stream-concurrent-%d", index)
+		if err := session.ValidateOutboundDataPlaneFrame(&runnerv1.ControlPlaneToRunner{
+			Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: &runnerv1.ExecFrame{
+				Fence: fence, OperationId: operationID, StreamId: streamID, Sequence: 1,
+				Payload: &runnerv1.ExecFrame_Open{Open: &runnerv1.ExecOpen{
+					Command: &runnerv1.ExecOpen_Shell{Shell: "true"},
+				}},
+			}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	errors := make(chan error, streams*2)
+	var group sync.WaitGroup
+	for index := range streams {
+		operationID := fmt.Sprintf("operation-concurrent-%d", index)
+		streamID := fmt.Sprintf("stream-concurrent-%d", index)
+		group.Add(2)
+		go func() {
+			defer group.Done()
+			_, err := session.Accept(runnerExecFrame(
+				fence, operationID, streamID, 1,
+				&runnerv1.ExecFrame_Terminal{Terminal: &runnerv1.ExecTerminal{
+					Kind: runnerv1.ExecTerminalKind_EXEC_TERMINAL_KIND_EXITED,
+				}},
+			))
+			errors <- err
+		}()
+		go func() {
+			defer group.Done()
+			errors <- session.ValidateOutboundDataPlaneFrame(&runnerv1.ControlPlaneToRunner{
+				Message: &runnerv1.ControlPlaneToRunner_Exec{Exec: &runnerv1.ExecFrame{
+					Fence: fence, OperationId: operationID, StreamId: streamID, Sequence: 2,
+					Payload: &runnerv1.ExecFrame_Credit{Credit: &runnerv1.StreamCredit{
+						ByteCount: 1,
+					}},
+				}},
+			})
+		}()
+	}
+	group.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatalf("concurrent data-plane session mutation: %v", err)
+		}
 	}
 }
 
@@ -465,13 +525,13 @@ func registrationFrame(runnerID, connectionID string, sequence uint64) *runnerv1
 				ConnectionId: connectionID, RunnerPoolId: "general", SoftwareVersion: "1.0.0",
 				ProtocolVersion: 1,
 				Capabilities: &runnerv1.RunnerCapabilities{
-					Architecture: "amd64", FirecrackerVersion: "1.16.1",
-					KvmReady: true, JailerReady: true, CgroupReady: true,
+					Architecture: "amd64", ComputeBackendVersion: "1.16.1",
+					HypervisorReady: true, IsolationReady: true, ResourceLimitsReady: true,
 					NetworkPolicyReady: true, StorageReady: true, CleanupReady: true,
 					DataPlaneReady:           true,
 					GuestProtocolGenerations: &runnerv1.ProtocolVersionRange{Minimum: 1, Maximum: 1},
 				},
-				Allocatable:                    &runnerv1.Capacity{VcpuMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30, Instances: 8},
+				Allocatable:                    &runnerv1.Capacity{VcpuCount: 8, MemoryBytes: 32 << 30, DiskBytes: 200 << 30, Instances: 8},
 				Reserved:                       &runnerv1.Capacity{},
 				StartupTiming:                  &runnerv1.StartupTiming{},
 				DataPlaneAdvertisedAddress:     "10.0.0.5:7443",
@@ -487,7 +547,7 @@ func heartbeatFrame(runnerID, connectionID, messageID string, sequence uint64) *
 			Heartbeat: &runnerv1.RunnerHeartbeat{
 				MessageId: messageID, Sequence: sequence, RunnerId: runnerID,
 				ConnectionId: connectionID, ObservedAtUnixMs: 1,
-				Allocatable: &runnerv1.Capacity{VcpuMillis: 8000, MemoryBytes: 32 << 30, DiskBytes: 200 << 30, Instances: 8},
+				Allocatable: &runnerv1.Capacity{VcpuCount: 8, MemoryBytes: 32 << 30, DiskBytes: 200 << 30, Instances: 8},
 				Reserved:    &runnerv1.Capacity{}, DrainPhase: runnerv1.DrainPhase_DRAIN_PHASE_ACTIVE,
 				StartupTiming:              &runnerv1.StartupTiming{},
 				DataPlaneAdvertisedAddress: "10.0.0.5:7443",

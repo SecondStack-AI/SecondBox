@@ -27,7 +27,7 @@ func runResourcesCommand(ctx context.Context, session cliSession, action string,
 	pool := flags.String("pool", "", "deployment RunnerPool name")
 	architectures := flags.String("architectures", "amd64", "comma-separated architecture inventory")
 	capabilities := flags.String("capabilities", "exec-streaming,file-streaming,pty,evidence,local-workspace,port-proxy", "comma-separated RunnerPool capabilities")
-	capacity := flags.String("capacity", "maxSandboxes=20,maxCpuMillis=80000,maxMemoryBytes=171798691840", "comma-separated RunnerPool capacity key=value entries")
+	capacity := flags.String("capacity", "maxSandboxes=20,maxVcpuCount=80,maxMemoryBytes=171798691840", "comma-separated RunnerPool capacity key=value entries")
 	state := flags.String("state", secondboxclient.RunnerPoolStateReady, "desired RunnerPool state")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("SecondBox resources %s options: %w", action, err)

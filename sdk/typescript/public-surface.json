@@ -515,9 +515,8 @@
   "ResourcePolicy": {
     "required": [
       "concurrentOperations",
-      "cpuMillis",
       "memoryBytes",
-      "processLimit",
+      "vcpuCount",
       "workspaceBytes"
     ],
     "optional": []

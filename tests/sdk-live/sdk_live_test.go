@@ -115,8 +115,8 @@ func liveProfileRevisionSpec() secondboxclient.ProfileRevisionSpec {
 		RuntimeBundleDigest:   "sha256:" + strings.Repeat("a", 64),
 		ToolchainBundleDigest: "sha256:" + strings.Repeat("b", 64),
 		Resources: secondboxclient.ResourcePolicy{
-			CPUMillis: 1000, MemoryBytes: 1 << 30, WorkspaceBytes: 8 << 30,
-			ProcessLimit: 128, ConcurrentOperations: 4,
+			VCPUCount: 1, MemoryBytes: 1 << 30, WorkspaceBytes: 8 << 30,
+			ConcurrentOperations: 4,
 		},
 		Startup: secondboxclient.StartupPolicy{Mode: secondboxclient.StartupModeColdBoot},
 		Lifecycle: secondboxclient.LifecyclePolicy{

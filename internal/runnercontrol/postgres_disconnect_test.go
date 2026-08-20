@@ -24,7 +24,7 @@ func TestHeartbeatPreservesAndReleasesDurableAssignmentReservations(t *testing.T
 			id,profile_name,revision_number,spec_json,created_at
 		) VALUES (
 			'profile-reservation','profile',1,
-			'{"resources":{"cpuMillis":1000,"memoryBytes":536870912,"workspaceBytes":1073741824,"concurrentOperations":4}}',
+			'{"resources":{"vcpuCount":1,"memoryBytes":536870912,"workspaceBytes":1073741824,"concurrentOperations":4}}',
 			$1
 		);
 		INSERT INTO secondbox.sandboxes (
@@ -72,7 +72,7 @@ func TestHeartbeatPreservesAndReleasesDurableAssignmentReservations(t *testing.T
 			ConnectionId:     "connection-reservation",
 			ObservedAtUnixMs: uint64(now.Add(time.Duration(sequence) * time.Second).UnixMilli()),
 			Allocatable: &runnerv1.Capacity{
-				VcpuMillis: 8000, MemoryBytes: 4 << 30, DiskBytes: 8 << 30,
+				VcpuCount: 8, MemoryBytes: 4 << 30, DiskBytes: 8 << 30,
 				Instances: 8, Operations: 32,
 			},
 			Reserved:      &runnerv1.Capacity{},
@@ -99,7 +99,7 @@ func TestHeartbeatPreservesAndReleasesDurableAssignmentReservations(t *testing.T
 	}
 	recordHeartbeat(1)
 	if got := readReservation(); got != (runnerCapacity{
-		CPUMillis: 1000, MemoryBytes: 536870912, DiskBytes: 1073741824,
+		VCPUCount: 1, MemoryBytes: 536870912, DiskBytes: 1073741824,
 		Instances: 1, Operations: 4,
 	}) {
 		t.Fatalf("durable reservation = %#v", got)
@@ -131,7 +131,7 @@ func TestHeartbeatMakesMissingActiveAssignmentUncertain(t *testing.T) {
 			id,profile_name,revision_number,spec_json,created_at
 		) VALUES (
 			'profile-active-inventory','profile',1,
-			'{"resources":{"cpuMillis":1000,"memoryBytes":536870912,"workspaceBytes":1073741824,"concurrentOperations":4}}',
+			'{"resources":{"vcpuCount":1,"memoryBytes":536870912,"workspaceBytes":1073741824,"concurrentOperations":4}}',
 			$1
 		);
 		INSERT INTO secondbox.assignments (
@@ -173,7 +173,7 @@ func TestHeartbeatMakesMissingActiveAssignmentUncertain(t *testing.T) {
 		ConnectionId:     "connection-active-inventory",
 		ObservedAtUnixMs: uint64(heartbeatAt.UnixMilli()),
 		Allocatable: &runnerv1.Capacity{
-			VcpuMillis: 8000, MemoryBytes: 4 << 30, DiskBytes: 8 << 30,
+			VcpuCount: 8, MemoryBytes: 4 << 30, DiskBytes: 8 << 30,
 			Instances: 8, Operations: 32,
 		},
 		Reserved: &runnerv1.Capacity{},

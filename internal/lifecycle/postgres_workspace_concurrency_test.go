@@ -42,7 +42,7 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 		RuntimeBundleDigest:   runtimeDigest,
 		ToolchainBundleDigest: toolchainDigest,
 		Resources: contracts.ResourcePolicy{
-			CPUMillis: 1000, MemoryBytes: 1 << 30, WorkspaceBytes: 8 << 30,
+			VCPUCount: 1, MemoryBytes: 1 << 30, WorkspaceBytes: 8 << 30,
 			ConcurrentOperations: 1,
 		},
 		Execution: contracts.ExecutionPolicy{
@@ -91,15 +91,15 @@ func TestAutomaticRestartBuildsStartAuthorityWithoutPublicOperation(t *testing.T
 	}
 	schedulerFailure := errors.New("captured automatic restart")
 	recordingScheduler := &recordingFailureScheduler{err: schedulerFailure}
-	catalog := fixedLifecycleAssetCatalog{assets: map[string]lifecycle.SignedAsset{
+	catalog := fixedLifecycleAssetCatalog{assets: map[string]lifecycle.Asset{
 		runtimeDigest: {
 			ArtifactID: "runtime", ManifestDigest: runtimeDigest,
-			SignatureKeyID: "release-key", Architecture: "amd64",
+			Architecture:            "amd64",
 			GuestProtocolGeneration: 1,
 		},
 		toolchainDigest: {
 			ArtifactID: "toolchain", ManifestDigest: toolchainDigest,
-			SignatureKeyID: "release-key", Architecture: "amd64",
+			Architecture:            "amd64",
 			GuestProtocolGeneration: 1,
 		},
 	}}
@@ -551,23 +551,23 @@ func (recorder *recordingFailureScheduler) Schedule(
 }
 
 type fixedLifecycleAssetCatalog struct {
-	assets map[string]lifecycle.SignedAsset
+	assets map[string]lifecycle.Asset
 }
 
 func (catalog fixedLifecycleAssetCatalog) Resolve(
 	digest string,
-) (lifecycle.SignedAsset, error) {
+) (lifecycle.Asset, error) {
 	asset, found := catalog.assets[digest]
 	if !found {
-		return lifecycle.SignedAsset{}, errors.New("missing fixed lifecycle asset")
+		return lifecycle.Asset{}, errors.New("missing fixed lifecycle asset")
 	}
 	return asset, nil
 }
 
 type unusedAssetCatalog struct{}
 
-func (unusedAssetCatalog) Resolve(string) (lifecycle.SignedAsset, error) {
-	return lifecycle.SignedAsset{}, errors.New("unused asset catalog")
+func (unusedAssetCatalog) Resolve(string) (lifecycle.Asset, error) {
+	return lifecycle.Asset{}, errors.New("unused asset catalog")
 }
 
 type noOpSessionCanceller struct{}

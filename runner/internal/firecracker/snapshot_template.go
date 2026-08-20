@@ -61,7 +61,6 @@ type SnapshotTemplateKey struct {
 	VCPUCount               int      `json:"vcpuCount"`
 	MemorySizeMiB           int      `json:"memorySizeMiB"`
 	WorkspaceSizeMiB        int      `json:"workspaceSizeMiB"`
-	ProcessLimit            int      `json:"processLimit"`
 	RuntimeClass            string   `json:"runtimeClass"`
 	// NetworkInterfaceID and TemplateGuestMAC describe the network device the VM
 	// state records. Both are empty exactly when the template was captured
@@ -112,7 +111,6 @@ func (k SnapshotTemplateKey) Validate() error {
 		{"vcpuCount", k.VCPUCount},
 		{"memorySizeMiB", k.MemorySizeMiB},
 		{"workspaceSizeMiB", k.WorkspaceSizeMiB},
-		{"processLimit", k.ProcessLimit},
 	}
 	for _, field := range positive {
 		if field.value < 1 {

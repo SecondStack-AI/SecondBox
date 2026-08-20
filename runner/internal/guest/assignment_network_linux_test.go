@@ -3,10 +3,34 @@ package microvmguest
 import (
 	"encoding/binary"
 	"errors"
+	"net/netip"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"golang.org/x/sys/unix"
 )
+
+func TestAssignmentResolverConfigurationIsExactAndAtomic(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "resolv.conf")
+	if err := writeResolverConfig(path, netip.MustParseAddr("198.18.7.1")); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "nameserver 198.18.7.1\noptions attempts:1 timeout:2\n" {
+		t.Fatalf("resolver configuration = %q", contents)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("resolver mode = %o", info.Mode().Perm())
+	}
+}
 
 // The wire encoding is the part of the install that cannot be observed from a
 // unit test's effects, only from its bytes. Every field is host-endian and every

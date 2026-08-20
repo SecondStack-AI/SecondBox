@@ -60,10 +60,10 @@ func TestAssignmentBackendRejectsImmutableAssetSubstitution(t *testing.T) {
 			assignment.Assets = assignment.Assets[:1]
 		},
 		"runtime substituted for toolchain": func(assignment *runnerprotocol.AssignmentCommand) {
-			assignment.Assets[1] = proto.Clone(assignment.Assets[0]).(*runnerprotocol.SignedAssetReference)
+			assignment.Assets[1] = proto.Clone(assignment.Assets[0]).(*runnerprotocol.AssetReference)
 		},
-		"wrong signing key": func(assignment *runnerprotocol.AssignmentCommand) {
-			assignment.Assets[0].SignatureKeyId = "untrusted-key"
+		"wrong immutable digest": func(assignment *runnerprotocol.AssignmentCommand) {
+			assignment.Assets[0].ManifestDigest = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 		},
 		"wrong architecture": func(assignment *runnerprotocol.AssignmentCommand) {
 			assignment.Assets[1].Architecture = "incompatible"
@@ -87,8 +87,8 @@ func TestAssignmentBackendRejectsImmutableAssetSubstitution(t *testing.T) {
 }
 
 func TestReadinessEvidenceHelpers(t *testing.T) {
-	if !firecrackerJailerReady(&config.Config{}) ||
-		firecrackerJailerReady(&config.Config{MicroVMAllowUnjailed: true}) {
+	if !firecrackerIsolationReady(&config.Config{}) ||
+		firecrackerIsolationReady(&config.Config{MicroVMAllowUnjailed: true}) {
 		t.Fatal("Jailer readiness does not reflect unjailed mode")
 	}
 	if !containsSpaceSeparated("cpu io memory pids", "memory") ||
@@ -103,21 +103,28 @@ func TestReadinessEvidenceHelpers(t *testing.T) {
 		containsNetworkAddress(addresses, "198.18.0.2/24") {
 		t.Fatal("bridge address matching is not interface-and-prefix exact")
 	}
-	cache := artifactCacheEvidenceForManifest(signedArtifactManifest{
+	cache, err := firecrackerMaterializationEvidence(signedArtifactManifest{
+		ArtifactVersion: "fixture-v1",
+		Architecture:    "amd64",
+		GuestProtocol: struct {
+			Minimum uint32 `json:"minimum"`
+			Maximum uint32 `json:"maximum"`
+		}{Minimum: 1, Maximum: 1},
 		RuntimeBundle: signedArtifactComponent{
-			ArtifactID: "runtime-v1", ManifestDigest: "sha256:runtime",
+			ArtifactID: "runtime-v1", ManifestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		},
 		ToolchainBundle: signedArtifactComponent{
-			ArtifactID: "toolchain-v1", ManifestDigest: "sha256:toolchain",
+			ArtifactID: "toolchain-v1", ManifestDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		},
+		Kernel: signedArtifactImage{SHA256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+		Rootfs: signedArtifactImage{SHA256: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+		Shared: signedArtifactImage{SHA256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
 	}, time.UnixMilli(1234))
-	if len(cache) != 2 ||
-		cache[0].ArtifactId != "runtime-v1" ||
-		cache[0].ManifestDigest != "sha256:runtime" ||
-		cache[1].ArtifactId != "toolchain-v1" ||
-		cache[1].ManifestDigest != "sha256:toolchain" ||
-		cache[0].VerifiedAtUnixMs != 1234 ||
-		cache[1].VerifiedAtUnixMs != 1234 {
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cache) != 1 || cache[0].RuntimeManifestDigest == "" || cache[0].ToolchainManifestDigest == "" ||
+		cache[0].MaterializationDigest == "" || cache[0].VerifiedAtUnixMs != 1234 {
 		t.Fatalf("component cache evidence = %+v", cache)
 	}
 }
@@ -130,7 +137,7 @@ func TestRunnerAllocatableCapacityUsesIndependentOperationLimit(t *testing.T) {
 		MicroVMMaxConcurrentGlobal:           16,
 		MicroVMMaxConcurrentOperationsGlobal: 64,
 	})
-	if capacity.VcpuMillis != 64000 ||
+	if capacity.VcpuCount != 64 ||
 		capacity.MemoryBytes != 16<<30 ||
 		capacity.DiskBytes != 800<<30 ||
 		capacity.Instances != 16 ||
@@ -204,18 +211,18 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 		if opts.WorkspaceAttachment == nil ||
 			opts.WorkspaceAttachment.WorkspaceID() != "workspace-1" ||
 			opts.WorkspaceAttachment.Generation() != opts.SandboxGeneration ||
-			opts.WorkspaceAttachment.Image() == nil {
+			opts.WorkspaceAttachment.Descriptor() == nil {
 			t.Fatalf("resolved Workspace attachment = %#v", opts.WorkspaceAttachment)
 		}
 		marker := []byte("SecondBox-attachment")
 		switch opts.SandboxGeneration {
 		case 7:
-			if _, err := opts.WorkspaceAttachment.Image().WriteAt(marker, 0); err != nil {
+			if _, err := opts.WorkspaceAttachment.Descriptor().WriteAt(marker, 0); err != nil {
 				t.Fatalf("write Workspace mutation: %v", err)
 			}
 		case 8:
 			got := make([]byte, len(marker))
-			if _, err := opts.WorkspaceAttachment.Image().ReadAt(got, 0); err != nil {
+			if _, err := opts.WorkspaceAttachment.Descriptor().ReadAt(got, 0); err != nil {
 				t.Fatalf("read persisted Workspace mutation: %v", err)
 			}
 			if string(got) != string(marker) {
@@ -318,8 +325,6 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 			WorkspaceId:       "workspace-1",
 			Requirements: &runnerprotocol.ProfileRequirements{
 				VcpuCount:    1,
-				VcpuMillis:   1000,
-				ProcessLimit: 128,
 				MemoryBytes:  512 << 20,
 				DiskBytes:    1024 << 20,
 				Architecture: runtime.GOARCH,
@@ -331,18 +336,16 @@ func newFirecrackerConformanceFixture(t *testing.T) conformance.Fixture {
 					"local-workspace",
 				},
 			},
-			Assets: []*runnerprotocol.SignedAssetReference{
+			Assets: []*runnerprotocol.AssetReference{
 				{
 					ArtifactId:              "artifact-v1-runtime",
 					ManifestDigest:          runtimeDigestString,
-					SignatureKeyId:          keyID,
 					Architecture:            runtime.GOARCH,
 					GuestProtocolGeneration: 1,
 				},
 				{
 					ArtifactId:              "artifact-v1-toolchain",
 					ManifestDigest:          toolchainDigestString,
-					SignatureKeyId:          keyID,
 					Architecture:            runtime.GOARCH,
 					GuestProtocolGeneration: 1,
 				},
@@ -416,8 +419,28 @@ func (attachment *conformanceComputeAttachment) Generation() uint64 {
 	return attachment.generation
 }
 
-func (attachment *conformanceComputeAttachment) Image() *os.File {
+func (attachment *conformanceComputeAttachment) Descriptor() *os.File {
 	return attachment.image
+}
+
+func (*conformanceComputeAttachment) StableBlockID() string { return "workspace" }
+func (attachment *conformanceComputeAttachment) CapacityBytes() int64 {
+	if attachment.image == nil {
+		return 0
+	}
+	info, _ := attachment.image.Stat()
+	if info == nil {
+		return 0
+	}
+	return info.Size()
+}
+func (*conformanceComputeAttachment) FilesystemUUID() string { return "test-workspace-uuid" }
+func (*conformanceComputeAttachment) ChildDescriptorPath(descriptor int) string {
+	return fmt.Sprintf("/proc/self/fd/%d", descriptor)
+}
+func (attachment *conformanceComputeAttachment) LinkInto(destination string) error {
+	_ = os.Remove(destination)
+	return os.Link(attachment.image.Name(), destination)
 }
 
 func (attachment *conformanceComputeAttachment) Close() error {

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "secondbox.release/qualification-evidence/v1",
+  "sourceCommit": "97d065ae4c3834a656ca0fa029fe3da4a6901497",
+  "repositoryDirty": false,
+  "suite": "test-scenario-microsandbox-linux",
+  "passCount": 21,
+  "wallClockSeconds": 379,
+  "host": {
+    "kvm": {
+      "path": "/dev/kvm",
+      "present": true,
+      "readable": true,
+      "writable": true
+    },
+    "workspaceFilesystem": {
+      "mount": "/home /dev/mapper/root[/@home] btrfs rw,noatime,compress=zstd:3,ssd,discard=async,space_cache=v2,subvolid=257,subvol=/@home",
+      "type": "btrfs"
+    },
+    "tun": {
+      "required": false
+    }
+  },
+  "qualifiedAt": "2026-08-14T03:04:31Z",
+  "backend": "microsandbox"
+}

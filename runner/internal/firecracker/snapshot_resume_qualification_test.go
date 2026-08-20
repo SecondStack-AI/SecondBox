@@ -132,10 +132,10 @@ func TestSmokeSnapshotResumeTemplateLifecycle(t *testing.T) {
 		"refused-resume",
 		instanceDir,
 		template,
-		filepath.Join(workDir, "template-workspace.ext4"),
+		managerTestAttachment(t, filepath.Join(workDir, "template-workspace.ext4")),
 		"",
 		12000,
-		&runtimemanager.SandboxRuntimePolicy{VCPUs: 1, CPUMillis: 1000, MemoryMiB: memoryMiB, ProcessLimit: 128},
+		&runtimemanager.SandboxRuntimePolicy{VCPUs: 1, MemoryMiB: memoryMiB},
 	)
 	if resumeErr == nil {
 		t.Fatal("an unjailed resume was accepted; a restored Instance would open the template source's disks")
@@ -197,6 +197,7 @@ func buildSnapshotResumeTemplate(
 	workspaceStore, err := workspacestore.New(t.Context(), workspacestore.Config{
 		Root:                  cfg.RunnerWorkspaceRoot,
 		TemplateCapacityBytes: int64(workspaceMiB) << 20,
+		FormatterKind:         workspacestore.FormatterMke2fs,
 	})
 	if err != nil {
 		t.Fatalf("new template WorkspaceStore: %v", err)

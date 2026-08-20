@@ -756,13 +756,13 @@ func TestRunnerProtocolServiceNegotiatesBeforeProfileResolvedAssignment(t *testi
 	backend := &recordingAssignmentBackend{
 		readiness: BackendReadiness{
 			Architecture: "amd64",
-			Capacity:     &runnerprotocol.Capacity{VcpuMillis: 4000, MemoryBytes: 8 << 30, DiskBytes: 64 << 30, Instances: 2, Operations: 8},
+			Capacity:     &runnerprotocol.Capacity{VcpuCount: 4, MemoryBytes: 8 << 30, DiskBytes: 64 << 30, Instances: 2, Operations: 8},
 			Capabilities: &runnerprotocol.RunnerCapabilities{
 				Architecture:             "amd64",
-				FirecrackerVersion:       "1.16.1",
-				KvmReady:                 true,
-				JailerReady:              true,
-				CgroupReady:              true,
+				ComputeBackendVersion:    "1.16.1",
+				HypervisorReady:          true,
+				IsolationReady:           true,
+				ResourceLimitsReady:      true,
 				NetworkPolicyReady:       true,
 				StorageReady:             true,
 				CleanupReady:             true,
@@ -872,6 +872,67 @@ func TestRunnerProtocolServiceRejectsUnresolvedAssignmentBeforeBackend(t *testin
 	ack := findAssignmentAck(stream.outbound)
 	if ack == nil || ack.Decision != runnerprotocol.AssignmentDecision_ASSIGNMENT_DECISION_REJECTED_INCOMPATIBLE_PROFILE {
 		t.Fatalf("assignment ack = %#v, want incompatible-profile rejection", ack)
+	}
+}
+
+func TestRunnerProtocolServicePreservesBackendAssignmentClassifications(t *testing.T) {
+	tests := []struct {
+		name         string
+		validateErr  error
+		startErr     error
+		wantDecision runnerprotocol.AssignmentDecision
+		wantTerminal runnerprotocol.AssignmentTerminalKind
+	}{
+		{
+			name: "validation decision",
+			validateErr: classifiedAssignmentError{
+				decision: runnerprotocol.AssignmentDecision_ASSIGNMENT_DECISION_REJECTED_CAPACITY,
+				terminal: runnerprotocol.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_ADMISSION_FAILED,
+			},
+			wantDecision: runnerprotocol.AssignmentDecision_ASSIGNMENT_DECISION_REJECTED_CAPACITY,
+		},
+		{
+			name: "startup terminal",
+			startErr: classifiedAssignmentError{
+				decision: runnerprotocol.AssignmentDecision_ASSIGNMENT_DECISION_REJECTED_PREREQUISITE,
+				terminal: runnerprotocol.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_INFRASTRUCTURE_FAILED,
+			},
+			wantDecision: runnerprotocol.AssignmentDecision_ASSIGNMENT_DECISION_ACCEPTED,
+			wantTerminal: runnerprotocol.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_INFRASTRUCTURE_FAILED,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assignment := resolvedAssignmentCommand()
+			stream := &recordingProtocolStream{inbound: []*runnerprotocol.ControlPlaneToRunner{
+				runnerWelcomeFrame("connection-1"),
+				{Message: &runnerprotocol.ControlPlaneToRunner_Assignment{Assignment: assignment}},
+			}}
+			backend := &recordingAssignmentBackend{
+				readiness:   BackendReadiness{Capacity: &runnerprotocol.Capacity{}, Capabilities: &runnerprotocol.RunnerCapabilities{}},
+				validateErr: test.validateErr,
+				startErr:    test.startErr,
+			}
+			service, err := NewRunnerProtocolService(testRunnerConfig(), backend, staticProtocolConnector{stream: stream})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.runProtocolSession(t.Context()); !errors.Is(err, io.EOF) {
+				t.Fatalf("Run() error = %v, want stream EOF", err)
+			}
+			ack := findAssignmentAck(stream.outbound)
+			if ack == nil || ack.Decision != test.wantDecision {
+				t.Fatalf("assignment ack = %#v, want %s", ack, test.wantDecision)
+			}
+			result := findAssignmentResult(stream.outbound)
+			if test.wantTerminal == runnerprotocol.AssignmentTerminalKind_ASSIGNMENT_TERMINAL_KIND_UNSPECIFIED {
+				if result != nil {
+					t.Fatalf("unexpected assignment result = %#v", result)
+				}
+			} else if result == nil || result.Terminal != test.wantTerminal {
+				t.Fatalf("assignment result = %#v, want %s", result, test.wantTerminal)
+			}
+		})
 	}
 }
 
@@ -1213,8 +1274,6 @@ func resolvedAssignmentCommand() *runnerprotocol.AssignmentCommand {
 		ProfileRevisionId: "profile-revision-1",
 		Requirements: &runnerprotocol.ProfileRequirements{
 			VcpuCount:          2,
-			VcpuMillis:         2000,
-			ProcessLimit:       128,
 			MemoryBytes:        4 << 30,
 			DiskBytes:          16 << 30,
 			Architecture:       "amd64",
@@ -1222,11 +1281,10 @@ func resolvedAssignmentCommand() *runnerprotocol.AssignmentCommand {
 			MaximumOperationMs: 30_000,
 			MaximumOutputBytes: 8 << 20,
 		},
-		Assets: []*runnerprotocol.SignedAssetReference{
+		Assets: []*runnerprotocol.AssetReference{
 			{
 				ArtifactId:              "secondbox-rootfs-1",
 				ManifestDigest:          "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-				SignatureKeyId:          "key-1",
 				Architecture:            "amd64",
 				GuestProtocolGeneration: 1,
 			},
@@ -1387,10 +1445,25 @@ type recordingAssignmentBackend struct {
 	readiness    BackendReadiness
 	instance     BackendInstance
 	started      *runnerprotocol.AssignmentCommand
+	validateErr  error
+	startErr     error
 	startupCount uint64
 	startupP95   time.Duration
 	startCalls   atomic.Uint32
 	fenceCalls   atomic.Uint32
+}
+
+type classifiedAssignmentError struct {
+	decision runnerprotocol.AssignmentDecision
+	terminal runnerprotocol.AssignmentTerminalKind
+}
+
+func (err classifiedAssignmentError) Error() string { return "classified assignment failure" }
+func (err classifiedAssignmentError) AssignmentDecision() runnerprotocol.AssignmentDecision {
+	return err.decision
+}
+func (err classifiedAssignmentError) AssignmentTerminal() runnerprotocol.AssignmentTerminalKind {
+	return err.terminal
 }
 
 type blockingAssignmentBackend struct {
@@ -1440,8 +1513,8 @@ func (b *recordingAssignmentBackend) Readiness(context.Context) (BackendReadines
 	return b.readiness, nil
 }
 
-func (*recordingAssignmentBackend) ValidateAssignment(context.Context, *runnerprotocol.AssignmentCommand) error {
-	return nil
+func (b *recordingAssignmentBackend) ValidateAssignment(context.Context, *runnerprotocol.AssignmentCommand) error {
+	return b.validateErr
 }
 
 func (b *recordingAssignmentBackend) StartAssignment(
@@ -1451,6 +1524,9 @@ func (b *recordingAssignmentBackend) StartAssignment(
 ) (BackendInstance, error) {
 	b.startCalls.Add(1)
 	b.started = assignment
+	if b.startErr != nil {
+		return BackendInstance{}, b.startErr
+	}
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_ARTIFACT_VERIFY); err != nil {
 		return BackendInstance{}, err
 	}

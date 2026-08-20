@@ -8,6 +8,34 @@ import (
 	"time"
 )
 
+func TestLifecycleEvidenceRequiresFixedDimensions(t *testing.T) {
+	record := NewRecord(EventLifecycleStage, "completed", "ready", time.Now())
+	record.RunnerID = "runner-1"
+	record.RequestID = "request-1"
+	record.OperationID = "operation-1"
+	record.SandboxID = "sandbox-1"
+	record.InstanceID = "instance-1"
+	record.SandboxGeneration = 1
+	record.AssignmentID = "assignment-1"
+	if err := record.Validate(); err == nil {
+		t.Fatal("incomplete lifecycle dimensions were accepted")
+	}
+	record.BackendKind = "microsandbox"
+	record.HostPlatform = "linux-amd64"
+	record.BackendVersion = "microsandbox-0.6.8/msb_krun-0.1.30"
+	record.Materialization = "sha256:" + strings.Repeat("a", 64)
+	record.Stage = "ready"
+	record.StreamID = "control:1"
+	record.HelperPID = 42
+	if err := record.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	record.HelperReason = strings.Repeat("x", 257)
+	if err := record.Validate(); err == nil {
+		t.Fatal("unbounded lifecycle classification was accepted")
+	}
+}
+
 func TestSlogSinkRejectsIncompleteOperationCorrelation(t *testing.T) {
 	record := NewRecord(EventExecTerminal, "completed", "exited", time.Now().UTC())
 	record.RunnerID = "runner-1"

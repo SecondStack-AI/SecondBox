@@ -9,6 +9,21 @@ verify-generated:
 build:
     go build -o /dev/null ./cmd/secondboxd
 
+build-microsandbox-probe-linux source output:
+    just -f runner/Justfile build-microsandbox-probe-linux "{{source}}" "{{output}}"
+
+build-microsandbox-probe-macos source output:
+    just -f runner/Justfile build-microsandbox-probe-macos "{{source}}" "{{output}}"
+
+test-microsandbox-probe-macos build_dir work_dir:
+    just -f runner/Justfile test-microsandbox-probe-macos "{{build_dir}}" "{{work_dir}}"
+
+test-microsandbox-probe-ext4-linux build_dir work_dir:
+    just -f runner/Justfile test-microsandbox-probe-ext4-linux "{{build_dir}}" "{{work_dir}}"
+
+test-microsandbox-probe-linux build_dir work_dir:
+    just -f runner/Justfile test-microsandbox-probe-linux "{{build_dir}}" "{{work_dir}}"
+
 lint:
     golangci-lint run ./...
     cd runner && golangci-lint run --config ../.golangci.yml ./...
@@ -27,6 +42,18 @@ test-image-policy:
 
 test-non-kvm:
     scripts/test-non-kvm.sh
+
+test-workspacestore-linux:
+    scripts/test-workspacestore-linux.sh
+
+test-workspacestore-macos:
+    scripts/test-workspacestore-macos.sh
+
+test-microsandbox-linux:
+    scripts/test-microsandbox-linux.sh
+
+test-microsandbox-macos:
+    scripts/test-microsandbox-macos.sh
 
 test-deployment:
     go test ./tests/deployment -count=1
@@ -87,6 +114,12 @@ test-multirunner:
 
 test-scenario:
     scripts/test-scenario.sh
+
+test-scenario-microsandbox-linux:
+    scripts/test-scenario-microsandbox-linux.sh
+
+test-scenario-microsandbox-macos:
+    scripts/test-scenario-microsandbox-macos.sh
 
 prepare-stress:
     scripts/prepare-stress.sh

@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"context"
 	"strconv"
 	"testing"
 	"time"
@@ -16,45 +17,58 @@ import (
 // Runner.
 const deferralPasses = 12
 
-// TestInvalidProfileStartDeferralHoldsThePublicRevision covers a Sandbox that is
-// wanted running whose pinned Profile revision cannot be resolved into an
-// assignment. The reconciler must keep looking, because the operator can repair
-// the Profile at any moment, and each of those passes changes nothing a caller
-// can observe — so the public revision, its ETag, and updated_at hold across all
-// of them, and the repair is still picked up on the next pass.
-func TestInvalidProfileStartDeferralHoldsThePublicRevision(t *testing.T) {
+// TestInvalidProfileStartFailsBeforeAssignmentAndRequiresExplicitRetry covers a
+// Sandbox whose pinned Profile revision cannot be resolved into an assignment.
+// Durable incompatibility is terminal: it releases the Workspace mutation,
+// fails the Operation before compute exists, and parks reconciliation until an
+// operator repairs the Profile and explicitly retries.
+func TestInvalidProfileStartFailsBeforeAssignmentAndRequiresExplicitRetry(t *testing.T) {
 	fixture := newTeardownFixture(t)
 	sandboxID := createStoppedSandboxWantedRunning(t, fixture, "invalid-profile")
 	repairProfile := breakPinnedProfileNetworkMode(t, fixture, sandboxID)
+	t.Cleanup(func() { repairProfile(t) })
 
-	deferredRevision, deferredETag := quiescenceSandboxETag(t, fixture, sandboxID)
-	deferredUpdatedAt := sandboxUpdatedAt(t, fixture, sandboxID)
-	for index := 0; index < deferralPasses; index++ {
-		fixture.runLifecycle(t, sandboxID, lifecycle.ActionStartInstance)
-		revision, etag := quiescenceSandboxETag(t, fixture, sandboxID)
-		if revision != deferredRevision || etag != deferredETag {
-			t.Fatalf(
-				"invalid Profile deferral %d moved the public revision from %d ETag %q to %d ETag %q",
-				index, deferredRevision, deferredETag, revision, etag,
-			)
-		}
-		// The Sandbox is wanted running: holding its revision must never be
-		// confused with parking it, or the repair would never be noticed.
-		if _, scheduled := fixture.sandboxDueAt(t, sandboxID); !scheduled {
-			t.Fatalf("invalid Profile deferral %d left the Sandbox unscheduled", index)
-		}
+	beforeRevision, _ := quiescenceSandboxETag(t, fixture, sandboxID)
+	fixture.runLifecycle(t, sandboxID, lifecycle.ActionStartInstance)
+	failed, err := fixture.controlPlane.GetSandbox(t.Context(), fixture.principal, sandboxID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if updatedAt := sandboxUpdatedAt(t, fixture, sandboxID); !updatedAt.Equal(deferredUpdatedAt) {
-		t.Fatalf(
-			"invalid Profile deferrals moved updated_at from %s to %s",
-			deferredUpdatedAt, updatedAt,
-		)
+	if failed.State != contracts.SandboxStateFailed || failed.Revision != beforeRevision+1 {
+		t.Fatalf("invalid Profile terminal Sandbox = %#v, prior revision %d", failed, beforeRevision)
+	}
+	if _, scheduled := fixture.sandboxDueAt(t, sandboxID); scheduled {
+		t.Fatal("invalid Profile terminal failure remained scheduled")
 	}
 	if count := sandboxAssignmentCount(t, fixture, sandboxID); count != 0 {
-		t.Fatalf("invalid Profile deferrals placed %d Assignments, want none", count)
+		t.Fatalf("invalid Profile failure placed %d Assignments, want none", count)
+	}
+	var mutationState, operationState, operationError string
+	if err := fixture.pool.QueryRow(t.Context(), `
+		SELECT workspace.mutation_state,operation.state,operation.error_code
+		FROM secondbox.sandboxes AS sandbox
+		JOIN secondbox.workspaces AS workspace ON workspace.id=sandbox.workspace_id
+		JOIN secondbox.operations AS operation ON operation.sandbox_id=sandbox.id
+		WHERE sandbox.id=$1 AND operation.kind IN ('create','start')
+		ORDER BY operation.created_at DESC,operation.id DESC LIMIT 1`, sandboxID,
+	).Scan(&mutationState, &operationState, &operationError); err != nil {
+		t.Fatal(err)
+	}
+	if mutationState != "" || operationState != contracts.OperationStateFailed ||
+		operationError != "profile_unavailable" {
+		t.Fatalf(
+			"invalid Profile terminal mutation=%q operation=%q/%q",
+			mutationState, operationState, operationError,
+		)
 	}
 
 	repairProfile(t)
+	if _, err := fixture.controlPlane.StartSandbox(
+		t.Context(), fixture.principal, sandboxID,
+		"invalid-profile-explicit-retry-"+sandboxID, failed.Revision,
+	); err != nil {
+		t.Fatal(err)
+	}
 	fixture.runLifecycle(t, sandboxID, lifecycle.ActionStartInstance)
 	started, err := fixture.controlPlane.GetSandbox(t.Context(), fixture.principal, sandboxID)
 	if err != nil {
@@ -65,10 +79,10 @@ func TestInvalidProfileStartDeferralHoldsThePublicRevision(t *testing.T) {
 	}
 	// Placement is an observable change, and the distinction from a deferral is
 	// the whole point.
-	if started.Revision <= deferredRevision {
+	if started.Revision <= failed.Revision {
 		t.Fatalf(
-			"placement left the public revision at %d, want above the held %d",
-			started.Revision, deferredRevision,
+			"explicit retry placement left revision at %d, want above failed %d",
+			started.Revision, failed.Revision,
 		)
 	}
 }
@@ -191,7 +205,9 @@ func breakPinnedProfileNetworkMode(
 	}
 	return func(t *testing.T) {
 		t.Helper()
-		if _, err := fixture.pool.Exec(t.Context(), `
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if _, err := fixture.pool.Exec(ctx, `
 			UPDATE secondbox.profile_revisions
 			SET spec_json=jsonb_set(spec_json,'{network,mode}','"deny_all"')
 			WHERE id=$1`, profileRevisionID,

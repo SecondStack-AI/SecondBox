@@ -16,7 +16,7 @@ func TestRelocateSandboxAdmitsOnlyStoppedSnapshotFreeWorkspaceToCompatibleRunner
 	if _, err := store.pool.Exec(t.Context(), `
 		UPDATE secondbox.runners
 		SET capabilities_json='["compute","local-workspace","workspace-relocation"]',
-		    protocol_versions_json='["2"]',state='ready',
+		    protocol_versions_json='["3"]',state='ready',
 		    active_connection_id='connection-home',drain_phase='active'
 		WHERE id='runner-home'`,
 	); err != nil {
@@ -146,7 +146,7 @@ func seedWorkspaceRelocationTarget(
 		) VALUES (
 			$1,'pool-local',$1,$2,'["amd64"]',
 			'["compute","local-workspace","storage","workspace-relocation"]',
-			'{"CPUMillis":8000,"MemoryBytes":17179869184,"DiskBytes":17179869184,"Instances":8,"Operations":32}',
+			'{"VCPUCount":8000,"MemoryBytes":17179869184,"DiskBytes":17179869184,"Instances":8,"Operations":32}',
 			'["2"]',1,1,'test','connection-' || $1,0,'active','{}','[]',0,0,$3,1,$3,$3
 		) ON CONFLICT (id) DO UPDATE SET state=EXCLUDED.state,
 			active_connection_id=EXCLUDED.active_connection_id,
