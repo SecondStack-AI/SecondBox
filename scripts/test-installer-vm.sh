@@ -25,7 +25,8 @@ while IFS= read -r encoded; do
   jq -e --arg family "$family" --arg image "$image" --slurpfile scenario "$repo_root/tests/installer/vm-scenario.json" '
     .schemaVersion == "secondbox.install.vm-evidence/v1" and
     .family == $family and .image == $image and .passed == true and
-    ([.assertions[] | select(.passed == true) | .id] | sort) == ($scenario[0].requiredAssertions | sort)
+    (($scenario[0].requiredAssertions - [.assertions[] | select(.passed == true) | .id]) | length) == 0 and
+    all(.assertions[]; .passed == true)
   ' "$evidence" >/dev/null
 done < <(jq -r '.[] | @base64' <<<"$images_json")
 

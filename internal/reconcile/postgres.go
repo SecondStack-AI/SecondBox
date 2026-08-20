@@ -613,16 +613,57 @@ func (store *PostgresStore) AdvanceFencedGeneration(
 		return 0, ErrClaimLost
 	}
 	stopEffectID := "runner-loss-stop-" + assignmentID
-	queueLocalAdvance := workspace.Mutation.State == ""
+	// A start scheduled against a Runner whose old heartbeat survived a host
+	// restart can be fenced before its Assignment command is ever delivered.
+	// That command is expired before the fence proof is recorded, so its own
+	// start mutation can be replaced by the required generation advance. No
+	// other active Workspace mutation crosses this boundary.
+	replaceFencedStart := false
+	if workspace.Mutation.Kind == "start" &&
+		workspace.Mutation.ID != "" &&
+		workspace.Mutation.EffectID != "" &&
+		workspace.Mutation.State == "assigned" &&
+		workspace.Mutation.ExpectedGeneration == generation &&
+		workspace.Mutation.TargetGeneration == generation {
+		var commandAssignmentID, commandKind, commandState string
+		err := tx.QueryRow(ctx, `
+			SELECT assignment_id,kind,state
+			FROM secondbox.runner_commands
+			WHERE id=$1`, workspace.Mutation.EffectID,
+		).Scan(&commandAssignmentID, &commandKind, &commandState)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return 0, fmt.Errorf("SecondBox runner-loss Workspace start command lookup: %w", err)
+		}
+		replaceFencedStart = err == nil && commandAssignmentID == assignmentID &&
+			commandKind == "assignment" && commandState == "expired"
+	}
+	queueLocalAdvance := workspace.Mutation.State == "" || replaceFencedStart
 	if queueLocalAdvance {
-		tag, err := tx.Exec(ctx, `
+		query := `
 			UPDATE secondbox.workspaces
 			SET mutation_kind='stop',mutation_id=$2,mutation_effect_id=$2,
 			    mutation_operation_id=$2,mutation_expected_generation=$3,
 			    mutation_target_generation=$4,mutation_state='advancing',updated_at=$5
-			WHERE id=$1 AND mutation_state=''`,
-			workspace.ID, stopEffectID, generation, nextGeneration, now,
-		)
+			WHERE id=$1 AND mutation_state=''`
+		arguments := []any{workspace.ID, stopEffectID, generation, nextGeneration, now}
+		if replaceFencedStart {
+			query = `
+				UPDATE secondbox.workspaces
+				SET mutation_kind='stop',mutation_id=$2,mutation_effect_id=$2,
+				    mutation_operation_id=$2,mutation_expected_generation=$3,
+				    mutation_target_generation=$4,mutation_state='advancing',updated_at=$5
+				WHERE id=$1 AND mutation_kind='start' AND mutation_id=$6
+				  AND mutation_effect_id=$7 AND mutation_operation_id=$8
+				  AND mutation_expected_generation=$3 AND mutation_target_generation=$3
+				  AND mutation_state='assigned'`
+			arguments = append(
+				arguments,
+				workspace.Mutation.ID,
+				workspace.Mutation.EffectID,
+				workspace.Mutation.OperationID,
+			)
+		}
+		tag, err := tx.Exec(ctx, query, arguments...)
 		if err != nil {
 			return 0, fmt.Errorf("SecondBox runner-loss Workspace mutation acquisition: %w", err)
 		}

@@ -271,9 +271,13 @@ if read_state; then
   elif [[ "$state_config" != "$(fingerprint)" ]]; then
     echo "active sandbox host-network config changed; remove it before applying new settings" >&2
     exit 1
-  elif [[ "$(sysctl -n net.ipv4.ip_forward)" != "1" ]]; then
-    echo "active sandbox host network lost net.ipv4.ip_forward=1" >&2
-    exit 1
+  elif ! ip link show "$bridge" >/dev/null 2>&1 ||
+       ! ip -4 addr show dev "$bridge" | grep -qw "$bridge_cidr" ||
+       [[ "$(sysctl -n net.ipv4.ip_forward)" != "1" ]]; then
+    # Kernel network state does not survive a host reboot. The durable state
+    # file records exactly what this script created, so tear down any surviving
+    # fragments and rebuild the accepted configuration before Runner readiness.
+    remove_network
   else
     install_firewall
     exit 0

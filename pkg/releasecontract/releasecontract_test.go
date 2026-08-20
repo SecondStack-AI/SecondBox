@@ -27,6 +27,32 @@ func TestParseTag(t *testing.T) {
 	}
 }
 
+func TestCompareVersionsUsesSemVerPrecedence(t *testing.T) {
+	tests := []struct {
+		left, right string
+		want        int
+	}{
+		{"0.5.1", "0.5.0", 1},
+		{"1.0.0-alpha", "1.0.0-alpha.1", -1},
+		{"1.0.0-alpha.2", "1.0.0-alpha.10", -1},
+		{"1.0.0-beta", "1.0.0-alpha", 1},
+		{"1.0.0", "1.0.0-rc.1", 1},
+		{"2.0.0", "2.0.0", 0},
+	}
+	for _, test := range tests {
+		got, err := CompareVersions(test.left, test.right)
+		if err != nil {
+			t.Fatalf("CompareVersions(%q, %q): %v", test.left, test.right, err)
+		}
+		if (got < 0 && test.want >= 0) || (got > 0 && test.want <= 0) || (got == 0 && test.want != 0) {
+			t.Fatalf("CompareVersions(%q, %q) = %d, want sign %d", test.left, test.right, got, test.want)
+		}
+	}
+	if _, err := CompareVersions("1.0", "1.0.0"); err == nil {
+		t.Fatal("invalid version comparison succeeded")
+	}
+}
+
 func TestArtifactManifestValidationRejectsInvalidReleaseContent(t *testing.T) {
 	tests := []struct {
 		name   string

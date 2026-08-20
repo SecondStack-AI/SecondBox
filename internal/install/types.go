@@ -12,8 +12,10 @@ const (
 
 const (
 	HostFactsSchema = "secondbox.install.host-facts/v1"
-	PlanSchema      = "secondbox.install.plan/v1"
-	ReceiptSchema   = "secondbox.install.receipt/v1"
+	PlanSchemaV1    = "secondbox.install.plan/v1"
+	PlanSchema      = "secondbox.install.plan/v2"
+	ReceiptSchemaV1 = "secondbox.install.receipt/v1"
+	ReceiptSchema   = "secondbox.install.receipt/v2"
 )
 
 type FindingClass string
@@ -65,6 +67,30 @@ const (
 )
 
 var StageSequence = []Stage{StagePreflight, StagePlanAccepted, StageHostApply, StageReleaseVerified, StageAssetsMaterialized, StageDeploymentMaterialized, StageRunnerEnrolled, StageComposeStarted, StageCLILogin, StageReadiness, StageSmokeExecution}
+
+type UpdateStatus string
+
+const (
+	UpdateRunning   UpdateStatus = "running"
+	UpdateFailed    UpdateStatus = "failed"
+	UpdateSucceeded UpdateStatus = "succeeded"
+)
+
+type UpdateStage string
+
+const (
+	UpdateStagePreflight           UpdateStage = "preflight"
+	UpdateStageReleaseVerified     UpdateStage = "release_verified"
+	UpdateStageAssetsStaged        UpdateStage = "assets_staged"
+	UpdateStageActivationStarted   UpdateStage = "activation_started"
+	UpdateStageDeploymentPublished UpdateStage = "deployment_published"
+	UpdateStageComposeStarted      UpdateStage = "compose_started"
+	UpdateStageResourcesApplied    UpdateStage = "resources_applied"
+	UpdateStageReadiness           UpdateStage = "readiness"
+	UpdateStageSmokeExecution      UpdateStage = "smoke_execution"
+)
+
+var UpdateStageSequence = []UpdateStage{UpdateStagePreflight, UpdateStageReleaseVerified, UpdateStageAssetsStaged, UpdateStageActivationStarted, UpdateStageDeploymentPublished, UpdateStageComposeStarted, UpdateStageResourcesApplied, UpdateStageReadiness, UpdateStageSmokeExecution}
 
 type StorageChoice string
 
@@ -183,17 +209,17 @@ type ComputePlan struct {
 	FirecrackerCPUTemplate string `json:"firecrackerCpuTemplate"`
 }
 type NetworkPlan struct {
-	APIAddress                string            `json:"apiAddress"`
-	RunnerAddress             string            `json:"runnerAddress"`
-	DataPlaneAddress          string            `json:"dataPlaneAddress"`
-	DatabaseAddress           string            `json:"databaseAddress"`
-	GuestBridgeCIDR           string            `json:"guestBridgeCidr"`
-	ComposeBackendCIDR        string            `json:"composeBackendCidr,omitempty"`
-	TAPPrefix                 string            `json:"tapPrefix"`
-	CgroupParent              string            `json:"cgroupParent"`
-	JailerUIDRange            UIDRange          `json:"jailerUidRange"`
-	DNSUpstream               string            `json:"dnsUpstream"`
-	Gateways                  map[string]string `json:"gateways"`
+	APIAddress         string            `json:"apiAddress"`
+	RunnerAddress      string            `json:"runnerAddress"`
+	DataPlaneAddress   string            `json:"dataPlaneAddress"`
+	DatabaseAddress    string            `json:"databaseAddress"`
+	GuestBridgeCIDR    string            `json:"guestBridgeCidr"`
+	ComposeBackendCIDR string            `json:"composeBackendCidr,omitempty"`
+	TAPPrefix          string            `json:"tapPrefix"`
+	CgroupParent       string            `json:"cgroupParent"`
+	JailerUIDRange     UIDRange          `json:"jailerUidRange"`
+	DNSUpstream        string            `json:"dnsUpstream"`
+	Gateways           map[string]string `json:"gateways"`
 }
 type ReleasePlan struct {
 	Version                string            `json:"version"`
@@ -204,6 +230,15 @@ type ReleasePlan struct {
 	BinaryDigests          map[string]string `json:"binaryDigests"`
 	ExpectedDownloadBytes  int64             `json:"expectedDownloadBytes"`
 }
+
+// ReleaseActivation is the append-only audit history for the release that an
+// installation operation made active. The initial entry is derived from the
+// original immutable install plan when a v1 operation is first read.
+type ReleaseActivation struct {
+	Release     ReleasePlan `json:"release"`
+	ActivatedAt time.Time   `json:"activatedAt"`
+	UpdateID    string      `json:"updateId,omitempty"`
+}
 type CLIPlan struct {
 	ConfigPath string `json:"configPath"`
 	TenantRef  string `json:"tenantRef"`
@@ -211,23 +246,24 @@ type CLIPlan struct {
 }
 
 type InstallPlan struct {
-	SchemaVersion                string         `json:"schemaVersion"`
-	OperationID                  string         `json:"operationId"`
-	CreatedAt                    time.Time      `json:"createdAt"`
-	HostFacts                    HostFacts      `json:"hostFacts"`
-	HostFactsDigest              string         `json:"hostFactsDigest"`
-	Release                      ReleasePlan    `json:"release"`
-	Storage                      StoragePlan    `json:"storage"`
-	Capacity                     CapacityPlan   `json:"capacity"`
-	Compute                      ComputePlan    `json:"compute"`
-	Network                      NetworkPlan    `json:"network"`
-	CLI                          CLIPlan        `json:"cli"`
-	Paths                        []PlannedPath  `json:"paths"`
-	SecretTargets                []SecretTarget `json:"secretTargets"`
-	GeneratedAuthorityCategories []string       `json:"generatedAuthorityCategories"`
-	StandardBundles              []string       `json:"standardBundles"`
-	RetentionSeconds             int64          `json:"retentionSeconds"`
-	PrivilegedActions            []string       `json:"privilegedActions"`
+	SchemaVersion                string              `json:"schemaVersion"`
+	OperationID                  string              `json:"operationId"`
+	CreatedAt                    time.Time           `json:"createdAt"`
+	HostFacts                    HostFacts           `json:"hostFacts"`
+	HostFactsDigest              string              `json:"hostFactsDigest"`
+	Release                      ReleasePlan         `json:"release"`
+	Storage                      StoragePlan         `json:"storage"`
+	Capacity                     CapacityPlan        `json:"capacity"`
+	Compute                      ComputePlan         `json:"compute"`
+	Network                      NetworkPlan         `json:"network"`
+	CLI                          CLIPlan             `json:"cli"`
+	Paths                        []PlannedPath       `json:"paths"`
+	SecretTargets                []SecretTarget      `json:"secretTargets"`
+	GeneratedAuthorityCategories []string            `json:"generatedAuthorityCategories"`
+	StandardBundles              []string            `json:"standardBundles"`
+	RetentionSeconds             int64               `json:"retentionSeconds"`
+	PrivilegedActions            []string            `json:"privilegedActions"`
+	ReleaseHistory               []ReleaseActivation `json:"releaseHistory,omitempty"`
 }
 
 type ResourceKind string
@@ -259,6 +295,27 @@ type StageRecord struct {
 	Evidence    map[string]string `json:"evidence"`
 }
 
+type UpdateStageRecord struct {
+	Stage       UpdateStage       `json:"stage"`
+	CompletedAt time.Time         `json:"completedAt"`
+	Evidence    map[string]string `json:"evidence"`
+}
+
+// UpdateRecord journals one forward-only release transition inside the
+// installation receipt. TargetRelease remains durable while an interrupted
+// activation is resumed by a later target-release bootstrap.
+type UpdateRecord struct {
+	ID              string              `json:"id"`
+	SourceRelease   ReleasePlan         `json:"sourceRelease"`
+	TargetRelease   ReleasePlan         `json:"targetRelease"`
+	Status          UpdateStatus        `json:"status"`
+	FailureClass    FailureClass        `json:"failureClass,omitempty"`
+	FailureStage    UpdateStage         `json:"failureStage,omitempty"`
+	CompletedStages []UpdateStageRecord `json:"completedStages"`
+	StartedAt       time.Time           `json:"startedAt"`
+	UpdatedAt       time.Time           `json:"updatedAt"`
+}
+
 type InstallReceipt struct {
 	SchemaVersion       string            `json:"schemaVersion"`
 	OperationID         string            `json:"operationId"`
@@ -272,5 +329,6 @@ type InstallReceipt struct {
 	PendingResourceIDs  []string          `json:"pendingResourceIds"`
 	RemovedResourceIDs  []string          `json:"removedResourceIds"`
 	CompletedPurgeSteps []string          `json:"completedPurgeSteps"`
+	Updates             []UpdateRecord    `json:"updates,omitempty"`
 	UpdatedAt           time.Time         `json:"updatedAt"`
 }

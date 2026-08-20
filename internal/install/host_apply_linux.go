@@ -150,7 +150,7 @@ func (executor SystemHostApplyExecutor) Revalidate(ctx context.Context, plan Ins
 	return ctx.Err()
 }
 
-func (executor SystemHostApplyExecutor) RevalidateTeardown(ctx context.Context, plan InstallPlan, receipt InstallReceipt) error {
+func (executor SystemHostApplyExecutor) RevalidateHostResources(ctx context.Context, plan InstallPlan, receipt InstallReceipt) error {
 	if err := executor.validateCallerAndHostIdentity(plan); err != nil {
 		return err
 	}

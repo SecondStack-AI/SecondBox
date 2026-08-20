@@ -128,10 +128,14 @@ func runCommand(arguments []string, renderer cliui.Renderer) error {
 		return runInstallPreflight(context.Background(), arguments[1:], renderer, install.SystemPreflightProbes())
 	case "uninstall":
 		return runInstallUninstall(context.Background(), arguments[1:], renderer)
+	case "update":
+		return runUpdateCommand(context.Background(), arguments[1:], renderer)
 	case "_install-host-apply":
 		return runPrivateHostApply(context.Background(), arguments[1:])
 	case "_install-host-teardown-verify":
 		return runPrivateHostTeardownVerify(context.Background(), arguments[1:])
+	case "_install-host-update-verify":
+		return runPrivateHostUpdateVerify(context.Background(), arguments[1:])
 	case "_install-host-purge":
 		return runPrivateHostPurge(context.Background(), arguments[1:])
 	case "_install-host-purge-validate":

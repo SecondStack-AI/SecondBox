@@ -59,14 +59,25 @@ chmod 0755 "$binary"
 # Keep the verified executable at a stable pathname while the installer runs. It
 # re-executes itself through the privilege boundary for narrow host apply, and
 # os.Executable must therefore continue to resolve to a path root can open.
-if [ "$#" -eq 0 ]; then
+command=install
+if [ "$#" -gt 0 ] && [ "$1" = update ]; then
+  command=update
+  shift
+fi
+if [ "$command" = install ] && [ "$#" -eq 0 ]; then
   if [ ! -r /dev/tty ]; then
     printf '%s\n' 'SecondBox guided install requires an interactive terminal. Use secondbox-deploy install --check for unattended preflight.' >&2
     exit 1
   fi
   "$binary" install </dev/tty &
+elif [ "$command" = update ] && { [ "$#" -eq 0 ] || { [ "$1" != --check ] && [ "$1" != --resume ]; }; }; then
+  if [ ! -r /dev/tty ]; then
+    printf '%s\n' 'SecondBox guided update requires an interactive terminal. Use update --check for unattended validation.' >&2
+    exit 1
+  fi
+  "$binary" update "$@" </dev/tty &
 else
-  "$binary" install "$@" &
+  "$binary" "$command" "$@" &
 fi
 child_pid=$!
 if wait "$child_pid"; then

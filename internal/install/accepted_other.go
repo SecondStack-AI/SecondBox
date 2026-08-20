@@ -16,8 +16,20 @@ func ReadOperation(string, int) (InstallPlan, InstallReceipt, error) {
 	return InstallPlan{}, InstallReceipt{}, installerError("installer operations require Linux openat2 path confinement", errors.ErrUnsupported)
 }
 
+func ReadOperationReadOnly(string, int) (InstallPlan, InstallReceipt, error) {
+	return InstallPlan{}, InstallReceipt{}, installerError("installer operations require Linux openat2 path confinement", errors.ErrUnsupported)
+}
+
+func RecoverOperation(string, int, *OperationLock) (InstallPlan, InstallReceipt, error) {
+	return InstallPlan{}, InstallReceipt{}, installerError("installer operations require Linux openat2 path confinement", errors.ErrUnsupported)
+}
+
 func SaveReceipt(string, InstallPlan, InstallReceipt, int) error {
 	return installerError("installer operations require Linux openat2 path confinement", errors.ErrUnsupported)
+}
+
+func SaveOperation(string, InstallPlan, InstallReceipt, int) error {
+	return installerError("installer operation commits require Linux openat2 path confinement", errors.ErrUnsupported)
 }
 
 func writeReceiptAtomic(string, InstallReceipt, int) error {

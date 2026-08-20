@@ -1,11 +1,36 @@
 package standardresources
 
 import (
+	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/SecondStack-AI/SecondBox/pkg/resourceapply"
 )
+
+func TestRecordedBundleAcceptsImmutablePrefixAfterPolicyAppends(t *testing.T) {
+	documents, err := Documents("sha256:"+strings.Repeat("a", 64), v030RuntimeBundleDigest, v030ToolchainBundleDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := documents[0]
+	document.Profile.Revisions = document.Profile.Revisions[:1]
+	content, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeDocument(content); err == nil || !strings.Contains(err.Error(), "lineage") {
+		t.Fatalf("current-policy decoder accepted recorded prefix: %v", err)
+	}
+	recorded, err := DecodeRecordedDocument(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recorded.Profile.Revisions) != 1 || recorded.Profile.Revisions[0].SpecDigest != document.Profile.Revisions[0].SpecDigest {
+		t.Fatalf("recorded lineage = %#v", recorded.Profile.Revisions)
+	}
+}
 
 func TestStandardProfilesHaveFixedArchitectureCapabilitiesAndGatewayBounds(t *testing.T) {
 	runtimeDigest := v030RuntimeBundleDigest

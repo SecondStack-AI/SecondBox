@@ -13,7 +13,7 @@ func (SystemHostApplyExecutor) EffectiveUID() int { return -1 }
 func (SystemHostApplyExecutor) Revalidate(context.Context, InstallPlan, InstallReceipt) error {
 	return errors.ErrUnsupported
 }
-func (SystemHostApplyExecutor) RevalidateTeardown(context.Context, InstallPlan, InstallReceipt) error {
+func (SystemHostApplyExecutor) RevalidateHostResources(context.Context, InstallPlan, InstallReceipt) error {
 	return errors.ErrUnsupported
 }
 func (SystemHostApplyExecutor) CreateDirectory(PlannedPath) error { return errors.ErrUnsupported }

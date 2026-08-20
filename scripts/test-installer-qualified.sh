@@ -44,7 +44,8 @@ jq -e --arg subject "$qualification_subject" --slurpfile scenario "$repo_root/te
   .passed == true and .rebootPassed == true and
   .releaseManifestDigest == $subject and
   (.filesystemIdentity | type == "string") and (.filesystemIdentity | length) > 0 and
-  ([.assertions[] | select(.passed == true) | .id] | sort) == ($scenario[0].requiredAssertions | sort)
+  (($scenario[0].requiredAssertions - [.assertions[] | select(.passed == true) | .id]) | length) == 0 and
+  all(.assertions[]; .passed == true)
 ' "$temporary/driver-evidence.json" >/dev/null
 pass_count="$(jq -er '.assertions | length' "$temporary/driver-evidence.json")"
 workspace_mount="$(findmnt -n -o TARGET --target "$SECONDBOX_INSTALLER_EXISTING_WORKSPACE_ROOT")"
