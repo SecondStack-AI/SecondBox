@@ -1,7 +1,6 @@
 package firecracker
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"fmt"
@@ -22,53 +21,18 @@ func (s *GuestProtocolSession) WriteFile(
 	content []byte,
 	createMode uint32,
 ) error {
-	if err := s.validateFileOperation(ctx, assignmentID, workspaceRelativePath); err != nil {
-		return err
-	}
-	s.operationMu.Lock()
-	defer s.operationMu.Unlock()
-	binding, err := s.newFileOperationBinding(assignmentID)
-	if err != nil {
-		return err
-	}
 	checksum := fmt.Sprintf("sha256:%x", sha256.Sum256(content))
-	if err := s.Stream.Send(&guestv1.RunnerToGuest{
-		Message: &guestv1.RunnerToGuest_File{File: &guestv1.FileFrame{
-			Binding: binding,
-			Payload: &guestv1.FileFrame_Request{Request: &guestv1.FileRequest{
-				Operation:             guestv1.FileOperation_FILE_OPERATION_WRITE,
-				WorkspaceRelativePath: workspaceRelativePath,
-				ExpectedSize:          uint64(len(content)),
-				ExpectedChecksum:      checksum,
-				CreateMode:            createMode,
-			}},
-		}},
-	}); err != nil {
-		return fmt.Errorf("send guest file write request: %w", err)
-	}
-	if len(content) > 0 {
-		binding.Sequence = 2
-		if err := s.Stream.Send(&guestv1.RunnerToGuest{
-			Message: &guestv1.RunnerToGuest_File{File: &guestv1.FileFrame{
-				Binding: binding,
-				Payload: &guestv1.FileFrame_Chunk{Chunk: &guestv1.FileChunk{
-					Offset: 0,
-					Data:   bytes.Clone(content),
-				}},
-			}},
-		}); err != nil {
-			return fmt.Errorf("send guest file write chunk: %w", err)
-		}
-	}
-	response, err := s.Stream.Recv()
+	result, err := s.ExecuteFileOperation(ctx, assignmentID, &guestv1.FileRequest{
+		Operation:             guestv1.FileOperation_FILE_OPERATION_WRITE,
+		WorkspaceRelativePath: workspaceRelativePath,
+		ExpectedSize:          uint64(len(content)),
+		ExpectedChecksum:      checksum,
+		CreateMode:            createMode,
+	}, content)
 	if err != nil {
-		return fmt.Errorf("receive guest file write terminal: %w", err)
+		return fmt.Errorf("write guest file: %w", err)
 	}
-	fileFrame := response.GetFile()
-	if err := validateGuestFileResponseBinding(fileFrame, binding, 1); err != nil {
-		return err
-	}
-	terminal := fileFrame.GetTerminal()
+	terminal := result.Terminal
 	if terminal == nil || terminal.Kind != guestv1.FileTerminalKind_FILE_TERMINAL_KIND_COMPLETED {
 		return fmt.Errorf("guest file write failed: %s", terminal.GetSafeDetail())
 	}

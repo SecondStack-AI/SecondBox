@@ -1,7 +1,6 @@
 package firecracker
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +8,8 @@ import (
 
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
 )
+
+const guestFileWriteChunkSize = 64 << 10
 
 type GuestFileOperationResult struct {
 	Metadata *guestv1.FileMetadata
@@ -34,6 +35,21 @@ func (sender *guestFileOperationSender) send(frame *guestv1.FileFrame) error {
 	return sender.session.Stream.Send(&guestv1.RunnerToGuest{
 		Message: &guestv1.RunnerToGuest_File{File: frame},
 	})
+}
+
+func (sender *guestFileOperationSender) sendWriteContent(content []byte) error {
+	for offset := 0; offset < len(content); offset += guestFileWriteChunkSize {
+		end := min(offset+guestFileWriteChunkSize, len(content))
+		if err := sender.send(&guestv1.FileFrame{
+			Payload: &guestv1.FileFrame_Chunk{Chunk: &guestv1.FileChunk{
+				Offset: uint64(offset),
+				Data:   content[offset:end],
+			}},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ExecuteFileOperation performs one serialized descriptor-pinned filesystem
@@ -80,13 +96,8 @@ func (s *GuestProtocolSession) ExecuteFileOperation(
 	sender := &guestFileOperationSender{
 		session: s, binding: binding, nextSequence: 2,
 	}
-	if request.Operation == guestv1.FileOperation_FILE_OPERATION_WRITE && len(content) > 0 {
-		if err := sender.send(&guestv1.FileFrame{
-			Payload: &guestv1.FileFrame_Chunk{Chunk: &guestv1.FileChunk{
-				Offset: 0,
-				Data:   bytes.Clone(content),
-			}},
-		}); err != nil {
+	if request.Operation == guestv1.FileOperation_FILE_OPERATION_WRITE {
+		if err := sender.sendWriteContent(content); err != nil {
 			return GuestFileOperationResult{}, fmt.Errorf("send guest file write content: %w", err)
 		}
 	}
