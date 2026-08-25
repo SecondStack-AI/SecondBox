@@ -120,7 +120,7 @@ production composition may depend on it.
   relay through the guest agent's port feature over the agent transport. If host-UDS passthrough
   proves unreliable, record a veth-TCP fallback with the same proofs; the selected transport
   becomes the single transport Task 2H implements.
-- [ ] Create a per-Instance network namespace with a routed veth pair and NAT egress, run runsc
+- [x] Create a per-Instance network namespace with a routed veth pair and NAT egress, run runsc
   with its netstack attached to that device, and enforce an inet-family nftables translation of
   one `deny_all` policy and a representative domain/port allow-list with DNS pinning: allowed
   request, denied request, DNS change, private-address target, and metadata target. Prove the
