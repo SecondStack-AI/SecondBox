@@ -2,6 +2,7 @@ package install
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -104,8 +105,17 @@ func TestProposeExistingFilesystemPlanIsCompleteAndExplicit(t *testing.T) {
 	if plan.Compute.FirecrackerCPUTemplate != SingleHostFirecrackerCPUTemplate {
 		t.Fatalf("compute plan = %#v", plan.Compute)
 	}
-	if len(plan.SecretTargets) != 8 {
+	if len(plan.SecretTargets) != 7 {
 		t.Fatalf("secret targets = %#v", plan.SecretTargets)
+	}
+	retiredCategory := "application-" + "authority"
+	for _, target := range plan.SecretTargets {
+		if target.Category == retiredCategory {
+			t.Fatalf("retired application secret target remains: %#v", target)
+		}
+	}
+	if slices.Contains(plan.GeneratedAuthorityCategories, retiredCategory) {
+		t.Fatalf("retired generated authority category remains: %#v", plan.GeneratedAuthorityCategories)
 	}
 	workspace, found := plannedPathByName(plan.Paths, "workspace")
 	if !found || workspace.OwnerUID != runnerContainerUID || workspace.OwnerGID != runnerContainerGID {

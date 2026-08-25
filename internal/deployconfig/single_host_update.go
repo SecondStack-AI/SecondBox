@@ -96,7 +96,7 @@ func singleHostUpdateContents(plan install.InstallPlan, update install.UpdateRec
 	catalogPath := installPath(plan, "signed-asset-catalog")
 	releasePath := installPath(plan, "release-artifact-manifest")
 	pkiPath := installPath(plan, "runner-pki")
-	manifest, err := singleHostManifest(plan, verified.Manifest, artifact.SigningKeyID, runnerID, installPath(plan, "runner-identity"), relativeTarget("database-password"), relativeTarget("platform-authority"), relativeTarget("runner-enrollment"), relativeTarget("application-authority"), relativeTo(deployment, catalogPath), relativeTo(deployment, releasePath), relativeTo(deployment, pkiPath))
+	manifest, err := singleHostManifest(plan, verified.Manifest, artifact.SigningKeyID, runnerID, installPath(plan, "runner-identity"), relativeTarget("database-password"), relativeTarget("platform-authority"), relativeTarget("runner-enrollment"), relativeTo(deployment, catalogPath), relativeTo(deployment, releasePath), relativeTo(deployment, pkiPath))
 	if err != nil {
 		return nil, nil, err
 	}

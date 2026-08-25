@@ -7,7 +7,7 @@ binary_dir="$repo_root/.tmp/compose-test"
 project_name="secondbox-compose-test-$$"
 network_name="$project_name-network"
 
-for command in curl docker go node openssl; do
+for command in curl docker go jq node openssl; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "SecondBox Compose test prerequisite missing: $command" >&2
     exit 1
@@ -148,6 +148,61 @@ if ! compose exec -T postgres psql \
   exit 1
 fi
 
+bootstrap_expiry="$(node -e 'process.stdout.write(new Date(Date.now() + 3600000).toISOString())')"
+bootstrap_tenant="sdk-live"
+bootstrap_subject="sdk-live-subject"
+platform_token="compose-test-platform-token-0000000000000000"
+
+management_post() {
+  local token="$1"
+  local path="$2"
+  local idempotency_key="$3"
+  local body="$4"
+  curl --fail-with-body --silent --show-error \
+    --request POST \
+    --header "Authorization: Bearer $token" \
+    --header "Content-Type: application/json" \
+    --header "Idempotency-Key: $idempotency_key" \
+    --data "$body" \
+    "$live_base_url$path"
+}
+
+management_post "$platform_token" /v1/tenants compose-bootstrap-tenant "$(jq -cn \
+  --arg ref "$bootstrap_tenant" \
+  '{ref:$ref,allowedProfileGrants:["go-sdk-live","typescript-sdk-live"],allowedApplicationScopes:["sandbox:read","sandbox:lifecycle"],aggregateQuota:{maxSandboxes:10,maxActiveInstances:10,maxCpuMillis:10000,maxMemoryBytes:10737418240,maxSnapshots:10,maxPortSessions:10,maxConcurrentOperations:10,maxActiveSubjects:2,maxApplicationAuthorities:2},expiryPolicy:{maximumSubjectLifetimeSeconds:3600,maximumAuthorityLifetimeSeconds:3600},metadata:{harness:"compose"}}')" >/dev/null
+
+controller_response="$(management_post "$platform_token" "/v1/tenants/$bootstrap_tenant/controller-authorities" compose-bootstrap-controller "$(jq -cn --arg expiresAt "$bootstrap_expiry" '{expiresAt:$expiresAt,metadata:{harness:"compose"}}')")"
+controller_token="$(jq -er '.bearerToken' <<<"$controller_response")"
+
+management_post "$controller_token" /v1/subjects compose-bootstrap-subject "$(jq -cn \
+  --arg ref "$bootstrap_subject" \
+  '{ref:$ref,quota:{maxSandboxes:10,maxActiveInstances:10,maxCpuMillis:10000,maxMemoryBytes:10737418240,maxSnapshots:10,maxPortSessions:10,maxConcurrentOperations:10},metadata:{harness:"compose"}}')" >/dev/null
+
+application_response="$(management_post "$controller_token" /v1/application-authorities compose-bootstrap-application "$(jq -cn \
+  --arg subjectRef "$bootstrap_subject" \
+  --arg expiresAt "$bootstrap_expiry" \
+  '{subjectRef:$subjectRef,scopes:["sandbox:read","sandbox:lifecycle"],profileGrants:["go-sdk-live","typescript-sdk-live"],expiresAt:$expiresAt,metadata:{harness:"compose"}}')")"
+application_token="$(jq -er '.bearerToken' <<<"$application_response")"
+
+create_live_profile() {
+  local name="$1"
+  local body
+  body="$(jq -cn \
+    --arg name "$name" \
+    '{name:$name,spec:{pool:"compose-live-pool",architecture:"amd64",runtimeBundleDigest:("sha256:"+("a"*64)),toolchainBundleDigest:("sha256:"+("b"*64)),resources:{cpuMillis:1000,memoryBytes:1073741824,workspaceBytes:8589934592,processLimit:128,concurrentOperations:4},startup:{mode:"cold_boot"},lifecycle:{initialState:"stopped",drainGraceSeconds:30,idleSeconds:300,maximumDurationSeconds:3600,leaseSeconds:60},retention:{snapshotLimit:8,snapshotRetentionSeconds:86400},execution:{maximumDeadlineMilliseconds:60000,maximumBufferedOutputBytes:1048576,streamWindowBytes:65536,maximumTransferBytes:1073741824,terminalDetachSeconds:30,dataPlaneTransport:"proxied"},network:{mode:"deny_all",destinations:[]},ports:[]}}')"
+  curl --fail-with-body --silent --show-error \
+    --request POST \
+    --header "Authorization: Bearer $platform_token" \
+    --header "X-SecondBox-Tenant-Ref: $bootstrap_tenant" \
+    --header "X-SecondBox-Subject-Ref: $bootstrap_subject" \
+    --header "Content-Type: application/json" \
+    --header "Idempotency-Key: compose-bootstrap-profile-$name" \
+    --data "$body" \
+    "$live_base_url/v1/profiles" >/dev/null
+}
+create_live_profile go-sdk-live
+create_live_profile typescript-sdk-live
+
 refresh_fixture_runner() {
   local half="$1"
   local refreshed
@@ -166,7 +221,9 @@ refresh_fixture_runner() {
 }
 
 export SECONDBOX_LIVE_BASE_URL="$live_base_url"
-export SECONDBOX_LIVE_PLATFORM_TOKEN="compose-test-platform-token-0000000000000000"
+export SECONDBOX_LIVE_APPLICATION_TOKEN="$application_token"
+export SECONDBOX_LIVE_TENANT_REF="$bootstrap_tenant"
+export SECONDBOX_LIVE_SUBJECT_REF="$bootstrap_subject"
 refresh_fixture_runner Go
 "$go_live_test" -test.v
 refresh_fixture_runner TypeScript

@@ -79,8 +79,7 @@ type RunnerTrust struct {
 }
 
 type Applications struct {
-	PlatformTokenFile          string `toml:"platform_token_file"`
-	ApplicationAuthoritiesFile string `toml:"application_authorities_file"`
+	PlatformTokenFile string `toml:"platform_token_file"`
 }
 
 type Policy struct {

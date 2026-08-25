@@ -40,7 +40,6 @@ certificate_lifetime_days = 825
 
 [applications]
 platform_token_file = 'secrets/platform-token'
-application_authorities_file = 'secrets/application-authorities.json'
 
 [policy]
 # Data-plane session, result, and idempotency retention deadline.

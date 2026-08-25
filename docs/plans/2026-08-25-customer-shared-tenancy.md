@@ -87,11 +87,11 @@ Turn the contract and persisted credentials into a usable customer management pl
 
 Delegated management can now mint credentials, so remove the static authority path in one slice that leaves every deployment, Compose, installer, and test surface green. No import, compatibility, fallback, or dual-source mode may remain after this task.
 
-- [ ] Remove in-memory static application-authority resolution, `SECONDBOX_APPLICATION_AUTHORITIES_JSON`, and any process-start parsing or runtime fallback to an authority file.
-- [ ] Remove `applications.application_authorities_file` from the deployment manifest, example manifests, resolved deployment state, Compose environment, secret inventory, diagnostics, installer planning, and update logic.
-- [ ] Rework `deploy/compose.yml`, `scripts/compose-test.yml`, and `scripts/scenario-compose.yml` so composed environments bootstrap tenants, controllers, subjects, and application authorities through authenticated management operations after startup.
-- [ ] Replace store-level credential seeding in earlier integration coverage with management-operation bootstrap so no test depends on private store access.
-- [ ] Update deployment, installer, Compose, CLI, configuration-surface, diagnostics, support-bundle, and source-free package tests to prove the retired secret has disappeared completely.
+- [x] Remove in-memory static application-authority resolution, `SECONDBOX_APPLICATION_AUTHORITIES_JSON`, and any process-start parsing or runtime fallback to an authority file.
+- [x] Remove `applications.application_authorities_file` from the deployment manifest, example manifests, resolved deployment state, Compose environment, secret inventory, diagnostics, installer planning, and update logic.
+- [x] Rework `deploy/compose.yml`, `scripts/compose-test.yml`, and `scripts/scenario-compose.yml` so composed environments bootstrap tenants, controllers, subjects, and application authorities through authenticated management operations after startup.
+- [x] Replace store-level credential seeding in earlier integration coverage with management-operation bootstrap so no test depends on private store access.
+- [x] Update deployment, installer, Compose, CLI, configuration-surface, diagnostics, support-bundle, and source-free package tests to prove the retired secret has disappeared completely.
 
 ### Task 5: Enforce tenant aggregate and subject quota atomically
 

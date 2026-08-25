@@ -1,11 +1,7 @@
 package api
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
-	"errors"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -25,93 +21,14 @@ const (
 	applicationScopeSandboxPortsDirect = "sandbox:ports:direct"
 )
 
-var applicationProfileNamePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,79}$`)
-
-// ApplicationAuthority binds one bearer credential to a fixed SecondBox ownership and capability scope.
-type ApplicationAuthority struct {
-	ID            string
-	Token         string
-	TenantRef     string
-	SubjectRef    string
-	Scopes        []string
-	ProfileGrants []string
-}
-
 type applicationAuthorityContextKey struct{}
 
 type resolvedApplicationAuthority struct {
 	id            string
-	tokenHash     [sha256.Size]byte
 	tenantRef     string
 	subjectRef    string
 	scopes        []string
 	profileGrants []string
-}
-
-func resolveApplicationAuthorities(
-	authorities []ApplicationAuthority,
-	platformTokenHash [sha256.Size]byte,
-) ([]resolvedApplicationAuthority, error) {
-	resolved := make([]resolvedApplicationAuthority, 0, len(authorities))
-	identifiers := map[string]struct{}{}
-	tokenHashes := map[[sha256.Size]byte]struct{}{platformTokenHash: {}}
-	for _, authority := range authorities {
-		if !ownershipRefPattern.MatchString(authority.ID) ||
-			!ownershipRefPattern.MatchString(authority.TenantRef) ||
-			!ownershipRefPattern.MatchString(authority.SubjectRef) {
-			return nil, errors.New("SecondBox application authority identity and ownership references must contain 1 to 128 visible ASCII characters")
-		}
-		if len(authority.Token) < 24 {
-			return nil, errors.New("SecondBox application authority token must contain at least 24 bytes")
-		}
-		if len(authority.Scopes) == 0 || len(authority.Scopes) > 7 {
-			return nil, errors.New("SecondBox application authority requires between 1 and 7 scopes")
-		}
-		if len(authority.ProfileGrants) == 0 || len(authority.ProfileGrants) > 32 {
-			return nil, errors.New("SecondBox application authority requires between 1 and 32 Profile grants")
-		}
-		if _, duplicate := identifiers[authority.ID]; duplicate {
-			return nil, errors.New("SecondBox application authority identifiers must be unique")
-		}
-		identifiers[authority.ID] = struct{}{}
-		tokenHash := sha256.Sum256([]byte(authority.Token))
-		if _, duplicate := tokenHashes[tokenHash]; duplicate {
-			return nil, errors.New("SecondBox application authority tokens must be unique and differ from the platform token")
-		}
-		tokenHashes[tokenHash] = struct{}{}
-		scopes := append([]string(nil), authority.Scopes...)
-		slices.Sort(scopes)
-		if slices.ContainsFunc(scopes, func(scope string) bool {
-			return !isApplicationScope(scope)
-		}) || hasAdjacentDuplicate(scopes) {
-			return nil, errors.New("SecondBox application authority contains an invalid or duplicate scope")
-		}
-		profileGrants := append([]string(nil), authority.ProfileGrants...)
-		slices.Sort(profileGrants)
-		if slices.ContainsFunc(profileGrants, func(profile string) bool {
-			return !applicationProfileNamePattern.MatchString(profile)
-		}) || hasAdjacentDuplicate(profileGrants) {
-			return nil, errors.New("SecondBox application authority contains an invalid or duplicate Profile grant")
-		}
-		resolved = append(resolved, resolvedApplicationAuthority{
-			id: authority.ID, tokenHash: tokenHash,
-			tenantRef: authority.TenantRef, subjectRef: authority.SubjectRef,
-			scopes: scopes, profileGrants: profileGrants,
-		})
-	}
-	return resolved, nil
-}
-
-func authenticateApplicationAuthority(
-	authorities []resolvedApplicationAuthority,
-	presentedHash [sha256.Size]byte,
-) (resolvedApplicationAuthority, bool) {
-	for _, authority := range authorities {
-		if subtle.ConstantTimeCompare(presentedHash[:], authority.tokenHash[:]) == 1 {
-			return authority, true
-		}
-	}
-	return resolvedApplicationAuthority{}, false
 }
 
 func authorizeApplicationRequest(
@@ -192,15 +109,6 @@ func applicationRequestScope(method string, pattern string) (string, bool) {
 	}
 }
 
-func isApplicationScope(scope string) bool {
-	return scope == applicationScopeSandboxRead ||
-		scope == applicationScopeSandboxLifecycle ||
-		scope == applicationScopeSandboxExec ||
-		scope == applicationScopeSandboxFiles ||
-		scope == applicationScopeSandboxPorts ||
-		scope == applicationScopeSandboxPortsDirect
-}
-
 // portTransportForRequest resolves which Port transport this caller may receive.
 // The direct transport is denied by default: a request carrying no application
 // authority, or an authority without the exact scope, receives the proxied
@@ -214,13 +122,4 @@ func portTransportForRequest(request *http.Request) string {
 		return contracts.PortTransportProxied
 	}
 	return contracts.PortTransportDirect
-}
-
-func hasAdjacentDuplicate(values []string) bool {
-	for index := 1; index < len(values); index++ {
-		if values[index] == values[index-1] {
-			return true
-		}
-	}
-	return false
 }

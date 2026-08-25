@@ -20,6 +20,7 @@ import (
 
 type lifecycleDriver struct {
 	config          lifecycleConfig
+	admin           *secondboxclient.Client
 	client          *secondboxclient.Client
 	runtimeDigest   string
 	toolchainDigest string
@@ -54,7 +55,7 @@ func (driver *lifecycleDriver) pollInterval() time.Duration {
 
 func (driver *lifecycleDriver) prepare(ctx context.Context) error {
 	pool, err := scenarioharness.RequestJSON[secondboxclient.RunnerPool](
-		ctx, driver.client, "createRunnerPool", secondboxclient.CallOptions{
+		ctx, driver.admin, "createRunnerPool", secondboxclient.CallOptions{
 			Body: scenarioharness.JSONBody(secondboxclient.CreateRunnerPoolRequest{
 				Name: driver.config.RunnerPoolName, State: "ready",
 				Architectures: []string{"amd64"},
@@ -71,7 +72,7 @@ func (driver *lifecycleDriver) prepare(ctx context.Context) error {
 		return fmt.Errorf("SecondBox lifecycle create RunnerPool failed: %w", err)
 	}
 	profile, err := scenarioharness.RequestJSON[secondboxclient.Profile](
-		ctx, driver.client, "createProfile", secondboxclient.CallOptions{
+		ctx, driver.admin, "createProfile", secondboxclient.CallOptions{
 			Headers: scenarioharness.IdempotencyHeaders("lifecycle-prepare-profile"),
 			Body: scenarioharness.JSONBody(secondboxclient.CreateProfileRequest{
 				Name: driver.config.ProfileName,
@@ -128,7 +129,7 @@ func (driver *lifecycleDriver) waitForRunner(ctx context.Context) error {
 	deadline := time.Now().Add(time.Duration(driver.config.OperationTimeoutSeconds) * time.Second)
 	for time.Now().Before(deadline) {
 		page, err := scenarioharness.RequestJSON[secondboxclient.RunnerPage](
-			ctx, driver.client, "listRunners", secondboxclient.CallOptions{
+			ctx, driver.admin, "listRunners", secondboxclient.CallOptions{
 				QueryParameters: url.Values{
 					"pool": {driver.config.RunnerPoolName}, "limit": {"200"},
 				},

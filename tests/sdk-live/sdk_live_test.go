@@ -14,8 +14,6 @@ import (
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 )
 
-const composeRunnerPoolName = "compose-live-pool"
-
 func TestGoSDKLiveControlPlaneContract(t *testing.T) {
 	fixture := newGoLiveSubjectFixture(t)
 	applicationClient := fixture.applicationClient
@@ -73,19 +71,19 @@ type goLiveSubjectFixture struct {
 func newGoLiveSubjectFixture(t *testing.T) goLiveSubjectFixture {
 	t.Helper()
 	baseURL := requireLiveTestEnvironment(t, "SECONDBOX_LIVE_BASE_URL")
-	platformToken := requireLiveTestEnvironment(t, "SECONDBOX_LIVE_PLATFORM_TOKEN")
+	applicationToken := requireLiveTestEnvironment(t, "SECONDBOX_LIVE_APPLICATION_TOKEN")
+	tenantRef := requireLiveTestEnvironment(t, "SECONDBOX_LIVE_TENANT_REF")
+	subjectRef := requireLiveTestEnvironment(t, "SECONDBOX_LIVE_SUBJECT_REF")
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
 	applicationClient, err := secondboxclient.NewSecondBoxSubjectClient(
-		baseURL, platformToken, "sdk-live-go", "sdk-live-go-subject", httpClient,
+		baseURL, applicationToken, tenantRef, subjectRef, httpClient,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	profileName := secondboxclient.ProfileName("go-sdk-live")
-	profile, err := applicationClient.CreateProfile(t.Context(), secondboxclient.CreateProfileRequest{
-		Name: profileName, Spec: liveProfileRevisionSpec(),
-	}, "go-create-profile")
+	profile, err := applicationClient.GetProfile(t.Context(), profileName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,34 +104,4 @@ func requireLiveTestEnvironment(t *testing.T, name string) string {
 		t.Fatalf("SecondBox live SDK test requires %s", name)
 	}
 	return value
-}
-
-func liveProfileRevisionSpec() secondboxclient.ProfileRevisionSpec {
-	return secondboxclient.ProfileRevisionSpec{
-		Pool:                  composeRunnerPoolName,
-		Architecture:          "amd64",
-		RuntimeBundleDigest:   "sha256:" + strings.Repeat("a", 64),
-		ToolchainBundleDigest: "sha256:" + strings.Repeat("b", 64),
-		Resources: secondboxclient.ResourcePolicy{
-			CPUMillis: 1000, MemoryBytes: 1 << 30, WorkspaceBytes: 8 << 30,
-			ProcessLimit: 128, ConcurrentOperations: 4,
-		},
-		Startup: secondboxclient.StartupPolicy{Mode: secondboxclient.StartupModeColdBoot},
-		Lifecycle: secondboxclient.LifecyclePolicy{
-			InitialState: "stopped", DrainGraceSeconds: 30, IdleSeconds: 300,
-			MaximumDurationSeconds: 3600, LeaseSeconds: 60,
-		},
-		Retention: secondboxclient.RetentionPolicy{
-			SnapshotLimit: 8, SnapshotRetentionSeconds: 86400,
-		},
-		Execution: secondboxclient.ExecutionPolicy{
-			MaximumDeadlineMilliseconds: 60000, MaximumBufferedOutputBytes: 1 << 20,
-			StreamWindowBytes: 65536, MaximumTransferBytes: 1 << 30,
-			TerminalDetachSeconds: 30, DataPlaneTransport: "proxied",
-		},
-		Network: secondboxclient.NetworkPolicy{
-			Mode: "deny_all", Destinations: []secondboxclient.NetworkDestination{},
-		},
-		Ports: []secondboxclient.PortPolicy{},
-	}
 }

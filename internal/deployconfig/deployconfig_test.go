@@ -65,6 +65,14 @@ func TestDevelopmentInitializationAndRenderAreCompleteAndReproducible(t *testing
 			t.Errorf("removed protocol declaration %s was rendered", name)
 		}
 	}
+	retiredEnvironment := "SECONDBOX_APPLICATION_" + "AUTHORITIES_JSON"
+	if _, exists := resolved.Environment[retiredEnvironment]; exists {
+		t.Fatalf("retired static authority environment %s was rendered", retiredEnvironment)
+	}
+	retiredSecret := filepath.Join(filepath.Dir(manifestPath), "secrets", "application-"+"authorities.json")
+	if _, err := os.Lstat(retiredSecret); !os.IsNotExist(err) {
+		t.Fatalf("retired static authority secret remains: %v", err)
+	}
 	first := filepath.Join(filepath.Dir(manifestPath), "generated.env")
 	if _, err := Render(manifestPath, first); err != nil {
 		t.Fatal(err)
@@ -386,6 +394,27 @@ func TestStrictDecodeRejectsUnknownDuplicateAndUnsupportedSchema(t *testing.T) {
 	}
 }
 
+func TestStrictDecodeRejectsRetiredStaticAuthorityManifestKey(t *testing.T) {
+	manifestPath := initializedDevelopment(t)
+	original, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retiredKey := "application_" + "authorities_file"
+	updated := bytes.Replace(
+		original,
+		[]byte("[applications]\n"),
+		[]byte("[applications]\n"+retiredKey+" = 'secrets/retired.json'\n"),
+		1,
+	)
+	if err := os.WriteFile(manifestPath, updated, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadManifest(manifestPath); err == nil {
+		t.Fatalf("retired manifest key error = %v", err)
+	}
+}
+
 func TestManifestValidationRejectsUnsafeDeploymentInputs(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -584,14 +613,6 @@ func TestCredentialsRemainSeparateAcrossTrustBoundaries(t *testing.T) {
 	for name, writeCollision := range map[string]func(string, ManifestV1, []byte) error{
 		"platform token": func(base string, manifest ManifestV1, runnerCredential []byte) error {
 			return os.WriteFile(filepath.Join(base, manifest.Applications.PlatformTokenFile), runnerCredential, 0o600)
-		},
-		"application authority token": func(base string, manifest ManifestV1, runnerCredential []byte) error {
-			authorities := []map[string]any{{"id": "review", "token": strings.TrimSpace(string(runnerCredential)), "tenantRef": "tenant", "subjectRef": "subject", "scopes": []string{"sandbox:read"}, "profileGrants": []string{"agent-compartment"}}}
-			content, err := json.Marshal(authorities)
-			if err != nil {
-				return err
-			}
-			return os.WriteFile(filepath.Join(base, manifest.Applications.ApplicationAuthoritiesFile), append(content, '\n'), 0o600)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

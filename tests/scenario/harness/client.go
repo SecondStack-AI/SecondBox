@@ -23,6 +23,7 @@ type Clients struct {
 func NewClients(
 	baseURL string,
 	platformToken string,
+	applicationToken string,
 	tenantRef string,
 	subjectRef string,
 	timeout time.Duration,
@@ -34,7 +35,7 @@ func NewClients(
 	}
 	subject, err := secondboxclient.NewSecondBoxSubjectClient(
 		baseURL,
-		platformToken,
+		applicationToken,
 		tenantRef,
 		subjectRef,
 		httpClient,

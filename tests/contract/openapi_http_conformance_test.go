@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/SecondStack-AI/SecondBox/internal/api"
+	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/internal/service"
 )
 
@@ -179,12 +180,7 @@ func TestManagementRoutesFailClosedAtTheirAuthorityBoundary(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	httpHandler, err := api.NewHandler(api.HandlerConfig{
 		Service: &service.ControlPlaneService{}, Logger: logger,
-		PlatformToken: "contract-platform-token-at-least-24-bytes",
-		ApplicationAuthorities: []api.ApplicationAuthority{{
-			ID: "contract-application", Token: "contract-application-token-at-least-24-bytes",
-			TenantRef: "tenant-one", SubjectRef: "subject-one",
-			Scopes: []string{"sandbox:read"}, ProfileGrants: []string{"standard"},
-		}},
+		PlatformToken:             "contract-platform-token-at-least-24-bytes",
 		MaximumDataPlaneBodyBytes: 1024,
 	})
 	if err != nil {
@@ -197,8 +193,8 @@ func TestManagementRoutesFailClosedAtTheirAuthorityBoundary(t *testing.T) {
 		token string
 	}{
 		{name: "platform cannot escalate to tenant controller", path: "/v1/subjects", token: "contract-platform-token-at-least-24-bytes"},
-		{name: "application cannot escalate to tenant controller", path: "/v1/subjects", token: "contract-application-token-at-least-24-bytes"},
-		{name: "application cannot escalate to platform", path: "/v1/tenants", token: "contract-application-token-at-least-24-bytes"},
+		{name: "application cannot escalate to tenant controller", path: "/v1/subjects", token: ports.ApplicationBearerTokenPrefix + "contract-application-token-material"},
+		{name: "application cannot escalate to platform", path: "/v1/tenants", token: ports.ApplicationBearerTokenPrefix + "contract-application-token-material"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, test.path, nil)

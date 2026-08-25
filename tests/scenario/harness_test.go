@@ -48,11 +48,15 @@ func newScenarioFixture(t *testing.T) scenarioFixture {
 	t.Helper()
 	baseURL := requireScenarioEnvironment(t, "SECONDBOX_LIVE_BASE_URL")
 	platformToken := requireScenarioEnvironment(t, "SECONDBOX_PLATFORM_TOKEN")
+	applicationToken := requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_APPLICATION_TOKEN")
+	tenantRef := requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_TENANT_REF")
+	subjectRef := requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_SUBJECT_REF")
 	clients, err := scenarioharness.NewClients(
 		baseURL,
 		platformToken,
-		"scenario-tenant",
-		"scenario-subject",
+		applicationToken,
+		tenantRef,
+		subjectRef,
 		70*time.Second,
 	)
 	if err != nil {

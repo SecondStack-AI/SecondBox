@@ -16,6 +16,7 @@ import (
 type runtimeInputs struct {
 	baseURL          string
 	platformToken    string
+	applicationToken string
 	runtimeDigest    string
 	toolchainDigest  string
 	sourceCommit     string
@@ -67,6 +68,7 @@ func runMain(arguments []string) error {
 	clients, err := scenarioharness.NewClients(
 		inputs.baseURL,
 		inputs.platformToken,
+		inputs.applicationToken,
 		config.TenantRef,
 		config.SubjectRef,
 		time.Duration(config.RequestTimeoutMilliseconds)*time.Millisecond,
@@ -75,7 +77,7 @@ func runMain(arguments []string) error {
 		return err
 	}
 	driver := &stressDriver{
-		config: config, client: clients.Subject,
+		config: config, admin: clients.Admin, client: clients.Subject,
 		runtimeDigest: inputs.runtimeDigest, toolchainDigest: inputs.toolchainDigest,
 		guestCIDR: inputs.guestCIDR, bootStages: make(map[string][]time.Duration),
 	}
@@ -177,6 +179,9 @@ func readRuntimeInputs(mode string) (runtimeInputs, error) {
 		return runtimeInputs{}, err
 	}
 	if inputs.platformToken, err = required("SECONDBOX_PLATFORM_TOKEN"); err != nil {
+		return runtimeInputs{}, err
+	}
+	if inputs.applicationToken, err = required("SECONDBOX_SCENARIO_APPLICATION_TOKEN"); err != nil {
 		return runtimeInputs{}, err
 	}
 	if inputs.runtimeDigest, err = required("SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST"); err != nil {

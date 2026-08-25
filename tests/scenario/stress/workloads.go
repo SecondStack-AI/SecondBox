@@ -36,7 +36,7 @@ func (driver *stressDriver) run(
 		}
 	}
 	summary, err := scenarioharness.RequestJSON[secondboxclient.DeploymentTimingSummary](
-		ctx, driver.client, "getDeploymentTiming", secondboxclient.CallOptions{
+		ctx, driver.admin, "getDeploymentTiming", secondboxclient.CallOptions{
 			QueryParameters: url.Values{
 				"windowSeconds": {strconv.Itoa(driver.config.TimingWindowSeconds)},
 			},

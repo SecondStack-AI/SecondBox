@@ -237,7 +237,6 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 	httpHandler, err := api.NewHandler(api.HandlerConfig{
 		Service: controlPlane, Logger: logger,
 		PlatformToken:             processConfig.PlatformToken,
-		ApplicationAuthorities:    applicationAuthorities(processConfig.ApplicationAuthorities),
 		PersistedAuthorities:      controlPlaneStore,
 		MaximumDataPlaneBodyBytes: processConfig.DataPlaneMaximumSessionBytes,
 	})
@@ -464,18 +463,6 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		return fmt.Errorf("SecondBox coordinated server shutdown: %w", err)
 	}
 	return nil
-}
-
-func applicationAuthorities(configured []config.ApplicationAuthority) []api.ApplicationAuthority {
-	authorities := make([]api.ApplicationAuthority, 0, len(configured))
-	for _, authority := range configured {
-		authorities = append(authorities, api.ApplicationAuthority{
-			ID: authority.ID, Token: authority.Token,
-			TenantRef: authority.TenantRef, SubjectRef: authority.SubjectRef,
-			Scopes: authority.Scopes, ProfileGrants: authority.ProfileGrants,
-		})
-	}
-	return authorities
 }
 
 func runDataPlaneSweeper(

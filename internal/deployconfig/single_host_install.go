@@ -158,13 +158,6 @@ func InitSingleHostFromRelease(plan install.InstallPlan, release releasecontract
 	if err != nil {
 		return SingleHostInstallResult{}, err
 	}
-	applicationAuthorities := targets["application-authority"]
-	if applicationAuthorities == "" {
-		return SingleHostInstallResult{}, manifestError("single-host application authority target is absent", nil)
-	}
-	if err := write(applicationAuthorities, []byte("[]\n"), 0o600); err != nil {
-		return SingleHostInstallResult{}, err
-	}
 	if err := generateTrackedRunnerPKI(pki, &created, generateRunnerPKI); err != nil {
 		return SingleHostInstallResult{}, err
 	}
@@ -193,7 +186,7 @@ func InitSingleHostFromRelease(plan install.InstallPlan, release releasecontract
 		return SingleHostInstallResult{}, err
 	}
 
-	manifest, err := singleHostManifest(plan, release, verified.SigningKeyID, runnerID, runnerIdentity, postgresPassword, platformToken, runnerCredential, relativeTo(deployment, applicationAuthorities), relativeTo(deployment, catalogPath), relativeTo(deployment, releasePath), relativeTo(deployment, pki))
+	manifest, err := singleHostManifest(plan, release, verified.SigningKeyID, runnerID, runnerIdentity, postgresPassword, platformToken, runnerCredential, relativeTo(deployment, catalogPath), relativeTo(deployment, releasePath), relativeTo(deployment, pki))
 	if err != nil {
 		return SingleHostInstallResult{}, err
 	}
@@ -314,7 +307,7 @@ func validateExistingSingleHostInstall(plan install.InstallPlan, release release
 	catalogPath := installPath(plan, "signed-asset-catalog")
 	releasePath := installPath(plan, "release-artifact-manifest")
 	pkiPath := installPath(plan, "runner-pki")
-	expectedManifest, err := singleHostManifest(plan, release, verified.SigningKeyID, runnerID, runnerIdentity, relativeTarget("database-password"), relativeTarget("platform-authority"), relativeTarget("runner-enrollment"), relativeTarget("application-authority"), relativeTo(deployment, catalogPath), relativeTo(deployment, releasePath), relativeTo(deployment, pkiPath))
+	expectedManifest, err := singleHostManifest(plan, release, verified.SigningKeyID, runnerID, runnerIdentity, relativeTarget("database-password"), relativeTarget("platform-authority"), relativeTarget("runner-enrollment"), relativeTo(deployment, catalogPath), relativeTo(deployment, releasePath), relativeTo(deployment, pkiPath))
 	if err != nil {
 		return SingleHostInstallResult{}, err
 	}
@@ -368,7 +361,7 @@ func readSingleHostPlannedFile(plan install.InstallPlan, name string) ([]byte, e
 	return os.ReadFile(path)
 }
 
-func singleHostManifest(plan install.InstallPlan, release releasecontract.ArtifactManifest, signingKeyID, runnerID, runnerIdentity, postgresPassword, platformToken, runnerCredential, applicationAuthorities, catalogPath, releasePath, pkiPath string) (ManifestV1, error) {
+func singleHostManifest(plan install.InstallPlan, release releasecontract.ArtifactManifest, signingKeyID, runnerID, runnerIdentity, postgresPassword, platformToken, runnerCredential, catalogPath, releasePath, pkiPath string) (ManifestV1, error) {
 	apiHost, apiPort, err := splitPlanAddress(plan.Network.APIAddress)
 	if err != nil {
 		return ManifestV1{}, err
@@ -418,7 +411,7 @@ func singleHostManifest(plan install.InstallPlan, release releasecontract.Artifa
 		Deployment:        Deployment{Mode: "development", ComposeProjectName: "secondbox-" + strings.ReplaceAll(strings.TrimPrefix(plan.OperationID, "install_"), "_", "-"), ComposeBackendCIDR: plan.Network.ComposeBackendCIDR, PublicBaseURL: "http://" + plan.Network.APIAddress, TLSTermination: "development-loopback", ControlPlaneImage: release.ControlPlane.Reference, RunnerImage: release.Runner.Reference, PostgresImage: release.BundledServices.Postgres, APIBindIP: apiHost, APIPublishedPort: integer(apiPort), ListenAddress: "0.0.0.0:8080", RunnerBindIP: runnerHost, RunnerPublishedPort: integer(runnerPort), RunnerListenAddress: "0.0.0.0:9443", LogPath: "/var/log/secondbox/control-plane.jsonl", SignedAssetCatalog: catalogPath, SignedAssetCatalogPath: "/etc/secondbox/signed-assets.json", DevelopmentWaitSeconds: integer(300)},
 		Database:          Database{Mode: "bundled", BindIP: databaseHost, PublishedPort: integer(databasePort), Name: "secondbox", User: "secondbox", PasswordFile: postgresPassword},
 		RunnerTrust:       RunnerTrust{EnrollmentCredentialFile: runnerCredential, CACertificateFile: filepath.Join(pkiPath, "runner-ca.crt"), CAPrivateKeyFile: filepath.Join(pkiPath, "runner-ca.key"), ServerCertificateFile: filepath.Join(pkiPath, "server.crt"), ServerPrivateKeyFile: filepath.Join(pkiPath, "server.key"), ServerName: "control-plane", CertificateLifetimeDays: integer(825)},
-		Applications:      Applications{PlatformTokenFile: platformToken, ApplicationAuthoritiesFile: applicationAuthorities},
+		Applications:      Applications{PlatformTokenFile: platformToken},
 		StandardResources: StandardResources{ArtifactManifest: releasePath, Bundles: slices.Clone(plan.StandardBundles), RunnerPools: pools, ApplyWaitSeconds: integer(300)},
 		Policy:            Policy{DataPlaneRetentionSeconds: integer(plan.RetentionSeconds), DataPlanePollIntervalMilliseconds: integer(250), RunnerCommandPollIntervalMilliseconds: integer(250), RunnerEnabledFeatures: strings.Join(features[1:], ","), DefaultSubjectMaxSandboxes: quota("maxSandboxes"), DefaultSubjectMaxActiveInstances: quota("maxActiveInstances"), DefaultSubjectMaxCPUMillis: quota("maxCpuMillis"), DefaultSubjectMaxMemoryBytes: quota("maxMemoryBytes"), DefaultSubjectMaxSnapshots: quota("maxSnapshots"), DefaultSubjectMaxPortSessions: quota("maxPortSessions"), DefaultSubjectMaxConcurrentOperations: quota("maxConcurrentOperations")},
 	}

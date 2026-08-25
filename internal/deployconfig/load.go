@@ -7,7 +7,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -240,14 +239,6 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 		return ResolvedDeployment{}, manifestError("applications.platform_token_file", err)
 	}
 	secretPaths["applications.platform_token_file"] = platformPath
-	authorities, authoritiesPath, err := readSecretReference(base, manifest.Applications.ApplicationAuthoritiesFile)
-	if err != nil {
-		return ResolvedDeployment{}, manifestError("applications.application_authorities_file", err)
-	}
-	var authorityValue []controlconfig.ApplicationAuthority
-	if err := json.Unmarshal([]byte(authorities), &authorityValue); err != nil {
-		return ResolvedDeployment{}, manifestError("applications.application_authorities_file must contain a JSON array", err)
-	}
 	credentials := map[string]string{
 		"applications.platform_token_file":        platformToken,
 		"runner_trust.enrollment_credential_file": credential,
@@ -255,15 +246,10 @@ func resolveManifestWithOptions(manifest ManifestV1, base string, validateSameHo
 	if databasePassword != "" {
 		credentials["database.password_file"] = databasePassword
 	}
-	for i, authority := range authorityValue {
-		credentials[fmt.Sprintf("applications.application_authorities_file[%d].token", i)] = authority.Token
-	}
 	if err := validateDistinctCredentials(credentials); err != nil {
 		return ResolvedDeployment{}, err
 	}
-	secretPaths["applications.application_authorities_file"] = authoritiesPath
 	put("SECONDBOX_PLATFORM_TOKEN", platformToken)
-	put("SECONDBOX_APPLICATION_AUTHORITIES_JSON", authorities)
 
 	addPolicyEnvironment(environment, manifest.Policy)
 	overrides, err := resolvedOverrides(manifest.Overrides)
@@ -450,10 +436,8 @@ func validateManifestShape(manifest ManifestV1) error {
 	if err := requireInt("runner_trust.certificate_lifetime_days", t.CertificateLifetimeDays, false); err != nil {
 		return err
 	}
-	for p, v := range map[string]string{"applications.platform_token_file": manifest.Applications.PlatformTokenFile, "applications.application_authorities_file": manifest.Applications.ApplicationAuthoritiesFile} {
-		if err := require(p, v); err != nil {
-			return err
-		}
+	if err := require("applications.platform_token_file", manifest.Applications.PlatformTokenFile); err != nil {
+		return err
 	}
 	if err := validatePolicy(manifest.Policy); err != nil {
 		return err

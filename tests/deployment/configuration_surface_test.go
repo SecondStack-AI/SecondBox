@@ -1,6 +1,7 @@
 package deployment_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -45,6 +46,38 @@ func TestDeploymentCompilerReplacesLegacyOperatorSurface(t *testing.T) {
 	for _, present := range []string{"deploy/secondbox.example.toml", "deploy/compose.yml", "deploy/compose.development.yml", "deploy/compose.explicit-network.yml", "deploy/compose.bundled-database.yml", "deploy/compose.same-host-runner.yml"} {
 		if _, err := os.Stat(filepath.Join(root, present)); err != nil {
 			t.Errorf("new deployment artifact missing: %s: %v", present, err)
+		}
+	}
+}
+
+func TestStaticApplicationAuthorityConfigurationIsAbsentFromShippedSurfaces(t *testing.T) {
+	root := repositoryRootForDeploymentPolicy(t)
+	retired := [][]byte{
+		[]byte("SECONDBOX_APPLICATION_" + "AUTHORITIES_JSON"),
+		[]byte("application_" + "authorities_file"),
+		[]byte("application-" + "authorities.json"),
+	}
+	for _, directory := range []string{"cmd", "deploy", "internal", "scripts"} {
+		err := filepath.WalkDir(filepath.Join(root, directory), func(path string, entry os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() {
+				return nil
+			}
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			for _, value := range retired {
+				if bytes.Contains(content, value) {
+					t.Errorf("shipped surface %s retains %q", path, value)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
 	}
 }
