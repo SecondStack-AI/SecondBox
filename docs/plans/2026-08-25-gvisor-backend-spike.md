@@ -391,16 +391,16 @@ A second hard gate: every host-proven mechanism must work inside a privileged co
 pod on a Kubernetes node without KVM, before packaging. If a mandatory proof fails, stop the pod
 track, retain evidence, and keep the host profile as the spike's sole qualified deployment.
 
-- [ ] Launch the runsc sandbox from the runner inside the privileged pod: seccomp/SIGSYS
+- [x] Launch the runsc sandbox from the runner inside the privileged pod: seccomp/SIGSYS
   behavior, clean reaping under the pod's PID namespace, and parent-death cleanup.
-- [ ] Prove nested cgroup enforcement: per-sandbox limits apply inside the pod's own resource
+- [x] Prove nested cgroup enforcement: per-sandbox limits apply inside the pod's own resource
   limits, and the pod's limits equal the node's declared sandbox budget without breaking
   per-sandbox classification.
-- [ ] Prove the loop-mount attachment path inside the pod, including mount-namespace containment,
+- [x] Prove the loop-mount attachment path inside the pod, including mount-namespace containment,
   crash reconciliation, and that no mount leaks to the host mount table beyond the pod's scope.
-- [ ] Prove the selected agent transport and the per-Instance network namespace with NAT egress
+- [x] Prove the selected agent transport and the per-Instance network namespace with NAT egress
   through the pod's interface, with the full Task 0H policy matrix repeated.
-- [ ] Record the pod environment — cluster distribution, containerd and kernel versions, pod
+- [x] Record the pod environment — cluster distribution, containerd and kernel versions, pod
   security context, node taints — and all outcomes in the dated evidence document.
 
 #### Task 8P validation

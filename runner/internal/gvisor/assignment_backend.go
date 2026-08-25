@@ -463,7 +463,10 @@ func (backend *AssignmentBackend) StartAssignment(
 		return result, err
 	}
 	networkCleanup := cleanup.push(func() error {
-		return backend.teardownInstanceNetwork(assignment.Fence.InstanceId, network)
+		return errors.Join(
+			backend.teardownInstanceNetwork(assignment.Fence.InstanceId, network),
+			removeInstanceCgroup(assignment.Fence.InstanceId),
+		)
 	})
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_NETWORK_SETUP); err != nil {
 		return result, err
@@ -555,7 +558,7 @@ func (backend *AssignmentBackend) launchInstance(
 		ToolchainDigest:      manifest.Key.ToolchainManifestDigest,
 		VCPUCount:            assignment.Requirements.VcpuCount,
 		MemoryBytes:          assignment.Requirements.MemoryBytes,
-		CgroupsPath:          "/secondbox-gvisor/" + assignment.Fence.InstanceId,
+		CgroupsPath:          instanceCgroupPath(assignment.Fence.InstanceId),
 		NetworkNamespacePath: network.namespacePath(),
 		ResolvConfPath:       resolvConfPath,
 	}); err != nil {
@@ -693,7 +696,8 @@ func (backend *AssignmentBackend) destroyInstance(active *activeAssignment) erro
 	}
 	closeErr := errors.Join(active.handles.CloseParentSide(), active.workspace.Close())
 	networkErr := backend.teardownInstanceNetwork(active.fence.InstanceId, active.network)
-	return errors.Join(closeErr, networkErr, os.RemoveAll(active.instanceDir))
+	return errors.Join(closeErr, networkErr,
+		removeInstanceCgroup(active.fence.InstanceId), os.RemoveAll(active.instanceDir))
 }
 
 // installInstanceNetwork creates the routed per-Instance namespace and
@@ -831,7 +835,8 @@ func (backend *AssignmentBackend) FenceAssignment(
 		}
 	}
 	err = errors.Join(err, active.handles.CloseParentSide(), active.workspace.Close(),
-		backend.teardownInstanceNetwork(active.fence.InstanceId, active.network), os.RemoveAll(active.instanceDir))
+		backend.teardownInstanceNetwork(active.fence.InstanceId, active.network),
+		removeInstanceCgroup(active.fence.InstanceId), os.RemoveAll(active.instanceDir))
 	outcome, terminalKind := "completed", "stopped"
 	if err != nil {
 		outcome, terminalKind = "failed", "cleanup_failed"

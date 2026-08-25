@@ -4,10 +4,14 @@ package gvisor
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
+	"time"
 )
 
 // The backend templates minimal OCI bundles directly: the pinned flat root is
@@ -103,6 +107,106 @@ type instanceBundle struct {
 }
 
 const cgroupCPUPeriodMicros = 100_000
+
+// sandboxCgroupParent resolves where per-Instance cgroups nest: the nearest
+// ancestor of the runner's own cgroup-v2 path that already delegates the cpu
+// and memory controllers to children. Inside a Kubernetes pod that is the
+// pod's slice, so every sandbox counts against the pod budget; a runner in a
+// leaf container namespace or directly on a host resolves to the visible
+// root, matching the flat layout.
+func sandboxCgroupParent() string {
+	content, err := os.ReadFile("/proc/self/cgroup")
+	if err != nil {
+		return "/"
+	}
+	return resolveSandboxCgroupParent(string(content), func(candidate string) string {
+		control, err := os.ReadFile(filepath.Join("/sys/fs/cgroup", candidate, "cgroup.subtree_control"))
+		if err != nil {
+			return ""
+		}
+		return string(control)
+	})
+}
+
+// instanceCgroupPath names the per-Instance cgroup relative to the cgroup
+// filesystem root; launch and teardown must agree on it.
+func instanceCgroupPath(instanceID string) string {
+	return filepath.Join(sandboxCgroupParent(), "secondbox-gvisor", instanceID)
+}
+
+// removeInstanceCgroup sweeps the per-Instance cgroup after compute exit.
+// runsc removes it on an orderly delete, but a forced kill leaves the
+// directory behind, so teardown always sweeps and tolerates absence. The
+// kernel returns EBUSY while the last sandbox processes drain, so removal
+// retries across a short bound before reporting the leak.
+func removeInstanceCgroup(instanceID string) error {
+	path := filepath.Join("/sys/fs/cgroup", instanceCgroupPath(instanceID))
+	var joined error
+	for attempt := 0; attempt < 40; attempt++ {
+		if attempt > 0 {
+			time.Sleep(50 * time.Millisecond)
+		}
+		entries, err := os.ReadDir(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		joined = nil
+		for _, entry := range entries {
+			if entry.IsDir() {
+				joined = errors.Join(joined, os.Remove(filepath.Join(path, entry.Name())))
+			}
+		}
+		err = os.Remove(path)
+		if err == nil || errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		joined = errors.Join(joined, err)
+	}
+	return fmt.Errorf("remove Instance cgroup %s: %w", instanceID, joined)
+}
+
+// reconcileStaleCgroups removes Instance cgroups left by an earlier runner
+// generation; none can be live before this backend launches compute.
+func reconcileStaleCgroups() error {
+	root := filepath.Join("/sys/fs/cgroup", sandboxCgroupParent(), "secondbox-gvisor")
+	entries, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read stale Instance cgroups: %w", err)
+	}
+	var joined error
+	for _, entry := range entries {
+		if entry.IsDir() {
+			joined = errors.Join(joined, removeInstanceCgroup(entry.Name()))
+		}
+	}
+	if err := os.Remove(root); err != nil && !errors.Is(err, os.ErrNotExist) {
+		joined = errors.Join(joined, err)
+	}
+	if joined != nil {
+		return fmt.Errorf("reconcile stale Instance cgroups: %w", joined)
+	}
+	return nil
+}
+
+func resolveSandboxCgroupParent(selfCgroup string, readSubtreeControl func(string) string) string {
+	own := ""
+	for _, line := range strings.Split(selfCgroup, "\n") {
+		if rest, found := strings.CutPrefix(line, "0::"); found {
+			own = rest
+			break
+		}
+	}
+	for current := filepath.Clean("/" + own); current != "/"; current = filepath.Dir(current) {
+		controllers := strings.Fields(readSubtreeControl(current))
+		if slices.Contains(controllers, "cpu") && slices.Contains(controllers, "memory") {
+			return current
+		}
+	}
+	return "/"
+}
 
 func writeInstanceBundle(bundle instanceBundle) error {
 	if bundle.BundleDir == "" || bundle.FlatRootPath == "" || bundle.AgentBinaryPath == "" ||

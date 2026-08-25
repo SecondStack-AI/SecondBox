@@ -133,6 +133,9 @@ test-scenario-microsandbox-macos:
 test-scenario-gvisor:
     scripts/test-scenario-gvisor.sh
 
+test-gvisor-pod:
+    scripts/test-gvisor-pod.sh
+
 prepare-stress:
     scripts/prepare-stress.sh
 

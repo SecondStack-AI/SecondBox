@@ -30,8 +30,8 @@ type Config struct {
 	// it selects the DNS proxy address, the link-local /30 slot space, and
 	// the veth and namespace name spaces. Single-runner hosts keep 0.
 	NetworkProfile uint32
-	WorkspaceRoot         string
-	SelfExecutable        string
+	WorkspaceRoot  string
+	SelfExecutable string
 	// DNSUpstream optionally overrides host-resolver discovery for the
 	// runner DNS proxy, as host:port. Qualification environments use it to
 	// pin a test-owned resolver.
