@@ -311,26 +311,31 @@ relay process exists in this backend.
 Preserve the fail-closed resolved-policy contract — domain rules included — on a routed veth,
 without changing Firecracker behavior.
 
-- [ ] Extract the policy-enforcement core and DNS proxy from the Firecracker package into a
-  shared runner package; Firecracker keeps its bridge-family and ARP rendering and its tests
-  unchanged.
-- [ ] Add an inet-family nftables rendering for routed veth traffic in a per-Instance network
+- [x] Share the policy-enforcement core and DNS proxy by parameterizing the enforcer's script
+  renderer and table-deletion form instead of a package move, which keeps every Firecracker
+  call site, its bridge-family and ARP rendering, and its tests unchanged while gVisor
+  supplies its own rendering. Two latent shared-enforcer defects surfaced and were fixed with
+  regression tests: strictly empty DNS answers (the AAAA half of a dual query) were refused,
+  which strict musl resolvers treat as total lookup failure, and pin expiry compared the
+  query's trailing-dot FQDN against the normalized destination domain, so expired pins were
+  rendered forever. The real-KVM Firecracker smoke suite passes with both fixes.
+- [x] Add an inet-family nftables rendering for routed veth traffic in a per-Instance network
   namespace with NAT egress, matching the rule shape proven in Task 0H. Pass every assignment
   policy through the shared provider-neutral compiler first; reject any rule with no exact
   representation; never omit or broaden.
-- [ ] Prove the agent transport is unreachable from the policed network path and carries no
+- [x] Prove the agent transport is unreachable from the policed network path and carries no
   policy exception, and that Port relay traffic flows only through the agent transport.
-- [ ] Make network readiness prove namespace creation, veth attachment, inet-family rule
+- [x] Make network readiness prove namespace creation, veth attachment, inet-family rule
   programming, and DNS pinning without TAP, bridge, or KVM prerequisites.
-- [ ] Record bounded lifecycle evidence containing runner, Sandbox, Instance, assignment,
+- [x] Record bounded lifecycle evidence containing runner, Sandbox, Instance, assignment,
   generation, sandbox process identity, backend/platform versions, materialization digest, stage,
   and stream ID while excluding environment values, payloads, file contents, and network bodies.
-- [ ] Map unsupported shape or policy to incompatible Profile, absent capacity to capacity
+- [x] Map unsupported shape or policy to incompatible Profile, absent capacity to capacity
   rejection, digest mismatch to artifact rejection, runsc failure to infrastructure failure, and
   agent negotiation or mount failure to guest rejection.
-- [ ] Record exit status, signal, and a bounded stderr/event-tail digest after unexpected exit
+- [x] Record exit status, signal, and a bounded stderr/event-tail digest after unexpected exit
   without inventing attribution the backend cannot observe.
-- [ ] Update operational diagnostics and metrics to distinguish backend and deployment
+- [x] Update operational diagnostics and metrics to distinguish backend and deployment
   environment using fixed-cardinality dimensions.
 
 #### Task 6H validation

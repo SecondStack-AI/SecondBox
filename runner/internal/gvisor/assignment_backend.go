@@ -9,16 +9,20 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/runner/internal/firecracker"
 	guestv1 "github.com/SecondStack-AI/SecondBox/runner/internal/guestprotocol"
+	"github.com/SecondStack-AI/SecondBox/runner/internal/networkpolicy"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnercontrol"
 	"github.com/SecondStack-AI/SecondBox/runner/internal/runnerevidence"
 	runnerprotocol "github.com/SecondStack-AI/SecondBox/runner/internal/runnerprotocol"
@@ -40,6 +44,7 @@ type activeAssignment struct {
 	handles        *SupervisorHandles
 	session        *firecracker.GuestProtocolSession
 	workspace      workspacestore.ComputeAttachment
+	network        instanceNetwork
 	instanceDir    string
 	reservation    capacityReservation
 	backendRef     string
@@ -68,6 +73,8 @@ type AssignmentBackend struct {
 	runnerID          string
 	platformProbe     sync.Once
 	platformProbeErr  error
+	networkSlots      map[uint32]bool
+	enforcer          *firecracker.NFTablesNetworkPolicyEnforcer
 }
 
 type cleanupStack struct {
@@ -154,11 +161,34 @@ func NewAssignmentBackend(config Config) (*AssignmentBackend, error) {
 	if err != nil {
 		return nil, err
 	}
+	nftPath, err := exec.LookPath("nft")
+	if err != nil {
+		return nil, fmt.Errorf("SecondBox gVisor network enforcement requires nft: %w", err)
+	}
+	upstream, err := resolveDNSUpstream(config.DNSUpstream)
+	if err != nil {
+		return nil, err
+	}
+	dnsListen := netip.MustParseAddr(dnsListenAddress)
 	return &AssignmentBackend{
 		config:            validated,
 		assignments:       make(map[string]*activeAssignment),
 		instanceTerminals: make(chan runnercontrol.BackendInstanceTerminal, config.MaximumInstances),
+		enforcer: firecracker.NewNetworkPolicyEnforcer(
+			nftPath, dnsListen, upstream, renderInetPolicy, deleteInetPolicyTables,
+		),
 	}, nil
+}
+
+func resolveDNSUpstream(override string) (netip.AddrPort, error) {
+	if strings.TrimSpace(override) != "" {
+		upstream, err := netip.ParseAddrPort(override)
+		if err != nil {
+			return netip.AddrPort{}, fmt.Errorf("SecondBox gVisor DNS upstream override is invalid: %w", err)
+		}
+		return upstream, nil
+	}
+	return systemDNSUpstream()
 }
 
 func (backend *AssignmentBackend) InstanceTerminals() <-chan runnercontrol.BackendInstanceTerminal {
@@ -185,6 +215,36 @@ func (backend *AssignmentBackend) StartupTiming() (uint64, time.Duration) {
 	slices.Sort(values)
 	index := (len(values)*95 + 99) / 100
 	return uint64(len(values)), values[index-1]
+}
+
+// BackendDimensions are the fixed-cardinality diagnostic dimensions.
+type BackendDimensions struct {
+	BackendKind  string
+	HostPlatform string
+}
+
+// MetricsSnapshot exposes bounded backend metrics with no correlation
+// identifiers.
+type MetricsSnapshot struct {
+	Dimensions       BackendDimensions
+	ActiveInstances  uint32
+	ActiveOperations uint32
+	ColdStartCount   uint64
+	ColdStartP95     time.Duration
+}
+
+func (backend *AssignmentBackend) DiagnosticDimensions() BackendDimensions {
+	return BackendDimensions{BackendKind: "gvisor", HostPlatform: gvisorHostPlatform()}
+}
+
+func (backend *AssignmentBackend) MetricsSnapshot() MetricsSnapshot {
+	count, p95 := backend.StartupTiming()
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	return MetricsSnapshot{
+		Dimensions: backend.DiagnosticDimensions(), ActiveInstances: backend.reserved.instances,
+		ActiveOperations: backend.reserved.operations, ColdStartCount: count, ColdStartP95: p95,
+	}
 }
 
 func gvisorHostPlatform() string {
@@ -315,7 +375,7 @@ func (backend *AssignmentBackend) ValidateAssignment(
 	if _, err := validateConfig(backend.config.Config); err != nil {
 		return artifactAssignment(fmt.Errorf("SecondBox gVisor revalidate local materialization: %w", err))
 	}
-	if err := validateNetworkPolicy(assignment.NetworkPolicy); err != nil {
+	if _, err := translateNetworkPolicy(assignment.NetworkPolicy); err != nil {
 		return incompatibleAssignment(err)
 	}
 	backend.mu.Lock()
@@ -388,19 +448,28 @@ func (backend *AssignmentBackend) StartAssignment(
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_WORKSPACE_ATTACH); err != nil {
 		return result, err
 	}
-	if err := validateNetworkPolicy(assignment.NetworkPolicy); err != nil {
+	compiled, err := translateNetworkPolicy(assignment.NetworkPolicy)
+	if err != nil {
+		return result, incompatibleAssignment(err)
+	}
+	network, supervisorPid, err := backend.installInstanceNetwork(ctx, assignment, compiled)
+	if err != nil {
 		return result, err
 	}
+	networkCleanup := cleanup.push(func() error {
+		return backend.teardownInstanceNetwork(assignment.Fence.InstanceId, network)
+	})
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_NETWORK_SETUP); err != nil {
 		return result, err
 	}
 	if err := progress(runnerprotocol.AssignmentProgressStage_ASSIGNMENT_PROGRESS_STAGE_COMPUTE_LAUNCH); err != nil {
 		return result, err
 	}
-	active, err := backend.launchInstance(ctx, assignment, workspace)
+	active, err := backend.launchInstance(ctx, assignment, workspace, network, supervisorPid)
 	if err != nil {
 		return result, infrastructureAssignment(err)
 	}
+	cleanup.disarm(networkCleanup)
 	cleanup.disarm(workspaceCleanup)
 	cleanup.push(func() error {
 		return backend.destroyInstance(active)
@@ -439,6 +508,8 @@ func (backend *AssignmentBackend) launchInstance(
 	ctx context.Context,
 	assignment *runnerprotocol.AssignmentCommand,
 	workspace workspacestore.ComputeAttachment,
+	network instanceNetwork,
+	supervisorPid *atomic.Int64,
 ) (*activeAssignment, error) {
 	// A short digest keeps every per-Instance socket path inside sun_path
 	// regardless of Instance ID length or runtime-directory depth.
@@ -458,23 +529,29 @@ func (backend *AssignmentBackend) launchInstance(
 			return nil, errors.Join(fmt.Errorf("create instance directory: %w", err), os.RemoveAll(instanceDir))
 		}
 	}
+	resolvConfPath, err := writeGuestResolvConf(instanceDir)
+	if err != nil {
+		return nil, errors.Join(err, os.RemoveAll(instanceDir))
+	}
 	manifest := backend.config.manifest
 	if err := writeInstanceBundle(instanceBundle{
-		BundleDir:           directories["bundle"],
-		FlatRootPath:        backend.config.FlatRootPath,
-		AgentBinaryPath:     backend.config.AgentPath,
-		WorkspaceMountpoint: directories["mnt"],
-		SocketDirectory:     directories["sockets"],
-		RuntimePrivateDir:   directories["runtime-private"],
-		InstanceID:          assignment.Fence.InstanceId,
-		SandboxID:           assignment.Fence.SandboxId,
-		SandboxGeneration:   assignment.Fence.SandboxGeneration,
-		GuestBuildID:        manifest.BackendBuildID,
-		ImageDigest:         manifest.Key.RuntimeManifestDigest,
-		ToolchainDigest:     manifest.Key.ToolchainManifestDigest,
-		VCPUCount:           assignment.Requirements.VcpuCount,
-		MemoryBytes:         assignment.Requirements.MemoryBytes,
-		CgroupsPath:         "/secondbox-gvisor/" + assignment.Fence.InstanceId,
+		BundleDir:            directories["bundle"],
+		FlatRootPath:         backend.config.FlatRootPath,
+		AgentBinaryPath:      backend.config.AgentPath,
+		WorkspaceMountpoint:  directories["mnt"],
+		SocketDirectory:      directories["sockets"],
+		RuntimePrivateDir:    directories["runtime-private"],
+		InstanceID:           assignment.Fence.InstanceId,
+		SandboxID:            assignment.Fence.SandboxId,
+		SandboxGeneration:    assignment.Fence.SandboxGeneration,
+		GuestBuildID:         manifest.BackendBuildID,
+		ImageDigest:          manifest.Key.RuntimeManifestDigest,
+		ToolchainDigest:      manifest.Key.ToolchainManifestDigest,
+		VCPUCount:            assignment.Requirements.VcpuCount,
+		MemoryBytes:          assignment.Requirements.MemoryBytes,
+		CgroupsPath:          "/secondbox-gvisor/" + assignment.Fence.InstanceId,
+		NetworkNamespacePath: network.namespacePath(),
+		ResolvConfPath:       resolvConfPath,
 	}); err != nil {
 		return nil, errors.Join(err, os.RemoveAll(instanceDir))
 	}
@@ -487,17 +564,19 @@ func (backend *AssignmentBackend) launchInstance(
 		BundleDir:     directories["bundle"],
 		ContainerID:   "secondbox-" + assignment.Fence.InstanceId,
 		RunscGlobal: []string{
-			"--network=none", "--platform=systrap", "--host-uds=all", "--overlay2=root:memory",
+			"--network=sandbox", "--platform=systrap", "--host-uds=all", "--overlay2=root:memory",
 		},
 	}, workspace.Descriptor())
 	if err != nil {
 		return nil, errors.Join(err, os.RemoveAll(instanceDir))
 	}
+	supervisorPid.Store(int64(handles.Command.Process.Pid))
 	active := &activeAssignment{
 		fence:         cloneFence(assignment.Fence),
 		correlation:   proto.Clone(assignment.Correlation).(*runnerprotocol.Correlation),
 		handles:       handles,
 		workspace:     workspace,
+		network:       network,
 		instanceDir:   instanceDir,
 		backendRef:    fmt.Sprintf("gvisor:%d", handles.Command.Process.Pid),
 		operations:    make(map[uint64]context.CancelFunc),
@@ -607,7 +686,53 @@ func (backend *AssignmentBackend) destroyInstance(active *activeAssignment) erro
 		}
 	}
 	closeErr := errors.Join(active.handles.CloseParentSide(), active.workspace.Close())
-	return errors.Join(closeErr, os.RemoveAll(active.instanceDir))
+	networkErr := backend.teardownInstanceNetwork(active.fence.InstanceId, active.network)
+	return errors.Join(closeErr, networkErr, os.RemoveAll(active.instanceDir))
+}
+
+// installInstanceNetwork creates the routed per-Instance namespace and
+// installs the compiled policy on its host veth. The returned pid holder is
+// armed after launch so an enforcement failure can force the compute down,
+// which delivers exactly one provider-neutral terminal.
+func (backend *AssignmentBackend) installInstanceNetwork(
+	ctx context.Context,
+	assignment *runnerprotocol.AssignmentCommand,
+	compiled *networkpolicy.CompiledPolicy,
+) (instanceNetwork, *atomic.Int64, error) {
+	network, err := backend.acquireNetworkSlot()
+	if err != nil {
+		return instanceNetwork{}, nil, capacityAssignment(err)
+	}
+	if err := createInstanceNetwork(ctx, network); err != nil {
+		backend.releaseNetworkSlot(network)
+		return instanceNetwork{}, nil, infrastructureAssignment(err)
+	}
+	supervisorPid := &atomic.Int64{}
+	if err := backend.enforcer.Install(ctx, firecracker.PolicyNetworkConfig{
+		InstanceID: assignment.Fence.InstanceId,
+		TapName:    network.hostVeth,
+		GuestIP:    network.guestAddress,
+		DNSAddress: netip.MustParseAddr(dnsListenAddress),
+		Policy:     compiled,
+		OnFailure: func(error) {
+			// Enforcement loss fails closed: the compute is forced down and
+			// the supervisor-exit path delivers the single terminal.
+			if pid := supervisorPid.Load(); pid > 0 {
+				_ = syscallKillGroup(int(pid))
+			}
+		},
+	}); err != nil {
+		teardown := backend.teardownInstanceNetwork(assignment.Fence.InstanceId, network)
+		return instanceNetwork{}, nil, infrastructureAssignment(errors.Join(err, teardown))
+	}
+	return network, supervisorPid, nil
+}
+
+func (backend *AssignmentBackend) teardownInstanceNetwork(instanceID string, network instanceNetwork) error {
+	removeErr := backend.enforcer.Remove(context.Background(), instanceID)
+	destroyErr := destroyInstanceNetwork(context.Background(), network)
+	backend.releaseNetworkSlot(network)
+	return errors.Join(removeErr, destroyErr)
 }
 
 const supervisorStopBound = 15 * time.Second
@@ -699,7 +824,8 @@ func (backend *AssignmentBackend) FenceAssignment(
 			<-active.done
 		}
 	}
-	err = errors.Join(err, active.handles.CloseParentSide(), active.workspace.Close(), os.RemoveAll(active.instanceDir))
+	err = errors.Join(err, active.handles.CloseParentSide(), active.workspace.Close(),
+		backend.teardownInstanceNetwork(active.fence.InstanceId, active.network), os.RemoveAll(active.instanceDir))
 	outcome, terminalKind := "completed", "stopped"
 	if err != nil {
 		outcome, terminalKind = "failed", "cleanup_failed"
@@ -735,7 +861,7 @@ func (backend *AssignmentBackend) Shutdown(ctx context.Context) error {
 		})
 		result = errors.Join(result, err)
 	}
-	return result
+	return errors.Join(result, backend.enforcer.Close())
 }
 
 func (backend *AssignmentBackend) reserve(request capacityReservation) error {

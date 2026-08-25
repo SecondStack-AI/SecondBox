@@ -40,6 +40,12 @@ func (backend *AssignmentBackend) runPlatformProbe(ctx context.Context) error {
 	if _, err := ReconcileStaleLoops(backend.config.WorkspaceRoot); err != nil {
 		return fmt.Errorf("SecondBox gVisor stale attachment reconciliation: %w", err)
 	}
+	if err := ensureHostNetworkPlumbing(ctx); err != nil {
+		return fmt.Errorf("SecondBox gVisor host network plumbing: %w", err)
+	}
+	if err := backend.enforcer.Ready(ctx); err != nil {
+		return fmt.Errorf("SecondBox gVisor network policy enforcement: %w", err)
+	}
 	stateRoot, err := os.MkdirTemp(backend.config.RuntimeDir, "readiness-")
 	if err != nil {
 		return fmt.Errorf("SecondBox gVisor readiness state root: %w", err)

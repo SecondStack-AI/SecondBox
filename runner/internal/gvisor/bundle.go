@@ -99,6 +99,7 @@ type instanceBundle struct {
 	MemoryBytes          uint64
 	CgroupsPath          string
 	NetworkNamespacePath string
+	ResolvConfPath       string
 }
 
 const cgroupCPUPeriodMicros = 100_000
@@ -108,7 +109,7 @@ func writeInstanceBundle(bundle instanceBundle) error {
 		bundle.WorkspaceMountpoint == "" || bundle.SocketDirectory == "" ||
 		bundle.RuntimePrivateDir == "" || bundle.InstanceID == "" || bundle.SandboxID == "" ||
 		bundle.SandboxGeneration == 0 || bundle.VCPUCount == 0 || bundle.MemoryBytes == 0 ||
-		bundle.CgroupsPath == "" {
+		bundle.CgroupsPath == "" || bundle.NetworkNamespacePath == "" || bundle.ResolvConfPath == "" {
 		return fmt.Errorf("SecondBox gVisor instance bundle is incomplete")
 	}
 	if err := os.MkdirAll(bundle.BundleDir, 0o700); err != nil {
@@ -149,6 +150,7 @@ func writeInstanceBundle(bundle instanceBundle) error {
 			{Destination: guestWorkspacePath, Type: "bind", Source: bundle.WorkspaceMountpoint, Options: []string{"bind", "rw"}},
 			{Destination: guestSocketDirectory, Type: "bind", Source: bundle.SocketDirectory, Options: []string{"bind", "rw"}},
 			{Destination: guestRuntimePrivatePath, Type: "bind", Source: bundle.RuntimePrivateDir, Options: []string{"bind", "rw"}},
+			{Destination: "/etc/resolv.conf", Type: "bind", Source: bundle.ResolvConfPath, Options: []string{"bind", "ro"}},
 		},
 		Linux: ociLinux{
 			Namespaces:  namespaces,

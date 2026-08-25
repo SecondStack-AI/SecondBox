@@ -28,12 +28,16 @@ type Config struct {
 	RuntimeDir            string
 	WorkspaceRoot         string
 	SelfExecutable        string
-	MaximumVCPUs          uint32
-	MaximumMemoryBytes    uint64
-	MaximumDiskBytes      uint64
-	MaximumInstances      uint32
-	MaximumOperations     uint32
-	WorkspaceStore        *workspacestore.Store
+	// DNSUpstream optionally overrides host-resolver discovery for the
+	// runner DNS proxy, as host:port. Qualification environments use it to
+	// pin a test-owned resolver.
+	DNSUpstream        string
+	MaximumVCPUs       uint32
+	MaximumMemoryBytes uint64
+	MaximumDiskBytes   uint64
+	MaximumInstances   uint32
+	MaximumOperations  uint32
+	WorkspaceStore     *workspacestore.Store
 }
 
 type validatedConfig struct {

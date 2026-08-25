@@ -35,6 +35,38 @@ type HostNetworkPolicyEnforcer interface {
 
 type nftScriptRunner func(context.Context, string, []string, string) ([]byte, error)
 
+// PolicyScriptRenderer produces the complete nftables script for one guest
+// interface and policy state. The Firecracker enforcer's default is the
+// bridge-family TAP rendering below; other backends supply a rendering for
+// their own interface topology while sharing the enforcer's fail-closed
+// lifecycle and DNS pin state machine.
+type PolicyScriptRenderer func(
+	table string,
+	interfaceName string,
+	guestIP string,
+	dnsAddress netip.Addr,
+	protected []netip.Prefix,
+	destinations []networkpolicy.Destination,
+	runnerGateways []networkpolicy.RunnerGatewayDestination,
+	pins map[int][]netip.Addr,
+) string
+
+// NewNetworkPolicyEnforcer builds an enforcer whose scripts come from the
+// given renderer and table-deletion form; nil values keep the Firecracker
+// bridge rendering.
+func NewNetworkPolicyEnforcer(
+	nftPath string,
+	dnsListen netip.Addr,
+	dnsUpstream netip.AddrPort,
+	render PolicyScriptRenderer,
+	deleteTable func(table string) string,
+) *NFTablesNetworkPolicyEnforcer {
+	return &NFTablesNetworkPolicyEnforcer{
+		nftPath: nftPath, dnsListen: dnsListen, dnsUpstream: dnsUpstream,
+		render: render, deleteTable: deleteTable,
+	}
+}
+
 // NFTablesNetworkPolicyEnforcer renders one isolated nftables table per VM.
 // The table accepts established replies, explicit CIDR destinations, and
 // runner-resolved DNS pins, then drops all other ingress and egress.
@@ -45,6 +77,8 @@ type NFTablesNetworkPolicyEnforcer struct {
 	dnsListen   netip.Addr
 	dnsUpstream netip.AddrPort
 	dnsProxy    *runnerDNSProxy
+	render      PolicyScriptRenderer
+	deleteTable func(table string) string
 
 	mutationMu sync.Mutex
 	mu         sync.Mutex
@@ -61,6 +95,30 @@ type nftPolicyInstance struct {
 }
 
 const allowedConnectionMark = "0x53425801"
+
+// deletePolicyTable renders the family-correct table deletion; other
+// renderers pair with their own families through DeleteTable.
+func (e *NFTablesNetworkPolicyEnforcer) deletePolicyTable(table string) string {
+	if e.deleteTable != nil {
+		return e.deleteTable(table)
+	}
+	return fmt.Sprintf("delete table bridge %s\n", table)
+}
+
+func (e *NFTablesNetworkPolicyEnforcer) renderPolicy(
+	table, interfaceName, guestIP string,
+	dnsAddress netip.Addr,
+	protected []netip.Prefix,
+	destinations []networkpolicy.Destination,
+	runnerGateways []networkpolicy.RunnerGatewayDestination,
+	pins map[int][]netip.Addr,
+) string {
+	render := e.render
+	if render == nil {
+		render = renderNFTPolicy
+	}
+	return render(table, interfaceName, guestIP, dnsAddress, protected, destinations, runnerGateways, pins)
+}
 
 func (e *NFTablesNetworkPolicyEnforcer) Ready(ctx context.Context) error {
 	if strings.TrimSpace(e.nftPath) == "" || !e.dnsListen.IsValid() || !e.dnsUpstream.IsValid() {
@@ -147,7 +205,7 @@ func (e *NFTablesNetworkPolicyEnforcer) Install(ctx context.Context, cfg PolicyN
 	destinations := cfg.Policy.Destinations()
 	runnerGateways := cfg.Policy.RunnerGatewayDestinations()
 	table := nftTableName(instanceID)
-	script := renderNFTPolicy(
+	script := e.renderPolicy(
 		table,
 		tapName,
 		cfg.GuestIP,
@@ -267,7 +325,7 @@ func (e *NFTablesNetworkPolicyEnforcer) ObserveDNSAnswer(
 		e.mu.Unlock()
 		return fmt.Errorf("SecondBox DNS query domain %q is not allowed", domain)
 	}
-	script := fmt.Sprintf("delete table bridge %s\n%s", instance.table, renderNFTPolicy(
+	script := fmt.Sprintf("%s%s", e.deletePolicyTable(instance.table), e.renderPolicy(
 		instance.table,
 		instance.cfg.TapName,
 		instance.cfg.GuestIP,
@@ -361,13 +419,17 @@ func (e *NFTablesNetworkPolicyEnforcer) expireDNSPin(instanceID, domain string, 
 	}
 	instance.pins = clonePolicyPins(instance.pins)
 	instance.expiry = clonePolicyExpiry(instance.expiry)
+	// The observed domain arrives as the query's FQDN with a trailing dot;
+	// destinations store the normalized form. Comparing raw values here left
+	// expired pins rendered forever.
+	normalizedDomain := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
 	for index, destination := range instance.cfg.Policy.Destinations() {
-		if destination.Domain == domain && !instance.expiry[index].After(expiresAt) {
+		if destination.Domain == normalizedDomain && !instance.expiry[index].After(expiresAt) {
 			delete(instance.pins, index)
 			delete(instance.expiry, index)
 		}
 	}
-	script := fmt.Sprintf("delete table bridge %s\n%s", instance.table, renderNFTPolicy(
+	script := fmt.Sprintf("%s%s", e.deletePolicyTable(instance.table), e.renderPolicy(
 		instance.table, instance.cfg.TapName, instance.cfg.GuestIP, instance.cfg.DNSAddress,
 		instance.cfg.Policy.AllowsDNS(),
 		instance.cfg.Policy.ProtectedPrefixes(), instance.cfg.Policy.Destinations(),
@@ -411,7 +473,7 @@ func (e *NFTablesNetworkPolicyEnforcer) Remove(ctx context.Context, instanceID s
 	if instance.cancel != nil {
 		instance.cancel()
 	}
-	script := fmt.Sprintf("delete table bridge %s\n", table)
+	script := e.deletePolicyTable(table)
 	output, err := e.command(ctx, e.nftPath, []string{"-f", "-"}, script)
 	if err != nil {
 		if strings.Contains(string(output), "No such file or directory") {

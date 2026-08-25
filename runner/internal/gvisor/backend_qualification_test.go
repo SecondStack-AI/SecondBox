@@ -72,6 +72,10 @@ type qualificationFixture struct {
 }
 
 func newQualificationFixture(t *testing.T, suffix string) qualificationFixture {
+	return newQualificationFixtureWithDNS(t, suffix, "")
+}
+
+func newQualificationFixtureWithDNS(t *testing.T, suffix, dnsUpstream string) qualificationFixture {
 	t.Helper()
 	runsc, agent, rootfs := qualificationBuild(t)
 
@@ -139,8 +143,8 @@ func newQualificationFixture(t *testing.T, suffix string) qualificationFixture {
 		RunscPath: runsc, AgentPath: agent, FlatRootPath: rootfs,
 		MaterializationPath: manifestPath, MaterializationDigest: manifestDigest,
 		RuntimeDir: runtimeDir, WorkspaceRoot: filepath.Join(qualificationRoot, "store"),
-		SelfExecutable: selfExecutable,
-		MaximumVCPUs:   2, MaximumMemoryBytes: 1 << 30,
+		SelfExecutable: selfExecutable, DNSUpstream: dnsUpstream,
+		MaximumVCPUs: 2, MaximumMemoryBytes: 1 << 30,
 		MaximumDiskBytes: uint64(backendQualificationWorkspaceBytes),
 		MaximumInstances: 1, MaximumOperations: 8, WorkspaceStore: store,
 	})
@@ -196,8 +200,8 @@ func TestQualifiedGVisorBackendBootsAgentAndWorkspace(t *testing.T) {
 	backend, fence := fixture.backend, fixture.fence
 	t.Cleanup(func() { _ = backend.Shutdown(context.Background()) })
 
-	// An allow-list has no exact enforcement yet: it must be rejected before
-	// any compute exists, never started unenforced.
+	// An exact allow-list compiles and validates; a rule with no exact
+	// representation (an unsupported protocol) stays rejected.
 	allowList := proto.Clone(fixture.command).(*runnerprotocol.AssignmentCommand)
 	allowList.NetworkPolicy = &runnerprotocol.NetworkPolicy{
 		Mode: runnerprotocol.NetworkPolicyMode_NETWORK_POLICY_MODE_ALLOW_LIST,
@@ -206,8 +210,13 @@ func TestQualifiedGVisorBackendBootsAgentAndWorkspace(t *testing.T) {
 			Target: &runnerprotocol.NetworkDestination_Domain{Domain: "example.com"},
 		}},
 	}
-	if err := backend.ValidateAssignment(t.Context(), allowList); err == nil {
-		t.Fatal("allow-list without exact enforcement was accepted")
+	if err := backend.ValidateAssignment(t.Context(), allowList); err != nil {
+		t.Fatalf("exact allow-list was rejected: %v", err)
+	}
+	malformed := proto.Clone(allowList).(*runnerprotocol.AssignmentCommand)
+	malformed.NetworkPolicy.Destinations[0].Protocol = runnerprotocol.NetworkDestinationProtocol_NETWORK_DESTINATION_PROTOCOL_UNSPECIFIED
+	if err := backend.ValidateAssignment(t.Context(), malformed); err == nil {
+		t.Fatal("policy without an exact representation was accepted")
 	}
 
 	instance, err := backend.StartAssignment(t.Context(), fixture.command,
