@@ -600,8 +600,8 @@ func validateStandardResources(resources StandardResources, runners []Runner) er
 	}
 	selected := map[string]bool{}
 	for _, bundle := range resources.Bundles {
-		if (bundle != standardresources.AgentCompartment && bundle != standardresources.DurableCoding) || selected[bundle] {
-			return manifestError("standard_resources.bundles must contain unique agent-compartment or durable-coding names", nil)
+		if !slices.Contains(standardresources.BundleNames(), bundle) || selected[bundle] {
+			return manifestError("standard_resources.bundles must contain unique release-owned bundle names", nil)
 		}
 		selected[bundle] = true
 	}
@@ -621,7 +621,7 @@ func validateStandardResources(resources StandardResources, runners []Runner) er
 		}
 		gateway := map[string]string{standardresources.AgentCompartment: standardresources.AgentGateway, standardresources.DurableCoding: standardresources.PlatformGateway}[pool.Bundle]
 		for runnerIndex, runner := range runners {
-			if runner.PoolID == pool.Name && !runnerGatewayNames(runner.NetworkPolicyRunnerGateways)[gateway] {
+			if gateway != "" && runner.PoolID == pool.Name && !runnerGatewayNames(runner.NetworkPolicyRunnerGateways)[gateway] {
 				return manifestError(fmt.Sprintf("runners[%d].network_policy_runner_gateways must resolve %s for selected bundle %s", runnerIndex, gateway, pool.Bundle), nil)
 			}
 		}

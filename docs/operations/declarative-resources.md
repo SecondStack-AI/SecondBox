@@ -13,10 +13,11 @@ Both commands return structured per-resource actions. `check` performs no mutati
 
 A Profile declaration contains its complete ordered lineage. Every revision carries its canonical SHA-256 spec digest. On install, the engine verifies every installed historical revision against the declared prefix and then appends missing revisions sequentially. Gaps, changed historical specs, disabled heads, unknown future heads, incompatible architecture/capability drift, and update races fail explicitly.
 
-The release owns two amd64 standard bundles:
+The release owns three amd64 standard bundles:
 
 - `agent-compartment` is short-lived, has no public Ports or Snapshots, and can reach only `agent-gateway.secondbox.internal` over HTTPS.
 - `durable-coding` is a bounded long-lived workspace with Snapshots, terminal detach, and the named `development-http` Port; it can reach only `platform-gateway.secondbox.internal` over HTTPS.
+- `agent-compartment-isolated` has the command, file, workspace, cancellation, and bounded lifecycle surface of `agent-compartment`, but its network policy is `deny_all`, it exposes no Ports, and it requires no logical gateway.
 
 The bundle resolver takes runtime/toolchain identity from the verified release artifact manifest. Standard documents contain no tokens, application authorities, runner credentials, host paths, or storage keys.
 
@@ -31,5 +32,7 @@ network_policy_runner_gateways = "agent-gateway.secondbox.internal=10.0.0.10,pla
 ```
 
 A logical gateway mapping binds the Profile's exact destination name and port to one protected Runner-local address for network-policy authorization. It does not provide guest name resolution or authenticate the destination. SecondBox does not assume that the destination is an HTTP proxy, inject proxy variables into Exec requests, or distribute an external proxy's interception CA. An application that supplies a forward proxy must make its logical name resolvable in the guest, pass its proxy environment explicitly, and make the proxy CA available in the guest trust path. The application also owns hostname verification and CA rotation. This keeps external gateway authority out of immutable SecondBox runtime and toolchain bundles.
+
+`agent-compartment-isolated` does not add a gateway mapping. Each current network-enabled RunnerPool maps to one trusted egress context; sharing a tenant-aware egress identity across tenants requires a separate authenticated routing capability and is outside this release.
 
 `secondbox-deploy inspect` shows selected bundles plus each standard Profile's release identity: name, revision number, and spec digest. `secondbox-deploy compose ... up` waits for `/readyz` and applies the selected document using the same library as `secondbox resources apply`.

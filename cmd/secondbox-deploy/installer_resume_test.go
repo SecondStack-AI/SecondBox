@@ -26,7 +26,7 @@ import (
 func TestInstallResumeOrchestratesEveryDurableStageWithoutPrintingSecrets(t *testing.T) {
 	operation := filepath.Join(t.TempDir(), "operation")
 	verified := fakeGuidedRelease()
-	plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: 86400})
+	plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding", "agent-compartment-isolated"}, RetentionSeconds: 86400})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func activeUpdateOperation(t *testing.T) (string, install.InstallPlan) {
 	t.Helper()
 	operation := filepath.Join(t.TempDir(), "operation")
 	verified := fakeGuidedRelease()
-	plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: 86400})
+	plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding", "agent-compartment-isolated"}, RetentionSeconds: 86400})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +284,7 @@ func activeUpdateOperation(t *testing.T) (string, install.InstallPlan) {
 func TestOrdinaryUninstallStopsComposeAndPreservesDurableResources(t *testing.T) {
 	operation := filepath.Join(t.TempDir(), "operation")
 	verified := fakeGuidedRelease()
-	plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: 86400})
+	plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding", "agent-compartment-isolated"}, RetentionSeconds: 86400})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -495,7 +495,7 @@ func failedComposeRecoveryOperationAt(t *testing.T, completed, failure install.S
 	t.Helper()
 	operation := filepath.Join(t.TempDir(), "operation")
 	verified := fakeGuidedRelease()
-	plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: 86400})
+	plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding", "agent-compartment-isolated"}, RetentionSeconds: 86400})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -600,7 +600,7 @@ func TestInstallResumeFailureInjectionStopsAtEveryOrchestrationBoundary(t *testi
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			operation := filepath.Join(t.TempDir(), "operation")
-			plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding"}, RetentionSeconds: 86400})
+			plan, err := install.ProposePlan(guidedFacts(), install.ProposalInput{OperationID: "install_0123456789abcdef", CreatedAt: time.Now(), DeploymentDirectory: operation, BinaryDirectory: filepath.Join(filepath.Dir(operation), "bin"), CLIConfigPath: filepath.Join(filepath.Dir(operation), "config", "secondbox", "config.json"), BackingAvailableBytes: 100 << 30, DeploymentAvailableBytes: 100 << 30, Release: releasePlan(verified, releasecontract.ArtifactManifestLocation("0.4.0")), StorageChoice: install.StorageBtrfsImage, StandardBundles: []string{"agent-compartment", "durable-coding", "agent-compartment-isolated"}, RetentionSeconds: 86400})
 			if err != nil {
 				t.Fatal(err)
 			}

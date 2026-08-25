@@ -134,14 +134,14 @@ Give operators and tenant controllers a source-free management surface. Producti
 
 Add a standard Profile for consumers that need compute and workspace capabilities but no outbound network. Keep it an ordinary immutable release-owned lineage selected explicitly by operators, with no reserved-name behavior or tenant-specific copies.
 
-- [ ] Add the `agent-compartment-isolated` standard bundle and immutable Profile lineage with command, file, workspace, cancellation, and bounded lifecycle capabilities but no outbound destinations, DNS access, exposed Ports, or network gateway dependency.
-- [ ] Extend standard-resource documents, validation, declarative application, installer selection, release manifests, artifact identity, and SDK-facing Profile inspection for the third explicit bundle.
-- [ ] Preserve existing `agent-compartment` behavior and its dedicated gateway mapping for network-enabled installations; do not silently replace or mutate its lineage.
-- [ ] Ensure tenant Profile ceilings and application grants can select the isolated Profile without creating per-tenant Profile copies.
-- [ ] Add standard-resource tests for canonical digest stability, ordered lineage application, installed-prefix validation, immutable revision pinning, and explicit bundle selection.
-- [ ] Add real network-policy coverage proving an isolated Sandbox cannot reach the configured Runner gateway, management networks, metadata endpoints, DNS resolvers, or arbitrary Internet destinations.
-- [ ] Prove an isolated and a network-enabled Sandbox can run concurrently on the same qualified Runner without sharing network policy or credentials.
-- [ ] Keep a tenant-aware shared egress capability outside this release and document that each current network-enabled RunnerPool maps to one trusted egress context.
+- [x] Add the `agent-compartment-isolated` standard bundle and immutable Profile lineage with command, file, workspace, cancellation, and bounded lifecycle capabilities but no outbound destinations, DNS access, exposed Ports, or network gateway dependency.
+- [x] Extend standard-resource documents, validation, declarative application, installer selection, release manifests, artifact identity, and SDK-facing Profile inspection for the third explicit bundle.
+- [x] Preserve existing `agent-compartment` behavior and its dedicated gateway mapping for network-enabled installations; do not silently replace or mutate its lineage.
+- [x] Ensure tenant Profile ceilings and application grants can select the isolated Profile without creating per-tenant Profile copies.
+- [x] Add standard-resource tests for canonical digest stability, ordered lineage application, installed-prefix validation, immutable revision pinning, and explicit bundle selection.
+- [x] Add real network-policy coverage proving an isolated Sandbox cannot reach the configured Runner gateway, management networks, metadata endpoints, DNS resolvers, or arbitrary Internet destinations.
+- [x] Prove an isolated and a network-enabled Sandbox can run concurrently on the same qualified Runner without sharing network policy or credentials.
+- [x] Keep a tenant-aware shared egress capability outside this release and document that each current network-enabled RunnerPool maps to one trusted egress context.
 
 ### Task 9: Qualify and document the complete v0.6.0 release
 

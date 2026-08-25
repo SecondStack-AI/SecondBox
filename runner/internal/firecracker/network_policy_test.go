@@ -76,6 +76,7 @@ func TestNFTablesNetworkPolicyEnforcerInstallsDefaultDenyAndExplicitAllows(t *te
 		`oifname "sbtap1" arp saddr ip 10.20.0.1 accept`,
 		`iifname "sbtap1" ip daddr 8.8.8.0/24 tcp dport 443 ct mark set 0x53425801 accept`,
 		`iifname "sbtap1" ip daddr 10.20.0.1 udp dport 53 ct mark set 0x53425801 accept`,
+		`iifname "sbtap1" ip daddr 10.20.0.1 tcp dport 53 ct mark set 0x53425801 accept`,
 		`iifname "sbtap1" drop`,
 		`oifname "sbtap1" drop`,
 	} {
@@ -178,10 +179,11 @@ func TestNFTablesNetworkPolicyPlacesExactRunnerGatewayBeforeProtectedDrops(t *te
 	}
 }
 
-func TestNFTablesNetworkPolicyKeepsUnsolicitedInboundClosedWithoutPortSessions(t *testing.T) {
+func TestNFTablesNetworkPolicyDenyAllBlocksDNSAndUnsolicitedInbound(t *testing.T) {
+	dnsAddress := netip.MustParseAddr("10.20.0.1")
 	compiled, err := networkpolicy.Compile(
 		networkpolicy.Policy{Mode: networkpolicy.ModeDenyAll},
-		networkpolicy.CompileOptions{MaximumPins: 1, MaximumTTL: time.Minute},
+		networkpolicy.CompileOptions{MaximumPins: 1, MaximumTTL: time.Minute, RunnerAddresses: []netip.Addr{dnsAddress}},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -198,6 +200,7 @@ func TestNFTablesNetworkPolicyKeepsUnsolicitedInboundClosedWithoutPortSessions(t
 		InstanceID: "fc-no-port-session",
 		TapName:    "sbtap-closed",
 		GuestIP:    "10.20.0.4",
+		DNSAddress: dnsAddress,
 		Policy:     compiled,
 	}); err != nil {
 		t.Fatal(err)
@@ -205,6 +208,7 @@ func TestNFTablesNetworkPolicyKeepsUnsolicitedInboundClosedWithoutPortSessions(t
 	t.Cleanup(func() { _ = enforcer.Remove(context.Background(), "fc-no-port-session") })
 
 	for _, required := range []string{
+		`iifname "sbtap-closed" ip daddr 10.20.0.1/32 drop`,
 		`iifname "sbtap-closed" drop`,
 		`oifname "sbtap-closed" drop`,
 	} {
@@ -212,7 +216,7 @@ func TestNFTablesNetworkPolicyKeepsUnsolicitedInboundClosedWithoutPortSessions(t
 			t.Fatalf("default-deny policy lacks published-port isolation %q:\n%s", required, script)
 		}
 	}
-	for _, forbidden := range []string{"dnat", "redirect", "tcp dport 8080 accept"} {
+	for _, forbidden := range []string{"dnat", "redirect", "tcp dport 8080 accept", "udp dport 53", "tcp dport 53"} {
 		if strings.Contains(strings.ToLower(script), forbidden) {
 			t.Fatalf("policy created unsupported published-port behavior %q:\n%s", forbidden, script)
 		}

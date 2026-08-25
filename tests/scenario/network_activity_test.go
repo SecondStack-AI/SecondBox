@@ -6,12 +6,16 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
+	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
 	secondboxclient "github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
 	"github.com/gorilla/websocket"
 )
@@ -468,6 +472,97 @@ func TestScenarioNetworkPolicyDenyAndAllowList(t *testing.T) {
 			describeScenarioExecOutcome(allowedOutcome),
 		)
 	}
+}
+
+func TestScenarioIsolatedAndNetworkEnabledProfilesRemainFencedConcurrently(t *testing.T) {
+	fixture := newScenarioFixture(t)
+	ensureScenarioRunnerPool(t, fixture)
+	waitForScenarioRunner(t, fixture, 90*time.Second)
+	bridgeAddress := requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_BRIDGE_ADDRESS")
+	const gatewayPort = int64(18443)
+	const gatewayContext = "network-enabled-egress-context"
+	gatewayAddress := net.JoinHostPort(bridgeAddress, strconv.FormatInt(gatewayPort, 10))
+	managementAddress := net.JoinHostPort(bridgeAddress, "18444")
+	startScenarioNetworkTarget(t, gatewayAddress, gatewayContext)
+	startScenarioNetworkTarget(t, managementAddress, "management-network")
+
+	runtimeDigest := requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_RUNTIME_BUNDLE_DIGEST")
+	toolchainDigest := requireScenarioEnvironment(t, "SECONDBOX_SCENARIO_TOOLCHAIN_BUNDLE_DIGEST")
+	isolatedLineage, err := standardresources.ProfileLineage(standardresources.AgentCompartmentIsolated, runtimeDigest, toolchainDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	isolatedProfile := createScenarioProfile(t, fixture, standardresources.AgentCompartmentIsolated, isolatedLineage.Revisions[0].Spec)
+
+	networkLineage, err := standardresources.ProfileLineage(standardresources.AgentCompartment, runtimeDigest, toolchainDigest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	networkSpec := networkLineage.Revisions[len(networkLineage.Revisions)-1].Spec
+	networkSpec.Network = contracts.NetworkPolicy{Mode: "allow_list", Destinations: []contracts.NetworkDestination{{Protocol: "http", CIDR: "1.1.1.1/32", Port: 80}}}
+	networkProfile := createScenarioProfile(t, fixture, "scenario-agent-compartment-network-enabled", networkSpec)
+
+	isolated, _ := createScenarioSandbox(t, fixture, isolatedProfile, "isolated-network-policy")
+	networkEnabled, _ := createScenarioSandbox(t, fixture, networkProfile, "network-enabled-policy")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	waitForSandbox(t, ctx, isolated, secondboxclient.SandboxStateReady)
+	waitForSandbox(t, ctx, networkEnabled, secondboxclient.SandboxStateReady)
+
+	probes := []struct {
+		name    string
+		key     string
+		command string
+	}{
+		{name: "configured Runner gateway", key: "runner-gateway", command: "curl --silent --show-error --connect-timeout 2 --max-time 4 http://" + gatewayAddress},
+		{name: "management network", key: "management-network", command: "curl --silent --show-error --connect-timeout 2 --max-time 4 http://" + managementAddress},
+		{name: "metadata endpoint", key: "metadata-endpoint", command: "curl --silent --show-error --connect-timeout 2 --max-time 4 http://169.254.169.254/latest/meta-data/"},
+		{name: "DNS resolver", key: "dns-resolver", command: `python3 -c 'import socket; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(3); s.sendto(bytes.fromhex("000101000001000000000000076578616d706c6503636f6d0000010001"),("` + bridgeAddress + `",53)); s.recvfrom(512)'`},
+		{name: "arbitrary Internet", key: "internet", command: "curl --silent --show-error --connect-timeout 2 --max-time 4 http://1.1.1.1/cdn-cgi/trace"},
+	}
+	for _, probe := range probes {
+		t.Run(probe.name, func(t *testing.T) {
+			outcome := executeScenarioCommand(t, ctx, isolated, probe.command, 4096, "isolated-"+probe.key)
+			if outcome.ExecExited == nil || outcome.ExecExited.ExitCode == 0 {
+				t.Fatalf("isolated %s probe = %s", probe.name, describeScenarioExecOutcome(outcome))
+			}
+			if strings.Contains(decodeScenarioOutput(t, outcome.ExecExited.Output.StdoutBase64), gatewayContext) {
+				t.Fatalf("isolated %s probe obtained the network-enabled gateway context", probe.name)
+			}
+		})
+	}
+
+	enabledOutcome := executeScenarioCommand(t, ctx, networkEnabled, "curl --silent --show-error --connect-timeout 2 --max-time 4 http://1.1.1.1/cdn-cgi/trace | tee /workspace/network-response >/dev/null", 4096, "network-enabled-internet")
+	assertScenarioExited(t, enabledOutcome, 0, "", "")
+	enabledResponse := executeScenarioCommand(t, ctx, networkEnabled, "test -s /workspace/network-response", 4096, "network-enabled-response-file")
+	assertScenarioExited(t, enabledResponse, 0, "", "")
+	isolationOutcome := executeScenarioCommand(t, ctx, isolated, "test ! -e /workspace/network-response", 4096, "isolated-network-response-file")
+	assertScenarioExited(t, isolationOutcome, 0, "", "")
+}
+
+func startScenarioNetworkTarget(t *testing.T, address string, response string) {
+	t.Helper()
+	listener, err := net.Listen("tcp4", address)
+	if err != nil {
+		t.Fatalf("SecondBox scenario listen on %s: %v", address, err)
+	}
+	server := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		if _, err := io.WriteString(writer, response); err != nil {
+			t.Errorf("SecondBox scenario write network target response: %v", err)
+		}
+	})}
+	go func() {
+		if serveErr := server.Serve(listener); serveErr != nil && serveErr != http.ErrServerClosed {
+			t.Errorf("SecondBox scenario serve network target %s: %v", address, serveErr)
+		}
+	}()
+	t.Cleanup(func() {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownContext); err != nil {
+			t.Errorf("SecondBox scenario stop network target %s: %v", address, err)
+		}
+	})
 }
 
 func TestScenarioTouchExtendsIdleExpiry(t *testing.T) {

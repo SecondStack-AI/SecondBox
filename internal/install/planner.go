@@ -164,8 +164,8 @@ func ProposePlan(facts HostFacts, input ProposalInput) (InstallPlan, error) {
 		return InstallPlan{}, err
 	}
 	paths, secretTargets := proposePaths(facts, input, storage, storagePaths)
-	if len(input.StandardBundles) != 2 || !slices.Contains(input.StandardBundles, "agent-compartment") || !slices.Contains(input.StandardBundles, "durable-coding") {
-		return InstallPlan{}, installerError("operator selection of both release-owned standard bundles is required", nil)
+	if !standardBundleSelectionComplete(input.StandardBundles) {
+		return InstallPlan{}, installerError("operator selection of all release-owned standard bundles is required", nil)
 	}
 	if input.RetentionSeconds <= 0 {
 		return InstallPlan{}, installerError("operator-selected retention is required", nil)
@@ -175,6 +175,13 @@ func ProposePlan(facts HostFacts, input ProposalInput) (InstallPlan, error) {
 		return InstallPlan{}, err
 	}
 	return plan, nil
+}
+
+func standardBundleSelectionComplete(selected []string) bool {
+	want := standardresources.BundleNames()
+	return len(selected) == len(want) && !slices.ContainsFunc(want, func(name string) bool {
+		return !slices.Contains(selected, name)
+	})
 }
 
 func proposeStorage(facts HostFacts, input ProposalInput) (StoragePlan, int64, []PlannedPath, error) {
