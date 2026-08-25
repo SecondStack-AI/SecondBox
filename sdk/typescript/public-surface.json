@@ -216,6 +216,16 @@
       "dominantBootStage"
     ]
   },
+  "DeploymentUsage": {
+    "required": [
+      "observedAt",
+      "tenants",
+      "usage"
+    ],
+    "optional": [
+      "nextCursor"
+    ]
+  },
   "DirectoryListing": {
     "required": [
       "entries",
@@ -895,6 +905,14 @@
       "expiresAt"
     ]
   },
+  "TenantAggregateUsage": {
+    "required": [
+      "limits",
+      "tenantRef",
+      "usage"
+    ],
+    "optional": []
+  },
   "TenantControllerAuthority": {
     "required": [
       "createdAt",
@@ -1058,6 +1076,12 @@
   "UpdateSandboxMetadataRequest": {
     "required": [
       "metadata"
+    ],
+    "optional": []
+  },
+  "UpdateSubjectQuotaRequest": {
+    "required": [
+      "quota"
     ],
     "optional": []
   },

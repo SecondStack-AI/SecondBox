@@ -245,6 +245,55 @@ func (apiHandler *handler) listSubjects(writer http.ResponseWriter, request *htt
 	apiHandler.writeJSON(writer, request, http.StatusOK, page)
 }
 
+func (apiHandler *handler) updateSubjectQuota(writer http.ResponseWriter, request *http.Request) {
+	var body contracts.UpdateSubjectQuotaRequest
+	if err := decodeStrictJSON(request, &body); err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	expectedRevision, err := parseIfMatch(request)
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	subject, replayed, err := apiHandler.service.UpdateSubjectQuota(
+		request.Context(), requestPrincipal(request), request.PathValue("subjectRef"),
+		request.Header.Get("Idempotency-Key"), expectedRevision, body,
+	)
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	setRevisionETag(writer, subject.Revision)
+	writer.Header().Set("Idempotency-Replayed", strconv.FormatBool(replayed))
+	apiHandler.writeJSON(writer, request, http.StatusOK, subject)
+}
+
+func (apiHandler *handler) getTenantUsage(writer http.ResponseWriter, request *http.Request) {
+	usage, err := apiHandler.service.GetTenantUsage(request.Context(), requestPrincipal(request))
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	apiHandler.writeJSON(writer, request, http.StatusOK, usage)
+}
+
+func (apiHandler *handler) getDeploymentUsage(writer http.ResponseWriter, request *http.Request) {
+	limit, err := queryLimit(request)
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	usage, err := apiHandler.service.GetDeploymentUsage(
+		request.Context(), requestPrincipal(request), limit, request.URL.Query().Get("cursor"),
+	)
+	if err != nil {
+		apiHandler.writeError(writer, request, err)
+		return
+	}
+	apiHandler.writeJSON(writer, request, http.StatusOK, usage)
+}
+
 func (apiHandler *handler) subjectManagementAction(writer http.ResponseWriter, request *http.Request) {
 	action := request.PathValue("subjectAction")
 	if !strings.HasSuffix(action, ":close") && !strings.HasSuffix(action, ":cleanup") {

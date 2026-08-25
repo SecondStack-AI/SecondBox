@@ -127,9 +127,45 @@ func (store *PostgresControlPlaneStore) SetSandboxDesiredState(
 			(locked.Workspace.State == "creating" || locked.Workspace.State == "failed")) {
 		return contracts.Operation{}, ports.ErrGenerationFenced
 	}
+	var tenantQuota contracts.TenantQuota
+	var subjectQuota contracts.QuotaLimits
+	if kind == "start" {
+		tenantQuota, subjectQuota, err = lockTenantAndSubjectQuotaForAdmission(
+			ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, input.Now,
+		)
+		if err != nil {
+			return contracts.Operation{}, err
+		}
+	}
 	if kind == "start" {
 		if observed != contracts.SandboxStateStopped && observed != contracts.SandboxStateFailed {
 			return contracts.Operation{}, ports.ErrWorkspaceMutation
+		}
+		var specJSON []byte
+		if err := tx.QueryRow(ctx, `SELECT spec_json FROM secondbox.profile_revisions WHERE id=$1`,
+			locked.ProfileRevisionID).Scan(&specJSON); err != nil {
+			return contracts.Operation{}, fmt.Errorf("SecondBox lifecycle quota Profile lookup failed: %w", err)
+		}
+		var spec contracts.ProfileRevisionSpec
+		if err := json.Unmarshal(specJSON, &spec); err != nil {
+			return contracts.Operation{}, fmt.Errorf("SecondBox lifecycle quota Profile decoding failed: %w", err)
+		}
+		subjectUsage, err := readSubjectQuotaUsage(
+			ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef,
+		)
+		if err != nil {
+			return contracts.Operation{}, err
+		}
+		tenantUsage, err := readTenantQuotaUsage(ctx, tx, input.Principal.TenantRef, input.Now)
+		if err != nil {
+			return contracts.Operation{}, err
+		}
+		delta := quotaUsage{activeInstances: 1, cpuMillis: spec.Resources.CPUMillis, memoryBytes: spec.Resources.MemoryBytes}
+		if subjectUsage.activeInstances+1 > subjectQuota.MaxActiveInstances ||
+			subjectUsage.cpuMillis+delta.cpuMillis > subjectQuota.MaxCPUMillis ||
+			subjectUsage.memoryBytes+delta.memoryBytes > subjectQuota.MaxMemoryBytes ||
+			tenantDataPlaneQuotaWouldExceed(tenantQuota, tenantUsage, delta) {
+			return contracts.Operation{}, ports.ErrQuotaExceeded
 		}
 		if err := requireHomeRunnerReady(ctx, tx, locked.Workspace.HomeRunnerID); err != nil {
 			return contracts.Operation{}, err

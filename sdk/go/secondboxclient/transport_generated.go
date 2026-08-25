@@ -134,6 +134,9 @@ var operations = map[string]OperationMetadata{
 	"getDeploymentTiming": {
 		OperationID: "getDeploymentTiming", Method: "GET", PathTemplate: "/v1/timings",
 	},
+	"getDeploymentUsage": {
+		OperationID: "getDeploymentUsage", Method: "GET", PathTemplate: "/v1/deployment-usage",
+	},
 	"getOperation": {
 		OperationID: "getOperation", Method: "GET", PathTemplate: "/v1/operations/{operationId}",
 	},
@@ -300,6 +303,13 @@ var operations = map[string]OperationMetadata{
 		OperationID: "updateSandboxMetadata", Method: "PUT", PathTemplate: "/v1/sandboxes/{sandboxId}/metadata",
 		RequestBody: []OperationMediaType{
 			{ContentType: "application/json", Schema: "UpdateSandboxMetadataRequest"},
+		},
+		RequestBodyRequired: true,
+	},
+	"updateSubjectQuota": {
+		OperationID: "updateSubjectQuota", Method: "PUT", PathTemplate: "/v1/subjects/{subjectRef}/quota",
+		RequestBody: []OperationMediaType{
+			{ContentType: "application/json", Schema: "UpdateSubjectQuotaRequest"},
 		},
 		RequestBodyRequired: true,
 	},

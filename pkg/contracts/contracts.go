@@ -404,7 +404,7 @@ type QuotaUsage struct {
 
 // SubjectUsage reports one trusted caller subject's limits and current usage.
 type SubjectUsage struct {
-	TenantRef  string      `json:"tenantRef"`
+	TenantRef  string      `json:"-"`
 	SubjectRef string      `json:"subjectRef"`
 	Limits     QuotaLimits `json:"limits"`
 	Usage      QuotaUsage  `json:"usage"`

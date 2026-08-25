@@ -100,7 +100,9 @@ func (store *PostgresControlPlaneStore) CreateSnapshot(
 	).Scan(&count); err != nil {
 		return contracts.Operation{}, fmt.Errorf("SecondBox Snapshot count lookup failed: %w", err)
 	}
-	quota, err := readSubjectQuota(ctx, tx, input.Snapshot.TenantRef, input.Snapshot.SubjectRef)
+	tenantQuota, quota, err := lockTenantAndSubjectQuotaForAdmission(
+		ctx, tx, input.Snapshot.TenantRef, input.Snapshot.SubjectRef, input.Snapshot.CreatedAt,
+	)
 	if err != nil {
 		return contracts.Operation{}, err
 	}
@@ -108,7 +110,12 @@ func (store *PostgresControlPlaneStore) CreateSnapshot(
 	if err != nil {
 		return contracts.Operation{}, err
 	}
-	if count+1 > spec.Retention.SnapshotLimit || usage.snapshots+1 > quota.MaxSnapshots {
+	tenantUsage, err := readTenantQuotaUsage(ctx, tx, input.Snapshot.TenantRef, input.Snapshot.CreatedAt)
+	if err != nil {
+		return contracts.Operation{}, err
+	}
+	if count+1 > spec.Retention.SnapshotLimit || usage.snapshots+1 > quota.MaxSnapshots ||
+		tenantDataPlaneQuotaWouldExceed(tenantQuota, tenantUsage, quotaUsage{snapshots: 1}) {
 		return contracts.Operation{}, ports.ErrQuotaExceeded
 	}
 

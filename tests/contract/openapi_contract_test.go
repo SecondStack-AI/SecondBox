@@ -189,9 +189,9 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 			"listTenants", "createTenant", "getTenant", "suspendTenant", "reactivateTenant",
 			"listTenantControllerAuthorities", "createTenantControllerAuthority",
 			"getTenantControllerAuthority", "rotateTenantControllerAuthority", "revokeTenantControllerAuthority",
-			"listSubjects", "createSubject", "getSubject", "closeSubject", "cleanupSubject",
+			"listSubjects", "createSubject", "getSubject", "updateSubjectQuota", "closeSubject", "cleanupSubject",
 			"listApplicationAuthorities", "createApplicationAuthority", "getApplicationAuthority",
-			"rotateApplicationAuthority", "revokeApplicationAuthority", "getTenantUsage",
+			"rotateApplicationAuthority", "revokeApplicationAuthority", "getTenantUsage", "getDeploymentUsage",
 			"createProfile", "reviseProfile", "createSandbox", "updateSandboxMetadata", "startSandbox",
 			"drainSandbox", "stopSandbox", "restoreSandboxSnapshot", "getOperation",
 			"executeSandboxCommand", "createSandboxExecStream", "readSandboxFile",
@@ -235,7 +235,7 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 			"createProfile": true, "reviseProfile": true, "disableProfile": true,
 			"createTenant": true, "suspendTenant": true, "reactivateTenant": true,
 			"createTenantControllerAuthority": true, "rotateTenantControllerAuthority": true,
-			"revokeTenantControllerAuthority": true, "createSubject": true,
+			"revokeTenantControllerAuthority": true, "createSubject": true, "updateSubjectQuota": true,
 			"closeSubject": true, "cleanupSubject": true,
 			"createApplicationAuthority": true, "rotateApplicationAuthority": true,
 			"revokeApplicationAuthority": true,
@@ -246,7 +246,7 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 			if reference, ok := pathItem["$ref"].(string); ok {
 				pathItem = object(t, resolveLocalReference(t, document, reference), path)
 			}
-			for _, method := range []string{"patch", "post"} {
+			for _, method := range []string{"patch", "post", "put"} {
 				operationValue, exists := pathItem[method]
 				if !exists {
 					continue
@@ -285,7 +285,7 @@ func TestCanonicalOpenAPIProtocolShape(t *testing.T) {
 			if strings.HasPrefix(path, "/v1/tenants") ||
 				strings.HasPrefix(path, "/v1/subjects") ||
 				strings.HasPrefix(path, "/v1/application-authorities") ||
-				path == "/v1/usage" {
+				path == "/v1/usage" || path == "/v1/deployment-usage" {
 				continue
 			}
 			pathItem := object(t, pathValue, path)

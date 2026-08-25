@@ -34,7 +34,7 @@ func TestDelegatedTenantManagementEndToEndAcrossIsolationRestartAndConcurrency(t
 	tenantRequest := func(ref secondboxclient.OwnershipRef) secondboxclient.CreateTenantRequest {
 		expiresAt := now.Add(24 * time.Hour)
 		return secondboxclient.CreateTenantRequest{
-			Ref: ref, AllowedProfileGrants: []string{"coding"},
+			Ref: ref, AllowedProfileGrants: []string{"coding", "management-quota-profile"},
 			AllowedApplicationScopes: []string{"sandbox:read", "sandbox:lifecycle"},
 			AggregateQuota: secondboxclient.TenantQuota{
 				MaxSandboxes: 8, MaxActiveInstances: 8, MaxCpuMillis: 8000,
@@ -133,7 +133,8 @@ func TestDelegatedTenantManagementEndToEndAcrossIsolationRestartAndConcurrency(t
 			MaxMemoryBytes: 2 << 30, MaxSnapshots: 2, MaxPortSessions: 2, MaxConcurrentOperations: 2,
 		},
 	}
-	if _, err := controllerAClient.CreateSubject(t.Context(), subjectRequest, "subject-a-create-idempotency"); err != nil {
+	subjectA, err := controllerAClient.CreateSubject(t.Context(), subjectRequest, "subject-a-create-idempotency")
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := controllerBClient.CreateSubject(t.Context(), subjectRequest, "subject-b-create-idempotency"); err != nil {
@@ -147,6 +148,41 @@ func TestDelegatedTenantManagementEndToEndAcrossIsolationRestartAndConcurrency(t
 	if _, err := controllerBClient.GetSubject(t.Context(), isolatedSubject.Ref); secondboxclient.ProblemCodeOf(err) != secondboxclient.ProblemCodeNotFound {
 		t.Fatalf("cross-Tenant Subject lookup error = %v", err)
 	}
+	expandedQuota := secondboxclient.UpdateSubjectQuotaRequest{Quota: subjectA.Quota}
+	expandedQuota.Quota.MaxSandboxes = 3
+	updatedSubject, err := controllerAClient.UpdateSubjectQuota(
+		t.Context(), subjectA.Ref, expandedQuota, subjectA.Revision, "subject-quota-expand-key",
+	)
+	if err != nil || updatedSubject.Revision != subjectA.Revision+1 || updatedSubject.Quota.MaxSandboxes != 3 {
+		t.Fatalf("Subject quota expansion = %#v error=%v", updatedSubject, err)
+	}
+	overCeilingQuota := expandedQuota
+	overCeilingQuota.Quota.MaxSandboxes = 9
+	if _, err := controllerAClient.UpdateSubjectQuota(
+		t.Context(), subjectA.Ref, overCeilingQuota, updatedSubject.Revision, "subject-quota-over-ceiling-key",
+	); secondboxclient.ProblemCodeOf(err) != secondboxclient.ProblemCodeGrantEscalationDenied {
+		t.Fatalf("Subject quota update escalation error = %v", err)
+	}
+	if _, err := controllerAClient.UpdateSubjectQuota(
+		t.Context(), subjectA.Ref, expandedQuota, subjectA.Revision, "subject-quota-stale-key",
+	); secondboxclient.ProblemCodeOf(err) != secondboxclient.ProblemCodePreconditionFailed {
+		t.Fatalf("stale Subject quota revision error = %v", err)
+	}
+	if _, err := controllerBClient.UpdateSubjectQuota(
+		t.Context(), isolatedSubject.Ref, expandedQuota, 1, "subject-quota-cross-tenant-key",
+	); secondboxclient.ProblemCodeOf(err) != secondboxclient.ProblemCodeNotFound {
+		t.Fatalf("cross-Tenant Subject quota update error = %v", err)
+	}
+	tenantUsage, err := controllerAClient.GetTenantUsage(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tenantUsage.TenantRef != tenantARef ||
+		tenantUsage.Limits.MaxActiveSubjects != tenantRequest(tenantARef).AggregateQuota.MaxActiveSubjects ||
+		tenantUsage.Usage.ActiveSubjects != 2 || len(tenantUsage.Subjects) != 2 ||
+		tenantUsage.ObservedAt.IsZero() {
+		t.Fatalf("Tenant usage = %#v", tenantUsage)
+	}
 	escalatedSubject := subjectRequest
 	escalatedSubject.Ref = "over-ceiling-subject"
 	escalatedSubject.Quota.MaxSandboxes = 9
@@ -156,13 +192,106 @@ func TestDelegatedTenantManagementEndToEndAcrossIsolationRestartAndConcurrency(t
 
 	applicationExpiry := now.Add(3 * time.Hour)
 	applicationRequest := secondboxclient.CreateApplicationAuthorityRequest{
-		SubjectRef: "shared-subject", Scopes: []string{"sandbox:read"},
-		ProfileGrants: []string{"coding"}, Metadata: map[string]string{"purpose": "sandbox"},
+		SubjectRef: "shared-subject", Scopes: []string{"sandbox:read", "sandbox:lifecycle"},
+		ProfileGrants: []string{"management-quota-profile"}, Metadata: map[string]string{"purpose": "sandbox"},
 		ExpiresAt: applicationExpiry,
 	}
 	applicationA, err := controllerAClient.CreateApplicationAuthority(t.Context(), applicationRequest, "application-a-create-key")
 	if err != nil {
 		t.Fatal(err)
+	}
+	createGrantedProfile(t, restarted, restartedStore, contracts.Principal{
+		Kind: contracts.AuthorityKindPlatform, ID: "management-quota-operator",
+	}, fixtureServiceAccount{
+		ID: "shared-subject", TenantRef: string(tenantARef),
+		ProfileGrants: []string{"management-quota-profile"},
+	}, "management-quota-profile")
+	applicationClient, err := secondboxclient.NewSecondBoxSubjectClient(
+		restartedServer.URL, applicationA.BearerToken, string(tenantARef), "shared-subject", restartedServer.Client(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type quotaRaceOutcome struct {
+		kind string
+		err  error
+	}
+	quotaRace := make(chan quotaRaceOutcome, 2)
+	startQuotaRace := make(chan struct{})
+	go func() {
+		<-startQuotaRace
+		_, _, raceErr := applicationClient.CreateSandbox(t.Context(), secondboxclient.CreateSandboxRequest{
+			Profile: "management-quota-profile", Metadata: map[string]string{},
+		}, "subject-quota-race-sandbox-key")
+		quotaRace <- quotaRaceOutcome{kind: "usage", err: raceErr}
+	}()
+	go func() {
+		<-startQuotaRace
+		narrowed := expandedQuota
+		narrowed.Quota.MaxSandboxes = 0
+		_, raceErr := controllerAClient.UpdateSubjectQuota(
+			t.Context(), subjectA.Ref, narrowed, updatedSubject.Revision, "subject-quota-race-narrow-key",
+		)
+		quotaRace <- quotaRaceOutcome{kind: "narrow", err: raceErr}
+	}()
+	close(startQuotaRace)
+	usageSucceeded, narrowingSucceeded := false, false
+	for range 2 {
+		outcome := <-quotaRace
+		switch outcome.kind {
+		case "usage":
+			usageSucceeded = outcome.err == nil
+			if outcome.err != nil && secondboxclient.ProblemCodeOf(outcome.err) != secondboxclient.ProblemCodeQuotaExceeded {
+				t.Fatalf("quota race usage error = %v", outcome.err)
+			}
+		case "narrow":
+			narrowingSucceeded = outcome.err == nil
+			if outcome.err != nil && secondboxclient.ProblemCodeOf(outcome.err) != secondboxclient.ProblemCodeStateConflict {
+				t.Fatalf("quota race narrowing error = %v", outcome.err)
+			}
+		}
+	}
+	if usageSucceeded == narrowingSucceeded {
+		t.Fatalf("quota race usage succeeded=%t narrowing succeeded=%t", usageSucceeded, narrowingSucceeded)
+	}
+	postRaceSubject, err := controllerAClient.GetSubject(t.Context(), subjectA.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	postRaceUsage, err := controllerAClient.GetTenantUsage(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, usage := range postRaceUsage.Subjects {
+		if usage.SubjectRef == subjectA.Ref && usage.Usage.Sandboxes > postRaceSubject.Quota.MaxSandboxes {
+			t.Fatalf("quota race committed usage=%d limit=%d", usage.Usage.Sandboxes, postRaceSubject.Quota.MaxSandboxes)
+		}
+	}
+	deploymentUsage, err := operator.GetDeploymentUsage(t.Context(), secondboxclient.PageOptions{Limit: 200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tenantAUsage, tenantBUsage *secondboxclient.TenantAggregateUsage
+	for index := range deploymentUsage.Tenants {
+		tenant := &deploymentUsage.Tenants[index]
+		if tenant.TenantRef == tenantARef {
+			tenantAUsage = tenant
+		}
+		if tenant.TenantRef == tenantBRef {
+			tenantBUsage = tenant
+		}
+	}
+	if tenantAUsage == nil || tenantBUsage == nil || tenantAUsage.Usage.ActiveSubjects != 2 ||
+		tenantBUsage.Usage.ActiveSubjects != 1 ||
+		deploymentUsage.Usage.ActiveSubjects < tenantAUsage.Usage.ActiveSubjects+tenantBUsage.Usage.ActiveSubjects ||
+		deploymentUsage.ObservedAt.IsZero() {
+		t.Fatalf("Deployment usage = %#v", deploymentUsage)
+	}
+	if _, err := controllerAClient.GetDeploymentUsage(t.Context(), secondboxclient.PageOptions{}); secondboxclient.ProblemCodeOf(err) != secondboxclient.ProblemCodeAuthenticationFailed {
+		t.Fatalf("controller Deployment usage error = %v", err)
+	}
+	if _, err := applicationClient.GetDeploymentUsage(t.Context(), secondboxclient.PageOptions{}); secondboxclient.ProblemCodeOf(err) != secondboxclient.ProblemCodeAuthenticationFailed {
+		t.Fatalf("application Deployment usage error = %v", err)
 	}
 	_, err = controllerAClient.CreateApplicationAuthority(t.Context(), applicationRequest, "application-a-create-key")
 	assertCredentialResponseUnavailableError(t, err)

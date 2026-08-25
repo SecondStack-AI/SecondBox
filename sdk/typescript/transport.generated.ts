@@ -201,6 +201,13 @@ export interface DeploymentTimingSummary {
   readonly windowSeconds: number;
 }
 
+export interface DeploymentUsage {
+  readonly nextCursor?: string;
+  readonly observedAt: Timestamp;
+  readonly tenants: readonly TenantAggregateUsage[];
+  readonly usage: TenantQuotaUsage;
+}
+
 export interface DirectoryListing {
   readonly entries: readonly FileStat[];
   readonly path: WorkspacePath;
@@ -788,6 +795,12 @@ export interface Tenant {
   readonly updatedAt: Timestamp;
 }
 
+export interface TenantAggregateUsage {
+  readonly limits: TenantQuota;
+  readonly tenantRef: OwnershipRef;
+  readonly usage: TenantQuotaUsage;
+}
+
 export interface TenantControllerAuthority {
   readonly createdAt: Timestamp;
   readonly expiresAt?: Timestamp;
@@ -923,6 +936,10 @@ export interface UpdateSandboxMetadataRequest {
   readonly metadata: Metadata;
 }
 
+export interface UpdateSubjectQuotaRequest {
+  readonly quota: SubjectQuota;
+}
+
 export interface WaitSandboxRequest {
   readonly deadlineMilliseconds: number;
   readonly states: readonly SandboxState[];
@@ -965,6 +982,7 @@ export type OperationID =
   | "executeSandboxCommand"
   | "getApplicationAuthority"
   | "getDeploymentTiming"
+  | "getDeploymentUsage"
   | "getOperation"
   | "getOperationTiming"
   | "getProfile"
@@ -1012,6 +1030,7 @@ export type OperationID =
   | "touchSandbox"
   | "updateRunnerPool"
   | "updateSandboxMetadata"
+  | "updateSubjectQuota"
   | "waitForSandbox"
   | "writeSandboxFile";
 
@@ -1047,6 +1066,7 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   executeSandboxCommand: { method: "POST", path: "/v1/sandboxes/{sandboxId}/exec", contentType: "application/json" },
   getApplicationAuthority: { method: "GET", path: "/v1/application-authorities/{authorityId}" },
   getDeploymentTiming: { method: "GET", path: "/v1/timings" },
+  getDeploymentUsage: { method: "GET", path: "/v1/deployment-usage" },
   getOperation: { method: "GET", path: "/v1/operations/{operationId}" },
   getOperationTiming: { method: "GET", path: "/v1/operations/{operationId}/timings" },
   getProfile: { method: "GET", path: "/v1/profiles/{profileName}" },
@@ -1094,6 +1114,7 @@ export const OPERATIONS: Readonly<Record<OperationID, Route>> = {
   touchSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:touch" },
   updateRunnerPool: { method: "PATCH", path: "/v1/runner-pools/{runnerPoolName}", contentType: "application/json" },
   updateSandboxMetadata: { method: "PUT", path: "/v1/sandboxes/{sandboxId}/metadata", contentType: "application/json" },
+  updateSubjectQuota: { method: "PUT", path: "/v1/subjects/{subjectRef}/quota", contentType: "application/json" },
   waitForSandbox: { method: "POST", path: "/v1/sandboxes/{sandboxId}:wait", contentType: "application/json" },
   writeSandboxFile: { method: "PUT", path: "/v1/sandboxes/{sandboxId}/files", contentType: "application/octet-stream" },
 };

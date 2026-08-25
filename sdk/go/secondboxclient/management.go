@@ -90,6 +90,12 @@ func (client *Client) GetSubject(ctx context.Context, subjectRef OwnershipRef) (
 	return subject, err
 }
 
+func (client *Client) UpdateSubjectQuota(ctx context.Context, subjectRef OwnershipRef, request UpdateSubjectQuotaRequest, expectedRevision int64, idempotencyKey string) (Subject, error) {
+	var subject Subject
+	err := client.mutateManagementJSON(ctx, "updateSubjectQuota", map[string]string{"subjectRef": subjectRef}, expectedRevision, idempotencyKey, request, &subject)
+	return subject, err
+}
+
 func (client *Client) ListSubjects(ctx context.Context, options PageOptions) (SubjectPage, error) {
 	query, err := pageQuery(options)
 	if err != nil {
@@ -140,6 +146,16 @@ func (client *Client) RevokeApplicationAuthority(ctx context.Context, authorityI
 func (client *Client) GetTenantUsage(ctx context.Context) (TenantUsage, error) {
 	var usage TenantUsage
 	err := client.RequestJSON(ctx, "getTenantUsage", CallOptions{}, &usage)
+	return usage, err
+}
+
+func (client *Client) GetDeploymentUsage(ctx context.Context, options PageOptions) (DeploymentUsage, error) {
+	query, err := pageQuery(options)
+	if err != nil {
+		return DeploymentUsage{}, err
+	}
+	var usage DeploymentUsage
+	err = client.RequestJSON(ctx, "getDeploymentUsage", CallOptions{QueryParameters: query}, &usage)
 	return usage, err
 }
 

@@ -361,7 +361,7 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	}
 
 	profile, err := scanProfile(tx.QueryRow(ctx, profileSelect+`
-		WHERE profile.name=$1 FOR UPDATE OF profile`, input.Sandbox.Profile))
+		WHERE profile.name=$1 FOR SHARE OF profile`, input.Sandbox.Profile))
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, mapNotFound(err, ports.ErrProfileNotFound)
 	}
@@ -387,10 +387,9 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
-	if err := ensureSubjectQuota(ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, input.SubjectQuota, input.Sandbox.CreatedAt); err != nil {
-		return contracts.Sandbox{}, contracts.Operation{}, false, err
-	}
-	subjectQuota, err := readSubjectQuota(ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef)
+	tenantQuota, subjectQuota, err := lockTenantAndSubjectQuotaForAdmission(
+		ctx, tx, input.Principal.TenantRef, input.Principal.SubjectRef, input.Sandbox.CreatedAt,
+	)
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
@@ -398,15 +397,24 @@ func (store *PostgresControlPlaneStore) CreateSandbox(
 	if err != nil {
 		return contracts.Sandbox{}, contracts.Operation{}, false, err
 	}
-	requestedCPU := profile.CurrentRevision.Spec.Resources.CPUMillis
-	requestedMemory := profile.CurrentRevision.Spec.Resources.MemoryBytes
+	tenantUsage, err := readTenantQuotaUsage(ctx, tx, input.Principal.TenantRef, input.Sandbox.CreatedAt)
+	if err != nil {
+		return contracts.Sandbox{}, contracts.Operation{}, false, err
+	}
+	requestedCPU := int64(0)
+	requestedMemory := int64(0)
 	requestedActiveInstances := int64(0)
 	if profile.CurrentRevision.Spec.Lifecycle.InitialState == contracts.SandboxDesiredStateRunning {
 		requestedActiveInstances = 1
+		requestedCPU = profile.CurrentRevision.Spec.Resources.CPUMillis
+		requestedMemory = profile.CurrentRevision.Spec.Resources.MemoryBytes
 	}
 	if quotaWouldExceed(
 		subjectQuota, subjectUsage, requestedCPU, requestedMemory, requestedActiveInstances,
-	) {
+	) || tenantDataPlaneQuotaWouldExceed(tenantQuota, tenantUsage, quotaUsage{
+		sandboxes: 1, activeInstances: requestedActiveInstances,
+		cpuMillis: requestedCPU, memoryBytes: requestedMemory,
+	}) {
 		return contracts.Sandbox{}, contracts.Operation{}, false, ports.ErrQuotaExceeded
 	}
 
@@ -1290,28 +1298,101 @@ func readSubjectQuota(
 	return quota, nil
 }
 
+func lockTenantQuota(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantRef string,
+) (contracts.TenantQuota, error) {
+	var quota contracts.TenantQuota
+	if err := tx.QueryRow(ctx, `
+		SELECT max_sandboxes,max_active_instances,max_cpu_millis,max_memory_bytes,
+		       max_snapshots,max_port_sessions,max_concurrent_operations,
+		       max_active_subjects,max_application_authorities
+		FROM secondbox.tenant_quotas
+		WHERE tenant_ref=$1
+		FOR UPDATE`, tenantRef).Scan(
+		&quota.MaxSandboxes, &quota.MaxActiveInstances, &quota.MaxCPUMillis,
+		&quota.MaxMemoryBytes, &quota.MaxSnapshots, &quota.MaxPortSessions,
+		&quota.MaxConcurrentOperations, &quota.MaxActiveSubjects,
+		&quota.MaxApplicationAuthorities,
+	); err != nil {
+		return contracts.TenantQuota{}, fmt.Errorf("SecondBox Tenant quota lookup failed: %w", err)
+	}
+	return quota, nil
+}
+
+func lockTenantAndSubjectQuota(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantRef string,
+	subjectRef string,
+) (contracts.TenantQuota, contracts.QuotaLimits, error) {
+	tenantQuota, err := lockTenantQuota(ctx, tx, tenantRef)
+	if err != nil {
+		return contracts.TenantQuota{}, contracts.QuotaLimits{}, err
+	}
+	subjectQuota, err := readSubjectQuota(ctx, tx, tenantRef, subjectRef)
+	if err != nil {
+		return contracts.TenantQuota{}, contracts.QuotaLimits{}, err
+	}
+	return tenantQuota, subjectQuota, nil
+}
+
+func lockTenantAndSubjectQuotaForAdmission(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantRef string,
+	subjectRef string,
+	now time.Time,
+) (contracts.TenantQuota, contracts.QuotaLimits, error) {
+	var state string
+	var expiresAt *time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT state,expires_at FROM secondbox.tenants WHERE ref=$1 FOR UPDATE`, tenantRef,
+	).Scan(&state, &expiresAt); err != nil {
+		return contracts.TenantQuota{}, contracts.QuotaLimits{}, fmt.Errorf("SecondBox Tenant quota admission lookup failed: %w", err)
+	}
+	if state == contracts.TenantStateSuspended {
+		return contracts.TenantQuota{}, contracts.QuotaLimits{}, ports.ErrTenantSuspended
+	}
+	if state == contracts.TenantStateExpired || expiresAt != nil && !expiresAt.After(now.UTC()) {
+		return contracts.TenantQuota{}, contracts.QuotaLimits{}, ports.ErrResourceExpired
+	}
+	if state != contracts.TenantStateActive {
+		return contracts.TenantQuota{}, contracts.QuotaLimits{}, ports.ErrInvalidLifecycleTransition
+	}
+	return lockTenantAndSubjectQuota(ctx, tx, tenantRef, subjectRef)
+}
+
 func readSubjectQuotaUsage(
 	ctx context.Context,
 	tx pgx.Tx,
 	tenantRef string,
 	subjectRef string,
 ) (quotaUsage, error) {
-	// Compute reservations (active instances, CPU, memory) count only states
-	// with a live or pending Instance; a stopped Sandbox holds no compute.
+	// Compute reservations (active instances, CPU, memory) include accepted
+	// running intent as well as live or pending Instances. A stopped Sandbox
+	// with no accepted start holds no compute.
 	// Durable reservations (Sandbox count and Snapshots) persist until deletion.
 	var usage quotaUsage
 	if err := tx.QueryRow(ctx, `
 		SELECT count(*),
-		       count(*) FILTER (WHERE sandbox.state IN ('starting','ready','draining','stopping')),
+		       count(*) FILTER (WHERE (sandbox.desired_state='running'
+		           AND sandbox.state IN ('creating','stopped'))
+		         OR sandbox.state IN ('starting','ready','draining','stopping')),
 		       COALESCE(sum((revision.spec_json->'resources'->>'cpuMillis')::bigint)
-		         FILTER (WHERE sandbox.state IN ('starting','ready','draining','stopping')),0),
+		         FILTER (WHERE (sandbox.desired_state='running'
+		             AND sandbox.state IN ('creating','stopped'))
+		           OR sandbox.state IN ('starting','ready','draining','stopping')),0),
 		       COALESCE(sum((revision.spec_json->'resources'->>'memoryBytes')::bigint)
-		         FILTER (WHERE sandbox.state IN ('starting','ready','draining','stopping')),0),
+		         FILTER (WHERE (sandbox.desired_state='running'
+		             AND sandbox.state IN ('creating','stopped'))
+		           OR sandbox.state IN ('starting','ready','draining','stopping')),0),
 		       (SELECT count(*) FROM secondbox.snapshots
 		        WHERE tenant_ref=$1 AND subject_ref=$2
 		          AND state IN ('creating','ready','deleting')),
 		       (SELECT count(*) FROM secondbox.port_sessions
-		        WHERE tenant_ref=$1 AND subject_ref=$2 AND state='open'),
+		        WHERE tenant_ref=$1 AND subject_ref=$2 AND state IN ('open','closing')),
 		       (SELECT count(*) FROM secondbox.data_plane_sessions
 		        WHERE tenant_ref=$1 AND subject_ref=$2 AND state IN ('pending','running','cancelling'))
 		FROM secondbox.sandboxes AS sandbox
@@ -1326,6 +1407,114 @@ func readSubjectQuotaUsage(
 		return quotaUsage{}, fmt.Errorf("SecondBox quota usage lookup failed: %w", err)
 	}
 	return usage, nil
+}
+
+func readTenantQuotaUsage(
+	ctx context.Context,
+	tx pgx.Tx,
+	tenantRef string,
+	now time.Time,
+) (contracts.TenantQuotaUsage, error) {
+	var usage contracts.TenantQuotaUsage
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*),
+		       count(*) FILTER (WHERE (sandbox.desired_state='running'
+		           AND sandbox.state IN ('creating','stopped'))
+		         OR sandbox.state IN ('starting','ready','draining','stopping')),
+		       COALESCE(sum((revision.spec_json->'resources'->>'cpuMillis')::bigint)
+		         FILTER (WHERE (sandbox.desired_state='running'
+		             AND sandbox.state IN ('creating','stopped'))
+		           OR sandbox.state IN ('starting','ready','draining','stopping')),0),
+		       COALESCE(sum((revision.spec_json->'resources'->>'memoryBytes')::bigint)
+		         FILTER (WHERE (sandbox.desired_state='running'
+		             AND sandbox.state IN ('creating','stopped'))
+		           OR sandbox.state IN ('starting','ready','draining','stopping')),0),
+		       (SELECT count(*) FROM secondbox.snapshots
+		        WHERE tenant_ref=$1 AND state IN ('creating','ready','deleting')),
+		       (SELECT count(*) FROM secondbox.port_sessions
+		        WHERE tenant_ref=$1 AND state IN ('open','closing') AND expires_at>$2),
+		       (SELECT count(*) FROM secondbox.data_plane_sessions
+		        WHERE tenant_ref=$1 AND state IN ('pending','running','cancelling')),
+		       (SELECT count(*) FROM secondbox.subjects
+		        WHERE tenant_ref=$1 AND state='active'
+		          AND (expires_at IS NULL OR expires_at>$2)),
+		       (SELECT count(*) FROM secondbox.application_authorities
+		        WHERE tenant_ref=$1 AND state='active'
+		          AND (expires_at IS NULL OR expires_at>$2))
+		FROM secondbox.sandboxes AS sandbox
+		JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
+		WHERE sandbox.tenant_ref=$1 AND sandbox.state<>'deleted'`, tenantRef, now.UTC()).Scan(
+		&usage.Sandboxes, &usage.ActiveInstances, &usage.CPUMillis, &usage.MemoryBytes,
+		&usage.Snapshots, &usage.PortSessions, &usage.ConcurrentOperations,
+		&usage.ActiveSubjects, &usage.ApplicationAuthorities,
+	); err != nil {
+		return contracts.TenantQuotaUsage{}, fmt.Errorf("SecondBox Tenant quota usage lookup failed: %w", err)
+	}
+	return usage, nil
+}
+
+func readDeploymentQuotaUsage(
+	ctx context.Context,
+	tx pgx.Tx,
+	now time.Time,
+) (contracts.TenantQuotaUsage, error) {
+	var usage contracts.TenantQuotaUsage
+	if err := tx.QueryRow(ctx, `
+		SELECT (SELECT count(*) FROM secondbox.sandboxes WHERE state<>'deleted'),
+		       (SELECT count(*) FROM secondbox.sandboxes
+		        WHERE (desired_state='running' AND state IN ('creating','stopped'))
+		           OR state IN ('starting','ready','draining','stopping')),
+		       (SELECT COALESCE(sum((revision.spec_json->'resources'->>'cpuMillis')::bigint),0)
+		        FROM secondbox.sandboxes AS sandbox
+		        JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
+		        WHERE (sandbox.desired_state='running' AND sandbox.state IN ('creating','stopped'))
+		           OR sandbox.state IN ('starting','ready','draining','stopping')),
+		       (SELECT COALESCE(sum((revision.spec_json->'resources'->>'memoryBytes')::bigint),0)
+		        FROM secondbox.sandboxes AS sandbox
+		        JOIN secondbox.profile_revisions AS revision ON revision.id=sandbox.profile_revision_id
+		        WHERE (sandbox.desired_state='running' AND sandbox.state IN ('creating','stopped'))
+		           OR sandbox.state IN ('starting','ready','draining','stopping')),
+		       (SELECT count(*) FROM secondbox.snapshots
+		        WHERE state IN ('creating','ready','deleting')),
+		       (SELECT count(*) FROM secondbox.port_sessions
+		        WHERE state IN ('open','closing') AND expires_at>$1),
+		       (SELECT count(*) FROM secondbox.data_plane_sessions
+		        WHERE state IN ('pending','running','cancelling')),
+		       (SELECT count(*) FROM secondbox.subjects
+		        WHERE state='active' AND (expires_at IS NULL OR expires_at>$1)),
+		       (SELECT count(*) FROM secondbox.application_authorities
+		        WHERE state='active' AND (expires_at IS NULL OR expires_at>$1))`, now.UTC()).Scan(
+		&usage.Sandboxes, &usage.ActiveInstances, &usage.CPUMillis, &usage.MemoryBytes,
+		&usage.Snapshots, &usage.PortSessions, &usage.ConcurrentOperations,
+		&usage.ActiveSubjects, &usage.ApplicationAuthorities,
+	); err != nil {
+		return contracts.TenantQuotaUsage{}, fmt.Errorf("SecondBox Deployment quota usage lookup failed: %w", err)
+	}
+	return usage, nil
+}
+
+func subjectQuotaCoversUsage(quota contracts.QuotaLimits, usage quotaUsage) bool {
+	return quota.MaxSandboxes >= usage.sandboxes &&
+		quota.MaxActiveInstances >= usage.activeInstances &&
+		quota.MaxCPUMillis >= usage.cpuMillis &&
+		quota.MaxMemoryBytes >= usage.memoryBytes &&
+		quota.MaxSnapshots >= usage.snapshots &&
+		quota.MaxPortSessions >= usage.portSessions &&
+		quota.MaxConcurrentOperations >= usage.concurrentOperations
+}
+
+func tenantDataPlaneQuotaWouldExceed(
+	quota contracts.TenantQuota,
+	usage contracts.TenantQuotaUsage,
+	delta quotaUsage,
+) bool {
+	return usage.Sandboxes+delta.sandboxes > quota.MaxSandboxes ||
+		usage.ActiveInstances+delta.activeInstances > quota.MaxActiveInstances ||
+		usage.CPUMillis+delta.cpuMillis > quota.MaxCPUMillis ||
+		usage.MemoryBytes+delta.memoryBytes > quota.MaxMemoryBytes ||
+		usage.Snapshots+delta.snapshots > quota.MaxSnapshots ||
+		usage.PortSessions+delta.portSessions > quota.MaxPortSessions ||
+		usage.ConcurrentOperations+delta.concurrentOperations > quota.MaxConcurrentOperations
 }
 
 func quotaWouldExceed(

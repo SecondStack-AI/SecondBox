@@ -706,6 +706,30 @@ func enforcePortSessionCapacity(
 	_ string,
 	policy contracts.PortPolicy,
 ) error {
+	var tenantState string
+	var tenantExpiresAt *time.Time
+	var tenantMaximum, tenantActive int64
+	if err := tx.QueryRow(ctx, `
+		SELECT tenant.state,tenant.expires_at,quota.max_port_sessions,
+		       (SELECT count(*) FROM secondbox.port_sessions
+		        WHERE tenant_ref=$1 AND state IN ('open','closing') AND expires_at>$2)
+		FROM secondbox.tenants AS tenant
+		JOIN secondbox.tenant_quotas AS quota ON quota.tenant_ref=tenant.ref
+		WHERE tenant.ref=$1
+		FOR UPDATE OF tenant,quota`, input.TenantRef, input.Now.UTC(),
+	).Scan(&tenantState, &tenantExpiresAt, &tenantMaximum, &tenantActive); err != nil {
+		return fmt.Errorf("SecondBox Tenant PortSession quota lookup: %w", err)
+	}
+	if tenantState == contracts.TenantStateSuspended {
+		return ports.ErrTenantSuspended
+	}
+	if tenantState == contracts.TenantStateExpired ||
+		tenantExpiresAt != nil && !tenantExpiresAt.After(input.Now.UTC()) {
+		return ports.ErrResourceExpired
+	}
+	if tenantState != contracts.TenantStateActive {
+		return ports.ErrInvalidLifecycleTransition
+	}
 	var subjectMaximum int64
 	if err := tx.QueryRow(ctx, `
 		SELECT max_port_sessions FROM secondbox.subject_quotas
@@ -726,7 +750,7 @@ func enforcePortSessionCapacity(
 	).Scan(&subjectActive, &namedActive); err != nil {
 		return fmt.Errorf("SecondBox PortSession usage lookup: %w", err)
 	}
-	if subjectActive >= subjectMaximum || namedActive >= policy.MaximumSessions {
+	if tenantActive >= tenantMaximum || subjectActive >= subjectMaximum || namedActive >= policy.MaximumSessions {
 		return ports.ErrQuotaExceeded
 	}
 	return nil

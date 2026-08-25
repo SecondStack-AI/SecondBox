@@ -20,27 +20,50 @@ import (
 const testPlatformToken = "test-platform-token-at-least-24-bytes"
 
 var fixtureCredentialPrincipals sync.Map
+var fixtureServiceQuotas sync.Map
 
 func createFixtureProject(
 	t *testing.T,
-	_ *service.ControlPlaneService,
-	_ context.Context,
-	_ contracts.Principal,
+	controlPlane *service.ControlPlaneService,
+	ctx context.Context,
+	admin contracts.Principal,
 	request fixtureCreateProjectRequest,
 ) (fixtureProject, error) {
 	t.Helper()
 	tenantRef, _ := newSubject(t)
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	return fixtureProject{
+	project := fixtureProject{
 		ID: tenantRef, Name: request.Name, State: fixtureProjectStateActive,
 		Revision: 1, CreatedAt: now, UpdatedAt: now,
-	}, nil
+	}
+	quota := generousQuota()
+	if quotaValue, ok := fixtureServiceQuotas.Load(controlPlane); ok {
+		quota = quotaValue.(contracts.QuotaLimits)
+	}
+	profileSuffix := strings.TrimPrefix(request.Name, "project-")
+	_, _, err := controlPlane.CreateTenant(ctx, admin, "fixture-tenant-"+project.ID, contracts.CreateTenantRequest{
+		Ref: project.ID,
+		AllowedProfileGrants: []string{
+			"profile-" + profileSuffix, "coding", "isolated", "quota-profile", "restart-profile", "http-profile",
+		},
+		AllowedApplicationScopes: []string{
+			"sandbox:read", "sandbox:lifecycle", "sandbox:exec",
+			"sandbox:files", "sandbox:ports", "sandbox:ports:direct",
+		},
+		AggregateQuota: tenantQuotaForSubjectQuota(quota),
+		ExpiryPolicy: contracts.TenantExpiryPolicy{
+			MaximumSubjectLifetimeSeconds:   86400,
+			MaximumAuthorityLifetimeSeconds: 86400,
+		},
+		Metadata: map[string]string{},
+	})
+	return project, err
 }
 
 func createFixtureServiceAccount(
 	t *testing.T,
-	_ *service.ControlPlaneService,
-	_ context.Context,
+	controlPlane *service.ControlPlaneService,
+	ctx context.Context,
 	_ contracts.Principal,
 	projectID string,
 	request fixtureCreateServiceAccountRequest,
@@ -48,11 +71,22 @@ func createFixtureServiceAccount(
 	t.Helper()
 	_, subjectRef := newSubject(t)
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	return fixtureServiceAccount{
+	account := fixtureServiceAccount{
 		ID: subjectRef, TenantRef: projectID, Name: request.Name,
 		State: fixtureServiceAccountStateActive, Scopes: request.Scopes,
 		ProfileGrants: request.ProfileGrants, Revision: 1, CreatedAt: now, UpdatedAt: now,
-	}, nil
+	}
+	quota := generousQuota()
+	if quotaValue, ok := fixtureServiceQuotas.Load(controlPlane); ok {
+		quota = quotaValue.(contracts.QuotaLimits)
+	}
+	_, _, err := controlPlane.CreateSubject(ctx, contracts.Principal{
+		Kind: contracts.AuthorityKindTenantController, ID: "fixture-controller-" + projectID,
+		TenantRef: projectID,
+	}, "fixture-subject-"+account.ID, contracts.CreateSubjectRequest{
+		Ref: account.ID, Quota: quota, Metadata: map[string]string{},
+	})
+	return account, err
 }
 
 func createFixtureAPIKey(
@@ -138,6 +172,7 @@ func newControlPlaneService(
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixtureServiceQuotas.Store(controlPlane, projectQuota)
 	return controlPlane
 }
 
@@ -217,6 +252,16 @@ func createProjectAccountAndCredential(
 		TenantRef: project.ID, SubjectRef: account.ID,
 	})
 	return project, account, createdKey.Credential
+}
+
+func tenantQuotaForSubjectQuota(quota contracts.QuotaLimits) contracts.TenantQuota {
+	return contracts.TenantQuota{
+		MaxSandboxes: quota.MaxSandboxes, MaxActiveInstances: quota.MaxActiveInstances,
+		MaxCPUMillis: quota.MaxCPUMillis, MaxMemoryBytes: quota.MaxMemoryBytes,
+		MaxSnapshots: quota.MaxSnapshots, MaxPortSessions: quota.MaxPortSessions,
+		MaxConcurrentOperations: quota.MaxConcurrentOperations,
+		MaxActiveSubjects:       100, MaxApplicationAuthorities: 100,
+	}
 }
 
 func createGrantedProfile(

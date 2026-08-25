@@ -204,6 +204,13 @@ type CreateTerminalRequest struct {
 
 type DeploymentTimingSummary = contracts.DeploymentTimingSummary
 
+type DeploymentUsage struct {
+	NextCursor *string                `json:"nextCursor,omitempty"`
+	ObservedAt Timestamp              `json:"observedAt"`
+	Tenants    []TenantAggregateUsage `json:"tenants"`
+	Usage      TenantQuotaUsage       `json:"usage"`
+}
+
 type DirectoryListing struct {
 	Entries []FileStat    `json:"entries"`
 	Path    WorkspacePath `json:"path"`
@@ -791,6 +798,12 @@ type Tenant struct {
 	UpdatedAt                Timestamp            `json:"updatedAt"`
 }
 
+type TenantAggregateUsage struct {
+	Limits    TenantQuota      `json:"limits"`
+	TenantRef OwnershipRef     `json:"tenantRef"`
+	Usage     TenantQuotaUsage `json:"usage"`
+}
+
 type TenantControllerAuthority struct {
 	CreatedAt Timestamp                     `json:"createdAt"`
 	ExpiresAt *Timestamp                    `json:"expiresAt,omitempty"`
@@ -946,6 +959,10 @@ type UpdateRunnerPoolRequest struct {
 
 type UpdateSandboxMetadataRequest struct {
 	Metadata Metadata `json:"metadata"`
+}
+
+type UpdateSubjectQuotaRequest struct {
+	Quota SubjectQuota `json:"quota"`
 }
 
 type WaitSandboxRequest struct {

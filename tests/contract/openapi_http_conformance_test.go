@@ -43,6 +43,7 @@ var auditedV1HTTPOperations = map[string]auditedHTTPOperation{
 	"listSubjects":                    {"listSubjects", "200", "SubjectPage", nil, nil},
 	"createSubject":                   {"createSubject", "201", "Subject", []string{"Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},
 	"getSubject":                      {"getSubject", "200", "Subject", nil, []string{"ETag"}},
+	"updateSubjectQuota":              {"updateSubjectQuota", "200", "Subject", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
 	"closeSubject":                    {"subjectManagementAction", "200", "Subject", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
 	"cleanupSubject":                  {"subjectManagementAction", "202", "Operation", []string{"Idempotency-Key", "If-Match"}, []string{"Idempotency-Replayed"}},
 	"listApplicationAuthorities":      {"listApplicationAuthorities", "200", "ApplicationAuthorityPage", nil, nil},
@@ -50,7 +51,8 @@ var auditedV1HTTPOperations = map[string]auditedHTTPOperation{
 	"getApplicationAuthority":         {"getApplicationAuthority", "200", "ApplicationAuthority", nil, []string{"ETag"}},
 	"rotateApplicationAuthority":      {"applicationAuthorityManagementAction", "200", "ApplicationCredentialResponse", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
 	"revokeApplicationAuthority":      {"applicationAuthorityManagementAction", "200", "ApplicationAuthority", []string{"Idempotency-Key", "If-Match"}, []string{"ETag", "Idempotency-Replayed"}},
-	"getTenantUsage":                  {"managementUnavailable", "200", "TenantUsage", nil, nil},
+	"getTenantUsage":                  {"getTenantUsage", "200", "TenantUsage", nil, nil},
+	"getDeploymentUsage":              {"getDeploymentUsage", "200", "DeploymentUsage", nil, nil},
 	"listProfiles":                    {"listProfiles", "200", "ProfilePage", nil, nil},
 	"createProfile":                   {"createProfile", "201", "Profile", []string{"Idempotency-Key"}, []string{"ETag", "Idempotency-Replayed"}},
 	"getProfile":                      {"getProfile", "200", "Profile", nil, []string{"ETag"}},
@@ -107,7 +109,7 @@ var auditedV1HTTPOperations = map[string]auditedHTTPOperation{
 }
 
 var failClosedManagementOperations = map[string]bool{
-	"closeSubject": true, "cleanupSubject": true, "getTenantUsage": true,
+	"closeSubject": true, "cleanupSubject": true,
 }
 
 func TestCanonicalOpenAPIHTTPConformanceInventory(t *testing.T) {
@@ -195,6 +197,8 @@ func TestManagementRoutesFailClosedAtTheirAuthorityBoundary(t *testing.T) {
 		{name: "platform cannot escalate to tenant controller", path: "/v1/subjects", token: "contract-platform-token-at-least-24-bytes"},
 		{name: "application cannot escalate to tenant controller", path: "/v1/subjects", token: ports.ApplicationBearerTokenPrefix + "contract-application-token-material"},
 		{name: "application cannot escalate to platform", path: "/v1/tenants", token: ports.ApplicationBearerTokenPrefix + "contract-application-token-material"},
+		{name: "tenant controller cannot inspect deployment usage", path: "/v1/deployment-usage", token: ports.TenantControllerBearerTokenPrefix + "contract-controller-token-material"},
+		{name: "application cannot inspect deployment usage", path: "/v1/deployment-usage", token: ports.ApplicationBearerTokenPrefix + "contract-application-token-material"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, test.path, nil)

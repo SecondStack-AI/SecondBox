@@ -605,6 +605,30 @@ func lockDataPlaneAuthority(
 		session.DataPlaneAddress = endpoint.Address
 		session.DataPlaneCertificateSPKI = endpoint.CertificateSPKISHA256
 	}
+	var tenantState string
+	var tenantExpiresAt *time.Time
+	var tenantActive, tenantMaximum int64
+	if err := tx.QueryRow(ctx, `
+		SELECT tenant.state,tenant.expires_at,quota.max_concurrent_operations,
+		       (SELECT count(*) FROM secondbox.data_plane_sessions
+		        WHERE tenant_ref=$1 AND state IN ('pending','running','cancelling'))
+		FROM secondbox.tenants AS tenant
+		JOIN secondbox.tenant_quotas AS quota ON quota.tenant_ref=tenant.ref
+		WHERE tenant.ref=$1
+		FOR UPDATE OF tenant,quota`, input.TenantRef,
+	).Scan(&tenantState, &tenantExpiresAt, &tenantMaximum, &tenantActive); err != nil {
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, fmt.Errorf("SecondBox Tenant operation quota lookup: %w", err)
+	}
+	if tenantState == contracts.TenantStateSuspended {
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrTenantSuspended
+	}
+	if tenantState == contracts.TenantStateExpired ||
+		tenantExpiresAt != nil && !tenantExpiresAt.After(input.Now.UTC()) {
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrResourceExpired
+	}
+	if tenantState != contracts.TenantStateActive {
+		return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrInvalidLifecycleTransition
+	}
 	var sandboxActive, subjectActive, subjectMaximum int64
 	if err := tx.QueryRow(ctx, `
 		SELECT count(*) FROM secondbox.data_plane_sessions
@@ -625,7 +649,8 @@ func lockDataPlaneAuthority(
 	).Scan(&subjectMaximum, &subjectActive); err != nil {
 		return DataPlaneSession{}, contracts.ExecutionPolicy{}, fmt.Errorf("SecondBox subject operation quota lookup: %w", err)
 	}
-	if sandboxActive >= spec.Resources.ConcurrentOperations || subjectActive >= subjectMaximum {
+	if sandboxActive >= spec.Resources.ConcurrentOperations || subjectActive >= subjectMaximum ||
+		tenantActive >= tenantMaximum {
 		return DataPlaneSession{}, contracts.ExecutionPolicy{}, ports.ErrQuotaExceeded
 	}
 	return session, spec.Execution, nil

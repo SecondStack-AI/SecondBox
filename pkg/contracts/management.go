@@ -3,6 +3,7 @@ package contracts
 import "time"
 
 const (
+	AuthorityKindPlatform         = "platform"
 	AuthorityKindTenantController = "tenant_controller"
 	AuthorityKindApplication      = "application"
 
@@ -45,6 +46,43 @@ type TenantQuota struct {
 	MaxConcurrentOperations   int64 `json:"maxConcurrentOperations"`
 	MaxActiveSubjects         int64 `json:"maxActiveSubjects"`
 	MaxApplicationAuthorities int64 `json:"maxApplicationAuthorities"`
+}
+
+// TenantQuotaUsage projects one tenant's aggregate persisted reservations.
+type TenantQuotaUsage struct {
+	Sandboxes              int64 `json:"sandboxes"`
+	ActiveInstances        int64 `json:"activeInstances"`
+	CPUMillis              int64 `json:"cpuMillis"`
+	MemoryBytes            int64 `json:"memoryBytes"`
+	Snapshots              int64 `json:"snapshots"`
+	PortSessions           int64 `json:"portSessions"`
+	ConcurrentOperations   int64 `json:"concurrentOperations"`
+	ActiveSubjects         int64 `json:"activeSubjects"`
+	ApplicationAuthorities int64 `json:"applicationAuthorities"`
+}
+
+// TenantUsage reports aggregate and per-Subject reservations for one tenant.
+type TenantUsage struct {
+	TenantRef  string           `json:"tenantRef"`
+	Limits     TenantQuota      `json:"limits"`
+	Usage      TenantQuotaUsage `json:"usage"`
+	Subjects   []SubjectUsage   `json:"subjects"`
+	ObservedAt time.Time        `json:"observedAt"`
+}
+
+// TenantAggregateUsage reports aggregate reservations for one tenant.
+type TenantAggregateUsage struct {
+	TenantRef string           `json:"tenantRef"`
+	Limits    TenantQuota      `json:"limits"`
+	Usage     TenantQuotaUsage `json:"usage"`
+}
+
+// DeploymentUsage reports deployment-wide reservations and one Tenant page.
+type DeploymentUsage struct {
+	Usage      TenantQuotaUsage       `json:"usage"`
+	Tenants    []TenantAggregateUsage `json:"tenants"`
+	NextCursor *string                `json:"nextCursor,omitempty"`
+	ObservedAt time.Time              `json:"observedAt"`
 }
 
 // Tenant is one stable management and aggregate-admission boundary.
@@ -137,6 +175,11 @@ type CreateSubjectRequest struct {
 	Quota     QuotaLimits       `json:"quota"`
 	Metadata  map[string]string `json:"metadata"`
 	ExpiresAt *time.Time        `json:"expiresAt,omitempty"`
+}
+
+// UpdateSubjectQuotaRequest replaces one Subject's complete quota set.
+type UpdateSubjectQuotaRequest struct {
+	Quota QuotaLimits `json:"quota"`
 }
 
 // CreateTenantControllerAuthorityRequest supplies bounded non-secret controller attributes.

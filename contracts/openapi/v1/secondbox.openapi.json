@@ -128,6 +128,15 @@
         "responses": {"200": {"$ref": "#/components/responses/SubjectOK"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
       }
     },
+    "/v1/subjects/{subjectRef}/quota": {
+      "put": {
+        "tags": ["Subjects"], "operationId": "updateSubjectQuota", "security": [{"tenantControllerBearer": []}],
+        "description": "Replaces a Subject quota in the tenant fixed by the authenticated controller. The quota must remain within the Tenant ceiling and cannot be narrowed below committed usage.",
+        "parameters": [{"$ref": "#/components/parameters/SubjectRefPath"}, {"$ref": "#/components/parameters/IfMatch"}, {"$ref": "#/components/parameters/IdempotencyKey"}, {"$ref": "#/components/parameters/RequestID"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UpdateSubjectQuotaRequest"}}}},
+        "responses": {"200": {"$ref": "#/components/responses/SubjectMutationOK"}, "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"}, "409": {"$ref": "#/components/responses/Conflict"}, "412": {"$ref": "#/components/responses/PreconditionFailed"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      }
+    },
     "/v1/subjects/{subjectRef}:close": {
       "post": {
         "tags": ["Subjects"], "operationId": "closeSubject", "security": [{"tenantControllerBearer": []}],
@@ -187,6 +196,14 @@
         "description": "Returns aggregate and per-Subject usage for the tenant fixed by the authenticated controller.",
         "parameters": [{"$ref": "#/components/parameters/RequestID"}],
         "responses": {"200": {"$ref": "#/components/responses/TenantUsageOK"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
+      }
+    },
+    "/v1/deployment-usage": {
+      "get": {
+        "tags": ["TenantUsage"], "operationId": "getDeploymentUsage", "security": [{"platformBearer": []}],
+        "description": "Returns deployment-wide aggregate usage and one stable page of per-Tenant aggregate usage for the platform operator.",
+        "parameters": [{"$ref": "#/components/parameters/PageLimit"}, {"$ref": "#/components/parameters/PageCursor"}, {"$ref": "#/components/parameters/RequestID"}],
+        "responses": {"200": {"$ref": "#/components/responses/DeploymentUsageOK"}, "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"}, "503": {"$ref": "#/components/responses/ManagementUnavailable"}}
       }
     },
     "/v1/profiles": {
@@ -1803,6 +1820,10 @@
         "description": "Authenticated tenant usage.", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
         "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TenantUsage"}}}
       },
+      "DeploymentUsageOK": {
+        "description": "Deployment-wide aggregate and per-Tenant usage page.", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/DeploymentUsage"}}}
+      },
       "ManagementUnavailable": {
         "description": "The authenticated management operation is not admitted because its durable management store is unavailable.",
         "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}},
@@ -2064,6 +2085,10 @@
           "expiresAt": {"$ref": "#/components/schemas/Timestamp"}
         }
       },
+      "UpdateSubjectQuotaRequest": {
+        "type": "object", "additionalProperties": false, "required": ["quota"],
+        "properties": {"quota": {"$ref": "#/components/schemas/SubjectQuota"}}
+      },
       "TenantControllerAuthority": {
         "type": "object", "additionalProperties": false,
         "required": ["id", "lookupId", "kind", "tenantRef", "grant", "state", "metadata", "revision", "createdAt", "updatedAt"],
@@ -2144,6 +2169,23 @@
           "limits": {"$ref": "#/components/schemas/TenantQuota"},
           "usage": {"$ref": "#/components/schemas/TenantQuotaUsage"},
           "subjects": {"type": "array", "maxItems": 200, "items": {"$ref": "#/components/schemas/SubjectUsage"}},
+          "observedAt": {"$ref": "#/components/schemas/Timestamp"}
+        }
+      },
+      "TenantAggregateUsage": {
+        "type": "object", "additionalProperties": false, "required": ["tenantRef", "limits", "usage"],
+        "properties": {
+          "tenantRef": {"$ref": "#/components/schemas/OwnershipRef"},
+          "limits": {"$ref": "#/components/schemas/TenantQuota"},
+          "usage": {"$ref": "#/components/schemas/TenantQuotaUsage"}
+        }
+      },
+      "DeploymentUsage": {
+        "type": "object", "additionalProperties": false, "required": ["usage", "tenants", "observedAt"],
+        "properties": {
+          "usage": {"$ref": "#/components/schemas/TenantQuotaUsage"},
+          "tenants": {"type": "array", "maxItems": 200, "items": {"$ref": "#/components/schemas/TenantAggregateUsage"}},
+          "nextCursor": {"type": "string", "maxLength": 512},
           "observedAt": {"$ref": "#/components/schemas/Timestamp"}
         }
       },

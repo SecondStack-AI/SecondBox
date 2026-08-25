@@ -105,6 +105,7 @@ type ManagementStore interface {
 	CreateManagedSubject(context.Context, contracts.Subject, ports.AdminIdempotencyInput) (contracts.Subject, ports.AdminIdempotencyResult, error)
 	GetSubject(context.Context, string, string) (contracts.Subject, error)
 	ListSubjects(context.Context, string, int, string) (contracts.SubjectPage, error)
+	UpdateManagedSubjectQuota(context.Context, string, string, contracts.QuotaLimits, int64, time.Time, ports.AdminIdempotencyInput) (contracts.Subject, ports.AdminIdempotencyResult, error)
 	CreateManagedTenantControllerAuthority(context.Context, contracts.TenantControllerAuthority, ports.AdminIdempotencyInput) (contracts.TenantControllerCredentialResponse, ports.AdminIdempotencyResult, error)
 	ListTenantControllerAuthorities(context.Context, string, int, string) (contracts.TenantControllerAuthorityPage, error)
 	RotateManagedTenantControllerAuthority(context.Context, string, string, int64, time.Time, ports.AdminIdempotencyInput) (contracts.TenantControllerCredentialResponse, ports.AdminIdempotencyResult, error)
@@ -115,6 +116,8 @@ type ManagementStore interface {
 	RevokeManagedApplicationAuthority(context.Context, string, string, int64, time.Time, ports.AdminIdempotencyInput) (contracts.ApplicationAuthority, ports.AdminIdempotencyResult, error)
 	GetTenantControllerAuthority(context.Context, string, string) (contracts.TenantControllerAuthority, error)
 	GetApplicationAuthority(context.Context, string, string) (contracts.ApplicationAuthority, error)
+	GetTenantUsage(context.Context, string, time.Time) (contracts.TenantUsage, error)
+	GetDeploymentUsage(context.Context, int, string, time.Time) (contracts.DeploymentUsage, error)
 }
 
 // ControlPlaneStore is the service's composite consumer-side store contract.

@@ -198,4 +198,32 @@ func TestOwnershipColumnsAndSubjectQuotaArePresentAfterFreshMigration(t *testing
 	if !strings.Contains(primaryKey, "(tenant_ref, subject_ref)") {
 		t.Fatalf("subject quota primary key = %q", primaryKey)
 	}
+	if err := pool.QueryRow(t.Context(), `
+		SELECT indexdef
+		FROM pg_indexes
+		WHERE schemaname='secondbox'
+		  AND tablename='tenant_quotas'
+		  AND indexname='tenant_quotas_pkey'`,
+	).Scan(&primaryKey); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(primaryKey, "(tenant_ref)") {
+		t.Fatalf("Tenant quota primary key = %q", primaryKey)
+	}
+	for _, trigger := range []string{
+		"sandboxes_quota_ledger_lock", "snapshots_quota_ledger_lock",
+		"port_sessions_quota_ledger_lock", "data_plane_sessions_quota_ledger_lock",
+		"application_authorities_quota_ledger_lock",
+	} {
+		var exists bool
+		if err := pool.QueryRow(t.Context(), `SELECT EXISTS (
+			SELECT 1 FROM pg_catalog.pg_trigger
+			WHERE tgname=$1 AND NOT tgisinternal
+		)`, trigger).Scan(&exists); err != nil {
+			t.Fatal(err)
+		}
+		if !exists {
+			t.Errorf("quota ledger trigger %q is absent", trigger)
+		}
+	}
 }

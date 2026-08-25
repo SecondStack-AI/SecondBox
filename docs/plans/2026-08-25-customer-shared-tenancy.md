@@ -97,14 +97,14 @@ Delegated management can now mint credentials, so remove the static authority pa
 
 Extend existing subject admission rather than creating a parallel quota system. Every chargeable operation must reserve against both levels in one stable transaction so concurrency cannot temporarily overcommit and repair later.
 
-- [ ] Persist tenant aggregate ceilings and usage alongside the existing subject quota dimensions for Sandboxes, active Instances, vCPU, memory, Snapshots, Port sessions, and concurrent data-plane operations.
-- [ ] Add limits for active subjects and application authorities so delegated management cannot create unbounded records.
-- [ ] Require subject quotas to remain within tenant ceilings and reject narrowing changes that conflict with committed usage through a typed revision-aware response.
-- [ ] Reserve and release tenant and subject usage in the same transaction and stable lock order at every existing admission and cleanup path.
-- [ ] Preserve Profile resource bounds and Runner storage-pressure admission as their existing distinct authorities; do not invent retained-byte tenant accounting for reflink-backed workspaces.
-- [ ] Expose tenant-scoped usage to its controller and deployment-wide usage to the platform operator without adding high-cardinality metric labels.
-- [ ] Add concurrent integration tests that race admissions and releases at every quota dimension and prove neither level can overcommit.
-- [ ] Prove an exhausted, suspended, or heavily contended tenant does not block or consume the entitlement of another tenant.
+- [x] Persist tenant aggregate ceilings and usage alongside the existing subject quota dimensions for Sandboxes, active Instances, vCPU, memory, Snapshots, Port sessions, and concurrent data-plane operations.
+- [x] Add limits for active subjects and application authorities so delegated management cannot create unbounded records.
+- [x] Require subject quotas to remain within tenant ceilings and reject narrowing changes that conflict with committed usage through a typed revision-aware response.
+- [x] Reserve and release tenant and subject usage in the same transaction and stable lock order at every existing admission and cleanup path.
+- [x] Preserve Profile resource bounds and Runner storage-pressure admission as their existing distinct authorities; do not invent retained-byte tenant accounting for reflink-backed workspaces.
+- [x] Expose tenant-scoped usage to its controller and deployment-wide usage to the platform operator without adding high-cardinality metric labels.
+- [x] Add concurrent integration tests that race admissions and releases at every quota dimension and prove neither level can overcommit.
+- [x] Prove an exhausted, suspended, or heavily contended tenant does not block or consume the entitlement of another tenant.
 
 ### Task 6: Make subject closure, expiry, and cleanup durable
 

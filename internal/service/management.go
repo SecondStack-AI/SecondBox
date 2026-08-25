@@ -203,6 +203,69 @@ func (service *ControlPlaneService) ListSubjects(ctx context.Context, principal 
 	return service.store.ListSubjects(ctx, principal.TenantRef, boundedLimit(limit), cursor)
 }
 
+// UpdateSubjectQuota replaces one Subject quota under revision and usage fences.
+func (service *ControlPlaneService) UpdateSubjectQuota(
+	ctx context.Context,
+	principal contracts.Principal,
+	subjectRef string,
+	idempotencyKey string,
+	expectedRevision int64,
+	request contracts.UpdateSubjectQuotaRequest,
+) (contracts.Subject, bool, error) {
+	if err := validateOwnershipRef("Subject", subjectRef); err != nil {
+		return contracts.Subject{}, false, err
+	}
+	if !validSubjectQuota(request.Quota) {
+		return contracts.Subject{}, false, invalidRequest(errors.New("SecondBox Subject quota must be non-negative"))
+	}
+	if expectedRevision < 1 {
+		return contracts.Subject{}, false, invalidRequest(errors.New("SecondBox Subject revision must be positive"))
+	}
+	now := service.now().UTC()
+	idempotency, err := service.adminIdempotency(principal, "subject.quota.update", subjectRef, idempotencyKey, struct {
+		ExpectedRevision int64                 `json:"expectedRevision"`
+		Quota            contracts.QuotaLimits `json:"quota"`
+	}{ExpectedRevision: expectedRevision, Quota: request.Quota}, now)
+	if err != nil {
+		return contracts.Subject{}, false, err
+	}
+	subject, result, err := service.store.UpdateManagedSubjectQuota(
+		ctx, principal.TenantRef, subjectRef, request.Quota, expectedRevision, now, idempotency,
+	)
+	if err != nil {
+		return contracts.Subject{}, false, service.managementDenied(
+			ctx, principal, "subject.quota_updated", "subject", subjectRef, principal.TenantRef, err,
+		)
+	}
+	if err := service.store.AppendAuditEvent(ctx, service.newAudit(
+		ctx, principal, "subject.quota_updated", "subject", subjectRef, principal.TenantRef, now,
+	)); err != nil {
+		return contracts.Subject{}, false, err
+	}
+	return subject, result.Replayed, nil
+}
+
+// GetTenantUsage returns aggregate and per-Subject usage for the authenticated tenant.
+func (service *ControlPlaneService) GetTenantUsage(ctx context.Context, principal contracts.Principal) (contracts.TenantUsage, error) {
+	if principal.Kind != contracts.AuthorityKindTenantController || principal.TenantRef == "" {
+		return contracts.TenantUsage{}, ports.ErrAuthorizationDenied
+	}
+	return service.store.GetTenantUsage(ctx, principal.TenantRef, service.now().UTC())
+}
+
+// GetDeploymentUsage returns deployment-wide usage to the platform operator.
+func (service *ControlPlaneService) GetDeploymentUsage(
+	ctx context.Context,
+	principal contracts.Principal,
+	limit int,
+	cursor string,
+) (contracts.DeploymentUsage, error) {
+	if principal.Kind != contracts.AuthorityKindPlatform {
+		return contracts.DeploymentUsage{}, ports.ErrAuthorizationDenied
+	}
+	return service.store.GetDeploymentUsage(ctx, boundedLimit(limit), cursor, service.now().UTC())
+}
+
 func (service *ControlPlaneService) CreateApplicationAuthority(ctx context.Context, principal contracts.Principal, idempotencyKey string, request contracts.CreateApplicationAuthorityRequest) (contracts.ApplicationCredentialResponse, bool, error) {
 	now := service.now().UTC()
 	if err := validateCreateApplicationAuthorityRequest(request, now); err != nil {
