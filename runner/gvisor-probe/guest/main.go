@@ -70,6 +70,8 @@ func run() int {
 		return 0
 	case "fill":
 		return fill(markerPath)
+	case "iobench":
+		return iobench()
 	case "hog":
 		hog()
 		return 0
@@ -103,6 +105,69 @@ func spin() {
 	for i := 0; i < spinWorkers; i++ {
 		<-done
 	}
+}
+
+// iobench measures bounded sequential write and read throughput against the
+// mounted workspace and reports MiB/s pairs on stdout for the host to record.
+func iobench() int {
+	const chunkBytes = 4 << 20
+	const totalBytes = 128 << 20
+	chunk := make([]byte, chunkBytes)
+	for i := range chunk {
+		chunk[i] = byte(i)
+	}
+	path := "/workspace/bench.dat"
+	output, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "guest iobench open failed: %v\n", err)
+		return 1
+	}
+	writeStart := time.Now()
+	for written := 0; written < totalBytes; written += chunkBytes {
+		if _, err := output.Write(chunk); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "guest iobench write failed: %v\n", err)
+			return 1
+		}
+	}
+	if err := output.Sync(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "guest iobench sync failed: %v\n", err)
+		return 1
+	}
+	writeSeconds := time.Since(writeStart).Seconds()
+	if err := output.Close(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "guest iobench close failed: %v\n", err)
+		return 1
+	}
+
+	input, err := os.Open(path)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "guest iobench reopen failed: %v\n", err)
+		return 1
+	}
+	defer input.Close()
+	readStart := time.Now()
+	buffer := make([]byte, chunkBytes)
+	total := 0
+	for {
+		n, err := input.Read(buffer)
+		total += n
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "guest iobench read failed: %v\n", err)
+			return 1
+		}
+	}
+	readSeconds := time.Since(readStart).Seconds()
+	if total != totalBytes {
+		_, _ = fmt.Fprintf(os.Stderr, "guest iobench read %d of %d bytes\n", total, totalBytes)
+		return 1
+	}
+	megabytes := float64(totalBytes) / (1 << 20)
+	fmt.Printf("write_mib_s=%.1f read_mib_s=%.1f total_mib=%.0f\n",
+		megabytes/writeSeconds, megabytes/readSeconds, megabytes)
+	return 0
 }
 
 // netcheck performs the network-policy probes. Each argument has the form

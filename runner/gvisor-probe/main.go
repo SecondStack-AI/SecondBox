@@ -34,6 +34,7 @@ var proofs = []proof{
 	{name: "workspace", run: proofWorkspace},
 	{name: "agent-protocol", run: proofAgentProtocol},
 	{name: "network-policy", run: proofNetworkPolicy},
+	{name: "performance", run: proofPerformance},
 }
 
 func main() {
@@ -60,8 +61,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 	netTargetsReady := flags.String("internal-net-targets", "",
 		"internal: serve the network-policy target listeners inside the targets namespace")
 	netDNSMap := flags.String("internal-net-dns-map", "", "internal: DNS map file for -internal-net-targets")
+	perfWork := flags.String("internal-perf-work", "",
+		"internal: run the workspace throughput measurement inside this unshared mount namespace")
+	perfDirectFS := flags.Bool("internal-perf-directfs", true, "internal: directFS mode for -internal-perf-work")
 	if err := flags.Parse(args); err != nil {
 		return 2
+	}
+
+	if *perfWork != "" {
+		if err := runPerfIOChild(*runscPath, *guestPath, *perfWork, *perfDirectFS); err != nil {
+			_, _ = fmt.Fprintf(stderr, "SecondBox gVisor probe perf child failed: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 
 	if *netTargetsReady != "" {
