@@ -8,7 +8,7 @@ provenance: Customer-shared SecondBox architecture review, 2026-08-25
 
 # Plan: Customer-Shared Tenancy
 
-Deliver SecondBox v0.6.0 as one implementation pull request that makes a single customer-operated deployment safely consumable by multiple SecondStack installations in the same trust domain. Implement the work as tested vertical slices: establish the public contract, make persisted authorities work end to end, add delegated management and quotas, complete subject lifecycle cleanup, then finish the operator, deployment, Profile, and release surfaces.
+Deliver SecondBox v0.6.0 as one implementation pull request that makes a single customer-operated deployment safely consumable by multiple SecondStack installations in the same trust domain. Implement the work as tested vertical slices: establish the public contract, make persisted authorities work end to end, add delegated management, retire static application credentials, enforce quotas, complete subject lifecycle cleanup, then finish the operator, deployment, Profile, and release surfaces. Every task must leave every gate in `Validation Commands` green.
 
 The canonical target design is [Customer-shared tenancy](../design/customer-shared-tenancy.md). Keep the control plane unprivileged, keep Runners independently deployed and privileged, and preserve the existing Sandbox, Instance, Workspace, Runner, and immutable Profile contracts. This plan changes management isolation and credential lifecycle; it does not introduce a configurable role system, public registration, billing, tenant-specific Profile copies, Kubernetes-native compute, automatic Sandbox relocation, or a tenant-aware shared egress gateway.
 
@@ -46,27 +46,27 @@ Load-bearing tests fail when their selected Profile, authority, PostgreSQL servi
 
 ### Task 1: Establish the v0.6.0 management contract
 
-Define the complete external shape before implementing storage or handlers. Preserve provider-neutral SecondBox terminology and make the three fixed authority kinds obvious in OpenAPI, SDKs, errors, and audit concepts.
+Define the complete external shape before implementing storage or handler behavior. Contract conformance tests require every documented operation to be registered through the authenticated HTTP router, so new routes land here with authentication, routing, and typed errors while their behavior arrives in later tasks. Preserve provider-neutral SecondBox terminology and make the three fixed authority kinds obvious in OpenAPI, SDKs, errors, and audit concepts.
 
 - [ ] Add Tenant, Subject, TenantControllerAuthority, and ApplicationAuthority schemas with bounded references, metadata, revisions, lifecycle state, timestamps, expiry, grants, and quota fields.
 - [ ] Add operator operations for tenant lifecycle and tenant-controller authority creation, inspection, listing, rotation, and revocation.
 - [ ] Add tenant-controller operations for subject lifecycle, subject cleanup, application-authority lifecycle, and tenant-scoped usage inspection; derive the tenant from authentication rather than request input.
+- [ ] Register every new operation through the authenticated HTTP router with its conformance inventory entry in the same change; handlers fail closed with typed errors until their implementing task supplies behavior.
 - [ ] Define one-time credential creation responses, non-secret authority reads, public lookup identifiers, idempotency behavior, optimistic revision checks, and the uncertain-response revoke-and-replace procedure.
 - [ ] Define typed errors for invalid lifecycle transitions, expiry, suspension, grant escalation, quota exhaustion, revision conflict, and cleanup state while keeping cross-tenant resource failures non-enumerating.
 - [ ] Specify audit attribution for actor authority, tenant, optional subject, operation, result, and bounded correlation metadata without exposing bearer material.
 - [ ] Regenerate the Go and TypeScript SDKs and update contract fixtures and conformance coverage in the same change.
 - [ ] Add negative contract coverage for unknown fields, undocumented routes, tenant assertions on controller routes, recoverable token fields, and authority-kind escalation.
 
-### Task 2: Make persisted authorities the only authentication source
+### Task 2: Make persisted authorities work end to end
 
-Complete the first runnable vertical slice: a clean database can persist tenant-scoped credentials, authenticate them after a control-plane restart, revoke them immediately, and never recover their secrets. Remove the static authority implementation rather than retaining it beside the new store.
+Complete the first runnable vertical slice: a clean database can persist tenant-scoped credentials, authenticate them after a control-plane restart, revoke them immediately, and never recover their secrets. Integration coverage seeds credentials through the store layer until Task 3 delivers management routes. The static authority path stays untouched so existing gates remain green; Task 4 retires it completely, and it must gain no new behavior in the meantime.
 
 - [ ] Add ordered PostgreSQL migrations for tenants, subjects, tenant-controller authorities, and application authorities, including lifecycle, expiry, grants, revisions, verifier data, and required uniqueness.
 - [ ] Keep cross-resource references logical strings without foreign keys or non-uniqueness constraints; use physical uniqueness only for tenant references, tenant-scoped subject identity, authority identity, token lookup identity, and idempotency invariants.
 - [ ] Generate high-entropy bearer tokens server-side, return each complete token only from its successful creation response, and persist only its lookup identifier and one-way verifier.
 - [ ] Resolve the presented credential on every newly admitted request, verify it in constant time, and enforce current authority, tenant, subject, expiry, scopes, and Profile grants before route handling.
 - [ ] Keep platform-token authentication separate and prevent generated tenant or application credentials from colliding with it or crossing authority kinds.
-- [ ] Remove in-memory static application-authority resolution, `SECONDBOX_APPLICATION_AUTHORITIES_JSON`, and any process-start parsing or runtime fallback to an authority file.
 - [ ] Ensure reads, lists, logs, errors, metrics, audit events, diagnostics, support bundles, and database inspection surfaces cannot disclose credential secrets or verifier material.
 - [ ] Add PostgreSQL and HTTP integration coverage for restart persistence, immediate revocation, expiry, token rotation, invalid verifiers, identical tenant-local names, and non-enumerating cross-tenant access.
 
@@ -75,7 +75,7 @@ Complete the first runnable vertical slice: a clean database can persist tenant-
 Turn the contract and persisted credentials into a usable customer management plane. The platform operator establishes tenant ceilings and delegates a fixed, code-owned management capability; a tenant controller can create only resources narrower than that ceiling.
 
 - [ ] Implement platform-operator tenant creation, inspection, listing, suspension, reactivation, and tenant-controller authority lifecycle through service, store, HTTP, audit, and generated-client layers.
-- [ ] Implement tenant-controller subject and application-authority creation, inspection, listing, rotation, and revocation with the tenant taken only from the authenticated principal.
+- [ ] Implement tenant-controller subject creation, inspection, and listing, and application-authority creation, inspection, listing, rotation, and revocation, with the tenant taken only from the authenticated principal; subject closure and cleanup behavior arrive in Task 6.
 - [ ] Enforce tenant ceilings for allowed application scopes and Profile grants, and require every application authority to bind exactly one existing active subject.
 - [ ] Make tenant suspension deny new controller and application admission while preserving resources for explicit recovery or later cleanup.
 - [ ] Apply idempotency and optimistic revisions to management mutations so retries converge without silently overwriting a concurrent operator decision.
@@ -83,7 +83,17 @@ Turn the contract and persisted credentials into a usable customer management pl
 - [ ] Add two-tenant integration scenarios proving a controller cannot discover or mutate another tenant, widen its ceiling, administer Runners or Profiles, or use ordinary Sandbox APIs as another subject.
 - [ ] Add restart and concurrency coverage for idempotent credential creation, uncertain creation responses, rotation, revocation, and lifecycle revision conflicts.
 
-### Task 4: Enforce tenant aggregate and subject quota atomically
+### Task 4: Retire static application authorities everywhere
+
+Delegated management can now mint credentials, so remove the static authority path in one slice that leaves every deployment, Compose, installer, and test surface green. No import, compatibility, fallback, or dual-source mode may remain after this task.
+
+- [ ] Remove in-memory static application-authority resolution, `SECONDBOX_APPLICATION_AUTHORITIES_JSON`, and any process-start parsing or runtime fallback to an authority file.
+- [ ] Remove `applications.application_authorities_file` from the deployment manifest, example manifests, resolved deployment state, Compose environment, secret inventory, diagnostics, installer planning, and update logic.
+- [ ] Rework `deploy/compose.yml`, `scripts/compose-test.yml`, and `scripts/scenario-compose.yml` so composed environments bootstrap tenants, controllers, subjects, and application authorities through authenticated management operations after startup.
+- [ ] Replace store-level credential seeding in earlier integration coverage with management-operation bootstrap so no test depends on private store access.
+- [ ] Update deployment, installer, Compose, CLI, configuration-surface, diagnostics, support-bundle, and source-free package tests to prove the retired secret has disappeared completely.
+
+### Task 5: Enforce tenant aggregate and subject quota atomically
 
 Extend existing subject admission rather than creating a parallel quota system. Every chargeable operation must reserve against both levels in one stable transaction so concurrency cannot temporarily overcommit and repair later.
 
@@ -96,7 +106,7 @@ Extend existing subject admission rather than creating a parallel quota system. 
 - [ ] Add concurrent integration tests that race admissions and releases at every quota dimension and prove neither level can overcommit.
 - [ ] Prove an exhausted, suspended, or heavily contended tenant does not block or consume the entitlement of another tenant.
 
-### Task 5: Make subject closure, expiry, and cleanup durable
+### Task 6: Make subject closure, expiry, and cleanup durable
 
 Represent application-environment teardown as one observable Operation. Closing a subject must stop new admission immediately, while cleanup remains restart-safe and reconciles Runner-owned state through the existing acknowledged protocol.
 
@@ -109,20 +119,18 @@ Represent application-environment teardown as one observable Operation. Closing 
 - [ ] Preserve operator-visible terminal errors for irrecoverable Runner workspace loss and avoid fabricating successful cleanup when acknowledgement is unavailable.
 - [ ] Test active streams, concurrent operations, partial deletion, already absent resources, control-plane restart, Runner disconnect/reconnect, retry, expiry, and isolation between two tenants during cleanup.
 
-### Task 6: Complete CLI and clean-install deployment workflows
+### Task 7: Complete CLI and clean-install deployment workflows
 
-Give operators and tenant controllers a source-free management surface, then remove all deployment artifacts that imply static application credentials. Production initialization creates only the platform authority; delegated credentials are created after startup through authenticated management operations.
+Give operators and tenant controllers a source-free management surface. Production initialization creates only the platform authority; delegated credentials are created after startup through authenticated management operations.
 
 - [ ] Add `secondbox` CLI command groups for platform-operator tenant management and tenant-controller subject, authority, usage, close, and cleanup workflows using the generated client.
 - [ ] Keep human and structured output stable, show bearer tokens only after successful creation, and prevent session/config helpers from treating tenant-controller and application credentials as platform tokens.
-- [ ] Remove `applications.application_authorities_file` from the deployment manifest, example manifests, resolved deployment state, Compose environment, secret inventory, diagnostics, installer planning, and update logic.
 - [ ] Generate and materialize only the platform token during a production installation; do not create an implicit tenant, subject, controller, or application authority.
 - [ ] Make v0.6.0 validation and update refuse a v0.5.2-style manifest or deployment with a direct clean-reinstall diagnostic and no import or compatibility option.
 - [ ] Keep development setup explicit: any sample tenant and credentials must be created by an observable post-start development step, not a runtime default or hidden bootstrap path.
-- [ ] Update deployment, installer, Compose, CLI, configuration-surface, diagnostics, support-bundle, and source-free package tests to prove the retired secret has disappeared completely.
 - [ ] Test a clean source-free install through platform-token login, tenant/controller creation, controller login, subject/application credential creation, and an authenticated Sandbox request.
 
-### Task 7: Ship the isolated agent Profile as a release-owned resource
+### Task 8: Ship the isolated agent Profile as a release-owned resource
 
 Add a standard Profile for consumers that need compute and workspace capabilities but no outbound network. Keep it an ordinary immutable release-owned lineage selected explicitly by operators, with no reserved-name behavior or tenant-specific copies.
 
@@ -135,7 +143,7 @@ Add a standard Profile for consumers that need compute and workspace capabilitie
 - [ ] Prove an isolated and a network-enabled Sandbox can run concurrently on the same qualified Runner without sharing network policy or credentials.
 - [ ] Keep a tenant-aware shared egress capability outside this release and document that each current network-enabled RunnerPool maps to one trusted egress context.
 
-### Task 8: Qualify and document the complete v0.6.0 release
+### Task 9: Qualify and document the complete v0.6.0 release
 
 Close the one pull request only after the full customer-shared path works through source-free artifacts on a clean deployment. Validate security properties across two tenants and ensure current architecture and operator documentation describes implemented behavior rather than prospective design.
 
