@@ -216,20 +216,21 @@ Keep the guest protocol and its generations unchanged; add only the transport se
 Attach the unchanged raw-ext4 image to a sandbox through a runner-owned loop mount while
 preserving every WorkspaceStore invariant.
 
-- [ ] Implement a backend-owned attachment component that creates a loop device from the
-  `ComputeAttachment` descriptor through `/proc/self/fd/<n>`, mounts it `rw,nosuid,nodev` in a
-  runner-private mount namespace, and exposes exactly one mountpoint per Instance.
-- [ ] Release in strict reverse order on every path — sandbox exit, fence, and pre-ready failure:
+- [x] Implement a backend-owned attachment component that creates a loop device from the
+  `ComputeAttachment` descriptor (bound directly with `LOOP_SET_FD` and autoclear armed — no
+  path at all, stronger than the probe's `/proc/self/fd` route), mounts it `rw,nosuid,nodev`
+  in a supervisor-private mount namespace, and exposes exactly one mountpoint per Instance.
+- [x] Release in strict reverse order on every path — sandbox exit, fence, and pre-ready failure:
   syncfs, umount, loop detach, then `ComputeAttachment.Close`. The flock is never released while
   the mount or loop device exists.
-- [ ] Reconcile stale loop devices and mounts left by a crashed runner at startup before
+- [x] Reconcile stale loop devices and mounts left by a crashed runner at startup before
   readiness, keyed by the runner-owned mount root, and emit bounded evidence for each cleanup.
-- [ ] Validate the deterministic ext4 UUID after mount against the attachment's declared identity
+- [x] Validate the deterministic ext4 UUID after mount against the attachment's declared identity
   and fail the assignment on mismatch.
-- [ ] Prove the provenance invariant with control-plane and runner tests: a gVisor pool can never
+- [x] Prove the provenance invariant with control-plane and runner tests: a gVisor pool can never
   become home to a Workspace created under another backend kind, and relocation only pairs
   runners of matching backend kind.
-- [ ] Prove marker durability across attach/detach cycles, journal replay after a simulated crash
+- [x] Prove marker durability across attach/detach cycles, journal replay after a simulated crash
   mid-write, ENOSPC behavior, and that snapshots and restores observe the store's existing
   detach-before-mutation ordering, on a real host.
 
