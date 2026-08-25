@@ -1,14 +1,13 @@
 package integration_test
 
 import (
-	"io"
-	"log/slog"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"testing"
+	"time"
 
-	"github.com/SecondStack-AI/SecondBox/internal/api"
 	"github.com/SecondStack-AI/SecondBox/pkg/resourceapply"
 	"github.com/SecondStack-AI/SecondBox/pkg/standardresources"
 	"github.com/SecondStack-AI/SecondBox/sdk/go/secondboxclient"
@@ -16,17 +15,39 @@ import (
 )
 
 func TestStandardResourcesFreshUpgradeAndReplayConvergeThroughLiveControlPlane(t *testing.T) {
-	controlPlane, _ := newControlPlaneFixture(t, generousQuota())
+	// The fixture control plane validates credential creation on its frozen
+	// clock while HTTP authentication checks the wall clock, so the tenant
+	// ceiling must span both and expiry must sit in the wall-clock future.
+	now := time.Now().UTC()
+	controlPlane, databaseStore := newControlPlaneFixture(t, generousQuota())
 	admin := fixtureAdmin(t, controlPlane)
-	project, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "standard-isolated")
-	const applicationToken = "standard-isolated-application-token-000000000001"
-	handler, err := api.NewHandler(api.HandlerConfig{Service: controlPlane, PlatformToken: testPlatformToken, ApplicationAuthorities: []api.ApplicationAuthority{{ID: "standard-isolated", Token: applicationToken, TenantRef: project.ID, SubjectRef: account.ID, Scopes: []string{"sandbox:read", "sandbox:lifecycle"}, ProfileGrants: []string{standardresources.AgentCompartmentIsolated}}}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), MaximumDataPlaneBodyBytes: 4 << 20})
+	_, account, credential := createProjectAccountAndCredential(t, controlPlane, admin, "standard-isolated")
+	server := httptest.NewServer(persistedHTTPHandler(t, controlPlane, databaseStore))
+	t.Cleanup(server.Close)
+	client, err := secondboxclient.NewSecondBoxClient(server.URL, testPlatformToken, http.DefaultClient)
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httptest.NewServer(handler)
-	t.Cleanup(server.Close)
-	client, err := secondboxclient.NewSecondBoxClient(server.URL, testPlatformToken, http.DefaultClient)
+	tenantRef := secondboxclient.OwnershipRef(fmt.Sprintf("standard-isolated-%d", integrationIdentitySequence.Add(1)))
+	tenantRequest := persistedHTTPTenantRequest(tenantRef)
+	tenantRequest.AllowedProfileGrants = []string{standardresources.AgentCompartmentIsolated}
+	tenantRequest.ExpiryPolicy.MaximumAuthorityLifetimeSeconds = int64(365 * 24 * time.Hour / time.Second)
+	tenantRequest.ExpiryPolicy.MaximumSubjectLifetimeSeconds = int64(365 * 24 * time.Hour / time.Second)
+	if _, err := client.CreateTenant(t.Context(), tenantRequest, "standard-isolated-tenant"); err != nil {
+		t.Fatal(err)
+	}
+	controller, err := client.CreateTenantControllerAuthority(t.Context(), tenantRef, secondboxclient.CreateTenantControllerAuthorityRequest{ExpiresAt: now.Add(45 * time.Minute), Metadata: map[string]string{}}, "standard-isolated-controller")
+	if err != nil {
+		t.Fatal(err)
+	}
+	controllerClient, err := secondboxclient.NewSecondBoxTenantControllerClient(server.URL, controller.BearerToken, http.DefaultClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controllerClient.CreateSubject(t.Context(), secondboxclient.CreateSubjectRequest{Ref: "standard-isolated-subject", Quota: secondboxclient.SubjectQuota{MaxSandboxes: 10, MaxActiveInstances: 10, MaxCpuMillis: 10000, MaxMemoryBytes: 10 << 30, MaxSnapshots: 10, MaxPortSessions: 10, MaxConcurrentOperations: 10}, Metadata: map[string]string{}}, "standard-isolated-subject"); err != nil {
+		t.Fatal(err)
+	}
+	application, err := controllerClient.CreateApplicationAuthority(t.Context(), secondboxclient.CreateApplicationAuthorityRequest{SubjectRef: "standard-isolated-subject", Scopes: []string{"sandbox:read", "sandbox:lifecycle"}, ProfileGrants: []string{standardresources.AgentCompartmentIsolated}, Metadata: map[string]string{}, ExpiresAt: now.Add(30 * time.Minute)}, "standard-isolated-application")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +71,7 @@ func TestStandardResourcesFreshUpgradeAndReplayConvergeThroughLiveControlPlane(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	applicationClient, err := secondboxclient.NewSecondBoxSubjectClient(server.URL, applicationToken, project.ID, account.ID, http.DefaultClient)
+	applicationClient, err := secondboxclient.NewSecondBoxSubjectClient(server.URL, application.BearerToken, string(tenantRef), "standard-isolated-subject", http.DefaultClient)
 	if err != nil {
 		t.Fatal(err)
 	}
