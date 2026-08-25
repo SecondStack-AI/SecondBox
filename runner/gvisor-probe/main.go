@@ -30,6 +30,7 @@ type proof struct {
 var proofs = []proof{
 	{name: "sandbox-lifecycle", run: proofSandboxLifecycle},
 	{name: "cgroup-limits", run: proofCgroupLimits},
+	{name: "workspace", run: proofWorkspace},
 }
 
 func main() {
@@ -50,8 +51,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 		"internal: supervise one runsc sandbox for the parent-death proof")
 	launchBundle := flags.String("internal-launch-bundle", "", "internal: bundle for -internal-launch-state-root")
 	launchID := flags.String("internal-launch-id", "", "internal: container ID for -internal-launch-state-root")
+	workspaceWork := flags.String("internal-workspace-work", "",
+		"internal: run the workspace proof inside this unshared mount namespace")
 	if err := flags.Parse(args); err != nil {
 		return 2
+	}
+
+	if *workspaceWork != "" {
+		if err := runWorkspaceChild(*runscPath, *guestPath, *workspaceWork); err != nil {
+			_, _ = fmt.Fprintf(stderr, "SecondBox gVisor probe workspace child failed: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 
 	if *launchStateRoot != "" {

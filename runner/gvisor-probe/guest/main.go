@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -19,7 +20,7 @@ func main() {
 
 func run() int {
 	if len(os.Args) != 3 {
-		_, _ = fmt.Fprintln(os.Stderr, "usage: guest <hello|fail|stay|spin|hog> <marker-path>")
+		_, _ = fmt.Fprintln(os.Stderr, "usage: guest <hello|fail|stay|spin|hog|fill> <marker-path>")
 		return 2
 	}
 	mode := os.Args[1]
@@ -46,6 +47,8 @@ func run() int {
 	case "spin":
 		spin()
 		return 0
+	case "fill":
+		return fill(markerPath)
 	case "hog":
 		hog()
 		return 0
@@ -79,6 +82,50 @@ func spin() {
 	for i := 0; i < spinWorkers; i++ {
 		<-done
 	}
+}
+
+// fill writes to the workspace until the filesystem refuses, then records the
+// outcome through the marker mount, which lives on a different filesystem so
+// the record itself cannot hit the exhausted capacity.
+func fill(markerPath string) int {
+	const chunkBytes = 1 << 20
+	chunk := make([]byte, chunkBytes)
+	for i := range chunk {
+		chunk[i] = 0xA5
+	}
+	output, err := os.OpenFile("/workspace/fill.dat", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "guest fill open failed: %v\n", err)
+		return 1
+	}
+	written := 0
+	var writeErr error
+	for {
+		n, err := output.Write(chunk)
+		written += n
+		if err != nil {
+			writeErr = err
+			break
+		}
+		if err := output.Sync(); err != nil {
+			writeErr = err
+			break
+		}
+	}
+	_ = output.Close()
+	outcome := "unexpected"
+	if errors.Is(writeErr, syscall.ENOSPC) {
+		outcome = "enospc"
+	}
+	record := fmt.Sprintf("outcome=%s bytes=%d error=%v\n", outcome, written, writeErr)
+	if err := os.WriteFile(markerPath, []byte(record), 0o600); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "guest fill record failed: %v\n", err)
+		return 1
+	}
+	if outcome != "enospc" {
+		return 1
+	}
+	return 0
 }
 
 // hog touches memory far past the configured limit; under enforcement the
