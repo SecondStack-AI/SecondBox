@@ -114,7 +114,7 @@ production composition may depend on it.
   and that the inode was never replaced.
 - [x] Prove ENOSPC at image capacity surfaces through the gofer as a sane in-sandbox error and the
   image stays consistent after detach.
-- [ ] Run the existing `secondbox-guest-agent` inside the sandbox with both of its listeners on
+- [x] Run the existing `secondbox-guest-agent` inside the sandbox with both of its listeners on
   gofer-passed host Unix sockets; complete `Hello`/`Welcome` negotiation, one buffered exec, one
   streaming exec with credit, one PTY open/resize/close, one binary file write/read, and one Port
   relay through the guest agent's port feature over the agent transport. If host-UDS passthrough
