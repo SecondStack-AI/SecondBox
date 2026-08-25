@@ -62,13 +62,13 @@ Define the complete external shape before implementing storage or handler behavi
 
 Complete the first runnable vertical slice: a clean database can persist tenant-scoped credentials, authenticate them after a control-plane restart, revoke them immediately, and never recover their secrets. Integration coverage seeds credentials through the store layer until Task 3 delivers management routes. The static authority path stays untouched so existing gates remain green; Task 4 retires it completely, and it must gain no new behavior in the meantime.
 
-- [ ] Add ordered PostgreSQL migrations for tenants, subjects, tenant-controller authorities, and application authorities, including lifecycle, expiry, grants, revisions, verifier data, and required uniqueness.
-- [ ] Keep cross-resource references logical strings without foreign keys or non-uniqueness constraints; use physical uniqueness only for tenant references, tenant-scoped subject identity, authority identity, token lookup identity, and idempotency invariants.
-- [ ] Generate high-entropy bearer tokens server-side, return each complete token only from its successful creation response, and persist only its lookup identifier and one-way verifier.
-- [ ] Resolve the presented credential on every newly admitted request, verify it in constant time, and enforce current authority, tenant, subject, expiry, scopes, and Profile grants before route handling.
-- [ ] Keep platform-token authentication separate and prevent generated tenant or application credentials from colliding with it or crossing authority kinds.
-- [ ] Ensure reads, lists, logs, errors, metrics, audit events, diagnostics, support bundles, and database inspection surfaces cannot disclose credential secrets or verifier material.
-- [ ] Add PostgreSQL and HTTP integration coverage for restart persistence, immediate revocation, expiry, token rotation, invalid verifiers, identical tenant-local names, and non-enumerating cross-tenant access.
+- [x] Add ordered PostgreSQL migrations for tenants, subjects, tenant-controller authorities, and application authorities, including lifecycle, expiry, grants, revisions, verifier data, and required uniqueness.
+- [x] Keep cross-resource references logical strings without foreign keys or non-uniqueness constraints; use physical uniqueness only for tenant references, tenant-scoped subject identity, authority identity, token lookup identity, and idempotency invariants.
+- [x] Generate high-entropy bearer tokens server-side, return each complete token only from its successful creation response, and persist only its lookup identifier and one-way verifier.
+- [x] Resolve the presented credential on every newly admitted request, verify it in constant time, and enforce current authority, tenant, subject, expiry, scopes, and Profile grants before route handling.
+- [x] Keep platform-token authentication separate and prevent generated tenant or application credentials from colliding with it or crossing authority kinds.
+- [x] Ensure reads, lists, logs, errors, metrics, audit events, diagnostics, support bundles, and database inspection surfaces cannot disclose credential secrets or verifier material.
+- [x] Add PostgreSQL and HTTP integration coverage for restart persistence, immediate revocation, expiry, token rotation, invalid verifiers, identical tenant-local names, and non-enumerating cross-tenant access.
 
 ### Task 3: Implement delegated tenant management end to end
 

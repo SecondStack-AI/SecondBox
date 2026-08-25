@@ -41,6 +41,7 @@ type HandlerConfig struct {
 	Logger                    *slog.Logger
 	PlatformToken             string
 	ApplicationAuthorities    []ApplicationAuthority
+	PersistedAuthorities      PersistedAuthorityAuthenticator
 	MaximumDataPlaneBodyBytes int64
 }
 
@@ -49,6 +50,7 @@ type handler struct {
 	logger                    *slog.Logger
 	platformTokenHash         [sha256.Size]byte
 	applicationAuthorities    []resolvedApplicationAuthority
+	persistedAuthorities      PersistedAuthorityAuthenticator
 	maximumDataPlaneBodyBytes int64
 	timings                   *observability.TimingRecorder
 }
@@ -63,6 +65,9 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	}
 	if len(config.PlatformToken) < 24 {
 		return nil, errors.New("SecondBox HTTP platform token must contain at least 24 bytes")
+	}
+	if isTenantControllerBearerToken(config.PlatformToken) || isApplicationBearerToken(config.PlatformToken) {
+		return nil, errors.New("SecondBox HTTP platform token uses a reserved persisted-authority prefix")
 	}
 	if config.MaximumDataPlaneBodyBytes <= 0 {
 		return nil, errors.New("SecondBox HTTP data-plane body bound is required")
@@ -79,6 +84,7 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 		service: config.Service, logger: config.Logger,
 		platformTokenHash:         platformTokenHash,
 		applicationAuthorities:    applicationAuthorities,
+		persistedAuthorities:      config.PersistedAuthorities,
 		maximumDataPlaneBodyBytes: config.MaximumDataPlaneBodyBytes,
 		timings:                   observability.NewTimingRecorder(),
 	}
@@ -836,11 +842,29 @@ func (apiHandler *handler) authenticate(next http.Handler) http.Handler {
 			next.ServeHTTP(writer, request.WithContext(context.WithValue(request.Context(), principalContextKey{}, principal)))
 			return
 		}
-		authority, ok := authenticateApplicationAuthority(
-			apiHandler.applicationAuthorities,
-			presentedHash,
-		)
-		if !ok {
+		if isTenantControllerBearerToken(credential) {
+			apiHandler.writeError(writer, request, ports.ErrAuthenticationFailed)
+			return
+		}
+		var authority resolvedApplicationAuthority
+		var authenticated bool
+		if apiHandler.persistedAuthorities != nil && isApplicationBearerToken(credential) {
+			persisted, err := apiHandler.persistedAuthorities.AuthenticateApplicationAuthority(
+				request.Context(), credential, time.Now().UTC(),
+			)
+			if err != nil {
+				apiHandler.writeError(writer, request, err)
+				return
+			}
+			authority = resolvedPersistedApplicationAuthority(persisted)
+			authenticated = true
+		} else if !isApplicationBearerToken(credential) {
+			authority, authenticated = authenticateApplicationAuthority(
+				apiHandler.applicationAuthorities,
+				presentedHash,
+			)
+		}
+		if !authenticated {
 			apiHandler.writeError(writer, request, ports.ErrAuthenticationFailed)
 			return
 		}

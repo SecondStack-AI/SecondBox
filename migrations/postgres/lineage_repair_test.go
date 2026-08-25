@@ -34,6 +34,7 @@ var v020MigrationFiles = []string{
 var postFenceMigrationFiles = []string{
 	"0014_lifecycle_quiescent_schedule.sql",
 	"0015_profile_startup_mode.sql",
+	"0016_persisted_authorities.sql",
 }
 
 func embeddedLineageVersions(t *testing.T) []string {

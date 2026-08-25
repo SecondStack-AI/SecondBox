@@ -1,0 +1,121 @@
+package contracts
+
+import "time"
+
+const (
+	AuthorityKindTenantController = "tenant_controller"
+	AuthorityKindApplication      = "application"
+
+	AuthorityStateActive  = "active"
+	AuthorityStateExpired = "expired"
+	AuthorityStateRevoked = "revoked"
+
+	TenantStateActive    = "active"
+	TenantStateSuspended = "suspended"
+	TenantStateExpired   = "expired"
+
+	SubjectStateActive  = "active"
+	SubjectStateClosing = "closing"
+	SubjectStateClosed  = "closed"
+	SubjectStateExpired = "expired"
+
+	SubjectCleanupStateNone      = "none"
+	SubjectCleanupStatePending   = "pending"
+	SubjectCleanupStateRunning   = "running"
+	SubjectCleanupStateSucceeded = "succeeded"
+	SubjectCleanupStateFailed    = "failed"
+
+	TenantControllerGrantManagement = "tenant_management"
+)
+
+// TenantExpiryPolicy bounds tenant-local subject and authority lifetimes.
+type TenantExpiryPolicy struct {
+	MaximumSubjectLifetimeSeconds   int64 `json:"maximumSubjectLifetimeSeconds"`
+	MaximumAuthorityLifetimeSeconds int64 `json:"maximumAuthorityLifetimeSeconds"`
+}
+
+// TenantQuota bounds aggregate tenant reservations and management resources.
+type TenantQuota struct {
+	MaxSandboxes              int64 `json:"maxSandboxes"`
+	MaxActiveInstances        int64 `json:"maxActiveInstances"`
+	MaxCPUMillis              int64 `json:"maxCpuMillis"`
+	MaxMemoryBytes            int64 `json:"maxMemoryBytes"`
+	MaxSnapshots              int64 `json:"maxSnapshots"`
+	MaxPortSessions           int64 `json:"maxPortSessions"`
+	MaxConcurrentOperations   int64 `json:"maxConcurrentOperations"`
+	MaxActiveSubjects         int64 `json:"maxActiveSubjects"`
+	MaxApplicationAuthorities int64 `json:"maxApplicationAuthorities"`
+}
+
+// Tenant is one stable management and aggregate-admission boundary.
+type Tenant struct {
+	Ref                      string             `json:"ref"`
+	State                    string             `json:"state"`
+	AllowedProfileGrants     []string           `json:"allowedProfileGrants"`
+	AllowedApplicationScopes []string           `json:"allowedApplicationScopes"`
+	AggregateQuota           TenantQuota        `json:"aggregateQuota"`
+	ExpiryPolicy             TenantExpiryPolicy `json:"expiryPolicy"`
+	Metadata                 map[string]string  `json:"metadata"`
+	ExpiresAt                *time.Time         `json:"expiresAt,omitempty"`
+	Revision                 int64              `json:"revision"`
+	CreatedAt                time.Time          `json:"createdAt"`
+	UpdatedAt                time.Time          `json:"updatedAt"`
+}
+
+// Subject is one tenant-scoped application ownership identity.
+type Subject struct {
+	TenantRef    string            `json:"tenantRef"`
+	Ref          string            `json:"ref"`
+	State        string            `json:"state"`
+	CleanupState string            `json:"cleanupState"`
+	Quota        QuotaLimits       `json:"quota"`
+	Metadata     map[string]string `json:"metadata"`
+	ExpiresAt    *time.Time        `json:"expiresAt,omitempty"`
+	Revision     int64             `json:"revision"`
+	CreatedAt    time.Time         `json:"createdAt"`
+	UpdatedAt    time.Time         `json:"updatedAt"`
+}
+
+// TenantControllerAuthority is the non-secret projection of one tenant controller.
+type TenantControllerAuthority struct {
+	ID        string            `json:"id"`
+	LookupID  string            `json:"lookupId"`
+	Kind      string            `json:"kind"`
+	TenantRef string            `json:"tenantRef"`
+	Grant     string            `json:"grant"`
+	State     string            `json:"state"`
+	Metadata  map[string]string `json:"metadata"`
+	ExpiresAt *time.Time        `json:"expiresAt,omitempty"`
+	Revision  int64             `json:"revision"`
+	CreatedAt time.Time         `json:"createdAt"`
+	UpdatedAt time.Time         `json:"updatedAt"`
+}
+
+// TenantControllerCredentialResponse carries bearer material only on successful creation or rotation.
+type TenantControllerCredentialResponse struct {
+	Authority   TenantControllerAuthority `json:"authority"`
+	BearerToken string                    `json:"bearerToken"`
+}
+
+// ApplicationAuthority is the non-secret projection of one application credential.
+type ApplicationAuthority struct {
+	ID            string            `json:"id"`
+	LookupID      string            `json:"lookupId"`
+	Kind          string            `json:"kind"`
+	TenantRef     string            `json:"tenantRef"`
+	SubjectRef    string            `json:"subjectRef"`
+	State         string            `json:"state"`
+	Scopes        []string          `json:"scopes"`
+	ProfileGrants []string          `json:"profileGrants"`
+	Metadata      map[string]string `json:"metadata"`
+	ExpiresAt     *time.Time        `json:"expiresAt,omitempty"`
+	Revision      int64             `json:"revision"`
+	CreatedAt     time.Time         `json:"createdAt"`
+	UpdatedAt     time.Time         `json:"updatedAt"`
+}
+
+// ApplicationCredentialResponse carries bearer material only on successful creation or rotation.
+type ApplicationCredentialResponse struct {
+	Authority   ApplicationAuthority `json:"authority"`
+	BearerToken string               `json:"bearerToken"`
+}

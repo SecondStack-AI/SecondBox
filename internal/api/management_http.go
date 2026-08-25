@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/SecondStack-AI/SecondBox/internal/ports"
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
@@ -28,9 +29,27 @@ func (apiHandler *handler) authenticatePlatformManagement(next http.Handler) htt
 	})
 }
 
-func (apiHandler *handler) authenticateTenantControllerManagement(_ http.Handler) http.Handler {
+func (apiHandler *handler) authenticateTenantControllerManagement(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		apiHandler.writeError(writer, request, ports.ErrAuthenticationFailed)
+		credential, ok := strings.CutPrefix(request.Header.Get("Authorization"), "Bearer ")
+		if !ok || credential == "" || !isTenantControllerBearerToken(credential) ||
+			apiHandler.persistedAuthorities == nil {
+			apiHandler.writeError(writer, request, ports.ErrAuthenticationFailed)
+			return
+		}
+		if request.Header.Get("X-SecondBox-Tenant-Ref") != "" ||
+			request.Header.Get("X-SecondBox-Subject-Ref") != "" {
+			apiHandler.writeError(writer, request, ports.ErrAuthorizationDenied)
+			return
+		}
+		principal, err := apiHandler.persistedAuthorities.AuthenticateTenantControllerAuthority(
+			request.Context(), credential, time.Now().UTC(),
+		)
+		if err != nil {
+			apiHandler.writeError(writer, request, err)
+			return
+		}
+		next.ServeHTTP(writer, request.WithContext(context.WithValue(request.Context(), principalContextKey{}, principal)))
 	})
 }
 

@@ -8,10 +8,16 @@ import (
 	"github.com/SecondStack-AI/SecondBox/pkg/contracts"
 )
 
+const (
+	TenantControllerBearerTokenPrefix = "secondbox_tenant_controller_"
+	ApplicationBearerTokenPrefix      = "secondbox_application_"
+)
+
 var (
 	ErrAuthenticationFailed  = errors.New("SecondBox credential authentication failed")
 	ErrAuthorizationDenied   = errors.New("SecondBox authorization denied")
 	ErrManagementUnavailable = errors.New("SecondBox durable management store is unavailable")
+	ErrManagementNotFound    = errors.New("SecondBox management resource not found")
 	ErrInvalidRequest        = errors.New("SecondBox request is invalid")
 	ErrProfileNotFound       = errors.New("SecondBox Profile not found")
 	ErrProfileDisabled       = errors.New("SecondBox Profile is disabled")
@@ -55,6 +61,15 @@ var (
 	ErrPortBackpressure        = errors.New("SecondBox port tunnel has no available byte credit")
 	ErrWaitExpired             = errors.New("SecondBox Sandbox wait deadline expired")
 )
+
+// AuthenticatedApplicationAuthority is the verified non-secret application authority used by HTTP admission.
+type AuthenticatedApplicationAuthority struct {
+	ID            string
+	TenantRef     string
+	SubjectRef    string
+	Scopes        []string
+	ProfileGrants []string
+}
 
 // AdminIdempotencyInput binds one administrative mutation to an exact durable response.
 type AdminIdempotencyInput struct {

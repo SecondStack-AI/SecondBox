@@ -238,6 +238,7 @@ func run(processConfig config.Config, logger *slog.Logger) error {
 		Service: controlPlane, Logger: logger,
 		PlatformToken:             processConfig.PlatformToken,
 		ApplicationAuthorities:    applicationAuthorities(processConfig.ApplicationAuthorities),
+		PersistedAuthorities:      controlPlaneStore,
 		MaximumDataPlaneBodyBytes: processConfig.DataPlaneMaximumSessionBytes,
 	})
 	if err != nil {
