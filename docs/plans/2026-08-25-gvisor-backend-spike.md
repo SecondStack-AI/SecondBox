@@ -245,33 +245,33 @@ preserving every WorkspaceStore invariant.
 Bind the new backend to the existing runner protocol and portable WorkspaceStore, mirroring the
 Microsandbox composition.
 
-- [ ] Add `runner/internal/gvisor` implementing `AssignmentBackend` — readiness, validation,
+- [x] Add `runner/internal/gvisor` implementing `AssignmentBackend` — readiness, validation,
   startup with the exact shared progress-stage order, fencing, capacity reservation and release,
   startup timing, terminal events, and shutdown — plus the `LocalWorkspaceBackend` and
   `WorkspaceRelocationBackend` adapters over the shared WorkspaceStore, so protocol generation 2
   registration and the local-workspace mandatory feature succeed exactly as they do for
   Microsandbox.
-- [ ] Generate one OCI bundle per Instance: the pinned flat root as a read-only rootfs with a
+- [x] Generate one OCI bundle per Instance: the pinned flat root as a read-only rootfs with a
   runsc writable overlay, the Workspace mountpoint bound at `/workspace`, the agent socket and
   runtime-private directories bound, and the guest agent as the sandbox's initial process with
   its required identity flags. Record the directFS mode chosen from Task 0H measurements as an
   explicit composition decision.
-- [ ] Launch `runsc` as a directly supervised child with parent-death signaling and process-group
+- [x] Launch `runsc` as a directly supervised child with parent-death signaling and process-group
   kill; observe exit through `wait` semantics and convert unexpected post-ready exit into exactly
   one provider-neutral terminal event. Never adopt a sandbox after runner restart.
-- [ ] Apply the Task 0H-proven cgroup limits for integer vCPU and guest memory to every sandbox
+- [x] Apply the Task 0H-proven cgroup limits for integer vCPU and guest memory to every sandbox
   and record the enforcement mechanism as backend evidence.
-- [ ] Make readiness probe the real environment: boot and tear down a trivial sandbox, verify the
+- [x] Make readiness probe the real environment: boot and tear down a trivial sandbox, verify the
   pinned runsc digest, verify the flat-root digest against the materialization manifest, and
   advertise exactly the cached materializations.
-- [ ] Admit only `cold_boot`, a supported architecture, available integer vCPU/memory capacity,
+- [x] Admit only `cold_boot`, a supported architecture, available integer vCPU/memory capacity,
   an exact cached materialization tuple, expressible network policy, and required agent features.
-- [ ] On fence, atomically reject new operations, cancel active streams, kill the sandbox process
+- [x] On fence, atomically reject new operations, cancel active streams, kill the sandbox process
   group, enforce the deadline, reap, detach the Workspace in Task 3H order, and only then release
   attachment authority.
-- [ ] Use a reverse-order cleanup stack for capacity, Workspace attachment, sandbox process,
+- [x] Use a reverse-order cleanup stack for capacity, Workspace attachment, sandbox process,
   socket directory, and network state on every pre-ready failure.
-- [ ] Run the shared assignment conformance suite against the backend with a real runsc.
+- [x] Run the shared assignment conformance suite against the backend with a real runsc.
 
 #### Task 4H validation
 
@@ -284,21 +284,21 @@ Microsandbox composition.
 Map the provider-neutral runner interfaces directly onto the negotiated guest-protocol session; no
 relay process exists in this backend.
 
-- [ ] Implement buffered exec with exact stdout/stderr bounds, typed spawn failures, deadlines,
+- [x] Implement buffered exec with exact stdout/stderr bounds, typed spawn failures, deadlines,
   cancellation, exit status, and signal results.
-- [ ] Implement streaming exec with stdin, end-of-input, signals, caller credit, bounded queues,
+- [x] Implement streaming exec with stdin, end-of-input, signals, caller credit, bounded queues,
   output-channel preservation, and cancellation propagated to the guest.
-- [ ] Implement binary-safe file stat, read, write, list, exists, mkdir, and remove with the same
+- [x] Implement binary-safe file stat, read, write, list, exists, mkdir, and remove with the same
   workspace-relative path and response contracts.
-- [ ] Implement PTY open, input, output, resize, and cancellation with bounded binary output.
-- [ ] Implement Port open as a generation-fenced relay through the guest agent's port feature
+- [x] Implement PTY open, input, output, resize, and cancellation with bounded binary output.
+- [x] Implement Port open as a generation-fenced relay through the guest agent's port feature
   over the agent transport, with bounded bidirectional relay, no host listener introduced by the
   backend, and no runner connection across the policed egress path.
-- [ ] Check the full assignment generation before every operation and again at stream terminal
+- [x] Check the full assignment generation before every operation and again at stream terminal
   publication.
-- [ ] Map every known runsc and guest-agent outcome to an existing provider-neutral result;
+- [x] Map every known runsc and guest-agent outcome to an existing provider-neutral result;
   unknown outcomes are infrastructure failures, never synthesized success.
-- [ ] Run the shared data-plane conformance suite; prove cancellation races, sandbox death,
+- [x] Run the shared data-plane conformance suite; prove cancellation races, sandbox death,
   caller disconnect, fence, output exhaustion, and duplicate terminal delivery.
 
 #### Task 5H validation

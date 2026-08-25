@@ -31,6 +31,7 @@ type Composition struct {
 // the pinned materialization manifest, and integer capacity bounds.
 type GVisorComposition struct {
 	RunscPath             string
+	RuntimeDir            string
 	AgentPath             string
 	FlatRootPath          string
 	MaterializationPath   string
@@ -127,6 +128,7 @@ func loadGVisorComposition() (GVisorComposition, int64, error) {
 		"SECONDBOX_GVISOR_AGENT_PATH",
 		"SECONDBOX_GVISOR_FLAT_ROOT_PATH",
 		"SECONDBOX_GVISOR_MATERIALIZATION_PATH",
+		"SECONDBOX_GVISOR_RUNTIME_DIR",
 	} {
 		value := strings.TrimSpace(os.Getenv(name))
 		if value == "" || !filepath.IsAbs(value) || filepath.Clean(value) != value {
@@ -171,6 +173,7 @@ func loadGVisorComposition() (GVisorComposition, int64, error) {
 	}
 	return GVisorComposition{
 		RunscPath:             values["SECONDBOX_GVISOR_RUNSC_PATH"],
+		RuntimeDir:            values["SECONDBOX_GVISOR_RUNTIME_DIR"],
 		AgentPath:             values["SECONDBOX_GVISOR_AGENT_PATH"],
 		FlatRootPath:          values["SECONDBOX_GVISOR_FLAT_ROOT_PATH"],
 		MaterializationPath:   values["SECONDBOX_GVISOR_MATERIALIZATION_PATH"],

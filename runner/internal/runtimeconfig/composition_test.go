@@ -94,6 +94,7 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 		"SECONDBOX_GVISOR_AGENT_PATH":                        "/opt/secondbox/bin/secondbox-guest-agent",
 		"SECONDBOX_GVISOR_FLAT_ROOT_PATH":                    "/var/lib/secondbox/gvisor/flat-root",
 		"SECONDBOX_GVISOR_MATERIALIZATION_PATH":              "/var/lib/secondbox/gvisor/materialization.json",
+		"SECONDBOX_GVISOR_RUNTIME_DIR":                       "/run/secondbox/gvisor",
 		"SECONDBOX_GVISOR_MATERIALIZATION_DIGEST":            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"SECONDBOX_GVISOR_MAXIMUM_VCPUS":                     "8",
 		"SECONDBOX_GVISOR_MAXIMUM_MEMORY_BYTES":              "17179869184",
@@ -110,6 +111,7 @@ func TestLoadGVisorCompositionRequiresCompleteEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	if composition.RunscPath != complete["SECONDBOX_GVISOR_RUNSC_PATH"] ||
+		composition.RuntimeDir != complete["SECONDBOX_GVISOR_RUNTIME_DIR"] ||
 		composition.AgentPath != complete["SECONDBOX_GVISOR_AGENT_PATH"] ||
 		composition.FlatRootPath != complete["SECONDBOX_GVISOR_FLAT_ROOT_PATH"] ||
 		composition.MaterializationPath != complete["SECONDBOX_GVISOR_MATERIALIZATION_PATH"] ||

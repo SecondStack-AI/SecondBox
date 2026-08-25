@@ -91,6 +91,7 @@ build-gvisor-probe output:
     CGO_ENABLED=0 go build -o "$output/bin/secondbox-gvisor-probe" ./gvisor-probe
     CGO_ENABLED=0 go build -o "$output/bin/secondbox-gvisor-probe-guest" ./gvisor-probe/guest
     CGO_ENABLED=0 go build -o "$output/bin/secondbox-gvisor-probe-agent" ./gvisor-probe/agentharness
+    CGO_ENABLED=0 go build -o "$output/bin/secondbox-guest-agent" ./cmd/secondbox-guest-agent
     echo "SecondBox gVisor probe build complete: $output/bin"
 
 test-gvisor-probe build_dir work_dir:
@@ -116,6 +117,33 @@ test-gvisor-probe build_dir work_dir:
     [[ -x "$runsc" ]] || { echo "SecondBox pinned runsc binary is missing: $runsc" >&2; exit 1; }
     mkdir -- "$work_dir"
     "$probe" -runsc "$runsc" -guest "$guest" -agent "$agent" -work "$work_dir/probe" all
+
+test-gvisor build_dir:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [[ "$(uname -s)" == "Linux" ]] || {
+      echo "SecondBox gVisor qualification requires Linux" >&2
+      exit 1
+    }
+    [[ ! -e /dev/kvm ]] || {
+      echo "SecondBox gVisor qualification requires a host without /dev/kvm" >&2
+      exit 1
+    }
+    [[ "$(id -u)" == "0" ]] || {
+      echo "SecondBox gVisor qualification requires root for loop devices, mounts, and cgroups" >&2
+      exit 1
+    }
+    [[ -n "${SECONDBOX_WORKSPACESTORE_QUALIFICATION_FILESYSTEM:-}" ]] || {
+      echo "SecondBox gVisor qualification requires SECONDBOX_WORKSPACESTORE_QUALIFICATION_FILESYSTEM on a reflink-capable filesystem" >&2
+      exit 1
+    }
+    build_dir="{{build_dir}}"
+    [[ -x "$build_dir/bin/runsc" && -x "$build_dir/bin/secondbox-guest-agent" && -d "$build_dir/rootfs" ]] || {
+      echo "SecondBox gVisor qualification requires bin/runsc, bin/secondbox-guest-agent, and rootfs in $build_dir" >&2
+      exit 1
+    }
+    SECONDBOX_GVISOR_QUALIFICATION=1 SECONDBOX_GVISOR_BUILD="$build_dir" \
+      go test ./internal/gvisor/ -count=1 -v -run 'TestAttachment|TestQualifiedGVisor'
 
 test-microsandbox-probe-linux build_dir work_dir:
     #!/usr/bin/env bash

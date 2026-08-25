@@ -1,0 +1,55 @@
+//go:build linux
+
+package gvisor
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"syscall"
+)
+
+// probePlatform proves the real environment once per process: the pinned
+// runsc reports its expected release, the sentry platform can boot and tear
+// down a trivial sandbox with no KVM requirement, loop devices are usable,
+// and startup reconciliation has cleared any stale attachment leftovers.
+func (backend *AssignmentBackend) probePlatform(ctx context.Context) error {
+	backend.platformProbe.Do(func() {
+		backend.platformProbeErr = backend.runPlatformProbe(ctx)
+	})
+	return backend.platformProbeErr
+}
+
+func (backend *AssignmentBackend) runPlatformProbe(ctx context.Context) error {
+	version, err := exec.CommandContext(ctx, backend.config.RunscPath, "--version").Output()
+	if err != nil {
+		return fmt.Errorf("SecondBox gVisor runsc version probe: %w", err)
+	}
+	release := strings.TrimPrefix(backend.config.manifest.HelperBuildID, "runsc-")
+	if !strings.Contains(string(version), release) {
+		return fmt.Errorf("SecondBox gVisor runsc reports a different release than the pinned materialization")
+	}
+	loopControl, err := os.OpenFile("/dev/loop-control", os.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("SecondBox gVisor loop devices are unavailable: %w", err)
+	}
+	_ = loopControl.Close()
+	if _, err := ReconcileStaleLoops(backend.config.WorkspaceRoot); err != nil {
+		return fmt.Errorf("SecondBox gVisor stale attachment reconciliation: %w", err)
+	}
+	stateRoot, err := os.MkdirTemp(backend.config.RuntimeDir, "readiness-")
+	if err != nil {
+		return fmt.Errorf("SecondBox gVisor readiness state root: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(stateRoot) }()
+	probe := exec.CommandContext(ctx, backend.config.RunscPath,
+		"--root", stateRoot, "--network=none", "--platform=systrap", "do", "/bin/true")
+	probe.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if output, err := probe.CombinedOutput(); err != nil {
+		return fmt.Errorf("SecondBox gVisor sentry platform probe: %v: %s", err, bytes.TrimSpace(output))
+	}
+	return nil
+}

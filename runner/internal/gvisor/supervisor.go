@@ -509,3 +509,7 @@ func (values *multiFlag) Set(value string) error {
 	*values = append(*values, value)
 	return nil
 }
+
+func unixKill(pid int) error {
+	return unix.Kill(pid, unix.SIGKILL)
+}

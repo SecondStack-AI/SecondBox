@@ -30,6 +30,9 @@ build-gvisor-probe output:
 test-gvisor-probe build_dir work_dir:
     just -f runner/Justfile test-gvisor-probe "{{build_dir}}" "{{work_dir}}"
 
+test-gvisor build_dir:
+    just -f runner/Justfile test-gvisor "{{build_dir}}"
+
 lint:
     golangci-lint run ./...
     cd runner && golangci-lint run --config ../.golangci.yml ./...

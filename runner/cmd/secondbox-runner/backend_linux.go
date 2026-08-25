@@ -21,7 +21,7 @@ func newPlatformAssignmentBackend(
 	case "microsandbox":
 		return newMicrosandboxAssignmentBackend(composition, workspaceStore)
 	case "gvisor":
-		return nil, nil, fmt.Errorf("SecondBox gVisor backend selection is valid but its assignment backend is not yet composed")
+		return newGVisorAssignmentBackend(composition, workspaceStore)
 	case "firecracker":
 		manager, err := firecracker.New(composition.Firecracker)
 		if err != nil {
