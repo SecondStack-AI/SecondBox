@@ -19,7 +19,7 @@ func main() {
 
 func run() int {
 	if len(os.Args) != 3 {
-		_, _ = fmt.Fprintln(os.Stderr, "usage: guest <hello|fail|stay> <marker-path>")
+		_, _ = fmt.Fprintln(os.Stderr, "usage: guest <hello|fail|stay|spin|hog> <marker-path>")
 		return 2
 	}
 	mode := os.Args[1]
@@ -43,8 +43,56 @@ func run() int {
 			_, _ = fmt.Fprintln(os.Stderr, "guest stay mode expired without a stop signal")
 			return 1
 		}
+	case "spin":
+		spin()
+		return 0
+	case "hog":
+		hog()
+		return 0
 	default:
 		_, _ = fmt.Fprintf(os.Stderr, "guest mode unknown: %s\n", mode)
 		return 2
 	}
+}
+
+// spinSeconds and spinWorkers are fixed so the host can bound the expected
+// cgroup CPU usage: with a one-CPU quota, four busy workers for three wall
+// seconds must accumulate roughly three CPU-seconds, not twelve.
+const (
+	spinSeconds = 3
+	spinWorkers = 4
+)
+
+func spin() {
+	stop := time.Now().Add(spinSeconds * time.Second)
+	done := make(chan struct{}, spinWorkers)
+	for i := 0; i < spinWorkers; i++ {
+		go func() {
+			counter := 0
+			for time.Now().Before(stop) {
+				counter++
+			}
+			_ = counter
+			done <- struct{}{}
+		}()
+	}
+	for i := 0; i < spinWorkers; i++ {
+		<-done
+	}
+}
+
+// hog touches memory far past the configured limit; under enforcement the
+// sandbox must be killed before completion, so finishing means failure.
+func hog() {
+	const chunkBytes = 32 << 20
+	const totalBytes = 1 << 30
+	var retained [][]byte
+	for allocated := 0; allocated < totalBytes; allocated += chunkBytes {
+		chunk := make([]byte, chunkBytes)
+		for page := 0; page < len(chunk); page += 4096 {
+			chunk[page] = 1
+		}
+		retained = append(retained, chunk)
+	}
+	_ = retained
 }

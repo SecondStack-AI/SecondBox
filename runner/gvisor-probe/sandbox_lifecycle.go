@@ -59,6 +59,7 @@ func subproofBootExit(env *probeEnv, base string) error {
 	}
 	start := time.Now()
 	command := env.runscRun(area, "run")
+	defer reapArea(env, area, nil)
 	if err := command.Run(); err != nil {
 		return fmt.Errorf("runsc run: %w", err)
 	}
@@ -83,6 +84,7 @@ func subproofBootExit(env *probeEnv, base string) error {
 		return err
 	}
 	exitCommand := env.runscRun(exitArea, "run")
+	defer reapArea(env, exitArea, nil)
 	runErr := exitCommand.Run()
 	var exitErr *exec.ExitError
 	if !errors.As(runErr, &exitErr) || exitErr.ExitCode() != guestFailExitCode {
@@ -322,13 +324,17 @@ func startStaySandbox(env *probeEnv, area *proofArea) (*exec.Cmd, error) {
 }
 
 // reapArea force-kills any leftover sandbox processes and clears state so a
-// failed sub-proof cannot leak into the next one.
+// failed sub-proof cannot leak into the next one. runsc leaves a bind-mounted
+// null-netns placeholder in its state root when running with --network=none
+// as root, and delete -force does not unmount it; the backend cleanup stack
+// must unmount it before the state directory can be removed.
 func reapArea(env *probeEnv, area *proofArea, command *exec.Cmd) {
 	if command != nil && command.Process != nil {
 		_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
 		_ = command.Wait()
 	}
 	_ = env.runscAdmin(area, "delete", "-force", area.containerID).Run()
+	_ = syscall.Unmount(filepath.Join(area.stateRoot, "null-netns"), 0)
 }
 
 func waitForFile(path string, deadline time.Duration) error {

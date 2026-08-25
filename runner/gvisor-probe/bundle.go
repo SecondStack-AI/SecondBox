@@ -45,11 +45,27 @@ type ociMount struct {
 }
 
 type ociLinux struct {
-	Namespaces []ociNamespace `json:"namespaces"`
+	Namespaces  []ociNamespace `json:"namespaces"`
+	CgroupsPath string         `json:"cgroupsPath,omitempty"`
+	Resources   *ociResources  `json:"resources,omitempty"`
 }
 
 type ociNamespace struct {
 	Type string `json:"type"`
+}
+
+type ociResources struct {
+	CPU    *ociCPU    `json:"cpu,omitempty"`
+	Memory *ociMemory `json:"memory,omitempty"`
+}
+
+type ociCPU struct {
+	Quota  int64  `json:"quota,omitempty"`
+	Period uint64 `json:"period,omitempty"`
+}
+
+type ociMemory struct {
+	Limit int64 `json:"limit,omitempty"`
 }
 
 type bindMount struct {
@@ -59,8 +75,10 @@ type bindMount struct {
 }
 
 type bundleConfig struct {
-	GuestArgs []string
-	Binds     []bindMount
+	GuestArgs   []string
+	Binds       []bindMount
+	CgroupsPath string
+	Resources   *ociResources
 }
 
 const guestBinaryName = "guest"
@@ -112,6 +130,8 @@ func writeBundle(bundleDir, guestBinary string, config bundleConfig) error {
 			Namespaces: []ociNamespace{
 				{Type: "pid"}, {Type: "mount"}, {Type: "ipc"}, {Type: "uts"},
 			},
+			CgroupsPath: config.CgroupsPath,
+			Resources:   config.Resources,
 		},
 	}
 	encoded, err := json.MarshalIndent(spec, "", "  ")

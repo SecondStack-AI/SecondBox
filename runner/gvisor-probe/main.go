@@ -29,6 +29,7 @@ type proof struct {
 // proofs run in dependency order; each emits one or more evidence lines.
 var proofs = []proof{
 	{name: "sandbox-lifecycle", run: proofSandboxLifecycle},
+	{name: "cgroup-limits", run: proofCgroupLimits},
 }
 
 func main() {
