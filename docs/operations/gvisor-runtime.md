@@ -93,6 +93,27 @@ certificate, private key, CA, enabled feature, and evidence setting. These are d
 authority and have no application defaults. The runner requires root for loop attachment, mount
 and network namespaces, and nftables; the control plane must never run with that authority.
 
+## Kubernetes pod install path
+
+The gVisor runner is also qualified as a privileged, node-pinned pod on a Kubernetes node
+without KVM. The qualified surface is the reference manifest at
+`runner/deploy/gvisor-runner-pod.yaml`; anything broader — Deployments, operators, charts —
+remains operator-authored and unqualified.
+
+- Use the gVisor runner image built from `runner/Dockerfile.gvisor` (CI builds and records its
+  digest); pin the pod to the exact image digest.
+- Dedicate a tainted node pool: one runner pod per node, tolerating the pool taint, with a
+  node-local reflink-capable volume for the WorkspaceStore.
+- Set the pod's resource requests and limits equal to the node's declared sandbox budget plus
+  runner overhead. Per-sandbox cgroups nest inside the pod's slice, so the pod budget caps the
+  sum of all sandboxes.
+- Provide the per-runner identity (mTLS keypair, CA, and runner credential) as a Secret; the
+  flat root and materialization manifest arrive on the node through the operator's reviewed
+  artifact flow.
+- The data plane is proxied through the control plane by default in clusters. The only
+  qualified direct-transport option is the manifest's hostPort entry, which exposes the
+  runner's data-plane listener on its node; remove it to stay proxied-only.
+
 ## Qualification before enrollment
 
 Run the backend qualification suites and the full scenario driver on the target host class — a
@@ -104,6 +125,14 @@ just test-gvisor "$SECONDBOX_GVISOR_BUILD"
 
 export SECONDBOX_GVISOR_LINUX_BUILD=/absolute/path/to/build
 just test-scenario-gvisor
+```
+
+For the pod placement, qualify the mechanisms and the identical scenario suite on the target
+node class (a no-KVM Kubernetes node with local kubectl):
+
+```sh
+just test-gvisor-pod
+just test-scenario-gvisor-pod
 ```
 
 The scenario wrapper refuses hosts that expose `/dev/kvm`, verifies the `runsc` binary against

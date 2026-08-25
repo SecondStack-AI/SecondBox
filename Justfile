@@ -136,6 +136,9 @@ test-scenario-gvisor:
 test-gvisor-pod:
     scripts/test-gvisor-pod.sh
 
+test-scenario-gvisor-pod:
+    scripts/test-scenario-gvisor-pod.sh
+
 prepare-stress:
     scripts/prepare-stress.sh
 

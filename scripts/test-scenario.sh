@@ -26,17 +26,39 @@ native_macos=false
 if [[ "$scenario_host_platform" == "darwin" ]]; then
   native_macos=true
 fi
+# The gVisor runner also qualifies as a privileged Kubernetes pod. In that
+# placement the runner lives outside Compose and a service-control script
+# translates every runner lifecycle verb, exactly like the native macOS path.
+runner_placement="${SECONDBOX_SCENARIO_RUNNER_PLACEMENT:-compose}"
+if [[ "$runner_placement" != "compose" && "$runner_placement" != "pod" ]]; then
+  echo "SecondBox scenario SECONDBOX_SCENARIO_RUNNER_PLACEMENT must be compose or pod" >&2
+  exit 1
+fi
+if [[ "$runner_placement" == "pod" && "$scenario_backend" != "gvisor" ]]; then
+  echo "SecondBox scenario pod placement is qualified only for the gvisor backend" >&2
+  exit 1
+fi
+runner_external=false
+if [[ "$native_macos" == "true" || "$runner_placement" == "pod" ]]; then
+  runner_external=true
+fi
 export SECONDBOX_SCENARIO_HOST_PLATFORM="$scenario_host_platform"
 qualification_evidence="$repo_root/.tmp/scenario-qualification-evidence.json"
 if [[ "$scenario_backend" == "microsandbox" ]]; then
   qualification_evidence="$repo_root/.tmp/microsandbox-$scenario_host_platform-scenario-qualification-evidence.json"
 elif [[ "$scenario_backend" == "gvisor" ]]; then
   qualification_evidence="$repo_root/.tmp/gvisor-$scenario_host_platform-scenario-qualification-evidence.json"
+  if [[ "$runner_placement" == "pod" ]]; then
+    qualification_evidence="$repo_root/.tmp/gvisor-pod-$scenario_host_platform-scenario-qualification-evidence.json"
+  fi
 fi
 snapshot_resume_evidence="$repo_root/.tmp/2026-08-07-snapshot-resume-end-to-end.json"
 microsandbox_cold_start_evidence="$repo_root/.tmp/2026-08-13-microsandbox-$scenario_host_platform-cold-starts.json"
 if [[ "$scenario_backend" == "gvisor" ]]; then
   microsandbox_cold_start_evidence="$repo_root/.tmp/2026-08-25-gvisor-$scenario_host_platform-cold-starts.json"
+  if [[ "$runner_placement" == "pod" ]]; then
+    microsandbox_cold_start_evidence="$repo_root/.tmp/2026-08-25-gvisor-pod-$scenario_host_platform-cold-starts.json"
+  fi
 fi
 rm -f -- "$qualification_evidence" "$snapshot_resume_evidence" "$microsandbox_cold_start_evidence"
 compose_file="$repo_root/scripts/scenario-compose.yml"
@@ -45,6 +67,9 @@ if [[ "$scenario_backend" == "microsandbox" && "$native_macos" != "true" ]]; the
   compose_override_file="$repo_root/scripts/scenario-microsandbox-compose.yml"
 elif [[ "$scenario_backend" == "gvisor" ]]; then
   compose_override_file="$repo_root/scripts/scenario-gvisor-compose.yml"
+  if [[ "$runner_placement" == "pod" ]]; then
+    compose_override_file="$repo_root/scripts/scenario-gvisor-pod-compose.yml"
+  fi
 fi
 scenario_root="$repo_root/.tmp/scenario"
 scenario_mode="${SECONDBOX_SCENARIO_MODE:-suite}"
@@ -425,6 +450,9 @@ else
     fail "SECONDBOX_SCENARIO_NATIVE_RUNNER_BUILD must be a clean absolute path"
   export SECONDBOX_SCENARIO_SERVICE_CONTROL="$repo_root/scripts/scenario-microsandbox-macos-service-control.sh"
 fi
+if [[ "$runner_placement" == "pod" ]]; then
+  export SECONDBOX_SCENARIO_SERVICE_CONTROL="$repo_root/scripts/scenario-gvisor-pod-service-control.sh"
+fi
 
 run_dir="$(mktemp -d "$scenario_root/run.XXXXXX")"
 pki_dir="$run_dir/pki"
@@ -658,7 +686,7 @@ collect_diagnostics() {
   [[ -n "$diagnostics_dir" ]] || return 0
   mkdir -m 0700 -- "$diagnostics_dir" ||
     return 1
-  if [[ "$native_macos" == "true" ]]; then
+  if [[ "$runner_external" == "true" ]]; then
     "$SECONDBOX_SCENARIO_SERVICE_CONTROL" logs secondbox-runner \
       >"$diagnostics_dir/runner.jsonl" || return 1
   else
@@ -686,7 +714,7 @@ cleanup() {
     if ! compose ps --all >&2; then
       echo "SecondBox scenario could not collect container state" >&2
     fi
-    if [[ "$native_macos" == "true" ]]; then
+    if [[ "$runner_external" == "true" ]]; then
       "$SECONDBOX_SCENARIO_SERVICE_CONTROL" logs secondbox-runner >&2 ||
         echo "SecondBox scenario could not collect native runner application logs" >&2
     elif ! compose exec --no-TTY secondbox-runner \
@@ -700,7 +728,7 @@ cleanup() {
       'find /var/lib/secondbox-runner/firecracker-log -type f -exec tail -n 200 {} +' >&2; then
       echo "SecondBox scenario could not collect Firecracker logs" >&2
     fi
-    if [[ "$native_macos" == "true" ]]; then
+    if [[ "$runner_external" == "true" ]]; then
       failure_logs=("$SECONDBOX_SCENARIO_SERVICE_CONTROL" logs --tail 200 control-plane secondbox-runner postgres)
     else
       failure_logs=(compose logs --tail 200 control-plane secondbox-runner postgres)
@@ -712,7 +740,7 @@ cleanup() {
   # The Runner container restarts unless it is stopped and every start reapplies
   # host networking, so the bridge can only be removed once the container can no
   # longer come back and recreate it.
-  if [[ "$native_macos" == "true" ]]; then
+  if [[ "$runner_external" == "true" ]]; then
     runner_stop_command=("$SECONDBOX_SCENARIO_SERVICE_CONTROL" stop secondbox-runner)
     "$SECONDBOX_SCENARIO_SERVICE_CONTROL" stop secondbox-runner-relocation >/dev/null 2>&1 || true
   else
@@ -732,7 +760,7 @@ cleanup() {
     status=1
   fi
   compose_down_arguments=(down --volumes --remove-orphans)
-  if [[ "$scenario_backend" != "firecracker" && "$native_macos" != "true" ]]; then
+  if [[ "$scenario_backend" != "firecracker" && "$runner_external" != "true" ]]; then
     # Docker Compose excludes inactive profile services from `down`. The
     # relocation runner may be stopped but still retain the locally built
     # image, so activate its profile for complete topology cleanup.
@@ -797,6 +825,9 @@ cleanup() {
       evidence_suite="test-scenario"
     elif [[ "$scenario_backend" == "gvisor" ]]; then
       evidence_suite="test-scenario-gvisor"
+      if [[ "$runner_placement" == "pod" ]]; then
+        evidence_suite="test-scenario-gvisor-pod"
+      fi
     else
       evidence_suite="test-scenario-microsandbox-$scenario_host_platform"
     fi
@@ -969,7 +1000,7 @@ if [[ "$scenario_mode" == "suite" && "$scenario_backend" == "firecracker" ]]; th
   echo "SecondBox scenario snapshot-resume template: $SECONDBOX_SCENARIO_SNAPSHOT_RESUME_TEMPLATE_ID"
 fi
 
-if [[ "$native_macos" == "true" ]]; then
+if [[ "$runner_external" == "true" ]]; then
   "$SECONDBOX_SCENARIO_SERVICE_CONTROL" up --detach --wait --wait-timeout 300 secondbox-runner
 else
   compose up --detach --wait --wait-timeout 300 secondbox-runner

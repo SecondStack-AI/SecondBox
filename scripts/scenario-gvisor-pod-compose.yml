@@ -1,0 +1,10 @@
+# Pod placement: the gVisor runner runs as a privileged Kubernetes pod outside
+# Compose, driven by scenario-gvisor-pod-service-control.sh. Compose keeps only
+# postgres and the control plane, and the runner-protocol port must be
+# reachable from the pod network, so it publishes beyond loopback. The API port
+# stays loopback-only for the suite on the node.
+services:
+  control-plane:
+    ports: !override
+      - "127.0.0.1:${SECONDBOX_SCENARIO_API_PORT:?SECONDBOX_SCENARIO_API_PORT is required}:8080"
+      - "${SECONDBOX_SCENARIO_RUNNER_PORT:?SECONDBOX_SCENARIO_RUNNER_PORT is required}:9443"
